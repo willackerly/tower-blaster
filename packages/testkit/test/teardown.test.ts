@@ -40,13 +40,15 @@ describe('closeWithin', () => {
     const log: string[] = [];
     const stuck = await closeWithin([['slow', after(150)], ['failing', after(150, true)]], 50, (l) => log.push(l));
     expect(stuck).toEqual(['slow', 'failing']);
-    await new Promise((r) => setTimeout(r, 300));
-    expect(log).toEqual([
+    for (let i = 0; i < 100 && log.length < 4; i++) await new Promise((r) => setTimeout(r, 20));
+    // In any order: a stalled event loop can let 'slow' finish before 'failing' times out.
+    expect(log).toHaveLength(4);
+    expect(log).toEqual(expect.arrayContaining([
       'slow did not close within 0.05 s; leaving it',
       'failing did not close within 0.05 s; leaving it',
       expect.stringMatching(/^slow closed after 0\.\d s$/),
       'failing failed to close (after its timeout): late failure',
-    ]);
+    ]));
   });
 });
 

@@ -124,7 +124,8 @@ describe('runner session', () => {
   // The browser's main process, found by a switch only it carries (Chrome
   // passes unknown switches to none of its helpers, which all have --type=).
   const browserPid = (token: string) => {
-    const pids = execFileSync('ps', ['-eo', 'pid=,args='], { encoding: 'utf8' }).split('\n')
+    // -ww: without it ps cuts args to $COLUMNS, and the token comes after Playwright's long switch list.
+    const pids = execFileSync('ps', ['-ww', '-eo', 'pid=,args='], { encoding: 'utf8' }).split('\n')
       .filter((l) => l.includes(token) && !l.includes('--type=')).map((l) => Number(l.trim().split(/\s+/)[0]));
     expect(pids).toHaveLength(1);
     return pids[0]!;
