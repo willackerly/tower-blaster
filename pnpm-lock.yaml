@@ -154,6 +154,9 @@ importers:
       '@tb/physics-ref':
         specifier: workspace:*
         version: link:../physics-ref
+      tsx:
+        specifier: 4.23.15
+        version: 4.23.15
 
   packages/lattice: {}
 
