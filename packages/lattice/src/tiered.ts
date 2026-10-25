@@ -65,6 +65,32 @@ export interface TierParams {
    */
   plugColumns: boolean;
   /**
+   * A dormant cell wakes only for motion someone could see: at least this
+   * many edges of slide. W2 wakes an impact plug only when sharing the
+   * body's momentum would carry the plug this far against the friction
+   * under it; W3 integrates a pushed cell's line as a friction block and
+   * wakes it once that virtual block has slid this far. 0: any push over
+   * capacity wakes (the rule before slides; on S5 at 10k cubes a ball that
+   * bounces off a 1,600-cube tower woke all of it).
+   */
+  slideMin: number;
+  /**
+   * W3 wakes the whole line that slides, not only the pushed cell. Off by
+   * default: on 8 perturbed S5 shots at one 1,600-cube tower (before
+   * unwedge) it left woken slabs wedged in the tower and broke 14 to 789
+   * cubes (median 168), against all-dynamic Rapier's 8 to 29.
+   */
+  slideLine: boolean;
+  /**
+   * Never leave woken cells wedged between dormant ones along a horizontal
+   * row: wake the thinner dormant side out to the tower's surface. Rapier
+   * boxes in a static well of zero clearance climb out of it: on S5 at one
+   * 1,600-cube tower a dent's column rose 0.4 m and dropped the top, and 8
+   * perturbed shots broke 0 to 167 cubes (median 44) without this, 0 to 97
+   * (median 0) with it, all-dynamic Rapier 8 to 29.
+   */
+  unwedge: boolean;
+  /**
    * A body is quiet while it stays slower than vRest and within restDrift
    * bounding radii (displacement plus rotation angle times radius) of where
    * it was at most restSteps steps before; after restSteps quiet steps it
@@ -117,7 +143,7 @@ export interface TierParams {
 
 export const DEFAULT_TIERS: TierParams = {
   support: looseColumns, proxyMargin: 0.25, proxyKeep: 30, lookahead: 1, vWake: 0.25,
-  kappa: 0.8, forceMin: 2, handoffMax: 20, maxPlugDepth: 64, plugColumns: true,
+  kappa: 0.8, forceMin: 2, handoffMax: 20, maxPlugDepth: 64, plugColumns: true, slideMin: 0.05, slideLine: false, unwedge: true,
   settle: 'auto', vRest: 0.25, restDrift: 0.02, restSteps: 30, minActiveSteps: 60, settlePos: 0.02, settleRot: (1 * Math.PI) / 180, settlePush: 0.002,
   rubble: true, touchTol: 0.02, rubbleForceSteps: 3,
 };
@@ -177,6 +203,10 @@ export class TieredEngine implements PhysicsEngine {
   /** Per id: speed at the start of the previous step (bounds the speed a pushed cell can be given). */
   private prevSpeed = new Float64Array(0);
   private curSpeed = new Map<number, number>();
+  /** Per lattice, per cell: held a body when the scene was built (the towers' footprint). */
+  private built: Uint8Array[] = [];
+  /** Per pushed lattice cell: the virtual slide of its line (W3), speed and distance along dir. */
+  private slides = new Map<number, { v: number; x: number; dir: Vec3; hold: number; M: number; line: Array<[number, number, number]> }>();
   /** Per id: step it became active, and consecutive quiet steps since. */
   private activeSince = new Int32Array(0);
   private quiet = new Int32Array(0);
@@ -252,6 +282,7 @@ export class TieredEngine implements PhysicsEngine {
     this.anchorRot = new Float64Array(4 * n);
     this.refForce = new Float64Array(3 * n);
     this.refPending = new Uint8Array(n);
+    this.slides = new Map();
     this.settles = new Uint8Array(n);
     this.freezeRetry = new Int32Array(n);
     this.pushed = new Int32Array(n);
@@ -262,6 +293,11 @@ export class TieredEngine implements PhysicsEngine {
     this.dependants = new Map();
     this.rubbleHash = new BoxHash(2 * this.radius.reduce((a, b) => Math.max(a, b), 1e-6));
     this.lattices = built.lattices;
+    this.built = this.lattices.map((l) => {
+      const f = new Uint8Array(l.nx * l.ny * l.nz);
+      l.forEach((i, j, k) => { f[l.cell(i, j, k)] = 1; });
+      return f;
+    });
     this.near = this.lattices.map(() => new Map());
     this.latticeOf.set(built.latticeOf);
     this.cellOf.set(built.cellOf);
@@ -373,14 +409,23 @@ export class TieredEngine implements PhysicsEngine {
     return r;
   }
 
-  /** W3: a proxy pushed beyond what friction under its column can hold wakes, and gets the push back as velocity. */
+  /**
+   * W3: a cell pushed sideways beyond what friction can hold slides, and
+   * with it every dormant cell ahead of it in its line (a packed lattice
+   * cannot move one cell alone). The line is integrated as one friction
+   * block: speed v grows by (push - hold) dt / M and friction takes it back
+   * to 0 once the push drops, and the cell wakes when the block has slid
+   * slideMin edges, with v handed back as velocity. A one-step spike that a
+   * real line would absorb in millimetres never wakes anything. A lift over
+   * the column's weight wakes at once.
+   */
   private forceWakes(state: HostState): WakeRequest[] {
     const c = state.contacts;
-    if (!c) return [];
     const out: WakeRequest[] = [];
     const g = gravityMag(this.scene!);
     const dt = this.scene!.dt;
-    for (let n = 0; n < c.ids.length; n++) {
+    const pushed = new Set<number>();
+    for (let n = 0; c && n < c.ids.length; n++) {
       const id = c.ids[n]!;
       if (this.tier[id] !== TIER_LATTICE) continue;
       const li = this.latticeOf[id]!, lat = this.lattices[li]!;
@@ -396,22 +441,94 @@ export class TieredEngine implements PhysicsEngine {
       // change against 68 N of capacity while 30 N of total was well held).
       const d = this.forceChange(id, f);
       if (!d) continue;
-      let w = 0;
-      for (const jj of lat.occupiedFrom(i, k, j)) w += this.restingLoad(lat.idAt(i, jj, k), g);
+      const w = this.columnLoad(li, i, j, k, g);
       const mu = this.table[id]!.friction;
-      // Friction under the column holds kappa * mu * (load from above + column weight).
-      const hold = this.p.kappa * mu * (Math.max(0, -f[1]) + w) + this.p.forceMin;
-      const slides = Math.hypot(f[0], f[2]) > hold && Math.hypot(d[0], d[2]) > hold;
-      const lift = this.p.kappa * w + this.p.forceMin;
-      const lifts = f[1] > lift && d[1] > lift;
-      if (!slides && !lifts) continue;
       // The push comes back as velocity, at most at the speed of the bodies
       // near the cell before or after that step.
       let cap = 0;
       for (const p of this.near[li]!.get(this.cellOf[id]!) ?? []) cap = Math.max(cap, this.prevSpeed[p]!, this.curSpeed.get(p) ?? 0);
-      out.push({ li, i, j, k, vel: handoff(d, dt / this.mass[id]!, Math.min(cap, this.p.handoffMax)) });
+      cap = Math.min(cap, this.p.handoffMax);
+      const lift = this.p.kappa * w + this.p.forceMin;
+      if (f[1] > lift && d[1] > lift) { out.push({ li, i, j, k, vel: handoff(d, dt / this.mass[id]!, cap) }); continue; }
+      // Sideways: the smaller of the total and the change since the reference
+      // (see above) is the push; friction under each column of the line holds
+      // kappa * mu * (its column weight), plus the load from above on this cell.
+      const fh = Math.hypot(f[0], f[2]), push = Math.min(fh, Math.hypot(d[0], d[2]));
+      if (fh === 0) continue;
+      const dir: Vec3 = [f[0] / fh, 0, f[2] / fh];
+      const ax = Math.abs(dir[0]) >= Math.abs(dir[2]) ? 0 : 2, sgn = Math.sign(dir[ax]!);
+      let hold = this.p.kappa * mu * (Math.max(0, -f[1]) + w) + this.p.forceMin, M = this.mass[id]!;
+      const line: Array<[number, number, number]> = [[i, j, k]];
+      for (let q = 1; q <= this.p.maxPlugDepth; q++) {
+        const ii = ax === 0 ? i + sgn * q : i, kk = ax === 2 ? k + sgn * q : k;
+        if (!lat.has(ii, j, kk)) break;
+        hold += this.p.kappa * mu * this.columnLoad(li, ii, j, kk, g);
+        M += this.mass[lat.idAt(ii, j, kk)]!;
+        line.push([ii, j, kk]);
+      }
+      let s = this.slides.get(id);
+      if (s && dotV(s.dir, dir) < 0) s = undefined; // reversed: a new slide
+      const v0 = s?.v ?? 0, v = Math.max(0, v0 + ((push - hold) * dt) / M);
+      if (v === 0) { this.slides.delete(id); continue; }
+      const x = (s?.x ?? 0) + ((v0 + v) / 2) * dt;
+      pushed.add(id);
+      if (x >= this.p.slideMin * lat.frame.edge) {
+        this.slides.delete(id);
+        const u = Math.min(v, cap);
+        for (const [ii, jj, kk] of this.p.slideLine ? line : [line[0]!]) out.push({ li, i: ii, j: jj, k: kk, vel: [dir[0] * u, 0, dir[2] * u] });
+      } else this.slides.set(id, { v, x, dir, hold, M, line });
+    }
+    // Lines no longer pushed coast to a stop against the hold they last had.
+    for (const [id, s] of this.slides) {
+      if (pushed.has(id)) continue;
+      if (this.tier[id] !== TIER_LATTICE) { this.slides.delete(id); continue; }
+      const li = this.latticeOf[id]!, lat = this.lattices[li]!;
+      const v = Math.max(0, s.v - (s.hold * dt) / s.M);
+      s.x += ((s.v + v) / 2) * dt;
+      s.v = v;
+      if (s.x >= this.p.slideMin * lat.frame.edge) {
+        this.slides.delete(id);
+        const u = Math.min(v, this.p.handoffMax);
+        for (const [i, j, k] of this.p.slideLine ? s.line : [s.line[0]!]) if (lat.has(i, j, k)) out.push({ li, i, j, k, vel: [s.dir[0] * u, 0, s.dir[2] * u] });
+      }
+      else if (v === 0) this.slides.delete(id);
     }
     return out;
+  }
+
+  /**
+   * Dormant cells to wake so that none of `cells` (just woken) sits in a row
+   * of the towers' footprint with dormant cells on both sides: for each such
+   * row, the thinner dormant side, out to the footprint's edge.
+   */
+  private wedges(li: number, cells: Array<{ i: number; j: number; k: number }>): Array<[number, number, number]> {
+    const lat = this.lattices[li]!, built = this.built[li]!;
+    const inside = (i: number, j: number, k: number) => lat.inBounds(i, j, k) && built[lat.cell(i, j, k)] === 1;
+    const out: Array<[number, number, number]> = [];
+    for (const { i, j, k } of cells) {
+      for (const ax of [0, 2]) {
+        const at = (q: number): [number, number, number] => (ax === 0 ? [q, j, k] : [i, j, q]);
+        const wall = (sgn: number): Array<[number, number, number]> | null => {
+          let q = (ax === 0 ? i : k) + sgn;
+          while (inside(...at(q)) && !lat.has(...at(q))) q += sgn; // woken cells of the row
+          if (!inside(...at(q))) return null; // a free side
+          const w: Array<[number, number, number]> = [];
+          for (; inside(...at(q)); q += sgn) if (lat.has(...at(q))) w.push(at(q));
+          return w;
+        };
+        const lo = wall(-1), hi = lo && wall(1);
+        if (lo && hi) out.push(...(lo.length <= hi.length ? lo : hi));
+      }
+    }
+    return out;
+  }
+
+  /** Weight resting on the floor under cell (i, j, k): its column from j up, and the rubble on it. */
+  private columnLoad(li: number, i: number, j: number, k: number, g: number): number {
+    const lat = this.lattices[li]!;
+    let w = 0;
+    for (const jj of lat.occupiedFrom(i, k, j)) w += this.restingLoad(lat.idAt(i, jj, k), g);
+    return w;
   }
 
   /**
@@ -427,6 +544,7 @@ export class TieredEngine implements PhysicsEngine {
     const out: WakeRequest[] = [];
     const scene = this.scene!;
     const T = (this.host.caps.stateLag + this.p.lookahead) * scene.dt;
+    const g = gravityMag(scene);
     for (const m of movers) {
       if (!m.awake || Math.hypot(...m.vel) < this.p.vWake) continue;
       const r = this.radius[m.id]!, mb = this.mass[m.id]!;
@@ -442,18 +560,36 @@ export class TieredEngine implements PhysicsEngine {
           const step: [number, number, number] = [0, 0, 0];
           step[ax] = sgn;
           let front = struck, M = 0;
-          const seen = new Set<number>();
+          const seen = new Set<number>(), plug: Array<[number, number, number]> = [];
           for (let depth = 0; depth < this.p.maxPlugDepth && front.length; depth++) {
             const layer = front.filter(([i, j, k]) => lat.has(i, j, k) && !seen.has(lat.cell(i, j, k)));
             if (!layer.length) break;
             for (const [i, j, k] of layer) {
               seen.add(lat.cell(i, j, k));
               M += this.mass[lat.idAt(i, j, k)]!;
-              out.push({ li, i, j, k, vel: null });
-              if (this.p.plugColumns) for (let jj = 0; jj < j; jj++) out.push({ li, i, j: jj, k, vel: null });
+              plug.push([i, j, k]);
             }
             if (P / (mb + M) < this.p.vWake) break;
             front = layer.map(([i, j, k]) => [i + step[0], j + step[1], k + step[2]] as [number, number, number]);
+          }
+          // At shared speed u = P / (mb + M) against a hold H the plug stops
+          // after u^2 (mb + M) / (2 H): sideways it slides on the cells under
+          // its lowest row, upwards it lifts against its own weight (and
+          // the body's). Too short to see: the body meets a wall, and W3
+          // decides what its push breaks.
+          if (!plug.length) continue;
+          let H = (mb + M) * g;
+          if (ax !== 1) {
+            const low = new Map<number, number>();
+            for (const [i, j, k] of plug) { const key = i * lat.nz + k; low.set(key, Math.min(j, low.get(key) ?? j)); }
+            H = 0;
+            for (const [key, j] of low) H += this.p.kappa * this.table[lat.idAt(Math.floor(key / lat.nz), j, key % lat.nz)]!.friction * this.columnLoad(li, Math.floor(key / lat.nz), j, key % lat.nz, g) + this.p.forceMin;
+          }
+          if ((P * P) / (2 * (mb + M) * H) < this.p.slideMin * lat.frame.edge) continue;
+          for (const [i, j, k] of plug) {
+            out.push({ li, i, j, k, vel: null });
+            // The floor under a sideways plug (see plugColumns); a lifted plug leaves it behind.
+            if (this.p.plugColumns && ax !== 1) for (let jj = 0; jj < j; jj++) out.push({ li, i, j: jj, k, vel: null });
           }
         }
       });
@@ -480,6 +616,12 @@ export class TieredEngine implements PhysicsEngine {
         if (r.command) commanded.add(lat.cell(r.i, r.j, r.k));
       }
       const detached = detach(lat, this.p.support, reqs.map((r) => [r.i, r.j, r.k] as [number, number, number]));
+      const wedged = new Set<number>();
+      for (let from = 0; this.p.unwedge && from < detached.length;) {
+        const more = this.wedges(li, detached.slice(from));
+        from = detached.length;
+        for (const d of detach(lat, this.p.support, more)) { detached.push(d); wedged.add(lat.cell(d.i, d.j, d.k)); }
+      }
       // Rest load per woken cell: weight of the woken run above it, if the run stands on something.
       const byCol = new Map<number, typeof detached>();
       for (const d of detached) {
@@ -502,7 +644,7 @@ export class TieredEngine implements PhysicsEngine {
       }
       for (const d of detached) {
         const cell = lat.cell(d.i, d.j, d.k);
-        const cause: TransitionCause = d.cause === 'support' ? 'support' : vel.has(cell) ? 'force' : commanded.has(cell) ? 'command' : 'impact';
+        const cause: TransitionCause = d.cause === 'support' || wedged.has(cell) ? 'support' : vel.has(cell) ? 'force' : commanded.has(cell) ? 'command' : 'impact';
         if (cause === 'support') this.stats.wokenBySupport++;
         else if (cause === 'force') this.stats.wokenByForce++;
         else this.stats.wokenByImpact++;
@@ -513,6 +655,7 @@ export class TieredEngine implements PhysicsEngine {
         this.quiet[d.id] = 0;
         this.refPending[d.id] = 0;
         this.refForce.fill(0, 3 * d.id, 3 * d.id + 3);
+        this.slides.delete(d.id);
         this.latticeOf[d.id] = -1;
         this.cellOf[d.id] = -1;
         this.proxyStamp[d.id] = -1;

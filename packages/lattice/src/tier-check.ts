@@ -3,7 +3,9 @@
 // (b) each body is in exactly one tier, and the host agrees (dormant: off or
 //     a static proxy; active: dynamic; not spawned: off);
 // (c) the body count is conserved;
-// (d) no dynamic body overlaps a dormant cell beyond `penTol` (in edges);
+// (d) no dynamic body overlaps a dormant cell beyond `penTol` (in edges)
+//     plus one step of its own travel toward the cell (a body that meets a
+//     dormant wall is pushed out on the next step, as by any static body);
 // (e) every exposed dormant cell touching a dynamic body's bounding sphere
 //     is a static proxy in the host (else the body would pass through it);
 // (f) rubble is static in the host at its frozen pose, and rests on the
@@ -15,8 +17,14 @@ import { checkStorage, checkSupport } from './check.ts';
 import { CUBE_ROTATIONS } from './symmetry.ts';
 import { cellsInBox, exposed, TIER_ACTIVE, TIER_LATTICE, TIER_RUBBLE, TIER_UNSPAWNED, type TieredEngine } from './tiered.ts';
 
-/** penTol is in edges; Rapier itself reaches about 0.03 for a moment when a cube lands hard. */
-export async function checkTiers(e: TieredEngine, penTol = 0.05): Promise<string[]> {
+/**
+ * penTol is in edges. Rapier itself reaches about 0.03 for a moment when a
+ * cube lands hard, and up to 0.067 for a few steps when a pile presses a cube
+ * into dormant cells that hold (they used to wake at any push over capacity;
+ * the slide rules keep them dormant). A body passing through a cell goes far
+ * deeper.
+ */
+export async function checkTiers(e: TieredEngine, penTol = 0.08): Promise<string[]> {
   const out: string[] = [];
   const host = e.host;
   for (const lat of e.lattices) out.push(...checkStorage(lat), ...checkSupport(lat, e.p.support));
@@ -58,12 +66,14 @@ export async function checkTiers(e: TieredEngine, penTol = 0.05): Promise<string
     const id = cur.ids[n]!, b = e.bodies[id]!;
     const pos: Vec3 = [cur.pos[3 * n]!, cur.pos[3 * n + 1]!, cur.pos[3 * n + 2]!];
     const rot: Quat = [cur.rot[4 * n]!, cur.rot[4 * n + 1]!, cur.rot[4 * n + 2]!, cur.rot[4 * n + 3]!];
-    const r = boundingRadius(b.shape);
+    const r = boundingRadius(b.shape), v: Vec3 = [cur.linVel[3 * n]!, cur.linVel[3 * n + 1]!, cur.linVel[3 * n + 2]!];
     for (const lat of e.lattices) {
       const h = lat.frame.edge / 2;
       for (const [i, j, k] of cellsInBox(lat, [pos[0] - r, pos[1] - r, pos[2] - r], [pos[0] + r, pos[1] + r, pos[2] + r], (i, j, k) => lat.has(i, j, k))) {
-        const depth = shapeDepth(b.shape, pos, rot, { kind: 'box', half: [h, h, h] }, lat.center(i, j, k), CUBE_ROTATIONS[lat.rotAt(i, j, k)]!);
-        if (depth > penTol * lat.frame.edge) out.push(`body ${id} overlaps dormant cell ${i},${j},${k} by ${depth.toFixed(4)}`);
+        const c = lat.center(i, j, k), depth = shapeDepth(b.shape, pos, rot, { kind: 'box', half: [h, h, h] }, c, CUBE_ROTATIONS[lat.rotAt(i, j, k)]!);
+        const to = [c[0] - pos[0], c[1] - pos[1], c[2] - pos[2]], dist = Math.hypot(...to) || 1;
+        const travel = Math.max(0, (v[0] * to[0]! + v[1] * to[1]! + v[2] * to[2]!) / dist) * e.scene!.dt;
+        if (depth > penTol * lat.frame.edge + travel) out.push(`body ${id} overlaps dormant cell ${i},${j},${k} by ${depth.toFixed(4)}`);
         if (depth > -1e-9 && exposed(lat, i, j, k) && host.modeOf(lat.idAt(i, j, k)) !== MODE_STATIC) {
           // Touching or overlapping: the cell must be solid for the host.
           out.push(`body ${id} touches dormant cell ${i},${j},${k} that is not a static proxy`);
