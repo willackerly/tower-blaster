@@ -28,6 +28,14 @@ pnpm bench:browser --engines rapier,rapier:iterations=8 --scenario S1 --sleep fa
 
 `bench:browser` serves the page, drives Chrome through Playwright with WebGPU developer features on (unquantized timestamps), and prints the page's result record. It exits with code 3 when timing can't be trusted there: no cross-origin isolation, a timer coarser than 20 µs, or a software GPU adapter for a GPU engine. Every run is also a URL, so the same benchmark can be opened by hand on any device.
 
+### Standard suite
+
+```sh
+pnpm bench:suite --channel chrome       # about 5-10 minutes; writes results/suite-<time>.jsonl and .md
+```
+
+Results worth keeping go in `docs/benchmarks/` (the first is a CPU baseline from a cloud VM).
+
 ## Layout
 
 | Package | Role |
