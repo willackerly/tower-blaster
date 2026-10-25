@@ -18,6 +18,16 @@ pnpm bench compare --a rapier --b rapier:iterations=8 --scenario S1 --no-sleep
 
 Results print as JSON; add `--out results/name.jsonl` to append them to a file.
 
+### In a real browser
+
+```sh
+pnpm runner                             # serve the runner page (cross-origin isolated) for manual runs
+pnpm bench:browser --engines rapier --scenario S4 --param N=10000 --channel chrome
+pnpm bench:browser --engines rapier,rapier:iterations=8 --scenario S1 --sleep false --headed
+```
+
+`bench:browser` serves the page, drives Chrome through Playwright with WebGPU developer features on (unquantized timestamps), and prints the page's result record. It exits with code 3 when timing can't be trusted there: no cross-origin isolation, a timer coarser than 20 µs, or a software GPU adapter for a GPU engine. Every run is also a URL, so the same benchmark can be opened by hand on any device.
+
 ## Layout
 
 | Package | Role |
@@ -29,4 +39,5 @@ Results print as JSON; add `--out results/name.jsonl` to append them to a file.
 | `metrics` | Quality metrics and benchmark statistics |
 | `adapter-rapier` | CPU baseline (Rapier WASM) |
 | `bench` | Timing and quality runs, CLI |
+| `runner` | Browser runner page, Playwright orchestrator (`bench:browser`) |
 | `testkit` | Headless Chromium WebGPU sessions for tests |

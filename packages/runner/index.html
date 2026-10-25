@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>tower-blaster bench</title>
+<style>
+  :root { color-scheme: light dark; --fg: #1b2130; --bg: #f5f6f9; --muted: #5b6478; --accent: #d8693f; }
+  @media (prefers-color-scheme: dark) { :root { --fg: #e4e7ef; --bg: #11141c; --muted: #9aa3b8; --accent: #f08d63; } }
+  body { font: 14px/1.5 system-ui, sans-serif; color: var(--fg); background: var(--bg); margin: 0; padding: 1.5rem max(16px, env(safe-area-inset-left)); }
+  h1 { font-size: 1.25rem; margin: 0 0 0.5rem; }
+  label { display: block; color: var(--muted); font-size: 12px; margin-top: 0.75rem; }
+  input { width: 100%; max-width: 40rem; font: 13px ui-monospace, Menlo, monospace; padding: 0.35rem; }
+  button { margin-top: 1rem; font: inherit; padding: 0.4rem 1rem; background: var(--accent); color: #fff; border: 0; border-radius: 4px; cursor: pointer; }
+  #status { margin-top: 1rem; font-weight: 600; }
+  pre { white-space: pre-wrap; overflow-wrap: anywhere; font: 12px ui-monospace, Menlo, monospace; }
+</style>
+</head>
+<body>
+<h1>tower-blaster bench runner</h1>
+<p>Configure with URL parameters, for example <code>?engines=rapier&amp;scenario=S4&amp;param.N=10000&amp;autorun=1</code>. Compare two engines with <code>engines=rapier,rapier:iterations=8</code>.</p>
+<label for="query">Query</label>
+<input id="query" type="text">
+<button id="run" type="button">Run</button>
+<div id="status">idle</div>
+<pre id="out"></pre>
+<script type="module" src="./src/main.ts"></script>
+</body>
+</html>

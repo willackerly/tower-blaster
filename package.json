@@ -11,7 +11,9 @@
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "codegen": "tsx packages/schema/src/cli.ts",
     "bench": "tsx packages/bench/src/cli.ts",
-    "check": "pnpm typecheck && pnpm test"
+    "check": "pnpm typecheck && pnpm test",
+    "runner": "vite packages/runner",
+    "bench:browser": "tsx packages/runner/src/cli.ts"
   },
   "devDependencies": {
     "@tb/adapter-rapier": "workspace:*",
@@ -19,6 +21,7 @@
     "@tb/engine-api": "workspace:*",
     "@tb/geom": "workspace:*",
     "@tb/metrics": "workspace:*",
+    "@tb/runner": "workspace:*",
     "@tb/scenarios": "workspace:*",
     "@tb/schema": "workspace:*",
     "@tb/testkit": "workspace:*",
@@ -28,6 +31,7 @@
     "playwright": "1.63.0",
     "tsx": "4.23.15",
     "typescript": "6.0.3",
+    "vite": "8.3.4",
     "vitest": "5.0.3"
   },
   "pnpm": {
