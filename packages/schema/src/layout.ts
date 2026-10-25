@@ -103,6 +103,29 @@ export function readStruct(view: DataView, s: StructLayout, index: number): Reco
   return out;
 }
 
+/**
+ * Copy field `name` of elements 0..n-1 of an array of `s` into `out`, components
+ * packed (out[i * c + k]). The bulk path: one typed-array view and no object
+ * per element, unlike readStruct. Typed arrays are host-endian; every WebGPU
+ * host is little-endian, as readStruct's DataView assumes.
+ */
+export function readField<T extends { [i: number]: number; readonly length: number }>(buf: ArrayBuffer, s: StructLayout, name: string, n: number, out: T): T {
+  const f = field(s, name);
+  const c = f.components;
+  if (!Number.isInteger(n) || n < 0) throw new Error(`readField ${s.name}.${name}: bad count ${n}`);
+  if (n * s.size > buf.byteLength) throw new Error(`readField ${s.name}.${name}: ${n} elements need ${n * s.size} bytes, the buffer has ${buf.byteLength}`);
+  // A typed array drops writes past its end silently.
+  if (n * c > out.length) throw new Error(`readField ${s.name}.${name}: ${n * c} values do not fit an output of length ${out.length}`);
+  const words = (n * s.size) / 4;
+  const src = f.scalar === 'f32' ? new Float32Array(buf, 0, words) : f.scalar === 'u32' ? new Uint32Array(buf, 0, words) : new Int32Array(buf, 0, words);
+  const stride = s.size / 4, at = f.offset / 4;
+  for (let i = 0; i < n; i++) {
+    const base = i * stride + at;
+    for (let k = 0; k < c; k++) out[i * c + k] = src[base + k]!;
+  }
+  return out;
+}
+
 function setScalar(view: DataView, at: number, scalar: Scalar, v: number): void {
   if (scalar === 'f32') view.setFloat32(at, v, true);
   else if (scalar === 'u32') view.setUint32(at, v, true);
