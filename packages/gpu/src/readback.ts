@@ -22,19 +22,26 @@ export class Readback {
   /**
    * Bytes [offset, offset + bytes) of src. The copy is submitted before this
    * returns, so the result is the state after exactly the work submitted
-   * before the call.
+   * before the call. Rejects, counting nothing in bytesRead, if the copy
+   * fails validation.
    */
   read(src: GPUBuffer, bytes = src.size, offset = 0): Promise<ArrayBuffer> {
     if (this.destroyed) throw new Error('Readback: destroyed');
     if (bytes % 4 !== 0 || offset % 4 !== 0 || bytes < 0 || offset < 0) throw new Error(`Readback: bytes (${bytes}) and offset (${offset}) must be non-negative multiples of 4`);
-    // Out of range is a validation error that leaves the staging buffer stale, which would read as data.
+    // A copy that fails validation is dropped while the map still succeeds, so
+    // a pooled staging buffer would hand back an earlier read's bytes as data.
+    // What can be checked here throws; the error scope catches the rest (a
+    // destroyed source, another device's buffer).
     if (offset + bytes > src.size) throw new Error(`Readback: ${bytes} bytes at ${offset} is past the end of a ${src.size}-byte buffer`);
+    if (!(src.usage & GPUBufferUsage.COPY_SRC)) throw new Error('Readback: the source buffer has no COPY_SRC usage');
+    if (src.mapState !== 'unmapped') throw new Error(`Readback: the source buffer is ${src.mapState}`);
     if (bytes === 0) return Promise.resolve(new ArrayBuffer(0));
     const staging = this.take(bytes);
+    this.device.pushErrorScope('validation');
     const enc = this.device.createCommandEncoder();
     enc.copyBufferToBuffer(src, offset, staging, 0, bytes);
     this.device.queue.submit([enc.finish()]);
-    return this.copyOut(staging, bytes);
+    return this.copyOut(staging, bytes, this.device.popErrorScope());
   }
 
   /** Destroy every staging buffer, including those of reads in flight (which then reject). */
@@ -61,9 +68,10 @@ export class Readback {
     return b;
   }
 
-  private async copyOut(staging: GPUBuffer, bytes: number): Promise<ArrayBuffer> {
+  private async copyOut(staging: GPUBuffer, bytes: number, copied: Promise<GPUError | null>): Promise<ArrayBuffer> {
+    let error: GPUError | null;
     try {
-      await staging.mapAsync(GPUMapMode.READ, 0, bytes);
+      [, error] = await Promise.all([staging.mapAsync(GPUMapMode.READ, 0, bytes), copied]);
     } catch (err) {
       // Its state is unknown (unmapped under us, device lost), so it never goes back in the pool.
       this.all.delete(staging);
@@ -71,6 +79,12 @@ export class Readback {
       throw err;
     }
     if (this.destroyed) throw new Error('Readback: destroyed during a read');
+    if (error) {
+      // Only the copy was bad: the staging buffer is sound, just stale.
+      staging.unmap();
+      this.free.push(staging);
+      throw new Error(`Readback: the copy failed: ${error.message}`);
+    }
     const out = staging.getMappedRange(0, bytes).slice(0);
     staging.unmap();
     this.free.push(staging);

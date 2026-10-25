@@ -312,6 +312,9 @@ export async function readbackRules() {
   // Errors and the empty read do no GPU work at all.
   const n0 = submits, created0 = rb.created, bytes0 = rb.bytesRead;
   const misaligned = { bytes: await fails(() => rb.read(c, 6)), offset: await fails(() => rb.read(c, 4, 2)), range: await fails(() => rb.read(c, 8, 12)), negative: await fails(() => rb.read(c, -4)) };
+  const noCopySrc = device.createBuffer({ size: 16, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });
+  const mapped = device.createBuffer({ size: 16, usage: GPUBufferUsage.COPY_SRC | GPUBufferUsage.MAP_WRITE, mappedAtCreation: true });
+  const badSource = { usage: await fails(() => rb.read(noCopySrc)), mapped: await fails(() => rb.read(mapped)) };
   const empty = (await rb.read(c, 0)).byteLength;
   const idle = { submits: submits - n0, created: rb.created - created0, bytesRead: rb.bytesRead - bytes0 };
   // One submit per read, and only the bytes read are mapped (of a 1 KiB buffer here).
@@ -321,6 +324,16 @@ export async function readbackRules() {
   GPUBuffer.prototype.mapAsync = function (mode, offset, size) { maps.push([offset, size]); return mapAsync.call(this, mode, offset, size); };
   try { await rb.read(c, 4, 12); } finally { GPUBuffer.prototype.mapAsync = mapAsync; }
   const submitsPerRead = submits - oneSubmit;
+
+  // A copy that fails validation (a destroyed source here) rejects instead of
+  // returning what an earlier read left in the staging buffer, counts
+  // nothing, and puts the buffer back for the next read.
+  const gone = source(Uint32Array.from([9, 9, 9, 9]));
+  gone.destroy();
+  const created1 = rb.created, bytes1 = rb.bytesRead;
+  const staleCopy = await fails(() => rb.read(gone));
+  const afterStale = { created: rb.created - created1, bytesRead: rb.bytesRead - bytes1, free: freeSizes(rb) };
+  const afterStaleRead = await u32(rb.read(c));
 
   // A failed map: the read rejects, its buffer is destroyed and never
   // returns to the pool, so the next read on this pool makes a new one.
@@ -348,7 +361,7 @@ export async function readbackRules() {
   device.destroy();
   return {
     error: error?.message ?? null, seq, afterSequential, largeOk, afterLarge, freeWhileSmallInFlight, smallAgainOk, afterSmall, concurrent, order,
-    misaligned, empty, idle, submitsPerRead, maps, failedMap, victimGone, victimDestroyed, recovered, recoveredCreated,
+    misaligned, badSource, empty, idle, submitsPerRead, maps, staleCopy, afterStale, afterStaleRead, failedMap, victimGone, victimDestroyed, recovered, recoveredCreated,
     destroyedInFlight, buffers: buffers.length, allDestroyed, readAfterDestroy,
   };
 }

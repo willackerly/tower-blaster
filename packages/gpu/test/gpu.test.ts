@@ -124,7 +124,7 @@ describe('Readback (pooled staging buffers)', () => {
     expect(r.created).toBe(2);
   });
 
-  it('reuses, grows, never shares, keeps queue order, rejects bad ranges and cleans up', async (ctx) => {
+  it('reuses, grows, never shares, keeps queue order, rejects bad ranges and failed copies, and cleans up', async (ctx) => {
     if (!gpu) return ctx.skip();
     const r = await call('readbackRules');
     expect(r.error).toBeNull();
@@ -145,10 +145,15 @@ describe('Readback (pooled staging buffers)', () => {
     expect(r.misaligned.offset).toMatch(/bytes \(4\) and offset \(2\) must be non-negative multiples of 4/);
     expect(r.misaligned.negative).toMatch(/must be non-negative multiples of 4/);
     expect(r.misaligned.range).toMatch(/8 bytes at 12 is past the end of a 16-byte buffer/);
+    expect(r.badSource).toEqual({ usage: 'Readback: the source buffer has no COPY_SRC usage', mapped: 'Readback: the source buffer is mapped' });
     expect(r.empty).toBe(0);
     expect(r.idle).toEqual({ submits: 0, created: 0, bytesRead: 0 });
     expect(r.submitsPerRead).toBe(1);
     expect(r.maps).toEqual([[0, 4]]);
+    // A dropped copy is an error, not the staging buffer's old bytes.
+    expect(r.staleCopy).toMatch(/^Readback: the copy failed: .*destroyed/s);
+    expect(r.afterStale).toEqual({ created: 0, bytesRead: 0, free: [1024, 2 ** 20] });
+    expect(r.afterStaleRead).toEqual([5, 6, 7, 8]);
     expect(r.failedMap).toMatch(/unmapped/i);
     expect(r.victimGone).toBe(true);
     expect(r.victimDestroyed).toBe(true);
