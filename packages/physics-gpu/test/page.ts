@@ -1,11 +1,13 @@
 // Page-side drivers for the GPU physics tests (bundled by loadBundle).
 import { createDevice, readBuffer } from '@tb/gpu';
-import { boundingRadius, groundManifold, quatNormalize, shapeManifold, spherePairs, supportArea, type Manifold as CpuManifold } from '@tb/geom';
+import { boundingRadius, groundManifold, NO_AXIS, quatNormalize, shapeManifold, spherePairs, supportArea, type Manifold as CpuManifold } from '@tb/geom';
 import { Body, Manifold, readStruct, Shape, writeStruct } from '@tb/schema';
-import type { BodyDesc, Quat, Vec3 } from '@tb/engine-api';
+import type { BodyDesc, InputEvent, Quat, Vec3 } from '@tb/engine-api';
 import { buildScenario } from '@tb/scenarios';
 import { bodiesAt } from '@tb/engine-api';
-import { Broadphase, Coloring, MAX_COLORS, Narrowphase } from '../src/index.ts';
+import { Broadphase, Coloring, GpuAvbdEngine, MAX_COLORS, Narrowphase } from '../src/index.ts';
+import type { AvbdParams } from '@tb/physics-ref';
+import type { SceneDesc } from '@tb/engine-api';
 import { colorGraph } from '@tb/physics-ref';
 
 export interface BroadCase {
@@ -109,14 +111,14 @@ function uploadBodies(device: GPUDevice, bodies: BodyDesc[]) {
 }
 
 /** The reference manifold for pair (a, b), normal from a to b. */
-function cpuPair(a: BodyDesc, b: BodyDesc, margin: number, reduce = true): CpuManifold | null {
-  return shapeManifold(a.shape, a.pos, a.rot, b.shape, b.pos, b.rot, margin, reduce);
+function cpuPair(a: BodyDesc, b: BodyDesc, margin: number, reduce = true, prevAxis = NO_AXIS): CpuManifold | null {
+  return shapeManifold(a.shape, a.pos, a.rot, b.shape, b.pos, b.rot, margin, reduce, prevAxis);
 }
 
-interface Gpu { count: number; normal: number[]; feature: number; points: number[][] }
+interface Gpu { count: number; normal: number[]; feature: number; axis: number; points: number[][] }
 function decode(view: DataView, i: number): Gpu {
   const r = readStruct(view, Manifold, i);
-  return { count: r.count![0]!, normal: r.normal!, feature: r.feature![0]!, points: [r.p0!, r.p1!, r.p2!, r.p3!].slice(0, r.count![0]!) };
+  return { count: r.count![0]!, normal: r.normal!, feature: r.feature![0]!, axis: r.axis![0]!, points: [r.p0!, r.p1!, r.p2!, r.p3!].slice(0, r.count![0]!) };
 }
 
 /**
@@ -137,11 +139,12 @@ function tieOnly(g: Gpu, c: CpuManifold | null, all: CpuManifold | null, tol: nu
   return supportArea(g.points.map((p) => [p[0]!, p[1]!, p[2]!] as Vec3), c.normal) >= 0.99 * supportArea(c.points.map((q) => q.point), c.normal) - 1e-6;
 }
 
-/** Match GPU against CPU: same count, normal within 1e-3 rad, every point paired within tol. */
+/** Match GPU against CPU: same count and SAT axis, normal within 1e-3 rad, every point paired within tol. */
 function agrees(g: Gpu, c: CpuManifold | null, tol: number): boolean {
   const cc = c ? c.points.length : 0;
   if (g.count !== cc) return false;
   if (!c || cc === 0) return true;
+  if (g.axis !== c.axis) return false;
   const dn = g.normal[0]! * c.normal[0] + g.normal[1]! * c.normal[1] + g.normal[2]! * c.normal[2];
   if (dn < 1 - 5e-7) return false;
   const left = [...c.points];
@@ -153,7 +156,11 @@ function agrees(g: Gpu, c: CpuManifold | null, tol: number): boolean {
   return true;
 }
 
-export interface NarrowCase { kind: 'random' | 'scenario'; pairs?: number; spheres?: number; scenario?: string; params?: Record<string, number>; margin: number; seed?: number; /** per-body sweep drawn from [0, sweep) */ sweep?: number }
+export interface NarrowCase {
+  kind: 'random' | 'scenario'; pairs?: number; spheres?: number; scenario?: string; params?: Record<string, number>; margin: number; seed?: number;
+  /** per-body sweep drawn from [0, sweep) */ sweep?: number;
+  /** give each pair a random last-step SAT axis (0..14, or none), as AvbdSolver.match would */ prevAxes?: boolean;
+}
 
 function randomPairs(c: NarrowCase): { bodies: BodyDesc[]; pairs: Array<[number, number]> } {
   let s = (c.seed ?? 1) >>> 0;
@@ -205,7 +212,11 @@ export async function narrowphase(c: NarrowCase) {
   const f32 = (x: number) => Math.fround(x);
   const pairMargin = (i: number, j: number) => f32(f32(f32(c.margin) + f32(sweeps[i]!)) + f32(sweeps[j]!));
   const groundMargin = (i: number) => f32(f32(c.margin) + f32(sweeps[i]!));
-  const np = new Narrowphase(device, bb, sb, pb, tb, Math.max(1, n), Math.max(1, pairs.length), sweepBuf);
+  let ps = 5;
+  const hints = pairs.map(() => (c.prevAxes ? Math.floor(16 * ((ps = (Math.imul(ps, 1664525) + 1013904223) >>> 0) / 2 ** 32)) : 15)).map((h) => (h === 15 ? NO_AXIS : h));
+  const prevBuf = device.createBuffer({ size: Math.max(16, pairs.length * 8), usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });
+  device.queue.writeBuffer(prevBuf, 0, Uint32Array.from(hints.flatMap((h) => [0, h])));
+  const np = new Narrowphase(device, bb, sb, pb, tb, Math.max(1, n), Math.max(1, pairs.length), sweepBuf, prevBuf);
   device.pushErrorScope('validation');
   const enc = device.createCommandEncoder();
   const pass = enc.beginComputePass();
@@ -219,11 +230,11 @@ export async function narrowphase(c: NarrowCase) {
   let pairMismatch = 0, pairTies = 0, contacts = 0, groundMismatch = 0, groundTies = 0, groundContacts = 0;
   const examples: unknown[] = [];
   pairs.forEach(([i, j], k) => {
-    const g = decode(mv, k), cpu = cpuPair(bodies[i]!, bodies[j]!, pairMargin(i, j));
+    const g = decode(mv, k), cpu = cpuPair(bodies[i]!, bodies[j]!, pairMargin(i, j), true, hints[k]);
     if (cpu) contacts++;
     const t = tol * (1 + Math.abs(bodies[i]!.pos[0]) / 25);
     if (!agrees(g, cpu, t)) {
-      if (tieOnly(g, cpu, cpuPair(bodies[i]!, bodies[j]!, pairMargin(i, j), false), t)) { pairTies++; return; }
+      if (g.axis === cpu?.axis && tieOnly(g, cpu, cpuPair(bodies[i]!, bodies[j]!, pairMargin(i, j), false, hints[k]), t)) { pairTies++; return; }
       pairMismatch++;
       if (examples.length < 3) examples.push({ k, gpu: g, cpu });
     }
@@ -241,6 +252,7 @@ export async function narrowphase(c: NarrowCase) {
   });
   np.destroy();
   sweepBuf.destroy();
+  prevBuf.destroy();
   device.destroy();
   return { error: error?.message ?? null, pairs: pairs.length, contacts, pairMismatch, pairTies, groundContacts, groundMismatch, groundTies, examples };
 }
@@ -357,6 +369,185 @@ export async function coloring(c: ColorCase) {
     colorsMatch: firstMismatch < 0, firstMismatch, rowsMatch, orderMatch: order.every((x, k) => x === expectOrder[k]),
     startMatch: start.every((x, k) => x === expectStart[k]),
     dispatchMatch: Array.from({ length: MAX_COLORS }, (_, k) => disp[3 * k] === Math.ceil((expectStart[k + 1]! - expectStart[k]!) / 64) && disp[3 * k + 1] === 1 && disp[3 * k + 2] === 1).every(Boolean),
-    maxDegree: Math.max(0, ...adj.map((s) => s.size)), wallMs,
+    maxDegree: adj.reduce((m, s) => Math.max(m, s.size), 0), wallMs,
   };
+}
+
+export interface PlainSnapshot { step: number; pos: number[]; rot: number[]; linVel: number[]; angVel: number[] }
+
+/** Run a scene on the GPU engine; snapshot every `every` steps (and at the end). */
+export async function simulateGpu(scene: SceneDesc, steps: number, params: Partial<AvbdParams> = {}, every = 0) {
+  const { device } = await createDevice();
+  device.pushErrorScope('validation');
+  const e = new GpuAvbdEngine(params, { device });
+  await e.init(scene);
+  const snaps: PlainSnapshot[] = [];
+  const take = async () => {
+    const s = await e.snapshot();
+    snaps.push({ step: e.stepIndex, pos: [...s.pos], rot: [...s.rot], linVel: [...s.linVel], angVel: [...s.angVel] });
+  };
+  await take();
+  const t0 = performance.now();
+  let maxColors = 0, worst = { pairsRequired: 0, pairsWritten: 0, uncolored: 0, colorOverflow: 0 };
+  for (let i = 0; i < steps; i++) {
+    e.step();
+    if (every && (i + 1) % every === 0 && i + 1 < steps) {
+      await take();
+      const d = await e.diagnostics();
+      maxColors = Math.max(maxColors, d.colors);
+      if (d.pairsRequired > d.pairsWritten || d.uncolored || d.colorOverflow) worst = d;
+    }
+  }
+  await take();
+  const wallMs = performance.now() - t0;
+  const d = await e.diagnostics();
+  maxColors = Math.max(maxColors, d.colors);
+  if (d.pairsRequired > d.pairsWritten || d.uncolored || d.colorOverflow) worst = d;
+  const error = await device.popErrorScope();
+  e.dispose();
+  device.destroy();
+  return { error: error?.message ?? null, snaps, maxColors, worst, wallMs };
+}
+
+
+/**
+ * The Rapier push() test on the GPU engine: inputs pushed mid-run (one for a
+ * past step, two for the same step around it) against the same events
+ * recorded into scene.inputs. Returns both final snapshots.
+ */
+export async function pushReplay(steps: number) {
+  const { device } = await createDevice();
+  device.pushErrorScope('validation');
+  const ball = (x: number, radius = 0.4): BodyDesc => ({ shape: { kind: 'sphere', radius }, pos: [x, 3, -6], rot: [0, 0, 0, 1], linVel: [0, 0, 12], angVel: [0, 0, 0], density: 5, friction: 0.5, restitution: 0.1, tag: -1 });
+  const base = buildScenario('S1', { F: 2, H: 4, gap: 0.02 });
+  // Room for the three pushes; the replay is created with the same options.
+  const opts = { device, capacity: base.bodies.length + 4 };
+  // Rejections leave the queue untouched: beyond capacity, a body larger than
+  // the cells were sized for, and (no options) any push past the scene.
+  const rejects = async (o: object, evs: InputEvent[]) => {
+    const e = new GpuAvbdEngine({}, { device, ...o });
+    await e.init(base);
+    let message: string | null = null;
+    try { e.push(evs); } catch (err) { message = (err as Error).message; }
+    for (let i = 0; i < 6; i++) e.step();
+    const count = (await e.snapshot()).count;
+    e.dispose();
+    return { message, count };
+  };
+  const rejected = {
+    capacity: await rejects({ capacity: base.bodies.length + 2 }, [0, 1, 2].map((k) => ({ step: 5, kind: 'spawn', body: ball(k) }))),
+    radius: await rejects({ capacity: base.bodies.length + 1 }, [{ step: 5, kind: 'spawn', body: ball(0, 2) }]),
+    noRoom: await rejects({}, [{ step: 5, kind: 'spawn', body: ball(0) }]),
+  };
+  const live = new GpuAvbdEngine({}, opts);
+  await live.init({ ...base, inputs: [{ step: 30, kind: 'spawn', body: ball(0) }] });
+  const pushedAt: InputEvent[] = [{ step: 30, kind: 'spawn', body: ball(0) }];
+  for (let i = 0; i < steps; i++) {
+    if (i === 10) {
+      const evs: InputEvent[] = [{ step: 20, kind: 'spawn', body: ball(10) }, { step: 3, kind: 'spawn', body: ball(-10) }, { step: 20, kind: 'spawn', body: ball(20) }];
+      live.push(evs);
+      pushedAt.push(...evs.map((e) => ({ ...e, step: Math.max(e.step, i) })));
+    }
+    live.step();
+  }
+  const a = await live.snapshot();
+  live.dispose();
+  const replay = new GpuAvbdEngine({}, opts);
+  await replay.init({ ...base, inputs: [...pushedAt].sort((x, y) => x.step - y.step) });
+  for (let i = 0; i < steps; i++) replay.step();
+  const b = await replay.snapshot();
+  replay.dispose();
+  const error = await device.popErrorScope();
+  device.destroy();
+  const plain = (s: typeof a) => ({ count: s.count, pos: [...s.pos], rot: [...s.rot] });
+  return { error: error?.message ?? null, n: base.bodies.length, live: plain(a), replay: plain(b), rejected };
+}
+
+/**
+ * Step a scene and check the solver's pair history (AvbdSolver.match): for
+ * every pair this step, prev must name its slot in last step's pair list
+ * (or NONE when the pair is new) and that slot's manifold axis. Then check
+ * the narrowphase used it: each box-box pair's axis must be the reference
+ * manifold's from the same f32 state given that hint (hinted counts the
+ * pairs where the hint changed the reference's answer). presenceMismatch
+ * counts pairs where only one side found a manifold: rounding at a clip
+ * plane, which the narrowphase tests bound.
+ */
+export async function pairHistory(scene: SceneDesc, steps: number, opts: { pairsPerBody?: number } = {}) {
+  const { device } = await createDevice();
+  device.pushErrorScope('validation');
+  const e = new GpuAvbdEngine({}, { device, pairsPerBody: opts.pairsPerBody });
+  await e.init(scene);
+  type Parts = { bodies: GPUBuffer; sweep: GPUBuffer; bp: { pairs: GPUBuffer; total: GPUBuffer }; np: { manifolds: GPUBuffer }; prev: GPUBuffer };
+  const parts = (e as unknown as { parts: Parts }).parts;
+  const descs = bodiesAt(scene, Number.MAX_SAFE_INTEGER), shapes = descs.map((b) => b.shape);
+  const margin = Math.fround((e as unknown as { params: AvbdParams }).params.margin);
+  const state = async () => {
+    const v = new DataView(await readBuffer(device, parts.bodies));
+    return Array.from({ length: (e as unknown as { n: number }).n }, (_, i) => { const b = readStruct(v, Body, i); return { pos: [...b.pos!] as Vec3, rot: [...b.rot!] as Quat }; });
+  };
+  const read = async () => {
+    const [pairs, total, mf, prev, sw] = await Promise.all([parts.bp.pairs, parts.bp.total, parts.np.manifolds, parts.prev, parts.sweep].map((b) => readBuffer(device, b)));
+    const t = new Uint32Array(total!), count = t[3]!, pv = new Uint32Array(pairs!), mv = new DataView(mf!), hv = new Uint32Array(prev!);
+    const list = Array.from({ length: count }, (_, k) => {
+      const m = readStruct(mv, Manifold, k);
+      return { a: pv[2 * k]!, b: pv[2 * k + 1]!, count: m.count![0]!, axis: m.axis![0]!, prevSlot: hv[2 * k]!, prevAxis: hv[2 * k + 1]! };
+    });
+    return { list, sweep: new Float32Array(sw!), overflow: t[5]! > t[3]! };
+  };
+  let wrong = 0, found = 0, missed = 0, axes = 0, checked = 0, axisMismatch = 0, presenceMismatch = 0, hinted = 0, overflowSteps = 0, spawnPairs = 0;
+  const examples: unknown[] = [];
+  let last = (await read()).list;
+  for (let s = 0; s < steps; s++) {
+    const before = await state();
+    e.step();
+    const { list: cur, sweep, overflow } = await read();
+    if (overflow) overflowSteps++;
+    spawnPairs += cur.filter((p) => Math.max(p.a, p.b) >= before.length).length;
+    // The narrowphase's axis given its hint, against the reference given the same hint.
+    for (const p of cur) {
+      if (shapes[p.a]!.kind !== 'box' || shapes[p.b]!.kind !== 'box') continue;
+      // A body spawned in this step is not in `before` yet: the GPU has its pose as authored, in f32.
+      const pose = (i: number) => before[i] ?? { pos: descs[i]!.pos.map(Math.fround) as Vec3, rot: descs[i]!.rot.map(Math.fround) as Quat };
+      const A = pose(p.a), B = pose(p.b), m = Math.fround(Math.fround(margin + sweep[p.a]!) + sweep[p.b]!);
+      const ref = shapeManifold(shapes[p.a]!, A.pos, A.rot, shapes[p.b]!, B.pos, B.rot, m, true, p.prevAxis);
+      const plain = shapeManifold(shapes[p.a]!, A.pos, A.rot, shapes[p.b]!, B.pos, B.rot, m, true, NO_AXIS);
+      const want = ref ? ref.axis : NONE_U32, got = p.count > 0 ? p.axis : NONE_U32;
+      checked++;
+      if (got !== want) {
+        if (got === NONE_U32 || want === NONE_U32) presenceMismatch++; else axisMismatch++;
+        if (examples.length < 3) examples.push({ step: s, a: p.a, b: p.b, got, want, hint: p.prevAxis, margin: m, A, B });
+      }
+      if (want !== (plain ? plain.axis : NONE_U32)) hinted++;
+    }
+    if (s > 0) { // the first step has no history
+      const index = new Map(last.map((p, k) => [`${p.a},${p.b}`, k]));
+      for (const p of cur) {
+        const k = index.get(`${p.a},${p.b}`);
+        if (k === undefined) { if (p.prevSlot !== NONE_U32) wrong++; continue; }
+        if (p.prevSlot === NONE_U32) { missed++; continue; }
+        const q = last[p.prevSlot]!;
+        const axis = q.count > 0 ? q.axis : NONE_U32;
+        if (p.prevSlot !== k || q.a !== p.a || q.b !== p.b || p.prevAxis !== axis) wrong++;
+        else { found++; if (axis !== NONE_U32) axes++; }
+      }
+    }
+    last = cur;
+  }
+  const error = await device.popErrorScope();
+  e.dispose(); device.destroy();
+  return { error: error?.message ?? null, wrong, found, missed, axes, checked, axisMismatch, presenceMismatch, hinted, overflowSteps, spawnPairs, examples };
+}
+const NONE_U32 = 0xffffffff;
+
+/** init() with a pair buffer too large for the device: the error it throws (null if none). */
+export async function initError(scene: SceneDesc, pairsPerBody: number) {
+  const { device } = await createDevice();
+  device.pushErrorScope('validation');
+  const e = new GpuAvbdEngine({}, { device, pairsPerBody });
+  let message: string | null = null;
+  try { await e.init(scene); } catch (err) { message = (err as Error).message; }
+  const validation = await device.popErrorScope();
+  e.dispose(); device.destroy();
+  return { message, validation: validation?.message ?? null };
 }

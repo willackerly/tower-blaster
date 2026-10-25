@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { emptySnapshot, type PhysicsEngine, type SceneDesc } from '@tb/engine-api';
 import { buildScenario } from '@tb/scenarios';
 import { RapierEngine } from '@tb/adapter-rapier';
-import { compareBlocks, makeEngine, parseSpec, qualityGates, qualityRun, SlowedEngine, timeInterleaved, timingSummary } from '../src/index.ts';
+import { compareBlocks, makeEngine, parseSpec, qualityGates, qualityRun, SlowedEngine, slowdownArms, timeInterleaved, timingSummary } from '../src/index.ts';
 
 /** An engine whose step "takes" cost(step) ms on a fake clock, and logs its order. */
 function fakeEngine(name: string, clock: { t: number }, cost: (step: number) => number, log: string[]): PhysicsEngine {
@@ -64,6 +64,25 @@ describe('engine registry and SlowedEngine', () => {
     expect(clock.t - t0).toBeGreaterThan(10 * 1.1 - 0.01);
     expect(clock.t - t0).toBeLessThan(10 * 1.1 + 0.01);
     expect(slowed.info.variant.slowed).toBe(0.1);
+  });
+
+  it('self-check arms: both wrapped, the baseline spins zero time and the copy the requested fraction', async () => {
+    const clock = { t: 0 }, log: string[] = [];
+    const spinClock = () => (clock.t += 0.001);
+    const arms = slowdownArms(() => fakeEngine('A', clock, () => 10, log), 0.1, spinClock);
+    expect(arms.map((e) => e instanceof SlowedEngine)).toEqual([true, true]);
+    expect(arms.map((e) => e.info.variant.slowed)).toEqual([0, 0.1]);
+    const took: number[] = [];
+    for (const e of arms) {
+      await e.init(tiny);
+      const t0 = clock.t;
+      await e.step();
+      took.push(clock.t - t0);
+    }
+    // Three clock reads (start, end, one loop test) and no spinning on the baseline.
+    expect(took[0]).toBeCloseTo(10.003, 9);
+    expect(took[1]).toBeGreaterThan(10 * 1.1 - 0.01);
+    expect(took[1]).toBeLessThan(10 * 1.1 + 0.01);
   });
 });
 

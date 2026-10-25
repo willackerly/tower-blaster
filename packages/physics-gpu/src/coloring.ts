@@ -19,7 +19,7 @@
 // The atomic fill leaves each row in scheduling order; rows are then sorted
 // by manifold slot so the solver, which walks a body's row to sum its
 // contact forces, is bit-for-bit reproducible.
-import { RadixSorter, Scanner } from '@tb/gpu';
+import { assertStorageFits, RadixSorter, Scanner } from '@tb/gpu';
 import { Manifold, wgslStruct } from '@tb/schema';
 
 const WG = 64;
@@ -231,7 +231,7 @@ export class Coloring {
   constructor(private readonly device: GPUDevice, manifolds: GPUBuffer, private readonly total: GPUBuffer, readonly capacity: number, maxPairs: number, readonly rounds = 64) {
     if (rounds % 2 !== 0) throw new Error('Coloring: rounds must be even (the result ends in the first buffer)');
     this.maxEdges = 2 * maxPairs;
-    const buf = (bytes: number, label: string, extra = 0) => device.createBuffer({ size: Math.max(16, bytes), usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST | extra, label });
+    const buf = (bytes: number, label: string, extra = 0) => (assertStorageFits(device, bytes, label), device.createBuffer({ size: Math.max(16, bytes), usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST | extra, label }));
     this.degree = buf(capacity * 4, 'col degree');
     this.rowStart = buf(capacity * 4, 'col row start');
     this.rowLength = buf(capacity * 4, 'col row length (fill cursor)');

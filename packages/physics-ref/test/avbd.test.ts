@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { type BodyDesc, bodiesAt, type SceneDesc, type Vec3 } from '@tb/engine-api';
+import { type BodyDesc, bodiesAt, type InputEvent, type SceneDesc, type Vec3 } from '@tb/engine-api';
 import { drift, energy, jitter, nonFinite, penetration, survival } from '@tb/metrics';
 import { buildScenario } from '@tb/scenarios';
 import { AvbdReferenceEngine, type AvbdParams, colorGraph, outranks, solveSpd6, tangentBasis } from '../src/index.ts';
@@ -154,6 +154,54 @@ describe('single bodies against analytic results', () => {
   });
 });
 
+describe('per-pair SAT axis history (AvbdWorld.axes)', () => {
+  // b overlaps a by 10 mm along x and 10.2 mm along y: x separates more,
+  // but within the face tolerance, so last step's axis decides (geom/manifold.ts).
+  const pair = (): SceneDesc => ({ ...sceneOf([cube([0, 0, 0]), cube([0.99, 0.9898, 0])], [0, 0, 0]), ground: null });
+  const along = (e: AvbdReferenceEngine, n: Vec3) => {
+    const cs = e.world!.contacts.filter((c) => c.a === 0 && c.b === 1);
+    return cs.length > 0 && cs.every((c) => c.n[0] * n[0] + c.n[1] * n[1] + c.n[2] * n[2] > 0.999);
+  };
+
+  it('the narrowphase gets last step\'s axis for the pair and records this step\'s', async () => {
+    const plain = new AvbdReferenceEngine();
+    await plain.init(pair());
+    plain.step();
+    expect(plain.world!.axes.get('0,1')).toBe(0);
+    expect(along(plain, [1, 0, 0])).toBe(true);
+    const hinted = new AvbdReferenceEngine();
+    await hinted.init(pair());
+    hinted.world!.axes.set('0,1', 1);
+    hinted.step();
+    expect(hinted.world!.axes.get('0,1')).toBe(1);
+    expect(along(hinted, [0, 1, 0])).toBe(true);
+  });
+
+  it('in a tower jiggled by 1e-5 every step, no touching pair changes axis', async () => {
+    // 2026-10-25: 0 of ~31k pair-steps switch (19k face pairs, the rest
+    // zero-depth slivers: see FACE_INSET); with the history cleared before
+    // each step 3 do here (and 1-27 in a 4x4x12 tower, by noise seed).
+    const scene = buildScenario('S1', { F: 3, H: 8, gap: 0 }, 1);
+    const e = new AvbdReferenceEngine();
+    await e.init(scene);
+    const w = e.world!;
+    let seed = 1;
+    const r = () => ((seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0) / 2 ** 32) * 2 - 1;
+    let changes = 0, kept = 0, last = new Map(w.axes);
+    for (let i = 0; i < 120; i++) {
+      for (const b of w.bodies) b.pos = [b.pos[0] + 1e-5 * r(), b.pos[1] + 1e-5 * r(), b.pos[2] + 1e-5 * r()];
+      e.step();
+      for (const [k, axis] of w.axes) {
+        const p = last.get(k);
+        if (p !== undefined) { if (p === axis) kept++; else changes++; }
+      }
+      last = new Map(w.axes);
+    }
+    expect(changes).toBe(0);
+    expect(kept).toBeGreaterThan(15_000);
+  });
+});
+
 describe('stacks and towers', () => {
   it('a 10-cube stack stands for 5 s', async () => {
     const scene = buildScenario('S9', { H: 10, ratio: 1 }, 1);
@@ -192,8 +240,8 @@ describe('stacks and towers', () => {
 
   // Same scene in Rapier: survival 0.30, ball rebounds at -4.1 m/s, worst
   // transient penetration 0.14 (cubes falling at 12-15 m/s move 0.25 per step).
-  const knockdown = async (params: Partial<AvbdParams>) => {
-    const scene = buildScenario('S5', { N: 48, F: 2, H: 12, fireStep: 0, speed: 15, massRatio: 5, radius: 0.6 }, 1);
+  const knockdown = async (params: Partial<AvbdParams>, speed = 15) => {
+    const scene = buildScenario('S5', { N: 48, F: 2, H: 12, fireStep: 0, speed, massRatio: 5, radius: 0.6 }, 1);
     const e = new AvbdReferenceEngine(params);
     await e.init(scene);
     e.step();
@@ -207,14 +255,35 @@ describe('stacks and towers', () => {
     const s1 = e.snapshot();
     return { s1, survival: survival(bodies, s0, s1, [0]), ballVx: s1.linVel[3 * ball]!, maxPen };
   };
-  it('a ball knocks a slender tower down, with speculative margins keeping impacts shallow', async () => {
-    const r = await knockdown({});
-    expect(nonFinite(r.s1)).toBe(0);
-    expect(r.survival).toBeLessThan(0.5);
-    expect(r.ballVx).toBeLessThan(-2);
-    expect(r.maxPen).toBeLessThan(0.03);
-    // Ablation: a fixed margin lets fast cubes land 0.1+ deep, as in Rapier.
-    expect((await knockdown({ sweep: false })).maxPen).toBeGreaterThan(0.1);
+  // One collapse is chaotic: nearby ball speeds, or a 1e-12 nudge to the
+  // tower (what any rounding-level code change does), give a different
+  // collapse. At speed 17 the ball keeps only -1.1 m/s, and a run's deepest
+  // transient is set by a single tumbling cube (0.02 to 0.52 over 144
+  // re-rolled runs). So the outcomes are medians over 9 speeds, with bounds
+  // outside their measured spread (16 re-rolls with 1e-12 jitter,
+  // 2026-10-25), not one realization.
+  const median = (x: number[]) => [...x].sort((a, b) => a - b)[x.length >> 1]!;
+  const speeds = [11, 12, 13, 14, 15, 16, 17, 18, 19];
+  let knocks: ReturnType<typeof knockdown>[] | null = null;
+  const knocked = () => Promise.all(knocks ??= speeds.map((v) => knockdown({}, v)));
+
+  it('a ball knocks a slender tower down (medians over 9 ball speeds)', async () => {
+    // Survival 0.16-0.31 (median 0.22), ball vx -4.5 to -1.1 (median -3.4).
+    const runs = await knocked();
+    for (const r of runs) expect(nonFinite(r.s1)).toBe(0);
+    expect(median(runs.map((r) => r.survival))).toBeLessThan(0.5);
+    expect(median(runs.map((r) => r.ballVx))).toBeLessThan(-1);
+  });
+
+  it('speculative margins keep impacts shallow (median over 9 ball speeds)', async () => {
+    // Median deepest transient 0.042 with sweeps (0.037-0.068 over the
+    // re-rolls), 0.27 without (0.20-0.27); Rapier, fixed margin: 0.14 at
+    // speed 15. A bootstrap of the re-rolled runs fails these bounds 0.02%
+    // of the time (the earlier 5 speeds, < 0.07 and > 3x: 16%).
+    const on = median((await knocked()).map((r) => r.maxPen));
+    const off = median(await Promise.all(speeds.map(async (v) => (await knockdown({ sweep: false }, v)).maxPen)));
+    expect(on).toBeLessThan(0.1);
+    expect(off).toBeGreaterThan(2 * on);
   });
 
   it('is deterministic', async () => {
@@ -222,5 +291,34 @@ describe('stacks and towers', () => {
     const a = await simulate(scene, 60), b = await simulate(scene, 60);
     expect([...a.s1.pos]).toEqual([...b.s1.pos]);
     expect([...a.s1.rot]).toEqual([...b.s1.rot]);
+  });
+});
+
+describe('AvbdReferenceEngine.push()', () => {
+  it('push() during a run replays exactly as the same events in scene.inputs', async () => {
+    const ball = (x: number): BodyDesc => ({ shape: { kind: 'sphere', radius: 0.4 }, pos: [x, 3, -6], rot: [0, 0, 0, 1], linVel: [0, 0, 12], angVel: [0, 0, 0], density: 5, friction: 0.5, restitution: 0.1, tag: -1 });
+    // As the Rapier test: a past-step event applies now, and two events for
+    // step 20 pushed around an earlier one keep push order (stable insert).
+    const live = new AvbdReferenceEngine();
+    const base = buildScenario('S1', { F: 2, H: 4, gap: 0.02 });
+    await live.init(base);
+    const pushedAt: InputEvent[] = [];
+    for (let i = 0; i < 40; i++) {
+      if (i === 10) {
+        const evs: InputEvent[] = [{ step: 20, kind: 'spawn', body: ball(10) }, { step: 3, kind: 'spawn', body: ball(-10) }, { step: 20, kind: 'spawn', body: ball(20) }];
+        live.push(evs);
+        pushedAt.push(...evs.map((e) => ({ ...e, step: Math.max(e.step, i) })));
+      }
+      live.step();
+    }
+    const replay = new AvbdReferenceEngine();
+    await replay.init({ ...base, inputs: [...pushedAt].sort((a, b) => a.step - b.step) });
+    for (let i = 0; i < 40; i++) replay.step();
+    const a = live.snapshot(), b = replay.snapshot();
+    expect(a.count).toBe(base.bodies.length + 3);
+    expect(Array.from(a.pos)).toEqual(Array.from(b.pos));
+    expect(Array.from(a.rot)).toEqual(Array.from(b.rot));
+    const n = base.bodies.length;
+    expect([a.pos[3 * n], a.pos[3 * (n + 1)], a.pos[3 * (n + 2)]].map((x) => Math.round(x!))).toEqual([-10, 10, 20]);
   });
 });

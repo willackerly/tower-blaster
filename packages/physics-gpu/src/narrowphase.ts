@@ -2,7 +2,10 @@
 // output is deterministic and needs no compaction), plus one ground manifold
 // per body. A WGSL port of geom/src/manifold.ts, which is its test oracle.
 // It follows the reference's order of operations (corner order, clipping
-// sequence, first-index tie-breaks) so the two agree, not merely look alike.
+// sequence, first-index tie-breaks, face-axis tolerance and the previous
+// axis as the first candidate) so the two agree, not merely look alike.
+import { EDGE_ABS, EDGE_REL, FACE_ABS, FACE_INSET, FACE_REL } from '@tb/geom';
+import { assertStorageFits } from '@tb/gpu';
 import { Body, Manifold, Shape, wgslStruct } from '@tb/schema';
 
 const WG = 64;
@@ -24,10 +27,17 @@ struct NP { n: u32, hasGround: u32, margin: f32, groundY: f32 }
 // Per-body speculative growth (how far the body can move this step); a
 // pair's margin is p.margin + sweep[a] + sweep[b], a ground contact's p.margin + sweep[i].
 @group(0) @binding(7) var<storage, read> sweep: array<f32>;
+// Per pair slot: (last step's slot, last step's SAT axis), NONE when new; see AvbdSolver.match.
+@group(0) @binding(8) var<storage, read> prev: array<vec2u>;
 var<private> margin: f32;
 
-const EDGE_REL = 0.95;
-const EDGE_ABS = 0.01;
+const NONE = ${NONE}u;
+// The reference's SAT tolerances (geom/src/manifold.ts).
+const EDGE_REL = ${EDGE_REL};
+const EDGE_ABS = ${EDGE_ABS};
+const FACE_REL = ${FACE_REL};
+const FACE_ABS = ${FACE_ABS};
+const FACE_INSET = ${FACE_INSET};
 
 struct Box { c: vec3f, ax: mat3x3f, h: vec3f }
 
@@ -51,6 +61,7 @@ fn emptyManifold(a: u32, b: u32) -> Manifold {
   m.b = b;
   m.count = 0u;
   m.normal = vec3f(0.0, 1.0, 0.0);
+  m.axis = NONE;
   return m;
 }
 
@@ -102,6 +113,11 @@ fn reduceInto(m: ptr<function, Manifold>, pts: ptr<function, array<vec4f, 8>>, n
   (*m).count = 4u;
 }
 
+// s beats best by abs + rel * |best| (see beats in @tb/geom: valid for gaps too).
+fn beats(s: f32, best: f32, relTol: f32, absTol: f32) -> bool {
+  return s > best + absTol + relTol * abs(best);
+}
+
 fn clipPoly(poly: ptr<function, array<vec3f, 8>>, n: u32, pn: vec3f, d: f32) -> u32 {
   var outp: array<vec3f, 8>;
   var c = 0u;
@@ -145,20 +161,25 @@ fn segmentClosest(p1: vec3f, q1: vec3f, p2: vec3f, q2: vec3f) -> array<vec3f, 2>
   return array<vec3f, 2>(p1 + d1 * s, p2 + d2 * t);
 }
 
-fn boxBox(a: Box, b: Box, m: ptr<function, Manifold>) {
+fn boxBox(a: Box, b: Box, m: ptr<function, Manifold>, prevAxis: u32) {
   let d = b.c - a.c;
   var faceBest = -3.4e38;
   var faceAxis = vec3f(0.0, 1.0, 0.0);
   var faceOwner = 0u;
   var faceK = 0u;
-  for (var owner = 0u; owner < 2u; owner++) {
-    for (var k = 0u; k < 3u; k++) {
-      var n = a.ax[k];
-      if (owner == 1u) { n = b.ax[k]; }
-      let s = abs(dot(d, n)) - projR(a, n) - projR(b, n);
-      if (s > margin) { return; }
-      if (s > faceBest) { faceBest = s; faceAxis = n; faceOwner = owner; faceK = k; }
-    }
+  // Last step's face axis first (another must beat it by the tolerance), then a's and b's in order.
+  var first = 0u;
+  if (prevAxis < 6u) { first = prevAxis; }
+  for (var t = 0u; t < 6u; t++) {
+    var id = first;
+    if (t > 0u) { id = t - 1u + select(0u, 1u, t - 1u >= first); }
+    let owner = id / 3u;
+    let k = id % 3u;
+    var n = a.ax[k];
+    if (owner == 1u) { n = b.ax[k]; }
+    let s = abs(dot(d, n)) - projR(a, n) - projR(b, n);
+    if (s > margin) { return; }
+    if (t == 0u || beats(s, faceBest, FACE_REL, FACE_ABS)) { faceBest = s; faceAxis = n; faceOwner = owner; faceK = k; }
   }
   var edgeBest = -3.4e38;
   var edgeAxis = vec3f(0.0, 1.0, 0.0);
@@ -175,7 +196,7 @@ fn boxBox(a: Box, b: Box, m: ptr<function, Manifold>) {
       if (s > edgeBest) { edgeBest = s; edgeAxis = n; edgeI = i; edgeJ = j; }
     }
   }
-  if (edgeBest > EDGE_REL * faceBest + EDGE_ABS) {
+  if (beats(edgeBest, faceBest, EDGE_REL, EDGE_ABS)) {
     var n = edgeAxis;
     if (dot(n, d) < 0.0) { n = -n; }
     let ea = supportEdge(a, edgeI, n);
@@ -183,6 +204,7 @@ fn boxBox(a: Box, b: Box, m: ptr<function, Manifold>) {
     let cp = segmentClosest(ea[0], ea[1], eb[0], eb[1]);
     (*m).normal = n;
     (*m).feature = 2u;
+    (*m).axis = 6u + 3u * edgeI + edgeJ;
     (*m).p0 = vec4f(0.5 * (cp[0] + cp[1]), -edgeBest);
     (*m).count = 1u;
     return;
@@ -203,7 +225,8 @@ fn boxBox(a: Box, b: Box, m: ptr<function, Manifold>) {
   }
   let u = (ik + 1u) % 3u;
   let v = (ik + 2u) % 3u;
-  let fc = inc.c + inc.ax[ik] * (isg * inc.h[ik]);
+  // Clip in the reference box's frame (f32 far from the origin would round the inset away).
+  let fc = (inc.c - rf.c) + inc.ax[ik] * (isg * inc.h[ik]);
   let eu = inc.ax[u] * inc.h[u];
   let ev = inc.ax[v] * inc.h[v];
   var poly: array<vec3f, 8>;
@@ -216,24 +239,23 @@ fn boxBox(a: Box, b: Box, m: ptr<function, Manifold>) {
   for (var s = 1u; s <= 2u; s++) {
     let k = (faceK + s) % 3u;
     let ax = rf.ax[k];
-    let h = rf.h[k];
-    let c = dot(rf.c, ax);
-    count = clipPoly(&poly, count, ax, c + h);
-    count = clipPoly(&poly, count, -ax, -(c - h));
+    let h = rf.h[k] - min(FACE_INSET, 0.1 * rf.h[k]);
+    count = clipPoly(&poly, count, ax, h);
+    count = clipPoly(&poly, count, -ax, h);
   }
-  let planeD = dot(rf.c, nRef) + rf.h[faceK];
   var pts: array<vec4f, 8>;
   var np = 0u;
   for (var k = 0u; k < count; k++) {
     let q = poly[k];
-    let s = dot(q, nRef) - planeD;
-    if (s <= margin) { pts[np] = vec4f(q - nRef * (s * 0.5), -s); np++; }
+    let s = dot(q, nRef) - rf.h[faceK];
+    if (s <= margin) { pts[np] = vec4f(rf.c + (q - nRef * (s * 0.5)), -s); np++; }
   }
   if (np == 0u) { return; }
   var normal = nRef;
   if (faceOwner == 1u) { normal = -nRef; }
   (*m).normal = normal;
   (*m).feature = faceOwner;
+  (*m).axis = 3u * faceOwner + faceK;
   reduceInto(m, &pts, np, normal);
 }
 
@@ -284,7 +306,7 @@ fn pairsMain(@builtin(global_invocation_id) id: vec3u) {
   let pa = bodies[ij.x].pos;
   let pb = bodies[ij.y].pos;
   if (sa.kind == 0u && sb.kind == 0u) {
-    boxBox(boxOf(ij.x), boxOf(ij.y), &m);
+    boxBox(boxOf(ij.x), boxOf(ij.y), &m, prev[k].y);
   } else if (sa.kind == 1u && sb.kind == 1u) {
     sphereSphere(pa, sa.half.x, pb, sb.half.x, &m);
   } else if (sa.kind == 1u) {
@@ -300,7 +322,7 @@ fn pairsMain(@builtin(global_invocation_id) id: vec3u) {
 fn groundMain(@builtin(global_invocation_id) id: vec3u) {
   let i = id.x;
   if (i >= p.n) { return; }
-  var m = emptyManifold(i, ${NONE}u);
+  var m = emptyManifold(i, NONE);
   if (p.hasGround == 0u) { ground[i] = m; return; }
   margin = p.margin + sweep[i];
   let s = shapes[bodies[i].shape];
@@ -338,6 +360,7 @@ export class Narrowphase {
   private readonly groundPipe: GPUComputePipeline;
   private readonly bind: GPUBindGroup;
   private readonly zeroSweep: GPUBuffer | null;
+  private readonly noPrev: GPUBuffer | null = null;
 
   /**
    * @param bodies Body records; @param shapes Shape table indexed by Body.shape
@@ -345,18 +368,24 @@ export class Narrowphase {
    */
   /**
    * @param sweep optional f32 per body added to the margin (see the shader); zero when omitted
+   * @param prev optional vec2u per pair slot, (last step's slot, last step's axis) from AvbdSolver.match; no history when omitted
    */
-  constructor(private readonly device: GPUDevice, bodies: GPUBuffer, shapes: GPUBuffer, pairs: GPUBuffer, private readonly total: GPUBuffer, readonly capacity: number, readonly maxPairs: number, sweep?: GPUBuffer) {
-    const buf = (bytes: number, label: string) => device.createBuffer({ size: Math.max(Manifold.size, bytes), usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC, label });
+  constructor(private readonly device: GPUDevice, bodies: GPUBuffer, shapes: GPUBuffer, pairs: GPUBuffer, private readonly total: GPUBuffer, readonly capacity: number, readonly maxPairs: number, sweep?: GPUBuffer, prev?: GPUBuffer) {
+    const buf = (bytes: number, label: string) => (assertStorageFits(device, bytes, label), device.createBuffer({ size: Math.max(Manifold.size, bytes), usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC, label }));
     this.manifolds = buf(maxPairs * Manifold.size, 'np manifolds');
     this.groundManifolds = buf(capacity * Manifold.size, 'np ground manifolds');
     this.uniform = device.createBuffer({ size: 16, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
     this.zeroSweep = sweep ? null : device.createBuffer({ size: Math.max(16, capacity * 4), usage: GPUBufferUsage.STORAGE, label: 'np zero sweep' });
+    if (!prev) {
+      this.noPrev = device.createBuffer({ size: Math.max(16, maxPairs * 8), usage: GPUBufferUsage.STORAGE, mappedAtCreation: true, label: 'np no history' });
+      new Uint32Array(this.noPrev.getMappedRange()).fill(NONE);
+      this.noPrev.unmap();
+    }
     const layout = device.createBindGroupLayout({
-      entries: [0, 1, 2, 3, 4, 5, 6, 7].map((binding) => ({
+      entries: [0, 1, 2, 3, 4, 5, 6, 7, 8].map((binding) => ({
         binding,
         visibility: GPUShaderStage.COMPUTE,
-        buffer: { type: binding <= 3 || binding === 7 ? 'read-only-storage' : binding === 6 ? 'uniform' : 'storage' },
+        buffer: { type: binding <= 3 || binding >= 7 ? 'read-only-storage' : binding === 6 ? 'uniform' : 'storage' },
       })),
     });
     const pl = device.createPipelineLayout({ bindGroupLayouts: [layout] });
@@ -365,7 +394,7 @@ export class Narrowphase {
     this.groundPipe = device.createComputePipeline({ layout: pl, compute: { module, entryPoint: 'groundMain' } });
     this.bind = device.createBindGroup({
       layout,
-      entries: [bodies, shapes, pairs, total, this.manifolds, this.groundManifolds, this.uniform, sweep ?? this.zeroSweep!].map((buffer, binding) => ({ binding, resource: { buffer } })),
+      entries: [bodies, shapes, pairs, total, this.manifolds, this.groundManifolds, this.uniform, sweep ?? this.zeroSweep!, prev ?? this.noPrev!].map((buffer, binding) => ({ binding, resource: { buffer } })),
     });
   }
 
@@ -387,5 +416,6 @@ export class Narrowphase {
   destroy(): void {
     for (const b of [this.manifolds, this.groundManifolds, this.uniform]) b.destroy();
     this.zeroSweep?.destroy();
+    this.noPrev?.destroy();
   }
 }

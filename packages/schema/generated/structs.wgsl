@@ -48,7 +48,7 @@ struct Manifold {
   a: u32, // @16
   b: u32, // @20 0xffffffff for the ground
   feature: u32, // @24 0 face of a, 1 face of b, 2 edge-edge
-  pad: u32, // @28
+  axis: u32, // @28 box-box SAT axis: 0..2 face k of a, 3..5 face k of b, 6 + 3i + j edges; 0xffffffff otherwise
   p0: vec4f, // @32 point xyz (midway between the surfaces), depth w (> 0 overlapping)
   p1: vec4f, // @48
   p2: vec4f, // @64
@@ -78,4 +78,95 @@ struct Spark {
 struct FxState {
   prevLinVel: vec3f, // @0 velocity when the detector last saw the slot
   bits: u32, // @12 bits 0-15 heat (f16), 16-23 tier last seen, 24 valid
+}
+
+// Constant per-body properties for the solver, written by the host.
+// size 32 B, align 16
+struct BodyProps {
+  inertia: vec3f, // @0 principal moments in the body frame
+  mass: f32, // @12
+  friction: f32, // @16
+  radius: f32, // @20 bounding sphere radius
+  pad0: u32, // @24
+  pad1: u32, // @28
+}
+
+// Per-body AVBD solver state.
+// size 112 B, align 16
+struct SolverBody {
+  x0: vec3f, // @0 position at the start of the step
+  sweep: f32, // @12 speculative margin growth: how far the body can move this step
+  q0: vec4f, // @16 rotation at the start of the step
+  dp: vec3f, // @32 position minus x0 (the primal variable)
+  pad0: u32, // @44
+  phi: vec3f, // @48 rotation vector since q0 (the primal variable)
+  pad1: u32, // @60
+  tp: vec3f, // @64 inertial target for dp: h v + h^2 g
+  pad2: u32, // @76
+  tphi: vec3f, // @80 inertial target for phi: h w
+  pad3: u32, // @92
+  prevVel: vec3f, // @96 linear velocity one step earlier (adaptive warm start)
+  pad4: u32, // @108
+}
+
+// One AVBD contact point (three rows), four per manifold.
+// size 128 B, align 16
+struct SolverContact {
+  n: vec3f, // @0 normal from a to b, fixed over the step
+  mu: f32, // @12
+  t1: vec3f, // @16 first tangent (t2 = n x t1)
+  used: u32, // @28 1 if this point is in use
+  ra: vec3f, // @32 anchor in a's frame (world for the ground)
+  lambdaN: f32, // @44 normal force (<= 0 pushes apart)
+  rb: vec3f, // @48 anchor in b's frame
+  kN: f32, // @60 normal penalty
+  raw: vec3f, // @64 a's lever arm in world space at the start of the step
+  kT: f32, // @76 tangent penalty (shared by both rows)
+  rbw: vec3f, // @80 b's lever arm
+  stick: u32, // @92 static friction held last step: anchors carried over
+  c0: vec3f, // @96 constraint at the start of the step along n, t1, t2
+  a: u32, // @108 body a, 0xffffffff for the ground
+  lt: vec2f, // @112 friction force along t1, t2
+  b: u32, // @120
+  pad: u32, // @124
+}
+
+// Per-step uniforms of the GPU AVBD solver.
+// size 112 B, align 16
+struct SolverParams {
+  gravity: vec3f, // @0
+  dt: f32, // @12
+  n: u32, // @16 bodies this step
+  prevN: u32, // @20 bodies last step (persistence lookups)
+  cur: u32, // @24 history half written this step (0 or 1)
+  iterations: u32, // @28
+  beta: f32, // @32
+  gamma: f32, // @36
+  penaltyMin: f32, // @40
+  penaltyMax: f32, // @44
+  margin: f32, // @48
+  slop: f32, // @52
+  stickThreshold: f32, // @56
+  matchDistance: f32, // @60
+  maxAngularSpeed: f32, // @64
+  maxSweep: f32, // @68
+  groundY: f32, // @72
+  hasGround: u32, // @76
+  groundFriction: f32, // @80
+  maxPairs: u32, // @84
+  capacity: u32, // @88
+  slidingHessian: u32, // @92
+  sweepOn: u32, // @96
+  pad0: u32, // @100
+  pad1: u32, // @104
+  pad2: u32, // @108
+}
+
+// Per-dispatch uniforms (bound with a dynamic offset).
+// size 16 B, align 4
+struct ColorParams {
+  color: u32, // @0 colour swept by this primal dispatch
+  alpha: f32, // @4 1 in the main iterations, 0 in post-stabilization
+  pad0: u32, // @8
+  pad1: u32, // @12
 }

@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import fc from 'fast-check';
 import type { Quat, Vec3 } from '@tb/engine-api';
 import {
-  boxBoxDepth, boxBoxManifold, boxGroundManifold, dot, length, obb, quatFromAxisAngle, quatMul, quatNormalize, reduceContacts, rotate, supportArea, shapeManifold, groundManifold,
+  beats, boxBoxDepth, boxBoxManifold, boxGroundManifold, dot, FACE_ABS, FACE_INSET, FACE_REL, length, NO_AXIS, obb, quatFromAxisAngle, quatMul, quatNormalize, reduceContacts, rotate, supportArea, shapeManifold, groundManifold,
   sphereBoxManifold, sphereSphereManifold, sub, type Obb,
 } from '../src/index.ts';
 
@@ -17,16 +17,18 @@ function inside(b: Obb, p: Vec3, tol: number): boolean {
 }
 
 describe('boxBoxManifold', () => {
-  it('offset face-on stack: 4 corners of the overlap rectangle, equal depth', () => {
+  it('offset face-on stack: 4 corners of the overlap rectangle (reference sides inset), equal depth', () => {
     const a = obb([0, 0, 0], I, H), b = obb([0.3, 0.99, 0.2], I, H);
     const m = boxBoxManifold(a, b)!;
     expect(m.feature).toBe('faceA');
+    expect(m.axis).toBe(1);
     expect(m.normal).toEqual([0, 1, 0]);
     expect(m.points).toHaveLength(4);
     for (const p of m.points) expect(p.depth).toBeCloseTo(0.01, 12);
     const xs = m.points.map((p) => p.point[0]).sort(), zs = m.points.map((p) => p.point[2]).sort();
-    expect([xs[0], xs[3]].map((x) => +x!.toFixed(9))).toEqual([-0.2, 0.5]);
-    expect([zs[0], zs[3]].map((z) => +z!.toFixed(9))).toEqual([-0.3, 0.5]);
+    // The far edges are b's (as they are); the near ones a's, moved in by the inset.
+    expect([xs[0], xs[3]].map((x) => +x!.toFixed(9))).toEqual([-0.2, 0.5 - FACE_INSET]);
+    expect([zs[0], zs[3]].map((z) => +z!.toFixed(9))).toEqual([-0.3, 0.5 - FACE_INSET]);
     for (const p of m.points) expect(p.point[1]).toBeCloseTo(0.495, 12);
   });
 
@@ -53,6 +55,7 @@ describe('boxBoxManifold', () => {
     const b = obb([0, Math.SQRT2 - 0.01, 0], quatFromAxisAngle([1, 0, 0], 45 * deg), H);
     const m = boxBoxManifold(a, b)!;
     expect(m.feature).toBe('edge');
+    expect(m.axis).toBeGreaterThanOrEqual(6);
     expect(m.points).toHaveLength(1);
     expect(m.points[0]!.depth).toBeCloseTo(0.01, 9);
     m.points[0]!.point.forEach((x, k) => expect(x).toBeCloseTo([0, Math.SQRT1_2 - 0.005, 0][k]!, 9));
@@ -65,6 +68,83 @@ describe('boxBoxManifold', () => {
     const m = boxBoxManifold(a, b, 0.01)!;
     expect(m.points).toHaveLength(4);
     for (const p of m.points) expect(p.depth).toBeCloseTo(-0.003, 12);
+  });
+
+  // Aligned unit cubes on a grid, the layout of every block tower, under
+  // position noise well below the inset and the face tolerance (f32
+  // rounding is ~1e-7 here).
+  const noise = fc.tuple(fc.double({ min: -4e-5, max: 4e-5, noNaN: true }), fc.double({ min: -4e-5, max: 4e-5, noNaN: true }), fc.double({ min: -4e-5, max: 4e-5, noNaN: true }));
+  const near = (d: Vec3, e: number[]): Vec3 => [d[0] + e[0]!, d[1] + e[1]!, d[2] + e[2]!];
+
+  it('aligned neighbours touching only along an edge or at a corner get no contact, whatever the noise', () => {
+    const a = obb([0, 0, 0], I, H);
+    for (const d of [[1, 1, 0], [0, 1, 1], [1, 0, 1], [1, 1, 1], [-1, 1, 1], [1, -1, 0]] as Vec3[]) {
+      fc.assert(fc.property(noise, (e) => boxBoxManifold(a, obb(near(d, e), I, H), 0.02) === null), { numRuns: 200 });
+    }
+  });
+
+  it('aligned face neighbours: always the same face axis and 4 points at the inset corners, whatever the noise', () => {
+    const a = obb([0, 0, 0], I, H);
+    for (const [d, axis] of [[[0, 1, 0], 1], [[1, 0, 0], 0], [[0, 0, -1], 2]] as Array<[Vec3, number]>) {
+      const k = d.findIndex((x) => x !== 0);
+      fc.assert(fc.property(noise, (e) => {
+        const m = boxBoxManifold(a, obb(near(d, e), I, H), 0.02)!;
+        if (m.axis !== axis || m.points.length !== 4) return false;
+        // Off the normal, each point sits at +-(0.5 - inset) (b's corners lie outside a's inset face).
+        return m.points.every((p) => [0, 1, 2].every((j) => j === k || Math.abs(Math.abs(p.point[j]!) - (0.5 - FACE_INSET)) < 1e-4));
+      }), { numRuns: 200 });
+    }
+  });
+
+  it('keeps last step\'s face axis until another separates by more than the tolerance', () => {
+    const a = obb([0, 0, 0], I, H);
+    // x separates by -0.0100, y by -0.0102: x is the larger, but only by 2e-4
+    // (the tolerance here is 1e-4 + 2% of 0.0102). Both overlaps are wider than the inset.
+    const b = obb([0.99, 0.9898, 0], I, H);
+    expect(boxBoxManifold(a, b, 0.02)!.axis).toBe(0);
+    expect(boxBoxManifold(a, b, 0.02, true, 0)!.axis).toBe(0);
+    const kept = boxBoxManifold(a, b, 0.02, true, 1)!;
+    expect(kept.axis).toBe(1);
+    expect(kept.normal).toEqual([0, 1, 0]);
+    // Once x is clearly better (by 5e-4) it takes over.
+    expect(boxBoxManifold(a, obb([0.99, 0.9895, 0], I, H), 0.02, true, 1)!.axis).toBe(0);
+    // Edge hints and NO_AXIS change nothing.
+    expect(boxBoxManifold(a, b, 0.02, true, 7)!.axis).toBe(0);
+    expect(boxBoxManifold(a, b, 0.02, true, NO_AXIS)!.axis).toBe(0);
+  });
+
+  it('across a speculative gap too, another axis must separate by more to take over', () => {
+    // Scaling best (Box2D's 0.98 * best + abs) asks for less than best once
+    // best > abs / 0.02 = 5 mm: this pair 2 cm apart alternated 4, 1, 4, 1.
+    const a = obb([0, 0, 0], I, H), b = obb([0, 1.02, 0], I, H);
+    for (const start of [NO_AXIS, 4]) {
+      let axis = start;
+      const seen: number[] = [];
+      for (let i = 0; i < 4; i++) { axis = boxBoxManifold(a, b, 0.05, true, axis)!.axis; seen.push(axis); }
+      expect(seen).toEqual(Array(4).fill(start === NO_AXIS ? 1 : 4));
+    }
+    fc.assert(fc.property(fc.double({ min: -1, max: 1, noNaN: true }), fc.double({ min: -1, max: 1, noNaN: true }), (s, best) =>
+      !beats(s, best, FACE_REL, FACE_ABS) || s > best + FACE_ABS), { numRuns: 2000 });
+    for (const best of [-0.3, -1e-3, 0, 1e-3, 0.02, 0.3]) {
+      expect(beats(best + FACE_ABS, best, FACE_REL, FACE_ABS)).toBe(false);
+      expect(beats(best + FACE_ABS + FACE_REL * Math.abs(best) + 1e-9, best, FACE_REL, FACE_ABS)).toBe(true);
+    }
+  });
+
+  it('far from the origin: diagonal neighbours still get no contact, face neighbours their 4 points', () => {
+    // A double's ulp at 3e12 is 4.9e-4, a float's at 5000: clipping against
+    // dot(c, axis) + h there would round the 1e-4 inset away (the corners
+    // then survive on the plane), so clipping is done relative to the reference box.
+    const o = 3e12, a = obb([o, 0.5, o], I, H);
+    for (const d of [[1, 0, 1], [-1, 0, 1], [1, 1, 1], [1, 1, 0]] as Vec3[]) {
+      expect(boxBoxManifold(a, obb([o + d[0], 0.5 + d[1], o + d[2]], I, H), 0.02)).toBeNull();
+    }
+    for (const [d, axis] of [[[0, 1, 0], 1], [[1, 0, 0], 0], [[0, 0, -1], 2]] as Array<[Vec3, number]>) {
+      const m = boxBoxManifold(a, obb([o + d[0], 0.5 + d[1], o + d[2]], I, H), 0.02)!;
+      expect(m.axis).toBe(axis);
+      expect(m.points.length).toBe(4);
+      for (const p of m.points) expect(Math.abs(p.depth)).toBeLessThan(1e-12);
+    }
   });
 
   const quat = fc.tuple(fc.double({ min: -1, max: 1, noNaN: true }), fc.double({ min: -1, max: 1, noNaN: true }), fc.double({ min: -1, max: 1, noNaN: true }), fc.double({ min: 0.05, max: 1, noNaN: true }))

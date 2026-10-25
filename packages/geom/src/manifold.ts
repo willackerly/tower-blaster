@@ -3,8 +3,9 @@
 // Box-box follows the standard SAT + clipping scheme (Gregorius, "The
 // Separating Axis Test between Convex Polyhedra", GDC 2013; Box2D/Bullet):
 // find the axis of least overlap among the 3 + 3 face normals and 9 edge
-// cross products; prefer a face axis unless an edge axis is clearly better
-// (face contacts give stable 4-point manifolds); for a face axis clip the
+// cross products (a face axis replaces an earlier one only when clearly
+// better, so near-ties resolve by order); prefer a face axis unless an edge
+// axis is clearly better (face contacts give stable 4-point manifolds); for a face axis clip the
 // incident face against the reference face's side planes; for an edge axis
 // take the closest points of the two supporting edges. At most 4 points are
 // kept (the deepest, then the widest support) so a resting face gets its corners.
@@ -16,11 +17,65 @@ import { add, cross, dot, length, obb, sub, scale, type Obb } from './index.ts';
 import type { Quat, ShapeDesc, Vec3 } from '@tb/engine-api';
 
 export interface ContactPoint { point: Vec3; depth: number }
-export interface Manifold { normal: Vec3; points: ContactPoint[]; feature: 'faceA' | 'faceB' | 'edge' }
+/**
+ * axis: the SAT axis a box-box manifold came from (0..2 face k of a, 3..5
+ * face k of b, 6 + 3i + j edge i of a x edge j of b; NO_AXIS otherwise). Pass
+ * it back as prevAxis next step to keep the pair on the same face.
+ */
+export interface Manifold { normal: Vec3; points: ContactPoint[]; feature: 'faceA' | 'faceB' | 'edge'; axis: number }
+export const NO_AXIS = 0xffffffff;
 
-/** Edge axes must beat the best face axis by this much to be chosen. */
-const EDGE_REL = 0.95;
-const EDGE_ABS = 0.01;
+/** Edge axes must beat the best face axis by this much to be chosen (see beats). */
+export const EDGE_REL = 0.05;
+export const EDGE_ABS = 0.01;
+/**
+ * A face axis replaces the best so far only if its separation is larger by
+ * this much (see beats; Box2D's rule for its two reference faces), and last step's face
+ * axis for the pair (prevAxis) is the first candidate, so it is kept until
+ * another is clearly better. Aligned neighbours touching along an edge or a
+ * corner separate by ~0 on two or three axes; with a plain maximum the pick
+ * follows rounding noise, so it differs between f32 and f64 and flips from
+ * step to step, moving a resting load between a vertical and a sideways
+ * normal (a kick through the whole stack). An order rule alone is not
+ * enough: under load the vertical axis drifts across the tolerance.
+ */
+export const FACE_REL = 0.02;
+export const FACE_ABS = 1e-4;
+
+/**
+ * s beats best by abs + rel * |best|. Separations are negative when the
+ * boxes overlap and positive across a speculative gap; scaling best itself
+ * (Box2D's 0.98 * best + abs) would demand less than best for gaps over
+ * abs / (1 - 0.98), so a smaller separation could win and the axis would
+ * alternate step to step.
+ */
+export function beats(s: number, best: number, rel: number, abs: number): boolean {
+  return s > best + abs + rel * Math.abs(best);
+}
+/**
+ * The reference face's side planes are moved inwards by this much (at most
+ * a tenth of the half-extent) before clipping. Aligned neighbours touching
+ * along an edge or at a corner then get no face contact (their overlap has
+ * zero width, and whether its points survive clipping would follow
+ * rounding noise), and an aligned stack gets the same 4 points whichever
+ * side of its edges the noise puts the corners.
+ *
+ * Kept small for now. In a loaded gap-free stack each layer reaches into
+ * its diagonal neighbours below by its resting penetration, so pairs whose
+ * penetration exceeds the inset get a zero-depth sideways sliver (2026-10-25:
+ * 969 manifolds per step for a 4x4x12 tower's 464 face pairs, 852 for a
+ * 3x3x20 tower's 411 at 1.2 mm penetration). A 5 mm inset leaves exactly
+ * the face pairs, drift and jitter unchanged, but drops every contact within
+ * 5 mm of a face edge: a ledge overlap under 5 mm gives no support and a
+ * tipping cube pivots 5 mm inside the edge. In the knock-down over 16-18
+ * re-rolls x 9 ball speeds it did not change transients significantly
+ * (9-speed median of the deepest transient, averaged: 0.060 vs 0.052;
+ * per-run maxima, Mann-Whitney p = 0.16; 90th percentile run 0.15 vs
+ * 0.10). The slivers carry ~no load and towers with
+ * gaps have none, so they only cost solver work in packed stacks; whether
+ * that cost justifies a larger inset is left to the P3.4 measurements.
+ */
+export const FACE_INSET = 1e-4;
 
 function projRadius(b: Obb, n: Vec3): number {
   return b.half[0] * Math.abs(dot(b.axes[0], n)) + b.half[1] * Math.abs(dot(b.axes[1], n)) + b.half[2] * Math.abs(dot(b.axes[2], n));
@@ -135,17 +190,18 @@ function supportEdge(b: Obb, k: number, n: Vec3): [Vec3, Vec3] {
 }
 
 /** reduce = false returns every clipped point (tests use it to tell reduction ties from errors). */
-export function boxBoxManifold(a: Obb, b: Obb, margin = 0, reduce = true): Manifold | null {
+export function boxBoxManifold(a: Obb, b: Obb, margin = 0, reduce = true, prevAxis = NO_AXIS): Manifold | null {
   const d = sub(b.c, a.c);
   let faceBest = -Infinity, faceAxis: Vec3 = [0, 1, 0], faceOwner: 'faceA' | 'faceB' = 'faceA', faceK = 0;
   // Separation along each axis (negative = overlap); maximize it.
   const sep = (n: Vec3) => Math.abs(dot(d, n)) - projRadius(a, n) - projRadius(b, n);
-  for (const [owner, box] of [['faceA', a], ['faceB', b]] as const) {
-    for (let k = 0; k < 3; k++) {
-      const s = sep(box.axes[k]!);
-      if (s > margin) return null;
-      if (s > faceBest) { faceBest = s; faceAxis = box.axes[k]!; faceOwner = owner; faceK = k; }
-    }
+  // Candidates: last step's face axis, then a's x, y, z and b's in order.
+  const first = prevAxis < 6 ? prevAxis : 0;
+  for (let t = 0; t < 6; t++) {
+    const id = t === 0 ? first : t - 1 + (t - 1 >= first ? 1 : 0), owner = id < 3 ? 'faceA' : 'faceB', k = id % 3;
+    const axis = (id < 3 ? a : b).axes[k]!, s = sep(axis);
+    if (s > margin) return null;
+    if (t === 0 || beats(s, faceBest, FACE_REL, FACE_ABS)) { faceBest = s; faceAxis = axis; faceOwner = owner; faceK = k; }
   }
   let edgeBest = -Infinity, edgeAxis: Vec3 = [0, 1, 0], edgeI = 0, edgeJ = 0;
   for (let i = 0; i < 3; i++) for (let j = 0; j < 3; j++) {
@@ -158,13 +214,13 @@ export function boxBoxManifold(a: Obb, b: Obb, margin = 0, reduce = true): Manif
     if (s > edgeBest) { edgeBest = s; edgeAxis = n; edgeI = i; edgeJ = j; }
   }
   // Separations are <= 0 when overlapping: "better" means larger (closer to 0).
-  const useEdge = edgeBest > EDGE_REL * faceBest + EDGE_ABS;
+  const useEdge = beats(edgeBest, faceBest, EDGE_REL, EDGE_ABS);
   if (useEdge) {
     const n = dot(edgeAxis, d) < 0 ? scale(edgeAxis, -1) : edgeAxis;
     const [ea0, ea1] = supportEdge(a, edgeI, n);
     const [eb0, eb1] = supportEdge(b, edgeJ, scale(n, -1));
     const [pa, pb] = segmentClosest(ea0, ea1, eb0, eb1);
-    return { normal: n, feature: 'edge', points: [{ point: scale(add(pa, pb), 0.5), depth: -edgeBest }] };
+    return { normal: n, feature: 'edge', axis: 6 + 3 * edgeI + edgeJ, points: [{ point: scale(add(pa, pb), 0.5), depth: -edgeBest }] };
   }
   const ref = faceOwner === 'faceA' ? a : b, inc = faceOwner === 'faceA' ? b : a;
   // Reference normal points from the reference box towards the other.
@@ -172,21 +228,22 @@ export function boxBoxManifold(a: Obb, b: Obb, margin = 0, reduce = true): Manif
   const refSign = dot(faceAxis, toOther) >= 0 ? 1 : -1;
   const nRef = scale(faceAxis, refSign);
   const [ik, is] = incidentFace(inc, nRef);
-  let poly = faceCorners(inc, ik, is);
+  // Clip in the reference box's frame: far from the origin dot(ref.c, ax) + h
+  // would round the inset away in f32 (ulp 5e-4 at 5000).
+  let poly = faceCorners({ ...inc, c: sub(inc.c, ref.c) }, ik, is);
   for (const k of [(faceK + 1) % 3, (faceK + 2) % 3]) {
-    const ax = ref.axes[k]!, h = ref.half[k]!, c = dot(ref.c, ax);
-    poly = clip(poly, ax, c + h);
-    poly = clip(poly, scale(ax, -1), -(c - h));
+    const ax = ref.axes[k]!, h = ref.half[k]! - Math.min(FACE_INSET, 0.1 * ref.half[k]!);
+    poly = clip(poly, ax, h);
+    poly = clip(poly, scale(ax, -1), h);
   }
-  const planeD = dot(ref.c, nRef) + ref.half[faceK]!;
   const pts: ContactPoint[] = [];
   for (const p of poly) {
-    const s = dot(p, nRef) - planeD; // < 0: below the reference face
-    if (s <= margin) pts.push({ point: sub(p, scale(nRef, s / 2)), depth: -s });
+    const s = dot(p, nRef) - ref.half[faceK]!; // < 0: below the reference face
+    if (s <= margin) pts.push({ point: add(ref.c, sub(p, scale(nRef, s / 2))), depth: -s });
   }
   if (!pts.length) return null;
   const normal = faceOwner === 'faceA' ? nRef : scale(nRef, -1);
-  return { normal, feature: faceOwner, points: reduce ? reduceContacts(pts, normal) : pts };
+  return { normal, feature: faceOwner, axis: (faceOwner === 'faceA' ? 0 : 3) + faceK, points: reduce ? reduceContacts(pts, normal) : pts };
 }
 
 /** Sphere (centre c, radius r) against box: normal from box to sphere. */
@@ -199,14 +256,14 @@ export function sphereBoxManifold(c: Vec3, r: number, b: Obb, margin = 0): Manif
     let k = 0, best = Infinity;
     for (let i = 0; i < 3; i++) { const g = b.half[i]! - Math.abs(local[i]!); if (g < best) { best = g; k = i; } }
     const n = scale(b.axes[k]!, local[k]! >= 0 ? 1 : -1);
-    return { normal: n, feature: 'faceA', points: [{ point: sub(c, scale(n, r)), depth: r + best }] };
+    return { normal: n, feature: 'faceA', axis: NO_AXIS, points: [{ point: sub(c, scale(n, r)), depth: r + best }] };
   }
   let q = b.c;
   for (let k = 0; k < 3; k++) q = add(q, scale(b.axes[k]!, Math.max(-b.half[k]!, Math.min(b.half[k]!, local[k]!))));
   const v = sub(c, q), dist = length(v);
   if (dist - r > margin) return null;
   const n = scale(v, 1 / dist);
-  return { normal: n, feature: 'faceA', points: [{ point: scale(add(q, sub(c, scale(n, r))), 0.5), depth: r - dist }] };
+  return { normal: n, feature: 'faceA', axis: NO_AXIS, points: [{ point: scale(add(q, sub(c, scale(n, r))), 0.5), depth: r - dist }] };
 }
 
 export function sphereSphereManifold(c1: Vec3, r1: number, c2: Vec3, r2: number, margin = 0): Manifold | null {
@@ -214,7 +271,7 @@ export function sphereSphereManifold(c1: Vec3, r1: number, c2: Vec3, r2: number,
   if (dist - r1 - r2 > margin) return null;
   const n: Vec3 = dist > 1e-12 ? scale(v, 1 / dist) : [0, 1, 0];
   const pa = add(c1, scale(n, r1)), pb = sub(c2, scale(n, r2));
-  return { normal: n, feature: 'faceA', points: [{ point: scale(add(pa, pb), 0.5), depth: r1 + r2 - dist }] };
+  return { normal: n, feature: 'faceA', axis: NO_AXIS, points: [{ point: scale(add(pa, pb), 0.5), depth: r1 + r2 - dist }] };
 }
 
 /** Box against the ground plane y = groundY: normal +y (from ground to box), up to 4 corners. */
@@ -226,21 +283,21 @@ export function boxGroundManifold(b: Obb, groundY: number, margin = 0, reduce = 
     if (s <= margin) pts.push({ point: [p[0], p[1] - s / 2, p[2]], depth: -s });
   }
   if (!pts.length) return null;
-  return { normal: [0, 1, 0], feature: 'faceA', points: reduce ? reduceContacts(pts, [0, 1, 0]) : pts };
+  return { normal: [0, 1, 0], feature: 'faceA', axis: NO_AXIS, points: reduce ? reduceContacts(pts, [0, 1, 0]) : pts };
 }
 
 /** Sphere against the ground plane: normal +y, one point midway between the sphere's bottom and the plane. */
 export function sphereGroundManifold(c: Vec3, r: number, groundY: number, margin = 0): Manifold | null {
   const s = c[1] - r - groundY;
   if (s > margin) return null;
-  return { normal: [0, 1, 0], feature: 'faceA', points: [{ point: [c[0], c[1] - r - s / 2, c[2]], depth: -s }] };
+  return { normal: [0, 1, 0], feature: 'faceA', axis: NO_AXIS, points: [{ point: [c[0], c[1] - r - s / 2, c[2]], depth: -s }] };
 }
 
 const neg = (v: Vec3): Vec3 => [-v[0], -v[1], -v[2]];
 
 /** Manifold between any two shapes, normal from a to b (the order the GPU narrowphase uses). */
-export function shapeManifold(sa: ShapeDesc, pa: Vec3, qa: Quat, sb: ShapeDesc, pb: Vec3, qb: Quat, margin = 0, reduce = true): Manifold | null {
-  if (sa.kind === 'box' && sb.kind === 'box') return boxBoxManifold(obb(pa, qa, sa.half), obb(pb, qb, sb.half), margin, reduce);
+export function shapeManifold(sa: ShapeDesc, pa: Vec3, qa: Quat, sb: ShapeDesc, pb: Vec3, qb: Quat, margin = 0, reduce = true, prevAxis = NO_AXIS): Manifold | null {
+  if (sa.kind === 'box' && sb.kind === 'box') return boxBoxManifold(obb(pa, qa, sa.half), obb(pb, qb, sb.half), margin, reduce, prevAxis);
   if (sa.kind === 'sphere' && sb.kind === 'sphere') return sphereSphereManifold(pa, sa.radius, pb, sb.radius, margin);
   if (sa.kind === 'box' && sb.kind === 'sphere') return sphereBoxManifold(pb, sb.radius, obb(pa, qa, sa.half), margin);
   const m = sphereBoxManifold(pa, (sa as { radius: number }).radius, obb(pb, qb, (sb as { half: Vec3 }).half), margin);
