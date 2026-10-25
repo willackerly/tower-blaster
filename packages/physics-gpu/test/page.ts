@@ -153,7 +153,7 @@ function agrees(g: Gpu, c: CpuManifold | null, tol: number): boolean {
   return true;
 }
 
-export interface NarrowCase { kind: 'random' | 'scenario'; pairs?: number; spheres?: number; scenario?: string; params?: Record<string, number>; margin: number; seed?: number }
+export interface NarrowCase { kind: 'random' | 'scenario'; pairs?: number; spheres?: number; scenario?: string; params?: Record<string, number>; margin: number; seed?: number; /** per-body sweep drawn from [0, sweep) */ sweep?: number }
 
 function randomPairs(c: NarrowCase): { bodies: BodyDesc[]; pairs: Array<[number, number]> } {
   let s = (c.seed ?? 1) >>> 0;
@@ -197,7 +197,15 @@ export async function narrowphase(c: NarrowCase) {
   device.queue.writeBuffer(pb, 0, Uint32Array.from(pairs.flat()));
   const tb = device.createBuffer({ size: 32, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.INDIRECT | GPUBufferUsage.COPY_DST });
   device.queue.writeBuffer(tb, 0, Uint32Array.from([Math.ceil(pairs.length / 64), 1, 1, pairs.length, 0, pairs.length, 0, 0]));
-  const np = new Narrowphase(device, bb, sb, pb, tb, Math.max(1, n), Math.max(1, pairs.length));
+  let sw = 7;
+  const sweeps = bodies.map(() => (c.sweep ?? 0) * ((sw = (Math.imul(sw, 1664525) + 1013904223) >>> 0) / 2 ** 32));
+  const sweepBuf = device.createBuffer({ size: Math.max(16, n * 4), usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });
+  device.queue.writeBuffer(sweepBuf, 0, Float32Array.from(sweeps));
+  // The oracle sees the margins the GPU computes in f32.
+  const f32 = (x: number) => Math.fround(x);
+  const pairMargin = (i: number, j: number) => f32(f32(f32(c.margin) + f32(sweeps[i]!)) + f32(sweeps[j]!));
+  const groundMargin = (i: number) => f32(f32(c.margin) + f32(sweeps[i]!));
+  const np = new Narrowphase(device, bb, sb, pb, tb, Math.max(1, n), Math.max(1, pairs.length), sweepBuf);
   device.pushErrorScope('validation');
   const enc = device.createCommandEncoder();
   const pass = enc.beginComputePass();
@@ -211,27 +219,28 @@ export async function narrowphase(c: NarrowCase) {
   let pairMismatch = 0, pairTies = 0, contacts = 0, groundMismatch = 0, groundTies = 0, groundContacts = 0;
   const examples: unknown[] = [];
   pairs.forEach(([i, j], k) => {
-    const g = decode(mv, k), cpu = cpuPair(bodies[i]!, bodies[j]!, c.margin);
+    const g = decode(mv, k), cpu = cpuPair(bodies[i]!, bodies[j]!, pairMargin(i, j));
     if (cpu) contacts++;
     const t = tol * (1 + Math.abs(bodies[i]!.pos[0]) / 25);
     if (!agrees(g, cpu, t)) {
-      if (tieOnly(g, cpu, cpuPair(bodies[i]!, bodies[j]!, c.margin, false), t)) { pairTies++; return; }
+      if (tieOnly(g, cpu, cpuPair(bodies[i]!, bodies[j]!, pairMargin(i, j), false), t)) { pairTies++; return; }
       pairMismatch++;
       if (examples.length < 3) examples.push({ k, gpu: g, cpu });
     }
   });
   bodies.forEach((b, i) => {
     const g = decode(gv, i);
-    const cpu = groundManifold(b.shape, b.pos, b.rot, 0, c.margin);
+    const cpu = groundManifold(b.shape, b.pos, b.rot, 0, groundMargin(i));
     if (cpu) groundContacts++;
     if (!agrees(g, cpu, tol * 4)) {
-      const all = groundManifold(b.shape, b.pos, b.rot, 0, c.margin, false);
+      const all = groundManifold(b.shape, b.pos, b.rot, 0, groundMargin(i), false);
       if (tieOnly(g, cpu, all, tol * 4)) { groundTies++; return; }
       groundMismatch++;
       if (examples.length < 6) examples.push({ ground: i, gpu: g, cpu, y: b.pos[1] });
     }
   });
   np.destroy();
+  sweepBuf.destroy();
   device.destroy();
   return { error: error?.message ?? null, pairs: pairs.length, contacts, pairMismatch, pairTies, groundContacts, groundMismatch, groundTies, examples };
 }

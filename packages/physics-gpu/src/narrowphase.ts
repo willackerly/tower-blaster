@@ -21,6 +21,10 @@ struct NP { n: u32, hasGround: u32, margin: f32, groundY: f32 }
 @group(0) @binding(4) var<storage, read_write> out: array<Manifold>;
 @group(0) @binding(5) var<storage, read_write> ground: array<Manifold>;
 @group(0) @binding(6) var<uniform> p: NP;
+// Per-body speculative growth (how far the body can move this step); a
+// pair's margin is p.margin + sweep[a] + sweep[b], a ground contact's p.margin + sweep[i].
+@group(0) @binding(7) var<storage, read> sweep: array<f32>;
+var<private> margin: f32;
 
 const EDGE_REL = 0.95;
 const EDGE_ABS = 0.01;
@@ -152,7 +156,7 @@ fn boxBox(a: Box, b: Box, m: ptr<function, Manifold>) {
       var n = a.ax[k];
       if (owner == 1u) { n = b.ax[k]; }
       let s = abs(dot(d, n)) - projR(a, n) - projR(b, n);
-      if (s > p.margin) { return; }
+      if (s > margin) { return; }
       if (s > faceBest) { faceBest = s; faceAxis = n; faceOwner = owner; faceK = k; }
     }
   }
@@ -167,7 +171,7 @@ fn boxBox(a: Box, b: Box, m: ptr<function, Manifold>) {
       if (len < 1e-6) { continue; }
       let n = c / len;
       let s = abs(dot(d, n)) - projR(a, n) - projR(b, n);
-      if (s > p.margin) { return; }
+      if (s > margin) { return; }
       if (s > edgeBest) { edgeBest = s; edgeAxis = n; edgeI = i; edgeJ = j; }
     }
   }
@@ -223,7 +227,7 @@ fn boxBox(a: Box, b: Box, m: ptr<function, Manifold>) {
   for (var k = 0u; k < count; k++) {
     let q = poly[k];
     let s = dot(q, nRef) - planeD;
-    if (s <= p.margin) { pts[np] = vec4f(q - nRef * (s * 0.5), -s); np++; }
+    if (s <= margin) { pts[np] = vec4f(q - nRef * (s * 0.5), -s); np++; }
   }
   if (np == 0u) { return; }
   var normal = nRef;
@@ -250,7 +254,7 @@ fn sphereBox(c: vec3f, r: f32, b: Box, m: ptr<function, Manifold>) {
   let q = b.c + b.ax * clamp(local, -b.h, b.h);
   let v = c - q;
   let dist = length(v);
-  if (dist - r > p.margin) { return; }
+  if (dist - r > margin) { return; }
   let n = v / dist;
   (*m).normal = n;
   (*m).p0 = vec4f(0.5 * (q + c - n * r), r - dist);
@@ -260,7 +264,7 @@ fn sphereBox(c: vec3f, r: f32, b: Box, m: ptr<function, Manifold>) {
 fn sphereSphere(c1: vec3f, r1: f32, c2: vec3f, r2: f32, m: ptr<function, Manifold>) {
   let v = c2 - c1;
   let dist = length(v);
-  if (dist - r1 - r2 > p.margin) { return; }
+  if (dist - r1 - r2 > margin) { return; }
   var n = vec3f(0.0, 1.0, 0.0);
   if (dist > 1e-12) { n = v / dist; }
   (*m).normal = n;
@@ -273,6 +277,7 @@ fn pairsMain(@builtin(global_invocation_id) id: vec3u) {
   let k = id.x;
   if (k >= total[3]) { return; }
   let ij = pairs[k];
+  margin = p.margin + sweep[ij.x] + sweep[ij.y];
   var m = emptyManifold(ij.x, ij.y);
   let sa = shapes[bodies[ij.x].shape];
   let sb = shapes[bodies[ij.y].shape];
@@ -297,11 +302,12 @@ fn groundMain(@builtin(global_invocation_id) id: vec3u) {
   if (i >= p.n) { return; }
   var m = emptyManifold(i, ${NONE}u);
   if (p.hasGround == 0u) { ground[i] = m; return; }
+  margin = p.margin + sweep[i];
   let s = shapes[bodies[i].shape];
   let c = bodies[i].pos;
   if (s.kind == 1u) {
     let sep = c.y - s.half.x - p.groundY;
-    if (sep <= p.margin) { m.p0 = vec4f(c.x, c.y - s.half.x - sep * 0.5, c.z, -sep); m.count = 1u; }
+    if (sep <= margin) { m.p0 = vec4f(c.x, c.y - s.half.x - sep * 0.5, c.z, -sep); m.count = 1u; }
   } else {
     let b = boxOf(i);
     var pts: array<vec4f, 8>;
@@ -311,7 +317,7 @@ fn groundMain(@builtin(global_invocation_id) id: vec3u) {
         for (var sz = -1.0; sz <= 1.0; sz += 2.0) {
           let q = b.c + b.ax[0] * (sx * b.h.x) + b.ax[1] * (sy * b.h.y) + b.ax[2] * (sz * b.h.z);
           let sep = q.y - p.groundY;
-          if (sep <= p.margin) { pts[np] = vec4f(q.x, q.y - sep * 0.5, q.z, -sep); np++; }
+          if (sep <= margin) { pts[np] = vec4f(q.x, q.y - sep * 0.5, q.z, -sep); np++; }
         }
       }
     }
@@ -331,21 +337,26 @@ export class Narrowphase {
   private readonly pairPipe: GPUComputePipeline;
   private readonly groundPipe: GPUComputePipeline;
   private readonly bind: GPUBindGroup;
+  private readonly zeroSweep: GPUBuffer | null;
 
   /**
    * @param bodies Body records; @param shapes Shape table indexed by Body.shape
    * @param pairs, total the Broadphase outputs (total[0..2] are indirect args)
    */
-  constructor(private readonly device: GPUDevice, bodies: GPUBuffer, shapes: GPUBuffer, pairs: GPUBuffer, private readonly total: GPUBuffer, readonly capacity: number, readonly maxPairs: number) {
+  /**
+   * @param sweep optional f32 per body added to the margin (see the shader); zero when omitted
+   */
+  constructor(private readonly device: GPUDevice, bodies: GPUBuffer, shapes: GPUBuffer, pairs: GPUBuffer, private readonly total: GPUBuffer, readonly capacity: number, readonly maxPairs: number, sweep?: GPUBuffer) {
     const buf = (bytes: number, label: string) => device.createBuffer({ size: Math.max(Manifold.size, bytes), usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC, label });
     this.manifolds = buf(maxPairs * Manifold.size, 'np manifolds');
     this.groundManifolds = buf(capacity * Manifold.size, 'np ground manifolds');
     this.uniform = device.createBuffer({ size: 16, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+    this.zeroSweep = sweep ? null : device.createBuffer({ size: Math.max(16, capacity * 4), usage: GPUBufferUsage.STORAGE, label: 'np zero sweep' });
     const layout = device.createBindGroupLayout({
-      entries: [0, 1, 2, 3, 4, 5, 6].map((binding) => ({
+      entries: [0, 1, 2, 3, 4, 5, 6, 7].map((binding) => ({
         binding,
         visibility: GPUShaderStage.COMPUTE,
-        buffer: { type: binding <= 3 ? 'read-only-storage' : binding === 6 ? 'uniform' : 'storage' },
+        buffer: { type: binding <= 3 || binding === 7 ? 'read-only-storage' : binding === 6 ? 'uniform' : 'storage' },
       })),
     });
     const pl = device.createPipelineLayout({ bindGroupLayouts: [layout] });
@@ -354,7 +365,7 @@ export class Narrowphase {
     this.groundPipe = device.createComputePipeline({ layout: pl, compute: { module, entryPoint: 'groundMain' } });
     this.bind = device.createBindGroup({
       layout,
-      entries: [bodies, shapes, pairs, total, this.manifolds, this.groundManifolds, this.uniform].map((buffer, binding) => ({ binding, resource: { buffer } })),
+      entries: [bodies, shapes, pairs, total, this.manifolds, this.groundManifolds, this.uniform, sweep ?? this.zeroSweep!].map((buffer, binding) => ({ binding, resource: { buffer } })),
     });
   }
 
@@ -375,5 +386,6 @@ export class Narrowphase {
 
   destroy(): void {
     for (const b of [this.manifolds, this.groundManifolds, this.uniform]) b.destroy();
+    this.zeroSweep?.destroy();
   }
 }

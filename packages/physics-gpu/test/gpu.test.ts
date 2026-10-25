@@ -75,6 +75,18 @@ describe('GPU narrowphase vs the double-precision manifolds', () => {
     expect(r.pairTies + r.groundTies).toBeLessThan(0.005 * (r.contacts + r.groundContacts));
   });
 
+  it('per-body speculative sweep widens each pair and ground margin by the bodies\' sweeps', async (ctx) => {
+    if (!gpu) return ctx.skip();
+    const r = await call('narrowphase', { kind: 'random', pairs: 3000, spheres: 0.3, margin: 0.02, seed: 13, sweep: 0.4 });
+    expect(r.error).toBeNull();
+    expect(r.pairMismatch, JSON.stringify(r.examples)).toBe(0);
+    expect(r.groundMismatch, JSON.stringify(r.examples)).toBe(0);
+    // Wider margins find more (speculative) contacts than the same scene at margin 0.02.
+    const base = await call('narrowphase', { kind: 'random', pairs: 3000, spheres: 0.3, margin: 0.02, seed: 13 });
+    expect(r.contacts).toBeGreaterThan(base.contacts);
+    expect(r.groundContacts).toBeGreaterThan(base.groundContacts);
+  });
+
   it.for([
     ['packed city', 'S4', { N: 2000, F: 4, H: 12 }],
     ['gapped tower', 'S1', { F: 4, H: 10, gap: 0.02 }],
