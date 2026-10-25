@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import type { Quat, Vec3 } from '@tb/engine-api';
 import {
   add, boxBoxDepth, length, obb, quatAngle, quatFromAxisAngle, quatMul, quatNormalize, rotate,
-  sphereBoxDepth, spherePairs, sub, QUAT_IDENTITY,
+  shapeDepth, signedDepth, signedGroundDepth, sphereBoxDepth, spherePairs, sub, QUAT_IDENTITY,
 } from '../src/index.ts';
 
 const vec = (lo = -5, hi = 5) => fc.tuple(fc.double({ min: lo, max: hi, noNaN: true }), fc.double({ min: lo, max: hi, noNaN: true }), fc.double({ min: lo, max: hi, noNaN: true })) as fc.Arbitrary<Vec3>;
@@ -87,6 +87,30 @@ describe('spherePairs', () => {
         if (d <= r[i]! + r[j]!) brute.push([i, j]);
       }
       expect(spherePairs(c, r)).toEqual(brute);
+    }));
+  });
+});
+
+describe('signedDepth', () => {
+  const box = { kind: 'box' as const, half: [0.5, 0.5, 0.5] as Vec3 }, ball = { kind: 'sphere' as const, radius: 0.5 };
+  it('is the gap (negative) for separated shapes and the penetration for overlapping ones', () => {
+    close(signedDepth(box, [0, 0, 0], QUAT_IDENTITY, box, [1.2, 0, 0], QUAT_IDENTITY), -0.2, 1e-12);
+    close(signedDepth(box, [0, 0, 0], QUAT_IDENTITY, box, [0.9, 0, 0], QUAT_IDENTITY), 0.1, 1e-12);
+    close(signedDepth(ball, [0, 0, 0], QUAT_IDENTITY, ball, [0, 1.5, 0], QUAT_IDENTITY), -0.5, 1e-12);
+    close(signedDepth(ball, [1.25, 0, 0], QUAT_IDENTITY, box, [0, 0, 0], QUAT_IDENTITY), -0.25, 1e-12);
+    close(signedDepth(box, [0, 0, 0], QUAT_IDENTITY, ball, [0.8, 0, 0], QUAT_IDENTITY), 0.2, 1e-12);
+    close(signedGroundDepth(box, [0, 2, 0], QUAT_IDENTITY, 0), -1.5, 1e-12);
+    close(signedGroundDepth(ball, [0, 0.4, 0], QUAT_IDENTITY, 0), 0.1, 1e-12);
+  });
+
+  it('agrees with shapeDepth when they overlap and never claims a gap larger than the true one', () => {
+    fc.assert(fc.property(vec(-2, 2), quat, quat, (d, qa, qb) => {
+      const a = quatNormalize(qa), b = quatNormalize(qb);
+      const s = signedDepth(box, [0, 0, 0], a, box, d, b), p = shapeDepth(box, [0, 0, 0], a, box, d, b);
+      if (p > 0) close(s, p, 1e-9);
+      else expect(s).toBeLessThanOrEqual(1e-12);
+      // The gap is at most the centre distance minus the inscribed radii.
+      expect(-s).toBeLessThanOrEqual(length(d) - 1 + 1e-9);
     }));
   });
 });
