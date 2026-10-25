@@ -21,30 +21,56 @@ export function chromiumArgs(): string[] {
   return args;
 }
 
-export async function runInBrowser(config: RunConfig, opts: BrowserRunOptions = {}): Promise<Record<string, unknown>> {
+export interface RunnerSession {
+  /** Run one config in a fresh page (fresh JS heap and WASM instance). */
+  run(config: RunConfig): Promise<Record<string, unknown>>;
+  close(): Promise<void>;
+}
+
+/** One Vite server and one browser, reused across runs. */
+export async function openRunner(opts: BrowserRunOptions = {}): Promise<RunnerSession> {
   const server = await createServer({ configFile: fileURLToPath(new URL('../vite.config.ts', import.meta.url)), server: { port: 0, host: '127.0.0.1' } });
   await server.listen();
   const base = server.resolvedUrls?.local[0];
-  if (!base) throw new Error('vite did not report a URL');
+  if (!base) {
+    await server.close();
+    throw new Error('vite did not report a URL');
+  }
+  // Serve from localhost, not 127.0.0.1: localhost is a secure context.
+  const origin = base.replace('127.0.0.1', 'localhost');
   const browser = await chromium.launch({
     headless: !opts.headed,
     args: [...chromiumArgs(), ...(opts.extraArgs ?? [])],
     ...(opts.channel ? { channel: opts.channel } : {}),
-  });
+  }).catch(async (e: unknown) => { await server.close(); throw e; });
+  return {
+    async run(config) {
+      const page = await browser.newPage();
+      try {
+        const errors: string[] = [];
+        page.on('pageerror', (e) => errors.push(e.message));
+        await page.goto(new URL(toQuery({ ...config, autorun: true }), origin).toString());
+        await page.waitForFunction(() => ['done', 'error'].includes(window.__tb?.status), undefined, { timeout: opts.timeoutMs ?? 600_000, polling: 250 });
+        const h = await page.evaluate(() => window.__tb);
+        if (h.status === 'error') throw new Error(`runner page failed: ${h.error}`);
+        if (errors.length) throw new Error(`page errors: ${errors.join('; ')}`);
+        return h.result as Record<string, unknown>;
+      } finally {
+        await page.close();
+      }
+    },
+    async close() {
+      await browser.close();
+      await server.close();
+    },
+  };
+}
+
+export async function runInBrowser(config: RunConfig, opts: BrowserRunOptions = {}): Promise<Record<string, unknown>> {
+  const runner = await openRunner(opts);
   try {
-    const page = await browser.newPage();
-    const errors: string[] = [];
-    page.on('pageerror', (e) => errors.push(e.message));
-    // Serve from localhost, not 127.0.0.1, so the page is a secure context
-    // with an origin that matches the isolation headers.
-    await page.goto(new URL(toQuery({ ...config, autorun: true }), base.replace('127.0.0.1', 'localhost')).toString());
-    await page.waitForFunction(() => ['done', 'error'].includes(window.__tb?.status), undefined, { timeout: opts.timeoutMs ?? 600_000, polling: 250 });
-    const h = await page.evaluate(() => window.__tb);
-    if (h.status === 'error') throw new Error(`runner page failed: ${h.error}`);
-    if (errors.length) throw new Error(`page errors: ${errors.join('; ')}`);
-    return h.result as Record<string, unknown>;
+    return await runner.run(config);
   } finally {
-    await browser.close();
-    await server.close();
+    await runner.close();
   }
 }
