@@ -64,6 +64,7 @@ export type RenderTarget = { canvas: HTMLCanvasElement } | { size: [number, numb
  */
 export type BoxPath = 'fan' | 'cube';
 
+
 export interface RendererOptions {
   /**
    * Box path for the scene pass. Default 'cube': on the M5 Max the scene
@@ -77,6 +78,10 @@ export interface RendererOptions {
   boxPath?: BoxPath;
   /** Bench diagnostics: boxes shaded with their flat albedo only, which separates fragment cost from the rest. */
   flatBoxes?: boolean;
+  /**
+   * Bench diagnostics for AO's cost: 'no-seam' compiles the seam cavity out.
+   */
+  aoDiag?: 'no-seam';
   /** Spark slots (default SPARK_POOL, 65536). Every slot costs a simulation thread and a quad per frame. */
   sparkPool?: number;
   /** Output format; default the canvas's preferred one (bgra8unorm on Apple, rgba8unorm elsewhere). Tests set it to cover both. */
@@ -120,6 +125,8 @@ export class Renderer {
   private idTex: GPUTexture | null = null;
   private idDepth: GPUTexture | null = null;
   private arena: Arena = { center: [0, 0, 0], half: [50, 50, 50], radius: 50 };
+  /** The floor height the AO grid was fitted to (the last frame's groundY). */
+  private aoFloor = -Infinity;
   private readonly shadowState: ShadowFitState = { level: -1 };
   /** The shadow window of the last frame (tests, debug overlays). */
   shadowFit: ShadowFit | null = null;
@@ -208,10 +215,11 @@ export class Renderer {
     const module = device.createShaderModule({ code: SCENE_WGSL, label: 'scene' });
     const main = device.createPipelineLayout({ bindGroupLayouts: [this.layout] });
     const shadowPl = device.createPipelineLayout({ bindGroupLayouts: [this.shadowLayout] });
+    const fsConsts: Record<string, Record<string, number>> = { fsBox: { AO_SEAM: opts.aoDiag === 'no-seam' ? 0 : 1 } };
     const color = (vs: string, fs: string, cull: GPUCullMode, seg: number, opts: { format?: GPUTextureFormat; samples?: number; sky?: boolean; buffers?: GPUVertexBufferLayout[] } = {}): GPURenderPipeline => device.createRenderPipeline({
       layout: main,
       vertex: { module, entryPoint: vs, constants: { SEG: seg, ...(vs === 'vsBox' ? { FAN: sceneFan ? 1 : 0 } : {}) }, buffers: opts.buffers ?? [] },
-      fragment: { module, entryPoint: fs, targets: [{ format: opts.format ?? HDR_FORMAT }] },
+      fragment: { module, entryPoint: fs, constants: fsConsts[fs] ?? {}, targets: [{ format: opts.format ?? HDR_FORMAT }] },
       primitive: { topology: 'triangle-list', cullMode: cull, frontFace: 'ccw' },
       depthStencil: opts.sky
         ? { format: 'depth24plus', depthWriteEnabled: false, depthCompare: 'less-equal' }
@@ -282,8 +290,13 @@ export class Renderer {
   setShadowBounds(center: V3, radius: number, half: V3 = [radius, radius, radius]): void {
     this.arena = { center, half, radius };
     this.shadowState.level = -1;
+    this.fitAo();
+  }
+
+  /** The AO grid for the arena, down to just under the floor (aoGrid); refitted when either changes. */
+  private fitAo(): void {
     const before = this.ao.volume;
-    this.ao.setGrid(aoGrid(this.arena));
+    this.ao.setGrid(aoGrid(this.arena, undefined, undefined, this.aoFloor));
     if (this.ao.volume !== before) this.cullKey = ''; // rebind the new volume
   }
 
@@ -421,6 +434,7 @@ export class Renderer {
   /** Cull, shadow, then the scene pass (or the ID pass, which skips floor, sky and shadow). */
   private encodeScene(enc: GPUCommandEncoder, f: FrameParams, mode: 'scene' | 'ids' | 'faces', stamp: Stamp = noStamp): void {
     const ids = mode !== 'scene';
+    if (f.groundY !== this.aoFloor) { this.aoFloor = f.groundY; this.fitAo(); }
     const culler = this.sync();
     let dt = 0;
     if (!ids) {
