@@ -20,6 +20,9 @@ importers:
       '@tb/geom':
         specifier: workspace:*
         version: link:packages/geom
+      '@tb/gpu':
+        specifier: workspace:*
+        version: link:packages/gpu
       '@tb/metrics':
         specifier: workspace:*
         version: link:packages/metrics
@@ -41,6 +44,9 @@ importers:
       '@webgpu/types':
         specifier: 0.1.74
         version: 0.1.74
+      esbuild:
+        specifier: 0.28.2
+        version: 0.28.2
       fast-check:
         specifier: 4.10.2
         version: 4.10.2
@@ -71,6 +77,8 @@ importers:
   packages/engine-api: {}
 
   packages/geom: {}
+
+  packages/gpu: {}
 
   packages/metrics: {}
 
