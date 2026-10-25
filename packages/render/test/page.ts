@@ -9,7 +9,7 @@ import { Body, RenderRecord, Shape, TIER, readStruct } from '@tb/schema';
 import {
   agx, AGX_WGSL, fromHalf, FX_WORDS, packFx, toHalf, bevelNormal, BEVEL_WGSL, oklabToLinear, OKLAB_WGSL, Post,
   Culler, cullReference, GpuBodySource, invert, listMatches, lookAt, makeGpuBodies, multiply, perspective, Renderer, SEGMENTS, SnapshotSource, transform,
-  translation, BOX_VERTS, SPHERE_VERTS, SUN, Sparks, CTL, MAX_EVENTS, flashSlot, FLASHES, MAX_BALLS, TRAIL, unpackImpacts, unpackSparks, spawnReference, stepReference, type Impact, type BodySource, type CullFrame, type FrameParams, type V3,
+  translation, BOX_VERTS, SPHERE_VERTS, SUN, Sparks, CTL, MAX_EVENTS, flashSlot, FLASHES, MAX_BALLS, TRAIL, Lights, LIGHTS, MATERIAL, unpackImpacts, unpackSparks, spawnReference, stepReference, type Impact, type BodySource, type CullFrame, type FrameParams, type V3,
 } from '../src/index.ts';
 
 function rng(seed: number) {
@@ -1175,4 +1175,116 @@ export async function ballTrail(frames: number) {
   rend.destroy();
   device.destroy();
   return { ordered, posErr, used, behind, farBehind, ahead, error: err?.message ?? null };
+}
+
+// ---------------------------------------------------------------- heat
+
+const heatOf = (state: ArrayBuffer) => Array.from(new Uint32Array(state)).filter((_, w) => w % 4 === 3).map((bits) => fromHalf(bits & 0xffff));
+
+/**
+ * Heat sources and decay, scripted: contact with a ball (exact point-box
+ * distance, rotation included; static and lattice bodies never heat),
+ * hard hits mapped linearly above heatDv, and exponential decay once the
+ * source is gone.
+ */
+export async function heatScript() {
+  const { device } = await createDevice({ timestamps: false });
+  device.pushErrorScope('validation');
+  const cap = 10, s = Math.sin(Math.PI / 8), c = Math.cos(Math.PI / 8);
+  const base: RawBody[] = [
+    { pos: [0, 1, 0], vel: [0, 0, 0], shape: 2 }, // 0: the ball, r 0.4 (reach 0.4 + contact 0.3)
+    { pos: [1.1, 1, 0], vel: [0, 0, 0], shape: 0 }, // 1: gap 0.6, touching
+    { pos: [1.25, 1, 0], vel: [0, 0, 0], shape: 0 }, // 2: gap 0.75, not
+    { pos: [0, 1, 1.35], vel: [0, 0, 0], shape: 0, rot: [0, s, 0, c] }, // 3: 45 degrees about y: an edge 0.707 from the centre, gap 0.643 (0.85 unrotated)
+    { pos: [20, 1, 0], vel: [0, 0, 0], shape: 0 }, // 4: far
+    { pos: [-5, 1, 0], vel: [0, 0, 0], shape: 0 }, // 5: hit, dv 9
+    { pos: [-8, 1, 0], vel: [0, 0, 0], shape: 0 }, // 6: hit, dv 4
+    { pos: [-11, 1, 0], vel: [0, 0, 0], shape: 0 }, // 7: hit, dv 15
+    { pos: [-1.1, 1, 0], vel: [0, 0, 0], shape: 0, invMass: 0 }, // 8: touching, static
+    { pos: [0, 1, -1.1], vel: [0, 0, 0], shape: 0, tier: TIER.lattice }, // 9: touching, dormant
+  ];
+  const looks = new Uint32Array(cap);
+  looks[0] = MATERIAL.ball << 12;
+  const src = rawSource(device, bodyWords(base, cap), bodyWords(base, cap), sparkShapes(), looks, cap, cap) as BodySource & { balls?: number[] };
+  src.balls = [0];
+  const sp = new Sparks(device);
+  const state = async () => heatOf(await readBuffer(device, sp.stateFor(src)));
+  const a = await sparkFrame(device, sp, src); // first sight: contact only
+  const seen = await state();
+  const next = base.map((b) => ({ ...b, vel: [...b.vel] as V3 }));
+  next[5]!.vel = [9, 0, 0]; next[6]!.vel = [0, 4, 0]; next[7]!.vel = [0, 0, -15];
+  device.queue.writeBuffer(src.bodies, 0, bodyWords(next, cap));
+  const b = await sparkFrame(device, sp, src);
+  const hit = await state();
+  await sparkFrame(device, sp, src, 0.25); // the hits are over, the ball stays
+  const later = await state();
+  src.balls = [];
+  await sparkFrame(device, sp, src, 0.25); // the ball is gone too
+  const gone = await state();
+  const err = await device.popErrorScope();
+  sp.destroy();
+  device.destroy();
+  return { seen, hit, later, gone, hot: [a.ctl[CTL.hot], b.ctl[CTL.hot]], cfg: sp.config, error: err?.message ?? null };
+}
+
+/** The glow gain against the hot count: 1 up to HOT_FULL hot bodies, HOT_FULL / hot beyond. */
+export async function heatGain(n: number) {
+  const { device } = await createDevice({ timestamps: false });
+  device.pushErrorScope('validation');
+  const bs: RawBody[] = Array.from({ length: n }, (_, i) => ({ pos: [(i % 300) * 1.1, 1 + Math.floor(i / 90000) * 2, Math.floor(i / 300) % 300] as V3, vel: [0, 0, 0] as V3, shape: 0 }));
+  const src = rawSource(device, bodyWords(bs, n), bodyWords(bs, n), sparkShapes(), new Uint32Array(n), n, n);
+  const records = device.createBuffer({ size: n * RenderRecord.size, usage: GPUBufferUsage.STORAGE });
+  const sp = new Sparks(device, 1024), lights = new Lights(device);
+  const frame = async () => {
+    const enc = device.createCommandEncoder();
+    const pass = enc.beginComputePass();
+    sp.encode(pass, src, { dt: 0, groundY: -100 });
+    lights.encode(pass, src, records, sp, { eye: [0, 0, 0], time: 1, ball: [1, 1, 1] });
+    pass.end();
+    device.queue.submit([enc.finish()]);
+    return { ctl: Array.from(new Uint32Array(await readBuffer(device, sp.ctl))), gain: new Float32Array(await readBuffer(device, lights.lights))[LIGHTS * 8]! };
+  };
+  const cold = await frame();
+  device.queue.writeBuffer(src.bodies, 0, bodyWords(bs.map((b) => ({ ...b, vel: [15, 0, 0] as V3 })), n));
+  const hot = await frame();
+  const err = await device.popErrorScope();
+  sp.destroy();
+  lights.destroy();
+  records.destroy();
+  device.destroy();
+  return { cold: { hot: cold.ctl[CTL.hot], gain: cold.gain }, hot: { hot: hot.ctl[CTL.hot], gain: hot.gain }, error: err?.message ?? null };
+}
+
+/**
+ * Heat in the image: a cube hit hard glows, its cold twin does not, and
+ * the glow dims when a crowd of other bodies (out of view) is hot too.
+ * Sparks, flashes, bloom and fog are off so only the glow changes pixels.
+ */
+export async function heatImage(crowd: number, crowdHot: boolean, dv = 15) {
+  const { device } = await createDevice({ timestamps: false });
+  device.pushErrorScope('validation');
+  const descs = [box([-1.5, 1, 0], [0.6, 0.6, 0.6], [0, 0, 0, 1]), box([1.5, 1, 0], [0.6, 0.6, 0.6], [0, 0, 0, 1])];
+  for (let i = 0; i < crowd; i++) descs.push(box([(i % 80) * 1.2 - 48, 0.5, 60 + Math.floor(i / 80) * 1.2], [0.4, 0.4, 0.4], [0, 0, 0, 1]));
+  const src = new SnapshotSource(device);
+  src.reset(descs);
+  const rend = new Renderer(device, { size: [W, H] }, { sparkPool: 1024 });
+  rend.look = { ...rend.look, bloomMix: 0, fogDensity: 0 };
+  rend.sparks.config = { ...rend.sparks.config, perDv: 0 };
+  rend.lights.config = { ...rend.lights.config, flashIntensity: 0 };
+  rend.toggles.trail = false;
+  rend.setSource(src);
+  const f: FrameParams = { ...camera([0, 2.5, 7], [0, 1, 0]), groundY: 0, time: 1, dt: 0, alpha: 1 };
+  const snap = snapshotOf(descs);
+  src.update(snap, descs);
+  const cold = (await rend.render(f, true, true))!.pixels!;
+  snap.linVel[1] = dv; // cube 0
+  if (crowdHot) for (let i = 2; i < descs.length; i++) snap.linVel[3 * i] = 15;
+  src.update(snap, descs);
+  const hot = (await rend.render(f, true, true))!.pixels!;
+  const ids = (await rend.renderIds(f)).ids;
+  const err = await device.popErrorScope();
+  rend.destroy();
+  device.destroy();
+  const m = (px: typeof cold, id: number) => meanOver(px, ids, id).mean;
+  return { hit: [m(cold, 1), m(hot, 1)], twin: [m(cold, 2), m(hot, 2)], n: meanOver(hot, ids, 1).n, error: err?.message ?? null };
 }

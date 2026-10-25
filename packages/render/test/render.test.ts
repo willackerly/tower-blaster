@@ -7,7 +7,7 @@ import { emptySnapshot, TAG_BALL, type BodyDesc } from '@tb/engine-api';
 import { buildScenario } from '@tb/scenarios';
 import { Body, readStruct, Shape } from '@tb/schema';
 import { isSoftwareAdapter, loadBundle, openWebGPU, type WebGPUSession } from '@tb/testkit';
-import { agx, bevelNormal, CANDY_NIGHT, CTL, MAX_EVENTS, SPAWN_BUDGET, FX_WORDS, packFx, tintWord, unpackFx, frustumPlanes, linearToOklab, listMatches, oklabToLinear, srgbToLinear, lookAt, lookOf, lookRange, MATERIAL, multiply, packBodies, packShapes, paletteOf, perspective, unpackLook } from '../src/index.ts';
+import { agx, bevelNormal, CANDY_NIGHT, CTL, HOT_FULL, MAX_EVENTS, SPAWN_BUDGET, FX_WORDS, packFx, tintWord, unpackFx, frustumPlanes, linearToOklab, listMatches, oklabToLinear, srgbToLinear, lookAt, lookOf, lookRange, MATERIAL, multiply, packBodies, packShapes, paletteOf, perspective, unpackLook } from '../src/index.ts';
 import type * as Drivers from './page.ts';
 
 describe('looks', () => {
@@ -285,6 +285,51 @@ describe('lights', () => {
   });
 });
 
+describe('heat', () => {
+  it('comes from ball contact and hard hits only, and decays with tau', async (ctx) => {
+    if (!gpu) return ctx.skip();
+    const r = await call('heatScript');
+    expect(r.error).toBeNull();
+    const { heatTau: tau, heatDv, heatRange } = r.cfg;
+    expect([tau, heatDv, heatRange]).toEqual([0.25, 6, 6]); // the numbers below assume these
+    const near = (got: number[], want: number[]) => got.forEach((v, i) => expect(Math.abs(v - want[i]!), `slot ${i}`).toBeLessThan(2e-3)); // f16 storage
+    // Slots: ball, touching, near miss, rotated touching, far, dv 9, dv 4, dv 15, static touching, lattice touching.
+    near(r.seen, [0, 1, 0, 1, 0, 0, 0, 0, 0, 0]);
+    near(r.hit, [0, 1, 0, 1, 0, 0.5, 0, 1, 0, 0]);
+    const e = Math.exp(-1);
+    near(r.later, [0, 1, 0, 1, 0, 0.5 * e, 0, e, 0, 0]);
+    near(r.gone, [0, e, 0, e, 0, 0.5 * e * e, 0, e * e, 0, 0]);
+    expect(r.hot).toEqual([2, 4]);
+  });
+
+  it('the glow gain is 1 up to HOT_FULL hot bodies and HOT_FULL / hot beyond', async (ctx) => {
+    if (!gpu) return ctx.skip();
+    for (const n of [1500, 100_000]) {
+      const r = await call('heatGain', n);
+      expect(r.error).toBeNull();
+      expect(r.cold).toEqual({ hot: 0, gain: 1 });
+      expect(r.hot.hot).toBe(n);
+      expect(r.hot.gain).toBeCloseTo(Math.min(1, HOT_FULL / n), 7);
+    }
+  });
+
+  it('a hard-hit cube glows, its twin does not, and the glow dims when thousands are hot', async (ctx) => {
+    if (!gpu) return ctx.skip();
+    // Heat 0.5 (dv 9): below the white end, where tone mapping is not yet flat.
+    const alone = await call('heatImage', 6000, false, 9);
+    const crowd = await call('heatImage', 6000, true, 9);
+    for (const r of [alone, crowd]) {
+      expect(r.error).toBeNull();
+      expect(r.n).toBeGreaterThan(300);
+      expect(r.twin[1]).toBe(r.twin[0]); // the cold twin: identical
+    }
+    const glow = alone.hit[1]! - alone.hit[0]!, dim = crowd.hit[1]! - crowd.hit[0]!;
+    expect(glow).toBeGreaterThan(40); // 8-bit luma, measured +79
+    expect(dim).toBeGreaterThan(0);
+    expect(dim).toBeLessThan(0.75 * glow); // gain 2000 / 6001; tone mapping compresses it to a measured 0.54
+  });
+});
+
 describe('GPU cull and compaction', () => {
   it('lists, counts and records match the CPU reference', async (ctx) => {
     if (!gpu) return ctx.skip();
@@ -466,6 +511,8 @@ describe('drawing', () => {
     expect(r.error).toBeNull();
     expect(r.diff).toBe(0);
     expect(r.prevEqual).toBe(true); // beforeStep() copied the state into prev
-    expect(r.bytesPerFrame).toBeLessThanOrEqual(1024);
+    // Uniforms only (frame, cull, spark and light params, spark control reset): measured 1044 B. Any per-body upload is 41 x Body.size more.
+    expect(r.bytesPerFrame).toBeLessThanOrEqual(1536);
+    expect(1536).toBeLessThan(41 * Body.size);
   });
 });

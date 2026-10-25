@@ -2,7 +2,7 @@
 // the floor, the sky, and the ID target used by tests. Everything is
 // camera-relative; the shading reads its colours and lights from the Frame
 // uniform (LookParams), so presets are data.
-import { defineStruct, RenderRecord, Spark, wgslStruct } from '@tb/schema';
+import { defineStruct, FxState, RenderRecord, Spark, wgslStruct } from '@tb/schema';
 import { FX_EMISSIVE_MAX, FX_WGSL } from './fx.ts';
 import { BEVEL_WGSL, OKLAB_WGSL } from './look.ts';
 import { SPARK_COMMON } from './sparks.ts';
@@ -44,6 +44,7 @@ export const Frame = defineStruct('Frame', [
 export const SCENE_WGSL = /* wgsl */ `
 ${wgslStruct(RenderRecord)}
 ${wgslStruct(Spark)}
+${wgslStruct(FxState)}
 ${SPARK_COMMON}
 ${wgslStruct(Frame)}
 @group(0) @binding(0) var<uniform> fr: Frame;
@@ -55,7 +56,8 @@ ${wgslStruct(Frame)}
 @group(0) @binding(6) var<storage, read> overlay: array<vec4f>;     // world x, y, z, radius
 @group(0) @binding(7) var<storage, read> overlayColour: array<u32>; // sRGB rgb8 + emissive8
 @group(0) @binding(8) var<storage, read> sparks: array<Spark>;      // sparks.ts
-@group(0) @binding(9) var<storage, read> lights: array<vec4f, ${LIGHTS * 2}>; // lights.ts: position + radius, colour * intensity
+@group(0) @binding(9) var<storage, read> lights: array<vec4f, ${LIGHTS * 2 + 1}>; // lights.ts: position + radius, colour * intensity; then heat gain
+@group(0) @binding(11) var<storage, read> fxState: array<FxState>;   // sparks.ts: heat in bits 0-15
 @group(0) @binding(10) var<storage, read> trail: array<vec4f>;      // lights.ts: world xyz, time
 
 // Which list a pipeline draws: SEG * capacity is its first entry.
@@ -351,7 +353,18 @@ fn boxFace(local: vec3f, w: vec3f) -> vec3f {
   let seam = 1.0 - 0.4 * min(1.0, wPx / 0.75) * (1.0 - smoothstep(drawn - 0.5, drawn + 0.5, edgeM / max(pxM, 1e-6)));
   var c = shade(base * seam, v.rel, n, aaAlpha(rough * rough, n, dndx, dndy), aaAlpha(0.0049, n, dndx, dndy), select(0.0, fr.clearcoat, isCandy));
   c += base * seam * fxGlow(w, fr.time);
+  c += heatGlow(v.slot, base);
   return vec4f(fog(c, v.rel), 1.0);
+}
+
+// Heat from hard hits and ball contact (sparks.ts), scaled down when many
+// bodies are hot at once (lights.ts). The palette colour glows; only the
+// hottest turn white.
+fn heatGlow(slot: u32, base: vec3f) -> vec3f {
+  if (slot >= fr.capacity) { return vec3f(0.0); }
+  let h = unpack2x16float(fxState[slot].bits).x;
+  if (h <= 0.0) { return vec3f(0.0); }
+  return h * lights[${LIGHTS * 2}u].x * mix(base * 3.0, vec3f(6.0), smoothstep(0.8, 1.0, h));
 }
 
 // Bench diagnostics (RendererOptions.flatBoxes): the cheapest box shading.

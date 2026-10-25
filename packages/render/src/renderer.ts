@@ -140,7 +140,7 @@ export class Renderer {
   private readonly boxVerts: { scene: number; shadow: number };
   /** Per-pass GPU timing of render() (cull, shadow, scene, bloom, composite) when set; read with profiler.collect(). */
   profiler: GpuProfiler | null = null;
-  /** Passes to skip, for measuring their marginal cost (bench:render). */
+  /** Passes to skip, for measuring their marginal cost (bench:render). sparks off also freezes heat (its detector writes it). */
   toggles = { shadow: true, post: true, sparks: true, trail: true };
 
   constructor(readonly device: GPUDevice, target: RenderTarget, opts: RendererOptions = {}) {
@@ -184,6 +184,7 @@ export class Renderer {
         { binding: 8, visibility: GPUShaderStage.VERTEX, buffer: ro },
         { binding: 9, visibility: GPUShaderStage.FRAGMENT, buffer: ro },
         { binding: 10, visibility: GPUShaderStage.VERTEX, buffer: ro },
+        { binding: 11, visibility: GPUShaderStage.FRAGMENT, buffer: ro },
       ],
     });
     // The shadow pass cannot bind the shadow map it writes.
@@ -348,6 +349,7 @@ export class Renderer {
           { binding: 5, resource: { buffer: this.fxBuf } }, { binding: 6, resource: { buffer: this.overlayBuf } }, { binding: 7, resource: { buffer: this.overlayColours } },
           { binding: 8, resource: { buffer: this.sparks.sparks } },
           { binding: 9, resource: { buffer: this.lights.lights } }, { binding: 10, resource: { buffer: this.lights.trail } },
+          { binding: 11, resource: { buffer: this.sparks.stateFor(s) } },
         ],
       });
       this.shadowBind = this.device.createBindGroup({ layout: this.shadowLayout, entries: common });

@@ -18,7 +18,7 @@
 // camera-relative position and radius; colour times intensity). Lights
 // do not cast shadows. flashSlot is the CPU twin of the slot rule.
 import { Body, ImpactEvent, RenderRecord, TIER, wgslStruct } from '@tb/schema';
-import { MAX_EVENTS, type Sparks } from './sparks.ts';
+import { CTL, MAX_EVENTS, type Sparks } from './sparks.ts';
 import type { BodySource } from './source.ts';
 import type { V3 } from './math.ts';
 
@@ -26,8 +26,10 @@ export const MAX_BALLS = 4;
 export const FLASHES = 8;
 export const LIGHTS = MAX_BALLS + FLASHES;
 export const TRAIL = 32;
-/** Words of the light list: 2 vec4 per light. */
-export const LIGHT_WORDS = LIGHTS * 8;
+/** Words of the light list: 2 vec4 per light, then one vec4 (x: heat glow gain). */
+export const LIGHT_WORDS = LIGHTS * 8 + 4;
+/** Hot bodies that glow at full strength; more share it (no white washout in a collapse). */
+export const HOT_FULL = 2000;
 
 export interface LightParams {
   /** Ball light: radius (m) and intensity (multiple of the look's ball colour). */
@@ -70,7 +72,7 @@ struct Flash { pos: vec3f, t0: f32, i0: f32, pad0: f32, pad1: f32, pad2: f32 }
 @group(0) @binding(4) var<storage, read> eventCount: array<u32>;   // the spark control words; [0] = events this frame
 @group(0) @binding(5) var<storage, read_write> keys: array<atomic<u32>, ${FLASHES}>;
 @group(0) @binding(6) var<storage, read_write> flashes: array<Flash, ${FLASHES}>;
-@group(0) @binding(7) var<storage, read_write> lights: array<vec4f, ${LIGHTS * 2}>;
+@group(0) @binding(7) var<storage, read_write> lights: array<vec4f, ${LIGHTS * 2 + 1}>;
 @group(0) @binding(8) var<storage, read_write> trail: array<vec4f>;  // MAX_BALLS x TRAIL: world xyz, time (w < 0: empty)
 
 ${FLASH_SLOT_WGSL()}
@@ -122,6 +124,7 @@ fn flashTake(@builtin(local_invocation_index) k: u32) {
   let lit = now > 0.01;
   lights[2u * (${MAX_BALLS}u + k)] = select(vec4f(0.0), vec4f(f.pos - p.eye, p.flashRadius), lit);
   lights[2u * (${MAX_BALLS}u + k) + 1u] = select(vec4f(0.0), vec4f(p.flashColour, now), lit);
+  if (k == 0u) { lights[${LIGHTS * 2}u] = vec4f(1.0 / max(1.0, f32(eventCount[${CTL.hot}]) / ${HOT_FULL}.0), 0.0, 0.0, 0.0); }
 }
 `;
 
@@ -181,7 +184,7 @@ export class Lights {
         layout: p.getBindGroupLayout(0),
         entries: bindings.map((binding) => ({ binding, resource: { buffer: all[binding]! } })),
       });
-      this.binds = { balls: bind(this.pipes.balls, [0, 1, 2, 7, 8]), flashPick: bind(this.pipes.flashPick, [0, 3, 4, 5]), flashTake: bind(this.pipes.flashTake, [0, 3, 5, 6, 7]) };
+      this.binds = { balls: bind(this.pipes.balls, [0, 1, 2, 7, 8]), flashPick: bind(this.pipes.flashPick, [0, 3, 4, 5]), flashTake: bind(this.pipes.flashTake, [0, 3, 4, 5, 6, 7]) };
       this.bound = want;
     }
     const c = this.config;

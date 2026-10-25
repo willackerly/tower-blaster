@@ -23,6 +23,7 @@
 // solver (tier 3) replace the detector's guesses when they exist.
 import { Body, FxState, ImpactEvent, Shape, Spark, TIER, wgslStruct } from '@tb/schema';
 import { MAX_STEP_JUMP } from './cull.ts';
+import { MATERIAL } from './looks.ts';
 import type { BodySource } from './source.ts';
 import type { V3 } from './math.ts';
 
@@ -46,14 +47,22 @@ export interface SparkParams {
   bounce: number;
   friction: number;
   gravity: number;
+  /** Heat glow: speed change (m/s) where heat starts, and the further change for full heat. */
+  heatDv: number;
+  heatRange: number;
+  /** Heat decay time constant, s. */
+  heatTau: number;
+  /** A body this close to a ball's surface (m) is fully hot. */
+  contact: number;
 }
 
-export const DEFAULT_SPARKS: SparkParams = { dvMin: 2.5, perDv: 24, speedMin: 6, speedMax: 22, drag: 0.08, bounce: 0.38, friction: 0.7, gravity: 9.81 };
+export const DEFAULT_SPARKS: SparkParams = { dvMin: 2.5, perDv: 24, speedMin: 6, speedMax: 22, drag: 0.08, bounce: 0.38, friction: 0.7, gravity: 9.81, heatDv: 6, heatRange: 6, heatTau: 0.25, contact: 0.3 };
 
-/** Control words: event count, pool head, events dropped, sparks spawned (this frame). */
-export const CTL = { events: 0, head: 1, dropped: 2, spawned: 3 } as const;
+/** Control words: event count, pool head, events dropped, sparks spawned, hot bodies (this frame). */
+export const CTL = { events: 0, head: 1, dropped: 2, spawned: 3, hot: 4 } as const;
+const CTL_WORDS = 8;
 
-const PARAM_WORDS = 16;
+const PARAM_WORDS = 24;
 
 /** Hash and spark life: shared by the simulation and the draw shader. */
 export const SPARK_COMMON = /* wgsl */ `
@@ -95,6 +104,7 @@ struct SparkParams {
   speedMin: f32, speedMax: f32, drag: f32, bounce: f32,
   friction: f32, gravity: f32, count: u32, frame: u32,
   capacity: u32, pool: u32, pad1: u32, pad2: u32,
+  balls: vec4u, heatDv: f32, heatRange: f32, heatTau: f32, contact: f32,
 }
 
 @group(0) @binding(0) var<uniform> p: SparkParams;
@@ -104,7 +114,7 @@ struct SparkParams {
 @group(0) @binding(4) var<storage, read> looks: array<u32>;
 @group(0) @binding(5) var<storage, read_write> state: array<FxState>;
 @group(0) @binding(6) var<storage, read_write> events: array<ImpactEvent>;
-@group(0) @binding(7) var<storage, read_write> ctl: array<atomic<u32>, 4>;
+@group(0) @binding(7) var<storage, read_write> ctl: array<atomic<u32>, ${CTL_WORDS}>;
 @group(0) @binding(8) var<storage, read_write> sparks: array<Spark>;
 
 fn qrot(q: vec4f, v: vec3f) -> vec3f {
@@ -143,7 +153,36 @@ fn detect(@builtin(global_invocation_id) id: vec3u) {
       }
     }
   }
-  state[i] = FxState(b.linVel, (st.bits & 0xffffu) | (tier << 16u) | select(0u, 1u << 24u, live));
+  // Heat (design step 17): only from a hard hit or from touching a ball,
+  // max-combined and saturating at 1, decaying with heatTau.
+  var heat = 0.0;
+  if (live) {
+    heat = unpack2x16float(st.bits).x * exp(-p.dt / p.heatTau);
+    if (seen && continuous) {
+      heat = max(heat, clamp((length(b.linVel - st.prevLinVel) - p.heatDv) / p.heatRange, 0.0, 1.0));
+    }
+    if (((looks[i] >> 12u) & 0xfu) != ${MATERIAL.ball}u) { heat = max(heat, ballContact(i, b)); }
+    if (heat > 0.05) { atomicAdd(&ctl[${CTL.hot}], 1u); }
+  }
+  state[i] = FxState(b.linVel, (pack2x16float(vec2f(heat, 0.0)) & 0xffffu) | (tier << 16u) | select(0u, 1u << 24u, live));
+}
+
+// 1 when a ball's surface is within p.contact of the body's box (exact
+// point-box distance in the body's frame), else 0.
+fn ballContact(i: u32, b: Body) -> f32 {
+  let sh = shapes[b.shape];
+  var hot = 0.0;
+  for (var k = 0u; k < 4u; k++) {
+    let j = p.balls[k];
+    if (j >= p.count || j == i) { continue; }
+    let ball = bodies[j];
+    let r = shapes[ball.shape].half.x;
+    let local = qrot(vec4f(-b.rot.xyz, b.rot.w), ball.pos - b.pos);
+    let half = select(sh.half, vec3f(sh.half.x), sh.kind == 1u);
+    let d = select(length(max(abs(local) - half, vec3f(0.0))), max(length(local) - sh.half.x, 0.0), sh.kind == 1u);
+    if (d < r + p.contact) { hot = 1.0; }
+  }
+  return hot;
 }
 
 fn sparkCount(e: ImpactEvent) -> u32 {
@@ -276,7 +315,7 @@ export class Sparks {
     for (let i = 0; i < pool; i++) init[i * 8 + 3] = -1;
     device.queue.writeBuffer(this.sparks, 0, init);
     this.events = device.createBuffer({ size: MAX_EVENTS * ImpactEvent.size, usage, label: 'impact events' });
-    this.ctl = device.createBuffer({ size: 16, usage, label: 'spark control' });
+    this.ctl = device.createBuffer({ size: CTL_WORDS * 4, usage, label: 'spark control' });
     this.params = device.createBuffer({ size: PARAM_WORDS * 4, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST, label: 'spark params' });
     const module = device.createShaderModule({ code: SPARK_WGSL, label: 'sparks' });
     const pipe = (entryPoint: string) => device.createComputePipeline({ layout: 'auto', compute: { module, entryPoint } });
@@ -290,15 +329,24 @@ export class Sparks {
     this.injected.push({ pos, dir: [dir[0] / l, dir[1] / l, dir[2] / l], strength, packed: 0xffffff | (1 << 24) });
   }
 
+  /**
+   * The per-slot FX state buffer (previous velocity, heat) sized for a
+   * source, for the scene shader to read heat from. Growing it zeroes every
+   * slot (unseen, cold) and rebinds the kernels on the next encode.
+   */
+  stateFor(source: BodySource): GPUBuffer {
+    if (!this.state || this.state.size < source.capacity * FxState.size) {
+      this.state?.destroy();
+      this.state = this.device.createBuffer({ size: Math.max(16, source.capacity * FxState.size), usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC, label: 'fx state' });
+      this.binds = null;
+    }
+    return this.state;
+  }
+
   private bind(source: BodySource): void {
     const key = `${source.version}:${source.capacity}`;
     if (this.source === source && this.bound === key && this.binds) return;
-    if (!this.state || this.state.size < source.capacity * FxState.size) {
-      this.state?.destroy();
-      // Zeroed: every slot unseen.
-      this.state = this.device.createBuffer({ size: Math.max(16, source.capacity * FxState.size), usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC, label: 'fx state' });
-    }
-    const all = [this.params, source.bodies, source.prev, source.shapes, source.looks, this.state, this.events, this.ctl, this.sparks];
+    const all = [this.params, source.bodies, source.prev, source.shapes, source.looks, this.stateFor(source), this.events, this.ctl, this.sparks];
     const bind = (p: GPUComputePipeline, bindings: number[]) => this.device.createBindGroup({
       layout: p.getBindGroupLayout(0),
       entries: bindings.map((binding) => ({ binding, resource: { buffer: all[binding]! } })),
@@ -318,12 +366,15 @@ export class Sparks {
     u[11] = this.frame++;
     u[12] = source.capacity;
     u[13] = this.pool;
+    const balls = source.balls ?? [];
+    for (let k = 0; k < 4; k++) u[16 + k] = balls[k] ?? 0xffffffff;
+    fl.set([pr.heatDv, pr.heatRange, pr.heatTau, pr.contact], 20);
     q.writeBuffer(this.params, 0, buf);
     // Injected events first; the detector appends after them.
     const inj = this.injected.splice(0);
     if (inj.length) q.writeBuffer(this.events, 0, packImpacts(inj));
     q.writeBuffer(this.ctl, 0, new Uint32Array([inj.length]));
-    q.writeBuffer(this.ctl, 8, new Uint32Array([0, 0]));
+    q.writeBuffer(this.ctl, 8, new Uint32Array([0, 0, 0]));
     if (f.detect !== false && source.count > 0) {
       pass.setBindGroup(0, this.binds!.detect);
       pass.setPipeline(this.pipes.detect);
