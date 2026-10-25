@@ -740,6 +740,7 @@ Original questions:
 - T3: `HostBatch.domain` accepted, result lag = stateLag, TieredEngine passes `spawned`. It lands with v2 (step 15) in the engine thread's PR.
 - T4: not now. The tier fixes the O(n·cands) blocked scan on the CPU with its mover hash; `select` plus a GPU rest detector wait for a tiered-on-GPU profile showing read() matters. An integer chord metric is fine when needed.
 - T5: confirmed; TierStats stay CPU tier state.
+- Landed in PR #8 (merged): T1 as 4b4c659 (CellChange.rot; the init table has dormant ids at the exact cell pose), T2 as f8f0d4e (freeze passes the rubble pose), T4's mover-hash settle scan as d67f9d6.
 
 Original questions:
 - **T1.** For a GPU host, will every off or static id hold the exact pose that `TieredEngine.snapshot()` reports, with v = 0 and awake 0? That covers the cell centre (f64 `o + i·e`, then f32), `CUBE_ROTATIONS[rotAt]`, and the rubble pose. It needs two things:

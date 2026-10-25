@@ -11,6 +11,7 @@ function fakeEngine(name: string, clock: { t: number }, cost: (step: number) => 
     info: { name, variant: {}, backend: 'fake' },
     get stepIndex() { return stepIndex; },
     async init() { stepIndex = 0; },
+    push() {},
     step() { clock.t += cost(stepIndex); log.push(name); stepIndex++; },
     snapshot: () => emptySnapshot(0),
     dispose() {},
@@ -30,6 +31,7 @@ function fakeGpuEngine(clock: { t: number }, cpu: number, gpu: number, device = 
     info: { name: 'gpu', variant: {}, backend: 'fake-gpu' },
     get stepIndex() { return stepIndex; },
     async init() { stepIndex = 0; },
+    push() {},
     step() {
       clock.t += cpu;
       doneAt = device.busyUntil = Math.max(device.busyUntil, clock.t) + gpu;
@@ -128,6 +130,7 @@ describe('timing modes for engines that submit work and return (finish())', () =
         info: { name: 'async', variant: {}, backend: 'fake' },
         get stepIndex() { return stepIndex; },
         async init() { stepIndex = 0; },
+        push() {},
         step: () => new Promise<void>((resolve) => setTimeout(() => { clock.t += 2; stepIndex++; resolve(); }, 0)),
         snapshot: () => emptySnapshot(0),
         dispose() {},
@@ -143,6 +146,7 @@ describe('timing modes for engines that submit work and return (finish())', () =
       info: { name: 'gpu', variant: {}, backend: 'fake-gpu' },
       get stepIndex() { return steps; },
       async init() { steps = 0; },
+      push() {},
       step() { clock.t += 1; if (++steps === 30) setTimeout(() => { failed = true; }, 0); },
       async finish() { if (failed) throw new Error('device error'); },
       snapshot: () => emptySnapshot(0),

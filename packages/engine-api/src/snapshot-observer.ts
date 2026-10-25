@@ -1,7 +1,7 @@
 // The CPU observer: any engine observed through snapshot() after every step,
 // evaluated with reduceRef. Exact by construction, so it is also what native
 // observers are compared with.
-import type { EngineInfo, PhysicsEngine, SceneDesc, ShapeDesc, Snapshot, StepReport } from './index.ts';
+import type { EngineInfo, GpuBodies, InputEvent, PhysicsEngine, SceneDesc, ShapeDesc, Snapshot, StepReport } from './index.ts';
 import {
   checkSpec, gatherRows, OBSERVER_CAPS, type Observation, type ObservedEngine, type ObserveOptions, type Observer,
   type ObserverCaps, reduceRef, type ReduceSpec,
@@ -90,7 +90,7 @@ class SnapshotObserver implements Observer {
     if (this.retired) return; // init() or dispose() ran while its step was pending
     const step = this.host.stepIndex;
     if (this.spec) {
-      if (snap.count > this.host.shapes.length) throw new Error(`${snap.count} bodies, but the scene describes ${this.host.shapes.length}`);
+      if (snap.count > this.host.shapes.length) throw new Error(`${snap.count} bodies, but the scene and the spawns so far describe ${this.host.shapes.length}`);
       if (snap.count > this.caps.maxBodies) throw new RangeError(`${snap.count} bodies, over maxBodies = ${this.caps.maxBodies}`);
       const out = reduceRef(this.spec, {
         snap, prevLinVel: this.prev, prevCount: this.prevCount, shapes: this.host.shapes, tagWords: this.tagWords, tags: this.tags,
@@ -107,9 +107,15 @@ class SnapshotObserver implements Observer {
 
 class SnapshotObserved implements ObservedEngine {
   readonly finish?: () => Promise<void>;
+  readonly gpu?: () => GpuBodies | null;
   /** Settles once the pending step's snapshot has been evaluated; null when none is. Never rejects. */
   pending: Promise<void> | null = null;
-  shapes: readonly ShapeDesc[] = [];
+  /** Shape per id, for the bodies that exist after the last step() call. */
+  shapes: ShapeDesc[] = [];
+  /** Spawns not yet applied, in the order every engine applies them: by step, then scene.inputs, then push order. */
+  private due: InputEvent[] = [];
+  /** An async inner step() is unresolved: inputs pushed now could land in it or the next, so push() refuses. */
+  private stepping = false;
   private scene: SceneDesc | null = null;
   private observer: SnapshotObserver | null = null;
   /** Bumped by init() and dispose(), so observe() can tell either ran while it awaited its snapshot. */
@@ -121,6 +127,7 @@ class SnapshotObserved implements ObservedEngine {
         await inner.finish!();
         await this.pending;
       };
+    if (inner.gpu) this.gpu = () => inner.gpu!();
   }
 
   get info(): EngineInfo { return this.inner.info; }
@@ -138,8 +145,25 @@ class SnapshotObserved implements ObservedEngine {
     this.scene = null;
     await this.inner.init(scene);
     this.scene = scene;
-    // Ids as the contract's bodiesAt assigns them: the scene's bodies, then its inputs as they spawn.
-    this.shapes = [...scene.bodies, ...scene.inputs.map((ev) => ev.body)].map((b) => b.shape);
+    // Ids as the engines assign them: the scene's bodies, then each input as it spawns.
+    this.shapes = scene.bodies.map((b) => b.shape);
+    this.due = [...scene.inputs].sort((a, b) => a.step - b.step);
+  }
+
+  /** Forwards to the engine, then queues the spawns with the engines' stable insertion. */
+  push(events: InputEvent[]): void {
+    if (this.stepping) throw new Error('push(): a step() is still running; await it first');
+    this.inner.push(events);
+    for (const ev of events) {
+      let i = this.due.length;
+      while (i > 0 && this.due[i - 1]!.step > ev.step) i--;
+      this.due.splice(i, 0, ev);
+    }
+  }
+
+  /** The inputs the step() just called applies: those due at or before its start index. */
+  private spawnDue(at: number): void {
+    while (this.due.length && this.due[0]!.step <= at) this.shapes.push(this.due.shift()!.body.shape);
   }
 
   /** The returned promise settles after pending is cleared, so a caller that awaits it may step again at once. */
@@ -151,11 +175,12 @@ class SnapshotObserved implements ObservedEngine {
 
   step(): StepReport | void | Promise<StepReport | void> {
     if (this.pending) throw new Error('step(): the previous step() is still pending; await it first');
-    const o = this.observer;
+    const o = this.observer, at = this.inner.stepIndex;
     if (!o) {
       // Tracked unobserved too, so observe() never snapshots a state this step is about to replace.
       const r = this.inner.step();
-      return isThenable(r) ? this.track(r) : r;
+      this.spawnDue(at);
+      return isThenable(r) ? this.track(this.running(r)) : r;
     }
     // A step whose state was not evaluated leaves prev a step behind, so a failed
     // step, snapshot or evaluation retires the observer rather than letting the next dv span two steps.
@@ -165,7 +190,8 @@ class SnapshotObserved implements ObservedEngine {
     };
     try {
       const r = this.inner.step();
-      if (isThenable(r)) return this.track(r.then(async (rep) => {
+      this.spawnDue(at);
+      if (isThenable(r)) return this.track(this.running(r).then(async (rep) => {
         o.after(await this.inner.snapshot());
         return rep;
       }).catch(failed));
@@ -179,6 +205,12 @@ class SnapshotObserved implements ObservedEngine {
     } catch (e) {
       return failed(e);
     }
+  }
+
+  /** r, with push() refused until it settles. */
+  private running<T>(r: Promise<T>): Promise<T> {
+    this.stepping = true;
+    return r.finally(() => { this.stepping = false; });
   }
 
   snapshot(): Snapshot | Promise<Snapshot> { return this.inner.snapshot(); }
@@ -205,7 +237,8 @@ class SnapshotObserved implements ObservedEngine {
 }
 
 /**
- * Any engine observed through snapshot() after every step (lag 0). Mirrors the engine's id assignment from init() and its spawns.
+ * Any engine observed through snapshot() after every step (lag 0). Mirrors the engine's id assignment from init(), its
+ * scene inputs and push(); push() refuses while an async step() is still running.
  * An observed step that fails (its step, snapshot or evaluation) retires the observer; later steps run unobserved.
  */
 export function withSnapshotObserver(inner: PhysicsEngine): ObservedEngine {

@@ -23,12 +23,14 @@ struct Body {
   shape: u32, // @60 index into the shape table
 }
 
-// What the renderer reads per cube.
-// size 32 B, align 16
-struct RenderInstance {
-  pos: vec3f, // @0
-  palette: u32, // @12 colour index, e.g. original tower height
-  rot: vec4f, // @16
+// Per-body pose the renderer draws, written once per frame by its prepare pass.
+// size 48 B, align 16
+struct RenderRecord {
+  pos: vec3f, // @0 camera-relative centre, interpolated between the last two steps
+  look: u32, // @12 BodyLook bits: 0-7 ramp, 8-11 hue, 12-15 material, 16-31 seed
+  rot: vec4f, // @16 unit quaternion (x, y, z, w), interpolated
+  half: vec3f, // @32 box half extents; x is the radius for a sphere
+  slot: u32, // @44 body index
 }
 
 // Collision shape, indexed by Body.shape.
@@ -51,6 +53,31 @@ struct Manifold {
   p1: vec4f, // @48
   p2: vec4f, // @64
   p3: vec4f, // @80
+}
+
+// An impact that spawns sparks.
+// size 32 B, align 16
+struct ImpactEvent {
+  pos: vec3f, // @0 world position of the contact
+  strength: f32, // @12 speed change, m/s
+  dir: vec3f, // @16 unit; sparks fly out around it
+  packed: u32, // @28 bits 0-23 slot (0xffffff: none), 24-27 kind (0 detector, 1 injected), 28-31 material
+}
+
+// One spark of the renderer's pool.
+// size 32 B, align 16
+struct Spark {
+  pos: vec3f, // @0 world position
+  age: f32, // @12 seconds; negative means dead
+  vel: vec3f, // @16 m/s
+  packed: u32, // @28 bits 0-7 life (0.4 + 0.8 * q / 255 s), 8-31 seed
+}
+
+// Renderer-side per-slot effect state.
+// size 16 B, align 16
+struct FxState {
+  prevLinVel: vec3f, // @0 velocity when the detector last saw the slot
+  bits: u32, // @12 bits 0-15 heat (f16), 16-23 tier last seen, 24 valid
 }
 
 // Constant per-body properties for the solver, written by the host.
@@ -130,7 +157,7 @@ struct SolverParams {
   capacity: u32, // @88
   slidingHessian: u32, // @92
   sweepOn: u32, // @96
-  pad0: u32, // @100
+  frictionCombine: u32, // @100 0 average, 1 min, 2 max, 3 multiply (SceneDesc.frictionCombine)
   pad1: u32, // @104
   pad2: u32, // @108
 }

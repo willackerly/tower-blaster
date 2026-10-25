@@ -1,0 +1,11 @@
+{
+  "name": "@tb/keystone-lab",
+  "private": true,
+  "type": "module",
+  "exports": { ".": "./src/index.ts" },
+  "dependencies": {
+    "@tb/adapter-rapier": "workspace:*",
+    "@tb/engine-api": "workspace:*",
+    "@tb/keystone": "workspace:*"
+  }
+}

@@ -42,6 +42,8 @@ export interface SceneDesc {
   ground: { y: number; friction: number } | null;
   /** Whether engines may put bodies to sleep. */
   sleep: boolean;
+  /** How the friction of two touching surfaces combines (ground included). Default 'average', as Rapier. */
+  frictionCombine?: CombineRule;
   bodies: BodyDesc[];
   /** Sorted by step. Spawned bodies get indices after `bodies`, in event order. */
   inputs: InputEvent[];
@@ -63,6 +65,37 @@ export interface EngineInfo {
   variant: Record<string, string | number | boolean>;
   /** Where it runs, e.g. "wasm-cpu" or "webgpu:apple/m5". */
   backend: string;
+  /**
+   * How a body in free flight moves: each step is `substeps` semi-implicit
+   * Euler steps of dt / substeps (see freeFlight), so a game can predict an
+   * arc exactly. Every engine here sets it; absent means unknown.
+   */
+  integrator?: { substeps: number };
+}
+
+/** Rapier's names for combining two coefficients. */
+export type CombineRule = 'average' | 'min' | 'max' | 'multiply';
+
+export function combineFriction(rule: CombineRule, a: number, b: number): number {
+  switch (rule) {
+    case 'average': return (a + b) / 2;
+    case 'min': return Math.min(a, b);
+    case 'max': return Math.max(a, b);
+    case 'multiply': return a * b;
+  }
+}
+
+/**
+ * Position and velocity after `steps` steps of free flight under gravity, as
+ * an engine with `integrator.substeps` moves a body: semi-implicit Euler
+ * (velocity first, then position) with dt / substeps.
+ */
+export function freeFlight(pos: Vec3, vel: Vec3, gravity: Vec3, dt: number, substeps: number, steps: number): { pos: Vec3; vel: Vec3 } {
+  const p: Vec3 = [...pos], v: Vec3 = [...vel], h = dt / substeps;
+  for (let s = 0; s < steps * substeps; s++) {
+    for (let k = 0; k < 3; k++) { v[k]! += h * gravity[k]!; p[k]! += h * v[k]!; }
+  }
+  return { pos: p, vel: v };
 }
 
 export interface StepReport {
@@ -73,6 +106,13 @@ export interface StepReport {
 export interface PhysicsEngine {
   readonly info: EngineInfo;
   init(scene: SceneDesc): Promise<void>;
+  /**
+   * Queue inputs after init, for interactive play. An event applies at the
+   * first step() whose index is >= event.step (so a past step means "next
+   * step"), in the same order as scene.inputs: by step, then push order.
+   * Recording pushed events into scene.inputs replays the session exactly.
+   */
+  push(events: InputEvent[]): void;
   /** Advance exactly one fixed step, applying any inputs due at this step. */
   step(): StepReport | void | Promise<StepReport | void>;
   /** Steps taken since init. */
@@ -86,9 +126,31 @@ export interface PhysicsEngine {
    * only the submission.
    */
   finish?(): Promise<void>;
+  /**
+   * GPU engines only: the live state buffers, so a renderer on the same
+   * device draws them with no CPU copy. Read-only for the caller.
+   */
+  gpu?(): GpuBodies | null;
   /** Exact reductions and sparse reads. Valid until the next init() or dispose(). Engines without it are wrapped with withSnapshotObserver(). */
   observe?(opts: ObserveOptions): Promise<Observer>;
   dispose(): void;
+}
+
+/**
+ * Body state that lives on the GPU. Buffers use the @tb/schema layouts and
+ * are overwritten in place by each step(); work submitted after step()
+ * returns sees the new state (queue order).
+ */
+export interface GpuBodies {
+  device: GPUDevice;
+  /** array<Body>, `capacity` slots; body i is slot i (slots are stable). */
+  bodies: GPUBuffer;
+  /** array<Shape>, indexed by Body.shape. */
+  shapes: GPUBuffer;
+  /** Bodies in use, slots [0, count); grows when inputs spawn. Read after step(). */
+  count: number;
+  /** Fixed at init. */
+  capacity: number;
 }
 
 export function emptySnapshot(count: number): Snapshot {
@@ -131,5 +193,6 @@ export function inertiaOf(b: BodyDesc): Vec3 {
   return [k * (hy * hy + hz * hz), k * (hx * hx + hz * hz), k * (hx * hx + hy * hy)];
 }
 
+export * from './host.ts';
 export * from './observe.ts';
 export * from './snapshot-observer.ts';

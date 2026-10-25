@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { type BodyDesc, bodiesAt, type SceneDesc, type Vec3 } from '@tb/engine-api';
+import { type BodyDesc, bodiesAt, type CombineRule, freeFlight, type InputEvent, type SceneDesc, type Vec3 } from '@tb/engine-api';
 import { drift, energy, jitter, nonFinite, penetration, survival } from '@tb/metrics';
 import { buildScenario } from '@tb/scenarios';
+import { appliedMu, slideMu, slideScene, THROW, throwScene } from '@tb/testkit';
 import { AvbdReferenceEngine, type AvbdParams, colorGraph, outranks, solveSpd6, tangentBasis } from '../src/index.ts';
 
 const cube = (pos: Vec3, linVel: Vec3 = [0, 0, 0]): BodyDesc => ({
@@ -291,5 +292,67 @@ describe('stacks and towers', () => {
     const a = await simulate(scene, 60), b = await simulate(scene, 60);
     expect([...a.s1.pos]).toEqual([...b.s1.pos]);
     expect([...a.s1.rot]).toEqual([...b.s1.rot]);
+  });
+});
+
+describe('engine contract: friction rule and integrator', () => {
+  const mu = async (rule: CombineRule | undefined) => {
+    const e = new AvbdReferenceEngine();
+    await e.init(slideScene(rule));
+    e.step();
+    const v1 = e.snapshot().linVel[0]!;
+    for (let i = 0; i < 10; i++) e.step();
+    return appliedMu(v1, e.snapshot().linVel[0]!);
+  };
+  it.for(['average', 'min', 'max', 'multiply'] as const)('SceneDesc.frictionCombine %s: a sliding cube decelerates at mu g with the combined mu', async (rule) => {
+    // Within solver convergence (2e-4 at 10 iterations); the closest two rules differ by 0.03.
+    expect(await mu(rule)).toBeCloseTo(slideMu(rule), 3);
+  });
+
+  it('frictionCombine defaults to average', async () => {
+    expect(await mu(undefined)).toBe(await mu('average'));
+  });
+
+  it('free flight is exactly what EngineInfo.integrator says', async () => {
+    const e = new AvbdReferenceEngine();
+    expect(e.info.integrator).toEqual({ substeps: 1 });
+    const scene = throwScene();
+    await e.init(scene);
+    for (let i = 0; i < THROW.steps; i++) e.step();
+    const want = freeFlight(THROW.pos, THROW.vel, scene.gravity, scene.dt, 1, THROW.steps);
+    const s = e.snapshot();
+    for (let k = 0; k < 3; k++) {
+      expect(s.pos[k]!).toBeCloseTo(want.pos[k]!, 9);
+      expect(s.linVel[k]!).toBeCloseTo(want.vel[k]!, 9);
+    }
+  });
+});
+
+describe('AvbdReferenceEngine.push()', () => {
+  it('push() during a run replays exactly as the same events in scene.inputs', async () => {
+    const ball = (x: number): BodyDesc => ({ shape: { kind: 'sphere', radius: 0.4 }, pos: [x, 3, -6], rot: [0, 0, 0, 1], linVel: [0, 0, 12], angVel: [0, 0, 0], density: 5, friction: 0.5, restitution: 0.1, tag: -1 });
+    // As the Rapier test: a past-step event applies now, and two events for
+    // step 20 pushed around an earlier one keep push order (stable insert).
+    const live = new AvbdReferenceEngine();
+    const base = buildScenario('S1', { F: 2, H: 4, gap: 0.02 });
+    await live.init(base);
+    const pushedAt: InputEvent[] = [];
+    for (let i = 0; i < 40; i++) {
+      if (i === 10) {
+        const evs: InputEvent[] = [{ step: 20, kind: 'spawn', body: ball(10) }, { step: 3, kind: 'spawn', body: ball(-10) }, { step: 20, kind: 'spawn', body: ball(20) }];
+        live.push(evs);
+        pushedAt.push(...evs.map((e) => ({ ...e, step: Math.max(e.step, i) })));
+      }
+      live.step();
+    }
+    const replay = new AvbdReferenceEngine();
+    await replay.init({ ...base, inputs: [...pushedAt].sort((a, b) => a.step - b.step) });
+    for (let i = 0; i < 40; i++) replay.step();
+    const a = live.snapshot(), b = replay.snapshot();
+    expect(a.count).toBe(base.bodies.length + 3);
+    expect(Array.from(a.pos)).toEqual(Array.from(b.pos));
+    expect(Array.from(a.rot)).toEqual(Array.from(b.rot));
+    const n = base.bodies.length;
+    expect([a.pos[3 * n], a.pos[3 * (n + 1)], a.pos[3 * (n + 2)]].map((x) => Math.round(x!))).toEqual([-10, 10, 20]);
   });
 });

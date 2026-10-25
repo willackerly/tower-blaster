@@ -10,6 +10,7 @@ function reobserved(e: ObservedEngine, edit: (o: Observer) => Observer, before?:
     get info() { return e.info; },
     get stepIndex() { return e.stepIndex; },
     init: (scene) => e.init(scene),
+    push: (events) => e.push(events),
     step: () => {
       before?.();
       return e.step();
@@ -127,6 +128,7 @@ describe('observerConformance', () => {
           n = scene.bodies.length;
           await r.init(scene);
         },
+        push: (events) => r.push(events),
         step: () => r.step(),
         snapshot: (): Snapshot => ({ ...r.snapshot(), count: n }),
         dispose: () => r.dispose(),

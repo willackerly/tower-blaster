@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { AvbdReferenceEngine } from '@tb/physics-ref';
 import { buildScenario } from '@tb/scenarios';
 import {
-  type BodyDesc, bodiesAt, gatherRows, OBSERVER_CAPS, type Observation, type PhysicsEngine, type Pred, reduceRef,
+  type BodyDesc, bodiesAt, gatherRows, type GpuBodies, type InputEvent, OBSERVER_CAPS, type Observation, type PhysicsEngine, type Pred, reduceRef,
   type ReduceSpec, type SceneDesc, type Snapshot, type StepReport, withSnapshotObserver,
 } from '../src/index.ts';
 
@@ -221,12 +221,15 @@ describe('withSnapshotObserver on physics-ref (§2, §3.1)', () => {
     expect(e.inner).toBe(inner);
     expect(e.info).toBe(inner.info);
     expect(e.finish).toBeUndefined();
+    expect(e.gpu).toBeUndefined();
     await e.init(tiny());
     expect(e.step()).toBeUndefined();
     expect(e.stepIndex).toBe(1);
     expect(await e.snapshot()).toEqual(inner.snapshot());
     expect(withSnapshotObserver(new AsyncEngine(new AvbdReferenceEngine(), 'snapshot')).finish).toBeTypeOf('function');
     e.dispose();
+    const bodies = { count: 7 } as GpuBodies, onGpu = Object.assign(new AvbdReferenceEngine(), { gpu: () => bodies });
+    expect(withSnapshotObserver(onGpu).gpu!()).toBe(bodies);
   });
 
   it.each([['snapshot()', 'snapshot'], ['step()', 'step'], ['step() and snapshot()', 'both']] as const)('an engine with an async %s: step() returns a promise, observer calls wait or throw, results are the same', async (_, kind) => {
@@ -264,13 +267,12 @@ describe('withSnapshotObserver on physics-ref (§2, §3.1)', () => {
     const obs = await e.observe({ tagWords: 0 });
     obs.query({ outputs: [{ op: 'count', where: 'all' }] });
     inner.world!.add(tiny().bodies[0]!); // a body the scene does not describe
-    for (let k = 0; k < 2; k++) e.step();
-    expect(() => e.step()).toThrow(/4 bodies, but the scene describes 3/);
-    await expect(obs.result(3)).rejects.toThrow(/observer failed after step 3/);
+    expect(() => e.step()).toThrow(/^3 bodies, but the scene and the spawns so far describe 2$/);
+    await expect(obs.result(1)).rejects.toThrow(/observer failed after step 1/);
     // Detached as well: later steps run unobserved instead of failing again.
     expect(() => e.step()).not.toThrow();
-    expect(e.stepIndex).toBe(4);
-    expect(() => obs.query(null)).toThrow(/observer failed after step 3/);
+    expect(e.stepIndex).toBe(2);
+    expect(() => obs.query(null)).toThrow(/observer failed after step 1/);
   });
 
   it.each([['a sync engine', 'sync'], ['an async snapshot()', 'snapshot'], ['an async step() and snapshot()', 'both']] as const)('%s: a snapshot() that fails after an observed step retires and detaches the observer', async (_, kind) => {
@@ -362,6 +364,66 @@ describe('withSnapshotObserver on physics-ref (§2, §3.1)', () => {
     expect((await obs.result(6)).count).toBe(4);
     e.dispose();
   });
+
+  it('ids and shapes follow push(): a past step applies at the next step, same-step pushes keep push order', async () => {
+    const scene = tiny();
+    const sphere = (x: number, radius: number): BodyDesc => ({ ...cube(x, 3), shape: { kind: 'sphere', radius } });
+    const slab = (x: number): BodyDesc => ({ ...cube(x, 3), shape: { kind: 'box', half: [1, 0.25, 1] } });
+    // Pushed before step() k. The scene's own input (a cube, step 2) lands between them.
+    const plan: Record<number, InputEvent[]> = {
+      1: [{ step: 0, kind: 'spawn', body: sphere(9, 2) }],
+      3: [{ step: 4, kind: 'spawn', body: slab(12) }, { step: 4, kind: 'spawn', body: sphere(15, 0.5) }],
+    };
+    // The session as recorded: each event at the step it applied, in apply order, so bodiesAt gives the engine's ids.
+    const recorded: SceneDesc = { ...scene, inputs: [...scene.inputs] };
+    const record = (events: InputEvent[], now: number) => {
+      for (const ev of events) {
+        let i = recorded.inputs.length;
+        while (i > 0 && recorded.inputs[i - 1]!.step > Math.max(ev.step, now)) i--;
+        recorded.inputs.splice(i, 0, { ...ev, step: Math.max(ev.step, now) });
+      }
+    };
+    const spec: ReduceSpec = {
+      outputs: [
+        { op: 'hist', by: { x: { aabb: 'hi', axis: 1 }, edges: [1, 2, 3, 4, 5].map((m) => m * 65536) }, where: 'all' },
+        { op: 'hist', by: { x: { aabb: 'lo', axis: 0 }, edges: [2, 4, 6, 8, 10, 12, 14].map((m) => m * 65536) }, where: 'all' },
+      ],
+    };
+    const e = withSnapshotObserver(new AvbdReferenceEngine());
+    await e.init(scene);
+    const obs = await e.observe({ tagWords: 2 }), m = new Model(recorded, await e.snapshot());
+    obs.query(spec);
+    m.query(spec);
+    for (let k = 0; k < 7; k++) {
+      if (plan[k]) {
+        e.push(plan[k]!);
+        record(plan[k]!, k);
+      }
+      await e.step();
+      expect(await obs.result(k + 1)).toEqual(m.advance(await e.snapshot(), k + 1));
+    }
+    expect(recorded.inputs.map((ev) => ev.step)).toEqual([1, 2, 4, 4]);
+    expect((await obs.result(7)).count).toBe(6);
+    // The recording replays the live session.
+    const replay = new AvbdReferenceEngine();
+    await replay.init(recorded);
+    for (let k = 0; k < 7; k++) replay.step();
+    expect(replay.snapshot()).toEqual(await e.snapshot());
+    e.dispose();
+  });
+
+  it('push() refuses while an async step() is still running, and is accepted once it settles', async () => {
+    const e = withSnapshotObserver(new AsyncEngine(new AvbdReferenceEngine(), 'step'));
+    await e.init(tiny());
+    const ev: InputEvent = { step: 0, kind: 'spawn', body: cube(9, 3) };
+    const p = e.step();
+    expect(() => e.push([ev])).toThrow(/^push\(\): a step\(\) is still running/);
+    await p;
+    e.push([ev]);
+    await e.step();
+    expect((await e.snapshot()).count).toBe(3);
+    e.dispose();
+  });
 });
 
 const cube = (x: number, y: number): BodyDesc => ({
@@ -394,6 +456,7 @@ class AsyncEngine implements PhysicsEngine {
   get info() { return this.e.info; }
   get stepIndex() { return this.e.stepIndex; }
   init(scene: SceneDesc) { return this.e.init(scene); }
+  push(events: InputEvent[]) { this.e.push(events); }
   step(): StepReport | void | Promise<StepReport | void> {
     if (this.kind !== 'step' && this.kind !== 'both') return this.e.step();
     return new Promise((done) => setTimeout(() => done(this.e.step())));
