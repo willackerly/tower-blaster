@@ -181,12 +181,16 @@ describe('GPU AVBD engine: stacks, towers and impacts', () => {
       expect(r.error).toBeNull();
       expect(r.wrong).toBe(0);
       expect(r.missed).toBe(0);
+      // A mismatch is f32 rounding (a tie) when the GPU's axis is the one a comparison within AXIS_TIE
+      // of its bar would flip the reference to (axisSlack). 2026-10-25, after the friction fix changed
+      // the collapse: 1 tie in its 12.4k checks (slack 4.5e-8 m, axis 1 against 4), none in the other runs.
       expect(r.axisMismatch, JSON.stringify(r.examples)).toBe(0);
+      expect(r.axisTies, JSON.stringify(r.examples)).toBeLessThan(1e-3 * r.checked);
       expect(r.presenceMismatch, JSON.stringify(r.examples)).toBeLessThan(1e-3 * r.checked);
     };
     // A collapse, so pairs appear, vanish and change slots between steps.
-    // 2026-10-25: 12.4k pairs found, 184 where the hint changed the
-    // reference's axis, and the narrowphase agreed on every one.
+    // 2026-10-25, after the friction fix: 12.3k pairs found, 254 where the
+    // hint changed the reference's axis; the narrowphase agreed on all but the tie.
     const collapse = await call('pairHistory', knock(0), 60);
     ok(collapse);
     expect(collapse.found).toBeGreaterThan(5000);

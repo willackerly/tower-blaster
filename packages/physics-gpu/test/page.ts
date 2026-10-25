@@ -9,6 +9,7 @@ import { Broadphase, Coloring, GpuAvbdEngine, MAX_COLORS, Narrowphase } from '..
 import type { AvbdParams } from '@tb/physics-ref';
 import type { SceneDesc } from '@tb/engine-api';
 import { colorGraph } from '@tb/physics-ref';
+import { axisSlack } from './sat-slack.ts';
 
 export interface BroadCase {
   kind: 'scenario' | 'cloud' | 'pile';
@@ -471,7 +472,9 @@ export async function pushReplay(steps: number) {
  * manifold's from the same f32 state given that hint (hinted counts the
  * pairs where the hint changed the reference's answer). presenceMismatch
  * counts pairs where only one side found a manifold: rounding at a clip
- * plane, which the narrowphase tests bound.
+ * plane, which the narrowphase tests bound. axisTies counts the axis
+ * mismatches where the GPU's axis is one the reference's own choice was
+ * within AXIS_TIE of flipping to (axisSlack).
  */
 export async function pairHistory(scene: SceneDesc, steps: number, opts: { pairsPerBody?: number } = {}) {
   const { device } = await createDevice();
@@ -495,7 +498,7 @@ export async function pairHistory(scene: SceneDesc, steps: number, opts: { pairs
     });
     return { list, sweep: new Float32Array(sw!), overflow: t[5]! > t[3]! };
   };
-  let wrong = 0, found = 0, missed = 0, axes = 0, checked = 0, axisMismatch = 0, presenceMismatch = 0, hinted = 0, overflowSteps = 0, spawnPairs = 0;
+  let wrong = 0, found = 0, missed = 0, axes = 0, checked = 0, axisMismatch = 0, axisTies = 0, presenceMismatch = 0, hinted = 0, overflowSteps = 0, spawnPairs = 0;
   const examples: unknown[] = [];
   let last = (await read()).list;
   for (let s = 0; s < steps; s++) {
@@ -515,8 +518,14 @@ export async function pairHistory(scene: SceneDesc, steps: number, opts: { pairs
       const want = ref ? ref.axis : NONE_U32, got = p.count > 0 ? p.axis : NONE_U32;
       checked++;
       if (got !== want) {
-        if (got === NONE_U32 || want === NONE_U32) presenceMismatch++; else axisMismatch++;
-        if (examples.length < 3) examples.push({ step: s, a: p.a, b: p.b, got, want, hint: p.prevAxis, margin: m, A, B });
+        let slack: number | null = null;
+        if (got === NONE_U32 || want === NONE_U32) presenceMismatch++;
+        else {
+          const r = axisSlack((shapes[p.a] as { half: Vec3 }).half, A, (shapes[p.b] as { half: Vec3 }).half, B, p.prevAxis);
+          slack = r.slack;
+          if (r.alternatives.includes(got)) axisTies++; else axisMismatch++;
+        }
+        if (examples.length < 3) examples.push({ step: s, a: p.a, b: p.b, got, want, hint: p.prevAxis, slack, margin: m, A, B });
       }
       if (want !== (plain ? plain.axis : NONE_U32)) hinted++;
     }
@@ -536,7 +545,7 @@ export async function pairHistory(scene: SceneDesc, steps: number, opts: { pairs
   }
   const error = await device.popErrorScope();
   e.dispose(); device.destroy();
-  return { error: error?.message ?? null, wrong, found, missed, axes, checked, axisMismatch, presenceMismatch, hinted, overflowSteps, spawnPairs, examples };
+  return { error: error?.message ?? null, wrong, found, missed, axes, checked, axisMismatch, axisTies, presenceMismatch, hinted, overflowSteps, spawnPairs, examples };
 }
 const NONE_U32 = 0xffffffff;
 
