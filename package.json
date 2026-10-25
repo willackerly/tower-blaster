@@ -1,0 +1,38 @@
+{
+  "name": "tower-blaster",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "codegen": "tsx packages/schema/src/cli.ts",
+    "bench": "tsx packages/bench/src/cli.ts",
+    "check": "pnpm typecheck && pnpm test"
+  },
+  "devDependencies": {
+    "@tb/adapter-rapier": "workspace:*",
+    "@tb/bench": "workspace:*",
+    "@tb/engine-api": "workspace:*",
+    "@tb/geom": "workspace:*",
+    "@tb/metrics": "workspace:*",
+    "@tb/scenarios": "workspace:*",
+    "@tb/schema": "workspace:*",
+    "@tb/testkit": "workspace:*",
+    "@types/node": "22.20.5",
+    "@webgpu/types": "0.1.74",
+    "fast-check": "4.10.2",
+    "playwright": "1.63.0",
+    "tsx": "4.23.15",
+    "typescript": "6.0.3",
+    "vitest": "5.0.3"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "esbuild"
+    ]
+  }
+}

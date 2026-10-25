@@ -1,0 +1,6 @@
+{
+  "name": "@tb/scenarios",
+  "private": true,
+  "type": "module",
+  "exports": { ".": "./src/index.ts" }
+}

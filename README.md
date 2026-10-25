@@ -3,3 +3,30 @@
 A browser game about knocking down cube towers with balls, built to simulate as many rigid blocks as possible in real time on WebGPU (target: 10,000 cubes at 30 fps minimum, 100,000 stretch).
 
 The engine plan, research and phase gates are in [docs/plan.md](docs/plan.md).
+
+## Getting started
+
+```sh
+pnpm install
+pnpm exec playwright install chromium   # headless WebGPU for GPU correctness tests
+pnpm check                              # typecheck + all tests
+pnpm bench selfcheck                    # harness gate G1: A/A and injected 10% slowdown
+pnpm bench scenarios                    # list S1-S11 and their parameters
+pnpm bench run --engine rapier --scenario S4 --param N=10000 --quality
+pnpm bench compare --a rapier --b rapier:iterations=8 --scenario S1 --no-sleep
+```
+
+Results print as JSON; add `--out results/name.jsonl` to append them to a file.
+
+## Layout
+
+| Package | Role |
+|---|---|
+| `engine-api` | The `PhysicsEngine` contract shared by the game, the harness and every engine |
+| `schema` | GPU buffer layouts, defined once; generates WGSL and TS accessors |
+| `geom` | Double-precision reference geometry (SAT, broadphase) used as a test oracle |
+| `scenarios` | Seeded benchmark scenes S1-S11 |
+| `metrics` | Quality metrics and benchmark statistics |
+| `adapter-rapier` | CPU baseline (Rapier WASM) |
+| `bench` | Timing and quality runs, CLI |
+| `testkit` | Headless Chromium WebGPU sessions for tests |
