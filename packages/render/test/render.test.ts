@@ -305,6 +305,22 @@ describe('drawing', () => {
     }
   });
 
+  it('bench:render completes and reports every case (numbers discarded)', async (ctx) => {
+    if (!gpu) return ctx.skip();
+    const r = await call('runRenderBench', { width: 160, height: 90, counts: [800], warmup: 1, batches: 2, batchFrames: 1, profiledFrames: 1 });
+    expect(r.cases.map((c) => `${c.world}:${c.variant}`)).toEqual(['near', 'far'].flatMap((w) => ['full', 'no-shadow', 'no-post', 'cube'].map((v) => `${w}:${v}`)));
+    for (const c of r.cases) {
+      expect(c.bodies).toBe(800);
+      expect(c.frameMs).toBeGreaterThan(0);
+      expect(c.batches).toHaveLength(2);
+      expect(c.drawn.boxes).toBeGreaterThan(0);
+      expect(c.drawn.boxes).toBeLessThanOrEqual(800);
+      if (r.timestamps) expect(Object.keys(c.passes)).toEqual(expect.arrayContaining(['cull', 'scene', ...(c.variant === 'no-shadow' ? [] : ['shadow']), ...(c.variant === 'no-post' ? [] : ['bloom', 'composite'])]));
+    }
+    expect(r.software).toBe(isSoftwareAdapter(gpu.adapter));
+    expect(await call('renderBenchMarkdown', r, 'h')).toMatch(/Without shadow/);
+  });
+
   it('culling never changes an ID pixel', async (ctx) => {
     if (!gpu) return ctx.skip();
     const r = await call('cullInvariance', 21, 4000);

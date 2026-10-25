@@ -1,3 +1,5 @@
+export { runRenderBench, renderBenchMarkdown } from '../src/bench.ts';
+
 // Drivers that run inside the browser page (bundled by render.test.ts). Each
 // checks GPU output against a CPU reference in the page and returns a small
 // summary, so large arrays never cross the Playwright boundary.

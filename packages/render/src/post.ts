@@ -92,6 +92,10 @@ fn ign(p: vec2f) -> f32 {
 
 export interface PostParams { bloomMix: number; exposure: number; vignette: number }
 
+/** Timestamp writes for a labelled pass (from a GpuProfiler), or none. */
+export type Stamp = (label: string) => { timestampWrites?: GPURenderPassTimestampWrites };
+export const noStamp: Stamp = () => ({});
+
 /** Bloom pyramid and composite for one output size. */
 export class Post {
   readonly levels: GPUTexture[] = [];
@@ -138,8 +142,8 @@ export class Post {
     this.height = h;
   }
 
-  private draw(enc: GPUCommandEncoder, pipe: GPURenderPipeline, src: GPUTextureView, dst: GPUTextureView, load: boolean): void {
-    const p = enc.beginRenderPass({ colorAttachments: [{ view: dst, loadOp: load ? 'load' : 'clear', clearValue: { r: 0, g: 0, b: 0, a: 1 }, storeOp: 'store' }] });
+  private draw(enc: GPUCommandEncoder, pipe: GPURenderPipeline, src: GPUTextureView, dst: GPUTextureView, load: boolean, stamp: Stamp): void {
+    const p = enc.beginRenderPass({ ...stamp('bloom'), colorAttachments: [{ view: dst, loadOp: load ? 'load' : 'clear', clearValue: { r: 0, g: 0, b: 0, a: 1 }, storeOp: 'store' }] });
     p.setPipeline(pipe);
     p.setBindGroup(0, this.device.createBindGroup({ layout: pipe.getBindGroupLayout(0), entries: [{ binding: 0, resource: src }, { binding: 1, resource: this.sampler }] }));
     p.draw(3);
@@ -147,18 +151,18 @@ export class Post {
   }
 
   /** Build the bloom pyramid from an HDR texture; levels[0] then holds the sum of all levels. */
-  encodeBloom(enc: GPUCommandEncoder, hdr: GPUTexture, karis = true): void {
+  encodeBloom(enc: GPUCommandEncoder, hdr: GPUTexture, karis = true, stamp: Stamp = noStamp): void {
     this.resize(hdr.width, hdr.height);
     const views = this.levels.map((t) => t.createView());
-    views.forEach((v, i) => this.draw(enc, i === 0 && karis ? this.downKaris : this.down, i === 0 ? hdr.createView() : views[i - 1]!, v, false));
-    for (let i = views.length - 2; i >= 0; i--) this.draw(enc, this.up, views[i + 1]!, views[i]!, true);
+    views.forEach((v, i) => this.draw(enc, i === 0 && karis ? this.downKaris : this.down, i === 0 ? hdr.createView() : views[i - 1]!, v, false, stamp));
+    for (let i = views.length - 2; i >= 0; i--) this.draw(enc, this.up, views[i + 1]!, views[i]!, true, stamp);
   }
 
   /** Bloom, then composite into out. */
-  encode(enc: GPUCommandEncoder, hdr: GPUTexture, out: GPUTextureView, p: PostParams): void {
-    this.encodeBloom(enc, hdr);
+  encode(enc: GPUCommandEncoder, hdr: GPUTexture, out: GPUTextureView, p: PostParams, stamp: Stamp = noStamp): void {
+    this.encodeBloom(enc, hdr, true, stamp);
     this.device.queue.writeBuffer(this.uniform, 0, new Float32Array([p.bloomMix, p.exposure, p.vignette, this.levels.length]));
-    const pass = enc.beginRenderPass({ colorAttachments: [{ view: out, loadOp: 'clear', clearValue: { r: 0, g: 0, b: 0, a: 1 }, storeOp: 'store' }] });
+    const pass = enc.beginRenderPass({ ...stamp('composite'), colorAttachments: [{ view: out, loadOp: 'clear', clearValue: { r: 0, g: 0, b: 0, a: 1 }, storeOp: 'store' }] });
     pass.setPipeline(this.composite);
     pass.setBindGroup(0, this.device.createBindGroup({
       layout: this.composite.getBindGroupLayout(0),

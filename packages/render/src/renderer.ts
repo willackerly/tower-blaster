@@ -5,11 +5,12 @@
 // Geometry is built from vertex_index (no vertex buffers); positions are
 // camera-relative. Colours and lights come from a LookParams preset.
 import { writeStruct } from '@tb/schema';
+import type { GpuProfiler } from '@tb/gpu';
 import { Culler, SEG, type CullFrame } from './cull.ts';
 import { FX_WORDS, packFx, tintWord, toHalf, type FxOptions, FX_ANCHOR } from './fx.ts';
 import { CANDY_NIGHT, linearToOklab, srgbToLinear, type LookParams } from './look.ts';
 import { invert, lookAt, multiply, normalize, type Mat4, type V3 } from './math.ts';
-import { HDR_FORMAT, Post } from './post.ts';
+import { HDR_FORMAT, noStamp, Post, type Stamp } from './post.ts';
 import { BOX_CUBE_VERTS, BOX_FAN_VERTS, Frame, SCENE_WGSL, SHADOW_SIZE, SPHERE_VERTS } from './shaders.ts';
 import { SnapshotSource, type BodySource } from './source.ts';
 
@@ -124,6 +125,10 @@ export class Renderer {
   private lastTime = 0;
 
   private readonly boxVerts: number;
+  /** Per-pass GPU timing of render() (cull, shadow, scene, bloom, composite) when set; read with profiler.collect(). */
+  profiler: GpuProfiler | null = null;
+  /** Passes to skip, for measuring their marginal cost (bench:render). */
+  toggles = { shadow: true, post: true };
 
   constructor(readonly device: GPUDevice, target: RenderTarget, opts: RendererOptions = {}) {
     const fan = (opts.boxPath ?? 'fan') === 'fan';
@@ -328,15 +333,15 @@ export class Renderer {
   }
 
   /** Cull, shadow, then the scene pass (or the ID pass, which skips floor, sky and shadow). */
-  private encodeScene(enc: GPUCommandEncoder, f: FrameParams, mode: 'scene' | 'ids' | 'faces'): void {
+  private encodeScene(enc: GPUCommandEncoder, f: FrameParams, mode: 'scene' | 'ids' | 'faces', stamp: Stamp = noStamp): void {
     const ids = mode !== 'scene';
     const culler = this.sync();
     const cf = this.writeFrame(f);
-    const cp = enc.beginComputePass({ label: 'cull' });
+    const cp = enc.beginComputePass({ label: 'cull', ...stamp('cull') });
     culler.encode(cp, cf);
     cp.end();
-    if (!ids) {
-      const sp = enc.beginRenderPass({ label: 'shadow', colorAttachments: [], depthStencilAttachment: { view: this.shadowTex.createView(), depthClearValue: 1, depthLoadOp: 'clear', depthStoreOp: 'store' } });
+    if (!ids && this.toggles.shadow) {
+      const sp = enc.beginRenderPass({ label: 'shadow', ...stamp('shadow'), colorAttachments: [], depthStencilAttachment: { view: this.shadowTex.createView(), depthClearValue: 1, depthLoadOp: 'clear', depthStoreOp: 'store' } });
       sp.setBindGroup(0, this.shadowBind!);
       sp.setPipeline(this.pipes.boxShadow);
       sp.drawIndirect(culler.args, 16 * SEG.boxShadow);
@@ -350,6 +355,7 @@ export class Renderer {
       : { view: this.msaa!.createView(), resolveTarget: this.hdr!.createView(), clearValue: { r: 0, g: 0, b: 0, a: 1 }, loadOp: 'clear', storeOp: 'discard' };
     const p = enc.beginRenderPass({
       label: mode,
+      ...(ids ? {} : stamp('scene')),
       colorAttachments: [color],
       depthStencilAttachment: { view: (ids ? this.idDepth! : this.depth!).createView(), depthClearValue: 1, depthLoadOp: 'clear', depthStoreOp: 'discard' },
     });
@@ -380,8 +386,12 @@ export class Renderer {
     const tex = this.offscreen ?? this.context!.getCurrentTexture();
     this.targets(tex.width, tex.height);
     const enc = this.device.createCommandEncoder();
-    this.encodeScene(enc, f, 'scene');
-    this.post.encode(enc, this.hdr!, tex.createView(), this.look);
+    const prof = this.profiler;
+    prof?.begin();
+    const stamp: Stamp = prof ? (label) => prof.pass(label) as { timestampWrites?: GPURenderPassTimestampWrites } : noStamp;
+    this.encodeScene(enc, f, 'scene', stamp);
+    if (this.toggles.post) this.post.encode(enc, this.hdr!, tex.createView(), this.look, stamp);
+    prof?.resolve(enc);
     let read: GPUBuffer | null = null;
     const bytesPerRow = Math.ceil((tex.width * 4) / 256) * 256;
     if (capture) {
