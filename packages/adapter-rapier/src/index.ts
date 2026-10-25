@@ -2,12 +2,19 @@
 // contract. Used as a reference for quality metrics and as the number every
 // GPU variant has to beat by a wide margin.
 import RAPIER from '@dimforge/rapier3d-simd-compat';
-import { type BodyDesc, emptySnapshot, type EngineInfo, type InputEvent, type PhysicsEngine, type SceneDesc, type Snapshot } from '@tb/engine-api';
+import { type BodyDesc, type CombineRule, emptySnapshot, type EngineInfo, type InputEvent, type PhysicsEngine, type SceneDesc, type Snapshot } from '@tb/engine-api';
 
 export interface RapierOptions {
   /** Solver iterations per step; Rapier's default is 4. */
   iterations?: number;
 }
+
+const RULES: Record<CombineRule, RAPIER.CoefficientCombineRule> = {
+  average: RAPIER.CoefficientCombineRule.Average,
+  min: RAPIER.CoefficientCombineRule.Min,
+  max: RAPIER.CoefficientCombineRule.Max,
+  multiply: RAPIER.CoefficientCombineRule.Multiply,
+};
 
 let ready: Promise<void> | null = null;
 const initRapier = () => (ready ??= RAPIER.init());
@@ -19,9 +26,11 @@ export class RapierEngine implements PhysicsEngine {
   private bodies: RAPIER.RigidBody[] = [];
   private pending: InputEvent[] = [];
   private sleep = true;
+  private combine = RAPIER.CoefficientCombineRule.Average;
 
   constructor(private readonly opts: RapierOptions = {}) {
-    this.info = { name: 'rapier', variant: { version: 'uninitialised', iterations: opts.iterations ?? 4 }, backend: 'wasm-simd-st' };
+    // Rapier takes one substep per solver iteration.
+    this.info = { name: 'rapier', variant: { version: 'uninitialised', iterations: opts.iterations ?? 4 }, backend: 'wasm-simd-st', integrator: { substeps: opts.iterations ?? 4 } };
   }
 
   async init(scene: SceneDesc): Promise<void> {
@@ -31,9 +40,10 @@ export class RapierEngine implements PhysicsEngine {
     const world = new RAPIER.World({ x: scene.gravity[0], y: scene.gravity[1], z: scene.gravity[2] });
     world.timestep = scene.dt;
     if (this.opts.iterations) world.numSolverIterations = this.opts.iterations;
+    this.combine = RULES[scene.frictionCombine ?? 'average'];
     if (scene.ground) {
       world.createCollider(
-        RAPIER.ColliderDesc.cuboid(1e4, 0.5, 1e4).setTranslation(0, scene.ground.y - 0.5, 0).setFriction(scene.ground.friction),
+        RAPIER.ColliderDesc.cuboid(1e4, 0.5, 1e4).setTranslation(0, scene.ground.y - 0.5, 0).setFriction(scene.ground.friction).setFrictionCombineRule(this.combine),
       );
     }
     this.world = world;
@@ -58,7 +68,8 @@ export class RapierEngine implements PhysicsEngine {
     const col = b.shape.kind === 'box'
       ? RAPIER.ColliderDesc.cuboid(b.shape.half[0], b.shape.half[1], b.shape.half[2])
       : RAPIER.ColliderDesc.ball(b.shape.radius);
-    w.createCollider(col.setDensity(b.density).setFriction(b.friction).setRestitution(b.restitution), rb);
+    // Every collider carries the scene's rule (Rapier uses the higher-priority rule of a pair).
+    w.createCollider(col.setDensity(b.density).setFriction(b.friction).setFrictionCombineRule(this.combine).setRestitution(b.restitution), rb);
     this.bodies.push(rb);
   }
 

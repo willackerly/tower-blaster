@@ -45,7 +45,7 @@ export class GpuAvbdEngine implements PhysicsEngine {
     if (!this.params.postStabilize) throw new Error('GpuAvbdEngine: only postStabilize = true is implemented');
     const variant: Record<string, number | boolean> = {};
     for (const [k, v] of Object.entries(this.params)) variant[k] = v;
-    this.info = { name: 'avbd-gpu', variant, backend: 'webgpu' };
+    this.info = { name: 'avbd-gpu', variant, backend: 'webgpu', integrator: { substeps: 1 } };
   }
 
   async init(scene: SceneDesc): Promise<void> {
@@ -111,7 +111,7 @@ export class GpuAvbdEngine implements PhysicsEngine {
     if (!device || !parts || !scene) throw new Error('init() first');
     while (this.pending.length && this.pending[0]!.step <= this.stepIndex) this.add(this.pending.shift()!.body);
     const n = this.n, p = this.params;
-    parts.solver.writeParams(n, scene.dt, scene.gravity, scene.ground, p);
+    parts.solver.writeParams(n, scene.dt, scene.gravity, scene.ground, p, scene.frictionCombine);
     const enc = device.createCommandEncoder();
     let pass = enc.beginComputePass();
     parts.solver.prepare(pass, n);

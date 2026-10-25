@@ -1,11 +1,12 @@
 // The GPU AVBD engine against analytic results and the f64 reference.
 import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { type BodyDesc, bodiesAt, emptySnapshot, type SceneDesc, type Snapshot, type Vec3 } from '@tb/engine-api';
+import { type BodyDesc, bodiesAt, type CombineRule, emptySnapshot, freeFlight, type SceneDesc, type Snapshot, type Vec3 } from '@tb/engine-api';
 import { drift, jitter, nonFinite, penetration, survival } from '@tb/metrics';
 import { AvbdReferenceEngine } from '@tb/physics-ref';
 import { buildScenario } from '@tb/scenarios';
-import { loadBundle, openWebGPU, type WebGPUSession } from '@tb/testkit';
+import { appliedMu, loadBundle, openWebGPU, slideMu, slideScene, THROW, throwScene, type WebGPUSession } from '@tb/testkit';
+import { GpuAvbdEngine } from '../src/index.ts';
 import type * as Drivers from './page.ts';
 
 let gpu: WebGPUSession | null = null;
@@ -217,5 +218,35 @@ describe('GPU AVBD engine: stacks, towers and impacts', () => {
     const a = await runGpu(scene, 90), b = await runGpu(scene, 90);
     expect([...a.s1.pos]).toEqual([...b.s1.pos]);
     expect([...a.s1.rot]).toEqual([...b.s1.rot]);
+  });
+});
+
+describe('GPU AVBD engine: engine contract (friction rule, integrator)', () => {
+  const mu = async (rule: CombineRule | undefined) => {
+    const { all } = await runGpu(slideScene(rule), 11, {}, 1);
+    return appliedMu(all[1]!.linVel[0]!, all[11]!.linVel[0]!);
+  };
+  it.for(['average', 'min', 'max', 'multiply'] as const)('SceneDesc.frictionCombine %s: a sliding cube decelerates with the combined mu', async (rule, ctx) => {
+    if (!gpu) return ctx.skip();
+    // Within solver convergence; the closest two rules differ by 0.03.
+    expect(await mu(rule)).toBeCloseTo(slideMu(rule), 3);
+  });
+
+  it('frictionCombine defaults to average', async (ctx) => {
+    if (!gpu) return ctx.skip();
+    expect(await mu(undefined)).toBe(await mu('average'));
+  });
+
+  it('free flight is semi-implicit Euler with one substep, as EngineInfo.integrator says', async (ctx) => {
+    expect(new GpuAvbdEngine().info.integrator).toEqual({ substeps: 1 });
+    if (!gpu) return ctx.skip();
+    const scene = throwScene();
+    const { s1 } = await runGpu(scene, THROW.steps);
+    const want = freeFlight(THROW.pos, THROW.vel, scene.gravity, scene.dt, 1, THROW.steps);
+    // f32 state; two substeps would put it 8 cm higher by now.
+    for (let k = 0; k < 3; k++) {
+      expect(Math.abs(s1.pos[k]! - want.pos[k]!)).toBeLessThan(5e-4);
+      expect(Math.abs(s1.linVel[k]! - want.vel[k]!)).toBeLessThan(5e-4);
+    }
   });
 });
