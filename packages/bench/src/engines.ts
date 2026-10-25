@@ -1,5 +1,5 @@
 // Engine registry for the CLI: "name" or "name:key=value,key=value".
-import type { PhysicsEngine, SceneDesc, StepReport } from '@tb/engine-api';
+import type { InputEvent, PhysicsEngine, SceneDesc, StepReport } from '@tb/engine-api';
 import { RapierEngine } from '@tb/adapter-rapier';
 
 type Options = Record<string, number | boolean>;
@@ -37,6 +37,7 @@ export class SlowedEngine implements PhysicsEngine {
   get info() { return { ...this.inner.info, variant: { ...this.inner.info.variant, slowed: this.fraction } }; }
   get stepIndex() { return this.inner.stepIndex; }
   init(scene: SceneDesc) { return this.inner.init(scene); }
+  push(events: InputEvent[]) { this.inner.push(events); }
   async step(): Promise<StepReport | void> {
     const t0 = this.clock();
     const r = await this.inner.step();
