@@ -14,7 +14,8 @@
     "check": "pnpm typecheck && pnpm test",
     "runner": "vite packages/runner",
     "bench:browser": "tsx packages/runner/src/cli.ts",
-    "bench:suite": "tsx packages/runner/src/suite-cli.ts"
+    "bench:suite": "tsx packages/runner/src/suite-cli.ts",
+    "tiers:compare": "tsx packages/lattice/src/compare-cli.ts"
   },
   "devDependencies": {
     "@tb/adapter-rapier": "workspace:*",
