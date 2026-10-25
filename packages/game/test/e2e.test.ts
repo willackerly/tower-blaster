@@ -54,7 +54,7 @@ describe('game page', () => {
     const aimed = await page.evaluate(() => window.__game.aim(0, 0));
     expect(aimed?.reachable).toBe(true);
     const stats = await page.evaluate(() => window.__game.capture());
-    expect(stats!.nonSkyFraction).toBeGreaterThan(0.2);
+    expect(stats!.bodyFraction).toBeGreaterThan(0.02);
     expect(stats!.distinctColors).toBeGreaterThan(50);
 
     await page.evaluate(() => { window.__game.fast = true; });

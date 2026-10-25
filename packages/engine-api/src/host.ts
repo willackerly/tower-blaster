@@ -75,7 +75,8 @@ export interface CellChange {
   rot?: Quat;
 }
 
-export type HostWorld = Pick<SceneDesc, 'gravity' | 'dt' | 'ground' | 'sleep'>;
+/** The scene-wide settings a host simulates with; frictionCombine applies to every contact, lattice cells and ground included. */
+export type HostWorld = Pick<SceneDesc, 'gravity' | 'dt' | 'ground' | 'sleep' | 'frictionCombine'>;
 
 /** A change of mode or state for one body, applied before the next step. */
 export interface ModeChange {

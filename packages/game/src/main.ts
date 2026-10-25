@@ -1,18 +1,19 @@
-// Keystone, playable: the rules from @tb/keystone on Rapier, drawn with the
-// viewer's renderer. Physics only runs while a shot is in play, at a pace the
+// Keystone, playable: the rules from @tb/keystone on Rapier, drawn by
+// @tb/render. Physics only runs while a shot is in play, at a pace the
 // Pacer sets (hit-stop, slow motion, fast-forward); between shots the world
 // is frozen, so a session is exactly (level, shots) and replays headless.
 import { RapierEngine } from '@tb/adapter-rapier';
 import type { BodyDesc, Vec3 } from '@tb/engine-api';
 import { type AmmoKind, type CompiledLevel, compileLevel, Driver, type Feedback, LEVELS, type LevelScore, type Shot, shotToSpawn, TIER_NAMES } from '@tb/keystone';
 import { clampPitch, eyeOf, frame, type Orbit, rayThrough, viewProj, Window } from '@tb/viewer';
-import { type PixelStats, Renderer } from '@tb/viewer/renderer';
+import { createDevice } from '@tb/gpu';
+import { HAZY_DAY, LOOKS, type PixelStats, Renderer, SnapshotSource } from '@tb/render';
 import { type Aimed, azFromYaw, pick, previewBeads, shotFor } from './aim.ts';
 import { Synth, type Voice, voicesFor } from './audio.ts';
 import { hudHtml, nextSelection, rackChips, resultHtml } from './hud.ts';
 import { CameraJuice, contactJuice } from './juice.ts';
 import { Pacer } from './pacing.ts';
-import { packScene, regrowDuration } from './scene.ts';
+import { beadOverlay, regrowDuration, regrowScales, structureTints, TINT } from './scene.ts';
 
 interface GameHandle {
   status: 'loading' | 'running' | 'error';
@@ -87,9 +88,14 @@ async function main() {
   };
   let levelIdx = levelOf(q.get('level') ?? LEVELS[0]!.id);
 
-  const renderer = await Renderer.create(canvas, offscreen ? [640, 400] : null);
-  renderer.device.lost.then((info) => fail(`GPU device lost: ${info.message}`));
-  renderer.device.addEventListener('uncapturederror', (e) => fail((e as GPUUncapturedErrorEvent).error.message));
+  const { device } = await createDevice({ timestamps: false });
+  const renderer = new Renderer(device, offscreen ? { size: [640, 400] } : { canvas });
+  const source = new SnapshotSource(device);
+  renderer.setSource(source);
+  // The maquette look by default: tints read true on its pale albedo (?look=candy for the rainbow).
+  renderer.look = LOOKS[q.get('look') ?? ''] ?? HAZY_DAY;
+  device.lost.then((info) => fail(`GPU device lost: ${info.message}`));
+  device.addEventListener('uncapturederror', (e) => fail((e as GPUUncapturedErrorEvent).error.message));
   const engine = new RapierEngine();
   const pacer = new Pacer(), juice = new CameraJuice(), stepMs = new Window(60);
   let synth: Synth | null = null;
@@ -97,14 +103,16 @@ async function main() {
   const voices: Voice[] = [];
 
   let c!: CompiledLevel, driver!: Driver, orbit!: Orbit;
-  let ammo: BodyDesc[] = [];
+  // Body descriptions in slot order: the structure, then ammo as fired.
+  let descs: BodyDesc[] = [];
+  let fxSlots = 0;
+  let regrowBuf = new Float32Array(0);
   let selected: AmmoKind | null = null;
   let power = 100;
   let aimed: Aimed | null = null, beads: Float64Array | null = null, aimDirty = false;
   let pointer: [number, number] | null = null;
   let regrowT: number | null = null;
   let fastHeld = false;
-  let packed: ReturnType<typeof packScene> | null = null;
   let lastHud = '', crownsShown = 0;
   let resultTimer = 0;
 
@@ -116,7 +124,14 @@ async function main() {
     c = compileLevel(LEVELS[i]!);
     driver = new Driver(engine, c);
     await driver.reset();
-    ammo = [];
+    descs = [...c.scene.bodies];
+    source.reset(c.scene.bodies);
+    source.update(driver.snapshot, descs);
+    // Fresh effects: role tints, and every body at scale 0 for Regrow.
+    if (fxSlots) renderer.clearFx(0, fxSlots);
+    regrowBuf = regrowScales(c, 0, new Float32Array(c.meta.n));
+    renderer.setFx(0, structureTints(c), regrowBuf, true);
+    fxSlots = c.meta.n;
     pacer.reset();
     juice.reset();
     handle.result = null;
@@ -129,8 +144,9 @@ async function main() {
     if (!retry) {
       orbit = viewOf(c);
       power = 100;
-      const r = Math.hypot(c.lot.max[0] - c.lot.min[0], c.lot.max[1] - c.lot.min[1], c.height) / 2 + 2;
-      renderer.setShadowBounds([(c.lot.min[0] + c.lot.max[0]) / 2, c.height / 2, (c.lot.min[1] + c.lot.max[1]) / 2], r);
+      // The play area: the lot (where debris counts), grown a little, up to the structure's top.
+      const half: Vec3 = [(c.lot.max[0] - c.lot.min[0]) / 2 + 2, c.height / 2 + 2, (c.lot.max[1] - c.lot.min[1]) / 2 + 2];
+      renderer.setShadowBounds([(c.lot.min[0] + c.lot.max[0]) / 2, c.height / 2, (c.lot.min[1] + c.lot.max[1]) / 2], Math.hypot(...half), half);
     }
     regrowT = 0;
     aimed = null;
@@ -159,15 +175,27 @@ async function main() {
       switch (f.t) {
         case 'fired': juice.kick(f.ammo === 'cannonball' ? 0.05 : 0.03); break;
         case 'contact': {
-          const j = contactJuice(f.impulse);
+          const j = contactJuice(f.impulse), s = driver.snapshot, b = f.body;
+          if (b < s.count) {
+            const v: Vec3 = [s.linVel[3 * b]!, s.linVel[3 * b + 1]!, s.linVel[3 * b + 2]!], l = Math.hypot(...v) || 1;
+            renderer.burst([s.pos[3 * b]!, s.pos[3 * b + 1]!, s.pos[3 * b + 2]!], [v[0] / l, v[1] / l, v[2] / l], f.dv);
+          }
           pacer.hitStop(j.frames);
           juice.shake(j.trauma);
           juice.kick(0.05);
           break;
         }
-        case 'crownDown': juice.shake(0.08); break;
+        case 'crownDown':
+          juice.shake(0.08);
+          // A felled crown flashes once and stops glowing.
+          renderer.setFx(f.body, { tint: TINT.crown, emissive: 0.9, flash: 0.5 });
+          break;
         case 'slowMo': if (!fastHeld && !handle.fast) pacer.slowMo(); break;
-        case 'heritageCrack': juice.shake(0.3); banner('Heritage cracked', 'crack'); break;
+        case 'heritageCrack':
+          juice.shake(0.3);
+          banner('Heritage cracked', 'crack');
+          renderer.setFx(f.body, { tint: TINT.heritage, emissive: 1, flash: 0.8 });
+          break;
         case 'tier': banner(`${TIER_NAMES[f.tier]}!`); break;
         case 'settled':
           pacer.release();
@@ -198,7 +226,8 @@ async function main() {
     if (regrowT !== null || !driver.session.canFire(shot.ammo)) return false;
     const step = engine.stepIndex;
     onFeedback(driver.fire(shot));
-    ammo.push(shotToSpawn(c.frame, shot, step).body);
+    descs.push(shotToSpawn(c.frame, shot, step).body);
+    fxSlots = descs.length;
     aimed = null;
     beads = null;
     sync();
@@ -318,9 +347,12 @@ async function main() {
     resize();
     if (regrowT !== null) {
       regrowT += dt;
-      if (regrowT >= regrowDuration(courses())) { regrowT = null; aimDirty = true; }
+      const done = regrowT >= regrowDuration(courses());
+      renderer.setFx(0, null, regrowScales(c, done ? Infinity : regrowT, regrowBuf), !done);
+      if (done) { regrowT = null; aimDirty = true; }
     }
-    if (driver.session.phase === 'running') {
+    const running = driver.session.phase === 'running';
+    if (running) {
       const n = pacer.stepsThisFrame(frameMs, c.scene.dt, { fastForward: fastHeld || handle.fast, stepMs: stepMs.quantile(0.5), budgetMs: 10 });
       for (let i = 0; i < n; i++) {
         const t0 = performance.now();
@@ -329,17 +361,19 @@ async function main() {
         onFeedback(fb);
         if (pacer.frozen || driver.session.phase !== 'running') break;
       }
+      if (n > 0) source.update(driver.snapshot, descs);
     }
     if (aimDirty) updateAim();
     sync();
 
     const shake = juice.update(dt);
     const view: Orbit = { ...orbit, yaw: orbit.yaw + shake.yaw, pitch: orbit.pitch + shake.pitch, fovY: orbit.fovY * shake.fovScale };
-    packed = packScene(driver.snapshot, c, ammo, { beads: beads ?? undefined, beadsReachable: aimed?.reachable ?? true, regrowT }, packed?.data);
-    renderer.upload(packed);
+    const o = beads ? beadOverlay(beads, aimed?.reachable ?? true) : null;
+    renderer.setOverlay(o?.xyzr ?? new Float32Array(0), o?.colours);
     const want = pendingCapture;
     pendingCapture = null;
-    const stats = await renderer.render({ viewProj: viewProj(view, aspect()), eye: eyeOf(view), groundY: 0, fogDist: orbit.distance * 4 + 60 }, !!want, want?.keep);
+    const fp = { viewProj: viewProj(view, aspect()), eye: eyeOf(view), focus: orbit.target, time: now / 1000, groundY: 0, alpha: running ? pacer.alpha(c.scene.dt) : 1 };
+    const stats = await renderer.render(fp, !!want, want?.keep);
     if (want) want.resolve(stats);
     if (voices.length) { synth?.play(voices); voices.length = 0; }
     drawHud();

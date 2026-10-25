@@ -44,6 +44,9 @@ importers:
       '@tb/physics-ref':
         specifier: workspace:*
         version: link:packages/physics-ref
+      '@tb/render':
+        specifier: workspace:*
+        version: link:packages/render
       '@tb/runner':
         specifier: workspace:*
         version: link:packages/runner
@@ -108,12 +111,15 @@ importers:
       '@tb/geom':
         specifier: workspace:*
         version: link:../geom
+      '@tb/gpu':
+        specifier: workspace:*
+        version: link:../gpu
       '@tb/keystone':
         specifier: workspace:*
         version: link:../keystone
-      '@tb/schema':
+      '@tb/render':
         specifier: workspace:*
-        version: link:../schema
+        version: link:../render
       '@tb/viewer':
         specifier: workspace:*
         version: link:../viewer
@@ -150,6 +156,8 @@ importers:
   packages/physics-gpu: {}
 
   packages/physics-ref: {}
+
+  packages/render: {}
 
   packages/runner: {}
 

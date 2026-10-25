@@ -5,11 +5,11 @@ import { makeEngine } from '@tb/bench';
 import { type BodyDesc, type InputEvent, type PhysicsEngine, type SceneDesc, TAG_BALL } from '@tb/engine-api';
 import { buildScenario, SCENARIOS } from '@tb/scenarios';
 import { clampPitch, frame, rayThrough, viewProj, eyeOf, type Orbit } from './camera.ts';
-import { packInstances, type Packed } from './instances.ts';
 import { newClock, stepsDue, Window } from './loop.ts';
 import type { V3 } from './math.ts';
 import { parseViewerConfig, toSearch, type ViewerConfig } from './params.ts';
-import { Renderer, type PixelStats } from './renderer.ts';
+import { createDevice } from '@tb/gpu';
+import { CANDY_NIGHT, LOOKS, Renderer, SnapshotSource, type PixelStats } from '@tb/render';
 
 const PRESETS: Array<{ label: string; search: string }> = [
   { label: 'Tower 8×8×30', search: '?scenario=S1&param.gap=0.02' },
@@ -78,7 +78,11 @@ function presets(current: string) {
 async function main() {
   const config = parseViewerConfig(location.search);
   presets(location.search);
-  const renderer = await Renderer.create(canvas, config.offscreen ? [640, 400] : null);
+  const { device, adapter } = await createDevice({ timestamps: false });
+  const renderer = new Renderer(device, config.offscreen ? { size: [640, 400] } : { canvas });
+  const source = new SnapshotSource(device);
+  renderer.setSource(source);
+  renderer.look = LOOKS[config.look] ?? CANDY_NIGHT;
   renderer.device.lost.then((info) => fail(`GPU device lost: ${info.message}`));
   renderer.device.addEventListener('uncapturederror', (e) => fail((e as GPUUncapturedErrorEvent).error.message));
 
@@ -89,7 +93,6 @@ async function main() {
   let events: InputEvent[] = [];
   let shapes: BodyDesc[] = [];
   let orbit: Orbit;
-  let packed: Packed | null = null;
   const clock = newClock();
   const stepMs = new Window(120);
   const snapMs = new Window(60);
@@ -115,6 +118,7 @@ async function main() {
     await engine.init(scene);
     events = [...scene.inputs];
     shapes = [...scene.bodies];
+    source.reset(scene.bodies);
     const b = bounds(scene.bodies);
     orbit = frame(b.min, b.max);
     const c: V3 = [(b.min[0] + b.max[0]) / 2, (b.min[1] + b.max[1]) / 2, (b.min[2] + b.max[2]) / 2];
@@ -131,8 +135,7 @@ async function main() {
   async function refresh() {
     const t0 = performance.now();
     const s = await engine.snapshot();
-    packed = packInstances(s, shapesFor(s.count), packed?.data);
-    renderer.upload(packed);
+    source.update(s, shapesFor(s.count));
     snapMs.push(performance.now() - t0);
     handle.bodies = s.count;
     awake = s.awake.reduce((a, x) => a + x, 0);
@@ -210,7 +213,7 @@ async function main() {
       <div class="row"><span>sim speed</span><span class="${clock.simSpeed < 0.95 ? 'warn' : ''}">${(clock.simSpeed * 100).toFixed(0)}%</span></div>
       <div class="row"><span>snapshot + upload</span><span>${fmt(snapMs.quantile(0.5))} ms</span></div>
       <div class="row muted"><span>budget</span><span>7.5 ms/step</span></div>
-      <div class="muted">${renderer.adapterInfo.vendor} ${renderer.adapterInfo.architecture}${paused ? ' · <b>paused</b>' : ''}</div>`;
+      <div class="muted">${adapter.info.vendor} ${adapter.info.architecture}${paused ? ' · <b>paused</b>' : ''}</div>`;
   }
 
   await reset();
@@ -236,7 +239,7 @@ async function main() {
     if (n > 0) await refresh();
     const want = pendingCapture;
     pendingCapture = null;
-    const stats = await renderer.render({ viewProj: viewProj(orbit, aspect()), eye: eyeOf(orbit), groundY: scene.ground?.y ?? 0, fogDist: orbit.distance * 4 + 60 }, !!want, want?.keep);
+    const stats = await renderer.render({ viewProj: viewProj(orbit, aspect()), eye: eyeOf(orbit), focus: orbit.target, time: now / 1000, groundY: scene.ground?.y ?? 0, alpha: paused ? 1 : clock.acc / scene.dt }, !!want, want?.keep);
     if (want) want.resolve(stats);
     handle.frames++;
     if (handle.frames % 10 === 1) drawHud();

@@ -53,20 +53,37 @@ export class GpuProfiler {
    * than once are summed). Empty when timestamps are unsupported.
    */
   async collect(): Promise<Record<string, number>> {
+    return (await this.collectFrame()).passes;
+  }
+
+  /**
+   * collect() plus the frame's span: last pass end minus first pass begin,
+   * in ms (null without timestamps). On tile-based GPUs (Apple) passes
+   * overlap, and each pass's own interval can include time it spent
+   * waiting on or sharing the GPU with its neighbours, so the per-pass sum
+   * can far exceed the frame; the span cannot.
+   */
+  async collectFrame(): Promise<{ passes: Record<string, number>; span: number | null }> {
     const p = this.pending.shift();
-    if (!p) return {};
+    if (!p) return { passes: {}, span: null };
     await p.buffer.mapAsync(GPUMapMode.READ, 0, p.labels.length * 16);
     const t = new BigUint64Array(p.buffer.getMappedRange(0, p.labels.length * 16));
-    const out: Record<string, number> = {};
+    const passes: Record<string, number> = {};
+    let first: bigint | null = null, last: bigint | null = null;
     p.labels.forEach((label, i) => {
+      const a = t[2 * i]!, b = t[2 * i + 1]!;
       // Timestamps may be reordered or zeroed by the implementation; clamp
       // rather than report negative time.
-      const ns = t[2 * i + 1]! > t[2 * i]! ? Number(t[2 * i + 1]! - t[2 * i]!) : 0;
-      out[label] = (out[label] ?? 0) + ns / 1e6;
+      const ns = b > a ? Number(b - a) : 0;
+      passes[label] = (passes[label] ?? 0) + ns / 1e6;
+      if (b > a && a > 0n) {
+        if (first === null || a < first) first = a;
+        if (last === null || b > last) last = b;
+      }
     });
     p.buffer.unmap();
     this.pool.push(p.buffer);
-    return out;
+    return { passes, span: first !== null && last !== null ? Number((last as bigint) - (first as bigint)) / 1e6 : null };
   }
 
   destroy(): void {

@@ -2,20 +2,13 @@
 // contract. Used as a reference for quality metrics and as the number every
 // GPU variant has to beat by a wide margin.
 import RAPIER from '@dimforge/rapier3d-simd-compat';
-import { type BodyDesc, type CombineRule, emptySnapshot, type EngineInfo, type InputEvent, type PhysicsEngine, type SceneDesc, type Snapshot } from '@tb/engine-api';
-import { createBody, createGround, initRapier } from './bodies.ts';
+import { type BodyDesc, emptySnapshot, type EngineInfo, type InputEvent, type PhysicsEngine, type SceneDesc, type Snapshot } from '@tb/engine-api';
+import { createBody, createGround, initRapier, RULES } from './bodies.ts';
 
 export interface RapierOptions {
   /** Solver iterations per step; Rapier's default is 4. */
   iterations?: number;
 }
-
-const RULES: Record<CombineRule, RAPIER.CoefficientCombineRule> = {
-  average: RAPIER.CoefficientCombineRule.Average,
-  min: RAPIER.CoefficientCombineRule.Min,
-  max: RAPIER.CoefficientCombineRule.Max,
-  multiply: RAPIER.CoefficientCombineRule.Multiply,
-};
 
 export class RapierEngine implements PhysicsEngine {
   readonly info: EngineInfo;
@@ -93,4 +86,4 @@ export class RapierEngine implements PhysicsEngine {
 }
 
 export { RapierHost } from './host.ts';
-export { createBody, createGround, icosphere, initRapier } from './bodies.ts';
+export { createBody, createGround, icosphere, initRapier, RULES } from './bodies.ts';

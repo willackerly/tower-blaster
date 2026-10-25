@@ -1,10 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import fc from 'fast-check';
-import { emptySnapshot, type BodyDesc } from '@tb/engine-api';
-import { buildScenario } from '@tb/scenarios';
-import { RenderInstance, readStruct } from '@tb/schema';
 import {
-  eyeOf, frame, invert, multiply, newClock, packInstances, paletteOf, parseViewerConfig, rayThrough, stepsDue, toSearch, transform, viewProj, Window, type Orbit,
+  eyeOf, frame, invert, multiply, newClock, parseViewerConfig, rayThrough, stepsDue, toSearch, transform, viewProj, Window, type Orbit,
 } from '../src/index.ts';
 
 const orbit: Orbit = { target: [1, 2, 3], yaw: 0.7, pitch: 0.4, distance: 25, fovY: 0.9 };
@@ -49,34 +46,6 @@ describe('math and camera', () => {
       expect(Math.abs(p[0] / p[3])).toBeLessThan(1);
       expect(Math.abs(p[1] / p[3])).toBeLessThan(1);
     }
-  });
-});
-
-describe('packInstances', () => {
-  it('writes the schema layout, boxes first, spheres after', () => {
-    const scene = buildScenario('S5', { N: 64, F: 2, H: 4, fireStep: 0 });
-    const shapes: BodyDesc[] = [scene.inputs[0]!.body, ...scene.bodies];
-    const s = emptySnapshot(shapes.length);
-    shapes.forEach((b, i) => { s.pos.set(b.pos, 3 * i); s.rot.set(b.rot, 4 * i); });
-    const p = packInstances(s, shapes);
-    expect([p.boxes, p.spheres]).toEqual([shapes.length - 1, 1]);
-    const view = new DataView(p.data);
-    const first = readStruct(view, RenderInstance, 0);
-    expect(first.shape).toEqual([0]);
-    expect(first.half).toEqual([0.5, 0.5, 0.5]);
-    expect(first.pos!.map((x, k) => Math.abs(x - shapes[1]!.pos[k]!) < 1e-5)).toEqual([true, true, true]);
-    const ball = readStruct(view, RenderInstance, p.boxes);
-    const r = (shapes[0]!.shape as { radius: number }).radius;
-    expect(ball.shape).toEqual([1]);
-    expect(ball.half).toEqual([r, r, r]);
-    expect(ball.palette).toEqual([paletteOf(-1)]);
-  });
-
-  it('reuses the output buffer when it is big enough', () => {
-    const scene = buildScenario('S1', { F: 2, H: 2 });
-    const s = emptySnapshot(scene.bodies.length);
-    const a = packInstances(s, scene.bodies);
-    expect(packInstances(s, scene.bodies, a.data).data).toBe(a.data);
   });
 });
 

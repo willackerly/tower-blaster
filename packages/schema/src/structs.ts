@@ -17,16 +17,16 @@ export const Body = defineStruct(
   'Rigid body state, one per active body.',
 );
 
-export const RenderInstance = defineStruct(
-  'RenderInstance',
+export const RenderRecord = defineStruct(
+  'RenderRecord',
   [
-    ['pos', 'vec3f'],
-    ['palette', 'u32', 'colour index, e.g. original tower height'],
-    ['rot', 'vec4f'],
+    ['pos', 'vec3f', 'camera-relative centre, interpolated between the last two steps'],
+    ['look', 'u32', 'BodyLook bits: 0-7 ramp, 8-11 hue, 12-15 material, 16-31 seed'],
+    ['rot', 'vec4f', 'unit quaternion (x, y, z, w), interpolated'],
     ['half', 'vec3f', 'box half extents; x is the radius for a sphere'],
-    ['shape', 'u32', '0 box, 1 sphere'],
+    ['slot', 'u32', 'body index'],
   ],
-  'What the renderer reads per body.',
+  'Per-body pose the renderer draws, written once per frame by its prepare pass.',
 );
 
 export const SimParams = defineStruct(
@@ -67,6 +67,50 @@ export const Manifold = defineStruct(
   ],
   'Contact manifold for one body pair, written by the narrowphase.',
 );
+
+/**
+ * Body.flags bits 8-15. lattice: a dormant cell, drawn by the lattice pass
+ * from the brick masks, never from Body[]. free: an unused slot. The
+ * renderer draws every other tier from Body[].
+ */
+export const TIER = { active: 0, rubble: 1, lattice: 2, debris: 3, free: 255 } as const;
+export const FLAG_AWAKE = 1;
+
+/**
+ * One impact, for sparks and flashes. The renderer's own detector writes
+ * these; a physics contact ring (later) uses the same layout.
+ */
+export const ImpactEvent = defineStruct(
+  'ImpactEvent',
+  [
+    ['pos', 'vec3f', 'world position of the contact'],
+    ['strength', 'f32', 'speed change, m/s'],
+    ['dir', 'vec3f', 'unit; sparks fly out around it'],
+    ['packed', 'u32', 'bits 0-23 slot (0xffffff: none), 24-27 kind (0 detector, 1 injected), 28-31 material'],
+  ],
+  'An impact that spawns sparks.',
+);
+
+export const Spark = defineStruct(
+  'Spark',
+  [
+    ['pos', 'vec3f', 'world position'],
+    ['age', 'f32', 'seconds; negative means dead'],
+    ['vel', 'vec3f', 'm/s'],
+    ['packed', 'u32', 'bits 0-7 life (0.4 + 0.8 * q / 255 s), 8-31 seed'],
+  ],
+  'One spark of the renderer\'s pool.',
+);
+
+export const FxState = defineStruct(
+  'FxState',
+  [
+    ['prevLinVel', 'vec3f', 'velocity when the detector last saw the slot'],
+    ['bits', 'u32', 'bits 0-15 heat (f16), 16-23 tier last seen, 24 valid'],
+  ],
+  'Renderer-side per-slot effect state.',
+);
+
 
 export const BodyProps = defineStruct(
   'BodyProps',
@@ -169,4 +213,4 @@ export const ColorParams = defineStruct(
   'Per-dispatch uniforms (bound with a dynamic offset).',
 );
 
-export const ALL_STRUCTS = [SimParams, Body, RenderInstance, Shape, Manifold, BodyProps, SolverBody, SolverContact, SolverParams, ColorParams];
+export const ALL_STRUCTS = [SimParams, Body, RenderRecord, Shape, Manifold, ImpactEvent, Spark, FxState, BodyProps, SolverBody, SolverContact, SolverParams, ColorParams];

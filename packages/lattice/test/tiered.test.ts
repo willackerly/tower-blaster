@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { MODE_STATIC, type SceneDesc } from '@tb/engine-api';
-import { RapierHost } from '@tb/adapter-rapier';
+import { RapierEngine, RapierHost } from '@tb/adapter-rapier';
+import { appliedMu, slideScene } from '@tb/testkit';
 import { buildScenario } from '@tb/scenarios';
 import { checkTiers, TIER_ACTIVE, TIER_LATTICE, TieredEngine } from '../src/index.ts';
 import { ScriptedHost } from './scripted-host.ts';
@@ -107,5 +108,20 @@ describe('TieredEngine host contract', () => {
     const settled = host.batches.flatMap((b) => b.cells ?? []).filter((c) => c.id === 3);
     expect(settled.length).toBe(2);
     expect(settled[1]!.rot).toEqual(Array.from(snap.rot.subarray(12, 16)));
+  });
+});
+
+describe('TieredEngine scene settings', () => {
+  it.for(['average', 'min', 'max', 'multiply', undefined] as const)('frictionCombine %s reaches the host: the testkit slide matches RapierEngine', async (rule) => {
+    const mu = async (e: TieredEngine | RapierEngine) => {
+      await e.init(slideScene(rule));
+      await e.step();
+      const v1 = (await e.snapshot()).linVel[0]!;
+      for (let i = 0; i < 10; i++) await e.step();
+      const v11 = (await e.snapshot()).linVel[0]!;
+      e.dispose();
+      return appliedMu(v1, v11);
+    };
+    expect(await mu(new TieredEngine(new RapierHost()))).toBe(await mu(new RapierEngine()));
   });
 });

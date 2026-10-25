@@ -142,6 +142,10 @@ struck tower stayed awake. That is what the slide rules fix.
   init table, in each filled `CellChange` (centre `origin + index * edge`
   in f64, plus `rot`) and in the snapshot. A scene built off its grid by
   up to `posTol` gets snapped there.
+- `HostWorld` carries `SceneDesc.frictionCombine`. `RapierHost` sets it on
+  every collider, voxel lattices and ground included, since Rapier uses the
+  higher-priority rule of a pair. The testkit slide on `TieredEngine`
+  matches `RapierEngine` bit for bit under each rule.
 - Rubble freezes at the pose the tiers recorded, sent with the static
   change, so a host whose state lags (`stateLag > 0`) puts it where the
   snapshot says it is. In Rapier, turning a sleeping body static wakes its

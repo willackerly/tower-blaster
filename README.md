@@ -76,4 +76,5 @@ Renders any engine live with WebGPU: drag to orbit, right-drag or shift-drag to 
 | `physics-gpu` | GPU AVBD engine (`GpuAvbdEngine`): broadphase, narrowphase, graph colouring and solver, matched step by step against `physics-ref` |
 | `physics-ref` | Reference AVBD rigid-body solver in double precision: the oracle for the GPU solver (`avbd-ref` in the bench) |
 | `testkit` | Headless Chromium WebGPU sessions for tests |
+| `render` | WebGPU renderer: GPU culling and indirect draws straight from Body buffers (design: docs/render-design.md) |
 | `viewer` | Interactive WebGPU viewer (`pnpm viewer`) |
