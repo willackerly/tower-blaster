@@ -183,7 +183,13 @@ describe('engine registry and SlowedEngine', () => {
     // spare is a GpuEngineOptions field (room for pushed bodies), not a solver parameter: the
     // engine checks it (a solver parameter would pass unchecked) and records it in the variant.
     expect(makeEngine('avbd-gpu:iterations=6,spare=8').info.variant).toEqual({ ...makeEngine('avbd-gpu:iterations=6').info.variant, spare: 8 });
-    for (const bad of ['-1', '2.5', 'abc']) expect(() => makeEngine(`avbd-gpu:spare=${bad}`)).toThrow(/spare must be a non-negative integer/);
+    for (const bad of ['-1', '2.5', 'abc', 'true']) expect(() => makeEngine(`avbd-gpu:spare=${bad}`)).toThrow(/spare must be a non-negative integer/);
+    expect(() => makeEngine('avbd-gpu:spare=')).toThrow(/bad engine option/);
+    // The other buffer-sizing options reach the engine too (it checks them, as it would not check a solver parameter).
+    expect(makeEngine('avbd-gpu:capacity=100,pairsPerBody=4,maxRadius=2.5').info.variant).toMatchObject({ capacity: 100, pairsPerBody: 4, maxRadius: 2.5 });
+    for (const [k, bad, what] of [['capacity', '0', 'a positive integer'], ['pairsPerBody', '1.5', 'a positive integer'], ['maxRadius', '-1', 'a finite number >= 0']] as const) {
+      expect(() => makeEngine(`avbd-gpu:${k}=${bad}`)).toThrow(`GpuEngineOptions.${k} must be ${what}`);
+    }
   });
 
   it('slows each step by the requested fraction', async () => {

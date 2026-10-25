@@ -3,7 +3,7 @@ import type { InputEvent, PhysicsEngine, SceneDesc, StepReport } from '@tb/engin
 import { RapierEngine, RapierHost } from '@tb/adapter-rapier';
 import { TieredEngine } from '@tb/lattice';
 import { AvbdReferenceEngine } from '@tb/physics-ref';
-import { GpuAvbdEngine } from '@tb/physics-gpu';
+import { GpuAvbdEngine, type GpuEngineOptions } from '@tb/physics-gpu';
 
 type Options = Record<string, number | boolean>;
 
@@ -11,11 +11,13 @@ const REGISTRY: Record<string, (o: Options) => PhysicsEngine> = {
   rapier: (o) => new RapierEngine(o.iterations !== undefined ? { iterations: Number(o.iterations) } : {}),
   // Options are AvbdParams fields, e.g. avbd-ref:iterations=4,sweep=false.
   'avbd-ref': (o) => new AvbdReferenceEngine(o),
-  // Same AvbdParams, plus spare (GpuEngineOptions: room for pushed bodies); needs WebGPU,
-  // so it runs in the browser runner, not the Node CLI.
+  // Same AvbdParams, plus the GpuEngineOptions that size its buffers (capacity, spare,
+  // pairsPerBody, maxRadius), which the engine checks; needs WebGPU, so it runs in the
+  // browser runner, not the Node CLI.
   'avbd-gpu': (o) => {
-    const { spare, ...params } = o;
-    return new GpuAvbdEngine(params, spare !== undefined ? { spare: Number(spare) } : {});
+    const { capacity, spare, pairsPerBody, maxRadius, ...params } = o;
+    const opts = Object.fromEntries(Object.entries({ capacity, spare, pairsPerBody, maxRadius }).filter(([, v]) => v !== undefined)) as GpuEngineOptions;
+    return new GpuAvbdEngine(params, opts);
   },
   // Dormant lattice tier over a Rapier host; other options are TierParams (e.g. tiered:vWake=0.5).
   tiered: (o) => {
@@ -29,7 +31,7 @@ export function parseSpec(spec: string): { name: string; options: Options } {
   const options: Options = {};
   for (const kv of rest ? rest.split(',') : []) {
     const [k, v] = kv.split('=');
-    if (!k || v === undefined) throw new Error(`bad engine option "${kv}" in "${spec}"`);
+    if (!k || v === undefined || v === '') throw new Error(`bad engine option "${kv}" in "${spec}"`);
     options[k] = v === 'true' ? true : v === 'false' ? false : Number(v);
   }
   return { name, options };

@@ -270,7 +270,7 @@ async function main() {
       <div class="row"><span>sim speed</span><span class="${clock.simSpeed < 0.95 ? 'warn' : ''}">${(clock.simSpeed * 100).toFixed(0)}%</span></div>
       <div class="row"><span>snapshot + upload</span><span>${fmt(snapMs.quantile(0.5))} ms</span></div>
       <div class="row muted"><span>budget</span><span>7.5 ms/step</span></div>
-      <div class="muted">${adapter.info.vendor} ${adapter.info.architecture}${paused ? ' · <b>paused</b>' : ''}</div>${notice ? `\n      <div class="warn">${escapeHtml(notice)}</div>` : ''}`;
+      <div class="muted">${escapeHtml(adapter.info.vendor)} ${escapeHtml(adapter.info.architecture)}${paused ? ' · <b>paused</b>' : ''}</div>${notice ? `\n      <div class="warn">${escapeHtml(notice)}</div>` : ''}`;
   }
 
   await reset();
