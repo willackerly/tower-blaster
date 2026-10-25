@@ -3,6 +3,7 @@
 // its GPU result against the CPU reference in the page and returns a small
 // summary, so large arrays never cross the Playwright boundary.
 import { BandwidthProbe, compactIndices, Compactor, createDevice, exclusiveScanU32, RadixSorter, Readback, sortPairs, GpuProfiler, readBuffer, Scanner, uploadU32 } from '../src/index.ts';
+import { type GpuBenchOptions, runGpuBench as bench } from '../src/bench.ts';
 
 function rng(seed: number) {
   let a = seed >>> 0;
@@ -382,4 +383,18 @@ export async function readbackRules() {
   };
 }
 
-export { runGpuBench } from '../src/bench.ts';
+/**
+ * runGpuBench, recording each MAP_READ buffer it creates (label and size), so
+ * the fresh and pooled readback cases can be told apart without timing them.
+ */
+export async function runGpuBench(opts: Partial<GpuBenchOptions>) {
+  const staging: Array<{ label: string; size: number }> = [];
+  const createBuffer = GPUDevice.prototype.createBuffer;
+  GPUDevice.prototype.createBuffer = function (desc) {
+    if (desc.usage & GPUBufferUsage.MAP_READ) staging.push({ label: desc.label ?? '', size: desc.size });
+    return createBuffer.call(this, desc);
+  };
+  try {
+    return { result: await bench(opts), staging };
+  } finally { GPUDevice.prototype.createBuffer = createBuffer; }
+}

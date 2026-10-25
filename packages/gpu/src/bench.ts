@@ -46,6 +46,8 @@ export interface GpuCase {
   medianMs: number;
   p10Ms: number;
   p90Ms: number;
+  /** Timed reps behind the quantiles (warmup excluded). */
+  samples: number;
   /** Nominal bytes moved per run. */
   traffic: number;
   effectiveGBs: number;
@@ -82,7 +84,7 @@ export async function runGpuBench(opts: Partial<GpuBenchOptions> = {}): Promise<
 
   const report = (name: string, n: number, traffic: number, ms: number[], source: GpuCase['source'], hostRoundTrip = false) => {
     const med = q(ms, 0.5);
-    cases.push({ name, n, medianMs: med, p10Ms: q(ms, 0.1), p90Ms: q(ms, 0.9), traffic, effectiveGBs: traffic / (med * 1e6), melemS: n / (med * 1e3), source, ...(hostRoundTrip ? { hostRoundTrip } : {}) });
+    cases.push({ name, n, medianMs: med, p10Ms: q(ms, 0.1), p90Ms: q(ms, 0.9), samples: ms.length, traffic, effectiveGBs: traffic / (med * 1e6), melemS: n / (med * 1e3), source, ...(hostRoundTrip ? { hostRoundTrip } : {}) });
   };
   /** Time `record` reps times; record gets the pass timestampWrites to use. */
   async function time(name: string, n: number, traffic: number, record: (enc: GPUCommandEncoder, ts: { timestampWrites?: GPUComputePassTimestampWrites }) => void) {
