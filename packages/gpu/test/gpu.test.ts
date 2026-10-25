@@ -88,3 +88,26 @@ describe('Compactor', () => {
     expect(r!.marksDiff).toBe(-1);
   });
 });
+
+describe('RadixSorter (stable, keys + values)', () => {
+  const cases = [
+    { n: 0, keys: 'random', keyBits: 32 },
+    { n: 1, keys: 'random', keyBits: 32 },
+    { n: 2, keys: 'reversed', keyBits: 32 },
+    { n: 255, keys: 'random', keyBits: 32 },
+    { n: 256, keys: 'dupes', keyBits: 32 },
+    { n: 257, keys: 'random', keyBits: 32 },
+    { n: 10_000, keys: 'dupes', keyBits: 32 },
+    { n: 10_000, keys: 'sorted', keyBits: 32 },
+    { n: 10_000, keys: 'reversed', keyBits: 32 },
+    { n: 10_000, keys: 'max', keyBits: 32 },
+    { n: 65_537, keys: 'random', keyBits: 12 }, // odd pass count: result copied back
+    { n: 100_000, keys: 'random', keyBits: 20 },
+    { n: 1_000_000, keys: 'random', keyBits: 32 },
+  ] as const;
+  it.for(cases)('n = $n, $keys keys, $keyBits bits', async (c, ctx) => {
+    if (!gpu) return ctx.skip();
+    const [r] = await call('sort', [{ ...c, capacity: c.n + 300, seed: c.n + c.keyBits }]);
+    expect(r).toMatchObject({ error: null, keyDiff: -1, valDiff: -1, tailDiff: -1 });
+  });
+});

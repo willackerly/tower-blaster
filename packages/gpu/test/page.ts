@@ -2,7 +2,7 @@
 // loadBundle() and calls the exports through page.evaluate; each driver checks
 // its GPU result against the CPU reference in the page and returns a small
 // summary, so large arrays never cross the Playwright boundary.
-import { compactIndices, Compactor, createDevice, exclusiveScanU32, GpuProfiler, readBuffer, Scanner, uploadU32 } from '../src/index.ts';
+import { compactIndices, Compactor, createDevice, exclusiveScanU32, RadixSorter, sortPairs, GpuProfiler, readBuffer, Scanner, uploadU32 } from '../src/index.ts';
 
 function rng(seed: number) {
   let a = seed >>> 0;
@@ -154,6 +154,48 @@ export async function compact(cases: CompactCase[]) {
       marksDiff: firstDiff(marked, wantMarks),
     });
     compactor.destroy();
+  }
+  device.destroy();
+  return out;
+}
+
+export type KeyKind = 'random' | 'dupes' | 'sorted' | 'reversed' | 'max';
+export interface SortCase { n: number; capacity: number; keys: KeyKind; keyBits: number; seed: number }
+
+/**
+ * Sort (key, original index) pairs and compare with the stable reference.
+ * Values are the original indices, so any instability shows up as a value
+ * mismatch among equal keys. Also checks the caller's tail is untouched.
+ */
+export async function sort(cases: SortCase[]) {
+  const { device } = await createDevice();
+  const out = [];
+  for (const c of cases) {
+    const r = rng(c.seed);
+    const mask = c.keyBits >= 32 ? 0xffffffff : (1 << c.keyBits) - 1;
+    const keys = new Uint32Array(c.capacity);
+    for (let i = 0; i < c.capacity; i++) {
+      const k = c.keys === 'dupes' ? r() & 7 : c.keys === 'sorted' ? i : c.keys === 'reversed' ? c.capacity - i : c.keys === 'max' ? 0xffffffff : r();
+      keys[i] = (k & mask) >>> 0;
+    }
+    const vals = Uint32Array.from({ length: c.capacity }, (_, i) => i);
+    const kb = uploadU32(device, keys), vb = uploadU32(device, vals);
+    const sorter = new RadixSorter(device, kb, vb, c.capacity);
+    device.pushErrorScope('validation');
+    const enc = device.createCommandEncoder();
+    sorter.encode(enc, c.n, c.keyBits);
+    device.queue.submit([enc.finish()]);
+    const error = await device.popErrorScope();
+    const gotK = new Uint32Array(await readBuffer(device, kb, c.capacity * 4));
+    const gotV = new Uint32Array(await readBuffer(device, vb, c.capacity * 4));
+    const want = sortPairs(keys.subarray(0, c.n), vals.subarray(0, c.n), c.keyBits);
+    out.push({
+      ...c, error: error?.message ?? null,
+      keyDiff: firstDiff(gotK.subarray(0, c.n), want.keys),
+      valDiff: firstDiff(gotV.subarray(0, c.n), want.vals),
+      tailDiff: firstDiff(gotK.subarray(c.n), keys.subarray(c.n)),
+    });
+    sorter.destroy();
   }
   device.destroy();
   return out;
