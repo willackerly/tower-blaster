@@ -14,6 +14,8 @@ pnpm bench selfcheck                    # harness gate G1: A/A and injected 10% 
 pnpm bench scenarios                    # list S1-S11 and their parameters
 pnpm bench run --engine rapier --scenario S4 --param N=10000 --quality
 pnpm bench compare --a rapier --b rapier:iterations=8 --scenario S1 --no-sleep
+pnpm bench run --engine tiered --scenario S4 --param N=10000   # dormant lattice tier over Rapier
+pnpm tiers:compare --scenario S5 --param N=1600 --runs 4      # tiered vs all-dynamic Rapier on one shot
 ```
 
 Results print as JSON; add `--out results/name.jsonl` to append them to a file.
@@ -34,6 +36,15 @@ pnpm bench:browser --engines rapier,rapier:iterations=8 --scenario S1 --sleep fa
 pnpm bench:suite --channel chrome       # about 5-10 minutes; writes results/suite-<time>.jsonl and .md
 ```
 
+### GPU primitives
+
+```sh
+pnpm bench:gpu --channel chrome         # copy roofline, dispatch overhead, scan, compaction, radix sort
+pnpm bench:gpu --quick                  # small sizes, for checking the pipeline
+```
+
+Writes `results/gpu-<time>.{json,md}`. GPU times come from timestamp queries, and each primitive's effective GB/s is reported as a fraction of a straight copy on the same device.
+
 Results worth keeping go in `docs/benchmarks/` (the first is a CPU baseline from a cloud VM).
 
 ## Viewer
@@ -53,8 +64,10 @@ Renders any engine live with WebGPU: drag to orbit, right-drag or shift-drag to 
 | `geom` | Double-precision reference geometry (SAT, broadphase) used as a test oracle |
 | `scenarios` | Seeded benchmark scenes S1-S11 |
 | `metrics` | Quality metrics and benchmark statistics |
+| `lattice` | Dormant tier: intact towers as a voxel lattice, support rules (loose columns), GPU brick export |
 | `adapter-rapier` | CPU baseline (Rapier WASM) |
 | `bench` | Timing and quality runs, CLI |
 | `runner` | Browser runner page, Playwright orchestrator (`bench:browser`) |
+| `gpu` | GPU primitives (profiler, scan, compaction, radix sort, bandwidth probe) and `bench:gpu` |
 | `testkit` | Headless Chromium WebGPU sessions for tests |
 | `viewer` | Interactive WebGPU viewer (`pnpm viewer`) |

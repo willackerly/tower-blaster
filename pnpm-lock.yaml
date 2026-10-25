@@ -23,12 +23,18 @@ importers:
       '@tb/geom':
         specifier: workspace:*
         version: link:packages/geom
+      '@tb/gpu':
+        specifier: workspace:*
+        version: link:packages/gpu
       '@tb/keystone':
         specifier: workspace:*
         version: link:packages/keystone
       '@tb/keystone-lab':
         specifier: workspace:*
         version: link:packages/keystone-lab
+      '@tb/lattice':
+        specifier: workspace:*
+        version: link:packages/lattice
       '@tb/metrics':
         specifier: workspace:*
         version: link:packages/metrics
@@ -53,6 +59,9 @@ importers:
       '@webgpu/types':
         specifier: 0.1.74
         version: 0.1.74
+      esbuild:
+        specifier: 0.28.2
+        version: 0.28.2
       fast-check:
         specifier: 4.10.2
         version: 4.10.2
@@ -105,6 +114,8 @@ importers:
 
   packages/geom: {}
 
+  packages/gpu: {}
+
   packages/keystone:
     dependencies:
       '@tb/engine-api':
@@ -125,6 +136,8 @@ importers:
       '@tb/keystone':
         specifier: workspace:*
         version: link:../keystone
+
+  packages/lattice: {}
 
   packages/metrics: {}
 
