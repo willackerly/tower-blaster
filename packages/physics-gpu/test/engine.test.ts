@@ -102,20 +102,23 @@ describe('GPU AVBD engine: single bodies against analytic results', () => {
 });
 
 describe('GPU AVBD engine: stacks, towers and impacts', () => {
-  it('a 10-cube stack and a 3x3x8 tower stand, matching the reference', async (ctx) => {
+  // One test per scene, with room to spare: under SwiftShader on a 4-core
+  // CI runner the two together took 51 s of the default 60 s, and timed
+  // out once another GPU test file ran alongside. The tower alone is most
+  // of that (19 s of 27 s on the dev VM).
+  it.for([['10-cube stack', 'S9', { H: 10, ratio: 1 }], ['3x3x8 tower', 'S1', { F: 3, H: 8, gap: 0 }]] as const)('a %s stands, matching the reference', { timeout: 120_000 }, async ([, id, params], ctx) => {
     if (!gpu) return ctx.skip();
-    for (const scene of [buildScenario('S9', { H: 10, ratio: 1 }, 1), buildScenario('S1', { F: 3, H: 8, gap: 0 }, 1)]) {
-      const g = await runGpu(scene, 120);
-      expect(nonFinite(g.s1)).toBe(0);
-      expect(survival(scene.bodies, g.s0, g.s1, [0, 1])).toBeGreaterThan(0.999);
-      expect(drift(g.s0, g.s1)).toBeLessThan(1e-3);
-      expect(jitter(g.s1)).toBeLessThan(1e-3);
-      expect(penetration(scene.bodies, g.s1, 0).max).toBeLessThan(1e-3);
-      const ref = await runRef(scene, 120);
-      let worst = 0;
-      for (let k = 0; k < ref.pos.length; k++) worst = Math.max(worst, Math.abs(ref.pos[k]! - g.s1.pos[k]!));
-      expect(worst).toBeLessThan(1e-3);
-    }
+    const scene = buildScenario(id, params, 1);
+    const g = await runGpu(scene, 120);
+    expect(nonFinite(g.s1)).toBe(0);
+    expect(survival(scene.bodies, g.s0, g.s1, [0, 1])).toBeGreaterThan(0.999);
+    expect(drift(g.s0, g.s1)).toBeLessThan(1e-3);
+    expect(jitter(g.s1)).toBeLessThan(1e-3);
+    expect(penetration(scene.bodies, g.s1, 0).max).toBeLessThan(1e-3);
+    const ref = await runRef(scene, 120);
+    let worst = 0;
+    for (let k = 0; k < ref.pos.length; k++) worst = Math.max(worst, Math.abs(ref.pos[k]! - g.s1.pos[k]!));
+    expect(worst).toBeLessThan(1e-3);
   });
 
   it('a 100:1 mass ratio stack holds', async (ctx) => {
