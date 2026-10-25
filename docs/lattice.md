@@ -145,6 +145,13 @@ and the rules run on top.
   measured case. Speed-quiet missed creep. Backoff stalled 220-body chains.
   97% of one-step force thaws were false.
 - **Whole-line W3 wakes:** see the results table. They left wedged slabs.
+- **Graded impact plugs (a dent instead of nothing):** on the one-tower
+  bounce-off, 4 shots at 1% steps, 900 steps, sleep off. Waking the
+  deepest prefix of the plug that would slide broke 110 to 189 cubes, woke
+  up to 1,076 and cost 208k to 335k active body-steps. Waking only the
+  front layer broke 62 to 184, woke up to 401 and cost 22k to 90k. The
+  reference breaks 8 to 29, and the all-or-nothing gate 0 to 97 (median 0)
+  at 6k to 33k. The woken columns over a dent slump into it.
 - **Wake everything a hit could affect (the old W2/W3):** faithful, but the
   cost scales with the tower, not with the damage.
 
@@ -181,10 +188,10 @@ and the rules run on top.
   columns above a dent that barely moves. Leaving them dormant while their
   supporter stays within tolerance would change the support invariant, so
   it needs measuring first.
-- Bounce-offs leave no dent: the W2 gate is all or nothing, so a plug too
-  heavy to slide wakes nothing, where the reference breaks about 24 cubes
-  at the face. A graded plug (the shallowest layers that would slide)
-  is the next thing to try.
+- Bounce-offs leave no dent: a plug too heavy to slide wakes nothing,
+  where the reference breaks about 24 cubes at the face (see Alternatives:
+  graded plugs overshoot). The reference's dent comes from contact
+  compliance, which rigid woken cubes in a dormant well do not have.
 - Small-tower overshoot: in 2 of 4 shots, about 30% more broken cubes than
   the reference. It comes from the W2 gate. With the gate off and the W3
   slide and unwedge on, the same 4 shots break 173 to 191, against the
