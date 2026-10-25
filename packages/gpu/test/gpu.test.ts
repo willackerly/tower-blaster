@@ -113,7 +113,9 @@ describe('RadixSorter (stable, keys + values)', () => {
     { n: 100_000, keys: 'random', keyBits: 20 },
     { n: 1_000_000, keys: 'random', keyBits: 32 },
   ] as const;
-  it.for(cases)('n = $n, $keys keys, $keyBits bits', async (c, ctx) => {
+  // 180 s: on SwiftShader the 1M-key case takes most of the default 60 s once
+  // other work shares the VM (it timed out at load 7-15 several times).
+  it.for(cases)('n = $n, $keys keys, $keyBits bits', { timeout: 180_000 }, async (c, ctx) => {
     if (!gpu) return ctx.skip();
     const [r] = await call('sort', [{ ...c, capacity: c.n + 300, seed: c.n + c.keyBits }]);
     expect(r).toMatchObject({ error: null, keyDiff: -1, valDiff: -1, tailDiff: -1 });
