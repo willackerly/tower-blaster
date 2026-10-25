@@ -3,7 +3,7 @@ import { type BodyDesc, bodiesAt, type CombineRule, freeFlight, type InputEvent,
 import { drift, energy, jitter, nonFinite, penetration, survival } from '@tb/metrics';
 import { buildScenario } from '@tb/scenarios';
 import { appliedMu, slideMu, slideScene, THROW, throwScene } from '@tb/testkit';
-import { AvbdReferenceEngine, type AvbdParams, colorGraph, outranks, solveSpd6, tangentBasis } from '../src/index.ts';
+import { AvbdReferenceEngine, type AvbdParams, colorGraph, DEFAULT_AVBD, outranks, solveSpd6, tangentBasis } from '../src/index.ts';
 
 const cube = (pos: Vec3, linVel: Vec3 = [0, 0, 0]): BodyDesc => ({
   shape: { kind: 'box', half: [0.5, 0.5, 0.5] }, pos, rot: [0, 0, 0, 1], linVel, angVel: [0, 0, 0], density: 1, friction: 0.6, restitution: 0, tag: 0,
@@ -130,7 +130,7 @@ describe('single bodies against analytic results', () => {
     expect(Math.abs(off)).toBeLessThan(3e-3); // 0.17 degrees
   });
 
-  it('sliding friction needs the cone-projection Hessian at low iteration counts', async () => {
+  it('sliding friction needs the secant stiffness at low iteration counts', async () => {
     // Ablation: with k J J^T on sliding friction rows (the 2D reference's choice), 4 iterations slide ~2x too far.
     const scene = sceneOf([cube([0, 0.5, 0], [3, 0, 0])]);
     const exact = await simulate(scene, 120, { iterations: 4 });
@@ -152,6 +152,168 @@ describe('single bodies against analytic results', () => {
     expect(s1.linVel[0]! / (a * T)).toBeGreaterThan(0.95);
     expect(s1.linVel[0]! / (a * T)).toBeLessThan(1.05);
     expect(Math.abs(s1.linVel[2]!)).toBeLessThan(1e-6);
+  });
+});
+
+// The stick/slip boundary. Before the secant stiffness and the dual-branch
+// stick flag (2026-10-25), a cube that slid to a stop never settled: its
+// contacts sat on the cone boundary, the friction Hessian flipped between k_t
+// and 0 along the slide, and the cube spun at up to 0.66 rad/s and crept up
+// to 14 mm, so its pose depended on rounding (a GPU test failed on one
+// platform only). Each test below fails on that code.
+describe('friction at the stick/slip boundary', () => {
+  const box = (pos: Vec3, half: Vec3, linVel: Vec3 = [0, 0, 0], angVel: Vec3 = [0, 0, 0], friction = MU): BodyDesc => ({
+    shape: { kind: 'box', half }, pos, rot: [0, 0, 0, 1], linVel, angVel, density: 1, friction, restitution: 0, tag: 0,
+  });
+  const stopping = (v0: number) => {
+    let x = 0;
+    for (let v = v0 - MU * G / 60; v > 0; v -= MU * G / 60) x += v / 60;
+    return x;
+  };
+  const speedOf = (v: Vec3) => Math.hypot(v[0], v[2]);
+  const yawOf = (q: readonly number[]) => 2 * Math.atan2(q[1]!, q[3]!);
+  /** Slide a cube from the origin; measure from 10 steps after it stops (speed < 1 cm/s) to step 240. */
+  async function slideToRest(v: Vec3, params: Partial<AvbdParams> = {}) {
+    const e = new AvbdReferenceEngine(params);
+    await e.init(sceneOf([cube([0, 0.5, 0], v)]));
+    const b = e.world!.bodies[0]!;
+    let stop = -1, dStop = 0, maxW = 0, maxV = 0, p0: Vec3 = [0, 0, 0], yaw0 = 0;
+    for (let s = 1; s <= 240; s++) {
+      e.step();
+      if (stop < 0 && speedOf(b.linVel) < 1e-2) [stop, dStop] = [s, Math.hypot(b.pos[0], b.pos[2])];
+      if (stop > 0 && s === stop + 10) [p0, yaw0] = [[...b.pos], yawOf(b.rot)];
+      if (stop > 0 && s > stop + 10) [maxW, maxV] = [Math.max(maxW, Math.hypot(...b.angVel)), Math.max(maxV, Math.hypot(...b.linVel))];
+    }
+    const off = Math.atan2(b.pos[2], b.pos[0]) - Math.atan2(v[2], v[0]);
+    return { stop, dStop, maxW, maxV, creep: Math.hypot(b.pos[0] - p0[0], b.pos[2] - p0[2]), yawDrift: Math.abs(yawOf(b.rot) - yaw0), off: Math.atan2(Math.sin(off), Math.cos(off)) };
+  }
+  const at = (speed: number, deg: number): Vec3 => [Math.fround(speed * Math.cos((deg * Math.PI) / 180)), 0, Math.fround(speed * Math.sin((deg * Math.PI) / 180))];
+
+  // Baseline worst cases over 72 slides: 0.66 rad/s, 14 mm, 3.3 deg, 0.073 rad. Now: 2.6e-7, 1.8e-5 mm, 3e-11 deg, 1.1e-5.
+  it.for([[3, 15], [3, 120], [6, 0], [1.5, 45], [3, 255], [6, 200]] as const)('a cube slid at %s m/s, %s deg comes to rest: no spin, creep or yaw drift', async ([speed, deg]) => {
+    const r = await slideToRest(at(speed, deg));
+    expect(r.stop).toBeGreaterThan(0);
+    expect(Math.abs(r.dStop / stopping(speed) - 1)).toBeLessThan(0.01);
+    expect(r.maxW).toBeLessThan(1e-4);
+    expect(r.maxV).toBeLessThan(1e-4);
+    expect(r.creep).toBeLessThan(1e-4);
+    expect(r.yawDrift).toBeLessThan(1e-4);
+    expect(Math.abs(r.off)).toBeLessThan(1e-4);
+  });
+
+  it('where it stops does not depend on rounding: 1-ulp nudges of the start velocity', async () => {
+    const nudge = (x: number, k: number) => { const f = new Float32Array([x]); new Int32Array(f.buffer)[0]! += k; return f[0]!; };
+    for (const [vx, vz] of [[-1.5, 2.598], [2.9, 0.78]] as const) {
+      const offs: number[] = [];
+      for (let k = -3; k <= 3; k++) offs.push((await slideToRest([nudge(vx, k), 0, nudge(vz, -k)])).off);
+      // Baseline spread (±3 ulp): 2.8e-3 rad at 120 deg (f32 on the GPU: 0.031). Now below 1e-11.
+      expect(Math.max(...offs) - Math.min(...offs)).toBeLessThan(1e-6);
+    }
+  });
+
+  it('a contact that slides for the whole step never holds its anchors', async () => {
+    // The old end-of-step test |lambda_t| < mu |lambda_n| passed by rounding for sliding contacts
+    // (48-72 of 224 contact-steps), and the stabilization pass then pulled the cube back to stale anchors.
+    for (const iterations of [2, 10]) for (const deg of [0, 120]) {
+      const e = new AvbdReferenceEngine({ iterations });
+      await e.init(sceneOf([cube([0, 0.5, 0], at(6, deg))]));
+      let held = 0, sliding = 0;
+      for (let s = 0; s < 60; s++) {
+        e.step();
+        if (speedOf(e.world!.bodies[0]!.linVel) < 0.5) continue;
+        sliding++;
+        held += e.world!.contacts.filter((c) => c.stick).length;
+      }
+      expect(sliding).toBeGreaterThan(50);
+      expect(held).toBe(0);
+    }
+  });
+
+  it('a contact never reuses anchors that have drifted apart by stickThreshold, even after an impact at 1-3 iterations', async () => {
+    // A fresh contact's k_t is still penaltyMin, so in an impact its trial force can sit inside the
+    // cone while it slips at m/s: the in-cone flag alone would keep its anchors. Before the drift was
+    // checked at reuse, the next step reused them 1.4-10.8 cm apart and pulled the bodies back.
+    const sphere = (pos: Vec3, linVel: Vec3, radius: number, density: number): BodyDesc => ({ ...cube(pos, linVel), shape: { kind: 'sphere', radius }, density, friction: 0.5 });
+    const scenes: SceneDesc[] = [
+      sceneOf([cube([0, 0.6, 0], [3, -1, 0])]), // lands sliding
+      sceneOf([box([0, 0.6, 0], [0.5, 0.5, 0.5], [0, -1, 0], [0, 8, 0])]), // lands spinning
+      sceneOf([0, 1, 2, 3].map((k) => cube([0, 0.5 + k, 0])).concat([sphere([-3, 2.5, 0], [10, 0, 0], 0.3, 5)])), // a stack knocked by a ball
+    ];
+    const threshold = DEFAULT_AVBD.stickThreshold;
+    for (const iterations of [1, 2, 3]) for (const scene of scenes) {
+      const e = new AvbdReferenceEngine({ iterations });
+      await e.init(scene);
+      let worst = 0;
+      for (let s = 0; s < 60; s++) {
+        e.step();
+        for (const c of e.world!.contacts) worst = Math.max(worst, Math.hypot(c.c0[1], c.c0[2]));
+      }
+      expect(worst, `${iterations} iterations, scene ${scenes.indexOf(scene)}`).toBeLessThan(threshold);
+    }
+  });
+
+  it('a cube spinning on the ground stops on the step Coulomb friction says, and stays stopped', async () => {
+    // Four corner contacts at r = sqrt(1/2) carry mu m g / 4 each: alpha = mu m g r / I = 6 r mu g for I = m / 6.
+    for (const [mu, w0] of [[1, 10], [0.6, 5], [0.3, 10]] as const) {
+      const e = new AvbdReferenceEngine();
+      await e.init({ ...sceneOf([box([0, 0.5, 0], [0.5, 0.5, 0.5], [0, 0, 0], [0, w0, 0], mu)]), ground: { y: 0, friction: mu } });
+      const b = e.world!.bodies[0]!;
+      let stop = -1, after = 0;
+      for (let s = 1; s <= 180; s++) {
+        e.step();
+        if (stop < 0 && Math.abs(b.angVel[1]) < 1e-2) stop = s;
+        if (stop > 0 && s > stop + 10) after = Math.max(after, Math.hypot(...b.angVel), Math.hypot(...b.linVel));
+      }
+      expect(Math.abs(stop - Math.ceil(w0 / ((6 * Math.SQRT1_2 * mu * G) / 60)))).toBeLessThanOrEqual(1); // baseline: step 135 for (1, 10)
+      expect(after).toBeLessThan(1e-4); // baseline: 0.45 rad/s for (0.6, 5)
+      expect(Math.hypot(b.pos[0], b.pos[2])).toBeLessThan(1e-4);
+    }
+  });
+
+  it('a sphere sliding with backspin starts to roll when Coulomb friction says, and keeps rolling', async () => {
+    // Slip v + w R falls at mu g (1 + m R^2 / I) = 3.5 mu g.
+    for (const R of [0.25, 0.5]) {
+      const v0 = 3, w0 = 5 / R;
+      const e = new AvbdReferenceEngine();
+      await e.init(sceneOf([{ ...cube([0, R, 0], [v0, 0, 0]), shape: { kind: 'sphere', radius: R }, angVel: [0, 0, w0] }]));
+      const b = e.world!.bodies[0]!;
+      let rolled = -1, late = 0;
+      for (let s = 1; s <= 180; s++) {
+        e.step();
+        const slip = Math.abs(b.linVel[0] + b.angVel[2] * R);
+        if (rolled < 0 && slip < 0.05) rolled = s;
+        if (s >= 60) late = Math.max(late, slip);
+      }
+      expect(Math.abs(rolled - (v0 + w0 * R) / (3.5 * MU * G) * 60)).toBeLessThan(2); // analytic 23.3 steps
+      expect(late).toBeLessThan(0.025); // baseline R 0.5: a period-2 slip of 0.17-0.52 m/s for 20 s
+      // Not checked: the rolling speed. It drifts up from the analytic 0.714 m/s (to 1.3 m/s by 3 s), before and after this fix.
+    }
+  });
+
+  // Flat boxes 1 x 0.5 x 1, the bottom pushed at f m_b g along deg; ground capacity mu (m_b + m_t) g = 1.2 m_b g.
+  async function pushedStack(f: number, until: number, deg: number) {
+    const u = [Math.cos((deg * Math.PI) / 180), Math.sin((deg * Math.PI) / 180)] as const;
+    const e = new AvbdReferenceEngine();
+    await e.init(sceneOf([box([0, 0.25, 0], [0.5, 0.25, 0.5]), box([0, 0.75, 0], [0.5, 0.25, 0.5])]));
+    const bottom = e.world!.bodies[0]!, top = e.world!.bodies[1]!;
+    for (let s = 1; s <= 300; s++) {
+      if (s <= until) bottom.linVel = [bottom.linVel[0] + (f * G * u[0]) / 60, bottom.linVel[1], bottom.linVel[2] + (f * G * u[1]) / 60];
+      e.step();
+    }
+    const along = (p: Vec3) => p[0] * u[0] + p[2] * u[1];
+    return { bottom: along(bottom.pos), top: along(top.pos) };
+  }
+  it.for([0, 30, 120] as const)('a 2-box stack pushed at its bottom box at %s deg: held below static friction, slides as one above it', async (deg) => {
+    // 1.3 m_b g for 90 steps: 0.05 g together, then 0.6 g to a stop. Exact implicit Euler: 0.558 m + 0.040 m.
+    let v = 0, x = 0;
+    for (let s = 1; s <= 300; s++) { v = Math.max(0, v + (s <= 90 ? 0.05 * G : -MU * G) / 60); x += v / 60; }
+    const above = await pushedStack(1.3, 90, deg);
+    expect(above.bottom / x).toBeGreaterThan(0.95); // now 1.14 at every angle; baseline 0.77-6.1
+    expect(above.bottom / x).toBeLessThan(1.2);
+    expect(Math.abs(above.top - above.bottom)).toBeLessThan(0.01);
+    const below = await pushedStack(1.0, 300, deg);
+    expect(Math.abs(below.bottom)).toBeLessThan(0.01); // now 1e-4 m; baseline 1.6-3.1 m
+    expect(Math.abs(below.top)).toBeLessThan(0.01);
   });
 });
 
