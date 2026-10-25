@@ -1,15 +1,18 @@
 // GPU primitive benchmarks, run in the page. Each case reports GPU time from
 // timestamp queries (median of reps, each its own submit) and throughput.
 // "Effective GB/s" uses a nominal traffic model per primitive (below), so it
-// can be compared with the copy roofline measured on the same device.
+// can be compared with the copy roofline measured on the same device. The
+// readback cases are the exception: wall-clock host round trips (copy,
+// mapAsync, copy-out), which is the latency a per-step read pays.
 //
 // Numbers from SwiftShader or CI runners are not performance results
 // (CLAUDE.md); the result records whether the adapter is software.
 import { BandwidthProbe } from './bandwidth.ts';
 import { Compactor } from './compact.ts';
-import { createDevice, uploadU32 } from './device.ts';
+import { createDevice, readBuffer, uploadU32 } from './device.ts';
 import { GpuProfiler, timeSubmit } from './profiler.ts';
 import { RadixSorter } from './radix-sort.ts';
+import { Readback } from './readback.ts';
 import { Scanner } from './scan.ts';
 
 export interface GpuBenchOptions {
@@ -20,6 +23,8 @@ export interface GpuBenchOptions {
   compactSizes: number[];
   sortSizes: number[];
   dispatches: number;
+  /** Bytes per readback round trip (multiples of 4). */
+  readbackSizes: number[];
 }
 
 export const DEFAULT_GPU_BENCH: GpuBenchOptions = {
@@ -30,21 +35,27 @@ export const DEFAULT_GPU_BENCH: GpuBenchOptions = {
   compactSizes: [100_000, 1_000_000],
   sortSizes: [10_000, 100_000, 1_000_000, 4_000_000],
   dispatches: 200,
+  // An observation record (about 2 KB) and a full snapshot at 100k bodies.
+  readbackSizes: [2048, 6_400_000],
 };
 
 export interface GpuCase {
   name: string;
-  /** Elements processed (bytes for copy, dispatches for overhead). */
+  /** Elements processed (bytes for copy and readback, dispatches for overhead). */
   n: number;
   medianMs: number;
   p10Ms: number;
   p90Ms: number;
+  /** Timed reps behind the quantiles (warmup excluded). */
+  samples: number;
   /** Nominal bytes moved per run. */
   traffic: number;
   effectiveGBs: number;
   /** Million elements per second. */
   melemS: number;
   source: 'timestamp' | 'wall';
+  /** A host round trip (submit, map, copy out), not a GPU kernel: no "% of copy". */
+  hostRoundTrip?: boolean;
 }
 
 export interface GpuBenchResult {
@@ -71,6 +82,10 @@ export async function runGpuBench(opts: Partial<GpuBenchOptions> = {}): Promise<
   const prof = new GpuProfiler(device, 4);
   const cases: GpuCase[] = [];
 
+  const report = (name: string, n: number, traffic: number, ms: number[], source: GpuCase['source'], hostRoundTrip = false) => {
+    const med = q(ms, 0.5);
+    cases.push({ name, n, medianMs: med, p10Ms: q(ms, 0.1), p90Ms: q(ms, 0.9), samples: ms.length, traffic, effectiveGBs: traffic / (med * 1e6), melemS: n / (med * 1e3), source, ...(hostRoundTrip ? { hostRoundTrip } : {}) });
+  };
   /** Time `record` reps times; record gets the pass timestampWrites to use. */
   async function time(name: string, n: number, traffic: number, record: (enc: GPUCommandEncoder, ts: { timestampWrites?: GPUComputePassTimestampWrites }) => void) {
     const ms: number[] = [];
@@ -88,8 +103,7 @@ export async function runGpuBench(opts: Partial<GpuBenchOptions> = {}): Promise<
       }
       if (r >= o.warmup) ms.push(t);
     }
-    const med = q(ms, 0.5);
-    cases.push({ name, n, medianMs: med, p10Ms: q(ms, 0.1), p90Ms: q(ms, 0.9), traffic, effectiveGBs: traffic / (med * 1e6), melemS: n / (med * 1e3), source: timestamps ? 'timestamp' : 'wall' });
+    report(name, n, traffic, ms, timestamps ? 'timestamp' : 'wall');
   }
   const inPass = (fn: (p: GPUComputePassEncoder) => void) => (enc: GPUCommandEncoder, ts: { timestampWrites?: GPUComputePassTimestampWrites }) => {
     const p = enc.beginComputePass(ts);
@@ -158,6 +172,26 @@ export async function runGpuBench(opts: Partial<GpuBenchOptions> = {}): Promise<
     vb.destroy();
   }
 
+  // Readback latency, wall clock from issuing the copy to holding the bytes:
+  // readBuffer makes a staging buffer each time, Readback reuses its pool
+  // (created during warmup).
+  for (const bytes of o.readbackSizes) {
+    if (bytes % 4) throw new Error(`readbackSizes: ${bytes} is not a multiple of 4`);
+    const src = uploadU32(device, new Uint32Array(bytes / 4).fill(1));
+    const rb = new Readback(device);
+    for (const [kind, read] of [['fresh', () => readBuffer(device, src, bytes)], ['pooled', () => rb.read(src, bytes)]] as const) {
+      const ms: number[] = [];
+      for (let r = 0; r < o.warmup + o.reps; r++) {
+        const t0 = performance.now();
+        await read();
+        if (r >= o.warmup) ms.push(performance.now() - t0);
+      }
+      report(`readback-${bytes}-${kind}`, bytes, bytes, ms, 'wall', true);
+    }
+    rb.destroy();
+    src.destroy();
+  }
+
   prof.destroy();
   const info = adapter.info;
   const software = /swiftshader|llvmpipe|lavapipe|software/i.test(`${info.vendor} ${info.architecture} ${info.description}`);
@@ -185,11 +219,12 @@ export function gpuBenchMarkdown(r: GpuBenchResult, header: string): string {
     '|---|---|---|---|---|---|---|---|',
   ];
   for (const c of r.cases) {
-    const pct = c.traffic && Number.isFinite(roof) ? `${((100 * c.effectiveGBs) / roof).toFixed(0)}%` : '';
+    const pct = c.traffic && !c.hostRoundTrip && Number.isFinite(roof) ? `${((100 * c.effectiveGBs) / roof).toFixed(0)}%` : '';
     lines.push(`| ${c.name} | ${c.n.toLocaleString('en-US')} | ${f(c.medianMs)} | ${f(c.p10Ms)} | ${f(c.p90Ms)} | ${c.traffic ? f(c.melemS) : ''} | ${c.traffic ? f(c.effectiveGBs) : ''} | ${pct} |`);
   }
   const d = r.cases.find((c) => c.name.startsWith('dispatch-'));
   if (d) lines.push('', `**Dispatch overhead**: ${f((1000 * d.medianMs) / d.n)} µs per back-to-back dispatch in one pass.`);
   lines.push('', 'Effective GB/s uses a nominal traffic model per primitive (see packages/gpu/src/bench.ts); "% of copy" compares it with the straight copy on the same device.');
+  if (r.cases.some((c) => c.hostRoundTrip)) lines.push('', 'The readback cases are wall-clock host round trips (copy, `mapAsync` and copy-out; fresh makes a staging buffer each time, pooled reuses `Readback`\'s), not GPU kernels, so their "% of copy" is blank.');
   return lines.join('\n');
 }

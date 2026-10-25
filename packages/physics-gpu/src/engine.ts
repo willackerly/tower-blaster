@@ -4,9 +4,9 @@
 // the two engines can be run side by side on the same settings.
 import { type BodyDesc, emptySnapshot, type EngineInfo, inertiaOf, type InputEvent, massOf, type PhysicsEngine, type SceneDesc, type Snapshot } from '@tb/engine-api';
 import { boundingRadius } from '@tb/geom';
-import { assertStorageFits, createDevice, readBuffer } from '@tb/gpu';
+import { assertStorageFits, createDevice, Readback } from '@tb/gpu';
 import { type AvbdParams, DEFAULT_AVBD } from '@tb/physics-ref';
-import { Body, BodyProps, readStruct, Shape, SolverBody, writeStruct } from '@tb/schema';
+import { Body, BodyProps, readField, Shape, SolverBody, writeStruct } from '@tb/schema';
 import { Broadphase } from './broadphase.ts';
 import { Coloring } from './coloring.ts';
 import { Narrowphase } from './narrowphase.ts';
@@ -52,7 +52,7 @@ export class GpuAvbdEngine implements PhysicsEngine {
   private capacity = 0;
   private rmax = 0;
   private cellSize = 1;
-  private parts: { bodies: GPUBuffer; shapes: GPUBuffer; props: GPUBuffer; spheres: GPUBuffer; sweep: GPUBuffer; prev: GPUBuffer; bp: Broadphase; np: Narrowphase; col: Coloring; solver: AvbdSolver } | null = null;
+  private parts: { bodies: GPUBuffer; shapes: GPUBuffer; props: GPUBuffer; spheres: GPUBuffer; sweep: GPUBuffer; prev: GPUBuffer; bp: Broadphase; np: Narrowphase; col: Coloring; solver: AvbdSolver; readback: Readback } | null = null;
 
   constructor(params: Partial<AvbdParams> = {}, private readonly opts: GpuEngineOptions = {}) {
     this.params = { ...DEFAULT_AVBD, ...params };
@@ -103,7 +103,7 @@ export class GpuAvbdEngine implements PhysicsEngine {
       pairs: bp.pairs, total: bp.total, offsets: bp.offsets,
       order: col.order, colorStart: col.colorStart, dispatch: col.dispatch, rowStart: col.rowStart, rowLength: col.rowLength, adjSlot: col.adjSlot,
     });
-    this.parts = { bodies, shapes, props, spheres, sweep, prev, bp, np, col, solver };
+    this.parts = { bodies, shapes, props, spheres, sweep, prev, bp, np, col, solver, readback: new Readback(device) };
     this.n = 0;
     for (const b of scene.bodies) this.add(b);
     this.pending = [...scene.inputs].sort((a, b) => a.step - b.step);
@@ -175,18 +175,19 @@ export class GpuAvbdEngine implements PhysicsEngine {
     if (this.failure) throw new Error(`GpuAvbdEngine: ${this.failure}`);
   }
 
+  /** Reads the n bodies only (not the capacity), through the engine's staging pool. */
   async snapshot(): Promise<Snapshot> {
-    const s = emptySnapshot(this.n);
-    if (!this.device || !this.parts || this.n === 0) return s;
-    const v = new DataView(await readBuffer(this.device, this.parts.bodies));
-    for (let i = 0; i < this.n; i++) {
-      const b = readStruct(v, Body, i);
-      s.pos.set(b.pos!, 3 * i);
-      s.rot.set(b.rot!, 4 * i);
-      s.linVel.set(b.linVel!, 3 * i);
-      s.angVel.set(b.angVel!, 3 * i);
-      s.awake[i] = 1; // no sleeping yet
-    }
+    const n = this.n;
+    const s = emptySnapshot(n);
+    if (!this.device || !this.parts || n === 0) return s;
+    const buf = await this.parts.readback.read(this.parts.bodies, n * Body.size);
+    readField(buf, Body, 'pos', n, s.pos);
+    readField(buf, Body, 'rot', n, s.rot);
+    readField(buf, Body, 'linVel', n, s.linVel);
+    readField(buf, Body, 'angVel', n, s.angVel);
+    // Bit 0 only: bits 8-15 are the tier's.
+    const flags = readField(buf, Body, 'flags', n, new Uint32Array(n));
+    for (let i = 0; i < n; i++) s.awake[i] = flags[i]! & 1;
     return s;
   }
 
@@ -194,7 +195,7 @@ export class GpuAvbdEngine implements PhysicsEngine {
   async diagnostics(): Promise<GpuDiagnostics> {
     const { device, parts } = this;
     if (!device || !parts) throw new Error('init() first');
-    const [t, c] = await Promise.all([readBuffer(device, parts.bp.total), readBuffer(device, parts.col.info)]);
+    const [t, c] = await Promise.all([parts.readback.read(parts.bp.total), parts.readback.read(parts.col.info)]);
     const total = new Uint32Array(t), info = new Uint32Array(c);
     return { pairsRequired: total[5]!, pairsWritten: total[3]!, colors: info[0]!, uncolored: info[1]!, colorOverflow: info[2]! };
   }
@@ -202,7 +203,7 @@ export class GpuAvbdEngine implements PhysicsEngine {
   dispose(): void {
     const p = this.parts;
     if (p) {
-      p.solver.destroy(); p.col.destroy(); p.np.destroy(); p.bp.destroy();
+      p.solver.destroy(); p.col.destroy(); p.np.destroy(); p.bp.destroy(); p.readback.destroy();
       for (const b of [p.bodies, p.shapes, p.props, p.spheres, p.sweep, p.prev]) b.destroy();
     }
     this.parts = null;

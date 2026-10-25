@@ -43,11 +43,11 @@ pnpm bench:suite --engine avbd-gpu --timing-mode throughput --channel chrome
 ### GPU primitives
 
 ```sh
-pnpm bench:gpu --channel chrome         # copy roofline, dispatch overhead, scan, compaction, radix sort
+pnpm bench:gpu --channel chrome         # copy roofline, dispatch overhead, scan, compaction, radix sort, readback latency
 pnpm bench:gpu --quick                  # small sizes, for checking the pipeline
 ```
 
-Writes `results/gpu-<time>.{json,md}`. GPU times come from timestamp queries, and each primitive's effective GB/s is reported as a fraction of a straight copy on the same device.
+Writes `results/gpu-<time>.{json,md}`. GPU times come from timestamp queries, and each primitive's effective GB/s is reported as a fraction of a straight copy on the same device. The readback cases, `readback-<bytes>-fresh` and `readback-<bytes>-pooled` (by default 2 KB, an observation record, and 6.4 MB, a snapshot of 100k bodies), are wall-clock round trips from issuing the copy to holding the bytes on the CPU (`mapAsync` included): fresh makes a staging buffer each time (`readBuffer`), pooled reuses `Readback`'s. They are host latencies, not GPU kernels, so they have no "% of copy".
 
 Results worth keeping go in `docs/benchmarks/` (the first is a CPU baseline from a cloud VM).
 
@@ -72,7 +72,7 @@ Renders any engine live with WebGPU: drag to orbit, right-drag or shift-drag to 
 | `adapter-rapier` | CPU baseline (Rapier WASM) |
 | `bench` | Timing and quality runs, CLI |
 | `runner` | Browser runner page, Playwright orchestrator (`bench:browser`) |
-| `gpu` | GPU primitives (profiler, scan, compaction, radix sort, bandwidth probe) and `bench:gpu` |
+| `gpu` | GPU primitives (profiler, scan, compaction, radix sort, bandwidth probe, pooled readback) and `bench:gpu` |
 | `physics-gpu` | GPU AVBD engine (`GpuAvbdEngine`): broadphase, narrowphase, graph colouring and solver, matched step by step against `physics-ref` |
 | `physics-ref` | Reference AVBD rigid-body solver in double precision: the oracle for the GPU solver (`avbd-ref` in the bench) |
 | `testkit` | Headless Chromium WebGPU sessions for tests |
