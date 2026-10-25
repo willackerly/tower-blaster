@@ -1,7 +1,7 @@
 // Exact reductions and sparse reads (docs/design/reduce.md). Pure TS, no
 // dependencies: everything here is the definition every engine's observer
 // must match bit for bit.
-import type { ShapeDesc, Snapshot, Vec3 } from './index.ts';
+import type { PhysicsEngine, ShapeDesc, Snapshot, Vec3 } from './index.ts';
 
 /** Fixed-point exponent: x is read as the integer quant(x, s) ≈ x·2^s. Integer 0..24; default 16 (2^-16 ≈ 15 µm, 15 µm/s). */
 export type Scale = number;
@@ -91,6 +91,46 @@ export interface ObserverCaps {
   maxRecordWords: number;
   /** Words of the encoded program, edges included. 4096 (16 KB uniform). */
   maxProgramWords: number;
+}
+
+export interface Observation {
+  /** Steps taken when the state was sampled. */
+  step: number;
+  /** Domain: ids 0 .. count − 1. */
+  count: number;
+  /** One per spec output, in order. */
+  out: OutResult[];
+  /** The watch list in force for that step, in its order. */
+  rows: BodyRows;
+}
+
+export interface ObserveOptions {
+  /** u32 tag words per id, fixed for the observer's life (0..maxTagWords). */
+  tagWords: number;
+}
+
+export interface Observer {
+  readonly caps: ObserverCaps;
+  /**
+   * Standing query, evaluated after every step from the next step() on; null stops it.
+   * A bad spec throws (checkSpec) and changes nothing. The first query after observe(),
+   * or after query(null), sets prev := linVel of the current state (ids < count).
+   */
+  query(spec: ReduceSpec | null): void;
+  /** Rows gathered into every observation from the next step() on. Any order, duplicates allowed, ≤ maxWatch. */
+  watch(ids: Int32Array): void;
+  /** Tags of ids first .. first + words.length / tagWords − 1, from the next step() on. Words never set read 0. */
+  setTags(first: number, words: Uint32Array): void;
+  /** ref[slot] := pos of ids < count in the current state (after the last step taken). Other ids, and slots never captured, are ⊥. */
+  captureRef(slot: number): void;
+  /** The observation of the state after `step` steps. Rejects if no query was active for that step, step > stepIndex, or step ≤ stepIndex − keep. */
+  result(step: number): Promise<Observation>;
+}
+
+/** Any engine observed through snapshot() after every step (lag 0). Mirrors the engine's id assignment from init() and its spawns. */
+export interface ObservedEngine extends PhysicsEngine {
+  readonly inner: PhysicsEngine;
+  observe(opts: ObserveOptions): Promise<Observer>;
 }
 
 /** The caps of §2 with the CPU lag. A GPU observer reports lag 1. */
