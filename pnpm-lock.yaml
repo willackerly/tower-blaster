@@ -44,6 +44,9 @@ importers:
       '@tb/testkit':
         specifier: workspace:*
         version: link:packages/testkit
+      '@tb/viewer':
+        specifier: workspace:*
+        version: link:packages/viewer
       '@types/node':
         specifier: 22.20.5
         version: 22.20.5
@@ -99,6 +102,8 @@ importers:
   packages/schema: {}
 
   packages/testkit: {}
+
+  packages/viewer: {}
 
 packages:
 

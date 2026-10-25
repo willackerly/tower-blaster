@@ -11,6 +11,7 @@ function fakeEngine(name: string, clock: { t: number }, cost: (step: number) => 
     info: { name, variant: {}, backend: 'fake' },
     get stepIndex() { return stepIndex; },
     async init() { stepIndex = 0; },
+    push() {},
     step() { clock.t += cost(stepIndex); log.push(name); stepIndex++; },
     snapshot: () => emptySnapshot(0),
     dispose() {},
