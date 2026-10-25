@@ -47,6 +47,14 @@ Writes `results/gpu-<time>.{json,md}`. GPU times come from timestamp queries, an
 
 Results worth keeping go in `docs/benchmarks/` (the first is a CPU baseline from a cloud VM).
 
+## Viewer
+
+```sh
+pnpm viewer                             # then open http://localhost:5173
+```
+
+Renders any engine live with WebGPU: drag to orbit, right-drag or shift-drag to pan, wheel to zoom, click to fire a ball, space to fire at the centre, R to reset, P to pause. Presets sit top right. The URL sets everything, for example `?scenario=S4&param.N=5000&param.F=5&param.H=16&engine=rapier`. The HUD shows physics ms/step (median and p95 over the last 120 steps) against the 7.5 ms budget, plus sim speed: an engine slower than real time runs in slow motion rather than dropping steps.
+
 ## Layout
 
 | Package | Role |
@@ -62,3 +70,4 @@ Results worth keeping go in `docs/benchmarks/` (the first is a CPU baseline from
 | `runner` | Browser runner page, Playwright orchestrator (`bench:browser`) |
 | `gpu` | GPU primitives (profiler, scan, compaction, radix sort, bandwidth probe) and `bench:gpu` |
 | `testkit` | Headless Chromium WebGPU sessions for tests |
+| `viewer` | Interactive WebGPU viewer (`pnpm viewer`) |

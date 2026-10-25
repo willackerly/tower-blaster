@@ -17,12 +17,21 @@ importers:
       '@tb/engine-api':
         specifier: workspace:*
         version: link:packages/engine-api
+      '@tb/game':
+        specifier: workspace:*
+        version: link:packages/game
       '@tb/geom':
         specifier: workspace:*
         version: link:packages/geom
       '@tb/gpu':
         specifier: workspace:*
         version: link:packages/gpu
+      '@tb/keystone':
+        specifier: workspace:*
+        version: link:packages/keystone
+      '@tb/keystone-lab':
+        specifier: workspace:*
+        version: link:packages/keystone-lab
       '@tb/lattice':
         specifier: workspace:*
         version: link:packages/lattice
@@ -41,6 +50,9 @@ importers:
       '@tb/testkit':
         specifier: workspace:*
         version: link:packages/testkit
+      '@tb/viewer':
+        specifier: workspace:*
+        version: link:packages/viewer
       '@types/node':
         specifier: 22.20.5
         version: 22.20.5
@@ -79,9 +91,51 @@ importers:
 
   packages/engine-api: {}
 
+  packages/game:
+    dependencies:
+      '@tb/adapter-rapier':
+        specifier: workspace:*
+        version: link:../adapter-rapier
+      '@tb/engine-api':
+        specifier: workspace:*
+        version: link:../engine-api
+      '@tb/geom':
+        specifier: workspace:*
+        version: link:../geom
+      '@tb/keystone':
+        specifier: workspace:*
+        version: link:../keystone
+      '@tb/schema':
+        specifier: workspace:*
+        version: link:../schema
+      '@tb/viewer':
+        specifier: workspace:*
+        version: link:../viewer
+
   packages/geom: {}
 
   packages/gpu: {}
+
+  packages/keystone:
+    dependencies:
+      '@tb/engine-api':
+        specifier: workspace:*
+        version: link:../engine-api
+      '@tb/geom':
+        specifier: workspace:*
+        version: link:../geom
+
+  packages/keystone-lab:
+    dependencies:
+      '@tb/adapter-rapier':
+        specifier: workspace:*
+        version: link:../adapter-rapier
+      '@tb/engine-api':
+        specifier: workspace:*
+        version: link:../engine-api
+      '@tb/keystone':
+        specifier: workspace:*
+        version: link:../keystone
 
   packages/lattice: {}
 
@@ -94,6 +148,8 @@ importers:
   packages/schema: {}
 
   packages/testkit: {}
+
+  packages/viewer: {}
 
 packages:
 

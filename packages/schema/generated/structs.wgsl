@@ -23,10 +23,12 @@ struct Body {
   shape: u32, // @60 index into the shape table
 }
 
-// What the renderer reads per cube.
-// size 32 B, align 16
+// What the renderer reads per body.
+// size 48 B, align 16
 struct RenderInstance {
   pos: vec3f, // @0
   palette: u32, // @12 colour index, e.g. original tower height
   rot: vec4f, // @16
+  half: vec3f, // @32 box half extents; x is the radius for a sphere
+  shape: u32, // @44 0 box, 1 sphere
 }
