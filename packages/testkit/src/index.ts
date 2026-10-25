@@ -2,6 +2,7 @@
 // without a GPU, Chromium falls back to SwiftShader, which is slow but
 // spec-conformant: good for correctness, useless for timing.
 import { chromium, type Browser, type Page } from 'playwright';
+import { CLOSE_TIMEOUT_MS, closeWithin } from './teardown.ts';
 
 export const WEBGPU_ARGS = ['--enable-unsafe-webgpu', '--enable-features=Vulkan'];
 
@@ -14,7 +15,8 @@ export interface AdapterSummary { vendor: string; architecture: string; descript
 export interface WebGPUSession {
   page: Page;
   adapter: AdapterSummary;
-  close(): Promise<void>;
+  /** Close the browser, waiting at most CLOSE_TIMEOUT_MS: resolves to ['browser'] if it had not exited (see closeWithin). */
+  close(): Promise<string[]>;
 }
 
 export async function openWebGPU(extraArgs: string[] = [], opts: { channel?: string; headless?: boolean } = {}): Promise<WebGPUSession | null> {
@@ -46,7 +48,7 @@ export async function openWebGPU(extraArgs: string[] = [], opts: { channel?: str
     if (requireWebGPU()) throw new Error('WebGPU adapter unavailable in Chromium');
     return null;
   }
-  return { page, adapter, close: () => browser.close() };
+  return { page, adapter, close: () => closeWithin([['browser', () => browser.close()]], CLOSE_TIMEOUT_MS) };
 }
 
 /** CI sets REQUIRE_WEBGPU=1 so a missing adapter fails instead of skipping. */
@@ -71,3 +73,4 @@ export async function loadBundle(page: Page, entry: string, globalName = '__tb_t
 export * from './contract.ts';
 export * from './collapse.ts';
 export * from './observe.ts';
+export * from './teardown.ts';
