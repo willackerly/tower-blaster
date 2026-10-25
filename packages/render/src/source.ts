@@ -6,7 +6,7 @@
 //   renderer-owned buffers.
 // - GpuBodySource: GPU engines. Body[] and Shape[] are the engine's own
 //   buffers; the only per-step work is a GPU copy into prev before each step.
-import { emptySnapshot, type BodyDesc, type GpuBodies, type Snapshot } from '@tb/engine-api';
+import { emptySnapshot, TAG_BALL, type BodyDesc, type GpuBodies, type Snapshot } from '@tb/engine-api';
 import { Body, FLAG_AWAKE, Shape, TIER } from '@tb/schema';
 import { lookOf, lookRange, type LookRange } from './looks.ts';
 
@@ -19,6 +19,15 @@ export interface BodySource {
   readonly count: number;
   /** Bumped whenever a buffer above is replaced, so users rebind. */
   readonly version: number;
+  /** Slots of balls (TAG_BALL), in slot order: they carry the ball lights and trails. */
+  readonly balls?: readonly number[];
+}
+
+/** Ball slots among descs[from..]. */
+function ballSlots(descs: BodyDesc[], from: number, to: number): number[] {
+  const out: number[] = [];
+  for (let i = from; i < to; i++) if (descs[i]!.tag === TAG_BALL) out.push(i);
+  return out;
 }
 
 const BODY_WORDS = Body.size / 4;
@@ -81,6 +90,7 @@ export class SnapshotSource implements BodySource {
   capacity = 0;
   count = 0;
   version = 0;
+  balls: number[] = [];
   private described = 0;
   private range: LookRange | null = null;
   private scratch: ArrayBuffer | undefined;
@@ -97,6 +107,7 @@ export class SnapshotSource implements BodySource {
     this.range = lookRange(initial);
     this.count = 0;
     this.described = 0;
+    this.balls = [];
   }
 
   private allocate(capacity: number): void {
@@ -108,6 +119,7 @@ export class SnapshotSource implements BodySource {
     this.looks = make(capacity * 4, 'snapshot looks');
     this.capacity = capacity;
     this.described = 0;
+    this.balls = [];
     this.version++;
   }
 
@@ -122,6 +134,7 @@ export class SnapshotSource implements BodySource {
       const d = descs.slice(0, s.count);
       q.writeBuffer(this.shapes, this.described * Shape.size, packShapes(d, this.described));
       q.writeBuffer(this.looks, this.described * 4, packLooks(d, this.described, this.range));
+      this.balls.push(...ballSlots(descs, this.described, s.count));
     }
     this.scratch = packBodies(s, descs, this.scratch);
     const bytes = s.count * Body.size;
@@ -153,6 +166,7 @@ export class GpuBodySource implements BodySource {
   readonly looks: GPUBuffer;
   readonly capacity: number;
   readonly version = 1;
+  readonly balls: number[] = [];
   private described = 0;
   private readonly range: LookRange;
 
@@ -183,6 +197,7 @@ export class GpuBodySource implements BodySource {
     const n = Math.min(descs.length, this.capacity);
     if (n <= this.described) return;
     this.gpu.device.queue.writeBuffer(this.looks, this.described * 4, packLooks(descs.slice(0, n), this.described, this.range));
+    this.balls.push(...ballSlots(descs, this.described, n));
     this.described = n;
   }
 

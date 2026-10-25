@@ -9,7 +9,7 @@ import { Body, RenderRecord, Shape, TIER, readStruct } from '@tb/schema';
 import {
   agx, AGX_WGSL, fromHalf, FX_WORDS, packFx, toHalf, bevelNormal, BEVEL_WGSL, oklabToLinear, OKLAB_WGSL, Post,
   Culler, cullReference, GpuBodySource, invert, listMatches, lookAt, makeGpuBodies, multiply, perspective, Renderer, SEGMENTS, SnapshotSource, transform,
-  translation, BOX_VERTS, SPHERE_VERTS, SUN, Sparks, CTL, MAX_EVENTS, unpackImpacts, unpackSparks, spawnReference, stepReference, type Impact, type BodySource, type CullFrame, type FrameParams, type V3,
+  translation, BOX_VERTS, SPHERE_VERTS, SUN, Sparks, CTL, MAX_EVENTS, flashSlot, FLASHES, MAX_BALLS, TRAIL, unpackImpacts, unpackSparks, spawnReference, stepReference, type Impact, type BodySource, type CullFrame, type FrameParams, type V3,
 } from '../src/index.ts';
 
 function rng(seed: number) {
@@ -1023,4 +1023,156 @@ export async function sparkDraw() {
   rend.destroy();
   device.destroy();
   return { near, stray, behindWall, maxWall, wallPixels: ids.reduce((s, v) => s + (v ? 1 : 0), 0), error: err?.message ?? null };
+}
+
+// ---------------------------------------------------------------- lights
+
+/** Mean 8-bit luma over the pixels whose ID is slot + 1. */
+function meanOver(px: { data: number[]; bytesPerRow: number; bgra: boolean }, ids: Uint32Array, id: number) {
+  let s = 0, n = 0;
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+    if (ids[y * W + x] !== id) continue;
+    const o = y * px.bytesPerRow + 4 * x;
+    s += 0.2126 * px.data[o + (px.bgra ? 2 : 0)]! + 0.7152 * px.data[o + 1]! + 0.0722 * px.data[o + (px.bgra ? 0 : 2)]!;
+    n++;
+  }
+  return { mean: n ? s / n : NaN, n };
+}
+
+/** The ball light: a cube 2 m from the ball brightens, one 20 m away does not change. */
+export async function ballLight() {
+  const { device } = await createDevice({ timestamps: false });
+  device.pushErrorScope('validation');
+  const descs = [ball([0, 1, 0], 0.3), box([2, 1, 0], [0.5, 0.5, 0.5], [0, 0, 0, 1]), box([0, 1, -20], [2, 2, 2], [0, 0, 0, 1])];
+  const src = new SnapshotSource(device);
+  src.reset(descs);
+  src.update(snapshotOf(descs), descs);
+  const rend = new Renderer(device, { size: [W, H] });
+  rend.look = { ...rend.look, bloomMix: 0, fogDensity: 0 };
+  rend.toggles.trail = false;
+  rend.setSource(src);
+  const f: FrameParams = { ...camera([1, 3, 7], [1, 1, -6]), groundY: 0, time: 1 };
+  const ids = (await rend.renderIds(f)).ids;
+  const on = (await rend.render(f, true, true))!.pixels!;
+  rend.lights.config = { ...rend.lights.config, ballIntensity: 0 };
+  const off = (await rend.render(f, true, true))!.pixels!;
+  const near = [meanOver(on, ids, 2), meanOver(off, ids, 2)], far = [meanOver(on, ids, 3), meanOver(off, ids, 3)];
+  // Ground pixels within 1.5 m of the ball's foot get brighter too.
+  let groundOn = 0, groundOff = 0, gn = 0;
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+    if (ids[y * W + x]) continue;
+    const { o, d } = rayAt(f, x, y);
+    if (d[1] >= 0) continue;
+    const t = -o[1] / d[1], gx = o[0] + d[0] * t, gz = o[2] + d[2] * t;
+    if (Math.hypot(gx, gz) > 1.5) continue;
+    const i = y * on.bytesPerRow + 4 * x;
+    groundOn += on.data[i + 1]!; groundOff += off.data[i + 1]!; gn++;
+  }
+  const err = await device.popErrorScope();
+  rend.destroy();
+  device.destroy();
+  return { near, far, ground: [groundOn / gn, groundOff / gn], gn, balls: src.balls, error: err?.message ?? null };
+}
+
+/** Flash lights against the CPU slot rule: the strongest bid per slot wins, then decays; a weaker later bid does not replace it. */
+export async function flashLights() {
+  const { device } = await createDevice({ timestamps: false });
+  device.pushErrorScope('validation');
+  const src = new SnapshotSource(device);
+  const rend = new Renderer(device, { size: [W, H] }, { sparkPool: 1024 });
+  rend.setSource(src);
+  const r = rng(91);
+  const bursts = Array.from({ length: 40 }, () => ({ pos: [(r() - 0.5) * 40, r() * 6, (r() - 0.5) * 40] as V3, dir: [0, 1, 0] as V3, strength: 1 + r() * 20 }));
+  for (const b of bursts) rend.burst(b.pos, b.dir, b.strength);
+  const cfg = rend.lights.config;
+  const f = (time: number): FrameParams => ({ ...camera([0, 10, 30], [0, 0, 0]), groundY: 0, time });
+  await rend.render(f(5));
+  const flashes = new Float32Array(await readBuffer(device, rend.lights.flashes));
+  const lights = new Float32Array(await readBuffer(device, rend.lights.lights));
+  // CPU rule.
+  const q = (s: number) => Math.floor(Math.fround(Math.min(1, Math.max(0, Math.fround(s) / cfg.flashFull)) * 4095));
+  const best = new Map<number, number>();
+  bursts.forEach((b, i) => {
+    if (!q(b.strength)) return;
+    const k = flashSlot(b.pos), key = q(b.strength) * 1048576 + i; // as the GPU's u32 (q << 20 | i), without JS's signed shift
+    if (key > (best.get(k) ?? -1)) best.set(k, key);
+  });
+  let posErr = 0, iErr = 0, slotsLit = 0, wrongLit = 0;
+  for (let k = 0; k < FLASHES; k++) {
+    const key = best.get(k), i0 = flashes[k * 8 + 4]!;
+    if (key === undefined) { if (i0 !== 0) wrongLit++; continue; }
+    slotsLit++;
+    const b = bursts[key % 1048576]!;
+    posErr = Math.max(posErr, Math.abs(flashes[k * 8]! - b.pos[0]), Math.abs(flashes[k * 8 + 1]! - (b.pos[1] + 0.5)), Math.abs(flashes[k * 8 + 2]! - b.pos[2]));
+    iErr = Math.max(iErr, Math.abs(i0 - (Math.floor(key / 1048576) / 4095) * cfg.flashIntensity), Math.abs(lights[(MAX_BALLS + k) * 8 + 7]! - i0));
+  }
+  // One tau later: a weak bid in a lit slot does not replace it; the light has decayed by e.
+  const [k0, key0] = [...best.entries()][0]!;
+  const lit = bursts[key0 % 1048576]!;
+  rend.burst(lit.pos, [0, 1, 0], 1.2); // weaker than what is left
+  await rend.render(f(5 + cfg.flashTau));
+  const flashes2 = new Float32Array(await readBuffer(device, rend.lights.flashes));
+  const lights2 = new Float32Array(await readBuffer(device, rend.lights.lights));
+  const kept = flashes2[k0 * 8 + 3] === flashes[k0 * 8 + 3] && flashes2[k0 * 8 + 4] === flashes[k0 * 8 + 4];
+  const decay = lights2[(MAX_BALLS + k0) * 8 + 7]! / flashes[k0 * 8 + 4]!;
+  // A strong bid replaces it.
+  rend.burst(lit.pos, [0, 1, 0], 100);
+  await rend.render(f(5 + 2 * cfg.flashTau));
+  const flashes3 = new Float32Array(await readBuffer(device, rend.lights.flashes));
+  const replaced = flashes3[k0 * 8 + 3] === Math.fround(5 + 2 * cfg.flashTau) && Math.abs(flashes3[k0 * 8 + 4]! - cfg.flashIntensity) < 1e-5;
+  const err = await device.popErrorScope();
+  rend.destroy();
+  device.destroy();
+  return { slotsLit, wrongLit, posErr, iErr, kept, decay, replaced, error: err?.message ?? null };
+}
+
+/** The ball trail: samples newest first in time order at the drawn positions; the ribbon lights the path behind the ball, not ahead. */
+export async function ballTrail(frames: number) {
+  const { device } = await createDevice({ timestamps: false });
+  device.pushErrorScope('validation');
+  const at = (i: number): V3 => [-3 + i * 0.4, 1.5, 0];
+  const descs = [ball(at(0), 0.25)];
+  const src = new SnapshotSource(device);
+  src.reset(descs);
+  const rend = new Renderer(device, { size: [W, H] }, { sparkPool: 1024 });
+  rend.look = { ...rend.look, bloomMix: 0, fogDensity: 0 };
+  rend.lights.config = { ...rend.lights.config, ballIntensity: 0 };
+  rend.setSource(src);
+  const f = (i: number): FrameParams => ({ ...camera([0, 2, 8], [0, 1.5, 0]), groundY: -2, time: 1 + i / 60, alpha: 1 });
+  for (let i = 0; i < frames; i++) {
+    descs[0] = { ...descs[0]!, pos: at(i) };
+    src.update(snapshotOf(descs), descs);
+    await rend.render(f(i));
+  }
+  const trail = new Float32Array(await readBuffer(device, rend.lights.trail));
+  const head = (rend.lights.nextFrame + TRAIL - 1) % TRAIL;
+  let ordered = true, posErr = 0, used = 0;
+  for (let j = 0; j < Math.min(frames, TRAIL); j++) {
+    const s = (head + TRAIL - j) % TRAIL, i = frames - 1 - j;
+    const t = trail[s * 4 + 3]!;
+    if (Math.abs(t - Math.fround(1 + i / 60)) > 1e-5) ordered = false;
+    posErr = Math.max(posErr, ...at(i).map((v, k) => Math.abs(trail[s * 4 + k]! - v)));
+    used++;
+  }
+  // The image: the last frame again with and without the ribbon.
+  const last = f(frames - 1);
+  const withTrail = (await rend.render(last, true, true))!.pixels!;
+  rend.toggles.trail = false;
+  const without = (await rend.render(last, true, true))!.pixels!;
+  const ids = (await rend.renderIds(last)).ids;
+  const project = (p: V3) => { const c = transform(last.viewProj, p); return [((c[0] / c[3]) * 0.5 + 0.5) * W, (0.5 - (c[1] / c[3]) * 0.5) * H] as const; };
+  const [bx, by] = project(at(frames - 1)), [tx] = project(at(frames - 12)), [mx] = project(at(frames - 6));
+  let behind = 0, ahead = 0, farBehind = 0;
+  for (let y = Math.floor(by - 3); y <= by + 3; y++) for (let x = 0; x < W; x++) {
+    if (ids[y * W + x]) continue;
+    const o = y * withTrail.bytesPerRow + 4 * x;
+    const d = Math.max(...[0, 1, 2].map((k) => withTrail.data[o + k]! - without.data[o + k]!));
+    if (x > tx && x < bx - 4) behind += Math.max(d, 0);
+    if (x > tx && x < mx) farBehind += Math.max(d, 0); // 6 to 12 frames back: the whole ribbon is drawn, not just its newest piece
+    if (x > bx + 6) ahead += Math.max(d, 0);
+  }
+  const err = await device.popErrorScope();
+  rend.destroy();
+  device.destroy();
+  return { ordered, posErr, used, behind, farBehind, ahead, error: err?.message ?? null };
 }

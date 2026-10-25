@@ -245,6 +245,46 @@ describe('sparks', () => {
   });
 });
 
+describe('lights', () => {
+  it('a ball lights a cube 2 m away and the floor under it, not a cube 20 m away', async (ctx) => {
+    if (!gpu) return ctx.skip();
+    const r = await call('ballLight');
+    expect(r.error).toBeNull();
+    expect(r.balls).toEqual([0]);
+    expect(r.near[0]!.n).toBeGreaterThan(100);
+    expect(r.near[0]!.mean).toBeGreaterThan(r.near[1]!.mean + 2); // measured +3.7 (its lit face is mostly turned from the camera)
+    expect(r.gn).toBeGreaterThan(100);
+    expect(r.ground[0]!).toBeGreaterThan(r.ground[1]! + 8); // floor around its foot: measured +14.9
+    expect(r.far[0]!.n).toBeGreaterThan(100);
+    expect(r.far[0]!.mean).toBe(r.far[1]!.mean); // outside the 12 m radius: identical
+  });
+
+  it('flash lights follow the CPU slot rule, decay with tau, and only a brighter impact replaces one', async (ctx) => {
+    if (!gpu) return ctx.skip();
+    const r = await call('flashLights');
+    expect(r.error).toBeNull();
+    expect(r.slotsLit).toBe(8); // 40 impacts over 8 slots
+    expect(r.wrongLit).toBe(0);
+    expect(r.posErr).toBeLessThan(1e-5); // the winner's position (plus 0.5 m along its normal)
+    expect(r.iErr).toBeLessThan(1e-5); // and intensity, also in the light list
+    expect(r.kept).toBe(true); // a weak impact one tau later does not replace it
+    expect(r.decay).toBeCloseTo(Math.exp(-1), 5);
+    expect(r.replaced).toBe(true); // a strong one does
+  });
+
+  it('the ball trail keeps its samples in order at the drawn positions and lights the path behind the ball', async (ctx) => {
+    if (!gpu) return ctx.skip();
+    const r = await call('ballTrail', 20);
+    expect(r.error).toBeNull();
+    expect(r.used).toBe(20);
+    expect(r.ordered).toBe(true);
+    expect(r.posErr).toBeLessThan(1e-5);
+    expect(r.behind).toBeGreaterThan(1000); // measured 25k
+    expect(r.farBehind).toBeGreaterThan(1000); // 6-12 frames back, faded: measured 14k (a ribbon reading the ring forwards draws only its newest piece)
+    expect(r.ahead).toBe(0);
+  });
+});
+
 describe('GPU cull and compaction', () => {
   it('lists, counts and records match the CPU reference', async (ctx) => {
     if (!gpu) return ctx.skip();

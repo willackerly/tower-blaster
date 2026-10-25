@@ -169,7 +169,7 @@ export async function runRenderBench(opts: Partial<RenderBenchOptions> = {}): Pr
       const rend = new Renderer(device, { size: [o.width, o.height] }, { ...variantOptions(variant), sparkPool: o.sparkPool });
       rend.setSource(src);
       rend.setShadowBounds(w.center, w.radius);
-      rend.toggles = { shadow: variant !== 'no-shadow', post: variant !== 'no-post', sparks: variant !== 'no-sparks' };
+      rend.toggles = { shadow: variant !== 'no-shadow', post: variant !== 'no-post', sparks: variant !== 'no-sparks', trail: true };
       return rend;
     });
     for (const rend of rends) for (let i = 0; i < o.warmup; i++) await rend.render(f);

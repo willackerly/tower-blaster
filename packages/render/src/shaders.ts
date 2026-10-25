@@ -6,6 +6,7 @@ import { defineStruct, RenderRecord, Spark, wgslStruct } from '@tb/schema';
 import { FX_EMISSIVE_MAX, FX_WGSL } from './fx.ts';
 import { BEVEL_WGSL, OKLAB_WGSL } from './look.ts';
 import { SPARK_COMMON } from './sparks.ts';
+import { LIGHTS, MAX_BALLS, TRAIL } from './lights.ts';
 
 export const SHADOW_SIZE = 2048;
 export const SPHERE_SEG = 24;
@@ -36,7 +37,7 @@ export const Frame = defineStruct('Frame', [
   ['rimDir', 'vec3f'], ['ballEmissive', 'f32'],
   ['ball', 'vec3f'], ['pad0', 'f32'],
   ['shadowParams', 'vec4f', 'normal offset m, depth bias (light depth units), texel m, unused'],
-  ['viewport', 'vec2f', 'pixels'], ['dt', 'f32', 'seconds since the last scene frame'], ['pad1', 'f32'],
+  ['viewport', 'vec2f', 'pixels'], ['dt', 'f32', 'seconds since the last scene frame'], ['trailHead', 'u32', 'newest ball trail sample'],
   ['ramp0', 'vec4f', 'OKLab'], ['ramp1', 'vec4f'], ['ramp2', 'vec4f'], ['ramp3', 'vec4f'], ['ramp4', 'vec4f'],
 ], 'Per-frame uniforms of the scene pass.');
 
@@ -54,6 +55,8 @@ ${wgslStruct(Frame)}
 @group(0) @binding(6) var<storage, read> overlay: array<vec4f>;     // world x, y, z, radius
 @group(0) @binding(7) var<storage, read> overlayColour: array<u32>; // sRGB rgb8 + emissive8
 @group(0) @binding(8) var<storage, read> sparks: array<Spark>;      // sparks.ts
+@group(0) @binding(9) var<storage, read> lights: array<vec4f, ${LIGHTS * 2}>; // lights.ts: position + radius, colour * intensity
+@group(0) @binding(10) var<storage, read> trail: array<vec4f>;      // lights.ts: world xyz, time
 
 // Which list a pipeline draws: SEG * capacity is its first entry.
 override SEG: u32 = 0u;
@@ -258,7 +261,29 @@ fn shade(base: vec3f, rel: vec3f, n: vec3f, a: f32, ac: f32, coat: f32) -> vec3f
   // Stand-in for ambient occlusion until the occupancy volume (R5): darker near the floor.
   let contact = 0.5 + 0.5 * smoothstep(0.0, 1.5, rel.y + fr.eye.y - fr.groundY);
   let amb = mix(fr.ambGround, fr.ambSky, n.y * 0.5 + 0.5) * contact;
-  return base * (amb + fr.sunColor * sh) + fr.sunColor * spec * sh + reflections * contact;
+  return base * (amb + fr.sunColor * sh) + fr.sunColor * spec * sh + reflections * contact + pointLights(base, rel, n, V, a);
+}
+
+// Ball and flash lights (lights.ts): diffuse plus the base specular lobe,
+// inverse-square falloff windowed to zero at the radius, no shadows.
+fn pointLights(base: vec3f, rel: vec3f, n: vec3f, V: vec3f, a: f32) -> vec3f {
+  var c = vec3f(0.0);
+  for (var k = 0u; k < ${LIGHTS}u; k++) {
+    let col = lights[2u * k + 1u];
+    if (col.w <= 0.0) { continue; }
+    let pl = lights[2u * k];
+    let d = pl.xyz - rel;
+    let r2 = dot(d, d);
+    let x = r2 / (pl.w * pl.w);
+    if (x >= 1.0) { continue; }
+    let L = d * inverseSqrt(max(r2, 1e-8));
+    let NoL = max(dot(n, L), 0.0);
+    let w = (1.0 - x) * (1.0 - x);
+    let H = normalize(L + V);
+    let spec = ggx(max(dot(n, H), 0.0), a) * smithVis(max(dot(n, V), 1e-4), NoL, a) * 0.04 * PI;
+    c += col.rgb * col.w * w / (r2 + 1.0) * NoL * (base + spec);
+  }
+  return c;
 }
 
 // Kaplanyan-Hoffman specular antialiasing: widen alpha by the normal's
@@ -479,5 +504,47 @@ const SPARK_HALF_WIDTH = 1.25;
   let across = 1.0 - smoothstep(0.35, 1.0, abs(o.uv.y));
   let along = smoothstep(0.0, 0.8, o.uv.x); // bright head, fading tail
   return vec4f(o.colour * across * along, 0.0);
+}
+
+// ---------------------------------------------------------------- ball trail
+
+// A camera-facing ribbon through each ball's last TRAIL positions, fading
+// over TRAIL_LIFE seconds; broken where the ball jumped (new ball, reset).
+const TRAIL_LIFE = 0.45;
+const TRAIL_WIDTH = 0.22;
+
+struct TrailOut {
+  @builtin(position) clip: vec4f,
+  @location(0) across: f32,
+  @location(1) fade: f32,
+}
+
+@vertex fn vsTrail(@builtin(vertex_index) vi: u32, @builtin(instance_index) ball: u32) -> TrailOut {
+  var o: TrailOut;
+  o.clip = vec4f(0.0, 0.0, 2.0, 1.0);
+  o.across = 0.0;
+  o.fade = 0.0;
+  let j = vi / 6u;
+  let end = array<u32, 6>(0u, 0u, 1u, 0u, 1u, 1u)[vi % 6u];
+  let side = array<f32, 6>(-1.0, 1.0, 1.0, -1.0, 1.0, -1.0)[vi % 6u];
+  let base = ball * ${TRAIL}u;
+  let a = trail[base + (fr.trailHead + ${TRAIL}u - j) % ${TRAIL}u];
+  let b = trail[base + (fr.trailHead + ${TRAIL * 2}u - j - 1u) % ${TRAIL}u];
+  if (a.w < 0.0 || b.w < 0.0 || b.w > a.w || fr.time - b.w > TRAIL_LIFE || distance(a.xyz, b.xyz) > 4.0) { return o; }
+  let p = select(a, b, end == 1u);
+  let rel = p.xyz - fr.eye;
+  let along = normalize(a.xyz - b.xyz + vec3f(1e-6, 0.0, 0.0));
+  let sideV = normalize(cross(along, rel) + vec3f(0.0, 1e-6, 0.0));
+  let age = clamp((fr.time - p.w) / TRAIL_LIFE, 0.0, 1.0);
+  let width = TRAIL_WIDTH * (1.0 - age);
+  o.clip = fr.viewProj * vec4f(rel + sideV * side * width, 1.0);
+  o.across = side;
+  o.fade = (1.0 - age) * (1.0 - age);
+  return o;
+}
+
+@fragment fn fsTrail(o: TrailOut) -> @location(0) vec4f {
+  let soft = 1.0 - smoothstep(0.2, 1.0, abs(o.across));
+  return vec4f(fr.ball * fr.ballEmissive * 0.6 * o.fade * soft, 0.0);
 }
 `;
