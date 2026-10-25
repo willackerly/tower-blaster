@@ -300,9 +300,26 @@ describe('drawing', () => {
       expect(r.covered).toBeGreaterThan(r.pixels * 0.3);
       expect(r.differ).toBeLessThan(r.pixels * 0.001); // measured 13 and 6 of 800k
       expect(r.coverDiff).toBe(0);
-      expect(r.edgeDiff).toBeLessThan(r.texels * 0.001); // measured 0 and 226 of 863k
-      expect(r.maxDiff).toBeLessThan(1e-4); // measured 5.2e-5 of the 40 m light range: 2 mm
+      expect(r.over1cm).toBeLessThan(r.texels * 0.001); // nearer-surface disagreements; measured 0 and 1 of 747k, 674k
+      expect(r.over1mm).toBeLessThan(r.texels * 0.01); // interpolation; measured 1946 and 2393, max 7 mm
     }
+  });
+
+  it('shadows fall where the analytic sun rays say, without acne or light leaks', async (ctx) => {
+    if (!gpu) return ctx.skip();
+    for (const kind of ['float', 'contact', 'grazing'] as const) {
+      const r = await call('shadowCheck', kind);
+      expect(r.error).toBeNull();
+      expect(r.used).toBeGreaterThan(3000);
+      expect(r.wrong).toBe(0); // away from shadow edges and silhouettes, every pixel is lit or shadowed as the rays say
+      expect(r.maxStep).toBeLessThanOrEqual(3); // no acne: measured 1.9, 2, 1 (12 on the grazing face without bias)
+      if (kind === 'grazing') { expect(r.NoL).toBeCloseTo(0.17, 6); continue; }
+      expect(r.iou).toBeGreaterThan(0.95); // measured 0.994 (float), 0.990 (contact)
+      expect(r.centroidErr).toBeLessThan(0.02); // metres; measured 5.6 mm, 3.1 mm
+      expect(r.leak).toBe(0); // no light under a resting cube (a 30 cm bias leaks 6 cm)
+    }
+    // The close-up sees a small part of the arena, so its map is the finest.
+    expect((await call('shadowCheck', 'contact')).window).toBe(4);
   });
 
   it('bench:render completes and reports every case (numbers discarded)', async (ctx) => {

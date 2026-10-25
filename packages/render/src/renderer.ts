@@ -7,6 +7,7 @@
 import { writeStruct } from '@tb/schema';
 import type { GpuProfiler } from '@tb/gpu';
 import { Culler, SEG, type CullFrame } from './cull.ts';
+import { fitShadow, frustumCorners, type Arena, type ShadowFit, type ShadowFitState } from './shadowfit.ts';
 import { FX_WORDS, packFx, tintWord, toHalf, type FxOptions, FX_ANCHOR } from './fx.ts';
 import { CANDY_NIGHT, linearToOklab, srgbToLinear, type LookParams } from './look.ts';
 import { invert, lookAt, multiply, normalize, type Mat4, type V3 } from './math.ts';
@@ -26,30 +27,11 @@ const OVERLAY_DEFAULT = 0x40ffffff;
 
 export const SUN: V3 = normalize([0.55, 0.75, -0.3]);
 
-export function ortho(l: number, r: number, b: number, t: number, n: number, f: number): Mat4 {
-  const m = new Float32Array(16);
-  m[0] = 2 / (r - l);
-  m[5] = 2 / (t - b);
-  m[10] = 1 / (n - f);
-  m[12] = -(r + l) / (r - l);
-  m[13] = -(t + b) / (t - b);
-  m[14] = n / (n - f);
-  m[15] = 1;
-  return m;
-}
-
 export function translation(t: V3): Mat4 {
   const m = new Float32Array(16);
   m[0] = m[5] = m[10] = m[15] = 1;
   m[12] = t[0]; m[13] = t[1]; m[14] = t[2];
   return m;
-}
-
-/** Sun view-projection covering a sphere around the scene. */
-export function lightMatrix(center: V3, radius: number, sun: V3 = SUN): Mat4 {
-  const r = Math.max(radius, 4);
-  const eye: V3 = [center[0] + sun[0] * 2 * r, center[1] + sun[1] * 2 * r, center[2] + sun[2] * 2 * r];
-  return multiply(ortho(-r, r, -r, r, 0.1, 4 * r), lookAt(eye, center, Math.abs(sun[1]) > 0.99 ? [0, 0, 1] : [0, 1, 0]));
 }
 
 export interface FrameParams {
@@ -110,7 +92,10 @@ export class Renderer {
   private depth: GPUTexture | null = null;
   private idTex: GPUTexture | null = null;
   private idDepth: GPUTexture | null = null;
-  private light: Mat4 = lightMatrix([0, 0, 0], 50);
+  private arena: Arena = { center: [0, 0, 0], half: [50, 50, 50], radius: 50 };
+  private readonly shadowState: ShadowFitState = { level: -1 };
+  /** The shadow window of the last frame (tests, debug overlays). */
+  shadowFit: ShadowFit | null = null;
   private source: BodySource;
   private culler: Culler | null = null;
   private cullKey = '';
@@ -216,9 +201,14 @@ export class Renderer {
     this.cullKey = '';
   }
 
-  /** Fit the shadow map to the scene; call when the scene changes. */
-  setShadowBounds(center: V3, radius: number): void {
-    this.light = lightMatrix(center, radius);
+  /**
+   * Where shadows can fall: a sphere around center, optionally clipped by a
+   * box of half extents `half`. Each frame the shadow map covers only the
+   * part of it the camera sees (shadowfit.ts).
+   */
+  setShadowBounds(center: V3, radius: number, half: V3 = [radius, radius, radius]): void {
+    this.arena = { center, half, radius };
+    this.shadowState.level = -1;
   }
 
   /**
@@ -319,7 +309,11 @@ export class Renderer {
   private writeFrame(f: FrameParams): CullFrame {
     const toWorld = translation(f.eye);
     const viewProj = multiply(f.viewProj, toWorld);
-    const lightViewProj = multiply(this.light, toWorld);
+    const { center, radius = Math.hypot(...this.arena.half) } = this.arena;
+    // Nothing past the far side of the arena receives a shadow.
+    const reach = Math.hypot(f.eye[0] - center[0], f.eye[1] - center[1], f.eye[2] - center[2]) + radius;
+    const fit = (this.shadowFit = fitShadow(this.arena, SUN, frustumCorners(invert(f.viewProj), f.eye, reach), SHADOW_SIZE, this.shadowState, f.groundY));
+    const lightViewProj = multiply(fit.matrix, toWorld);
     const focus = f.focus ?? [f.eye[0], f.eye[1], f.eye[2] - 1];
     this.lastTime = f.time ?? 0;
     writeStruct(this.frameData, Frame, 0, {
@@ -327,6 +321,8 @@ export class Renderer {
       eye: f.eye, time: f.time ?? 0, sun: SUN, groundY: f.groundY,
       focus: [focus[0] - f.eye[0], focus[1] - f.eye[1], focus[2] - f.eye[2]], capacity: this.culler?.capacity ?? 0,
       ...lookUniforms(this.look),
+      // Bias, all on the receiver: normal offset of 2 texels, depth bias of 1 texel + 1 cm.
+      shadowParams: [2 * fit.texel, (fit.texel + 0.01) / fit.depthRange, fit.texel, 0],
     });
     this.device.queue.writeBuffer(this.frameBuf, 0, this.frameData);
     return { viewProj, lightViewProj, eye: f.eye, alpha: f.alpha ?? 1, noCull: f.noCull ?? false };

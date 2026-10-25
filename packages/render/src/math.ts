@@ -61,3 +61,15 @@ export function invert(m: Mat4): Mat4 {
 export function transform(m: Mat4, p: V3, w = 1): [number, number, number, number] {
   return [0, 1, 2, 3].map((r) => m[r]! * p[0] + m[4 + r]! * p[1] + m[8 + r]! * p[2] + m[12 + r]! * w) as [number, number, number, number];
 }
+
+export function ortho(l: number, r: number, b: number, t: number, n: number, f: number): Mat4 {
+  const m = new Float32Array(16);
+  m[0] = 2 / (r - l);
+  m[5] = 2 / (t - b);
+  m[10] = 1 / (n - f);
+  m[12] = -(r + l) / (r - l);
+  m[13] = -(t + b) / (t - b);
+  m[14] = n / (n - f);
+  m[15] = 1;
+  return m;
+}

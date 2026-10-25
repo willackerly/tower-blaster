@@ -34,6 +34,7 @@ export const Frame = defineStruct('Frame', [
   ['rimColor', 'vec3f'], ['hueStep', 'f32', 'radians'],
   ['rimDir', 'vec3f'], ['ballEmissive', 'f32'],
   ['ball', 'vec3f'], ['pad0', 'f32'],
+  ['shadowParams', 'vec4f', 'normal offset m, depth bias (light depth units), texel m, unused'],
   ['ramp0', 'vec4f', 'OKLab'], ['ramp1', 'vec4f'], ['ramp2', 'vec4f'], ['ramp3', 'vec4f'], ['ramp4', 'vec4f'],
 ], 'Per-frame uniforms of the scene pass.');
 
@@ -165,9 +166,9 @@ fn place(r: RenderRecord, corner: vec3f) -> VOut {
 // ---------------------------------------------------------------- lighting
 
 fn shadow(rel: vec3f, n: vec3f) -> f32 {
-  let lc = fr.lightViewProj * vec4f(rel + n * 0.04, 1.0);
+  let lc = fr.lightViewProj * vec4f(rel + n * fr.shadowParams.x, 1.0);
   let uv = lc.xy * vec2f(0.5, -0.5) + 0.5;
-  let depth = lc.z - 0.0015;
+  let depth = lc.z - fr.shadowParams.y;
   let texel = 1.0 / ${SHADOW_SIZE}.0;
   var sum = 0.0;
   for (var y = -1; y <= 1; y++) {

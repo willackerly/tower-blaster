@@ -9,7 +9,7 @@ import { Body, RenderRecord, Shape, TIER, readStruct } from '@tb/schema';
 import {
   agx, AGX_WGSL, fromHalf, FX_WORDS, packFx, toHalf, bevelNormal, BEVEL_WGSL, oklabToLinear, OKLAB_WGSL, Post,
   Culler, cullReference, GpuBodySource, invert, listMatches, lookAt, makeGpuBodies, multiply, perspective, Renderer, SEGMENTS, SnapshotSource, transform,
-  translation, BOX_VERTS, SPHERE_VERTS, type BodySource, type CullFrame, type FrameParams, type V3,
+  translation, BOX_VERTS, SPHERE_VERTS, SUN, type BodySource, type CullFrame, type FrameParams, type V3,
 } from '../src/index.ts';
 
 function rng(seed: number) {
@@ -144,6 +144,10 @@ function snapshotOf(descs: BodyDesc[]): Snapshot {
   const s = emptySnapshot(descs.length);
   descs.forEach((b, i) => { s.pos.set(b.pos, 3 * i); s.rot.set(b.rot, 4 * i); s.awake[i] = 1; });
   return s;
+}
+
+function qrotV(q: number[], v: number[]): number[] {
+  return qrotInv([-q[0]!, -q[1]!, -q[2]!, q[3]!], v);
 }
 
 function qrotInv(q: number[], v: number[]): number[] {
@@ -685,28 +689,141 @@ export async function fanVsCube(seed: number, cameras = 50) {
     for (let i = 0; i < a.length; i++) { if (a[i] !== b[i]) differ++; if (b[i]) covered++; }
     pixels += a.length;
   }
-  // Shadow maps from the same frame.
+  // Shadow maps from the same frame. Where both maps see a caster the depths
+  // differ only by interpolation (the two triangulate each face differently,
+  // and vertices snap to the sub-texel grid, which tilts thin triangles), or
+  // where the two disagree about which of two touching surfaces is nearer.
+  // Compared in metres against the receiver's depth bias (at least 1 cm):
+  // anything below it cannot change a shadow.
   const f = camera([9, 5, 10], [0, 0, 0]);
   await fan.render(f);
   await cube.render(f);
   const sa = await fan.readShadowMap(), sb = await cube.readShadowMap();
-  // Texels either map covers: the depths must agree up to interpolation
-  // rounding (the two triangulate each face differently), except on
-  // rasterization edges, where a texel can see a different surface.
-  const N = Math.sqrt(sa.length);
-  const smooth = (m: Float32Array, i: number) => [-1, 1, -N, N].every((o) => Math.abs(m[i + o]! - m[i]!) < 2e-3);
-  let texels = 0, coverDiff = 0, edgeDiff = 0, maxDiff = 0;
-  for (let i = N; i < sa.length - N; i++) {
+  const range = fan.shadowFit!.depthRange;
+  let texels = 0, coverDiff = 0, over1mm = 0, over1cm = 0, maxDiff = 0;
+  for (let i = 0; i < sa.length; i++) {
     if (sb[i]! >= 1 && sa[i]! >= 1) continue;
     texels++;
-    const d = Math.abs(sa[i]! - sb[i]!);
-    if (sa[i]! >= 1 || sb[i]! >= 1) coverDiff++;
-    else if (smooth(sa, i) && smooth(sb, i)) maxDiff = Math.max(maxDiff, d);
-    else if (d > 1e-4) edgeDiff++;
+    if (sa[i]! >= 1 || sb[i]! >= 1) { coverDiff++; continue; }
+    const d = Math.abs(sa[i]! - sb[i]!) * range;
+    if (d > 0.001) over1mm++;
+    if (d > 0.01) over1cm++;
+    else maxDiff = Math.max(maxDiff, d);
   }
   const err = await device.popErrorScope();
   fan.destroy();
   cube.destroy();
   device.destroy();
-  return { differ, pixels, covered, texels, coverDiff, edgeDiff, maxDiff, error: err?.message ?? null };
+  return { differ, pixels, covered, texels, coverDiff, over1mm, over1cm, maxDiff, error: err?.message ?? null };
+}
+
+// ---------------------------------------------------------------- shadows
+
+/**
+ * Shadows against an analytic reference: a ground pixel is in shadow exactly
+ * when the ray from its ground point towards the sun hits a body. Cases:
+ * 'float' a cube 3 m up, seen from above (position and shape of the shadow);
+ * 'contact' a cube resting on the ground, close up on its shadowed corner
+ * (no light leaking between cube and shadow); 'grazing' a slab lit at 80
+ * degrees from its normal (no acne on the lit face).
+ */
+export async function shadowCheck(kind: 'float' | 'contact' | 'grazing') {
+  const { device } = await createDevice({ timestamps: false });
+  device.pushErrorScope('validation');
+  const sun = SUN;
+  const descs: BodyDesc[] = [];
+  let f: FrameParams;
+  if (kind === 'float') {
+    descs.push(box([0, 3.5, 0], [0.5, 0.5, 0.5], [0, 0, 0, 1]));
+    f = { ...camera([1.5, 12, -1.2], [1.5, 0, -0.8]), groundY: 0 };
+  } else if (kind === 'contact') {
+    descs.push(box([0, 0.5, 0], [0.5, 0.5, 0.5], [0, 0, 0, 1]));
+    f = { ...camera([-1.3, 2.2, 1.1], [-0.8, 0, 0.7]), groundY: 0 };
+  } else {
+    // Tilt the slab's normal away from the sun until N.L = 0.17.
+    const h = Math.hypot(sun[0], sun[2]), axis: V3 = [sun[2] / h, 0, -sun[0] / h]; // up x sun, normalised
+    const phi = -(Math.acos(0.17) - Math.atan2(h, sun[1]));
+    const s = Math.sin(phi / 2);
+    descs.push(box([0, 2, 0], [2, 0.05, 2], [axis[0] * s, axis[1] * s, axis[2] * s, Math.cos(phi / 2)]));
+    f = { ...camera([0.3, 7, 0.4], [0, 2, 0]), groundY: -5 };
+  }
+  const src = new SnapshotSource(device);
+  src.update(snapshotOf(descs), descs);
+  const rend = new Renderer(device, { size: [W, H] });
+  rend.look = { ...rend.look, floorGrid: 0, fogDensity: 0, bloomMix: 0, vignette: 0 };
+  rend.setSource(src);
+  rend.setShadowBounds([0, 2, 0], 8);
+  const ids = (await rend.renderIds(f)).ids;
+  const px = (await rend.render(f, true, true))!.pixels!;
+  const luma = new Float32Array(W * H);
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+    const o = y * px.bytesPerRow + 4 * x;
+    luma[y * W + x] = 0.2126 * px.data[o]! + 0.7152 * px.data[o + 1]! + 0.0722 * px.data[o + 2]!;
+  }
+  // Surface point and analytic visibility of each pixel's surface.
+  const want = new Int8Array(W * H).fill(-1); // 1 shadowed, 0 lit, -1 not used
+  const ground: (V3 | null)[] = new Array(W * H).fill(null);
+  const target = kind === 'grazing' ? 1 : 0;
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+    const i = y * W + x;
+    if (ids[i] !== target) continue;
+    const { o, d } = rayAt(f, x, y);
+    let p: V3;
+    if (target === 0) {
+      if (d[1] >= 0) continue;
+      const t = (f.groundY - o[1]) / d[1];
+      p = [o[0] + d[0] * t, f.groundY, o[2] + d[2] * t];
+      ground[i] = p;
+    } else {
+      // Slab top face: keep its flat interior (the bevel and edges shade differently).
+      const b = descs[0]!, half = (b.shape as { half: V3 }).half;
+      const lo = qrotInv(b.rot, [o[0] - b.pos[0], o[1] - b.pos[1], o[2] - b.pos[2]]), ld = qrotInv(b.rot, d);
+      const t = (half[1] - lo[1]!) / ld[1]!;
+      const u = lo[0]! + ld[0]! * t, v = lo[2]! + ld[2]! * t;
+      if (!(t > 0) || Math.abs(u) > 0.8 * half[0] || Math.abs(v) > 0.8 * half[2]) continue;
+      p = [o[0] + d[0] * t, o[1] + d[1] * t, o[2] + d[2] * t];
+    }
+    want[i] = target === 1 ? 0 : raycast(descs, [p[0] + sun[0] * 1e-4, p[1] + sun[1] * 1e-4, p[2] + sun[2] * 1e-4], sun) !== 0 ? 1 : 0;
+  }
+  // Boundary band: pixels next to the other class or to anything unused
+  // (body silhouettes blend with MSAA; the shadow edge is PCF-soft).
+  const band = (i: number) => {
+    const x = i % W, y = (i - x) / W;
+    if (x === 0 || y === 0 || x === W - 1 || y === H - 1) return true;
+    return [-W - 1, -W, -W + 1, -1, 1, W - 1, W, W + 1].some((o) => want[i + o] !== want[i]);
+  };
+  const median = (xs: number[]) => (xs.sort((a, b) => a - b), xs[xs.length >> 1] ?? NaN);
+  const litL: number[] = [], shadeL: number[] = [];
+  for (let i = 0; i < W * H; i++) if (want[i]! >= 0 && !band(i)) (want[i] ? shadeL : litL).push(luma[i]!);
+  const lit = median(litL), shaded = median(shadeL);
+  const cut = shadeL.length ? (lit + shaded) / 2 : 0.85 * lit; // all lit (grazing): any dark speckle is acne
+  // Mismatches away from the band; leak: furthest lit pixel of the predicted
+  // shadow from the cube's footprint (light under a resting cube).
+  let predicted = 0, measured = 0, both = 0, wrong = 0, leak = 0, maxStep = 0;
+  const cen = [[0, 0, 0], [0, 0, 0]];
+  for (let i = 0; i < W * H; i++) {
+    if (want[i]! < 0) continue;
+    const dark = luma[i]! < cut;
+    if (want[i]) { predicted++; const g = ground[i]!; cen[0]![0]! += g[0]; cen[0]![1]! += g[2]; cen[0]![2]!++; }
+    if (dark) { measured++; const g = ground[i]; if (g) { cen[1]![0]! += g[0]; cen[1]![1]! += g[2]; cen[1]![2]!++; } }
+    if (want[i] && dark) both++;
+    if (band(i)) continue;
+    if (dark !== (want[i] === 1)) {
+      wrong++;
+      const g = ground[i];
+      if (g && want[i]) leak = Math.max(leak, Math.hypot(Math.max(Math.abs(g[0]) - 0.5, 0), Math.max(Math.abs(g[2]) - 0.5, 0)));
+    }
+    // Acne: speckle between neighbouring pixels of one class.
+    for (const o of [1, W]) if (want[i + o] === want[i] && !band(i + o)) maxStep = Math.max(maxStep, Math.abs(luma[i + o]! - luma[i]!));
+  }
+  const centroid = (c: number[]) => [c[0]! / c[2]!, c[1]! / c[2]!];
+  const cp = centroid(cen[0]!), cm = centroid(cen[1]!);
+  const err = await device.popErrorScope();
+  rend.destroy();
+  device.destroy();
+  return {
+    lit, shaded, predicted, measured, iou: both / (predicted + measured - both || 1), wrong, used: litL.length + shadeL.length,
+    centroidErr: predicted ? Math.hypot(cp[0]! - cm[0]!, cp[1]! - cm[1]!) : 0, leak, maxStep,
+    window: rend.shadowFit!.half, NoL: kind === 'grazing' ? qrotV(descs[0]!.rot, [0, 1, 0]).reduce((a, v, k) => a + v * sun[k]!, 0) : null, error: err?.message ?? null,
+  };
 }
