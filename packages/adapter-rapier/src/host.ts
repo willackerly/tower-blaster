@@ -10,7 +10,7 @@ import {
   MODE_DYNAMIC, MODE_OFF, MODE_STATIC, type PhysicsHost, type Quat, type Vec3,
 } from '@tb/engine-api';
 import { boundingRadius, signedDepth } from '@tb/geom';
-import { createBody, createGround, initRapier } from './bodies.ts';
+import { createBody, createGround, initRapier, RULES } from './bodies.ts';
 import type { RapierOptions } from './index.ts';
 
 /** Spheres are icosphere hulls (162 vertices), since they meet voxels here: see createBody. */
@@ -30,6 +30,7 @@ export class RapierHost implements PhysicsHost {
   private idsDirty = false;
   private sleep = true;
   private dt = 1 / 60;
+  private combine = RAPIER.CoefficientCombineRule.Average;
   private steps = 0;
   private lattices: Array<HostLattice & { cells: Int32Array; collider: RAPIER.Collider | null }> = [];
   private events: RAPIER.EventQueue | null = null;
@@ -49,7 +50,9 @@ export class RapierHost implements PhysicsHost {
     const w = new RAPIER.World({ x: world.gravity[0], y: world.gravity[1], z: world.gravity[2] });
     w.timestep = world.dt;
     if (this.opts.iterations) w.numSolverIterations = this.opts.iterations;
-    if (world.ground) createGround(w, world.ground);
+    // Every collider carries the scene's friction rule: bodies, ground and voxel lattices.
+    this.combine = RULES[world.frictionCombine ?? 'average'];
+    if (world.ground) createGround(w, world.ground).setFrictionCombineRule(this.combine);
     this.world = w;
     this.table = table;
     this.bodies = new Array(table.length);
@@ -105,6 +108,7 @@ export class RapierHost implements PhysicsHost {
       if (!entry) {
         const desc = c.mode === MODE_STATIC ? RAPIER.RigidBodyDesc.fixed() : RAPIER.RigidBodyDesc.dynamic();
         entry = this.bodies[c.id] = createBody(w, { ...this.table[c.id]!, pos: c.pos!, rot: c.rot!, linVel: [0, 0, 0], angVel: [0, 0, 0] }, this.sleep, desc, SPHERE_HULL);
+        entry.collider.setFrictionCombineRule(this.combine);
         this.bodyOfCollider.set(entry.collider.handle, c.id);
       } else {
         if (prev === MODE_OFF) entry.body.setEnabled(true);
@@ -149,6 +153,7 @@ export class RapierHost implements PhysicsHost {
           RAPIER.ColliderDesc.voxels(data, { x: l.edge, y: l.edge, z: l.edge })
             .setTranslation(l.origin[0] - l.edge / 2, l.origin[1] - l.edge / 2, l.origin[2] - l.edge / 2)
             .setFriction(l.friction)
+            .setFrictionCombineRule(this.combine)
             .setActiveEvents(RAPIER.ActiveEvents.CONTACT_FORCE_EVENTS)
             .setContactForceEventThreshold(0),
         );

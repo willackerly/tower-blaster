@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { type BodyDesc, type HostWorld, massOf, MODE_DYNAMIC, MODE_OFF, MODE_STATIC, type ModeChange } from '@tb/engine-api';
+import { type BodyDesc, type CombineRule, combineFriction, type HostWorld, massOf, MODE_DYNAMIC, MODE_OFF, MODE_STATIC, type ModeChange } from '@tb/engine-api';
 import { stateHash } from '@tb/metrics';
 import { buildScenario } from '@tb/scenarios';
-import { RapierEngine, RapierHost } from '../src/index.ts';
+import { appliedMu, SLIDE, slideMu, slideScene } from '@tb/testkit';
+import RAPIER from '@dimforge/rapier3d-simd-compat';
+import { RapierEngine, RapierHost, RULES } from '../src/index.ts';
 
 const cube = (pos: [number, number, number], density = 1): BodyDesc => ({
   shape: { kind: 'box', half: [0.5, 0.5, 0.5] }, pos, rot: [0, 0, 0, 1], linVel: [0, 0, 0], angVel: [0, 0, 0], density, friction: 0.6, restitution: 0, tag: 0,
@@ -189,6 +191,46 @@ describe('RapierHost', () => {
       expect(s.pos[1]).toBeCloseTo(1.5, 2); // rests on the cell below
       expect(Array.from(s.contacts!.ids)).toEqual([0]);
       h.dispose();
+    });
+  });
+
+  describe('HostWorld.frictionCombine', () => {
+    // The testkit slide, on the ground and across native lattice cells (same frictions).
+    const slide = async (rule: CombineRule | undefined, onCells: boolean) => {
+      const scene = slideScene(rule);
+      const h = new RapierHost();
+      const slider = scene.bodies[0]!;
+      if (!onCells) {
+        await h.init(scene, scene.bodies);
+        h.apply({ changes: [{ ...on(0, MODE_DYNAMIC, slider), linVel: slider.linVel }], wake: [] });
+      } else {
+        const table = [...Array.from({ length: 16 }, (_, i) => ({ ...cube([i, 0.5, 0]), friction: SLIDE.ground })), { ...slider, pos: [0, 1.5, 0] as [number, number, number] }];
+        await h.init({ ...scene, ground: null }, table, [{ origin: [0, 0.5, 0], edge: 1, dims: [16, 1, 1], friction: SLIDE.ground }]);
+        h.apply({ changes: [{ ...on(16, MODE_DYNAMIC, table[16]!), linVel: slider.linVel }], wake: [], cells: table.slice(0, 16).map((_, i) => ({ lattice: 0, i, j: 0, k: 0, id: i, rot: [0, 0, 0, 1] })) });
+      }
+      const vx = () => { const s = h.read(); return s.linVel[0]!; };
+      h.step();
+      const v1 = vx();
+      for (let i = 0; i < 10; i++) h.step();
+      const mu = appliedMu(v1, vx());
+      const rules: number[] = [];
+      (h as unknown as { world: RAPIER.World }).world.forEachCollider((c) => rules.push(c.frictionCombineRule()));
+      h.dispose();
+      return { mu, rules };
+    };
+
+    it.for(['average', 'min', 'max', 'multiply'] as const)('%s reaches every contact, ground and lattice cells alike', async (rule) => {
+      for (const onCells of [false, true]) {
+        const { mu, rules } = await slide(rule, onCells);
+        // Measured within 1% on the ground and 2.1% across cells (max: 0.881 for 0.9); the closest rules are 11% apart.
+        expect(Math.abs(mu / slideMu(rule) - 1), `on cells: ${onCells}`).toBeLessThan(0.03);
+        expect(rules, `on cells: ${onCells}`).toEqual(Array(2).fill(RULES[rule]));
+      }
+    });
+
+    it('defaults to average', async () => {
+      for (const onCells of [false, true]) expect((await slide(undefined, onCells)).mu).toBe((await slide('average', onCells)).mu);
+      expect(combineFriction('average', SLIDE.body, SLIDE.ground)).toBeCloseTo(0.6, 12);
     });
   });
 });

@@ -1,6 +1,6 @@
 // Shared Rapier setup for the engine and the host.
 import RAPIER from '@dimforge/rapier3d-simd-compat';
-import type { BodyDesc } from '@tb/engine-api';
+import type { BodyDesc, CombineRule } from '@tb/engine-api';
 
 let ready: Promise<void> | null = null;
 export const initRapier = () => (ready ??= RAPIER.init());
@@ -12,6 +12,14 @@ export const initRapier = () => (ready ??= RAPIER.init());
  * collider presses on an edge of a voxel collider, e.g. a ball rolling down
  * a dormant tower to its foot (test/voxel-panic.test.ts).
  */
+/** SceneDesc.frictionCombine in Rapier. Rapier uses the higher-priority rule of a pair, so every collider gets it. */
+export const RULES: Record<CombineRule, RAPIER.CoefficientCombineRule> = {
+  average: RAPIER.CoefficientCombineRule.Average,
+  min: RAPIER.CoefficientCombineRule.Min,
+  max: RAPIER.CoefficientCombineRule.Max,
+  multiply: RAPIER.CoefficientCombineRule.Multiply,
+};
+
 export function createBody(w: RAPIER.World, b: BodyDesc, canSleep: boolean, desc: RAPIER.RigidBodyDesc, sphereHull = 0) {
   desc
     .setTranslation(b.pos[0], b.pos[1], b.pos[2])
