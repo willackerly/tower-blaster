@@ -10,6 +10,7 @@ import { Culler, SEG, type CullFrame } from './cull.ts';
 import { Sparks } from './sparks.ts';
 import { Lights, MAX_BALLS, TRAIL } from './lights.ts';
 import { aoFrame, aoGrid, AoVolume } from './ao.ts';
+import { FLOOR_VERTS, floorFan, floorPolygon } from './floor.ts';
 import { fitShadow, frustumCorners, type Arena, type ShadowFit, type ShadowFitState } from './shadowfit.ts';
 import { FX_WORDS, packFx, tintWord, toHalf, type FxOptions, FX_ANCHOR } from './fx.ts';
 import { CANDY_NIGHT, linearToOklab, srgbToLinear, type LookParams } from './look.ts';
@@ -78,6 +79,8 @@ export interface RendererOptions {
   flatBoxes?: boolean;
   /** Spark slots (default SPARK_POOL, 65536). Every slot costs a simulation thread and a quad per frame. */
   sparkPool?: number;
+  /** Output format; default the canvas's preferred one (bgra8unorm on Apple, rgba8unorm elsewhere). Tests set it to cover both. */
+  format?: GPUTextureFormat;
 }
 
 type PipeName = 'box' | 'sphere' | 'ground' | 'sky' | 'overlay' | 'spark' | 'trail' | 'boxShadow' | 'sphereShadow' | 'boxId' | 'sphereId';
@@ -131,6 +134,9 @@ export class Renderer {
   private readonly overlayBuf: GPUBuffer;
   private readonly overlayColours: GPUBuffer;
   private overlayCount = 0;
+  private readonly floorBuf: GPUBuffer;
+  private readonly floorData = new Float32Array(FLOOR_VERTS * 3);
+  private floorCount = 0;
   private lastTime = 0;
   private sceneTime: number | null = null;
   /** Sparks from impacts: detector, pool and tunables (sparks.ts). */
@@ -151,7 +157,7 @@ export class Renderer {
     const sceneFan = (opts.scenePath ?? opts.boxPath ?? 'cube') === 'fan';
     const shadowFan = (opts.shadowPath ?? opts.boxPath ?? 'fan') === 'fan';
     this.boxVerts = { scene: sceneFan ? BOX_FAN_VERTS : BOX_CUBE_VERTS, shadow: shadowFan ? BOX_FAN_VERTS : BOX_CUBE_VERTS };
-    this.format = navigator.gpu.getPreferredCanvasFormat();
+    this.format = opts.format ?? navigator.gpu.getPreferredCanvasFormat();
     if ('canvas' in target) {
       const ctx = target.canvas.getContext('webgpu');
       if (!ctx) throw new Error('could not get a webgpu canvas context');
@@ -177,6 +183,7 @@ export class Renderer {
       { binding: 1, visibility: VF, buffer: ro },
       { binding: 2, visibility: GPUShaderStage.VERTEX, buffer: ro },
     ];
+    this.floorBuf = device.createBuffer({ size: this.floorData.byteLength, usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST, label: 'floor polygon' });
     this.overlayBuf = device.createBuffer({ size: MAX_OVERLAY * 16, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST, label: 'overlay spheres' });
     this.overlayColours = device.createBuffer({ size: MAX_OVERLAY * 4, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST, label: 'overlay colours' });
     this.layout = device.createBindGroupLayout({
@@ -201,9 +208,9 @@ export class Renderer {
     const module = device.createShaderModule({ code: SCENE_WGSL, label: 'scene' });
     const main = device.createPipelineLayout({ bindGroupLayouts: [this.layout] });
     const shadowPl = device.createPipelineLayout({ bindGroupLayouts: [this.shadowLayout] });
-    const color = (vs: string, fs: string, cull: GPUCullMode, seg: number, opts: { format?: GPUTextureFormat; samples?: number; sky?: boolean } = {}): GPURenderPipeline => device.createRenderPipeline({
+    const color = (vs: string, fs: string, cull: GPUCullMode, seg: number, opts: { format?: GPUTextureFormat; samples?: number; sky?: boolean; buffers?: GPUVertexBufferLayout[] } = {}): GPURenderPipeline => device.createRenderPipeline({
       layout: main,
-      vertex: { module, entryPoint: vs, constants: { SEG: seg, ...(vs === 'vsBox' ? { FAN: sceneFan ? 1 : 0 } : {}) } },
+      vertex: { module, entryPoint: vs, constants: { SEG: seg, ...(vs === 'vsBox' ? { FAN: sceneFan ? 1 : 0 } : {}) }, buffers: opts.buffers ?? [] },
       fragment: { module, entryPoint: fs, targets: [{ format: opts.format ?? HDR_FORMAT }] },
       primitive: { topology: 'triangle-list', cullMode: cull, frontFace: 'ccw' },
       depthStencil: opts.sky
@@ -229,7 +236,7 @@ export class Renderer {
     this.pipes = {
       box: color('vsBox', opts.flatBoxes ? 'fsBoxFlat' : 'fsBox', 'back', SEG.box),
       sphere: color('vsSphere', 'fsSphere', 'back', SEG.sphere),
-      ground: color('vsGround', 'fsGround', 'none', 0),
+      ground: color('vsGround', 'fsGround', 'none', 0, { buffers: [{ arrayStride: 12, attributes: [{ shaderLocation: 0, offset: 0, format: 'float32x3' }] }] }),
       sky: color('vsSky', 'fsSky', 'none', 0, { sky: true }),
       overlay: color('vsOverlay', 'fsOverlay', 'back', 0),
       spark: device.createRenderPipeline({
@@ -394,8 +401,11 @@ export class Renderer {
     const lightViewProj = multiply(fit.matrix, toWorld);
     const focus = f.focus ?? [f.eye[0], f.eye[1], f.eye[2] - 1];
     this.lastTime = f.time ?? 0;
+    const inv = invert(viewProj);
+    this.floorCount = floorFan(floorPolygon(inv, f.groundY - f.eye[1]), this.floorData).count;
+    if (this.floorCount) this.device.queue.writeBuffer(this.floorBuf, 0, this.floorData, 0, this.floorCount * 3);
     writeStruct(this.frameData, Frame, 0, {
-      viewProj, lightViewProj, invViewProj: invert(viewProj),
+      viewProj, lightViewProj, invViewProj: inv,
       eye: f.eye, time: f.time ?? 0, sun: SUN, groundY: f.groundY,
       focus: [focus[0] - f.eye[0], focus[1] - f.eye[1], focus[2] - f.eye[2]], capacity: this.culler?.capacity ?? 0,
       ...lookUniforms(this.look),
@@ -462,8 +472,11 @@ export class Renderer {
         p.setPipeline(this.pipes.overlay);
         p.draw(SPHERE_VERTS, this.overlayCount);
       }
-      p.setPipeline(this.pipes.ground);
-      p.draw(6);
+      if (this.floorCount) {
+        p.setPipeline(this.pipes.ground);
+        p.setVertexBuffer(0, this.floorBuf);
+        p.draw(this.floorCount);
+      }
       p.setPipeline(this.pipes.sky);
       p.draw(3);
       if (this.toggles.sparks) {
@@ -503,7 +516,12 @@ export class Renderer {
     await read.mapAsync(GPUMapMode.READ);
     const raw = new Uint8Array(read.getMappedRange());
     const stats = pixelStats(raw, tex.width, tex.height, bytesPerRow);
-    if (keepPixels) stats.pixels = { data: Array.from(raw), bytesPerRow, bgra: this.format.startsWith('bgra') };
+    if (keepPixels) {
+      const data = Array.from(raw);
+      // Always RGBA for the caller: Apple's preferred canvas format is BGRA.
+      if (this.format.startsWith('bgra')) for (let o = 0; o < data.length; o += 4) { const b = data[o]!; data[o] = data[o + 2]!; data[o + 2] = b; }
+      stats.pixels = { data, bytesPerRow };
+    }
     read.destroy();
     const { ids } = await this.renderIds(f);
     stats.bodyFraction = ids.reduce((a, v) => a + (v ? 1 : 0), 0) / ids.length;
@@ -561,6 +579,7 @@ export class Renderer {
     this.frameBuf.destroy();
     this.fxBuf?.destroy();
     this.overlayBuf.destroy();
+    this.floorBuf.destroy();
     this.overlayColours.destroy();
     this.sparks.destroy();
     this.lights.destroy();
@@ -585,8 +604,8 @@ export interface PixelStats {
   meanLuma: number;
   /** Fraction of pixels covered by a body (from the ID pass of the same frame). */
   bodyFraction?: number;
-  /** Raw rows when asked for (test screenshots). */
-  pixels?: { data: number[]; bytesPerRow: number; bgra: boolean };
+  /** Raw rows when asked for (test screenshots), RGBA8 whatever the output format. */
+  pixels?: { data: number[]; bytesPerRow: number };
 }
 
 /** Coarse statistics of an RGBA/BGRA frame: enough to tell "drew a scene" from "blank". */

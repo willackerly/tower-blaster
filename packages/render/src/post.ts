@@ -133,7 +133,8 @@ export class Post {
     for (const t of this.levels) t.destroy();
     this.levels.length = 0;
     let lw = Math.max(1, w >> 1), lh = Math.max(1, h >> 1);
-    while (this.levels.length < this.maxLevels && lw >= 4 && lh >= 4) {
+    // At least one level, however small the target (a hidden or tiny canvas), so the composite always has a bloom input.
+    while (this.levels.length < this.maxLevels && (this.levels.length === 0 || (lw >= 4 && lh >= 4))) {
       this.levels.push(this.device.createTexture({ size: [lw, lh], format: BLOOM_FORMAT, usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_SRC, label: `bloom ${this.levels.length}` }));
       lw = Math.max(1, lw >> 1);
       lh = Math.max(1, lh >> 1);

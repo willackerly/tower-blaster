@@ -9,7 +9,7 @@ import { Body, RenderRecord, Shape, TIER, readStruct } from '@tb/schema';
 import {
   agx, AGX_WGSL, fromHalf, FX_WORDS, packFx, toHalf, bevelNormal, BEVEL_WGSL, oklabToLinear, OKLAB_WGSL, Post,
   Culler, cullReference, GpuBodySource, invert, listMatches, lookAt, makeGpuBodies, multiply, perspective, Renderer, SEGMENTS, SnapshotSource, transform,
-  translation, BOX_VERTS, SPHERE_VERTS, SUN, Sparks, CTL, MAX_EVENTS, flashSlot, FLASHES, MAX_BALLS, TRAIL, Lights, LIGHTS, LIGHT_META, LIGHT_PACKED, MATERIAL, AoVolume, aoGrid, aoFrame, splatReference, composeReference, AO_FOOT_WGSL, AO_SAMPLE_WGSL, AO_SEAM_WGSL, AO_ONE, type SplatBody, unpackImpacts, unpackSparks, spawnReference, stepReference, type Impact, type BodySource, type CullFrame, type FrameParams, type V3,
+  translation, normalize, BOX_VERTS, SPHERE_VERTS, SUN, Sparks, CTL, MAX_EVENTS, flashSlot, FLASHES, MAX_BALLS, TRAIL, Lights, LIGHTS, LIGHT_META, LIGHT_PACKED, MATERIAL, AoVolume, aoGrid, aoFrame, splatReference, composeReference, AO_FOOT_WGSL, AO_SAMPLE_WGSL, AO_SEAM_WGSL, AO_ONE, type SplatBody, unpackImpacts, unpackSparks, spawnReference, stepReference, type Impact, type BodySource, type CullFrame, type FrameParams, type V3,
 } from '../src/index.ts';
 
 function rng(seed: number) {
@@ -612,13 +612,13 @@ export async function fxColour() {
   const mask = (await rend.renderIds(f)).ids;
   const mean = async () => {
     const st = (await rend.render(f, true, true))!;
-    const { data, bytesPerRow, bgra } = st.pixels!;
+    const { data, bytesPerRow } = st.pixels!;
     const sum = [0, 0, 0];
     let n = 0;
     for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
       if (!mask[y * W + x]) continue;
       const o = y * bytesPerRow + 4 * x;
-      const px = bgra ? [data[o + 2]!, data[o + 1]!, data[o]!] : [data[o]!, data[o + 1]!, data[o + 2]!];
+      const px = [data[o]!, data[o + 1]!, data[o + 2]!];
       px.forEach((v, k) => { sum[k]! += v; });
       n++;
     }
@@ -727,7 +727,12 @@ export async function fanVsCube(seed: number, cameras = 50) {
  * (no light leaking between cube and shadow); 'grazing' a slab lit at 80
  * degrees from its normal (no acne on the lit face).
  */
-export async function shadowCheck(kind: 'float' | 'contact' | 'grazing') {
+export interface ShadowCheckOptions {
+  /** Output format (bgra8unorm is Apple's preferred). */
+  format?: GPUTextureFormat;
+}
+
+export async function shadowCheck(kind: 'float' | 'contact' | 'grazing', { format }: ShadowCheckOptions = {}) {
   const { device } = await createDevice({ timestamps: false });
   device.pushErrorScope('validation');
   const sun = SUN;
@@ -749,7 +754,7 @@ export async function shadowCheck(kind: 'float' | 'contact' | 'grazing') {
   }
   const src = new SnapshotSource(device);
   src.update(snapshotOf(descs), descs);
-  const rend = new Renderer(device, { size: [W, H] });
+  const rend = new Renderer(device, { size: [W, H] }, { format });
   rend.look = { ...rend.look, floorGrid: 0, fogDensity: 0, bloomMix: 0, vignette: 0 };
   rend.setSource(src);
   rend.setShadowBounds([0, 2, 0], 8);
@@ -826,6 +831,68 @@ export async function shadowCheck(kind: 'float' | 'contact' | 'grazing') {
     centroidErr: predicted ? Math.hypot(cp[0]! - cm[0]!, cp[1]! - cm[1]!) : 0, leak, maxStep,
     window: rend.shadowFit!.half, NoL: kind === 'grazing' ? qrotV(descs[0]!.rot, [0, 1, 0]).reduce((a, v, k) => a + v * sun[k]!, 0) : null, error: err?.message ?? null,
   };
+}
+
+/**
+ * The floor in the image against the analytic plane: with no bodies, a red
+ * floor and a green sky, every pixel whose ray meets y = groundY before
+ * the far plane must be floor and every other pixel sky, away from the
+ * horizon (the pixels next to the other class).
+ */
+export async function floorCoverage(eye: V3, target: V3, groundY: number) {
+  const { device } = await createDevice({ timestamps: false });
+  device.pushErrorScope('validation');
+  const src = new SnapshotSource(device);
+  src.update(snapshotOf([]), []);
+  const rend = new Renderer(device, { size: [W, H] });
+  rend.look = { ...rend.look, floor: [1, 0, 0], floorGrid: 0, skyZenith: [0, 0.5, 0], skyHorizon: [0, 0.5, 0], glow: [0, 0, 0], fogDensity: 0, bloomMix: 0, vignette: 0 };
+  rend.setSource(src);
+  const f: FrameParams = { ...camera(eye, target), groundY };
+  const px = (await rend.render(f, true, true))!.pixels!;
+  const want = new Int8Array(W * H);
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+    const { o, d } = rayAt(f, x, y);
+    const t = (groundY - o[1]) / d[1];
+    // camera() has its far plane at 400 m along the view axis.
+    const view = normalize([target[0] - eye[0], target[1] - eye[1], target[2] - eye[2]]);
+    want[y * W + x] = t > 0 && t * (d[0] * view[0] + d[1] * view[1] + d[2] * view[2]) < 400 ? 1 : 0;
+  }
+  let floor = 0, wrong = 0, checked = 0;
+  for (let y = 1; y < H - 1; y++) for (let x = 1; x < W - 1; x++) {
+    const i = y * W + x, o = y * px.bytesPerRow + 4 * x;
+    if ([-W, -1, 1, W].some((k) => want[i + k] !== want[i])) continue;
+    const isFloor = px.data[o]! > px.data[o + 1]!;
+    checked++;
+    if (want[i]) floor++;
+    if (isFloor !== (want[i] === 1)) wrong++;
+  }
+  const err = await device.popErrorScope();
+  rend.destroy();
+  device.destroy();
+  return { checked, floor, wrong, error: err?.message ?? null };
+}
+
+/** Frames at tiny output sizes (a hidden or minimised canvas): no validation error, and the scene still shows. */
+export async function tinyFrames(sizes: [number, number][]) {
+  const { device } = await createDevice({ timestamps: false });
+  const descs = [box([0, 0.5, 0], [0.5, 0.5, 0.5], [0, 0, 0, 1])];
+  const src = new SnapshotSource(device);
+  src.update(snapshotOf(descs), descs);
+  const out: { size: [number, number]; meanLuma: number | null; error: string | null }[] = [];
+  for (const size of sizes) {
+    device.pushErrorScope('validation');
+    let thrown: string | null = null, meanLuma: number | null = null;
+    try {
+      const rend = new Renderer(device, { size });
+      rend.setSource(src);
+      meanLuma = (await rend.render({ ...camera([2, 2, 3], [0, 0.5, 0], size[0] / size[1]), groundY: 0 }, true))!.meanLuma;
+      rend.destroy();
+    } catch (e) { thrown = (e as Error).message; }
+    const err = await device.popErrorScope();
+    out.push({ size, meanLuma, error: thrown ?? err?.message ?? null });
+  }
+  device.destroy();
+  return out;
 }
 
 // ---------------------------------------------------------------- sparks
@@ -1037,12 +1104,12 @@ export async function sparkDraw() {
 // ---------------------------------------------------------------- lights
 
 /** Mean 8-bit luma over the pixels whose ID is slot + 1. */
-function meanOver(px: { data: number[]; bytesPerRow: number; bgra: boolean }, ids: Uint32Array, id: number) {
+function meanOver(px: { data: number[]; bytesPerRow: number }, ids: Uint32Array, id: number) {
   let s = 0, n = 0;
   for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
     if (ids[y * W + x] !== id) continue;
     const o = y * px.bytesPerRow + 4 * x;
-    s += 0.2126 * px.data[o + (px.bgra ? 2 : 0)]! + 0.7152 * px.data[o + 1]! + 0.0722 * px.data[o + (px.bgra ? 0 : 2)]!;
+    s += 0.2126 * px.data[o]! + 0.7152 * px.data[o + 1]! + 0.0722 * px.data[o + 2]!;
     n++;
   }
   return { mean: n ? s / n : NaN, n };
@@ -1497,7 +1564,7 @@ export async function aoCompose(seed: number) {
 }
 
 /** A fixed scene's pixels, hashed: towers, rubble, a ball, the floor. For before/after checks of a change that must not alter the image. */
-export async function sceneHash(toggles: Record<string, boolean> = {}) {
+export async function sceneHash(toggles: Record<string, boolean> = {}, format?: GPUTextureFormat) {
   const { device } = await createDevice({ timestamps: false });
   device.pushErrorScope('validation');
   const descs: BodyDesc[] = [];
@@ -1508,7 +1575,7 @@ export async function sceneHash(toggles: Record<string, boolean> = {}) {
   const src = new SnapshotSource(device);
   src.reset(descs);
   src.update(snapshotOf(descs), descs);
-  const rend = new Renderer(device, { size: [W, H] });
+  const rend = new Renderer(device, { size: [W, H] }, { format });
   Object.assign(rend.toggles, toggles);
   rend.setSource(src);
   const f: FrameParams = { ...camera([0, 4, 9], [0, 1, -1]), groundY: 0, time: 1, dt: 0, alpha: 1 };
@@ -1652,7 +1719,7 @@ export async function aoImage() {
   rend.toggles.ao = false;
   const off = (await rend.render(f, true, true))!.pixels!;
   const ids = (await rend.renderIds(f)).ids;
-  const luma = (px: typeof on, i: number) => 0.2126 * px.data[i + (px.bgra ? 2 : 0)]! + 0.7152 * px.data[i + 1]! + 0.0722 * px.data[i + (px.bgra ? 0 : 2)]!;
+  const luma = (px: typeof on, i: number) => 0.2126 * px.data[i]! + 0.7152 * px.data[i + 1]! + 0.0722 * px.data[i + 2]!;
   let nearOn = 0, nearOff = 0, nn = 0, openDiff = 0, no = 0, cubeDiff = 0, nc = 0, footOn = 0, footOff = 0, nf = 0;
   let openChanged = 0, cubeChanged = 0;
   for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
@@ -1697,7 +1764,7 @@ export async function seamImage() {
   rend.toggles.ao = false;
   const off = (await rend.render(f, true, true))!.pixels!;
   const ids = (await rend.renderIds(f)).ids;
-  const luma = (px: typeof on, i: number) => 0.2126 * px.data[i + (px.bgra ? 2 : 0)]! + 0.7152 * px.data[i + 1]! + 0.0722 * px.data[i + (px.bgra ? 0 : 2)]!;
+  const luma = (px: typeof on, i: number) => 0.2126 * px.data[i]! + 0.7152 * px.data[i + 1]! + 0.0722 * px.data[i + 2]!;
   const acc: Record<'shared' | 'mid' | 'top', [number, number, number]> = { shared: [0, 0, 0], mid: [0, 0, 0], top: [0, 0, 0] };
   for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
     const i = y * on.bytesPerRow + 4 * x, id = ids[y * W + x]!;
