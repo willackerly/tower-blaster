@@ -67,6 +67,19 @@ describe('reduceRef scalars (§3.3)', () => {
     expect(value(P(0, 15), { p: [8192, 0, 0] })).toBe(2 ** 28);
   });
 
+  it('reads state, half extents, radii and quaternions as f32 first (§3.1)', () => {
+    // fround(1.3)·2^24 = 21810380, while 1.3·2^24 rounds to 21810381.
+    for (const axis of [0, 1, 2] as const) expect(value(P(axis, 24), { p: [1.3, 1.3, 1.3] })).toBe(21810380);
+    // f32(8 + 2^-17 + 2^-30) = 8 + 2^-17, a tie at s 16 that goes to even: H = 2^19, not 2^19 + 1.
+    const h = 8 + 2 ** -17 + 2 ** -30;
+    expect(value({ aabb: 'hi', axis: 0 }, { shape: box(h, 0.5, 0.5) })).toBe(2 ** 19);
+    expect(value({ aabb: 'hi', axis: 0 }, { shape: sphere(h) })).toBe(2 ** 19);
+    // f32(0.5 + 2^-15 + 2^-30) = 0.5 + 2^-15, a Q14 tie: Qx = 8192, not 8193. With Qw = 14189,
+    // row 1 is (0, 2^27, -2·14189·2^13), so ext_y = 2^14 + 2·14189.
+    const c = 0.5 + 2 ** -15 + 2 ** -30;
+    expect(value({ aabb: 'hi', axis: 1 }, { q: [c, 0, 0, Math.sqrt(1 - c * c)] })).toBe(16384 + 2 * 14189);
+  });
+
   it("dv: quant(v) − quant(prev) − G at the scalar's own s; ⊥ for entering ids and ⊥ prev", () => {
     // G_y = quant(-9.81/60, 16) = -10715 and quant(-9.81/60, 8) = -42.
     const b: Body = { v: [0, 1, 0], prev: [0, 0.5, 0] };
@@ -129,13 +142,15 @@ describe('reduceRef scalars (§3.3)', () => {
     expect(value({ aabb: 'lo', axis: 0 }, { shape: sphere(16 + 2 ** -16) })).toBe(null);
   });
 
-  it('aabb equals the BigInt matrix on every Q14 corner combination, with no entry beyond 2^30', () => {
+  it('aabb equals the BigInt matrix per body on every Q14 corner combination, with no entry beyond 2^30', () => {
     const corners = [-(2 ** 14), -(2 ** 14) + 1, -1, 0, 1, 2 ** 14 - 1, 2 ** 14].map((c) => c / 2 ** 14);
     const bodies: Body[] = [];
     for (const x of corners) for (const y of corners) for (const z of corners) for (const w of corners) bodies.push({ q: [x, y, z, w], shape: box(16, 0.5, 3) });
     expect(bodies.length).toBe(7 ** 4);
     const inp = state(bodies);
-    for (const axis of [0, 1, 2] as const) reduce({ outputs: [{ op: 'hist', by: { x: { aabb: 'hi', axis }, edges: [0, 2 ** 20, 2 ** 22, 3 * 2 ** 22] }, where: 'all' }] }, inp);
+    // One body at a time: a wrong entry that leaves a body in its histogram bin still shows.
+    const faces: ReduceSpec = { outputs: ([0, 1, 2] as const).flatMap((axis) => [{ op: 'max', x: { aabb: 'lo', axis }, where: 'all' }, { op: 'max', x: { aabb: 'hi', axis }, where: 'all' }] as Output[]) };
+    for (let i = 0; i < bodies.length; i++) expect(reduce(faces, inp, i, i + 1).every((r) => r.n === 1)).toBe(true);
     let biggest = 0n;
     for (const b of bodies) for (const row of rotation(b.q!.map((c) => BigInt(c * 2 ** 14)))) for (const e of row) biggest = e > biggest ? e : -e > biggest ? -e : biggest;
     expect(biggest).toBe(2n ** 30n);
@@ -203,6 +218,15 @@ describe('reduceRef predicates (§3.4)', () => {
     const inp = state([{ tags: [1], ref: [[0, 0, 0]] }, { tags: [0] }, { tags: [1] }]);
     expect(reduce({ outputs: [{ op: 'count', where: displaced }] }, inp)).toEqual([{ n: 0, invalid: 1 }]);
   });
+
+  it('shares a column or a row only between equal scalars and nodes', () => {
+    const xs = state([1, -1, -2].map((x) => ({ p: [x, 0, 0] })));
+    expect(reduce({ outputs: [{ op: 'count', where: { cmp: P(0), op: '>', k: 0 } }, { op: 'count', where: { cmp: P(0), op: '<', k: 0 } }] }, xs)).toEqual([{ n: 1, invalid: 0 }, { n: 2, invalid: 0 }]);
+    const maxes = (x: Scalar[], b: Body) => reduce({ outputs: x.map((s): Output => ({ op: 'max', x: s, where: 'all' })) }, state([b])).map((r) => r.max);
+    expect(maxes([{ aabb: 'lo', axis: 1 }, { aabb: 'hi', axis: 1 }], {})).toEqual([-32768, 32768]);
+    expect(maxes([{ tag: 0, bits: 8 }, { tag: 0, shift: 8, bits: 8 }], { tags: [0x0201] })).toEqual([1, 2]);
+    expect(maxes([{ tag: 0 }, { tag: 1 }], { tags: [1, 2] })).toEqual([1, 2]);
+  });
 });
 
 describe('reduceRef outputs (§3.5)', () => {
@@ -239,6 +263,19 @@ describe('reduceRef outputs (§3.5)', () => {
     expect(sum(hiX, 0, 30, big.slice(1)).sum).toBe(-536870914);
     expect(sum(hiX, 0, 0, big)).toEqual({ n: 2, invalid: 0, sum: 0, sat: 2 });
     expect(sum(hiX, 0, 62, big)).toEqual({ n: 2, invalid: 0, sum: -1, sat: 0 });
+    // w = -(2^31 - 1), x = 2^23 - 1: ⌊w·x / 2^23⌋ = -2^31 + 2^8, but the f64 product drops the low bit and floors to one more.
+    const lowBit = { n: 1, invalid: 0, sum: -2147483392, sat: 0 };
+    expect(sum({ tag: 0 }, 1, 23, [{ tags: [2 ** 23 - 1, 0x80000001] }])).toEqual(lowBit);
+    expect(sum(X0, 1, 23, [{ p: [2 ** 23 - 1, 0, 0], tags: [0, 0x80000001] }])).toEqual(lowBit);
+  });
+
+  it('sum: products past 2^53 whose dropped low bits decide the floor (fast-check)', () => {
+    // w = j·2^k + d and x = 2^k + e, so w·x ≡ d·e (mod 2^k): only the bits below 2^53 decide ⌊w·x / 2^k⌋.
+    const arb = fc.integer({ min: 22, max: 30 }).chain((k) =>
+      fc.tuple(fc.constant(k), fc.integer({ min: -(2 ** (31 - k)), max: 2 ** (31 - k) - 1 }), fc.integer({ min: -4, max: 4 }), fc.constantFrom(-1, 1)));
+    fc.assert(fc.property(arb, ([k, j, d, e]) => {
+      sum({ tag: 0 }, 1, k, [{ tags: [2 ** k + e, (j * 2 ** k + d) | 0] }]);
+    }), { numRuns: 2000 });
   });
 
   it('sum: totals beyond 2^32, alternating signs, 100k terms of 2^31 − 1', () => {
@@ -299,11 +336,22 @@ describe('reduceRef domain', () => {
     ]);
   });
 
-  it('rejects a bad id range and a domain over 2^22', () => {
+  it('max carries across a chunk with no contributor, first or last', () => {
+    const lone = (at: number) => {
+      const bodies: Body[] = Array.from({ length: 1025 }, (_, i) => ({ p: [i === at ? 0 : 5, 0, 0] }));
+      return reduce({ outputs: [{ op: 'max', x: P(0, 0), where: { cmp: P(0, 0), op: '<', k: 1 } }] }, state(bodies));
+    };
+    expect(lone(0)).toEqual([{ n: 1, invalid: 0, max: 0 }]);
+    expect(lone(1024)).toEqual([{ n: 1, invalid: 0, max: 0 }]);
+  });
+
+  it('rejects a bad id range and a domain over 2^22, and takes exactly 2^22', () => {
     const inp = state([{}, {}]);
     expect(() => reduceRef({ outputs: [] }, inp, 1, 3)).toThrow(RangeError);
     expect(() => reduceRef({ outputs: [] }, inp, 2, 1)).toThrow(RangeError);
     expect(() => reduceRef({ outputs: [] }, { ...inp, snap: { ...inp.snap, count: 2 ** 22 + 1 } })).toThrow(/2\^22/);
+    // 'all' reads no per-body array, so two bodies' arrays serve a domain of 2^22.
+    expect(reduceRef({ outputs: [{ op: 'count', where: 'all' }] }, { ...inp, snap: { ...inp.snap, count: 2 ** 22 } })).toEqual([{ n: 2 ** 22, invalid: 0 }]);
   });
 });
 
@@ -377,19 +425,27 @@ describe('the keystone spec (§4) on a hand-built state', () => {
 
 // Random states and specs: values on and around quanta, ties, limits and ⊥.
 const TW = 2;
+// A tie at 2^-e plus noise below f32's half ulp: fround makes it an exact tie, which only the f32 read sends to even.
+const tie = (k: fc.Arbitrary<number>, e: number) => fc.tuple(k, fc.constantFrom(-1, 1)).map(([k, sign]) => (2 * k + 1) / 2 ** e + sign * 2 ** -45);
 const coord = fc.oneof(
   fc.double({ min: -20, max: 20, noNaN: true }),
   fc.integer({ min: -(2 ** 20), max: 2 ** 20 }).map((k) => k / 2 ** 16),
   fc.integer({ min: -(2 ** 20), max: 2 ** 20 }).map((k) => (2 * k + 1) / 2 ** 17),
+  tie(fc.integer({ min: -(2 ** 20), max: 2 ** 20 }), 17),
   fc.constantFrom(NaN, Infinity, -Infinity, -0, 0, 8192, 8192 - 2 ** -11, -8192, 2 ** 28, 32, 1e30, 2 ** -149),
   fc.double(),
 );
 const qc = fc.oneof(
   fc.double({ min: -1, max: 1, noNaN: true }),
   fc.constantFrom(-(2 ** 14), -(2 ** 14) + 1, -1, 0, 1, 2 ** 14 - 1, 2 ** 14).map((c) => c / 2 ** 14),
+  tie(fc.integer({ min: -(2 ** 14), max: 2 ** 14 - 1 }), 15),
   fc.constantFrom(1 + 2 ** -14, -1 - 2 ** -14, NaN, -0, 0.5),
 );
-const extent = fc.oneof(fc.double({ min: 0, max: 20, noNaN: true }), fc.constantFrom(-0.5, 0, 16, 16 + 2 ** -16, NaN, 0.5));
+const extent = fc.oneof(
+  fc.double({ min: 0, max: 20, noNaN: true }),
+  tie(fc.integer({ min: 0, max: 2 ** 20 }), 17),
+  fc.constantFrom(-0.5, 0, 16, 16 + 2 ** -16, NaN, 0.5),
+);
 const shape: fc.Arbitrary<ShapeDesc> = fc.oneof(
   fc.tuple(extent, extent, extent).map((half) => ({ kind: 'box' as const, half })),
   extent.map((radius) => ({ kind: 'sphere' as const, radius })),
@@ -420,8 +476,12 @@ const arbState = (maxN: number, full = false) =>
 const src: fc.Arbitrary<VecSrc> = fc.oneof(fc.constantFrom<VecSrc>('pos', 'linVel', 'angVel', 'dv'), fc.integer({ min: 0, max: 2 }).map((disp) => ({ disp })));
 const scale = fc.option(fc.oneof(fc.integer({ min: 0, max: 24 }), fc.constantFrom(14, 16)), { nil: undefined });
 const axis = fc.constantFrom(0 as const, 1 as const, 2 as const);
-const tagScalar = fc.integer({ min: 0, max: 31 }).chain((shift) =>
-  fc.record({ tag: fc.integer({ min: 0, max: TW - 1 }), shift: fc.constant(shift), bits: fc.integer({ min: 1, max: Math.min(31, 32 - shift) }) }));
+// Shifts and widths often repeat, so fields that differ only in word, shift or bits meet in one spec.
+const tagScalar = fc.oneof(fc.constantFrom(0, 8), fc.integer({ min: 0, max: 31 })).chain((shift) =>
+  fc.record({
+    tag: fc.integer({ min: 0, max: TW - 1 }), shift: fc.constant(shift),
+    bits: fc.oneof(fc.constant(Math.min(8, 32 - shift)), fc.integer({ min: 1, max: Math.min(31, 32 - shift) })),
+  }));
 const i32Scalar: fc.Arbitrary<Scalar> = fc.oneof(
   fc.record({ comp: src, axis, s: scale }),
   fc.record({ aabb: fc.constantFrom('lo' as const, 'hi' as const), axis, s: scale }),
@@ -429,10 +489,11 @@ const i32Scalar: fc.Arbitrary<Scalar> = fc.oneof(
 );
 const norm2Scalar: fc.Arbitrary<Scalar> = fc.record({ norm2: src, s: scale });
 const anyScalar = fc.oneof(i32Scalar, norm2Scalar);
+// A small shared pool too, so two cmps on one scalar and k with different ops meet in one spec.
 const kFor = (x: Scalar) =>
   'norm2' in x
-    ? fc.oneof(fc.integer({ min: 0, max: 2 ** 31 - 1 }), fc.maxSafeNat().map((v) => v % 2 ** 50), fc.integer({ min: 0, max: 2 ** 20 }).map((v) => v * v))
-    : fc.oneof(fc.integer({ min: -(2 ** 31 - 1), max: 2 ** 31 - 1 }), fc.integer({ min: -(2 ** 21), max: 2 ** 21 }), fc.integer({ min: -64, max: 64 }));
+    ? fc.oneof(fc.integer({ min: 0, max: 2 ** 31 - 1 }), fc.maxSafeNat().map((v) => v % 2 ** 50), fc.integer({ min: 0, max: 2 ** 20 }).map((v) => v * v), fc.constantFrom(0, 1))
+    : fc.oneof(fc.integer({ min: -(2 ** 31 - 1), max: 2 ** 31 - 1 }), fc.integer({ min: -(2 ** 21), max: 2 ** 21 }), fc.integer({ min: -64, max: 64 }), fc.constantFrom(-1, 0, 1));
 const cmp: fc.Arbitrary<Pred> = anyScalar.chain((x) =>
   fc.record({ cmp: fc.constant(x), op: fc.constantFrom<CmpOp>('<', '<=', '>', '>=', '==', '!='), k: kFor(x) }));
 const { pred } = fc.letrec<{ pred: Pred }>((tie) => ({
