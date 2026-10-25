@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import fc from 'fast-check';
 import {
-  eyeOf, frame, invert, multiply, newClock, parseViewerConfig, rayThrough, stepsDue, toSearch, transform, viewProj, Window, type Orbit,
+  engineSpec, eyeOf, frame, GPU_SPARE, invert, multiply, newClock, parseViewerConfig, rayThrough, stepsDue, toSearch, transform, viewProj, Window, withOption, type Orbit,
 } from '../src/index.ts';
 
 const orbit: Orbit = { target: [1, 2, 3], yaw: 0.7, pitch: 0.4, distance: 25, fovY: 0.9 };
@@ -81,8 +81,21 @@ describe('stepsDue', () => {
 });
 
 describe('viewer config', () => {
-  it('defaults to a 2k city', () => {
-    expect(parseViewerConfig('')).toMatchObject({ scenario: 'S4', params: { N: 2000, F: 4, H: 12 }, engine: 'rapier', sleep: null });
+  it('defaults to a 2k city on the GPU engine', () => {
+    expect(parseViewerConfig('')).toMatchObject({ scenario: 'S4', params: { N: 2000, F: 4, H: 12 }, engine: 'avbd-gpu', sleep: null });
+  });
+  it('gives the GPU engine room for fired balls unless the spec sets it, and leaves other engines alone', () => {
+    expect(engineSpec('avbd-gpu')).toBe(`avbd-gpu:spare=${GPU_SPARE}`);
+    expect(engineSpec('avbd-gpu:iterations=4')).toBe(`avbd-gpu:iterations=4,spare=${GPU_SPARE}`);
+    expect(engineSpec('avbd-gpu:spare=3')).toBe('avbd-gpu:spare=3');
+    expect(engineSpec('rapier')).toBe('rapier');
+    expect(engineSpec('avbd-ref:iterations=4')).toBe('avbd-ref:iterations=4');
+  });
+  it('sets, replaces and removes one engine option', () => {
+    expect(withOption('avbd-gpu', 'iterations', 20)).toBe('avbd-gpu:iterations=20');
+    expect(withOption('avbd-gpu:iterations=20,sweep=false', 'iterations', 40)).toBe('avbd-gpu:iterations=40,sweep=false');
+    expect(withOption('avbd-gpu:iterations=20,sweep=false', 'iterations', undefined)).toBe('avbd-gpu:sweep=false');
+    expect(withOption('avbd-gpu:iterations=20', 'iterations', undefined)).toBe('avbd-gpu');
   });
   it('round-trips through the URL', () => {
     const c = parseViewerConfig('?scenario=s1&param.F=3&param.gap=0.02&sleep=0&autofire=30&seed=4&offscreen=1');
