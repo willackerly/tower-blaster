@@ -45,6 +45,7 @@ struct CullParams {
   noCull: u32,
   vertsBox: u32,
   vertsSphere: u32,
+  vertsBoxShadow: u32,
 }
 
 @group(0) @binding(0) var<uniform> p: CullParams;
@@ -124,7 +125,7 @@ fn scatter(@builtin(global_invocation_id) id: vec3u) {
 fn writeArgs() {
   let cap = p.capacity;
   for (var s = 0u; s < 4u; s++) {
-    args[4u * s] = select(p.vertsBox, p.vertsSphere, s % 2u == 1u);
+    args[4u * s] = select(select(p.vertsBox, p.vertsBoxShadow, s == ${SEG.boxShadow}u), p.vertsSphere, s % 2u == 1u);
     args[4u * s + 1u] = scan[(s + 1u) * cap] - scan[s * cap];
     args[4u * s + 2u] = 0u;
     args[4u * s + 3u] = 0u;
@@ -179,7 +180,7 @@ export class Culler {
   readonly capacity: number;
 
   /** fx: the renderer's per-slot FX records (FX_WORDS u32 each, at least capacity of them). */
-  constructor(private readonly device: GPUDevice, readonly source: BodySource, private readonly verts: { box: number; sphere: number }, fx: GPUBuffer) {
+  constructor(private readonly device: GPUDevice, readonly source: BodySource, private readonly verts: { box: number; boxShadow?: number; sphere: number }, fx: GPUBuffer) {
     const cap = (this.capacity = source.capacity);
     const usage = GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC;
     this.records = device.createBuffer({ size: Math.max(16, cap * RenderRecord.size), usage, label: 'render records' });
@@ -215,6 +216,7 @@ export class Culler {
     u[54] = f.noCull ? 1 : 0;
     u[55] = this.verts.box;
     u[56] = this.verts.sphere;
+    u[57] = this.verts.boxShadow ?? this.verts.box;
     this.device.queue.writeBuffer(this.params, 0, buf);
     pass.setBindGroup(0, this.binds.prepare);
     pass.setPipeline(this.pipes.prepare);

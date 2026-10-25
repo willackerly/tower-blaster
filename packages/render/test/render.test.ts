@@ -325,7 +325,7 @@ describe('drawing', () => {
   it('bench:render completes and reports every case (numbers discarded)', async (ctx) => {
     if (!gpu) return ctx.skip();
     const r = await call('runRenderBench', { width: 160, height: 90, counts: [800], warmup: 1, batches: 2, batchFrames: 1, profiledFrames: 1 });
-    expect(r.cases.map((c) => `${c.world}:${c.variant}`)).toEqual(['near', 'far'].flatMap((w) => ['full', 'no-shadow', 'no-post', 'cube'].map((v) => `${w}:${v}`)));
+    expect(r.cases.map((c) => `${c.world}:${c.variant}`)).toEqual(['near', 'far'].flatMap((w) => ['full', 'no-shadow', 'no-post', 'fan', 'cube', 'flat-fan', 'flat-cube'].map((v) => `${w}:${v}`)));
     for (const c of r.cases) {
       expect(c.bodies).toBe(800);
       expect(c.frameMs).toBeGreaterThan(0);

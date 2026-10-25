@@ -324,6 +324,11 @@ fn boxFace(local: vec3f, w: vec3f) -> vec3f {
   return vec4f(fog(c, v.rel), 1.0);
 }
 
+// Bench diagnostics (RendererOptions.flatBoxes): the cheapest box shading.
+@fragment fn fsBoxFlat(v: VOut) -> @location(0) vec4f {
+  return vec4f(albedo(v.look), 1.0);
+}
+
 @fragment fn fsSphere(v: VOut) -> @location(0) vec4f {
   let n = qrot(v.rot, normalize(v.local));
   let dndx = dpdx(n);

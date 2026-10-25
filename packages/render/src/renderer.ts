@@ -51,9 +51,26 @@ export interface FrameParams {
 
 export type RenderTarget = { canvas: HTMLCanvasElement } | { size: [number, number] };
 
+/**
+ * How boxes are drawn: the 18-vertex hexagon fan (the three faces towards
+ * the viewer, or the light) or the 36-vertex cube (all six, faces turned
+ * away culled by the rasterizer). Same pixels and depths either way (tests).
+ */
+export type BoxPath = 'fan' | 'cube';
+
 export interface RendererOptions {
-  /** Box geometry: the 18-vertex hexagon fan (default) or the 36-vertex cube (debug and A/B). */
-  boxPath?: 'fan' | 'cube';
+  /**
+   * Box path for the scene pass. Default 'cube': on the M5 Max the scene
+   * pass took 0.90 vs 1.19 ms (near) and 0.98 vs 1.43 ms (far) at 100k
+   * with the cube, though the fan runs half the vertices.
+   */
+  scenePath?: BoxPath;
+  /** Box path for the shadow pass. Default 'fan'. */
+  shadowPath?: BoxPath;
+  /** Shorthand: both paths. */
+  boxPath?: BoxPath;
+  /** Bench diagnostics: boxes shaded with their flat albedo only, which separates fragment cost from the rest. */
+  flatBoxes?: boolean;
 }
 
 type PipeName = 'box' | 'sphere' | 'ground' | 'sky' | 'overlay' | 'boxShadow' | 'sphereShadow' | 'boxId' | 'sphereId';
@@ -109,15 +126,16 @@ export class Renderer {
   private overlayCount = 0;
   private lastTime = 0;
 
-  private readonly boxVerts: number;
+  private readonly boxVerts: { scene: number; shadow: number };
   /** Per-pass GPU timing of render() (cull, shadow, scene, bloom, composite) when set; read with profiler.collect(). */
   profiler: GpuProfiler | null = null;
   /** Passes to skip, for measuring their marginal cost (bench:render). */
   toggles = { shadow: true, post: true };
 
   constructor(readonly device: GPUDevice, target: RenderTarget, opts: RendererOptions = {}) {
-    const fan = (opts.boxPath ?? 'fan') === 'fan';
-    this.boxVerts = fan ? BOX_FAN_VERTS : BOX_CUBE_VERTS;
+    const sceneFan = (opts.scenePath ?? opts.boxPath ?? 'cube') === 'fan';
+    const shadowFan = (opts.shadowPath ?? opts.boxPath ?? 'fan') === 'fan';
+    this.boxVerts = { scene: sceneFan ? BOX_FAN_VERTS : BOX_CUBE_VERTS, shadow: shadowFan ? BOX_FAN_VERTS : BOX_CUBE_VERTS };
     this.format = navigator.gpu.getPreferredCanvasFormat();
     if ('canvas' in target) {
       const ctx = target.canvas.getContext('webgpu');
@@ -159,7 +177,7 @@ export class Renderer {
     const shadowPl = device.createPipelineLayout({ bindGroupLayouts: [this.shadowLayout] });
     const color = (vs: string, fs: string, cull: GPUCullMode, seg: number, opts: { format?: GPUTextureFormat; samples?: number; sky?: boolean } = {}): GPURenderPipeline => device.createRenderPipeline({
       layout: main,
-      vertex: { module, entryPoint: vs, constants: { SEG: seg, ...(vs === 'vsBox' ? { FAN: fan ? 1 : 0 } : {}) } },
+      vertex: { module, entryPoint: vs, constants: { SEG: seg, ...(vs === 'vsBox' ? { FAN: sceneFan ? 1 : 0 } : {}) } },
       fragment: { module, entryPoint: fs, targets: [{ format: opts.format ?? HDR_FORMAT }] },
       primitive: { topology: 'triangle-list', cullMode: cull, frontFace: 'ccw' },
       depthStencil: opts.sky
@@ -169,11 +187,11 @@ export class Renderer {
     });
     const depthOnly = (vs: string, seg: number): GPURenderPipeline => device.createRenderPipeline({
       layout: shadowPl,
-      vertex: { module, entryPoint: vs, constants: { SEG: seg, ...(vs === 'vsBoxShadow' ? { FAN: fan ? 1 : 0 } : {}) } },
-      // Casters are the light-facing faces only (the fan around the corner
-      // nearest the light) or, on the cube path, every face; both write the
-      // same nearest depth.
-      primitive: { topology: 'triangle-list', cullMode: 'none' },
+      vertex: { module, entryPoint: vs, constants: { SEG: seg, ...(vs === 'vsBoxShadow' ? { FAN: shadowFan ? 1 : 0 } : {}) } },
+      // Casters are the light-facing faces: the fan around the corner
+      // nearest the light, or the cube with faces turned away culled. Both
+      // write the same nearest depth.
+      primitive: { topology: 'triangle-list', cullMode: 'back', frontFace: 'ccw' },
       // No caster bias: one bias model, all on the receiver (normal offset
       // plus a constant, in shadow() in shaders.ts). Slope-scaled caster bias
       // also depends on how a face is triangulated in the rasterizer, so the
@@ -183,7 +201,7 @@ export class Renderer {
     this.source = new SnapshotSource(device);
     this.facePipe = () => (this.faceCache ??= color('vsBox', 'fsFace', 'back', SEG.box, { format: 'r32uint', samples: 1 }));
     this.pipes = {
-      box: color('vsBox', 'fsBox', 'back', SEG.box),
+      box: color('vsBox', opts.flatBoxes ? 'fsBoxFlat' : 'fsBox', 'back', SEG.box),
       sphere: color('vsSphere', 'fsSphere', 'back', SEG.sphere),
       ground: color('vsGround', 'fsGround', 'none', 0),
       sky: color('vsSky', 'fsSky', 'none', 0, { sky: true }),
@@ -282,7 +300,7 @@ export class Renderer {
         this.fxBuf = this.device.createBuffer({ size: Math.max(16, this.fx.byteLength), usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST, label: 'fx' });
         this.device.queue.writeBuffer(this.fxBuf, 0, this.fx);
       }
-      this.culler = new Culler(this.device, s, { box: this.boxVerts, sphere: SPHERE_VERTS }, this.fxBuf);
+      this.culler = new Culler(this.device, s, { box: this.boxVerts.scene, boxShadow: this.boxVerts.shadow, sphere: SPHERE_VERTS }, this.fxBuf);
       const buffers = [this.frameBuf, this.culler.records, this.culler.lists];
       const common = buffers.map((buffer, binding) => ({ binding, resource: { buffer } }));
       this.bind = this.device.createBindGroup({
