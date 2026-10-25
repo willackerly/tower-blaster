@@ -26,6 +26,9 @@ importers:
       '@tb/metrics':
         specifier: workspace:*
         version: link:packages/metrics
+      '@tb/physics-gpu':
+        specifier: workspace:*
+        version: link:packages/physics-gpu
       '@tb/runner':
         specifier: workspace:*
         version: link:packages/runner
@@ -81,6 +84,8 @@ importers:
   packages/gpu: {}
 
   packages/metrics: {}
+
+  packages/physics-gpu: {}
 
   packages/runner: {}
 

@@ -58,4 +58,5 @@ Results worth keeping go in `docs/benchmarks/` (the first is a CPU baseline from
 | `bench` | Timing and quality runs, CLI |
 | `runner` | Browser runner page, Playwright orchestrator (`bench:browser`) |
 | `gpu` | GPU primitives (profiler, scan, compaction, radix sort, bandwidth probe) and `bench:gpu` |
+| `physics-gpu` | GPU physics pipeline stages (broadphase so far) |
 | `testkit` | Headless Chromium WebGPU sessions for tests |
