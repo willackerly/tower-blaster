@@ -33,7 +33,7 @@
 // - Friction is a cone (the two tangent rows clamped together to mu |lambda_n|).
 // - Bodies are swept by graph colour (see coloring.ts), the order the
 //   parallel GPU version uses, so the two can be compared step by step.
-import { type BodyDesc, inertiaOf, massOf, type Quat, type SceneDesc, type Vec3 } from '@tb/engine-api';
+import { type BodyDesc, combineFriction, inertiaOf, massOf, type Quat, type SceneDesc, type Vec3 } from '@tb/engine-api';
 import { boundingRadius, cross, dot, groundManifold, NO_AXIS, quatMul, quatNormalize, rotate, shapeManifold, spherePairs } from '@tb/geom';
 import { colorGraph } from './coloring.ts';
 import { solveSpd6 } from './linalg.ts';
@@ -138,7 +138,7 @@ export class AvbdWorld {
   axes = new Map<string, number>();
   stats: StepStats = { contacts: 0, manifolds: 0, colors: 0 };
 
-  constructor(readonly scene: Pick<SceneDesc, 'gravity' | 'dt' | 'ground'>, readonly p: AvbdParams = DEFAULT_AVBD) {}
+  constructor(readonly scene: Pick<SceneDesc, 'gravity' | 'dt' | 'ground' | 'frictionCombine'>, readonly p: AvbdParams = DEFAULT_AVBD) {}
 
   add(b: BodyDesc): void {
     this.bodies.push({
@@ -222,6 +222,7 @@ export class AvbdWorld {
       sweep[i] = p.sweep ? Math.min(p.maxSweep, h * v) : 0;
     });
     const inflated = radii.map((r, i) => r + sweep[i]!);
+    const rule = this.scene.frictionCombine ?? 'average';
     const axes = new Map<string, number>();
     for (const [i, j] of spherePairs(centers, inflated, p.margin)) {
       const A = bodies[i]!, B = bodies[j]!;
@@ -229,14 +230,14 @@ export class AvbdWorld {
       const m = shapeManifold(A.desc.shape, A.pos, A.rot, B.desc.shape, B.pos, B.rot, p.margin + sweep[i]! + sweep[j]!, true, this.axes.get(key) ?? NO_AXIS);
       if (!m) continue;
       axes.set(key, m.axis);
-      emit(i, j, m.normal, m.points, Math.sqrt(A.desc.friction * B.desc.friction));
+      emit(i, j, m.normal, m.points, combineFriction(rule, A.desc.friction, B.desc.friction));
     }
     this.axes = axes;
     const g = this.scene.ground;
     if (g) {
       bodies.forEach((B, i) => {
         const m = groundManifold(B.desc.shape, B.pos, B.rot, g.y, p.margin + sweep[i]!);
-        if (m) emit(GROUND, i, m.normal, m.points, Math.sqrt(B.desc.friction * g.friction));
+        if (m) emit(GROUND, i, m.normal, m.points, combineFriction(rule, B.desc.friction, g.friction));
       });
     }
     this.contacts = out;

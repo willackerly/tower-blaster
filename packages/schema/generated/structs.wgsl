@@ -132,7 +132,7 @@ struct SolverParams {
   capacity: u32, // @88
   slidingHessian: u32, // @92
   sweepOn: u32, // @96
-  pad0: u32, // @100
+  frictionCombine: u32, // @100 0 average, 1 min, 2 max, 3 multiply (SceneDesc.frictionCombine)
   pad1: u32, // @104
   pad2: u32, // @108
 }

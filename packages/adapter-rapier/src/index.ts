@@ -2,13 +2,20 @@
 // contract. Used as a reference for quality metrics and as the number every
 // GPU variant has to beat by a wide margin.
 import RAPIER from '@dimforge/rapier3d-simd-compat';
-import { type BodyDesc, emptySnapshot, type EngineInfo, type InputEvent, type PhysicsEngine, type SceneDesc, type Snapshot } from '@tb/engine-api';
+import { type BodyDesc, type CombineRule, emptySnapshot, type EngineInfo, type InputEvent, type PhysicsEngine, type SceneDesc, type Snapshot } from '@tb/engine-api';
 import { createBody, createGround, initRapier } from './bodies.ts';
 
 export interface RapierOptions {
   /** Solver iterations per step; Rapier's default is 4. */
   iterations?: number;
 }
+
+const RULES: Record<CombineRule, RAPIER.CoefficientCombineRule> = {
+  average: RAPIER.CoefficientCombineRule.Average,
+  min: RAPIER.CoefficientCombineRule.Min,
+  max: RAPIER.CoefficientCombineRule.Max,
+  multiply: RAPIER.CoefficientCombineRule.Multiply,
+};
 
 export class RapierEngine implements PhysicsEngine {
   readonly info: EngineInfo;
@@ -17,9 +24,11 @@ export class RapierEngine implements PhysicsEngine {
   private bodies: RAPIER.RigidBody[] = [];
   private pending: InputEvent[] = [];
   private sleep = true;
+  private combine = RAPIER.CoefficientCombineRule.Average;
 
   constructor(private readonly opts: RapierOptions = {}) {
-    this.info = { name: 'rapier', variant: { version: 'uninitialised', iterations: opts.iterations ?? 4 }, backend: 'wasm-simd-st' };
+    // Rapier takes one substep per solver iteration.
+    this.info = { name: 'rapier', variant: { version: 'uninitialised', iterations: opts.iterations ?? 4 }, backend: 'wasm-simd-st', integrator: { substeps: opts.iterations ?? 4 } };
   }
 
   async init(scene: SceneDesc): Promise<void> {
@@ -29,7 +38,8 @@ export class RapierEngine implements PhysicsEngine {
     const world = new RAPIER.World({ x: scene.gravity[0], y: scene.gravity[1], z: scene.gravity[2] });
     world.timestep = scene.dt;
     if (this.opts.iterations) world.numSolverIterations = this.opts.iterations;
-    if (scene.ground) createGround(world, scene.ground);
+    this.combine = RULES[scene.frictionCombine ?? 'average'];
+    if (scene.ground) createGround(world, scene.ground).setFrictionCombineRule(this.combine);
     this.world = world;
     this.sleep = scene.sleep;
     this.bodies = [];
@@ -39,7 +49,10 @@ export class RapierEngine implements PhysicsEngine {
   }
 
   private add(b: BodyDesc): void {
-    this.bodies.push(createBody(this.world!, b, this.sleep, RAPIER.RigidBodyDesc.dynamic()).body);
+    const { body, collider } = createBody(this.world!, b, this.sleep, RAPIER.RigidBodyDesc.dynamic());
+    // Every collider carries the scene's rule (Rapier uses the higher-priority rule of a pair).
+    collider.setFrictionCombineRule(this.combine);
+    this.bodies.push(body);
   }
 
   push(events: InputEvent[]): void {
