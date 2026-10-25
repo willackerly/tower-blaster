@@ -14,20 +14,21 @@
     "check": "pnpm typecheck && pnpm test"
   },
   "devDependencies": {
+    "@tb/adapter-rapier": "workspace:*",
+    "@tb/bench": "workspace:*",
+    "@tb/engine-api": "workspace:*",
+    "@tb/geom": "workspace:*",
+    "@tb/metrics": "workspace:*",
+    "@tb/scenarios": "workspace:*",
+    "@tb/schema": "workspace:*",
+    "@tb/testkit": "workspace:*",
     "@types/node": "22.20.5",
+    "@webgpu/types": "0.1.74",
     "fast-check": "4.10.2",
     "playwright": "1.63.0",
     "tsx": "4.23.15",
     "typescript": "6.0.3",
-    "vitest": "5.0.3",
-    "@webgpu/types": "0.1.74",
-    "@tb/schema": "workspace:*",
-    "@tb/scenarios": "workspace:*",
-    "@tb/engine-api": "workspace:*",
-    "@tb/adapter-rapier": "workspace:*",
-    "@tb/metrics": "workspace:*",
-    "@tb/bench": "workspace:*",
-    "@tb/testkit": "workspace:*"
+    "vitest": "5.0.3"
   },
   "pnpm": {
     "onlyBuiltDependencies": [

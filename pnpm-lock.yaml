@@ -17,6 +17,9 @@ importers:
       '@tb/engine-api':
         specifier: workspace:*
         version: link:packages/engine-api
+      '@tb/geom':
+        specifier: workspace:*
+        version: link:packages/geom
       '@tb/metrics':
         specifier: workspace:*
         version: link:packages/metrics
@@ -60,6 +63,8 @@ importers:
   packages/bench: {}
 
   packages/engine-api: {}
+
+  packages/geom: {}
 
   packages/metrics: {}
 
