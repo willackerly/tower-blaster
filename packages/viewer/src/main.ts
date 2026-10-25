@@ -9,7 +9,7 @@ import { newClock, stepsDue, Window } from './loop.ts';
 import type { V3 } from './math.ts';
 import { parseViewerConfig, toSearch, type ViewerConfig } from './params.ts';
 import { createDevice } from '@tb/gpu';
-import { Renderer, SnapshotSource, type PixelStats } from '@tb/render';
+import { CANDY_NIGHT, LOOKS, Renderer, SnapshotSource, type PixelStats } from '@tb/render';
 
 const PRESETS: Array<{ label: string; search: string }> = [
   { label: 'Tower 8×8×30', search: '?scenario=S1&param.gap=0.02' },
@@ -82,6 +82,7 @@ async function main() {
   const renderer = new Renderer(device, config.offscreen ? { size: [640, 400] } : { canvas });
   const source = new SnapshotSource(device);
   renderer.setSource(source);
+  renderer.look = LOOKS[config.look] ?? CANDY_NIGHT;
   renderer.device.lost.then((info) => fail(`GPU device lost: ${info.message}`));
   renderer.device.addEventListener('uncapturederror', (e) => fail((e as GPUUncapturedErrorEvent).error.message));
 
@@ -238,7 +239,7 @@ async function main() {
     if (n > 0) await refresh();
     const want = pendingCapture;
     pendingCapture = null;
-    const stats = await renderer.render({ viewProj: viewProj(orbit, aspect()), eye: eyeOf(orbit), groundY: scene.ground?.y ?? 0, fogDist: orbit.distance * 4 + 60, alpha: paused ? 1 : clock.acc / scene.dt }, !!want, want?.keep);
+    const stats = await renderer.render({ viewProj: viewProj(orbit, aspect()), eye: eyeOf(orbit), focus: orbit.target, time: now / 1000, groundY: scene.ground?.y ?? 0, alpha: paused ? 1 : clock.acc / scene.dt }, !!want, want?.keep);
     if (want) want.resolve(stats);
     handle.frames++;
     if (handle.frames % 10 === 1) drawHud();

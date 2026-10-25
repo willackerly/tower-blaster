@@ -4,3 +4,6 @@ export * from './looks.ts';
 export * from './math.ts';
 export * from './renderer.ts';
 export * from './source.ts';
+export * from './look.ts';
+export * from './post.ts';
+export * from './shaders.ts';

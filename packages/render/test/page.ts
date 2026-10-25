@@ -5,6 +5,7 @@ import { emptySnapshot, TAG_BALL, type BodyDesc, type Snapshot } from '@tb/engin
 import { createDevice, readBuffer } from '@tb/gpu';
 import { Body, RenderRecord, Shape, TIER, readStruct } from '@tb/schema';
 import {
+  agx, AGX_WGSL, bevelNormal, BEVEL_WGSL, oklabToLinear, OKLAB_WGSL, Post,
   Culler, cullReference, GpuBodySource, invert, listMatches, lookAt, makeGpuBodies, multiply, perspective, Renderer, SEGMENTS, SnapshotSource, transform,
   translation, BOX_VERTS, SPHERE_VERTS, type BodySource, type CullFrame, type FrameParams, type V3,
 } from '../src/index.ts';
@@ -29,7 +30,7 @@ function randomQuat(r: () => number): [number, number, number, number] {
 const W = 160, H = 100;
 
 function camera(eye: V3, target: V3, aspect = W / H): FrameParams {
-  return { viewProj: multiply(perspective(0.9, aspect, 0.1, 400), lookAt(eye, target)), eye, groundY: -100, fogDist: 1e6 };
+  return { viewProj: multiply(perspective(0.9, aspect, 0.1, 400), lookAt(eye, target)), eye, groundY: -100 };
 }
 
 // ---------------------------------------------------------------- cull
@@ -338,4 +339,196 @@ export async function gpuSource(seed: number) {
   src.destroy();
   device.destroy();
   return { diff: diffIds(idsSnap, idsGpu), prevEqual, bytesPerFrame: bytes / FRAMES, callsPerFrame: calls / FRAMES, error: err?.message ?? null };
+}
+
+// ---------------------------------------------------------------- faces
+
+/** Face code (1 + 2 * axis + negative) of where a ray enters an AABB, 0 for a miss. */
+function aabbFace(lo: V3, hi: V3, o: V3, d: V3): number {
+  let t0 = -Infinity, t1 = Infinity, face = 0;
+  for (let k = 0; k < 3; k++) {
+    if (Math.abs(d[k]!) < 1e-12) { if (o[k]! < lo[k]! || o[k]! > hi[k]!) return 0; continue; }
+    const a = (lo[k]! - o[k]!) / d[k]!, b = (hi[k]! - o[k]!) / d[k]!;
+    const near = Math.min(a, b);
+    if (near > t0) { t0 = near; face = 1 + 2 * k + (d[k]! > 0 ? 1 : 0); }
+    t1 = Math.min(t1, Math.max(a, b));
+  }
+  return t0 <= t1 && t0 > 0 ? face : 0;
+}
+
+/**
+ * A gap-free F x F x H tower of unit cubes is exactly an AABB, so every
+ * pixel's visible face is known. Pixels whose 3x3 neighbourhood sees one
+ * face (away from the silhouette and the tower's own edges) must show that
+ * face, and the box shader must name the same face anywhere within half a
+ * pixel (unstable otherwise). Off-centre eyes put the cubes' shared edges
+ * at arbitrary sub-pixel positions.
+ */
+export async function towerFaces() {
+  const { device } = await createDevice({ timestamps: false });
+  device.pushErrorScope('validation');
+  const F = 6, Ht = 10, ox = 0.37, oz = -0.21;
+  const descs: BodyDesc[] = [];
+  for (let y = 0; y < Ht; y++) for (let x = 0; x < F; x++) for (let z = 0; z < F; z++) descs.push(box([ox + x - (F - 1) / 2, 0.5 + y, oz + z - (F - 1) / 2], [0.5, 0.5, 0.5], [0, 0, 0, 1]));
+  const lo: V3 = [ox - F / 2, 0, oz - F / 2], hi: V3 = [ox + F / 2, Ht, oz + F / 2];
+  const src = new SnapshotSource(device);
+  src.update(snapshotOf(descs), descs);
+  const rend = new Renderer(device, { size: [W, H] });
+  rend.setSource(src);
+  let checked = 0, wrong = 0, unstable = 0;
+  const examples: string[] = [];
+  for (const eye of [[17.3, 9.1, 21.7], [-23.9, 14.2, 19.4], [29.1, 4.3, -11.8], [-8.6, 22.5, -31.3]] as V3[]) {
+    const f = camera(eye, [ox, Ht / 2, oz]);
+    const { ids: faces } = await rend.renderIds(f, true);
+    const want = new Uint8Array(W * H);
+    for (let py = 0; py < H; py++) for (let px = 0; px < W; px++) want[py * W + px] = aabbFace(lo, hi, ...Object.values(rayAt(f, px, py)) as [V3, V3]);
+    for (let py = 1; py < H - 1; py++) for (let px = 1; px < W - 1; px++) {
+      const w = want[py * W + px]!;
+      if (!w || [-1, 0, 1].some((dy) => [-1, 0, 1].some((dx) => want[(py + dy) * W + px + dx] !== w))) continue;
+      checked++;
+      const got = faces[py * W + px]!;
+      if (got === 15) unstable++;
+      else if (got !== w) wrong++;
+      if (got !== w && examples.length < 5) examples.push(`eye ${eye} (${px},${py}) face ${got} want ${w}`);
+    }
+  }
+  const err = await device.popErrorScope();
+  rend.destroy();
+  device.destroy();
+  return { checked, wrong, unstable, examples, error: err?.message ?? null };
+}
+
+
+// ---------------------------------------------------------------- look twins
+
+/** Run WGSL fn(vec4f x 3) -> vec4f over n inputs on the GPU. */
+async function mapGpu(device: GPUDevice, lib: string, body: string, inputs: Float32Array, n: number): Promise<Float32Array> {
+  const code = `${lib}
+@group(0) @binding(0) var<storage, read> xs: array<vec4f>;
+@group(0) @binding(1) var<storage, read_write> ys: array<vec4f>;
+@compute @workgroup_size(64) fn main(@builtin(global_invocation_id) id: vec3u) {
+  let i = id.x;
+  if (i >= ${n}u) { return; }
+  let a = xs[3u * i]; let b = xs[3u * i + 1u]; let c = xs[3u * i + 2u];
+  ${body}
+}`;
+  const pipe = device.createComputePipeline({ layout: 'auto', compute: { module: device.createShaderModule({ code }), entryPoint: 'main' } });
+  const xs = device.createBuffer({ size: inputs.byteLength, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });
+  device.queue.writeBuffer(xs, 0, inputs);
+  const ys = device.createBuffer({ size: n * 16, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC });
+  const enc = device.createCommandEncoder();
+  const pass = enc.beginComputePass();
+  pass.setPipeline(pipe);
+  pass.setBindGroup(0, device.createBindGroup({ layout: pipe.getBindGroupLayout(0), entries: [{ binding: 0, resource: { buffer: xs } }, { binding: 1, resource: { buffer: ys } }] }));
+  pass.dispatchWorkgroups(Math.ceil(n / 64));
+  pass.end();
+  device.queue.submit([enc.finish()]);
+  const out = new Float32Array(await readBuffer(device, ys));
+  xs.destroy();
+  ys.destroy();
+  return out;
+}
+
+/**
+ * The colour and bevel WGSL against their TypeScript twins (look.ts), on
+ * random inputs: AgX over 1e-5..1e3 linear HDR (and zero), OKLab around
+ * the ramp colours, bevel normals over random boxes, faces, pixel sizes
+ * and radii. Returns the largest absolute difference of each.
+ */
+export async function lookTwins(seed: number, n = 4096) {
+  const { device } = await createDevice({ timestamps: false });
+  device.pushErrorScope('validation');
+  const r = rng(seed);
+  const f32 = Math.fround;
+  const pack = (rows: number[][][]) => new Float32Array(rows.flatMap((abc) => abc.flatMap((v) => [v[0] ?? 0, v[1] ?? 0, v[2] ?? 0, v[3] ?? 0]).map(f32)));
+  const hdr = () => (r() < 0.02 ? 0 : 10 ** (r() * 8 - 5));
+  // AgX
+  const agxIn = Array.from({ length: n }, () => [[hdr(), hdr(), hdr()], [], []]);
+  const agxGpu = await mapGpu(device, AGX_WGSL, 'ys[i] = vec4f(agx(a.xyz), 0.0);', pack(agxIn), n);
+  let agxErr = 0;
+  agxIn.forEach(([c], i) => agx(c!.map(f32) as V3).forEach((v, k) => { agxErr = Math.max(agxErr, Math.abs(v - agxGpu[4 * i + k]!)); }));
+  // OKLab
+  const labIn = Array.from({ length: n }, () => [[0.3 + 0.7 * r(), (r() - 0.5) * 0.4, (r() - 0.5) * 0.4], [], []]);
+  const labGpu = await mapGpu(device, OKLAB_WGSL, 'ys[i] = vec4f(oklabToLinear(a.xyz), 0.0);', pack(labIn), n);
+  let labErr = 0;
+  labIn.forEach(([c], i) => oklabToLinear(c!.map(f32) as V3).forEach((v, k) => { labErr = Math.max(labErr, Math.abs(v - labGpu[4 * i + k]!)); }));
+  // Bevel
+  const bevIn = Array.from({ length: n }, () => {
+    const half = [0.05 + r() * 1.5, 0.05 + r() * 1.5, 0.05 + r() * 1.5];
+    const axis = Math.floor(r() * 3), sgn = r() < 0.5 ? -1 : 1;
+    const faceN = [0, 0, 0];
+    faceN[axis] = sgn;
+    const lp = half.map((h, k) => (k === axis ? sgn * h : (r() * 2 - 1) * h));
+    return [lp, faceN, [...half, 10 ** (r() * 4 - 4)], [r() < 0.5 ? 0.06 : 0.005 + r() * 0.2]];
+  });
+  const bevPacked = new Float32Array(bevIn.flatMap(([lp, fn, hp, rb]) => [...lp!, rb![0]!, ...fn!, 0, ...hp!]).map(f32));
+  const bevGpu = await mapGpu(device, BEVEL_WGSL, 'ys[i] = vec4f(bevelNormal(a.xyz, b.xyz, c.xyz, c.w, a.w), 0.0);', bevPacked, n);
+  let bevErr = 0;
+  bevIn.forEach(([lp, fn, hp, rb], i) => {
+    const want = bevelNormal(lp!.map(f32) as V3, fn as V3, hp!.slice(0, 3).map(f32) as V3, f32(hp![3]!), f32(rb![0]!));
+    want.forEach((v, k) => { bevErr = Math.max(bevErr, Math.abs(v - bevGpu[4 * i + k]!)); });
+  });
+  const err = await device.popErrorScope();
+  device.destroy();
+  return { agxErr, labErr, bevErr, error: err?.message ?? null };
+}
+
+// ---------------------------------------------------------------- bloom
+
+function toHalf(x: number): number {
+  const f = new Float32Array([x]), u = new Uint32Array(f.buffer)[0]!;
+  const sign = (u >>> 16) & 0x8000, e = ((u >>> 23) & 0xff) - 127 + 15, m = u & 0x7fffff;
+  if (e <= 0) return sign;
+  if (e >= 31) return sign | 0x7c00;
+  return sign | (e << 10) | Math.round(m / 8192);
+}
+function fromHalf(h: number): number {
+  const e = (h >>> 10) & 0x1f, m = h & 0x3ff, s = h & 0x8000 ? -1 : 1;
+  if (e === 0) return s * m * 2 ** -24;
+  if (e === 31) return m ? NaN : s * Infinity;
+  return s * (1 + m / 1024) * 2 ** (e - 15);
+}
+
+/**
+ * One bright pixel through the bloom pyramid. Without Karis weighting
+ * every filter preserves the mean, so levels[0] (the sum of all levels)
+ * divided by the level count has the input's mean; the glow falls off
+ * monotonically from the pixel; nothing is NaN or infinite.
+ */
+export async function bloomEnergy(karis: boolean) {
+  const { device } = await createDevice({ timestamps: false });
+  device.pushErrorScope('validation');
+  const w = 256, h = 192, cx = 128, cy = 96, value = 1000;
+  const hdr = device.createTexture({ size: [w, h], format: 'rgba16float', usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST | GPUTextureUsage.RENDER_ATTACHMENT });
+  const px = new Uint16Array(w * h * 4);
+  for (let i = 0; i < w * h; i++) px[4 * i + 3] = toHalf(1);
+  px.set([toHalf(value), toHalf(value), toHalf(value)], 4 * (cy * w + cx));
+  device.queue.writeTexture({ texture: hdr }, px, { bytesPerRow: w * 8 }, [w, h]);
+  const post = new Post(device, 'rgba8unorm');
+  const enc = device.createCommandEncoder();
+  post.encodeBloom(enc, hdr, karis);
+  const top = post.levels[0]!;
+  const bpr = Math.ceil((top.width * 8) / 256) * 256;
+  const read = device.createBuffer({ size: bpr * top.height, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST });
+  enc.copyTextureToBuffer({ texture: top }, { buffer: read, bytesPerRow: bpr }, [top.width, top.height]);
+  device.queue.submit([enc.finish()]);
+  await read.mapAsync(GPUMapMode.READ);
+  const raw = new Uint16Array(read.getMappedRange());
+  const at = (x: number, y: number) => fromHalf(raw[(y * bpr) / 2 + 4 * x]!);
+  let sum = 0, finite = true;
+  for (let y = 0; y < top.height; y++) for (let x = 0; x < top.width; x++) { const v = at(x, y); sum += v; if (!Number.isFinite(v)) finite = false; }
+  const meanRatio = sum / (top.width * top.height) / post.levels.length / (value / (w * h));
+  // Outward from the peak along the row and column through it: never rising.
+  const tx = cx / 2, ty = cy / 2;
+  let rises = 0;
+  for (let x = tx + 1; x < top.width; x++) if (at(x, ty) > at(x - 1, ty) * 1.001 + 1e-6) rises++;
+  for (let x = tx - 2; x >= 0; x--) if (at(x, ty) > at(x + 1, ty) * 1.001 + 1e-6) rises++;
+  for (let y = ty + 1; y < top.height; y++) if (at(tx, y) > at(tx, y - 1) * 1.001 + 1e-6) rises++;
+  const levels = post.levels.length;
+  read.destroy();
+  post.destroy();
+  hdr.destroy();
+  const err = await device.popErrorScope();
+  device.destroy();
+  return { meanRatio, rises, finite, levels, error: err?.message ?? null };
 }

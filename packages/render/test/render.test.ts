@@ -6,8 +6,8 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { emptySnapshot, TAG_BALL, type BodyDesc } from '@tb/engine-api';
 import { buildScenario } from '@tb/scenarios';
 import { Body, readStruct, Shape } from '@tb/schema';
-import { loadBundle, openWebGPU, type WebGPUSession } from '@tb/testkit';
-import { frustumPlanes, listMatches, lookAt, lookOf, lookRange, MATERIAL, multiply, packBodies, packShapes, paletteOf, perspective, unpackLook } from '../src/index.ts';
+import { isSoftwareAdapter, loadBundle, openWebGPU, type WebGPUSession } from '@tb/testkit';
+import { agx, bevelNormal, CANDY_NIGHT, frustumPlanes, linearToOklab, listMatches, oklabToLinear, srgbToLinear, lookAt, lookOf, lookRange, MATERIAL, multiply, packBodies, packShapes, paletteOf, perspective, unpackLook } from '../src/index.ts';
 import type * as Drivers from './page.ts';
 
 describe('looks', () => {
@@ -76,6 +76,66 @@ describe('listMatches', () => {
   });
 });
 
+describe('look math (CPU twins)', () => {
+  const r = (() => { let a = 7; return () => ((a = (a * 1103515245 + 12345) >>> 0) / 2 ** 32); })();
+
+  it('OKLab round-trips linear sRGB', () => {
+    for (let i = 0; i < 1000; i++) {
+      const c: [number, number, number] = [r(), r(), r()];
+      oklabToLinear(linearToOklab(c)).forEach((v, k) => expect(v).toBeCloseTo(c[k]!, 6));
+    }
+    // White is L = 1, a = b = 0.
+    linearToOklab([1, 1, 1]).forEach((v, k) => expect(v).toBeCloseTo(k ? 0 : 1, 4));
+  });
+
+  // Monotone up to a quarter of an 8-bit step: near white, the punchy
+  // saturation plus the output clamp dips luma by up to ~5e-4.
+  it('AgX maps black to black, stays in 0..1, and is monotone in exposure', () => {
+    expect(Math.max(...agx([0, 0, 0]))).toBeLessThan(0.01);
+    for (let i = 0; i < 200; i++) {
+      const c: [number, number, number] = [r() * 4, r() * 4, r() * 4];
+      let prev = -1;
+      for (let ev = -8; ev <= 8; ev += 0.5) {
+        const out = agx(c.map((x) => x * 2 ** ev) as [number, number, number]);
+        out.forEach((v) => { expect(v).toBeGreaterThanOrEqual(0); expect(v).toBeLessThanOrEqual(1); });
+        const luma = 0.2126 * out[0] + 0.7152 * out[1] + 0.0722 * out[2];
+        expect(luma).toBeGreaterThanOrEqual(prev - 1 / 1024);
+        prev = luma;
+      }
+    }
+  });
+
+  it('every ramp colour keeps its hue ordering through OKLab (no channel clipping)', () => {
+    for (const c of CANDY_NIGHT.ramp) {
+      const lin = c.map(srgbToLinear) as [number, number, number];
+      oklabToLinear(linearToOklab(lin)).forEach((v) => { expect(v).toBeGreaterThanOrEqual(-1e-6); expect(v).toBeLessThanOrEqual(1 + 1e-6); });
+    }
+  });
+
+  it('bevel normals are unit, never face inward, and flat at face centres', () => {
+    for (let i = 0; i < 5000; i++) {
+      const half: [number, number, number] = [0.05 + r() * 1.5, 0.05 + r() * 1.5, 0.05 + r() * 1.5];
+      const axis = Math.floor(r() * 3), sgn = r() < 0.5 ? -1 : 1;
+      const faceN: [number, number, number] = [0, 0, 0];
+      faceN[axis] = sgn;
+      const lp = half.map((h, k) => (k === axis ? sgn * h : (r() * 2 - 1) * h)) as [number, number, number];
+      const pxM = 10 ** (r() * 4 - 4), rb = 0.005 + r() * 0.2;
+      const n = bevelNormal(lp, faceN, half, pxM, rb);
+      expect(Math.hypot(...n)).toBeCloseTo(1, 9);
+      expect(n[axis]! * sgn).toBeGreaterThan(0.3); // tilts at most to the 45 degree edge normal (and less near corners' sides)
+      const centre = half.map((h, k) => (k === axis ? sgn * h : 0)) as [number, number, number];
+      bevelNormal(centre, faceN, half, pxM, rb).forEach((v, k) => expect(v).toBeCloseTo(faceN[k]!, 9));
+    }
+  });
+
+  it('bevel fades to the flat face once the radius is under a third of a pixel', () => {
+    const half: [number, number, number] = [0.5, 0.5, 0.5];
+    const edge: [number, number, number] = [0.5, 0.499, 0.2];
+    expect(bevelNormal(edge, [1, 0, 0], half, 0.001, 0.06)[1]).toBeGreaterThan(0.1); // resolved: tilted
+    expect(bevelNormal(edge, [1, 0, 0], half, 0.2, 0.06)).toEqual([1, 0, 0]); // 3x the radius per pixel: flat
+  });
+});
+
 let gpu: WebGPUSession | null = null;
 beforeAll(async () => {
   gpu = await openWebGPU();
@@ -127,6 +187,48 @@ describe('drawing', () => {
       expect(r.hitProbes).toBeGreaterThan(50);
       expect(r.mismatches, r.examples.join('; ')).toBe(0);
     }
+  });
+
+  // A packed tower showed dark vertical dashes: at edge pixels the MSAA
+  // shading point lies outside the triangle, and a face guessed from the
+  // extrapolated local position named the neighbouring face (that guess
+  // makes 1735 of these pixels unstable).
+  it('tower faces shade as their own face at every sub-pixel edge', async (ctx) => {
+    if (!gpu) return ctx.skip();
+    const r = await call('towerFaces');
+    expect(r.error).toBeNull();
+    expect(r.checked).toBeGreaterThan(2000);
+    expect(r.unstable, r.examples.join('; ')).toBe(0);
+    // A few pixels on a shared edge see the neighbour's inner face: the two
+    // meet exactly there, and snapped vertices decide either way. Measured
+    // 5 of 2897; neither depth32float nor dilating boxes by up to 1 px
+    // removes them, and in the shaded image they are one sample of four on
+    // an already darkened seam.
+    expect(r.wrong, r.examples.join('; ')).toBeLessThan(r.checked * 0.005);
+  });
+
+  it('colour and bevel WGSL match their TypeScript twins', async (ctx) => {
+    if (!gpu) return ctx.skip();
+    const r = await call('lookTwins', 41);
+    expect(r.error).toBeNull();
+    expect(r.agxErr).toBeLessThan(1 / 1024); // a quarter of an 8-bit step
+    expect(r.labErr).toBeLessThan(1e-5);
+    expect(r.bevErr).toBeLessThan(1e-4);
+  });
+
+  it('bloom without Karis weighting conserves energy and falls off monotonically', async (ctx) => {
+    if (!gpu) return ctx.skip();
+    const r = await call('bloomEnergy', false);
+    expect(r.error).toBeNull();
+    expect(r.finite).toBe(true);
+    expect(r.levels).toBe(5);
+    expect(r.meanRatio).toBeGreaterThan(0.95);
+    expect(r.meanRatio).toBeLessThan(1.05);
+    expect(r.rises).toBe(0);
+    // Karis weighting tames the single-pixel firefly: much less energy, still finite.
+    const k = await call('bloomEnergy', true);
+    expect(k.finite).toBe(true);
+    expect(k.meanRatio).toBeLessThan(0.5);
   });
 
   it('culling never changes an ID pixel', async (ctx) => {
