@@ -1,4 +1,4 @@
-// pnpm bench:suite [--engine rapier] [--sizes 1000,2000,5000] [--channel chrome] [--headed] [--node-label NAME]
+// pnpm bench:suite [--engine rapier] [--sizes 1000,2000,5000] [--timing-mode latency|throughput] [--channel chrome] [--headed] [--node-label NAME]
 // Runs the standard suite in one browser, writes results/suite-<time>.jsonl
 // and a Markdown summary next to it, and prints the summary.
 import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
@@ -17,7 +17,9 @@ const flag = (k: string) => {
 const engine = typeof flag('engine') === 'string' ? (flag('engine') as string) : 'rapier';
 const sizes = typeof flag('sizes') === 'string' ? (flag('sizes') as string).split(',').map(Number) : undefined;
 const channel = flag('channel');
-const suite = standardSuite(engine, sizes);
+const mode = flag('timing-mode') ?? 'latency';
+if (mode !== 'latency' && mode !== 'throughput') throw new Error(`--timing-mode must be latency or throughput, got "${String(mode)}"`);
+const suite = standardSuite(engine, sizes, mode);
 
 let git = 'unknown';
 try { git = execSync('git rev-parse --short HEAD', { stdio: ['ignore', 'pipe', 'ignore'] }).toString().trim(); } catch { /* not a checkout */ }
@@ -49,6 +51,9 @@ const header = [
   `${new Date().toISOString()} · ${hostname()} · ${cpus()[0]?.model ?? 'unknown CPU'} × ${cpus().length}`,
   `Browser: ${b?.userAgent ?? 'unknown'}`,
   `GPU adapter: ${b?.gpu ? `${b.gpu.vendor} ${b.gpu.architecture}` : 'none'}`,
+  mode === 'throughput'
+    ? 'Timing: throughput (each block waits for the GPU once; the sustained cost per step, no per-step tail)'
+    : 'Timing: latency (every step waits for its work to finish)',
 ].join('\n');
 const md = summaryMarkdown(results, suite, header);
 writeFileSync(jsonl.replace(/\.jsonl$/, '.md'), md + '\n');

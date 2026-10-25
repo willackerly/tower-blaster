@@ -6,6 +6,7 @@ import { drift, jitter, nonFinite, penetration, survival } from '@tb/metrics';
 import { AvbdReferenceEngine } from '@tb/physics-ref';
 import { buildScenario } from '@tb/scenarios';
 import { loadBundle, openWebGPU, type WebGPUSession } from '@tb/testkit';
+import { GpuAvbdEngine } from '../src/index.ts';
 import type * as Drivers from './page.ts';
 
 let gpu: WebGPUSession | null = null;
@@ -217,5 +218,31 @@ describe('GPU AVBD engine: stacks, towers and impacts', () => {
     const a = await runGpu(scene, 90), b = await runGpu(scene, 90);
     expect([...a.s1.pos]).toEqual([...b.s1.pos]);
     expect([...a.s1.rot]).toEqual([...b.s1.rot]);
+  });
+});
+
+describe('GPU AVBD engine: finish()', () => {
+  it('waits until the device queue reports the submitted work done', async () => {
+    const e = new GpuAvbdEngine();
+    let release!: () => void;
+    const done = new Promise<void>((r) => { release = r; });
+    (e as unknown as { device: unknown }).device = { queue: { onSubmittedWorkDone: () => done } };
+    let finished = false;
+    const f = e.finish().then(() => { finished = true; });
+    await new Promise((r) => setTimeout(r, 10));
+    expect(finished).toBe(false);
+    release();
+    await f;
+    expect(finished).toBe(true);
+  });
+
+  it('rejects after a GPU error or a lost device, so work that never ran is never timed', async (ctx) => {
+    if (!gpu) return ctx.skip();
+    const r = await call('finishFailures', sceneOf([cube([0, 0.5, 0])]));
+    expect(r.healthy).toBe('resolved');
+    expect(r.afterError).toMatch(/^GpuAvbdEngine: GPU error: /);
+    expect(r.stepAfterError).toMatch(/^GpuAvbdEngine: GPU error: /);
+    expect(r.afterLoss).toMatch(/^GpuAvbdEngine: GPU device lost \(destroyed\)/);
+    expect(r.reinit).toBe('resolved');
   });
 });

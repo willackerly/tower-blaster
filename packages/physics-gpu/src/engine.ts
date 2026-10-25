@@ -33,6 +33,9 @@ export class GpuAvbdEngine implements PhysicsEngine {
   private readonly params: AvbdParams;
   private device: GPUDevice | null = null;
   private ownsDevice = false;
+  /** Set when the device can't be trusted to have run what was submitted. */
+  private failure: string | null = null;
+  private readonly onGpuError = (ev: Event) => { this.failure ??= `GPU error: ${(ev as GPUUncapturedErrorEvent).error.message}`; };
   private scene: SceneDesc | null = null;
   private pending: InputEvent[] = [];
   private n = 0;
@@ -49,10 +52,16 @@ export class GpuAvbdEngine implements PhysicsEngine {
   }
 
   async init(scene: SceneDesc): Promise<void> {
+    this.failure = null;
     this.dispose();
     if (this.opts.device) this.device = this.opts.device;
     else { this.device = (await createDevice()).device; this.ownsDevice = true; }
     const device = this.device;
+    // A rejected command buffer or a lost device makes submit a silent no-op that
+    // onSubmittedWorkDone() still reports as done, which would time nothing at all.
+    // Record either, so step() and finish() fail instead.
+    device.addEventListener('uncapturederror', this.onGpuError);
+    void device.lost.then((info) => { if (this.device === device) this.failure ??= `GPU device lost (${info.reason}): ${info.message}`; });
     const adapter = (device as GPUDevice & { adapterInfo?: GPUAdapterInfo }).adapterInfo;
     if (adapter) this.info.backend = `webgpu:${adapter.vendor}/${adapter.architecture}`;
     this.scene = scene;
@@ -109,6 +118,7 @@ export class GpuAvbdEngine implements PhysicsEngine {
   step(): void {
     const { device, parts, scene } = this;
     if (!device || !parts || !scene) throw new Error('init() first');
+    if (this.failure) throw new Error(`GpuAvbdEngine: ${this.failure}`);
     while (this.pending.length && this.pending[0]!.step <= this.stepIndex) this.add(this.pending.shift()!.body);
     const n = this.n, p = this.params;
     parts.solver.writeParams(n, scene.dt, scene.gravity, scene.ground, p);
@@ -125,6 +135,16 @@ export class GpuAvbdEngine implements PhysicsEngine {
     parts.solver.solve(enc, n, p.iterations);
     device.queue.submit([enc.finish()]);
     this.stepIndex++;
+  }
+
+  /**
+   * Resolves when every submitted step has finished on the GPU (step() only
+   * submits). Rejects if the device reported an error or was lost, since the
+   * work it says is done may never have run.
+   */
+  async finish(): Promise<void> {
+    if (this.device) await this.device.queue.onSubmittedWorkDone();
+    if (this.failure) throw new Error(`GpuAvbdEngine: ${this.failure}`);
   }
 
   async snapshot(): Promise<Snapshot> {
@@ -158,8 +178,10 @@ export class GpuAvbdEngine implements PhysicsEngine {
       for (const b of [p.bodies, p.shapes, p.props, p.spheres, p.sweep, p.prev]) b.destroy();
     }
     this.parts = null;
-    if (this.ownsDevice) this.device?.destroy();
-    this.device = null;
+    const device = this.device;
+    device?.removeEventListener('uncapturederror', this.onGpuError);
+    if (this.ownsDevice) device?.destroy();
+    this.device = null; // its 'lost' now resolves for a device this engine no longer uses, which is not a failure
     this.ownsDevice = false;
   }
 }

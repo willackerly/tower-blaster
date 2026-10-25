@@ -174,6 +174,8 @@ describe('engine registry and SlowedEngine', () => {
     expect(() => makeEngine('nope')).toThrow(/unknown engine/);
     expect(makeEngine('rapier:iterations=6').info.variant.iterations).toBe(6);
     expect(makeEngine('avbd-ref:iterations=4,sweep=false').info.variant).toMatchObject({ iterations: 4, sweep: false });
+    // Constructing needs no device (init() gets one), so the registry works in Node.
+    expect(makeEngine('avbd-gpu:iterations=6').info).toMatchObject({ name: 'avbd-gpu', backend: 'webgpu', variant: { iterations: 6 } });
   });
 
   it('slows each step by the requested fraction', async () => {
