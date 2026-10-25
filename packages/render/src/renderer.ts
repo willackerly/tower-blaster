@@ -7,6 +7,7 @@
 import { writeStruct } from '@tb/schema';
 import type { GpuProfiler } from '@tb/gpu';
 import { Culler, SEG, type CullFrame } from './cull.ts';
+import { Sparks } from './sparks.ts';
 import { fitShadow, frustumCorners, type Arena, type ShadowFit, type ShadowFitState } from './shadowfit.ts';
 import { FX_WORDS, packFx, tintWord, toHalf, type FxOptions, FX_ANCHOR } from './fx.ts';
 import { CANDY_NIGHT, linearToOklab, srgbToLinear, type LookParams } from './look.ts';
@@ -47,6 +48,8 @@ export interface FrameParams {
   alpha?: number;
   /** Draw every body regardless of frusta (tests compare against this). */
   noCull?: boolean;
+  /** Seconds since the last scene frame, for sparks (default: from time, at most 0.1). */
+  dt?: number;
 }
 
 export type RenderTarget = { canvas: HTMLCanvasElement } | { size: [number, number] };
@@ -71,9 +74,11 @@ export interface RendererOptions {
   boxPath?: BoxPath;
   /** Bench diagnostics: boxes shaded with their flat albedo only, which separates fragment cost from the rest. */
   flatBoxes?: boolean;
+  /** Spark slots (default SPARK_POOL, 65536). Every slot costs a simulation thread and a quad per frame. */
+  sparkPool?: number;
 }
 
-type PipeName = 'box' | 'sphere' | 'ground' | 'sky' | 'overlay' | 'boxShadow' | 'sphereShadow' | 'boxId' | 'sphereId';
+type PipeName = 'box' | 'sphere' | 'ground' | 'sky' | 'overlay' | 'spark' | 'boxShadow' | 'sphereShadow' | 'boxId' | 'sphereId';
 
 /** Frame uniform values that come from a look preset (colours to OKLab / linear as the shader wants). */
 export function lookUniforms(l: LookParams): Record<string, number | number[]> {
@@ -125,12 +130,15 @@ export class Renderer {
   private readonly overlayColours: GPUBuffer;
   private overlayCount = 0;
   private lastTime = 0;
+  private sceneTime: number | null = null;
+  /** Sparks from impacts: detector, pool and tunables (sparks.ts). */
+  readonly sparks: Sparks;
 
   private readonly boxVerts: { scene: number; shadow: number };
   /** Per-pass GPU timing of render() (cull, shadow, scene, bloom, composite) when set; read with profiler.collect(). */
   profiler: GpuProfiler | null = null;
   /** Passes to skip, for measuring their marginal cost (bench:render). */
-  toggles = { shadow: true, post: true };
+  toggles = { shadow: true, post: true, sparks: true };
 
   constructor(readonly device: GPUDevice, target: RenderTarget, opts: RendererOptions = {}) {
     const sceneFan = (opts.scenePath ?? opts.boxPath ?? 'cube') === 'fan';
@@ -151,6 +159,7 @@ export class Renderer {
     this.shadowTex = device.createTexture({ size: [SHADOW_SIZE, SHADOW_SIZE], format: 'depth32float', usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_SRC });
     this.shadowSampler = device.createSampler({ compare: 'less', magFilter: 'linear', minFilter: 'linear' });
     this.post = new Post(device, this.format);
+    this.sparks = new Sparks(device, opts.sparkPool);
     const VF = GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT;
     const ro = { type: 'read-only-storage' } as const;
     const common: GPUBindGroupLayoutEntry[] = [
@@ -168,6 +177,7 @@ export class Renderer {
         { binding: 5, visibility: GPUShaderStage.FRAGMENT, buffer: ro },
         { binding: 6, visibility: GPUShaderStage.VERTEX, buffer: ro },
         { binding: 7, visibility: GPUShaderStage.FRAGMENT, buffer: ro },
+        { binding: 8, visibility: GPUShaderStage.VERTEX, buffer: ro },
       ],
     });
     // The shadow pass cannot bind the shadow map it writes.
@@ -206,6 +216,17 @@ export class Renderer {
       ground: color('vsGround', 'fsGround', 'none', 0),
       sky: color('vsSky', 'fsSky', 'none', 0, { sky: true }),
       overlay: color('vsOverlay', 'fsOverlay', 'back', 0),
+      spark: device.createRenderPipeline({
+        layout: main,
+        vertex: { module, entryPoint: 'vsSpark' },
+        fragment: {
+          module, entryPoint: 'fsSpark',
+          targets: [{ format: HDR_FORMAT, writeMask: GPUColorWrite.RED | GPUColorWrite.GREEN | GPUColorWrite.BLUE, blend: { color: { srcFactor: 'one', dstFactor: 'one', operation: 'add' }, alpha: { srcFactor: 'zero', dstFactor: 'one', operation: 'add' } } }],
+        },
+        primitive: { topology: 'triangle-list', cullMode: 'none' },
+        depthStencil: { format: 'depth24plus', depthWriteEnabled: false, depthCompare: 'less' },
+        multisample: { count: SAMPLES },
+      }),
       boxShadow: depthOnly('vsBoxShadow', SEG.boxShadow),
       sphereShadow: depthOnly('vsSphereShadow', SEG.sphereShadow),
       boxId: color('vsBox', 'fsId', 'back', SEG.box, { format: 'r32uint', samples: 1 }),
@@ -308,6 +329,7 @@ export class Renderer {
         entries: [
           ...common, { binding: 3, resource: this.shadowTex.createView() }, { binding: 4, resource: this.shadowSampler },
           { binding: 5, resource: { buffer: this.fxBuf } }, { binding: 6, resource: { buffer: this.overlayBuf } }, { binding: 7, resource: { buffer: this.overlayColours } },
+          { binding: 8, resource: { buffer: this.sparks.sparks } },
         ],
       });
       this.shadowBind = this.device.createBindGroup({ layout: this.shadowLayout, entries: common });
@@ -341,6 +363,7 @@ export class Renderer {
       ...lookUniforms(this.look),
       // Bias, all on the receiver: normal offset of 2 texels, depth bias of 1 texel + 1 cm.
       shadowParams: [2 * fit.texel, (fit.texel + 0.01) / fit.depthRange, fit.texel, 0],
+      viewport: this.viewport(), dt: f.dt ?? 0,
     });
     this.device.queue.writeBuffer(this.frameBuf, 0, this.frameData);
     return { viewProj, lightViewProj, eye: f.eye, alpha: f.alpha ?? 1, noCull: f.noCull ?? false };
@@ -350,9 +373,16 @@ export class Renderer {
   private encodeScene(enc: GPUCommandEncoder, f: FrameParams, mode: 'scene' | 'ids' | 'faces', stamp: Stamp = noStamp): void {
     const ids = mode !== 'scene';
     const culler = this.sync();
-    const cf = this.writeFrame(f);
+    let dt = 0;
+    if (!ids) {
+      const t = f.time ?? 0;
+      dt = f.dt ?? (this.sceneTime === null ? 0 : Math.min(0.1, Math.max(0, t - this.sceneTime)));
+      this.sceneTime = t;
+    }
+    const cf = this.writeFrame({ ...f, dt });
     const cp = enc.beginComputePass({ label: 'cull', ...stamp('cull') });
     culler.encode(cp, cf);
+    if (!ids && this.toggles.sparks) this.sparks.encode(cp, this.source, { dt, groundY: f.groundY });
     cp.end();
     if (!ids && this.toggles.shadow) {
       const sp = enc.beginRenderPass({ label: 'shadow', ...stamp('shadow'), colorAttachments: [], depthStencilAttachment: { view: this.shadowTex.createView(), depthClearValue: 1, depthLoadOp: 'clear', depthStoreOp: 'store' } });
@@ -388,6 +418,10 @@ export class Renderer {
       p.draw(6);
       p.setPipeline(this.pipes.sky);
       p.draw(3);
+      if (this.toggles.sparks) {
+        p.setPipeline(this.pipes.spark);
+        p.draw(6, this.sparks.pool);
+      }
     }
     p.end();
   }
@@ -476,6 +510,17 @@ export class Renderer {
     this.fxBuf?.destroy();
     this.overlayBuf.destroy();
     this.overlayColours.destroy();
+    this.sparks.destroy();
+  }
+
+  /** Sparks from a game event at pos, flying out around dir; strength is a speed change in m/s. */
+  burst(pos: V3, dir: V3, strength: number): void {
+    this.sparks.inject(pos, dir, strength);
+  }
+
+  private viewport(): [number, number] {
+    const t = this.offscreen ?? this.context?.canvas;
+    return t ? [t.width, t.height] : [1, 1];
   }
 }
 

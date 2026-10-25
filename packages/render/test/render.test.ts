@@ -7,7 +7,7 @@ import { emptySnapshot, TAG_BALL, type BodyDesc } from '@tb/engine-api';
 import { buildScenario } from '@tb/scenarios';
 import { Body, readStruct, Shape } from '@tb/schema';
 import { isSoftwareAdapter, loadBundle, openWebGPU, type WebGPUSession } from '@tb/testkit';
-import { agx, bevelNormal, CANDY_NIGHT, FX_WORDS, packFx, tintWord, unpackFx, frustumPlanes, linearToOklab, listMatches, oklabToLinear, srgbToLinear, lookAt, lookOf, lookRange, MATERIAL, multiply, packBodies, packShapes, paletteOf, perspective, unpackLook } from '../src/index.ts';
+import { agx, bevelNormal, CANDY_NIGHT, CTL, MAX_EVENTS, SPAWN_BUDGET, FX_WORDS, packFx, tintWord, unpackFx, frustumPlanes, linearToOklab, listMatches, oklabToLinear, srgbToLinear, lookAt, lookOf, lookRange, MATERIAL, multiply, packBodies, packShapes, paletteOf, perspective, unpackLook } from '../src/index.ts';
 import type * as Drivers from './page.ts';
 
 describe('looks', () => {
@@ -183,6 +183,68 @@ function call<K extends keyof D>(name: K, ...args: Parameters<D[K]>): Promise<Aw
   ) as Promise<Awaited<ReturnType<D[K]>>>;
 }
 
+describe('sparks', () => {
+  it('the impact detector reports real speed changes only, at the support point', async (ctx) => {
+    if (!gpu) return ctx.skip();
+    const r = await call('sparkDetect');
+    expect(r.error).toBeNull();
+    expect([r.first, r.still, r.after]).toEqual([0, 0, 0]); // first sight, and frames without a step
+    // Bodies 0, 7, 8, 9 only: 1 is under dvMin; 2 teleported; 3 changed tier; 4 static; 5 lattice; 6 new shape; 10, 11 new slots.
+    expect(r.step.map((e) => e.packed & 0xffffff)).toEqual([0, 7, 8, 9]);
+    const want = [
+      { pos: [-0.5, 2, 0], strength: 5, dir: [1, 0, 0], material: 0 },
+      { pos: [21, 1, 0], strength: 7, dir: [0, 1, 0], material: 3 }, // slab turned 90 degrees: support 1 m along y
+      { pos: [24, 2, 0.4], strength: 4, dir: [0, 0, -1], material: 0 }, // sphere: radius
+      { pos: [26.5, 2, 0], strength: 3, dir: [1, 0, 0], material: 1 },
+    ];
+    r.step.forEach((e, i) => {
+      e.pos.forEach((v, k) => expect(v).toBeCloseTo(want[i]!.pos[k]!, 5));
+      e.dir.forEach((v, k) => expect(v).toBeCloseTo(want[i]!.dir[k]!, 6));
+      expect(e.strength).toBeCloseTo(want[i]!.strength, 5);
+      expect(e.packed >>> 28).toBe(want[i]!.material);
+    });
+    expect(r.spawned).toBe(60 + 108 + 36 + 12); // floor((dv - 2.5) * 24) each
+    // Once the detector has seen body 3's new tier, its next impact counts.
+    expect(r.again.map((e) => e.packed & 0xffffff)).toEqual([3]);
+  });
+
+  it('spawn and flight match the CPU twins, bounces included', async (ctx) => {
+    if (!gpu) return ctx.skip();
+    const r = await call('sparkSim', 50);
+    expect(r.error).toBeNull();
+    expect(r.born).toBe(r.want);
+    expect(r.spawned).toBe(r.want);
+    expect(r.unmatched).toBe(0);
+    expect(r.spawnErr).toBeLessThan(1e-3); // GPU trig and normalize vs f32-rounded JS; measured 1.8e-4
+    expect(r.alive).toBe(r.aliveRef);
+    expect(r.alive).toBeGreaterThan(100); // some live sparks left to compare after 50 frames
+    expect(r.bounced).toBeGreaterThan(50); // and many of them have hit the ground
+    expect(r.simErr).toBeLessThan(1e-4); // measured 2.4e-6
+  });
+
+  it('a flood of 100k impacts stays within the event and spark budgets', async (ctx) => {
+    if (!gpu) return ctx.skip();
+    const r = await call('sparkFlood', 100_000);
+    expect(r.error).toBeNull();
+    expect(r.ctl[CTL.events]).toBe(100_000); // every body counted...
+    expect(r.events).toBe(MAX_EVENTS); // ...but only the first MAX_EVENTS kept,
+    expect(r.distinct).toBe(MAX_EVENTS); // each a different body,
+    expect(r.ctl[CTL.dropped]).toBe(100_000 - MAX_EVENTS); // the rest dropped
+    expect(r.ctl[CTL.spawned]).toBe(SPAWN_BUDGET);
+    expect(r.live).toBe(SPAWN_BUDGET);
+  });
+
+  it('streaks show where a burst projects, nowhere else, and not through a wall', async (ctx) => {
+    if (!gpu) return ctx.skip();
+    const r = await call('sparkDraw');
+    expect(r.error).toBeNull();
+    expect(r.near).toBeGreaterThan(2000); // summed 8-bit brightening near the open burst; measured 16.9k
+    expect(r.stray).toBe(0); // the 64k dead pool slots draw nothing
+    expect(r.wallPixels).toBeGreaterThan(500);
+    expect(r.maxWall).toBe(0); // the burst behind the wall is hidden
+  });
+});
+
 describe('GPU cull and compaction', () => {
   it('lists, counts and records match the CPU reference', async (ctx) => {
     if (!gpu) return ctx.skip();
@@ -324,8 +386,8 @@ describe('drawing', () => {
 
   it('bench:render completes and reports every case (numbers discarded)', async (ctx) => {
     if (!gpu) return ctx.skip();
-    const r = await call('runRenderBench', { width: 160, height: 90, counts: [800], warmup: 1, batches: 2, batchFrames: 1, profiledFrames: 1 });
-    expect(r.cases.map((c) => `${c.world}:${c.variant}`)).toEqual(['near', 'far'].flatMap((w) => ['full', 'no-shadow', 'no-post', 'fan', 'cube', 'flat-fan', 'flat-cube'].map((v) => `${w}:${v}`)));
+    const r = await call('runRenderBench', { width: 160, height: 90, counts: [800], warmup: 1, batches: 2, batchFrames: 1, profiledFrames: 1, sparkPool: 1024 });
+    expect(r.cases.map((c) => `${c.world}:${c.variant}`)).toEqual(['near', 'far'].flatMap((w) => ['full', 'no-shadow', 'no-post', 'no-sparks', 'fan', 'cube', 'flat-fan', 'flat-cube'].map((v) => `${w}:${v}`)));
     for (const c of r.cases) {
       expect(c.bodies).toBe(800);
       expect(c.frameMs).toBeGreaterThan(0);

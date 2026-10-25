@@ -39,26 +39,29 @@ export interface RenderBenchOptions {
   batches: number;
   batchFrames: number;
   profiledFrames: number;
+  /** Spark pool per renderer (the smoke test shrinks it for software adapters). */
+  sparkPool?: number;
 }
 
 export const DEFAULT_RENDER_BENCH: RenderBenchOptions = {
-  width: 2560, height: 1440, counts: [10_000, 100_000], worlds: ['near', 'far'], variants: ['full', 'no-shadow', 'no-post', 'fan', 'cube', 'flat-fan', 'flat-cube'],
+  width: 2560, height: 1440, counts: [10_000, 100_000], worlds: ['near', 'far'], variants: ['full', 'no-shadow', 'no-post', 'no-sparks', 'fan', 'cube', 'flat-fan', 'flat-cube'],
   warmup: 30, batches: 10, batchFrames: 30, profiledFrames: 100,
 };
 
 export const QUICK_RENDER_BENCH: RenderBenchOptions = {
-  width: 320, height: 180, counts: [2000], worlds: ['near', 'far'], variants: ['full', 'no-shadow', 'no-post', 'fan', 'cube', 'flat-fan', 'flat-cube'],
+  width: 320, height: 180, counts: [2000], worlds: ['near', 'far'], variants: ['full', 'no-shadow', 'no-post', 'no-sparks', 'fan', 'cube', 'flat-fan', 'flat-cube'],
   warmup: 1, batches: 2, batchFrames: 2, profiledFrames: 2,
 };
 
 export type WorldName = 'near' | 'far';
 /**
- * full: the defaults (cube scene, fan shadow). no-shadow, no-post: one pass
- * off. fan, cube: that box path in both passes. flat-*: boxes shaded with
+ * full: the defaults (cube scene, fan shadow). no-shadow, no-post,
+ * no-sparks: one pass off (the spark pool costs the same with or without
+ * live sparks). fan, cube: that box path in both passes. flat-*: boxes shaded with
  * flat albedo, so flat-fan vs flat-cube is the paths' cost without the
  * fragment shading, and fan vs cube minus that is the shading's share.
  */
-export type VariantName = 'full' | 'no-shadow' | 'no-post' | 'fan' | 'cube' | 'flat-fan' | 'flat-cube';
+export type VariantName = 'full' | 'no-shadow' | 'no-post' | 'no-sparks' | 'fan' | 'cube' | 'flat-fan' | 'flat-cube';
 
 function variantOptions(v: VariantName): RendererOptions {
   if (v === 'fan' || v === 'flat-fan') return { boxPath: 'fan', flatBoxes: v === 'flat-fan' };
@@ -163,10 +166,10 @@ export async function runRenderBench(opts: Partial<RenderBenchOptions> = {}): Pr
       eye: w.eye, focus: w.target, groundY: 0, time: 1, alpha: 1,
     };
     const rends = o.variants.map((variant) => {
-      const rend = new Renderer(device, { size: [o.width, o.height] }, variantOptions(variant));
+      const rend = new Renderer(device, { size: [o.width, o.height] }, { ...variantOptions(variant), sparkPool: o.sparkPool });
       rend.setSource(src);
       rend.setShadowBounds(w.center, w.radius);
-      rend.toggles = { shadow: variant !== 'no-shadow', post: variant !== 'no-post' };
+      rend.toggles = { shadow: variant !== 'no-shadow', post: variant !== 'no-post', sparks: variant !== 'no-sparks' };
       return rend;
     });
     for (const rend of rends) for (let i = 0; i < o.warmup; i++) await rend.render(f);
@@ -227,7 +230,7 @@ export function renderBenchMarkdown(r: RenderBenchResult, header: string): strin
     ...r.cases.map((c) => `| ${c.world} | ${c.bodies.toLocaleString('en-US')} | ${c.variant} | ${ms(c.frameMs)} | ${ms(c.frameCI[0])}-${ms(c.frameCI[1])} | ${ms(c.gpuP50)} | ${ms(c.gpuP95)} | ${ms(c.gpuSumP50)} | ${passNames.map((p) => ms(c.passes[p])).join(' | ')} | ${c.drawn.boxes.toLocaleString('en-US')} | ${c.drawn.shadowBoxes.toLocaleString('en-US')} |`),
     '',
     'Marginal cost: change in frame time when the thing is switched off (paired over interleaved batches; median and 95% CI; "n.s." when the interval includes 0):', '',
-    '| World | Bodies | Without shadow | Without post (bloom + AgX) | Fan in both passes | Cube in both passes | Flat shading: cube vs fan |', '|---|---|---|---|---|---|---|',
+    '| World | Bodies | Without shadow | Without post (bloom + AgX) | Without sparks | Fan in both passes | Cube in both passes | Flat shading: cube vs fan |', '|---|---|---|---|---|---|---|---|',
   ];
   const groups = new Map<string, RenderCase[]>();
   for (const c of r.cases) groups.set(`${c.world}:${c.bodies}`, [...(groups.get(`${c.world}:${c.bodies}`) ?? []), c]);
@@ -239,7 +242,7 @@ export function renderBenchMarkdown(r: RenderBenchResult, header: string): strin
       const pct = (x: number) => `${x >= 0 ? '+' : ''}${(100 * x).toFixed(1)}%`;
       return `${pct(d.estimate)} [${pct(d.lo)}, ${pct(d.hi)}]${verdict(d) === 'no-difference' ? ' n.s.' : ''}`;
     };
-    lines.push(`| ${cs[0]!.world} | ${cs[0]!.bodies.toLocaleString('en-US')} | ${diff(by('no-shadow'))} | ${diff(by('no-post'))} | ${diff(by('fan'))} | ${diff(by('cube'))} | ${diff(by('flat-cube'), by('flat-fan'))} |`);
+    lines.push(`| ${cs[0]!.world} | ${cs[0]!.bodies.toLocaleString('en-US')} | ${diff(by('no-shadow'))} | ${diff(by('no-post'))} | ${diff(by('no-sparks'))} | ${diff(by('fan'))} | ${diff(by('cube'))} | ${diff(by('flat-cube'), by('flat-fan'))} |`);
   }
   return lines.join('\n');
 }

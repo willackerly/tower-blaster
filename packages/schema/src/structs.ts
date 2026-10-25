@@ -76,4 +76,39 @@ export const Manifold = defineStruct(
 export const TIER = { active: 0, rubble: 1, lattice: 2, debris: 3, free: 255 } as const;
 export const FLAG_AWAKE = 1;
 
-export const ALL_STRUCTS = [SimParams, Body, RenderRecord, Shape, Manifold];
+/**
+ * One impact, for sparks and flashes. The renderer's own detector writes
+ * these; a physics contact ring (later) uses the same layout.
+ */
+export const ImpactEvent = defineStruct(
+  'ImpactEvent',
+  [
+    ['pos', 'vec3f', 'world position of the contact'],
+    ['strength', 'f32', 'speed change, m/s'],
+    ['dir', 'vec3f', 'unit; sparks fly out around it'],
+    ['packed', 'u32', 'bits 0-23 slot (0xffffff: none), 24-27 kind (0 detector, 1 injected), 28-31 material'],
+  ],
+  'An impact that spawns sparks.',
+);
+
+export const Spark = defineStruct(
+  'Spark',
+  [
+    ['pos', 'vec3f', 'world position'],
+    ['age', 'f32', 'seconds; negative means dead'],
+    ['vel', 'vec3f', 'm/s'],
+    ['packed', 'u32', 'bits 0-7 life (0.4 + 0.8 * q / 255 s), 8-31 seed'],
+  ],
+  'One spark of the renderer\'s pool.',
+);
+
+export const FxState = defineStruct(
+  'FxState',
+  [
+    ['prevLinVel', 'vec3f', 'velocity when the detector last saw the slot'],
+    ['bits', 'u32', 'bits 0-15 heat (f16), 16-23 tier last seen, 24 valid'],
+  ],
+  'Renderer-side per-slot effect state.',
+);
+
+export const ALL_STRUCTS = [SimParams, Body, RenderRecord, Shape, Manifold, ImpactEvent, Spark, FxState];

@@ -2,9 +2,10 @@
 // the floor, the sky, and the ID target used by tests. Everything is
 // camera-relative; the shading reads its colours and lights from the Frame
 // uniform (LookParams), so presets are data.
-import { defineStruct, RenderRecord, wgslStruct } from '@tb/schema';
+import { defineStruct, RenderRecord, Spark, wgslStruct } from '@tb/schema';
 import { FX_EMISSIVE_MAX, FX_WGSL } from './fx.ts';
 import { BEVEL_WGSL, OKLAB_WGSL } from './look.ts';
+import { SPARK_COMMON } from './sparks.ts';
 
 export const SHADOW_SIZE = 2048;
 export const SPHERE_SEG = 24;
@@ -35,11 +36,14 @@ export const Frame = defineStruct('Frame', [
   ['rimDir', 'vec3f'], ['ballEmissive', 'f32'],
   ['ball', 'vec3f'], ['pad0', 'f32'],
   ['shadowParams', 'vec4f', 'normal offset m, depth bias (light depth units), texel m, unused'],
+  ['viewport', 'vec2f', 'pixels'], ['dt', 'f32', 'seconds since the last scene frame'], ['pad1', 'f32'],
   ['ramp0', 'vec4f', 'OKLab'], ['ramp1', 'vec4f'], ['ramp2', 'vec4f'], ['ramp3', 'vec4f'], ['ramp4', 'vec4f'],
 ], 'Per-frame uniforms of the scene pass.');
 
 export const SCENE_WGSL = /* wgsl */ `
 ${wgslStruct(RenderRecord)}
+${wgslStruct(Spark)}
+${SPARK_COMMON}
 ${wgslStruct(Frame)}
 @group(0) @binding(0) var<uniform> fr: Frame;
 @group(0) @binding(1) var<storage, read> records: array<RenderRecord>;
@@ -49,6 +53,7 @@ ${wgslStruct(Frame)}
 @group(0) @binding(5) var<storage, read> fx: array<vec4u>;          // per slot, see fx.ts
 @group(0) @binding(6) var<storage, read> overlay: array<vec4f>;     // world x, y, z, radius
 @group(0) @binding(7) var<storage, read> overlayColour: array<u32>; // sRGB rgb8 + emissive8
+@group(0) @binding(8) var<storage, read> sparks: array<Spark>;      // sparks.ts
 
 // Which list a pipeline draws: SEG * capacity is its first entry.
 override SEG: u32 = 0u;
@@ -424,5 +429,55 @@ struct SOut { @builtin(position) clip: vec4f, @location(0) ndc: vec2f }
   let p = fr.invViewProj * vec4f(s.ndc, 1.0, 1.0);
   let dir = normalize(p.xyz / p.w);
   return vec4f(select(skyColor(dir), fr.skyHorizon, dir.y < 0.0), 1.0);
+}
+
+// ---------------------------------------------------------------- sparks
+
+// A streak from the spark back along its velocity (1/45 s of travel), drawn
+// as a screen-space quad 2.5 px wide, so it neither aliases nor shrinks
+// with distance. Dead sparks collapse to nothing. Additive into the HDR
+// target, depth-tested against the scene, no depth write.
+struct SparkOut {
+  @builtin(position) clip: vec4f,
+  @location(0) uv: vec2f,
+  @location(1) @interpolate(flat) colour: vec3f,
+}
+
+const SPARK_HALF_WIDTH = 1.25;
+
+@vertex fn vsSpark(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> SparkOut {
+  var o: SparkOut;
+  o.clip = vec4f(0.0, 0.0, 2.0, 1.0); // outside the depth range: clipped
+  o.uv = vec2f(0.0);
+  o.colour = vec3f(0.0);
+  let s = sparks[ii];
+  if (s.age < 0.0) { return o; }
+  let head = fr.viewProj * vec4f(s.pos - fr.eye, 1.0);
+  let tail = fr.viewProj * vec4f(s.pos - s.vel * (1.0 / 45.0) - fr.eye, 1.0);
+  if (head.w < 0.05 || tail.w < 0.05) { return o; }
+  let half = 0.5 * fr.viewport;
+  let ph = head.xy / head.w * half;
+  let pt = tail.xy / tail.w * half;
+  let len = length(ph - pt);
+  let d = select(vec2f(1.0, 0.0), (ph - pt) / len, len > 1e-4);
+  let n = vec2f(-d.y, d.x);
+  let along = array<f32, 6>(0.0, 0.0, 1.0, 0.0, 1.0, 1.0)[vi];
+  let side = array<f32, 6>(-1.0, 1.0, 1.0, -1.0, 1.0, -1.0)[vi];
+  let w = SPARK_HALF_WIDTH;
+  let p = mix(pt - d * w, ph + d * w, along) + n * side * w;
+  o.clip = vec4f(p / half, mix(tail.z / tail.w, head.z / head.w, along), 1.0);
+  o.uv = vec2f(along, side);
+  // White-hot to amber over the life, then out; a streak under a pixel long
+  // is dimmed by its coverage.
+  let t = s.age / sparkLife(s.packed);
+  let hot = mix(vec3f(1.0, 0.92, 0.8) * 20.0, vec3f(1.0, 0.42, 0.1) * 8.0, smoothstep(0.0, 0.6, t));
+  o.colour = hot * (1.0 - smoothstep(0.7, 1.0, t)) * clamp(len + 0.4, 0.4, 1.0);
+  return o;
+}
+
+@fragment fn fsSpark(o: SparkOut) -> @location(0) vec4f {
+  let across = 1.0 - smoothstep(0.35, 1.0, abs(o.uv.y));
+  let along = smoothstep(0.0, 0.8, o.uv.x); // bright head, fading tail
+  return vec4f(o.colour * across * along, 0.0);
 }
 `;

@@ -9,7 +9,7 @@ import { Body, RenderRecord, Shape, TIER, readStruct } from '@tb/schema';
 import {
   agx, AGX_WGSL, fromHalf, FX_WORDS, packFx, toHalf, bevelNormal, BEVEL_WGSL, oklabToLinear, OKLAB_WGSL, Post,
   Culler, cullReference, GpuBodySource, invert, listMatches, lookAt, makeGpuBodies, multiply, perspective, Renderer, SEGMENTS, SnapshotSource, transform,
-  translation, BOX_VERTS, SPHERE_VERTS, SUN, type BodySource, type CullFrame, type FrameParams, type V3,
+  translation, BOX_VERTS, SPHERE_VERTS, SUN, Sparks, CTL, MAX_EVENTS, unpackImpacts, unpackSparks, spawnReference, stepReference, type Impact, type BodySource, type CullFrame, type FrameParams, type V3,
 } from '../src/index.ts';
 
 function rng(seed: number) {
@@ -826,4 +826,201 @@ export async function shadowCheck(kind: 'float' | 'contact' | 'grazing') {
     centroidErr: predicted ? Math.hypot(cp[0]! - cm[0]!, cp[1]! - cm[1]!) : 0, leak, maxStep,
     window: rend.shadowFit!.half, NoL: kind === 'grazing' ? qrotV(descs[0]!.rot, [0, 1, 0]).reduce((a, v, k) => a + v * sun[k]!, 0) : null, error: err?.message ?? null,
   };
+}
+
+// ---------------------------------------------------------------- sparks
+
+interface RawBody { pos: V3; vel: V3; tier?: number; invMass?: number; shape: number; rot?: [number, number, number, number] }
+
+function bodyWords(bs: RawBody[], capacity: number): ArrayBuffer {
+  const out = new ArrayBuffer(capacity * Body.size), f = new Float32Array(out), u = new Uint32Array(out);
+  const at = (name: string) => Body.fields.find((x) => x.name === name)!.offset / 4;
+  bs.forEach((b, i) => {
+    const o = (i * Body.size) / 4;
+    f.set(b.pos, o + at('pos'));
+    f[o + at('invMass')] = b.invMass ?? 1;
+    f.set(b.rot ?? [0, 0, 0, 1], o + at('rot'));
+    f.set(b.vel, o + at('linVel'));
+    u[o + at('flags')] = 1 | ((b.tier ?? TIER.active) << 8);
+    u[o + at('shape')] = b.shape;
+  });
+  return out;
+}
+
+function sparkShapes(): ArrayBuffer {
+  const out = new ArrayBuffer(4 * Shape.size), f = new Float32Array(out), u = new Uint32Array(out);
+  const halfs: V3[] = [[0.5, 0.5, 0.5], [1, 0.25, 0.5], [0.4, 0.4, 0.4], [0.3, 0.3, 0.3]];
+  halfs.forEach((h, i) => { f.set(h, i * 4); u[i * 4 + 3] = i === 2 ? 1 : 0; });
+  return out;
+}
+
+async function sparkFrame(device: GPUDevice, sp: Sparks, src: BodySource, dt = 0, groundY = -100) {
+  const enc = device.createCommandEncoder();
+  const pass = enc.beginComputePass();
+  sp.encode(pass, src, { dt, groundY });
+  pass.end();
+  device.queue.submit([enc.finish()]);
+  const ctl = Array.from(new Uint32Array(await readBuffer(device, sp.ctl)));
+  return { ctl, events: unpackImpacts(await readBuffer(device, sp.events), Math.min(ctl[CTL.events]!, MAX_EVENTS)) };
+}
+
+/**
+ * The impact detector against hand-computed events: one step changes ten
+ * bodies' velocities, each case either a real impact or one a guard must
+ * reject (below threshold, teleport, tier change, static, lattice, shape
+ * change, new slots).
+ */
+export async function sparkDetect() {
+  const { device } = await createDevice({ timestamps: false });
+  device.pushErrorScope('validation');
+  const cap = 12;
+  const base: RawBody[] = Array.from({ length: 10 }, (_, i) => ({ pos: [i * 3, 2, 0] as V3, vel: [0, -1, 0] as V3, shape: 0 }));
+  base[7]!.shape = 1;
+  base[7]!.rot = [0, 0, Math.SQRT1_2, Math.SQRT1_2]; // 90 degrees about z: local x is world y
+  base[8]!.shape = 2; // sphere r 0.4
+  const looks = new Uint32Array(cap).map((_, i) => (i % 4) << 12);
+  const src = rawSource(device, bodyWords(base, cap), bodyWords(base, cap), sparkShapes(), looks, 10, cap) as BodySource & { count: number };
+  const sp = new Sparks(device);
+  const first = await sparkFrame(device, sp, src); // first sight of every slot
+  const still = await sparkFrame(device, sp, src); // no step: no change
+  const next: RawBody[] = base.map((b) => ({ ...b, vel: [...b.vel] as V3, pos: [...b.pos] as V3 }));
+  const add = (i: number, dv: V3) => { next[i]!.vel = next[i]!.vel.map((v, k) => v + dv[k]!) as V3; };
+  add(0, [5, 0, 0]); // impact
+  add(1, [0, 2, 0]); // below dvMin
+  add(2, [0, 8, 0]); next[2]!.pos[1] += 5; // teleport
+  add(3, [6, 0, 0]); next[3]!.tier = TIER.rubble; // tier change
+  add(4, [9, 0, 0]); next[4]!.invMass = 0; // static
+  add(5, [9, 0, 0]); next[5]!.tier = TIER.lattice; // dormant cell
+  add(6, [9, 0, 0]); next[6]!.shape = 3; // reused slot, new shape
+  add(7, [0, 7, 0]); // rotated slab: support 1.0 along y
+  add(8, [0, 0, -4]); // sphere
+  add(9, [3, 0, 0]); // just above dvMin
+  next.push({ pos: [40, 2, 0], vel: [20, 0, 0], shape: 0 }, { pos: [43, 2, 0], vel: [0, 20, 0], shape: 0 }); // spawned this step
+  device.queue.writeBuffer(src.prev, 0, bodyWords(base, cap));
+  device.queue.writeBuffer(src.bodies, 0, bodyWords(next, cap));
+  src.count = 12;
+  const step = await sparkFrame(device, sp, src);
+  const after = await sparkFrame(device, sp, src); // no further step
+  // Body 3 now has a known tier: its next impact counts.
+  const later = next.map((b) => ({ ...b, vel: [...b.vel] as V3 }));
+  later[3]!.vel[0] += 6;
+  device.queue.writeBuffer(src.prev, 0, bodyWords(next, cap));
+  device.queue.writeBuffer(src.bodies, 0, bodyWords(later, cap));
+  const again = await sparkFrame(device, sp, src);
+  const err = await device.popErrorScope();
+  sp.destroy();
+  device.destroy();
+  return {
+    first: first.ctl[CTL.events], still: still.ctl[CTL.events], after: after.ctl[CTL.events],
+    step: step.events.sort((a, b) => (a.packed & 0xffffff) - (b.packed & 0xffffff)), spawned: step.ctl[CTL.spawned],
+    again: again.events, error: err?.message ?? null,
+  };
+}
+
+/** Spawn and flight against the CPU twins: three injected bursts, then frames of flight with ground bounces. */
+export async function sparkSim(frames: number) {
+  const { device } = await createDevice({ timestamps: false });
+  device.pushErrorScope('validation');
+  const src = rawSource(device, new ArrayBuffer(4 * Body.size), new ArrayBuffer(4 * Body.size), sparkShapes(), new Uint32Array(4), 0, 4);
+  const sp = new Sparks(device);
+  const bursts: { pos: V3; dir: V3; strength: number }[] = [
+    { pos: [0, 1, 0], dir: [0, 1, 0], strength: 8 },
+    { pos: [2, 0.3, 1], dir: [1, 0.2, 0], strength: 14 },
+    { pos: [-1, 2, -1], dir: [0.1, -1, 0.2], strength: 30 },
+  ];
+  for (const b of bursts) sp.inject(b.pos, b.dir, b.strength);
+  // The events as the GPU sees them (f32).
+  const f32v = (v: number[]) => v.map((x) => Math.fround(x)) as V3;
+  const events: Impact[] = bursts.map((b) => { const l = Math.hypot(...b.dir); return { pos: f32v(b.pos), dir: f32v(b.dir.map((x) => x / l)), strength: Math.fround(b.strength), packed: 0xffffff | (1 << 24) }; });
+  const frame0 = sp.nextFrame;
+  const s0 = await sparkFrame(device, sp, src, 0, 0);
+  const born = unpackSparks(await readBuffer(device, sp.sparks)).filter((s) => s.age >= 0);
+  const want = spawnReference(events, frame0, sp.config);
+  const byPacked = new Map(want.map((s) => [s.packed, s]));
+  let spawnErr = 0, unmatched = 0;
+  for (const s of born) {
+    const w = byPacked.get(s.packed);
+    if (!w) { unmatched++; continue; }
+    for (let k = 0; k < 3; k++) spawnErr = Math.max(spawnErr, Math.abs(s.pos[k]! - w.pos[k]!), Math.abs(s.vel[k]! - w.vel[k]!) / (1 + Math.abs(w.vel[k]!)));
+  }
+  // Flight: the twin starts from the GPU's own initial states.
+  const dt = 1 / 60;
+  for (let i = 0; i < frames; i++) await sparkFrame(device, sp, src, dt, 0);
+  const flown = unpackSparks(await readBuffer(device, sp.sparks));
+  let simErr = 0, alive = 0, aliveRef = 0, bounced = 0;
+  const all = new Map(born.map((s) => [s.packed, s]));
+  for (const s of flown) {
+    if (s.age < 0 && !all.has(s.packed)) continue; // never-used slot
+    const init = all.get(s.packed);
+    if (!init) continue;
+    let r = init, up = false;
+    for (let i = 0; i < frames; i++) { const n = stepReference(r, dt, 0, sp.config); if (n.age >= 0 && r.vel[1] < 0 && n.vel[1] > 0 && n.pos[1] < 0.5) up = true; r = n; }
+    if (r.age >= 0) aliveRef++;
+    if (s.age >= 0) alive++;
+    if (up && r.age >= 0) bounced++;
+    if ((r.age < 0) !== (s.age < 0)) { simErr = Infinity; continue; }
+    if (r.age < 0) continue;
+    for (let k = 0; k < 3; k++) simErr = Math.max(simErr, Math.abs(s.pos[k]! - r.pos[k]!), Math.abs(s.vel[k]! - r.vel[k]!) / (1 + Math.abs(r.vel[k]!)));
+  }
+  const err = await device.popErrorScope();
+  sp.destroy();
+  device.destroy();
+  return { born: born.length, want: want.length, spawned: s0.ctl[CTL.spawned], unmatched, spawnErr, alive, aliveRef, bounced, simErr, error: err?.message ?? null };
+}
+
+/** A flood: every one of 100k bodies hit at once. Events and sparks stay within their budgets. */
+export async function sparkFlood(n: number) {
+  const { device } = await createDevice({ timestamps: false });
+  device.pushErrorScope('validation');
+  const bs: RawBody[] = Array.from({ length: n }, (_, i) => ({ pos: [(i % 300) * 1.1, 1 + Math.floor(i / 90000), Math.floor(i / 300) % 300] as V3, vel: [0, 0, 0] as V3, shape: 0 }));
+  const src = rawSource(device, bodyWords(bs, n), bodyWords(bs, n), sparkShapes(), new Uint32Array(n), n, n);
+  const sp = new Sparks(device);
+  await sparkFrame(device, sp, src);
+  device.queue.writeBuffer(src.bodies, 0, bodyWords(bs.map((b) => ({ ...b, vel: [10, 0, 0] as V3 })), n));
+  const hit = await sparkFrame(device, sp, src);
+  const live = unpackSparks(await readBuffer(device, sp.sparks)).filter((s) => s.age >= 0).length;
+  const slots = new Set(hit.events.map((e) => e.packed & 0xffffff));
+  const err = await device.popErrorScope();
+  sp.destroy();
+  device.destroy();
+  return { ctl: hit.ctl, events: hit.events.length, distinct: slots.size, live, error: err?.message ?? null };
+}
+
+/**
+ * Streaks in the image: a burst in the open shows around where it
+ * projects and nowhere else (64k dead slots draw nothing); a burst behind
+ * a wall is hidden by depth.
+ */
+export async function sparkDraw() {
+  const { device } = await createDevice({ timestamps: false });
+  device.pushErrorScope('validation');
+  const descs = [box([2, 1, -5], [2, 2, 0.3], [0, 0, 0, 1])];
+  const src = new SnapshotSource(device);
+  src.update(snapshotOf(descs), descs);
+  const rend = new Renderer(device, { size: [W, H] });
+  rend.look = { ...rend.look, bloomMix: 0 };
+  rend.setSource(src);
+  const f: FrameParams = { ...camera([0, 1.5, 6], [0, 1, 0]), groundY: -1, time: 1, dt: 1 / 60 };
+  const open: V3 = [-2.5, 1.5, 0], hidden: V3 = [2, 1, -8];
+  rend.burst(open, [0, 1, 0], 20);
+  rend.burst(hidden, [0, 0, -1], 20);
+  const a = (await rend.render(f, true, true))!.pixels!;
+  rend.toggles.sparks = false;
+  const b = (await rend.render(f, true, true))!.pixels!;
+  const ids = (await rend.renderIds(f)).ids;
+  const project = (p: V3) => { const c = transform(f.viewProj, p); return [((c[0] / c[3]) * 0.5 + 0.5) * W, (0.5 - (c[1] / c[3]) * 0.5) * H]; };
+  const [ox, oy] = project(open);
+  let near = 0, stray = 0, behindWall = 0, maxWall = 0;
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+    const o = y * a.bytesPerRow + 4 * x;
+    const d = Math.max(...[0, 1, 2].map((k) => a.data[o + k]! - b.data[o + k]!));
+    const r = Math.hypot(x + 0.5 - ox!, y + 0.5 - oy!);
+    if (ids[y * W + x]) { maxWall = Math.max(maxWall, Math.abs(d)); if (d > 1) behindWall++; continue; }
+    if (r < 30) near += Math.max(d, 0);
+    else if (d > 1) stray++;
+  }
+  const err = await device.popErrorScope();
+  rend.destroy();
+  device.destroy();
+  return { near, stray, behindWall, maxWall, wallPixels: ids.reduce((s, v) => s + (v ? 1 : 0), 0), error: err?.message ?? null };
 }

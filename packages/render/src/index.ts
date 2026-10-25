@@ -9,3 +9,4 @@ export * from './post.ts';
 export * from './shaders.ts';
 export * from './fx.ts';
 export * from './shadowfit.ts';
+export * from './sparks.ts';
