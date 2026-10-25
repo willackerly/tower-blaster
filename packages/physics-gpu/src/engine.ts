@@ -17,6 +17,16 @@ export interface GpuEngineOptions {
   device?: GPUDevice;
   /** Pair buffer size per body. */
   pairsPerBody?: number;
+  /**
+   * Room for push(): bodies the engine can hold (default: the scene's bodies
+   * and inputs) and the largest bounding radius a pushed body may have
+   * (default: the scene's largest). Buffers, the broadphase table and the
+   * cell size are fixed at init from these, so push() throws beyond them,
+   * and a replay with the pushed events in scene.inputs is bit-identical
+   * only when it is created with the same options.
+   */
+  capacity?: number;
+  maxRadius?: number;
 }
 
 export interface GpuDiagnostics {
@@ -40,6 +50,7 @@ export class GpuAvbdEngine implements PhysicsEngine {
   private pending: InputEvent[] = [];
   private n = 0;
   private capacity = 0;
+  private rmax = 0;
   private cellSize = 1;
   private parts: { bodies: GPUBuffer; shapes: GPUBuffer; props: GPUBuffer; spheres: GPUBuffer; sweep: GPUBuffer; prev: GPUBuffer; bp: Broadphase; np: Narrowphase; col: Coloring; solver: AvbdSolver } | null = null;
 
@@ -66,12 +77,13 @@ export class GpuAvbdEngine implements PhysicsEngine {
     if (adapter) this.info.backend = `webgpu:${adapter.vendor}/${adapter.architecture}`;
     this.scene = scene;
     const all = [...scene.bodies, ...scene.inputs.map((e) => e.body)];
-    this.capacity = Math.max(1, all.length);
+    if (this.opts.capacity !== undefined && this.opts.capacity < all.length) throw new Error(`GpuAvbdEngine: capacity ${this.opts.capacity} is below the scene's ${all.length} bodies and inputs`);
+    this.capacity = Math.max(1, this.opts.capacity ?? all.length);
     const maxPairs = (this.opts.pairsPerBody ?? 16) * this.capacity;
     const p = this.params;
-    const rmax = all.reduce((m, b) => Math.max(m, boundingRadius(b.shape)), 0);
+    this.rmax = all.reduce((m, b) => Math.max(m, boundingRadius(b.shape)), this.opts.maxRadius ?? 0);
     // Every overlapping (inflated) pair must lie in adjacent cells.
-    this.cellSize = Math.max(1e-3, 2 * (rmax + (p.sweep ? p.maxSweep : 0)) + p.margin);
+    this.cellSize = Math.max(1e-3, 2 * (this.rmax + (p.sweep ? p.maxSweep : 0)) + p.margin);
     // The contact buffer is the largest (1 KB per pair slot; a manifold is
     // 96 B), so checking it first means no stage throws halfway through
     // allocating, which would leak what it had made.
@@ -113,6 +125,22 @@ export class GpuAvbdEngine implements PhysicsEngine {
     one(BodyProps, { inertia: inertiaOf(b), mass: m, friction: b.friction, radius: boundingRadius(b.shape) }, parts!.props);
     // prevVel = initial velocity, as the reference (no adaptive warm-start kick on the first step).
     one(SolverBody, { prevVel: b.linVel }, parts!.solver.solver);
+  }
+
+  push(events: InputEvent[]): void {
+    if (!this.parts) throw new Error('init() first');
+    // Checked before queueing any, so a rejected batch changes nothing.
+    if (this.n + this.pending.length + events.length > this.capacity) throw new Error(`GpuAvbdEngine: push() needs room for ${this.n + this.pending.length + events.length} bodies, capacity is ${this.capacity} (GpuEngineOptions.capacity)`);
+    for (const ev of events) {
+      const r = boundingRadius(ev.body.shape);
+      if (r > this.rmax) throw new Error(`GpuAvbdEngine: pushed body radius ${r} exceeds ${this.rmax}, the largest the broadphase cells were sized for (GpuEngineOptions.maxRadius)`);
+    }
+    // Stable insertion keeps push order among events due at the same step.
+    for (const ev of events) {
+      let i = this.pending.length;
+      while (i > 0 && this.pending[i - 1]!.step > ev.step) i--;
+      this.pending.splice(i, 0, ev);
+    }
   }
 
   step(): void {
