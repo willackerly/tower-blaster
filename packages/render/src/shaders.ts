@@ -68,6 +68,14 @@ ${wgslStruct(Frame)}
 ${AO_SAMPLE_WGSL}
 
 fn aoView() -> AoView { return AoView(fr.aoOrigin, fr.aoInvVoxel, fr.aoDims, fr.aoOn, fr.aoK); }
+@group(0) @binding(14) var<storage, read> aoFeet: array<vec4f>;      // ao.ts: per slot footprint, written by the splat
+
+// AO at a body's surface point, its own footprint subtracted (the centre from its record).
+fn aoBody(rel: vec3f, n: vec3f, slot: u32) -> vec2f {
+  let av = aoView();
+  if (av.on == 0.0 || slot >= fr.capacity) { return vec2f(1.0); }
+  return aoAt(av, rel, n, records[slot].pos, aoFeet[slot].xyz);
+}
 @group(0) @binding(10) var<storage, read> trail: array<vec4f>;      // lights.ts: world xyz, time
 
 // Which list a pipeline draws: SEG * capacity is its first entry.
@@ -149,8 +157,6 @@ struct VOut {
   @location(3) @interpolate(flat) half: vec3f,
   @location(4) @interpolate(flat) look: u32,
   @location(5) @interpolate(flat) slot: u32,
-  @location(6) @interpolate(flat) centre: vec3f, // camera-relative body centre
-  @location(7) @interpolate(flat) foot: vec3f,   // AO footprint half extents (ao.ts), 0 for none
 }
 
 fn place(r: RenderRecord, corner: vec3f) -> VOut {
@@ -163,23 +169,16 @@ fn place(r: RenderRecord, corner: vec3f) -> VOut {
   o.half = r.half;
   o.look = r.look;
   o.slot = r.slot;
-  o.centre = r.pos;
-  o.foot = vec3f(0.0);
   return o;
 }
 
 @vertex fn vsBox(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> VOut {
   let r = record(ii);
-  var o = place(r, boxCorner(vi, r, -r.pos));
-  o.foot = aoFoot(r.rot, r.half, false);
-  return o;
+  return place(r, boxCorner(vi, r, -r.pos));
 }
 
 @vertex fn vsSphere(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> VOut {
-  let r = record(ii);
-  var o = place(r, sphereCorner(vi));
-  o.foot = aoFoot(r.rot, r.half, true);
-  return o;
+  return place(record(ii), sphereCorner(vi));
 }
 
 @vertex fn vsBoxShadow(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> @builtin(position) vec4f {
@@ -371,7 +370,7 @@ fn boxFace(local: vec3f, w: vec3f) -> vec3f {
   let wPx = SEAM / max(pxM, 1e-6);
   let drawn = max(wPx, 0.75);
   let seam = 1.0 - 0.4 * min(1.0, wPx / 0.75) * (1.0 - smoothstep(drawn - 0.5, drawn + 0.5, edgeM / max(pxM, 1e-6)));
-  var c = shade(base * seam, v.rel, n, aaAlpha(rough * rough, n, dndx, dndy), aaAlpha(0.0049, n, dndx, dndy), select(0.0, fr.clearcoat, isCandy), aoAt(aoView(), v.rel, n, v.centre, v.foot));
+  var c = shade(base * seam, v.rel, n, aaAlpha(rough * rough, n, dndx, dndy), aaAlpha(0.0049, n, dndx, dndy), select(0.0, fr.clearcoat, isCandy), aoBody(v.rel, n, v.slot));
   c += base * seam * fxGlow(w, fr.time);
   c += heatGlow(v.slot, base);
   return vec4f(fog(c, v.rel), 1.0);
@@ -399,7 +398,7 @@ fn heatGlow(slot: u32, base: vec3f) -> vec3f {
   let isBall = material(v.look) == 1u;
   let w = fx[v.slot];
   let base = select(albedo(v.look), fr.ball, isBall) * fxTint(w.x);
-  var c = shade(base, v.rel, n, aaAlpha(0.04, n, dndx, dndy), aaAlpha(0.0049, n, dndx, dndy), 0.5, aoAt(aoView(), v.rel, n, v.centre, v.foot));
+  var c = shade(base, v.rel, n, aaAlpha(0.04, n, dndx, dndy), aaAlpha(0.0049, n, dndx, dndy), 0.5, aoBody(v.rel, n, v.slot));
   c += base * fxGlow(w, fr.time);
   let NoV = max(dot(n, normalize(-v.rel)), 0.0);
   c += select(vec3f(0.0), fr.ball * fr.ballEmissive * (0.35 + 0.65 * NoV), isBall);
@@ -418,7 +417,7 @@ fn heatGlow(slot: u32, base: vec3f) -> vec3f {
   let dndy = dpdy(n);
   let col = overlayColour[v.slot];
   let base = pow(unpack4x8unorm(col).rgb, vec3f(2.2));
-  var c = shade(base, v.rel, n, aaAlpha(0.04, n, dndx, dndy), aaAlpha(0.0049, n, dndx, dndy), 0.5, aoAt(aoView(), v.rel, n, v.centre, v.foot));
+  var c = shade(base, v.rel, n, aaAlpha(0.04, n, dndx, dndy), aaAlpha(0.0049, n, dndx, dndy), 0.5, aoAt(aoView(), v.rel, n, v.rel, vec3f(0.0)));
   c += base * f32(col >> 24u) / 255.0 * ${FX_EMISSIVE_MAX}.0;
   return vec4f(fog(c, v.rel), 1.0);
 }

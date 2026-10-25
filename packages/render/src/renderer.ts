@@ -174,7 +174,7 @@ export class Renderer {
     const ro = { type: 'read-only-storage' } as const;
     const common: GPUBindGroupLayoutEntry[] = [
       { binding: 0, visibility: VF, buffer: { type: 'uniform' } },
-      { binding: 1, visibility: GPUShaderStage.VERTEX, buffer: ro },
+      { binding: 1, visibility: VF, buffer: ro },
       { binding: 2, visibility: GPUShaderStage.VERTEX, buffer: ro },
     ];
     this.overlayBuf = device.createBuffer({ size: MAX_OVERLAY * 16, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST, label: 'overlay spheres' });
@@ -193,6 +193,7 @@ export class Renderer {
         { binding: 11, visibility: GPUShaderStage.FRAGMENT, buffer: ro },
         { binding: 12, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: 'float', viewDimension: '3d' } },
         { binding: 13, visibility: GPUShaderStage.FRAGMENT, sampler: { type: 'filtering' } },
+        { binding: 14, visibility: GPUShaderStage.FRAGMENT, buffer: ro },
       ],
     });
     // The shadow pass cannot bind the shadow map it writes.
@@ -366,7 +367,7 @@ export class Renderer {
           { binding: 8, resource: { buffer: this.sparks.sparks } },
           { binding: 9, resource: { buffer: this.lights.lights } }, { binding: 10, resource: { buffer: this.lights.trail } },
           { binding: 11, resource: { buffer: this.sparks.stateFor(s) } },
-          { binding: 12, resource: this.ao.volume.createView() }, { binding: 13, resource: this.aoSampler },
+          { binding: 12, resource: this.ao.volume.createView() }, { binding: 13, resource: this.aoSampler }, { binding: 14, resource: { buffer: this.ao.feetFor(s) } },
         ],
       });
       this.shadowBind = this.device.createBindGroup({ layout: this.shadowLayout, entries: common });

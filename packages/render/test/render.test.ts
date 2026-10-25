@@ -399,6 +399,9 @@ describe('AO shading', () => {
     expect(r.error).toBeNull();
     expect(r.nn).toBeGreaterThan(30);
     expect(r.near[0]! / r.near[1]!).toBeLessThan(0.9); // ambient-only light: measured 0.82
+    // A cube at the tower's foot (mean over all its pixels): measured 0.967; own footprint centred on the shading point instead of the body, 0.987.
+    expect(r.nf).toBeGreaterThan(100);
+    expect(r.foot[0]! / r.foot[1]!).toBeLessThan(0.978);
     // The isolated cube: at most 1 LSB even with ambient as the only light (its own sky term at low edges, >= 0.94).
     expect(r.nc).toBeGreaterThan(100);
     expect(r.cubeDiff).toBeLessThanOrEqual(1);

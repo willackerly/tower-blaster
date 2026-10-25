@@ -13,11 +13,11 @@
 //              independent of thread order (bit-identical frame to frame)
 //
 // Compose then turns the grid into an rgba8unorm 3D texture with AO_MIPS
-// levels (0.5, 1, 2 m), one thread per column per level, top down:
-//   R  occupancy: each 0.5 m voxel clamped to 1, averaged over the level's voxel
-//   G  sky visibility: exp(-skyK * occupancy above, in 0.5 m voxels)
-// Each level is built from the accumulator directly (not from the level
-// below), so the levels have no dependency on one another.
+// levels (0.5, 1, 2 m):
+//   R  occupancy: each 0.5 m voxel clamped to 1, then box-averaged level
+//      by level (one thread per voxel, in an f32 buffer)
+//   G  sky visibility: exp(-skyK * occupancy above, in 0.5 m voxels), from
+//      one top-down scan per column per level, which also stores the texels
 //
 // The splat reads the cull pass's records (pose interpolated, FX scale
 // applied), so AO, culling, shadows and the draw see the same pose. It
@@ -109,6 +109,7 @@ struct AoParams {
 @group(0) @binding(2) var<storage, read> shapes: array<Shape>;
 @group(0) @binding(3) var<storage, read> records: array<RenderRecord>;
 @group(0) @binding(4) var<storage, read_write> occ: array<atomic<u32>>;
+@group(0) @binding(5) var<storage, read_write> feet: array<vec4f>;  // per slot: the footprint's half extents (m), for own subtraction in the scene shader
 
 ${AO_FOOT_WGSL}
 
@@ -120,7 +121,9 @@ fn splat(@builtin(global_invocation_id) id: vec3u) {
   let tier = (b.flags >> 8u) & 0xffu;
   if (tier == ${TIER.lattice}u || tier == ${TIER.free}u) { return; }
   let r = records[i];
-  let e = aoFoot(r.rot, r.half, shapes[b.shape].kind == 1u) * p.invVoxel;
+  let foot = aoFoot(r.rot, r.half, shapes[b.shape].kind == 1u);
+  feet[i] = vec4f(foot, 0.0);
+  let e = foot * p.invVoxel;
   let u = (r.pos - p.originRel) * p.invVoxel;
   let lo = u - e;
   let hi = u + e;
@@ -141,29 +144,45 @@ fn splat(@builtin(global_invocation_id) id: vec3u) {
 `;
 
 export const AO_COMPOSE_WGSL = /* wgsl */ `
-struct ComposeParams { dims: vec3u, level: u32, base: vec3u, skyK: f32 }
+// src, dst: offsets into levels (f32 per voxel, all levels back to back). prev: dims of level - 1.
+struct ComposeParams { dims: vec3u, level: u32, prev: vec3u, skyK: f32, src: u32, dst: u32, pad0: u32, pad1: u32 }
 
 @group(0) @binding(0) var<uniform> c: ComposeParams;
 @group(0) @binding(1) var<storage, read> occ: array<u32>;
-@group(0) @binding(2) var dst: texture_storage_3d<rgba8unorm, write>;
+@group(0) @binding(2) var<storage, read_write> levels: array<f32>;
+@group(0) @binding(3) var dst: texture_storage_3d<rgba8unorm, write>;
 
+// One thread per voxel of the level: level 0 clamps the accumulator,
+// coarser levels average 8 voxels of the level below.
+@compute @workgroup_size(4, 4, 4)
+fn reduce(@builtin(global_invocation_id) id: vec3u) {
+  if (any(id >= c.dims)) { return; }
+  let v = (id.z * c.dims.y + id.y) * c.dims.x + id.x;
+  if (c.level == 0u) {
+    levels[c.dst + v] = min(f32(occ[v]) / ${AO_ONE}.0, 1.0);
+    return;
+  }
+  var o = 0.0;
+  for (var dz = 0u; dz < 2u; dz++) {
+    for (var dy = 0u; dy < 2u; dy++) {
+      let row = c.src + ((2u * id.z + dz) * c.prev.y + 2u * id.y + dy) * c.prev.x + 2u * id.x;
+      o += levels[row] + levels[row + 1u];
+    }
+  }
+  levels[c.dst + v] = o * 0.125;
+}
+
+// One thread per column of the level, top down: R the level's occupancy,
+// G the sky visibility from what lies above (in 0.5 m voxels).
 @compute @workgroup_size(8, 8)
-fn compose(@builtin(global_invocation_id) id: vec3u) {
+fn scan(@builtin(global_invocation_id) id: vec3u) {
   if (id.x >= c.dims.x || id.y >= c.dims.z) { return; }
-  let s = 1u << c.level;
-  let inv = 1.0 / f32(s * s * s);
+  let s = f32(1u << c.level);
   var above = 0.0;
   for (var y = i32(c.dims.y) - 1; y >= 0; y--) {
-    var o = 0.0;
-    for (var dz = 0u; dz < s; dz++) {
-      for (var dy = 0u; dy < s; dy++) {
-        let row = ((id.y * s + dz) * c.base.y + u32(y) * s + dy) * c.base.x + id.x * s;
-        for (var dx = 0u; dx < s; dx++) { o += min(f32(occ[row + dx]) / ${AO_ONE}.0, 1.0); }
-      }
-    }
-    o *= inv;
+    let o = levels[c.dst + (id.y * c.dims.y + u32(y)) * c.dims.x + id.x];
     textureStore(dst, vec3u(id.x, u32(y), id.y), vec4f(o, exp(-c.skyK * above), 0.0, 1.0));
-    above += o * f32(s);
+    above += o * s;
   }
 }
 `;
@@ -212,6 +231,35 @@ fn aoAt(av: AoView, rel: vec3f, n: vec3f, c: vec3f, foot: vec3f) -> vec2f {
   var sky = 1.0;
   if (all(sp >= vec3f(0.0)) && all(sp <= av.dims)) { sky = textureSampleLevel(aoVol, aoSamp, sp / av.dims, 0.0).g; }
   return vec2f(a, mix(1.0, sky, av.k.w));
+}
+`;
+
+/**
+ * Seam cavity (design step 13.5): within AO_SEAM_BAND of a box edge, one
+ * level-0 tap 0.25 m out from the nearest edge point, along the edge's
+ * normal (the mean of its two faces'), minus own. A neighbour across the
+ * edge darkens the band; a free (silhouette) edge stays bright. lp: the
+ * shading point in the body's frame (metres); face: its face normal there
+ * (unit axis, signed); returns the factor on occlusion.
+ */
+export const AO_SEAM_BAND = 0.15;
+export const AO_SEAM_K = 0.8;
+export const AO_SEAM_WGSL = /* wgsl */ `
+fn aoSeam(av: AoView, lp: vec3f, face: vec3f, half: vec3f, rot: vec4f, c: vec3f, foot: vec3f) -> f32 {
+  if (av.on == 0.0) { return 1.0; }
+  // The nearest edge on this face: the in-face axis with the least room left.
+  let room = select(half - abs(lp), vec3f(1e9), abs(face) > vec3f(0.5));
+  let k = select(select(2u, 1u, room.y <= room.z), 0u, room.x <= room.y && room.x <= room.z);
+  let d = room[k];
+  if (d >= ${AO_SEAM_BAND}) { return 1.0; }
+  var e = lp;
+  var side = vec3f(0.0);
+  e[k] = sign(lp[k]) * half[k];
+  side[k] = sign(lp[k]);
+  let n = aoQrot(rot, normalize(face + side));
+  let p = c + aoQrot(rot, e) + 0.25 * n;
+  let band = 1.0 - smoothstep(0.0, ${AO_SEAM_BAND}, d);
+  return 1.0 - ${AO_SEAM_K} * band * aoTap(av, p, 0u, c, foot);
 }
 `;
 
@@ -272,25 +320,28 @@ export function splatReference(bodies: SplatBody[], g: AoGrid, eye: V3): Uint32A
 
 /** CPU twin of compose: per level, R and G as floats (before unorm8 rounding), x fastest. */
 export function composeReference(occ: Uint32Array, g: AoGrid, skyK = AO_SKY_K): { dims: [number, number, number]; r: Float32Array; g: Float32Array }[] {
-  const [bx, by] = g.dims;
-  const out = [];
+  const out: { dims: [number, number, number]; r: Float32Array; g: Float32Array }[] = [];
   for (let level = 0; level < AO_MIPS; level++) {
     const s = 2 ** level, dims = g.dims.map((d) => d / s) as [number, number, number];
     const R = new Float32Array(dims[0] * dims[1] * dims[2]), G = new Float32Array(R.length);
-    const inv = fr(1 / (s * s * s));
+    if (level === 0) for (let v = 0; v < R.length; v++) R[v] = Math.min(fr(occ[v]! / AO_ONE), 1);
+    else {
+      const p = out[level - 1]!, pd = p.dims;
+      for (let z = 0; z < dims[2]; z++) for (let y = 0; y < dims[1]; y++) for (let x = 0; x < dims[0]; x++) {
+        let o = 0;
+        for (let dz = 0; dz < 2; dz++) for (let dy = 0; dy < 2; dy++) {
+          const row = ((2 * z + dz) * pd[1] + 2 * y + dy) * pd[0] + 2 * x;
+          o = fr(o + fr(p.r[row]! + p.r[row + 1]!));
+        }
+        R[(z * dims[1] + y) * dims[0] + x] = fr(o * 0.125);
+      }
+    }
     for (let z = 0; z < dims[2]; z++) for (let x = 0; x < dims[0]; x++) {
       let above = 0;
       for (let y = dims[1] - 1; y >= 0; y--) {
-        let o = 0;
-        for (let dz = 0; dz < s; dz++) for (let dy = 0; dy < s; dy++) {
-          const row = ((z * s + dz) * by + y * s + dy) * bx + x * s;
-          for (let dx = 0; dx < s; dx++) o = fr(o + Math.min(fr(occ[row + dx]! / AO_ONE), 1));
-        }
-        o = fr(o * inv);
         const v = (z * dims[1] + y) * dims[0] + x;
-        R[v] = o;
         G[v] = Math.exp(-skyK * above);
-        above = fr(above + fr(o * s));
+        above = fr(above + fr(R[v]! * s));
       }
     }
     out.push({ dims, r: R, g: G });
@@ -312,18 +363,24 @@ export class AoVolume {
   private readonly params: GPUBuffer;
   private readonly composeParams: GPUBuffer[];
   private readonly pipe: GPUComputePipeline;
-  private readonly composePipe: GPUComputePipeline;
+  private readonly reducePipe: GPUComputePipeline;
+  private readonly scanPipe: GPUComputePipeline;
   private bind: GPUBindGroup | null = null;
-  private composeBinds: GPUBindGroup[] = [];
+  private levels: GPUBuffer | null = null;
+  private reduceBinds: GPUBindGroup[] = [];
+  private scanBinds: GPUBindGroup[] = [];
   private bound: unknown[] = [];
+  private levelOffsets: number[] = [];
+  private feet: GPUBuffer | null = null;
 
   constructor(private readonly device: GPUDevice, public grid: AoGrid) {
     this.params = device.createBuffer({ size: PARAM_BYTES, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST, label: 'ao params' });
-    this.composeParams = Array.from({ length: AO_MIPS }, (_, l) => device.createBuffer({ size: 32, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST, label: `ao compose ${l}` }));
+    this.composeParams = Array.from({ length: AO_MIPS }, (_, l) => device.createBuffer({ size: 48, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST, label: `ao compose ${l}` }));
     const module = device.createShaderModule({ code: AO_SPLAT_WGSL, label: 'ao splat' });
     this.pipe = device.createComputePipeline({ layout: 'auto', compute: { module, entryPoint: 'splat' } });
     const cm = device.createShaderModule({ code: AO_COMPOSE_WGSL, label: 'ao compose' });
-    this.composePipe = device.createComputePipeline({ layout: 'auto', compute: { module: cm, entryPoint: 'compose' } });
+    this.reducePipe = device.createComputePipeline({ layout: 'auto', compute: { module: cm, entryPoint: 'reduce' } });
+    this.scanPipe = device.createComputePipeline({ layout: 'auto', compute: { module: cm, entryPoint: 'scan' } });
     [this.occ, this.volume] = this.allocate();
   }
 
@@ -334,10 +391,18 @@ export class AoVolume {
       size: g.dims, dimension: '3d', format: 'rgba8unorm', mipLevelCount: AO_MIPS,
       usage: GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_SRC, label: 'ao volume',
     });
-    this.composeBinds = this.composeParams.map((params, level) => this.device.createBindGroup({
-      layout: this.composePipe.getBindGroupLayout(0),
-      entries: [{ binding: 0, resource: { buffer: params } }, { binding: 1, resource: { buffer: occ } }, { binding: 2, resource: volume.createView({ baseMipLevel: level, mipLevelCount: 1 }) }],
+    this.levels?.destroy();
+    const n0 = voxelCount(g), offsets = Array.from({ length: AO_MIPS }, (_, l) => { let o = 0; for (let k = 0; k < l; k++) o += n0 / 8 ** k; return o; });
+    const levels = (this.levels = this.device.createBuffer({ size: offsets[AO_MIPS - 1]! * 4 + (n0 / 8 ** (AO_MIPS - 1)) * 4, usage: GPUBufferUsage.STORAGE, label: 'ao levels' }));
+    this.reduceBinds = this.composeParams.map((params, level) => this.device.createBindGroup({
+      layout: this.reducePipe.getBindGroupLayout(0),
+      entries: [{ binding: 0, resource: { buffer: params } }, { binding: 1, resource: { buffer: occ } }, { binding: 2, resource: { buffer: levels } }],
     }));
+    this.scanBinds = this.composeParams.map((params, level) => this.device.createBindGroup({
+      layout: this.scanPipe.getBindGroupLayout(0),
+      entries: [{ binding: 0, resource: { buffer: params } }, { binding: 2, resource: { buffer: levels } }, { binding: 3, resource: volume.createView({ baseMipLevel: level, mipLevelCount: 1 }) }],
+    }));
+    this.levelOffsets = offsets;
     this.bind = null;
     return [occ, volume];
   }
@@ -352,6 +417,22 @@ export class AoVolume {
     [this.occ, this.volume] = this.allocate();
   }
 
+  /**
+   * Per-slot footprints (vec4, half extents in metres), written by the
+   * splat, sized for a source; the scene shader reads them for own
+   * subtraction. (Passing them as vertex outputs instead cost about 0.2 ms
+   * at 100k on the M5: a tiler stores every vertex output.) Growing it
+   * rebinds the splat on the next frame.
+   */
+  feetFor(source: BodySource): GPUBuffer {
+    if (!this.feet || this.feet.size < source.capacity * 16) {
+      this.feet?.destroy();
+      this.feet = this.device.createBuffer({ size: Math.max(16, source.capacity * 16), usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC, label: 'ao footprints' });
+      this.bind = null;
+    }
+    return this.feet;
+  }
+
   /** Zero the accumulator: outside any pass, before the compute pass that splats. */
   clear(enc: GPUCommandEncoder): void {
     enc.clearBuffer(this.occ);
@@ -359,7 +440,7 @@ export class AoVolume {
 
   /** Splat every drawable slot, after the cull pass wrote this frame's records (same compute pass is fine). */
   splat(pass: GPUComputePassEncoder, source: BodySource, records: GPUBuffer, eye: V3): void {
-    const want = [source.bodies, source.shapes, records, this.occ];
+    const want = [source.bodies, source.shapes, records, this.occ, this.feetFor(source)];
     if (!this.bind || want.some((b, i) => b !== this.bound[i])) {
       this.bind = this.device.createBindGroup({
         layout: this.pipe.getBindGroupLayout(0),
@@ -379,21 +460,40 @@ export class AoVolume {
     pass.dispatchWorkgroups(Math.ceil(source.capacity / WG));
   }
 
-  /** Build the volume's levels from the accumulator, after the splat (same compute pass). */
+  /**
+   * Build the volume's levels from the accumulator, after the splat (same
+   * compute pass): per-voxel reductions level by level (fully parallel),
+   * then one top-down scan per column per level for sky and the stores.
+   * (Scanning each level straight from the accumulator, as first written,
+   * made a 2 m column thread read 64 voxels per step in series: 0.2-0.4 ms
+   * on the M5 at 1-2M voxels.)
+   */
   compose(pass: GPUComputePassEncoder): void {
-    pass.setPipeline(this.composePipe);
+    const dimsAt = (l: number) => this.grid.dims.map((d) => d / 2 ** l);
     for (let level = 0; level < AO_MIPS; level++) {
-      const s = 2 ** level, dims = this.grid.dims.map((d) => d / s);
-      const buf = new ArrayBuffer(32), u = new Uint32Array(buf), fl = new Float32Array(buf);
-      u.set(dims, 0); u[3] = level; u.set(this.grid.dims, 4); fl[7] = this.skyK;
+      const buf = new ArrayBuffer(48), u = new Uint32Array(buf), fl = new Float32Array(buf);
+      u.set(dimsAt(level), 0); u[3] = level; u.set(dimsAt(Math.max(0, level - 1)), 4); fl[7] = this.skyK;
+      u[8] = this.levelOffsets[Math.max(0, level - 1)]!; u[9] = this.levelOffsets[level]!;
       this.device.queue.writeBuffer(this.composeParams[level]!, 0, buf);
-      pass.setBindGroup(0, this.composeBinds[level]!);
-      pass.dispatchWorkgroups(Math.ceil(dims[0]! / 8), Math.ceil(dims[2]! / 8));
+    }
+    pass.setPipeline(this.reducePipe);
+    for (let level = 0; level < AO_MIPS; level++) {
+      const d = dimsAt(level);
+      pass.setBindGroup(0, this.reduceBinds[level]!);
+      pass.dispatchWorkgroups(Math.ceil(d[0]! / 4), Math.ceil(d[1]! / 4), Math.ceil(d[2]! / 4));
+    }
+    pass.setPipeline(this.scanPipe);
+    for (let level = 0; level < AO_MIPS; level++) {
+      const d = dimsAt(level);
+      pass.setBindGroup(0, this.scanBinds[level]!);
+      pass.dispatchWorkgroups(Math.ceil(d[0]! / 8), Math.ceil(d[2]! / 8));
     }
   }
 
   destroy(): void {
     for (const b of [this.occ, this.params, ...this.composeParams]) b.destroy();
+    this.levels?.destroy();
+    this.feet?.destroy();
     this.volume.destroy();
   }
 }

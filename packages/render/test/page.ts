@@ -1624,7 +1624,8 @@ ${AO_SAMPLE_WGSL}
  * AO in the image: a tower on the floor and an isolated cube in the air,
  * rendered with the volume on and off, sun off so ambient (what AO
  * scales) is all the light. The floor around the tower's foot darkens;
- * the isolated cube and the open floor do not change beyond f32 noise.
+ * the isolated cube and the open floor do not change beyond f32 noise;
+ * a cube at the tower's foot darkens where the tower rises beside it.
  */
 export async function aoImage() {
   const { device } = await createDevice({ timestamps: false });
@@ -1632,6 +1633,7 @@ export async function aoImage() {
   const descs: BodyDesc[] = [];
   for (let y = 0; y < 6; y++) descs.push(box([-2, 0.5 + y, -2], [0.5, 0.5, 0.5], [0, 0, 0, 1], 1));
   descs.push(box([2.6, 2.2, -1], [0.5, 0.5, 0.5], [0, Math.sin(0.3), 0, Math.cos(0.3)], 2)); // isolated, slot 6
+  descs.push(box([-1, 0.5, -2], [0.5, 0.5, 0.5], [0, 0, 0, 1], 3)); // against the tower's foot, slot 7
   const src = new SnapshotSource(device);
   src.reset(descs);
   src.update(snapshotOf(descs), descs);
@@ -1645,11 +1647,12 @@ export async function aoImage() {
   const off = (await rend.render(f, true, true))!.pixels!;
   const ids = (await rend.renderIds(f)).ids;
   const luma = (px: typeof on, i: number) => 0.2126 * px.data[i + (px.bgra ? 2 : 0)]! + 0.7152 * px.data[i + 1]! + 0.0722 * px.data[i + (px.bgra ? 0 : 2)]!;
-  let nearOn = 0, nearOff = 0, nn = 0, openDiff = 0, no = 0, cubeDiff = 0, nc = 0;
+  let nearOn = 0, nearOff = 0, nn = 0, openDiff = 0, no = 0, cubeDiff = 0, nc = 0, footOn = 0, footOff = 0, nf = 0;
   let openChanged = 0, cubeChanged = 0;
   for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
     const i = y * on.bytesPerRow + 4 * x, id = ids[y * W + x]!;
     if (id === 7) { const dd = Math.abs(luma(on, i) - luma(off, i)); cubeDiff = Math.max(cubeDiff, dd); nc++; if (dd) cubeChanged++; continue; }
+    if (id === 8) { footOn += luma(on, i); footOff += luma(off, i); nf++; continue; }
     if (id) continue;
     const { o, d } = rayAt(f, x, y);
     if (d[1] >= 0) continue;
@@ -1662,5 +1665,5 @@ export async function aoImage() {
   const err = await device.popErrorScope();
   rend.destroy();
   device.destroy();
-  return { near: [nearOn / nn, nearOff / nn], nn, openDiff, openChanged, no, cubeDiff, cubeChanged, nc, error: err?.message ?? null };
+  return { foot: [footOn / nf, footOff / nf], nf, near: [nearOn / nn, nearOff / nn], nn, openDiff, openChanged, no, cubeDiff, cubeChanged, nc, error: err?.message ?? null };
 }
