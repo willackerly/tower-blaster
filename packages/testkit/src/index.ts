@@ -17,10 +17,10 @@ export interface WebGPUSession {
   close(): Promise<void>;
 }
 
-export async function openWebGPU(extraArgs: string[] = []): Promise<WebGPUSession | null> {
+export async function openWebGPU(extraArgs: string[] = [], opts: { channel?: string; headless?: boolean } = {}): Promise<WebGPUSession | null> {
   let browser: Browser;
   try {
-    browser = await chromium.launch({ args: [...WEBGPU_ARGS, ...extraArgs] });
+    browser = await chromium.launch({ args: [...WEBGPU_ARGS, ...extraArgs], headless: opts.headless ?? true, ...(opts.channel ? { channel: opts.channel } : {}) });
   } catch (e) {
     if (requireWebGPU()) throw e;
     return null;

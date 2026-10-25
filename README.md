@@ -34,6 +34,15 @@ pnpm bench:browser --engines rapier,rapier:iterations=8 --scenario S1 --sleep fa
 pnpm bench:suite --channel chrome       # about 5-10 minutes; writes results/suite-<time>.jsonl and .md
 ```
 
+### GPU primitives
+
+```sh
+pnpm bench:gpu --channel chrome         # copy roofline, dispatch overhead, scan, compaction, radix sort
+pnpm bench:gpu --quick                  # small sizes, for checking the pipeline
+```
+
+Writes `results/gpu-<time>.{json,md}`. GPU times come from timestamp queries, and each primitive's effective GB/s is reported as a fraction of a straight copy on the same device.
+
 Results worth keeping go in `docs/benchmarks/` (the first is a CPU baseline from a cloud VM).
 
 ## Layout
@@ -48,4 +57,5 @@ Results worth keeping go in `docs/benchmarks/` (the first is a CPU baseline from
 | `adapter-rapier` | CPU baseline (Rapier WASM) |
 | `bench` | Timing and quality runs, CLI |
 | `runner` | Browser runner page, Playwright orchestrator (`bench:browser`) |
+| `gpu` | GPU primitives (profiler, scan, compaction, radix sort, bandwidth probe) and `bench:gpu` |
 | `testkit` | Headless Chromium WebGPU sessions for tests |

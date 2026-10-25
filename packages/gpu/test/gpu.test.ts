@@ -111,3 +111,22 @@ describe('RadixSorter (stable, keys + values)', () => {
     expect(r).toMatchObject({ error: null, keyDiff: -1, valDiff: -1, tailDiff: -1 });
   });
 });
+
+describe('BandwidthProbe and bench:gpu', () => {
+  it('the copy kernel copies every word, including a partial last workgroup', async (ctx) => {
+    if (!gpu) return ctx.skip();
+    const r = await call('bandwidthCopy', 4 * 2 ** 20 + 48);
+    expect(r).toEqual({ bytes: 4 * 2 ** 20 + 48, traffic: 2 * (4 * 2 ** 20 + 48), diff: -1 });
+  });
+
+  it('a quick bench run yields one finite, positive record per case', async (ctx) => {
+    if (!gpu) return ctx.skip();
+    const r = await call('runGpuBench', { reps: 2, warmup: 1, copyBytes: 2 ** 20, scanSizes: [1000], compactSizes: [1000], sortSizes: [1000], dispatches: 10 });
+    expect(r.cases.map((c) => c.name)).toEqual(['copy-1MiB', 'dispatch-x10', 'scan-1000', 'compact-1000-30pct', 'sort-1000-32bit', 'sort-1000-20bit']);
+    for (const c of r.cases) {
+      expect(Number.isFinite(c.medianMs) && c.medianMs >= 0).toBe(true);
+      expect(c.p10Ms).toBeLessThanOrEqual(c.p90Ms);
+    }
+    expect(r.software).toBe(/swiftshader/i.test(gpu.adapter.architecture));
+  });
+});

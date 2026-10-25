@@ -2,7 +2,7 @@
 // loadBundle() and calls the exports through page.evaluate; each driver checks
 // its GPU result against the CPU reference in the page and returns a small
 // summary, so large arrays never cross the Playwright boundary.
-import { compactIndices, Compactor, createDevice, exclusiveScanU32, RadixSorter, sortPairs, GpuProfiler, readBuffer, Scanner, uploadU32 } from '../src/index.ts';
+import { BandwidthProbe, compactIndices, Compactor, createDevice, exclusiveScanU32, RadixSorter, sortPairs, GpuProfiler, readBuffer, Scanner, uploadU32 } from '../src/index.ts';
 
 function rng(seed: number) {
   let a = seed >>> 0;
@@ -200,3 +200,26 @@ export async function sort(cases: SortCase[]) {
   device.destroy();
   return out;
 }
+
+/** The copy kernel must actually copy, or its GB/s means nothing. */
+export async function bandwidthCopy(bytes: number) {
+  const { device } = await createDevice();
+  const probe = new BandwidthProbe(device, bytes);
+  const words = probe.bytes / 4;
+  const src = new Uint32Array(words);
+  const r = rng(9);
+  for (let i = 0; i < words; i++) src[i] = r();
+  device.queue.writeBuffer(probe.src, 0, src);
+  const enc = device.createCommandEncoder();
+  const pass = enc.beginComputePass();
+  probe.encode(pass);
+  pass.end();
+  device.queue.submit([enc.finish()]);
+  const got = new Uint32Array(await readBuffer(device, probe.dst));
+  const res = { bytes: probe.bytes, traffic: probe.traffic, diff: firstDiff(got, src) };
+  probe.destroy();
+  device.destroy();
+  return res;
+}
+
+export { runGpuBench } from '../src/bench.ts';
