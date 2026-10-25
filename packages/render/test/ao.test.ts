@@ -35,6 +35,37 @@ describe('aoGrid', () => {
     expect(voxelCount(g)).toBeLessThanOrEqual(5_000_000);
     expect(voxelCount(aoGrid({ center: [0, 0, 0], half: [400, 50, 400] }, 2, 1e12))).toBeGreaterThan(5_000_000);
   });
+
+  it('stops one coarsest texel under the floor, and only in y', () => {
+    const arena = { center: [0.2, 4, 0] as V3, half: [30, 12, 30] as V3, radius: 25 };
+    const all = aoGrid(arena);
+    expect(aoGrid(arena, undefined, undefined, -Infinity)).toEqual(all);
+    expect(aoGrid(arena, undefined, undefined, -20)).toEqual(all); // the arena ends above that floor
+    for (const floorY of [0, 0.3, -1.1, 3]) {
+      const g = aoGrid(arena, undefined, undefined, floorY);
+      expect(g.voxel).toBe(0.5);
+      // At least 4 voxels (one level-2 texel) under the floor, less than 5.
+      expect(floorY - g.origin[1]).toBeGreaterThanOrEqual(4 * 0.5);
+      expect(floorY - g.origin[1]).toBeLessThan(5 * 0.5);
+      expect(Math.abs(g.origin[1] % 0.5)).toBe(0);
+      expect([g.origin[0], g.origin[2]]).toEqual([all.origin[0], all.origin[2]]);
+      expect([g.dims[0], g.dims[2]]).toEqual([all.dims[0], all.dims[2]]);
+      expect(g.dims[1] % 4).toBe(0);
+      expect(g.origin[1] + g.dims[1] * g.voxel).toBeGreaterThanOrEqual(16); // the top is kept
+    }
+    // A floor above the whole arena leaves one level-2 texel, not a negative grid.
+    const above = aoGrid(arena, undefined, undefined, 100);
+    expect(above.dims[1]).toBe(4);
+    expect(above.origin[1]).toBeLessThanOrEqual(16);
+  });
+
+  it('the bench\'s far city (an arena sphere of radius 150 about y = 5): about half the voxels with the floor at 0', () => {
+    const arena = { center: [0, 5, 0] as V3, half: [150, 150, 150] as V3, radius: 150 };
+    const all = aoGrid(arena), clipped = aoGrid(arena, undefined, undefined, 0);
+    expect(all.voxel).toBe(2);
+    expect(clipped.voxel).toBe(2);
+    expect(voxelCount(clipped) / voxelCount(all)).toBeLessThan(0.56); // 152 x 84 x 152 of 152 x 152 x 152
+  });
 });
 
 describe('footprint', () => {

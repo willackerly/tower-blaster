@@ -55,13 +55,23 @@ export interface AoGrid {
   dims: [number, number, number];
 }
 
-/** The grid over an arena's box (clipped by its sphere), voxel doubled until it fits the cap. */
-export function aoGrid(arena: Arena, voxel = AO_VOXEL, cap = AO_MAX_VOXELS): AoGrid {
+/**
+ * The grid over an arena's box (clipped by its sphere), voxel doubled until
+ * it fits the cap. Below floorY nothing is seen and nothing occludes what
+ * is (the floor is opaque, and taps reach down only from faces turned
+ * down, where they find nothing), so the grid stops one coarsest texel
+ * under the floor: a tap at the floor, at any level, still blends with an
+ * empty texel below rather than (by edge clamping) with the one it is in.
+ * The viewer's and the bench's arenas are spheres about their scene, so
+ * half of each grid was underground.
+ */
+export function aoGrid(arena: Arena, voxel = AO_VOXEL, cap = AO_MAX_VOXELS, floorY = -Infinity): AoGrid {
   const { center: c, half: h, radius = Infinity } = arena;
   const lo = [0, 1, 2].map((k) => c[k]! - Math.min(h[k]!, radius)), hi = [0, 1, 2].map((k) => c[k]! + Math.min(h[k]!, radius));
+  const step = 2 ** (AO_MIPS - 1);
   for (;;) {
-    const origin = lo.map((v) => Math.floor(v / voxel) * voxel) as V3;
-    const step = 2 ** (AO_MIPS - 1);
+    const bottom = Math.min(Math.max(lo[1]!, floorY - step * voxel), hi[1]!);
+    const origin = [lo[0]!, bottom, lo[2]!].map((v) => Math.floor(v / voxel) * voxel) as V3;
     const dims = [0, 1, 2].map((k) => Math.max(1, Math.ceil((hi[k]! - origin[k]!) / voxel / step)) * step) as [number, number, number];
     if (dims[0] * dims[1] * dims[2] <= cap) return { origin, voxel, dims };
     voxel *= 2;
@@ -240,13 +250,25 @@ fn aoAt(av: AoView, rel: vec3f, n: vec3f, c: vec3f, foot: vec3f) -> vec2f {
  * normal (the mean of its two faces'), minus own. A neighbour across the
  * edge darkens the band; a free (silhouette) edge stays bright. lp: the
  * shading point in the body's frame (metres); face: its face normal there
- * (unit axis, signed); returns the factor on occlusion.
+ * (unit axis, signed); pxM: metres per pixel there (fsBox: the length of
+ * fwidth of the unclamped body-frame position);
+ * returns the factor on occlusion.
+ *
+ * Level of detail: the band is AO_SEAM_BAND / pxM pixels wide, and a band
+ * under 2 px is sampled once per pixel, so it aliases (pixels in and out
+ * of the band at random along the edge). The cavity fades in from
+ * AO_SEAM_LOD[0] to AO_SEAM_LOD[1] pixels, and below that no tap is
+ * taken: in the far bench view (cubes about 6 px) that is every pixel,
+ * where the seam had cost one more texture tap on most of them.
  */
 export const AO_SEAM_BAND = 0.15;
 export const AO_SEAM_K = 0.8;
+export const AO_SEAM_LOD: [number, number] = [1, 2];
 export const AO_SEAM_WGSL = /* wgsl */ `
-fn aoSeam(av: AoView, lp: vec3f, face: vec3f, half: vec3f, rot: vec4f, c: vec3f, foot: vec3f) -> f32 {
+fn aoSeam(av: AoView, lp: vec3f, face: vec3f, half: vec3f, rot: vec4f, c: vec3f, foot: vec3f, pxM: f32) -> f32 {
   if (av.on == 0.0) { return 1.0; }
+  let lod = smoothstep(${AO_SEAM_LOD[0].toFixed(1)}, ${AO_SEAM_LOD[1].toFixed(1)}, ${AO_SEAM_BAND} / max(pxM, 1e-6));
+  if (lod == 0.0) { return 1.0; }
   // The nearest edge on this face: the in-face axis with the least room left.
   let room = select(half - abs(lp), vec3f(1e9), abs(face) > vec3f(0.5));
   let k = select(select(2u, 1u, room.y <= room.z), 0u, room.x <= room.y && room.x <= room.z);
@@ -258,7 +280,7 @@ fn aoSeam(av: AoView, lp: vec3f, face: vec3f, half: vec3f, rot: vec4f, c: vec3f,
   side[k] = sign(lp[k]);
   let n = aoQrot(rot, normalize(face + side));
   let p = c + aoQrot(rot, e) + 0.25 * n;
-  let band = 1.0 - smoothstep(0.0, ${AO_SEAM_BAND}, d);
+  let band = lod * (1.0 - smoothstep(0.0, ${AO_SEAM_BAND}, d));
   return 1.0 - ${AO_SEAM_K} * band * aoTap(av, p, 0u, c, foot);
 }
 `;

@@ -9,7 +9,7 @@ import { Body, RenderRecord, Shape, TIER, readStruct } from '@tb/schema';
 import {
   agx, AGX_WGSL, fromHalf, FX_WORDS, packFx, toHalf, bevelNormal, BEVEL_WGSL, oklabToLinear, OKLAB_WGSL, Post,
   Culler, cullReference, GpuBodySource, invert, listMatches, lookAt, makeGpuBodies, multiply, perspective, Renderer, SEGMENTS, SnapshotSource, transform,
-  translation, normalize, BOX_VERTS, SPHERE_VERTS, SUN, Sparks, CTL, MAX_EVENTS, flashSlot, FLASHES, MAX_BALLS, TRAIL, Lights, LIGHTS, LIGHT_META, LIGHT_PACKED, MATERIAL, AoVolume, aoGrid, aoFrame, splatReference, composeReference, AO_FOOT_WGSL, AO_SAMPLE_WGSL, AO_SEAM_WGSL, AO_ONE, type SplatBody, unpackImpacts, unpackSparks, spawnReference, stepReference, type Impact, type BodySource, type CullFrame, type FrameParams, type V3,
+  translation, normalize, BOX_VERTS, SPHERE_VERTS, SUN, Sparks, CTL, MAX_EVENTS, flashSlot, FLASHES, MAX_BALLS, TRAIL, Lights, LIGHTS, LIGHT_META, LIGHT_PACKED, MATERIAL, AoVolume, aoGrid, aoFrame, splatReference, composeReference, AO_FOOT_WGSL, AO_SAMPLE_WGSL, AO_SEAM_WGSL, AO_ONE, type SplatBody, unpackImpacts, unpackSparks, spawnReference, stepReference, type Impact, type BodySource, type CullFrame, type FrameParams, type RendererOptions, type V3,
 } from '../src/index.ts';
 
 function rng(seed: number) {
@@ -1590,7 +1590,7 @@ export async function sceneHash(toggles: Record<string, boolean> = {}, format?: 
 }
 
 export interface AoProbeBody { pos: V3; half: V3; rot?: number[]; sphere?: boolean }
-export interface AoProbe { p: V3; n: V3; own: number; /** For the seam cavity: the point in the body's frame and its face normal there. */ local?: V3; face?: V3 }
+export interface AoProbe { p: V3; n: V3; own: number; /** For the seam cavity: the point in the body's frame, its face normal there, and metres per pixel (default 0: full strength). */ local?: V3; face?: V3; pxM?: number }
 
 /**
  * aoAt (the scene shader's AO function) evaluated in a compute kernel at
@@ -1634,7 +1634,7 @@ ${AO_SAMPLE_WGSL}
 @group(0) @binding(2) var<uniform> av: AoView;
 @group(0) @binding(3) var<storage, read> inp: array<vec4f>;  // per probe: p, n, own rotation, (own half extents, 0 floor / 1 box / 2 sphere)
 @group(0) @binding(4) var<storage, read_write> out: array<vec4f>;
-@group(0) @binding(5) var<storage, read> centres: array<vec4f>; // per probe: own centre; local point (w 1: seam probe); face normal
+@group(0) @binding(5) var<storage, read> centres: array<vec4f>; // per probe: own centre; local point (w 1: seam probe); face normal (w metres per pixel)
 ${AO_SEAM_WGSL}
 @compute @workgroup_size(64) fn main(@builtin(global_invocation_id) id: vec3u) {
   if (id.x >= arrayLength(&out)) { return; }
@@ -1645,7 +1645,7 @@ ${AO_SEAM_WGSL}
   let c = centres[3u * id.x].xyz;
   let lp = centres[3u * id.x + 1u];
   var seam = 1.0;
-  if (lp.w > 0.5) { seam = aoSeam(av, lp.xyz, centres[3u * id.x + 2u].xyz, f.xyz, inp[i + 2u], c, foot); }
+  if (lp.w > 0.5) { seam = aoSeam(av, lp.xyz, centres[3u * id.x + 2u].xyz, f.xyz, inp[i + 2u], c, foot, centres[3u * id.x + 2u].w); }
   out[id.x] = vec4f(aoAt(av, inp[i].xyz, inp[i + 1u].xyz, c, foot), seam, 0.0);
 }
 `,
@@ -1661,7 +1661,7 @@ ${AO_SEAM_WGSL}
     data.set(b?.rot ?? [0, 0, 0, 1], k * 16 + 8);
     data.set([...(b ? (b.sphere ? [b.half[0], b.half[0], b.half[0]] : b.half) : [0, 0, 0]), b ? (b.sphere ? 2 : 1) : 0], k * 16 + 12);
     cdata.set(b ? rel(b.pos) : [0, 0, 0], k * 12);
-    if (q.local && q.face) { cdata.set([...q.local, 1], k * 12 + 4); cdata.set(q.face, k * 12 + 8); }
+    if (q.local && q.face) { cdata.set([...q.local, 1], k * 12 + 4); cdata.set([...q.face, q.pxM ?? 0], k * 12 + 8); }
   });
   const usage = GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST;
   const inp = device.createBuffer({ size: data.byteLength, usage }), cen = device.createBuffer({ size: cdata.byteLength, usage });
@@ -1697,35 +1697,45 @@ ${AO_SEAM_WGSL}
  * AO in the image: a tower on the floor and an isolated cube in the air,
  * rendered with the volume on and off, sun off so ambient (what AO
  * scales) is all the light. The floor around the tower's foot darkens;
- * the isolated cube and the open floor do not change beyond f32 noise;
- * a cube at the tower's foot darkens where the tower rises beside it.
+ * the isolated cube and ball and the open floor do not change beyond f32
+ * noise; a cube at the tower's foot darkens where the tower rises beside it.
  */
-export async function aoImage() {
-  const { device } = await createDevice({ timestamps: false });
-  device.pushErrorScope('validation');
+function aoScene(device: GPUDevice, opts: RendererOptions = {}, contact = false) {
   const descs: BodyDesc[] = [];
   for (let y = 0; y < 6; y++) descs.push(box([-2, 0.5 + y, -2], [0.5, 0.5, 0.5], [0, 0, 0, 1], 1));
   descs.push(box([2.6, 2.2, -1], [0.5, 0.5, 0.5], [0, Math.sin(0.3), 0, Math.cos(0.3)], 2)); // isolated, slot 6
   descs.push(box([-1, 0.5, -2], [0.5, 0.5, 0.5], [0, 0, 0, 1], 3)); // against the tower's foot, slot 7
+  const q = normalize([0.4, -0.7, 0.2]), sh = Math.sin(0.6);
+  descs.push({ ...ball([-3.2, 1.2, 1.5], 0.55), rot: [q[0] * sh, q[1] * sh, q[2] * sh, Math.cos(0.6)], tag: 4 }); // isolated, turned, not a ball (balls are lights), slot 8
+  // On the foot cube, against the tower: where an own footprint subtracted in the wrong place shows. Slot 9.
+  if (contact) descs.push({ ...ball([-1.02, 1.47, -2], 0.45), rot: [q[0] * sh, q[1] * sh, q[2] * sh, Math.cos(0.6)], tag: 5 });
   const src = new SnapshotSource(device);
   src.reset(descs);
   src.update(snapshotOf(descs), descs);
-  const rend = new Renderer(device, { size: [W, H] });
+  const rend = new Renderer(device, { size: [W, H] }, opts);
   rend.look = { ...rend.look, bloomMix: 0, fogDensity: 0, sunColor: [0, 0, 0] };
   rend.setShadowBounds([0, 3, 0], 14, [14, 8, 14]);
   rend.setSource(src);
   const f: FrameParams = { ...camera([1, 5, 7], [0, 1, -2]), groundY: 0, time: 1, dt: 0, alpha: 1 };
+  return { rend, f };
+}
+
+export async function aoImage() {
+  const { device } = await createDevice({ timestamps: false });
+  device.pushErrorScope('validation');
+  const { rend, f } = aoScene(device);
   const on = (await rend.render(f, true, true))!.pixels!;
   rend.toggles.ao = false;
   const off = (await rend.render(f, true, true))!.pixels!;
   const ids = (await rend.renderIds(f)).ids;
   const luma = (px: typeof on, i: number) => 0.2126 * px.data[i]! + 0.7152 * px.data[i + 1]! + 0.0722 * px.data[i + 2]!;
-  let nearOn = 0, nearOff = 0, nn = 0, openDiff = 0, no = 0, cubeDiff = 0, nc = 0, footOn = 0, footOff = 0, nf = 0;
+  let nearOn = 0, nearOff = 0, nn = 0, openDiff = 0, no = 0, cubeDiff = 0, nc = 0, footOn = 0, footOff = 0, nf = 0, ballDiff = 0, nb = 0;
   let openChanged = 0, cubeChanged = 0;
   for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
     const i = y * on.bytesPerRow + 4 * x, id = ids[y * W + x]!;
     if (id === 7) { const dd = Math.abs(luma(on, i) - luma(off, i)); cubeDiff = Math.max(cubeDiff, dd); nc++; if (dd) cubeChanged++; continue; }
     if (id === 8) { footOn += luma(on, i); footOff += luma(off, i); nf++; continue; }
+    if (id === 9) { ballDiff = Math.max(ballDiff, Math.abs(luma(on, i) - luma(off, i))); nb++; continue; }
     if (id) continue;
     const { o, d } = rayAt(f, x, y);
     if (d[1] >= 0) continue;
@@ -1738,7 +1748,37 @@ export async function aoImage() {
   const err = await device.popErrorScope();
   rend.destroy();
   device.destroy();
-  return { foot: [footOn / nf, footOff / nf], nf, near: [nearOn / nn, nearOff / nn], nn, openDiff, openChanged, no, cubeDiff, cubeChanged, nc, error: err?.message ?? null };
+  return { foot: [footOn / nf, footOff / nf], nf, near: [nearOn / nn, nearOff / nn], nn, openDiff, openChanged, no, cubeDiff, cubeChanged, nc, ballDiff, nb, error: err?.message ?? null };
+}
+
+/**
+ * The AO scene drawn with the own centre and footprint derived in the
+ * fragment shader (the default) and read from per-slot buffers
+ * (aoDiag 'own-read', the earlier path): per-channel byte differences.
+ */
+export async function aoOwnPaths() {
+  const { device } = await createDevice({ timestamps: false });
+  device.pushErrorScope('validation');
+  const a = aoScene(device, {}, true), b = aoScene(device, { aoDiag: 'own-read' }, true);
+  const pa = (await a.rend.render(a.f, true, true))!.pixels!, pb = (await b.rend.render(b.f, true, true))!.pixels!;
+  a.rend.toggles.ao = false;
+  const po = (await a.rend.render(a.f, true, true))!.pixels!;
+  const ids = (await a.rend.renderIds(a.f)).ids;
+  let maxDiff = 0, changed = 0, aoChanged = 0, ballPx = 0, ballAo = 0;
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+    const i = y * pa.bytesPerRow + 4 * x;
+    let d = 0, o = 0;
+    for (let c = 0; c < 3; c++) { d = Math.max(d, Math.abs(pa.data[i + c]! - pb.data[i + c]!)); o = Math.max(o, Math.abs(pa.data[i + c]! - po.data[i + c]!)); }
+    maxDiff = Math.max(maxDiff, d);
+    if (d) changed++;
+    if (o) aoChanged++;
+    if (ids[y * W + x] === 10) { ballPx++; if (o) ballAo++; }
+  }
+  const err = await device.popErrorScope();
+  a.rend.destroy();
+  b.rend.destroy();
+  device.destroy();
+  return { maxDiff, changed, aoChanged, ballPx, ballAo, pixels: W * H, error: err?.message ?? null };
 }
 
 /**
@@ -1748,14 +1788,14 @@ export async function aoImage() {
  * (within 0.08 m of y = 1, both cubes), mid-face (more than 0.3 m from any
  * horizontal edge) and the free top edge (within 0.08 m of y = 2).
  */
-export async function seamImage() {
+export async function seamImage(opts: RendererOptions = {}) {
   const { device } = await createDevice({ timestamps: false });
   device.pushErrorScope('validation');
   const descs = [box([0, 0.5, 0], [0.5, 0.5, 0.5], [0, 0, 0, 1], 1), box([0, 1.5, 0], [0.5, 0.5, 0.5], [0, 0, 0, 1], 2)];
   const src = new SnapshotSource(device);
   src.reset(descs);
   src.update(snapshotOf(descs), descs);
-  const rend = new Renderer(device, { size: [W, H] });
+  const rend = new Renderer(device, { size: [W, H] }, opts);
   rend.look = { ...rend.look, bloomMix: 0, fogDensity: 0, sunColor: [0, 0, 0] };
   rend.setShadowBounds([0, 2, 0], 8, [8, 6, 8]);
   rend.setSource(src);
@@ -1782,4 +1822,117 @@ export async function seamImage() {
   device.destroy();
   const r = (a: number[]) => ({ ratio: a[0]! / a[1]!, n: a[2]! });
   return { shared: r(acc.shared), mid: r(acc.mid), top: r(acc.top), error: err?.message ?? null };
+}
+
+/**
+ * The AO grid the renderer fits as the floor moves: after a frame at each
+ * groundY, the grid and whether the volume was reallocated.
+ */
+export async function aoFloorFit(floors: number[]) {
+  const { device } = await createDevice({ timestamps: false });
+  device.pushErrorScope('validation');
+  const descs = [box([0, 0.5, 0], [0.5, 0.5, 0.5], [0, 0, 0, 1], 1)];
+  const src = new SnapshotSource(device);
+  src.reset(descs);
+  src.update(snapshotOf(descs), descs);
+  const rend = new Renderer(device, { size: [32, 32] });
+  rend.setShadowBounds([0, 2, 0], 10);
+  rend.setSource(src);
+  const out: { grid: { origin: number[]; voxel: number; dims: number[] }; realloc: boolean }[] = [];
+  for (const groundY of floors) {
+    const before = rend.ao.volume;
+    await rend.render({ ...camera([3, 4, 6], [0, 0.5, 0]), groundY, time: 1, dt: 0, alpha: 1 });
+    await device.queue.onSubmittedWorkDone();
+    const g = rend.ao.grid;
+    out.push({ grid: { origin: [...g.origin], voxel: g.voxel, dims: [...g.dims] }, realloc: rend.ao.volume !== before });
+  }
+  const err = await device.popErrorScope();
+  rend.destroy();
+  device.destroy();
+  return { out, error: err?.message ?? null };
+}
+
+/**
+ * fsOwn: how far the AO own centre and footprint the fragment shader
+ * derives (ownCentre, aoFoot of the flat inputs) lie from the record's
+ * centre and the splat's footprint, per body, for turned boxes, slabs and
+ * spheres from 3 m to 250 m away. Max over each body's pixels, metres.
+ */
+export async function aoOwnError() {
+  const { device } = await createDevice({ timestamps: false });
+  device.pushErrorScope('validation');
+  const w = 400, h = 250;
+  const eye: V3 = [37, 12, -55];
+  const r = rng(91);
+  const turn = () => { const q = [r() - 0.5, r() - 0.5, r() - 0.5, r() - 0.5], l = Math.hypot(...q); return q.map((x) => x / l) as [number, number, number, number]; };
+  const descs: BodyDesc[] = [];
+  const dist: number[] = [];
+  // Each body about 0.05 rad across, in its own direction: a row per distance.
+  for (const [g, d] of [3, 8, 30, 90, 250].entries()) for (let k = 0; k < 6; k++) {
+    const s = d / 40, ax = (k - 2.5) * 0.12, ay = (g - 2) * 0.1;
+    const pos: V3 = [eye[0] + Math.sin(ax) * d, eye[1] + Math.sin(ay) * d, eye[2] - Math.cos(ax) * Math.cos(ay) * d];
+    descs.push(k % 3 === 2 ? { ...ball(pos, 0.6 * s), rot: turn(), tag: 4 } : box(pos, k % 3 === 0 ? [0.5 * s, 0.5 * s, 0.5 * s] : [1.1 * s, 0.2 * s, 0.6 * s], turn(), k));
+    dist.push(d);
+  }
+  const src = new SnapshotSource(device);
+  src.reset(descs);
+  src.update(snapshotOf(descs), descs);
+  const rend = new Renderer(device, { size: [w, h] });
+  rend.setShadowBounds([eye[0], eye[1], eye[2] - 130], 150);
+  rend.setSource(src);
+  const f: FrameParams = { viewProj: multiply(perspective(0.9, w / h, 0.1, 400), lookAt(eye, [eye[0], eye[1], eye[2] - 1])), eye, groundY: -100, time: 1, dt: 0, alpha: 1 };
+  const ids = (await rend.renderIds(f)).ids;
+  const err = new Float32Array((await rend.renderIds(f, 'own')).ids.buffer);
+  const perBody = descs.map(() => ({ px: 0, max: 0 }));
+  let nan = 0;
+  for (let i = 0; i < ids.length; i++) {
+    if (!ids[i]) continue;
+    const b = perBody[ids[i]! - 1]!;
+    b.px++;
+    if (!Number.isFinite(err[i]!)) nan++;
+    else b.max = Math.max(b.max, err[i]!);
+  }
+  const e = await device.popErrorScope();
+  rend.destroy();
+  device.destroy();
+  return { bodies: perBody.map((b, i) => ({ ...b, dist: dist[i]!, sphere: i % 3 === 2 })), nan, error: e?.message ?? null };
+}
+
+/**
+ * The seam scene (two stacked cubes, ambient only) with the default box
+ * shading and with aoDiag 'no-seam', the camera `scale` times as far from
+ * the target as seamImage's: per-channel byte differences.
+ */
+export async function seamVsNone(scale: number) {
+  const { device } = await createDevice({ timestamps: false });
+  device.pushErrorScope('validation');
+  const descs = [box([0, 0.5, 0], [0.5, 0.5, 0.5], [0, 0, 0, 1], 1), box([0, 1.5, 0], [0.5, 0.5, 0.5], [0, 0, 0, 1], 2)];
+  const src = new SnapshotSource(device);
+  src.reset(descs);
+  src.update(snapshotOf(descs), descs);
+  const target: V3 = [0, 1.2, 0], eye: V3 = [0.2 * scale, 1.2 + 0.1 * scale, 2.6 * scale];
+  const f: FrameParams = { ...camera(eye, target), groundY: 0, time: 1, dt: 0, alpha: 1 };
+  const draw = async (opts: RendererOptions) => {
+    const rend = new Renderer(device, { size: [W, H] }, opts);
+    rend.look = { ...rend.look, bloomMix: 0, fogDensity: 0, sunColor: [0, 0, 0] };
+    rend.setShadowBounds([0, 2, 0], 8, [8, 6, 8]);
+    rend.setSource(src);
+    const px = (await rend.render(f, true, true))!.pixels!;
+    const ids = (await rend.renderIds(f)).ids;
+    rend.destroy();
+    return { px, ids };
+  };
+  const a = await draw({}), b = await draw({ aoDiag: 'no-seam' });
+  let maxDiff = 0, changed = 0, boxPx = 0;
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+    const i = y * a.px.bytesPerRow + 4 * x;
+    if (a.ids[y * W + x]) boxPx++;
+    let d = 0;
+    for (let c = 0; c < 3; c++) d = Math.max(d, Math.abs(a.px.data[i + c]! - b.px.data[i + c]!));
+    maxDiff = Math.max(maxDiff, d);
+    if (d) changed++;
+  }
+  const err = await device.popErrorScope();
+  device.destroy();
+  return { maxDiff, changed, boxPx, error: err?.message ?? null };
 }

@@ -68,25 +68,60 @@ ${wgslStruct(Frame)}
 ${AO_SAMPLE_WGSL}
 
 fn aoView() -> AoView { return AoView(fr.aoOrigin, fr.aoInvVoxel, fr.aoDims, fr.aoOn, fr.aoK); }
-@group(0) @binding(14) var<storage, read> aoFeet: array<vec4f>;      // ao.ts: per slot footprint, written by the splat
+@group(0) @binding(14) var<storage, read> aoFeet: array<vec4f>;      // ao.ts: per slot footprint, written by the splat (AO_OWN_READ only)
+// Bench diagnostics (RendererOptions.aoDiag): AO_OWN_READ takes the own
+// centre and footprint from per-slot buffers (records, aoFeet), as before;
+// AO_SEAM false drops the seam cavity.
+override AO_OWN_READ: bool = false;
+override AO_SEAM: bool = true;
 
-// AO at a body's surface point, its own footprint subtracted (the centre from its record).
-fn aoBody(rel: vec3f, n: vec3f, slot: u32) -> vec2f {
+// The own centre for AO (camera-relative), without a buffer read: rel and
+// local are interpolated with the same weights and every vertex has
+// rel = centre + rot * (local * half) (place()), so rel - rot * (local *
+// half) is the centre up to f32 rounding, wherever the shading point lies.
+// The own footprint is aoFoot of the flat rot and half: the record's own
+// f32 values, as the splat used them. fsOwn tests both.
+fn ownCentre(v: VOut) -> vec3f { return v.rel - qrot(v.rot, v.local * v.half); }
+
+// AO at a body's surface point, its own footprint subtracted.
+fn aoBody(v: VOut, n: vec3f, sphere: bool) -> vec2f {
   let av = aoView();
-  if (av.on == 0.0 || slot >= fr.capacity) { return vec2f(1.0); }
-  return aoAt(av, rel, n, records[slot].pos, aoFeet[slot].xyz);
+  if (av.on == 0.0) { return vec2f(1.0); }
+  if (AO_OWN_READ) {
+    if (v.slot >= fr.capacity) { return vec2f(1.0); }
+    return aoAt(av, v.rel, n, records[v.slot].pos, aoFeet[v.slot].xyz);
+  }
+  return aoAt(av, v.rel, n, ownCentre(v), aoFoot(v.rot, v.half, sphere));
 }
 ${AO_SEAM_WGSL}
 
-// aoBody plus the seam cavity at a box's edges (lp, face: body frame, from fsBox).
-fn aoBox(rel: vec3f, n: vec3f, slot: u32, lp: vec3f, face: vec3f, half: vec3f, rot: vec4f) -> vec2f {
+// aoBody plus the seam cavity at a box's edges (lp, face, pxM: body frame, from fsBox).
+fn aoBox(v: VOut, n: vec3f, lp: vec3f, face: vec3f, pxM: f32) -> vec2f {
   let av = aoView();
-  if (av.on == 0.0 || slot >= fr.capacity) { return vec2f(1.0); }
-  let c = records[slot].pos;
-  let foot = aoFeet[slot].xyz;
-  let a = aoAt(av, rel, n, c, foot);
-  return vec2f(a.x * aoSeam(av, lp, face, half, rot, c, foot), a.y);
+  if (av.on == 0.0) { return vec2f(1.0); }
+  var c = ownCentre(v);
+  var foot = aoFoot(v.rot, v.half, false);
+  if (AO_OWN_READ) {
+    if (v.slot >= fr.capacity) { return vec2f(1.0); }
+    c = records[v.slot].pos;
+    foot = aoFeet[v.slot].xyz;
+  }
+  let a = aoAt(av, v.rel, n, c, foot);
+  if (!AO_SEAM) { return a; }
+  return vec2f(a.x * aoSeam(av, lp, face, v.half, v.rot, c, foot, pxM), a.y);
 }
+
+// Test target (Renderer.renderIds 'own'): the largest per-axis difference,
+// in metres, of ownCentre and the derived footprint from the record's
+// centre and the splat's footprint, as f32 bits.
+fn ownErr(v: VOut, sphere: bool) -> u32 {
+  if (v.slot >= fr.capacity) { return 0xffffffffu; }
+  let dc = abs(ownCentre(v) - records[v.slot].pos);
+  let df = abs(aoFoot(v.rot, v.half, sphere) - aoFeet[v.slot].xyz);
+  return bitcast<u32>(max(max(max(dc.x, dc.y), dc.z), max(max(df.x, df.y), df.z)));
+}
+@fragment fn fsOwnBox(v: VOut) -> @location(0) u32 { return ownErr(v, false); }
+@fragment fn fsOwnSphere(v: VOut) -> @location(0) u32 { return ownErr(v, true); }
 @group(0) @binding(10) var<storage, read> trail: array<vec4f>;      // lights.ts: world xyz, time
 
 // Which list a pipeline draws: SEG * capacity is its first entry.
@@ -381,7 +416,10 @@ fn boxFace(local: vec3f, w: vec3f) -> vec3f {
   let wPx = SEAM / max(pxM, 1e-6);
   let drawn = max(wPx, 0.75);
   let seam = 1.0 - 0.4 * min(1.0, wPx / 0.75) * (1.0 - smoothstep(drawn - 0.5, drawn + 0.5, edgeM / max(pxM, 1e-6)));
-  var c = shade(base * seam, v.rel, n, aaAlpha(rough * rough, n, dndx, dndy), aaAlpha(0.0049, n, dndx, dndy), select(0.0, fr.clearcoat, isCandy), aoBox(v.rel, n, v.slot, lp, faceN, v.half, v.rot));
+  // The seam cavity's level of detail wants the true pixel footprint: pxM
+  // comes from the clamped lp, whose derivatives flatten at edge pixels.
+  let aoPxM = length(fwidth(v.local * v.half));
+  var c = shade(base * seam, v.rel, n, aaAlpha(rough * rough, n, dndx, dndy), aaAlpha(0.0049, n, dndx, dndy), select(0.0, fr.clearcoat, isCandy), aoBox(v, n, lp, faceN, aoPxM));
   c += base * seam * fxGlow(w, fr.time);
   c += heatGlow(v.slot, base);
   return vec4f(fog(c, v.rel), 1.0);
@@ -409,7 +447,7 @@ fn heatGlow(slot: u32, base: vec3f) -> vec3f {
   let isBall = material(v.look) == 1u;
   let w = fx[v.slot];
   let base = select(albedo(v.look), fr.ball, isBall) * fxTint(w.x);
-  var c = shade(base, v.rel, n, aaAlpha(0.04, n, dndx, dndy), aaAlpha(0.0049, n, dndx, dndy), 0.5, aoBody(v.rel, n, v.slot));
+  var c = shade(base, v.rel, n, aaAlpha(0.04, n, dndx, dndy), aaAlpha(0.0049, n, dndx, dndy), 0.5, aoBody(v, n, true));
   c += base * fxGlow(w, fr.time);
   let NoV = max(dot(n, normalize(-v.rel)), 0.0);
   c += select(vec3f(0.0), fr.ball * fr.ballEmissive * (0.35 + 0.65 * NoV), isBall);

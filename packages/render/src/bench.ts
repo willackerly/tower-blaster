@@ -44,12 +44,12 @@ export interface RenderBenchOptions {
 }
 
 export const DEFAULT_RENDER_BENCH: RenderBenchOptions = {
-  width: 2560, height: 1440, counts: [10_000, 100_000], worlds: ['near', 'far'], variants: ['full', 'no-shadow', 'no-post', 'no-sparks', 'no-heat', 'no-ao', 'fan', 'cube', 'flat-fan', 'flat-cube'],
+  width: 2560, height: 1440, counts: [10_000, 100_000], worlds: ['near', 'far'], variants: ['full', 'no-shadow', 'no-post', 'no-sparks', 'no-heat', 'no-ao', 'no-seam', 'own-read', 'fan', 'cube', 'flat-fan', 'flat-cube'],
   warmup: 30, batches: 10, batchFrames: 30, profiledFrames: 100,
 };
 
 export const QUICK_RENDER_BENCH: RenderBenchOptions = {
-  width: 320, height: 180, counts: [2000], worlds: ['near', 'far'], variants: ['full', 'no-shadow', 'no-post', 'no-sparks', 'no-heat', 'no-ao', 'fan', 'cube', 'flat-fan', 'flat-cube'],
+  width: 320, height: 180, counts: [2000], worlds: ['near', 'far'], variants: ['full', 'no-shadow', 'no-post', 'no-sparks', 'no-heat', 'no-ao', 'no-seam', 'own-read', 'fan', 'cube', 'flat-fan', 'flat-cube'],
   warmup: 1, batches: 2, batchFrames: 2, profiledFrames: 2,
 };
 
@@ -59,15 +59,19 @@ export type WorldName = 'near' | 'far';
  * no-sparks: one pass off (in these still worlds no spark lives, so
  * no-sparks is the detector's cost; the streak draw is empty either way).
  * no-heat: the heat glow lookup off in the box shader. no-ao: no occupancy
- * volume (splat, compose) and no AO taps. fan, cube: that box path in both passes. flat-*: boxes shaded with
+ * volume (splat, compose) and no AO taps. no-seam: AO without the seam
+ * cavity. own-read: AO's own centre and footprint read per fragment from
+ * per-slot buffers (the previous path) instead of derived from the
+ * fragment's inputs. fan, cube: that box path in both passes. flat-*: boxes shaded with
  * flat albedo, so flat-fan vs flat-cube is the paths' cost without the
  * fragment shading, and fan vs cube minus that is the shading's share.
  */
-export type VariantName = 'full' | 'no-shadow' | 'no-post' | 'no-sparks' | 'no-heat' | 'no-ao' | 'fan' | 'cube' | 'flat-fan' | 'flat-cube';
+export type VariantName = 'full' | 'no-shadow' | 'no-post' | 'no-sparks' | 'no-heat' | 'no-ao' | 'no-seam' | 'own-read' | 'fan' | 'cube' | 'flat-fan' | 'flat-cube';
 
 function variantOptions(v: VariantName): RendererOptions {
   if (v === 'fan' || v === 'flat-fan') return { boxPath: 'fan', flatBoxes: v === 'flat-fan' };
   if (v === 'cube' || v === 'flat-cube') return { boxPath: 'cube', flatBoxes: v === 'flat-cube' };
+  if (v === 'no-seam' || v === 'own-read') return { aoDiag: v };
   return {};
 }
 
@@ -232,7 +236,7 @@ export function renderBenchMarkdown(r: RenderBenchResult, header: string): strin
     ...r.cases.map((c) => `| ${c.world} | ${c.bodies.toLocaleString('en-US')} | ${c.variant} | ${ms(c.frameMs)} | ${ms(c.frameCI[0])}-${ms(c.frameCI[1])} | ${ms(c.gpuP50)} | ${ms(c.gpuP95)} | ${ms(c.gpuSumP50)} | ${passNames.map((p) => ms(c.passes[p])).join(' | ')} | ${c.drawn.boxes.toLocaleString('en-US')} | ${c.drawn.shadowBoxes.toLocaleString('en-US')} |`),
     '',
     'Marginal cost: change in frame time when the thing is switched off (paired over interleaved batches; median and 95% CI; "n.s." when the interval includes 0):', '',
-    '| World | Bodies | Without shadow | Without post (bloom + AgX) | Without sparks | Without heat glow | Without AO | Fan in both passes | Cube in both passes | Flat shading: cube vs fan |', '|---|---|---|---|---|---|---|---|---|---|',
+    '| World | Bodies | Without shadow | Without post (bloom + AgX) | Without sparks | Without heat glow | Without AO | Without seam cavity | Own read per fragment | Fan in both passes | Cube in both passes | Flat shading: cube vs fan |', '|---|---|---|---|---|---|---|---|---|---|---|---|',
   ];
   const groups = new Map<string, RenderCase[]>();
   for (const c of r.cases) groups.set(`${c.world}:${c.bodies}`, [...(groups.get(`${c.world}:${c.bodies}`) ?? []), c]);
@@ -244,7 +248,7 @@ export function renderBenchMarkdown(r: RenderBenchResult, header: string): strin
       const pct = (x: number) => `${x >= 0 ? '+' : ''}${(100 * x).toFixed(1)}%`;
       return `${pct(d.estimate)} [${pct(d.lo)}, ${pct(d.hi)}]${verdict(d) === 'no-difference' ? ' n.s.' : ''}`;
     };
-    lines.push(`| ${cs[0]!.world} | ${cs[0]!.bodies.toLocaleString('en-US')} | ${diff(by('no-shadow'))} | ${diff(by('no-post'))} | ${diff(by('no-sparks'))} | ${diff(by('no-heat'))} | ${diff(by('no-ao'))} | ${diff(by('fan'))} | ${diff(by('cube'))} | ${diff(by('flat-cube'), by('flat-fan'))} |`);
+    lines.push(`| ${cs[0]!.world} | ${cs[0]!.bodies.toLocaleString('en-US')} | ${diff(by('no-shadow'))} | ${diff(by('no-post'))} | ${diff(by('no-sparks'))} | ${diff(by('no-heat'))} | ${diff(by('no-ao'))} | ${diff(by('no-seam'))} | ${diff(by('own-read'))} | ${diff(by('fan'))} | ${diff(by('cube'))} | ${diff(by('flat-cube'), by('flat-fan'))} |`);
   }
   return lines.join('\n');
 }

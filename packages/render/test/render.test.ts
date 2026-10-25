@@ -398,13 +398,16 @@ describe('AO shading', () => {
     const r = await call('aoImage');
     expect(r.error).toBeNull();
     expect(r.nn).toBeGreaterThan(30);
-    expect(r.near[0]! / r.near[1]!).toBeLessThan(0.9); // ambient-only light: measured 0.82
+    expect(r.near[0]! / r.near[1]!).toBeLessThan(0.9); // ambient-only light: measured 0.81 (0.82 before the grid stopped under the floor)
     // A cube at the tower's foot (mean over all its pixels): measured 0.967; own footprint centred on the shading point instead of the body, 0.987.
     expect(r.nf).toBeGreaterThan(100);
     expect(r.foot[0]! / r.foot[1]!).toBeLessThan(0.978);
     // The isolated cube: at most 1 LSB even with ambient as the only light (its own sky term at low edges, >= 0.94).
     expect(r.nc).toBeGreaterThan(100);
     expect(r.cubeDiff).toBeLessThanOrEqual(1);
+    // The isolated (turned) ball too: its own centre is derived in the fragment shader, as the cube's is.
+    expect(r.nb).toBeGreaterThan(50);
+    expect(r.ballDiff).toBeLessThanOrEqual(1);
     // Where AO is 1 the shading differs from the AO-off path by f32 rounding only (and the AO-off image is bit-identical to before R5).
     // Measured 16 of 6,689 pixels by 1 LSB.
     expect(r.no).toBeGreaterThan(500);
@@ -509,6 +512,83 @@ describe('AO shading', () => {
     expect(img.shared.ratio).toBeLessThan(0.96);
     expect(img.mid.ratio).toBeGreaterThan(0.99);
     expect(img.top.ratio).toBeGreaterThan(0.99);
+    // The bench's no-seam variant compiles the cavity out: the shared edge is as aoBody alone left it (measured 0.984; mid-face unchanged).
+    const none = await call('seamImage', { aoDiag: 'no-seam' });
+    expect(none.error).toBeNull();
+    expect(none.shared.ratio).toBeGreaterThan(0.975);
+    expect(none.mid.ratio).toBeCloseTo(img.mid.ratio, 3);
+  });
+
+  it('seam cavity level of detail: full from 2 px of band, none (no tap) under 1 px, half way at 1.5 px', async (ctx) => {
+    if (!gpu) return ctx.skip();
+    const H3: V3 = [0.5, 0.5, 0.5];
+    const a: V3 = [0.13, 0.63, 0.13];
+    // The lower cube's front face by its top edge, under a neighbour; band 0.15 m, so pxM = 0.15 / px.
+    const at = (pxM: number) => ({ p: [a[0], a[1] + 0.45, a[2] + 0.5] as V3, n: [0, 0, 1] as V3, own: 0, local: [0, 0.45, 0.5] as V3, face: [0, 0, 1] as V3, pxM });
+    const pxs = [100, 4, 2, 1.5, 1.01, 1, 0.5, 0.01];
+    const r = await call('aoProbe', [{ pos: a, half: H3 }, { pos: [a[0], a[1] + 1, a[2]], half: H3 }], pxs.map((px) => at(0.15 / px)));
+    expect(r.error).toBeNull();
+    const dark = r.seam.map((v) => 1 - v), full = dark[0]!;
+    expect(full).toBeGreaterThan(0.05); // measured 0.098
+    expect(dark[1]).toBeCloseTo(full, 6);
+    expect(dark[2]).toBeCloseTo(full, 5); // smoothstep ends at 2 px
+    expect(dark[3]! / full).toBeCloseTo(0.5, 4); // smoothstep(1, 2, 1.5)
+    expect(dark[4]! / full).toBeGreaterThan(0);
+    expect(dark[4]! / full).toBeLessThan(0.001);
+    for (const k of [5, 6, 7]) expect(r.seam[k]).toBe(1);
+  });
+
+  it('seam cavity level of detail in the image: from far away the box shading is bit-identical to no seam', async (ctx) => {
+    if (!gpu) return ctx.skip();
+    const near = await call('seamVsNone', 1), far = await call('seamVsNone', 12);
+    expect(near.error).toBeNull();
+    expect(far.error).toBeNull();
+    expect(near.changed).toBeGreaterThan(50); // close up the cavity shows
+    expect(far.boxPx).toBeGreaterThan(5);
+    expect(far.maxDiff).toBe(0); // band under 1 px: aoSeam returns exactly 1, no tap (with fsBox's clamped pxM, one edge pixel was off by 1)
+  });
+
+  it('own subtraction derived in the fragment shader matches the per-slot buffers it replaced', async (ctx) => {
+    if (!gpu) return ctx.skip();
+    const r = await call('aoOwnPaths');
+    expect(r.error).toBeNull();
+    expect(r.aoChanged).toBeGreaterThan(1000); // AO is doing something in this scene: measured 2,421 of 16,000 pixels
+    expect(r.ballPx).toBeGreaterThan(50); // and on the ball in contact (measured 60 of its 70 pixels), where own in the wrong place shows
+    expect(r.ballAo / r.ballPx).toBeGreaterThan(0.5);
+    expect(r.maxDiff).toBeLessThanOrEqual(1); // measured 0: bit-identical
+    expect(r.changed / r.pixels).toBeLessThan(0.01);
+  });
+
+  it('the fragment shader\'s own centre and footprint equal the record\'s and the splat\'s, near and 250 m away', async (ctx) => {
+    if (!gpu) return ctx.skip();
+    const r = await call('aoOwnError');
+    expect(r.error).toBeNull();
+    expect(r.nan).toBe(0);
+    // Measured at most 1.4e-6 of the distance (0.14 mm at 250 m, against 0.5-2 m voxels): interpolation rounding.
+    for (const b of r.bodies) {
+      expect(b.px, `${b.dist} m`).toBeGreaterThan(3);
+      expect(b.max, `${b.dist} m`).toBeLessThan(1e-5 * b.dist);
+    }
+    // f32 rounding 250 m out is never exactly 0: the comparison really reads the record and the splat.
+    expect(Math.max(...r.bodies.filter((b) => b.dist === 250).map((b) => b.max))).toBeGreaterThan(0);
+  });
+
+  it('the AO grid follows the floor: refitted when groundY changes, not reallocated when it does not', async (ctx) => {
+    if (!gpu) return ctx.skip();
+    const r = await call('aoFloorFit', [0, 0, 3, 3, 0, 0.1]);
+    expect(r.error).toBeNull();
+    const [a, b, c, d, e, g] = r.out;
+    expect(a!.grid.origin[1]).toBe(-2); // one 2 m (level 2) texel under the floor
+    expect(b!.realloc).toBe(false);
+    expect(b!.grid).toEqual(a!.grid);
+    expect(c!.grid.origin[1]).toBe(1);
+    expect(c!.grid.dims[1]).toBeLessThan(a!.grid.dims[1]!);
+    expect(c!.realloc).toBe(true);
+    expect(d!.realloc).toBe(false);
+    expect(e!.grid).toEqual(a!.grid);
+    // A floor that moves less than a voxel keeps the grid's size (and here its origin): no new volume.
+    expect(g!.grid).toEqual(a!.grid);
+    expect(g!.realloc).toBe(false);
   });
 });
 
@@ -687,7 +767,7 @@ describe('drawing', () => {
   it('bench:render completes and reports every case (numbers discarded)', async (ctx) => {
     if (!gpu) return ctx.skip();
     const r = await call('runRenderBench', { width: 160, height: 90, counts: [800], warmup: 1, batches: 2, batchFrames: 1, profiledFrames: 1, sparkPool: 1024 });
-    expect(r.cases.map((c) => `${c.world}:${c.variant}`)).toEqual(['near', 'far'].flatMap((w) => ['full', 'no-shadow', 'no-post', 'no-sparks', 'no-heat', 'no-ao', 'fan', 'cube', 'flat-fan', 'flat-cube'].map((v) => `${w}:${v}`)));
+    expect(r.cases.map((c) => `${c.world}:${c.variant}`)).toEqual(['near', 'far'].flatMap((w) => ['full', 'no-shadow', 'no-post', 'no-sparks', 'no-heat', 'no-ao', 'no-seam', 'own-read', 'fan', 'cube', 'flat-fan', 'flat-cube'].map((v) => `${w}:${v}`)));
     for (const c of r.cases) {
       expect(c.bodies).toBe(800);
       expect(c.frameMs).toBeGreaterThan(0);
