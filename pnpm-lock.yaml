@@ -23,6 +23,9 @@ importers:
       '@tb/gpu':
         specifier: workspace:*
         version: link:packages/gpu
+      '@tb/lattice':
+        specifier: workspace:*
+        version: link:packages/lattice
       '@tb/metrics':
         specifier: workspace:*
         version: link:packages/metrics
@@ -79,6 +82,8 @@ importers:
   packages/geom: {}
 
   packages/gpu: {}
+
+  packages/lattice: {}
 
   packages/metrics: {}
 
