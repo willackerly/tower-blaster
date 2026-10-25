@@ -60,9 +60,13 @@ export class GpuAvbdEngine implements PhysicsEngine {
     this.capacity = Math.max(1, all.length);
     const maxPairs = (this.opts.pairsPerBody ?? 16) * this.capacity;
     const p = this.params;
-    const rmax = Math.max(0, ...all.map((b) => boundingRadius(b.shape)));
+    const rmax = all.reduce((m, b) => Math.max(m, boundingRadius(b.shape)), 0);
     // Every overlapping (inflated) pair must lie in adjacent cells.
     this.cellSize = Math.max(1e-3, 2 * (rmax + (p.sweep ? p.maxSweep : 0)) + p.margin);
+    // The contact buffer is the largest (1 KB per pair slot; a manifold is
+    // 96 B), so checking it first means no stage throws halfway through
+    // allocating, which would leak what it had made.
+    assertStorageFits(device, AvbdSolver.contactBytes(this.capacity, maxPairs), 'avbd contacts');
     const buf = (bytes: number, label: string) => (assertStorageFits(device, bytes, label), device.createBuffer({ size: Math.max(16, bytes), usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC, label }));
     const bodies = buf(this.capacity * Body.size, 'bodies');
     const shapes = buf(this.capacity * Shape.size, 'shapes');

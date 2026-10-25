@@ -163,8 +163,10 @@ describe('GPU AVBD engine: stacks, towers and impacts', () => {
     expect(median(runs.map(({ bodies, g }) => survival(bodies, g.all[1]!, g.s1, [0])))).toBeLessThan(0.5);
     expect(median(runs.map(({ bodies, g }) => g.s1.linVel[3 * (bodies.length - 1)]!))).toBeLessThan(-1);
     const gMean = mean(runs.flatMap((r) => r.gp)), rMean = mean(runs.flatMap((r) => r.rp));
+    // Two re-rolled reference runs (1e-12 jitter) differ by this ratio within
+    // 0.71-1.41 in 99.9% of bootstrap draws (2026-10-25), so wider means a real difference.
     expect(gMean / rMean).toBeGreaterThan(0.7);
-    expect(gMean / rMean).toBeLessThan(1.3);
+    expect(gMean / rMean).toBeLessThan(1.4);
     expect(median(runs.map((r) => max(r.gp)))).toBeLessThan(0.08);
   }, 300_000);
 
@@ -186,10 +188,14 @@ describe('GPU AVBD engine: stacks, towers and impacts', () => {
     expect(collapse.found).toBeGreaterThan(5000);
     expect(collapse.axes).toBeGreaterThan(3000);
     expect(collapse.hinted).toBeGreaterThan(50);
-    // The ball spawned mid-run: its pairs are new, the tower's keep their history.
-    const spawn = await call('pairHistory', knock(30), 60);
+    // The ball spawned mid-run, 0.2 m from the tower so it has (speculative)
+    // pairs in its first step: those are new, the tower's keep their history.
+    const late = knock(30);
+    late.inputs[0]!.body.pos[0] += 3.8;
+    const spawn = await call('pairHistory', late, 60);
     ok(spawn);
     expect(spawn.found).toBeGreaterThan(5000);
+    expect(spawn.spawnPairs).toBeGreaterThan(0);
     // Pair buffer too small every step (3 per body): only written pairs have history, and no slot is out of range.
     const overflow = await call('pairHistory', knock(0), 60, { pairsPerBody: 3 });
     ok(overflow);
@@ -200,8 +206,8 @@ describe('GPU AVBD engine: stacks, towers and impacts', () => {
   it('init() names the buffer that does not fit the device instead of failing validation later', async (ctx) => {
     if (!gpu) return ctx.skip();
     const r = await call('initError', buildScenario('S9', { H: 10, ratio: 1 }, 1), 1e6);
-    // Which buffer is first too large depends on the device's limit.
-    expect(r.message).toMatch(/^[\w ]+: \d+ bytes exceeds the device's \d+-byte storage binding limit$/);
+    // Checked before anything is allocated: the contact buffer is the largest.
+    expect(r.message).toMatch(/^avbd contacts: \d+ bytes exceeds the device's \d+-byte storage binding limit$/);
     expect(r.validation).toBeNull();
   });
 

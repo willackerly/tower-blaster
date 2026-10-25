@@ -533,6 +533,11 @@ type Kind = 'r' | 'rw' | 'u' | 'ud';
  * and narrowphase read), then solve() after the colouring.
  */
 export class AvbdSolver {
+  /** Size of the contact buffer, the pipeline's largest (4 points per pair slot and ground slot, two history halves). */
+  static contactBytes(capacity: number, maxPairs: number): number {
+    return 2 * (maxPairs + capacity) * 4 * SolverContact.size;
+  }
+
   readonly solver: GPUBuffer;
   /** Two halves of (maxPairs + capacity) * 4 contact points. */
   readonly contacts: GPUBuffer;
@@ -549,7 +554,7 @@ export class AvbdSolver {
   constructor(private readonly device: GPUDevice, readonly capacity: number, readonly maxPairs: number, private readonly b: SolverBuffers) {
     const buf = (bytes: number, label: string) => (assertStorageFits(device, bytes, label), device.createBuffer({ size: Math.max(16, bytes), usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST, label }));
     this.solver = buf(capacity * SolverBody.size, 'avbd solver bodies');
-    this.contacts = buf(2 * (maxPairs + capacity) * 4 * SolverContact.size, 'avbd contacts');
+    this.contacts = buf(AvbdSolver.contactBytes(capacity, maxPairs), 'avbd contacts');
     this.meta = buf(64, 'avbd meta');
     this.pairHist = buf(2 * maxPairs * 8, 'avbd pair history');
     this.offHist = buf(2 * capacity * 4, 'avbd offset history');

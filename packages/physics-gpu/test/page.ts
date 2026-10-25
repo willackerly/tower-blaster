@@ -427,7 +427,7 @@ export async function pairHistory(scene: SceneDesc, steps: number, opts: { pairs
   await e.init(scene);
   type Parts = { bodies: GPUBuffer; sweep: GPUBuffer; bp: { pairs: GPUBuffer; total: GPUBuffer }; np: { manifolds: GPUBuffer }; prev: GPUBuffer };
   const parts = (e as unknown as { parts: Parts }).parts;
-  const shapes = bodiesAt(scene, Number.MAX_SAFE_INTEGER).map((b) => b.shape);
+  const descs = bodiesAt(scene, Number.MAX_SAFE_INTEGER), shapes = descs.map((b) => b.shape);
   const margin = Math.fround((e as unknown as { params: AvbdParams }).params.margin);
   const state = async () => {
     const v = new DataView(await readBuffer(device, parts.bodies));
@@ -442,7 +442,7 @@ export async function pairHistory(scene: SceneDesc, steps: number, opts: { pairs
     });
     return { list, sweep: new Float32Array(sw!), overflow: t[5]! > t[3]! };
   };
-  let wrong = 0, found = 0, missed = 0, axes = 0, checked = 0, axisMismatch = 0, presenceMismatch = 0, hinted = 0, overflowSteps = 0;
+  let wrong = 0, found = 0, missed = 0, axes = 0, checked = 0, axisMismatch = 0, presenceMismatch = 0, hinted = 0, overflowSteps = 0, spawnPairs = 0;
   const examples: unknown[] = [];
   let last = (await read()).list;
   for (let s = 0; s < steps; s++) {
@@ -450,10 +450,13 @@ export async function pairHistory(scene: SceneDesc, steps: number, opts: { pairs
     e.step();
     const { list: cur, sweep, overflow } = await read();
     if (overflow) overflowSteps++;
+    spawnPairs += cur.filter((p) => Math.max(p.a, p.b) >= before.length).length;
     // The narrowphase's axis given its hint, against the reference given the same hint.
     for (const p of cur) {
       if (shapes[p.a]!.kind !== 'box' || shapes[p.b]!.kind !== 'box') continue;
-      const A = before[p.a]!, B = before[p.b]!, m = Math.fround(Math.fround(margin + sweep[p.a]!) + sweep[p.b]!);
+      // A body spawned in this step is not in `before` yet: the GPU has its pose as authored, in f32.
+      const pose = (i: number) => before[i] ?? { pos: descs[i]!.pos.map(Math.fround) as Vec3, rot: descs[i]!.rot.map(Math.fround) as Quat };
+      const A = pose(p.a), B = pose(p.b), m = Math.fround(Math.fround(margin + sweep[p.a]!) + sweep[p.b]!);
       const ref = shapeManifold(shapes[p.a]!, A.pos, A.rot, shapes[p.b]!, B.pos, B.rot, m, true, p.prevAxis);
       const plain = shapeManifold(shapes[p.a]!, A.pos, A.rot, shapes[p.b]!, B.pos, B.rot, m, true, NO_AXIS);
       const want = ref ? ref.axis : NONE_U32, got = p.count > 0 ? p.axis : NONE_U32;
@@ -480,7 +483,7 @@ export async function pairHistory(scene: SceneDesc, steps: number, opts: { pairs
   }
   const error = await device.popErrorScope();
   e.dispose(); device.destroy();
-  return { error: error?.message ?? null, wrong, found, missed, axes, checked, axisMismatch, presenceMismatch, hinted, overflowSteps, examples };
+  return { error: error?.message ?? null, wrong, found, missed, axes, checked, axisMismatch, presenceMismatch, hinted, overflowSteps, spawnPairs, examples };
 }
 const NONE_U32 = 0xffffffff;
 

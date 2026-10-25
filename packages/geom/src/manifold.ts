@@ -60,16 +60,20 @@ export function beats(s: number, best: number, rel: number, abs: number): boolea
  * rounding noise), and an aligned stack gets the same 4 points whichever
  * side of its edges the noise puts the corners.
  *
- * Kept small on purpose. In a loaded gap-free stack each layer reaches into
+ * Kept small for now. In a loaded gap-free stack each layer reaches into
  * its diagonal neighbours below by its resting penetration, so pairs whose
  * penetration exceeds the inset get a zero-depth sideways sliver (2026-10-25:
- * 969 manifolds per step for a 4x4x12 tower's 464 face pairs). A 5 mm inset
- * removes them all, but it also drops contacts near every face edge, and in
- * the knockdown scene the median deepest transient over 9 ball speeds went
- * from 0.042 to 0.077 (one 0.32). 1 mm keeps transients as now but only
- * helps short towers (580 in the 4x4x12, but 722 of 852 in a 3x3x20 at
- * 1.2 mm penetration). The slivers carry ~no load and towers with gaps
- * have none, so they only cost solver work in packed stacks.
+ * 969 manifolds per step for a 4x4x12 tower's 464 face pairs, 852 for a
+ * 3x3x20 tower's 411 at 1.2 mm penetration). A 5 mm inset leaves exactly
+ * the face pairs, drift and jitter unchanged, but drops every contact within
+ * 5 mm of a face edge: a ledge overlap under 5 mm gives no support and a
+ * tipping cube pivots 5 mm inside the edge. In the knock-down over 16-18
+ * re-rolls x 9 ball speeds it did not change transients significantly
+ * (9-speed median of the deepest transient, averaged: 0.060 vs 0.052;
+ * per-run maxima, Mann-Whitney p = 0.16; 90th percentile run 0.15 vs
+ * 0.10). The slivers carry ~no load and towers with
+ * gaps have none, so they only cost solver work in packed stacks; whether
+ * that cost justifies a larger inset is left to the P3.4 measurements.
  */
 export const FACE_INSET = 1e-4;
 

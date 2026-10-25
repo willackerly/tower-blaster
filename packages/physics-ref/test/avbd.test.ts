@@ -255,30 +255,35 @@ describe('stacks and towers', () => {
     const s1 = e.snapshot();
     return { s1, survival: survival(bodies, s0, s1, [0]), ballVx: s1.linVel[3 * ball]!, maxPen };
   };
-  // One collapse is chaotic (at speed 17 the ball keeps only -1.1 m/s), so
-  // outcomes are medians over 5 nearby ball speeds.
+  // One collapse is chaotic: nearby ball speeds, or a 1e-12 nudge to the
+  // tower (what any rounding-level code change does), give a different
+  // collapse. At speed 17 the ball keeps only -1.1 m/s, and a run's deepest
+  // transient is set by a single tumbling cube (0.02 to 0.52 over 144
+  // re-rolled runs). So the outcomes are medians over 9 speeds, with bounds
+  // outside their measured spread (16 re-rolls with 1e-12 jitter,
+  // 2026-10-25), not one realization.
   const median = (x: number[]) => [...x].sort((a, b) => a - b)[x.length >> 1]!;
-  const speeds = [13, 14, 15, 16, 17];
+  const speeds = [11, 12, 13, 14, 15, 16, 17, 18, 19];
   let knocks: ReturnType<typeof knockdown>[] | null = null;
   const knocked = () => Promise.all(knocks ??= speeds.map((v) => knockdown({}, v)));
 
-  it('a ball knocks a slender tower down (medians over 5 ball speeds)', async () => {
-    // 2026-10-25: survival 0.16-0.31 (median 0.22), ball vx -4.3 to -1.1 (median -3.4).
+  it('a ball knocks a slender tower down (medians over 9 ball speeds)', async () => {
+    // Survival 0.16-0.31 (median 0.22), ball vx -4.5 to -1.1 (median -3.4).
     const runs = await knocked();
     for (const r of runs) expect(nonFinite(r.s1)).toBe(0);
     expect(median(runs.map((r) => r.survival))).toBeLessThan(0.5);
     expect(median(runs.map((r) => r.ballVx))).toBeLessThan(-1);
   });
 
-  it('speculative margins keep impacts shallow (median over 5 ball speeds)', async () => {
-    // The deepest transient of one collapse is set by a single tumbling cube
-    // (up to ~30 rad/s here), so it varies 4x between nearby speeds: compare
-    // medians, not one run. 2026-10-25: 0.042 with sweeps, 0.28 without
-    // (Rapier, fixed margin: 0.14 at speed 15).
+  it('speculative margins keep impacts shallow (median over 9 ball speeds)', async () => {
+    // Median deepest transient 0.042 with sweeps (0.037-0.068 over the
+    // re-rolls), 0.27 without (0.20-0.27); Rapier, fixed margin: 0.14 at
+    // speed 15. A bootstrap of the re-rolled runs fails these bounds 0.02%
+    // of the time (the earlier 5 speeds, < 0.07 and > 3x: 16%).
     const on = median((await knocked()).map((r) => r.maxPen));
     const off = median(await Promise.all(speeds.map(async (v) => (await knockdown({ sweep: false }, v)).maxPen)));
-    expect(on).toBeLessThan(0.07);
-    expect(off).toBeGreaterThan(3 * on);
+    expect(on).toBeLessThan(0.1);
+    expect(off).toBeGreaterThan(2 * on);
   });
 
   it('is deterministic', async () => {
