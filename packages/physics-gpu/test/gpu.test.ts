@@ -90,3 +90,44 @@ describe('GPU narrowphase vs the double-precision manifolds', () => {
     expect(r.pairTies + r.groundTies).toBeLessThan(0.005 * (r.contacts + r.groundContacts));
   });
 });
+
+describe('GPU graph colouring vs the reference (Jones-Plassmann = greedy in priority order)', () => {
+  const exact = (r: Awaited<ReturnType<D['coloring']>>) => {
+    expect(r.error).toBeNull();
+    expect(r.uncolored).toBe(0);
+    expect(r.overflow).toBe(0);
+    expect(r.colorsMatch, `first mismatch at ${r.firstMismatch}`).toBe(true);
+    expect(r.colorsUsed).toBe(r.refColors);
+    expect(r.orderMatch).toBe(true);
+    expect(r.startMatch).toBe(true);
+    expect(r.dispatchMatch).toBe(true);
+  };
+  it.for([
+    ['sparse random graph, isolated nodes, empty slots', { kind: 'random', n: 3000, edges: 4000, seed: 1 }],
+    ['dense random graph (degree ~20)', { kind: 'random', n: 2000, edges: 20000, seed: 2 }],
+    ['no edges', { kind: 'random', n: 100, edges: 0, seed: 3 }],
+    ['one node', { kind: 'random', n: 1, edges: 0, seed: 4 }],
+  ] as const)('%s', async ([, c], ctx) => {
+    if (!gpu) return ctx.skip();
+    exact(await call('coloring', { ...c }));
+  });
+
+  it.for([
+    ['packed city (edge and corner neighbours touch)', 'S4', { N: 2000, F: 4, H: 12 }, 0.05],
+    // Loose cubes spawn apart; a wide speculative margin connects them.
+    ['loose rotated cubes, wide margin', 'S6', { N: 2000 }, 0.8],
+    ['ball resting in a city', 'S5', { N: 1000, F: 4, H: 8, fireStep: 0 }, 0.05],
+  ] as const)('contact graph of a %s', async ([, scenario, params, margin], ctx) => {
+    if (!gpu) return ctx.skip();
+    const r = await call('coloring', { kind: 'scenario', scenario, params: { ...params }, margin });
+    expect(r.edges).toBeGreaterThan(0);
+    exact(r);
+  });
+
+  it('reports too few rounds instead of returning a wrong colouring', async (ctx) => {
+    if (!gpu) return ctx.skip();
+    const r = await call('coloring', { kind: 'random', n: 2000, edges: 20000, seed: 2, rounds: 2 });
+    expect(r.error).toBeNull();
+    expect(r.uncolored).toBeGreaterThan(0);
+  });
+});

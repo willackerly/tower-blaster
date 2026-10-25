@@ -5,7 +5,8 @@ import { Body, Manifold, readStruct, Shape, writeStruct } from '@tb/schema';
 import type { BodyDesc, Quat, Vec3 } from '@tb/engine-api';
 import { buildScenario } from '@tb/scenarios';
 import { bodiesAt } from '@tb/engine-api';
-import { Broadphase, Narrowphase } from '../src/index.ts';
+import { Broadphase, Coloring, MAX_COLORS, Narrowphase } from '../src/index.ts';
+import { colorGraph } from '@tb/physics-ref';
 
 export interface BroadCase {
   kind: 'scenario' | 'cloud' | 'pile';
@@ -233,4 +234,110 @@ export async function narrowphase(c: NarrowCase) {
   np.destroy();
   device.destroy();
   return { error: error?.message ?? null, pairs: pairs.length, contacts, pairMismatch, pairTies, groundContacts, groundMismatch, groundTies, examples };
+}
+
+export interface ColorCase {
+  kind: 'random' | 'scenario';
+  /** random: nodes, edges (some slots left empty), seed */
+  n?: number;
+  edges?: number;
+  seed?: number;
+  scenario?: string;
+  params?: Record<string, number>;
+  margin?: number;
+  rounds?: number;
+}
+
+/**
+ * Colour a contact graph on the GPU and compare with the reference colouring
+ * (physics-ref colorGraph) of the same graph. Random graphs are written as
+ * fake manifolds (only count, a and b matter); scenarios run the GPU
+ * broadphase and narrowphase first and take the graph from their output.
+ */
+export async function coloring(c: ColorCase) {
+  const { device } = await createDevice();
+  device.pushErrorScope('validation');
+  let n: number, slots: number, manifolds: GPUBuffer, total: GPUBuffer;
+  const owned: Array<{ destroy(): void }> = [];
+  if (c.kind === 'random') {
+    n = c.n!;
+    slots = c.edges!;
+    let s = (c.seed ?? 1) >>> 0;
+    const r = () => ((s = (Math.imul(s, 1664525) + 1013904223) >>> 0) / 2 ** 32);
+    const view = new DataView(new ArrayBuffer(Math.max(96, slots * Manifold.size)));
+    const seen = new Set<string>();
+    for (let k = 0; k < slots; k++) {
+      let a = Math.floor(r() * n), b = Math.floor(r() * n);
+      if (a > b) [a, b] = [b, a];
+      // Every 7th slot is empty (count 0), as for pairs whose shapes do not touch.
+      const ok = a !== b && !seen.has(`${a},${b}`) && k % 7 !== 3;
+      if (ok) seen.add(`${a},${b}`);
+      writeStruct(view, Manifold, k, { count: [ok ? 1 : 0], a: [a], b: [b] });
+    }
+    manifolds = device.createBuffer({ size: view.byteLength, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC });
+    device.queue.writeBuffer(manifolds, 0, view.buffer);
+    total = device.createBuffer({ size: 32, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.INDIRECT | GPUBufferUsage.COPY_DST });
+    device.queue.writeBuffer(total, 0, Uint32Array.from([Math.ceil(slots / 64), 1, 1, slots, 0, slots, 0, 0]));
+    owned.push(manifolds, total);
+  } else {
+    const scene = buildScenario(c.scenario!, c.params ?? {}, c.seed ?? 1);
+    const bodies = bodiesAt(scene, Number.MAX_SAFE_INTEGER);
+    n = bodies.length;
+    const margin = c.margin ?? 0.05;
+    const { bodies: bb, shapes: sb } = uploadBodies(device, bodies);
+    const spheres = device.createBuffer({ size: Math.max(16, n * 16), usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });
+    device.queue.writeBuffer(spheres, 0, Float32Array.from(bodies.flatMap((b) => [...b.pos, boundingRadius(b.shape)])));
+    const rmax = Math.max(...bodies.map((b) => boundingRadius(b.shape)));
+    const maxPairs = 16 * n;
+    const bp = new Broadphase(device, spheres, n, maxPairs);
+    const np = new Narrowphase(device, bb, sb, bp.pairs, bp.total, n, maxPairs);
+    const enc = device.createCommandEncoder();
+    bp.encode(enc, n, { cellSize: 2 * rmax + margin, margin });
+    const pass = enc.beginComputePass();
+    np.encode(pass, n, { margin, ground: { y: 0 } });
+    pass.end();
+    device.queue.submit([enc.finish()]);
+    manifolds = np.manifolds;
+    total = bp.total;
+    slots = new Uint32Array(await readBuffer(device, total))[3]!;
+    owned.push(bp, np, spheres, bb, sb);
+  }
+  const col = new Coloring(device, manifolds, total, Math.max(1, n), Math.max(1, slots), c.rounds ?? 64);
+  const t0 = performance.now();
+  const enc = device.createCommandEncoder();
+  col.encode(enc, n);
+  device.queue.submit([enc.finish()]);
+  const [colorsB, orderB, startB, dispB, infoB, manB] = await Promise.all([col.colors, col.order, col.colorStart, col.dispatch, col.info, manifolds].map((b) => readBuffer(device, b)));
+  const wallMs = performance.now() - t0;
+  const error = await device.popErrorScope();
+  const colors = [...new Uint32Array(colorsB!).slice(0, n)];
+  const order = [...new Uint32Array(orderB!).slice(0, n)];
+  const start = [...new Uint32Array(startB!)];
+  const disp = [...new Uint32Array(dispB!)];
+  const info = [...new Uint32Array(infoB!)];
+  // Reference colouring of the graph the GPU saw.
+  const mv = new DataView(manB!);
+  const adj: Array<Set<number>> = Array.from({ length: n }, () => new Set());
+  let edges = 0;
+  for (let k = 0; k < slots; k++) {
+    const m = readStruct(mv, Manifold, k);
+    if (!m.count![0]) continue;
+    adj[m.a![0]!]!.add(m.b![0]!); adj[m.b![0]!]!.add(m.a![0]!);
+    edges++;
+  }
+  const ref = [...colorGraph(adj.map((s) => [...s]))];
+  const used = n ? Math.max(...ref) + 1 : 0;
+  const expectOrder = Array.from({ length: n }, (_, i) => i).sort((i, j) => ref[i]! - ref[j]! || i - j);
+  const expectStart = Array.from({ length: MAX_COLORS + 1 }, (_, k) => ref.filter((x) => x < k).length);
+  const firstMismatch = colors.findIndex((x, i) => x !== ref[i]);
+  col.destroy();
+  for (const o of owned) o.destroy();
+  device.destroy();
+  return {
+    error: error?.message ?? null, n, edges, colorsUsed: info[0], uncolored: info[1], overflow: info[2], refColors: used,
+    colorsMatch: firstMismatch < 0, firstMismatch, orderMatch: order.every((x, k) => x === expectOrder[k]),
+    startMatch: start.every((x, k) => x === expectStart[k]),
+    dispatchMatch: Array.from({ length: MAX_COLORS }, (_, k) => disp[3 * k] === Math.ceil((expectStart[k + 1]! - expectStart[k]!) / 64) && disp[3 * k + 1] === 1 && disp[3 * k + 2] === 1).every(Boolean),
+    maxDegree: Math.max(0, ...adj.map((s) => s.size)), wallMs,
+  };
 }

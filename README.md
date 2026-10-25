@@ -58,6 +58,6 @@ Results worth keeping go in `docs/benchmarks/` (the first is a CPU baseline from
 | `bench` | Timing and quality runs, CLI |
 | `runner` | Browser runner page, Playwright orchestrator (`bench:browser`) |
 | `gpu` | GPU primitives (profiler, scan, compaction, radix sort, bandwidth probe) and `bench:gpu` |
-| `physics-gpu` | GPU physics pipeline stages (broadphase, narrowphase so far) |
+| `physics-gpu` | GPU physics pipeline stages (broadphase, narrowphase, graph colouring so far) |
 | `physics-ref` | Reference AVBD rigid-body solver in double precision: the oracle for the GPU solver (`avbd-ref` in the bench) |
 | `testkit` | Headless Chromium WebGPU sessions for tests |
