@@ -13,7 +13,8 @@
     "bench": "tsx packages/bench/src/cli.ts",
     "check": "pnpm typecheck && pnpm test",
     "runner": "vite packages/runner",
-    "bench:browser": "tsx packages/runner/src/cli.ts"
+    "bench:browser": "tsx packages/runner/src/cli.ts",
+    "bench:suite": "tsx packages/runner/src/suite-cli.ts"
   },
   "devDependencies": {
     "@tb/adapter-rapier": "workspace:*",
