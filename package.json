@@ -21,6 +21,7 @@
     "@tb/bench": "workspace:*",
     "@tb/engine-api": "workspace:*",
     "@tb/geom": "workspace:*",
+    "@tb/lattice": "workspace:*",
     "@tb/metrics": "workspace:*",
     "@tb/runner": "workspace:*",
     "@tb/scenarios": "workspace:*",

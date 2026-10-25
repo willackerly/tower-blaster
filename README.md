@@ -45,6 +45,7 @@ Results worth keeping go in `docs/benchmarks/` (the first is a CPU baseline from
 | `geom` | Double-precision reference geometry (SAT, broadphase) used as a test oracle |
 | `scenarios` | Seeded benchmark scenes S1-S11 |
 | `metrics` | Quality metrics and benchmark statistics |
+| `lattice` | Dormant tier: intact towers as a voxel lattice, support rules (loose columns), GPU brick export |
 | `adapter-rapier` | CPU baseline (Rapier WASM) |
 | `bench` | Timing and quality runs, CLI |
 | `runner` | Browser runner page, Playwright orchestrator (`bench:browser`) |
