@@ -30,7 +30,7 @@ describe('standard suite', () => {
     expect(md).toContain('| rain-awake-2000 | 2000 | 4.00 | 5.00 | 9.00 | no | yes |');
     expect(md).toContain('N^1.00');
     expect(md).toContain('about N = 3750');
-    expect(md).toContain('cost 2.50x the gapped tower');
+    expect(md).toContain('(1 s after load, sleep on): touching columns cost 2.50x the gapped tower');
     expect(md).toContain('| NO |');
   });
 });

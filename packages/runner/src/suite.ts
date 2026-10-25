@@ -47,13 +47,13 @@ export function standardSuite(engine = 'rapier', sizes = [1000, 2000, 5000, 1000
     },
     {
       name: 'tower-packed',
-      question: 'Packed-lattice penalty, part 1: an 8x8x30 tower with columns touching',
-      config: cfg(e, 'S1', { F: 8, H: 30, gap: 0 }, false),
+      question: 'Packed-lattice penalty, part 1: an 8x8x30 tower with columns touching, 1 s after load, sleep on',
+      config: cfg(e, 'S1', { F: 8, H: 30, gap: 0 }, true),
     },
     {
       name: 'tower-gapped',
-      question: 'Packed-lattice penalty, part 2: the same tower with 2% gaps',
-      config: cfg(e, 'S1', { F: 8, H: 30, gap: 0.02 }, false),
+      question: 'Packed-lattice penalty, part 2: the same tower with 2% gaps (with sleep off the two cost the same per step; the penalty is in settling and sleeping)',
+      config: cfg(e, 'S1', { F: 8, H: 30, gap: 0.02 }, true),
     },
   ];
 }
@@ -90,7 +90,7 @@ export function summaryMarkdown(results: CaseResult[], suite: SuiteCase[], heade
     lines.push('', `**${series}**: cost grows as N^${f.slope.toFixed(2)} (r² ${f.r2.toFixed(3)}); median reaches ${STEP_BUDGET_MS} ms per step at about N = ${Math.round(f.nAtBudget)}${f.extrapolated ? ' (extrapolated beyond the measured range)' : ''}.`);
   }
   const packed = results.find((r) => r.name === 'tower-packed'), gapped = results.find((r) => r.name === 'tower-gapped');
-  if (packed && gapped) lines.push('', `**Packed-lattice penalty**: touching columns cost ${(packed.median / gapped.median).toFixed(2)}x the gapped tower.`);
+  if (packed && gapped) lines.push('', `**Packed-lattice penalty** (1 s after load, sleep on): touching columns cost ${(packed.median / gapped.median).toFixed(2)}x the gapped tower.`);
   const questions = suite.map((c) => `- \`${c.name}\`: ${c.question}`);
   lines.push('', '<details><summary>What each case measures</summary>', '', ...questions, '', '</details>');
   return lines.join('\n');
