@@ -69,3 +69,4 @@ export async function loadBundle(page: Page, entry: string, globalName = '__tb_t
   await page.addScriptTag({ content: out.outputFiles[0]!.text });
 }
 export * from './contract.ts';
+export * from './collapse.ts';

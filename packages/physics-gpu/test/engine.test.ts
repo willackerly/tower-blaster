@@ -5,7 +5,7 @@ import { type BodyDesc, bodiesAt, type CombineRule, emptySnapshot, freeFlight, t
 import { drift, jitter, nonFinite, penetration, survival } from '@tb/metrics';
 import { AvbdReferenceEngine } from '@tb/physics-ref';
 import { buildScenario } from '@tb/scenarios';
-import { appliedMu, loadBundle, openWebGPU, slideMu, slideScene, THROW, throwScene, type WebGPUSession } from '@tb/testkit';
+import { aboveHole, appliedMu, loadBundle, openWebGPU, readColumn, rodRock, rodToppleTime, slideMu, slideScene, THROW, throwScene, tippingAngle, type WebGPUSession } from '@tb/testkit';
 import { GpuAvbdEngine } from '../src/index.ts';
 import type * as Drivers from './page.ts';
 
@@ -319,6 +319,64 @@ describe('GPU AVBD engine: stacks, towers and impacts', () => {
     const a = await runGpu(scene, 90), b = await runGpu(scene, 90);
     expect([...a.s1.pos]).toEqual([...b.s1.pos]);
     expect([...a.s1.rot]).toEqual([...b.s1.rot]);
+  });
+});
+
+describe('GPU AVBD engine: walls and columns fall as rigid bodies do (S12, S13)', () => {
+  // The cases of physics-ref/test/collapse.test.ts, which says why, at the
+  // default 10 iterations, plus agreement with the reference run. The
+  // reference also covers 20 iterations; on SwiftShader each S13 case here
+  // takes 17-27 s on the dev VM, so the GPU runs only the shipping default.
+  it('S12: the cubes above a hole in a stack-bond wall fall freely, and the rest of the wall stays', { timeout: 120_000 }, async (ctx) => {
+    if (!gpu) return ctx.skip();
+    const scene = buildScenario('S12', {}, 1), steps = 30;
+    const above = aboveHole(scene);
+    expect(above).toHaveLength(18);
+    const g = await runGpu(scene, steps);
+    for (const i of above) {
+      const free = freeFlight(scene.bodies[i]!.pos, [0, 0, 0], scene.gravity, scene.dt, 1, steps).pos[1];
+      expect((scene.bodies[i]!.pos[1] - g.s1.pos[3 * i + 1]!) / (scene.bodies[i]!.pos[1] - free)).toBeGreaterThan(0.99);
+    }
+    let worst = 0;
+    scene.bodies.forEach((b, i) => {
+      if (!above.includes(i)) worst = Math.max(worst, Math.hypot(g.s1.pos[3 * i]! - b.pos[0], g.s1.pos[3 * i + 1]! - b.pos[1], g.s1.pos[3 * i + 2]! - b.pos[2]));
+    });
+    expect(worst).toBeLessThan(0.03);
+    const ref = await runRef(scene, steps);
+    let diff = 0;
+    for (let k = 0; k < ref.pos.length; k++) diff = Math.max(diff, Math.abs(ref.pos[k]! - g.s1.pos[k]!));
+    expect(diff).toBeLessThan(1e-3);
+  });
+
+  const column = async (deg: number, steps: number, iterations: number) => {
+    const H = 20, scene = buildScenario('S13', { H, deg }, 1);
+    const g = await runGpu(scene, steps, { iterations }, 5);
+    const e = new AvbdReferenceEngine({ iterations });
+    await e.init(scene);
+    const ref = [{ t: 0, pos: [...e.snapshot().pos] }];
+    for (let i = 1; i <= steps; i++) { e.step(); if (i % 5 === 0 || i === steps) ref.push({ t: i * scene.dt, pos: [...e.snapshot().pos] }); }
+    return { H, gpu: readColumn(g.snaps.map((s) => ({ t: s.step * scene.dt, pos: s.pos })), H), ref: readColumn(ref, H) };
+  };
+
+  it('S13: a 20-cube column leaning 4 deg topples like the rigid column', { timeout: 120_000 }, async (ctx) => {
+    if (!gpu) return ctx.skip();
+    const r = await column(4, 330, 10), rod = rodToppleTime(r.H, 4, 30);
+    expect(r.gpu.topple).not.toBeNull();
+    expect(Math.abs(r.gpu.topple! / rod - 1)).toBeLessThan(0.12);
+    expect(Math.abs(r.gpu.topple! - r.ref.topple!)).toBeLessThan(0.02);
+  });
+
+  it('S13: a 20-cube column leaning 2 deg rocks back past upright on time, no further than the rigid column', { timeout: 120_000 }, async (ctx) => {
+    if (!gpu) return ctx.skip();
+    const r = await column(2, 300, 10), rod = rodRock(r.H, 2);
+    expect(r.gpu.upright).not.toBeNull();
+    expect(Math.abs(r.gpu.upright! / rod.upright - 1)).toBeLessThan(0.15);
+    expect(r.gpu.before).toBeLessThan(tippingAngle(r.H));
+    expect(r.gpu.turned).toBe(true);
+    expect(r.gpu.farSide / rod.farSide).toBeGreaterThan(0.6);
+    expect(r.gpu.farSide / rod.farSide).toBeLessThan(1.02);
+    expect(Math.abs(r.gpu.upright! - r.ref.upright!)).toBeLessThan(0.02);
+    expect(Math.abs(r.gpu.farSide - r.ref.farSide)).toBeLessThan(0.02);
   });
 });
 
