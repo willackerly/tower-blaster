@@ -260,6 +260,9 @@ export class TieredEngine implements PhysicsEngine {
     this.table = bodiesAt(scene, Infinity);
     const n = this.table.length;
     const built = latticesFromScene(scene, this.p.support);
+    // Dormant cubes are at their cell pose (the scene's is within posTol of
+    // it), so the host's table, the cell changes and the snapshot agree exactly.
+    for (const lat of built.lattices) lat.forEach((i, j, k, id) => { this.table[id] = { ...this.table[id]!, pos: lat.center(i, j, k), rot: CUBE_ROTATIONS[lat.rotAt(i, j, k)]! }; });
     await this.host.init(scene, this.table, built.lattices.map((l) => {
       let friction = 0;
       l.forEach((_i, _j, _k, id) => { friction = this.table[id]!.friction; });
@@ -312,7 +315,7 @@ export class TieredEngine implements PhysicsEngine {
     this.stepIndex = 0;
     // Native hosts get every dormant cell; others get proxies around the bodies that start active.
     const cells: CellChange[] = [];
-    if (this.native) this.lattices.forEach((lat, li) => lat.forEach((i, j, k, id) => cells.push({ lattice: li, i, j, k, id })));
+    if (this.native) this.lattices.forEach((lat, li) => lat.forEach((i, j, k, id) => cells.push({ lattice: li, i, j, k, id, rot: CUBE_ROTATIONS[lat.rotAt(i, j, k)]! })));
     const dyn = changes.map((c) => ({ id: c.id, pos: c.pos!, vel: c.linVel! }));
     this.host.apply({ changes: this.withShell(changes, dyn), wake: [], cells });
   }
@@ -735,7 +738,7 @@ export class TieredEngine implements PhysicsEngine {
       this.quiet[c.id] = 0;
       this.refPending[c.id] = 1;
       if (this.settles[c.id]! < 255) this.settles[c.id]!++;
-      if (this.native) this.cellChanges.push({ lattice: c.li, i: c.i, j: c.j, k: c.k, id: c.id });
+      if (this.native) this.cellChanges.push({ lattice: c.li, i: c.i, j: c.j, k: c.k, id: c.id, rot: cubeRot });
       else {
         // It becomes a proxy in place; the shell drops it once nothing is near.
         changes.set(c.id, { id: c.id, mode: MODE_STATIC, pos: center, rot: cubeRot });

@@ -50,7 +50,12 @@ export interface HostCaps {
   localCellChanges?: boolean;
 }
 
-/** A lattice the host represents natively: cell (i, j, k) is the cube at origin + (i, j, k) * edge. */
+/**
+ * A lattice the host represents natively: cell (i, j, k) is the cube centred
+ * at origin + (i, j, k) * edge, computed per axis in f64 as
+ * `origin[a] + index * edge` (the tiers use the same expression, so poses
+ * agree bit for bit).
+ */
 export interface HostLattice {
   origin: Vec3;
   edge: number;
@@ -66,6 +71,8 @@ export interface CellChange {
   k: number;
   /** Body id of the cube now in the cell, or -1 to empty it. */
   id: number;
+  /** The cube's rotation in the cell (one of the 24 cube symmetries); set whenever id >= 0. */
+  rot?: Quat;
 }
 
 export type HostWorld = Pick<SceneDesc, 'gravity' | 'dt' | 'ground' | 'sleep'>;
@@ -126,8 +133,10 @@ export interface PhysicsHost {
   readonly caps: HostCaps;
   /**
    * `table` describes every id the run can use (shape, material, initial
-   * state); all start off. `lattices` are the frames native cells live in
-   * (ignored unless caps.latticeNative); they start empty.
+   * state); all start off. Ids that start in a lattice cell are at that
+   * cell's exact pose (centre and CellChange rot). `lattices` are the
+   * frames native cells live in (ignored unless caps.latticeNative); they
+   * start empty.
    */
   init(world: HostWorld, table: readonly BodyDesc[], lattices?: readonly HostLattice[]): Promise<void>;
   /** Throws on an invalid batch (unknown id, off without a pose) and applies nothing. */

@@ -3,6 +3,7 @@ import { MODE_STATIC, type SceneDesc } from '@tb/engine-api';
 import { RapierHost } from '@tb/adapter-rapier';
 import { buildScenario } from '@tb/scenarios';
 import { checkTiers, TIER_ACTIVE, TIER_LATTICE, TieredEngine } from '../src/index.ts';
+import { ScriptedHost } from './scripted-host.ts';
 
 async function run(scene: SceneDesc, steps: number, every = 1, e = new TieredEngine(new RapierHost())) {
   await e.init(scene);
@@ -76,5 +77,35 @@ describe('TieredEngine on Rapier', () => {
     const s = await e.snapshot();
     expect(s.pos[3 * 96 + 1]).toBeGreaterThan(6.4); // resting on the roof, not inside
     e.dispose();
+  });
+});
+
+describe('TieredEngine host contract', () => {
+  it('poses dormant cubes exactly at their cells in the host table, the cell changes and the snapshot', async () => {
+    // A tower built slightly off its grid (within posTol) and turned 90 degrees about y.
+    const scene = buildScenario('S1', { F: 2, H: 2 }, 1);
+    const s = Math.SQRT1_2;
+    for (const b of scene.bodies) { b.pos = [b.pos[0] + 3e-7, b.pos[1], b.pos[2] - 2e-7]; b.rot = [0, s + 1e-9, 0, s]; }
+    const host = new ScriptedHost(), e = new TieredEngine(host);
+    await e.init(scene);
+    const cells = host.batches[0]!.cells!;
+    expect(cells.map((c) => c.id).sort()).toEqual(scene.bodies.map((_, id) => id));
+    const snap = await e.snapshot();
+    for (const c of cells) {
+      const pos = Array.from(snap.pos.subarray(3 * c.id, 3 * c.id + 3)), rot = Array.from(snap.rot.subarray(4 * c.id, 4 * c.id + 4));
+      expect(pos).not.toEqual(scene.bodies[c.id]!.pos);
+      expect(host.table[c.id]!.pos).toEqual(pos);
+      expect(host.table[c.id]!.rot).toEqual(rot);
+      expect(c.rot).toEqual(rot);
+    }
+    // A cube that settles back into its cell is sent with its rotation too.
+    e.wakeSphere(snap.pos.subarray(9, 12) as unknown as [number, number, number], 0.1);
+    await e.step();
+    expect(e.tier[3]).toBe(TIER_ACTIVE);
+    for (let k = 0; k <= e.p.minActiveSteps && e.tier[3] !== TIER_LATTICE; k++) await e.step();
+    expect(e.tier[3]).toBe(TIER_LATTICE);
+    const settled = host.batches.flatMap((b) => b.cells ?? []).filter((c) => c.id === 3);
+    expect(settled.length).toBe(2);
+    expect(settled[1]!.rot).toEqual(Array.from(snap.rot.subarray(12, 16)));
   });
 });

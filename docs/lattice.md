@@ -138,6 +138,10 @@ struck tower stayed awake. That is what the slide rules fix.
 - Rapier 0.21 panics (wasm `unreachable`) when a ball presses on a voxel
   edge. `RapierHost` builds spheres as icosphere hulls of the same mass, and
   `adapter-rapier/test/voxel-panic.test.ts` pins the upstream bug.
+- Dormant cubes are at their exact cell pose everywhere: in the host's
+  init table, in each filled `CellChange` (centre `origin + index * edge`
+  in f64, plus `rot`) and in the snapshot. A scene built off its grid by
+  up to `posTol` gets snapped there.
 - Rubble freezes at the pose the tiers recorded, sent with the static
   change, so a host whose state lags (`stateLag > 0`) puts it where the
   snapshot says it is. In Rapier, turning a sleeping body static wakes its

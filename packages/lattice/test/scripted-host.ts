@@ -18,12 +18,18 @@ export class ScriptedHost implements PhysicsHost {
   /** Velocities reported for dynamic bodies (they still do not move). */
   vel = new Map<number, Vec3>();
 
+  /** What init and apply were given, in order. */
+  table: readonly BodyDesc[] = [];
+  batches: HostBatch[] = [];
+
   async init(_w: HostWorld, table: readonly BodyDesc[]): Promise<void> {
+    this.table = table;
     this.caps = { ...this.caps, capacity: table.length };
     this.modes = table.map(() => MODE_OFF);
     table.forEach((b, id) => this.pose.set(id, { pos: b.pos, rot: b.rot }));
   }
   apply(batch: HostBatch): void {
+    this.batches.push(batch);
     for (const c of batch.cells ?? []) if (c.id >= 0) this.modes[c.id] = MODE_STATIC;
     for (const c of batch.changes) {
       this.modes[c.id] = c.mode;
