@@ -10,7 +10,7 @@ import { cpus, platform, release } from 'node:os';
 import { dirname } from 'node:path';
 import type { SceneDesc } from '@tb/engine-api';
 import { buildScenario, SCENARIOS, type Params } from '@tb/scenarios';
-import { makeEngine, SlowedEngine } from './engines.ts';
+import { makeEngine, slowdownArms } from './engines.ts';
 import { compareBlocks, DEFAULT_TIMING, qualityGates, qualityRun, timeInterleaved, timingSummary, type TimingOptions } from './run.ts';
 
 interface Args { _: string[]; flags: Record<string, string | true>; params: Params }
@@ -99,7 +99,7 @@ async function cmdSelfcheck(a: Args) {
   const opts = timingOpts(a, { warmup: 60, blockSteps: 20, blocks: 40 });
   const [a1, a2] = await timeInterleaved([makeEngine('rapier'), makeEngine('rapier')], scene, opts);
   const aa = compareBlocks(a1!, a2!, 0.03);
-  const [s1, s2] = await timeInterleaved([makeEngine('rapier'), new SlowedEngine(makeEngine('rapier'), 0.1)], scene, opts);
+  const [s1, s2] = await timeInterleaved(slowdownArms(() => makeEngine('rapier'), 0.1), scene, opts);
   const slow = compareBlocks(s1!, s2!, 0.03);
   const checks = {
     aaNoDifference: aa.verdict === 'no-difference',
