@@ -63,9 +63,14 @@ describe('reference AVBD: walls and columns fall as rigid bodies do', () => {
   // flat that 0.003% of the column's energy decides whether it falls, and the
   // solver gains that much at a landing (2026-10-25: at 40 iterations it
   // leans 2.32 deg on its third swing, where the rigid column leans 1.94).
+  // The far side is an upper bound, not a target: loose cubes land as a chain
+  // of impacts (the bottom joint opens), not as Housner's one corner impact.
+  // Measured far side / rigid (2026-10-25): 0.69 at 10 iterations; 0.86-0.98
+  // from 16 to 60, except 1.008 at exactly 20; 0.92-0.97 at 20 with beta
+  // changed by 10%.
   it.for([
     [10, 0.15, 0.6],
-    [20, 0.03, 0.95],
+    [20, 0.03, 0.85],
   ] as const)('S13: a 20-cube column leaning 2 deg rocks back past upright on time, no further than the rigid column (%s iterations)', async ([iterations, tol, farMin]) => {
     const H = 20, rod = rodRock(H, 2);
     const r = readColumn(await run(buildScenario('S13', { H, deg: 2 }, 1), 300, { iterations }), H);
@@ -73,7 +78,6 @@ describe('reference AVBD: walls and columns fall as rigid bodies do', () => {
     expect(Math.abs(r.upright! / rod.upright - 1)).toBeLessThan(tol);
     expect(r.before).toBeLessThan(tippingAngle(H));
     expect(r.turned).toBe(true);
-    // At 10 iterations the landing loses 31% of the swing (2026-10-25).
     expect(r.farSide / rod.farSide).toBeGreaterThan(farMin);
     expect(r.farSide / rod.farSide).toBeLessThan(1.02);
   });

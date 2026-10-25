@@ -103,10 +103,12 @@ export interface ColumnSample { t: number; pos: ArrayLike<number> }
  *   bend: the largest bendOf before that.
  * - upright: when the lean first drops below 0 (null if never); before: the
  *   largest lean until then; farSide: the deepest lean on the other side
- *   (positive) until it comes back past 0 or the samples end; turned: it was
- *   past that extreme before the samples ended.
+ *   (positive) until the swing turns or the samples end; turned: the lean
+ *   came back from that extreme by more than turnDeg. Loose cubes wiggle near
+ *   the extreme, where the lean barely moves, so the first sample that leans
+ *   less is not yet the turn.
  */
-export function readColumn(samples: ColumnSample[], H: number, toppleDeg = 30) {
+export function readColumn(samples: ColumnSample[], H: number, toppleDeg = 30, turnDeg = 0.02) {
   let topple: number | null = null, bend = 0, upright: number | null = null, before = -Infinity, farSide = 0, turned = false;
   let prev: { t: number; a: number } | null = null;
   for (const s of samples) {
@@ -119,8 +121,8 @@ export function readColumn(samples: ColumnSample[], H: number, toppleDeg = 30) {
     if (upright === null) {
       if (a < 0) { upright = at(0); farSide = -a; } else before = Math.max(before, a);
     } else if (!turned) {
-      if (-a < farSide) turned = true;
-      else farSide = -a;
+      if (-a > farSide) farSide = -a;
+      else if (farSide + a > turnDeg) turned = true;
     }
     prev = { t: s.t, a };
   }
