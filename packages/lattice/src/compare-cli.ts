@@ -8,7 +8,7 @@ import { RapierEngine, RapierHost } from '@tb/adapter-rapier';
 import type { SceneDesc } from '@tb/engine-api';
 import { median, quantile } from '@tb/metrics';
 import { buildScenario } from '@tb/scenarios';
-import { compare, trace } from './compare.ts';
+import { compare, compareBonds, trace } from './compare.ts';
 import { TieredEngine } from './tiered.ts';
 
 const args = process.argv.slice(2);
@@ -34,6 +34,14 @@ function perturbed(k: number): SceneDesc {
   return s;
 }
 
+const stat = (xs: number[]) => ({ mean: +(xs.reduce((a, b) => a + b, 0) / xs.length).toFixed(3), sd: +Math.sqrt(xs.reduce((a, b) => a + b * b, 0) / xs.length - (xs.reduce((a, b) => a + b, 0) / xs.length) ** 2).toFixed(3) });
+const bondsOf = (b: ReturnType<typeof compareBonds>) => ({ brokenTest: b.brokenTest, brokenJaccard: b.jaccard });
+type Run = ReturnType<typeof compare> & ReturnType<typeof bondsOf>;
+const summary = (cs: Run[]) => ({
+  jaccardToRef0: stat(cs.map((c) => c.jaccard)), moved: stat(cs.map((c) => c.movedTest)), spread: stat(cs.map((c) => c.spreadTest)),
+  broken: stat(cs.map((c) => c.brokenTest)), brokenJaccardToRef0: stat(cs.map((c) => c.brokenJaccard)),
+});
+
 const ref0 = await trace(new RapierEngine(), base, steps);
 const tiered = new TieredEngine(new RapierHost());
 const test0 = await trace(tiered, base, steps);
@@ -41,22 +49,23 @@ const ms = (t: number[]) => ({ median: +median(t).toFixed(3), p90: +quantile(t, 
 const out: Record<string, unknown> = {
   scenario: base.id, params: base.params, steps,
   comparison: compare(base, ref0.final, test0.final),
+  bonds: compareBonds(base, ref0.final, test0.final),
   momentumX: { refFinal: ref0.momentumX.at(-1), testFinal: test0.momentumX.at(-1) },
   stepMs: { ref: ms(ref0.stepMs), tiered: ms(test0.stepMs) },
   tierStats: tiered.stats,
 };
 if (runs > 0) {
-  const stat = (xs: number[]) => ({ mean: +(xs.reduce((a, b) => a + b, 0) / xs.length).toFixed(3), sd: +Math.sqrt(xs.reduce((a, b) => a + b * b, 0) / xs.length - (xs.reduce((a, b) => a + b, 0) / xs.length) ** 2).toFixed(3) });
-  const refs = [], tests = [];
+  const refs: Run[] = [], tests: Run[] = [];
   for (let k = 1; k <= runs; k++) {
     const s = perturbed(k);
-    refs.push(compare(base, ref0.final, (await trace(new RapierEngine(), s, steps)).final));
-    tests.push(compare(base, ref0.final, (await trace(new TieredEngine(new RapierHost()), s, steps)).final));
+    const r = (await trace(new RapierEngine(), s, steps)).final, t = (await trace(new TieredEngine(new RapierHost()), s, steps)).final;
+    refs.push({ ...compare(base, ref0.final, r), ...bondsOf(compareBonds(base, ref0.final, r)) });
+    tests.push({ ...compare(base, ref0.final, t), ...bondsOf(compareBonds(base, ref0.final, t)) });
   }
   out.perturbed = {
     runs,
-    reference: { jaccardToRef0: stat(refs.map((c) => c.jaccard)), moved: stat(refs.map((c) => c.movedTest)), spread: stat(refs.map((c) => c.spreadTest)) },
-    tiered: { jaccardToRef0: stat(tests.map((c) => c.jaccard)), moved: stat(tests.map((c) => c.movedTest)), spread: stat(tests.map((c) => c.spreadTest)) },
+    reference: summary(refs),
+    tiered: summary(tests),
   };
 }
 console.log(JSON.stringify(out, null, 2));

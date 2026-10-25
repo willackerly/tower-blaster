@@ -1,7 +1,8 @@
 // Differential comparison of the tiered engine against an all-dynamic
 // reference on the same scene: which cubes moved, how far the debris went,
 // and where the momentum went. Used by tests and by `pnpm tiers:compare`.
-import { bodiesAt, massOf, type PhysicsEngine, type SceneDesc, type Snapshot, TAG_BALL } from '@tb/engine-api';
+import { bodiesAt, massOf, type PhysicsEngine, type Quat, type SceneDesc, type Snapshot, TAG_BALL, type Vec3 } from '@tb/engine-api';
+import { quatAngle, quatMul, rotate, spherePairs, sub } from '@tb/geom';
 
 export interface Trace {
   /** Horizontal momentum sum m v_x per sampled step (all bodies). */
@@ -62,4 +63,57 @@ export function compare(scene: SceneDesc, ref: Snapshot, test: Snapshot, moved =
     if (mb && !ma) extra++;
   }
   return { movedRef: a, movedTest: b, jaccard: a + b - both ? both / (a + b - both) : 1, missed, extra, spreadRef: a ? sa / a : 0, spreadTest: b ? sb / b : 0 };
+}
+
+export interface BondComparison {
+  /** Face-adjacent box pairs in the scene. */
+  bonds: number;
+  /** Bonds broken in each run (see `broken`), and the cubes with at least one. */
+  brokenBondsRef: number;
+  brokenBondsTest: number;
+  brokenRef: number;
+  brokenTest: number;
+  /** |A ∩ B| / |A ∪ B| of the broken-cube sets. */
+  jaccard: number;
+}
+
+const conj = (q: Quat): Quat => [-q[0], -q[1], -q[2], q[3]];
+const pose = (s: Snapshot, i: number) => ({ p: [s.pos[3 * i]!, s.pos[3 * i + 1]!, s.pos[3 * i + 2]!] as Vec3, q: [s.rot[4 * i]!, s.rot[4 * i + 1]!, s.rot[4 * i + 2]!, s.rot[4 * i + 3]!] as Quat });
+
+/**
+ * Face-adjacent box pairs of the scene whose relative pose changed: the
+ * offset of b seen from a's frame moved by more than `shift` edges, or their
+ * relative rotation by more than `angle`. Unlike displacement from the start
+ * this ignores rigid motion and smooth bending of a whole tower, so a tower
+ * that sways (Rapier stacks are soft: an 8 x 8 x 25 tower struck by the S5
+ * ball sways ~0.5 m at the top for seconds) breaks no bonds, while a cube
+ * knocked out of it breaks all of its own.
+ */
+export function brokenBonds(scene: SceneDesc, s: Snapshot, shift = 0.25, angle = (15 * Math.PI) / 180): { pairs: number; broken: Array<[number, number]> } {
+  const boxes = scene.bodies.map((b, i) => ({ b, i })).filter(({ b }) => b.shape.kind === 'box');
+  const centers = new Float64Array(3 * boxes.length), radii = new Float64Array(boxes.length);
+  boxes.forEach(({ b }, k) => {
+    centers.set(b.pos, 3 * k);
+    radii[k] = b.shape.kind === 'box' ? Math.min(...b.shape.half) : 0;
+  });
+  const pairs = spherePairs(centers, radii, 0.02);
+  const broken: Array<[number, number]> = [];
+  for (const [x, y] of pairs) {
+    const a = boxes[x]!.i, b = boxes[y]!.i, A = boxes[x]!.b, B = boxes[y]!.b, edge = 2 * radii[x]!;
+    const off0 = rotate(conj(A.rot), sub(B.pos, A.pos)), pa = pose(s, a), pb = pose(s, b);
+    const off = rotate(conj(pa.q), sub(pb.p, pa.p));
+    const rel0 = quatMul(conj(A.rot), B.rot), rel = quatMul(conj(pa.q), pb.q);
+    if (Math.hypot(...sub(off, off0)) > shift * edge || quatAngle(quatMul(conj(rel0), rel)) > angle) broken.push([a, b]);
+  }
+  return { pairs: pairs.length, broken };
+}
+
+export function compareBonds(scene: SceneDesc, ref: Snapshot, test: Snapshot): BondComparison {
+  const r = brokenBonds(scene, ref), t = brokenBonds(scene, test);
+  const cubes = (br: Array<[number, number]>) => new Set(br.flat());
+  const A = cubes(r.broken), B = cubes(t.broken);
+  let both = 0;
+  for (const i of A) if (B.has(i)) both++;
+  const union = A.size + B.size - both;
+  return { bonds: r.pairs, brokenBondsRef: r.broken.length, brokenBondsTest: t.broken.length, brokenRef: A.size, brokenTest: B.size, jaccard: union ? both / union : 1 };
 }
