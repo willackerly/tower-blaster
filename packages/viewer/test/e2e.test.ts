@@ -49,9 +49,10 @@ async function open(search: string) {
 }
 
 describe('viewer', () => {
-  it('renders a tower, steps physics and fires a ball', async (ctx) => {
+  // The GPU case also picks 20 solver iterations, which its buttons show.
+  it.for([['avbd-gpu:iterations=20', 'GPU AVBD'], ['rapier', 'Rapier (CPU)']] as const)('renders a tower, steps physics and fires a ball on %s', async ([engine, button], ctx) => {
     if (!browser) return ctx.skip();
-    const { page, errors } = await open('/?scenario=S1&param.F=3&param.H=6&param.gap=0.02&offscreen=1');
+    const { page, errors } = await open(`/?scenario=S1&param.F=3&param.H=6&param.gap=0.02&offscreen=1&engine=${engine}`);
     const status = await page.evaluate(() => ({ s: window.__viewer.status, e: window.__viewer.error }));
     if (status.s === 'error' && /WebGPU|adapter/.test(status.e ?? '') && !requireWebGPU()) return ctx.skip();
     expect(status).toEqual({ s: 'running', e: undefined });
@@ -69,6 +70,10 @@ describe('viewer', () => {
     await page.waitForFunction(() => window.__viewer.bodies === 55, undefined, { timeout: 30_000 });
     expect(await page.evaluate(() => window.__viewer.inputs.length)).toBe(1);
     expect(await page.locator('#hud').innerText()).toMatch(/bodies[\s\S]*ms\/step/);
+    expect(await page.locator('#hud').innerText()).toContain(engine);
+    const on = await page.locator('#presets button.on').allInnerTexts();
+    expect(on).toContain(button);
+    expect(on.includes('20 iterations')).toBe(engine.startsWith('avbd-gpu'));
     expect(errors).toEqual([]);
     await page.close();
   });

@@ -27,6 +27,8 @@ export interface GpuEngineOptions {
    */
   capacity?: number;
   maxRadius?: number;
+  /** Without capacity: room for this many pushed bodies beyond the scene's bodies and inputs (default 0). */
+  spare?: number;
 }
 
 export interface GpuDiagnostics {
@@ -78,7 +80,7 @@ export class GpuAvbdEngine implements PhysicsEngine {
     this.scene = scene;
     const all = [...scene.bodies, ...scene.inputs.map((e) => e.body)];
     if (this.opts.capacity !== undefined && this.opts.capacity < all.length) throw new Error(`GpuAvbdEngine: capacity ${this.opts.capacity} is below the scene's ${all.length} bodies and inputs`);
-    this.capacity = Math.max(1, this.opts.capacity ?? all.length);
+    this.capacity = Math.max(1, this.opts.capacity ?? all.length + (this.opts.spare ?? 0));
     const maxPairs = (this.opts.pairsPerBody ?? 16) * this.capacity;
     const p = this.params;
     this.rmax = all.reduce((m, b) => Math.max(m, boundingRadius(b.shape)), this.opts.maxRadius ?? 0);
@@ -130,7 +132,7 @@ export class GpuAvbdEngine implements PhysicsEngine {
   push(events: InputEvent[]): void {
     if (!this.parts) throw new Error('init() first');
     // Checked before queueing any, so a rejected batch changes nothing.
-    if (this.n + this.pending.length + events.length > this.capacity) throw new Error(`GpuAvbdEngine: push() needs room for ${this.n + this.pending.length + events.length} bodies, capacity is ${this.capacity} (GpuEngineOptions.capacity)`);
+    if (this.n + this.pending.length + events.length > this.capacity) throw new Error(`GpuAvbdEngine: push() needs room for ${this.n + this.pending.length + events.length} bodies, capacity is ${this.capacity} (GpuEngineOptions.capacity or spare)`);
     for (const ev of events) {
       const r = boundingRadius(ev.body.shape);
       if (r > this.rmax) throw new Error(`GpuAvbdEngine: pushed body radius ${r} exceeds ${this.rmax}, the largest the broadphase cells were sized for (GpuEngineOptions.maxRadius)`);

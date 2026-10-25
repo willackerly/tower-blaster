@@ -1,13 +1,14 @@
 // Interactive viewer: any PhysicsEngine, rendered live. Physics runs on the
 // main thread at a fixed 60 Hz (at most two steps per frame; slower engines
 // fall into slow motion, shown as sim speed).
-import { makeEngine } from '@tb/bench';
+import { makeEngine, parseSpec } from '@tb/bench';
 import { type BodyDesc, type InputEvent, type PhysicsEngine, type SceneDesc, TAG_BALL } from '@tb/engine-api';
+import { DEFAULT_AVBD } from '@tb/physics-ref';
 import { buildScenario, SCENARIOS } from '@tb/scenarios';
 import { clampPitch, frame, rayThrough, viewProj, eyeOf, type Orbit } from './camera.ts';
 import { newClock, stepsDue, Window } from './loop.ts';
 import type { V3 } from './math.ts';
-import { parseViewerConfig, toSearch, type ViewerConfig } from './params.ts';
+import { engineSpec, parseViewerConfig, toSearch, type ViewerConfig, withOption } from './params.ts';
 import { createDevice } from '@tb/gpu';
 import { CANDY_NIGHT, LOOKS, Renderer, SnapshotSource, type PixelStats } from '@tb/render';
 
@@ -20,7 +21,20 @@ const PRESETS: Array<{ label: string; search: string }> = [
   { label: 'Pyramid', search: '?scenario=S2&param.C=20' },
   { label: 'Slabs and rods', search: '?scenario=S8&param.floors=15' },
   { label: 'Cube rain 3k', search: '?scenario=S6&param.N=3000' },
+  { label: 'Wall with a hole', search: '?scenario=S12' },
+  { label: 'Leaning column', search: '?scenario=S13' },
 ];
+
+const ENGINES: Array<{ label: string; spec: string }> = [
+  { label: 'GPU AVBD', spec: 'avbd-gpu' },
+  { label: 'Rapier (CPU)', spec: 'rapier' },
+];
+
+// Solver iterations for the GPU engine: a tall column flexes and topples
+// early at the default 10; 20 cubes are rigid from 13 (physics-ref/test/collapse.test.ts).
+const GPU_ITERATIONS = [10, 20, 40];
+
+const viewerEngine = (spec: string): PhysicsEngine => makeEngine(engineSpec(spec));
 
 interface ViewerHandle {
   status: 'loading' | 'running' | 'error';
@@ -66,11 +80,32 @@ function bounds(bodies: BodyDesc[]): { min: V3; max: V3 } {
 
 function presets(current: string) {
   const box = document.getElementById('presets')!;
+  const config = parseViewerConfig(current);
+  for (const e of ENGINES) {
+    const b = document.createElement('button');
+    b.textContent = e.label;
+    if (parseSpec(config.engine).name === e.spec) b.className = 'on';
+    b.onclick = () => { location.search = toSearch({ ...parseViewerConfig(location.search), engine: e.spec }); };
+    box.appendChild(b);
+  }
+  const { name, options } = parseSpec(config.engine);
+  if (name === 'avbd-gpu') {
+    for (const n of GPU_ITERATIONS) {
+      const b = document.createElement('button');
+      b.textContent = `${n} iterations`;
+      if ((options.iterations ?? DEFAULT_AVBD.iterations) === n) b.className = 'on';
+      b.onclick = () => {
+        const c = parseViewerConfig(location.search);
+        location.search = toSearch({ ...c, engine: withOption(c.engine, 'iterations', n === DEFAULT_AVBD.iterations ? undefined : n) });
+      };
+      box.appendChild(b);
+    }
+  }
   for (const p of PRESETS) {
     const b = document.createElement('button');
     b.textContent = p.label;
     if (parseViewerConfig(p.search).scenario === parseViewerConfig(current).scenario && toSearch(parseViewerConfig(p.search)) === toSearch(parseViewerConfig(current))) b.className = 'on';
-    b.onclick = () => { location.search = p.search; };
+    b.onclick = () => { location.search = toSearch({ ...parseViewerConfig(p.search), engine: config.engine }); };
     box.appendChild(b);
   }
 }
@@ -86,7 +121,7 @@ async function main() {
   renderer.device.lost.then((info) => fail(`GPU device lost: ${info.message}`));
   renderer.device.addEventListener('uncapturederror', (e) => fail((e as GPUUncapturedErrorEvent).error.message));
 
-  let engine: PhysicsEngine = makeEngine(config.engine);
+  let engine: PhysicsEngine = viewerEngine(config.engine);
   let scene = sceneFor(config);
   // Engine body i has shape shapes[i]: initial bodies, then spawns in
   // (step, push order), the same order the engine applies them.
@@ -98,6 +133,7 @@ async function main() {
   const snapMs = new Window(60);
   let paused = false;
   let fps = 60;
+  let notice = '';
 
   const ballDesc = (origin: V3, dir: V3): BodyDesc => ({
     shape: { kind: 'sphere', radius: 0.7 },
@@ -113,7 +149,7 @@ async function main() {
 
   async function reset() {
     engine.dispose();
-    engine = makeEngine(config.engine);
+    engine = viewerEngine(config.engine);
     scene = sceneFor(config);
     await engine.init(scene);
     events = [...scene.inputs];
@@ -124,6 +160,7 @@ async function main() {
     const c: V3 = [(b.min[0] + b.max[0]) / 2, (b.min[1] + b.max[1]) / 2, (b.min[2] + b.max[2]) / 2];
     renderer.setShadowBounds(c, Math.hypot(b.max[0] - b.min[0], b.max[1] - b.min[1], b.max[2] - b.min[2]) / 2 + 2);
     handle.inputs = [];
+    notice = '';
     await refresh();
   }
 
@@ -145,7 +182,14 @@ async function main() {
   handle.fire = (x = 0, y = 0) => {
     const { origin, dir } = rayThrough(orbit, aspect(), x, y);
     const ev: InputEvent = { step: engine.stepIndex, kind: 'spawn', body: ballDesc(origin, dir) };
-    engine.push([ev]);
+    try {
+      engine.push([ev]);
+    } catch (e) {
+      // The GPU engine has room for GPU_SPARE fired balls (params.ts); R resets.
+      notice = `${e instanceof Error ? e.message : String(e)} (press R to reset)`;
+      drawHud();
+      return;
+    }
     handle.inputs.push(ev);
     // Keep events in engine application order: stable by step.
     let i = events.length;
@@ -213,7 +257,7 @@ async function main() {
       <div class="row"><span>sim speed</span><span class="${clock.simSpeed < 0.95 ? 'warn' : ''}">${(clock.simSpeed * 100).toFixed(0)}%</span></div>
       <div class="row"><span>snapshot + upload</span><span>${fmt(snapMs.quantile(0.5))} ms</span></div>
       <div class="row muted"><span>budget</span><span>7.5 ms/step</span></div>
-      <div class="muted">${adapter.info.vendor} ${adapter.info.architecture}${paused ? ' · <b>paused</b>' : ''}</div>`;
+      <div class="muted">${adapter.info.vendor} ${adapter.info.architecture}${paused ? ' · <b>paused</b>' : ''}</div>${notice ? `\n      <div class="warn">${notice}</div>` : ''}`;
   }
 
   await reset();
@@ -229,11 +273,19 @@ async function main() {
     fps = 0.9 * fps + 0.1 * (1000 / Math.max(frameMs, 1));
     resize();
     const n = paused ? 0 : stepsDue(clock, frameMs, scene.dt);
+    // A GPU engine's step() only submits, so its steps are timed to completion with finish().
+    // refresh() reads a snapshot back after them anyway, so the wait adds no stall.
+    const t0 = performance.now();
     for (let i = 0; i < n; i++) {
-      const t0 = performance.now();
+      const ts = performance.now();
       await engine.step();
-      stepMs.push(performance.now() - t0);
+      if (!engine.finish) stepMs.push(performance.now() - ts);
       if (config.autofire && engine.stepIndex === config.autofire) handle.fire(0, 0);
+    }
+    if (n > 0 && engine.finish) {
+      await engine.finish();
+      const per = (performance.now() - t0) / n;
+      for (let i = 0; i < n; i++) stepMs.push(per);
     }
     handle.stepIndex = engine.stepIndex;
     if (n > 0) await refresh();

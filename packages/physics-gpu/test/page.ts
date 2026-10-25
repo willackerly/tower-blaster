@@ -439,6 +439,9 @@ export async function pushReplay(steps: number) {
     capacity: await rejects({ capacity: base.bodies.length + 2 }, [0, 1, 2].map((k) => ({ step: 5, kind: 'spawn', body: ball(k) }))),
     radius: await rejects({ capacity: base.bodies.length + 1 }, [{ step: 5, kind: 'spawn', body: ball(0, 2) }]),
     noRoom: await rejects({}, [{ step: 5, kind: 'spawn', body: ball(0) }]),
+    // spare reserves room beyond the scene without naming a capacity.
+    spare: await rejects({ spare: 2 }, [0, 1, 2].map((k) => ({ step: 5, kind: 'spawn', body: ball(k) }))),
+    spareFits: await rejects({ spare: 3 }, [0, 1, 2].map((k) => ({ step: 5, kind: 'spawn', body: ball(k) }))),
   };
   const live = new GpuAvbdEngine({}, opts);
   await live.init({ ...base, inputs: [{ step: 30, kind: 'spawn', body: ball(0) }] });
