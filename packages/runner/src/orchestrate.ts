@@ -2,9 +2,8 @@
 // Chromium through Playwright, and return the page's result record.
 import { fileURLToPath } from 'node:url';
 import { platform } from 'node:os';
-import { chromium } from 'playwright';
 import { createServer } from 'vite';
-import { CLOSE_TIMEOUT_MS, closeWithin } from '@tb/testkit';
+import { CLOSE_TIMEOUT_MS, closeWithin, launchChromium } from '@tb/testkit';
 import { type RunConfig, toQuery } from './config.ts';
 
 export interface BrowserRunOptions {
@@ -47,7 +46,7 @@ export async function openRunner(opts: BrowserRunOptions = {}): Promise<RunnerSe
   }
   // Serve from localhost, not 127.0.0.1: localhost is a secure context.
   const origin = base.replace('127.0.0.1', 'localhost');
-  const browser = await chromium.launch({
+  const { browser, close: closeBrowser } = await launchChromium({
     headless: !opts.headed,
     args: [...chromiumArgs(), ...(opts.extraArgs ?? [])],
     ...(opts.channel ? { channel: opts.channel } : {}),
@@ -68,7 +67,7 @@ export async function openRunner(opts: BrowserRunOptions = {}): Promise<RunnerSe
         await page.close();
       }
     },
-    close: () => closeWithin([['browser', () => browser.close()], ['vite server', () => server.close()]], opts.closeTimeoutMs ?? CLOSE_TIMEOUT_MS),
+    close: () => closeWithin([['browser', closeBrowser], ['vite server', () => server.close()]], opts.closeTimeoutMs ?? CLOSE_TIMEOUT_MS),
   };
 }
 

@@ -2,7 +2,7 @@
 // without a GPU, Chromium falls back to SwiftShader, which is slow but
 // spec-conformant: good for correctness, useless for timing.
 import { chromium, type Browser, type Page } from 'playwright';
-import { CLOSE_TIMEOUT_MS, closeWithin } from './teardown.ts';
+import { CLOSE_TIMEOUT_MS, closeWithin, releaseStdioOnExit, type ReleaseOptions } from './teardown.ts';
 
 export const WEBGPU_ARGS = ['--enable-unsafe-webgpu', '--enable-features=Vulkan'];
 
@@ -19,10 +19,28 @@ export interface WebGPUSession {
   close(): Promise<string[]>;
 }
 
-export async function openWebGPU(extraArgs: string[] = [], opts: { channel?: string; headless?: boolean } = {}): Promise<WebGPUSession | null> {
-  let browser: Browser;
+/**
+ * Launch Chromium through a Playwright browser server, the launch that
+ * exposes the browser's process, and release its stdio once it has exited
+ * (releaseStdioOnExit; see teardown.ts for why). close() closes the browser
+ * as browser.close() does: gracefully, with a SIGKILL after 30 s.
+ */
+export async function launchChromium(options: Parameters<typeof chromium.launchServer>[0] = {}, release: ReleaseOptions = {}): Promise<{ browser: Browser; close(): Promise<void> }> {
+  const server = await chromium.launchServer(options);
+  releaseStdioOnExit(server.process(), release);
   try {
-    browser = await chromium.launch({ args: [...WEBGPU_ARGS, ...extraArgs], headless: opts.headless ?? true, ...(opts.channel ? { channel: opts.channel } : {}) });
+    const browser = await chromium.connect(server.wsEndpoint());
+    return { browser, close: () => server.close() };
+  } catch (e) {
+    await server.kill();
+    throw e;
+  }
+}
+
+export async function openWebGPU(extraArgs: string[] = [], opts: { channel?: string; headless?: boolean } = {}): Promise<WebGPUSession | null> {
+  let browser: Browser, closeBrowser: () => Promise<void>;
+  try {
+    ({ browser, close: closeBrowser } = await launchChromium({ args: [...WEBGPU_ARGS, ...extraArgs], headless: opts.headless ?? true, ...(opts.channel ? { channel: opts.channel } : {}) }));
   } catch (e) {
     if (requireWebGPU()) throw e;
     return null;
@@ -44,11 +62,11 @@ export async function openWebGPU(extraArgs: string[] = [], opts: { channel?: str
     };
   });
   if (!adapter) {
-    await browser.close();
+    await closeBrowser();
     if (requireWebGPU()) throw new Error('WebGPU adapter unavailable in Chromium');
     return null;
   }
-  return { page, adapter, close: () => closeWithin([['browser', () => browser.close()]], CLOSE_TIMEOUT_MS) };
+  return { page, adapter, close: () => closeWithin([['browser', closeBrowser]], CLOSE_TIMEOUT_MS) };
 }
 
 /** CI sets REQUIRE_WEBGPU=1 so a missing adapter fails instead of skipping. */

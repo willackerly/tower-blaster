@@ -162,13 +162,15 @@ describe('runner session', () => {
     return readdirSync('/proc').filter((p) => /^\d+$/.test(p) && (fd(p, 1) === stderr || fd(p, 2) === stderr) && pgid(p) !== null && pgid(p) !== pid).map(Number);
   };
 
-  it.runIf(process.platform === 'linux')('close() returns at its bound when a process outside the browser\'s group holds its stdio', async () => {
+  it.runIf(process.platform === 'linux')('close() does not wait for a process outside the browser\'s group that holds its stdio', async () => {
     // Full Chromium (not the headless shell) starts chrome_crashpad_handler with setsid,
     // holding the browser's stdout and stderr. Stopped, it keeps them open after the
-    // browser exits, and Playwright's SIGKILL of the browser's group cannot reach it,
-    // so browser.close() never resolves: the unbounded case behind the Mac stall.
+    // browser exits, and Playwright's SIGKILL of the browser's group cannot reach it, so
+    // Playwright alone never finishes closing: the Mac stall, where the handler outlived
+    // the browser. Our end is released once the browser has exited (releaseStdioOnExit),
+    // well inside the 20 s bound.
     const token = `--tb-teardown-test=${process.pid}-${Math.round(performance.now())}`;
-    const runner = await openRunner({ channel: 'chromium', closeTimeoutMs: 1500, extraArgs: [token] });
+    const runner = await openRunner({ channel: 'chromium', closeTimeoutMs: 20_000, extraArgs: [token] });
     const holders = outsideHolders(browserPid(token));
     expect(holders.length).toBeGreaterThan(0);
     for (const h of holders) process.kill(h, 'SIGSTOP');
@@ -176,9 +178,35 @@ describe('runner session', () => {
       const t0 = performance.now();
       const stuck = await runner.close();
       expect(performance.now() - t0).toBeLessThan(10_000);
-      expect(stuck).toEqual(['browser']);
+      expect(stuck).toEqual([]);
     } finally {
       for (const h of holders) { try { process.kill(h, 'SIGKILL'); } catch { /* already gone */ } }
     }
   });
+
+  it.runIf(process.platform === 'linux')('close() finishes after Playwright\'s 30 s kill of a browser that ignores it, and its profile is removed', async () => {
+    // Both at once: the browser cannot act on Browser.close, and a process outside its
+    // group holds its stdio. Playwright SIGKILLs the group at 30 s; the release then lets
+    // its close finish, inside the default 45 s bound, and Playwright removes its profile.
+    const token = `--tb-teardown-test=${process.pid}-${Math.round(performance.now())}`;
+    const runner = await openRunner({ channel: 'chromium', extraArgs: [token] });
+    const pid = browserPid(token);
+    const profile = readFileSync(`/proc/${pid}/cmdline`, 'utf8').split('\0').find((a) => a.startsWith('--user-data-dir='))!.slice('--user-data-dir='.length);
+    expect(existsSync(profile)).toBe(true);
+    const holders = outsideHolders(pid);
+    expect(holders.length).toBeGreaterThan(0);
+    for (const h of [pid, ...holders]) process.kill(h, 'SIGSTOP');
+    try {
+      const t0 = performance.now();
+      const stuck = await runner.close();
+      const s = (performance.now() - t0) / 1000;
+      expect(stuck).toEqual([]);
+      expect(s).toBeGreaterThan(29);
+      expect(s).toBeLessThan(40);
+      expect(existsSync(profile)).toBe(false);
+    } finally {
+      for (const h of holders) { try { process.kill(h, 'SIGKILL'); } catch { /* already gone */ } }
+      try { process.kill(-pid, 'SIGKILL'); } catch { /* group gone */ }
+    }
+  }, 60_000);
 });
