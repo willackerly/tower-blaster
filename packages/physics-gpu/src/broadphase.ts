@@ -135,7 +135,8 @@ export class Broadphase {
   private readonly vals: GPUBuffer;
   private readonly cellStart: GPUBuffer;
   private readonly cellEnd: GPUBuffer;
-  private readonly offsets: GPUBuffer;
+  /** u32 per body after encode(): start of body i's group in `pairs` (exclusive scan of its partner count). */
+  readonly offsets: GPUBuffer;
   private readonly uniform: GPUBuffer;
   private readonly sorter: RadixSorter;
   private readonly scanner: Scanner;

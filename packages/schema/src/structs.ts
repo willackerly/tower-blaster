@@ -66,4 +66,105 @@ export const Manifold = defineStruct(
   'Contact manifold for one body pair, written by the narrowphase.',
 );
 
-export const ALL_STRUCTS = [SimParams, Body, RenderInstance, Shape, Manifold];
+export const BodyProps = defineStruct(
+  'BodyProps',
+  [
+    ['inertia', 'vec3f', 'principal moments in the body frame'],
+    ['mass', 'f32'],
+    ['friction', 'f32'],
+    ['radius', 'f32', 'bounding sphere radius'],
+    ['pad0', 'u32'],
+    ['pad1', 'u32'],
+  ],
+  'Constant per-body properties for the solver, written by the host.',
+);
+
+export const SolverBody = defineStruct(
+  'SolverBody',
+  [
+    ['x0', 'vec3f', 'position at the start of the step'],
+    ['sweep', 'f32', 'speculative margin growth: how far the body can move this step'],
+    ['q0', 'vec4f', 'rotation at the start of the step'],
+    ['dp', 'vec3f', 'position minus x0 (the primal variable)'],
+    ['pad0', 'u32'],
+    ['phi', 'vec3f', 'rotation vector since q0 (the primal variable)'],
+    ['pad1', 'u32'],
+    ['tp', 'vec3f', 'inertial target for dp: h v + h^2 g'],
+    ['pad2', 'u32'],
+    ['tphi', 'vec3f', 'inertial target for phi: h w'],
+    ['pad3', 'u32'],
+    ['prevVel', 'vec3f', 'linear velocity one step earlier (adaptive warm start)'],
+    ['pad4', 'u32'],
+  ],
+  'Per-body AVBD solver state.',
+);
+
+export const SolverContact = defineStruct(
+  'SolverContact',
+  [
+    ['n', 'vec3f', 'normal from a to b, fixed over the step'],
+    ['mu', 'f32'],
+    ['t1', 'vec3f', 'first tangent (t2 = n x t1)'],
+    ['used', 'u32', '1 if this point is in use'],
+    ['ra', 'vec3f', "anchor in a's frame (world for the ground)"],
+    ['lambdaN', 'f32', 'normal force (<= 0 pushes apart)'],
+    ['rb', 'vec3f', "anchor in b's frame"],
+    ['kN', 'f32', 'normal penalty'],
+    ['raw', 'vec3f', "a's lever arm in world space at the start of the step"],
+    ['kT', 'f32', 'tangent penalty (shared by both rows)'],
+    ['rbw', 'vec3f', "b's lever arm"],
+    ['stick', 'u32', 'static friction held last step: anchors carried over'],
+    ['c0', 'vec3f', 'constraint at the start of the step along n, t1, t2'],
+    ['a', 'u32', 'body a, 0xffffffff for the ground'],
+    ['lt', 'vec2f', 'friction force along t1, t2'],
+    ['b', 'u32'],
+    ['pad', 'u32'],
+  ],
+  'One AVBD contact point (three rows), four per manifold.',
+);
+
+export const SolverParams = defineStruct(
+  'SolverParams',
+  [
+    ['gravity', 'vec3f'],
+    ['dt', 'f32'],
+    ['n', 'u32', 'bodies this step'],
+    ['prevN', 'u32', 'bodies last step (persistence lookups)'],
+    ['cur', 'u32', 'history half written this step (0 or 1)'],
+    ['iterations', 'u32'],
+    ['beta', 'f32'],
+    ['gamma', 'f32'],
+    ['penaltyMin', 'f32'],
+    ['penaltyMax', 'f32'],
+    ['margin', 'f32'],
+    ['slop', 'f32'],
+    ['stickThreshold', 'f32'],
+    ['matchDistance', 'f32'],
+    ['maxAngularSpeed', 'f32'],
+    ['maxSweep', 'f32'],
+    ['groundY', 'f32'],
+    ['hasGround', 'u32'],
+    ['groundFriction', 'f32'],
+    ['maxPairs', 'u32'],
+    ['capacity', 'u32'],
+    ['slidingHessian', 'u32'],
+    ['sweepOn', 'u32'],
+    ['pad0', 'u32'],
+    ['pad1', 'u32'],
+    ['pad2', 'u32'],
+  ],
+  'Per-step uniforms of the GPU AVBD solver.',
+);
+
+export const ColorParams = defineStruct(
+  'ColorParams',
+  [
+    ['color', 'u32', 'colour swept by this primal dispatch'],
+    ['alpha', 'f32', '1 in the main iterations, 0 in post-stabilization'],
+    ['pad0', 'u32'],
+    ['pad1', 'u32'],
+  ],
+  'Per-dispatch uniforms (bound with a dynamic offset).',
+);
+
+export const ALL_STRUCTS = [SimParams, Body, RenderInstance, Shape, Manifold, BodyProps, SolverBody, SolverContact, SolverParams, ColorParams];

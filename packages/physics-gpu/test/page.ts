@@ -5,7 +5,9 @@ import { Body, Manifold, readStruct, Shape, writeStruct } from '@tb/schema';
 import type { BodyDesc, Quat, Vec3 } from '@tb/engine-api';
 import { buildScenario } from '@tb/scenarios';
 import { bodiesAt } from '@tb/engine-api';
-import { Broadphase, Coloring, MAX_COLORS, Narrowphase } from '../src/index.ts';
+import { Broadphase, Coloring, GpuAvbdEngine, MAX_COLORS, Narrowphase } from '../src/index.ts';
+import type { AvbdParams } from '@tb/physics-ref';
+import type { SceneDesc } from '@tb/engine-api';
 import { colorGraph } from '@tb/physics-ref';
 
 export interface BroadCase {
@@ -370,4 +372,115 @@ export async function coloring(c: ColorCase) {
     maxDegree: Math.max(0, ...adj.map((s) => s.size)), wallMs,
   };
 }
+
+export interface PlainSnapshot { step: number; pos: number[]; rot: number[]; linVel: number[]; angVel: number[] }
+
+/** Run a scene on the GPU engine; snapshot every `every` steps (and at the end). */
+export async function simulateGpu(scene: SceneDesc, steps: number, params: Partial<AvbdParams> = {}, every = 0) {
+  const { device } = await createDevice();
+  device.pushErrorScope('validation');
+  const e = new GpuAvbdEngine(params, { device });
+  await e.init(scene);
+  const snaps: PlainSnapshot[] = [];
+  const take = async () => {
+    const s = await e.snapshot();
+    snaps.push({ step: e.stepIndex, pos: [...s.pos], rot: [...s.rot], linVel: [...s.linVel], angVel: [...s.angVel] });
+  };
+  await take();
+  const t0 = performance.now();
+  let maxColors = 0, worst = { pairsRequired: 0, pairsWritten: 0, uncolored: 0, colorOverflow: 0 };
+  for (let i = 0; i < steps; i++) {
+    e.step();
+    if (every && (i + 1) % every === 0 && i + 1 < steps) {
+      await take();
+      const d = await e.diagnostics();
+      maxColors = Math.max(maxColors, d.colors);
+      if (d.pairsRequired > d.pairsWritten || d.uncolored || d.colorOverflow) worst = d;
+    }
+  }
+  await take();
+  const wallMs = performance.now() - t0;
+  const d = await e.diagnostics();
+  maxColors = Math.max(maxColors, d.colors);
+  if (d.pairsRequired > d.pairsWritten || d.uncolored || d.colorOverflow) worst = d;
+  const error = await device.popErrorScope();
+  e.dispose();
+  device.destroy();
+  return { error: error?.message ?? null, snaps, maxColors, worst, wallMs };
+}
+
+
+/**
+ * Step a scene and check the solver's pair history (AvbdSolver.match): for
+ * every pair this step, prev must name its slot in last step's pair list
+ * (or NONE when the pair is new) and that slot's manifold axis. Then check
+ * the narrowphase used it: each box-box pair's axis must be the reference
+ * manifold's from the same f32 state given that hint (hinted counts the
+ * pairs where the hint changed the reference's answer). presenceMismatch
+ * counts pairs where only one side found a manifold: rounding at a clip
+ * plane, which the narrowphase tests bound.
+ */
+export async function pairHistory(scene: SceneDesc, steps: number, opts: { pairsPerBody?: number } = {}) {
+  const { device } = await createDevice();
+  device.pushErrorScope('validation');
+  const e = new GpuAvbdEngine({}, { device, pairsPerBody: opts.pairsPerBody });
+  await e.init(scene);
+  type Parts = { bodies: GPUBuffer; sweep: GPUBuffer; bp: { pairs: GPUBuffer; total: GPUBuffer }; np: { manifolds: GPUBuffer }; prev: GPUBuffer };
+  const parts = (e as unknown as { parts: Parts }).parts;
+  const shapes = bodiesAt(scene, Number.MAX_SAFE_INTEGER).map((b) => b.shape);
+  const margin = Math.fround((e as unknown as { params: AvbdParams }).params.margin);
+  const state = async () => {
+    const v = new DataView(await readBuffer(device, parts.bodies));
+    return Array.from({ length: (e as unknown as { n: number }).n }, (_, i) => { const b = readStruct(v, Body, i); return { pos: [...b.pos!] as Vec3, rot: [...b.rot!] as Quat }; });
+  };
+  const read = async () => {
+    const [pairs, total, mf, prev, sw] = await Promise.all([parts.bp.pairs, parts.bp.total, parts.np.manifolds, parts.prev, parts.sweep].map((b) => readBuffer(device, b)));
+    const t = new Uint32Array(total!), count = t[3]!, pv = new Uint32Array(pairs!), mv = new DataView(mf!), hv = new Uint32Array(prev!);
+    const list = Array.from({ length: count }, (_, k) => {
+      const m = readStruct(mv, Manifold, k);
+      return { a: pv[2 * k]!, b: pv[2 * k + 1]!, count: m.count![0]!, axis: m.axis![0]!, prevSlot: hv[2 * k]!, prevAxis: hv[2 * k + 1]! };
+    });
+    return { list, sweep: new Float32Array(sw!), overflow: t[5]! > t[3]! };
+  };
+  let wrong = 0, found = 0, missed = 0, axes = 0, checked = 0, axisMismatch = 0, presenceMismatch = 0, hinted = 0, overflowSteps = 0;
+  const examples: unknown[] = [];
+  let last = (await read()).list;
+  for (let s = 0; s < steps; s++) {
+    const before = await state();
+    e.step();
+    const { list: cur, sweep, overflow } = await read();
+    if (overflow) overflowSteps++;
+    // The narrowphase's axis given its hint, against the reference given the same hint.
+    for (const p of cur) {
+      if (shapes[p.a]!.kind !== 'box' || shapes[p.b]!.kind !== 'box') continue;
+      const A = before[p.a]!, B = before[p.b]!, m = Math.fround(Math.fround(margin + sweep[p.a]!) + sweep[p.b]!);
+      const ref = shapeManifold(shapes[p.a]!, A.pos, A.rot, shapes[p.b]!, B.pos, B.rot, m, true, p.prevAxis);
+      const plain = shapeManifold(shapes[p.a]!, A.pos, A.rot, shapes[p.b]!, B.pos, B.rot, m, true, NO_AXIS);
+      const want = ref ? ref.axis : NONE_U32, got = p.count > 0 ? p.axis : NONE_U32;
+      checked++;
+      if (got !== want) {
+        if (got === NONE_U32 || want === NONE_U32) presenceMismatch++; else axisMismatch++;
+        if (examples.length < 3) examples.push({ step: s, a: p.a, b: p.b, got, want, hint: p.prevAxis, margin: m, A, B });
+      }
+      if (want !== (plain ? plain.axis : NONE_U32)) hinted++;
+    }
+    if (s > 0) { // the first step has no history
+      const index = new Map(last.map((p, k) => [`${p.a},${p.b}`, k]));
+      for (const p of cur) {
+        const k = index.get(`${p.a},${p.b}`);
+        if (k === undefined) { if (p.prevSlot !== NONE_U32) wrong++; continue; }
+        if (p.prevSlot === NONE_U32) { missed++; continue; }
+        const q = last[p.prevSlot]!;
+        const axis = q.count > 0 ? q.axis : NONE_U32;
+        if (p.prevSlot !== k || q.a !== p.a || q.b !== p.b || p.prevAxis !== axis) wrong++;
+        else { found++; if (axis !== NONE_U32) axes++; }
+      }
+    }
+    last = cur;
+  }
+  const error = await device.popErrorScope();
+  e.dispose(); device.destroy();
+  return { error: error?.message ?? null, wrong, found, missed, axes, checked, axisMismatch, presenceMismatch, hinted, overflowSteps, examples };
+}
+const NONE_U32 = 0xffffffff;
 
