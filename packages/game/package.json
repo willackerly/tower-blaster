@@ -11,6 +11,7 @@
     "@tb/geom": "workspace:*",
     "@tb/gpu": "workspace:*",
     "@tb/keystone": "workspace:*",
+    "@tb/physics-gpu": "workspace:*",
     "@tb/render": "workspace:*",
     "@tb/viewer": "workspace:*"
   }

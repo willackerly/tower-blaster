@@ -1,15 +1,16 @@
-// Keystone, playable: the rules from @tb/keystone on Rapier, drawn by
-// @tb/render. Physics only runs while a shot is in play, at a pace the
-// Pacer sets (hit-stop, slow motion, fast-forward); between shots the world
-// is frozen, so a session is exactly (level, shots) and replays headless.
-import { RapierEngine } from '@tb/adapter-rapier';
-import type { BodyDesc, Vec3 } from '@tb/engine-api';
-import { type AmmoKind, type CompiledLevel, compileLevel, Driver, type Feedback, LEVELS, type LevelScore, type Shot, shotToSpawn, TIER_NAMES } from '@tb/keystone';
+// Keystone, playable: the rules from @tb/keystone on Rapier or the GPU
+// solver (?engine=gpu), drawn by @tb/render. Physics only runs while a shot
+// is in play, at a pace the Pacer sets (hit-stop, slow motion, fast-forward);
+// between shots the world is frozen, so a session is exactly (level, shots)
+// and replays headless.
+import type { BodyDesc, PhysicsEngine, Vec3 } from '@tb/engine-api';
+import { type AmmoKind, type CompiledLevel, compileLevel, Driver, type Feedback, LEVELS, type LevelScore, runSession, type Shot, shotToSpawn, snapshotHash, TIER_NAMES } from '@tb/keystone';
 import { clampPitch, eyeOf, frame, type Orbit, rayThrough, viewProj, Window } from '@tb/viewer';
 import { createDevice } from '@tb/gpu';
 import { HAZY_DAY, LOOKS, type PixelStats, Renderer, SnapshotSource } from '@tb/render';
 import { type Aimed, azFromYaw, pick, previewBeads, shotFor, SUBSTEPS } from './aim.ts';
 import { Synth, type Voice, voicesFor } from './audio.ts';
+import { type EngineKind, engineKind, makeEngine } from './engines.ts';
 import { hudHtml, nextSelection, rackChips, resultHtml } from './hud.ts';
 import { CameraJuice, contactJuice } from './juice.ts';
 import { Pacer } from './pacing.ts';
@@ -18,6 +19,7 @@ import { beadOverlay, regrowDuration, regrowScales, structureTints, TINT } from 
 interface GameHandle {
   status: 'loading' | 'running' | 'error';
   error?: string;
+  engine: EngineKind | '';
   level: string;
   phase: string;
   /** Aiming, and the Regrow animation has finished: a shot can be fired. */
@@ -38,14 +40,20 @@ interface GameHandle {
   load(id: string): Promise<void>;
   retry(): Promise<void>;
   capture(keepPixels?: boolean): Promise<PixelStats | null>;
+  /** Physics state now: step, phase and a hash of every pose. */
+  state(): SessionState;
+  /** The same shots from the same level on a fresh engine, built as the live one, on this device. */
+  replay(shots: Shot[]): Promise<SessionState>;
 }
+interface SessionState { step: number; phase: string; strokes: number; hash: string }
 declare global { interface Window { __game: GameHandle } }
 
 const $ = (id: string) => document.getElementById(id)!;
 const canvas = $('c') as HTMLCanvasElement, hudEl = $('hud'), bannerEl = $('banner'), resultEl = $('result'), errorEl = $('error');
 const handle: GameHandle = {
-  status: 'loading', level: '', phase: 'loading', ready: false, frames: 0, stepIndex: 0, strokes: 0, bodies: 0, fast: false, result: null, counts: {},
+  status: 'loading', engine: '', level: '', phase: 'loading', ready: false, frames: 0, stepIndex: 0, strokes: 0, bodies: 0, fast: false, result: null, counts: {},
   fire: () => false, aim: () => null, select: () => false, load: async () => {}, retry: async () => {}, capture: async () => null,
+  state: () => ({ step: 0, phase: 'loading', strokes: 0, hash: '' }), replay: async () => ({ step: 0, phase: 'loading', strokes: 0, hash: '' }),
 };
 window.__game = handle;
 
@@ -87,6 +95,8 @@ async function main() {
     return i;
   };
   let levelIdx = levelOf(q.get('level') ?? LEVELS[0]!.id);
+  const kind = engineKind(q.get('engine'));
+  handle.engine = kind;
 
   const { device } = await createDevice({ timestamps: false });
   const renderer = new Renderer(device, offscreen ? { size: [640, 400] } : { canvas });
@@ -96,9 +106,14 @@ async function main() {
   renderer.look = LOOKS[q.get('look') ?? ''] ?? HAZY_DAY;
   device.lost.then((info) => fail(`GPU device lost: ${info.message}`));
   device.addEventListener('uncapturederror', (e) => fail((e as GPUUncapturedErrorEvent).error.message));
-  const engine = new RapierEngine();
+  // One engine per level load: the GPU engine sizes its buffers for the level's rack at init.
+  let engine: PhysicsEngine | null = null;
   // The arc preview integrates as the engine does, so it is exact on any engine.
-  const substeps = engine.info.integrator?.substeps ?? SUBSTEPS;
+  let substeps = SUBSTEPS;
+  // Level loads and physics steps take turns: a load disposes the engine, and
+  // a GPU step may still be awaiting its readback.
+  let lock: Promise<unknown> = Promise.resolve();
+  const exclusive = <T>(fn: () => Promise<T>): Promise<T> => { const r = lock.then(fn); lock = r.catch(() => {}); return r; };
   const pacer = new Pacer(), juice = new CameraJuice(), stepMs = new Window(60);
   let synth: Synth | null = null;
   let muted = false;
@@ -121,9 +136,16 @@ async function main() {
   const aspect = () => (offscreen ? 640 / 400 : canvas.width / Math.max(1, canvas.height));
   const courses = () => Math.ceil(c.height / c.frame.unit);
 
-  async function load(i: number, retry = false) {
+  function load(i: number, retry = false): Promise<void> {
+    return exclusive(() => loadNow(i, retry));
+  }
+
+  async function loadNow(i: number, retry: boolean) {
     levelIdx = i;
     c = compileLevel(LEVELS[i]!);
+    engine?.dispose();
+    engine = makeEngine(kind, c, device);
+    substeps = engine.info.integrator?.substeps ?? SUBSTEPS;
     driver = new Driver(engine, c);
     await driver.reset();
     descs = [...c.scene.bodies];
@@ -221,12 +243,12 @@ async function main() {
   /** Mirror state onto the test handle; called each frame and right after anything that changes it. */
   function sync() {
     const s = driver.session;
-    Object.assign(handle, { phase: s.phase, ready: s.phase === 'aiming' && regrowT === null, stepIndex: engine.stepIndex, strokes: s.strokes, bodies: driver.snapshot.count });
+    Object.assign(handle, { phase: s.phase, ready: s.phase === 'aiming' && regrowT === null, stepIndex: driver.engine.stepIndex, strokes: s.strokes, bodies: driver.snapshot.count });
   }
 
   function fire(shot: Shot): boolean {
     if (regrowT !== null || !driver.session.canFire(shot.ammo)) return false;
-    const step = engine.stepIndex;
+    const step = driver.engine.stepIndex;
     onFeedback(driver.fire(shot));
     descs.push(shotToSpawn(c.frame, shot, step).body);
     fxSlots = descs.length;
@@ -248,6 +270,14 @@ async function main() {
   handle.aim = (x, y) => { pointer = [x, y]; updateAim(); return aimed; };
   handle.load = (id) => load(levelOf(id)).catch(fail);
   handle.retry = () => load(levelIdx, true).catch(fail);
+  handle.state = () => ({ step: driver.engine.stepIndex, phase: driver.session.phase, strokes: driver.session.strokes, hash: snapshotHash(driver.snapshot) });
+  handle.replay = async (shots) => {
+    const e = makeEngine(kind, c, device);
+    try {
+      const r = await runSession(e, c, shots);
+      return { step: r.steps, phase: r.session.phase, strokes: r.session.strokes, hash: snapshotHash(r.snapshot) };
+    } finally { e.dispose(); }
+  };
 
   // Audio needs a user gesture before it may start.
   const wakeAudio = () => {
@@ -354,7 +384,8 @@ async function main() {
       if (done) { regrowT = null; aimDirty = true; }
     }
     const running = driver.session.phase === 'running';
-    if (running) {
+    if (running) await exclusive(async () => {
+      if (driver.session.phase !== 'running') return; // a load got in first
       const n = pacer.stepsThisFrame(frameMs, c.scene.dt, { fastForward: fastHeld || handle.fast, stepMs: stepMs.quantile(0.5), budgetMs: 10 });
       for (let i = 0; i < n; i++) {
         const t0 = performance.now();
@@ -364,7 +395,7 @@ async function main() {
         if (pacer.frozen || driver.session.phase !== 'running') break;
       }
       if (n > 0) source.update(driver.snapshot, descs);
-    }
+    });
     if (aimDirty) updateAim();
     sync();
 
@@ -375,8 +406,14 @@ async function main() {
     const want = pendingCapture;
     pendingCapture = null;
     const fp = { viewProj: viewProj(view, aspect()), eye: eyeOf(view), focus: orbit.target, time: now / 1000, groundY: 0, alpha: running ? pacer.alpha(c.scene.dt) : 1 };
-    const stats = await renderer.render(fp, !!want, want?.keep);
-    if (want) want.resolve(stats);
+    // Offscreen (tests), nobody sees a frame and nothing throttles requestAnimationFrame
+    // to the GPU: on SwiftShader a frame takes up to a second, so frames would queue
+    // without bound and every readback (a step's, a replay's) wait behind them.
+    // There, draw only for a capture.
+    if (!offscreen || want) {
+      const stats = await renderer.render(fp, !!want, want?.keep);
+      if (want) want.resolve(stats);
+    }
     if (voices.length) { synth?.play(voices); voices.length = 0; }
     drawHud();
     handle.frames++;
