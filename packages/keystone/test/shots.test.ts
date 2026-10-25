@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import fc from 'fast-check';
-import { massOf } from '@tb/engine-api';
+import { freeFlight, massOf } from '@tb/engine-api';
 import { aimAt, ammoKE, closestApproach, compileLevel, decodeRecord, encodeRecord, GRAVITY, L1, launchDir, predictArc, type SessionRecord, type Shot, shotToSpawn, speedOf } from '@tb/keystone';
 
 const c = compileLevel(L1);
@@ -38,6 +38,16 @@ describe('shots', () => {
     expect(ammoKE(m)).toBeCloseTo(0.5 * massOf(m.body) * 15 * 15, 9);
     const d = shotToSpawn(f, { ammo: 'drop', x: 0, z: 0 }, 0);
     expect(ammoKE(d)).toBeCloseTo(massOf(d.body) * GRAVITY * L1.launcher.dropY * f.unit, 9);
+  });
+  it("predictArc is the contract's freeFlight, for AVBD's 1 substep and Rapier's 4", () => {
+    const ev = shotToSpawn(f, { ammo: 'marble', az: 0, y: 8, yaw: 0, pitch: 350, power: 80 }, 0);
+    for (const n of [1, 4]) {
+      const arc = predictArc(ev, [0, -GRAVITY, 0], 1 / 60, 90, n);
+      for (const k of [1, 30, 90]) {
+        const ff = freeFlight(ev.body.pos, ev.body.linVel, [0, -GRAVITY, 0], 1 / 60, n, k);
+        expect(Array.from(arc.subarray(3 * k, 3 * k + 3))).toEqual(ff.pos);
+      }
+    }
   });
   it('predictArc is semi-implicit Euler: v += g dt, then x += v dt', () => {
     const ev = shotToSpawn(f, { ammo: 'marble', az: 0, y: 4, yaw: 0, pitch: 300, power: 50 }, 0);

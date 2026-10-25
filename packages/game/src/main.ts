@@ -8,7 +8,7 @@ import { type AmmoKind, type CompiledLevel, compileLevel, Driver, type Feedback,
 import { clampPitch, eyeOf, frame, type Orbit, rayThrough, viewProj, Window } from '@tb/viewer';
 import { createDevice } from '@tb/gpu';
 import { HAZY_DAY, LOOKS, type PixelStats, Renderer, SnapshotSource } from '@tb/render';
-import { type Aimed, azFromYaw, pick, previewBeads, shotFor } from './aim.ts';
+import { type Aimed, azFromYaw, pick, previewBeads, shotFor, SUBSTEPS } from './aim.ts';
 import { Synth, type Voice, voicesFor } from './audio.ts';
 import { hudHtml, nextSelection, rackChips, resultHtml } from './hud.ts';
 import { CameraJuice, contactJuice } from './juice.ts';
@@ -97,6 +97,8 @@ async function main() {
   device.lost.then((info) => fail(`GPU device lost: ${info.message}`));
   device.addEventListener('uncapturederror', (e) => fail((e as GPUUncapturedErrorEvent).error.message));
   const engine = new RapierEngine();
+  // The arc preview integrates as the engine does, so it is exact on any engine.
+  const substeps = engine.info.integrator?.substeps ?? SUBSTEPS;
   const pacer = new Pacer(), juice = new CameraJuice(), stepMs = new Window(60);
   let synth: Synth | null = null;
   let muted = false;
@@ -164,8 +166,8 @@ async function main() {
     if (!pointer || !selected || driver.session.phase !== 'aiming' || regrowT !== null) return;
     const hit = pick(rayThrough(orbit, aspect(), pointer[0], pointer[1]), driver.snapshot, c);
     if (!hit) return;
-    aimed = shotFor(c, selected, azFromYaw(orbit.yaw), power, hit.point);
-    if (aimed) beads = previewBeads(c, aimed.shot, hit.point);
+    aimed = shotFor(c, selected, azFromYaw(orbit.yaw), power, hit.point, substeps);
+    if (aimed) beads = previewBeads(c, aimed.shot, hit.point, substeps);
   }
 
   function onFeedback(fb: Feedback[]) {

@@ -107,4 +107,21 @@ describe('SUBSTEPS', () => {
   it('matches the substeps Rapier reports', () => {
     expect(new RapierEngine().info.integrator?.substeps).toBe(SUBSTEPS);
   });
+  it('aims and previews with the substeps it is given (AVBD reports 1)', () => {
+    const target: Vec3 = [-1.5 * p, 5.5 * h, 0];
+    const a1 = shotFor(c, 'marble', 360, 100, target, 1)!, a4 = shotFor(c, 'marble', 360, 100, target, 4)!;
+    const arc1 = predictArc(shotToSpawn(c.frame, a1.shot, 0), [0, -GRAVITY, 0], c.scene.dt, 240, 1);
+    expect(closestApproach(arc1, target)).toBeCloseTo(a1.error, 9);
+    // Every bead is a point of the one-substep arc, and the preview differs from Rapier's.
+    const beads = previewBeads(c, a1.shot, target, 1);
+    for (let b = 0; b < beads.length; b += 3) {
+      let best = Infinity;
+      for (let k = 0; k < arc1.length; k += 3) best = Math.min(best, Math.hypot(beads[b]! - arc1[k]!, beads[b + 1]! - arc1[k + 1]!, beads[b + 2]! - arc1[k + 2]!));
+      expect(best).toBe(0);
+    }
+    const beads4 = previewBeads(c, a1.shot, target, 4);
+    expect(Array.from(beads4.subarray(0, 3))).toEqual(Array.from(beads.subarray(0, 3))); // same spawn point
+    expect(beads4.some((v, i) => i < beads.length && Math.abs(v - beads[i]!) > 1e-3)).toBe(true);
+    expect(a4.reachable && a1.reachable).toBe(true);
+  });
 });

@@ -5,7 +5,10 @@ import type { Quat, Snapshot, Vec3 } from '@tb/engine-api';
 import { rotate } from '@tb/geom';
 import { aimAt, type AmmoKind, type CompiledLevel, GRAVITY, predictArc, type Shot, shotToSpawn } from '@tb/keystone';
 
-/** Rapier integrates in one substep per solver iteration (4 by default). */
+/**
+ * Substeps per step for the arc, when the engine doesn't report them
+ * (EngineInfo.integrator): Rapier's default of one per solver iteration.
+ */
 export const SUBSTEPS = 4;
 /** A target the arc misses by more than this (m) is out of reach at this power. */
 export const REACH = 0.15;
@@ -81,7 +84,7 @@ export function pick(r: Ray, s: Snapshot, c: CompiledLevel, groundY = 0): Hit | 
 export interface Aimed { shot: Shot; error: number; reachable: boolean }
 
 /** The quantised shot of `ammo` that best reaches `target` from azimuth `az` at `power`. */
-export function shotFor(c: CompiledLevel, ammo: AmmoKind, az: number, power: number, target: Vec3): Aimed | null {
+export function shotFor(c: CompiledLevel, ammo: AmmoKind, az: number, power: number, target: Vec3, substeps = SUBSTEPS): Aimed | null {
   const f = c.frame, ph = f.pitch * f.unit;
   if (ammo === 'drop') {
     const shot: Shot = { ammo, x: Math.round((4 * target[0]) / ph), z: Math.round((4 * target[2]) / ph) };
@@ -89,7 +92,7 @@ export function shotFor(c: CompiledLevel, ammo: AmmoKind, az: number, power: num
     return { shot, error: err, reachable: true };
   }
   if (ammo === 'cue') return null; // no starter level racks a cue yet
-  const a = aimAt(f, ammo, { az, y: Math.round(f.launcher.y * 4), power }, target, { substeps: SUBSTEPS });
+  const a = aimAt(f, ammo, { az, y: Math.round(f.launcher.y * 4), power }, target, { substeps });
   return { shot: a.shot, error: a.error, reachable: a.error <= REACH };
 }
 
@@ -97,7 +100,7 @@ export function shotFor(c: CompiledLevel, ammo: AmmoKind, az: number, power: num
  * Bead positions along a shot's predicted flight, ending where it passes
  * closest to `target` (or where it reaches the ground): packed xyz.
  */
-export function previewBeads(c: CompiledLevel, shot: Shot, target: Vec3, maxBeads = 40, every = 2): Float64Array {
+export function previewBeads(c: CompiledLevel, shot: Shot, target: Vec3, substeps = SUBSTEPS, maxBeads = 40, every = 2): Float64Array {
   const ev = shotToSpawn(c.frame, shot, 0);
   if (shot.ammo === 'drop') {
     const top = ev.body.pos[1], bottom = Math.min(top, target[1]), n = Math.min(maxBeads, Math.max(2, Math.ceil((top - bottom) / 0.3)));
@@ -105,7 +108,7 @@ export function previewBeads(c: CompiledLevel, shot: Shot, target: Vec3, maxBead
     for (let k = 0; k < n; k++) out.set([ev.body.pos[0], top - ((top - bottom) * k) / (n - 1), ev.body.pos[2]], 3 * k);
     return out;
   }
-  const steps = 240, arc = predictArc(ev, [0, -GRAVITY, 0], c.scene.dt, steps, SUBSTEPS);
+  const steps = 240, arc = predictArc(ev, [0, -GRAVITY, 0], c.scene.dt, steps, substeps);
   // Last step before the arc starts moving away from the target, or hits the ground.
   let end = steps, best = Infinity;
   for (let k = 0; k <= steps; k++) {
