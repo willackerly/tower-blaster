@@ -8,7 +8,7 @@ import { chromium, type Browser, type Page } from 'playwright';
 import { createServer, type ViteDevServer } from 'vite';
 import { RapierEngine } from '@tb/adapter-rapier';
 import { requireWebGPU, WEBGPU_ARGS } from '@tb/testkit';
-import { compileLevel, L1, runSession, type Shot } from '@tb/keystone';
+import { compileLevel, L1, L4, runSession, type Shot } from '@tb/keystone';
 
 let server: ViteDevServer | null = null;
 let browser: Browser | null = null;
@@ -32,14 +32,15 @@ async function open(search: string): Promise<{ page: Page; errors: string[] } | 
   const errors: string[] = [];
   page.on('pageerror', (e) => errors.push(e.message));
   await page.goto(new URL(search, origin).toString());
-  await page.waitForFunction(() => window.__game?.status !== 'loading', undefined, { timeout: 60_000 });
+  await page.waitForFunction(() => window.__game?.status !== 'loading', undefined, { timeout: 60_000, polling: 250 });
   const st = await page.evaluate(() => ({ s: window.__game.status, e: window.__game.error }));
   if (st.s === 'error' && /WebGPU|adapter/.test(st.e ?? '') && !requireWebGPU()) { await page.close(); return null; }
   expect(st).toEqual({ s: 'running', e: undefined });
   return { page, errors };
 }
 
-const ready = (page: Page) => page.waitForFunction(() => window.__game.ready || window.__game.result !== null, undefined, { timeout: 60_000 });
+// Timer polling: requestAnimationFrame polling starves while SwiftShader is busy with the GPU solver.
+const ready = (page: Page, timeout = 60_000) => page.waitForFunction(() => window.__game.ready || window.__game.result !== null, undefined, { timeout, polling: 250 });
 
 describe('game page', () => {
   it('plays the L1 par line to a result card that matches the headless score', async (ctx) => {
@@ -76,6 +77,10 @@ describe('game page', () => {
     // Same shots, headless, same engine: the same score to the point.
     const r = await runSession(new RapierEngine(), compileLevel(L1), shots);
     expect(result.score).toEqual(r.session.score);
+    // And the page's own replay agrees, pose for pose.
+    const live = await page.evaluate(() => window.__game.state());
+    expect(live).toMatchObject({ step: r.steps, phase: 'cleared' });
+    expect(await page.evaluate((s) => window.__game.replay(s), shots)).toEqual(live);
 
     // Retry regrows the level and resets the rack.
     await page.keyboard.press('r');
@@ -83,6 +88,43 @@ describe('game page', () => {
     expect(await page.evaluate(() => ({ phase: window.__game.phase, strokes: window.__game.strokes, result: window.__game.result }))).toEqual({ phase: 'aiming', strokes: 0, result: null });
     expect(await page.locator('#result').isVisible()).toBe(false);
     expect(errors).toEqual([]);
+    await page.close();
+  });
+
+  // L4 (38 bodies, one anvil drop) rather than L1: SwiftShader runs the GPU
+  // solver at a few hundred ms per step, so this test takes minutes as it is.
+  it('plays on the GPU solver, and a replay on the same device is bit-identical', async (ctx) => {
+    if (!browser) return ctx.skip();
+    const o = await open('/?level=L4&offscreen=1&engine=gpu');
+    if (!o) return ctx.skip();
+    const { page, errors } = o;
+    await ready(page);
+    expect(await page.evaluate(() => ({ engine: window.__game.engine, bodies: window.__game.bodies }))).toEqual({ engine: 'gpu', bodies: 38 });
+    // The arc preview follows the GPU's one substep and still finds the structure.
+    await page.evaluate(() => window.__game.select('marble'));
+    expect((await page.evaluate(() => window.__game.aim(0, 0)))?.reachable).toBe(true);
+    await page.evaluate(() => { window.__game.fast = true; });
+    // The par line was pinned on Rapier, so it need not clear here: compare states, not scores.
+    const shots = L4.solutions!.par as Shot[];
+    for (const shot of shots) {
+      await ready(page);
+      expect(await page.evaluate((s) => window.__game.fire(s), shot)).toBe(true);
+    }
+    await page.waitForFunction((n) => window.__game.result !== null || (window.__game.ready && window.__game.strokes === n), shots.length, { timeout: 600_000, polling: 250 });
+    const live = await page.evaluate(() => window.__game.state());
+    expect(live.strokes).toBe(shots.length);
+    expect(live.step).toBeGreaterThan(90);
+    expect(await page.evaluate((s) => window.__game.replay(s), shots)).toEqual(live);
+    expect(errors).toEqual([]);
+    await page.close();
+  }, 1_200_000);
+
+  it('names the engines when ?engine= is unknown', async (ctx) => {
+    if (!browser) return ctx.skip();
+    const page = await browser.newPage();
+    await page.goto(new URL('/?level=L1&engine=physx&offscreen=1', origin).toString());
+    await page.waitForFunction(() => window.__game?.status === 'error', undefined, { timeout: 60_000 });
+    expect(await page.locator('#error').innerText()).toMatch(/unknown engine physx: use rapier or gpu/);
     await page.close();
   });
 

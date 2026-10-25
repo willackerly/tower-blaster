@@ -117,6 +117,9 @@ importers:
       '@tb/keystone':
         specifier: workspace:*
         version: link:../keystone
+      '@tb/physics-gpu':
+        specifier: workspace:*
+        version: link:../physics-gpu
       '@tb/render':
         specifier: workspace:*
         version: link:../render
