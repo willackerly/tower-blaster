@@ -168,6 +168,56 @@ fn compose(@builtin(global_invocation_id) id: vec3u) {
 }
 `;
 
+/**
+ * Shading from the volume (design step 13, taps): occlusion from three
+ * taps along the normal (0.3 m at level 0, 0.9 m at 1, 2.0 m at 2),
+ * ao = product of (1 - k_i * max(0, occ_i - own_i)), and sky visibility
+ * from G at p + 0.6n + 0.5 m up. own_i is the shaded body's own share of
+ * the tap, exact for its footprint: a level's texel is the mean over its
+ * voxel and both the overlap and the trilinear weights are separable, so
+ * own = product over axes of (w0 o0 + w1 o1), where o0 and o1 are the
+ * footprint's overlaps with the two texels the tap blends. Without it
+ * every body darkens itself. Outside the grid a tap is empty.
+ * The includer declares aoVol (texture_3d<f32>) and aoSamp (filtering).
+ */
+export const AO_SAMPLE_WGSL = /* wgsl */ `
+struct AoView { origin: vec3f, invVoxel: f32, dims: vec3f, on: f32, k: vec4f }
+
+fn aoOwn(s: vec3f, c: vec3f, e: vec3f) -> f32 {
+  let j0 = floor(s - 0.5);
+  let w1 = s - 0.5 - j0;
+  let o0 = clamp(min(c + e, j0 + 1.0) - max(c - e, j0), vec3f(0.0), vec3f(1.0));
+  let o1 = clamp(min(c + e, j0 + 2.0) - max(c - e, j0 + 1.0), vec3f(0.0), vec3f(1.0));
+  let t = (1.0 - w1) * o0 + w1 * o1;
+  return t.x * t.y * t.z;
+}
+
+// Occupancy at camera-relative p from level, minus the own footprint (centre c, half extents e, metres).
+fn aoTap(av: AoView, p: vec3f, level: u32, c: vec3f, e: vec3f) -> f32 {
+  let scale = av.invVoxel / f32(1u << level);
+  let dims = av.dims / f32(1u << level);
+  let s = (p - av.origin) * scale;
+  if (any(s < vec3f(0.0)) || any(s > dims)) { return 0.0; }
+  let occ = textureSampleLevel(aoVol, aoSamp, s / dims, f32(level)).r;
+  return max(occ - aoOwn(s, (c - av.origin) * scale, e * scale), 0.0);
+}
+
+// (occlusion, sky visibility) at a surface point: rel and c camera-relative, n unit, foot from aoFoot (0 for none).
+fn aoAt(av: AoView, rel: vec3f, n: vec3f, c: vec3f, foot: vec3f) -> vec2f {
+  if (av.on == 0.0) { return vec2f(1.0); }
+  var a = (1.0 - av.k.x * aoTap(av, rel + 0.3 * n, 0u, c, foot));
+  a *= 1.0 - av.k.y * aoTap(av, rel + 0.9 * n, 1u, c, foot);
+  a *= 1.0 - av.k.z * aoTap(av, rel + 2.0 * n, 2u, c, foot);
+  let sp = (rel + 0.6 * n + vec3f(0.0, 0.5, 0.0) - av.origin) * av.invVoxel;
+  var sky = 1.0;
+  if (all(sp >= vec3f(0.0)) && all(sp <= av.dims)) { sky = textureSampleLevel(aoVol, aoSamp, sp / av.dims, 0.0).g; }
+  return vec2f(a, mix(1.0, sky, av.k.w));
+}
+`;
+
+/** Tap strengths (0.3, 0.9, 2.0 m) and the sky term's weight. */
+export const AO_K: [number, number, number, number] = [0.6, 0.5, 0.35, 1];
+
 // ---------------------------------------------------------------- CPU twins
 
 const fr = Math.fround;
@@ -257,6 +307,8 @@ export class AoVolume {
   volume: GPUTexture;
   /** Sky visibility falloff, read each frame. */
   skyK = AO_SKY_K;
+  /** Shading strengths (AO_K), read each frame by the renderer. */
+  k: [number, number, number, number] = [...AO_K];
   private readonly params: GPUBuffer;
   private readonly composeParams: GPUBuffer[];
   private readonly pipe: GPUComputePipeline;

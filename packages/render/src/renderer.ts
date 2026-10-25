@@ -9,6 +9,7 @@ import type { GpuProfiler } from '@tb/gpu';
 import { Culler, SEG, type CullFrame } from './cull.ts';
 import { Sparks } from './sparks.ts';
 import { Lights, MAX_BALLS, TRAIL } from './lights.ts';
+import { aoFrame, aoGrid, AoVolume } from './ao.ts';
 import { fitShadow, frustumCorners, type Arena, type ShadowFit, type ShadowFitState } from './shadowfit.ts';
 import { FX_WORDS, packFx, tintWord, toHalf, type FxOptions, FX_ANCHOR } from './fx.ts';
 import { CANDY_NIGHT, linearToOklab, srgbToLinear, type LookParams } from './look.ts';
@@ -136,12 +137,15 @@ export class Renderer {
   readonly sparks: Sparks;
   /** Ball and flash lights and the ball trail (lights.ts). */
   readonly lights: Lights;
+  /** Occupancy volume for AO (ao.ts), fitted to the arena (setShadowBounds). */
+  readonly ao: AoVolume;
+  private readonly aoSampler: GPUSampler;
 
   private readonly boxVerts: { scene: number; shadow: number };
   /** Per-pass GPU timing of render() (cull, shadow, scene, bloom, composite) when set; read with profiler.collect(). */
   profiler: GpuProfiler | null = null;
   /** Passes to skip, for measuring their marginal cost (bench:render). sparks off also freezes heat (its detector writes it). */
-  toggles = { shadow: true, post: true, sparks: true, trail: true, heat: true };
+  toggles = { shadow: true, post: true, sparks: true, trail: true, heat: true, ao: true };
 
   constructor(readonly device: GPUDevice, target: RenderTarget, opts: RendererOptions = {}) {
     const sceneFan = (opts.scenePath ?? opts.boxPath ?? 'cube') === 'fan';
@@ -164,6 +168,8 @@ export class Renderer {
     this.post = new Post(device, this.format);
     this.sparks = new Sparks(device, opts.sparkPool);
     this.lights = new Lights(device);
+    this.ao = new AoVolume(device, aoGrid(this.arena));
+    this.aoSampler = device.createSampler({ magFilter: 'linear', minFilter: 'linear' });
     const VF = GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT;
     const ro = { type: 'read-only-storage' } as const;
     const common: GPUBindGroupLayoutEntry[] = [
@@ -185,6 +191,8 @@ export class Renderer {
         { binding: 9, visibility: GPUShaderStage.FRAGMENT, buffer: { type: 'uniform' } },
         { binding: 10, visibility: GPUShaderStage.VERTEX, buffer: ro },
         { binding: 11, visibility: GPUShaderStage.FRAGMENT, buffer: ro },
+        { binding: 12, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: 'float', viewDimension: '3d' } },
+        { binding: 13, visibility: GPUShaderStage.FRAGMENT, sampler: { type: 'filtering' } },
       ],
     });
     // The shadow pass cannot bind the shadow map it writes.
@@ -266,6 +274,9 @@ export class Renderer {
   setShadowBounds(center: V3, radius: number, half: V3 = [radius, radius, radius]): void {
     this.arena = { center, half, radius };
     this.shadowState.level = -1;
+    const before = this.ao.volume;
+    this.ao.setGrid(aoGrid(this.arena));
+    if (this.ao.volume !== before) this.cullKey = ''; // rebind the new volume
   }
 
   /**
@@ -327,6 +338,11 @@ export class Renderer {
     this.device.queue.writeBuffer(b, slot * FX_WORDS * 4, this.fx, slot * FX_WORDS, count * FX_WORDS);
   }
 
+  private aoUniforms(eye: V3) {
+    const g = this.ao.grid, { originRel, invVoxel } = aoFrame(g, eye);
+    return { aoOrigin: originRel, aoInvVoxel: invVoxel, aoDims: g.dims, aoOn: this.toggles.ao ? 1 : 0, aoK: this.ao.k };
+  }
+
   /** Rebuild the culler and bind groups when the source's buffers change. */
   private sync(): Culler {
     const s = this.source;
@@ -350,6 +366,7 @@ export class Renderer {
           { binding: 8, resource: { buffer: this.sparks.sparks } },
           { binding: 9, resource: { buffer: this.lights.lights } }, { binding: 10, resource: { buffer: this.lights.trail } },
           { binding: 11, resource: { buffer: this.sparks.stateFor(s) } },
+          { binding: 12, resource: this.ao.volume.createView() }, { binding: 13, resource: this.aoSampler },
         ],
       });
       this.shadowBind = this.device.createBindGroup({ layout: this.shadowLayout, entries: common });
@@ -383,6 +400,7 @@ export class Renderer {
       ...lookUniforms(this.look),
       // Bias, all on the receiver: normal offset of 2 texels, depth bias of 1 texel + 1 cm.
       shadowParams: [2 * fit.texel, (fit.texel + 0.01) / fit.depthRange, fit.texel, 0],
+      ...this.aoUniforms(f.eye),
       heat: this.toggles.heat ? 1 : 0, viewport: this.viewport(), dt: f.dt ?? 0, trailHead: (this.lights.nextFrame + TRAIL - 1) % TRAIL,
     });
     this.device.queue.writeBuffer(this.frameBuf, 0, this.frameData);
@@ -400,8 +418,14 @@ export class Renderer {
       this.sceneTime = t;
     }
     const cf = this.writeFrame({ ...f, dt });
+    const ao = !ids && this.toggles.ao;
+    if (ao) this.ao.clear(enc);
     const cp = enc.beginComputePass({ label: 'cull', ...stamp('cull') });
     culler.encode(cp, cf);
+    if (ao) {
+      this.ao.splat(cp, this.source, culler.records, f.eye);
+      this.ao.compose(cp);
+    }
     if (!ids) {
       if (this.toggles.sparks) this.sparks.encode(cp, this.source, { dt, groundY: f.groundY });
       this.lights.encode(cp, this.source, culler.records, this.sparks, { eye: f.eye, time: f.time ?? 0, ball: this.look.ball.map(srgbToLinear) as V3 });
@@ -539,6 +563,7 @@ export class Renderer {
     this.overlayColours.destroy();
     this.sparks.destroy();
     this.lights.destroy();
+    this.ao.destroy();
   }
 
   /** Sparks from a game event at pos, flying out around dir; strength is a speed change in m/s. */

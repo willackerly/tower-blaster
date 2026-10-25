@@ -7,7 +7,7 @@ import { emptySnapshot, TAG_BALL, type BodyDesc } from '@tb/engine-api';
 import { buildScenario } from '@tb/scenarios';
 import { Body, readStruct, Shape } from '@tb/schema';
 import { isSoftwareAdapter, loadBundle, openWebGPU, type WebGPUSession } from '@tb/testkit';
-import { agx, aoFootReference, bevelNormal, CANDY_NIGHT, CTL, HOT_FULL, MAX_EVENTS, SPAWN_BUDGET, FX_WORDS, packFx, tintWord, unpackFx, frustumPlanes, linearToOklab, listMatches, oklabToLinear, srgbToLinear, lookAt, lookOf, lookRange, MATERIAL, multiply, packBodies, packShapes, paletteOf, perspective, unpackLook } from '../src/index.ts';
+import { agx, aoFootReference, bevelNormal, type V3, CANDY_NIGHT, CTL, HOT_FULL, MAX_EVENTS, SPAWN_BUDGET, FX_WORDS, packFx, tintWord, unpackFx, frustumPlanes, linearToOklab, listMatches, oklabToLinear, srgbToLinear, lookAt, lookOf, lookRange, MATERIAL, multiply, packBodies, packShapes, paletteOf, perspective, unpackLook } from '../src/index.ts';
 import type * as Drivers from './page.ts';
 
 describe('looks', () => {
@@ -392,6 +392,84 @@ describe('AO volume', () => {
   });
 });
 
+describe('AO shading', () => {
+  it('in the image: the floor by a tower darkens, an isolated cube and the open floor do not change', async (ctx) => {
+    if (!gpu) return ctx.skip();
+    const r = await call('aoImage');
+    expect(r.error).toBeNull();
+    expect(r.nn).toBeGreaterThan(30);
+    expect(r.near[0]! / r.near[1]!).toBeLessThan(0.9); // ambient-only light: measured 0.82
+    // The isolated cube: at most 1 LSB even with ambient as the only light (its own sky term at low edges, >= 0.94).
+    expect(r.nc).toBeGreaterThan(100);
+    expect(r.cubeDiff).toBeLessThanOrEqual(1);
+    // Where AO is 1 the shading differs from the AO-off path by f32 rounding only (and the AO-off image is bit-identical to before R5).
+    // Measured 16 of 6,689 pixels by 1 LSB.
+    expect(r.no).toBeGreaterThan(500);
+    expect(r.openDiff).toBeLessThanOrEqual(1);
+    expect(r.openChanged / r.no).toBeLessThan(0.01);
+  });
+
+  type P = { p: V3; n: V3; own: number };
+  const qrotT = (q: number[], v: V3): V3 => {
+    const [x, y, z, w] = q as [number, number, number, number];
+    const t = [2 * (y * v[2] - z * v[1]), 2 * (z * v[0] - x * v[2]), 2 * (x * v[1] - y * v[0])];
+    return [v[0] + w * t[0]! + (y * t[2]! - z * t[1]!), v[1] + w * t[1]! + (z * t[0]! - x * t[2]!), v[2] + w * t[2]! + (x * t[1]! - y * t[0]!)];
+  };
+  /** Face centres, edge midpoints and corners of a cube, with their (averaged) normals. */
+  const cubeProbes = (c: V3, h: number, rot: number[], own: number): P[] => {
+    const out: P[] = [];
+    for (const sx of [-1, 0, 1]) for (const sy of [-1, 0, 1]) for (const sz of [-1, 0, 1]) {
+      if (!sx && !sy && !sz) continue;
+      const d = qrotT(rot, [sx * h, sy * h, sz * h]);
+      out.push({ p: [c[0] + d[0], c[1] + d[1], c[2] + d[2]], n: qrotT(rot, [sx, sy, sz]), own });
+    }
+    return out;
+  };
+
+  it('an isolated cube or ball does not occlude itself, on any face, edge or corner', async (ctx) => {
+    if (!gpu) return ctx.skip();
+    const s = Math.SQRT1_2, rots = [[0, 0, 0, 1], [0, Math.sin(Math.PI / 8), 0, Math.cos(Math.PI / 8)], [0.3, 0.5, -0.1, 0.8]].map((q) => { const l = Math.hypot(...q); return q.map((x) => x / l); });
+    let checked = 0;
+    for (const off of [[0, 0, 0], [0.13, 0.27, 0.41], [0.25, 0.25, 0.25]] as V3[]) for (const rot of rots) {
+      const c: V3 = [off[0], 2 + off[1], off[2]];
+      const probes = cubeProbes(c, 0.5, rot, 0);
+      const r = await call('aoProbe', [{ pos: c, half: [0.5, 0.5, 0.5], rot }], probes);
+      expect(r.error).toBeNull();
+      r.ao.forEach(([occ, sky], i) => {
+        // The design asks >= 0.97; measured >= 0.9988 over all of these (own subtraction at the wrong level scale gives 0.975).
+        expect(occ, `offset ${off} rot ${rot} probe ${probes[i]!.n}`).toBeGreaterThanOrEqual(0.995);
+        if (probes[i]!.n[1] > -s) expect(sky).toBeGreaterThanOrEqual(0.9); // sky only weighs faces turned up or sideways; measured >= 0.94
+        checked++;
+      });
+    }
+    const ballC: V3 = [0.2, 2.1, -0.3];
+    const dirs: V3[] = [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1], [1, 1, 1], [-1, 1, -1], [1, -1, 1]];
+    const ball = await call('aoProbe', [{ pos: ballC, half: [0.6, 0, 0], sphere: true }], dirs.map((d) => { const l = Math.hypot(...d); return { p: [ballC[0] + 0.6 * d[0] / l, ballC[1] + 0.6 * d[1] / l, ballC[2] + 0.6 * d[2] / l] as V3, n: d, own: 0 }; }));
+    expect(ball.error).toBeNull();
+    for (const [occ] of ball.ao) { expect(occ).toBeGreaterThanOrEqual(0.995); checked++; }
+    expect(checked).toBe(3 * 3 * 26 + 9);
+  });
+
+  it('the centre of a 5x5x5 heap is dark, and the floor beside a tower darker than the open floor', async (ctx) => {
+    if (!gpu) return ctx.skip();
+    const heap: { pos: V3; half: V3 }[] = [];
+    for (let x = 0; x < 5; x++) for (let y = 0; y < 5; y++) for (let z = 0; z < 5; z++) heap.push({ pos: [x - 2, 0.5 + y, z - 2], half: [0.5, 0.5, 0.5] });
+    const ci = heap.findIndex((b) => b.pos[0] === 0 && b.pos[1] === 2.5 && b.pos[2] === 0);
+    const faces: V3[] = [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]];
+    const h = await call('aoProbe', heap, faces.map((n) => ({ p: [n[0] * 0.5, 2.5 + n[1] * 0.5, n[2] * 0.5] as V3, n, own: ci })));
+    expect(h.error).toBeNull();
+    for (const [occ] of h.ao) expect(occ).toBeLessThanOrEqual(0.6); // measured 0.17
+    const tower = Array.from({ length: 8 }, (_, y) => ({ pos: [0, 0.5 + y, 0] as V3, half: [0.5, 0.5, 0.5] as V3 }));
+    const fl = await call('aoProbe', tower, [0.75, 1, 10].map((d) => ({ p: [d, 0, 0.2] as V3, n: [0, 1, 0] as V3, own: -1 })));
+    expect(fl.error).toBeNull();
+    const [near, mid, far] = fl.ao.map((a) => a[0]);
+    expect(far).toBe(1);
+    expect(near!).toBeLessThan(0.92); // measured 0.886, 0.25 m from the tower's face
+    expect(near!).toBeLessThan(mid!);
+    expect(mid!).toBeLessThan(far!);
+  });
+});
+
 describe('GPU cull and compaction', () => {
   it('lists, counts and records match the CPU reference', async (ctx) => {
     if (!gpu) return ctx.skip();
@@ -534,7 +612,7 @@ describe('drawing', () => {
   it('bench:render completes and reports every case (numbers discarded)', async (ctx) => {
     if (!gpu) return ctx.skip();
     const r = await call('runRenderBench', { width: 160, height: 90, counts: [800], warmup: 1, batches: 2, batchFrames: 1, profiledFrames: 1, sparkPool: 1024 });
-    expect(r.cases.map((c) => `${c.world}:${c.variant}`)).toEqual(['near', 'far'].flatMap((w) => ['full', 'no-shadow', 'no-post', 'no-sparks', 'no-heat', 'fan', 'cube', 'flat-fan', 'flat-cube'].map((v) => `${w}:${v}`)));
+    expect(r.cases.map((c) => `${c.world}:${c.variant}`)).toEqual(['near', 'far'].flatMap((w) => ['full', 'no-shadow', 'no-post', 'no-sparks', 'no-heat', 'no-ao', 'fan', 'cube', 'flat-fan', 'flat-cube'].map((v) => `${w}:${v}`)));
     for (const c of r.cases) {
       expect(c.bodies).toBe(800);
       expect(c.frameMs).toBeGreaterThan(0);
@@ -545,7 +623,7 @@ describe('drawing', () => {
     }
     expect(r.software).toBe(isSoftwareAdapter(gpu.adapter));
     expect(await call('renderBenchMarkdown', r, 'h')).toMatch(/Without heat glow/);
-  }, 30_000); // 18 cases on a software adapter
+  }, 40_000); // 20 cases on a software adapter
 
   it('culling never changes an ID pixel', async (ctx) => {
     if (!gpu) return ctx.skip();

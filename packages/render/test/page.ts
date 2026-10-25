@@ -9,7 +9,7 @@ import { Body, RenderRecord, Shape, TIER, readStruct } from '@tb/schema';
 import {
   agx, AGX_WGSL, fromHalf, FX_WORDS, packFx, toHalf, bevelNormal, BEVEL_WGSL, oklabToLinear, OKLAB_WGSL, Post,
   Culler, cullReference, GpuBodySource, invert, listMatches, lookAt, makeGpuBodies, multiply, perspective, Renderer, SEGMENTS, SnapshotSource, transform,
-  translation, BOX_VERTS, SPHERE_VERTS, SUN, Sparks, CTL, MAX_EVENTS, flashSlot, FLASHES, MAX_BALLS, TRAIL, Lights, LIGHTS, LIGHT_META, LIGHT_PACKED, MATERIAL, AoVolume, aoGrid, splatReference, composeReference, AO_FOOT_WGSL, AO_ONE, type SplatBody, unpackImpacts, unpackSparks, spawnReference, stepReference, type Impact, type BodySource, type CullFrame, type FrameParams, type V3,
+  translation, BOX_VERTS, SPHERE_VERTS, SUN, Sparks, CTL, MAX_EVENTS, flashSlot, FLASHES, MAX_BALLS, TRAIL, Lights, LIGHTS, LIGHT_META, LIGHT_PACKED, MATERIAL, AoVolume, aoGrid, aoFrame, splatReference, composeReference, AO_FOOT_WGSL, AO_SAMPLE_WGSL, AO_ONE, type SplatBody, unpackImpacts, unpackSparks, spawnReference, stepReference, type Impact, type BodySource, type CullFrame, type FrameParams, type V3,
 } from '../src/index.ts';
 
 function rng(seed: number) {
@@ -1494,4 +1494,173 @@ export async function aoCompose(seed: number) {
   const err = await device.popErrorScope();
   device.destroy();
   return { levels, error: err?.message ?? null };
+}
+
+/** A fixed scene's pixels, hashed: towers, rubble, a ball, the floor. For before/after checks of a change that must not alter the image. */
+export async function sceneHash(toggles: Record<string, boolean> = {}) {
+  const { device } = await createDevice({ timestamps: false });
+  device.pushErrorScope('validation');
+  const descs: BodyDesc[] = [];
+  for (let t = 0; t < 4; t++) for (let y = 0; y < 6; y++) descs.push(box([t * 3 - 4.5, 0.5 + y, -3], [0.5, 0.5, 0.5], [0, 0, 0, 1], t));
+  const r = rng(3);
+  for (let i = 0; i < 40; i++) descs.push(box([(r() - 0.5) * 10, 0.3, 1 + r() * 3], [0.3, 0.3, 0.3], randomQuat(r), 5));
+  descs.push(ball([0, 2, 2], 0.4));
+  const src = new SnapshotSource(device);
+  src.reset(descs);
+  src.update(snapshotOf(descs), descs);
+  const rend = new Renderer(device, { size: [W, H] });
+  Object.assign(rend.toggles, toggles);
+  rend.setSource(src);
+  const f: FrameParams = { ...camera([0, 4, 9], [0, 1, -1]), groundY: 0, time: 1, dt: 0, alpha: 1 };
+  await rend.render(f);
+  const px = (await rend.render(f, true, true))!.pixels!;
+  let h = 2166136261;
+  for (const b of px.data) h = Math.imul(h ^ b, 16777619) >>> 0;
+  const err = await device.popErrorScope();
+  rend.destroy();
+  device.destroy();
+  return { hash: h, error: err?.message ?? null };
+}
+
+export interface AoProbeBody { pos: V3; half: V3; rot?: number[]; sphere?: boolean }
+export interface AoProbe { p: V3; n: V3; own: number }
+
+/**
+ * aoAt (the scene shader's AO function) evaluated in a compute kernel at
+ * world points, against a volume splatted and composed from these bodies.
+ * own: the probe's body (its footprint is subtracted), or -1 (floor).
+ */
+export async function aoProbe(bodies: AoProbeBody[], probes: AoProbe[], center: V3 = [0, 4, 0], half: V3 = [12, 8, 12]) {
+  const { device } = await createDevice({ timestamps: false });
+  device.pushErrorScope('validation');
+  const n = bodies.length;
+  const bw = new ArrayBuffer(n * Body.size), sw = new ArrayBuffer(n * Shape.size);
+  const bf = new Float32Array(bw), bu = new Uint32Array(bw), sf = new Float32Array(sw), su = new Uint32Array(sw);
+  const BW = Body.size / 4, SW = Shape.size / 4;
+  bodies.forEach((b, i) => {
+    bf.set(b.pos, i * BW); bf.set(b.rot ?? [0, 0, 0, 1], i * BW + 4); bf[i * BW + 3] = 1;
+    bu[i * BW + 11] = 1 | (TIER.active << 8);
+    bu[i * BW + 15] = i;
+    sf.set(b.sphere ? [b.half[0], b.half[0], b.half[0]] : b.half, i * SW);
+    su[i * SW + 3] = b.sphere ? 1 : 0;
+  });
+  const src = rawSource(device, bw, bw, sw, new Uint32Array(n), n, n);
+  const fxBuf = device.createBuffer({ size: Math.max(16, n * FX_WORDS * 4), usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });
+  const culler = new Culler(device, src, { box: BOX_VERTS, sphere: SPHERE_VERTS }, fxBuf);
+  const grid = aoGrid({ center, half });
+  const ao = new AoVolume(device, grid);
+  const eye: V3 = [1.7, 3.1, 9.4];
+  const enc = device.createCommandEncoder();
+  ao.clear(enc);
+  const pass = enc.beginComputePass();
+  culler.encode(pass, { viewProj: perspective(1, 1, 0.1, 100), lightViewProj: perspective(1, 1, 0.1, 100), eye, alpha: 1 });
+  ao.splat(pass, src, culler.records, eye);
+  ao.compose(pass);
+  pass.end();
+  device.queue.submit([enc.finish()]);
+  const module = device.createShaderModule({
+    code: /* wgsl */ `
+${AO_FOOT_WGSL}
+@group(0) @binding(0) var aoVol: texture_3d<f32>;
+@group(0) @binding(1) var aoSamp: sampler;
+${AO_SAMPLE_WGSL}
+@group(0) @binding(2) var<uniform> av: AoView;
+@group(0) @binding(3) var<storage, read> inp: array<vec4f>;  // per probe: p, n, own rotation, (own half extents, 0 floor / 1 box / 2 sphere)
+@group(0) @binding(4) var<storage, read_write> out: array<vec2f>;
+@group(0) @binding(5) var<storage, read> centres: array<vec4f>; // own centre
+@compute @workgroup_size(64) fn main(@builtin(global_invocation_id) id: vec3u) {
+  if (id.x >= arrayLength(&out)) { return; }
+  let i = 4u * id.x;
+  let f = inp[i + 3u];
+  var foot = vec3f(0.0);
+  if (f.w > 0.5) { foot = aoFoot(inp[i + 2u], f.xyz, f.w > 1.5); }
+  out[id.x] = aoAt(av, inp[i].xyz, inp[i + 1u].xyz, centres[id.x].xyz, foot);
+}
+`,
+  });
+  const pipe = device.createComputePipeline({ layout: 'auto', compute: { module, entryPoint: 'main' } });
+  const data = new Float32Array(probes.length * 16), cdata = new Float32Array(probes.length * 4);
+  const rel = (p: readonly number[]) => [Math.fround(p[0]! - eye[0]), Math.fround(p[1]! - eye[1]), Math.fround(p[2]! - eye[2])];
+  probes.forEach((q, k) => {
+    const b = q.own >= 0 ? bodies[q.own]! : null;
+    data.set(rel(q.p), k * 16);
+    const l = Math.hypot(...q.n);
+    data.set(q.n.map((x) => x / l), k * 16 + 4);
+    data.set(b?.rot ?? [0, 0, 0, 1], k * 16 + 8);
+    data.set([...(b ? (b.sphere ? [b.half[0], b.half[0], b.half[0]] : b.half) : [0, 0, 0]), b ? (b.sphere ? 2 : 1) : 0], k * 16 + 12);
+    cdata.set(b ? rel(b.pos) : [0, 0, 0], k * 4);
+  });
+  const usage = GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST;
+  const inp = device.createBuffer({ size: data.byteLength, usage }), cen = device.createBuffer({ size: cdata.byteLength, usage });
+  device.queue.writeBuffer(inp, 0, data);
+  device.queue.writeBuffer(cen, 0, cdata);
+  const { originRel, invVoxel } = aoFrame(grid, eye);
+  const avBuf = device.createBuffer({ size: 48, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+  device.queue.writeBuffer(avBuf, 0, new Float32Array([...originRel, invVoxel, ...grid.dims, 1, ...ao.k]));
+  const out = device.createBuffer({ size: probes.length * 8, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC });
+  const samp = device.createSampler({ magFilter: 'linear', minFilter: 'linear' });
+  const enc2 = device.createCommandEncoder();
+  const p2 = enc2.beginComputePass();
+  p2.setPipeline(pipe);
+  p2.setBindGroup(0, device.createBindGroup({
+    layout: pipe.getBindGroupLayout(0),
+    entries: [
+      { binding: 0, resource: ao.volume.createView() }, { binding: 1, resource: samp }, { binding: 2, resource: { buffer: avBuf } },
+      { binding: 3, resource: { buffer: inp } }, { binding: 4, resource: { buffer: out } }, { binding: 5, resource: { buffer: cen } },
+    ],
+  }));
+  p2.dispatchWorkgroups(Math.ceil(probes.length / 64));
+  p2.end();
+  device.queue.submit([enc2.finish()]);
+  const res = new Float32Array(await readBuffer(device, out));
+  const err = await device.popErrorScope();
+  ao.destroy();
+  culler.destroy();
+  device.destroy();
+  return { ao: probes.map((_, k) => [res[2 * k]!, res[2 * k + 1]!] as [number, number]), error: err?.message ?? null };
+}
+
+/**
+ * AO in the image: a tower on the floor and an isolated cube in the air,
+ * rendered with the volume on and off, sun off so ambient (what AO
+ * scales) is all the light. The floor around the tower's foot darkens;
+ * the isolated cube and the open floor do not change beyond f32 noise.
+ */
+export async function aoImage() {
+  const { device } = await createDevice({ timestamps: false });
+  device.pushErrorScope('validation');
+  const descs: BodyDesc[] = [];
+  for (let y = 0; y < 6; y++) descs.push(box([-2, 0.5 + y, -2], [0.5, 0.5, 0.5], [0, 0, 0, 1], 1));
+  descs.push(box([2.6, 2.2, -1], [0.5, 0.5, 0.5], [0, Math.sin(0.3), 0, Math.cos(0.3)], 2)); // isolated, slot 6
+  const src = new SnapshotSource(device);
+  src.reset(descs);
+  src.update(snapshotOf(descs), descs);
+  const rend = new Renderer(device, { size: [W, H] });
+  rend.look = { ...rend.look, bloomMix: 0, fogDensity: 0, sunColor: [0, 0, 0] };
+  rend.setShadowBounds([0, 3, 0], 14, [14, 8, 14]);
+  rend.setSource(src);
+  const f: FrameParams = { ...camera([1, 5, 7], [0, 1, -2]), groundY: 0, time: 1, dt: 0, alpha: 1 };
+  const on = (await rend.render(f, true, true))!.pixels!;
+  rend.toggles.ao = false;
+  const off = (await rend.render(f, true, true))!.pixels!;
+  const ids = (await rend.renderIds(f)).ids;
+  const luma = (px: typeof on, i: number) => 0.2126 * px.data[i + (px.bgra ? 2 : 0)]! + 0.7152 * px.data[i + 1]! + 0.0722 * px.data[i + (px.bgra ? 0 : 2)]!;
+  let nearOn = 0, nearOff = 0, nn = 0, openDiff = 0, no = 0, cubeDiff = 0, nc = 0;
+  let openChanged = 0, cubeChanged = 0;
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+    const i = y * on.bytesPerRow + 4 * x, id = ids[y * W + x]!;
+    if (id === 7) { const dd = Math.abs(luma(on, i) - luma(off, i)); cubeDiff = Math.max(cubeDiff, dd); nc++; if (dd) cubeChanged++; continue; }
+    if (id) continue;
+    const { o, d } = rayAt(f, x, y);
+    if (d[1] >= 0) continue;
+    const t = -o[1] / d[1], gx = o[0] + d[0] * t, gz = o[2] + d[2] * t;
+    const dt = Math.max(Math.abs(gx + 2), Math.abs(gz + 2)); // distance from the tower's axis (Chebyshev)
+    if (dt > 0.55 && dt < 1.0) { nearOn += luma(on, i); nearOff += luma(off, i); nn++; }
+    const clear = Math.hypot(gx + 2, gz + 2) > 5 && Math.hypot(gx - 2.6, gz + 1) > 5;
+    if (clear) { const dd = Math.abs(luma(on, i) - luma(off, i)); openDiff = Math.max(openDiff, dd); no++; if (dd) openChanged++; }
+  }
+  const err = await device.popErrorScope();
+  rend.destroy();
+  device.destroy();
+  return { near: [nearOn / nn, nearOff / nn], nn, openDiff, openChanged, no, cubeDiff, cubeChanged, nc, error: err?.message ?? null };
 }

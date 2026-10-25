@@ -7,6 +7,7 @@ import { FX_EMISSIVE_MAX, FX_WGSL } from './fx.ts';
 import { BEVEL_WGSL, OKLAB_WGSL } from './look.ts';
 import { SPARK_COMMON } from './sparks.ts';
 import { LIGHT_META, LIGHT_PACKED, LIGHT_VEC4, MAX_BALLS, TRAIL } from './lights.ts';
+import { AO_FOOT_WGSL, AO_SAMPLE_WGSL } from './ao.ts';
 
 export const SHADOW_SIZE = 2048;
 export const SPHERE_SEG = 24;
@@ -38,6 +39,9 @@ export const Frame = defineStruct('Frame', [
   ['ball', 'vec3f'], ['heat', 'f32', '1: heat glow on (bench toggle)'],
   ['shadowParams', 'vec4f', 'normal offset m, depth bias (light depth units), texel m, unused'],
   ['viewport', 'vec2f', 'pixels'], ['dt', 'f32', 'seconds since the last scene frame'], ['trailHead', 'u32', 'newest ball trail sample'],
+  ['aoOrigin', 'vec3f', 'AO grid low corner, camera-relative'], ['aoInvVoxel', 'f32', 'per metre, level 0'],
+  ['aoDims', 'vec3f', 'level-0 voxels'], ['aoOn', 'f32', '0: AO off'],
+  ['aoK', 'vec4f', 'tap strengths (0.3, 0.9, 2.0 m), sky weight'],
   ['ramp0', 'vec4f', 'OKLab'], ['ramp1', 'vec4f'], ['ramp2', 'vec4f'], ['ramp3', 'vec4f'], ['ramp4', 'vec4f'],
 ], 'Per-frame uniforms of the scene pass.');
 
@@ -46,6 +50,7 @@ ${wgslStruct(RenderRecord)}
 ${wgslStruct(Spark)}
 ${wgslStruct(FxState)}
 ${SPARK_COMMON}
+${AO_FOOT_WGSL}
 ${wgslStruct(Frame)}
 @group(0) @binding(0) var<uniform> fr: Frame;
 @group(0) @binding(1) var<storage, read> records: array<RenderRecord>;
@@ -58,6 +63,11 @@ ${wgslStruct(Frame)}
 @group(0) @binding(8) var<storage, read> sparks: array<Spark>;      // sparks.ts
 @group(0) @binding(9) var<uniform> lights: array<vec4f, ${LIGHT_VEC4}>;      // lights.ts: raw slots, meta (heat gain, lit count), packed lit lights
 @group(0) @binding(11) var<storage, read> fxState: array<FxState>;   // sparks.ts: heat in bits 0-15
+@group(0) @binding(12) var aoVol: texture_3d<f32>;                   // ao.ts: R occupancy, G sky
+@group(0) @binding(13) var aoSamp: sampler;
+${AO_SAMPLE_WGSL}
+
+fn aoView() -> AoView { return AoView(fr.aoOrigin, fr.aoInvVoxel, fr.aoDims, fr.aoOn, fr.aoK); }
 @group(0) @binding(10) var<storage, read> trail: array<vec4f>;      // lights.ts: world xyz, time
 
 // Which list a pipeline draws: SEG * capacity is its first entry.
@@ -139,6 +149,8 @@ struct VOut {
   @location(3) @interpolate(flat) half: vec3f,
   @location(4) @interpolate(flat) look: u32,
   @location(5) @interpolate(flat) slot: u32,
+  @location(6) @interpolate(flat) centre: vec3f, // camera-relative body centre
+  @location(7) @interpolate(flat) foot: vec3f,   // AO footprint half extents (ao.ts), 0 for none
 }
 
 fn place(r: RenderRecord, corner: vec3f) -> VOut {
@@ -151,16 +163,23 @@ fn place(r: RenderRecord, corner: vec3f) -> VOut {
   o.half = r.half;
   o.look = r.look;
   o.slot = r.slot;
+  o.centre = r.pos;
+  o.foot = vec3f(0.0);
   return o;
 }
 
 @vertex fn vsBox(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> VOut {
   let r = record(ii);
-  return place(r, boxCorner(vi, r, -r.pos));
+  var o = place(r, boxCorner(vi, r, -r.pos));
+  o.foot = aoFoot(r.rot, r.half, false);
+  return o;
 }
 
 @vertex fn vsSphere(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> VOut {
-  return place(record(ii), sphereCorner(vi));
+  let r = record(ii);
+  var o = place(r, sphereCorner(vi));
+  o.foot = aoFoot(r.rot, r.half, true);
+  return o;
 }
 
 @vertex fn vsBoxShadow(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> @builtin(position) vec4f {
@@ -246,8 +265,8 @@ fn fog(c: vec3f, rel: vec3f) -> vec3f {
   return mix(c, fr.skyHorizon, 1.0 - exp(-length(rel) * density));
 }
 
-/** Lit colour of an opaque surface. a and ac: GGX alpha of the base and clearcoat lobes. */
-fn shade(base: vec3f, rel: vec3f, n: vec3f, a: f32, ac: f32, coat: f32) -> vec3f {
+/** Lit colour of an opaque surface. a and ac: GGX alpha of the base and clearcoat lobes. ao: (occlusion, sky visibility) from aoAt. */
+fn shade(base: vec3f, rel: vec3f, n: vec3f, a: f32, ac: f32, coat: f32, ao: vec2f) -> vec3f {
   let V = normalize(-rel);
   let NoV = max(dot(n, V), 1e-4);
   let L = fr.sun;
@@ -260,10 +279,11 @@ fn shade(base: vec3f, rel: vec3f, n: vec3f, a: f32, ac: f32, coat: f32) -> vec3f
   let spec = (ggx(NoH, a) * smithVis(NoV, NoL, a) + coat * ggx(NoH, ac) * smithVis(NoV, NoL, ac)) * F * PI;
   let R = reflect(-V, n);
   let reflections = env(R, sqrt(a)) * envBrdf(0.04, sqrt(a), NoV) + coat * env(R, sqrt(ac)) * envBrdf(0.04, sqrt(ac), NoV);
-  // Stand-in for ambient occlusion until the occupancy volume (R5): darker near the floor.
+  // Ground contact: darker near the floor. The occupancy volume (ao.ts) adds what is nearby; sky visibility dims only the sky light.
   let contact = 0.5 + 0.5 * smoothstep(0.0, 1.5, rel.y + fr.eye.y - fr.groundY);
-  let amb = mix(fr.ambGround, fr.ambSky, n.y * 0.5 + 0.5) * contact;
-  return base * (amb + fr.sunColor * sh) + fr.sunColor * spec * sh + reflections * contact + pointLights(base, rel, n, V, a);
+  let occl = contact * ao.x;
+  let amb = mix(fr.ambGround, fr.ambSky * ao.y, n.y * 0.5 + 0.5) * occl;
+  return base * (amb + fr.sunColor * sh) + fr.sunColor * spec * sh + reflections * occl + pointLights(base, rel, n, V, a);
 }
 
 // Ball and flash lights (lights.ts): diffuse plus the base specular lobe,
@@ -351,7 +371,7 @@ fn boxFace(local: vec3f, w: vec3f) -> vec3f {
   let wPx = SEAM / max(pxM, 1e-6);
   let drawn = max(wPx, 0.75);
   let seam = 1.0 - 0.4 * min(1.0, wPx / 0.75) * (1.0 - smoothstep(drawn - 0.5, drawn + 0.5, edgeM / max(pxM, 1e-6)));
-  var c = shade(base * seam, v.rel, n, aaAlpha(rough * rough, n, dndx, dndy), aaAlpha(0.0049, n, dndx, dndy), select(0.0, fr.clearcoat, isCandy));
+  var c = shade(base * seam, v.rel, n, aaAlpha(rough * rough, n, dndx, dndy), aaAlpha(0.0049, n, dndx, dndy), select(0.0, fr.clearcoat, isCandy), aoAt(aoView(), v.rel, n, v.centre, v.foot));
   c += base * seam * fxGlow(w, fr.time);
   c += heatGlow(v.slot, base);
   return vec4f(fog(c, v.rel), 1.0);
@@ -379,7 +399,7 @@ fn heatGlow(slot: u32, base: vec3f) -> vec3f {
   let isBall = material(v.look) == 1u;
   let w = fx[v.slot];
   let base = select(albedo(v.look), fr.ball, isBall) * fxTint(w.x);
-  var c = shade(base, v.rel, n, aaAlpha(0.04, n, dndx, dndy), aaAlpha(0.0049, n, dndx, dndy), 0.5);
+  var c = shade(base, v.rel, n, aaAlpha(0.04, n, dndx, dndy), aaAlpha(0.0049, n, dndx, dndy), 0.5, aoAt(aoView(), v.rel, n, v.centre, v.foot));
   c += base * fxGlow(w, fr.time);
   let NoV = max(dot(n, normalize(-v.rel)), 0.0);
   c += select(vec3f(0.0), fr.ball * fr.ballEmissive * (0.35 + 0.65 * NoV), isBall);
@@ -398,7 +418,7 @@ fn heatGlow(slot: u32, base: vec3f) -> vec3f {
   let dndy = dpdy(n);
   let col = overlayColour[v.slot];
   let base = pow(unpack4x8unorm(col).rgb, vec3f(2.2));
-  var c = shade(base, v.rel, n, aaAlpha(0.04, n, dndx, dndy), aaAlpha(0.0049, n, dndx, dndy), 0.5);
+  var c = shade(base, v.rel, n, aaAlpha(0.04, n, dndx, dndy), aaAlpha(0.0049, n, dndx, dndy), 0.5, aoAt(aoView(), v.rel, n, v.centre, v.foot));
   c += base * f32(col >> 24u) / 255.0 * ${FX_EMISSIVE_MAX}.0;
   return vec4f(fog(c, v.rel), 1.0);
 }
@@ -449,7 +469,8 @@ struct GOut { @builtin(position) clip: vec4f, @location(0) rel: vec3f }
   let line = abs(fract(p - 0.5) - 0.5) / max(w, vec2f(1e-4));
   let grid = (1.0 - min(min(line.x, line.y), 1.0)) * (1.0 - smoothstep(0.05, 0.4, max(w.x, w.y)));
   let base = fr.floor * (1.0 + 2.0 * fr.floorGrid * grid);
-  return vec4f(fog(shade(base, g.rel, vec3f(0.0, 1.0, 0.0), 0.36, 0.36, 0.0), g.rel), 1.0);
+  let up = vec3f(0.0, 1.0, 0.0);
+  return vec4f(fog(shade(base, g.rel, up, 0.36, 0.36, 0.0, aoAt(aoView(), g.rel, up, g.rel, vec3f(0.0))), g.rel), 1.0);
 }
 
 struct SOut { @builtin(position) clip: vec4f, @location(0) ndc: vec2f }
