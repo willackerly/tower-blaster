@@ -128,7 +128,7 @@ struct SolverContact {
   a: u32, // @108 body a, 0xffffffff for the ground
   lt: vec2f, // @112 friction force along t1, t2
   b: u32, // @120
-  pad: u32, // @124
+  inCone: u32, // @124 1 if the last dual update's trial friction was inside the cone (static friction held)
 }
 
 // Per-step uniforms of the GPU AVBD solver.

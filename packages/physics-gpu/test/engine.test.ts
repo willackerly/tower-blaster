@@ -74,12 +74,12 @@ describe('GPU AVBD engine: single bodies against analytic results', () => {
     expect(Math.max(...all.slice(landed).map((s) => s.pos[1]!))).toBeLessThan(0.51);
   });
 
-  // Off-axis error: exact along a face normal (symmetry). At 120 deg the
-  // cube yaws slightly while it slides (4 contact points, the tipping
-  // balance is not fully converged in 10 iterations): the reference ends
-  // 1.2e-3 rad off and yawed 2 deg, the GPU 3.8e-3 rad off, yawed the other
-  // way. Per-row friction penalties (the bug this guards against) gave 0.2 rad.
-  it.for([[3, 0, 1e-5], [-1.5, 2.598, 6e-3]] as const)('a cube sliding at (%s, %s) stops where Coulomb friction says', async ([vx, vz, offAxis], ctx) => {
+  // Off-axis error: exact along a face normal (symmetry); at 120 deg the GPU
+  // and the reference both end 4e-6 rad off. Before the secant friction
+  // stiffness (2026-10-25) the cube spun after it stopped, so this depended
+  // on rounding: 3.8e-3 rad here, 2.7e-2 on macOS SwiftShader. Per-row
+  // friction penalties (the bug this first guarded against) gave 0.2 rad.
+  it.for([[3, 0, 1e-5], [-1.5, 2.598, 1e-4]] as const)('a cube sliding at (%s, %s) stops where Coulomb friction says', async ([vx, vz, offAxis], ctx) => {
     if (!gpu) return ctx.skip();
     const { s1 } = await runGpu(sceneOf([cube([0, 0.5, 0], [vx, 0, vz])]), 120);
     const d = Math.hypot(s1.pos[0]!, s1.pos[2]!) / stopping(Math.hypot(vx, vz));
@@ -98,6 +98,65 @@ describe('GPU AVBD engine: single bodies against analytic results', () => {
     const ratio = slide.s1.linVel[0]! / (G * (Math.sin(theta) - MU * Math.cos(theta)));
     expect(ratio).toBeGreaterThan(0.95);
     expect(ratio).toBeLessThan(1.05);
+  });
+});
+
+// The stick/slip boundary (see the reference's tests of the same name). Each
+// test failed before the secant friction stiffness and the dual-branch stick
+// flag: a cube that slid or spun to a stop kept turning and creeping, so
+// where it ended depended on rounding.
+describe('GPU AVBD engine: friction at the stick/slip boundary', () => {
+  const yawOf = (q: ArrayLike<number>) => 2 * Math.atan2(q[1]!, q[3]!);
+  const at = (speed: number, deg: number): Vec3 => [Math.fround(speed * Math.cos((deg * Math.PI) / 180)), 0, Math.fround(speed * Math.sin((deg * Math.PI) / 180))];
+  const offAxis = (s: Snapshot, v: Vec3) => {
+    const a = Math.atan2(s.pos[2]!, s.pos[0]!) - Math.atan2(v[2], v[0]);
+    return Math.atan2(Math.sin(a), Math.cos(a));
+  };
+
+  // Baseline at (3, 120): 0.65 rad/s and 0.2 mm of creep between steps 70 and 120.
+  it.for([[3, 120], [6, 200]] as const)('a cube slid at %s m/s, %s deg comes to rest: no spin, creep or yaw drift', async ([speed, deg], ctx) => {
+    if (!gpu) return ctx.skip();
+    const v = at(speed, deg);
+    const { all, s1 } = await runGpu(sceneOf([cube([0, 0.5, 0], v)]), 150, {}, 10);
+    const stop = Math.ceil(speed / ((MU * G) / 60));
+    const rest = all.filter((_, k) => 10 * k >= stop + 20);
+    expect(rest.length).toBeGreaterThanOrEqual(5);
+    const r0 = rest[0]!;
+    expect(Math.max(...rest.map((s) => Math.hypot(s.angVel[0]!, s.angVel[1]!, s.angVel[2]!)))).toBeLessThan(1e-4);
+    expect(Math.max(...rest.map((s) => Math.hypot(s.linVel[0]!, s.linVel[1]!, s.linVel[2]!)))).toBeLessThan(1e-4);
+    expect(Math.hypot(s1.pos[0]! - r0.pos[0]!, s1.pos[2]! - r0.pos[2]!)).toBeLessThan(1e-4);
+    expect(Math.abs(yawOf(s1.rot) - yawOf(r0.rot))).toBeLessThan(1e-4);
+    expect(Math.abs(Math.hypot(s1.pos[0]!, s1.pos[2]!) / stopping(speed) - 1)).toBeLessThan(0.01);
+    expect(Math.abs(offAxis(s1, v))).toBeLessThan(1e-4);
+  });
+
+  it('where it stops does not depend on rounding: 1-ulp nudges of the start velocity', async (ctx) => {
+    if (!gpu) return ctx.skip();
+    const nudge = (x: number, k: number) => { const f = new Float32Array([x]); new Int32Array(f.buffer)[0]! += k; return f[0]!; };
+    // Seven cubes 3 m apart in one scene (one pipeline build instead of seven); they never meet.
+    const ks = [-3, -2, -1, 0, 1, 2, 3];
+    const vs = ks.map((k): Vec3 => [nudge(-1.5, k), 0, nudge(2.598, -k)]);
+    const { s1 } = await runGpu(sceneOf(ks.map((k, j) => cube([3 * k, 0.5, 0], vs[j]))), 120);
+    const offs = ks.map((k, j) => {
+      const a = Math.atan2(s1.pos[3 * j + 2]!, s1.pos[3 * j]! - 3 * k) - Math.atan2(vs[j]![2], vs[j]![0]);
+      return Math.atan2(Math.sin(a), Math.cos(a));
+    });
+    // Baseline spread: 2.9e-2 rad (one cube at a time: -2.7e-2 to 3.5e-3, in clusters; macOS SwiftShader's 2.7e-2 is one). Now 2e-6.
+    expect(Math.max(...offs) - Math.min(...offs)).toBeLessThan(1e-5);
+    for (const o of offs) expect(Math.abs(o)).toBeLessThan(1e-4);
+  });
+
+  it('a cube spinning on the ground stops on the step Coulomb friction says, and stays stopped', async (ctx) => {
+    if (!gpu) return ctx.skip();
+    // Four corner contacts at r = sqrt(1/2) carry mu m g / 4 each: alpha = 6 r mu g for I = m / 6.
+    const mu = 0.6, w0 = 5;
+    const scene = { ...sceneOf([{ ...cube([0, 0.5, 0]), angVel: [0, w0, 0] as Vec3, friction: mu }]), ground: { y: 0, friction: mu } };
+    const { all, s1 } = await runGpu(scene, 60, {}, 1);
+    const stop = all.findIndex((s) => Math.abs(s.angVel[1]!) < 1e-2);
+    expect(Math.abs(stop - Math.ceil(w0 / ((6 * Math.SQRT1_2 * mu * G) / 60)))).toBeLessThanOrEqual(1);
+    const after = all.slice(stop + 10);
+    expect(Math.max(...after.map((s) => Math.hypot(s.angVel[0]!, s.angVel[1]!, s.angVel[2]!, s.linVel[0]!, s.linVel[1]!, s.linVel[2]!)))).toBeLessThan(1e-4);
+    expect(Math.hypot(s1.pos[0]!, s1.pos[2]!)).toBeLessThan(1e-4);
   });
 });
 

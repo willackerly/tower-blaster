@@ -164,7 +164,7 @@ export const SolverContact = defineStruct(
     ['a', 'u32', 'body a, 0xffffffff for the ground'],
     ['lt', 'vec2f', 'friction force along t1, t2'],
     ['b', 'u32'],
-    ['pad', 'u32'],
+    ['inCone', 'u32', "1 if the last dual update's trial friction was inside the cone (static friction held)"],
   ],
   'One AVBD contact point (three rows), four per manifold.',
 );
