@@ -19,7 +19,7 @@ The first suite run on the target machine: Rapier (single-threaded WASM, SIMD) i
 
 ## What this tells us
 
-- **CPU is ruled out, as planned.** On the M5 Max, Rapier reaches the 7.5 ms budget at about 2,800 awake cubes (fit N^1.10, r² 0.999), against a 10k minimum. 10k awake cubes cost 31.6 ms median, 4.2x over budget. The ball-impact spike costs 46 ms median and 89 ms p99, about 12x over budget. The WASM build uses one of the 18 cores. A perfect 12-way parallel CPU solver would only just reach 10k, with no headroom for 100k.
+- **CPU is ruled out, as planned.** On the M5 Max, Rapier reaches the 7.5 ms budget at about 2,800 awake cubes (fit N^1.10, r² 0.999), against a 10k minimum. 10k awake cubes cost 31.6 ms median, 4.2x over budget. The ball-impact spike costs 46 ms median and 89 ms p99, about 12x over budget. The WASM build uses one of the 18 cores, but even ideal scaling would not reach the stretch goal: the fit extrapolates to about 380 ms per step at 100k, which is still about 21 ms across 18 cores, before any parallel overhead.
 - **The gap widens with load.** The speedup grows from 2.0x at 1k to 2.6x at 20k, and is about 3x for the 10k city cases. This fits a memory-bound workload that benefits from the M5's bandwidth and cache more than from its clock.
 - **The packed-lattice penalty holds on the target: 33x** (VM 43x). Touching columns are still awake 1 s after load. A loose tower must not rely on the solver to settle; the lattice tier must hold intact towers out of the solver, as the plan says.
 - **Idle cost is low but not zero.** A sleeping 10k city costs 1.09 ms per step, mostly broadphase upkeep. The lattice tier's target for a 100k idle world is under 1 ms (gate G3). This is the number to beat.
