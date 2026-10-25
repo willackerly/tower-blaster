@@ -15,8 +15,8 @@ export interface SuiteOutput {
 
 /**
  * Run the suite and close the runner. The summary is written before the
- * runner closes: Chrome has failed to exit after a WebGPU suite (macOS,
- * 2026-10-25), and the results must not wait on it. If a case fails, the
+ * runner closes: closing Chrome hung after a WebGPU suite (macOS,
+ * 2026-10-25; see testkit's teardown.ts), and the results must not wait on it. If a case fails, the
  * runner is closed and the error rethrown, with no summary.
  */
 export async function runSuite(runner: RunnerSession, suite: SuiteCase[], out: SuiteOutput): Promise<{ results: CaseResult[]; md: string; summary: string; stuck: string[] }> {

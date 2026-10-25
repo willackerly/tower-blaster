@@ -3,10 +3,11 @@
 // never wrote its summary. Playwright's browser.close() (playwright-core
 // 1.63) asks Chrome to close, SIGKILLs its process group after 30 s, and then
 // waits, with no limit, for the child's 'close' event, which needs every
-// process holding Chrome's stdout/stderr to exit. Chrome's crashpad handler
-// holds them from outside that process group (setsid), and a GPU helper stuck
-// in the driver may not die, so that wait can be forever. Reproduced on Linux
-// Chromium by stopping crashpad; not yet confirmed on the Mac.
+// process holding Chrome's stdout/stderr to exit. Chrome's crash handler
+// (chrome_crashpad_handler) holds them from outside that process group, and a
+// GPU helper stuck in the driver may not die, so that wait can be forever.
+// Confirmed on the Mac (2026-10-25 22:30): the browser had exited, and its
+// crash handler (ppid 1, its own group) still held the browser's stderr.
 
 /**
  * How long each teardown step may take before closeWithin gives up on it:
@@ -52,8 +53,10 @@ export async function closeWithin(
 
 /**
  * Flush stdout and stderr, then exit. For a CLI whose teardown left a step
- * running (closeWithin): a browser that has not exited keeps Node's event
- * loop alive, and Playwright kills its process group when Node exits.
+ * running (closeWithin), which keeps Node's event loop alive. Playwright's
+ * exit handler kills the browser's process group only until its own 30 s
+ * kill has run; after that nothing more is killed at exit, and its temporary
+ * profile directory is left behind.
  */
 export async function exitNow(code = Number(process.exitCode ?? 0)): Promise<never> {
   for (const s of [process.stdout, process.stderr]) await new Promise<void>((resolve) => s.write('', () => resolve()));

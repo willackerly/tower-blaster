@@ -79,7 +79,7 @@ describe('runSuite', () => {
     let n = 0;
     const runner: RunnerSession = {
       run: async () => record(++n),
-      // Chrome that will not exit (macOS, 2026-10-25): the results must already be on disk.
+      // A close that hangs (macOS, 2026-10-25): the results must already be on disk.
       close: async () => { atClose = { summary: existsSync(f.md), rows: rows(f.jsonl).length }; return ['browser']; },
     };
     const r = await runSuite(runner, cases, { jsonl: f.jsonl, git: 'abc1234', header: (first) => `## suite (${(first.env as { browser: { userAgent: string } }).browser.userAgent})`, progress: () => {} });
@@ -135,10 +135,8 @@ describe('runner session', () => {
     const token = `--tb-teardown-test=${process.pid}-${Math.round(performance.now())}`;
     const runner = await openRunner({ closeTimeoutMs: 1500, extraArgs: [token] });
     const pid = browserPid(token);
-    // A stopped browser cannot act on Browser.close, so browser.close() takes
-    // Playwright's own 30 s before its SIGKILL; a pipe holder outside the
-    // process group (crashpad, see closeWithin) makes it wait forever. Either
-    // way close() must return at its own bound.
+    // A stopped browser cannot act on Browser.close, so Playwright's close
+    // takes its own 30 s before its SIGKILL; close() must return at its own bound.
     process.kill(pid, 'SIGSTOP');
     try {
       const t0 = performance.now();
