@@ -17,6 +17,9 @@ importers:
       '@tb/engine-api':
         specifier: workspace:*
         version: link:packages/engine-api
+      '@tb/game':
+        specifier: workspace:*
+        version: link:packages/game
       '@tb/geom':
         specifier: workspace:*
         version: link:packages/geom
@@ -78,6 +81,27 @@ importers:
   packages/bench: {}
 
   packages/engine-api: {}
+
+  packages/game:
+    dependencies:
+      '@tb/adapter-rapier':
+        specifier: workspace:*
+        version: link:../adapter-rapier
+      '@tb/engine-api':
+        specifier: workspace:*
+        version: link:../engine-api
+      '@tb/geom':
+        specifier: workspace:*
+        version: link:../geom
+      '@tb/keystone':
+        specifier: workspace:*
+        version: link:../keystone
+      '@tb/schema':
+        specifier: workspace:*
+        version: link:../schema
+      '@tb/viewer':
+        specifier: workspace:*
+        version: link:../viewer
 
   packages/geom: {}
 

@@ -23,6 +23,7 @@
     "@tb/adapter-rapier": "workspace:*",
     "@tb/bench": "workspace:*",
     "@tb/engine-api": "workspace:*",
+    "@tb/game": "workspace:*",
     "@tb/geom": "workspace:*",
     "@tb/keystone": "workspace:*",
     "@tb/keystone-lab": "workspace:*",
