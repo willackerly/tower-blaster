@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import fc from 'fast-check';
 import {
-  engineSpec, eyeOf, frame, GPU_SPARE, invert, multiply, newClock, parseViewerConfig, rayThrough, stepsDue, toSearch, transform, viewProj, Window, withOption, type Orbit,
+  engineSpec, escapeHtml, eyeOf, frame, GPU_SPARE, invert, multiply, newClock, parseViewerConfig, presetSearch, rayThrough, stepsDue, toSearch, transform, viewProj, Window, withOption, type Orbit,
 } from '../src/index.ts';
 
 const orbit: Orbit = { target: [1, 2, 3], yaw: 0.7, pitch: 0.4, distance: 25, fovY: 0.9 };
@@ -96,6 +96,16 @@ describe('viewer config', () => {
     expect(withOption('avbd-gpu:iterations=20,sweep=false', 'iterations', 40)).toBe('avbd-gpu:iterations=40,sweep=false');
     expect(withOption('avbd-gpu:iterations=20,sweep=false', 'iterations', undefined)).toBe('avbd-gpu:sweep=false');
     expect(withOption('avbd-gpu:iterations=20', 'iterations', undefined)).toBe('avbd-gpu');
+  });
+  it('takes a preset to its scene with the current engine, so its button can tell it is on', () => {
+    const at = toSearch(parseViewerConfig('?scenario=S12&engine=rapier'));
+    expect(presetSearch('?scenario=S12', 'rapier')).toBe(at);
+    expect(presetSearch('?scenario=S12', 'avbd-gpu:iterations=20')).toBe(toSearch(parseViewerConfig('?scenario=S12&engine=avbd-gpu:iterations=20')));
+    expect(presetSearch('?scenario=S13', 'rapier')).not.toBe(at);
+  });
+  it('escapes text for the HUD', () => {
+    expect(escapeHtml(`rapier:x=<img src=x onerror="alert('1')">&`)).toBe('rapier:x=&#60;img src=x onerror=&#34;alert(&#39;1&#39;)&#34;&#62;&#38;');
+    expect(escapeHtml('avbd-gpu:iterations=20')).toBe('avbd-gpu:iterations=20');
   });
   it('round-trips through the URL', () => {
     const c = parseViewerConfig('?scenario=s1&param.F=3&param.gap=0.02&sleep=0&autofire=30&seed=4&offscreen=1');

@@ -8,7 +8,8 @@ import { buildScenario, SCENARIOS } from '@tb/scenarios';
 import { clampPitch, frame, rayThrough, viewProj, eyeOf, type Orbit } from './camera.ts';
 import { newClock, stepsDue, Window } from './loop.ts';
 import type { V3 } from './math.ts';
-import { engineSpec, parseViewerConfig, toSearch, type ViewerConfig, withOption } from './params.ts';
+import { escapeHtml } from './html.ts';
+import { engineSpec, parseViewerConfig, presetSearch, toSearch, type ViewerConfig, withOption } from './params.ts';
 import { createDevice } from '@tb/gpu';
 import { CANDY_NIGHT, LOOKS, Renderer, SnapshotSource, type PixelStats } from '@tb/render';
 
@@ -106,8 +107,8 @@ function presets(current: string) {
   for (const p of PRESETS) {
     const b = document.createElement('button');
     b.textContent = p.label;
-    if (parseViewerConfig(p.search).scenario === parseViewerConfig(current).scenario && toSearch(parseViewerConfig(p.search)) === toSearch(parseViewerConfig(current))) b.className = 'on';
-    b.onclick = () => { location.search = toSearch({ ...parseViewerConfig(p.search), engine: config.engine }); };
+    if (presetSearch(p.search, config.engine) === toSearch(config)) b.className = 'on';
+    b.onclick = () => { location.search = presetSearch(p.search, config.engine); };
     box.appendChild(b);
   }
 }
@@ -262,14 +263,14 @@ async function main() {
     const over = med > 7.5;
     hud.innerHTML = `
       <div class="big">${handle.bodies.toLocaleString()} bodies</div>
-      <div class="muted">${SCENARIOS[config.scenario]!.title} · ${config.engine} (${engine.info.backend})</div>
+      <div class="muted">${SCENARIOS[config.scenario]!.title} · ${escapeHtml(config.engine)} (${escapeHtml(engine.info.backend)})</div>
       <div class="row"><span>physics ms/step</span><span class="${over ? 'warn' : ''}">${fmt(med)} <span class="muted">p95 ${fmt(p95)}</span></span></div>
       <div class="row"><span>awake</span><span>${awake.toLocaleString()}</span></div>
       <div class="row"><span>fps</span><span>${fmt(fps)}</span></div>
       <div class="row"><span>sim speed</span><span class="${clock.simSpeed < 0.95 ? 'warn' : ''}">${(clock.simSpeed * 100).toFixed(0)}%</span></div>
       <div class="row"><span>snapshot + upload</span><span>${fmt(snapMs.quantile(0.5))} ms</span></div>
       <div class="row muted"><span>budget</span><span>7.5 ms/step</span></div>
-      <div class="muted">${adapter.info.vendor} ${adapter.info.architecture}${paused ? ' · <b>paused</b>' : ''}</div>${notice ? `\n      <div class="warn">${notice}</div>` : ''}`;
+      <div class="muted">${adapter.info.vendor} ${adapter.info.architecture}${paused ? ' · <b>paused</b>' : ''}</div>${notice ? `\n      <div class="warn">${escapeHtml(notice)}</div>` : ''}`;
   }
 
   await reset();
@@ -287,7 +288,8 @@ async function main() {
     if (resetAsked) { resetAsked = false; await reset(); }
     const n = paused ? 0 : stepsDue(clock, frameMs, scene.dt);
     // A GPU engine's step() only submits, so its steps are timed to completion with finish().
-    // refresh() reads a snapshot back after them anyway, so the wait adds no stall.
+    // refresh() waits for the GPU anyway to read a snapshot back; the wait adds one
+    // queue-completion round trip before that readback's copy is submitted.
     const t0 = performance.now();
     for (let i = 0; i < n; i++) {
       const ts = performance.now();
