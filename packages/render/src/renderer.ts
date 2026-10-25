@@ -64,8 +64,6 @@ export type RenderTarget = { canvas: HTMLCanvasElement } | { size: [number, numb
  */
 export type BoxPath = 'fan' | 'cube';
 
-/** What renderIds draws: body slot + 1, fsFace's face codes, or fsOwn's AO own-centre error. */
-export type IdTarget = 'ids' | 'faces' | 'own';
 
 export interface RendererOptions {
   /**
@@ -81,12 +79,9 @@ export interface RendererOptions {
   /** Bench diagnostics: boxes shaded with their flat albedo only, which separates fragment cost from the rest. */
   flatBoxes?: boolean;
   /**
-   * Bench diagnostics for AO's cost: 'own-read' reads the own centre and
-   * footprint per fragment from per-slot buffers (the earlier path; by
-   * default they are derived from the fragment's inputs), 'no-seam' drops
-   * the seam cavity.
+   * Bench diagnostics for AO's cost: 'no-seam' compiles the seam cavity out.
    */
-  aoDiag?: 'own-read' | 'no-seam';
+  aoDiag?: 'no-seam';
   /** Spark slots (default SPARK_POOL, 65536). Every slot costs a simulation thread and a quad per frame. */
   sparkPool?: number;
   /** Output format; default the canvas's preferred one (bgra8unorm on Apple, rgba8unorm elsewhere). Tests set it to cover both. */
@@ -119,8 +114,6 @@ export class Renderer {
   private readonly pipes: Record<PipeName, GPURenderPipeline>;
   private readonly facePipe: () => GPURenderPipeline;
   private faceCache: GPURenderPipeline | null = null;
-  private readonly ownPipes: () => [GPURenderPipeline, GPURenderPipeline];
-  private ownCache: [GPURenderPipeline, GPURenderPipeline] | null = null;
   private readonly shadowTex: GPUTexture;
   private readonly shadowSampler: GPUSampler;
   private readonly context: GPUCanvasContext | null;
@@ -222,8 +215,7 @@ export class Renderer {
     const module = device.createShaderModule({ code: SCENE_WGSL, label: 'scene' });
     const main = device.createPipelineLayout({ bindGroupLayouts: [this.layout] });
     const shadowPl = device.createPipelineLayout({ bindGroupLayouts: [this.shadowLayout] });
-    const ownRead = opts.aoDiag === 'own-read' ? 1 : 0;
-    const fsConsts: Record<string, Record<string, number>> = { fsBox: { AO_OWN_READ: ownRead, AO_SEAM: opts.aoDiag === 'no-seam' ? 0 : 1 }, fsSphere: { AO_OWN_READ: ownRead } };
+    const fsConsts: Record<string, Record<string, number>> = { fsBox: { AO_SEAM: opts.aoDiag === 'no-seam' ? 0 : 1 } };
     const color = (vs: string, fs: string, cull: GPUCullMode, seg: number, opts: { format?: GPUTextureFormat; samples?: number; sky?: boolean; buffers?: GPUVertexBufferLayout[] } = {}): GPURenderPipeline => device.createRenderPipeline({
       layout: main,
       vertex: { module, entryPoint: vs, constants: { SEG: seg, ...(vs === 'vsBox' ? { FAN: sceneFan ? 1 : 0 } : {}) }, buffers: opts.buffers ?? [] },
@@ -249,7 +241,6 @@ export class Renderer {
     });
     this.source = new SnapshotSource(device);
     this.facePipe = () => (this.faceCache ??= color('vsBox', 'fsFace', 'back', SEG.box, { format: 'r32uint', samples: 1 }));
-    this.ownPipes = () => (this.ownCache ??= [color('vsBox', 'fsOwnBox', 'back', SEG.box, { format: 'r32uint', samples: 1 }), color('vsSphere', 'fsOwnSphere', 'back', SEG.sphere, { format: 'r32uint', samples: 1 })]);
     this.pipes = {
       box: color('vsBox', opts.flatBoxes ? 'fsBoxFlat' : 'fsBox', 'back', SEG.box),
       sphere: color('vsSphere', 'fsSphere', 'back', SEG.sphere),
@@ -441,7 +432,7 @@ export class Renderer {
   }
 
   /** Cull, shadow, then the scene pass (or the ID pass, which skips floor, sky and shadow). */
-  private encodeScene(enc: GPUCommandEncoder, f: FrameParams, mode: 'scene' | IdTarget, stamp: Stamp = noStamp): void {
+  private encodeScene(enc: GPUCommandEncoder, f: FrameParams, mode: 'scene' | 'ids' | 'faces', stamp: Stamp = noStamp): void {
     const ids = mode !== 'scene';
     if (f.groundY !== this.aoFloor) { this.aoFloor = f.groundY; this.fitAo(); }
     const culler = this.sync();
@@ -452,7 +443,7 @@ export class Renderer {
       this.sceneTime = t;
     }
     const cf = this.writeFrame({ ...f, dt });
-    const ao = (!ids || mode === 'own') && this.toggles.ao; // own compares with the splat's footprints
+    const ao = !ids && this.toggles.ao;
     if (ao) this.ao.clear(enc);
     const cp = enc.beginComputePass({ label: 'cull', ...stamp('cull') });
     culler.encode(cp, cf);
@@ -485,10 +476,10 @@ export class Renderer {
       depthStencilAttachment: { view: (ids ? this.idDepth! : this.depth!).createView(), depthClearValue: 1, depthLoadOp: 'clear', depthStoreOp: 'discard' },
     });
     p.setBindGroup(0, this.bind!);
-    p.setPipeline(mode === 'faces' ? this.facePipe() : mode === 'own' ? this.ownPipes()[0] : ids ? this.pipes.boxId : this.pipes.box);
+    p.setPipeline(mode === 'faces' ? this.facePipe() : ids ? this.pipes.boxId : this.pipes.box);
     p.drawIndirect(culler.args, 16 * SEG.box);
     if (mode === 'faces') { p.end(); return; }
-    p.setPipeline(mode === 'own' ? this.ownPipes()[1] : ids ? this.pipes.sphereId : this.pipes.sphere);
+    p.setPipeline(ids ? this.pipes.sphereId : this.pipes.sphere);
     p.drawIndirect(culler.args, 16 * SEG.sphere);
     if (!ids) {
       if (this.overlayCount) {
@@ -553,11 +544,9 @@ export class Renderer {
 
   /**
    * Test path: body slot + 1 per pixel (0 = nothing), row-major, size of the
-   * target. faces: boxes only, the face code fsFace writes instead. own:
-   * the AO own-centre error fsOwnBox and fsOwnSphere write (f32 bits).
+   * target. With faces, boxes only, the face code fsFace writes instead.
    */
-  async renderIds(f: FrameParams, target: IdTarget | boolean = 'ids'): Promise<{ width: number; height: number; ids: Uint32Array }> {
-    const mode: IdTarget = target === true ? 'faces' : target === false ? 'ids' : target;
+  async renderIds(f: FrameParams, faces = false): Promise<{ width: number; height: number; ids: Uint32Array }> {
     const [w, h] = this.offscreen ? [this.offscreen.width, this.offscreen.height] : [this.context!.canvas.width, this.context!.canvas.height];
     if (!this.idTex || this.idTex.width !== w || this.idTex.height !== h) {
       this.idTex?.destroy();
@@ -566,7 +555,7 @@ export class Renderer {
       this.idDepth = this.device.createTexture({ size: [w, h], format: 'depth24plus', usage: GPUTextureUsage.RENDER_ATTACHMENT });
     }
     const enc = this.device.createCommandEncoder();
-    this.encodeScene(enc, f, mode);
+    this.encodeScene(enc, f, faces ? 'faces' : 'ids');
     const bytesPerRow = Math.ceil((w * 4) / 256) * 256;
     const read = this.device.createBuffer({ size: bytesPerRow * h, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST });
     enc.copyTextureToBuffer({ texture: this.idTex }, { buffer: read, bytesPerRow }, [w, h]);
