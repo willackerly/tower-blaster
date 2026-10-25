@@ -111,12 +111,15 @@ importers:
       '@tb/geom':
         specifier: workspace:*
         version: link:../geom
+      '@tb/gpu':
+        specifier: workspace:*
+        version: link:../gpu
       '@tb/keystone':
         specifier: workspace:*
         version: link:../keystone
-      '@tb/schema':
+      '@tb/render':
         specifier: workspace:*
-        version: link:../schema
+        version: link:../render
       '@tb/viewer':
         specifier: workspace:*
         version: link:../viewer

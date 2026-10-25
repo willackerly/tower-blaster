@@ -49,4 +49,14 @@ describe('Pacer', () => {
     run(p, 1, { stepMs: 1, budgetMs: 10 });
     expect(p.timeScale).toBe(1);
   });
+  it('alpha is the fraction of a step owed, and holds still during hit-stop', () => {
+    const p = new Pacer();
+    p.stepsThisFrame(FRAME / 2, DT);
+    expect(p.alpha(DT)).toBeCloseTo(0.5, 9);
+    p.hitStop(2);
+    p.stepsThisFrame(FRAME, DT);
+    expect(p.alpha(DT)).toBeCloseTo(0.5, 9);
+    p.reset();
+    expect(p.alpha(DT)).toBe(0);
+  });
 });

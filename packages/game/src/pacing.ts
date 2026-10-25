@@ -30,6 +30,8 @@ export class Pacer {
   get slowing() { return this.slow !== null; }
   /** True while a hit-stop holds: stop stepping for the rest of this frame too. */
   get frozen() { return this.stopFrames > 0; }
+  /** How far real time is into the next step (0..1): the renderer interpolates by it. */
+  alpha(dt: number) { return Math.min(1, Math.max(0, this.acc / dt)); }
   reset() { this.acc = 0; this.stopFrames = 0; this.slow = null; this.timeScale = 1; }
 
   /** The slow-motion time scale `t` seconds in, released at `rel` (or not yet). */
