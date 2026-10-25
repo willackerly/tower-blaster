@@ -1,34 +1,45 @@
 // Rapier as the active-set host under the world tiers (see
 // @tb/engine-api host.ts). Bodies are created the first time an id is
-// switched on and then only enabled, disabled or retyped, so a cell that
-// wakes keeps its Rapier body and contacts.
+// switched on and then only enabled, disabled or retyped. Lattices are
+// native: one voxel collider per lattice, so dormant towers have no internal
+// seams for sliding cubes to catch on, and a dormant tower is a single
+// broadphase entry however many cubes it holds.
 import RAPIER from '@dimforge/rapier3d-simd-compat';
 import {
-  type BodyDesc, type BodyMode, type EngineInfo, type HostBatch, type HostCaps, type HostState, type HostWorld,
-  MODE_DYNAMIC, MODE_OFF, MODE_STATIC, type PhysicsHost,
+  type BodyDesc, type BodyMode, type EngineInfo, type HostBatch, type HostCaps, type HostLattice, type HostState, type HostWorld,
+  MODE_DYNAMIC, MODE_OFF, MODE_STATIC, type PhysicsHost, type Quat, type Vec3,
 } from '@tb/engine-api';
+import { boundingRadius, shapeDepth } from '@tb/geom';
 import { createBody, createGround, initRapier } from './bodies.ts';
 import type { RapierOptions } from './index.ts';
 
 export class RapierHost implements PhysicsHost {
   readonly info: EngineInfo;
-  caps: HostCaps = { capacity: 0, stateLag: 0, contactForces: true };
+  caps: HostCaps = { capacity: 0, stateLag: 0, contactForces: true, latticeNative: true };
   private world: RAPIER.World | null = null;
   private table: readonly BodyDesc[] = [];
   private bodies: Array<{ body: RAPIER.RigidBody; collider: RAPIER.Collider } | undefined> = [];
   private modes = new Uint8Array(0);
+  /** 1 while an id sits in a native lattice cell. */
+  private inCell = new Uint8Array(0);
   private dynamicIds: number[] = [];
   private staticIds: number[] = [];
   private idsDirty = false;
   private sleep = true;
   private dt = 1 / 60;
   private steps = 0;
+  private lattices: Array<HostLattice & { cells: Int32Array; collider: RAPIER.Collider | null }> = [];
+  private events: RAPIER.EventQueue | null = null;
+  /** Collider handle -> lattice index, for voxel colliders. */
+  private voxelOf = new Map<number, number>();
+  private bodyOfCollider = new Map<number, number>();
+  private voxelForces: Array<{ lattice: number; body: number; force: Vec3; magnitude: number }> = [];
 
   constructor(private readonly opts: RapierOptions = {}) {
     this.info = { name: 'rapier-host', variant: { version: 'uninitialised', iterations: opts.iterations ?? 4 }, backend: 'wasm-simd-st' };
   }
 
-  async init(world: HostWorld, table: readonly BodyDesc[]): Promise<void> {
+  async init(world: HostWorld, table: readonly BodyDesc[], lattices: readonly HostLattice[] = []): Promise<void> {
     await initRapier();
     this.info.variant.version = RAPIER.version();
     this.dispose();
@@ -40,12 +51,18 @@ export class RapierHost implements PhysicsHost {
     this.table = table;
     this.bodies = new Array(table.length);
     this.modes = new Uint8Array(table.length);
+    this.inCell = new Uint8Array(table.length);
     this.caps = { ...this.caps, capacity: table.length };
     this.sleep = world.sleep;
     this.dt = world.dt;
     this.steps = 0;
     this.dynamicIds = [];
     this.staticIds = [];
+    this.events = new RAPIER.EventQueue(true);
+    this.voxelOf = new Map();
+    this.bodyOfCollider = new Map();
+    this.voxelForces = [];
+    this.lattices = lattices.map((l) => ({ ...l, cells: new Int32Array(l.dims[0] * l.dims[1] * l.dims[2]).fill(-1), collider: null }));
   }
 
   modeOf(id: number): BodyMode { return this.modes[id] as BodyMode; }
@@ -59,11 +76,18 @@ export class RapierHost implements PhysicsHost {
       if (!(c.id >= 0 && c.id < this.table.length)) throw new Error(`id ${c.id} outside capacity ${this.table.length}`);
       if (c.id <= last) throw new Error('changes must have ascending, unique ids');
       last = c.id;
-      if (c.mode !== MODE_OFF && this.modes[c.id] === MODE_OFF && (!c.pos || !c.rot)) throw new Error(`id ${c.id} is off: switching it on needs a pose`);
+      if (c.mode !== MODE_OFF && !this.bodies[c.id] && (!c.pos || !c.rot)) throw new Error(`id ${c.id} has no body yet: switching it on needs a pose`);
     }
     for (const id of batch.wake) if (this.modes[id] !== MODE_DYNAMIC && !batch.changes.some((c) => c.id === id && c.mode === MODE_DYNAMIC)) {
       throw new Error(`wake: id ${id} is not dynamic`);
     }
+    for (const c of batch.cells ?? []) {
+      const l = this.lattices[c.lattice];
+      if (!l) throw new Error(`cell change for unknown lattice ${c.lattice}`);
+      if (!(c.i >= 0 && c.j >= 0 && c.k >= 0 && c.i < l.dims[0] && c.j < l.dims[1] && c.k < l.dims[2])) throw new Error(`cell ${c.i},${c.j},${c.k} outside lattice ${c.lattice}`);
+      if (c.id >= this.table.length) throw new Error(`cell id ${c.id} outside capacity`);
+    }
+    this.applyCells(batch.cells ?? []);
     for (const c of batch.changes) {
       const prev = this.modes[c.id]!;
       if (c.mode === prev && !c.pos && !c.linVel && !c.angVel) continue;
@@ -78,6 +102,7 @@ export class RapierHost implements PhysicsHost {
       if (!entry) {
         const desc = c.mode === MODE_STATIC ? RAPIER.RigidBodyDesc.fixed() : RAPIER.RigidBodyDesc.dynamic();
         entry = this.bodies[c.id] = createBody(w, { ...this.table[c.id]!, pos: c.pos!, rot: c.rot!, linVel: [0, 0, 0], angVel: [0, 0, 0] }, this.sleep, desc);
+        this.bodyOfCollider.set(entry.collider.handle, c.id);
       } else {
         if (prev === MODE_OFF) entry.body.setEnabled(true);
         if (entry.body.bodyType() !== type) entry.body.setBodyType(type, true);
@@ -96,11 +121,87 @@ export class RapierHost implements PhysicsHost {
     for (const id of batch.wake) this.bodies[id]!.body.wakeUp();
   }
 
+  private cellIndex(l: HostLattice, i: number, j: number, k: number) { return (k * l.dims[0] + i) * l.dims[1] + j; }
+
+  private applyCells(cells: readonly NonNullable<HostBatch['cells']>[number][]): void {
+    const w = this.world!;
+    const byLattice = new Map<number, typeof cells[number][]>();
+    for (const c of cells) {
+      const list = byLattice.get(c.lattice);
+      if (list) list.push(c); else byLattice.set(c.lattice, [c]);
+    }
+    for (const [li, list] of byLattice) {
+      const l = this.lattices[li]!;
+      if (!l.collider) {
+        // Created on first use with its whole domain: the corners are filled and
+        // then cleared unless the batch fills them, so later fills stay inside.
+        const [nx, ny, nz] = l.dims;
+        const data = new Int32Array([0, 0, 0, nx - 1, ny - 1, nz - 1]);
+        l.collider = w.createCollider(
+          RAPIER.ColliderDesc.voxels(data, { x: l.edge, y: l.edge, z: l.edge })
+            .setTranslation(l.origin[0] - l.edge / 2, l.origin[1] - l.edge / 2, l.origin[2] - l.edge / 2)
+            .setFriction(l.friction)
+            .setActiveEvents(RAPIER.ActiveEvents.CONTACT_FORCE_EVENTS)
+            .setContactForceEventThreshold(0),
+        );
+        this.voxelOf.set(l.collider.handle, li);
+        l.collider.setVoxel(0, 0, 0, false);
+        l.collider.setVoxel(nx - 1, ny - 1, nz - 1, false);
+      }
+      for (const c of list) {
+        const n = this.cellIndex(l, c.i, c.j, c.k);
+        const prev = l.cells[n]!;
+        if (prev >= 0) { this.inCell[prev] = 0; if (this.modes[prev] === MODE_STATIC) this.modes[prev] = MODE_OFF; }
+        l.cells[n] = c.id;
+        if (c.id >= 0) {
+          // A body that settles into a cell leaves the solver.
+          this.bodies[c.id]?.body.setEnabled(false);
+          this.modes[c.id] = MODE_STATIC;
+          this.inCell[c.id] = 1;
+        }
+        l.collider.setVoxel(c.i, c.j, c.k, c.id >= 0);
+        this.idsDirty = true;
+      }
+    }
+  }
+
   step(): void {
     const w = this.world;
     if (!w) throw new Error('init() first');
-    w.step();
+    const q = this.events!;
+    w.step(q);
+    this.voxelForces = [];
+    q.drainContactForceEvents((ev) => {
+      const h1 = ev.collider1(), h2 = ev.collider2();
+      const l1 = this.voxelOf.get(h1), l2 = this.voxelOf.get(h2);
+      if ((l1 === undefined) === (l2 === undefined)) return;
+      const lattice = (l1 ?? l2)!, other = l1 === undefined ? h1 : h2;
+      const body = this.bodyOfCollider.get(other);
+      if (body === undefined) return;
+      // totalForce acts on collider2; the lattice gets the opposite when it is collider1.
+      const f = ev.totalForce(), sgn = l1 === undefined ? 1 : -1;
+      this.voxelForces.push({ lattice, body, force: [sgn * f.x, sgn * f.y, sgn * f.z], magnitude: ev.totalForceMagnitude() });
+    });
     this.steps++;
+  }
+
+  /** Ids of native cells within a small distance of a body's shape. */
+  private touchedCells(l: HostLattice & { cells: Int32Array }, desc: BodyDesc, rb: RAPIER.RigidBody): number[] {
+    const p = rb.translation(), q = rb.rotation();
+    const pos: Vec3 = [p.x, p.y, p.z], rot: Quat = [q.x, q.y, q.z, q.w];
+    const r = boundingRadius(desc.shape) + 0.05 * l.edge, e = l.edge, h = e / 2;
+    const lo = (a: number) => Math.max(0, Math.ceil((pos[a]! - r - l.origin[a]!) / e - 0.5));
+    const hi = (a: number) => Math.min(l.dims[a]! - 1, Math.floor((pos[a]! + r - l.origin[a]!) / e + 0.5));
+    const out: number[] = [];
+    for (let k = lo(2); k <= hi(2); k++)
+      for (let i = lo(0); i <= hi(0); i++)
+        for (let j = lo(1); j <= hi(1); j++) {
+          const id = l.cells[this.cellIndex(l, i, j, k)]!;
+          if (id < 0) continue;
+          const c: Vec3 = [l.origin[0] + i * e, l.origin[1] + j * e, l.origin[2] + k * e];
+          if (shapeDepth(desc.shape, pos, rot, { kind: 'box', half: [h, h, h] }, c, [0, 0, 0, 1]) > -0.05 * e) out.push(id);
+        }
+    return out.sort((a, b) => a - b);
   }
 
   private refreshIds(): void {
@@ -109,7 +210,7 @@ export class RapierHost implements PhysicsHost {
     this.staticIds = [];
     this.modes.forEach((m, id) => {
       if (m === MODE_DYNAMIC) this.dynamicIds.push(id);
-      else if (m === MODE_STATIC) this.staticIds.push(id);
+      else if (m === MODE_STATIC && !this.inCell[id]) this.staticIds.push(id);
     });
     this.idsDirty = false;
   }
@@ -167,12 +268,38 @@ export class RapierHost implements PhysicsHost {
       });
       if (mag > 0) { ids.push(id); force.push(fx, fy, fz); magnitude.push(mag); }
     }
+    // Native lattice cells. Rapier reports no per-point impulses for voxel
+    // manifolds, so each step's pair force (collider force events) is split
+    // evenly over the cells the body touches.
+    const perCell = new Map<number, [number, number, number, number]>();
+    for (const ev of this.voxelForces) {
+      const l = this.lattices[ev.lattice]!, entry = this.bodies[ev.body];
+      if (!entry) continue;
+      const touched = this.touchedCells(l, this.table[ev.body]!, entry.body);
+      if (!touched.length) continue;
+      const share = 1 / touched.length;
+      for (const id of touched) {
+        const acc = perCell.get(id) ?? [0, 0, 0, 0];
+        acc[0] += share * ev.force[0]; acc[1] += share * ev.force[1]; acc[2] += share * ev.force[2]; acc[3] += share * ev.magnitude;
+        perCell.set(id, acc);
+      }
+    }
+    if (perCell.size) {
+      const all = ids.map((id, n) => [id, force[3 * n]!, force[3 * n + 1]!, force[3 * n + 2]!, magnitude[n]!] as const);
+      for (const [id, a] of perCell) all.push([id, a[0], a[1], a[2], a[3]]);
+      all.sort((a, b) => a[0] - b[0]);
+      ids.length = force.length = magnitude.length = 0;
+      for (const r of all) { ids.push(r[0]); force.push(r[1], r[2], r[3]); magnitude.push(r[4]); }
+    }
     return { ids: Int32Array.from(ids), force: Float64Array.from(force), magnitude: Float64Array.from(magnitude) };
   }
 
   dispose(): void {
     this.world?.free();
     this.world = null;
+    this.events?.free();
+    this.events = null;
     this.bodies = [];
+    this.lattices = [];
   }
 }

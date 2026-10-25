@@ -9,9 +9,14 @@
 //   contact warm starts keyed by slot pairs stay valid.
 // - Capacity is fixed at init: the id table. Static bodies count against it.
 // - Changes are batched between steps and applied atomically.
-// - A lattice cell near moving bodies is a static body with the cell's own
-//   id at the exact cell pose; waking it is a static -> dynamic switch in
-//   place, which keeps its slot and contacts.
+// - Dormant lattice cells reach the host in one of two ways. A host with
+//   caps.latticeNative takes the lattice occupancy itself (Rapier: a voxel
+//   collider per lattice; GPU: brick lookups) and gets cell changes in each
+//   batch. Otherwise a cell near moving bodies is a static body with the
+//   cell's own id at the exact cell pose (a proxy). Native is preferred:
+//   separate static boxes have internal seams that catch sliding cubes
+//   (measured in Rapier: a cube sliding without friction across 16 static
+//   boxes went from 3 to 0.2 m/s and hopped; across voxels, unchanged).
 // - State reads may lag by a fixed number of steps (caps.stateLag); the tier
 //   always consumes exactly the state of step k - stateLag, so results never
 //   depend on readback timing.
@@ -30,8 +35,28 @@ export interface HostCaps {
   capacity: number;
   /** read() after step k returns the state of step k - stateLag. 0 on CPU hosts. */
   stateLag: number;
-  /** Whether read() reports contact forces on static bodies. */
+  /** Whether read() reports contact forces on static bodies (and native lattice cells). */
   contactForces: boolean;
+  /** Whether the host takes lattice occupancy natively (init lattices + batch cells). */
+  latticeNative: boolean;
+}
+
+/** A lattice the host represents natively: cell (i, j, k) is the cube at origin + (i, j, k) * edge. */
+export interface HostLattice {
+  origin: Vec3;
+  edge: number;
+  dims: [number, number, number];
+  friction: number;
+}
+
+/** Fill or empty one native lattice cell. */
+export interface CellChange {
+  lattice: number;
+  i: number;
+  j: number;
+  k: number;
+  /** Body id of the cube now in the cell, or -1 to empty it. */
+  id: number;
 }
 
 export type HostWorld = Pick<SceneDesc, 'gravity' | 'dt' | 'ground' | 'sleep'>;
@@ -59,6 +84,8 @@ export interface HostBatch {
   changes: ModeChange[];
   /** Dynamic bodies to wake (asleep bodies next to something that changed). */
   wake: number[];
+  /** Native lattice cells to fill or empty (latticeNative hosts only); applied before `changes`. */
+  cells?: CellChange[];
 }
 
 /** Summed contact forces on static bodies over one step. */
@@ -88,8 +115,12 @@ export interface HostState {
 export interface PhysicsHost {
   readonly info: EngineInfo;
   readonly caps: HostCaps;
-  /** `table` describes every id the run can use (shape, material, initial state); all start off. */
-  init(world: HostWorld, table: readonly BodyDesc[]): Promise<void>;
+  /**
+   * `table` describes every id the run can use (shape, material, initial
+   * state); all start off. `lattices` are the frames native cells live in
+   * (ignored unless caps.latticeNative); they start empty.
+   */
+  init(world: HostWorld, table: readonly BodyDesc[], lattices?: readonly HostLattice[]): Promise<void>;
   /** Throws on an invalid batch (unknown id, off without a pose) and applies nothing. */
   apply(batch: HostBatch): void;
   /** Advance one fixed step. */
@@ -98,6 +129,7 @@ export interface PhysicsHost {
   read(): HostState | Promise<HostState>;
   /** Current state of every dynamic body, exact (for snapshots; never in a timed region). */
   current(): HostState | Promise<HostState>;
+  /** MODE_STATIC for a body in a native lattice cell. */
   modeOf(id: number): BodyMode;
   dispose(): void;
 }

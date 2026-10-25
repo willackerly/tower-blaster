@@ -87,4 +87,53 @@ describe('RapierHost', () => {
     h.dispose();
     e.dispose();
   });
+
+  describe('native lattice cells (voxels)', () => {
+    const lat = { origin: [0, 0.5, 0] as [number, number, number], edge: 1, dims: [16, 3, 3] as [number, number, number], friction: 0.6 };
+
+    it('report the weight of a body resting across two cells, split between them', async () => {
+      const table = [cube([0, 0.5, 0]), cube([1, 0.5, 0]), cube([0.5, 1.5, 0], 2)];
+      const h = new RapierHost();
+      await h.init(world, table, [lat]);
+      h.apply({ changes: [on(2, MODE_DYNAMIC, table[2]!)], wake: [], cells: [{ lattice: 0, i: 0, j: 0, k: 0, id: 0 }, { lattice: 0, i: 1, j: 0, k: 0, id: 1 }] });
+      expect(h.modeOf(0)).toBe(MODE_STATIC);
+      for (let i = 0; i < 30; i++) h.step();
+      const c = h.read().contacts!;
+      expect(Array.from(c.ids)).toEqual([0, 1]);
+      for (const n of [0, 1]) expect(c.force[3 * n + 1]! / (2 * 9.81)).toBeCloseTo(-0.5, 2);
+      h.dispose();
+    });
+
+    it('have no internal seams: a frictionless cube slides across 16 cells without losing speed', async () => {
+      const slider = { ...cube([0, 1.5, 0]), friction: 0 };
+      const table = [...Array.from({ length: 16 }, (_, i) => cube([i, 0.5, 0])), slider];
+      for (const sep of [false, true]) {
+        const h = new RapierHost();
+        await h.init({ ...world, sleep: false }, table, [{ ...lat, friction: 0 }]);
+        const cells = sep ? [] : table.slice(0, 16).map((_, i) => ({ lattice: 0, i, j: 0, k: 0, id: i }));
+        const statics = sep ? table.slice(0, 16).map((b, i) => on(i, MODE_STATIC, b)) : [];
+        h.apply({ changes: [...statics, { ...on(16, MODE_DYNAMIC, slider), linVel: [3, 0, 0] }], wake: [], cells });
+        for (let i = 0; i < 150; i++) h.step();
+        const s = h.read();
+        const vx = s.linVel[3 * s.ids.indexOf(16)]!;
+        // Separate static boxes are the control: they catch the slider (the reason lattices are native).
+        if (sep) expect(vx).toBeLessThan(2); else expect(vx).toBeCloseTo(3, 3);
+        h.dispose();
+      }
+    });
+
+    it('empty a cell and wake its cube as a dynamic body in the same batch', async () => {
+      const table = [cube([0, 0.5, 0]), cube([0, 1.5, 0])];
+      const h = new RapierHost();
+      await h.init(world, table, [lat]);
+      h.apply({ changes: [], wake: [], cells: [{ lattice: 0, i: 0, j: 0, k: 0, id: 0 }, { lattice: 0, i: 0, j: 1, k: 0, id: 1 }] });
+      h.apply({ changes: [{ id: 1, mode: MODE_DYNAMIC, pos: table[1]!.pos, rot: table[1]!.rot }], wake: [], cells: [{ lattice: 0, i: 0, j: 1, k: 0, id: -1 }] });
+      expect(h.modeOf(1)).toBe(MODE_DYNAMIC);
+      for (let i = 0; i < 30; i++) h.step();
+      const s = h.read();
+      expect(s.pos[1]).toBeCloseTo(1.5, 2); // rests on the cell below
+      expect(Array.from(s.contacts!.ids)).toEqual([0]);
+      h.dispose();
+    });
+  });
 });
