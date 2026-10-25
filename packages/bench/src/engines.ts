@@ -34,10 +34,15 @@ export const engineNames = () => Object.keys(REGISTRY);
 /**
  * Wraps an engine and busy-waits so each step takes (1 + fraction) times as
  * long. The harness self-check must detect this. Fraction 0 runs the same
- * code and spins zero time, which makes it the baseline arm.
+ * code and spins zero time, which makes it the baseline arm. The spin is a
+ * fraction of the host-side step; finish() is passed through, so a wrapped
+ * GPU engine is still timed to completion.
  */
 export class SlowedEngine implements PhysicsEngine {
-  constructor(private readonly inner: PhysicsEngine, private readonly fraction: number, private readonly clock: () => number = () => performance.now()) {}
+  readonly finish?: () => Promise<void>;
+  constructor(private readonly inner: PhysicsEngine, private readonly fraction: number, private readonly clock: () => number = () => performance.now()) {
+    if (inner.finish) this.finish = () => inner.finish!();
+  }
   get info() { return { ...this.inner.info, variant: { ...this.inner.info.variant, slowed: this.fraction } }; }
   get stepIndex() { return this.inner.stepIndex; }
   init(scene: SceneDesc) { return this.inner.init(scene); }
