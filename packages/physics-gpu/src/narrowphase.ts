@@ -5,6 +5,7 @@
 // sequence, first-index tie-breaks, face-axis tolerance and the previous
 // axis as the first candidate) so the two agree, not merely look alike.
 import { EDGE_ABS, EDGE_REL, FACE_ABS, FACE_INSET, FACE_REL } from '@tb/geom';
+import { assertStorageFits } from '@tb/gpu';
 import { Body, Manifold, Shape, wgslStruct } from '@tb/schema';
 
 const WG = 64;
@@ -370,7 +371,7 @@ export class Narrowphase {
    * @param prev optional vec2u per pair slot, (last step's slot, last step's axis) from AvbdSolver.match; no history when omitted
    */
   constructor(private readonly device: GPUDevice, bodies: GPUBuffer, shapes: GPUBuffer, pairs: GPUBuffer, private readonly total: GPUBuffer, readonly capacity: number, readonly maxPairs: number, sweep?: GPUBuffer, prev?: GPUBuffer) {
-    const buf = (bytes: number, label: string) => device.createBuffer({ size: Math.max(Manifold.size, bytes), usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC, label });
+    const buf = (bytes: number, label: string) => (assertStorageFits(device, bytes, label), device.createBuffer({ size: Math.max(Manifold.size, bytes), usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC, label }));
     this.manifolds = buf(maxPairs * Manifold.size, 'np manifolds');
     this.groundManifolds = buf(capacity * Manifold.size, 'np ground manifolds');
     this.uniform = device.createBuffer({ size: 16, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });

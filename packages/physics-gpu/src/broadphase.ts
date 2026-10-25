@@ -19,7 +19,7 @@
 // size is known before writing. The rejected alternative, atomic append
 // followed by a sort, is faster when pairs are few but nondeterministic, and
 // determinism is a project requirement (scenario S11).
-import { RadixSorter, Scanner } from '@tb/gpu';
+import { assertStorageFits, RadixSorter, Scanner } from '@tb/gpu';
 
 const WG = 64;
 
@@ -153,7 +153,7 @@ export class Broadphase {
     // Table of at least 2 buckets per body keeps chains short.
     this.keyBits = tableBits ?? Math.max(4, Math.ceil(Math.log2(Math.max(2, 2 * capacity))));
     const table = 2 ** this.keyBits;
-    const buf = (bytes: number, label: string, extra = 0) => device.createBuffer({ size: Math.max(16, bytes), usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST | extra, label });
+    const buf = (bytes: number, label: string, extra = 0) => (assertStorageFits(device, bytes, label), device.createBuffer({ size: Math.max(16, bytes), usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST | extra, label }));
     this.keys = buf(capacity * 4, 'bp keys');
     this.vals = buf(capacity * 4, 'bp vals');
     this.cellStart = buf(table * 4, 'bp cell start');

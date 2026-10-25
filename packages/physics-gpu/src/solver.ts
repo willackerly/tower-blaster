@@ -15,6 +15,7 @@
 // - Post-stabilization is always on (the reference's default).
 //
 // Each kernel binds at most 8 storage buffers (the WebGPU default limit).
+import { assertStorageFits } from '@tb/gpu';
 import { Body, BodyProps, ColorParams, Manifold, SolverBody, SolverContact, SolverParams, wgslStruct } from '@tb/schema';
 import { MAX_COLORS } from './coloring.ts';
 
@@ -546,7 +547,7 @@ export class AvbdSolver {
   private prevN = 0;
 
   constructor(private readonly device: GPUDevice, readonly capacity: number, readonly maxPairs: number, private readonly b: SolverBuffers) {
-    const buf = (bytes: number, label: string, usage = 0) => device.createBuffer({ size: Math.max(16, bytes), usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST | usage, label });
+    const buf = (bytes: number, label: string) => (assertStorageFits(device, bytes, label), device.createBuffer({ size: Math.max(16, bytes), usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST, label }));
     this.solver = buf(capacity * SolverBody.size, 'avbd solver bodies');
     this.contacts = buf(2 * (maxPairs + capacity) * 4 * SolverContact.size, 'avbd contacts');
     this.meta = buf(64, 'avbd meta');

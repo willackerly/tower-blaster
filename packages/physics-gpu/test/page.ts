@@ -369,7 +369,7 @@ export async function coloring(c: ColorCase) {
     colorsMatch: firstMismatch < 0, firstMismatch, rowsMatch, orderMatch: order.every((x, k) => x === expectOrder[k]),
     startMatch: start.every((x, k) => x === expectStart[k]),
     dispatchMatch: Array.from({ length: MAX_COLORS }, (_, k) => disp[3 * k] === Math.ceil((expectStart[k + 1]! - expectStart[k]!) / 64) && disp[3 * k + 1] === 1 && disp[3 * k + 2] === 1).every(Boolean),
-    maxDegree: Math.max(0, ...adj.map((s) => s.size)), wallMs,
+    maxDegree: adj.reduce((m, s) => Math.max(m, s.size), 0), wallMs,
   };
 }
 
@@ -484,3 +484,14 @@ export async function pairHistory(scene: SceneDesc, steps: number, opts: { pairs
 }
 const NONE_U32 = 0xffffffff;
 
+/** init() with a pair buffer too large for the device: the error it throws (null if none). */
+export async function initError(scene: SceneDesc, pairsPerBody: number) {
+  const { device } = await createDevice();
+  device.pushErrorScope('validation');
+  const e = new GpuAvbdEngine({}, { device, pairsPerBody });
+  let message: string | null = null;
+  try { await e.init(scene); } catch (err) { message = (err as Error).message; }
+  const validation = await device.popErrorScope();
+  e.dispose(); device.destroy();
+  return { message, validation: validation?.message ?? null };
+}

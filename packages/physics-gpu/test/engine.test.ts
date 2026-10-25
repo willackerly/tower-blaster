@@ -197,6 +197,14 @@ describe('GPU AVBD engine: stacks, towers and impacts', () => {
     expect(overflow.found).toBeGreaterThan(1000);
   }, 180_000);
 
+  it('init() names the buffer that does not fit the device instead of failing validation later', async (ctx) => {
+    if (!gpu) return ctx.skip();
+    const r = await call('initError', buildScenario('S9', { H: 10, ratio: 1 }, 1), 1e6);
+    // Which buffer is first too large depends on the device's limit.
+    expect(r.message).toMatch(/^[\w ]+: \d+ bytes exceeds the device's \d+-byte storage binding limit$/);
+    expect(r.validation).toBeNull();
+  });
+
   it('is bit-for-bit deterministic', async (ctx) => {
     if (!gpu) return ctx.skip();
     const scene = buildScenario('S11', { N: 200 }, 7);

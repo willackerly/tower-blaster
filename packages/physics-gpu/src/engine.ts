@@ -4,7 +4,7 @@
 // the two engines can be run side by side on the same settings.
 import { type BodyDesc, emptySnapshot, type EngineInfo, inertiaOf, type InputEvent, massOf, type PhysicsEngine, type SceneDesc, type Snapshot } from '@tb/engine-api';
 import { boundingRadius } from '@tb/geom';
-import { createDevice, readBuffer } from '@tb/gpu';
+import { assertStorageFits, createDevice, readBuffer } from '@tb/gpu';
 import { type AvbdParams, DEFAULT_AVBD } from '@tb/physics-ref';
 import { Body, BodyProps, readStruct, Shape, SolverBody, writeStruct } from '@tb/schema';
 import { Broadphase } from './broadphase.ts';
@@ -63,7 +63,7 @@ export class GpuAvbdEngine implements PhysicsEngine {
     const rmax = Math.max(0, ...all.map((b) => boundingRadius(b.shape)));
     // Every overlapping (inflated) pair must lie in adjacent cells.
     this.cellSize = Math.max(1e-3, 2 * (rmax + (p.sweep ? p.maxSweep : 0)) + p.margin);
-    const buf = (bytes: number, label: string) => device.createBuffer({ size: Math.max(16, bytes), usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC, label });
+    const buf = (bytes: number, label: string) => (assertStorageFits(device, bytes, label), device.createBuffer({ size: Math.max(16, bytes), usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC, label }));
     const bodies = buf(this.capacity * Body.size, 'bodies');
     const shapes = buf(this.capacity * Shape.size, 'shapes');
     const props = buf(this.capacity * BodyProps.size, 'body props');
