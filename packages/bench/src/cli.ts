@@ -3,7 +3,7 @@
 //   run --engine E --scenario S [--param k=v ...] [--quality] [timing flags]
 //   compare --a E1 --b E2 --scenario S [--param k=v ...] [timing flags]
 //   selfcheck                         A/A and injected 10% slowdown (gate G1)
-// Timing flags: --warmup N --block-steps N --blocks N --no-sleep --seed N --out file.jsonl
+// Timing flags: --warmup N --block-steps N --blocks N --timing-mode latency|throughput --no-sleep --seed N --out file.jsonl
 import { execSync } from 'node:child_process';
 import { appendFileSync, mkdirSync } from 'node:fs';
 import { cpus, platform, release } from 'node:os';
@@ -36,7 +36,9 @@ function parseArgs(argv: string[]): Args {
 const int = (a: Args, k: string, d: number) => (typeof a.flags[k] === 'string' ? Number(a.flags[k]) : d);
 
 function timingOpts(a: Args, d: TimingOptions = DEFAULT_TIMING): TimingOptions {
-  return { warmup: int(a, 'warmup', d.warmup), blockSteps: int(a, 'block-steps', d.blockSteps), blocks: int(a, 'blocks', d.blocks) };
+  const mode = a.flags['timing-mode'] ?? d.mode ?? 'latency';
+  if (mode !== 'latency' && mode !== 'throughput') throw new Error(`--timing-mode must be latency or throughput, got "${mode}"`);
+  return { warmup: int(a, 'warmup', d.warmup), blockSteps: int(a, 'block-steps', d.blockSteps), blocks: int(a, 'blocks', d.blocks), mode };
 }
 
 function sceneFrom(a: Args): SceneDesc {

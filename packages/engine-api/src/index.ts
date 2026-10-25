@@ -85,6 +85,13 @@ export interface PhysicsEngine {
   readonly stepIndex: number;
   /** Full state copy. Never called inside a timed region. */
   snapshot(): Snapshot | Promise<Snapshot>;
+  /**
+   * Resolves once every step submitted so far has finished executing. Engines
+   * whose step() returns only after the work is done (CPU engines) leave it out;
+   * GPU engines, whose step() only submits, must provide it, or timing sees
+   * only the submission.
+   */
+  finish?(): Promise<void>;
   dispose(): void;
 }
 

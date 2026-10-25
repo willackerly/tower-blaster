@@ -1,7 +1,7 @@
 // The standard benchmark suite: one command, one results file, comparable
 // across machines and commits.
 import { loglogFit } from '@tb/metrics';
-import { DEFAULT_TIMING, type TimingOptions } from '@tb/bench';
+import { DEFAULT_TIMING, type TimingMode, type TimingOptions } from '@tb/bench';
 import type { RunConfig } from './config.ts';
 
 /** Physics budget per 60 Hz step: half of a 33 ms frame, two steps. */
@@ -17,12 +17,18 @@ export interface SuiteCase {
   series?: string;
 }
 
-function cfg(engines: string[], scenario: string, params: RunConfig['params'], sleep: boolean | null, timing: Partial<TimingOptions> = {}): RunConfig {
+function baseCfg(engines: string[], scenario: string, params: RunConfig['params'], sleep: boolean | null, timing: Partial<TimingOptions> = {}): RunConfig {
   return { engines, scenario, params, seed: 1, sleep, timing: { ...DEFAULT_TIMING, warmup: 60, blockSteps: 30, blocks: 6, ...timing }, qualitySteps: 0, autorun: false };
 }
 
-export function standardSuite(engine = 'rapier', sizes = [1000, 2000, 5000, 10000, 20000]): SuiteCase[] {
+/**
+ * The suite for one engine in one timing mode: 'latency' waits for every step,
+ * 'throughput' once per block (see TimingMode). Run a GPU engine in both.
+ */
+export function standardSuite(engine = 'rapier', sizes = [1000, 2000, 5000, 10000, 20000], mode: TimingMode = 'latency'): SuiteCase[] {
   const e = [engine];
+  const cfg = (engines: string[], scenario: string, params: RunConfig['params'], sleep: boolean | null, timing: Partial<TimingOptions> = {}) =>
+    baseCfg(engines, scenario, params, sleep, { mode, ...timing });
   return [
     ...sizes.map((N) => ({
       name: `rain-awake-${N}`,
@@ -58,12 +64,17 @@ export function standardSuite(engine = 'rapier', sizes = [1000, 2000, 5000, 1000
   ];
 }
 
-export interface CaseResult { name: string; series?: string; N: number; median: number; p95: number; p99: number; valid: boolean }
+/**
+ * One case's numbers. In 'throughput' mode a sample is a block's mean step, so
+ * p95 and p99 are over a handful of block means and can't show a slow step.
+ */
+export interface CaseResult { name: string; series?: string; N: number; mode: TimingMode; median: number; p95: number; p99: number; valid: boolean }
 
 export function caseResult(c: SuiteCase, record: Record<string, unknown>): CaseResult {
-  const t = (record.timing as Array<{ wallMs: { median: number; p95: number; p99: number } }>)[0]!.wallMs;
+  const timing = (record.timing as Array<{ mode?: TimingMode; wallMs: { median: number; p95: number; p99: number } }>)[0]!;
+  const t = timing.wallMs;
   const scene = record.scene as { bodies: number };
-  return { name: c.name, ...(c.series ? { series: c.series } : {}), N: scene.bodies, median: t.median, p95: t.p95, p99: t.p99, valid: record.timingValid === true };
+  return { name: c.name, ...(c.series ? { series: c.series } : {}), N: scene.bodies, mode: timing.mode ?? 'latency', median: t.median, p95: t.p95, p99: t.p99, valid: record.timingValid === true };
 }
 
 /**
@@ -81,7 +92,12 @@ export function summaryMarkdown(results: CaseResult[], suite: SuiteCase[], heade
   const fmt = (x: number) => (x >= 100 ? x.toFixed(0) : x >= 10 ? x.toFixed(1) : x.toFixed(2));
   const lines = [header, '', '| Case | Bodies | Median ms/step | p95 | p99 | Within 7.5 ms | Valid |', '|---|---|---|---|---|---|---|'];
   for (const r of results) {
-    lines.push(`| ${r.name} | ${r.N} | ${fmt(r.median)} | ${fmt(r.p95)} | ${fmt(r.p99)} | ${r.p99 <= STEP_BUDGET_MS ? 'yes' : 'no'} | ${r.valid ? 'yes' : 'NO'} |`);
+    // The budget is a per-step p99, which only latency mode measures.
+    const tail = r.mode === 'latency' ? [fmt(r.p95), fmt(r.p99), r.p99 <= STEP_BUDGET_MS ? 'yes' : 'no'] : ['–', '–', '–'];
+    lines.push(`| ${r.name} | ${r.N} | ${fmt(r.median)} | ${tail.join(' | ')} | ${r.valid ? 'yes' : 'NO'} |`);
+  }
+  if (results.some((r) => r.mode === 'throughput')) {
+    lines.push('', 'Throughput rows give the sustained cost per step (the median over blocks of each block\'s mean step). A block mean hides a slow step, so they leave p95, p99 and the budget column to a latency run.');
   }
   for (const series of new Set(results.map((r) => r.series).filter(Boolean))) {
     const pts = results.filter((r) => r.series === series).map((r) => ({ N: r.N, ms: r.median }));

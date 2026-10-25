@@ -551,3 +551,48 @@ export async function initError(scene: SceneDesc, pairsPerBody: number) {
   e.dispose(); device.destroy();
   return { message, validation: validation?.message ?? null };
 }
+
+/**
+ * finish() on a healthy run, after a GPU validation error, and after the
+ * device is lost under the engine; then re-init after a failure-free dispose.
+ */
+export async function finishFailures(scene: SceneDesc) {
+  const settle = (p: Promise<void>) => p.then(() => 'resolved', (err: Error) => err.message);
+  // Fail with a name instead of hanging if an event never comes.
+  const within = <T>(p: Promise<T>, what: string) =>
+    Promise.race([p, new Promise<never>((_, reject) => setTimeout(() => reject(new Error(`timed out waiting for ${what}`)), 10_000))]);
+  const a = (await createDevice()).device;
+  const e = new GpuAvbdEngine({}, { device: a });
+  await e.init(scene);
+  e.step();
+  const healthy = await settle(e.finish());
+  const fired = new Promise((r) => a.addEventListener('uncapturederror', r, { once: true }));
+  a.createBuffer({ size: 4, usage: 0 }); // invalid: a validation error
+  // Chrome delivers the error event only once the device next talks to the GPU process.
+  await a.queue.onSubmittedWorkDone();
+  await within(fired, 'uncapturederror');
+  const afterError = await settle(e.finish());
+  let stepAfterError = 'no throw';
+  try { e.step(); } catch (err) { stepAfterError = (err as Error).message; }
+  e.dispose(); a.destroy();
+
+  const b = (await createDevice()).device;
+  const e2 = new GpuAvbdEngine({}, { device: b });
+  await e2.init(scene);
+  e2.step();
+  b.destroy();
+  await within(b.lost, 'device b lost');
+  const afterLoss = await settle(e2.finish());
+  e2.dispose();
+
+  // init() again disposes the engine's own first device; that loss is not a failure.
+  const e3 = new GpuAvbdEngine();
+  await e3.init(scene);
+  const first = (e3 as unknown as { device: GPUDevice }).device;
+  await e3.init(scene);
+  await within(first.lost, 'first device lost');
+  e3.step();
+  const reinit = await settle(e3.finish());
+  e3.dispose();
+  return { healthy, afterError, stepAfterError, afterLoss, reinit };
+}
