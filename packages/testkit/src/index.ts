@@ -17,10 +17,10 @@ export interface WebGPUSession {
   close(): Promise<void>;
 }
 
-export async function openWebGPU(extraArgs: string[] = []): Promise<WebGPUSession | null> {
+export async function openWebGPU(extraArgs: string[] = [], opts: { channel?: string; headless?: boolean } = {}): Promise<WebGPUSession | null> {
   let browser: Browser;
   try {
-    browser = await chromium.launch({ args: [...WEBGPU_ARGS, ...extraArgs] });
+    browser = await chromium.launch({ args: [...WEBGPU_ARGS, ...extraArgs], headless: opts.headless ?? true, ...(opts.channel ? { channel: opts.channel } : {}) });
   } catch (e) {
     if (requireWebGPU()) throw e;
     return null;
@@ -56,4 +56,15 @@ export function requireWebGPU(): boolean {
 
 export function isSoftwareAdapter(a: AdapterSummary): boolean {
   return /swiftshader|llvmpipe|lavapipe|software/i.test(`${a.vendor} ${a.architecture} ${a.description}`);
+}
+
+/**
+ * Bundle a TypeScript entry for the page (esbuild, IIFE) and install its
+ * exports as `window[globalName]`, so tests can call real package code inside
+ * the browser rather than pasting shader strings into page.evaluate.
+ */
+export async function loadBundle(page: Page, entry: string, globalName = '__tb_test'): Promise<void> {
+  const { build } = await import('esbuild');
+  const out = await build({ entryPoints: [entry], bundle: true, format: 'iife', globalName, target: 'es2022', write: false, logLevel: 'silent' });
+  await page.addScriptTag({ content: out.outputFiles[0]!.text });
 }
