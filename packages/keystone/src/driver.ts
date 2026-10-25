@@ -7,8 +7,19 @@ import { CpuObserver } from './rules.ts';
 import { type Feedback, Session } from './session.ts';
 import type { Shot } from './shots.ts';
 
-/** Steps run after init before play starts. */
+/**
+ * Steps run after init before play starts. Every level is quiet well inside
+ * it on Rapier (34 to 48 steps) and on AVBD at AVBD_ITERATIONS (46 to 67);
+ * a test holds both to it.
+ */
 export const PRESETTLE_STEPS = 90;
+
+/**
+ * Solver iterations Keystone runs AVBD at. At the default 10, columns taller
+ * than about 10 cubes bend and topple early; towers here reach 12 courses,
+ * and a 20-cube column is within 1% of rigid at 20 (scenario S13).
+ */
+export const AVBD_ITERATIONS = 20;
 
 export class Driver {
   session!: Session;

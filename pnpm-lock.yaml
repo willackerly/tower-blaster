@@ -151,6 +151,9 @@ importers:
       '@tb/keystone':
         specifier: workspace:*
         version: link:../keystone
+      '@tb/physics-ref':
+        specifier: workspace:*
+        version: link:../physics-ref
 
   packages/lattice: {}
 
