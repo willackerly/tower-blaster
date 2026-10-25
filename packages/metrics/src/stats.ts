@@ -51,28 +51,18 @@ export function bootstrapCI(xs: readonly number[], stat: (s: number[]) => number
 }
 
 /**
- * Percent change of B's median relative to A's, (median B / median A - 1),
- * from interleaved blocks. Block i of A and block i of B ran back to back,
- * so blocks are resampled as pairs, which cancels slow drift (thermal,
- * background load) common to both.
+ * Percent change of B relative to A from interleaved blocks: block i of A
+ * and block i of B ran back to back, so each pair shares whatever the
+ * machine was doing at the time. The estimate is exp(median of per-pair
+ * log ratios) - 1, which cancels slow drift (thermal, background load)
+ * exactly and is robust to a noise burst hitting one side of a pair.
+ * The interval is a percentile bootstrap over pairs.
  */
 export function pairedPercentDiff(a: readonly number[], b: readonly number[], opts: BootstrapOptions = {}): Interval {
   if (a.length !== b.length || a.length < 2) throw new Error('need two equal-length series of at least 2 blocks');
-  const { iters = 2000, alpha = 0.05, seed = 1 } = opts;
-  const r = prng(seed);
-  const n = a.length;
-  const est = median(b) / median(a) - 1;
-  const reps: number[] = [];
-  const ra = new Array<number>(n), rb = new Array<number>(n);
-  for (let k = 0; k < iters; k++) {
-    for (let i = 0; i < n; i++) {
-      const j = Math.floor(r() * n);
-      ra[i] = a[j]!;
-      rb[i] = b[j]!;
-    }
-    reps.push(median(rb) / median(ra) - 1);
-  }
-  return { estimate: est, lo: quantile(reps, alpha / 2), hi: quantile(reps, 1 - alpha / 2) };
+  const logRatios = a.map((x, i) => Math.log(b[i]! / x));
+  const ci = bootstrapCI(logRatios, median, opts);
+  return { estimate: Math.expm1(ci.estimate), lo: Math.expm1(ci.lo), hi: Math.expm1(ci.hi) };
 }
 
 export type Verdict = 'faster' | 'slower' | 'no-difference';

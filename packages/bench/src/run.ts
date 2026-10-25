@@ -1,0 +1,167 @@
+// Timing and quality runs. Timing and quality are separate passes so that
+// snapshotting and metric computation never land inside a timed region.
+import { bodiesAt, type PhysicsEngine, type SceneDesc, type Snapshot, TAG_BALL } from '@tb/engine-api';
+import {
+  drift, driftSuspect, energy, energyGain, jitter, median, nonFinite, pairedPercentDiff, penetration,
+  sleepRatio, stateHash, summarize, survival, verdict, type Interval, type Verdict,
+} from '@tb/metrics';
+
+export type Clock = () => number;
+export const wallClock: Clock = () => performance.now();
+
+export interface TimingOptions {
+  /** Steps run before measuring (pipeline creation, caches, settling). */
+  warmup: number;
+  /** Steps per measured block. */
+  blockSteps: number;
+  blocks: number;
+  clock?: Clock;
+}
+
+export const DEFAULT_TIMING: TimingOptions = { warmup: 120, blockSteps: 300, blocks: 10 };
+
+export interface BlockTiming {
+  /** Wall time per step, ms. */
+  samples: number[];
+  /** GPU time per step, ms, when the engine reports it. */
+  gpu: number[];
+  median: number;
+  driftSuspect: boolean;
+}
+
+async function stepTimed(e: PhysicsEngine, clock: Clock): Promise<[number, number | undefined]> {
+  const t0 = clock();
+  const r = await e.step();
+  return [clock() - t0, r ? r.gpuMs : undefined];
+}
+
+async function runBlock(e: PhysicsEngine, steps: number, clock: Clock): Promise<BlockTiming> {
+  const samples: number[] = [], gpu: number[] = [];
+  for (let i = 0; i < steps; i++) {
+    const [ms, g] = await stepTimed(e, clock);
+    samples.push(ms);
+    if (g !== undefined) gpu.push(g);
+  }
+  return { samples, gpu, median: median(samples), driftSuspect: driftSuspect(samples) };
+}
+
+/**
+ * Time several engines on the same scene with interleaved blocks: block i of
+ * every engine covers the same simulated steps, run back to back, so blocks
+ * can be compared as pairs.
+ */
+export async function timeInterleaved(engines: PhysicsEngine[], scene: SceneDesc, opts: TimingOptions): Promise<BlockTiming[][]> {
+  const clock = opts.clock ?? wallClock;
+  for (const e of engines) await e.init(scene);
+  for (const e of engines) for (let i = 0; i < opts.warmup; i++) await e.step();
+  const out: BlockTiming[][] = engines.map(() => []);
+  for (let b = 0; b < opts.blocks; b++) {
+    // Alternate which engine goes first, so neither always follows the other.
+    const order = engines.map((_, i) => i);
+    if (b % 2 === 1) order.reverse();
+    for (const i of order) out[i]!.push(await runBlock(engines[i]!, opts.blockSteps, clock));
+  }
+  return out;
+}
+
+export function timingSummary(blocks: BlockTiming[]) {
+  const all = blocks.flatMap((b) => b.samples);
+  const gpu = blocks.flatMap((b) => b.gpu);
+  return {
+    blocks: blocks.length,
+    stepsPerBlock: blocks[0]?.samples.length ?? 0,
+    blockMedians: blocks.map((b) => b.median),
+    wallMs: summarize(all),
+    gpuMs: gpu.length ? summarize(gpu) : null,
+    driftSuspectBlocks: blocks.filter((b) => b.driftSuspect).length,
+  };
+}
+
+export interface Comparison { diff: Interval; verdict: Verdict; threshold: number }
+
+/** B relative to A; negative means B is faster. */
+export function compareBlocks(a: BlockTiming[], b: BlockTiming[], threshold = 0.02): Comparison {
+  const diff = pairedPercentDiff(a.map((x) => x.median), b.map((x) => x.median));
+  return { diff, verdict: verdict(diff, threshold), threshold };
+}
+
+export interface QualityOptions { steps: number; sampleEvery: number; h?: number }
+
+export interface QualityReport {
+  steps: number;
+  bodies: number;
+  penetration: ReturnType<typeof penetration>;
+  /** Max horizontal displacement over the run, cube edges; untouched scenes only. */
+  drift: number;
+  jitter: number;
+  energyGain: number;
+  survival: number;
+  sleepRatio: number;
+  /** First sampled step at which every body was asleep, or null. */
+  allAsleepStep: number | null;
+  nonFinite: number;
+  hash: string;
+  series: { step: number; energy: number; sleepRatio: number; penetrationMax: number }[];
+}
+
+/**
+ * Run a scene for `steps`, sampling metrics every `sampleEvery` steps.
+ * Drift and survival are measured against the initial state, which is only
+ * meaningful when nothing is fired at the scene.
+ */
+export async function qualityRun(e: PhysicsEngine, scene: SceneDesc, opts: QualityOptions): Promise<QualityReport> {
+  const h = opts.h ?? 1;
+  await e.init(scene);
+  const s0 = await e.snapshot();
+  const series: QualityReport['series'] = [];
+  const energies: number[] = [];
+  let allAsleepStep: number | null = null;
+  let maxPen = penetration(bodiesAt(scene, 0), s0, scene.ground?.y ?? null, h);
+  let last: Snapshot = s0;
+  const sample = async (step: number) => {
+    const s = await e.snapshot();
+    const bodies = bodiesAt(scene, step);
+    const pen = penetration(bodies, s, scene.ground?.y ?? null, h);
+    if (pen.max > maxPen.max) maxPen = pen;
+    const en = energy(bodies, s, scene.gravity).total;
+    energies.push(en);
+    const sr = sleepRatio(s);
+    if (sr === 1 && allAsleepStep === null) allAsleepStep = step;
+    series.push({ step, energy: en, sleepRatio: sr, penetrationMax: pen.max });
+    last = s;
+  };
+  await sample(0);
+  for (let i = 1; i <= opts.steps; i++) {
+    await e.step();
+    if (i % opts.sampleEvery === 0 || i === opts.steps) await sample(i);
+  }
+  const initial = scene.bodies.length;
+  const untouched = Array.from({ length: initial }, (_, i) => i);
+  const towerTags = [...new Set(scene.bodies.map((b) => b.tag).filter((t) => t >= 0))];
+  const fired = scene.inputs.some((ev) => ev.body.tag === TAG_BALL);
+  return {
+    steps: opts.steps,
+    bodies: last.count,
+    penetration: maxPen,
+    drift: fired ? NaN : drift(s0, last, untouched, h),
+    jitter: jitter(last, undefined, h),
+    energyGain: energyGain(energies),
+    survival: fired ? NaN : survival(scene.bodies, s0, last, towerTags),
+    sleepRatio: sleepRatio(last),
+    allAsleepStep,
+    nonFinite: nonFinite(last),
+    hash: stateHash(last),
+    series,
+  };
+}
+
+/** Quality gates from the plan. Each returns null when passing, or a reason. */
+export function qualityGates(q: QualityReport, untouched: boolean): Record<string, string | null> {
+  return {
+    finite: q.nonFinite === 0 ? null : `${q.nonFinite} non-finite values`,
+    penetration: q.penetration.p99 < 0.02 ? null : `p99 penetration ${q.penetration.p99.toFixed(4)} >= 0.02`,
+    energy: q.energyGain < 0.01 ? null : `energy gain ${(q.energyGain * 100).toFixed(2)}% >= 1%`,
+    drift: !untouched || q.drift < 0.05 ? null : `drift ${q.drift.toFixed(4)} >= 0.05`,
+    survival: !untouched || q.survival >= 0.98 ? null : `survival ${q.survival.toFixed(3)} < 0.98`,
+  };
+}
