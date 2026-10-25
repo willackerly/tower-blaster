@@ -1,0 +1,11 @@
+{
+  "name": "@tb/adapter-rapier",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@dimforge/rapier3d-simd-compat": "0.21.0"
+  }
+}
