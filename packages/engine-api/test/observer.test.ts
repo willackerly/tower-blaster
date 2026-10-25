@@ -229,7 +229,7 @@ describe('withSnapshotObserver on physics-ref (§2, §3.1)', () => {
     e.dispose();
   });
 
-  it.each(['snapshot', 'step'] as const)('an engine with an async %s: step() returns a promise, observer calls wait or throw, results are the same', async (kind) => {
+  it.each([['snapshot()', 'snapshot'], ['step()', 'step'], ['step() and snapshot()', 'both']] as const)('an engine with an async %s: step() returns a promise, observer calls wait or throw, results are the same', async (_, kind) => {
     const sync = withSnapshotObserver(new AvbdReferenceEngine()), e = withSnapshotObserver(new AsyncEngine(new AvbdReferenceEngine(), kind));
     for (const x of [sync, e]) await x.init(SCENE);
     const [a, b] = [await sync.observe({ tagWords: 2 }), await e.observe({ tagWords: 2 })];
@@ -249,7 +249,11 @@ describe('withSnapshotObserver on physics-ref (§2, §3.1)', () => {
       expect(await r).toEqual(await a.result(k + 1));
       if (k === 20) for (const o of [a, b]) o.captureRef(0);
     }
+    // finish() settles the pending evaluation too, so the caller may step at once.
+    void e.step();
     await e.finish!();
+    await e.step();
+    expect(e.stepIndex).toBe(42);
     sync.dispose();
     e.dispose();
   });
@@ -263,6 +267,100 @@ describe('withSnapshotObserver on physics-ref (§2, §3.1)', () => {
     for (let k = 0; k < 2; k++) e.step();
     expect(() => e.step()).toThrow(/4 bodies, but the scene describes 3/);
     await expect(obs.result(3)).rejects.toThrow(/observer failed after step 3/);
+    // Detached as well: later steps run unobserved instead of failing again.
+    expect(() => e.step()).not.toThrow();
+    expect(e.stepIndex).toBe(4);
+    expect(() => obs.query(null)).toThrow(/observer failed after step 3/);
+  });
+
+  it.each([['a sync engine', 'sync'], ['an async snapshot()', 'snapshot'], ['an async step() and snapshot()', 'both']] as const)('%s: a snapshot() that fails after an observed step retires and detaches the observer', async (_, kind) => {
+    const inner = new AsyncEngine(new AvbdReferenceEngine(), kind), e = withSnapshotObserver(inner);
+    await e.init(SCENE);
+    const obs = await e.observe({ tagWords: 2 });
+    obs.query(SPEC_B);
+    for (let k = 0; k < 3; k++) await e.step();
+    inner.failNext = true;
+    const step = async () => e.step();
+    await expect(step()).rejects.toThrow(/transient snapshot failure/);
+    // Step 4 was never evaluated, so the next dv would span two steps: every call now fails with the reason.
+    const why = /observer failed after step 4: transient snapshot failure/;
+    expect(e.stepIndex).toBe(4);
+    expect(() => obs.query(SPEC_B)).toThrow(why);
+    await expect(obs.result(3)).rejects.toThrow(why);
+    // Detached: the next step takes no snapshot, so a failure that persists cannot fail it.
+    inner.failNext = true;
+    await e.step();
+    expect(inner.failNext).toBe(true);
+    inner.failNext = false;
+    const again = await e.observe({ tagWords: 2 }), m = new Model(SCENE, await e.snapshot());
+    again.query(SPEC_B);
+    m.query(SPEC_B);
+    await e.step();
+    expect(await again.result(6)).toEqual(m.advance(await e.snapshot(), 6));
+    e.dispose();
+  });
+
+  it('observe() refuses while a step is pending, observed or not, and fails if init() or dispose() runs meanwhile', async () => {
+    const e = withSnapshotObserver(new AsyncEngine(new AvbdReferenceEngine(), 'both'));
+    await e.init(SCENE);
+    // Unobserved: observe() would otherwise prime from the state this step replaces.
+    const p = e.step();
+    expect(() => e.step()).toThrow(/still pending/);
+    await expect(e.observe({ tagWords: 2 })).rejects.toThrow(/observe\(\): a step\(\) is still pending/);
+    await p;
+    const obs = await e.observe({ tagWords: 2 }), m = new Model(SCENE, await e.snapshot());
+    obs.query(SPEC_B);
+    m.query(SPEC_B);
+    const q = e.step();
+    await expect(e.observe({ tagWords: 2 })).rejects.toThrow(/observe\(\): a step\(\) is still pending/);
+    await q;
+    expect(await obs.result(2)).toEqual(m.advance(await e.snapshot(), 2));
+    // init() while observe() awaits its snapshot, even with the same scene: that snapshot is of the old run.
+    const late = e.observe({ tagWords: 2 });
+    await e.init(SCENE);
+    await expect(late).rejects.toThrow(/init\(\) or dispose\(\) ran meanwhile/);
+    const disposed = e.observe({ tagWords: 2 });
+    e.dispose();
+    await expect(disposed).rejects.toThrow(/init\(\) or dispose\(\) ran meanwhile/);
+  });
+
+  it('init() while an observed step is pending retires its observer, and that step still resolves', async () => {
+    const e = withSnapshotObserver(new AsyncEngine(new AvbdReferenceEngine(), 'snapshot'));
+    await e.init(SCENE);
+    const obs = await e.observe({ tagWords: 2 });
+    obs.query({ outputs: [{ op: 'count', where: 'all' }] });
+    const p = e.step();
+    // tiny() has 3 shapes: the old run's snapshot, evaluated against them, would throw.
+    await e.init(tiny());
+    await p;
+    expect(() => obs.query(null)).toThrow(/re-initialized/);
+    await expect(obs.result(1)).rejects.toThrow(/re-initialized/);
+    e.dispose();
+  });
+
+  it('ids and shapes follow bodiesAt through spawns of different shapes', async () => {
+    const scene = tiny();
+    scene.inputs = [
+      { step: 1, kind: 'spawn', body: { ...cube(6, 3), shape: { kind: 'sphere', radius: 2 } } },
+      { step: 2, kind: 'spawn', body: { ...cube(9, 3), shape: { kind: 'box', half: [0.25, 1, 0.25] } } },
+    ];
+    const spec: ReduceSpec = {
+      outputs: [
+        { op: 'hist', by: { x: { aabb: 'hi', axis: 1 }, edges: [1, 2, 3, 4, 5].map((m) => m * 65536) }, where: 'all' },
+        { op: 'hist', by: { x: { aabb: 'lo', axis: 0 }, edges: [2, 4, 6, 8].map((m) => m * 65536) }, where: 'all' },
+      ],
+    };
+    const e = withSnapshotObserver(new AvbdReferenceEngine());
+    await e.init(scene);
+    const obs = await e.observe({ tagWords: 2 }), m = new Model(scene, await e.snapshot());
+    obs.query(spec);
+    m.query(spec);
+    for (let k = 0; k < 6; k++) {
+      await e.step();
+      expect(await obs.result(k + 1)).toEqual(m.advance(await e.snapshot(), k + 1));
+    }
+    expect((await obs.result(6)).count).toBe(4);
+    e.dispose();
   });
 });
 
@@ -286,19 +384,27 @@ function inputOf(snap: Snapshot, prev: Snapshot) {
   };
 }
 
-/** An engine whose snapshot() or step() resolves a task later, as a GPU engine's would. */
+/**
+ * An engine whose snapshot(), step() or both resolve a task later, as a GPU engine's would
+ * (SlowedEngine(GpuAvbdEngine) has both). failNext makes the next snapshot() fail.
+ */
 class AsyncEngine implements PhysicsEngine {
-  constructor(private readonly e: PhysicsEngine, private readonly kind: 'snapshot' | 'step') {}
+  failNext = false;
+  constructor(private readonly e: PhysicsEngine, private readonly kind: 'sync' | 'snapshot' | 'step' | 'both') {}
   get info() { return this.e.info; }
   get stepIndex() { return this.e.stepIndex; }
   init(scene: SceneDesc) { return this.e.init(scene); }
   step(): StepReport | void | Promise<StepReport | void> {
-    if (this.kind === 'snapshot') return this.e.step();
+    if (this.kind !== 'step' && this.kind !== 'both') return this.e.step();
     return new Promise((done) => setTimeout(() => done(this.e.step())));
   }
   snapshot(): Snapshot | Promise<Snapshot> {
+    const later = this.kind === 'snapshot' || this.kind === 'both', fail = this.failNext;
+    this.failNext = false;
+    if (fail && !later) throw new Error('transient snapshot failure');
     const s = this.e.snapshot();
-    return this.kind === 'snapshot' ? new Promise((done) => setTimeout(() => done(s))) : s;
+    if (!later) return s;
+    return new Promise((done, reject) => setTimeout(() => (fail ? reject(new Error('transient snapshot failure')) : done(s))));
   }
   async finish(): Promise<void> {}
   dispose() { this.e.dispose(); }

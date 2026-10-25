@@ -85,24 +85,20 @@ class SnapshotObserver implements Observer {
     return o;
   }
 
-  /** The state after a step: evaluate the standing query on it, then make it prev. */
+  /** The state after a step: evaluate the standing query on it, then make it prev. If this throws, the host retires the observer. */
   after(snap: Snapshot): void {
+    if (this.retired) return; // init() or dispose() ran while its step was pending
     const step = this.host.stepIndex;
-    try {
-      if (this.spec) {
-        if (snap.count > this.host.shapes.length) throw new Error(`${snap.count} bodies, but the scene describes ${this.host.shapes.length}`);
-        if (snap.count > this.caps.maxBodies) throw new RangeError(`${snap.count} bodies, over maxBodies = ${this.caps.maxBodies}`);
-        const out = reduceRef(this.spec, {
-          snap, prevLinVel: this.prev, prevCount: this.prevCount, shapes: this.host.shapes, tagWords: this.tagWords, tags: this.tags,
-          refs: this.refs, gravity: this.scene.gravity, dt: this.scene.dt,
-        });
-        this.results.set(step, { step, count: snap.count, out, rows: gatherRows(snap, this.watchIds) });
-        this.prev = snap.linVel.slice(0, 3 * snap.count);
-        this.prevCount = snap.count;
-      }
-    } catch (e) {
-      this.retired = `observer failed after step ${step}: ${(e as Error).message}`;
-      throw e;
+    if (this.spec) {
+      if (snap.count > this.host.shapes.length) throw new Error(`${snap.count} bodies, but the scene describes ${this.host.shapes.length}`);
+      if (snap.count > this.caps.maxBodies) throw new RangeError(`${snap.count} bodies, over maxBodies = ${this.caps.maxBodies}`);
+      const out = reduceRef(this.spec, {
+        snap, prevLinVel: this.prev, prevCount: this.prevCount, shapes: this.host.shapes, tagWords: this.tagWords, tags: this.tags,
+        refs: this.refs, gravity: this.scene.gravity, dt: this.scene.dt,
+      });
+      this.results.set(step, { step, count: snap.count, out, rows: gatherRows(snap, this.watchIds) });
+      this.prev = snap.linVel.slice(0, 3 * snap.count);
+      this.prevCount = snap.count;
     }
     this.latest = snap;
     for (const k of this.results.keys()) if (k <= step - this.caps.keep) this.results.delete(k);
@@ -116,6 +112,8 @@ class SnapshotObserved implements ObservedEngine {
   shapes: readonly ShapeDesc[] = [];
   private scene: SceneDesc | null = null;
   private observer: SnapshotObserver | null = null;
+  /** Bumped by init() and dispose(), so observe() can tell either ran while it awaited its snapshot. */
+  private generation = 0;
 
   constructor(readonly inner: PhysicsEngine) {
     if (inner.finish)
@@ -128,12 +126,14 @@ class SnapshotObserved implements ObservedEngine {
   get info(): EngineInfo { return this.inner.info; }
   get stepIndex(): number { return this.inner.stepIndex; }
 
-  private retire(why: string): void {
-    if (this.observer) this.observer.retired ??= why;
-    this.observer = null;
+  /** o keeps its first reason; detached, so later steps run unobserved. */
+  private retire(why: string, o = this.observer): void {
+    if (o) o.retired ??= why;
+    if (this.observer === o) this.observer = null;
   }
 
   async init(scene: SceneDesc): Promise<void> {
+    this.generation++;
     this.retire('the engine was re-initialized by init()');
     this.scene = null;
     await this.inner.init(scene);
@@ -151,44 +151,63 @@ class SnapshotObserved implements ObservedEngine {
 
   step(): StepReport | void | Promise<StepReport | void> {
     if (this.pending) throw new Error('step(): the previous step() is still pending; await it first');
-    const o = this.observer, r = this.inner.step();
-    if (!o) return r;
-    if (isThenable(r)) return this.track(r.then(async (rep) => {
-      o.after(await this.inner.snapshot());
-      return rep;
-    }));
-    const s = this.inner.snapshot();
-    if (isThenable(s)) return this.track(s.then((snap) => {
-      o.after(snap);
+    const o = this.observer;
+    if (!o) {
+      // Tracked unobserved too, so observe() never snapshots a state this step is about to replace.
+      const r = this.inner.step();
+      return isThenable(r) ? this.track(r) : r;
+    }
+    // A step whose state was not evaluated leaves prev a step behind, so a failed
+    // step, snapshot or evaluation retires the observer rather than letting the next dv span two steps.
+    const failed = (e: unknown): never => {
+      this.retire(`observer failed after step ${this.inner.stepIndex}: ${(e as Error).message}`, o);
+      throw e;
+    };
+    try {
+      const r = this.inner.step();
+      if (isThenable(r)) return this.track(r.then(async (rep) => {
+        o.after(await this.inner.snapshot());
+        return rep;
+      }).catch(failed));
+      const s = this.inner.snapshot();
+      if (isThenable(s)) return this.track(s.then((snap) => {
+        o.after(snap);
+        return r;
+      }).catch(failed));
+      o.after(s);
       return r;
-    }));
-    o.after(s);
-    return r;
+    } catch (e) {
+      return failed(e);
+    }
   }
 
   snapshot(): Snapshot | Promise<Snapshot> { return this.inner.snapshot(); }
 
   dispose(): void {
+    this.generation++;
     this.retire('the engine was disposed');
     this.scene = null;
     this.inner.dispose();
   }
 
   async observe(opts: ObserveOptions): Promise<Observer> {
-    const scene = this.scene, tw = opts.tagWords;
+    const scene = this.scene, generation = this.generation, tw = opts.tagWords;
     if (!scene) throw new Error('observe(): init() first');
     if (this.pending) throw new Error('observe(): a step() is still pending; await it first');
     if (!(Number.isInteger(tw) && tw >= 0 && tw <= OBSERVER_CAPS.maxTagWords)) throw new RangeError(`observe(): tagWords must be an integer 0..${OBSERVER_CAPS.maxTagWords}, got ${tw}`);
     for (let i = 1; i < scene.inputs.length; i++)
       if (scene.inputs[i]!.step < scene.inputs[i - 1]!.step) throw new Error('observe(): scene.inputs must be sorted by step, or ids would not follow bodiesAt');
     const s = this.inner.snapshot(), snap = isThenable(s) ? await this.track(s) : s;
-    if (this.scene !== scene) throw new Error('observe(): the engine was re-initialized meanwhile');
+    if (this.generation !== generation) throw new Error('observe(): init() or dispose() ran meanwhile');
     this.retire('replaced by a later observe()');
     return (this.observer = new SnapshotObserver(this, scene, tw, snap));
   }
 }
 
-/** Any engine observed through snapshot() after every step (lag 0). Mirrors the engine's id assignment from init() and its spawns. */
+/**
+ * Any engine observed through snapshot() after every step (lag 0). Mirrors the engine's id assignment from init() and its spawns.
+ * An observed step that fails (its step, snapshot or evaluation) retires the observer; later steps run unobserved.
+ */
 export function withSnapshotObserver(inner: PhysicsEngine): ObservedEngine {
   return new SnapshotObserved(inner);
 }
