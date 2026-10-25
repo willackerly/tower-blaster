@@ -10,7 +10,10 @@ export const SHADOW_SIZE = 2048;
 export const SPHERE_SEG = 24;
 export const SPHERE_RINGS = 14;
 export const SPHERE_VERTS = SPHERE_SEG * SPHERE_RINGS * 6;
-export const BOX_VERTS = 36;
+/** Vertices per box: the hexagon fan (default) or the full 12-triangle cube (debug, A/B). */
+export const BOX_FAN_VERTS = 18;
+export const BOX_CUBE_VERTS = 36;
+export const BOX_VERTS = BOX_FAN_VERTS;
 
 export const Frame = defineStruct('Frame', [
   ['viewProj', 'mat4x4f', 'camera-relative'],
@@ -48,6 +51,9 @@ ${wgslStruct(Frame)}
 
 // Which list a pipeline draws: SEG * capacity is its first entry.
 override SEG: u32 = 0u;
+// Boxes as a 6-triangle fan over the three faces that face the viewer (or
+// the light), instead of all 12 triangles.
+override FAN: bool = true;
 
 const PI = 3.14159265;
 const SEAM = 0.012;
@@ -72,6 +78,31 @@ fn cubeCorner(vi: u32) -> vec3f {
   p[(axis + 1u) % 3u] = uv.x;
   p[(axis + 2u) % 3u] = uv.y * s;
   return p;
+}
+
+// The hexagon fan: around the box's corner nearest the viewer, s * (1,1,1)
+// with s = sign of the viewer in body space, six triangles to the ring of
+// the six corners next to it. Each triangle shares a coordinate with that
+// corner, so it lies in one of the three faces facing the viewer: depth is
+// exact and the three faces are covered once. Mirroring by s flips the
+// winding when an odd number of signs is negative; the second and third
+// vertices swap back to counter-clockwise.
+fn fanCorner(vi: u32, s: vec3f) -> vec3f {
+  let ring = array<vec3f, 7>(vec3f(1, 1, -1), vec3f(-1, 1, -1), vec3f(-1, 1, 1), vec3f(-1, -1, 1), vec3f(1, -1, 1), vec3f(1, -1, -1), vec3f(1, 1, 1));
+  let t = vi / 3u;
+  var k = vi % 3u;
+  if (s.x * s.y * s.z < 0.0 && k != 0u) { k = 3u - k; }
+  return s * ring[select(select((t + 1u) % 6u, t, k == 1u), 6u, k == 0u)];
+}
+
+// Sign per body axis of a direction (body-relative viewer or light).
+fn sideOf(rot: vec4f, dir: vec3f) -> vec3f {
+  return select(vec3f(-1.0), vec3f(1.0), qrot(vec4f(-rot.xyz, rot.w), dir) >= vec3f(0.0));
+}
+
+fn boxCorner(vi: u32, r: RenderRecord, toViewer: vec3f) -> vec3f {
+  if (FAN) { return fanCorner(vi, sideOf(r.rot, toViewer)); }
+  return cubeCorner(vi);
 }
 
 fn sphereCorner(vi: u32) -> vec3f {
@@ -113,7 +144,8 @@ fn place(r: RenderRecord, corner: vec3f) -> VOut {
 }
 
 @vertex fn vsBox(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> VOut {
-  return place(record(ii), cubeCorner(vi));
+  let r = record(ii);
+  return place(r, boxCorner(vi, r, -r.pos));
 }
 
 @vertex fn vsSphere(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> VOut {
@@ -122,7 +154,7 @@ fn place(r: RenderRecord, corner: vec3f) -> VOut {
 
 @vertex fn vsBoxShadow(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> @builtin(position) vec4f {
   let r = record(ii);
-  return fr.lightViewProj * vec4f(r.pos + qrot(r.rot, cubeCorner(vi) * r.half), 1.0);
+  return fr.lightViewProj * vec4f(r.pos + qrot(r.rot, boxCorner(vi, r, fr.sun) * r.half), 1.0);
 }
 
 @vertex fn vsSphereShadow(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> @builtin(position) vec4f {

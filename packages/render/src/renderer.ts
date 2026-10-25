@@ -10,10 +10,10 @@ import { FX_WORDS, packFx, tintWord, toHalf, type FxOptions, FX_ANCHOR } from '.
 import { CANDY_NIGHT, linearToOklab, srgbToLinear, type LookParams } from './look.ts';
 import { invert, lookAt, multiply, normalize, type Mat4, type V3 } from './math.ts';
 import { HDR_FORMAT, Post } from './post.ts';
-import { BOX_VERTS, Frame, SCENE_WGSL, SHADOW_SIZE, SPHERE_VERTS } from './shaders.ts';
+import { BOX_CUBE_VERTS, BOX_FAN_VERTS, Frame, SCENE_WGSL, SHADOW_SIZE, SPHERE_VERTS } from './shaders.ts';
 import { SnapshotSource, type BodySource } from './source.ts';
 
-export { BOX_VERTS, SPHERE_VERTS } from './shaders.ts';
+export { BOX_CUBE_VERTS, BOX_FAN_VERTS, BOX_VERTS, SPHERE_VERTS } from './shaders.ts';
 
 const SAMPLES = 4;
 // From the camera's right, slightly behind the scene: one lit face, one in
@@ -68,6 +68,11 @@ export interface FrameParams {
 
 export type RenderTarget = { canvas: HTMLCanvasElement } | { size: [number, number] };
 
+export interface RendererOptions {
+  /** Box geometry: the 18-vertex hexagon fan (default) or the 36-vertex cube (debug and A/B). */
+  boxPath?: 'fan' | 'cube';
+}
+
 type PipeName = 'box' | 'sphere' | 'ground' | 'sky' | 'overlay' | 'boxShadow' | 'sphereShadow' | 'boxId' | 'sphereId';
 
 /** Frame uniform values that come from a look preset (colours to OKLab / linear as the shader wants). */
@@ -118,7 +123,11 @@ export class Renderer {
   private overlayCount = 0;
   private lastTime = 0;
 
-  constructor(readonly device: GPUDevice, target: RenderTarget) {
+  private readonly boxVerts: number;
+
+  constructor(readonly device: GPUDevice, target: RenderTarget, opts: RendererOptions = {}) {
+    const fan = (opts.boxPath ?? 'fan') === 'fan';
+    this.boxVerts = fan ? BOX_FAN_VERTS : BOX_CUBE_VERTS;
     this.format = navigator.gpu.getPreferredCanvasFormat();
     if ('canvas' in target) {
       const ctx = target.canvas.getContext('webgpu');
@@ -131,7 +140,7 @@ export class Renderer {
       this.offscreen = device.createTexture({ size: target.size, format: this.format, usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_SRC });
     }
     this.frameBuf = device.createBuffer({ size: Frame.size, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST, label: 'frame' });
-    this.shadowTex = device.createTexture({ size: [SHADOW_SIZE, SHADOW_SIZE], format: 'depth32float', usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING });
+    this.shadowTex = device.createTexture({ size: [SHADOW_SIZE, SHADOW_SIZE], format: 'depth32float', usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_SRC });
     this.shadowSampler = device.createSampler({ compare: 'less', magFilter: 'linear', minFilter: 'linear' });
     this.post = new Post(device, this.format);
     const VF = GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT;
@@ -160,7 +169,7 @@ export class Renderer {
     const shadowPl = device.createPipelineLayout({ bindGroupLayouts: [this.shadowLayout] });
     const color = (vs: string, fs: string, cull: GPUCullMode, seg: number, opts: { format?: GPUTextureFormat; samples?: number; sky?: boolean } = {}): GPURenderPipeline => device.createRenderPipeline({
       layout: main,
-      vertex: { module, entryPoint: vs, constants: { SEG: seg } },
+      vertex: { module, entryPoint: vs, constants: { SEG: seg, ...(vs === 'vsBox' ? { FAN: fan ? 1 : 0 } : {}) } },
       fragment: { module, entryPoint: fs, targets: [{ format: opts.format ?? HDR_FORMAT }] },
       primitive: { topology: 'triangle-list', cullMode: cull, frontFace: 'ccw' },
       depthStencil: opts.sky
@@ -170,9 +179,16 @@ export class Renderer {
     });
     const depthOnly = (vs: string, seg: number): GPURenderPipeline => device.createRenderPipeline({
       layout: shadowPl,
-      vertex: { module, entryPoint: vs, constants: { SEG: seg } },
+      vertex: { module, entryPoint: vs, constants: { SEG: seg, ...(vs === 'vsBoxShadow' ? { FAN: fan ? 1 : 0 } : {}) } },
+      // Casters are the light-facing faces only (the fan around the corner
+      // nearest the light) or, on the cube path, every face; both write the
+      // same nearest depth.
       primitive: { topology: 'triangle-list', cullMode: 'none' },
-      depthStencil: { format: 'depth32float', depthWriteEnabled: true, depthCompare: 'less', depthBias: 2, depthBiasSlopeScale: 2 },
+      // No caster bias: one bias model, all on the receiver (normal offset
+      // plus a constant, in shadow() in shaders.ts). Slope-scaled caster bias
+      // also depends on how a face is triangulated in the rasterizer, so the
+      // fan and cube paths' maps differed by up to 4 cm with it.
+      depthStencil: { format: 'depth32float', depthWriteEnabled: true, depthCompare: 'less' },
     });
     this.source = new SnapshotSource(device);
     this.facePipe = () => (this.faceCache ??= color('vsBox', 'fsFace', 'back', SEG.box, { format: 'r32uint', samples: 1 }));
@@ -271,7 +287,7 @@ export class Renderer {
         this.fxBuf = this.device.createBuffer({ size: Math.max(16, this.fx.byteLength), usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST, label: 'fx' });
         this.device.queue.writeBuffer(this.fxBuf, 0, this.fx);
       }
-      this.culler = new Culler(this.device, s, { box: BOX_VERTS, sphere: SPHERE_VERTS }, this.fxBuf);
+      this.culler = new Culler(this.device, s, { box: this.boxVerts, sphere: SPHERE_VERTS }, this.fxBuf);
       const buffers = [this.frameBuf, this.culler.records, this.culler.lists];
       const common = buffers.map((buffer, binding) => ({ binding, resource: { buffer } }));
       this.bind = this.device.createBindGroup({
@@ -408,6 +424,19 @@ export class Renderer {
     for (let y = 0; y < h; y++) ids.set(raw.subarray((y * bytesPerRow) / 4, (y * bytesPerRow) / 4 + w), y * w);
     read.destroy();
     return { width: w, height: h, ids };
+  }
+
+  /** Test path: the shadow map of the last frame, light depth 0..1 per texel (SHADOW_SIZE squared). */
+  async readShadowMap(): Promise<Float32Array> {
+    const bytesPerRow = SHADOW_SIZE * 4;
+    const read = this.device.createBuffer({ size: bytesPerRow * SHADOW_SIZE, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST });
+    const enc = this.device.createCommandEncoder();
+    enc.copyTextureToBuffer({ texture: this.shadowTex, aspect: 'depth-only' }, { buffer: read, bytesPerRow }, [SHADOW_SIZE, SHADOW_SIZE]);
+    this.device.queue.submit([enc.finish()]);
+    await read.mapAsync(GPUMapMode.READ);
+    const out = new Float32Array(read.getMappedRange().slice(0));
+    read.destroy();
+    return out;
   }
 
   /** Test path: the cull outputs of the last frame. */

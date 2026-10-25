@@ -650,3 +650,61 @@ export async function fxColour() {
   device.destroy();
   return { plain, red, glow, flashMid, flashDone, frontDelta, backDelta, backBehindBox, error: err?.message ?? null };
 }
+
+// ---------------------------------------------------------------- hexagon fan
+
+/**
+ * The 18-vertex hexagon fan against the 36-vertex cube: boxes, slabs and
+ * rods at random rotations, seen from cameras among them (so many eyes sit
+ * inside a box's slab on some axis, where the fan includes a face seen
+ * edge-on or from behind). Returns the fraction of ID pixels that differ,
+ * and the shadow maps' texel differences.
+ */
+export async function fanVsCube(seed: number, cameras = 50) {
+  const { device } = await createDevice({ timestamps: false });
+  device.pushErrorScope('validation');
+  const r = rng(seed);
+  const descs: BodyDesc[] = [];
+  for (let i = 0; i < 60; i++) {
+    const k = i % 3; // cube-ish, slab, rod
+    const half: V3 = k === 0 ? [0.3 + r() * 0.5, 0.3 + r() * 0.5, 0.3 + r() * 0.5] : k === 1 ? [0.8 + r(), 0.05 + r() * 0.1, 0.6 + r()] : [0.06 + r() * 0.1, 1 + r() * 1.5, 0.06 + r() * 0.1];
+    descs.push(box([(r() - 0.5) * 12, (r() - 0.5) * 6, (r() - 0.5) * 12], half, randomQuat(r)));
+  }
+  const src = new SnapshotSource(device);
+  src.update(snapshotOf(descs), descs);
+  const fan = new Renderer(device, { size: [W, H] });
+  const cube = new Renderer(device, { size: [W, H] }, { boxPath: 'cube' });
+  for (const rend of [fan, cube]) { rend.setSource(src); rend.setShadowBounds([0, 0, 0], 10); }
+  let differ = 0, pixels = 0, covered = 0;
+  for (let c = 0; c < cameras; c++) {
+    const eye: V3 = [(r() - 0.5) * 14, (r() - 0.5) * 7, (r() - 0.5) * 14];
+    const f = camera(eye, [(r() - 0.5) * 4, (r() - 0.5) * 2, (r() - 0.5) * 4]);
+    const a = (await fan.renderIds(f)).ids, b = (await cube.renderIds(f)).ids;
+    for (let i = 0; i < a.length; i++) { if (a[i] !== b[i]) differ++; if (b[i]) covered++; }
+    pixels += a.length;
+  }
+  // Shadow maps from the same frame.
+  const f = camera([9, 5, 10], [0, 0, 0]);
+  await fan.render(f);
+  await cube.render(f);
+  const sa = await fan.readShadowMap(), sb = await cube.readShadowMap();
+  // Texels either map covers: the depths must agree up to interpolation
+  // rounding (the two triangulate each face differently), except on
+  // rasterization edges, where a texel can see a different surface.
+  const N = Math.sqrt(sa.length);
+  const smooth = (m: Float32Array, i: number) => [-1, 1, -N, N].every((o) => Math.abs(m[i + o]! - m[i]!) < 2e-3);
+  let texels = 0, coverDiff = 0, edgeDiff = 0, maxDiff = 0;
+  for (let i = N; i < sa.length - N; i++) {
+    if (sb[i]! >= 1 && sa[i]! >= 1) continue;
+    texels++;
+    const d = Math.abs(sa[i]! - sb[i]!);
+    if (sa[i]! >= 1 || sb[i]! >= 1) coverDiff++;
+    else if (smooth(sa, i) && smooth(sb, i)) maxDiff = Math.max(maxDiff, d);
+    else if (d > 1e-4) edgeDiff++;
+  }
+  const err = await device.popErrorScope();
+  fan.destroy();
+  cube.destroy();
+  device.destroy();
+  return { differ, pixels, covered, texels, coverDiff, edgeDiff, maxDiff, error: err?.message ?? null };
+}

@@ -292,6 +292,19 @@ describe('drawing', () => {
     expect(r.backDelta).toBeLessThan(3); // the one behind the box is hidden by depth
   });
 
+  it('the hexagon fan draws and casts the same boxes as the 36-vertex cube', async (ctx) => {
+    if (!gpu) return ctx.skip();
+    for (const seed of [61, 62]) {
+      const r = await call('fanVsCube', seed, 50);
+      expect(r.error).toBeNull();
+      expect(r.covered).toBeGreaterThan(r.pixels * 0.3);
+      expect(r.differ).toBeLessThan(r.pixels * 0.001); // measured 13 and 6 of 800k
+      expect(r.coverDiff).toBe(0);
+      expect(r.edgeDiff).toBeLessThan(r.texels * 0.001); // measured 0 and 226 of 863k
+      expect(r.maxDiff).toBeLessThan(1e-4); // measured 5.2e-5 of the 40 m light range: 2 mm
+    }
+  });
+
   it('culling never changes an ID pixel', async (ctx) => {
     if (!gpu) return ctx.skip();
     const r = await call('cullInvariance', 21, 4000);
