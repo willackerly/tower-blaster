@@ -15,6 +15,14 @@ async function run(scene: SceneDesc, steps: number, every = 1, e = new TieredEng
 }
 
 describe('TieredEngine on Rapier', () => {
+  it('reports the host variant as the host fills it in at init (Rapier: its version)', async () => {
+    const host = new RapierHost(), e = new TieredEngine(host);
+    await e.init(buildScenario('S1', { F: 1, H: 1 }, 1));
+    expect(e.info.variant['host.version']).toBe(host.info.variant.version);
+    expect(e.info.variant['host.version']).not.toBe('uninitialised');
+    e.dispose();
+  });
+
   it('an intact tower costs nothing: no host bodies, no proxies, exact poses', async () => {
     const scene = buildScenario('S1', { F: 4, H: 12 }, 1);
     const { e, problems } = await run(scene, 60, 10);

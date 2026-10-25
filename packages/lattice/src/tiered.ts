@@ -236,6 +236,7 @@ export class TieredEngine implements PhysicsEngine {
       return { origin: l.frame.origin, edge: l.frame.edge, dims: [l.nx, l.ny, l.nz] as [number, number, number], friction };
     }));
     if (this.host.caps.capacity < n) throw new Error(`host capacity ${this.host.caps.capacity} < ${n} bodies`);
+    Object.assign(this.info.variant, prefix(this.host.info.variant, 'host.')); // hosts may fill some in at init (Rapier: version)
     this.native = this.host.caps.latticeNative;
     this.mass = Float64Array.from(this.table, massOf);
     this.radius = Float64Array.from(this.table, (b) => boundingRadius(b.shape));
