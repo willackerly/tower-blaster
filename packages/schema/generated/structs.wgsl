@@ -46,7 +46,7 @@ struct Manifold {
   a: u32, // @16
   b: u32, // @20 0xffffffff for the ground
   feature: u32, // @24 0 face of a, 1 face of b, 2 edge-edge
-  pad: u32, // @28
+  axis: u32, // @28 box-box SAT axis: 0..2 face k of a, 3..5 face k of b, 6 + 3i + j edges; 0xffffffff otherwise
   p0: vec4f, // @32 point xyz (midway between the surfaces), depth w (> 0 overlapping)
   p1: vec4f, // @48
   p2: vec4f, // @64

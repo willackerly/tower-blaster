@@ -28,11 +28,13 @@
 //   matchDistance) instead of clipping feature ids, and carries the friction
 //   force as a world vector so a rotated tangent basis does not scramble it.
 // - Speculative margins grow with each body's speed (see collide()).
+// - Each touching pair keeps last step's SAT face axis unless another is
+//   clearly better (geom/manifold.ts): aligned neighbours tie on several axes.
 // - Friction is a cone (the two tangent rows clamped together to mu |lambda_n|).
 // - Bodies are swept by graph colour (see coloring.ts), the order the
 //   parallel GPU version uses, so the two can be compared step by step.
 import { type BodyDesc, inertiaOf, massOf, type Quat, type SceneDesc, type Vec3 } from '@tb/engine-api';
-import { boundingRadius, cross, dot, groundManifold, quatMul, quatNormalize, rotate, shapeManifold, spherePairs } from '@tb/geom';
+import { boundingRadius, cross, dot, groundManifold, NO_AXIS, quatMul, quatNormalize, rotate, shapeManifold, spherePairs } from '@tb/geom';
 import { colorGraph } from './coloring.ts';
 import { solveSpd6 } from './linalg.ts';
 
@@ -132,6 +134,8 @@ export interface StepStats { contacts: number; manifolds: number; colors: number
 export class AvbdWorld {
   readonly bodies: BodyState[] = [];
   contacts: Contact[] = [];
+  /** Last step's SAT axis per touching pair (key `a,b`), preferred by this step's narrowphase. */
+  axes = new Map<string, number>();
   stats: StepStats = { contacts: 0, manifolds: 0, colors: 0 };
 
   constructor(readonly scene: Pick<SceneDesc, 'gravity' | 'dt' | 'ground'>, readonly p: AvbdParams = DEFAULT_AVBD) {}
@@ -218,11 +222,16 @@ export class AvbdWorld {
       sweep[i] = p.sweep ? Math.min(p.maxSweep, h * v) : 0;
     });
     const inflated = radii.map((r, i) => r + sweep[i]!);
+    const axes = new Map<string, number>();
     for (const [i, j] of spherePairs(centers, inflated, p.margin)) {
       const A = bodies[i]!, B = bodies[j]!;
-      const m = shapeManifold(A.desc.shape, A.pos, A.rot, B.desc.shape, B.pos, B.rot, p.margin + sweep[i]! + sweep[j]!);
-      if (m) emit(i, j, m.normal, m.points, Math.sqrt(A.desc.friction * B.desc.friction));
+      const key = `${i},${j}`;
+      const m = shapeManifold(A.desc.shape, A.pos, A.rot, B.desc.shape, B.pos, B.rot, p.margin + sweep[i]! + sweep[j]!, true, this.axes.get(key) ?? NO_AXIS);
+      if (!m) continue;
+      axes.set(key, m.axis);
+      emit(i, j, m.normal, m.points, Math.sqrt(A.desc.friction * B.desc.friction));
     }
+    this.axes = axes;
     const g = this.scene.ground;
     if (g) {
       bodies.forEach((B, i) => {

@@ -87,10 +87,26 @@ describe('GPU narrowphase vs the double-precision manifolds', () => {
     expect(r.groundContacts).toBeGreaterThan(base.groundContacts);
   });
 
+  it('keeps each pair on its previous SAT axis exactly as the reference does', async (ctx) => {
+    if (!gpu) return ctx.skip();
+    // Random boxes rarely tie; the aligned city ties on every face neighbour
+    // (a's and b's face axes separate equally), so there the hint decides.
+    const random = await call('narrowphase', { kind: 'random', pairs: 3000, spheres: 0.2, margin: 0.02, seed: 14, prevAxes: true });
+    const city = await call('narrowphase', { kind: 'scenario', scenario: 'S4', params: { N: 2000, F: 4, H: 12 }, margin: 0.05, prevAxes: true });
+    for (const r of [random, city]) {
+      expect(r.error).toBeNull();
+      expect(r.pairMismatch, JSON.stringify(r.examples)).toBe(0);
+      expect(r.pairTies).toBeLessThan(0.005 * r.contacts);
+    }
+    expect(city.contacts).toBeGreaterThan(1000);
+  });
+
   it.for([
     ['packed city', 'S4', { N: 2000, F: 4, H: 12 }],
     ['gapped tower', 'S1', { F: 4, H: 10, gap: 0.02 }],
     ['ball resting in a city', 'S5', { N: 1000, F: 4, H: 8, fireStep: 0 }],
+    // f32 ulp 4.9e-4 here: the 1e-4 side inset survives only because clipping is relative to the reference box.
+    ['tower far from the origin', 'S10', { F: 4, H: 6, gap: 0, offset: 5000 }],
   ] as const)('%s: every manifold matches', async ([, scenario, params], ctx) => {
     if (!gpu) return ctx.skip();
     const r = await call('narrowphase', { kind: 'scenario', scenario, params: { ...params }, margin: 0.05 });

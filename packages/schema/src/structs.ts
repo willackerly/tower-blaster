@@ -57,7 +57,7 @@ export const Manifold = defineStruct(
     ['a', 'u32'],
     ['b', 'u32', '0xffffffff for the ground'],
     ['feature', 'u32', '0 face of a, 1 face of b, 2 edge-edge'],
-    ['pad', 'u32'],
+    ['axis', 'u32', 'box-box SAT axis: 0..2 face k of a, 3..5 face k of b, 6 + 3i + j edges; 0xffffffff otherwise'],
     ['p0', 'vec4f', 'point xyz (midway between the surfaces), depth w (> 0 overlapping)'],
     ['p1', 'vec4f'],
     ['p2', 'vec4f'],

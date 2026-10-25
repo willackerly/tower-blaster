@@ -1,6 +1,6 @@
 // Page-side drivers for the GPU physics tests (bundled by loadBundle).
 import { createDevice, readBuffer } from '@tb/gpu';
-import { boundingRadius, groundManifold, quatNormalize, shapeManifold, spherePairs, supportArea, type Manifold as CpuManifold } from '@tb/geom';
+import { boundingRadius, groundManifold, NO_AXIS, quatNormalize, shapeManifold, spherePairs, supportArea, type Manifold as CpuManifold } from '@tb/geom';
 import { Body, Manifold, readStruct, Shape, writeStruct } from '@tb/schema';
 import type { BodyDesc, Quat, Vec3 } from '@tb/engine-api';
 import { buildScenario } from '@tb/scenarios';
@@ -109,14 +109,14 @@ function uploadBodies(device: GPUDevice, bodies: BodyDesc[]) {
 }
 
 /** The reference manifold for pair (a, b), normal from a to b. */
-function cpuPair(a: BodyDesc, b: BodyDesc, margin: number, reduce = true): CpuManifold | null {
-  return shapeManifold(a.shape, a.pos, a.rot, b.shape, b.pos, b.rot, margin, reduce);
+function cpuPair(a: BodyDesc, b: BodyDesc, margin: number, reduce = true, prevAxis = NO_AXIS): CpuManifold | null {
+  return shapeManifold(a.shape, a.pos, a.rot, b.shape, b.pos, b.rot, margin, reduce, prevAxis);
 }
 
-interface Gpu { count: number; normal: number[]; feature: number; points: number[][] }
+interface Gpu { count: number; normal: number[]; feature: number; axis: number; points: number[][] }
 function decode(view: DataView, i: number): Gpu {
   const r = readStruct(view, Manifold, i);
-  return { count: r.count![0]!, normal: r.normal!, feature: r.feature![0]!, points: [r.p0!, r.p1!, r.p2!, r.p3!].slice(0, r.count![0]!) };
+  return { count: r.count![0]!, normal: r.normal!, feature: r.feature![0]!, axis: r.axis![0]!, points: [r.p0!, r.p1!, r.p2!, r.p3!].slice(0, r.count![0]!) };
 }
 
 /**
@@ -137,11 +137,12 @@ function tieOnly(g: Gpu, c: CpuManifold | null, all: CpuManifold | null, tol: nu
   return supportArea(g.points.map((p) => [p[0]!, p[1]!, p[2]!] as Vec3), c.normal) >= 0.99 * supportArea(c.points.map((q) => q.point), c.normal) - 1e-6;
 }
 
-/** Match GPU against CPU: same count, normal within 1e-3 rad, every point paired within tol. */
+/** Match GPU against CPU: same count and SAT axis, normal within 1e-3 rad, every point paired within tol. */
 function agrees(g: Gpu, c: CpuManifold | null, tol: number): boolean {
   const cc = c ? c.points.length : 0;
   if (g.count !== cc) return false;
   if (!c || cc === 0) return true;
+  if (g.axis !== c.axis) return false;
   const dn = g.normal[0]! * c.normal[0] + g.normal[1]! * c.normal[1] + g.normal[2]! * c.normal[2];
   if (dn < 1 - 5e-7) return false;
   const left = [...c.points];
@@ -153,7 +154,11 @@ function agrees(g: Gpu, c: CpuManifold | null, tol: number): boolean {
   return true;
 }
 
-export interface NarrowCase { kind: 'random' | 'scenario'; pairs?: number; spheres?: number; scenario?: string; params?: Record<string, number>; margin: number; seed?: number; /** per-body sweep drawn from [0, sweep) */ sweep?: number }
+export interface NarrowCase {
+  kind: 'random' | 'scenario'; pairs?: number; spheres?: number; scenario?: string; params?: Record<string, number>; margin: number; seed?: number;
+  /** per-body sweep drawn from [0, sweep) */ sweep?: number;
+  /** give each pair a random last-step SAT axis (0..14, or none), as AvbdSolver.match would */ prevAxes?: boolean;
+}
 
 function randomPairs(c: NarrowCase): { bodies: BodyDesc[]; pairs: Array<[number, number]> } {
   let s = (c.seed ?? 1) >>> 0;
@@ -205,7 +210,11 @@ export async function narrowphase(c: NarrowCase) {
   const f32 = (x: number) => Math.fround(x);
   const pairMargin = (i: number, j: number) => f32(f32(f32(c.margin) + f32(sweeps[i]!)) + f32(sweeps[j]!));
   const groundMargin = (i: number) => f32(f32(c.margin) + f32(sweeps[i]!));
-  const np = new Narrowphase(device, bb, sb, pb, tb, Math.max(1, n), Math.max(1, pairs.length), sweepBuf);
+  let ps = 5;
+  const hints = pairs.map(() => (c.prevAxes ? Math.floor(16 * ((ps = (Math.imul(ps, 1664525) + 1013904223) >>> 0) / 2 ** 32)) : 15)).map((h) => (h === 15 ? NO_AXIS : h));
+  const prevBuf = device.createBuffer({ size: Math.max(16, pairs.length * 8), usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });
+  device.queue.writeBuffer(prevBuf, 0, Uint32Array.from(hints.flatMap((h) => [0, h])));
+  const np = new Narrowphase(device, bb, sb, pb, tb, Math.max(1, n), Math.max(1, pairs.length), sweepBuf, prevBuf);
   device.pushErrorScope('validation');
   const enc = device.createCommandEncoder();
   const pass = enc.beginComputePass();
@@ -219,11 +228,11 @@ export async function narrowphase(c: NarrowCase) {
   let pairMismatch = 0, pairTies = 0, contacts = 0, groundMismatch = 0, groundTies = 0, groundContacts = 0;
   const examples: unknown[] = [];
   pairs.forEach(([i, j], k) => {
-    const g = decode(mv, k), cpu = cpuPair(bodies[i]!, bodies[j]!, pairMargin(i, j));
+    const g = decode(mv, k), cpu = cpuPair(bodies[i]!, bodies[j]!, pairMargin(i, j), true, hints[k]);
     if (cpu) contacts++;
     const t = tol * (1 + Math.abs(bodies[i]!.pos[0]) / 25);
     if (!agrees(g, cpu, t)) {
-      if (tieOnly(g, cpu, cpuPair(bodies[i]!, bodies[j]!, pairMargin(i, j), false), t)) { pairTies++; return; }
+      if (g.axis === cpu?.axis && tieOnly(g, cpu, cpuPair(bodies[i]!, bodies[j]!, pairMargin(i, j), false, hints[k]), t)) { pairTies++; return; }
       pairMismatch++;
       if (examples.length < 3) examples.push({ k, gpu: g, cpu });
     }
@@ -241,6 +250,7 @@ export async function narrowphase(c: NarrowCase) {
   });
   np.destroy();
   sweepBuf.destroy();
+  prevBuf.destroy();
   device.destroy();
   return { error: error?.message ?? null, pairs: pairs.length, contacts, pairMismatch, pairTies, groundContacts, groundMismatch, groundTies, examples };
 }
@@ -360,3 +370,4 @@ export async function coloring(c: ColorCase) {
     maxDegree: Math.max(0, ...adj.map((s) => s.size)), wallMs,
   };
 }
+
