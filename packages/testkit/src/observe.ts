@@ -42,13 +42,16 @@ export interface ConformanceReport {
   observations: number;
 }
 
+/** String(v), but -0 shows as -0. */
+const show = (v: unknown) => (Object.is(v, -0) ? '-0' : String(v));
+
 /** The first difference between two observations, as a path, or null. Numbers compare with Object.is. */
 function difference(want: unknown, got: unknown, path: string): string | null {
-  if (typeof want === 'number' || want === null || want === undefined) return Object.is(want, got) ? null : `${path}: want ${String(want)}, got ${String(got)}`;
+  if (typeof want === 'number' || want === null || want === undefined) return Object.is(want, got) ? null : `${path}: want ${show(want)}, got ${show(got)}`;
   if (ArrayBuffer.isView(want)) {
     const w = want as unknown as ArrayLike<number>, g = got as ArrayLike<number> | undefined;
     if (!ArrayBuffer.isView(got) || want.constructor !== got.constructor || w.length !== g!.length) return `${path}: want ${want.constructor.name}(${w.length}), got ${String(got)}`;
-    for (let i = 0; i < w.length; i++) if (!Object.is(w[i], g![i])) return `${path}[${i}]: want ${w[i]}, got ${g![i]}`;
+    for (let i = 0; i < w.length; i++) if (!Object.is(w[i], g![i])) return `${path}[${i}]: want ${show(w[i])}, got ${show(g![i])}`;
     return null;
   }
   if (typeof want !== 'object' || typeof got !== 'object' || got === null) return `${path}: want ${JSON.stringify(want)}, got ${String(got)}`;

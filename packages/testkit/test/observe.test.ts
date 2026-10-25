@@ -1,16 +1,19 @@
 import { describe, expect, it } from 'vitest';
 import { RapierEngine } from '@tb/adapter-rapier';
-import { type ObservedEngine, type Observer, type PhysicsEngine, withSnapshotObserver } from '@tb/engine-api';
+import { type Observation, type ObservedEngine, type Observer, type PhysicsEngine, type ReduceSpec, type Snapshot, withSnapshotObserver } from '@tb/engine-api';
 import { AvbdReferenceEngine } from '@tb/physics-ref';
 import { observerConformance } from '../src/index.ts';
 
-/** e, with every observer it hands out replaced by edit(observer). */
-function reobserved(e: ObservedEngine, edit: (o: Observer) => Observer): PhysicsEngine {
+/** e, with every observer it hands out replaced by edit(observer); before() runs ahead of every step. */
+function reobserved(e: ObservedEngine, edit: (o: Observer) => Observer, before?: () => void): PhysicsEngine {
   return {
     get info() { return e.info; },
     get stepIndex() { return e.stepIndex; },
     init: (scene) => e.init(scene),
-    step: () => e.step(),
+    step: () => {
+      before?.();
+      return e.step();
+    },
     snapshot: () => e.snapshot(),
     dispose: () => e.dispose(),
     observe: async (opts) => edit(await e.observe(opts)),
@@ -58,6 +61,78 @@ describe('observerConformance', () => {
       return reobserved(e, (o) => passthrough(o, (k) => (k > e.stepIndex ? o.result(e.stepIndex) : o.result(k))));
     };
     await expect(observerConformance(lenient)).rejects.toThrow('observerConformance: result(2), a step not yet taken, resolved; it must reject');
+  });
+
+  // Each wrong observer below is one that a single check of the harness must catch.
+  const onRapier = (result: (o: Observer, e: ObservedEngine) => Observer['result']) => () => {
+    const e = withSnapshotObserver(new RapierEngine());
+    return reobserved(e, (o) => passthrough(o, result(o, e)));
+  };
+
+  it.each<[string, (r: Observation) => Observation, RegExp]>([
+    ['a wrong row value', (r) => ({ ...r, rows: { ...r.rows, pos: r.rows.pos.map((v, i) => (i ? v : v + 1e-3)) } }), /^observerConformance: result\(1\)\.rows\.pos\[0\]: want /],
+    ['reversed bins with the right n', (r) => ({ ...r, out: r.out.map((x) => (x.bins ? { ...x, bins: x.bins.slice().reverse() } : x)) }), /^observerConformance: result\(1\)\.out\.\d+\.bins\[\d+\]: want /],
+    ['-0 for a sat of 0', (r) => ({ ...r, out: r.out.map((x) => (x.sat === 0 ? { ...x, sat: -0 } : x)) }), /^observerConformance: result\(1\)\.out\.5\.sat: want 0, got -0$/],
+    ['-0 for a +0 row value', (r) => ({ ...r, rows: { ...r.rows, linVel: r.rows.linVel.map((v) => (v === 0 ? -0 : v)) } }), /^observerConformance: result\(1\)\.rows\.linVel\[\d+\]: want 0, got -0$/],
+    ['an extra field', (r) => ({ ...r, extra: 1 }) as Observation, /^observerConformance: result\(1\)\.extra: want undefined, got 1$/],
+  ])('fails an observer that returns %s', async (_, edit, msg) => {
+    await expect(observerConformance(onRapier((o) => (k) => o.result(k).then(edit)))).rejects.toThrow(msg);
+  });
+
+  it.each<[string, (o: Observer, e: ObservedEngine) => Observer['result'], string]>([
+    ['result(0)', (o) => (k) => (k === 0 ? Promise.resolve({} as Observation) : o.result(k)), 'result(0), before any query was evaluated, resolved'],
+    ['a step with no query', (o) => (k) => o.result(k).catch((err: Error) => (k >= 1 && /no query/.test(err.message) ? o.result(150) : Promise.reject(err))), 'result(151), a step with no query, resolved'],
+    ['a step older than keep', (o, e) => (k) => (k >= 1 && k <= e.stepIndex - 64 ? o.result(e.stepIndex) : o.result(k)), 'result(1), older than keep, resolved'],
+  ])('fails an observer that resolves %s', async (_, result, what) => {
+    await expect(observerConformance(onRapier(result))).rejects.toThrow(`observerConformance: ${what}; it must reject`);
+  });
+
+  it('fails an observer that forgets a step inside the keep window', async () => {
+    const forgets = onRapier((o, e) => (k) => (k < e.stepIndex - 10 ? Promise.reject(new Error('gone')) : o.result(k)));
+    await expect(observerConformance(forgets)).rejects.toThrow('observerConformance: result(1) rejected: gone');
+  });
+
+  it.each(['spec', 'watch ids', 'tag words'] as const)("fails an observer that keeps the caller's %s instead of a copy", async (what) => {
+    // It reads the caller's object again before every step, as one that kept the reference would.
+    const keeping = () => {
+      let o: Observer, spec: ReduceSpec | null = null, ids: Int32Array | null = null;
+      const tags: [number, Uint32Array][] = [];
+      const again = () => {
+        if (what === 'spec' && spec) o.query(spec);
+        if (what === 'watch ids' && ids) o.watch(ids);
+        if (what === 'tag words') for (const [first, words] of tags) o.setTags(first, words);
+      };
+      return reobserved(withSnapshotObserver(new RapierEngine()), (inner) => {
+        o = inner;
+        return {
+          ...passthrough(inner, (k) => inner.result(k)),
+          query: (s) => { spec = s; inner.query(s); },
+          watch: (w) => { ids = w; inner.watch(w); },
+          setTags: (first, words) => { tags.push([first, words]); inner.setTags(first, words); },
+        };
+      }, again);
+    };
+    await expect(observerConformance(keeping)).rejects.toThrow(/^observerConformance: result\(1\)\.(out|rows)\./);
+  });
+
+  it('fails an engine whose snapshots do not follow bodiesAt, though its observer agrees with them', async () => {
+    // The ball never shows: the wrapper observes the engine's own snapshots exactly, so only the body count catches it.
+    const hiding = () => {
+      const r = new RapierEngine();
+      let n = 0;
+      return withSnapshotObserver({
+        get info() { return r.info; },
+        get stepIndex() { return r.stepIndex; },
+        init: async (scene) => {
+          n = scene.bodies.length;
+          await r.init(scene);
+        },
+        step: () => r.step(),
+        snapshot: (): Snapshot => ({ ...r.snapshot(), count: n }),
+        dispose: () => r.dispose(),
+      });
+    };
+    await expect(observerConformance(hiding)).rejects.toThrow(/^observerConformance: \d+ bodies after step 31, but bodiesAt gives \d+$/);
   });
 
   it('fails an engine without observe(), and disposes every engine it was given', async () => {
