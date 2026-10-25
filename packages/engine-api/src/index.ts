@@ -127,3 +127,5 @@ export function inertiaOf(b: BodyDesc): Vec3 {
   const k = m / 3; // (m/12)*(2h)^2 = m h^2 / 3
   return [k * (hy * hy + hz * hz), k * (hx * hx + hz * hz), k * (hx * hx + hy * hy)];
 }
+
+export * from './observe.ts';
