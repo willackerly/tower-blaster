@@ -26,8 +26,17 @@ export const MAX_BALLS = 4;
 export const FLASHES = 8;
 export const LIGHTS = MAX_BALLS + FLASHES;
 export const TRAIL = 32;
-/** Words of the light list: 2 vec4 per light, then one vec4 (x: heat glow gain). */
-export const LIGHT_WORDS = LIGHTS * 8 + 4;
+/**
+ * The light buffer, in vec4: the LIGHTS raw slots (2 vec4 each: position
+ * and radius, colour times intensity; zero when off), then LIGHT_META
+ * (x: heat glow gain, y: lit count), then the lit lights packed from
+ * LIGHT_PACKED in slot order. The scene shader reads it as a uniform and
+ * loops over the packed lights only, so with none lit it costs nothing.
+ */
+export const LIGHT_META = LIGHTS * 2;
+export const LIGHT_PACKED = LIGHT_META + 1;
+export const LIGHT_VEC4 = LIGHT_PACKED + LIGHTS * 2;
+export const LIGHT_WORDS = LIGHT_VEC4 * 4;
 /** Hot bodies that glow at full strength; more share it (no white washout in a collapse). */
 export const HOT_FULL = 2000;
 
@@ -72,7 +81,7 @@ struct Flash { pos: vec3f, t0: f32, i0: f32, pad0: f32, pad1: f32, pad2: f32 }
 @group(0) @binding(4) var<storage, read> eventCount: array<u32>;   // the spark control words; [0] = events this frame
 @group(0) @binding(5) var<storage, read_write> keys: array<atomic<u32>, ${FLASHES}>;
 @group(0) @binding(6) var<storage, read_write> flashes: array<Flash, ${FLASHES}>;
-@group(0) @binding(7) var<storage, read_write> lights: array<vec4f, ${LIGHTS * 2 + 1}>;
+@group(0) @binding(7) var<storage, read_write> lights: array<vec4f, ${LIGHT_VEC4}>;
 @group(0) @binding(8) var<storage, read_write> trail: array<vec4f>;  // MAX_BALLS x TRAIL: world xyz, time (w < 0: empty)
 
 ${FLASH_SLOT_WGSL()}
@@ -124,7 +133,21 @@ fn flashTake(@builtin(local_invocation_index) k: u32) {
   let lit = now > 0.01;
   lights[2u * (${MAX_BALLS}u + k)] = select(vec4f(0.0), vec4f(f.pos - p.eye, p.flashRadius), lit);
   lights[2u * (${MAX_BALLS}u + k) + 1u] = select(vec4f(0.0), vec4f(p.flashColour, now), lit);
-  if (k == 0u) { lights[${LIGHTS * 2}u] = vec4f(1.0 / max(1.0, f32(eventCount[${CTL.hot}]) / ${HOT_FULL}.0), 0.0, 0.0, 0.0); }
+}
+
+@compute @workgroup_size(1)
+fn pack() {
+  var n = 0u;
+  for (var k = 0u; k < ${LIGHTS}u; k++) {
+    let pl = lights[2u * k];
+    let col = lights[2u * k + 1u];
+    if (pl.w > 0.0 && col.w > 0.0) {
+      lights[${LIGHT_PACKED}u + 2u * n] = pl;
+      lights[${LIGHT_PACKED}u + 2u * n + 1u] = col;
+      n++;
+    }
+  }
+  lights[${LIGHT_META}u] = vec4f(1.0 / max(1.0, f32(eventCount[${CTL.hot}]) / ${HOT_FULL}.0), f32(n), 0.0, 0.0);
 }
 `;
 
@@ -152,8 +175,8 @@ export class Lights {
   readonly flashes: GPUBuffer;
   private readonly keys: GPUBuffer;
   private readonly params: GPUBuffer;
-  private readonly pipes: { balls: GPUComputePipeline; flashPick: GPUComputePipeline; flashTake: GPUComputePipeline };
-  private binds: { balls: GPUBindGroup; flashPick: GPUBindGroup; flashTake: GPUBindGroup } | null = null;
+  private readonly pipes: { balls: GPUComputePipeline; flashPick: GPUComputePipeline; flashTake: GPUComputePipeline; pack: GPUComputePipeline };
+  private binds: { balls: GPUBindGroup; flashPick: GPUBindGroup; flashTake: GPUBindGroup; pack: GPUBindGroup } | null = null;
   private bound: unknown[] = [];
   private frame = 0;
   /** Tunables, read every frame. */
@@ -161,7 +184,7 @@ export class Lights {
 
   constructor(private readonly device: GPUDevice) {
     const usage = GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST;
-    this.lights = device.createBuffer({ size: LIGHT_WORDS * 4, usage, label: 'lights' });
+    this.lights = device.createBuffer({ size: LIGHT_WORDS * 4, usage: usage | GPUBufferUsage.UNIFORM, label: 'lights' });
     this.trail = device.createBuffer({ size: MAX_BALLS * TRAIL * 16, usage, label: 'ball trail' });
     device.queue.writeBuffer(this.trail, 0, new Float32Array(MAX_BALLS * TRAIL * 4).map((_, i) => (i % 4 === 3 ? -1 : 0)));
     this.flashes = device.createBuffer({ size: FLASHES * 32, usage, label: 'flash lights' });
@@ -169,7 +192,7 @@ export class Lights {
     this.params = device.createBuffer({ size: PARAM_WORDS * 4, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST, label: 'light params' });
     const module = device.createShaderModule({ code: LIGHT_WGSL, label: 'lights' });
     const pipe = (entryPoint: string) => device.createComputePipeline({ layout: 'auto', compute: { module, entryPoint } });
-    this.pipes = { balls: pipe('balls'), flashPick: pipe('flashPick'), flashTake: pipe('flashTake') };
+    this.pipes = { balls: pipe('balls'), flashPick: pipe('flashPick'), flashTake: pipe('flashTake'), pack: pipe('pack') };
   }
 
   /**
@@ -184,7 +207,7 @@ export class Lights {
         layout: p.getBindGroupLayout(0),
         entries: bindings.map((binding) => ({ binding, resource: { buffer: all[binding]! } })),
       });
-      this.binds = { balls: bind(this.pipes.balls, [0, 1, 2, 7, 8]), flashPick: bind(this.pipes.flashPick, [0, 3, 4, 5]), flashTake: bind(this.pipes.flashTake, [0, 3, 4, 5, 6, 7]) };
+      this.binds = { balls: bind(this.pipes.balls, [0, 1, 2, 7, 8]), flashPick: bind(this.pipes.flashPick, [0, 3, 4, 5]), flashTake: bind(this.pipes.flashTake, [0, 3, 5, 6, 7]), pack: bind(this.pipes.pack, [4, 7]) };
       this.bound = want;
     }
     const c = this.config;
@@ -206,6 +229,9 @@ export class Lights {
     pass.dispatchWorkgroups(Math.ceil(MAX_EVENTS / 64));
     pass.setBindGroup(0, this.binds.flashTake);
     pass.setPipeline(this.pipes.flashTake);
+    pass.dispatchWorkgroups(1);
+    pass.setBindGroup(0, this.binds.pack);
+    pass.setPipeline(this.pipes.pack);
     pass.dispatchWorkgroups(1);
   }
 

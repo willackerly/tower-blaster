@@ -6,7 +6,7 @@ import { defineStruct, FxState, RenderRecord, Spark, wgslStruct } from '@tb/sche
 import { FX_EMISSIVE_MAX, FX_WGSL } from './fx.ts';
 import { BEVEL_WGSL, OKLAB_WGSL } from './look.ts';
 import { SPARK_COMMON } from './sparks.ts';
-import { LIGHTS, MAX_BALLS, TRAIL } from './lights.ts';
+import { LIGHT_META, LIGHT_PACKED, LIGHT_VEC4, MAX_BALLS, TRAIL } from './lights.ts';
 
 export const SHADOW_SIZE = 2048;
 export const SPHERE_SEG = 24;
@@ -35,7 +35,7 @@ export const Frame = defineStruct('Frame', [
   ['keyDir', 'vec3f'], ['rimSize', 'f32'],
   ['rimColor', 'vec3f'], ['hueStep', 'f32', 'radians'],
   ['rimDir', 'vec3f'], ['ballEmissive', 'f32'],
-  ['ball', 'vec3f'], ['pad0', 'f32'],
+  ['ball', 'vec3f'], ['heat', 'f32', '1: heat glow on (bench toggle)'],
   ['shadowParams', 'vec4f', 'normal offset m, depth bias (light depth units), texel m, unused'],
   ['viewport', 'vec2f', 'pixels'], ['dt', 'f32', 'seconds since the last scene frame'], ['trailHead', 'u32', 'newest ball trail sample'],
   ['ramp0', 'vec4f', 'OKLab'], ['ramp1', 'vec4f'], ['ramp2', 'vec4f'], ['ramp3', 'vec4f'], ['ramp4', 'vec4f'],
@@ -56,7 +56,7 @@ ${wgslStruct(Frame)}
 @group(0) @binding(6) var<storage, read> overlay: array<vec4f>;     // world x, y, z, radius
 @group(0) @binding(7) var<storage, read> overlayColour: array<u32>; // sRGB rgb8 + emissive8
 @group(0) @binding(8) var<storage, read> sparks: array<Spark>;      // sparks.ts
-@group(0) @binding(9) var<storage, read> lights: array<vec4f, ${LIGHTS * 2 + 1}>; // lights.ts: position + radius, colour * intensity; then heat gain
+@group(0) @binding(9) var<uniform> lights: array<vec4f, ${LIGHT_VEC4}>;      // lights.ts: raw slots, meta (heat gain, lit count), packed lit lights
 @group(0) @binding(11) var<storage, read> fxState: array<FxState>;   // sparks.ts: heat in bits 0-15
 @group(0) @binding(10) var<storage, read> trail: array<vec4f>;      // lights.ts: world xyz, time
 
@@ -270,10 +270,10 @@ fn shade(base: vec3f, rel: vec3f, n: vec3f, a: f32, ac: f32, coat: f32) -> vec3f
 // inverse-square falloff windowed to zero at the radius, no shadows.
 fn pointLights(base: vec3f, rel: vec3f, n: vec3f, V: vec3f, a: f32) -> vec3f {
   var c = vec3f(0.0);
-  for (var k = 0u; k < ${LIGHTS}u; k++) {
-    let col = lights[2u * k + 1u];
-    if (col.w <= 0.0) { continue; }
-    let pl = lights[2u * k];
+  let lit = u32(lights[${LIGHT_META}u].y);
+  for (var k = 0u; k < lit; k++) {
+    let pl = lights[${LIGHT_PACKED}u + 2u * k];
+    let col = lights[${LIGHT_PACKED}u + 2u * k + 1u];
     let d = pl.xyz - rel;
     let r2 = dot(d, d);
     let x = r2 / (pl.w * pl.w);
@@ -361,10 +361,10 @@ fn boxFace(local: vec3f, w: vec3f) -> vec3f {
 // bodies are hot at once (lights.ts). The palette colour glows; only the
 // hottest turn white.
 fn heatGlow(slot: u32, base: vec3f) -> vec3f {
-  if (slot >= fr.capacity) { return vec3f(0.0); }
+  if (fr.heat == 0.0 || slot >= fr.capacity) { return vec3f(0.0); }
   let h = unpack2x16float(fxState[slot].bits).x;
   if (h <= 0.0) { return vec3f(0.0); }
-  return h * lights[${LIGHTS * 2}u].x * mix(base * 3.0, vec3f(6.0), smoothstep(0.8, 1.0, h));
+  return h * lights[${LIGHT_META}u].x * mix(base * 3.0, vec3f(6.0), smoothstep(0.8, 1.0, h));
 }
 
 // Bench diagnostics (RendererOptions.flatBoxes): the cheapest box shading.

@@ -220,6 +220,11 @@ describe('sparks', () => {
     expect(r.alive).toBeGreaterThan(100); // some live sparks left to compare after 50 frames
     expect(r.bounced).toBeGreaterThan(50); // and many of them have hit the ground
     expect(r.simErr).toBeLessThan(1e-4); // measured 2.4e-6
+    // The streak draw: the whole pool while any spark lives, empty once all are dead.
+    expect(r.aliveCtl).toBe(r.alive);
+    expect(r.argsFlying).toEqual([6, r.pool, 0, 0]);
+    expect(r.aliveDead).toBe(0);
+    expect(r.argsDead).toEqual([6, 0, 0, 0]);
   });
 
   it('a flood of 100k impacts stays within the event and spark budgets', async (ctx) => {
@@ -270,6 +275,7 @@ describe('lights', () => {
     expect(r.kept).toBe(true); // a weak impact one tau later does not replace it
     expect(r.decay).toBeCloseTo(Math.exp(-1), 5);
     expect(r.replaced).toBe(true); // a strong one does
+    expect(r.pack).toEqual({ n: 8, same: true }); // the scene shader loops over the lit lights only
   });
 
   it('the ball trail keeps its samples in order at the drawn positions and lights the path behind the ball', async (ctx) => {
@@ -307,7 +313,7 @@ describe('heat', () => {
     for (const n of [1500, 100_000]) {
       const r = await call('heatGain', n);
       expect(r.error).toBeNull();
-      expect(r.cold).toEqual({ hot: 0, gain: 1 });
+      expect(r.cold).toEqual({ hot: 0, gain: 1, lit: 0 }); // no balls, no flashes: the scene shader's light loop is empty
       expect(r.hot.hot).toBe(n);
       expect(r.hot.gain).toBeCloseTo(Math.min(1, HOT_FULL / n), 7);
     }
@@ -327,6 +333,10 @@ describe('heat', () => {
     expect(glow).toBeGreaterThan(40); // 8-bit luma, measured +79
     expect(dim).toBeGreaterThan(0);
     expect(dim).toBeLessThan(0.75 * glow); // gain 2000 / 6001; tone mapping compresses it to a measured 0.54
+    // The bench toggle: with the glow off the hit cube does not change.
+    const off = await call('heatImage', 0, false, 9, false);
+    expect(off.error).toBeNull();
+    expect(off.hit[1]).toBe(off.hit[0]);
   });
 });
 
@@ -472,7 +482,7 @@ describe('drawing', () => {
   it('bench:render completes and reports every case (numbers discarded)', async (ctx) => {
     if (!gpu) return ctx.skip();
     const r = await call('runRenderBench', { width: 160, height: 90, counts: [800], warmup: 1, batches: 2, batchFrames: 1, profiledFrames: 1, sparkPool: 1024 });
-    expect(r.cases.map((c) => `${c.world}:${c.variant}`)).toEqual(['near', 'far'].flatMap((w) => ['full', 'no-shadow', 'no-post', 'no-sparks', 'fan', 'cube', 'flat-fan', 'flat-cube'].map((v) => `${w}:${v}`)));
+    expect(r.cases.map((c) => `${c.world}:${c.variant}`)).toEqual(['near', 'far'].flatMap((w) => ['full', 'no-shadow', 'no-post', 'no-sparks', 'no-heat', 'fan', 'cube', 'flat-fan', 'flat-cube'].map((v) => `${w}:${v}`)));
     for (const c of r.cases) {
       expect(c.bodies).toBe(800);
       expect(c.frameMs).toBeGreaterThan(0);
@@ -482,8 +492,8 @@ describe('drawing', () => {
       if (r.timestamps) expect(Object.keys(c.passes)).toEqual(expect.arrayContaining(['cull', 'scene', ...(c.variant === 'no-shadow' ? [] : ['shadow']), ...(c.variant === 'no-post' ? [] : ['bloom', 'composite'])]));
     }
     expect(r.software).toBe(isSoftwareAdapter(gpu.adapter));
-    expect(await call('renderBenchMarkdown', r, 'h')).toMatch(/Without shadow/);
-  });
+    expect(await call('renderBenchMarkdown', r, 'h')).toMatch(/Without heat glow/);
+  }, 30_000); // 18 cases on a software adapter
 
   it('culling never changes an ID pixel', async (ctx) => {
     if (!gpu) return ctx.skip();

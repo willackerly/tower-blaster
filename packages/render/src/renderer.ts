@@ -141,7 +141,7 @@ export class Renderer {
   /** Per-pass GPU timing of render() (cull, shadow, scene, bloom, composite) when set; read with profiler.collect(). */
   profiler: GpuProfiler | null = null;
   /** Passes to skip, for measuring their marginal cost (bench:render). sparks off also freezes heat (its detector writes it). */
-  toggles = { shadow: true, post: true, sparks: true, trail: true };
+  toggles = { shadow: true, post: true, sparks: true, trail: true, heat: true };
 
   constructor(readonly device: GPUDevice, target: RenderTarget, opts: RendererOptions = {}) {
     const sceneFan = (opts.scenePath ?? opts.boxPath ?? 'cube') === 'fan';
@@ -182,7 +182,7 @@ export class Renderer {
         { binding: 6, visibility: GPUShaderStage.VERTEX, buffer: ro },
         { binding: 7, visibility: GPUShaderStage.FRAGMENT, buffer: ro },
         { binding: 8, visibility: GPUShaderStage.VERTEX, buffer: ro },
-        { binding: 9, visibility: GPUShaderStage.FRAGMENT, buffer: ro },
+        { binding: 9, visibility: GPUShaderStage.FRAGMENT, buffer: { type: 'uniform' } },
         { binding: 10, visibility: GPUShaderStage.VERTEX, buffer: ro },
         { binding: 11, visibility: GPUShaderStage.FRAGMENT, buffer: ro },
       ],
@@ -383,7 +383,7 @@ export class Renderer {
       ...lookUniforms(this.look),
       // Bias, all on the receiver: normal offset of 2 texels, depth bias of 1 texel + 1 cm.
       shadowParams: [2 * fit.texel, (fit.texel + 0.01) / fit.depthRange, fit.texel, 0],
-      viewport: this.viewport(), dt: f.dt ?? 0, trailHead: (this.lights.nextFrame + TRAIL - 1) % TRAIL,
+      heat: this.toggles.heat ? 1 : 0, viewport: this.viewport(), dt: f.dt ?? 0, trailHead: (this.lights.nextFrame + TRAIL - 1) % TRAIL,
     });
     this.device.queue.writeBuffer(this.frameBuf, 0, this.frameData);
     return { viewProj, lightViewProj, eye: f.eye, alpha: f.alpha ?? 1, noCull: f.noCull ?? false };
@@ -443,7 +443,7 @@ export class Renderer {
       p.draw(3);
       if (this.toggles.sparks) {
         p.setPipeline(this.pipes.spark);
-        p.draw(6, this.sparks.pool);
+        p.drawIndirect(this.sparks.args, 0);
       }
       if (this.toggles.trail) {
         p.setPipeline(this.pipes.trail);

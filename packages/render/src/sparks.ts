@@ -59,7 +59,7 @@ export interface SparkParams {
 export const DEFAULT_SPARKS: SparkParams = { dvMin: 2.5, perDv: 24, speedMin: 6, speedMax: 22, drag: 0.08, bounce: 0.38, friction: 0.7, gravity: 9.81, heatDv: 6, heatRange: 6, heatTau: 0.25, contact: 0.3 };
 
 /** Control words: event count, pool head, events dropped, sparks spawned, hot bodies (this frame). */
-export const CTL = { events: 0, head: 1, dropped: 2, spawned: 3, hot: 4 } as const;
+export const CTL = { events: 0, head: 1, dropped: 2, spawned: 3, hot: 4, alive: 5 } as const;
 const CTL_WORDS = 8;
 
 const PARAM_WORDS = 24;
@@ -202,26 +202,48 @@ fn spawn(@builtin(global_invocation_id) id: vec3u) {
   sparks[slot] = newSpark(e, j, p.frame, p.speedMin, p.speedMax);
 }
 
+var<workgroup> wgAlive: atomic<u32>;
+
 @compute @workgroup_size(${WG})
-fn simulate(@builtin(global_invocation_id) id: vec3u) {
+fn simulate(@builtin(global_invocation_id) id: vec3u, @builtin(local_invocation_index) li: u32) {
   let i = id.x;
-  if (i >= p.pool) { return; }
-  var s = sparks[i];
-  if (s.age < 0.0) { return; }
-  s.age += p.dt;
-  if (s.age >= sparkLife(s.packed)) {
-    s.age = -1.0;
-    sparks[i] = s;
-    return;
+  if (i < p.pool) {
+    var s = sparks[i];
+    if (s.age >= 0.0) {
+      s.age += p.dt;
+      if (s.age >= sparkLife(s.packed)) {
+        s.age = -1.0;
+      } else {
+        s.vel.y -= p.gravity * p.dt;
+        s.vel /= 1.0 + p.drag * length(s.vel) * p.dt;
+        s.pos += s.vel * p.dt;
+        if (s.pos.y < p.groundY) {
+          s.pos.y = p.groundY + (p.groundY - s.pos.y) * p.bounce;
+          s.vel = vec3f(s.vel.x * p.friction, -s.vel.y * p.bounce, s.vel.z * p.friction);
+        }
+        atomicAdd(&wgAlive, 1u);
+      }
+      sparks[i] = s;
+    }
   }
-  s.vel.y -= p.gravity * p.dt;
-  s.vel /= 1.0 + p.drag * length(s.vel) * p.dt;
-  s.pos += s.vel * p.dt;
-  if (s.pos.y < p.groundY) {
-    s.pos.y = p.groundY + (p.groundY - s.pos.y) * p.bounce;
-    s.vel = vec3f(s.vel.x * p.friction, -s.vel.y * p.bounce, s.vel.z * p.friction);
+  // One global atomic per workgroup, not per spark.
+  workgroupBarrier();
+  if (li == 0u) {
+    let n = atomicLoad(&wgAlive);
+    if (n > 0u) { atomicAdd(&ctl[${CTL.alive}], n); }
   }
-  sparks[i] = s;
+}
+
+// The streak draw's indirect arguments: the whole pool while any spark
+// lives, nothing otherwise (a 64k-instance draw of dead slots is not free).
+@group(0) @binding(9) var<storage, read_write> drawArgs: array<u32, 4>;
+
+@compute @workgroup_size(1)
+fn writeArgs() {
+  drawArgs[0] = 6u;
+  drawArgs[1] = select(0u, p.pool, atomicLoad(&ctl[${CTL.alive}]) > 0u);
+  drawArgs[2] = 0u;
+  drawArgs[3] = 0u;
 }
 `;
 
@@ -295,10 +317,12 @@ export class Sparks {
   readonly sparks: GPUBuffer;
   readonly events: GPUBuffer;
   readonly ctl: GPUBuffer;
+  /** drawIndirect arguments of the streak draw (6 vertices, pool or 0 instances). */
+  readonly args: GPUBuffer;
   private state: GPUBuffer | null = null;
   private readonly params: GPUBuffer;
-  private readonly pipes: { detect: GPUComputePipeline; spawn: GPUComputePipeline; simulate: GPUComputePipeline };
-  private binds: { detect: GPUBindGroup; spawn: GPUBindGroup; simulate: GPUBindGroup } | null = null;
+  private readonly pipes: { detect: GPUComputePipeline; spawn: GPUComputePipeline; simulate: GPUComputePipeline; writeArgs: GPUComputePipeline };
+  private binds: { detect: GPUBindGroup; spawn: GPUBindGroup; simulate: GPUBindGroup; writeArgs: GPUBindGroup } | null = null;
   private source: BodySource | null = null;
   private bound = '';
   private injected: Impact[] = [];
@@ -316,10 +340,12 @@ export class Sparks {
     device.queue.writeBuffer(this.sparks, 0, init);
     this.events = device.createBuffer({ size: MAX_EVENTS * ImpactEvent.size, usage, label: 'impact events' });
     this.ctl = device.createBuffer({ size: CTL_WORDS * 4, usage, label: 'spark control' });
+    this.args = device.createBuffer({ size: 16, usage: usage | GPUBufferUsage.INDIRECT, label: 'spark draw args' });
+    device.queue.writeBuffer(this.args, 0, new Uint32Array([6, 0, 0, 0]));
     this.params = device.createBuffer({ size: PARAM_WORDS * 4, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST, label: 'spark params' });
     const module = device.createShaderModule({ code: SPARK_WGSL, label: 'sparks' });
     const pipe = (entryPoint: string) => device.createComputePipeline({ layout: 'auto', compute: { module, entryPoint } });
-    this.pipes = { detect: pipe('detect'), spawn: pipe('spawn'), simulate: pipe('simulate') };
+    this.pipes = { detect: pipe('detect'), spawn: pipe('spawn'), simulate: pipe('simulate'), writeArgs: pipe('writeArgs') };
   }
 
   /** CPU-authored impacts (game events, tests), spawned on the next frame. */
@@ -346,12 +372,12 @@ export class Sparks {
   private bind(source: BodySource): void {
     const key = `${source.version}:${source.capacity}`;
     if (this.source === source && this.bound === key && this.binds) return;
-    const all = [this.params, source.bodies, source.prev, source.shapes, source.looks, this.stateFor(source), this.events, this.ctl, this.sparks];
+    const all = [this.params, source.bodies, source.prev, source.shapes, source.looks, this.stateFor(source), this.events, this.ctl, this.sparks, this.args];
     const bind = (p: GPUComputePipeline, bindings: number[]) => this.device.createBindGroup({
       layout: p.getBindGroupLayout(0),
       entries: bindings.map((binding) => ({ binding, resource: { buffer: all[binding]! } })),
     });
-    this.binds = { detect: bind(this.pipes.detect, [0, 1, 2, 3, 4, 5, 6, 7]), spawn: bind(this.pipes.spawn, [0, 6, 7, 8]), simulate: bind(this.pipes.simulate, [0, 8]) };
+    this.binds = { detect: bind(this.pipes.detect, [0, 1, 2, 3, 4, 5, 6, 7]), spawn: bind(this.pipes.spawn, [0, 6, 7, 8]), simulate: bind(this.pipes.simulate, [0, 7, 8]), writeArgs: bind(this.pipes.writeArgs, [0, 7, 9]) };
     this.source = source;
     this.bound = key;
   }
@@ -374,7 +400,7 @@ export class Sparks {
     const inj = this.injected.splice(0);
     if (inj.length) q.writeBuffer(this.events, 0, packImpacts(inj));
     q.writeBuffer(this.ctl, 0, new Uint32Array([inj.length]));
-    q.writeBuffer(this.ctl, 8, new Uint32Array([0, 0, 0]));
+    q.writeBuffer(this.ctl, 8, new Uint32Array([0, 0, 0, 0])); // dropped, spawned, hot, alive
     if (f.detect !== false && source.count > 0) {
       pass.setBindGroup(0, this.binds!.detect);
       pass.setPipeline(this.pipes.detect);
@@ -386,13 +412,16 @@ export class Sparks {
     pass.setBindGroup(0, this.binds!.simulate);
     pass.setPipeline(this.pipes.simulate);
     pass.dispatchWorkgroups(Math.ceil(this.pool / WG));
+    pass.setBindGroup(0, this.binds!.writeArgs);
+    pass.setPipeline(this.pipes.writeArgs);
+    pass.dispatchWorkgroups(1);
   }
 
   /** Frame counter the next encode will use (spark seeds depend on it). */
   get nextFrame(): number { return this.frame; }
 
   destroy(): void {
-    for (const b of [this.sparks, this.events, this.ctl, this.params, this.state]) b?.destroy();
+    for (const b of [this.sparks, this.events, this.ctl, this.args, this.params, this.state]) b?.destroy();
   }
 }
 

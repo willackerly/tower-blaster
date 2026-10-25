@@ -9,7 +9,7 @@ import { Body, RenderRecord, Shape, TIER, readStruct } from '@tb/schema';
 import {
   agx, AGX_WGSL, fromHalf, FX_WORDS, packFx, toHalf, bevelNormal, BEVEL_WGSL, oklabToLinear, OKLAB_WGSL, Post,
   Culler, cullReference, GpuBodySource, invert, listMatches, lookAt, makeGpuBodies, multiply, perspective, Renderer, SEGMENTS, SnapshotSource, transform,
-  translation, BOX_VERTS, SPHERE_VERTS, SUN, Sparks, CTL, MAX_EVENTS, flashSlot, FLASHES, MAX_BALLS, TRAIL, Lights, LIGHTS, MATERIAL, unpackImpacts, unpackSparks, spawnReference, stepReference, type Impact, type BodySource, type CullFrame, type FrameParams, type V3,
+  translation, BOX_VERTS, SPHERE_VERTS, SUN, Sparks, CTL, MAX_EVENTS, flashSlot, FLASHES, MAX_BALLS, TRAIL, Lights, LIGHTS, LIGHT_META, LIGHT_PACKED, MATERIAL, unpackImpacts, unpackSparks, spawnReference, stepReference, type Impact, type BodySource, type CullFrame, type FrameParams, type V3,
 } from '../src/index.ts';
 
 function rng(seed: number) {
@@ -945,8 +945,10 @@ export async function sparkSim(frames: number) {
   }
   // Flight: the twin starts from the GPU's own initial states.
   const dt = 1 / 60;
-  for (let i = 0; i < frames; i++) await sparkFrame(device, sp, src, dt, 0);
+  let last = s0;
+  for (let i = 0; i < frames; i++) last = await sparkFrame(device, sp, src, dt, 0);
   const flown = unpackSparks(await readBuffer(device, sp.sparks));
+  const argsFlying = Array.from(new Uint32Array(await readBuffer(device, sp.args)));
   let simErr = 0, alive = 0, aliveRef = 0, bounced = 0;
   const all = new Map(born.map((s) => [s.packed, s]));
   for (const s of flown) {
@@ -962,10 +964,17 @@ export async function sparkSim(frames: number) {
     if (r.age < 0) continue;
     for (let k = 0; k < 3; k++) simErr = Math.max(simErr, Math.abs(s.pos[k]! - r.pos[k]!), Math.abs(s.vel[k]! - r.vel[k]!) / (1 + Math.abs(r.vel[k]!)));
   }
+  // Past the longest life (1.2 s) every spark is dead and the streak draw is empty.
+  let dead = last;
+  for (let i = 0; i < 80; i++) dead = await sparkFrame(device, sp, src, dt, 0);
+  const argsDead = Array.from(new Uint32Array(await readBuffer(device, sp.args)));
   const err = await device.popErrorScope();
   sp.destroy();
   device.destroy();
-  return { born: born.length, want: want.length, spawned: s0.ctl[CTL.spawned], unmatched, spawnErr, alive, aliveRef, bounced, simErr, error: err?.message ?? null };
+  return {
+    born: born.length, want: want.length, spawned: s0.ctl[CTL.spawned], unmatched, spawnErr, alive, aliveRef, bounced, simErr,
+    aliveCtl: last.ctl[CTL.alive], argsFlying, aliveDead: dead.ctl[CTL.alive], argsDead, pool: sp.pool, error: err?.message ?? null,
+  };
 }
 
 /** A flood: every one of 100k bodies hit at once. Events and sparks stay within their budgets. */
@@ -1106,6 +1115,14 @@ export async function flashLights() {
     posErr = Math.max(posErr, Math.abs(flashes[k * 8]! - b.pos[0]), Math.abs(flashes[k * 8 + 1]! - (b.pos[1] + 0.5)), Math.abs(flashes[k * 8 + 2]! - b.pos[2]));
     iErr = Math.max(iErr, Math.abs(i0 - (Math.floor(key / 1048576) / 4095) * cfg.flashIntensity), Math.abs(lights[(MAX_BALLS + k) * 8 + 7]! - i0));
   }
+  // The packed list the scene shader loops over: exactly the lit raw slots, in slot order.
+  const packed = (l: Float32Array) => {
+    const want: number[] = [];
+    for (let k = 0; k < LIGHTS; k++) if (l[k * 8 + 3]! > 0 && l[k * 8 + 7]! > 0) want.push(...l.slice(k * 8, k * 8 + 8));
+    const n = l[LIGHT_META * 4 + 1]!, got = Array.from(l.slice(LIGHT_PACKED * 4, LIGHT_PACKED * 4 + n * 8));
+    return { n, same: n * 8 === want.length && got.every((v, i) => v === want[i]) };
+  };
+  const pack = packed(lights);
   // One tau later: a weak bid in a lit slot does not replace it; the light has decayed by e.
   const [k0, key0] = [...best.entries()][0]!;
   const lit = bursts[key0 % 1048576]!;
@@ -1123,7 +1140,7 @@ export async function flashLights() {
   const err = await device.popErrorScope();
   rend.destroy();
   device.destroy();
-  return { slotsLit, wrongLit, posErr, iErr, kept, decay, replaced, error: err?.message ?? null };
+  return { slotsLit, wrongLit, posErr, iErr, kept, decay, replaced, pack, error: err?.message ?? null };
 }
 
 /** The ball trail: samples newest first in time order at the drawn positions; the ribbon lights the path behind the ball, not ahead. */
@@ -1242,7 +1259,8 @@ export async function heatGain(n: number) {
     lights.encode(pass, src, records, sp, { eye: [0, 0, 0], time: 1, ball: [1, 1, 1] });
     pass.end();
     device.queue.submit([enc.finish()]);
-    return { ctl: Array.from(new Uint32Array(await readBuffer(device, sp.ctl))), gain: new Float32Array(await readBuffer(device, lights.lights))[LIGHTS * 8]! };
+    const l = new Float32Array(await readBuffer(device, lights.lights));
+    return { ctl: Array.from(new Uint32Array(await readBuffer(device, sp.ctl))), gain: l[LIGHT_META * 4]!, lit: l[LIGHT_META * 4 + 1]! };
   };
   const cold = await frame();
   device.queue.writeBuffer(src.bodies, 0, bodyWords(bs.map((b) => ({ ...b, vel: [15, 0, 0] as V3 })), n));
@@ -1252,7 +1270,7 @@ export async function heatGain(n: number) {
   lights.destroy();
   records.destroy();
   device.destroy();
-  return { cold: { hot: cold.ctl[CTL.hot], gain: cold.gain }, hot: { hot: hot.ctl[CTL.hot], gain: hot.gain }, error: err?.message ?? null };
+  return { cold: { hot: cold.ctl[CTL.hot], gain: cold.gain, lit: cold.lit }, hot: { hot: hot.ctl[CTL.hot], gain: hot.gain }, error: err?.message ?? null };
 }
 
 /**
@@ -1260,7 +1278,7 @@ export async function heatGain(n: number) {
  * the glow dims when a crowd of other bodies (out of view) is hot too.
  * Sparks, flashes, bloom and fog are off so only the glow changes pixels.
  */
-export async function heatImage(crowd: number, crowdHot: boolean, dv = 15) {
+export async function heatImage(crowd: number, crowdHot: boolean, dv = 15, heat = true) {
   const { device } = await createDevice({ timestamps: false });
   device.pushErrorScope('validation');
   const descs = [box([-1.5, 1, 0], [0.6, 0.6, 0.6], [0, 0, 0, 1]), box([1.5, 1, 0], [0.6, 0.6, 0.6], [0, 0, 0, 1])];
@@ -1272,6 +1290,7 @@ export async function heatImage(crowd: number, crowdHot: boolean, dv = 15) {
   rend.sparks.config = { ...rend.sparks.config, perDv: 0 };
   rend.lights.config = { ...rend.lights.config, flashIntensity: 0 };
   rend.toggles.trail = false;
+  rend.toggles.heat = heat;
   rend.setSource(src);
   const f: FrameParams = { ...camera([0, 2.5, 7], [0, 1, 0]), groundY: 0, time: 1, dt: 0, alpha: 1 };
   const snap = snapshotOf(descs);
