@@ -3,7 +3,7 @@ import type { SceneDesc } from '@tb/engine-api';
 import { RapierHost } from '@tb/adapter-rapier';
 import { quatFromAxisAngle } from '@tb/geom';
 import { buildScenario } from '@tb/scenarios';
-import { checkTiers, TIER_ACTIVE, TIER_LATTICE, TieredEngine } from '../src/index.ts';
+import { checkTiers, TIER_LATTICE, TieredEngine } from '../src/index.ts';
 
 async function steps(e: TieredEngine, n: number, penTol?: number) {
   for (let s = 0; s < n; s++) { await e.step(); const p = await checkTiers(e, penTol); if (p.length) throw new Error(`step ${e.stepIndex}: ${p.join('; ')}`); }
@@ -12,7 +12,7 @@ async function steps(e: TieredEngine, n: number, penTol?: number) {
 describe('settling back into the lattice', () => {
   it('cubes woken without being disturbed go back, bottom-up, at their exact poses', async () => {
     const scene = buildScenario('S1', { F: 2, H: 6 }, 1);
-    const e = new TieredEngine(new RapierHost());
+    const e = new TieredEngine(new RapierHost(), { settle: true });
     await e.init(scene);
     e.wakeSphere([0, 3, 0], 1.5); // a band and everything above it
     await steps(e, 1);
@@ -28,14 +28,32 @@ describe('settling back into the lattice', () => {
     e.dispose();
   });
 
-  it('a cube dropped square onto a column joins it; a tilted one stays active', async () => {
+  it('by default does not settle into Rapier voxels (any voxel change jolts all their contacts); woken cubes freeze in place instead', async () => {
+    const scene = buildScenario('S1', { F: 2, H: 6 }, 1);
+    const e = new TieredEngine(new RapierHost());
+    await e.init(scene);
+    e.wakeSphere([0, 3, 0], 1.5);
+    await steps(e, 100);
+    expect(e.stats.total.settled).toBe(0);
+    expect(e.stats.active).toBe(0);
+    expect(e.stats.rubble).toBeGreaterThan(8);
+    e.dispose();
+  });
+
+  it('a cube dropped square onto a column joins it; a tilted one comes to rest as rubble', async () => {
     for (const tilt of [0, 0.2]) {
       const scene: SceneDesc = buildScenario('S1', { F: 1, H: 3 }, 1);
       scene.bodies.push({ ...scene.bodies[0]!, pos: [0, 5.5, 0], rot: quatFromAxisAngle([0, 0, 1], tilt) });
-      const e = new TieredEngine(new RapierHost());
+      // Tilted, it bounces off sideways and wakes the column (Rapier settles nothing by default, see TierParams.settle).
+      const e = new TieredEngine(new RapierHost(), tilt === 0 ? { settle: true } : {});
       await e.init(scene);
       await steps(e, 240, 0.1); // a 2 m drop onto a cube penetrates about 0.07 for a step in Rapier
-      expect(e.tier[3], `tilt ${tilt}`).toBe(tilt === 0 ? TIER_LATTICE : TIER_ACTIVE);
+      if (tilt === 0) expect(e.tier[3]).toBe(TIER_LATTICE);
+      else {
+        expect(e.stats.active).toBe(0);
+        expect(e.supporters.get(3)).toEqual([2]); // the cube under it, frozen too
+        expect(e.supporters.get(0)).toEqual([]); // on the ground
+      }
       e.dispose();
     }
   });
@@ -46,7 +64,7 @@ describe('settling back into the lattice', () => {
     // before the next (minActiveSteps * 2^settles), which bounds transitions
     // per cube to O(log steps): at most 3 settles, 7 transitions in 600 steps.
     const scene = buildScenario('S5', { N: 1024, F: 4, H: 16, radius: 1, speed: 20, fireStep: 2 }, 1);
-    const e = new TieredEngine(new RapierHost());
+    const e = new TieredEngine(new RapierHost(), { settle: true, rubble: false }); // rubble churn is bounded separately
     const log: Array<Array<{ step: number; cause: string }>> = scene.bodies.map(() => []);
     e.onTransition = (id, _to, cause, step) => log[id]?.push({ step, cause });
     await e.init(scene);

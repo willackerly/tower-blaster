@@ -5,19 +5,22 @@
 // (c) the body count is conserved;
 // (d) no dynamic body overlaps a dormant cell beyond `penTol` (in edges);
 // (e) every exposed dormant cell touching a dynamic body's bounding sphere
-//     is a static proxy in the host (else the body would pass through it).
+//     is a static proxy in the host (else the body would pass through it);
+// (f) rubble is static in the host at its frozen pose, and rests on the
+//     ground or on supporters that are all still at rest (lattice or rubble):
+//     nothing at rest floats.
 import { MODE_DYNAMIC, MODE_OFF, MODE_STATIC, type Quat, type Vec3 } from '@tb/engine-api';
-import { boundingRadius, shapeDepth } from '@tb/geom';
+import { boundingRadius, shapeDepth, signedGroundDepth } from '@tb/geom';
 import { checkStorage, checkSupport } from './check.ts';
 import { CUBE_ROTATIONS } from './symmetry.ts';
-import { cellsInBox, exposed, TIER_ACTIVE, TIER_LATTICE, TIER_UNSPAWNED, type TieredEngine } from './tiered.ts';
+import { cellsInBox, exposed, TIER_ACTIVE, TIER_LATTICE, TIER_RUBBLE, TIER_UNSPAWNED, type TieredEngine } from './tiered.ts';
 
 /** penTol is in edges; Rapier itself reaches about 0.03 for a moment when a cube lands hard. */
 export async function checkTiers(e: TieredEngine, penTol = 0.05): Promise<string[]> {
   const out: string[] = [];
   const host = e.host;
   for (const lat of e.lattices) out.push(...checkStorage(lat), ...checkSupport(lat, e.p.support));
-  let dormant = 0;
+  let dormant = 0, rubble = 0;
   for (let id = 0; id < e.tier.length; id++) {
     const t = e.tier[id]!, mode = host.modeOf(id);
     if (t === TIER_LATTICE) {
@@ -29,6 +32,16 @@ export async function checkTiers(e: TieredEngine, penTol = 0.05): Promise<string
     } else if (t === TIER_ACTIVE) {
       if (mode !== MODE_DYNAMIC) out.push(`body ${id}: active but host mode ${mode}`);
       if (e.latticeOf[id] !== -1) out.push(`body ${id}: active but still mapped to a cell`);
+    } else if (t === TIER_RUBBLE) {
+      rubble++;
+      if (mode !== MODE_STATIC) out.push(`body ${id}: rubble but host mode ${mode}`);
+      if (e.latticeOf[id] !== -1) out.push(`body ${id}: rubble but mapped to a cell`);
+      const sup = e.supporters.get(id);
+      if (!sup) { out.push(`body ${id}: rubble without a supporter record`); continue; }
+      for (const s of sup) if (e.tier[s] !== TIER_LATTICE && e.tier[s] !== TIER_RUBBLE) out.push(`body ${id}: rubble resting on body ${s}, which is no longer at rest`);
+      const { pos, rot } = e.rubblePose(id), g = e.scene?.ground;
+      const grounded = g != null && signedGroundDepth(e.bodies[id]!.shape, pos, rot, g.y) > -e.p.touchTol;
+      if (!grounded && !sup.length) out.push(`body ${id}: rubble floating (no ground, no supporters)`);
     } else if (t === TIER_UNSPAWNED) {
       if (id < e.spawned) out.push(`body ${id}: spawned but unspawned tier`);
       if (mode !== MODE_OFF) out.push(`body ${id}: not spawned but host mode ${mode}`);
@@ -38,7 +51,8 @@ export async function checkTiers(e: TieredEngine, penTol = 0.05): Promise<string
   if (stored !== dormant) out.push(`lattices hold ${stored} cells but ${dormant} bodies are dormant`);
   let active = 0;
   for (let id = 0; id < e.spawned; id++) if (e.tier[id] === TIER_ACTIVE) active++;
-  if (dormant + active !== e.spawned) out.push(`count: ${dormant} dormant + ${active} active != ${e.spawned} spawned`);
+  if (dormant + active + rubble !== e.spawned) out.push(`count: ${dormant} dormant + ${active} active + ${rubble} rubble != ${e.spawned} spawned`);
+  if (e.supporters.size !== rubble) out.push(`${e.supporters.size} supporter records for ${rubble} rubble bodies`);
   const cur = await host.current();
   for (let n = 0; n < cur.ids.length; n++) {
     const id = cur.ids[n]!, b = e.bodies[id]!;

@@ -105,7 +105,9 @@ export class RapierHost implements PhysicsHost {
         this.bodyOfCollider.set(entry.collider.handle, c.id);
       } else {
         if (prev === MODE_OFF) entry.body.setEnabled(true);
-        if (entry.body.bodyType() !== type) entry.body.setBodyType(type, true);
+        // Freezing in place wakes nothing: a static body that does not move
+        // disturbs no contact, and waking its island would keep piles awake.
+        if (entry.body.bodyType() !== type) entry.body.setBodyType(type, c.mode === MODE_DYNAMIC);
       }
       const rb = entry.body;
       if (c.pos) rb.setTranslation({ x: c.pos[0], y: c.pos[1], z: c.pos[2] }, true);

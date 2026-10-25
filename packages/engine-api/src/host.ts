@@ -39,6 +39,15 @@ export interface HostCaps {
   contactForces: boolean;
   /** Whether the host takes lattice occupancy natively (init lattices + batch cells). */
   latticeNative: boolean;
+  /**
+   * Whether filling or emptying a native cell disturbs only contacts with
+   * that cell. Rapier's voxel colliders fail this: any setVoxel jolts every
+   * contact on the collider (a resting 10-cube stack on one voxel went from
+   * 0.0027 to 0.04 m/s when a voxel 10 m away was filled), so settling cubes
+   * back into cells keeps whole rubble piles awake there. The tiers settle
+   * cubes into native cells only on hosts that have this.
+   */
+  localCellChanges?: boolean;
 }
 
 /** A lattice the host represents natively: cell (i, j, k) is the cube at origin + (i, j, k) * edge. */

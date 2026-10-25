@@ -10,16 +10,21 @@
 //  3. wake cells: force capacity on proxies (W3, with the absorbed impulse
 //     handed back as velocity), predictive impact plugs (W2), then the
 //     support closure (W1, exact);
-//  4. wake asleep bodies next to woken cells;
+//     Rubble thaws by the same three rules: force capacity (T3), predicted
+//     contact with a fast body (T2), and losing a supporter (T1, closure);
+//  4. wake asleep bodies next to woken cells and thawed rubble;
 //  5. settle quiet cubes back into the lattice (bottom-up, with hysteresis);
-//  6. refresh the static proxy shell around dynamic bodies (with hysteresis);
-//  7. apply the batch atomically and step the host.
+//  6. freeze the other quiet bodies in place as rubble (bottom-up, only on
+//     ground, lattice or rubble, recording what each one rests on);
+//  7. refresh the static proxy shell around dynamic bodies (with hysteresis);
+//  8. apply the batch atomically and step the host.
 import {
   bodiesAt, type BodyDesc, type CellChange, type EngineInfo, emptySnapshot, type HostState, type InputEvent, massOf, MODE_DYNAMIC, MODE_OFF,
   MODE_STATIC, type ModeChange, type PhysicsEngine, type PhysicsHost, type Quat, type SceneDesc, type Snapshot, type StepReport, type Vec3,
 } from '@tb/engine-api';
-import { boundingRadius, shapeDepth } from '@tb/geom';
+import { boundingRadius, shapeDepth, signedDepth, signedGroundDepth } from '@tb/geom';
 import { latticesFromScene } from './build.ts';
+import { BoxHash } from './hash.ts';
 import { type Lattice } from './lattice.ts';
 import { detach, looseColumns, type SupportModel } from './support.ts';
 import { CUBE_ROTATIONS, nearestCubeRotation } from './symmetry.ts';
@@ -27,6 +32,11 @@ import { CUBE_ROTATIONS, nearestCubeRotation } from './symmetry.ts';
 export const TIER_UNSPAWNED = 0;
 export const TIER_LATTICE = 1;
 export const TIER_ACTIVE = 2;
+/** Frozen in place (a static host body) after coming to rest off any cell pose. */
+export const TIER_RUBBLE = 3;
+
+/** Steps before a body found resting on a moving one tries to freeze again (the pass is the costly part of a step otherwise). */
+const FREEZE_RETRY = 8;
 
 export interface TierParams {
   support: SupportModel;
@@ -54,8 +64,16 @@ export interface TierParams {
    * cubes against the all-dynamic reference's 172 with it.
    */
   plugColumns: boolean;
-  /** A cube that has been this slow (m/s, and rad/s times half-edge) for restSteps steps may settle back into the lattice. */
+  /**
+   * A body is quiet while it stays slower than vRest and within restDrift
+   * bounding radii (displacement plus rotation angle times radius) of where
+   * it was at most restSteps steps before; after restSteps quiet steps it
+   * may settle or freeze. Displacement, not
+   * speed, decides because packed Rapier towers jitter at a few cm/s forever
+   * (p50 2.7 cm/s, p90 17 cm/s on S5) while going nowhere.
+   */
   vRest: number;
+  restDrift: number;
   restSteps: number;
   /**
    * Steps a body must have been active before it may settle (hysteresis
@@ -63,6 +81,14 @@ export interface TierParams {
    * again, so a cube under a restless pile stops trying.
    */
   minActiveSteps: number;
+  /**
+   * Settle quiet cubes back into lattice cells. 'auto': only where that is
+   * harmless, i.e. hosts without native cells (proxies) and native hosts with
+   * caps.localCellChanges. On Rapier's voxels, S5 at 1,024 cubes ended 1,200
+   * steps with 594 bodies awake with settling and 1 without (the rest frozen
+   * as rubble or never woken), against 1 for all-dynamic Rapier.
+   */
+  settle: boolean | 'auto';
   /** Settle tolerances: distance from the cell centre (edges) and angle from a cube symmetry (radians). */
   settlePos: number;
   settleRot: number;
@@ -73,17 +99,33 @@ export interface TierParams {
    * rests against it, the solver throws the rubble out at up to a few m/s.
    */
   settlePush: number;
+  /**
+   * Freeze quiet bodies that cannot settle into a cell in place, as static
+   * rubble. Off: they stay active (and in Rapier, packed piles never sleep).
+   */
+  rubble: boolean;
+  /** Bodies closer than this (m) count as touching when rubble records what it rests on. */
+  touchTol: number;
+  /**
+   * Consecutive steps a rubble body must be pushed beyond capacity before it
+   * thaws by force (T3). Measured on S5 with sleep off: of 64 to 78 rubble
+   * force thaws on the first step over, 1 to 3 moved 5 cm within the next
+   * second; the rest stalled the piles above them for nothing.
+   */
+  rubbleForceSteps: number;
 }
 
 export const DEFAULT_TIERS: TierParams = {
   support: looseColumns, proxyMargin: 0.25, proxyKeep: 30, lookahead: 1, vWake: 0.25,
   kappa: 0.8, forceMin: 2, handoffMax: 20, maxPlugDepth: 64, plugColumns: true,
-  vRest: 0.05, restSteps: 30, minActiveSteps: 60, settlePos: 0.02, settleRot: (1 * Math.PI) / 180, settlePush: 0.002,
+  settle: 'auto', vRest: 0.25, restDrift: 0.02, restSteps: 30, minActiveSteps: 60, settlePos: 0.02, settleRot: (1 * Math.PI) / 180, settlePush: 0.002,
+  rubble: true, touchTol: 0.02, rubbleForceSteps: 3,
 };
 
 export interface TierStats {
   lattice: number;
   active: number;
+  rubble: number;
   proxies: number;
   /** Cells woken this step, by rule. */
   wokenByForce: number;
@@ -93,12 +135,15 @@ export interface TierStats {
   proxiesDropped: number;
   /** Cubes that settled back into the lattice this step. */
   settled: number;
+  /** Bodies frozen as rubble, and rubble thawed (by any rule), this step. */
+  frozen: number;
+  thawed: number;
   /** Since init. */
-  total: { byForce: number; byImpact: number; bySupport: number; settled: number };
+  total: { byForce: number; byImpact: number; bySupport: number; settled: number; frozen: number; thawed: number };
 }
 
 /** Why a body changed tier: a game hook (sound, score) and a debugging aid. */
-export type TransitionCause = 'force' | 'impact' | 'support' | 'command' | 'settle';
+export type TransitionCause = 'force' | 'impact' | 'support' | 'command' | 'settle' | 'freeze';
 export type TransitionListener = (id: number, to: number, cause: TransitionCause, step: number) => void;
 
 interface WakeRequest { li: number; i: number; j: number; k: number; vel: Vec3 | null; command?: boolean }
@@ -113,8 +158,16 @@ export class TieredEngine implements PhysicsEngine {
   /** Per id: lattice index and flat cell while dormant (else -1). */
   latticeOf = new Int32Array(0);
   cellOf = new Int32Array(0);
-  stats: TierStats = { lattice: 0, active: 0, proxies: 0, wokenByForce: 0, wokenByImpact: 0, wokenBySupport: 0, proxiesAdded: 0, proxiesDropped: 0, settled: 0, total: { byForce: 0, byImpact: 0, bySupport: 0, settled: 0 } };
-  private scene: SceneDesc | null = null;
+  stats: TierStats = {
+    lattice: 0, active: 0, rubble: 0, proxies: 0, wokenByForce: 0, wokenByImpact: 0, wokenBySupport: 0, proxiesAdded: 0, proxiesDropped: 0, settled: 0, frozen: 0, thawed: 0,
+    total: { byForce: 0, byImpact: 0, bySupport: 0, settled: 0, frozen: 0, thawed: 0 },
+  };
+  /** Per rubble id: frozen pose (3 and 4 per id). */
+  rubblePos = new Float64Array(0);
+  rubbleRot = new Float64Array(0);
+  /** Per rubble id: the lattice cells and rubble it rested on when it froze (ground is implicit). */
+  supporters = new Map<number, number[]>();
+  scene: SceneDesc | null = null;
   private table: BodyDesc[] = [];
   private mass = new Float64Array(0);
   private radius = new Float64Array(0);
@@ -127,13 +180,35 @@ export class TieredEngine implements PhysicsEngine {
   /** Per id: step it became active, and consecutive quiet steps since. */
   private activeSince = new Int32Array(0);
   private quiet = new Int32Array(0);
+  /** Per id: pose at the start of the current quiet run. */
+  private anchorPos = new Float64Array(0);
+  private anchorRot = new Float64Array(0);
   /** Per id: reference contact force of a settled cell (3 per id), and whether it is still to be taken. */
   private refForce = new Float64Array(0);
   private refPending = new Uint8Array(0);
-  /** Per id: times it settled. */
+  /**
+   * Per id: times it settled, which backs off the next settle. Freezing
+   * has no backoff, only the minActiveSteps rate limit (so at most
+   * 2 T / minActiveSteps + 1 tier changes in T steps): it moves nothing, and
+   * a backoff on the ground row (480 steps after three false force thaws)
+   * stalled the hundreds of bodies above it, which wait for what is under
+   * them.
+   */
   private settles = new Uint8Array(0);
+  /** Per rubble id: consecutive steps pushed beyond capacity (T3). */
+  private pushed = new Int32Array(0);
+  private pushedAt = new Int32Array(0);
+  /** Per id: first step to try freezing again after it was found on a moving body. */
+  private freezeRetry = new Int32Array(0);
+  /** Per id: rubble resting on it. */
+  private dependants = new Map<number, Set<number>>();
+  private rubbleHash = new BoxHash(1);
+  private moverRot = new Map<number, Quat>();
+  /** Per dynamic id: its row in this step's host state. */
+  private row = new Map<number, number>();
   private pending: InputEvent[] = [];
   private queued: WakeRequest[] = [];
+  private queuedThaws: Array<{ id: number; vel: null; cause: TransitionCause }> = [];
   private nextSpawn = 0;
   /** Per lattice: cell -> dynamic bodies near it at the last shell pass. */
   private near: Array<Map<number, number[]>> = [];
@@ -172,9 +247,19 @@ export class TieredEngine implements PhysicsEngine {
     this.prevSpeed = new Float64Array(n);
     this.activeSince = new Int32Array(n);
     this.quiet = new Int32Array(n);
+    this.anchorPos = new Float64Array(3 * n);
+    this.anchorRot = new Float64Array(4 * n);
     this.refForce = new Float64Array(3 * n);
     this.refPending = new Uint8Array(n);
     this.settles = new Uint8Array(n);
+    this.freezeRetry = new Int32Array(n);
+    this.pushed = new Int32Array(n);
+    this.pushedAt = new Int32Array(n).fill(-2);
+    this.rubblePos = new Float64Array(3 * n);
+    this.rubbleRot = new Float64Array(4 * n);
+    this.supporters = new Map();
+    this.dependants = new Map();
+    this.rubbleHash = new BoxHash(2 * this.radius.reduce((a, b) => Math.max(a, b), 1e-6));
     this.lattices = built.lattices;
     this.near = this.lattices.map(() => new Map());
     this.latticeOf.set(built.latticeOf);
@@ -205,8 +290,12 @@ export class TieredEngine implements PhysicsEngine {
     this.pending.sort((a, b) => a.step - b.step);
   }
 
-  /** Game command: wake every dormant cell whose centre is within `radius` of `center`, at the next step. */
+  /** Game command: wake every dormant cell and rubble body whose centre is within `radius` of `center`, at the next step. */
   wakeSphere(center: Vec3, radius: number): void {
+    for (const id of this.supporters.keys()) {
+      const p = vec(this.rubblePos, id);
+      if (Math.hypot(p[0] - center[0], p[1] - center[1], p[2] - center[2]) <= radius) this.queuedThaws.push({ id, vel: null, cause: 'command' });
+    }
     this.lattices.forEach((lat, li) => {
       const lo: Vec3 = [center[0] - radius, center[1] - radius, center[2] - radius], hi: Vec3 = [center[0] + radius, center[1] + radius, center[2] + radius];
       for (const [i, j, k] of cellsInBox(lat, lo, hi, (i, j, k) => lat.has(i, j, k))) {
@@ -225,15 +314,26 @@ export class TieredEngine implements PhysicsEngine {
   async step(): Promise<StepReport | void> {
     if (!this.scene) throw new Error('init() first');
     const st = this.stats;
-    st.wokenByForce = st.wokenByImpact = st.wokenBySupport = st.settled = 0;
+    st.wokenByForce = st.wokenByImpact = st.wokenBySupport = st.settled = st.frozen = st.thawed = 0;
     const state = await this.host.read();
     const changes = new Map<number, ModeChange>();
     const movers: Mover[] = [];
     for (let n = 0; n < state.ids.length; n++) {
-      const id = state.ids[n]!, vel = vec(state.linVel, n), half = this.radius[id]! / Math.sqrt(3);
-      movers.push({ id, pos: vec(state.pos, n), vel, awake: state.awake[n] === 1 });
-      const still = Math.hypot(...vel) < this.p.vRest && Math.hypot(...vec(state.angVel, n)) * half < this.p.vRest;
-      this.quiet[id] = still ? this.quiet[id]! + 1 : 0;
+      const id = state.ids[n]!, pos = vec(state.pos, n), vel = vec(state.linVel, n), r = this.radius[id]!;
+      movers.push({ id, pos, vel, awake: state.awake[n] === 1 });
+      const slow = Math.hypot(...vel) < this.p.vRest && Math.hypot(...vec(state.angVel, n)) * r < this.p.vRest;
+      const a = vec(this.anchorPos, id), q = quat(state.rot, n), qa = quat(this.anchorRot, id);
+      const turn = 2 * Math.acos(Math.min(1, Math.abs(q[0] * qa[0] + q[1] * qa[1] + q[2] * qa[2] + q[3] * qa[3])));
+      const drift = Math.hypot(pos[0] - a[0], pos[1] - a[1], pos[2] - a[2]) + turn * r;
+      if (this.quiet[id]! > 0 && slow && drift <= this.p.restDrift * r) {
+        // The window slides: drift counts from a pose at most restSteps old, so
+        // solver creep (a few mm/s in settled Rapier piles) is rest too.
+        if (++this.quiet[id]! % this.p.restSteps === 0) { this.anchorPos.set(pos, 3 * id); this.anchorRot.set(q, 4 * id); }
+      } else {
+        this.anchorPos.set(pos, 3 * id);
+        this.anchorRot.set(q, 4 * id);
+        this.quiet[id] = slow ? 1 : 0;
+      }
     }
     // Spawns.
     while (this.pending.length && this.pending[0]!.step <= this.stepIndex) {
@@ -245,18 +345,26 @@ export class TieredEngine implements PhysicsEngine {
       movers.push({ id, pos: b.pos, vel: b.linVel, awake: true });
     }
     this.curSpeed = new Map(movers.map((m) => [m.id, Math.hypot(...m.vel)]));
+    const dyn = this.moverHash(state);
     // Wake rules (forces use the speeds from before the step that produced them).
     const requests = [...this.queued.splice(0), ...this.forceWakes(state), ...this.impactWakes(movers)];
     const woken = this.wake(requests, changes);
-    // Asleep bodies next to woken cells.
+    const thawed = this.thaw([...this.queuedThaws.splice(0), ...this.rubbleForceThaws(state, dyn), ...this.rubbleImpactThaws(movers)], woken.map((w) => w.id), changes);
+    // Asleep bodies next to woken cells and thawed rubble.
     const wake = new Set<number>();
     for (const { li, cell } of woken) for (const id of this.near[li]!.get(cell) ?? []) if (this.tier[id] === TIER_ACTIVE && !changes.has(id)) wake.add(id);
-    // Woken cells are dynamic now: they need proxies around them too.
-    for (const { id } of woken) movers.push({ id, pos: changes.get(id)!.pos!, vel: changes.get(id)!.linVel ?? [0, 0, 0], awake: true });
+    for (const id of thawed) {
+      for (const o of this.touching(dyn, state, id, this.rubblePose(id))) if (!changes.has(o)) wake.add(o);
+    }
+    // Woken cells and thawed rubble are dynamic now: they need proxies around them too.
+    for (const id of [...woken.map((w) => w.id), ...thawed]) movers.push({ id, pos: changes.get(id)!.pos!, vel: changes.get(id)!.linVel ?? [0, 0, 0], awake: true });
     const settled = this.settle(state, changes);
-    const list = this.withShell([...changes.values()].sort((a, b) => a.id - b.id), settled.size ? movers.filter((m) => !settled.has(m.id)) : movers);
+    const frozen = this.freeze(state, changes, settled, dyn);
+    const resting = settled.size || frozen.size ? movers.filter((m) => !settled.has(m.id) && !frozen.has(m.id)) : movers;
+    const list = this.withShell([...changes.values()].sort((a, b) => a.id - b.id), resting);
     this.host.apply({ changes: list, wake: [...wake].sort((a, b) => a - b), cells: this.cellChanges.splice(0) });
-    st.total.byForce += st.wokenByForce; st.total.byImpact += st.wokenByImpact; st.total.bySupport += st.wokenBySupport; st.total.settled += st.settled;
+    st.total.byForce += st.wokenByForce; st.total.byImpact += st.wokenByImpact; st.total.bySupport += st.wokenBySupport;
+    st.total.settled += st.settled; st.total.frozen += st.frozen; st.total.thawed += st.thawed;
     this.prevSpeed.fill(0);
     for (const m of movers) this.prevSpeed[m.id] = Math.hypot(...m.vel);
     const r = await this.host.step();
@@ -285,14 +393,10 @@ export class TieredEngine implements PhysicsEngine {
       // the change alone over-wakes when a held load reverses (measured: a
       // ground cube under rubble went from -40 to +30 N sideways, 70 N of
       // change against 68 N of capacity while 30 N of total was well held).
-      if (this.refPending[id]) {
-        this.refPending[id] = 0;
-        this.refForce.set(f, 3 * id);
-        continue;
-      }
-      const d: Vec3 = [f[0] - this.refForce[3 * id]!, f[1] - this.refForce[3 * id + 1]!, f[2] - this.refForce[3 * id + 2]!];
+      const d = this.forceChange(id, f);
+      if (!d) continue;
       let w = 0;
-      for (const jj of lat.occupiedFrom(i, k, j)) w += g * this.mass[lat.idAt(i, jj, k)]!;
+      for (const jj of lat.occupiedFrom(i, k, j)) w += this.restingLoad(lat.idAt(i, jj, k), g);
       const mu = this.table[id]!.friction;
       // Friction under the column holds kappa * mu * (load from above + column weight).
       const hold = this.p.kappa * mu * (Math.max(0, -f[1]) + w) + this.p.forceMin;
@@ -300,18 +404,11 @@ export class TieredEngine implements PhysicsEngine {
       const lift = this.p.kappa * w + this.p.forceMin;
       const lifts = f[1] > lift && d[1] > lift;
       if (!slides && !lifts) continue;
-      const [fx, fy, fz] = d;
-      // Hand back the impulse the cell absorbed while static, at most at the
-      // speed of the bodies near it before or after that step: momentum is
-      // returned without creating energy (a cell cannot outrun its pusher).
-      const m = this.mass[id]!;
-      let vel: Vec3 = [fx * dt / m, Math.max(0, fy) * dt / m, fz * dt / m];
+      // The push comes back as velocity, at most at the speed of the bodies
+      // near the cell before or after that step.
       let cap = 0;
       for (const p of this.near[li]!.get(this.cellOf[id]!) ?? []) cap = Math.max(cap, this.prevSpeed[p]!, this.curSpeed.get(p) ?? 0);
-      cap = Math.min(cap, this.p.handoffMax);
-      const s = Math.hypot(...vel);
-      if (s > cap) vel = vel.map((x) => (x * cap) / s) as Vec3;
-      out.push({ li, i, j, k, vel });
+      out.push({ li, i, j, k, vel: handoff(d, dt / this.mass[id]!, Math.min(cap, this.p.handoffMax)) });
     }
     return out;
   }
@@ -437,7 +534,8 @@ export class TieredEngine implements PhysicsEngine {
    */
   private settle(state: HostState, changes: Map<number, ModeChange>): Set<number> {
     const done = new Set<number>();
-    if (!this.lattices.length) return done;
+    const on = this.p.settle === 'auto' ? !this.native || this.host.caps.localCellChanges === true : this.p.settle;
+    if (!on || !this.lattices.length) return done;
     interface Cand { n: number; id: number; li: number; i: number; j: number; k: number; rot: number }
     const cands: Cand[] = [];
     for (let n = 0; n < state.ids.length; n++) {
@@ -506,6 +604,284 @@ export class TieredEngine implements PhysicsEngine {
     return done;
   }
 
+  /**
+   * Quiet bodies that did not settle freeze in place as static rubble. A body
+   * freezes only when everything under it is already at rest (ground,
+   * lattice, rubble, or rubble frozen earlier in this bottom-up pass), and
+   * records the cells and rubble under it as its supporters: if any of them
+   * moves, it thaws (T1). It is never moved.
+   */
+  private freeze(state: HostState, changes: Map<number, ModeChange>, settled: Set<number>, dyn: BoxHash): Set<number> {
+    const done = new Set<number>();
+    if (!this.p.rubble) return done;
+    const cands: number[] = [];
+    for (let n = 0; n < state.ids.length; n++) {
+      const id = state.ids[n]!;
+      if (this.tier[id] !== TIER_ACTIVE || changes.has(id) || settled.has(id) || this.quiet[id]! < this.p.restSteps) continue;
+      if (this.stepIndex - this.activeSince[id]! < this.p.minActiveSteps || this.stepIndex < this.freezeRetry[id]!) continue;
+      cands.push(n);
+    }
+    if (!cands.length) return done;
+    const up = this.up();
+    const height = (n: number) => -(state.pos[3 * n]! * up[0] + state.pos[3 * n + 1]! * up[1] + state.pos[3 * n + 2]! * up[2]);
+    cands.sort((a, b) => height(b) - height(a) || state.ids[a]! - state.ids[b]!);
+    const ground = this.scene!.ground;
+    for (const n of cands) {
+      const id = state.ids[n]!, shape = this.table[id]!.shape;
+      const pose = { pos: vec(state.pos, n), rot: quat(state.rot, n) };
+      // A moving body clearly under it (centre lower by a quarter of its
+      // radius) still carries it: not yet. Neighbours beside it may keep
+      // moving, and push it (T3) or hit it (T2) if they do.
+      const h = dotV(pose.pos, up), r = this.radius[id]!;
+      if (this.touching(dyn, state, id, pose, (p) => dotV(p, up) < h - 0.25 * r).some((o) => !done.has(o))) { // frozen in this pass: found below as rubble
+        this.freezeRetry[id] = this.stepIndex + FREEZE_RETRY;
+        continue;
+      }
+      // Supporters are generous (T1 thaws more, never less): everything at
+      // rest that it touches lower down, or, wedged level with its
+      // neighbours, everything at rest that it touches.
+      const near = [...this.touchingRubble(id, pose).map((o) => ({ o, p: this.rubblePose(o).pos })), ...this.touchingCells(id, pose).map((o) => ({ o, p: this.cellCenter(o) }))];
+      let sup = near.filter((x) => dotV(x.p, up) < h).map((x) => x.o);
+      if (!sup.length) sup = near.map((x) => x.o);
+      sup.sort((a, b) => a - b);
+      const grounded = ground !== null && signedGroundDepth(shape, pose.pos, pose.rot, ground.y) > -this.p.touchTol;
+      if (!grounded && !sup.length) continue; // resting only on moving bodies beside it
+      this.tier[id] = TIER_RUBBLE;
+      this.rubblePos.set(pose.pos, 3 * id);
+      this.rubbleRot.set(pose.rot, 4 * id);
+      this.supporters.set(id, sup);
+      for (const o of sup) {
+        const d = this.dependants.get(o);
+        if (d) d.add(id); else this.dependants.set(o, new Set([id]));
+      }
+      this.rubbleHash.insert(id, pose.pos, this.radius[id]!);
+      this.quiet[id] = 0;
+      this.refPending[id] = 1;
+      changes.set(id, { id, mode: MODE_STATIC }); // in place: the host keeps its pose
+      done.add(id);
+      this.stats.frozen++;
+      this.onTransition?.(id, TIER_RUBBLE, 'freeze', this.stepIndex);
+    }
+    return done;
+  }
+
+  /**
+   * Thaw rubble: the requested bodies, and by T1 every rubble body resting
+   * (transitively) on one of them or on a lattice cell that woke this step.
+   */
+  private thaw(requests: Array<{ id: number; vel: Vec3 | null; cause: TransitionCause }>, wokenCells: number[], changes: Map<number, ModeChange>): number[] {
+    const out: number[] = [];
+    const vel = new Map<number, Vec3>();
+    const queue: Array<{ id: number; cause: TransitionCause }> = [];
+    for (const r of [...requests].sort((a, b) => a.id - b.id)) {
+      if (this.tier[r.id] !== TIER_RUBBLE || vel.has(r.id) || queue.some((q) => q.id === r.id)) continue;
+      if (r.vel) vel.set(r.id, r.vel);
+      queue.push({ id: r.id, cause: r.cause });
+    }
+    const seeds = [...wokenCells];
+    const visit = (id: number) => {
+      for (const d of [...(this.dependants.get(id) ?? [])].sort((a, b) => a - b)) if (this.tier[d] === TIER_RUBBLE) queue.push({ id: d, cause: 'support' });
+      this.dependants.delete(id);
+    };
+    for (const id of seeds) visit(id);
+    for (let q = 0; q < queue.length; q++) {
+      const { id, cause } = queue[q]!;
+      if (this.tier[id] !== TIER_RUBBLE) continue;
+      this.tier[id] = TIER_ACTIVE;
+      for (const o of this.supporters.get(id)!) this.dependants.get(o)?.delete(id);
+      this.supporters.delete(id);
+      this.rubbleHash.remove(id);
+      this.activeSince[id] = this.stepIndex;
+      this.quiet[id] = 0;
+      this.refPending[id] = 0;
+      this.refForce.fill(0, 3 * id, 3 * id + 3);
+      const { pos, rot } = this.rubblePose(id);
+      changes.set(id, { id, mode: MODE_DYNAMIC, pos, rot, linVel: vel.get(id) ?? [0, 0, 0], angVel: [0, 0, 0] });
+      out.push(id);
+      this.stats.thawed++;
+      this.onTransition?.(id, TIER_ACTIVE, cause, this.stepIndex);
+      visit(id);
+    }
+    return out;
+  }
+
+  /** T3 for rubble: the lattice rule with the body's own weight for the column. */
+  private rubbleForceThaws(state: HostState, dyn: BoxHash): Array<{ id: number; vel: Vec3; cause: TransitionCause }> {
+    const c = state.contacts;
+    const out: Array<{ id: number; vel: Vec3; cause: TransitionCause }> = [];
+    if (!c || !this.supporters.size) return out;
+    const g = gravityMag(this.scene!), dt = this.scene!.dt;
+    for (let n = 0; n < c.ids.length; n++) {
+      const id = c.ids[n]!;
+      if (this.tier[id] !== TIER_RUBBLE) continue;
+      const f: Vec3 = [c.force[3 * n]!, c.force[3 * n + 1]!, c.force[3 * n + 2]!];
+      const d = this.forceChange(id, f);
+      if (!d) continue;
+      const m = this.mass[id]!, w = this.restingLoad(id, g), mu = this.table[id]!.friction;
+      const hold = this.p.kappa * mu * (Math.max(0, -f[1]) + w) + this.p.forceMin;
+      const lift = this.p.kappa * w + this.p.forceMin;
+      const fh = Math.hypot(f[0], f[2]);
+      // A push into something at rest that it touches cannot slide it alone
+      // (static pairs report no forces, so the hold of what backs it is
+      // invisible here): measured, ground cubes squeezed by a leaning pile
+      // were force-thawed again and again without moving.
+      const backed = fh > 0 && this.backedToward(id, [f[0] / fh, 0, f[2] / fh]);
+      const slides = !backed && fh > hold && Math.hypot(d[0], d[2]) > hold;
+      const lifts = f[1] > lift && d[1] > lift;
+      if (!slides && !lifts) continue;
+      // Consecutive steps over (a step without contact breaks the run).
+      this.pushed[id] = this.pushedAt[id] === this.stepIndex - 1 ? this.pushed[id]! + 1 : 1;
+      this.pushedAt[id] = this.stepIndex;
+      if (this.pushed[id]! < this.p.rubbleForceSteps) continue;
+      let cap = 0;
+      for (const o of this.touching(dyn, state, id, this.rubblePose(id))) cap = Math.max(cap, this.prevSpeed[o]!, this.curSpeed.get(o) ?? 0);
+      out.push({ id, vel: handoff(d, dt / m, Math.min(cap, this.p.handoffMax)), cause: 'force' });
+    }
+    return out;
+  }
+
+  /**
+   * T2 for rubble: a body that will touch a rubble body within the look-ahead
+   * thaws it if it closes in fast enough to set it moving: the shared speed
+   * m v / (m + M) along the line between their centres is at least vWake (the
+   * W2 rule for a plug one body deep). Neighbours jittering against it in
+   * Rapier (up to 0.65 m/s) would thaw it every step otherwise. As in W2,
+   * motion straight down does not count: what the rubble rests on takes it.
+   * (Measured: a thawed stack sags at about 0.6 m/s for a few steps, with
+   * its warm starts gone; counting that, every thaw thawed the next pile.)
+   */
+  private rubbleImpactThaws(movers: Mover[]): Array<{ id: number; vel: null; cause: TransitionCause }> {
+    const out: Array<{ id: number; vel: null; cause: TransitionCause }> = [];
+    if (!this.supporters.size) return out;
+    const T = (this.host.caps.stateLag + this.p.lookahead) * this.scene!.dt;
+    for (const m of movers) {
+      if (!m.awake || Math.hypot(...m.vel) < this.p.vWake) continue;
+      const end: Vec3 = [m.pos[0] + m.vel[0] * T, m.pos[1] + m.vel[1] * T, m.pos[2] + m.vel[2] * T];
+      const r = this.radius[m.id]! + this.p.touchTol;
+      const q = this.moverRot.get(m.id) ?? [0, 0, 0, 1];
+      const mb = this.mass[m.id]!, up = this.up(), down = Math.min(0, dotV(m.vel, up));
+      const v: Vec3 = [m.vel[0] - down * up[0], m.vel[1] - down * up[1], m.vel[2] - down * up[2]];
+      for (const o of this.rubbleHash.query(minOf(m.pos, end, -r), minOf(m.pos, end, r, true))) {
+        const pose = this.rubblePose(o);
+        const dx = pose.pos[0] - m.pos[0], dy = pose.pos[1] - m.pos[1], dz = pose.pos[2] - m.pos[2], len = Math.hypot(dx, dy, dz) || 1;
+        const closing = (v[0] * dx + v[1] * dy + v[2] * dz) / len;
+        if ((mb * closing) / (mb + this.mass[o]!) < this.p.vWake) continue;
+        if (signedDepth(this.table[m.id]!.shape, end, q, this.table[o]!.shape, pose.pos, pose.rot) > -this.p.touchTol) out.push({ id: o, vel: null, cause: 'impact' });
+      }
+    }
+    return out;
+  }
+
+  /**
+   * The change in contact force since the body came to rest, or null on the
+   * step that takes the reference (see forceWakes).
+   */
+  private forceChange(id: number, f: Vec3): Vec3 | null {
+    if (this.refPending[id]) {
+      this.refPending[id] = 0;
+      this.refForce.set(f, 3 * id);
+      return null;
+    }
+    return [f[0] - this.refForce[3 * id]!, f[1] - this.refForce[3 * id + 1]!, f[2] - this.refForce[3 * id + 2]!];
+  }
+
+  /** Hash of the dynamic bodies in `state` (also records their rotations for T2). */
+  private moverHash(state: HostState): BoxHash {
+    const h = new BoxHash(this.rubbleHash.size);
+    this.moverRot = new Map();
+    this.row = new Map();
+    for (let n = 0; n < state.ids.length; n++) {
+      const id = state.ids[n]!;
+      this.row.set(id, n);
+      h.insert(id, vec(state.pos, n), this.radius[id]!);
+      this.moverRot.set(id, quat(state.rot, n));
+    }
+    return h;
+  }
+
+  /** Dynamic bodies within touchTol of body `id` at `pose` (only those passing `keep`, checked first). */
+  private touching(dyn: BoxHash, state: HostState, id: number, pose: { pos: Vec3; rot: Quat }, keep?: (pos: Vec3) => boolean): number[] {
+    const r = this.radius[id]! + this.p.touchTol, shape = this.table[id]!.shape;
+    const out: number[] = [];
+    for (const o of dyn.query(minOf(pose.pos, pose.pos, -r), minOf(pose.pos, pose.pos, r, true))) {
+      if (o === id) continue;
+      const n = this.row.get(o);
+      if (n === undefined) continue;
+      const p = vec(state.pos, n);
+      if (keep && !keep(p)) continue;
+      if (Math.hypot(p[0] - pose.pos[0], p[1] - pose.pos[1], p[2] - pose.pos[2]) > r + this.radius[o]!) continue;
+      if (signedDepth(shape, pose.pos, pose.rot, this.table[o]!.shape, p, quat(state.rot, n)) > -this.p.touchTol) out.push(o);
+    }
+    return out;
+  }
+
+  private touchingRubble(id: number, pose: { pos: Vec3; rot: Quat }): number[] {
+    const r = this.radius[id]! + this.p.touchTol, shape = this.table[id]!.shape;
+    return this.rubbleHash.query(minOf(pose.pos, pose.pos, -r), minOf(pose.pos, pose.pos, r, true)).filter((o) => {
+      if (o === id) return false;
+      const p = this.rubblePose(o);
+      return signedDepth(shape, pose.pos, pose.rot, this.table[o]!.shape, p.pos, p.rot) > -this.p.touchTol;
+    });
+  }
+
+  /** Body ids of dormant cells within touchTol of body `id` at `pose`. */
+  private touchingCells(id: number, pose: { pos: Vec3; rot: Quat }): number[] {
+    const r = this.radius[id]! + this.p.touchTol, shape = this.table[id]!.shape;
+    const out: number[] = [];
+    for (const lat of this.lattices) {
+      const h = lat.frame.edge / 2, cube = { kind: 'box' as const, half: [h, h, h] as Vec3 };
+      for (const [i, j, k] of cellsInBox(lat, minOf(pose.pos, pose.pos, -r), minOf(pose.pos, pose.pos, r, true), (i, j, k) => lat.has(i, j, k))) {
+        if (signedDepth(shape, pose.pos, pose.rot, cube, lat.center(i, j, k), CUBE_ROTATIONS[lat.rotAt(i, j, k)]!) > -this.p.touchTol) out.push(lat.idAt(i, j, k));
+      }
+    }
+    return out;
+  }
+
+  /**
+   * Weight a body at rest carries, N: its own plus its share of the rubble
+   * resting on it (each rubble body's load split evenly over its supporters).
+   * Static pairs report no contact forces, so this is the only way the
+   * capacity tests see rubble lying on a cell or on other rubble; without it
+   * a cube under a frozen pile held only its own weight (measured: a 60 N
+   * sideways squeeze thawed one under 125 bodies, which then all thawed by
+   * support, refroze, and did it again every 64 steps).
+   */
+  private restingLoad(id: number, g: number, seen = new Set<number>()): number {
+    let w = g * this.mass[id]!;
+    if (seen.has(id)) return w;
+    seen.add(id);
+    for (const d of this.dependants.get(id) ?? []) {
+      const n = this.supporters.get(d)?.length ?? 1;
+      w += this.restingLoad(d, g, seen) / n;
+    }
+    return w;
+  }
+
+  /** Whether rubble `id` touches something at rest (rubble or a cell) in direction u (within 60 degrees). */
+  private backedToward(id: number, u: Vec3): boolean {
+    const pose = this.rubblePose(id);
+    const at = (c: Vec3) => {
+      const d: Vec3 = [c[0] - pose.pos[0], c[1] - pose.pos[1], c[2] - pose.pos[2]], len = Math.hypot(...d);
+      return len > 0 && dotV(d, u) > 0.5 * len;
+    };
+    return this.touchingRubble(id, pose).some((o) => at(this.rubblePose(o).pos)) || this.touchingCells(id, pose).some((o) => at(this.cellCenter(o)));
+  }
+
+  rubblePose(id: number): { pos: Vec3; rot: Quat } {
+    return { pos: vec(this.rubblePos, id), rot: quat(this.rubbleRot, id) };
+  }
+
+  private cellCenter(id: number): Vec3 {
+    const lat = this.lattices[this.latticeOf[id]!]!;
+    return lat.center(...lat.coords(this.cellOf[id]!));
+  }
+
+  /** Unit vector against gravity (up when there is none). */
+  private up(): Vec3 {
+    const g = this.scene!.gravity, m = Math.hypot(...g);
+    return m > 0 ? [-g[0] / m, -g[1] / m, -g[2] / m] : [0, 1, 0];
+  }
+
   /** Add proxy changes for the shell around `movers` and drop stale proxies. */
   private withShell(changes: ModeChange[], movers: Array<{ id: number; pos: Vec3; vel: Vec3 }>): ModeChange[] {
     const k = this.stepIndex;
@@ -545,7 +921,8 @@ export class TieredEngine implements PhysicsEngine {
 
   private refreshCounts(): void {
     const lattice = this.lattices.reduce((n, l) => n + l.count, 0);
-    Object.assign(this.stats, { lattice, active: this.nextSpawn - lattice, proxies: this.proxies.size });
+    const rubble = this.rubbleHash.count;
+    Object.assign(this.stats, { lattice, rubble, active: this.nextSpawn - lattice - rubble, proxies: this.proxies.size });
   }
 
   async snapshot(): Promise<Snapshot> {
@@ -565,6 +942,10 @@ export class TieredEngine implements PhysicsEngine {
       s.pos.set(lat.center(i, j, k), 3 * id);
       s.rot.set(CUBE_ROTATIONS[lat.rotAt(i, j, k)]!, 4 * id);
     }));
+    for (const id of this.supporters.keys()) {
+      s.pos.set(this.rubblePos.subarray(3 * id, 3 * id + 3), 3 * id);
+      s.rot.set(this.rubbleRot.subarray(4 * id, 4 * id + 4), 4 * id);
+    }
     return s;
   }
 
@@ -574,6 +955,20 @@ export class TieredEngine implements PhysicsEngine {
 interface Mover { id: number; pos: Vec3; vel: Vec3; awake: boolean }
 
 const vec = (a: Float64Array, n: number): Vec3 => [a[3 * n]!, a[3 * n + 1]!, a[3 * n + 2]!];
+const quat = (a: Float64Array, n: number): Quat => [a[4 * n]!, a[4 * n + 1]!, a[4 * n + 2]!, a[4 * n + 3]!];
+const dotV = (a: Vec3, b: Vec3) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+
+/**
+ * Hand back the impulse a static body absorbed (force change d over a step,
+ * scaled by dt / m) as velocity, at most `cap`: momentum is returned without
+ * creating energy (a body cannot outrun its pusher). Never downwards.
+ */
+function handoff(d: Vec3, dtOverM: number, cap: number): Vec3 {
+  let v: Vec3 = [d[0] * dtOverM, Math.max(0, d[1]) * dtOverM, d[2] * dtOverM];
+  const s = Math.hypot(...v);
+  if (s > cap) v = v.map((x) => (x * cap) / s) as Vec3;
+  return v;
+}
 const gravityMag = (s: SceneDesc) => Math.hypot(...s.gravity);
 const dominantAxis = (v: Vec3) => (Math.abs(v[0]) >= Math.abs(v[1]) ? (Math.abs(v[0]) >= Math.abs(v[2]) ? 0 : 2) : Math.abs(v[1]) >= Math.abs(v[2]) ? 1 : 2);
 
