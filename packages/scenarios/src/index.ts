@@ -256,7 +256,8 @@ const S13: ScenarioDef = {
     const H = int(p, 'H'), th = (num(p, 'deg') * Math.PI) / 180;
     // A column of H cubes turned rigidly by deg about its base edge (x = 0.5, y = 0), leaning towards +x.
     // Each cube sits 1e-6 m above the one below, so none overlap after rounding.
-    const rot: Quat = [0, 0, -Math.sin(th / 2), Math.cos(th / 2)]; // not quatFromAxisAngle: its 0 * -s is -0, which JSON turns into 0
+    // Not quatFromAxisAngle: its 0 * -s is -0, which JSON turns into 0. 0 - s is +0 at deg 0 too.
+    const rot: Quat = [0, 0, 0 - Math.sin(th / 2), Math.cos(th / 2)];
     const out: BodyDesc[] = [];
     for (let k = 0; k < H; k++) {
       const x = -0.5, y = 0.5 + k;
