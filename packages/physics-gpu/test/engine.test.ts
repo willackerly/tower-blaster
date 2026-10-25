@@ -227,19 +227,32 @@ describe('GPU AVBD engine: stacks, towers and impacts', () => {
 describe('GPU AVBD engine: snapshot()', () => {
   const knock = (fireStep: number) => buildScenario('S5', { N: 48, F: 2, H: 12, fireStep, speed: 15, massRatio: 5, radius: 0.6 }, 1);
 
-  it('equals the readStruct decode bit for bit, reads awake from flags bit 0, and reuses one staging buffer', async (ctx) => {
+  it('equals the readStruct decode bit for bit at the call, reads awake from flags bit 0 only, and reuses one staging buffer', async (ctx) => {
     if (!gpu) return ctx.skip();
     const scene = knock(0);
     const r = await call('snapshotDecode', scene, 50, 7);
     expect(r.error).toBeNull();
     expect(r.count).toBe(bodiesAt(scene, 50).length);
     expect(r.compared).toBe(14 * r.count);
+    // A step() issued before snapshot() resolves is not in it.
     expect(r.mismatches, JSON.stringify(r.examples)).toBe(0);
+    expect(r.changedByStep).toBeGreaterThan(0);
     // add() writes flags 1, and nothing else writes them.
-    expect(r.sleepingAtStart).toEqual([]);
-    expect(r.sleepingWithTierBits).toEqual([7]);
-    expect(r.sleepingAfterWake).toEqual([]);
+    const ones = Array<number>(r.count).fill(1);
+    const body7 = (a: number) => ones.map((x, i) => (i === 7 ? a : x));
+    expect(r.awake).toEqual({ start: ones, tierBits: body7(0), woken: ones, highBits: body7(0), lowByte: ones });
     expect(r.created).toBe(1);
+  });
+
+  it('diagnostics() reads through the same pool, and dispose() destroys it, rejecting a snapshot in flight', async (ctx) => {
+    if (!gpu) return ctx.skip();
+    const r = await call('engineReadback', knock(0), 5);
+    expect(r.error).toBeNull();
+    expect(r.diagnostics).toEqual({ created: 2, bytesRead: 2 * r.diagnostics.perCall, perCall: r.diagnostics.perCall });
+    expect(r.snapshotInFlight).toBe('Readback: destroyed during a read');
+    // The two diagnostics buffers and the snapshot's.
+    expect(r.destroyed).toEqual([true, true, true]);
+    expect(r.readAfterDispose).toBe('Readback: destroyed');
   });
 
   it('reads only the bodies spawned so far, n * 64 bytes, not the capacity', async (ctx) => {

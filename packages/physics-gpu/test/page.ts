@@ -544,13 +544,15 @@ export async function finishFailures(scene: SceneDesc) {
   return { healthy, afterError, stepAfterError, afterLoss, reinit };
 }
 
-type SnapshotParts = { parts: { bodies: GPUBuffer; readback: Readback }; n: number };
+type SnapshotParts = { parts: { bodies: GPUBuffer; readback: Readback; bp: { total: GPUBuffer }; col: { info: GPUBuffer } }; n: number };
 
 /**
- * snapshot() after `steps` steps against a readBuffer + readStruct decode of
- * the bodies buffer (the old path), compared with Object.is; then the awake
+ * snapshot() called after `steps` steps, with another step() issued before it
+ * resolves, against a readBuffer + readStruct decode of the bodies buffer (the
+ * old path) issued at the same point, compared with Object.is; then the awake
  * bit: body `flagged` given flags 0x100 (tier bits set, awake clear), kept
- * through a step, then 0x101. Three snapshots in all, on one staging buffer.
+ * through a step, then 0x101, 0xfffffffe and 0xff. Six snapshots in all, on
+ * one staging buffer.
  */
 export async function snapshotDecode(scene: SceneDesc, steps: number, flagged: number) {
   const { device } = await createDevice();
@@ -559,8 +561,12 @@ export async function snapshotDecode(scene: SceneDesc, steps: number, flagged: n
   await e.init(scene);
   const { parts } = e as unknown as SnapshotParts;
   for (let i = 0; i < steps; i++) e.step();
-  const s = await e.snapshot();
-  const v = new DataView(await readBuffer(device, parts.bodies));
+  // Both reads are issued before the step, so both must see the state after `steps` steps.
+  const pending = e.snapshot();
+  const old = readBuffer(device, parts.bodies);
+  e.step();
+  const [s, oldBytes] = await Promise.all([pending, old]);
+  const v = new DataView(oldBytes);
   let mismatches = 0, compared = 0;
   const examples: unknown[] = [];
   for (let i = 0; i < s.count; i++) {
@@ -575,21 +581,60 @@ export async function snapshotDecode(scene: SceneDesc, steps: number, flagged: n
     compared++;
     if (s.awake[i] !== (b.flags![0]! & 1)) mismatches++;
   }
-  const asleep = (a: Uint8Array) => [...a].flatMap((x, i) => (x === 0 ? [i] : []));
+  // That step changed the state, so a read issued after it would not have matched.
+  const next = await e.snapshot();
+  let changedByStep = 0;
+  for (const k of ['pos', 'rot', 'linVel', 'angVel'] as const) s[k].forEach((x, j) => { if (!Object.is(x, next[k][j])) changedByStep++; });
   const setFlags = (f: number) => device.queue.writeBuffer(parts.bodies, flagged * Body.size + field(Body, 'flags').offset, Uint32Array.from([f]));
+  const awakeWith = async (f: number) => (setFlags(f), [...(await e.snapshot()).awake]);
   setFlags(0x100);
   e.step();
-  const tierBits = await e.snapshot();
-  setFlags(0x101);
-  const woken = await e.snapshot();
+  const tierBits = [...(await e.snapshot()).awake];
+  // Every bit but bit 0, then bits 0-7: a Uint8Array store without the mask would read 254 and 255.
+  const awake = { start: [...s.awake], tierBits, woken: await awakeWith(0x101), highBits: await awakeWith(0xfffffffe), lowByte: await awakeWith(0xff) };
   const error = await device.popErrorScope();
-  const res = {
-    error: error?.message ?? null, count: s.count, compared, mismatches, examples, sleepingAtStart: asleep(s.awake),
-    sleepingWithTierBits: asleep(tierBits.awake), sleepingAfterWake: asleep(woken.awake), created: parts.readback.created,
-  };
+  const res = { error: error?.message ?? null, count: s.count, compared, mismatches, examples, changedByStep, awake, created: parts.readback.created };
   e.dispose();
   device.destroy();
   return res;
+}
+
+/**
+ * The engine's Readback outside snapshot(): diagnostics() reads through it
+ * (two reads at once, so two buffers, which the second call reuses), and
+ * dispose() destroys it, rejecting a snapshot still in flight.
+ */
+export async function engineReadback(scene: SceneDesc, steps: number) {
+  const { device } = await createDevice();
+  device.pushErrorScope('validation');
+  const e = new GpuAvbdEngine({}, { device });
+  await e.init(scene);
+  const { parts } = e as unknown as SnapshotParts;
+  const rb = parts.readback;
+  for (let i = 0; i < steps; i++) e.step();
+  await e.diagnostics();
+  await e.diagnostics();
+  const diagnostics = { created: rb.created, bytesRead: rb.bytesRead, perCall: parts.bp.total.size + parts.col.info.size };
+  const inFlight = e.snapshot();
+  const buffers = [...(rb as unknown as { all: Set<GPUBuffer> }).all];
+  e.dispose();
+  const fails = async (f: () => Promise<unknown>) => { try { await f(); return 'no error'; } catch (err) { return (err as Error).message; } };
+  const snapshotInFlight = await fails(() => inFlight);
+  // Copying into a destroyed buffer is a validation error; into a live, unmapped one it is not.
+  const probe = device.createBuffer({ size: 16, usage: GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST });
+  const isDestroyed = async (b: GPUBuffer) => {
+    if (b.mapState !== 'unmapped') return false;
+    device.pushErrorScope('validation');
+    const enc = device.createCommandEncoder();
+    enc.copyBufferToBuffer(probe, 0, b, 0, 4);
+    device.queue.submit([enc.finish()]);
+    return (await device.popErrorScope()) !== null;
+  };
+  const destroyed = await Promise.all(buffers.map(isDestroyed));
+  const readAfterDispose = await fails(() => rb.read(probe));
+  const error = await device.popErrorScope();
+  device.destroy();
+  return { error: error?.message ?? null, diagnostics, snapshotInFlight, destroyed, readAfterDispose };
 }
 
 /** Bodies counted and bytes read by snapshot() at each of `at` (step counts, ascending), with the buffer's capacity. */
