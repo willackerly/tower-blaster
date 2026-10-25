@@ -30,7 +30,36 @@ const open: LevelDef = {
   lot: { min: [-30, -30], max: [30, 30] }, crownLine: 0, objective: { kind: 'crowns' }, par: 1, rack: ['marble', 'cannonball'], launcher: { radius: 10, y: 4, dropY: 10 },
 };
 
+describe('friction on Rapier', () => {
+  // An ice cube shoved across the plaster ground stops after v0^2 / (2 mu g).
+  // Keystone combines by 'min', so one ice face makes a slip plane (mu 0.05);
+  // the engines' default 'average' would make it 0.325 and ice would not work.
+  const v0 = 2;
+  const slide = async (rule: 'min' | 'average') => {
+    const c = compileLevel({ ...open, parts: [{ kind: 'block', at: [0, 0, 0], size: [1, 1, 1], material: 'ice' }] });
+    const body = { ...c.scene.bodies[0]!, linVel: [v0, 0, 0] as [number, number, number] };
+    const e = new RapierEngine();
+    await e.init({ ...c.scene, frictionCombine: rule, bodies: [body] });
+    for (let t = 0; t < 360; t++) e.step();
+    const x = e.snapshot().pos[0]! - body.pos[0];
+    e.dispose();
+    return x;
+  };
+  it("compiled levels combine by 'min'", () => {
+    for (const def of LEVELS) expect(compileLevel(def).scene.frictionCombine).toBe('min');
+  });
+  it('an ice cube slides as far as mu = 0.05 predicts, not the averaged 0.325', async () => {
+    const expected = (mu: number) => (v0 * v0) / (2 * mu * GRAVITY);
+    const min = await slide('min'), avg = await slide('average');
+    expect(Math.abs(min / expected(0.05) - 1)).toBeLessThan(0.02);
+    expect(Math.abs(avg / expected(0.325) - 1)).toBeLessThan(0.02);
+  });
+});
+
 describe('shots on Rapier', () => {
+  it('the lab predicts with the substeps Rapier reports', () => {
+    expect(new RapierEngine().info.integrator?.substeps).toBe(RAPIER_SUBSTEPS);
+  });
   it('free flight matches predictArc (with Rapier\'s 4 substeps) to float32 rounding for one second', async () => {
     const c = compileLevel(open), e = new RapierEngine();
     await e.init(c.scene);

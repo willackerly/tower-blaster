@@ -28,7 +28,9 @@ With 1 cm gaps between cells, columns never touch until something moves. Only sl
 - **"The block above the ice course slides off as a unit."** The hit column's cubes leave one by one; the neighbouring columns stay put.
 - **"Undercut one side and the block above tips."** There is no block, only independent columns.
 
-Ice also needs ice on both faces of the slip plane. Rapier averages friction coefficients, so ice (0.05) on plaster (0.6) behaves like 0.325.
+Ice used to need ice on both faces of the slip plane: Rapier averages friction coefficients by default, so ice (0.05) on plaster (0.6) behaved like 0.325. Levels now set `SceneDesc.frictionCombine: 'min'` (engine contract since #13), so one ice face makes a slip plane. A test shoves an ice cube across the plaster ground and checks it slides v0²/(2μg) for μ = 0.05 (4.07 m from 2 m/s, against 0.62 m under 'average').
+
+Switching the rule alone moved every steel-on-plaster contact from 0.55 to 0.5. That was enough to break L2's par line and to drop the bot's best L1 line from 100% to 37% robust (only 8 solutions from 1,344 attempts). Steel's friction is now 0.55, which restores 0.55 on plaster and the ground. L1, L3, L4 and L5 replay their par lines to the bit-identical final state. Only stone on plaster still changes (0.65 to 0.6), and only L2 has stone.
 
 ## 4. Mechanics probe (the kill gate)
 
@@ -39,11 +41,11 @@ Each behaviour is a tiny level, a nominal shot, and a success test. The shot is 
 | B1 Column drop: knock a cube out, the column above drops one course | 9% | Not usable. The knocked cube drags the one above; the column tilts and topples. |
 | B2 Shear: a low cannonball brings a slender tower down | 100% | Robust |
 | B3 Pick-off: a marble takes a crown from between two heritage cubes | 100% | Robust |
-| B4 Lintel tip: fell one column, the lintel sheds its load | 69% | Usable for early levels, not for tight par lines |
+| B4 Lintel tip: fell one column, the lintel sheds its load | 91% | Robust since the 'min' friction rule (69% under 'average') |
 | B5 Catapult: an anvil on the free end throws the crowns | 100% | Robust |
 | B6 Dominoes: a toppling column knocks the next over | 100% | Robust |
 
-**4 of 6 robust: the gate passes.** Levels L1 to L5 were rebuilt around B2 to B6 (one each), replacing the panel's L1 to L5.
+**5 of 6 robust: the gate passes.** (4 of 6 under 'average' friction; the lintel became robust with 'min'.) Levels L1 to L5 were rebuilt around B2 to B6 (one each), replacing the panel's L1 to L5.
 
 ## 5. Par lines from the solver bot
 
@@ -52,7 +54,7 @@ The bot aims at every cell of every block face every two courses, plus anvil dro
 | Level | Behaviour | Par | Solutions found | Par line robustness |
 |---|---|---|---|---|
 | L1 Open Fire | shear | 2 | 91 of 1,344 attempts | 100% |
-| L2 Lintel | lintel tip | 1 | 41 clean of 600 | 71% |
+| L2 Lintel | lintel tip | 1 | 41 clean of 600 | 77% (71% under 'average') |
 | L3 Surgeon | pick-off | 2 | 36 clean of 600 | 97% |
 | L4 Catapult | catapult | 1 | 23 of 211 | 80% |
 | L5 Dominoes | dominoes | 1 | 149 of 400 | 100% |
@@ -77,7 +79,7 @@ These are first-pass levels. They need playtesting and level-design passes, not 
 
 None of these block the prototype. They matter once the GPU solver replaces Rapier:
 
-1. **Friction combine rule.** It decides whether ice works. Rapier averages; AVBD must do the same, or the contract must name the rule.
-2. **Integrator substeps in `EngineInfo`**, so arc previews are exact on every engine.
+1. **Friction combine rule.** Done (#13): `SceneDesc.frictionCombine`, honoured by Rapier, physics-ref and GPU AVBD. Keystone uses 'min'. The tower tier's host does not carry it yet, so levels on `TieredEngine` still average.
+2. **Integrator substeps in `EngineInfo`.** Done (#13): Rapier 4, AVBD 1. Tests pin the game's and the lab's substep constants to what Rapier reports.
 3. **`reduce()` and sparse `readBodies()`** with fixed-point integer sums, matching `reduceCpu` in `@tb/keystone/src/rules.ts` bit for bit. At 100k bodies the game cannot read a full snapshot every step.
 4. Later: a static-body flag (plinths, anchors) and a deterministic GPU mode for shared replays.

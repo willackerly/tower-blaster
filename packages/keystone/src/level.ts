@@ -145,7 +145,9 @@ export function compileLevel(def: LevelDef): CompiledLevel {
 
   const scene: SceneDesc = {
     id: `keystone:${def.id}`, params: { version: def.version }, seed: 0, gravity: [0, -GRAVITY, 0], dt: 1 / 60,
-    ground: { y: 0, friction: MATERIALS[0].friction }, sleep: true, bodies, inputs: [],
+    // 'min' lets one slick face make a slip plane: ice on plaster is ice, not
+    // the 0.325 the default average gives (docs/game/findings.md, section 3).
+    ground: { y: 0, friction: MATERIALS[0].friction }, sleep: true, frictionCombine: 'min', bodies, inputs: [],
   };
   const lot = { min: [def.lot.min[0] * p, def.lot.min[1] * p] as [number, number], max: [def.lot.max[0] * p, def.lot.max[1] * p] as [number, number] };
   const frame: ShotFrame = { unit: h, pitch: pitchOf(def), centre: [(lot.min[0] + lot.max[0]) / 2, (lot.min[1] + lot.max[1]) / 2], launcher: def.launcher };
