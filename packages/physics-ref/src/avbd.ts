@@ -190,8 +190,13 @@ export class AvbdWorld {
           const decay = (x: number) => Math.min(p.penaltyMax, Math.max(p.penaltyMin, x * p.gamma));
           k = [decay(best.k[0]), decay(best.k[1]), decay(best.k[2])];
           if (!p.postStabilize) lambda = [lambda[0] * p.alpha * p.gamma, lambda[1] * p.alpha * p.gamma, lambda[2] * p.alpha * p.gamma];
-          stick = best.stick;
-          if (stick) { ra = best.ra; rb = best.rb; }
+          // Static friction held at the end of last step: keep its anchors, unless they
+          // have drifted apart along the surface by stickThreshold since (as the step's
+          // stabilization pass would pull the bodies that far back).
+          if (best.stick) {
+            const pa = A ? add3(A.pos, rotate(A.rot, best.ra)) : best.ra, d = sub3(add3(B.pos, rotate(B.rot, best.rb)), pa);
+            if (Math.hypot(dot(d, t1), dot(d, t2)) < p.stickThreshold) { stick = true; ra = best.ra; rb = best.rb; }
+          }
         }
         // Start-of-step constraint and Jacobians, from the (possibly old) anchors.
         const raw = A ? rotate(A.rot, ra) : null; // lever arm of a, world
@@ -396,7 +401,9 @@ export class AvbdWorld {
           if (c.lambda[0] < 0) c.k[0] = Math.min(c.k[0] + p.beta * Math.abs(C[0]!), p.penaltyMax);
           const f1 = c.k[1] * C[1]! + c.lambda[1], f2 = c.k[1] * C[2]! + c.lambda[2];
           const fl = Math.hypot(f1, f2);
-          // Static friction held if the trial force is inside the cone; the last main iteration's answer stands.
+          // Trial force inside the cone: static friction held, or k_t is still too low to tell (a new
+          // contact in an impact), which the drift check at reuse (collide) catches. The last main
+          // iteration's answer stands.
           c.stick = fl < bound;
           if (fl < bound) {
             c.lambda[1] = f1; c.lambda[2] = f2;
@@ -421,9 +428,6 @@ export class AvbdWorld {
       const b = bodies[i]!, d = dx[i]!;
       b.pos = [x0[i]![0] + d[0]!, x0[i]![1] + d[1]!, x0[i]![2] + d[2]!];
       b.rot = applyRotation(q0[i]!, [d[3]!, d[4]!, d[5]!]);
-    }
-    for (const c of contacts) {
-      c.stick = c.stick && Math.hypot(c.c0[1], c.c0[2]) < p.stickThreshold;
     }
   }
 }

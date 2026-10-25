@@ -146,6 +146,19 @@ describe('GPU AVBD engine: friction at the stick/slip boundary', () => {
     for (const o of offs) expect(Math.abs(o)).toBeLessThan(1e-4);
   });
 
+  it('a contact never reuses anchors that have drifted apart by stickThreshold, even after an impact at 1-3 iterations', { timeout: 120_000 }, async (ctx) => {
+    if (!gpu) return ctx.skip();
+    // The reference test of the same name says why. Before the drift was checked at reuse: 4.1 cm.
+    const spin = { ...cube([0, 0.6, 0], [0, -1, 0]), angVel: [0, 8, 0] as Vec3 };
+    const ball: BodyDesc = { ...cube([-3, 2.5, 0], [10, 0, 0]), shape: { kind: 'sphere', radius: 0.3 }, density: 5, friction: 0.5 };
+    const scenes = [sceneOf([cube([0, 0.6, 0], [3, -1, 0])]), sceneOf([spin]), sceneOf([0, 1, 2, 3].map((k) => cube([0, 0.5 + k, 0])).concat([ball]))];
+    for (const iterations of [1, 2, 3]) for (const [k, scene] of scenes.entries()) {
+      const r = await call('anchorDrift', scene, 60, { iterations });
+      expect(r.error).toBeNull();
+      expect(r.worst, `${iterations} iterations, scene ${k}`).toBeLessThan(0.01);
+    }
+  });
+
   it('a cube spinning on the ground stops on the step Coulomb friction says, and stays stopped', async (ctx) => {
     if (!gpu) return ctx.skip();
     // Four corner contacts at r = sqrt(1/2) carry mu m g / 4 each: alpha = 6 r mu g for I = m / 6.
@@ -194,9 +207,10 @@ describe('GPU AVBD engine: stacks, towers and impacts', () => {
     // One collapse's deepest transient is set by a single tumbling cube and
     // varies 4x between nearby ball speeds, so penetration is compared with
     // the reference as statistics over 5 speeds, sampled every 10 steps
-    // (2026-10-25: mean 0.0074 GPU vs 0.0086 reference; median of the
-    // per-run sampled maxima 0.013 vs 0.030. Over every step the reference's
-    // median maximum is 0.042, Rapier's 0.14 at speed 15).
+    // (2026-10-25, after the friction fix: mean 0.0067 GPU vs 0.0075
+    // reference; median of the per-run sampled maxima 0.015 vs 0.011. Over
+    // every step the reference's median maximum is 0.053, Rapier's 0.14 at
+    // speed 15).
     const knock = async (speed: number) => {
       const scene = buildScenario('S5', { N: 48, F: 2, H: 12, fireStep: 0, speed, massRatio: 5, radius: 0.6 }, 1);
       const bodies = bodiesAt(scene, 1);
@@ -219,15 +233,19 @@ describe('GPU AVBD engine: stacks, towers and impacts', () => {
     const median = (x: number[]) => [...x].sort((a, b) => a - b)[x.length >> 1]!;
     const max = (x: number[]) => x.reduce((a, b) => Math.max(a, b), 0);
     // The outcome is chaotic too (a nudge flips the ball's rebound in a few
-    // percent of runs), so it is a median as well. 2026-10-25: survival
-    // 0.20-0.30 (median 0.23; reference 0.22), ball vx -4.2 to -1.8 (median
-    // -2.4; reference -4.3 to -1.1, median -3.4).
+    // percent of runs), so it is a median as well. 2026-10-25, after the
+    // friction fix: survival 0.22-0.31 (median 0.23; reference 0.18-0.28,
+    // median 0.22), ball vx -4.2 to -2.1 (median -3.4; reference -4.4 to
+    // -1.6, median -3.1).
     for (const { g } of runs) expect(nonFinite(g.s1)).toBe(0);
     expect(median(runs.map(({ bodies, g }) => survival(bodies, g.all[1]!, g.s1, [0])))).toBeLessThan(0.5);
     expect(median(runs.map(({ bodies, g }) => g.s1.linVel[3 * (bodies.length - 1)]!))).toBeLessThan(-1);
     const gMean = mean(runs.flatMap((r) => r.gp)), rMean = mean(runs.flatMap((r) => r.rp));
-    // Two re-rolled reference runs (1e-12 jitter) differ by this ratio within
-    // 0.71-1.41 in 99.9% of bootstrap draws (2026-10-25), so wider means a real difference.
+    // Two reference runs re-rolled by f32-sized jitter (1e-6 m on every
+    // position) differ by this ratio within 0.72-1.39 in 99.9% of bootstrap
+    // draws (2026-10-25, after the friction fix, 12 re-rolls per speed), so
+    // wider means a real difference; the GPU's was 0.90. (Jitter of 1e-12 no
+    // longer changes 4 of the 5 runs at all.)
     expect(gMean / rMean).toBeGreaterThan(0.7);
     expect(gMean / rMean).toBeLessThan(1.4);
     expect(median(runs.map((r) => max(r.gp)))).toBeLessThan(0.08);

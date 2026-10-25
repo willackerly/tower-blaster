@@ -3,7 +3,7 @@ import { type BodyDesc, bodiesAt, type CombineRule, freeFlight, type InputEvent,
 import { drift, energy, jitter, nonFinite, penetration, survival } from '@tb/metrics';
 import { buildScenario } from '@tb/scenarios';
 import { appliedMu, slideMu, slideScene, THROW, throwScene } from '@tb/testkit';
-import { AvbdReferenceEngine, type AvbdParams, colorGraph, outranks, solveSpd6, tangentBasis } from '../src/index.ts';
+import { AvbdReferenceEngine, type AvbdParams, colorGraph, DEFAULT_AVBD, outranks, solveSpd6, tangentBasis } from '../src/index.ts';
 
 const cube = (pos: Vec3, linVel: Vec3 = [0, 0, 0]): BodyDesc => ({
   shape: { kind: 'box', half: [0.5, 0.5, 0.5] }, pos, rot: [0, 0, 0, 1], linVel, angVel: [0, 0, 0], density: 1, friction: 0.6, restitution: 0, tag: 0,
@@ -226,6 +226,29 @@ describe('friction at the stick/slip boundary', () => {
       }
       expect(sliding).toBeGreaterThan(50);
       expect(held).toBe(0);
+    }
+  });
+
+  it('a contact never reuses anchors that have drifted apart by stickThreshold, even after an impact at 1-3 iterations', async () => {
+    // A fresh contact's k_t is still penaltyMin, so in an impact its trial force can sit inside the
+    // cone while it slips at m/s: the in-cone flag alone would keep its anchors. Before the drift was
+    // checked at reuse, the next step reused them 1.4-10.8 cm apart and pulled the bodies back.
+    const sphere = (pos: Vec3, linVel: Vec3, radius: number, density: number): BodyDesc => ({ ...cube(pos, linVel), shape: { kind: 'sphere', radius }, density, friction: 0.5 });
+    const scenes: SceneDesc[] = [
+      sceneOf([cube([0, 0.6, 0], [3, -1, 0])]), // lands sliding
+      sceneOf([box([0, 0.6, 0], [0.5, 0.5, 0.5], [0, -1, 0], [0, 8, 0])]), // lands spinning
+      sceneOf([0, 1, 2, 3].map((k) => cube([0, 0.5 + k, 0])).concat([sphere([-3, 2.5, 0], [10, 0, 0], 0.3, 5)])), // a stack knocked by a ball
+    ];
+    const threshold = DEFAULT_AVBD.stickThreshold;
+    for (const iterations of [1, 2, 3]) for (const scene of scenes) {
+      const e = new AvbdReferenceEngine({ iterations });
+      await e.init(scene);
+      let worst = 0;
+      for (let s = 0; s < 60; s++) {
+        e.step();
+        for (const c of e.world!.contacts) worst = Math.max(worst, Math.hypot(c.c0[1], c.c0[2]));
+      }
+      expect(worst, `${iterations} iterations, scene ${scenes.indexOf(scene)}`).toBeLessThan(threshold);
     }
   });
 

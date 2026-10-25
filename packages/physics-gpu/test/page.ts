@@ -1,7 +1,7 @@
 // Page-side drivers for the GPU physics tests (bundled by loadBundle).
 import { createDevice, readBuffer, type Readback } from '@tb/gpu';
 import { boundingRadius, groundManifold, NO_AXIS, quatNormalize, shapeManifold, spherePairs, supportArea, type Manifold as CpuManifold } from '@tb/geom';
-import { Body, field, Manifold, readStruct, Shape, writeStruct } from '@tb/schema';
+import { Body, field, Manifold, readStruct, Shape, SolverContact, writeStruct } from '@tb/schema';
 import type { BodyDesc, InputEvent, Quat, Vec3 } from '@tb/engine-api';
 import { buildScenario } from '@tb/scenarios';
 import { bodiesAt } from '@tb/engine-api';
@@ -548,6 +548,28 @@ export async function pairHistory(scene: SceneDesc, steps: number, opts: { pairs
   return { error: error?.message ?? null, wrong, found, missed, axes, checked, axisMismatch, axisTies, presenceMismatch, hinted, overflowSteps, spawnPairs, examples };
 }
 const NONE_U32 = 0xffffffff;
+
+/** The largest tangential start-of-step drift |c0.yz| of any used contact, over every step of a run. */
+export async function anchorDrift(scene: SceneDesc, steps: number, params: Partial<AvbdParams> = {}) {
+  const { device } = await createDevice();
+  device.pushErrorScope('validation');
+  const e = new GpuAvbdEngine(params, { device });
+  await e.init(scene);
+  const contacts = (e as unknown as { parts: { solver: { contacts: GPUBuffer } } }).parts.solver.contacts;
+  let worst = 0;
+  for (let s = 0; s < steps; s++) {
+    e.step();
+    // Both halves (this step's contacts and last step's): each was a step's contacts once.
+    const v = new DataView(await readBuffer(device, contacts));
+    for (let k = 0; k < v.byteLength / SolverContact.size; k++) {
+      const c = readStruct(v, SolverContact, k);
+      if (c.used![0]) worst = Math.max(worst, Math.hypot(c.c0![1]!, c.c0![2]!));
+    }
+  }
+  const error = await device.popErrorScope();
+  e.dispose(); device.destroy();
+  return { error: error?.message ?? null, worst };
+}
 
 /** init() with a pair buffer too large for the device: the error it throws (null if none). */
 export async function initError(scene: SceneDesc, pairsPerBody: number) {

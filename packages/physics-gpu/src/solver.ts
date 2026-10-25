@@ -217,9 +217,14 @@ fn setup(m: Manifold, a: u32, b: u32, mu: f32, dst: u32, old: u32, hasOld: bool)
         ct.lt = vec2f(dot(f, t1), dot(f, t2));
         ct.kN = clamp(oc.kN * p.gamma, p.penaltyMin, p.penaltyMax);
         ct.kT = clamp(oc.kT * p.gamma, p.penaltyMin, p.penaltyMax);
-        // Static friction held at the end of last step: keep its anchors.
-        let held = oc.inCone != 0u && length(oc.c0.yz) < p.stickThreshold;
-        if (held) { ct.stick = 1u; ra = oc.ra; rb = oc.rb; }
+        // Static friction held at the end of last step: keep its anchors, unless they
+        // have drifted apart along the surface by stickThreshold since.
+        if (oc.inCone != 0u) {
+          var opa = oc.ra;
+          if (a != NONE) { opa = bodies[a].pos + qrot(bodies[a].rot, oc.ra); }
+          let od = B.pos + qrot(B.rot, oc.rb) - opa;
+          if (length(vec2f(dot(od, t1), dot(od, t2))) < p.stickThreshold) { ct.stick = 1u; ra = oc.ra; rb = oc.rb; }
+        }
       }
     }
     var raw = vec3f(0.0);
