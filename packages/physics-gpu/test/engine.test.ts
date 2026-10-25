@@ -310,7 +310,9 @@ describe('GPU AVBD engine: stacks, towers and impacts', () => {
     expect(r.rejected.radius.message).toMatch(/radius 2 exceeds/);
     expect(r.rejected.noRoom.message).toMatch(/capacity is \d+/);
     // A rejected batch queues nothing: no body spawns at step 5.
-    for (const k of ['capacity', 'radius', 'noRoom'] as const) expect(r.rejected[k].count).toBe(n);
+    for (const k of ['capacity', 'radius', 'noRoom', 'spare'] as const) expect(r.rejected[k].count).toBe(n);
+    expect(r.rejected.spare.message).toMatch(new RegExp(`capacity is ${n + 2}\\b`));
+    expect(r.rejected.spareFits).toEqual({ message: null, count: n + 3 });
   });
 
   it('is bit-for-bit deterministic', async (ctx) => {
