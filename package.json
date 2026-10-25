@@ -15,13 +15,17 @@
     "runner": "vite packages/runner",
     "bench:browser": "tsx packages/runner/src/cli.ts",
     "bench:suite": "tsx packages/runner/src/suite-cli.ts",
-    "viewer": "vite packages/viewer"
+    "viewer": "vite packages/viewer",
+    "keystone:probe": "tsx packages/keystone-lab/src/cli.ts",
+    "keystone:bot": "tsx packages/keystone-lab/src/bot-cli.ts"
   },
   "devDependencies": {
     "@tb/adapter-rapier": "workspace:*",
     "@tb/bench": "workspace:*",
     "@tb/engine-api": "workspace:*",
     "@tb/geom": "workspace:*",
+    "@tb/keystone": "workspace:*",
+    "@tb/keystone-lab": "workspace:*",
     "@tb/metrics": "workspace:*",
     "@tb/runner": "workspace:*",
     "@tb/scenarios": "workspace:*",

@@ -20,6 +20,12 @@ importers:
       '@tb/geom':
         specifier: workspace:*
         version: link:packages/geom
+      '@tb/keystone':
+        specifier: workspace:*
+        version: link:packages/keystone
+      '@tb/keystone-lab':
+        specifier: workspace:*
+        version: link:packages/keystone-lab
       '@tb/metrics':
         specifier: workspace:*
         version: link:packages/metrics
@@ -74,6 +80,27 @@ importers:
   packages/engine-api: {}
 
   packages/geom: {}
+
+  packages/keystone:
+    dependencies:
+      '@tb/engine-api':
+        specifier: workspace:*
+        version: link:../engine-api
+      '@tb/geom':
+        specifier: workspace:*
+        version: link:../geom
+
+  packages/keystone-lab:
+    dependencies:
+      '@tb/adapter-rapier':
+        specifier: workspace:*
+        version: link:../adapter-rapier
+      '@tb/engine-api':
+        specifier: workspace:*
+        version: link:../engine-api
+      '@tb/keystone':
+        specifier: workspace:*
+        version: link:../keystone
 
   packages/metrics: {}
 
