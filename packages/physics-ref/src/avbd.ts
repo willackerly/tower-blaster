@@ -30,7 +30,8 @@
 // - Speculative margins grow with each body's speed (see collide()).
 // - Each touching pair keeps last step's SAT face axis unless another is
 //   clearly better (geom/manifold.ts): aligned neighbours tie on several axes.
-// - Friction is a cone (the two tangent rows clamped together to mu |lambda_n|).
+// - Friction is a cone (the two tangent rows clamped together to mu |lambda_n|),
+//   and a sliding contact's stiffness is the secant of that clamp (see step()).
 // - Bodies are swept by graph colour (see coloring.ts), the order the
 //   parallel GPU version uses, so the two can be compared step by step.
 import { type BodyDesc, combineFriction, inertiaOf, massOf, type Quat, type SceneDesc, type Vec3 } from '@tb/engine-api';
@@ -63,7 +64,7 @@ export interface AvbdParams {
   sweep: boolean;
   /** Cap on that growth. */
   maxSweep: number;
-  /** Use the cone projection's derivative as the friction Hessian while sliding (else k_t J J^T, as the reference). */
+  /** Scale the friction stiffness by the cone clamp, k_t min(1, bound / |z|), while sliding (else k_t J J^T, as the reference). */
   slidingHessian: boolean;
 }
 
@@ -315,7 +316,8 @@ export class AvbdWorld {
     // Clamped forces for the current C: normal compressive only, friction inside the cone.
     // The tangent rows share one penalty k[1] (k[2] only mirrors it) so friction is
     // isotropic: per-row penalties tilt the force off the sliding direction.
-    const F = new Float64Array(3), FZ = new Float64Array(4), K = new Float64Array(9);
+    // Returns the clamp's scale s = min(1, bound / |z|): F_t = s z for the trial force z.
+    const F = new Float64Array(3), K = new Float64Array(9);
     const evalF = (c: Contact) => {
       F[0] = Math.min(0, c.k[0] * C[0]! + c.lambda[0]);
       const bound = c.mu * Math.abs(c.lambda[0]);
@@ -323,8 +325,7 @@ export class AvbdWorld {
       const fl = Math.hypot(f1, f2);
       const s = fl > bound ? (fl > 0 ? bound / fl : 0) : 1;
       F[1] = f1 * s; F[2] = f2 * s;
-      FZ[0] = fl; FZ[1] = bound; FZ[2] = f1; FZ[3] = f2;
-      return fl <= bound; // inside the cone (sticking)
+      return s;
     };
 
     const lhs = new Float64Array(36), rhs = new Float64Array(6), step = new Float64Array(6);
@@ -352,19 +353,23 @@ export class AvbdWorld {
           for (const ci of touching[i]!) {
             const c = contacts[ci]!;
             evalC(c, alpha);
-            const sticking = evalF(c);
+            const s = evalF(c);
             const J = c.b === i ? c.jb : c.ja;
-            // Row stiffness K (3x3): k_n on the normal; on the tangents k_t
-            // while sticking, else the derivative of the cone projection,
-            // k_t (bound / |z|) (I - z z^T / |z|^2): no stiffness along the
-            // slide, where the force no longer depends on displacement.
+            // Row stiffness K (3x3): k_n on the normal, k_t s on both tangents
+            // (s from evalF; 1 inside the cone). Sliding, that is the secant of
+            // the clamp F_t = s z, and the curvature of the half-quadratic
+            // (IRLS) upper bound of the friction energy, a Huber function of z.
+            // Across the slide it equals the clamp's derivative
+            // k_t (bound / |z|) (I - z z^T / |z|^2); along it, where that
+            // derivative is 0, it keeps k_t bound / |z|. So the stiffness is
+            // continuous across the cone boundary and a step cannot overshoot
+            // back through the cone. (With the derivative, contacts resting on
+            // the boundary flipped between k_t and 0 along the slide and fell
+            // into a period-2 cycle.) While clearly sliding it falls off like
+            // bound / (k_t |C_t|), which keeps low iteration counts accurate.
             K.fill(0);
             K[0] = c.k[0];
-            if (sticking || !p.slidingHessian) { K[4] = c.k[1]; K[8] = c.k[1]; }
-            else if (FZ[0]! > 0) {
-              const s = c.k[1] * FZ[1]! / FZ[0]!, zx = FZ[2]! / FZ[0]!, zy = FZ[3]! / FZ[0]!;
-              K[4] = s * (1 - zx * zx); K[5] = K[7] = -s * zx * zy; K[8] = s * (1 - zy * zy);
-            }
+            K[4] = K[8] = p.slidingHessian ? c.k[1] * s : c.k[1];
             for (let r = 0; r < 3; r++) {
               const f = F[r]!;
               for (let u = 0; u < 6; u++) rhs[u] = rhs[u]! + J[6 * r + u]! * f;
@@ -391,6 +396,8 @@ export class AvbdWorld {
           if (c.lambda[0] < 0) c.k[0] = Math.min(c.k[0] + p.beta * Math.abs(C[0]!), p.penaltyMax);
           const f1 = c.k[1] * C[1]! + c.lambda[1], f2 = c.k[1] * C[2]! + c.lambda[2];
           const fl = Math.hypot(f1, f2);
+          // Static friction held if the trial force is inside the cone; the last main iteration's answer stands.
+          c.stick = fl < bound;
           if (fl < bound) {
             c.lambda[1] = f1; c.lambda[2] = f2;
             c.k[1] = c.k[2] = Math.min(c.k[1] + p.beta * Math.hypot(C[1]!, C[2]!), p.penaltyMax);
@@ -416,7 +423,7 @@ export class AvbdWorld {
       b.rot = applyRotation(q0[i]!, [d[3]!, d[4]!, d[5]!]);
     }
     for (const c of contacts) {
-      c.stick = Math.hypot(c.lambda[1], c.lambda[2]) < c.mu * Math.abs(c.lambda[0]) && Math.hypot(c.c0[1], c.c0[2]) < p.stickThreshold;
+      c.stick = c.stick && Math.hypot(c.c0[1], c.c0[2]) < p.stickThreshold;
     }
   }
 }
