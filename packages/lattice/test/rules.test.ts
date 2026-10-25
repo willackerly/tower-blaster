@@ -22,18 +22,22 @@ async function settledCube() {
 
 describe('settle snaps', () => {
   it('are refused when they would push a cube into a moving neighbour, and allowed when clear', async () => {
-    for (const ballX of [0.985, 1.2]) {
-      // The cube sits 1.5 cm off its cell in -x; a ball touches its +x face.
-      const scene = buildScenario('S1', { F: 1, H: 1 }, 1);
-      scene.bodies.push({ ...scene.bodies[0]!, shape: { kind: 'sphere', radius: 0.5 }, pos: [ballX, 0.5, 0] });
-      const host = new ScriptedHost();
-      const e = new TieredEngine(host, { rubble: false }); // a refused cube would freeze as rubble instead
-      await e.init(scene);
-      e.wakeSphere(scene.bodies[0]!.pos, 0.1);
-      await e.step();
-      host.place(0, [-0.015, 0.5, 0]);
-      for (let s = 0; s < 2 * e.p.minActiveSteps; s++) await e.step();
-      expect(e.tier[0], `ball at x = ${ballX}`).toBe(ballX < 1 ? TIER_ACTIVE : TIER_LATTICE);
+    // The cube sits 1.5 cm off its cell, away from a ball that touches it on
+    // that side; every side, so the neighbour lookup cannot miss a direction.
+    for (const d of [[1, 0, 0], [-1, 0, 0], [0, 0, 1], [0, 0, -1], [0, 1, 0]] as Vec3[]) {
+      for (const gap of [0.985, 1.2]) {
+        const scene = buildScenario('S1', { F: 1, H: 1 }, 1);
+        const at = (s: number): Vec3 => [s * d[0], 0.5 + s * d[1], s * d[2]];
+        scene.bodies.push({ ...scene.bodies[0]!, shape: { kind: 'sphere', radius: 0.5 }, pos: at(gap) });
+        const host = new ScriptedHost();
+        const e = new TieredEngine(host, { rubble: false }); // a refused cube would freeze as rubble instead
+        await e.init(scene);
+        e.wakeSphere(scene.bodies[0]!.pos, 0.1);
+        await e.step();
+        host.place(0, at(-0.015));
+        for (let s = 0; s < 2 * e.p.minActiveSteps; s++) await e.step();
+        expect(e.tier[0], `ball at ${gap} along ${d}`).toBe(gap < 1 ? TIER_ACTIVE : TIER_LATTICE);
+      }
     }
   });
 });

@@ -395,7 +395,7 @@ export class TieredEngine implements PhysicsEngine {
     }
     // Woken cells and thawed rubble are dynamic now: they need proxies around them too.
     for (const id of [...woken.map((w) => w.id), ...thawed]) movers.push({ id, pos: changes.get(id)!.pos!, vel: changes.get(id)!.linVel ?? [0, 0, 0], awake: true });
-    const settled = this.settle(state, changes);
+    const settled = this.settle(state, changes, dyn);
     const frozen = this.freeze(state, changes, settled, dyn);
     const resting = settled.size || frozen.size ? movers.filter((m) => !settled.has(m.id) && !frozen.has(m.id)) : movers;
     const list = this.withShell([...changes.values()].sort((a, b) => a.id - b.id), resting);
@@ -676,7 +676,7 @@ export class TieredEngine implements PhysicsEngine {
    * moves a cube at most settlePos edges, and is refused if that would push
    * it deeper into a moving neighbour by more than settlePush edges.
    */
-  private settle(state: HostState, changes: Map<number, ModeChange>): Set<number> {
+  private settle(state: HostState, changes: Map<number, ModeChange>, dyn: BoxHash): Set<number> {
     const done = new Set<number>();
     const on = this.p.settle === 'auto' ? !this.native || this.host.caps.localCellChanges === true : this.p.settle;
     if (!on || !this.lattices.length) return done;
@@ -716,9 +716,10 @@ export class TieredEngine implements PhysicsEngine {
       const cube = { kind: 'box' as const, half: [e / 2, e / 2, e / 2] as Vec3 };
       const from = vec(state.pos, c.n), fromRot: Quat = [state.rot[4 * c.n]!, state.rot[4 * c.n + 1]!, state.rot[4 * c.n + 2]!, state.rot[4 * c.n + 3]!];
       let blocked = false;
-      for (let n = 0; n < state.ids.length && !blocked; n++) {
-        const other = state.ids[n]!;
+      for (const other of dyn.query(minOf(center, center, -e), minOf(center, center, e, true))) {
+        if (blocked) break;
         if (snapping.has(other)) continue;
+        const n = this.row.get(other)!;
         const p = vec(state.pos, n);
         if (Math.hypot(p[0] - center[0], p[1] - center[1], p[2] - center[2]) > this.radius[other]! + e) continue;
         const q: [number, number, number, number] = [state.rot[4 * n]!, state.rot[4 * n + 1]!, state.rot[4 * n + 2]!, state.rot[4 * n + 3]!];
