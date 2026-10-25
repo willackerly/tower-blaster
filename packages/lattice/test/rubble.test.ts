@@ -44,6 +44,26 @@ describe('rubble', () => {
     expect(e.stats.active).toBe(0);
   });
 
+  it('freezes a body at the pose it recorded, even where the host has moved on (state lag)', async () => {
+    // The host reports ball 1 lagging 3 mm behind where it really is.
+    class Lagging extends ScriptedHost {
+      override read() {
+        const s = super.read();
+        for (let n = 0; n < s.ids.length; n++) if (s.ids[n] === 1) s.pos[3 * n] = s.pos[3 * n]! - 0.003;
+        return s;
+      }
+    }
+    const host = new Lagging();
+    const e = new TieredEngine(host);
+    await e.init(scene([{ pos: [3, 0.5, 0] }]));
+    for (let k = 0; k <= e.p.minActiveSteps && e.tier[1] !== TIER_RUBBLE; k++) await e.step();
+    expect(e.tier[1]).toBe(TIER_RUBBLE);
+    expect(host.modeOf(1)).toBe(MODE_STATIC);
+    expect(host.poseOf(1).pos).toEqual([2.997, 0.5, 0]);
+    expect(Array.from(e.rubblePos.subarray(3, 6))).toEqual([2.997, 0.5, 0]);
+    expect(Array.from((await e.snapshot()).pos.subarray(3, 6))).toEqual([2.997, 0.5, 0]);
+  });
+
   it('thaws what rests on a body that moves (T1), transitively', async () => {
     const { e, log, steps } = await start(scene([{ pos: [3, 0.5, 0] }, { pos: [3, 1.5, 0] }, { pos: [0, 1.5, 0] }]));
     await steps(e.p.minActiveSteps + 1);

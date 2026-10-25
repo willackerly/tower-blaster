@@ -80,6 +80,27 @@ describe('RapierHost', () => {
     h.dispose();
   });
 
+  it('turning a sleeping body static wakes its sleeping neighbours, with or without a new pose (Rapier 0.21)', async () => {
+    // Pinned because the tiers freeze rubble this way: each freeze wakes the
+    // pile around it for a sleep timeout, and no wake-up flag avoids it.
+    for (const shift of [null, 0, -0.001]) {
+      const table = [cube([0, 0.5, 0]), cube([1, 0.5, 0])];
+      const h = new RapierHost();
+      await h.init(world, table);
+      h.apply({ changes: [on(0, MODE_DYNAMIC, table[0]!), on(1, MODE_DYNAMIC, table[1]!)], wake: [] });
+      let s = h.read();
+      for (let i = 0; i < 600 && (s.awake[0] || s.awake[1]); i++) { h.step(); s = h.read(); }
+      expect(Array.from(s.awake)).toEqual([0, 0]);
+      const pose: Partial<ModeChange> = shift === null ? {} : { pos: [s.pos[0]! + shift, s.pos[1]!, s.pos[2]!], rot: [s.rot[0]!, s.rot[1]!, s.rot[2]!, s.rot[3]!] };
+      h.apply({ changes: [{ id: 0, mode: MODE_STATIC, ...pose }], wake: [] });
+      h.step();
+      s = h.read();
+      expect(Array.from(s.ids)).toEqual([1]);
+      expect(Array.from(s.awake), `shift ${shift}`).toEqual([1]);
+      h.dispose();
+    }
+  });
+
   it('rejects a bad batch without applying any of it', async () => {
     const table = [cube([0, 0.5, 0]), cube([0, 1.5, 0])];
     const h = new RapierHost();

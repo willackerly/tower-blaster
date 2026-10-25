@@ -802,7 +802,8 @@ export class TieredEngine implements PhysicsEngine {
       this.rubbleHash.insert(id, pose.pos, this.radius[id]!);
       this.quiet[id] = 0;
       this.refPending[id] = 1;
-      changes.set(id, { id, mode: MODE_STATIC }); // in place: the host keeps its pose
+      // At the pose the tiers record, which the host may have moved past by its state lag.
+      changes.set(id, { id, mode: MODE_STATIC, pos: pose.pos, rot: pose.rot });
       done.add(id);
       this.stats.frozen++;
       this.onTransition?.(id, TIER_RUBBLE, 'freeze', this.stepIndex);

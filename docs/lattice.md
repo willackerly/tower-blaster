@@ -138,6 +138,14 @@ struck tower stayed awake. That is what the slide rules fix.
 - Rapier 0.21 panics (wasm `unreachable`) when a ball presses on a voxel
   edge. `RapierHost` builds spheres as icosphere hulls of the same mass, and
   `adapter-rapier/test/voxel-panic.test.ts` pins the upstream bug.
+- Rubble freezes at the pose the tiers recorded, sent with the static
+  change, so a host whose state lags (`stateLag > 0`) puts it where the
+  snapshot says it is. In Rapier, turning a sleeping body static wakes its
+  sleeping neighbours whatever the wake flags say (`host.test.ts` pins it),
+  so each freeze keeps its pile awake for one sleep timeout. `RapierHost`
+  skips a pose write that changes nothing: `setRotation` renormalises
+  (17% of quaternions moved by an f32 ulp), and one S5 collapse froze 310
+  cubes instead of 740 from that alone.
 - The GPU host keys contact warm starts per cell, so a cell change disturbs
   only its neighbours. It can set `localCellChanges` and use settling.
 

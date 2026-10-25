@@ -51,5 +51,6 @@ export class ScriptedHost implements PhysicsHost {
   /** Move a body as if the solver had. */
   place(id: number, pos: Vec3): void { this.pose.set(id, { ...this.pose.get(id)!, pos }); }
   modeOf(id: number): BodyMode { return this.modes[id]!; }
+  poseOf(id: number): { pos: Vec3; rot: [number, number, number, number] } { return this.pose.get(id)!; }
   dispose(): void {}
 }
