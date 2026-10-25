@@ -37,7 +37,14 @@ export async function readBuffer(device: GPUDevice, src: GPUBuffer, bytes = src.
   return out;
 }
 
+/** Throw (instead of a later validation error) when the device cannot bind a storage buffer this large. */
+export function assertStorageFits(device: GPUDevice, bytes: number, label = 'storage buffer'): void {
+  const limit = Math.min(device.limits.maxStorageBufferBindingSize, device.limits.maxBufferSize);
+  if (bytes > limit) throw new Error(`${label}: ${bytes} bytes exceeds the device's ${limit}-byte storage binding limit`);
+}
+
 export function storageBuffer(device: GPUDevice, bytes: number, label?: string, extraUsage = 0): GPUBuffer {
+  assertStorageFits(device, bytes, label);
   return device.createBuffer({
     size: Math.max(16, Math.ceil(bytes / 16) * 16),
     usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST | extraUsage,

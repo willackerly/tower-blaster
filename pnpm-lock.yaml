@@ -38,6 +38,12 @@ importers:
       '@tb/metrics':
         specifier: workspace:*
         version: link:packages/metrics
+      '@tb/physics-gpu':
+        specifier: workspace:*
+        version: link:packages/physics-gpu
+      '@tb/physics-ref':
+        specifier: workspace:*
+        version: link:packages/physics-ref
       '@tb/runner':
         specifier: workspace:*
         version: link:packages/runner
@@ -140,6 +146,10 @@ importers:
   packages/lattice: {}
 
   packages/metrics: {}
+
+  packages/physics-gpu: {}
+
+  packages/physics-ref: {}
 
   packages/runner: {}
 
