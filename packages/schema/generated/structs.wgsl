@@ -30,3 +30,25 @@ struct RenderInstance {
   palette: u32, // @12 colour index, e.g. original tower height
   rot: vec4f, // @16
 }
+
+// Collision shape, indexed by Body.shape.
+// size 16 B, align 16
+struct Shape {
+  half: vec3f, // @0 box half extents; x is the radius for a sphere
+  kind: u32, // @12 0 box, 1 sphere
+}
+
+// Contact manifold for one body pair, written by the narrowphase.
+// size 96 B, align 16
+struct Manifold {
+  normal: vec3f, // @0 unit, from body a to body b (from the ground up for ground contacts)
+  count: u32, // @12 contact points used, 0..4; 0 means no contact
+  a: u32, // @16
+  b: u32, // @20 0xffffffff for the ground
+  feature: u32, // @24 0 face of a, 1 face of b, 2 edge-edge
+  pad: u32, // @28
+  p0: vec4f, // @32 point xyz (midway between the surfaces), depth w (> 0 overlapping)
+  p1: vec4f, // @48
+  p2: vec4f, // @64
+  p3: vec4f, // @80
+}

@@ -50,3 +50,43 @@ describe('GPU broadphase vs the double-precision oracle', () => {
     expect(r).toMatchObject({ duplicates: 0, ordered: true, extra: 0 });
   });
 });
+
+describe('GPU narrowphase vs the double-precision manifolds', () => {
+  // f32 rounding can flip a reduction near-tie: a different one of the
+  // reference's candidate points is kept, with the same count, normal,
+  // deepest depth and (within 1%) support area. Those are classified as ties
+  // and allowed, but must stay rare; anything else must match exactly.
+  it('4000 random box-box pairs', async (ctx) => {
+    if (!gpu) return ctx.skip();
+    const r = await call('narrowphase', { kind: 'random', pairs: 4000, margin: 0.02, seed: 11 });
+    expect(r.error).toBeNull();
+    expect(r.contacts).toBeGreaterThan(1500);
+    expect(r.pairMismatch, JSON.stringify(r.examples)).toBe(0);
+    expect(r.groundMismatch, JSON.stringify(r.examples)).toBe(0);
+    expect(r.pairTies + r.groundTies).toBeLessThan(0.005 * (r.contacts + r.groundContacts));
+  });
+
+  it('2000 random pairs mixing spheres and boxes in both orders', async (ctx) => {
+    if (!gpu) return ctx.skip();
+    const r = await call('narrowphase', { kind: 'random', pairs: 2000, spheres: 0.5, margin: 0.02, seed: 12 });
+    expect(r.error).toBeNull();
+    expect(r.pairMismatch, JSON.stringify(r.examples)).toBe(0);
+    expect(r.groundMismatch, JSON.stringify(r.examples)).toBe(0);
+    expect(r.pairTies + r.groundTies).toBeLessThan(0.005 * (r.contacts + r.groundContacts));
+  });
+
+  it.for([
+    ['packed city', 'S4', { N: 2000, F: 4, H: 12 }],
+    ['gapped tower', 'S1', { F: 4, H: 10, gap: 0.02 }],
+    ['ball resting in a city', 'S5', { N: 1000, F: 4, H: 8, fireStep: 0 }],
+  ] as const)('%s: every manifold matches', async ([, scenario, params], ctx) => {
+    if (!gpu) return ctx.skip();
+    const r = await call('narrowphase', { kind: 'scenario', scenario, params: { ...params }, margin: 0.05 });
+    expect(r.error).toBeNull();
+    expect(r.contacts).toBeGreaterThan(0);
+    expect(r.pairMismatch, JSON.stringify(r.examples)).toBe(0);
+    expect(r.groundMismatch).toBe(0);
+    expect(r.groundContacts).toBeGreaterThan(0);
+    expect(r.pairTies + r.groundTies).toBeLessThan(0.005 * (r.contacts + r.groundContacts));
+  });
+});

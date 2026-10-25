@@ -1,9 +1,11 @@
 // Page-side drivers for the GPU physics tests (bundled by loadBundle).
 import { createDevice, readBuffer } from '@tb/gpu';
-import { boundingRadius, spherePairs } from '@tb/geom';
+import { boundingRadius, boxBoxManifold, boxGroundManifold, obb, quatNormalize, sphereBoxManifold, sphereGroundManifold, spherePairs, sphereSphereManifold, supportArea, type Manifold as CpuManifold } from '@tb/geom';
+import { Body, Manifold, readStruct, Shape, writeStruct } from '@tb/schema';
+import type { BodyDesc, Quat, Vec3 } from '@tb/engine-api';
 import { buildScenario } from '@tb/scenarios';
 import { bodiesAt } from '@tb/engine-api';
-import { Broadphase } from '../src/index.ts';
+import { Broadphase, Narrowphase } from '../src/index.ts';
 
 export interface BroadCase {
   kind: 'scenario' | 'cloud' | 'pile';
@@ -85,4 +87,157 @@ export async function broadphase(c: BroadCase, repeat = 1) {
   bp.destroy();
   device.destroy();
   return res;
+}
+
+// ---------- narrowphase ----------
+
+/** Upload bodies as Body records plus a Shape table (one shape per body, for simplicity). */
+function uploadBodies(device: GPUDevice, bodies: BodyDesc[]) {
+  const n = Math.max(1, bodies.length);
+  const bv = new DataView(new ArrayBuffer(Body.size * n)), sv = new DataView(new ArrayBuffer(Shape.size * n));
+  bodies.forEach((b, i) => {
+    writeStruct(bv, Body, i, { pos: b.pos, rot: b.rot, invMass: 1, linVel: [0, 0, 0], angVel: [0, 0, 0], flags: 1, shape: i });
+    writeStruct(sv, Shape, i, b.shape.kind === 'box' ? { half: b.shape.half, kind: 0 } : { half: [b.shape.radius, 0, 0], kind: 1 });
+  });
+  const mk = (v: DataView) => {
+    const buf = device.createBuffer({ size: v.byteLength, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });
+    device.queue.writeBuffer(buf, 0, v.buffer);
+    return buf;
+  };
+  return { bodies: mk(bv), shapes: mk(sv) };
+}
+
+/** The reference manifold for pair (a, b), normal from a to b. */
+function cpuPair(a: BodyDesc, b: BodyDesc, margin: number, reduce = true): CpuManifold | null {
+  const sa = a.shape, sb = b.shape;
+  if (sa.kind === 'box' && sb.kind === 'box') return boxBoxManifold(obb(a.pos, a.rot, sa.half), obb(b.pos, b.rot, sb.half), margin, reduce);
+  if (sa.kind === 'sphere' && sb.kind === 'sphere') return sphereSphereManifold(a.pos, sa.radius, b.pos, sb.radius, margin);
+  if (sa.kind === 'sphere' && sb.kind === 'box') {
+    const m = sphereBoxManifold(a.pos, sa.radius, obb(b.pos, b.rot, sb.half), margin);
+    return m && { ...m, normal: [-m.normal[0], -m.normal[1], -m.normal[2]] };
+  }
+  return sphereBoxManifold(b.pos, (sb as { radius: number }).radius, obb(a.pos, a.rot, (sa as { half: Vec3 }).half), margin);
+}
+
+interface Gpu { count: number; normal: number[]; feature: number; points: number[][] }
+function decode(view: DataView, i: number): Gpu {
+  const r = readStruct(view, Manifold, i);
+  return { count: r.count![0]!, normal: r.normal!, feature: r.feature![0]!, points: [r.p0!, r.p1!, r.p2!, r.p3!].slice(0, r.count![0]!) };
+}
+
+/**
+ * A reduction tie, not an error: same count, normal and deepest depth as the
+ * reference, and every GPU point is one of the reference's unreduced
+ * candidates. f32 noise can then legitimately keep a different point among
+ * near-equal scores. The reduction scores spread exactly, so a true tie also
+ * keeps (within 1%) the reference's support area; anything less is a bug.
+ */
+function tieOnly(g: Gpu, c: CpuManifold | null, all: CpuManifold | null, tol: number): boolean {
+  if (!c || !all || g.count !== c.points.length) return false;
+  const dn = g.normal[0]! * c.normal[0] + g.normal[1]! * c.normal[1] + g.normal[2]! * c.normal[2];
+  if (dn < 1 - 5e-7) return false;
+  const deep = Math.max(...c.points.map((q) => q.depth)), gdeep = Math.max(...g.points.map((p) => p[3]!));
+  if (Math.abs(deep - gdeep) > tol) return false;
+  if (!g.points.every((p) => all.points.some((q) => Math.hypot(q.point[0] - p[0]!, q.point[1] - p[1]!, q.point[2] - p[2]!) < tol && Math.abs(q.depth - p[3]!) < tol))) return false;
+  // A tie must keep the support as well spread as the reference does.
+  return supportArea(g.points.map((p) => [p[0]!, p[1]!, p[2]!] as Vec3), c.normal) >= 0.99 * supportArea(c.points.map((q) => q.point), c.normal) - 1e-6;
+}
+
+/** Match GPU against CPU: same count, normal within 1e-3 rad, every point paired within tol. */
+function agrees(g: Gpu, c: CpuManifold | null, tol: number): boolean {
+  const cc = c ? c.points.length : 0;
+  if (g.count !== cc) return false;
+  if (!c || cc === 0) return true;
+  const dn = g.normal[0]! * c.normal[0] + g.normal[1]! * c.normal[1] + g.normal[2]! * c.normal[2];
+  if (dn < 1 - 5e-7) return false;
+  const left = [...c.points];
+  for (const p of g.points) {
+    const k = left.findIndex((q) => Math.hypot(q.point[0] - p[0]!, q.point[1] - p[1]!, q.point[2] - p[2]!) < tol && Math.abs(q.depth - p[3]!) < tol);
+    if (k < 0) return false;
+    left.splice(k, 1);
+  }
+  return true;
+}
+
+export interface NarrowCase { kind: 'random' | 'scenario'; pairs?: number; spheres?: number; scenario?: string; params?: Record<string, number>; margin: number; seed?: number }
+
+function randomPairs(c: NarrowCase): { bodies: BodyDesc[]; pairs: Array<[number, number]> } {
+  let s = (c.seed ?? 1) >>> 0;
+  const r = () => ((s = (Math.imul(s, 1664525) + 1013904223) >>> 0) / 2 ** 32);
+  const u = (lo: number, hi: number) => lo + (hi - lo) * r();
+  const quat = (): Quat => quatNormalize([u(-1, 1), u(-1, 1), u(-1, 1), u(0.05, 1)]);
+  const body = (pos: Vec3, sphere: boolean): BodyDesc => ({
+    shape: sphere ? { kind: 'sphere', radius: u(0.1, 1) } : { kind: 'box', half: [u(0.1, 1), u(0.1, 1), u(0.1, 1)] },
+    pos, rot: quat(), linVel: [0, 0, 0], angVel: [0, 0, 0], density: 1, friction: 0.5, restitution: 0, tag: 0,
+  });
+  const bodies: BodyDesc[] = [], pairs: Array<[number, number]> = [];
+  for (let k = 0; k < c.pairs!; k++) {
+    // Each side independently a sphere with probability `spheres`, so all
+    // four shape orders (box-box, box-sphere, sphere-box, sphere-sphere) occur.
+    bodies.push(body([u(-50, 50), u(0, 5), u(-50, 50)], r() < (c.spheres ?? 0)));
+    const a = bodies[bodies.length - 1]!.pos;
+    bodies.push(body([a[0] + u(-1.6, 1.6), a[1] + u(-1.6, 1.6), a[2] + u(-1.6, 1.6)], r() < (c.spheres ?? 0)));
+    pairs.push([2 * k, 2 * k + 1]);
+  }
+  return { bodies, pairs };
+}
+
+/**
+ * Run the narrowphase on explicit pairs (random) or on broadphase output
+ * (scenario) and compare every manifold with the double-precision oracle.
+ */
+export async function narrowphase(c: NarrowCase) {
+  const { device } = await createDevice();
+  let bodies: BodyDesc[];
+  let pairs: Array<[number, number]>;
+  if (c.kind === 'random') ({ bodies, pairs } = randomPairs(c));
+  else {
+    const scene = buildScenario(c.scenario!, c.params ?? {}, c.seed ?? 1);
+    bodies = bodiesAt(scene, Number.MAX_SAFE_INTEGER);
+    const centers = bodies.flatMap((b) => b.pos), radii = bodies.map((b) => boundingRadius(b.shape));
+    pairs = spherePairs(centers, radii, c.margin);
+  }
+  const n = bodies.length;
+  const { bodies: bb, shapes: sb } = uploadBodies(device, bodies);
+  const pb = device.createBuffer({ size: Math.max(8, pairs.length * 8), usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });
+  device.queue.writeBuffer(pb, 0, Uint32Array.from(pairs.flat()));
+  const tb = device.createBuffer({ size: 32, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.INDIRECT | GPUBufferUsage.COPY_DST });
+  device.queue.writeBuffer(tb, 0, Uint32Array.from([Math.ceil(pairs.length / 64), 1, 1, pairs.length, 0, pairs.length, 0, 0]));
+  const np = new Narrowphase(device, bb, sb, pb, tb, Math.max(1, n), Math.max(1, pairs.length));
+  device.pushErrorScope('validation');
+  const enc = device.createCommandEncoder();
+  const pass = enc.beginComputePass();
+  np.encode(pass, n, { margin: c.margin, ground: { y: 0 } });
+  pass.end();
+  device.queue.submit([enc.finish()]);
+  const error = await device.popErrorScope();
+  const mv = new DataView(await readBuffer(device, np.manifolds));
+  const gv = new DataView(await readBuffer(device, np.groundManifolds));
+  const tol = 2e-4 * (1 + 0); // f32 vs f64 on coordinates of magnitude <= 50
+  let pairMismatch = 0, pairTies = 0, contacts = 0, groundMismatch = 0, groundTies = 0, groundContacts = 0;
+  const examples: unknown[] = [];
+  pairs.forEach(([i, j], k) => {
+    const g = decode(mv, k), cpu = cpuPair(bodies[i]!, bodies[j]!, c.margin);
+    if (cpu) contacts++;
+    const t = tol * (1 + Math.abs(bodies[i]!.pos[0]) / 25);
+    if (!agrees(g, cpu, t)) {
+      if (tieOnly(g, cpu, cpuPair(bodies[i]!, bodies[j]!, c.margin, false), t)) { pairTies++; return; }
+      pairMismatch++;
+      if (examples.length < 3) examples.push({ k, gpu: g, cpu });
+    }
+  });
+  bodies.forEach((b, i) => {
+    const g = decode(gv, i);
+    const cpu = b.shape.kind === 'box' ? boxGroundManifold(obb(b.pos, b.rot, b.shape.half), 0, c.margin) : sphereGroundManifold(b.pos, b.shape.radius, 0, c.margin);
+    if (cpu) groundContacts++;
+    if (!agrees(g, cpu, tol * 4)) {
+      const all = b.shape.kind === 'box' ? boxGroundManifold(obb(b.pos, b.rot, b.shape.half), 0, c.margin, false) : cpu;
+      if (tieOnly(g, cpu, all, tol * 4)) { groundTies++; return; }
+      groundMismatch++;
+      if (examples.length < 6) examples.push({ ground: i, gpu: g, cpu, y: b.pos[1] });
+    }
+  });
+  np.destroy();
+  device.destroy();
+  return { error: error?.message ?? null, pairs: pairs.length, contacts, pairMismatch, pairTies, groundContacts, groundMismatch, groundTies, examples };
 }

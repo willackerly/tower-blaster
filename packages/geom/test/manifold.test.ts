@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import fc from 'fast-check';
 import type { Quat, Vec3 } from '@tb/engine-api';
 import {
-  boxBoxDepth, boxBoxManifold, boxGroundManifold, dot, length, obb, quatFromAxisAngle, quatMul, quatNormalize, reduceContacts, rotate,
+  boxBoxDepth, boxBoxManifold, boxGroundManifold, dot, length, obb, quatFromAxisAngle, quatMul, quatNormalize, reduceContacts, rotate, supportArea,
   sphereBoxManifold, sphereSphereManifold, sub, type Obb,
 } from '../src/index.ts';
 
@@ -96,6 +96,46 @@ describe('reduceContacts', () => {
     const r = reduceContacts(pts, [0, 1, 0]);
     expect(r).toHaveLength(4);
     expect(r[0]!.depth).toBe(0.3);
+  });
+  it('spreads the support when the first two picks lie on a hull edge', () => {
+    // Deepest (0,0) and farthest (4,0) span the bottom edge, so every other
+    // point is on one side. The best 4 keep the top edge's ends: area 3.
+    const at = (x: number, z: number, depth = 0.1) => ({ point: [x, 0, z] as Vec3, depth });
+    const pts = [at(0, 0, 0.3), at(1, 1), at(1.2, 1), at(4, 0), at(2.8, 1), at(3, 1)];
+    const r = reduceContacts(pts, [0, 1, 0]);
+    expect(supportArea(r.map((p) => p.point), [0, 1, 0])).toBeCloseTo(3, 12);
+  });
+  it('random convex polygons: the best support that keeps the deepest point', () => {
+    // Independent brute force using the monotone-chain hull.
+    let seed = 7;
+    const rnd = () => ((seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0) / 2 ** 32);
+    const N: Vec3 = [0, 1, 0];
+    for (let t = 0; t < 300; t++) {
+      const n = 5 + Math.floor(rnd() * 4), sx = 0.2 + rnd() * 2, sz = 0.2 + rnd();
+      const pts = Array.from({ length: n }, () => rnd() * 2 * Math.PI).sort((x, y) => x - y)
+        .map((g) => ({ point: [sx * Math.cos(g), 0, sz * Math.sin(g)] as Vec3, depth: rnd() }));
+      // Interior points too: the hull of 4 can be a triangle.
+      if (t % 3 === 0) pts.push({ point: [0, 0, 0], depth: rnd() }, { point: [0.1 * sx, 0, -0.1 * sz], depth: rnd() });
+      const d = pts.reduce((bi, p, i) => (p.depth > pts[bi]!.depth ? i : bi), 0);
+      let best = 0;
+      for (let i = 0; i < pts.length; i++) for (let j = i + 1; j < pts.length; j++) for (let k = j + 1; k < pts.length; k++)
+        if (i !== d && j !== d && k !== d) best = Math.max(best, supportArea([pts[d]!, pts[i]!, pts[j]!, pts[k]!].map((p) => p.point), N));
+      const r = reduceContacts(pts, N);
+      expect(r[0]).toBe(pts[d]);
+      expect(new Set(r).size).toBe(4);
+      expect(supportArea(r.map((p) => p.point), N)).toBeCloseTo(best, 12);
+    }
+  });
+});
+
+describe('supportArea', () => {
+  it('is the projected convex hull area, ignoring interior and duplicate points', () => {
+    const sq: Vec3[] = [[0, 0, 0], [1, 0, 0], [1, 0, 1], [0, 0, 1], [0.5, 0, 0.5], [1, 0, 1]];
+    expect(supportArea(sq, [0, 1, 0])).toBeCloseTo(1, 12);
+    // Tilted plane: the square rotated about x, measured about its own normal.
+    const c = Math.cos(0.7), s = Math.sin(0.7);
+    expect(supportArea(sq.map(([x, , z]) => [x, z * s, z * c] as Vec3), [0, c, -s])).toBeCloseTo(1, 12);
+    expect(supportArea([[0, 0, 0], [1, 0, 0], [2, 0, 0]], [0, 1, 0])).toBeCloseTo(0, 12);
   });
 });
 

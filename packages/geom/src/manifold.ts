@@ -7,7 +7,7 @@
 // (face contacts give stable 4-point manifolds); for a face axis clip the
 // incident face against the reference face's side planes; for an edge axis
 // take the closest points of the two supporting edges. At most 4 points are
-// kept (deepest first, then spread out) so a resting face gets its corners.
+// kept (the deepest, then the widest support) so a resting face gets its corners.
 //
 // Conventions: the normal points from shape A to shape B, depth > 0 means
 // overlap, and a speculative margin keeps contacts slightly apart (depth down
@@ -58,25 +58,60 @@ function clip(poly: Vec3[], n: Vec3, d: number): Vec3[] {
   return out;
 }
 
-/** Keep at most 4 points: the deepest, the farthest from it, then the two that most enlarge the area. */
+/**
+ * Twice the area of the convex hull of 4 points about the normal: the largest
+ * of the 3 quadrilateral orderings (shoelace = diagonal cross product) and
+ * the 4 triangles (the hull is a triangle when one point is inside).
+ */
+function hull4x2(p0: Vec3, p1: Vec3, p2: Vec3, p3: Vec3, n: Vec3): number {
+  const x = (u: Vec3, v: Vec3) => Math.abs(dot(cross(u, v), n));
+  return Math.max(
+    x(sub(p2, p0), sub(p3, p1)), x(sub(p3, p0), sub(p2, p1)), x(sub(p1, p0), sub(p3, p2)),
+    x(sub(p1, p0), sub(p2, p0)), x(sub(p1, p0), sub(p3, p0)), x(sub(p2, p0), sub(p3, p0)), x(sub(p2, p1), sub(p3, p1)),
+  );
+}
+
+/**
+ * Keep at most 4 points: the deepest, plus the 3 others that maximize the
+ * support area (exhaustive: at most 7 choose 3 = 35 triples, first index
+ * wins ties). The usual greedy rule (farthest from the deepest, largest
+ * triangle, largest growth) is about 1% worse on average and up to 30% on
+ * some polygons, and its intermediate ties change the final quality, so f32
+ * and f64 could legitimately disagree on how well a face is supported.
+ */
 export function reduceContacts(points: ContactPoint[], normal: Vec3): ContactPoint[] {
   if (points.length <= 4) return points;
-  const pick: ContactPoint[] = [];
-  const rest = [...points];
-  const take = (score: (p: ContactPoint) => number) => {
-    let bi = 0;
-    for (let i = 1; i < rest.length; i++) if (score(rest[i]!) > score(rest[bi]!)) bi = i;
-    pick.push(rest.splice(bi, 1)[0]!);
+  let d = 0;
+  for (let i = 1; i < points.length; i++) if (points[i]!.depth > points[d]!.depth) d = i;
+  const a = points[d]!.point, rest = points.filter((_, i) => i !== d);
+  let best = -1, pick: [number, number, number] = [0, 1, 2];
+  for (let i = 0; i < rest.length; i++) for (let j = i + 1; j < rest.length; j++) for (let k = j + 1; k < rest.length; k++) {
+    const s = hull4x2(a, rest[i]!.point, rest[j]!.point, rest[k]!.point, normal);
+    if (s > best) { best = s; pick = [i, j, k]; }
+  }
+  return [points[d]!, ...pick.map((i) => rest[i]!)];
+}
+
+/** Area of the convex hull of points projected on the plane with normal n (monotone chain). */
+export function supportArea(points: Vec3[], n: Vec3): number {
+  if (points.length < 3) return 0;
+  const t: Vec3 = Math.abs(n[0]) < 0.9 ? [1, 0, 0] : [0, 1, 0];
+  const w = cross(n, t), u = scale(w, 1 / length(w)), v0 = cross(n, u), v = scale(v0, 1 / length(v0));
+  const xy = points.map((p) => [dot(p, u), dot(p, v)] as [number, number]).sort((p, q) => p[0] - q[0] || p[1] - q[1]);
+  const turn = (o: number[], p: number[], q: number[]) => (p[0]! - o[0]!) * (q[1]! - o[1]!) - (p[1]! - o[1]!) * (q[0]! - o[0]!);
+  const half = (pts: Array<[number, number]>) => {
+    const h: Array<[number, number]> = [];
+    for (const p of pts) {
+      while (h.length >= 2 && turn(h[h.length - 2]!, h[h.length - 1]!, p) <= 0) h.pop();
+      h.push(p);
+    }
+    h.pop();
+    return h;
   };
-  take((p) => p.depth);
-  const a = pick[0]!.point;
-  take((p) => dot(sub(p.point, a), sub(p.point, a)));
-  const b = pick[1]!.point;
-  // Signed area of triangle (a, b, p) about the normal: one point each side.
-  const area = (p: ContactPoint) => dot(cross(sub(b, a), sub(p.point, a)), normal);
-  take(area);
-  take((p) => -area(p));
-  return pick;
+  const hull = [...half(xy), ...half([...xy].reverse())];
+  let area = 0;
+  for (let i = 0; i < hull.length; i++) { const p = hull[i]!, q = hull[(i + 1) % hull.length]!; area += p[0] * q[1] - p[1] * q[0]; }
+  return Math.abs(area) / 2;
 }
 
 /** Closest points between segments p1q1 and p2q2 (Ericson, Real-Time Collision Detection 5.1.9). */
@@ -99,7 +134,8 @@ function supportEdge(b: Obb, k: number, n: Vec3): [Vec3, Vec3] {
   return [sub(c, e), add(c, e)];
 }
 
-export function boxBoxManifold(a: Obb, b: Obb, margin = 0): Manifold | null {
+/** reduce = false returns every clipped point (tests use it to tell reduction ties from errors). */
+export function boxBoxManifold(a: Obb, b: Obb, margin = 0, reduce = true): Manifold | null {
   const d = sub(b.c, a.c);
   let faceBest = -Infinity, faceAxis: Vec3 = [0, 1, 0], faceOwner: 'faceA' | 'faceB' = 'faceA', faceK = 0;
   // Separation along each axis (negative = overlap); maximize it.
@@ -150,7 +186,7 @@ export function boxBoxManifold(a: Obb, b: Obb, margin = 0): Manifold | null {
   }
   if (!pts.length) return null;
   const normal = faceOwner === 'faceA' ? nRef : scale(nRef, -1);
-  return { normal, feature: faceOwner, points: reduceContacts(pts, normal) };
+  return { normal, feature: faceOwner, points: reduce ? reduceContacts(pts, normal) : pts };
 }
 
 /** Sphere (centre c, radius r) against box: normal from box to sphere. */
@@ -182,7 +218,7 @@ export function sphereSphereManifold(c1: Vec3, r1: number, c2: Vec3, r2: number,
 }
 
 /** Box against the ground plane y = groundY: normal +y (from ground to box), up to 4 corners. */
-export function boxGroundManifold(b: Obb, groundY: number, margin = 0): Manifold | null {
+export function boxGroundManifold(b: Obb, groundY: number, margin = 0, reduce = true): Manifold | null {
   const pts: ContactPoint[] = [];
   for (const sx of [-1, 1]) for (const sy of [-1, 1]) for (const sz of [-1, 1]) {
     const p = add(add(add(b.c, scale(b.axes[0], sx * b.half[0])), scale(b.axes[1], sy * b.half[1])), scale(b.axes[2], sz * b.half[2]));
@@ -190,5 +226,12 @@ export function boxGroundManifold(b: Obb, groundY: number, margin = 0): Manifold
     if (s <= margin) pts.push({ point: [p[0], p[1] - s / 2, p[2]], depth: -s });
   }
   if (!pts.length) return null;
-  return { normal: [0, 1, 0], feature: 'faceA', points: reduceContacts(pts, [0, 1, 0]) };
+  return { normal: [0, 1, 0], feature: 'faceA', points: reduce ? reduceContacts(pts, [0, 1, 0]) : pts };
+}
+
+/** Sphere against the ground plane: normal +y, one point midway between the sphere's bottom and the plane. */
+export function sphereGroundManifold(c: Vec3, r: number, groundY: number, margin = 0): Manifold | null {
+  const s = c[1] - r - groundY;
+  if (s > margin) return null;
+  return { normal: [0, 1, 0], feature: 'faceA', points: [{ point: [c[0], c[1] - r - s / 2, c[2]], depth: -s }] };
 }
