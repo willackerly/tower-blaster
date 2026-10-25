@@ -26,9 +26,9 @@ export function rayThrough(o: Orbit, aspect: number, ndcX: number, ndcY: number)
 
 /** Frame an axis-aligned box: look at its centre from a 3/4 view. */
 export function frame(min: V3, max: V3, fovY = (50 * Math.PI) / 180): Orbit {
-  const target: V3 = [(min[0] + max[0]) / 2, (max[1] - min[1]) * 0.35 + min[1], (min[2] + max[2]) / 2];
+  const target: V3 = [(min[0] + max[0]) / 2, (max[1] - min[1]) * 0.45 + min[1], (min[2] + max[2]) / 2];
   const radius = Math.hypot(max[0] - min[0], max[1] - min[1], max[2] - min[2]) / 2;
-  return { target, yaw: Math.PI / 5, pitch: 0.38, distance: Math.max(6, (radius / Math.sin(fovY / 2)) * 0.95), fovY };
+  return { target, yaw: Math.PI / 5, pitch: 0.38, distance: Math.max(8, (radius / Math.sin(fovY / 2)) * 1.35), fovY };
 }
 
 export function clampPitch(p: number): number {

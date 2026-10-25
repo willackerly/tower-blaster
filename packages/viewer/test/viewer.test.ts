@@ -113,11 +113,11 @@ describe('stepsDue', () => {
 
 describe('viewer config', () => {
   it('defaults to a 2k city', () => {
-    expect(parseViewerConfig('')).toMatchObject({ scenario: 'S4', params: { N: 2000 }, engine: 'rapier', sleep: null });
+    expect(parseViewerConfig('')).toMatchObject({ scenario: 'S4', params: { N: 2000, F: 4, H: 12 }, engine: 'rapier', sleep: null });
   });
   it('round-trips through the URL', () => {
-    const c = parseViewerConfig('?scenario=s1&param.F=3&param.gap=0.02&sleep=0&autofire=30&seed=4');
-    expect(c).toMatchObject({ scenario: 'S1', params: { F: 3, gap: 0.02 }, sleep: false, autofire: 30, seed: 4 });
+    const c = parseViewerConfig('?scenario=s1&param.F=3&param.gap=0.02&sleep=0&autofire=30&seed=4&offscreen=1');
+    expect(c).toMatchObject({ scenario: 'S1', params: { F: 3, gap: 0.02 }, sleep: false, autofire: 30, seed: 4, offscreen: true });
     expect(parseViewerConfig(toSearch(c))).toEqual(c);
   });
   it('rejects unknown scenarios and non-numeric params', () => {
