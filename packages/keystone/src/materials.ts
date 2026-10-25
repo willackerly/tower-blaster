@@ -16,13 +16,16 @@ export interface Material { name: string; density: number; friction: number; res
 // steel marble barely shoves a loaded cube and a cannonball moves a whole row
 // about 10 cm before friction stops it (measured on Rapier), so nothing is fun.
 // Ratios between structure materials are kept; ammo stays solid steel/iron.
+// Levels combine friction by 'min' (see compileLevel). Steel is 0.55, not a
+// handbook 0.5, so steel on plaster is the 0.55 the old average gave and
+// every par line recorded before the switch replays unchanged.
 export const MATERIALS = [
   { name: 'plaster', density: 250, friction: 0.6, restitution: 0.05 },
   { name: 'stone', density: 625, friction: 0.7, restitution: 0.02 },
   { name: 'iron', density: 1950, friction: 0.5, restitution: 0 },
   { name: 'ice', density: 225, friction: 0.05, restitution: 0.05 },
   { name: 'rubber', density: 275, friction: 0.9, restitution: 0.6 },
-  { name: 'steel', density: 7800, friction: 0.5, restitution: 0.1 },
+  { name: 'steel', density: 7800, friction: 0.55, restitution: 0.1 },
 ] as const satisfies readonly Material[];
 
 export type MaterialName = (typeof MATERIALS)[number]['name'];

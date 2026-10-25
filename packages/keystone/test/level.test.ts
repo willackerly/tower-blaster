@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { TAG_BALL } from '@tb/engine-api';
+import { combineFriction, TAG_BALL } from '@tb/engine-api';
 import { compileLevel, decodeTag, encodeTag, type LevelDef, LEVELS, MATERIALS, ROLES, validateLevel } from '@tb/keystone';
 
 const tiny = (parts: LevelDef['parts'], extra: Partial<LevelDef> = {}): LevelDef => ({
@@ -13,6 +13,13 @@ describe('materials and tags', () => {
     const c = compileLevel(tiny([{ kind: 'block', at: [0, 0, 0], size: [1, 1, 1], material: 'plaster' }]));
     expect(c.meta.mass[0]).toBe(0.125 * MATERIALS[0].density);
     expect(c.meta.mass[0]).toBe(31.25);
+  });
+  it("under 'min', ammo grips plaster and the ground as it did under the old average, and ice slips", () => {
+    const f = (name: string) => MATERIALS.find((m) => m.name === name)!.friction;
+    const ground = compileLevel(LEVELS[0]!).scene.ground!.friction;
+    expect(combineFriction('min', f('steel'), f('plaster'))).toBe(combineFriction('average', 0.5, f('plaster')));
+    expect(combineFriction('min', f('steel'), ground)).toBe(0.55);
+    expect(combineFriction('min', f('ice'), f('plaster'))).toBe(f('ice'));
   });
   it('tags round-trip for every role and part, and ammo uses TAG_BALL', () => {
     for (const role of ROLES) for (const part of [0, 1, 17, 4095]) expect(decodeTag(encodeTag(role, part))).toEqual({ role, part });

@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { RapierEngine } from '@tb/adapter-rapier';
 import { emptySnapshot, type Snapshot, type Vec3 } from '@tb/engine-api';
 import { quatFromAxisAngle } from '@tb/geom';
 import { closestApproach, compileLevel, GRAVITY, L1, L4, launcherPos, predictArc, shotToSpawn } from '@tb/keystone';
@@ -98,5 +99,12 @@ describe('shots from a picked point', () => {
   });
   it('has no cue aiming yet', () => {
     expect(shotFor(c, 'cue', 0, 50, [0, 1, 0])).toBeNull();
+  });
+});
+
+describe('SUBSTEPS', () => {
+  // The arc preview must integrate as the engine does (EngineInfo.integrator).
+  it('matches the substeps Rapier reports', () => {
+    expect(new RapierEngine().info.integrator?.substeps).toBe(SUBSTEPS);
   });
 });

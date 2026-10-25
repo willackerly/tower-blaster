@@ -73,7 +73,7 @@
           false
         ]
       ],
-      "ms": 1197.291505
+      "ms": 1131.181948
     },
     {
       "id": "B2",
@@ -131,7 +131,7 @@
           true
         ]
       ],
-      "ms": 1796.2740410000001
+      "ms": 1832.5827840000002
     },
     {
       "id": "B3",
@@ -189,13 +189,13 @@
           true
         ]
       ],
-      "ms": 1178.9155799999999
+      "ms": 1240.527102
     },
     {
       "id": "B4",
       "title": "Lintel tip: fell one column and the lintel sheds its load",
       "nominal": true,
-      "successRate": 0.6857142857142857,
+      "successRate": 0.9142857142857143,
       "grid": [
         [
           true,
@@ -212,11 +212,25 @@
           true
         ],
         [
+          true,
+          true,
+          true,
+          true,
+          true
+        ],
+        [
+          false,
           false,
           true,
+          true,
+          true
+        ],
+        [
+          true,
           false,
-          false,
-          false
+          true,
+          true,
+          true
         ],
         [
           true,
@@ -226,28 +240,14 @@
           true
         ],
         [
-          false,
+          true,
           true,
           true,
           true,
           true
-        ],
-        [
-          true,
-          true,
-          false,
-          false,
-          false
-        ],
-        [
-          true,
-          true,
-          false,
-          false,
-          false
         ]
       ],
-      "ms": 7626.413528000001
+      "ms": 7881.910898000001
     },
     {
       "id": "B5",
@@ -305,7 +305,7 @@
           true
         ]
       ],
-      "ms": 1721.6647830000002
+      "ms": 1768.3992529999996
     },
     {
       "id": "B6",
@@ -363,7 +363,7 @@
           true
         ]
       ],
-      "ms": 2539.3397540000005
+      "ms": 3087.3272700000016
     }
   ]
 }
