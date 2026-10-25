@@ -148,6 +148,11 @@ struck tower stayed awake. That is what the slide rules fix.
   supporter stays within tolerance would change the support invariant, so
   it needs measuring first.
 - Small-tower overshoot: in 2 of 4 shots, about 30% more broken cubes than
-  the reference.
+  the reference. It comes from the W2 gate. With the gate off and the W3
+  slide and unwedge on, the same 4 shots break 173 to 191, against the
+  reference's 180 to 184. But the gate is what keeps a bounce-off from
+  waking the whole big tower. The likely gap is secondary hits: debris at a
+  few m/s into a packed line moves the far end of the line (Newton's
+  cradle), while the plug model moves the line as one block.
 - The debris particle tier: at the S5 peak there were no free-flying
   bodies, so it is deferred until the M5 numbers show a need.
