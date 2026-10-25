@@ -112,6 +112,24 @@ Rapier's 0.829 ms median (−99.6%), 100k idle 0.0066 ms. S5 10k p99 12.0 ms
 against 61.9 ms, but the median was 8.4 ms against 5.7 ms because the
 struck tower stayed awake. That is what the slide rules fix.
 
+M5 Max at 5cd751a (slides and unwedge), 900 steps, step ms median / p99:
+
+| Scene | All-dynamic Rapier | Tiered | Broken cubes, ref / tiered |
+|---|---|---|---|
+| S5 10k, sleep on | 7.95 / 67.4 | 0.120 / 1.25 | 50 / 100 |
+| S5 10k, sleep off | 37.7 / 56.3 | 0.117 / 1.39 | 30 / 100 |
+| S5 one tower (N=1600), 4 shots | 3.66 / 9.10 | 0.118 / 0.95 | 24 ± 4 / 14 ± 24 |
+| S5 small (N=1024), 4 shots | 1.79 / 4.60 | 2.44 / 5.45 | 184 ± 4 / 249 ± 10 |
+
+The bounce-off scenes wake no impact plug (the gate holds), only 4
+cells by W3 and their 66-cell columns. Those columns either stay put (0
+broken, 3 of the 4 one-tower shots) or slump (55 broken in the fourth,
+100 in the 10k shot). The reference dents the
+face instead: about 24 cubes, but different ones on every shot (broken
+jaccard between reference shots 0.07). A small tower that collapses
+costs the tiers 36% more than Rapier at the median: everything is awake
+and the rules run on top.
+
 ## Alternatives tried
 
 - **Separate static boxes per dormant cell:** seams catch sliding cubes. A
@@ -127,6 +145,13 @@ struck tower stayed awake. That is what the slide rules fix.
   measured case. Speed-quiet missed creep. Backoff stalled 220-body chains.
   97% of one-step force thaws were false.
 - **Whole-line W3 wakes:** see the results table. They left wedged slabs.
+- **Graded impact plugs (a dent instead of nothing):** on the one-tower
+  bounce-off, 4 shots at 1% steps, 900 steps, sleep off. Waking the
+  deepest prefix of the plug that would slide broke 110 to 189 cubes, woke
+  up to 1,076 and cost 208k to 335k active body-steps. Waking only the
+  front layer broke 62 to 184, woke up to 401 and cost 22k to 90k. The
+  reference breaks 8 to 29, and the all-or-nothing gate 0 to 97 (median 0)
+  at 6k to 33k. The woken columns over a dent slump into it.
 - **Wake everything a hit could affect (the old W2/W3):** faithful, but the
   cost scales with the tower, not with the damage.
 
@@ -163,6 +188,10 @@ struck tower stayed awake. That is what the slide rules fix.
   columns above a dent that barely moves. Leaving them dormant while their
   supporter stays within tolerance would change the support invariant, so
   it needs measuring first.
+- Bounce-offs leave no dent: a plug too heavy to slide wakes nothing,
+  where the reference breaks about 24 cubes at the face (see Alternatives:
+  graded plugs overshoot). The reference's dent comes from contact
+  compliance, which rigid woken cubes in a dormant well do not have.
 - Small-tower overshoot: in 2 of 4 shots, about 30% more broken cubes than
   the reference. It comes from the W2 gate. With the gate off and the W3
   slide and unwedge on, the same 4 shots break 173 to 191, against the

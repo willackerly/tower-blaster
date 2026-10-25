@@ -11,8 +11,12 @@ const REGISTRY: Record<string, (o: Options) => PhysicsEngine> = {
   rapier: (o) => new RapierEngine(o.iterations !== undefined ? { iterations: Number(o.iterations) } : {}),
   // Options are AvbdParams fields, e.g. avbd-ref:iterations=4,sweep=false.
   'avbd-ref': (o) => new AvbdReferenceEngine(o),
-  // Same AvbdParams; needs WebGPU, so it runs in the browser runner, not the Node CLI.
-  'avbd-gpu': (o) => new GpuAvbdEngine(o),
+  // Same AvbdParams, plus spare (GpuEngineOptions: room for pushed bodies); needs WebGPU,
+  // so it runs in the browser runner, not the Node CLI.
+  'avbd-gpu': (o) => {
+    const { spare, ...params } = o;
+    return new GpuAvbdEngine(params, spare !== undefined ? { spare: Number(spare) } : {});
+  },
   // Dormant lattice tier over a Rapier host; other options are TierParams (e.g. tiered:vWake=0.5).
   tiered: (o) => {
     const { iterations, ...tier } = o;

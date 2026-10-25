@@ -1,5 +1,6 @@
 // Viewer configuration from the URL, e.g.
-// ?scenario=S4&param.N=3000&engine=rapier&sleep=1
+// ?scenario=S4&param.N=3000&engine=rapier&sleep=1 (engine: a @tb/bench spec; the default is the GPU engine)
+import { parseSpec } from '@tb/bench';
 import { SCENARIOS } from '@tb/scenarios';
 
 export interface ViewerConfig {
@@ -16,7 +17,7 @@ export interface ViewerConfig {
   look: string;
 }
 
-export const DEFAULT_CONFIG: ViewerConfig = { engine: 'rapier', scenario: 'S4', params: { N: 2000, F: 4, H: 12 }, seed: 1, sleep: null, autofire: 0, offscreen: false, look: 'candy' };
+export const DEFAULT_CONFIG: ViewerConfig = { engine: 'avbd-gpu', scenario: 'S4', params: { N: 2000, F: 4, H: 12 }, seed: 1, sleep: null, autofire: 0, offscreen: false, look: 'candy' };
 
 export function parseViewerConfig(search: string): ViewerConfig {
   const q = new URLSearchParams(search);
@@ -51,4 +52,24 @@ export function toSearch(c: ViewerConfig): string {
   if (c.offscreen) q.set('offscreen', '1');
   if (c.look !== DEFAULT_CONFIG.look) q.set('look', c.look);
   return `?${q}`;
+}
+
+/** Bodies fired balls may add on the GPU engine, whose buffers are sized at init. */
+export const GPU_SPARE = 256;
+
+/** The engine spec to build: the GPU engine gets room for GPU_SPARE fired balls unless the spec sets spare. */
+export function engineSpec(spec: string): string {
+  const { name, options } = parseSpec(spec);
+  if (name !== 'avbd-gpu' || options.spare !== undefined) return spec;
+  return withOption(spec, 'spare', GPU_SPARE);
+}
+
+/** spec with one option set, or removed when value is undefined; the other options keep their order. */
+export function withOption(spec: string, key: string, value: number | boolean | undefined): string {
+  const { name, options } = parseSpec(spec);
+  const o = { ...options };
+  if (value === undefined) delete o[key];
+  else o[key] = value;
+  const kv = Object.entries(o).map(([k, v]) => `${k}=${v}`);
+  return kv.length ? `${name}:${kv.join(',')}` : name;
 }

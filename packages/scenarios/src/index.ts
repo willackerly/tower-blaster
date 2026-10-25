@@ -1,4 +1,4 @@
-// Canonical benchmark scenes S1-S11. Each is a pure function of
+// Canonical benchmark scenes S1-S13. Each is a pure function of
 // (params, seed) so any engine, on any machine, starts from identical state.
 import { type BodyDesc, type Quat, type SceneDesc, type Vec3, TAG_BALL, TAG_DEBRIS, volumeOf } from '@tb/engine-api';
 import { quatNormalize, QUAT_IDENTITY } from '@tb/geom';
@@ -227,8 +227,47 @@ const S11: ScenarioDef = {
   build: (p, seed) => scene('S11', p, seed, looseCubes(int(p, 'N'), seed, 1.9, 1.5)),
 };
 
+const S12: ScenarioDef = {
+  id: 'S12', title: 'Wall with a hole', catches: 'friction holding cubes up over a hole with no side force (stack bond)',
+  defaults: { W: 20, H: 14, holeW: 3, holeH: 5, holeY: 3, running: false },
+  build(p, seed) {
+    const W = int(p, 'W'), H = int(p, 'H'), hw = int(p, 'holeW'), hh = int(p, 'holeH'), hy = int(p, 'holeY', 0);
+    if (hw > W || hy + hh > H) throw new Error('S12: the hole must fit inside the wall');
+    // The hole spans columns x0 .. x0 + hw - 1 (of the unshifted rows), centred, and rows hy .. hy + hh - 1.
+    // running: odd rows shift by half a cube (running bond). Each course over the hole then overhangs
+    // by exactly half, a knife edge for what stays up, so only stack bond is a test.
+    const x0 = Math.floor((W - hw) / 2);
+    const out: BodyDesc[] = [];
+    for (let y = 0; y < H; y++) {
+      const shift = p.running && y % 2 === 1 ? 0.5 : 0;
+      for (let x = 0; x < W; x++) {
+        if (y >= hy && y < hy + hh && x >= x0 && x < x0 + hw) continue;
+        out.push(cube([x - (W - 1) / 2 + shift, 0.5 + y, 0], 0));
+      }
+    }
+    return scene('S12', p, seed, out);
+  },
+};
+
+const S13: ScenarioDef = {
+  id: 'S13', title: 'Leaning column', catches: 'toppling too slowly, or leaning past the tipping angle without falling',
+  defaults: { H: 20, deg: 4 },
+  build(p, seed) {
+    const H = int(p, 'H'), th = (num(p, 'deg') * Math.PI) / 180;
+    // A column of H cubes turned rigidly by deg about its base edge (x = 0.5, y = 0), leaning towards +x.
+    // Each cube sits 1e-6 m above the one below, so none overlap after rounding.
+    const rot: Quat = [0, 0, -Math.sin(th / 2), Math.cos(th / 2)]; // not quatFromAxisAngle: its 0 * -s is -0, which JSON turns into 0
+    const out: BodyDesc[] = [];
+    for (let k = 0; k < H; k++) {
+      const x = -0.5, y = 0.5 + k;
+      out.push(cube([0.5 + x * Math.cos(th) + y * Math.sin(th), -x * Math.sin(th) + y * Math.cos(th) + 1e-6 * (k + 1), 0], 0, rot));
+    }
+    return scene('S13', p, seed, out);
+  },
+};
+
 export const SCENARIOS: Record<string, ScenarioDef> = Object.fromEntries(
-  [S1, S2, S3, S4, S5, S6, S7, S8, S9, S10, S11].map((s) => [s.id, s]),
+  [S1, S2, S3, S4, S5, S6, S7, S8, S9, S10, S11, S12, S13].map((s) => [s.id, s]),
 );
 
 export function buildScenario(id: string, overrides: Params = {}, seed = 1): SceneDesc {

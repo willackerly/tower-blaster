@@ -180,6 +180,8 @@ describe('engine registry and SlowedEngine', () => {
     expect(makeEngine('avbd-ref:iterations=4,sweep=false').info.variant).toMatchObject({ iterations: 4, sweep: false });
     // Constructing needs no device (init() gets one), so the registry works in Node.
     expect(makeEngine('avbd-gpu:iterations=6').info).toMatchObject({ name: 'avbd-gpu', backend: 'webgpu', variant: { iterations: 6 } });
+    // spare is a GpuEngineOptions field (room for pushed bodies), not a solver parameter.
+    expect(makeEngine('avbd-gpu:iterations=6,spare=8').info.variant).toEqual(makeEngine('avbd-gpu:iterations=6').info.variant);
   });
 
   it('slows each step by the requested fraction', async () => {

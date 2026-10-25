@@ -217,9 +217,14 @@ fn setup(m: Manifold, a: u32, b: u32, mu: f32, dst: u32, old: u32, hasOld: bool)
         ct.lt = vec2f(dot(f, t1), dot(f, t2));
         ct.kN = clamp(oc.kN * p.gamma, p.penaltyMin, p.penaltyMax);
         ct.kT = clamp(oc.kT * p.gamma, p.penaltyMin, p.penaltyMax);
-        // Static friction held at the end of last step: keep its anchors.
-        let held = length(oc.lt) < oc.mu * abs(oc.lambdaN) && length(oc.c0.yz) < p.stickThreshold;
-        if (held) { ct.stick = 1u; ra = oc.ra; rb = oc.rb; }
+        // Static friction held at the end of last step: keep its anchors, unless they
+        // have drifted apart along the surface by stickThreshold since.
+        if (oc.inCone != 0u) {
+          var opa = oc.ra;
+          if (a != NONE) { opa = bodies[a].pos + qrot(bodies[a].rot, oc.ra); }
+          let od = B.pos + qrot(B.rot, oc.rb) - opa;
+          if (length(vec2f(dot(od, t1), dot(od, t2))) < p.stickThreshold) { ct.stick = 1u; ra = oc.ra; rb = oc.rb; }
+        }
       }
     }
     var raw = vec3f(0.0);
@@ -332,21 +337,15 @@ fn accumulate(ct: SolverContact, i: u32) {
   let bound = ct.mu * abs(ct.lambdaN);
   let z = ct.kT * C.yz + ct.lt;
   let fl = length(z);
-  var ft = z;
-  if (fl > bound) { ft = select(vec2f(0.0), z * (bound / fl), fl > 0.0); }
-  let F = array<f32, 3>(fn0, ft.x, ft.y);
-  // Row stiffness K: k_n on the normal; on the tangents k_t while sticking,
-  // else the derivative of the cone projection (none along the slide).
-  var K = array<f32, 9>(ct.kN, 0.0, 0.0, 0.0, ct.kT, 0.0, 0.0, 0.0, ct.kT);
-  if (fl > bound && p.slidingHessian != 0u) {
-    K[4] = 0.0; K[8] = 0.0;
-    if (fl > 0.0) {
-      let s = ct.kT * bound / fl;
-      let zx = z.x / fl;
-      let zy = z.y / fl;
-      K[4] = s * (1.0 - zx * zx); K[5] = -s * zx * zy; K[7] = K[5]; K[8] = s * (1.0 - zy * zy);
-    }
-  }
+  // The clamp's scale: F_t = s z, s = min(1, bound / |z|).
+  var s = 1.0;
+  if (fl > bound) { s = select(0.0, bound / fl, fl > 0.0); }
+  let F = array<f32, 3>(fn0, s * z.x, s * z.y);
+  // Row stiffness K: k_n on the normal, k_t s on both tangents. Sliding, that
+  // is the secant of the clamp (the half-quadratic upper bound of the friction
+  // energy), continuous across the cone boundary; see the reference's step().
+  let kt = select(ct.kT, ct.kT * s, p.slidingHessian != 0u);
+  let K = array<f32, 9>(ct.kN, 0.0, 0.0, 0.0, kt, 0.0, 0.0, 0.0, kt);
   let J = array<array<f32, 6>, 3>(jrow(ct, 0u, onB), jrow(ct, 1u, onB), jrow(ct, 2u, onB));
   for (var r = 0u; r < 3u; r++) {
     for (var u = 0u; u < 6u; u++) { rhs[u] += J[r][u] * F[r]; }
@@ -451,6 +450,8 @@ fn dualPoint(idx: u32) {
   if (ct.lambdaN < 0.0) { ct.kN = min(ct.kN + p.beta * abs(C.x), p.penaltyMax); }
   let z = ct.kT * C.yz + ct.lt;
   let fl = length(z);
+  // Static friction held if the trial force is inside the cone; the last main iteration's answer stands.
+  ct.inCone = select(0u, 1u, fl < bound);
   if (fl < bound) {
     ct.lt = z;
     ct.kT = min(ct.kT + p.beta * length(C.yz), p.penaltyMax);
