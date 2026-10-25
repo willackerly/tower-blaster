@@ -41,6 +41,8 @@ export interface SceneDesc {
   ground: { y: number; friction: number } | null;
   /** Whether engines may put bodies to sleep. */
   sleep: boolean;
+  /** How the friction of two touching surfaces combines (ground included). Default 'average', as Rapier. */
+  frictionCombine?: CombineRule;
   bodies: BodyDesc[];
   /** Sorted by step. Spawned bodies get indices after `bodies`, in event order. */
   inputs: InputEvent[];
@@ -62,6 +64,37 @@ export interface EngineInfo {
   variant: Record<string, string | number | boolean>;
   /** Where it runs, e.g. "wasm-cpu" or "webgpu:apple/m5". */
   backend: string;
+  /**
+   * How a body in free flight moves: each step is `substeps` semi-implicit
+   * Euler steps of dt / substeps (see freeFlight), so a game can predict an
+   * arc exactly. Every engine here sets it; absent means unknown.
+   */
+  integrator?: { substeps: number };
+}
+
+/** Rapier's names for combining two coefficients. */
+export type CombineRule = 'average' | 'min' | 'max' | 'multiply';
+
+export function combineFriction(rule: CombineRule, a: number, b: number): number {
+  switch (rule) {
+    case 'average': return (a + b) / 2;
+    case 'min': return Math.min(a, b);
+    case 'max': return Math.max(a, b);
+    case 'multiply': return a * b;
+  }
+}
+
+/**
+ * Position and velocity after `steps` steps of free flight under gravity, as
+ * an engine with `integrator.substeps` moves a body: semi-implicit Euler
+ * (velocity first, then position) with dt / substeps.
+ */
+export function freeFlight(pos: Vec3, vel: Vec3, gravity: Vec3, dt: number, substeps: number, steps: number): { pos: Vec3; vel: Vec3 } {
+  const p: Vec3 = [...pos], v: Vec3 = [...vel], h = dt / substeps;
+  for (let s = 0; s < steps * substeps; s++) {
+    for (let k = 0; k < 3; k++) { v[k]! += h * gravity[k]!; p[k]! += h * v[k]!; }
+  }
+  return { pos: p, vel: v };
 }
 
 export interface StepReport {
@@ -85,6 +118,13 @@ export interface PhysicsEngine {
   readonly stepIndex: number;
   /** Full state copy. Never called inside a timed region. */
   snapshot(): Snapshot | Promise<Snapshot>;
+  /**
+   * Resolves once every step submitted so far has finished executing. Engines
+   * whose step() returns only after the work is done (CPU engines) leave it out;
+   * GPU engines, whose step() only submits, must provide it, or timing sees
+   * only the submission.
+   */
+  finish?(): Promise<void>;
   /**
    * GPU engines only: the live state buffers, so a renderer on the same
    * device draws them with no CPU copy. Read-only for the caller.

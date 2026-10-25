@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { type BodyDesc, bodiesAt, type InputEvent, type SceneDesc, type Vec3 } from '@tb/engine-api';
+import { type BodyDesc, bodiesAt, type CombineRule, freeFlight, type InputEvent, type SceneDesc, type Vec3 } from '@tb/engine-api';
 import { drift, energy, jitter, nonFinite, penetration, survival } from '@tb/metrics';
 import { buildScenario } from '@tb/scenarios';
+import { appliedMu, slideMu, slideScene, THROW, throwScene } from '@tb/testkit';
 import { AvbdReferenceEngine, type AvbdParams, colorGraph, outranks, solveSpd6, tangentBasis } from '../src/index.ts';
 
 const cube = (pos: Vec3, linVel: Vec3 = [0, 0, 0]): BodyDesc => ({
@@ -291,6 +292,39 @@ describe('stacks and towers', () => {
     const a = await simulate(scene, 60), b = await simulate(scene, 60);
     expect([...a.s1.pos]).toEqual([...b.s1.pos]);
     expect([...a.s1.rot]).toEqual([...b.s1.rot]);
+  });
+});
+
+describe('engine contract: friction rule and integrator', () => {
+  const mu = async (rule: CombineRule | undefined) => {
+    const e = new AvbdReferenceEngine();
+    await e.init(slideScene(rule));
+    e.step();
+    const v1 = e.snapshot().linVel[0]!;
+    for (let i = 0; i < 10; i++) e.step();
+    return appliedMu(v1, e.snapshot().linVel[0]!);
+  };
+  it.for(['average', 'min', 'max', 'multiply'] as const)('SceneDesc.frictionCombine %s: a sliding cube decelerates at mu g with the combined mu', async (rule) => {
+    // Within solver convergence (2e-4 at 10 iterations); the closest two rules differ by 0.03.
+    expect(await mu(rule)).toBeCloseTo(slideMu(rule), 3);
+  });
+
+  it('frictionCombine defaults to average', async () => {
+    expect(await mu(undefined)).toBe(await mu('average'));
+  });
+
+  it('free flight is exactly what EngineInfo.integrator says', async () => {
+    const e = new AvbdReferenceEngine();
+    expect(e.info.integrator).toEqual({ substeps: 1 });
+    const scene = throwScene();
+    await e.init(scene);
+    for (let i = 0; i < THROW.steps; i++) e.step();
+    const want = freeFlight(THROW.pos, THROW.vel, scene.gravity, scene.dt, 1, THROW.steps);
+    const s = e.snapshot();
+    for (let k = 0; k < 3; k++) {
+      expect(s.pos[k]!).toBeCloseTo(want.pos[k]!, 9);
+      expect(s.linVel[k]!).toBeCloseTo(want.vel[k]!, 9);
+    }
   });
 });
 

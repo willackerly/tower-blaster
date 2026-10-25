@@ -68,3 +68,4 @@ export async function loadBundle(page: Page, entry: string, globalName = '__tb_t
   const out = await build({ entryPoints: [entry], bundle: true, format: 'iife', globalName, target: 'es2022', write: false, logLevel: 'silent' });
   await page.addScriptTag({ content: out.outputFiles[0]!.text });
 }
+export * from './contract.ts';

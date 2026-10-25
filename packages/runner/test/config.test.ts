@@ -10,6 +10,8 @@ describe('run config in the URL', () => {
     expect(c.params).toEqual({ N: 5000, running: true });
     expect(c.timing.blocks).toBe(4);
     expect(c.timing.warmup).toBe(120);
+    expect(c.timing.mode).toBe('latency');
+    expect(parseConfig('?engines=avbd-gpu&timingMode=throughput').timing.mode).toBe('throughput');
     expect(c.sleep).toBe(false);
     expect(c.autorun).toBe(true);
   });
@@ -17,6 +19,7 @@ describe('run config in the URL', () => {
   it('rejects bad input', () => {
     expect(() => parseConfig('?engines=a,b,c')).toThrow(/one or two/);
     expect(() => parseConfig('?param.N=lots')).toThrow(/number/);
+    expect(() => parseConfig('?timingMode=fast')).toThrow(/latency or throughput/);
   });
 
   it('round-trips through toQuery', () => {
@@ -26,7 +29,7 @@ describe('run config in the URL', () => {
       params: fc.dictionary(fc.constantFrom('N', 'F', 'H', 'running'), fc.oneof(fc.integer({ min: 1, max: 1e5 }), fc.boolean())),
       seed: fc.integer({ min: 0, max: 1e6 }),
       sleep: fc.constantFrom(null, true, false),
-      timing: fc.record({ warmup: fc.nat(500), blockSteps: fc.integer({ min: 1, max: 500 }), blocks: fc.integer({ min: 1, max: 50 }) }),
+      timing: fc.record({ warmup: fc.nat(500), blockSteps: fc.integer({ min: 1, max: 500 }), blocks: fc.integer({ min: 1, max: 50 }), mode: fc.constantFrom('latency', 'throughput') }),
       qualitySteps: fc.nat(1000),
       autorun: fc.boolean(),
     }) as fc.Arbitrary<RunConfig>;

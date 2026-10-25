@@ -195,7 +195,7 @@ export const SolverParams = defineStruct(
     ['capacity', 'u32'],
     ['slidingHessian', 'u32'],
     ['sweepOn', 'u32'],
-    ['pad0', 'u32'],
+    ['frictionCombine', 'u32', '0 average, 1 min, 2 max, 3 multiply (SceneDesc.frictionCombine)'],
     ['pad1', 'u32'],
     ['pad2', 'u32'],
   ],

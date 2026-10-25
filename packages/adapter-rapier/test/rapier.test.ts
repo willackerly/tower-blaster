@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { bodiesAt, type BodyDesc, type InputEvent, type SceneDesc } from '@tb/engine-api';
+import { bodiesAt, type BodyDesc, type CombineRule, freeFlight, type InputEvent, type SceneDesc } from '@tb/engine-api';
 import { buildScenario } from '@tb/scenarios';
+import { appliedMu, slideMu, slideScene, THROW, throwScene } from '@tb/testkit';
+import RAPIER from '@dimforge/rapier3d-simd-compat';
 import { RapierEngine } from '../src/index.ts';
 
 function dropScene(y0: number): SceneDesc {
@@ -88,5 +90,54 @@ describe('RapierEngine', () => {
     expect([a.pos[3 * n], a.pos[3 * (n + 1)], a.pos[3 * (n + 2)]].map((x) => Math.round(x!))).toEqual([-10, 10, 20]);
     live.dispose();
     replay.dispose();
+  });
+});
+
+describe('RapierEngine: engine contract (friction rule, integrator)', () => {
+  const mu = async (rule: CombineRule | undefined) => {
+    const e = new RapierEngine();
+    await e.init(slideScene(rule));
+    e.step();
+    const v1 = e.snapshot().linVel[0]!;
+    for (let i = 0; i < 10; i++) e.step();
+    const v11 = e.snapshot().linVel[0]!;
+    e.dispose();
+    return appliedMu(v1, v11);
+  };
+  it.for(['average', 'min', 'max', 'multiply'] as const)('SceneDesc.frictionCombine %s reaches Rapier: the cube decelerates with the combined mu', async (rule) => {
+    // Rapier's solver lands within about 1% (0.891 for max's 0.9); the closest two rules are 11% apart.
+    expect(Math.abs((await mu(rule)) / slideMu(rule) - 1)).toBeLessThan(0.02);
+  });
+
+  it('frictionCombine defaults to average', async () => {
+    expect(await mu(undefined)).toBe(await mu('average'));
+  });
+
+  it('every collider, ground included, carries the rule, so body-body contacts use it too', async () => {
+    // A pair takes the higher-priority rule of its two colliders, so the slide alone
+    // can't see a body collider left at the default.
+    const e = new RapierEngine();
+    const scene = slideScene('min');
+    scene.bodies.push({ ...scene.bodies[0]!, pos: [0, 2, 0] });
+    await e.init(scene);
+    const rules: number[] = [];
+    (e as unknown as { world: RAPIER.World }).world.forEachCollider((c) => rules.push(c.frictionCombineRule()));
+    expect(rules).toEqual(Array(3).fill(RAPIER.CoefficientCombineRule.Min));
+    e.dispose();
+  });
+
+  it.for([4, 1, 8])('free flight with %i iterations is semi-implicit Euler with that many substeps, as EngineInfo.integrator says', async (iterations) => {
+    const e = new RapierEngine({ iterations });
+    expect(e.info.integrator).toEqual({ substeps: iterations });
+    const scene = throwScene();
+    await e.init(scene);
+    for (let i = 0; i < THROW.steps; i++) e.step();
+    const s = e.snapshot();
+    const want = freeFlight(THROW.pos, THROW.vel, scene.gravity, scene.dt, iterations, THROW.steps);
+    // f32 state; one substep fewer or more would be 1 cm or more off by now.
+    for (let k = 0; k < 3; k++) expect(Math.abs(s.pos[k]! - want.pos[k]!)).toBeLessThan(5e-4);
+    const other = freeFlight(THROW.pos, THROW.vel, scene.gravity, scene.dt, iterations === 1 ? 2 : iterations - 1, THROW.steps);
+    expect(Math.abs(other.pos[1]! - want.pos[1]!)).toBeGreaterThan(1e-2 / iterations);
+    e.dispose();
   });
 });

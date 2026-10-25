@@ -15,6 +15,7 @@
 // - Post-stabilization is always on (the reference's default).
 //
 // Each kernel binds at most 8 storage buffers (the WebGPU default limit).
+import type { CombineRule } from '@tb/engine-api';
 import { assertStorageFits } from '@tb/gpu';
 import { Body, BodyProps, ColorParams, Manifold, SolverBody, SolverContact, SolverParams, wgslStruct } from '@tb/schema';
 import { MAX_COLORS } from './coloring.ts';
@@ -164,6 +165,16 @@ fn point(m: Manifold, q: u32) -> vec4f {
   }
 }
 
+// SceneDesc.frictionCombine, in COMBINE_RULES order.
+fn combineFriction(a: f32, b: f32) -> f32 {
+  switch (p.frictionCombine) {
+    case 1u: { return min(a, b); }
+    case 2u: { return max(a, b); }
+    case 3u: { return a * b; }
+    default: { return 0.5 * (a + b); }
+  }
+}
+
 // Fill the 4 points of manifold m into contacts[dst + q]; old points (if
 // any) are contacts[old + q].
 fn setup(m: Manifold, a: u32, b: u32, mu: f32, dst: u32, old: u32, hasOld: bool) {
@@ -232,7 +243,7 @@ fn pairSetup(@builtin(global_invocation_id) id: vec3u) {
   let a = m.a;
   let b = m.b;
   let ps = prev[k].x;
-  let mu = sqrt(props[a].friction * props[b].friction);
+  let mu = combineFriction(props[a].friction, props[b].friction);
   setup(m, a, b, mu, pairPoint(p.cur, k, 0u), pairPoint(1u - p.cur, select(0u, ps, ps != NONE), 0u), ps != NONE);
 }
 
@@ -242,7 +253,7 @@ fn groundSetup(@builtin(global_invocation_id) id: vec3u) {
   if (i >= p.n) { return; }
   var m = groundManifolds[i];
   if (p.hasGround == 0u) { m.count = 0u; }
-  let mu = sqrt(props[i].friction * p.groundFriction);
+  let mu = combineFriction(props[i].friction, p.groundFriction);
   setup(m, NONE, i, mu, groundPoint(p.cur, i, 0u), groundPoint(1u - p.cur, i, 0u), i < p.prevN);
 }`;
 
@@ -485,6 +496,9 @@ fn finalize(@builtin(global_invocation_id) id: vec3u) {
 
 export const SOLVER_WGSL = { PREP, MATCH, SETUP, INIT, SOLVE, DUAL };
 
+/** Index = SolverParams.frictionCombine; combineFriction in the setup kernels follows this order. */
+export const COMBINE_RULES: readonly CombineRule[] = ['average', 'min', 'max', 'multiply'];
+
 export interface GpuSolverParams {
   iterations: number;
   beta: number;
@@ -599,7 +613,7 @@ export class AvbdSolver {
   }
 
   /** Per-step uniforms; call once per step before prepare(). */
-  writeParams(n: number, dt: number, gravity: readonly number[], ground: { y: number; friction: number } | null, sp: GpuSolverParams): void {
+  writeParams(n: number, dt: number, gravity: readonly number[], ground: { y: number; friction: number } | null, sp: GpuSolverParams, frictionCombine: CombineRule = 'average'): void {
     const u = new ArrayBuffer(SolverParams.size);
     const f = new Float32Array(u), i = new Uint32Array(u);
     const at = (name: string) => SolverParams.fields.find((x) => x.name === name)!.offset / 4;
@@ -612,6 +626,7 @@ export class AvbdSolver {
     f[at('groundY')] = ground?.y ?? 0; i[at('hasGround')] = ground ? 1 : 0; f[at('groundFriction')] = ground?.friction ?? 0;
     i[at('maxPairs')] = this.maxPairs; i[at('capacity')] = this.capacity;
     i[at('slidingHessian')] = sp.slidingHessian ? 1 : 0; i[at('sweepOn')] = sp.sweep ? 1 : 0;
+    i[at('frictionCombine')] = COMBINE_RULES.indexOf(frictionCombine);
     this.device.queue.writeBuffer(this.uniform, 0, u);
   }
 
