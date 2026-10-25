@@ -11,3 +11,4 @@ export * from './fx.ts';
 export * from './shadowfit.ts';
 export * from './sparks.ts';
 export * from './lights.ts';
+export * from './ao.ts';

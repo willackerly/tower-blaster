@@ -7,7 +7,7 @@ import { emptySnapshot, TAG_BALL, type BodyDesc } from '@tb/engine-api';
 import { buildScenario } from '@tb/scenarios';
 import { Body, readStruct, Shape } from '@tb/schema';
 import { isSoftwareAdapter, loadBundle, openWebGPU, type WebGPUSession } from '@tb/testkit';
-import { agx, bevelNormal, CANDY_NIGHT, CTL, HOT_FULL, MAX_EVENTS, SPAWN_BUDGET, FX_WORDS, packFx, tintWord, unpackFx, frustumPlanes, linearToOklab, listMatches, oklabToLinear, srgbToLinear, lookAt, lookOf, lookRange, MATERIAL, multiply, packBodies, packShapes, paletteOf, perspective, unpackLook } from '../src/index.ts';
+import { agx, aoFootReference, bevelNormal, CANDY_NIGHT, CTL, HOT_FULL, MAX_EVENTS, SPAWN_BUDGET, FX_WORDS, packFx, tintWord, unpackFx, frustumPlanes, linearToOklab, listMatches, oklabToLinear, srgbToLinear, lookAt, lookOf, lookRange, MATERIAL, multiply, packBodies, packShapes, paletteOf, perspective, unpackLook } from '../src/index.ts';
 import type * as Drivers from './page.ts';
 
 describe('looks', () => {
@@ -337,6 +337,46 @@ describe('heat', () => {
     const off = await call('heatImage', 0, false, 9, false);
     expect(off.error).toBeNull();
     expect(off.hit[1]).toBe(off.hit[0]);
+  });
+});
+
+describe('AO volume', () => {
+  it('the GPU footprint matches its twin: exact at rest, a few ulps rotated, zero (not NaN) when hidden', async (ctx) => {
+    if (!gpu) return ctx.skip();
+    let s = 77;
+    const r = () => ((s = (Math.imul(s, 1103515245) + 12345) >>> 0) / 4294967296);
+    const q = () => { const v = [r() - 0.5, r() - 0.5, r() - 0.5, r() - 0.5], l = Math.hypot(...v); return v.map((x) => x / l); };
+    const cases = [
+      ...Array.from({ length: 40 }, () => ({ rot: [0, 0, 0, 1], half: [0.05 + r(), 0.05 + r() * 2, 0.05 + r() * 0.3], sphere: false })),
+      ...Array.from({ length: 200 }, () => ({ rot: q(), half: [0.05 + r(), 0.05 + r() * 2, 0.05 + r() * 0.3], sphere: false })),
+      ...Array.from({ length: 20 }, () => ({ rot: q(), half: [0.1 + r(), 0, 0], sphere: true })),
+      { rot: q(), half: [0, 0, 0], sphere: false }, { rot: [0, 0, 0, 1], half: [0, 0, 0], sphere: false }, { rot: q(), half: [0, 0, 0], sphere: true },
+    ];
+    const g = await call('aoFootGpu', cases);
+    expect(g.error).toBeNull();
+    cases.forEach((c, i) => {
+      const want = aoFootReference(c.rot, c.half, c.sphere), got = g.foot[i]!;
+      if (c.half[0] === 0) expect(got).toEqual([0, 0, 0]);
+      else if (c.sphere || c.rot[3] === 1) expect(got).toEqual(want);
+      else got.forEach((v, k) => expect(Math.abs(v - want[k]!) / want[k]!).toBeLessThan(2e-6));
+    });
+  });
+
+  it('the splat equals its CPU twin on the GPU\'s own records, independent of slot order', async (ctx) => {
+    if (!gpu) return ctx.skip();
+    const r = await call('aoSplat', 61, 3000, false);
+    expect(r.error).toBeNull();
+    expect(r.splatted).toBeGreaterThan(2500); // lattice and free slots are left out
+    expect(r.touched).toBeGreaterThan(20_000);
+    expect(r.mismatched).toBe(0); // unrotated: bit-exact
+    expect(r.stable).toBe(true);
+    expect(r.orderFree).toBe(true);
+    const rot = await call('aoSplat', 62, 3000, true);
+    expect(rot.error).toBeNull();
+    expect(rot.orderFree).toBe(true);
+    // Rotation and cube root differ by f32 rounding only: measured 185 of 44k voxels off, by 1 unit (2^-16 voxel).
+    expect(rot.maxDiff).toBeLessThanOrEqual(4);
+    expect(rot.relDiff).toBeLessThan(1e-5);
   });
 });
 

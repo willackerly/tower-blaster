@@ -9,7 +9,7 @@ import { Body, RenderRecord, Shape, TIER, readStruct } from '@tb/schema';
 import {
   agx, AGX_WGSL, fromHalf, FX_WORDS, packFx, toHalf, bevelNormal, BEVEL_WGSL, oklabToLinear, OKLAB_WGSL, Post,
   Culler, cullReference, GpuBodySource, invert, listMatches, lookAt, makeGpuBodies, multiply, perspective, Renderer, SEGMENTS, SnapshotSource, transform,
-  translation, BOX_VERTS, SPHERE_VERTS, SUN, Sparks, CTL, MAX_EVENTS, flashSlot, FLASHES, MAX_BALLS, TRAIL, Lights, LIGHTS, LIGHT_META, LIGHT_PACKED, MATERIAL, unpackImpacts, unpackSparks, spawnReference, stepReference, type Impact, type BodySource, type CullFrame, type FrameParams, type V3,
+  translation, BOX_VERTS, SPHERE_VERTS, SUN, Sparks, CTL, MAX_EVENTS, flashSlot, FLASHES, MAX_BALLS, TRAIL, Lights, LIGHTS, LIGHT_META, LIGHT_PACKED, MATERIAL, AoVolume, aoGrid, splatReference, AO_FOOT_WGSL, type SplatBody, unpackImpacts, unpackSparks, spawnReference, stepReference, type Impact, type BodySource, type CullFrame, type FrameParams, type V3,
 } from '../src/index.ts';
 
 function rng(seed: number) {
@@ -1306,4 +1306,142 @@ export async function heatImage(crowd: number, crowdHot: boolean, dv = 15, heat 
   device.destroy();
   const m = (px: typeof cold, id: number) => meanOver(px, ids, id).mean;
   return { hit: [m(cold, 1), m(hot, 1)], twin: [m(cold, 2), m(hot, 2)], n: meanOver(hot, ids, 1).n, error: err?.message ?? null };
+}
+
+// ---------------------------------------------------------------- AO volume
+
+/**
+ * The occupancy splat against its CPU twin, fed the GPU's own records:
+ * random boxes (slabs and rods too) and spheres, some straddling or
+ * outside the grid, some lattice or free (never splatted), some hidden by
+ * FX scale 0. Unrotated bodies must match exactly; rotated ones within the
+ * f32 slack of the rotation and cube root. The same world with its slots
+ * reversed gives the same grid (integer atomics: order-independent). The
+ * frame before, every slot was drawable, so lattice and free slots hold
+ * stale records the splat must not use.
+ */
+export async function aoSplat(seed: number, n: number, rotated: boolean) {
+  const { device } = await createDevice({ timestamps: false });
+  device.pushErrorScope('validation');
+  const r = rng(seed);
+  const grid = aoGrid({ center: [0, 4, 0], half: [20, 6, 20] });
+  const eye: V3 = [3.3, 7.1, -12.6];
+  interface W { pos: V3; rot: number[]; half: V3; sphere: boolean; tier: number; hidden: boolean }
+  const world: W[] = Array.from({ length: n }, () => {
+    const sphere = r() < 0.15, k = r();
+    const half: V3 = sphere ? [0.2 + r() * 0.8, 0, 0] : k < 0.1 ? [2 + r() * 2, 0.1, 1 + r()] : k < 0.2 ? [0.1, 0.1, 1 + r() * 2] : [0.1 + r() * 0.9, 0.1 + r() * 0.9, 0.1 + r() * 0.9];
+    const t = r();
+    return {
+      pos: [(r() - 0.5) * 44, -3 + r() * 16, (r() - 0.5) * 44], rot: rotated ? randomQuat(r) : [0, 0, 0, 1], half, sphere,
+      tier: t < 0.05 ? TIER.lattice : t < 0.08 ? TIER.free : t < 0.3 ? TIER.rubble : TIER.active, hidden: r() < 0.03,
+    };
+  });
+  const run = async (order: number[]) => {
+    const words = (allDrawn: boolean) => {
+      const out = new ArrayBuffer(n * Body.size), bf = new Float32Array(out), bu = new Uint32Array(out), BW = Body.size / 4;
+      order.forEach((w, i) => {
+        const b = world[w]!;
+        bf.set(b.pos, i * BW); bf.set(b.rot, i * BW + 4); bf[i * BW + 3] = 1;
+        bu[i * BW + 11] = 1 | ((allDrawn ? TIER.active : b.tier) << 8);
+        bu[i * BW + 15] = i;
+      });
+      return out;
+    };
+    const bodies = words(true), shapes = new ArrayBuffer(n * Shape.size);
+    const sf = new Float32Array(shapes), su = new Uint32Array(shapes);
+    const fx = new Uint32Array(n * FX_WORDS);
+    const SW = Shape.size / 4;
+    order.forEach((w, i) => {
+      const b = world[w]!;
+      sf.set(b.sphere ? [b.half[0], b.half[0], b.half[0]] : b.half, i * SW);
+      su[i * SW + 3] = b.sphere ? 1 : 0;
+      if (b.hidden) packFx({ scale: 0 }, fx, i * FX_WORDS);
+    });
+    const src = rawSource(device, bodies, bodies, shapes, new Uint32Array(n), n, n);
+    const fxBuf = device.createBuffer({ size: Math.max(16, fx.byteLength), usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });
+    device.queue.writeBuffer(fxBuf, 0, fx);
+    const culler = new Culler(device, src, { box: BOX_VERTS, sphere: SPHERE_VERTS }, fxBuf);
+    const ao = new AoVolume(device, grid);
+    const f: CullFrame = { viewProj: perspective(1, 1, 0.1, 100), lightViewProj: perspective(1, 1, 0.1, 100), eye, alpha: 1 };
+    const frame = async () => {
+      const enc = device.createCommandEncoder();
+      ao.clear(enc);
+      const pass = enc.beginComputePass();
+      culler.encode(pass, f);
+      ao.splat(pass, src, culler.records, eye);
+      pass.end();
+      device.queue.submit([enc.finish()]);
+      return new Uint32Array(await readBuffer(device, ao.occ));
+    };
+    await frame(); // every slot drawn: records everywhere
+    const real = words(false);
+    device.queue.writeBuffer(src.bodies, 0, real);
+    device.queue.writeBuffer(src.prev, 0, real);
+    const occ = await frame();
+    const again = await frame();
+    const view = new DataView(await readBuffer(device, culler.records));
+    const recs: SplatBody[] = [];
+    order.forEach((w, i) => {
+      const b = world[w]!;
+      if (b.tier === TIER.lattice || b.tier === TIER.free) return;
+      const rec = readStruct(view, RenderRecord, i);
+      recs.push({ pos: rec.pos!, rot: rec.rot!, half: rec.half!, sphere: b.sphere });
+    });
+    culler.destroy();
+    ao.destroy();
+    for (const b of [src.bodies, src.prev, src.shapes, src.looks, fxBuf]) b.destroy();
+    return { occ, again, recs };
+  };
+  const fwd = await run(world.map((_, i) => i));
+  const rev = await run(world.map((_, i) => n - 1 - i));
+  const want = splatReference(fwd.recs, grid, eye);
+  let mismatched = 0, maxDiff = 0, total = 0, absDiff = 0;
+  for (let v = 0; v < want.length; v++) {
+    const d = Math.abs(fwd.occ[v]! - want[v]!);
+    if (d) mismatched++;
+    maxDiff = Math.max(maxDiff, d);
+    absDiff += d;
+    total += want[v]!;
+  }
+  const same = (a: Uint32Array, b: Uint32Array) => a.every((x, i) => x === b[i]);
+  const err = await device.popErrorScope();
+  device.destroy();
+  return {
+    voxels: want.length, touched: want.reduce((c, x) => c + (x ? 1 : 0), 0), mismatched, maxDiff, relDiff: absDiff / (total || 1),
+    stable: same(fwd.occ, fwd.again), orderFree: same(fwd.occ, rev.occ), splatted: fwd.recs.length, error: err?.message ?? null,
+  };
+}
+
+/** aoFoot on the GPU for given (rot, half, sphere) cases, to compare with aoFootReference. */
+export async function aoFootGpu(cases: { rot: number[]; half: number[]; sphere: boolean }[]) {
+  const { device } = await createDevice({ timestamps: false });
+  device.pushErrorScope('validation');
+  const module = device.createShaderModule({
+    code: /* wgsl */ `
+${AO_FOOT_WGSL}
+@group(0) @binding(0) var<storage, read> inp: array<vec4f>;
+@group(0) @binding(1) var<storage, read_write> out: array<vec4f>;
+@compute @workgroup_size(64) fn main(@builtin(global_invocation_id) id: vec3u) {
+  if (id.x >= arrayLength(&out)) { return; }
+  let h = inp[2u * id.x + 1u];
+  out[id.x] = vec4f(aoFoot(inp[2u * id.x], h.xyz, h.w > 0.5), 0.0);
+}`,
+  });
+  const pipe = device.createComputePipeline({ layout: 'auto', compute: { module, entryPoint: 'main' } });
+  const data = new Float32Array(cases.length * 8);
+  cases.forEach((c, i) => { data.set(c.rot, i * 8); data.set([c.half[0]!, c.half[1] ?? 0, c.half[2] ?? 0, c.sphere ? 1 : 0], i * 8 + 4); });
+  const inp = device.createBuffer({ size: data.byteLength, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });
+  device.queue.writeBuffer(inp, 0, data);
+  const out = device.createBuffer({ size: cases.length * 16, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC });
+  const enc = device.createCommandEncoder();
+  const pass = enc.beginComputePass();
+  pass.setPipeline(pipe);
+  pass.setBindGroup(0, device.createBindGroup({ layout: pipe.getBindGroupLayout(0), entries: [{ binding: 0, resource: { buffer: inp } }, { binding: 1, resource: { buffer: out } }] }));
+  pass.dispatchWorkgroups(Math.ceil(cases.length / 64));
+  pass.end();
+  device.queue.submit([enc.finish()]);
+  const res = new Float32Array(await readBuffer(device, out));
+  const err = await device.popErrorScope();
+  device.destroy();
+  return { foot: cases.map((_, i) => Array.from(res.slice(i * 4, i * 4 + 3))), error: err?.message ?? null };
 }
