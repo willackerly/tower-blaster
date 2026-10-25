@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import fc from 'fast-check';
 import { describe, expect, it } from 'vitest';
-import { ALL_STRUCTS, Body, defineStruct, field, readStruct, RenderInstance, wgslModule, writeStruct } from '../src/index.ts';
+import { ALL_STRUCTS, Body, defineStruct, field, readField, readStruct, RenderInstance, type StructLayout, wgslModule, writeStruct } from '../src/index.ts';
 
 describe('defineStruct follows WGSL alignment rules', () => {
   it('pads a vec3 after a scalar to 16', () => {
@@ -71,6 +71,73 @@ describe('writeStruct / readStruct', () => {
   it('rejects a wrong component count', () => {
     const buf = new DataView(new ArrayBuffer(Body.size));
     expect(() => writeStruct(buf, Body, 0, { pos: [1, 2] })).toThrow(/expected 3/);
+  });
+});
+
+describe('readField', () => {
+  // NaN payloads (quiet, signalling, all ones), ±Inf, ±0, the extreme
+  // subnormals and normals, and the i32/u32 extremes.
+  const SPECIAL = [0x7fc00000, 0x7f800001, 0xffffffff, 0x7fffffff, 0x7f800000, 0xff800000, 0x80000000, 0, 1, 0x807fffff, 0x00800000, 0x7f7fffff, 0xff7fffff];
+  // Every type, so i32, vec2 and mat4x4 fields are covered too.
+  const Probe = defineStruct('Probe', [
+    ['a', 'f32'], ['b', 'vec3f'], ['c', 'u32'], ['d', 'vec2f'], ['e', 'i32'], ['f', 'vec4u'],
+    ['g', 'f32'], ['h', 'mat4x4f'], ['i', 'vec2i'], ['j', 'vec3u'], ['k', 'vec4i'],
+  ]);
+  const structs = [...ALL_STRUCTS, Probe];
+
+  /** The first value where readField and readStruct differ (Object.is, so -0 and NaN count), or null. */
+  function firstDiff(buf: ArrayBuffer, s: StructLayout, n: number): string | null {
+    const view = new DataView(buf);
+    const rows = Array.from({ length: n }, (_, i) => readStruct(view, s, i));
+    for (const f of s.fields) {
+      const got = readField(buf, s, f.name, n, new Float64Array(n * f.components));
+      for (let i = 0; i < n; i++) {
+        for (let k = 0; k < f.components; k++) {
+          const want = rows[i]![f.name]![k]!, g = got[i * f.components + k]!;
+          if (!Object.is(g, want)) return `${s.name}.${f.name} element ${i} component ${k}: ${g} vs ${want}`;
+        }
+      }
+    }
+    return null;
+  }
+
+  it.for(structs.map((s) => [s.name, s] as const))('equals readStruct for every field of %s on random words', ([, s]) => {
+    const word = fc.oneof(fc.integer({ min: 0, max: 0xffffffff }), fc.constantFrom(...SPECIAL));
+    const words = (7 * s.size) / 4;
+    fc.assert(
+      fc.property(fc.constantFrom(0, 1, 7), fc.array(word, { minLength: words, maxLength: words }), (n, ws) => {
+        // Exactly n elements: no slack after the last one.
+        expect(firstDiff(Uint32Array.from(ws).buffer.slice(0, n * s.size), s, n)).toBeNull();
+      }),
+    );
+  });
+
+  it.for(structs.map((s) => [s.name, s] as const))('equals readStruct for every field of %s with every special pattern in every word', ([, s]) => {
+    const words = (7 * s.size) / 4;
+    for (let r = 0; r < SPECIAL.length; r++) {
+      const buf = Uint32Array.from({ length: words }, (_, j) => SPECIAL[(j + r) % SPECIAL.length]!).buffer;
+      expect(firstDiff(buf, s, 7)).toBeNull();
+    }
+  });
+
+  it('packs components, leaves the rest of out alone and returns it', () => {
+    const view = new DataView(new ArrayBuffer(Body.size * 3));
+    for (let i = 0; i < 3; i++) writeStruct(view, Body, i, { rot: [i, -i, 0.5 + i, -0], flags: 0x100 | i });
+    const out = new Float64Array(14).fill(9);
+    expect(readField(view.buffer, Body, 'rot', 3, out)).toBe(out);
+    expect([...out]).toEqual([0, -0, 0.5, -0, 1, -1, 1.5, -0, 2, -2, 2.5, -0, 9, 9]);
+    expect(Object.is(out[1], -0)).toBe(true);
+    expect([...readField(view.buffer, Body, 'flags', 3, new Uint32Array(3))]).toEqual([0x100, 0x101, 0x102]);
+  });
+
+  it('rejects an unknown field, a bad count, a short buffer and a short output', () => {
+    const buf = new ArrayBuffer(Body.size * 2);
+    expect(() => readField(buf, Body, 'nope', 1, new Float64Array(3))).toThrow(/no field nope/);
+    expect(() => readField(buf, Body, 'pos', -1, new Float64Array(3))).toThrow(/bad count/);
+    expect(() => readField(buf, Body, 'pos', 1.5, new Float64Array(6))).toThrow(/bad count/);
+    expect(() => readField(buf, Body, 'pos', 3, new Float64Array(9))).toThrow(/need 192 bytes, the buffer has 128/);
+    expect(() => readField(buf, Body, 'pos', 2, new Float64Array(5))).toThrow(/6 values do not fit an output of length 5/);
+    expect(readField(buf, Body, 'pos', 0, new Float64Array(0))).toHaveLength(0);
   });
 });
 
