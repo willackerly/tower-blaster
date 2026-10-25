@@ -13,6 +13,9 @@ import { boundingRadius, signedDepth } from '@tb/geom';
 import { createBody, createGround, initRapier } from './bodies.ts';
 import type { RapierOptions } from './index.ts';
 
+/** Spheres are icosphere hulls (162 vertices), since they meet voxels here: see createBody. */
+const SPHERE_HULL = 2;
+
 export class RapierHost implements PhysicsHost {
   readonly info: EngineInfo;
   caps: HostCaps = { capacity: 0, stateLag: 0, contactForces: true, latticeNative: true };
@@ -36,7 +39,7 @@ export class RapierHost implements PhysicsHost {
   private voxelForces: Array<{ lattice: number; body: number; force: Vec3; magnitude: number }> = [];
 
   constructor(private readonly opts: RapierOptions = {}) {
-    this.info = { name: 'rapier-host', variant: { version: 'uninitialised', iterations: opts.iterations ?? 4 }, backend: 'wasm-simd-st' };
+    this.info = { name: 'rapier-host', variant: { version: 'uninitialised', iterations: opts.iterations ?? 4, sphereHull: SPHERE_HULL }, backend: 'wasm-simd-st' };
   }
 
   async init(world: HostWorld, table: readonly BodyDesc[], lattices: readonly HostLattice[] = []): Promise<void> {
@@ -101,7 +104,7 @@ export class RapierHost implements PhysicsHost {
       const type = c.mode === MODE_STATIC ? RAPIER.RigidBodyType.Fixed : RAPIER.RigidBodyType.Dynamic;
       if (!entry) {
         const desc = c.mode === MODE_STATIC ? RAPIER.RigidBodyDesc.fixed() : RAPIER.RigidBodyDesc.dynamic();
-        entry = this.bodies[c.id] = createBody(w, { ...this.table[c.id]!, pos: c.pos!, rot: c.rot!, linVel: [0, 0, 0], angVel: [0, 0, 0] }, this.sleep, desc);
+        entry = this.bodies[c.id] = createBody(w, { ...this.table[c.id]!, pos: c.pos!, rot: c.rot!, linVel: [0, 0, 0], angVel: [0, 0, 0] }, this.sleep, desc, SPHERE_HULL);
         this.bodyOfCollider.set(entry.collider.handle, c.id);
       } else {
         if (prev === MODE_OFF) entry.body.setEnabled(true);

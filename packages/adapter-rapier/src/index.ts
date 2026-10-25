@@ -71,4 +71,4 @@ export class RapierEngine implements PhysicsEngine {
 }
 
 export { RapierHost } from './host.ts';
-export { createBody, createGround, initRapier } from './bodies.ts';
+export { createBody, createGround, icosphere, initRapier } from './bodies.ts';
