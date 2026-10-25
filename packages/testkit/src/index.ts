@@ -70,3 +70,4 @@ export async function loadBundle(page: Page, entry: string, globalName = '__tb_t
 }
 export * from './contract.ts';
 export * from './collapse.ts';
+export * from './observe.ts';

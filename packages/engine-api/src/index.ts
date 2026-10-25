@@ -1,6 +1,7 @@
 // The one contract every physics implementation meets: the TypeScript
 // reference, CPU baselines (Rapier, Box3D, Jolt) and every GPU variant.
 // The game and the benchmark harness both drive engines only through this.
+import type { ObserveOptions, Observer } from './observe.ts';
 
 export type Vec3 = [number, number, number];
 /** Unit quaternion, (x, y, z, w). */
@@ -130,6 +131,8 @@ export interface PhysicsEngine {
    * device draws them with no CPU copy. Read-only for the caller.
    */
   gpu?(): GpuBodies | null;
+  /** Exact reductions and sparse reads. Valid until the next init() or dispose(). Engines without it are wrapped with withSnapshotObserver(). */
+  observe?(opts: ObserveOptions): Promise<Observer>;
   dispose(): void;
 }
 
@@ -191,3 +194,5 @@ export function inertiaOf(b: BodyDesc): Vec3 {
 }
 
 export * from './host.ts';
+export * from './observe.ts';
+export * from './snapshot-observer.ts';
