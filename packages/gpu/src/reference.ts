@@ -10,3 +10,9 @@ export function exclusiveScanU32(a: ArrayLike<number>): Uint32Array {
   }
   return out;
 }
+
+export function compactIndices(flags: ArrayLike<number>): Uint32Array {
+  const out: number[] = [];
+  for (let i = 0; i < flags.length; i++) if (flags[i] !== 0) out.push(i);
+  return Uint32Array.from(out);
+}

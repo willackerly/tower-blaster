@@ -2,7 +2,7 @@
 // loadBundle() and calls the exports through page.evaluate; each driver checks
 // its GPU result against the CPU reference in the page and returns a small
 // summary, so large arrays never cross the Playwright boundary.
-import { createDevice, exclusiveScanU32, GpuProfiler, readBuffer, Scanner, uploadU32 } from '../src/index.ts';
+import { compactIndices, Compactor, createDevice, exclusiveScanU32, GpuProfiler, readBuffer, Scanner, uploadU32 } from '../src/index.ts';
 
 function rng(seed: number) {
   let a = seed >>> 0;
@@ -99,6 +99,61 @@ export async function scan(cases: ScanCase[]) {
     const prefix = firstDiff(got.subarray(0, c.n), exclusiveScanU32(input.subarray(0, c.n)));
     const tail = firstDiff(got.subarray(c.n), input.subarray(c.n));
     out.push({ ...c, error: error?.message ?? null, prefixDiff: prefix, tailDiff: tail });
+  }
+  device.destroy();
+  return out;
+}
+
+export interface CompactCase { n: number; capacity: number; density: number; seed: number }
+
+const MARK = /* wgsl */ `
+@group(0) @binding(0) var<storage, read> list: array<u32>;
+@group(0) @binding(1) var<storage, read> count: array<u32, 4>;
+@group(0) @binding(2) var<storage, read_write> marks: array<u32>;
+@compute @workgroup_size(64) fn main(@builtin(global_invocation_id) id: vec3u) {
+  if (id.x < count[3]) { marks[list[id.x]] = 1u; }
+}`;
+
+/**
+ * Compact random flags (arbitrary nonzero values, to exercise normalization),
+ * check the list and count, then consume the list through
+ * dispatchWorkgroupsIndirect to prove the indirect arguments cover it.
+ */
+export async function compact(cases: CompactCase[]) {
+  const { device } = await createDevice();
+  const markPipe = device.createComputePipeline({ layout: 'auto', compute: { module: device.createShaderModule({ code: MARK }), entryPoint: 'main' } });
+  const out = [];
+  for (const c of cases) {
+    const r = rng(c.seed);
+    const flags = new Uint32Array(c.capacity);
+    for (let i = 0; i < c.capacity; i++) flags[i] = r() / 2 ** 32 < c.density ? r() | 1 : 0;
+    const flagBuf = uploadU32(device, flags);
+    const listBuf = uploadU32(device, new Uint32Array(Math.max(1, c.capacity)).fill(0xdeadbeef));
+    const marks = uploadU32(device, new Uint32Array(Math.max(1, c.capacity)));
+    const compactor = new Compactor(device, flagBuf, listBuf, c.capacity, 64);
+    device.pushErrorScope('validation');
+    const enc = device.createCommandEncoder();
+    const pass = enc.beginComputePass();
+    compactor.encode(pass, c.n);
+    pass.setPipeline(markPipe);
+    pass.setBindGroup(0, device.createBindGroup({ layout: markPipe.getBindGroupLayout(0), entries: [listBuf, compactor.count, marks].map((buffer, binding) => ({ binding, resource: { buffer } })) }));
+    pass.dispatchWorkgroupsIndirect(compactor.count, 0);
+    pass.end();
+    device.queue.submit([enc.finish()]);
+    const error = await device.popErrorScope();
+    const count = Array.from(new Uint32Array(await readBuffer(device, compactor.count)));
+    const expected = compactIndices(flags.subarray(0, c.n));
+    const list = new Uint32Array(await readBuffer(device, listBuf, Math.max(1, c.capacity) * 4));
+    const marked = new Uint32Array(await readBuffer(device, marks, Math.max(1, c.capacity) * 4));
+    const wantMarks = new Uint32Array(Math.max(1, c.capacity));
+    for (const i of expected) wantMarks[i] = 1;
+    out.push({
+      ...c, error: error?.message ?? null, count, expectedCount: expected.length,
+      listDiff: firstDiff(list.subarray(0, expected.length), expected),
+      untouchedAfter: list.subarray(expected.length).every((x) => x === 0xdeadbeef),
+      marksDiff: firstDiff(marked, wantMarks),
+    });
+    compactor.destroy();
   }
   device.destroy();
   return out;

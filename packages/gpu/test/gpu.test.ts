@@ -66,3 +66,25 @@ describe('Scanner (exclusive u32 scan, in place)', () => {
     for (const r of rs) expect(r).toMatchObject({ error: null, prefixDiff: -1, tailDiff: -1 });
   });
 });
+
+describe('Compactor', () => {
+  const cases = [
+    { n: 0, capacity: 10, density: 0.5 },
+    { n: 1, capacity: 1, density: 1 },
+    { n: 1000, capacity: 1000, density: 0 },
+    { n: 1000, capacity: 1000, density: 1 },
+    { n: 513, capacity: 600, density: 0.5 },
+    { n: 100_000, capacity: 100_000, density: 0.03 },
+    { n: 300_000, capacity: 400_000, density: 0.7 },
+  ];
+  it.for(cases)('n = $n, density $density: ordered indices, count and indirect args', async (c, ctx) => {
+    if (!gpu) return ctx.skip();
+    const [r] = await call('compact', [{ ...c, seed: c.n + 7 }]);
+    expect(r!.error).toBeNull();
+    const k = r!.expectedCount;
+    expect(r!.count).toEqual([Math.ceil(k / 64), 1, 1, k]);
+    expect(r!.listDiff).toBe(-1);
+    expect(r!.untouchedAfter).toBe(true);
+    expect(r!.marksDiff).toBe(-1);
+  });
+});
