@@ -1,28 +1,69 @@
-// Keystone on a real engine (Rapier): levels sit still, shots fly as
-// predicted, sessions are deterministic, and records replay exactly.
+// Keystone on real engines: levels sit still (Rapier and the AVBD reference),
+// and on Rapier shots fly as predicted, sessions are deterministic, and
+// records replay exactly.
 import { describe, expect, it } from 'vitest';
 import { RapierEngine } from '@tb/adapter-rapier';
+import type { PhysicsEngine } from '@tb/engine-api';
+import { AvbdReferenceEngine } from '@tb/physics-ref';
 import { quatAngle } from '@tb/geom';
 import { RAPIER_SUBSTEPS } from '@tb/keystone-lab';
-import { compileLevel, Driver, GRAVITY, L1, type LevelDef, LEVELS, predictArc, PRESETTLE_STEPS, runSession, type Shot, shotToSpawn, snapshotHash } from '@tb/keystone';
+import { AVBD_ITERATIONS, compileLevel, GRAVITY, L1, type LevelDef, LEVELS, predictArc, PRESETTLE_STEPS, QUIET_SPEED, QUIET_SPIN, runSession, SETTLE_QUIET, type Shot, shotToSpawn, snapshotHash } from '@tb/keystone';
 
-describe('levels on Rapier', () => {
-  it.each(LEVELS.map((l) => [l.id, l] as const))('%s settles within the pre-settle and then sits still', async (_id, def) => {
-    const c = compileLevel(def), d = new Driver(new RapierEngine(), c);
-    await d.reset();
-    const settled = d.snapshot, h = c.frame.unit;
+const ENGINES = [
+  ['Rapier', () => new RapierEngine()],
+  [`AVBD (reference, ${AVBD_ITERATIONS} iterations)`, () => new AvbdReferenceEngine({ iterations: AVBD_ITERATIONS })],
+] as const;
+
+/** Init and run the pre-settle, counting the quiet steps (as the rules define quiet) at its end. */
+async function presettle(e: PhysicsEngine, def: LevelDef) {
+  const c = compileLevel(def);
+  await e.init(c.scene);
+  let run = 0;
+  for (let t = 0; t < PRESETTLE_STEPS; t++) {
+    await e.step();
+    const s = await e.snapshot();
+    let v = 0, w = 0;
+    for (let i = 0; i < c.meta.n; i++) if (s.awake[i]) {
+      v = Math.max(v, Math.hypot(s.linVel[3 * i]!, s.linVel[3 * i + 1]!, s.linVel[3 * i + 2]!));
+      w = Math.max(w, Math.hypot(s.angVel[3 * i]!, s.angVel[3 * i + 1]!, s.angVel[3 * i + 2]!));
+    }
+    run = v < QUIET_SPEED && w < QUIET_SPIN ? run + 1 : 0;
+  }
+  return { c, run, settled: await e.snapshot() };
+}
+
+describe.each(ENGINES)('levels on %s', (name, make) => {
+  const levels = LEVELS.map((l) => [l.id, l] as const);
+  it.each(levels)('%s goes quiet within the pre-settle', async (_id, def) => {
+    const e = make();
+    const { c, run, settled } = await presettle(e, def);
+    e.dispose();
+    expect(run, 'quiet steps at the end of the pre-settle').toBeGreaterThanOrEqual(SETTLE_QUIET);
     // The pre-settle only absorbs contact compression: small, and no tilt.
     for (let i = 0; i < c.meta.n; i++) {
       const drift = Math.hypot(...[0, 1, 2].map((k) => settled.pos[3 * i + k]! - c.meta.home[3 * i + k]!));
-      expect(drift, `body ${i} drift`).toBeLessThan(0.2 * h);
+      expect(drift, `body ${i} drift`).toBeLessThan(0.2 * c.frame.unit);
       expect(quatAngle([...settled.rot.subarray(4 * i, 4 * i + 4)] as [number, number, number, number]), `body ${i} tilt`).toBeLessThan((2 * Math.PI) / 180);
     }
-    expect(settled.awake.every((a) => a === 0)).toBe(true);
-    for (let t = 0; t < 120; t++) await d.engine.step();
-    const later = await d.engine.snapshot();
-    for (let i = 0; i < 3 * c.meta.n; i++) expect(Math.abs(later.pos[i]! - settled.pos[i]!)).toBeLessThan(1e-3);
-    d.engine.dispose();
-  });
+    if (name === 'Rapier') expect(settled.awake.every((a) => a === 0)).toBe(true); // the reference does not sleep
+  }, 120_000);
+
+  // Idle stacks must stay put, or a level changes before the first shot. Known
+  // failure on the AVBD reference: stacks keep sinking (about 1 to 2 mm in these
+  // 2 s, decaying) and L2 later creeps sideways exponentially (1.9 h by 10 s).
+  // Reported to the solver thread; when their fix lands this row starts
+  // passing, vitest flags it, and it.fails becomes it.
+  const holds = name === 'Rapier' ? it.each(levels) : it.fails.each(levels);
+  holds('%s then sits still for 2 s (within 1 mm)', async (_id, def) => {
+    const e = make();
+    const { c, settled } = await presettle(e, def);
+    for (let t = 0; t < 120; t++) await e.step();
+    const later = await e.snapshot();
+    e.dispose();
+    let worst = 0;
+    for (let i = 0; i < 3 * c.meta.n; i++) worst = Math.max(worst, Math.abs(later.pos[i]! - settled.pos[i]!));
+    expect(worst).toBeLessThan(1e-3);
+  }, 120_000);
 });
 
 const open: LevelDef = {
