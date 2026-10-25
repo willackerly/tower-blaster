@@ -113,8 +113,11 @@ export class RapierHost implements PhysicsHost {
         if (entry.body.bodyType() !== type) entry.body.setBodyType(type, c.mode === MODE_DYNAMIC);
       }
       const rb = entry.body;
-      if (c.pos) rb.setTranslation({ x: c.pos[0], y: c.pos[1], z: c.pos[2] }, true);
-      if (c.rot) rb.setRotation({ x: c.rot[0], y: c.rot[1], z: c.rot[2], w: c.rot[3] }, true);
+      // A body put at the pose it already has is left alone: setRotation
+      // renormalises, which moved 17% of quaternions by an f32 ulp, and a
+      // collapse amplifies that (one S5 shot froze 310 cubes instead of 740).
+      if (c.pos && !sameF32(rb.translation(), c.pos)) rb.setTranslation({ x: c.pos[0], y: c.pos[1], z: c.pos[2] }, true);
+      if (c.rot && !sameF32(rb.rotation(), c.rot)) rb.setRotation({ x: c.rot[0], y: c.rot[1], z: c.rot[2], w: c.rot[3] }, true);
       if (c.mode === MODE_DYNAMIC) {
         const v = c.linVel ?? (prev === MODE_DYNAMIC ? null : [0, 0, 0]);
         const a = c.angVel ?? (prev === MODE_DYNAMIC ? null : [0, 0, 0]);
@@ -307,4 +310,9 @@ export class RapierHost implements PhysicsHost {
     this.bodies = [];
     this.lattices = [];
   }
+}
+
+/** Whether Rapier's f32 pose `a` already equals `b` rounded to f32. */
+function sameF32(a: { x: number; y: number; z: number; w?: number }, b: readonly number[]): boolean {
+  return a.x === Math.fround(b[0]!) && a.y === Math.fround(b[1]!) && a.z === Math.fround(b[2]!) && (b.length < 4 || a.w === Math.fround(b[3]!));
 }

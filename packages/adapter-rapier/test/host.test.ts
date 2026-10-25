@@ -60,6 +60,26 @@ describe('RapierHost', () => {
     h.dispose();
   });
 
+  it('leaves a body put at the pose it already has bit for bit (Rapier renormalises every rotation it is given)', async () => {
+    let seed = 7;
+    const rand = () => ((seed = (seed * 1103515245 + 12345) % 2 ** 31) / 2 ** 31) - 0.5;
+    const table = Array.from({ length: 200 }, (_, i) => cube([3 * (i % 20), 0.5, 3 * Math.floor(i / 20)]));
+    const h = new RapierHost();
+    await h.init({ ...world, gravity: [0, 0, 0] }, table);
+    h.apply({ changes: table.map((b, id) => {
+      const q = [rand(), rand(), rand(), rand()], n = Math.hypot(...q);
+      return { id, mode: MODE_DYNAMIC, pos: b.pos, rot: q.map((x) => x / n) as [number, number, number, number] };
+    }), wake: [] });
+    const before = h.read();
+    const pose = (s: typeof before, n: number): ModeChange => ({ id: s.ids[n]!, mode: MODE_STATIC, pos: [s.pos[3 * n]!, s.pos[3 * n + 1]!, s.pos[3 * n + 2]!], rot: [s.rot[4 * n]!, s.rot[4 * n + 1]!, s.rot[4 * n + 2]!, s.rot[4 * n + 3]!] });
+    h.apply({ changes: table.map((_, n) => pose(before, n)), wake: [] });
+    h.apply({ changes: table.map((_, id) => ({ id, mode: MODE_DYNAMIC })), wake: [] }); // back to dynamic in place, to read the poses
+    const after = h.read();
+    expect(Array.from(after.pos)).toEqual(Array.from(before.pos));
+    expect(Array.from(after.rot)).toEqual(Array.from(before.rot));
+    h.dispose();
+  });
+
   it('rejects a bad batch without applying any of it', async () => {
     const table = [cube([0, 0.5, 0]), cube([0, 1.5, 0])];
     const h = new RapierHost();
