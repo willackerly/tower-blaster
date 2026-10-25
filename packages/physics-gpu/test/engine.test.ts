@@ -224,6 +224,39 @@ describe('GPU AVBD engine: stacks, towers and impacts', () => {
   });
 });
 
+describe('GPU AVBD engine: snapshot()', () => {
+  const knock = (fireStep: number) => buildScenario('S5', { N: 48, F: 2, H: 12, fireStep, speed: 15, massRatio: 5, radius: 0.6 }, 1);
+
+  it('equals the readStruct decode bit for bit, reads awake from flags bit 0, and reuses one staging buffer', async (ctx) => {
+    if (!gpu) return ctx.skip();
+    const scene = knock(0);
+    const r = await call('snapshotDecode', scene, 50, 7);
+    expect(r.error).toBeNull();
+    expect(r.count).toBe(bodiesAt(scene, 50).length);
+    expect(r.compared).toBe(14 * r.count);
+    expect(r.mismatches, JSON.stringify(r.examples)).toBe(0);
+    // add() writes flags 1, and nothing else writes them.
+    expect(r.sleepingAtStart).toEqual([]);
+    expect(r.sleepingWithTierBits).toEqual([7]);
+    expect(r.sleepingAfterWake).toEqual([]);
+    expect(r.created).toBe(1);
+  });
+
+  it('reads only the bodies spawned so far, n * 64 bytes, not the capacity', async (ctx) => {
+    if (!gpu) return ctx.skip();
+    const scene = knock(30);
+    const r = await call('snapshotSpawn', scene, [0, 10, 31]);
+    expect(r.error).toBeNull();
+    const n = scene.bodies.length;
+    expect(r.capacityBytes).toBe((n + 1) * 64);
+    expect(r.reads).toEqual([
+      { step: 0, count: n, posLength: 3 * n, bytes: 64 * n },
+      { step: 10, count: n, posLength: 3 * n, bytes: 64 * n },
+      { step: 31, count: n + 1, posLength: 3 * (n + 1), bytes: 64 * (n + 1) },
+    ]);
+  });
+});
+
 describe('GPU AVBD engine: finish()', () => {
   it('waits until the device queue reports the submitted work done', async () => {
     const e = new GpuAvbdEngine();

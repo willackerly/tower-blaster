@@ -1,7 +1,7 @@
 // Page-side drivers for the GPU physics tests (bundled by loadBundle).
-import { createDevice, readBuffer } from '@tb/gpu';
+import { createDevice, readBuffer, type Readback } from '@tb/gpu';
 import { boundingRadius, groundManifold, NO_AXIS, quatNormalize, shapeManifold, spherePairs, supportArea, type Manifold as CpuManifold } from '@tb/geom';
-import { Body, Manifold, readStruct, Shape, writeStruct } from '@tb/schema';
+import { Body, field, Manifold, readStruct, Shape, writeStruct } from '@tb/schema';
 import type { BodyDesc, Quat, Vec3 } from '@tb/engine-api';
 import { buildScenario } from '@tb/scenarios';
 import { bodiesAt } from '@tb/engine-api';
@@ -542,4 +542,73 @@ export async function finishFailures(scene: SceneDesc) {
   const reinit = await settle(e3.finish());
   e3.dispose();
   return { healthy, afterError, stepAfterError, afterLoss, reinit };
+}
+
+type SnapshotParts = { parts: { bodies: GPUBuffer; readback: Readback }; n: number };
+
+/**
+ * snapshot() after `steps` steps against a readBuffer + readStruct decode of
+ * the bodies buffer (the old path), compared with Object.is; then the awake
+ * bit: body `flagged` given flags 0x100 (tier bits set, awake clear), kept
+ * through a step, then 0x101. Three snapshots in all, on one staging buffer.
+ */
+export async function snapshotDecode(scene: SceneDesc, steps: number, flagged: number) {
+  const { device } = await createDevice();
+  device.pushErrorScope('validation');
+  const e = new GpuAvbdEngine({}, { device });
+  await e.init(scene);
+  const { parts } = e as unknown as SnapshotParts;
+  for (let i = 0; i < steps; i++) e.step();
+  const s = await e.snapshot();
+  const v = new DataView(await readBuffer(device, parts.bodies));
+  let mismatches = 0, compared = 0;
+  const examples: unknown[] = [];
+  for (let i = 0; i < s.count; i++) {
+    const b = readStruct(v, Body, i);
+    for (const [k, c] of [['pos', 3], ['rot', 4], ['linVel', 3], ['angVel', 3]] as const) {
+      for (let j = 0; j < c; j++, compared++) {
+        if (Object.is(s[k][c * i + j], b[k]![j])) continue;
+        mismatches++;
+        if (examples.length < 3) examples.push({ i, k, j, got: s[k][c * i + j], want: b[k]![j] });
+      }
+    }
+    compared++;
+    if (s.awake[i] !== (b.flags![0]! & 1)) mismatches++;
+  }
+  const asleep = (a: Uint8Array) => [...a].flatMap((x, i) => (x === 0 ? [i] : []));
+  const setFlags = (f: number) => device.queue.writeBuffer(parts.bodies, flagged * Body.size + field(Body, 'flags').offset, Uint32Array.from([f]));
+  setFlags(0x100);
+  e.step();
+  const tierBits = await e.snapshot();
+  setFlags(0x101);
+  const woken = await e.snapshot();
+  const error = await device.popErrorScope();
+  const res = {
+    error: error?.message ?? null, count: s.count, compared, mismatches, examples, sleepingAtStart: asleep(s.awake),
+    sleepingWithTierBits: asleep(tierBits.awake), sleepingAfterWake: asleep(woken.awake), created: parts.readback.created,
+  };
+  e.dispose();
+  device.destroy();
+  return res;
+}
+
+/** Bodies counted and bytes read by snapshot() at each of `at` (step counts, ascending), with the buffer's capacity. */
+export async function snapshotSpawn(scene: SceneDesc, at: number[]) {
+  const { device } = await createDevice();
+  device.pushErrorScope('validation');
+  const e = new GpuAvbdEngine({}, { device });
+  await e.init(scene);
+  const { parts } = e as unknown as SnapshotParts;
+  const reads = [];
+  for (const step of at) {
+    while (e.stepIndex < step) e.step();
+    const before = parts.readback.bytesRead;
+    const s = await e.snapshot();
+    reads.push({ step, count: s.count, posLength: s.pos.length, bytes: parts.readback.bytesRead - before });
+  }
+  const error = await device.popErrorScope();
+  const res = { error: error?.message ?? null, capacityBytes: parts.bodies.size, reads };
+  e.dispose();
+  device.destroy();
+  return res;
 }
