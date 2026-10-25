@@ -307,7 +307,7 @@ export async function coloring(c: ColorCase) {
   const enc = device.createCommandEncoder();
   col.encode(enc, n);
   device.queue.submit([enc.finish()]);
-  const [colorsB, orderB, startB, dispB, infoB, manB] = await Promise.all([col.colors, col.order, col.colorStart, col.dispatch, col.info, manifolds].map((b) => readBuffer(device, b)));
+  const [colorsB, orderB, startB, dispB, infoB, manB, rsB, rlB, adjB, slotB] = await Promise.all([col.colors, col.order, col.colorStart, col.dispatch, col.info, manifolds, col.rowStart, col.rowLength, col.adj, col.adjSlot].map((b) => readBuffer(device, b)));
   const wallMs = performance.now() - t0;
   const error = await device.popErrorScope();
   const colors = [...new Uint32Array(colorsB!).slice(0, n)];
@@ -326,6 +326,16 @@ export async function coloring(c: ColorCase) {
     edges++;
   }
   const ref = [...colorGraph(adj.map((s) => [...s]))];
+  // Rows: every slot with points touching body i, ascending, with the right neighbour.
+  const rs = new Uint32Array(rsB!), rl = new Uint32Array(rlB!), ga = new Uint32Array(adjB!), gs = new Uint32Array(slotB!);
+  const expectRows: Array<Array<[number, number]>> = Array.from({ length: n }, () => []);
+  for (let k = 0; k < slots; k++) {
+    const m = readStruct(mv, Manifold, k);
+    if (!m.count![0]) continue;
+    expectRows[m.a![0]!]!.push([k, m.b![0]!]);
+    expectRows[m.b![0]!]!.push([k, m.a![0]!]);
+  }
+  const rowsMatch = expectRows.every((row, i) => rl[i] === row.length && row.every(([k, j], q) => gs[rs[i]! + q] === k && ga[rs[i]! + q] === j));
   const used = n ? Math.max(...ref) + 1 : 0;
   const expectOrder = Array.from({ length: n }, (_, i) => i).sort((i, j) => ref[i]! - ref[j]! || i - j);
   const expectStart = Array.from({ length: MAX_COLORS + 1 }, (_, k) => ref.filter((x) => x < k).length);
@@ -335,7 +345,7 @@ export async function coloring(c: ColorCase) {
   device.destroy();
   return {
     error: error?.message ?? null, n, edges, colorsUsed: info[0], uncolored: info[1], overflow: info[2], refColors: used,
-    colorsMatch: firstMismatch < 0, firstMismatch, orderMatch: order.every((x, k) => x === expectOrder[k]),
+    colorsMatch: firstMismatch < 0, firstMismatch, rowsMatch, orderMatch: order.every((x, k) => x === expectOrder[k]),
     startMatch: start.every((x, k) => x === expectStart[k]),
     dispatchMatch: Array.from({ length: MAX_COLORS }, (_, k) => disp[3 * k] === Math.ceil((expectStart[k + 1]! - expectStart[k]!) / 64) && disp[3 * k + 1] === 1 && disp[3 * k + 2] === 1).every(Boolean),
     maxDegree: Math.max(0, ...adj.map((s) => s.size)), wallMs,

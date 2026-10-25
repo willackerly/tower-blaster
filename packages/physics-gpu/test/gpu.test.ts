@@ -97,6 +97,7 @@ describe('GPU graph colouring vs the reference (Jones-Plassmann = greedy in prio
     expect(r.uncolored).toBe(0);
     expect(r.overflow).toBe(0);
     expect(r.colorsMatch, `first mismatch at ${r.firstMismatch}`).toBe(true);
+    expect(r.rowsMatch).toBe(true);
     expect(r.colorsUsed).toBe(r.refColors);
     expect(r.orderMatch).toBe(true);
     expect(r.startMatch).toBe(true);

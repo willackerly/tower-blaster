@@ -16,8 +16,9 @@
 // in-place version would also be correct under sequential consistency, but
 // WGSL atomics are relaxed.)
 //
-// Adjacency order within a row is not deterministic (atomic fill) and does
-// not need to be: nothing reads it in order.
+// The atomic fill leaves each row in scheduling order; rows are then sorted
+// by manifold slot so the solver, which walks a body's row to sum its
+// contact forces, is bit-for-bit reproducible.
 import { RadixSorter, Scanner } from '@tb/gpu';
 import { Manifold, wgslStruct } from '@tb/schema';
 
@@ -52,6 +53,7 @@ struct Params { n: u32, maxEdges: u32 }
 @group(0) @binding(4) var<storage, read_write> cursor: array<atomic<u32>>;
 @group(0) @binding(5) var<storage, read_write> adj: array<u32>;
 @group(0) @binding(6) var<uniform> p: Params;
+@group(0) @binding(7) var<storage, read_write> adjSlot: array<u32>;
 
 @compute @workgroup_size(${WG})
 fn countDegree(@builtin(global_invocation_id) id: vec3u) {
@@ -71,8 +73,31 @@ fn fill(@builtin(global_invocation_id) id: vec3u) {
   if (m.count == 0u) { return; }
   let sa = rowStart[m.a] + atomicAdd(&cursor[m.a], 1u);
   let sb = rowStart[m.b] + atomicAdd(&cursor[m.b], 1u);
-  if (sa < p.maxEdges) { adj[sa] = m.b; }
-  if (sb < p.maxEdges) { adj[sb] = m.a; }
+  if (sa < p.maxEdges) { adj[sa] = m.b; adjSlot[sa] = k; }
+  if (sb < p.maxEdges) { adj[sb] = m.a; adjSlot[sb] = k; }
+}
+
+// Sort each row by manifold slot (insertion sort; rows are short). The fill
+// order is scheduling-dependent; the solver sums forces in row order, so
+// sorted rows make its results bit-for-bit reproducible.
+@compute @workgroup_size(${WG})
+fn sortRows(@builtin(global_invocation_id) id: vec3u) {
+  let i = id.x;
+  if (i >= p.n) { return; }
+  let start = rowStart[i];
+  let end = min(start + atomicLoad(&cursor[i]), p.maxEdges);
+  for (var k = start + 1u; k < end; k++) {
+    let s = adjSlot[k];
+    let a = adj[k];
+    var j = k;
+    while (j > start && adjSlot[j - 1u] > s) {
+      adjSlot[j] = adjSlot[j - 1u];
+      adj[j] = adj[j - 1u];
+      j--;
+    }
+    adjSlot[j] = s;
+    adj[j] = a;
+  }
 }`;
 
 const ROUNDS = /* wgsl */ `
@@ -179,16 +204,20 @@ export class Coloring {
   /** u32 x 8: [colours used, uncoloured, overflow]. */
   readonly info: GPUBuffer;
   readonly maxEdges: number;
+  /** Contact graph rows (CSR): body i's neighbours are adj[rowStart[i] .. + rowLength[i]], sorted by manifold slot. */
+  readonly rowStart: GPUBuffer;
+  /** Row lengths (u32 per body). */
+  readonly rowLength: GPUBuffer;
+  readonly adj: GPUBuffer;
+  /** Manifold slot of each adjacency entry. */
+  readonly adjSlot: GPUBuffer;
   private readonly degree: GPUBuffer;
-  private readonly rowStart: GPUBuffer;
-  private readonly cursor: GPUBuffer;
-  private readonly adj: GPUBuffer;
   private readonly ping: [GPUBuffer, GPUBuffer];
   private readonly uniform: GPUBuffer;
   private readonly rangesUniform: GPUBuffer;
   private readonly scanner: Scanner;
   private readonly sorter: RadixSorter;
-  private readonly pipes: Record<'countDegree' | 'fill' | 'init' | 'round' | 'finish', GPUComputePipeline>;
+  private readonly pipes: Record<'countDegree' | 'fill' | 'sortRows' | 'init' | 'round' | 'finish', GPUComputePipeline>;
   private readonly graphBind: GPUBindGroup;
   private readonly binds: [GPUBindGroup, GPUBindGroup];
   private readonly rangesPipe: GPUComputePipeline;
@@ -205,8 +234,9 @@ export class Coloring {
     const buf = (bytes: number, label: string, extra = 0) => device.createBuffer({ size: Math.max(16, bytes), usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST | extra, label });
     this.degree = buf(capacity * 4, 'col degree');
     this.rowStart = buf(capacity * 4, 'col row start');
-    this.cursor = buf(capacity * 4, 'col cursor');
+    this.rowLength = buf(capacity * 4, 'col row length (fill cursor)');
     this.adj = buf(this.maxEdges * 4, 'col adjacency');
+    this.adjSlot = buf(this.maxEdges * 4, 'col adjacency slot');
     this.ping = [buf(capacity * 4, 'col colours A'), buf(capacity * 4, 'col colours B')];
     this.colors = this.ping[1];
     this.order = buf(capacity * 4, 'col order');
@@ -221,21 +251,21 @@ export class Coloring {
     const layoutOf = (kinds: GPUBufferBindingType[]) => device.createPipelineLayout({
       bindGroupLayouts: [device.createBindGroupLayout({ entries: kinds.map((type, binding) => ({ binding, visibility: GPUShaderStage.COMPUTE, buffer: { type } })) })],
     });
-    const graphLayout = layoutOf(['read-only-storage', 'read-only-storage', 'storage', 'storage', 'storage', 'storage', 'uniform']);
+    const graphLayout = layoutOf(['read-only-storage', 'read-only-storage', 'storage', 'storage', 'storage', 'storage', 'uniform', 'storage']);
     const roundLayout = layoutOf(['read-only-storage', 'read-only-storage', 'read-only-storage', 'storage', 'storage', 'storage', 'storage', 'uniform']);
     const graph = device.createShaderModule({ code: GRAPH, label: 'coloring graph' });
     const roundsModule = device.createShaderModule({ code: ROUNDS, label: 'coloring rounds' });
     const mk = (layout: GPUPipelineLayout, module: GPUShaderModule, entryPoint: string) => device.createComputePipeline({ layout, compute: { module, entryPoint } });
     this.pipes = {
-      countDegree: mk(graphLayout, graph, 'countDegree'), fill: mk(graphLayout, graph, 'fill'),
+      countDegree: mk(graphLayout, graph, 'countDegree'), fill: mk(graphLayout, graph, 'fill'), sortRows: mk(graphLayout, graph, 'sortRows'),
       init: mk(roundLayout, roundsModule, 'init'), round: mk(roundLayout, roundsModule, 'round'), finish: mk(roundLayout, roundsModule, 'finish'),
     };
     const entries = (buffers: GPUBuffer[]) => buffers.map((buffer, binding) => ({ binding, resource: { buffer } }));
-    this.graphBind = device.createBindGroup({ layout: this.pipes.countDegree.getBindGroupLayout(0), entries: entries([manifolds, total, this.degree, this.rowStart, this.cursor, this.adj, this.uniform]) });
-    // After fill, cursor[i] is body i's row length.
+    this.graphBind = device.createBindGroup({ layout: this.pipes.countDegree.getBindGroupLayout(0), entries: entries([manifolds, total, this.degree, this.rowStart, this.rowLength, this.adj, this.uniform, this.adjSlot]) });
+    // After fill, rowLength (the fill cursor) holds each row's length.
     const bindWith = (cin: GPUBuffer, cout: GPUBuffer) => device.createBindGroup({
       layout: this.pipes.round.getBindGroupLayout(0),
-      entries: entries([this.rowStart, this.cursor, this.adj, cin, cout, this.info, this.order, this.uniform]),
+      entries: entries([this.rowStart, this.rowLength, this.adj, cin, cout, this.info, this.order, this.uniform]),
     });
     this.binds = [bindWith(this.ping[0], this.ping[1]), bindWith(this.ping[1], this.ping[0])];
     const rmod = device.createShaderModule({ code: RANGES, label: 'coloring ranges' });
@@ -250,7 +280,7 @@ export class Coloring {
     if (n > this.capacity) throw new Error(`Coloring: n ${n} exceeds capacity ${this.capacity}`);
     this.device.queue.writeBuffer(this.uniform, 0, new Uint32Array([n, this.maxEdges]));
     this.device.queue.writeBuffer(this.rangesUniform, 0, new Uint32Array([n]));
-    for (const b of [this.degree, this.cursor, this.info]) encoder.clearBuffer(b);
+    for (const b of [this.degree, this.rowLength, this.info]) encoder.clearBuffer(b);
     const groups = Math.max(1, Math.ceil(n / WG));
     let pass = encoder.beginComputePass();
     pass.setBindGroup(0, this.graphBind);
@@ -263,8 +293,10 @@ export class Coloring {
     pass.setBindGroup(0, this.graphBind);
     pass.setPipeline(this.pipes.fill);
     pass.dispatchWorkgroupsIndirect(this.total, 0);
+    pass.setPipeline(this.pipes.sortRows);
+    pass.dispatchWorkgroups(groups);
     pass.end();
-    // A new pass, because the rounds read cursor and adj through read-only bindings.
+    // A new pass, because the rounds read rowLength and adj through read-only bindings.
     pass = encoder.beginComputePass();
     pass.setBindGroup(0, this.binds[0]);
     pass.setPipeline(this.pipes.init);
@@ -292,6 +324,6 @@ export class Coloring {
   destroy(): void {
     this.scanner.destroy();
     this.sorter.destroy();
-    for (const b of [this.degree, this.rowStart, this.cursor, this.adj, ...this.ping, this.order, this.colorStart, this.dispatch, this.info, this.uniform, this.rangesUniform]) b.destroy();
+    for (const b of [this.degree, this.rowStart, this.rowLength, this.adj, this.adjSlot, ...this.ping, this.order, this.colorStart, this.dispatch, this.info, this.uniform, this.rangesUniform]) b.destroy();
   }
 }
