@@ -17,7 +17,8 @@
     "bench:suite": "tsx packages/runner/src/suite-cli.ts",
     "viewer": "vite packages/viewer",
     "keystone:probe": "tsx packages/keystone-lab/src/cli.ts",
-    "keystone:bot": "tsx packages/keystone-lab/src/bot-cli.ts"
+    "keystone:bot": "tsx packages/keystone-lab/src/bot-cli.ts",
+    "game": "vite packages/game"
   },
   "devDependencies": {
     "@tb/adapter-rapier": "workspace:*",
