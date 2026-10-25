@@ -61,7 +61,7 @@ Renders any engine live with WebGPU: drag to orbit, right-drag or shift-drag to 
 |---|---|
 | `engine-api` | The `PhysicsEngine` contract shared by the game, the harness and every engine |
 | `schema` | GPU buffer layouts, defined once; generates WGSL and TS accessors |
-| `geom` | Double-precision reference geometry (SAT, broadphase) used as a test oracle |
+| `geom` | Double-precision reference geometry (SAT, broadphase, contact manifolds) used as a test oracle |
 | `scenarios` | Seeded benchmark scenes S1-S11 |
 | `metrics` | Quality metrics and benchmark statistics |
 | `lattice` | Dormant tier: intact towers as a voxel lattice, support rules (loose columns), GPU brick export |
@@ -69,5 +69,8 @@ Renders any engine live with WebGPU: drag to orbit, right-drag or shift-drag to 
 | `bench` | Timing and quality runs, CLI |
 | `runner` | Browser runner page, Playwright orchestrator (`bench:browser`) |
 | `gpu` | GPU primitives (profiler, scan, compaction, radix sort, bandwidth probe) and `bench:gpu` |
+| `physics-gpu` | GPU physics pipeline stages (broadphase, narrowphase, graph colouring so far) |
+| `physics-ref` | Reference AVBD rigid-body solver in double precision: the oracle for the GPU solver (`avbd-ref` in the bench) |
 | `testkit` | Headless Chromium WebGPU sessions for tests |
+| `render` | WebGPU renderer: GPU culling and indirect draws straight from Body buffers (design: docs/render-design.md) |
 | `viewer` | Interactive WebGPU viewer (`pnpm viewer`) |

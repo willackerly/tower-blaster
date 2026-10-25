@@ -1,12 +1,15 @@
 // Engine registry for the CLI: "name" or "name:key=value,key=value".
 import type { InputEvent, PhysicsEngine, SceneDesc, StepReport } from '@tb/engine-api';
 import { RapierEngine, RapierHost } from '@tb/adapter-rapier';
+import { AvbdReferenceEngine } from '@tb/physics-ref';
 import { TieredEngine } from '@tb/lattice';
 
 type Options = Record<string, number | boolean>;
 
 const REGISTRY: Record<string, (o: Options) => PhysicsEngine> = {
   rapier: (o) => new RapierEngine(o.iterations !== undefined ? { iterations: Number(o.iterations) } : {}),
+  // Options are AvbdParams fields, e.g. avbd-ref:iterations=4,sweep=false.
+  'avbd-ref': (o) => new AvbdReferenceEngine(o),
   // Dormant lattice tier over a Rapier host; other options are TierParams (e.g. tiered:vWake=0.5).
   tiered: (o) => {
     const { iterations, ...tier } = o;

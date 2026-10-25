@@ -23,12 +23,59 @@ struct Body {
   shape: u32, // @60 index into the shape table
 }
 
-// What the renderer reads per body.
+// Per-body pose the renderer draws, written once per frame by its prepare pass.
 // size 48 B, align 16
-struct RenderInstance {
-  pos: vec3f, // @0
-  palette: u32, // @12 colour index, e.g. original tower height
-  rot: vec4f, // @16
+struct RenderRecord {
+  pos: vec3f, // @0 camera-relative centre, interpolated between the last two steps
+  look: u32, // @12 BodyLook bits: 0-7 ramp, 8-11 hue, 12-15 material, 16-31 seed
+  rot: vec4f, // @16 unit quaternion (x, y, z, w), interpolated
   half: vec3f, // @32 box half extents; x is the radius for a sphere
-  shape: u32, // @44 0 box, 1 sphere
+  slot: u32, // @44 body index
+}
+
+// Collision shape, indexed by Body.shape.
+// size 16 B, align 16
+struct Shape {
+  half: vec3f, // @0 box half extents; x is the radius for a sphere
+  kind: u32, // @12 0 box, 1 sphere
+}
+
+// Contact manifold for one body pair, written by the narrowphase.
+// size 96 B, align 16
+struct Manifold {
+  normal: vec3f, // @0 unit, from body a to body b (from the ground up for ground contacts)
+  count: u32, // @12 contact points used, 0..4; 0 means no contact
+  a: u32, // @16
+  b: u32, // @20 0xffffffff for the ground
+  feature: u32, // @24 0 face of a, 1 face of b, 2 edge-edge
+  pad: u32, // @28
+  p0: vec4f, // @32 point xyz (midway between the surfaces), depth w (> 0 overlapping)
+  p1: vec4f, // @48
+  p2: vec4f, // @64
+  p3: vec4f, // @80
+}
+
+// An impact that spawns sparks.
+// size 32 B, align 16
+struct ImpactEvent {
+  pos: vec3f, // @0 world position of the contact
+  strength: f32, // @12 speed change, m/s
+  dir: vec3f, // @16 unit; sparks fly out around it
+  packed: u32, // @28 bits 0-23 slot (0xffffff: none), 24-27 kind (0 detector, 1 injected), 28-31 material
+}
+
+// One spark of the renderer's pool.
+// size 32 B, align 16
+struct Spark {
+  pos: vec3f, // @0 world position
+  age: f32, // @12 seconds; negative means dead
+  vel: vec3f, // @16 m/s
+  packed: u32, // @28 bits 0-7 life (0.4 + 0.8 * q / 255 s), 8-31 seed
+}
+
+// Renderer-side per-slot effect state.
+// size 16 B, align 16
+struct FxState {
+  prevLinVel: vec3f, // @0 velocity when the detector last saw the slot
+  bits: u32, // @12 bits 0-15 heat (f16), 16-23 tier last seen, 24 valid
 }

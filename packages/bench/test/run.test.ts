@@ -49,6 +49,7 @@ describe('engine registry and SlowedEngine', () => {
     expect(parseSpec('rapier:iterations=8,ccd=true')).toEqual({ name: 'rapier', options: { iterations: 8, ccd: true } });
     expect(() => makeEngine('nope')).toThrow(/unknown engine/);
     expect(makeEngine('rapier:iterations=6').info.variant.iterations).toBe(6);
+    expect(makeEngine('avbd-ref:iterations=4,sweep=false').info.variant).toMatchObject({ iterations: 4, sweep: false });
   });
 
   it('slows each step by the requested fraction', async () => {
