@@ -9,7 +9,7 @@ import {
   type BodyDesc, type BodyMode, type EngineInfo, type HostBatch, type HostCaps, type HostLattice, type HostState, type HostWorld,
   MODE_DYNAMIC, MODE_OFF, MODE_STATIC, type PhysicsHost, type Quat, type Vec3,
 } from '@tb/engine-api';
-import { boundingRadius, shapeDepth } from '@tb/geom';
+import { boundingRadius, signedDepth } from '@tb/geom';
 import { createBody, createGround, initRapier } from './bodies.ts';
 import type { RapierOptions } from './index.ts';
 
@@ -199,7 +199,7 @@ export class RapierHost implements PhysicsHost {
           const id = l.cells[this.cellIndex(l, i, j, k)]!;
           if (id < 0) continue;
           const c: Vec3 = [l.origin[0] + i * e, l.origin[1] + j * e, l.origin[2] + k * e];
-          if (shapeDepth(desc.shape, pos, rot, { kind: 'box', half: [h, h, h] }, c, [0, 0, 0, 1]) > -0.05 * e) out.push(id);
+          if (signedDepth(desc.shape, pos, rot, { kind: 'box', half: [h, h, h] }, c, [0, 0, 0, 1]) > -0.05 * e) out.push(id);
         }
     return out.sort((a, b) => a - b);
   }

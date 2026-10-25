@@ -135,6 +135,40 @@ export function shapeDepth(sa: ShapeDesc, pa: Vec3, qa: Quat, sb: ShapeDesc, pb:
   throw new Error('unreachable');
 }
 
+/**
+ * Signed depth: penetration when the shapes overlap (as shapeDepth), minus
+ * a lower bound on their gap when they do not (exact for spheres, sphere and
+ * box, and boxes separated along a face normal; the largest separation over
+ * the SAT axes otherwise). Use it for "within tol of touching" tests, which
+ * shapeDepth (0 for any separated pair) cannot answer.
+ */
+export function signedDepth(sa: ShapeDesc, pa: Vec3, qa: Quat, sb: ShapeDesc, pb: Vec3, qb: Quat): number {
+  if (sa.kind === 'sphere' && sb.kind === 'sphere') return sa.radius + sb.radius - length(sub(pa, pb));
+  if (sa.kind === 'box' && sb.kind === 'box') {
+    const a = obb(pa, qa, sa.half), b = obb(pb, qb, sb.half), d = sub(b.c, a.c);
+    const candidates: Vec3[] = [...a.axes, ...b.axes];
+    for (const u of a.axes) for (const v of b.axes) {
+      const n = cross(u, v), len = length(n);
+      if (len > 1e-6) candidates.push(scale(n, 1 / len));
+    }
+    let best = Infinity;
+    for (const n of candidates) best = Math.min(best, radius(a, n) + radius(b, n) - Math.abs(dot(d, n)));
+    return best;
+  }
+  let c: Vec3, r: number, box: Obb;
+  if (sa.kind === 'sphere' && sb.kind === 'box') { c = pa; r = sa.radius; box = obb(pb, qb, sb.half); }
+  else if (sa.kind === 'box' && sb.kind === 'sphere') { c = pb; r = sb.radius; box = obb(pa, qa, sa.half); }
+  else throw new Error('unreachable');
+  const depth = sphereBoxDepth(c, r, box);
+  return depth > 0 ? depth : r - length(sub(c, closestPointOnBox(box, c)));
+}
+
+/** Signed depth below the plane y = groundY (negative: height of the lowest point above it). */
+export function signedGroundDepth(shape: ShapeDesc, pos: Vec3, rot: Quat, groundY: number): number {
+  if (shape.kind === 'sphere') return groundY - (pos[1] - shape.radius);
+  return groundY - (pos[1] - radius(obb(pos, rot, shape.half), [0, 1, 0]));
+}
+
 /** Radius of the bounding sphere. */
 export function boundingRadius(s: ShapeDesc): number {
   return s.kind === 'sphere' ? s.radius : length(s.half);

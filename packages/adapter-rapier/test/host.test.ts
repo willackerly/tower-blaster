@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { type BodyDesc, type HostWorld, MODE_DYNAMIC, MODE_OFF, MODE_STATIC, type ModeChange } from '@tb/engine-api';
+import { type BodyDesc, type HostWorld, massOf, MODE_DYNAMIC, MODE_OFF, MODE_STATIC, type ModeChange } from '@tb/engine-api';
 import { stateHash } from '@tb/metrics';
 import { buildScenario } from '@tb/scenarios';
 import { RapierEngine, RapierHost } from '../src/index.ts';
@@ -101,6 +101,20 @@ describe('RapierHost', () => {
       const c = h.read().contacts!;
       expect(Array.from(c.ids)).toEqual([0, 1]);
       for (const n of [0, 1]) expect(c.force[3 * n + 1]! / (2 * 9.81)).toBeCloseTo(-0.5, 2);
+      h.dispose();
+    });
+
+    it('split a contact force only over the cells the body touches', async () => {
+      // A ball on cell 0; cell 1 is within its bounding box but 0.2 m away.
+      const ball: BodyDesc = { ...cube([0, 1.5, 0]), shape: { kind: 'sphere', radius: 0.5 } };
+      const table = [cube([0, 0.5, 0]), cube([1, 0.5, 0]), ball];
+      const h = new RapierHost();
+      await h.init(world, table, [lat]);
+      h.apply({ changes: [on(2, MODE_DYNAMIC, ball)], wake: [], cells: [{ lattice: 0, i: 0, j: 0, k: 0, id: 0 }, { lattice: 0, i: 1, j: 0, k: 0, id: 1 }] });
+      for (let i = 0; i < 30; i++) h.step();
+      const c = h.read().contacts!;
+      expect(Array.from(c.ids)).toEqual([0]);
+      expect(c.force[1]! / (massOf(ball) * 9.81)).toBeCloseTo(-1, 2);
       h.dispose();
     });
 
