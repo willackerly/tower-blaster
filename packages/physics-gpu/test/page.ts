@@ -2,7 +2,7 @@
 import { createDevice, readBuffer } from '@tb/gpu';
 import { boundingRadius, groundManifold, NO_AXIS, quatNormalize, shapeManifold, spherePairs, supportArea, type Manifold as CpuManifold } from '@tb/geom';
 import { Body, Manifold, readStruct, Shape, writeStruct } from '@tb/schema';
-import type { BodyDesc, Quat, Vec3 } from '@tb/engine-api';
+import type { BodyDesc, InputEvent, Quat, Vec3 } from '@tb/engine-api';
 import { buildScenario } from '@tb/scenarios';
 import { bodiesAt } from '@tb/engine-api';
 import { Broadphase, Coloring, GpuAvbdEngine, MAX_COLORS, Narrowphase } from '../src/index.ts';
@@ -409,6 +409,59 @@ export async function simulateGpu(scene: SceneDesc, steps: number, params: Parti
   return { error: error?.message ?? null, snaps, maxColors, worst, wallMs };
 }
 
+
+/**
+ * The Rapier push() test on the GPU engine: inputs pushed mid-run (one for a
+ * past step, two for the same step around it) against the same events
+ * recorded into scene.inputs. Returns both final snapshots.
+ */
+export async function pushReplay(steps: number) {
+  const { device } = await createDevice();
+  device.pushErrorScope('validation');
+  const ball = (x: number, radius = 0.4): BodyDesc => ({ shape: { kind: 'sphere', radius }, pos: [x, 3, -6], rot: [0, 0, 0, 1], linVel: [0, 0, 12], angVel: [0, 0, 0], density: 5, friction: 0.5, restitution: 0.1, tag: -1 });
+  const base = buildScenario('S1', { F: 2, H: 4, gap: 0.02 });
+  // Room for the three pushes; the replay is created with the same options.
+  const opts = { device, capacity: base.bodies.length + 4 };
+  // Rejections leave the queue untouched: beyond capacity, a body larger than
+  // the cells were sized for, and (no options) any push past the scene.
+  const rejects = async (o: object, evs: InputEvent[]) => {
+    const e = new GpuAvbdEngine({}, { device, ...o });
+    await e.init(base);
+    let message: string | null = null;
+    try { e.push(evs); } catch (err) { message = (err as Error).message; }
+    for (let i = 0; i < 6; i++) e.step();
+    const count = (await e.snapshot()).count;
+    e.dispose();
+    return { message, count };
+  };
+  const rejected = {
+    capacity: await rejects({ capacity: base.bodies.length + 2 }, [0, 1, 2].map((k) => ({ step: 5, kind: 'spawn', body: ball(k) }))),
+    radius: await rejects({ capacity: base.bodies.length + 1 }, [{ step: 5, kind: 'spawn', body: ball(0, 2) }]),
+    noRoom: await rejects({}, [{ step: 5, kind: 'spawn', body: ball(0) }]),
+  };
+  const live = new GpuAvbdEngine({}, opts);
+  await live.init({ ...base, inputs: [{ step: 30, kind: 'spawn', body: ball(0) }] });
+  const pushedAt: InputEvent[] = [{ step: 30, kind: 'spawn', body: ball(0) }];
+  for (let i = 0; i < steps; i++) {
+    if (i === 10) {
+      const evs: InputEvent[] = [{ step: 20, kind: 'spawn', body: ball(10) }, { step: 3, kind: 'spawn', body: ball(-10) }, { step: 20, kind: 'spawn', body: ball(20) }];
+      live.push(evs);
+      pushedAt.push(...evs.map((e) => ({ ...e, step: Math.max(e.step, i) })));
+    }
+    live.step();
+  }
+  const a = await live.snapshot();
+  live.dispose();
+  const replay = new GpuAvbdEngine({}, opts);
+  await replay.init({ ...base, inputs: [...pushedAt].sort((x, y) => x.step - y.step) });
+  for (let i = 0; i < steps; i++) replay.step();
+  const b = await replay.snapshot();
+  replay.dispose();
+  const error = await device.popErrorScope();
+  device.destroy();
+  const plain = (s: typeof a) => ({ count: s.count, pos: [...s.pos], rot: [...s.rot] });
+  return { error: error?.message ?? null, n: base.bodies.length, live: plain(a), replay: plain(b), rejected };
+}
 
 /**
  * Step a scene and check the solver's pair history (AvbdSolver.match): for
