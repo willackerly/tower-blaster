@@ -12,8 +12,8 @@
 // Conventions: the normal points from shape A to shape B, depth > 0 means
 // overlap, and a speculative margin keeps contacts slightly apart (depth down
 // to -margin) so a solver can stop bodies before they touch.
-import { add, cross, dot, length, sub, scale, type Obb } from './index.ts';
-import type { Vec3 } from '@tb/engine-api';
+import { add, cross, dot, length, obb, sub, scale, type Obb } from './index.ts';
+import type { Quat, ShapeDesc, Vec3 } from '@tb/engine-api';
 
 export interface ContactPoint { point: Vec3; depth: number }
 export interface Manifold { normal: Vec3; points: ContactPoint[]; feature: 'faceA' | 'faceB' | 'edge' }
@@ -234,4 +234,20 @@ export function sphereGroundManifold(c: Vec3, r: number, groundY: number, margin
   const s = c[1] - r - groundY;
   if (s > margin) return null;
   return { normal: [0, 1, 0], feature: 'faceA', points: [{ point: [c[0], c[1] - r - s / 2, c[2]], depth: -s }] };
+}
+
+const neg = (v: Vec3): Vec3 => [-v[0], -v[1], -v[2]];
+
+/** Manifold between any two shapes, normal from a to b (the order the GPU narrowphase uses). */
+export function shapeManifold(sa: ShapeDesc, pa: Vec3, qa: Quat, sb: ShapeDesc, pb: Vec3, qb: Quat, margin = 0, reduce = true): Manifold | null {
+  if (sa.kind === 'box' && sb.kind === 'box') return boxBoxManifold(obb(pa, qa, sa.half), obb(pb, qb, sb.half), margin, reduce);
+  if (sa.kind === 'sphere' && sb.kind === 'sphere') return sphereSphereManifold(pa, sa.radius, pb, sb.radius, margin);
+  if (sa.kind === 'box' && sb.kind === 'sphere') return sphereBoxManifold(pb, sb.radius, obb(pa, qa, sa.half), margin);
+  const m = sphereBoxManifold(pa, (sa as { radius: number }).radius, obb(pb, qb, (sb as { half: Vec3 }).half), margin);
+  return m && { ...m, normal: neg(m.normal) };
+}
+
+/** Manifold of a shape against the ground plane y = groundY, normal +y. */
+export function groundManifold(s: ShapeDesc, p: Vec3, q: Quat, groundY: number, margin = 0, reduce = true): Manifold | null {
+  return s.kind === 'box' ? boxGroundManifold(obb(p, q, s.half), groundY, margin, reduce) : sphereGroundManifold(p, s.radius, groundY, margin);
 }

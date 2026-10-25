@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import fc from 'fast-check';
 import type { Quat, Vec3 } from '@tb/engine-api';
 import {
-  boxBoxDepth, boxBoxManifold, boxGroundManifold, dot, length, obb, quatFromAxisAngle, quatMul, quatNormalize, reduceContacts, rotate, supportArea,
+  boxBoxDepth, boxBoxManifold, boxGroundManifold, dot, length, obb, quatFromAxisAngle, quatMul, quatNormalize, reduceContacts, rotate, supportArea, shapeManifold, groundManifold,
   sphereBoxManifold, sphereSphereManifold, sub, type Obb,
 } from '../src/index.ts';
 
@@ -125,6 +125,23 @@ describe('reduceContacts', () => {
       expect(new Set(r).size).toBe(4);
       expect(supportArea(r.map((p) => p.point), N)).toBeCloseTo(best, 12);
     }
+  });
+});
+
+describe('shapeManifold and groundManifold', () => {
+  const box = { kind: 'box' as const, half: H }, ball = { kind: 'sphere' as const, radius: 0.5 };
+  it.for([['box', 'box'], ['box', 'sphere'], ['sphere', 'box'], ['sphere', 'sphere']] as const)('%s under %s: normal points from a (below) to b', ([ka, kb]) => {
+    const sa = ka === 'box' ? box : ball, sb = kb === 'box' ? box : ball;
+    const m = shapeManifold(sa, [0, 0, 0], I, sb, [0.01, 0.99, 0], I, 0.02)!;
+    expect(m.normal[1]).toBeGreaterThan(0.99);
+    for (const p of m.points) expect(p.depth).toBeCloseTo(0.01, 3);
+  });
+  it('ground contacts for both shapes', () => {
+    expect(groundManifold(box, [0, 0.49, 0], I, 0)!.points).toHaveLength(4);
+    const s = groundManifold(ball, [0, 0.49, 0], I, 0)!;
+    expect(s.points).toHaveLength(1);
+    expect(s.points[0]!.depth).toBeCloseTo(0.01, 12);
+    expect(groundManifold(ball, [0, 0.6, 0], I, 0, 0.05)).toBeNull();
   });
 });
 

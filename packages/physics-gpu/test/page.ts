@@ -1,6 +1,6 @@
 // Page-side drivers for the GPU physics tests (bundled by loadBundle).
 import { createDevice, readBuffer } from '@tb/gpu';
-import { boundingRadius, boxBoxManifold, boxGroundManifold, obb, quatNormalize, sphereBoxManifold, sphereGroundManifold, spherePairs, sphereSphereManifold, supportArea, type Manifold as CpuManifold } from '@tb/geom';
+import { boundingRadius, groundManifold, quatNormalize, shapeManifold, spherePairs, supportArea, type Manifold as CpuManifold } from '@tb/geom';
 import { Body, Manifold, readStruct, Shape, writeStruct } from '@tb/schema';
 import type { BodyDesc, Quat, Vec3 } from '@tb/engine-api';
 import { buildScenario } from '@tb/scenarios';
@@ -109,14 +109,7 @@ function uploadBodies(device: GPUDevice, bodies: BodyDesc[]) {
 
 /** The reference manifold for pair (a, b), normal from a to b. */
 function cpuPair(a: BodyDesc, b: BodyDesc, margin: number, reduce = true): CpuManifold | null {
-  const sa = a.shape, sb = b.shape;
-  if (sa.kind === 'box' && sb.kind === 'box') return boxBoxManifold(obb(a.pos, a.rot, sa.half), obb(b.pos, b.rot, sb.half), margin, reduce);
-  if (sa.kind === 'sphere' && sb.kind === 'sphere') return sphereSphereManifold(a.pos, sa.radius, b.pos, sb.radius, margin);
-  if (sa.kind === 'sphere' && sb.kind === 'box') {
-    const m = sphereBoxManifold(a.pos, sa.radius, obb(b.pos, b.rot, sb.half), margin);
-    return m && { ...m, normal: [-m.normal[0], -m.normal[1], -m.normal[2]] };
-  }
-  return sphereBoxManifold(b.pos, (sb as { radius: number }).radius, obb(a.pos, a.rot, (sa as { half: Vec3 }).half), margin);
+  return shapeManifold(a.shape, a.pos, a.rot, b.shape, b.pos, b.rot, margin, reduce);
 }
 
 interface Gpu { count: number; normal: number[]; feature: number; points: number[][] }
@@ -228,10 +221,10 @@ export async function narrowphase(c: NarrowCase) {
   });
   bodies.forEach((b, i) => {
     const g = decode(gv, i);
-    const cpu = b.shape.kind === 'box' ? boxGroundManifold(obb(b.pos, b.rot, b.shape.half), 0, c.margin) : sphereGroundManifold(b.pos, b.shape.radius, 0, c.margin);
+    const cpu = groundManifold(b.shape, b.pos, b.rot, 0, c.margin);
     if (cpu) groundContacts++;
     if (!agrees(g, cpu, tol * 4)) {
-      const all = b.shape.kind === 'box' ? boxGroundManifold(obb(b.pos, b.rot, b.shape.half), 0, c.margin, false) : cpu;
+      const all = groundManifold(b.shape, b.pos, b.rot, 0, c.margin, false);
       if (tieOnly(g, cpu, all, tol * 4)) { groundTies++; return; }
       groundMismatch++;
       if (examples.length < 6) examples.push({ ground: i, gpu: g, cpu, y: b.pos[1] });

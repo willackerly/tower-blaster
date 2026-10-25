@@ -1,11 +1,14 @@
 // Engine registry for the CLI: "name" or "name:key=value,key=value".
 import type { PhysicsEngine, SceneDesc, StepReport } from '@tb/engine-api';
 import { RapierEngine } from '@tb/adapter-rapier';
+import { AvbdReferenceEngine } from '@tb/physics-ref';
 
 type Options = Record<string, number | boolean>;
 
 const REGISTRY: Record<string, (o: Options) => PhysicsEngine> = {
   rapier: (o) => new RapierEngine(o.iterations !== undefined ? { iterations: Number(o.iterations) } : {}),
+  // Options are AvbdParams fields, e.g. avbd-ref:iterations=4,sweep=false.
+  'avbd-ref': (o) => new AvbdReferenceEngine(o),
 };
 
 export function parseSpec(spec: string): { name: string; options: Options } {

@@ -51,12 +51,13 @@ Results worth keeping go in `docs/benchmarks/` (the first is a CPU baseline from
 |---|---|
 | `engine-api` | The `PhysicsEngine` contract shared by the game, the harness and every engine |
 | `schema` | GPU buffer layouts, defined once; generates WGSL and TS accessors |
-| `geom` | Double-precision reference geometry (SAT, broadphase) used as a test oracle |
+| `geom` | Double-precision reference geometry (SAT, broadphase, contact manifolds) used as a test oracle |
 | `scenarios` | Seeded benchmark scenes S1-S11 |
 | `metrics` | Quality metrics and benchmark statistics |
 | `adapter-rapier` | CPU baseline (Rapier WASM) |
 | `bench` | Timing and quality runs, CLI |
 | `runner` | Browser runner page, Playwright orchestrator (`bench:browser`) |
 | `gpu` | GPU primitives (profiler, scan, compaction, radix sort, bandwidth probe) and `bench:gpu` |
-| `physics-gpu` | GPU physics pipeline stages (broadphase so far) |
+| `physics-gpu` | GPU physics pipeline stages (broadphase, narrowphase so far) |
+| `physics-ref` | Reference AVBD rigid-body solver in double precision: the oracle for the GPU solver (`avbd-ref` in the bench) |
 | `testkit` | Headless Chromium WebGPU sessions for tests |

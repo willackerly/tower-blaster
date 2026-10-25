@@ -25,6 +25,7 @@
     "@tb/gpu": "workspace:*",
     "@tb/metrics": "workspace:*",
     "@tb/physics-gpu": "workspace:*",
+    "@tb/physics-ref": "workspace:*",
     "@tb/runner": "workspace:*",
     "@tb/scenarios": "workspace:*",
     "@tb/schema": "workspace:*",
