@@ -23,8 +23,10 @@ export const RenderInstance = defineStruct(
     ['pos', 'vec3f'],
     ['palette', 'u32', 'colour index, e.g. original tower height'],
     ['rot', 'vec4f'],
+    ['half', 'vec3f', 'box half extents; x is the radius for a sphere'],
+    ['shape', 'u32', '0 box, 1 sphere'],
   ],
-  'What the renderer reads per cube.',
+  'What the renderer reads per body.',
 );
 
 export const SimParams = defineStruct(

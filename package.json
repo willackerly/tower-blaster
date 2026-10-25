@@ -14,7 +14,8 @@
     "check": "pnpm typecheck && pnpm test",
     "runner": "vite packages/runner",
     "bench:browser": "tsx packages/runner/src/cli.ts",
-    "bench:suite": "tsx packages/runner/src/suite-cli.ts"
+    "bench:suite": "tsx packages/runner/src/suite-cli.ts",
+    "viewer": "vite packages/viewer"
   },
   "devDependencies": {
     "@tb/adapter-rapier": "workspace:*",
@@ -26,6 +27,7 @@
     "@tb/scenarios": "workspace:*",
     "@tb/schema": "workspace:*",
     "@tb/testkit": "workspace:*",
+    "@tb/viewer": "workspace:*",
     "@types/node": "22.20.5",
     "@webgpu/types": "0.1.74",
     "fast-check": "4.10.2",
