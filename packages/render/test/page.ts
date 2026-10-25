@@ -9,7 +9,7 @@ import { Body, RenderRecord, Shape, TIER, readStruct } from '@tb/schema';
 import {
   agx, AGX_WGSL, fromHalf, FX_WORDS, packFx, toHalf, bevelNormal, BEVEL_WGSL, oklabToLinear, OKLAB_WGSL, Post,
   Culler, cullReference, GpuBodySource, invert, listMatches, lookAt, makeGpuBodies, multiply, perspective, Renderer, SEGMENTS, SnapshotSource, transform,
-  translation, BOX_VERTS, SPHERE_VERTS, SUN, Sparks, CTL, MAX_EVENTS, flashSlot, FLASHES, MAX_BALLS, TRAIL, Lights, LIGHTS, LIGHT_META, LIGHT_PACKED, MATERIAL, AoVolume, aoGrid, aoFrame, splatReference, composeReference, AO_FOOT_WGSL, AO_SAMPLE_WGSL, AO_ONE, type SplatBody, unpackImpacts, unpackSparks, spawnReference, stepReference, type Impact, type BodySource, type CullFrame, type FrameParams, type V3,
+  translation, BOX_VERTS, SPHERE_VERTS, SUN, Sparks, CTL, MAX_EVENTS, flashSlot, FLASHES, MAX_BALLS, TRAIL, Lights, LIGHTS, LIGHT_META, LIGHT_PACKED, MATERIAL, AoVolume, aoGrid, aoFrame, splatReference, composeReference, AO_FOOT_WGSL, AO_SAMPLE_WGSL, AO_SEAM_WGSL, AO_ONE, type SplatBody, unpackImpacts, unpackSparks, spawnReference, stepReference, type Impact, type BodySource, type CullFrame, type FrameParams, type V3,
 } from '../src/index.ts';
 
 function rng(seed: number) {
@@ -1523,7 +1523,7 @@ export async function sceneHash(toggles: Record<string, boolean> = {}) {
 }
 
 export interface AoProbeBody { pos: V3; half: V3; rot?: number[]; sphere?: boolean }
-export interface AoProbe { p: V3; n: V3; own: number }
+export interface AoProbe { p: V3; n: V3; own: number; /** For the seam cavity: the point in the body's frame and its face normal there. */ local?: V3; face?: V3 }
 
 /**
  * aoAt (the scene shader's AO function) evaluated in a compute kernel at
@@ -1566,20 +1566,25 @@ ${AO_FOOT_WGSL}
 ${AO_SAMPLE_WGSL}
 @group(0) @binding(2) var<uniform> av: AoView;
 @group(0) @binding(3) var<storage, read> inp: array<vec4f>;  // per probe: p, n, own rotation, (own half extents, 0 floor / 1 box / 2 sphere)
-@group(0) @binding(4) var<storage, read_write> out: array<vec2f>;
-@group(0) @binding(5) var<storage, read> centres: array<vec4f>; // own centre
+@group(0) @binding(4) var<storage, read_write> out: array<vec4f>;
+@group(0) @binding(5) var<storage, read> centres: array<vec4f>; // per probe: own centre; local point (w 1: seam probe); face normal
+${AO_SEAM_WGSL}
 @compute @workgroup_size(64) fn main(@builtin(global_invocation_id) id: vec3u) {
   if (id.x >= arrayLength(&out)) { return; }
   let i = 4u * id.x;
   let f = inp[i + 3u];
   var foot = vec3f(0.0);
   if (f.w > 0.5) { foot = aoFoot(inp[i + 2u], f.xyz, f.w > 1.5); }
-  out[id.x] = aoAt(av, inp[i].xyz, inp[i + 1u].xyz, centres[id.x].xyz, foot);
+  let c = centres[3u * id.x].xyz;
+  let lp = centres[3u * id.x + 1u];
+  var seam = 1.0;
+  if (lp.w > 0.5) { seam = aoSeam(av, lp.xyz, centres[3u * id.x + 2u].xyz, f.xyz, inp[i + 2u], c, foot); }
+  out[id.x] = vec4f(aoAt(av, inp[i].xyz, inp[i + 1u].xyz, c, foot), seam, 0.0);
 }
 `,
   });
   const pipe = device.createComputePipeline({ layout: 'auto', compute: { module, entryPoint: 'main' } });
-  const data = new Float32Array(probes.length * 16), cdata = new Float32Array(probes.length * 4);
+  const data = new Float32Array(probes.length * 16), cdata = new Float32Array(probes.length * 12);
   const rel = (p: readonly number[]) => [Math.fround(p[0]! - eye[0]), Math.fround(p[1]! - eye[1]), Math.fround(p[2]! - eye[2])];
   probes.forEach((q, k) => {
     const b = q.own >= 0 ? bodies[q.own]! : null;
@@ -1588,7 +1593,8 @@ ${AO_SAMPLE_WGSL}
     data.set(q.n.map((x) => x / l), k * 16 + 4);
     data.set(b?.rot ?? [0, 0, 0, 1], k * 16 + 8);
     data.set([...(b ? (b.sphere ? [b.half[0], b.half[0], b.half[0]] : b.half) : [0, 0, 0]), b ? (b.sphere ? 2 : 1) : 0], k * 16 + 12);
-    cdata.set(b ? rel(b.pos) : [0, 0, 0], k * 4);
+    cdata.set(b ? rel(b.pos) : [0, 0, 0], k * 12);
+    if (q.local && q.face) { cdata.set([...q.local, 1], k * 12 + 4); cdata.set(q.face, k * 12 + 8); }
   });
   const usage = GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST;
   const inp = device.createBuffer({ size: data.byteLength, usage }), cen = device.createBuffer({ size: cdata.byteLength, usage });
@@ -1597,7 +1603,7 @@ ${AO_SAMPLE_WGSL}
   const { originRel, invVoxel } = aoFrame(grid, eye);
   const avBuf = device.createBuffer({ size: 48, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
   device.queue.writeBuffer(avBuf, 0, new Float32Array([...originRel, invVoxel, ...grid.dims, 1, ...ao.k]));
-  const out = device.createBuffer({ size: probes.length * 8, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC });
+  const out = device.createBuffer({ size: probes.length * 16, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC });
   const samp = device.createSampler({ magFilter: 'linear', minFilter: 'linear' });
   const enc2 = device.createCommandEncoder();
   const p2 = enc2.beginComputePass();
@@ -1617,7 +1623,7 @@ ${AO_SAMPLE_WGSL}
   ao.destroy();
   culler.destroy();
   device.destroy();
-  return { ao: probes.map((_, k) => [res[2 * k]!, res[2 * k + 1]!] as [number, number]), error: err?.message ?? null };
+  return { ao: probes.map((_, k) => [res[4 * k]!, res[4 * k + 1]!] as [number, number]), seam: probes.map((_, k) => res[4 * k + 2]!), error: err?.message ?? null };
 }
 
 /**
@@ -1666,4 +1672,47 @@ export async function aoImage() {
   rend.destroy();
   device.destroy();
   return { foot: [footOn / nf, footOff / nf], nf, near: [nearOn / nn, nearOff / nn], nn, openDiff, openChanged, no, cubeDiff, cubeChanged, nc, error: err?.message ?? null };
+}
+
+/**
+ * The seam cavity in the image: a close-up of the front face (z = 0.5) of
+ * two stacked unit cubes, ambient light only, AO on against off. Per class
+ * of front-face pixel (|x| < 0.3), the luma ratio on / off: the shared edge
+ * (within 0.08 m of y = 1, both cubes), mid-face (more than 0.3 m from any
+ * horizontal edge) and the free top edge (within 0.08 m of y = 2).
+ */
+export async function seamImage() {
+  const { device } = await createDevice({ timestamps: false });
+  device.pushErrorScope('validation');
+  const descs = [box([0, 0.5, 0], [0.5, 0.5, 0.5], [0, 0, 0, 1], 1), box([0, 1.5, 0], [0.5, 0.5, 0.5], [0, 0, 0, 1], 2)];
+  const src = new SnapshotSource(device);
+  src.reset(descs);
+  src.update(snapshotOf(descs), descs);
+  const rend = new Renderer(device, { size: [W, H] });
+  rend.look = { ...rend.look, bloomMix: 0, fogDensity: 0, sunColor: [0, 0, 0] };
+  rend.setShadowBounds([0, 2, 0], 8, [8, 6, 8]);
+  rend.setSource(src);
+  const f: FrameParams = { ...camera([0.2, 1.3, 2.6], [0, 1.2, 0]), groundY: 0, time: 1, dt: 0, alpha: 1 };
+  const on = (await rend.render(f, true, true))!.pixels!;
+  rend.toggles.ao = false;
+  const off = (await rend.render(f, true, true))!.pixels!;
+  const ids = (await rend.renderIds(f)).ids;
+  const luma = (px: typeof on, i: number) => 0.2126 * px.data[i + (px.bgra ? 2 : 0)]! + 0.7152 * px.data[i + 1]! + 0.0722 * px.data[i + (px.bgra ? 0 : 2)]!;
+  const acc: Record<'shared' | 'mid' | 'top', [number, number, number]> = { shared: [0, 0, 0], mid: [0, 0, 0], top: [0, 0, 0] };
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+    const i = y * on.bytesPerRow + 4 * x, id = ids[y * W + x]!;
+    if (id !== 1 && id !== 2) continue;
+    const { o, d } = rayAt(f, x, y);
+    const t = (0.5 - o[2]) / d[2], hx = o[0] + d[0] * t, hy = o[1] + d[1] * t;
+    if (!(t > 0) || Math.abs(hx) >= 0.3 || hy < 0 || hy > 2) continue;
+    const e = Math.min(Math.abs(hy - 1), Math.abs(hy), Math.abs(hy - 2));
+    const k = Math.abs(hy - 1) < 0.08 ? 'shared' : Math.abs(hy - 2) < 0.08 ? 'top' : e > 0.3 ? 'mid' : null;
+    if (!k) continue;
+    acc[k][0] += luma(on, i); acc[k][1] += luma(off, i); acc[k][2]++;
+  }
+  const err = await device.popErrorScope();
+  rend.destroy();
+  device.destroy();
+  const r = (a: number[]) => ({ ratio: a[0]! / a[1]!, n: a[2]! });
+  return { shared: r(acc.shared), mid: r(acc.mid), top: r(acc.top), error: err?.message ?? null };
 }

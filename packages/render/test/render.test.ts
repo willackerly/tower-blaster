@@ -471,6 +471,45 @@ describe('AO shading', () => {
     expect(near!).toBeLessThan(mid!);
     expect(mid!).toBeLessThan(far!);
   });
+
+  it('seam cavity: an edge shared with a neighbour darkens within the band, a free edge and the rest of the face do not', async (ctx) => {
+    if (!gpu) return ctx.skip();
+    const H3: V3 = [0.5, 0.5, 0.5];
+    const at = (c: V3, local: V3) => ({ p: [c[0] + local[0], c[1] + local[1], c[2] + local[2]] as V3, n: [0, 0, 1] as V3, own: 0, local, face: [0, 0, 1] as V3 });
+    for (const off of [0, 0.13, 0.25]) {
+      const a: V3 = [off, 0.5 + off, off];
+      // The lower cube's front face: by its top edge, outside the band, by its right edge, centre, by its left edge, just inside the band.
+      const probes = [at(a, [0, 0.45, 0.5]), at(a, [0, 0.3, 0.5]), at(a, [0.45, 0, 0.5]), at(a, [0, 0, 0.5]), at(a, [-0.45, 0, 0.5]), at(a, [0, 0.36, 0.5])];
+      const run = async (others: V3[]) => {
+        const r = await call('aoProbe', [{ pos: a, half: H3 }, ...others.map((pos) => ({ pos, half: H3 }))], probes);
+        expect(r.error).toBeNull();
+        return r.seam as number[];
+      };
+      const above = await run([[off, 1.5 + off, off]]), side = await run([[1 + off, 0.5 + off, off]]), alone = await run([]);
+      const msg = `offset ${off}`;
+      // Measured 0.926 / 0.902 / 0.870 over the offsets for both neighbours.
+      expect(above[0]!, msg).toBeLessThan(0.95);
+      expect(side[2]!, msg).toBeLessThan(0.95);
+      // The other edges are free: measured 1 with a neighbour elsewhere, >= 0.9998 alone.
+      for (const k of [2, 4]) expect(above[k]!, msg).toBeGreaterThanOrEqual(0.995);
+      for (const k of [0, 4]) expect(side[k]!, msg).toBeGreaterThanOrEqual(0.995);
+      for (const k of [0, 2, 4]) expect(alone[k]!, msg).toBeGreaterThanOrEqual(0.995);
+      // The band fades out: 0.01 m inside it the darkening is nearly gone (no visible step at its border).
+      expect(above[5]!, msg).toBeGreaterThan(0.99);
+      // Outside the band no tap is taken.
+      for (const s of [above, side, alone]) { expect(s[1], msg).toBe(1); expect(s[3], msg).toBe(1); }
+    }
+    // In the scene shader (two stacked cubes, ambient only, AO on / off): measured shared 0.936, mid 0.998, top 0.9996;
+    // with box shading using aoBody (no seam), shared 0.984.
+    const img = await call('seamImage');
+    expect(img.error).toBeNull();
+    expect(img.shared.n).toBeGreaterThan(100);
+    expect(img.mid.n).toBeGreaterThan(500);
+    expect(img.top.n).toBeGreaterThan(50);
+    expect(img.shared.ratio).toBeLessThan(0.96);
+    expect(img.mid.ratio).toBeGreaterThan(0.99);
+    expect(img.top.ratio).toBeGreaterThan(0.99);
+  });
 });
 
 describe('GPU cull and compaction', () => {

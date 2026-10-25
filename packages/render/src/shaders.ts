@@ -7,7 +7,7 @@ import { FX_EMISSIVE_MAX, FX_WGSL } from './fx.ts';
 import { BEVEL_WGSL, OKLAB_WGSL } from './look.ts';
 import { SPARK_COMMON } from './sparks.ts';
 import { LIGHT_META, LIGHT_PACKED, LIGHT_VEC4, MAX_BALLS, TRAIL } from './lights.ts';
-import { AO_FOOT_WGSL, AO_SAMPLE_WGSL } from './ao.ts';
+import { AO_FOOT_WGSL, AO_SAMPLE_WGSL, AO_SEAM_WGSL } from './ao.ts';
 
 export const SHADOW_SIZE = 2048;
 export const SPHERE_SEG = 24;
@@ -75,6 +75,17 @@ fn aoBody(rel: vec3f, n: vec3f, slot: u32) -> vec2f {
   let av = aoView();
   if (av.on == 0.0 || slot >= fr.capacity) { return vec2f(1.0); }
   return aoAt(av, rel, n, records[slot].pos, aoFeet[slot].xyz);
+}
+${AO_SEAM_WGSL}
+
+// aoBody plus the seam cavity at a box's edges (lp, face: body frame, from fsBox).
+fn aoBox(rel: vec3f, n: vec3f, slot: u32, lp: vec3f, face: vec3f, half: vec3f, rot: vec4f) -> vec2f {
+  let av = aoView();
+  if (av.on == 0.0 || slot >= fr.capacity) { return vec2f(1.0); }
+  let c = records[slot].pos;
+  let foot = aoFeet[slot].xyz;
+  let a = aoAt(av, rel, n, c, foot);
+  return vec2f(a.x * aoSeam(av, lp, face, half, rot, c, foot), a.y);
 }
 @group(0) @binding(10) var<storage, read> trail: array<vec4f>;      // lights.ts: world xyz, time
 
@@ -370,7 +381,7 @@ fn boxFace(local: vec3f, w: vec3f) -> vec3f {
   let wPx = SEAM / max(pxM, 1e-6);
   let drawn = max(wPx, 0.75);
   let seam = 1.0 - 0.4 * min(1.0, wPx / 0.75) * (1.0 - smoothstep(drawn - 0.5, drawn + 0.5, edgeM / max(pxM, 1e-6)));
-  var c = shade(base * seam, v.rel, n, aaAlpha(rough * rough, n, dndx, dndy), aaAlpha(0.0049, n, dndx, dndy), select(0.0, fr.clearcoat, isCandy), aoBody(v.rel, n, v.slot));
+  var c = shade(base * seam, v.rel, n, aaAlpha(rough * rough, n, dndx, dndy), aaAlpha(0.0049, n, dndx, dndy), select(0.0, fr.clearcoat, isCandy), aoBox(v.rel, n, v.slot, lp, faceN, v.half, v.rot));
   c += base * seam * fxGlow(w, fr.time);
   c += heatGlow(v.slot, base);
   return vec4f(fog(c, v.rel), 1.0);
