@@ -7,3 +7,4 @@ export * from './source.ts';
 export * from './look.ts';
 export * from './post.ts';
 export * from './shaders.ts';
+export * from './fx.ts';

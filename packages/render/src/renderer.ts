@@ -6,6 +6,7 @@
 // camera-relative. Colours and lights come from a LookParams preset.
 import { writeStruct } from '@tb/schema';
 import { Culler, SEG, type CullFrame } from './cull.ts';
+import { FX_WORDS, packFx, tintWord, toHalf, type FxOptions, FX_ANCHOR } from './fx.ts';
 import { CANDY_NIGHT, linearToOklab, srgbToLinear, type LookParams } from './look.ts';
 import { invert, lookAt, multiply, normalize, type Mat4, type V3 } from './math.ts';
 import { HDR_FORMAT, Post } from './post.ts';
@@ -17,6 +18,11 @@ export { BOX_VERTS, SPHERE_VERTS } from './shaders.ts';
 const SAMPLES = 4;
 // From the camera's right, slightly behind the scene: one lit face, one in
 // shade, and shadows falling toward the viewer.
+/** Most overlay spheres setOverlay draws. */
+export const MAX_OVERLAY = 1024;
+/** Overlay colour when none is given: white, slightly glowing. */
+const OVERLAY_DEFAULT = 0x40ffffff;
+
 export const SUN: V3 = normalize([0.55, 0.75, -0.3]);
 
 export function ortho(l: number, r: number, b: number, t: number, n: number, f: number): Mat4 {
@@ -62,7 +68,7 @@ export interface FrameParams {
 
 export type RenderTarget = { canvas: HTMLCanvasElement } | { size: [number, number] };
 
-type PipeName = 'box' | 'sphere' | 'ground' | 'sky' | 'boxShadow' | 'sphereShadow' | 'boxId' | 'sphereId';
+type PipeName = 'box' | 'sphere' | 'ground' | 'sky' | 'overlay' | 'boxShadow' | 'sphereShadow' | 'boxId' | 'sphereId';
 
 /** Frame uniform values that come from a look preset (colours to OKLab / linear as the shader wants). */
 export function lookUniforms(l: LookParams): Record<string, number | number[]> {
@@ -104,6 +110,13 @@ export class Renderer {
   private cullKey = '';
   private bind: GPUBindGroup | null = null;
   private shadowBind: GPUBindGroup | null = null;
+  /** Per-slot FX records: CPU mirror (grows with the source) and its GPU copy. */
+  private fx = new Uint32Array(1024 * FX_WORDS);
+  private fxBuf: GPUBuffer | null = null;
+  private readonly overlayBuf: GPUBuffer;
+  private readonly overlayColours: GPUBuffer;
+  private overlayCount = 0;
+  private lastTime = 0;
 
   constructor(readonly device: GPUDevice, target: RenderTarget) {
     this.format = navigator.gpu.getPreferredCanvasFormat();
@@ -128,11 +141,16 @@ export class Renderer {
       { binding: 1, visibility: GPUShaderStage.VERTEX, buffer: ro },
       { binding: 2, visibility: GPUShaderStage.VERTEX, buffer: ro },
     ];
+    this.overlayBuf = device.createBuffer({ size: MAX_OVERLAY * 16, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST, label: 'overlay spheres' });
+    this.overlayColours = device.createBuffer({ size: MAX_OVERLAY * 4, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST, label: 'overlay colours' });
     this.layout = device.createBindGroupLayout({
       entries: [
         ...common,
         { binding: 3, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: 'depth' } },
         { binding: 4, visibility: GPUShaderStage.FRAGMENT, sampler: { type: 'comparison' } },
+        { binding: 5, visibility: GPUShaderStage.FRAGMENT, buffer: ro },
+        { binding: 6, visibility: GPUShaderStage.VERTEX, buffer: ro },
+        { binding: 7, visibility: GPUShaderStage.FRAGMENT, buffer: ro },
       ],
     });
     // The shadow pass cannot bind the shadow map it writes.
@@ -163,6 +181,7 @@ export class Renderer {
       sphere: color('vsSphere', 'fsSphere', 'back', SEG.sphere),
       ground: color('vsGround', 'fsGround', 'none', 0),
       sky: color('vsSky', 'fsSky', 'none', 0, { sky: true }),
+      overlay: color('vsOverlay', 'fsOverlay', 'back', 0),
       boxShadow: depthOnly('vsBoxShadow', SEG.boxShadow),
       sphereShadow: depthOnly('vsSphereShadow', SEG.sphereShadow),
       boxId: color('vsBox', 'fsId', 'back', SEG.box, { format: 'r32uint', samples: 1 }),
@@ -181,18 +200,86 @@ export class Renderer {
     this.light = lightMatrix(center, radius);
   }
 
+  /**
+   * Set visual effects on body slots (fx.ts): one slot with options, or a
+   * contiguous range from bulk arrays. Tints are rgb8 (linear, r in the low
+   * byte) + emissive8 in the high byte; null keeps the current tint. Scales
+   * set the visual scale, anchored at the base when anchor is set. Applied
+   * from the next frame; costs one small upload per call.
+   */
+  setFx(slot: number, fx: FxOptions): void;
+  setFx(slot0: number, tints: Uint32Array | null, scales?: Float32Array, anchor?: boolean): void;
+  setFx(slot: number, a: FxOptions | Uint32Array | null, scales?: Float32Array, anchor = false): void {
+    const n = a === null || a instanceof Uint32Array ? Math.max(a?.length ?? 0, scales?.length ?? 0) : 1;
+    this.growFx(slot + n);
+    if (a === null || a instanceof Uint32Array) {
+      for (let k = 0; k < n; k++) {
+        const o = (slot + k) * FX_WORDS;
+        if (a && k < a.length) this.fx[o] = tintWord(a[k]!);
+        if (scales && k < scales.length) this.fx[o + 1] = (toHalf(1 - Math.min(1, Math.max(0, scales[k]!))) | (anchor ? FX_ANCHOR : 0)) >>> 0;
+      }
+    } else {
+      packFx(a, this.fx, slot * FX_WORDS, this.lastTime);
+    }
+    this.uploadFx(slot, n);
+  }
+
+  /** Remove the effects of count slots from slot. */
+  clearFx(slot: number, count = 1): void {
+    this.growFx(slot + count);
+    this.fx.fill(0, slot * FX_WORDS, (slot + count) * FX_WORDS);
+    this.uploadFx(slot, count);
+  }
+
+  /**
+   * Spheres drawn after the bodies (aim previews, markers): x, y, z, radius
+   * per sphere in world space, and optionally sRGB rgb8 + emissive8 per
+   * sphere (r in the low byte). At most MAX_OVERLAY; replaces the last set.
+   */
+  setOverlay(xyzr: Float32Array, colours?: Uint32Array): void {
+    const n = Math.min(MAX_OVERLAY, Math.floor(xyzr.length / 4));
+    if (n) this.device.queue.writeBuffer(this.overlayBuf, 0, xyzr, 0, 4 * n);
+    const c = colours ?? new Uint32Array(n).fill(OVERLAY_DEFAULT);
+    if (n) this.device.queue.writeBuffer(this.overlayColours, 0, c, 0, Math.min(n, c.length));
+    this.overlayCount = Math.min(n, c.length);
+  }
+
+  private growFx(slots: number): void {
+    if (slots * FX_WORDS <= this.fx.length) return;
+    let len = this.fx.length;
+    while (len < slots * FX_WORDS) len *= 2;
+    const next = new Uint32Array(len);
+    next.set(this.fx);
+    this.fx = next;
+  }
+
+  private uploadFx(slot: number, count: number): void {
+    const b = this.fxBuf;
+    if (!b || (slot + count) * FX_WORDS * 4 > b.size) return; // sync() uploads the whole mirror when it reallocates
+    this.device.queue.writeBuffer(b, slot * FX_WORDS * 4, this.fx, slot * FX_WORDS, count * FX_WORDS);
+  }
+
   /** Rebuild the culler and bind groups when the source's buffers change. */
   private sync(): Culler {
     const s = this.source;
     const key = `${s.version}:${s.capacity}`;
     if (key !== this.cullKey || !this.culler || this.culler.source !== s) {
       this.culler?.destroy();
-      this.culler = new Culler(this.device, s, { box: BOX_VERTS, sphere: SPHERE_VERTS });
+      this.growFx(s.capacity);
+      if (!this.fxBuf || this.fxBuf.size < s.capacity * FX_WORDS * 4) {
+        this.fxBuf?.destroy();
+        this.fxBuf = this.device.createBuffer({ size: Math.max(16, this.fx.byteLength), usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST, label: 'fx' });
+        this.device.queue.writeBuffer(this.fxBuf, 0, this.fx);
+      }
+      this.culler = new Culler(this.device, s, { box: BOX_VERTS, sphere: SPHERE_VERTS }, this.fxBuf);
       const buffers = [this.frameBuf, this.culler.records, this.culler.lists];
       const common = buffers.map((buffer, binding) => ({ binding, resource: { buffer } }));
       this.bind = this.device.createBindGroup({
         layout: this.layout,
-        entries: [...common, { binding: 3, resource: this.shadowTex.createView() }, { binding: 4, resource: this.shadowSampler }],
+        entries: [
+          ...common, { binding: 3, resource: this.shadowTex.createView() }, { binding: 4, resource: this.shadowSampler },
+          { binding: 5, resource: { buffer: this.fxBuf } }, { binding: 6, resource: { buffer: this.overlayBuf } }, { binding: 7, resource: { buffer: this.overlayColours } },
+        ],
       });
       this.shadowBind = this.device.createBindGroup({ layout: this.shadowLayout, entries: common });
       this.cullKey = key;
@@ -213,6 +300,7 @@ export class Renderer {
     const viewProj = multiply(f.viewProj, toWorld);
     const lightViewProj = multiply(this.light, toWorld);
     const focus = f.focus ?? [f.eye[0], f.eye[1], f.eye[2] - 1];
+    this.lastTime = f.time ?? 0;
     writeStruct(this.frameData, Frame, 0, {
       viewProj, lightViewProj, invViewProj: invert(viewProj),
       eye: f.eye, time: f.time ?? 0, sun: SUN, groundY: f.groundY,
@@ -256,6 +344,10 @@ export class Renderer {
     p.setPipeline(ids ? this.pipes.sphereId : this.pipes.sphere);
     p.drawIndirect(culler.args, 16 * SEG.sphere);
     if (!ids) {
+      if (this.overlayCount) {
+        p.setPipeline(this.pipes.overlay);
+        p.draw(SPHERE_VERTS, this.overlayCount);
+      }
       p.setPipeline(this.pipes.ground);
       p.draw(6);
       p.setPipeline(this.pipes.sky);
@@ -328,6 +420,9 @@ export class Renderer {
     this.post.destroy();
     for (const t of [this.msaa, this.hdr, this.depth, this.idTex, this.idDepth, this.shadowTex, this.offscreen]) t?.destroy();
     this.frameBuf.destroy();
+    this.fxBuf?.destroy();
+    this.overlayBuf.destroy();
+    this.overlayColours.destroy();
   }
 }
 

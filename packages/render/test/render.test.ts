@@ -7,7 +7,7 @@ import { emptySnapshot, TAG_BALL, type BodyDesc } from '@tb/engine-api';
 import { buildScenario } from '@tb/scenarios';
 import { Body, readStruct, Shape } from '@tb/schema';
 import { isSoftwareAdapter, loadBundle, openWebGPU, type WebGPUSession } from '@tb/testkit';
-import { agx, bevelNormal, CANDY_NIGHT, frustumPlanes, linearToOklab, listMatches, oklabToLinear, srgbToLinear, lookAt, lookOf, lookRange, MATERIAL, multiply, packBodies, packShapes, paletteOf, perspective, unpackLook } from '../src/index.ts';
+import { agx, bevelNormal, CANDY_NIGHT, FX_WORDS, packFx, tintWord, unpackFx, frustumPlanes, linearToOklab, listMatches, oklabToLinear, srgbToLinear, lookAt, lookOf, lookRange, MATERIAL, multiply, packBodies, packShapes, paletteOf, perspective, unpackLook } from '../src/index.ts';
 import type * as Drivers from './page.ts';
 
 describe('looks', () => {
@@ -136,6 +136,38 @@ describe('look math (CPU twins)', () => {
   });
 });
 
+describe('fx records', () => {
+  it('all-zero words mean no effect', () => {
+    expect(unpackFx(new Uint32Array(FX_WORDS))).toEqual({ tint: [1, 1, 1], emissive: 0, scale: 1, anchor: false, flashAt: 0, flash: 0 });
+    const w = new Uint32Array(FX_WORDS);
+    packFx({}, w);
+    expect(Array.from(w)).toEqual([0, 0, 0, 0]);
+  });
+
+  it('round-trip within 8-bit colour and f16 scale precision', () => {
+    const w = new Uint32Array(FX_WORDS);
+    for (const s of [0, 0.001, 0.25, 0.5, 0.6, 0.999, 1]) {
+      packFx({ tint: [0.2, 0.5, 1], emissive: 0.75, scale: s, anchor: true, flash: 0.3, flashAt: 12.5 }, w);
+      const u = unpackFx(w);
+      u.tint.forEach((v, k) => expect(Math.abs(v - [0.2, 0.5, 1][k]!)).toBeLessThan(1 / 255));
+      expect(Math.abs(u.emissive - 0.75)).toBeLessThan(1 / 255);
+      expect(Math.abs(u.scale - s)).toBeLessThan(5e-4);
+      expect(u).toMatchObject({ anchor: true, flash: Math.fround(0.3), flashAt: 12.5 });
+    }
+    // Hidden must be exactly 0, not a tiny positive scale.
+    packFx({ scale: 0 }, w);
+    expect(unpackFx(w).scale).toBe(0);
+  });
+
+  it('bulk tints are rgb8 + emissive8, r in the low byte', () => {
+    const w = new Uint32Array(FX_WORDS);
+    w[0] = tintWord(0x80ff4000); // emissive 0x80, b 0xff, g 0x40, r 0x00
+    const u = unpackFx(w);
+    expect(u.tint).toEqual([0, 0x40 / 255, 1]);
+    expect(u.emissive).toBeCloseTo(0x80 / 255, 9);
+  });
+});
+
 let gpu: WebGPUSession | null = null;
 beforeAll(async () => {
   gpu = await openWebGPU();
@@ -161,6 +193,7 @@ describe('GPU cull and compaction', () => {
       { seed: 4, count: 600, capacity: 700, alpha: 0.5, noCull: true },
       { seed: 5, count: 1, capacity: 1, alpha: 0.5, noCull: false },
       { seed: 6, count: 0, capacity: 64, alpha: 0.5, noCull: false },
+      { seed: 7, count: 3000, capacity: 3000, alpha: 0.6, noCull: false, fx: true }, // FX scale, anchor, hidden
     ];
     const out = await call('cull', cases);
     for (const r of out) {
@@ -229,6 +262,34 @@ describe('drawing', () => {
     const k = await call('bloomEnergy', true);
     expect(k.finite).toBe(true);
     expect(k.meanRatio).toBeLessThan(0.5);
+  });
+
+  it('FX scale hides, shrinks and regrows bodies exactly; clearFx restores', async (ctx) => {
+    if (!gpu) return ctx.skip();
+    for (const seed of [51, 52]) {
+      const r = await call('fxScale', seed);
+      expect(r.error).toBeNull();
+      expect(r.probes).toBeGreaterThan(500);
+      expect(r.hits).toBeGreaterThan(50);
+      expect(r.mismatches, r.examples.join('; ')).toBe(0);
+      expect(r.hiddenSeen).toBe(0);
+      expect(r.restoreDiff).toBe(0);
+    }
+  });
+
+  it('FX tint, glow, flash and overlay show in the final image', async (ctx) => {
+    if (!gpu) return ctx.skip();
+    const r = await call('fxColour');
+    expect(r.error).toBeNull();
+    const luma = (c: number[]) => 0.2126 * c[0]! + 0.7152 * c[1]! + 0.0722 * c[2]!;
+    expect(r.red[0]! / r.red[1]!).toBeGreaterThan(1.5 * (r.plain[0]! / r.plain[1]!)); // tint shifts towards red
+    expect(luma(r.glow)).toBeGreaterThan(luma(r.plain) + 20); // glow brightens
+    expect(luma(r.flashMid)).toBeGreaterThan(luma(r.plain) + 5); // halfway through the flash
+    expect(luma(r.flashMid)).toBeLessThan(luma(r.glow));
+    expect(Math.abs(luma(r.flashDone) - luma(r.plain))).toBeLessThan(1); // flash over: as if none
+    expect(r.backBehindBox).toBe(true);
+    expect(r.frontDelta).toBeGreaterThan(30); // the front sphere is drawn
+    expect(r.backDelta).toBeLessThan(3); // the one behind the box is hidden by depth
   });
 
   it('culling never changes an ID pixel', async (ctx) => {

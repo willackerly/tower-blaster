@@ -5,7 +5,7 @@ import { emptySnapshot, TAG_BALL, type BodyDesc, type Snapshot } from '@tb/engin
 import { createDevice, readBuffer } from '@tb/gpu';
 import { Body, RenderRecord, Shape, TIER, readStruct } from '@tb/schema';
 import {
-  agx, AGX_WGSL, bevelNormal, BEVEL_WGSL, oklabToLinear, OKLAB_WGSL, Post,
+  agx, AGX_WGSL, fromHalf, FX_WORDS, packFx, toHalf, bevelNormal, BEVEL_WGSL, oklabToLinear, OKLAB_WGSL, Post,
   Culler, cullReference, GpuBodySource, invert, listMatches, lookAt, makeGpuBodies, multiply, perspective, Renderer, SEGMENTS, SnapshotSource, transform,
   translation, BOX_VERTS, SPHERE_VERTS, type BodySource, type CullFrame, type FrameParams, type V3,
 } from '../src/index.ts';
@@ -48,12 +48,13 @@ function rawSource(device: GPUDevice, bodies: ArrayBuffer, prev: ArrayBuffer, sh
   };
 }
 
-export interface CullCase { seed: number; count: number; capacity: number; alpha: number; noCull: boolean }
+export interface CullCase { seed: number; count: number; capacity: number; alpha: number; noCull: boolean; fx?: boolean }
 
 /**
  * Random world: boxes, slabs and spheres scattered around the camera (so
  * every frustum plane cuts some), lattice and free tiers, and prev
- * states that are valid, teleported, tier-changed or zeroed.
+ * states that are valid, teleported, tier-changed or zeroed. With fx, a
+ * third of the bodies get an FX scale (some 0, i.e. hidden), half anchored.
  */
 export async function cull(cases: CullCase[]) {
   const { device } = await createDevice({ timestamps: false });
@@ -65,6 +66,7 @@ export async function cull(cases: CullCase[]) {
     const bf = new Float32Array(bodies), bu = new Uint32Array(bodies), pf = new Float32Array(prev), pu = new Uint32Array(prev);
     const sf = new Float32Array(shapes), su = new Uint32Array(shapes);
     const looks = new Uint32Array(c.capacity);
+    const fx = new Uint32Array(c.capacity * FX_WORDS);
     const BW = Body.size / 4, SW = Shape.size / 4;
     for (let i = 0; i < c.count; i++) {
       const sphere = r() < 0.1;
@@ -86,9 +88,12 @@ export async function cull(cases: CullCase[]) {
       pf.set(ppos, i * BW); pf.set(prot, i * BW + 4);
       pu[i * BW + 11] = 1 | ((k > 0.85 && k <= 0.9 ? TIER.rubble + 1 : tier) << 8);
       pu[i * BW + 15] = i;
+      if (c.fx && r() < 0.33) packFx({ scale: r() < 0.15 ? 0 : 0.2 + 0.8 * r(), anchor: r() < 0.5, emissive: r() }, fx, i * FX_WORDS);
     }
     const src = rawSource(device, bodies, prev, shapes, looks, c.count, c.capacity);
-    const culler = new Culler(device, src, { box: BOX_VERTS, sphere: SPHERE_VERTS });
+    const fxBuf = device.createBuffer({ size: Math.max(16, fx.byteLength), usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });
+    device.queue.writeBuffer(fxBuf, 0, fx);
+    const culler = new Culler(device, src, { box: BOX_VERTS, sphere: SPHERE_VERTS }, fxBuf);
     const eye: V3 = [r() * 4, r() * 4, r() * 4];
     const cam = multiply(multiply(perspective(1.0, 1.5, 0.5, 70), lookAt(eye, [eye[0] + 1, eye[1] - 0.2, eye[2] + 0.5])), translation(eye));
     const light = multiply(multiply(perspective(0.6, 1, 1, 200), lookAt([eye[0], eye[1] + 80, eye[2]], [eye[0] + 5, eye[1], eye[2]], [0, 0, 1])), translation(eye));
@@ -99,7 +104,7 @@ export async function cull(cases: CullCase[]) {
     pass.end();
     device.queue.submit([enc.finish()]);
     const [lists, args, recs] = await Promise.all([readBuffer(device, culler.lists), readBuffer(device, culler.args), readBuffer(device, culler.records)]);
-    const ref = cullReference({ bodies, prev, shapes, looks, count: c.count }, f);
+    const ref = cullReference({ bodies, prev, shapes, looks, count: c.count, fx }, f);
     const L = new Uint32Array(lists), A = new Uint32Array(args);
     const counts = SEGMENTS.map((_, s) => A[4 * s + 1]!);
     const segLists = SEGMENTS.map((_, s) => Array.from(L.subarray(s * c.capacity, s * c.capacity + counts[s]!)));
@@ -116,7 +121,7 @@ export async function cull(cases: CullCase[]) {
       lists: segLists.map((l, s) => listMatches(l, ref.must[s]!, ref.may[s]!)),
     });
     culler.destroy();
-    for (const b of [src.bodies, src.prev, src.shapes, src.looks]) b.destroy();
+    for (const b of [src.bodies, src.prev, src.shapes, src.looks, fxBuf]) b.destroy();
   }
   const err = await device.popErrorScope();
   if (err) out.forEach((o) => { o.error = err.message; });
@@ -475,20 +480,6 @@ export async function lookTwins(seed: number, n = 4096) {
 
 // ---------------------------------------------------------------- bloom
 
-function toHalf(x: number): number {
-  const f = new Float32Array([x]), u = new Uint32Array(f.buffer)[0]!;
-  const sign = (u >>> 16) & 0x8000, e = ((u >>> 23) & 0xff) - 127 + 15, m = u & 0x7fffff;
-  if (e <= 0) return sign;
-  if (e >= 31) return sign | 0x7c00;
-  return sign | (e << 10) | Math.round(m / 8192);
-}
-function fromHalf(h: number): number {
-  const e = (h >>> 10) & 0x1f, m = h & 0x3ff, s = h & 0x8000 ? -1 : 1;
-  if (e === 0) return s * m * 2 ** -24;
-  if (e === 31) return m ? NaN : s * Infinity;
-  return s * (1 + m / 1024) * 2 ** (e - 15);
-}
-
 /**
  * One bright pixel through the bloom pyramid. Without Karis weighting
  * every filter preserves the mean, so levels[0] (the sum of all levels)
@@ -531,4 +522,131 @@ export async function bloomEnergy(karis: boolean) {
   const err = await device.popErrorScope();
   device.destroy();
   return { meanRatio, rises, finite, levels, error: err?.message ?? null };
+}
+
+// ---------------------------------------------------------------- fx
+
+/** Probe mismatches between the ID image and a CPU raycast of descs (probes stable under a 2 px shift). */
+function probeMismatches(ids: Uint32Array, f: FrameParams, descs: BodyDesc[]) {
+  let probes = 0, hits = 0, mismatches = 0;
+  const examples: string[] = [];
+  for (let py = 3; py < H - 3; py += 2) for (let px = 3; px < W - 3; px += 2) {
+    const want = raycast(descs, ...Object.values(rayAt(f, px, py)) as [V3, V3]);
+    const stable = want >= 0 && [[2, 0], [-2, 0], [0, 2], [0, -2]].every(([dx, dy]) => raycast(descs, ...Object.values(rayAt(f, px + dx!, py + dy!)) as [V3, V3]) === want);
+    if (!stable) continue;
+    probes++;
+    if (want) hits++;
+    if (ids[py * W + px] !== want) { mismatches++; if (examples.length < 5) examples.push(`(${px},${py}) gpu ${ids[py * W + px]} cpu ${want}`); }
+  }
+  return { probes, hits, mismatches, examples };
+}
+
+/**
+ * FX scale through the renderer: hidden (scale 0), centre-scaled, and
+ * base-anchored bodies, set one by one and in bulk, must draw exactly as
+ * the CPU raycast of the bodies with those sizes and positions; clearFx
+ * restores the original image.
+ */
+export async function fxScale(seed: number) {
+  const { device } = await createDevice({ timestamps: false });
+  device.pushErrorScope('validation');
+  const r = rng(seed);
+  const descs: BodyDesc[] = [];
+  for (let i = 0; i < 24; i++) descs.push(box([(r() - 0.5) * 8, (r() - 0.5) * 4, (r() - 0.5) * 8], [0.4 + r() * 0.6, 0.4 + r() * 0.8, 0.4 + r() * 0.6], randomQuat(r)));
+  const src = new SnapshotSource(device);
+  src.update(snapshotOf(descs), descs);
+  const rend = new Renderer(device, { size: [W, H] });
+  rend.setSource(src);
+  const f = camera([9, 5, 10], [0, 0, 0]);
+  const before = (await rend.renderIds(f)).ids;
+  // What the CPU expects: scaled halves; anchored bodies keep their base (body -y face).
+  const scaled = descs.map((b, i) => {
+    const s = i % 4 === 0 ? 0 : i % 4 === 1 ? 0.6 : i % 4 === 2 ? 0.45 : 1;
+    const anchor = i % 4 === 2;
+    if (b.shape.kind !== 'box') return b;
+    const half = b.shape.half.map((h) => h * s) as V3;
+    const [x, y, z, w] = b.rot;
+    const up = [2 * (x * y - w * z), 1 - 2 * (x * x + z * z), 2 * (y * z + w * x)];
+    const pos = anchor ? b.pos.map((p, k) => p - (b.shape.kind === 'box' ? (b.shape.half[1]! - half[1]!) : 0) * up[k]!) as V3 : b.pos;
+    return { ...b, pos, shape: { kind: 'box' as const, half } };
+  }).filter((_, i) => i % 4 !== 0);
+  const slotOf = descs.map((_, i) => i).filter((i) => i % 4 !== 0);
+  // Single-slot calls for hidden and centre-scaled, one bulk call for the anchored ones.
+  for (let i = 0; i < descs.length; i++) if (i % 4 === 0) rend.setFx(i, { scale: 0 }); else if (i % 4 === 1) rend.setFx(i, { scale: 0.6 });
+  for (let i = 2; i < descs.length; i += 4) rend.setFx(i, null, new Float32Array([0.45]), true);
+  const { ids } = await rend.renderIds(f);
+  const remapped = ids.map((v) => (v ? slotOf.indexOf(v - 1) + 1 : 0));
+  const scaledCheck = probeMismatches(remapped, f, scaled);
+  let hiddenSeen = 0;
+  for (const v of ids) if (v && (v - 1) % 4 === 0) hiddenSeen++;
+  rend.clearFx(0, descs.length);
+  const after = (await rend.renderIds(f)).ids;
+  let restored = 0;
+  for (let i = 0; i < after.length; i++) if (after[i] !== before[i]) restored++;
+  const err = await device.popErrorScope();
+  rend.destroy();
+  device.destroy();
+  return { ...scaledCheck, hiddenSeen, restoreDiff: restored, error: err?.message ?? null };
+}
+
+/**
+ * Tint, glow, flash and overlay in the final image: mean colour of one box's
+ * pixels (from the ID mask) under each effect, and overlay spheres in front
+ * of and behind the box.
+ */
+export async function fxColour() {
+  const { device } = await createDevice({ timestamps: false });
+  device.pushErrorScope('validation');
+  const descs = [box([0, 0, 0], [1, 1, 1], [0, 0, 0, 1])];
+  const src = new SnapshotSource(device);
+  src.update(snapshotOf(descs), descs);
+  const rend = new Renderer(device, { size: [W, H] });
+  rend.setSource(src);
+  const f = { ...camera([4, 3, 5], [0, 0, 0]), time: 10 };
+  const mask = (await rend.renderIds(f)).ids;
+  const mean = async () => {
+    const st = (await rend.render(f, true, true))!;
+    const { data, bytesPerRow, bgra } = st.pixels!;
+    const sum = [0, 0, 0];
+    let n = 0;
+    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+      if (!mask[y * W + x]) continue;
+      const o = y * bytesPerRow + 4 * x;
+      const px = bgra ? [data[o + 2]!, data[o + 1]!, data[o]!] : [data[o]!, data[o + 1]!, data[o + 2]!];
+      px.forEach((v, k) => { sum[k]! += v; });
+      n++;
+    }
+    return sum.map((v) => v / n);
+  };
+  const plain = await mean();
+  rend.setFx(0, { tint: [1, 0.15, 0.15] });
+  const red = await mean();
+  rend.setFx(0, { emissive: 0.5 });
+  const glow = await mean();
+  rend.setFx(0, { emissive: 0.5, flash: 1, flashAt: 9.5 });
+  const flashMid = await mean();
+  rend.setFx(0, { emissive: 0.5, flash: 1, flashAt: 5 });
+  const flashDone = await mean();
+  rend.clearFx(0);
+  // Overlay: a glowing sphere hidden behind the box changes nothing; one in front of it shows.
+  const pix = async () => (await rend.render(f, true, true))!.pixels!;
+  const base = await pix();
+  rend.setOverlay(new Float32Array([-2.5, -1.8, -3, 0.3]), new Uint32Array([0xff0000ff]));
+  const withBack = await pix();
+  rend.setOverlay(new Float32Array([2.5, 2, 3.8, 0.3]), new Uint32Array([0xff00ff00]));
+  const withFront = await pix();
+  // Where the front sphere's centre projects, the image must change; the hidden one changes nothing it covers.
+  const project = (p: V3) => {
+    const c = transform(f.viewProj, p);
+    return [Math.floor(((c[0] / c[3]) * 0.5 + 0.5) * W), Math.floor((0.5 - (c[1] / c[3]) * 0.5) * H)] as const;
+  };
+  const at = (px: { data: number[]; bytesPerRow: number }, [x, y]: readonly [number, number]) => [0, 1, 2].map((k) => px.data[y * px.bytesPerRow + 4 * x + k]!);
+  const front = project([2.5, 2, 3.8]), back = project([-2.5, -1.8, -3]);
+  const frontDelta = Math.max(...at(withFront, front).map((v, k) => Math.abs(v - at(base, front)[k]!)));
+  const backDelta = Math.max(...at(withBack, back).map((v, k) => Math.abs(v - at(base, back)[k]!)));
+  const backBehindBox = mask[back[1] * W + back[0]] !== 0;
+  const err = await device.popErrorScope();
+  rend.destroy();
+  device.destroy();
+  return { plain, red, glow, flashMid, flashDone, frontDelta, backDelta, backBehindBox, error: err?.message ?? null };
 }

@@ -3,6 +3,7 @@
 // within EPS of a plane are reported as ambiguous instead of guessed.
 import { Body, Shape, TIER } from '@tb/schema';
 import { frustumPlanes, MAX_STEP_JUMP, SEGMENTS, type CullFrame } from './cull.ts';
+import { FX_WORDS, unpackFx } from './fx.ts';
 
 const EPS = 1e-3;
 const BO = Object.fromEntries(Body.fields.map((f) => [f.name, f.offset / 4])) as Record<string, number>;
@@ -15,6 +16,8 @@ export interface CpuWorld {
   shapes: ArrayBuffer;
   looks: Uint32Array;
   count: number;
+  /** Per-slot FX records (FX_WORDS each); none means no effects. */
+  fx?: Uint32Array;
 }
 
 export interface RefRecord { pos: number[]; look: number; rot: number[]; half: number[]; slot: number }
@@ -46,7 +49,9 @@ export function cullReference(w: CpuWorld, f: CullFrame): CullRef {
     const tier = (bu[o + BO.flags!]! >>> 8) & 0xff;
     if (tier === TIER.lattice || tier === TIER.free) continue;
     const shape = bu[o + BO.shape!]!, so = shape * (Shape.size / 4);
-    const half = [0, 1, 2].map((k) => sf[so + SO.half! + k]!);
+    const shapeHalf = [0, 1, 2].map((k) => sf[so + SO.half! + k]!);
+    const fx = w.fx ? unpackFx(w.fx, i * FX_WORDS) : { scale: 1, anchor: false };
+    const half = shapeHalf.map((h) => Math.fround(h * fx.scale));
     const kind = su[so + SO.kind!]!;
     let pos = [0, 1, 2].map((k) => bf[o + BO.pos! + k]!);
     let rot = [0, 1, 2, 3].map((k) => bf[o + BO.rot! + k]!);
@@ -60,11 +65,17 @@ export function cullReference(w: CpuWorld, f: CullFrame): CullRef {
       const l = Math.hypot(...m);
       rot = m.map((x) => x / l);
     }
+    if (fx.anchor) {
+      // Keep the base (body-local -y face) in place: move down along the rotated up axis.
+      const [x, y, z, ww] = rot as [number, number, number, number];
+      const up = [2 * (x * y - ww * z), 1 - 2 * (x * x + z * z), 2 * (y * z + ww * x)];
+      pos = pos.map((p, k) => p - (shapeHalf[1]! - half[1]!) * up[k]!);
+    }
     const rel = pos.map((x, k) => x - f.eye[k]!);
     records.set(i, { pos: rel, look: w.looks[i]!, rot, half, slot: i });
     const seg = Math.min(kind, 1);
     const r = kind === 1 ? half[0]! : Math.hypot(...half);
-    const tests: Test[] = f.noCull ? ['in', 'in'] : [classify(cam, rel, r), classify(light, rel, r)];
+    const tests: Test[] = !(fx.scale > 0) ? ['out', 'out'] : f.noCull ? ['in', 'in'] : [classify(cam, rel, r), classify(light, rel, r)];
     tests.forEach((t, j) => {
       const s = seg + 2 * j;
       if (t === 'in') must[s]!.push(i);

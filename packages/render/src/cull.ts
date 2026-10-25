@@ -4,7 +4,8 @@
 // segment, with indirect draw arguments. No CPU readback, no per-body upload.
 //
 // Passes (one compute pass):
-//   prepare   one thread per slot: RenderRecord + a 0/1 flag per segment
+//   prepare   one thread per slot: RenderRecord (with the slot's FX scale
+//             applied) + a 0/1 flag per segment
 //   scan      exclusive scan over all segment flags (one Scanner, fixed n)
 //   scatter   flagged slot -> lists[seg * capacity + local index]
 //   args      one thread: drawIndirect arguments per segment
@@ -16,6 +17,7 @@
 // lists can be compared element by element with cullReference().
 import { Scanner } from '@tb/gpu';
 import { Body, RenderRecord, Shape, TIER, wgslStruct } from '@tb/schema';
+import { FX_WGSL } from './fx.ts';
 import type { BodySource } from './source.ts';
 
 export const SEGMENTS = ['box', 'sphere', 'boxShadow', 'sphereShadow'] as const;
@@ -31,6 +33,7 @@ export const CULL_WGSL = /* wgsl */ `
 ${wgslStruct(Body)}
 ${wgslStruct(Shape)}
 ${wgslStruct(RenderRecord)}
+${FX_WGSL}
 
 struct CullParams {
   planes: array<vec4f, 6>,      // camera frustum, camera-relative, inside: dot(n, p) + d >= 0
@@ -53,6 +56,7 @@ struct CullParams {
 @group(0) @binding(6) var<storage, read_write> scan: array<u32>;   // 4 * capacity + 1
 @group(0) @binding(7) var<storage, read_write> lists: array<u32>;  // 4 * capacity
 @group(0) @binding(8) var<storage, read_write> args: array<u32>;   // 4 x drawIndirect
+@group(0) @binding(9) var<storage, read> fx: array<vec4u>;         // per slot, see fx.ts
 
 fn inside(planes: array<vec4f, 6>, c: vec3f, r: f32) -> bool {
   var ok = true;
@@ -83,12 +87,19 @@ fn prepare(@builtin(global_invocation_id) id: vec3u) {
         let qr = select(q.rot, -q.rot, dot(q.rot, b.rot) < 0.0);
         rot = normalize(mix(qr, b.rot, p.alpha));
       }
+      let fs = fxScale(fx[i].y);
+      let half = sh.half * fs.scale;
+      if (fs.anchor) {
+        let t = 2.0 * cross(rot.xyz, vec3f(0.0, 1.0, 0.0));
+        pos -= (sh.half.y - half.y) * (vec3f(0.0, 1.0, 0.0) + rot.w * t + cross(rot.xyz, t));
+      }
       let rel = pos - p.eye;
-      records[i] = RenderRecord(rel, looks[i], rot, sh.half, i);
+      records[i] = RenderRecord(rel, looks[i], rot, half, i);
       seg = min(sh.kind, 1u);
-      let r = select(length(sh.half), sh.half.x, sh.kind == 1u);
-      vis = p.noCull != 0u || inside(p.planes, rel, r);
-      shadow = p.noCull != 0u || inside(p.lightPlanes, rel, r);
+      let r = select(length(half), half.x, sh.kind == 1u);
+      let shown = fs.scale > 0.0;
+      vis = shown && (p.noCull != 0u || inside(p.planes, rel, r));
+      shadow = shown && (p.noCull != 0u || inside(p.lightPlanes, rel, r));
     }
   }
   scan[i] = select(0u, 1u, vis && seg == 0u);
@@ -163,11 +174,12 @@ export class Culler {
   private readonly scanBuf: GPUBuffer;
   private readonly params: GPUBuffer;
   private readonly scanner: Scanner;
-  private readonly bind: GPUBindGroup;
+  private readonly binds: { prepare: GPUBindGroup; scatter: GPUBindGroup; args: GPUBindGroup };
   private readonly pipes: { prepare: GPUComputePipeline; scatter: GPUComputePipeline; args: GPUComputePipeline };
   readonly capacity: number;
 
-  constructor(private readonly device: GPUDevice, readonly source: BodySource, private readonly verts: { box: number; sphere: number }) {
+  /** fx: the renderer's per-slot FX records (FX_WORDS u32 each, at least capacity of them). */
+  constructor(private readonly device: GPUDevice, readonly source: BodySource, private readonly verts: { box: number; sphere: number }, fx: GPUBuffer) {
     const cap = (this.capacity = source.capacity);
     const usage = GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC;
     this.records = device.createBuffer({ size: Math.max(16, cap * RenderRecord.size), usage, label: 'render records' });
@@ -177,18 +189,16 @@ export class Culler {
     this.params = device.createBuffer({ size: PARAM_BYTES, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST, label: 'cull params' });
     this.scanner = new Scanner(device, this.scanBuf, 4 * cap + 1);
     const module = device.createShaderModule({ code: CULL_WGSL, label: 'cull' });
-    const ro = { type: 'read-only-storage' } as const, rw = { type: 'storage' } as const;
-    const layout = device.createBindGroupLayout({
-      entries: [{ type: 'uniform' } as const, ro, ro, ro, ro, rw, rw, rw, rw].map((buffer, binding) => ({ binding, visibility: GPUShaderStage.COMPUTE, buffer })),
-    });
-    const pl = device.createPipelineLayout({ bindGroupLayouts: [layout] });
-    const pipe = (entryPoint: string) => device.createComputePipeline({ layout: pl, compute: { module, entryPoint } });
+    // One layout per kernel ('auto', holding only what it uses): together
+    // they bind 9 storage buffers, over WebGPU's default limit of 8.
+    const pipe = (entryPoint: string) => device.createComputePipeline({ layout: 'auto', compute: { module, entryPoint } });
     this.pipes = { prepare: pipe('prepare'), scatter: pipe('scatter'), args: pipe('writeArgs') };
-    this.bind = device.createBindGroup({
-      layout,
-      entries: [this.params, source.bodies, source.prev, source.shapes, source.looks, this.records, this.scanBuf, this.lists, this.args]
-        .map((buffer, binding) => ({ binding, resource: { buffer } })),
+    const all = [this.params, source.bodies, source.prev, source.shapes, source.looks, this.records, this.scanBuf, this.lists, this.args, fx];
+    const bind = (p: GPUComputePipeline, bindings: number[]) => device.createBindGroup({
+      layout: p.getBindGroupLayout(0),
+      entries: bindings.map((binding) => ({ binding, resource: { buffer: all[binding]! } })),
     });
+    this.binds = { prepare: bind(this.pipes.prepare, [0, 1, 2, 3, 4, 5, 6, 9]), scatter: bind(this.pipes.scatter, [0, 6, 7]), args: bind(this.pipes.args, [0, 6, 8]) };
   }
 
   /** Record the cull into an open compute pass. */
@@ -206,13 +216,14 @@ export class Culler {
     u[55] = this.verts.box;
     u[56] = this.verts.sphere;
     this.device.queue.writeBuffer(this.params, 0, buf);
-    pass.setBindGroup(0, this.bind);
+    pass.setBindGroup(0, this.binds.prepare);
     pass.setPipeline(this.pipes.prepare);
     pass.dispatchWorkgroups(Math.ceil(cap / WG));
     this.scanner.encode(pass, 4 * cap + 1);
-    pass.setBindGroup(0, this.bind);
+    pass.setBindGroup(0, this.binds.scatter);
     pass.setPipeline(this.pipes.scatter);
     pass.dispatchWorkgroups(Math.ceil((4 * cap) / WG));
+    pass.setBindGroup(0, this.binds.args);
     pass.setPipeline(this.pipes.args);
     pass.dispatchWorkgroups(1);
   }

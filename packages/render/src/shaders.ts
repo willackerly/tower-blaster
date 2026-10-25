@@ -3,6 +3,7 @@
 // camera-relative; the shading reads its colours and lights from the Frame
 // uniform (LookParams), so presets are data.
 import { defineStruct, RenderRecord, wgslStruct } from '@tb/schema';
+import { FX_EMISSIVE_MAX, FX_WGSL } from './fx.ts';
 import { BEVEL_WGSL, OKLAB_WGSL } from './look.ts';
 
 export const SHADOW_SIZE = 2048;
@@ -41,6 +42,9 @@ ${wgslStruct(Frame)}
 @group(0) @binding(2) var<storage, read> lists: array<u32>;
 @group(0) @binding(3) var shadowMap: texture_depth_2d;
 @group(0) @binding(4) var shadowSampler: sampler_comparison;
+@group(0) @binding(5) var<storage, read> fx: array<vec4u>;          // per slot, see fx.ts
+@group(0) @binding(6) var<storage, read> overlay: array<vec4f>;     // world x, y, z, radius
+@group(0) @binding(7) var<storage, read> overlayColour: array<u32>; // sRGB rgb8 + emissive8
 
 // Which list a pipeline draws: SEG * capacity is its first entry.
 override SEG: u32 = 0u;
@@ -49,6 +53,7 @@ const PI = 3.14159265;
 const SEAM = 0.012;
 ${OKLAB_WGSL}
 ${BEVEL_WGSL}
+${FX_WGSL}
 
 fn qrot(q: vec4f, v: vec3f) -> vec3f {
   let t = 2.0 * cross(q.xyz, v);
@@ -271,7 +276,8 @@ fn boxFace(local: vec3f, w: vec3f) -> vec3f {
   let dndy = dpdy(n);
   let isCandy = material(v.look) == 0u;
   let rough = select(0.7, fr.roughness, isCandy);
-  let base = select(vec3f(0.35), albedo(v.look), isCandy);
+  let w = fx[v.slot];
+  let base = select(vec3f(0.35), albedo(v.look), isCandy) * fxTint(w.x);
   // A thin dark seam (SEAM m wide on each cube) keeps neighbours in a packed
   // tower apart. Antialiased in pixels and faded out once it is narrower
   // than a pixel, where a hard line would alias into dashes.
@@ -280,7 +286,8 @@ fn boxFace(local: vec3f, w: vec3f) -> vec3f {
   let wPx = SEAM / max(pxM, 1e-6);
   let drawn = max(wPx, 0.75);
   let seam = 1.0 - 0.4 * min(1.0, wPx / 0.75) * (1.0 - smoothstep(drawn - 0.5, drawn + 0.5, edgeM / max(pxM, 1e-6)));
-  let c = shade(base * seam, v.rel, n, aaAlpha(rough * rough, n, dndx, dndy), aaAlpha(0.0049, n, dndx, dndy), select(0.0, fr.clearcoat, isCandy));
+  var c = shade(base * seam, v.rel, n, aaAlpha(rough * rough, n, dndx, dndy), aaAlpha(0.0049, n, dndx, dndy), select(0.0, fr.clearcoat, isCandy));
+  c += base * seam * fxGlow(w, fr.time);
   return vec4f(fog(c, v.rel), 1.0);
 }
 
@@ -289,10 +296,29 @@ fn boxFace(local: vec3f, w: vec3f) -> vec3f {
   let dndx = dpdx(n);
   let dndy = dpdy(n);
   let isBall = material(v.look) == 1u;
-  let base = select(albedo(v.look), fr.ball, isBall);
+  let w = fx[v.slot];
+  let base = select(albedo(v.look), fr.ball, isBall) * fxTint(w.x);
   var c = shade(base, v.rel, n, aaAlpha(0.04, n, dndx, dndy), aaAlpha(0.0049, n, dndx, dndy), 0.5);
+  c += base * fxGlow(w, fr.time);
   let NoV = max(dot(n, normalize(-v.rel)), 0.0);
   c += select(vec3f(0.0), fr.ball * fr.ballEmissive * (0.35 + 0.65 * NoV), isBall);
+  return vec4f(fog(c, v.rel), 1.0);
+}
+
+// Overlay spheres (setOverlay): not bodies, no shadows; slot = overlay index.
+@vertex fn vsOverlay(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> VOut {
+  let s = overlay[ii];
+  return place(RenderRecord(s.xyz - fr.eye, 0u, vec4f(0.0, 0.0, 0.0, 1.0), vec3f(s.w), ii), sphereCorner(vi));
+}
+
+@fragment fn fsOverlay(v: VOut) -> @location(0) vec4f {
+  let n = normalize(v.local);
+  let dndx = dpdx(n);
+  let dndy = dpdy(n);
+  let col = overlayColour[v.slot];
+  let base = pow(unpack4x8unorm(col).rgb, vec3f(2.2));
+  var c = shade(base, v.rel, n, aaAlpha(0.04, n, dndx, dndy), aaAlpha(0.0049, n, dndx, dndy), 0.5);
+  c += base * f32(col >> 24u) / 255.0 * ${FX_EMISSIVE_MAX}.0;
   return vec4f(fog(c, v.rel), 1.0);
 }
 
