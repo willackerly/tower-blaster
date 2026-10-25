@@ -341,6 +341,18 @@ describe('heat', () => {
 });
 
 describe('AO volume', () => {
+  it('compose matches its CPU twin at every level, within unorm8 rounding', async (ctx) => {
+    if (!gpu) return ctx.skip();
+    const r = await call('aoCompose', 63);
+    expect(r.error).toBeNull();
+    expect(r.levels.map((l) => l.dims)).toEqual([[40, 24, 32], [20, 12, 16], [10, 6, 8]]);
+    for (const l of r.levels) {
+      expect(l.maxR).toBeLessThanOrEqual(0.6); // unorm8 conversion: nearest within 0.6 ulp
+      expect(l.maxG).toBeLessThanOrEqual(0.6 + 255 * 1e-5); // and exp() within f32 slack
+      expect(l.fixed).toBe(0);
+    }
+  });
+
   it('the GPU footprint matches its twin: exact at rest, a few ulps rotated, zero (not NaN) when hidden', async (ctx) => {
     if (!gpu) return ctx.skip();
     let s = 77;

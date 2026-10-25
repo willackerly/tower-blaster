@@ -3,7 +3,7 @@
 // conservation, so the GPU comparison in render.test.ts compares against
 // something independently right.
 import { describe, expect, it } from 'vitest';
-import { AO_ONE, aoFootReference, aoGrid, FOOT_SPHERE, splatReference, voxelCount, type AoGrid, type V3 } from '../src/index.ts';
+import { AO_ONE, aoFootReference, aoGrid, composeReference, FOOT_SPHERE, splatReference, voxelCount, type AoGrid, type V3 } from '../src/index.ts';
 
 function rng(seed: number) {
   let a = seed >>> 0;
@@ -26,7 +26,7 @@ describe('aoGrid', () => {
     const g = aoGrid({ center: [0.2, 4, 0], half: [30, 12, 30], radius: 25 });
     expect(g.voxel).toBe(0.5);
     expect(g.origin).toEqual([-25, -8, -25]); // floor(-24.8 / 0.5) * 0.5 on x; y from the box, not the sphere
-    expect(g.dims).toEqual([101, 48, 100]); // up to 25.2, 16 and 25
+    expect(g.dims).toEqual([104, 48, 100]); // up to 25.2, 16 and 25, rounded up to whole level-2 voxels (multiples of 4)
   });
 
   it('doubles the voxel until the grid fits the cap', () => {
@@ -115,5 +115,42 @@ describe('splatReference', () => {
     const world = splatReference([{ pos: [0.125, 0.125, 0.125], rot: ID, half: [0.5, 0.5, 0.5], sphere: false }], g, [0, 0, 0]);
     const rel = splatReference([{ pos: [0.125 - e[0], 0.125 - e[1], 0.125 - e[2]], rot: ID, half: [0.5, 0.5, 0.5], sphere: false }], g, e);
     expect(rel).toEqual(world);
+  });
+});
+
+describe('composeReference', () => {
+  const g: AoGrid = { origin: [0, 0, 0], voxel: 0.5, dims: [8, 16, 8] };
+  const idx = (x: number, y: number, z: number) => (z * 16 + y) * 8 + x;
+
+  it('a full layer: occupied in it, sky 1 above and exp(-k) below, at every level', () => {
+    const occ = new Uint32Array(8 * 16 * 8);
+    for (let z = 0; z < 8; z++) for (let x = 0; x < 8; x++) occ[idx(x, 10, z)] = 2 * AO_ONE; // over-full clamps to 1
+    const [l0, l1, l2] = composeReference(occ, g, 0.5);
+    const at = (l: typeof l0, y: number) => (3 * l!.dims[1] + y) * l!.dims[0] + 3;
+    expect(l0!.r[at(l0, 10)]).toBe(1);
+    expect(l0!.r[at(l0, 9)]).toBe(0);
+    expect(l0!.g[at(l0, 10)]).toBe(1); // nothing above the layer itself
+    expect(l0!.g[at(l0, 11)]).toBe(1);
+    expect(l0!.g[at(l0, 9)]).toBeCloseTo(Math.exp(-0.5), 7);
+    expect(l0!.g[at(l0, 0)]).toBeCloseTo(Math.exp(-0.5), 7);
+    // Level 1 (1 m): the layer is half of voxel y 5; below it the same sky.
+    expect(l1!.dims).toEqual([4, 8, 4]);
+    expect(l1!.r[(1 * 8 + 5) * 4 + 1]).toBe(0.5);
+    expect(l1!.g[(1 * 8 + 4) * 4 + 1]).toBeCloseTo(Math.exp(-0.5), 7);
+    // Level 2 (2 m): a quarter of voxel y 2.
+    expect(l2!.r[(0 * 4 + 2) * 2 + 0]).toBe(0.25);
+    expect(l2!.g[(0 * 4 + 1) * 2 + 0]).toBeCloseTo(Math.exp(-0.5), 7);
+  });
+
+  it('levels are box filters of the clamped level 0', () => {
+    const r = rng(12), occ = new Uint32Array(8 * 16 * 8).map(() => (r() < 0.3 ? Math.floor(r() * 1.5 * AO_ONE) : 0));
+    const [l0, l1, l2] = composeReference(occ, g);
+    for (const [l, s] of [[l1!, 2], [l2!, 4]] as const) {
+      for (let z = 0; z < l.dims[2]; z++) for (let y = 0; y < l.dims[1]; y++) for (let x = 0; x < l.dims[0]; x++) {
+        let m = 0;
+        for (let dz = 0; dz < s; dz++) for (let dy = 0; dy < s; dy++) for (let dx = 0; dx < s; dx++) m += l0!.r[((z * s + dz) * 16 + y * s + dy) * 8 + x * s + dx]!;
+        expect(l.r[(z * l.dims[1] + y) * l.dims[0] + x]).toBeCloseTo(m / s ** 3, 6);
+      }
+    }
   });
 });

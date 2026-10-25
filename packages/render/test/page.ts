@@ -9,7 +9,7 @@ import { Body, RenderRecord, Shape, TIER, readStruct } from '@tb/schema';
 import {
   agx, AGX_WGSL, fromHalf, FX_WORDS, packFx, toHalf, bevelNormal, BEVEL_WGSL, oklabToLinear, OKLAB_WGSL, Post,
   Culler, cullReference, GpuBodySource, invert, listMatches, lookAt, makeGpuBodies, multiply, perspective, Renderer, SEGMENTS, SnapshotSource, transform,
-  translation, BOX_VERTS, SPHERE_VERTS, SUN, Sparks, CTL, MAX_EVENTS, flashSlot, FLASHES, MAX_BALLS, TRAIL, Lights, LIGHTS, LIGHT_META, LIGHT_PACKED, MATERIAL, AoVolume, aoGrid, splatReference, AO_FOOT_WGSL, type SplatBody, unpackImpacts, unpackSparks, spawnReference, stepReference, type Impact, type BodySource, type CullFrame, type FrameParams, type V3,
+  translation, BOX_VERTS, SPHERE_VERTS, SUN, Sparks, CTL, MAX_EVENTS, flashSlot, FLASHES, MAX_BALLS, TRAIL, Lights, LIGHTS, LIGHT_META, LIGHT_PACKED, MATERIAL, AoVolume, aoGrid, splatReference, composeReference, AO_FOOT_WGSL, AO_ONE, type SplatBody, unpackImpacts, unpackSparks, spawnReference, stepReference, type Impact, type BodySource, type CullFrame, type FrameParams, type V3,
 } from '../src/index.ts';
 
 function rng(seed: number) {
@@ -1444,4 +1444,54 @@ ${AO_FOOT_WGSL}
   const err = await device.popErrorScope();
   device.destroy();
   return { foot: cases.map((_, i) => Array.from(res.slice(i * 4, i * 4 + 3))), error: err?.message ?? null };
+}
+
+/** Read one level of an rgba8unorm 3D texture into tight RGBA bytes. */
+async function readVolume(device: GPUDevice, tex: GPUTexture, level: number, dims: number[]): Promise<Uint8Array> {
+  const [w, h, d] = dims as [number, number, number];
+  const bytesPerRow = Math.ceil((w * 4) / 256) * 256;
+  const buf = device.createBuffer({ size: bytesPerRow * h * d, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
+  const enc = device.createCommandEncoder();
+  enc.copyTextureToBuffer({ texture: tex, mipLevel: level }, { buffer: buf, bytesPerRow, rowsPerImage: h }, [w, h, d]);
+  device.queue.submit([enc.finish()]);
+  await buf.mapAsync(GPUMapMode.READ);
+  const src = new Uint8Array(buf.getMappedRange()), out = new Uint8Array(w * h * d * 4);
+  for (let z = 0; z < d; z++) for (let y = 0; y < h; y++) out.set(src.subarray((z * h + y) * bytesPerRow, (z * h + y) * bytesPerRow + w * 4), ((z * h + y) * w) * 4);
+  buf.unmap();
+  buf.destroy();
+  return out;
+}
+
+/** Compose against its CPU twin on a random accumulator (sparse, some over-full voxels, some full layers). */
+export async function aoCompose(seed: number) {
+  const { device } = await createDevice({ timestamps: false });
+  device.pushErrorScope('validation');
+  const grid = aoGrid({ center: [0, 4, 0], half: [10, 6, 8] });
+  const r = rng(seed);
+  const [nx, ny, nz] = grid.dims;
+  const occ = new Uint32Array(nx * ny * nz).map(() => (r() < 0.25 ? Math.floor(r() * 1.6 * AO_ONE) : 0));
+  for (let z = 0; z < nz; z++) for (let x = 0; x < nx; x++) if (x < nx / 2) occ[(z * ny + 7) * nx + x] = AO_ONE; // a floor under half the grid
+  const ao = new AoVolume(device, grid);
+  device.queue.writeBuffer(ao.occ, 0, occ);
+  const enc = device.createCommandEncoder();
+  const pass = enc.beginComputePass();
+  ao.compose(pass);
+  pass.end();
+  device.queue.submit([enc.finish()]);
+  const want = composeReference(occ, grid, ao.skyK);
+  const levels = [];
+  for (let l = 0; l < want.length; l++) {
+    const got = await readVolume(device, ao.volume, l, want[l]!.dims);
+    let maxR = 0, maxG = 0, fixed = 0;
+    for (let v = 0; v < want[l]!.r.length; v++) {
+      maxR = Math.max(maxR, Math.abs(got[v * 4]! - want[l]!.r[v]! * 255));
+      maxG = Math.max(maxG, Math.abs(got[v * 4 + 1]! - want[l]!.g[v]! * 255));
+      if (got[v * 4 + 2] !== 0 || got[v * 4 + 3] !== 255) fixed++;
+    }
+    levels.push({ dims: want[l]!.dims, maxR, maxG, fixed });
+  }
+  ao.destroy();
+  const err = await device.popErrorScope();
+  device.destroy();
+  return { levels, error: err?.message ?? null };
 }
