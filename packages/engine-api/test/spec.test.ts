@@ -117,6 +117,21 @@ describe('checkSpec (§2, §3.3)', () => {
     expect(() => check({ outputs: [{ op: 'count', where: shared }, { op: 'count', where: shared }, { op: 'count', where: 'all' }] })).toThrow(/65 predicate nodes/);
   });
 
+  it('walks a shared subtree once, counting it at every use; a cycle is rejected', () => {
+    // p doubled 20 times: 2^21 - 1 nodes in 21 objects. Each and list is read once, not 2^(20 - level) times.
+    let p: Pred = 'all', reads = 0;
+    for (let i = 0; i < 20; i++) {
+      const c = [p, p];
+      p = Object.defineProperty({}, 'and', { enumerable: true, get: () => (reads++, c) }) as Pred;
+    }
+    expect(() => check(where(p))).toThrow(/2097151 predicate nodes, over the cap of 64/);
+    expect(specCost(where(p))).toEqual({ recordWords: 2, programWords: 4 * (2 ** 21 - 1) + 4 });
+    expect(reads).toBe(2 * 20);
+    const loop: { and: Pred[] } = { and: ['all'] };
+    loop.and.push({ not: loop });
+    expect(() => check(where(loop))).toThrow(/where\.and\[1\]\.not: a predicate cannot contain itself/);
+  });
+
   it('caps tagWords at maxTagWords', () => {
     expect(() => check(where('all'), OBSERVER_CAPS, 4)).not.toThrow();
     expect(() => check(where('all'), OBSERVER_CAPS, 5)).toThrow(/tagWords must be an integer 0\.\.4/);

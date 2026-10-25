@@ -217,6 +217,8 @@ class Analyzer {
   readonly preds: PredDef[] = [];
   private readonly scalarAt = new Map<string, number>();
   private readonly predAt = new Map<string, number>();
+  /** Per predicate object: its table index and node count, or null while it is being walked. */
+  private readonly predSeen = new Map<object, { i: number; nodes: number } | null>();
   predNodes = 0;
   recordWords = 0;
   edgeWords = 0;
@@ -294,7 +296,22 @@ class Analyzer {
     return k as number;
   }
 
+  /** A subtree shared by object is walked once and counted at every use, so a doubling DAG costs its depth, not 2^depth. */
   pred(p: unknown, path: string): number {
+    if (!isObj(p)) return this.node(p, path);
+    const seen = this.predSeen.get(p);
+    if (seen === null) throw new SpecError(path, 'a predicate cannot contain itself');
+    if (seen) {
+      this.predNodes += seen.nodes;
+      return seen.i;
+    }
+    this.predSeen.set(p, null);
+    const before = this.predNodes, i = this.node(p, path);
+    this.predSeen.set(p, { i, nodes: this.predNodes - before });
+    return i;
+  }
+
+  private node(p: unknown, path: string): number {
     this.predNodes++;
     if (p === 'all' || p === 'awake') return this.internPred(p, { t: p });
     if (!isObj(p)) throw new SpecError(path, `predicate must be 'all', 'awake' or an object, got ${show(p)}`);
