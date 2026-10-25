@@ -59,8 +59,11 @@ export class GpuAvbdEngine implements PhysicsEngine {
   constructor(params: Partial<AvbdParams> = {}, private readonly opts: GpuEngineOptions = {}) {
     this.params = { ...DEFAULT_AVBD, ...params };
     if (!this.params.postStabilize) throw new Error('GpuAvbdEngine: only postStabilize = true is implemented');
+    if (opts.spare !== undefined && !(Number.isInteger(opts.spare) && opts.spare >= 0)) throw new Error(`GpuAvbdEngine: GpuEngineOptions.spare must be a non-negative integer, got ${opts.spare}`);
     const variant: Record<string, number | boolean> = {};
     for (const [k, v] of Object.entries(this.params)) variant[k] = v;
+    // Options that size the buffers change the work per step (e.g. the broadphase's key bits), so they are part of the variant.
+    for (const k of ['capacity', 'spare', 'pairsPerBody', 'maxRadius'] as const) if (opts[k] !== undefined) variant[k] = opts[k];
     this.info = { name: 'avbd-gpu', variant, backend: 'webgpu', integrator: { substeps: 1 } };
   }
 
