@@ -85,7 +85,29 @@ export interface PhysicsEngine {
   readonly stepIndex: number;
   /** Full state copy. Never called inside a timed region. */
   snapshot(): Snapshot | Promise<Snapshot>;
+  /**
+   * GPU engines only: the live state buffers, so a renderer on the same
+   * device draws them with no CPU copy. Read-only for the caller.
+   */
+  gpu?(): GpuBodies | null;
   dispose(): void;
+}
+
+/**
+ * Body state that lives on the GPU. Buffers use the @tb/schema layouts and
+ * are overwritten in place by each step(); work submitted after step()
+ * returns sees the new state (queue order).
+ */
+export interface GpuBodies {
+  device: GPUDevice;
+  /** array<Body>, `capacity` slots; body i is slot i (slots are stable). */
+  bodies: GPUBuffer;
+  /** array<Shape>, indexed by Body.shape. */
+  shapes: GPUBuffer;
+  /** Bodies in use, slots [0, count); grows when inputs spawn. Read after step(). */
+  count: number;
+  /** Fixed at init. */
+  capacity: number;
 }
 
 export function emptySnapshot(count: number): Snapshot {

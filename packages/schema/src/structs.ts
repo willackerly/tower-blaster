@@ -17,16 +17,16 @@ export const Body = defineStruct(
   'Rigid body state, one per active body.',
 );
 
-export const RenderInstance = defineStruct(
-  'RenderInstance',
+export const RenderRecord = defineStruct(
+  'RenderRecord',
   [
-    ['pos', 'vec3f'],
-    ['palette', 'u32', 'colour index, e.g. original tower height'],
-    ['rot', 'vec4f'],
+    ['pos', 'vec3f', 'camera-relative centre, interpolated between the last two steps'],
+    ['look', 'u32', 'BodyLook bits: 0-7 ramp, 8-11 hue, 12-15 material, 16-31 seed'],
+    ['rot', 'vec4f', 'unit quaternion (x, y, z, w), interpolated'],
     ['half', 'vec3f', 'box half extents; x is the radius for a sphere'],
-    ['shape', 'u32', '0 box, 1 sphere'],
+    ['slot', 'u32', 'body index'],
   ],
-  'What the renderer reads per body.',
+  'Per-body pose the renderer draws, written once per frame by its prepare pass.',
 );
 
 export const SimParams = defineStruct(
@@ -68,4 +68,11 @@ export const Manifold = defineStruct(
   'Contact manifold for one body pair, written by the narrowphase.',
 );
 
-export const ALL_STRUCTS = [SimParams, Body, RenderInstance, Shape, Manifold];
+/**
+ * Body.flags bits 8-15. Renderer rule: lattice proxies are drawn from the
+ * lattice masks and free slots not at all; everything else from Body[].
+ */
+export const TIER = { active: 0, rubble: 1, latticeProxy: 2, debris: 3, free: 255 } as const;
+export const FLAG_AWAKE = 1;
+
+export const ALL_STRUCTS = [SimParams, Body, RenderRecord, Shape, Manifold];

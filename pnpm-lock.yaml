@@ -32,6 +32,9 @@ importers:
       '@tb/physics-ref':
         specifier: workspace:*
         version: link:packages/physics-ref
+      '@tb/render':
+        specifier: workspace:*
+        version: link:packages/render
       '@tb/runner':
         specifier: workspace:*
         version: link:packages/runner
@@ -94,6 +97,8 @@ importers:
   packages/physics-gpu: {}
 
   packages/physics-ref: {}
+
+  packages/render: {}
 
   packages/runner: {}
 

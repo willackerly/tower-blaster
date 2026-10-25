@@ -23,14 +23,14 @@ struct Body {
   shape: u32, // @60 index into the shape table
 }
 
-// What the renderer reads per body.
+// Per-body pose the renderer draws, written once per frame by its prepare pass.
 // size 48 B, align 16
-struct RenderInstance {
-  pos: vec3f, // @0
-  palette: u32, // @12 colour index, e.g. original tower height
-  rot: vec4f, // @16
+struct RenderRecord {
+  pos: vec3f, // @0 camera-relative centre, interpolated between the last two steps
+  look: u32, // @12 BodyLook bits: 0-7 ramp, 8-11 hue, 12-15 material, 16-31 seed
+  rot: vec4f, // @16 unit quaternion (x, y, z, w), interpolated
   half: vec3f, // @32 box half extents; x is the radius for a sphere
-  shape: u32, // @44 0 box, 1 sphere
+  slot: u32, // @44 body index
 }
 
 // Collision shape, indexed by Body.shape.
