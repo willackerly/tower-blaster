@@ -112,6 +112,54 @@ describe('RadixSorter (stable, keys + values)', () => {
   });
 });
 
+describe('Readback (pooled staging buffers)', () => {
+  it('reads 4 B, 256 B, 1 MiB, the whole buffer by default and a range at an offset', async (ctx) => {
+    if (!gpu) return ctx.skip();
+    const r = await call('readbackData', [{ size: 4 }, { size: 256 }, { size: 2 ** 20 }, { size: 2 ** 20 + 64, bytes: 4108, offset: 1000 }, { size: 512, bytes: 4, offset: 508 }]);
+    expect(r.error).toBeNull();
+    expect(r.cases.map((c) => [c.byteLength, c.diff])).toEqual([[4, -1], [256, -1], [2 ** 20, -1], [4108, -1], [4, -1]]);
+    expect(r.bytesRead).toBe(4 + 256 + 2 ** 20 + 4108 + 4);
+    // One 256 B buffer serves the 4 B, 256 B and last reads; the 4108 B read takes the free 1 MiB one.
+    expect(r.created).toBe(2);
+  });
+
+  it('reuses, grows, never shares, keeps queue order, rejects bad ranges and cleans up', async (ctx) => {
+    if (!gpu) return ctx.skip();
+    const r = await call('readbackRules');
+    expect(r.error).toBeNull();
+    // Sequential reads of one size: one 1 KiB buffer.
+    expect(r.seq).toEqual([true, true, true]);
+    expect(r.afterSequential).toEqual({ created: 1, free: [1024] });
+    // A larger read adds one; a smaller one after it takes the smallest that fits.
+    expect(r.largeOk).toBe(true);
+    expect(r.afterLarge).toEqual({ created: 2, free: [1024, 2 ** 20] });
+    expect(r.freeWhileSmallInFlight).toEqual([2 ** 20]);
+    expect(r.smallAgainOk).toBe(true);
+    expect(r.afterSmall).toEqual({ created: 2, free: [1024, 2 ** 20] });
+    // Two reads in flight at once get a buffer each.
+    expect(r.concurrent).toEqual({ created: 2, a: -1, b: -1 });
+    // The copy is submitted by read() itself, so a later writeBuffer cannot leak into it.
+    expect(r.order).toEqual({ before: [1, 2, 3, 4], after: [5, 6, 7, 8] });
+    expect(r.misaligned.bytes).toMatch(/bytes \(6\) and offset \(0\) must be non-negative multiples of 4/);
+    expect(r.misaligned.offset).toMatch(/bytes \(4\) and offset \(2\) must be non-negative multiples of 4/);
+    expect(r.misaligned.negative).toMatch(/must be non-negative multiples of 4/);
+    expect(r.misaligned.range).toMatch(/8 bytes at 12 is past the end of a 16-byte buffer/);
+    expect(r.empty).toBe(0);
+    expect(r.idle).toEqual({ submits: 0, created: 0, bytesRead: 0 });
+    expect(r.submitsPerRead).toBe(1);
+    expect(r.maps).toEqual([[0, 4]]);
+    expect(r.failedMap).toMatch(/unmapped/i);
+    expect(r.victimGone).toBe(true);
+    expect(r.victimDestroyed).toBe(true);
+    expect(r.recovered).toBe(true);
+    expect(r.recoveredCreated).toBe(2);
+    expect(r.destroyedInFlight).toMatch(/destroyed/i);
+    expect(r.buffers).toBe(2);
+    expect(r.allDestroyed).toBe(true);
+    expect(r.readAfterDestroy).toBe('Readback: destroyed');
+  });
+});
+
 describe('BandwidthProbe and bench:gpu', () => {
   it('the copy kernel copies every word, including a partial last workgroup', async (ctx) => {
     if (!gpu) return ctx.skip();

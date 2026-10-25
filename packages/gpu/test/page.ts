@@ -2,7 +2,7 @@
 // loadBundle() and calls the exports through page.evaluate; each driver checks
 // its GPU result against the CPU reference in the page and returns a small
 // summary, so large arrays never cross the Playwright boundary.
-import { BandwidthProbe, compactIndices, Compactor, createDevice, exclusiveScanU32, RadixSorter, sortPairs, GpuProfiler, readBuffer, Scanner, uploadU32 } from '../src/index.ts';
+import { BandwidthProbe, compactIndices, Compactor, createDevice, exclusiveScanU32, RadixSorter, Readback, sortPairs, GpuProfiler, readBuffer, Scanner, uploadU32 } from '../src/index.ts';
 
 function rng(seed: number) {
   let a = seed >>> 0;
@@ -220,6 +220,137 @@ export async function bandwidthCopy(bytes: number) {
   probe.destroy();
   device.destroy();
   return res;
+}
+
+export interface ReadCase { size: number; bytes?: number; offset?: number }
+
+/** Read each case's range of a random source buffer through one Readback. */
+export async function readbackData(cases: ReadCase[]) {
+  const { device } = await createDevice();
+  const rb = new Readback(device);
+  device.pushErrorScope('validation');
+  const out = [];
+  for (const [k, c] of cases.entries()) {
+    const words = fill(c.size / 4, 'random', 50 + k);
+    const src = device.createBuffer({ size: c.size, usage: GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST });
+    device.queue.writeBuffer(src, 0, words);
+    const got = await (c.bytes === undefined ? rb.read(src) : rb.read(src, c.bytes, c.offset));
+    const first = (c.offset ?? 0) / 4;
+    out.push({ ...c, byteLength: got.byteLength, diff: firstDiff(new Uint32Array(got), words.subarray(first, first + (c.bytes ?? c.size) / 4)) });
+    src.destroy();
+  }
+  const error = await device.popErrorScope();
+  const res = { cases: out, error: error?.message ?? null, created: rb.created, bytesRead: rb.bytesRead };
+  rb.destroy();
+  device.destroy();
+  return res;
+}
+
+/**
+ * The Readback rules, step by step: pool reuse and growth, concurrency,
+ * queue order, alignment and range errors, a failed map and destroy().
+ * Each entry is what the test expects to be exact.
+ */
+export async function readbackRules() {
+  const { device } = await createDevice();
+  let submits = 0;
+  const submit = device.queue.submit.bind(device.queue);
+  device.queue.submit = (cmds) => { submits++; submit(cmds); };
+  device.pushErrorScope('validation');
+  const source = (words: Uint32Array) => {
+    const b = device.createBuffer({ size: words.byteLength, usage: GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST });
+    device.queue.writeBuffer(b, 0, words);
+    return b;
+  };
+  const u32 = async (p: Promise<ArrayBuffer>) => Array.from(new Uint32Array(await p));
+  const fails = async (f: () => Promise<unknown>) => { try { await f(); return 'no error'; } catch (err) { return (err as Error).message; } };
+  type Pool = { free: GPUBuffer[]; all: Set<GPUBuffer> };
+  const pool = (rb: Readback) => rb as unknown as Pool;
+  const freeSizes = (rb: Readback) => pool(rb).free.map((b) => b.size).sort((a, b) => a - b);
+  const inFlight = (rb: Readback) => [...pool(rb).all].filter((b) => !pool(rb).free.includes(b));
+  // Copying into a destroyed buffer is a validation error; into a live,
+  // unmapped one it is not. (A mapped one fails too, hence mapState.)
+  const probe = source(new Uint32Array(1));
+  const isDestroyed = async (b: GPUBuffer) => {
+    if (b.mapState !== 'unmapped') return false;
+    device.pushErrorScope('validation');
+    const enc = device.createCommandEncoder();
+    enc.copyBufferToBuffer(probe, 0, b, 0, 4);
+    submit([enc.finish()]);
+    return (await device.popErrorScope()) !== null;
+  };
+
+  const big = fill(2 ** 18, 'random', 1), small = fill(250, 'random', 2);
+  const a = source(big), b = source(small);
+  const rb = new Readback(device);
+
+  // Pool: three 1000-byte reads share one 1 KiB buffer; a 1 MiB read adds
+  // one; a 1000-byte read then takes the 1 KiB buffer, not the larger one.
+  const seq = [];
+  for (let i = 0; i < 3; i++) seq.push((await u32(rb.read(b))).every((x, k) => x === small[k]));
+  const afterSequential = { created: rb.created, free: freeSizes(rb) };
+  const largeOk = firstDiff(new Uint32Array(await rb.read(a)), big) === -1;
+  const afterLarge = { created: rb.created, free: freeSizes(rb) };
+  const pending = rb.read(b);
+  const freeWhileSmallInFlight = freeSizes(rb);
+  const smallAgainOk = (await u32(pending)).every((x, k) => x === small[k]);
+  const afterSmall = { created: rb.created, free: freeSizes(rb) };
+
+  // Concurrent reads on a fresh pool: two buffers, both correct.
+  const rc = new Readback(device);
+  const [ca, cb] = await Promise.all([rc.read(a), rc.read(b)]);
+  const concurrent = { created: rc.created, a: firstDiff(new Uint32Array(ca), big), b: firstDiff(new Uint32Array(cb), small) };
+  rc.destroy();
+
+  // Queue order: a read sees exactly what was submitted before it was called.
+  const c = source(Uint32Array.from([1, 2, 3, 4]));
+  const before = rb.read(c);
+  device.queue.writeBuffer(c, 0, Uint32Array.from([5, 6, 7, 8]));
+  const after = rb.read(c);
+  const order = { before: await u32(before), after: await u32(after) };
+
+  // Errors and the empty read do no GPU work at all.
+  const n0 = submits, created0 = rb.created, bytes0 = rb.bytesRead;
+  const misaligned = { bytes: await fails(() => rb.read(c, 6)), offset: await fails(() => rb.read(c, 4, 2)), range: await fails(() => rb.read(c, 8, 12)), negative: await fails(() => rb.read(c, -4)) };
+  const empty = (await rb.read(c, 0)).byteLength;
+  const idle = { submits: submits - n0, created: rb.created - created0, bytesRead: rb.bytesRead - bytes0 };
+  // One submit per read, and only the bytes read are mapped (of a 1 KiB buffer here).
+  const oneSubmit = submits;
+  const maps: Array<[number | undefined, number | undefined]> = [];
+  const mapAsync = GPUBuffer.prototype.mapAsync;
+  GPUBuffer.prototype.mapAsync = function (mode, offset, size) { maps.push([offset, size]); return mapAsync.call(this, mode, offset, size); };
+  try { await rb.read(c, 4, 12); } finally { GPUBuffer.prototype.mapAsync = mapAsync; }
+  const submitsPerRead = submits - oneSubmit;
+
+  // A failed map: the read rejects, its buffer is destroyed and never
+  // returns to the pool, so the next read on this pool makes a new one.
+  const rf = new Readback(device);
+  const failing = rf.read(b, 64);
+  const victim = inFlight(rf)[0]!;
+  victim.unmap(); // rejects the pending mapAsync
+  const failedMap = await fails(() => failing);
+  const victimGone = pool(rf).all.size === 0 && pool(rf).free.length === 0;
+  const victimDestroyed = await isDestroyed(victim);
+  const recovered = (await u32(rf.read(b, 64))).every((x, k) => x === small[k]);
+  const recoveredCreated = rf.created;
+  rf.destroy();
+
+  // destroy(): every buffer, a read in flight rejects, later reads throw.
+  const flying = rb.read(a);
+  const buffers = [...pool(rb).all];
+  rb.destroy();
+  const destroyedInFlight = await fails(() => flying);
+  const allDestroyed = (await Promise.all(buffers.map(isDestroyed))).every(Boolean);
+  const readAfterDestroy = await fails(() => rb.read(b));
+
+  // isDestroyed's own errors were taken by its scopes; anything else is a bug.
+  const error = await device.popErrorScope();
+  device.destroy();
+  return {
+    error: error?.message ?? null, seq, afterSequential, largeOk, afterLarge, freeWhileSmallInFlight, smallAgainOk, afterSmall, concurrent, order,
+    misaligned, empty, idle, submitsPerRead, maps, failedMap, victimGone, victimDestroyed, recovered, recoveredCreated,
+    destroyedInFlight, buffers: buffers.length, allDestroyed, readAfterDestroy,
+  };
 }
 
 export { runGpuBench } from '../src/bench.ts';
