@@ -634,6 +634,39 @@ describe('drawing', () => {
     }
   });
 
+  it('the floor covers exactly the visible plane (no stray floor over bodies, no gaps)', async (ctx) => {
+    if (!gpu) return ctx.skip();
+    // Looking down at the grazing slab's floor (where macOS SwiftShader drew the old 1,200 m quad's triangle over the slab),
+    // a low camera with the horizon in view, a camera close to the floor, and one below it looking up.
+    const cases: [V3, V3, number][] = [[[0.3, 7, 0.4], [0, 2, 0], -5], [[0, 1.5, 8], [0, 1, 0], 0], [[2, 0.05, 3], [0, 0, 0], 0], [[0, -2, 0], [3, 4, 1], 0]];
+    for (const [eye, target, groundY] of cases) {
+      const r = await call('floorCoverage', eye, target, groundY);
+      expect(r.error).toBeNull();
+      expect(r.checked).toBeGreaterThan(10000);
+      expect(r.wrong, `eye ${eye}`).toBe(0);
+    }
+  });
+
+  it('renders at tiny output sizes without error (bloom keeps at least one level)', async (ctx) => {
+    if (!gpu) return ctx.skip();
+    const r = await call('tinyFrames', [[1, 1], [3, 5], [7, 7], [8, 8], [9, 4]]);
+    for (const f of r) {
+      expect(f.error, `size ${f.size}`).toBeNull();
+      expect(f.meanLuma, `size ${f.size}`).toBeGreaterThan(5); // sky and floor still drawn and composited
+    }
+  });
+
+  it('pixel readback is RGBA whatever the output format (Apple prefers BGRA)', async (ctx) => {
+    if (!gpu) return ctx.skip();
+    const rgba = await call('sceneHash', {}, 'rgba8unorm'), bgra = await call('sceneHash', {}, 'bgra8unorm');
+    expect(rgba.error).toBeNull();
+    expect(bgra.error).toBeNull();
+    expect(bgra.hash).toBe(rgba.hash);
+    // The shadow check thresholds on luma, so a swapped readback moves its numbers (measured lit 142 vs 126 on the grazing slab).
+    const a = await call('shadowCheck', 'grazing', { format: 'rgba8unorm' }), b = await call('shadowCheck', 'grazing', { format: 'bgra8unorm' });
+    expect(b.lit).toBe(a.lit);
+  });
+
   it('shadows fall where the analytic sun rays say, without acne or light leaks', async (ctx) => {
     if (!gpu) return ctx.skip();
     for (const kind of ['float', 'contact', 'grazing'] as const) {

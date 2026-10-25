@@ -12,3 +12,4 @@ export * from './shadowfit.ts';
 export * from './sparks.ts';
 export * from './lights.ts';
 export * from './ao.ts';
+export * from './floor.ts';

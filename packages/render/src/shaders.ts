@@ -463,9 +463,8 @@ fn faceCode(n: vec3f) -> u32 {
 
 struct GOut { @builtin(position) clip: vec4f, @location(0) rel: vec3f }
 
-@vertex fn vsGround(@builtin(vertex_index) vi: u32) -> GOut {
-  let uv = array<vec2f, 6>(vec2f(-1, -1), vec2f(1, 1), vec2f(1, -1), vec2f(-1, -1), vec2f(-1, 1), vec2f(1, 1))[vi];
-  let rel = vec3f(uv.x * 600.0, fr.groundY - fr.eye.y, uv.y * 600.0);
+// The floor's visible polygon, camera-relative (floor.ts).
+@vertex fn vsGround(@location(0) rel: vec3f) -> GOut {
   var o: GOut;
   o.clip = fr.viewProj * vec4f(rel, 1.0);
   o.rel = rel;
