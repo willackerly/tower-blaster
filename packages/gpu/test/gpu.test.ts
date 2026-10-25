@@ -154,15 +154,17 @@ describe('Readback (pooled staging buffers)', () => {
     expect(r.staleCopy).toMatch(/^Readback: the copy failed: .*destroyed/s);
     expect(r.afterStale).toEqual({ created: 0, bytesRead: 0, free: [1024, 2 ** 20] });
     expect(r.afterStaleRead).toEqual([5, 6, 7, 8]);
+    expect(r.clamped).toEqual({ ok: true, free: [1000] });
     expect(r.failedMap).toMatch(/unmapped/i);
     expect(r.victimGone).toBe(true);
     expect(r.victimDestroyed).toBe(true);
     expect(r.recovered).toBe(true);
     expect(r.recoveredCreated).toBe(2);
-    expect(r.destroyedInFlight).toMatch(/destroyed/i);
+    expect(r.destroyedInFlight).toBe('Readback: destroyed during a read');
     expect(r.buffers).toBe(2);
     expect(r.allDestroyed).toBe(true);
     expect(r.readAfterDestroy).toBe('Readback: destroyed');
+    expect(r.destroyedAfterMap).toBe('Readback: destroyed during a read');
   });
 });
 

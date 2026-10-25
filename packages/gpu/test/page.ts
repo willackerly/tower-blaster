@@ -335,6 +335,13 @@ export async function readbackRules() {
   const afterStale = { created: rb.created - created1, bytesRead: rb.bytesRead - bytes1, free: freeSizes(rb) };
   const afterStaleRead = await u32(rb.read(c));
 
+  // A staging size past maxBufferSize is clamped to it (a device reporting 1000 bytes here).
+  const narrow = new Proxy(device, { get: (t, k) => (k === 'limits' ? { maxBufferSize: 1000 } : ((v: unknown) => (typeof v === 'function' ? v.bind(t) : v))(Reflect.get(t, k))) });
+  const rn = new Readback(narrow);
+  const narrowRead = await u32(rn.read(b, 600));
+  const clamped = { ok: narrowRead.length === 150 && narrowRead.every((x, k) => x === small[k]), free: freeSizes(rn) };
+  rn.destroy();
+
   // A failed map: the read rejects, its buffer is destroyed and never
   // returns to the pool, so the next read on this pool makes a new one.
   const rf = new Readback(device);
@@ -355,14 +362,23 @@ export async function readbackRules() {
   const destroyedInFlight = await fails(() => flying);
   const allDestroyed = (await Promise.all(buffers.map(isDestroyed))).every(Boolean);
   const readAfterDestroy = await fails(() => rb.read(b));
+  // A map that completes despite destroy() (stubbed; a real one rejects, as above) rejects the same way.
+  const rs = new Readback(device);
+  let destroyedAfterMap = 'not run';
+  GPUBuffer.prototype.mapAsync = () => Promise.resolve(undefined);
+  try {
+    const p = rs.read(b, 64);
+    rs.destroy();
+    destroyedAfterMap = await fails(() => p);
+  } finally { GPUBuffer.prototype.mapAsync = mapAsync; }
 
   // isDestroyed's own errors were taken by its scopes; anything else is a bug.
   const error = await device.popErrorScope();
   device.destroy();
   return {
     error: error?.message ?? null, seq, afterSequential, largeOk, afterLarge, freeWhileSmallInFlight, smallAgainOk, afterSmall, concurrent, order,
-    misaligned, badSource, empty, idle, submitsPerRead, maps, staleCopy, afterStale, afterStaleRead, failedMap, victimGone, victimDestroyed, recovered, recoveredCreated,
-    destroyedInFlight, buffers: buffers.length, allDestroyed, readAfterDestroy,
+    misaligned, badSource, empty, idle, submitsPerRead, maps, staleCopy, afterStale, afterStaleRead, clamped, failedMap, victimGone, victimDestroyed, recovered, recoveredCreated,
+    destroyedInFlight, buffers: buffers.length, allDestroyed, readAfterDestroy, destroyedAfterMap,
   };
 }
 

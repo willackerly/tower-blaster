@@ -4,7 +4,8 @@
 // Staging sizes are powers of two from 256 B, so reads of varying size
 // settle on a few buffers, and a read takes the smallest free one that fits.
 // A buffer is in the free list only while unmapped, so concurrent reads
-// never share one.
+// never share one. Nothing is freed before destroy(): the pool keeps as many
+// buffers as were ever in flight at once.
 
 const MIN_STAGING = 256;
 
@@ -73,11 +74,13 @@ export class Readback {
     try {
       [, error] = await Promise.all([staging.mapAsync(GPUMapMode.READ, 0, bytes), copied]);
     } catch (err) {
+      if (this.destroyed) throw new Error('Readback: destroyed during a read');
       // Its state is unknown (unmapped under us, device lost), so it never goes back in the pool.
       this.all.delete(staging);
       staging.destroy();
       throw err;
     }
+    // A real map rejects once destroy() runs; this covers one that resolved first.
     if (this.destroyed) throw new Error('Readback: destroyed during a read');
     if (error) {
       // Only the copy was bad: the staging buffer is sound, just stale.
