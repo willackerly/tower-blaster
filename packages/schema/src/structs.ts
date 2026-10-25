@@ -69,10 +69,11 @@ export const Manifold = defineStruct(
 );
 
 /**
- * Body.flags bits 8-15. Renderer rule: lattice proxies are drawn from the
- * lattice masks and free slots not at all; everything else from Body[].
+ * Body.flags bits 8-15. lattice: a dormant cell, drawn by the lattice pass
+ * from the brick masks, never from Body[]. free: an unused slot. The
+ * renderer draws every other tier from Body[].
  */
-export const TIER = { active: 0, rubble: 1, latticeProxy: 2, debris: 3, free: 255 } as const;
+export const TIER = { active: 0, rubble: 1, lattice: 2, debris: 3, free: 255 } as const;
 export const FLAG_AWAKE = 1;
 
 export const ALL_STRUCTS = [SimParams, Body, RenderRecord, Shape, Manifold];

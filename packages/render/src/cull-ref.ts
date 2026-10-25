@@ -44,7 +44,7 @@ export function cullReference(w: CpuWorld, f: CullFrame): CullRef {
   for (let i = 0; i < w.count; i++) {
     const o = i * (Body.size / 4);
     const tier = (bu[o + BO.flags!]! >>> 8) & 0xff;
-    if (tier === TIER.latticeProxy || tier === TIER.free) continue;
+    if (tier === TIER.lattice || tier === TIER.free) continue;
     const shape = bu[o + BO.shape!]!, so = shape * (Shape.size / 4);
     const half = [0, 1, 2].map((k) => sf[so + SO.half! + k]!);
     const kind = su[so + SO.kind!]!;

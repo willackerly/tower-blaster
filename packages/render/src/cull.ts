@@ -71,7 +71,7 @@ fn prepare(@builtin(global_invocation_id) id: vec3u) {
   if (i < p.count) {
     let b = bodies[i];
     let tier = (b.flags >> 8u) & 0xffu;
-    if (tier != ${TIER.latticeProxy}u && tier != ${TIER.free}u) {
+    if (tier != ${TIER.lattice}u && tier != ${TIER.free}u) {
       let sh = shapes[b.shape];
       var pos = b.pos;
       var rot = b.rot;

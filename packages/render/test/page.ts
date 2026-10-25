@@ -51,7 +51,7 @@ export interface CullCase { seed: number; count: number; capacity: number; alpha
 
 /**
  * Random world: boxes, slabs and spheres scattered around the camera (so
- * every frustum plane cuts some), lattice-proxy and free tiers, and prev
+ * every frustum plane cuts some), lattice and free tiers, and prev
  * states that are valid, teleported, tier-changed or zeroed.
  */
 export async function cull(cases: CullCase[]) {
@@ -73,7 +73,7 @@ export async function cull(cases: CullCase[]) {
       const pos = [(r() - 0.5) * 120, (r() - 0.5) * 60, (r() - 0.5) * 120];
       const rot = randomQuat(r);
       const t = r();
-      const tier = t < 0.05 ? TIER.latticeProxy : t < 0.08 ? TIER.free : t < 0.2 ? TIER.rubble : TIER.active;
+      const tier = t < 0.05 ? TIER.lattice : t < 0.08 ? TIER.free : t < 0.2 ? TIER.rubble : TIER.active;
       bf.set(pos, i * BW); bf.set(rot, i * BW + 4);
       bu[i * BW + 11] = 1 | (tier << 8);
       bu[i * BW + 15] = i;

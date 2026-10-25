@@ -149,7 +149,7 @@ export interface PhysicsEngine { gpuView?(): GpuWorldView | null }  // optional;
 |---|---|---|
 | 0 | active | drawn |
 | 1 | frozen rubble | drawn |
-| 2 | lattice proxy | skipped; drawn from bricks |
+| 2 | lattice (dormant cell) | skipped; drawn from bricks |
 | 3 | debris | drawn |
 | 255 | free | skipped |
 
