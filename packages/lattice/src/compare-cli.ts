@@ -1,4 +1,4 @@
-// pnpm tiers:compare [--scenario S5] [--steps 180] [--param k=v ...] [--seed 1] [--friction mu] [--runs 4] [--perturb 0.01]
+// pnpm tiers:compare [--scenario S5] [--steps 180] [--param k=v ...] [--seed 1] [--friction mu] [--runs 4] [--perturb 0.01] [--no-sleep]
 // Runs plain Rapier and the tiered engine on Rapier over the same scene and
 // prints the differential comparison and step times (CPU, this machine).
 // With --runs K, both engines also run K perturbed copies (every input body
@@ -6,7 +6,7 @@
 // against the reference's own chaotic spread instead of a single run.
 import { RapierEngine, RapierHost } from '@tb/adapter-rapier';
 import type { SceneDesc } from '@tb/engine-api';
-import { median } from '@tb/metrics';
+import { median, quantile } from '@tb/metrics';
 import { buildScenario } from '@tb/scenarios';
 import { compare, trace } from './compare.ts';
 import { TieredEngine } from './tiered.ts';
@@ -16,6 +16,7 @@ const opt = (k: string, d: string) => { const i = args.indexOf(`--${k}`); return
 const params: Record<string, number | boolean> = {};
 args.forEach((a, i) => { if (a === '--param') { const [k, v] = args[i + 1]!.split('='); params[k!] = v === 'true' ? true : v === 'false' ? false : Number(v); } });
 const base = buildScenario(opt('scenario', 'S5'), params, Number(opt('seed', '1')));
+if (args.includes('--no-sleep')) base.sleep = false;
 const fr = opt('friction', '');
 if (fr !== '') {
   const mu = Number(fr);
@@ -36,7 +37,7 @@ function perturbed(k: number): SceneDesc {
 const ref0 = await trace(new RapierEngine(), base, steps);
 const tiered = new TieredEngine(new RapierHost());
 const test0 = await trace(tiered, base, steps);
-const ms = (t: number[]) => ({ median: +median(t).toFixed(3), max: +Math.max(...t).toFixed(3) });
+const ms = (t: number[]) => ({ median: +median(t).toFixed(3), p90: +quantile(t, 0.9).toFixed(3), p99: +quantile(t, 0.99).toFixed(3), max: +Math.max(...t).toFixed(3) });
 const out: Record<string, unknown> = {
   scenario: base.id, params: base.params, steps,
   comparison: compare(base, ref0.final, test0.final),
