@@ -13,7 +13,8 @@ export class AvbdReferenceEngine implements PhysicsEngine {
     this.params = { ...DEFAULT_AVBD, ...params };
     const variant: Record<string, number | boolean> = {};
     for (const [k, v] of Object.entries(this.params)) variant[k] = v;
-    this.info = { name: 'avbd-ref', variant, backend: 'js-f64' };
+    // Free flight converges to the inertial target x + h v + h^2 g: one semi-implicit Euler step.
+    this.info = { name: 'avbd-ref', variant, backend: 'js-f64', integrator: { substeps: 1 } };
   }
 
   async init(scene: SceneDesc): Promise<void> {
@@ -21,6 +22,15 @@ export class AvbdReferenceEngine implements PhysicsEngine {
     for (const b of scene.bodies) this.world.add(b);
     this.pending = [...scene.inputs].sort((a, b) => a.step - b.step);
     this.stepIndex = 0;
+  }
+
+  push(events: InputEvent[]): void {
+    // Stable insertion keeps push order among events due at the same step.
+    for (const ev of events) {
+      let i = this.pending.length;
+      while (i > 0 && this.pending[i - 1]!.step > ev.step) i--;
+      this.pending.splice(i, 0, ev);
+    }
   }
 
   step(): void {

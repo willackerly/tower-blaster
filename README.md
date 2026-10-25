@@ -14,6 +14,8 @@ pnpm bench selfcheck                    # harness gate G1: A/A and injected 10% 
 pnpm bench scenarios                    # list S1-S11 and their parameters
 pnpm bench run --engine rapier --scenario S4 --param N=10000 --quality
 pnpm bench compare --a rapier --b rapier:iterations=8 --scenario S1 --no-sleep
+pnpm bench run --engine tiered --scenario S4 --param N=10000   # dormant lattice tier over Rapier
+pnpm tiers:compare --scenario S5 --param N=1600 --runs 4      # tiered vs all-dynamic Rapier on one shot
 ```
 
 Results print as JSON; add `--out results/name.jsonl` to append them to a file.
@@ -49,6 +51,14 @@ Writes `results/gpu-<time>.{json,md}`. GPU times come from timestamp queries, an
 
 Results worth keeping go in `docs/benchmarks/` (the first is a CPU baseline from a cloud VM).
 
+## Viewer
+
+```sh
+pnpm viewer                             # then open http://localhost:5173
+```
+
+Renders any engine live with WebGPU: drag to orbit, right-drag or shift-drag to pan, wheel to zoom, click to fire a ball, space to fire at the centre, R to reset, P to pause. Presets sit top right. The URL sets everything, for example `?scenario=S4&param.N=5000&param.F=5&param.H=16&engine=rapier`. The HUD shows physics ms/step (median and p95 over the last 120 steps) against the 7.5 ms budget, plus sim speed: an engine slower than real time runs in slow motion rather than dropping steps.
+
 ## Layout
 
 | Package | Role |
@@ -58,6 +68,7 @@ Results worth keeping go in `docs/benchmarks/` (the first is a CPU baseline from
 | `geom` | Double-precision reference geometry (SAT, broadphase, contact manifolds) used as a test oracle |
 | `scenarios` | Seeded benchmark scenes S1-S11 |
 | `metrics` | Quality metrics and benchmark statistics |
+| `lattice` | Dormant tier: intact towers as a voxel lattice, support rules (loose columns), GPU brick export |
 | `adapter-rapier` | CPU baseline (Rapier WASM) |
 | `bench` | Timing and quality runs, CLI |
 | `runner` | Browser runner page, Playwright orchestrator (`bench:browser`) |
@@ -65,3 +76,5 @@ Results worth keeping go in `docs/benchmarks/` (the first is a CPU baseline from
 | `physics-gpu` | GPU AVBD engine (`GpuAvbdEngine`): broadphase, narrowphase, graph colouring and solver, matched step by step against `physics-ref` |
 | `physics-ref` | Reference AVBD rigid-body solver in double precision: the oracle for the GPU solver (`avbd-ref` in the bench) |
 | `testkit` | Headless Chromium WebGPU sessions for tests |
+| `render` | WebGPU renderer: GPU culling and indirect draws straight from Body buffers (design: docs/render-design.md) |
+| `viewer` | Interactive WebGPU viewer (`pnpm viewer`) |

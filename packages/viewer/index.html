@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>tower-blaster viewer</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #070b1a; font: 13px/1.45 system-ui, sans-serif; }
+  canvas { display: block; width: 100vw; height: 100vh; touch-action: none; cursor: crosshair; }
+  .panel { position: fixed; background: rgba(17, 20, 28, 0.78); color: #e8ebf2; border-radius: 8px; padding: 10px 12px; backdrop-filter: blur(6px); }
+  #hud { top: 12px; left: 12px; min-width: 230px; font-variant-numeric: tabular-nums; }
+  #hud .big { font-size: 22px; font-weight: 650; }
+  #hud .row { display: flex; justify-content: space-between; gap: 16px; }
+  #hud .muted, #help { color: #9aa3b8; }
+  #hud .warn { color: #f5b169; }
+  #presets { top: 12px; right: 12px; display: flex; flex-direction: column; gap: 6px; max-width: 200px; }
+  #presets button { font: inherit; text-align: left; padding: 5px 9px; border: 0; border-radius: 5px; background: #2b3242; color: #e8ebf2; cursor: pointer; }
+  #presets button:hover { background: #3a4459; }
+  #presets button.on { background: #d8693f; }
+  #help { bottom: 12px; left: 12px; font-size: 12px; }
+  #error { top: 40%; left: 50%; transform: translate(-50%, -50%); max-width: 520px; display: none; }
+  @media (max-width: 640px) { #presets { top: auto; bottom: 52px; } #help { display: none; } }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="hud" class="panel">loading…</div>
+<div id="presets" class="panel"></div>
+<div id="help" class="panel">drag: orbit · right-drag / shift-drag: pan · wheel: zoom · click: fire ball · space: fire at centre · R: reset · P: pause</div>
+<div id="error" class="panel"></div>
+<script type="module" src="./src/main.ts"></script>
+</body>
+</html>

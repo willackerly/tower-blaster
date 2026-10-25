@@ -1,6 +1,7 @@
 // Engine registry for the CLI: "name" or "name:key=value,key=value".
-import type { PhysicsEngine, SceneDesc, StepReport } from '@tb/engine-api';
-import { RapierEngine } from '@tb/adapter-rapier';
+import type { InputEvent, PhysicsEngine, SceneDesc, StepReport } from '@tb/engine-api';
+import { RapierEngine, RapierHost } from '@tb/adapter-rapier';
+import { TieredEngine } from '@tb/lattice';
 import { AvbdReferenceEngine } from '@tb/physics-ref';
 import { GpuAvbdEngine } from '@tb/physics-gpu';
 
@@ -12,6 +13,11 @@ const REGISTRY: Record<string, (o: Options) => PhysicsEngine> = {
   'avbd-ref': (o) => new AvbdReferenceEngine(o),
   // Same AvbdParams; needs WebGPU, so it runs in the browser runner, not the Node CLI.
   'avbd-gpu': (o) => new GpuAvbdEngine(o),
+  // Dormant lattice tier over a Rapier host; other options are TierParams (e.g. tiered:vWake=0.5).
+  tiered: (o) => {
+    const { iterations, ...tier } = o;
+    return new TieredEngine(new RapierHost(iterations !== undefined ? { iterations: Number(iterations) } : {}), tier);
+  },
 };
 
 export function parseSpec(spec: string): { name: string; options: Options } {
@@ -49,6 +55,7 @@ export class SlowedEngine implements PhysicsEngine {
   get info() { return { ...this.inner.info, variant: { ...this.inner.info.variant, slowed: this.fraction } }; }
   get stepIndex() { return this.inner.stepIndex; }
   init(scene: SceneDesc) { return this.inner.init(scene); }
+  push(events: InputEvent[]) { this.inner.push(events); }
   async step(): Promise<StepReport | void> {
     const t0 = this.clock();
     const r = await this.inner.step();

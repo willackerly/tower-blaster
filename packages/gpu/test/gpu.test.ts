@@ -22,7 +22,7 @@ function call<K extends keyof D>(name: K, ...args: Parameters<D[K]>): Promise<Aw
 }
 
 describe('GpuProfiler', () => {
-  it('reports per-label pass times for every frame in flight', async (ctx) => {
+  it('reports per-label pass times and the frame span for every frame in flight', async (ctx) => {
     if (!gpu) return ctx.skip();
     const r = await call('profiler', 3);
     expect(r.error).toBeNull();
@@ -30,6 +30,7 @@ describe('GpuProfiler', () => {
     expect(r.supported).toBe(r.timestamps);
     if (!r.supported) {
       expect(r.results).toEqual([{}, {}, {}]);
+      expect(r.spans).toEqual([null, null, null]);
       return;
     }
     expect(r.results).toHaveLength(3);
@@ -40,6 +41,12 @@ describe('GpuProfiler', () => {
         expect(ms).toBeGreaterThanOrEqual(0);
       }
     }
+    // The span holds every pass: at least the longest one ('a' is two passes).
+    r.results.forEach((frame, i) => {
+      const span = r.spans[i];
+      if (span === null || span === undefined) return; // all timestamps zeroed (quantized away)
+      expect(span).toBeGreaterThanOrEqual(Math.max(frame.b!, frame.a! / 2) - 1e-6);
+    });
   });
 });
 
