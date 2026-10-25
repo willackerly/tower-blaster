@@ -11,17 +11,18 @@
 //     handed back as velocity), predictive impact plugs (W2), then the
 //     support closure (W1, exact);
 //  4. wake asleep bodies next to woken cells;
-//  5. refresh the static proxy shell around dynamic bodies (with hysteresis);
-//  6. apply the batch atomically and step the host.
+//  5. settle quiet cubes back into the lattice (bottom-up, with hysteresis);
+//  6. refresh the static proxy shell around dynamic bodies (with hysteresis);
+//  7. apply the batch atomically and step the host.
 import {
   bodiesAt, type BodyDesc, type CellChange, type EngineInfo, emptySnapshot, type HostState, type InputEvent, massOf, MODE_DYNAMIC, MODE_OFF,
-  MODE_STATIC, type ModeChange, type PhysicsEngine, type PhysicsHost, type SceneDesc, type Snapshot, type StepReport, type Vec3,
+  MODE_STATIC, type ModeChange, type PhysicsEngine, type PhysicsHost, type Quat, type SceneDesc, type Snapshot, type StepReport, type Vec3,
 } from '@tb/engine-api';
-import { boundingRadius } from '@tb/geom';
+import { boundingRadius, shapeDepth } from '@tb/geom';
 import { latticesFromScene } from './build.ts';
 import { type Lattice } from './lattice.ts';
 import { detach, looseColumns, type SupportModel } from './support.ts';
-import { CUBE_ROTATIONS } from './symmetry.ts';
+import { CUBE_ROTATIONS, nearestCubeRotation } from './symmetry.ts';
 
 export const TIER_UNSPAWNED = 0;
 export const TIER_LATTICE = 1;
@@ -53,11 +54,31 @@ export interface TierParams {
    * cubes against the all-dynamic reference's 172 with it.
    */
   plugColumns: boolean;
+  /** A cube that has been this slow (m/s, and rad/s times half-edge) for restSteps steps may settle back into the lattice. */
+  vRest: number;
+  restSteps: number;
+  /**
+   * Steps a body must have been active before it may settle (hysteresis
+   * against wake/settle thrash). Doubles each time a settled cube is woken
+   * again, so a cube under a restless pile stops trying.
+   */
+  minActiveSteps: number;
+  /** Settle tolerances: distance from the cell centre (edges) and angle from a cube symmetry (radians). */
+  settlePos: number;
+  settleRot: number;
+  /**
+   * The most a snap may deepen its overlap with a moving neighbour, in edges.
+   * A snap moves a cube up to settlePos edges and turns it up to settleRot
+   * (a corner moves edge * sin(settleRot) / sqrt 2); pushed into rubble that
+   * rests against it, the solver throws the rubble out at up to a few m/s.
+   */
+  settlePush: number;
 }
 
 export const DEFAULT_TIERS: TierParams = {
   support: looseColumns, proxyMargin: 0.25, proxyKeep: 30, lookahead: 1, vWake: 0.25,
   kappa: 0.8, forceMin: 2, handoffMax: 20, maxPlugDepth: 64, plugColumns: true,
+  vRest: 0.05, restSteps: 30, minActiveSteps: 60, settlePos: 0.02, settleRot: (1 * Math.PI) / 180, settlePush: 0.002,
 };
 
 export interface TierStats {
@@ -70,11 +91,17 @@ export interface TierStats {
   wokenBySupport: number;
   proxiesAdded: number;
   proxiesDropped: number;
+  /** Cubes that settled back into the lattice this step. */
+  settled: number;
   /** Since init. */
-  total: { byForce: number; byImpact: number; bySupport: number };
+  total: { byForce: number; byImpact: number; bySupport: number; settled: number };
 }
 
-interface WakeRequest { li: number; i: number; j: number; k: number; vel: Vec3 | null }
+/** Why a body changed tier: a game hook (sound, score) and a debugging aid. */
+export type TransitionCause = 'force' | 'impact' | 'support' | 'command' | 'settle';
+export type TransitionListener = (id: number, to: number, cause: TransitionCause, step: number) => void;
+
+interface WakeRequest { li: number; i: number; j: number; k: number; vel: Vec3 | null; command?: boolean }
 
 export class TieredEngine implements PhysicsEngine {
   readonly info: EngineInfo;
@@ -86,7 +113,7 @@ export class TieredEngine implements PhysicsEngine {
   /** Per id: lattice index and flat cell while dormant (else -1). */
   latticeOf = new Int32Array(0);
   cellOf = new Int32Array(0);
-  stats: TierStats = { lattice: 0, active: 0, proxies: 0, wokenByForce: 0, wokenByImpact: 0, wokenBySupport: 0, proxiesAdded: 0, proxiesDropped: 0, total: { byForce: 0, byImpact: 0, bySupport: 0 } };
+  stats: TierStats = { lattice: 0, active: 0, proxies: 0, wokenByForce: 0, wokenByImpact: 0, wokenBySupport: 0, proxiesAdded: 0, proxiesDropped: 0, settled: 0, total: { byForce: 0, byImpact: 0, bySupport: 0, settled: 0 } };
   private scene: SceneDesc | null = null;
   private table: BodyDesc[] = [];
   private mass = new Float64Array(0);
@@ -97,6 +124,14 @@ export class TieredEngine implements PhysicsEngine {
   /** Per id: speed at the start of the previous step (bounds the speed a pushed cell can be given). */
   private prevSpeed = new Float64Array(0);
   private curSpeed = new Map<number, number>();
+  /** Per id: step it became active, and consecutive quiet steps since. */
+  private activeSince = new Int32Array(0);
+  private quiet = new Int32Array(0);
+  /** Per id: reference contact force of a settled cell (3 per id), and whether it is still to be taken. */
+  private refForce = new Float64Array(0);
+  private refPending = new Uint8Array(0);
+  /** Per id: times it settled. */
+  private settles = new Uint8Array(0);
   private pending: InputEvent[] = [];
   private queued: WakeRequest[] = [];
   private nextSpawn = 0;
@@ -105,6 +140,8 @@ export class TieredEngine implements PhysicsEngine {
   /** Whether the host takes lattice cells natively (no proxies). */
   private native = false;
   private cellChanges: CellChange[] = [];
+  /** Called for every tier change, in the order they happen. */
+  onTransition: TransitionListener | null = null;
 
   constructor(readonly host: PhysicsHost, params: Partial<TierParams> = {}) {
     this.p = { ...DEFAULT_TIERS, ...params };
@@ -133,6 +170,11 @@ export class TieredEngine implements PhysicsEngine {
     this.proxyStamp = new Int32Array(n).fill(-1);
     this.proxies = new Set();
     this.prevSpeed = new Float64Array(n);
+    this.activeSince = new Int32Array(n);
+    this.quiet = new Int32Array(n);
+    this.refForce = new Float64Array(3 * n);
+    this.refPending = new Uint8Array(n);
+    this.settles = new Uint8Array(n);
     this.lattices = built.lattices;
     this.near = this.lattices.map(() => new Map());
     this.latticeOf.set(built.latticeOf);
@@ -169,7 +211,7 @@ export class TieredEngine implements PhysicsEngine {
       const lo: Vec3 = [center[0] - radius, center[1] - radius, center[2] - radius], hi: Vec3 = [center[0] + radius, center[1] + radius, center[2] + radius];
       for (const [i, j, k] of cellsInBox(lat, lo, hi, (i, j, k) => lat.has(i, j, k))) {
         const c = lat.center(i, j, k);
-        if (Math.hypot(c[0] - center[0], c[1] - center[1], c[2] - center[2]) <= radius) this.queued.push({ li, i, j, k, vel: null });
+        if (Math.hypot(c[0] - center[0], c[1] - center[1], c[2] - center[2]) <= radius) this.queued.push({ li, i, j, k, vel: null, command: true });
       }
     });
   }
@@ -183,18 +225,22 @@ export class TieredEngine implements PhysicsEngine {
   async step(): Promise<StepReport | void> {
     if (!this.scene) throw new Error('init() first');
     const st = this.stats;
-    st.wokenByForce = st.wokenByImpact = st.wokenBySupport = 0;
+    st.wokenByForce = st.wokenByImpact = st.wokenBySupport = st.settled = 0;
     const state = await this.host.read();
     const changes = new Map<number, ModeChange>();
     const movers: Mover[] = [];
     for (let n = 0; n < state.ids.length; n++) {
-      movers.push({ id: state.ids[n]!, pos: vec(state.pos, n), vel: vec(state.linVel, n), awake: state.awake[n] === 1 });
+      const id = state.ids[n]!, vel = vec(state.linVel, n), half = this.radius[id]! / Math.sqrt(3);
+      movers.push({ id, pos: vec(state.pos, n), vel, awake: state.awake[n] === 1 });
+      const still = Math.hypot(...vel) < this.p.vRest && Math.hypot(...vec(state.angVel, n)) * half < this.p.vRest;
+      this.quiet[id] = still ? this.quiet[id]! + 1 : 0;
     }
     // Spawns.
     while (this.pending.length && this.pending[0]!.step <= this.stepIndex) {
       const b = this.pending.shift()!.body;
       const id = this.nextSpawn++;
       this.tier[id] = TIER_ACTIVE;
+      this.activeSince[id] = this.stepIndex;
       changes.set(id, { id, mode: MODE_DYNAMIC, pos: b.pos, rot: b.rot, linVel: b.linVel, angVel: b.angVel });
       movers.push({ id, pos: b.pos, vel: b.linVel, awake: true });
     }
@@ -207,9 +253,10 @@ export class TieredEngine implements PhysicsEngine {
     for (const { li, cell } of woken) for (const id of this.near[li]!.get(cell) ?? []) if (this.tier[id] === TIER_ACTIVE && !changes.has(id)) wake.add(id);
     // Woken cells are dynamic now: they need proxies around them too.
     for (const { id } of woken) movers.push({ id, pos: changes.get(id)!.pos!, vel: changes.get(id)!.linVel ?? [0, 0, 0], awake: true });
-    const list = this.withShell([...changes.values()].sort((a, b) => a.id - b.id), movers);
+    const settled = this.settle(state, changes);
+    const list = this.withShell([...changes.values()].sort((a, b) => a.id - b.id), settled.size ? movers.filter((m) => !settled.has(m.id)) : movers);
     this.host.apply({ changes: list, wake: [...wake].sort((a, b) => a - b), cells: this.cellChanges.splice(0) });
-    st.total.byForce += st.wokenByForce; st.total.byImpact += st.wokenByImpact; st.total.bySupport += st.wokenBySupport;
+    st.total.byForce += st.wokenByForce; st.total.byImpact += st.wokenByImpact; st.total.bySupport += st.wokenBySupport; st.total.settled += st.settled;
     this.prevSpeed.fill(0);
     for (const m of movers) this.prevSpeed[m.id] = Math.hypot(...m.vel);
     const r = await this.host.step();
@@ -229,14 +276,31 @@ export class TieredEngine implements PhysicsEngine {
       if (this.tier[id] !== TIER_LATTICE) continue;
       const li = this.latticeOf[id]!, lat = this.lattices[li]!;
       const [i, j, k] = lat.coords(this.cellOf[id]!);
-      const fx = c.force[3 * n]!, fy = c.force[3 * n + 1]!, fz = c.force[3 * n + 2]!;
+      const f: Vec3 = [c.force[3 * n]!, c.force[3 * n + 1]!, c.force[3 * n + 2]!];
+      // A cube that settled carried its current load while it was active and
+      // quiet, so that load is known to hold: the first force after settling
+      // becomes its reference, and it wakes only when both the total force and
+      // the change since then exceed the capacity. The total alone over-wakes
+      // where neighbours hold a cell (its base friction is all the test sees);
+      // the change alone over-wakes when a held load reverses (measured: a
+      // ground cube under rubble went from -40 to +30 N sideways, 70 N of
+      // change against 68 N of capacity while 30 N of total was well held).
+      if (this.refPending[id]) {
+        this.refPending[id] = 0;
+        this.refForce.set(f, 3 * id);
+        continue;
+      }
+      const d: Vec3 = [f[0] - this.refForce[3 * id]!, f[1] - this.refForce[3 * id + 1]!, f[2] - this.refForce[3 * id + 2]!];
       let w = 0;
       for (const jj of lat.occupiedFrom(i, k, j)) w += g * this.mass[lat.idAt(i, jj, k)]!;
       const mu = this.table[id]!.friction;
-      const fh = Math.hypot(fx, fz);
-      const slides = fh > this.p.kappa * mu * (Math.max(0, -fy) + w) + this.p.forceMin;
-      const lifts = fy > this.p.kappa * w + this.p.forceMin;
+      // Friction under the column holds kappa * mu * (load from above + column weight).
+      const hold = this.p.kappa * mu * (Math.max(0, -f[1]) + w) + this.p.forceMin;
+      const slides = Math.hypot(f[0], f[2]) > hold && Math.hypot(d[0], d[2]) > hold;
+      const lift = this.p.kappa * w + this.p.forceMin;
+      const lifts = f[1] > lift && d[1] > lift;
       if (!slides && !lifts) continue;
+      const [fx, fy, fz] = d;
       // Hand back the impulse the cell absorbed while static, at most at the
       // speed of the bodies near it before or after that step: momentum is
       // returned without creating energy (a cell cannot outrun its pusher).
@@ -312,7 +376,11 @@ export class TieredEngine implements PhysicsEngine {
       const lat = this.lattices[li]!;
       const reqs = byLattice.get(li)!.sort((a, b) => lat.cell(a.i, a.j, a.k) - lat.cell(b.i, b.j, b.k));
       const vel = new Map<number, Vec3>();
-      for (const r of reqs) if (r.vel && !vel.has(lat.cell(r.i, r.j, r.k))) vel.set(lat.cell(r.i, r.j, r.k), r.vel);
+      const commanded = new Set<number>();
+      for (const r of reqs) {
+        if (r.vel && !vel.has(lat.cell(r.i, r.j, r.k))) vel.set(lat.cell(r.i, r.j, r.k), r.vel);
+        if (r.command) commanded.add(lat.cell(r.i, r.j, r.k));
+      }
       const detached = detach(lat, this.p.support, reqs.map((r) => [r.i, r.j, r.k] as [number, number, number]));
       // Rest load per woken cell: weight of the woken run above it, if the run stands on something.
       const byCol = new Map<number, typeof detached>();
@@ -336,11 +404,17 @@ export class TieredEngine implements PhysicsEngine {
       }
       for (const d of detached) {
         const cell = lat.cell(d.i, d.j, d.k);
-        if (d.cause === 'support') this.stats.wokenBySupport++;
-        else if (vel.has(cell)) this.stats.wokenByForce++;
+        const cause: TransitionCause = d.cause === 'support' ? 'support' : vel.has(cell) ? 'force' : commanded.has(cell) ? 'command' : 'impact';
+        if (cause === 'support') this.stats.wokenBySupport++;
+        else if (cause === 'force') this.stats.wokenByForce++;
         else this.stats.wokenByImpact++;
+        this.onTransition?.(d.id, TIER_ACTIVE, cause, this.stepIndex);
         if (this.native) this.cellChanges.push({ lattice: li, i: d.i, j: d.j, k: d.k, id: -1 });
         this.tier[d.id] = TIER_ACTIVE;
+        this.activeSince[d.id] = this.stepIndex;
+        this.quiet[d.id] = 0;
+        this.refPending[d.id] = 0;
+        this.refForce.fill(0, 3 * d.id, 3 * d.id + 3);
         this.latticeOf[d.id] = -1;
         this.cellOf[d.id] = -1;
         this.proxyStamp[d.id] = -1;
@@ -353,6 +427,83 @@ export class TieredEngine implements PhysicsEngine {
       }
     }
     return out;
+  }
+
+  /**
+   * Quiet cubes within tolerance of an empty, supported cell snap back into
+   * the lattice, bottom-up so a settled stack goes back in one pass. A snap
+   * moves a cube at most settlePos edges, and is refused if that would push
+   * it deeper into a moving neighbour by more than settlePush edges.
+   */
+  private settle(state: HostState, changes: Map<number, ModeChange>): Set<number> {
+    const done = new Set<number>();
+    if (!this.lattices.length) return done;
+    interface Cand { n: number; id: number; li: number; i: number; j: number; k: number; rot: number }
+    const cands: Cand[] = [];
+    for (let n = 0; n < state.ids.length; n++) {
+      const id = state.ids[n]!;
+      if (this.tier[id] !== TIER_ACTIVE || changes.has(id) || this.quiet[id]! < this.p.restSteps) continue;
+      if (this.stepIndex - this.activeSince[id]! < this.p.minActiveSteps * 2 ** Math.min(this.settles[id]!, 8)) continue;
+      const b = this.table[id]!;
+      if (b.shape.kind !== 'box') continue;
+      const [hx, hy, hz] = b.shape.half;
+      const pos = vec(state.pos, n);
+      const q: [number, number, number, number] = [state.rot[4 * n]!, state.rot[4 * n + 1]!, state.rot[4 * n + 2]!, state.rot[4 * n + 3]!];
+      const sym = nearestCubeRotation(q);
+      if (sym.angle > this.p.settleRot) continue;
+      for (let li = 0; li < this.lattices.length; li++) {
+        const lat = this.lattices[li]!, e = lat.frame.edge;
+        if (Math.abs(hx - e / 2) > 1e-9 * e || Math.abs(hy - e / 2) > 1e-9 * e || Math.abs(hz - e / 2) > 1e-9 * e) continue;
+        const [i, j, k] = lat.nearest(pos);
+        if (!lat.inBounds(i, j, k)) continue;
+        const c = lat.center(i, j, k);
+        if (Math.hypot(pos[0] - c[0], pos[1] - c[1], pos[2] - c[2]) > this.p.settlePos * e) continue;
+        cands.push({ n, id, li, i, j, k, rot: sym.index });
+        break;
+      }
+    }
+    if (!cands.length) return done;
+    cands.sort((a, b) => a.li - b.li || a.j - b.j || a.k - b.k || a.i - b.i || a.id - b.id);
+    // Candidates snap in this same pass, so only the others can be pushed.
+    const snapping = new Set(cands.map((c) => c.id));
+    for (const c of cands) {
+      const lat = this.lattices[c.li]!, e = lat.frame.edge;
+      if (!this.p.support.canInsert(lat, c.i, c.j, c.k)) continue;
+      // Neighbours that the snap would push into.
+      const center = lat.center(c.i, c.j, c.k), cubeRot = CUBE_ROTATIONS[c.rot]!;
+      const cube = { kind: 'box' as const, half: [e / 2, e / 2, e / 2] as Vec3 };
+      const from = vec(state.pos, c.n), fromRot: Quat = [state.rot[4 * c.n]!, state.rot[4 * c.n + 1]!, state.rot[4 * c.n + 2]!, state.rot[4 * c.n + 3]!];
+      let blocked = false;
+      for (let n = 0; n < state.ids.length && !blocked; n++) {
+        const other = state.ids[n]!;
+        if (snapping.has(other)) continue;
+        const p = vec(state.pos, n);
+        if (Math.hypot(p[0] - center[0], p[1] - center[1], p[2] - center[2]) > this.radius[other]! + e) continue;
+        const q: [number, number, number, number] = [state.rot[4 * n]!, state.rot[4 * n + 1]!, state.rot[4 * n + 2]!, state.rot[4 * n + 3]!];
+        const shape = this.table[other]!.shape;
+        const deeper = Math.max(0, shapeDepth(shape, p, q, cube, center, cubeRot)) - Math.max(0, shapeDepth(shape, p, q, cube, from, fromRot));
+        if (deeper > this.p.settlePush * e) blocked = true;
+      }
+      if (blocked) continue;
+      lat.insert(c.i, c.j, c.k, c.id, c.rot);
+      this.tier[c.id] = TIER_LATTICE;
+      this.latticeOf[c.id] = c.li;
+      this.cellOf[c.id] = lat.cell(c.i, c.j, c.k);
+      this.quiet[c.id] = 0;
+      this.refPending[c.id] = 1;
+      if (this.settles[c.id]! < 255) this.settles[c.id]!++;
+      if (this.native) this.cellChanges.push({ lattice: c.li, i: c.i, j: c.j, k: c.k, id: c.id });
+      else {
+        // It becomes a proxy in place; the shell drops it once nothing is near.
+        changes.set(c.id, { id: c.id, mode: MODE_STATIC, pos: center, rot: cubeRot });
+        this.proxyStamp[c.id] = this.stepIndex;
+        this.proxies.add(c.id);
+      }
+      done.add(c.id);
+      this.stats.settled++;
+      this.onTransition?.(c.id, TIER_LATTICE, 'settle', this.stepIndex);
+    }
+    return done;
   }
 
   /** Add proxy changes for the shell around `movers` and drop stale proxies. */
