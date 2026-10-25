@@ -1,6 +1,7 @@
 // pnpm bench:gpu [--channel chrome] [--headed] [--quick] [--reps N]
 // Measures the GPU primitives (copy roofline, dispatch overhead, scan,
-// compaction, radix sort) in a real browser and writes
+// compaction, radix sort) and readback latency (fresh against pooled
+// staging buffers) in a real browser and writes
 // results/gpu-<time>.{json,md}. Use real Chrome on the target machine for
 // numbers worth keeping; software adapters are flagged as invalid.
 import { mkdirSync, writeFileSync } from 'node:fs';

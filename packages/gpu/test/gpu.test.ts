@@ -3,6 +3,7 @@
 import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { loadBundle, openWebGPU, type WebGPUSession } from '@tb/testkit';
+import { gpuBenchMarkdown } from '../src/bench.ts';
 import type * as Drivers from './page.ts';
 
 let gpu: WebGPUSession | null = null;
@@ -169,12 +170,26 @@ describe('BandwidthProbe and bench:gpu', () => {
 
   it('a quick bench run yields one finite, positive record per case', async (ctx) => {
     if (!gpu) return ctx.skip();
+    // readbackSizes left at its default: the 2 KB and 6.4 MB round trips.
     const r = await call('runGpuBench', { reps: 2, warmup: 1, copyBytes: 2 ** 20, scanSizes: [1000], compactSizes: [1000], sortSizes: [1000], dispatches: 10 });
-    expect(r.cases.map((c) => c.name)).toEqual(['copy-1MiB', 'dispatch-x10', 'scan-1000', 'compact-1000-30pct', 'sort-1000-32bit', 'sort-1000-20bit']);
+    expect(r.cases.map((c) => c.name)).toEqual([
+      'copy-1MiB', 'dispatch-x10', 'scan-1000', 'compact-1000-30pct', 'sort-1000-32bit', 'sort-1000-20bit',
+      'readback-2048-fresh', 'readback-2048-pooled', 'readback-6400000-fresh', 'readback-6400000-pooled',
+    ]);
     for (const c of r.cases) {
       expect(Number.isFinite(c.medianMs) && c.medianMs >= 0).toBe(true);
       expect(c.p10Ms).toBeLessThanOrEqual(c.p90Ms);
     }
     expect(r.software).toBe(/swiftshader/i.test(gpu.adapter.architecture));
+    // Readback cases are wall-clock host round trips: marked, and no "% of copy" in the table.
+    expect(r.cases.filter((c) => c.hostRoundTrip).map((c) => [c.name, c.n, c.traffic, c.source])).toEqual(
+      [2048, 6_400_000].flatMap((b) => ['fresh', 'pooled'].map((k) => [`readback-${b}-${k}`, b, b, 'wall'])),
+    );
+    const md = gpuBenchMarkdown(r, '## test');
+    const row = (name: string) => md.split('\n').find((l) => l.startsWith(`| ${name} |`))!.split('|').map((x) => x.trim());
+    expect(row('copy-1MiB').at(-2)).toBe('100%');
+    expect(row('readback-2048-pooled').at(-2)).toBe('');
+    expect(row('readback-6400000-fresh').at(-2)).toBe('');
+    expect(md).toMatch(/readback cases are wall-clock host round trips/);
   });
 });
