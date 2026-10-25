@@ -5,8 +5,9 @@
 // unless --allow-invalid is given.
 import { appendFileSync, mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
+import { exitNow } from '@tb/testkit';
 import { parseConfig } from './config.ts';
-import { runInBrowser } from './orchestrate.ts';
+import { openRunner } from './orchestrate.ts';
 
 const argv = process.argv.slice(2);
 const flags: Record<string, string | true> = {};
@@ -27,16 +28,25 @@ const map: Record<string, string> = { engines: 'engines', engine: 'engines', sce
 for (const [k, v] of Object.entries(flags)) if (map[k] && typeof v === 'string') q.set(map[k]!, v);
 
 const config = parseConfig(`?${q.toString()}`);
-const result = await runInBrowser(config, {
+const runner = await openRunner({
   headed: flags.headed === true,
   ...(typeof flags.channel === 'string' ? { channel: flags.channel } : {}),
 });
-console.log(JSON.stringify(result, null, 2));
-if (typeof flags.out === 'string') {
-  mkdirSync(dirname(flags.out), { recursive: true });
-  appendFileSync(flags.out, JSON.stringify(result) + '\n');
+let stuck: string[] = [];
+try {
+  const result = await runner.run(config);
+  // Reported before teardown, which can hang (see closeWithin).
+  console.log(JSON.stringify(result, null, 2));
+  if (typeof flags.out === 'string') {
+    mkdirSync(dirname(flags.out), { recursive: true });
+    appendFileSync(flags.out, JSON.stringify(result) + '\n');
+  }
+  if (!result.timingValid && !flags['allow-invalid']) {
+    console.error(`timing not valid here: ${(result.timingProblems as string[]).join('; ')}`);
+    process.exitCode = 3;
+  }
+} finally {
+  stuck = await runner.close();
 }
-if (!result.timingValid && !flags['allow-invalid']) {
-  console.error(`timing not valid here: ${(result.timingProblems as string[]).join('; ')}`);
-  process.exitCode = 3;
-}
+// A browser or server that did not close keeps Node alive.
+if (stuck.length) await exitNow();

@@ -1,11 +1,13 @@
 // pnpm bench:suite [--engine rapier] [--sizes 1000,2000,5000] [--timing-mode latency|throughput] [--channel chrome] [--headed] [--node-label NAME]
 // Runs the standard suite in one browser, writes results/suite-<time>.jsonl
 // and a Markdown summary next to it, and prints the summary.
-import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync } from 'node:fs';
 import { cpus, hostname } from 'node:os';
 import { execSync } from 'node:child_process';
+import { exitNow } from '@tb/testkit';
 import { openRunner } from './orchestrate.ts';
-import { caseResult, standardSuite, summaryMarkdown, type CaseResult } from './suite.ts';
+import { standardSuite } from './suite.ts';
+import { runSuite } from './suite-run.ts';
 
 const argv = process.argv.slice(2);
 const flag = (k: string) => {
@@ -28,35 +30,22 @@ mkdirSync('results', { recursive: true });
 const jsonl = `results/suite-${stamp}.jsonl`;
 
 const runner = await openRunner({ headed: flag('headed') === true, ...(typeof channel === 'string' ? { channel } : {}) });
-const results: CaseResult[] = [];
-try {
-  for (const [i, c] of suite.entries()) {
-    process.stderr.write(`[${i + 1}/${suite.length}] ${c.name} … `);
-    const record = await runner.run(c.config);
-    appendFileSync(jsonl, JSON.stringify({ case: c.name, git, ...record }) + '\n');
-    const r = caseResult(c, record);
-    results.push(r);
-    process.stderr.write(`${r.median.toFixed(2)} ms/step\n`);
-  }
-} finally {
-  await runner.close();
-}
-
-const firstLine = readFileSync(jsonl, 'utf8').split('\n')[0];
-const first = firstLine ? (JSON.parse(firstLine) as { env?: { browser?: { userAgent?: string; gpu?: { vendor: string; architecture: string } | null } } }) : {};
-const b = first.env?.browser;
-const header = [
-  `## Benchmark suite, ${engine}, commit ${git}`,
-  '',
-  `${new Date().toISOString()} · ${hostname()} · ${cpus()[0]?.model ?? 'unknown CPU'} × ${cpus().length}`,
-  `Browser: ${b?.userAgent ?? 'unknown'}`,
-  `GPU adapter: ${b?.gpu ? `${b.gpu.vendor} ${b.gpu.architecture}` : 'none'}`,
-  mode === 'throughput'
-    ? 'Timing: throughput (each block waits for the GPU once; the sustained cost per step, no per-step tail)'
-    : 'Timing: latency (every step waits for its work to finish)',
-].join('\n');
-const md = summaryMarkdown(results, suite, header);
-writeFileSync(jsonl.replace(/\.jsonl$/, '.md'), md + '\n');
+const header = (first: Record<string, unknown>) => {
+  const b = (first as { env?: { browser?: { userAgent?: string; gpu?: { vendor: string; architecture: string } | null } } }).env?.browser;
+  return [
+    `## Benchmark suite, ${engine}, commit ${git}`,
+    '',
+    `${new Date().toISOString()} · ${hostname()} · ${cpus()[0]?.model ?? 'unknown CPU'} × ${cpus().length}`,
+    `Browser: ${b?.userAgent ?? 'unknown'}`,
+    `GPU adapter: ${b?.gpu ? `${b.gpu.vendor} ${b.gpu.architecture}` : 'none'}`,
+    mode === 'throughput'
+      ? 'Timing: throughput (each block waits for the GPU once; the sustained cost per step, no per-step tail)'
+      : 'Timing: latency (every step waits for its work to finish)',
+  ].join('\n');
+};
+const { results, md, summary, stuck } = await runSuite(runner, suite, { jsonl, git, header });
 console.log(md);
-console.error(`\nwrote ${jsonl} and ${jsonl.replace(/\.jsonl$/, '.md')}`);
+console.error(`\nwrote ${jsonl} and ${summary}`);
 if (results.some((r) => !r.valid)) process.exitCode = 3;
+// A browser or server that did not close keeps Node alive.
+if (stuck.length) await exitNow();
