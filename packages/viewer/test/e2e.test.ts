@@ -60,8 +60,8 @@ describe('viewer', () => {
 
     const stats = await page.evaluate((keep) => window.__viewer.capture(keep), !!process.env.VIEWER_SCREENSHOT);
     expect(stats).not.toBeNull();
-    // Sky, ground, lit and shadowed faces in several colours: not blank.
-    expect(stats!.nonSkyFraction).toBeGreaterThan(0.2);
+    // Bodies cover part of the frame, with lit and shadowed faces in several colours: not blank.
+    expect(stats!.bodyFraction).toBeGreaterThan(0.05);
     expect(stats!.distinctColors).toBeGreaterThan(50);
     if (process.env.VIEWER_SCREENSHOT) writeFileSync(process.env.VIEWER_SCREENSHOT, encodePng(stats!.width, stats!.height, stats!.pixels!));
 

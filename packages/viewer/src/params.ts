@@ -12,9 +12,11 @@ export interface ViewerConfig {
   autofire: number;
   /** Render to an offscreen texture (headless tests; see Renderer.create). */
   offscreen: boolean;
+  /** Look preset: candy (default) or hazy. */
+  look: string;
 }
 
-export const DEFAULT_CONFIG: ViewerConfig = { engine: 'rapier', scenario: 'S4', params: { N: 2000, F: 4, H: 12 }, seed: 1, sleep: null, autofire: 0, offscreen: false };
+export const DEFAULT_CONFIG: ViewerConfig = { engine: 'rapier', scenario: 'S4', params: { N: 2000, F: 4, H: 12 }, seed: 1, sleep: null, autofire: 0, offscreen: false, look: 'candy' };
 
 export function parseViewerConfig(search: string): ViewerConfig {
   const q = new URLSearchParams(search);
@@ -36,6 +38,7 @@ export function parseViewerConfig(search: string): ViewerConfig {
     sleep: sleep === null ? null : sleep === '1' || sleep === 'true',
     autofire: Number(q.get('autofire') ?? 0),
     offscreen: q.get('offscreen') === '1',
+    look: q.get('look') ?? DEFAULT_CONFIG.look,
   };
 }
 
@@ -46,5 +49,6 @@ export function toSearch(c: ViewerConfig): string {
   if (c.sleep !== null) q.set('sleep', c.sleep ? '1' : '0');
   if (c.autofire) q.set('autofire', String(c.autofire));
   if (c.offscreen) q.set('offscreen', '1');
+  if (c.look !== DEFAULT_CONFIG.look) q.set('look', c.look);
   return `?${q}`;
 }

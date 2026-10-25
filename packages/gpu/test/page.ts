@@ -45,6 +45,7 @@ export async function profiler(frames: number) {
   const data = device.createBuffer({ size: 64 * 1024 * 4, usage: GPUBufferUsage.STORAGE });
   const bind = device.createBindGroup({ layout: pipeline.getBindGroupLayout(0), entries: [{ binding: 0, resource: { buffer: data } }] });
   const results: Array<Record<string, number>> = [];
+  const spans: Array<number | null> = [];
   device.pushErrorScope('validation');
   for (let f = 0; f < frames; f++) {
     prof.begin();
@@ -60,12 +61,16 @@ export async function profiler(frames: number) {
     device.queue.submit([enc.finish()]);
   }
   // Collect after all submits: exercises the pool with several frames in flight.
-  for (let f = 0; f < frames; f++) results.push(await prof.collect());
+  for (let f = 0; f < frames; f++) {
+    const { passes, span } = await prof.collectFrame();
+    results.push(passes);
+    spans.push(span);
+  }
   const error = await device.popErrorScope();
   const extra = await prof.collect();
   prof.destroy();
   device.destroy();
-  return { timestamps, supported: prof.supported, results, extra, error: error?.message ?? null };
+  return { timestamps, supported: prof.supported, results, spans, extra, error: error?.message ?? null };
 }
 
 export interface ScanCase { n: number; capacity: number; fill: Fill; seed: number }

@@ -2,13 +2,16 @@
   "name": "@tb/game",
   "private": true,
   "type": "module",
-  "exports": { ".": "./src/index.ts" },
+  "exports": {
+    ".": "./src/index.ts"
+  },
   "dependencies": {
     "@tb/adapter-rapier": "workspace:*",
     "@tb/engine-api": "workspace:*",
     "@tb/geom": "workspace:*",
+    "@tb/gpu": "workspace:*",
     "@tb/keystone": "workspace:*",
-    "@tb/schema": "workspace:*",
+    "@tb/render": "workspace:*",
     "@tb/viewer": "workspace:*"
   }
 }
