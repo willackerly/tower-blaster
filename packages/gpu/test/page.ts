@@ -2,7 +2,33 @@
 // loadBundle() and calls the exports through page.evaluate; each driver checks
 // its GPU result against the CPU reference in the page and returns a small
 // summary, so large arrays never cross the Playwright boundary.
-import { createDevice, GpuProfiler } from '../src/index.ts';
+import { createDevice, exclusiveScanU32, GpuProfiler, readBuffer, Scanner, uploadU32 } from '../src/index.ts';
+
+function rng(seed: number) {
+  let a = seed >>> 0;
+  return () => {
+    a = (a + 0x6d2b79f5) >>> 0;
+    let t = a;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return (t ^ (t >>> 14)) >>> 0;
+  };
+}
+
+export type Fill = 'random' | 'max' | 'small';
+function fill(n: number, kind: Fill, seed: number): Uint32Array {
+  const r = rng(seed);
+  const a = new Uint32Array(n);
+  for (let i = 0; i < n; i++) a[i] = kind === 'max' ? 0xffffffff : kind === 'small' ? r() & 3 : r();
+  return a;
+}
+
+/** First index where a and b differ, or -1. */
+function firstDiff(a: Uint32Array, b: Uint32Array): number {
+  if (a.length !== b.length) return Math.min(a.length, b.length);
+  for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return i;
+  return -1;
+}
 
 const BUSY = /* wgsl */ `
 @group(0) @binding(0) var<storage, read_write> data: array<u32>;
@@ -40,4 +66,40 @@ export async function profiler(frames: number) {
   prof.destroy();
   device.destroy();
   return { timestamps, supported: prof.supported, results, extra, error: error?.message ?? null };
+}
+
+export interface ScanCase { n: number; capacity: number; fill: Fill; seed: number }
+
+/**
+ * For each case: fill capacity elements, scan the first n, and check the
+ * prefix against the reference and the tail for being untouched. Cases share
+ * one Scanner per capacity, so later cases also test reuse at a smaller n.
+ */
+export async function scan(cases: ScanCase[]) {
+  const { device } = await createDevice();
+  const scanners = new Map<number, { buf: GPUBuffer; scanner: Scanner }>();
+  const out = [];
+  for (const c of cases) {
+    let s = scanners.get(c.capacity);
+    if (!s) {
+      const buf = uploadU32(device, new Uint32Array(c.capacity));
+      s = { buf, scanner: new Scanner(device, buf, c.capacity) };
+      scanners.set(c.capacity, s);
+    }
+    const input = fill(c.capacity, c.fill, c.seed);
+    device.queue.writeBuffer(s.buf, 0, input);
+    device.pushErrorScope('validation');
+    const enc = device.createCommandEncoder();
+    const pass = enc.beginComputePass();
+    s.scanner.encode(pass, c.n);
+    pass.end();
+    device.queue.submit([enc.finish()]);
+    const error = await device.popErrorScope();
+    const got = new Uint32Array(await readBuffer(device, s.buf, c.capacity * 4));
+    const prefix = firstDiff(got.subarray(0, c.n), exclusiveScanU32(input.subarray(0, c.n)));
+    const tail = firstDiff(got.subarray(c.n), input.subarray(c.n));
+    out.push({ ...c, error: error?.message ?? null, prefixDiff: prefix, tailDiff: tail });
+  }
+  device.destroy();
+  return out;
 }

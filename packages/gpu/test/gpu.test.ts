@@ -41,3 +41,28 @@ describe('GpuProfiler', () => {
     }
   });
 });
+
+describe('Scanner (exclusive u32 scan, in place)', () => {
+  // Sizes straddle every block and level boundary: 512 = one block,
+  // 512² = two full levels, 512² + 1 forces a third level.
+  const sizes = [1, 2, 511, 512, 513, 1000, 262_143, 262_144, 262_145, 1_000_003];
+  it.for(sizes)('n = %i matches the reference and leaves the tail alone', async (n, ctx) => {
+    if (!gpu) return ctx.skip();
+    const capacity = n + 37;
+    const [r] = await call('scan', [{ n, capacity, fill: 'random', seed: n }]);
+    expect(r).toMatchObject({ error: null, prefixDiff: -1, tailDiff: -1 });
+  });
+
+  it('wraps modulo 2^32 like the reference', async (ctx) => {
+    if (!gpu) return ctx.skip();
+    const [r] = await call('scan', [{ n: 70_000, capacity: 70_000, fill: 'max', seed: 1 }]);
+    expect(r).toMatchObject({ error: null, prefixDiff: -1, tailDiff: -1 });
+  });
+
+  it('reuses one scanner across shrinking and growing n', async (ctx) => {
+    if (!gpu) return ctx.skip();
+    const capacity = 300_000;
+    const rs = await call('scan', [300_000, 5, 0, 262_145, 513].map((n, i) => ({ n, capacity, fill: 'small' as const, seed: 100 + i })));
+    for (const r of rs) expect(r).toMatchObject({ error: null, prefixDiff: -1, tailDiff: -1 });
+  });
+});
