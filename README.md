@@ -14,6 +14,8 @@ pnpm bench selfcheck                    # harness gate G1: A/A and injected 10% 
 pnpm bench scenarios                    # list S1-S11 and their parameters
 pnpm bench run --engine rapier --scenario S4 --param N=10000 --quality
 pnpm bench compare --a rapier --b rapier:iterations=8 --scenario S1 --no-sleep
+pnpm bench run --engine tiered --scenario S4 --param N=10000   # dormant lattice tier over Rapier
+pnpm tiers:compare --scenario S5 --param N=1600 --runs 4      # tiered vs all-dynamic Rapier on one shot
 ```
 
 Results print as JSON; add `--out results/name.jsonl` to append them to a file.
@@ -62,6 +64,7 @@ Renders any engine live with WebGPU: drag to orbit, right-drag or shift-drag to 
 | `geom` | Double-precision reference geometry (SAT, broadphase, contact manifolds) used as a test oracle |
 | `scenarios` | Seeded benchmark scenes S1-S11 |
 | `metrics` | Quality metrics and benchmark statistics |
+| `lattice` | Dormant tier: intact towers as a voxel lattice, support rules (loose columns), GPU brick export |
 | `adapter-rapier` | CPU baseline (Rapier WASM) |
 | `bench` | Timing and quality runs, CLI |
 | `runner` | Browser runner page, Playwright orchestrator (`bench:browser`) |
