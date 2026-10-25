@@ -105,12 +105,26 @@ export interface StepReport {
 export interface PhysicsEngine {
   readonly info: EngineInfo;
   init(scene: SceneDesc): Promise<void>;
+  /**
+   * Queue inputs after init, for interactive play. An event applies at the
+   * first step() whose index is >= event.step (so a past step means "next
+   * step"), in the same order as scene.inputs: by step, then push order.
+   * Recording pushed events into scene.inputs replays the session exactly.
+   */
+  push(events: InputEvent[]): void;
   /** Advance exactly one fixed step, applying any inputs due at this step. */
   step(): StepReport | void | Promise<StepReport | void>;
   /** Steps taken since init. */
   readonly stepIndex: number;
   /** Full state copy. Never called inside a timed region. */
   snapshot(): Snapshot | Promise<Snapshot>;
+  /**
+   * Resolves once every step submitted so far has finished executing. Engines
+   * whose step() returns only after the work is done (CPU engines) leave it out;
+   * GPU engines, whose step() only submits, must provide it, or timing sees
+   * only the submission.
+   */
+  finish?(): Promise<void>;
   dispose(): void;
 }
 
@@ -153,3 +167,5 @@ export function inertiaOf(b: BodyDesc): Vec3 {
   const k = m / 3; // (m/12)*(2h)^2 = m h^2 / 3
   return [k * (hy * hy + hz * hz), k * (hx * hx + hz * hz), k * (hx * hx + hy * hy)];
 }
+
+export * from './host.ts';

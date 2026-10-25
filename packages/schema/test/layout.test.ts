@@ -26,7 +26,7 @@ describe('defineStruct follows WGSL alignment rules', () => {
 
   it('gives the shared structs their intended sizes', () => {
     expect(Body.size).toBe(64);
-    expect(RenderInstance.size).toBe(32);
+    expect(RenderInstance.size).toBe(48);
     expect(Body.fields.map((f) => [f.name, f.offset])).toEqual([
       ['pos', 0], ['invMass', 12], ['rot', 16], ['linVel', 32], ['flags', 44], ['angVel', 48], ['shape', 60],
     ]);

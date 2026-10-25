@@ -9,40 +9,67 @@ import {
 export type Clock = () => number;
 export const wallClock: Clock = () => performance.now();
 
+/**
+ * How steps are timed. 'latency': each sample is one step() plus finish(), the
+ * cost of a step to a caller that waits for it. 'throughput': a block runs its
+ * steps back to back and waits once at the end, so a GPU can overlap them; the
+ * block gives one sample, its time divided by its steps. For an engine without
+ * finish() the modes differ only in the statistic (a block's median step
+ * against its mean step).
+ */
+export type TimingMode = 'latency' | 'throughput';
+
 export interface TimingOptions {
   /** Steps run before measuring (pipeline creation, caches, settling). */
   warmup: number;
   /** Steps per measured block. */
   blockSteps: number;
   blocks: number;
+  /** Default 'latency'. */
+  mode?: TimingMode;
   clock?: Clock;
 }
 
 export const DEFAULT_TIMING: TimingOptions = { warmup: 120, blockSteps: 300, blocks: 10 };
 
 export interface BlockTiming {
-  /** Wall time per step, ms. */
+  mode: TimingMode;
+  steps: number;
+  /** Wall time per step, ms: one per step ('latency') or one per block ('throughput'). */
   samples: number[];
   /** GPU time per step, ms, when the engine reports it. */
   gpu: number[];
   median: number;
-  driftSuspect: boolean;
+  /** Null in 'throughput' mode: one sample per block can't show drift within it. */
+  driftSuspect: boolean | null;
 }
 
 async function stepTimed(e: PhysicsEngine, clock: Clock): Promise<[number, number | undefined]> {
   const t0 = clock();
   const r = await e.step();
+  if (e.finish) await e.finish();
   return [clock() - t0, r ? r.gpuMs : undefined];
 }
 
-async function runBlock(e: PhysicsEngine, steps: number, clock: Clock): Promise<BlockTiming> {
+/** Must start with every engine idle (see timeInterleaved). */
+async function runBlock(e: PhysicsEngine, steps: number, clock: Clock, mode: TimingMode): Promise<BlockTiming> {
   const samples: number[] = [], gpu: number[] = [];
+  if (mode === 'throughput') {
+    const t0 = clock();
+    for (let i = 0; i < steps; i++) {
+      const r = await e.step();
+      if (r && r.gpuMs !== undefined) gpu.push(r.gpuMs);
+    }
+    if (e.finish) await e.finish();
+    const perStep = (clock() - t0) / steps;
+    return { mode, steps, samples: [perStep], gpu, median: perStep, driftSuspect: null };
+  }
   for (let i = 0; i < steps; i++) {
     const [ms, g] = await stepTimed(e, clock);
     samples.push(ms);
     if (g !== undefined) gpu.push(g);
   }
-  return { samples, gpu, median: median(samples), driftSuspect: driftSuspect(samples) };
+  return { mode, steps, samples, gpu, median: median(samples), driftSuspect: driftSuspect(samples) };
 }
 
 /**
@@ -54,13 +81,23 @@ export async function timeInterleaved(engines: PhysicsEngine[], scene: SceneDesc
   const clock = opts.clock ?? wallClock;
   for (const e of engines) await e.init(scene);
   for (const e of engines) for (let i = 0; i < opts.warmup; i++) await e.step();
+  // Every block starts with every engine idle: GPU engines each have their own
+  // device, and work still queued on one competes with the block timing another.
+  const idle = async () => { for (const e of engines) if (e.finish) await e.finish(); };
   const out: BlockTiming[][] = engines.map(() => []);
   for (let b = 0; b < opts.blocks; b++) {
     // Alternate which engine goes first, so neither always follows the other.
     const order = engines.map((_, i) => i);
     if (b % 2 === 1) order.reverse();
-    for (const i of order) out[i]!.push(await runBlock(engines[i]!, opts.blockSteps, clock));
+    for (const i of order) {
+      await idle();
+      out[i]!.push(await runBlock(engines[i]!, opts.blockSteps, clock, opts.mode ?? 'latency'));
+    }
   }
+  // finish() rejects once a GPU engine has seen a device error, but the browser
+  // may deliver that event a task later: let it arrive, then check once more.
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  await idle();
   return out;
 }
 
@@ -68,12 +105,14 @@ export function timingSummary(blocks: BlockTiming[]) {
   const all = blocks.flatMap((b) => b.samples);
   const gpu = blocks.flatMap((b) => b.gpu);
   return {
+    mode: blocks[0]?.mode ?? 'latency',
     blocks: blocks.length,
-    stepsPerBlock: blocks[0]?.samples.length ?? 0,
+    stepsPerBlock: blocks[0]?.steps ?? 0,
     blockMedians: blocks.map((b) => b.median),
     wallMs: summarize(all),
     gpuMs: gpu.length ? summarize(gpu) : null,
-    driftSuspectBlocks: blocks.filter((b) => b.driftSuspect).length,
+    // Null when not checked (throughput mode).
+    driftSuspectBlocks: blocks.some((b) => b.driftSuspect === null) ? null : blocks.filter((b) => b.driftSuspect).length,
   };
 }
 

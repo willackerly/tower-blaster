@@ -215,6 +215,23 @@ describe('GPU AVBD engine: stacks, towers and impacts', () => {
     expect(r.validation).toBeNull();
   });
 
+  it('push() during a run replays exactly as the same events in scene.inputs', async (ctx) => {
+    if (!gpu) return ctx.skip();
+    // An init-time input (step 30) lands after the pushed ones: pushes merge into the scene's queue.
+    const r = await call('pushReplay', 40);
+    expect(r.error).toBeNull();
+    expect(r.live.count).toBe(r.n + 4);
+    expect(r.live.pos).toEqual(r.replay.pos);
+    expect(r.live.rot).toEqual(r.replay.rot);
+    const n = r.n;
+    expect([0, 1, 2, 3].map((k) => Math.round(r.live.pos[3 * (n + k)]!))).toEqual([-10, 10, 20, 0]);
+    expect(r.rejected.capacity.message).toMatch(/capacity is \d+/);
+    expect(r.rejected.radius.message).toMatch(/radius 2 exceeds/);
+    expect(r.rejected.noRoom.message).toMatch(/capacity is \d+/);
+    // A rejected batch queues nothing: no body spawns at step 5.
+    for (const k of ['capacity', 'radius', 'noRoom'] as const) expect(r.rejected[k].count).toBe(n);
+  });
+
   it('is bit-for-bit deterministic', async (ctx) => {
     if (!gpu) return ctx.skip();
     const scene = buildScenario('S11', { N: 200 }, 7);
@@ -251,5 +268,31 @@ describe('GPU AVBD engine: engine contract (friction rule, integrator)', () => {
       expect(Math.abs(s1.pos[k]! - want.pos[k]!)).toBeLessThan(5e-4);
       expect(Math.abs(s1.linVel[k]! - want.vel[k]!)).toBeLessThan(5e-4);
     }
+  });
+});
+
+describe('GPU AVBD engine: finish()', () => {
+  it('waits until the device queue reports the submitted work done', async () => {
+    const e = new GpuAvbdEngine();
+    let release!: () => void;
+    const done = new Promise<void>((r) => { release = r; });
+    (e as unknown as { device: unknown }).device = { queue: { onSubmittedWorkDone: () => done } };
+    let finished = false;
+    const f = e.finish().then(() => { finished = true; });
+    await new Promise((r) => setTimeout(r, 10));
+    expect(finished).toBe(false);
+    release();
+    await f;
+    expect(finished).toBe(true);
+  });
+
+  it('rejects after a GPU error or a lost device, so work that never ran is never timed', async (ctx) => {
+    if (!gpu) return ctx.skip();
+    const r = await call('finishFailures', sceneOf([cube([0, 0.5, 0])]));
+    expect(r.healthy).toBe('resolved');
+    expect(r.afterError).toMatch(/^GpuAvbdEngine: GPU error: /);
+    expect(r.stepAfterError).toMatch(/^GpuAvbdEngine: GPU error: /);
+    expect(r.afterLoss).toMatch(/^GpuAvbdEngine: GPU device lost \(destroyed\)/);
+    expect(r.reinit).toBe('resolved');
   });
 });

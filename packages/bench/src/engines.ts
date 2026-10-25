@@ -1,7 +1,9 @@
 // Engine registry for the CLI: "name" or "name:key=value,key=value".
-import type { PhysicsEngine, SceneDesc, StepReport } from '@tb/engine-api';
-import { RapierEngine } from '@tb/adapter-rapier';
+import type { InputEvent, PhysicsEngine, SceneDesc, StepReport } from '@tb/engine-api';
+import { RapierEngine, RapierHost } from '@tb/adapter-rapier';
+import { TieredEngine } from '@tb/lattice';
 import { AvbdReferenceEngine } from '@tb/physics-ref';
+import { GpuAvbdEngine } from '@tb/physics-gpu';
 
 type Options = Record<string, number | boolean>;
 
@@ -9,6 +11,13 @@ const REGISTRY: Record<string, (o: Options) => PhysicsEngine> = {
   rapier: (o) => new RapierEngine(o.iterations !== undefined ? { iterations: Number(o.iterations) } : {}),
   // Options are AvbdParams fields, e.g. avbd-ref:iterations=4,sweep=false.
   'avbd-ref': (o) => new AvbdReferenceEngine(o),
+  // Same AvbdParams; needs WebGPU, so it runs in the browser runner, not the Node CLI.
+  'avbd-gpu': (o) => new GpuAvbdEngine(o),
+  // Dormant lattice tier over a Rapier host; other options are TierParams (e.g. tiered:vWake=0.5).
+  tiered: (o) => {
+    const { iterations, ...tier } = o;
+    return new TieredEngine(new RapierHost(iterations !== undefined ? { iterations: Number(iterations) } : {}), tier);
+  },
 };
 
 export function parseSpec(spec: string): { name: string; options: Options } {
@@ -34,13 +43,19 @@ export const engineNames = () => Object.keys(REGISTRY);
 /**
  * Wraps an engine and busy-waits so each step takes (1 + fraction) times as
  * long. The harness self-check must detect this. Fraction 0 runs the same
- * code and spins zero time, which makes it the baseline arm.
+ * code and spins zero time, which makes it the baseline arm. The spin is a
+ * fraction of the host-side step; finish() is passed through, so a wrapped
+ * GPU engine is still timed to completion.
  */
 export class SlowedEngine implements PhysicsEngine {
-  constructor(private readonly inner: PhysicsEngine, private readonly fraction: number, private readonly clock: () => number = () => performance.now()) {}
+  readonly finish?: () => Promise<void>;
+  constructor(private readonly inner: PhysicsEngine, private readonly fraction: number, private readonly clock: () => number = () => performance.now()) {
+    if (inner.finish) this.finish = () => inner.finish!();
+  }
   get info() { return { ...this.inner.info, variant: { ...this.inner.info.variant, slowed: this.fraction } }; }
   get stepIndex() { return this.inner.stepIndex; }
   init(scene: SceneDesc) { return this.inner.init(scene); }
+  push(events: InputEvent[]) { this.inner.push(events); }
   async step(): Promise<StepReport | void> {
     const t0 = this.clock();
     const r = await this.inner.step();

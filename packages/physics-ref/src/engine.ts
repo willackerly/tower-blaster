@@ -24,6 +24,15 @@ export class AvbdReferenceEngine implements PhysicsEngine {
     this.stepIndex = 0;
   }
 
+  push(events: InputEvent[]): void {
+    // Stable insertion keeps push order among events due at the same step.
+    for (const ev of events) {
+      let i = this.pending.length;
+      while (i > 0 && this.pending[i - 1]!.step > ev.step) i--;
+      this.pending.splice(i, 0, ev);
+    }
+  }
+
   step(): void {
     const w = this.world;
     if (!w) throw new Error('init() first');

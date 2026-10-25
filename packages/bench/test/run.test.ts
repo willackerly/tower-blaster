@@ -11,7 +11,37 @@ function fakeEngine(name: string, clock: { t: number }, cost: (step: number) => 
     info: { name, variant: {}, backend: 'fake' },
     get stepIndex() { return stepIndex; },
     async init() { stepIndex = 0; },
+    push() {},
     step() { clock.t += cost(stepIndex); log.push(name); stepIndex++; },
+    snapshot: () => emptySnapshot(0),
+    dispose() {},
+  };
+}
+
+/**
+ * A fake GPU engine on a fake clock. step() spends `cpu` ms of host time and
+ * queues `gpu` ms of work on its own queue; the GPU runs every queue's work in
+ * submission order, so engines given the same `gpu` timeline wait behind each
+ * other. finish() resolves in a later task, as onSubmittedWorkDone does, once
+ * this engine's own work is done.
+ */
+function fakeGpuEngine(clock: { t: number }, cpu: number, gpu: number, device = { busyUntil: 0 }): PhysicsEngine {
+  let stepIndex = 0, doneAt = 0;
+  return {
+    info: { name: 'gpu', variant: {}, backend: 'fake-gpu' },
+    get stepIndex() { return stepIndex; },
+    async init() { stepIndex = 0; },
+    push() {},
+    step() {
+      clock.t += cpu;
+      doneAt = device.busyUntil = Math.max(device.busyUntil, clock.t) + gpu;
+      stepIndex++;
+      return { gpuMs: gpu };
+    },
+    finish() {
+      const until = doneAt;
+      return new Promise<void>((resolve) => setTimeout(() => { clock.t = Math.max(clock.t, until); resolve(); }, 0));
+    },
     snapshot: () => emptySnapshot(0),
     dispose() {},
   };
@@ -29,6 +59,9 @@ describe('timeInterleaved', () => {
     // warmup A, B; then blocks A A B B | B B A A | A A B B
     expect(log.join('')).toBe('AB' + 'AABB' + 'BBAA' + 'AABB');
     expect(timingSummary(ta!).wallMs.median).toBe(2);
+    // Latency mode is the default: one sample per step.
+    expect(timingSummary(ta!).mode).toBe('latency');
+    expect(ta![0]!.samples).toHaveLength(2);
   });
 
   it('pairs blocks by simulated phase, so a workload that changes over time compares fairly', async () => {
@@ -43,12 +76,110 @@ describe('timeInterleaved', () => {
   });
 });
 
+describe('timing modes for engines that submit work and return (finish())', () => {
+  const run = async (e: PhysicsEngine, clock: { t: number }, mode: 'latency' | 'throughput', warmup = 0) =>
+    (await timeInterleaved([e], tiny, { warmup, blockSteps: 10, blocks: 3, mode, clock: () => clock.t }))[0]!;
+
+  it('latency: every step is charged its host time plus its device time', async () => {
+    const clock = { t: 0 };
+    const blocks = await run(fakeGpuEngine(clock, 1, 4), clock, 'latency');
+    expect(blocks.flatMap((b) => b.samples)).toEqual(Array(30).fill(5));
+  });
+
+  it('throughput: a block overlaps host and device work, costing max(cpu, gpu) + min(cpu, gpu) / steps per step', async () => {
+    for (const [cpu, gpu] of [[1, 4], [4, 1]] as const) {
+      const clock = { t: 0 };
+      const blocks = await run(fakeGpuEngine(clock, cpu, gpu), clock, 'throughput');
+      expect(blocks.map((b) => [b.samples.length, b.steps, b.median])).toEqual(Array(3).fill([1, 10, 4.1]));
+      // One sample per block can't show drift within it, so it is reported as unchecked.
+      expect(timingSummary(blocks)).toMatchObject({ mode: 'throughput', blocks: 3, stepsPerBlock: 10, driftSuspectBlocks: null });
+    }
+  });
+
+  it('device work queued in warmup or an earlier block is never charged to a block', async () => {
+    // 50 warmup steps leave 150 ms of device work queued.
+    for (const mode of ['latency', 'throughput'] as const) {
+      const clock = { t: 0 };
+      const blocks = await run(fakeGpuEngine(clock, 1, 4), clock, mode, 50);
+      expect(blocks[0]!.samples[0]).toBe(mode === 'latency' ? 5 : 4.1);
+    }
+  });
+
+  it('work another engine queued on the same GPU is never charged to a block', async () => {
+    // Two GPU engines with their own queues on one GPU; each warmup leaves 150 ms queued.
+    for (const mode of ['latency', 'throughput'] as const) {
+      const clock = { t: 0 }, gpu = { busyUntil: 0 };
+      const engines = [fakeGpuEngine(clock, 1, 4, gpu), fakeGpuEngine(clock, 1, 4, gpu)];
+      const blocks = await timeInterleaved(engines, tiny, { warmup: 50, blockSteps: 10, blocks: 3, mode, clock: () => clock.t });
+      for (const b of blocks.flat()) expect(b.samples).toEqual(mode === 'latency' ? Array(10).fill(5) : [4.1]);
+    }
+  });
+
+  it('collects reported GPU time from every step in both modes', async () => {
+    for (const mode of ['latency', 'throughput'] as const) {
+      const clock = { t: 0 };
+      expect(timingSummary(await run(fakeGpuEngine(clock, 1, 4), clock, mode)).gpuMs).toMatchObject({ n: 30, median: 4 });
+    }
+  });
+
+  it('awaits an async step() in both modes', async () => {
+    for (const mode of ['latency', 'throughput'] as const) {
+      const clock = { t: 0 };
+      let stepIndex = 0;
+      const e: PhysicsEngine = {
+        info: { name: 'async', variant: {}, backend: 'fake' },
+        get stepIndex() { return stepIndex; },
+        async init() { stepIndex = 0; },
+        push() {},
+        step: () => new Promise<void>((resolve) => setTimeout(() => { clock.t += 2; stepIndex++; resolve(); }, 0)),
+        snapshot: () => emptySnapshot(0),
+        dispose() {},
+      };
+      expect((await run(e, clock, mode)).map((b) => b.median)).toEqual([2, 2, 2]);
+    }
+  });
+
+  it('a device error reported a task after the last step still fails the run', async () => {
+    const clock = { t: 0 };
+    let failed = false, steps = 0;
+    const e: PhysicsEngine = {
+      info: { name: 'gpu', variant: {}, backend: 'fake-gpu' },
+      get stepIndex() { return steps; },
+      async init() { steps = 0; },
+      push() {},
+      step() { clock.t += 1; if (++steps === 30) setTimeout(() => { failed = true; }, 0); },
+      async finish() { if (failed) throw new Error('device error'); },
+      snapshot: () => emptySnapshot(0),
+      dispose() {},
+    };
+    await expect(run(e, clock, 'throughput')).rejects.toThrow('device error');
+  });
+
+  it('SlowedEngine passes finish() through, and adds none to an engine without it', async () => {
+    const clock = { t: 0 };
+    const blocks = await run(new SlowedEngine(fakeGpuEngine(clock, 1, 4), 0, () => clock.t), clock, 'latency');
+    expect(blocks.flatMap((b) => b.samples)).toEqual(Array(30).fill(5));
+    expect(new SlowedEngine(fakeEngine('A', clock, () => 1, []), 0).finish).toBeUndefined();
+  });
+
+  it('an engine without finish() gets the same per-step cost in both modes', async () => {
+    for (const mode of ['latency', 'throughput'] as const) {
+      const clock = { t: 0 };
+      const blocks = await run(fakeEngine('A', clock, () => 2, []), clock, mode);
+      expect(blocks.map((b) => b.median)).toEqual([2, 2, 2]);
+      expect(timingSummary(blocks).mode).toBe(mode);
+    }
+  });
+});
+
 describe('engine registry and SlowedEngine', () => {
   it('parses specs', () => {
     expect(parseSpec('rapier:iterations=8,ccd=true')).toEqual({ name: 'rapier', options: { iterations: 8, ccd: true } });
     expect(() => makeEngine('nope')).toThrow(/unknown engine/);
     expect(makeEngine('rapier:iterations=6').info.variant.iterations).toBe(6);
     expect(makeEngine('avbd-ref:iterations=4,sweep=false').info.variant).toMatchObject({ iterations: 4, sweep: false });
+    // Constructing needs no device (init() gets one), so the registry works in Node.
+    expect(makeEngine('avbd-gpu:iterations=6').info).toMatchObject({ name: 'avbd-gpu', backend: 'webgpu', variant: { iterations: 6 } });
   });
 
   it('slows each step by the requested fraction', async () => {

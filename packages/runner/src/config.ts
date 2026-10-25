@@ -34,13 +34,15 @@ export function parseConfig(search: string): RunConfig {
   }
   const sleep = q.get('sleep');
   const get = (k: string, d: number) => (q.has(k) ? num(q.get(k)!, k) : d);
+  const mode = q.get('timingMode') ?? 'latency';
+  if (mode !== 'latency' && mode !== 'throughput') throw new Error(`timingMode must be latency or throughput, got "${mode}"`);
   return {
     engines,
     scenario: q.get('scenario') ?? 'S1',
     params,
     seed: get('seed', 1),
     sleep: sleep === null ? null : sleep === 'true',
-    timing: { warmup: get('warmup', DEFAULT_TIMING.warmup), blockSteps: get('blockSteps', DEFAULT_TIMING.blockSteps), blocks: get('blocks', DEFAULT_TIMING.blocks) },
+    timing: { warmup: get('warmup', DEFAULT_TIMING.warmup), blockSteps: get('blockSteps', DEFAULT_TIMING.blockSteps), blocks: get('blocks', DEFAULT_TIMING.blocks), mode },
     qualitySteps: get('qualitySteps', 0),
     autorun: q.get('autorun') === '1',
   };
@@ -56,6 +58,7 @@ export function toQuery(c: RunConfig): string {
   q.set('warmup', String(c.timing.warmup));
   q.set('blockSteps', String(c.timing.blockSteps));
   q.set('blocks', String(c.timing.blocks));
+  if (c.timing.mode && c.timing.mode !== 'latency') q.set('timingMode', c.timing.mode);
   if (c.qualitySteps) q.set('qualitySteps', String(c.qualitySteps));
   if (c.autorun) q.set('autorun', '1');
   return `?${q.toString()}`;

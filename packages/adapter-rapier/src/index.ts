@@ -3,6 +3,7 @@
 // GPU variant has to beat by a wide margin.
 import RAPIER from '@dimforge/rapier3d-simd-compat';
 import { type BodyDesc, type CombineRule, emptySnapshot, type EngineInfo, type InputEvent, type PhysicsEngine, type SceneDesc, type Snapshot } from '@tb/engine-api';
+import { createBody, createGround, initRapier } from './bodies.ts';
 
 export interface RapierOptions {
   /** Solver iterations per step; Rapier's default is 4. */
@@ -15,9 +16,6 @@ const RULES: Record<CombineRule, RAPIER.CoefficientCombineRule> = {
   max: RAPIER.CoefficientCombineRule.Max,
   multiply: RAPIER.CoefficientCombineRule.Multiply,
 };
-
-let ready: Promise<void> | null = null;
-const initRapier = () => (ready ??= RAPIER.init());
 
 export class RapierEngine implements PhysicsEngine {
   readonly info: EngineInfo;
@@ -41,11 +39,7 @@ export class RapierEngine implements PhysicsEngine {
     world.timestep = scene.dt;
     if (this.opts.iterations) world.numSolverIterations = this.opts.iterations;
     this.combine = RULES[scene.frictionCombine ?? 'average'];
-    if (scene.ground) {
-      world.createCollider(
-        RAPIER.ColliderDesc.cuboid(1e4, 0.5, 1e4).setTranslation(0, scene.ground.y - 0.5, 0).setFriction(scene.ground.friction).setFrictionCombineRule(this.combine),
-      );
-    }
+    if (scene.ground) createGround(world, scene.ground).setFrictionCombineRule(this.combine);
     this.world = world;
     this.sleep = scene.sleep;
     this.bodies = [];
@@ -55,22 +49,19 @@ export class RapierEngine implements PhysicsEngine {
   }
 
   private add(b: BodyDesc): void {
-    const w = this.world!;
-    const desc = RAPIER.RigidBodyDesc.dynamic()
-      .setTranslation(b.pos[0], b.pos[1], b.pos[2])
-      .setRotation({ x: b.rot[0], y: b.rot[1], z: b.rot[2], w: b.rot[3] })
-      .setLinvel(b.linVel[0], b.linVel[1], b.linVel[2])
-      .setAngvel({ x: b.angVel[0], y: b.angVel[1], z: b.angVel[2] })
-      .setCanSleep(this.sleep)
-      // Fast balls tunnel without continuous collision detection.
-      .setCcdEnabled(b.shape.kind === 'sphere');
-    const rb = w.createRigidBody(desc);
-    const col = b.shape.kind === 'box'
-      ? RAPIER.ColliderDesc.cuboid(b.shape.half[0], b.shape.half[1], b.shape.half[2])
-      : RAPIER.ColliderDesc.ball(b.shape.radius);
+    const { body, collider } = createBody(this.world!, b, this.sleep, RAPIER.RigidBodyDesc.dynamic());
     // Every collider carries the scene's rule (Rapier uses the higher-priority rule of a pair).
-    w.createCollider(col.setDensity(b.density).setFriction(b.friction).setFrictionCombineRule(this.combine).setRestitution(b.restitution), rb);
-    this.bodies.push(rb);
+    collider.setFrictionCombineRule(this.combine);
+    this.bodies.push(body);
+  }
+
+  push(events: InputEvent[]): void {
+    // Stable insertion keeps push order among events due at the same step.
+    for (const ev of events) {
+      let i = this.pending.length;
+      while (i > 0 && this.pending[i - 1]!.step > ev.step) i--;
+      this.pending.splice(i, 0, ev);
+    }
   }
 
   step(): void {
@@ -100,3 +91,6 @@ export class RapierEngine implements PhysicsEngine {
     this.bodies = [];
   }
 }
+
+export { RapierHost } from './host.ts';
+export { createBody, createGround, icosphere, initRapier } from './bodies.ts';
