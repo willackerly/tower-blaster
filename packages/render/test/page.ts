@@ -8,7 +8,7 @@ import { createDevice, readBuffer } from '@tb/gpu';
 import { Body, RenderRecord, Shape, TIER, readStruct } from '@tb/schema';
 import {
   agx, AGX_WGSL, fromHalf, FX_WORDS, packFx, toHalf, bevelNormal, BEVEL_WGSL, oklabToLinear, OKLAB_WGSL, Post,
-  Culler, cullReference, GpuBodySource, invert, listMatches, lookAt, makeGpuBodies, multiply, perspective, Renderer, SEGMENTS, SnapshotSource, transform,
+  Culler, cullReference, GpuBodySource, invert, listMatches, lookAt, makeGpuBodies, multiply, packBodies, perspective, Renderer, SEGMENTS, SnapshotSource, transform,
   translation, normalize, BOX_VERTS, SPHERE_VERTS, SUN, Sparks, CTL, MAX_EVENTS, flashSlot, FLASHES, MAX_BALLS, TRAIL, Lights, LIGHTS, LIGHT_META, LIGHT_PACKED, MATERIAL, AoVolume, aoGrid, aoFrame, splatReference, composeReference, AO_FOOT_WGSL, AO_SAMPLE_WGSL, AO_SEAM_WGSL, AO_ONE, type SplatBody, unpackImpacts, unpackSparks, spawnReference, stepReference, type Impact, type BodySource, type CullFrame, type FrameParams, type RendererOptions, type V3,
 } from '../src/index.ts';
 
@@ -350,6 +350,51 @@ export async function gpuSource(seed: number) {
   src.destroy();
   device.destroy();
   return { diff: diffIds(idsSnap, idsGpu), prevEqual, bytesPerFrame: bytes / FRAMES, callsPerFrame: calls / FRAMES, error: err?.message ?? null };
+}
+
+/**
+ * SnapshotSource with Snapshot.tier: after each update the GPU Body[] equals
+ * a full pack of the snapshot, while only new, active and re-tiered slots
+ * are uploaded. Dormant (lattice-tier) bodies are still drawn.
+ */
+export async function tierUploads(seed: number) {
+  const { device } = await createDevice({ timestamps: false });
+  device.pushErrorScope('validation');
+  const r = rng(seed);
+  const descs: BodyDesc[] = [];
+  for (let i = 0; i < 200; i++) descs.push(box([(i % 20) - 10, 0.5 + Math.floor(i / 20), 0], [0.5, 0.5, 0.5], [0, 0, 0, 1], i));
+  descs.push(ball([0, 3, 4], 1));
+  const src = new SnapshotSource(device);
+  const s = snapshotOf(descs.slice(0, 200));
+  s.tier = new Uint8Array(200).fill(TIER.lattice);
+  s.awake.fill(0);
+  const steps: Array<{ uploaded: number; equal: boolean }> = [];
+  const check = async (snap: Snapshot) => {
+    src.update(snap, descs);
+    const got = new Uint8Array(await readBuffer(device, src.bodies)).subarray(0, snap.count * Body.size);
+    const want = new Uint8Array(packBodies(snap, descs), 0, snap.count * Body.size);
+    steps.push({ uploaded: src.uploaded, equal: got.every((x, i) => x === want[i]) });
+  };
+  await check(s); // first: everything
+  const t = structuredClone(s);
+  for (const i of [5, 77, 150]) { t.tier![i] = TIER.active; t.pos[3 * i + 1]! += r(); t.awake[i] = 1; }
+  await check(t); // three woken
+  const u = structuredClone(t);
+  u.tier![77] = TIER.rubble; u.pos[3 * 5]! += 0.25;
+  await check(u); // 5 moves, 77 freezes, 150 still active
+  const v = { ...structuredClone(u), count: 201 };
+  for (const k of ['pos', 'rot', 'linVel', 'angVel'] as const) { const a = new Float64Array(201 * (k === 'rot' ? 4 : 3)); a.set(u[k]); v[k] = a; }
+  v.pos.set(descs[200]!.pos, 600); v.rot.set([0, 0, 0, 1], 800);
+  v.awake = Uint8Array.from([...u.awake, 1]); v.tier = Uint8Array.from([...u.tier!, TIER.active]);
+  await check(v); // a spawned ball
+  const rend = new Renderer(device, { size: [W, H] });
+  rend.setSource(src);
+  const { ids } = await rend.renderIds(camera([0, 6, 30], [0, 5, 0]));
+  const drawn = new Set(ids);
+  const err = await device.popErrorScope();
+  rend.destroy();
+  device.destroy();
+  return { steps, dormantDrawn: [0, 10, 199].map((i) => drawn.has(i + 1)), error: err?.message ?? null };
 }
 
 // ---------------------------------------------------------------- faces

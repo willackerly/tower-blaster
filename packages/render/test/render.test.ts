@@ -5,9 +5,11 @@ import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { emptySnapshot, TAG_BALL, type BodyDesc } from '@tb/engine-api';
 import { buildScenario } from '@tb/scenarios';
-import { Body, readStruct, Shape } from '@tb/schema';
+import { Body, readStruct, Shape, TIER } from '@tb/schema';
+import { RapierHost } from '@tb/adapter-rapier';
+import { TieredEngine } from '@tb/lattice';
 import { isSoftwareAdapter, loadBundle, openWebGPU, type WebGPUSession } from '@tb/testkit';
-import { agx, aoFootReference, bevelNormal, type V3, CANDY_NIGHT, CTL, HOT_FULL, MAX_EVENTS, SPAWN_BUDGET, FX_WORDS, packFx, tintWord, unpackFx, frustumPlanes, linearToOklab, listMatches, oklabToLinear, srgbToLinear, lookAt, lookOf, lookRange, MATERIAL, multiply, packBodies, packShapes, paletteOf, perspective, unpackLook } from '../src/index.ts';
+import { agx, aoFootReference, bevelNormal, type V3, CANDY_NIGHT, CTL, HOT_FULL, MAX_EVENTS, SPAWN_BUDGET, FX_WORDS, packFx, tintWord, unpackFx, frustumPlanes, linearToOklab, listMatches, oklabToLinear, srgbToLinear, lookAt, lookOf, lookRange, MATERIAL, multiply, packBodies, changedRanges, drawnTier, packShapes, paletteOf, perspective, unpackLook } from '../src/index.ts';
 import type * as Drivers from './page.ts';
 
 describe('looks', () => {
@@ -50,6 +52,75 @@ describe('packBodies / packShapes', () => {
     expect(readStruct(shapes, Shape, 0)).toEqual({ half: [0.5, 0.5, 0.5], kind: [0] });
     const r = (descs[last]!.shape as { radius: number }).radius;
     expect(readStruct(shapes, Shape, last)).toEqual({ half: [r, r, r].map(Math.fround), kind: [1] });
+  });
+});
+
+describe('tiers in Body[] (Snapshot.tier)', () => {
+  const snap = (tiers: number[]) => {
+    const s = emptySnapshot(tiers.length);
+    tiers.forEach((_, i) => { s.pos.set([i, 0, 0], 3 * i); s.rot.set([0, 0, 0, 1], 4 * i); });
+    s.tier = Uint8Array.from(tiers);
+    return s;
+  };
+  const descs = (n: number) => buildScenario('S1', { F: 1, H: n }).bodies;
+
+  it('packs each body\'s tier, drawing dormant cells as static bodies until the lattice pass exists', () => {
+    const view = new DataView(packBodies(snap([TIER.active, TIER.rubble, TIER.lattice]), descs(3)));
+    expect([0, 1, 2].map((i) => readStruct(view, Body, i).flags![0]! >>> 8)).toEqual([TIER.active, TIER.rubble, TIER.rubble]);
+    expect(drawnTier(TIER.lattice)).toBe(TIER.rubble);
+  });
+
+  it('changedRanges: new, active and changed slots, merged across small gaps; everything without tiers', () => {
+    const A = TIER.active, R = TIER.rubble, L = TIER.lattice;
+    const prev = Uint8Array.from([L, L, A, L, L, L, L, L, R, L]);
+    expect(changedRanges(snap([L, L, A, L, L, L, L, L, R, L, A, A]), prev, 10, 1)).toEqual([[2, 3], [10, 12]]);
+    expect(changedRanges(snap([L, R, L, L, L, L, L, L, A, L]), prev, 10, 1)).toEqual([[1, 3], [8, 9]]); // 1, 2 (settled) and 8 changed tier
+    expect(changedRanges(snap([L, R, L, L, L, L, L, L, A, L]), prev, 10, 16)).toEqual([[1, 9]]);
+    expect(changedRanges(snap([L, L, A, L, L, L, L, L, R, L]), null, 10)).toEqual([[0, 10]]);
+    const s = snap([A, A]); delete s.tier;
+    expect(changedRanges(s, prev, 2)).toEqual([[0, 2]]);
+  });
+
+  it('on a TieredEngine collapse, packing only the changed ranges keeps Body[] identical to a full pack, for a fraction of the bytes', { timeout: 180_000 }, async () => {
+    const scene = buildScenario('S5', { N: 1024, F: 4, H: 16, radius: 1, speed: 20, fireStep: 2 }, 1);
+    const e = new TieredEngine(new RapierHost());
+    await e.init(scene);
+    const all = e.bodies as BodyDesc[];
+    let s = await e.snapshot();
+    let mirror = packBodies(s, all), tiers = s.tier!, count = s.count, written = 0, full = 0;
+    for (let k = 1; k <= 300; k++) {
+      await e.step();
+      s = await e.snapshot();
+      const ranges = changedRanges(s, tiers, count);
+      const grown = new ArrayBuffer(Math.max(mirror.byteLength, s.count * Body.size));
+      new Uint8Array(grown).set(new Uint8Array(mirror));
+      mirror = packBodies(s, all, grown, ranges);
+      const want = new Uint8Array(packBodies(s, all), 0, s.count * Body.size), got = new Uint8Array(mirror, 0, s.count * Body.size);
+      let diff = -1;
+      for (let b = 0; b < want.length && diff < 0; b++) if (got[b] !== want[b]) diff = b;
+      expect(diff < 0 ? null : `step ${k}: slot ${Math.floor(diff / Body.size)} differs`).toBeNull();
+      written += ranges.reduce((a, [f, t]) => a + t - f, 0);
+      full += s.count;
+      tiers = s.tier!; count = s.count;
+    }
+    e.dispose();
+    expect(written / full).toBeLessThan(0.5); // 0.45 measured: this tower falls over
+  });
+
+  it('an intact city uploads nothing after its first frame', async () => {
+    const scene = buildScenario('S4', { N: 10_000 }, 1);
+    const e = new TieredEngine(new RapierHost());
+    await e.init(scene);
+    let s = await e.snapshot(), written = 0;
+    for (let k = 1; k <= 30; k++) {
+      await e.step();
+      const next = await e.snapshot();
+      written += changedRanges(next, s.tier!, s.count).length;
+      s = next;
+    }
+    e.dispose();
+    expect(s.count).toBe(10_000);
+    expect(written).toBe(0);
   });
 });
 
@@ -773,6 +844,16 @@ describe('drawing', () => {
     expect(r.diff1).toBe(0);
     expect(Math.abs(r.c1 - r.c0)).toBeGreaterThan(5);
     expect(Math.abs(r.c5 - (r.c0 + r.c1) / 2)).toBeLessThan(1);
+  });
+
+  it('SnapshotSource uploads only new, active and re-tiered slots, and still draws dormant cells', async (ctx) => {
+    if (!gpu) return ctx.skip();
+    const r = await call('tierUploads', 5);
+    expect(r.error).toBeNull();
+    expect(r.steps.map((s) => s.equal)).toEqual([true, true, true, true]);
+    // All 200; the woken 5, 77, 150; 5 and 150 (active) and 77 (frozen); 5 and 150 and the new slot 200, not 77 (still rubble).
+    expect(r.steps.map((s) => s.uploaded / Body.size)).toEqual([200, 3, 3, 3]);
+    expect(r.dormantDrawn).toEqual([true, true, true]);
   });
 
   it("draws a GPU engine's buffers in place: same image, uniforms-only uploads", async (ctx) => {
