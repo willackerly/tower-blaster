@@ -135,7 +135,11 @@ export function trackSimSpeed(c: StepClock, steps: number, frameMs: number, dt: 
 export interface FreeHooks {
   /** False ends the loop. */
   running(): boolean;
-  /** No steps (paused, or a hidden tab); both clocks restart when it ends. */
+  /**
+   * No steps (paused, or a hidden tab); both clocks restart when it ends. It
+   * must be true at least once after any pause, even one the loop slept
+   * through waiting for a frame (a hidden tab: see pauseLatch).
+   */
   paused(): boolean;
   /** Wall clock, ms. */
   now(): number;
@@ -282,6 +286,28 @@ export async function runFree(h: FreeHooks, pacer: Pacer, arrivals: Arrivals): P
     throw e;
   }
   await drain();
+}
+
+/**
+ * FreeHooks.paused for a page: paused(p, visible) is true while p (the
+ * user's pause) or the tab is hidden, and once more after the tab is shown
+ * again if hidden() was called meanwhile. A hidden tab gets no frames, so a
+ * loop waiting for one sleeps through the whole time hidden and would wake
+ * with stale clocks: owed time for a catch-up burst (up to FREE_MAX_LAG_MS),
+ * and the time away as a gap between arrivals. The extra paused pass makes it
+ * restart them instead.
+ */
+export function pauseLatch(): { hidden(): void; paused(p: boolean, visible: boolean): boolean } {
+  let missed = false;
+  return {
+    hidden: () => { missed = true; },
+    paused(p, visible) {
+      if (p || !visible) return true;
+      if (!missed) return false;
+      missed = false;
+      return true;
+    },
+  };
 }
 
 /**
