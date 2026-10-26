@@ -124,7 +124,13 @@ export interface PhysicsEngine {
   step(): StepReport | void | Promise<StepReport | void>;
   /** Steps taken since init. */
   readonly stepIndex: number;
-  /** Full state copy. Never called inside a timed region. */
+  /**
+   * Full state copy. Never called inside a timed region. An engine with
+   * finish() queues its read before snapshot() returns, so the copy holds the
+   * state after exactly the steps submitted before the call, even when step()
+   * is called again before it resolves (the viewer's pipelined loop relies on
+   * this).
+   */
   snapshot(): Snapshot | Promise<Snapshot>;
   /**
    * Resolves once every step submitted so far has finished executing. Engines

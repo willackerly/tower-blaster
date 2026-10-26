@@ -1,6 +1,7 @@
 // The viewer's control panel: the scene (scenario, its params, seed), rebuilt
-// on demand, and the projectile, applied as soon as a field changes. The panel
+// on demand, and the projectile and the look, applied as soon as a field changes. The panel
 // only proposes configs; main.ts decides how to apply them (live, or by reset).
+import { linearToSrgb, LOOKS, REAL_DEFAULTS, REAL_KNOBS, type RealKnob, type RealOptions, srgbToLinear, type Stone, STONES, type V3 } from '@tb/render';
 import { buildScenario, SCENARIOS } from '@tb/scenarios';
 import { escapeHtml } from './html.ts';
 import type { ViewerConfig } from './params.ts';
@@ -21,6 +22,25 @@ export interface ControlsHooks {
   rebuild(next: ViewerConfig): void;
   /** Fire this from now on. */
   setProjectile(p: Projectile): void;
+  /** Draw with this look from now on (real: the real look's knobs that differ from REAL_DEFAULTS). */
+  setLook(look: string, real: Partial<RealOptions>): void;
+}
+
+/** Linear albedo to a colour input's #rrggbb (sRGB) and back, to 3 decimals. */
+export const albedoHex = (c: V3) => `#${c.map((x) => Math.round(255 * linearToSrgb(Math.min(Math.max(x, 0), 1))).toString(16).padStart(2, '0')).join('')}`;
+export const hexAlbedo = (h: string): V3 => [1, 3, 5].map((i) => Math.round(1000 * srgbToLinear(parseInt(h.slice(i, i + 2), 16) / 255)) / 1000) as V3;
+
+/** The real look's options from panel values: only what differs from REAL_DEFAULTS, so the URL stays short. */
+export function realOverrides(values: Record<RealKnob, number>, groundHex: string, stone: Stone = REAL_DEFAULTS.stone): Partial<RealOptions> {
+  const o: Partial<RealOptions> = {};
+  for (const key of Object.keys(REAL_KNOBS) as RealKnob[]) {
+    const v = values[key], k = REAL_KNOBS[key];
+    if (!Number.isFinite(v) || v < k.min || v > k.max) throw new Error(`${k.label} must be from ${k.min} to ${k.max}`);
+    if (v !== REAL_DEFAULTS[key]) o[key] = v;
+  }
+  if (groundHex.toLowerCase() !== albedoHex(REAL_DEFAULTS.groundAlbedo)) o.groundAlbedo = hexAlbedo(groundHex);
+  if (stone !== REAL_DEFAULTS.stone) o.stone = stone;
+  return o;
 }
 
 /**
@@ -61,12 +81,25 @@ export function mountControls(root: HTMLElement, hooks: ControlsHooks): { refres
       ${field('mass', 'mass (kg)', '', 'step="any" min="0.01"')}
       ${field('speed', 'speed (m/s)', 0, 'step="1" min="0" max="500"')}
       <div class="out muted"></div>
+    </form>
+    <form id="look-form">
+      <div class="h">Look</div>
+      <label class="f"><span>look</span><select name="look">${Object.keys(LOOKS).map((l) => `<option value="${l}">${l}</option>`).join('')}</select></label>
+      <div class="real">
+        <label class="f"><span>stone</span><select name="stone">${STONES.map((st) => `<option value="${st}">${st}</option>`).join('')}</select></label>
+        ${(Object.entries(REAL_KNOBS) as [RealKnob, (typeof REAL_KNOBS)[RealKnob]][]).map(([key, k]) => field(key, k.label, REAL_DEFAULTS[key], `step="${k.step}" min="${k.min}" max="${k.max}"`)).join('')}
+        <label class="f"><span>ground albedo</span><input type="color" name="ground" value="${albedoHex(REAL_DEFAULTS.groundAlbedo)}"></label>
+      </div>
+      <div class="out muted"></div>
     </form>`;
   const sceneForm = root.querySelector<HTMLFormElement>('#scene-form')!;
   const projForm = root.querySelector<HTMLFormElement>('#proj-form')!;
   const paramsBox = sceneForm.querySelector<HTMLElement>('.params')!;
   const sceneOut = sceneForm.querySelector<HTMLElement>('.out')!;
   const projOut = projForm.querySelector<HTMLElement>('.out')!;
+  const lookForm = root.querySelector<HTMLFormElement>('#look-form')!;
+  const realBox = lookForm.querySelector<HTMLElement>('.real')!;
+  const lookOut = lookForm.querySelector<HTMLElement>('.out')!;
   const input = (form: HTMLFormElement, name: string) => form.elements.namedItem(name) as HTMLInputElement | HTMLSelectElement;
   const rebuildButton = sceneForm.querySelector<HTMLButtonElement>('button')!;
 
@@ -126,6 +159,22 @@ export function mountControls(root: HTMLElement, hooks: ControlsHooks): { refres
     }
   });
 
+  function applyLook() {
+    const look = input(lookForm, 'look').value;
+    realBox.hidden = look !== 'real';
+    try {
+      const values = Object.fromEntries((Object.keys(REAL_KNOBS) as RealKnob[]).map((k) => [k, Number(input(lookForm, k).value)])) as Record<RealKnob, number>;
+      hooks.setLook(look, realOverrides(values, input(lookForm, 'ground').value, input(lookForm, 'stone').value as Stone));
+      lookOut.textContent = look === 'real' ? 'sun azimuth: clockwise from -z; visibility: 10 hazy, 40 clear, 150 crisp' : '';
+      lookOut.classList.remove('warn');
+    } catch (e) {
+      lookOut.textContent = e instanceof Error ? e.message : String(e);
+      lookOut.classList.add('warn');
+    }
+  }
+  lookForm.addEventListener('submit', (e) => e.preventDefault());
+  lookForm.addEventListener('input', applyLook);
+
   /** Shows the current config (after a load or a URL change). */
   function refresh() {
     const c = hooks.config();
@@ -139,6 +188,12 @@ export function mountControls(root: HTMLElement, hooks: ControlsHooks): { refres
     input(projForm, 'mass').value = p.mass === null ? '' : String(p.mass);
     input(projForm, 'speed').value = String(p.speed);
     showMass(p);
+    input(lookForm, 'look').value = c.look;
+    realBox.hidden = c.look !== 'real';
+    const real = { ...REAL_DEFAULTS, ...c.real };
+    for (const key of Object.keys(REAL_KNOBS) as RealKnob[]) input(lookForm, key).value = String(real[key]);
+    input(lookForm, 'ground').value = albedoHex(real.groundAlbedo);
+    input(lookForm, 'stone').value = real.stone;
   }
   // Open or closed as the viewer last left it; open by default on a wide screen.
   const OPEN_KEY = 'tb.viewer.controls.open';

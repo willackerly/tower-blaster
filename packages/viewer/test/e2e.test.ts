@@ -169,6 +169,42 @@ describe('viewer', () => {
     await again.page.close();
   });
 
+  it('the panel switches to the real look live and its knobs go into the URL', async (ctx) => {
+    if (!browser) return ctx.skip();
+    const { page, errors } = await open('/?scenario=S1&param.F=3&param.H=6&param.gap=0.02&offscreen=1&engine=rapier');
+    const status = await page.evaluate(() => ({ s: window.__viewer.status, e: window.__viewer.error }));
+    if (status.s === 'error' && /WebGPU|adapter/.test(status.e ?? '') && !requireWebGPU()) return ctx.skip();
+    expect(status).toEqual({ s: 'running', e: undefined });
+    await page.waitForFunction(() => window.__viewer.frames > 5, undefined, { timeout: 60_000 });
+    // The top row's centre pixel: sky (S1 is one short tower, framed below it).
+    const sky = () => page.evaluate(async () => {
+      const f = (await window.__viewer.capture(true))!;
+      return [0, 1, 2].map((c) => f.pixels!.data[4 * Math.floor(f.width / 2) + c]!);
+    });
+    const candy = await sky();
+    await page.locator('#controls summary').click();
+    const look = page.locator('#look-form');
+    expect(await look.locator('.real').isHidden()).toBe(true);
+    await look.locator('select[name=look]').selectOption('real');
+    expect(await look.locator('.real').isVisible()).toBe(true);
+    await look.locator('input[name=sunElevation]').fill('40');
+    await look.locator('input[name=visibility]').fill('15');
+    await page.waitForFunction(() => window.__viewer.frames > 15, undefined, { timeout: 60_000 });
+    const real = await sky();
+    expect(real[2]!).toBeGreaterThan(real[0]!); // a blue sky
+    expect(real).not.toEqual(candy);
+    const url = new URL(page.url());
+    expect(Object.fromEntries([...url.searchParams].filter(([k]) => k === 'look' || k.startsWith('real.')))).toEqual({ look: 'real', 'real.sunElevation': '40', 'real.visibility': '15' });
+    expect(await page.evaluate(() => window.__viewer.resets)).toBe(1); // live: no rebuild
+    expect(errors).toEqual([]);
+    await page.close();
+    const again = await open(url.pathname + url.search);
+    expect(await again.page.locator('#look-form input[name=sunElevation]').inputValue()).toBe('40');
+    expect(await again.page.locator('#look-form select[name=look]').inputValue()).toBe('real');
+    expect(again.errors).toEqual([]);
+    await again.page.close();
+  });
+
   // loop=free with an engine that steps synchronously and slower than real time (the f64
   // reference at 30 iterations, ~100-150 ms a step here and still over 16.7 ms on a host
   // five times faster): steps are always due, so without a task boundary between them the
@@ -201,6 +237,15 @@ describe('viewer', () => {
     if (status.s === 'error' && /WebGPU|adapter/.test(status.e ?? '') && !requireWebGPU()) return ctx.skip();
     expect(status).toEqual({ s: 'running', e: undefined });
     await new Promise((resolve) => setTimeout(resolve, 8000));
+    // Pipelined (the default): an engine behind real time submits each step while the one before
+    // still runs. SwiftShader is far behind on this scene; a fast GPU need not be.
+    const run = await page.evaluate(() => ({ overlapped: window.__viewer.overlapped, ms: window.__viewer.msPerStep, snap: window.__viewer.snapMs, steps: window.__viewer.stepIndex }));
+    console.log(`pipelined: ${run.steps} steps, ${run.overlapped} overlapped, ${run.ms.toFixed(1)} ms/step, ${run.snap.toFixed(1)} ms snapshot + upload`);
+    if (run.ms > 1.5 * (1000 / 60)) {
+      expect(run.overlapped).toBeGreaterThan(0);
+      // Each read waits behind its step (and the one before), but is timed from when its step was done.
+      expect(run.snap).toBeLessThan(run.ms);
+    }
     const before = await page.evaluate(() => window.__viewer.stepIndex);
     const t0 = Date.now();
     expect(await page.evaluate(() => window.__viewer.capture(false))).not.toBeNull();
@@ -211,6 +256,25 @@ describe('viewer', () => {
     await page.keyboard.press('r');
     await page.waitForFunction(() => window.__viewer.resets === 2 && window.__viewer.stepIndex > 3, undefined, { timeout: 60_000, polling: 250 });
     expect((await page.evaluate(() => window.__viewer.capture(false)))!.bodyFraction).toBeGreaterThan(0.05);
+    expect(errors).toEqual([]);
+    await page.close();
+  });
+
+  it('pipeline=0 runs the free loop serially: steps, resets, never overlaps a step, and the HUD says so', async (ctx) => {
+    if (!browser) return ctx.skip();
+    const { page, errors } = await open('/?scenario=S1&param.F=3&param.H=6&param.gap=0.02&offscreen=1&engine=avbd-gpu&pipeline=0');
+    const status = await page.evaluate(() => ({ s: window.__viewer.status, e: window.__viewer.error }));
+    if (status.s === 'error' && /WebGPU|adapter/.test(status.e ?? '') && !requireWebGPU()) return ctx.skip();
+    expect(status).toEqual({ s: 'running', e: undefined });
+    await page.waitForFunction(() => window.__viewer.frames > 10 && window.__viewer.stepIndex > 5, undefined, { timeout: 60_000, polling: 250 });
+    await page.keyboard.press('r');
+    await page.waitForFunction(() => window.__viewer.resets === 2 && window.__viewer.stepIndex > 3, undefined, { timeout: 60_000, polling: 250 });
+    // Serial, a step is never queued behind the one before. That only tells pipelining apart when
+    // the engine is behind real time, as it always is on SwiftShader here.
+    const run = await page.evaluate(() => ({ overlapped: window.__viewer.overlapped, ms: window.__viewer.msPerStep }));
+    console.log(`pipeline=0: ${run.overlapped} overlapped, ${run.ms.toFixed(1)} ms/step`);
+    if (run.ms > 1.5 * (1000 / 60)) expect(run.overlapped).toBe(0);
+    expect(await page.locator('#hud').innerText()).toContain('loop free · pipeline off');
     expect(errors).toEqual([]);
     await page.close();
   });

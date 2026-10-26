@@ -102,6 +102,22 @@ describe('fitShadow', () => {
     }
   });
 
+  it('a low sun: the floor past the arena where its shadows land is covered too', () => {
+    // An 8 degree sun from +z: the arena's top (y = 16) casts 12/tan(8) = 85 m past its -z side, along the floor (y = -8).
+    const e = (8 * Math.PI) / 180, sun: V3 = [0, Math.sin(e), Math.cos(e)];
+    const top: V3 = [10, 16, -25], hit: V3 = [10, -8, -25 - 24 / Math.tan(e)];
+    // The camera looks at that floor point, well outside the arena box.
+    const cam = cameraAt([10, 4, -60], hit);
+    const f = fitShadow(ARENA, sun, cam.corners, SIZE, { level: -1 }, -8);
+    expect(inClip(f.matrix, hit)).toBe(true);
+    // The caster and its shadow share the light-space x, y.
+    const a = transform(f.matrix, top), b = transform(f.matrix, hit);
+    expect(a[0]).toBeCloseTo(b[0], 6);
+    expect(a[1]).toBeCloseTo(b[1], 6);
+    // Still no larger than the arena's light-space box needs.
+    expect(f.half).toBeLessThanOrEqual(ARENA.radius! * Math.SQRT2 + 1e-9);
+  });
+
   it('is much tighter than the arena close up, and never larger than the arena needs', () => {
     // Looking down at the arena floor (y = -8) from 6 m.
     const close = fit(cameraAt([0, -2, 0.5], [0, -8, 0]));

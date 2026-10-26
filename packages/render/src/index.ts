@@ -14,3 +14,5 @@ export * from './lights.ts';
 export * from './ao.ts';
 export * from './floor.ts';
 export * from './atmosphere.ts';
+export * from './noise.ts';
+export * from './materials.ts';
