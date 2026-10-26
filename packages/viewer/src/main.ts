@@ -1,6 +1,6 @@
 // Interactive viewer: any PhysicsEngine, rendered live. Physics runs on the
-// main thread at a fixed 60 Hz (at most two steps per frame; slower engines
-// fall into slow motion, shown as sim speed).
+// main thread at a fixed 60 Hz (one step per frame by default, maxSteps in the
+// URL allows catch-up; slower engines fall into slow motion, shown as sim speed).
 import { makeEngine, parseSpec } from '@tb/bench';
 import { type BodyDesc, type InputEvent, type PhysicsEngine, type SceneDesc, TAG_BALL } from '@tb/engine-api';
 import { DEFAULT_AVBD } from '@tb/physics-ref';
@@ -289,7 +289,7 @@ async function main() {
     fps = 0.9 * fps + 0.1 * (1000 / Math.max(frameMs, 1));
     resize();
     if (resetAsked) { resetAsked = false; await reset(); }
-    const n = paused ? 0 : stepsDue(clock, frameMs, scene.dt);
+    const n = paused ? 0 : stepsDue(clock, frameMs, scene.dt, config.maxSteps);
     // A GPU engine's step() only submits, so its steps are timed to completion with finish().
     // refresh() waits for the GPU anyway to read a snapshot back; the wait adds one
     // queue-completion round trip before that readback's copy is submitted.

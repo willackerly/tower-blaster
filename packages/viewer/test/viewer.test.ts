@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import fc from 'fast-check';
 import {
-  engineSpec, escapeHtml, eyeOf, frame, GPU_SPARE, invert, multiply, newClock, parseViewerConfig, presetSearch, rayThrough, stepsDue, toSearch, transform, viewProj, Window, withOption, type Orbit,
+  engineSpec, escapeHtml, eyeOf, frame, GPU_SPARE, invert, MAX_STEPS_LIMIT, multiply, newClock, parseViewerConfig, presetSearch, rayThrough, stepsDue, toSearch, transform, viewProj, Window, withOption, type Orbit,
 } from '../src/index.ts';
 
 const orbit: Orbit = { target: [1, 2, 3], yaw: 0.7, pitch: 0.4, distance: 25, fovY: 0.9 };
@@ -65,11 +65,39 @@ describe('stepsDue', () => {
     expect(steps.reduce((a, b) => a + b)).toBeGreaterThanOrEqual(119);
     expect(Math.max(...steps)).toBe(1);
   });
-  it('a slow frame is capped and becomes slow motion, not a spiral', () => {
+  it('a slow frame takes one step and becomes slow motion, not a spiral', () => {
     const c = newClock();
-    for (let i = 0; i < 100; i++) expect(stepsDue(c, 100, dt)).toBe(2);
-    expect(c.acc).toBe(0);
+    for (let i = 0; i < 100; i++) expect(stepsDue(c, 100, dt)).toBe(1);
+    // The owed time is dropped, all but just under one step, so the renderer's alpha stays near 1.
+    expect(c.acc).toBeLessThan(dt);
+    expect(c.acc / dt).toBeGreaterThan(0.999);
+    expect(c.simSpeed).toBeCloseTo(dt / 0.1, 2);
+  });
+  it('maxSteps allows catch-up steps, still capped', () => {
+    const c = newClock();
+    for (let i = 0; i < 100; i++) expect(stepsDue(c, 100, dt, 2)).toBe(2);
+    expect(c.acc).toBeLessThan(dt);
     expect(c.simSpeed).toBeCloseTo((2 * dt) / 0.1, 2);
+    // Two frames at 60 fps after a dropped frame: the second step is caught up, not lost.
+    const d = newClock();
+    expect([stepsDue(d, 1000 / 60, dt, 2), stepsDue(d, 2000 / 60, dt, 2)]).toEqual([1, 2]);
+  });
+  it('one dropped frame at 60 fps costs one step and no more, then one step per frame resumes', () => {
+    const c = newClock();
+    const frames = [1000 / 60, 2000 / 60, ...Array.from({ length: 58 }, () => 1000 / 60)];
+    const steps = frames.map((f) => stepsDue(c, f, dt));
+    expect(Math.max(...steps)).toBe(1);
+    expect(steps.slice(2).every((n) => n === 1)).toBe(true);
+    expect(steps.reduce((a, b) => a + b)).toBe(60);
+  });
+  it('a step that fits the frame again brings sim speed back to real time', () => {
+    const c = newClock();
+    for (let i = 0; i < 60; i++) stepsDue(c, 50, dt);
+    expect(c.simSpeed).toBeLessThan(0.4);
+    let total = 0;
+    for (let i = 0; i < 120; i++) total += stepsDue(c, 1000 / 60, dt);
+    expect(total).toBe(120);
+    expect(c.simSpeed).toBeCloseTo(1, 2);
   });
   it('Window quantiles', () => {
     const w = new Window(10);
@@ -109,12 +137,16 @@ describe('viewer config', () => {
     expect(escapeHtml('avbd-gpu:iterations=20')).toBe('avbd-gpu:iterations=20');
   });
   it('round-trips through the URL', () => {
-    const c = parseViewerConfig('?scenario=s1&param.F=3&param.gap=0.02&sleep=0&autofire=30&seed=4&offscreen=1');
-    expect(c).toMatchObject({ scenario: 'S1', params: { F: 3, gap: 0.02 }, sleep: false, autofire: 30, seed: 4, offscreen: true });
+    const c = parseViewerConfig('?scenario=s1&param.F=3&param.gap=0.02&sleep=0&autofire=30&seed=4&offscreen=1&maxSteps=2');
+    expect(c).toMatchObject({ scenario: 'S1', params: { F: 3, gap: 0.02 }, sleep: false, autofire: 30, seed: 4, offscreen: true, maxSteps: 2 });
     expect(parseViewerConfig(toSearch(c))).toEqual(c);
+    expect(parseViewerConfig('').maxSteps).toBe(1);
+    expect(toSearch(parseViewerConfig(''))).not.toContain('maxSteps');
   });
-  it('rejects unknown scenarios and non-numeric params', () => {
+  it('rejects unknown scenarios, non-numeric params and a maxSteps outside 1-4', () => {
     expect(() => parseViewerConfig('?scenario=S99')).toThrow(/unknown scenario/);
     expect(() => parseViewerConfig('?param.N=lots')).toThrow(/not a number/);
+    for (const m of ['0', '5', '1.5', 'two']) expect(() => parseViewerConfig(`?maxSteps=${m}`)).toThrow(/maxSteps/);
+    expect(parseViewerConfig(`?maxSteps=${MAX_STEPS_LIMIT}`).maxSteps).toBe(MAX_STEPS_LIMIT);
   });
 });
