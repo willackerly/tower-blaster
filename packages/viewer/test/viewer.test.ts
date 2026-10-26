@@ -5,7 +5,7 @@ import { massOf, TAG_BALL } from '@tb/engine-api';
 import { REAL_DEFAULTS, REAL_KNOBS } from '@tb/render';
 import {
   albedoHex, alphaAt, arrived, hexAlbedo, realOverrides, DEFAULT_PROJECTILE, engineSpec, escapeHtml, eyeOf, frame, FREE_MAX_LAG_MS, GPU_SPARE, invert, MAX_STEPS_LIMIT, multiply,
-  newArrivals, newClock, newPacer, PACE_SLACK, parseProjectile, parseViewerConfig, presetSearch, projectileBody, projectileMass, proposeScene,
+  newArrivals, newClock, newPacer, PACE_SLACK, parseProjectile, pauseLatch, parseViewerConfig, presetSearch, projectileBody, projectileMass, proposeScene,
   pushRadiusLimit, rayThrough, runFree, SIM_SPEED_TAU, stepDue, stepped, stepsDue, taskYield, toSearch, trackSimSpeed, transform, viewProj, Window,
   withOption, type FreeHooks, type Orbit,
 } from '../src/index.ts';
@@ -171,8 +171,11 @@ function virtualClock() {
  * finish() reports done callbackMs after the GPU is. A read lands snapMs after
  * the work queued before it is done (read-back, callback and upload), and is
  * timed as main.ts times it: from the call, or from when its step was done if
- * that was later (`readMs`). Frames in `gaps` never fire (a hidden tab);
- * from frame paused[0] to paused[1] the loop is paused. Each frame draws the
+ * that was later (`readMs`). Frames in `gaps` never fire (a stall); frames
+ * in `hidden` never fire either, and the tab is hidden from half a frame
+ * before the first to half a frame before the last, with paused() from
+ * pauseLatch as main.ts has it. From frame paused[0] to paused[1] the loop is
+ * paused. `intervals` is runFree's arrival interval as each step starts. Each frame draws the
  * two newest reads at alphaAt: `shown` is the step it draws, interpolated
  * between the steps those reads hold; `perFrame` the steps newly shown;
  * `simSpeed` what the frame loop's trackSimSpeed reads at the end; `recorded`
@@ -181,11 +184,16 @@ function virtualClock() {
 async function simulateFree(o: {
   periodMs: number; stepMs: number | ((i: number) => number); snapMs?: number; frames: number; phaseMs?: number; pipeline?: boolean;
   encodeMs?: number; callbackMs?: number; jitter?: (k: number) => number; gaps?: Array<[number, number]>; paused?: [number, number];
+  hidden?: [number, number];
 }) {
   const dtMs = 1000 / 60;
   const clock = virtualClock();
   const frameAt = (k: number) => (o.phaseMs ?? 0) + k * o.periodMs + (o.jitter?.(k) ?? 0);
-  const skipped = (k: number) => (o.gaps ?? []).some(([from, to]) => k >= from && k < to);
+  const skipped = (k: number) => [...(o.gaps ?? []), ...(o.hidden ? [o.hidden] : [])].some(([from, to]) => k >= from && k < to);
+  const hideFrom = o.hidden ? frameAt(o.hidden[0]) - o.periodMs / 2 : NaN, hideTo = o.hidden ? frameAt(o.hidden[1]) - o.periodMs / 2 : NaN;
+  const latch = pauseLatch();
+  if (o.hidden) void clock.wait(hideFrom).then(() => latch.hidden());
+  const arrivals = newArrivals(), intervals: number[] = [];
   const cost = (i: number) => (typeof o.stepMs === 'number' ? o.stepMs : o.stepMs(i));
   const reads: Array<{ at: number; step: number }> = [];
   const recorded: Array<{ ms: number; overlapped: boolean }> = [];
@@ -194,13 +202,17 @@ async function simulateFree(o: {
   const end = frameAt(o.frames);
   await clock.run(runFree({
     running: () => clock.now() < end,
-    paused: () => !!o.paused && clock.now() >= frameAt(o.paused[0]) && clock.now() < frameAt(o.paused[1]),
+    paused: () => latch.paused(
+      !!o.paused && clock.now() >= frameAt(o.paused[0]) && clock.now() < frameAt(o.paused[1]),
+      !(clock.now() >= hideFrom && clock.now() < hideTo),
+    ),
     now: clock.now,
     dtMs: () => dtMs,
     resetAsked: () => false,
     reset: async () => {},
     step: async () => {
       if (o.encodeMs) await clock.wait(clock.now() + o.encodeMs);
+      intervals.push(arrivals.interval);
       subs.push(clock.now());
       const c = cost(submitted++);
       gpu = Math.max(gpu, clock.now()) + c;
@@ -224,7 +236,7 @@ async function simulateFree(o: {
       return clock.wait(frameAt(k));
     },
     nextTask: async () => {},
-  }, newPacer(), newArrivals()));
+  }, newPacer(), arrivals));
   // Frames: steps newly shown since the previous frame, and the step drawn.
   const perFrame: number[] = [], shown: number[] = [];
   const replay = newArrivals();
@@ -246,7 +258,7 @@ async function simulateFree(o: {
   return {
     steps: submitted, shownSteps: reads.at(-1)?.step ?? 0, reads: reads.length, waits, perFrame, shown, dtMs, simSpeed: speed.simSpeed,
     // GPU time inside [0, end]: the work still queued at end runs back to back until gpu.
-    recorded, busy: (gpuBusy - Math.max(0, gpu - end)) / end, newestAt, submittedBy, frameAt, landed: reads, doneAt, readMs,
+    recorded, busy: (gpuBusy - Math.max(0, gpu - end)) / end, newestAt, submittedBy, frameAt, landed: reads, doneAt, readMs, intervals,
   };
 }
 
@@ -441,13 +453,32 @@ describe('free loop (stepDue, alphaAt)', () => {
     expect(r.perFrame.slice(61).every((n) => n === 1)).toBe(true);
     expect(r.steps).toBe(120 - 30);
   });
-  it('after frames stop for 300 ms (a hidden tab), it catches up at most FREE_MAX_LAG_MS, then one step per frame', async () => {
+  it('after frames stop for 300 ms (a stall: the tab stays visible), it catches up at most FREE_MAX_LAG_MS, then one step per frame', async () => {
     const r = await simulateFree({ periodMs: dtMs, stepMs: 2, frames: 120, gaps: [[30, 48]] });
     const at = r.perFrame.findIndex((n, i) => i > 25 && n > 1);
     expect(r.perFrame[at]).toBeLessThanOrEqual(Math.ceil(FREE_MAX_LAG_MS / dtMs) + 1);
     expect(r.perFrame.slice(at + 1).every((n) => n === 1)).toBe(true);
     // 18 frames (300 ms) were missed; all but about FREE_MAX_LAG_MS of it is dropped as slow motion.
     expect(120 - r.steps).toBeGreaterThanOrEqual(Math.floor((300 - FREE_MAX_LAG_MS) / dtMs) - 1);
+  });
+  it('a tab hidden while the loop waits for a frame resumes with one step and fresh clocks, not a catch-up burst', async () => {
+    for (const pipeline of [false, true]) {
+      // A fast engine waits for a frame nearly all the time; frames 30-47 never come (300 ms hidden).
+      const r = await simulateFree({ periodMs: dtMs, stepMs: 2, snapMs: 0.5, frames: 120, hidden: [30, 48], pipeline });
+      // Frame 48 takes the paused pass (restarting both clocks), frame 49 the first step: one a frame,
+      // never a burst of the time away.
+      expect(Math.max(...r.perFrame.slice(1))).toBe(1);
+      expect(r.steps).toBe(30 + (120 - 49));
+      // The time away is no gap between arrivals: every interval is dt, or unset just after a restart.
+      expect(r.intervals.every((x) => Number.isNaN(x) || Math.abs(x - dtMs) < 1e-9)).toBe(true);
+      expect(r.intervals.slice(-60).every((x) => Math.abs(x - dtMs) < 1e-9)).toBe(true);
+    }
+  });
+  it('pauseLatch is paused while paused or hidden, and once more after the tab is shown again', () => {
+    const l = pauseLatch();
+    expect([l.paused(false, true), l.paused(true, true)]).toEqual([false, true]);
+    l.hidden();
+    expect([l.paused(false, false), l.paused(true, true), l.paused(false, true), l.paused(false, true)]).toEqual([true, true, true, false]);
   });
   it('the drawn pose never goes backwards and moves smoothly when steps and frames run at different rates', async () => {
     // [step, snapshot, frames, frames to settle]; 300 ms steps are slower than the 8-step gap cap.
