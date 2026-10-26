@@ -19,7 +19,9 @@ Structure materials are now model-scale (plaster 250 kg/m³, a 31 kg block); the
 
 Every level sinks 2 to 4 mm per loaded contact in its first half second: 26 mm at the top of a 10-course tower, 73 mm at the crown end of a lever. Solver iterations (4, 8, 16) make no difference, so this is contact compliance, not convergence.
 
-The driver now pre-settles 90 steps after `init`. The settled pose, not the authored one, is the home for heritage checks and the first shot baseline. Tests assert the pre-settle drift is under 0.2 h with no tilt over 2°, and that nothing moves by 1 mm in the 120 steps after it.
+The driver now pre-settles after `init`. The settled pose, not the authored one, is the home for heritage checks and the first shot baseline. Tests assert, on Rapier and on the AVBD reference, the pre-settle drift is under 0.2 h with no tilt over 2°, and that nothing moves by 1 mm in the 120 steps after it.
+
+The pre-settle was 90 steps, and is 300 since AVBD (2026-10-26). New AVBD contacts hold nothing for their first few steps, so stacks drop up to 41 mm and spring back with a time constant of about 45 steps; after 90 steps L1 and L2 were still rising 3.7 and 6.8 mm. Rapier is asleep by step 48, and its state at step 300 is bit-identical to step 90, so the Rapier par lines and probe grids are unchanged.
 
 ## 3. Loose lattice columns are independent
 

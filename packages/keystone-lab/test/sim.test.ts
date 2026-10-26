@@ -65,18 +65,13 @@ describe.each(ENGINES)('levels on %s', (name, make) => {
     return { up, side };
   };
 
-  // Idle stacks must stay put, or a level changes before the first shot. Known
-  // failure on the AVBD reference for L1 and L2: their tall stacks are still
-  // rising out of the pre-settle's contact compression, 3.6 and 6.1 mm in these
-  // 2 s (they stop at 3.7 and 6.8 mm, by 4-10 s; measured 2026-10-26). When that
-  // is fixed these rows start passing, vitest flags them, and it.fails becomes it.
-  const rising = name === 'Rapier' ? [] : ['L1', 'L2'];
-  const sitsStill = async (_id: string, def: LevelDef) => {
+  // Idle stacks must stay put, or a level changes before the first shot. On the
+  // AVBD reference L1 and L2 used to rise 3.6 and 6.1 mm in these 2 s, out of
+  // the compression of a 90-step pre-settle; PRESETTLE_STEPS covers it now.
+  it.each(levels)('%s then sits still for 2 s (within 1 mm)', async (_id, def) => {
     const { up, side } = await idle(def, 120);
     expect(Math.max(up, side)).toBeLessThan(1e-3);
-  };
-  it.each(levels.filter(([id]) => !rising.includes(id)))('%s then sits still for 2 s (within 1 mm)', sitsStill, 120_000);
-  if (rising.length) it.fails.each(levels.filter(([id]) => rising.includes(id)))('%s then sits still for 2 s (within 1 mm)', sitsStill, 120_000);
+  }, 120_000);
 
   // Resting stacks used to lean over by themselves on the AVBD reference,
   // growing from rounding error: L2's portal moved 0.94 m sideways by 10 s
@@ -86,6 +81,24 @@ describe.each(ENGINES)('levels on %s', (name, make) => {
     const { side } = await idle(LEVELS.find((l) => l.id === 'L2')!, 600);
     expect(side).toBeLessThan(1e-3);
   }, 180_000);
+});
+
+describe('pre-settle on Rapier', () => {
+  // Rapier puts every level to sleep well inside the pre-settle, so the steps
+  // it runs for AVBD's sake leave Rapier's state (and its par lines) unchanged.
+  it.each(LEVELS.map((l) => [l.id, l] as const))('%s: asleep early, and unchanged from then to the end of the pre-settle', async (_id, def) => {
+    const e = new RapierEngine();
+    await e.init(compileLevel(def).scene);
+    let asleepAt = -1, hash = '';
+    for (let t = 1; t <= PRESETTLE_STEPS; t++) {
+      e.step();
+      if (asleepAt < 0 && e.snapshot().awake.every((a) => a === 0)) { asleepAt = t; hash = snapshotHash(e.snapshot()); }
+    }
+    expect(asleepAt).toBeGreaterThan(0);
+    expect(asleepAt).toBeLessThan(PRESETTLE_STEPS / 2);
+    expect(snapshotHash(e.snapshot())).toBe(hash);
+    e.dispose();
+  });
 });
 
 const open: LevelDef = {
