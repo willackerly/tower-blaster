@@ -28,12 +28,15 @@ import { BoxHash } from './hash.ts';
 import { type Lattice } from './lattice.ts';
 import { detach, looseColumns, type SupportModel } from './support.ts';
 import { CUBE_ROTATIONS, nearestCubeRotation } from './symmetry.ts';
+import { TIER } from '@tb/schema';
 
 export const TIER_UNSPAWNED = 0;
 export const TIER_LATTICE = 1;
 export const TIER_ACTIVE = 2;
 /** Frozen in place (a static host body) after coming to rest off any cell pose. */
 export const TIER_RUBBLE = 3;
+/** Internal tier -> Snapshot.tier (@tb/schema TIER). Proxies are lattice cells. */
+const RENDER_TIER: Record<number, number> = { [TIER_LATTICE]: TIER.lattice, [TIER_ACTIVE]: TIER.active, [TIER_RUBBLE]: TIER.rubble };
 
 /** Steps before a body found resting on a moving one tries to freeze again (the pass is the costly part of a step otherwise). */
 const FREEZE_RETRY = 8;
@@ -1095,6 +1098,8 @@ export class TieredEngine implements PhysicsEngine {
       s.pos.set(this.rubblePos.subarray(3 * id, 3 * id + 3), 3 * id);
       s.rot.set(this.rubbleRot.subarray(4 * id, 4 * id + 4), 4 * id);
     }
+    s.tier = new Uint8Array(count);
+    for (let id = 0; id < count; id++) s.tier[id] = RENDER_TIER[this.tier[id]!]!;
     return s;
   }
 
