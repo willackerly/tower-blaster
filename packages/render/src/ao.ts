@@ -371,6 +371,62 @@ export function composeReference(occ: Uint32Array, g: AoGrid, skyK = AO_SKY_K): 
   return out;
 }
 
+/**
+ * The floor's sky view factor (the real look): the cosine-weighted
+ * hemisphere in three bands of equal-ish weight by elevation, rings at 75,
+ * 45 and 15 degrees (zenith angle 0-30, 30-60 and 60-90: a quarter, a half
+ * and a quarter of it), eight azimuths each, every ray marched through the
+ * 1 m occupancy mip out to 11.6 m in 0.9 m steps (the 2 m level sees a
+ * 1 m wall, as in S5, as half empty, and lets a fifth of the light through). The AO's vertical sky term
+ * counts a street between towers as open sky; the centre of an endless
+ * street twice as deep as wide sees cos(atan(4)) = 0.24 of it. render.test
+ * compares a street and open floor with ray-cast values.
+ * After AO_SAMPLE_WGSL. AoVolume.bakeFloorSky stores it per floor texel.
+ */
+export const FLOOR_SKY_WGSL = /* wgsl */ `
+fn floorRay(av: AoView, rel: vec3f, d: vec3f) -> f32 {
+  var T = 1.0;
+  for (var i = 0u; i < 13u; i++) {
+    T *= 1.0 - aoTap(av, rel + (0.8 + 0.9 * f32(i)) * d, 1u, rel, vec3f(0.0)); // 0.8 to 11.6 m
+  }
+  return T;
+}
+
+fn floorSkyAt(av: AoView, rel: vec3f) -> f32 {
+  var bands = vec3f(0.0);
+  for (var k = 0u; k < 8u; k++) {
+    let az = (f32(k) + 0.5) * 0.785398163;
+    let h = vec2f(cos(az), sin(az));
+    bands += vec3f(
+      floorRay(av, rel, vec3f(0.2588 * h.x, 0.9659, 0.2588 * h.y)),
+      floorRay(av, rel, vec3f(0.7071 * h.x, 0.7071, 0.7071 * h.y)),
+      floorRay(av, rel, vec3f(0.9659 * h.x, 0.2588, 0.9659 * h.y)));
+  }
+  return dot(bands / 8.0, vec3f(0.25, 0.5, 0.25));
+}
+`;
+/** Metres the floor sky rays reach sideways (11.2 m at 15 degrees, plus a texel). */
+export const FLOOR_SKY_REACH = 13;
+/** Floor sky texels per level-0 voxel side: the map is baked at half resolution (the view factor is smooth). */
+const FLOOR_SKY_TEXEL = 2;
+
+const FLOOR_BAKE_WGSL = /* wgsl */ `
+struct FloorParams { dims: vec3f, invVoxel: f32, k: vec4f, floorY: f32, margin: f32, mapW: u32, mapH: u32 }
+@group(0) @binding(0) var<uniform> fp: FloorParams;
+@group(0) @binding(1) var aoVol: texture_3d<f32>;
+@group(0) @binding(2) var aoSamp: sampler;
+@group(0) @binding(3) var dst: texture_storage_2d<rgba8unorm, write>;
+${AO_SAMPLE_WGSL}
+${FLOOR_SKY_WGSL}
+// One thread per floor texel, in grid space (the volume's origin at 0).
+@compute @workgroup_size(8, 8)
+fn bake(@builtin(global_invocation_id) id: vec3u) {
+  if (id.x >= fp.mapW || id.y >= fp.mapH) { return; }
+  let rel = vec3f(f32(id.x) + 0.5 - fp.margin, 0.0, f32(id.y) + 0.5 - fp.margin) * ${FLOOR_SKY_TEXEL}.0 / fp.invVoxel + vec3f(0.0, fp.floorY, 0.0);
+  textureStore(dst, id.xy, vec4f(floorSkyAt(AoView(vec3f(0.0), fp.invVoxel, fp.dims, 1.0, fp.k), rel), 0.0, 0.0, 1.0));
+}
+`;
+
 // ---------------------------------------------------------------- GPU side
 
 export class AoVolume {
@@ -394,8 +450,18 @@ export class AoVolume {
   private bound: unknown[] = [];
   private levelOffsets: number[] = [];
   private feet: GPUBuffer | null = null;
+  /** The floor's sky view factor (R), one texel per FLOOR_SKY_TEXEL voxels, FLOOR_SKY_REACH past the grid on each side in x and z; see floorSkyFrame. */
+  floorSky!: GPUTexture;
+  private floorMargin = 0;
+  private readonly floorParams: GPUBuffer;
+  private readonly floorPipe: GPUComputePipeline;
+  private readonly floorSampler: GPUSampler;
+  private floorBind: GPUBindGroup | null = null;
 
   constructor(private readonly device: GPUDevice, public grid: AoGrid) {
+    this.floorParams = device.createBuffer({ size: 48, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST, label: 'ao floor sky params' });
+    this.floorPipe = device.createComputePipeline({ layout: 'auto', compute: { module: device.createShaderModule({ code: FLOOR_BAKE_WGSL, label: 'ao floor sky' }), entryPoint: 'bake' } });
+    this.floorSampler = device.createSampler({ magFilter: 'linear', minFilter: 'linear' });
     this.params = device.createBuffer({ size: PARAM_BYTES, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST, label: 'ao params' });
     this.composeParams = Array.from({ length: AO_MIPS }, (_, l) => device.createBuffer({ size: 48, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST, label: `ao compose ${l}` }));
     const module = device.createShaderModule({ code: AO_SPLAT_WGSL, label: 'ao splat' });
@@ -426,6 +492,14 @@ export class AoVolume {
     }));
     this.levelOffsets = offsets;
     this.bind = null;
+    this.floorSky?.destroy();
+    const texel = FLOOR_SKY_TEXEL * g.voxel;
+    this.floorMargin = Math.ceil(FLOOR_SKY_REACH / texel);
+    this.floorSky = this.device.createTexture({ size: [Math.ceil(g.dims[0] / FLOOR_SKY_TEXEL) + 2 * this.floorMargin, Math.ceil(g.dims[2] / FLOOR_SKY_TEXEL) + 2 * this.floorMargin], format: 'rgba8unorm', usage: GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_SRC, label: 'ao floor sky' });
+    this.floorBind = this.device.createBindGroup({
+      layout: this.floorPipe.getBindGroupLayout(0),
+      entries: [{ binding: 0, resource: { buffer: this.floorParams } }, { binding: 1, resource: volume.createView() }, { binding: 2, resource: this.floorSampler }, { binding: 3, resource: this.floorSky.createView() }],
+    });
     return [occ, volume];
   }
 
@@ -512,7 +586,30 @@ export class AoVolume {
     }
   }
 
+  /**
+   * Bake the floor's sky view factor (FLOOR_SKY_WGSL) at floorY (world),
+   * after compose (same compute pass).
+   */
+  bakeFloorSky(pass: GPUComputePassEncoder, floorY: number): void {
+    const g = this.grid, w = this.floorSky.width, h = this.floorSky.height;
+    const buf = new ArrayBuffer(48), fl = new Float32Array(buf), u = new Uint32Array(buf);
+    fl.set(g.dims, 0); fl[3] = Math.fround(1 / g.voxel); fl.set(this.k, 4);
+    fl[8] = floorY - g.origin[1]; fl[9] = this.floorMargin; u[10] = w; u[11] = h;
+    this.device.queue.writeBuffer(this.floorParams, 0, buf);
+    pass.setBindGroup(0, this.floorBind!);
+    pass.setPipeline(this.floorPipe);
+    pass.dispatchWorkgroups(Math.ceil(w / 8), Math.ceil(h / 8));
+  }
+
+  /** The scene shader's mapping onto floorSky: uv = (rel.xz - xy) * zw, camera-relative. */
+  floorSkyFrame(eye: V3): [number, number, number, number] {
+    const g = this.grid, texel = FLOOR_SKY_TEXEL * g.voxel, m = this.floorMargin * texel;
+    return [g.origin[0] - m - eye[0], g.origin[2] - m - eye[2], 1 / (this.floorSky.width * texel), 1 / (this.floorSky.height * texel)];
+  }
+
   destroy(): void {
+    this.floorSky.destroy();
+    this.floorParams.destroy();
     for (const b of [this.occ, this.params, ...this.composeParams]) b.destroy();
     this.levels?.destroy();
     this.feet?.destroy();

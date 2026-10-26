@@ -51,6 +51,7 @@ export const Frame = defineStruct('Frame', [
   ['stone', 'vec4f', 'real look: stone layer (materials.ts STONES), texture scale, edge wear, dirt'],
   ['stoneDetail', 'vec4f', 'real look: x: stone texture strength (0: none, nothing sampled), y: fade-out pixel footprint (m)'],
   ['blockAlbedo', 'vec4f', 'real look: the blocks\' mean linear albedo (the ramp\'s)'],
+  ['aoFloorSky', 'vec4f', 'real look: floor sky map placement, uv = (rel.xz - xy) * zw (AoVolume.floorSkyFrame)'],
 ], 'Per-frame uniforms of the scene pass.');
 
 // The real look's sky (atmosphere.ts): bind group 1, read by the scene
@@ -63,13 +64,14 @@ ${ATMO_COMMON_WGSL}
 @group(1) @binding(3) var stoneDetail: texture_2d_array<f32>; // materials.ts: albedo multiplier / 2, roughness
 @group(1) @binding(4) var stoneNormal: texture_2d_array<f32>; // materials.ts: tangent-space normal * 0.5 + 0.5, cavity
 @group(1) @binding(5) var stoneSamp: sampler;
+@group(0) @binding(15) var aoFloorSkyTex: texture_2d<f32>; // ao.ts: the floor's sky view factor (R)
 ${PCG_WGSL}
 // Bench diagnostics (RendererOptions.realDiag): REAL_STONE false compiles the
 // stone samples out ('stone-off'); REAL_BLOCK false shades blocks as step 1
 // did, the stylized body under the atmosphere ('step1').
 override REAL_STONE: bool = true;
 override REAL_BLOCK: bool = true;
-// RendererOptions.realDiag 'no-floor-sky': the floor's cones compiled out (the vertical sky term only).
+// RendererOptions.realDiag 'no-floor-sky': the floor's baked sky view unused (the vertical sky term only).
 override FLOOR_CONES: bool = true;
 
 // In-scattered radiance (rgb) and green transmittance (a) along the view ray in direction dir (unit).
@@ -135,31 +137,15 @@ fn realBounce() -> vec3f {
   return fr.blockAlbedo.rgb * (fr.sunColor * cosE / PI + 0.5 * atmoAmbient[0].rgb + 0.5 * atmoAmbient[1].rgb);
 }
 
-// The floor's sky view factor from the AO volume: the vertical term for the
-// zenith cap (up to 30 degrees off vertical, a quarter of the cosine-weighted
-// hemisphere) and six cones at 30 degrees elevation for the rest, each
-// marched through the occupancy mips at 1.2, 2.6 and 5 m. The AO's own
-// sky term looks straight up only, which counts a street between towers as
-// open sky; its centre sees about a sixth of the sky between 12 m towers
-// 4 m apart.
+// The floor's sky view factor (FLOOR_SKY_WGSL), baked per frame into
+// aoFloorSky over the AO grid and the cones' reach; past it, open sky.
 fn floorSky(rel: vec3f) -> f32 {
   let av = aoView();
   if (av.on == 0.0) { return 1.0; }
-  let zen = aoAt(av, rel, vec3f(0.0, 1.0, 0.0), rel, vec3f(0.0)).y;
-  if (!FLOOR_CONES) { return zen; }
-  let s = (rel - av.origin) * av.invVoxel;
-  let reach = 5.0 * av.invVoxel;
-  if (any(s.xz < vec2f(-reach)) || any(s.xz > av.dims.xz + reach)) { return zen; }
-  var t = 0.0;
-  for (var k = 0u; k < 6u; k++) {
-    let az = (f32(k) + 0.5) * (PI / 3.0);
-    let d = vec3f(0.866 * cos(az), 0.5, 0.866 * sin(az));
-    var T = 1.0 - aoTap(av, rel + 1.2 * d, 1u, rel, vec3f(0.0));
-    T *= 1.0 - aoTap(av, rel + 2.6 * d, 2u, rel, vec3f(0.0));
-    T *= 1.0 - aoTap(av, rel + 5.0 * d, 2u, rel, vec3f(0.0));
-    t += T;
-  }
-  return 0.25 * zen + 0.75 * t / 6.0;
+  if (!FLOOR_CONES) { return aoAt(av, rel, vec3f(0.0, 1.0, 0.0), rel, vec3f(0.0)).y; }
+  let uv = (rel.xz - fr.aoFloorSky.xy) * fr.aoFloorSky.zw;
+  if (any(uv < vec2f(0.0)) || any(uv > vec2f(1.0))) { return 1.0; }
+  return textureSampleLevel(aoFloorSkyTex, aoSamp, uv, 0.0).r;
 }
 
 // Aerial perspective: the surface through d metres of air. The LUT holds

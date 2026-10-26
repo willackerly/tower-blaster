@@ -206,9 +206,11 @@ export class Renderer {
   /** Passes to skip, for measuring their marginal cost (bench:render). sparks off also freezes heat (its detector writes it). */
   toggles = { shadow: true, post: true, sparks: true, trail: true, heat: true, ao: true };
   private readonly stoneLod: boolean;
+  private readonly realDiag: RendererOptions['realDiag'];
 
   constructor(readonly device: GPUDevice, target: RenderTarget, opts: RendererOptions = {}) {
     this.stoneLod = opts.stoneLod !== false;
+    this.realDiag = opts.realDiag;
     const sceneFan = (opts.scenePath ?? opts.boxPath ?? 'cube') === 'fan';
     const shadowFan = (opts.shadowPath ?? opts.boxPath ?? 'fan') === 'fan';
     this.boxVerts = { scene: sceneFan ? BOX_FAN_VERTS : BOX_CUBE_VERTS, shadow: shadowFan ? BOX_FAN_VERTS : BOX_CUBE_VERTS };
@@ -255,6 +257,7 @@ export class Renderer {
         { binding: 11, visibility: GPUShaderStage.FRAGMENT, buffer: ro },
         { binding: 12, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: 'float', viewDimension: '3d' } },
         { binding: 13, visibility: GPUShaderStage.FRAGMENT, sampler: { type: 'filtering' } },
+        { binding: 15, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: 'float' } },
         { binding: 14, visibility: GPUShaderStage.FRAGMENT, buffer: ro },
       ],
     });
@@ -442,7 +445,7 @@ export class Renderer {
 
   private aoUniforms(eye: V3) {
     const g = this.ao.grid, { originRel, invVoxel } = aoFrame(g, eye);
-    return { aoOrigin: originRel, aoInvVoxel: invVoxel, aoDims: g.dims, aoOn: this.toggles.ao ? 1 : 0, aoK: this.ao.k };
+    return { aoOrigin: originRel, aoInvVoxel: invVoxel, aoDims: g.dims, aoOn: this.toggles.ao ? 1 : 0, aoK: this.ao.k, aoFloorSky: this.ao.floorSkyFrame(eye) };
   }
 
   /** Rebuild the culler and bind groups when the source's buffers change. */
@@ -469,6 +472,7 @@ export class Renderer {
           { binding: 9, resource: { buffer: this.lights.lights } }, { binding: 10, resource: { buffer: this.lights.trail } },
           { binding: 11, resource: { buffer: this.sparks.stateFor(s) } },
           { binding: 12, resource: this.ao.volume.createView() }, { binding: 13, resource: this.aoSampler }, { binding: 14, resource: { buffer: this.ao.feetFor(s) } },
+          { binding: 15, resource: this.ao.floorSky.createView() },
         ],
       });
       this.shadowBind = this.device.createBindGroup({ layout: this.shadowLayout, entries: common });
@@ -549,6 +553,7 @@ export class Renderer {
     if (ao) {
       this.ao.splat(cp, this.source, culler.records, f.eye);
       this.ao.compose(cp);
+      if (this.look.atmosphere && this.realDiag !== 'no-floor-sky') this.ao.bakeFloorSky(cp, f.groundY);
     }
     const real = !ids && this.look.atmosphere ? (this.real ??= this.makeReal()) : null;
     if (real) real.atmosphere.encode(cp, this.look.atmosphere!, sunOf(this.look), this.eyeKm(f), this.look.exposure, this.look.autoExposure ?? 0);

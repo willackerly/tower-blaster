@@ -80,8 +80,17 @@ rules the code follows; the doc has the reasoning.
   floor; in the real look a surface facing up takes none of it, so open
   shadow gets the whole sky (about 0.15 of sunlight at 35 degrees).
 - The AO volume's sky term looks straight up only. The floor's sky view
-  factor (`floorSky`) adds six cones at 30 degrees elevation through the
-  occupancy mips. Where blocks hide the sky, a surface sees `realBounce`:
+  factor (`floorSky`) is baked once a frame, after the AO compose, into a
+  2D map at half the AO volume's resolution (`AoVolume.bakeFloorSky`). Each
+  texel marches 3 rings (75, 45 and 15 degrees elevation, cosine weights
+  0.25, 0.5 and 0.25) of 8 azimuths, 13 taps each from 0.8 to 11.6 m
+  through occupancy mip 1. Floor pixels then take one bilinear tap instead
+  of about 22 occupancy taps per pixel (the per-pixel version cost 0.07 ms
+  at near 10k on the M5 Max). Against a ray-cast ground truth (scratch
+  script, exact boxes, cosine-weighted hemisphere) on the floor test's
+  scene: street 0.40 against 0.32, open ground 0.94 against 0.91. The
+  remaining leak in the street is the mip-1 voxel blur at wall edges.
+  Where blocks hide the sky, a surface sees `realBounce`:
   walls of the blocks' mean albedo, lit by the sun averaged over compass
   directions and by half the sky and ground. That turns streets between
   towers from sky-blue to warm, as sunlit walls make them. Step 2 replaces

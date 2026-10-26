@@ -989,14 +989,22 @@ describe('drawing', () => {
     // sky's light at 35 degrees of sun; 31 was about 0.05.
     expect(f!.openShadow).toBeGreaterThan(0.36 * f!.lit);
     expect(f!.openShadow).toBeLessThan(0.6 * f!.lit);
-    // The street (8 m walls, 4 m apart) sees about a quarter sky, the rest walls (floorSky,
-    // realBounce): about as bright, and warmer. Red / blue measured 0.89 against 0.69 in the open,
-    // which the vertical-only sky term had at 0.69 too (luma 54 against 53).
+    // The street (8 m walls, 4 m apart) sees about a third sky, the rest walls (floorSky,
+    // realBounce): a little brighter, and warm. Measured luma 61 against 54 in the open, red / blue
+    // 1.18 against 0.74; the vertical-only sky term (no-floor-sky) had the street at 54 and 0.71.
     expect(f!.street).toBeGreaterThan(0.9 * f!.openShadow);
     expect(f!.street).toBeLessThan(1.3 * f!.openShadow);
     expect(f!.streetRB).toBeGreaterThan(1.15 * f!.openShadowRB);
+    // The baked sky view factor against a cosine-weighted ray cast of these three walls (200k rays):
+    // street 0.32, open shadow 0.91, lit 0.91. Measured 0.40, 0.94, 0.95: the 1 m occupancy level
+    // lets some light through a 1 m wall that straddles two of its voxels (S14's 4 m towers do not).
+    expect(Math.abs(f!.streetSky - 0.32)).toBeLessThan(0.1);
+    expect(Math.abs(f!.openShadowSky - 0.91)).toBeLessThan(0.05);
+    expect(Math.abs(f!.litSky - 0.91)).toBeLessThan(0.06);
     expect(Math.abs(vertical!.streetRB / vertical!.openShadowRB - 1)).toBeLessThan(0.05);
-    expect(vertical!.openShadow).toBeCloseTo(f!.openShadow, 0);
+    // In the open, the wall 9 m away hides 6% of the sky: a little more light, not less.
+    expect(f!.openShadow / vertical!.openShadow - 1).toBeGreaterThanOrEqual(0);
+    expect(f!.openShadow / vertical!.openShadow - 1).toBeLessThan(0.03);
   });
 
   it('real look: blue sky paling to the horizon, exposure adapting to a low sun, no stylized lights', async (ctx) => {

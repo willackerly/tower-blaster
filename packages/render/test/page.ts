@@ -2198,7 +2198,8 @@ export async function materialBake() {
  * free-standing wall 9 m from it, on open floor; and sunlit open floor.
  * The sun is due +z (azimuth 180), so shadows fall toward -z. Returns the
  * mean sRGB luma of a 5x5 pixel patch at each, seen from straight above,
- * and its red / blue ratio (<name>RB).
+ * its red / blue ratio (<name>RB), and the baked floor sky view factor
+ * under it (<name>Sky).
  */
 export async function floorChecks(looks: Array<Partial<RealOptions> & Pick<RendererOptions, 'realDiag'>>, size: [number, number] = [320, 180]) {
   const { device } = await createDevice({ timestamps: false });
@@ -2213,7 +2214,7 @@ export async function floorChecks(looks: Array<Partial<RealOptions> & Pick<Rende
   const eye: V3 = [5, 45, 0.01], target: V3 = [5, 0, 0];
   const viewProj = multiply(perspective(0.9, size[0] / size[1], 0.1, 400), lookAt(eye, target));
   const probes: Record<string, V3> = { street: [-5, 0, 0], openShadow: [15, 0, -9], lit: [15, 0, 9] };
-  const out: Array<{ street: number; openShadow: number; lit: number; streetRB: number; openShadowRB: number; litRB: number }> = [];
+  const out: Array<{ street: number; openShadow: number; lit: number; streetRB: number; openShadowRB: number; litRB: number; streetSky: number; openShadowSky: number; litSky: number }> = [];
   for (const { realDiag, ...o } of looks) {
     const rend = new Renderer(device, { size }, { format: 'rgba8unorm', realDiag });
     rend.look = realLook({ sunElevation: 35, sunAzimuth: 180, ...o });
@@ -2235,6 +2236,21 @@ export async function floorChecks(looks: Array<Partial<RealOptions> & Pick<Rende
       luma[name] = m;
       luma[`${name}RB`] = red / blue;
     }
+    // The baked sky view factor (AoVolume.floorSky) under each probe, nearest texel.
+    const ao = (rend as unknown as { ao: AoVolume }).ao, tex = ao.floorSky;
+    const row = Math.ceil((tex.width * 4) / 256) * 256;
+    const rb = device.createBuffer({ size: row * tex.height, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST });
+    const enc = device.createCommandEncoder();
+    enc.copyTextureToBuffer({ texture: tex }, { buffer: rb, bytesPerRow: row }, [tex.width, tex.height]);
+    device.queue.submit([enc.finish()]);
+    await rb.mapAsync(GPUMapMode.READ);
+    const map = new Uint8Array(rb.getMappedRange());
+    const [ox, oz, iu, iv] = ao.floorSkyFrame(eye);
+    for (const [name, p] of Object.entries(probes)) {
+      const u = Math.floor((p[0] - eye[0] - ox) * iu * tex.width), v = Math.floor((p[2] - eye[2] - oz) * iv * tex.height);
+      luma[`${name}Sky`] = map[v * row + 4 * u]! / 255;
+    }
+    rb.destroy();
     out.push(luma as (typeof out)[number]);
     rend.destroy();
   }
