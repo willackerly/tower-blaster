@@ -7,6 +7,7 @@
     "@tb/adapter-rapier": "workspace:*",
     "@tb/engine-api": "workspace:*",
     "@tb/keystone": "workspace:*",
-    "@tb/physics-ref": "workspace:*"
+    "@tb/physics-ref": "workspace:*",
+    "tsx": "4.23.15"
   }
 }
