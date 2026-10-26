@@ -118,6 +118,43 @@ rules the code follows; the doc has the reasoning.
   calls per pixel); parallax offset near the camera, since the relief is
   millimetres to a centimetre and the bake keeps no height channel for it.
 
+## What step 5 built
+
+- Soft sun shadows (`shadowSoft`, the real build only): percentage-closer
+  soft shadows (Fernando 2005) with the sun's angular size. A blocker
+  search of 8 `textureGather`s (32 depths) over the widest penumbra a
+  blocker `PCSS_REACH` (40 m) away casts, at most `PCSS_MAX_TEXELS` (24);
+  then 12 comparison taps on a disc whose radius is the mean
+  receiver-blocker distance times tan(sun radius) x `shadowSoftness`.
+  Taps sit on Vogel discs (radius sqrt((i + 0.5) / N), golden angle), so
+  equal weights average over the sun's disc, and turn per pixel by
+  interleaved gradient noise, which trades the banding of 12 fixed taps for
+  fine grain. Each tap compares against the receiver's own plane (its
+  tangents through the light's matrix), clamped at tan 85 degrees, so wide
+  discs do not shadow tilted surfaces with themselves.
+- Where the penumbra is under 1.5 texels (contact, or a coarse window where
+  even a 40 m blocker gives one), the 3x3 taps of the other looks run
+  instead, with no search; fully lit or fully blocked searches return at
+  once; back faces skip the lookup.
+- Knobs: `sunSize` (the sun's diameter, degrees: the sky's disc and the
+  penumbra) and `shadowSoftness` (0: the 3x3 taps). `RendererOptions.shadowSize`
+  sets the map's size (default 2048). Bench variants `real-no-pcss` (the
+  soft shadow code compiled out) and `real-4096`.
+- Tests: the analytic shadow checks (rays against boxes: no acne, no
+  leak, IoU) pass on the real look. A slab's penumbra, read through the
+  `shadow-view` diagnostic (the floor draws its sun visibility, inverted
+  through the agx twin), puts its 10%, 50% and 90% lines where the disc
+  edge profile does, within a texel (SwiftShader: within 1.2 mm of a
+  3.9 mm texel), at two heights, two elevations and two softnesses.
+- Rejected: variance and exponential shadow maps (light bleeds through
+  stacked cubes); ray-marching the AO volume (0.5 m voxels give no contact
+  shadows); cascades (the map is already fitted to the visible arena);
+  blue-noise or temporal accumulation of the taps (no TAA here).
+- Fix from step 5's screenshots: in shade, the gravel's crevice term drew
+  each stone as a dark ring. The crevice is now a halo outside the stone
+  (0.8 to 1.7 radii), half as strong, and stones vary more in tone (0.62
+  to 1.32 of the matrix), so shaded gravel reads as stones.
+
 ## Floor and ambient (fixes after the stone step's screenshots)
 
 - Contact darkening (within 1.5 m of the floor) is for what stands on the
