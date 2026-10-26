@@ -125,3 +125,32 @@ describe('TieredEngine scene settings', () => {
     expect(await mu(new TieredEngine(new RapierHost()))).toBe(await mu(new RapierEngine()));
   });
 });
+
+describe('TieredEngine pushed bodies (TierParams.spare)', () => {
+  const ballAt = (x: number, radius: number, step: number) => ({
+    step, kind: 'spawn' as const,
+    body: { shape: { kind: 'sphere' as const, radius }, pos: [x, radius + 1, 0] as [number, number, number], rot: [0, 0, 0, 1] as [number, number, number, number], linVel: [0, 0, 0] as [number, number, number], angVel: [0, 0, 0] as [number, number, number], density: 1, friction: 0.5, restitution: 0, tag: -1 },
+  });
+
+  it('spawn with their own shape on the host, in (step, push order), even ahead of a scene input; past the spare ids push() throws', async () => {
+    const scene = buildScenario('S1', { F: 1, H: 1 }, 1);
+    scene.inputs = [ballAt(4, 1.2, 30)]; // a scene input due late
+    const e = new TieredEngine(new RapierHost(), { spare: 2 });
+    await e.init(scene);
+    e.push([ballAt(-4, 0.4, 2)]); // due first: takes the scene input's id 1
+    for (let k = 0; k < 10; k++) await e.step();
+    e.push([ballAt(8, 0.8, e.stepIndex)]);
+    expect(() => e.push([ballAt(12, 0.3, e.stepIndex)])).toThrow(/spare/);
+    for (let k = 0; k < 150; k++) await e.step();
+    const s = await e.snapshot();
+    expect(s.count).toBe(4);
+    // Each ball rests on the ground at its own radius (icosphere hulls sit within 1.2% of it).
+    const rest = [1, 2, 3].map((id) => s.pos[3 * id + 1]!);
+    const radii = [0.4, 0.8, 1.2];
+    const x = [1, 2, 3].map((id) => s.pos[3 * id]!);
+    expect(x.map(Math.round)).toEqual([-4, 8, 4]);
+    rest.forEach((y, k) => expect(Math.abs(y / radii[k]! - 1)).toBeLessThan(0.02));
+    e.dispose();
+  });
+});
+

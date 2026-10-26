@@ -20,7 +20,7 @@ export class RapierHost implements PhysicsHost {
   readonly info: EngineInfo;
   caps: HostCaps = { capacity: 0, stateLag: 0, contactForces: true, latticeNative: true };
   private world: RAPIER.World | null = null;
-  private table: readonly BodyDesc[] = [];
+  private table: BodyDesc[] = [];
   private bodies: Array<{ body: RAPIER.RigidBody; collider: RAPIER.Collider } | undefined> = [];
   private modes = new Uint8Array(0);
   /** 1 while an id sits in a native lattice cell. */
@@ -54,7 +54,7 @@ export class RapierHost implements PhysicsHost {
     this.combine = RULES[world.frictionCombine ?? 'average'];
     if (world.ground) createGround(w, world.ground).setFrictionCombineRule(this.combine);
     this.world = w;
-    this.table = table;
+    this.table = table.slice(); // spare ids get their description later (ModeChange.body)
     this.bodies = new Array(table.length);
     this.modes = new Uint8Array(table.length);
     this.inCell = new Uint8Array(table.length);
@@ -83,6 +83,7 @@ export class RapierHost implements PhysicsHost {
       if (c.id <= last) throw new Error('changes must have ascending, unique ids');
       last = c.id;
       if (c.mode !== MODE_OFF && !this.bodies[c.id] && (!c.pos || !c.rot)) throw new Error(`id ${c.id} has no body yet: switching it on needs a pose`);
+      if (c.body && this.bodies[c.id]) throw new Error(`id ${c.id} already has a body: its description is fixed`);
     }
     for (const id of batch.wake) if (this.modes[id] !== MODE_DYNAMIC && !batch.changes.some((c) => c.id === id && c.mode === MODE_DYNAMIC)) {
       throw new Error(`wake: id ${id} is not dynamic`);
@@ -105,6 +106,7 @@ export class RapierHost implements PhysicsHost {
       }
       let entry = this.bodies[c.id];
       const type = c.mode === MODE_STATIC ? RAPIER.RigidBodyType.Fixed : RAPIER.RigidBodyType.Dynamic;
+      if (c.body) this.table[c.id] = c.body;
       if (!entry) {
         const desc = c.mode === MODE_STATIC ? RAPIER.RigidBodyDesc.fixed() : RAPIER.RigidBodyDesc.dynamic();
         entry = this.bodies[c.id] = createBody(w, { ...this.table[c.id]!, pos: c.pos!, rot: c.rot!, linVel: [0, 0, 0], angVel: [0, 0, 0] }, this.sleep, desc, SPHERE_HULL);
