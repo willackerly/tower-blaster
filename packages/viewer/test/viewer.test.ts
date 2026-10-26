@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import fc from 'fast-check';
+import { buildScenario } from '@tb/scenarios';
+import { massOf, TAG_BALL } from '@tb/engine-api';
 import {
-  engineSpec, escapeHtml, eyeOf, frame, GPU_SPARE, invert, MAX_STEPS_LIMIT, multiply, newClock, parseViewerConfig, presetSearch, rayThrough, stepsDue, toSearch, transform, viewProj, Window, withOption, type Orbit,
+  DEFAULT_PROJECTILE, engineSpec, escapeHtml, parseProjectile, projectileBody, projectileMass, proposeScene, pushRadiusLimit, eyeOf, frame, GPU_SPARE, invert, MAX_STEPS_LIMIT, multiply, newClock, parseViewerConfig, presetSearch, rayThrough, stepsDue, toSearch, transform, viewProj, Window, withOption, type Orbit,
 } from '../src/index.ts';
 
 const orbit: Orbit = { target: [1, 2, 3], yaw: 0.7, pitch: 0.4, distance: 25, fovY: 0.9 };
@@ -113,12 +115,26 @@ describe('viewer config', () => {
     expect(parseViewerConfig('')).toMatchObject({ scenario: 'S4', params: { N: 2000, F: 4, H: 12 }, engine: 'avbd-gpu', sleep: null });
   });
   it('gives the GPU and tiered engines room for fired balls unless the spec sets it, and leaves other engines alone', () => {
-    expect(engineSpec('avbd-gpu')).toBe(`avbd-gpu:spare=${GPU_SPARE}`);
-    expect(engineSpec('avbd-gpu:iterations=4')).toBe(`avbd-gpu:iterations=4,spare=${GPU_SPARE}`);
+    expect(engineSpec('avbd-gpu')).toBe(`avbd-gpu:spare=${GPU_SPARE},maxRadius=0.7`);
+    expect(engineSpec('avbd-gpu:iterations=4')).toBe(`avbd-gpu:iterations=4,spare=${GPU_SPARE},maxRadius=0.7`);
     expect(engineSpec('tiered')).toBe(`tiered:spare=${GPU_SPARE}`);
-    expect(engineSpec('avbd-gpu:spare=3')).toBe('avbd-gpu:spare=3');
+    expect(engineSpec('avbd-gpu:spare=3,maxRadius=2')).toBe('avbd-gpu:spare=3,maxRadius=2');
     expect(engineSpec('rapier')).toBe('rapier');
     expect(engineSpec('avbd-ref:iterations=4')).toBe('avbd-ref:iterations=4');
+  });
+  it('sizes the GPU engine for the projectile, which leaves the default scene engine as it was', () => {
+    const cube = { ...DEFAULT_PROJECTILE, shape: 'cube' as const, size: 2 };
+    expect(engineSpec('avbd-gpu', cube)).toBe(`avbd-gpu:spare=${GPU_SPARE},maxRadius=${Math.sqrt(3)}`);
+    expect(engineSpec('tiered', cube)).toBe(`tiered:spare=${GPU_SPARE}`);
+    expect(engineSpec('rapier', cube)).toBe('rapier');
+    // The engine sizes its cells for max(maxRadius, the scene's largest body): a unit cube's
+    // sqrt(3)/2 > 0.7 in every default scene, so the default ball changes nothing.
+    const scene = buildScenario('S4', { N: 2000, F: 4, H: 12 });
+    expect(pushRadiusLimit(engineSpec('avbd-gpu'), scene)).toBe(Math.sqrt(0.75));
+    expect(pushRadiusLimit(engineSpec('avbd-gpu', cube), scene)).toBe(Math.sqrt(3));
+    expect(pushRadiusLimit(engineSpec('avbd-gpu', { ...DEFAULT_PROJECTILE, size: 6 }), scene)).toBe(3);
+    expect(pushRadiusLimit(engineSpec('rapier', cube), scene)).toBe(Infinity);
+    expect(pushRadiusLimit(engineSpec('tiered', cube), scene)).toBe(Infinity);
   });
   it('sets, replaces and removes one engine option', () => {
     expect(withOption('avbd-gpu', 'iterations', 20)).toBe('avbd-gpu:iterations=20');
@@ -131,6 +147,8 @@ describe('viewer config', () => {
     expect(presetSearch('?scenario=S12', 'rapier')).toBe(at);
     expect(presetSearch('?scenario=S12', 'avbd-gpu:iterations=20')).toBe(toSearch(parseViewerConfig('?scenario=S12&engine=avbd-gpu:iterations=20')));
     expect(presetSearch('?scenario=S13', 'rapier')).not.toBe(at);
+    const cube = { ...DEFAULT_PROJECTILE, shape: 'cube' as const };
+    expect(parseViewerConfig(presetSearch('?scenario=S12', 'rapier', cube)).projectile).toEqual(cube);
   });
   it('escapes text for the HUD', () => {
     expect(escapeHtml(`rapier:x=<img src=x onerror="alert('1')">&`)).toBe('rapier:x=&#60;img src=x onerror=&#34;alert(&#39;1&#39;)&#34;&#62;&#38;');
@@ -148,5 +166,64 @@ describe('viewer config', () => {
     expect(() => parseViewerConfig('?param.N=lots')).toThrow(/not a number/);
     for (const m of ['0', '5', '1.5', 'two']) expect(() => parseViewerConfig(`?maxSteps=${m}`)).toThrow(/maxSteps/);
     expect(parseViewerConfig(`?maxSteps=${MAX_STEPS_LIMIT}`).maxSteps).toBe(MAX_STEPS_LIMIT);
+  });
+});
+
+describe('projectile', () => {
+  const origin = [1, 2, 3] as [number, number, number], dir = [0.6, 0, -0.8] as [number, number, number];
+  it('by default is the ball the viewer always fired, field for field', () => {
+    expect(parseViewerConfig('').projectile).toEqual(DEFAULT_PROJECTILE);
+    expect(projectileBody(DEFAULT_PROJECTILE, origin, dir)).toEqual({
+      shape: { kind: 'sphere', radius: 0.7 },
+      pos: [origin[0] + dir[0] * 2, origin[1] + dir[1] * 2, origin[2] + dir[2] * 2],
+      rot: [0, 0, 0, 1],
+      linVel: [dir[0] * 40, dir[1] * 40, dir[2] * 40],
+      angVel: [0, 0, 0],
+      density: 8,
+      friction: 0.5,
+      restitution: 0.1,
+      tag: TAG_BALL,
+    });
+    expect(toSearch(parseViewerConfig(''))).not.toContain('proj');
+  });
+  it('has the size, mass and speed asked for, as a ball or a cube', () => {
+    fc.assert(fc.property(fc.constantFrom('ball' as const, 'cube' as const), fc.double({ min: 0.1, max: 20, noNaN: true }), fc.option(fc.double({ min: 0.01, max: 1e6, noNaN: true })), fc.double({ min: 0, max: 500, noNaN: true }), (shape, size, mass, speed) => {
+      const p = { shape, size, mass, speed };
+      const b = projectileBody(p, origin, dir);
+      if (shape === 'ball') expect(b.shape).toEqual({ kind: 'sphere', radius: size / 2 });
+      else expect(b.shape).toEqual({ kind: 'box', half: [size / 2, size / 2, size / 2] });
+      expect(massOf(b)).toBeCloseTo(projectileMass(p), 6);
+      if (mass !== null) expect(massOf(b) / mass).toBeCloseTo(1, 12);
+      expect(Math.hypot(...b.linVel)).toBeCloseTo(speed, 9);
+      // Starts clear of the camera: further than its own radius plus a metre.
+      const r = shape === 'ball' ? size / 2 : (size / 2) * Math.sqrt(3);
+      expect(Math.hypot(b.pos[0] - origin[0], b.pos[1] - origin[1], b.pos[2] - origin[2])).toBeGreaterThanOrEqual(Math.min(r + 1, 2) - 1e-9);
+      // Round-trips through the URL.
+      const c = { ...parseViewerConfig(''), projectile: p };
+      expect(parseViewerConfig(toSearch(c)).projectile).toEqual(p);
+    }));
+  });
+  it('the default mass is density 8, so a cube of the same size is heavier', () => {
+    expect(projectileMass(DEFAULT_PROJECTILE)).toBeCloseTo((8 * 4 * Math.PI * 0.343) / 3, 12);
+    expect(projectileMass({ ...DEFAULT_PROJECTILE, shape: 'cube' })).toBeCloseTo(8 * 1.4 ** 3, 12);
+  });
+  it('rejects shapes and values out of range', () => {
+    const q = (s: string) => parseProjectile(new URLSearchParams(s));
+    expect(() => q('proj=cone')).toThrow(/ball or cube/);
+    for (const s of ['proj.size=0', 'proj.size=21', 'proj.mass=0', 'proj.speed=-1', 'proj.speed=fast']) expect(() => q(s)).toThrow(/from/);
+    expect(q('proj.mass=')).toEqual(DEFAULT_PROJECTILE);
+  });
+});
+
+describe('scene controls', () => {
+  it('proposes a scene with its body count, or says why it can not be built', () => {
+    const c = parseViewerConfig('');
+    const ok = proposeScene(c, 'S14', { towers: 3, W: 2, D: 3, H: 4, street: 2, vary: 0 }, 5);
+    expect(ok).toMatchObject({ ok: true, bodies: 3 * 2 * 3 * 4, config: { scenario: 'S14', seed: 5, params: { towers: 3 }, engine: c.engine } });
+    // What the panel proposes is what the URL then reproduces.
+    if (ok.ok) expect(parseViewerConfig(toSearch(ok.config))).toEqual(ok.config);
+    expect(proposeScene(c, 'S14', { towers: 0 }, 1)).toMatchObject({ ok: false, error: expect.stringMatching(/towers/) });
+    expect(proposeScene(c, 'S14', { towers: NaN }, 1)).toMatchObject({ ok: false });
+    expect(proposeScene(c, 'S14', {}, 1.5)).toMatchObject({ ok: false, error: expect.stringMatching(/seed/) });
   });
 });

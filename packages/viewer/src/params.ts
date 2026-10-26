@@ -1,8 +1,11 @@
 // Viewer configuration from the URL, e.g.
-// ?scenario=S4&param.N=3000&engine=rapier&sleep=1&maxSteps=2 (engine: a @tb/bench spec; the default is the GPU engine)
+// ?scenario=S4&param.N=3000&engine=rapier&sleep=1&maxSteps=2&proj=cube&proj.size=2
+// (engine: a @tb/bench spec; the default is the GPU engine; proj*: see projectile.ts)
 import { parseSpec } from '@tb/bench';
+import { boundingRadius } from '@tb/geom';
 import { SCENARIOS } from '@tb/scenarios';
 import { MAX_STEPS_LIMIT } from './loop.ts';
+import { DEFAULT_PROJECTILE, parseProjectile, type Projectile, projectileShape, writeProjectile } from './projectile.ts';
 
 export interface ViewerConfig {
   engine: string;
@@ -18,9 +21,11 @@ export interface ViewerConfig {
   look: string;
   /** Most physics steps per frame, 1 to MAX_STEPS_LIMIT (see stepsDue); 1 = no catch-up. */
   maxSteps: number;
+  /** What a click fires. */
+  projectile: Projectile;
 }
 
-export const DEFAULT_CONFIG: ViewerConfig = { engine: 'avbd-gpu', scenario: 'S4', params: { N: 2000, F: 4, H: 12 }, seed: 1, sleep: null, autofire: 0, offscreen: false, look: 'candy', maxSteps: 1 };
+export const DEFAULT_CONFIG: ViewerConfig = { engine: 'avbd-gpu', scenario: 'S4', params: { N: 2000, F: 4, H: 12 }, seed: 1, sleep: null, autofire: 0, offscreen: false, look: 'candy', maxSteps: 1, projectile: DEFAULT_PROJECTILE };
 
 export function parseViewerConfig(search: string): ViewerConfig {
   const q = new URLSearchParams(search);
@@ -46,6 +51,7 @@ export function parseViewerConfig(search: string): ViewerConfig {
     offscreen: q.get('offscreen') === '1',
     look: q.get('look') ?? DEFAULT_CONFIG.look,
     maxSteps,
+    projectile: parseProjectile(q),
   };
 }
 
@@ -58,22 +64,30 @@ export function toSearch(c: ViewerConfig): string {
   if (c.offscreen) q.set('offscreen', '1');
   if (c.look !== DEFAULT_CONFIG.look) q.set('look', c.look);
   if (c.maxSteps !== DEFAULT_CONFIG.maxSteps) q.set('maxSteps', String(c.maxSteps));
+  writeProjectile(c.projectile, q);
   return `?${q}`;
 }
 
-/** A preset's search with the current engine kept, which is where its button takes you. */
-export function presetSearch(preset: string, engine: string): string {
-  return toSearch({ ...parseViewerConfig(preset), engine });
+/** A preset's search with the current engine and projectile kept, which is where its button takes you. */
+export function presetSearch(preset: string, engine: string, projectile: Projectile = DEFAULT_PROJECTILE): string {
+  return toSearch({ ...parseViewerConfig(preset), engine, projectile });
 }
 
 /** Bodies fired balls may add on the engines whose id tables are sized at init (GPU AVBD, the tiers). */
 export const GPU_SPARE = 256;
 
-/** The engine spec to build: the GPU and tiered engines get room for GPU_SPARE fired balls unless the spec sets spare. */
-export function engineSpec(spec: string): string {
+/**
+ * The engine spec to build: the GPU and tiered engines get room for GPU_SPARE fired balls unless
+ * the spec sets spare, and the GPU engine's broadphase is sized for the projectile unless the spec
+ * sets maxRadius. That changes nothing while the projectile is no larger than the scene's largest
+ * body (the engine takes the larger of the two), which holds for the default ball in every scene.
+ */
+export function engineSpec(spec: string, projectile: Projectile = DEFAULT_PROJECTILE): string {
   const { name, options } = parseSpec(spec);
-  if ((name !== 'avbd-gpu' && name !== 'tiered') || options.spare !== undefined) return spec;
-  return withOption(spec, 'spare', GPU_SPARE);
+  if (name !== 'avbd-gpu' && name !== 'tiered') return spec;
+  let out = options.spare === undefined ? withOption(spec, 'spare', GPU_SPARE) : spec;
+  if (name === 'avbd-gpu' && options.maxRadius === undefined) out = withOption(out, 'maxRadius', boundingRadius(projectileShape(projectile)));
+  return out;
 }
 
 /** spec with one option set, or removed when value is undefined; the other options keep their order. */

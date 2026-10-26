@@ -103,6 +103,72 @@ describe('viewer', () => {
     await page.close();
   });
 
+  it('the panel rebuilds the scene in place, a bigger projectile rebuilds the GPU engine, and the URL reproduces both', async (ctx) => {
+    if (!browser) return ctx.skip();
+    const { page, errors } = await open('/?scenario=S1&param.F=3&param.H=6&param.gap=0.02&offscreen=1&engine=avbd-gpu');
+    const status = await page.evaluate(() => ({ s: window.__viewer.status, e: window.__viewer.error }));
+    if (status.s === 'error' && /WebGPU|adapter/.test(status.e ?? '') && !requireWebGPU()) return ctx.skip();
+    expect(status).toEqual({ s: 'running', e: undefined });
+    await page.evaluate(() => { (window as unknown as { marker: number }).marker = 1; });
+    const hasMarker = () => page.evaluate(() => (window as unknown as { marker?: number }).marker === 1);
+
+    // The panel starts closed on a screen this narrow.
+    expect(await page.locator('#controls').getAttribute('open')).toBeNull();
+    await page.locator('#controls summary').click();
+    // Scene: switch to S14, size it, and the panel shows the count before rebuilding.
+    const scene = page.locator('#scene-form');
+    await scene.locator('select[name=scenario]').selectOption('S14');
+    for (const [k, v] of [['towers', '2'], ['W', '2'], ['D', '3'], ['H', '4']] as const) await scene.locator(`input[name="param.${k}"]`).fill(v);
+    expect(await scene.locator('.out').innerText()).toBe('48 bodies');
+    // Keys typed into the panel are not viewer commands (R would reset).
+    await scene.locator('input[name=seed]').press('r');
+    await scene.locator('input[name="param.towers"]').fill('0');
+    expect(await scene.locator('button').isDisabled()).toBe(true);
+    await scene.locator('input[name="param.towers"]').fill('2');
+    await scene.locator('button').click();
+    await page.waitForFunction(() => window.__viewer.status !== 'running' || (window.__viewer.resets === 2 && window.__viewer.stepIndex > 5), undefined, { timeout: 60_000 });
+    expect(await page.evaluate(() => ({ s: window.__viewer.status, e: window.__viewer.error, bodies: window.__viewer.bodies }))).toEqual({ s: 'running', e: undefined, bodies: 48 });
+    expect(await hasMarker()).toBe(true); // no page load
+    expect(new URL(page.url()).searchParams.get('scenario')).toBe('S14');
+    expect(new URL(page.url()).searchParams.get('param.towers')).toBe('2');
+
+    // Projectile: a 3 m cube is larger than any body the GPU engine was sized for, so it rebuilds.
+    const proj = page.locator('#proj-form');
+    await proj.locator('select[name=shape]').selectOption('cube');
+    await page.waitForFunction(() => window.__viewer.resets === 3, undefined, { timeout: 60_000 }); // a 1.4 m cube: radius 1.21 > 0.87
+    await proj.locator('input[name=size]').fill('3');
+    await proj.locator('input[name=size]').dispatchEvent('change');
+    await page.waitForFunction(() => window.__viewer.status !== 'running' || (window.__viewer.resets === 4 && window.__viewer.stepIndex > 5), undefined, { timeout: 60_000 });
+    expect(await page.locator('#hud').innerText()).toMatch(/Rebuilt the scene/);
+    // Slower and heavier fits the engine as it is: applied live, no rebuild.
+    await proj.locator('input[name=speed]').fill('15');
+    await proj.locator('input[name=mass]').fill('200');
+    await proj.locator('input[name=mass]').dispatchEvent('change');
+    expect(await proj.locator('.out').innerText()).toMatch(/^200 kg, 3\.00e\+3 kg·m\/s/);
+    await page.evaluate(() => window.__viewer.fire(0, 0));
+    await page.waitForFunction(() => window.__viewer.bodies === 49, undefined, { timeout: 30_000 });
+    const fired = await page.evaluate(() => window.__viewer.inputs[0]!.body);
+    expect(fired.shape).toEqual({ kind: 'box', half: [1.5, 1.5, 1.5] });
+    expect(Math.hypot(...fired.linVel)).toBeCloseTo(15, 9);
+    expect(fired.density * 27).toBeCloseTo(200, 9);
+    expect(await page.evaluate(() => window.__viewer.resets)).toBe(4);
+    const url = new URL(page.url());
+    expect(Object.fromEntries([...url.searchParams].filter(([k]) => k.startsWith('proj')))).toEqual({ proj: 'cube', 'proj.size': '3', 'proj.mass': '200', 'proj.speed': '15' });
+    expect(errors).toEqual([]);
+    await page.close();
+
+    // The URL alone reproduces the setup: same scene, and the engine is sized for the cube from the start.
+    const again = await open(url.pathname + url.search);
+    expect(await again.page.evaluate(() => ({ s: window.__viewer.status, e: window.__viewer.error }))).toEqual({ s: 'running', e: undefined });
+    await again.page.waitForFunction(() => window.__viewer.stepIndex > 5, undefined, { timeout: 60_000 });
+    await again.page.evaluate(() => window.__viewer.fire(0, 0));
+    await again.page.waitForFunction(() => window.__viewer.bodies === 49, undefined, { timeout: 30_000 });
+    expect(await again.page.locator('#proj-form select[name=shape]').inputValue()).toBe('cube');
+    expect(await again.page.locator('#scene-form input[name="param.D"]').inputValue()).toBe('3');
+    expect(again.errors).toEqual([]);
+    await again.page.close();
+  });
+
   it('shows a readable error for a bad URL instead of a blank page', async (ctx) => {
     if (!browser) return ctx.skip();
     const { page } = await open('/?scenario=S99&offscreen=1');

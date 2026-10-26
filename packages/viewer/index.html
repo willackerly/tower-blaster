@@ -8,12 +8,25 @@
   html, body { margin: 0; height: 100%; overflow: hidden; background: #070b1a; font: 13px/1.45 system-ui, sans-serif; }
   canvas { display: block; width: 100vw; height: 100vh; touch-action: none; cursor: crosshair; }
   .panel { position: fixed; background: rgba(17, 20, 28, 0.78); color: #e8ebf2; border-radius: 8px; padding: 10px 12px; backdrop-filter: blur(6px); }
-  #hud { top: 12px; left: 12px; min-width: 230px; font-variant-numeric: tabular-nums; }
+  #left { position: fixed; top: 12px; left: 12px; bottom: 52px; display: flex; flex-direction: column; align-items: stretch; gap: 8px; pointer-events: none; }
+  #left > .panel { position: static; pointer-events: auto; }
+  #hud { min-width: 230px; font-variant-numeric: tabular-nums; }
   #hud .big { font-size: 22px; font-weight: 650; }
   #hud .row { display: flex; justify-content: space-between; gap: 16px; }
   #hud .muted, #help { color: #9aa3b8; }
   #hud .warn { color: #f5b169; }
   #presets { top: 12px; right: 12px; display: flex; flex-direction: column; gap: 6px; max-width: 200px; }
+  #controls { min-height: 0; overflow-y: auto; }
+  #controls summary { cursor: pointer; font-weight: 600; }
+  #controls form { margin-top: 8px; display: flex; flex-direction: column; gap: 4px; }
+  #controls .h { color: #9aa3b8; font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; margin-top: 4px; }
+  #controls .f { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+  #controls input[type=number], #controls select { font: inherit; width: 96px; box-sizing: border-box; padding: 2px 5px; border: 1px solid #3a4459; border-radius: 4px; background: #1b2030; color: #e8ebf2; }
+  #controls select[name=scenario] { width: 140px; }
+  #controls .out { font-size: 12px; min-height: 1.45em; }
+  #controls .out.warn { color: #f5b169; }
+  #controls button { font: inherit; padding: 5px 9px; border: 0; border-radius: 5px; background: #d8693f; color: #fff; cursor: pointer; }
+  #controls button:disabled { background: #2b3242; color: #9aa3b8; cursor: default; }
   #presets button { font: inherit; text-align: left; padding: 5px 9px; border: 0; border-radius: 5px; background: #2b3242; color: #e8ebf2; cursor: pointer; }
   #presets button:hover { background: #3a4459; }
   #presets button.on { background: #d8693f; }
@@ -24,9 +37,12 @@
 </head>
 <body>
 <canvas id="c"></canvas>
-<div id="hud" class="panel">loading…</div>
+<div id="left">
+  <div id="hud" class="panel">loading…</div>
+  <details id="controls" class="panel"></details>
+</div>
 <div id="presets" class="panel"></div>
-<div id="help" class="panel">drag: orbit · right-drag / shift-drag: pan · wheel: zoom · click: fire ball · space: fire at centre · R: reset · P: pause</div>
+<div id="help" class="panel">drag: orbit · right-drag / shift-drag: pan · wheel: zoom · click: fire · space: fire at centre · R: reset · P: pause</div>
 <div id="error" class="panel"></div>
 <script type="module" src="./src/main.ts"></script>
 </body>
