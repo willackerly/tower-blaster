@@ -12,7 +12,14 @@ never performance results.
 | Active | dynamic | The solver's set. |
 | Rubble | static, at its pose | Woken cubes that came to rest off the lattice, frozen where they lie. |
 
-Renderer flags for these tiers live in `@tb/schema` `TIER`.
+`Snapshot.tier` reports each body's tier in the renderer's encoding
+(`@tb/schema` `TIER`). A body outside the active tier keeps its exact state
+until its tier changes, so `SnapshotSource` uploads only new, active and
+re-tiered slots: an intact 10k city uploads nothing after its first frame.
+Dormant cells are drawn from `Body[]` as static bodies (`drawnTier`) until
+the renderer's brick-mask lattice pass (R6 in `docs/render-design.md`)
+exists. Bodies pushed after init need ids reserved with `TierParams.spare`
+(the viewer reserves 256); `ModeChange.body` describes them to the host.
 
 ## Support (W1)
 
@@ -199,5 +206,10 @@ and the rules run on top.
   waking the whole big tower. The likely gap is secondary hits: debris at a
   few m/s into a packed line moves the far end of the line (Newton's
   cradle), while the plug model moves the line as one block.
-- The debris particle tier: at the S5 peak there were no free-flying
-  bodies, so it is deferred until the M5 numbers show a need.
+- The debris particle tier is dropped for now (decided 2026-10-26). At the
+  S5 peak no awake body was in free flight: collapses fall in chunks and
+  pile up, so particles would take nothing off the peak. On the M5 the
+  worst measured collapse (S5 small) is 5.45 ms p99 and 15 ms max per step,
+  inside the 33 ms frame. If a peak ever exceeds the budget, the candidate
+  is chunk rigidification (a falling chunk simulated as one body), which
+  needs compound bodies in the host contract.

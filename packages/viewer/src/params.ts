@@ -59,13 +59,13 @@ export function presetSearch(preset: string, engine: string): string {
   return toSearch({ ...parseViewerConfig(preset), engine });
 }
 
-/** Bodies fired balls may add on the GPU engine, whose buffers are sized at init. */
+/** Bodies fired balls may add on the engines whose id tables are sized at init (GPU AVBD, the tiers). */
 export const GPU_SPARE = 256;
 
-/** The engine spec to build: the GPU engine gets room for GPU_SPARE fired balls unless the spec sets spare. */
+/** The engine spec to build: the GPU and tiered engines get room for GPU_SPARE fired balls unless the spec sets spare. */
 export function engineSpec(spec: string): string {
   const { name, options } = parseSpec(spec);
-  if (name !== 'avbd-gpu' || options.spare !== undefined) return spec;
+  if ((name !== 'avbd-gpu' && name !== 'tiered') || options.spare !== undefined) return spec;
   return withOption(spec, 'spare', GPU_SPARE);
 }
 

@@ -50,7 +50,7 @@ async function open(search: string) {
 
 describe('viewer', () => {
   // The GPU case also picks 20 solver iterations, which its buttons show.
-  it.for([['avbd-gpu:iterations=20', 'GPU AVBD'], ['rapier', 'Rapier (CPU)']] as const)('renders a tower, steps physics and fires a ball on %s', async ([engine, button], ctx) => {
+  it.for([['avbd-gpu:iterations=20', 'GPU AVBD'], ['rapier', 'Rapier (CPU)'], ['tiered', 'Tiered (CPU)']] as const)('renders a tower, steps physics and fires a ball on %s', async ([engine, button], ctx) => {
     if (!browser) return ctx.skip();
     const { page, errors } = await open(`/?scenario=S1&param.F=3&param.H=6&param.gap=0.02&offscreen=1&engine=${engine}`);
     const status = await page.evaluate(() => ({ s: window.__viewer.status, e: window.__viewer.error }));
@@ -81,6 +81,24 @@ describe('viewer', () => {
     await page.waitForFunction(() => window.__viewer.status !== 'running' || (window.__viewer.resets === 2 && window.__viewer.stepIndex > 5), undefined, { timeout: 60_000 });
     expect(await page.evaluate(() => ({ s: window.__viewer.status, e: window.__viewer.error, bodies: window.__viewer.bodies, inputs: window.__viewer.inputs.length })))
       .toEqual({ s: 'running', e: undefined, bodies: 54, inputs: 0 });
+    expect(errors).toEqual([]);
+    await page.close();
+  });
+
+  it('draws a dormant tower on the tiered engine, keeps it asleep, and a fired ball wakes it', async (ctx) => {
+    if (!browser) return ctx.skip();
+    // No gap: the cubes sit on a grid, so the tiers take the whole tower dormant.
+    const { page, errors } = await open('/?scenario=S1&param.F=3&param.H=6&offscreen=1&engine=tiered');
+    const status = await page.evaluate(() => ({ s: window.__viewer.status, e: window.__viewer.error }));
+    if (status.s === 'error' && /WebGPU|adapter/.test(status.e ?? '') && !requireWebGPU()) return ctx.skip();
+    expect(status).toEqual({ s: 'running', e: undefined });
+    await page.waitForFunction(() => window.__viewer.frames > 10 && window.__viewer.stepIndex > 5, undefined, { timeout: 60_000 });
+    expect(await page.evaluate(() => ({ bodies: window.__viewer.bodies, awake: window.__viewer.awake }))).toEqual({ bodies: 54, awake: 0 });
+    const stats = await page.evaluate(() => window.__viewer.capture(false));
+    expect(stats!.bodyFraction).toBeGreaterThan(0.05);
+    expect(stats!.distinctColors).toBeGreaterThan(50);
+    await page.evaluate(() => window.__viewer.fire(0, 0));
+    await page.waitForFunction(() => window.__viewer.bodies === 55 && window.__viewer.awake > 1, undefined, { timeout: 30_000 });
     expect(errors).toEqual([]);
     await page.close();
   });
