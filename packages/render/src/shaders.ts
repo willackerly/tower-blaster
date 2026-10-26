@@ -135,6 +135,16 @@ fn aerial(c: vec3f, rel: vec3f) -> vec3f {
 }
 `;
 
+// The real look's specular (shade): the clearcoat lobe only where there is a
+// coat (the ball), so blocks and floor skip its sky LUT sample.
+const REAL_SPEC = /* wgsl */ `  var spec = ggx(NoH, a) * smithVis(NoV, NoL, a);
+  var reflections = env(R, sqrt(a)) * envBrdf(0.04, sqrt(a), NoV);
+  if (coat > 0.0) {
+    spec += coat * ggx(NoH, ac) * smithVis(NoV, NoL, ac);
+    reflections += coat * env(R, sqrt(ac)) * envBrdf(0.04, sqrt(ac), NoV);
+  }
+  spec *= F * PI;`;
+
 // The real look's ambient (shade). Contact darkening is the floor hiding
 // the lower view of what stands on it, so a surface facing up (the floor
 // itself) takes none of it; the stylized looks darken the floor too.
@@ -443,9 +453,9 @@ fn shade(base: vec3f, rel: vec3f, n: vec3f, a: f32, ac: f32, coat: f32, ao: vec2
   let NoH = max(dot(n, H), 0.0);
   let VoH = max(dot(V, H), 0.0);
   let F = schlick(0.04, VoH);
-  let spec = (ggx(NoH, a) * smithVis(NoV, NoL, a) + coat * ggx(NoH, ac) * smithVis(NoV, NoL, ac)) * F * PI;
   let R = reflect(-V, n);
-  let reflections = env(R, sqrt(a)) * envBrdf(0.04, sqrt(a), NoV) + coat * env(R, sqrt(ac)) * envBrdf(0.04, sqrt(ac), NoV);
+${real ? REAL_SPEC : `  let spec = (ggx(NoH, a) * smithVis(NoV, NoL, a) + coat * ggx(NoH, ac) * smithVis(NoV, NoL, ac)) * F * PI;
+  let reflections = env(R, sqrt(a)) * envBrdf(0.04, sqrt(a), NoV) + coat * env(R, sqrt(ac)) * envBrdf(0.04, sqrt(ac), NoV);`}
   // Ground contact: darker near the floor. The occupancy volume (ao.ts) adds what is nearby; sky visibility dims only the sky light.
   let contact = ${real ? REAL_CONTACT : '0.5 + 0.5 * smoothstep(0.0, 1.5, rel.y + fr.eye.y - fr.groundY)'};
   let occl = contact * ao.x;
