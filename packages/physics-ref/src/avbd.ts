@@ -38,6 +38,7 @@
 // - Persistence matches contact points by their anchor on body b (within
 //   matchDistance) instead of clipping feature ids, and carries the friction
 //   force as a world vector so a rotated tangent basis does not scramble it.
+// - Rolling contacts (any contact on a sphere) keep no anchors: see collide().
 // - Speculative margins grow with each body's speed (see collide()).
 // - Each touching pair keeps last step's SAT face axis unless another is
 //   clearly better (geom/manifold.ts): aligned neighbours tie on several axes.
@@ -83,11 +84,20 @@ export interface AvbdParams {
    * would press it in by restDepth. 0 turns it off (the paper's warm start).
    */
   restDepth: number;
+  /**
+   * Rolling contacts: a contact on a sphere takes its points fresh from the
+   * narrowphase every step, carries static friction's slip instead of its
+   * anchors, is matched by the sphere's lever arm in world space, and in an
+   * impact caps its load floor (see collide()). false treats it as a box's
+   * contact.
+   */
+  rollingContacts: boolean;
 }
 
 export const DEFAULT_AVBD: AvbdParams = {
   iterations: 10, beta: 1e5, gamma: 0.99, alpha: 0.99, postStabilize: true, penaltyMin: 1, penaltyMax: 1e9,
   margin: 0.02, slop: 0, stickThreshold: 0.01, matchDistance: 0.05, maxAngularSpeed: 50, slidingHessian: true, sweep: true, maxSweep: 1, restDepth: 0.003,
+  rollingContacts: true,
 };
 
 export const GROUND = -1;
@@ -99,6 +109,9 @@ export interface Contact {
   /** Anchor in a's frame (world for the ground) and in b's frame. */
   ra: Vec3;
   rb: Vec3;
+  /** The lever arms in world space at the start of the step (a's is 0 for the ground). */
+  raw: Vec3;
+  rbw: Vec3;
   n: Vec3;
   t1: Vec3;
   t2: Vec3;
@@ -155,6 +168,8 @@ export class AvbdWorld {
   /** Last step's SAT axis per touching pair (key `a,b`), preferred by this step's narrowphase. */
   axes = new Map<string, number>();
   stats: StepStats = { contacts: 0, manifolds: 0, colors: 0 };
+  /** Each body's last step, [position change, rotation vector] (what the GPU keeps in SolverBody.dp, phi until the next initBodies). */
+  lastDx: Float64Array[] = [];
 
   constructor(readonly scene: Pick<SceneDesc, 'gravity' | 'dt' | 'ground' | 'frictionCombine'>, readonly p: AvbdParams = DEFAULT_AVBD) {}
 
@@ -165,7 +180,64 @@ export class AvbdWorld {
     });
   }
 
-  /** Find contacts at the current poses and carry state over from the previous step. */
+  /**
+   * Find contacts at the current poses and carry state over from the previous step.
+   *
+   * Rolling contacts. A box's contact points are material points: a corner, or
+   * a point of a face that moves with the box while it sticks. Keeping their
+   * anchors under static friction is exact. On a sphere the contact point is
+   * not a material point: it is wherever the surface faces the other body,
+   * centre + R n in world space whichever way the sphere has turned, and on a
+   * rolling sphere a new material point touches every step, as does a new
+   * point of the face or ground it rolls on. Kept anchors there are wrong:
+   * the old material point has rotated R (1 - cos theta) up off the contact,
+   * which the normal row reads as a gap (the ball sinks), and R theta = v h
+   * along the surface, which loses the match above matchDistance / h (the
+   * force and penalty restart from zero every step). So any contact on a
+   * sphere (when rollingContacts is on):
+   * - takes all three rows from this step's narrowphase point: the gap, and
+   *   the lever arms of the normal and friction rows (the friction torque
+   *   needs the arm at the contact, not a tilted one);
+   * - carries static friction as slip, not anchors: the relative tangential
+   *   displacement of the material points in contact, summed over the steps
+   *   it has held. Last step's is its tangential C at the end of the step,
+   *   c0_t + J_t dx (c0_t being the slip carried into it). For a sphere that
+   *   is exact, not a linearization: the point in contact stays at the same
+   *   lever arm r, so its slip over a step is dp + phi x r, and rolling
+   *   (v = -w x r) gives 0. Kept material anchors would measure the
+   *   cycloid, R (theta - sin theta) per step, as slip. As with anchors,
+   *   slip of stickThreshold or more is dropped;
+   * - is matched by the sphere's lever arm in world space, which only moves
+   *   as the normal turns: R |dn| < matchDistance however fast it rolls,
+   *   slides or spins (its anchor on the other body moves with the sphere's
+   *   speed, its body-frame anchor with its spin). Between two spheres it is
+   *   the smaller one's arm: a ball of radius r rolling at v over a sphere of
+   *   radius R turns the normal by v h / (R + r) per step, which moves the
+   *   ball's arm r v h / (R + r) but the big sphere's R v h / (R + r), nearly
+   *   v h, so keyed on that one the match was lost above about 3 m/s again;
+   * - between two bodies, gets a load floor (restDepth) of at most
+   *   sqrt(m_a m_b) / h^2 if it moved along its normal by restDepth or more
+   *   last step (|n . J dx|): it was in an impact, not at rest. Matched this
+   *   way, a ball's contact persists through an impact (kept anchors often
+   *   lost it there: the spin and the turning normal moved them past
+   *   matchDistance, and k restarted at penaltyMin), and the full floor
+   *   would read the impact force as a load: k_n of 20 x a 1 kg cube's
+   *   m / h^2. A Gauss-Seidel sweep shrinks the two bodies' disagreement
+   *   about the contact by rho = k^2 / ((k + a)(k + b)), with a = m_a / h^2
+   *   and b = m_b / h^2, near 1 there: uncapped, a 5 kg ball hitting a 1 kg
+   *   cube in zero g at 10 iterations lost 9.0% of the momentum head-on and
+   *   5.1% grazing. With k at most sqrt(ab), rho is at most
+   *   sqrt(ab) / (sqrt a + sqrt b)^2 <= 1/4 for any mass ratio: 0.41% and
+   *   0.11%. (Kept anchors: 9.0% head-on, where the match held, and 0.15%
+   *   grazing, where it broke and k restarted.) Contacts at rest (a resting
+   *   or rolling ball, a ball under a heavy load) and on the ground keep the
+   *   full floor; beta still ramps k in an impact.
+   *   The cost: a heavy ball landing on a light body that rests on something
+   *   else goes deeper, as the light body's own mass understates what backs
+   *   it. A 510 kg steel ball dropped 1 m onto a 1 kg cube on the ground
+   *   reaches 74.7 mm at 10 iterations (19.1 mm with kept anchors and the
+   *   full floor); onto Keystone's 31 kg plaster cube, 24.6 mm (23.5 mm).
+   */
   collide(): void {
     const { p, bodies } = this;
     const old = new Map<string, Contact[]>();
@@ -181,6 +253,11 @@ export class AvbdWorld {
       const prev = old.get(`${a},${b}`) ?? [];
       const taken = new Set<Contact>();
       const A = a === GROUND ? null : bodies[a]!, B = bodies[b]!;
+      // A rolling contact (see above) is matched by a sphere's world lever arm: the smaller sphere's (b's if they are
+      // equal; a box or the ground counts as infinitely large).
+      const roll = p.rollingContacts && (B.desc.shape.kind === 'sphere' || A?.desc.shape.kind === 'sphere');
+      const radius = (s: BodyState | null) => (s?.desc.shape.kind === 'sphere' ? s.desc.shape.radius : Infinity);
+      const onB = radius(B) <= radius(A);
       for (const pt of points) {
         // Surface points: a's is the one further along n (it reaches into b).
         const wa: Vec3 = [pt.point[0] + normal[0] * pt.depth / 2, pt.point[1] + normal[1] * pt.depth / 2, pt.point[2] + normal[2] * pt.depth / 2];
@@ -190,11 +267,14 @@ export class AvbdWorld {
         const [t1, t2] = tangentBasis(normal);
         let lambda: Vec3 = [0, 0, 0], k: Vec3 = [p.penaltyMin, p.penaltyMin, p.penaltyMin], stick = false;
         let best: Contact | null = null, bestD = p.matchDistance;
+        const key = roll ? (onB ? sub3(wb, B.pos) : sub3(wa, A!.pos)) : rb;
         for (const c of prev) {
           if (taken.has(c)) continue;
-          const d = Math.hypot(c.rb[0] - rb[0], c.rb[1] - rb[1], c.rb[2] - rb[2]);
+          const o = roll ? (onB ? c.rbw : c.raw) : c.rb;
+          const d = Math.hypot(o[0] - key[0], o[1] - key[1], o[2] - key[2]);
           if (d < bestD) { best = c; bestD = d; }
         }
+        let slip: [number, number] | null = null;
         if (best) {
           taken.add(best);
           // Friction force as a world vector, re-expressed in the new basis.
@@ -206,12 +286,22 @@ export class AvbdWorld {
           lambda = [best.lambda[0], dot(f, t1), dot(f, t2)];
           const decay = (x: number) => Math.min(p.penaltyMax, Math.max(p.penaltyMin, x * p.gamma));
           k = [decay(best.k[0]), decay(best.k[1]), decay(best.k[2])];
-          if (p.restDepth > 0) k[0] = Math.min(p.penaltyMax, Math.max(k[0], Math.abs(best.lambda[0]) / p.restDepth));
+          if (p.restDepth > 0) {
+            // Load floor. A rolling contact between two bodies that moved along its normal by restDepth
+            // last step was in an impact, not at rest: its floor stops at sqrt(m_a m_b) / h^2 (see above).
+            let floor = Math.abs(best.lambda[0]) / p.restDepth;
+            if (roll && A && Math.abs(dot(best.n, this.moveAfter(best))) >= p.restDepth) floor = Math.min(floor, Math.sqrt(A.mass * B.mass) / (this.scene.dt * this.scene.dt));
+            k[0] = Math.min(p.penaltyMax, Math.max(k[0], floor));
+          }
           if (!p.postStabilize) lambda = [lambda[0] * p.alpha * p.gamma, lambda[1] * p.alpha * p.gamma, lambda[2] * p.alpha * p.gamma];
           // Static friction held at the end of last step: keep its anchors, unless they
           // have drifted apart along the surface by stickThreshold since (as the step's
           // stabilization pass would pull the bodies that far back).
-          if (best.stick) {
+          if (best.stick && roll) {
+            // A rolling contact keeps its fresh points and carries last step's slip as c0_t.
+            const s = this.slipAfter(best), s1 = dot(s, t1), s2 = dot(s, t2);
+            if (Math.hypot(s1, s2) < p.stickThreshold) { stick = true; slip = [s1, s2]; }
+          } else if (best.stick) {
             const pa = A ? add3(A.pos, rotate(A.rot, best.ra)) : best.ra, d = sub3(add3(B.pos, rotate(B.rot, best.rb)), pa);
             if (Math.hypot(dot(d, t1), dot(d, t2)) < p.stickThreshold) { stick = true; ra = best.ra; rb = best.rb; }
           }
@@ -222,6 +312,7 @@ export class AvbdWorld {
         const pa = A ? add3(A.pos, raw!) : ra, pb = add3(B.pos, rbw);
         const d = sub3(pb, pa);
         const c0: Vec3 = [dot(d, normal) + p.slop, dot(d, t1), dot(d, t2)];
+        if (slip) { c0[1] += slip[0]; c0[2] += slip[1]; }
         const ja = new Float64Array(18), jb = new Float64Array(18);
         [normal, t1, t2].forEach((u, r) => {
           const xb = cross(rbw, u);
@@ -231,7 +322,7 @@ export class AvbdWorld {
             ja.set([-u[0], -u[1], -u[2], -xa[0], -xa[1], -xa[2]], 6 * r);
           }
         });
-        out.push({ a, b, ra, rb, n: normal, t1, t2, mu, c0, ja, jb, lambda, k, stick });
+        out.push({ a, b, ra, rb, raw: raw ?? [0, 0, 0], rbw, n: normal, t1, t2, mu, c0, ja, jb, lambda, k, stick });
       }
     };
     // Speculative contacts: each body's margin grows by how far any of its
@@ -267,6 +358,20 @@ export class AvbdWorld {
     this.contacts = out;
     this.stats.contacts = out.length;
     this.stats.manifolds = manifolds;
+  }
+
+  /** How far a contact's point on b moved relative to a's over last step, J dx as a world vector: (dp + phi x r) on b minus a. */
+  moveAfter(c: Contact): Vec3 {
+    const zero = new Float64Array(6);
+    const db = this.lastDx[c.b] ?? zero, da = c.a === GROUND ? zero : this.lastDx[c.a] ?? zero;
+    const ub = add3([db[0]!, db[1]!, db[2]!], cross([db[3]!, db[4]!, db[5]!], c.rbw));
+    const ua = add3([da[0]!, da[1]!, da[2]!], cross([da[3]!, da[4]!, da[5]!], c.raw));
+    return sub3(ub, ua);
+  }
+  /** A contact's slip at the end of last step, as a world vector: its tangential C at the final dx, c0_t + J_t dx. */
+  slipAfter(c: Contact): Vec3 {
+    const u = this.moveAfter(c), s1 = c.c0[1] + dot(c.t1, u), s2 = c.c0[2] + dot(c.t2, u);
+    return [s1 * c.t1[0] + s2 * c.t2[0], s1 * c.t1[1] + s2 * c.t2[1], s1 * c.t1[2] + s2 * c.t2[2]];
   }
 
   step(): void {
@@ -447,6 +552,7 @@ export class AvbdWorld {
       b.pos = [x0[i]![0] + d[0]!, x0[i]![1] + d[1]!, x0[i]![2] + d[2]!];
       b.rot = applyRotation(q0[i]!, [d[3]!, d[4]!, d[5]!]);
     }
+    this.lastDx = dx;
   }
 }
 
