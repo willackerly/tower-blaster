@@ -401,6 +401,37 @@ describe('stacks and towers', () => {
     expect((eMax - e0) / Math.abs(e0)).toBeLessThan(1e-3);
   });
 
+  // A resting stack resists tilting with about iterations x k_n x (lever
+  // arm)^2 per interface. With no error left to ramp k_n, gamma would decay it
+  // every step until the stack leans over by itself, from any seed (here a
+  // 0.1 mm lean, top to bottom); the load floor (restDepth) stops that. Measured
+  // 2026-10-26: 0.14 / 0.07 mm at 10 / 20 iterations with the floor; without
+  // it the column falls (5.7 m by 15 s at both).
+  const leaningColumn = async (params: Partial<AvbdParams>) => {
+    const plaster = (k: number): BodyDesc => ({
+      shape: { kind: 'box', half: [0.25, 0.25, 0.25] }, pos: [1e-5 * k, 0.25 + 0.5 * k, 0], rot: [0, 0, 0, 1],
+      linVel: [0, 0, 0], angVel: [0, 0, 0], density: 250, friction: 0.6, restitution: 0.05, tag: 0,
+    });
+    const scene: SceneDesc = { ...sceneOf(Array.from({ length: 12 }, (_, k) => plaster(k))), frictionCombine: 'min' };
+    const e = new AvbdReferenceEngine(params);
+    await e.init(scene);
+    for (let i = 0; i < 90; i++) e.step();
+    const p0 = e.snapshot().pos.slice();
+    let worst = 0;
+    for (let i = 0; i < 900; i++) {
+      e.step();
+      const p = e.snapshot().pos;
+      for (let b = 0; b < 12; b++) worst = Math.max(worst, Math.hypot(p[3 * b]! - p0[3 * b]!, p[3 * b + 2]! - p0[3 * b + 2]!));
+    }
+    return worst;
+  };
+  it.each([10, 20])('a 12-cube column of 0.5 m cubes, settled with a lean, stands for 15 s at %i iterations', async (iterations) => {
+    expect(await leaningColumn({ iterations })).toBeLessThan(1e-3);
+  });
+  it('without the load floor that column falls over', async () => {
+    expect(await leaningColumn({ restDepth: 0 })).toBeGreaterThan(1);
+  });
+
   // Same scene in Rapier: survival 0.30, ball rebounds at -4.1 m/s, worst
   // transient penetration 0.14 (cubes falling at 12-15 m/s move 0.25 per step).
   const knockdown = async (params: Partial<AvbdParams>, speed = 15) => {
