@@ -1,6 +1,7 @@
 // What the result needs to say about where it ran. A timing result is only
 // valid when the timer is fine-grained and, for GPU engines, the adapter is
 // real hardware.
+import { isSoftwareAdapter } from '@tb/gpu';
 
 export interface BrowserEnv {
   userAgent: string;
@@ -29,11 +30,10 @@ export async function browserEnv(): Promise<BrowserEnv> {
     const a = await navigator.gpu.requestAdapter({ powerPreference: 'high-performance' });
     if (a) {
       const i = a.info;
-      const text = `${i.vendor} ${i.architecture} ${i.description} ${i.device}`;
       gpu = {
         vendor: i.vendor, architecture: i.architecture, description: i.description, device: i.device,
         features: [...a.features] as string[],
-        software: /swiftshader|llvmpipe|lavapipe|software/i.test(text) || ('isFallbackAdapter' in i && Boolean((i as { isFallbackAdapter?: boolean }).isFallbackAdapter)),
+        software: isSoftwareAdapter(i),
       };
     }
   }

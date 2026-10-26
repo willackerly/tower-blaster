@@ -9,7 +9,7 @@
 // (CLAUDE.md); the result records whether the adapter is software.
 import { BandwidthProbe } from './bandwidth.ts';
 import { Compactor } from './compact.ts';
-import { createDevice, readBuffer, uploadU32 } from './device.ts';
+import { createDevice, isSoftwareAdapter, readBuffer, uploadU32 } from './device.ts';
 import { GpuProfiler, timeSubmit } from './profiler.ts';
 import { RadixSorter } from './radix-sort.ts';
 import { Readback } from './readback.ts';
@@ -194,7 +194,7 @@ export async function runGpuBench(opts: Partial<GpuBenchOptions> = {}): Promise<
 
   prof.destroy();
   const info = adapter.info;
-  const software = /swiftshader|llvmpipe|lavapipe|software/i.test(`${info.vendor} ${info.architecture} ${info.description}`);
+  const software = isSoftwareAdapter(info);
   const result: GpuBenchResult = {
     adapter: { vendor: info.vendor, architecture: info.architecture, description: info.description },
     software,

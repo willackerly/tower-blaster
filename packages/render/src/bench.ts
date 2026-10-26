@@ -22,7 +22,7 @@
 // Variants change one thing at a time, so their difference from "full" is
 // that thing's marginal cost: shadow, post, and the box paths.
 import { emptySnapshot, type BodyDesc } from '@tb/engine-api';
-import { createDevice, GpuProfiler, readBuffer } from '@tb/gpu';
+import { createDevice, GpuProfiler, isSoftwareAdapter, readBuffer } from '@tb/gpu';
 import { bootstrapCI, pairedPercentDiff, quantile, verdict } from '@tb/metrics';
 import { lookAt, multiply, perspective, type V3 } from './math.ts';
 import { Renderer, type FrameParams, type RendererOptions } from './renderer.ts';
@@ -156,7 +156,7 @@ export async function runRenderBench(opts: Partial<RenderBenchOptions> = {}): Pr
   const { device, adapter, timestamps } = await createDevice({ timestamps: true });
   const info = adapter.info;
   const name = `${info.vendor} ${info.architecture} ${info.description}`.trim();
-  const software = /swiftshader|llvmpipe|lavapipe|software/i.test(name) || (adapter as GPUAdapter & { isFallbackAdapter?: boolean }).isFallbackAdapter === true;
+  const software = isSoftwareAdapter(info) || (adapter as GPUAdapter & { isFallbackAdapter?: boolean }).isFallbackAdapter === true;
   const cases: RenderCase[] = [];
   for (const worldName of o.worlds) for (const n of o.counts) {
     const w = buildWorld(worldName, n);

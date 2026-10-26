@@ -573,16 +573,26 @@ export interface SolverDispatch {
   /** The previous dispatch, for timing it against: colours 0-62 by indirect dispatch, sized by the colouring. Colour 63 still goes to the tail. */
   indirectColors: boolean;
   /**
-   * The tail workgroup's size, 1-256. Default 64: at most 2 strides for the
-   * largest tail colour measured so far; and on SwiftShader a 256-thread tail
-   * measured about 0.9 ms per dispatch, which slowed the GPU tests by a fifth.
+   * The tail workgroup's size, 1-256. Default 256 (MAX_TAIL) on a hardware GPU:
+   * on the M5 Max it was never slower than 64, and late in the 10k city, where
+   * the colours from 8 up hold hundreds of bodies, it saved 5.6 ms a step.
+   * SOFTWARE_TAIL_THREADS on a software adapter, where a 256-thread tail
+   * measured about 0.9 ms per dispatch and slowed the GPU tests by a fifth.
    * 1 makes the tail serial; with colorTail 0 the whole sweep is then serial,
    * which the tests use as an oracle for every other split.
    */
   tailThreads: number;
 }
 
-export const DEFAULT_DISPATCH: SolverDispatch = { colorTail: 8, indirectColors: false, tailThreads: 64 };
+export const DEFAULT_DISPATCH: SolverDispatch = { colorTail: 8, indirectColors: false, tailThreads: MAX_TAIL };
+
+/** The default tail width on a software adapter (SwiftShader in tests and CI); see SolverDispatch.tailThreads. */
+export const SOFTWARE_TAIL_THREADS = 64;
+
+/** The default tail width for an adapter: every width gives the same result, so this only sets the speed. */
+export function defaultTailThreads(software: boolean): number {
+  return software ? SOFTWARE_TAIL_THREADS : DEFAULT_DISPATCH.tailThreads;
+}
 
 export interface SolverBuffers {
   bodies: GPUBuffer;
