@@ -141,14 +141,33 @@ export interface FreeHooks {
   now(): number;
   /** The scene's dt in ms (a reset can change it). */
   dtMs(): number;
-  /** Run a reset if one was asked for (here, because this loop owns the engine); resolves whether it did. */
-  resetIfAsked(): Promise<boolean>;
-  /** One step: submit it, wait until it has run, and record its time. */
+  /** Whether a reset was asked for. It runs here, because this loop owns the engine. */
+  resetAsked(): boolean;
+  /** Run it (after every read in flight has landed). */
+  reset(): Promise<void>;
+  /** Submit one step (a CPU engine runs it here). */
   step(): Promise<void>;
-  /** Read the new state back for the renderer. */
-  refresh(): Promise<void>;
-  /** True when step() and refresh() wait on the GPU, which hands control back to the event loop. */
+  /** Resolves when every step submitted so far has run (a GPU engine's finish(); at once for a CPU engine). */
+  finish(): Promise<void>;
+  /**
+   * One step's time, ms, for the HUD. overlapped: the step was submitted
+   * before the one before it reported done, so it queued behind it (see
+   * runFree for what the time then measures).
+   */
+  record(ms: number, overlapped: boolean): void;
+  /**
+   * Read the newest state back and hand it to the renderer; resolves with the
+   * time it landed. The read is queued behind the steps submitted so far
+   * before this returns, so a step submitted after the call does not delay
+   * it (Readback.read). Pipelined, done resolves with the time the step this
+   * read follows was done: the read waits behind that step, so its own time
+   * (the HUD's snapshot + upload) counts from then, not from the call.
+   */
+  refresh(done?: Promise<number>): Promise<number>;
+  /** True when finish() and refresh() wait on the GPU, which hands control back to the event loop. */
   yields(): boolean;
+  /** Whether to pipeline (see runFree): GPU engines, unless the URL says pipeline=0. */
+  pipeline(): boolean;
   nextFrame(): Promise<void>;
   /** A task boundary (see taskYield). */
   nextTask(): Promise<void>;
@@ -167,6 +186,31 @@ export interface FreeHooks {
  * then takes a second step, the next frame finds none due, and a display
  * slightly slower than 60 Hz (59.94) locks into 0, 2, 0, 2 steps a frame.
  * Once a dt has passed the engine is behind, and now is the right time to ask.
+ *
+ * Pipelining (GPU engines). Serially, each step waits for the GPU and then
+ * for its read-back before the next is submitted, and the GPU idles through
+ * both round trips and the next step's encoding: on the M5 at 10k cubes,
+ * compute was busy 81.5% of the time. Pipelined, each step's read is queued
+ * right behind it and lands on its own (refresh hands it to the renderer when
+ * it does); the loop then waits only for the read of the step before. So a
+ * step that is behind is submitted while the one before it still runs, and
+ * at most two steps are queued; a step that is not behind finds that read
+ * landed long ago, and the newest state shows as soon as it would serially.
+ * The cost: while behind, a click lands in the step after the queued one, one
+ * step later than serially.
+ *
+ * Step times come from finish() per step. Pipelined, a step is timed from
+ * the later of its submit (after encoding) and the step before's reported
+ * done, to its own reported done: the GPU cannot start it before either. Each
+ * done is reported L (callback latency) after the GPU's, so a step queued
+ * behind a running one reads exactly its GPU time G, and any other reads at
+ * most G + L. (Timing from before encoding instead pinned steps near dt to
+ * the frame cadence, and classifying steps by whether the loop waited for a
+ * frame misread steps that queue behind a running one at a frame: 75, 90 and
+ * 144 Hz displays, engines slightly behind.) Serially a step is timed from
+ * before encoding to done, E + G + L, as loop=frame and the bench's latency
+ * mode time it. A step that fails (finish() rejects) fails its read too, as
+ * serially.
  */
 export async function runFree(h: FreeHooks, pacer: Pacer, arrivals: Arrivals): Promise<void> {
   const restart = () => {
@@ -174,30 +218,70 @@ export async function runFree(h: FreeHooks, pacer: Pacer, arrivals: Arrivals): P
     Object.assign(arrivals, newArrivals());
   };
   let wake = h.now();
-  while (h.running()) {
-    if (await h.resetIfAsked()) {
-      restart();
-      continue;
+  // Pipelined: the newest read in flight (the ones before it land first), and when the last step finished.
+  let inflight: Promise<void> | null = null;
+  let lastDone = NaN;
+  const drain = async () => {
+    const r = inflight;
+    inflight = null;
+    if (r) await r;
+  };
+  try {
+    while (h.running()) {
+      if (h.resetAsked()) {
+        // A read landing after the reset would hand the old engine's state to the new scene.
+        await drain();
+        await h.reset();
+        restart();
+        lastDone = NaN;
+        continue;
+      }
+      if (h.paused()) {
+        // Owed time from before the pause is not owed: resume with one step, not a burst. The reads
+        // in flight land first, so neither they nor the pause count as a gap between arrivals: a
+        // hidden tab gets no frames, so this restart may be the only one until it is shown again.
+        await drain();
+        restart();
+        await h.nextFrame();
+        wake = h.now();
+        continue;
+      }
+      const now = h.now(), dtMs = h.dtMs();
+      if (!stepDue(pacer, now - wake < dtMs ? wake : now, dtMs)) {
+        await h.nextFrame();
+        wake = h.now();
+        continue;
+      }
+      const t0 = h.now();
+      await h.step();
+      stepped(pacer, dtMs);
+      if (h.pipeline()) {
+        const submitted = h.now();
+        const done = h.finish().then(() => h.now());
+        void done.then((t) => {
+          const overlapped = lastDone > submitted;
+          h.record(t - (overlapped ? lastDone : submitted), overlapped);
+          lastDone = t;
+        }, () => {}); // the read below fails with it
+        const read = Promise.all([h.refresh(done), done]).then(([at]) => arrived(arrivals, at, dtMs));
+        // Awaited below or by drain(); until then a read that fails must not count as unhandled.
+        read.catch(() => {});
+        const before = inflight;
+        inflight = read;
+        if (before) await before;
+        continue;
+      }
+      await h.finish();
+      h.record(h.now() - t0, false);
+      arrived(arrivals, await h.refresh(), h.dtMs());
+      if (!h.yields()) await h.nextTask();
     }
-    if (h.paused()) {
-      // Owed time from before the pause is not owed: resume with one step, not a burst.
-      restart();
-      await h.nextFrame();
-      wake = h.now();
-      continue;
-    }
-    const now = h.now(), dtMs = h.dtMs();
-    if (!stepDue(pacer, now - wake < dtMs ? wake : now, dtMs)) {
-      await h.nextFrame();
-      wake = h.now();
-      continue;
-    }
-    await h.step();
-    stepped(pacer, h.dtMs());
-    await h.refresh();
-    arrived(arrivals, h.now(), h.dtMs());
-    if (!h.yields()) await h.nextTask();
+  } catch (e) {
+    // Let the read in flight settle, so none lands after the loop has ended; the first error is the one thrown.
+    await inflight?.catch(() => {});
+    throw e;
   }
+  await drain();
 }
 
 /**

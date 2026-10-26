@@ -29,13 +29,19 @@ export interface ViewerConfig {
    * steps, waits for the snapshot, then renders (stepsDue), as before.
    */
   loop: 'free' | 'frame';
+  /**
+   * loop=free with a GPU engine: while physics is behind, queue each step
+   * behind the read-back of the one before, so the GPU never waits for the
+   * page (runFree). pipeline=0 turns it off.
+   */
+  pipeline: boolean;
   /** loop=frame only: most physics steps per frame, 1 to MAX_STEPS_LIMIT (see stepsDue); 1 = no catch-up. */
   maxSteps: number;
   /** What a click fires. */
   projectile: Projectile;
 }
 
-export const DEFAULT_CONFIG: ViewerConfig = { engine: 'avbd-gpu', scenario: 'S4', params: { N: 2000, F: 4, H: 12 }, seed: 1, sleep: null, autofire: 0, offscreen: false, look: 'candy', real: {}, loop: 'free', maxSteps: 1, projectile: DEFAULT_PROJECTILE };
+export const DEFAULT_CONFIG: ViewerConfig = { engine: 'avbd-gpu', scenario: 'S4', params: { N: 2000, F: 4, H: 12 }, seed: 1, sleep: null, autofire: 0, offscreen: false, look: 'candy', real: {}, loop: 'free', pipeline: true, maxSteps: 1, projectile: DEFAULT_PROJECTILE };
 
 export function parseViewerConfig(search: string): ViewerConfig {
   const q = new URLSearchParams(search);
@@ -57,6 +63,9 @@ export function parseViewerConfig(search: string): ViewerConfig {
   const loop = q.get('loop') ?? (q.has('maxSteps') ? 'frame' : DEFAULT_CONFIG.loop);
   if (loop !== 'free' && loop !== 'frame') throw new Error(`loop must be free or frame: ${loop}`);
   if (loop === 'free' && maxSteps !== DEFAULT_CONFIG.maxSteps) throw new Error('maxSteps applies to loop=frame; loop=free catches up on its own');
+  const pipeline = q.get('pipeline') ?? '1';
+  if (pipeline !== '0' && pipeline !== '1') throw new Error(`pipeline must be 0 or 1: ${pipeline}`);
+  if (loop === 'frame' && pipeline === '0') throw new Error('pipeline applies to loop=free');
   return {
     engine: q.get('engine') ?? DEFAULT_CONFIG.engine,
     scenario,
@@ -68,6 +77,7 @@ export function parseViewerConfig(search: string): ViewerConfig {
     look,
     real: parseRealOptions(q),
     loop,
+    pipeline: pipeline === '1',
     maxSteps,
     projectile: parseProjectile(q),
   };
@@ -83,15 +93,16 @@ export function toSearch(c: ViewerConfig): string {
   if (c.look !== DEFAULT_CONFIG.look) q.set('look', c.look);
   writeRealOptions(c.real, q);
   if (c.loop !== DEFAULT_CONFIG.loop) q.set('loop', c.loop);
+  if (c.pipeline !== DEFAULT_CONFIG.pipeline) q.set('pipeline', c.pipeline ? '1' : '0');
   if (c.maxSteps !== DEFAULT_CONFIG.maxSteps) q.set('maxSteps', String(c.maxSteps));
   writeProjectile(c.projectile, q);
   return `?${q}`;
 }
 
-/** A preset's search with how the viewer runs (engine, loop), the projectile and the look kept, which is where its button takes you. */
-export function presetSearch(preset: string, cur: Pick<ViewerConfig, 'engine' | 'loop' | 'maxSteps' | 'projectile'> & Partial<Pick<ViewerConfig, 'look' | 'real'>>): string {
-  const { engine, loop, maxSteps, projectile, look = DEFAULT_CONFIG.look, real = {} } = cur;
-  return toSearch({ ...parseViewerConfig(preset), engine, loop, maxSteps, projectile, look, real });
+/** A preset's search with how the viewer runs (engine, loop, pipeline), the projectile and the look kept, which is where its button takes you. */
+export function presetSearch(preset: string, cur: Pick<ViewerConfig, 'engine' | 'loop' | 'pipeline' | 'maxSteps' | 'projectile'> & Partial<Pick<ViewerConfig, 'look' | 'real'>>): string {
+  const { engine, loop, pipeline, maxSteps, projectile, look = DEFAULT_CONFIG.look, real = {} } = cur;
+  return toSearch({ ...parseViewerConfig(preset), engine, loop, pipeline, maxSteps, projectile, look, real });
 }
 
 /** Bodies fired balls may add on the engines whose id tables are sized at init (GPU AVBD, the tiers). */

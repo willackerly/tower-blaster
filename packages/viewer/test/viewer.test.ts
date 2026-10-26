@@ -136,56 +136,118 @@ describe('stepsDue', () => {
 });
 
 /**
+ * A virtual clock for async code: wait(at) resolves when the clock reaches
+ * at. run() lets every microtask settle, then moves the clock to the earliest
+ * wait and resolves it, until the driven promise settles.
+ */
+function virtualClock() {
+  let t = 0;
+  const waits: Array<{ at: number; seq: number; resolve: () => void }> = [];
+  let seq = 0;
+  return {
+    now: () => t,
+    wait: (at: number) => new Promise<void>((resolve) => { waits.push({ at: Math.max(at, t), seq: seq++, resolve }); }),
+    async run(p: Promise<unknown>) {
+      let settled = false;
+      const done = p.then(() => { settled = true; }, (e) => { settled = true; throw e; });
+      for (;;) {
+        await new Promise((r) => setImmediate(r));
+        if (settled) return done;
+        if (!waits.length) throw new Error('virtualClock: nothing to wait for (deadlock)');
+        waits.sort((a, b) => a.at - b.at || a.seq - b.seq);
+        const w = waits.shift()!;
+        t = w.at;
+        w.resolve();
+      }
+    },
+  };
+}
+
+/**
  * The viewer's loop=free schedule on a virtual clock: runFree (as main.ts
- * runs it) with display frames at phaseMs + k periodMs (plus jitter); each
- * step costs stepMs and its snapshot snapMs. Frames in `gaps` never fire (a
- * hidden tab); frames in `paused` find the loop paused. Each frame draws the
- * two newest snapshots at alphaAt; `shown` is the step it draws, (newest - 1)
- * + alpha, and `simSpeed` what the frame loop's trackSimSpeed reads at the end.
+ * runs it, for a GPU engine) with display frames at phaseMs + k periodMs (plus
+ * jitter). step() takes encodeMs of CPU time, then submits; the GPU runs
+ * submitted steps one after another, each taking stepMs(i) of GPU time, and
+ * finish() reports done callbackMs after the GPU is. A read lands snapMs after
+ * the work queued before it is done (read-back, callback and upload), and is
+ * timed as main.ts times it: from the call, or from when its step was done if
+ * that was later (`readMs`). Frames in `gaps` never fire (a hidden tab);
+ * from frame paused[0] to paused[1] the loop is paused. Each frame draws the
+ * two newest reads at alphaAt: `shown` is the step it draws, interpolated
+ * between the steps those reads hold; `perFrame` the steps newly shown;
+ * `simSpeed` what the frame loop's trackSimSpeed reads at the end; `recorded`
+ * the step times runFree recorded; `busy` the fraction of time the GPU ran.
  */
 async function simulateFree(o: {
-  periodMs: number; stepMs: number; snapMs?: number; frames: number; phaseMs?: number;
-  jitter?: (k: number) => number; gaps?: Array<[number, number]>; paused?: [number, number];
+  periodMs: number; stepMs: number | ((i: number) => number); snapMs?: number; frames: number; phaseMs?: number; pipeline?: boolean;
+  encodeMs?: number; callbackMs?: number; jitter?: (k: number) => number; gaps?: Array<[number, number]>; paused?: [number, number];
 }) {
   const dtMs = 1000 / 60;
+  const clock = virtualClock();
   const frameAt = (k: number) => (o.phaseMs ?? 0) + k * o.periodMs + (o.jitter?.(k) ?? 0);
   const skipped = (k: number) => (o.gaps ?? []).some(([from, to]) => k >= from && k < to);
-  const done: number[] = []; // completion time of each step
-  let t = 0, waits = 0, k = 0;
+  const cost = (i: number) => (typeof o.stepMs === 'number' ? o.stepMs : o.stepMs(i));
+  const reads: Array<{ at: number; step: number }> = [];
+  const recorded: Array<{ ms: number; overlapped: boolean }> = [];
+  const subs: number[] = [], doneAt: number[] = [], readMs: number[] = []; // when each step was submitted, and when it was done
+  let waits = 0, k = 0, submitted = 0, gpu = 0, gpuBusy = 0;
   const end = frameAt(o.frames);
-  await runFree({
-    running: () => t < end,
-    // k is the frame the loop last woke on.
-    paused: () => !!o.paused && k >= o.paused[0] && k < o.paused[1],
-    now: () => t,
+  await clock.run(runFree({
+    running: () => clock.now() < end,
+    paused: () => !!o.paused && clock.now() >= frameAt(o.paused[0]) && clock.now() < frameAt(o.paused[1]),
+    now: clock.now,
     dtMs: () => dtMs,
-    resetIfAsked: async () => false,
-    step: async () => { t += o.stepMs; },
-    refresh: async () => { t += o.snapMs ?? 0; done.push(t); },
+    resetAsked: () => false,
+    reset: async () => {},
+    step: async () => {
+      if (o.encodeMs) await clock.wait(clock.now() + o.encodeMs);
+      subs.push(clock.now());
+      const c = cost(submitted++);
+      gpu = Math.max(gpu, clock.now()) + c;
+      gpuBusy += c;
+      doneAt.push(gpu);
+    },
+    finish: () => clock.wait(gpu + (o.callbackMs ?? 0)),
+    record: (ms, overlapped) => { recorded.push({ ms, overlapped }); },
+    refresh: async (done) => {
+      const t0 = clock.now(), at = Math.max(gpu, t0) + (o.snapMs ?? 0), step = submitted;
+      await clock.wait(at);
+      reads.push({ at, step });
+      readMs.push(at - Math.max(t0, done ? await done : t0));
+      return at;
+    },
     yields: () => true,
-    nextFrame: async () => {
-      while (frameAt(k) <= t || skipped(k)) k++;
-      t = frameAt(k);
+    pipeline: () => !!o.pipeline,
+    nextFrame: () => {
+      while (frameAt(k) <= clock.now() || skipped(k)) k++;
       waits++;
+      return clock.wait(frameAt(k));
     },
     nextTask: async () => {},
-  }, newPacer(), newArrivals());
-  // Frames: steps completed since the previous frame, and the step drawn.
+  }, newPacer(), newArrivals()));
+  // Frames: steps newly shown since the previous frame, and the step drawn.
   const perFrame: number[] = [], shown: number[] = [];
   const replay = newArrivals();
-  const clock = newClock();
-  let j = 0, last = 0;
+  const speed = newClock();
+  let j = 0, last = 0, prevShown = 0;
   for (let f = 0; f < o.frames; f++) {
     if (skipped(f)) continue;
     const now = frameAt(f);
-    let n = 0;
-    while (j < done.length && done[j]! <= now) { arrived(replay, done[j]!, dtMs); j++; n++; }
-    perFrame.push(n);
-    shown.push(j === 0 ? 0 : j - 1 + alphaAt(replay, now, dtMs));
-    if (f > 0) trackSimSpeed(clock, n, now - last, 1 / 60);
+    while (j < reads.length && reads[j]!.at <= now) { arrived(replay, reads[j]!.at, dtMs); j++; }
+    const newest = j ? reads[j - 1]!.step : 0, before = j > 1 ? reads[j - 2]!.step : 0;
+    perFrame.push(newest - prevShown);
+    if (f > 0) trackSimSpeed(speed, newest - prevShown, now - last, 1 / 60);
+    prevShown = newest;
+    shown.push(j === 0 ? 0 : before + (newest - before) * alphaAt(replay, now, dtMs));
     last = now;
   }
-  return { steps: done.length, waits, perFrame, shown, dtMs, simSpeed: clock.simSpeed };
+  const newestAt = (f: number) => reads.filter((r) => r.at <= frameAt(f)).at(-1)?.step ?? 0;
+  const submittedBy = (f: number) => subs.filter((x) => x <= frameAt(f)).length;
+  return {
+    steps: submitted, shownSteps: reads.at(-1)?.step ?? 0, reads: reads.length, waits, perFrame, shown, dtMs, simSpeed: speed.simSpeed,
+    // GPU time inside [0, end]: the work still queued at end runs back to back until gpu.
+    recorded, busy: (gpuBusy - Math.max(0, gpu - end)) / end, newestAt, submittedBy, frameAt, landed: reads, doneAt, readMs,
+  };
 }
 
 /** Deterministic jitter in [-amp, amp] ms. */
@@ -213,38 +275,164 @@ describe('free loop (stepDue, alphaAt)', () => {
     expect(r.perFrame.slice(1).every((n) => n === 1)).toBe(true);
     expect(r.steps).toBeGreaterThanOrEqual(599);
     expect(r.steps).toBeLessThanOrEqual(601);
+    // An engine that keeps up gains nothing from pipelining, and loses nothing either: every frame
+    // shows the same steps at the same pose, and no step is queued behind another.
+    const p = await simulateFree({ periodMs: dtMs, stepMs: 2, snapMs: 0.5, frames: 600, jitter: jitter(1.5), pipeline: true });
+    expect(p.perFrame).toEqual(r.perFrame);
+    expect(p.shown).toEqual(r.shown);
+    expect(p.recorded.some((x) => x.overlapped)).toBe(false);
+    expect(p.recorded.every((x) => Math.abs(x.ms - 2) < 1e-9)).toBe(true);
   });
   it('a fast engine on a 120 Hz display steps every other frame, and sim speed reads real time', async () => {
-    const r = await simulateFree({ periodMs: 1000 / 120, stepMs: 2, frames: 1200 });
-    expect(Math.max(...r.perFrame)).toBe(1);
-    expect(r.steps).toBeGreaterThanOrEqual(599);
-    expect(r.steps).toBeLessThanOrEqual(601);
-    expect(r.simSpeed).toBeGreaterThan(0.98);
+    for (const pipeline of [false, true]) {
+      const r = await simulateFree({ periodMs: 1000 / 120, stepMs: 2, frames: 1200, pipeline });
+      expect(Math.max(...r.perFrame)).toBe(1);
+      expect(r.steps).toBeGreaterThanOrEqual(599);
+      expect(r.steps).toBeLessThanOrEqual(601);
+      expect(r.simSpeed).toBeGreaterThan(0.98);
+    }
   });
   it('a display slightly slower than 60 Hz (59.94) gets one step a frame, plus one extra every ~1000 frames, from any start phase', async () => {
     for (const phaseMs of [0, 3, 10, 14, 16]) {
-      // A 9 ms step: finishing it inside the frame must not make the next step due in the same frame.
-      const r = await simulateFree({ periodMs: 1000 / 59.94, phaseMs, stepMs: 8, snapMs: 1, frames: 2000 });
-      // (Frame 1 can come before the second step is due: physics starts phaseMs before frame 0.)
-      const odd = r.perFrame.slice(2).filter((n) => n !== 1);
-      // 2000 frames at 59.94 Hz are 2002 steps of real time: two frames of 2, never a 0, 2, 0, 2 lock.
-      expect(odd.every((n) => n === 2)).toBe(true);
-      expect(odd.length).toBeLessThanOrEqual(3);
-      expect(r.simSpeed).toBeGreaterThan(0.99);
+      const runs = [];
+      for (const pipeline of [false, true]) {
+        // A 9 ms step: finishing it inside the frame must not make the next step due in the same frame.
+        const r = await simulateFree({ periodMs: 1000 / 59.94, phaseMs, stepMs: 8, snapMs: 1, frames: 2000, pipeline });
+        // (Frame 1 can come before the second step is due: physics starts phaseMs before frame 0.)
+        const odd = r.perFrame.slice(2).filter((n) => n !== 1);
+        // 2000 frames at 59.94 Hz are 2002 steps of real time: two frames of 2, never a 0, 2, 0, 2 lock.
+        expect(odd.every((n) => n === 2)).toBe(true);
+        expect(odd.length).toBeLessThanOrEqual(3);
+        expect(r.simSpeed).toBeGreaterThan(0.99);
+        runs.push(r);
+      }
+      // Pipelined, a frame's second step is queued behind its first rather than after its read, so it
+      // can land a little sooner (the snapshot time); never later.
+      const [serial, piped] = runs as [typeof runs[0], typeof runs[0]];
+      expect(piped.perFrame).toEqual(serial.perFrame);
+      for (let f = 0; f < 2000; f++) {
+        expect(piped.newestAt(f)).toBeGreaterThanOrEqual(serial.newestAt(f));
+        expect(Math.abs(piped.shown[f]! - serial.shown[f]!)).toBeLessThan(0.1);
+      }
     }
   });
   it('a fast engine on a 30 Hz display takes two steps per frame, so the sim keeps real time (loop=frame runs at half speed there)', async () => {
-    const r = await simulateFree({ periodMs: 1000 / 30, stepMs: 2, frames: 300 });
-    // Frame 1 shows the first step only (taken at t = 0); from then on two per frame.
-    expect(r.perFrame.slice(0, 2)).toEqual([0, 1]);
-    expect(r.perFrame.slice(2).every((n) => n === 2)).toBe(true);
-    expect(r.steps).toBeGreaterThanOrEqual(599);
+    for (const pipeline of [false, true]) {
+      const r = await simulateFree({ periodMs: 1000 / 30, stepMs: 2, frames: 300, pipeline });
+      // Frame 1 shows the first step only (taken at t = 0); from then on two per frame.
+      expect(r.perFrame.slice(0, 2)).toEqual([0, 1]);
+      expect(r.perFrame.slice(2).every((n) => n === 2)).toBe(true);
+      expect(r.steps).toBeGreaterThanOrEqual(599);
+      // Every step is read back on its own and timed at its GPU time. Pipelined, a frame's second
+      // step is submitted at once and queued behind its first (overlapped); serially, after it.
+      expect(r.reads).toBe(r.steps);
+      expect(r.recorded.every((x) => Math.abs(x.ms - 2) < 1e-9)).toBe(true);
+      expect(r.recorded.filter((x) => x.overlapped).length).toBe(pipeline ? Math.floor(r.steps / 2) : 0);
+    }
   });
   it('a slow engine steps back to back and never waits for a frame: sim speed is dt / (step + snapshot)', async () => {
     const r = await simulateFree({ periodMs: dtMs, stepMs: 18, snapMs: 2, frames: 600 });
     expect(r.waits).toBe(0);
     expect(r.steps).toBe(500);
     expect(Math.abs(r.simSpeed - dtMs / 20)).toBeLessThan(1 / 60 / SIM_SPEED_TAU);
+  });
+  it('pipelined, a GPU engine that is behind keeps the GPU busy: sim speed dt / step instead of dt / (step + read)', async () => {
+    const serial = await simulateFree({ periodMs: dtMs, stepMs: 18, snapMs: 2, frames: 1200 });
+    const piped = await simulateFree({ periodMs: dtMs, stepMs: 18, snapMs: 2, frames: 1200, pipeline: true });
+    expect(serial.busy).toBeCloseTo(0.9, 2);
+    expect(piped.busy).toBeGreaterThan(0.999);
+    expect(serial.steps).toBe(1000);
+    // Steps run back to back from t = 0, plus at most two queued at the end.
+    const end = 1200 * dtMs;
+    expect(piped.steps - Math.floor(end / 18)).toBeGreaterThanOrEqual(0);
+    expect(piped.steps - Math.floor(end / 18)).toBeLessThanOrEqual(2);
+    expect(Math.abs(piped.simSpeed - dtMs / 18)).toBeLessThan(1 / 60 / SIM_SPEED_TAU);
+    // At most two steps are queued past the newest read: one running, one waiting behind it.
+    let most = 0;
+    for (let f = 0; f < 1200; f++) most = Math.max(most, piped.submittedBy(f) - piped.newestAt(f));
+    expect(most).toBe(2);
+    // Each step's read is queued right behind it, so it lands snapMs after the step is done, as serially.
+    expect(piped.landed.length).toBe(piped.steps);
+    expect(piped.landed.every((r) => r.at === piped.doneAt[r.step - 1]! + 2)).toBe(true);
+    // Every step queues behind the one before (at frames at first, then as soon as the read before
+    // lands), except step 0 and step 12, where a read landed right on a frame and the GPU idled
+    // 0.7 ms. Each is timed at its GPU time.
+    expect(piped.recorded.length).toBe(piped.steps);
+    expect(piped.recorded.every((x) => Math.abs(x.ms - 18) < 1e-9)).toBe(true);
+    expect(piped.recorded.flatMap((x, i) => (x.overlapped ? [] : [i]))).toEqual([0, 12]);
+    expect(serial.recorded.every((x) => !x.overlapped && Math.abs(x.ms - 18) < 1e-9)).toBe(true);
+    // A read is timed from when its step was done, so pipelined and serial both read the 2 ms it takes.
+    expect(piped.readMs.every((x) => Math.abs(x - 2) < 1e-9)).toBe(true);
+    expect(serial.readMs.every((x) => Math.abs(x - 2) < 1e-9)).toBe(true);
+    // Stopping waits for the reads in flight: the last read holds every step.
+    expect(piped.shownSteps).toBe(piped.steps);
+    // Motion stays smooth: every frame advances the drawn step by dt / 18.
+    const d = piped.shown.slice(120).map((x, i, xs) => (i ? x - xs[i - 1]! : dtMs / 18)).slice(1);
+    expect(Math.min(...d)).toBeCloseTo(dtMs / 18, 6);
+    expect(Math.max(...d)).toBeCloseTo(dtMs / 18, 6);
+  });
+  it('pipelined, an engine whose step fits dt but whose step + read does not keeps real time, one step a frame', async () => {
+    // 16 ms on the GPU plus a 2 ms read: serially 18 ms a step, so slow motion and a frame with no new step every ~13.
+    const serial = await simulateFree({ periodMs: dtMs, stepMs: 16, snapMs: 2, frames: 1200 });
+    const piped = await simulateFree({ periodMs: dtMs, stepMs: 16, snapMs: 2, frames: 1200, pipeline: true });
+    expect(Math.abs(serial.simSpeed - dtMs / 18)).toBeLessThan(1 / 60 / SIM_SPEED_TAU);
+    expect(serial.perFrame.slice(60).filter((n) => n === 0).length).toBeGreaterThan(60);
+    expect(piped.simSpeed).toBeGreaterThan(0.99);
+    expect(piped.perFrame.slice(2).every((n) => n === 1)).toBe(true);
+    // Each frame's step is submitted when the frame wakes, so it never waits behind the one before.
+    expect(piped.recorded.some((x) => x.overlapped)).toBe(false);
+    expect(piped.busy).toBeCloseTo(16 / dtMs, 2);
+  });
+  it('pipelined, every step is timed within one callback latency of its GPU time, queued or not, on any display', async () => {
+    // 1 ms to encode, each done reported 1.5 ms late (L), reads 1.8 ms after the GPU.
+    const L = 1.5;
+    const o = { snapMs: 1.8, encodeMs: 1, callbackMs: L, frames: 600, pipeline: true };
+    const cases: Array<{ hz: number; stepMs: number | ((i: number) => number); gaps?: Array<[number, number]> }> = [
+      // Keeping up, near dt (where timing from before encoding pinned steps to dt), slightly and well behind.
+      ...[5, 13, 15, 16, 16.8, 18, 25].flatMap((stepMs) => [60, 75, 90, 120, 144].map((hz) => ({ hz, stepMs }))),
+      // Fast and slow steps in turn; a 120 ms stall.
+      { hz: 60, stepMs: (i: number) => (i % 2 ? 25 : 5) },
+      { hz: 60, stepMs: (i: number) => (i === 100 ? 120 : 10) },
+      // Steps faster than their reads, in a catch-up burst after frames stop.
+      { hz: 60, stepMs: 0.5, gaps: [[30, 34]] },
+    ];
+    for (const c of cases) {
+      const r = await simulateFree({ ...o, ...c, periodMs: 1000 / c.hz });
+      const gpu = (i: number) => (typeof c.stepMs === 'number' ? c.stepMs : c.stepMs(i));
+      const off = r.recorded.flatMap((x, i) => (x.ms >= gpu(i) - 1e-9 && x.ms <= gpu(i) + L + 1e-9 ? [] : [{ i, ...x, gpu: gpu(i) }]));
+      expect({ hz: c.hz, off: off.slice(0, 3) }).toEqual({ hz: c.hz, off: [] });
+    }
+    // Steps that keep up at 60 Hz are not queued; steps well behind always are, and read exactly G.
+    const fast = await simulateFree({ ...o, periodMs: dtMs, stepMs: 13 });
+    expect(fast.recorded.some((x) => x.overlapped)).toBe(false);
+    const behind = await simulateFree({ ...o, periodMs: dtMs, stepMs: 25 });
+    expect(behind.recorded.slice(1).every((x) => x.overlapped && Math.abs(x.ms - 25) < 1e-9)).toBe(true);
+    expect(Math.abs(behind.simSpeed - dtMs / 25)).toBeLessThan(1 / 60 / SIM_SPEED_TAU);
+  });
+  it('pipelined, an engine that catches up runs one step a frame, unqueued, and each frame shows the step the frame before took', async () => {
+    // 25 ms GPU steps (behind) for 300 steps, then 5 ms ones (keeps up).
+    const r = await simulateFree({ periodMs: dtMs, stepMs: (i) => (i < 300 ? 25 : 5), snapMs: 1, frames: 900, pipeline: true });
+    // Behind, then back in step with frames.
+    expect(r.recorded.slice(1, 300).every((x) => x.overlapped && Math.abs(x.ms - 25) < 1e-9)).toBe(true);
+    expect(r.recorded.slice(-300).every((x) => !x.overlapped && Math.abs(x.ms - 5) < 1e-9)).toBe(true);
+    // Reads are timed from their step's completion either way.
+    expect(r.readMs.every((x) => Math.abs(x - 1) < 1e-9)).toBe(true);
+    // Back in step with the display: one step a frame, and the frame shows the step just taken.
+    expect(r.perFrame.slice(-200).every((n) => n === 1)).toBe(true);
+    // (The step taken when frame f - 1 woke is read 6 ms later, before frame f.)
+    for (let f = 700; f < 900; f += 37) {
+      expect(r.newestAt(f)).toBe(r.submittedBy(f - 1));
+      expect(r.submittedBy(f)).toBe(r.submittedBy(f - 1) + 1);
+    }
+  });
+  it('pipelined, the steps in flight when a pause begins are read back, so the paused frames show the newest state', async () => {
+    const r = await simulateFree({ periodMs: dtMs, stepMs: 25, snapMs: 1, frames: 400, pipeline: true, paused: [200, 260] });
+    expect(r.recorded.slice(1, 100).every((x) => x.overlapped)).toBe(true);
+    // The two steps in flight when the pause began take up to 51 ms (3.06 frames) to land.
+    for (let f = 204; f < 260; f += 5) {
+      expect(r.newestAt(f)).toBe(r.submittedBy(f));
+      expect(r.submittedBy(f)).toBe(r.submittedBy(203));
+    }
   });
   it('after a pause it resumes with one step, not a burst of the owed time', async () => {
     const r = await simulateFree({ periodMs: dtMs, stepMs: 2, frames: 120, paused: [30, 60] });
@@ -297,19 +485,20 @@ describe('runFree', () => {
   const busy = (ms: number) => { const end = performance.now() + ms; while (performance.now() < end); };
   const hooks = (o: Partial<FreeHooks>): FreeHooks => ({
     running: () => true, paused: () => false, now: () => performance.now(), dtMs: () => 1000 / 60,
-    resetIfAsked: async () => false, step: async () => {}, refresh: async () => {}, yields: () => false,
+    resetAsked: () => false, reset: async () => {}, step: async () => {}, finish: async () => {}, record: () => {}, refresh: async () => 0,
+    yields: () => false, pipeline: () => false,
     nextFrame: () => new Promise((resolve) => setTimeout(resolve, 16)), nextTask: async () => {}, ...o,
   });
   it('a CPU engine slower than real time gets a task boundary after every step, so timers (frames, input) still run', async () => {
     let steps = 0, ticks = 0;
     const timer = setInterval(() => { ticks++; }, 1);
-    const stop = performance.now() + 300;
-    // 20 ms steps against a 16.7 ms dt: always due, so the loop never waits for a frame.
+    // 20 ms steps against a 16.7 ms dt: always due, so the loop never waits for a frame. (A count,
+    // not a time, ends the run, so a loaded host only makes it slower.)
     // (Node drains a MessagePort's messages in one go, so the test's task boundary is a timer;
     // in a browser each message is its own task, which is what taskYield relies on.)
-    await runFree(hooks({ running: () => performance.now() < stop, step: async () => { busy(20); steps++; }, nextTask: () => new Promise((resolve) => setTimeout(resolve, 0)) }), newPacer(), newArrivals());
+    await runFree(hooks({ running: () => steps < 12, step: async () => { busy(20); steps++; }, nextTask: () => new Promise((resolve) => setTimeout(resolve, 0)) }), newPacer(), newArrivals());
     clearInterval(timer);
-    expect(steps).toBeGreaterThanOrEqual(10);
+    expect(steps).toBe(12);
     expect(ticks).toBeGreaterThanOrEqual(steps - 1);
   });
   it('taskYield resolves each wait once, in order', async () => {
@@ -328,8 +517,10 @@ describe('runFree', () => {
       yields: () => true,
       nextTask: async () => { tasks++; },
       nextFrame: async () => { frames++; if (frames === 3) paused = false; },
-      async resetIfAsked() { if (!ask) return false; ask = false; resets++; return true; },
+      resetAsked: () => ask,
+      reset: async () => { ask = false; resets++; },
       step: async () => { steps++; if (steps === 3) paused = true; if (steps === 5) ask = true; },
+      refresh: async () => steps * 1000,
       now: () => steps * 1000, // always due once unpaused
     }), pacer, arrivals);
     expect({ steps, tasks, resets }).toEqual({ steps: 6, tasks: 0, resets: 1 });
@@ -338,6 +529,126 @@ describe('runFree', () => {
     expect(pacer.next).toBeCloseTo(5000 + 1000 / 60, 6);
     expect(arrivals.last).toBe(6000);
     expect(arrivals.interval).toBeNaN();
+  });
+  /**
+   * A pipelined GPU engine on the virtual clock: 25 ms steps (behind at 60 Hz), reads landing 1 ms
+   * after the step they follow, frames every 16 ms. `log` records each read as it lands (by the
+   * steps it holds), resets and errors. A step can fail as it is submitted (stepFails) or on the GPU
+   * (finishFails: finish() rejects), and a read at once (readFails). The loop can be paused for
+   * pauseMs from the step pauseAfter; hidden: no frames come while it is (a hidden tab, where
+   * requestAnimationFrame does not fire). `seen` is the arrival clock's interval as each step starts.
+   * Reads wait for their step's done, as main.ts's do, unless ignoreDone.
+   */
+  const piped = (o: {
+    steps: number; resetAfter?: number; stepFails?: number; finishFails?: number; readFails?: number;
+    pauseAfter?: number; pauseMs?: number; hidden?: boolean; ignoreDone?: boolean;
+  }) => {
+    const clock = virtualClock();
+    const arrivals = newArrivals();
+    const log: string[] = [], seen: Array<[number, number]> = [];
+    let gpu = 0, n = 0, ask = false, pausedAt = NaN, failedAt = NaN;
+    const pauseEnd = () => pausedAt + (o.pauseMs ?? 0);
+    const run = runFree(hooks({
+      running: () => n < o.steps,
+      paused: () => clock.now() < pauseEnd(),
+      now: clock.now,
+      yields: () => true,
+      pipeline: () => true,
+      resetAsked: () => ask,
+      reset: async () => { ask = false; log.push('reset'); await clock.wait(clock.now() + 5); },
+      step: async () => {
+        if (n + 1 === o.stepFails) throw new Error('step failed');
+        seen.push([n + 1, arrivals.interval]);
+        n++;
+        if (n === o.pauseAfter) pausedAt = clock.now();
+        gpu = Math.max(gpu, clock.now()) + 25;
+        if (n === o.resetAfter) ask = true;
+      },
+      finish: () => {
+        const i = n;
+        return clock.wait(gpu).then(() => { if (i === o.finishFails) throw new Error(`step ${i} failed on the GPU`); });
+      },
+      // As main.ts: a read is applied once it lands and its step is done.
+      refresh: (done) => {
+        const i = n, at = gpu + 1;
+        // A read that fails at once, as Readback.read does when its pool is destroyed.
+        if (i === o.readFails) return Promise.reject(new Error(`read ${i} failed`));
+        return clock.wait(at).then(async () => { if (done && !o.ignoreDone) await done; log.push(`read ${i}`); return at; });
+      },
+      nextFrame: () => {
+        const next = Math.floor(clock.now() / 16) * 16 + 16;
+        return clock.wait(o.hidden && clock.now() < pauseEnd() ? Math.max(next, Math.ceil(pauseEnd() / 16) * 16) : next);
+      },
+    }), newPacer(), arrivals);
+    return {
+      log, seen, pauseEnd, failedAt: () => failedAt,
+      run: clock.run(run.catch((e: Error) => { log.push(e.message); failedAt = clock.now(); })),
+    };
+  };
+  /** Runs f and returns the unhandled rejections it caused. */
+  const unhandledBy = async (f: () => Promise<void>) => {
+    const unhandled: unknown[] = [];
+    const listen = (e: unknown) => { unhandled.push(e); };
+    process.on('unhandledRejection', listen);
+    try {
+      await f();
+      await new Promise((resolve) => setImmediate(resolve));
+    } finally {
+      process.off('unhandledRejection', listen);
+    }
+    return unhandled;
+  };
+  it('pipelined, a reset waits for the reads in flight, so no read of the old scene lands after it', async () => {
+    const r = piped({ steps: 10, resetAfter: 6 });
+    await r.run;
+    // Step 6 asked for the reset while read 5 and read 6 were in flight.
+    expect(r.log).toEqual([...[1, 2, 3, 4, 5, 6].map((i) => `read ${i}`), 'reset', ...[7, 8, 9, 10].map((i) => `read ${i}`)]);
+  });
+  it('pipelined, a pause lets the reads in flight land before it restarts the arrival clock, so the time paused is no gap, even in a hidden tab', async () => {
+    for (const hidden of [false, true]) {
+      const r = piped({ steps: 14, pauseAfter: 6, pauseMs: 500, hidden });
+      await r.run;
+      expect(r.log).toEqual([...Array(14)].map((_, i) => `read ${i + 1}`));
+      // Reads land 25 ms apart. Before the pause and after it, the interval is that, or unset just
+      // after the clock starts. A read landing after the only restart of a hidden tab would have
+      // counted the 500 ms away as a gap (capped at 8 steps), and made it 133 ms.
+      expect(r.seen.filter(([, x]) => !Number.isNaN(x)).length).toBeGreaterThan(6);
+      expect(r.seen.every(([, x]) => Number.isNaN(x) || Math.abs(x - 25) < 1e-9)).toBe(true);
+    }
+  });
+  it('pipelined, an engine error rejects the loop after the read in flight has settled', async () => {
+    const r = piped({ steps: 10, stepFails: 5 });
+    await r.run;
+    // Step 5 failed after step 4 was queued: the loop waited for read 4 before it rejected.
+    expect(r.log).toEqual(['read 1', 'read 2', 'read 3', 'read 4', 'step failed']);
+  });
+  it('pipelined, a read that fails rejects the loop with its error, and is never left unhandled meanwhile', async () => {
+    expect(await unhandledBy(async () => {
+      const r = piped({ steps: 10, readFails: 3 });
+      await r.run;
+      // Read 3 failed at once, while the loop waited for read 2. The loop threw when it came to
+      // read 3, after step 4, and first let read 4 land.
+      expect(r.log).toEqual(['read 1', 'read 2', 'read 4', 'read 3 failed']);
+    })).toEqual([]);
+  });
+  it('pipelined, a step that fails on the GPU fails its read, so the loop rejects at that read, even while paused', async () => {
+    expect(await unhandledBy(async () => {
+      // Step 4 is queued behind step 3, and step 5 behind step 4; read 4 fails, read 5 lands first.
+      // The loop fails read 4 itself, whether or not refresh() waits for its step.
+      for (const ignoreDone of [false, true]) {
+        const r = piped({ steps: 10, finishFails: 4, ignoreDone });
+        await r.run;
+        expect(r.log.filter((x) => x !== 'read 4')).toEqual(['read 1', 'read 2', 'read 3', 'read 5', 'step 4 failed on the GPU']);
+      }
+      // Paused (or hidden) right after step 4: the pause waits for read 4, which fails, so the
+      // error shows then, not when the pause ends and a later step() would fail.
+      for (const hidden of [false, true]) {
+        const p = piped({ steps: 10, finishFails: 4, pauseAfter: 4, pauseMs: 500, hidden });
+        await p.run;
+        expect(p.log).toEqual(['read 1', 'read 2', 'read 3', 'step 4 failed on the GPU']);
+        expect(p.failedAt()).toBeLessThan(p.pauseEnd());
+      }
+    })).toEqual([]);
   });
 });
 
@@ -384,6 +695,7 @@ describe('viewer config', () => {
     // How physics is scheduled is the viewer's mode, like the engine: a preset keeps it.
     expect(parseViewerConfig(presetSearch('?scenario=S3', cur('?scenario=S1&loop=frame&maxSteps=2')))).toMatchObject({ scenario: 'S3', loop: 'frame', maxSteps: 2 });
     expect(parseViewerConfig(presetSearch('?scenario=S3', cur('?loop=frame')))).toMatchObject({ loop: 'frame', maxSteps: 1 });
+    expect(parseViewerConfig(presetSearch('?scenario=S3', cur('?pipeline=0')))).toMatchObject({ scenario: 'S3', loop: 'free', pipeline: false });
   });
   it('escapes text for the HUD', () => {
     expect(escapeHtml(`rapier:x=<img src=x onerror="alert('1')">&`)).toBe('rapier:x=&#60;img src=x onerror=&#34;alert(&#39;1&#39;)&#34;&#62;&#38;');
@@ -396,19 +708,28 @@ describe('viewer config', () => {
     expect(parseViewerConfig('?loop=frame')).toMatchObject({ loop: 'frame', maxSteps: 1 });
     expect(parseViewerConfig(toSearch(parseViewerConfig('?loop=frame')))).toMatchObject({ loop: 'frame', maxSteps: 1 });
     expect(parseViewerConfig('')).toMatchObject({ loop: 'free', maxSteps: 1 });
-    expect(toSearch(parseViewerConfig(''))).not.toMatch(/maxSteps|loop/);
+    expect(toSearch(parseViewerConfig(''))).not.toMatch(/maxSteps|loop|pipeline/);
+    const serial = parseViewerConfig('?pipeline=0');
+    expect(serial).toMatchObject({ loop: 'free', pipeline: false });
+    expect(toSearch(serial)).toMatch(/(^|[?&])pipeline=0(&|$)/);
+    expect(parseViewerConfig(toSearch(serial))).toEqual(serial);
+    expect(parseViewerConfig('?pipeline=1')).toEqual(parseViewerConfig(''));
   });
   it('a URL with maxSteps and no loop keeps the frame loop it was written for', () => {
     expect(parseViewerConfig('?maxSteps=2')).toMatchObject({ loop: 'frame', maxSteps: 2 });
     expect(parseViewerConfig('?maxSteps=1')).toMatchObject({ loop: 'frame', maxSteps: 1 });
   });
-  it('rejects unknown scenarios, non-numeric params, a maxSteps outside 1-4, an unknown loop and maxSteps on the free loop', () => {
+  it('rejects unknown scenarios, non-numeric params, a maxSteps outside 1-4, an unknown loop, maxSteps on the free loop and pipeline=0 on the frame loop', () => {
     expect(() => parseViewerConfig('?scenario=S99')).toThrow(/unknown scenario/);
     expect(() => parseViewerConfig('?param.N=lots')).toThrow(/not a number/);
     for (const m of ['0', '5', '1.5', 'two']) expect(() => parseViewerConfig(`?maxSteps=${m}`)).toThrow(/maxSteps/);
     expect(parseViewerConfig(`?maxSteps=${MAX_STEPS_LIMIT}`).maxSteps).toBe(MAX_STEPS_LIMIT);
     expect(() => parseViewerConfig('?loop=fast')).toThrow(/loop must be free or frame/);
     expect(() => parseViewerConfig('?loop=free&maxSteps=2')).toThrow(/maxSteps applies to loop=frame/);
+    for (const v of ['2', 'off', '']) expect(() => parseViewerConfig(`?pipeline=${v}`)).toThrow(/pipeline must be 0 or 1/);
+    expect(() => parseViewerConfig('?loop=frame&pipeline=0')).toThrow(/pipeline applies to loop=free/);
+    // maxSteps alone means the frame loop, so it does not take pipeline=0 either.
+    expect(() => parseViewerConfig('?maxSteps=2&pipeline=0')).toThrow(/pipeline applies to loop=free/);
   });
 });
 

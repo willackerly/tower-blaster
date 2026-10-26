@@ -56,8 +56,12 @@ interface ViewerHandle {
   stepIndex: number;
   /** Median physics ms/step over the HUD's window (NaN before the first step); updated with the HUD. */
   msPerStep: number;
+  /** Median snapshot read-back + upload ms over the HUD's window, as msPerStep. */
+  snapMs: number;
   /** Scene loads so far: 1 after start, one more per R. */
   resets: number;
+  /** Steps submitted before the step before reported done, so queued behind it (loop=free pipelining; see runFree). */
+  overlapped: number;
   /** Fire a ball through normalized device coords (0, 0 = centre). */
   fire(ndcX?: number, ndcY?: number): void;
   capture(keepPixels?: boolean): Promise<PixelStats | null>;
@@ -68,7 +72,7 @@ declare global { interface Window { __viewer: ViewerHandle } }
 const canvas = document.getElementById('c') as HTMLCanvasElement;
 const hud = document.getElementById('hud')!;
 const errorBox = document.getElementById('error')!;
-const handle: ViewerHandle = { status: 'loading', frames: 0, bodies: 0, awake: 0, stepIndex: 0, msPerStep: NaN, resets: 0, fire: () => {}, capture: async () => null, inputs: [] };
+const handle: ViewerHandle = { status: 'loading', frames: 0, bodies: 0, awake: 0, stepIndex: 0, msPerStep: NaN, snapMs: NaN, resets: 0, overlapped: 0, fire: () => {}, capture: async () => null, inputs: [] };
 window.__viewer = handle;
 
 function fail(e: unknown) {
@@ -200,7 +204,8 @@ async function main() {
     engine = viewerEngine(want);
     pushLimit = pushRadiusLimit(engineSpec(want.engine, want.projectile), next);
     await engine.init(next);
-    const s = await snapshot();
+    const t0 = performance.now();
+    const s = await engine.snapshot();
     config = want;
     scene = next;
     events = [...scene.inputs];
@@ -212,7 +217,7 @@ async function main() {
     renderer.setShadowBounds(c, Math.hypot(b.max[0] - b.min[0], b.max[1] - b.min[1], b.max[2] - b.min[2]) / 2 + 2);
     handle.inputs = [];
     notice = '';
-    apply(s);
+    apply(s, t0);
   }
 
   const controls = mountControls(document.getElementById('controls')!, {
@@ -253,19 +258,23 @@ async function main() {
     return shapes;
   }
 
-  // Snapshot read-back, then upload; snapMs times both.
-  let snapT0 = 0;
-  async function snapshot(): Promise<Snapshot> {
-    snapT0 = performance.now();
-    return engine.snapshot();
-  }
-  function apply(s: Snapshot) {
+  // Snapshot read-back (from t0), then upload; snapMs times both. Pipelined reads overlap, so each keeps its own t0.
+  function apply(s: Snapshot, t0: number) {
     source.update(s, shapesFor(s.count));
-    snapMs.push(performance.now() - snapT0);
+    snapMs.push(performance.now() - t0);
     handle.bodies = s.count;
     awake = handle.awake = s.awake.reduce((a, x) => a + x, 0);
   }
-  const refresh = async () => apply(await snapshot());
+  /**
+   * Read the newest state back and upload it; resolves with the time it landed. Pipelined, the read
+   * waits behind its step on the GPU, so it is timed from when that step was done (done).
+   */
+  const refresh = async (done?: Promise<number>) => {
+    const t0 = performance.now();
+    const s = await engine.snapshot();
+    apply(s, done ? Math.max(t0, await done) : t0);
+    return performance.now();
+  };
   let awake = 0;
 
   handle.fire = (x = 0, y = 0) => {
@@ -340,16 +349,17 @@ async function main() {
   function drawHud() {
     const med = stepMs.quantile(0.5), p95 = stepMs.quantile(0.95);
     handle.msPerStep = med;
+    handle.snapMs = snapMs.quantile(0.5);
     const over = med > 7.5;
     hud.innerHTML = `
       <div class="big">${handle.bodies.toLocaleString()} bodies</div>
       <div class="muted">${SCENARIOS[config.scenario]!.title} · ${escapeHtml(config.engine)} (${escapeHtml(engine.info.backend)})</div>
       <div class="row"><span>physics ms/step</span><span class="${over ? 'warn' : ''}">${fmt(med)} <span class="muted">p95 ${fmt(p95)}</span></span></div>
-      <div class="row muted"><span>step</span><span>${handle.stepIndex.toLocaleString()} · loop ${config.loop}</span></div>
+      <div class="row muted"><span>step</span><span>${handle.stepIndex.toLocaleString()} · loop ${config.loop}${config.loop === 'free' && !config.pipeline ? ' · pipeline off' : ''}</span></div>
       <div class="row"><span>awake</span><span>${awake.toLocaleString()}</span></div>
       <div class="row"><span>fps</span><span>${fmt(fps)}</span></div>
       <div class="row"><span>sim speed</span><span class="${clock.simSpeed < 0.95 ? 'warn' : ''}">${(clock.simSpeed * 100).toFixed(0)}%</span></div>
-      <div class="row"><span>snapshot + upload</span><span>${fmt(snapMs.quantile(0.5))} ms</span></div>
+      <div class="row"><span>snapshot + upload</span><span>${fmt(handle.snapMs)} ms</span></div>
       <div class="row muted"><span>budget</span><span>7.5 ms/step</span></div>
       <div class="muted">${escapeHtml(adapter.info.vendor)} ${escapeHtml(adapter.info.architecture)}${paused ? ' · <b>paused</b>' : ''}</div>${notice ? `\n      <div class="warn">${escapeHtml(notice)}</div>` : ''}`;
   }
@@ -420,24 +430,26 @@ async function main() {
     paused: () => paused || document.visibilityState !== 'visible',
     now: () => performance.now(),
     dtMs,
-    async resetIfAsked() {
-      if (!resetAsked) return false;
+    resetAsked: () => resetAsked,
+    async reset() {
       resetAsked = false;
       await reset();
-      return true;
     },
     async step() {
-      const t0 = performance.now();
       await engine.step();
-      if (engine.finish) await engine.finish();
-      stepMs.push(performance.now() - t0);
       stepsSinceFrame++;
       if (config.autofire && engine.stepIndex === config.autofire) handle.fire(0, 0);
       handle.stepIndex = engine.stepIndex;
     },
+    finish: async () => { await engine.finish?.(); },
+    record(ms, overlapped) {
+      stepMs.push(ms);
+      if (overlapped) handle.overlapped++;
+    },
     refresh,
     // A GPU engine's finish() and snapshot wait on the GPU; a CPU engine (no finish) steps synchronously.
     yields: () => !!engine.finish,
+    pipeline: () => config.pipeline && !!engine.finish,
     nextFrame,
     nextTask: tasks.next,
   }, pacer, arrivals);
