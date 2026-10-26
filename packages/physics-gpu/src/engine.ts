@@ -180,6 +180,32 @@ export class GpuAvbdEngine implements PhysicsEngine {
   }
 
   step(): void {
+    this.encodeStep();
+  }
+
+  /**
+   * Bench only (the solver probe, probe.ts): step() with the solve pass
+   * timestamped. The work submitted is step()'s.
+   */
+  probeStep(solveTimestamps: GPUComputePassTimestampWrites): void {
+    this.encodeStep(solveTimestamps);
+  }
+
+  /**
+   * Bench only (the solver probe): the device and the stages of the last
+   * step, to read its colour structure and time pieces of its sweep
+   * (AvbdSolver.encodeProbe). step() does not use this.
+   */
+  probeParts(): { device: GPUDevice; n: number; iterations: number; dispatch: SolverDispatch; solver: AvbdSolver; col: Coloring; total: GPUBuffer; maxPairs: number; capacity: number } {
+    const { device, parts } = this;
+    if (!device || !parts) throw new Error('init() first');
+    return {
+      device, n: this.n, iterations: this.params.iterations, solver: parts.solver, col: parts.col, total: parts.bp.total,
+      maxPairs: parts.solver.maxPairs, capacity: this.capacity, dispatch: this.dispatch!,
+    };
+  }
+
+  private encodeStep(solveTimestamps?: GPUComputePassTimestampWrites): void {
     const { device, parts, scene } = this;
     if (!device || !parts || !scene) throw new Error('init() first');
     if (this.failure) throw new Error(`GpuAvbdEngine: ${this.failure}`);
@@ -196,7 +222,7 @@ export class GpuAvbdEngine implements PhysicsEngine {
     parts.np.encode(pass, n, { margin: p.margin, ground: scene.ground ? { y: scene.ground.y } : null });
     pass.end();
     parts.col.encode(enc, n);
-    parts.solver.solve(enc, n, p.iterations);
+    parts.solver.solve(enc, n, p.iterations, solveTimestamps);
     device.queue.submit([enc.finish()]);
     this.stepIndex++;
   }
