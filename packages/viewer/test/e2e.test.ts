@@ -205,6 +205,71 @@ describe('viewer', () => {
     await again.page.close();
   });
 
+  // loop=free with an engine that steps synchronously and slower than real time (the f64
+  // reference at 30 iterations, ~100-150 ms a step here and still over 16.7 ms on a host
+  // five times faster): steps are always due, so without a task boundary between them the
+  // physics loop would never yield and the page would hang.
+  it('keeps rendering while a CPU engine slower than real time steps back to back', async (ctx) => {
+    if (!browser) return ctx.skip();
+    const { page, errors } = await open('/?scenario=S1&param.F=3&param.H=6&param.gap=0.02&offscreen=1&engine=avbd-ref:iterations=30');
+    const status = await page.evaluate(() => ({ s: window.__viewer.status, e: window.__viewer.error }));
+    if (status.s === 'error' && /WebGPU|adapter/.test(status.e ?? '') && !requireWebGPU()) return ctx.skip();
+    expect(status).toEqual({ s: 'running', e: undefined });
+    await page.waitForFunction(() => window.__viewer.stepIndex > 6 && window.__viewer.msPerStep > 0, undefined, { timeout: 60_000, polling: 250 });
+    const a = await page.evaluate(() => ({ steps: window.__viewer.stepIndex, frames: window.__viewer.frames, ms: window.__viewer.msPerStep }));
+    // Slower than real time, so the physics loop never waits for a frame...
+    expect(a.ms).toBeGreaterThan(1000 / 60);
+    // ...and frames still run between its steps. (Their rate is SwiftShader's and the host's
+    // load's, so this waits for progress rather than timing it; a loop that never yields hangs here.)
+    await page.waitForFunction((x) => window.__viewer.frames >= x.frames + 3 && window.__viewer.stepIndex >= x.steps + 8, a, { timeout: 60_000, polling: 250 });
+    expect(await page.locator('#hud').innerText()).toContain('loop free');
+    expect(errors).toEqual([]);
+    await page.close();
+  });
+
+  // loop=free renders every frame without waiting for physics. An offscreen target gets no
+  // presentation backpressure, so the loop bounds its own GPU work: unbounded, SwiftShader's
+  // queue was 50 s behind after 12 s, starving physics and turning a capture into a 50 s wait.
+  it('keeps at most a couple of frames queued on the GPU, so physics and readbacks keep up', async (ctx) => {
+    if (!browser) return ctx.skip();
+    const { page, errors } = await open('/?scenario=S1&param.F=3&param.H=6&param.gap=0.02&offscreen=1&engine=avbd-gpu');
+    const status = await page.evaluate(() => ({ s: window.__viewer.status, e: window.__viewer.error }));
+    if (status.s === 'error' && /WebGPU|adapter/.test(status.e ?? '') && !requireWebGPU()) return ctx.skip();
+    expect(status).toEqual({ s: 'running', e: undefined });
+    await new Promise((resolve) => setTimeout(resolve, 8000));
+    const before = await page.evaluate(() => window.__viewer.stepIndex);
+    const t0 = Date.now();
+    expect(await page.evaluate(() => window.__viewer.capture(false))).not.toBeNull();
+    // Without the cap the queue was ~30 s behind by now; with it a capture waits a frame or two (more on a loaded host).
+    expect(Date.now() - t0).toBeLessThan(15_000);
+    await page.waitForFunction((k) => window.__viewer.stepIndex > k + 3, before, { timeout: 10_000, polling: 250 });
+    // R resets on the physics loop while frames keep drawing; afterwards the new scene is on screen and stepping.
+    await page.keyboard.press('r');
+    await page.waitForFunction(() => window.__viewer.resets === 2 && window.__viewer.stepIndex > 3, undefined, { timeout: 60_000, polling: 250 });
+    expect((await page.evaluate(() => window.__viewer.capture(false)))!.bodyFraction).toBeGreaterThan(0.05);
+    expect(errors).toEqual([]);
+    await page.close();
+  });
+
+  // The GPU engine, so the frame loop's finish() timing runs too.
+  it('loop=frame still steps, renders, fires and resets', async (ctx) => {
+    if (!browser) return ctx.skip();
+    const { page, errors } = await open('/?scenario=S1&param.F=3&param.H=6&param.gap=0.02&offscreen=1&engine=avbd-gpu&loop=frame');
+    const status = await page.evaluate(() => ({ s: window.__viewer.status, e: window.__viewer.error }));
+    if (status.s === 'error' && /WebGPU|adapter/.test(status.e ?? '') && !requireWebGPU()) return ctx.skip();
+    expect(status).toEqual({ s: 'running', e: undefined });
+    await page.waitForFunction(() => window.__viewer.frames > 10 && window.__viewer.stepIndex > 5, undefined, { timeout: 60_000 });
+    await page.evaluate(() => window.__viewer.fire(0, 0));
+    await page.waitForFunction(() => window.__viewer.bodies === 55, undefined, { timeout: 30_000 });
+    await page.keyboard.press('r');
+    await page.waitForFunction(() => window.__viewer.resets === 2 && window.__viewer.stepIndex > 3, undefined, { timeout: 60_000, polling: 250 });
+    expect(await page.evaluate(() => window.__viewer.bodies)).toBe(54);
+    expect((await page.evaluate(() => window.__viewer.capture(false)))!.bodyFraction).toBeGreaterThan(0.05);
+    expect(await page.locator('#hud').innerText()).toContain('loop frame');
+    expect(errors).toEqual([]);
+    await page.close();
+  });
+
   it('shows a readable error for a bad URL instead of a blank page', async (ctx) => {
     if (!browser) return ctx.skip();
     const { page } = await open('/?scenario=S99&offscreen=1');

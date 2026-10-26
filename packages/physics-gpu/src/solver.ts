@@ -781,6 +781,49 @@ export class AvbdSolver {
     this.cur = 1 - this.cur;
   }
 
+  /** The contact history half the last solve() read and wrote (p.cur in the uniforms it left). */
+  get lastHalf(): number {
+    return 1 - this.cur;
+  }
+
+  /**
+   * Bench only (the solver probe, probe.ts); solve() never calls this. Encode
+   * `reps` copies of one piece of the last solve()'s main-iteration sweep,
+   * issued exactly as solve() issues it, with its pipelines, bind groups and
+   * the uniforms it left: colour c's primal dispatch, the tail workgroup, or
+   * one dual update (pairs and ground). The primal dispatch can also be
+   * issued for a colour the sweep gives to the tail (c up to 62): for an
+   * empty one, that is the dispatch's fixed cost. They run on the state the
+   * last step left and change it: primal pieces only touch dp and phi, which
+   * the next step's initBodies overwrites; the dual changes contact state,
+   * which the next step warm-starts from.
+   */
+  encodeProbe(pass: GPUComputePassEncoder, n: number, piece: { primal: number } | 'tail' | 'dual', reps: number): void {
+    if (n === 0) return;
+    const { b } = this;
+    const groups = Math.max(1, Math.ceil(n / WG));
+    const direct = this.dispatch.indirectColors ? MAX_COLORS - 1 : this.dispatch.colorTail;
+    if (piece === 'dual') {
+      pass.setBindGroup(0, this.binds.dual!);
+      for (let r = 0; r < reps; r++) {
+        pass.setPipeline(this.pipes.dualPairs!);
+        pass.dispatchWorkgroupsIndirect(b.total, 0);
+        pass.setPipeline(this.pipes.dualGround!);
+        pass.dispatchWorkgroups(groups);
+      }
+      return;
+    }
+    const c = piece === 'tail' ? direct : piece.primal;
+    if (piece !== 'tail' && !(Number.isInteger(c) && c >= 0 && c < MAX_COLORS - 1)) throw new Error(`AvbdSolver.encodeProbe: colour ${c} has no primal dispatch (colours 0-${MAX_COLORS - 2} do; ${MAX_COLORS - 1} is solved serially)`);
+    pass.setPipeline(piece === 'tail' ? this.pipes.primalTail! : this.pipes.primal!);
+    pass.setBindGroup(0, this.binds.solve!, [c * DYN]);
+    for (let r = 0; r < reps; r++) {
+      if (piece === 'tail') pass.dispatchWorkgroups(1);
+      else if (this.dispatch.indirectColors) pass.dispatchWorkgroupsIndirect(b.dispatch, 12 * c);
+      else pass.dispatchWorkgroups(groups);
+    }
+  }
+
   destroy(): void {
     for (const x of [this.solver, this.contacts, this.meta, this.pairHist, this.offHist, this.uniform, this.colorUniform]) x.destroy();
   }
