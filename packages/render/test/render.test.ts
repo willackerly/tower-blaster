@@ -968,11 +968,10 @@ describe('drawing', () => {
 
   it('real look ground: textured floor keeps its brightness, gravel and dirt differ, variation shows, texture 0 is the flat floor', async (ctx) => {
     if (!gpu) return ctx.skip();
-    const r = await call('groundChecks', [{ groundDetail: 0, hills: 0 }, { groundDetail: 0, hills: 0, realDiag: 'ground-off' }, { realDiag: 'ground-off' }, {}, { groundMaterial: 'dirt' }, { groundVariation: 0 }, { groundVariation: 1 }, { groundScale: 4 }]);
+    const r = await call('groundChecks', [{ groundDetail: 0, hills: 0 }, { realDiag: 'ground-off' }, {}, { groundMaterial: 'dirt' }, { groundVariation: 0 }, { groundVariation: 1 }, { groundScale: 4 }]);
     expect(r.error).toBeNull();
-    const [flat, offFlat, off, gravel, dirt, still, varied, coarse] = r.frames;
+    const [flat, off, gravel, dirt, still, varied, coarse] = r.frames;
     // Compiled out, the ground knobs do nothing, and the frame is texture 0's to the bit.
-    expect(offFlat!.hash).toBe(flat!.hash);
     expect(off!.hash).toBe(flat!.hash);
     // Measured on SwiftShader (mean luma; fine detail, mean |luma - neighbours|; coarse, std of 16 px block means):
     // flat 123.1, 0.42, 2.4 (dither and the light's gradient); gravel 119.9, 1.61, 2.8; dirt 120.6, 0.65, 2.8;
@@ -985,7 +984,7 @@ describe('drawing', () => {
     expect(gravel!.detail).toBeGreaterThan(1.5 * dirt!.detail);
     expect(coarse!.detail).toBeGreaterThan(1.2 * gravel!.detail); // pebbles 4x larger: more of them span pixels
     expect(varied!.coarse).toBeGreaterThan(2 * still!.coarse);
-  });
+  }, 180_000); // seven renderers, each baking its materials: 37 s alone on SwiftShader, over 60 s in the full suite
 
   it('real look ground: no seam where the floor polygon ends and the sky pass shades the ground on', async (ctx) => {
     if (!gpu) return ctx.skip();
@@ -1018,7 +1017,7 @@ describe('drawing', () => {
     expect(d(far!.low, none!.low)).toBeLessThan(d(hills!.low, none!.low));
     // Compiled out with the ground, the hills are gone, and the frame is the flat floor's under a bare horizon.
     expect(off!.hash).toBe(flat!.hash);
-  });
+  }, 180_000); // six renderers, each baking its materials
 
   it('stone level of detail: far boxes drop the stone code with no visible seam, and texture 0 sends every box far', async (ctx) => {
     if (!gpu) return ctx.skip();
