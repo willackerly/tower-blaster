@@ -211,7 +211,7 @@ describe('look math (CPU twins)', () => {
 
 describe('real look options', () => {
   it('round-trip through URL keys, only the ones set, and realLook fills the rest', () => {
-    const o = { sunElevation: 4, sunAzimuth: 200, visibility: 8, sunStrength: 1.5, exposure: 2, autoExposure: 0.5, groundAlbedo: [0.3, 0.25, 0.2] as V3, stone: 'granite' as const, stoneDetail: 0.5, stoneScale: 2, wear: 0.2, dirt: 0 };
+    const o = { sunElevation: 4, sunAzimuth: 200, visibility: 8, sunStrength: 1.5, exposure: 2, autoExposure: 0.5, groundAlbedo: [0.3, 0.25, 0.2] as V3, stone: 'granite' as const, stoneDetail: 0.5, stoneScale: 2, wear: 0.2, dirt: 0, groundMaterial: 'dirt' as const, groundDetail: 0.7, groundScale: 3, groundVariation: 0 };
     const q = new URLSearchParams();
     writeRealOptions(o, q);
     expect(parseRealOptions(q)).toEqual(o);
@@ -230,6 +230,7 @@ describe('real look options', () => {
     }
     for (const g of ['0.2,0.2', '0.2,0.2,1.5', 'a,b,c']) expect(() => parseRealOptions(new URLSearchParams({ 'real.ground': g }))).toThrow(/real.ground/);
     expect(() => parseRealOptions(new URLSearchParams({ 'real.stone': 'marble' }))).toThrow(/real.stone/);
+    expect(() => parseRealOptions(new URLSearchParams({ 'real.groundMaterial': 'lava' }))).toThrow(/real.groundMaterial/);
   });
   it('the defaults sit inside the knob ranges, and looks resolve by name', () => {
     for (const [key, k] of Object.entries(REAL_KNOBS)) {
@@ -918,18 +919,21 @@ describe('drawing', () => {
     }
   });
 
-  it('stone bake matches its CPU twin, tiles, keeps unit normals, and box-filters its mips', async (ctx) => {
+  it('material bake (stones, grounds, macro) matches its CPU twin, tiles, keeps unit normals, and box-filters its mips', async (ctx) => {
     if (!gpu) return ctx.skip();
     const r = await call('materialBake');
     expect(r.error).toBeNull();
+    expect(r.layers.map((l) => l.layer)).toEqual(['limestone', 'sandstone', 'granite', 'concrete', 'gravel', 'dirt', 'macro']);
     // Measured on SwiftShader: twin within 0.5 of an 8-bit step (rounding), mips within 0.5 step,
     // the wrap jump within 1.1x the jump between neighbours inside.
     for (const l of r.layers) {
-      expect(l.twin, l.stone).toBeLessThanOrEqual(1);
-      expect(l.unit, l.stone).toBeLessThan(0.02);
-      expect(l.mip, l.stone).toBeLessThanOrEqual(1);
-      expect(l.tile.wrap, l.stone).toBeLessThan(1.5 * l.tile.inside + 1);
-      for (const m of l.mean) { expect(m, l.stone).toBeGreaterThan(0.8); expect(m, l.stone).toBeLessThan(1.15); }
+      expect(l.twin, l.layer).toBeLessThanOrEqual(1);
+      expect(l.unit, l.layer).toBeLessThan(0.02);
+      expect(l.mip, l.layer).toBeLessThanOrEqual(1);
+      expect(l.tile.wrap, l.layer).toBeLessThan(1.5 * l.tile.inside + 1);
+      // The ground keeps the configured albedo on average (within 5%), and the macro layer is 0.5 (x 2) on average.
+      const [lo, hi] = ['gravel', 'dirt', 'macro'].includes(l.layer) ? [0.95, 1.05] : [0.8, 1.15];
+      for (const m of l.mean) { expect(m, l.layer).toBeGreaterThan(lo); expect(m, l.layer).toBeLessThan(hi); }
     }
   });
 
@@ -961,6 +965,59 @@ describe('drawing', () => {
     // Step 1's blocks: the stylized body (no palette per block, wear or dirt).
     expect(step1!.hash).not.toBe(flat!.hash);
   });
+
+  it('real look ground: textured floor keeps its brightness, gravel and dirt differ, variation shows, texture 0 is the flat floor', async (ctx) => {
+    if (!gpu) return ctx.skip();
+    const r = await call('groundChecks', [{ groundDetail: 0, hills: 0 }, { realDiag: 'ground-off' }, {}, { groundMaterial: 'dirt' }, { groundVariation: 0 }, { groundVariation: 1 }, { groundScale: 4 }]);
+    expect(r.error).toBeNull();
+    const [flat, off, gravel, dirt, still, varied, coarse] = r.frames;
+    // Compiled out, the ground knobs do nothing, and the frame is texture 0's to the bit.
+    expect(off!.hash).toBe(flat!.hash);
+    // Measured on SwiftShader (mean luma; fine detail, mean |luma - neighbours|; coarse, std of 16 px block means):
+    // flat 123.1, 0.42, 2.4 (dither and the light's gradient); gravel 120.4, 1.34, 2.8; dirt 120.6, 0.65, 2.8;
+    // variation 0: 122.7, 1.35, 2.1; variation 1: 118.0, 1.34, 4.5; scale 4: 124.9, 1.66, 2.7.
+    // Without macro variation the floor keeps its brightness within 5%; with it, this 20 m patch is one sample of a 64 m field.
+    expect(Math.abs(still!.mean - flat!.mean) / flat!.mean).toBeLessThan(0.05);
+    for (const f of [gravel, dirt, varied, coarse]) expect(Math.abs(f!.mean - flat!.mean) / flat!.mean).toBeLessThan(0.08);
+    expect(gravel!.detail).toBeGreaterThan(2.5 * flat!.detail);
+    expect(dirt!.detail).toBeGreaterThan(1.3 * flat!.detail);
+    expect(gravel!.detail).toBeGreaterThan(1.5 * dirt!.detail);
+    expect(coarse!.detail).toBeGreaterThan(1.2 * gravel!.detail); // pebbles 4x larger: more of them span pixels
+    expect(varied!.coarse).toBeGreaterThan(2 * still!.coarse);
+  }, 180_000); // seven renderers, each baking its materials: 37 s alone on SwiftShader, over 60 s in the full suite
+
+  it('real look ground: no seam where the floor polygon ends and the sky pass shades the ground on', async (ctx) => {
+    if (!gpu) return ctx.skip();
+    const r = await call('groundSeam', [{ groundDetail: 0 }, {}, { groundMaterial: 'dirt', groundVariation: 1 }]);
+    expect(r.error).toBeNull();
+    expect(r.cut).toBeGreaterThan(10);
+    expect(r.cut).toBeLessThan(80);
+    // Across the cut (rows cut-1 to cut+2), the change beyond what the rows on either side change over 3 rows.
+    const excess = r.rows.map((m) => Math.abs(m[r.cut - 1]! - m[r.cut + 2]!) - (Math.abs(m[r.cut - 4]! - m[r.cut - 1]!) + Math.abs(m[r.cut + 2]! - m[r.cut + 5]!)) / 2);
+    // Measured on SwiftShader (8-bit luma): flat 0.04, gravel 0.37, dirt at full variation 0.25. Before the far
+    // ground took the material's mean roughness and cavity, gravel's cut showed as a 1.8 step.
+    for (const e of excess) expect(e).toBeLessThan(1);
+  });
+
+  it('real look horizon hills: cover the sky just above the horizon, not above the ridge, and fade into the haze with distance', async (ctx) => {
+    if (!gpu) return ctx.skip();
+    const r = await call('hillChecks', [{ hills: 0 }, { hills: 8 }, { hills: 8, hillDistance: 2 }, { hills: 8, hillDistance: 40 }, { hills: 8, realDiag: 'ground-off' }, { hills: 0, groundDetail: 0 }]);
+    for (const f of r.frames) expect(f.rows).toEqual([1, 3]);
+    expect(r.error).toBeNull();
+    const [none, hills, near, far, off, flat] = r.frames;
+    const d = (a: number[], b: number[]) => Math.hypot(a[0]! - b[0]!, a[1]! - b[1]!, a[2]! - b[2]!);
+    // Measured on SwiftShader (sRGB of the low band): sky 159.6, 158.4, 158.1; hills at 6 km 141.6, 136.2, 129.6;
+    // at 2 km 123.0, 116.5, 108.6; at 40 km (visibility 40 km) 159.4, 157.8, 157.2.
+    // Above the ridge, the sky is untouched.
+    for (const f of [hills, near, far]) expect(d(f!.high, none!.high)).toBeLessThan(1);
+    // Just above the horizon, hills instead of sky.
+    expect(d(hills!.low, none!.low)).toBeGreaterThan(10);
+    // Nearer hills stand out more from the sky; far ones fade into it.
+    expect(d(near!.low, none!.low)).toBeGreaterThan(d(hills!.low, none!.low));
+    expect(d(far!.low, none!.low)).toBeLessThan(d(hills!.low, none!.low));
+    // Compiled out with the ground, the hills are gone, and the frame is the flat floor's under a bare horizon.
+    expect(off!.hash).toBe(flat!.hash);
+  }, 180_000); // six renderers, each baking its materials
 
   it('stone level of detail: far boxes drop the stone code with no visible seam, and texture 0 sends every box far', async (ctx) => {
     if (!gpu) return ctx.skip();
@@ -1085,7 +1142,7 @@ describe('drawing', () => {
   it('bench:render completes and reports every case (numbers discarded)', async (ctx) => {
     if (!gpu) return ctx.skip();
     const r = await call('runRenderBench', { width: 160, height: 90, counts: [800], warmup: 1, batches: 2, batchFrames: 1, profiledFrames: 1, sparkPool: 1024 });
-    expect(r.cases.map((c) => `${c.world}:${c.variant}`)).toEqual(['near', 'far'].flatMap((w) => ['full', 'no-shadow', 'no-post', 'no-sparks', 'no-heat', 'no-ao', 'no-seam', 'fan', 'cube', 'flat-fan', 'flat-cube', 'real', 'real-no-stone', 'real-stone-off', 'real-step1', 'real-no-lod', 'real-no-floor-sky'].map((v) => `${w}:${v}`)));
+    expect(r.cases.map((c) => `${c.world}:${c.variant}`)).toEqual(['near', 'far'].flatMap((w) => ['full', 'no-shadow', 'no-post', 'no-sparks', 'no-heat', 'no-ao', 'no-seam', 'fan', 'cube', 'flat-fan', 'flat-cube', 'real', 'real-no-stone', 'real-stone-off', 'real-step1', 'real-no-lod', 'real-no-floor-sky', 'real-flat-ground'].map((v) => `${w}:${v}`)));
     for (const c of r.cases) {
       expect(c.bodies).toBe(800);
       expect(c.frameMs).toBeGreaterThan(0);
@@ -1097,7 +1154,7 @@ describe('drawing', () => {
     }
     expect(r.software).toBe(isSoftwareAdapter(gpu.adapter));
     expect(await call('renderBenchMarkdown', r, 'h')).toMatch(/Without heat glow/);
-  }, 180_000); // 34 cases on a software adapter, most of it the first frame of each renderer; 40 s timed out on CI beside the GPU physics and game tests (main, 8b5dd54), and 120 s when every case built its own renderer (b6bf9a2)
+  }, 180_000); // 36 cases on a software adapter, most of it the first frame of each renderer; 40 s timed out on CI beside the GPU physics and game tests (main, 8b5dd54), and 120 s when every case built its own renderer (b6bf9a2)
 
   it('culling never changes an ID pixel', async (ctx) => {
     if (!gpu) return ctx.skip();

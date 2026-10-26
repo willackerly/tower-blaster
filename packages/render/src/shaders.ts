@@ -9,7 +9,7 @@ import { SPARK_COMMON } from './sparks.ts';
 import { LIGHT_META, LIGHT_PACKED, LIGHT_VEC4, MAX_BALLS, TRAIL } from './lights.ts';
 import { AO_FOOT_WGSL, AO_SAMPLE_WGSL, AO_SEAM_WGSL } from './ao.ts';
 import { ATMO_COMMON_WGSL } from './atmosphere.ts';
-import { MATERIAL_TILE } from './materials.ts';
+import { GROUND_TILE, MACRO_LAYER, MACRO_TILE, MATERIAL_MIPS, MATERIAL_SIZE, MATERIAL_TILE } from './materials.ts';
 import { PCG_WGSL } from './noise.ts';
 
 export const SHADOW_SIZE = 2048;
@@ -52,10 +52,15 @@ export const Frame = defineStruct('Frame', [
   ['stoneDetail', 'vec4f', 'real look: x: stone texture strength (0: none, nothing sampled), y: fade-out pixel footprint (m)'],
   ['blockAlbedo', 'vec4f', 'real look: the blocks\' mean linear albedo (the ramp\'s)'],
   ['aoFloorSky', 'vec4f', 'real look: floor sky map placement, uv = (rel.xz - xy) * zw (AoVolume.floorSkyFrame)'],
+  ['ground', 'vec4f', 'real look: ground layer (materials.ts), texture scale, texture strength (0: none, nothing sampled), macro variation'],
+  ['hills', 'vec4f', 'real look: horizon hills\' greatest height (radians, 0: none) and distance (m)'],
 ], 'Per-frame uniforms of the scene pass.');
 
 // The real look's sky (atmosphere.ts): bind group 1, read by the scene
 // shader only when it is generated for that look (sceneWgsl(true)).
+/** The ground's second scale is this much coarser than its first (realism step 4). */
+const GROUND_B = 2.71;
+
 const REAL_WGSL = /* wgsl */ `
 ${ATMO_COMMON_WGSL}
 @group(1) @binding(0) var skyViewTex: texture_2d<f32>;
@@ -73,6 +78,8 @@ override REAL_STONE: bool = true;
 override REAL_BLOCK: bool = true;
 // RendererOptions.realDiag 'no-floor-sky': the floor's baked sky view unused (the vertical sky term only).
 override FLOOR_CONES: bool = true;
+// RendererOptions.realDiag 'ground-off': the ground material and horizon hills compiled out (the flat floor of ground texture 0).
+override REAL_GROUND: bool = true;
 
 // In-scattered radiance (rgb) and green transmittance (a) along the view ray in direction dir (unit).
 fn skyLut(dir: vec3f) -> vec4f {
@@ -146,6 +153,91 @@ fn floorSky(rel: vec3f) -> f32 {
   let uv = (rel.xz - fr.aoFloorSky.xy) * fr.aoFloorSky.zw;
   if (any(uv < vec2f(0.0)) || any(uv > vec2f(1.0))) { return 1.0; }
   return textureSampleLevel(aoFloorSkyTex, aoSamp, uv, 0.0).r;
+}
+
+// The ground (realism step 4): its material (materials.ts) at two scales,
+// the second ${GROUND_B}x coarser and turned 0.6 rad so their repeats never
+// line up, blended by the macro layer, which also varies brightness and
+// tint over tens of metres. Texture 0 (or REAL_GROUND false) is the flat
+// floor, with nothing sampled. a: GGX alpha, Toksvig-widened where the
+// mips (and the blend) average bumps away.
+struct GroundHit { albedo: vec3f, a: f32, n: vec3f, cavity: f32 }
+const GROUND_ROT = mat2x2f(0.8253356, 0.5646425, -0.5646425, 0.8253356);
+const MACRO_MIN_LOD = 2.0; // the macro layer's finest level: 0.5 m texels at scale 1
+
+// Brightness and tint (rgb) and the coarse scale's weight (a), at the macro
+// layer's level for a footprint of pxM metres (never finer than MACRO_MIN_LOD).
+fn groundMacro(p: vec2f, pxM: f32) -> vec4f {
+  let size = ${MACRO_TILE.toFixed(1)} * fr.ground.y;
+  let lod = clamp(log2(pxM * ${MATERIAL_SIZE.toFixed(1)} / size), MACRO_MIN_LOD, ${(MATERIAL_MIPS - 1).toFixed(1)});
+  let m = textureSampleLevel(stoneDetail, stoneSamp, p / size + vec2f(0.31, 0.17), ${MACRO_LAYER}, lod);
+  let v = fr.ground.w;
+  return vec4f((1.0 + 0.5 * v * (2.0 * m.r - 1.0)) * (1.0 + 0.25 * v * (2.0 * m.g - 1.0) * vec3f(1.0, 0.0, -1.0)), smoothstep(0.3, 0.7, m.b));
+}
+
+// The ground at world xz p; w: fwidth(p).
+fn groundAt(p: vec2f, w: vec2f) -> GroundHit {
+  if (!REAL_GROUND || fr.ground.z <= 0.0) { return GroundHit(vec3f(1.0), 0.36, vec3f(0.0, 1.0, 0.0), 1.0); } // uniform: skips every sample
+  let layer = i32(fr.ground.x);
+  let tile = ${GROUND_TILE.toFixed(1)} * fr.ground.y;
+  let uvA = p / tile;
+  let uvB = GROUND_ROT * p / (tile * ${GROUND_B}) + vec2f(0.43, 0.71);
+  let dA = textureSample(stoneDetail, stoneSamp, uvA, layer);
+  let nA = textureSample(stoneNormal, stoneSamp, uvA, layer);
+  let dB = textureSample(stoneDetail, stoneSamp, uvB, layer);
+  let nB = textureSample(stoneNormal, stoneSamp, uvB, layer);
+  let mac = groundMacro(p, max(w.x, w.y));
+  let k = fr.ground.z;
+  let b = mac.a;
+  // uvB = R p, so B's slope in p is R^T times its slope in uv.
+  let tB = nB.xyz * 2.0 - 1.0;
+  let t = mix(nA.xyz * 2.0 - 1.0, vec3f(transpose(GROUND_ROT) * tB.xy, tB.z), b);
+  let len = mix(1.0, min(max(length(t), 1e-4), 1.0), k);
+  let slope = t.xy / max(t.z, 0.2) * k;
+  let rough = mix(0.6, mix(dA.a, dB.a, b), k);
+  let a = sqrt(min(rough * rough * rough * rough + 2.0 * (1.0 - len) / len, 1.0));
+  return GroundHit(mix(vec3f(1.0), mix(dA.rgb, dB.rgb, b) * 2.0, k) * mac.rgb, a, normalize(vec3f(slope.x, 1.0, slope.y)), mix(1.0, mix(nA.a, nB.a, b), k));
+}
+
+// The ground past the floor polygon (fsSky, non-uniform control flow, so no
+// implicit derivatives), for a footprint of pxM metres: what groundAt gives
+// where the texture has mipped down to its mean (its 1x1 level), under the
+// same macro variation.
+fn groundFar(p: vec2f, pxM: f32) -> GroundHit {
+  if (!REAL_GROUND || fr.ground.z <= 0.0) { return GroundHit(vec3f(1.0), 0.36, vec3f(0.0, 1.0, 0.0), 1.0); }
+  let layer = i32(fr.ground.x);
+  let d = textureSampleLevel(stoneDetail, stoneSamp, vec2f(0.5), layer, ${(MATERIAL_MIPS - 1).toFixed(1)});
+  let n = textureSampleLevel(stoneNormal, stoneSamp, vec2f(0.5), layer, ${(MATERIAL_MIPS - 1).toFixed(1)});
+  let k = fr.ground.z;
+  let len = mix(1.0, min(max(length(n.xyz * 2.0 - 1.0), 1e-4), 1.0), k);
+  let rough = mix(0.6, d.a, k);
+  let a = sqrt(min(rough * rough * rough * rough + 2.0 * (1.0 - len) / len, 1.0));
+  return GroundHit(mix(vec3f(1.0), d.rgb * 2.0, k) * groundMacro(p, pxM).rgb, a, vec3f(0.0, 1.0, 0.0), mix(1.0, n.a, k));
+}
+
+// Hills on the horizon (realism step 4): a ridge at most hills.x radians
+// high, hills.y metres away, its profile a sum of sines in azimuth (so it
+// closes on itself). Their slopes face the eye, tilted 27 degrees, and turn
+// sideways with the profile's own slope, so a low sun picks out the folds;
+// lit by the sun and the ambient light in the floor's albedo, seen through
+// hills.y metres of air. rgb, and coverage (the ridge antialiased over a
+// pixel). Most sky pixels are above every ridge and return at once.
+fn hillsAt(dir: vec3f, pxA: f32) -> vec4f {
+  if (dir.y > sin(fr.hills.x) + pxA) { return vec4f(0.0); }
+  let az = atan2(dir.x, -dir.z);
+  let H = fr.hills.x;
+  let ridge = H * (0.55 + 0.2 * sin(3.0 * az + 1.3) + 0.15 * sin(7.0 * az + 0.4) + 0.07 * sin(13.0 * az + 2.1) + 0.03 * sin(29.0 * az + 0.7));
+  let cover = 1.0 - smoothstep(ridge - pxA, ridge + pxA, asin(clamp(dir.y, -1.0, 1.0)));
+  if (cover <= 0.0) { return vec4f(0.0); }
+  // d ridge / d azimuth: the hillside's slope across the line of sight (height and width both scale with the distance).
+  let lateral = H * (0.6 * cos(3.0 * az + 1.3) + 1.05 * cos(7.0 * az + 0.4) + 0.91 * cos(13.0 * az + 2.1) + 0.87 * cos(29.0 * az + 0.7));
+  let back = -dir.xz / max(length(dir.xz), 1e-6);
+  let down = vec2f(-back.y, back.x); // toward decreasing azimuth: downhill where lateral > 0
+  // The profile's slope is the silhouette's, gentler than the slopes in front of it: 8x.
+  let tilt = 0.5 * back + 8.0 * lateral * down;
+  let n = normalize(vec3f(tilt.x, 1.0, tilt.y));
+  let lit = fr.floor * (mix(atmoAmbient[1].rgb, atmoAmbient[0].rgb, n.y * 0.5 + 0.5) + fr.sunColor * max(dot(n, fr.sun), 0.0));
+  return vec4f(fog(lit, dir * fr.hills.y), cover);
 }
 
 // Aerial perspective: the surface through d metres of air. The LUT holds
@@ -666,18 +758,20 @@ struct GOut { @builtin(position) clip: vec4f, @location(0) rel: vec3f }
 }
 
 @fragment fn fsGround(g: GOut) -> @location(0) vec4f {
-  // 1 m grid with screen-space antialiased lines, fading out where a line is under a pixel.
   let p = g.rel.xz + fr.eye.xz;
   let w = fwidth(p);
+  ${real ? /* wgsl */ `// The ground's material (groundAt); the sky it sees is the baked floor sky view.
+  let gh = groundAt(p, w);
+  return vec4f(fog(shade(fr.floor * gh.albedo, g.rel, gh.n, gh.a, gh.a, 0.0, vec2f(gh.cavity, floorSky(g.rel))), g.rel), 1.0);` : /* wgsl */ `// 1 m grid with screen-space antialiased lines, fading out where a line is under a pixel.
   let line = abs(fract(p - 0.5) - 0.5) / max(w, vec2f(1e-4));
   let grid = (1.0 - min(min(line.x, line.y), 1.0)) * (1.0 - smoothstep(0.05, 0.4, max(w.x, w.y)));
-  return vec4f(groundShade(fr.floor * (1.0 + 2.0 * fr.floorGrid * grid), g.rel), 1.0);
+  return vec4f(groundShade(fr.floor * (1.0 + 2.0 * fr.floorGrid * grid), g.rel), 1.0);`}
 }
 
 // The lit, fogged floor at camera-relative rel (no derivatives: fsSky calls it in non-uniform control flow).
-fn groundShade(base: vec3f, rel: vec3f) -> vec3f {
+fn groundShade(base: vec3f, rel: vec3f${real ? ', a: f32, cavity: f32' : ''}) -> vec3f {
   let up = vec3f(0.0, 1.0, 0.0);
-  return fog(shade(base, rel, up, 0.36, 0.36, 0.0, ${real ? 'vec2f(1.0, floorSky(rel))' : 'aoAt(aoView(), rel, up, rel, vec3f(0.0))'}), rel);
+  return fog(shade(base, rel, up, ${real ? 'a, a' : '0.36, 0.36'}, 0.0, ${real ? 'vec2f(cavity, floorSky(rel))' : 'aoAt(aoView(), rel, up, rel, vec3f(0.0))'}), rel);
 }
 
 struct SOut { @builtin(position) clip: vec4f, @location(0) ndc: vec2f }
@@ -698,11 +792,26 @@ struct SOut { @builtin(position) clip: vec4f, @location(0) ndc: vec2f }
   let cs = dot(dir, fr.sun);
   let x = sqrt(max(1.0 - cs * cs, 0.0)) / sqrt(1.0 - fr.sunCos * fr.sunCos);
   let rim = 1.0 - smoothstep(1.0 - 1.5 * fwidth(x), 1.0, x);
-  // Below the horizon, the floor goes on past the floor polygon's reach: the same shading, through more air.
+  let pxA = length(fwidth(dir)); // radians per pixel
   let hEye = fr.eye.y - fr.groundY;
-  if (dir.y < 0.0 && hEye > 0.0) { return vec4f(groundShade(fr.floor, dir * (hEye / -dir.y)), 1.0); }
-  let disc = fr.sunDisc * (1.0 - 0.6 * (1.0 - sqrt(max(1.0 - x * x, 0.0)))) / 0.8 * select(0.0, rim, cs > 0.0);
-  return vec4f(skyLut(dir).rgb + disc, 1.0);` : 'return vec4f(select(skyColor(dir), fr.skyHorizon, dir.y < 0.0), 1.0);'}
+  let below = dir.y < 0.0 && hEye > 0.0;
+  // Hills on the horizon, where the floor does not reach them first.
+  var hill = vec4f(0.0);
+  if (REAL_GROUND && fr.hills.x > 0.0 && !(below && hEye < -dir.y * fr.hills.y)) {
+    hill = hillsAt(dir, pxA);
+    if (hill.a >= 1.0) { return vec4f(hill.rgb, 1.0); }
+  }
+  // Below the horizon, the floor goes on past the floor polygon's reach: the same shading, through more air.
+  var c: vec3f;
+  if (below) {
+    let rel = dir * (hEye / -dir.y);
+    let gf = groundFar(rel.xz + fr.eye.xz, length(rel) * pxA / -dir.y);
+    c = groundShade(fr.floor * gf.albedo, rel, gf.a, gf.cavity);
+  } else {
+    let disc = fr.sunDisc * (1.0 - 0.6 * (1.0 - sqrt(max(1.0 - x * x, 0.0)))) / 0.8 * select(0.0, rim, cs > 0.0);
+    c = skyLut(dir).rgb + disc;
+  }
+  return vec4f(mix(c, hill.rgb, hill.a), 1.0);` : 'return vec4f(select(skyColor(dir), fr.skyHorizon, dir.y < 0.0), 1.0);'}
 }
 
 // ---------------------------------------------------------------- sparks

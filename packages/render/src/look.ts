@@ -3,7 +3,7 @@
 // CPU twins of the colour math (OKLab, AgX) that tests compare the GPU with.
 import type { V3 } from './math.ts';
 import { CLEAR_DAY, type AtmosphereParams } from './atmosphere.ts';
-import { type Stone, STONE_PALETTES, STONES } from './materials.ts';
+import { type Ground, GROUNDS, type Stone, STONE_PALETTES, STONES } from './materials.ts';
 
 export interface LookParams {
   name: string;
@@ -58,6 +58,14 @@ export interface LookParams {
    * where the texture has faded out (from half that), past which blocks drop the stone code.
    */
   stone?: { kind: Stone; scale: number; wear: number; dirt: number; detail: number; fade: number };
+  /**
+   * With an atmosphere: the ground's material (materials.ts GROUNDS), texture scale (1 = a tile per
+   * GROUND_TILE metres), texture strength (0: flat floor, nothing sampled) and macro variation (0 to 1):
+   * brightness, tint and a second, coarser scale that hide the tile's repeat.
+   */
+  ground?: { kind: Ground; scale: number; detail: number; variation: number };
+  /** With an atmosphere: hills on the horizon, their greatest height (degrees above the horizon; 0: none) and distance (km). */
+  hills?: { height: number; distance: number };
   /** false: none of the stylized effects (sparks, ball trail, heat glow, ball and impact lights). Default true. */
   effects?: boolean;
 }
@@ -141,9 +149,21 @@ export interface RealOptions {
   stoneFade: number;
   wear: number;
   dirt: number;
+  /** The ground's material, its texture strength (0: flat, nothing sampled) and scale, and how much it varies over tens of metres (0 to 1). */
+  groundMaterial: Ground;
+  groundDetail: number;
+  groundScale: number;
+  groundVariation: number;
+  /** Hills on the horizon: their greatest height in degrees above it (0: none) and how far away they are, km. */
+  hills: number;
+  hillDistance: number;
 }
 
-export const REAL_DEFAULTS: RealOptions = { sunElevation: 35, sunAzimuth: 140, visibility: 40, sunStrength: 1, groundAlbedo: [0.2, 0.19, 0.17], exposure: 1.1, autoExposure: 0.75, stone: 'limestone', stoneDetail: 1, stoneScale: 1, stoneFade: 8, wear: 0.5, dirt: 0.4 };
+export const REAL_DEFAULTS: RealOptions = {
+  sunElevation: 35, sunAzimuth: 140, visibility: 40, sunStrength: 1, groundAlbedo: [0.2, 0.19, 0.17], exposure: 1.1, autoExposure: 0.75,
+  stone: 'limestone', stoneDetail: 1, stoneScale: 1, stoneFade: 8, wear: 0.5, dirt: 0.4,
+  groundMaterial: 'gravel', groundDetail: 1, groundScale: 1, groundVariation: 0.5, hills: 1.5, hillDistance: 6,
+};
 
 /** Direction toward the sun from elevation and azimuth in degrees. */
 export function sunFrom(elevation: number, azimuth: number): V3 {
@@ -154,8 +174,7 @@ export function sunFrom(elevation: number, azimuth: number): V3 {
 /**
  * The photoreal look (docs/realism.md), from its knobs. Stone-coloured
  * blocks, no studio softboxes, the sky and light from the atmosphere.
- * Materials, ground texture, sky lighting and soft shadows arrive in later
- * realism steps.
+ * Sky lighting and soft shadows arrive in later realism steps.
  */
 export function realLook(o: Partial<RealOptions> = {}): LookParams {
   const r = { ...REAL_DEFAULTS, ...o };
@@ -173,6 +192,8 @@ export function realLook(o: Partial<RealOptions> = {}): LookParams {
     bevel: 0.012,
     ramp: STONE_PALETTES[r.stone].map(hex) as LookParams['ramp'],
     stone: { kind: r.stone, scale: r.stoneScale, wear: r.wear, dirt: r.dirt, detail: r.stoneDetail, fade: r.stoneFade / 100 },
+    ground: { kind: r.groundMaterial, scale: r.groundScale, detail: r.groundDetail, variation: r.groundVariation },
+    hills: { height: r.hills, distance: r.hillDistance },
     hueStep: 4,
     ball: hex('#8A8D90'),
     ballEmissive: 0,
@@ -198,12 +219,17 @@ export const REAL_KNOBS = {
   stoneFade: { label: 'stone fade-out (cm/px)', min: 0.5, max: 1000, step: 0.5 },
   wear: { label: 'edge wear 0-1', min: 0, max: 1, step: 0.05 },
   dirt: { label: 'dirt 0-1', min: 0, max: 1, step: 0.05 },
+  groundDetail: { label: 'ground texture 0-1', min: 0, max: 1, step: 0.05 },
+  groundScale: { label: 'ground texture scale', min: 0.1, max: 10, step: 0.1 },
+  groundVariation: { label: 'ground variation 0-1', min: 0, max: 1, step: 0.05 },
+  hills: { label: 'horizon hills (deg)', min: 0, max: 10, step: 0.1 },
+  hillDistance: { label: 'hill distance (km)', min: 0.5, max: 100, step: 0.5 },
 } as const;
 export type RealKnob = keyof typeof REAL_KNOBS;
 
 /**
  * The real look's options from URL keys real.<knob>, real.stone (a STONES
- * name) and real.ground (linear albedo r,g,b, each 0 to 1); absent keys are left out, so realLook fills
+ * name), real.groundMaterial (a GROUNDS name) and real.ground (linear albedo r,g,b, each 0 to 1); absent keys are left out, so realLook fills
  * them from REAL_DEFAULTS. Rejects values that are not numbers or are out of range.
  */
 export function parseRealOptions(q: URLSearchParams): Partial<RealOptions> {
@@ -220,6 +246,11 @@ export function parseRealOptions(q: URLSearchParams): Partial<RealOptions> {
     if (!(STONES as readonly string[]).includes(stone)) throw new Error(`real.stone must be one of ${STONES.join(', ')}: ${stone}`);
     o.stone = stone as Stone;
   }
+  const material = q.get('real.groundMaterial');
+  if (material !== null && material !== '') {
+    if (!(GROUNDS as readonly string[]).includes(material)) throw new Error(`real.groundMaterial must be one of ${GROUNDS.join(', ')}: ${material}`);
+    o.groundMaterial = material as Ground;
+  }
   const ground = q.get('real.ground');
   if (ground !== null && ground !== '') {
     const v = ground.split(',').map(Number);
@@ -233,6 +264,7 @@ export function parseRealOptions(q: URLSearchParams): Partial<RealOptions> {
 export function writeRealOptions(o: Partial<RealOptions>, q: URLSearchParams): void {
   for (const key of Object.keys(REAL_KNOBS) as RealKnob[]) if (o[key] !== undefined) q.set(`real.${key}`, String(o[key]));
   if (o.stone) q.set('real.stone', o.stone);
+  if (o.groundMaterial) q.set('real.groundMaterial', o.groundMaterial);
   if (o.groundAlbedo) q.set('real.ground', o.groundAlbedo.join(','));
 }
 

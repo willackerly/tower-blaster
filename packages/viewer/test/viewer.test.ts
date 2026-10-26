@@ -766,8 +766,8 @@ describe('viewer config', () => {
 
 describe('look', () => {
   it('round-trips the look and the real knobs through the URL; a preset keeps them', () => {
-    const c = parseViewerConfig('?look=real&real.sunElevation=4&real.visibility=12&real.ground=0.3,0.25,0.2&real.stone=granite');
-    expect(c).toMatchObject({ look: 'real', real: { sunElevation: 4, visibility: 12, groundAlbedo: [0.3, 0.25, 0.2], stone: 'granite' } });
+    const c = parseViewerConfig('?look=real&real.sunElevation=4&real.visibility=12&real.ground=0.3,0.25,0.2&real.stone=granite&real.groundMaterial=dirt&real.groundScale=2');
+    expect(c).toMatchObject({ look: 'real', real: { sunElevation: 4, visibility: 12, groundAlbedo: [0.3, 0.25, 0.2], stone: 'granite', groundMaterial: 'dirt', groundScale: 2 } });
     expect(parseViewerConfig(toSearch(c))).toEqual(c);
     expect(toSearch(parseViewerConfig(''))).not.toMatch(/look|real/);
     expect(parseViewerConfig(presetSearch('?scenario=S1', c))).toMatchObject({ scenario: 'S1', look: 'real', real: c.real });
@@ -782,6 +782,7 @@ describe('look', () => {
     expect(realOverrides(values, hex)).toEqual({});
     expect(realOverrides({ ...values, sunElevation: 5 }, hex)).toEqual({ sunElevation: 5 });
     expect(realOverrides(values, hex, 'granite')).toEqual({ stone: 'granite' });
+    expect(realOverrides(values, hex, 'granite', 'dirt')).toEqual({ stone: 'granite', groundMaterial: 'dirt' });
     expect(realOverrides(values, '#808080').groundAlbedo).toEqual(hexAlbedo('#808080'));
     expect(hexAlbedo('#808080')[0]).toBeCloseTo(0.216, 3);
     expect(() => realOverrides({ ...values, autoExposure: 2 }, hex)).toThrow(/auto exposure/);
