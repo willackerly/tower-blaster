@@ -111,6 +111,9 @@ describe('RapierHost', () => {
     expect(h.modeOf(0)).toBe(MODE_OFF);
     expect(() => h.apply({ changes: [on(1, MODE_STATIC, table[1]!), on(0, MODE_STATIC, table[0]!)], wake: [] })).toThrow(/ascending/);
     expect(() => h.apply({ changes: [on(2, MODE_STATIC, table[0]!)], wake: [] })).toThrow(/capacity/);
+    h.apply({ changes: [{ ...on(0, MODE_STATIC, table[0]!), body: table[0]! }], wake: [] }); // a first switch-on may describe the body
+    expect(() => h.apply({ changes: [{ ...on(0, MODE_DYNAMIC, table[0]!), body: table[1]! }], wake: [] })).toThrow(/description is fixed/);
+    expect(h.modeOf(0)).toBe(MODE_STATIC);
     expect(() => h.apply({ changes: [], wake: [0] })).toThrow(/not dynamic/);
     expect(h.modeOf(1)).toBe(MODE_OFF);
     h.dispose();

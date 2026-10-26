@@ -38,12 +38,23 @@ const SO = Object.fromEntries(Shape.fields.map((f) => [f.name, f.offset / 4])) a
 // A function, not a constant: GPUBufferUsage does not exist in Node, where the packing helpers are tested.
 const storage = () => GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC;
 
-/** Body[] words for a snapshot (slot i = body i, Body.shape = i). */
-export function packBodies(s: Snapshot, descs: BodyDesc[], out?: ArrayBuffer): ArrayBuffer {
+/**
+ * The Body.flags tier a snapshot tier is drawn with. Dormant lattice cells
+ * are drawn from Body[] as static bodies until the lattice pass (R6) draws
+ * them from brick masks: the passes skip TIER.lattice.
+ */
+export const drawnTier = (t: number): number => (t === TIER.lattice ? TIER.rubble : t);
+
+/**
+ * Body[] words for a snapshot (slot i = body i, Body.shape = i), for every
+ * slot or only those in `ranges` ([from, to) pairs; the rest of `out` is
+ * left as it was).
+ */
+export function packBodies(s: Snapshot, descs: BodyDesc[], out?: ArrayBuffer, ranges: ReadonlyArray<readonly [number, number]> = [[0, s.count]]): ArrayBuffer {
   const bytes = Math.max(Body.size, s.count * Body.size);
   const data = out && out.byteLength >= bytes ? out : new ArrayBuffer(bytes);
   const f = new Float32Array(data), u = new Uint32Array(data);
-  for (let i = 0; i < s.count; i++) {
+  for (const [from, to] of ranges) for (let i = from; i < to; i++) {
     const o = i * BODY_WORDS;
     for (let k = 0; k < 3; k++) {
       f[o + BO.pos + k] = s.pos[3 * i + k]!;
@@ -52,10 +63,30 @@ export function packBodies(s: Snapshot, descs: BodyDesc[], out?: ArrayBuffer): A
     }
     for (let k = 0; k < 4; k++) f[o + BO.rot + k] = s.rot[4 * i + k]!;
     f[o + BO.invMass] = descs[i]!.density > 0 ? 1 : 0;
-    u[o + BO.flags] = (s.awake[i] ? FLAG_AWAKE : 0) | (TIER.active << 8);
+    u[o + BO.flags] = (s.awake[i] ? FLAG_AWAKE : 0) | (drawnTier(s.tier?.[i] ?? TIER.active) << 8);
     u[o + BO.shape] = i;
   }
   return data;
+}
+
+/**
+ * Slot ranges [from, to) where snapshot `s` can differ from the one before
+ * it (`prevTier`, `prevCount`): new slots, active slots and tier changes. A
+ * body outside the active tier keeps its exact state until its tier changes
+ * (Snapshot.tier), so the rest need no upload. Without tiers, everything.
+ * Ranges less than `gap` slots apart are merged into one write.
+ */
+export function changedRanges(s: Snapshot, prevTier: Uint8Array | null, prevCount: number, gap = 16): Array<[number, number]> {
+  if (!s.tier || !prevTier) return s.count ? [[0, s.count]] : [];
+  const out: Array<[number, number]> = [];
+  for (let i = 0; i < s.count; i++) {
+    const t = s.tier[i]!;
+    if (i < prevCount && t !== TIER.active && t === prevTier[i]) continue;
+    const last = out[out.length - 1];
+    if (last && i - last[1] < gap) last[1] = i + 1;
+    else out.push([i, i + 1]);
+  }
+  return out;
 }
 
 /** Shape[] words, one per body. */
@@ -94,6 +125,9 @@ export class SnapshotSource implements BodySource {
   private described = 0;
   private range: LookRange | null = null;
   private scratch: ArrayBuffer | undefined;
+  private tiers: Uint8Array | null = null;
+  /** Body[] bytes written by the last update() (for tests and benches). */
+  uploaded = 0;
 
   constructor(private readonly device: GPUDevice) {
     this.allocate(1024);
@@ -136,9 +170,12 @@ export class SnapshotSource implements BodySource {
       q.writeBuffer(this.looks, this.described * 4, packLooks(d, this.described, this.range));
       this.balls.push(...ballSlots(descs, this.described, s.count));
     }
-    this.scratch = packBodies(s, descs, this.scratch);
+    const full = fresh || this.count === 0;
+    const ranges = full ? (s.count ? [[0, s.count] as [number, number]] : []) : changedRanges(s, this.tiers, this.count);
+    this.scratch = packBodies(s, descs, this.scratch, ranges);
+    this.tiers = s.tier ? Uint8Array.from(s.tier) : null;
     const bytes = s.count * Body.size;
-    if (fresh || this.count === 0) {
+    if (full) {
       // No previous state on the GPU: prev = current, so nothing interpolates.
       if (bytes) q.writeBuffer(this.prev, 0, this.scratch, 0, bytes);
     } else {
@@ -148,7 +185,11 @@ export class SnapshotSource implements BodySource {
       // Newly spawned slots have no prev: mark them invalid (zero quaternion).
       if (s.count > this.count) q.writeBuffer(this.prev, this.count * Body.size, new Uint8Array((s.count - this.count) * Body.size));
     }
-    if (bytes) q.writeBuffer(this.bodies, 0, this.scratch, 0, bytes);
+    this.uploaded = 0;
+    for (const [from, to] of ranges) {
+      q.writeBuffer(this.bodies, from * Body.size, this.scratch, from * Body.size, (to - from) * Body.size);
+      this.uploaded += (to - from) * Body.size;
+    }
     this.described = Math.max(this.described, s.count);
     this.count = s.count;
   }

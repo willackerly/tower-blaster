@@ -3,6 +3,7 @@ import { type BodyDesc, MODE_STATIC, type SceneDesc, type Vec3 } from '@tb/engin
 import { buildScenario } from '@tb/scenarios';
 import { checkTiers, TIER_ACTIVE, TIER_LATTICE, TIER_RUBBLE, TieredEngine, type TransitionCause } from '../src/index.ts';
 import { RapierHost } from '@tb/adapter-rapier';
+import { TIER } from '@tb/schema';
 import { ScriptedHost } from './scripted-host.ts';
 
 // One lattice cube at the origin (id 0) plus balls that start active. The
@@ -32,6 +33,7 @@ describe('rubble', () => {
     const { e, host, steps } = await start(scene([{ pos: [3, 0.5, 0] }, { pos: [3, 1.5, 0] }, { pos: [0, 1.5, 0] }]));
     await steps(e.p.minActiveSteps); // a body may come to rest after minActiveSteps active
     expect([1, 2, 3].map((id) => e.tier[id])).toEqual([TIER_ACTIVE, TIER_ACTIVE, TIER_ACTIVE]);
+    expect(Array.from((await e.snapshot()).tier!)).toEqual([TIER.lattice, TIER.active, TIER.active, TIER.active]);
     await steps(1);
     expect([1, 2, 3].map((id) => e.tier[id])).toEqual([TIER_RUBBLE, TIER_RUBBLE, TIER_RUBBLE]);
     expect(e.supporters.get(1)).toEqual([]);
@@ -40,6 +42,7 @@ describe('rubble', () => {
     for (const id of [1, 2, 3]) expect(host.modeOf(id)).toBe(MODE_STATIC);
     const snap = await e.snapshot();
     expect(Array.from(snap.pos.subarray(6, 9))).toEqual([3, 1.5, 0]);
+    expect(Array.from(snap.tier!)).toEqual([TIER.lattice, TIER.rubble, TIER.rubble, TIER.rubble]);
     expect(e.stats.rubble).toBe(3);
     expect(e.stats.active).toBe(0);
   });
@@ -165,6 +168,32 @@ describe('rubble', () => {
     expect(e.stats.rubble).toBeGreaterThan(600);
     // No backoff on freezing, only the rate limit: at most 2 T / minActiveSteps + 1 changes per body.
     expect(Math.max(...changes)).toBeLessThanOrEqual(2 * T / e.p.minActiveSteps + 1);
+    e.dispose();
+  });
+
+  it('reports each body\'s tier in the snapshot, and a body outside the active tier keeps its exact state until its tier changes', { timeout: 60_000 }, async () => {
+    // What the renderer relies on to upload only active bodies and tier changes.
+    const s = buildScenario('S5', { N: 1024, F: 4, H: 16, radius: 1, speed: 20, fireStep: 2 }, 1);
+    const e = new TieredEngine(new RapierHost());
+    await e.init(s);
+    let prev = await e.snapshot(), held = 0, seen = new Set<number>();
+    for (let k = 1; k <= 400; k++) {
+      await e.step();
+      const cur = await e.snapshot();
+      expect(cur.tier!.length).toBe(cur.count);
+      for (let id = 0; id < prev.count; id++) {
+        const t = cur.tier![id]!;
+        seen.add(t);
+        if (t === TIER.active || t !== prev.tier![id]) continue;
+        held++;
+        const same = (a: Float64Array, b: Float64Array, w: number) => a.subarray(w * id, w * id + w).every((x, q) => x === b[w * id + q]);
+        expect(same(cur.pos, prev.pos, 3) && same(cur.rot, prev.rot, 4), `body ${id} at step ${k}`).toBe(true);
+        expect([...cur.linVel.subarray(3 * id, 3 * id + 3), ...cur.angVel.subarray(3 * id, 3 * id + 3), cur.awake[id]]).toEqual([0, 0, 0, 0, 0, 0, 0]);
+      }
+      prev = cur;
+    }
+    expect([...seen].sort()).toEqual([TIER.active, TIER.rubble, TIER.lattice]);
+    expect(held).toBeGreaterThan(100_000);
     e.dispose();
   });
 });

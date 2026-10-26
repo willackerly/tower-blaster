@@ -84,9 +84,10 @@ describe('viewer config', () => {
   it('defaults to a 2k city on the GPU engine', () => {
     expect(parseViewerConfig('')).toMatchObject({ scenario: 'S4', params: { N: 2000, F: 4, H: 12 }, engine: 'avbd-gpu', sleep: null });
   });
-  it('gives the GPU engine room for fired balls unless the spec sets it, and leaves other engines alone', () => {
+  it('gives the GPU and tiered engines room for fired balls unless the spec sets it, and leaves other engines alone', () => {
     expect(engineSpec('avbd-gpu')).toBe(`avbd-gpu:spare=${GPU_SPARE}`);
     expect(engineSpec('avbd-gpu:iterations=4')).toBe(`avbd-gpu:iterations=4,spare=${GPU_SPARE}`);
+    expect(engineSpec('tiered')).toBe(`tiered:spare=${GPU_SPARE}`);
     expect(engineSpec('avbd-gpu:spare=3')).toBe('avbd-gpu:spare=3');
     expect(engineSpec('rapier')).toBe('rapier');
     expect(engineSpec('avbd-ref:iterations=4')).toBe('avbd-ref:iterations=4');

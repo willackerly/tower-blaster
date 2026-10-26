@@ -29,6 +29,7 @@ const PRESETS: Array<{ label: string; search: string }> = [
 const ENGINES: Array<{ label: string; spec: string }> = [
   { label: 'GPU AVBD', spec: 'avbd-gpu' },
   { label: 'Rapier (CPU)', spec: 'rapier' },
+  { label: 'Tiered (CPU)', spec: 'tiered' },
 ];
 
 // Solver iterations for the GPU engine: a tall column flexes and topples
@@ -42,6 +43,8 @@ interface ViewerHandle {
   error?: string;
   frames: number;
   bodies: number;
+  /** Bodies the last snapshot reports awake (dormant and frozen ones are not). */
+  awake: number;
   stepIndex: number;
   /** Scene loads so far: 1 after start, one more per R. */
   resets: number;
@@ -55,7 +58,7 @@ declare global { interface Window { __viewer: ViewerHandle } }
 const canvas = document.getElementById('c') as HTMLCanvasElement;
 const hud = document.getElementById('hud')!;
 const errorBox = document.getElementById('error')!;
-const handle: ViewerHandle = { status: 'loading', frames: 0, bodies: 0, stepIndex: 0, resets: 0, fire: () => {}, capture: async () => null, inputs: [] };
+const handle: ViewerHandle = { status: 'loading', frames: 0, bodies: 0, awake: 0, stepIndex: 0, resets: 0, fire: () => {}, capture: async () => null, inputs: [] };
 window.__viewer = handle;
 
 function fail(e: unknown) {
@@ -187,7 +190,7 @@ async function main() {
     source.update(s, shapesFor(s.count));
     snapMs.push(performance.now() - t0);
     handle.bodies = s.count;
-    awake = s.awake.reduce((a, x) => a + x, 0);
+    awake = handle.awake = s.awake.reduce((a, x) => a + x, 0);
   }
   let awake = 0;
 
@@ -198,7 +201,7 @@ async function main() {
     try {
       engine.push([ev]);
     } catch (e) {
-      // The GPU engine has room for GPU_SPARE fired balls (params.ts); R resets.
+      // The GPU and tiered engines have room for GPU_SPARE fired balls (params.ts); R resets.
       notice = `${e instanceof Error ? e.message : String(e)} (press R to reset)`;
       drawHud();
       return;

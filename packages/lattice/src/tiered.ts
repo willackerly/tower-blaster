@@ -28,12 +28,17 @@ import { BoxHash } from './hash.ts';
 import { type Lattice } from './lattice.ts';
 import { detach, looseColumns, type SupportModel } from './support.ts';
 import { CUBE_ROTATIONS, nearestCubeRotation } from './symmetry.ts';
+import { TIER } from '@tb/schema';
 
 export const TIER_UNSPAWNED = 0;
 export const TIER_LATTICE = 1;
 export const TIER_ACTIVE = 2;
 /** Frozen in place (a static host body) after coming to rest off any cell pose. */
 export const TIER_RUBBLE = 3;
+/** The init table entry of an id reserved for a pushed body (TierParams.spare). */
+const SPARE: BodyDesc = { shape: { kind: 'sphere', radius: 0.5 }, pos: [0, 0, 0], rot: [0, 0, 0, 1], linVel: [0, 0, 0], angVel: [0, 0, 0], density: 1, friction: 0.5, restitution: 0, tag: -1 };
+/** Internal tier -> Snapshot.tier (@tb/schema TIER). Proxies are lattice cells. */
+const RENDER_TIER: Record<number, number> = { [TIER_LATTICE]: TIER.lattice, [TIER_ACTIVE]: TIER.active, [TIER_RUBBLE]: TIER.rubble };
 
 /** Steps before a body found resting on a moving one tries to freeze again (the pass is the costly part of a step otherwise). */
 const FREEZE_RETRY = 8;
@@ -54,6 +59,8 @@ export interface TierParams {
   forceMin: number;
   /** Absolute cap on the speed handed to a cell woken by force, m/s (it is also capped by the speed of the bodies near it). */
   handoffMax: number;
+  /** Ids reserved for bodies pushed after init (host capacity is fixed at init). */
+  spare: number;
   /** Longest impact plug, in cells. */
   maxPlugDepth: number;
   /**
@@ -143,7 +150,7 @@ export interface TierParams {
 
 export const DEFAULT_TIERS: TierParams = {
   support: looseColumns, proxyMargin: 0.25, proxyKeep: 30, lookahead: 1, vWake: 0.25,
-  kappa: 0.8, forceMin: 2, handoffMax: 20, maxPlugDepth: 64, plugColumns: true, slideMin: 0.05, slideLine: false, unwedge: true,
+  kappa: 0.8, forceMin: 2, handoffMax: 20, spare: 0, maxPlugDepth: 64, plugColumns: true, slideMin: 0.05, slideLine: false, unwedge: true,
   settle: 'auto', vRest: 0.25, restDrift: 0.02, restSteps: 30, minActiveSteps: 60, settlePos: 0.02, settleRot: (1 * Math.PI) / 180, settlePush: 0.002,
   rubble: true, touchTol: 0.02, rubbleForceSteps: 3,
 };
@@ -258,6 +265,8 @@ export class TieredEngine implements PhysicsEngine {
   async init(scene: SceneDesc): Promise<void> {
     this.scene = scene;
     this.table = bodiesAt(scene, Infinity);
+    // Placeholders for pushed bodies: never switched on until push() describes them.
+    for (let k = 0; k < this.p.spare; k++) this.table.push(SPARE);
     const n = this.table.length;
     const built = latticesFromScene(scene, this.p.support);
     // Dormant cubes are at their cell pose (the scene's is within posTol of
@@ -324,7 +333,7 @@ export class TieredEngine implements PhysicsEngine {
   push(events: InputEvent[]): void {
     for (const ev of events) {
       const id = this.nextSpawn + this.pending.length;
-      if (id >= this.table.length) throw new Error('pushed spawn beyond the id table; reserve capacity in the scene');
+      if (id >= this.table.length) throw new Error(`pushed spawn beyond the id table (${this.table.length} ids): reserve more with TierParams.spare`);
       this.pending.push(ev);
     }
     this.pending.sort((a, b) => a.step - b.step);
@@ -381,7 +390,15 @@ export class TieredEngine implements PhysicsEngine {
       const id = this.nextSpawn++;
       this.tier[id] = TIER_ACTIVE;
       this.activeSince[id] = this.stepIndex;
-      changes.set(id, { id, mode: MODE_DYNAMIC, pos: b.pos, rot: b.rot, linVel: b.linVel, angVel: b.angVel });
+      // Spawns take ids in (step, push order); a pushed body may land on a
+      // slot the table described differently (a spare, or a later scene input).
+      const pushed = this.table[id] !== b;
+      if (pushed) {
+        this.table[id] = b;
+        this.mass[id] = massOf(b);
+        this.radius[id] = boundingRadius(b.shape);
+      }
+      changes.set(id, { id, mode: MODE_DYNAMIC, pos: b.pos, rot: b.rot, linVel: b.linVel, angVel: b.angVel, ...(pushed ? { body: b } : {}) });
       movers.push({ id, pos: b.pos, vel: b.linVel, awake: true });
     }
     this.curSpeed = new Map(movers.map((m) => [m.id, Math.hypot(...m.vel)]));
@@ -1095,6 +1112,8 @@ export class TieredEngine implements PhysicsEngine {
       s.pos.set(this.rubblePos.subarray(3 * id, 3 * id + 3), 3 * id);
       s.rot.set(this.rubbleRot.subarray(4 * id, 4 * id + 4), 4 * id);
     }
+    s.tier = new Uint8Array(count);
+    for (let id = 0; id < count; id++) s.tier[id] = RENDER_TIER[this.tier[id]!]!;
     return s;
   }
 

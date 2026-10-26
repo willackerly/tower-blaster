@@ -94,6 +94,12 @@ export interface ModeChange {
    * equilibrium instead of sagging. A hint; hosts may ignore it.
    */
   restLoad?: number;
+  /**
+   * The body's description when a spare id is switched on for the first
+   * time: its init table entry was only a placeholder (bodies pushed after
+   * init). The host takes shape and material from it from then on.
+   */
+  body?: BodyDesc;
 }
 
 export interface HostBatch {

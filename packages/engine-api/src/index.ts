@@ -57,6 +57,13 @@ export interface Snapshot {
   linVel: Float64Array; // 3 per body
   angVel: Float64Array; // 3 per body
   awake: Uint8Array; // 1 per body
+  /**
+   * Per body, the tier it is in, in the renderer's Body.flags encoding
+   * (@tb/schema TIER: active 0, rubble 1, lattice 2). Set by engines that
+   * keep tiers (TieredEngine); absent means every body is active. A body
+   * that is not active does not move until its tier changes.
+   */
+  tier?: Uint8Array;
 }
 
 export interface EngineInfo {
