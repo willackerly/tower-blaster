@@ -74,6 +74,35 @@ rules the code follows; the doc has the reasoning.
   seam to see (render.test.ts: within 2 of 255). `stoneDetail` 0 sends
   every box to `boxFar`. `real-no-lod` measures what the split saves.
 
+## What step 4 built
+
+- Ground materials in the same arrays as the stones, after them:
+  `gravel` (rounded pebbles of mixed tone in a dirt matrix, denser in
+  metre-scale clumps) and `dirt` (packed earth, drying cracks in clumps, a
+  few small stones), each tiling every `GROUND_TILE` (2 m) at 3.9 mm a
+  texel, and a macro layer (`MACRO_TILE`, 64 m) of low-frequency
+  brightness, tint and blend fields. The grounds keep the configured
+  `groundAlbedo` on average (mean multipliers within 5% of 1, tested on the
+  CPU and on the bake). The bake writes heights once into an r32float array
+  and takes normals from it, instead of evaluating each texel's material
+  five times.
+- Shading (`groundAt`, the real build's `fsGround`): the ground at two
+  scales, the second 2.71x coarser and turned 0.6 rad so their repeats
+  never line up, blended by the macro layer, which also varies brightness
+  and tint over tens of metres (`groundVariation`). Four material fetches
+  and one macro fetch per floor pixel; Toksvig widens roughness where mips
+  and the blend average bumps away; cavity darkens the ambient light.
+- Past the floor polygon's reach (600 m), `fsSky` shades the ground with
+  the texture's mean (its 1x1 level) under the same macro variation, so the
+  cut does not show (render.test.ts measures it).
+- Knobs: `groundMaterial`, `groundDetail` (0: the flat floor, nothing
+  sampled), `groundScale`, `groundVariation`. Bench variant
+  `real-flat-ground` compiles the ground material out (`REAL_GROUND`).
+- Rejected: hex tiling (Mikkelsen 2022), the best anti-tiling but three
+  fetches per texture instead of one each; per-pixel noise (tens of noise
+  calls per pixel); parallax offset near the camera, since the relief is
+  millimetres to a centimetre and the bake keeps no height channel for it.
+
 ## Floor and ambient (fixes after the stone step's screenshots)
 
 - Contact darkening (within 1.5 m of the floor) is for what stands on the

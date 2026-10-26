@@ -8,7 +8,7 @@ import { createDevice, readBuffer } from '@tb/gpu';
 import { Body, RenderRecord, Shape, TIER, readStruct } from '@tb/schema';
 import {
   agx, AGX_WGSL, LOOKS, realLook, type RealOptions, type LookParams, fromHalf, Atmosphere, CLEAR_DAY, transmittance, transmittanceHMu, multiScattering, skyViewDir, skyRadiance, skyViewUv, sampleTransmittance, ambientOf, distanceToGround, meteredIlluminance, Materials, heightNormal, STONES, GROUNDS, MATERIAL_LAYERS, MACRO_LAYER, layerTile, materialSample, macroSample, adaptedExposure, LUMA, R_TOP, R_GROUND, FX_WORDS, packFx, toHalf, bevelNormal, BEVEL_WGSL, oklabToLinear, OKLAB_WGSL, Post,
-  Culler, cullReference, GpuBodySource, invert, listMatches, lookAt, makeGpuBodies, multiply, packBodies, perspective, Renderer, SEG, SEGMENTS, SnapshotSource, transform,
+  Culler, cullReference, FLOOR_REACH, GpuBodySource, invert, listMatches, lookAt, makeGpuBodies, multiply, packBodies, perspective, Renderer, SEG, SEGMENTS, SnapshotSource, transform,
   translation, normalize, BOX_VERTS, SPHERE_VERTS, SUN, Sparks, CTL, MAX_EVENTS, flashSlot, FLASHES, MAX_BALLS, TRAIL, Lights, LIGHTS, LIGHT_META, LIGHT_PACKED, MATERIAL, AoVolume, aoGrid, aoFrame, splatReference, composeReference, AO_FOOT_WGSL, AO_SAMPLE_WGSL, AO_SEAM_WGSL, AO_ONE, type SplatBody, unpackImpacts, unpackSparks, spawnReference, stepReference, type Impact, type BodySource, type CullFrame, type FrameParams, type RendererOptions, type V3,
 } from '../src/index.ts';
 
@@ -1743,7 +1743,8 @@ export async function realChecks(looks: Array<string | (Partial<RealOptions> & P
   const out = [];
   for (const look of looks) {
     const { realDiag, stoneLod, ...real } = typeof look === 'string' ? {} : look;
-    const rend = goldenRenderer(device, src, typeof look === 'string' ? LOOKS[look]! : realLook(real), size, { realDiag, stoneLod });
+    // Object looks keep the floor flat unless they set it, so block statistics see the blocks only.
+    const rend = goldenRenderer(device, src, typeof look === 'string' ? LOOKS[look]! : realLook({ groundDetail: 0, ...real }), size, { realDiag, stoneLod });
     const f: FrameParams = { viewProj, eye, groundY: 0, time: 1, dt: 0, alpha: 1 };
     await rend.render(f);
     const stats = (await rend.render(f, true, true))!;
@@ -1769,6 +1770,93 @@ export async function realChecks(looks: Array<string | (Partial<RealOptions> & P
   const err = await device.popErrorScope();
   device.destroy();
   return { frames: out, horizonRow, error: err?.message ?? null };
+}
+
+/**
+ * The real look's ground (realism step 4), seen from 5 m up over open floor
+ * away from the golden scene's towers (sun from +x, so their shadows fall
+ * away from it). Per look: the RGBA frame's hash, the mean sRGB luma of the
+ * floor below the horizon, its fine detail (mean |luma - mean of its 4
+ * neighbours|), and its coarse variation (standard deviation of the means of
+ * 16 x 16 pixel blocks).
+ */
+export async function groundChecks(looks: Array<Partial<RealOptions> & Pick<RendererOptions, 'realDiag'>>, size: [number, number] = [320, 180]) {
+  const { device } = await createDevice({ timestamps: false });
+  device.pushErrorScope('validation');
+  const src = goldenScene(device);
+  const eye: V3 = [0, 5, 22], target: V3 = [0, 0, 34];
+  const viewProj = multiply(perspective(0.9, size[0] / size[1], 0.1, 2000), lookAt(eye, target));
+  const out = [];
+  for (const { realDiag, ...o } of looks) {
+    const rend = goldenRenderer(device, src, realLook({ sunElevation: 35, sunAzimuth: 90, ...o }), size, { realDiag });
+    const f: FrameParams = { viewProj, eye, groundY: 0, time: 1, dt: 0, alpha: 1 };
+    await rend.render(f);
+    const { data, bytesPerRow } = (await rend.render(f, true, true))!.pixels!;
+    const luma = (x: number, y: number) => { const q = y * bytesPerRow + 4 * x; return 0.2126 * data[q]! + 0.7152 * data[q + 1]! + 0.0722 * data[q + 2]!; };
+    const y0 = Math.round(size[1] * 0.45); // well below the horizon (row 0.37 of the frame)
+    let mean = 0, detail = 0, cnt = 0;
+    for (let y = y0; y < size[1] - 1; y++) for (let x = 1; x < size[0] - 1; x++) {
+      const l = luma(x, y);
+      mean += l;
+      detail += Math.abs(l - (luma(x - 1, y) + luma(x + 1, y) + luma(x, y - 1) + luma(x, y + 1)) / 4);
+      cnt++;
+    }
+    const blocks: number[] = [];
+    for (let by = y0; by + 16 <= size[1]; by += 16) for (let bx = 0; bx + 16 <= size[0]; bx += 16) {
+      let m = 0;
+      for (let y = by; y < by + 16; y++) for (let x = bx; x < bx + 16; x++) m += luma(x, y) / 256;
+      blocks.push(m);
+    }
+    const bm = blocks.reduce((a, b) => a + b, 0) / blocks.length;
+    out.push({ hash: fnv(data), mean: mean / cnt, detail: detail / cnt, coarse: Math.sqrt(blocks.reduce((a, b) => a + (b - bm) ** 2, 0) / blocks.length) });
+    rend.destroy();
+  }
+  const err = await device.popErrorScope();
+  device.destroy();
+  return { frames: out, error: err?.message ?? null };
+}
+
+/**
+ * Where the floor polygon ends (FLOOR_REACH along the view axis) and fsSky
+ * shades the ground on: seen from 50 m up, pitched so the cut is in view.
+ * Returns the cut's row and, per look, the mean sRGB luma of each row over
+ * the middle 60% of columns.
+ */
+export async function groundSeam(looks: Array<Partial<RealOptions>>, size: [number, number] = [320, 180]) {
+  const { device } = await createDevice({ timestamps: false });
+  device.pushErrorScope('validation');
+  const src = goldenScene(device);
+  const pitch = (24 * Math.PI) / 180;
+  const eye: V3 = [0, 50, 200], fwd: V3 = [0, -Math.sin(pitch), Math.cos(pitch)];
+  const viewProj = multiply(perspective(0.9, size[0] / size[1], 0.5, 2000), lookAt(eye, [eye[0] + fwd[0], eye[1] + fwd[1], eye[2] + fwd[2]]));
+  const inv = invert(viewProj);
+  // The cut's row: on the middle column, where the floor along the pixel's ray is FLOOR_REACH along the view axis.
+  let cut = -1;
+  for (let y = 0; y < size[1]; y++) {
+    const ny = 1 - (2 * (y + 0.5)) / size[1];
+    const p = [0, 1, 2, 3].map((i) => [0, ny, 0.5, 1].reduce((acc, v, j) => acc + inv[j * 4 + i]! * v, 0));
+    const d: V3 = [p[0]! / p[3]! - eye[0], p[1]! / p[3]! - eye[1], p[2]! / p[3]! - eye[2]];
+    if (d[1] >= 0) continue;
+    const t = eye[1] / -d[1];
+    if (t * (d[0] * fwd[0] + d[1] * fwd[1] + d[2] * fwd[2]) <= FLOOR_REACH) { cut = y; break; }
+  }
+  const rows = [];
+  for (const o of looks) {
+    const rend = goldenRenderer(device, src, realLook({ sunElevation: 35, sunAzimuth: 90, ...o }), size);
+    const f: FrameParams = { viewProj, eye, groundY: 0, time: 1, dt: 0, alpha: 1 };
+    await rend.render(f);
+    const { data, bytesPerRow } = (await rend.render(f, true, true))!.pixels!;
+    const x0 = Math.round(size[0] * 0.2), x1 = Math.round(size[0] * 0.8);
+    rows.push(Array.from({ length: size[1] }, (_, y) => {
+      let m = 0;
+      for (let x = x0; x < x1; x++) { const q = y * bytesPerRow + 4 * x; m += (0.2126 * data[q]! + 0.7152 * data[q + 1]! + 0.0722 * data[q + 2]!) / (x1 - x0); }
+      return m;
+    }));
+    rend.destroy();
+  }
+  const err = await device.popErrorScope();
+  device.destroy();
+  return { cut, rows, error: err?.message ?? null };
 }
 
 export interface AoProbeBody { pos: V3; half: V3; rot?: number[]; sphere?: boolean }
@@ -2221,7 +2309,7 @@ export async function floorChecks(looks: Array<Partial<RealOptions> & Pick<Rende
   const out: Array<{ street: number; openShadow: number; lit: number; streetRB: number; openShadowRB: number; litRB: number; streetSky: number; openShadowSky: number; litSky: number }> = [];
   for (const { realDiag, ...o } of looks) {
     const rend = new Renderer(device, { size }, { format: 'rgba8unorm', realDiag });
-    rend.look = realLook({ sunElevation: 35, sunAzimuth: 180, ...o });
+    rend.look = realLook({ sunElevation: 35, sunAzimuth: 180, groundDetail: 0, ...o }); // a flat floor: the probes compare light, not texture
     rend.setSource(src);
     rend.setShadowBounds([5, 4, 0], 22, [16, 8, 14]);
     const f: FrameParams = { viewProj, eye, groundY: 0, time: 1, dt: 0, alpha: 1 };
