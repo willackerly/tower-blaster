@@ -974,15 +974,15 @@ describe('drawing', () => {
     // Compiled out, the ground knobs do nothing, and the frame is texture 0's to the bit.
     expect(off!.hash).toBe(flat!.hash);
     // Measured on SwiftShader (mean luma; fine detail, mean |luma - neighbours|; coarse, std of 16 px block means):
-    // flat 123.1, 0.42, 2.4 (dither and the light's gradient); gravel 120.4, 1.34, 2.8; dirt 120.6, 0.65, 2.8;
-    // variation 0: 122.7, 1.35, 2.1; variation 1: 118.0, 1.34, 4.5; scale 4: 124.9, 1.66, 2.7.
+    // flat 123.1, 0.42, 2.4 (dither and the light's gradient); gravel 120.6, 1.50, 2.8; dirt 120.6, 0.65, 2.8;
+    // variation 0: 122.8, 1.51, 2.2; variation 1: 118.2, 1.49, 4.5; scale 4: 125.0, 1.80, 2.8.
     // Without macro variation the floor keeps its brightness within 5%; with it, this 20 m patch is one sample of a 64 m field.
     expect(Math.abs(still!.mean - flat!.mean) / flat!.mean).toBeLessThan(0.05);
     for (const f of [gravel, dirt, varied, coarse]) expect(Math.abs(f!.mean - flat!.mean) / flat!.mean).toBeLessThan(0.08);
     expect(gravel!.detail).toBeGreaterThan(2.5 * flat!.detail);
     expect(dirt!.detail).toBeGreaterThan(1.3 * flat!.detail);
     expect(gravel!.detail).toBeGreaterThan(1.5 * dirt!.detail);
-    expect(coarse!.detail).toBeGreaterThan(1.2 * gravel!.detail); // pebbles 4x larger: more of them span pixels
+    expect(coarse!.detail).toBeGreaterThan(1.1 * gravel!.detail); // pebbles 4x larger: more of them span pixels (1.20x since step 5's stone tones, 1.24x before)
     expect(varied!.coarse).toBeGreaterThan(2 * still!.coarse);
   }, 180_000); // seven renderers, each baking its materials: 37 s alone on SwiftShader, over 60 s in the full suite
 
