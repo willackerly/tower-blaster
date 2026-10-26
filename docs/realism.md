@@ -158,40 +158,54 @@ rules the code follows; the doc has the reasoning.
 ## What step 6 built
 
 - Impacts in the real look throw dust and stone chips instead of sparks
-  (the real look already had no heat glow). The spark pipeline's detector
-  is unchanged; `Sparks` gains a `debris` mode that splits its pool into a
-  dust ring (`DUST_POOL`, 2048 slots) and a chip ring (`CHIP_POOL`, 4096)
-  with their own heads and per-frame spawn budgets (10 puffs, 24 chips).
-  The budgets are set from the rings: budget x 60 frames x mean life stays
-  under the ring (10 x 60 x 3 s = 1800 of 2048), so a long collapse builds
-  a steady cloud instead of recycling puffs before they grow. An impact of
-  speed change dv is owed (dv - 2.5) x 0.6 puffs (at most 8) and
-  (dv - 3) x 1 chips (at most 12), the fraction rounded up by chance (a
-  hash of the event and frame), so the many 3-5 m/s hits of a collapse
-  make dust now and then rather than never. When a frame has more events
-  than budget, the spawn threads walk the events from a per-frame start in
-  steps of a prime larger than `MAX_EVENTS`, so the dust samples the whole
-  collapse rather than the lowest body indices. Bits 8-11 of a particle's
-  packed word keep the impact's size class (dv / 3, at most 15), and a
-  puff's size scales from 0.5x to 2x with it: the ball's hit throws a big
-  puff. Switching mode kills every particle; in debris mode the simulate
-  pass runs over the rings only (6144 slots, not 65536).
-- First Mac screenshots (S14, ball into a tower at 30 m) showed almost no
-  dust: the first counts were floor((dv - 2.5) x 0.5), which gives a
-  typical collapse hit no puff at all, and their budget (96 a frame)
-  recycled the dust ring every 0.36 s, so the few puffs there were stayed
-  young and small. The rules above replace them.
-- A puff lives 2 to 4 s: launched slowly (up to 1.6 m/s) up and along the
-  impact, linear drag, a slow rise, and a floor 10 cm above the ground. It
+  (the real look already had no heat glow). The spark detector is reused,
+  with a lower threshold in debris mode (`dustDv`, 1.2 m/s against the
+  sparks' 2.5: a knock too light for a spark still raises dust). `Sparks`
+  gains a `debris` mode that splits its pool into a dust ring (`DUST_POOL`,
+  2048 slots) and a chip ring (`CHIP_POOL`, 4096). Switching mode kills
+  every particle; in debris mode the simulate pass runs over the rings only
+  (6144 slots, not 65536).
+- Counts. An impact of speed change dv is owed (dv - 1.2) x 1.5 puffs (at
+  most 8) and (dv - 3) x 1 chips (at most 12), the fraction rounded up by
+  chance (a hash of the event and frame), so the many light knocks of a
+  collapse each make dust now and then.
+- Budgets are token buckets, kept on the GPU in the control words (fixed
+  point, `TOKEN_ONE` per particle): each kind spawns at most what its
+  bucket holds, at most its size in one frame (384 puffs, 768 chips), and
+  refills at its rate (600 puffs, 1500 chips per second of particle time).
+  A big hit spends the bucket at once; a long collapse is held to the
+  rate, and rate x mean life stays under the ring (600 x 3 s = 1800 of
+  2048), so the cloud builds instead of recycling young puffs. A paused
+  game (dt 0) refills nothing.
+- When a frame has more events than a bucket allows, the spawn threads walk
+  the events from a per-frame start in steps of a prime larger than
+  `MAX_EVENTS`, so the dust samples the whole collapse, not the lowest body
+  indices. Bits 8-11 of a particle's packed word keep its impact's size
+  class (dv in whole m/s, at most 15), and a puff's size scales from 0.5x
+  to 2x with it: the ball's hit throws a big puff.
+- How the rules were found. The first rule (floor((dv - 2.5) x 0.5) puffs,
+  at most 96 a frame) showed almost no dust in the Mac's S14 screenshots.
+  A histogram of per-step dv in that scene on the GPU engine (a 40 m/s
+  ball into a tower, 4 s) has 593 body-steps above 1.2 m/s but only 164
+  above 2.5, 39 of them in the ball's one step: the old rule gave a
+  typical knock no puff at all, and a second attempt with a flat budget of
+  10 a frame (to keep the ring from recycling) capped the ball's hit at 10
+  puffs. Rendering that collapse headless with the rules above, about 700
+  puffs are alive by 2.8 s and 1000 by 5.5 s, and the falling rubble
+  stands in a haze. Dust raised inside the tower stays hidden until the
+  pile opens, as it would.
+- A puff lives 2 to 4 s: launched at up to 2.5 m/s up and along the impact,
+  linear drag, a rise of 0.6 m/s^2, and a floor 10 cm above the ground. It
   draws as a camera-facing disc that grows from 0.13 to 1 of `dustSize`
-  (ease-out, times its size class's 0.5 to 2) and fades as (1 - t)^1.5, with a macro-noise texture so puffs
-  are not round, softened where it meets the ground. Lighting is done in
-  the vertex shader: one shadow tap at the centre, the sun through a
-  Henyey-Greenstein phase (g 0.4, half isotropic, so puffs against the sun
-  glow and puffs with the sun behind the camera stay light), and half sky,
-  half ground ambient; the colour is the blocks' mean albedo mixed 30%
-  toward the ground. Premultiplied blending, no depth write, aerial
-  perspective applied.
+  (ease-out, times its size class's 0.5 to 2), and fades as (1 - t)^1.5
+  from `dustOpacity` at its centre. A macro-noise texture keeps puffs from
+  looking round, and the disc softens where it meets the ground. Lighting
+  is done in the vertex shader: one shadow tap at the centre, the sun
+  through a Henyey-Greenstein phase (g 0.4, half isotropic, so puffs
+  against the sun glow and puffs with the sun behind the camera stay
+  light), and half sky, half ground ambient. The colour is the blocks'
+  mean albedo mixed 30% toward the ground. Premultiplied blending, no
+  depth write, aerial perspective applied.
 - A chip lives 1.5 to 3.5 s: a spark's flight (gravity, quadratic drag)
   with its own bounce (0.25) and friction (0.55). It draws as a small
   opaque tumbling flake (3.5 cm, 0.5 to 1.5x, shrinking over its last 20%
@@ -204,28 +218,36 @@ rules the code follows; the doc has the reasoning.
   `indirect-first-instance`), so the chip shader adds the ring's offset
   through the `CHIP_BASE` override.
 - Knobs: `dust` and `chips` (multipliers on the per-dv counts; 0 turns one
-  off, both 0 skips the passes) and `dustSize` (a full-grown puff's
-  radius, m: 1.2, half that for the softest hits and twice for the
-  hardest). Bench variant `real-dust`: 64 impacts a frame around the
-  view's focus with 1/60 s steps, warmed up 4 s so the counts and ages are
-  steady (the bench's new "Particles alive" column shows how many); real
-  against it is the worst steady cost. At 1b0ae83 (the first budgets, both
-  rings full) it cost +0.5% to +4.6% of the real frame on the M5 Max; the
-  real look stayed under its caps (near 100k: 3.68 ms p50 of 4).
-- Tests: the counts' expected rates and caps, and a short budget sampling
-  every event over frames; the spawn and flight kernels against CPU twins
-  (24 bursts; spawn within 3e-4, 80 frames of flight within 1e-6), each
-  kind only in its own ring, puffs never below 10 cm and chips never below the ground, all dead
-  and both draws empty after 4 s, the mode switch clearing the pool; a
-  flood of 64 impacts a frame for 220 frames spawning exactly the budgets
-  and wrapping both rings without touching the slots past them; the draw
-  changing pixels only near a burst in the open, none on a wall hiding a
-  second burst, each kind visible on its own, and `dust` 0 with `chips` 0
-  drawing the sparks-off frame bit for bit.
-- Rejected: soft particles against the depth buffer (needs a depth copy;
-  the ground fade covers the common case); lit volume dust (the AO volume
-  is 0.5 m, coarser than a puff); chips as rigid bodies in the physics
-  engine (a chip is under a pixel past 20 m, and engines count bodies).
+  off, both 0 skip the passes), `dustSize` (m, 1.6) and `dustOpacity`
+  (0.6). Bench variant `real-dust`: 64 impacts a frame around the view's
+  focus with 1/60 s steps, warmed up 4 s so the counts and ages are steady
+  (the bench's "Particles alive" column shows how many); real against it is
+  the worst steady cost. On the M5 Max (82e0559, the flat-budget attempt,
+  about 5,200 alive) it cost +0.2% to +7.8% of the real frame, and the real
+  look stayed under its caps (near 100k: 3.69 ms p50 of 4).
+- Tests:
+  - the counts' expected rates and caps;
+  - a short budget sampling every event over frames, and a part-empty
+    bucket limiting a frame;
+  - the spawn and flight kernels against CPU twins (24 bursts; spawn
+    within 3e-4, 80 frames of flight within 1e-6), each kind only in its
+    own ring;
+  - puffs never below 10 cm and chips never below the ground; all dead and
+    both draws empty after 4 s; the mode switch clearing the pool;
+  - a flood spending each bucket in its first frame and then spawning
+    exactly its rate, and, refilled every frame, wrapping both rings
+    without touching the slots past them;
+  - the draw: pixels change only near a burst in the open, none on a wall
+    hiding a second burst, each kind is visible on its own, and `dust` 0
+    with `chips` 0 draws the sparks-off frame bit for bit.
+- Rejected:
+  - soft particles against the depth buffer (needs a depth copy; the
+    ground fade covers the common case);
+  - lit volume dust (the AO volume is 0.5 m, coarser than a puff);
+  - chips as rigid bodies in the physics engine (a chip is under a pixel
+    past 20 m, and engines count bodies);
+  - a CPU-side budget (the CPU does not know how many events a frame has
+    without a readback).
 
 ## Floor and ambient (fixes after the stone step's screenshots)
 

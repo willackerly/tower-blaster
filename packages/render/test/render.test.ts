@@ -434,36 +434,39 @@ describe('debris (real look impacts)', () => {
   });
 
   it('puff and chip counts: the expected share per m/s, fractions rounded up by chance, capped', () => {
+    const D = DEFAULT_DEBRIS;
     const e = (strength: number, k = 0) => ({ pos: [k * 0.37, 1 + k * 0.11, 0] as V3, dir: [0, 1, 0] as V3, strength, packed: 0 });
     const mean = (f: (frame: number) => number) => { let s = 0; for (let fr = 0; fr < 4000; fr++) s += f(fr); return s / 4000; };
-    // Below the spark threshold, or with the knob at 0: never.
-    expect(mean((fr) => dustCount(e(2.5), DEFAULT_SPARKS, DEFAULT_DEBRIS, fr))).toBe(0);
-    expect(mean((fr) => dustCount(e(100), DEFAULT_SPARKS, { ...DEFAULT_DEBRIS, dustPerDv: 0 }, fr))).toBe(0);
-    expect(mean((fr) => chipCount(e(3), DEFAULT_DEBRIS, fr))).toBe(0); // chips need a harder hit than dust
-    // Weak hits make dust now and then, at the expected rate (4000 draws: 3 sigma is under 0.025).
-    expect(mean((fr) => dustCount(e(3), DEFAULT_SPARKS, DEFAULT_DEBRIS, fr))).toBeCloseTo(0.3, 1);
-    expect(Math.abs(mean((fr) => dustCount(e(5, 3), DEFAULT_SPARKS, DEFAULT_DEBRIS, fr)) - 1.5)).toBeLessThan(0.03);
-    expect(Math.abs(mean((fr) => chipCount(e(5.5, 5), DEFAULT_DEBRIS, fr)) - 2.5)).toBeLessThan(0.03);
-    expect(mean((fr) => dustCount(e(100), DEFAULT_SPARKS, DEFAULT_DEBRIS, fr))).toBe(DUST_PER_EVENT);
-    expect(mean((fr) => chipCount(e(100), DEFAULT_DEBRIS, fr))).toBe(CHIPS_PER_EVENT);
-    // Size classes: dv / 3, at most 15.
-    expect([2.9, 3, 10, 44.9, 45, 200].map(debrisClass)).toEqual([0, 1, 3, 14, 15, 15]);
+    // Below the debris threshold, or with the knob at 0: never.
+    expect(mean((fr) => dustCount(e(D.dustDv), D, fr))).toBe(0);
+    expect(mean((fr) => dustCount(e(100), { ...D, dustPerDv: 0 }, fr))).toBe(0);
+    expect(mean((fr) => chipCount(e(D.chipDv), D, fr))).toBe(0); // chips need a harder hit than dust
+    // Light knocks make dust now and then, at the expected rate (4000 draws: 3 sigma is under 0.025).
+    expect(Math.abs(mean((fr) => dustCount(e(1.5), D, fr)) - 0.45)).toBeLessThan(0.025);
+    expect(Math.abs(mean((fr) => dustCount(e(4, 3), D, fr)) - 4.2)).toBeLessThan(0.03);
+    expect(Math.abs(mean((fr) => chipCount(e(5.5, 5), D, fr)) - 2.5)).toBeLessThan(0.03);
+    expect(mean((fr) => dustCount(e(100), D, fr))).toBe(DUST_PER_EVENT);
+    expect(mean((fr) => chipCount(e(100), D, fr))).toBe(CHIPS_PER_EVENT);
+    // Size classes: dv in whole m/s, at most 15.
+    expect([0.9, 1, 10.5, 14.9, 15, 200].map(debrisClass)).toEqual([0, 1, 10, 14, 15, 15]);
   });
 
-  it('a budget smaller than the events samples all of them over frames, each frame different events', () => {
+  it('a budget smaller than the events samples all of them over frames, each frame different events; tokens limit a frame', () => {
+    const short = { ...DEFAULT_DEBRIS, dustBudget: 10, chipBudget: 24 };
     const events = Array.from({ length: 64 }, (_, k) => ({ pos: [k, 1, 0] as V3, dir: [0, 1, 0] as V3, strength: 30, packed: 0xffffff | (1 << 24) }));
     const seen = new Set<number>();
     for (let frame = 0; frame < 64; frame++) {
-      const { dust, chips } = debrisSpawnReference(events, frame, DEFAULT_SPARKS, DEFAULT_DEBRIS);
-      expect(dust).toHaveLength(DEFAULT_DEBRIS.dustBudget); // every thread has an event with dust to give
-      expect(chips).toHaveLength(DEFAULT_DEBRIS.chipBudget);
+      const { dust, chips } = debrisSpawnReference(events, frame, short);
+      expect(dust).toHaveLength(10); // every thread has an event with dust to give
+      expect(chips).toHaveLength(24);
       const xs = dust.map((s) => s.pos[0]);
       expect(new Set(xs).size).toBe(xs.length); // one puff per event while the budget is short
       xs.forEach((x) => seen.add(x));
     }
     expect(seen.size).toBe(64); // not the first ten bodies every frame
-    expect(debrisClass(30)).toBe(10);
-    expect(debrisSpawnReference(events, 0, DEFAULT_SPARKS, DEFAULT_DEBRIS).dust.every((s) => ((s.packed >>> 8) & 0xf) === 10)).toBe(true);
+    const r = debrisSpawnReference(events, 0, short, [3, 5]);
+    expect([r.dust.length, r.chips.length]).toEqual([3, 5]); // a part-empty bucket
+    expect(r.dust.every((s) => ((s.packed >>> 8) & 0xf) === 15)).toBe(true); // dv 30: the largest class
   });
 
   it('a puff slows, rises and never sinks below 10 cm; a chip falls and bounces', () => {
@@ -508,17 +511,25 @@ describe('debris (real look impacts)', () => {
     expect(r.aliveAfterSwitch).toBe(0); // switching to sparks kills the debris
   }, 120_000);
 
-  it('a flood stays within the dust and chip budgets and inside the rings', async (ctx) => {
+  it('a flood spends the buckets, then spawns at their rates; refilled every frame it wraps the rings and stays inside them', async (ctx) => {
     if (!gpu) return ctx.skip();
-    const r = await call('debrisFlood', 220);
+    const D = DEFAULT_DEBRIS;
+    const r = await call('debrisFlood', 120, 1 / 60, null);
     expect(r.error).toBeNull();
-    const [dustBudget, chipBudget] = r.budgets;
-    expect(new Set(r.spawned)).toEqual(new Set([dustBudget! + chipBudget!])); // every frame: the budgets, not 64 x (8 + 12)
-    expect(r.dustHead).toBe(220 * dustBudget!);
-    expect(r.chipHead).toBe(220 * chipBudget!);
-    expect(r.dust).toBe(r.dustPool); // 2200 puffs into 2048 slots, 5280 chips into 4096: both rings wrapped, all live
-    expect(r.chips).toBe(r.chipPool);
-    expect(r.outside).toBe(0); // the 59k slots past the rings untouched
+    expect(r.dustSpawned[0]).toBe(D.dustBudget); // a full bucket: the budget at once, not 64 x 8
+    expect(r.chipSpawned[0]).toBe(D.chipBudget);
+    expect(new Set(r.dustSpawned.slice(1))).toEqual(new Set([D.dustRate / 60])); // then the rate: 600/s at 60 frames a second
+    expect(new Set(r.chipSpawned.slice(1))).toEqual(new Set([D.chipRate / 60]));
+    expect(r.dustHead).toBe(D.dustBudget + 119 * (D.dustRate / 60));
+    // Refilled in full every frame: 30 frames of the budgets overrun both rings.
+    const w = await call('debrisFlood', 30, 1 / 480, 1e7);
+    expect(w.error).toBeNull();
+    expect(new Set(w.dustSpawned)).toEqual(new Set([D.dustBudget]));
+    expect(w.dustHead).toBe(30 * D.dustBudget);
+    expect(w.chipHead).toBe(30 * D.chipBudget);
+    expect(w.dust).toBe(w.dustPool); // 11.5k puffs into 2048 slots: the ring wrapped, all live
+    expect(w.chips).toBe(w.chipPool);
+    expect(w.outside).toBe(0); // the 59k slots past the rings untouched
   }, 120_000);
 
   it('a burst draws only near its projection, not through a wall; dust and chips 0 draw nothing', async (ctx) => {
@@ -1348,8 +1359,8 @@ describe('drawing', () => {
     expect(r.error).toBeNull();
     expect(r.diff).toBe(0);
     expect(r.prevEqual).toBe(true); // beforeStep() copied the state into prev
-    // Uniforms only (frame, cull, spark and light params, spark control reset): measured 1044 B. Any per-body upload is 41 x Body.size more.
-    expect(r.bytesPerFrame).toBeLessThanOrEqual(1536);
-    expect(1536).toBeLessThan(41 * Body.size);
+    // Uniforms only (frame, cull, spark and light params, spark control reset): measured 1554 B (the debris params and counters added 24). Any per-body upload is 41 x Body.size more.
+    expect(r.bytesPerFrame).toBeLessThanOrEqual(1600);
+    expect(1600).toBeLessThan(41 * Body.size);
   });
 });

@@ -69,7 +69,7 @@ export interface LookParams {
   /** With an atmosphere: sun shadow penumbrae as wide as the sun's disc times softness (0: the stylized looks' 3x3 taps). Default 1. */
   shadow?: { softness: number };
   /** With an atmosphere and effects off: impact dust and chips, as multiples of the default amounts (0: none), and a puff's full size (m). */
-  debris?: { dust: number; chips: number; size: number };
+  debris?: { dust: number; chips: number; size: number; opacity: number };
   /** false: none of the stylized effects (sparks, ball trail, heat glow, ball and impact lights). Default true. */
   effects?: boolean;
 }
@@ -164,10 +164,11 @@ export interface RealOptions {
   /** The sun's angular diameter, degrees (0.53 is the real one): the disc in the sky and, times shadowSoftness, how fast shadows soften with distance (0: hard 3x3 taps). */
   sunSize: number;
   shadowSoftness: number;
-  /** Impacts throw dust puffs and stone chips (multiples of the default amounts, 0: none); a puff grows to a radius of about dustSize metres (half that for the softest hits, twice for the hardest). */
+  /** Impacts throw dust puffs and stone chips (multiples of the default amounts, 0: none); a puff grows to a radius of about dustSize metres (half that for the softest hits, twice for the hardest), dustOpacity opaque at its centre. */
   dust: number;
   chips: number;
   dustSize: number;
+  dustOpacity: number;
 }
 
 export const REAL_DEFAULTS: RealOptions = {
@@ -175,7 +176,7 @@ export const REAL_DEFAULTS: RealOptions = {
   stone: 'limestone', stoneDetail: 1, stoneScale: 1, stoneFade: 8, wear: 0.5, dirt: 0.4,
   groundMaterial: 'gravel', groundDetail: 1, groundScale: 1, groundVariation: 0.5, hills: 1.5, hillDistance: 6,
   sunSize: 0.53, shadowSoftness: 1,
-  dust: 1, chips: 1, dustSize: 1.2,
+  dust: 1, chips: 1, dustSize: 1.6, dustOpacity: 0.6,
 };
 
 /** Direction toward the sun from elevation and azimuth in degrees. */
@@ -208,7 +209,7 @@ export function realLook(o: Partial<RealOptions> = {}): LookParams {
     ground: { kind: r.groundMaterial, scale: r.groundScale, detail: r.groundDetail, variation: r.groundVariation },
     hills: { height: r.hills, distance: r.hillDistance },
     shadow: { softness: r.shadowSoftness },
-    debris: { dust: r.dust, chips: r.chips, size: r.dustSize },
+    debris: { dust: r.dust, chips: r.chips, size: r.dustSize, opacity: r.dustOpacity },
     hueStep: 4,
     ball: hex('#8A8D90'),
     ballEmissive: 0,
@@ -244,6 +245,7 @@ export const REAL_KNOBS = {
   dust: { label: 'impact dust x', min: 0, max: 4, step: 0.1 },
   chips: { label: 'impact chips x', min: 0, max: 4, step: 0.1 },
   dustSize: { label: 'dust puff radius (m)', min: 0.1, max: 5, step: 0.1 },
+  dustOpacity: { label: 'dust puff opacity', min: 0, max: 1, step: 0.05 },
 } as const;
 export type RealKnob = keyof typeof REAL_KNOBS;
 

@@ -9,7 +9,7 @@ import { Body, RenderRecord, Shape, TIER, readStruct } from '@tb/schema';
 import {
   agx, AGX_WGSL, LOOKS, realLook, type RealOptions, type LookParams, fromHalf, Atmosphere, CLEAR_DAY, transmittance, transmittanceHMu, multiScattering, skyViewDir, skyRadiance, skyViewUv, sampleTransmittance, ambientOf, distanceToGround, meteredIlluminance, Materials, heightNormal, STONES, GROUNDS, MATERIAL_LAYERS, MACRO_LAYER, layerTile, materialSample, macroSample, adaptedExposure, LUMA, R_TOP, R_GROUND, FX_WORDS, packFx, toHalf, bevelNormal, BEVEL_WGSL, oklabToLinear, OKLAB_WGSL, Post,
   Culler, cullReference, FLOOR_REACH, GpuBodySource, invert, listMatches, lookAt, makeGpuBodies, multiply, packBodies, perspective, Renderer, SEG, SEGMENTS, SnapshotSource, transform,
-  translation, normalize, BOX_VERTS, SPHERE_VERTS, SUN, Sparks, CTL, MAX_EVENTS, flashSlot, FLASHES, MAX_BALLS, TRAIL, Lights, LIGHTS, LIGHT_META, LIGHT_PACKED, MATERIAL, AoVolume, aoGrid, aoFrame, splatReference, composeReference, AO_FOOT_WGSL, AO_SAMPLE_WGSL, AO_SEAM_WGSL, AO_ONE, type SplatBody, unpackImpacts, unpackSparks, spawnReference, stepReference, debrisSpawnReference, dustStepReference, chipStepReference, DEFAULT_DEBRIS, type SparkState, type Impact, type BodySource, type CullFrame, type FrameParams, type RendererOptions, type V3,
+  translation, normalize, BOX_VERTS, SPHERE_VERTS, SUN, Sparks, CTL, MAX_EVENTS, flashSlot, FLASHES, MAX_BALLS, TRAIL, Lights, LIGHTS, LIGHT_META, LIGHT_PACKED, MATERIAL, AoVolume, aoGrid, aoFrame, splatReference, composeReference, AO_FOOT_WGSL, AO_SAMPLE_WGSL, AO_SEAM_WGSL, AO_ONE, type SplatBody, unpackImpacts, unpackSparks, spawnReference, stepReference, debrisSpawnReference, dustStepReference, chipStepReference, type SparkState, type Impact, type BodySource, type CullFrame, type FrameParams, type RendererOptions, type V3,
 } from '../src/index.ts';
 
 function rng(seed: number) {
@@ -1119,7 +1119,7 @@ export async function debrisSim(frames: number) {
   const frame0 = sp.nextFrame;
   const s0 = await sparkFrame(device, sp, src, 0, 0, 'debris');
   const slots = unpackSparks(await readBuffer(device, sp.sparks));
-  const want = debrisSpawnReference(events, frame0, sp.config, sp.debris);
+  const want = debrisSpawnReference(events, frame0, sp.debris);
   const wantDust = new Map(want.dust.map((s) => [s.packed, s])), wantChip = new Map(want.chips.map((s) => [s.packed, s]));
   let spawnErr = 0, unmatched = 0, outside = 0, bornDust = 0, bornChips = 0;
   const born = new Map<number, { init: SparkState; dust: boolean }>();
@@ -1173,16 +1173,19 @@ export async function debrisSim(frames: number) {
   };
 }
 
-/** A debris flood: 64 strong bursts a frame, in short steps (nothing dies). Spawns stay within the dust and chip budgets and every particle within its ring. */
-export async function debrisFlood(frames: number) {
+/** A debris flood: 64 strong bursts a frame for frames of dt each (rate: both buckets' refill per second, null for the defaults). */
+export async function debrisFlood(frames: number, dt: number, rate: number | null) {
   const { device } = await createDevice({ timestamps: false });
   device.pushErrorScope('validation');
   const src = rawSource(device, new ArrayBuffer(4 * Body.size), new ArrayBuffer(4 * Body.size), sparkShapes(), new Uint32Array(4), 0, 4);
   const sp = new Sparks(device);
-  const spawned: number[] = [];
+  if (rate !== null) sp.debris = { ...sp.debris, dustRate: rate, chipRate: rate };
+  const dustSpawned: number[] = [], chipSpawned: number[] = [];
   for (let f = 0; f < frames; f++) {
     for (let i = 0; i < 64; i++) sp.inject([i, 1, f], [0, 1, 0], 30);
-    spawned.push((await sparkFrame(device, sp, src, 1 / 480, 0, 'debris')).ctl[CTL.spawned]!);
+    const { ctl } = await sparkFrame(device, sp, src, dt, 0, 'debris');
+    dustSpawned.push(ctl[CTL.dustSpawned]!);
+    chipSpawned.push(ctl[CTL.chipSpawned]!);
   }
   const slots = unpackSparks(await readBuffer(device, sp.sparks));
   const [dustPool, chipPool] = sp.rings;
@@ -1191,7 +1194,7 @@ export async function debrisFlood(frames: number) {
   const err = await device.popErrorScope();
   sp.destroy();
   device.destroy();
-  return { spawned, dust: live(0, dustPool), chips: live(dustPool, dustPool + chipPool), outside: live(dustPool + chipPool, slots.length), dustHead: ctl[CTL.dustHead], chipHead: ctl[CTL.chipHead], dustPool, chipPool, budgets: [DEFAULT_DEBRIS.dustBudget, DEFAULT_DEBRIS.chipBudget], error: err?.message ?? null };
+  return { dustSpawned, chipSpawned, dust: live(0, dustPool), chips: live(dustPool, dustPool + chipPool), outside: live(dustPool + chipPool, slots.length), dustHead: ctl[CTL.dustHead], chipHead: ctl[CTL.chipHead], dustPool, chipPool, error: err?.message ?? null };
 }
 
 /** A flood: every one of 100k bodies hit at once. Events and sparks stay within their budgets. */

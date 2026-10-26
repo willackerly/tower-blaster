@@ -24,8 +24,7 @@ import { SnapshotSource, type BodySource } from './source.ts';
 export { BOX_CUBE_VERTS, BOX_FAN_VERTS, BOX_VERTS, SPHERE_VERTS } from './shaders.ts';
 
 const SAMPLES = 4;
-/** Real look debris: a dust puff's peak opacity at its centre, and a chip's size (m, about; each varies 0.5 to 1.5x). */
-const DUST_OPACITY = 0.4;
+/** Real look debris: a chip's size (m, about; each varies 0.5 to 1.5x). */
 const CHIP_SIZE = 0.035;
 // From the camera's right, slightly behind the scene: one lit face, one in
 // shade, and shadows falling toward the viewer.
@@ -152,7 +151,7 @@ export function lookUniforms(l: LookParams): Record<string, number | number[]> {
     stoneDetail: [l.stone?.detail ?? 0, l.stone?.fade ?? 1, 0, 0],
     ground: l.ground ? [GROUND_LAYER + GROUNDS.indexOf(l.ground.kind), l.ground.scale, l.ground.detail, l.ground.variation] : [GROUND_LAYER, 1, 0, 0],
     hills: l.hills ? [(l.hills.height * Math.PI) / 180, l.hills.distance * 1000, 0, 0] : [0, 1000, 0, 0],
-    debris: [l.debris?.size ?? 1.2, DUST_OPACITY, CHIP_SIZE, 0],
+    debris: [l.debris?.size ?? 1.6, l.debris?.opacity ?? 0.6, CHIP_SIZE, 0],
     blockAlbedo: [...[0, 1, 2].map((k) => l.ramp.reduce((acc, c) => acc + srgbToLinear(c[k]!), 0) / l.ramp.length), 0],
     ...Object.fromEntries(l.ramp.map((c, i) => [`ramp${i}`, [...linearToOklab(lin(c) as V3), 0]])),
   };
