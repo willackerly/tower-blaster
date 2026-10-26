@@ -67,7 +67,11 @@ describe('reference AVBD: walls and columns fall as rigid bodies do', () => {
   // of impacts (the bottom joint opens), not as Housner's one corner impact.
   // Measured far side / rigid (2026-10-25): 0.69 at 10 iterations; 0.86-0.98
   // from 16 to 60, except 1.008 at exactly 20; 0.92-0.97 at 20 with beta
-  // changed by 10%.
+  // changed by 10%. With the load floor: 0.64 / 0.87 at 10 / 20 iterations;
+  // with the floor and the load cap: 0.63 / 0.90 (2026-10-26: at 10
+  // iterations the cap lowers it, 5% above the 0.6 gate; dropped to the cap
+  // at once (capFall 0) it was 0.67 / 0.92, and 0.79 / 0.96 with the cap on
+  // the pair's mean load instead of its largest).
   it.for([
     [10, 0.15, 0.6],
     [20, 0.03, 0.85],

@@ -695,6 +695,86 @@ describe('stacks and towers', () => {
     expect(await leaningColumn({ restDepth: 0 })).toBeGreaterThan(1);
   });
 
+  // The floor alone is a ratchet: a landing's lambda_n spikes (here the
+  // pre-settle) and the beta ramp stay in k_n for ~100 steps, and a column
+  // taller than 10 iterations resolve is unstable to kicks at about 2x its
+  // resting k_n: it bounces, each landing raises k_n again, and it never stops.
+  // The load cap eases k_n towards loadCap x the floor of the largest load on
+  // a point of its pair, falling at most to capFall x its uncapped value each
+  // step, so it forgets them within a dozen-odd steps. Measured 2026-10-26,
+  // max speed over steps 301-600 with / without the cap: 24 cubes 1e-15 /
+  // 0.36 m/s, 30 cubes 5e-10 / 0.50 m/s (40 cubes 2e-5 with it). Kicked
+  // vertically at step 400 (every cube a random vertical speed of up to
+  // 1 m/s), the 30-cube column boils again for good without the cap
+  // (0.51 m/s over steps 601-900) and comes back to rest with it (4e-7 m/s).
+  // A 4x4x25 tower (max speed over steps 201-300, sideways offset at step
+  // 300): 6e-5 m/s and 0.025 mm with the cap, 0.42 m/s and 50 mm without; an
+  // 8x8x25 one, as in the S4 city, the same (6e-5 m/s, 0.027 mm; 0.41 m/s,
+  // 45 mm).
+  //
+  // Sideways kicks are not covered. At 10 iterations a column of 8-20 cubes,
+  // or a 2x2 to 4x4 tower 8 high, kicked sideways by up to 0.01 m/s per cube
+  // keeps rocking (0.17-0.50 m/s over steps 1201-1500), with the cap as with
+  // the floor alone (the 8-cube case below: 0.25 m/s with the cap, 0.18 with
+  // the floor alone, 0.39 with neither; over 22 draws of the kick 0.12-0.26,
+  // 0.17-0.18 and 0.31-0.62). 4x4x25 and 8x8x25 towers slow to 8e-4 and
+  // 5e-4 m/s by step 1500, then grow again (7e-3 and 3e-3 m/s over steps
+  // 2101-2400). postStabilize off (2e-5) or 100 iterations (1e-9) damp it, so
+  // it is post-stabilization at low iteration counts, not the floor or the cap
+  // (2026-10-26). The it.fails case below tracks it.
+  type Kick = (linVel: Vec3, rnd: () => number) => void;
+  const column = async (H: number, params: Partial<AvbdParams>, { F = 1, steps = 600, win = 300, kick }: { F?: number; steps?: number; win?: number; kick?: Kick } = {}) => {
+    const scene = buildScenario('S1', { F, H, gap: 0 }, 1);
+    const e = new AvbdReferenceEngine(params);
+    await e.init(scene);
+    let maxV = 0, side = 0, seed = 12345;
+    const rnd = () => { seed = (seed * 1103515245 + 12345) % 2147483648; return seed / 2147483648; };
+    for (let i = 1; i <= steps; i++) {
+      if (kick && i === 401) for (const b of e.world!.bodies) kick(b.linVel, rnd);
+      e.step();
+      if (i > steps - win) for (const b of e.world!.bodies) maxV = Math.max(maxV, Math.hypot(...b.linVel));
+    }
+    e.world!.bodies.forEach((b, i) => { const p0 = scene.bodies[i]!.pos; side = Math.max(side, Math.hypot(b.pos[0] - p0[0], b.pos[2] - p0[2])); });
+    return { maxV, side, loaded: e.world!.contacts.every((c) => c.lambda[0] < 0) };
+  };
+  it.each([24, 30])('a column of %i unit cubes comes to rest with every contact loaded', async (H) => {
+    const r = await column(H, {});
+    expect(r.maxV).toBeLessThan(1e-3);
+    expect(r.loaded).toBe(true);
+  });
+  it('with the floor alone (loadCap 0) a 24-cube column never comes to rest', async () => {
+    expect((await column(24, { loadCap: 0 })).maxV).toBeGreaterThan(0.1);
+  });
+  it('a settled 30-cube column kicked vertically at up to 1 m/s per cube comes back to rest', async () => {
+    const r = await column(30, {}, { steps: 900, kick: (v, rnd) => { v[1] += 2 * rnd() - 1; } });
+    expect(r.maxV).toBeLessThan(1e-3);
+    expect(r.loaded).toBe(true);
+  });
+  it('a packed 4x4x25 tower comes to rest without sliding', { timeout: 300_000 }, async () => {
+    const r = await column(25, {}, { F: 4, steps: 300, win: 100 });
+    expect(r.maxV).toBeLessThan(1e-3);
+    expect(r.side).toBeLessThan(1e-3);
+  });
+  it.fails('a settled 8-cube column kicked sideways at up to 0.01 m/s per cube comes back to rest (known: post-stabilization rocking)', async () => {
+    const kick: Kick = (v, rnd) => { v[0] += 0.01 * (2 * rnd() - 1); v[2] += 0.01 * (2 * rnd() - 1); };
+    expect((await column(8, {}, { steps: 1500, kick })).maxV).toBeLessThan(1e-3);
+  });
+  it('a column of 24 cubes under one 100x as heavy comes to rest (S9)', async () => {
+    // With the floor alone it boils too (0.30 m/s over steps 301-600). With k_n dropped to the cap at once
+    // (capFall 0), the heavy top bounced on the column for good (0.91 m/s; the column sank 0.93 m): each time it
+    // lifted off, the contact's k_n fell to penaltyMin, and it landed on a soft contact. capFall eases it down
+    // instead: 1e-7 m/s (2026-10-26).
+    const e = new AvbdReferenceEngine({});
+    await e.init(buildScenario('S9', { H: 24, ratio: 100 }, 1));
+    let maxV = 0;
+    for (let i = 1; i <= 600; i++) {
+      e.step();
+      if (i > 300) for (const b of e.world!.bodies) maxV = Math.max(maxV, Math.hypot(...b.linVel));
+    }
+    expect(maxV).toBeLessThan(1e-3);
+    expect(e.world!.contacts.every((c) => c.lambda[0] < 0)).toBe(true);
+  });
+
   // Same scene in Rapier: survival 0.30, ball rebounds at -4.1 m/s, worst
   // transient penetration 0.14 (cubes falling at 12-15 m/s move 0.25 per step).
   const knockdown = async (params: Partial<AvbdParams>, speed = 15) => {

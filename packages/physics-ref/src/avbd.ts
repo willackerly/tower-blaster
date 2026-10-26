@@ -31,6 +31,58 @@
 // any mass or load. It is not size-free: by an estimate, cubes of half-width
 // w under a lever arm L need restDepth well below iterations x w^2 / L.
 //
+// The floor alone is a ratchet: max(gamma k_n, |lambda_n| / restDepth) holds
+// the largest |lambda_n| / restDepth of the last ~100 steps, and the beta
+// ramp's increments too. A landing (a tower's pre-settle, a kick) presses
+// contacts with several times their resting load, and a column taller than
+// the iterations resolve (24+ unit cubes at 10) is unstable to kicks once its
+// k_n sits at about 2x the floor of its resting load: it bounces, each landing
+// raises k_n again, and it boils for good (0.3-0.5 m/s, cubes 2 cm up; a
+// packed 8x8x30 tower too, 2026-10-26). So each step k_n is also pulled down
+// towards loadCap x the floor of the largest load on a point of its pair: a
+// transient fades from k_n once it ends, and a resting contact keeps its
+// floor. The reference is the pair's most loaded point, not the point's own
+// load: when a pair rocks, the side that lifts keeps the stiffness of the
+// side that bears. On its own load it went soft, and a 20-cube column rocking
+// back from 2 degrees (S13) gained energy and fell over. On the pair's mean
+// load per point, S13 columns of 16-30 cubes released 0.5-1.5 degrees off
+// upright at 20 iterations toppled within 30 s in 10 of 19 cases, against 4
+// with the floor alone and 6 with the largest load (the rule used here): the
+// softer landing side sinks in further, and post-stabilization lifts it out
+// without slowing it. The largest load still costs: over four 35-case sets
+// (18-30 cubes, 0.5-1.5 degrees, each angle also nudged by +-0.002 and
+// +0.004) it toppled 60 of 140 against 36 with the floor alone at 20
+// iterations, and 70 of 70 against 65 at 10. Whether a column below its
+// tipping angle falls on a later swing is decided by tiny energy gains at
+// its landings (physics-ref/test/collapse.test.ts); at 20 iterations the cap
+// makes them slightly less dissipative (far side 0.90 vs 0.87 of the rigid
+// column's; at 10, 0.63 vs 0.64). A higher loadCap is no remedy: on 12 of
+// these cases (16-30 cubes, 20 iterations) loadCap 1.25, 1.5 and 1.75 each
+// toppled 3, as did the floor alone. With capFall, loadCap 1.25-2 rest the
+// columns above alike (24-40 cubes, kicked or not); 1.25 is the value the
+// idle-city and review runs used.
+//
+// k_n is eased down to the cap, not dropped to it: each step it is at least
+// capFall x what it would have been uncapped (gamma decay, the floor and the
+// beta ramp). A contact still in an impact has its k_n climbing the ramp
+// faster than capFall pulls it down, so it is not held back while that
+// matters, and the cap only bites a dozen-odd steps later, once the impact is
+// over. This is why no contact needs an exception. Dropped to the cap at once
+// (capFall 0), a 510 kg ball resting on a 31 kg cube sank it 0.9 mm (the
+// ground contact lost the stiffness the ramp had built), a ball rolling over
+// a sphere sank into it (its fresh point lost the ramp every step), and a
+// 100x heavier cube bounced for good on a column of 16-24 cubes whose top
+// pair kept lifting off and landing on a softened contact; with capFall 0.85
+// all three hold to the floor-alone depth. After a heavy landing the cap
+// leaves the penetration to post-stabilization, which removes it about 0.4%
+// a step on a 25-cube column, as the floor alone does at rest; the floor
+// alone got there sooner by bouncing it out (S9, 24 cubes under a 1000x
+// heavier one, 10 iterations: under 0.1 mm by step 1094 vs 254, the same
+// 6.9 mm peak). A ball knocking a tower down penetrates as deep: the mean
+// sampled maximum is 0.0031 m with and without the cap, over 40 runs at each
+// of 5 ball speeds, each run's start moved by up to 1e-6 m (the scene of
+// physics-gpu/test/engine.test.ts).
+//
 // Departures from the 2D reference, each needed in 3D or by our pipeline:
 // - Speculative contacts: a positive gap at the start of the step is not
 //   error, so it always counts in full (only penetration is scaled by
@@ -92,12 +144,26 @@ export interface AvbdParams {
    * contact.
    */
   rollingContacts: boolean;
+  /**
+   * Load cap: with the floor on, a reused contact's normal penalty is also
+   * pulled down each step towards loadCap x (the largest |lambda_n| on a point
+   * of its pair) / restDepth (never below its own floor), at the rate capFall,
+   * so it forgets transients once they end. 0 turns it off (the floor alone,
+   * which keeps them: see above).
+   */
+  loadCap: number;
+  /**
+   * How fast the normal penalty falls to the load cap: at least capFall x what
+   * it would have been without the cap, each step. 0 drops it to the cap at
+   * once (see above).
+   */
+  capFall: number;
 }
 
 export const DEFAULT_AVBD: AvbdParams = {
   iterations: 10, beta: 1e5, gamma: 0.99, alpha: 0.99, postStabilize: true, penaltyMin: 1, penaltyMax: 1e9,
   margin: 0.02, slop: 0, stickThreshold: 0.01, matchDistance: 0.05, maxAngularSpeed: 50, slidingHessian: true, sweep: true, maxSweep: 1, restDepth: 0.003,
-  rollingContacts: true,
+  rollingContacts: true, loadCap: 1.25, capFall: 0.85,
 };
 
 export const GROUND = -1;
@@ -256,6 +322,9 @@ export class AvbdWorld {
       // A rolling contact (see above) is matched by a sphere's world lever arm: the smaller sphere's (b's if they are
       // equal; a box or the ground counts as infinitely large).
       const roll = p.rollingContacts && (B.desc.shape.kind === 'sphere' || A?.desc.shape.kind === 'sphere');
+      // The load cap's reference: last step's largest normal force on a point of this pair.
+      let pairLoad = 0;
+      if (p.loadCap > 0) for (const c of prev) pairLoad = Math.max(pairLoad, Math.abs(c.lambda[0]));
       const radius = (s: BodyState | null) => (s?.desc.shape.kind === 'sphere' ? s.desc.shape.radius : Infinity);
       const onB = radius(B) <= radius(A);
       for (const pt of points) {
@@ -289,8 +358,11 @@ export class AvbdWorld {
           if (p.restDepth > 0) {
             // Load floor. A rolling contact between two bodies that moved along its normal by restDepth
             // last step was in an impact, not at rest: its floor stops at sqrt(m_a m_b) / h^2 (see above).
+            // Load cap (see the header): k_n is eased towards loadCap x the floor of the pair's largest load, falling
+            // each step to no less than capFall x its uncapped value.
             let floor = Math.abs(best.lambda[0]) / p.restDepth;
             if (roll && A && Math.abs(dot(best.n, this.moveAfter(best))) >= p.restDepth) floor = Math.min(floor, Math.sqrt(A.mass * B.mass) / (this.scene.dt * this.scene.dt));
+            if (p.loadCap > 0) k[0] = Math.max(p.penaltyMin, Math.min(k[0], Math.max(p.loadCap * (pairLoad / p.restDepth), p.capFall * k[0])));
             k[0] = Math.min(p.penaltyMax, Math.max(k[0], floor));
           }
           if (!p.postStabilize) lambda = [lambda[0] * p.alpha * p.gamma, lambda[1] * p.alpha * p.gamma, lambda[2] * p.alpha * p.gamma];

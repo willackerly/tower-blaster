@@ -132,7 +132,7 @@ struct SolverContact {
 }
 
 // Per-step uniforms of the GPU AVBD solver.
-// size 112 B, align 16
+// size 128 B, align 16
 struct SolverParams {
   gravity: vec3f, // @0
   dt: f32, // @12
@@ -160,6 +160,8 @@ struct SolverParams {
   frictionCombine: u32, // @100 0 average, 1 min, 2 max, 3 multiply (SceneDesc.frictionCombine)
   restDepth: f32, // @104 load floor: a reused contact starts with kN >= |lambdaN| / restDepth; 0 = off
   rollingContacts: u32, // @108 1: a contact on a sphere is a rolling contact (AvbdParams.rollingContacts)
+  loadCap: f32, // @112 load cap: a reused contact eases kN towards loadCap * (largest |lambdaN| on a point of its pair) / restDepth; 0 = off
+  capFall: f32, // @116 how fast kN falls to the load cap: at least capFall x its uncapped value each step
 }
 
 // Per-dispatch uniforms (bound with a dynamic offset).

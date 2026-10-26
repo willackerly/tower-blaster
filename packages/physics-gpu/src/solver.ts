@@ -204,6 +204,14 @@ fn setup(m: Manifold, a: u32, b: u32, mu: f32, dst: u32, old: u32, hasOld: bool)
   let sphereA = a != NONE && props[a].sphere != 0u;
   let sphereB = props[b].sphere != 0u;
   let roll = p.rollingContacts != 0u && (sphereA || sphereB);
+  // The load cap's reference (AvbdParams.loadCap): last step's largest |lambdaN| on a point of this pair.
+  var pairLoad = 0.0;
+  if (hasOld && p.loadCap > 0.0) {
+    for (var o = 0u; o < 4u; o++) {
+      let oc = contacts[old + o];
+      if (oc.used != 0u) { pairLoad = max(pairLoad, abs(oc.lambdaN)); }
+    }
+  }
   let onB = sphereB && (!sphereA || props[b].radius <= props[a].radius);
   // Last step's final displacements (zero for a body added since, and for the ground).
   var dpA = vec3f(0.0); var phiA = vec3f(0.0);
@@ -257,9 +265,12 @@ fn setup(m: Manifold, a: u32, b: u32, mu: f32, dst: u32, old: u32, hasOld: bool)
         if (roll) { u = dpB + cross(phiB, oc.rbw) - (dpA + cross(phiA, oc.raw)); }
         // Load floor (AvbdParams.restDepth): keeps a resting stack stiff enough not to lean over.
         // A rolling contact between two bodies that moved along its normal by restDepth was in an impact.
+        // Load cap (AvbdParams.loadCap): eases kN towards loadCap x pairLoad / restDepth, to no less than capFall x its uncapped
+        // value each step, so it forgets landings and the ramp (see the reference).
         if (p.restDepth > 0.0) {
           var kFloor = abs(oc.lambdaN) / p.restDepth;
           if (roll && a != NONE && abs(dot(oc.n, u)) >= p.restDepth) { kFloor = min(kFloor, sqrt(props[a].mass * props[b].mass) / (p.dt * p.dt)); }
+          if (p.loadCap > 0.0) { ct.kN = max(min(ct.kN, max(p.loadCap * (pairLoad / p.restDepth), p.capFall * ct.kN)), p.penaltyMin); }
           ct.kN = min(max(ct.kN, kFloor), p.penaltyMax);
         }
         ct.kT = clamp(oc.kT * p.gamma, p.penaltyMin, p.penaltyMax);
@@ -732,6 +743,8 @@ export interface GpuSolverParams {
   slidingHessian: boolean;
   restDepth: number;
   rollingContacts: boolean;
+  loadCap: number;
+  capFall: number;
 }
 
 /**
@@ -902,6 +915,8 @@ export class AvbdSolver {
     i[at('frictionCombine')] = COMBINE_RULES.indexOf(frictionCombine);
     f[at('restDepth')] = sp.restDepth;
     i[at('rollingContacts')] = sp.rollingContacts ? 1 : 0;
+    f[at('loadCap')] = sp.loadCap;
+    f[at('capFall')] = sp.capFall;
     this.device.queue.writeBuffer(this.uniform, 0, u);
   }
 

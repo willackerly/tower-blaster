@@ -230,29 +230,40 @@ describe('GPU AVBD engine: stacks, towers and impacts', () => {
     if (!gpu) return ctx.skip();
     // One collapse's deepest transient is set by a single tumbling cube and
     // varies 4x between nearby ball speeds, so penetration is compared with
-    // the reference as statistics over 5 speeds, sampled every 10 steps
-    // (2026-10-25, after the friction fix: mean 0.0067 GPU vs 0.0075
-    // reference; median of the per-run sampled maxima 0.015 vs 0.011. Over
-    // every step the reference's median maximum is 0.053, Rapier's 0.14 at
-    // speed 15).
-    const knock = async (speed: number) => {
+    // the reference as statistics over 5 speeds, sampled every 10 steps.
+    // The collapse is chaotic, and the GPU's f32 rounding re-rolls it, so the
+    // reference is re-rolled too: 4 runs per speed, each with every start
+    // position moved by up to 1e-6 m (fixed seeds). (2026-10-25, before the
+    // load floor and against one unmoved reference run: mean 0.0067 GPU vs
+    // 0.0075 reference; median of the per-run sampled maxima 0.015 vs 0.011.
+    // Over every step the reference's median maximum is 0.053, Rapier's 0.14
+    // at speed 15.)
+    const moved = (scene: SceneDesc, seed: number): SceneDesc => {
+      const rnd = () => { seed = (seed * 1103515245 + 12345) % 2147483648; return seed / 2147483648; };
+      return { ...scene, bodies: scene.bodies.map((b) => ({ ...b, pos: b.pos.map((x) => x + 1e-6 * (2 * rnd() - 1)) as Vec3 })) };
+    };
+    const knock = async (speed: number, si: number) => {
       const scene = buildScenario('S5', { N: 48, F: 2, H: 12, fireStep: 0, speed, massRatio: 5, radius: 0.6 }, 1);
       const bodies = bodiesAt(scene, 1);
       const g = await runGpu(scene, 181, {}, 10);
-      const e = new AvbdReferenceEngine();
-      await e.init(scene);
+      const refs: AvbdReferenceEngine[] = [];
+      for (let r = 1; r <= 4; r++) {
+        const e = new AvbdReferenceEngine();
+        await e.init(moved(scene, 50000 + 1000 * si + r));
+        refs.push(e);
+      }
       const gp: number[] = [], rp: number[] = [];
       for (let i = 1; i <= 181; i++) {
-        e.step();
+        for (const e of refs) e.step();
         const k = g.snaps.findIndex((s) => s.step === i);
         if (k < 1) continue;
         gp.push(penetration(bodies, g.all[k]!, 0).max);
-        rp.push(penetration(bodies, e.snapshot(), 0).max);
+        for (const e of refs) rp.push(penetration(bodies, e.snapshot(), 0).max);
       }
       return { scene, bodies, g, gp, rp };
     };
     const runs = [];
-    for (const speed of [13, 14, 15, 16, 17]) runs.push(await knock(speed));
+    for (const [si, speed] of [13, 14, 15, 16, 17].entries()) runs.push(await knock(speed, si));
     const mean = (x: number[]) => x.reduce((a, b) => a + b, 0) / x.length;
     const median = (x: number[]) => [...x].sort((a, b) => a - b)[x.length >> 1]!;
     const max = (x: number[]) => x.reduce((a, b) => Math.max(a, b), 0);
@@ -265,13 +276,19 @@ describe('GPU AVBD engine: stacks, towers and impacts', () => {
     expect(median(runs.map(({ bodies, g }) => survival(bodies, g.all[1]!, g.s1, [0])))).toBeLessThan(0.5);
     expect(median(runs.map(({ bodies, g }) => g.s1.linVel[3 * (bodies.length - 1)]!))).toBeLessThan(-1);
     const gMean = mean(runs.flatMap((r) => r.gp)), rMean = mean(runs.flatMap((r) => r.rp));
-    // Two reference runs re-rolled by f32-sized jitter (1e-6 m on every
-    // position) differ by this ratio within 0.72-1.39 in 99.9% of bootstrap
-    // draws (2026-10-25, after the friction fix, 12 re-rolls per speed), so
-    // wider means a real difference; the GPU's was 0.90. (Jitter of 1e-12 no
-    // longer changes 4 of the 5 runs at all.)
-    expect(gMean / rMean).toBeGreaterThan(0.7);
-    expect(gMean / rMean).toBeLessThan(1.4);
+    // The GPU's mean over the 4 re-rolled reference runs' mean. One re-rolled
+    // reference run over the mean of 4 others gives 0.61-1.93 in 99.9% of
+    // bootstrap draws (2026-10-26, with the load cap, 40 re-rolls per speed),
+    // so outside the bars means a real difference; the GPU's is 1.11 on
+    // SwiftShader. The bars allow for the reference's 4 runs being re-rolled
+    // too, as any physics change does: these 4 seeds' mean sits 1.11x the
+    // 40-run mean, so with them fixed a GPU re-roll would land in 0.61-1.55.
+    // Against the unmoved run alone the band is off-centre: the re-rolls
+    // average 1.24x it with the cap (0.80x without), and the GPU's ratio to
+    // it was 1.53.
+    console.log(`knock: GPU / re-rolled reference mean penetration ${(gMean / rMean).toFixed(3)} (${gMean.toExponential(3)} / ${rMean.toExponential(3)})`);
+    expect(gMean / rMean).toBeGreaterThan(0.6);
+    expect(gMean / rMean).toBeLessThan(1.95);
     expect(median(runs.map((r) => max(r.gp)))).toBeLessThan(0.08);
   }, 300_000);
 
@@ -368,6 +385,73 @@ describe('GPU AVBD engine: stacks, towers and impacts', () => {
     const a = await runGpu(scene, 90), b = await runGpu(scene, 90);
     expect([...a.s1.pos]).toEqual([...b.s1.pos]);
     expect([...a.s1.rot]).toEqual([...b.s1.rot]);
+  });
+});
+
+describe('GPU AVBD engine: the load cap (AvbdParams.loadCap)', () => {
+  // physics-ref/test/avbd.test.ts says why: with the load floor alone, k_n
+  // keeps a landing's stiffness for ~100 steps, and a column taller than 10
+  // iterations resolve boils for good. The cap eases it back down within a
+  // dozen-odd steps (capFall). The columns stand 40 m apart in one scene, so
+  // one run covers them (on SwiftShader a run costs mostly per step). Speeds,
+  // heights and sideways drift from the start are sampled every 10 steps over
+  // steps 301-600. Measured 2026-10-26 on SwiftShader: max speed 1.7e-7,
+  // 1.4e-7, 6.8e-5 and 1.4e-6 m/s, sideways at most 0.047 mm. With loadCap 0
+  // the 1x1x24 and 2x2x30 columns boil (0.36 and 0.66 m/s; the 2x2x30 one
+  // 0.41 m sideways), and a 4x4x25 tower rests with the cap (4e-5 m/s,
+  // 0.051 mm). Those runs cost CI time (118 s for the tower on SwiftShader),
+  // so they are opt-in (PHYSICS_GPU_SLOW=1, below), with an S4 city tower;
+  // the reference tests cover both on the CPU path.
+  const column = (F: number, H: number) => buildScenario('S1', { F, H, gap: 0 }, 1).bodies;
+  const settle = async (parts: [string, BodyDesc[]][], params: Partial<AvbdParams> = {}) => {
+    const bodies: BodyDesc[] = [], range: [number, number][] = [];
+    parts.forEach(([, p], i) => {
+      range.push([bodies.length, bodies.length + p.length]);
+      for (const b of p) bodies.push({ ...b, pos: [b.pos[0] + 40 * i, b.pos[1], b.pos[2]] });
+    });
+    const scene = { ...buildScenario('S1', { F: 1, H: 1, gap: 0 }, 1), id: 'load-cap', sleep: false, bodies };
+    const g = await runGpu(scene, 600, params, 10);
+    const out = new Map<string, { maxV: number; maxUp: number; side: number }>();
+    parts.forEach(([name], i) => {
+      let maxV = 0, maxUp = -Infinity, side = 0;
+      for (const s of g.snaps.filter((x) => x.step > 300))
+        for (let b = range[i]![0]; b < range[i]![1]; b++) {
+          const p0 = bodies[b]!.pos;
+          maxV = Math.max(maxV, Math.hypot(s.linVel[3 * b]!, s.linVel[3 * b + 1]!, s.linVel[3 * b + 2]!));
+          maxUp = Math.max(maxUp, s.pos[3 * b + 1]! - p0[1]);
+          side = Math.max(side, Math.hypot(s.pos[3 * b]! - p0[0], s.pos[3 * b + 2]! - p0[2]));
+        }
+      out.set(name, { maxV, maxUp, side });
+      console.log(`load cap GPU ${name} ${JSON.stringify(params)}: maxV=${maxV.toExponential(2)} maxUp=${(maxUp * 1e3).toFixed(3)}mm side=${(side * 1e3).toFixed(3)}mm`);
+    });
+    console.log(`load cap GPU ${bodies.length} bodies ${JSON.stringify(params)}: wall=${(g.wallMs / 1000).toFixed(1)}s`);
+    return out;
+  };
+  it('packed columns of 1x1x24, 1x1x30 and 2x2x30 cubes, and 24 cubes under a 100x heavier one (S9), come to rest without sliding (10 iterations)', { timeout: 300_000 }, async (ctx) => {
+    if (!gpu) return ctx.skip();
+    const r = await settle([['1x1x24', column(1, 24)], ['1x1x30', column(1, 30)], ['2x2x30', column(2, 30)], ['S9', buildScenario('S9', { H: 24, ratio: 100 }, 1).bodies]]);
+    for (const [name, v] of r) {
+      expect(v.maxV, name).toBeLessThan(1e-3);
+      expect(v.maxUp, name).toBeLessThan(1e-4);
+      expect(v.side, name).toBeLessThan(1e-3);
+    }
+  });
+  // Opt-in, too slow for CI: 5.5 and 0.8 minutes on SwiftShader. Measured 2026-10-26 on SwiftShader: the 4x4x25 and
+  // 8x8x25 towers 4.0e-5 and 2.8e-5 m/s, 0.051 and 0.046 mm sideways.
+  const slow = process.env.PHYSICS_GPU_SLOW === '1';
+  it.runIf(slow)('slow: a packed 4x4x25 tower and an S4 city tower (8x8x25) come to rest without sliding (10 iterations)', { timeout: 3_600_000 }, async (ctx) => {
+    if (!gpu) return ctx.skip();
+    const r = await settle([['4x4x25', column(4, 25)], ['S4 8x8x25', buildScenario('S4', { N: 1600, F: 8, H: 25, street: 6 }, 1).bodies]]);
+    for (const [name, v] of r) {
+      expect(v.maxV, name).toBeLessThan(1e-3);
+      expect(v.maxUp, name).toBeLessThan(1e-4);
+      expect(v.side, name).toBeLessThan(1e-3);
+    }
+  });
+  it.runIf(slow)('slow: with the floor alone (loadCap 0) the 1x1x24 and 2x2x30 columns never come to rest', { timeout: 600_000 }, async (ctx) => {
+    if (!gpu) return ctx.skip();
+    const r = await settle([['1x1x24', column(1, 24)], ['2x2x30', column(2, 30)]], { loadCap: 0 });
+    for (const [name, v] of r) expect(v.maxV, name).toBeGreaterThan(0.1);
   });
 });
 
@@ -653,10 +737,20 @@ describe('GPU AVBD engine: walls and columns fall as rigid bodies do (S12, S13)'
     expect(Math.abs(r.gpu.upright! / rod.upright - 1)).toBeLessThan(0.15);
     expect(r.gpu.before).toBeLessThan(tippingAngle(r.H));
     expect(r.gpu.turned).toBe(true);
-    expect(r.gpu.farSide / rod.farSide).toBeGreaterThan(0.6);
+    // The far side is the one number here that rounding moves: on SwiftShader the GPU crosses upright 0.005 s
+    // after the reference (step ~123), and the landing there sets the swing. With the load cap, moving every start
+    // position by up to 1e-6 m spreads the reference's far side over 1.185-1.273 deg (360 seeds, 2026-10-26),
+    // from 0.057 below the unmoved run to 0.031 above it; rounding its state to f32 each step moves it 0.0001
+    // (bodies) or 0.010 (bodies and contacts). The GPU's 1.192 on SwiftShader is 0.050 below, inside that spread
+    // (0.018 off with the floor alone). So the GPU - reference bounds follow the spread, -0.07 / +0.04, and on the
+    // low side that bound binds: 1.172 deg, 0.596 of the rigid column's far side, 0.020 below the GPU and 0.013
+    // below the spread's lowest run (0.602 of the rigid column's; the GPU 0.606). The 0.58 gate is a backstop in
+    // case the reference itself moves; physics-ref/test/collapse.test.ts holds the unmoved reference (0.63) to 0.6.
+    expect(r.gpu.farSide / rod.farSide).toBeGreaterThan(0.58);
     expect(r.gpu.farSide / rod.farSide).toBeLessThan(1.02);
     expect(Math.abs(r.gpu.upright! - r.ref.upright!)).toBeLessThan(0.02);
-    expect(Math.abs(r.gpu.farSide - r.ref.farSide)).toBeLessThan(0.02);
+    expect(r.gpu.farSide - r.ref.farSide).toBeGreaterThan(-0.07);
+    expect(r.gpu.farSide - r.ref.farSide).toBeLessThan(0.04);
   });
 });
 
