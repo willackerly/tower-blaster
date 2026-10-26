@@ -11,7 +11,7 @@ import { boundingRadius } from '@tb/geom';
 import { DEFAULT_AVBD } from '@tb/physics-ref';
 import { buildScenario, SCENARIOS } from '@tb/scenarios';
 import { clampPitch, frame, rayThrough, viewProj, eyeOf, type Orbit } from './camera.ts';
-import { alphaAt, newArrivals, newClock, newPacer, runFree, stepsDue, taskYield, trackSimSpeed, Window } from './loop.ts';
+import { alphaAt, newArrivals, newClock, newPacer, pauseLatch, runFree, stepsDue, taskYield, trackSimSpeed, Window } from './loop.ts';
 import type { V3 } from './math.ts';
 import { escapeHtml } from './html.ts';
 import { engineSpec, parseViewerConfig, presetSearch, toSearch, type ViewerConfig, withOption } from './params.ts';
@@ -424,10 +424,12 @@ async function main() {
   let stepsSinceFrame = 0;
   const nextFrame = () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
   const tasks = taskYield();
+  const latch = pauseLatch();
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState !== 'visible') latch.hidden(); });
   const physics = () => runFree({
     running: () => handle.status === 'running',
     // A hidden tab gets no frames, so it would show nothing for the GPU and power it spends.
-    paused: () => paused || document.visibilityState !== 'visible',
+    paused: () => latch.paused(paused, document.visibilityState === 'visible'),
     now: () => performance.now(),
     dtMs,
     resetAsked: () => resetAsked,
