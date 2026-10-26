@@ -169,6 +169,42 @@ describe('viewer', () => {
     await again.page.close();
   });
 
+  it('the panel switches to the real look live and its knobs go into the URL', async (ctx) => {
+    if (!browser) return ctx.skip();
+    const { page, errors } = await open('/?scenario=S1&param.F=3&param.H=6&param.gap=0.02&offscreen=1&engine=rapier');
+    const status = await page.evaluate(() => ({ s: window.__viewer.status, e: window.__viewer.error }));
+    if (status.s === 'error' && /WebGPU|adapter/.test(status.e ?? '') && !requireWebGPU()) return ctx.skip();
+    expect(status).toEqual({ s: 'running', e: undefined });
+    await page.waitForFunction(() => window.__viewer.frames > 5, undefined, { timeout: 60_000 });
+    // The top row's centre pixel: sky (S1 is one short tower, framed below it).
+    const sky = () => page.evaluate(async () => {
+      const f = (await window.__viewer.capture(true))!;
+      return [0, 1, 2].map((c) => f.pixels!.data[4 * Math.floor(f.width / 2) + c]!);
+    });
+    const candy = await sky();
+    await page.locator('#controls summary').click();
+    const look = page.locator('#look-form');
+    expect(await look.locator('.real').isHidden()).toBe(true);
+    await look.locator('select[name=look]').selectOption('real');
+    expect(await look.locator('.real').isVisible()).toBe(true);
+    await look.locator('input[name=sunElevation]').fill('40');
+    await look.locator('input[name=visibility]').fill('15');
+    await page.waitForFunction(() => window.__viewer.frames > 15, undefined, { timeout: 60_000 });
+    const real = await sky();
+    expect(real[2]!).toBeGreaterThan(real[0]!); // a blue sky
+    expect(real).not.toEqual(candy);
+    const url = new URL(page.url());
+    expect(Object.fromEntries([...url.searchParams].filter(([k]) => k === 'look' || k.startsWith('real.')))).toEqual({ look: 'real', 'real.sunElevation': '40', 'real.visibility': '15' });
+    expect(await page.evaluate(() => window.__viewer.resets)).toBe(1); // live: no rebuild
+    expect(errors).toEqual([]);
+    await page.close();
+    const again = await open(url.pathname + url.search);
+    expect(await again.page.locator('#look-form input[name=sunElevation]').inputValue()).toBe('40');
+    expect(await again.page.locator('#look-form select[name=look]').inputValue()).toBe('real');
+    expect(again.errors).toEqual([]);
+    await again.page.close();
+  });
+
   it('shows a readable error for a bad URL instead of a blank page', async (ctx) => {
     if (!browser) return ctx.skip();
     const { page } = await open('/?scenario=S99&offscreen=1');

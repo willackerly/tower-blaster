@@ -7,7 +7,7 @@ import type { BodyDesc, PhysicsEngine, Vec3 } from '@tb/engine-api';
 import { type AmmoKind, type CompiledLevel, compileLevel, Driver, type Feedback, LEVELS, type LevelScore, runSession, type Shot, shotToSpawn, snapshotHash, TIER_NAMES } from '@tb/keystone';
 import { clampPitch, eyeOf, frame, type Orbit, rayThrough, viewProj, Window } from '@tb/viewer';
 import { createDevice } from '@tb/gpu';
-import { HAZY_DAY, LOOKS, type PixelStats, Renderer, SnapshotSource } from '@tb/render';
+import { HAZY_DAY, lookByName, parseRealOptions, type PixelStats, Renderer, SnapshotSource } from '@tb/render';
 import { type Aimed, azFromYaw, pick, previewBeads, shotFor, SUBSTEPS } from './aim.ts';
 import { Synth, type Voice, voicesFor } from './audio.ts';
 import { type EngineKind, engineKind, makeEngine } from './engines.ts';
@@ -102,8 +102,9 @@ async function main() {
   const renderer = new Renderer(device, offscreen ? { size: [640, 400] } : { canvas });
   const source = new SnapshotSource(device);
   renderer.setSource(source);
-  // The maquette look by default: tints read true on its pale albedo (?look=candy for the rainbow).
-  renderer.look = LOOKS[q.get('look') ?? ''] ?? HAZY_DAY;
+  // The maquette look by default: tints read true on its pale albedo (?look=candy for the rainbow;
+  // ?look=real with real.* knobs, parseRealOptions in @tb/render).
+  renderer.look = lookByName(q.get('look') ?? '', parseRealOptions(q), HAZY_DAY);
   device.lost.then((info) => fail(`GPU device lost: ${info.message}`));
   device.addEventListener('uncapturederror', (e) => fail((e as GPUUncapturedErrorEvent).error.message));
   // One engine per level load: the GPU engine sizes its buffers for the level's rack at init.
