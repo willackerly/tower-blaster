@@ -8,7 +8,7 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { execSync } from 'node:child_process';
 import { cpus, hostname, platform } from 'node:os';
 import { fileURLToPath } from 'node:url';
-import { loadBundle, openWebGPU } from '@tb/testkit';
+import { exitNow, loadBundle, openWebGPU } from '@tb/testkit';
 import { DEFAULT_GPU_BENCH, gpuBenchMarkdown, type GpuBenchOptions, type GpuBenchResult } from './bench.ts';
 
 const argv = process.argv.slice(2);
@@ -23,6 +23,7 @@ const extra = ['--enable-webgpu-developer-features'];
 const channel = value('channel');
 const gpu = await openWebGPU(extra, { ...(channel ? { channel } : {}), headless: !flag('headed') });
 if (!gpu) throw new Error('no WebGPU adapter in this browser');
+let stuck: string[] = [];
 try {
   await loadBundle(gpu.page, fileURLToPath(new URL('./bench-entry.ts', import.meta.url)), '__gpubench');
   const result = await gpu.page.evaluate((o) => (window as unknown as { __gpubench: { runGpuBench: (o: unknown) => Promise<GpuBenchResult> } }).__gpubench.runGpuBench(o), opts);
@@ -39,5 +40,7 @@ try {
   console.error(`\nwrote ${base}.json and ${base}.md`);
   if (result.software) console.error('warning: software adapter; these timings are not performance results');
 } finally {
-  await gpu.close();
+  stuck = await gpu.close();
 }
+// A browser that did not close keeps Node alive; the results are already written.
+if (stuck.length) await exitNow();

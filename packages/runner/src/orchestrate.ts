@@ -2,8 +2,8 @@
 // Chromium through Playwright, and return the page's result record.
 import { fileURLToPath } from 'node:url';
 import { platform } from 'node:os';
-import { chromium } from 'playwright';
 import { createServer } from 'vite';
+import { CLOSE_TIMEOUT_MS, closeWithin, launchChromium } from '@tb/testkit';
 import { type RunConfig, toQuery } from './config.ts';
 
 export interface BrowserRunOptions {
@@ -11,6 +11,8 @@ export interface BrowserRunOptions {
   /** Playwright channel, e.g. "chrome" to use the installed Google Chrome. */
   channel?: string;
   timeoutMs?: number;
+  /** How long close() waits for each of the browser and the server (default CLOSE_TIMEOUT_MS). */
+  closeTimeoutMs?: number;
   extraArgs?: string[];
 }
 
@@ -24,7 +26,13 @@ export function chromiumArgs(): string[] {
 export interface RunnerSession {
   /** Run one config in a fresh page (fresh JS heap and WASM instance). */
   run(config: RunConfig): Promise<Record<string, unknown>>;
-  close(): Promise<void>;
+  /**
+   * Close the browser, then the server, waiting at most closeTimeoutMs for
+   * each. Resolves to the ones that had not closed ([] normally). Either
+   * keeps Node running, so a CLI that gets a non-empty list should write its
+   * results first and then exitNow().
+   */
+  close(): Promise<string[]>;
 }
 
 /** One Vite server and one browser, reused across runs. */
@@ -38,7 +46,7 @@ export async function openRunner(opts: BrowserRunOptions = {}): Promise<RunnerSe
   }
   // Serve from localhost, not 127.0.0.1: localhost is a secure context.
   const origin = base.replace('127.0.0.1', 'localhost');
-  const browser = await chromium.launch({
+  const { browser, close: closeBrowser } = await launchChromium({
     headless: !opts.headed,
     args: [...chromiumArgs(), ...(opts.extraArgs ?? [])],
     ...(opts.channel ? { channel: opts.channel } : {}),
@@ -59,10 +67,7 @@ export async function openRunner(opts: BrowserRunOptions = {}): Promise<RunnerSe
         await page.close();
       }
     },
-    async close() {
-      await browser.close();
-      await server.close();
-    },
+    close: () => closeWithin([['browser', closeBrowser], ['vite server', () => server.close()]], opts.closeTimeoutMs ?? CLOSE_TIMEOUT_MS),
   };
 }
 
