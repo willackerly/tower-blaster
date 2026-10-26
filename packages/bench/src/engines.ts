@@ -12,11 +12,11 @@ const REGISTRY: Record<string, (o: Options) => PhysicsEngine> = {
   // Options are AvbdParams fields, e.g. avbd-ref:iterations=4,sweep=false.
   'avbd-ref': (o) => new AvbdReferenceEngine(o),
   // Same AvbdParams, plus the GpuEngineOptions that size its buffers (capacity, spare,
-  // pairsPerBody, maxRadius), which the engine checks; needs WebGPU, so it runs in the
-  // browser runner, not the Node CLI.
+  // pairsPerBody, maxRadius) or shape its dispatch (colorTail, indirectColors, tailThreads, colorRounds),
+  // which the engine checks; needs WebGPU, so it runs in the browser runner, not the Node CLI.
   'avbd-gpu': (o) => {
-    const { capacity, spare, pairsPerBody, maxRadius, ...params } = o;
-    const opts = Object.fromEntries(Object.entries({ capacity, spare, pairsPerBody, maxRadius }).filter(([, v]) => v !== undefined)) as GpuEngineOptions;
+    const { capacity, spare, pairsPerBody, maxRadius, colorTail, indirectColors, tailThreads, colorRounds, ...params } = o;
+    const opts = Object.fromEntries(Object.entries({ capacity, spare, pairsPerBody, maxRadius, colorTail, indirectColors, tailThreads, colorRounds }).filter(([, v]) => v !== undefined)) as GpuEngineOptions;
     return new GpuAvbdEngine(params, opts);
   },
   // Dormant lattice tier over a Rapier host; other options are TierParams (e.g. tiered:vWake=0.5).

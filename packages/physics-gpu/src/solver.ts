@@ -21,6 +21,8 @@ import { Body, BodyProps, ColorParams, Manifold, SolverBody, SolverContact, Solv
 import { MAX_COLORS } from './coloring.ts';
 
 const WG = 64;
+/** Most threads the tail workgroup can have (SolverDispatch.tailThreads): WebGPU's default limit per workgroup. */
+const MAX_TAIL = 256;
 const NONE = 0xffffffff;
 /** Uniform buffer offset alignment for the per-colour dynamic uniforms. */
 const DYN = 256;
@@ -362,11 +364,8 @@ fn accumulate(ct: SolverContact, i: u32) {
   }
 }
 
-@compute @workgroup_size(${WG})
-fn primal(@builtin(global_invocation_id) id: vec3u) {
-  let start = colorStart[cp.color];
-  if (id.x >= colorStart[cp.color + 1u] - start) { return; }
-  let i = order[start + id.x];
+// One primal update of body i: its 6x6 system from inertia and contacts, solved and applied.
+fn solveBody(i: u32) {
   let me = solver[i];
   let pr = props[i];
   let h2 = p.dt * p.dt;
@@ -428,6 +427,44 @@ fn primal(@builtin(global_invocation_id) id: vec3u) {
   }
   solver[i].dp = me.dp - vec3f(x[0], x[1], x[2]);
   solver[i].phi = me.phi - vec3f(x[3], x[4], x[5]);
+}
+
+// Colour cp.color, one thread per body, dispatched with enough groups for every body.
+@compute @workgroup_size(${WG})
+fn primal(@builtin(global_invocation_id) id: vec3u) {
+  let start = colorStart[cp.color];
+  if (id.x >= colorStart[cp.color + 1u] - start) { return; }
+  solveBody(order[start + id.x]);
+}
+
+// The tail workgroup's size (SolverDispatch.tailThreads).
+override tailThreads: u32 = ${MAX_TAIL}u;
+
+// Colour c by the first "threads" threads of the tail workgroup, in strides.
+fn solveColour(c: u32, threads: u32, lid: u32) {
+  if (lid < threads) {
+    let end = colorStart[c + 1u];
+    for (var k = colorStart[c] + lid; k < end; k += threads) { solveBody(order[k]); }
+  }
+}
+
+// Colours cp.color .. ${MAX_COLORS - 1}, in order, by one workgroup: a small colour
+// then costs a barrier instead of a dispatch. The loop stops after the last
+// colour below ${MAX_COLORS - 1} that has bodies, so empty colours cost nothing (on
+// SwiftShader, looping over all of them made the GPU tests 3-10x slower). colorStart
+// is read-only here, so every thread finds that colour itself, and the loop
+// bound is uniform without a barrier. The last colour takes the bodies the
+// colouring could not colour (uncoloured, or out of colours), which may touch
+// each other, so one thread solves those, in order.
+@compute @workgroup_size(tailThreads)
+fn primalTail(@builtin(local_invocation_index) lid: u32) {
+  var end = cp.color;
+  for (var c = cp.color; c < ${MAX_COLORS - 1}u; c++) { if (colorStart[c + 1u] > colorStart[c]) { end = c + 1u; } }
+  for (var c = cp.color; c < end; c++) {
+    solveColour(c, tailThreads, lid);
+    storageBarrier();
+  }
+  solveColour(${MAX_COLORS - 1}u, 1u, lid);
 }`;
 
 // Dual update (forces and penalties) and the end-of-step body updates.
@@ -519,6 +556,34 @@ export interface GpuSolverParams {
   restDepth: number;
 }
 
+/**
+ * How the primal sweep is dispatched. Every choice does the same arithmetic
+ * per body, colour after colour; within a colour the bodies share no contact,
+ * so which thread takes which body does not change the result.
+ */
+export interface SolverDispatch {
+  /**
+   * Colours below this get one dispatch each, sized for all n bodies (threads
+   * past the colour's end exit); the rest are solved in order by one workgroup
+   * of tailThreads threads, in a single dispatch. 0-63. Default 8: in the
+   * scenes measured so far (towers, city, rain, impact), colours 8 and up held
+   * at most 121 bodies.
+   */
+  colorTail: number;
+  /** The previous dispatch, for timing it against: colours 0-62 by indirect dispatch, sized by the colouring. Colour 63 still goes to the tail. */
+  indirectColors: boolean;
+  /**
+   * The tail workgroup's size, 1-256. Default 64: at most 2 strides for the
+   * largest tail colour measured so far; and on SwiftShader a 256-thread tail
+   * measured about 0.9 ms per dispatch, which slowed the GPU tests by a fifth.
+   * 1 makes the tail serial; with colorTail 0 the whole sweep is then serial,
+   * which the tests use as an oracle for every other split.
+   */
+  tailThreads: number;
+}
+
+export const DEFAULT_DISPATCH: SolverDispatch = { colorTail: 8, indirectColors: false, tailThreads: 64 };
+
 export interface SolverBuffers {
   bodies: GPUBuffer;
   props: GPUBuffer;
@@ -569,7 +634,9 @@ export class AvbdSolver {
   private cur = 0;
   private prevN = 0;
 
-  constructor(private readonly device: GPUDevice, readonly capacity: number, readonly maxPairs: number, private readonly b: SolverBuffers) {
+  constructor(private readonly device: GPUDevice, readonly capacity: number, readonly maxPairs: number, private readonly b: SolverBuffers, private readonly dispatch: SolverDispatch = DEFAULT_DISPATCH) {
+    if (!(Number.isInteger(dispatch.colorTail) && dispatch.colorTail >= 0 && dispatch.colorTail < MAX_COLORS)) throw new Error(`AvbdSolver: colorTail must be an integer from 0 to ${MAX_COLORS - 1}, got ${dispatch.colorTail}`);
+    if (!(Number.isInteger(dispatch.tailThreads) && dispatch.tailThreads >= 1 && dispatch.tailThreads <= MAX_TAIL)) throw new Error(`AvbdSolver: tailThreads must be an integer from 1 to ${MAX_TAIL}, got ${dispatch.tailThreads}`);
     const buf = (bytes: number, label: string) => (assertStorageFits(device, bytes, label), device.createBuffer({ size: Math.max(16, bytes), usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST, label }));
     this.solver = buf(capacity * SolverBody.size, 'avbd solver bodies');
     this.contacts = buf(AvbdSolver.contactBytes(capacity, maxPairs), 'avbd contacts');
@@ -585,7 +652,7 @@ export class AvbdSolver {
       new Float32Array(cu, (stab * MAX_COLORS + c) * DYN + 4, 1)[0] = stab ? 0 : 1;
     }
     device.queue.writeBuffer(this.colorUniform, 0, cu);
-    const mk = (name: string, code: string, entries: Array<[string, ...string[]]>, kinds: Kind[], groups: Array<[string, GPUBuffer[]]>) => {
+    const mk = (name: string, code: string, entries: Array<[string, ...string[]]>, kinds: Kind[], groups: Array<[string, GPUBuffer[]]>, constants: Record<string, Record<string, number>> = {}) => {
       const layout = device.createBindGroupLayout({
         label: name,
         entries: kinds.map((k, binding) => ({
@@ -595,7 +662,7 @@ export class AvbdSolver {
       });
       const pl = device.createPipelineLayout({ bindGroupLayouts: [layout] });
       const module = device.createShaderModule({ code, label: name });
-      for (const [, ...eps] of entries) for (const ep of eps) this.pipes[ep] = device.createComputePipeline({ layout: pl, compute: { module, entryPoint: ep } });
+      for (const [, ...eps] of entries) for (const ep of eps) this.pipes[ep] = device.createComputePipeline({ layout: pl, compute: { module, entryPoint: ep, ...(constants[ep] ? { constants: constants[ep] } : {}) } });
       for (const [g, buffers] of groups) {
         this.binds[g] = device.createBindGroup({
           layout,
@@ -610,8 +677,9 @@ export class AvbdSolver {
     mk('avbd setup', SETUP, [['', 'pairSetup', 'groundSetup']], ['r', 'r', 'r', 'r', 'r', 'r', 'rw', 'u'],
       [['setup', [B.manifolds, B.groundManifolds, B.bodies, B.props, this.meta, B.prev, this.contacts, this.uniform]]]);
     mk('avbd init', INIT, [['', 'initBodies']], ['rw', 'rw', 'u'], [['init', [B.bodies, this.solver, this.uniform]]]);
-    mk('avbd solve', SOLVE, [['', 'primal']], ['r', 'rw', 'r', 'r', 'r', 'r', 'r', 'r', 'u', 'ud'],
-      [['solve', [B.props, this.solver, this.contacts, B.order, B.colorStart, B.rowStart, B.rowLength, B.adjSlot, this.uniform, this.colorUniform]]]);
+    mk('avbd solve', SOLVE, [['', 'primal', 'primalTail']], ['r', 'rw', 'r', 'r', 'r', 'r', 'r', 'r', 'u', 'ud'],
+      [['solve', [B.props, this.solver, this.contacts, B.order, B.colorStart, B.rowStart, B.rowLength, B.adjSlot, this.uniform, this.colorUniform]]],
+      { primalTail: { tailThreads: dispatch.tailThreads } });
     mk('avbd dual', DUAL, [['', 'dualPairs', 'dualGround', 'velocities', 'finalize']], ['rw', 'rw', 'rw', 'r', 'u'],
       [['dual', [B.bodies, this.solver, this.contacts, this.meta, this.uniform]]]);
   }
@@ -668,13 +736,21 @@ export class AvbdSolver {
       pass.setBindGroup(0, this.binds.init!);
       pass.setPipeline(this.pipes.initBodies!);
       pass.dispatchWorkgroups(groups);
+      // Colours below `direct` get a dispatch each; the tail workgroup does the rest.
+      const { indirectColors } = this.dispatch;
+      const direct = indirectColors ? MAX_COLORS - 1 : this.dispatch.colorTail;
       for (let it = 0; it <= iterations; it++) {
         const stab = it === iterations ? 1 : 0;
+        const colour = (c: number) => [(stab * MAX_COLORS + c) * DYN];
         pass.setPipeline(this.pipes.primal!);
-        for (let c = 0; c < MAX_COLORS; c++) {
-          pass.setBindGroup(0, this.binds.solve!, [(stab * MAX_COLORS + c) * DYN]);
-          pass.dispatchWorkgroupsIndirect(b.dispatch, 12 * c);
+        for (let c = 0; c < direct; c++) {
+          pass.setBindGroup(0, this.binds.solve!, colour(c));
+          if (indirectColors) pass.dispatchWorkgroupsIndirect(b.dispatch, 12 * c);
+          else pass.dispatchWorkgroups(groups);
         }
+        pass.setPipeline(this.pipes.primalTail!);
+        pass.setBindGroup(0, this.binds.solve!, colour(direct));
+        pass.dispatchWorkgroups(1);
         pass.setBindGroup(0, this.binds.dual!);
         if (it < iterations) {
           pass.setPipeline(this.pipes.dualPairs!);
