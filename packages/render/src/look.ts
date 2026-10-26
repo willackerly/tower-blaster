@@ -2,6 +2,7 @@
 // read, so a preset is a uniform block, not a shader variant. Includes the
 // CPU twins of the colour math (OKLab, AgX) that tests compare the GPU with.
 import type { V3 } from './math.ts';
+import { CLEAR_DAY, type AtmosphereParams } from './atmosphere.ts';
 
 export interface LookParams {
   name: string;
@@ -40,6 +41,18 @@ export interface LookParams {
   /** Fraction of the bloom pyramid mixed into the image (energy-conserving). */
   bloomMix: number;
   vignette: number;
+  /** Direction toward the sun (default SUN in renderer.ts). */
+  sunDir?: V3;
+  /**
+   * A physically based sky (atmosphere.ts). When set, the sky, haze, sun
+   * colour and ambient light come from it, and skyZenith, skyHorizon, glow,
+   * fog, sunColor, ambSky, ambGround and the softboxes are unused.
+   */
+  atmosphere?: AtmosphereParams;
+  /** With an atmosphere: how far exposure adapts to the light, 0 (fixed) to 1 (auto exposure); see adaptedExposure. */
+  autoExposure?: number;
+  /** false: none of the stylized effects (sparks, ball trail, heat glow, ball and impact lights). Default true. */
+  effects?: boolean;
 }
 
 const hex = (h: string): V3 => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16) / 255) as V3;
@@ -99,7 +112,66 @@ export const HAZY_DAY: LookParams = {
   vignette: 0.15,
 };
 
-export const LOOKS: Record<string, LookParams> = { candy: CANDY_NIGHT, hazy: HAZY_DAY };
+/** The knobs of the real look (all optional; realLook fills the rest). */
+export interface RealOptions {
+  /** Sun elevation above the horizon and azimuth (clockwise from -z, toward +x), degrees. */
+  sunElevation: number;
+  sunAzimuth: number;
+  /** Meteorological visibility, km: 10 is hazy, 40 a clear summer day, 150 crisp. */
+  visibility: number;
+  /** Sun illuminance multiplier (1 = the default exposure's daylight). */
+  sunStrength: number;
+  /** Linear albedo of the ground (also what the sky's multiple scattering sees). */
+  groundAlbedo: V3;
+  /** Exposure at the default sun; autoExposure (0 to 1) is how far it follows the light as the sun moves or haze thickens. */
+  exposure: number;
+  autoExposure: number;
+}
+
+export const REAL_DEFAULTS: RealOptions = { sunElevation: 35, sunAzimuth: 140, visibility: 40, sunStrength: 1, groundAlbedo: [0.2, 0.19, 0.17], exposure: 1.1, autoExposure: 0.75 };
+
+/** Direction toward the sun from elevation and azimuth in degrees. */
+export function sunFrom(elevation: number, azimuth: number): V3 {
+  const e = (elevation * Math.PI) / 180, a = (azimuth * Math.PI) / 180;
+  return [Math.cos(e) * Math.sin(a), Math.sin(e), -Math.cos(e) * Math.cos(a)];
+}
+
+/**
+ * The photoreal look (docs/realism.md), from its knobs. Stone-coloured
+ * blocks, no studio softboxes, the sky and light from the atmosphere.
+ * Materials, ground texture, sky lighting and soft shadows arrive in later
+ * realism steps.
+ */
+export function realLook(o: Partial<RealOptions> = {}): LookParams {
+  const r = { ...REAL_DEFAULTS, ...o };
+  return {
+    ...HAZY_DAY,
+    name: 'real',
+    sunDir: sunFrom(r.sunElevation, r.sunAzimuth),
+    atmosphere: { ...CLEAR_DAY, visibility: r.visibility, groundAlbedo: r.groundAlbedo, sunIlluminance: CLEAR_DAY.sunIlluminance.map((x) => x * r.sunStrength) as V3 },
+    floor: r.groundAlbedo,
+    floorGrid: 0,
+    keyColor: [0, 0, 0],
+    rimColor: [0, 0, 0],
+    roughness: 0.8,
+    clearcoat: 0,
+    bevel: 0.012,
+    ramp: [hex('#9E9A92'), hex('#ABA397'), hex('#B6AC9C'), hex('#A7A097'), hex('#BDB6AA')],
+    hueStep: 4,
+    ball: hex('#8A8D90'),
+    ballEmissive: 0,
+    exposure: r.exposure,
+    autoExposure: r.autoExposure,
+    // Sparks and glows are not real; impact dust replaces them (realism step 6).
+    effects: false,
+    bloomMix: 0.02,
+    vignette: 0.08,
+  };
+}
+
+export const REAL = realLook();
+
+export const LOOKS: Record<string, LookParams> = { candy: CANDY_NIGHT, hazy: HAZY_DAY, real: REAL };
 
 // ---------------------------------------------------------------- colour math (CPU twins)
 
