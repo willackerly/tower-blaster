@@ -7,7 +7,7 @@
 import { writeStruct } from '@tb/schema';
 import type { GpuProfiler } from '@tb/gpu';
 import { Culler, NO_LOD, SEG, type CullFrame } from './cull.ts';
-import { Sparks } from './sparks.ts';
+import { DEFAULT_DEBRIS, Sparks } from './sparks.ts';
 import { Lights, MAX_BALLS, TRAIL } from './lights.ts';
 import { aoFrame, aoGrid, AoVolume } from './ao.ts';
 import { FLOOR_VERTS, floorFan, floorPolygon } from './floor.ts';
@@ -24,6 +24,8 @@ import { SnapshotSource, type BodySource } from './source.ts';
 export { BOX_CUBE_VERTS, BOX_FAN_VERTS, BOX_VERTS, SPHERE_VERTS } from './shaders.ts';
 
 const SAMPLES = 4;
+/** Real look debris: a chip's size (m, about; each varies 0.5 to 1.5x). */
+const CHIP_SIZE = 0.035;
 // From the camera's right, slightly behind the scene: one lit face, one in
 // shade, and shadows falling toward the viewer.
 /** Most overlay spheres setOverlay draws. */
@@ -108,7 +110,7 @@ export interface RendererOptions {
 
 type PipeName = 'box' | 'sphere' | 'ground' | 'sky' | 'overlay' | 'spark' | 'trail' | 'boxShadow' | 'sphereShadow' | 'boxId' | 'sphereId';
 /** The pipelines whose shading differs for a look with an atmosphere (sceneWgsl(true)). */
-type RealPipe = 'box' | 'boxFar' | 'sphere' | 'ground' | 'sky' | 'overlay';
+type RealPipe = 'box' | 'boxFar' | 'sphere' | 'ground' | 'sky' | 'overlay' | 'chip' | 'dust';
 
 /**
  * The depth past the near plane beyond which every pixel of a surface
@@ -149,6 +151,7 @@ export function lookUniforms(l: LookParams): Record<string, number | number[]> {
     stoneDetail: [l.stone?.detail ?? 0, l.stone?.fade ?? 1, 0, 0],
     ground: l.ground ? [GROUND_LAYER + GROUNDS.indexOf(l.ground.kind), l.ground.scale, l.ground.detail, l.ground.variation] : [GROUND_LAYER, 1, 0, 0],
     hills: l.hills ? [(l.hills.height * Math.PI) / 180, l.hills.distance * 1000, 0, 0] : [0, 1000, 0, 0],
+    debris: [l.debris?.size ?? 1.6, l.debris?.opacity ?? 0.6, CHIP_SIZE, 0],
     blockAlbedo: [...[0, 1, 2].map((k) => l.ramp.reduce((acc, c) => acc + srgbToLinear(c[k]!), 0) / l.ramp.length), 0],
     ...Object.fromEntries(l.ramp.map((c, i) => [`ramp${i}`, [...linearToOklab(lin(c) as V3), 0]])),
   };
@@ -256,8 +259,9 @@ export class Renderer {
     this.layout = device.createBindGroupLayout({
       entries: [
         ...common,
-        { binding: 3, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: 'depth' } },
-        { binding: 4, visibility: GPUShaderStage.FRAGMENT, sampler: { type: 'comparison' } },
+        // The shadow map in the vertex stage too: a dust puff is lit once per vertex (real look).
+        { binding: 3, visibility: VF, texture: { sampleType: 'depth' } },
+        { binding: 4, visibility: VF, sampler: { type: 'comparison' } },
         { binding: 5, visibility: GPUShaderStage.FRAGMENT, buffer: ro },
         { binding: 6, visibility: GPUShaderStage.VERTEX, buffer: ro },
         { binding: 7, visibility: GPUShaderStage.FRAGMENT, buffer: ro },
@@ -339,9 +343,9 @@ export class Renderer {
       const atmosphere = new Atmosphere(device);
       const layout = device.createBindGroupLayout({
         entries: [
-          { binding: 0, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: 'float' } },
-          { binding: 1, visibility: GPUShaderStage.FRAGMENT, sampler: { type: 'filtering' } },
-          { binding: 2, visibility: GPUShaderStage.FRAGMENT, buffer: ro },
+          { binding: 0, visibility: VF, texture: { sampleType: 'float' } },
+          { binding: 1, visibility: VF, sampler: { type: 'filtering' } },
+          { binding: 2, visibility: VF, buffer: ro },
           { binding: 3, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: 'float', viewDimension: '2d-array' } },
           { binding: 4, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: 'float', viewDimension: '2d-array' } },
           { binding: 5, visibility: GPUShaderStage.FRAGMENT, sampler: { type: 'filtering' } },
@@ -360,6 +364,26 @@ export class Renderer {
         ground: color('vsGround', 'fsGround', 'none', 0, { ...m, constants: { ...floorConsts, SHADOW_VIEW: opts.realDiag === 'shadow-view' ? 1 : 0 }, buffers: [{ arrayStride: 12, attributes: [{ shaderLocation: 0, offset: 0, format: 'float32x3' }] }] }),
         sky: color('vsSky', 'fsSky', 'none', 0, { ...m, sky: true, constants: floorConsts }),
         overlay: color('vsOverlay', 'fsOverlay', 'back', 0, { ...m, constants: pcss }),
+        // Debris (realism step 6): chips opaque and depth-written, puffs premultiplied over the scene without depth writes.
+        chip: device.createRenderPipeline({
+          layout: m.layout,
+          vertex: { module: m.module, entryPoint: 'vsChip', constants: { CHIP_BASE: this.sparks.rings[0] } },
+          fragment: { module: m.module, entryPoint: 'fsChip', constants: pcss, targets: [{ format: HDR_FORMAT }] },
+          primitive: { topology: 'triangle-list', cullMode: 'none' },
+          depthStencil: { format: 'depth24plus', depthWriteEnabled: true, depthCompare: 'less' },
+          multisample: { count: SAMPLES },
+        }),
+        dust: device.createRenderPipeline({
+          layout: m.layout,
+          vertex: { module: m.module, entryPoint: 'vsDust' },
+          fragment: {
+            module: m.module, entryPoint: 'fsDust',
+            targets: [{ format: HDR_FORMAT, writeMask: GPUColorWrite.RED | GPUColorWrite.GREEN | GPUColorWrite.BLUE, blend: { color: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha', operation: 'add' }, alpha: { srcFactor: 'zero', dstFactor: 'one', operation: 'add' } } }],
+          },
+          primitive: { topology: 'triangle-list', cullMode: 'none' },
+          depthStencil: { format: 'depth24plus', depthWriteEnabled: false, depthCompare: 'less' },
+          multisample: { count: SAMPLES },
+        }),
       };
       const bind = device.createBindGroup({
         layout,
@@ -574,10 +598,19 @@ export class Renderer {
     const real = !ids && this.look.atmosphere ? (this.real ??= this.makeReal()) : null;
     if (real) real.atmosphere.encode(cp, this.look.atmosphere!, sunOf(this.look), this.eyeKm(f), this.look.exposure, this.look.autoExposure ?? 0);
     const effects = this.look.effects !== false;
+    // The real look's impacts throw dust and chips instead (sparks.ts debris mode).
+    const debris = !ids && !effects && real !== null && this.toggles.sparks && (this.look.debris?.dust ?? 1) + (this.look.debris?.chips ?? 1) > 0;
     if (!ids && effects) {
       if (this.toggles.sparks) this.sparks.encode(cp, this.source, { dt, groundY: f.groundY });
       this.lights.encode(cp, this.source, culler.records, this.sparks, { eye: f.eye, time: f.time ?? 0, ball: this.look.ball.map(srgbToLinear) as V3 });
-    } else if (!ids) this.lights.off();
+    } else if (!ids) {
+      this.lights.off();
+      if (debris) {
+        const d = this.look.debris;
+        this.sparks.debris = { ...this.sparks.debris, dustPerDv: DEFAULT_DEBRIS.dustPerDv * (d?.dust ?? 1), chipPerDv: DEFAULT_DEBRIS.chipPerDv * (d?.chips ?? 1) };
+        this.sparks.encode(cp, this.source, { dt, groundY: f.groundY, mode: 'debris' });
+      }
+    }
     cp.end();
     if (!ids && this.toggles.shadow) {
       const sp = enc.beginRenderPass({ label: 'shadow', ...stamp('shadow'), colorAttachments: [], depthStencilAttachment: { view: this.shadowTex.createView(), depthClearValue: 1, depthLoadOp: 'clear', depthStoreOp: 'store' } });
@@ -625,6 +658,12 @@ export class Renderer {
       if (this.toggles.sparks && effects) {
         p.setPipeline(this.pipes.spark);
         p.drawIndirect(this.sparks.args, 0);
+      }
+      if (debris) {
+        p.setPipeline(real!.pipes.chip);
+        p.drawIndirect(this.sparks.args, 32);
+        p.setPipeline(real!.pipes.dust);
+        p.drawIndirect(this.sparks.args, 16);
       }
       if (this.toggles.trail && effects) {
         p.setPipeline(this.pipes.trail);

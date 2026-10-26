@@ -155,6 +155,104 @@ rules the code follows; the doc has the reasoning.
   (0.8 to 1.7 radii), half as strong, and stones vary more in tone (0.62
   to 1.32 of the matrix), so shaded gravel reads as stones.
 
+## What step 6 built
+
+- Impacts in the real look throw dust and stone chips instead of sparks
+  (the real look already had no heat glow). The spark detector is reused,
+  with a lower threshold in debris mode (`dustDv`, 1.2 m/s against the
+  sparks' 2.5: a knock too light for a spark still raises dust). `Sparks`
+  gains a `debris` mode that splits its pool into a dust ring (`DUST_POOL`,
+  2048 slots) and a chip ring (`CHIP_POOL`, 4096). Switching mode kills
+  every particle; in debris mode the simulate pass runs over the rings only
+  (6144 slots, not 65536).
+- Counts. An impact of speed change dv is owed (dv - 1.2) x 1.5 puffs (at
+  most 8) and (dv - 3) x 1 chips (at most 12), the fraction rounded up by
+  chance (a hash of the event and frame), so the many light knocks of a
+  collapse each make dust now and then.
+- Budgets are token buckets, kept on the GPU in the control words (fixed
+  point, `TOKEN_ONE` per particle): each kind spawns at most what its
+  bucket holds, at most its size in one frame (384 puffs, 768 chips), and
+  refills at its rate (600 puffs, 1500 chips per second of particle time).
+  A big hit spends the bucket at once; a long collapse is held to the
+  rate, and rate x mean life stays under the ring (600 x 3 s = 1800 of
+  2048), so the cloud builds instead of recycling young puffs. A paused
+  game (dt 0) refills nothing.
+- When a frame has more events than a bucket allows, the spawn threads walk
+  the events from a per-frame start in steps of a prime larger than
+  `MAX_EVENTS`, so the dust samples the whole collapse, not the lowest body
+  indices. Bits 8-11 of a particle's packed word keep its impact's size
+  class (dv in whole m/s, at most 15), and a puff's size scales from 0.5x
+  to 2x with it: the ball's hit throws a big puff.
+- How the rules were found. The first rule (floor((dv - 2.5) x 0.5) puffs,
+  at most 96 a frame) showed almost no dust in the Mac's S14 screenshots.
+  A histogram of per-step dv in that scene on the GPU engine (a 40 m/s
+  ball into a tower, 4 s) has 593 body-steps above 1.2 m/s but only 164
+  above 2.5, 39 of them in the ball's one step: the old rule gave a
+  typical knock no puff at all, and a second attempt with a flat budget of
+  10 a frame (to keep the ring from recycling) capped the ball's hit at 10
+  puffs. Rendering that collapse headless with the rules above, about 700
+  puffs are alive by 2.8 s and 1000 by 5.5 s, and the falling rubble
+  stands in a haze. Dust raised inside the tower stays hidden until the
+  pile opens, as it would.
+- A puff lives 2 to 4 s: launched at up to 2.5 m/s up and along the impact,
+  linear drag, a rise of 0.6 m/s^2, and a floor 10 cm above the ground. It
+  draws as a camera-facing disc that grows from 0.13 to 1 of `dustSize`
+  (ease-out, times its size class's 0.5 to 2), and fades as (1 - t)^1.5
+  from `dustOpacity` at its centre. A macro-noise texture keeps puffs from
+  looking round, and the disc softens where it meets the ground. Lighting
+  is done in the vertex shader: one shadow tap at the centre, the sun
+  through a Henyey-Greenstein phase (g 0.4, half isotropic, so puffs
+  against the sun glow and puffs with the sun behind the camera stay
+  light), and half sky, half ground ambient. The colour is the blocks'
+  mean albedo mixed 30% toward the ground. Premultiplied blending, no
+  depth write, aerial perspective applied.
+- A chip lives 1.5 to 3.5 s: a spark's flight (gravity, quadratic drag)
+  with its own bounce (0.25) and friction (0.55). It draws as a small
+  opaque tumbling flake (3.5 cm, 0.5 to 1.5x, shrinking over its last 20%
+  of life) through the block shader's `shade`, so it takes the sun, PCSS
+  and fog like a block; its colour is a darker shade of the block albedo.
+  It is lifted so it never sinks into the ground.
+- Indirect draws: the args buffer holds three draws (streaks at byte 0,
+  puffs at 16, chips at 32), each the whole ring while anything lives and
+  empty otherwise. First instance stays 0 (non-zero needs
+  `indirect-first-instance`), so the chip shader adds the ring's offset
+  through the `CHIP_BASE` override.
+- Knobs: `dust` and `chips` (multipliers on the per-dv counts; 0 turns one
+  off, both 0 skip the passes), `dustSize` (m, 1.6) and `dustOpacity`
+  (0.6). Bench variant `real-dust`: 64 impacts a frame around the view's
+  focus with 1/60 s steps, warmed up 4 s so the counts and ages are steady
+  (the bench's "Particles alive" column shows how many); real against it is
+  the worst steady cost. On the M5 Max at 638cab8 (about 5,280 alive) real
+  against real-dust GPU p50: near 10k 2.28 / 2.34 ms, near 100k 3.68 /
+  3.69, far 10k 0.89 / 1.23, far 100k 2.93 / 2.96. Every case stays under
+  its cap; far 10k pays most (+0.34 ms), where a full shower's big puffs
+  cover much of a small screen footprint. The Mac's S14 screenshots at 2.5
+  and 5 s show a tan haze rising through the pile and hanging between the
+  rubble; with `dustOpacity` 0.9 it is a thick plume.
+- Tests:
+  - the counts' expected rates and caps;
+  - a short budget sampling every event over frames, and a part-empty
+    bucket limiting a frame;
+  - the spawn and flight kernels against CPU twins (24 bursts; spawn
+    within 3e-4, 80 frames of flight within 1e-6), each kind only in its
+    own ring;
+  - puffs never below 10 cm and chips never below the ground; all dead and
+    both draws empty after 4 s; the mode switch clearing the pool;
+  - a flood spending each bucket in its first frame and then spawning
+    exactly its rate, and, refilled every frame, wrapping both rings
+    without touching the slots past them;
+  - the draw: pixels change only near a burst in the open, none on a wall
+    hiding a second burst, each kind is visible on its own, and `dust` 0
+    with `chips` 0 draws the sparks-off frame bit for bit.
+- Rejected:
+  - soft particles against the depth buffer (needs a depth copy; the
+    ground fade covers the common case);
+  - lit volume dust (the AO volume is 0.5 m, coarser than a puff);
+  - chips as rigid bodies in the physics engine (a chip is under a pixel
+    past 20 m, and engines count bodies);
+  - a CPU-side budget (the CPU does not know how many events a frame has
+    without a readback).
+
 ## Floor and ambient (fixes after the stone step's screenshots)
 
 - Contact darkening (within 1.5 m of the floor) is for what stands on the

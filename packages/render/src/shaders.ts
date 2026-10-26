@@ -54,6 +54,7 @@ export const Frame = defineStruct('Frame', [
   ['aoFloorSky', 'vec4f', 'real look: floor sky map placement, uv = (rel.xz - xy) * zw (AoVolume.floorSkyFrame)'],
   ['ground', 'vec4f', 'real look: ground layer (materials.ts), texture scale, texture strength (0: none, nothing sampled), macro variation'],
   ['hills', 'vec4f', 'real look: horizon hills\' greatest height (radians, 0: none) and distance (m)'],
+  ['debris', 'vec4f', 'real look: dust puff size (m, fully grown), puff opacity, chip size (m), unused'],
   ['shadowSoft', 'vec4f', 'real look: tan of the penumbra half angle (0: 3x3 taps), blocker search radius (texels), light depth range (m), steepest receiver plane (depth per uv)'],
 ], 'Per-frame uniforms of the scene pass.');
 
@@ -340,6 +341,135 @@ fn aerial(c: vec3f, rel: vec3f) -> vec3f {
   let s = skyLut(rel / max(d, 1e-6));
   let T = exp(-fr.atmoSigma * d);
   return c * T + s.rgb * min((1.0 - T.g) / max(1.0 - s.a, 1e-4), 1.0);
+}
+`;
+
+// Debris (realism step 6, sparks.ts debris mode): dust puffs and stone
+// chips from impacts, in place of sparks. Puffs are camera-facing quads,
+// alpha-blended (premultiplied) and unsorted: similar low-alpha puffs show
+// no ordering errors. Each is lit once, in the vertex shader: the sun
+// through one shadow tap, scattered forward (half Henyey-Greenstein, g
+// 0.4, half isotropic for the multiple scattering of a thick cloud), and
+// the sky and ground's ambient, then seen through the air (aerial).
+// Its fragments fade out within half a radius above the ground, so a
+// puff's foot never shows the floor's edge and nothing draws below it.
+// Chips are small opaque quads with a tumbling normal, shaded like the
+// blocks and darker (small broken stone is in its own shade), resting on
+// the ground rather than through it; CHIP_BASE is where their ring starts
+// in the pool.
+const REAL_DEBRIS_WGSL = /* wgsl */ `
+override CHIP_BASE: u32 = 0u;
+struct DustOut {
+  @builtin(position) clip: vec4f,
+  @location(0) uv: vec2f,
+  @location(1) rel: vec3f,
+  @location(2) @interpolate(flat) colour: vec4f, // lit rgb, opacity
+  @location(3) @interpolate(flat) size: vec2f,   // radius m, noise offset
+}
+
+fn hg4pi(c: f32, g: f32) -> f32 {
+  return (1.0 - g * g) / pow(1.0 + g * g - 2.0 * g * c, 1.5);
+}
+
+// Camera-facing corner offset (m) of a quad of radius r at rel, turned by angle a.
+fn facing(rel: vec3f, corner: vec2f, r: f32, a: f32) -> vec3f {
+  let f = normalize(rel);
+  let right = normalize(select(cross(f, vec3f(0.0, 1.0, 0.0)), vec3f(1.0, 0.0, 0.0), abs(f.y) > 0.999));
+  let up = cross(right, f);
+  let c = vec2f(corner.x * cos(a) - corner.y * sin(a), corner.x * sin(a) + corner.y * cos(a));
+  return (right * c.x + up * c.y) * r;
+}
+
+const QUAD = array<vec2f, 6>(vec2f(-1.0, -1.0), vec2f(1.0, -1.0), vec2f(1.0, 1.0), vec2f(-1.0, -1.0), vec2f(1.0, 1.0), vec2f(-1.0, 1.0));
+
+@vertex fn vsDust(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> DustOut {
+  var o: DustOut;
+  o.clip = vec4f(0.0, 0.0, 2.0, 1.0); // outside the depth range: clipped
+  o.uv = vec2f(0.0);
+  o.rel = vec3f(0.0);
+  o.colour = vec4f(0.0);
+  o.size = vec2f(1.0, 0.0);
+  let s = sparks[ii];
+  if (s.age < 0.0) { return o; }
+  let t = s.age / dustLife(s.packed);
+  let seed = unit(s.packed);
+  // Grows (ease-out) to dustSize, 0.5x for the softest hits to 2x for the hardest (size class in bits 8-11).
+  let r = fr.debris.x * mix(0.13, 1.0, 1.0 - pow(1.0 - t, 3.0)) * (0.7 + 0.6 * seed) * mix(0.5, 2.0, f32((s.packed >> 8u) & 0xfu) / 15.0);
+  let rel = s.pos - fr.eye;
+  let lc = fr.lightViewProj * vec4f(rel, 1.0);
+  let suv = lc.xy * vec2f(0.5, -0.5) + 0.5;
+  let inside = all(suv > vec2f(0.0)) && all(suv < vec2f(1.0)) && lc.z < 1.0;
+  let vis = select(1.0, textureSampleCompareLevel(shadowMap, shadowSampler, suv, lc.z - fr.shadowParams.y), inside);
+  // Stone powder, lighter than the blocks; a thick cloud scatters many times, so half its phase is isotropic.
+  let albedo = mix(fr.blockAlbedo.rgb, fr.floor, 0.3) * 1.1;
+  let lit = albedo * (fr.sunColor * vis * 0.5 * (0.5 + 0.5 * hg4pi(dot(fr.sun, normalize(rel)), 0.4)) + 0.5 * (atmoAmbient[0].rgb + atmoAmbient[1].rgb));
+  let alpha = fr.debris.y * pow(1.0 - t, 1.5) * smoothstep(0.0, 0.06, t);
+  let corner = QUAD[vi];
+  let p = rel + facing(rel, corner, r, 6.2831853 * fract(seed * 7.13) + s.age * (seed - 0.5));
+  o.clip = fr.viewProj * vec4f(p, 1.0);
+  o.uv = corner;
+  o.rel = p;
+  o.colour = vec4f(aerial(lit, rel), alpha);
+  o.size = vec2f(r, fract(seed * 31.7));
+  return o;
+}
+
+@fragment fn fsDust(o: DustOut) -> @location(0) vec4f {
+  let d2 = dot(o.uv, o.uv);
+  if (d2 >= 1.0) { discard; }
+  // Billowing: the macro layer's smooth fields as density, a different patch per puff.
+  let n = textureSampleLevel(stoneDetail, stoneSamp, o.uv * 0.06 + vec2f(o.size.y, fract(o.size.y * 7.0)), ${MACRO_LAYER}, 0.0);
+  let density = (1.0 - d2) * (1.0 - d2) * (0.45 + 1.1 * n.b);
+  let h = o.rel.y + fr.eye.y - fr.groundY;
+  let a = clamp(o.colour.a * density * smoothstep(0.0, 0.5 * o.size.x, h), 0.0, 1.0);
+  return vec4f(o.colour.rgb * a, a);
+}
+
+struct ChipOut {
+  @builtin(position) clip: vec4f,
+  @location(0) uv: vec2f,
+  @location(1) rel: vec3f,
+  @location(2) @interpolate(flat) n: vec3f,
+  @location(3) @interpolate(flat) base: vec4f, // albedo, shape seed
+}
+
+@vertex fn vsChip(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> ChipOut {
+  var o: ChipOut;
+  o.clip = vec4f(0.0, 0.0, 2.0, 1.0);
+  o.uv = vec2f(0.0);
+  o.rel = vec3f(0.0);
+  o.n = vec3f(0.0, 1.0, 0.0);
+  o.base = vec4f(0.0);
+  let s = sparks[CHIP_BASE + ii];
+  if (s.age < 0.0) { return o; }
+  let t = s.age / chipLife(s.packed);
+  let h = pcg(s.packed);
+  let seed = unit(s.packed);
+  let r = fr.debris.z * (0.5 + unit(h)) * (1.0 - smoothstep(0.8, 1.0, t));
+  // Tumbling while it flies, still once it rests on the ground.
+  let spin = (8.0 + 10.0 * unit(pcg(h))) * min(length(s.vel), 3.0);
+  let a1 = 6.2831853 * seed + s.age * spin;
+  let a2 = 6.2831853 * unit(h) + s.age * spin * 0.7;
+  o.n = normalize(vec3f(sin(a1) * cos(a2), abs(cos(a1)) + 0.2, sin(a1) * sin(a2)));
+  // Lifted so the quad's lowest corner (turned: r sqrt 2) stays on the ground.
+  let rel = s.pos - fr.eye + vec3f(0.0, max(1.42 * r - (s.pos.y - fr.groundY), 0.0), 0.0);
+  let corner = QUAD[vi];
+  let p = rel + facing(rel, corner, r, a1 * 0.3);
+  o.clip = fr.viewProj * vec4f(p, 1.0);
+  o.uv = corner;
+  o.rel = p;
+  o.base = vec4f(fr.blockAlbedo.rgb * (0.45 + 0.4 * unit(pcg(h + 1u))), unit(pcg(h + 2u)));
+  return o;
+}
+
+@fragment fn fsChip(o: ChipOut) -> @location(0) vec4f {
+  // An irregular chip: a square and a diamond mixed per chip, cut at a hashed corner.
+  let q = abs(o.uv);
+  let k = 0.3 + 0.5 * o.base.w;
+  if (mix(max(q.x, q.y), q.x + q.y, k) > 0.85 || (o.uv.x + o.uv.y > 1.1 - 0.6 * o.base.w)) { discard; }
+  fragPx = o.clip.xy;
+  let c = shade(o.base.rgb, o.rel, o.n, 0.5, 0.5, 0.0, vec2f(1.0));
+  return vec4f(fog(c, o.rel), 1.0);
 }
 `;
 
@@ -960,6 +1090,7 @@ const SPARK_HALF_WIDTH = 1.25;
   return vec4f(o.colour * across * along, 0.0);
 }
 
+${real ? REAL_DEBRIS_WGSL : ''}
 // ---------------------------------------------------------------- ball trail
 
 // A camera-facing ribbon through each ball's last TRAIL positions, fading
