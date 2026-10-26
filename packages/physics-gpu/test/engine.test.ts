@@ -1,9 +1,9 @@
 // The GPU AVBD engine against analytic results and the f64 reference.
 import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { type BodyDesc, bodiesAt, type CombineRule, emptySnapshot, freeFlight, type SceneDesc, type Snapshot, type Vec3 } from '@tb/engine-api';
+import { type BodyDesc, bodiesAt, type CombineRule, emptySnapshot, freeFlight, massOf, type SceneDesc, type Snapshot, type Vec3 } from '@tb/engine-api';
 import { drift, jitter, nonFinite, penetration, survival } from '@tb/metrics';
-import { AvbdReferenceEngine } from '@tb/physics-ref';
+import { type AvbdParams, AvbdReferenceEngine } from '@tb/physics-ref';
 import { buildScenario } from '@tb/scenarios';
 import { aboveHole, appliedMu, loadBundle, openWebGPU, readColumn, rodRock, rodToppleTime, slideMu, slideScene, THROW, throwScene, tippingAngle, type WebGPUSession } from '@tb/testkit';
 import { GpuAvbdEngine, type GpuEngineOptions } from '../src/index.ts';
@@ -29,8 +29,8 @@ const toSnap = (p: Drivers.PlainSnapshot): Snapshot => {
   s.pos.set(p.pos); s.rot.set(p.rot); s.linVel.set(p.linVel); s.angVel.set(p.angVel); s.awake.fill(1);
   return s;
 };
-async function runGpu(scene: SceneDesc, steps: number, params = {}, every = 0) {
-  const r = await call('simulateGpu', scene, steps, params, every);
+async function runGpu(scene: SceneDesc, steps: number, params: Partial<AvbdParams> = {}, every = 0, kicks: Drivers.Kick[] = []) {
+  const r = await call('simulateGpu', scene, steps, params, every, {}, kicks);
   expect(r.error).toBeNull();
   expect(r.worst.uncolored).toBe(0);
   expect(r.worst.colorOverflow).toBe(0);
@@ -494,6 +494,212 @@ describe('GPU AVBD engine: walls and columns fall as rigid bodies do (S12, S13)'
     expect(r.gpu.farSide / rod.farSide).toBeLessThan(1.02);
     expect(Math.abs(r.gpu.upright! - r.ref.upright!)).toBeLessThan(0.02);
     expect(Math.abs(r.gpu.farSide - r.ref.farSide)).toBeLessThan(0.02);
+  });
+});
+
+// Rolling contacts (AvbdParams.rollingContacts): the reference's collide()
+// says why, and physics-ref/test/avbd.test.ts has these cases in f64. Steel
+// balls of R 0.25 settle at rest for 60 steps and are then set rolling, w R = v.
+describe('GPU AVBD engine: rolling contacts', () => {
+  const R = 0.25, SETTLE = 60;
+  const ball = (pos: Vec3, v = 0, radius = R): BodyDesc => ({
+    shape: { kind: 'sphere', radius }, pos, rot: [0, 0, 0, 1], linVel: [v, 0, 0], angVel: [0, 0, -v / radius], density: 7800, friction: 0.55, restitution: 0, tag: 0,
+  });
+  const slab = (z: number, hx = 2): BodyDesc => ({ ...cube([0, 0.25, z]), shape: { kind: 'box', half: [hx, 0.25, 2] }, density: 1e4 });
+  const rollScene = (bodies: BodyDesc[]): SceneDesc => ({ ...sceneOf(bodies), frictionCombine: 'min' });
+  const kick = (body: number, v: number, step = SETTLE): Drivers.Kick => ({ step, body, linVel: [v, 0, 0], angVel: [0, 0, -v / R] });
+  /** Ball b over the steps after its kick at `from` (snapshots every step): worst change of its height above `surface`, lowest height, |v / v0 - 1| and |w R / v - 1|. */
+  const rolling = (all: Snapshot[], b: number, v0: number, surface: (s: Snapshot) => number, from = SETTLE) => {
+    const y = (s: Snapshot) => s.pos[3 * b + 1]! - surface(s) - R;
+    const y0 = y(all[from]!);
+    let dy = 0, low = Infinity, dv = 0, dw = 0;
+    for (const s of all.slice(from + 1)) {
+      dy = Math.max(dy, Math.abs(y(s) - y0));
+      low = Math.min(low, y(s));
+      dv = Math.max(dv, Math.abs(s.linVel[3 * b]! / v0 - 1));
+      dw = Math.max(dw, Math.abs((-s.angVel[3 * b + 2]! * R) / s.linVel[3 * b]! - 1));
+    }
+    return { dy, low, dv, dw };
+  };
+  const state = (s: Snapshot) => [s.pos, s.rot, s.linVel, s.angVel].map((a) => [...a]);
+
+  it('a steel ball rolling on the ground at 2 and 6 m/s keeps its height, speed and rolling', { timeout: 120_000 }, async (ctx) => {
+    if (!gpu) return ctx.skip();
+    // Both balls in one scene, 3 m apart (one pipeline build), 2 s after the kick. 2026-10-26 (SwiftShader):
+    // height within 1.5e-7 m, speed and w R exact. Kept anchors (rollingContacts false, GPU and reference
+    // alike): 1.19 m and 1.51 m sunk.
+    const { all } = await runGpu(rollScene([ball([0, R, 0]), ball([0, R, 3])]), SETTLE + 120, { iterations: 10 }, 1, [kick(0, 2), kick(1, 6)]);
+    for (const [b, v0] of [[0, 2], [1, 6]] as const) {
+      const r = rolling(all, b, v0, () => 0), at = `${v0} m/s`;
+      expect(r.dy, at).toBeLessThan(1e-3);
+      expect(r.low, at).toBeGreaterThan(-1e-3);
+      expect(r.dv, at).toBeLessThan(0.01);
+      expect(r.dw, at).toBeLessThan(0.01);
+    }
+  });
+
+  it('a ball rolls across a heavy box at constant height and speed, listed before or after the box', { timeout: 120_000 }, async (ctx) => {
+    if (!gpu) return ctx.skip();
+    // Listed first the ball is a, and matching keys on its arm; listed after the box, on b's. A 4 x 0.5 x 4 slab
+    // at 2 m/s, and an 8 m slab at 6 m/s (kicked 35 steps later, so it rolls 65 steps as on the reference). At
+    // 6 m/s the box's anchor moves v h = 0.1 m a step, past matchDistance: keyed on it, the ball listed first
+    // lost the match every step and sank 0.51 m. 2026-10-26 (SwiftShader): height within 1.8e-7 m, |w R / v - 1|
+    // 7.7e-6. Kept anchors (rollingContacts false, GPU and reference alike): 0.72 m and 0.89 m into the box at 2 m/s.
+    const LATE = SETTLE + 35;
+    const scene = rollScene([
+      ball([0.4 - 2, 0.5 + R, 0]), slab(0), slab(6), ball([0.4 - 2, 0.5 + R, 6]),
+      ball([0.4 - 4, 0.5 + R, 12]), slab(12, 4), slab(18, 4), ball([0.4 - 4, 0.5 + R, 18]),
+    ]);
+    const { all } = await runGpu(scene, SETTLE + 100, { iterations: 10 }, 1, [kick(0, 2), kick(3, 2), kick(4, 6, LATE), kick(7, 6, LATE)]);
+    const cases = [[0, 1, 2, SETTLE, 'ball first'], [3, 2, 2, SETTLE, 'box first'], [4, 5, 6, LATE, 'ball first'], [7, 6, 6, LATE, 'box first']] as const;
+    for (const [b, box, v0, from, order] of cases) {
+      const r = rolling(all, b, v0, (s) => s.pos[3 * box + 1]! + 0.25, from), at = `${v0} m/s, ${order}`;
+      expect(r.dy, at).toBeLessThan(1e-3);
+      expect(r.low, at).toBeGreaterThan(-1e-3);
+      expect(r.dv, at).toBeLessThan(0.01);
+      expect(r.dw, at).toBeLessThan(0.01);
+    }
+  });
+
+  it('a ball rolling over a much larger sphere stays on its surface, listed before or after it', { timeout: 120_000 }, async (ctx) => {
+    if (!gpu) return ctx.skip();
+    // Between two spheres matching keys on the smaller one's arm (a's or b's). GPU and reference: -0.44 to
+    // +3.34 mm in both orders; kept anchors, or keyed on b's arm with the big sphere listed second: 817 mm into it.
+    const Rb = 10, v0 = 4;
+    const big = (z: number): BodyDesc => ({ ...ball([0, Rb, z], 0, Rb), density: 1e5, friction: MU });
+    const small = (z: number) => ball([-0.5, Rb + Math.sqrt((Rb + R) ** 2 - 0.25), z], v0);
+    const { all } = await runGpu(sceneOf([big(0), small(0), small(25), big(25)]), 70, { iterations: 10 }, 1);
+    for (const [sm, bg, at] of [[1, 0, 'big sphere first'], [2, 3, 'big sphere second']] as const) {
+      let low = Infinity, high = -Infinity, n = 0;
+      for (const [k, s] of all.entries()) {
+        if (k === 0) continue;
+        const d = [0, 1, 2].map((c) => s.pos[3 * sm + c]! - s.pos[3 * bg + c]!);
+        if (Math.abs(Math.atan2(d[0]!, d[1]!)) > (20 * Math.PI) / 180) break; // 20 deg past the top
+        const gap = Math.hypot(d[0]!, d[1]!, d[2]!) - Rb - R;
+        if (k > 10) { low = Math.min(low, gap); high = Math.max(high, gap); n++; }
+      }
+      expect(n, at).toBeGreaterThan(20);
+      expect(low, at).toBeGreaterThan(-5e-3);
+      expect(high, at).toBeLessThan(5e-3);
+    }
+  });
+
+  it('a plank on two ball rollers ends where the reference does, plank listed before or after the balls', { timeout: 120_000 }, async (ctx) => {
+    if (!gpu) return ctx.skip();
+    // Pair contacts with the ball as b (plank first) and as a (balls first), and the balls' ground contacts.
+    // The bound is f32's: a random 1-ulp error added to every position, rotation and velocity after every
+    // step moves the reference's final positions by 4.6e-6 to 7.5e-5 m (24 draws; rounding them to f32
+    // instead, 2e-7), so 1e-4 allows the GPU an ulp of state error per step. 2026-10-26 (SwiftShader): 3.6e-7.
+    // (By 180 steps the same noise moves them 1.2e-4 to 7.2e-4, so a longer run needs a wider bound.)
+    const plank = (z: number): BodyDesc => ({ ...cube([0, 2 * R + 0.05, z], [1, 0, 0]), shape: { kind: 'box', half: [2.4, 0.05, 0.4] }, density: 500 });
+    const rollers = (z: number) => [-0.6, 0.6].map((x): BodyDesc => ({ ...ball([x, R, z]), density: 1000, friction: MU }));
+    const scene = sceneOf([plank(0), ...rollers(0), ...rollers(3), plank(3)]);
+    const steps = 90;
+    const g = await runGpu(scene, steps, { iterations: 10 });
+    const ref = await runRef(scene, steps);
+    let worst = 0;
+    for (let k = 0; k < ref.pos.length; k++) worst = Math.max(worst, Math.abs(ref.pos[k]! - g.s1.pos[k]!));
+    expect(worst).toBeLessThan(1e-4);
+    // And the analytic speeds: the plank at 2 M / (2 M + 1.4 m), the balls at half that, rolling.
+    const M = 500 * 4.8 * 0.1 * 0.8, m = (1000 * 4 * Math.PI * R ** 3) / 3, V = (2 * M) / (2 * M + 1.4 * m);
+    for (const [p, bs] of [[0, [1, 2]], [5, [3, 4]]] as const) {
+      expect(Math.abs(g.s1.linVel[3 * p]! / V - 1)).toBeLessThan(0.01);
+      for (const b of bs) {
+        expect(Math.abs(g.s1.linVel[3 * b]! / (V / 2) - 1)).toBeLessThan(0.01);
+        expect(Math.abs((-g.s1.angVel[3 * b + 2]! * R) / g.s1.linVel[3 * b]! - 1)).toBeLessThan(0.01);
+      }
+    }
+  });
+
+  /** Snapshots of a reference run, one per step from the start. */
+  async function refSteps(scene: SceneDesc, steps: number) {
+    const e = new AvbdReferenceEngine();
+    await e.init(scene);
+    const out = [e.snapshot()];
+    for (let i = 0; i < steps; i++) { e.step(); out.push(e.snapshot()); }
+    return out;
+  }
+  /** The bodies `idx` of a snapshot, as a snapshot of their own. */
+  const pick = (s: Snapshot, idx: readonly number[]) => {
+    const p = emptySnapshot(idx.length);
+    idx.forEach((i, k) => {
+      for (let c = 0; c < 3; c++) { p.pos[3 * k + c] = s.pos[3 * i + c]!; p.linVel[3 * k + c] = s.linVel[3 * i + c]!; p.angVel[3 * k + c] = s.angVel[3 * i + c]!; }
+      for (let c = 0; c < 4; c++) p.rot[4 * k + c] = s.rot[4 * i + c]!;
+    });
+    return p;
+  };
+
+  it('a heavy ball\'s impact on a light cube goes as deep as on the reference: the load floor cap is sqrt(m_a m_b) / h^2, and only in an impact', { timeout: 120_000 }, async (ctx) => {
+    if (!gpu) return ctx.skip();
+    // A 510 kg steel ball dropped 1 m onto a 31 kg (Keystone's plaster) and a 1 kg cube on the ground, and one
+    // placed at rest on a 1 kg cube, side by side. Reference, deepest over 2 s: 24.6, 73.6 and 7.6 mm (the
+    // resting one's landing transient), all 0 from step 61. Capped at the lighter body's m / h^2: 59.1, 102.2
+    // and 42.8 mm. Capped whether or not the contact moved along its normal: 26.1, 73.6 and 19.3 mm, and 0.7 and
+    // 1.3 mm on the 1 kg cubes from step 61. Each case alone, its start moved by up to 1e-5 m, gives the same
+    // deepest to 0.01 mm, so the GPU must follow within 1 mm. 2026-10-26 (SwiftShader): the same to 0.001 mm.
+    const cases = [[250, 1.75, 'dropped on 31 kg'], [8, 1.75, 'dropped on 1 kg'], [8, 0.75, 'at rest on 1 kg']] as const;
+    const bodies = cases.flatMap(([density, y], i): BodyDesc[] => [
+      { ...cube([0, 0.25, 3 * i]), shape: { kind: 'box', half: [0.25, 0.25, 0.25] }, density }, ball([0, y, 3 * i]),
+    ]);
+    const scene = sceneOf(bodies), steps = 120;
+    const g = await runGpu(scene, steps, { iterations: 10 }, 1);
+    const ref = await refSteps(scene, steps);
+    cases.forEach(([, , at], i) => {
+      const idx = [2 * i, 2 * i + 1], sub = idx.map((k) => bodies[k]!);
+      const depth = (all: Snapshot[], from: number) => Math.max(...all.slice(from).map((s) => penetration(sub, pick(s, idx), 0).max));
+      expect(Math.abs(depth(g.all, 1) - depth(ref, 1)), at).toBeLessThan(1e-3);
+      expect(depth(g.all, 61), at).toBeLessThan(1e-4);
+    });
+  });
+
+  it('a ball hitting a free cube in zero g keeps the momentum as on the reference, head-on and grazing', { timeout: 120_000 }, async (ctx) => {
+    if (!gpu) return ctx.skip();
+    // A 5 kg ball at 15 m/s hits a 1 kg cube (the reference's test, both hits side by side). Worst momentum drift
+    // over 1.5 s, reference: 0.405% head-on and 0.116% grazing. Kept anchors (rollingContacts false): 8.99% and
+    // 0.160%. Capped whether or not the contact moved along its normal: 0.157% head-on, so the GPU must follow
+    // within 0.1 points. 2026-10-26 (SwiftShader): the same to 0.0001 points.
+    const R6 = 0.6, density = 5 / ((4 / 3) * Math.PI * R6 ** 3);
+    const hits = [[[-1.5, 0, 0], [15, 0, 0], 'head-on'], [[-1.5, 0.45, 0.2], [15, -2.6, 0], 'grazing']] as const;
+    const bodies = hits.flatMap(([p, v], i): BodyDesc[] => [
+      cube([0, 0, 10 * i]), { ...ball([p[0], p[1], p[2] + 10 * i], 0, R6), linVel: [...v], angVel: [0, 0, 0], density, friction: MU },
+    ]);
+    const scene: SceneDesc = { ...sceneOf(bodies, [0, 0, 0]), ground: null }, steps = 90;
+    const g = await runGpu(scene, steps, { iterations: 10 }, 1);
+    const ref = await refSteps(scene, steps);
+    const m = bodies.map(massOf);
+    hits.forEach(([, , at], i) => {
+      const P = (s: Snapshot) => [0, 1, 2].map((c) => m[2 * i]! * s.linVel[6 * i + c]! + m[2 * i + 1]! * s.linVel[6 * i + 3 + c]!);
+      const drift = (all: Snapshot[]) => {
+        const p0 = P(all[0]!);
+        return Math.max(...all.map((s) => { const p = P(s); return Math.hypot(p[0]! - p0[0]!, p[1]! - p0[1]!, p[2]! - p0[2]!) / Math.hypot(...p0); }));
+      };
+      expect(g.s1.linVel[6 * i], at).toBeGreaterThan(5); // the cube was hit
+      expect(drift(g.all), at).toBeLessThan(0.01);
+      expect(Math.abs(drift(g.all) - drift(ref)), at).toBeLessThan(1e-3);
+    });
+  });
+
+  it('rollingContacts false changes nothing for boxes, bit for bit, and keeps a ball\'s anchors as the reference does', { timeout: 120_000 }, async (ctx) => {
+    expect(new GpuAvbdEngine({ rollingContacts: false }).info.variant.rollingContacts).toBe(false);
+    expect(new GpuAvbdEngine().info.variant.rollingContacts).toBe(true);
+    if (!gpu) return ctx.skip();
+    // Loose cubes falling into a heap: contacts made, sliding, sticking and lost.
+    const heap = buildScenario('S11', { N: 200 }, 7);
+    const on = await runGpu(heap, 60), off = await runGpu(heap, 60, { rollingContacts: false });
+    expect(state(off.s1)).toEqual(state(on.s1));
+    // A ball rolling at 2 m/s: false must bring the kept anchors back, not just leave the flag unread. It
+    // sinks 0.36 m in 1 s on the reference; 2026-10-26 (SwiftShader) the GPU followed within 2.8e-6 m.
+    const roll = rollScene([ball([0, R, 0], 2)]);
+    const g = await runGpu(roll, 60, { rollingContacts: false }, 1);
+    const e = new AvbdReferenceEngine({ rollingContacts: false });
+    await e.init(roll);
+    let worst = 0;
+    for (let i = 1; i <= 60; i++) {
+      e.step();
+      worst = Math.max(worst, Math.abs(e.snapshot().pos[1]! - g.all[i]!.pos[1]!));
+    }
+    expect(e.snapshot().pos[1]).toBeLessThan(0);
+    expect(worst).toBeLessThan(1e-4);
   });
 });
 

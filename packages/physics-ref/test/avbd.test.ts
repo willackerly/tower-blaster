@@ -3,7 +3,7 @@ import { type BodyDesc, bodiesAt, type CombineRule, freeFlight, type InputEvent,
 import { drift, energy, jitter, nonFinite, penetration, survival } from '@tb/metrics';
 import { buildScenario } from '@tb/scenarios';
 import { appliedMu, slideMu, slideScene, THROW, throwScene } from '@tb/testkit';
-import { AvbdReferenceEngine, type AvbdParams, colorGraph, DEFAULT_AVBD, outranks, solveSpd6, tangentBasis } from '../src/index.ts';
+import { AvbdReferenceEngine, type AvbdParams, colorGraph, DEFAULT_AVBD, GROUND, outranks, solveSpd6, tangentBasis } from '../src/index.ts';
 
 const cube = (pos: Vec3, linVel: Vec3 = [0, 0, 0]): BodyDesc => ({
   shape: { kind: 'box', half: [0.5, 0.5, 0.5] }, pos, rot: [0, 0, 0, 1], linVel, angVel: [0, 0, 0], density: 1, friction: 0.6, restitution: 0, tag: 0,
@@ -286,7 +286,8 @@ describe('friction at the stick/slip boundary', () => {
       }
       expect(Math.abs(rolled - (v0 + w0 * R) / (3.5 * MU * G) * 60)).toBeLessThan(2); // analytic 23.3 steps
       expect(late).toBeLessThan(0.025); // baseline R 0.5: a period-2 slip of 0.17-0.52 m/s for 20 s
-      // Not checked: the rolling speed. It drifts up from the analytic 0.714 m/s (to 1.3 m/s by 3 s), before and after this fix.
+      // Rolling speed (5 v0 - 2 w0 R) / 7 = 0.714 m/s: exact with rolling contacts; kept anchors drifted up to 1.3 m/s by 3 s.
+      expect(Math.abs(b.linVel[0] / ((5 * v0 - 2 * w0 * R) / 7) - 1)).toBeLessThan(0.01);
     }
   });
 
@@ -314,6 +315,268 @@ describe('friction at the stick/slip boundary', () => {
     const below = await pushedStack(1.0, 300, deg);
     expect(Math.abs(below.bottom)).toBeLessThan(0.01); // now 1e-4 m; baseline 1.6-3.1 m
     expect(Math.abs(below.top)).toBeLessThan(0.01);
+  });
+});
+
+// Rolling contacts (AvbdWorld.collide): a contact on a sphere takes fresh
+// points every step, carries slip instead of anchors, and is matched by a
+// sphere's world lever arm. With kept anchors (the baselines below) the
+// rotated material point read as a gap, so a rolling ball sank and sped up,
+// and above matchDistance / h = 3 m/s every step's contact was new, its
+// force and penalty restarting from zero.
+describe('rolling contacts', () => {
+  const R = 0.25;
+  const ball = (pos: Vec3, v: number, radius = R): BodyDesc => ({
+    shape: { kind: 'sphere', radius }, pos, rot: [0, 0, 0, 1], linVel: [v, 0, 0], angVel: [0, 0, -v / radius], density: 7800, friction: 0.55, restitution: 0, tag: 0,
+  });
+  const slab = (half: Vec3): BodyDesc => ({ ...cube([0, 0.25, 0]), shape: { kind: 'box', half }, density: 1e4 });
+  const rollScene = (bodies: BodyDesc[]): SceneDesc => ({ ...sceneOf(bodies), frictionCombine: 'min' });
+  const radiusOf = (d: BodyDesc) => (d.shape as { radius: number }).radius;
+  /** Run `steps`; the ball's lowest height above `surface` from step 31 (after the landing transient), final height, velocity, w R. */
+  async function roll(scene: SceneDesc, ball: number, steps: number, surface: (e: AvbdReferenceEngine) => number, params: Partial<AvbdParams> = {}) {
+    const e = new AvbdReferenceEngine(params);
+    await e.init(scene);
+    const b = e.world!.bodies[ball]!, r = radiusOf(scene.bodies[ball]!);
+    let low = Infinity;
+    for (let s = 1; s <= steps; s++) {
+      e.step();
+      if (s > 30) low = Math.min(low, b.pos[1] - surface(e) - r);
+    }
+    return { low, h: b.pos[1] - surface(e) - r, v: b.linVel, wR: -b.angVel[2] * r };
+  }
+  /**
+   * Settle the scene for 60 steps with the ball at rest, then set it rolling along x at v0 (w R = v0) and run `steps`.
+   * Worst over the run: the lowest height above `surface`, the change of that height, |v / v0 - 1| and the slip
+   * |v + w R| / v0. `path` is x travelled minus the sum of v h: what the stabilization pass moved it (it moves positions only).
+   */
+  async function rollSettled(scene: SceneDesc, ball: number, v0: number, steps: number, surface: (e: AvbdReferenceEngine) => number, params: Partial<AvbdParams> = {}) {
+    const e = new AvbdReferenceEngine(params);
+    await e.init(scene);
+    const b = e.world!.bodies[ball]!, r = radiusOf(scene.bodies[ball]!);
+    for (let s = 0; s < 60; s++) e.step();
+    b.linVel = [v0, 0, 0];
+    b.angVel = [0, 0, -v0 / r];
+    const y0 = b.pos[1] - surface(e) - r, x0 = b.pos[0];
+    let low = Infinity, dy = 0, dv = 0, slip = 0, sum = 0;
+    for (let s = 0; s < steps; s++) {
+      e.step();
+      const y = b.pos[1] - surface(e) - r;
+      low = Math.min(low, y);
+      dy = Math.max(dy, Math.abs(y - y0));
+      dv = Math.max(dv, Math.abs(b.linVel[0] / v0 - 1));
+      slip = Math.max(slip, Math.abs(b.linVel[0] + b.angVel[2] * r) / v0);
+      sum += b.linVel[0] * scene.dt;
+    }
+    return { low, dy, dv, slip, path: b.pos[0] - x0 - sum };
+  }
+
+  it.for([10, 20])('a ball rolling on the ground at 0.05-6 m/s keeps its height, speed and rolling (%i iterations)', async (iterations) => {
+    // Set rolling once settled at rest, so the bounds need not skip a landing. Kept anchors stuck across steps below
+    // stickThreshold / h = 0.6 m/s and never matched above matchDistance / h = 3 m/s.
+    // Baseline, 300 steps at 10 iterations: the steel ball sinks 1.22-1.73 m, at 60x the speed from 0.05 m/s and 6x from 0.5;
+    // the 65 g ball (density 1) sinks 8 mm at 0.05-0.5 m/s, at 27x and 2.8x the speed.
+    for (const density of [7800, 1]) for (const v0 of [0.05, 0.5, 2, 3.2, 6]) {
+      const r = await rollSettled(rollScene([{ ...ball([0, R, 0], 0), density }]), 0, v0, 300, () => 0, { iterations });
+      const at = `${v0} m/s, density ${density}`;
+      expect(r.low, at).toBeGreaterThan(-1e-4); // the resting penetration is 0 (post-stabilization, slop 0)
+      expect(r.dy, at).toBeLessThan(1e-4);
+      expect(r.dv, at).toBeLessThan(1e-3);
+      expect(r.slip, at).toBeLessThan(1e-3);
+      expect(Math.abs(r.path), at).toBeLessThan(1e-4);
+    }
+  });
+
+  it('a ball rolls across a heavy box at constant height and speed, listed before or after the box', async () => {
+    // A 4 x 0.5 x 4 slab at 2 m/s, and an 8 m slab at 6 m/s, where b's anchor (the box's, with the ball listed first)
+    // moves v h = 0.1 m a step: the match is keyed on the ball's world lever arm.
+    // Baseline: 0.71-0.90 m into the box at 2 m/s, at 1.4-1.5x the speed, and 1.35 m at 6 m/s.
+    for (const [half, v0, steps] of [[[2, 0.25, 2], 2, 100], [[4, 0.25, 2], 6, 65]] as const) for (const first of [true, false]) {
+      const bodies = first ? [ball([0.4 - half[0], 0.5 + R, 0], 0), slab([...half])] : [slab([...half]), ball([0.4 - half[0], 0.5 + R, 0], 0)];
+      const r = await rollSettled(rollScene(bodies), first ? 0 : 1, v0, steps, (e) => e.world!.bodies[first ? 1 : 0]!.pos[1] + 0.25);
+      const at = `${v0} m/s, ${first ? 'ball first' : 'box first'}`;
+      expect(r.low, at).toBeGreaterThan(-1e-4);
+      expect(r.dv, at).toBeLessThan(1e-3);
+      expect(r.slip, at).toBeLessThan(1e-3);
+    }
+  });
+
+  it('a ball rolls down an incline at 5/7 g sin theta', async () => {
+    // Tilted gravity, mu 0.6 > 2/7 tan(30 deg). Baseline: 1.06-1.43x the speed, 0.15-3 m sunk.
+    for (const radius of [0.25, 1]) for (const deg of [10, 30]) {
+      const th = (deg * Math.PI) / 180;
+      const scene = sceneOf([{ ...ball([0, radius, 0], 0, radius), density: 1000, friction: MU }], [G * Math.sin(th), -G * Math.cos(th), 0]);
+      const r = await roll(scene, 0, 120, () => 0);
+      const v = (5 / 7) * G * Math.sin(th) * 2;
+      expect(Math.abs(r.v[0] / v - 1), `R ${radius}, ${deg} deg`).toBeLessThan(0.01);
+      expect(Math.abs(r.wR / v - 1)).toBeLessThan(0.01);
+      expect(r.low).toBeGreaterThan(-1e-3);
+    }
+  });
+
+  it('an oblique landing ends rolling at 5/7 of the speed along the surface, on the ground or on a box', async () => {
+    // Contact forces act at the contact point, so they keep the angular momentum about it: m v R = (m R^2 + I) w.
+    // Baseline after 1 s: 0.98-1.05x, still sinking at 1.9 m/s.
+    const top = slab([4, 0.25, 4]);
+    for (const [vx, vy] of [[5, 5], [8, 2]] as const) for (const on of ['ground', 'box first', 'ball first'] as const) {
+      const b: BodyDesc = { ...ball([-3, (on === 'ground' ? 0 : 0.5) + R + vy / 60, 0], 0), linVel: [vx, -vy, 0], angVel: [0, 0, 0] };
+      const bodies = on === 'ground' ? [b] : on === 'box first' ? [top, b] : [b, top];
+      const r = await roll(rollScene(bodies), on === 'ball first' ? 0 : bodies.length - 1, 60, (e) => (on === 'ground' ? 0 : e.world!.bodies[on === 'box first' ? 0 : 1]!.pos[1] + 0.25));
+      expect(Math.abs(r.v[0] / ((5 / 7) * vx) - 1), `(${vx}, ${-vy}) on the ${on}`).toBeLessThan(0.01);
+      expect(Math.abs(r.v[1])).toBeLessThan(0.01);
+      expect(Math.abs(r.wR / r.v[0] - 1)).toBeLessThan(0.01);
+    }
+  });
+
+  it.for([10, 20])('a plank pushed over two ball rollers moves at 2 M V0 / (2 M + 1.4 m), the balls rolling at half its speed (%i iterations)', async (iterations) => {
+    // Each ball keeps its angular momentum about its ground contact: the plank's impulse P at 2R gives 2 P R = 1.4 m v R,
+    // and the plank M (V - V0) = -2 P with V = 2 v. Baseline: the plank at 2.1-2.55 V, 83-180 mm low.
+    const plank: BodyDesc = { ...cube([0, 2 * R + 0.05, 0], [1, 0, 0]), shape: { kind: 'box', half: [2.4, 0.05, 0.4] }, density: 500 };
+    const balls = [-0.6, 0.6].map((x): BodyDesc => ({ ...ball([x, R, 0], 0), density: 1000, friction: MU }));
+    for (const plankFirst of [true, false]) {
+      const e = new AvbdReferenceEngine({ iterations });
+      await e.init(sceneOf(plankFirst ? [plank, ...balls] : [...balls, plank]));
+      const bs = e.world!.bodies, P = bs[plankFirst ? 0 : 2]!, B = plankFirst ? [bs[1]!, bs[2]!] : [bs[0]!, bs[1]!];
+      let off = 0;
+      for (let s = 1; s <= 90; s++) {
+        e.step();
+        if (s > 30) off = Math.max(off, Math.abs(P.pos[1] - (2 * R + 0.05)), ...B.map((b) => Math.abs(b.pos[1] - R)));
+      }
+      const V = (2 * P.mass) / (2 * P.mass + 1.4 * B[0]!.mass), at = plankFirst ? 'plank first' : 'balls first';
+      expect(Math.abs(P.linVel[0] / V - 1), at).toBeLessThan(0.01);
+      for (const b of B) {
+        expect(Math.abs(b.linVel[0] / (V / 2) - 1), at).toBeLessThan(0.01);
+        expect(Math.abs((-b.angVel[2] * R) / b.linVel[0] - 1), at).toBeLessThan(0.01);
+      }
+      expect(off, at).toBeLessThan(1e-4);
+    }
+  });
+
+  it('a ball rolling over a much larger sphere stays on its surface, listed before or after it', async () => {
+    // A ball of radius r at v over a sphere of radius R turns the normal by v h / (R + r) per step: the ball's arm moves
+    // r v h / (R + r), the big sphere's nearly v h, so the match is keyed on the smaller sphere.
+    // Baseline (and keyed on b's arm, with the big sphere listed second): 817 mm into it.
+    const Rb = 10, r = R, v0 = 4;
+    const big: BodyDesc = { ...ball([0, Rb, 0], 0, Rb), density: 1e5, friction: MU };
+    const small = ball([-0.5, Rb + Math.sqrt((Rb + r) ** 2 - 0.25), 0], v0);
+    for (const bigFirst of [true, false]) {
+      const e = new AvbdReferenceEngine({ iterations: 10 });
+      await e.init(sceneOf(bigFirst ? [big, small] : [small, big]));
+      const S = e.world!.bodies[bigFirst ? 1 : 0]!, Bg = e.world!.bodies[bigFirst ? 0 : 1]!;
+      let low = Infinity, high = -Infinity, n = 0;
+      for (let s = 1; s <= 120; s++) {
+        e.step();
+        const dx = S.pos[0] - Bg.pos[0], dy = S.pos[1] - Bg.pos[1];
+        if (Math.abs(Math.atan2(dx, dy)) > (20 * Math.PI) / 180) break; // 20 deg past the top
+        const gap = Math.hypot(dx, dy) - Rb - r;
+        if (s > 10) { low = Math.min(low, gap); high = Math.max(high, gap); n++; }
+      }
+      const at = bigFirst ? 'big sphere first' : 'big sphere second';
+      expect(n, at).toBeGreaterThan(20);
+      expect(low, at).toBeGreaterThan(-5e-3);
+      expect(high, at).toBeLessThan(5e-3);
+    }
+  });
+
+  it.for([10, 20])('a tetrahedron of 4 balls holds its height: static friction carries each rolling contact\'s slip, c0_t + J_t dx, into the next step (%i iterations)', async (iterations) => {
+    // The bottom balls are pushed apart and held by friction, on the ground and under the top ball. A rolling contact
+    // keeps no anchors, so static friction holds only through the slip it carries; without it each step's friction
+    // starts from zero slip, and the creep it lets through while k_t ramps up is never pulled back.
+    // 480 steps: the top ball ends 0.036 mm (10 iterations) and 0.016 mm (20) below R + 2R sqrt(2/3). With the carry
+    // negated, removed, without J_t dx or without c0_t: 4.2-4.5 mm and 1.8-1.9 mm below. Kept anchors (rollingContacts
+    // false): 602 mm and 426 mm (it collapses).
+    // White-box, every step: a contact that stuck at the end of last step and is carried starts with c0_t = its
+    // geometric part (0 on a sphere: both points are this step's) + last step's slip, the old contact's c0_t + J_t dx
+    // from its own Jacobian rows and that step's dx, re-expressed in the new tangent basis. The scene needs both
+    // terms: up to 9.0 mm of slip carried and J_t dx up to 3.9 mm a step at 10 iterations (3.6 and 1.7 mm at 20).
+    const d = 2 * R;
+    const at: Vec3[] = [[0, R, 0], [d, R, 0], [d / 2, R, (d * Math.sqrt(3)) / 2], [d / 2, R + d * Math.sqrt(2 / 3), (d * Math.sqrt(3)) / 6]];
+    const e = new AvbdReferenceEngine({ iterations });
+    await e.init(sceneOf(at.map((p): BodyDesc => ({ ...ball(p, 0), density: 1000, friction: MU }))));
+    const w = e.world!, bs = w.bodies;
+    let carried = 0, worst = 0, slipMax = 0, oldMax = 0, jdxMax = 0;
+    for (let s = 1; s <= 480; s++) {
+      const old = new Map(w.contacts.map((c) => [`${c.a},${c.b}`, c])), dx = w.lastDx, x0 = bs.map((b) => b.pos);
+      e.step();
+      for (const c of w.contacts) {
+        const o = old.get(`${c.a},${c.b}`); // one contact per pair of spheres
+        if (!o?.stick) continue;
+        const jdx = (r: number) => {
+          let x = 0;
+          for (let k = 0; k < 6; k++) x += o.jb[6 * r + k]! * dx[o.b]![k]! + (o.a === GROUND ? 0 : o.ja[6 * r + k]! * dx[o.a]![k]!);
+          return x;
+        };
+        const s1 = o.c0[1] + jdx(1), s2 = o.c0[2] + jdx(2);
+        const slip = [0, 1, 2].map((k) => s1 * o.t1[k]! + s2 * o.t2[k]!);
+        const pa = c.a === GROUND ? c.ra : [0, 1, 2].map((k) => x0[c.a]![k]! + c.raw[k]!);
+        const g = [0, 1, 2].map((k) => x0[c.b]![k]! + c.rbw[k]! - pa[k]!);
+        const dot = (u: number[], v: Vec3) => u[0]! * v[0] + u[1]! * v[1] + u[2]! * v[2];
+        const e1 = dot(slip, c.t1), e2 = dot(slip, c.t2);
+        if (Math.hypot(e1, e2) >= DEFAULT_AVBD.stickThreshold) continue; // dropped, as kept anchors that drifted are
+        carried++;
+        worst = Math.max(worst, Math.hypot(c.c0[1] - dot(g, c.t1) - e1, c.c0[2] - dot(g, c.t2) - e2));
+        slipMax = Math.max(slipMax, Math.hypot(e1, e2));
+        oldMax = Math.max(oldMax, Math.hypot(o.c0[1], o.c0[2]));
+        jdxMax = Math.max(jdxMax, Math.hypot(jdx(1), jdx(2)));
+      }
+    }
+    expect(Math.abs(bs[3]!.pos[1] - (R + d * Math.sqrt(2 / 3)))).toBeLessThan(5e-4);
+    expect(carried).toBeGreaterThan(2000);
+    expect(Math.min(slipMax, oldMax, jdxMax)).toBeGreaterThan(1e-3);
+    expect(worst).toBeLessThan(1e-12);
+  });
+
+  it.for(['head-on', 'grazing'] as const)('a ball hitting a free cube %s in zero g keeps the momentum: an impact contact gets a capped load floor', async (hit) => {
+    // A 5 kg ball at 15 m/s hits a 1 kg cube. The contact persists through the impact; with the full load floor its k_n
+    // was 20x the cube's m / h^2. Worst drift at 10 iterations: head-on 0.41% (baseline 9.0%), grazing 0.11% (5.1% with
+    // the full floor). Grazing is a guard: there kept anchors lost the match, and with it the floor (baseline 0.15%).
+    const R6 = 0.6, density = 5 / ((4 / 3) * Math.PI * R6 ** 3);
+    const pos: Vec3 = hit === 'head-on' ? [-1.5, 0, 0] : [-1.5, 0.45, 0.2], v: Vec3 = hit === 'head-on' ? [15, 0, 0] : [15, -2.6, 0];
+    const b: BodyDesc = { ...ball(pos, 0, R6), linVel: v, angVel: [0, 0, 0], density, friction: MU };
+    const e = new AvbdReferenceEngine();
+    await e.init({ ...sceneOf([cube([0, 0, 0]), b], [0, 0, 0]), ground: null });
+    const P = () => [0, 1, 2].map((k) => e.world!.bodies.reduce((s, x) => s + x.mass * x.linVel[k]!, 0));
+    const p0 = P();
+    let worst = 0;
+    for (let s = 0; s < 90; s++) {
+      e.step();
+      const p = P();
+      worst = Math.max(worst, Math.hypot(p[0]! - p0[0]!, p[1]! - p0[1]!, p[2]! - p0[2]!) / Math.hypot(...p0));
+    }
+    expect(e.world!.bodies[0]!.linVel[0]).toBeGreaterThan(5); // the cube was hit
+    expect(worst).toBeLessThan(0.01);
+  });
+
+  it('a heavy ball landing on a light cube stays shallow (a guard on the impact cap)', async () => {
+    // Keystone's case: a 510 kg steel ball dropped 1 m onto a 31 kg plaster cube resting on the ground. Deepest at
+    // 10 iterations with the cap at sqrt(m_a m_b) / h^2: 24.6 mm (baseline 23.5 mm; capped at the lighter body's m / h^2, 59.1 mm).
+    const cubeD: BodyDesc = { ...cube([0, 0.25, 0]), shape: { kind: 'box', half: [0.25, 0.25, 0.25] }, density: 250 };
+    const bodies = [cubeD, ball([0, 0.5 + R + 1, 0], 0)];
+    const e = new AvbdReferenceEngine({ iterations: 10 });
+    await e.init(sceneOf(bodies));
+    let deepest = 0;
+    for (let s = 0; s < 120; s++) {
+      e.step();
+      deepest = Math.max(deepest, penetration(bodies, e.snapshot(), 0).max);
+    }
+    expect(deepest).toBeLessThan(0.03);
+  });
+
+  it('a heavy ball at rest on a light cube keeps the full load floor: the cap is only for a contact that moved along its normal', async () => {
+    // A 510 kg steel ball placed on a 1 kg cube on the ground. Its contact moves along the normal by restDepth or
+    // more only in the landing transient, so from step 61 it has the full floor, |lambda_n| / restDepth (20 x the
+    // cap): 0 mm deep at 10 and 20 iterations. Capped whether or not it moved: 1.3 mm and 0.7 mm deep.
+    const cubeD: BodyDesc = { ...cube([0, 0.25, 0]), shape: { kind: 'box', half: [0.25, 0.25, 0.25] }, density: 8 };
+    const bodies = [cubeD, ball([0, 0.5 + R, 0], 0)];
+    for (const iterations of [10, 20]) {
+      const e = new AvbdReferenceEngine({ iterations });
+      await e.init(sceneOf(bodies));
+      let late = 0;
+      for (let s = 1; s <= 300; s++) {
+        e.step();
+        if (s > 60) late = Math.max(late, penetration(bodies, e.snapshot(), 0).max);
+      }
+      expect(late, `${iterations} iterations`).toBeLessThan(1e-4);
+    }
   });
 });
 

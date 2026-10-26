@@ -376,12 +376,21 @@ export async function coloring(c: ColorCase) {
 
 export interface PlainSnapshot { step: number; pos: number[]; rot: number[]; linVel: number[]; angVel: number[] }
 
+/** Body `body`'s velocities set to these after `step` steps, as a reference test sets them mid-run (the engine has no setter). */
+export interface Kick { step: number; body: number; linVel: Vec3; angVel: Vec3 }
+
 /** Run a scene on the GPU engine; snapshot every `every` steps (and at the end). */
-export async function simulateGpu(scene: SceneDesc, steps: number, params: Partial<AvbdParams> = {}, every = 0, opts: Omit<GpuEngineOptions, 'device'> = {}) {
+export async function simulateGpu(scene: SceneDesc, steps: number, params: Partial<AvbdParams> = {}, every = 0, opts: Omit<GpuEngineOptions, 'device'> = {}, kicks: Kick[] = []) {
   const { device } = await createDevice();
   device.pushErrorScope('validation');
   const e = new GpuAvbdEngine(params, { ...opts, device });
   await e.init(scene);
+  const bodyBuf = (e as unknown as { parts: { bodies: GPUBuffer } }).parts.bodies;
+  // Queue writes run in order with the submitted steps.
+  const kick = (k: Kick) => {
+    device.queue.writeBuffer(bodyBuf, k.body * Body.size + field(Body, 'linVel').offset, Float32Array.from(k.linVel));
+    device.queue.writeBuffer(bodyBuf, k.body * Body.size + field(Body, 'angVel').offset, Float32Array.from(k.angVel));
+  };
   const snaps: PlainSnapshot[] = [];
   const take = async () => {
     const s = await e.snapshot();
@@ -391,6 +400,7 @@ export async function simulateGpu(scene: SceneDesc, steps: number, params: Parti
   const t0 = performance.now();
   let maxColors = 0, worst = { pairsRequired: 0, pairsWritten: 0, uncolored: 0, colorOverflow: 0 };
   for (let i = 0; i < steps; i++) {
+    for (const k of kicks) if (k.step === i) kick(k);
     e.step();
     if (every && (i + 1) % every === 0 && i + 1 < steps) {
       await take();
