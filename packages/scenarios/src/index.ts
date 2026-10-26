@@ -1,4 +1,4 @@
-// Canonical benchmark scenes S1-S13. Each is a pure function of
+// Canonical benchmark scenes S1-S13, plus S14, a configurable city for the viewer. Each is a pure function of
 // (params, seed) so any engine, on any machine, starts from identical state.
 import { type BodyDesc, type Quat, type SceneDesc, type Vec3, TAG_BALL, TAG_DEBRIS, volumeOf } from '@tb/engine-api';
 import { quatNormalize, QUAT_IDENTITY } from '@tb/geom';
@@ -267,8 +267,32 @@ const S13: ScenarioDef = {
   },
 };
 
+const S14: ScenarioDef = {
+  id: 'S14', title: 'Buildings', catches: 'a city set by building count and size (the viewer\'s scene controls)',
+  defaults: { towers: 9, W: 4, D: 4, H: 12, street: 4, vary: 0 },
+  build(p, seed) {
+    const towers = int(p, 'towers'), W = int(p, 'W'), D = int(p, 'D'), H = int(p, 'H'), street = num(p, 'street'), vary = num(p, 'vary');
+    if (street < 0) throw new Error('param street must be >= 0');
+    if (vary < 0 || vary > 1) throw new Error('param vary must be from 0 to 1');
+    // Towers on a square grid, row by row. vary: each tower's height is uniform in [H (1 - vary), H],
+    // rounded, at least 1 cube; vary 0 draws nothing from the seed, so every tower is H tall.
+    const r = rng(seed);
+    const side = Math.ceil(Math.sqrt(towers));
+    const out: BodyDesc[] = [];
+    for (let t = 0; t < towers; t++) {
+      const ox = ((t % side) - (side - 1) / 2) * (W + street);
+      const oz = (Math.floor(t / side) - (side - 1) / 2) * (D + street);
+      const h = vary === 0 ? H : Math.max(1, Math.round(H * (1 - vary * r())));
+      for (let y = 0; y < h; y++)
+        for (let x = 0; x < W; x++)
+          for (let z = 0; z < D; z++) out.push(cube([ox + x - (W - 1) / 2, 0.5 + y, oz + z - (D - 1) / 2], t));
+    }
+    return scene('S14', p, seed, out);
+  },
+};
+
 export const SCENARIOS: Record<string, ScenarioDef> = Object.fromEntries(
-  [S1, S2, S3, S4, S5, S6, S7, S8, S9, S10, S11, S12, S13].map((s) => [s.id, s]),
+  [S1, S2, S3, S4, S5, S6, S7, S8, S9, S10, S11, S12, S13, S14].map((s) => [s.id, s]),
 );
 
 export function buildScenario(id: string, overrides: Params = {}, seed = 1): SceneDesc {

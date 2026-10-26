@@ -2,7 +2,8 @@
 // main thread at a fixed 60 Hz (one step per frame by default, maxSteps in the
 // URL allows catch-up; slower engines fall into slow motion, shown as sim speed).
 import { makeEngine, parseSpec } from '@tb/bench';
-import { type BodyDesc, type InputEvent, type PhysicsEngine, type SceneDesc, TAG_BALL } from '@tb/engine-api';
+import { type BodyDesc, type InputEvent, type PhysicsEngine, type SceneDesc } from '@tb/engine-api';
+import { boundingRadius } from '@tb/geom';
 import { DEFAULT_AVBD } from '@tb/physics-ref';
 import { buildScenario, SCENARIOS } from '@tb/scenarios';
 import { clampPitch, frame, rayThrough, viewProj, eyeOf, type Orbit } from './camera.ts';
@@ -10,6 +11,8 @@ import { newClock, stepsDue, Window } from './loop.ts';
 import type { V3 } from './math.ts';
 import { escapeHtml } from './html.ts';
 import { engineSpec, parseViewerConfig, presetSearch, toSearch, type ViewerConfig, withOption } from './params.ts';
+import { projectileBody, projectileShape, pushRadiusLimit } from './projectile.ts';
+import { mountControls } from './controls.ts';
 import { createDevice } from '@tb/gpu';
 import { CANDY_NIGHT, LOOKS, Renderer, SnapshotSource, type PixelStats } from '@tb/render';
 
@@ -24,6 +27,7 @@ const PRESETS: Array<{ label: string; search: string }> = [
   { label: 'Cube rain 3k', search: '?scenario=S6&param.N=3000' },
   { label: 'Wall with a hole', search: '?scenario=S12' },
   { label: 'Leaning column', search: '?scenario=S13' },
+  { label: 'Buildings', search: '?scenario=S14&param.vary=0.5' },
 ];
 
 const ENGINES: Array<{ label: string; spec: string }> = [
@@ -36,7 +40,7 @@ const ENGINES: Array<{ label: string; spec: string }> = [
 // early at the default 10; 20 cubes are rigid from 13 (physics-ref/test/collapse.test.ts).
 const GPU_ITERATIONS = [10, 20, 40];
 
-const viewerEngine = (spec: string): PhysicsEngine => makeEngine(engineSpec(spec));
+const viewerEngine = (c: ViewerConfig): PhysicsEngine => makeEngine(engineSpec(c.engine, c.projectile));
 
 interface ViewerHandle {
   status: 'loading' | 'running' | 'error';
@@ -86,6 +90,7 @@ function bounds(bodies: BodyDesc[]): { min: V3; max: V3 } {
 
 function presets(current: string) {
   const box = document.getElementById('presets')!;
+  box.replaceChildren();
   const config = parseViewerConfig(current);
   for (const e of ENGINES) {
     const b = document.createElement('button');
@@ -110,14 +115,17 @@ function presets(current: string) {
   for (const p of PRESETS) {
     const b = document.createElement('button');
     b.textContent = p.label;
-    if (presetSearch(p.search, config.engine) === toSearch(config)) b.className = 'on';
-    b.onclick = () => { location.search = presetSearch(p.search, config.engine); };
+    if (presetSearch(p.search, config.engine, config.projectile) === toSearch(config)) b.className = 'on';
+    b.onclick = () => {
+      const c = parseViewerConfig(location.search);
+      location.search = presetSearch(p.search, c.engine, c.projectile);
+    };
     box.appendChild(b);
   }
 }
 
 async function main() {
-  const config = parseViewerConfig(location.search);
+  let config = parseViewerConfig(location.search);
   presets(location.search);
   const { device, adapter } = await createDevice({ timestamps: false });
   const renderer = new Renderer(device, config.offscreen ? { size: [640, 400] } : { canvas });
@@ -127,7 +135,7 @@ async function main() {
   renderer.device.lost.then((info) => fail(`GPU device lost: ${info.message}`));
   renderer.device.addEventListener('uncapturederror', (e) => fail((e as GPUUncapturedErrorEvent).error.message));
 
-  let engine: PhysicsEngine = viewerEngine(config.engine);
+  let engine: PhysicsEngine = viewerEngine(config);
   let scene = sceneFor(config);
   // Engine body i has shape shapes[i]: initial bodies, then spawns in
   // (step, push order), the same order the engine applies them.
@@ -145,24 +153,44 @@ async function main() {
   // an engine that is not ready (or that reset() has just disposed).
   let resetAsked = false;
   let resetting = false;
-
-  const ballDesc = (origin: V3, dir: V3): BodyDesc => ({
-    shape: { kind: 'sphere', radius: 0.7 },
-    pos: [origin[0] + dir[0] * 2, origin[1] + dir[1] * 2, origin[2] + dir[2] * 2],
-    rot: [0, 0, 0, 1],
-    linVel: [dir[0] * 40, dir[1] * 40, dir[2] * 40],
-    angVel: [0, 0, 0],
-    density: 8,
-    friction: 0.5,
-    restitution: 0.1,
-    tag: TAG_BALL,
-  });
+  // The control panel asks for a new config by setting nextConfig and resetAsked (never by calling
+  // reset() itself), so a reset still runs only where the frame loop runs it. resetNote is shown after it.
+  let nextConfig: ViewerConfig | null = null;
+  let resetNote = '';
+  // Largest projectile the engine accepts without a rebuild (pushRadiusLimit).
+  let pushLimit = Infinity;
 
   async function reset() {
     resetting = true;
+    const prev = config, want = nextConfig ?? config;
+    nextConfig = null;
+    try {
+      await load(want);
+      notice = resetNote;
+    } catch (e) {
+      if (want === prev) throw e;
+      // An engine that can't hold the new scene (GPU storage limits, say): go back to the last one.
+      await load(prev);
+      notice = `Kept the previous scene: ${e instanceof Error ? e.message : String(e)}`;
+    }
+    resetNote = '';
+    if (config !== prev) {
+      history.replaceState(null, '', toSearch(config));
+      presets(location.search);
+    }
+    controls.refresh();
+    resetting = false;
+    handle.stepIndex = engine.stepIndex;
+    handle.resets++;
+  }
+
+  async function load(want: ViewerConfig) {
+    const next = sceneFor(want); // throws on bad params before anything is torn down
     engine.dispose();
-    engine = viewerEngine(config.engine);
-    scene = sceneFor(config);
+    engine = viewerEngine(want);
+    config = want;
+    scene = next;
+    pushLimit = pushRadiusLimit(engineSpec(want.engine, want.projectile), scene);
     await engine.init(scene);
     events = [...scene.inputs];
     shapes = [...scene.bodies];
@@ -174,10 +202,32 @@ async function main() {
     handle.inputs = [];
     notice = '';
     await refresh();
-    resetting = false;
-    handle.stepIndex = engine.stepIndex;
-    handle.resets++;
   }
+
+  const controls = mountControls(document.getElementById('controls')!, {
+    config: () => config,
+    rebuild(next) {
+      nextConfig = next;
+      resetAsked = true;
+    },
+    setProjectile(p) {
+      // A rebuild already queued takes the projectile with it (and sizes its engine for it).
+      if (nextConfig) {
+        nextConfig = { ...nextConfig, projectile: p };
+        return;
+      }
+      const next = { ...config, projectile: p };
+      if (boundingRadius(projectileShape(p)) <= pushLimit) {
+        config = next;
+        history.replaceState(null, '', toSearch(config));
+        return;
+      }
+      // The GPU engine sizes its broadphase grid for the largest body at init, so a bigger projectile needs a new engine.
+      nextConfig = next;
+      resetNote = 'Rebuilt the scene: the GPU engine sizes its grid for the largest body when it starts';
+      resetAsked = true;
+    },
+  });
 
   function shapesFor(count: number): BodyDesc[] {
     while (shapes.length < count) shapes.push(events[shapes.length - scene.bodies.length]!.body);
@@ -197,11 +247,11 @@ async function main() {
   handle.fire = (x = 0, y = 0) => {
     if (resetting) return;
     const { origin, dir } = rayThrough(orbit, aspect(), x, y);
-    const ev: InputEvent = { step: engine.stepIndex, kind: 'spawn', body: ballDesc(origin, dir) };
+    const ev: InputEvent = { step: engine.stepIndex, kind: 'spawn', body: projectileBody(config.projectile, origin, dir) };
     try {
       engine.push([ev]);
     } catch (e) {
-      // The GPU and tiered engines have room for GPU_SPARE fired balls (params.ts); R resets.
+      // The GPU and tiered engines have room for GPU_SPARE fired projectiles (params.ts); R resets.
       notice = `${e instanceof Error ? e.message : String(e)} (press R to reset)`;
       drawHud();
       return;
@@ -247,6 +297,8 @@ async function main() {
     orbit.distance = Math.min(800, Math.max(3, orbit.distance * Math.exp(e.deltaY * 0.001)));
   }, { passive: false });
   addEventListener('keydown', (e) => {
+    // Typing in the control panel is not a command.
+    if (e.target instanceof HTMLInputElement || e.target instanceof HTMLSelectElement) return;
     if (e.key === ' ') { e.preventDefault(); handle.fire(0, 0); }
     if (e.key === 'r' || e.key === 'R') resetAsked = true;
     if (e.key === 'p' || e.key === 'P') paused = !paused;
