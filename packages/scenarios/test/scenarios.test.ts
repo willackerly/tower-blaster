@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import fc from 'fast-check';
 import { describe, expect, it } from 'vitest';
 import { bodiesAt, type BodyDesc, massOf, TAG_BALL } from '@tb/engine-api';
@@ -9,6 +10,7 @@ const SMALL: Record<string, Record<string, number | boolean>> = {
   S1: { F: 4, H: 12 }, S2: { C: 12, depth: 2 }, S3: { W: 12, H: 6, running: true }, S4: { N: 900, F: 4, H: 10 },
   S5: { N: 900, F: 4, H: 10 }, S6: { N: 600 }, S7: { N: 600 }, S8: { floors: 5, bays: 2 }, S9: { H: 6 },
   S10: { F: 3, H: 5 }, S11: { N: 200 }, S12: { W: 9, H: 7, holeW: 3, holeH: 2, holeY: 1, running: true }, S13: { H: 6, deg: 4 },
+  S14: { towers: 5, W: 3, D: 2, H: 6, street: 1.5, vary: 0.5 },
 };
 
 function maxPenetration(bodies: BodyDesc[], groundY: number | null): number {
@@ -96,6 +98,49 @@ describe('scenario specifics', () => {
   it('S10 is S1 translated', () => {
     const a = buildScenario('S1', { F: 3, H: 4 }), b = buildScenario('S10', { F: 3, H: 4, offset: 5000 });
     expect(b.bodies.map((x) => [x.pos[0] - 5000, x.pos[1], x.pos[2] - 5000])).toEqual(a.bodies.map((x) => x.pos));
+  });
+
+  it('S14 builds towers W x D x H cubes, one tag per tower, on a grid with street between footprints', () => {
+    fc.assert(fc.property(fc.integer({ min: 1, max: 12 }), fc.integer({ min: 1, max: 5 }), fc.integer({ min: 1, max: 5 }), fc.integer({ min: 1, max: 8 }), fc.double({ min: 0, max: 6, noNaN: true }), (towers, W, D, H, street) => {
+      const s = buildScenario('S14', { towers, W, D, H, street });
+      expect(s.bodies.length).toBe(towers * W * D * H);
+      for (let t = 0; t < towers; t++) {
+        const mine = s.bodies.filter((b) => b.tag === t);
+        expect(mine.length).toBe(W * D * H);
+        const span = (k: 0 | 1 | 2) => Math.max(...mine.map((b) => b.pos[k])) - Math.min(...mine.map((b) => b.pos[k])) + 1;
+        [W, H, D].forEach((n, k) => expect(span(k as 0 | 1 | 2)).toBeCloseTo(n, 9));
+      }
+      // Neighbouring footprints (towers 0 and 1, when there are two) are street apart.
+      if (towers > 1) {
+        const edge = (t: number, f: (...x: number[]) => number) => f(...s.bodies.filter((b) => b.tag === t).map((b) => b.pos[0]));
+        expect(edge(1, Math.min) - 0.5 - (edge(0, Math.max) + 0.5)).toBeCloseTo(street, 9);
+      }
+    }), { numRuns: 60 });
+  });
+
+  it('S14 vary spreads tower heights over [H (1 - vary), H] from the seed, and vary 0 ignores the seed', () => {
+    const heights = (s: ReturnType<typeof buildScenario>) => Array.from({ length: 64 }, (_, t) => Math.max(0, ...s.bodies.filter((b) => b.tag === t).map((b) => b.pos[1] + 0.5)));
+    const a = heights(buildScenario('S14', { towers: 64, W: 1, D: 1, H: 20, vary: 0.5 }, 3));
+    expect(Math.min(...a)).toBeGreaterThanOrEqual(10);
+    expect(Math.max(...a)).toBeLessThanOrEqual(20);
+    expect(new Set(a).size).toBeGreaterThan(5);
+    expect(heights(buildScenario('S14', { towers: 64, W: 1, D: 1, H: 20, vary: 0.5 }, 4))).not.toEqual(a);
+    expect(buildScenario('S14', { vary: 0 }, 3).bodies).toEqual(buildScenario('S14', { vary: 0 }, 4).bodies);
+    expect(() => buildScenario('S14', { vary: 1.5 })).toThrow(/vary/);
+    expect(() => buildScenario('S14', { street: -1 })).toThrow(/street/);
+    expect(() => buildScenario('S14', { towers: 0 })).toThrow(/integer >= 1/);
+  });
+
+  it('S1-S13 at their defaults are bit-identical to the scenes the benchmarks were run on', () => {
+    // sha256 of the JSON scene, first 16 hex digits, pinned at 64c2969. A change here moves every
+    // bench result for that scenario: change a scene on purpose only, and re-pin.
+    const pinned: Record<string, string> = {
+      S1: '60732b579cf034e4', S2: '494fa8c06737698c', S3: '0ea52a71d7ab9cf3', S4: '277a82fd43480d47', S5: 'e86af49fed32bbab',
+      S6: 'bb13b94d5930abca', S7: '2a9896a199c8fc7a', S8: '13bf80840eb78c21', S9: '26ff7b459d845528', S10: 'cb706858f237ca78',
+      S11: '5db510a720529485', S12: '475f0020ea675dd5', S13: '83d18c1ef34def89',
+    };
+    const hash = (id: string) => createHash('sha256').update(JSON.stringify(buildScenario(id))).digest('hex').slice(0, 16);
+    expect(Object.fromEntries(Object.keys(pinned).map((id) => [id, hash(id)]))).toEqual(pinned);
   });
 
   it('rejects unknown scenarios and params', () => {

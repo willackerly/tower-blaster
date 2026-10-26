@@ -2,6 +2,8 @@
 // read, so a preset is a uniform block, not a shader variant. Includes the
 // CPU twins of the colour math (OKLab, AgX) that tests compare the GPU with.
 import type { V3 } from './math.ts';
+import { CLEAR_DAY, type AtmosphereParams } from './atmosphere.ts';
+import { type Stone, STONE_PALETTES, STONES } from './materials.ts';
 
 export interface LookParams {
   name: string;
@@ -40,6 +42,24 @@ export interface LookParams {
   /** Fraction of the bloom pyramid mixed into the image (energy-conserving). */
   bloomMix: number;
   vignette: number;
+  /** Direction toward the sun (default SUN in renderer.ts). */
+  sunDir?: V3;
+  /**
+   * A physically based sky (atmosphere.ts). When set, the sky, haze, sun
+   * colour and ambient light come from it, and skyZenith, skyHorizon, glow,
+   * fog, sunColor, ambSky, ambGround and the softboxes are unused.
+   */
+  atmosphere?: AtmosphereParams;
+  /** With an atmosphere: how far exposure adapts to the light, 0 (fixed) to 1 (auto exposure); see adaptedExposure. */
+  autoExposure?: number;
+  /**
+   * With an atmosphere: the blocks' stone (materials.ts), texture scale (1 = a tile per MATERIAL_TILE
+   * metres), edge wear and dirt (0 to 1), texture strength, and fade: the pixel footprint (metres)
+   * where the texture has faded out (from half that), past which blocks drop the stone code.
+   */
+  stone?: { kind: Stone; scale: number; wear: number; dirt: number; detail: number; fade: number };
+  /** false: none of the stylized effects (sparks, ball trail, heat glow, ball and impact lights). Default true. */
+  effects?: boolean;
 }
 
 const hex = (h: string): V3 => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16) / 255) as V3;
@@ -99,12 +119,140 @@ export const HAZY_DAY: LookParams = {
   vignette: 0.15,
 };
 
-export const LOOKS: Record<string, LookParams> = { candy: CANDY_NIGHT, hazy: HAZY_DAY };
+/** The knobs of the real look (all optional; realLook fills the rest). */
+export interface RealOptions {
+  /** Sun elevation above the horizon and azimuth (clockwise from -z, toward +x), degrees. */
+  sunElevation: number;
+  sunAzimuth: number;
+  /** Meteorological visibility, km: 10 is hazy, 40 a clear summer day, 150 crisp. */
+  visibility: number;
+  /** Sun illuminance multiplier (1 = the default exposure's daylight). */
+  sunStrength: number;
+  /** Linear albedo of the ground (also what the sky's multiple scattering sees). */
+  groundAlbedo: V3;
+  /** Exposure at the default sun; autoExposure (0 to 1) is how far it follows the light as the sun moves or haze thickens. */
+  exposure: number;
+  autoExposure: number;
+  /** The blocks' stone, its texture strength (0: flat colour, nothing sampled) and scale (2 = features twice as large), edge wear and dirt at the base (0 to 1). */
+  stone: Stone;
+  stoneDetail: number;
+  stoneScale: number;
+  /** Pixel footprint (cm) where the stone texture has faded out, from half that; past it blocks use the cheaper shader. */
+  stoneFade: number;
+  wear: number;
+  dirt: number;
+}
+
+export const REAL_DEFAULTS: RealOptions = { sunElevation: 35, sunAzimuth: 140, visibility: 40, sunStrength: 1, groundAlbedo: [0.2, 0.19, 0.17], exposure: 1.1, autoExposure: 0.75, stone: 'limestone', stoneDetail: 1, stoneScale: 1, stoneFade: 8, wear: 0.5, dirt: 0.4 };
+
+/** Direction toward the sun from elevation and azimuth in degrees. */
+export function sunFrom(elevation: number, azimuth: number): V3 {
+  const e = (elevation * Math.PI) / 180, a = (azimuth * Math.PI) / 180;
+  return [Math.cos(e) * Math.sin(a), Math.sin(e), -Math.cos(e) * Math.cos(a)];
+}
+
+/**
+ * The photoreal look (docs/realism.md), from its knobs. Stone-coloured
+ * blocks, no studio softboxes, the sky and light from the atmosphere.
+ * Materials, ground texture, sky lighting and soft shadows arrive in later
+ * realism steps.
+ */
+export function realLook(o: Partial<RealOptions> = {}): LookParams {
+  const r = { ...REAL_DEFAULTS, ...o };
+  return {
+    ...HAZY_DAY,
+    name: 'real',
+    sunDir: sunFrom(r.sunElevation, r.sunAzimuth),
+    atmosphere: { ...CLEAR_DAY, visibility: r.visibility, groundAlbedo: r.groundAlbedo, sunIlluminance: CLEAR_DAY.sunIlluminance.map((x) => x * r.sunStrength) as V3 },
+    floor: r.groundAlbedo,
+    floorGrid: 0,
+    keyColor: [0, 0, 0],
+    rimColor: [0, 0, 0],
+    roughness: 0.8,
+    clearcoat: 0,
+    bevel: 0.012,
+    ramp: STONE_PALETTES[r.stone].map(hex) as LookParams['ramp'],
+    stone: { kind: r.stone, scale: r.stoneScale, wear: r.wear, dirt: r.dirt, detail: r.stoneDetail, fade: r.stoneFade / 100 },
+    hueStep: 4,
+    ball: hex('#8A8D90'),
+    ballEmissive: 0,
+    exposure: r.exposure,
+    autoExposure: r.autoExposure,
+    // Sparks and glows are not real; impact dust replaces them (realism step 6).
+    effects: false,
+    bloomMix: 0.02,
+    vignette: 0.08,
+  };
+}
+
+/** The real look's scalar knobs: URL key real.<name>, panel label, accepted range and step. */
+export const REAL_KNOBS = {
+  sunElevation: { label: 'sun elevation (deg)', min: -10, max: 90, step: 1 },
+  sunAzimuth: { label: 'sun azimuth (deg)', min: -360, max: 360, step: 5 },
+  visibility: { label: 'visibility (km)', min: 1, max: 400, step: 1 },
+  sunStrength: { label: 'sun strength x', min: 0.05, max: 10, step: 0.05 },
+  exposure: { label: 'exposure', min: 0.05, max: 20, step: 0.05 },
+  autoExposure: { label: 'auto exposure 0-1', min: 0, max: 1, step: 0.05 },
+  stoneDetail: { label: 'stone texture 0-1', min: 0, max: 1, step: 0.05 },
+  stoneScale: { label: 'stone texture scale', min: 0.1, max: 10, step: 0.1 },
+  stoneFade: { label: 'stone fade-out (cm/px)', min: 0.5, max: 1000, step: 0.5 },
+  wear: { label: 'edge wear 0-1', min: 0, max: 1, step: 0.05 },
+  dirt: { label: 'dirt 0-1', min: 0, max: 1, step: 0.05 },
+} as const;
+export type RealKnob = keyof typeof REAL_KNOBS;
+
+/**
+ * The real look's options from URL keys real.<knob>, real.stone (a STONES
+ * name) and real.ground (linear albedo r,g,b, each 0 to 1); absent keys are left out, so realLook fills
+ * them from REAL_DEFAULTS. Rejects values that are not numbers or are out of range.
+ */
+export function parseRealOptions(q: URLSearchParams): Partial<RealOptions> {
+  const o: Partial<RealOptions> = {};
+  for (const [key, k] of Object.entries(REAL_KNOBS) as [RealKnob, (typeof REAL_KNOBS)[RealKnob]][]) {
+    const raw = q.get(`real.${key}`);
+    if (raw === null || raw === '') continue;
+    const v = Number(raw);
+    if (!Number.isFinite(v) || v < k.min || v > k.max) throw new Error(`real.${key} must be a number from ${k.min} to ${k.max}: ${raw}`);
+    o[key] = v;
+  }
+  const stone = q.get('real.stone');
+  if (stone !== null && stone !== '') {
+    if (!(STONES as readonly string[]).includes(stone)) throw new Error(`real.stone must be one of ${STONES.join(', ')}: ${stone}`);
+    o.stone = stone as Stone;
+  }
+  const ground = q.get('real.ground');
+  if (ground !== null && ground !== '') {
+    const v = ground.split(',').map(Number);
+    if (v.length !== 3 || v.some((x) => !Number.isFinite(x) || x < 0 || x > 1)) throw new Error(`real.ground must be three numbers from 0 to 1 (linear albedo r,g,b): ${ground}`);
+    o.groundAlbedo = v as V3;
+  }
+  return o;
+}
+
+/** Writes the options that are set as URL keys (parseRealOptions reads them back). */
+export function writeRealOptions(o: Partial<RealOptions>, q: URLSearchParams): void {
+  for (const key of Object.keys(REAL_KNOBS) as RealKnob[]) if (o[key] !== undefined) q.set(`real.${key}`, String(o[key]));
+  if (o.stone) q.set('real.stone', o.stone);
+  if (o.groundAlbedo) q.set('real.ground', o.groundAlbedo.join(','));
+}
+
+/** A look by name; real takes its options (the others have none). Unknown names give fallback. */
+export function lookByName(name: string, real: Partial<RealOptions> = {}, fallback: LookParams = CANDY_NIGHT): LookParams {
+  return name === 'real' ? realLook(real) : LOOKS[name] ?? fallback;
+}
+
+export const REAL = realLook();
+
+export const LOOKS: Record<string, LookParams> = { candy: CANDY_NIGHT, hazy: HAZY_DAY, real: REAL };
 
 // ---------------------------------------------------------------- colour math (CPU twins)
 
 export function srgbToLinear(c: number): number {
   return c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+}
+
+export function linearToSrgb(c: number): number {
+  return c <= 0.0031308 ? c * 12.92 : 1.055 * c ** (1 / 2.4) - 0.055;
 }
 
 export function linearToOklab([r, g, b]: V3): V3 {

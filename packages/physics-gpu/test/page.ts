@@ -1,5 +1,5 @@
 // Page-side drivers for the GPU physics tests (bundled by loadBundle).
-import { createDevice, readBuffer, type Readback } from '@tb/gpu';
+import { createDevice, isSoftwareAdapter, readBuffer, type Readback } from '@tb/gpu';
 import { boundingRadius, groundManifold, NO_AXIS, quatNormalize, shapeManifold, spherePairs, supportArea, type Manifold as CpuManifold } from '@tb/geom';
 import { Body, field, Manifold, readStruct, Shape, SolverContact, writeStruct } from '@tb/schema';
 import type { BodyDesc, InputEvent, Quat, Vec3 } from '@tb/engine-api';
@@ -777,4 +777,17 @@ export async function dispatchCounts(scene: SceneDesc, params: Partial<AvbdParam
   e.dispose();
   device.destroy();
   return { error: error?.message ?? null, ...counts, colors: d.colors };
+}
+
+/** The dispatch init() chose, and whether the adapter is software (which sets the tail width's default). */
+export async function dispatchPlan(scene: SceneDesc, opts: Omit<GpuEngineOptions, 'device'>) {
+  const { device } = await createDevice();
+  const e = new GpuAvbdEngine({}, { ...opts, device });
+  const before = e.dispatch;
+  await e.init(scene);
+  const info = (device as GPUDevice & { adapterInfo?: GPUAdapterInfo }).adapterInfo;
+  const out = { before, dispatch: e.dispatch, software: info ? isSoftwareAdapter(info) : null, adapter: info ? `${info.vendor}/${info.architecture}/${info.description}` : null };
+  e.dispose();
+  device.destroy();
+  return out;
 }

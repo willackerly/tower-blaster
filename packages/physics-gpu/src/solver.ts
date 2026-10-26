@@ -623,16 +623,26 @@ export interface SolverDispatch {
   /** The previous dispatch, for timing it against: colours 0-62 by indirect dispatch, sized by the colouring. Colour 63 still goes to the tail. */
   indirectColors: boolean;
   /**
-   * The tail workgroup's size, 1-256. Default 64: at most 2 strides for the
-   * largest tail colour measured so far; and on SwiftShader a 256-thread tail
-   * measured about 0.9 ms per dispatch, which slowed the GPU tests by a fifth.
+   * The tail workgroup's size, 1-256. Default 256 (MAX_TAIL) on a hardware GPU:
+   * on the M5 Max it was never slower than 64, and late in the 10k city, where
+   * the colours from 8 up hold hundreds of bodies, it saved 5.6 ms a step.
+   * SOFTWARE_TAIL_THREADS on a software adapter, where a 256-thread tail
+   * measured about 0.9 ms per dispatch and slowed the GPU tests by a fifth.
    * 1 makes the tail serial; with colorTail 0 the whole sweep is then serial,
    * which the tests use as an oracle for every other split.
    */
   tailThreads: number;
 }
 
-export const DEFAULT_DISPATCH: SolverDispatch = { colorTail: 8, indirectColors: false, tailThreads: 64 };
+export const DEFAULT_DISPATCH: SolverDispatch = { colorTail: 8, indirectColors: false, tailThreads: MAX_TAIL };
+
+/** The default tail width on a software adapter (SwiftShader in tests and CI); see SolverDispatch.tailThreads. */
+export const SOFTWARE_TAIL_THREADS = 64;
+
+/** The default tail width for an adapter: every width gives the same result, so this only sets the speed. */
+export function defaultTailThreads(software: boolean): number {
+  return software ? SOFTWARE_TAIL_THREADS : DEFAULT_DISPATCH.tailThreads;
+}
 
 export interface SolverBuffers {
   bodies: GPUBuffer;
@@ -820,6 +830,49 @@ export class AvbdSolver {
     pass.end();
     this.prevN = n;
     this.cur = 1 - this.cur;
+  }
+
+  /** The contact history half the last solve() read and wrote (p.cur in the uniforms it left). */
+  get lastHalf(): number {
+    return 1 - this.cur;
+  }
+
+  /**
+   * Bench only (the solver probe, probe.ts); solve() never calls this. Encode
+   * `reps` copies of one piece of the last solve()'s main-iteration sweep,
+   * issued exactly as solve() issues it, with its pipelines, bind groups and
+   * the uniforms it left: colour c's primal dispatch, the tail workgroup, or
+   * one dual update (pairs and ground). The primal dispatch can also be
+   * issued for a colour the sweep gives to the tail (c up to 62): for an
+   * empty one, that is the dispatch's fixed cost. They run on the state the
+   * last step left and change it: primal pieces only touch dp and phi, which
+   * the next step's initBodies overwrites; the dual changes contact state,
+   * which the next step warm-starts from.
+   */
+  encodeProbe(pass: GPUComputePassEncoder, n: number, piece: { primal: number } | 'tail' | 'dual', reps: number): void {
+    if (n === 0) return;
+    const { b } = this;
+    const groups = Math.max(1, Math.ceil(n / WG));
+    const direct = this.dispatch.indirectColors ? MAX_COLORS - 1 : this.dispatch.colorTail;
+    if (piece === 'dual') {
+      pass.setBindGroup(0, this.binds.dual!);
+      for (let r = 0; r < reps; r++) {
+        pass.setPipeline(this.pipes.dualPairs!);
+        pass.dispatchWorkgroupsIndirect(b.total, 0);
+        pass.setPipeline(this.pipes.dualGround!);
+        pass.dispatchWorkgroups(groups);
+      }
+      return;
+    }
+    const c = piece === 'tail' ? direct : piece.primal;
+    if (piece !== 'tail' && !(Number.isInteger(c) && c >= 0 && c < MAX_COLORS - 1)) throw new Error(`AvbdSolver.encodeProbe: colour ${c} has no primal dispatch (colours 0-${MAX_COLORS - 2} do; ${MAX_COLORS - 1} is solved serially)`);
+    pass.setPipeline(piece === 'tail' ? this.pipes.primalTail! : this.pipes.primal!);
+    pass.setBindGroup(0, this.binds.solve!, [c * DYN]);
+    for (let r = 0; r < reps; r++) {
+      if (piece === 'tail') pass.dispatchWorkgroups(1);
+      else if (this.dispatch.indirectColors) pass.dispatchWorkgroupsIndirect(b.dispatch, 12 * c);
+      else pass.dispatchWorkgroups(groups);
+    }
   }
 
   destroy(): void {

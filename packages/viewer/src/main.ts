@@ -1,17 +1,24 @@
 // Interactive viewer: any PhysicsEngine, rendered live. Physics runs on the
-// main thread at a fixed 60 Hz (at most two steps per frame; slower engines
-// fall into slow motion, shown as sim speed).
+// main thread at a fixed 60 Hz. By default (loop=free) it steps in its own loop,
+// back to back while steps are due, and every display frame renders the newest
+// snapshots (a CPU engine blocks the thread while it steps, so its frames run
+// between steps); loop=frame steps, reads back and renders in series, one step
+// per frame (maxSteps allows catch-up). Slower engines fall into slow motion,
+// shown as sim speed.
 import { makeEngine, parseSpec } from '@tb/bench';
-import { type BodyDesc, type InputEvent, type PhysicsEngine, type SceneDesc, TAG_BALL } from '@tb/engine-api';
+import { type BodyDesc, type InputEvent, type PhysicsEngine, type SceneDesc, type Snapshot } from '@tb/engine-api';
+import { boundingRadius } from '@tb/geom';
 import { DEFAULT_AVBD } from '@tb/physics-ref';
 import { buildScenario, SCENARIOS } from '@tb/scenarios';
 import { clampPitch, frame, rayThrough, viewProj, eyeOf, type Orbit } from './camera.ts';
-import { newClock, stepsDue, Window } from './loop.ts';
+import { alphaAt, newArrivals, newClock, newPacer, runFree, stepsDue, taskYield, trackSimSpeed, Window } from './loop.ts';
 import type { V3 } from './math.ts';
 import { escapeHtml } from './html.ts';
 import { engineSpec, parseViewerConfig, presetSearch, toSearch, type ViewerConfig, withOption } from './params.ts';
+import { projectileBody, projectileShape, pushRadiusLimit } from './projectile.ts';
+import { mountControls } from './controls.ts';
 import { createDevice } from '@tb/gpu';
-import { CANDY_NIGHT, LOOKS, Renderer, SnapshotSource, type PixelStats } from '@tb/render';
+import { lookByName, Renderer, SnapshotSource, type PixelStats } from '@tb/render';
 
 const PRESETS: Array<{ label: string; search: string }> = [
   { label: 'Tower 8×8×30', search: '?scenario=S1&param.gap=0.02' },
@@ -24,6 +31,7 @@ const PRESETS: Array<{ label: string; search: string }> = [
   { label: 'Cube rain 3k', search: '?scenario=S6&param.N=3000' },
   { label: 'Wall with a hole', search: '?scenario=S12' },
   { label: 'Leaning column', search: '?scenario=S13' },
+  { label: 'Buildings', search: '?scenario=S14&param.vary=0.5' },
 ];
 
 const ENGINES: Array<{ label: string; spec: string }> = [
@@ -36,7 +44,7 @@ const ENGINES: Array<{ label: string; spec: string }> = [
 // early at the default 10; 20 cubes are rigid from 13 (physics-ref/test/collapse.test.ts).
 const GPU_ITERATIONS = [10, 20, 40];
 
-const viewerEngine = (spec: string): PhysicsEngine => makeEngine(engineSpec(spec));
+const viewerEngine = (c: ViewerConfig): PhysicsEngine => makeEngine(engineSpec(c.engine, c.projectile));
 
 interface ViewerHandle {
   status: 'loading' | 'running' | 'error';
@@ -46,8 +54,14 @@ interface ViewerHandle {
   /** Bodies the last snapshot reports awake (dormant and frozen ones are not). */
   awake: number;
   stepIndex: number;
+  /** Median physics ms/step over the HUD's window (NaN before the first step); updated with the HUD. */
+  msPerStep: number;
+  /** Median snapshot read-back + upload ms over the HUD's window, as msPerStep. */
+  snapMs: number;
   /** Scene loads so far: 1 after start, one more per R. */
   resets: number;
+  /** Steps submitted before the step before reported done, so queued behind it (loop=free pipelining; see runFree). */
+  overlapped: number;
   /** Fire a ball through normalized device coords (0, 0 = centre). */
   fire(ndcX?: number, ndcY?: number): void;
   capture(keepPixels?: boolean): Promise<PixelStats | null>;
@@ -58,7 +72,7 @@ declare global { interface Window { __viewer: ViewerHandle } }
 const canvas = document.getElementById('c') as HTMLCanvasElement;
 const hud = document.getElementById('hud')!;
 const errorBox = document.getElementById('error')!;
-const handle: ViewerHandle = { status: 'loading', frames: 0, bodies: 0, awake: 0, stepIndex: 0, resets: 0, fire: () => {}, capture: async () => null, inputs: [] };
+const handle: ViewerHandle = { status: 'loading', frames: 0, bodies: 0, awake: 0, stepIndex: 0, msPerStep: NaN, snapMs: NaN, resets: 0, overlapped: 0, fire: () => {}, capture: async () => null, inputs: [] };
 window.__viewer = handle;
 
 function fail(e: unknown) {
@@ -86,6 +100,7 @@ function bounds(bodies: BodyDesc[]): { min: V3; max: V3 } {
 
 function presets(current: string) {
   const box = document.getElementById('presets')!;
+  box.replaceChildren();
   const config = parseViewerConfig(current);
   for (const e of ENGINES) {
     const b = document.createElement('button');
@@ -110,24 +125,24 @@ function presets(current: string) {
   for (const p of PRESETS) {
     const b = document.createElement('button');
     b.textContent = p.label;
-    if (presetSearch(p.search, config.engine) === toSearch(config)) b.className = 'on';
-    b.onclick = () => { location.search = presetSearch(p.search, config.engine); };
+    if (presetSearch(p.search, config) === toSearch(config)) b.className = 'on';
+    b.onclick = () => { location.search = presetSearch(p.search, parseViewerConfig(location.search)); };
     box.appendChild(b);
   }
 }
 
 async function main() {
-  const config = parseViewerConfig(location.search);
+  let config = parseViewerConfig(location.search);
   presets(location.search);
   const { device, adapter } = await createDevice({ timestamps: false });
   const renderer = new Renderer(device, config.offscreen ? { size: [640, 400] } : { canvas });
   const source = new SnapshotSource(device);
   renderer.setSource(source);
-  renderer.look = LOOKS[config.look] ?? CANDY_NIGHT;
+  renderer.look = lookByName(config.look, config.real);
   renderer.device.lost.then((info) => fail(`GPU device lost: ${info.message}`));
   renderer.device.addEventListener('uncapturederror', (e) => fail((e as GPUUncapturedErrorEvent).error.message));
 
-  let engine: PhysicsEngine = viewerEngine(config.engine);
+  let engine: PhysicsEngine = viewerEngine(config);
   let scene = sceneFor(config);
   // Engine body i has shape shapes[i]: initial bodies, then spawns in
   // (step, push order), the same order the engine applies them.
@@ -135,7 +150,8 @@ async function main() {
   let shapes: BodyDesc[] = [];
   let orbit: Orbit;
   const clock = newClock();
-  const stepMs = new Window(120);
+  // 30 steps (half a second of sim): a longer window lags the scene, whose step cost changes within seconds.
+  const stepMs = new Window(30);
   const snapMs = new Window(60);
   let paused = false;
   let fps = 60;
@@ -145,25 +161,53 @@ async function main() {
   // an engine that is not ready (or that reset() has just disposed).
   let resetAsked = false;
   let resetting = false;
-
-  const ballDesc = (origin: V3, dir: V3): BodyDesc => ({
-    shape: { kind: 'sphere', radius: 0.7 },
-    pos: [origin[0] + dir[0] * 2, origin[1] + dir[1] * 2, origin[2] + dir[2] * 2],
-    rot: [0, 0, 0, 1],
-    linVel: [dir[0] * 40, dir[1] * 40, dir[2] * 40],
-    angVel: [0, 0, 0],
-    density: 8,
-    friction: 0.5,
-    restitution: 0.1,
-    tag: TAG_BALL,
-  });
+  // The control panel asks for a new config by setting nextConfig and resetAsked (never by calling
+  // reset() itself), so a reset still runs only where the frame loop runs it. resetNote is shown after it.
+  let nextConfig: ViewerConfig | null = null;
+  let resetNote = '';
+  // Largest projectile the engine accepts without a rebuild (pushRadiusLimit).
+  let pushLimit = Infinity;
 
   async function reset() {
     resetting = true;
+    const prev = config, want = nextConfig ?? config;
+    nextConfig = null;
+    try {
+      await load(want);
+      notice = resetNote;
+    } catch (e) {
+      if (want === prev) throw e;
+      // An engine that can't hold the new scene (GPU storage limits, say): go back to the last one.
+      await load(prev);
+      notice = `Kept the previous scene: ${e instanceof Error ? e.message : String(e)}`;
+    }
+    resetNote = '';
+    if (config !== prev) {
+      history.replaceState(null, '', toSearch(config));
+      presets(location.search);
+    }
+    controls.refresh();
+    resetting = false;
+    handle.stepIndex = engine.stepIndex;
+    handle.resets++;
+    // Show the new scene's HUD and any notice now: with loop=free, frames (which redraw it
+    // every 10) need not keep pace with steps.
+    drawHud();
+  }
+
+  // With loop=free, frames keep drawing while a reset awaits, so everything a frame reads
+  // (scene, camera, the source's bodies) switches in one synchronous block after the last
+  // await: no frame sees an empty source or the new camera on the old scene.
+  async function load(want: ViewerConfig) {
+    const next = sceneFor(want); // throws on bad params before anything is torn down
     engine.dispose();
-    engine = viewerEngine(config.engine);
-    scene = sceneFor(config);
-    await engine.init(scene);
+    engine = viewerEngine(want);
+    pushLimit = pushRadiusLimit(engineSpec(want.engine, want.projectile), next);
+    await engine.init(next);
+    const t0 = performance.now();
+    const s = await engine.snapshot();
+    config = want;
+    scene = next;
     events = [...scene.inputs];
     shapes = [...scene.bodies];
     source.reset(scene.bodies);
@@ -173,35 +217,74 @@ async function main() {
     renderer.setShadowBounds(c, Math.hypot(b.max[0] - b.min[0], b.max[1] - b.min[1], b.max[2] - b.min[2]) / 2 + 2);
     handle.inputs = [];
     notice = '';
-    await refresh();
-    resetting = false;
-    handle.stepIndex = engine.stepIndex;
-    handle.resets++;
+    apply(s, t0);
   }
+
+  const controls = mountControls(document.getElementById('controls')!, {
+    config: () => config,
+    rebuild(next) {
+      nextConfig = next;
+      resetAsked = true;
+    },
+    setLook(look, real) {
+      // Shading only: live, nothing to rebuild. A queued rebuild keeps it too.
+      config = { ...config, look, real };
+      if (nextConfig) nextConfig = { ...nextConfig, look, real };
+      renderer.look = lookByName(look, real);
+      history.replaceState(null, '', toSearch(config));
+      presets(location.search);
+    },
+    setProjectile(p) {
+      // A rebuild already queued takes the projectile with it (and sizes its engine for it).
+      if (nextConfig) {
+        nextConfig = { ...nextConfig, projectile: p };
+        return;
+      }
+      const next = { ...config, projectile: p };
+      if (boundingRadius(projectileShape(p)) <= pushLimit) {
+        config = next;
+        history.replaceState(null, '', toSearch(config));
+        return;
+      }
+      // The GPU engine sizes its broadphase grid for the largest body at init, so a bigger projectile needs a new engine.
+      nextConfig = next;
+      resetNote = 'Rebuilt the scene: the GPU engine sizes its grid for the largest body when it starts';
+      resetAsked = true;
+    },
+  });
 
   function shapesFor(count: number): BodyDesc[] {
     while (shapes.length < count) shapes.push(events[shapes.length - scene.bodies.length]!.body);
     return shapes;
   }
 
-  async function refresh() {
-    const t0 = performance.now();
-    const s = await engine.snapshot();
+  // Snapshot read-back (from t0), then upload; snapMs times both. Pipelined reads overlap, so each keeps its own t0.
+  function apply(s: Snapshot, t0: number) {
     source.update(s, shapesFor(s.count));
     snapMs.push(performance.now() - t0);
     handle.bodies = s.count;
     awake = handle.awake = s.awake.reduce((a, x) => a + x, 0);
   }
+  /**
+   * Read the newest state back and upload it; resolves with the time it landed. Pipelined, the read
+   * waits behind its step on the GPU, so it is timed from when that step was done (done).
+   */
+  const refresh = async (done?: Promise<number>) => {
+    const t0 = performance.now();
+    const s = await engine.snapshot();
+    apply(s, done ? Math.max(t0, await done) : t0);
+    return performance.now();
+  };
   let awake = 0;
 
   handle.fire = (x = 0, y = 0) => {
     if (resetting) return;
     const { origin, dir } = rayThrough(orbit, aspect(), x, y);
-    const ev: InputEvent = { step: engine.stepIndex, kind: 'spawn', body: ballDesc(origin, dir) };
+    const ev: InputEvent = { step: engine.stepIndex, kind: 'spawn', body: projectileBody(config.projectile, origin, dir) };
     try {
       engine.push([ev]);
     } catch (e) {
-      // The GPU and tiered engines have room for GPU_SPARE fired balls (params.ts); R resets.
+      // The GPU and tiered engines have room for GPU_SPARE fired projectiles (params.ts); R resets.
       notice = `${e instanceof Error ? e.message : String(e)} (press R to reset)`;
       drawHud();
       return;
@@ -247,6 +330,8 @@ async function main() {
     orbit.distance = Math.min(800, Math.max(3, orbit.distance * Math.exp(e.deltaY * 0.001)));
   }, { passive: false });
   addEventListener('keydown', (e) => {
+    // Typing in the control panel is not a command.
+    if (e.target instanceof HTMLInputElement || e.target instanceof HTMLSelectElement) return;
     if (e.key === ' ') { e.preventDefault(); handle.fire(0, 0); }
     if (e.key === 'r' || e.key === 'R') resetAsked = true;
     if (e.key === 'p' || e.key === 'P') paused = !paused;
@@ -263,15 +348,18 @@ async function main() {
   const fmt = (x: number) => (Number.isFinite(x) ? (x >= 100 ? x.toFixed(0) : x >= 10 ? x.toFixed(1) : x.toFixed(2)) : '–');
   function drawHud() {
     const med = stepMs.quantile(0.5), p95 = stepMs.quantile(0.95);
+    handle.msPerStep = med;
+    handle.snapMs = snapMs.quantile(0.5);
     const over = med > 7.5;
     hud.innerHTML = `
       <div class="big">${handle.bodies.toLocaleString()} bodies</div>
       <div class="muted">${SCENARIOS[config.scenario]!.title} · ${escapeHtml(config.engine)} (${escapeHtml(engine.info.backend)})</div>
       <div class="row"><span>physics ms/step</span><span class="${over ? 'warn' : ''}">${fmt(med)} <span class="muted">p95 ${fmt(p95)}</span></span></div>
+      <div class="row muted"><span>step</span><span>${handle.stepIndex.toLocaleString()} · loop ${config.loop}${config.loop === 'free' && !config.pipeline ? ' · pipeline off' : ''}</span></div>
       <div class="row"><span>awake</span><span>${awake.toLocaleString()}</span></div>
       <div class="row"><span>fps</span><span>${fmt(fps)}</span></div>
       <div class="row"><span>sim speed</span><span class="${clock.simSpeed < 0.95 ? 'warn' : ''}">${(clock.simSpeed * 100).toFixed(0)}%</span></div>
-      <div class="row"><span>snapshot + upload</span><span>${fmt(snapMs.quantile(0.5))} ms</span></div>
+      <div class="row"><span>snapshot + upload</span><span>${fmt(handle.snapMs)} ms</span></div>
       <div class="row muted"><span>budget</span><span>7.5 ms/step</span></div>
       <div class="muted">${escapeHtml(adapter.info.vendor)} ${escapeHtml(adapter.info.architecture)}${paused ? ' · <b>paused</b>' : ''}</div>${notice ? `\n      <div class="warn">${escapeHtml(notice)}</div>` : ''}`;
   }
@@ -281,15 +369,33 @@ async function main() {
   let last = performance.now();
   let pendingCapture: { resolve: (s: PixelStats | null) => void; keep: boolean } | null = null;
   handle.capture = (keep = false) => new Promise((resolve) => { pendingCapture = { resolve, keep }; });
+  const dtMs = () => scene.dt * 1000;
 
-  const tick = async () => {
-    const now = performance.now();
+  /** Draw one frame at alpha, answer a pending capture, and update the frame counters. */
+  async function draw(now: number, alpha: number) {
+    const want = pendingCapture;
+    pendingCapture = null;
+    const stats = await renderer.render({ viewProj: viewProj(orbit, aspect()), eye: eyeOf(orbit), focus: orbit.target, time: now / 1000, groundY: scene.ground?.y ?? 0, alpha }, !!want, want?.keep);
+    if (want) want.resolve(stats);
+    handle.frames++;
+    if (handle.frames % 10 === 1) drawHud();
+  }
+
+  /** Real time since the last frame, folded into the fps estimate. */
+  function frameTime(now: number): number {
     const frameMs = now - last;
     last = now;
     fps = 0.9 * fps + 0.1 * (1000 / Math.max(frameMs, 1));
+    return frameMs;
+  }
+
+  // loop=frame: step, wait, read back and render in series, once per display frame.
+  const tick = async () => {
+    const now = performance.now();
+    const frameMs = frameTime(now);
     resize();
     if (resetAsked) { resetAsked = false; await reset(); }
-    const n = paused ? 0 : stepsDue(clock, frameMs, scene.dt);
+    const n = paused ? 0 : stepsDue(clock, frameMs, scene.dt, config.maxSteps);
     // A GPU engine's step() only submits, so its steps are timed to completion with finish().
     // refresh() waits for the GPU anyway to read a snapshot back; the wait adds one
     // queue-completion round trip before that readback's copy is submitted.
@@ -307,15 +413,73 @@ async function main() {
     }
     handle.stepIndex = engine.stepIndex;
     if (n > 0) await refresh();
-    const want = pendingCapture;
-    pendingCapture = null;
-    const stats = await renderer.render({ viewProj: viewProj(orbit, aspect()), eye: eyeOf(orbit), focus: orbit.target, time: now / 1000, groundY: scene.ground?.y ?? 0, alpha: paused ? 1 : clock.acc / scene.dt }, !!want, want?.keep);
-    if (want) want.resolve(stats);
-    handle.frames++;
-    if (handle.frames % 10 === 1) drawHud();
+    await draw(now, paused ? 1 : clock.acc / scene.dt);
     if (handle.status === 'running') requestAnimationFrame(() => void tick().catch(fail));
   };
-  requestAnimationFrame(() => void tick().catch(fail));
+
+  // loop=free: physics owns the engine (steps, snapshots, resets) and runs back to back
+  // while steps are due; the render loop below never waits for it.
+  const pacer = newPacer();
+  const arrivals = newArrivals();
+  let stepsSinceFrame = 0;
+  const nextFrame = () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+  const tasks = taskYield();
+  const physics = () => runFree({
+    running: () => handle.status === 'running',
+    // A hidden tab gets no frames, so it would show nothing for the GPU and power it spends.
+    paused: () => paused || document.visibilityState !== 'visible',
+    now: () => performance.now(),
+    dtMs,
+    resetAsked: () => resetAsked,
+    async reset() {
+      resetAsked = false;
+      await reset();
+    },
+    async step() {
+      await engine.step();
+      stepsSinceFrame++;
+      if (config.autofire && engine.stepIndex === config.autofire) handle.fire(0, 0);
+      handle.stepIndex = engine.stepIndex;
+    },
+    finish: async () => { await engine.finish?.(); },
+    record(ms, overlapped) {
+      stepMs.push(ms);
+      if (overlapped) handle.overlapped++;
+    },
+    refresh,
+    // A GPU engine's finish() and snapshot wait on the GPU; a CPU engine (no finish) steps synchronously.
+    yields: () => !!engine.finish,
+    pipeline: () => config.pipeline && !!engine.finish,
+    nextFrame,
+    nextTask: tasks.next,
+  }, pacer, arrivals);
+  let lastFrameDone: Promise<void> | null = null;
+  // The first frame after the tab was hidden spans the time away, which is not slow motion.
+  let wasHidden = false;
+  document.addEventListener('visibilitychange', () => { wasHidden = true; });
+  const frameLoop = async () => {
+    const now = performance.now();
+    const frameMs = frameTime(now);
+    resize();
+    if (!paused && !resetting && !wasHidden) trackSimSpeed(clock, stepsSinceFrame, frameMs, scene.dt);
+    stepsSinceFrame = 0;
+    wasHidden = false;
+    await draw(now, paused || resetting ? 1 : alphaAt(arrivals, now, dtMs()));
+    // At most two frames queued on the GPU. Nothing else holds this loop back: an offscreen
+    // target gets no presentation backpressure, and on a slow GPU (SwiftShader) the queue was
+    // 50 s behind after 12 s, starving physics and every readback.
+    const done = renderer.device.queue.onSubmittedWorkDone();
+    if (lastFrameDone) await lastFrameDone;
+    lastFrameDone = done;
+    if (handle.status === 'running') requestAnimationFrame(() => void frameLoop().catch(fail));
+  };
+
+  if (config.loop === 'frame') {
+    requestAnimationFrame(() => void tick().catch(fail));
+  } else {
+    void physics().catch(fail);
+    requestAnimationFrame(() => void frameLoop().catch(fail));
+  }
 }
 
 main().catch(fail);

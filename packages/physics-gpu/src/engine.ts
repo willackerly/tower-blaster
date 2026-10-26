@@ -4,13 +4,13 @@
 // the two engines can be run side by side on the same settings.
 import { type BodyDesc, emptySnapshot, type EngineInfo, inertiaOf, type InputEvent, massOf, type PhysicsEngine, type SceneDesc, type Snapshot } from '@tb/engine-api';
 import { boundingRadius } from '@tb/geom';
-import { assertStorageFits, createDevice, Readback } from '@tb/gpu';
+import { assertStorageFits, createDevice, isSoftwareAdapter, Readback } from '@tb/gpu';
 import { type AvbdParams, DEFAULT_AVBD } from '@tb/physics-ref';
 import { Body, BodyProps, readField, Shape, SolverBody, writeStruct } from '@tb/schema';
 import { Broadphase } from './broadphase.ts';
 import { Coloring } from './coloring.ts';
 import { Narrowphase } from './narrowphase.ts';
-import { AvbdSolver, DEFAULT_DISPATCH } from './solver.ts';
+import { AvbdSolver, DEFAULT_DISPATCH, defaultTailThreads, type SolverDispatch } from './solver.ts';
 
 export interface GpuEngineOptions {
   /** Use this device instead of creating one (it is then not destroyed by dispose()). */
@@ -32,7 +32,8 @@ export interface GpuEngineOptions {
   /**
    * How the primal sweep is dispatched (SolverDispatch in solver.ts): colours
    * below colorTail (default 8) get a dispatch each, the rest one workgroup of
-   * tailThreads threads (1-256, default 64). indirectColors restores
+   * tailThreads threads (1-256; default 256 on a hardware GPU, 64 on a software
+   * adapter such as SwiftShader; see dispatch). indirectColors restores
    * the earlier indirect dispatch of colours 0-62, to time against; colour 63
    * always goes to the tail. None of them changes the result.
    */
@@ -66,6 +67,8 @@ export class GpuAvbdEngine implements PhysicsEngine {
   private capacity = 0;
   private rmax = 0;
   private cellSize = 1;
+  /** The primal dispatch init() chose, with the adapter's default tail width filled in; null before init. */
+  dispatch: SolverDispatch | null = null;
   private parts: { bodies: GPUBuffer; shapes: GPUBuffer; props: GPUBuffer; spheres: GPUBuffer; sweep: GPUBuffer; prev: GPUBuffer; bp: Broadphase; np: Narrowphase; col: Coloring; solver: AvbdSolver; readback: Readback } | null = null;
 
   constructor(params: Partial<AvbdParams> = {}, private readonly opts: GpuEngineOptions = {}) {
@@ -103,6 +106,11 @@ export class GpuAvbdEngine implements PhysicsEngine {
     void device.lost.then((info) => { if (this.device === device) this.failure ??= `GPU device lost (${info.reason}): ${info.message}`; });
     const adapter = (device as GPUDevice & { adapterInfo?: GPUAdapterInfo }).adapterInfo;
     if (adapter) this.info.backend = `webgpu:${adapter.vendor}/${adapter.architecture}`;
+    // Unknown adapters count as hardware: the width only sets the speed, never the result.
+    this.dispatch = {
+      colorTail: this.opts.colorTail ?? DEFAULT_DISPATCH.colorTail, indirectColors: this.opts.indirectColors ?? DEFAULT_DISPATCH.indirectColors,
+      tailThreads: this.opts.tailThreads ?? defaultTailThreads(adapter ? isSoftwareAdapter(adapter) : false),
+    };
     this.scene = scene;
     const all = [...scene.bodies, ...scene.inputs.map((e) => e.body)];
     if (this.opts.capacity !== undefined && this.opts.capacity < all.length) throw new Error(`GpuAvbdEngine: capacity ${this.opts.capacity} is below the scene's ${all.length} bodies and inputs`);
@@ -130,8 +138,7 @@ export class GpuAvbdEngine implements PhysicsEngine {
       bodies, props, spheres, sweep, prev, manifolds: np.manifolds, groundManifolds: np.groundManifolds,
       pairs: bp.pairs, total: bp.total, offsets: bp.offsets,
       order: col.order, colorStart: col.colorStart, dispatch: col.dispatch, rowStart: col.rowStart, rowLength: col.rowLength, adjSlot: col.adjSlot,
-    }, { colorTail: this.opts.colorTail ?? DEFAULT_DISPATCH.colorTail, indirectColors: this.opts.indirectColors ?? DEFAULT_DISPATCH.indirectColors,
-      tailThreads: this.opts.tailThreads ?? DEFAULT_DISPATCH.tailThreads });
+    }, this.dispatch);
     this.parts = { bodies, shapes, props, spheres, sweep, prev, bp, np, col, solver, readback: new Readback(device) };
     this.n = 0;
     for (const b of scene.bodies) this.add(b);
@@ -173,6 +180,32 @@ export class GpuAvbdEngine implements PhysicsEngine {
   }
 
   step(): void {
+    this.encodeStep();
+  }
+
+  /**
+   * Bench only (the solver probe, probe.ts): step() with the solve pass
+   * timestamped. The work submitted is step()'s.
+   */
+  probeStep(solveTimestamps: GPUComputePassTimestampWrites): void {
+    this.encodeStep(solveTimestamps);
+  }
+
+  /**
+   * Bench only (the solver probe): the device and the stages of the last
+   * step, to read its colour structure and time pieces of its sweep
+   * (AvbdSolver.encodeProbe). step() does not use this.
+   */
+  probeParts(): { device: GPUDevice; n: number; iterations: number; dispatch: SolverDispatch; solver: AvbdSolver; col: Coloring; total: GPUBuffer; maxPairs: number; capacity: number } {
+    const { device, parts } = this;
+    if (!device || !parts) throw new Error('init() first');
+    return {
+      device, n: this.n, iterations: this.params.iterations, solver: parts.solver, col: parts.col, total: parts.bp.total,
+      maxPairs: parts.solver.maxPairs, capacity: this.capacity, dispatch: this.dispatch!,
+    };
+  }
+
+  private encodeStep(solveTimestamps?: GPUComputePassTimestampWrites): void {
     const { device, parts, scene } = this;
     if (!device || !parts || !scene) throw new Error('init() first');
     if (this.failure) throw new Error(`GpuAvbdEngine: ${this.failure}`);
@@ -189,7 +222,7 @@ export class GpuAvbdEngine implements PhysicsEngine {
     parts.np.encode(pass, n, { margin: p.margin, ground: scene.ground ? { y: scene.ground.y } : null });
     pass.end();
     parts.col.encode(enc, n);
-    parts.solver.solve(enc, n, p.iterations);
+    parts.solver.solve(enc, n, p.iterations, solveTimestamps);
     device.queue.submit([enc.finish()]);
     this.stepIndex++;
   }

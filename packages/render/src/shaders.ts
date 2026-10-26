@@ -8,6 +8,9 @@ import { BEVEL_WGSL, OKLAB_WGSL } from './look.ts';
 import { SPARK_COMMON } from './sparks.ts';
 import { LIGHT_META, LIGHT_PACKED, LIGHT_VEC4, MAX_BALLS, TRAIL } from './lights.ts';
 import { AO_FOOT_WGSL, AO_SAMPLE_WGSL, AO_SEAM_WGSL } from './ao.ts';
+import { ATMO_COMMON_WGSL } from './atmosphere.ts';
+import { MATERIAL_TILE } from './materials.ts';
+import { PCG_WGSL } from './noise.ts';
 
 export const SHADOW_SIZE = 2048;
 export const SPHERE_SEG = 24;
@@ -43,9 +46,180 @@ export const Frame = defineStruct('Frame', [
   ['aoDims', 'vec3f', 'level-0 voxels'], ['aoOn', 'f32', '0: AO off'],
   ['aoK', 'vec4f', 'tap strengths (0.3, 0.9, 2.0 m), sky weight'],
   ['ramp0', 'vec4f', 'OKLab'], ['ramp1', 'vec4f'], ['ramp2', 'vec4f'], ['ramp3', 'vec4f'], ['ramp4', 'vec4f'],
+  ['atmoSigma', 'vec3f', 'real look: air extinction at the ground, per metre'], ['atmoEyeKm', 'f32', 'real look: eye height above the ground, km'],
+  ['sunDisc', 'vec3f', 'real look: sun disc radiance'], ['sunCos', 'f32', 'real look: cos of the sun disc angular radius'],
+  ['stone', 'vec4f', 'real look: stone layer (materials.ts STONES), texture scale, edge wear, dirt'],
+  ['stoneDetail', 'vec4f', 'real look: x: stone texture strength (0: none, nothing sampled), y: fade-out pixel footprint (m)'],
+  ['blockAlbedo', 'vec4f', 'real look: the blocks\' mean linear albedo (the ramp\'s)'],
+  ['aoFloorSky', 'vec4f', 'real look: floor sky map placement, uv = (rel.xz - xy) * zw (AoVolume.floorSkyFrame)'],
 ], 'Per-frame uniforms of the scene pass.');
 
-export const SCENE_WGSL = /* wgsl */ `
+// The real look's sky (atmosphere.ts): bind group 1, read by the scene
+// shader only when it is generated for that look (sceneWgsl(true)).
+const REAL_WGSL = /* wgsl */ `
+${ATMO_COMMON_WGSL}
+@group(1) @binding(0) var skyViewTex: texture_2d<f32>;
+@group(1) @binding(1) var skySamp: sampler;
+@group(1) @binding(2) var<storage, read> atmoAmbient: array<vec4f, 3>; // sky irradiance / pi, ground radiance, adapted exposure
+@group(1) @binding(3) var stoneDetail: texture_2d_array<f32>; // materials.ts: albedo multiplier / 2, roughness
+@group(1) @binding(4) var stoneNormal: texture_2d_array<f32>; // materials.ts: tangent-space normal * 0.5 + 0.5, cavity
+@group(1) @binding(5) var stoneSamp: sampler;
+@group(0) @binding(15) var aoFloorSkyTex: texture_2d<f32>; // ao.ts: the floor's sky view factor (R)
+${PCG_WGSL}
+// Bench diagnostics (RendererOptions.realDiag): REAL_STONE false compiles the
+// stone samples out ('stone-off'); REAL_BLOCK false shades blocks as step 1
+// did, the stylized body under the atmosphere ('step1').
+override REAL_STONE: bool = true;
+override REAL_BLOCK: bool = true;
+// RendererOptions.realDiag 'no-floor-sky': the floor's baked sky view unused (the vertical sky term only).
+override FLOOR_CONES: bool = true;
+
+// In-scattered radiance (rgb) and green transmittance (a) along the view ray in direction dir (unit).
+fn skyLut(dir: vec3f) -> vec4f {
+  return textureSampleLevel(skyViewTex, skySamp, skyViewUv(dir, fr.sun, fr.atmoEyeKm), 0.0);
+}
+
+fn rot90(v: vec2f, k: u32) -> vec2f {
+  switch k {
+    case 0u: { return v; }
+    case 1u: { return vec2f(-v.y, v.x); }
+    case 2u: { return -v; }
+    default: { return vec2f(v.y, -v.x); }
+  }
+}
+
+// A block face's stone (materials.ts): its texture placed at the face's
+// body-local position, shifted and turned by a hash of (slot, face) so no two
+// faces show the same patch. pxM: metres per pixel there (unclamped, see
+// stoneLodDepth); the texture fades out from half the fade footprint to all
+// of it. dn: the normal map's tilt in body-local space,
+// to add to the face (or bevel) normal; nLen: the mip-averaged normal's
+// length, < 1 where bumps average out (Toksvig).
+struct StoneHit { albedo: vec3f, rough: f32, dn: vec3f, cavity: f32, nLen: f32 }
+fn stoneAt(slot: u32, lp: vec3f, faceN: vec3f, pxM: f32) -> StoneHit {
+  if (!REAL_STONE || fr.stoneDetail.x <= 0.0) { return StoneHit(vec3f(1.0), 0.8, vec3f(0.0), 1.0, 1.0); } // uniform: skips both samples
+  let ax = abs(faceN);
+  let T = select(vec3f(1.0, 0.0, 0.0), vec3f(0.0, 0.0, 1.0), ax.x > 0.5);
+  let B = select(vec3f(0.0, 1.0, 0.0), vec3f(0.0, 0.0, 1.0), ax.y > 0.5);
+  let faceId = u32(dot(ax, vec3f(0.0, 2.0, 4.0))) + select(0u, 1u, dot(faceN, vec3f(1.0)) > 0.0);
+  let h = pcg3d(vec3u(slot, faceId, 0x5ea1u));
+  let k = h.x & 3u;
+  let uv = rot90(vec2f(dot(lp, T), dot(lp, B)) / (${MATERIAL_TILE.toFixed(1)} * fr.stone.y), k) + vec2f(f32(h.y), f32(h.z)) * NOISE_U;
+  let layer = i32(fr.stone.x);
+  let detail = fr.stoneDetail.x * (1.0 - smoothstep(0.5 * fr.stoneDetail.y, fr.stoneDetail.y, pxM));
+  let d = textureSample(stoneDetail, stoneSamp, uv, layer);
+  let nm = textureSample(stoneNormal, stoneSamp, uv, layer);
+  let tn = nm.xyz * 2.0 - 1.0;
+  let len = max(length(tn), 1e-4);
+  let t = rot90(tn.xy, (4u - k) & 3u) / max(tn.z, 0.2);
+  return StoneHit(mix(vec3f(1.0), d.rgb * 2.0, detail), mix(0.8, d.a, detail), (T * t.x + B * t.y) * detail, mix(1.0, nm.a, detail), mix(1.0, min(len, 1.0), detail));
+}
+
+// A block's base colour in the real look: one of the stone's five palette
+// colours (the ramp) per block, a little lightness jitter, the tower's hue step.
+fn realAlbedo(look: u32, slot: u32) -> vec3f {
+  let h = pcg3d(vec3u(slot, 0x77u, 0xc01u));
+  var lab = rampKey(h.x % 5u);
+  let hue = (f32((look >> 8u) & 0xfu) - 2.5) * fr.hueStep;
+  let c = cos(hue);
+  let s = sin(hue);
+  lab = vec3f(lab.x * (1.0 + (f32(h.y >> 16u) / 65535.0 - 0.5) * 0.08), c * lab.y - s * lab.z, s * lab.y + c * lab.z);
+  return max(oklabToLinear(lab), vec3f(0.0));
+}
+
+// Radiance of the blocks a surface sees where they hide the sky: walls of
+// the blocks' mean albedo, lit by the sun at its elevation averaged over the
+// walls' compass directions (the mean of max(cos, 0) is 1/pi), and by half
+// the sky and half the ground. Neither their shadows on each other nor
+// their tops count; sky lighting (realism step 2) replaces this.
+fn realBounce() -> vec3f {
+  let cosE = sqrt(max(1.0 - fr.sun.y * fr.sun.y, 0.0));
+  return fr.blockAlbedo.rgb * (fr.sunColor * cosE / PI + 0.5 * atmoAmbient[0].rgb + 0.5 * atmoAmbient[1].rgb);
+}
+
+// The floor's sky view factor (FLOOR_SKY_WGSL), baked per frame into
+// aoFloorSky over the AO grid and the cones' reach; past it, open sky.
+fn floorSky(rel: vec3f) -> f32 {
+  let av = aoView();
+  if (av.on == 0.0) { return 1.0; }
+  if (!FLOOR_CONES) { return aoAt(av, rel, vec3f(0.0, 1.0, 0.0), rel, vec3f(0.0)).y; }
+  let uv = (rel.xz - fr.aoFloorSky.xy) * fr.aoFloorSky.zw;
+  if (any(uv < vec2f(0.0)) || any(uv > vec2f(1.0))) { return 1.0; }
+  return textureSampleLevel(aoFloorSkyTex, aoSamp, uv, 0.0).r;
+}
+
+// Aerial perspective: the surface through d metres of air. The LUT holds
+// the in-scattering along the whole ray (to the ground or space) and that
+// ray's transmittance; the part within d is scaled by the optical depth
+// covered, exact for uniform air with a uniform source, and equal to the
+// sky itself at the horizon.
+fn aerial(c: vec3f, rel: vec3f) -> vec3f {
+  let d = length(rel);
+  let s = skyLut(rel / max(d, 1e-6));
+  let T = exp(-fr.atmoSigma * d);
+  return c * T + s.rgb * min((1.0 - T.g) / max(1.0 - s.a, 1e-4), 1.0);
+}
+`;
+
+// The real look's specular (shade): the clearcoat lobe only where there is a
+// coat (the ball), so blocks and floor skip its sky LUT sample.
+const REAL_SPEC = /* wgsl */ `  var spec = ggx(NoH, a) * smithVis(NoV, NoL, a);
+  var reflections = env(R, sqrt(a)) * envBrdf(0.04, sqrt(a), NoV);
+  if (coat > 0.0) {
+    spec += coat * ggx(NoH, ac) * smithVis(NoV, NoL, ac);
+    reflections += coat * env(R, sqrt(ac)) * envBrdf(0.04, sqrt(ac), NoV);
+  }
+  spec *= F * PI;`;
+
+// The real look's ambient (shade). Contact darkening is the floor hiding
+// the lower view of what stands on it, so a surface facing up (the floor
+// itself) takes none of it; the stylized looks darken the floor too.
+const REAL_CONTACT = 'mix(0.5 + 0.5 * smoothstep(0.0, 1.5, rel.y + fr.eye.y - fr.groundY), 1.0, max(n.y, 0.0))';
+// Where the AO volume hides the sky, the surface sees blocks instead, and
+// they are not black: realBounce, until sky lighting lands (realism step 2).
+const REAL_SKY_AMBIENT = 'atmoAmbient[0].rgb * ao.y + realBounce() * (1.0 - ao.y)';
+
+// The real look's block (realism step 3): stone texture and relief, a palette
+// colour per block, chipped lighter edges, dirt toward the ground. Injected at
+// the top of fsBox; the stylized body after it runs only when REAL_BLOCK is false.
+const REAL_FS_BOX = /* wgsl */ `if (REAL_BLOCK) {
+    let lp = clamp(v.local, vec3f(-1.0), vec3f(1.0)) * v.half;
+    let pxM = length(fwidth(lp));
+    let faceN = boxFace(v.local, fwidth(v.local));
+    let aoPxM = length(fwidth(v.local * v.half));
+    let st = stoneAt(v.slot, lp, faceN, aoPxM);
+    let n = qrot(v.rot, normalize(bevelNormal(lp, faceN, v.half, pxM, fr.bevel) + st.dn));
+    let dndx = dpdx(n);
+    let dndy = dpdy(n);
+    let w = fx[v.slot];
+    let d3 = v.half - abs(lp);
+    let edgeM = max(min(d3.x, d3.y), min(max(d3.x, d3.y), d3.z));
+    // Wear: within 1-4 cm of an edge, further where the stone is pitted, fresh (lighter, rougher) stone shows.
+    let wear = fr.stone.z * (1.0 - smoothstep(0.0, 0.01 + 0.03 * (1.0 - st.cavity) + 0.01 * fr.stone.z, edgeM));
+    let y = v.rel.y + fr.eye.y - fr.groundY;
+    let dirt = fr.stone.w * (1.0 - smoothstep(0.0, 2.5, y));
+    var base = realAlbedo(v.look, v.slot) * st.albedo * mix(1.0, st.cavity, 0.6) * fxTint(w.x);
+    base = mix(base, base * 1.2, wear) * (1.0 - 0.35 * dirt);
+    // Toksvig: bumps averaged away by the mips widen the lobe instead.
+    let a = st.rough * st.rough;
+    let aT = sqrt(min(a * a + 2.0 * (1.0 - st.nLen) / st.nLen, 1.0));
+    let alpha = min(aT + 0.1 * wear, 1.0);
+    let wPx = SEAM / max(pxM, 1e-6);
+    let drawn = max(wPx, 0.75);
+    let seam = 1.0 - 0.4 * min(1.0, wPx / 0.75) * (1.0 - smoothstep(drawn - 0.5, drawn + 0.5, edgeM / max(pxM, 1e-6)));
+    var c = shade(base * seam, v.rel, n, aaAlpha(alpha, n, dndx, dndy), aaAlpha(0.0049, n, dndx, dndy), 0.0, aoBox(v, n, lp, faceN, aoPxM));
+    c += base * seam * fxGlow(w, fr.time);
+    return vec4f(fog(c, v.rel), 1.0);
+  }
+  `;
+
+/**
+ * The scene shader. real: the variant for looks with an atmosphere (sky,
+ * haze and ambient from atmosphere.ts, bind group 1); the other looks use
+ * the variant without it, so nothing of the real look reaches them.
+ */
+export function sceneWgsl(real = false): string {
+  return /* wgsl */ `
 ${wgslStruct(RenderRecord)}
 ${wgslStruct(Spark)}
 ${wgslStruct(FxState)}
@@ -68,6 +242,7 @@ ${wgslStruct(Frame)}
 ${AO_SAMPLE_WGSL}
 
 fn aoView() -> AoView { return AoView(fr.aoOrigin, fr.aoInvVoxel, fr.aoDims, fr.aoOn, fr.aoK); }
+${real ? REAL_WGSL : ''}
 @group(0) @binding(14) var<storage, read> aoFeet: array<vec4f>;      // ao.ts: per slot footprint, written by the splat
 // Bench diagnostics (RendererOptions.aoDiag 'no-seam'): the seam cavity compiled out.
 override AO_SEAM: bool = true;
@@ -269,6 +444,12 @@ fn skyColor(dir: vec3f) -> vec3f {
 }
 
 fn env(R: vec3f, rough: f32) -> vec3f {
+  ${real ? /* wgsl */ `// Until sky lighting lands (realism step 2): the sky view, blurred toward the mean sky by roughness, over the ground's radiance.
+  let sky = mix(skyLut(normalize(vec3f(R.x, max(R.y, 0.0), R.z))).rgb, atmoAmbient[0].rgb, rough);
+  return mix(atmoAmbient[1].rgb, sky, smoothstep(-0.05 - 0.3 * rough, 0.05 + 0.3 * rough, R.y));
+}
+
+fn envCandy(R: vec3f, rough: f32) -> vec3f {` : ''}
   var c = select(skyColor(R), mix(fr.skyHorizon, fr.floor * fr.ambSky, min(-4.0 * R.y, 1.0)), R.y < 0.0);
   c += fr.keyColor * softbox(R, fr.keyDir, fr.keySize, rough);
   c += fr.rimColor * softbox(R, fr.rimDir, fr.rimSize, rough);
@@ -276,6 +457,10 @@ fn env(R: vec3f, rough: f32) -> vec3f {
 }
 
 fn fog(c: vec3f, rel: vec3f) -> vec3f {
+  ${real ? `return aerial(c, rel);
+}
+
+fn fogCandy(c: vec3f, rel: vec3f) -> vec3f {` : ''}
   let y = rel.y + fr.eye.y - fr.groundY;
   let density = fr.fogDensity * exp(-max(y, 0.0) * fr.fogHeight);
   return mix(c, fr.skyHorizon, 1.0 - exp(-length(rel) * density));
@@ -292,13 +477,13 @@ fn shade(base: vec3f, rel: vec3f, n: vec3f, a: f32, ac: f32, coat: f32, ao: vec2
   let NoH = max(dot(n, H), 0.0);
   let VoH = max(dot(V, H), 0.0);
   let F = schlick(0.04, VoH);
-  let spec = (ggx(NoH, a) * smithVis(NoV, NoL, a) + coat * ggx(NoH, ac) * smithVis(NoV, NoL, ac)) * F * PI;
   let R = reflect(-V, n);
-  let reflections = env(R, sqrt(a)) * envBrdf(0.04, sqrt(a), NoV) + coat * env(R, sqrt(ac)) * envBrdf(0.04, sqrt(ac), NoV);
+${real ? REAL_SPEC : `  let spec = (ggx(NoH, a) * smithVis(NoV, NoL, a) + coat * ggx(NoH, ac) * smithVis(NoV, NoL, ac)) * F * PI;
+  let reflections = env(R, sqrt(a)) * envBrdf(0.04, sqrt(a), NoV) + coat * env(R, sqrt(ac)) * envBrdf(0.04, sqrt(ac), NoV);`}
   // Ground contact: darker near the floor. The occupancy volume (ao.ts) adds what is nearby; sky visibility dims only the sky light.
-  let contact = 0.5 + 0.5 * smoothstep(0.0, 1.5, rel.y + fr.eye.y - fr.groundY);
+  let contact = ${real ? REAL_CONTACT : '0.5 + 0.5 * smoothstep(0.0, 1.5, rel.y + fr.eye.y - fr.groundY)'};
   let occl = contact * ao.x;
-  let amb = mix(fr.ambGround, fr.ambSky * ao.y, n.y * 0.5 + 0.5) * occl;
+  let amb = mix(${real ? 'atmoAmbient[1].rgb' : 'fr.ambGround'}, ${real ? REAL_SKY_AMBIENT : 'fr.ambSky * ao.y'}, n.y * 0.5 + 0.5) * occl;
   return base * (amb + fr.sunColor * sh) + fr.sunColor * spec * sh + reflections * occl + pointLights(base, rel, n, V, a);
 }
 
@@ -368,7 +553,7 @@ fn boxFace(local: vec3f, w: vec3f) -> vec3f {
 }
 
 @fragment fn fsBox(v: VOut) -> @location(0) vec4f {
-  // Clamped: an edge pixel's shading point may lie just outside the face.
+  ${real ? REAL_FS_BOX : ''}// Clamped: an edge pixel's shading point may lie just outside the face.
   let lp = clamp(v.local, vec3f(-1.0), vec3f(1.0)) * v.half;
   let pxM = length(fwidth(lp));
   let faceN = boxFace(v.local, fwidth(v.local));
@@ -486,9 +671,13 @@ struct GOut { @builtin(position) clip: vec4f, @location(0) rel: vec3f }
   let w = fwidth(p);
   let line = abs(fract(p - 0.5) - 0.5) / max(w, vec2f(1e-4));
   let grid = (1.0 - min(min(line.x, line.y), 1.0)) * (1.0 - smoothstep(0.05, 0.4, max(w.x, w.y)));
-  let base = fr.floor * (1.0 + 2.0 * fr.floorGrid * grid);
+  return vec4f(groundShade(fr.floor * (1.0 + 2.0 * fr.floorGrid * grid), g.rel), 1.0);
+}
+
+// The lit, fogged floor at camera-relative rel (no derivatives: fsSky calls it in non-uniform control flow).
+fn groundShade(base: vec3f, rel: vec3f) -> vec3f {
   let up = vec3f(0.0, 1.0, 0.0);
-  return vec4f(fog(shade(base, g.rel, up, 0.36, 0.36, 0.0, aoAt(aoView(), g.rel, up, g.rel, vec3f(0.0))), g.rel), 1.0);
+  return fog(shade(base, rel, up, 0.36, 0.36, 0.0, ${real ? 'vec2f(1.0, floorSky(rel))' : 'aoAt(aoView(), rel, up, rel, vec3f(0.0))'}), rel);
 }
 
 struct SOut { @builtin(position) clip: vec4f, @location(0) ndc: vec2f }
@@ -505,7 +694,15 @@ struct SOut { @builtin(position) clip: vec4f, @location(0) ndc: vec2f }
 @fragment fn fsSky(s: SOut) -> @location(0) vec4f {
   let p = fr.invViewProj * vec4f(s.ndc, 1.0, 1.0);
   let dir = normalize(p.xyz / p.w);
-  return vec4f(select(skyColor(dir), fr.skyHorizon, dir.y < 0.0), 1.0);
+  ${real ? /* wgsl */ `// The sun disc, limb-darkened (I(mu) = 1 - 0.6 (1 - mu), normalized to mean 1), its rim antialiased.
+  let cs = dot(dir, fr.sun);
+  let x = sqrt(max(1.0 - cs * cs, 0.0)) / sqrt(1.0 - fr.sunCos * fr.sunCos);
+  let rim = 1.0 - smoothstep(1.0 - 1.5 * fwidth(x), 1.0, x);
+  // Below the horizon, the floor goes on past the floor polygon's reach: the same shading, through more air.
+  let hEye = fr.eye.y - fr.groundY;
+  if (dir.y < 0.0 && hEye > 0.0) { return vec4f(groundShade(fr.floor, dir * (hEye / -dir.y)), 1.0); }
+  let disc = fr.sunDisc * (1.0 - 0.6 * (1.0 - sqrt(max(1.0 - x * x, 0.0)))) / 0.8 * select(0.0, rim, cs > 0.0);
+  return vec4f(skyLut(dir).rgb + disc, 1.0);` : 'return vec4f(select(skyColor(dir), fr.skyHorizon, dir.y < 0.0), 1.0);'}
 }
 
 // ---------------------------------------------------------------- sparks
@@ -600,3 +797,6 @@ struct TrailOut {
   return vec4f(fr.ball * fr.ballEmissive * 0.6 * o.fade * soft, 0.0);
 }
 `;
+}
+
+export const SCENE_WGSL = sceneWgsl();

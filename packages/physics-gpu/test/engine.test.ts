@@ -6,7 +6,7 @@ import { drift, jitter, nonFinite, penetration, survival } from '@tb/metrics';
 import { type AvbdParams, AvbdReferenceEngine } from '@tb/physics-ref';
 import { buildScenario } from '@tb/scenarios';
 import { aboveHole, appliedMu, loadBundle, openWebGPU, readColumn, rodRock, rodToppleTime, slideMu, slideScene, THROW, throwScene, tippingAngle, type WebGPUSession } from '@tb/testkit';
-import { GpuAvbdEngine, type GpuEngineOptions } from '../src/index.ts';
+import { defaultTailThreads, GpuAvbdEngine, type GpuEngineOptions } from '../src/index.ts';
 import type * as Drivers from './page.ts';
 
 let gpu: WebGPUSession | null = null;
@@ -436,6 +436,18 @@ describe('GPU AVBD engine: primal dispatch (direct colours and the one-workgroup
       expect(def.direct - tail0.direct).toBe(8 * sweeps);
       expect(def.direct + def.indirect).toBe(old.direct + old.indirect - 55 * sweeps);
     }
+  });
+  it('(e) the tail is 256 threads on a hardware GPU and 64 on a software adapter, unless set', async () => {
+    expect([defaultTailThreads(false), defaultTailThreads(true)]).toEqual([256, 64]);
+    const scene = buildScenario('S11', { N: 50 }, 7);
+    const def = await call('dispatchPlan', scene, {});
+    expect(def.before).toBeNull();
+    expect(def.software).not.toBeNull();
+    expect(def.dispatch).toEqual({ colorTail: 8, indirectColors: false, tailThreads: def.software ? 64 : 256 });
+    // The tests run on SwiftShader unless a real GPU is present; it must count as software.
+    if (/swiftshader/i.test(def.adapter ?? '')) expect(def.software).toBe(true);
+    const set = await call('dispatchPlan', scene, { tailThreads: 32, colorTail: 3, indirectColors: true });
+    expect(set.dispatch).toEqual({ colorTail: 3, indirectColors: true, tailThreads: 32 });
   });
 });
 

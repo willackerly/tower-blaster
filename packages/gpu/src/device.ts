@@ -25,6 +25,19 @@ export async function createDevice(opts: { timestamps?: boolean; powerPreference
   return { adapter, device, timestamps };
 }
 
+/** What isSoftwareAdapter reads: GPUAdapterInfo's text fields, any of them absent. */
+export interface AdapterText { vendor?: string; architecture?: string; description?: string; device?: string; isFallbackAdapter?: boolean }
+
+/**
+ * A software (CPU) adapter: SwiftShader, llvmpipe, lavapipe, or one the
+ * browser marks as a fallback. Its timings are never performance results
+ * (CLAUDE.md), and a few defaults are chosen for it (the solver's tail width).
+ */
+export function isSoftwareAdapter(info: AdapterText): boolean {
+  const text = `${info.vendor ?? ''} ${info.architecture ?? ''} ${info.description ?? ''} ${info.device ?? ''}`;
+  return /swiftshader|llvmpipe|lavapipe|software/i.test(text) || info.isFallbackAdapter === true;
+}
+
 /** Read a buffer back to the CPU (test and debug path; stalls the queue). */
 export async function readBuffer(device: GPUDevice, src: GPUBuffer, bytes = src.size, offset = 0): Promise<ArrayBuffer> {
   const staging = device.createBuffer({ size: bytes, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST });

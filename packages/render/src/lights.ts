@@ -235,6 +235,11 @@ export class Lights {
     pass.dispatchWorkgroups(1);
   }
 
+  /** No lights this frame, in place of encode: zeroes the meta (lit count, heat gain). */
+  off(): void {
+    this.device.queue.writeBuffer(this.lights, LIGHT_META * 16, new Float32Array(4));
+  }
+
   /** Frame counter the next encode uses (the trail head is frame % TRAIL). */
   get nextFrame(): number { return this.frame; }
 

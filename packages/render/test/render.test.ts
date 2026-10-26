@@ -1,6 +1,7 @@
 // The renderer's data path: CPU-side packing and references here, GPU
 // culling and drawing in headless Chromium (SwiftShader without a GPU).
 // Correctness only: timings from here are never performance results.
+import { readFileSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { emptySnapshot, TAG_BALL, type BodyDesc } from '@tb/engine-api';
@@ -9,7 +10,8 @@ import { Body, readStruct, Shape, TIER } from '@tb/schema';
 import { RapierHost } from '@tb/adapter-rapier';
 import { TieredEngine } from '@tb/lattice';
 import { isSoftwareAdapter, loadBundle, openWebGPU, type WebGPUSession } from '@tb/testkit';
-import { agx, aoFootReference, bevelNormal, type V3, CANDY_NIGHT, CTL, HOT_FULL, MAX_EVENTS, SPAWN_BUDGET, FX_WORDS, packFx, tintWord, unpackFx, frustumPlanes, linearToOklab, listMatches, oklabToLinear, srgbToLinear, lookAt, lookOf, lookRange, MATERIAL, multiply, packBodies, changedRanges, drawnTier, packShapes, paletteOf, perspective, unpackLook } from '../src/index.ts';
+import { ADAPT_MAX, ADAPT_REF, adaptedExposure, HAZY_DAY, linearToSrgb, lookByName, parseRealOptions, REAL_DEFAULTS, REAL_KNOBS, realLook, writeRealOptions, CLEAR_DAY, MIE_H, mieExtinction, multiTable, normalize, OZONE, OZONE_WIDTH, RAYLEIGH, RAYLEIGH_H, skyRadiance, skyViewDir, skyViewUv, sunAtGround, sunDiscRadiance, transmittance, transmittanceHMu, transmittanceTable, transmittanceUv } from '../src/index.ts';
+import { agx, aoFootReference, bevelNormal, type V3, CANDY_NIGHT, CTL, HOT_FULL, MAX_EVENTS, SPAWN_BUDGET, FX_WORDS, packFx, tintWord, unpackFx, frustumPlanes, linearToOklab, listMatches, oklabToLinear, srgbToLinear, lookAt, lookOf, lookRange, MATERIAL, multiply, SEG, packBodies, changedRanges, drawnTier, packShapes, paletteOf, perspective, unpackLook } from '../src/index.ts';
 import type * as Drivers from './page.ts';
 
 describe('looks', () => {
@@ -204,6 +206,108 @@ describe('look math (CPU twins)', () => {
     const edge: [number, number, number] = [0.5, 0.499, 0.2];
     expect(bevelNormal(edge, [1, 0, 0], half, 0.001, 0.06)[1]).toBeGreaterThan(0.1); // resolved: tilted
     expect(bevelNormal(edge, [1, 0, 0], half, 0.2, 0.06)).toEqual([1, 0, 0]); // 3x the radius per pixel: flat
+  });
+});
+
+describe('real look options', () => {
+  it('round-trip through URL keys, only the ones set, and realLook fills the rest', () => {
+    const o = { sunElevation: 4, sunAzimuth: 200, visibility: 8, sunStrength: 1.5, exposure: 2, autoExposure: 0.5, groundAlbedo: [0.3, 0.25, 0.2] as V3, stone: 'granite' as const, stoneDetail: 0.5, stoneScale: 2, wear: 0.2, dirt: 0 };
+    const q = new URLSearchParams();
+    writeRealOptions(o, q);
+    expect(parseRealOptions(q)).toEqual(o);
+    const one = new URLSearchParams();
+    writeRealOptions({ sunElevation: 10 }, one);
+    expect([...one.keys()]).toEqual(['real.sunElevation']);
+    expect(parseRealOptions(new URLSearchParams())).toEqual({});
+    expect(realLook(parseRealOptions(new URLSearchParams()))).toEqual(realLook(REAL_DEFAULTS));
+    expect(realLook({ visibility: 8 }).atmosphere!.visibility).toBe(8);
+  });
+  it('rejects values out of range or not numbers', () => {
+    for (const [key, k] of Object.entries(REAL_KNOBS)) {
+      expect(() => parseRealOptions(new URLSearchParams({ [`real.${key}`]: String(k.max + 1) }))).toThrow(new RegExp(`real.${key}`));
+      expect(() => parseRealOptions(new URLSearchParams({ [`real.${key}`]: 'x' }))).toThrow(new RegExp(`real.${key}`));
+      expect(parseRealOptions(new URLSearchParams({ [`real.${key}`]: String(k.min) }))[key as keyof typeof REAL_KNOBS]).toBe(k.min);
+    }
+    for (const g of ['0.2,0.2', '0.2,0.2,1.5', 'a,b,c']) expect(() => parseRealOptions(new URLSearchParams({ 'real.ground': g }))).toThrow(/real.ground/);
+    expect(() => parseRealOptions(new URLSearchParams({ 'real.stone': 'marble' }))).toThrow(/real.stone/);
+  });
+  it('the defaults sit inside the knob ranges, and looks resolve by name', () => {
+    for (const [key, k] of Object.entries(REAL_KNOBS)) {
+      const v = REAL_DEFAULTS[key as keyof typeof REAL_KNOBS];
+      expect(v).toBeGreaterThanOrEqual(k.min);
+      expect(v).toBeLessThanOrEqual(k.max);
+    }
+    expect(lookByName('real', { sunElevation: 4 })).toEqual(realLook({ sunElevation: 4 }));
+    expect(lookByName('hazy')).toBe(HAZY_DAY);
+    expect(lookByName('nope')).toBe(CANDY_NIGHT);
+    expect(lookByName('nope', {}, HAZY_DAY)).toBe(HAZY_DAY);
+    expect(srgbToLinear(linearToSrgb(0.19))).toBeCloseTo(0.19, 12);
+  });
+});
+
+describe('atmosphere (CPU twin)', () => {
+  it('exposure adaptation: fixed at 0, unchanged at the reference light, partial in between, clamped', () => {
+    const E: V3 = [9.4, 9.4, 9.4], ref = ADAPT_REF * 9.4;
+    expect(adaptedExposure(ref, E, 1.1, 0.75)).toBeCloseTo(1.1, 12);
+    expect(adaptedExposure(ref / 10, E, 1.1, 0)).toBe(1.1);
+    // A tenth of the light: full adaptation gives 10x, 0.75 gives 10^0.75.
+    expect(adaptedExposure(ref / 10, E, 1, 1)).toBeCloseTo(10, 10);
+    expect(adaptedExposure(ref / 10, E, 1, 0.75)).toBeCloseTo(10 ** 0.75, 10);
+    // The reference follows the sun's strength: twice the sun and twice the light leave the exposure as set.
+    expect(adaptedExposure(2 * ref, [18.8, 18.8, 18.8], 1, 1)).toBeCloseTo(1, 12);
+    expect(adaptedExposure(0, E, 1, 1)).toBe(ADAPT_MAX);
+    expect(adaptedExposure(1e6, E, 1, 1)).toBe(1 / ADAPT_MAX);
+  });
+
+  const a = CLEAR_DAY;
+  const el = (deg: number): V3 => [Math.cos((deg * Math.PI) / 180), Math.sin((deg * Math.PI) / 180), 0];
+  const T = transmittanceTable(a);
+  const M = multiTable(a, T, 8, 8);
+  const sky = (sun: V3, dir: V3, at = a, t = T, m = M) => skyRadiance(at, t, m, sun, dir, 0.03)[0];
+
+  it('vertical transmittance matches the analytic optical depth of the exponential layers', () => {
+    const me = mieExtinction(a);
+    const tau = [0, 1, 2].map((k) => RAYLEIGH[k]! * RAYLEIGH_H * (1 - Math.exp(-100 / RAYLEIGH_H)) + me * MIE_H * (1 - Math.exp(-100 / MIE_H)) + OZONE[k]! * OZONE_WIDTH);
+    transmittance(a, 0, 1).forEach((t, k) => expect(Math.abs(t / Math.exp(-tau[k]!) - 1)).toBeLessThan(2e-3)); // measured 1.1e-3
+  });
+
+  it('LUT parameterizations round-trip', () => {
+    for (const [h, mu] of [[0.002, 0.3], [0.01, 0.3], [40, -0.2], [1, 1], [99, -0.9], [0.5, 0]] as const) {
+      const [h2, mu2] = transmittanceHMu(...transmittanceUv(h, mu));
+      expect(h2 / h).toBeCloseTo(1, 9);
+      expect(mu2).toBeCloseTo(mu, 6);
+    }
+    for (const d of [[0.3, 0.9, 0.1], [-0.7, 0.05, 0.4], [0.2, -0.3, -0.9], [0, 1, 0]] as V3[]) {
+      const n = normalize(d), back = skyViewDir(...skyViewUv(n, [1, 0, 0], 0.03), 0.03);
+      expect(back[1]).toBeCloseTo(n[1], 6); // elevation; azimuth is folded about the sun
+      if (Math.hypot(n[0], n[2]) > 1e-3) expect(back[0] / Math.hypot(back[0], back[2])).toBeCloseTo(n[0] / Math.hypot(n[0], n[2]), 5); // cos of the azimuth from the sun
+    }
+  });
+
+  it('the sky is blue overhead and paler at the horizon; the low sun is redder and dimmer', () => {
+    const noon = el(60), zen = sky(noon, [0, 1, 0]), hor = sky(noon, normalize([0, 0.02, 1]));
+    expect(zen[2] / zen[0]).toBeGreaterThan(1.5); // measured 1.8 (30 degrees from the sun)
+    expect(hor[2] / hor[0]).toBeLessThan(0.8 * (zen[2] / zen[0])); // measured 0.69 x
+    const high = sunAtGround(a, el(60)), low = sunAtGround(a, el(4));
+    expect(low[0] / low[2]).toBeGreaterThan(2 * (high[0] / high[2]));
+    expect(low[1]).toBeLessThan(high[1]);
+    expect(sunAtGround(a, el(-3))).toEqual([0, 0, 0]); // below the horizon
+  });
+
+  it('lower visibility whitens the horizon and dims the sun', () => {
+    const hazy = { ...a, visibility: 8 }, Th = transmittanceTable(hazy), Mh = multiTable(hazy, Th, 8, 8);
+    const sun = el(30), dir = normalize([0, 0.05, 1]);
+    const clear = sky(sun, dir), murky = sky(sun, dir, hazy, Th, Mh);
+    expect(murky[2] / murky[0]).toBeLessThan(clear[2] / clear[0]);
+    expect(sunAtGround(hazy, sun)[1]).toBeLessThan(0.8 * sunAtGround(a, sun)[1]);
+  });
+
+  it('the sun disc keeps its colour inside the half-float range', () => {
+    for (const d of [60, 10, 2]) {
+      const L = sunDiscRadiance(a, el(d)), s = sunAtGround(a, el(d));
+      expect(Math.max(...L)).toBeLessThanOrEqual(6e4);
+      expect(L[0] / L[2]).toBeCloseTo(s[0] / s[2], 6);
+    }
   });
 });
 
@@ -649,11 +753,13 @@ describe('GPU cull and compaction', () => {
       { seed: 5, count: 1, capacity: 1, alpha: 0.5, noCull: false },
       { seed: 6, count: 0, capacity: 64, alpha: 0.5, noCull: false },
       { seed: 7, count: 3000, capacity: 3000, alpha: 0.6, noCull: false, fx: true }, // FX scale, anchor, hidden
+      { seed: 8, count: 3000, capacity: 3000, alpha: 0.4, noCull: false, lodDepth: 30 }, // near and far boxes
+      { seed: 9, count: 600, capacity: 600, alpha: 1, noCull: false, lodDepth: -1e30 }, // every visible box far
     ];
     const out = await call('cull', cases);
     for (const r of out) {
       expect(r.error, `seed ${r.seed}`).toBeNull();
-      expect(r.lists, `seed ${r.seed}`).toEqual([null, null, null, null]);
+      expect(r.lists, `seed ${r.seed}`).toEqual([null, null, null, null, null]);
       expect(r.argsOk).toBe(true);
       expect(r.recordErr, `seed ${r.seed}`).toBeLessThan(2e-5);
     }
@@ -661,6 +767,12 @@ describe('GPU cull and compaction', () => {
     expect(out[0]!.counts[0]).toBeGreaterThan(50);
     expect(out[0]!.counts[0]).toBeLessThan(2500);
     expect(out[5]!.listed).toBe(0);
+    // boxFar: empty without a lodDepth; split at 30 m; everything at -1e30.
+    for (const r of out.slice(0, 7)) expect(r.counts[SEG.boxFar], `seed ${r.seed}`).toBe(0);
+    expect(out[7]!.counts[SEG.box]).toBeGreaterThan(50);
+    expect(out[7]!.counts[SEG.boxFar]).toBeGreaterThan(50);
+    expect(out[8]!.counts[SEG.box]).toBe(0);
+    expect(out[8]!.counts[SEG.boxFar]).toBeGreaterThan(10);
   });
 });
 
@@ -782,6 +894,139 @@ describe('drawing', () => {
     }
   });
 
+  it('atmosphere LUT passes match their CPU twins, pass by pass', async (ctx) => {
+    if (!gpu) return ctx.skip();
+    const el = (deg: number): V3 => normalize([Math.cos((deg * Math.PI) / 180) * 0.6, Math.sin((deg * Math.PI) / 180), Math.cos((deg * Math.PI) / 180) * -0.8]);
+    const sun35 = el(35);
+    for (const [sun, eye] of [[sun35, 0.03], [el(4), 0.002], [el(-2), 0.1]] as [V3, number][]) {
+      const r = await call('atmosphereTwins', sun, eye);
+      expect(r.error).toBeNull();
+      expect(r.finite).toBe(true);
+      // Measured on SwiftShader, worst of the three: 4.8e-4 (half-float rounding), 4e-4, 2.3e-2 (2 m up, just below
+      // the horizon, where transmittance changes fastest and the sampler's fixed-point weights show), 3.2e-3 absolute, 1.7e-4.
+      expect(r.worst.transmittance).toBeLessThan(1e-3);
+      expect(r.worst.multi).toBeLessThan(2e-3);
+      expect(r.worst.sky).toBeLessThan(4e-2);
+      expect(r.worst.skyAlpha).toBeLessThan(5e-3);
+      expect(r.worst.ambient).toBeLessThan(2e-3);
+      expect(r.worst.exposure).toBeLessThan(1e-4);
+      if (sun === sun35) {
+        // ADAPT_REF is this ratio (measured at 30 m), so the default sun keeps the exposure as set.
+        expect(Math.abs(r.illuminance / r.sunIlluminanceLuma / ADAPT_REF - 1)).toBeLessThan(5e-3);
+        expect(r.exposure).toBeCloseTo(1.3, 2);
+      }
+    }
+  });
+
+  it('stone bake matches its CPU twin, tiles, keeps unit normals, and box-filters its mips', async (ctx) => {
+    if (!gpu) return ctx.skip();
+    const r = await call('materialBake');
+    expect(r.error).toBeNull();
+    // Measured on SwiftShader: twin within 0.5 of an 8-bit step (rounding), mips within 0.5 step,
+    // the wrap jump within 1.1x the jump between neighbours inside.
+    for (const l of r.layers) {
+      expect(l.twin, l.stone).toBeLessThanOrEqual(1);
+      expect(l.unit, l.stone).toBeLessThan(0.02);
+      expect(l.mip, l.stone).toBeLessThanOrEqual(1);
+      expect(l.tile.wrap, l.stone).toBeLessThan(1.5 * l.tile.inside + 1);
+      for (const m of l.mean) { expect(m, l.stone).toBeGreaterThan(0.8); expect(m, l.stone).toBeLessThan(1.15); }
+    }
+  });
+
+  it('real look stones: textured blocks carry fine detail, each stone differs, and texture 0 is flat', async (ctx) => {
+    if (!gpu) return ctx.skip();
+    // Close up on a tumbled block's face (the golden "low" view).
+    const r = await call('realChecks', [{}, { stoneDetail: 0 }, { stone: 'granite' }, { stone: 'sandstone' }, { stone: 'concrete' }, { stoneScale: 3 }], [320, 180], [[2.2, 0.45, 2.4], [-1, 1.2, -3]]);
+    expect(r.error).toBeNull();
+    const [lime, flat, granite, , concrete, scaled] = r.frames as NonNullable<typeof r.frames>;
+    // Measured on SwiftShader (mean |luma - neighbour mean|): limestone 1.11, flat 0.65, granite 2.38,
+    // sandstone 1.01, concrete 0.74, limestone at 3x scale 0.95.
+    expect(lime!.detail).toBeGreaterThan(1.4 * flat!.detail);
+    expect(granite!.detail).toBeGreaterThan(1.5 * lime!.detail);
+    expect(concrete!.detail).toBeGreaterThan(flat!.detail);
+    expect(scaled!.detail).toBeLessThan(lime!.detail);
+    // The texture's mean multiplier is about 1: the same block colours on average.
+    expect(Math.abs(lime!.meanLuma / flat!.meanLuma - 1)).toBeLessThan(0.05);
+    expect(new Set(r.frames.map((f) => f.hash)).size).toBe(6);
+  });
+
+  it('real look bench diagnostics: stone code compiled out draws what texture 0 draws; step-1 blocks differ', async (ctx) => {
+    if (!gpu) return ctx.skip();
+    const r = await call('realChecks', [{ stoneDetail: 0 }, { stoneDetail: 0, realDiag: 'stone-off' }, { realDiag: 'stone-off' }, { stoneDetail: 0, realDiag: 'step1' }], [320, 180], [[2.2, 0.45, 2.4], [-1, 1.2, -3]]);
+    expect(r.error).toBeNull();
+    const [flat, off, offDetail, step1] = r.frames as NonNullable<typeof r.frames>;
+    // Compiled out, the stone knob does nothing, and the frame is texture 0's to the bit.
+    expect(off!.hash).toBe(flat!.hash);
+    expect(offDetail!.hash).toBe(flat!.hash);
+    // Step 1's blocks: the stylized body (no palette per block, wear or dirt).
+    expect(step1!.hash).not.toBe(flat!.hash);
+  });
+
+  it('stone level of detail: far boxes drop the stone code with no visible seam, and texture 0 sends every box far', async (ctx) => {
+    if (!gpu) return ctx.skip();
+    // At 180 px a fade-out of 3 cm per pixel puts the split about 6 m past the near plane: the
+    // tumbled boxes (5 to 8 m away) fall on both sides, the towers (12 m) are far.
+    const r = await call('stoneLodSeam', { stoneFade: 3 });
+    expect(r.error).toBeNull();
+    expect(r.lod.boxes).toBeGreaterThan(0);
+    expect(r.lod.farBoxes).toBeGreaterThan(0);
+    expect(r.noLod.farBoxes).toBe(0);
+    expect(r.lod.boxes + r.lod.farBoxes).toBe(r.noLod.boxes);
+    // Past the fade-out both shaders compute the same thing; two compilations may round differently.
+    expect(r.maxDiff).toBeLessThanOrEqual(2);
+    const flat = await call('stoneLodSeam', { stoneDetail: 0 });
+    expect(flat.lod.boxes).toBe(0);
+    expect(flat.maxDiff).toBeLessThanOrEqual(2);
+  });
+
+  it('real look floor: open shadow lit by the whole sky; a street sees sunlit walls where the sky is hidden', async (ctx) => {
+    if (!gpu) return ctx.skip();
+    const r = await call('floorChecks', [{}, { realDiag: 'no-floor-sky' }]);
+    expect(r.error).toBeNull();
+    const [f, vertical] = r.frames as NonNullable<typeof r.frames>;
+    // Measured on SwiftShader (sRGB luma): lit 127, open shadow 53; before the floor kept its contact
+    // darkening, open shadow 31. In linear light 53 against 127 is about 0.15, the share of a clear
+    // sky's light at 35 degrees of sun; 31 was about 0.05.
+    expect(f!.openShadow).toBeGreaterThan(0.36 * f!.lit);
+    expect(f!.openShadow).toBeLessThan(0.6 * f!.lit);
+    // The street (8 m walls, 4 m apart) sees about a third sky, the rest walls (floorSky,
+    // realBounce): a little brighter, and warm. Measured luma 61 against 54 in the open, red / blue
+    // 1.18 against 0.74; the vertical-only sky term (no-floor-sky) had the street at 54 and 0.71.
+    expect(f!.street).toBeGreaterThan(0.9 * f!.openShadow);
+    expect(f!.street).toBeLessThan(1.3 * f!.openShadow);
+    expect(f!.streetRB).toBeGreaterThan(1.15 * f!.openShadowRB);
+    // The baked sky view factor against a cosine-weighted ray cast of these three walls (200k rays):
+    // street 0.32, open shadow 0.91, lit 0.91. Measured 0.40, 0.94, 0.95: the 1 m occupancy level
+    // lets some light through a 1 m wall that straddles two of its voxels (S14's 4 m towers do not).
+    expect(Math.abs(f!.streetSky - 0.32)).toBeLessThan(0.1);
+    expect(Math.abs(f!.openShadowSky - 0.91)).toBeLessThan(0.05);
+    expect(Math.abs(f!.litSky - 0.91)).toBeLessThan(0.06);
+    expect(Math.abs(vertical!.streetRB / vertical!.openShadowRB - 1)).toBeLessThan(0.05);
+    // In the open, the wall 9 m away hides 6% of the sky: a little more light, not less.
+    expect(f!.openShadow / vertical!.openShadow - 1).toBeGreaterThanOrEqual(0);
+    expect(f!.openShadow / vertical!.openShadow - 1).toBeLessThan(0.03);
+  });
+
+  it('real look: blue sky paling to the horizon, exposure adapting to a low sun, no stylized lights', async (ctx) => {
+    if (!gpu) return ctx.skip();
+    const r = await call('realChecks', ['hazy', {}, { sunElevation: 4, sunAzimuth: 200 }, { sunElevation: 4, sunAzimuth: 200, autoExposure: 0 }]);
+    expect(r.error).toBeNull();
+    const [hazy, noon, low, lowFixed] = r.frames as NonNullable<typeof r.frames>;
+    // Measured on SwiftShader: high sky b/r 1.99, just above the horizon 1.04; the low sun's horizon r/b 1.55.
+    const br = (c: number[]) => c[2]! / c[0]!;
+    expect(br(noon!.top)).toBeGreaterThan(1.6);
+    expect(br(noon!.horizon)).toBeLessThan(0.65 * br(noon!.top));
+    expect(br(low!.horizon)).toBeLessThan(0.8);
+    // Mean luma 124 at noon; at 4 degrees 116 adapting (0.75), 46 fixed: partial adaptation keeps dusk a little darker.
+    expect(low!.meanLuma).toBeGreaterThan(0.75 * noon!.meanLuma);
+    expect(low!.meanLuma).toBeLessThan(noon!.meanLuma);
+    expect(lowFixed!.meanLuma).toBeLessThan(0.5 * noon!.meanLuma);
+    // The ball is a light in hazy; real has no stylized lights.
+    expect(hazy!.lit).toBe(1);
+    expect(noon!.lit).toBe(0);
+    expect(low!.lit).toBe(0);
+  });
+
   it('pixel readback is RGBA whatever the output format (Apple prefers BGRA)', async (ctx) => {
     if (!gpu) return ctx.skip();
     const rgba = await call('sceneHash', {}, 'rgba8unorm'), bgra = await call('sceneHash', {}, 'bgra8unorm');
@@ -791,6 +1036,33 @@ describe('drawing', () => {
     // The shadow check thresholds on luma, so a swapped readback moves its numbers (measured lit 142 vs 126 on the grazing slab).
     const a = await call('shadowCheck', 'grazing', { format: 'rgba8unorm' }), b = await call('shadowCheck', 'grazing', { format: 'bgra8unorm' });
     expect(b.lit).toBe(a.lit);
+  });
+
+  // Golden images: the looks that exist must not change by a single bit while
+  // new looks are added to the same shaders (docs/realism.md). Hashes are
+  // pinned per platform, since rasterizers differ (Linux and macOS SwiftShader
+  // do); an unpinned platform logs its hashes and skips. UPDATE_GOLDEN=1
+  // rewrites this platform's entry, for a change meant to alter these looks:
+  // say why in the commit.
+  it('candy and hazy are bit-identical to their pinned golden images', async (ctx) => {
+    if (!gpu) return ctx.skip();
+    const r = await call('lookHashes', ['candy', 'hazy']);
+    expect(r.error).toBeNull();
+    expect((await call('lookHashes', ['candy', 'hazy'])).hashes).toEqual(r.hashes); // deterministic, or the gate means nothing
+    const key = `${process.platform} ${gpu.adapter.vendor} ${gpu.adapter.architecture} ${gpu.adapter.description}`.replace(/\s+/g, ' ').trim();
+    const file = fileURLToPath(new URL('./golden/looks.json', import.meta.url));
+    const pinned = JSON.parse(readFileSync(file, 'utf8')) as Record<string, Record<string, number>>;
+    if (process.env.UPDATE_GOLDEN === '1') {
+      pinned[key] = r.hashes;
+      writeFileSync(file, JSON.stringify(pinned, null, 2) + '\n');
+      return;
+    }
+    const want = pinned[key];
+    if (!want) {
+      console.warn(`no golden images pinned for "${key}"; UPDATE_GOLDEN=1 pins: ${JSON.stringify(r.hashes)}`);
+      return ctx.skip();
+    }
+    expect(r.hashes).toEqual(want);
   });
 
   it('shadows fall where the analytic sun rays say, without acne or light leaks', async (ctx) => {
@@ -813,18 +1085,19 @@ describe('drawing', () => {
   it('bench:render completes and reports every case (numbers discarded)', async (ctx) => {
     if (!gpu) return ctx.skip();
     const r = await call('runRenderBench', { width: 160, height: 90, counts: [800], warmup: 1, batches: 2, batchFrames: 1, profiledFrames: 1, sparkPool: 1024 });
-    expect(r.cases.map((c) => `${c.world}:${c.variant}`)).toEqual(['near', 'far'].flatMap((w) => ['full', 'no-shadow', 'no-post', 'no-sparks', 'no-heat', 'no-ao', 'no-seam', 'fan', 'cube', 'flat-fan', 'flat-cube'].map((v) => `${w}:${v}`)));
+    expect(r.cases.map((c) => `${c.world}:${c.variant}`)).toEqual(['near', 'far'].flatMap((w) => ['full', 'no-shadow', 'no-post', 'no-sparks', 'no-heat', 'no-ao', 'no-seam', 'fan', 'cube', 'flat-fan', 'flat-cube', 'real', 'real-no-stone', 'real-stone-off', 'real-step1', 'real-no-lod', 'real-no-floor-sky'].map((v) => `${w}:${v}`)));
     for (const c of r.cases) {
       expect(c.bodies).toBe(800);
       expect(c.frameMs).toBeGreaterThan(0);
       expect(c.batches).toHaveLength(2);
-      expect(c.drawn.boxes).toBeGreaterThan(0);
-      expect(c.drawn.boxes).toBeLessThanOrEqual(800);
+      expect(c.drawn.boxes + c.drawn.farBoxes).toBeGreaterThan(0);
+      expect(c.drawn.boxes + c.drawn.farBoxes).toBeLessThanOrEqual(800);
+      if (!c.variant.startsWith('real') || c.variant === 'real-no-lod') expect(c.drawn.farBoxes, c.variant).toBe(0);
       if (r.timestamps) expect(Object.keys(c.passes)).toEqual(expect.arrayContaining(['cull', 'scene', ...(c.variant === 'no-shadow' ? [] : ['shadow']), ...(c.variant === 'no-post' ? [] : ['bloom', 'composite'])]));
     }
     expect(r.software).toBe(isSoftwareAdapter(gpu.adapter));
     expect(await call('renderBenchMarkdown', r, 'h')).toMatch(/Without heat glow/);
-  }, 120_000); // 22 cases on a software adapter; 40 s timed out on CI beside the GPU physics and game tests (main, 8b5dd54)
+  }, 180_000); // 34 cases on a software adapter, most of it the first frame of each renderer; 40 s timed out on CI beside the GPU physics and game tests (main, 8b5dd54), and 120 s when every case built its own renderer (b6bf9a2)
 
   it('culling never changes an ID pixel', async (ctx) => {
     if (!gpu) return ctx.skip();
