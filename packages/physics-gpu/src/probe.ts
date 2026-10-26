@@ -26,6 +26,7 @@ import { buildScenario } from '@tb/scenarios';
 import { SolverContact } from '@tb/schema';
 import { MAX_COLORS } from './coloring.ts';
 import { GpuAvbdEngine } from './engine.ts';
+import type { HessianForm } from './solver.ts';
 import {
   barrierWgsl, BODY_PARAMS, exchangeRef, GRID_BARRIER_WGSL, KERNEL_PARAMS_BYTES, kernelParams, P3_EMPTY_WGSL, P3_VARIANT_INFO, P3_VARIANTS, p3Records,
   p3Reference, p3Wgsl, type P3Variant, type PoseOrder, posesFor, PROBE_TILE, probePoses, tileRecords, tileRef, tileWgsl,
@@ -44,6 +45,8 @@ export interface ProbeOptions {
   checkpoints: number[];
   R: number;
   solveSteps: number;
+  /** P2: the primal's form (SolverDispatch.hessian), to time one against the other. */
+  hessian: HessianForm;
   /** P3 sweep. inner: dispatches per timed pass (the time reported is per dispatch). */
   p3Variants: P3Variant[];
   p3Sizes: number[];
@@ -76,6 +79,7 @@ export const DEFAULT_PROBE: ProbeOptions = {
   checkpoints: [60, 300],
   R: 50,
   solveSteps: 10,
+  hessian: 'array',
   p3Variants: [...P3_VARIANTS],
   p3Sizes: [32, 64, 96, 128],
   p3Points: [8, 16, 32, 56, 64],
@@ -154,6 +158,8 @@ export interface Checkpoint {
 export interface Fit { model: string; coef: Record<string, number>; r2: number; adjR2: number; rmsUs: number; points: number }
 export interface P2Result {
   scenario: string; N: number; seed: number; iterations: number; R: number; checkpoints: Checkpoint[];
+  /** The hessian form the engine built (SolverDispatch.hessian). */
+  hessian: HessianForm;
   /** t = a + b W, t = a + b W + e bodies, t = a + e bodies, t = a + g Σpoints. */
   fits: Array<Fit | { model: string; singular: true }>;
   /** Over every direct colour with bodies: (t_c - empty dispatch) / W_c, in ns. */
@@ -437,12 +443,13 @@ async function colourStructure(e: GpuAvbdEngine): Promise<Omit<Checkpoint, 'step
 async function runP2(device: GPUDevice, timer: Timer, o: ProbeOptions): Promise<P2Result> {
   const scene = buildScenario('S4', { N: o.N }, o.seed);
   const checkpoints: Checkpoint[] = [];
-  let iterations = 0;
+  let iterations = 0, hessian = o.hessian;
   for (const step of o.checkpoints) {
     // A fresh engine per checkpoint: the probes below change contact state (the dual), which would carry into later steps.
-    const e = new GpuAvbdEngine({}, { device });
+    const e = new GpuAvbdEngine({}, { device, hessian: o.hessian });
     await e.init(scene);
     iterations = e.probeParts().iterations;
+    hessian = e.probeParts().dispatch.hessian;
     const timedFrom = Math.max(0, step - o.solveSteps);
     for (let s = 0; s < timedFrom; s++) {
       e.step();
@@ -520,7 +527,7 @@ async function runP2(device: GPUDevice, timer: Timer, o: ProbeOptions): Promise<
       : share < 0.2 ? 'A colour costs about the same whatever its size: the slowest thread\'s serial walk (latency) sets it.' : 'Both the size and the slowest thread matter.'}`);
   }
   if (perPointNs) verdict.push(`Per critical-path point, (t_c − empty dispatch) / W_c = ${perPointNs.median.toFixed(0)} ns (p10 ${perPointNs.p10.toFixed(0)}, p90 ${perPointNs.p90.toFixed(0)}) over ${per.length} colours.`);
-  return { scenario: 'S4', N: o.N, seed: o.seed, iterations, R: o.R, checkpoints, fits, perPointNs, verdict };
+  return { scenario: 'S4', N: o.N, seed: o.seed, iterations, R: o.R, checkpoints, hessian, fits, perPointNs, verdict };
 }
 
 // --- P3 --------------------------------------------------------------------
@@ -856,7 +863,7 @@ export function probeMarkdown(r: ProbeResult, header: string): string {
 
   if (r.p2) {
     const p = r.p2;
-    L.push('', `## P2 Real solver: ${p.scenario} N=${p.N} seed ${p.seed}, ${p.iterations} iterations (${p.iterations + 1} sweeps), R=${p.R} dispatches per timed pass`);
+    L.push('', `## P2 Real solver: ${p.scenario} N=${p.N} seed ${p.seed}, ${p.iterations} iterations (${p.iterations + 1} sweeps), hessian ${p.hessian}, R=${p.R} dispatches per timed pass`);
     for (const c of p.checkpoints) {
       L.push('', `### Step ${c.step}: ${c.n} bodies, ${c.coloursUsed} colours (${c.uncolored} uncoloured), ${c.pairSlots} pair slots, ${c.totalPoints} contact points`, '');
       const e0 = c.emptyDispatch?.median;

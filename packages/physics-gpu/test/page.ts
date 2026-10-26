@@ -1,12 +1,12 @@
 // Page-side drivers for the GPU physics tests (bundled by loadBundle).
 import { createDevice, isSoftwareAdapter, readBuffer, type Readback } from '@tb/gpu';
 import { boundingRadius, groundManifold, NO_AXIS, quatNormalize, shapeManifold, spherePairs, supportArea, type Manifold as CpuManifold } from '@tb/geom';
-import { Body, field, Manifold, readStruct, Shape, SolverContact, writeStruct } from '@tb/schema';
+import { Body, BodyProps, field, Manifold, readStruct, Shape, SolverBody, SolverContact, writeStruct } from '@tb/schema';
 import type { BodyDesc, InputEvent, Quat, Vec3 } from '@tb/engine-api';
 import { buildScenario } from '@tb/scenarios';
 import { bodiesAt } from '@tb/engine-api';
-import { Broadphase, Coloring, GpuAvbdEngine, type GpuEngineOptions, MAX_COLORS, Narrowphase } from '../src/index.ts';
-import type { AvbdParams } from '@tb/physics-ref';
+import { AvbdSolver, Broadphase, Coloring, DEFAULT_DISPATCH, GpuAvbdEngine, type GpuEngineOptions, type HessianForm, MAX_COLORS, Narrowphase } from '../src/index.ts';
+import { type AvbdParams, DEFAULT_AVBD } from '@tb/physics-ref';
 import type { SceneDesc } from '@tb/engine-api';
 import { colorGraph } from '@tb/physics-ref';
 import { axisSlack } from './sat-slack.ts';
@@ -790,4 +790,215 @@ export async function dispatchPlan(scene: SceneDesc, opts: Omit<GpuEngineOptions
   e.dispose();
   device.destroy();
   return out;
+}
+
+/** The code of the 'avbd solve' shader module the engine built at init, and the dispatch it chose. */
+export async function solveShader(scene: SceneDesc, opts: Omit<GpuEngineOptions, 'device'>) {
+  const { device } = await createDevice();
+  const codes: string[] = [];
+  const create = device.createShaderModule.bind(device);
+  device.createShaderModule = (d: GPUShaderModuleDescriptor) => { if (d.label === 'avbd solve') codes.push(d.code); return create(d); };
+  const e = new GpuAvbdEngine({}, { ...opts, device });
+  await e.init(scene);
+  const out = { codes, dispatch: e.dispatch, variant: e.info.variant };
+  e.dispose();
+  device.destroy();
+  return out;
+}
+
+/**
+ * step(), push() and probeParts() called while init() is pending: right after
+ * init() returns its promise, then on every task until it settles. First on a
+ * fresh engine, then on the same engine re-initialised with a second scene
+ * after `steps` steps of the first (so its body count, pending inputs and step
+ * index are set). Then init() overtaken: by dispose(), and by another init()
+ * of the second scene. Returns what each call did, how the overtaken inits
+ * settled, and the second scene after `steps` steps (after either re-init)
+ * against a fresh engine's.
+ */
+export async function callsDuringInit(first: SceneDesc, second: SceneDesc, steps: number) {
+  const { device } = await createDevice();
+  device.pushErrorScope('validation');
+  const uncaptured: string[] = [];
+  device.addEventListener('uncapturederror', (ev) => uncaptured.push((ev as GPUUncapturedErrorEvent).error.message));
+  const e = new GpuAvbdEngine({}, { device });
+  const calls: string[][] = [];
+  const state = async (x: GpuAvbdEngine) => {
+    const s = await x.snapshot();
+    return { count: s.count, pos: [...s.pos], rot: [...s.rot], linVel: [...s.linVel], angVel: [...s.angVel] };
+  };
+  for (const scene of [first, second]) {
+    const did: string[] = [];
+    const attempt = () => {
+      const tries: Array<[string, () => unknown]> = [['step', () => e.step()], ['push', () => e.push([])], ['probeParts', () => e.probeParts()]];
+      for (const [name, f] of tries) {
+        try { f(); did.push(`${name}: ran`); } catch (err) { did.push(`${name}: ${(err as Error).message}`); }
+      }
+    };
+    let settled = false;
+    const done = e.init(scene).finally(() => { settled = true; });
+    while (!settled) { attempt(); await new Promise((r) => setTimeout(r, 0)); }
+    await done;
+    calls.push(did);
+    for (let k = 0; k < steps; k++) e.step();
+    await e.finish();
+  }
+  const after = await state(e);
+  const settle = (p: Promise<void>) => p.then(() => 'resolved', (err: Error) => err.message);
+  const disposed = settle(e.init(first));
+  e.dispose();
+  const superseded = settle(e.init(first));
+  const last = settle(e.init(second));
+  const overtaken = { disposed: await disposed, superseded: await superseded, last: await last };
+  for (let k = 0; k < steps; k++) e.step();
+  await e.finish();
+  const reinit = await state(e);
+  e.dispose();
+  const c = new GpuAvbdEngine({}, { device });
+  await c.init(second);
+  for (let k = 0; k < steps; k++) c.step();
+  await c.finish();
+  const clean = await state(c);
+  c.dispose();
+  const error = await device.popErrorScope();
+  await new Promise((r) => setTimeout(r, 50));
+  device.destroy();
+  return { error: error?.message ?? null, uncaptured, calls, count: after.count, after, overtaken, reinit, clean };
+}
+
+/**
+ * init() when a solve pipeline cannot be built: the tail entry point's
+ * workgroup is made twice as tall, so 256 tail threads become 512, past the
+ * device's maxComputeInvocationsPerWorkgroup (256), as a kernel whose register
+ * use lowers Metal's maxTotalThreadsPerThreadgroup would be. Then a step()
+ * and an init() of a healthy engine on the same device.
+ */
+export async function solvePipelineFailure(scene: SceneDesc) {
+  const { device } = await createDevice();
+  const uncaptured: string[] = [];
+  device.addEventListener('uncapturederror', (ev) => uncaptured.push((ev as GPUUncapturedErrorEvent).error.message));
+  const create = device.createShaderModule.bind(device);
+  let broken = true;
+  device.createShaderModule = (d: GPUShaderModuleDescriptor) =>
+    create(broken && d.label === 'avbd solve' ? { ...d, code: d.code.replace('@workgroup_size(tailThreads)', '@workgroup_size(tailThreads, 2)') } : d);
+  const e = new GpuAvbdEngine({}, { device, tailThreads: 256, hessian: 'registers' });
+  const message = await e.init(scene).then(() => null, (err: Error) => err.message);
+  let stepAfter: string | null = null;
+  try { e.step(); } catch (err) { stepAfter = (err as Error).message; }
+  broken = false;
+  const healthy = await e.init(scene).then(async () => { e.step(); await e.finish(); return 'resolved'; }, (err: Error) => err.message);
+  await new Promise((r) => setTimeout(r, 50));
+  e.dispose();
+  device.destroy();
+  return { message, stepAfter, healthy, uncaptured, maxInvocations: device.limits.maxComputeInvocationsPerWorkgroup };
+}
+
+/**
+ * One primal dispatch (colour 0, a main iteration) of the real solve kernel in
+ * the given hessian form, on synthetic inputs written straight into its
+ * buffers. Bodies 0 .. n-1 form colour 0; their contacts are with bodies n ..
+ * 2n-1, which are only read, and with the ground. Bodies 0 and 1 are the
+ * signed-zero cases (engine.test.ts says why); the rest are random, including axis-aligned
+ * normals (exact and signed zeros in the Jacobian) and zero stiffnesses.
+ * Returns the bits of dp and phi of bodies 0 .. n-1 after the dispatch.
+ */
+export async function primalKernel(hessian: HessianForm, n: number, seed: number) {
+  const { device } = await createDevice();
+  device.pushErrorScope('validation');
+  const total = 2 * n, perBody = 3, maxPairs = n * perBody;
+  const usage = GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC;
+  const mk = (bytes: number) => device.createBuffer({ size: Math.max(64, bytes), usage });
+  const B = {
+    bodies: mk(total * Body.size), props: mk(total * BodyProps.size), spheres: mk(16 * total), sweep: mk(4 * total),
+    manifolds: mk(maxPairs * Manifold.size), groundManifolds: mk(total * Manifold.size), prev: mk(8 * maxPairs), pairs: mk(8 * maxPairs),
+    total: mk(32), offsets: mk(4 * total), order: mk(4 * total), colorStart: mk(4 * (MAX_COLORS + 1)), dispatch: mk(12 * MAX_COLORS),
+    rowStart: mk(4 * total), rowLength: mk(4 * total), adjSlot: mk(4 * maxPairs),
+  };
+  const solver = new AvbdSolver(device, total, maxPairs, B, { ...DEFAULT_DISPATCH, tailThreads: 64, hessian });
+  solver.writeParams(total, 1 / 60, [0, -9.81, 0], { y: 0, friction: 0.5 }, DEFAULT_AVBD);
+  let s = seed >>> 0 || 1;
+  const r = () => ((s = (Math.imul(s, 1664525) + 1013904223) >>> 0) / 2 ** 32);
+  const u = (a: number) => a * (2 * r() - 1);
+  const unit = (v: number[]) => { const l = Math.hypot(...v) || 1; return v.map((x) => x / l); };
+  const cross = (a: number[], b: number[]) => [a[1]! * b[2]! - a[2]! * b[1]!, a[2]! * b[0]! - a[0]! * b[2]!, a[0]! * b[1]! - a[1]! * b[0]!];
+  // Axis-aligned a quarter of the time, with signed zeros.
+  const direction = () => {
+    if (r() < 0.25) { const k = Math.floor(3 * r()); return [0, 1, 2].map((j) => (j === k ? (r() < 0.5 ? -1 : 1) : r() < 0.5 ? -0 : 0)); }
+    return unit([u(1), u(1), u(1)]);
+  };
+  const stiffness = () => (r() < 0.15 ? 0 : 10 ** (2 + 4 * r()));
+  const bodyView = new DataView(new ArrayBuffer(total * SolverBody.size));
+  const propView = new DataView(new ArrayBuffer(total * BodyProps.size));
+  for (let i = 0; i < total; i++) {
+    const q = unit([u(1), u(1), u(1), u(1)]);
+    writeStruct(bodyView, SolverBody, i, { q0: q, dp: [u(0.05), u(0.05), u(0.05)], phi: [u(0.05), u(0.05), u(0.05)], tp: [u(0.05), u(0.05), u(0.05)], tphi: [u(0.05), u(0.05), u(0.05)] });
+    writeStruct(propView, BodyProps, i, { inertia: [0.05 + 2 * r(), 0.05 + 2 * r(), 0.05 + 2 * r()], mass: 0.5 + 4.5 * r(), friction: 0.5, radius: 1 });
+  }
+  const contactView = new DataView(new ArrayBuffer(AvbdSolver.contactBytes(total, maxPairs) / 2));
+  let points = 0, zeroRows = 0;
+  const contact = (at: number, a: number, b: number) => {
+    const nn = direction();
+    const t1 = unit(cross(nn, Math.abs(nn[0]!) < 0.9 ? [1, 0, 0] : [0, 1, 0]));
+    const kN = stiffness(), kT = stiffness();
+    zeroRows += (kN === 0 ? 1 : 0) + (kT === 0 ? 2 : 0);
+    points++;
+    writeStruct(contactView, SolverContact, at, {
+      n: nn, t1, mu: r(), used: 1, raw: a === NONE_U32 ? [0, 0, 0] : [u(1), u(1), u(1)], rbw: [u(1), u(1), u(1)],
+      c0: [u(0.05), u(0.05), u(0.05)], lambdaN: r() < 0.3 ? 0 : -100 * r(), lt: r() < 0.3 ? [0, 0] : [u(50), u(50)], kN, kT, a, b,
+    });
+  };
+  const rowStart = new Uint32Array(total), rowLength = new Uint32Array(total), adjSlot = new Uint32Array(maxPairs);
+  for (let i = 2; i < n; i++) {
+    rowStart[i] = perBody * i;
+    rowLength[i] = Math.floor(r() * (perBody + 1));
+    for (let k = 0; k < rowLength[i]!; k++) {
+      const slot = perBody * i + k, other = n + Math.floor(r() * n), m = 1 + Math.floor(4 * r());
+      adjSlot[slot] = slot;
+      for (let q = 0; q < m; q++) { const onB = r() < 0.5; contact(4 * slot + q, onB ? other : i, onB ? i : other); }
+    }
+    const m = Math.floor(5 * r());
+    for (let q = 0; q < m; q++) contact(4 * (maxPairs + i) + q, NONE_U32, i);
+  }
+  // Bodies 0 and 1: one ground contact each with kN = kT = 0 (every row
+  // skipped) under a -0 seed in the rotational block (negative inertia at the
+  // identity rotation). Body 0's normal is y, so its output shows a tangent
+  // row not skipped; body 1's is x, so its output shows the normal row not
+  // skipped. No pair contacts (rowLength 0).
+  for (const [i, nn, t1] of [[0, [0, 1, 0], [1, 0, 0]], [1, [1, 0, 0], [0, 1, 0]]] as const) {
+    writeStruct(bodyView, SolverBody, i, { q0: [0, 0, 0, 1], dp: [0.1, 0.2, 0.3], phi: [-0, 0.01, 0.02], tp: [0, 0, 0], tphi: [0, 0, 0] });
+    writeStruct(propView, BodyProps, i, { inertia: [-1, -1, -1], mass: 1, friction: 0.5, radius: 1 });
+    writeStruct(contactView, SolverContact, 4 * (maxPairs + i), {
+      n: [...nn], t1: [...t1], mu: 0.5, used: 1, raw: [0, 0, 0], rbw: [1, 1, 1], c0: [0, 0, 0], lambdaN: 0, lt: [0, 0], kN: 0, kT: 0, a: NONE_U32, b: i,
+    });
+  }
+  const colorStart = new Uint32Array(MAX_COLORS + 1).fill(n);
+  colorStart[0] = 0;
+  const q = device.queue;
+  q.writeBuffer(solver.solver, 0, bodyView.buffer);
+  q.writeBuffer(B.props, 0, propView.buffer);
+  q.writeBuffer(solver.contacts, 0, contactView.buffer);
+  q.writeBuffer(B.order, 0, Uint32Array.from({ length: total }, (_, k) => k));
+  q.writeBuffer(B.colorStart, 0, colorStart);
+  q.writeBuffer(B.rowStart, 0, rowStart);
+  q.writeBuffer(B.rowLength, 0, rowLength);
+  q.writeBuffer(B.adjSlot, 0, adjSlot);
+  const enc = device.createCommandEncoder();
+  const pass = enc.beginComputePass();
+  solver.encodeProbe(pass, total, { primal: 0 }, 1);
+  pass.end();
+  q.submit([enc.finish()]);
+  const out = new DataView(await readBuffer(device, solver.solver, n * SolverBody.size));
+  const bits: number[] = [], before: number[] = [];
+  let nonFinite = 0;
+  for (let i = 0; i < n; i++) for (const f of ['dp', 'phi'] as const) for (let c = 0; c < 3; c++) {
+    const at = i * SolverBody.size + field(SolverBody, f).offset + 4 * c;
+    bits.push(out.getUint32(at, true));
+    before.push(bodyView.getUint32(at, true));
+    if (!Number.isFinite(out.getFloat32(at, true))) nonFinite++;
+  }
+  const error = await device.popErrorScope();
+  solver.destroy();
+  for (const b of Object.values(B)) b.destroy();
+  device.destroy();
+  return { error: error?.message ?? null, bits, changed: bits.filter((b, k) => b !== before[k]).length, nonFinite, points, zeroRows };
 }

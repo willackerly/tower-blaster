@@ -25,7 +25,7 @@ function call<K extends keyof D>(name: K, ...args: Parameters<D[K]>): Promise<Aw
 }
 
 const TINY: Partial<ProbeOptions> = {
-  reps: 2, warmup: 1, N: 300, checkpoints: [4, 8], R: 2, solveSteps: 2,
+  reps: 2, warmup: 1, N: 300, checkpoints: [4, 8], R: 2, solveSteps: 2, hessian: 'array',
   p3Sizes: [32, 64, 96, 128], p3Points: [4, 8], p3Threads: [64, 130], p3Inner: 1, p3Reps: 1,
   barrierRounds: 20, barrierThreads: [64, 256],
   gridGroups: [1, 2, 4], gridRounds: 10, maxPolls: 20_000,
@@ -58,7 +58,8 @@ describe('solver probe (every section, tiny)', () => {
     for (const [k, v] of Object.entries(r.p1.limits)) expect(v.device, k).toBe(v.adapter);
     expect(r.p1.limits.maxComputeWorkgroupStorageSize!.device).toBeGreaterThanOrEqual(16384);
 
-    // P2: every body is in exactly one colour, and each piece was timed.
+    // P2: the engine built the form asked for, every body is in exactly one colour, and each piece was timed.
+    expect(r.p2!.hessian).toBe('array');
     expect(r.p2!.checkpoints).toHaveLength(2);
     for (const c of r.p2!.checkpoints) {
       expect(c.n).toBe(300);
@@ -94,6 +95,7 @@ describe('solver probe (every section, tiny)', () => {
 
     const md = probeMarkdown(r, '## test');
     expect(md).toContain('## P4(d)');
+    expect(md).toContain('hessian array');
     if (!r.valid) expect(md).toContain('Not a performance result');
   });
 });

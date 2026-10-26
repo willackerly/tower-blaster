@@ -345,7 +345,16 @@ fn initBodies(@builtin(global_invocation_id) id: vec3u) {
   solver[i] = s;
 }`;
 
-const SOLVE = /* wgsl */ `
+// The primal sweep. Each body's 6x6 system is built and solved in one of two
+// forms (SolverDispatch.hessian), both generated here by solveWgsl() from the
+// same pieces: 'array', the original, in private arrays with dynamically
+// indexed loops, kept unchanged for A/B timing and as the tests' oracle; and
+// 'registers' (registerSolveBody()), the same floating-point operations in
+// the same order in named scalars, every loop unrolled. On the M5 Max the
+// solver probe (PR #40, probe-kernels.ts) measured a contact point at
+// 1450-1690 ns in the array form's shape and 357-556 ns in registers: the
+// private array spills.
+const SOLVE_HEAD = /* wgsl */ `
 ${COMMON}
 ${wgslStruct(ColorParams)}
 ${EVAL}
@@ -359,10 +368,16 @@ ${EVAL}
 @group(0) @binding(7) var<storage, read> adjSlot: array<u32>;
 @group(0) @binding(8) var<uniform> p: SolverParams;
 @group(0) @binding(9) var<uniform> cp: ColorParams;
+`;
 
+// The array form's system: module-scope private arrays, zeroed or assigned by each solveBody().
+const ARRAY_STORAGE = /* wgsl */ `
 var<private> lhs: array<f32, 36>;
 var<private> rhs: array<f32, 6>;
+`;
 
+// Row r (n, t1, t2) of the contact Jacobian for body b, or for body a.
+const JROW = /* wgsl */ `
 fn jrow(ct: SolverContact, r: u32, onB: bool) -> array<f32, 6> {
   var u = ct.n;
   if (r == 1u) { u = ct.t1; } else if (r == 2u) { u = cross(ct.n, ct.t1); }
@@ -371,10 +386,12 @@ fn jrow(ct: SolverContact, r: u32, onB: bool) -> array<f32, 6> {
   if (!onB) { w = -cross(ct.raw, u); u = -u; }
   return array<f32, 6>(u.x, u.y, u.z, w.x, w.y, w.z);
 }
+`;
 
-// Add one contact's force and stiffness to body i's system.
-fn accumulate(ct: SolverContact, i: u32) {
-  let onB = ct.b == i;
+// One contact's constraint values, clamped forces F (n, t1, t2) and tangent
+// stiffness kt, for body i: the head of the array form's accumulate(), shared
+// by both forms. Declares onB, me, C, F, kt and the temporaries they need.
+const CONTACT_FORCE = /* wgsl */ `  let onB = ct.b == i;
   let me = solver[i];
   var dpA = vec3f(0.0); var phiA = vec3f(0.0); var dpB = vec3f(0.0); var phiB = vec3f(0.0);
   if (onB) {
@@ -397,7 +414,13 @@ fn accumulate(ct: SolverContact, i: u32) {
   // Row stiffness K: k_n on the normal, k_t s on both tangents. Sliding, that
   // is the secant of the clamp (the half-quadratic upper bound of the friction
   // energy), continuous across the cone boundary; see the reference's step().
-  let kt = select(ct.kT, ct.kT * s, p.slidingHessian != 0u);
+  let kt = select(ct.kT, ct.kT * s, p.slidingHessian != 0u);`;
+
+// accumulate() and solveBody() in the array form.
+const ARRAY_SOLVE = /* wgsl */ `
+// Add one contact's force and stiffness to body i's system.
+fn accumulate(ct: SolverContact, i: u32) {
+${CONTACT_FORCE}
   let K = array<f32, 9>(ct.kN, 0.0, 0.0, 0.0, kt, 0.0, 0.0, 0.0, kt);
   let J = array<array<f32, 6>, 3>(jrow(ct, 0u, onB), jrow(ct, 1u, onB), jrow(ct, 2u, onB));
   for (var r = 0u; r < 3u; r++) {
@@ -477,7 +500,10 @@ fn solveBody(i: u32) {
   solver[i].dp = me.dp - vec3f(x[0], x[1], x[2]);
   solver[i].phi = me.phi - vec3f(x[3], x[4], x[5]);
 }
+`;
 
+// The entry points, the same in both forms.
+const SOLVE_TAIL = /* wgsl */ `
 // Colour cp.color, one thread per body, dispatched with enough groups for every body.
 @compute @workgroup_size(${WG})
 fn primal(@builtin(global_invocation_id) id: vec3u) {
@@ -515,6 +541,107 @@ fn primalTail(@builtin(local_invocation_index) lid: u32) {
   }
   solveColour(${MAX_COLORS - 1}u, 1u, lid);
 }`;
+
+/**
+ * solveBody() in the 'registers' form: the array form's solveBody() and
+ * accumulate() with lhs, rhs, L, D and x in named scalars and every loop
+ * unrolled, doing the same floating-point operations in the same order, so
+ * the two agree bit for bit wherever the compiler does not reassociate or
+ * contract one differently from the other. In detail:
+ * - Only the lower triangle of lhs is kept, hRC for row R >= column C: the
+ *   LDL^T reads nothing else. Entry (R, C) accumulates what lhs[6R + C]
+ *   does, (k J[r][R]) J[r][C]; the upper entry would round k J[r][C] instead.
+ * - K is diagonal (kN, kt, kt), so the array form's rows q != r are always
+ *   skipped; row r is skipped when its k is 0, as there (adding (0 a) b
+ *   instead can turn a -0 entry into +0, or 0 into NaN).
+ * - The gradient adds row 0, then 1, then 2, one addition per row.
+ * - The inertia seeds are the array form's lhs[7r] = mh and the rotational
+ *   block's I[r][c] / h2 with I[r][c] evaluated row first, as there.
+ * - The contacts are read in the same order (the body's pair slots, then
+ *   its ground slot), in one loop, so the update below is inlined once.
+ */
+function registerSolveBody(): string {
+  const xyz = (k: number) => 'xyz'[k]!;
+  const upTo = (n: number) => Array.from({ length: n }, (_, k) => k);
+  const lower: Array<[number, number]> = upTo(6).flatMap((r) => upTo(r + 1).map((c): [number, number] => [r, c]));
+  // I[r][c] as the array form's Irc: sum over k of I_k ax_k[r] ax_k[c], left to right.
+  const inertia = upTo(3).flatMap((r) => upTo(3).map((c) =>
+    `  let i${r}${c} = ${upTo(3).map((k) => `pr.inertia.${xyz(k)} * ax${k}.${xyz(r)} * ax${k}.${xyz(c)}`).join(' + ')};`));
+  const seed = (r: number, c: number) => (r === c && r < 3 ? 'mh' : r >= 3 && c >= 3 ? `i${r - 3}${c - 3} / h2` : '0.0');
+  const hessian = upTo(6).map((r) => `  ${lower.filter(([a]) => a === r).map(([a, c]) => `var h${a}${c} = ${seed(a, c)};`).join(' ')}`);
+  const gradient = [
+    ...upTo(3).map((r) => `  var g${r} = mh * (me.dp.${xyz(r)} - me.tp.${xyz(r)});`),
+    ...upTo(3).map((r) => `  var g${3 + r} = 0.0;${upTo(3).map((c) => ` g${3 + r} += i${r}${c} * dphi.${xyz(c)};`).join('')} g${3 + r} = g${3 + r} / h2;`),
+  ];
+  const ind = '      ';
+  const update: string[] = [];
+  for (let r = 0; r < 3; r++) update.push(`${ind}let J${r} = jrow(ct, ${r}u, onB);`);
+  for (let r = 0; r < 3; r++) update.push(`${ind}${upTo(6).map((u) => `g${u} += J${r}[${u}] * F[${r}];`).join(' ')}`);
+  for (let r = 0; r < 3; r++) {
+    const k = r === 0 ? 'ct.kN' : 'kt';
+    update.push(`${ind}if (${k} != 0.0) {`);
+    update.push(`${ind}  ${upTo(6).map((u) => `let k${u} = ${k} * J${r}[${u}];`).join(' ')}`);
+    for (let a = 0; a < 6; a++) update.push(`${ind}  ${upTo(a + 1).map((c) => `h${a}${c} += k${a} * J${r}[${c}];`).join(' ')}`);
+    update.push(`${ind}}`);
+  }
+  const ldl: string[] = [];
+  for (let j = 0; j < 6; j++) {
+    ldl.push(`  let d${j} = h${j}${j}${upTo(j).map((k) => ` - l${j}${k} * l${j}${k} * d${k}`).join('')};`);
+    for (let r = j + 1; r < 6; r++) {
+      const s = `h${r}${j}${upTo(j).map((k) => ` - l${r}${k} * l${j}${k} * d${k}`).join('')}`;
+      ldl.push(`  let l${r}${j} = ${j ? `(${s})` : s} / d${j};`);
+    }
+  }
+  for (let r = 0; r < 6; r++) ldl.push(`  let z${r} = g${r}${upTo(r).map((k) => ` - l${r}${k} * z${k}`).join('')};`);
+  for (let r = 0; r < 6; r++) ldl.push(`  let y${r} = z${r} / d${r};`);
+  for (let r = 5; r >= 0; r--) ldl.push(`  let x${r} = y${r}${upTo(5 - r).map((m) => ` - l${r + 1 + m}${r} * x${r + 1 + m}`).join('')};`);
+  return /* wgsl */ `
+// One primal update of body i, 'registers' form: the array form's solveBody()
+// and accumulate() in named scalars (registerSolveBody() in solver.ts).
+fn solveBody(i: u32) {
+  let me = solver[i];
+  let pr = props[i];
+  let h2 = p.dt * p.dt;
+  let mh = pr.mass / h2;
+  let ax0 = qrot(me.q0, vec3f(1.0, 0.0, 0.0));
+  let ax1 = qrot(me.q0, vec3f(0.0, 1.0, 0.0));
+  let ax2 = qrot(me.q0, vec3f(0.0, 0.0, 1.0));
+  let dphi = me.phi - me.tphi;
+${inertia.join('\n')}
+  // The system's lower triangle, hRC = lhs[6R + C], and its right-hand side.
+${hessian.join('\n')}
+${gradient.join('\n')}
+  // Pair slots first, then the ground slot (e == re).
+  let rs = rowStart[i];
+  let re = rs + rowLength[i];
+  for (var e = rs; e <= re; e++) {
+    var base = groundPoint(p.cur, i, 0u);
+    if (e < re) { base = pairPoint(p.cur, adjSlot[e], 0u); }
+    for (var q = 0u; q < 4u; q++) {
+      let ct = contacts[base + q];
+      if (ct.used == 0u) { break; }
+      // (The body's own state is read again here, as accumulate() does.)
+${CONTACT_FORCE.replace(/^/gm, '    ')}
+${update.join('\n')}
+    }
+  }
+  // LDL^T, forward substitution, D^-1, back substitution.
+${ldl.join('\n')}
+  solver[i].dp = me.dp - vec3f(x0, x1, x2);
+  solver[i].phi = me.phi - vec3f(x3, x4, x5);
+}
+`;
+}
+
+/** The two forms of the primal's 6x6 solve (SolverDispatch.hessian). */
+export const HESSIAN_FORMS = ['registers', 'array'] as const;
+export type HessianForm = (typeof HESSIAN_FORMS)[number];
+
+/** The primal shader (entry points primal and primalTail) with the system in the given form. */
+export function solveWgsl(hessian: HessianForm): string {
+  if (!HESSIAN_FORMS.includes(hessian)) throw new Error(`solveWgsl: hessian must be one of ${HESSIAN_FORMS.join(', ')}, got ${hessian}`);
+  return hessian === 'array' ? SOLVE_HEAD + ARRAY_STORAGE + JROW + ARRAY_SOLVE + SOLVE_TAIL : SOLVE_HEAD + JROW + registerSolveBody() + SOLVE_TAIL;
+}
 
 // Dual update (forces and penalties) and the end-of-step body updates.
 const DUAL = /* wgsl */ `
@@ -583,7 +710,8 @@ fn finalize(@builtin(global_invocation_id) id: vec3u) {
   bodies[i].rot = applyRotation(s.q0, s.phi);
 }`;
 
-export const SOLVER_WGSL = { PREP, MATCH, SETUP, INIT, SOLVE, DUAL };
+/** The other kernels' shaders; the primal's is solveWgsl(). */
+export const SOLVER_WGSL = { PREP, MATCH, SETUP, INIT, DUAL };
 
 /** Index = SolverParams.frictionCombine; combineFriction in the setup kernels follows this order. */
 export const COMBINE_RULES: readonly CombineRule[] = ['average', 'min', 'max', 'multiply'];
@@ -607,9 +735,9 @@ export interface GpuSolverParams {
 }
 
 /**
- * How the primal sweep is dispatched. Every choice does the same arithmetic
- * per body, colour after colour; within a colour the bodies share no contact,
- * so which thread takes which body does not change the result.
+ * How the primal sweep is dispatched and compiled. Every choice does the same
+ * arithmetic per body, colour after colour; within a colour the bodies share
+ * no contact, so which thread takes which body does not change the result.
  */
 export interface SolverDispatch {
   /**
@@ -632,9 +760,20 @@ export interface SolverDispatch {
    * which the tests use as an oracle for every other split.
    */
   tailThreads: number;
+  /**
+   * How each body's 6x6 system is held and solved (solveWgsl). 'array'
+   * (default): the earlier private arrays and loops, also the tests' oracle.
+   * 'registers': named scalars, unrolled (plan step 2b). It becomes the
+   * default once an M5 run shows it builds at 256 tail threads and is faster. Both do the same
+   * floating-point operations in the same order; on SwiftShader the results
+   * are bit-identical. A compiler that contracts or reassociates them
+   * differently could round differently, so on other GPUs they may differ
+   * in the last bits.
+   */
+  hessian: HessianForm;
 }
 
-export const DEFAULT_DISPATCH: SolverDispatch = { colorTail: 8, indirectColors: false, tailThreads: MAX_TAIL };
+export const DEFAULT_DISPATCH: SolverDispatch = { colorTail: 8, indirectColors: false, tailThreads: MAX_TAIL, hessian: 'array' };
 
 /** The default tail width on a software adapter (SwiftShader in tests and CI); see SolverDispatch.tailThreads. */
 export const SOFTWARE_TAIL_THREADS = 64;
@@ -697,6 +836,7 @@ export class AvbdSolver {
   constructor(private readonly device: GPUDevice, readonly capacity: number, readonly maxPairs: number, private readonly b: SolverBuffers, private readonly dispatch: SolverDispatch = DEFAULT_DISPATCH) {
     if (!(Number.isInteger(dispatch.colorTail) && dispatch.colorTail >= 0 && dispatch.colorTail < MAX_COLORS)) throw new Error(`AvbdSolver: colorTail must be an integer from 0 to ${MAX_COLORS - 1}, got ${dispatch.colorTail}`);
     if (!(Number.isInteger(dispatch.tailThreads) && dispatch.tailThreads >= 1 && dispatch.tailThreads <= MAX_TAIL)) throw new Error(`AvbdSolver: tailThreads must be an integer from 1 to ${MAX_TAIL}, got ${dispatch.tailThreads}`);
+    if (!HESSIAN_FORMS.includes(dispatch.hessian)) throw new Error(`AvbdSolver: hessian must be one of ${HESSIAN_FORMS.join(', ')}, got ${dispatch.hessian}`);
     const buf = (bytes: number, label: string) => (assertStorageFits(device, bytes, label), device.createBuffer({ size: Math.max(16, bytes), usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST, label }));
     this.solver = buf(capacity * SolverBody.size, 'avbd solver bodies');
     this.contacts = buf(AvbdSolver.contactBytes(capacity, maxPairs), 'avbd contacts');
@@ -722,7 +862,7 @@ export class AvbdSolver {
       });
       const pl = device.createPipelineLayout({ bindGroupLayouts: [layout] });
       const module = device.createShaderModule({ code, label: name });
-      for (const [, ...eps] of entries) for (const ep of eps) this.pipes[ep] = device.createComputePipeline({ layout: pl, compute: { module, entryPoint: ep, ...(constants[ep] ? { constants: constants[ep] } : {}) } });
+      for (const [, ...eps] of entries) for (const ep of eps) this.pipes[ep] = device.createComputePipeline({ label: `${name}: ${ep}`, layout: pl, compute: { module, entryPoint: ep, ...(constants[ep] ? { constants: constants[ep] } : {}) } });
       for (const [g, buffers] of groups) {
         this.binds[g] = device.createBindGroup({
           layout,
@@ -737,7 +877,7 @@ export class AvbdSolver {
     mk('avbd setup', SETUP, [['', 'pairSetup', 'groundSetup']], ['r', 'r', 'r', 'r', 'r', 'r', 'rw', 'r', 'u'],
       [['setup', [B.manifolds, B.groundManifolds, B.bodies, B.props, this.meta, B.prev, this.contacts, this.solver, this.uniform]]]);
     mk('avbd init', INIT, [['', 'initBodies']], ['rw', 'rw', 'u'], [['init', [B.bodies, this.solver, this.uniform]]]);
-    mk('avbd solve', SOLVE, [['', 'primal', 'primalTail']], ['r', 'rw', 'r', 'r', 'r', 'r', 'r', 'r', 'u', 'ud'],
+    mk('avbd solve', solveWgsl(dispatch.hessian), [['', 'primal', 'primalTail']], ['r', 'rw', 'r', 'r', 'r', 'r', 'r', 'r', 'u', 'ud'],
       [['solve', [B.props, this.solver, this.contacts, B.order, B.colorStart, B.rowStart, B.rowLength, B.adjSlot, this.uniform, this.colorUniform]]],
       { primalTail: { tailThreads: dispatch.tailThreads } });
     mk('avbd dual', DUAL, [['', 'dualPairs', 'dualGround', 'velocities', 'finalize']], ['rw', 'rw', 'rw', 'r', 'u'],
@@ -838,7 +978,8 @@ export class AvbdSolver {
   }
 
   /**
-   * Bench only (the solver probe, probe.ts); solve() never calls this. Encode
+   * Bench and tests only (the solver probe, probe.ts; the primal kernel test,
+   * test/page.ts primalKernel); solve() never calls this. Encode
    * `reps` copies of one piece of the last solve()'s main-iteration sweep,
    * issued exactly as solve() issues it, with its pipelines, bind groups and
    * the uniforms it left: colour c's primal dispatch, the tail workgroup, or
