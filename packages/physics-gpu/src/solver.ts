@@ -12,6 +12,9 @@
 //   pair list (the broadphase groups pairs by a) and reads the SAT axis of
 //   its previous manifold, which the narrowphase prefers; ground contacts
 //   sit at a fixed per-body slot.
+// - Rolling contacts (AvbdParams.rollingContacts) need last step's final
+//   displacements: setup() runs before initBodies(), so they are still in
+//   SolverBody.dp and phi, and setup reads them there.
 // - Post-stabilization is always on (the reference's default).
 //
 // Each kernel binds at most 8 storage buffers (the WebGPU default limit).
@@ -144,6 +147,9 @@ fn matchPairs(@builtin(global_invocation_id) id: vec3u) {
 }`;
 
 // Contacts from manifolds, with state carried over from last step.
+// Eight storage buffers, the WebGPU default limit (packages/gpu createDevice
+// requests no more): another binding needs one freed first, e.g. stepInfo
+// moved into a uniform.
 const SETUP = /* wgsl */ `
 ${COMMON}
 ${wgslStruct(Manifold)}
@@ -156,7 +162,9 @@ ${wgslStruct(Manifold)}
 // (last step's slot, axis) per pair, from match().
 @group(0) @binding(5) var<storage, read> prev: array<vec2u>;
 @group(0) @binding(6) var<storage, read_write> contacts: array<SolverContact>;
-@group(0) @binding(7) var<uniform> p: SolverParams;
+// Last step's final dp, phi per body (initBodies has not run yet): rolling contacts' slip and normal motion.
+@group(0) @binding(7) var<storage, read> solver: array<SolverBody>;
+@group(0) @binding(8) var<uniform> p: SolverParams;
 
 fn point(m: Manifold, q: u32) -> vec4f {
   switch q {
@@ -179,11 +187,29 @@ fn combineFriction(a: f32, b: f32) -> f32 {
 
 // Fill the 4 points of manifold m into contacts[dst + q]; old points (if
 // any) are contacts[old + q].
+//
+// Rolling contacts (the reference's collide() says why): a contact on a
+// sphere takes its points from this step's manifold, carries static friction
+// as last step's slip (its tangential C at the final dx, c0_t + J_t dx)
+// instead of its anchors, and is matched by the smaller sphere's lever arm in
+// world space (b's if they are equal; a box or the ground counts as
+// infinitely large). Between two bodies, a reused one that moved along its
+// normal by restDepth or more last step was in an impact: its load floor
+// stops at sqrt(m_a m_b) / h^2.
 fn setup(m: Manifold, a: u32, b: u32, mu: f32, dst: u32, old: u32, hasOld: bool) {
   var taken = array<bool, 4>(false, false, false, false);
   let n = m.normal;
   let t1 = tangent1(n);
   let t2 = cross(n, t1);
+  let sphereA = a != NONE && props[a].sphere != 0u;
+  let sphereB = props[b].sphere != 0u;
+  let roll = p.rollingContacts != 0u && (sphereA || sphereB);
+  let onB = sphereB && (!sphereA || props[b].radius <= props[a].radius);
+  // Last step's final displacements (zero for a body added since, and for the ground).
+  var dpA = vec3f(0.0); var phiA = vec3f(0.0);
+  if (roll && a != NONE) { dpA = solver[a].dp; phiA = solver[a].phi; }
+  var dpB = vec3f(0.0); var phiB = vec3f(0.0);
+  if (roll) { dpB = solver[b].dp; phiB = solver[b].phi; }
   for (var q = 0u; q < 4u; q++) {
     var ct: SolverContact;
     ct.used = 0u;
@@ -201,13 +227,21 @@ fn setup(m: Manifold, a: u32, b: u32, mu: f32, dst: u32, old: u32, hasOld: bool)
     ct.kN = p.penaltyMin;
     ct.kT = p.penaltyMin;
     ct.stick = 0u;
+    // A rolling contact's slip carried over (c0_t), if it held.
+    var slip = vec2f(0.0);
+    var carry = false;
     if (hasOld) {
+      // Matched by b's anchor, or a rolling contact by the smaller sphere's world lever arm.
+      var key = rb;
+      if (roll) { if (onB) { key = wb - B.pos; } else { key = wa - bodies[a].pos; } }
       var best = 4u;
       var bestD = p.matchDistance;
       for (var o = 0u; o < 4u; o++) {
         let oc = contacts[old + o];
         if (oc.used == 0u || taken[o]) { continue; }
-        let d = length(oc.rb - rb);
+        var ok = oc.rb;
+        if (roll) { ok = select(oc.raw, oc.rbw, onB); }
+        let d = length(ok - key);
         if (d < bestD) { best = o; bestD = d; }
       }
       if (best < 4u) {
@@ -218,12 +252,26 @@ fn setup(m: Manifold, a: u32, b: u32, mu: f32, dst: u32, old: u32, hasOld: bool)
         ct.lambdaN = oc.lambdaN;
         ct.lt = vec2f(dot(f, t1), dot(f, t2));
         ct.kN = clamp(oc.kN * p.gamma, p.penaltyMin, p.penaltyMax);
+        // How far its point on b moved relative to a's over last step, J dx as a world vector.
+        var u = vec3f(0.0);
+        if (roll) { u = dpB + cross(phiB, oc.rbw) - (dpA + cross(phiA, oc.raw)); }
         // Load floor (AvbdParams.restDepth): keeps a resting stack stiff enough not to lean over.
-        if (p.restDepth > 0.0) { ct.kN = min(max(ct.kN, abs(oc.lambdaN) / p.restDepth), p.penaltyMax); }
+        // A rolling contact between two bodies that moved along its normal by restDepth was in an impact.
+        if (p.restDepth > 0.0) {
+          var kFloor = abs(oc.lambdaN) / p.restDepth;
+          if (roll && a != NONE && abs(dot(oc.n, u)) >= p.restDepth) { kFloor = min(kFloor, sqrt(props[a].mass * props[b].mass) / (p.dt * p.dt)); }
+          ct.kN = min(max(ct.kN, kFloor), p.penaltyMax);
+        }
         ct.kT = clamp(oc.kT * p.gamma, p.penaltyMin, p.penaltyMax);
         // Static friction held at the end of last step: keep its anchors, unless they
-        // have drifted apart along the surface by stickThreshold since.
-        if (oc.inCone != 0u) {
+        // have drifted apart along the surface by stickThreshold since. A rolling
+        // contact keeps its fresh points and carries last step's slip instead.
+        if (oc.inCone != 0u && roll) {
+          let t2o = cross(oc.n, oc.t1);
+          let s = (oc.c0.y + dot(oc.t1, u)) * oc.t1 + (oc.c0.z + dot(t2o, u)) * t2o;
+          let st = vec2f(dot(s, t1), dot(s, t2));
+          if (length(st) < p.stickThreshold) { ct.stick = 1u; slip = st; carry = true; }
+        } else if (oc.inCone != 0u) {
           var opa = oc.ra;
           if (a != NONE) { opa = bodies[a].pos + qrot(bodies[a].rot, oc.ra); }
           let od = B.pos + qrot(B.rot, oc.rb) - opa;
@@ -239,6 +287,7 @@ fn setup(m: Manifold, a: u32, b: u32, mu: f32, dst: u32, old: u32, hasOld: bool)
     ct.n = n; ct.t1 = t1; ct.mu = mu; ct.used = 1u;
     ct.ra = ra; ct.rb = rb; ct.raw = raw; ct.rbw = rbw;
     ct.c0 = vec3f(dot(d, n) + p.slop, dot(d, t1), dot(d, t2));
+    if (carry) { ct.c0 = vec3f(ct.c0.x, ct.c0.y + slip.x, ct.c0.z + slip.y); }
     ct.a = a; ct.b = b;
     contacts[dst + q] = ct;
   }
@@ -682,6 +731,7 @@ export interface GpuSolverParams {
   sweep: boolean;
   slidingHessian: boolean;
   restDepth: number;
+  rollingContacts: boolean;
 }
 
 /**
@@ -824,8 +874,8 @@ export class AvbdSolver {
     mk('avbd prepare', PREP, [['', 'prepare']], ['r', 'r', 'rw', 'rw', 'u'], [['prep', [B.bodies, B.props, B.spheres, B.sweep, this.uniform]]]);
     mk('avbd match', MATCH, [['', 'matchPairs']], ['r', 'r', 'r', 'r', 'r', 'r', 'rw', 'u'],
       [['match', [B.pairs, B.total, this.meta, this.pairHist, this.offHist, B.manifolds, B.prev, this.uniform]]]);
-    mk('avbd setup', SETUP, [['', 'pairSetup', 'groundSetup']], ['r', 'r', 'r', 'r', 'r', 'r', 'rw', 'u'],
-      [['setup', [B.manifolds, B.groundManifolds, B.bodies, B.props, this.meta, B.prev, this.contacts, this.uniform]]]);
+    mk('avbd setup', SETUP, [['', 'pairSetup', 'groundSetup']], ['r', 'r', 'r', 'r', 'r', 'r', 'rw', 'r', 'u'],
+      [['setup', [B.manifolds, B.groundManifolds, B.bodies, B.props, this.meta, B.prev, this.contacts, this.solver, this.uniform]]]);
     mk('avbd init', INIT, [['', 'initBodies']], ['rw', 'rw', 'u'], [['init', [B.bodies, this.solver, this.uniform]]]);
     mk('avbd solve', solveWgsl(dispatch.hessian), [['', 'primal', 'primalTail']], ['r', 'rw', 'r', 'r', 'r', 'r', 'r', 'r', 'u', 'ud'],
       [['solve', [B.props, this.solver, this.contacts, B.order, B.colorStart, B.rowStart, B.rowLength, B.adjSlot, this.uniform, this.colorUniform]]],
@@ -850,6 +900,7 @@ export class AvbdSolver {
     i[at('slidingHessian')] = sp.slidingHessian ? 1 : 0; i[at('sweepOn')] = sp.sweep ? 1 : 0;
     i[at('frictionCombine')] = COMBINE_RULES.indexOf(frictionCombine);
     f[at('restDepth')] = sp.restDepth;
+    i[at('rollingContacts')] = sp.rollingContacts ? 1 : 0;
     this.device.queue.writeBuffer(this.uniform, 0, u);
   }
 

@@ -87,7 +87,7 @@ struct BodyProps {
   mass: f32, // @12
   friction: f32, // @16
   radius: f32, // @20 bounding sphere radius
-  pad0: u32, // @24
+  sphere: u32, // @24 1 for a sphere (radius is its radius), 0 for a box: picks rolling contacts (SolverParams.rollingContacts)
   pad1: u32, // @28
 }
 
@@ -123,7 +123,7 @@ struct SolverContact {
   raw: vec3f, // @64 a's lever arm in world space at the start of the step
   kT: f32, // @76 tangent penalty (shared by both rows)
   rbw: vec3f, // @80 b's lever arm
-  stick: u32, // @92 static friction held last step: anchors carried over
+  stick: u32, // @92 static friction held last step: anchors (a rolling contact: slip) carried over
   c0: vec3f, // @96 constraint at the start of the step along n, t1, t2
   a: u32, // @108 body a, 0xffffffff for the ground
   lt: vec2f, // @112 friction force along t1, t2
@@ -159,7 +159,7 @@ struct SolverParams {
   sweepOn: u32, // @96
   frictionCombine: u32, // @100 0 average, 1 min, 2 max, 3 multiply (SceneDesc.frictionCombine)
   restDepth: f32, // @104 load floor: a reused contact starts with kN >= |lambdaN| / restDepth; 0 = off
-  pad2: u32, // @108
+  rollingContacts: u32, // @108 1: a contact on a sphere is a rolling contact (AvbdParams.rollingContacts)
 }
 
 // Per-dispatch uniforms (bound with a dynamic offset).
