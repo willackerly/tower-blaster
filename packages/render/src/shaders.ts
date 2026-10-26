@@ -8,6 +8,7 @@ import { BEVEL_WGSL, OKLAB_WGSL } from './look.ts';
 import { SPARK_COMMON } from './sparks.ts';
 import { LIGHT_META, LIGHT_PACKED, LIGHT_VEC4, MAX_BALLS, TRAIL } from './lights.ts';
 import { AO_FOOT_WGSL, AO_SAMPLE_WGSL, AO_SEAM_WGSL } from './ao.ts';
+import { ATMO_COMMON_WGSL } from './atmosphere.ts';
 
 export const SHADOW_SIZE = 2048;
 export const SPHERE_SEG = 24;
@@ -43,9 +44,43 @@ export const Frame = defineStruct('Frame', [
   ['aoDims', 'vec3f', 'level-0 voxels'], ['aoOn', 'f32', '0: AO off'],
   ['aoK', 'vec4f', 'tap strengths (0.3, 0.9, 2.0 m), sky weight'],
   ['ramp0', 'vec4f', 'OKLab'], ['ramp1', 'vec4f'], ['ramp2', 'vec4f'], ['ramp3', 'vec4f'], ['ramp4', 'vec4f'],
+  ['atmoSigma', 'vec3f', 'real look: air extinction at the ground, per metre'], ['atmoEyeKm', 'f32', 'real look: eye height above the ground, km'],
+  ['sunDisc', 'vec3f', 'real look: sun disc radiance'], ['sunCos', 'f32', 'real look: cos of the sun disc angular radius'],
 ], 'Per-frame uniforms of the scene pass.');
 
-export const SCENE_WGSL = /* wgsl */ `
+// The real look's sky (atmosphere.ts): bind group 1, read by the scene
+// shader only when it is generated for that look (sceneWgsl(true)).
+const REAL_WGSL = /* wgsl */ `
+${ATMO_COMMON_WGSL}
+@group(1) @binding(0) var skyViewTex: texture_2d<f32>;
+@group(1) @binding(1) var skySamp: sampler;
+@group(1) @binding(2) var<storage, read> atmoAmbient: array<vec4f, 3>; // sky irradiance / pi, ground radiance, adapted exposure
+
+// In-scattered radiance (rgb) and green transmittance (a) along the view ray in direction dir (unit).
+fn skyLut(dir: vec3f) -> vec4f {
+  return textureSampleLevel(skyViewTex, skySamp, skyViewUv(dir, fr.sun, fr.atmoEyeKm), 0.0);
+}
+
+// Aerial perspective: the surface through d metres of air. The LUT holds
+// the in-scattering along the whole ray (to the ground or space) and that
+// ray's transmittance; the part within d is scaled by the optical depth
+// covered, exact for uniform air with a uniform source, and equal to the
+// sky itself at the horizon.
+fn aerial(c: vec3f, rel: vec3f) -> vec3f {
+  let d = length(rel);
+  let s = skyLut(rel / max(d, 1e-6));
+  let T = exp(-fr.atmoSigma * d);
+  return c * T + s.rgb * min((1.0 - T.g) / max(1.0 - s.a, 1e-4), 1.0);
+}
+`;
+
+/**
+ * The scene shader. real: the variant for looks with an atmosphere (sky,
+ * haze and ambient from atmosphere.ts, bind group 1); the other looks use
+ * the variant without it, so nothing of the real look reaches them.
+ */
+export function sceneWgsl(real = false): string {
+  return /* wgsl */ `
 ${wgslStruct(RenderRecord)}
 ${wgslStruct(Spark)}
 ${wgslStruct(FxState)}
@@ -68,6 +103,7 @@ ${wgslStruct(Frame)}
 ${AO_SAMPLE_WGSL}
 
 fn aoView() -> AoView { return AoView(fr.aoOrigin, fr.aoInvVoxel, fr.aoDims, fr.aoOn, fr.aoK); }
+${real ? REAL_WGSL : ''}
 @group(0) @binding(14) var<storage, read> aoFeet: array<vec4f>;      // ao.ts: per slot footprint, written by the splat
 // Bench diagnostics (RendererOptions.aoDiag 'no-seam'): the seam cavity compiled out.
 override AO_SEAM: bool = true;
@@ -269,6 +305,12 @@ fn skyColor(dir: vec3f) -> vec3f {
 }
 
 fn env(R: vec3f, rough: f32) -> vec3f {
+  ${real ? /* wgsl */ `// Until sky lighting lands (realism step 2): the sky view, blurred toward the mean sky by roughness, over the ground's radiance.
+  let sky = mix(skyLut(normalize(vec3f(R.x, max(R.y, 0.0), R.z))).rgb, atmoAmbient[0].rgb, rough);
+  return mix(atmoAmbient[1].rgb, sky, smoothstep(-0.05 - 0.3 * rough, 0.05 + 0.3 * rough, R.y));
+}
+
+fn envCandy(R: vec3f, rough: f32) -> vec3f {` : ''}
   var c = select(skyColor(R), mix(fr.skyHorizon, fr.floor * fr.ambSky, min(-4.0 * R.y, 1.0)), R.y < 0.0);
   c += fr.keyColor * softbox(R, fr.keyDir, fr.keySize, rough);
   c += fr.rimColor * softbox(R, fr.rimDir, fr.rimSize, rough);
@@ -276,6 +318,10 @@ fn env(R: vec3f, rough: f32) -> vec3f {
 }
 
 fn fog(c: vec3f, rel: vec3f) -> vec3f {
+  ${real ? `return aerial(c, rel);
+}
+
+fn fogCandy(c: vec3f, rel: vec3f) -> vec3f {` : ''}
   let y = rel.y + fr.eye.y - fr.groundY;
   let density = fr.fogDensity * exp(-max(y, 0.0) * fr.fogHeight);
   return mix(c, fr.skyHorizon, 1.0 - exp(-length(rel) * density));
@@ -298,7 +344,7 @@ fn shade(base: vec3f, rel: vec3f, n: vec3f, a: f32, ac: f32, coat: f32, ao: vec2
   // Ground contact: darker near the floor. The occupancy volume (ao.ts) adds what is nearby; sky visibility dims only the sky light.
   let contact = 0.5 + 0.5 * smoothstep(0.0, 1.5, rel.y + fr.eye.y - fr.groundY);
   let occl = contact * ao.x;
-  let amb = mix(fr.ambGround, fr.ambSky * ao.y, n.y * 0.5 + 0.5) * occl;
+  let amb = mix(${real ? 'atmoAmbient[1].rgb' : 'fr.ambGround'}, ${real ? 'atmoAmbient[0].rgb' : 'fr.ambSky'} * ao.y, n.y * 0.5 + 0.5) * occl;
   return base * (amb + fr.sunColor * sh) + fr.sunColor * spec * sh + reflections * occl + pointLights(base, rel, n, V, a);
 }
 
@@ -486,9 +532,13 @@ struct GOut { @builtin(position) clip: vec4f, @location(0) rel: vec3f }
   let w = fwidth(p);
   let line = abs(fract(p - 0.5) - 0.5) / max(w, vec2f(1e-4));
   let grid = (1.0 - min(min(line.x, line.y), 1.0)) * (1.0 - smoothstep(0.05, 0.4, max(w.x, w.y)));
-  let base = fr.floor * (1.0 + 2.0 * fr.floorGrid * grid);
+  return vec4f(groundShade(fr.floor * (1.0 + 2.0 * fr.floorGrid * grid), g.rel), 1.0);
+}
+
+// The lit, fogged floor at camera-relative rel (no derivatives: fsSky calls it in non-uniform control flow).
+fn groundShade(base: vec3f, rel: vec3f) -> vec3f {
   let up = vec3f(0.0, 1.0, 0.0);
-  return vec4f(fog(shade(base, g.rel, up, 0.36, 0.36, 0.0, aoAt(aoView(), g.rel, up, g.rel, vec3f(0.0))), g.rel), 1.0);
+  return fog(shade(base, rel, up, 0.36, 0.36, 0.0, aoAt(aoView(), rel, up, rel, vec3f(0.0))), rel);
 }
 
 struct SOut { @builtin(position) clip: vec4f, @location(0) ndc: vec2f }
@@ -505,7 +555,15 @@ struct SOut { @builtin(position) clip: vec4f, @location(0) ndc: vec2f }
 @fragment fn fsSky(s: SOut) -> @location(0) vec4f {
   let p = fr.invViewProj * vec4f(s.ndc, 1.0, 1.0);
   let dir = normalize(p.xyz / p.w);
-  return vec4f(select(skyColor(dir), fr.skyHorizon, dir.y < 0.0), 1.0);
+  ${real ? /* wgsl */ `// The sun disc, limb-darkened (I(mu) = 1 - 0.6 (1 - mu), normalized to mean 1), its rim antialiased.
+  let cs = dot(dir, fr.sun);
+  let x = sqrt(max(1.0 - cs * cs, 0.0)) / sqrt(1.0 - fr.sunCos * fr.sunCos);
+  let rim = 1.0 - smoothstep(1.0 - 1.5 * fwidth(x), 1.0, x);
+  // Below the horizon, the floor goes on past the floor polygon's reach: the same shading, through more air.
+  let hEye = fr.eye.y - fr.groundY;
+  if (dir.y < 0.0 && hEye > 0.0) { return vec4f(groundShade(fr.floor, dir * (hEye / -dir.y)), 1.0); }
+  let disc = fr.sunDisc * (1.0 - 0.6 * (1.0 - sqrt(max(1.0 - x * x, 0.0)))) / 0.8 * select(0.0, rim, cs > 0.0);
+  return vec4f(skyLut(dir).rgb + disc, 1.0);` : 'return vec4f(select(skyColor(dir), fr.skyHorizon, dir.y < 0.0), 1.0);'}
 }
 
 // ---------------------------------------------------------------- sparks
@@ -600,3 +658,6 @@ struct TrailOut {
   return vec4f(fr.ball * fr.ballEmissive * 0.6 * o.fade * soft, 0.0);
 }
 `;
+}
+
+export const SCENE_WGSL = sceneWgsl();

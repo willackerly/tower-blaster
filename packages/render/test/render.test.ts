@@ -10,6 +10,7 @@ import { Body, readStruct, Shape, TIER } from '@tb/schema';
 import { RapierHost } from '@tb/adapter-rapier';
 import { TieredEngine } from '@tb/lattice';
 import { isSoftwareAdapter, loadBundle, openWebGPU, type WebGPUSession } from '@tb/testkit';
+import { ADAPT_MAX, ADAPT_REF, adaptedExposure, CLEAR_DAY, MIE_H, mieExtinction, multiTable, normalize, OZONE, OZONE_WIDTH, RAYLEIGH, RAYLEIGH_H, skyRadiance, skyViewDir, skyViewUv, sunAtGround, sunDiscRadiance, transmittance, transmittanceHMu, transmittanceTable, transmittanceUv } from '../src/index.ts';
 import { agx, aoFootReference, bevelNormal, type V3, CANDY_NIGHT, CTL, HOT_FULL, MAX_EVENTS, SPAWN_BUDGET, FX_WORDS, packFx, tintWord, unpackFx, frustumPlanes, linearToOklab, listMatches, oklabToLinear, srgbToLinear, lookAt, lookOf, lookRange, MATERIAL, multiply, packBodies, changedRanges, drawnTier, packShapes, paletteOf, perspective, unpackLook } from '../src/index.ts';
 import type * as Drivers from './page.ts';
 
@@ -205,6 +206,72 @@ describe('look math (CPU twins)', () => {
     const edge: [number, number, number] = [0.5, 0.499, 0.2];
     expect(bevelNormal(edge, [1, 0, 0], half, 0.001, 0.06)[1]).toBeGreaterThan(0.1); // resolved: tilted
     expect(bevelNormal(edge, [1, 0, 0], half, 0.2, 0.06)).toEqual([1, 0, 0]); // 3x the radius per pixel: flat
+  });
+});
+
+describe('atmosphere (CPU twin)', () => {
+  it('exposure adaptation: fixed at 0, unchanged at the reference light, partial in between, clamped', () => {
+    const E: V3 = [9.4, 9.4, 9.4], ref = ADAPT_REF * 9.4;
+    expect(adaptedExposure(ref, E, 1.1, 0.75)).toBeCloseTo(1.1, 12);
+    expect(adaptedExposure(ref / 10, E, 1.1, 0)).toBe(1.1);
+    // A tenth of the light: full adaptation gives 10x, 0.75 gives 10^0.75.
+    expect(adaptedExposure(ref / 10, E, 1, 1)).toBeCloseTo(10, 10);
+    expect(adaptedExposure(ref / 10, E, 1, 0.75)).toBeCloseTo(10 ** 0.75, 10);
+    // The reference follows the sun's strength: twice the sun and twice the light leave the exposure as set.
+    expect(adaptedExposure(2 * ref, [18.8, 18.8, 18.8], 1, 1)).toBeCloseTo(1, 12);
+    expect(adaptedExposure(0, E, 1, 1)).toBe(ADAPT_MAX);
+    expect(adaptedExposure(1e6, E, 1, 1)).toBe(1 / ADAPT_MAX);
+  });
+
+  const a = CLEAR_DAY;
+  const el = (deg: number): V3 => [Math.cos((deg * Math.PI) / 180), Math.sin((deg * Math.PI) / 180), 0];
+  const T = transmittanceTable(a);
+  const M = multiTable(a, T, 8, 8);
+  const sky = (sun: V3, dir: V3, at = a, t = T, m = M) => skyRadiance(at, t, m, sun, dir, 0.03)[0];
+
+  it('vertical transmittance matches the analytic optical depth of the exponential layers', () => {
+    const me = mieExtinction(a);
+    const tau = [0, 1, 2].map((k) => RAYLEIGH[k]! * RAYLEIGH_H * (1 - Math.exp(-100 / RAYLEIGH_H)) + me * MIE_H * (1 - Math.exp(-100 / MIE_H)) + OZONE[k]! * OZONE_WIDTH);
+    transmittance(a, 0, 1).forEach((t, k) => expect(Math.abs(t / Math.exp(-tau[k]!) - 1)).toBeLessThan(2e-3)); // measured 1.1e-3
+  });
+
+  it('LUT parameterizations round-trip', () => {
+    for (const [h, mu] of [[0.002, 0.3], [0.01, 0.3], [40, -0.2], [1, 1], [99, -0.9], [0.5, 0]] as const) {
+      const [h2, mu2] = transmittanceHMu(...transmittanceUv(h, mu));
+      expect(h2 / h).toBeCloseTo(1, 9);
+      expect(mu2).toBeCloseTo(mu, 6);
+    }
+    for (const d of [[0.3, 0.9, 0.1], [-0.7, 0.05, 0.4], [0.2, -0.3, -0.9], [0, 1, 0]] as V3[]) {
+      const n = normalize(d), back = skyViewDir(...skyViewUv(n, [1, 0, 0], 0.03), 0.03);
+      expect(back[1]).toBeCloseTo(n[1], 6); // elevation; azimuth is folded about the sun
+      if (Math.hypot(n[0], n[2]) > 1e-3) expect(back[0] / Math.hypot(back[0], back[2])).toBeCloseTo(n[0] / Math.hypot(n[0], n[2]), 5); // cos of the azimuth from the sun
+    }
+  });
+
+  it('the sky is blue overhead and paler at the horizon; the low sun is redder and dimmer', () => {
+    const noon = el(60), zen = sky(noon, [0, 1, 0]), hor = sky(noon, normalize([0, 0.02, 1]));
+    expect(zen[2] / zen[0]).toBeGreaterThan(1.5); // measured 1.8 (30 degrees from the sun)
+    expect(hor[2] / hor[0]).toBeLessThan(0.8 * (zen[2] / zen[0])); // measured 0.69 x
+    const high = sunAtGround(a, el(60)), low = sunAtGround(a, el(4));
+    expect(low[0] / low[2]).toBeGreaterThan(2 * (high[0] / high[2]));
+    expect(low[1]).toBeLessThan(high[1]);
+    expect(sunAtGround(a, el(-3))).toEqual([0, 0, 0]); // below the horizon
+  });
+
+  it('lower visibility whitens the horizon and dims the sun', () => {
+    const hazy = { ...a, visibility: 8 }, Th = transmittanceTable(hazy), Mh = multiTable(hazy, Th, 8, 8);
+    const sun = el(30), dir = normalize([0, 0.05, 1]);
+    const clear = sky(sun, dir), murky = sky(sun, dir, hazy, Th, Mh);
+    expect(murky[2] / murky[0]).toBeLessThan(clear[2] / clear[0]);
+    expect(sunAtGround(hazy, sun)[1]).toBeLessThan(0.8 * sunAtGround(a, sun)[1]);
+  });
+
+  it('the sun disc keeps its colour inside the half-float range', () => {
+    for (const d of [60, 10, 2]) {
+      const L = sunDiscRadiance(a, el(d)), s = sunAtGround(a, el(d));
+      expect(Math.max(...L)).toBeLessThanOrEqual(6e4);
+      expect(L[0] / L[2]).toBeCloseTo(s[0] / s[2], 6);
+    }
   });
 });
 
@@ -783,6 +850,50 @@ describe('drawing', () => {
     }
   });
 
+  it('atmosphere LUT passes match their CPU twins, pass by pass', async (ctx) => {
+    if (!gpu) return ctx.skip();
+    const el = (deg: number): V3 => normalize([Math.cos((deg * Math.PI) / 180) * 0.6, Math.sin((deg * Math.PI) / 180), Math.cos((deg * Math.PI) / 180) * -0.8]);
+    const sun35 = el(35);
+    for (const [sun, eye] of [[sun35, 0.03], [el(4), 0.002], [el(-2), 0.1]] as [V3, number][]) {
+      const r = await call('atmosphereTwins', sun, eye);
+      expect(r.error).toBeNull();
+      expect(r.finite).toBe(true);
+      // Measured on SwiftShader, worst of the three: 4.8e-4 (half-float rounding), 4e-4, 2.3e-2 (2 m up, just below
+      // the horizon, where transmittance changes fastest and the sampler's fixed-point weights show), 3.2e-3 absolute, 1.7e-4.
+      expect(r.worst.transmittance).toBeLessThan(1e-3);
+      expect(r.worst.multi).toBeLessThan(2e-3);
+      expect(r.worst.sky).toBeLessThan(4e-2);
+      expect(r.worst.skyAlpha).toBeLessThan(5e-3);
+      expect(r.worst.ambient).toBeLessThan(2e-3);
+      expect(r.worst.exposure).toBeLessThan(1e-4);
+      if (sun === sun35) {
+        // ADAPT_REF is this ratio (measured at 30 m), so the default sun keeps the exposure as set.
+        expect(Math.abs(r.illuminance / r.sunIlluminanceLuma / ADAPT_REF - 1)).toBeLessThan(5e-3);
+        expect(r.exposure).toBeCloseTo(1.3, 2);
+      }
+    }
+  });
+
+  it('real look: blue sky paling to the horizon, exposure adapting to a low sun, no stylized lights', async (ctx) => {
+    if (!gpu) return ctx.skip();
+    const r = await call('realChecks', ['hazy', {}, { sunElevation: 4, sunAzimuth: 200 }, { sunElevation: 4, sunAzimuth: 200, autoExposure: 0 }]);
+    expect(r.error).toBeNull();
+    const [hazy, noon, low, lowFixed] = r.frames as NonNullable<typeof r.frames>;
+    // Measured on SwiftShader: high sky b/r 1.99, just above the horizon 1.04; the low sun's horizon r/b 1.55.
+    const br = (c: number[]) => c[2]! / c[0]!;
+    expect(br(noon!.top)).toBeGreaterThan(1.6);
+    expect(br(noon!.horizon)).toBeLessThan(0.65 * br(noon!.top));
+    expect(br(low!.horizon)).toBeLessThan(0.8);
+    // Mean luma 124 at noon; at 4 degrees 116 adapting (0.75), 46 fixed: partial adaptation keeps dusk a little darker.
+    expect(low!.meanLuma).toBeGreaterThan(0.75 * noon!.meanLuma);
+    expect(low!.meanLuma).toBeLessThan(noon!.meanLuma);
+    expect(lowFixed!.meanLuma).toBeLessThan(0.5 * noon!.meanLuma);
+    // The ball is a light in hazy; real has no stylized lights.
+    expect(hazy!.lit).toBe(1);
+    expect(noon!.lit).toBe(0);
+    expect(low!.lit).toBe(0);
+  });
+
   it('pixel readback is RGBA whatever the output format (Apple prefers BGRA)', async (ctx) => {
     if (!gpu) return ctx.skip();
     const rgba = await call('sceneHash', {}, 'rgba8unorm'), bgra = await call('sceneHash', {}, 'bgra8unorm');
@@ -841,7 +952,7 @@ describe('drawing', () => {
   it('bench:render completes and reports every case (numbers discarded)', async (ctx) => {
     if (!gpu) return ctx.skip();
     const r = await call('runRenderBench', { width: 160, height: 90, counts: [800], warmup: 1, batches: 2, batchFrames: 1, profiledFrames: 1, sparkPool: 1024 });
-    expect(r.cases.map((c) => `${c.world}:${c.variant}`)).toEqual(['near', 'far'].flatMap((w) => ['full', 'no-shadow', 'no-post', 'no-sparks', 'no-heat', 'no-ao', 'no-seam', 'fan', 'cube', 'flat-fan', 'flat-cube'].map((v) => `${w}:${v}`)));
+    expect(r.cases.map((c) => `${c.world}:${c.variant}`)).toEqual(['near', 'far'].flatMap((w) => ['full', 'no-shadow', 'no-post', 'no-sparks', 'no-heat', 'no-ao', 'no-seam', 'fan', 'cube', 'flat-fan', 'flat-cube', 'real'].map((v) => `${w}:${v}`)));
     for (const c of r.cases) {
       expect(c.bodies).toBe(800);
       expect(c.frameMs).toBeGreaterThan(0);

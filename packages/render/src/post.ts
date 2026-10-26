@@ -159,10 +159,15 @@ export class Post {
     for (let i = views.length - 2; i >= 0; i--) this.draw(enc, this.up, views[i + 1]!, views[i]!, true, stamp);
   }
 
-  /** Bloom, then composite into out. */
-  encode(enc: GPUCommandEncoder, hdr: GPUTexture, out: GPUTextureView, p: PostParams, stamp: Stamp = noStamp): void {
+  /**
+   * Bloom, then composite into out. exposureFrom: a GPU-computed exposure
+   * (an f32 at offset in buffer, which needs COPY_SRC) that replaces
+   * p.exposure, copied in on the GPU timeline.
+   */
+  encode(enc: GPUCommandEncoder, hdr: GPUTexture, out: GPUTextureView, p: PostParams, stamp: Stamp = noStamp, exposureFrom?: { buffer: GPUBuffer; offset: number }): void {
     this.encodeBloom(enc, hdr, true, stamp);
     this.device.queue.writeBuffer(this.uniform, 0, new Float32Array([p.bloomMix, p.exposure, p.vignette, this.levels.length]));
+    if (exposureFrom) enc.copyBufferToBuffer(exposureFrom.buffer, exposureFrom.offset, this.uniform, 4, 4);
     const pass = enc.beginRenderPass({ ...stamp('composite'), colorAttachments: [{ view: out, loadOp: 'clear', clearValue: { r: 0, g: 0, b: 0, a: 1 }, storeOp: 'store' }] });
     pass.setPipeline(this.composite);
     pass.setBindGroup(0, this.device.createBindGroup({

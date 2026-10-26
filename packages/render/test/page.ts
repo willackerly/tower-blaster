@@ -7,7 +7,7 @@ import { emptySnapshot, TAG_BALL, type BodyDesc, type Snapshot } from '@tb/engin
 import { createDevice, readBuffer } from '@tb/gpu';
 import { Body, RenderRecord, Shape, TIER, readStruct } from '@tb/schema';
 import {
-  agx, AGX_WGSL, LOOKS, fromHalf, FX_WORDS, packFx, toHalf, bevelNormal, BEVEL_WGSL, oklabToLinear, OKLAB_WGSL, Post,
+  agx, AGX_WGSL, LOOKS, realLook, type RealOptions, type LookParams, fromHalf, Atmosphere, CLEAR_DAY, transmittance, transmittanceHMu, multiScattering, skyViewDir, skyRadiance, skyViewUv, sampleTransmittance, ambientOf, distanceToGround, meteredIlluminance, adaptedExposure, LUMA, R_TOP, R_GROUND, FX_WORDS, packFx, toHalf, bevelNormal, BEVEL_WGSL, oklabToLinear, OKLAB_WGSL, Post,
   Culler, cullReference, GpuBodySource, invert, listMatches, lookAt, makeGpuBodies, multiply, packBodies, perspective, Renderer, SEGMENTS, SnapshotSource, transform,
   translation, normalize, BOX_VERTS, SPHERE_VERTS, SUN, Sparks, CTL, MAX_EVENTS, flashSlot, FLASHES, MAX_BALLS, TRAIL, Lights, LIGHTS, LIGHT_META, LIGHT_PACKED, MATERIAL, AoVolume, aoGrid, aoFrame, splatReference, composeReference, AO_FOOT_WGSL, AO_SAMPLE_WGSL, AO_SEAM_WGSL, AO_ONE, type SplatBody, unpackImpacts, unpackSparks, spawnReference, stepReference, type Impact, type BodySource, type CullFrame, type FrameParams, type RendererOptions, type V3,
 } from '../src/index.ts';
@@ -1648,9 +1648,7 @@ const GOLDEN_VIEWS: Record<string, [V3, V3]> = {
  * shader's paths draw. Still bodies, so no spark lives and nothing depends on
  * timing.
  */
-export async function lookHashes(looks: string[], size: [number, number] = [320, 180]) {
-  const { device } = await createDevice({ timestamps: false });
-  device.pushErrorScope('validation');
+function goldenScene(device: GPUDevice): SnapshotSource {
   const descs: BodyDesc[] = [];
   for (let t = 0; t < 4; t++) for (let y = 0; y < 6; y++) descs.push(box([t * 3 - 4.5, 0.5 + y, -3], [0.5, 0.5, 0.5], [0, 0, 0, 1], t));
   const r = rng(3);
@@ -1659,14 +1657,33 @@ export async function lookHashes(looks: string[], size: [number, number] = [320,
   const src = new SnapshotSource(device);
   src.reset(descs);
   src.update(snapshotOf(descs), descs);
+  return src;
+}
+
+function goldenRenderer(device: GPUDevice, src: BodySource, look: LookParams, size: [number, number]): Renderer {
+  const rend = new Renderer(device, { size }, { format: 'rgba8unorm' });
+  rend.look = look;
+  rend.setSource(src);
+  rend.setShadowBounds([0, 3, -1], 14, [9, 7, 9]);
+  rend.setFx(5, { tint: [1, 0.5, 0.25], emissive: 0.25 });
+  rend.setOverlay(new Float32Array([1.5, 1, 3, 0.15]));
+  return rend;
+}
+
+/**
+ * FNV-1a hash of the RGBA frame of each look and view, for the golden-image
+ * gate (render.test.ts): towers, tumbled boxes, the ball, an overlay sphere
+ * and a tinted, glowing slot, with the arena set, so most of the scene
+ * shader's paths draw. Still bodies, so no spark lives and nothing depends on
+ * timing.
+ */
+export async function lookHashes(looks: string[], size: [number, number] = [320, 180]) {
+  const { device } = await createDevice({ timestamps: false });
+  device.pushErrorScope('validation');
+  const src = goldenScene(device);
   const hashes: Record<string, number> = {};
   for (const name of looks) {
-    const rend = new Renderer(device, { size }, { format: 'rgba8unorm' });
-    rend.look = LOOKS[name]!;
-    rend.setSource(src);
-    rend.setShadowBounds([0, 3, -1], 14, [9, 7, 9]);
-    rend.setFx(5, { tint: [1, 0.5, 0.25], emissive: 0.25 });
-    rend.setOverlay(new Float32Array([1.5, 1, 3, 0.15]));
+    const rend = goldenRenderer(device, src, LOOKS[name]!, size);
     for (const [view, [eye, target]] of Object.entries(GOLDEN_VIEWS)) {
       const f: FrameParams = { ...camera(eye, target, size[0] / size[1]), groundY: 0, time: 1, dt: 0, alpha: 1 };
       await rend.render(f);
@@ -1680,6 +1697,62 @@ export async function lookHashes(looks: string[], size: [number, number] = [320,
   const err = await device.popErrorScope();
   device.destroy();
   return { hashes, error: err?.message ?? null };
+}
+
+/**
+ * The golden scene in a look (a LOOKS name, or realLook options), as RGBA
+ * rows: for image checks and screenshots. Also returns the mean colour of
+ * the top and bottom rows of sky (looking up from the low view) when sky is set.
+ */
+export async function lookFrame(look: string | Partial<RealOptions>, eye: V3, target: V3, size: [number, number] = [320, 180], far = 400) {
+  const { device } = await createDevice({ timestamps: false });
+  device.pushErrorScope('validation');
+  const src = goldenScene(device);
+  const rend = goldenRenderer(device, src, typeof look === 'string' ? LOOKS[look]! : realLook(look), size);
+  const f: FrameParams = { viewProj: multiply(perspective(0.9, size[0] / size[1], 0.1, far), lookAt(eye, target)), eye, groundY: 0, time: 1, dt: 0, alpha: 1 };
+  await rend.render(f);
+  const stats = (await rend.render(f, true, true))!;
+  const err = await device.popErrorScope();
+  rend.destroy();
+  device.destroy();
+  return { width: size[0], height: size[1], data: stats.pixels!.data, bytesPerRow: stats.pixels!.bytesPerRow, meanLuma: stats.meanLuma, error: err?.message ?? null };
+}
+
+/**
+ * The real look end to end: frames of the golden scene from a view with the
+ * horizon in it, for each look given. Per frame: mean luma, the mean sRGB of
+ * the top rows (high sky) and of a band just above the horizon, and the lit
+ * count of the point lights (lights.ts meta) after the frame.
+ */
+export async function realChecks(looks: Array<string | Partial<RealOptions>>, size: [number, number] = [320, 180]) {
+  const { device } = await createDevice({ timestamps: false });
+  device.pushErrorScope('validation');
+  const src = goldenScene(device);
+  const eye: V3 = [0, 2, 9];
+  const viewProj = multiply(perspective(0.9, size[0] / size[1], 0.1, 400), lookAt(eye, [0, 2.6, -1]));
+  // Row of the horizon: a far point at eye height.
+  const far = [eye[0], eye[1], eye[2] - 1e5, 1];
+  const clip = [0, 1, 2, 3].map((i) => far.reduce((acc, v, j) => acc + viewProj[j * 4 + i]! * v, 0));
+  const horizonRow = Math.round(((1 - clip[1]! / clip[3]!) / 2) * size[1]);
+  const out = [];
+  for (const look of looks) {
+    const rend = goldenRenderer(device, src, typeof look === 'string' ? LOOKS[look]! : realLook(look), size);
+    const f: FrameParams = { viewProj, eye, groundY: 0, time: 1, dt: 0, alpha: 1 };
+    await rend.render(f);
+    const stats = (await rend.render(f, true, true))!;
+    const { data, bytesPerRow } = stats.pixels!;
+    const band = (r0: number, r1: number) => {
+      const m = [0, 0, 0];
+      for (let y = r0; y < r1; y++) for (let x = 0; x < size[0]; x++) for (let c = 0; c < 3; c++) m[c] = m[c]! + data[y * bytesPerRow + 4 * x + c]! / ((r1 - r0) * size[0]);
+      return m;
+    };
+    const meta = new Float32Array(await readBuffer(device, rend.lights.lights)).slice(LIGHT_META * 4, LIGHT_META * 4 + 4);
+    out.push({ meanLuma: stats.meanLuma, top: band(0, 8), horizon: band(horizonRow - 8, horizonRow - 3), lit: meta[1]! });
+    rend.destroy();
+  }
+  const err = await device.popErrorScope();
+  device.destroy();
+  return { frames: out, horizonRow, error: err?.message ?? null };
 }
 
 export interface AoProbeBody { pos: V3; half: V3; rot?: number[]; sphere?: boolean }
@@ -1951,4 +2024,90 @@ export async function seamVsNone(scale: number) {
   const err = await device.popErrorScope();
   device.destroy();
   return { maxDiff, changed, boxPx, error: err?.message ?? null };
+}
+
+// ---------------------------------------------------------------- atmosphere
+
+/** An rgba16float texture read back as rgb tables plus the alpha channel. */
+async function readLut(device: GPUDevice, tex: GPUTexture): Promise<{ rgb: { w: number; h: number; data: Float32Array }; alpha: Float32Array }> {
+  const w = tex.width, h = tex.height, bytesPerRow = Math.ceil((w * 8) / 256) * 256;
+  const buf = device.createBuffer({ size: bytesPerRow * h, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST });
+  const enc = device.createCommandEncoder();
+  enc.copyTextureToBuffer({ texture: tex }, { buffer: buf, bytesPerRow }, [w, h]);
+  device.queue.submit([enc.finish()]);
+  await buf.mapAsync(GPUMapMode.READ);
+  const raw = new Uint16Array(buf.getMappedRange().slice(0));
+  buf.destroy();
+  const data = new Float32Array(w * h * 3), alpha = new Float32Array(w * h);
+  for (let j = 0; j < h; j++) for (let i = 0; i < w; i++) {
+    const o = (j * bytesPerRow) / 2 + i * 4;
+    for (let k = 0; k < 3; k++) data[(j * w + i) * 3 + k] = fromHalf(raw[o + k]!);
+    alpha[j * w + i] = fromHalf(raw[o + 3]!);
+  }
+  return { rgb: { w, h, data }, alpha };
+}
+
+/**
+ * The atmosphere passes against their CPU twins, each pass in isolation:
+ * the CPU recomputes a pass from the GPU's own inputs (the LUTs read back),
+ * so an error is that pass's. Returns the worst relative error per pass
+ * (texels sampled with a stride) and the ambient pair.
+ */
+export async function atmosphereTwins(sun: V3, eyeKm: number, visibility = CLEAR_DAY.visibility) {
+  const { device } = await createDevice({ timestamps: false });
+  device.pushErrorScope('validation');
+  const a = { ...CLEAR_DAY, visibility };
+  const atmo = new Atmosphere(device);
+  const enc = device.createCommandEncoder();
+  const cp = enc.beginComputePass();
+  atmo.encode(cp, a, sun, eyeKm, 1.3, 0.75);
+  cp.end();
+  device.queue.submit([enc.finish()]);
+  const T = await readLut(device, atmo.transmittance), M = await readLut(device, atmo.multi), S = await readLut(device, atmo.skyView);
+  const amb = new Float32Array(await readBuffer(device, atmo.ambient));
+  const rel = (g: number, c: number) => Math.abs(g - c) / Math.max(Math.abs(c), 1e-4);
+  const worst = { transmittance: 0, multi: 0, sky: 0, skyAlpha: 0, ambient: 0, exposure: 0 };
+  let finite = true;
+  const check = (vals: ArrayLike<number>) => { for (let i = 0; i < vals.length; i++) if (!Number.isFinite(vals[i]!)) finite = false; };
+  [T.rgb.data, M.rgb.data, S.rgb.data, S.alpha, amb].forEach(check);
+  for (let j = 0; j < T.rgb.h; j += 3) for (let i = 0; i < T.rgb.w; i += 5) {
+    const want = transmittance(a, ...transmittanceHMu((i + 0.5) / T.rgb.w, (j + 0.5) / T.rgb.h));
+    for (let k = 0; k < 3; k++) worst.transmittance = Math.max(worst.transmittance, rel(T.rgb.data[(j * T.rgb.w + i) * 3 + k]!, want[k]!));
+  }
+  for (let j = 0; j < M.rgb.h; j += 5) for (let i = 0; i < M.rgb.w; i += 5) {
+    const muS = 2 * ((((i + 0.5) / M.rgb.w) - 0.5 / M.rgb.w) / (1 - 1 / M.rgb.w)) - 1;
+    const h = ((((j + 0.5) / M.rgb.h) - 0.5 / M.rgb.h) / (1 - 1 / M.rgb.h)) * (R_TOP - R_GROUND);
+    const want = multiScattering(a, T.rgb, muS, h);
+    for (let k = 0; k < 3; k++) worst.multi = Math.max(worst.multi, rel(M.rgb.data[(j * M.rgb.w + i) * 3 + k]!, want[k]!));
+  }
+  const sunLocal: V3 = [Math.hypot(sun[0], sun[2]), sun[1], 0];
+  let skyWorstAt: { dir: V3; gpu: number; cpu: number } | null = null;
+  for (let j = 0; j < S.rgb.h; j += 7) for (let i = 0; i < S.rgb.w; i += 11) {
+    const dir = skyViewDir((i + 0.5) / S.rgb.w, (j + 0.5) / S.rgb.h, eyeKm);
+    const [L, t] = skyRadiance(a, T.rgb, M.rgb, sunLocal, dir, eyeKm);
+    for (let k = 0; k < 3; k++) {
+      // Relative, floored at 0.01 (zenith radiance is about 0.1-0.3): the dimmest below-horizon texels are 0.002.
+      const e = Math.abs(S.rgb.data[(j * S.rgb.w + i) * 3 + k]! - L[k]!) / Math.max(L[k]!, 0.01);
+      if (e > worst.sky) { worst.sky = e; skyWorstAt = { dir, gpu: S.rgb.data[(j * S.rgb.w + i) * 3 + k]!, cpu: L[k]! }; }
+    }
+    worst.skyAlpha = Math.max(worst.skyAlpha, Math.abs(S.alpha[j * S.rgb.w + i]! - t));
+  }
+  const skyAt = (dir: V3): V3 => {
+    const [u, v] = skyViewUv(dir, sun, eyeKm);
+    const x = Math.min(S.rgb.w - 1, Math.max(0, u * S.rgb.w - 0.5)), y = Math.min(S.rgb.h - 1, Math.max(0, v * S.rgb.h - 0.5));
+    const x0 = Math.floor(x), y0 = Math.floor(y), x1 = Math.min(x0 + 1, S.rgb.w - 1), y1 = Math.min(y0 + 1, S.rgb.h - 1), fx = x - x0, fy = y - y0;
+    const at = (i: number, j: number, k: number) => S.rgb.data[(j * S.rgb.w + i) * 3 + k]!;
+    return [0, 1, 2].map((k) => (at(x0, y0, k) * (1 - fx) + at(x1, y0, k) * fx) * (1 - fy) + (at(x0, y1, k) * (1 - fx) + at(x1, y1, k) * fx) * fy) as V3;
+  };
+  const hEye = Math.max(eyeKm, 1e-4), lit = distanceToGround(hEye, sun[1]) >= 0 ? 0 : 1;
+  const sunC = sampleTransmittance(T.rgb, hEye, sun[1]).map((x, k) => (lit * x * a.sunIlluminance[k]!) / Math.PI) as V3;
+  const want = ambientOf(skyAt, sunC, sun, a.groundAlbedo);
+  for (let k = 0; k < 3; k++) worst.ambient = Math.max(worst.ambient, rel(amb[k]!, want.sky[k]!), rel(amb[4 + k]!, want.ground[k]!));
+  // Adaptation from the GPU's own ambient (its error is the ambient's, checked above).
+  const I = meteredIlluminance([amb[0]!, amb[1]!, amb[2]!], [amb[4]!, amb[5]!, amb[6]!], sunC);
+  worst.exposure = rel(amb[8]!, adaptedExposure(I, a.sunIlluminance, 1.3, 0.75));
+  const err = await device.popErrorScope();
+  atmo.destroy();
+  device.destroy();
+  return { worst, skyWorstAt, finite, ambient: { sky: Array.from(amb.slice(0, 3)), ground: Array.from(amb.slice(4, 7)) }, exposure: amb[8]!, illuminance: amb[9]!, sunIlluminanceLuma: LUMA.reduce((s, w, c) => s + w * a.sunIlluminance[c]!, 0), error: err?.message ?? null };
 }
