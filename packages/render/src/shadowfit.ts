@@ -205,3 +205,23 @@ export function fitShadow(arena: Arena, sun: V3, corners: V3[], size: number, st
   const proj = ortho(center[0] - half, center[0] + half, center[1] - half, center[1] + half, near, far);
   return { matrix: multiply(proj, view), level, half, texel, depthRange: far - near, center };
 }
+
+/** Farthest blocker the soft shadow search looks for, metres along the light (a 30 m tower under a 50 degree sun). */
+export const PCSS_REACH = 40;
+/** Widest blocker search and penumbra radius, texels: past it, more taps would only spread thinner. */
+export const PCSS_MAX_TEXELS = 24;
+/** Steepest receiver plane the soft shadow taps follow, metres of light depth per metre (tan 85 degrees). */
+const PCSS_MAX_SLOPE = 11.4;
+
+/**
+ * The scene shader's shadowSoft uniform (shaders.ts shadowSoft()) for a
+ * penumbra half angle with tangent tanHalf (the sun's radius times the
+ * look's softness): [tanHalf, search radius in texels, light depth range in
+ * metres, steepest receiver plane in depth per uv]. Where even a blocker
+ * PCSS_REACH away casts a penumbra under 1.5 texels, tanHalf is 0 and the
+ * shader takes the 3x3 taps without searching.
+ */
+export function pcssParams(tanHalf: number, fit: ShadowFit): [number, number, number, number] {
+  const search = (PCSS_REACH * tanHalf) / fit.texel;
+  return [search < 1.5 ? 0 : tanHalf, Math.min(search, PCSS_MAX_TEXELS), fit.depthRange, (PCSS_MAX_SLOPE * 2 * fit.half) / fit.depthRange];
+}

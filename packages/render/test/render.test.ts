@@ -974,15 +974,15 @@ describe('drawing', () => {
     // Compiled out, the ground knobs do nothing, and the frame is texture 0's to the bit.
     expect(off!.hash).toBe(flat!.hash);
     // Measured on SwiftShader (mean luma; fine detail, mean |luma - neighbours|; coarse, std of 16 px block means):
-    // flat 123.1, 0.42, 2.4 (dither and the light's gradient); gravel 120.4, 1.34, 2.8; dirt 120.6, 0.65, 2.8;
-    // variation 0: 122.7, 1.35, 2.1; variation 1: 118.0, 1.34, 4.5; scale 4: 124.9, 1.66, 2.7.
+    // flat 123.1, 0.42, 2.4 (dither and the light's gradient); gravel 120.6, 1.50, 2.8; dirt 120.6, 0.65, 2.8;
+    // variation 0: 122.8, 1.51, 2.2; variation 1: 118.2, 1.49, 4.5; scale 4: 125.0, 1.80, 2.8.
     // Without macro variation the floor keeps its brightness within 5%; with it, this 20 m patch is one sample of a 64 m field.
     expect(Math.abs(still!.mean - flat!.mean) / flat!.mean).toBeLessThan(0.05);
     for (const f of [gravel, dirt, varied, coarse]) expect(Math.abs(f!.mean - flat!.mean) / flat!.mean).toBeLessThan(0.08);
     expect(gravel!.detail).toBeGreaterThan(2.5 * flat!.detail);
     expect(dirt!.detail).toBeGreaterThan(1.3 * flat!.detail);
     expect(gravel!.detail).toBeGreaterThan(1.5 * dirt!.detail);
-    expect(coarse!.detail).toBeGreaterThan(1.2 * gravel!.detail); // pebbles 4x larger: more of them span pixels
+    expect(coarse!.detail).toBeGreaterThan(1.1 * gravel!.detail); // pebbles 4x larger: more of them span pixels (1.20x since step 5's stone tones, 1.24x before)
     expect(varied!.coarse).toBeGreaterThan(2 * still!.coarse);
   }, 180_000); // seven renderers, each baking its materials: 37 s alone on SwiftShader, over 60 s in the full suite
 
@@ -1139,10 +1139,55 @@ describe('drawing', () => {
     expect((await call('shadowCheck', 'contact')).window).toBe(4);
   });
 
+  it('real look soft shadows: the same analytic shadows, without acne or leaks', async (ctx) => {
+    if (!gpu) return ctx.skip();
+    for (const kind of ['float', 'contact', 'grazing'] as const) {
+      const r = await call('shadowCheck', kind, { real: {} });
+      expect(r.error).toBeNull();
+      expect(r.used).toBeGreaterThan(3000);
+      expect(r.wrong).toBe(0);
+      expect(r.maxStep).toBeLessThanOrEqual(3);
+      if (kind === 'grazing') continue;
+      expect(r.iou).toBeGreaterThan(0.95);
+      expect(r.centroidErr).toBeLessThan(0.02);
+      expect(r.leak).toBe(0);
+    }
+  }, 120_000);
+
+  it('real look soft shadows: penumbrae as wide as the sun disc says', async (ctx) => {
+    if (!gpu) return ctx.skip();
+    const r = await call('penumbraChecks', [{ h: 2 }, { h: 6 }, { h: 2, real: { shadowSoftness: 2 } }, { h: 3, elevation: 25 }, { h: 2, real: { shadowSoftness: 0 } }]);
+    expect(r.error).toBeNull();
+    for (const [i, c] of r.cases.entries()) {
+      expect(c.band).toBeGreaterThan(1000);
+      expect(c.dark).toBeLessThan(0.03); // inside the shadow
+      expect(c.lit).toBeGreaterThan(0.97); // past the penumbra
+      expect(Math.abs(c.x50)).toBeLessThan(c.texel); // the half-lit line on the geometric edge
+      if (i === 4) { expect(c.x90 - c.x10).toBeLessThan(3 * c.texel); continue; } // softness 0: the 3x3 taps (measured 2.7 texels)
+      // The 10% and 90% lines where the disc profile puts them, within a texel
+      // (SwiftShader: within 0.05 to 1.2 mm of the 3.9 mm texel, 4.5% narrow at h = 6).
+      expect(Math.abs(c.x10 - c.want10)).toBeLessThan(c.texel);
+      expect(Math.abs(c.x90 - c.want90)).toBeLessThan(c.texel);
+    }
+    // Twice the softness, twice the width; three times the height, three times.
+    const w = r.cases.map((c) => c.x90 - c.x10);
+    expect(w[2]! / w[0]!).toBeGreaterThan(1.8);
+    expect(w[2]! / w[0]!).toBeLessThan(2.2);
+    expect(w[1]! / w[0]!).toBeGreaterThan(2.6);
+  }, 120_000);
+
+  it('real look shadow softness 0 is the frame with the soft shadow code compiled out', async (ctx) => {
+    if (!gpu) return ctx.skip();
+    const r = await call('penumbraFrames', [{ h: 2, realDiag: null, real: { shadowSoftness: 0 } }, { h: 2, realDiag: 'pcss-off' }, { h: 2, realDiag: null }]);
+    expect(r.error).toBeNull();
+    expect(r.frames[0]).toEqual(r.frames[1]);
+    expect(r.frames[2]).not.toEqual(r.frames[1]);
+  }, 120_000);
+
   it('bench:render completes and reports every case (numbers discarded)', async (ctx) => {
     if (!gpu) return ctx.skip();
     const r = await call('runRenderBench', { width: 160, height: 90, counts: [800], warmup: 1, batches: 2, batchFrames: 1, profiledFrames: 1, sparkPool: 1024 });
-    expect(r.cases.map((c) => `${c.world}:${c.variant}`)).toEqual(['near', 'far'].flatMap((w) => ['full', 'no-shadow', 'no-post', 'no-sparks', 'no-heat', 'no-ao', 'no-seam', 'fan', 'cube', 'flat-fan', 'flat-cube', 'real', 'real-no-stone', 'real-stone-off', 'real-step1', 'real-no-lod', 'real-no-floor-sky', 'real-flat-ground'].map((v) => `${w}:${v}`)));
+    expect(r.cases.map((c) => `${c.world}:${c.variant}`)).toEqual(['near', 'far'].flatMap((w) => ['full', 'no-shadow', 'no-post', 'no-sparks', 'no-heat', 'no-ao', 'no-seam', 'fan', 'cube', 'flat-fan', 'flat-cube', 'real', 'real-no-stone', 'real-stone-off', 'real-step1', 'real-no-lod', 'real-no-floor-sky', 'real-flat-ground', 'real-no-pcss', 'real-4096'].map((v) => `${w}:${v}`)));
     for (const c of r.cases) {
       expect(c.bodies).toBe(800);
       expect(c.frameMs).toBeGreaterThan(0);
@@ -1154,7 +1199,7 @@ describe('drawing', () => {
     }
     expect(r.software).toBe(isSoftwareAdapter(gpu.adapter));
     expect(await call('renderBenchMarkdown', r, 'h')).toMatch(/Without heat glow/);
-  }, 180_000); // 36 cases on a software adapter, most of it the first frame of each renderer; 40 s timed out on CI beside the GPU physics and game tests (main, 8b5dd54), and 120 s when every case built its own renderer (b6bf9a2)
+  }, 180_000); // 40 cases on a software adapter, most of it the first frame of each renderer; 40 s timed out on CI beside the GPU physics and game tests (main, 8b5dd54), and 120 s when every case built its own renderer (b6bf9a2)
 
   it('culling never changes an ID pixel', async (ctx) => {
     if (!gpu) return ctx.skip();

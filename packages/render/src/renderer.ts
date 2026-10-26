@@ -11,7 +11,7 @@ import { Sparks } from './sparks.ts';
 import { Lights, MAX_BALLS, TRAIL } from './lights.ts';
 import { aoFrame, aoGrid, AoVolume } from './ao.ts';
 import { FLOOR_VERTS, floorFan, floorPolygon } from './floor.ts';
-import { fitShadow, frustumCorners, type Arena, type ShadowFit, type ShadowFitState } from './shadowfit.ts';
+import { fitShadow, frustumCorners, pcssParams, type Arena, type ShadowFit, type ShadowFitState } from './shadowfit.ts';
 import { FX_WORDS, packFx, tintWord, toHalf, type FxOptions, FX_ANCHOR } from './fx.ts';
 import { CANDY_NIGHT, linearToOklab, srgbToLinear, type LookParams } from './look.ts';
 import { invert, lookAt, multiply, normalize, type Mat4, type V3 } from './math.ts';
@@ -91,9 +91,13 @@ export interface RendererOptions {
    * step 1 did (the stylized body under the atmosphere); 'no-floor-sky'
    * gives the floor the vertical sky term only (no floorSky cones);
    * 'ground-off' compiles the ground material and horizon hills out (the
-   * flat floor of ground texture 0).
+   * flat floor of ground texture 0); 'pcss-off' gives sun shadows the
+   * stylized looks' 3x3 taps, the soft shadow code compiled out;
+   * 'shadow-view' (tests) draws the floor as its sun visibility.
    */
-  realDiag?: 'stone-off' | 'step1' | 'no-floor-sky' | 'ground-off';
+  realDiag?: 'stone-off' | 'step1' | 'no-floor-sky' | 'ground-off' | 'pcss-off' | 'shadow-view';
+  /** Shadow map width and height, texels. Default SHADOW_SIZE (2048). */
+  shadowSize?: number;
   /** false: no material level of detail, every box drawn with the stone code (bench and tests). Default true. */
   stoneLod?: boolean;
   /** Spark slots (default SPARK_POOL, 65536). Every slot costs a simulation thread and a quad per frame. */
@@ -211,10 +215,12 @@ export class Renderer {
   toggles = { shadow: true, post: true, sparks: true, trail: true, heat: true, ao: true };
   private readonly stoneLod: boolean;
   private readonly realDiag: RendererOptions['realDiag'];
+  private readonly shadowSize: number;
 
   constructor(readonly device: GPUDevice, target: RenderTarget, opts: RendererOptions = {}) {
     this.stoneLod = opts.stoneLod !== false;
     this.realDiag = opts.realDiag;
+    this.shadowSize = opts.shadowSize ?? SHADOW_SIZE;
     const sceneFan = (opts.scenePath ?? opts.boxPath ?? 'cube') === 'fan';
     const shadowFan = (opts.shadowPath ?? opts.boxPath ?? 'fan') === 'fan';
     this.boxVerts = { scene: sceneFan ? BOX_FAN_VERTS : BOX_CUBE_VERTS, shadow: shadowFan ? BOX_FAN_VERTS : BOX_CUBE_VERTS };
@@ -230,7 +236,7 @@ export class Renderer {
       this.offscreen = device.createTexture({ size: target.size, format: this.format, usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_SRC });
     }
     this.frameBuf = device.createBuffer({ size: Frame.size, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST, label: 'frame' });
-    this.shadowTex = device.createTexture({ size: [SHADOW_SIZE, SHADOW_SIZE], format: 'depth32float', usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_SRC });
+    this.shadowTex = device.createTexture({ size: [this.shadowSize, this.shadowSize], format: 'depth32float', usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_SRC });
     this.shadowSampler = device.createSampler({ compare: 'less', magFilter: 'linear', minFilter: 'linear' });
     this.post = new Post(device, this.format);
     this.sparks = new Sparks(device, opts.sparkPool);
@@ -339,26 +345,28 @@ export class Renderer {
           { binding: 3, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: 'float', viewDimension: '2d-array' } },
           { binding: 4, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: 'float', viewDimension: '2d-array' } },
           { binding: 5, visibility: GPUShaderStage.FRAGMENT, sampler: { type: 'filtering' } },
+          { binding: 6, visibility: GPUShaderStage.FRAGMENT, sampler: { type: 'non-filtering' } },
         ],
       });
       const materials = new Materials(device);
       const m = { module: device.createShaderModule({ code: sceneWgsl(true), label: 'scene (real)' }), layout: device.createPipelineLayout({ bindGroupLayouts: [this.layout, layout] }) };
-      const floorConsts = { FLOOR_CONES: opts.realDiag === 'no-floor-sky' ? 0 : 1, REAL_GROUND: opts.realDiag === 'ground-off' ? 0 : 1 };
+      const pcss = { REAL_PCSS: opts.realDiag === 'pcss-off' ? 0 : 1 };
+      const floorConsts = { ...pcss, FLOOR_CONES: opts.realDiag === 'no-floor-sky' ? 0 : 1, REAL_GROUND: opts.realDiag === 'ground-off' ? 0 : 1 };
       const pipes: Record<RealPipe, GPURenderPipeline> = {
-        box: color('vsBox', opts.flatBoxes ? 'fsBoxFlat' : 'fsBox', 'back', SEG.box, { ...m, constants: opts.flatBoxes ? {} : { REAL_STONE: opts.realDiag === 'stone-off' ? 0 : 1, REAL_BLOCK: opts.realDiag === 'step1' ? 0 : 1 } }),
+        box: color('vsBox', opts.flatBoxes ? 'fsBoxFlat' : 'fsBox', 'back', SEG.box, { ...m, constants: opts.flatBoxes ? {} : { ...pcss, REAL_STONE: opts.realDiag === 'stone-off' ? 0 : 1, REAL_BLOCK: opts.realDiag === 'step1' ? 0 : 1 } }),
         // Past the stone's fade-out (stoneLodDepth): the same shading without the stone code.
-        boxFar: color('vsBox', opts.flatBoxes ? 'fsBoxFlat' : 'fsBox', 'back', SEG.boxFar, { ...m, constants: opts.flatBoxes ? {} : { REAL_STONE: 0, REAL_BLOCK: opts.realDiag === 'step1' ? 0 : 1 } }),
-        sphere: color('vsSphere', 'fsSphere', 'back', SEG.sphere, m),
-        ground: color('vsGround', 'fsGround', 'none', 0, { ...m, constants: floorConsts, buffers: [{ arrayStride: 12, attributes: [{ shaderLocation: 0, offset: 0, format: 'float32x3' }] }] }),
+        boxFar: color('vsBox', opts.flatBoxes ? 'fsBoxFlat' : 'fsBox', 'back', SEG.boxFar, { ...m, constants: opts.flatBoxes ? {} : { ...pcss, REAL_STONE: 0, REAL_BLOCK: opts.realDiag === 'step1' ? 0 : 1 } }),
+        sphere: color('vsSphere', 'fsSphere', 'back', SEG.sphere, { ...m, constants: pcss }),
+        ground: color('vsGround', 'fsGround', 'none', 0, { ...m, constants: { ...floorConsts, SHADOW_VIEW: opts.realDiag === 'shadow-view' ? 1 : 0 }, buffers: [{ arrayStride: 12, attributes: [{ shaderLocation: 0, offset: 0, format: 'float32x3' }] }] }),
         sky: color('vsSky', 'fsSky', 'none', 0, { ...m, sky: true, constants: floorConsts }),
-        overlay: color('vsOverlay', 'fsOverlay', 'back', 0, m),
+        overlay: color('vsOverlay', 'fsOverlay', 'back', 0, { ...m, constants: pcss }),
       };
       const bind = device.createBindGroup({
         layout,
         entries: [
           { binding: 0, resource: atmosphere.skyView.createView() }, { binding: 1, resource: atmosphere.sampler }, { binding: 2, resource: { buffer: atmosphere.ambient } },
           { binding: 3, resource: materials.detail.createView({ dimension: '2d-array' }) }, { binding: 4, resource: materials.normal.createView({ dimension: '2d-array' }) },
-          { binding: 5, resource: materials.sampler },
+          { binding: 5, resource: materials.sampler }, { binding: 6, resource: device.createSampler({ label: 'shadow gather' }) },
         ],
       });
       return { pipes, atmosphere, materials, layout, bind };
@@ -502,7 +510,7 @@ export class Renderer {
     const reach = Math.hypot(f.eye[0] - center[0], f.eye[1] - center[1], f.eye[2] - center[2]) + radius;
     const sun = sunOf(this.look);
     if (sun.some((x, k) => x !== this.lastSun[k])) { this.shadowState.level = -1; this.lastSun = sun; } // refit from scratch for a new sun
-    const fit = (this.shadowFit = fitShadow(this.arena, sun, frustumCorners(invert(f.viewProj), f.eye, reach), SHADOW_SIZE, this.shadowState, f.groundY));
+    const fit = (this.shadowFit = fitShadow(this.arena, sun, frustumCorners(invert(f.viewProj), f.eye, reach), this.shadowSize, this.shadowState, f.groundY));
     const lightViewProj = multiply(fit.matrix, toWorld);
     const focus = f.focus ?? [f.eye[0], f.eye[1], f.eye[2] - 1];
     this.lastTime = f.time ?? 0;
@@ -515,10 +523,10 @@ export class Renderer {
       focus: [focus[0] - f.eye[0], focus[1] - f.eye[1], focus[2] - f.eye[2]], capacity: this.culler?.capacity ?? 0,
       ...lookUniforms(this.look),
       // Bias, all on the receiver: normal offset of 2 texels, depth bias of 1 texel + 1 cm.
-      shadowParams: [2 * fit.texel, (fit.texel + 0.01) / fit.depthRange, fit.texel, 0],
+      shadowParams: [2 * fit.texel, (fit.texel + 0.01) / fit.depthRange, fit.texel, 1 / this.shadowSize],
       ...this.aoUniforms(f.eye),
       heat: this.toggles.heat && this.look.effects !== false ? 1 : 0, viewport: this.viewport(), dt: f.dt ?? 0, trailHead: (this.lights.nextFrame + TRAIL - 1) % TRAIL,
-      ...this.atmosphereUniforms(f, sun),
+      ...this.atmosphereUniforms(f, sun, fit),
     });
     this.device.queue.writeBuffer(this.frameBuf, 0, this.frameData);
     return { viewProj, lightViewProj, eye: f.eye, alpha: f.alpha ?? 1, noCull: f.noCull ?? false };
@@ -529,11 +537,14 @@ export class Renderer {
     return Math.max(f.eye[1] - f.groundY, 1) / 1000;
   }
 
-  private atmosphereUniforms(f: FrameParams, sun: V3): Record<string, number | number[]> {
+  private atmosphereUniforms(f: FrameParams, sun: V3, fit: ShadowFit): Record<string, number | number[]> {
     const a = this.look.atmosphere;
     if (!a) return {};
     const h = this.eyeKm(f);
-    return { atmoSigma: medium(a, h).extinction.map((x) => x / 1000), atmoEyeKm: h, sunDisc: sunDiscRadiance(a, sun, h), sunCos: Math.cos(a.sunRadius) };
+    return {
+      atmoSigma: medium(a, h).extinction.map((x) => x / 1000), atmoEyeKm: h, sunDisc: sunDiscRadiance(a, sun, h), sunCos: Math.cos(a.sunRadius),
+      shadowSoft: pcssParams(Math.tan(a.sunRadius) * (this.look.shadow?.softness ?? 1), fit),
+    };
   }
 
   /** Cull, shadow, then the scene pass (or the ID pass, which skips floor, sky and shadow). */
@@ -688,12 +699,12 @@ export class Renderer {
     return { width: w, height: h, ids };
   }
 
-  /** Test path: the shadow map of the last frame, light depth 0..1 per texel (SHADOW_SIZE squared). */
+  /** Test path: the shadow map of the last frame, light depth 0..1 per texel (shadowSize squared). */
   async readShadowMap(): Promise<Float32Array> {
-    const bytesPerRow = SHADOW_SIZE * 4;
-    const read = this.device.createBuffer({ size: bytesPerRow * SHADOW_SIZE, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST });
+    const n = this.shadowSize, bytesPerRow = n * 4;
+    const read = this.device.createBuffer({ size: bytesPerRow * n, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST });
     const enc = this.device.createCommandEncoder();
-    enc.copyTextureToBuffer({ texture: this.shadowTex, aspect: 'depth-only' }, { buffer: read, bytesPerRow }, [SHADOW_SIZE, SHADOW_SIZE]);
+    enc.copyTextureToBuffer({ texture: this.shadowTex, aspect: 'depth-only' }, { buffer: read, bytesPerRow }, [n, n]);
     this.device.queue.submit([enc.finish()]);
     await read.mapAsync(GPUMapMode.READ);
     const out = new Float32Array(read.getMappedRange().slice(0));

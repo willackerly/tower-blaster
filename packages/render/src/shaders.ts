@@ -40,7 +40,7 @@ export const Frame = defineStruct('Frame', [
   ['rimColor', 'vec3f'], ['hueStep', 'f32', 'radians'],
   ['rimDir', 'vec3f'], ['ballEmissive', 'f32'],
   ['ball', 'vec3f'], ['heat', 'f32', '1: heat glow on (bench toggle)'],
-  ['shadowParams', 'vec4f', 'normal offset m, depth bias (light depth units), texel m, unused'],
+  ['shadowParams', 'vec4f', 'normal offset m, depth bias (light depth units), texel m, texel uv (1 / map size)'],
   ['viewport', 'vec2f', 'pixels'], ['dt', 'f32', 'seconds since the last scene frame'], ['trailHead', 'u32', 'newest ball trail sample'],
   ['aoOrigin', 'vec3f', 'AO grid low corner, camera-relative'], ['aoInvVoxel', 'f32', 'per metre, level 0'],
   ['aoDims', 'vec3f', 'level-0 voxels'], ['aoOn', 'f32', '0: AO off'],
@@ -54,6 +54,7 @@ export const Frame = defineStruct('Frame', [
   ['aoFloorSky', 'vec4f', 'real look: floor sky map placement, uv = (rel.xz - xy) * zw (AoVolume.floorSkyFrame)'],
   ['ground', 'vec4f', 'real look: ground layer (materials.ts), texture scale, texture strength (0: none, nothing sampled), macro variation'],
   ['hills', 'vec4f', 'real look: horizon hills\' greatest height (radians, 0: none) and distance (m)'],
+  ['shadowSoft', 'vec4f', 'real look: tan of the penumbra half angle (0: 3x3 taps), blocker search radius (texels), light depth range (m), steepest receiver plane (depth per uv)'],
 ], 'Per-frame uniforms of the scene pass.');
 
 // The real look's sky (atmosphere.ts): bind group 1, read by the scene
@@ -80,6 +81,95 @@ override REAL_BLOCK: bool = true;
 override FLOOR_CONES: bool = true;
 // RendererOptions.realDiag 'ground-off': the ground material and horizon hills compiled out (the flat floor of ground texture 0).
 override REAL_GROUND: bool = true;
+// RendererOptions.realDiag 'pcss-off': sun shadows from the stylized looks' 3x3 taps, the soft shadow code compiled out.
+override REAL_PCSS: bool = true;
+// RendererOptions.realDiag 'shadow-view' (tests): the floor shows its sun visibility (0 to 1) instead of its colour.
+override SHADOW_VIEW: bool = false;
+@group(1) @binding(6) var shadowPoint: sampler; // non-filtering: textureGather on the shadow map
+// The fragment's pixel (set by each real fragment entry point), for the shadow taps' per-pixel turn.
+var<private> fragPx: vec2f;
+
+// Soft sun shadows (realism step 5): percentage-closer soft shadows with the
+// sun's angular size. Taps on Vogel discs (radius sqrt((i + 0.5) / N), golden
+// angle), so equal weights average over the disc the sun is.
+const PCSS_SEARCH = array<vec2f, 8>(vec2f(0.2500, 0.0000), vec2f(-0.3193, 0.2925), vec2f(0.0489, -0.5569), vec2f(0.4024, 0.5249), vec2f(-0.7385, -0.1306), vec2f(0.6996, -0.4450), vec2f(-0.2340, 0.8705), vec2f(-0.4463, -0.8593));
+const PCSS_TAPS = array<vec2f, 12>(vec2f(0.2041, 0.0000), vec2f(-0.2607, 0.2388), vec2f(0.0399, -0.4547), vec2f(0.3286, 0.4286), vec2f(-0.6030, -0.1067), vec2f(0.5712, -0.3634), vec2f(-0.1911, 0.7107), vec2f(-0.3644, -0.7016), vec2f(0.7906, 0.2887), vec2f(-0.8224, 0.3395), vec2f(0.3965, -0.8472), vec2f(0.2930, 0.9341));
+
+// The stylized looks' 3x3 taps (shadow()), for penumbrae under 1.5 texels.
+fn shadowPcf(uv: vec2f, depth: f32) -> f32 {
+  var sum = 0.0;
+  for (var y = -1; y <= 1; y++) {
+    for (var x = -1; x <= 1; x++) {
+      sum += textureSampleCompareLevel(shadowMap, shadowSampler, uv + vec2f(f32(x), f32(y)) * fr.shadowParams.w, depth);
+    }
+  }
+  return sum / 9.0;
+}
+
+// The receiver's plane in the shadow map: light depth per unit of uv, so a
+// tap away from the centre compares against the surface's own depth there
+// (without it, wide kernels shadow tilted surfaces with themselves).
+// Tangents through the light's matrix, solved for the gradient.
+fn receiverSlope(n: vec3f) -> vec2f {
+  let t1 = normalize(cross(n, select(vec3f(1.0, 0.0, 0.0), vec3f(0.0, 0.0, 1.0), abs(n.x) > 0.9)));
+  let t2 = cross(n, t1);
+  let c1 = (fr.lightViewProj * vec4f(t1, 0.0)).xyz * vec3f(0.5, -0.5, 1.0);
+  let c2 = (fr.lightViewProj * vec4f(t2, 0.0)).xyz * vec3f(0.5, -0.5, 1.0);
+  let det = c1.x * c2.y - c1.y * c2.x;
+  var g = vec2f(c1.z * c2.y - c1.y * c2.z, c1.x * c2.z - c1.z * c2.x) / select(det, 1e-20, abs(det) < 1e-20);
+  let gl = length(g);
+  if (gl > fr.shadowSoft.w) { g *= fr.shadowSoft.w / gl; }
+  return g;
+}
+
+fn turn(v: vec2f, cs: vec2f) -> vec2f {
+  return vec2f(v.x * cs.x - v.y * cs.y, v.x * cs.y + v.y * cs.x);
+}
+
+// Sun visibility at rel (normal n): a blocker search over the widest
+// penumbra (fr.shadowSoft.y texels), then a disc of taps whose radius is
+// the receiver-blocker distance times tan(sun radius). Fully lit or fully
+// blocked searches return at once.
+fn shadowSoft(rel: vec3f, n: vec3f) -> f32 {
+  let lc = fr.lightViewProj * vec4f(rel + n * fr.shadowParams.x, 1.0);
+  let uv = lc.xy * vec2f(0.5, -0.5) + 0.5;
+  let depth = lc.z - fr.shadowParams.y;
+  if (!(all(uv > vec2f(0.0)) && all(uv < vec2f(1.0)) && depth < 1.0)) { return 1.0; }
+  if (!REAL_PCSS || fr.shadowSoft.x <= 0.0) { return shadowPcf(uv, depth); }
+  let g = receiverSlope(n);
+  let ang = 6.2831853 * fract(52.9829189 * fract(dot(fragPx, vec2f(0.06711056, 0.00583715))));
+  let cs = vec2f(cos(ang), sin(ang));
+  let search = fr.shadowSoft.y * fr.shadowParams.w;
+  // A gather's four texels lie within 0.71 texel of its point.
+  let slack = 0.71 * length(g) * fr.shadowParams.w;
+  var blockers = 0.0;
+  var dsum = 0.0;
+  for (var i = 0; i < 8; i++) {
+    let o = turn(PCSS_SEARCH[i], cs) * search;
+    let z = depth + dot(g, o);
+    let d = textureGather(shadowMap, shadowPoint, uv + o);
+    let b = vec4f(d < vec4f(z - slack));
+    blockers += b.x + b.y + b.z + b.w;
+    dsum += dot(b, vec4f(z) - d);
+  }
+  if (blockers == 0.0) { return 1.0; }
+  if (blockers == 32.0) { return 0.0; }
+  // Penumbra radius, texels: blocker distance (m) x tan(sun radius) / texel (m).
+  let r = min(dsum / blockers * fr.shadowSoft.z * fr.shadowSoft.x / fr.shadowParams.z, fr.shadowSoft.y);
+  if (r < 1.5) { return shadowPcf(uv, depth); }
+  var sum = 0.0;
+  for (var i = 0; i < 12; i++) {
+    let o = turn(PCSS_TAPS[i], cs) * (r * fr.shadowParams.w);
+    sum += textureSampleCompareLevel(shadowMap, shadowSampler, uv + o, depth + dot(g, o));
+  }
+  return sum / 12.0;
+}
+
+// Back faces skip the lookup (their N.L is 0 anyway).
+fn sunShadow(rel: vec3f, n: vec3f, NoL: f32) -> f32 {
+  if (NoL <= 0.0) { return 0.0; }
+  return shadowSoft(rel, n) * NoL;
+}
 
 // In-scattered radiance (rgb) and green transmittance (a) along the view ray in direction dir (unit).
 fn skyLut(dir: vec3f) -> vec4f {
@@ -274,7 +364,8 @@ const REAL_SKY_AMBIENT = 'atmoAmbient[0].rgb * ao.y + realBounce() * (1.0 - ao.y
 // The real look's block (realism step 3): stone texture and relief, a palette
 // colour per block, chipped lighter edges, dirt toward the ground. Injected at
 // the top of fsBox; the stylized body after it runs only when REAL_BLOCK is false.
-const REAL_FS_BOX = /* wgsl */ `if (REAL_BLOCK) {
+const REAL_FS_BOX = /* wgsl */ `fragPx = v.clip.xy;
+  if (REAL_BLOCK) {
     let lp = clamp(v.local, vec3f(-1.0), vec3f(1.0)) * v.half;
     let pxM = length(fwidth(lp));
     let faceN = boxFace(v.local, fwidth(v.local));
@@ -481,7 +572,7 @@ fn shadow(rel: vec3f, n: vec3f) -> f32 {
   let lc = fr.lightViewProj * vec4f(rel + n * fr.shadowParams.x, 1.0);
   let uv = lc.xy * vec2f(0.5, -0.5) + 0.5;
   let depth = lc.z - fr.shadowParams.y;
-  let texel = 1.0 / ${SHADOW_SIZE}.0;
+  let texel = fr.shadowParams.w;
   var sum = 0.0;
   for (var y = -1; y <= 1; y++) {
     for (var x = -1; x <= 1; x++) {
@@ -564,7 +655,7 @@ fn shade(base: vec3f, rel: vec3f, n: vec3f, a: f32, ac: f32, coat: f32, ao: vec2
   let NoV = max(dot(n, V), 1e-4);
   let L = fr.sun;
   let NoL = max(dot(n, L), 0.0);
-  let sh = shadow(rel, n) * NoL;
+  let sh = ${real ? 'sunShadow(rel, n, NoL)' : 'shadow(rel, n) * NoL'};
   let H = normalize(L + V);
   let NoH = max(dot(n, H), 0.0);
   let VoH = max(dot(V, H), 0.0);
@@ -689,6 +780,7 @@ fn heatGlow(slot: u32, base: vec3f) -> vec3f {
 }
 
 @fragment fn fsSphere(v: VOut) -> @location(0) vec4f {
+  ${real ? 'fragPx = v.clip.xy;' : ''}
   let n = qrot(v.rot, normalize(v.local));
   let dndx = dpdx(n);
   let dndy = dpdy(n);
@@ -709,6 +801,7 @@ fn heatGlow(slot: u32, base: vec3f) -> vec3f {
 }
 
 @fragment fn fsOverlay(v: VOut) -> @location(0) vec4f {
+  ${real ? 'fragPx = v.clip.xy;' : ''}
   let n = normalize(v.local);
   let dndx = dpdx(n);
   let dndy = dpdy(n);
@@ -760,7 +853,9 @@ struct GOut { @builtin(position) clip: vec4f, @location(0) rel: vec3f }
 @fragment fn fsGround(g: GOut) -> @location(0) vec4f {
   let p = g.rel.xz + fr.eye.xz;
   let w = fwidth(p);
-  ${real ? /* wgsl */ `// The ground's material (groundAt); the sky it sees is the baked floor sky view.
+  ${real ? /* wgsl */ `fragPx = g.clip.xy;
+  if (SHADOW_VIEW) { return vec4f(vec3f(shadowSoft(g.rel, vec3f(0.0, 1.0, 0.0))), 1.0); }
+  // The ground's material (groundAt); the sky it sees is the baked floor sky view.
   let gh = groundAt(p, w);
   return vec4f(fog(shade(fr.floor * gh.albedo, g.rel, gh.n, gh.a, gh.a, 0.0, vec2f(gh.cavity, floorSky(g.rel))), g.rel), 1.0);` : /* wgsl */ `// 1 m grid with screen-space antialiased lines, fading out where a line is under a pixel.
   let line = abs(fract(p - 0.5) - 0.5) / max(w, vec2f(1e-4));
@@ -788,7 +883,8 @@ struct SOut { @builtin(position) clip: vec4f, @location(0) ndc: vec2f }
 @fragment fn fsSky(s: SOut) -> @location(0) vec4f {
   let p = fr.invViewProj * vec4f(s.ndc, 1.0, 1.0);
   let dir = normalize(p.xyz / p.w);
-  ${real ? /* wgsl */ `// The sun disc, limb-darkened (I(mu) = 1 - 0.6 (1 - mu), normalized to mean 1), its rim antialiased.
+  ${real ? /* wgsl */ `fragPx = s.clip.xy;
+  // The sun disc, limb-darkened (I(mu) = 1 - 0.6 (1 - mu), normalized to mean 1), its rim antialiased.
   let cs = dot(dir, fr.sun);
   let x = sqrt(max(1.0 - cs * cs, 0.0)) / sqrt(1.0 - fr.sunCos * fr.sunCos);
   let rim = 1.0 - smoothstep(1.0 - 1.5 * fwidth(x), 1.0, x);

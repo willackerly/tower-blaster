@@ -2,7 +2,7 @@
 // how it snaps and how its size ladder behaves as the camera moves.
 import { describe, expect, it } from 'vitest';
 import { rng } from '@tb/scenarios';
-import { clipToBox, fitShadow, frustumCorners, invert, lookAt, multiply, perspective, SHADOW_LADDER_MIN, SUN, transform, type Arena, type ShadowFitState, type V3 } from '../src/index.ts';
+import { clipToBox, fitShadow, frustumCorners, invert, lookAt, multiply, pcssParams, PCSS_MAX_TEXELS, PCSS_REACH, perspective, SHADOW_LADDER_MIN, SUN, transform, type Arena, type ShadowFitState, type V3 } from '../src/index.ts';
 
 const SIZE = 2048;
 const ARENA: Arena = { center: [0, 4, 0], half: [30, 12, 30], radius: 36 };
@@ -183,4 +183,30 @@ describe('fitShadow', () => {
       expect(inClip(away.matrix, p)).toBe(true);
     }
   });
+
+  it('soft shadow uniform: search radius from the reach, 3x3 taps where it is under 1.5 texels, receiver slope in depth per uv', () => {
+    const near = fit(cameraAt([2, 3, 6], [0, 1, 0])), far = fit(cameraAt([0, 150, 260], [0, 0, 0]));
+    const tanHalf = Math.tan(0.53 * Math.PI / 360);
+    const p = pcssParams(tanHalf, near);
+    expect(p[0]).toBe(tanHalf);
+    expect(p[1]).toBe(Math.min((PCSS_REACH * tanHalf) / near.texel, PCSS_MAX_TEXELS));
+    expect(p[2]).toBe(near.depthRange);
+    if ((PCSS_REACH * tanHalf) / far.texel < 1.5) expect(pcssParams(tanHalf, far)[0]).toBe(0);
+    expect(pcssParams(0, near)[0]).toBe(0);
+    // A plane tilted atan(11.4) from facing the light: its light depth per
+    // uv, from three projected points, is the bound the uniform carries.
+    const sun = SUN, k = 11.4, theta = Math.atan(k);
+    const side = normalize3(cross3(sun, [0, 1, 0])), up = cross3(side, sun);
+    const nrm: V3 = [0, 1, 2].map((i) => Math.cos(theta) * sun[i]! + Math.sin(theta) * up[i]!) as V3;
+    const t1 = side, t2 = normalize3(cross3(nrm, t1));
+    const c: V3 = ARENA.center;
+    const uvz = (q: V3) => { const v = transform(near.matrix, q); return [v[0]! * 0.5 + 0.5, -v[1]! * 0.5 + 0.5, v[2]!] as const; };
+    const a = uvz(c), b = uvz([c[0] + t1[0], c[1] + t1[1], c[2] + t1[2]]), d = uvz([c[0] + t2[0], c[1] + t2[1], c[2] + t2[2]]);
+    const det = (b[0] - a[0]) * (d[1] - a[1]) - (b[1] - a[1]) * (d[0] - a[0]);
+    const gx = ((b[2] - a[2]) * (d[1] - a[1]) - (b[1] - a[1]) * (d[2] - a[2])) / det, gy = ((b[0] - a[0]) * (d[2] - a[2]) - (b[2] - a[2]) * (d[0] - a[0])) / det;
+    expect(Math.hypot(gx, gy) / p[3] - 1).toBeCloseTo(0, 6);
+  });
 });
+
+function cross3(a: V3, b: V3): V3 { return [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]]; }
+function normalize3(a: V3): V3 { const l = Math.hypot(...a); return [a[0] / l, a[1] / l, a[2] / l]; }
