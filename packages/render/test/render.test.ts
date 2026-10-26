@@ -11,7 +11,7 @@ import { RapierHost } from '@tb/adapter-rapier';
 import { TieredEngine } from '@tb/lattice';
 import { isSoftwareAdapter, loadBundle, openWebGPU, type WebGPUSession } from '@tb/testkit';
 import { ADAPT_MAX, ADAPT_REF, adaptedExposure, HAZY_DAY, linearToSrgb, lookByName, parseRealOptions, REAL_DEFAULTS, REAL_KNOBS, realLook, writeRealOptions, CLEAR_DAY, MIE_H, mieExtinction, multiTable, normalize, OZONE, OZONE_WIDTH, RAYLEIGH, RAYLEIGH_H, skyRadiance, skyViewDir, skyViewUv, sunAtGround, sunDiscRadiance, transmittance, transmittanceHMu, transmittanceTable, transmittanceUv } from '../src/index.ts';
-import { agx, aoFootReference, bevelNormal, type V3, CANDY_NIGHT, CTL, HOT_FULL, MAX_EVENTS, SPAWN_BUDGET, FX_WORDS, packFx, tintWord, unpackFx, frustumPlanes, linearToOklab, listMatches, oklabToLinear, srgbToLinear, lookAt, lookOf, lookRange, MATERIAL, multiply, packBodies, changedRanges, drawnTier, packShapes, paletteOf, perspective, unpackLook } from '../src/index.ts';
+import { agx, aoFootReference, bevelNormal, type V3, CANDY_NIGHT, CTL, HOT_FULL, MAX_EVENTS, SPAWN_BUDGET, FX_WORDS, packFx, tintWord, unpackFx, frustumPlanes, linearToOklab, listMatches, oklabToLinear, srgbToLinear, lookAt, lookOf, lookRange, MATERIAL, multiply, SEG, packBodies, changedRanges, drawnTier, packShapes, paletteOf, perspective, unpackLook } from '../src/index.ts';
 import type * as Drivers from './page.ts';
 
 describe('looks', () => {
@@ -753,11 +753,13 @@ describe('GPU cull and compaction', () => {
       { seed: 5, count: 1, capacity: 1, alpha: 0.5, noCull: false },
       { seed: 6, count: 0, capacity: 64, alpha: 0.5, noCull: false },
       { seed: 7, count: 3000, capacity: 3000, alpha: 0.6, noCull: false, fx: true }, // FX scale, anchor, hidden
+      { seed: 8, count: 3000, capacity: 3000, alpha: 0.4, noCull: false, lodDepth: 30 }, // near and far boxes
+      { seed: 9, count: 600, capacity: 600, alpha: 1, noCull: false, lodDepth: -1e30 }, // every visible box far
     ];
     const out = await call('cull', cases);
     for (const r of out) {
       expect(r.error, `seed ${r.seed}`).toBeNull();
-      expect(r.lists, `seed ${r.seed}`).toEqual([null, null, null, null]);
+      expect(r.lists, `seed ${r.seed}`).toEqual([null, null, null, null, null]);
       expect(r.argsOk).toBe(true);
       expect(r.recordErr, `seed ${r.seed}`).toBeLessThan(2e-5);
     }
@@ -765,6 +767,12 @@ describe('GPU cull and compaction', () => {
     expect(out[0]!.counts[0]).toBeGreaterThan(50);
     expect(out[0]!.counts[0]).toBeLessThan(2500);
     expect(out[5]!.listed).toBe(0);
+    // boxFar: empty without a lodDepth; split at 30 m; everything at -1e30.
+    for (const r of out.slice(0, 7)) expect(r.counts[SEG.boxFar], `seed ${r.seed}`).toBe(0);
+    expect(out[7]!.counts[SEG.box]).toBeGreaterThan(50);
+    expect(out[7]!.counts[SEG.boxFar]).toBeGreaterThan(50);
+    expect(out[8]!.counts[SEG.box]).toBe(0);
+    expect(out[8]!.counts[SEG.boxFar]).toBeGreaterThan(10);
   });
 });
 

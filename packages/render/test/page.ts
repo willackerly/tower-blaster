@@ -8,7 +8,7 @@ import { createDevice, readBuffer } from '@tb/gpu';
 import { Body, RenderRecord, Shape, TIER, readStruct } from '@tb/schema';
 import {
   agx, AGX_WGSL, LOOKS, realLook, type RealOptions, type LookParams, fromHalf, Atmosphere, CLEAR_DAY, transmittance, transmittanceHMu, multiScattering, skyViewDir, skyRadiance, skyViewUv, sampleTransmittance, ambientOf, distanceToGround, meteredIlluminance, Materials, MATERIAL_TILE, heightNormal, STONES, stoneSample, adaptedExposure, LUMA, R_TOP, R_GROUND, FX_WORDS, packFx, toHalf, bevelNormal, BEVEL_WGSL, oklabToLinear, OKLAB_WGSL, Post,
-  Culler, cullReference, GpuBodySource, invert, listMatches, lookAt, makeGpuBodies, multiply, packBodies, perspective, Renderer, SEGMENTS, SnapshotSource, transform,
+  Culler, cullReference, GpuBodySource, invert, listMatches, lookAt, makeGpuBodies, multiply, packBodies, perspective, Renderer, SEG, SEGMENTS, SnapshotSource, transform,
   translation, normalize, BOX_VERTS, SPHERE_VERTS, SUN, Sparks, CTL, MAX_EVENTS, flashSlot, FLASHES, MAX_BALLS, TRAIL, Lights, LIGHTS, LIGHT_META, LIGHT_PACKED, MATERIAL, AoVolume, aoGrid, aoFrame, splatReference, composeReference, AO_FOOT_WGSL, AO_SAMPLE_WGSL, AO_SEAM_WGSL, AO_ONE, type SplatBody, unpackImpacts, unpackSparks, spawnReference, stepReference, type Impact, type BodySource, type CullFrame, type FrameParams, type RendererOptions, type V3,
 } from '../src/index.ts';
 
@@ -50,7 +50,7 @@ function rawSource(device: GPUDevice, bodies: ArrayBuffer, prev: ArrayBuffer, sh
   };
 }
 
-export interface CullCase { seed: number; count: number; capacity: number; alpha: number; noCull: boolean; fx?: boolean }
+export interface CullCase { seed: number; count: number; capacity: number; alpha: number; noCull: boolean; fx?: boolean; lodDepth?: number }
 
 /**
  * Random world: boxes, slabs and spheres scattered around the camera (so
@@ -99,7 +99,7 @@ export async function cull(cases: CullCase[]) {
     const eye: V3 = [r() * 4, r() * 4, r() * 4];
     const cam = multiply(multiply(perspective(1.0, 1.5, 0.5, 70), lookAt(eye, [eye[0] + 1, eye[1] - 0.2, eye[2] + 0.5])), translation(eye));
     const light = multiply(multiply(perspective(0.6, 1, 1, 200), lookAt([eye[0], eye[1] + 80, eye[2]], [eye[0] + 5, eye[1], eye[2]], [0, 0, 1])), translation(eye));
-    const f: CullFrame = { viewProj: cam, lightViewProj: light, eye, alpha: c.alpha, noCull: c.noCull };
+    const f: CullFrame = { viewProj: cam, lightViewProj: light, eye, alpha: c.alpha, noCull: c.noCull, lodDepth: c.lodDepth };
     const enc = device.createCommandEncoder();
     const pass = enc.beginComputePass();
     culler.encode(pass, f);
@@ -110,7 +110,7 @@ export async function cull(cases: CullCase[]) {
     const L = new Uint32Array(lists), A = new Uint32Array(args);
     const counts = SEGMENTS.map((_, s) => A[4 * s + 1]!);
     const segLists = SEGMENTS.map((_, s) => Array.from(L.subarray(s * c.capacity, s * c.capacity + counts[s]!)));
-    const argsOk = SEGMENTS.every((_, s) => A[4 * s] === (s % 2 ? SPHERE_VERTS : BOX_VERTS) && A[4 * s + 2] === 0 && A[4 * s + 3] === 0);
+    const argsOk = SEGMENTS.every((_, s) => A[4 * s] === (s === SEG.sphere || s === SEG.sphereShadow ? SPHERE_VERTS : BOX_VERTS) && A[4 * s + 2] === 0 && A[4 * s + 3] === 0);
     let recordErr = 0;
     const view = new DataView(recs);
     for (const [slot, want] of ref.records) {
