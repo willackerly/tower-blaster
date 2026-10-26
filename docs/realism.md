@@ -222,9 +222,13 @@ rules the code follows; the doc has the reasoning.
   (0.6). Bench variant `real-dust`: 64 impacts a frame around the view's
   focus with 1/60 s steps, warmed up 4 s so the counts and ages are steady
   (the bench's "Particles alive" column shows how many); real against it is
-  the worst steady cost. On the M5 Max (82e0559, the flat-budget attempt,
-  about 5,200 alive) it cost +0.2% to +7.8% of the real frame, and the real
-  look stayed under its caps (near 100k: 3.69 ms p50 of 4).
+  the worst steady cost. On the M5 Max at 638cab8 (about 5,280 alive) real
+  against real-dust GPU p50: near 10k 2.28 / 2.34 ms, near 100k 3.68 /
+  3.69, far 10k 0.89 / 1.23, far 100k 2.93 / 2.96. Every case stays under
+  its cap; far 10k pays most (+0.34 ms), where a full shower's big puffs
+  cover much of a small screen footprint. The Mac's S14 screenshots at 2.5
+  and 5 s show a tan haze rising through the pile and hanging between the
+  rubble; with `dustOpacity` 0.9 it is a thick plume.
 - Tests:
   - the counts' expected rates and caps;
   - a short budget sampling every event over frames, and a part-empty
