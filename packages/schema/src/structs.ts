@@ -196,7 +196,7 @@ export const SolverParams = defineStruct(
     ['slidingHessian', 'u32'],
     ['sweepOn', 'u32'],
     ['frictionCombine', 'u32', '0 average, 1 min, 2 max, 3 multiply (SceneDesc.frictionCombine)'],
-    ['pad1', 'u32'],
+    ['restDepth', 'f32', 'load floor: a reused contact starts with kN >= |lambdaN| / restDepth; 0 = off'],
     ['pad2', 'u32'],
   ],
   'Per-step uniforms of the GPU AVBD solver.',

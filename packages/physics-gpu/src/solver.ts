@@ -216,6 +216,8 @@ fn setup(m: Manifold, a: u32, b: u32, mu: f32, dst: u32, old: u32, hasOld: bool)
         ct.lambdaN = oc.lambdaN;
         ct.lt = vec2f(dot(f, t1), dot(f, t2));
         ct.kN = clamp(oc.kN * p.gamma, p.penaltyMin, p.penaltyMax);
+        // Load floor (AvbdParams.restDepth): keeps a resting stack stiff enough not to lean over.
+        if (p.restDepth > 0.0) { ct.kN = min(max(ct.kN, abs(oc.lambdaN) / p.restDepth), p.penaltyMax); }
         ct.kT = clamp(oc.kT * p.gamma, p.penaltyMin, p.penaltyMax);
         // Static friction held at the end of last step: keep its anchors, unless they
         // have drifted apart along the surface by stickThreshold since.
@@ -514,6 +516,7 @@ export interface GpuSolverParams {
   maxSweep: number;
   sweep: boolean;
   slidingHessian: boolean;
+  restDepth: number;
 }
 
 export interface SolverBuffers {
@@ -628,6 +631,7 @@ export class AvbdSolver {
     i[at('maxPairs')] = this.maxPairs; i[at('capacity')] = this.capacity;
     i[at('slidingHessian')] = sp.slidingHessian ? 1 : 0; i[at('sweepOn')] = sp.sweep ? 1 : 0;
     i[at('frictionCombine')] = COMBINE_RULES.indexOf(frictionCombine);
+    f[at('restDepth')] = sp.restDepth;
     this.device.queue.writeBuffer(this.uniform, 0, u);
   }
 

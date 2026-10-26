@@ -20,6 +20,17 @@
 //   Static friction keeps the contact anchors of the previous step, so the
 //   friction rows also correct tangential drift.
 //
+// Departure from the paper, for resting stacks: a reused contact's normal
+// penalty starts the step at no less than |lambda_n| / restDepth. At rest the
+// main iterations see no error (alpha = 1), so beta never ramps k up again,
+// and gamma alone would decay it 1% a step. A stack's resistance to tilting is
+// about iterations x k_n x (lever arm)^2 per interface; once that falls below
+// what its weight needs, a tall stack leans over by itself, growing from
+// rounding error (by 0.3-6% a step on Keystone's levels, as k decays).
+// The floor keeps k_n proportional to the load it carries, so it holds for
+// any mass or load. It is not size-free: by an estimate, cubes of half-width
+// w under a lever arm L need restDepth well below iterations x w^2 / L.
+//
 // Departures from the 2D reference, each needed in 3D or by our pipeline:
 // - Speculative contacts: a positive gap at the start of the step is not
 //   error, so it always counts in full (only penetration is scaled by
@@ -66,11 +77,17 @@ export interface AvbdParams {
   maxSweep: number;
   /** Scale the friction stiffness by the cone clamp, k_t min(1, bound / |z|), while sliding (else k_t J J^T, as the reference). */
   slidingHessian: boolean;
+  /**
+   * Load floor, m: a reused contact's normal penalty starts the step at least
+   * |lambda_n| / restDepth, the stiffness at which last step's normal force
+   * would press it in by restDepth. 0 turns it off (the paper's warm start).
+   */
+  restDepth: number;
 }
 
 export const DEFAULT_AVBD: AvbdParams = {
   iterations: 10, beta: 1e5, gamma: 0.99, alpha: 0.99, postStabilize: true, penaltyMin: 1, penaltyMax: 1e9,
-  margin: 0.02, slop: 0, stickThreshold: 0.01, matchDistance: 0.05, maxAngularSpeed: 50, slidingHessian: true, sweep: true, maxSweep: 1,
+  margin: 0.02, slop: 0, stickThreshold: 0.01, matchDistance: 0.05, maxAngularSpeed: 50, slidingHessian: true, sweep: true, maxSweep: 1, restDepth: 0.003,
 };
 
 export const GROUND = -1;
@@ -189,6 +206,7 @@ export class AvbdWorld {
           lambda = [best.lambda[0], dot(f, t1), dot(f, t2)];
           const decay = (x: number) => Math.min(p.penaltyMax, Math.max(p.penaltyMin, x * p.gamma));
           k = [decay(best.k[0]), decay(best.k[1]), decay(best.k[2])];
+          if (p.restDepth > 0) k[0] = Math.min(p.penaltyMax, Math.max(k[0], Math.abs(best.lambda[0]) / p.restDepth));
           if (!p.postStabilize) lambda = [lambda[0] * p.alpha * p.gamma, lambda[1] * p.alpha * p.gamma, lambda[2] * p.alpha * p.gamma];
           // Static friction held at the end of last step: keep its anchors, unless they
           // have drifted apart along the surface by stickThreshold since (as the step's

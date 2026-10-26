@@ -193,6 +193,30 @@ describe('GPU AVBD engine: stacks, towers and impacts', () => {
     expect(worst).toBeLessThan(1e-3);
   });
 
+  // The load floor (AvbdParams.restDepth). Without it this column falls over
+  // (physics-ref/test/avbd.test.ts; on the reference at 10 iterations it is
+  // 0.31 m sideways 6 s after the settle, measured 2026-10-26), so matching the
+  // reference to 0.1 mm also shows the GPU applies the floor. 12 cubes of
+  // 0.5 m plaster, settled with a 0.1 mm lean, then 6 s.
+  const leaning = (k: number): BodyDesc => ({
+    shape: { kind: 'box', half: [0.25, 0.25, 0.25] }, pos: [1e-5 * k, 0.25 + 0.5 * k, 0], rot: [0, 0, 0, 1],
+    linVel: [0, 0, 0], angVel: [0, 0, 0], density: 250, friction: 0.6, restitution: 0.05, tag: 0,
+  });
+  it('a 12-cube column, settled with a lean, stands for 6 s, matching the reference', { timeout: 120_000 }, async (ctx) => {
+    if (!gpu) return ctx.skip();
+    const column: SceneDesc = { ...sceneOf(Array.from({ length: 12 }, (_, k) => leaning(k))), frictionCombine: 'min' };
+    const g = await runGpu(column, 450, {}, 30);
+    const p0 = g.snaps.find((s) => s.step === 90)!.pos;
+    let side = 0;
+    for (const s of g.snaps.filter((x) => x.step >= 90))
+      for (let b = 0; b < 12; b++) side = Math.max(side, Math.hypot(s.pos[3 * b]! - p0[3 * b]!, s.pos[3 * b + 2]! - p0[3 * b + 2]!));
+    expect(side).toBeLessThan(1e-3);
+    const ref = await runRef(column, 450);
+    let worst = 0;
+    for (let k = 0; k < ref.pos.length; k++) worst = Math.max(worst, Math.abs(ref.pos[k]! - g.s1.pos[k]!));
+    expect(worst).toBeLessThan(1e-4);
+  });
+
   it('a 100:1 mass ratio stack holds', async (ctx) => {
     if (!gpu) return ctx.skip();
     const scene = buildScenario('S9', { H: 10, ratio: 100 }, 1);

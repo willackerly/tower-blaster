@@ -158,7 +158,7 @@ struct SolverParams {
   slidingHessian: u32, // @92
   sweepOn: u32, // @96
   frictionCombine: u32, // @100 0 average, 1 min, 2 max, 3 multiply (SceneDesc.frictionCombine)
-  pad1: u32, // @104
+  restDepth: f32, // @104 load floor: a reused contact starts with kN >= |lambdaN| / restDepth; 0 = off
   pad2: u32, // @108
 }
 

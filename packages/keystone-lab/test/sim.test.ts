@@ -48,22 +48,44 @@ describe.each(ENGINES)('levels on %s', (name, make) => {
     if (name === 'Rapier') expect(settled.awake.every((a) => a === 0)).toBe(true); // the reference does not sleep
   }, 120_000);
 
-  // Idle stacks must stay put, or a level changes before the first shot. Known
-  // failure on the AVBD reference: stacks keep sinking (about 1 to 2 mm in these
-  // 2 s, decaying) and L2 later creeps sideways exponentially (1.9 h by 10 s).
-  // Reported to the solver thread; when their fix lands this row starts
-  // passing, vitest flags it, and it.fails becomes it.
-  const holds = name === 'Rapier' ? it.each(levels) : it.fails.each(levels);
-  holds('%s then sits still for 2 s (within 1 mm)', async (_id, def) => {
+  /** Run the pre-settle, then `steps` more; the worst vertical and sideways move of any body since the pre-settle. */
+  const idle = async (def: LevelDef, steps: number) => {
     const e = make();
     const { c, settled } = await presettle(e, def);
-    for (let t = 0; t < 120; t++) await e.step();
-    const later = await e.snapshot();
+    let up = 0, side = 0;
+    for (let t = 0; t < steps; t++) {
+      await e.step();
+      const p = (await e.snapshot()).pos, q = settled.pos;
+      for (let i = 0; i < c.meta.n; i++) {
+        up = Math.max(up, Math.abs(p[3 * i + 1]! - q[3 * i + 1]!));
+        side = Math.max(side, Math.hypot(p[3 * i]! - q[3 * i]!, p[3 * i + 2]! - q[3 * i + 2]!));
+      }
+    }
     e.dispose();
-    let worst = 0;
-    for (let i = 0; i < 3 * c.meta.n; i++) worst = Math.max(worst, Math.abs(later.pos[i]! - settled.pos[i]!));
-    expect(worst).toBeLessThan(1e-3);
-  }, 120_000);
+    return { up, side };
+  };
+
+  // Idle stacks must stay put, or a level changes before the first shot. Known
+  // failure on the AVBD reference for L1 and L2: their tall stacks are still
+  // rising out of the pre-settle's contact compression, 3.6 and 6.1 mm in these
+  // 2 s (they stop at 3.7 and 6.8 mm, by 4-10 s; measured 2026-10-26). When that
+  // is fixed these rows start passing, vitest flags them, and it.fails becomes it.
+  const rising = name === 'Rapier' ? [] : ['L1', 'L2'];
+  const sitsStill = async (_id: string, def: LevelDef) => {
+    const { up, side } = await idle(def, 120);
+    expect(Math.max(up, side)).toBeLessThan(1e-3);
+  };
+  it.each(levels.filter(([id]) => !rising.includes(id)))('%s then sits still for 2 s (within 1 mm)', sitsStill, 120_000);
+  if (rising.length) it.fails.each(levels.filter(([id]) => rising.includes(id)))('%s then sits still for 2 s (within 1 mm)', sitsStill, 120_000);
+
+  // Resting stacks used to lean over by themselves on the AVBD reference,
+  // growing from rounding error: L2's portal moved 0.94 m sideways by 10 s
+  // (L1 55 mm, L3 6.7 mm). The load floor (AvbdParams.restDepth) fixed it;
+  // L2 now moves 0.27 mm (2026-10-26).
+  it('L2 does not lean in 10 s (within 1 mm sideways)', async () => {
+    const { side } = await idle(LEVELS.find((l) => l.id === 'L2')!, 600);
+    expect(side).toBeLessThan(1e-3);
+  }, 180_000);
 });
 
 const open: LevelDef = {
