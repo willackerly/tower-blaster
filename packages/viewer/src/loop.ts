@@ -150,9 +150,9 @@ export interface FreeHooks {
   /** Resolves when every step submitted so far has run (a GPU engine's finish(); at once for a CPU engine). */
   finish(): Promise<void>;
   /**
-   * One step's time, ms, for the HUD. overlapped: the loop queued the step
-   * behind the one before, which was still running, so the GPU did not wait
-   * and the time is from that step's completion to this one's.
+   * One step's time, ms, for the HUD. overlapped: the step was submitted
+   * before the one before it reported done, so it queued behind it (see
+   * runFree for what the time then measures).
    */
   record(ms: number, overlapped: boolean): void;
   /**
@@ -199,13 +199,18 @@ export interface FreeHooks {
  * The cost: while behind, a click lands in the step after the queued one, one
  * step later than serially.
  *
- * Step times come from finish() per step. A step the loop queued behind the
- * one before, still running, is timed from that step's completion to its own
- * (the GPU's time per step); any other step from submit to done, as serially.
- * A step taken after waiting for a frame is never counted as queued: when E +
- * G + L (encode, GPU, callback latency) passes dt but G does not, the step
- * before reports done after this one starts, yet the GPU idled in between.
- * A step that fails (finish() rejects) fails its read too, as serially.
+ * Step times come from finish() per step. Pipelined, a step is timed from
+ * the later of its submit (after encoding) and the step before's reported
+ * done, to its own reported done: the GPU cannot start it before either. Each
+ * done is reported L (callback latency) after the GPU's, so a step queued
+ * behind a running one reads exactly its GPU time G, and any other reads at
+ * most G + L. (Timing from before encoding instead pinned steps near dt to
+ * the frame cadence, and classifying steps by whether the loop waited for a
+ * frame misread steps that queue behind a running one at a frame: 75, 90 and
+ * 144 Hz displays, engines slightly behind.) Serially a step is timed from
+ * before encoding to done, E + G + L, as loop=frame and the bench's latency
+ * mode time it. A step that fails (finish() rejects) fails its read too, as
+ * serially.
  */
 export async function runFree(h: FreeHooks, pacer: Pacer, arrivals: Arrivals): Promise<void> {
   const restart = () => {
@@ -216,8 +221,6 @@ export async function runFree(h: FreeHooks, pacer: Pacer, arrivals: Arrivals): P
   // Pipelined: the newest read in flight (the ones before it land first), and when the last step finished.
   let inflight: Promise<void> | null = null;
   let lastDone = NaN;
-  // The loop waited for a frame or a reset since the last step, so the next step is not queued behind it.
-  let paced = true;
   const drain = async () => {
     const r = inflight;
     inflight = null;
@@ -231,7 +234,6 @@ export async function runFree(h: FreeHooks, pacer: Pacer, arrivals: Arrivals): P
         await h.reset();
         restart();
         lastDone = NaN;
-        paced = true;
         continue;
       }
       if (h.paused()) {
@@ -242,26 +244,23 @@ export async function runFree(h: FreeHooks, pacer: Pacer, arrivals: Arrivals): P
         restart();
         await h.nextFrame();
         wake = h.now();
-        paced = true;
         continue;
       }
       const now = h.now(), dtMs = h.dtMs();
       if (!stepDue(pacer, now - wake < dtMs ? wake : now, dtMs)) {
         await h.nextFrame();
         wake = h.now();
-        paced = true;
         continue;
       }
       const t0 = h.now();
-      const queued = !paced;
-      paced = false;
       await h.step();
       stepped(pacer, dtMs);
       if (h.pipeline()) {
+        const submitted = h.now();
         const done = h.finish().then(() => h.now());
         void done.then((t) => {
-          const overlapped = queued && lastDone > t0;
-          h.record(t - (overlapped ? lastDone : t0), overlapped);
+          const overlapped = lastDone > submitted;
+          h.record(t - (overlapped ? lastDone : submitted), overlapped);
           lastDone = t;
         }, () => {}); // the read below fails with it
         const read = Promise.all([h.refresh(done), done]).then(([at]) => arrived(arrivals, at, dtMs));

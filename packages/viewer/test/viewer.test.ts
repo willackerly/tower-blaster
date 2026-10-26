@@ -354,13 +354,12 @@ describe('free loop (stepDue, alphaAt)', () => {
     // Each step's read is queued right behind it, so it lands snapMs after the step is done, as serially.
     expect(piped.landed.length).toBe(piped.steps);
     expect(piped.landed.every((r) => r.at === piped.doneAt[r.step - 1]! + 2)).toBe(true);
-    // Once the loop is behind (from step 13; a read landed right on a frame at step 12), it queues
-    // every step behind the one before, and times it at its GPU time: done to done. Steps taken at a
-    // frame before that are timed from submit to done, as serially, which includes the wait behind
-    // the step before.
+    // Every step queues behind the one before (at frames at first, then as soon as the read before
+    // lands), except step 0 and step 12, where a read landed right on a frame and the GPU idled
+    // 0.7 ms. Each is timed at its GPU time.
     expect(piped.recorded.length).toBe(piped.steps);
-    expect(piped.recorded.slice(13).every((x) => x.overlapped && Math.abs(x.ms - 18) < 1e-9)).toBe(true);
-    expect(piped.recorded.slice(0, 13).every((x) => !x.overlapped && x.ms >= 18 - 1e-9 && x.ms < 36)).toBe(true);
+    expect(piped.recorded.every((x) => Math.abs(x.ms - 18) < 1e-9)).toBe(true);
+    expect(piped.recorded.flatMap((x, i) => (x.overlapped ? [] : [i]))).toEqual([0, 12]);
     expect(serial.recorded.every((x) => !x.overlapped && Math.abs(x.ms - 18) < 1e-9)).toBe(true);
     // A read is timed from when its step was done, so pipelined and serial both read the 2 ms it takes.
     expect(piped.readMs.every((x) => Math.abs(x - 2) < 1e-9)).toBe(true);
@@ -384,26 +383,37 @@ describe('free loop (stepDue, alphaAt)', () => {
     expect(piped.recorded.some((x) => x.overlapped)).toBe(false);
     expect(piped.busy).toBeCloseTo(16 / dtMs, 2);
   });
-  it('pipelined, a step taken at a frame is never counted as queued, even when the one before reports done after it starts', async () => {
-    // 1 ms to encode, done reported 1.5 ms late: 15 ms on the GPU fits dt, 17.5 ms from submit to done does not.
-    const o = { periodMs: dtMs, snapMs: 1.8, encodeMs: 1, callbackMs: 1.5, frames: 600, pipeline: true };
-    for (const stepMs of [13, 14, 15, 16]) {
-      const r = await simulateFree({ ...o, stepMs });
-      expect(r.perFrame.slice(2).every((n) => n === 1)).toBe(true);
-      // The GPU idled between steps, so each is timed as serially: encode, GPU and callback.
-      expect(r.recorded.some((x) => x.overlapped)).toBe(false);
-      expect(r.recorded.every((x) => Math.abs(x.ms - (1 + stepMs + 1.5)) < 1e-9)).toBe(true);
+  it('pipelined, every step is timed within one callback latency of its GPU time, queued or not, on any display', async () => {
+    // 1 ms to encode, each done reported 1.5 ms late (L), reads 1.8 ms after the GPU.
+    const L = 1.5;
+    const o = { snapMs: 1.8, encodeMs: 1, callbackMs: L, frames: 600, pipeline: true };
+    const cases: Array<{ hz: number; stepMs: number | ((i: number) => number); gaps?: Array<[number, number]> }> = [
+      // Keeping up, near dt (where timing from before encoding pinned steps to dt), slightly and well behind.
+      ...[5, 13, 15, 16, 16.8, 18, 25].flatMap((stepMs) => [60, 75, 90, 120, 144].map((hz) => ({ hz, stepMs }))),
+      // Fast and slow steps in turn; a 120 ms stall.
+      { hz: 60, stepMs: (i: number) => (i % 2 ? 25 : 5) },
+      { hz: 60, stepMs: (i: number) => (i === 100 ? 120 : 10) },
+      // Steps faster than their reads, in a catch-up burst after frames stop.
+      { hz: 60, stepMs: 0.5, gaps: [[30, 34]] },
+    ];
+    for (const c of cases) {
+      const r = await simulateFree({ ...o, ...c, periodMs: 1000 / c.hz });
+      const gpu = (i: number) => (typeof c.stepMs === 'number' ? c.stepMs : c.stepMs(i));
+      const off = r.recorded.flatMap((x, i) => (x.ms >= gpu(i) - 1e-9 && x.ms <= gpu(i) + L + 1e-9 ? [] : [{ i, ...x, gpu: gpu(i) }]));
+      expect({ hz: c.hz, off: off.slice(0, 3) }).toEqual({ hz: c.hz, off: [] });
     }
-    // Behind (25 ms steps, from step 3), the steps the loop queues are timed done to done: the GPU's time.
-    const behind = await simulateFree({ ...o, stepMs: 25 });
-    expect(behind.recorded.slice(3).every((x) => x.overlapped && Math.abs(x.ms - 25) < 1e-9)).toBe(true);
+    // Steps that keep up at 60 Hz are not queued; steps well behind always are, and read exactly G.
+    const fast = await simulateFree({ ...o, periodMs: dtMs, stepMs: 13 });
+    expect(fast.recorded.some((x) => x.overlapped)).toBe(false);
+    const behind = await simulateFree({ ...o, periodMs: dtMs, stepMs: 25 });
+    expect(behind.recorded.slice(1).every((x) => x.overlapped && Math.abs(x.ms - 25) < 1e-9)).toBe(true);
     expect(Math.abs(behind.simSpeed - dtMs / 25)).toBeLessThan(1 / 60 / SIM_SPEED_TAU);
   });
   it('pipelined, an engine that catches up runs one step a frame, unqueued, and each frame shows the step the frame before took', async () => {
     // 25 ms GPU steps (behind) for 300 steps, then 5 ms ones (keeps up).
     const r = await simulateFree({ periodMs: dtMs, stepMs: (i) => (i < 300 ? 25 : 5), snapMs: 1, frames: 900, pipeline: true });
-    // Behind from step 3 (the first steps are taken at frames), then back in step with frames.
-    expect(r.recorded.slice(3, 300).every((x) => x.overlapped && Math.abs(x.ms - 25) < 1e-9)).toBe(true);
+    // Behind, then back in step with frames.
+    expect(r.recorded.slice(1, 300).every((x) => x.overlapped && Math.abs(x.ms - 25) < 1e-9)).toBe(true);
     expect(r.recorded.slice(-300).every((x) => !x.overlapped && Math.abs(x.ms - 5) < 1e-9)).toBe(true);
     // Reads are timed from their step's completion either way.
     expect(r.readMs.every((x) => Math.abs(x - 1) < 1e-9)).toBe(true);
@@ -417,7 +427,7 @@ describe('free loop (stepDue, alphaAt)', () => {
   });
   it('pipelined, the steps in flight when a pause begins are read back, so the paused frames show the newest state', async () => {
     const r = await simulateFree({ periodMs: dtMs, stepMs: 25, snapMs: 1, frames: 400, pipeline: true, paused: [200, 260] });
-    expect(r.recorded.slice(3, 100).every((x) => x.overlapped)).toBe(true);
+    expect(r.recorded.slice(1, 100).every((x) => x.overlapped)).toBe(true);
     // The two steps in flight when the pause began take up to 51 ms (3.06 frames) to land.
     for (let f = 204; f < 260; f += 5) {
       expect(r.newestAt(f)).toBe(r.submittedBy(f));

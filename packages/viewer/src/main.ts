@@ -60,7 +60,7 @@ interface ViewerHandle {
   snapMs: number;
   /** Scene loads so far: 1 after start, one more per R. */
   resets: number;
-  /** Steps the physics loop queued behind the step before while it still ran (loop=free pipelining; see runFree). */
+  /** Steps submitted before the step before reported done, so queued behind it (loop=free pipelining; see runFree). */
   overlapped: number;
   /** Fire a ball through normalized device coords (0, 0 = centre). */
   fire(ndcX?: number, ndcY?: number): void;
