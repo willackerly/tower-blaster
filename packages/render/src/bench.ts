@@ -43,6 +43,8 @@ export interface RenderBenchOptions {
   profiledFrames: number;
   /** Spark pool per renderer (the smoke test shrinks it for software adapters). */
   sparkPool?: number;
+  /** Extra warmup frames for real-dust, so its particle counts and ages are steady (default 240: 4 s of particle time). */
+  dustWarmup?: number;
 }
 
 export const DEFAULT_RENDER_BENCH: RenderBenchOptions = {
@@ -223,8 +225,8 @@ export async function runRenderBench(opts: Partial<RenderBenchOptions> = {}): Pr
       for (let i = 0; i < MAX_INJECT; i++) rends[k]!.burst([w.target[0] + 6 * (shower() - 0.5), 0.2 + 3 * shower(), w.target[2] + 6 * (shower() - 0.5)], [shower() - 0.5, 1, shower() - 0.5], 12);
       return rends[k]!.render(fDust);
     };
-    // real-dust warms up 4 s of particle time more, so its puffs and chips reach their steady count and ages.
-    for (const k of rends.keys()) for (let i = 0; i < o.warmup + (o.variants[k] === 'real-dust' ? 240 : 0); i++) await render(k);
+    // real-dust warms up longer (4 s of particle time), so its puffs and chips reach their steady count and ages.
+    for (const k of rends.keys()) for (let i = 0; i < o.warmup + (o.variants[k] === 'real-dust' ? o.dustWarmup ?? 240 : 0); i++) await render(k);
     await device.queue.onSubmittedWorkDone();
     const batches: number[][] = rends.map(() => []);
     for (let b = 0; b < o.batches; b++) {
