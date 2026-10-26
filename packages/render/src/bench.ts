@@ -176,6 +176,16 @@ export async function runRenderBench(opts: Partial<RenderBenchOptions> = {}): Pr
   const name = `${info.vendor} ${info.architecture} ${info.description}`.trim();
   const software = isSoftwareAdapter(info) || (adapter as GPUAdapter & { isFallbackAdapter?: boolean }).isFallbackAdapter === true;
   const cases: RenderCase[] = [];
+  // One renderer per variant for every world: the first frame compiles its
+  // pipelines and bakes its textures, which on a software adapter is most of
+  // the run. Each world still gets its own warmup.
+  const rends = o.variants.map((variant) => {
+    const rend = new Renderer(device, { size: [o.width, o.height] }, { ...variantOptions(variant), sparkPool: o.sparkPool });
+    if (variant === 'real' || variant === 'real-no-lod' || variant === 'real-no-floor-sky') rend.look = LOOKS.real!;
+    if (variant === 'real-no-stone' || variant === 'real-stone-off' || variant === 'real-step1') rend.look = realLook({ stoneDetail: 0 });
+    rend.toggles = { shadow: variant !== 'no-shadow', post: variant !== 'no-post', sparks: variant !== 'no-sparks', trail: true, heat: variant !== 'no-heat', ao: variant !== 'no-ao' };
+    return rend;
+  });
   for (const worldName of o.worlds) for (const n of o.counts) {
     const w = buildWorld(worldName, n);
     const snap = emptySnapshot(w.descs.length);
@@ -187,15 +197,10 @@ export async function runRenderBench(opts: Partial<RenderBenchOptions> = {}): Pr
       viewProj: multiply(perspective(0.9, o.width / o.height, 0.5, 2000), lookAt(w.eye, w.target)),
       eye: w.eye, focus: w.target, groundY: 0, time: 1, alpha: 1,
     };
-    const rends = o.variants.map((variant) => {
-      const rend = new Renderer(device, { size: [o.width, o.height] }, { ...variantOptions(variant), sparkPool: o.sparkPool });
+    for (const rend of rends) {
       rend.setSource(src);
       rend.setShadowBounds(w.center, w.radius);
-      if (variant === 'real' || variant === 'real-no-lod' || variant === 'real-no-floor-sky') rend.look = LOOKS.real!;
-      if (variant === 'real-no-stone' || variant === 'real-stone-off' || variant === 'real-step1') rend.look = realLook({ stoneDetail: 0 });
-      rend.toggles = { shadow: variant !== 'no-shadow', post: variant !== 'no-post', sparks: variant !== 'no-sparks', trail: true, heat: variant !== 'no-heat', ao: variant !== 'no-ao' };
-      return rend;
-    });
+    }
     for (const rend of rends) for (let i = 0; i < o.warmup; i++) await rend.render(f);
     await device.queue.onSubmittedWorkDone();
     const batches: number[][] = rends.map(() => []);
@@ -234,9 +239,9 @@ export async function runRenderBench(opts: Partial<RenderBenchOptions> = {}): Pr
         drawn: { boxes: args[1]!, farBoxes: args[17]!, shadowBoxes: args[9]! },
         batches: xs,
       });
-      rend.destroy();
     }
   }
+  for (const rend of rends) rend.destroy();
   device.destroy();
   return { adapter: name, software, timestamps, width: o.width, height: o.height, cases };
 }
