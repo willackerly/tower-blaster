@@ -63,6 +63,11 @@ ${ATMO_COMMON_WGSL}
 @group(1) @binding(4) var stoneNormal: texture_2d_array<f32>; // materials.ts: tangent-space normal * 0.5 + 0.5, cavity
 @group(1) @binding(5) var stoneSamp: sampler;
 ${PCG_WGSL}
+// Bench diagnostics (RendererOptions.realDiag): REAL_STONE false compiles the
+// stone samples out ('stone-off'); REAL_BLOCK false shades blocks as step 1
+// did, the stylized body under the atmosphere ('step1').
+override REAL_STONE: bool = true;
+override REAL_BLOCK: bool = true;
 
 // In-scattered radiance (rgb) and green transmittance (a) along the view ray in direction dir (unit).
 fn skyLut(dir: vec3f) -> vec4f {
@@ -86,7 +91,7 @@ fn rot90(v: vec2f, k: u32) -> vec2f {
 struct StoneHit { albedo: vec3f, rough: f32, dn: vec3f, cavity: f32, nLen: f32 }
 fn stoneAt(slot: u32, lp: vec3f, faceN: vec3f) -> StoneHit {
   let detail = fr.stoneDetail.x;
-  if (detail <= 0.0) { return StoneHit(vec3f(1.0), 0.8, vec3f(0.0), 1.0, 1.0); } // uniform: skips both samples
+  if (!REAL_STONE || detail <= 0.0) { return StoneHit(vec3f(1.0), 0.8, vec3f(0.0), 1.0, 1.0); } // uniform: skips both samples
   let ax = abs(faceN);
   let T = select(vec3f(1.0, 0.0, 0.0), vec3f(0.0, 0.0, 1.0), ax.x > 0.5);
   let B = select(vec3f(0.0, 1.0, 0.0), vec3f(0.0, 0.0, 1.0), ax.y > 0.5);
@@ -130,37 +135,36 @@ fn aerial(c: vec3f, rel: vec3f) -> vec3f {
 
 // The real look's block (realism step 3): stone texture and relief, a palette
 // colour per block, chipped lighter edges, dirt toward the ground. Injected at
-// the top of fsBox; the stylized body follows as fsBoxCandy, unused.
-const REAL_FS_BOX = /* wgsl */ `let lp = clamp(v.local, vec3f(-1.0), vec3f(1.0)) * v.half;
-  let pxM = length(fwidth(lp));
-  let faceN = boxFace(v.local, fwidth(v.local));
-  let st = stoneAt(v.slot, lp, faceN);
-  let n = qrot(v.rot, normalize(bevelNormal(lp, faceN, v.half, pxM, fr.bevel) + st.dn));
-  let dndx = dpdx(n);
-  let dndy = dpdy(n);
-  let w = fx[v.slot];
-  let d3 = v.half - abs(lp);
-  let edgeM = max(min(d3.x, d3.y), min(max(d3.x, d3.y), d3.z));
-  // Wear: within 1-4 cm of an edge, further where the stone is pitted, fresh (lighter, rougher) stone shows.
-  let wear = fr.stone.z * (1.0 - smoothstep(0.0, 0.01 + 0.03 * (1.0 - st.cavity) + 0.01 * fr.stone.z, edgeM));
-  let y = v.rel.y + fr.eye.y - fr.groundY;
-  let dirt = fr.stone.w * (1.0 - smoothstep(0.0, 2.5, y));
-  var base = realAlbedo(v.look, v.slot) * st.albedo * mix(1.0, st.cavity, 0.6) * fxTint(w.x);
-  base = mix(base, base * 1.2, wear) * (1.0 - 0.35 * dirt);
-  // Toksvig: bumps averaged away by the mips widen the lobe instead.
-  let a = st.rough * st.rough;
-  let aT = sqrt(min(a * a + 2.0 * (1.0 - st.nLen) / st.nLen, 1.0));
-  let alpha = min(aT + 0.1 * wear, 1.0);
-  let wPx = SEAM / max(pxM, 1e-6);
-  let drawn = max(wPx, 0.75);
-  let seam = 1.0 - 0.4 * min(1.0, wPx / 0.75) * (1.0 - smoothstep(drawn - 0.5, drawn + 0.5, edgeM / max(pxM, 1e-6)));
-  let aoPxM = length(fwidth(v.local * v.half));
-  var c = shade(base * seam, v.rel, n, aaAlpha(alpha, n, dndx, dndy), aaAlpha(0.0049, n, dndx, dndy), 0.0, aoBox(v, n, lp, faceN, aoPxM));
-  c += base * seam * fxGlow(w, fr.time);
-  return vec4f(fog(c, v.rel), 1.0);
-}
-
-@fragment fn fsBoxCandy(v: VOut) -> @location(0) vec4f {
+// the top of fsBox; the stylized body after it runs only when REAL_BLOCK is false.
+const REAL_FS_BOX = /* wgsl */ `if (REAL_BLOCK) {
+    let lp = clamp(v.local, vec3f(-1.0), vec3f(1.0)) * v.half;
+    let pxM = length(fwidth(lp));
+    let faceN = boxFace(v.local, fwidth(v.local));
+    let st = stoneAt(v.slot, lp, faceN);
+    let n = qrot(v.rot, normalize(bevelNormal(lp, faceN, v.half, pxM, fr.bevel) + st.dn));
+    let dndx = dpdx(n);
+    let dndy = dpdy(n);
+    let w = fx[v.slot];
+    let d3 = v.half - abs(lp);
+    let edgeM = max(min(d3.x, d3.y), min(max(d3.x, d3.y), d3.z));
+    // Wear: within 1-4 cm of an edge, further where the stone is pitted, fresh (lighter, rougher) stone shows.
+    let wear = fr.stone.z * (1.0 - smoothstep(0.0, 0.01 + 0.03 * (1.0 - st.cavity) + 0.01 * fr.stone.z, edgeM));
+    let y = v.rel.y + fr.eye.y - fr.groundY;
+    let dirt = fr.stone.w * (1.0 - smoothstep(0.0, 2.5, y));
+    var base = realAlbedo(v.look, v.slot) * st.albedo * mix(1.0, st.cavity, 0.6) * fxTint(w.x);
+    base = mix(base, base * 1.2, wear) * (1.0 - 0.35 * dirt);
+    // Toksvig: bumps averaged away by the mips widen the lobe instead.
+    let a = st.rough * st.rough;
+    let aT = sqrt(min(a * a + 2.0 * (1.0 - st.nLen) / st.nLen, 1.0));
+    let alpha = min(aT + 0.1 * wear, 1.0);
+    let wPx = SEAM / max(pxM, 1e-6);
+    let drawn = max(wPx, 0.75);
+    let seam = 1.0 - 0.4 * min(1.0, wPx / 0.75) * (1.0 - smoothstep(drawn - 0.5, drawn + 0.5, edgeM / max(pxM, 1e-6)));
+    let aoPxM = length(fwidth(v.local * v.half));
+    var c = shade(base * seam, v.rel, n, aaAlpha(alpha, n, dndx, dndy), aaAlpha(0.0049, n, dndx, dndy), 0.0, aoBox(v, n, lp, faceN, aoPxM));
+    c += base * seam * fxGlow(w, fr.time);
+    return vec4f(fog(c, v.rel), 1.0);
+  }
   `;
 
 /**

@@ -84,6 +84,13 @@ export interface RendererOptions {
    * Bench diagnostics for AO's cost: 'no-seam' compiles the seam cavity out.
    */
   aoDiag?: 'no-seam';
+  /**
+   * Bench diagnostics for the real look's block shading: 'stone-off'
+   * compiles the stone samples out (against stone texture 0, the cost of
+   * the samples' code being there at all); 'step1' shades blocks as realism
+   * step 1 did (the stylized body under the atmosphere).
+   */
+  realDiag?: 'stone-off' | 'step1';
   /** Spark slots (default SPARK_POOL, 65536). Every slot costs a simulation thread and a quad per frame. */
   sparkPool?: number;
   /** Output format; default the canvas's preferred one (bgra8unorm on Apple, rgba8unorm elsewhere). Tests set it to cover both. */
@@ -233,10 +240,10 @@ export class Renderer {
     const main = device.createPipelineLayout({ bindGroupLayouts: [this.layout] });
     const shadowPl = device.createPipelineLayout({ bindGroupLayouts: [this.shadowLayout] });
     const fsConsts: Record<string, Record<string, number>> = { fsBox: { AO_SEAM: opts.aoDiag === 'no-seam' ? 0 : 1 } };
-    const color = (vs: string, fs: string, cull: GPUCullMode, seg: number, opts: { format?: GPUTextureFormat; samples?: number; sky?: boolean; buffers?: GPUVertexBufferLayout[]; module?: GPUShaderModule; layout?: GPUPipelineLayout } = {}): GPURenderPipeline => device.createRenderPipeline({
+    const color = (vs: string, fs: string, cull: GPUCullMode, seg: number, opts: { format?: GPUTextureFormat; samples?: number; sky?: boolean; buffers?: GPUVertexBufferLayout[]; module?: GPUShaderModule; layout?: GPUPipelineLayout; constants?: Record<string, number> } = {}): GPURenderPipeline => device.createRenderPipeline({
       layout: opts.layout ?? main,
       vertex: { module: opts.module ?? module, entryPoint: vs, constants: { SEG: seg, ...(vs === 'vsBox' ? { FAN: sceneFan ? 1 : 0 } : {}) }, buffers: opts.buffers ?? [] },
-      fragment: { module: opts.module ?? module, entryPoint: fs, constants: fsConsts[fs] ?? {}, targets: [{ format: opts.format ?? HDR_FORMAT }] },
+      fragment: { module: opts.module ?? module, entryPoint: fs, constants: { ...fsConsts[fs], ...opts.constants }, targets: [{ format: opts.format ?? HDR_FORMAT }] },
       primitive: { topology: 'triangle-list', cullMode: cull, frontFace: 'ccw' },
       depthStencil: opts.sky
         ? { format: 'depth24plus', depthWriteEnabled: false, depthCompare: 'less-equal' }
@@ -306,7 +313,7 @@ export class Renderer {
       const materials = new Materials(device);
       const m = { module: device.createShaderModule({ code: sceneWgsl(true), label: 'scene (real)' }), layout: device.createPipelineLayout({ bindGroupLayouts: [this.layout, layout] }) };
       const pipes: Record<RealPipe, GPURenderPipeline> = {
-        box: color('vsBox', opts.flatBoxes ? 'fsBoxFlat' : 'fsBox', 'back', SEG.box, m),
+        box: color('vsBox', opts.flatBoxes ? 'fsBoxFlat' : 'fsBox', 'back', SEG.box, { ...m, constants: opts.flatBoxes ? {} : { REAL_STONE: opts.realDiag === 'stone-off' ? 0 : 1, REAL_BLOCK: opts.realDiag === 'step1' ? 0 : 1 } }),
         sphere: color('vsSphere', 'fsSphere', 'back', SEG.sphere, m),
         ground: color('vsGround', 'fsGround', 'none', 0, { ...m, buffers: [{ arrayStride: 12, attributes: [{ shaderLocation: 0, offset: 0, format: 'float32x3' }] }] }),
         sky: color('vsSky', 'fsSky', 'none', 0, { ...m, sky: true }),

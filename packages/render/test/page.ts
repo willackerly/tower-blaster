@@ -1660,8 +1660,8 @@ function goldenScene(device: GPUDevice): SnapshotSource {
   return src;
 }
 
-function goldenRenderer(device: GPUDevice, src: BodySource, look: LookParams, size: [number, number]): Renderer {
-  const rend = new Renderer(device, { size }, { format: 'rgba8unorm' });
+function goldenRenderer(device: GPUDevice, src: BodySource, look: LookParams, size: [number, number], opts: RendererOptions = {}): Renderer {
+  const rend = new Renderer(device, { size }, { format: 'rgba8unorm', ...opts });
   rend.look = look;
   rend.setSource(src);
   rend.setShadowBounds([0, 3, -1], 14, [9, 7, 9]);
@@ -1730,7 +1730,7 @@ function fnv(data: ArrayLike<number>): number {
  * the top rows (high sky) and of a band just above the horizon, and the lit
  * count of the point lights (lights.ts meta) after the frame.
  */
-export async function realChecks(looks: Array<string | Partial<RealOptions>>, size: [number, number] = [320, 180], view: [V3, V3] = [[0, 2, 9], [0, 2.6, -1]]) {
+export async function realChecks(looks: Array<string | (Partial<RealOptions> & Pick<RendererOptions, 'realDiag'>)>, size: [number, number] = [320, 180], view: [V3, V3] = [[0, 2, 9], [0, 2.6, -1]]) {
   const { device } = await createDevice({ timestamps: false });
   device.pushErrorScope('validation');
   const src = goldenScene(device);
@@ -1742,7 +1742,8 @@ export async function realChecks(looks: Array<string | Partial<RealOptions>>, si
   const horizonRow = Math.round(((1 - clip[1]! / clip[3]!) / 2) * size[1]);
   const out = [];
   for (const look of looks) {
-    const rend = goldenRenderer(device, src, typeof look === 'string' ? LOOKS[look]! : realLook(look), size);
+    const { realDiag, ...real } = typeof look === 'string' ? {} : look;
+    const rend = goldenRenderer(device, src, typeof look === 'string' ? LOOKS[look]! : realLook(real), size, { realDiag });
     const f: FrameParams = { viewProj, eye, groundY: 0, time: 1, dt: 0, alpha: 1 };
     await rend.render(f);
     const stats = (await rend.render(f, true, true))!;

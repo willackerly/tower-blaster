@@ -942,6 +942,18 @@ describe('drawing', () => {
     expect(new Set(r.frames.map((f) => f.hash)).size).toBe(6);
   });
 
+  it('real look bench diagnostics: stone code compiled out draws what texture 0 draws; step-1 blocks differ', async (ctx) => {
+    if (!gpu) return ctx.skip();
+    const r = await call('realChecks', [{ stoneDetail: 0 }, { stoneDetail: 0, realDiag: 'stone-off' }, { realDiag: 'stone-off' }, { stoneDetail: 0, realDiag: 'step1' }], [320, 180], [[2.2, 0.45, 2.4], [-1, 1.2, -3]]);
+    expect(r.error).toBeNull();
+    const [flat, off, offDetail, step1] = r.frames as NonNullable<typeof r.frames>;
+    // Compiled out, the stone knob does nothing, and the frame is texture 0's to the bit.
+    expect(off!.hash).toBe(flat!.hash);
+    expect(offDetail!.hash).toBe(flat!.hash);
+    // Step 1's blocks: the stylized body (no palette per block, wear or dirt).
+    expect(step1!.hash).not.toBe(flat!.hash);
+  });
+
   it('real look: blue sky paling to the horizon, exposure adapting to a low sun, no stylized lights', async (ctx) => {
     if (!gpu) return ctx.skip();
     const r = await call('realChecks', ['hazy', {}, { sunElevation: 4, sunAzimuth: 200 }, { sunElevation: 4, sunAzimuth: 200, autoExposure: 0 }]);
@@ -1020,7 +1032,7 @@ describe('drawing', () => {
   it('bench:render completes and reports every case (numbers discarded)', async (ctx) => {
     if (!gpu) return ctx.skip();
     const r = await call('runRenderBench', { width: 160, height: 90, counts: [800], warmup: 1, batches: 2, batchFrames: 1, profiledFrames: 1, sparkPool: 1024 });
-    expect(r.cases.map((c) => `${c.world}:${c.variant}`)).toEqual(['near', 'far'].flatMap((w) => ['full', 'no-shadow', 'no-post', 'no-sparks', 'no-heat', 'no-ao', 'no-seam', 'fan', 'cube', 'flat-fan', 'flat-cube', 'real', 'real-no-stone'].map((v) => `${w}:${v}`)));
+    expect(r.cases.map((c) => `${c.world}:${c.variant}`)).toEqual(['near', 'far'].flatMap((w) => ['full', 'no-shadow', 'no-post', 'no-sparks', 'no-heat', 'no-ao', 'no-seam', 'fan', 'cube', 'flat-fan', 'flat-cube', 'real', 'real-no-stone', 'real-stone-off', 'real-step1'].map((v) => `${w}:${v}`)));
     for (const c of r.cases) {
       expect(c.bodies).toBe(800);
       expect(c.frameMs).toBeGreaterThan(0);
