@@ -1,13 +1,17 @@
 // Interactive viewer: any PhysicsEngine, rendered live. Physics runs on the
-// main thread at a fixed 60 Hz (one step per frame by default, maxSteps in the
-// URL allows catch-up; slower engines fall into slow motion, shown as sim speed).
+// main thread at a fixed 60 Hz. By default (loop=free) it steps in its own loop,
+// back to back while steps are due, and every display frame renders the newest
+// snapshots (a CPU engine blocks the thread while it steps, so its frames run
+// between steps); loop=frame steps, reads back and renders in series, one step
+// per frame (maxSteps allows catch-up). Slower engines fall into slow motion,
+// shown as sim speed.
 import { makeEngine, parseSpec } from '@tb/bench';
-import { type BodyDesc, type InputEvent, type PhysicsEngine, type SceneDesc } from '@tb/engine-api';
+import { type BodyDesc, type InputEvent, type PhysicsEngine, type SceneDesc, type Snapshot } from '@tb/engine-api';
 import { boundingRadius } from '@tb/geom';
 import { DEFAULT_AVBD } from '@tb/physics-ref';
 import { buildScenario, SCENARIOS } from '@tb/scenarios';
 import { clampPitch, frame, rayThrough, viewProj, eyeOf, type Orbit } from './camera.ts';
-import { newClock, stepsDue, Window } from './loop.ts';
+import { alphaAt, newArrivals, newClock, newPacer, runFree, stepsDue, taskYield, trackSimSpeed, Window } from './loop.ts';
 import type { V3 } from './math.ts';
 import { escapeHtml } from './html.ts';
 import { engineSpec, parseViewerConfig, presetSearch, toSearch, type ViewerConfig, withOption } from './params.ts';
@@ -50,6 +54,8 @@ interface ViewerHandle {
   /** Bodies the last snapshot reports awake (dormant and frozen ones are not). */
   awake: number;
   stepIndex: number;
+  /** Median physics ms/step over the HUD's window (NaN before the first step); updated with the HUD. */
+  msPerStep: number;
   /** Scene loads so far: 1 after start, one more per R. */
   resets: number;
   /** Fire a ball through normalized device coords (0, 0 = centre). */
@@ -62,7 +68,7 @@ declare global { interface Window { __viewer: ViewerHandle } }
 const canvas = document.getElementById('c') as HTMLCanvasElement;
 const hud = document.getElementById('hud')!;
 const errorBox = document.getElementById('error')!;
-const handle: ViewerHandle = { status: 'loading', frames: 0, bodies: 0, awake: 0, stepIndex: 0, resets: 0, fire: () => {}, capture: async () => null, inputs: [] };
+const handle: ViewerHandle = { status: 'loading', frames: 0, bodies: 0, awake: 0, stepIndex: 0, msPerStep: NaN, resets: 0, fire: () => {}, capture: async () => null, inputs: [] };
 window.__viewer = handle;
 
 function fail(e: unknown) {
@@ -115,11 +121,8 @@ function presets(current: string) {
   for (const p of PRESETS) {
     const b = document.createElement('button');
     b.textContent = p.label;
-    if (presetSearch(p.search, config.engine, config.projectile) === toSearch(config)) b.className = 'on';
-    b.onclick = () => {
-      const c = parseViewerConfig(location.search);
-      location.search = presetSearch(p.search, c.engine, c.projectile);
-    };
+    if (presetSearch(p.search, config) === toSearch(config)) b.className = 'on';
+    b.onclick = () => { location.search = presetSearch(p.search, parseViewerConfig(location.search)); };
     box.appendChild(b);
   }
 }
@@ -143,7 +146,8 @@ async function main() {
   let shapes: BodyDesc[] = [];
   let orbit: Orbit;
   const clock = newClock();
-  const stepMs = new Window(120);
+  // 30 steps (half a second of sim): a longer window lags the scene, whose step cost changes within seconds.
+  const stepMs = new Window(30);
   const snapMs = new Window(60);
   let paused = false;
   let fps = 60;
@@ -182,16 +186,23 @@ async function main() {
     resetting = false;
     handle.stepIndex = engine.stepIndex;
     handle.resets++;
+    // Show the new scene's HUD and any notice now: with loop=free, frames (which redraw it
+    // every 10) need not keep pace with steps.
+    drawHud();
   }
 
+  // With loop=free, frames keep drawing while a reset awaits, so everything a frame reads
+  // (scene, camera, the source's bodies) switches in one synchronous block after the last
+  // await: no frame sees an empty source or the new camera on the old scene.
   async function load(want: ViewerConfig) {
     const next = sceneFor(want); // throws on bad params before anything is torn down
     engine.dispose();
     engine = viewerEngine(want);
+    pushLimit = pushRadiusLimit(engineSpec(want.engine, want.projectile), next);
+    await engine.init(next);
+    const s = await snapshot();
     config = want;
     scene = next;
-    pushLimit = pushRadiusLimit(engineSpec(want.engine, want.projectile), scene);
-    await engine.init(scene);
     events = [...scene.inputs];
     shapes = [...scene.bodies];
     source.reset(scene.bodies);
@@ -201,7 +212,7 @@ async function main() {
     renderer.setShadowBounds(c, Math.hypot(b.max[0] - b.min[0], b.max[1] - b.min[1], b.max[2] - b.min[2]) / 2 + 2);
     handle.inputs = [];
     notice = '';
-    await refresh();
+    apply(s);
   }
 
   const controls = mountControls(document.getElementById('controls')!, {
@@ -234,14 +245,19 @@ async function main() {
     return shapes;
   }
 
-  async function refresh() {
-    const t0 = performance.now();
-    const s = await engine.snapshot();
+  // Snapshot read-back, then upload; snapMs times both.
+  let snapT0 = 0;
+  async function snapshot(): Promise<Snapshot> {
+    snapT0 = performance.now();
+    return engine.snapshot();
+  }
+  function apply(s: Snapshot) {
     source.update(s, shapesFor(s.count));
-    snapMs.push(performance.now() - t0);
+    snapMs.push(performance.now() - snapT0);
     handle.bodies = s.count;
     awake = handle.awake = s.awake.reduce((a, x) => a + x, 0);
   }
+  const refresh = async () => apply(await snapshot());
   let awake = 0;
 
   handle.fire = (x = 0, y = 0) => {
@@ -315,11 +331,13 @@ async function main() {
   const fmt = (x: number) => (Number.isFinite(x) ? (x >= 100 ? x.toFixed(0) : x >= 10 ? x.toFixed(1) : x.toFixed(2)) : '–');
   function drawHud() {
     const med = stepMs.quantile(0.5), p95 = stepMs.quantile(0.95);
+    handle.msPerStep = med;
     const over = med > 7.5;
     hud.innerHTML = `
       <div class="big">${handle.bodies.toLocaleString()} bodies</div>
       <div class="muted">${SCENARIOS[config.scenario]!.title} · ${escapeHtml(config.engine)} (${escapeHtml(engine.info.backend)})</div>
       <div class="row"><span>physics ms/step</span><span class="${over ? 'warn' : ''}">${fmt(med)} <span class="muted">p95 ${fmt(p95)}</span></span></div>
+      <div class="row muted"><span>step</span><span>${handle.stepIndex.toLocaleString()} · loop ${config.loop}</span></div>
       <div class="row"><span>awake</span><span>${awake.toLocaleString()}</span></div>
       <div class="row"><span>fps</span><span>${fmt(fps)}</span></div>
       <div class="row"><span>sim speed</span><span class="${clock.simSpeed < 0.95 ? 'warn' : ''}">${(clock.simSpeed * 100).toFixed(0)}%</span></div>
@@ -333,12 +351,30 @@ async function main() {
   let last = performance.now();
   let pendingCapture: { resolve: (s: PixelStats | null) => void; keep: boolean } | null = null;
   handle.capture = (keep = false) => new Promise((resolve) => { pendingCapture = { resolve, keep }; });
+  const dtMs = () => scene.dt * 1000;
 
-  const tick = async () => {
-    const now = performance.now();
+  /** Draw one frame at alpha, answer a pending capture, and update the frame counters. */
+  async function draw(now: number, alpha: number) {
+    const want = pendingCapture;
+    pendingCapture = null;
+    const stats = await renderer.render({ viewProj: viewProj(orbit, aspect()), eye: eyeOf(orbit), focus: orbit.target, time: now / 1000, groundY: scene.ground?.y ?? 0, alpha }, !!want, want?.keep);
+    if (want) want.resolve(stats);
+    handle.frames++;
+    if (handle.frames % 10 === 1) drawHud();
+  }
+
+  /** Real time since the last frame, folded into the fps estimate. */
+  function frameTime(now: number): number {
     const frameMs = now - last;
     last = now;
     fps = 0.9 * fps + 0.1 * (1000 / Math.max(frameMs, 1));
+    return frameMs;
+  }
+
+  // loop=frame: step, wait, read back and render in series, once per display frame.
+  const tick = async () => {
+    const now = performance.now();
+    const frameMs = frameTime(now);
     resize();
     if (resetAsked) { resetAsked = false; await reset(); }
     const n = paused ? 0 : stepsDue(clock, frameMs, scene.dt, config.maxSteps);
@@ -359,15 +395,71 @@ async function main() {
     }
     handle.stepIndex = engine.stepIndex;
     if (n > 0) await refresh();
-    const want = pendingCapture;
-    pendingCapture = null;
-    const stats = await renderer.render({ viewProj: viewProj(orbit, aspect()), eye: eyeOf(orbit), focus: orbit.target, time: now / 1000, groundY: scene.ground?.y ?? 0, alpha: paused ? 1 : clock.acc / scene.dt }, !!want, want?.keep);
-    if (want) want.resolve(stats);
-    handle.frames++;
-    if (handle.frames % 10 === 1) drawHud();
+    await draw(now, paused ? 1 : clock.acc / scene.dt);
     if (handle.status === 'running') requestAnimationFrame(() => void tick().catch(fail));
   };
-  requestAnimationFrame(() => void tick().catch(fail));
+
+  // loop=free: physics owns the engine (steps, snapshots, resets) and runs back to back
+  // while steps are due; the render loop below never waits for it.
+  const pacer = newPacer();
+  const arrivals = newArrivals();
+  let stepsSinceFrame = 0;
+  const nextFrame = () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+  const tasks = taskYield();
+  const physics = () => runFree({
+    running: () => handle.status === 'running',
+    // A hidden tab gets no frames, so it would show nothing for the GPU and power it spends.
+    paused: () => paused || document.visibilityState !== 'visible',
+    now: () => performance.now(),
+    dtMs,
+    async resetIfAsked() {
+      if (!resetAsked) return false;
+      resetAsked = false;
+      await reset();
+      return true;
+    },
+    async step() {
+      const t0 = performance.now();
+      await engine.step();
+      if (engine.finish) await engine.finish();
+      stepMs.push(performance.now() - t0);
+      stepsSinceFrame++;
+      if (config.autofire && engine.stepIndex === config.autofire) handle.fire(0, 0);
+      handle.stepIndex = engine.stepIndex;
+    },
+    refresh,
+    // A GPU engine's finish() and snapshot wait on the GPU; a CPU engine (no finish) steps synchronously.
+    yields: () => !!engine.finish,
+    nextFrame,
+    nextTask: tasks.next,
+  }, pacer, arrivals);
+  let lastFrameDone: Promise<void> | null = null;
+  // The first frame after the tab was hidden spans the time away, which is not slow motion.
+  let wasHidden = false;
+  document.addEventListener('visibilitychange', () => { wasHidden = true; });
+  const frameLoop = async () => {
+    const now = performance.now();
+    const frameMs = frameTime(now);
+    resize();
+    if (!paused && !resetting && !wasHidden) trackSimSpeed(clock, stepsSinceFrame, frameMs, scene.dt);
+    stepsSinceFrame = 0;
+    wasHidden = false;
+    await draw(now, paused || resetting ? 1 : alphaAt(arrivals, now, dtMs()));
+    // At most two frames queued on the GPU. Nothing else holds this loop back: an offscreen
+    // target gets no presentation backpressure, and on a slow GPU (SwiftShader) the queue was
+    // 50 s behind after 12 s, starving physics and every readback.
+    const done = renderer.device.queue.onSubmittedWorkDone();
+    if (lastFrameDone) await lastFrameDone;
+    lastFrameDone = done;
+    if (handle.status === 'running') requestAnimationFrame(() => void frameLoop().catch(fail));
+  };
+
+  if (config.loop === 'frame') {
+    requestAnimationFrame(() => void tick().catch(fail));
+  } else {
+    void physics().catch(fail);
+    requestAnimationFrame(() => void frameLoop().catch(fail));
+  }
 }
 
 main().catch(fail);
