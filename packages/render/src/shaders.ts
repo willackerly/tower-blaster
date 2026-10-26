@@ -53,6 +53,7 @@ export const Frame = defineStruct('Frame', [
   ['blockAlbedo', 'vec4f', 'real look: the blocks\' mean linear albedo (the ramp\'s)'],
   ['aoFloorSky', 'vec4f', 'real look: floor sky map placement, uv = (rel.xz - xy) * zw (AoVolume.floorSkyFrame)'],
   ['ground', 'vec4f', 'real look: ground layer (materials.ts), texture scale, texture strength (0: none, nothing sampled), macro variation'],
+  ['hills', 'vec4f', 'real look: horizon hills\' greatest height (radians, 0: none) and distance (m)'],
 ], 'Per-frame uniforms of the scene pass.');
 
 // The real look's sky (atmosphere.ts): bind group 1, read by the scene
@@ -77,7 +78,7 @@ override REAL_STONE: bool = true;
 override REAL_BLOCK: bool = true;
 // RendererOptions.realDiag 'no-floor-sky': the floor's baked sky view unused (the vertical sky term only).
 override FLOOR_CONES: bool = true;
-// RendererOptions.realDiag 'ground-off': the ground material compiled out (the flat floor of ground texture 0).
+// RendererOptions.realDiag 'ground-off': the ground material and horizon hills compiled out (the flat floor of ground texture 0).
 override REAL_GROUND: bool = true;
 
 // In-scattered radiance (rgb) and green transmittance (a) along the view ray in direction dir (unit).
@@ -212,6 +213,22 @@ fn groundFar(p: vec2f, pxM: f32) -> GroundHit {
   let rough = mix(0.6, d.a, k);
   let a = sqrt(min(rough * rough * rough * rough + 2.0 * (1.0 - len) / len, 1.0));
   return GroundHit(mix(vec3f(1.0), d.rgb * 2.0, k) * groundMacro(p, pxM).rgb, a, vec3f(0.0, 1.0, 0.0), mix(1.0, n.a, k));
+}
+
+// Hills on the horizon (realism step 4): a ridge at most hills.x radians
+// high, hills.y metres away, its profile a sum of sines in azimuth (so it
+// closes on itself). Their slopes face the eye, tilted 27 degrees, under the
+// sun and the ambient light, in the floor's albedo, seen through hills.y
+// metres of air. rgb, and coverage (the ridge antialiased over a pixel).
+fn hillsAt(dir: vec3f, pxA: f32) -> vec4f {
+  let az = atan2(dir.x, -dir.z);
+  let ridge = fr.hills.x * (0.55 + 0.2 * sin(3.0 * az + 1.3) + 0.15 * sin(7.0 * az + 0.4) + 0.07 * sin(13.0 * az + 2.1) + 0.03 * sin(29.0 * az + 0.7));
+  let cover = 1.0 - smoothstep(ridge - pxA, ridge + pxA, asin(clamp(dir.y, -1.0, 1.0)));
+  if (cover <= 0.0) { return vec4f(0.0); }
+  let back = -dir.xz / max(length(dir.xz), 1e-6);
+  let n = normalize(vec3f(0.5 * back.x, 1.0, 0.5 * back.y));
+  let lit = fr.floor * (mix(atmoAmbient[1].rgb, atmoAmbient[0].rgb, n.y * 0.5 + 0.5) + fr.sunColor * max(dot(n, fr.sun), 0.0));
+  return vec4f(fog(lit, dir * fr.hills.y), cover);
 }
 
 // Aerial perspective: the surface through d metres of air. The LUT holds
@@ -767,15 +784,25 @@ struct SOut { @builtin(position) clip: vec4f, @location(0) ndc: vec2f }
   let x = sqrt(max(1.0 - cs * cs, 0.0)) / sqrt(1.0 - fr.sunCos * fr.sunCos);
   let rim = 1.0 - smoothstep(1.0 - 1.5 * fwidth(x), 1.0, x);
   let pxA = length(fwidth(dir)); // radians per pixel
-  // Below the horizon, the floor goes on past the floor polygon's reach: the same shading, through more air.
   let hEye = fr.eye.y - fr.groundY;
-  if (dir.y < 0.0 && hEye > 0.0) {
+  let below = dir.y < 0.0 && hEye > 0.0;
+  // Hills on the horizon, where the floor does not reach them first.
+  var hill = vec4f(0.0);
+  if (REAL_GROUND && fr.hills.x > 0.0 && !(below && hEye < -dir.y * fr.hills.y)) {
+    hill = hillsAt(dir, pxA);
+    if (hill.a >= 1.0) { return vec4f(hill.rgb, 1.0); }
+  }
+  // Below the horizon, the floor goes on past the floor polygon's reach: the same shading, through more air.
+  var c: vec3f;
+  if (below) {
     let rel = dir * (hEye / -dir.y);
     let gf = groundFar(rel.xz + fr.eye.xz, length(rel) * pxA / -dir.y);
-    return vec4f(groundShade(fr.floor * gf.albedo, rel, gf.a, gf.cavity), 1.0);
+    c = groundShade(fr.floor * gf.albedo, rel, gf.a, gf.cavity);
+  } else {
+    let disc = fr.sunDisc * (1.0 - 0.6 * (1.0 - sqrt(max(1.0 - x * x, 0.0)))) / 0.8 * select(0.0, rim, cs > 0.0);
+    c = skyLut(dir).rgb + disc;
   }
-  let disc = fr.sunDisc * (1.0 - 0.6 * (1.0 - sqrt(max(1.0 - x * x, 0.0)))) / 0.8 * select(0.0, rim, cs > 0.0);
-  return vec4f(skyLut(dir).rgb + disc, 1.0);` : 'return vec4f(select(skyColor(dir), fr.skyHorizon, dir.y < 0.0), 1.0);'}
+  return vec4f(mix(c, hill.rgb, hill.a), 1.0);` : 'return vec4f(select(skyColor(dir), fr.skyHorizon, dir.y < 0.0), 1.0);'}
 }
 
 // ---------------------------------------------------------------- sparks

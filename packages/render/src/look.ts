@@ -64,6 +64,8 @@ export interface LookParams {
    * brightness, tint and a second, coarser scale that hide the tile's repeat.
    */
   ground?: { kind: Ground; scale: number; detail: number; variation: number };
+  /** With an atmosphere: hills on the horizon, their greatest height (degrees above the horizon; 0: none) and distance (km). */
+  hills?: { height: number; distance: number };
   /** false: none of the stylized effects (sparks, ball trail, heat glow, ball and impact lights). Default true. */
   effects?: boolean;
 }
@@ -152,12 +154,15 @@ export interface RealOptions {
   groundDetail: number;
   groundScale: number;
   groundVariation: number;
+  /** Hills on the horizon: their greatest height in degrees above it (0: none) and how far away they are, km. */
+  hills: number;
+  hillDistance: number;
 }
 
 export const REAL_DEFAULTS: RealOptions = {
   sunElevation: 35, sunAzimuth: 140, visibility: 40, sunStrength: 1, groundAlbedo: [0.2, 0.19, 0.17], exposure: 1.1, autoExposure: 0.75,
   stone: 'limestone', stoneDetail: 1, stoneScale: 1, stoneFade: 8, wear: 0.5, dirt: 0.4,
-  groundMaterial: 'gravel', groundDetail: 1, groundScale: 1, groundVariation: 0.5,
+  groundMaterial: 'gravel', groundDetail: 1, groundScale: 1, groundVariation: 0.5, hills: 1.5, hillDistance: 6,
 };
 
 /** Direction toward the sun from elevation and azimuth in degrees. */
@@ -188,6 +193,7 @@ export function realLook(o: Partial<RealOptions> = {}): LookParams {
     ramp: STONE_PALETTES[r.stone].map(hex) as LookParams['ramp'],
     stone: { kind: r.stone, scale: r.stoneScale, wear: r.wear, dirt: r.dirt, detail: r.stoneDetail, fade: r.stoneFade / 100 },
     ground: { kind: r.groundMaterial, scale: r.groundScale, detail: r.groundDetail, variation: r.groundVariation },
+    hills: { height: r.hills, distance: r.hillDistance },
     hueStep: 4,
     ball: hex('#8A8D90'),
     ballEmissive: 0,
@@ -216,6 +222,8 @@ export const REAL_KNOBS = {
   groundDetail: { label: 'ground texture 0-1', min: 0, max: 1, step: 0.05 },
   groundScale: { label: 'ground texture scale', min: 0.1, max: 10, step: 0.1 },
   groundVariation: { label: 'ground variation 0-1', min: 0, max: 1, step: 0.05 },
+  hills: { label: 'horizon hills (deg)', min: 0, max: 10, step: 0.1 },
+  hillDistance: { label: 'hill distance (km)', min: 0.5, max: 100, step: 0.5 },
 } as const;
 export type RealKnob = keyof typeof REAL_KNOBS;
 

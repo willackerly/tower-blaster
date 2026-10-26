@@ -90,8 +90,8 @@ export interface RendererOptions {
    * the samples' code being there at all); 'step1' shades blocks as realism
    * step 1 did (the stylized body under the atmosphere); 'no-floor-sky'
    * gives the floor the vertical sky term only (no floorSky cones);
-   * 'ground-off' compiles the ground material out (the flat floor of
-   * ground texture 0).
+   * 'ground-off' compiles the ground material and horizon hills out (the
+   * flat floor of ground texture 0).
    */
   realDiag?: 'stone-off' | 'step1' | 'no-floor-sky' | 'ground-off';
   /** false: no material level of detail, every box drawn with the stone code (bench and tests). Default true. */
@@ -144,6 +144,7 @@ export function lookUniforms(l: LookParams): Record<string, number | number[]> {
     stone: l.stone ? [STONES.indexOf(l.stone.kind), l.stone.scale, l.stone.wear, l.stone.dirt] : [0, 1, 0, 0],
     stoneDetail: [l.stone?.detail ?? 0, l.stone?.fade ?? 1, 0, 0],
     ground: l.ground ? [GROUND_LAYER + GROUNDS.indexOf(l.ground.kind), l.ground.scale, l.ground.detail, l.ground.variation] : [GROUND_LAYER, 1, 0, 0],
+    hills: l.hills ? [(l.hills.height * Math.PI) / 180, l.hills.distance * 1000, 0, 0] : [0, 1000, 0, 0],
     blockAlbedo: [...[0, 1, 2].map((k) => l.ramp.reduce((acc, c) => acc + srgbToLinear(c[k]!), 0) / l.ramp.length), 0],
     ...Object.fromEntries(l.ramp.map((c, i) => [`ramp${i}`, [...linearToOklab(lin(c) as V3), 0]])),
   };

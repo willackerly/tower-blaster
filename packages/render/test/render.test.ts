@@ -968,7 +968,7 @@ describe('drawing', () => {
 
   it('real look ground: textured floor keeps its brightness, gravel and dirt differ, variation shows, texture 0 is the flat floor', async (ctx) => {
     if (!gpu) return ctx.skip();
-    const r = await call('groundChecks', [{ groundDetail: 0 }, { groundDetail: 0, realDiag: 'ground-off' }, { realDiag: 'ground-off' }, {}, { groundMaterial: 'dirt' }, { groundVariation: 0 }, { groundVariation: 1 }, { groundScale: 4 }]);
+    const r = await call('groundChecks', [{ groundDetail: 0, hills: 0 }, { groundDetail: 0, hills: 0, realDiag: 'ground-off' }, { realDiag: 'ground-off' }, {}, { groundMaterial: 'dirt' }, { groundVariation: 0 }, { groundVariation: 1 }, { groundScale: 4 }]);
     expect(r.error).toBeNull();
     const [flat, offFlat, off, gravel, dirt, still, varied, coarse] = r.frames;
     // Compiled out, the ground knobs do nothing, and the frame is texture 0's to the bit.
@@ -998,6 +998,26 @@ describe('drawing', () => {
     // Measured on SwiftShader (8-bit luma): flat 0.03, gravel 0.32, dirt at full variation 0.26. Before the far
     // ground took the material's mean roughness and cavity, gravel's cut showed as a 1.8 step.
     for (const e of excess) expect(e).toBeLessThan(1);
+  });
+
+  it('real look horizon hills: cover the sky just above the horizon, not above the ridge, and fade into the haze with distance', async (ctx) => {
+    if (!gpu) return ctx.skip();
+    const r = await call('hillChecks', [{ hills: 0 }, { hills: 8 }, { hills: 8, hillDistance: 2 }, { hills: 8, hillDistance: 40 }, { hills: 8, realDiag: 'ground-off' }, { hills: 0, groundDetail: 0 }]);
+    for (const f of r.frames) expect(f.rows).toEqual([1, 3]);
+    expect(r.error).toBeNull();
+    const [none, hills, near, far, off, flat] = r.frames;
+    const d = (a: number[], b: number[]) => Math.hypot(a[0]! - b[0]!, a[1]! - b[1]!, a[2]! - b[2]!);
+    // Measured on SwiftShader (sRGB of the low band): sky 159.6, 158.4, 158.1; hills at 6 km 137.5, 133.0, 128.2;
+    // at 2 km 117.9, 112.3, 106.1; at 40 km (visibility 40 km) 159.2, 157.8, 157.1.
+    // Above the ridge, the sky is untouched.
+    for (const f of [hills, near, far]) expect(d(f!.high, none!.high)).toBeLessThan(1);
+    // Just above the horizon, hills instead of sky.
+    expect(d(hills!.low, none!.low)).toBeGreaterThan(10);
+    // Nearer hills stand out more from the sky; far ones fade into it.
+    expect(d(near!.low, none!.low)).toBeGreaterThan(d(hills!.low, none!.low));
+    expect(d(far!.low, none!.low)).toBeLessThan(d(hills!.low, none!.low));
+    // Compiled out with the ground, the hills are gone, and the frame is the flat floor's under a bare horizon.
+    expect(off!.hash).toBe(flat!.hash);
   });
 
   it('stone level of detail: far boxes drop the stone code with no visible seam, and texture 0 sends every box far', async (ctx) => {

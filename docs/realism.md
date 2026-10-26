@@ -95,9 +95,16 @@ rules the code follows; the doc has the reasoning.
 - Past the floor polygon's reach (600 m), `fsSky` shades the ground with
   the texture's mean (its 1x1 level) under the same macro variation, so the
   cut does not show (render.test.ts measures it).
+- Hills on the horizon (`hillsAt`, in `fsSky`): a ridge `hills` degrees high
+  at most (default 1.5), `hillDistance` km away (default 6), its profile a
+  sum of sines in azimuth so it closes on itself. Slopes face the eye, lit
+  by the sun and the ambient light in the floor's albedo, and are seen
+  through that much air, so far hills fade into the haze. Where the floor
+  reaches past the hills' distance, the hills hide it.
 - Knobs: `groundMaterial`, `groundDetail` (0: the flat floor, nothing
-  sampled), `groundScale`, `groundVariation`. Bench variant
-  `real-flat-ground` compiles the ground material out (`REAL_GROUND`).
+  sampled), `groundScale`, `groundVariation`, `hills` (0: none),
+  `hillDistance`. Bench variant `real-flat-ground` compiles the ground
+  material and the hills out (`REAL_GROUND`).
 - Rejected: hex tiling (Mikkelsen 2022), the best anti-tiling but three
   fetches per texture instead of one each; per-pixel noise (tens of noise
   calls per pixel); parallax offset near the camera, since the relief is

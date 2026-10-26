@@ -1743,8 +1743,8 @@ export async function realChecks(looks: Array<string | (Partial<RealOptions> & P
   const out = [];
   for (const look of looks) {
     const { realDiag, stoneLod, ...real } = typeof look === 'string' ? {} : look;
-    // Object looks keep the floor flat unless they set it, so block statistics see the blocks only.
-    const rend = goldenRenderer(device, src, typeof look === 'string' ? LOOKS[look]! : realLook({ groundDetail: 0, ...real }), size, { realDiag, stoneLod });
+    // Object looks keep the floor flat and the horizon bare unless they set them, so block and sky statistics see those only.
+    const rend = goldenRenderer(device, src, typeof look === 'string' ? LOOKS[look]! : realLook({ groundDetail: 0, hills: 0, ...real }), size, { realDiag, stoneLod });
     const f: FrameParams = { viewProj, eye, groundY: 0, time: 1, dt: 0, alpha: 1 };
     await rend.render(f);
     const stats = (await rend.render(f, true, true))!;
@@ -1857,6 +1857,43 @@ export async function groundSeam(looks: Array<Partial<RealOptions>>, size: [numb
   const err = await device.popErrorScope();
   device.destroy();
   return { cut, rows, error: err?.message ?? null };
+}
+
+/**
+ * Horizon hills (realism step 4), looking level along +z from 2 m up. Per
+ * look: the RGBA frame's hash, and the mean sRGB colour of two bands of rows
+ * across the frame: just above the horizon (0.3 to 0.7 degrees, over the
+ * floor and under every hill of an 8 degree ridge) and well above it (9 to
+ * 10 degrees, over all of them).
+ */
+export async function hillChecks(looks: Array<Partial<RealOptions> & Pick<RendererOptions, 'realDiag'>>, size: [number, number] = [320, 180]) {
+  const { device } = await createDevice({ timestamps: false });
+  device.pushErrorScope('validation');
+  const src = goldenScene(device);
+  const eye: V3 = [0, 2, 40], fov = 0.9;
+  const viewProj = multiply(perspective(fov, size[0] / size[1], 0.1, 2000), lookAt(eye, [eye[0], eye[1], eye[2] + 1]));
+  // Elevation (radians) of row y's pixel centres on the middle column.
+  const elev = (y: number) => Math.atan((1 - (2 * (y + 0.5)) / size[1]) * Math.tan(fov / 2));
+  const deg = Math.PI / 180;
+  const out = [];
+  for (const { realDiag, ...o } of looks) {
+    const rend = goldenRenderer(device, src, realLook(o), size, { realDiag });
+    const f: FrameParams = { viewProj, eye, groundY: 0, time: 1, dt: 0, alpha: 1 };
+    await rend.render(f);
+    const { data, bytesPerRow } = (await rend.render(f, true, true))!.pixels!;
+    const band = (e0: number, e1: number) => {
+      const rows = Array.from({ length: size[1] }, (_, y) => y).filter((y) => elev(y) >= e0 && elev(y) <= e1);
+      const m = [0, 0, 0];
+      for (const y of rows) for (let x = 0; x < size[0]; x++) for (let c = 0; c < 3; c++) m[c] = m[c]! + data[y * bytesPerRow + 4 * x + c]! / (rows.length * size[0]);
+      return { m, rows: rows.length };
+    };
+    const low = band(0.3 * deg, 0.7 * deg), high = band(9 * deg, 10 * deg);
+    out.push({ hash: fnv(data), low: low.m, high: high.m, rows: [low.rows, high.rows] });
+    rend.destroy();
+  }
+  const err = await device.popErrorScope();
+  device.destroy();
+  return { frames: out, error: err?.message ?? null };
 }
 
 export interface AoProbeBody { pos: V3; half: V3; rot?: number[]; sphere?: boolean }

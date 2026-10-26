@@ -74,8 +74,8 @@ export type WorldName = 'near' | 'far';
  * real-no-lod: every box drawn with the stone code (no boxFar list), so
  * real against it is what the material level of detail saves.
  * real-no-floor-sky: the floor without its sky view cones (floorSky).
- * real-flat-ground: the ground material compiled out (realism step 4), so
- * real against it is the ground's cost.
+ * real-flat-ground: the ground material and horizon hills compiled out
+ * (realism step 4), so real against it is their cost.
  * Since the level of detail, stone texture 0 sends every box to boxFar, so
  * real-no-stone and real-stone-off draw the same shader.
  */
@@ -262,7 +262,7 @@ export function renderBenchMarkdown(r: RenderBenchResult, header: string): strin
     ...r.cases.map((c) => `| ${c.world} | ${c.bodies.toLocaleString('en-US')} | ${c.variant} | ${ms(c.frameMs)} | ${ms(c.frameCI[0])}-${ms(c.frameCI[1])} | ${ms(c.gpuP50)} | ${ms(c.gpuP95)} | ${ms(c.gpuSumP50)} | ${passNames.map((p) => ms(c.passes[p])).join(' | ')} | ${c.drawn.boxes.toLocaleString('en-US')} | ${c.drawn.farBoxes.toLocaleString('en-US')} | ${c.drawn.shadowBoxes.toLocaleString('en-US')} |`),
     '',
     'Marginal cost: change in frame time when the thing is switched off (paired over interleaved batches; median and 95% CI; "n.s." when the interval includes 0):', '',
-    '| World | Bodies | Without shadow | Without post (bloom + AgX) | Without sparks | Without heat glow | Without AO | Without seam cavity | Fan in both passes | Cube in both passes | Flat shading: cube vs fan | Real look instead of candy | Stone textures (real vs real without) | Unused stone code (texture 0 vs compiled out) | Step 3 shading without stone (vs step 1 blocks) | Stone level of detail (real vs every box with stone code) | Floor sky view cones | Ground material |', '|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|',
+    '| World | Bodies | Without shadow | Without post (bloom + AgX) | Without sparks | Without heat glow | Without AO | Without seam cavity | Fan in both passes | Cube in both passes | Flat shading: cube vs fan | Real look instead of candy | Stone textures (real vs real without) | Unused stone code (texture 0 vs compiled out) | Step 3 shading without stone (vs step 1 blocks) | Stone level of detail (real vs every box with stone code) | Floor sky view cones | Ground material and hills |', '|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|',
   ];
   const groups = new Map<string, RenderCase[]>();
   for (const c of r.cases) groups.set(`${c.world}:${c.bodies}`, [...(groups.get(`${c.world}:${c.bodies}`) ?? []), c]);
