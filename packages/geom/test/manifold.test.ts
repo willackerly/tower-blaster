@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import fc from 'fast-check';
 import type { Quat, Vec3 } from '@tb/engine-api';
 import {
-  beats, boxBoxDepth, boxBoxManifold, boxGroundManifold, dot, FACE_ABS, FACE_INSET, FACE_REL, length, NO_AXIS, obb, quatFromAxisAngle, quatMul, quatNormalize, reduceContacts, rotate, supportArea, shapeManifold, groundManifold,
+  beats, boxBoxDepth, boxBoxManifold, boxGroundManifold, dot, EDGE_ABS, EDGE_REL, FACE_ABS, FACE_INSET, FACE_REL, length, NO_AXIS, obb, quatFromAxisAngle, quatMul, quatNormalize, reduceContacts, rotate, supportArea, shapeManifold, groundManifold,
   sphereBoxManifold, sphereSphereManifold, sub, type Obb,
 } from '../src/index.ts';
 
@@ -163,10 +163,20 @@ describe('boxBoxManifold', () => {
       if (dot(m.normal, d) < -1e-9) return false;
       const maxDepth = Math.max(...m.points.map((p) => p.depth));
       if (m.points.length < 1 || m.points.length > 4) return false;
-      // The face bias may pick a face axis up to 5% + 1 cm worse than the SAT minimum.
-      if (maxDepth > sat / 0.95 + 0.0101) return false;
+      // The face bias keeps a face axis of depth D unless an edge axis beats it
+      // (see beats): 0.95 D - 0.01 <= the SAT minimum, so D <= (sat + EDGE_ABS) /
+      // (1 - EDGE_REL). That covers the face-against-face rule, (sat + FACE_ABS) /
+      // (1 - FACE_REL), and no contact point is deeper than D. The bound is tight:
+      // over 1.6M random overlapping pairs the deepest point came within 2e-6 of it.
+      if (maxDepth > (sat + EDGE_ABS) / (1 - EDGE_REL) + 1e-9) return false;
       return m.points.every((p) => inside(a, p.point, maxDepth + 1e-9) && inside(b, p.point, maxDepth + 1e-9));
-    }), { numRuns: 3000 });
+    }), {
+      numRuns: 3000,
+      // Seed -900132091 (2026-10-26), shrunk: a face kept over an edge axis 6.7%
+      // shallower, deeper than the earlier bound sat / 0.95 + 0.0101 (which left
+      // out 1 / 0.95 of the 1 cm term), within this one.
+      examples: [[[0, 0, 0], [0, -0.06084349308181975, 0, 0.9981473184603575], [0.9939780000666941, 0, 0, 0.1095798128462316], [0.5177613947235908, 0.10253189698915383, 0.5296914206773689], [0.22219217016277157, 0.6380672664032423, 0.1447060609704961]]],
+    });
   });
 });
 
