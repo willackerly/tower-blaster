@@ -753,7 +753,7 @@ describe('drawing', () => {
     }
     expect(r.software).toBe(isSoftwareAdapter(gpu.adapter));
     expect(await call('renderBenchMarkdown', r, 'h')).toMatch(/Without heat glow/);
-  }, 40_000); // 20 cases on a software adapter
+  }, 120_000); // 22 cases on a software adapter; 40 s timed out on CI beside the GPU physics and game tests (main, 8b5dd54)
 
   it('culling never changes an ID pixel', async (ctx) => {
     if (!gpu) return ctx.skip();
