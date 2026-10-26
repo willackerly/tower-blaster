@@ -1,6 +1,7 @@
 // The renderer's data path: CPU-side packing and references here, GPU
 // culling and drawing in headless Chromium (SwiftShader without a GPU).
 // Correctness only: timings from here are never performance results.
+import { readFileSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { emptySnapshot, TAG_BALL, type BodyDesc } from '@tb/engine-api';
@@ -791,6 +792,33 @@ describe('drawing', () => {
     // The shadow check thresholds on luma, so a swapped readback moves its numbers (measured lit 142 vs 126 on the grazing slab).
     const a = await call('shadowCheck', 'grazing', { format: 'rgba8unorm' }), b = await call('shadowCheck', 'grazing', { format: 'bgra8unorm' });
     expect(b.lit).toBe(a.lit);
+  });
+
+  // Golden images: the looks that exist must not change by a single bit while
+  // new looks are added to the same shaders (docs/realism.md). Hashes are
+  // pinned per platform, since rasterizers differ (Linux and macOS SwiftShader
+  // do); an unpinned platform logs its hashes and skips. UPDATE_GOLDEN=1
+  // rewrites this platform's entry, for a change meant to alter these looks:
+  // say why in the commit.
+  it('candy and hazy are bit-identical to their pinned golden images', async (ctx) => {
+    if (!gpu) return ctx.skip();
+    const r = await call('lookHashes', ['candy', 'hazy']);
+    expect(r.error).toBeNull();
+    expect((await call('lookHashes', ['candy', 'hazy'])).hashes).toEqual(r.hashes); // deterministic, or the gate means nothing
+    const key = `${process.platform} ${gpu.adapter.vendor} ${gpu.adapter.architecture} ${gpu.adapter.description}`.replace(/\s+/g, ' ').trim();
+    const file = fileURLToPath(new URL('./golden/looks.json', import.meta.url));
+    const pinned = JSON.parse(readFileSync(file, 'utf8')) as Record<string, Record<string, number>>;
+    if (process.env.UPDATE_GOLDEN === '1') {
+      pinned[key] = r.hashes;
+      writeFileSync(file, JSON.stringify(pinned, null, 2) + '\n');
+      return;
+    }
+    const want = pinned[key];
+    if (!want) {
+      console.warn(`no golden images pinned for "${key}"; UPDATE_GOLDEN=1 pins: ${JSON.stringify(r.hashes)}`);
+      return ctx.skip();
+    }
+    expect(r.hashes).toEqual(want);
   });
 
   it('shadows fall where the analytic sun rays say, without acne or light leaks', async (ctx) => {

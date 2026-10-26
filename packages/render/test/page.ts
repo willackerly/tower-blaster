@@ -7,7 +7,7 @@ import { emptySnapshot, TAG_BALL, type BodyDesc, type Snapshot } from '@tb/engin
 import { createDevice, readBuffer } from '@tb/gpu';
 import { Body, RenderRecord, Shape, TIER, readStruct } from '@tb/schema';
 import {
-  agx, AGX_WGSL, fromHalf, FX_WORDS, packFx, toHalf, bevelNormal, BEVEL_WGSL, oklabToLinear, OKLAB_WGSL, Post,
+  agx, AGX_WGSL, LOOKS, fromHalf, FX_WORDS, packFx, toHalf, bevelNormal, BEVEL_WGSL, oklabToLinear, OKLAB_WGSL, Post,
   Culler, cullReference, GpuBodySource, invert, listMatches, lookAt, makeGpuBodies, multiply, packBodies, perspective, Renderer, SEGMENTS, SnapshotSource, transform,
   translation, normalize, BOX_VERTS, SPHERE_VERTS, SUN, Sparks, CTL, MAX_EVENTS, flashSlot, FLASHES, MAX_BALLS, TRAIL, Lights, LIGHTS, LIGHT_META, LIGHT_PACKED, MATERIAL, AoVolume, aoGrid, aoFrame, splatReference, composeReference, AO_FOOT_WGSL, AO_SAMPLE_WGSL, AO_SEAM_WGSL, AO_ONE, type SplatBody, unpackImpacts, unpackSparks, spawnReference, stepReference, type Impact, type BodySource, type CullFrame, type FrameParams, type RendererOptions, type V3,
 } from '../src/index.ts';
@@ -1632,6 +1632,54 @@ export async function sceneHash(toggles: Record<string, boolean> = {}, format?: 
   rend.destroy();
   device.destroy();
   return { hash: h, error: err?.message ?? null };
+}
+
+/** Cameras of the golden images: eye, target, groundY. */
+const GOLDEN_VIEWS: Record<string, [V3, V3]> = {
+  near: [[0, 4, 9], [0, 1, -1]],
+  far: [[18, 22, 40], [0, 2, -2]],
+  low: [[2.2, 0.45, 2.4], [-1, 1.2, -3]],
+};
+
+/**
+ * FNV-1a hash of the RGBA frame of each look and view, for the golden-image
+ * gate (render.test.ts): towers, tumbled boxes, the ball, an overlay sphere
+ * and a tinted, glowing slot, with the arena set, so most of the scene
+ * shader's paths draw. Still bodies, so no spark lives and nothing depends on
+ * timing.
+ */
+export async function lookHashes(looks: string[], size: [number, number] = [320, 180]) {
+  const { device } = await createDevice({ timestamps: false });
+  device.pushErrorScope('validation');
+  const descs: BodyDesc[] = [];
+  for (let t = 0; t < 4; t++) for (let y = 0; y < 6; y++) descs.push(box([t * 3 - 4.5, 0.5 + y, -3], [0.5, 0.5, 0.5], [0, 0, 0, 1], t));
+  const r = rng(3);
+  for (let i = 0; i < 40; i++) descs.push(box([(r() - 0.5) * 10, 0.3, 1 + r() * 3], [0.3, 0.3, 0.3], randomQuat(r), 5));
+  descs.push(ball([0, 2, 2], 0.4));
+  const src = new SnapshotSource(device);
+  src.reset(descs);
+  src.update(snapshotOf(descs), descs);
+  const hashes: Record<string, number> = {};
+  for (const name of looks) {
+    const rend = new Renderer(device, { size }, { format: 'rgba8unorm' });
+    rend.look = LOOKS[name]!;
+    rend.setSource(src);
+    rend.setShadowBounds([0, 3, -1], 14, [9, 7, 9]);
+    rend.setFx(5, { tint: [1, 0.5, 0.25], emissive: 0.25 });
+    rend.setOverlay(new Float32Array([1.5, 1, 3, 0.15]));
+    for (const [view, [eye, target]] of Object.entries(GOLDEN_VIEWS)) {
+      const f: FrameParams = { ...camera(eye, target, size[0] / size[1]), groundY: 0, time: 1, dt: 0, alpha: 1 };
+      await rend.render(f);
+      const px = (await rend.render(f, true, true))!.pixels!;
+      let h = 2166136261;
+      for (const b of px.data) h = Math.imul(h ^ b, 16777619) >>> 0;
+      hashes[`${name}:${view}`] = h;
+    }
+    rend.destroy();
+  }
+  const err = await device.popErrorScope();
+  device.destroy();
+  return { hashes, error: err?.message ?? null };
 }
 
 export interface AoProbeBody { pos: V3; half: V3; rot?: number[]; sphere?: boolean }
