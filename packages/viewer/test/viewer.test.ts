@@ -2,8 +2,9 @@ import { describe, expect, it } from 'vitest';
 import fc from 'fast-check';
 import { buildScenario } from '@tb/scenarios';
 import { massOf, TAG_BALL } from '@tb/engine-api';
+import { REAL_DEFAULTS, REAL_KNOBS } from '@tb/render';
 import {
-  alphaAt, arrived, DEFAULT_PROJECTILE, engineSpec, escapeHtml, eyeOf, frame, FREE_MAX_LAG_MS, GPU_SPARE, invert, MAX_STEPS_LIMIT, multiply,
+  albedoHex, alphaAt, arrived, hexAlbedo, realOverrides, DEFAULT_PROJECTILE, engineSpec, escapeHtml, eyeOf, frame, FREE_MAX_LAG_MS, GPU_SPARE, invert, MAX_STEPS_LIMIT, multiply,
   newArrivals, newClock, newPacer, PACE_SLACK, parseProjectile, parseViewerConfig, presetSearch, projectileBody, projectileMass, proposeScene,
   pushRadiusLimit, rayThrough, runFree, SIM_SPEED_TAU, stepDue, stepped, stepsDue, taskYield, toSearch, trackSimSpeed, transform, viewProj, Window,
   withOption, type FreeHooks, type Orbit,
@@ -719,6 +720,29 @@ describe('viewer config', () => {
     expect(() => parseViewerConfig('?loop=frame&pipeline=0')).toThrow(/pipeline applies to loop=free/);
     // maxSteps alone means the frame loop, so it does not take pipeline=0 either.
     expect(() => parseViewerConfig('?maxSteps=2&pipeline=0')).toThrow(/pipeline applies to loop=free/);
+  });
+});
+
+describe('look', () => {
+  it('round-trips the look and the real knobs through the URL; a preset keeps them', () => {
+    const c = parseViewerConfig('?look=real&real.sunElevation=4&real.visibility=12&real.ground=0.3,0.25,0.2');
+    expect(c).toMatchObject({ look: 'real', real: { sunElevation: 4, visibility: 12, groundAlbedo: [0.3, 0.25, 0.2] } });
+    expect(parseViewerConfig(toSearch(c))).toEqual(c);
+    expect(toSearch(parseViewerConfig(''))).not.toMatch(/look|real/);
+    expect(parseViewerConfig(presetSearch('?scenario=S1', c))).toMatchObject({ scenario: 'S1', look: 'real', real: c.real });
+  });
+  it('rejects an unknown look and out-of-range knobs', () => {
+    expect(() => parseViewerConfig('?look=photo')).toThrow(/unknown look/);
+    expect(() => parseViewerConfig('?look=real&real.sunElevation=120')).toThrow(/real.sunElevation/);
+  });
+  it('the panel sends only knobs that differ from the defaults, and refuses out-of-range ones', () => {
+    const values = { ...REAL_DEFAULTS } as Record<keyof typeof REAL_KNOBS, number>;
+    const hex = albedoHex(REAL_DEFAULTS.groundAlbedo);
+    expect(realOverrides(values, hex)).toEqual({});
+    expect(realOverrides({ ...values, sunElevation: 5 }, hex)).toEqual({ sunElevation: 5 });
+    expect(realOverrides(values, '#808080').groundAlbedo).toEqual(hexAlbedo('#808080'));
+    expect(hexAlbedo('#808080')[0]).toBeCloseTo(0.216, 3);
+    expect(() => realOverrides({ ...values, autoExposure: 2 }, hex)).toThrow(/auto exposure/);
   });
 });
 

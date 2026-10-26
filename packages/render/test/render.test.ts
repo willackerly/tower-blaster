@@ -10,7 +10,7 @@ import { Body, readStruct, Shape, TIER } from '@tb/schema';
 import { RapierHost } from '@tb/adapter-rapier';
 import { TieredEngine } from '@tb/lattice';
 import { isSoftwareAdapter, loadBundle, openWebGPU, type WebGPUSession } from '@tb/testkit';
-import { ADAPT_MAX, ADAPT_REF, adaptedExposure, CLEAR_DAY, MIE_H, mieExtinction, multiTable, normalize, OZONE, OZONE_WIDTH, RAYLEIGH, RAYLEIGH_H, skyRadiance, skyViewDir, skyViewUv, sunAtGround, sunDiscRadiance, transmittance, transmittanceHMu, transmittanceTable, transmittanceUv } from '../src/index.ts';
+import { ADAPT_MAX, ADAPT_REF, adaptedExposure, HAZY_DAY, linearToSrgb, lookByName, parseRealOptions, REAL_DEFAULTS, REAL_KNOBS, realLook, writeRealOptions, CLEAR_DAY, MIE_H, mieExtinction, multiTable, normalize, OZONE, OZONE_WIDTH, RAYLEIGH, RAYLEIGH_H, skyRadiance, skyViewDir, skyViewUv, sunAtGround, sunDiscRadiance, transmittance, transmittanceHMu, transmittanceTable, transmittanceUv } from '../src/index.ts';
 import { agx, aoFootReference, bevelNormal, type V3, CANDY_NIGHT, CTL, HOT_FULL, MAX_EVENTS, SPAWN_BUDGET, FX_WORDS, packFx, tintWord, unpackFx, frustumPlanes, linearToOklab, listMatches, oklabToLinear, srgbToLinear, lookAt, lookOf, lookRange, MATERIAL, multiply, packBodies, changedRanges, drawnTier, packShapes, paletteOf, perspective, unpackLook } from '../src/index.ts';
 import type * as Drivers from './page.ts';
 
@@ -206,6 +206,41 @@ describe('look math (CPU twins)', () => {
     const edge: [number, number, number] = [0.5, 0.499, 0.2];
     expect(bevelNormal(edge, [1, 0, 0], half, 0.001, 0.06)[1]).toBeGreaterThan(0.1); // resolved: tilted
     expect(bevelNormal(edge, [1, 0, 0], half, 0.2, 0.06)).toEqual([1, 0, 0]); // 3x the radius per pixel: flat
+  });
+});
+
+describe('real look options', () => {
+  it('round-trip through URL keys, only the ones set, and realLook fills the rest', () => {
+    const o = { sunElevation: 4, sunAzimuth: 200, visibility: 8, sunStrength: 1.5, exposure: 2, autoExposure: 0.5, groundAlbedo: [0.3, 0.25, 0.2] as V3 };
+    const q = new URLSearchParams();
+    writeRealOptions(o, q);
+    expect(parseRealOptions(q)).toEqual(o);
+    const one = new URLSearchParams();
+    writeRealOptions({ sunElevation: 10 }, one);
+    expect([...one.keys()]).toEqual(['real.sunElevation']);
+    expect(parseRealOptions(new URLSearchParams())).toEqual({});
+    expect(realLook(parseRealOptions(new URLSearchParams()))).toEqual(realLook(REAL_DEFAULTS));
+    expect(realLook({ visibility: 8 }).atmosphere!.visibility).toBe(8);
+  });
+  it('rejects values out of range or not numbers', () => {
+    for (const [key, k] of Object.entries(REAL_KNOBS)) {
+      expect(() => parseRealOptions(new URLSearchParams({ [`real.${key}`]: String(k.max + 1) }))).toThrow(new RegExp(`real.${key}`));
+      expect(() => parseRealOptions(new URLSearchParams({ [`real.${key}`]: 'x' }))).toThrow(new RegExp(`real.${key}`));
+      expect(parseRealOptions(new URLSearchParams({ [`real.${key}`]: String(k.min) }))[key as keyof typeof REAL_KNOBS]).toBe(k.min);
+    }
+    for (const g of ['0.2,0.2', '0.2,0.2,1.5', 'a,b,c']) expect(() => parseRealOptions(new URLSearchParams({ 'real.ground': g }))).toThrow(/real.ground/);
+  });
+  it('the defaults sit inside the knob ranges, and looks resolve by name', () => {
+    for (const [key, k] of Object.entries(REAL_KNOBS)) {
+      const v = REAL_DEFAULTS[key as keyof typeof REAL_KNOBS];
+      expect(v).toBeGreaterThanOrEqual(k.min);
+      expect(v).toBeLessThanOrEqual(k.max);
+    }
+    expect(lookByName('real', { sunElevation: 4 })).toEqual(realLook({ sunElevation: 4 }));
+    expect(lookByName('hazy')).toBe(HAZY_DAY);
+    expect(lookByName('nope')).toBe(CANDY_NIGHT);
+    expect(lookByName('nope', {}, HAZY_DAY)).toBe(HAZY_DAY);
+    expect(srgbToLinear(linearToSrgb(0.19))).toBeCloseTo(0.19, 12);
   });
 });
 

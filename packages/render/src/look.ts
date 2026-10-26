@@ -169,6 +169,51 @@ export function realLook(o: Partial<RealOptions> = {}): LookParams {
   };
 }
 
+/** The real look's scalar knobs: URL key real.<name>, panel label, accepted range and step. */
+export const REAL_KNOBS = {
+  sunElevation: { label: 'sun elevation (deg)', min: -10, max: 90, step: 1 },
+  sunAzimuth: { label: 'sun azimuth (deg)', min: -360, max: 360, step: 5 },
+  visibility: { label: 'visibility (km)', min: 1, max: 400, step: 1 },
+  sunStrength: { label: 'sun strength x', min: 0.05, max: 10, step: 0.05 },
+  exposure: { label: 'exposure', min: 0.05, max: 20, step: 0.05 },
+  autoExposure: { label: 'auto exposure 0-1', min: 0, max: 1, step: 0.05 },
+} as const;
+export type RealKnob = keyof typeof REAL_KNOBS;
+
+/**
+ * The real look's options from URL keys real.<knob> and real.ground (linear
+ * albedo r,g,b, each 0 to 1); absent keys are left out, so realLook fills
+ * them from REAL_DEFAULTS. Rejects values that are not numbers or are out of range.
+ */
+export function parseRealOptions(q: URLSearchParams): Partial<RealOptions> {
+  const o: Partial<RealOptions> = {};
+  for (const [key, k] of Object.entries(REAL_KNOBS) as [RealKnob, (typeof REAL_KNOBS)[RealKnob]][]) {
+    const raw = q.get(`real.${key}`);
+    if (raw === null || raw === '') continue;
+    const v = Number(raw);
+    if (!Number.isFinite(v) || v < k.min || v > k.max) throw new Error(`real.${key} must be a number from ${k.min} to ${k.max}: ${raw}`);
+    o[key] = v;
+  }
+  const ground = q.get('real.ground');
+  if (ground !== null && ground !== '') {
+    const v = ground.split(',').map(Number);
+    if (v.length !== 3 || v.some((x) => !Number.isFinite(x) || x < 0 || x > 1)) throw new Error(`real.ground must be three numbers from 0 to 1 (linear albedo r,g,b): ${ground}`);
+    o.groundAlbedo = v as V3;
+  }
+  return o;
+}
+
+/** Writes the options that are set as URL keys (parseRealOptions reads them back). */
+export function writeRealOptions(o: Partial<RealOptions>, q: URLSearchParams): void {
+  for (const key of Object.keys(REAL_KNOBS) as RealKnob[]) if (o[key] !== undefined) q.set(`real.${key}`, String(o[key]));
+  if (o.groundAlbedo) q.set('real.ground', o.groundAlbedo.join(','));
+}
+
+/** A look by name; real takes its options (the others have none). Unknown names give fallback. */
+export function lookByName(name: string, real: Partial<RealOptions> = {}, fallback: LookParams = CANDY_NIGHT): LookParams {
+  return name === 'real' ? realLook(real) : LOOKS[name] ?? fallback;
+}
+
 export const REAL = realLook();
 
 export const LOOKS: Record<string, LookParams> = { candy: CANDY_NIGHT, hazy: HAZY_DAY, real: REAL };
@@ -177,6 +222,10 @@ export const LOOKS: Record<string, LookParams> = { candy: CANDY_NIGHT, hazy: HAZ
 
 export function srgbToLinear(c: number): number {
   return c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+}
+
+export function linearToSrgb(c: number): number {
+  return c <= 0.0031308 ? c * 12.92 : 1.055 * c ** (1 / 2.4) - 0.055;
 }
 
 export function linearToOklab([r, g, b]: V3): V3 {

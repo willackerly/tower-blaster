@@ -1,8 +1,10 @@
 // Viewer configuration from the URL, e.g.
 // ?scenario=S4&param.N=3000&engine=rapier&sleep=1&loop=frame&maxSteps=2&proj=cube&proj.size=2
-// (engine: a @tb/bench spec; the default is the GPU engine; proj*: see projectile.ts)
+// (engine: a @tb/bench spec; the default is the GPU engine; proj*: see projectile.ts;
+// look=real with real.* knobs: see parseRealOptions in @tb/render)
 import { parseSpec } from '@tb/bench';
 import { boundingRadius } from '@tb/geom';
+import { LOOKS, parseRealOptions, type RealOptions, writeRealOptions } from '@tb/render';
 import { SCENARIOS } from '@tb/scenarios';
 import { MAX_STEPS_LIMIT } from './loop.ts';
 import { DEFAULT_PROJECTILE, parseProjectile, type Projectile, projectileShape, writeProjectile } from './projectile.ts';
@@ -17,8 +19,10 @@ export interface ViewerConfig {
   autofire: number;
   /** Render to an offscreen texture (headless tests; see Renderer.create). */
   offscreen: boolean;
-  /** Look preset: candy (default) or hazy. */
+  /** Look preset: candy (default), hazy or real. */
   look: string;
+  /** The real look's knobs that differ from REAL_DEFAULTS (URL keys real.*); kept whatever the look. */
+  real: Partial<RealOptions>;
   /**
    * free (default): physics steps in its own loop, back to back while steps
    * are due, and every frame renders (stepDue, alphaAt). frame: each frame
@@ -37,7 +41,7 @@ export interface ViewerConfig {
   projectile: Projectile;
 }
 
-export const DEFAULT_CONFIG: ViewerConfig = { engine: 'avbd-gpu', scenario: 'S4', params: { N: 2000, F: 4, H: 12 }, seed: 1, sleep: null, autofire: 0, offscreen: false, look: 'candy', loop: 'free', pipeline: true, maxSteps: 1, projectile: DEFAULT_PROJECTILE };
+export const DEFAULT_CONFIG: ViewerConfig = { engine: 'avbd-gpu', scenario: 'S4', params: { N: 2000, F: 4, H: 12 }, seed: 1, sleep: null, autofire: 0, offscreen: false, look: 'candy', real: {}, loop: 'free', pipeline: true, maxSteps: 1, projectile: DEFAULT_PROJECTILE };
 
 export function parseViewerConfig(search: string): ViewerConfig {
   const q = new URLSearchParams(search);
@@ -53,6 +57,8 @@ export function parseViewerConfig(search: string): ViewerConfig {
   const sleep = q.get('sleep');
   const maxSteps = Number(q.get('maxSteps') ?? DEFAULT_CONFIG.maxSteps);
   if (!Number.isInteger(maxSteps) || maxSteps < 1 || maxSteps > MAX_STEPS_LIMIT) throw new Error(`maxSteps must be an integer from 1 to ${MAX_STEPS_LIMIT}: ${q.get('maxSteps')}`);
+  const look = q.get('look') ?? DEFAULT_CONFIG.look;
+  if (!LOOKS[look]) throw new Error(`unknown look ${look}; known: ${Object.keys(LOOKS).join(', ')}`);
   // maxSteps is a frame-loop option, so a URL that sets it without a loop keeps meaning what it did before loop=free.
   const loop = q.get('loop') ?? (q.has('maxSteps') ? 'frame' : DEFAULT_CONFIG.loop);
   if (loop !== 'free' && loop !== 'frame') throw new Error(`loop must be free or frame: ${loop}`);
@@ -68,7 +74,8 @@ export function parseViewerConfig(search: string): ViewerConfig {
     sleep: sleep === null ? null : sleep === '1' || sleep === 'true',
     autofire: Number(q.get('autofire') ?? 0),
     offscreen: q.get('offscreen') === '1',
-    look: q.get('look') ?? DEFAULT_CONFIG.look,
+    look,
+    real: parseRealOptions(q),
     loop,
     pipeline: pipeline === '1',
     maxSteps,
@@ -84,6 +91,7 @@ export function toSearch(c: ViewerConfig): string {
   if (c.autofire) q.set('autofire', String(c.autofire));
   if (c.offscreen) q.set('offscreen', '1');
   if (c.look !== DEFAULT_CONFIG.look) q.set('look', c.look);
+  writeRealOptions(c.real, q);
   if (c.loop !== DEFAULT_CONFIG.loop) q.set('loop', c.loop);
   if (c.pipeline !== DEFAULT_CONFIG.pipeline) q.set('pipeline', c.pipeline ? '1' : '0');
   if (c.maxSteps !== DEFAULT_CONFIG.maxSteps) q.set('maxSteps', String(c.maxSteps));
@@ -91,10 +99,10 @@ export function toSearch(c: ViewerConfig): string {
   return `?${q}`;
 }
 
-/** A preset's search with how the viewer runs (engine, loop) and the projectile kept, which is where its button takes you. */
-export function presetSearch(preset: string, cur: Pick<ViewerConfig, 'engine' | 'loop' | 'pipeline' | 'maxSteps' | 'projectile'>): string {
-  const { engine, loop, pipeline, maxSteps, projectile } = cur;
-  return toSearch({ ...parseViewerConfig(preset), engine, loop, pipeline, maxSteps, projectile });
+/** A preset's search with how the viewer runs (engine, loop, pipeline), the projectile and the look kept, which is where its button takes you. */
+export function presetSearch(preset: string, cur: Pick<ViewerConfig, 'engine' | 'loop' | 'pipeline' | 'maxSteps' | 'projectile'> & Partial<Pick<ViewerConfig, 'look' | 'real'>>): string {
+  const { engine, loop, pipeline, maxSteps, projectile, look = DEFAULT_CONFIG.look, real = {} } = cur;
+  return toSearch({ ...parseViewerConfig(preset), engine, loop, pipeline, maxSteps, projectile, look, real });
 }
 
 /** Bodies fired balls may add on the engines whose id tables are sized at init (GPU AVBD, the tiers). */

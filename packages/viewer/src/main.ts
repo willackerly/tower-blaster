@@ -18,7 +18,7 @@ import { engineSpec, parseViewerConfig, presetSearch, toSearch, type ViewerConfi
 import { projectileBody, projectileShape, pushRadiusLimit } from './projectile.ts';
 import { mountControls } from './controls.ts';
 import { createDevice } from '@tb/gpu';
-import { CANDY_NIGHT, LOOKS, Renderer, SnapshotSource, type PixelStats } from '@tb/render';
+import { lookByName, Renderer, SnapshotSource, type PixelStats } from '@tb/render';
 
 const PRESETS: Array<{ label: string; search: string }> = [
   { label: 'Tower 8×8×30', search: '?scenario=S1&param.gap=0.02' },
@@ -138,7 +138,7 @@ async function main() {
   const renderer = new Renderer(device, config.offscreen ? { size: [640, 400] } : { canvas });
   const source = new SnapshotSource(device);
   renderer.setSource(source);
-  renderer.look = LOOKS[config.look] ?? CANDY_NIGHT;
+  renderer.look = lookByName(config.look, config.real);
   renderer.device.lost.then((info) => fail(`GPU device lost: ${info.message}`));
   renderer.device.addEventListener('uncapturederror', (e) => fail((e as GPUUncapturedErrorEvent).error.message));
 
@@ -225,6 +225,14 @@ async function main() {
     rebuild(next) {
       nextConfig = next;
       resetAsked = true;
+    },
+    setLook(look, real) {
+      // Shading only: live, nothing to rebuild. A queued rebuild keeps it too.
+      config = { ...config, look, real };
+      if (nextConfig) nextConfig = { ...nextConfig, look, real };
+      renderer.look = lookByName(look, real);
+      history.replaceState(null, '', toSearch(config));
+      presets(location.search);
     },
     setProjectile(p) {
       // A rebuild already queued takes the projectile with it (and sizes its engine for it).
