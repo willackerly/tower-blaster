@@ -27,7 +27,7 @@ import { bootstrapCI, pairedPercentDiff, quantile, verdict } from '@tb/metrics';
 import { lookAt, multiply, perspective, type V3 } from './math.ts';
 import { Renderer, type FrameParams, type RendererOptions } from './renderer.ts';
 import { SnapshotSource } from './source.ts';
-import { LOOKS } from './look.ts';
+import { LOOKS, realLook } from './look.ts';
 
 export interface RenderBenchOptions {
   width: number;
@@ -45,12 +45,12 @@ export interface RenderBenchOptions {
 }
 
 export const DEFAULT_RENDER_BENCH: RenderBenchOptions = {
-  width: 2560, height: 1440, counts: [10_000, 100_000], worlds: ['near', 'far'], variants: ['full', 'no-shadow', 'no-post', 'no-sparks', 'no-heat', 'no-ao', 'no-seam', 'fan', 'cube', 'flat-fan', 'flat-cube', 'real'],
+  width: 2560, height: 1440, counts: [10_000, 100_000], worlds: ['near', 'far'], variants: ['full', 'no-shadow', 'no-post', 'no-sparks', 'no-heat', 'no-ao', 'no-seam', 'fan', 'cube', 'flat-fan', 'flat-cube', 'real', 'real-no-stone'],
   warmup: 30, batches: 10, batchFrames: 30, profiledFrames: 100,
 };
 
 export const QUICK_RENDER_BENCH: RenderBenchOptions = {
-  width: 320, height: 180, counts: [2000], worlds: ['near', 'far'], variants: ['full', 'no-shadow', 'no-post', 'no-sparks', 'no-heat', 'no-ao', 'no-seam', 'fan', 'cube', 'flat-fan', 'flat-cube', 'real'],
+  width: 320, height: 180, counts: [2000], worlds: ['near', 'far'], variants: ['full', 'no-shadow', 'no-post', 'no-sparks', 'no-heat', 'no-ao', 'no-seam', 'fan', 'cube', 'flat-fan', 'flat-cube', 'real', 'real-no-stone'],
   warmup: 1, batches: 2, batchFrames: 2, profiledFrames: 2,
 };
 
@@ -66,8 +66,10 @@ export type WorldName = 'near' | 'far';
  * fragment shading, and fan vs cube minus that is the shading's share.
  * real: the real look (docs/realism.md) in place of candy: its sky LUTs run
  * in the cull pass, and it has no sparks, trail, heat or point lights.
+ * real-no-stone: real with stone texture 0 (no texture samples), so real
+ * against it is the stone materials' cost.
  */
-export type VariantName = 'full' | 'no-shadow' | 'no-post' | 'no-sparks' | 'no-heat' | 'no-ao' | 'no-seam' | 'fan' | 'cube' | 'flat-fan' | 'flat-cube' | 'real';
+export type VariantName = 'full' | 'no-shadow' | 'no-post' | 'no-sparks' | 'no-heat' | 'no-ao' | 'no-seam' | 'fan' | 'cube' | 'flat-fan' | 'flat-cube' | 'real' | 'real-no-stone';
 
 function variantOptions(v: VariantName): RendererOptions {
   if (v === 'fan' || v === 'flat-fan') return { boxPath: 'fan', flatBoxes: v === 'flat-fan' };
@@ -177,6 +179,7 @@ export async function runRenderBench(opts: Partial<RenderBenchOptions> = {}): Pr
       rend.setSource(src);
       rend.setShadowBounds(w.center, w.radius);
       if (variant === 'real') rend.look = LOOKS.real!;
+      if (variant === 'real-no-stone') rend.look = realLook({ stoneDetail: 0 });
       rend.toggles = { shadow: variant !== 'no-shadow', post: variant !== 'no-post', sparks: variant !== 'no-sparks', trail: true, heat: variant !== 'no-heat', ao: variant !== 'no-ao' };
       return rend;
     });
@@ -238,7 +241,7 @@ export function renderBenchMarkdown(r: RenderBenchResult, header: string): strin
     ...r.cases.map((c) => `| ${c.world} | ${c.bodies.toLocaleString('en-US')} | ${c.variant} | ${ms(c.frameMs)} | ${ms(c.frameCI[0])}-${ms(c.frameCI[1])} | ${ms(c.gpuP50)} | ${ms(c.gpuP95)} | ${ms(c.gpuSumP50)} | ${passNames.map((p) => ms(c.passes[p])).join(' | ')} | ${c.drawn.boxes.toLocaleString('en-US')} | ${c.drawn.shadowBoxes.toLocaleString('en-US')} |`),
     '',
     'Marginal cost: change in frame time when the thing is switched off (paired over interleaved batches; median and 95% CI; "n.s." when the interval includes 0):', '',
-    '| World | Bodies | Without shadow | Without post (bloom + AgX) | Without sparks | Without heat glow | Without AO | Without seam cavity | Fan in both passes | Cube in both passes | Flat shading: cube vs fan | Real look instead of candy |', '|---|---|---|---|---|---|---|---|---|---|---|---|',
+    '| World | Bodies | Without shadow | Without post (bloom + AgX) | Without sparks | Without heat glow | Without AO | Without seam cavity | Fan in both passes | Cube in both passes | Flat shading: cube vs fan | Real look instead of candy | Stone textures (real vs real without) |', '|---|---|---|---|---|---|---|---|---|---|---|---|---|',
   ];
   const groups = new Map<string, RenderCase[]>();
   for (const c of r.cases) groups.set(`${c.world}:${c.bodies}`, [...(groups.get(`${c.world}:${c.bodies}`) ?? []), c]);
@@ -250,7 +253,7 @@ export function renderBenchMarkdown(r: RenderBenchResult, header: string): strin
       const pct = (x: number) => `${x >= 0 ? '+' : ''}${(100 * x).toFixed(1)}%`;
       return `${pct(d.estimate)} [${pct(d.lo)}, ${pct(d.hi)}]${verdict(d) === 'no-difference' ? ' n.s.' : ''}`;
     };
-    lines.push(`| ${cs[0]!.world} | ${cs[0]!.bodies.toLocaleString('en-US')} | ${diff(by('no-shadow'))} | ${diff(by('no-post'))} | ${diff(by('no-sparks'))} | ${diff(by('no-heat'))} | ${diff(by('no-ao'))} | ${diff(by('no-seam'))} | ${diff(by('fan'))} | ${diff(by('cube'))} | ${diff(by('flat-cube'), by('flat-fan'))} | ${diff(by('real'))} |`);
+    lines.push(`| ${cs[0]!.world} | ${cs[0]!.bodies.toLocaleString('en-US')} | ${diff(by('no-shadow'))} | ${diff(by('no-post'))} | ${diff(by('no-sparks'))} | ${diff(by('no-heat'))} | ${diff(by('no-ao'))} | ${diff(by('no-seam'))} | ${diff(by('fan'))} | ${diff(by('cube'))} | ${diff(by('flat-cube'), by('flat-fan'))} | ${diff(by('real'))} | ${diff(by('real'), by('real-no-stone'))} |`);
   }
   return lines.join('\n');
 }

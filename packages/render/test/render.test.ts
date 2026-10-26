@@ -211,7 +211,7 @@ describe('look math (CPU twins)', () => {
 
 describe('real look options', () => {
   it('round-trip through URL keys, only the ones set, and realLook fills the rest', () => {
-    const o = { sunElevation: 4, sunAzimuth: 200, visibility: 8, sunStrength: 1.5, exposure: 2, autoExposure: 0.5, groundAlbedo: [0.3, 0.25, 0.2] as V3 };
+    const o = { sunElevation: 4, sunAzimuth: 200, visibility: 8, sunStrength: 1.5, exposure: 2, autoExposure: 0.5, groundAlbedo: [0.3, 0.25, 0.2] as V3, stone: 'granite' as const, stoneDetail: 0.5, stoneScale: 2, wear: 0.2, dirt: 0 };
     const q = new URLSearchParams();
     writeRealOptions(o, q);
     expect(parseRealOptions(q)).toEqual(o);
@@ -229,6 +229,7 @@ describe('real look options', () => {
       expect(parseRealOptions(new URLSearchParams({ [`real.${key}`]: String(k.min) }))[key as keyof typeof REAL_KNOBS]).toBe(k.min);
     }
     for (const g of ['0.2,0.2', '0.2,0.2,1.5', 'a,b,c']) expect(() => parseRealOptions(new URLSearchParams({ 'real.ground': g }))).toThrow(/real.ground/);
+    expect(() => parseRealOptions(new URLSearchParams({ 'real.stone': 'marble' }))).toThrow(/real.stone/);
   });
   it('the defaults sit inside the knob ranges, and looks resolve by name', () => {
     for (const [key, k] of Object.entries(REAL_KNOBS)) {
@@ -909,6 +910,38 @@ describe('drawing', () => {
     }
   });
 
+  it('stone bake matches its CPU twin, tiles, keeps unit normals, and box-filters its mips', async (ctx) => {
+    if (!gpu) return ctx.skip();
+    const r = await call('materialBake');
+    expect(r.error).toBeNull();
+    // Measured on SwiftShader: twin within 0.5 of an 8-bit step (rounding), mips within 0.5 step,
+    // the wrap jump within 1.1x the jump between neighbours inside.
+    for (const l of r.layers) {
+      expect(l.twin, l.stone).toBeLessThanOrEqual(1);
+      expect(l.unit, l.stone).toBeLessThan(0.02);
+      expect(l.mip, l.stone).toBeLessThanOrEqual(1);
+      expect(l.tile.wrap, l.stone).toBeLessThan(1.5 * l.tile.inside + 1);
+      for (const m of l.mean) { expect(m, l.stone).toBeGreaterThan(0.8); expect(m, l.stone).toBeLessThan(1.15); }
+    }
+  });
+
+  it('real look stones: textured blocks carry fine detail, each stone differs, and texture 0 is flat', async (ctx) => {
+    if (!gpu) return ctx.skip();
+    // Close up on a tumbled block's face (the golden "low" view).
+    const r = await call('realChecks', [{}, { stoneDetail: 0 }, { stone: 'granite' }, { stone: 'sandstone' }, { stone: 'concrete' }, { stoneScale: 3 }], [320, 180], [[2.2, 0.45, 2.4], [-1, 1.2, -3]]);
+    expect(r.error).toBeNull();
+    const [lime, flat, granite, , concrete, scaled] = r.frames as NonNullable<typeof r.frames>;
+    // Measured on SwiftShader (mean |luma - neighbour mean|): limestone 1.11, flat 0.65, granite 2.38,
+    // sandstone 1.01, concrete 0.74, limestone at 3x scale 0.95.
+    expect(lime!.detail).toBeGreaterThan(1.4 * flat!.detail);
+    expect(granite!.detail).toBeGreaterThan(1.5 * lime!.detail);
+    expect(concrete!.detail).toBeGreaterThan(flat!.detail);
+    expect(scaled!.detail).toBeLessThan(lime!.detail);
+    // The texture's mean multiplier is about 1: the same block colours on average.
+    expect(Math.abs(lime!.meanLuma / flat!.meanLuma - 1)).toBeLessThan(0.05);
+    expect(new Set(r.frames.map((f) => f.hash)).size).toBe(6);
+  });
+
   it('real look: blue sky paling to the horizon, exposure adapting to a low sun, no stylized lights', async (ctx) => {
     if (!gpu) return ctx.skip();
     const r = await call('realChecks', ['hazy', {}, { sunElevation: 4, sunAzimuth: 200 }, { sunElevation: 4, sunAzimuth: 200, autoExposure: 0 }]);
@@ -987,7 +1020,7 @@ describe('drawing', () => {
   it('bench:render completes and reports every case (numbers discarded)', async (ctx) => {
     if (!gpu) return ctx.skip();
     const r = await call('runRenderBench', { width: 160, height: 90, counts: [800], warmup: 1, batches: 2, batchFrames: 1, profiledFrames: 1, sparkPool: 1024 });
-    expect(r.cases.map((c) => `${c.world}:${c.variant}`)).toEqual(['near', 'far'].flatMap((w) => ['full', 'no-shadow', 'no-post', 'no-sparks', 'no-heat', 'no-ao', 'no-seam', 'fan', 'cube', 'flat-fan', 'flat-cube', 'real'].map((v) => `${w}:${v}`)));
+    expect(r.cases.map((c) => `${c.world}:${c.variant}`)).toEqual(['near', 'far'].flatMap((w) => ['full', 'no-shadow', 'no-post', 'no-sparks', 'no-heat', 'no-ao', 'no-seam', 'fan', 'cube', 'flat-fan', 'flat-cube', 'real', 'real-no-stone'].map((v) => `${w}:${v}`)));
     for (const c of r.cases) {
       expect(c.bodies).toBe(800);
       expect(c.frameMs).toBeGreaterThan(0);

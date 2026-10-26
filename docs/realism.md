@@ -44,7 +44,30 @@ rules the code follows; the doc has the reasoning.
   `ADAPT_REF` is the reading at the default sun, so the default exposure
   holds there.
 
+## What step 3 built
+
+- `noise.ts`: periodic integer-hash noise (pcg3d), gradient noise, fbm and
+  worley cells, each with a WGSL twin; a period in cells makes every texture
+  tile exactly.
+- `materials.ts`: four stones (`limestone`, `sandstone`, `granite`,
+  `concrete`) baked once per renderer on the GPU (csBake, csDown) into two
+  512x512 rgba8 texture arrays with 10 box-filtered mips: detail (albedo
+  multiplier, roughness) and normal (tangent normal, cavity). `stoneSample`
+  is the CPU twin the bake is compared with. About 11 MB of GPU memory with mips.
+- Shading (`REAL_FS_BOX`, the real build only): each face samples the arrays
+  at its body-local position divided by `stoneScale`, plus a per-body hash offset
+  and quarter turn, so no two blocks show the same patch. Each block takes
+  one colour of the stone's palette. Normal mips that average out shorten
+  the normal, and Toksvig widens roughness by that amount, so far faces lose
+  bump as roughness instead of shimmering. Edge wear lightens and roughens
+  the outer 1 to 4 cm of each edge; dirt darkens faces below 2.5 m.
+- `stoneDetail` 0 skips every texture fetch (a uniform branch), which is the
+  `real-no-stone` bench variant the "Stone textures" column compares with.
+
 ## Steps
+
+Order of work: 1, 3, 4, then 5, 6, 2, 7 (textures do more for "real" than
+sky lighting does, so they came first).
 
 1. Golden gate; sun direction as a look parameter; `real` scaffold and bench variant; Hillaire 2020 atmosphere (sky, haze, sun colour).
 2. Sky lighting: SH irradiance, prefiltered cubemap, ground bounce.

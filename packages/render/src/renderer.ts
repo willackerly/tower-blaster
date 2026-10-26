@@ -17,6 +17,7 @@ import { CANDY_NIGHT, linearToOklab, srgbToLinear, type LookParams } from './loo
 import { invert, lookAt, multiply, normalize, type Mat4, type V3 } from './math.ts';
 import { HDR_FORMAT, noStamp, Post, type Stamp } from './post.ts';
 import { BOX_CUBE_VERTS, BOX_FAN_VERTS, Frame, SCENE_WGSL, sceneWgsl, SHADOW_SIZE, SPHERE_VERTS } from './shaders.ts';
+import { Materials, STONES } from './materials.ts';
 import { ADAPTED_EXPOSURE_OFFSET, Atmosphere, medium, sunAtGround, sunDiscRadiance } from './atmosphere.ts';
 import { SnapshotSource, type BodySource } from './source.ts';
 
@@ -110,6 +111,8 @@ export function lookUniforms(l: LookParams): Record<string, number | number[]> {
     rimColor: l.rimColor, rimDir: normalize(l.rimDir), rimSize: l.rimSize,
     roughness: l.roughness, clearcoat: l.clearcoat, bevel: l.bevel, hueStep: (l.hueStep * Math.PI) / 180,
     ball: lin(l.ball), ballEmissive: l.ballEmissive, fogDensity: l.fogDensity, fogHeight: l.fogHeight, exposure: l.exposure,
+    stone: l.stone ? [STONES.indexOf(l.stone.kind), l.stone.scale, l.stone.wear, l.stone.dirt] : [0, 1, 0, 0],
+    stoneDetail: [l.stone?.detail ?? 0, 0, 0, 0],
     ...Object.fromEntries(l.ramp.map((c, i) => [`ramp${i}`, [...linearToOklab(lin(c) as V3), 0]])),
   };
 }
@@ -123,7 +126,7 @@ export class Renderer {
   private readonly shadowLayout: GPUBindGroupLayout;
   private readonly pipes: Record<PipeName, GPURenderPipeline>;
   /** Pipelines and sky of looks with an atmosphere, made on first use. */
-  private real: { pipes: Record<RealPipe, GPURenderPipeline>; atmosphere: Atmosphere; layout: GPUBindGroupLayout; bind: GPUBindGroup } | null = null;
+  private real: { pipes: Record<RealPipe, GPURenderPipeline>; atmosphere: Atmosphere; materials: Materials; layout: GPUBindGroupLayout; bind: GPUBindGroup } | null = null;
   private readonly makeReal: () => NonNullable<Renderer['real']>;
   private lastSun: V3 = SUN;
   private readonly facePipe: () => GPURenderPipeline;
@@ -295,8 +298,12 @@ export class Renderer {
           { binding: 0, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: 'float' } },
           { binding: 1, visibility: GPUShaderStage.FRAGMENT, sampler: { type: 'filtering' } },
           { binding: 2, visibility: GPUShaderStage.FRAGMENT, buffer: ro },
+          { binding: 3, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: 'float', viewDimension: '2d-array' } },
+          { binding: 4, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: 'float', viewDimension: '2d-array' } },
+          { binding: 5, visibility: GPUShaderStage.FRAGMENT, sampler: { type: 'filtering' } },
         ],
       });
+      const materials = new Materials(device);
       const m = { module: device.createShaderModule({ code: sceneWgsl(true), label: 'scene (real)' }), layout: device.createPipelineLayout({ bindGroupLayouts: [this.layout, layout] }) };
       const pipes: Record<RealPipe, GPURenderPipeline> = {
         box: color('vsBox', opts.flatBoxes ? 'fsBoxFlat' : 'fsBox', 'back', SEG.box, m),
@@ -307,9 +314,13 @@ export class Renderer {
       };
       const bind = device.createBindGroup({
         layout,
-        entries: [{ binding: 0, resource: atmosphere.skyView.createView() }, { binding: 1, resource: atmosphere.sampler }, { binding: 2, resource: { buffer: atmosphere.ambient } }],
+        entries: [
+          { binding: 0, resource: atmosphere.skyView.createView() }, { binding: 1, resource: atmosphere.sampler }, { binding: 2, resource: { buffer: atmosphere.ambient } },
+          { binding: 3, resource: materials.detail.createView({ dimension: '2d-array' }) }, { binding: 4, resource: materials.normal.createView({ dimension: '2d-array' }) },
+          { binding: 5, resource: materials.sampler },
+        ],
       });
-      return { pipes, atmosphere, layout, bind };
+      return { pipes, atmosphere, materials, layout, bind };
     };
   }
 
@@ -658,6 +669,7 @@ export class Renderer {
     this.lights.destroy();
     this.ao.destroy();
     this.real?.atmosphere.destroy();
+    this.real?.materials.destroy();
   }
 
   /** Sparks from a game event at pos, flying out around dir; strength is a speed change in m/s. */
