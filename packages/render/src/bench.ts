@@ -79,11 +79,12 @@ export type WorldName = 'near' | 'far';
  * (realism step 4), so real against it is their cost. real-no-pcss: sun
  * shadows from the 3x3 taps, the soft shadow code compiled out (step 5).
  * real-4096: real with a 4096 shadow map instead of 2048. real-dust: real
- * with the debris rings full (step 6): 64 impacts a frame around the view's
+ * in a steady debris shower (step 6): 64 impacts a frame around the view's
  * focus (more than the dust and chip budgets take) and 1/60 s of particle
- * time a frame, so puffs of every age and size are on screen; real against
- * it is the worst steady cost of impact dust and chips. (Every other variant
- * renders a still world with dt 0: no particle lives.)
+ * time a frame, warmed up until the counts and ages are steady (puffs of
+ * every age and size on screen); real against it is the worst steady cost
+ * of impact dust and chips. (Every other variant renders a still world with
+ * dt 0: no particle lives.)
  * Since the level of detail, stone texture 0 sends every box to boxFar, so
  * real-no-stone and real-stone-off draw the same shader.
  */
@@ -222,7 +223,8 @@ export async function runRenderBench(opts: Partial<RenderBenchOptions> = {}): Pr
       for (let i = 0; i < MAX_INJECT; i++) rends[k]!.burst([w.target[0] + 6 * (shower() - 0.5), 0.2 + 3 * shower(), w.target[2] + 6 * (shower() - 0.5)], [shower() - 0.5, 1, shower() - 0.5], 12);
       return rends[k]!.render(fDust);
     };
-    for (const k of rends.keys()) for (let i = 0; i < o.warmup; i++) await render(k);
+    // real-dust warms up 4 s of particle time more, so its puffs and chips reach their steady count and ages.
+    for (const k of rends.keys()) for (let i = 0; i < o.warmup + (o.variants[k] === 'real-dust' ? 240 : 0); i++) await render(k);
     await device.queue.onSubmittedWorkDone();
     const batches: number[][] = rends.map(() => []);
     for (let b = 0; b < o.batches; b++) {
@@ -281,7 +283,7 @@ export function renderBenchMarkdown(r: RenderBenchResult, header: string): strin
     ...r.cases.map((c) => `| ${c.world} | ${c.bodies.toLocaleString('en-US')} | ${c.variant} | ${ms(c.frameMs)} | ${ms(c.frameCI[0])}-${ms(c.frameCI[1])} | ${ms(c.gpuP50)} | ${ms(c.gpuP95)} | ${ms(c.gpuSumP50)} | ${passNames.map((p) => ms(c.passes[p])).join(' | ')} | ${c.drawn.boxes.toLocaleString('en-US')} | ${c.drawn.farBoxes.toLocaleString('en-US')} | ${c.drawn.shadowBoxes.toLocaleString('en-US')} | ${c.particles.toLocaleString('en-US')} |`),
     '',
     'Marginal cost: change in frame time when the thing is switched off (paired over interleaved batches; median and 95% CI; "n.s." when the interval includes 0):', '',
-    '| World | Bodies | Without shadow | Without post (bloom + AgX) | Without sparks | Without heat glow | Without AO | Without seam cavity | Fan in both passes | Cube in both passes | Flat shading: cube vs fan | Real look instead of candy | Stone textures (real vs real without) | Unused stone code (texture 0 vs compiled out) | Step 3 shading without stone (vs step 1 blocks) | Stone level of detail (real vs every box with stone code) | Floor sky view cones | Ground material and hills | Soft shadows (real vs 3x3 taps) | 4096 shadow map (vs 2048) | Impact dust and chips, rings full (vs none alive) |', '|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|',
+    '| World | Bodies | Without shadow | Without post (bloom + AgX) | Without sparks | Without heat glow | Without AO | Without seam cavity | Fan in both passes | Cube in both passes | Flat shading: cube vs fan | Real look instead of candy | Stone textures (real vs real without) | Unused stone code (texture 0 vs compiled out) | Step 3 shading without stone (vs step 1 blocks) | Stone level of detail (real vs every box with stone code) | Floor sky view cones | Ground material and hills | Soft shadows (real vs 3x3 taps) | 4096 shadow map (vs 2048) | Impact dust and chips, steady shower (vs none alive) |', '|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|',
   ];
   const groups = new Map<string, RenderCase[]>();
   for (const c of r.cases) groups.set(`${c.world}:${c.bodies}`, [...(groups.get(`${c.world}:${c.bodies}`) ?? []), c]);

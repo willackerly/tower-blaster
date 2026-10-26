@@ -1105,6 +1105,7 @@ export async function debrisSim(frames: number) {
   device.pushErrorScope('validation');
   const src = rawSource(device, new ArrayBuffer(4 * Body.size), new ArrayBuffer(4 * Body.size), sparkShapes(), new Uint32Array(4), 0, 4);
   const sp = new Sparks(device);
+  sp.debris = { ...sp.debris, dustBudget: 96, chipBudget: 192 }; // room for several of each per burst: the copies' seeds and launch spread are compared too
   const [dustPool, chipPool] = sp.rings;
   const r = rng(5);
   const bursts = Array.from({ length: 24 }, (_, i) => ({
@@ -1172,7 +1173,7 @@ export async function debrisSim(frames: number) {
   };
 }
 
-/** A debris flood: 64 strong bursts a frame. Spawns stay within the dust and chip budgets and every particle within its ring. */
+/** A debris flood: 64 strong bursts a frame, in short steps (nothing dies). Spawns stay within the dust and chip budgets and every particle within its ring. */
 export async function debrisFlood(frames: number) {
   const { device } = await createDevice({ timestamps: false });
   device.pushErrorScope('validation');
@@ -1181,7 +1182,7 @@ export async function debrisFlood(frames: number) {
   const spawned: number[] = [];
   for (let f = 0; f < frames; f++) {
     for (let i = 0; i < 64; i++) sp.inject([i, 1, f], [0, 1, 0], 30);
-    spawned.push((await sparkFrame(device, sp, src, 1 / 120, 0, 'debris')).ctl[CTL.spawned]!);
+    spawned.push((await sparkFrame(device, sp, src, 1 / 480, 0, 'debris')).ctl[CTL.spawned]!);
   }
   const slots = unpackSparks(await readBuffer(device, sp.sparks));
   const [dustPool, chipPool] = sp.rings;

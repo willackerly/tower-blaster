@@ -11,7 +11,7 @@ import { RapierHost } from '@tb/adapter-rapier';
 import { TieredEngine } from '@tb/lattice';
 import { isSoftwareAdapter, loadBundle, openWebGPU, type WebGPUSession } from '@tb/testkit';
 import { ADAPT_MAX, ADAPT_REF, adaptedExposure, HAZY_DAY, linearToSrgb, lookByName, parseRealOptions, REAL_DEFAULTS, REAL_KNOBS, realLook, writeRealOptions, CLEAR_DAY, MIE_H, mieExtinction, multiTable, normalize, OZONE, OZONE_WIDTH, RAYLEIGH, RAYLEIGH_H, skyRadiance, skyViewDir, skyViewUv, sunAtGround, sunDiscRadiance, transmittance, transmittanceHMu, transmittanceTable, transmittanceUv } from '../src/index.ts';
-import { agx, aoFootReference, chipCount, chipStepReference, CHIP_POOL, CHIPS_PER_EVENT, debrisRings, DEFAULT_DEBRIS, DEFAULT_SPARKS, dustCount, dustStepReference, DUST_PER_EVENT, DUST_POOL, bevelNormal, type V3, CANDY_NIGHT, CTL, HOT_FULL, MAX_EVENTS, SPAWN_BUDGET, FX_WORDS, packFx, tintWord, unpackFx, frustumPlanes, linearToOklab, listMatches, oklabToLinear, srgbToLinear, lookAt, lookOf, lookRange, MATERIAL, multiply, SEG, packBodies, changedRanges, drawnTier, packShapes, paletteOf, perspective, unpackLook } from '../src/index.ts';
+import { agx, aoFootReference, debrisClass, debrisSpawnReference, chipCount, chipStepReference, CHIP_POOL, CHIPS_PER_EVENT, debrisRings, DEFAULT_DEBRIS, DEFAULT_SPARKS, dustCount, dustStepReference, DUST_PER_EVENT, DUST_POOL, bevelNormal, type V3, CANDY_NIGHT, CTL, HOT_FULL, MAX_EVENTS, SPAWN_BUDGET, FX_WORDS, packFx, tintWord, unpackFx, frustumPlanes, linearToOklab, listMatches, oklabToLinear, srgbToLinear, lookAt, lookOf, lookRange, MATERIAL, multiply, SEG, packBodies, changedRanges, drawnTier, packShapes, paletteOf, perspective, unpackLook } from '../src/index.ts';
 import type * as Drivers from './page.ts';
 
 describe('looks', () => {
@@ -433,15 +433,37 @@ describe('debris (real look impacts)', () => {
     expect(debrisRings(12)).toEqual([4, 8]);
   });
 
-  it('puff and chip counts grow with impact speed and stop at their caps', () => {
-    const e = (strength: number) => ({ pos: [0, 0, 0] as V3, dir: [0, 1, 0] as V3, strength, packed: 0 });
-    expect(dustCount(e(2.5), DEFAULT_SPARKS, DEFAULT_DEBRIS)).toBe(0); // below the spark threshold: nothing
-    expect(dustCount(e(5), DEFAULT_SPARKS, DEFAULT_DEBRIS)).toBe(1);
-    expect(dustCount(e(100), DEFAULT_SPARKS, DEFAULT_DEBRIS)).toBe(DUST_PER_EVENT);
-    expect(chipCount(e(4), DEFAULT_DEBRIS)).toBe(0); // chips need a harder hit than dust
-    expect(chipCount(e(7), DEFAULT_DEBRIS)).toBe(1);
-    expect(chipCount(e(100), DEFAULT_DEBRIS)).toBe(CHIPS_PER_EVENT);
-    expect(dustCount(e(100), DEFAULT_SPARKS, { ...DEFAULT_DEBRIS, dustPerDv: 0 })).toBe(0); // the dust 0 knob
+  it('puff and chip counts: the expected share per m/s, fractions rounded up by chance, capped', () => {
+    const e = (strength: number, k = 0) => ({ pos: [k * 0.37, 1 + k * 0.11, 0] as V3, dir: [0, 1, 0] as V3, strength, packed: 0 });
+    const mean = (f: (frame: number) => number) => { let s = 0; for (let fr = 0; fr < 4000; fr++) s += f(fr); return s / 4000; };
+    // Below the spark threshold, or with the knob at 0: never.
+    expect(mean((fr) => dustCount(e(2.5), DEFAULT_SPARKS, DEFAULT_DEBRIS, fr))).toBe(0);
+    expect(mean((fr) => dustCount(e(100), DEFAULT_SPARKS, { ...DEFAULT_DEBRIS, dustPerDv: 0 }, fr))).toBe(0);
+    expect(mean((fr) => chipCount(e(3), DEFAULT_DEBRIS, fr))).toBe(0); // chips need a harder hit than dust
+    // Weak hits make dust now and then, at the expected rate (4000 draws: 3 sigma is under 0.025).
+    expect(mean((fr) => dustCount(e(3), DEFAULT_SPARKS, DEFAULT_DEBRIS, fr))).toBeCloseTo(0.3, 1);
+    expect(Math.abs(mean((fr) => dustCount(e(5, 3), DEFAULT_SPARKS, DEFAULT_DEBRIS, fr)) - 1.5)).toBeLessThan(0.03);
+    expect(Math.abs(mean((fr) => chipCount(e(5.5, 5), DEFAULT_DEBRIS, fr)) - 2.5)).toBeLessThan(0.03);
+    expect(mean((fr) => dustCount(e(100), DEFAULT_SPARKS, DEFAULT_DEBRIS, fr))).toBe(DUST_PER_EVENT);
+    expect(mean((fr) => chipCount(e(100), DEFAULT_DEBRIS, fr))).toBe(CHIPS_PER_EVENT);
+    // Size classes: dv / 3, at most 15.
+    expect([2.9, 3, 10, 44.9, 45, 200].map(debrisClass)).toEqual([0, 1, 3, 14, 15, 15]);
+  });
+
+  it('a budget smaller than the events samples all of them over frames, each frame different events', () => {
+    const events = Array.from({ length: 64 }, (_, k) => ({ pos: [k, 1, 0] as V3, dir: [0, 1, 0] as V3, strength: 30, packed: 0xffffff | (1 << 24) }));
+    const seen = new Set<number>();
+    for (let frame = 0; frame < 64; frame++) {
+      const { dust, chips } = debrisSpawnReference(events, frame, DEFAULT_SPARKS, DEFAULT_DEBRIS);
+      expect(dust).toHaveLength(DEFAULT_DEBRIS.dustBudget); // every thread has an event with dust to give
+      expect(chips).toHaveLength(DEFAULT_DEBRIS.chipBudget);
+      const xs = dust.map((s) => s.pos[0]);
+      expect(new Set(xs).size).toBe(xs.length); // one puff per event while the budget is short
+      xs.forEach((x) => seen.add(x));
+    }
+    expect(seen.size).toBe(64); // not the first ten bodies every frame
+    expect(debrisClass(30)).toBe(10);
+    expect(debrisSpawnReference(events, 0, DEFAULT_SPARKS, DEFAULT_DEBRIS).dust.every((s) => ((s.packed >>> 8) & 0xf) === 10)).toBe(true);
   });
 
   it('a puff slows, rises and never sinks below 10 cm; a chip falls and bounces', () => {
@@ -466,7 +488,7 @@ describe('debris (real look impacts)', () => {
     expect([r.dustPool, r.chipPool]).toEqual([DUST_POOL, CHIP_POOL]);
     expect(r.bornDust).toBe(r.wantDust);
     expect(r.bornChips).toBe(r.wantChips);
-    expect(r.wantDust).toBeGreaterThan(30); // 24 bursts, up to 3 puffs and 4 chips each: 49 and 55
+    expect(r.wantDust).toBeGreaterThan(30); // 24 bursts, up to 4 puffs and 8 chips each at these budgets
     expect(r.wantChips).toBeGreaterThan(30);
     expect(r.spawned).toBe(r.wantDust + r.wantChips);
     expect(r.outside).toBe(0);
@@ -475,8 +497,8 @@ describe('debris (real look impacts)', () => {
     expect(r.alive).toBe(r.wantDust + r.wantChips); // 1.33 s: shorter than any life
     expect(r.aliveCtl).toBe(r.alive);
     expect(r.simErr).toBeLessThan(1e-4); // measured 9.5e-7
-    expect(r.bounced).toBeGreaterThan(10); // chips that hit the floor: measured all 55
-    expect(r.floored).toBeGreaterThan(5); // puffs that reached their 10 cm floor: measured 14 of 49
+    expect(r.bounced).toBeGreaterThan(10); // chips that hit the floor
+    expect(r.floored).toBeGreaterThan(5); // puffs that reached their 10 cm floor
     expect(r.rose).toBeGreaterThan(r.wantDust / 2); // most puffs drifting up by now
     expect(r.dustMinY).toBeGreaterThanOrEqual(Math.fround(0.1));
     expect(r.chipMinY).toBeGreaterThanOrEqual(0);
@@ -488,13 +510,13 @@ describe('debris (real look impacts)', () => {
 
   it('a flood stays within the dust and chip budgets and inside the rings', async (ctx) => {
     if (!gpu) return ctx.skip();
-    const r = await call('debrisFlood', 30);
+    const r = await call('debrisFlood', 220);
     expect(r.error).toBeNull();
     const [dustBudget, chipBudget] = r.budgets;
-    expect(new Set(r.spawned)).toEqual(new Set([dustBudget! + chipBudget!])); // every frame: the budgets, not 64 x (3 + 4)
-    expect(r.dustHead).toBe(30 * dustBudget!);
-    expect(r.chipHead).toBe(30 * chipBudget!);
-    expect(r.dust).toBe(r.dustPool); // 2880 puffs into 2048 slots: the ring wrapped, all live
+    expect(new Set(r.spawned)).toEqual(new Set([dustBudget! + chipBudget!])); // every frame: the budgets, not 64 x (8 + 12)
+    expect(r.dustHead).toBe(220 * dustBudget!);
+    expect(r.chipHead).toBe(220 * chipBudget!);
+    expect(r.dust).toBe(r.dustPool); // 2200 puffs into 2048 slots, 5280 chips into 4096: both rings wrapped, all live
     expect(r.chips).toBe(r.chipPool);
     expect(r.outside).toBe(0); // the 59k slots past the rings untouched
   }, 120_000);
@@ -1282,7 +1304,7 @@ describe('drawing', () => {
       expect(c.drawn.boxes + c.drawn.farBoxes).toBeGreaterThan(0);
       expect(c.drawn.boxes + c.drawn.farBoxes).toBeLessThanOrEqual(800);
       if (!c.variant.startsWith('real') || c.variant === 'real-no-lod') expect(c.drawn.farBoxes, c.variant).toBe(0);
-      // Still worlds: no particle lives, except in real-dust, whose rings (341 + 683 of a 1024 pool) its shower keeps full.
+      // Still worlds: no particle lives, except in real-dust, whose shower fills both rings of a 1024 pool (341 + 683; the full pool's rings hold more than the budgets' steady count).
       expect(c.particles, c.variant).toBe(c.variant === 'real-dust' ? 1024 : 0);
       if (r.timestamps) expect(Object.keys(c.passes)).toEqual(expect.arrayContaining(['cull', 'scene', ...(c.variant === 'no-shadow' ? [] : ['shadow']), ...(c.variant === 'no-post' ? [] : ['bloom', 'composite'])]));
     }

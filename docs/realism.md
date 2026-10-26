@@ -161,16 +161,30 @@ rules the code follows; the doc has the reasoning.
   (the real look already had no heat glow). The spark pipeline's detector
   is unchanged; `Sparks` gains a `debris` mode that splits its pool into a
   dust ring (`DUST_POOL`, 2048 slots) and a chip ring (`CHIP_POOL`, 4096)
-  with their own heads and per-frame spawn budgets (96 puffs, 192 chips;
-  the rest of an event's share is dropped, as sparks past `SPAWN_BUDGET`
-  are). An impact of speed change dv makes min(3, (dv - 2.5) x 0.5) puffs
-  and min(4, (dv - 4) x 0.5) chips, so only hard hits chip. Switching mode
-  kills every particle; in debris mode the simulate pass runs over the
-  rings only (6144 slots, not 65536).
+  with their own heads and per-frame spawn budgets (10 puffs, 24 chips).
+  The budgets are set from the rings: budget x 60 frames x mean life stays
+  under the ring (10 x 60 x 3 s = 1800 of 2048), so a long collapse builds
+  a steady cloud instead of recycling puffs before they grow. An impact of
+  speed change dv is owed (dv - 2.5) x 0.6 puffs (at most 8) and
+  (dv - 3) x 1 chips (at most 12), the fraction rounded up by chance (a
+  hash of the event and frame), so the many 3-5 m/s hits of a collapse
+  make dust now and then rather than never. When a frame has more events
+  than budget, the spawn threads walk the events from a per-frame start in
+  steps of a prime larger than `MAX_EVENTS`, so the dust samples the whole
+  collapse rather than the lowest body indices. Bits 8-11 of a particle's
+  packed word keep the impact's size class (dv / 3, at most 15), and a
+  puff's size scales from 0.5x to 2x with it: the ball's hit throws a big
+  puff. Switching mode kills every particle; in debris mode the simulate
+  pass runs over the rings only (6144 slots, not 65536).
+- First Mac screenshots (S14, ball into a tower at 30 m) showed almost no
+  dust: the first counts were floor((dv - 2.5) x 0.5), which gives a
+  typical collapse hit no puff at all, and their budget (96 a frame)
+  recycled the dust ring every 0.36 s, so the few puffs there were stayed
+  young and small. The rules above replace them.
 - A puff lives 2 to 4 s: launched slowly (up to 1.6 m/s) up and along the
   impact, linear drag, a slow rise, and a floor 10 cm above the ground. It
   draws as a camera-facing disc that grows from 0.13 to 1 of `dustSize`
-  (ease-out) and fades as (1 - t)^1.5, with a macro-noise texture so puffs
+  (ease-out, times its size class's 0.5 to 2) and fades as (1 - t)^1.5, with a macro-noise texture so puffs
   are not round, softened where it meets the ground. Lighting is done in
   the vertex shader: one shadow tap at the centre, the sun through a
   Henyey-Greenstein phase (g 0.4, half isotropic, so puffs against the sun
@@ -191,15 +205,19 @@ rules the code follows; the doc has the reasoning.
   through the `CHIP_BASE` override.
 - Knobs: `dust` and `chips` (multipliers on the per-dv counts; 0 turns one
   off, both 0 skips the passes) and `dustSize` (a full-grown puff's
-  radius, m). Bench variant `real-dust`: 64 impacts a frame around the
-  view's focus with 1/60 s steps, so both rings stay full (the bench's
-  new "Particles alive" column shows it); real against it is the worst
-  steady cost.
-- Tests: the spawn and flight kernels against CPU twins (24 bursts; spawn
-  within 3e-4, 80 frames of flight within 1e-6), each kind only in its own
-  ring, puffs never below 10 cm and chips never below the ground, all dead
+  radius, m: 1.2, half that for the softest hits and twice for the
+  hardest). Bench variant `real-dust`: 64 impacts a frame around the
+  view's focus with 1/60 s steps, warmed up 4 s so the counts and ages are
+  steady (the bench's new "Particles alive" column shows how many); real
+  against it is the worst steady cost. At 1b0ae83 (the first budgets, both
+  rings full) it cost +0.5% to +4.6% of the real frame on the M5 Max; the
+  real look stayed under its caps (near 100k: 3.68 ms p50 of 4).
+- Tests: the counts' expected rates and caps, and a short budget sampling
+  every event over frames; the spawn and flight kernels against CPU twins
+  (24 bursts; spawn within 3e-4, 80 frames of flight within 1e-6), each
+  kind only in its own ring, puffs never below 10 cm and chips never below the ground, all dead
   and both draws empty after 4 s, the mode switch clearing the pool; a
-  flood of 64 impacts a frame for 30 frames spawning exactly the budgets
+  flood of 64 impacts a frame for 220 frames spawning exactly the budgets
   and wrapping both rings without touching the slots past them; the draw
   changing pixels only near a burst in the open, none on a wall hiding a
   second burst, each kind visible on its own, and `dust` 0 with `chips` 0

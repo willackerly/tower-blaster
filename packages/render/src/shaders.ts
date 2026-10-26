@@ -393,7 +393,8 @@ const QUAD = array<vec2f, 6>(vec2f(-1.0, -1.0), vec2f(1.0, -1.0), vec2f(1.0, 1.0
   if (s.age < 0.0) { return o; }
   let t = s.age / dustLife(s.packed);
   let seed = unit(s.packed);
-  let r = fr.debris.x * mix(0.13, 1.0, 1.0 - pow(1.0 - t, 3.0)) * (0.7 + 0.6 * seed);
+  // Grows (ease-out) to dustSize, 0.5x for the softest hits to 2x for the hardest (size class in bits 8-11).
+  let r = fr.debris.x * mix(0.13, 1.0, 1.0 - pow(1.0 - t, 3.0)) * (0.7 + 0.6 * seed) * mix(0.5, 2.0, f32((s.packed >> 8u) & 0xfu) / 15.0);
   let rel = s.pos - fr.eye;
   let lc = fr.lightViewProj * vec4f(rel, 1.0);
   let suv = lc.xy * vec2f(0.5, -0.5) + 0.5;

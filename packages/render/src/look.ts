@@ -164,7 +164,7 @@ export interface RealOptions {
   /** The sun's angular diameter, degrees (0.53 is the real one): the disc in the sky and, times shadowSoftness, how fast shadows soften with distance (0: hard 3x3 taps). */
   sunSize: number;
   shadowSoftness: number;
-  /** Impacts throw dust puffs and stone chips (multiples of the default amounts, 0: none); a puff grows to a radius of dustSize metres. */
+  /** Impacts throw dust puffs and stone chips (multiples of the default amounts, 0: none); a puff grows to a radius of about dustSize metres (half that for the softest hits, twice for the hardest). */
   dust: number;
   chips: number;
   dustSize: number;
@@ -175,7 +175,7 @@ export const REAL_DEFAULTS: RealOptions = {
   stone: 'limestone', stoneDetail: 1, stoneScale: 1, stoneFade: 8, wear: 0.5, dirt: 0.4,
   groundMaterial: 'gravel', groundDetail: 1, groundScale: 1, groundVariation: 0.5, hills: 1.5, hillDistance: 6,
   sunSize: 0.53, shadowSoftness: 1,
-  dust: 1, chips: 1, dustSize: 0.9,
+  dust: 1, chips: 1, dustSize: 1.2,
 };
 
 /** Direction toward the sun from elevation and azimuth in degrees. */
