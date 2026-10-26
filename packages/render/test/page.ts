@@ -7,7 +7,7 @@ import { emptySnapshot, TAG_BALL, type BodyDesc, type Snapshot } from '@tb/engin
 import { createDevice, readBuffer } from '@tb/gpu';
 import { Body, RenderRecord, Shape, TIER, readStruct } from '@tb/schema';
 import {
-  agx, AGX_WGSL, LOOKS, realLook, type RealOptions, type LookParams, fromHalf, Atmosphere, CLEAR_DAY, transmittance, transmittanceHMu, multiScattering, skyViewDir, skyRadiance, skyViewUv, sampleTransmittance, ambientOf, distanceToGround, meteredIlluminance, Materials, MATERIAL_TILE, heightNormal, STONES, stoneSample, adaptedExposure, LUMA, R_TOP, R_GROUND, FX_WORDS, packFx, toHalf, bevelNormal, BEVEL_WGSL, oklabToLinear, OKLAB_WGSL, Post,
+  agx, AGX_WGSL, LOOKS, realLook, type RealOptions, type LookParams, fromHalf, Atmosphere, CLEAR_DAY, transmittance, transmittanceHMu, multiScattering, skyViewDir, skyRadiance, skyViewUv, sampleTransmittance, ambientOf, distanceToGround, meteredIlluminance, Materials, heightNormal, STONES, GROUNDS, MATERIAL_LAYERS, MACRO_LAYER, layerTile, materialSample, macroSample, adaptedExposure, LUMA, R_TOP, R_GROUND, FX_WORDS, packFx, toHalf, bevelNormal, BEVEL_WGSL, oklabToLinear, OKLAB_WGSL, Post,
   Culler, cullReference, GpuBodySource, invert, listMatches, lookAt, makeGpuBodies, multiply, packBodies, perspective, Renderer, SEG, SEGMENTS, SnapshotSource, transform,
   translation, normalize, BOX_VERTS, SPHERE_VERTS, SUN, Sparks, CTL, MAX_EVENTS, flashSlot, FLASHES, MAX_BALLS, TRAIL, Lights, LIGHTS, LIGHT_META, LIGHT_PACKED, MATERIAL, AoVolume, aoGrid, aoFrame, splatReference, composeReference, AO_FOOT_WGSL, AO_SAMPLE_WGSL, AO_SEAM_WGSL, AO_ONE, type SplatBody, unpackImpacts, unpackSparks, spawnReference, stepReference, type Impact, type BodySource, type CullFrame, type FrameParams, type RendererOptions, type V3,
 } from '../src/index.ts';
@@ -2144,7 +2144,7 @@ async function readLayer(device: GPUDevice, tex: GPUTexture, layer: number, mip:
 }
 
 /**
- * The stone bake (materials.ts) against stoneSample, per layer: the worst
+ * The material bake (materials.ts) against materialSample and macroSample, per layer: the worst
  * difference of sampled level-0 texels (albedo, roughness, normal from
  * central differences, cavity) from the CPU twin, in 8-bit steps, the mean
  * albedo multiplier, how far the level-0 normals are from unit length, tiling (the jump across the wrap against the mean jump between
@@ -2156,15 +2156,19 @@ export async function materialBake() {
   device.pushErrorScope('validation');
   const mats = new Materials(device);
   const out = [];
-  for (let layer = 0; layer < STONES.length; layer++) {
+  for (let layer = 0; layer < MATERIAL_LAYERS; layer++) {
     const d0 = await readLayer(device, mats.detail, layer, 0), n0 = await readLayer(device, mats.normal, layer, 0);
     const n = d0.n, at = (t: Uint8Array, i: number, j: number, c: number) => t[((j % n) * n + (i % n)) * 4 + c]!;
     let twin = 0, unit = 0, mean = [0, 0, 0];
     for (let j = 0; j < n; j += 37) for (let i = 0; i < n; i += 29) {
-      const s = stoneSample(layer, (i + 0.5) / n, (j + 0.5) / n);
-      const texel = MATERIAL_TILE / n, h = (di: number, dj: number) => stoneSample(layer, (((i + di + n) % n) + 0.5) / n, (((j + dj + n) % n) + 0.5) / n).height;
-      const nrm = heightNormal(h(-1, 0), h(1, 0), h(0, -1), h(0, 1), texel);
-      const want = [...s.albedo.map((x) => Math.min(Math.max(x * 0.5, 0), 1)), Math.min(Math.max(s.rough, 0), 1), ...nrm.map((x) => x * 0.5 + 0.5), Math.min(Math.max(s.cavity, 0), 1)];
+      let want: number[];
+      if (layer === MACRO_LAYER) want = [...macroSample((i + 0.5) / n, (j + 0.5) / n), 0.5, 0.5, 1, 1];
+      else {
+        const s = materialSample(layer, (i + 0.5) / n, (j + 0.5) / n);
+        const texel = layerTile(layer) / n, h = (di: number, dj: number) => materialSample(layer, (((i + di + n) % n) + 0.5) / n, (((j + dj + n) % n) + 0.5) / n).height;
+        const nrm = heightNormal(h(-1, 0), h(1, 0), h(0, -1), h(0, 1), texel);
+        want = [...s.albedo.map((x) => Math.min(Math.max(x * 0.5, 0), 1)), Math.min(Math.max(s.rough, 0), 1), ...nrm.map((x) => x * 0.5 + 0.5), Math.min(Math.max(s.cavity, 0), 1)];
+      }
       const got = [0, 1, 2, 3].map((c) => at(d0.data, i, j, c)).concat([0, 1, 2, 3].map((c) => at(n0.data, i, j, c)));
       for (let k = 0; k < 8; k++) twin = Math.max(twin, Math.abs(got[k]! - want[k]! * 255));
     }
@@ -2184,7 +2188,7 @@ export async function materialBake() {
         mip = Math.max(mip, Math.abs(lo.data[(j * lo.n + i) * 4 + c]! - avg));
       }
     }
-    out.push({ stone: STONES[layer]!, twin, mean, unit, tile: { wrap: jumpWrap / n, inside: jumpIn / cnt }, mip });
+    out.push({ layer: [...STONES, ...GROUNDS, 'macro'][layer]!, twin, mean, unit, tile: { wrap: jumpWrap / n, inside: jumpIn / cnt }, mip });
   }
   const err = await device.popErrorScope();
   mats.destroy();

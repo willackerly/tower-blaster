@@ -918,18 +918,21 @@ describe('drawing', () => {
     }
   });
 
-  it('stone bake matches its CPU twin, tiles, keeps unit normals, and box-filters its mips', async (ctx) => {
+  it('material bake (stones, grounds, macro) matches its CPU twin, tiles, keeps unit normals, and box-filters its mips', async (ctx) => {
     if (!gpu) return ctx.skip();
     const r = await call('materialBake');
     expect(r.error).toBeNull();
+    expect(r.layers.map((l) => l.layer)).toEqual(['limestone', 'sandstone', 'granite', 'concrete', 'gravel', 'dirt', 'macro']);
     // Measured on SwiftShader: twin within 0.5 of an 8-bit step (rounding), mips within 0.5 step,
     // the wrap jump within 1.1x the jump between neighbours inside.
     for (const l of r.layers) {
-      expect(l.twin, l.stone).toBeLessThanOrEqual(1);
-      expect(l.unit, l.stone).toBeLessThan(0.02);
-      expect(l.mip, l.stone).toBeLessThanOrEqual(1);
-      expect(l.tile.wrap, l.stone).toBeLessThan(1.5 * l.tile.inside + 1);
-      for (const m of l.mean) { expect(m, l.stone).toBeGreaterThan(0.8); expect(m, l.stone).toBeLessThan(1.15); }
+      expect(l.twin, l.layer).toBeLessThanOrEqual(1);
+      expect(l.unit, l.layer).toBeLessThan(0.02);
+      expect(l.mip, l.layer).toBeLessThanOrEqual(1);
+      expect(l.tile.wrap, l.layer).toBeLessThan(1.5 * l.tile.inside + 1);
+      // The ground keeps the configured albedo on average (within 5%), and the macro layer is 0.5 (x 2) on average.
+      const [lo, hi] = ['gravel', 'dirt', 'macro'].includes(l.layer) ? [0.95, 1.05] : [0.8, 1.15];
+      for (const m of l.mean) { expect(m, l.layer).toBeGreaterThan(lo); expect(m, l.layer).toBeLessThan(hi); }
     }
   });
 
