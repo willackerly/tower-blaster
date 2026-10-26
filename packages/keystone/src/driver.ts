@@ -8,11 +8,13 @@ import { type Feedback, Session } from './session.ts';
 import type { Shot } from './shots.ts';
 
 /**
- * Steps run after init before play starts. Every level is quiet well inside
- * it on Rapier (34 to 48 steps) and on AVBD at AVBD_ITERATIONS (46 to 67);
- * a test holds both to it.
+ * Steps run after init before play starts. New AVBD contacts hold nothing for
+ * their first few steps, so stacks drop up to 41 mm (L2, 20 iterations) and
+ * spring back with a time constant of about 45 steps; by 300 under 0.1 mm is
+ * left to recover. Rapier is quiet and asleep by step 48, so the extra steps
+ * change nothing there. A test holds both engines still afterwards.
  */
-export const PRESETTLE_STEPS = 90;
+export const PRESETTLE_STEPS = 300;
 
 /**
  * Solver iterations Keystone runs AVBD at. At the default 10, columns taller
