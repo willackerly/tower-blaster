@@ -974,8 +974,8 @@ describe('drawing', () => {
     // Compiled out, the ground knobs do nothing, and the frame is texture 0's to the bit.
     expect(off!.hash).toBe(flat!.hash);
     // Measured on SwiftShader (mean luma; fine detail, mean |luma - neighbours|; coarse, std of 16 px block means):
-    // flat 123.1, 0.42, 2.4 (dither and the light's gradient); gravel 119.9, 1.61, 2.8; dirt 120.6, 0.65, 2.8;
-    // variation 0: 122.2, 1.62, 2.1; variation 1: 117.5, 1.61, 4.5; scale 4: 124.0, 2.35, 2.8.
+    // flat 123.1, 0.42, 2.4 (dither and the light's gradient); gravel 120.4, 1.34, 2.8; dirt 120.6, 0.65, 2.8;
+    // variation 0: 122.7, 1.35, 2.1; variation 1: 118.0, 1.34, 4.5; scale 4: 124.9, 1.66, 2.7.
     // Without macro variation the floor keeps its brightness within 5%; with it, this 20 m patch is one sample of a 64 m field.
     expect(Math.abs(still!.mean - flat!.mean) / flat!.mean).toBeLessThan(0.05);
     for (const f of [gravel, dirt, varied, coarse]) expect(Math.abs(f!.mean - flat!.mean) / flat!.mean).toBeLessThan(0.08);
@@ -994,7 +994,7 @@ describe('drawing', () => {
     expect(r.cut).toBeLessThan(80);
     // Across the cut (rows cut-1 to cut+2), the change beyond what the rows on either side change over 3 rows.
     const excess = r.rows.map((m) => Math.abs(m[r.cut - 1]! - m[r.cut + 2]!) - (Math.abs(m[r.cut - 4]! - m[r.cut - 1]!) + Math.abs(m[r.cut + 2]! - m[r.cut + 5]!)) / 2);
-    // Measured on SwiftShader (8-bit luma): flat 0.03, gravel 0.32, dirt at full variation 0.26. Before the far
+    // Measured on SwiftShader (8-bit luma): flat 0.04, gravel 0.37, dirt at full variation 0.25. Before the far
     // ground took the material's mean roughness and cavity, gravel's cut showed as a 1.8 step.
     for (const e of excess) expect(e).toBeLessThan(1);
   });
@@ -1006,8 +1006,8 @@ describe('drawing', () => {
     expect(r.error).toBeNull();
     const [none, hills, near, far, off, flat] = r.frames;
     const d = (a: number[], b: number[]) => Math.hypot(a[0]! - b[0]!, a[1]! - b[1]!, a[2]! - b[2]!);
-    // Measured on SwiftShader (sRGB of the low band): sky 159.6, 158.4, 158.1; hills at 6 km 137.5, 133.0, 128.2;
-    // at 2 km 117.9, 112.3, 106.1; at 40 km (visibility 40 km) 159.2, 157.8, 157.1.
+    // Measured on SwiftShader (sRGB of the low band): sky 159.6, 158.4, 158.1; hills at 6 km 141.6, 136.2, 129.6;
+    // at 2 km 123.0, 116.5, 108.6; at 40 km (visibility 40 km) 159.4, 157.8, 157.2.
     // Above the ridge, the sky is untouched.
     for (const f of [hills, near, far]) expect(d(f!.high, none!.high)).toBeLessThan(1);
     // Just above the horizon, hills instead of sky.

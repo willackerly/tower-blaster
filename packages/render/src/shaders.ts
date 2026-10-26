@@ -217,16 +217,25 @@ fn groundFar(p: vec2f, pxM: f32) -> GroundHit {
 
 // Hills on the horizon (realism step 4): a ridge at most hills.x radians
 // high, hills.y metres away, its profile a sum of sines in azimuth (so it
-// closes on itself). Their slopes face the eye, tilted 27 degrees, under the
-// sun and the ambient light, in the floor's albedo, seen through hills.y
-// metres of air. rgb, and coverage (the ridge antialiased over a pixel).
+// closes on itself). Their slopes face the eye, tilted 27 degrees, and turn
+// sideways with the profile's own slope, so a low sun picks out the folds;
+// lit by the sun and the ambient light in the floor's albedo, seen through
+// hills.y metres of air. rgb, and coverage (the ridge antialiased over a
+// pixel). Most sky pixels are above every ridge and return at once.
 fn hillsAt(dir: vec3f, pxA: f32) -> vec4f {
+  if (dir.y > sin(fr.hills.x) + pxA) { return vec4f(0.0); }
   let az = atan2(dir.x, -dir.z);
-  let ridge = fr.hills.x * (0.55 + 0.2 * sin(3.0 * az + 1.3) + 0.15 * sin(7.0 * az + 0.4) + 0.07 * sin(13.0 * az + 2.1) + 0.03 * sin(29.0 * az + 0.7));
+  let H = fr.hills.x;
+  let ridge = H * (0.55 + 0.2 * sin(3.0 * az + 1.3) + 0.15 * sin(7.0 * az + 0.4) + 0.07 * sin(13.0 * az + 2.1) + 0.03 * sin(29.0 * az + 0.7));
   let cover = 1.0 - smoothstep(ridge - pxA, ridge + pxA, asin(clamp(dir.y, -1.0, 1.0)));
   if (cover <= 0.0) { return vec4f(0.0); }
+  // d ridge / d azimuth: the hillside's slope across the line of sight (height and width both scale with the distance).
+  let lateral = H * (0.6 * cos(3.0 * az + 1.3) + 1.05 * cos(7.0 * az + 0.4) + 0.91 * cos(13.0 * az + 2.1) + 0.87 * cos(29.0 * az + 0.7));
   let back = -dir.xz / max(length(dir.xz), 1e-6);
-  let n = normalize(vec3f(0.5 * back.x, 1.0, 0.5 * back.y));
+  let down = vec2f(-back.y, back.x); // toward decreasing azimuth: downhill where lateral > 0
+  // The profile's slope is the silhouette's, gentler than the slopes in front of it: 8x.
+  let tilt = 0.5 * back + 8.0 * lateral * down;
+  let n = normalize(vec3f(tilt.x, 1.0, tilt.y));
   let lit = fr.floor * (mix(atmoAmbient[1].rgb, atmoAmbient[0].rgb, n.y * 0.5 + 0.5) + fr.sunColor * max(dot(n, fr.sun), 0.0));
   return vec4f(fog(lit, dir * fr.hills.y), cover);
 }

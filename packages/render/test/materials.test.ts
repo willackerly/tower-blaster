@@ -22,7 +22,7 @@ describe('stones', () => {
 
 describe('grounds and the macro layer', () => {
   it('every ground tiles, keeps the configured albedo within 5% on average, and stays inside its encodable range', () => {
-    // Measured (128 x 128): gravel 1.008, 0.993, 0.976; dirt 1.014, 0.994, 0.964.
+    // Measured (128 x 128): gravel 1.027, 1.007, 0.984; dirt 1.014, 0.994, 0.964.
     for (let k = 0; k < GROUNDS.length; k++) {
       const n = 64, mean = [0, 0, 0];
       for (let j = 0; j < n; j++) for (let i = 0; i < n; i++) {
@@ -31,7 +31,7 @@ describe('grounds and the macro layer', () => {
         expect(s.rough).toBeGreaterThan(0.5);
         expect(s.rough).toBeLessThanOrEqual(1);
         expect(Math.abs(s.height)).toBeLessThan(0.012);
-        expect(s.cavity).toBeGreaterThan(0.3);
+        expect(s.cavity).toBeGreaterThan(0.1);
       }
       for (const m of mean) { expect(m, GROUNDS[k]).toBeGreaterThan(0.95); expect(m, GROUNDS[k]).toBeLessThan(1.05); }
       for (const v of [0.1, 0.37, 0.8]) {

@@ -77,8 +77,8 @@ rules the code follows; the doc has the reasoning.
 ## What step 4 built
 
 - Ground materials in the same arrays as the stones, after them:
-  `gravel` (rounded pebbles of mixed tone in a dirt matrix, denser in
-  metre-scale clumps) and `dirt` (packed earth, drying cracks in clumps, a
+  `gravel` (rounded stones of three sizes, 1 to 10 cm, and mixed tone in a
+  dirt matrix, denser in metre-scale clumps) and `dirt` (packed earth, drying cracks in clumps, a
   few small stones), each tiling every `GROUND_TILE` (2 m) at 3.9 mm a
   texel, and a macro layer (`MACRO_TILE`, 64 m) of low-frequency
   brightness, tint and blend fields. The grounds keep the configured
@@ -97,7 +97,8 @@ rules the code follows; the doc has the reasoning.
   cut does not show (render.test.ts measures it).
 - Hills on the horizon (`hillsAt`, in `fsSky`): a ridge `hills` degrees high
   at most (default 1.5), `hillDistance` km away (default 6), its profile a
-  sum of sines in azimuth so it closes on itself. Slopes face the eye, lit
+  sum of sines in azimuth so it closes on itself. Slopes face the eye and
+  turn sideways with the profile's slope, so a low sun picks out folds; lit
   by the sun and the ambient light in the floor's albedo, and are seen
   through that much air, so far hills fade into the haze. Where the floor
   reaches past the hills' distance, the hills hide it.

@@ -98,21 +98,34 @@ export function stoneSample(layer: number, u: number, v: number): StoneTexel {
   return { albedo: [a, a, a * 1.01], rough: 0.9, height: 0.001 * m - 0.0012 * pore, cavity: 1 - 0.7 * pore };
 }
 
+/**
+ * Rounded stones on a worley grid of period cells per tile: in a cell whose
+ * hash is under density, a dome of radius 0.3 to 0.6 cells and peak height
+ * up to hMax metres, in one of several tones. cover: where it shows; crevice:
+ * the ring where it meets the ground.
+ */
+function pebbles(u: number, v: number, period: number, seed: number, density: number, hMax: number) {
+  const [f1, , id] = worley(u * period, v * period, period, seed);
+  const r = 0.3 + (0.3 * ((id >>> 8) & 255)) / 255;
+  const on = 1 - smoothstep(density - 0.05, density + 0.05, id * U);
+  const x = Math.min(f1 / r, 1), dome = (1 - x * x) * (1 - x * x);
+  const t = ((id >>> 16) & 255) / 255;
+  const albedo: V3 = ((id >>> 24) & 3) === 0 ? [1.15, 1.0, 0.82] : [0.75 + 0.45 * t, 0.75 + 0.44 * t, 0.75 + 0.43 * t];
+  return { cover: on * (1 - smoothstep(0.8, 1, x)), height: (hMax * r * on * dome) / 0.6, albedo, crevice: on * smoothstep(0.75, 1, x) * (1 - smoothstep(1, 1.35, f1 / r)) };
+}
+
 /** One ground (k: index in GROUNDS) at (u, v) in [0, 1) of its GROUND_TILE: what the bake writes. */
 export function groundSample(k: number, u: number, v: number): StoneTexel {
   const seed = 1000 * (GROUND_LAYER + k + 1);
-  if (k === 0) { // gravel: rounded pebbles of mixed tone in a dirt matrix, denser in patches
-    const clump = fbm(u * 2, v * 2, 2, seed, 3), tone = fbm(u * 16, v * 16, 16, seed + 3, 3), grit = gnoise(u * 256, v * 256, 256, seed + 7);
-    const [f1, , id] = worley(u * 64, v * 64, 64, seed + 11), kk = id * U;
-    const r = 0.3 + (0.3 * ((id >>> 8) & 255)) / 255; // radius in cells (3.1 cm)
-    const on = 1 - smoothstep(0.72 + 0.5 * clump, 0.82 + 0.5 * clump, kk);
-    const x = Math.min(f1 / r, 1), dome = (1 - x * x) * (1 - x * x);
-    const peb = on * (1 - smoothstep(0.8, 1, x));
-    const t = ((id >>> 16) & 255) / 255;
-    const pebble: V3 = ((id >>> 24) & 3) === 0 ? [1.15, 1.0, 0.82] : [0.75 + 0.45 * t, 0.75 + 0.44 * t, 0.75 + 0.43 * t];
-    const m = 1.0 + 0.3 * tone + 0.04 * grit;
-    const crevice = on * smoothstep(0.75, 1, x) * (1 - smoothstep(1, 1.35, f1 / r));
-    return { albedo: mix3([m, m, m], pebble, peb), rough: 0.95 - 0.22 * peb, height: (0.005 * r * on * dome) / 0.45 + 0.0006 * grit + 0.0015 * tone, cavity: 1 - 0.5 * crevice };
+  if (k === 0) { // gravel: rounded stones of three sizes and mixed tone in a dirt matrix, denser in metre-scale clumps
+    const clump = fbm(u * 2, v * 2, 2, seed, 3), tone = fbm(u * 16, v * 16, 16, seed + 3, 3), fines = gnoise(u * 256, v * 256, 256, seed + 7);
+    const grit = pebbles(u, v, 150, seed + 13, 0.55 + 0.3 * clump, 0.0015);
+    const peb = pebbles(u, v, 56, seed + 11, 0.5 + 0.5 * clump, 0.005);
+    const cob = pebbles(u, v, 20, seed + 17, 0.18 + 0.2 * clump, 0.011);
+    const m = 1.03 + 0.3 * tone + 0.04 * fines;
+    const albedo = mix3(mix3(mix3([m, m, m], grit.albedo, grit.cover), peb.albedo, peb.cover), cob.albedo, cob.cover);
+    const cover = Math.max(grit.cover, peb.cover, cob.cover);
+    return { albedo, rough: 0.95 - 0.22 * cover, height: Math.max(grit.height, peb.height, cob.height) + 0.0006 * fines + 0.0015 * tone, cavity: (1 - 0.3 * grit.crevice) * (1 - 0.5 * peb.crevice) * (1 - 0.6 * cob.crevice) };
   }
   // dirt: packed earth with a mottled crust, fine drying cracks in patches, a few small stones
   const clump = fbm(u * 2, v * 2, 2, seed, 3), m = fbm(u * 8, v * 8, 8, seed + 3, 4), grain = gnoise(u * 256, v * 256, 256, seed + 7);
@@ -176,24 +189,31 @@ fn stoneSample(layer: u32, uv: vec2f) -> StoneTexel {
   return StoneTexel(vec3f(a, a, a * 1.01), 0.9, 0.001 * m - 0.0012 * pore, 1.0 - 0.7 * pore);
 }
 
+struct Pebbles { cover: f32, height: f32, albedo: vec3f, crevice: f32 }
+fn pebbles(uv: vec2f, period: i32, seed: u32, density: f32, hMax: f32) -> Pebbles {
+  let c = worley(uv * f32(period), period, seed);
+  let r = 0.3 + 0.3 * f32((c.id >> 8u) & 255u) / 255.0;
+  let on = 1.0 - smoothstep(density - 0.05, density + 0.05, f32(c.id) * NOISE_U);
+  let x = min(c.f1 / r, 1.0);
+  let dome = (1.0 - x * x) * (1.0 - x * x);
+  let t = f32((c.id >> 16u) & 255u) / 255.0;
+  let albedo = select(vec3f(0.75 + 0.45 * t, 0.75 + 0.44 * t, 0.75 + 0.43 * t), vec3f(1.15, 1.0, 0.82), ((c.id >> 24u) & 3u) == 0u);
+  return Pebbles(on * (1.0 - smoothstep(0.8, 1.0, x)), hMax * r * on * dome / 0.6, albedo, on * smoothstep(0.75, 1.0, x) * (1.0 - smoothstep(1.0, 1.35, c.f1 / r)));
+}
+
 fn groundSample(k: u32, uv: vec2f) -> StoneTexel {
   let seed = 1000u * (${GROUND_LAYER}u + k + 1u);
   if (k == 0u) {
     let clump = fbm(uv * 2.0, 2, seed, 3);
     let tone = fbm(uv * 16.0, 16, seed + 3u, 3);
-    let grit = gnoise(uv * 256.0, 256, seed + 7u);
-    let c = worley(uv * 64.0, 64, seed + 11u);
-    let kk = f32(c.id) * NOISE_U;
-    let r = 0.3 + 0.3 * f32((c.id >> 8u) & 255u) / 255.0;
-    let on = 1.0 - smoothstep(0.72 + 0.5 * clump, 0.82 + 0.5 * clump, kk);
-    let x = min(c.f1 / r, 1.0);
-    let dome = (1.0 - x * x) * (1.0 - x * x);
-    let peb = on * (1.0 - smoothstep(0.8, 1.0, x));
-    let t = f32((c.id >> 16u) & 255u) / 255.0;
-    let pebble = select(vec3f(0.75 + 0.45 * t, 0.75 + 0.44 * t, 0.75 + 0.43 * t), vec3f(1.15, 1.0, 0.82), ((c.id >> 24u) & 3u) == 0u);
-    let m = 1.0 + 0.3 * tone + 0.04 * grit;
-    let crevice = on * smoothstep(0.75, 1.0, x) * (1.0 - smoothstep(1.0, 1.35, c.f1 / r));
-    return StoneTexel(mix(vec3f(m), pebble, peb), 0.95 - 0.22 * peb, 0.005 * r * on * dome / 0.45 + 0.0006 * grit + 0.0015 * tone, 1.0 - 0.5 * crevice);
+    let fines = gnoise(uv * 256.0, 256, seed + 7u);
+    let grit = pebbles(uv, 150, seed + 13u, 0.55 + 0.3 * clump, 0.0015);
+    let peb = pebbles(uv, 56, seed + 11u, 0.5 + 0.5 * clump, 0.005);
+    let cob = pebbles(uv, 20, seed + 17u, 0.18 + 0.2 * clump, 0.011);
+    let m = 1.03 + 0.3 * tone + 0.04 * fines;
+    let albedo = mix(mix(mix(vec3f(m), grit.albedo, grit.cover), peb.albedo, peb.cover), cob.albedo, cob.cover);
+    let cover = max(grit.cover, max(peb.cover, cob.cover));
+    return StoneTexel(albedo, 0.95 - 0.22 * cover, max(grit.height, max(peb.height, cob.height)) + 0.0006 * fines + 0.0015 * tone, (1.0 - 0.3 * grit.crevice) * (1.0 - 0.5 * peb.crevice) * (1.0 - 0.6 * cob.crevice));
   }
   let clump = fbm(uv * 2.0, 2, seed, 3);
   let m = fbm(uv * 8.0, 8, seed + 3u, 4);
