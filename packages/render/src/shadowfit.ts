@@ -21,6 +21,7 @@
 //      camera moves the map content shifts by whole texels and shadow
 //      edges do not swim.
 // Depth always spans the arena along the light, so every caster counts.
+// Receivers are the arena plus the floor its shadows reach under a low sun.
 import { lookAt, multiply, ortho, transform, type Mat4, type V3 } from './math.ts';
 
 const sub = (a: V3, b: V3): V3 => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
@@ -52,6 +53,8 @@ export interface Arena {
 }
 
 export const SHADOW_LADDER_MIN = 4;
+/** Farthest a shadow is followed past the arena along the floor, metres (a sun within ~0.5 degrees of the horizon). */
+export const SHADOW_REACH_MAX = 2000;
 const SHRINK_MARGIN = 1.15;
 
 /** The light's view matrix for an arena: looks along -sun at its centre, from outside it. */
@@ -174,7 +177,14 @@ export function fitShadow(arena: Arena, sun: V3, corners: V3[], size: number, st
   const { center: c, half: h } = arena;
   const bottom = Math.min(Math.max(c[1] - h[1], floorY - 0.05), c[1] + h[1]);
   const top = c[1] + h[1];
-  const a = arenaBox(view, arena), seen = clipToBox(corners, [c[0], (bottom + top) / 2, c[2]], [h[0], (top - bottom) / 2, h[2]]);
+  // A low sun throws the arena's shadows past it along the floor, away from the sun, as far as its top
+  // casts: those floor points are receivers too (their light-space x, y lie inside the arena's, so the
+  // window below stays within the arena's light-space box).
+  const horiz = Math.hypot(sun[0], sun[2]);
+  const reach = sun[1] > 0 && horiz > 1e-6 ? Math.min(((top - bottom) * horiz) / sun[1], SHADOW_REACH_MAX) : 0;
+  const sx = (-sun[0] / (horiz || 1)) * reach, sz = (-sun[2] / (horiz || 1)) * reach;
+  const rc: V3 = [c[0] + sx / 2, (bottom + top) / 2, c[2] + sz / 2], rh: V3 = [h[0] + Math.abs(sx) / 2, (top - bottom) / 2, h[2] + Math.abs(sz) / 2];
+  const a = arenaBox(view, arena), seen = clipToBox(corners, rc, rh);
   const f = lightBox(view, seen);
   let lo = [Math.max(a.lo[0]!, f.lo[0]!), Math.max(a.lo[1]!, f.lo[1]!)], hi = [Math.min(a.hi[0]!, f.hi[0]!), Math.min(a.hi[1]!, f.hi[1]!)];
   if (!seen.length || !(lo[0]! < hi[0]! && lo[1]! < hi[1]!)) { lo = [a.lo[0]!, a.lo[1]!]; hi = [a.hi[0]!, a.hi[1]!]; } // nothing of the arena in view: fit it all
@@ -189,8 +199,9 @@ export function fitShadow(arena: Arena, sun: V3, corners: V3[], size: number, st
   // the grid is aligned to the light view's origin, so snap the centre to it.
   const half = halfAt(level), texel = (2 * half) / size;
   const center: [number, number] = [Math.round((lo[0]! + hi[0]!) / 2 / texel) * texel, Math.round((lo[1]! + hi[1]!) / 2 / texel) * texel];
-  // Light view looks down -z: depths are -z. Span the arena with a 1 m margin.
-  const near = -a.hi[2]! - 1, far = -a.lo[2]! + 1;
+  // Light view looks down -z: depths are -z. Span the arena with a 1 m margin, and as deep as the floor its shadows reach.
+  const reachLo = reach > 0 ? lightBox(view, [0, 1, 2, 3].map((i) => [rc[0] + (i & 1 ? 1 : -1) * rh[0], bottom, rc[2] + (i & 2 ? 1 : -1) * rh[2]] as V3)).lo[2]! : Infinity;
+  const near = -a.hi[2]! - 1, far = -Math.min(a.lo[2]!, reachLo) + 1;
   const proj = ortho(center[0] - half, center[0] + half, center[1] - half, center[1] + half, near, far);
   return { matrix: multiply(proj, view), level, half, texel, depthRange: far - near, center };
 }
