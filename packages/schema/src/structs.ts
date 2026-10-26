@@ -198,6 +198,8 @@ export const SolverParams = defineStruct(
     ['frictionCombine', 'u32', '0 average, 1 min, 2 max, 3 multiply (SceneDesc.frictionCombine)'],
     ['restDepth', 'f32', 'load floor: a reused contact starts with kN >= |lambdaN| / restDepth; 0 = off'],
     ['rollingContacts', 'u32', '1: a contact on a sphere is a rolling contact (AvbdParams.rollingContacts)'],
+    ['loadCap', 'f32', 'load cap: a reused contact eases kN towards loadCap * (largest |lambdaN| on a point of its pair) / restDepth; 0 = off'],
+    ['capFall', 'f32', 'how fast kN falls to the load cap: at least capFall x its uncapped value each step'],
   ],
   'Per-step uniforms of the GPU AVBD solver.',
 );
