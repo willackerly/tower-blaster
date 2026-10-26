@@ -1,8 +1,10 @@
-// pnpm bench:probe [--channel chrome] [--headed] [--quick] [--only p1,p2,...] [--reps N] [--polls N]
+// pnpm bench:probe [--channel chrome] [--headed] [--quick] [--only p1,p2,...] [--reps N] [--polls N] [--hessian registers|array]
 // The solver probe (probe.ts): adapter limits (P1), the real solver's
 // per-colour structure and times on the S4 city (P2), synthetic per-point
 // kernels (P3) and synchronization costs (P4: a = workgroupBarrier,
 // b = dispatch chain, c = grid barrier, d = workgroup tile; p4 = all four).
+// --hessian sets the primal's form for P2 (default array, the engine's
+// default; registers is plan step 2b's form, to time against it).
 // Writes results/probe-<time>.{json,md}. Use real Chrome on the target
 // machine for numbers worth keeping; software adapters are flagged as invalid.
 import { mkdirSync, writeFileSync } from 'node:fs';
@@ -11,6 +13,7 @@ import { cpus, hostname, platform } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { exitNow, loadBundle, openWebGPU } from '@tb/testkit';
 import { PROBE_SECTIONS, type ProbeOptions, type ProbeResult, type ProbeSection, probeMarkdown, QUICK_PROBE } from './probe.ts';
+import { HESSIAN_FORMS, type HessianForm } from './solver.ts';
 
 const argv = process.argv.slice(2);
 const flag = (k: string) => argv.includes(`--${k}`);
@@ -26,6 +29,11 @@ if (only) {
 }
 if (value('reps')) opts.reps = Number(value('reps'));
 if (value('polls')) opts.maxPolls = Number(value('polls'));
+const hessian = value('hessian');
+if (hessian !== undefined) {
+  if (!(HESSIAN_FORMS as readonly string[]).includes(hessian)) throw new Error(`--hessian: must be one of ${HESSIAN_FORMS.join(', ')}, got ${hessian}`);
+  opts.hessian = hessian as HessianForm;
+}
 
 // Developer features lift Chrome's 100 µs timestamp quantization.
 const extra = ['--enable-webgpu-developer-features'];

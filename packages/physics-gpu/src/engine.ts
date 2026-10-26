@@ -10,7 +10,7 @@ import { Body, BodyProps, readField, Shape, SolverBody, writeStruct } from '@tb/
 import { Broadphase } from './broadphase.ts';
 import { Coloring } from './coloring.ts';
 import { Narrowphase } from './narrowphase.ts';
-import { AvbdSolver, DEFAULT_DISPATCH, defaultTailThreads, type SolverDispatch } from './solver.ts';
+import { AvbdSolver, DEFAULT_DISPATCH, defaultTailThreads, HESSIAN_FORMS, type HessianForm, type SolverDispatch } from './solver.ts';
 
 export interface GpuEngineOptions {
   /** Use this device instead of creating one (it is then not destroyed by dispose()). */
@@ -40,6 +40,12 @@ export interface GpuEngineOptions {
   colorTail?: number;
   indirectColors?: boolean;
   tailThreads?: number;
+  /**
+   * How the primal holds and solves each body's 6x6 system (SolverDispatch.hessian):
+   * 'array' (default), the earlier private arrays and loops; 'registers', named
+   * scalars, unrolled (plan step 2b). The same operations in the same order.
+   */
+  hessian?: HessianForm;
   /** Jones-Plassmann rounds (even, default 64). Fewer leave bodies uncoloured; for tests of that path. */
   colorRounds?: number;
 }
@@ -70,6 +76,8 @@ export class GpuAvbdEngine implements PhysicsEngine {
   /** The primal dispatch init() chose, with the adapter's default tail width filled in; null before init. */
   dispatch: SolverDispatch | null = null;
   private parts: { bodies: GPUBuffer; shapes: GPUBuffer; props: GPUBuffer; spheres: GPUBuffer; sweep: GPUBuffer; prev: GPUBuffer; bp: Broadphase; np: Narrowphase; col: Coloring; solver: AvbdSolver; readback: Readback } | null = null;
+  /** Counts dispose() calls (init() makes one), so an init() that awaited across another knows it was overtaken. */
+  private generation = 0;
 
   constructor(params: Partial<AvbdParams> = {}, private readonly opts: GpuEngineOptions = {}) {
     this.params = { ...DEFAULT_AVBD, ...params };
@@ -86,16 +94,18 @@ export class GpuAvbdEngine implements PhysicsEngine {
     check('tailThreads', (v) => Number.isInteger(v) && v >= 1 && v <= 256, 'an integer from 1 to 256');
     check('colorRounds', (v) => Number.isInteger(v) && v >= 2 && v % 2 === 0, 'an even integer >= 2');
     if (opts.indirectColors !== undefined && typeof opts.indirectColors !== 'boolean') throw new Error(`GpuAvbdEngine: GpuEngineOptions.indirectColors must be a boolean, got ${opts.indirectColors}`);
-    const variant: Record<string, number | boolean> = {};
+    if (opts.hessian !== undefined && !HESSIAN_FORMS.includes(opts.hessian)) throw new Error(`GpuAvbdEngine: GpuEngineOptions.hessian must be one of ${HESSIAN_FORMS.join(', ')}, got ${opts.hessian}`);
+    const variant: Record<string, number | boolean | string> = {};
     for (const [k, v] of Object.entries(this.params)) variant[k] = v;
     // Options that size the buffers or shape the dispatch change the work per step (e.g. the broadphase's key bits), so they are part of the variant.
-    for (const k of ['capacity', 'spare', 'pairsPerBody', 'maxRadius', 'colorTail', 'indirectColors', 'tailThreads', 'colorRounds'] as const) if (opts[k] !== undefined) variant[k] = opts[k];
+    for (const k of ['capacity', 'spare', 'pairsPerBody', 'maxRadius', 'colorTail', 'indirectColors', 'tailThreads', 'colorRounds', 'hessian'] as const) if (opts[k] !== undefined) variant[k] = opts[k];
     this.info = { name: 'avbd-gpu', variant, backend: 'webgpu', integrator: { substeps: 1 } };
   }
 
   async init(scene: SceneDesc): Promise<void> {
     this.failure = null;
     this.dispose();
+    const generation = this.generation;
     if (this.opts.device) this.device = this.opts.device;
     else { this.device = (await createDevice()).device; this.ownsDevice = true; }
     const device = this.device;
@@ -110,6 +120,7 @@ export class GpuAvbdEngine implements PhysicsEngine {
     this.dispatch = {
       colorTail: this.opts.colorTail ?? DEFAULT_DISPATCH.colorTail, indirectColors: this.opts.indirectColors ?? DEFAULT_DISPATCH.indirectColors,
       tailThreads: this.opts.tailThreads ?? defaultTailThreads(adapter ? isSoftwareAdapter(adapter) : false),
+      hessian: this.opts.hessian ?? DEFAULT_DISPATCH.hessian,
     };
     this.scene = scene;
     const all = [...scene.bodies, ...scene.inputs.map((e) => e.body)];
@@ -125,21 +136,58 @@ export class GpuAvbdEngine implements PhysicsEngine {
     // allocating, which would leak what it had made.
     assertStorageFits(device, AvbdSolver.contactBytes(this.capacity, maxPairs), 'avbd contacts');
     const buf = (bytes: number, label: string) => (assertStorageFits(device, bytes, label), device.createBuffer({ size: Math.max(16, bytes), usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC, label }));
-    const bodies = buf(this.capacity * Body.size, 'bodies');
-    const shapes = buf(this.capacity * Shape.size, 'shapes');
-    const props = buf(this.capacity * BodyProps.size, 'body props');
-    const spheres = buf(this.capacity * 16, 'inflated spheres');
-    const sweep = buf(this.capacity * 4, 'sweep');
-    const prev = buf(maxPairs * 8, 'pair history lookup');
-    const bp = new Broadphase(device, spheres, this.capacity, maxPairs);
-    const np = new Narrowphase(device, bodies, shapes, bp.pairs, bp.total, this.capacity, maxPairs, sweep, prev);
-    const col = new Coloring(device, np.manifolds, bp.total, this.capacity, maxPairs, this.opts.colorRounds);
-    const solver = new AvbdSolver(device, this.capacity, maxPairs, {
-      bodies, props, spheres, sweep, prev, manifolds: np.manifolds, groundManifolds: np.groundManifolds,
-      pairs: bp.pairs, total: bp.total, offsets: bp.offsets,
-      order: col.order, colorStart: col.colorStart, dispatch: col.dispatch, rowStart: col.rowStart, rowLength: col.rowLength, adjSlot: col.adjSlot,
-    }, this.dispatch);
-    this.parts = { bodies, shapes, props, spheres, sweep, prev, bp, np, col, solver, readback: new Readback(device) };
+    // A pipeline that fails to build (e.g. on Metal, a kernel whose register use
+    // lowers maxTotalThreadsPerThreadgroup below its workgroup size) is an error
+    // reported later, not a throw, and step() would then fail on the first
+    // submit. Catch it here instead, with what was being built.
+    //
+    // The stages are built into a local and published as this.parts only after
+    // the error scopes resolve, in the same synchronous run that writes the
+    // scene's bodies: step(), push() and snapshot() during init() must keep
+    // failing with 'init() first', never run on buffers that hold no bodies yet
+    // with the previous scene's n, pending inputs and step index. A dispose()
+    // or another init() in that window wins: this one frees what it built and
+    // rejects, instead of installing it over (and leaking) the other's.
+    device.pushErrorScope('internal');
+    device.pushErrorScope('validation');
+    let parts: GpuAvbdEngine['parts'] = null;
+    let thrown: unknown = null;
+    try {
+      const bodies = buf(this.capacity * Body.size, 'bodies');
+      const shapes = buf(this.capacity * Shape.size, 'shapes');
+      const props = buf(this.capacity * BodyProps.size, 'body props');
+      const spheres = buf(this.capacity * 16, 'inflated spheres');
+      const sweep = buf(this.capacity * 4, 'sweep');
+      const prev = buf(maxPairs * 8, 'pair history lookup');
+      const bp = new Broadphase(device, spheres, this.capacity, maxPairs);
+      const np = new Narrowphase(device, bodies, shapes, bp.pairs, bp.total, this.capacity, maxPairs, sweep, prev);
+      const col = new Coloring(device, np.manifolds, bp.total, this.capacity, maxPairs, this.opts.colorRounds);
+      const solver = new AvbdSolver(device, this.capacity, maxPairs, {
+        bodies, props, spheres, sweep, prev, manifolds: np.manifolds, groundManifolds: np.groundManifolds,
+        pairs: bp.pairs, total: bp.total, offsets: bp.offsets,
+        order: col.order, colorStart: col.colorStart, dispatch: col.dispatch, rowStart: col.rowStart, rowLength: col.rowLength, adjSlot: col.adjSlot,
+      }, this.dispatch);
+      parts = { bodies, shapes, props, spheres, sweep, prev, bp, np, col, solver, readback: new Readback(device) };
+    } catch (e) {
+      thrown = e;
+    }
+    // Both popped before awaiting either, so neither scope stays pushed across an
+    // await (on a shared device, it would capture errors of the caller's work).
+    const [validation, internal] = await Promise.all([device.popErrorScope(), device.popErrorScope()]);
+    if (this.generation !== generation) {
+      if (parts) GpuAvbdEngine.free(parts);
+      if (!this.opts.device && this.device !== device) device.destroy(); // its own device, which nothing holds now
+      throw new Error('GpuAvbdEngine: init() was overtaken by dispose() or another init() before it finished');
+    }
+    if (thrown) throw thrown;
+    const failed = validation ?? internal;
+    if (failed) {
+      const d = this.dispatch;
+      if (parts) GpuAvbdEngine.free(parts);
+      this.dispose();
+      throw new Error(`GpuAvbdEngine: init() could not build the GPU pipelines (hessian ${d.hessian}, tailThreads ${d.tailThreads}): ${failed.message}`);
+    }
+    this.parts = parts;
     this.n = 0;
     for (const b of scene.bodies) this.add(b);
     this.pending = [...scene.inputs].sort((a, b) => a.step - b.step);
@@ -262,12 +310,14 @@ export class GpuAvbdEngine implements PhysicsEngine {
     return { pairsRequired: total[5]!, pairsWritten: total[3]!, colors: info[0]!, uncolored: info[1]!, colorOverflow: info[2]! };
   }
 
+  private static free(p: NonNullable<GpuAvbdEngine['parts']>): void {
+    p.solver.destroy(); p.col.destroy(); p.np.destroy(); p.bp.destroy(); p.readback.destroy();
+    for (const b of [p.bodies, p.shapes, p.props, p.spheres, p.sweep, p.prev]) b.destroy();
+  }
+
   dispose(): void {
-    const p = this.parts;
-    if (p) {
-      p.solver.destroy(); p.col.destroy(); p.np.destroy(); p.bp.destroy(); p.readback.destroy();
-      for (const b of [p.bodies, p.shapes, p.props, p.spheres, p.sweep, p.prev]) b.destroy();
-    }
+    this.generation++;
+    if (this.parts) GpuAvbdEngine.free(this.parts);
     this.parts = null;
     const device = this.device;
     device?.removeEventListener('uncapturederror', this.onGpuError);

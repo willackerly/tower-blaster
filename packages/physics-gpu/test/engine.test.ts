@@ -6,7 +6,7 @@ import { drift, jitter, nonFinite, penetration, survival } from '@tb/metrics';
 import { AvbdReferenceEngine } from '@tb/physics-ref';
 import { buildScenario } from '@tb/scenarios';
 import { aboveHole, appliedMu, loadBundle, openWebGPU, readColumn, rodRock, rodToppleTime, slideMu, slideScene, THROW, throwScene, tippingAngle, type WebGPUSession } from '@tb/testkit';
-import { defaultTailThreads, GpuAvbdEngine, type GpuEngineOptions } from '../src/index.ts';
+import { defaultTailThreads, GpuAvbdEngine, type GpuEngineOptions, HESSIAN_FORMS, solveWgsl } from '../src/index.ts';
 import type * as Drivers from './page.ts';
 
 let gpu: WebGPUSession | null = null;
@@ -312,6 +312,29 @@ describe('GPU AVBD engine: stacks, towers and impacts', () => {
     expect(overflow.found).toBeGreaterThan(1000);
   }, 180_000);
 
+  // init() awaits the GPU's error scopes after building its stages. A call in
+  // that window must fail as before init(), not step the new, empty buffers
+  // with the previous scene's body count, pending inputs and step index (and
+  // advance the solver's contact history with that garbage step). A dispose()
+  // or a second init() in that window wins; the overtaken init() rejects
+  // rather than install its stages over the newer ones.
+  it('step(), push() and probeParts() during init() throw init() first, an overtaken init() rejects, and neither leaves anything behind', { timeout: 120_000 }, async (ctx) => {
+    if (!gpu) return ctx.skip();
+    const first = buildScenario('S11', { N: 40 }, 3);
+    first.inputs = [{ step: 1000, kind: 'spawn', body: cube([20, 0.5, 20]) }];
+    const r = await call('callsDuringInit', first, buildScenario('S11', { N: 60 }, 7), 20);
+    expect([r.error, r.uncaptured]).toEqual([null, []]);
+    for (const k of [0, 1]) {
+      expect(r.calls[k]!.length).toBeGreaterThanOrEqual(3);
+      expect(r.calls[k]!.filter((c) => !c.endsWith(': init() first'))).toEqual([]);
+    }
+    const overtaken = 'GpuAvbdEngine: init() was overtaken by dispose() or another init() before it finished';
+    expect(r.overtaken).toEqual({ disposed: overtaken, superseded: overtaken, last: 'resolved' });
+    expect(r.count).toBe(60);
+    expect(r.after).toEqual(r.clean);
+    expect(r.reinit).toEqual(r.clean);
+  });
+
   it('init() names the buffer that does not fit the device instead of failing validation later', async (ctx) => {
     if (!gpu) return ctx.skip();
     const r = await call('initError', buildScenario('S9', { H: 10, ratio: 1 }, 1), 1e6);
@@ -443,11 +466,139 @@ describe('GPU AVBD engine: primal dispatch (direct colours and the one-workgroup
     const def = await call('dispatchPlan', scene, {});
     expect(def.before).toBeNull();
     expect(def.software).not.toBeNull();
-    expect(def.dispatch).toEqual({ colorTail: 8, indirectColors: false, tailThreads: def.software ? 64 : 256 });
+    expect(def.dispatch).toEqual({ colorTail: 8, indirectColors: false, tailThreads: def.software ? 64 : 256, hessian: 'array' });
     // The tests run on SwiftShader unless a real GPU is present; it must count as software.
     if (/swiftshader/i.test(def.adapter ?? '')) expect(def.software).toBe(true);
-    const set = await call('dispatchPlan', scene, { tailThreads: 32, colorTail: 3, indirectColors: true });
-    expect(set.dispatch).toEqual({ colorTail: 3, indirectColors: true, tailThreads: 32 });
+    const set = await call('dispatchPlan', scene, { tailThreads: 32, colorTail: 3, indirectColors: true, hessian: 'array' });
+    expect(set.dispatch).toEqual({ colorTail: 3, indirectColors: true, tailThreads: 32, hessian: 'array' });
+  });
+});
+
+describe('GPU AVBD engine: primal hessian form (named registers against the private array)', () => {
+  // hessian 'registers' (plan step 2b) holds each body's 6x6 system in named
+  // scalars, unrolled; 'array' is the earlier private-array form. The register
+  // form does the array form's floating-point operations in the same order
+  // (registerSolveBody in solver.ts), so where the compiler does not contract
+  // or reassociate one differently, the two agree bit for bit: on SwiftShader
+  // they do, every scene here, at every step compared.
+  const state = (s: Drivers.PlainSnapshot) => [s.pos, s.rot, s.linVel, s.angVel];
+  const same = async (scene: SceneDesc, steps: number, params: Partial<{ iterations: number }>, opts: Omit<GpuEngineOptions, 'device' | 'hessian'> = {}, every = 0) => {
+    const [a, r] = [await call('simulateGpu', scene, steps, params, every, { ...opts, hessian: 'array' }), await call('simulateGpu', scene, steps, params, every, { ...opts, hessian: 'registers' })];
+    expect([a.error, r.error]).toEqual([null, null]);
+    expect(r.snaps.length).toBe(a.snaps.length);
+    a.snaps.forEach((s, k) => expect(state(r.snaps[k]!), `step ${s.step}`).toEqual(state(s)));
+    const last = toSnap(r.snaps.at(-1)!);
+    expect(nonFinite(last)).toBe(0);
+    // Contacts acted, so the comparison is not of free flight: bodies held up, falling at under half the free-fall speed.
+    let held = 0;
+    for (let i = 0; i < last.count; i++) if (last.linVel[3 * i + 1]! > -0.5 * G * steps * scene.dt) held++;
+    expect(held).toBeGreaterThanOrEqual(10);
+    return { a, r };
+  };
+  const knock = () => buildScenario('S5', { N: 64, F: 2, H: 8, street: 2, fireStep: 0, radius: 0.6, speed: 15 }, 1);
+  const sphere = (pos: Vec3, radius: number, linVel: Vec3 = [0, 0, 0]): BodyDesc => ({ ...cube(pos, linVel), shape: { kind: 'sphere', radius } });
+
+  // The ball reaches the towers at about step 17.
+  it('two 2x2x8 towers and a ball: the same state, bit for bit, every 4 steps', { timeout: 120_000 }, async (ctx) => {
+    if (!gpu) return ctx.skip();
+    await same(knock(), 24, {}, {}, 4);
+  });
+
+  it('S11, 300 loose cubes landing: the same state, bit for bit', { timeout: 120_000 }, async (ctx) => {
+    if (!gpu) return ctx.skip();
+    await same(buildScenario('S11', { N: 300 }, 7), 40, {});
+  });
+
+  it('S5, a small city hit by a ball: the same state, bit for bit', { timeout: 120_000 }, async (ctx) => {
+    if (!gpu) return ctx.skip();
+    const scene = buildScenario('S5', { N: 150, F: 3, H: 6, street: 2, fireStep: 0, radius: 0.8, speed: 15 }, 1);
+    await same(scene, 30, {});
+  });
+
+  it('spheres on boxes, on each other and rolling into a box: the same state, bit for bit', { timeout: 120_000 }, async (ctx) => {
+    if (!gpu) return ctx.skip();
+    const scene = sceneOf([
+      cube([-1.2, 0.5, 0]), cube([0, 0.5, 0]), cube([1.2, 0.5, 0]),
+      sphere([-1.2, 1.4, 0], 0.4), sphere([0, 1.4, 0], 0.4, [0.5, 0, 0.2]), sphere([1.2, 1.4, 0], 0.4),
+      // Three touching spheres on the ground and one resting on them (just above, it drops into contact).
+      sphere([3, 0.5, 0], 0.5), sphere([4, 0.5, 0], 0.5), sphere([3.5, 0.5, 0.866], 0.5), sphere([3.5, 1.32, 0.289], 0.5),
+      sphere([-4.5, 0.5, 0], 0.5, [3, 0, 0.3]), cube([-3, 0.5, 0]),
+    ]);
+    await same(scene, 60, {}, {}, 20);
+  });
+
+  it('20 iterations: the same state, bit for bit', { timeout: 120_000 }, async (ctx) => {
+    if (!gpu) return ctx.skip();
+    await same(knock(), 20, { iterations: 20 });
+  });
+
+  it('every colour in the tail, uncoloured bodies included (primalTail): the same state, bit for bit', { timeout: 120_000 }, async (ctx) => {
+    if (!gpu) return ctx.skip();
+    const { r } = await same(knock(), 24, { iterations: 4 }, { colorTail: 0, colorRounds: 2 });
+    expect(r.worst.uncolored).toBeGreaterThan(0);
+  });
+
+  // One primal dispatch of the solve kernel on 2048 synthetic bodies with up
+  // to 16 contact points each (page.ts primalKernel): random poses, normals
+  // (a quarter axis-aligned, so the Jacobian has exact and signed zeros),
+  // lever arms, forces, and stiffnesses (15% zero).
+  //
+  // Bodies 0 and 1 are built so that skipping a zero-stiffness row, as both
+  // forms must, is visible. Negative inertia at the identity rotation seeds
+  // the rotational block's off-diagonal entries with -0 (I[1][0] = -0 + -0 +
+  // -0), and one ground contact has kN = kT = 0. Skipped, entry (4, 3) stays
+  // -0, so l43 = -0 / d3 = +0 (d3 < 0), x3 = y3 - l43 x4 - l53 x5 = -0 with
+  // y3 = +0 / d3 = -0, and phi.x = -0 - x3 = +0. A row with J[4] = 1 and
+  // J[3] = 0 (u = x, lever arm (1, 1, 1)) added as (0 J[4]) J[3] = +0
+  // instead turns the entry +0, x3 = +0 and phi.x = -0. That row is body 0's
+  // first tangent (n = y, t1 = x) and body 1's normal (n = x, t1 = y); every
+  // other row of the two adds -0, which leaves the entry as it is.
+  it('the solve kernel on random systems: the two forms agree bit for bit, a skipped zero-stiffness row included', { timeout: 120_000 }, async (ctx) => {
+    if (!gpu) return ctx.skip();
+    const [a, r] = [await call('primalKernel', 'array', 2048, 5), await call('primalKernel', 'registers', 2048, 5)];
+    expect([a.error, r.error]).toEqual([null, null]);
+    expect(a.points).toBeGreaterThan(10_000);
+    expect(a.zeroRows).toBeGreaterThan(1000);
+    expect(a.changed).toBeGreaterThan(0.95 * a.bits.length);
+    expect(a.nonFinite).toBe(0);
+    let differ = 0;
+    for (let k = 0; k < a.bits.length; k++) if (a.bits[k] !== r.bits[k]) differ++;
+    expect(differ).toBe(0);
+    // Bodies 0 and 1: phi.x is +0 (bits 0), not -0 (0x80000000).
+    expect([a.bits[3], r.bits[3], a.bits[9], r.bits[9]]).toEqual([0, 0, 0, 0]);
+  });
+
+  it('the option reaches the shader: array by default, two different modules, and the array form is the private-array code', async (ctx) => {
+    expect(HESSIAN_FORMS).toEqual(['registers', 'array']);
+    const reg = solveWgsl('registers'), arr = solveWgsl('array');
+    expect(arr).toContain('var<private> lhs: array<f32, 36>;');
+    expect(arr).toContain('fn accumulate(ct: SolverContact, i: u32)');
+    const code = (wgsl: string) => wgsl.replace(/\/\/.*$/gm, '');
+    for (const name of ['lhs', 'rhs', 'accumulate', 'var<private>', 'array<f32, 36>']) expect(code(reg)).not.toContain(name);
+    expect(reg).toContain('h43 += k4 * J1[3];');
+    expect(() => solveWgsl('matrix' as never)).toThrow(/hessian must be one of registers, array, got matrix/);
+    expect(() => new GpuAvbdEngine({}, { hessian: 'matrix' as never })).toThrow("GpuEngineOptions.hessian must be one of registers, array, got matrix");
+    expect(new GpuAvbdEngine({}, { hessian: 'array' }).info.variant).toMatchObject({ hessian: 'array' });
+    if (!gpu) return ctx.skip();
+    const scene = buildScenario('S11', { N: 50 }, 7);
+    const def = await call('solveShader', scene, {});
+    expect(def.dispatch!.hessian).toBe('array');
+    expect(def.codes).toEqual([arr]);
+    const set = await call('solveShader', scene, { hessian: 'registers' });
+    expect(set.dispatch!.hessian).toBe('registers');
+    expect(set.codes).toEqual([reg]);
+  });
+
+  it('init() fails, naming the error, when a solve pipeline cannot be built (on Metal: too many registers for the tail workgroup)', async (ctx) => {
+    if (!gpu) return ctx.skip();
+    const r = await call('solvePipelineFailure', buildScenario('S11', { N: 50 }, 7));
+    expect(r.maxInvocations).toBeLessThan(512);
+    expect(r.message).toMatch(/^GpuAvbdEngine: init\(\) could not build the GPU pipelines \(hessian registers, tailThreads 256\): /);
+    expect(r.message).toMatch(/primalTail/);
+    // Nothing is left half-built: step() needs a new init(), which works once the shader does.
+    expect(r.stepAfter).toBe('init() first');
+    expect(r.healthy).toBe('resolved');
+    expect(r.uncaptured).toEqual([]);
   });
 });
 

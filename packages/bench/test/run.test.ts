@@ -183,8 +183,9 @@ describe('engine registry and SlowedEngine', () => {
     // spare is a GpuEngineOptions field (room for pushed bodies), not a solver parameter: the
     // engine checks it (a solver parameter would pass unchecked) and records it in the variant.
     expect(makeEngine('avbd-gpu:iterations=6,spare=8').info.variant).toEqual({ ...makeEngine('avbd-gpu:iterations=6').info.variant, spare: 8 });
-    for (const bad of ['-1', '2.5', 'abc', 'true']) expect(() => makeEngine(`avbd-gpu:spare=${bad}`)).toThrow(/spare must be a non-negative integer/);
+    for (const bad of ['-1', '2.5', 'true']) expect(() => makeEngine(`avbd-gpu:spare=${bad}`)).toThrow(/spare must be a non-negative integer/);
     expect(() => makeEngine('avbd-gpu:spare=')).toThrow(/bad engine option/);
+    expect(() => makeEngine('avbd-gpu:spare=abc')).toThrow(/bad engine option "spare=abc" .*: spare takes a number, true or false/);
     // The other buffer-sizing options reach the engine too (it checks them, as it would not check a solver parameter).
     expect(makeEngine('avbd-gpu:capacity=100,pairsPerBody=4,maxRadius=2.5').info.variant).toMatchObject({ capacity: 100, pairsPerBody: 4, maxRadius: 2.5 });
     // So do the options that shape the primal dispatch and the colouring.
@@ -195,6 +196,18 @@ describe('engine registry and SlowedEngine', () => {
       ['tailThreads', '0', 'an integer from 1 to 256'], ['tailThreads', '257', 'an integer from 1 to 256'],
     ] as const) {
       expect(() => makeEngine(`avbd-gpu:${k}=${bad}`)).toThrow(`GpuEngineOptions.${k} must be ${what}`);
+    }
+    // hessian takes a word: a value that is not a number stays a string, and the engine checks it.
+    expect(parseSpec('avbd-gpu:hessian=array,iterations=4')).toEqual({ name: 'avbd-gpu', options: { hessian: 'array', iterations: 4 } });
+    expect(makeEngine('avbd-gpu:hessian=array').info.variant).toMatchObject({ hessian: 'array' });
+    expect(makeEngine('avbd-gpu:hessian=registers').info.variant).toMatchObject({ hessian: 'registers' });
+    expect(makeEngine('avbd-gpu:iterations=6').info.variant.hessian).toBeUndefined();
+    for (const bad of ['matrix', 'Array', '1', 'true']) {
+      expect(() => makeEngine(`avbd-gpu:hessian=${bad}`)).toThrow(`GpuEngineOptions.hessian must be one of registers, array, got ${bad}`);
+    }
+    // Any other option given a word is rejected rather than passed on as a truthy string.
+    for (const spec of ['avbd-gpu:sweep=off', 'avbd-ref:slidingHessian=no', 'avbd-gpu:iterations=ten', 'rapier:ccd=yes']) {
+      expect(() => parseSpec(spec)).toThrow(/bad engine option .* takes a number, true or false/);
     }
   });
 

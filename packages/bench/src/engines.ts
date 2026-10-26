@@ -5,18 +5,18 @@ import { TieredEngine } from '@tb/lattice';
 import { AvbdReferenceEngine } from '@tb/physics-ref';
 import { GpuAvbdEngine, type GpuEngineOptions } from '@tb/physics-gpu';
 
-type Options = Record<string, number | boolean>;
+type Options = Record<string, number | boolean | string>;
 
 const REGISTRY: Record<string, (o: Options) => PhysicsEngine> = {
   rapier: (o) => new RapierEngine(o.iterations !== undefined ? { iterations: Number(o.iterations) } : {}),
   // Options are AvbdParams fields, e.g. avbd-ref:iterations=4,sweep=false.
   'avbd-ref': (o) => new AvbdReferenceEngine(o),
   // Same AvbdParams, plus the GpuEngineOptions that size its buffers (capacity, spare,
-  // pairsPerBody, maxRadius) or shape its dispatch (colorTail, indirectColors, tailThreads, colorRounds),
-  // which the engine checks; needs WebGPU, so it runs in the browser runner, not the Node CLI.
+  // pairsPerBody, maxRadius) or shape its dispatch (colorTail, indirectColors, tailThreads, colorRounds,
+  // hessian), which the engine checks; needs WebGPU, so it runs in the browser runner, not the Node CLI.
   'avbd-gpu': (o) => {
-    const { capacity, spare, pairsPerBody, maxRadius, colorTail, indirectColors, tailThreads, colorRounds, ...params } = o;
-    const opts = Object.fromEntries(Object.entries({ capacity, spare, pairsPerBody, maxRadius, colorTail, indirectColors, tailThreads, colorRounds }).filter(([, v]) => v !== undefined)) as GpuEngineOptions;
+    const { capacity, spare, pairsPerBody, maxRadius, colorTail, indirectColors, tailThreads, colorRounds, hessian, ...params } = o;
+    const opts = Object.fromEntries(Object.entries({ capacity, spare, pairsPerBody, maxRadius, colorTail, indirectColors, tailThreads, colorRounds, hessian }).filter(([, v]) => v !== undefined)) as GpuEngineOptions;
     return new GpuAvbdEngine(params, opts);
   },
   // Dormant lattice tier over a Rapier host; other options are TierParams (e.g. tiered:vWake=0.5).
@@ -26,13 +26,22 @@ const REGISTRY: Record<string, (o: Options) => PhysicsEngine> = {
   },
 };
 
+/** Engine options whose value is a word rather than a number or boolean. */
+const WORD_OPTIONS = new Set(['hessian']);
+
 export function parseSpec(spec: string): { name: string; options: Options } {
   const [name, rest] = spec.split(':', 2) as [string, string | undefined];
   const options: Options = {};
   for (const kv of rest ? rest.split(',') : []) {
     const [k, v] = kv.split('=');
     if (!k || v === undefined || v === '') throw new Error(`bad engine option "${kv}" in "${spec}"`);
-    options[k] = v === 'true' ? true : v === 'false' ? false : Number(v);
+    // Only options that take a word (hessian=array) keep a string; the engine checks its value. Any other
+    // non-number is a mistake: sweep=off would otherwise be a truthy string and turn the sweep on.
+    const num = Number(v);
+    if (v === 'true' || v === 'false') options[k] = v === 'true';
+    else if (!Number.isNaN(num)) options[k] = num;
+    else if (WORD_OPTIONS.has(k)) options[k] = v;
+    else throw new Error(`bad engine option "${kv}" in "${spec}": ${k} takes a number, true or false`);
   }
   return { name, options };
 }
