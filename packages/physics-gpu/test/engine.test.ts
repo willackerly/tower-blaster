@@ -466,7 +466,7 @@ describe('GPU AVBD engine: primal dispatch (direct colours and the one-workgroup
     const def = await call('dispatchPlan', scene, {});
     expect(def.before).toBeNull();
     expect(def.software).not.toBeNull();
-    expect(def.dispatch).toEqual({ colorTail: 8, indirectColors: false, tailThreads: def.software ? 64 : 256, hessian: 'array' });
+    expect(def.dispatch).toEqual({ colorTail: 8, indirectColors: false, tailThreads: def.software ? 64 : 256, hessian: 'registers' });
     // The tests run on SwiftShader unless a real GPU is present; it must count as software.
     if (/swiftshader/i.test(def.adapter ?? '')) expect(def.software).toBe(true);
     const set = await call('dispatchPlan', scene, { tailThreads: 32, colorTail: 3, indirectColors: true, hessian: 'array' });
@@ -568,7 +568,7 @@ describe('GPU AVBD engine: primal hessian form (named registers against the priv
     expect([a.bits[3], r.bits[3], a.bits[9], r.bits[9]]).toEqual([0, 0, 0, 0]);
   });
 
-  it('the option reaches the shader: array by default, two different modules, and the array form is the private-array code', async (ctx) => {
+  it('the option reaches the shader: registers by default, two different modules, and the array form is the private-array code', async (ctx) => {
     expect(HESSIAN_FORMS).toEqual(['registers', 'array']);
     const reg = solveWgsl('registers'), arr = solveWgsl('array');
     expect(arr).toContain('var<private> lhs: array<f32, 36>;');
@@ -582,11 +582,11 @@ describe('GPU AVBD engine: primal hessian form (named registers against the priv
     if (!gpu) return ctx.skip();
     const scene = buildScenario('S11', { N: 50 }, 7);
     const def = await call('solveShader', scene, {});
-    expect(def.dispatch!.hessian).toBe('array');
-    expect(def.codes).toEqual([arr]);
-    const set = await call('solveShader', scene, { hessian: 'registers' });
-    expect(set.dispatch!.hessian).toBe('registers');
-    expect(set.codes).toEqual([reg]);
+    expect(def.dispatch!.hessian).toBe('registers');
+    expect(def.codes).toEqual([reg]);
+    const set = await call('solveShader', scene, { hessian: 'array' });
+    expect(set.dispatch!.hessian).toBe('array');
+    expect(set.codes).toEqual([arr]);
   });
 
   it('init() fails, naming the error, when a solve pipeline cannot be built (on Metal: too many registers for the tail workgroup)', async (ctx) => {
