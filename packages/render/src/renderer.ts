@@ -88,9 +88,10 @@ export interface RendererOptions {
    * Bench diagnostics for the real look's block shading: 'stone-off'
    * compiles the stone samples out (against stone texture 0, the cost of
    * the samples' code being there at all); 'step1' shades blocks as realism
-   * step 1 did (the stylized body under the atmosphere).
+   * step 1 did (the stylized body under the atmosphere); 'no-floor-sky'
+   * gives the floor the vertical sky term only (no floorSky cones).
    */
-  realDiag?: 'stone-off' | 'step1';
+  realDiag?: 'stone-off' | 'step1' | 'no-floor-sky';
   /** false: no material level of detail, every box drawn with the stone code (bench and tests). Default true. */
   stoneLod?: boolean;
   /** Spark slots (default SPARK_POOL, 65536). Every slot costs a simulation thread and a quad per frame. */
@@ -140,6 +141,7 @@ export function lookUniforms(l: LookParams): Record<string, number | number[]> {
     ball: lin(l.ball), ballEmissive: l.ballEmissive, fogDensity: l.fogDensity, fogHeight: l.fogHeight, exposure: l.exposure,
     stone: l.stone ? [STONES.indexOf(l.stone.kind), l.stone.scale, l.stone.wear, l.stone.dirt] : [0, 1, 0, 0],
     stoneDetail: [l.stone?.detail ?? 0, l.stone?.fade ?? 1, 0, 0],
+    blockAlbedo: [...[0, 1, 2].map((k) => l.ramp.reduce((acc, c) => acc + srgbToLinear(c[k]!), 0) / l.ramp.length), 0],
     ...Object.fromEntries(l.ramp.map((c, i) => [`ramp${i}`, [...linearToOklab(lin(c) as V3), 0]])),
   };
 }
@@ -339,8 +341,8 @@ export class Renderer {
         // Past the stone's fade-out (stoneLodDepth): the same shading without the stone code.
         boxFar: color('vsBox', opts.flatBoxes ? 'fsBoxFlat' : 'fsBox', 'back', SEG.boxFar, { ...m, constants: opts.flatBoxes ? {} : { REAL_STONE: 0, REAL_BLOCK: opts.realDiag === 'step1' ? 0 : 1 } }),
         sphere: color('vsSphere', 'fsSphere', 'back', SEG.sphere, m),
-        ground: color('vsGround', 'fsGround', 'none', 0, { ...m, buffers: [{ arrayStride: 12, attributes: [{ shaderLocation: 0, offset: 0, format: 'float32x3' }] }] }),
-        sky: color('vsSky', 'fsSky', 'none', 0, { ...m, sky: true }),
+        ground: color('vsGround', 'fsGround', 'none', 0, { ...m, constants: { FLOOR_CONES: opts.realDiag === 'no-floor-sky' ? 0 : 1 }, buffers: [{ arrayStride: 12, attributes: [{ shaderLocation: 0, offset: 0, format: 'float32x3' }] }] }),
+        sky: color('vsSky', 'fsSky', 'none', 0, { ...m, sky: true, constants: { FLOOR_CONES: opts.realDiag === 'no-floor-sky' ? 0 : 1 } }),
         overlay: color('vsOverlay', 'fsOverlay', 'back', 0, m),
       };
       const bind = device.createBindGroup({

@@ -74,6 +74,20 @@ rules the code follows; the doc has the reasoning.
   seam to see (render.test.ts: within 2 of 255). `stoneDetail` 0 sends
   every box to `boxFar`. `real-no-lod` measures what the split saves.
 
+## Floor and ambient (fixes after the stone step's screenshots)
+
+- Contact darkening (within 1.5 m of the floor) is for what stands on the
+  floor; in the real look a surface facing up takes none of it, so open
+  shadow gets the whole sky (about 0.15 of sunlight at 35 degrees).
+- The AO volume's sky term looks straight up only. The floor's sky view
+  factor (`floorSky`) adds six cones at 30 degrees elevation through the
+  occupancy mips. Where blocks hide the sky, a surface sees `realBounce`:
+  walls of the blocks' mean albedo, lit by the sun averaged over compass
+  directions and by half the sky and ground. That turns streets between
+  towers from sky-blue to warm, as sunlit walls make them. Step 2 replaces
+  both with proper sky lighting. Bench variant `real-no-floor-sky`.
+- The clearcoat lobe only runs where there is a coat (the ball).
+
 ## Steps
 
 Order of work: 1, 3, 4, then 5, 6, 2, 7 (textures do more for "real" than

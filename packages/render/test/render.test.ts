@@ -979,17 +979,24 @@ describe('drawing', () => {
     expect(flat.maxDiff).toBeLessThanOrEqual(2);
   });
 
-  it('real look floor: shadowed street floor about as bright as open shadow; open shadow lit by the whole sky', async (ctx) => {
+  it('real look floor: open shadow lit by the whole sky; a street sees sunlit walls where the sky is hidden', async (ctx) => {
     if (!gpu) return ctx.skip();
-    const r = await call('floorChecks', [{}]);
+    const r = await call('floorChecks', [{}, { realDiag: 'no-floor-sky' }]);
     expect(r.error).toBeNull();
-    const [f] = r.frames as NonNullable<typeof r.frames>;
-    // Measured on SwiftShader (sRGB luma): lit 127, open shadow 53, street 54; before the floor kept
-    // its contact darkening, open shadow 31. In linear light 53 against 127 is about 0.15, the share
-    // of a clear sky's light at 35 degrees of sun; 31 was about 0.05.
+    const [f, vertical] = r.frames as NonNullable<typeof r.frames>;
+    // Measured on SwiftShader (sRGB luma): lit 127, open shadow 53; before the floor kept its contact
+    // darkening, open shadow 31. In linear light 53 against 127 is about 0.15, the share of a clear
+    // sky's light at 35 degrees of sun; 31 was about 0.05.
     expect(f!.openShadow).toBeGreaterThan(0.36 * f!.lit);
     expect(f!.openShadow).toBeLessThan(0.6 * f!.lit);
-    expect(Math.abs(f!.street / f!.openShadow - 1)).toBeLessThan(0.1);
+    // The street (8 m walls, 4 m apart) sees about a quarter sky, the rest walls (floorSky,
+    // realBounce): about as bright, and warmer. Red / blue measured 0.89 against 0.69 in the open,
+    // which the vertical-only sky term had at 0.69 too (luma 54 against 53).
+    expect(f!.street).toBeGreaterThan(0.9 * f!.openShadow);
+    expect(f!.street).toBeLessThan(1.3 * f!.openShadow);
+    expect(f!.streetRB).toBeGreaterThan(1.15 * f!.openShadowRB);
+    expect(Math.abs(vertical!.streetRB / vertical!.openShadowRB - 1)).toBeLessThan(0.05);
+    expect(vertical!.openShadow).toBeCloseTo(f!.openShadow, 0);
   });
 
   it('real look: blue sky paling to the horizon, exposure adapting to a low sun, no stylized lights', async (ctx) => {
@@ -1070,7 +1077,7 @@ describe('drawing', () => {
   it('bench:render completes and reports every case (numbers discarded)', async (ctx) => {
     if (!gpu) return ctx.skip();
     const r = await call('runRenderBench', { width: 160, height: 90, counts: [800], warmup: 1, batches: 2, batchFrames: 1, profiledFrames: 1, sparkPool: 1024 });
-    expect(r.cases.map((c) => `${c.world}:${c.variant}`)).toEqual(['near', 'far'].flatMap((w) => ['full', 'no-shadow', 'no-post', 'no-sparks', 'no-heat', 'no-ao', 'no-seam', 'fan', 'cube', 'flat-fan', 'flat-cube', 'real', 'real-no-stone', 'real-stone-off', 'real-step1', 'real-no-lod'].map((v) => `${w}:${v}`)));
+    expect(r.cases.map((c) => `${c.world}:${c.variant}`)).toEqual(['near', 'far'].flatMap((w) => ['full', 'no-shadow', 'no-post', 'no-sparks', 'no-heat', 'no-ao', 'no-seam', 'fan', 'cube', 'flat-fan', 'flat-cube', 'real', 'real-no-stone', 'real-stone-off', 'real-step1', 'real-no-lod', 'real-no-floor-sky'].map((v) => `${w}:${v}`)));
     for (const c of r.cases) {
       expect(c.bodies).toBe(800);
       expect(c.frameMs).toBeGreaterThan(0);

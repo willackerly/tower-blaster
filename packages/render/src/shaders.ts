@@ -50,6 +50,7 @@ export const Frame = defineStruct('Frame', [
   ['sunDisc', 'vec3f', 'real look: sun disc radiance'], ['sunCos', 'f32', 'real look: cos of the sun disc angular radius'],
   ['stone', 'vec4f', 'real look: stone layer (materials.ts STONES), texture scale, edge wear, dirt'],
   ['stoneDetail', 'vec4f', 'real look: x: stone texture strength (0: none, nothing sampled), y: fade-out pixel footprint (m)'],
+  ['blockAlbedo', 'vec4f', 'real look: the blocks\' mean linear albedo (the ramp\'s)'],
 ], 'Per-frame uniforms of the scene pass.');
 
 // The real look's sky (atmosphere.ts): bind group 1, read by the scene
@@ -68,6 +69,8 @@ ${PCG_WGSL}
 // did, the stylized body under the atmosphere ('step1').
 override REAL_STONE: bool = true;
 override REAL_BLOCK: bool = true;
+// RendererOptions.realDiag 'no-floor-sky': the floor's cones compiled out (the vertical sky term only).
+override FLOOR_CONES: bool = true;
 
 // In-scattered radiance (rgb) and green transmittance (a) along the view ray in direction dir (unit).
 fn skyLut(dir: vec3f) -> vec4f {
@@ -122,6 +125,43 @@ fn realAlbedo(look: u32, slot: u32) -> vec3f {
   return max(oklabToLinear(lab), vec3f(0.0));
 }
 
+// Radiance of the blocks a surface sees where they hide the sky: walls of
+// the blocks' mean albedo, lit by the sun at its elevation averaged over the
+// walls' compass directions (the mean of max(cos, 0) is 1/pi), and by half
+// the sky and half the ground. Neither their shadows on each other nor
+// their tops count; sky lighting (realism step 2) replaces this.
+fn realBounce() -> vec3f {
+  let cosE = sqrt(max(1.0 - fr.sun.y * fr.sun.y, 0.0));
+  return fr.blockAlbedo.rgb * (fr.sunColor * cosE / PI + 0.5 * atmoAmbient[0].rgb + 0.5 * atmoAmbient[1].rgb);
+}
+
+// The floor's sky view factor from the AO volume: the vertical term for the
+// zenith cap (up to 30 degrees off vertical, a quarter of the cosine-weighted
+// hemisphere) and six cones at 30 degrees elevation for the rest, each
+// marched through the occupancy mips at 1.2, 2.6 and 5 m. The AO's own
+// sky term looks straight up only, which counts a street between towers as
+// open sky; its centre sees about a sixth of the sky between 12 m towers
+// 4 m apart.
+fn floorSky(rel: vec3f) -> f32 {
+  let av = aoView();
+  if (av.on == 0.0) { return 1.0; }
+  let zen = aoAt(av, rel, vec3f(0.0, 1.0, 0.0), rel, vec3f(0.0)).y;
+  if (!FLOOR_CONES) { return zen; }
+  let s = (rel - av.origin) * av.invVoxel;
+  let reach = 5.0 * av.invVoxel;
+  if (any(s.xz < vec2f(-reach)) || any(s.xz > av.dims.xz + reach)) { return zen; }
+  var t = 0.0;
+  for (var k = 0u; k < 6u; k++) {
+    let az = (f32(k) + 0.5) * (PI / 3.0);
+    let d = vec3f(0.866 * cos(az), 0.5, 0.866 * sin(az));
+    var T = 1.0 - aoTap(av, rel + 1.2 * d, 1u, rel, vec3f(0.0));
+    T *= 1.0 - aoTap(av, rel + 2.6 * d, 2u, rel, vec3f(0.0));
+    T *= 1.0 - aoTap(av, rel + 5.0 * d, 2u, rel, vec3f(0.0));
+    t += T;
+  }
+  return 0.25 * zen + 0.75 * t / 6.0;
+}
+
 // Aerial perspective: the surface through d metres of air. The LUT holds
 // the in-scattering along the whole ray (to the ground or space) and that
 // ray's transmittance; the part within d is scaled by the optical depth
@@ -150,10 +190,8 @@ const REAL_SPEC = /* wgsl */ `  var spec = ggx(NoH, a) * smithVis(NoV, NoL, a);
 // itself) takes none of it; the stylized looks darken the floor too.
 const REAL_CONTACT = 'mix(0.5 + 0.5 * smoothstep(0.0, 1.5, rel.y + fr.eye.y - fr.groundY), 1.0, max(n.y, 0.0))';
 // Where the AO volume hides the sky, the surface sees blocks instead, and
-// they are not black: until sky lighting lands (realism step 2) they shine
-// like the sunlit ground (atmoAmbient[1]). At the default sun, half-lit
-// stone walls (albedo about 0.5) and the ground (0.2) differ by about 20%.
-const REAL_SKY_AMBIENT = 'atmoAmbient[0].rgb * ao.y + atmoAmbient[1].rgb * (1.0 - ao.y)';
+// they are not black: realBounce, until sky lighting lands (realism step 2).
+const REAL_SKY_AMBIENT = 'atmoAmbient[0].rgb * ao.y + realBounce() * (1.0 - ao.y)';
 
 // The real look's block (realism step 3): stone texture and relief, a palette
 // colour per block, chipped lighter edges, dirt toward the ground. Injected at
@@ -653,7 +691,7 @@ struct GOut { @builtin(position) clip: vec4f, @location(0) rel: vec3f }
 // The lit, fogged floor at camera-relative rel (no derivatives: fsSky calls it in non-uniform control flow).
 fn groundShade(base: vec3f, rel: vec3f) -> vec3f {
   let up = vec3f(0.0, 1.0, 0.0);
-  return fog(shade(base, rel, up, 0.36, 0.36, 0.0, aoAt(aoView(), rel, up, rel, vec3f(0.0))), rel);
+  return fog(shade(base, rel, up, 0.36, 0.36, 0.0, ${real ? 'vec2f(1.0, floorSky(rel))' : 'aoAt(aoView(), rel, up, rel, vec3f(0.0))'}), rel);
 }
 
 struct SOut { @builtin(position) clip: vec4f, @location(0) ndc: vec2f }
