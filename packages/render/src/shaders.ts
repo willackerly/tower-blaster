@@ -133,6 +133,16 @@ fn aerial(c: vec3f, rel: vec3f) -> vec3f {
 }
 `;
 
+// The real look's ambient (shade). Contact darkening is the floor hiding
+// the lower view of what stands on it, so a surface facing up (the floor
+// itself) takes none of it; the stylized looks darken the floor too.
+const REAL_CONTACT = 'mix(0.5 + 0.5 * smoothstep(0.0, 1.5, rel.y + fr.eye.y - fr.groundY), 1.0, max(n.y, 0.0))';
+// Where the AO volume hides the sky, the surface sees blocks instead, and
+// they are not black: until sky lighting lands (realism step 2) they shine
+// like the sunlit ground (atmoAmbient[1]). At the default sun, half-lit
+// stone walls (albedo about 0.5) and the ground (0.2) differ by about 20%.
+const REAL_SKY_AMBIENT = 'atmoAmbient[0].rgb * ao.y + atmoAmbient[1].rgb * (1.0 - ao.y)';
+
 // The real look's block (realism step 3): stone texture and relief, a palette
 // colour per block, chipped lighter edges, dirt toward the ground. Injected at
 // the top of fsBox; the stylized body after it runs only when REAL_BLOCK is false.
@@ -435,9 +445,9 @@ fn shade(base: vec3f, rel: vec3f, n: vec3f, a: f32, ac: f32, coat: f32, ao: vec2
   let R = reflect(-V, n);
   let reflections = env(R, sqrt(a)) * envBrdf(0.04, sqrt(a), NoV) + coat * env(R, sqrt(ac)) * envBrdf(0.04, sqrt(ac), NoV);
   // Ground contact: darker near the floor. The occupancy volume (ao.ts) adds what is nearby; sky visibility dims only the sky light.
-  let contact = 0.5 + 0.5 * smoothstep(0.0, 1.5, rel.y + fr.eye.y - fr.groundY);
+  let contact = ${real ? REAL_CONTACT : '0.5 + 0.5 * smoothstep(0.0, 1.5, rel.y + fr.eye.y - fr.groundY)'};
   let occl = contact * ao.x;
-  let amb = mix(${real ? 'atmoAmbient[1].rgb' : 'fr.ambGround'}, ${real ? 'atmoAmbient[0].rgb' : 'fr.ambSky'} * ao.y, n.y * 0.5 + 0.5) * occl;
+  let amb = mix(${real ? 'atmoAmbient[1].rgb' : 'fr.ambGround'}, ${real ? REAL_SKY_AMBIENT : 'fr.ambSky * ao.y'}, n.y * 0.5 + 0.5) * occl;
   return base * (amb + fr.sunColor * sh) + fr.sunColor * spec * sh + reflections * occl + pointLights(base, rel, n, V, a);
 }
 

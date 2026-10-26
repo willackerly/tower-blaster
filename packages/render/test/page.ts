@@ -2189,3 +2189,51 @@ export async function materialBake() {
   device.destroy();
   return { layers: out, error: err?.message ?? null };
 }
+
+/**
+ * The real look's floor in three lights (realism: the floor's ambient):
+ * a 4 m street between two 8 m walls, all in their shadow; the shadow of a
+ * free-standing wall 9 m from it, on open floor; and sunlit open floor.
+ * The sun is due +z (azimuth 180), so shadows fall toward -z. Returns the
+ * mean sRGB luma of a 5x5 pixel patch at each, seen from straight above.
+ */
+export async function floorChecks(looks: Array<Partial<RealOptions>>, size: [number, number] = [320, 180]) {
+  const { device } = await createDevice({ timestamps: false });
+  device.pushErrorScope('validation');
+  const descs: BodyDesc[] = [
+    box([-5, 4, -2.5], [5, 4, 0.5], [0, 0, 0, 1]), box([-5, 4, 2.5], [5, 4, 0.5], [0, 0, 0, 1]), // the street, z in (-2, 2)
+    box([15, 4, 0], [5, 4, 0.5], [0, 0, 0, 1]), // the free-standing wall
+  ];
+  const src = new SnapshotSource(device);
+  src.reset(descs);
+  src.update(snapshotOf(descs), descs);
+  const eye: V3 = [5, 45, 0.01], target: V3 = [5, 0, 0];
+  const viewProj = multiply(perspective(0.9, size[0] / size[1], 0.1, 400), lookAt(eye, target));
+  const probes: Record<string, V3> = { street: [-5, 0, 0], openShadow: [15, 0, -9], lit: [15, 0, 9] };
+  const out: Array<{ street: number; openShadow: number; lit: number }> = [];
+  for (const o of looks) {
+    const rend = new Renderer(device, { size }, { format: 'rgba8unorm' });
+    rend.look = realLook({ sunElevation: 35, sunAzimuth: 180, ...o });
+    rend.setSource(src);
+    rend.setShadowBounds([5, 4, 0], 22, [16, 8, 14]);
+    const f: FrameParams = { viewProj, eye, groundY: 0, time: 1, dt: 0, alpha: 1 };
+    await rend.render(f);
+    const { data, bytesPerRow } = (await rend.render(f, true, true))!.pixels!;
+    const luma: Record<string, number> = {};
+    for (const [name, p] of Object.entries(probes)) {
+      const c = [0, 1, 2, 3].map((i) => [...p, 1].reduce((acc, v, j) => acc + viewProj[j * 4 + i]! * v, 0));
+      const px = Math.round(((c[0]! / c[3]! + 1) / 2) * size[0]), py = Math.round(((1 - c[1]! / c[3]!) / 2) * size[1]);
+      let m = 0;
+      for (let y = py - 2; y <= py + 2; y++) for (let x = px - 2; x <= px + 2; x++) {
+        const k = y * bytesPerRow + 4 * x;
+        m += (0.2126 * data[k]! + 0.7152 * data[k + 1]! + 0.0722 * data[k + 2]!) / 25;
+      }
+      luma[name] = m;
+    }
+    out.push(luma as { street: number; openShadow: number; lit: number });
+    rend.destroy();
+  }
+  const err = await device.popErrorScope();
+  device.destroy();
+  return { frames: out, error: err?.message ?? null };
+}

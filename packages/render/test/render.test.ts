@@ -954,6 +954,19 @@ describe('drawing', () => {
     expect(step1!.hash).not.toBe(flat!.hash);
   });
 
+  it('real look floor: shadowed street floor about as bright as open shadow; open shadow lit by the whole sky', async (ctx) => {
+    if (!gpu) return ctx.skip();
+    const r = await call('floorChecks', [{}]);
+    expect(r.error).toBeNull();
+    const [f] = r.frames as NonNullable<typeof r.frames>;
+    // Measured on SwiftShader (sRGB luma): lit 127, open shadow 53, street 54; before the floor kept
+    // its contact darkening, open shadow 31. In linear light 53 against 127 is about 0.15, the share
+    // of a clear sky's light at 35 degrees of sun; 31 was about 0.05.
+    expect(f!.openShadow).toBeGreaterThan(0.36 * f!.lit);
+    expect(f!.openShadow).toBeLessThan(0.6 * f!.lit);
+    expect(Math.abs(f!.street / f!.openShadow - 1)).toBeLessThan(0.1);
+  });
+
   it('real look: blue sky paling to the horizon, exposure adapting to a low sun, no stylized lights', async (ctx) => {
     if (!gpu) return ctx.skip();
     const r = await call('realChecks', ['hazy', {}, { sunElevation: 4, sunAzimuth: 200 }, { sunElevation: 4, sunAzimuth: 200, autoExposure: 0 }]);
