@@ -962,6 +962,23 @@ describe('drawing', () => {
     expect(step1!.hash).not.toBe(flat!.hash);
   });
 
+  it('stone level of detail: far boxes drop the stone code with no visible seam, and texture 0 sends every box far', async (ctx) => {
+    if (!gpu) return ctx.skip();
+    // At 180 px a fade-out of 3 cm per pixel puts the split about 6 m past the near plane: the
+    // tumbled boxes (5 to 8 m away) fall on both sides, the towers (12 m) are far.
+    const r = await call('stoneLodSeam', { stoneFade: 3 });
+    expect(r.error).toBeNull();
+    expect(r.lod.boxes).toBeGreaterThan(0);
+    expect(r.lod.farBoxes).toBeGreaterThan(0);
+    expect(r.noLod.farBoxes).toBe(0);
+    expect(r.lod.boxes + r.lod.farBoxes).toBe(r.noLod.boxes);
+    // Past the fade-out both shaders compute the same thing; two compilations may round differently.
+    expect(r.maxDiff).toBeLessThanOrEqual(2);
+    const flat = await call('stoneLodSeam', { stoneDetail: 0 });
+    expect(flat.lod.boxes).toBe(0);
+    expect(flat.maxDiff).toBeLessThanOrEqual(2);
+  });
+
   it('real look floor: shadowed street floor about as bright as open shadow; open shadow lit by the whole sky', async (ctx) => {
     if (!gpu) return ctx.skip();
     const r = await call('floorChecks', [{}]);
@@ -1053,13 +1070,14 @@ describe('drawing', () => {
   it('bench:render completes and reports every case (numbers discarded)', async (ctx) => {
     if (!gpu) return ctx.skip();
     const r = await call('runRenderBench', { width: 160, height: 90, counts: [800], warmup: 1, batches: 2, batchFrames: 1, profiledFrames: 1, sparkPool: 1024 });
-    expect(r.cases.map((c) => `${c.world}:${c.variant}`)).toEqual(['near', 'far'].flatMap((w) => ['full', 'no-shadow', 'no-post', 'no-sparks', 'no-heat', 'no-ao', 'no-seam', 'fan', 'cube', 'flat-fan', 'flat-cube', 'real', 'real-no-stone', 'real-stone-off', 'real-step1'].map((v) => `${w}:${v}`)));
+    expect(r.cases.map((c) => `${c.world}:${c.variant}`)).toEqual(['near', 'far'].flatMap((w) => ['full', 'no-shadow', 'no-post', 'no-sparks', 'no-heat', 'no-ao', 'no-seam', 'fan', 'cube', 'flat-fan', 'flat-cube', 'real', 'real-no-stone', 'real-stone-off', 'real-step1', 'real-no-lod'].map((v) => `${w}:${v}`)));
     for (const c of r.cases) {
       expect(c.bodies).toBe(800);
       expect(c.frameMs).toBeGreaterThan(0);
       expect(c.batches).toHaveLength(2);
-      expect(c.drawn.boxes).toBeGreaterThan(0);
-      expect(c.drawn.boxes).toBeLessThanOrEqual(800);
+      expect(c.drawn.boxes + c.drawn.farBoxes).toBeGreaterThan(0);
+      expect(c.drawn.boxes + c.drawn.farBoxes).toBeLessThanOrEqual(800);
+      if (!c.variant.startsWith('real') || c.variant === 'real-no-lod') expect(c.drawn.farBoxes, c.variant).toBe(0);
       if (r.timestamps) expect(Object.keys(c.passes)).toEqual(expect.arrayContaining(['cull', 'scene', ...(c.variant === 'no-shadow' ? [] : ['shadow']), ...(c.variant === 'no-post' ? [] : ['bloom', 'composite'])]));
     }
     expect(r.software).toBe(isSoftwareAdapter(gpu.adapter));

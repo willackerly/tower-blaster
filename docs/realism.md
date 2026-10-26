@@ -61,8 +61,18 @@ rules the code follows; the doc has the reasoning.
   the normal, and Toksvig widens roughness by that amount, so far faces lose
   bump as roughness instead of shimmering. Edge wear lightens and roughens
   the outer 1 to 4 cm of each edge; dirt darkens faces below 2.5 m.
-- `stoneDetail` 0 skips every texture fetch (a uniform branch), which is the
-  `real-no-stone` bench variant the "Stone textures" column compares with.
+- Material level of detail. On the M5 Max the stone code cost the scene
+  pass 0.2 to 0.9 ms even when a uniform branch skipped it, twice what the
+  samples themselves cost (bench variants `real-stone-off`, `real-step1`):
+  its registers lower occupancy for the whole shader. So the stone fades
+  out by pixel footprint (`stoneFade`, default 8 cm per pixel, from half
+  that), and the cull pass lists boxes whose bounding sphere lies wholly
+  past `stoneLodDepth` in `boxFar`, drawn by the same shader with the stone
+  compiled out (`REAL_STONE` false). Past that depth every pixel covers at
+  least the fade-out (lod.test.ts checks the bound on random cameras and
+  surfaces), so both pipelines compute the same colour and there is no
+  seam to see (render.test.ts: within 2 of 255). `stoneDetail` 0 sends
+  every box to `boxFar`. `real-no-lod` measures what the split saves.
 
 ## Steps
 

@@ -49,7 +49,7 @@ export const Frame = defineStruct('Frame', [
   ['atmoSigma', 'vec3f', 'real look: air extinction at the ground, per metre'], ['atmoEyeKm', 'f32', 'real look: eye height above the ground, km'],
   ['sunDisc', 'vec3f', 'real look: sun disc radiance'], ['sunCos', 'f32', 'real look: cos of the sun disc angular radius'],
   ['stone', 'vec4f', 'real look: stone layer (materials.ts STONES), texture scale, edge wear, dirt'],
-  ['stoneDetail', 'vec4f', 'real look: x: stone texture strength (0: none, nothing sampled)'],
+  ['stoneDetail', 'vec4f', 'real look: x: stone texture strength (0: none, nothing sampled), y: fade-out pixel footprint (m)'],
 ], 'Per-frame uniforms of the scene pass.');
 
 // The real look's sky (atmosphere.ts): bind group 1, read by the scene
@@ -85,13 +85,14 @@ fn rot90(v: vec2f, k: u32) -> vec2f {
 
 // A block face's stone (materials.ts): its texture placed at the face's
 // body-local position, shifted and turned by a hash of (slot, face) so no two
-// faces show the same patch. dn: the normal map's tilt in body-local space,
+// faces show the same patch. pxM: metres per pixel there (unclamped, see
+// stoneLodDepth); the texture fades out from half the fade footprint to all
+// of it. dn: the normal map's tilt in body-local space,
 // to add to the face (or bevel) normal; nLen: the mip-averaged normal's
 // length, < 1 where bumps average out (Toksvig).
 struct StoneHit { albedo: vec3f, rough: f32, dn: vec3f, cavity: f32, nLen: f32 }
-fn stoneAt(slot: u32, lp: vec3f, faceN: vec3f) -> StoneHit {
-  let detail = fr.stoneDetail.x;
-  if (!REAL_STONE || detail <= 0.0) { return StoneHit(vec3f(1.0), 0.8, vec3f(0.0), 1.0, 1.0); } // uniform: skips both samples
+fn stoneAt(slot: u32, lp: vec3f, faceN: vec3f, pxM: f32) -> StoneHit {
+  if (!REAL_STONE || fr.stoneDetail.x <= 0.0) { return StoneHit(vec3f(1.0), 0.8, vec3f(0.0), 1.0, 1.0); } // uniform: skips both samples
   let ax = abs(faceN);
   let T = select(vec3f(1.0, 0.0, 0.0), vec3f(0.0, 0.0, 1.0), ax.x > 0.5);
   let B = select(vec3f(0.0, 1.0, 0.0), vec3f(0.0, 0.0, 1.0), ax.y > 0.5);
@@ -100,6 +101,7 @@ fn stoneAt(slot: u32, lp: vec3f, faceN: vec3f) -> StoneHit {
   let k = h.x & 3u;
   let uv = rot90(vec2f(dot(lp, T), dot(lp, B)) / (${MATERIAL_TILE.toFixed(1)} * fr.stone.y), k) + vec2f(f32(h.y), f32(h.z)) * NOISE_U;
   let layer = i32(fr.stone.x);
+  let detail = fr.stoneDetail.x * (1.0 - smoothstep(0.5 * fr.stoneDetail.y, fr.stoneDetail.y, pxM));
   let d = textureSample(stoneDetail, stoneSamp, uv, layer);
   let nm = textureSample(stoneNormal, stoneSamp, uv, layer);
   let tn = nm.xyz * 2.0 - 1.0;
@@ -150,7 +152,8 @@ const REAL_FS_BOX = /* wgsl */ `if (REAL_BLOCK) {
     let lp = clamp(v.local, vec3f(-1.0), vec3f(1.0)) * v.half;
     let pxM = length(fwidth(lp));
     let faceN = boxFace(v.local, fwidth(v.local));
-    let st = stoneAt(v.slot, lp, faceN);
+    let aoPxM = length(fwidth(v.local * v.half));
+    let st = stoneAt(v.slot, lp, faceN, aoPxM);
     let n = qrot(v.rot, normalize(bevelNormal(lp, faceN, v.half, pxM, fr.bevel) + st.dn));
     let dndx = dpdx(n);
     let dndy = dpdy(n);
@@ -170,7 +173,6 @@ const REAL_FS_BOX = /* wgsl */ `if (REAL_BLOCK) {
     let wPx = SEAM / max(pxM, 1e-6);
     let drawn = max(wPx, 0.75);
     let seam = 1.0 - 0.4 * min(1.0, wPx / 0.75) * (1.0 - smoothstep(drawn - 0.5, drawn + 0.5, edgeM / max(pxM, 1e-6)));
-    let aoPxM = length(fwidth(v.local * v.half));
     var c = shade(base * seam, v.rel, n, aaAlpha(alpha, n, dndx, dndy), aaAlpha(0.0049, n, dndx, dndy), 0.0, aoBox(v, n, lp, faceN, aoPxM));
     c += base * seam * fxGlow(w, fr.time);
     return vec4f(fog(c, v.rel), 1.0);

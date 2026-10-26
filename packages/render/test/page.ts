@@ -1730,7 +1730,7 @@ function fnv(data: ArrayLike<number>): number {
  * the top rows (high sky) and of a band just above the horizon, and the lit
  * count of the point lights (lights.ts meta) after the frame.
  */
-export async function realChecks(looks: Array<string | (Partial<RealOptions> & Pick<RendererOptions, 'realDiag'>)>, size: [number, number] = [320, 180], view: [V3, V3] = [[0, 2, 9], [0, 2.6, -1]]) {
+export async function realChecks(looks: Array<string | (Partial<RealOptions> & Pick<RendererOptions, 'realDiag' | 'stoneLod'>)>, size: [number, number] = [320, 180], view: [V3, V3] = [[0, 2, 9], [0, 2.6, -1]]) {
   const { device } = await createDevice({ timestamps: false });
   device.pushErrorScope('validation');
   const src = goldenScene(device);
@@ -1742,8 +1742,8 @@ export async function realChecks(looks: Array<string | (Partial<RealOptions> & P
   const horizonRow = Math.round(((1 - clip[1]! / clip[3]!) / 2) * size[1]);
   const out = [];
   for (const look of looks) {
-    const { realDiag, ...real } = typeof look === 'string' ? {} : look;
-    const rend = goldenRenderer(device, src, typeof look === 'string' ? LOOKS[look]! : realLook(real), size, { realDiag });
+    const { realDiag, stoneLod, ...real } = typeof look === 'string' ? {} : look;
+    const rend = goldenRenderer(device, src, typeof look === 'string' ? LOOKS[look]! : realLook(real), size, { realDiag, stoneLod });
     const f: FrameParams = { viewProj, eye, groundY: 0, time: 1, dt: 0, alpha: 1 };
     await rend.render(f);
     const stats = (await rend.render(f, true, true))!;
@@ -1761,7 +1761,9 @@ export async function realChecks(looks: Array<string | (Partial<RealOptions> & P
       detail += Math.abs(luma(x, y) - (luma(x - 1, y) + luma(x + 1, y) + luma(x, y - 1) + luma(x, y + 1)) / 4);
       cnt++;
     }
-    out.push({ meanLuma: stats.meanLuma, top: band(0, 8), horizon: band(horizonRow - 8, horizonRow - 3), lit: meta[1]!, detail: detail / cnt, hash: fnv(data) });
+    await rend.render(f); // the capture ends with an ID pass, which culls without the level of detail
+    const args = new Uint32Array(await readBuffer(device, rend.cullBuffers!.args));
+    out.push({ meanLuma: stats.meanLuma, top: band(0, 8), horizon: band(horizonRow - 8, horizonRow - 3), lit: meta[1]!, detail: detail / cnt, hash: fnv(data), boxes: args[4 * SEG.box + 1]!, farBoxes: args[4 * SEG.boxFar + 1]! });
     rend.destroy();
   }
   const err = await device.popErrorScope();
@@ -2236,4 +2238,37 @@ export async function floorChecks(looks: Array<Partial<RealOptions>>, size: [num
   const err = await device.popErrorScope();
   device.destroy();
   return { frames: out, error: err?.message ?? null };
+}
+
+/**
+ * The material level of detail's seam: the golden scene drawn in the real
+ * look with and without the boxFar list (stoneLod), at one fade-out. Max
+ * and count of differing 8-bit channel values, and how many boxes each list drew.
+ */
+export async function stoneLodSeam(o: Partial<RealOptions>, size: [number, number] = [320, 180], view: [V3, V3] = [[0, 2, 9], [0, 2.6, -1]]) {
+  const { device } = await createDevice({ timestamps: false });
+  device.pushErrorScope('validation');
+  const src = goldenScene(device);
+  const [eye, target] = view;
+  const f: FrameParams = { viewProj: multiply(perspective(0.9, size[0] / size[1], 0.1, 400), lookAt(eye, target)), eye, groundY: 0, time: 1, dt: 0, alpha: 1 };
+  const frames = [];
+  for (const stoneLod of [true, false]) {
+    const rend = goldenRenderer(device, src, realLook(o), size, { stoneLod });
+    await rend.render(f);
+    const { data } = (await rend.render(f, true, true))!.pixels!;
+    await rend.render(f); // the capture ends with an ID pass, which culls without the level of detail
+    const args = new Uint32Array(await readBuffer(device, rend.cullBuffers!.args));
+    frames.push({ data: data.slice(), boxes: args[4 * SEG.box + 1]!, farBoxes: args[4 * SEG.boxFar + 1]! });
+    rend.destroy();
+  }
+  const [a, b] = frames as [typeof frames[0], typeof frames[0]];
+  let maxDiff = 0, differing = 0;
+  for (let k = 0; k < a.data.length; k++) {
+    const d = Math.abs(a.data[k]! - b.data[k]!);
+    if (d) differing++;
+    maxDiff = Math.max(maxDiff, d);
+  }
+  const err = await device.popErrorScope();
+  device.destroy();
+  return { maxDiff, differing, lod: { boxes: a.boxes, farBoxes: a.farBoxes }, noLod: { boxes: b.boxes, farBoxes: b.farBoxes }, error: err?.message ?? null };
 }

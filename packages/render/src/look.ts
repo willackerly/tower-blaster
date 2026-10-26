@@ -52,8 +52,12 @@ export interface LookParams {
   atmosphere?: AtmosphereParams;
   /** With an atmosphere: how far exposure adapts to the light, 0 (fixed) to 1 (auto exposure); see adaptedExposure. */
   autoExposure?: number;
-  /** With an atmosphere: the blocks' stone (materials.ts), texture scale (1 = a tile per MATERIAL_TILE metres), edge wear and dirt (0 to 1). */
-  stone?: { kind: Stone; scale: number; wear: number; dirt: number; detail: number };
+  /**
+   * With an atmosphere: the blocks' stone (materials.ts), texture scale (1 = a tile per MATERIAL_TILE
+   * metres), edge wear and dirt (0 to 1), texture strength, and fade: the pixel footprint (metres)
+   * where the texture has faded out (from half that), past which blocks drop the stone code.
+   */
+  stone?: { kind: Stone; scale: number; wear: number; dirt: number; detail: number; fade: number };
   /** false: none of the stylized effects (sparks, ball trail, heat glow, ball and impact lights). Default true. */
   effects?: boolean;
 }
@@ -133,11 +137,13 @@ export interface RealOptions {
   stone: Stone;
   stoneDetail: number;
   stoneScale: number;
+  /** Pixel footprint (cm) where the stone texture has faded out, from half that; past it blocks use the cheaper shader. */
+  stoneFade: number;
   wear: number;
   dirt: number;
 }
 
-export const REAL_DEFAULTS: RealOptions = { sunElevation: 35, sunAzimuth: 140, visibility: 40, sunStrength: 1, groundAlbedo: [0.2, 0.19, 0.17], exposure: 1.1, autoExposure: 0.75, stone: 'limestone', stoneDetail: 1, stoneScale: 1, wear: 0.5, dirt: 0.4 };
+export const REAL_DEFAULTS: RealOptions = { sunElevation: 35, sunAzimuth: 140, visibility: 40, sunStrength: 1, groundAlbedo: [0.2, 0.19, 0.17], exposure: 1.1, autoExposure: 0.75, stone: 'limestone', stoneDetail: 1, stoneScale: 1, stoneFade: 8, wear: 0.5, dirt: 0.4 };
 
 /** Direction toward the sun from elevation and azimuth in degrees. */
 export function sunFrom(elevation: number, azimuth: number): V3 {
@@ -166,7 +172,7 @@ export function realLook(o: Partial<RealOptions> = {}): LookParams {
     clearcoat: 0,
     bevel: 0.012,
     ramp: STONE_PALETTES[r.stone].map(hex) as LookParams['ramp'],
-    stone: { kind: r.stone, scale: r.stoneScale, wear: r.wear, dirt: r.dirt, detail: r.stoneDetail },
+    stone: { kind: r.stone, scale: r.stoneScale, wear: r.wear, dirt: r.dirt, detail: r.stoneDetail, fade: r.stoneFade / 100 },
     hueStep: 4,
     ball: hex('#8A8D90'),
     ballEmissive: 0,
@@ -189,6 +195,7 @@ export const REAL_KNOBS = {
   autoExposure: { label: 'auto exposure 0-1', min: 0, max: 1, step: 0.05 },
   stoneDetail: { label: 'stone texture 0-1', min: 0, max: 1, step: 0.05 },
   stoneScale: { label: 'stone texture scale', min: 0.1, max: 10, step: 0.1 },
+  stoneFade: { label: 'stone fade-out (cm/px)', min: 0.5, max: 1000, step: 0.5 },
   wear: { label: 'edge wear 0-1', min: 0, max: 1, step: 0.05 },
   dirt: { label: 'dirt 0-1', min: 0, max: 1, step: 0.05 },
 } as const;
