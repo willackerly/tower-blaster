@@ -87,6 +87,12 @@ describe('scenario specifics', () => {
     expect(buildScenario('S7', { N: 50 }).sleep).toBe(false);
   });
 
+  it('S13 at 0 deg is an upright column that survives JSON (no -0 in its rotation)', () => {
+    const s = buildScenario('S13', { H: 3, deg: 0 });
+    expect(JSON.parse(JSON.stringify(s))).toEqual(s);
+    expect(s.bodies.map((b) => b.pos)).toEqual([0, 1, 2].map((k) => [0, 0.5 + k + 1e-6 * (k + 1), 0]));
+  });
+
   it('S10 is S1 translated', () => {
     const a = buildScenario('S1', { F: 3, H: 4 }), b = buildScenario('S10', { F: 3, H: 4, offset: 5000 });
     expect(b.bodies.map((x) => [x.pos[0] - 5000, x.pos[1], x.pos[2] - 5000])).toEqual(a.bodies.map((x) => x.pos));

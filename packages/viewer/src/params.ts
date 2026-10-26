@@ -54,6 +54,11 @@ export function toSearch(c: ViewerConfig): string {
   return `?${q}`;
 }
 
+/** A preset's search with the current engine kept, which is where its button takes you. */
+export function presetSearch(preset: string, engine: string): string {
+  return toSearch({ ...parseViewerConfig(preset), engine });
+}
+
 /** Bodies fired balls may add on the GPU engine, whose buffers are sized at init. */
 export const GPU_SPARE = 256;
 

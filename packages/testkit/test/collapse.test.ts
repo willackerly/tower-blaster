@@ -92,6 +92,12 @@ describe('readColumn', () => {
     expect(r.turned).toBe(true);
     // Cut before the far-side extreme: not turned.
     expect(readColumn(samples.slice(0, 25), H).turned).toBe(false);
+    // A pause near the far-side extreme (loose cubes wiggle there) is not the turn.
+    const wiggle = [0, 1, 1.79, 1.7898, 1.8, 1.86, 1.866, 1.85, 1.6].map((d, i) => ({ t: i, pos: line(d === 0 ? 0.5 : -d, H) }));
+    const w = readColumn(wiggle, H);
+    expect(w.farSide).toBeCloseTo(1.866, 10);
+    expect(w.turned).toBe(true);
+    expect(readColumn(wiggle.slice(0, 8), H).turned).toBe(false); // 1.85 is within turnDeg of 1.866
     const falls = Array.from({ length: 11 }, (_, i) => ({ t: i, pos: line(4 * i, H) }));
     const f = readColumn(falls, H, 30);
     expect(f.topple).toBeCloseTo(7.5, 10);

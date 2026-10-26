@@ -8,7 +8,8 @@ import { buildScenario, SCENARIOS } from '@tb/scenarios';
 import { clampPitch, frame, rayThrough, viewProj, eyeOf, type Orbit } from './camera.ts';
 import { newClock, stepsDue, Window } from './loop.ts';
 import type { V3 } from './math.ts';
-import { engineSpec, parseViewerConfig, toSearch, type ViewerConfig, withOption } from './params.ts';
+import { escapeHtml } from './html.ts';
+import { engineSpec, parseViewerConfig, presetSearch, toSearch, type ViewerConfig, withOption } from './params.ts';
 import { createDevice } from '@tb/gpu';
 import { CANDY_NIGHT, LOOKS, Renderer, SnapshotSource, type PixelStats } from '@tb/render';
 
@@ -42,6 +43,8 @@ interface ViewerHandle {
   frames: number;
   bodies: number;
   stepIndex: number;
+  /** Scene loads so far: 1 after start, one more per R. */
+  resets: number;
   /** Fire a ball through normalized device coords (0, 0 = centre). */
   fire(ndcX?: number, ndcY?: number): void;
   capture(keepPixels?: boolean): Promise<PixelStats | null>;
@@ -52,7 +55,7 @@ declare global { interface Window { __viewer: ViewerHandle } }
 const canvas = document.getElementById('c') as HTMLCanvasElement;
 const hud = document.getElementById('hud')!;
 const errorBox = document.getElementById('error')!;
-const handle: ViewerHandle = { status: 'loading', frames: 0, bodies: 0, stepIndex: 0, fire: () => {}, capture: async () => null, inputs: [] };
+const handle: ViewerHandle = { status: 'loading', frames: 0, bodies: 0, stepIndex: 0, resets: 0, fire: () => {}, capture: async () => null, inputs: [] };
 window.__viewer = handle;
 
 function fail(e: unknown) {
@@ -104,8 +107,8 @@ function presets(current: string) {
   for (const p of PRESETS) {
     const b = document.createElement('button');
     b.textContent = p.label;
-    if (parseViewerConfig(p.search).scenario === parseViewerConfig(current).scenario && toSearch(parseViewerConfig(p.search)) === toSearch(parseViewerConfig(current))) b.className = 'on';
-    b.onclick = () => { location.search = toSearch({ ...parseViewerConfig(p.search), engine: config.engine }); };
+    if (presetSearch(p.search, config.engine) === toSearch(config)) b.className = 'on';
+    b.onclick = () => { location.search = presetSearch(p.search, config.engine); };
     box.appendChild(b);
   }
 }
@@ -134,6 +137,11 @@ async function main() {
   let paused = false;
   let fps = 60;
   let notice = '';
+  // R asks for a reset, which the frame loop runs between frames: the GPU
+  // engine's init() takes longer than a frame, and no frame may step or read
+  // an engine that is not ready (or that reset() has just disposed).
+  let resetAsked = false;
+  let resetting = false;
 
   const ballDesc = (origin: V3, dir: V3): BodyDesc => ({
     shape: { kind: 'sphere', radius: 0.7 },
@@ -148,6 +156,7 @@ async function main() {
   });
 
   async function reset() {
+    resetting = true;
     engine.dispose();
     engine = viewerEngine(config.engine);
     scene = sceneFor(config);
@@ -162,6 +171,9 @@ async function main() {
     handle.inputs = [];
     notice = '';
     await refresh();
+    resetting = false;
+    handle.stepIndex = engine.stepIndex;
+    handle.resets++;
   }
 
   function shapesFor(count: number): BodyDesc[] {
@@ -180,6 +192,7 @@ async function main() {
   let awake = 0;
 
   handle.fire = (x = 0, y = 0) => {
+    if (resetting) return;
     const { origin, dir } = rayThrough(orbit, aspect(), x, y);
     const ev: InputEvent = { step: engine.stepIndex, kind: 'spawn', body: ballDesc(origin, dir) };
     try {
@@ -232,7 +245,7 @@ async function main() {
   }, { passive: false });
   addEventListener('keydown', (e) => {
     if (e.key === ' ') { e.preventDefault(); handle.fire(0, 0); }
-    if (e.key === 'r' || e.key === 'R') void reset().catch(fail);
+    if (e.key === 'r' || e.key === 'R') resetAsked = true;
     if (e.key === 'p' || e.key === 'P') paused = !paused;
   });
 
@@ -250,14 +263,14 @@ async function main() {
     const over = med > 7.5;
     hud.innerHTML = `
       <div class="big">${handle.bodies.toLocaleString()} bodies</div>
-      <div class="muted">${SCENARIOS[config.scenario]!.title} · ${config.engine} (${engine.info.backend})</div>
+      <div class="muted">${SCENARIOS[config.scenario]!.title} · ${escapeHtml(config.engine)} (${escapeHtml(engine.info.backend)})</div>
       <div class="row"><span>physics ms/step</span><span class="${over ? 'warn' : ''}">${fmt(med)} <span class="muted">p95 ${fmt(p95)}</span></span></div>
       <div class="row"><span>awake</span><span>${awake.toLocaleString()}</span></div>
       <div class="row"><span>fps</span><span>${fmt(fps)}</span></div>
       <div class="row"><span>sim speed</span><span class="${clock.simSpeed < 0.95 ? 'warn' : ''}">${(clock.simSpeed * 100).toFixed(0)}%</span></div>
       <div class="row"><span>snapshot + upload</span><span>${fmt(snapMs.quantile(0.5))} ms</span></div>
       <div class="row muted"><span>budget</span><span>7.5 ms/step</span></div>
-      <div class="muted">${adapter.info.vendor} ${adapter.info.architecture}${paused ? ' · <b>paused</b>' : ''}</div>${notice ? `\n      <div class="warn">${notice}</div>` : ''}`;
+      <div class="muted">${escapeHtml(adapter.info.vendor)} ${escapeHtml(adapter.info.architecture)}${paused ? ' · <b>paused</b>' : ''}</div>${notice ? `\n      <div class="warn">${escapeHtml(notice)}</div>` : ''}`;
   }
 
   await reset();
@@ -272,9 +285,11 @@ async function main() {
     last = now;
     fps = 0.9 * fps + 0.1 * (1000 / Math.max(frameMs, 1));
     resize();
+    if (resetAsked) { resetAsked = false; await reset(); }
     const n = paused ? 0 : stepsDue(clock, frameMs, scene.dt);
     // A GPU engine's step() only submits, so its steps are timed to completion with finish().
-    // refresh() reads a snapshot back after them anyway, so the wait adds no stall.
+    // refresh() waits for the GPU anyway to read a snapshot back; the wait adds one
+    // queue-completion round trip before that readback's copy is submitted.
     const t0 = performance.now();
     for (let i = 0; i < n; i++) {
       const ts = performance.now();

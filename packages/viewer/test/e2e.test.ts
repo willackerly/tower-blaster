@@ -74,6 +74,13 @@ describe('viewer', () => {
     const on = await page.locator('#presets button.on').allInnerTexts();
     expect(on).toContain(button);
     expect(on.includes('20 iterations')).toBe(engine.startsWith('avbd-gpu'));
+
+    // R reloads the scene between frames. The GPU engine's init() spans frames, and a
+    // frame that stepped the engine mid-init stopped the viewer ('init() first').
+    await page.keyboard.press('r');
+    await page.waitForFunction(() => window.__viewer.status !== 'running' || (window.__viewer.resets === 2 && window.__viewer.stepIndex > 5), undefined, { timeout: 60_000 });
+    expect(await page.evaluate(() => ({ s: window.__viewer.status, e: window.__viewer.error, bodies: window.__viewer.bodies, inputs: window.__viewer.inputs.length })))
+      .toEqual({ s: 'running', e: undefined, bodies: 54, inputs: 0 });
     expect(errors).toEqual([]);
     await page.close();
   });
