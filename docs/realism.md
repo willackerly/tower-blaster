@@ -155,6 +155,60 @@ rules the code follows; the doc has the reasoning.
   (0.8 to 1.7 radii), half as strong, and stones vary more in tone (0.62
   to 1.32 of the matrix), so shaded gravel reads as stones.
 
+## What step 6 built
+
+- Impacts in the real look throw dust and stone chips instead of sparks
+  (the real look already had no heat glow). The spark pipeline's detector
+  is unchanged; `Sparks` gains a `debris` mode that splits its pool into a
+  dust ring (`DUST_POOL`, 2048 slots) and a chip ring (`CHIP_POOL`, 4096)
+  with their own heads and per-frame spawn budgets (96 puffs, 192 chips;
+  the rest of an event's share is dropped, as sparks past `SPAWN_BUDGET`
+  are). An impact of speed change dv makes min(3, (dv - 2.5) x 0.5) puffs
+  and min(4, (dv - 4) x 0.5) chips, so only hard hits chip. Switching mode
+  kills every particle; in debris mode the simulate pass runs over the
+  rings only (6144 slots, not 65536).
+- A puff lives 2 to 4 s: launched slowly (up to 1.6 m/s) up and along the
+  impact, linear drag, a slow rise, and a floor 10 cm above the ground. It
+  draws as a camera-facing disc that grows from 0.13 to 1 of `dustSize`
+  (ease-out) and fades as (1 - t)^1.5, with a macro-noise texture so puffs
+  are not round, softened where it meets the ground. Lighting is done in
+  the vertex shader: one shadow tap at the centre, the sun through a
+  Henyey-Greenstein phase (g 0.4, half isotropic, so puffs against the sun
+  glow and puffs with the sun behind the camera stay light), and half sky,
+  half ground ambient; the colour is the blocks' mean albedo mixed 30%
+  toward the ground. Premultiplied blending, no depth write, aerial
+  perspective applied.
+- A chip lives 1.5 to 3.5 s: a spark's flight (gravity, quadratic drag)
+  with its own bounce (0.25) and friction (0.55). It draws as a small
+  opaque tumbling flake (3.5 cm, 0.5 to 1.5x, shrinking over its last 20%
+  of life) through the block shader's `shade`, so it takes the sun, PCSS
+  and fog like a block; its colour is a darker shade of the block albedo.
+  It is lifted so it never sinks into the ground.
+- Indirect draws: the args buffer holds three draws (streaks at byte 0,
+  puffs at 16, chips at 32), each the whole ring while anything lives and
+  empty otherwise. First instance stays 0 (non-zero needs
+  `indirect-first-instance`), so the chip shader adds the ring's offset
+  through the `CHIP_BASE` override.
+- Knobs: `dust` and `chips` (multipliers on the per-dv counts; 0 turns one
+  off, both 0 skips the passes) and `dustSize` (a full-grown puff's
+  radius, m). Bench variant `real-dust`: 64 impacts a frame around the
+  view's focus with 1/60 s steps, so both rings stay full (the bench's
+  new "Particles alive" column shows it); real against it is the worst
+  steady cost.
+- Tests: the spawn and flight kernels against CPU twins (24 bursts; spawn
+  within 3e-4, 80 frames of flight within 1e-6), each kind only in its own
+  ring, puffs never below 10 cm and chips never below the ground, all dead
+  and both draws empty after 4 s, the mode switch clearing the pool; a
+  flood of 64 impacts a frame for 30 frames spawning exactly the budgets
+  and wrapping both rings without touching the slots past them; the draw
+  changing pixels only near a burst in the open, none on a wall hiding a
+  second burst, each kind visible on its own, and `dust` 0 with `chips` 0
+  drawing the sparks-off frame bit for bit.
+- Rejected: soft particles against the depth buffer (needs a depth copy;
+  the ground fade covers the common case); lit volume dust (the AO volume
+  is 0.5 m, coarser than a puff); chips as rigid bodies in the physics
+  engine (a chip is under a pixel past 20 m, and engines count bodies).
+
 ## Floor and ambient (fixes after the stone step's screenshots)
 
 - Contact darkening (within 1.5 m of the floor) is for what stands on the

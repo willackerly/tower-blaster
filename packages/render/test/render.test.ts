@@ -11,7 +11,7 @@ import { RapierHost } from '@tb/adapter-rapier';
 import { TieredEngine } from '@tb/lattice';
 import { isSoftwareAdapter, loadBundle, openWebGPU, type WebGPUSession } from '@tb/testkit';
 import { ADAPT_MAX, ADAPT_REF, adaptedExposure, HAZY_DAY, linearToSrgb, lookByName, parseRealOptions, REAL_DEFAULTS, REAL_KNOBS, realLook, writeRealOptions, CLEAR_DAY, MIE_H, mieExtinction, multiTable, normalize, OZONE, OZONE_WIDTH, RAYLEIGH, RAYLEIGH_H, skyRadiance, skyViewDir, skyViewUv, sunAtGround, sunDiscRadiance, transmittance, transmittanceHMu, transmittanceTable, transmittanceUv } from '../src/index.ts';
-import { agx, aoFootReference, bevelNormal, type V3, CANDY_NIGHT, CTL, HOT_FULL, MAX_EVENTS, SPAWN_BUDGET, FX_WORDS, packFx, tintWord, unpackFx, frustumPlanes, linearToOklab, listMatches, oklabToLinear, srgbToLinear, lookAt, lookOf, lookRange, MATERIAL, multiply, SEG, packBodies, changedRanges, drawnTier, packShapes, paletteOf, perspective, unpackLook } from '../src/index.ts';
+import { agx, aoFootReference, chipCount, chipStepReference, CHIP_POOL, CHIPS_PER_EVENT, debrisRings, DEFAULT_DEBRIS, DEFAULT_SPARKS, dustCount, dustStepReference, DUST_PER_EVENT, DUST_POOL, bevelNormal, type V3, CANDY_NIGHT, CTL, HOT_FULL, MAX_EVENTS, SPAWN_BUDGET, FX_WORDS, packFx, tintWord, unpackFx, frustumPlanes, linearToOklab, listMatches, oklabToLinear, srgbToLinear, lookAt, lookOf, lookRange, MATERIAL, multiply, SEG, packBodies, changedRanges, drawnTier, packShapes, paletteOf, perspective, unpackLook } from '../src/index.ts';
 import type * as Drivers from './page.ts';
 
 describe('looks', () => {
@@ -398,9 +398,9 @@ describe('sparks', () => {
     expect(r.simErr).toBeLessThan(1e-4); // measured 2.4e-6
     // The streak draw: the whole pool while any spark lives, empty once all are dead.
     expect(r.aliveCtl).toBe(r.alive);
-    expect(r.argsFlying).toEqual([6, r.pool, 0, 0]);
+    expect(r.argsFlying).toEqual([6, r.pool, 0, 0, 6, 0, 0, 0, 6, 0, 0, 0]); // sparks mode: the puff and chip draws stay empty
     expect(r.aliveDead).toBe(0);
-    expect(r.argsDead).toEqual([6, 0, 0, 0]);
+    expect(r.argsDead).toEqual([6, 0, 0, 0, 6, 0, 0, 0, 6, 0, 0, 0]);
   });
 
   it('a flood of 100k impacts stays within the event and spark budgets', async (ctx) => {
@@ -424,6 +424,93 @@ describe('sparks', () => {
     expect(r.wallPixels).toBeGreaterThan(500);
     expect(r.maxWall).toBe(0); // the burst behind the wall is hidden
   });
+});
+
+describe('debris (real look impacts)', () => {
+  it('rings split the pool: dust first, chips next, each capped', () => {
+    expect(debrisRings(65536)).toEqual([DUST_POOL, CHIP_POOL]);
+    expect(debrisRings(3000)).toEqual([1000, 2000]);
+    expect(debrisRings(12)).toEqual([4, 8]);
+  });
+
+  it('puff and chip counts grow with impact speed and stop at their caps', () => {
+    const e = (strength: number) => ({ pos: [0, 0, 0] as V3, dir: [0, 1, 0] as V3, strength, packed: 0 });
+    expect(dustCount(e(2.5), DEFAULT_SPARKS, DEFAULT_DEBRIS)).toBe(0); // below the spark threshold: nothing
+    expect(dustCount(e(5), DEFAULT_SPARKS, DEFAULT_DEBRIS)).toBe(1);
+    expect(dustCount(e(100), DEFAULT_SPARKS, DEFAULT_DEBRIS)).toBe(DUST_PER_EVENT);
+    expect(chipCount(e(4), DEFAULT_DEBRIS)).toBe(0); // chips need a harder hit than dust
+    expect(chipCount(e(7), DEFAULT_DEBRIS)).toBe(1);
+    expect(chipCount(e(100), DEFAULT_DEBRIS)).toBe(CHIPS_PER_EVENT);
+    expect(dustCount(e(100), DEFAULT_SPARKS, { ...DEFAULT_DEBRIS, dustPerDv: 0 })).toBe(0); // the dust 0 knob
+  });
+
+  it('a puff slows, rises and never sinks below 10 cm; a chip falls and bounces', () => {
+    let d = { pos: [0, 0.5, 0] as V3, vel: [2, -3, 0] as V3, age: 0, packed: 0 };
+    let minY = Infinity;
+    for (let i = 0; i < 120; i++) { d = dustStepReference(d, 1 / 60, 0, DEFAULT_DEBRIS); minY = Math.min(minY, d.pos[1]); }
+    expect(d.age).toBeGreaterThan(0); // alive at 2 s (life 2 to 4 s)
+    expect(minY).toBeCloseTo(0.1, 6);
+    expect(d.vel[1]).toBeGreaterThan(0); // drifting up again
+    expect(Math.abs(d.vel[0])).toBeLessThan(0.2); // drag: 2 m/s down to under 0.2 in 2 s
+    let c = { pos: [0, 1, 0] as V3, vel: [1, 0, 0] as V3, age: 0, packed: 0 };
+    let bounced = false;
+    for (let i = 0; i < 60; i++) { const n = chipStepReference(c, 1 / 60, 0, DEFAULT_SPARKS, DEFAULT_DEBRIS); if (c.vel[1] < 0 && n.vel[1] > 0) bounced = true; c = n; expect(c.pos[1]).toBeGreaterThanOrEqual(0); }
+    expect(bounced).toBe(true);
+    expect(chipStepReference({ ...c, age: 4 }, 1 / 60, 0, DEFAULT_SPARKS, DEFAULT_DEBRIS).age).toBe(-1); // past its life (at most 3.5 s)
+  });
+
+  it('spawn and flight match the CPU twins, each kind in its own ring, nothing below the floor', async (ctx) => {
+    if (!gpu) return ctx.skip();
+    const r = await call('debrisSim', 80);
+    expect(r.error).toBeNull();
+    expect([r.dustPool, r.chipPool]).toEqual([DUST_POOL, CHIP_POOL]);
+    expect(r.bornDust).toBe(r.wantDust);
+    expect(r.bornChips).toBe(r.wantChips);
+    expect(r.wantDust).toBeGreaterThan(30); // 24 bursts, up to 3 puffs and 4 chips each: 49 and 55
+    expect(r.wantChips).toBeGreaterThan(30);
+    expect(r.spawned).toBe(r.wantDust + r.wantChips);
+    expect(r.outside).toBe(0);
+    expect(r.unmatched).toBe(0); // every puff in the dust ring, every chip in the chip ring
+    expect(r.spawnErr).toBeLessThan(1e-3); // measured 2.8e-4
+    expect(r.alive).toBe(r.wantDust + r.wantChips); // 1.33 s: shorter than any life
+    expect(r.aliveCtl).toBe(r.alive);
+    expect(r.simErr).toBeLessThan(1e-4); // measured 9.5e-7
+    expect(r.bounced).toBeGreaterThan(10); // chips that hit the floor: measured all 55
+    expect(r.floored).toBeGreaterThan(5); // puffs that reached their 10 cm floor: measured 14 of 49
+    expect(r.rose).toBeGreaterThan(r.wantDust / 2); // most puffs drifting up by now
+    expect(r.dustMinY).toBeGreaterThanOrEqual(Math.fround(0.1));
+    expect(r.chipMinY).toBeGreaterThanOrEqual(0);
+    expect(r.argsFlying).toEqual([6, 0, 0, 0, 6, DUST_POOL, 0, 0, 6, CHIP_POOL, 0, 0]); // no streaks in debris mode
+    expect(r.aliveDead).toBe(0);
+    expect(r.argsDead).toEqual([6, 0, 0, 0, 6, 0, 0, 0, 6, 0, 0, 0]);
+    expect(r.aliveAfterSwitch).toBe(0); // switching to sparks kills the debris
+  }, 120_000);
+
+  it('a flood stays within the dust and chip budgets and inside the rings', async (ctx) => {
+    if (!gpu) return ctx.skip();
+    const r = await call('debrisFlood', 30);
+    expect(r.error).toBeNull();
+    const [dustBudget, chipBudget] = r.budgets;
+    expect(new Set(r.spawned)).toEqual(new Set([dustBudget! + chipBudget!])); // every frame: the budgets, not 64 x (3 + 4)
+    expect(r.dustHead).toBe(30 * dustBudget!);
+    expect(r.chipHead).toBe(30 * chipBudget!);
+    expect(r.dust).toBe(r.dustPool); // 2880 puffs into 2048 slots: the ring wrapped, all live
+    expect(r.chips).toBe(r.chipPool);
+    expect(r.outside).toBe(0); // the 59k slots past the rings untouched
+  }, 120_000);
+
+  it('a burst draws only near its projection, not through a wall; dust and chips 0 draw nothing', async (ctx) => {
+    if (!gpu) return ctx.skip();
+    const r = await call('debrisDraw', 12);
+    expect(r.error).toBeNull();
+    expect(r.near).toBeGreaterThan(1000); // summed 8-bit change near the open bursts; measured 2.6k
+    expect(r.nearDust).toBeGreaterThan(1000); // each kind draws on its own (summed over channels): measured 3.9k
+    expect(r.nearChips).toBeGreaterThan(1000); // measured 2.5k
+    expect(r.stray).toBe(0); // the dead ring slots draw nothing, and no frame-wide change (exposure, AO)
+    expect(r.wallPixels).toBeGreaterThan(500);
+    expect(r.maxWall).toBe(0); // the bursts behind the wall are hidden
+    expect(r.zeroDiff).toBe(0); // dust 0 and chips 0: bit for bit the frame with sparks off
+  }, 120_000);
 });
 
 describe('lights', () => {
@@ -1187,7 +1274,7 @@ describe('drawing', () => {
   it('bench:render completes and reports every case (numbers discarded)', async (ctx) => {
     if (!gpu) return ctx.skip();
     const r = await call('runRenderBench', { width: 160, height: 90, counts: [800], warmup: 1, batches: 2, batchFrames: 1, profiledFrames: 1, sparkPool: 1024 });
-    expect(r.cases.map((c) => `${c.world}:${c.variant}`)).toEqual(['near', 'far'].flatMap((w) => ['full', 'no-shadow', 'no-post', 'no-sparks', 'no-heat', 'no-ao', 'no-seam', 'fan', 'cube', 'flat-fan', 'flat-cube', 'real', 'real-no-stone', 'real-stone-off', 'real-step1', 'real-no-lod', 'real-no-floor-sky', 'real-flat-ground', 'real-no-pcss', 'real-4096'].map((v) => `${w}:${v}`)));
+    expect(r.cases.map((c) => `${c.world}:${c.variant}`)).toEqual(['near', 'far'].flatMap((w) => ['full', 'no-shadow', 'no-post', 'no-sparks', 'no-heat', 'no-ao', 'no-seam', 'fan', 'cube', 'flat-fan', 'flat-cube', 'real', 'real-no-stone', 'real-stone-off', 'real-step1', 'real-no-lod', 'real-no-floor-sky', 'real-flat-ground', 'real-no-pcss', 'real-4096', 'real-dust'].map((v) => `${w}:${v}`)));
     for (const c of r.cases) {
       expect(c.bodies).toBe(800);
       expect(c.frameMs).toBeGreaterThan(0);
@@ -1195,11 +1282,13 @@ describe('drawing', () => {
       expect(c.drawn.boxes + c.drawn.farBoxes).toBeGreaterThan(0);
       expect(c.drawn.boxes + c.drawn.farBoxes).toBeLessThanOrEqual(800);
       if (!c.variant.startsWith('real') || c.variant === 'real-no-lod') expect(c.drawn.farBoxes, c.variant).toBe(0);
+      // Still worlds: no particle lives, except in real-dust, whose rings (341 + 683 of a 1024 pool) its shower keeps full.
+      expect(c.particles, c.variant).toBe(c.variant === 'real-dust' ? 1024 : 0);
       if (r.timestamps) expect(Object.keys(c.passes)).toEqual(expect.arrayContaining(['cull', 'scene', ...(c.variant === 'no-shadow' ? [] : ['shadow']), ...(c.variant === 'no-post' ? [] : ['bloom', 'composite'])]));
     }
     expect(r.software).toBe(isSoftwareAdapter(gpu.adapter));
     expect(await call('renderBenchMarkdown', r, 'h')).toMatch(/Without heat glow/);
-  }, 180_000); // 40 cases on a software adapter, most of it the first frame of each renderer; 40 s timed out on CI beside the GPU physics and game tests (main, 8b5dd54), and 120 s when every case built its own renderer (b6bf9a2)
+  }, 180_000); // 42 cases on a software adapter, most of it the first frame of each renderer; 40 s timed out on CI beside the GPU physics and game tests (main, 8b5dd54), and 120 s when every case built its own renderer (b6bf9a2)
 
   it('culling never changes an ID pixel', async (ctx) => {
     if (!gpu) return ctx.skip();

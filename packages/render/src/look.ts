@@ -68,6 +68,8 @@ export interface LookParams {
   hills?: { height: number; distance: number };
   /** With an atmosphere: sun shadow penumbrae as wide as the sun's disc times softness (0: the stylized looks' 3x3 taps). Default 1. */
   shadow?: { softness: number };
+  /** With an atmosphere and effects off: impact dust and chips, as multiples of the default amounts (0: none), and a puff's full size (m). */
+  debris?: { dust: number; chips: number; size: number };
   /** false: none of the stylized effects (sparks, ball trail, heat glow, ball and impact lights). Default true. */
   effects?: boolean;
 }
@@ -162,6 +164,10 @@ export interface RealOptions {
   /** The sun's angular diameter, degrees (0.53 is the real one): the disc in the sky and, times shadowSoftness, how fast shadows soften with distance (0: hard 3x3 taps). */
   sunSize: number;
   shadowSoftness: number;
+  /** Impacts throw dust puffs and stone chips (multiples of the default amounts, 0: none); a puff grows to a radius of dustSize metres. */
+  dust: number;
+  chips: number;
+  dustSize: number;
 }
 
 export const REAL_DEFAULTS: RealOptions = {
@@ -169,6 +175,7 @@ export const REAL_DEFAULTS: RealOptions = {
   stone: 'limestone', stoneDetail: 1, stoneScale: 1, stoneFade: 8, wear: 0.5, dirt: 0.4,
   groundMaterial: 'gravel', groundDetail: 1, groundScale: 1, groundVariation: 0.5, hills: 1.5, hillDistance: 6,
   sunSize: 0.53, shadowSoftness: 1,
+  dust: 1, chips: 1, dustSize: 0.9,
 };
 
 /** Direction toward the sun from elevation and azimuth in degrees. */
@@ -201,12 +208,13 @@ export function realLook(o: Partial<RealOptions> = {}): LookParams {
     ground: { kind: r.groundMaterial, scale: r.groundScale, detail: r.groundDetail, variation: r.groundVariation },
     hills: { height: r.hills, distance: r.hillDistance },
     shadow: { softness: r.shadowSoftness },
+    debris: { dust: r.dust, chips: r.chips, size: r.dustSize },
     hueStep: 4,
     ball: hex('#8A8D90'),
     ballEmissive: 0,
     exposure: r.exposure,
     autoExposure: r.autoExposure,
-    // Sparks and glows are not real; impact dust replaces them (realism step 6).
+    // Sparks and glows are not real; impacts throw dust and chips instead (debris).
     effects: false,
     bloomMix: 0.02,
     vignette: 0.08,
@@ -233,6 +241,9 @@ export const REAL_KNOBS = {
   hillDistance: { label: 'hill distance (km)', min: 0.5, max: 100, step: 0.5 },
   sunSize: { label: 'sun size (deg)', min: 0.05, max: 5, step: 0.01 },
   shadowSoftness: { label: 'shadow softness x (0: hard)', min: 0, max: 4, step: 0.1 },
+  dust: { label: 'impact dust x', min: 0, max: 4, step: 0.1 },
+  chips: { label: 'impact chips x', min: 0, max: 4, step: 0.1 },
+  dustSize: { label: 'dust puff radius (m)', min: 0.1, max: 5, step: 0.1 },
 } as const;
 export type RealKnob = keyof typeof REAL_KNOBS;
 

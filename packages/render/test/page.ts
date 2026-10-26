@@ -9,7 +9,7 @@ import { Body, RenderRecord, Shape, TIER, readStruct } from '@tb/schema';
 import {
   agx, AGX_WGSL, LOOKS, realLook, type RealOptions, type LookParams, fromHalf, Atmosphere, CLEAR_DAY, transmittance, transmittanceHMu, multiScattering, skyViewDir, skyRadiance, skyViewUv, sampleTransmittance, ambientOf, distanceToGround, meteredIlluminance, Materials, heightNormal, STONES, GROUNDS, MATERIAL_LAYERS, MACRO_LAYER, layerTile, materialSample, macroSample, adaptedExposure, LUMA, R_TOP, R_GROUND, FX_WORDS, packFx, toHalf, bevelNormal, BEVEL_WGSL, oklabToLinear, OKLAB_WGSL, Post,
   Culler, cullReference, FLOOR_REACH, GpuBodySource, invert, listMatches, lookAt, makeGpuBodies, multiply, packBodies, perspective, Renderer, SEG, SEGMENTS, SnapshotSource, transform,
-  translation, normalize, BOX_VERTS, SPHERE_VERTS, SUN, Sparks, CTL, MAX_EVENTS, flashSlot, FLASHES, MAX_BALLS, TRAIL, Lights, LIGHTS, LIGHT_META, LIGHT_PACKED, MATERIAL, AoVolume, aoGrid, aoFrame, splatReference, composeReference, AO_FOOT_WGSL, AO_SAMPLE_WGSL, AO_SEAM_WGSL, AO_ONE, type SplatBody, unpackImpacts, unpackSparks, spawnReference, stepReference, type Impact, type BodySource, type CullFrame, type FrameParams, type RendererOptions, type V3,
+  translation, normalize, BOX_VERTS, SPHERE_VERTS, SUN, Sparks, CTL, MAX_EVENTS, flashSlot, FLASHES, MAX_BALLS, TRAIL, Lights, LIGHTS, LIGHT_META, LIGHT_PACKED, MATERIAL, AoVolume, aoGrid, aoFrame, splatReference, composeReference, AO_FOOT_WGSL, AO_SAMPLE_WGSL, AO_SEAM_WGSL, AO_ONE, type SplatBody, unpackImpacts, unpackSparks, spawnReference, stepReference, debrisSpawnReference, dustStepReference, chipStepReference, DEFAULT_DEBRIS, type SparkState, type Impact, type BodySource, type CullFrame, type FrameParams, type RendererOptions, type V3,
 } from '../src/index.ts';
 
 function rng(seed: number) {
@@ -971,10 +971,10 @@ function sparkShapes(): ArrayBuffer {
   return out;
 }
 
-async function sparkFrame(device: GPUDevice, sp: Sparks, src: BodySource, dt = 0, groundY = -100) {
+async function sparkFrame(device: GPUDevice, sp: Sparks, src: BodySource, dt = 0, groundY = -100, mode: 'sparks' | 'debris' = 'sparks') {
   const enc = device.createCommandEncoder();
   const pass = enc.beginComputePass();
-  sp.encode(pass, src, { dt, groundY });
+  sp.encode(pass, src, { dt, groundY, mode });
   pass.end();
   device.queue.submit([enc.finish()]);
   const ctl = Array.from(new Uint32Array(await readBuffer(device, sp.ctl)));
@@ -1094,6 +1094,105 @@ export async function sparkSim(frames: number) {
   };
 }
 
+/**
+ * Debris mode against the CPU twins: a frame of injected bursts spawns puffs
+ * into the dust ring and chips into the chip ring, then frames of flight
+ * (puffs drift and rise, chips fall and bounce), then death; a switch back
+ * to sparks mode clears the pool.
+ */
+export async function debrisSim(frames: number) {
+  const { device } = await createDevice({ timestamps: false });
+  device.pushErrorScope('validation');
+  const src = rawSource(device, new ArrayBuffer(4 * Body.size), new ArrayBuffer(4 * Body.size), sparkShapes(), new Uint32Array(4), 0, 4);
+  const sp = new Sparks(device);
+  const [dustPool, chipPool] = sp.rings;
+  const r = rng(5);
+  const bursts = Array.from({ length: 24 }, (_, i) => ({
+    pos: [(r() - 0.5) * 8, i % 3 === 0 ? 0.12 : 0.2 + 2 * r(), (r() - 0.5) * 8] as V3,
+    dir: [r() - 0.5, i % 3 === 0 ? -1 : r(), r() - 0.5] as V3, // every third just above the floor, aimed down: its puffs must stop at 10 cm
+    strength: 3 + 25 * r(),
+  }));
+  for (const b of bursts) sp.inject(b.pos, b.dir, b.strength);
+  const f32v = (v: number[]) => v.map((x) => Math.fround(x)) as V3;
+  const events: Impact[] = bursts.map((b) => { const l = Math.hypot(...b.dir); return { pos: f32v(b.pos), dir: f32v(b.dir.map((x) => x / l)), strength: Math.fround(b.strength), packed: 0xffffff | (1 << 24) }; });
+  const frame0 = sp.nextFrame;
+  const s0 = await sparkFrame(device, sp, src, 0, 0, 'debris');
+  const slots = unpackSparks(await readBuffer(device, sp.sparks));
+  const want = debrisSpawnReference(events, frame0, sp.config, sp.debris);
+  const wantDust = new Map(want.dust.map((s) => [s.packed, s])), wantChip = new Map(want.chips.map((s) => [s.packed, s]));
+  let spawnErr = 0, unmatched = 0, outside = 0, bornDust = 0, bornChips = 0;
+  const born = new Map<number, { init: SparkState; dust: boolean }>();
+  slots.forEach((s, i) => {
+    if (s.age < 0) return;
+    const dust = i < dustPool;
+    if (i >= dustPool + chipPool) { outside++; return; }
+    if (dust) bornDust++; else bornChips++;
+    const w = (dust ? wantDust : wantChip).get(s.packed);
+    if (!w) { unmatched++; return; }
+    born.set(i, { init: s, dust });
+    for (let k = 0; k < 3; k++) spawnErr = Math.max(spawnErr, Math.abs(s.pos[k]! - w.pos[k]!), Math.abs(s.vel[k]! - w.vel[k]!) / (1 + Math.abs(w.vel[k]!)));
+  });
+  const dt = 1 / 60;
+  let last = s0;
+  for (let i = 0; i < frames; i++) last = await sparkFrame(device, sp, src, dt, 0, 'debris');
+  const flown = unpackSparks(await readBuffer(device, sp.sparks));
+  const argsFlying = Array.from(new Uint32Array(await readBuffer(device, sp.args)));
+  let simErr = 0, alive = 0, bounced = 0, floored = 0, dustMinY = Infinity, chipMinY = Infinity, rose = 0;
+  for (const [i, { init, dust }] of born) {
+    let ref = init, up = false;
+    for (let k = 0; k < frames; k++) {
+      const n = dust ? dustStepReference(ref, dt, 0, sp.debris) : chipStepReference(ref, dt, 0, sp.config, sp.debris);
+      if (!dust && n.age >= 0 && ref.vel[1] < 0 && n.vel[1] > 0) up = true;
+      if (dust && n.pos[1] === Math.fround(0.1)) up = true;
+      ref = n;
+    }
+    const s = flown[i]!;
+    if ((ref.age < 0) !== (s.age < 0)) { simErr = Infinity; continue; }
+    if (s.age < 0) continue;
+    alive++;
+    if (up) { if (dust) floored++; else bounced++; }
+    if (dust) { dustMinY = Math.min(dustMinY, s.pos[1]); if (s.vel[1] > 0) rose++; } else chipMinY = Math.min(chipMinY, s.pos[1]);
+    for (let k = 0; k < 3; k++) simErr = Math.max(simErr, Math.abs(s.pos[k]! - ref.pos[k]!), Math.abs(s.vel[k]! - ref.vel[k]!) / (1 + Math.abs(ref.vel[k]!)));
+  }
+  // Past the longest life (4 s) all are dead and both draws are empty.
+  let dead = last;
+  for (let i = 0; i < 250; i++) dead = await sparkFrame(device, sp, src, dt, 0, 'debris');
+  const argsDead = Array.from(new Uint32Array(await readBuffer(device, sp.args)));
+  // Back to sparks mode with live debris: the switch kills every particle.
+  sp.inject([0, 1, 0], [0, 1, 0], 20);
+  await sparkFrame(device, sp, src, 0, 0, 'debris');
+  const sw = await sparkFrame(device, sp, src, dt, 0, 'sparks');
+  const err = await device.popErrorScope();
+  sp.destroy();
+  device.destroy();
+  return {
+    dustPool, chipPool, wantDust: want.dust.length, wantChips: want.chips.length, bornDust, bornChips, spawned: s0.ctl[CTL.spawned], outside, unmatched, spawnErr,
+    alive, aliveCtl: last.ctl[CTL.alive], simErr, bounced, floored, rose, dustMinY, chipMinY, argsFlying, aliveDead: dead.ctl[CTL.alive], argsDead, aliveAfterSwitch: sw.ctl[CTL.alive],
+    error: err?.message ?? null,
+  };
+}
+
+/** A debris flood: 64 strong bursts a frame. Spawns stay within the dust and chip budgets and every particle within its ring. */
+export async function debrisFlood(frames: number) {
+  const { device } = await createDevice({ timestamps: false });
+  device.pushErrorScope('validation');
+  const src = rawSource(device, new ArrayBuffer(4 * Body.size), new ArrayBuffer(4 * Body.size), sparkShapes(), new Uint32Array(4), 0, 4);
+  const sp = new Sparks(device);
+  const spawned: number[] = [];
+  for (let f = 0; f < frames; f++) {
+    for (let i = 0; i < 64; i++) sp.inject([i, 1, f], [0, 1, 0], 30);
+    spawned.push((await sparkFrame(device, sp, src, 1 / 120, 0, 'debris')).ctl[CTL.spawned]!);
+  }
+  const slots = unpackSparks(await readBuffer(device, sp.sparks));
+  const [dustPool, chipPool] = sp.rings;
+  const live = (a: number, b: number) => slots.slice(a, b).filter((s) => s.age >= 0).length;
+  const ctl = Array.from(new Uint32Array(await readBuffer(device, sp.ctl)));
+  const err = await device.popErrorScope();
+  sp.destroy();
+  device.destroy();
+  return { spawned, dust: live(0, dustPool), chips: live(dustPool, dustPool + chipPool), outside: live(dustPool + chipPool, slots.length), dustHead: ctl[CTL.dustHead], chipHead: ctl[CTL.chipHead], dustPool, chipPool, budgets: [DEFAULT_DEBRIS.dustBudget, DEFAULT_DEBRIS.chipBudget], error: err?.message ?? null };
+}
+
 /** A flood: every one of 100k bodies hit at once. Events and sparks stay within their budgets. */
 export async function sparkFlood(n: number) {
   const { device } = await createDevice({ timestamps: false });
@@ -1149,6 +1248,58 @@ export async function sparkDraw() {
   rend.destroy();
   device.destroy();
   return { near, stray, behindWall, maxWall, wallPixels: ids.reduce((s, v) => s + (v ? 1 : 0), 0), error: err?.message ?? null };
+}
+
+/**
+ * The real look's debris draw: a burst a frame in the open changes pixels only
+ * near its projection, one behind a wall changes none of the wall, and dust 0 with
+ * chips 0 draws exactly the frame with sparks off.
+ */
+export async function debrisDraw(frames: number) {
+  const { device } = await createDevice({ timestamps: false });
+  device.pushErrorScope('validation');
+  const descs = [box([2, 1, -5], [2, 2, 0.3], [0, 0, 0, 1])];
+  const src = new SnapshotSource(device);
+  src.reset(descs);
+  src.update(snapshotOf(descs), descs);
+  const f: FrameParams = { ...camera([0, 1.5, 6], [0, 1, 0]), groundY: 0, time: 1, dt: 1 / 60 };
+  const open: V3 = [-2.5, 1.5, 0], hidden: V3 = [2, 1, -8];
+  const run = async (o: Partial<RealOptions>, sparks: boolean) => {
+    const rend = new Renderer(device, { size: [W, H] }, { format: 'rgba8unorm' });
+    rend.look = { ...realLook({ stoneDetail: 0, groundDetail: 0, hills: 0, ...o }), bloomMix: 0, vignette: 0 };
+    rend.toggles.sparks = sparks;
+    rend.setSource(src);
+    rend.setShadowBounds([0, 1, -3], 10);
+    for (let i = 0; i < frames; i++) {
+      rend.burst(open, [0, 1, 0], 20);
+      rend.burst(hidden, [0, 0, -1], 20);
+      await rend.render(f);
+    }
+    const px = (await rend.render(f, true, true))!.pixels!;
+    const ids = (await rend.renderIds(f)).ids;
+    rend.destroy();
+    return { px, ids };
+  };
+  const on = await run({}, true), off = await run({}, false), zero = await run({ dust: 0, chips: 0 }, true);
+  const dustOnly = await run({ chips: 0 }, true), chipsOnly = await run({ dust: 0 }, true);
+  const project = (p: V3) => { const c = transform(f.viewProj, p); return [((c[0] / c[3]) * 0.5 + 0.5) * W, (0.5 - (c[1] / c[3]) * 0.5) * H]; };
+  const [ox, oy] = project(open);
+  let near = 0, stray = 0, behindWall = 0, maxWall = 0, zeroDiff = 0, nearDust = 0, nearChips = 0;
+  const a = on.px, b = off.px, ids = off.ids;
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+    const o = y * a.bytesPerRow + 4 * x;
+    for (let k = 0; k < 4; k++) if (zero.px.data[o + k] !== b.data[o + k]) zeroDiff++;
+    const d = Math.max(...[0, 1, 2].map((k) => Math.abs(a.data[o + k]! - b.data[o + k]!)));
+    const r = Math.hypot(x + 0.5 - ox!, y + 0.5 - oy!);
+    if (ids[y * W + x] === 1) { maxWall = Math.max(maxWall, d); if (d > 1) behindWall++; continue; }
+    if (r < 0.3 * H) {
+      near += d;
+      for (let k = 0; k < 3; k++) { nearDust += Math.abs(dustOnly.px.data[o + k]! - b.data[o + k]!); nearChips += Math.abs(chipsOnly.px.data[o + k]! - b.data[o + k]!); }
+    } else if (d > 1) stray++;
+  }
+  const err = await device.popErrorScope();
+  device.destroy();
+  return { near, nearDust, nearChips, stray, behindWall, maxWall, zeroDiff, wallPixels: ids.reduce((s, v) => s + (v === 1 ? 1 : 0), 0), error: err?.message ?? null };
 }
 
 // ---------------------------------------------------------------- lights
