@@ -30,6 +30,7 @@ function randomQuat(r: () => number): [number, number, number, number] {
 }
 
 const W = 160, H = 100;
+const H_PX = H;
 
 function camera(eye: V3, target: V3, aspect = W / H): FrameParams {
   return { viewProj: multiply(perspective(0.9, aspect, 0.1, 400), lookAt(eye, target)), eye, groundY: -100 };
@@ -775,9 +776,11 @@ export async function fanVsCube(seed: number, cameras = 50) {
 export interface ShadowCheckOptions {
   /** Output format (bgra8unorm is Apple's preferred). */
   format?: GPUTextureFormat;
+  /** The real look (soft shadows, realism step 5) with these options, its sun at SUN and its textures off, instead of candy. */
+  real?: Partial<RealOptions>;
 }
 
-export async function shadowCheck(kind: 'float' | 'contact' | 'grazing', { format }: ShadowCheckOptions = {}) {
+export async function shadowCheck(kind: 'float' | 'contact' | 'grazing', { format, real }: ShadowCheckOptions = {}) {
   const { device } = await createDevice({ timestamps: false });
   device.pushErrorScope('validation');
   const sun = SUN;
@@ -800,7 +803,9 @@ export async function shadowCheck(kind: 'float' | 'contact' | 'grazing', { forma
   const src = new SnapshotSource(device);
   src.update(snapshotOf(descs), descs);
   const rend = new Renderer(device, { size: [W, H] }, { format });
-  rend.look = { ...rend.look, floorGrid: 0, fogDensity: 0, bloomMix: 0, vignette: 0 };
+  rend.look = real
+    ? { ...realLook({ stoneDetail: 0, groundDetail: 0, hills: 0, ...real }), sunDir: sun, bloomMix: 0, vignette: 0 }
+    : { ...rend.look, floorGrid: 0, fogDensity: 0, bloomMix: 0, vignette: 0 };
   rend.setSource(src);
   rend.setShadowBounds([0, 2, 0], 8);
   const ids = (await rend.renderIds(f)).ids;
@@ -2419,4 +2424,109 @@ export async function stoneLodSeam(o: Partial<RealOptions>, size: [number, numbe
   const err = await device.popErrorScope();
   device.destroy();
   return { maxDiff, differing, lod: { boxes: a.boxes, farBoxes: a.farBoxes }, noLod: { boxes: b.boxes, farBoxes: b.farBoxes }, error: err?.message ?? null };
+}
+
+// ---------------------------------------------------------------- soft shadows
+
+/** Visible fraction of a disc cut by a straight edge u radii from its centre (u = -1: none, 1: all). */
+export function discEdge(u: number): number {
+  const c = Math.max(-1, Math.min(1, u));
+  return 0.5 + (c * Math.sqrt(1 - c * c) + Math.asin(c)) / Math.PI;
+}
+
+export interface PenumbraCase {
+  /** Height of the slab's underside over the floor, m. */
+  h: number;
+  /** Sun elevation, degrees (azimuth 0: shadows fall toward +z). */
+  elevation?: number;
+  real?: Partial<RealOptions>;
+  /** Default 'shadow-view' (the floor draws its sun visibility); null: the lit frame. */
+  realDiag?: RendererOptions['realDiag'] | null;
+}
+
+/**
+ * Soft shadow penumbra against the sun disc's (realism step 5). A thin 1 m
+ * slab h over the floor; a camera 0.3 m over the floor looks down at the
+ * shadow of its +x edge, which runs along the sun's azimuth, so the floor
+ * there sees the sun's disc cut by a straight edge H = h + t above it and
+ * H / sin(elevation) away: its lit fraction is discEdge(dx sin(e) / (H
+ * tan(sun radius) softness)), dx the floor's distance past the edge. With
+ * realDiag 'shadow-view' the floor draws its sun visibility s, and the
+ * composite maps it through agx (exposure 1, no bloom or vignette), which
+ * the CPU twin inverts. Returns the positions (m, from the edge) where s
+ * crosses 0.1, 0.5 and 0.9, measured as the share of floor pixels below
+ * each level in a band [-L, L] (unbiased for a monotone profile under
+ * symmetric noise), the expected ones, the texel, and s far in the shadow
+ * and far in the light. Several cases share one device.
+ */
+export async function penumbraChecks(cases: PenumbraCase[]) {
+  const { device } = await createDevice({ timestamps: false });
+  device.pushErrorScope('validation');
+  // agx is monotone on grey: invert its green channel by bisection.
+  const lut = Array.from({ length: 1025 }, (_, i) => agx([i / 1024, i / 1024, i / 1024])[1]);
+  const inv = (g: number) => {
+    let lo = 0, hi = 1024;
+    while (hi - lo > 1) { const m = (lo + hi) >> 1; if (lut[m]! < g) lo = m; else hi = m; }
+    const a = lut[lo]!, b = lut[hi]!;
+    return (lo + (b > a ? Math.min(Math.max((g - a) / (b - a), 0), 1) : 0)) / 1024;
+  };
+  const out = [];
+  for (const c of cases) {
+    const { f, px, texel, look, e, H, z0 } = await penumbraFrame(device, c);
+    const tanHalf = Math.tan(look.atmosphere!.sunRadius) * (look.shadow?.softness ?? 1);
+    const half = (H * tanHalf) / Math.sin(e); // floor half width of the penumbra
+    const L = 3 * half + 6 * texel;
+    const band: number[] = [], dark: number[] = [], lit: number[] = [];
+    for (let y = 0; y < H_PX; y++) for (let x = 0; x < W; x++) {
+      const { o, d } = rayAt(f, x, y);
+      if (d[1] >= 0) continue;
+      const k = -o[1] / d[1], gx = o[0] + d[0] * k - 0.5, gz = o[2] + d[2] * k;
+      if (Math.abs(gz - z0) > 0.25) continue; // well inside the shadow's length, away from its ends
+      const s = inv(px.data[y * px.bytesPerRow + 4 * x + 1]! / 255);
+      if (Math.abs(gx) <= L) band.push(s);
+      else (gx < 0 ? dark : lit).push(s);
+    }
+    const at = (q: number) => -L + (2 * L * band.filter((s) => s < q).length) / band.length;
+    // discEdge(u) = q at u = qu; the floor offset is u times the half width.
+    const solve = (q: number) => { let lo = -1, hi = 1; for (let i = 0; i < 60; i++) { const m = (lo + hi) / 2; if (discEdge(m) < q) lo = m; else hi = m; } return lo * half; };
+    const median = (xs: number[]) => (xs.sort((a, b) => a - b), xs[xs.length >> 1] ?? NaN);
+    out.push({ x10: at(0.1), x50: at(0.5), x90: at(0.9), want10: solve(0.1), want90: solve(0.9), texel, half, band: band.length, dark: median(dark), lit: median(lit) });
+  }
+  const err = await device.popErrorScope();
+  device.destroy();
+  return { cases: out, error: err?.message ?? null };
+}
+
+/** The frames (green channel) of penumbra cases, to compare renderer setups bit for bit. */
+export async function penumbraFrames(cases: PenumbraCase[]) {
+  const { device } = await createDevice({ timestamps: false });
+  device.pushErrorScope('validation');
+  const frames: number[][] = [];
+  for (const c of cases) {
+    const { px } = await penumbraFrame(device, c);
+    const g: number[] = [];
+    for (let y = 0; y < H_PX; y++) for (let x = 0; x < W; x++) g.push(px.data[y * px.bytesPerRow + 4 * x + 1]!);
+    frames.push(g);
+  }
+  const err = await device.popErrorScope();
+  device.destroy();
+  return { frames, error: err?.message ?? null };
+}
+
+async function penumbraFrame(device: GPUDevice, c: PenumbraCase) {
+  const e = ((c.elevation ?? 45) * Math.PI) / 180, t = 0.01, H = c.h + t;
+  const look = realLook({ stoneDetail: 0, groundDetail: 0, hills: 0, autoExposure: 0, sunAzimuth: 0, ...c.real, sunElevation: c.elevation ?? 45 });
+  const descs = [box([0, c.h + t, 0], [0.5, t, 0.5], [0, 0, 0, 1])];
+  const src = new SnapshotSource(device);
+  src.update(snapshotOf(descs), descs);
+  const rend = new Renderer(device, { size: [W, H_PX] }, { realDiag: c.realDiag === undefined ? 'shadow-view' : c.realDiag ?? undefined });
+  rend.look = { ...look, exposure: 1, bloomMix: 0, vignette: 0 };
+  rend.setSource(src);
+  const z0 = H / Math.tan(e);
+  rend.setShadowBounds([0, c.h / 2, z0 / 2], Math.hypot(c.h, z0) / 2 + 2);
+  const f: FrameParams = { ...camera([0.5, 0.3, z0 + 0.05], [0.5, 0, z0]), groundY: 0 };
+  const px = (await rend.render(f, true, true))!.pixels!;
+  const texel = rend.shadowFit!.texel;
+  rend.destroy();
+  return { f, px, texel, look, e, H, z0 };
 }
