@@ -5,7 +5,9 @@
 //
 // Passes (one compute pass):
 //   prepare   one thread per slot: RenderRecord (with the slot's FX scale
-//             applied) + a 0/1 flag per segment
+//             applied) + a 0/1 flag per segment; a visible box is in boxFar
+//             instead of box when all of it lies lodDepth or more past the
+//             near plane (material level of detail: see Renderer)
 //   scan      exclusive scan over all segment flags (one Scanner, fixed n)
 //   scatter   flagged slot -> lists[seg * capacity + local index]
 //   args      one thread: drawIndirect arguments per segment
@@ -20,9 +22,13 @@ import { Body, RenderRecord, Shape, TIER, wgslStruct } from '@tb/schema';
 import { FX_WGSL } from './fx.ts';
 import type { BodySource } from './source.ts';
 
-export const SEGMENTS = ['box', 'sphere', 'boxShadow', 'sphereShadow'] as const;
+export const SEGMENTS = ['box', 'sphere', 'boxShadow', 'sphereShadow', 'boxFar'] as const;
 export type Segment = (typeof SEGMENTS)[number];
-export const SEG = { box: 0, sphere: 1, boxShadow: 2, sphereShadow: 3 } as const;
+export const SEG = { box: 0, sphere: 1, boxShadow: 2, sphereShadow: 3, boxFar: 4 } as const;
+const NSEG = SEGMENTS.length;
+
+/** CullFrame.lodDepth when no box is far: every visible box is listed in box. */
+export const NO_LOD = 1e30;
 
 /** Interpolation is skipped when a body moved further than this in one step (teleport, slot reuse). */
 export const MAX_STEP_JUMP = 3;
@@ -46,6 +52,7 @@ struct CullParams {
   vertsBox: u32,
   vertsSphere: u32,
   vertsBoxShadow: u32,
+  lodDepth: f32,                // metres past the near plane; NO_LOD: none
 }
 
 @group(0) @binding(0) var<uniform> p: CullParams;
@@ -54,9 +61,9 @@ struct CullParams {
 @group(0) @binding(3) var<storage, read> shapes: array<Shape>;
 @group(0) @binding(4) var<storage, read> looks: array<u32>;
 @group(0) @binding(5) var<storage, read_write> records: array<RenderRecord>;
-@group(0) @binding(6) var<storage, read_write> scan: array<u32>;   // 4 * capacity + 1
-@group(0) @binding(7) var<storage, read_write> lists: array<u32>;  // 4 * capacity
-@group(0) @binding(8) var<storage, read_write> args: array<u32>;   // 4 x drawIndirect
+@group(0) @binding(6) var<storage, read_write> scan: array<u32>;   // NSEG * capacity + 1
+@group(0) @binding(7) var<storage, read_write> lists: array<u32>;  // NSEG * capacity
+@group(0) @binding(8) var<storage, read_write> args: array<u32>;   // NSEG x drawIndirect
 @group(0) @binding(9) var<storage, read> fx: array<vec4u>;         // per slot, see fx.ts
 
 fn inside(planes: array<vec4f, 6>, c: vec3f, r: f32) -> bool {
@@ -73,6 +80,7 @@ fn prepare(@builtin(global_invocation_id) id: vec3u) {
   var seg = 0u;
   var vis = false;
   var shadow = false;
+  var far = false;
   if (i < p.count) {
     let b = bodies[i];
     let tier = (b.flags >> 8u) & 0xffu;
@@ -101,20 +109,22 @@ fn prepare(@builtin(global_invocation_id) id: vec3u) {
       let shown = fs.scale > 0.0;
       vis = shown && (p.noCull != 0u || inside(p.planes, rel, r));
       shadow = shown && (p.noCull != 0u || inside(p.lightPlanes, rel, r));
+      far = dot(p.planes[4].xyz, rel) + p.planes[4].w - r >= p.lodDepth;
     }
   }
-  scan[i] = select(0u, 1u, vis && seg == 0u);
+  scan[i] = select(0u, 1u, vis && seg == 0u && !far);
   scan[cap + i] = select(0u, 1u, vis && seg == 1u);
   scan[2u * cap + i] = select(0u, 1u, shadow && seg == 0u);
   scan[3u * cap + i] = select(0u, 1u, shadow && seg == 1u);
-  if (i == 0u) { scan[4u * cap] = 0u; }
+  scan[4u * cap + i] = select(0u, 1u, vis && seg == 0u && far);
+  if (i == 0u) { scan[${NSEG}u * cap] = 0u; }
 }
 
 @compute @workgroup_size(${WG})
 fn scatter(@builtin(global_invocation_id) id: vec3u) {
   let k = id.x;
   let cap = p.capacity;
-  if (k >= 4u * cap) { return; }
+  if (k >= ${NSEG}u * cap) { return; }
   let o = scan[k];
   if (scan[k + 1u] == o) { return; }
   let seg = k / cap;
@@ -124,8 +134,8 @@ fn scatter(@builtin(global_invocation_id) id: vec3u) {
 @compute @workgroup_size(1)
 fn writeArgs() {
   let cap = p.capacity;
-  for (var s = 0u; s < 4u; s++) {
-    args[4u * s] = select(select(p.vertsBox, p.vertsBoxShadow, s == ${SEG.boxShadow}u), p.vertsSphere, s % 2u == 1u);
+  for (var s = 0u; s < ${NSEG}u; s++) {
+    args[4u * s] = select(select(p.vertsBox, p.vertsBoxShadow, s == ${SEG.boxShadow}u), p.vertsSphere, s == ${SEG.sphere}u || s == ${SEG.sphereShadow}u);
     args[4u * s + 1u] = scan[(s + 1u) * cap] - scan[s * cap];
     args[4u * s + 2u] = 0u;
     args[4u * s + 3u] = 0u;
@@ -143,6 +153,8 @@ export interface CullFrame {
   eye: [number, number, number];
   alpha: number;
   noCull?: boolean;
+  /** Boxes this far past the near plane (metres, all of the box) go to boxFar; default NO_LOD. */
+  lodDepth?: number;
 }
 
 /**
@@ -170,7 +182,7 @@ const PARAM_BYTES = 12 * 16 + 16 + 32;
 export class Culler {
   readonly records: GPUBuffer;
   readonly lists: GPUBuffer;
-  /** 4 x drawIndirect (vertexCount, instanceCount, firstVertex, firstInstance), in SEGMENTS order. */
+  /** NSEG x drawIndirect (vertexCount, instanceCount, firstVertex, firstInstance), in SEGMENTS order. */
   readonly args: GPUBuffer;
   private readonly scanBuf: GPUBuffer;
   private readonly params: GPUBuffer;
@@ -184,11 +196,11 @@ export class Culler {
     const cap = (this.capacity = source.capacity);
     const usage = GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC;
     this.records = device.createBuffer({ size: Math.max(16, cap * RenderRecord.size), usage, label: 'render records' });
-    this.lists = device.createBuffer({ size: Math.max(16, 4 * cap * 4), usage, label: 'render lists' });
-    this.scanBuf = device.createBuffer({ size: (4 * cap + 1) * 4, usage, label: 'cull scan' });
-    this.args = device.createBuffer({ size: 64, usage: usage | GPUBufferUsage.INDIRECT, label: 'draw args' });
+    this.lists = device.createBuffer({ size: Math.max(16, NSEG * cap * 4), usage, label: 'render lists' });
+    this.scanBuf = device.createBuffer({ size: (NSEG * cap + 1) * 4, usage, label: 'cull scan' });
+    this.args = device.createBuffer({ size: 16 * NSEG, usage: usage | GPUBufferUsage.INDIRECT, label: 'draw args' });
     this.params = device.createBuffer({ size: PARAM_BYTES, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST, label: 'cull params' });
-    this.scanner = new Scanner(device, this.scanBuf, 4 * cap + 1);
+    this.scanner = new Scanner(device, this.scanBuf, NSEG * cap + 1);
     const module = device.createShaderModule({ code: CULL_WGSL, label: 'cull' });
     // One layout per kernel ('auto', holding only what it uses): together
     // they bind 9 storage buffers, over WebGPU's default limit of 8.
@@ -217,14 +229,15 @@ export class Culler {
     u[55] = this.verts.box;
     u[56] = this.verts.sphere;
     u[57] = this.verts.boxShadow ?? this.verts.box;
+    fl[58] = f.lodDepth ?? NO_LOD;
     this.device.queue.writeBuffer(this.params, 0, buf);
     pass.setBindGroup(0, this.binds.prepare);
     pass.setPipeline(this.pipes.prepare);
     pass.dispatchWorkgroups(Math.ceil(cap / WG));
-    this.scanner.encode(pass, 4 * cap + 1);
+    this.scanner.encode(pass, NSEG * cap + 1);
     pass.setBindGroup(0, this.binds.scatter);
     pass.setPipeline(this.pipes.scatter);
-    pass.dispatchWorkgroups(Math.ceil((4 * cap) / WG));
+    pass.dispatchWorkgroups(Math.ceil((NSEG * cap) / WG));
     pass.setBindGroup(0, this.binds.args);
     pass.setPipeline(this.pipes.args);
     pass.dispatchWorkgroups(1);

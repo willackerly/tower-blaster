@@ -6,7 +6,7 @@
 // camera-relative. Colours and lights come from a LookParams preset.
 import { writeStruct } from '@tb/schema';
 import type { GpuProfiler } from '@tb/gpu';
-import { Culler, SEG, type CullFrame } from './cull.ts';
+import { Culler, NO_LOD, SEG, type CullFrame } from './cull.ts';
 import { Sparks } from './sparks.ts';
 import { Lights, MAX_BALLS, TRAIL } from './lights.ts';
 import { aoFrame, aoGrid, AoVolume } from './ao.ts';
@@ -17,6 +17,7 @@ import { CANDY_NIGHT, linearToOklab, srgbToLinear, type LookParams } from './loo
 import { invert, lookAt, multiply, normalize, type Mat4, type V3 } from './math.ts';
 import { HDR_FORMAT, noStamp, Post, type Stamp } from './post.ts';
 import { BOX_CUBE_VERTS, BOX_FAN_VERTS, Frame, SCENE_WGSL, sceneWgsl, SHADOW_SIZE, SPHERE_VERTS } from './shaders.ts';
+import { Materials, STONES } from './materials.ts';
 import { ADAPTED_EXPOSURE_OFFSET, Atmosphere, medium, sunAtGround, sunDiscRadiance } from './atmosphere.ts';
 import { SnapshotSource, type BodySource } from './source.ts';
 
@@ -83,6 +84,16 @@ export interface RendererOptions {
    * Bench diagnostics for AO's cost: 'no-seam' compiles the seam cavity out.
    */
   aoDiag?: 'no-seam';
+  /**
+   * Bench diagnostics for the real look's block shading: 'stone-off'
+   * compiles the stone samples out (against stone texture 0, the cost of
+   * the samples' code being there at all); 'step1' shades blocks as realism
+   * step 1 did (the stylized body under the atmosphere); 'no-floor-sky'
+   * gives the floor the vertical sky term only (no floorSky cones).
+   */
+  realDiag?: 'stone-off' | 'step1' | 'no-floor-sky';
+  /** false: no material level of detail, every box drawn with the stone code (bench and tests). Default true. */
+  stoneLod?: boolean;
   /** Spark slots (default SPARK_POOL, 65536). Every slot costs a simulation thread and a quad per frame. */
   sparkPool?: number;
   /** Output format; default the canvas's preferred one (bgra8unorm on Apple, rgba8unorm elsewhere). Tests set it to cover both. */
@@ -91,7 +102,25 @@ export interface RendererOptions {
 
 type PipeName = 'box' | 'sphere' | 'ground' | 'sky' | 'overlay' | 'spark' | 'trail' | 'boxShadow' | 'sphereShadow' | 'boxId' | 'sphereId';
 /** The pipelines whose shading differs for a look with an atmosphere (sceneWgsl(true)). */
-type RealPipe = 'box' | 'sphere' | 'ground' | 'sky' | 'overlay';
+type RealPipe = 'box' | 'boxFar' | 'sphere' | 'ground' | 'sky' | 'overlay';
+
+/**
+ * The depth past the near plane beyond which every pixel of a surface
+ * covers at least fade metres (as fsBox measures it: the length of fwidth
+ * of the body-frame position), so the stone has faded out there and boxes
+ * all of whose bounding sphere lies beyond can use the shader without it.
+ * viewProj: camera-relative; height: viewport pixels. A pixel step at view
+ * depth z spans at least z cos(theta) 2 / (P11 height) metres on any
+ * surface, theta the pixel's angle off the view axis (at most the frustum
+ * corner's), and fwidth's length is at least sqrt(2) times one step. The
+ * near plane is closer than view depth, which only adds margin; so does
+ * the 10% on top.
+ */
+export function stoneLodDepth(viewProj: Float32Array, height: number, fade: number): number {
+  const p00 = Math.hypot(viewProj[0]!, viewProj[4]!, viewProj[8]!), p11 = Math.hypot(viewProj[1]!, viewProj[5]!, viewProj[9]!);
+  const cosCorner = 1 / Math.sqrt(1 + 1 / (p00 * p00) + 1 / (p11 * p11));
+  return (1.1 * fade * p11 * height) / (2 * Math.SQRT2 * cosCorner);
+}
 
 /** Direction toward the sun of a look. */
 export function sunOf(l: LookParams): V3 {
@@ -110,6 +139,9 @@ export function lookUniforms(l: LookParams): Record<string, number | number[]> {
     rimColor: l.rimColor, rimDir: normalize(l.rimDir), rimSize: l.rimSize,
     roughness: l.roughness, clearcoat: l.clearcoat, bevel: l.bevel, hueStep: (l.hueStep * Math.PI) / 180,
     ball: lin(l.ball), ballEmissive: l.ballEmissive, fogDensity: l.fogDensity, fogHeight: l.fogHeight, exposure: l.exposure,
+    stone: l.stone ? [STONES.indexOf(l.stone.kind), l.stone.scale, l.stone.wear, l.stone.dirt] : [0, 1, 0, 0],
+    stoneDetail: [l.stone?.detail ?? 0, l.stone?.fade ?? 1, 0, 0],
+    blockAlbedo: [...[0, 1, 2].map((k) => l.ramp.reduce((acc, c) => acc + srgbToLinear(c[k]!), 0) / l.ramp.length), 0],
     ...Object.fromEntries(l.ramp.map((c, i) => [`ramp${i}`, [...linearToOklab(lin(c) as V3), 0]])),
   };
 }
@@ -123,7 +155,7 @@ export class Renderer {
   private readonly shadowLayout: GPUBindGroupLayout;
   private readonly pipes: Record<PipeName, GPURenderPipeline>;
   /** Pipelines and sky of looks with an atmosphere, made on first use. */
-  private real: { pipes: Record<RealPipe, GPURenderPipeline>; atmosphere: Atmosphere; layout: GPUBindGroupLayout; bind: GPUBindGroup } | null = null;
+  private real: { pipes: Record<RealPipe, GPURenderPipeline>; atmosphere: Atmosphere; materials: Materials; layout: GPUBindGroupLayout; bind: GPUBindGroup } | null = null;
   private readonly makeReal: () => NonNullable<Renderer['real']>;
   private lastSun: V3 = SUN;
   private readonly facePipe: () => GPURenderPipeline;
@@ -173,8 +205,12 @@ export class Renderer {
   profiler: GpuProfiler | null = null;
   /** Passes to skip, for measuring their marginal cost (bench:render). sparks off also freezes heat (its detector writes it). */
   toggles = { shadow: true, post: true, sparks: true, trail: true, heat: true, ao: true };
+  private readonly stoneLod: boolean;
+  private readonly realDiag: RendererOptions['realDiag'];
 
   constructor(readonly device: GPUDevice, target: RenderTarget, opts: RendererOptions = {}) {
+    this.stoneLod = opts.stoneLod !== false;
+    this.realDiag = opts.realDiag;
     const sceneFan = (opts.scenePath ?? opts.boxPath ?? 'cube') === 'fan';
     const shadowFan = (opts.shadowPath ?? opts.boxPath ?? 'fan') === 'fan';
     this.boxVerts = { scene: sceneFan ? BOX_FAN_VERTS : BOX_CUBE_VERTS, shadow: shadowFan ? BOX_FAN_VERTS : BOX_CUBE_VERTS };
@@ -221,6 +257,7 @@ export class Renderer {
         { binding: 11, visibility: GPUShaderStage.FRAGMENT, buffer: ro },
         { binding: 12, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: 'float', viewDimension: '3d' } },
         { binding: 13, visibility: GPUShaderStage.FRAGMENT, sampler: { type: 'filtering' } },
+        { binding: 15, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: 'float' } },
         { binding: 14, visibility: GPUShaderStage.FRAGMENT, buffer: ro },
       ],
     });
@@ -230,10 +267,10 @@ export class Renderer {
     const main = device.createPipelineLayout({ bindGroupLayouts: [this.layout] });
     const shadowPl = device.createPipelineLayout({ bindGroupLayouts: [this.shadowLayout] });
     const fsConsts: Record<string, Record<string, number>> = { fsBox: { AO_SEAM: opts.aoDiag === 'no-seam' ? 0 : 1 } };
-    const color = (vs: string, fs: string, cull: GPUCullMode, seg: number, opts: { format?: GPUTextureFormat; samples?: number; sky?: boolean; buffers?: GPUVertexBufferLayout[]; module?: GPUShaderModule; layout?: GPUPipelineLayout } = {}): GPURenderPipeline => device.createRenderPipeline({
+    const color = (vs: string, fs: string, cull: GPUCullMode, seg: number, opts: { format?: GPUTextureFormat; samples?: number; sky?: boolean; buffers?: GPUVertexBufferLayout[]; module?: GPUShaderModule; layout?: GPUPipelineLayout; constants?: Record<string, number> } = {}): GPURenderPipeline => device.createRenderPipeline({
       layout: opts.layout ?? main,
       vertex: { module: opts.module ?? module, entryPoint: vs, constants: { SEG: seg, ...(vs === 'vsBox' ? { FAN: sceneFan ? 1 : 0 } : {}) }, buffers: opts.buffers ?? [] },
-      fragment: { module: opts.module ?? module, entryPoint: fs, constants: fsConsts[fs] ?? {}, targets: [{ format: opts.format ?? HDR_FORMAT }] },
+      fragment: { module: opts.module ?? module, entryPoint: fs, constants: { ...fsConsts[fs], ...opts.constants }, targets: [{ format: opts.format ?? HDR_FORMAT }] },
       primitive: { topology: 'triangle-list', cullMode: cull, frontFace: 'ccw' },
       depthStencil: opts.sky
         ? { format: 'depth24plus', depthWriteEnabled: false, depthCompare: 'less-equal' }
@@ -295,21 +332,31 @@ export class Renderer {
           { binding: 0, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: 'float' } },
           { binding: 1, visibility: GPUShaderStage.FRAGMENT, sampler: { type: 'filtering' } },
           { binding: 2, visibility: GPUShaderStage.FRAGMENT, buffer: ro },
+          { binding: 3, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: 'float', viewDimension: '2d-array' } },
+          { binding: 4, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: 'float', viewDimension: '2d-array' } },
+          { binding: 5, visibility: GPUShaderStage.FRAGMENT, sampler: { type: 'filtering' } },
         ],
       });
+      const materials = new Materials(device);
       const m = { module: device.createShaderModule({ code: sceneWgsl(true), label: 'scene (real)' }), layout: device.createPipelineLayout({ bindGroupLayouts: [this.layout, layout] }) };
       const pipes: Record<RealPipe, GPURenderPipeline> = {
-        box: color('vsBox', opts.flatBoxes ? 'fsBoxFlat' : 'fsBox', 'back', SEG.box, m),
+        box: color('vsBox', opts.flatBoxes ? 'fsBoxFlat' : 'fsBox', 'back', SEG.box, { ...m, constants: opts.flatBoxes ? {} : { REAL_STONE: opts.realDiag === 'stone-off' ? 0 : 1, REAL_BLOCK: opts.realDiag === 'step1' ? 0 : 1 } }),
+        // Past the stone's fade-out (stoneLodDepth): the same shading without the stone code.
+        boxFar: color('vsBox', opts.flatBoxes ? 'fsBoxFlat' : 'fsBox', 'back', SEG.boxFar, { ...m, constants: opts.flatBoxes ? {} : { REAL_STONE: 0, REAL_BLOCK: opts.realDiag === 'step1' ? 0 : 1 } }),
         sphere: color('vsSphere', 'fsSphere', 'back', SEG.sphere, m),
-        ground: color('vsGround', 'fsGround', 'none', 0, { ...m, buffers: [{ arrayStride: 12, attributes: [{ shaderLocation: 0, offset: 0, format: 'float32x3' }] }] }),
-        sky: color('vsSky', 'fsSky', 'none', 0, { ...m, sky: true }),
+        ground: color('vsGround', 'fsGround', 'none', 0, { ...m, constants: { FLOOR_CONES: opts.realDiag === 'no-floor-sky' ? 0 : 1 }, buffers: [{ arrayStride: 12, attributes: [{ shaderLocation: 0, offset: 0, format: 'float32x3' }] }] }),
+        sky: color('vsSky', 'fsSky', 'none', 0, { ...m, sky: true, constants: { FLOOR_CONES: opts.realDiag === 'no-floor-sky' ? 0 : 1 } }),
         overlay: color('vsOverlay', 'fsOverlay', 'back', 0, m),
       };
       const bind = device.createBindGroup({
         layout,
-        entries: [{ binding: 0, resource: atmosphere.skyView.createView() }, { binding: 1, resource: atmosphere.sampler }, { binding: 2, resource: { buffer: atmosphere.ambient } }],
+        entries: [
+          { binding: 0, resource: atmosphere.skyView.createView() }, { binding: 1, resource: atmosphere.sampler }, { binding: 2, resource: { buffer: atmosphere.ambient } },
+          { binding: 3, resource: materials.detail.createView({ dimension: '2d-array' }) }, { binding: 4, resource: materials.normal.createView({ dimension: '2d-array' }) },
+          { binding: 5, resource: materials.sampler },
+        ],
       });
-      return { pipes, atmosphere, layout, bind };
+      return { pipes, atmosphere, materials, layout, bind };
     };
   }
 
@@ -398,7 +445,7 @@ export class Renderer {
 
   private aoUniforms(eye: V3) {
     const g = this.ao.grid, { originRel, invVoxel } = aoFrame(g, eye);
-    return { aoOrigin: originRel, aoInvVoxel: invVoxel, aoDims: g.dims, aoOn: this.toggles.ao ? 1 : 0, aoK: this.ao.k };
+    return { aoOrigin: originRel, aoInvVoxel: invVoxel, aoDims: g.dims, aoOn: this.toggles.ao ? 1 : 0, aoK: this.ao.k, aoFloorSky: this.ao.floorSkyFrame(eye) };
   }
 
   /** Rebuild the culler and bind groups when the source's buffers change. */
@@ -425,6 +472,7 @@ export class Renderer {
           { binding: 9, resource: { buffer: this.lights.lights } }, { binding: 10, resource: { buffer: this.lights.trail } },
           { binding: 11, resource: { buffer: this.sparks.stateFor(s) } },
           { binding: 12, resource: this.ao.volume.createView() }, { binding: 13, resource: this.aoSampler }, { binding: 14, resource: { buffer: this.ao.feetFor(s) } },
+          { binding: 15, resource: this.ao.floorSky.createView() },
         ],
       });
       this.shadowBind = this.device.createBindGroup({ layout: this.shadowLayout, entries: common });
@@ -497,11 +545,15 @@ export class Renderer {
     const cf = this.writeFrame({ ...f, dt });
     const ao = !ids && this.toggles.ao;
     if (ao) this.ao.clear(enc);
+    // Material level of detail: in the real look, boxes past the stone's fade-out go to boxFar, all of them with no stone.
+    const stone = !ids && this.look.atmosphere ? this.look.stone : undefined;
+    if (stone && this.stoneLod) cf.lodDepth = stone.detail > 0 ? stoneLodDepth(cf.viewProj, this.viewport()[1], stone.fade) : -NO_LOD;
     const cp = enc.beginComputePass({ label: 'cull', ...stamp('cull') });
     culler.encode(cp, cf);
     if (ao) {
       this.ao.splat(cp, this.source, culler.records, f.eye);
       this.ao.compose(cp);
+      if (this.look.atmosphere && this.realDiag !== 'no-floor-sky') this.ao.bakeFloorSky(cp, f.groundY);
     }
     const real = !ids && this.look.atmosphere ? (this.real ??= this.makeReal()) : null;
     if (real) real.atmosphere.encode(cp, this.look.atmosphere!, sunOf(this.look), this.eyeKm(f), this.look.exposure, this.look.autoExposure ?? 0);
@@ -535,6 +587,10 @@ export class Renderer {
     const pipes = real ? { ...this.pipes, ...real.pipes } : this.pipes;
     p.setPipeline(mode === 'faces' ? this.facePipe() : ids ? pipes.boxId : pipes.box);
     p.drawIndirect(culler.args, 16 * SEG.box);
+    if (real) {
+      p.setPipeline(real.pipes.boxFar);
+      p.drawIndirect(culler.args, 16 * SEG.boxFar);
+    }
     if (mode === 'faces') { p.end(); return; }
     p.setPipeline(ids ? pipes.sphereId : pipes.sphere);
     p.drawIndirect(culler.args, 16 * SEG.sphere);
@@ -658,6 +714,7 @@ export class Renderer {
     this.lights.destroy();
     this.ao.destroy();
     this.real?.atmosphere.destroy();
+    this.real?.materials.destroy();
   }
 
   /** Sparks from a game event at pos, flying out around dir; strength is a speed change in m/s. */

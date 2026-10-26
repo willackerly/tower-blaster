@@ -7,8 +7,8 @@ import { emptySnapshot, TAG_BALL, type BodyDesc, type Snapshot } from '@tb/engin
 import { createDevice, readBuffer } from '@tb/gpu';
 import { Body, RenderRecord, Shape, TIER, readStruct } from '@tb/schema';
 import {
-  agx, AGX_WGSL, LOOKS, realLook, type RealOptions, type LookParams, fromHalf, Atmosphere, CLEAR_DAY, transmittance, transmittanceHMu, multiScattering, skyViewDir, skyRadiance, skyViewUv, sampleTransmittance, ambientOf, distanceToGround, meteredIlluminance, adaptedExposure, LUMA, R_TOP, R_GROUND, FX_WORDS, packFx, toHalf, bevelNormal, BEVEL_WGSL, oklabToLinear, OKLAB_WGSL, Post,
-  Culler, cullReference, GpuBodySource, invert, listMatches, lookAt, makeGpuBodies, multiply, packBodies, perspective, Renderer, SEGMENTS, SnapshotSource, transform,
+  agx, AGX_WGSL, LOOKS, realLook, type RealOptions, type LookParams, fromHalf, Atmosphere, CLEAR_DAY, transmittance, transmittanceHMu, multiScattering, skyViewDir, skyRadiance, skyViewUv, sampleTransmittance, ambientOf, distanceToGround, meteredIlluminance, Materials, MATERIAL_TILE, heightNormal, STONES, stoneSample, adaptedExposure, LUMA, R_TOP, R_GROUND, FX_WORDS, packFx, toHalf, bevelNormal, BEVEL_WGSL, oklabToLinear, OKLAB_WGSL, Post,
+  Culler, cullReference, GpuBodySource, invert, listMatches, lookAt, makeGpuBodies, multiply, packBodies, perspective, Renderer, SEG, SEGMENTS, SnapshotSource, transform,
   translation, normalize, BOX_VERTS, SPHERE_VERTS, SUN, Sparks, CTL, MAX_EVENTS, flashSlot, FLASHES, MAX_BALLS, TRAIL, Lights, LIGHTS, LIGHT_META, LIGHT_PACKED, MATERIAL, AoVolume, aoGrid, aoFrame, splatReference, composeReference, AO_FOOT_WGSL, AO_SAMPLE_WGSL, AO_SEAM_WGSL, AO_ONE, type SplatBody, unpackImpacts, unpackSparks, spawnReference, stepReference, type Impact, type BodySource, type CullFrame, type FrameParams, type RendererOptions, type V3,
 } from '../src/index.ts';
 
@@ -50,7 +50,7 @@ function rawSource(device: GPUDevice, bodies: ArrayBuffer, prev: ArrayBuffer, sh
   };
 }
 
-export interface CullCase { seed: number; count: number; capacity: number; alpha: number; noCull: boolean; fx?: boolean }
+export interface CullCase { seed: number; count: number; capacity: number; alpha: number; noCull: boolean; fx?: boolean; lodDepth?: number }
 
 /**
  * Random world: boxes, slabs and spheres scattered around the camera (so
@@ -99,7 +99,7 @@ export async function cull(cases: CullCase[]) {
     const eye: V3 = [r() * 4, r() * 4, r() * 4];
     const cam = multiply(multiply(perspective(1.0, 1.5, 0.5, 70), lookAt(eye, [eye[0] + 1, eye[1] - 0.2, eye[2] + 0.5])), translation(eye));
     const light = multiply(multiply(perspective(0.6, 1, 1, 200), lookAt([eye[0], eye[1] + 80, eye[2]], [eye[0] + 5, eye[1], eye[2]], [0, 0, 1])), translation(eye));
-    const f: CullFrame = { viewProj: cam, lightViewProj: light, eye, alpha: c.alpha, noCull: c.noCull };
+    const f: CullFrame = { viewProj: cam, lightViewProj: light, eye, alpha: c.alpha, noCull: c.noCull, lodDepth: c.lodDepth };
     const enc = device.createCommandEncoder();
     const pass = enc.beginComputePass();
     culler.encode(pass, f);
@@ -110,7 +110,7 @@ export async function cull(cases: CullCase[]) {
     const L = new Uint32Array(lists), A = new Uint32Array(args);
     const counts = SEGMENTS.map((_, s) => A[4 * s + 1]!);
     const segLists = SEGMENTS.map((_, s) => Array.from(L.subarray(s * c.capacity, s * c.capacity + counts[s]!)));
-    const argsOk = SEGMENTS.every((_, s) => A[4 * s] === (s % 2 ? SPHERE_VERTS : BOX_VERTS) && A[4 * s + 2] === 0 && A[4 * s + 3] === 0);
+    const argsOk = SEGMENTS.every((_, s) => A[4 * s] === (s === SEG.sphere || s === SEG.sphereShadow ? SPHERE_VERTS : BOX_VERTS) && A[4 * s + 2] === 0 && A[4 * s + 3] === 0);
     let recordErr = 0;
     const view = new DataView(recs);
     for (const [slot, want] of ref.records) {
@@ -1660,8 +1660,8 @@ function goldenScene(device: GPUDevice): SnapshotSource {
   return src;
 }
 
-function goldenRenderer(device: GPUDevice, src: BodySource, look: LookParams, size: [number, number]): Renderer {
-  const rend = new Renderer(device, { size }, { format: 'rgba8unorm' });
+function goldenRenderer(device: GPUDevice, src: BodySource, look: LookParams, size: [number, number], opts: RendererOptions = {}): Renderer {
+  const rend = new Renderer(device, { size }, { format: 'rgba8unorm', ...opts });
   rend.look = look;
   rend.setSource(src);
   rend.setShadowBounds([0, 3, -1], 14, [9, 7, 9]);
@@ -1718,25 +1718,32 @@ export async function lookFrame(look: string | Partial<RealOptions>, eye: V3, ta
   return { width: size[0], height: size[1], data: stats.pixels!.data, bytesPerRow: stats.pixels!.bytesPerRow, meanLuma: stats.meanLuma, error: err?.message ?? null };
 }
 
+function fnv(data: ArrayLike<number>): number {
+  let h = 2166136261;
+  for (let i = 0; i < data.length; i++) h = Math.imul(h ^ data[i]!, 16777619) >>> 0;
+  return h;
+}
+
 /**
  * The real look end to end: frames of the golden scene from a view with the
  * horizon in it, for each look given. Per frame: mean luma, the mean sRGB of
  * the top rows (high sky) and of a band just above the horizon, and the lit
  * count of the point lights (lights.ts meta) after the frame.
  */
-export async function realChecks(looks: Array<string | Partial<RealOptions>>, size: [number, number] = [320, 180]) {
+export async function realChecks(looks: Array<string | (Partial<RealOptions> & Pick<RendererOptions, 'realDiag' | 'stoneLod'>)>, size: [number, number] = [320, 180], view: [V3, V3] = [[0, 2, 9], [0, 2.6, -1]]) {
   const { device } = await createDevice({ timestamps: false });
   device.pushErrorScope('validation');
   const src = goldenScene(device);
-  const eye: V3 = [0, 2, 9];
-  const viewProj = multiply(perspective(0.9, size[0] / size[1], 0.1, 400), lookAt(eye, [0, 2.6, -1]));
+  const [eye, target] = view;
+  const viewProj = multiply(perspective(0.9, size[0] / size[1], 0.1, 400), lookAt(eye, target));
   // Row of the horizon: a far point at eye height.
   const far = [eye[0], eye[1], eye[2] - 1e5, 1];
   const clip = [0, 1, 2, 3].map((i) => far.reduce((acc, v, j) => acc + viewProj[j * 4 + i]! * v, 0));
   const horizonRow = Math.round(((1 - clip[1]! / clip[3]!) / 2) * size[1]);
   const out = [];
   for (const look of looks) {
-    const rend = goldenRenderer(device, src, typeof look === 'string' ? LOOKS[look]! : realLook(look), size);
+    const { realDiag, stoneLod, ...real } = typeof look === 'string' ? {} : look;
+    const rend = goldenRenderer(device, src, typeof look === 'string' ? LOOKS[look]! : realLook(real), size, { realDiag, stoneLod });
     const f: FrameParams = { viewProj, eye, groundY: 0, time: 1, dt: 0, alpha: 1 };
     await rend.render(f);
     const stats = (await rend.render(f, true, true))!;
@@ -1747,7 +1754,16 @@ export async function realChecks(looks: Array<string | Partial<RealOptions>>, si
       return m;
     };
     const meta = new Float32Array(await readBuffer(device, rend.lights.lights)).slice(LIGHT_META * 4, LIGHT_META * 4 + 4);
-    out.push({ meanLuma: stats.meanLuma, top: band(0, 8), horizon: band(horizonRow - 8, horizonRow - 3), lit: meta[1]! });
+    // Fine detail below the horizon: mean |luma - mean of its 4 neighbours|.
+    const luma = (x: number, y: number) => { const o = y * bytesPerRow + 4 * x; return 0.2126 * data[o]! + 0.7152 * data[o + 1]! + 0.0722 * data[o + 2]!; };
+    let detail = 0, cnt = 0;
+    for (let y = Math.max(horizonRow + 2, 1); y < size[1] - 1; y++) for (let x = 1; x < size[0] - 1; x++) {
+      detail += Math.abs(luma(x, y) - (luma(x - 1, y) + luma(x + 1, y) + luma(x, y - 1) + luma(x, y + 1)) / 4);
+      cnt++;
+    }
+    await rend.render(f); // the capture ends with an ID pass, which culls without the level of detail
+    const args = new Uint32Array(await readBuffer(device, rend.cullBuffers!.args));
+    out.push({ meanLuma: stats.meanLuma, top: band(0, 8), horizon: band(horizonRow - 8, horizonRow - 3), lit: meta[1]!, detail: detail / cnt, hash: fnv(data), boxes: args[4 * SEG.box + 1]!, farBoxes: args[4 * SEG.boxFar + 1]! });
     rend.destroy();
   }
   const err = await device.popErrorScope();
@@ -2110,4 +2126,168 @@ export async function atmosphereTwins(sun: V3, eyeKm: number, visibility = CLEAR
   atmo.destroy();
   device.destroy();
   return { worst, skyWorstAt, finite, ambient: { sky: Array.from(amb.slice(0, 3)), ground: Array.from(amb.slice(4, 7)) }, exposure: amb[8]!, illuminance: amb[9]!, sunIlluminanceLuma: LUMA.reduce((s, w, c) => s + w * a.sunIlluminance[c]!, 0), error: err?.message ?? null };
+}
+
+/** One mip level of one layer of an rgba8unorm array texture, as bytes (rows packed). */
+async function readLayer(device: GPUDevice, tex: GPUTexture, layer: number, mip: number): Promise<{ n: number; data: Uint8Array }> {
+  const n = Math.max(1, tex.width >> mip), bytesPerRow = Math.ceil((n * 4) / 256) * 256;
+  const buf = device.createBuffer({ size: bytesPerRow * n, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST });
+  const enc = device.createCommandEncoder();
+  enc.copyTextureToBuffer({ texture: tex, mipLevel: mip, origin: [0, 0, layer] }, { buffer: buf, bytesPerRow }, [n, n, 1]);
+  device.queue.submit([enc.finish()]);
+  await buf.mapAsync(GPUMapMode.READ);
+  const raw = new Uint8Array(buf.getMappedRange().slice(0));
+  buf.destroy();
+  const data = new Uint8Array(n * n * 4);
+  for (let j = 0; j < n; j++) data.set(raw.subarray(j * bytesPerRow, j * bytesPerRow + n * 4), j * n * 4);
+  return { n, data };
+}
+
+/**
+ * The stone bake (materials.ts) against stoneSample, per layer: the worst
+ * difference of sampled level-0 texels (albedo, roughness, normal from
+ * central differences, cavity) from the CPU twin, in 8-bit steps, the mean
+ * albedo multiplier, how far the level-0 normals are from unit length, tiling (the jump across the wrap against the mean jump between
+ * neighbours inside), and the worst mip texel against the average of its
+ * four parents.
+ */
+export async function materialBake() {
+  const { device } = await createDevice({ timestamps: false });
+  device.pushErrorScope('validation');
+  const mats = new Materials(device);
+  const out = [];
+  for (let layer = 0; layer < STONES.length; layer++) {
+    const d0 = await readLayer(device, mats.detail, layer, 0), n0 = await readLayer(device, mats.normal, layer, 0);
+    const n = d0.n, at = (t: Uint8Array, i: number, j: number, c: number) => t[((j % n) * n + (i % n)) * 4 + c]!;
+    let twin = 0, unit = 0, mean = [0, 0, 0];
+    for (let j = 0; j < n; j += 37) for (let i = 0; i < n; i += 29) {
+      const s = stoneSample(layer, (i + 0.5) / n, (j + 0.5) / n);
+      const texel = MATERIAL_TILE / n, h = (di: number, dj: number) => stoneSample(layer, (((i + di + n) % n) + 0.5) / n, (((j + dj + n) % n) + 0.5) / n).height;
+      const nrm = heightNormal(h(-1, 0), h(1, 0), h(0, -1), h(0, 1), texel);
+      const want = [...s.albedo.map((x) => Math.min(Math.max(x * 0.5, 0), 1)), Math.min(Math.max(s.rough, 0), 1), ...nrm.map((x) => x * 0.5 + 0.5), Math.min(Math.max(s.cavity, 0), 1)];
+      const got = [0, 1, 2, 3].map((c) => at(d0.data, i, j, c)).concat([0, 1, 2, 3].map((c) => at(n0.data, i, j, c)));
+      for (let k = 0; k < 8; k++) twin = Math.max(twin, Math.abs(got[k]! - want[k]! * 255));
+    }
+    let jumpIn = 0, jumpWrap = 0, cnt = 0;
+    for (let j = 0; j < n; j++) for (let i = 0; i < n; i++) {
+      for (let c = 0; c < 3; c++) mean[c] = mean[c]! + (2 * at(d0.data, i, j, c)) / 255 / (n * n);
+      const v = [0, 1, 2].map((c) => at(n0.data, i, j, c) / 127.5 - 1);
+      unit = Math.max(unit, Math.abs(Math.hypot(...v) - 1));
+      if (i === n - 1) jumpWrap += Math.abs(at(d0.data, 0, j, 0) - at(d0.data, i, j, 0)) + Math.abs(at(n0.data, 0, j, 0) - at(n0.data, i, j, 0));
+      else if (i === n - 2) { jumpIn += Math.abs(at(d0.data, i + 1, j, 0) - at(d0.data, i, j, 0)) + Math.abs(at(n0.data, i + 1, j, 0) - at(n0.data, i, j, 0)); cnt++; }
+    }
+    let mip = 0;
+    for (const t of [mats.detail, mats.normal]) for (const m of [1, 4, 8]) {
+      const hi = await readLayer(device, t, layer, m - 1), lo = await readLayer(device, t, layer, m);
+      for (let j = 0; j < lo.n; j += Math.max(1, lo.n >> 4)) for (let i = 0; i < lo.n; i += Math.max(1, lo.n >> 4)) for (let c = 0; c < 4; c++) {
+        const avg = [[0, 0], [1, 0], [0, 1], [1, 1]].reduce((s, [a, b]) => s + hi.data[((2 * j + b!) * hi.n + 2 * i + a!) * 4 + c]!, 0) / 4;
+        mip = Math.max(mip, Math.abs(lo.data[(j * lo.n + i) * 4 + c]! - avg));
+      }
+    }
+    out.push({ stone: STONES[layer]!, twin, mean, unit, tile: { wrap: jumpWrap / n, inside: jumpIn / cnt }, mip });
+  }
+  const err = await device.popErrorScope();
+  mats.destroy();
+  device.destroy();
+  return { layers: out, error: err?.message ?? null };
+}
+
+/**
+ * The real look's floor in three lights (realism: the floor's ambient):
+ * a 4 m street between two 8 m walls, all in their shadow; the shadow of a
+ * free-standing wall 9 m from it, on open floor; and sunlit open floor.
+ * The sun is due +z (azimuth 180), so shadows fall toward -z. Returns the
+ * mean sRGB luma of a 5x5 pixel patch at each, seen from straight above,
+ * its red / blue ratio (<name>RB), and the baked floor sky view factor
+ * under it (<name>Sky).
+ */
+export async function floorChecks(looks: Array<Partial<RealOptions> & Pick<RendererOptions, 'realDiag'>>, size: [number, number] = [320, 180]) {
+  const { device } = await createDevice({ timestamps: false });
+  device.pushErrorScope('validation');
+  const descs: BodyDesc[] = [
+    box([-5, 4, -2.5], [5, 4, 0.5], [0, 0, 0, 1]), box([-5, 4, 2.5], [5, 4, 0.5], [0, 0, 0, 1]), // the street, z in (-2, 2)
+    box([15, 4, 0], [5, 4, 0.5], [0, 0, 0, 1]), // the free-standing wall
+  ];
+  const src = new SnapshotSource(device);
+  src.reset(descs);
+  src.update(snapshotOf(descs), descs);
+  const eye: V3 = [5, 45, 0.01], target: V3 = [5, 0, 0];
+  const viewProj = multiply(perspective(0.9, size[0] / size[1], 0.1, 400), lookAt(eye, target));
+  const probes: Record<string, V3> = { street: [-5, 0, 0], openShadow: [15, 0, -9], lit: [15, 0, 9] };
+  const out: Array<{ street: number; openShadow: number; lit: number; streetRB: number; openShadowRB: number; litRB: number; streetSky: number; openShadowSky: number; litSky: number }> = [];
+  for (const { realDiag, ...o } of looks) {
+    const rend = new Renderer(device, { size }, { format: 'rgba8unorm', realDiag });
+    rend.look = realLook({ sunElevation: 35, sunAzimuth: 180, ...o });
+    rend.setSource(src);
+    rend.setShadowBounds([5, 4, 0], 22, [16, 8, 14]);
+    const f: FrameParams = { viewProj, eye, groundY: 0, time: 1, dt: 0, alpha: 1 };
+    await rend.render(f);
+    const { data, bytesPerRow } = (await rend.render(f, true, true))!.pixels!;
+    const luma: Record<string, number> = {};
+    for (const [name, p] of Object.entries(probes)) {
+      const c = [0, 1, 2, 3].map((i) => [...p, 1].reduce((acc, v, j) => acc + viewProj[j * 4 + i]! * v, 0));
+      const px = Math.round(((c[0]! / c[3]! + 1) / 2) * size[0]), py = Math.round(((1 - c[1]! / c[3]!) / 2) * size[1]);
+      let m = 0, red = 0, blue = 0;
+      for (let y = py - 2; y <= py + 2; y++) for (let x = px - 2; x <= px + 2; x++) {
+        const k = y * bytesPerRow + 4 * x;
+        m += (0.2126 * data[k]! + 0.7152 * data[k + 1]! + 0.0722 * data[k + 2]!) / 25;
+        red += data[k]!; blue += data[k + 2]!;
+      }
+      luma[name] = m;
+      luma[`${name}RB`] = red / blue;
+    }
+    // The baked sky view factor (AoVolume.floorSky) under each probe, nearest texel.
+    const ao = (rend as unknown as { ao: AoVolume }).ao, tex = ao.floorSky;
+    const row = Math.ceil((tex.width * 4) / 256) * 256;
+    const rb = device.createBuffer({ size: row * tex.height, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST });
+    const enc = device.createCommandEncoder();
+    enc.copyTextureToBuffer({ texture: tex }, { buffer: rb, bytesPerRow: row }, [tex.width, tex.height]);
+    device.queue.submit([enc.finish()]);
+    await rb.mapAsync(GPUMapMode.READ);
+    const map = new Uint8Array(rb.getMappedRange());
+    const [ox, oz, iu, iv] = ao.floorSkyFrame(eye);
+    for (const [name, p] of Object.entries(probes)) {
+      const u = Math.floor((p[0] - eye[0] - ox) * iu * tex.width), v = Math.floor((p[2] - eye[2] - oz) * iv * tex.height);
+      luma[`${name}Sky`] = map[v * row + 4 * u]! / 255;
+    }
+    rb.destroy();
+    out.push(luma as (typeof out)[number]);
+    rend.destroy();
+  }
+  const err = await device.popErrorScope();
+  device.destroy();
+  return { frames: out, error: err?.message ?? null };
+}
+
+/**
+ * The material level of detail's seam: the golden scene drawn in the real
+ * look with and without the boxFar list (stoneLod), at one fade-out. Max
+ * and count of differing 8-bit channel values, and how many boxes each list drew.
+ */
+export async function stoneLodSeam(o: Partial<RealOptions>, size: [number, number] = [320, 180], view: [V3, V3] = [[0, 2, 9], [0, 2.6, -1]]) {
+  const { device } = await createDevice({ timestamps: false });
+  device.pushErrorScope('validation');
+  const src = goldenScene(device);
+  const [eye, target] = view;
+  const f: FrameParams = { viewProj: multiply(perspective(0.9, size[0] / size[1], 0.1, 400), lookAt(eye, target)), eye, groundY: 0, time: 1, dt: 0, alpha: 1 };
+  const frames = [];
+  for (const stoneLod of [true, false]) {
+    const rend = goldenRenderer(device, src, realLook(o), size, { stoneLod });
+    await rend.render(f);
+    const { data } = (await rend.render(f, true, true))!.pixels!;
+    await rend.render(f); // the capture ends with an ID pass, which culls without the level of detail
+    const args = new Uint32Array(await readBuffer(device, rend.cullBuffers!.args));
+    frames.push({ data: data.slice(), boxes: args[4 * SEG.box + 1]!, farBoxes: args[4 * SEG.boxFar + 1]! });
+    rend.destroy();
+  }
+  const [a, b] = frames as [typeof frames[0], typeof frames[0]];
+  let maxDiff = 0, differing = 0;
+  for (let k = 0; k < a.data.length; k++) {
+    const d = Math.abs(a.data[k]! - b.data[k]!);
+    if (d) differing++;
+    maxDiff = Math.max(maxDiff, d);
+  }
+  const err = await device.popErrorScope();
+  device.destroy();
+  return { maxDiff, differing, lod: { boxes: a.boxes, farBoxes: a.farBoxes }, noLod: { boxes: b.boxes, farBoxes: b.farBoxes }, error: err?.message ?? null };
 }

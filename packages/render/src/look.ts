@@ -3,6 +3,7 @@
 // CPU twins of the colour math (OKLab, AgX) that tests compare the GPU with.
 import type { V3 } from './math.ts';
 import { CLEAR_DAY, type AtmosphereParams } from './atmosphere.ts';
+import { type Stone, STONE_PALETTES, STONES } from './materials.ts';
 
 export interface LookParams {
   name: string;
@@ -51,6 +52,12 @@ export interface LookParams {
   atmosphere?: AtmosphereParams;
   /** With an atmosphere: how far exposure adapts to the light, 0 (fixed) to 1 (auto exposure); see adaptedExposure. */
   autoExposure?: number;
+  /**
+   * With an atmosphere: the blocks' stone (materials.ts), texture scale (1 = a tile per MATERIAL_TILE
+   * metres), edge wear and dirt (0 to 1), texture strength, and fade: the pixel footprint (metres)
+   * where the texture has faded out (from half that), past which blocks drop the stone code.
+   */
+  stone?: { kind: Stone; scale: number; wear: number; dirt: number; detail: number; fade: number };
   /** false: none of the stylized effects (sparks, ball trail, heat glow, ball and impact lights). Default true. */
   effects?: boolean;
 }
@@ -126,9 +133,17 @@ export interface RealOptions {
   /** Exposure at the default sun; autoExposure (0 to 1) is how far it follows the light as the sun moves or haze thickens. */
   exposure: number;
   autoExposure: number;
+  /** The blocks' stone, its texture strength (0: flat colour, nothing sampled) and scale (2 = features twice as large), edge wear and dirt at the base (0 to 1). */
+  stone: Stone;
+  stoneDetail: number;
+  stoneScale: number;
+  /** Pixel footprint (cm) where the stone texture has faded out, from half that; past it blocks use the cheaper shader. */
+  stoneFade: number;
+  wear: number;
+  dirt: number;
 }
 
-export const REAL_DEFAULTS: RealOptions = { sunElevation: 35, sunAzimuth: 140, visibility: 40, sunStrength: 1, groundAlbedo: [0.2, 0.19, 0.17], exposure: 1.1, autoExposure: 0.75 };
+export const REAL_DEFAULTS: RealOptions = { sunElevation: 35, sunAzimuth: 140, visibility: 40, sunStrength: 1, groundAlbedo: [0.2, 0.19, 0.17], exposure: 1.1, autoExposure: 0.75, stone: 'limestone', stoneDetail: 1, stoneScale: 1, stoneFade: 8, wear: 0.5, dirt: 0.4 };
 
 /** Direction toward the sun from elevation and azimuth in degrees. */
 export function sunFrom(elevation: number, azimuth: number): V3 {
@@ -156,7 +171,8 @@ export function realLook(o: Partial<RealOptions> = {}): LookParams {
     roughness: 0.8,
     clearcoat: 0,
     bevel: 0.012,
-    ramp: [hex('#9E9A92'), hex('#ABA397'), hex('#B6AC9C'), hex('#A7A097'), hex('#BDB6AA')],
+    ramp: STONE_PALETTES[r.stone].map(hex) as LookParams['ramp'],
+    stone: { kind: r.stone, scale: r.stoneScale, wear: r.wear, dirt: r.dirt, detail: r.stoneDetail, fade: r.stoneFade / 100 },
     hueStep: 4,
     ball: hex('#8A8D90'),
     ballEmissive: 0,
@@ -177,12 +193,17 @@ export const REAL_KNOBS = {
   sunStrength: { label: 'sun strength x', min: 0.05, max: 10, step: 0.05 },
   exposure: { label: 'exposure', min: 0.05, max: 20, step: 0.05 },
   autoExposure: { label: 'auto exposure 0-1', min: 0, max: 1, step: 0.05 },
+  stoneDetail: { label: 'stone texture 0-1', min: 0, max: 1, step: 0.05 },
+  stoneScale: { label: 'stone texture scale', min: 0.1, max: 10, step: 0.1 },
+  stoneFade: { label: 'stone fade-out (cm/px)', min: 0.5, max: 1000, step: 0.5 },
+  wear: { label: 'edge wear 0-1', min: 0, max: 1, step: 0.05 },
+  dirt: { label: 'dirt 0-1', min: 0, max: 1, step: 0.05 },
 } as const;
 export type RealKnob = keyof typeof REAL_KNOBS;
 
 /**
- * The real look's options from URL keys real.<knob> and real.ground (linear
- * albedo r,g,b, each 0 to 1); absent keys are left out, so realLook fills
+ * The real look's options from URL keys real.<knob>, real.stone (a STONES
+ * name) and real.ground (linear albedo r,g,b, each 0 to 1); absent keys are left out, so realLook fills
  * them from REAL_DEFAULTS. Rejects values that are not numbers or are out of range.
  */
 export function parseRealOptions(q: URLSearchParams): Partial<RealOptions> {
@@ -193,6 +214,11 @@ export function parseRealOptions(q: URLSearchParams): Partial<RealOptions> {
     const v = Number(raw);
     if (!Number.isFinite(v) || v < k.min || v > k.max) throw new Error(`real.${key} must be a number from ${k.min} to ${k.max}: ${raw}`);
     o[key] = v;
+  }
+  const stone = q.get('real.stone');
+  if (stone !== null && stone !== '') {
+    if (!(STONES as readonly string[]).includes(stone)) throw new Error(`real.stone must be one of ${STONES.join(', ')}: ${stone}`);
+    o.stone = stone as Stone;
   }
   const ground = q.get('real.ground');
   if (ground !== null && ground !== '') {
@@ -206,6 +232,7 @@ export function parseRealOptions(q: URLSearchParams): Partial<RealOptions> {
 /** Writes the options that are set as URL keys (parseRealOptions reads them back). */
 export function writeRealOptions(o: Partial<RealOptions>, q: URLSearchParams): void {
   for (const key of Object.keys(REAL_KNOBS) as RealKnob[]) if (o[key] !== undefined) q.set(`real.${key}`, String(o[key]));
+  if (o.stone) q.set('real.stone', o.stone);
   if (o.groundAlbedo) q.set('real.ground', o.groundAlbedo.join(','));
 }
 

@@ -2,7 +2,7 @@
 // same classification, same list order. Plane tests use float64, so bodies
 // within EPS of a plane are reported as ambiguous instead of guessed.
 import { Body, Shape, TIER } from '@tb/schema';
-import { frustumPlanes, MAX_STEP_JUMP, SEGMENTS, type CullFrame } from './cull.ts';
+import { frustumPlanes, MAX_STEP_JUMP, NO_LOD, SEG, SEGMENTS, type CullFrame } from './cull.ts';
 import { FX_WORDS, unpackFx } from './fx.ts';
 
 const EPS = 1e-3;
@@ -76,10 +76,16 @@ export function cullReference(w: CpuWorld, f: CullFrame): CullRef {
     const seg = Math.min(kind, 1);
     const r = kind === 1 ? half[0]! : Math.hypot(...half);
     const tests: Test[] = !(fx.scale > 0) ? ['out', 'out'] : f.noCull ? ['in', 'in'] : [classify(cam, rel, r), classify(light, rel, r)];
+    // A visible box is far when all of it lies lodDepth or more past the near plane (camera plane 4).
+    const x = cam[16]! * rel[0]! + cam[17]! * rel[1]! + cam[18]! * rel[2]! + cam[19]! - r - (f.lodDepth ?? NO_LOD);
+    const far: Test = x > EPS ? 'in' : x < -EPS ? 'out' : 'maybe';
     tests.forEach((t, j) => {
       const s = seg + 2 * j;
-      if (t === 'in') must[s]!.push(i);
-      if (t !== 'out') may[s]!.push(i);
+      const lists = s === SEG.box ? [[SEG.box, far === 'out', far !== 'in'], [SEG.boxFar, far === 'in', far !== 'out']] as const : [[s, true, true]] as const;
+      for (const [l, sure, maybe] of lists) {
+        if (t === 'in' && sure) must[l]!.push(i);
+        if (t !== 'out' && maybe) may[l]!.push(i);
+      }
     });
   }
   return { records, must, may };
