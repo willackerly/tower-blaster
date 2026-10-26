@@ -6,7 +6,7 @@ import { drift, jitter, nonFinite, penetration, survival } from '@tb/metrics';
 import { AvbdReferenceEngine } from '@tb/physics-ref';
 import { buildScenario } from '@tb/scenarios';
 import { aboveHole, appliedMu, loadBundle, openWebGPU, readColumn, rodRock, rodToppleTime, slideMu, slideScene, THROW, throwScene, tippingAngle, type WebGPUSession } from '@tb/testkit';
-import { GpuAvbdEngine } from '../src/index.ts';
+import { GpuAvbdEngine, type GpuEngineOptions } from '../src/index.ts';
 import type * as Drivers from './page.ts';
 
 let gpu: WebGPUSession | null = null;
@@ -345,6 +345,97 @@ describe('GPU AVBD engine: stacks, towers and impacts', () => {
     const a = await runGpu(scene, 90), b = await runGpu(scene, 90);
     expect([...a.s1.pos]).toEqual([...b.s1.pos]);
     expect([...a.s1.rot]).toEqual([...b.s1.rot]);
+  });
+});
+
+describe('GPU AVBD engine: primal dispatch (direct colours and the one-workgroup tail)', () => {
+  // Colours below colorTail get a dispatch each; the rest are solved in order
+  // by one workgroup. A colour's bodies share no contact, so who solves which
+  // body must not change a bit of the result.
+  const state = (r: { s1: Snapshot }) => [r.s1.pos, r.s1.rot, r.s1.linVel, r.s1.angVel].map((a) => [...a]);
+  // Few iterations and steps: on SwiftShader the cost is dispatches, and
+  // bit-identity holds at any iteration count.
+  const params = { iterations: 4 };
+  const run = (scene: SceneDesc, steps: number, opts: Omit<GpuEngineOptions, 'device'>, every = 0) =>
+    call('simulateGpu', scene, steps, params, every, opts);
+  // A ball into two 2x2x8 towers: contacts from the first step, and colours
+  // that change as they fall.
+  const knock = () => buildScenario('S5', { N: 64, F: 2, H: 8, street: 2, fireStep: 0, radius: 0.6, speed: 15 }, 1);
+
+  it('every split between direct colours and the tail gives the same state, bit for bit', { timeout: 120_000 }, async (ctx) => {
+    if (!gpu) return ctx.skip();
+    const scene = knock();
+    const base = await runGpu(scene, 16, params, 4);
+    expect(base.maxColors).toBeGreaterThan(2); // so colorTail = 2 puts colours with bodies in the tail
+    // Then every colour in the tail, at its largest size, and the serial
+    // sweep: every colour in the tail, one thread.
+    for (const opts of [{ indirectColors: true }, { colorTail: 0 }, { colorTail: 2 }, { colorTail: 63 }, { colorTail: 0, tailThreads: 256 }, { colorTail: 0, tailThreads: 1 }]) {
+      const r = await run(scene, 16, opts);
+      expect(r.error).toBeNull();
+      expect(state({ ...base, s1: toSnap(r.snaps.at(-1)!) }), JSON.stringify(opts)).toEqual(state(base));
+    }
+  });
+
+  it('the tail solves a colour larger than its workgroup, every body of it', { timeout: 120_000 }, async (ctx) => {
+    if (!gpu) return ctx.skip();
+    // 600 cubes, barely touching yet, in so few colours that every step has
+    // one of more than 256 bodies (at least 600 / colours), which the tail
+    // (64 threads by default, 256 at most) takes in strides. Colours are read
+    // after every step.
+    const scene = buildScenario('S11', { N: 600 }, 3);
+    const a = await runGpu(scene, 10, params, 1);
+    expect(600 / a.maxColors).toBeGreaterThan(256);
+    for (const opts of [{ colorTail: 0 }, { colorTail: 0, tailThreads: 1 }]) {
+      const b = await run(scene, 10, opts);
+      expect(b.error).toBeNull();
+      expect(state({ ...a, s1: toSnap(b.snaps.at(-1)!) }), JSON.stringify(opts)).toEqual(state(a));
+    }
+  });
+
+  it('uncoloured bodies, which may touch, are solved one after another, the same on every split', { timeout: 120_000 }, async (ctx) => {
+    if (!gpu) return ctx.skip();
+    // Two colouring rounds leave most bodies uncoloured (51 of 65 here); they
+    // all go to the last colour, which one thread of the tail solves in order.
+    // The serial sweep is the oracle: solving that colour with the whole
+    // workgroup races where its bodies touch, and no longer matches it.
+    const scene = knock();
+    const s = [];
+    for (const opts of [{ colorTail: 0, tailThreads: 1 }, {}, { colorTail: 0 }, { indirectColors: true }]) {
+      const r = await run(scene, 16, { ...opts, colorRounds: 2 }, 4);
+      expect(r.error).toBeNull();
+      expect(r.worst.uncolored, JSON.stringify(opts)).toBeGreaterThan(0);
+      s.push(toSnap(r.snaps.at(-1)!));
+    }
+    for (const other of s.slice(1)) expect(state({ s1: other })).toEqual(state({ s1: s[0]! }));
+    expect(nonFinite(s[0]!)).toBe(0);
+    // Every split skipping that colour would agree too, so check that it is
+    // solved at all: against the fully coloured sweep, the other colour order
+    // moves the towers by 0.7 mm; leaving the colour out, by about 0.35 m.
+    const full = await run(scene, 16, {});
+    expect(full.error).toBeNull();
+    const f = full.snaps.at(-1)!.pos;
+    expect(Math.max(...s[0]!.pos.map((v, i) => Math.abs(v - f[i]!)))).toBeLessThan(5e-3);
+  });
+
+  it('dispatches each colour below colorTail directly, and the rest in one dispatch', { timeout: 120_000 }, async (ctx) => {
+    if (!gpu) return ctx.skip();
+    const scene = buildScenario('S11', { N: 200 }, 7);
+    for (const iterations of [3, 6]) {
+      const def = await call('dispatchCounts', scene, { iterations }, {});
+      const old = await call('dispatchCounts', scene, { iterations }, { indirectColors: true });
+      const tail0 = await call('dispatchCounts', scene, { iterations }, { colorTail: 0 });
+      const tail3 = await call('dispatchCounts', scene, { iterations }, { colorTail: 3 });
+      expect([def.error, old.error, tail0.error, tail3.error]).toEqual([null, null, null, null]);
+      const sweeps = iterations + 1;
+      // Indirect, outside the primal: match, narrowphase pairs, degree, fill, pair setup, and the dual per iteration.
+      for (const r of [def, tail0, tail3]) expect(r.indirect).toBe(iterations + 5);
+      expect(old.indirect).toBe(iterations + 5 + 63 * sweeps);
+      // Per sweep: colorTail direct colours + the tail; indirectColors and colorTail 0 have the tail alone.
+      expect(old.direct).toBe(tail0.direct);
+      expect(tail3.direct - tail0.direct).toBe(3 * sweeps);
+      expect(def.direct - tail0.direct).toBe(8 * sweeps);
+      expect(def.direct + def.indirect).toBe(old.direct + old.indirect - 55 * sweeps);
+    }
   });
 });
 

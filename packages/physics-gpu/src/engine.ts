@@ -10,7 +10,7 @@ import { Body, BodyProps, readField, Shape, SolverBody, writeStruct } from '@tb/
 import { Broadphase } from './broadphase.ts';
 import { Coloring } from './coloring.ts';
 import { Narrowphase } from './narrowphase.ts';
-import { AvbdSolver } from './solver.ts';
+import { AvbdSolver, DEFAULT_DISPATCH } from './solver.ts';
 
 export interface GpuEngineOptions {
   /** Use this device instead of creating one (it is then not destroyed by dispose()). */
@@ -29,6 +29,18 @@ export interface GpuEngineOptions {
   maxRadius?: number;
   /** Without capacity: room for this many pushed bodies beyond the scene's bodies and inputs (default 0). */
   spare?: number;
+  /**
+   * How the primal sweep is dispatched (SolverDispatch in solver.ts): colours
+   * below colorTail (default 8) get a dispatch each, the rest one workgroup of
+   * tailThreads threads (1-256, default 64). indirectColors restores
+   * the earlier indirect dispatch of colours 0-62, to time against; colour 63
+   * always goes to the tail. None of them changes the result.
+   */
+  colorTail?: number;
+  indirectColors?: boolean;
+  tailThreads?: number;
+  /** Jones-Plassmann rounds (even, default 64). Fewer leave bodies uncoloured; for tests of that path. */
+  colorRounds?: number;
 }
 
 export interface GpuDiagnostics {
@@ -59,7 +71,7 @@ export class GpuAvbdEngine implements PhysicsEngine {
   constructor(params: Partial<AvbdParams> = {}, private readonly opts: GpuEngineOptions = {}) {
     this.params = { ...DEFAULT_AVBD, ...params };
     if (!this.params.postStabilize) throw new Error('GpuAvbdEngine: only postStabilize = true is implemented');
-    const check = (k: 'capacity' | 'spare' | 'pairsPerBody' | 'maxRadius', ok: (v: number) => boolean, what: string) => {
+    const check = (k: 'capacity' | 'spare' | 'pairsPerBody' | 'maxRadius' | 'colorTail' | 'tailThreads' | 'colorRounds', ok: (v: number) => boolean, what: string) => {
       const v = opts[k];
       if (v !== undefined && !(typeof v === 'number' && ok(v))) throw new Error(`GpuAvbdEngine: GpuEngineOptions.${k} must be ${what}, got ${v}`);
     };
@@ -67,10 +79,14 @@ export class GpuAvbdEngine implements PhysicsEngine {
     check('spare', (v) => Number.isInteger(v) && v >= 0, 'a non-negative integer');
     check('pairsPerBody', (v) => Number.isInteger(v) && v >= 1, 'a positive integer');
     check('maxRadius', (v) => Number.isFinite(v) && v >= 0, 'a finite number >= 0');
+    check('colorTail', (v) => Number.isInteger(v) && v >= 0 && v <= 63, 'an integer from 0 to 63');
+    check('tailThreads', (v) => Number.isInteger(v) && v >= 1 && v <= 256, 'an integer from 1 to 256');
+    check('colorRounds', (v) => Number.isInteger(v) && v >= 2 && v % 2 === 0, 'an even integer >= 2');
+    if (opts.indirectColors !== undefined && typeof opts.indirectColors !== 'boolean') throw new Error(`GpuAvbdEngine: GpuEngineOptions.indirectColors must be a boolean, got ${opts.indirectColors}`);
     const variant: Record<string, number | boolean> = {};
     for (const [k, v] of Object.entries(this.params)) variant[k] = v;
-    // Options that size the buffers change the work per step (e.g. the broadphase's key bits), so they are part of the variant.
-    for (const k of ['capacity', 'spare', 'pairsPerBody', 'maxRadius'] as const) if (opts[k] !== undefined) variant[k] = opts[k];
+    // Options that size the buffers or shape the dispatch change the work per step (e.g. the broadphase's key bits), so they are part of the variant.
+    for (const k of ['capacity', 'spare', 'pairsPerBody', 'maxRadius', 'colorTail', 'indirectColors', 'tailThreads', 'colorRounds'] as const) if (opts[k] !== undefined) variant[k] = opts[k];
     this.info = { name: 'avbd-gpu', variant, backend: 'webgpu', integrator: { substeps: 1 } };
   }
 
@@ -109,12 +125,13 @@ export class GpuAvbdEngine implements PhysicsEngine {
     const prev = buf(maxPairs * 8, 'pair history lookup');
     const bp = new Broadphase(device, spheres, this.capacity, maxPairs);
     const np = new Narrowphase(device, bodies, shapes, bp.pairs, bp.total, this.capacity, maxPairs, sweep, prev);
-    const col = new Coloring(device, np.manifolds, bp.total, this.capacity, maxPairs);
+    const col = new Coloring(device, np.manifolds, bp.total, this.capacity, maxPairs, this.opts.colorRounds);
     const solver = new AvbdSolver(device, this.capacity, maxPairs, {
       bodies, props, spheres, sweep, prev, manifolds: np.manifolds, groundManifolds: np.groundManifolds,
       pairs: bp.pairs, total: bp.total, offsets: bp.offsets,
       order: col.order, colorStart: col.colorStart, dispatch: col.dispatch, rowStart: col.rowStart, rowLength: col.rowLength, adjSlot: col.adjSlot,
-    });
+    }, { colorTail: this.opts.colorTail ?? DEFAULT_DISPATCH.colorTail, indirectColors: this.opts.indirectColors ?? DEFAULT_DISPATCH.indirectColors,
+      tailThreads: this.opts.tailThreads ?? DEFAULT_DISPATCH.tailThreads });
     this.parts = { bodies, shapes, props, spheres, sweep, prev, bp, np, col, solver, readback: new Readback(device) };
     this.n = 0;
     for (const b of scene.bodies) this.add(b);

@@ -5,7 +5,7 @@ import { Body, field, Manifold, readStruct, Shape, SolverContact, writeStruct } 
 import type { BodyDesc, InputEvent, Quat, Vec3 } from '@tb/engine-api';
 import { buildScenario } from '@tb/scenarios';
 import { bodiesAt } from '@tb/engine-api';
-import { Broadphase, Coloring, GpuAvbdEngine, MAX_COLORS, Narrowphase } from '../src/index.ts';
+import { Broadphase, Coloring, GpuAvbdEngine, type GpuEngineOptions, MAX_COLORS, Narrowphase } from '../src/index.ts';
 import type { AvbdParams } from '@tb/physics-ref';
 import type { SceneDesc } from '@tb/engine-api';
 import { colorGraph } from '@tb/physics-ref';
@@ -377,10 +377,10 @@ export async function coloring(c: ColorCase) {
 export interface PlainSnapshot { step: number; pos: number[]; rot: number[]; linVel: number[]; angVel: number[] }
 
 /** Run a scene on the GPU engine; snapshot every `every` steps (and at the end). */
-export async function simulateGpu(scene: SceneDesc, steps: number, params: Partial<AvbdParams> = {}, every = 0) {
+export async function simulateGpu(scene: SceneDesc, steps: number, params: Partial<AvbdParams> = {}, every = 0, opts: Omit<GpuEngineOptions, 'device'> = {}) {
   const { device } = await createDevice();
   device.pushErrorScope('validation');
-  const e = new GpuAvbdEngine(params, { device });
+  const e = new GpuAvbdEngine(params, { ...opts, device });
   await e.init(scene);
   const snaps: PlainSnapshot[] = [];
   const take = async () => {
@@ -743,4 +743,28 @@ export async function snapshotSpawn(scene: SceneDesc, at: number[]) {
   e.dispose();
   device.destroy();
   return res;
+}
+
+/**
+ * Dispatch calls in one step, after `warm` steps: counted by wrapping the
+ * compute pass encoder's dispatch methods while step() encodes.
+ */
+export async function dispatchCounts(scene: SceneDesc, params: Partial<AvbdParams>, opts: Omit<GpuEngineOptions, 'device'>, warm = 3) {
+  const { device } = await createDevice();
+  device.pushErrorScope('validation');
+  const e = new GpuAvbdEngine(params, { ...opts, device });
+  await e.init(scene);
+  for (let i = 0; i < warm; i++) e.step();
+  const proto = GPUComputePassEncoder.prototype;
+  const original = { direct: proto.dispatchWorkgroups, indirect: proto.dispatchWorkgroupsIndirect };
+  const counts = { direct: 0, indirect: 0 };
+  proto.dispatchWorkgroups = function (this: GPUComputePassEncoder, ...a: Parameters<GPUComputePassEncoder['dispatchWorkgroups']>) { counts.direct++; return original.direct.apply(this, a); };
+  proto.dispatchWorkgroupsIndirect = function (this: GPUComputePassEncoder, ...a: Parameters<GPUComputePassEncoder['dispatchWorkgroupsIndirect']>) { counts.indirect++; return original.indirect.apply(this, a); };
+  try { e.step(); } finally { proto.dispatchWorkgroups = original.direct; proto.dispatchWorkgroupsIndirect = original.indirect; }
+  await e.finish();
+  const d = await e.diagnostics();
+  const error = await device.popErrorScope();
+  e.dispose();
+  device.destroy();
+  return { error: error?.message ?? null, ...counts, colors: d.colors };
 }

@@ -187,7 +187,13 @@ describe('engine registry and SlowedEngine', () => {
     expect(() => makeEngine('avbd-gpu:spare=')).toThrow(/bad engine option/);
     // The other buffer-sizing options reach the engine too (it checks them, as it would not check a solver parameter).
     expect(makeEngine('avbd-gpu:capacity=100,pairsPerBody=4,maxRadius=2.5').info.variant).toMatchObject({ capacity: 100, pairsPerBody: 4, maxRadius: 2.5 });
-    for (const [k, bad, what] of [['capacity', '0', 'a positive integer'], ['pairsPerBody', '1.5', 'a positive integer'], ['maxRadius', '-1', 'a finite number >= 0']] as const) {
+    // So do the options that shape the primal dispatch and the colouring.
+    expect(makeEngine('avbd-gpu:colorTail=3,indirectColors=true,tailThreads=1,colorRounds=8').info.variant).toMatchObject({ colorTail: 3, indirectColors: true, tailThreads: 1, colorRounds: 8 });
+    for (const [k, bad, what] of [
+      ['capacity', '0', 'a positive integer'], ['pairsPerBody', '1.5', 'a positive integer'], ['maxRadius', '-1', 'a finite number >= 0'],
+      ['colorTail', '64', 'an integer from 0 to 63'], ['colorRounds', '3', 'an even integer >= 2'], ['indirectColors', '1', 'a boolean'],
+      ['tailThreads', '0', 'an integer from 1 to 256'], ['tailThreads', '257', 'an integer from 1 to 256'],
+    ] as const) {
       expect(() => makeEngine(`avbd-gpu:${k}=${bad}`)).toThrow(`GpuEngineOptions.${k} must be ${what}`);
     }
   });
