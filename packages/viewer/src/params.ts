@@ -1,7 +1,8 @@
 // Viewer configuration from the URL, e.g.
-// ?scenario=S4&param.N=3000&engine=rapier&sleep=1 (engine: a @tb/bench spec; the default is the GPU engine)
+// ?scenario=S4&param.N=3000&engine=rapier&sleep=1&maxSteps=2 (engine: a @tb/bench spec; the default is the GPU engine)
 import { parseSpec } from '@tb/bench';
 import { SCENARIOS } from '@tb/scenarios';
+import { MAX_STEPS_LIMIT } from './loop.ts';
 
 export interface ViewerConfig {
   engine: string;
@@ -15,9 +16,11 @@ export interface ViewerConfig {
   offscreen: boolean;
   /** Look preset: candy (default) or hazy. */
   look: string;
+  /** Most physics steps per frame, 1 to MAX_STEPS_LIMIT (see stepsDue); 1 = no catch-up. */
+  maxSteps: number;
 }
 
-export const DEFAULT_CONFIG: ViewerConfig = { engine: 'avbd-gpu', scenario: 'S4', params: { N: 2000, F: 4, H: 12 }, seed: 1, sleep: null, autofire: 0, offscreen: false, look: 'candy' };
+export const DEFAULT_CONFIG: ViewerConfig = { engine: 'avbd-gpu', scenario: 'S4', params: { N: 2000, F: 4, H: 12 }, seed: 1, sleep: null, autofire: 0, offscreen: false, look: 'candy', maxSteps: 1 };
 
 export function parseViewerConfig(search: string): ViewerConfig {
   const q = new URLSearchParams(search);
@@ -31,6 +34,8 @@ export function parseViewerConfig(search: string): ViewerConfig {
   }
   const hasParams = [...q.keys()].some((k) => k.startsWith('param.'));
   const sleep = q.get('sleep');
+  const maxSteps = Number(q.get('maxSteps') ?? DEFAULT_CONFIG.maxSteps);
+  if (!Number.isInteger(maxSteps) || maxSteps < 1 || maxSteps > MAX_STEPS_LIMIT) throw new Error(`maxSteps must be an integer from 1 to ${MAX_STEPS_LIMIT}: ${q.get('maxSteps')}`);
   return {
     engine: q.get('engine') ?? DEFAULT_CONFIG.engine,
     scenario,
@@ -40,6 +45,7 @@ export function parseViewerConfig(search: string): ViewerConfig {
     autofire: Number(q.get('autofire') ?? 0),
     offscreen: q.get('offscreen') === '1',
     look: q.get('look') ?? DEFAULT_CONFIG.look,
+    maxSteps,
   };
 }
 
@@ -51,6 +57,7 @@ export function toSearch(c: ViewerConfig): string {
   if (c.autofire) q.set('autofire', String(c.autofire));
   if (c.offscreen) q.set('offscreen', '1');
   if (c.look !== DEFAULT_CONFIG.look) q.set('look', c.look);
+  if (c.maxSteps !== DEFAULT_CONFIG.maxSteps) q.set('maxSteps', String(c.maxSteps));
   return `?${q}`;
 }
 
