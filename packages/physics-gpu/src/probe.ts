@@ -26,7 +26,7 @@ import { buildScenario } from '@tb/scenarios';
 import { SolverContact } from '@tb/schema';
 import { MAX_COLORS } from './coloring.ts';
 import { GpuAvbdEngine } from './engine.ts';
-import type { HessianForm } from './solver.ts';
+import { DEFAULT_DISPATCH, type HessianForm } from './solver.ts';
 import {
   barrierWgsl, BODY_PARAMS, exchangeRef, GRID_BARRIER_WGSL, KERNEL_PARAMS_BYTES, kernelParams, P3_EMPTY_WGSL, P3_VARIANT_INFO, P3_VARIANTS, p3Records,
   p3Reference, p3Wgsl, type P3Variant, type PoseOrder, posesFor, PROBE_TILE, probePoses, tileRecords, tileRef, tileWgsl,
@@ -79,7 +79,7 @@ export const DEFAULT_PROBE: ProbeOptions = {
   checkpoints: [60, 300],
   R: 50,
   solveSteps: 10,
-  hessian: 'array',
+  hessian: DEFAULT_DISPATCH.hessian,
   p3Variants: [...P3_VARIANTS],
   p3Sizes: [32, 64, 96, 128],
   p3Points: [8, 16, 32, 56, 64],

@@ -3,8 +3,8 @@
 // per-colour structure and times on the S4 city (P2), synthetic per-point
 // kernels (P3) and synchronization costs (P4: a = workgroupBarrier,
 // b = dispatch chain, c = grid barrier, d = workgroup tile; p4 = all four).
-// --hessian sets the primal's form for P2 (default array, the engine's
-// default; registers is plan step 2b's form, to time against it).
+// --hessian sets the primal's form for P2 (default registers, the engine's
+// default since plan step 2b; array is the earlier form, to time against it).
 // Writes results/probe-<time>.{json,md}. Use real Chrome on the target
 // machine for numbers worth keeping; software adapters are flagged as invalid.
 import { mkdirSync, writeFileSync } from 'node:fs';

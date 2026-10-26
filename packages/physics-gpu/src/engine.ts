@@ -42,8 +42,8 @@ export interface GpuEngineOptions {
   tailThreads?: number;
   /**
    * How the primal holds and solves each body's 6x6 system (SolverDispatch.hessian):
-   * 'array' (default), the earlier private arrays and loops; 'registers', named
-   * scalars, unrolled (plan step 2b). The same operations in the same order.
+   * 'registers' (default), named scalars, unrolled (plan step 2b); 'array', the
+   * earlier private arrays and loops. The same operations in the same order.
    */
   hessian?: HessianForm;
   /** Jones-Plassmann rounds (even, default 64). Fewer leave bodies uncoloured; for tests of that path. */

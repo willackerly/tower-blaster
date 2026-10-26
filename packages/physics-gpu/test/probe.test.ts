@@ -6,7 +6,8 @@ import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { buildScenario } from '@tb/scenarios';
 import { isSoftwareAdapter, loadBundle, openWebGPU, type WebGPUSession } from '@tb/testkit';
-import { probeMarkdown, type ProbeOptions } from '../src/probe.ts';
+import { DEFAULT_PROBE, probeMarkdown, type ProbeOptions } from '../src/probe.ts';
+import { DEFAULT_DISPATCH } from '../src/solver.ts';
 import type * as Drivers from './probe-page.ts';
 
 let gpu: WebGPUSession | null = null;
@@ -31,6 +32,13 @@ const TINY: Partial<ProbeOptions> = {
   gridGroups: [1, 2, 4], gridRounds: 10, maxPolls: 20_000,
   tileGroups: [2], tileThreads: [64], tileK: [4], tileIters: [1, 2], tilePoints: 4,
 };
+
+describe('solver probe defaults', () => {
+  it('P2 times the engine\'s default hessian form (registers since plan step 2b) unless --hessian says otherwise', () => {
+    expect(DEFAULT_DISPATCH.hessian).toBe('registers');
+    expect(DEFAULT_PROBE.hessian).toBe(DEFAULT_DISPATCH.hessian);
+  });
+});
 
 describe('solver probe hooks', () => {
   it('probeStep() and encodeProbe() leave the trajectory bit-identical to step(), and encodeProbe issues the sweep\'s dispatches', { timeout: 300_000 }, async (ctx) => {

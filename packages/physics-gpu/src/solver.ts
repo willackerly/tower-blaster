@@ -761,19 +761,20 @@ export interface SolverDispatch {
    */
   tailThreads: number;
   /**
-   * How each body's 6x6 system is held and solved (solveWgsl). 'array'
-   * (default): the earlier private arrays and loops, also the tests' oracle.
-   * 'registers': named scalars, unrolled (plan step 2b). It becomes the
-   * default once an M5 run shows it builds at 256 tail threads and is faster. Both do the same
+   * How each body's 6x6 system is held and solved (solveWgsl). 'registers'
+   * (default): named scalars, unrolled (plan step 2b); on the M5 Max it
+   * builds at 256 tail threads and halves the step (about 2x in every bench
+   * suite case). 'array': the earlier private arrays and loops, which spill,
+   * kept as the tests' oracle and for A/B runs. Both do the same
    * floating-point operations in the same order; on SwiftShader the results
    * are bit-identical. A compiler that contracts or reassociates them
-   * differently could round differently, so on other GPUs they may differ
-   * in the last bits.
+   * differently could round differently (Metal compiles with relaxed math),
+   * so on other GPUs they may differ in the last bits.
    */
   hessian: HessianForm;
 }
 
-export const DEFAULT_DISPATCH: SolverDispatch = { colorTail: 8, indirectColors: false, tailThreads: MAX_TAIL, hessian: 'array' };
+export const DEFAULT_DISPATCH: SolverDispatch = { colorTail: 8, indirectColors: false, tailThreads: MAX_TAIL, hessian: 'registers' };
 
 /** The default tail width on a software adapter (SwiftShader in tests and CI); see SolverDispatch.tailThreads. */
 export const SOFTWARE_TAIL_THREADS = 64;
