@@ -58,7 +58,11 @@ jobs:
       # system libvulkan removed), and the runner image already has Chromium's
       # libraries, so a slow apt mirror can't stall the run.
       - run: pnpm exec playwright install chromium
-      - run: pnpm test --shard=${{ matrix.shard }}/4
+      - run: pnpm test --shard=${{ matrix.shard }}/4 --reporter=default --reporter=json --outputFile.json=.vitest-report.json
+      # This runner's per-file times, one line, for refreshing vitest.durations.json.
+      - name: Shard file times
+        if: ${{ !cancelled() }}
+        run: pnpm exec tsx packages/testkit/src/durations-cli.ts --print .vitest-report.json
 
   # The one status to require: green only when every job above is. Skipped, not
   # failed, when a newer push cancels the run.
