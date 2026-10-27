@@ -1,5 +1,5 @@
 // The opt-in lattice colouring (AvbdParams.colorMode) on the GPU against
-// the f64 reference variant: packed stacks stand (lattice-impact.test.ts:
+// the f64 reference variant: packed stacks stand (lattice-impact-<mode>.test.ts:
 // an impact; lattice-colours.test.ts: the colours themselves).
 import { describe, expect, it } from 'vitest';
 import { buildScenario } from '@tb/scenarios';

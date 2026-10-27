@@ -2,7 +2,8 @@
 // degree-first priority (colorPriority) on the GPU, the colours: the
 // reference rule (physics-ref coloring.ts) on the GPU's own poses and graph,
 // with and without the fallback colours. Off, the engine is the default.
-// lattice-physics.test.ts, lattice-impact.test.ts and lattice-gates.test.ts
+// The reference rule through an impact, per mode: lattice-rule-<set>.test.ts.
+// lattice-physics.test.ts, lattice-impact-<mode>.test.ts and lattice-gates.test.ts
 // run the trajectories.
 import { describe, expect, it } from 'vitest';
 import { buildScenario } from '@tb/scenarios';
@@ -15,25 +16,6 @@ describe('GPU AVBD engine: lattice colouring (AvbdParams.colorMode, colorPriorit
     expect(new GpuAvbdEngine({ colorMode: 2, colorPriority: 1 }).info.variant).toMatchObject({ colorMode: 2, colorPriority: 1 });
     expect(new GpuAvbdEngine({}).info.variant).not.toHaveProperty('colorMode');
     expect(new GpuAvbdEngine({ colorMode: 0, colorPriority: 0 }).info.variant).toEqual(new GpuAvbdEngine({}).info.variant);
-  });
-
-  it('the colours are the reference rule\'s on the GPU\'s own poses and graph: every mode, at rest and through an impact', { timeout: 600_000 }, async (ctx) => {
-    if (!gpu) return ctx.skip();
-    const at = [1, 10, 20, 30, 37, 40, 50, 60, 80];
-    for (const params of [{ colorMode: 1 }, { colorMode: 2 }, { colorMode: 3 }, { colorMode: 4 }, { colorPriority: 1 }, { colorMode: 2, colorPriority: 1 }, { colorMode: 4, colorPriority: 1 }] as const) {
-      const r = await call('latticeRun', impact(), 80, params, {}, at);
-      expect(r.error).toBeNull();
-      for (const c of r.checks) {
-        expect(c.mismatches, `${JSON.stringify(params)} step ${c.step}`).toBe(0);
-        expect(c.uncolored).toBe(0);
-        expect(c.overflow).toBe(0);
-      }
-      // The resting tower before the ball: every interior cube takes its pattern colour.
-      const rest = r.checks.find((c) => c.step === 10)!;
-      if (params.colorMode === 1) expect(rest.K).toBe(8);
-      else if (params.colorMode) expect(rest.K).toBe(4);
-      if (params.colorMode) expect(rest.tookPreference).toBe(rest.preferring);
-    }
   });
 
   it('a squeezed block has contacts along both kernels: the fallback colours take them (mode 4: no preference there), still the reference rule', { timeout: 300_000 }, async (ctx) => {
