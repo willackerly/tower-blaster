@@ -17,7 +17,11 @@ export interface GamePage {
   open(search: string, timeout?: number): Promise<{ page: Page; errors: string[] } | null>;
 }
 
-/** Registers this file's server and browser (beforeAll / afterAll). */
+/**
+ * Registers this file's server and browser (beforeAll / afterAll). Playwright's
+ * Chromium runs WebGPU on SwiftShader; TB_CHANNEL=chrome uses the installed
+ * Chrome and so the real GPU (Metal on a Mac).
+ */
 export function gamePage(): GamePage {
   let server: ViteDevServer | null = null;
   let browser: Browser | null = null;
@@ -27,7 +31,8 @@ export function gamePage(): GamePage {
     await server.listen();
     origin = server.resolvedUrls!.local[0]!.replace('127.0.0.1', 'localhost');
     try {
-      browser = await chromium.launch({ args: platform() === 'linux' ? WEBGPU_ARGS : ['--enable-unsafe-webgpu'] });
+      const channel = process.env.TB_CHANNEL;
+      browser = await chromium.launch({ args: platform() === 'linux' ? WEBGPU_ARGS : ['--enable-unsafe-webgpu'], ...(channel ? { channel } : {}) });
     } catch (e) {
       if (requireWebGPU()) throw e;
     }

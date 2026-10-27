@@ -26,6 +26,8 @@ export function parOnGpu(id: string, more: { before?(page: Page): Promise<void>;
       const shots = def.solutions!.par as Shot[];
       await playShots(page, shots, 20 * MINUTES);
       const live = await page.evaluate(() => window.__game.state());
+      const adapter = await page.evaluate(async () => { const i = (await navigator.gpu.requestAdapter())?.info; return i ? `${i.vendor} ${i.architecture} ${i.description}`.trim() : 'none'; });
+      console.log(`${id} on the GPU (${adapter}): ${live.phase}, ${live.step} steps`);
       expect({ phase: live.phase, strokes: live.strokes, heritageBroken: live.heritageBroken }).toEqual({ phase: 'cleared', strokes: def.par, heritageBroken: 0 });
       await more.after?.(page, shots);
       expect(errors).toEqual([]);
