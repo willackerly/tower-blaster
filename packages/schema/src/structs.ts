@@ -87,6 +87,8 @@ export const ImpactEvent = defineStruct(
     ['strength', 'f32', 'speed change, m/s'],
     ['dir', 'vec3f', 'unit; sparks fly out around it'],
     ['packed', 'u32', 'bits 0-23 slot (0xffffff: none), 24-27 kind (0 detector, 1 injected), 28-31 material'],
+    ['normal', 'vec3f', 'unit; the contact normal into the body (debris: the face normal nearest dir; else dir)'],
+    ['raw', 'f32', 'speed change before the debris face weight, m/s (strength in sparks mode)'],
   ],
   'An impact that spawns sparks.',
 );

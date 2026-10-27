@@ -219,7 +219,7 @@ rules the code follows; the doc has the reasoning.
   through the `CHIP_BASE` override.
 - Knobs: `dust` and `chips` (multipliers on the per-dv counts; 0 turns one
   off, both 0 skip the passes), `dustSize` (m, 1.6) and `dustOpacity`
-  (0.6). Bench variant `real-dust`: 64 impacts a frame around the view's
+  (0.6). (Retuned on 2026-10-27, see below.) Bench variant `real-dust`: 64 impacts a frame around the view's
   focus with 1/60 s steps, warmed up 4 s so the counts and ages are steady
   (the bench's "Particles alive" column shows how many); real against it is
   the worst steady cost. On the M5 Max at 638cab8 (about 5,280 alive) real
@@ -252,6 +252,48 @@ rules the code follows; the doc has the reasoning.
     past 20 m, and engines count bodies);
   - a CPU-side budget (the CPU does not know how many events a frame has
     without a readback).
+
+## Dust after Will's collapse screenshot (2026-10-27)
+
+Will's render of a toppled tower showed the dust as one uniform tan
+sausage along the rubble: every light knock of the collapse raised a big
+puff (1.6 m, 0.6 opaque), and puffs rose as a column. He asked for much
+smaller, fainter dust from harder impacts only, thrown the way the impact
+goes, and little from two faces meeting flat.
+
+- Face weight (detector, debris mode). A box's speed change dv is read in
+  its own frame: the face normal nearest dv is the contact normal, and how
+  far dv leans off it says what kind of knock it was (sine 0 square on a
+  face, 0.71 an edge, 0.82 a corner, or the friction's share of a scrape).
+  The event's strength is |dv| times a weight from `dustFace` (square
+  face-on) to 1 (smoothstep over a lean of 0.15 to 0.6), and must pass
+  `dustThreshold`. Spheres always count in full. Strength drives the
+  counts and the size class of puffs and chips alike, so face-on knocks
+  chip less too. Sparks mode is unchanged (weight 1, normal = dir), so the
+  other looks stay bit for bit.
+- `ImpactEvent` gains the contact normal and the raw |dv| (32 to 48 bytes).
+- Launch. A puff leaves along the contact plane (a ring round a landing),
+  plus `dustSlide` (1.5) times the push's part off the normal, against
+  it: a scrape throws its dust on along the slide. A little lift (0.1 to
+  0.4 of the in-plane speed), and buoyancy halved (`dustRise` 0.3), so
+  dust spreads low instead of rising as a column. Chips fly as before.
+- Colour. A puff raised by a landing on the ground (normal up, within
+  15 cm of it; packed bit 12) is soil, the floor's albedo mixed 70% in;
+  others are stone powder as before. Each puff's opacity varies 0.5 to 1x.
+- Defaults: `dustSize` 0.9 m (was 1.6), `dustOpacity` 0.4 (0.6),
+  `dustThreshold` 2 m/s (1.2), `dustFace` 0.15. In the headless S14 tower
+  collapse (3x3x16, ball at 40 m/s) puffs spawned by 4.3 s fell from 1,565
+  to 699 with the face weight alone (threshold 2); `dustFace` 0.3 instead of
+  0.15 adds only 3%: in a tumbling collapse most knocks are edges, corners
+  and scrapes, so the threshold is the main lever on the amount.
+- Knobs: `real.dustThreshold`, `real.dustFace` (with `real.dustSize`,
+  `real.dustOpacity`, `real.dust`, `real.chips`), in the viewer's Look panel.
+- Tests: the twin of the face weight (face, edge, corner, scrape, lean,
+  sphere); the detector on the GPU against it in debris mode, and unweighted
+  in sparks mode; the launch directions (a landing's ring and lift, a
+  scrape's slide, a side knock's upright fan) and the ground bit; the GPU
+  spawn against its twin with injected normals (scrapes and level normals
+  included).
 
 ## Floor and ambient (fixes after the stone step's screenshots)
 

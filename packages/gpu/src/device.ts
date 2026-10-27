@@ -25,6 +25,34 @@ export async function createDevice(opts: { timestamps?: boolean; powerPreference
   return { adapter, device, timestamps };
 }
 
+const shared = new Map<string, Promise<GpuContext>>();
+
+/**
+ * One device per option set for a page that builds many short-lived engines
+ * or renderers one after another (the GPU test pages). Dawn keeps a device's
+ * shader modules and pipelines by content, so the second engine with the
+ * same shaders builds in ~30 ms where a new device takes ~3 s on
+ * SwiftShader. Callers never destroy it; a lost one is replaced on the next
+ * call. Error scopes a failed caller left pushed are popped first, so they
+ * cannot swallow the next caller's errors.
+ */
+export async function sharedDevice(opts: Parameters<typeof createDevice>[0] = {}): Promise<GpuContext> {
+  const key = JSON.stringify(opts);
+  let p = shared.get(key);
+  if (!p) {
+    const made = createDevice(opts);
+    shared.set(key, made);
+    const forget = () => { if (shared.get(key) === made) shared.delete(key); };
+    made.then(({ device }) => device.lost.then(forget), forget);
+    p = made;
+  }
+  const ctx = await p;
+  // popErrorScope() rejects once the stack is empty (a lost device resolves
+  // instead, hence the cap).
+  for (let i = 0; i < 64; i++) if (await ctx.device.popErrorScope().then(() => false, () => true)) break;
+  return ctx;
+}
+
 /** What isSoftwareAdapter reads: GPUAdapterInfo's text fields, any of them absent. */
 export interface AdapterText { vendor?: string; architecture?: string; description?: string; device?: string; isFallbackAdapter?: boolean }
 

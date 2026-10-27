@@ -3,16 +3,15 @@
 // Correctness only: timings from here are never performance results.
 import { readFileSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { emptySnapshot, TAG_BALL, type BodyDesc } from '@tb/engine-api';
 import { buildScenario } from '@tb/scenarios';
 import { Body, readStruct, Shape, TIER } from '@tb/schema';
 import { RapierHost } from '@tb/adapter-rapier';
 import { TieredEngine } from '@tb/lattice';
-import { isSoftwareAdapter, loadBundle, openWebGPU, type WebGPUSession } from '@tb/testkit';
 import { ADAPT_MAX, ADAPT_REF, adaptedExposure, HAZY_DAY, linearToSrgb, lookByName, parseRealOptions, REAL_DEFAULTS, REAL_KNOBS, realLook, writeRealOptions, CLEAR_DAY, MIE_H, mieExtinction, multiTable, normalize, OZONE, OZONE_WIDTH, RAYLEIGH, RAYLEIGH_H, skyRadiance, skyViewDir, skyViewUv, sunAtGround, sunDiscRadiance, transmittance, transmittanceHMu, transmittanceTable, transmittanceUv } from '../src/index.ts';
-import { agx, aoFootReference, debrisClass, debrisSpawnReference, chipCount, chipStepReference, CHIP_POOL, CHIPS_PER_EVENT, debrisRings, DEFAULT_DEBRIS, DEFAULT_SPARKS, dustCount, dustStepReference, DUST_PER_EVENT, DUST_POOL, bevelNormal, type V3, CANDY_NIGHT, CTL, HOT_FULL, MAX_EVENTS, SPAWN_BUDGET, FX_WORDS, packFx, tintWord, unpackFx, frustumPlanes, linearToOklab, listMatches, oklabToLinear, srgbToLinear, lookAt, lookOf, lookRange, MATERIAL, multiply, SEG, packBodies, changedRanges, drawnTier, packShapes, paletteOf, perspective, unpackLook } from '../src/index.ts';
-import type * as Drivers from './page.ts';
+import { agx, aoFootReference, debrisClass, debrisSpawnReference, debrisWeight, newDebrisReference, chipCount, chipStepReference, CHIP_POOL, CHIPS_PER_EVENT, debrisRings, DEFAULT_DEBRIS, DEFAULT_SPARKS, dustCount, dustStepReference, DUST_PER_EVENT, DUST_POOL, bevelNormal, type V3, CANDY_NIGHT, CTL, HOT_FULL, MAX_EVENTS, SPAWN_BUDGET, FX_WORDS, packFx, tintWord, unpackFx, frustumPlanes, linearToOklab, listMatches, oklabToLinear, srgbToLinear, lookAt, lookOf, lookRange, MATERIAL, multiply, SEG, packBodies, changedRanges, drawnTier, packShapes, paletteOf, perspective, unpackLook } from '../src/index.ts';
+import { gpu, call, type D } from './harness.ts';
 
 describe('looks', () => {
   const scene = buildScenario('S1', { F: 2, H: 5 });
@@ -344,21 +343,6 @@ describe('fx records', () => {
   });
 });
 
-let gpu: WebGPUSession | null = null;
-beforeAll(async () => {
-  gpu = await openWebGPU();
-  if (gpu) await loadBundle(gpu.page, fileURLToPath(new URL('./page.ts', import.meta.url)), '__render');
-}, 120_000);
-afterAll(async () => { await gpu?.close(); });
-
-type D = typeof Drivers;
-function call<K extends keyof D>(name: K, ...args: Parameters<D[K]>): Promise<Awaited<ReturnType<D[K]>>> {
-  return gpu!.page.evaluate(
-    ([n, a]) => (window as unknown as { __render: Record<string, (...x: unknown[]) => unknown> }).__render[n as string]!(...(a as unknown[])),
-    [name, args] as const,
-  ) as Promise<Awaited<ReturnType<D[K]>>>;
-}
-
 describe('sparks', () => {
   it('the impact detector reports real speed changes only, at the support point', async (ctx) => {
     if (!gpu) return ctx.skip();
@@ -442,14 +426,90 @@ describe('debris (real look impacts)', () => {
     expect(mean((fr) => dustCount(e(100), { ...D, dustPerDv: 0 }, fr))).toBe(0);
     expect(mean((fr) => chipCount(e(D.chipDv), D, fr))).toBe(0); // chips need a harder hit than dust
     // Light knocks make dust now and then, at the expected rate (4000 draws: 3 sigma is under 0.025).
-    expect(Math.abs(mean((fr) => dustCount(e(1.5), D, fr)) - 0.45)).toBeLessThan(0.025);
-    expect(Math.abs(mean((fr) => dustCount(e(4, 3), D, fr)) - 4.2)).toBeLessThan(0.03);
+    expect(Math.abs(mean((fr) => dustCount(e(D.dustDv + 0.3), D, fr)) - 0.45)).toBeLessThan(0.025);
+    expect(Math.abs(mean((fr) => dustCount(e(D.dustDv + 2.8, 3), D, fr)) - 4.2)).toBeLessThan(0.03);
     expect(Math.abs(mean((fr) => chipCount(e(5.5, 5), D, fr)) - 2.5)).toBeLessThan(0.03);
     expect(mean((fr) => dustCount(e(100), D, fr))).toBe(DUST_PER_EVENT);
     expect(mean((fr) => chipCount(e(100), D, fr))).toBe(CHIPS_PER_EVENT);
     // Size classes: dv in whole m/s, at most 15.
     expect([0.9, 1, 10.5, 14.9, 15, 200].map(debrisClass)).toEqual([0, 1, 10, 14, 15, 15]);
   });
+
+  it('face weight: a square face-on knock counts dustFace of its speed change; edges, corners and scrapes count it all', () => {
+    const turn = (deg: number, axis: V3): [number, number, number, number] => { const h = (deg * Math.PI) / 360; return [axis[0] * Math.sin(h), axis[1] * Math.sin(h), axis[2] * Math.sin(h), Math.cos(h)]; };
+    const F = 0.15, I: [number, number, number, number] = [0, 0, 0, 1];
+    expect(debrisWeight([0, 5, 0], I, false, F)).toEqual({ normal: [0, 1, 0], weight: F }); // landing flat
+    expect(debrisWeight([0, 0, -5], I, false, F).normal).toEqual([0, 0, -1]);
+    const edge = debrisWeight([0, 5, 0], turn(40, [0, 0, 1]), false, F); // landing on an edge
+    expect(edge.weight).toBe(1);
+    expect(edge.normal[1]).toBeCloseTo(Math.cos((40 * Math.PI) / 180), 6); // the face nearest the push: turned 40 degrees from up
+    expect(debrisWeight([0, 5, 0], [0.3, 0.2, 0.1, 0.927], false, F).weight).toBe(1); // a corner
+    const scrape = debrisWeight([3, 4, 0], I, false, F); // a scrape: friction 0.6 of the push
+    expect(scrape.normal).toEqual([0, 1, 0]);
+    expect(scrape.weight).toBeCloseTo(1, 6);
+    const mild = debrisWeight([2, 6, 0], I, false, F).weight; // leaning 0.32 off the normal: part way
+    expect(mild).toBeGreaterThan(0.3);
+    expect(mild).toBeLessThan(0.5);
+    expect(debrisWeight([0, 3, 0], I, true, F)).toEqual({ normal: [0, 1, 0], weight: 1 }); // spheres: all of it
+    expect(debrisWeight([0, 5, 0], I, false, 1).weight).toBe(1); // dustFace 1: no weighting
+  });
+
+  it('a puff leaves along the contact plane, thrown on along a scrape; one raised from the ground takes its colour bit', () => {
+    const D = DEFAULT_DEBRIS;
+    const puffs = (dir: V3, normal: V3, y = 0.05) => Array.from({ length: 400 }, (_, j) => newDebrisReference({ pos: [0.3, y, 0.7], strength: 6, dir, normal, packed: 0 }, j % 8, j >> 3, 1, D, 0));
+    // A flat landing: a ring along the ground, a little lift, no side preferred.
+    const land = puffs([0, 1, 0], [0, 1, 0]);
+    const mean = (ps: typeof land, k: number) => ps.reduce((a, p) => a + p.vel[k]! / Math.hypot(...p.vel), 0) / ps.length;
+    for (const p of land) {
+      const l = Math.hypot(...p.vel);
+      expect(p.vel[1] / l).toBeGreaterThan(0.09); // lift 0.1 to 0.4 of the in-plane unit
+      expect(p.vel[1] / l).toBeLessThan(0.38);
+    }
+    expect(Math.abs(mean(land, 0))).toBeLessThan(0.1);
+    expect(Math.abs(mean(land, 2))).toBeLessThan(0.1);
+    // A scrape: the body slid along -x (friction pushed it +x), so its puffs go on along -x.
+    const s = Math.SQRT1_2, scrape = puffs([s, s, 0], [0, 1, 0]);
+    expect(mean(scrape, 0)).toBeLessThan(-0.6);
+    // A knock from the side: puffs fan out in the upright plane across it, not along it.
+    const side = puffs([1, 0, 0], [1, 0, 0], 1);
+    expect(Math.abs(mean(side, 0))).toBeLessThan(0.05);
+    expect(side.every((p) => Math.abs(p.vel[0]) < 1e-6)).toBe(true);
+    // Bit 12: raised from the ground (a landing within 15 cm of it), not by a knock in the air or from the side.
+    expect(land.every((p) => (p.packed >>> 12) & 1)).toBe(true);
+    expect(puffs([0, 1, 0], [0, 1, 0], 1).some((p) => (p.packed >>> 12) & 1)).toBe(false);
+    expect(side.some((p) => (p.packed >>> 12) & 1)).toBe(false);
+  });
+
+  it('the detector weighs debris knocks on the GPU as its twin does; sparks mode keeps the raw speed change', async (ctx) => {
+    if (!gpu) return ctx.skip();
+    const D = DEFAULT_DEBRIS;
+    const turn = (deg: number, axis: V3): [number, number, number, number] => { const h = (deg * Math.PI) / 360; return [axis[0] * Math.sin(h), axis[1] * Math.sin(h), axis[2] * Math.sin(h), Math.cos(h)]; };
+    const cases: Array<{ dv: V3; rot?: [number, number, number, number]; sphere?: boolean }> = [
+      { dv: [0, 5, 0] }, // flat landing: 0.75 m/s weighted, under the threshold
+      { dv: [0, 20, 0] }, // a hard flat landing: 3
+      { dv: [0, 5, 0], rot: turn(40, [0, 0, 1]) }, // an edge
+      { dv: [0, 4, 0], rot: [0.3, 0.2, 0.1, 0.927] }, // a corner
+      { dv: [3, 4, 0] }, // a scrape
+      { dv: [2, 6, 0] }, // a mild lean: part way
+      { dv: [0, 3, 0], sphere: true },
+      { dv: [0, -14, 0] }, // pushed down onto its top face: 2.1
+      { dv: [0, -12, 0] }, // 1.8: under
+    ];
+    const r = await call('debrisDetect', cases);
+    expect(r.error).toBeNull();
+    const want = cases.map((c, i) => ({ i, ...debrisWeight(c.dv, c.rot ?? [0, 0, 0, 1], !!c.sphere, D.dustFace), raw: Math.hypot(...c.dv) })).filter((w) => w.raw * w.weight > D.dustDv);
+    expect(r.debris.map((e) => e.slot)).toEqual([1, 2, 3, 4, 5, 6, 7]);
+    expect(want.map((w) => w.i)).toEqual([1, 2, 3, 4, 5, 6, 7]);
+    r.debris.forEach((e, k) => {
+      const w = want[k]!;
+      expect(e.raw).toBeCloseTo(w.raw, 4);
+      expect(Math.abs(e.strength - w.raw * w.weight)).toBeLessThan(1e-4 * w.raw);
+      e.normal.forEach((x, c) => expect(Math.abs(x - w.normal[c]!)).toBeLessThan(1e-5));
+    });
+    // Sparks mode: every case over 2.5 m/s, at full strength, normal = dir.
+    expect(r.sparks.map((e) => e.slot)).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8]);
+    r.sparks.forEach((e) => { expect(e.strength).toBe(e.raw); expect(e.normal).toEqual(e.dir); });
+  }, 120_000);
 
   it('a budget smaller than the events samples all of them over frames, each frame different events; tokens limit a frame', () => {
     const short = { ...DEFAULT_DEBRIS, dustBudget: 10, chipBudget: 24 };
@@ -501,7 +561,7 @@ describe('debris (real look impacts)', () => {
     expect(r.aliveCtl).toBe(r.alive);
     expect(r.simErr).toBeLessThan(1e-4); // measured 9.5e-7
     expect(r.bounced).toBeGreaterThan(10); // chips that hit the floor
-    expect(r.floored).toBeGreaterThan(5); // puffs that reached their 10 cm floor
+    expect(r.floored).toBeGreaterThan(1); // puffs that reached their 10 cm floor (measured 3: the level-normal bursts fan half their puffs downward)
     expect(r.rose).toBeGreaterThan(r.wantDust / 2); // most puffs drifting up by now
     expect(r.dustMinY).toBeGreaterThanOrEqual(Math.fround(0.1));
     expect(r.chipMinY).toBeGreaterThanOrEqual(0);
@@ -1057,153 +1117,6 @@ describe('drawing', () => {
     }
   });
 
-  it('real look stones: textured blocks carry fine detail, each stone differs, and texture 0 is flat', async (ctx) => {
-    if (!gpu) return ctx.skip();
-    // Close up on a tumbled block's face (the golden "low" view).
-    const r = await call('realChecks', [{}, { stoneDetail: 0 }, { stone: 'granite' }, { stone: 'sandstone' }, { stone: 'concrete' }, { stoneScale: 3 }], [320, 180], [[2.2, 0.45, 2.4], [-1, 1.2, -3]]);
-    expect(r.error).toBeNull();
-    const [lime, flat, granite, , concrete, scaled] = r.frames as NonNullable<typeof r.frames>;
-    // Measured on SwiftShader (mean |luma - neighbour mean|): limestone 1.11, flat 0.65, granite 2.38,
-    // sandstone 1.01, concrete 0.74, limestone at 3x scale 0.95.
-    expect(lime!.detail).toBeGreaterThan(1.4 * flat!.detail);
-    expect(granite!.detail).toBeGreaterThan(1.5 * lime!.detail);
-    expect(concrete!.detail).toBeGreaterThan(flat!.detail);
-    expect(scaled!.detail).toBeLessThan(lime!.detail);
-    // The texture's mean multiplier is about 1: the same block colours on average.
-    expect(Math.abs(lime!.meanLuma / flat!.meanLuma - 1)).toBeLessThan(0.05);
-    expect(new Set(r.frames.map((f) => f.hash)).size).toBe(6);
-  });
-
-  it('real look bench diagnostics: stone code compiled out draws what texture 0 draws; step-1 blocks differ', async (ctx) => {
-    if (!gpu) return ctx.skip();
-    const r = await call('realChecks', [{ stoneDetail: 0 }, { stoneDetail: 0, realDiag: 'stone-off' }, { realDiag: 'stone-off' }, { stoneDetail: 0, realDiag: 'step1' }], [320, 180], [[2.2, 0.45, 2.4], [-1, 1.2, -3]]);
-    expect(r.error).toBeNull();
-    const [flat, off, offDetail, step1] = r.frames as NonNullable<typeof r.frames>;
-    // Compiled out, the stone knob does nothing, and the frame is texture 0's to the bit.
-    expect(off!.hash).toBe(flat!.hash);
-    expect(offDetail!.hash).toBe(flat!.hash);
-    // Step 1's blocks: the stylized body (no palette per block, wear or dirt).
-    expect(step1!.hash).not.toBe(flat!.hash);
-  });
-
-  it('real look ground: textured floor keeps its brightness, gravel and dirt differ, variation shows, texture 0 is the flat floor', async (ctx) => {
-    if (!gpu) return ctx.skip();
-    const r = await call('groundChecks', [{ groundDetail: 0, hills: 0 }, { realDiag: 'ground-off' }, {}, { groundMaterial: 'dirt' }, { groundVariation: 0 }, { groundVariation: 1 }, { groundScale: 4 }]);
-    expect(r.error).toBeNull();
-    const [flat, off, gravel, dirt, still, varied, coarse] = r.frames;
-    // Compiled out, the ground knobs do nothing, and the frame is texture 0's to the bit.
-    expect(off!.hash).toBe(flat!.hash);
-    // Measured on SwiftShader (mean luma; fine detail, mean |luma - neighbours|; coarse, std of 16 px block means):
-    // flat 123.1, 0.42, 2.4 (dither and the light's gradient); gravel 120.6, 1.50, 2.8; dirt 120.6, 0.65, 2.8;
-    // variation 0: 122.8, 1.51, 2.2; variation 1: 118.2, 1.49, 4.5; scale 4: 125.0, 1.80, 2.8.
-    // Without macro variation the floor keeps its brightness within 5%; with it, this 20 m patch is one sample of a 64 m field.
-    expect(Math.abs(still!.mean - flat!.mean) / flat!.mean).toBeLessThan(0.05);
-    for (const f of [gravel, dirt, varied, coarse]) expect(Math.abs(f!.mean - flat!.mean) / flat!.mean).toBeLessThan(0.08);
-    expect(gravel!.detail).toBeGreaterThan(2.5 * flat!.detail);
-    expect(dirt!.detail).toBeGreaterThan(1.3 * flat!.detail);
-    expect(gravel!.detail).toBeGreaterThan(1.5 * dirt!.detail);
-    expect(coarse!.detail).toBeGreaterThan(1.1 * gravel!.detail); // pebbles 4x larger: more of them span pixels (1.20x since step 5's stone tones, 1.24x before)
-    expect(varied!.coarse).toBeGreaterThan(2 * still!.coarse);
-  }, 180_000); // seven renderers, each baking its materials: 37 s alone on SwiftShader, over 60 s in the full suite
-
-  it('real look ground: no seam where the floor polygon ends and the sky pass shades the ground on', async (ctx) => {
-    if (!gpu) return ctx.skip();
-    const r = await call('groundSeam', [{ groundDetail: 0 }, {}, { groundMaterial: 'dirt', groundVariation: 1 }]);
-    expect(r.error).toBeNull();
-    expect(r.cut).toBeGreaterThan(10);
-    expect(r.cut).toBeLessThan(80);
-    // Across the cut (rows cut-1 to cut+2), the change beyond what the rows on either side change over 3 rows.
-    const excess = r.rows.map((m) => Math.abs(m[r.cut - 1]! - m[r.cut + 2]!) - (Math.abs(m[r.cut - 4]! - m[r.cut - 1]!) + Math.abs(m[r.cut + 2]! - m[r.cut + 5]!)) / 2);
-    // Measured on SwiftShader (8-bit luma): flat 0.04, gravel 0.37, dirt at full variation 0.25. Before the far
-    // ground took the material's mean roughness and cavity, gravel's cut showed as a 1.8 step.
-    for (const e of excess) expect(e).toBeLessThan(1);
-  });
-
-  it('real look horizon hills: cover the sky just above the horizon, not above the ridge, and fade into the haze with distance', async (ctx) => {
-    if (!gpu) return ctx.skip();
-    const r = await call('hillChecks', [{ hills: 0 }, { hills: 8 }, { hills: 8, hillDistance: 2 }, { hills: 8, hillDistance: 40 }, { hills: 8, realDiag: 'ground-off' }, { hills: 0, groundDetail: 0 }]);
-    for (const f of r.frames) expect(f.rows).toEqual([1, 3]);
-    expect(r.error).toBeNull();
-    const [none, hills, near, far, off, flat] = r.frames;
-    const d = (a: number[], b: number[]) => Math.hypot(a[0]! - b[0]!, a[1]! - b[1]!, a[2]! - b[2]!);
-    // Measured on SwiftShader (sRGB of the low band): sky 159.6, 158.4, 158.1; hills at 6 km 141.6, 136.2, 129.6;
-    // at 2 km 123.0, 116.5, 108.6; at 40 km (visibility 40 km) 159.4, 157.8, 157.2.
-    // Above the ridge, the sky is untouched.
-    for (const f of [hills, near, far]) expect(d(f!.high, none!.high)).toBeLessThan(1);
-    // Just above the horizon, hills instead of sky.
-    expect(d(hills!.low, none!.low)).toBeGreaterThan(10);
-    // Nearer hills stand out more from the sky; far ones fade into it.
-    expect(d(near!.low, none!.low)).toBeGreaterThan(d(hills!.low, none!.low));
-    expect(d(far!.low, none!.low)).toBeLessThan(d(hills!.low, none!.low));
-    // Compiled out with the ground, the hills are gone, and the frame is the flat floor's under a bare horizon.
-    expect(off!.hash).toBe(flat!.hash);
-  }, 180_000); // six renderers, each baking its materials
-
-  it('stone level of detail: far boxes drop the stone code with no visible seam, and texture 0 sends every box far', async (ctx) => {
-    if (!gpu) return ctx.skip();
-    // At 180 px a fade-out of 3 cm per pixel puts the split about 6 m past the near plane: the
-    // tumbled boxes (5 to 8 m away) fall on both sides, the towers (12 m) are far.
-    const r = await call('stoneLodSeam', { stoneFade: 3 });
-    expect(r.error).toBeNull();
-    expect(r.lod.boxes).toBeGreaterThan(0);
-    expect(r.lod.farBoxes).toBeGreaterThan(0);
-    expect(r.noLod.farBoxes).toBe(0);
-    expect(r.lod.boxes + r.lod.farBoxes).toBe(r.noLod.boxes);
-    // Past the fade-out both shaders compute the same thing; two compilations may round differently.
-    expect(r.maxDiff).toBeLessThanOrEqual(2);
-    const flat = await call('stoneLodSeam', { stoneDetail: 0 });
-    expect(flat.lod.boxes).toBe(0);
-    expect(flat.maxDiff).toBeLessThanOrEqual(2);
-  });
-
-  it('real look floor: open shadow lit by the whole sky; a street sees sunlit walls where the sky is hidden', async (ctx) => {
-    if (!gpu) return ctx.skip();
-    const r = await call('floorChecks', [{}, { realDiag: 'no-floor-sky' }]);
-    expect(r.error).toBeNull();
-    const [f, vertical] = r.frames as NonNullable<typeof r.frames>;
-    // Measured on SwiftShader (sRGB luma): lit 127, open shadow 53; before the floor kept its contact
-    // darkening, open shadow 31. In linear light 53 against 127 is about 0.15, the share of a clear
-    // sky's light at 35 degrees of sun; 31 was about 0.05.
-    expect(f!.openShadow).toBeGreaterThan(0.36 * f!.lit);
-    expect(f!.openShadow).toBeLessThan(0.6 * f!.lit);
-    // The street (8 m walls, 4 m apart) sees about a third sky, the rest walls (floorSky,
-    // realBounce): a little brighter, and warm. Measured luma 61 against 54 in the open, red / blue
-    // 1.18 against 0.74; the vertical-only sky term (no-floor-sky) had the street at 54 and 0.71.
-    expect(f!.street).toBeGreaterThan(0.9 * f!.openShadow);
-    expect(f!.street).toBeLessThan(1.3 * f!.openShadow);
-    expect(f!.streetRB).toBeGreaterThan(1.15 * f!.openShadowRB);
-    // The baked sky view factor against a cosine-weighted ray cast of these three walls (200k rays):
-    // street 0.32, open shadow 0.91, lit 0.91. Measured 0.40, 0.94, 0.95: the 1 m occupancy level
-    // lets some light through a 1 m wall that straddles two of its voxels (S14's 4 m towers do not).
-    expect(Math.abs(f!.streetSky - 0.32)).toBeLessThan(0.1);
-    expect(Math.abs(f!.openShadowSky - 0.91)).toBeLessThan(0.05);
-    expect(Math.abs(f!.litSky - 0.91)).toBeLessThan(0.06);
-    expect(Math.abs(vertical!.streetRB / vertical!.openShadowRB - 1)).toBeLessThan(0.05);
-    // In the open, the wall 9 m away hides 6% of the sky: a little more light, not less.
-    expect(f!.openShadow / vertical!.openShadow - 1).toBeGreaterThanOrEqual(0);
-    expect(f!.openShadow / vertical!.openShadow - 1).toBeLessThan(0.03);
-  });
-
-  it('real look: blue sky paling to the horizon, exposure adapting to a low sun, no stylized lights', async (ctx) => {
-    if (!gpu) return ctx.skip();
-    const r = await call('realChecks', ['hazy', {}, { sunElevation: 4, sunAzimuth: 200 }, { sunElevation: 4, sunAzimuth: 200, autoExposure: 0 }]);
-    expect(r.error).toBeNull();
-    const [hazy, noon, low, lowFixed] = r.frames as NonNullable<typeof r.frames>;
-    // Measured on SwiftShader: high sky b/r 1.99, just above the horizon 1.04; the low sun's horizon r/b 1.55.
-    const br = (c: number[]) => c[2]! / c[0]!;
-    expect(br(noon!.top)).toBeGreaterThan(1.6);
-    expect(br(noon!.horizon)).toBeLessThan(0.65 * br(noon!.top));
-    expect(br(low!.horizon)).toBeLessThan(0.8);
-    // Mean luma 124 at noon; at 4 degrees 116 adapting (0.75), 46 fixed: partial adaptation keeps dusk a little darker.
-    expect(low!.meanLuma).toBeGreaterThan(0.75 * noon!.meanLuma);
-    expect(low!.meanLuma).toBeLessThan(noon!.meanLuma);
-    expect(lowFixed!.meanLuma).toBeLessThan(0.5 * noon!.meanLuma);
-    // The ball is a light in hazy; real has no stylized lights.
-    expect(hazy!.lit).toBe(1);
-    expect(noon!.lit).toBe(0);
-    expect(low!.lit).toBe(0);
-  });
-
   it('pixel readback is RGBA whatever the output format (Apple prefers BGRA)', async (ctx) => {
     if (!gpu) return ctx.skip();
     const rgba = await call('sceneHash', {}, 'rgba8unorm'), bgra = await call('sceneHash', {}, 'bgra8unorm');
@@ -1258,70 +1171,6 @@ describe('drawing', () => {
     // The close-up sees a small part of the arena, so its map is the finest.
     expect((await call('shadowCheck', 'contact')).window).toBe(4);
   });
-
-  it('real look soft shadows: the same analytic shadows, without acne or leaks', async (ctx) => {
-    if (!gpu) return ctx.skip();
-    for (const kind of ['float', 'contact', 'grazing'] as const) {
-      const r = await call('shadowCheck', kind, { real: {} });
-      expect(r.error).toBeNull();
-      expect(r.used).toBeGreaterThan(3000);
-      expect(r.wrong).toBe(0);
-      expect(r.maxStep).toBeLessThanOrEqual(3);
-      if (kind === 'grazing') continue;
-      expect(r.iou).toBeGreaterThan(0.95);
-      expect(r.centroidErr).toBeLessThan(0.02);
-      expect(r.leak).toBe(0);
-    }
-  }, 120_000);
-
-  it('real look soft shadows: penumbrae as wide as the sun disc says', async (ctx) => {
-    if (!gpu) return ctx.skip();
-    const r = await call('penumbraChecks', [{ h: 2 }, { h: 6 }, { h: 2, real: { shadowSoftness: 2 } }, { h: 3, elevation: 25 }, { h: 2, real: { shadowSoftness: 0 } }]);
-    expect(r.error).toBeNull();
-    for (const [i, c] of r.cases.entries()) {
-      expect(c.band).toBeGreaterThan(1000);
-      expect(c.dark).toBeLessThan(0.03); // inside the shadow
-      expect(c.lit).toBeGreaterThan(0.97); // past the penumbra
-      expect(Math.abs(c.x50)).toBeLessThan(c.texel); // the half-lit line on the geometric edge
-      if (i === 4) { expect(c.x90 - c.x10).toBeLessThan(3 * c.texel); continue; } // softness 0: the 3x3 taps (measured 2.7 texels)
-      // The 10% and 90% lines where the disc profile puts them, within a texel
-      // (SwiftShader: within 0.05 to 1.2 mm of the 3.9 mm texel, 4.5% narrow at h = 6).
-      expect(Math.abs(c.x10 - c.want10)).toBeLessThan(c.texel);
-      expect(Math.abs(c.x90 - c.want90)).toBeLessThan(c.texel);
-    }
-    // Twice the softness, twice the width; three times the height, three times.
-    const w = r.cases.map((c) => c.x90 - c.x10);
-    expect(w[2]! / w[0]!).toBeGreaterThan(1.8);
-    expect(w[2]! / w[0]!).toBeLessThan(2.2);
-    expect(w[1]! / w[0]!).toBeGreaterThan(2.6);
-  }, 120_000);
-
-  it('real look shadow softness 0 is the frame with the soft shadow code compiled out', async (ctx) => {
-    if (!gpu) return ctx.skip();
-    const r = await call('penumbraFrames', [{ h: 2, realDiag: null, real: { shadowSoftness: 0 } }, { h: 2, realDiag: 'pcss-off' }, { h: 2, realDiag: null }]);
-    expect(r.error).toBeNull();
-    expect(r.frames[0]).toEqual(r.frames[1]);
-    expect(r.frames[2]).not.toEqual(r.frames[1]);
-  }, 120_000);
-
-  it('bench:render completes and reports every case (numbers discarded)', async (ctx) => {
-    if (!gpu) return ctx.skip();
-    const r = await call('runRenderBench', { width: 160, height: 90, counts: [800], warmup: 1, batches: 2, batchFrames: 1, profiledFrames: 1, sparkPool: 1024, dustWarmup: 40 });
-    expect(r.cases.map((c) => `${c.world}:${c.variant}`)).toEqual(['near', 'far'].flatMap((w) => ['full', 'no-shadow', 'no-post', 'no-sparks', 'no-heat', 'no-ao', 'no-seam', 'fan', 'cube', 'flat-fan', 'flat-cube', 'real', 'real-no-stone', 'real-stone-off', 'real-step1', 'real-no-lod', 'real-no-floor-sky', 'real-flat-ground', 'real-no-pcss', 'real-4096', 'real-dust'].map((v) => `${w}:${v}`)));
-    for (const c of r.cases) {
-      expect(c.bodies).toBe(800);
-      expect(c.frameMs).toBeGreaterThan(0);
-      expect(c.batches).toHaveLength(2);
-      expect(c.drawn.boxes + c.drawn.farBoxes).toBeGreaterThan(0);
-      expect(c.drawn.boxes + c.drawn.farBoxes).toBeLessThanOrEqual(800);
-      if (!c.variant.startsWith('real') || c.variant === 'real-no-lod') expect(c.drawn.farBoxes, c.variant).toBe(0);
-      // Still worlds: no particle lives, except in real-dust, whose shower fills both rings of a 1024 pool in its 40 extra warmup frames (341 + 683; the full pool's rings hold more than the budgets' steady count).
-      expect(c.particles, c.variant).toBe(c.variant === 'real-dust' ? 1024 : 0);
-      if (r.timestamps) expect(Object.keys(c.passes)).toEqual(expect.arrayContaining(['cull', 'scene', ...(c.variant === 'no-shadow' ? [] : ['shadow']), ...(c.variant === 'no-post' ? [] : ['bloom', 'composite'])]));
-    }
-    expect(r.software).toBe(isSoftwareAdapter(gpu.adapter));
-    expect(await call('renderBenchMarkdown', r, 'h')).toMatch(/Without heat glow/);
-  }, 180_000); // 42 cases on a software adapter, most of it the first frame of each renderer; 40 s timed out on CI beside the GPU physics and game tests (main, 8b5dd54), and 120 s when every case built its own renderer (b6bf9a2)
 
   it('culling never changes an ID pixel', async (ctx) => {
     if (!gpu) return ctx.skip();

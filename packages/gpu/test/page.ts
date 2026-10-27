@@ -2,7 +2,7 @@
 // loadBundle() and calls the exports through page.evaluate; each driver checks
 // its GPU result against the CPU reference in the page and returns a small
 // summary, so large arrays never cross the Playwright boundary.
-import { BandwidthProbe, compactIndices, Compactor, createDevice, exclusiveScanU32, RadixSorter, Readback, sortPairs, GpuProfiler, readBuffer, Scanner, uploadU32 } from '../src/index.ts';
+import { BandwidthProbe, compactIndices, Compactor, createDevice, sharedDevice, exclusiveScanU32, RadixSorter, Readback, sortPairs, GpuProfiler, readBuffer, Scanner, uploadU32 } from '../src/index.ts';
 import { type GpuBenchOptions, runGpuBench as bench } from '../src/bench.ts';
 
 function rng(seed: number) {
@@ -402,4 +402,31 @@ export async function runGpuBench(opts: Partial<GpuBenchOptions>) {
   try {
     return { result: await bench(opts), staging };
   } finally { GPUDevice.prototype.createBuffer = createBuffer; }
+}
+
+/**
+ * sharedDevice(): one device per option set; error scopes a failed caller
+ * left pushed are gone on the next call (an error after it is uncaptured,
+ * not swallowed); a destroyed device is replaced by a working one.
+ */
+export async function sharedDevices() {
+  const a = await sharedDevice(), b = await sharedDevice();
+  const c = await sharedDevice({ timestamps: false }), d = await sharedDevice({ timestamps: false });
+  const same = a.device === b.device && c.device === d.device, distinct = a.device !== c.device;
+
+  a.device.pushErrorScope('validation'); // a caller that threw before popping
+  a.device.pushErrorScope('out-of-memory');
+  const { device } = await sharedDevice();
+  const fired = new Promise<string>((r) => device.addEventListener('uncapturederror', (ev) => r((ev as GPUUncapturedErrorEvent).error.message), { once: true }));
+  device.createBuffer({ size: 4, usage: 0 }); // invalid: a validation error
+  await device.queue.onSubmittedWorkDone();
+  const uncaptured = await Promise.race([fired, new Promise<null>((r) => setTimeout(() => r(null), 5000))]);
+
+  a.device.destroy();
+  await a.device.lost;
+  const e = await sharedDevice();
+  e.device.pushErrorScope('validation');
+  e.device.createBuffer({ size: 16, usage: GPUBufferUsage.STORAGE });
+  const replacedError = await e.device.popErrorScope();
+  return { same, distinct, uncaptured, replaced: e.device !== a.device, replacedError: replacedError?.message ?? null, sameAfter: (await sharedDevice()).device === e.device };
 }

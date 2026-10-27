@@ -56,12 +56,14 @@ struct Manifold {
 }
 
 // An impact that spawns sparks.
-// size 32 B, align 16
+// size 48 B, align 16
 struct ImpactEvent {
   pos: vec3f, // @0 world position of the contact
   strength: f32, // @12 speed change, m/s
   dir: vec3f, // @16 unit; sparks fly out around it
   packed: u32, // @28 bits 0-23 slot (0xffffff: none), 24-27 kind (0 detector, 1 injected), 28-31 material
+  normal: vec3f, // @32 unit; the contact normal into the body (debris: the face normal nearest dir; else dir)
+  raw: f32, // @44 speed change before the debris face weight, m/s (strength in sparks mode)
 }
 
 // One spark of the renderer's pool.
