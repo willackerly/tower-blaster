@@ -7,7 +7,7 @@ import { emptySnapshot, TAG_BALL, type BodyDesc, type Snapshot } from '@tb/engin
 import { readBuffer, sharedDevice } from '@tb/gpu';
 import { Body, RenderRecord, Shape, TIER, readStruct } from '@tb/schema';
 import {
-  agx, AGX_WGSL, LOOKS, realLook, type RealOptions, type LookParams, fromHalf, Atmosphere, CLEAR_DAY, transmittance, transmittanceHMu, multiScattering, skyViewDir, skyRadiance, skyViewUv, sampleTransmittance, ambientOf, distanceToGround, meteredIlluminance, Materials, heightNormal, STONES, GROUNDS, MATERIAL_LAYERS, MACRO_LAYER, layerTile, materialSample, macroSample, adaptedExposure, LUMA, R_TOP, R_GROUND, FX_WORDS, packFx, toHalf, bevelNormal, BEVEL_WGSL, oklabToLinear, OKLAB_WGSL, Post,
+  agx, AGX_WGSL, LOOKS, realLook, type RealOptions, type LookParams, fromHalf, Atmosphere, CLEAR_DAY, transmittance, transmittanceHMu, multiScattering, skyViewDir, skyRadiance, skyViewUv, sampleTransmittance, ambientOf, distanceToGround, meteredIlluminance, Materials, heightNormal, STONES, GROUNDS, MATERIAL_LAYERS, WOOD_WGSL, WOOD_RING_M, woodRings, PCG_WGSL, pcg3d, MACRO_LAYER, layerTile, materialSample, macroSample, adaptedExposure, LUMA, R_TOP, R_GROUND, FX_WORDS, packFx, toHalf, bevelNormal, BEVEL_WGSL, oklabToLinear, OKLAB_WGSL, Post,
   Culler, cullReference, FLOOR_REACH, GpuBodySource, invert, listMatches, lookAt, makeGpuBodies, multiply, packBodies, perspective, Renderer, SEG, SEGMENTS, SnapshotSource, transform,
   translation, normalize, BOX_VERTS, SPHERE_VERTS, SUN, Sparks, CTL, MAX_EVENTS, flashSlot, FLASHES, MAX_BALLS, TRAIL, Lights, LIGHTS, LIGHT_META, LIGHT_PACKED, MATERIAL, AoVolume, aoGrid, aoFrame, splatReference, composeReference, AO_FOOT_WGSL, AO_SAMPLE_WGSL, AO_SEAM_WGSL, AO_ONE, type SplatBody, unpackImpacts, unpackSparks, spawnReference, stepReference, debrisSpawnReference, dustStepReference, chipStepReference, type SparkState, type Impact, type BodySource, type CullFrame, type FrameParams, type RendererOptions, type V3,
 } from '../src/index.ts';
@@ -2597,6 +2597,91 @@ export async function stoneLodSeam(o: Partial<RealOptions>, size: [number, numbe
   }
   const err = await device.popErrorScope();
   return { maxDiff, differing, lod: { boxes: a.boxes, farBoxes: a.farBoxes }, noLod: { boxes: b.boxes, farBoxes: b.farBoxes }, error: err?.message ?? null };
+}
+
+// ---------------------------------------------------------------- wood
+
+/**
+ * woodRings' WGSL against its CPU twin on n random points, blocks and pixel
+ * footprints (from a tenth of a ring to two); the largest differences, and
+ * how many points were left out at a ring's end.
+ */
+export async function woodTwins(seed: number, n = 4096) {
+  const { device } = await sharedDevice({ timestamps: false });
+  device.pushErrorScope('validation');
+  const r = rng(seed);
+  const f32 = Math.fround;
+  // Hashes made on both sides from a small slot number, as the shader makes them (raw u32 bits
+  // passed through a float buffer would not survive: the GPU may canonicalize NaN patterns).
+  const fl = new Float32Array(n * 12);
+  const cases = Array.from({ length: n }, (_, i) => {
+    const q: V3 = [f32((r() - 0.5) * 0.06), f32((r() - 0.5) * 0.06), f32((r() - 0.5) * 1.2)];
+    const slot = Math.floor(r() * 1e6), h = pcg3d(slot, 0x3779, 0x9e3d);
+    const ring = f32(WOOD_RING_M * (0.5 + 2 * r())), pxM = f32(ring * 10 ** (r() * 1.3 - 1));
+    fl.set([...q, 0, slot, 0, 0, 0, ring, pxM, 0, 0], 12 * i);
+    return { q, h, ring, pxM };
+  });
+  const out = await mapGpu(device, `${PCG_WGSL}${WOOD_WGSL}`, 'ys[i] = vec4f(woodRings(a.xyz, pcg3d(vec3u(u32(b.x), 0x3779u, 0x9e3du)), c.x, c.y), 0.0, 0.0);', fl, n);
+  let albedoErr = 0, lateErr = 0, worst: unknown = null, boundary = 0;
+  cases.forEach(({ q, h, ring, pxM }, i) => {
+    const w = woodRings(q[0], q[1], q[2], h, ring, pxM);
+    // Within 2e-3 of a ring's end, f32 rounding (sin and cos of tens of radians) may put the point in the next ring: latewood ends sharply.
+    if (Math.min(w.phase, 1 - w.phase) < 2e-3) { boundary++; return; }
+    const ea = Math.abs(w.albedo - out[4 * i]!), el = Math.abs(w.late - out[4 * i + 1]!);
+    if (ea > albedoErr) { albedoErr = ea; worst = { q, h, ring, pxM, cpu: w, gpu: [out[4 * i], out[4 * i + 1]] }; }
+    lateErr = Math.max(lateErr, el);
+  });
+  const err = await device.popErrorScope();
+  return { albedoErr, lateErr, boundary, n, worst, error: err?.message ?? null };
+}
+
+/**
+ * One plank (Kapla proportions, 1.2 m long, lying on the floor along x, or
+ * along z when turned), seen from 41 cm above, per look: the frame's hash,
+ * the mean luma of a patch inside its top face, and that patch's mean
+ * |luma step| along screen x (world x) and along screen y (world z). Grain
+ * along the plank makes steps across it larger.
+ */
+export async function woodFace(looks: Array<Partial<RealOptions> & { turned?: boolean } & Pick<RendererOptions, 'realDiag'>>, size: [number, number] = [320, 180]) {
+  const { device } = await sharedDevice({ timestamps: false });
+  device.pushErrorScope('validation');
+  const eye: V3 = [0, 0.45, 0.02], target: V3 = [0, 0.04, 0];
+  const f: FrameParams = { viewProj: multiply(perspective(0.9, size[0] / size[1], 0.05, 50), lookAt(eye, target)), eye, groundY: 0, time: 1, dt: 0, alpha: 1 };
+  const plank = (turned: boolean) => {
+    const s = Math.SQRT1_2, descs = [box([0, 0.04, 0], [0.6, 0.04, 0.12], turned ? [0, s, 0, s] : [0, 0, 0, 1])];
+    const src = new SnapshotSource(device);
+    src.reset(descs);
+    src.update(snapshotOf(descs), descs);
+    return src;
+  };
+  const planks = [plank(false), plank(true)];
+  // One renderer per bench diagnostic, its look switched between frames as the Scene panel does.
+  const renderers = new Map<string, Renderer>();
+  const out = [];
+  for (const { turned, realDiag, ...o } of looks) {
+    let rend = renderers.get(realDiag ?? '');
+    if (!rend) {
+      rend = new Renderer(device, { size }, { format: 'rgba8unorm', realDiag });
+      rend.setShadowBounds([0, 0, 0], 2, [1, 1, 1]);
+      renderers.set(realDiag ?? '', rend);
+    }
+    rend.look = realLook({ groundDetail: 0, hills: 0, ...o });
+    rend.setSource(planks[turned ? 1 : 0]!);
+    await rend.render(f);
+    const { data, bytesPerRow } = (await rend.render(f, true, true))!.pixels!;
+    const luma = (x: number, y: number) => { const k = y * bytesPerRow + 4 * x; return 0.2126 * data[k]! + 0.7152 * data[k + 1]! + 0.0722 * data[k + 2]!; };
+    let mean = 0, dx = 0, dy = 0, cnt = 0;
+    for (let y = 60; y < 120; y++) for (let x = 120; x < 200; x++) {
+      mean += luma(x, y);
+      dx += Math.abs(luma(x + 1, y) - luma(x, y));
+      dy += Math.abs(luma(x, y + 1) - luma(x, y));
+      cnt++;
+    }
+    out.push({ hash: fnv(data), meanLuma: mean / cnt, alongX: dx / cnt, alongZ: dy / cnt });
+  }
+  for (const rend of renderers.values()) rend.destroy();
+  const err = await device.popErrorScope();
+  return { frames: out, error: err?.message ?? null };
 }
 
 // ---------------------------------------------------------------- soft shadows

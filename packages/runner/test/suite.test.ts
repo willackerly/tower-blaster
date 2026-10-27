@@ -4,13 +4,31 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { buildScenario } from '@tb/scenarios';
-import { caseResult, nAtBudget, openRunner, parseConfig, runSuite, standardSuite, summaryMarkdown, toQuery, type CaseResult, type RunnerSession } from '../src/orchestrate-entry.ts';
+import { caseResult, nAtBudget, openRunner, parseConfig, runSuite, selectCases, standardSuite, summaryMarkdown, toQuery, type CaseResult, type RunnerSession } from '../src/orchestrate-entry.ts';
 
 describe('standard suite', () => {
   const suite = standardSuite();
   it('has unique case names and every case builds', () => {
     expect(new Set(suite.map((c) => c.name)).size).toBe(suite.length);
     for (const c of suite) expect(buildScenario(c.config.scenario, c.config.params, c.config.seed).bodies.length).toBeGreaterThan(0);
+  });
+
+  it('times the Kapla collapse: the ball spawns inside the timed window', () => {
+    const c = suite.find((x) => x.name === 'kapla-10k-topple')!;
+    const scene = buildScenario(c.config.scenario, c.config.params, c.config.seed);
+    expect(scene.bodies.length).toBeGreaterThan(9900); // fitShape: 9,969 planks
+    const spawn = scene.inputs!.find((i) => i.kind === 'spawn')!.step;
+    const t = c.config.timing;
+    expect(spawn).toBeGreaterThanOrEqual(t.warmup);
+    expect(spawn).toBeLessThan(t.warmup + t.blocks * t.blockSteps / 2);
+    expect(buildScenario('S15', suite.find((x) => x.name === 'kapla-10k-standing')!.config.params, 1).inputs ?? []).toEqual([]);
+  });
+
+  it('selects cases by name patterns', () => {
+    expect(selectCases(suite, undefined)).toBe(suite);
+    expect(selectCases(suite, 'kapla').map((c) => c.name)).toEqual(['kapla-10k-standing', 'kapla-10k-topple']);
+    expect(selectCases(suite, 'tower-packed,city-10k-awake').map((c) => c.name)).toEqual(['city-10k-awake', 'tower-packed']);
+    expect(() => selectCases(suite, 'nope')).toThrow(/matches no case/);
   });
 
   it('carries the timing mode into every case and its URL', () => {

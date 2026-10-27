@@ -61,7 +61,28 @@ export function standardSuite(engine = 'rapier', sizes = [1000, 2000, 5000, 1000
       question: 'Packed-lattice penalty, part 2: the same tower with 2% gaps (with sleep off the two cost the same per step; the penalty is in settling and sleeping)',
       config: cfg(e, 'S1', { F: 8, H: 30, gap: 0.02 }, true),
     },
+    // Kapla (S15, units of one plank width). Until the scene carries its metres per unit, gravity
+    // is 9.81 units/s^2: planks fall as if 43x larger, slower than real ones (docs/world-scale.md).
+    {
+      name: 'kapla-10k-standing',
+      question: 'Kapla: a 10k-plank tower standing, every plank awake: thin boxes, deep load paths, sphere-loose broadphase pairs',
+      config: cfg(e, 'S15', { planks: 10000, topple: false }, false),
+    },
+    {
+      name: 'kapla-10k-topple',
+      question: 'Kapla: a ball rolled into the 10k-plank tower 1 s in, timed from 0.5 s: the collapse',
+      config: cfg(e, 'S15', { planks: 10000, toppleAt: 1 }, false, { warmup: 30 }),
+    },
   ];
+}
+
+/** The cases whose name contains any of the comma-separated patterns (all of them for undefined). */
+export function selectCases(suite: SuiteCase[], patterns: string | undefined): SuiteCase[] {
+  if (patterns === undefined) return suite;
+  const ps = patterns.split(',').filter((p) => p !== '');
+  const out = suite.filter((c) => ps.some((p) => c.name.includes(p)));
+  if (!out.length) throw new Error(`--cases ${patterns} matches no case; cases: ${suite.map((c) => c.name).join(', ')}`);
+  return out;
 }
 
 /**

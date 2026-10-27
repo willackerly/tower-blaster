@@ -46,6 +46,8 @@ export interface ProbeOptions {
   params: Params;
   gravityScale: number;
   pairsPerBody: number | null;
+  /** GpuEngineOptions.boxBroadphase. */
+  boxBroadphase: boolean;
   seed: number;
   checkpoints: number[];
   R: number;
@@ -84,6 +86,7 @@ export const DEFAULT_PROBE: ProbeOptions = {
   params: {},
   gravityScale: 1,
   pairsPerBody: null,
+  boxBroadphase: false,
   seed: 1,
   checkpoints: [60, 300],
   R: 50,
@@ -148,7 +151,7 @@ export interface Checkpoint {
   coloursUsed: number;
   uncolored: number;
   pairSlots: number;
-  /** Bounding-sphere pairs the broadphase found (written or not), and the slots whose manifold has at least one point. */
+  /** Pairs the broadphase found (bounding-sphere pairs, less those the box test drops when it is on) (written or not), and the slots whose manifold has at least one point. */
   pairsRequired: number;
   contactPairs: number;
   colorTail: number;
@@ -169,7 +172,7 @@ export interface Checkpoint {
 /** A least-squares fit of t_c (µs) on the named regressors (coefficients in µs per unit); null where they cannot be told apart. */
 export interface Fit { model: string; coef: Record<string, number>; r2: number; adjR2: number; rmsUs: number; points: number }
 export interface P2Result {
-  scenario: string; params: Params; gravityScale: number; N: number; seed: number; iterations: number; R: number; checkpoints: Checkpoint[];
+  scenario: string; params: Params; gravityScale: number; boxBroadphase: boolean; N: number; seed: number; iterations: number; R: number; checkpoints: Checkpoint[];
   /** The hessian form the engine built (SolverDispatch.hessian). */
   hessian: HessianForm;
   /** t = a + b W, t = a + b W + e bodies, t = a + e bodies, t = a + g Σpoints. */
@@ -461,7 +464,7 @@ async function runP2(device: GPUDevice, timer: Timer, o: ProbeOptions): Promise<
   let iterations = 0, hessian = o.hessian;
   for (const step of o.checkpoints) {
     // A fresh engine per checkpoint: the probes below change contact state (the dual), which would carry into later steps.
-    const e = new GpuAvbdEngine({}, { device, hessian: o.hessian, ...(o.pairsPerBody ? { pairsPerBody: o.pairsPerBody } : {}) });
+    const e = new GpuAvbdEngine({}, { device, hessian: o.hessian, ...(o.pairsPerBody ? { pairsPerBody: o.pairsPerBody } : {}), ...(o.boxBroadphase ? { boxBroadphase: true } : {}) });
     await e.init(scene);
     iterations = e.probeParts().iterations;
     hessian = e.probeParts().dispatch.hessian;
@@ -542,7 +545,7 @@ async function runP2(device: GPUDevice, timer: Timer, o: ProbeOptions): Promise<
       : share < 0.2 ? 'A colour costs about the same whatever its size: the slowest thread\'s serial walk (latency) sets it.' : 'Both the size and the slowest thread matter.'}`);
   }
   if (perPointNs) verdict.push(`Per critical-path point, (t_c − empty dispatch) / W_c = ${perPointNs.median.toFixed(0)} ns (p10 ${perPointNs.p10.toFixed(0)}, p90 ${perPointNs.p90.toFixed(0)}) over ${per.length} colours.`);
-  return { scenario: o.scenario, params: scene.params as Params, gravityScale: o.gravityScale, N: scene.bodies.length, seed: o.seed, iterations, R: o.R, checkpoints, hessian, fits, perPointNs, verdict };
+  return { scenario: o.scenario, params: scene.params as Params, gravityScale: o.gravityScale, boxBroadphase: o.boxBroadphase, N: scene.bodies.length, seed: o.seed, iterations, R: o.R, checkpoints, hessian, fits, perPointNs, verdict };
 }
 
 // --- P3 --------------------------------------------------------------------
@@ -878,9 +881,9 @@ export function probeMarkdown(r: ProbeResult, header: string): string {
 
   if (r.p2) {
     const p = r.p2;
-    L.push('', `## P2 Real solver: ${p.scenario} ${JSON.stringify(p.params)}${p.gravityScale !== 1 ? ` gravity x${p.gravityScale}` : ''} N=${p.N} seed ${p.seed}, ${p.iterations} iterations (${p.iterations + 1} sweeps), hessian ${p.hessian}, R=${p.R} dispatches per timed pass`);
+    L.push('', `## P2 Real solver: ${p.scenario} ${JSON.stringify(p.params)}${p.gravityScale !== 1 ? ` gravity x${p.gravityScale}` : ''}${p.boxBroadphase ? ' box broadphase' : ''} N=${p.N} seed ${p.seed}, ${p.iterations} iterations (${p.iterations + 1} sweeps), hessian ${p.hessian}, R=${p.R} dispatches per timed pass`);
     for (const c of p.checkpoints) {
-      L.push('', `### Step ${c.step}: ${c.n} bodies, ${c.coloursUsed} colours (${c.uncolored} uncoloured), ${c.pairSlots} pair slots of ${c.pairsRequired} sphere pairs, ${c.contactPairs} in contact, ${c.totalPoints} contact points`, '');
+      L.push('', `### Step ${c.step}: ${c.n} bodies, ${c.coloursUsed} colours (${c.uncolored} uncoloured), ${c.pairSlots} pair slots of ${c.pairsRequired} broadphase pairs, ${c.contactPairs} in contact, ${c.totalPoints} contact points`, '');
       const e0 = c.emptyDispatch?.median;
       L.push('| Colour | Bodies | W_c (max points) | Max loads | Σ points | t_c µs | (t_c − empty) / W_c ns |', '|---|---|---|---|---|---|---|');
       for (const d of c.direct) L.push(`| ${d.colour} | ${d.bodies} | ${d.W} | ${d.loads} | ${d.points} | ${us(d.t)} | ${d.t && d.W && e0 !== undefined ? f(((d.t.median - e0) * 1e6) / d.W) : '–'} |`);

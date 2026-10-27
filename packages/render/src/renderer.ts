@@ -17,7 +17,7 @@ import { CANDY_NIGHT, linearToOklab, REAL_DEFAULTS, srgbToLinear, type LookParam
 import { invert, lookAt, multiply, normalize, type Mat4, type V3 } from './math.ts';
 import { HDR_FORMAT, noStamp, Post, type Stamp } from './post.ts';
 import { BOX_CUBE_VERTS, BOX_FAN_VERTS, Frame, SCENE_WGSL, sceneWgsl, SHADOW_SIZE, SPHERE_VERTS } from './shaders.ts';
-import { GROUND_LAYER, GROUNDS, Materials, patchThreshold, STONES } from './materials.ts';
+import { GROUND_LAYER, GROUNDS, Materials, patchThreshold, STONES, WOOD } from './materials.ts';
 import { ADAPTED_EXPOSURE_OFFSET, Atmosphere, medium, sunAtGround, sunDiscRadiance } from './atmosphere.ts';
 import { SnapshotSource, type BodySource } from './source.ts';
 
@@ -180,7 +180,7 @@ export class Renderer {
   private readonly shadowLayout: GPUBindGroupLayout;
   private readonly pipes: Record<PipeName, GPURenderPipeline>;
   /** Pipelines and sky of looks with an atmosphere, made on first use. */
-  private real: { pipes: Record<RealPipe, GPURenderPipeline>; atmosphere: Atmosphere; materials: Materials; layout: GPUBindGroupLayout; bind: GPUBindGroup } | null = null;
+  private real: { pipes: Record<RealPipe, GPURenderPipeline>; woodBox: () => GPURenderPipeline; atmosphere: Atmosphere; materials: Materials; layout: GPUBindGroupLayout; bind: GPUBindGroup } | null = null;
   private readonly makeReal: () => NonNullable<Renderer['real']>;
   private lastSun: V3 = SUN;
   private readonly facePipe: () => GPURenderPipeline;
@@ -370,8 +370,12 @@ export class Renderer {
       const m = { module: device.createShaderModule({ code: sceneWgsl(true), label: 'scene (real)' }), layout: device.createPipelineLayout({ bindGroupLayouts: [this.layout, layout] }) };
       const pcss = { REAL_PCSS: opts.realDiag === 'pcss-off' ? 0 : 1 };
       const floorConsts = { ...pcss, FLOOR_CONES: opts.realDiag === 'no-floor-sky' ? 0 : 1, REAL_GROUND: opts.realDiag === 'ground-off' ? 0 : 1 };
+      const boxConsts = { ...pcss, REAL_STONE: opts.realDiag === 'stone-off' ? 0 : 1, REAL_BLOCK: opts.realDiag === 'step1' ? 0 : 1 };
+      // The wood's box pipeline (REAL_WOOD), compiled the first time a look's stone is pine.
+      let wood: GPURenderPipeline | undefined;
+      const woodBox = () => (wood ??= opts.flatBoxes ? pipes.box : color('vsBox', 'fsBox', 'back', SEG.box, { ...m, constants: { ...boxConsts, REAL_WOOD: 1 } }));
       const pipes: Record<RealPipe, GPURenderPipeline> = {
-        box: color('vsBox', opts.flatBoxes ? 'fsBoxFlat' : 'fsBox', 'back', SEG.box, { ...m, constants: opts.flatBoxes ? {} : { ...pcss, REAL_STONE: opts.realDiag === 'stone-off' ? 0 : 1, REAL_BLOCK: opts.realDiag === 'step1' ? 0 : 1 } }),
+        box: color('vsBox', opts.flatBoxes ? 'fsBoxFlat' : 'fsBox', 'back', SEG.box, { ...m, constants: opts.flatBoxes ? {} : boxConsts }),
         // Past the stone's fade-out (stoneLodDepth): the same shading without the stone code.
         boxFar: color('vsBox', opts.flatBoxes ? 'fsBoxFlat' : 'fsBox', 'back', SEG.boxFar, { ...m, constants: opts.flatBoxes ? {} : { ...pcss, REAL_STONE: 0, REAL_BLOCK: opts.realDiag === 'step1' ? 0 : 1 } }),
         sphere: color('vsSphere', 'fsSphere', 'back', SEG.sphere, { ...m, constants: pcss }),
@@ -407,7 +411,7 @@ export class Renderer {
           { binding: 5, resource: materials.sampler }, { binding: 6, resource: device.createSampler({ label: 'shadow gather' }) },
         ],
       });
-      return { pipes, atmosphere, materials, layout, bind };
+      return { pipes, woodBox, atmosphere, materials, layout, bind };
     };
   }
 
@@ -650,7 +654,7 @@ export class Renderer {
     p.setBindGroup(0, this.bind!);
     if (real) p.setBindGroup(1, real.bind);
     const pipes = real ? { ...this.pipes, ...real.pipes } : this.pipes;
-    p.setPipeline(mode === 'faces' ? this.facePipe() : ids ? pipes.boxId : pipes.box);
+    p.setPipeline(mode === 'faces' ? this.facePipe() : ids ? pipes.boxId : real && stone?.kind === STONES[WOOD] ? real.woodBox() : pipes.box);
     p.drawIndirect(culler.args, 16 * SEG.box);
     if (real) {
       p.setPipeline(real.pipes.boxFar);

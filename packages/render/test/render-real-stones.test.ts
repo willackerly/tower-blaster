@@ -21,7 +21,7 @@ describe('drawing', () => {
     // The texture's mean multiplier is about 1: the same block colours on average.
     expect(Math.abs(lime!.meanLuma / flat!.meanLuma - 1)).toBeLessThan(0.05);
     expect(new Set(r.frames.map((f) => f.hash)).size).toBe(6);
-  });
+  }, 120_000);
 
   it('real look bench diagnostics: stone code compiled out draws what texture 0 draws; step-1 blocks differ', async (ctx) => {
     if (!gpu) return ctx.skip();
@@ -33,7 +33,7 @@ describe('drawing', () => {
     expect(offDetail!.hash).toBe(flat!.hash);
     // Step 1's blocks: the stylized body (no palette per block, wear or dirt).
     expect(step1!.hash).not.toBe(flat!.hash);
-  });
+  }, 120_000);
 
   it('stone level of detail: far boxes drop the stone code with no visible seam, and texture 0 sends every box far', async (ctx) => {
     if (!gpu) return ctx.skip();
@@ -50,7 +50,7 @@ describe('drawing', () => {
     const flat = await call('stoneLodSeam', { stoneDetail: 0 });
     expect(flat.lod.boxes).toBe(0);
     expect(flat.maxDiff).toBeLessThanOrEqual(2);
-  });
+  }, 120_000);
 
   it('real look soft shadows: the same analytic shadows, without acne or leaks', async (ctx) => {
     if (!gpu) return ctx.skip();

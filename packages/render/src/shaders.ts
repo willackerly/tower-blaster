@@ -9,7 +9,7 @@ import { SPARK_COMMON } from './sparks.ts';
 import { LIGHT_META, LIGHT_PACKED, LIGHT_VEC4, MAX_BALLS, TRAIL } from './lights.ts';
 import { AO_FOOT_WGSL, AO_SAMPLE_WGSL, AO_SEAM_WGSL } from './ao.ts';
 import { ATMO_COMMON_WGSL } from './atmosphere.ts';
-import { GROUND_LAYER, GROUND_TILE, GROUNDS, MACRO_LAYER, MACRO_TILE, MATERIAL_MIPS, MATERIAL_SIZE, MATERIAL_TILE } from './materials.ts';
+import { GROUND_LAYER, GROUND_TILE, GROUNDS, MACRO_LAYER, MACRO_TILE, MATERIAL_MIPS, MATERIAL_SIZE, MATERIAL_TILE, WOOD, WOOD_RING_M, WOOD_STRETCH, WOOD_WGSL } from './materials.ts';
 import { PCG_WGSL } from './noise.ts';
 
 export const SHADOW_SIZE = 2048;
@@ -74,11 +74,16 @@ ${ATMO_COMMON_WGSL}
 @group(1) @binding(5) var stoneSamp: sampler;
 @group(0) @binding(15) var aoFloorSkyTex: texture_2d<f32>; // ao.ts: the floor's sky view factor (R)
 ${PCG_WGSL}
+${WOOD_WGSL}
 // Bench diagnostics (RendererOptions.realDiag): REAL_STONE false compiles the
 // stone samples out ('stone-off'); REAL_BLOCK false shades blocks as step 1
 // did, the stylized body under the atmosphere ('step1').
 override REAL_STONE: bool = true;
 override REAL_BLOCK: bool = true;
+// The wood (materials.ts WOOD): the box pipeline for a look whose stone is
+// pine sets it, and blocks take woodAt instead of the stone. Off, the wood
+// code is not compiled, so the stones' pipelines carry none of its registers.
+override REAL_WOOD: bool = false;
 // RendererOptions.realDiag 'no-floor-sky': the floor's baked sky view unused (the vertical sky term only).
 override FLOOR_CONES: bool = true;
 // RendererOptions.realDiag 'ground-off': the ground material and horizon hills compiled out (the flat floor of ground texture 0).
@@ -194,9 +199,47 @@ fn rot90(v: vec2f, k: u32) -> vec2f {
 // of it. dn: the normal map's tilt in body-local space,
 // to add to the face (or bevel) normal; nLen: the mip-averaged normal's
 // length, < 1 where bumps average out (Toksvig).
+// Wood (materials.ts WOOD, REAL_WOOD): the grain runs along the block's
+// longest axis G (x on ties). Faces along it sample the layer WOOD_STRETCH
+// times longer along G, so its noise reads as fibres, flipped and shifted by
+// a hash; end faces sample it unstretched at half strength, darker and
+// rougher (open end grain). The growth rings (woodRings) are 3D, so end faces
+// show arcs and the long faces stripes and arches, matching at the edges.
+// Like stoneAt, everything fades to the uniform hit (albedo 1, roughness 0.8)
+// by the fade-out footprint, so the far boxes (REAL_STONE off) match.
+fn woodAt(slot: u32, lp: vec3f, faceN: vec3f, half: vec3f, pxM: f32) -> StoneHit {
+  let gx = half.x >= half.y && half.x >= half.z;
+  let gy = !gx && half.y >= half.z;
+  let G = select(select(vec3f(0.0, 0.0, 1.0), vec3f(0.0, 1.0, 0.0), gy), vec3f(1.0, 0.0, 0.0), gx);
+  let A = select(select(vec3f(1.0, 0.0, 0.0), vec3f(0.0, 0.0, 1.0), gy), vec3f(0.0, 1.0, 0.0), gx);
+  let B = cross(G, A);
+  let h = pcg3d(vec3u(slot, 0x3779u, 0x9e3du));
+  let tile = ${MATERIAL_TILE.toFixed(1)} * fr.stone.y;
+  let detail = fr.stoneDetail.x * (1.0 - smoothstep(0.5 * fr.stoneDetail.y, fr.stoneDetail.y, pxM));
+  let rings = woodRings(vec3f(dot(lp, A), dot(lp, B), dot(lp, G)), h, ${WOOD_RING_M / MATERIAL_TILE} * tile, pxM);
+  let endGrain = abs(dot(faceN, G)) > 0.5;
+  // Texture axes: along the grain and across it on the long faces, the cross-section's on the ends.
+  let fl = vec2f(select(-1.0, 1.0, (h.x & 1u) == 0u), select(-1.0, 1.0, (h.x & 2u) == 0u));
+  let U = select(G, A, endGrain) * fl.x;
+  let V = select(cross(faceN, G), B, endGrain) * fl.y;
+  let stretch = select(${WOOD_STRETCH.toFixed(1)}, 1.0, endGrain);
+  let off = vec2f(f32(h.y), f32(h.z)) * NOISE_U;
+  let uv = vec2f(dot(lp, U) / (stretch * tile), dot(lp, V) / tile) + off;
+  let d = textureSample(stoneDetail, stoneSamp, uv, ${WOOD});
+  let nm = textureSample(stoneNormal, stoneSamp, uv, ${WOOD});
+  let tn = nm.xyz * 2.0 - 1.0;
+  let len = max(length(tn), 1e-4);
+  let t = vec2f(tn.x / stretch, tn.y) / max(tn.z, 0.2);
+  let k = select(1.0, 0.5, endGrain) * detail;
+  let albedo = mix(vec3f(1.0), d.rgb * 2.0, k) * mix(1.0, rings.x, detail) * select(1.0, mix(1.0, 0.82, detail), endGrain);
+  let rough = mix(0.8, d.a - 0.05 * rings.y + select(0.0, 0.1, endGrain), detail);
+  return StoneHit(albedo, rough, (U * t.x + V * t.y) * k, mix(1.0, nm.a, k), mix(1.0, min(len, 1.0), k));
+}
+
 struct StoneHit { albedo: vec3f, rough: f32, dn: vec3f, cavity: f32, nLen: f32 }
-fn stoneAt(slot: u32, lp: vec3f, faceN: vec3f, pxM: f32) -> StoneHit {
+fn stoneAt(slot: u32, lp: vec3f, faceN: vec3f, half: vec3f, pxM: f32) -> StoneHit {
   if (!REAL_STONE || fr.stoneDetail.x <= 0.0) { return StoneHit(vec3f(1.0), 0.8, vec3f(0.0), 1.0, 1.0); } // uniform: skips both samples
+  if (REAL_WOOD) { return woodAt(slot, lp, faceN, half, pxM); }
   let ax = abs(faceN);
   let T = select(vec3f(1.0, 0.0, 0.0), vec3f(0.0, 0.0, 1.0), ax.x > 0.5);
   let B = select(vec3f(0.0, 1.0, 0.0), vec3f(0.0, 0.0, 1.0), ax.y > 0.5);
@@ -581,7 +624,7 @@ const REAL_FS_BOX = /* wgsl */ `fragPx = v.clip.xy;
     let pxM = length(fwidth(lp));
     let faceN = boxFace(v.local, fwidth(v.local));
     let aoPxM = length(fwidth(v.local * v.half));
-    let st = stoneAt(v.slot, lp, faceN, aoPxM);
+    let st = stoneAt(v.slot, lp, faceN, v.half, aoPxM);
     let n = qrot(v.rot, normalize(bevelNormal(lp, faceN, v.half, pxM, fr.bevel) + st.dn));
     let dndx = dpdx(n);
     let dndy = dpdy(n);

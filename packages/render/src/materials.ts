@@ -31,8 +31,15 @@
 import { fbm, gnoise, NOISE_WGSL, worley } from './noise.ts';
 import type { V3 } from './math.ts';
 
-export const STONES = ['limestone', 'sandstone', 'granite', 'concrete'] as const;
+export const STONES = ['limestone', 'sandstone', 'granite', 'concrete', 'pine'] as const;
 export type Stone = (typeof STONES)[number];
+/**
+ * The one wood among the block materials (Kapla's maritime pine). Its layer
+ * is stretched WOOD_STRETCH times along the grain, which follows each block's
+ * longest axis, and growth rings (woodRings) are added per pixel; shaders.ts
+ * woodAt, compiled only into the wood pipeline (REAL_WOOD).
+ */
+export const WOOD = STONES.indexOf('pine');
 export const GROUNDS = ['gravel', 'dirt'] as const;
 export type Ground = (typeof GROUNDS)[number];
 /** Layer of the first ground, and of the ground's macro variation (after the grounds). */
@@ -46,6 +53,10 @@ export const MATERIAL_TILE = 1;
 /** Metres of floor one ground tile, and the macro layer, cover at ground scale 1. */
 export const GROUND_TILE = 2;
 export const MACRO_TILE = 64;
+// The grounds' and macro layer's noise seeds, fixed when pine was added after
+// the stones so that the grounds kept their textures (they were 1000 x (layer + 1)).
+const GROUND_SEED = 5000;
+const MACRO_SEED = 7000;
 
 /** Metres one tile of a layer covers at scale 1. */
 export function layerTile(layer: number): number {
@@ -58,6 +69,8 @@ export const STONE_PALETTES: Record<Stone, string[]> = {
   sandstone: ['#C49A6C', '#B98B5E', '#CFA77A', '#A97C55', '#C2946A'],
   granite: ['#8F8A86', '#9A928D', '#86817E', '#A39B95', '#918B88'],
   concrete: ['#A7A6A1', '#9C9B96', '#B0AEA8', '#95948F', '#A3A19B'],
+  // Pale, unfinished maritime pine, plank to plank from straw to honey.
+  pine: ['#E2C79B', '#D9BC8C', '#E9D3AA', '#D3B382', '#DEC293'],
 };
 
 export interface StoneTexel { albedo: V3; rough: number; height: number; cavity: number }
@@ -91,11 +104,19 @@ export function stoneSample(layer: number, u: number, v: number): StoneTexel {
     const s = (0.95 + 0.05 * edge) * (0.92 + 0.16 * coarse);
     return { albedo: [mineral[0] * s, mineral[1] * s, mineral[2] * s], rough: 0.6 + 0.15 * (k < 0.1 ? 1 : 0), height: 0.0002 * (edge - 1) + 0.0002 * coarse, cavity: 0.8 + 0.2 * edge };
   }
-  // concrete: cement mottling, sparse air voids
-  const m = fbm(u * 5, v * 5, 5, seed, 5), [f1, , id] = worley(u * 40, v * 40, 40, seed + 11);
-  const pore = id * U < 0.3 ? 1 - smoothstep(0.03, 0.09, f1) : 0;
-  const a = 1 + 0.12 * m - 0.45 * pore;
-  return { albedo: [a, a, a * 1.01], rough: 0.9, height: 0.001 * m - 0.0012 * pore, cavity: 1 - 0.7 * pore };
+  if (layer === 3) { // concrete: cement mottling, sparse air voids
+    const m = fbm(u * 5, v * 5, 5, seed, 5), [f1, , id] = worley(u * 40, v * 40, 40, seed + 11);
+    const pore = id * U < 0.3 ? 1 - smoothstep(0.03, 0.09, f1) : 0;
+    const a = 1 + 0.12 * m - 0.45 * pore;
+    return { albedo: [a, a, a * 1.01], rough: 0.9, height: 0.001 * m - 0.0012 * pore, cavity: 1 - 0.7 * pore };
+  }
+  // pine: isotropic here; sampled WOOD_STRETCH times longer along the grain, the fine noise
+  // becomes fibres (4 x 31 mm), the coarse one streaks, the sparse cells resin canals
+  const fib = gnoise(u * 256, v * 256, 256, seed), streak = fbm(u * 32, v * 32, 32, seed + 3, 3);
+  const [f1, , id] = worley(u * 48, v * 48, 48, seed + 11);
+  const resin = id * U < 0.15 ? 1 - smoothstep(0.08, 0.22, f1) : 0;
+  const a = 1 + 0.07 * fib + 0.12 * streak - 0.25 * resin;
+  return { albedo: mix3([a, a, a], [a * 1.03, a * 0.93, a * 0.75], resin), rough: 0.65 + 0.08 * fib, height: 0.00015 * fib + 0.0002 * streak - 0.0002 * resin, cavity: 1 - 0.3 * resin - 0.15 * Math.max(-fib, 0) };
 }
 
 /**
@@ -116,7 +137,7 @@ function pebbles(u: number, v: number, period: number, seed: number, density: nu
 
 /** One ground (k: index in GROUNDS) at (u, v) in [0, 1) of its GROUND_TILE: what the bake writes. */
 export function groundSample(k: number, u: number, v: number): StoneTexel {
-  const seed = 1000 * (GROUND_LAYER + k + 1);
+  const seed = GROUND_SEED + 1000 * k;
   if (k === 0) { // gravel: rounded stones of three sizes and mixed tone in a dirt matrix, denser in metre-scale clumps
     const clump = fbm(u * 2, v * 2, 2, seed, 3), tone = fbm(u * 16, v * 16, 16, seed + 3, 3), fines = gnoise(u * 256, v * 256, 256, seed + 7);
     const grit = pebbles(u, v, 150, seed + 13, 0.55 + 0.3 * clump, 0.0015);
@@ -144,10 +165,68 @@ export function materialSample(layer: number, u: number, v: number): StoneTexel 
 
 /** The macro layer at (u, v) in [0, 1): brightness, tint and scale blend, each 0.5 on average, and 1. */
 export function macroSample(u: number, v: number): [number, number, number, number] {
-  const seed = 1000 * (MACRO_LAYER + 1);
+  const seed = MACRO_SEED;
   const b = fbm(u * 4, v * 4, 4, seed, 5), t = fbm(u * 3, v * 3, 3, seed + 5, 4), w = fbm(u * 6, v * 6, 6, seed + 9, 4);
   return [clamp01(0.5 + b), clamp01(0.5 + t), clamp01(0.5 + 1.5 * w), 1];
 }
+
+/** Mean growth-ring spacing (metres; maritime pine grows 3 to 8 mm a year) and the fibre layer's stretch along the grain. */
+export const WOOD_RING_M = 0.005;
+export const WOOD_STRETCH = 8;
+// Latewood: the dark part of each ring, from 0.62 to 0.72 of the way out (smoothstep) to the
+// ring's end; its mean over a ring, which a footprint wider than the rings fades to.
+const LATE = [0.62, 0.72] as const;
+const LATE_MEAN = 1 - (LATE[0] + LATE[1]) / 2;
+const LATE_DARK = 0.28;
+
+/**
+ * A block's growth rings at body-local (a, b) across the grain and g along it
+ * (world units), ring = WOOD_RING_M in world units, pxM: the pixel's
+ * footprint there; h: the block's hash. The rings are cylinders about a pith
+ * line 8 to 40 rings off the block's centre in a hashed direction, tilted 3%
+ * to the grain (across that direction, either way), their radius wobbling with g (0.3 m and 7 cm waves): end
+ * faces show arcs, faces along the grain the stripes and long arches of
+ * flat-sawn boards. Spacing varies 0.7 to 1.3x per block.
+ *
+ * albedo: the multiplier, 1 on average over a ring, darker in the latewood;
+ * late: latewood, 0 to 1; phase: how far out in its ring the point is, 0 to 1
+ * (latewood ends sharply at 1). albedo and late fade to the ring's mean as the footprint
+ * passes a fifth to a half of the ring (a conservative bound: the phase
+ * changes at most 1 / spacing per unit of distance), so the rings never alias.
+ */
+export function woodRings(a: number, b: number, g: number, h: [number, number, number], ring: number, pxM: number): { albedo: number; late: number; phase: number } {
+  const s = 0.7 + 0.6 * h[0] * U, d = 8 + 32 * h[1] * U;
+  // The pith's direction from the hash without trigonometry: 8 to 40 rings times a GPU's sin or
+  // cos error (2^-11) would move the rings by up to 2% of one against this twin.
+  const ex = (h[2] >>> 16) / 65536 - 0.5, ey = (h[2] & 0xffff) / 65536 - 0.5, el = Math.max(Math.hypot(ex, ey), 1e-6);
+  const tilt = (h[0] & 1 ? 0.03 : -0.03), ph = (2 * Math.PI * (h[1] & 0xffff)) / 65536;
+  const x = a / ring, y = b / ring, z = g / ring;
+  const cx = (d * ex - tilt * z * ey) / el, cy = (d * ey + tilt * z * ex) / el;
+  const r = Math.hypot(x - cx, y - cy) + 0.15 * Math.sin(z / 9.5 + ph) + 0.05 * Math.sin(z / 2.3 + 3 * ph);
+  const f = r / s - Math.floor(r / s);
+  const fade = 1 - smoothstep(0.2, 0.5, pxM / (ring * s));
+  const late = LATE_MEAN + (smoothstep(LATE[0], LATE[1], f) - LATE_MEAN) * fade;
+  return { albedo: (1 - LATE_DARK * late) / (1 - LATE_DARK * LATE_MEAN), late, phase: f };
+}
+
+/** woodRings in WGSL (vec2f: albedo, late). */
+export const WOOD_WGSL = /* wgsl */ `
+fn woodRings(q: vec3f, h: vec3u, ring: f32, pxM: f32) -> vec2f {
+  let s = 0.7 + 0.6 * f32(h.x) * 2.3283064365386963e-10;
+  let d = 8.0 + 32.0 * f32(h.y) * 2.3283064365386963e-10;
+  let e = vec2f(f32(h.z >> 16u), f32(h.z & 0xffffu)) / 65536.0 - 0.5;
+  let el = max(length(e), 1e-6);
+  let tilt = select(-0.03, 0.03, (h.x & 1u) != 0u);
+  let ph = 6.283185307 * f32(h.y & 0xffffu) / 65536.0;
+  let p = q / ring;
+  let c = (d * e + tilt * p.z * vec2f(-e.y, e.x)) / el;
+  let r = length(p.xy - c) + 0.15 * sin(p.z / 9.5 + ph) + 0.05 * sin(p.z / 2.3 + 3.0 * ph);
+  let f = fract(r / s);
+  let fade = 1.0 - smoothstep(0.2, 0.5, pxM / (ring * s));
+  let late = ${LATE_MEAN} + (smoothstep(${LATE[0]}, ${LATE[1]}, f) - ${LATE_MEAN}) * fade;
+  return vec2f((1.0 - ${LATE_DARK} * late) / ${1 - LATE_DARK * LATE_MEAN}, late);
+}
+`;
 
 /**
  * The ground's patch field (shaders.ts groundMacro: 0.55 x the macro b at
@@ -211,11 +290,19 @@ fn stoneSample(layer: u32, uv: vec2f) -> StoneTexel {
     let s = (0.95 + 0.05 * edge) * (0.92 + 0.16 * coarse);
     return StoneTexel(mineral * s, 0.6 + 0.15 * select(0.0, 1.0, k < 0.1), 0.0002 * (edge - 1.0) + 0.0002 * coarse, 0.8 + 0.2 * edge);
   }
-  let m = fbm(uv * 5.0, 5, seed, 5);
-  let c = worley(uv * 40.0, 40, seed + 11u);
-  let pore = select(0.0, 1.0 - smoothstep(0.03, 0.09, c.f1), f32(c.id) * NOISE_U < 0.3);
-  let a = 1.0 + 0.12 * m - 0.45 * pore;
-  return StoneTexel(vec3f(a, a, a * 1.01), 0.9, 0.001 * m - 0.0012 * pore, 1.0 - 0.7 * pore);
+  if (layer == 3u) {
+    let m = fbm(uv * 5.0, 5, seed, 5);
+    let c = worley(uv * 40.0, 40, seed + 11u);
+    let pore = select(0.0, 1.0 - smoothstep(0.03, 0.09, c.f1), f32(c.id) * NOISE_U < 0.3);
+    let a = 1.0 + 0.12 * m - 0.45 * pore;
+    return StoneTexel(vec3f(a, a, a * 1.01), 0.9, 0.001 * m - 0.0012 * pore, 1.0 - 0.7 * pore);
+  }
+  let fib = gnoise(uv * 256.0, 256, seed);
+  let streak = fbm(uv * 32.0, 32, seed + 3u, 3);
+  let c = worley(uv * 48.0, 48, seed + 11u);
+  let resin = select(0.0, 1.0 - smoothstep(0.08, 0.22, c.f1), f32(c.id) * NOISE_U < 0.15);
+  let a = 1.0 + 0.07 * fib + 0.12 * streak - 0.25 * resin;
+  return StoneTexel(mix(vec3f(a), vec3f(a * 1.03, a * 0.93, a * 0.75), resin), 0.65 + 0.08 * fib, 0.00015 * fib + 0.0002 * streak - 0.0002 * resin, 1.0 - 0.3 * resin - 0.15 * max(-fib, 0.0));
 }
 
 struct Pebbles { cover: f32, height: f32, albedo: vec3f, crevice: f32 }
@@ -231,7 +318,7 @@ fn pebbles(uv: vec2f, period: i32, seed: u32, density: f32, hMax: f32) -> Pebble
 }
 
 fn groundSample(k: u32, uv: vec2f) -> StoneTexel {
-  let seed = 1000u * (${GROUND_LAYER}u + k + 1u);
+  let seed = ${GROUND_SEED}u + 1000u * k;
   if (k == 0u) {
     let clump = fbm(uv * 2.0, 2, seed, 3);
     let tone = fbm(uv * 16.0, 16, seed + 3u, 3);
@@ -261,7 +348,7 @@ fn materialSample(layer: u32, uv: vec2f) -> StoneTexel {
 }
 
 fn macroSample(uv: vec2f) -> vec4f {
-  let seed = 1000u * ${MACRO_LAYER + 1}u;
+  let seed = ${MACRO_SEED}u;
   let b = fbm(uv * 4.0, 4, seed, 5);
   let t = fbm(uv * 3.0, 3, seed + 5u, 4);
   let w = fbm(uv * 6.0, 6, seed + 9u, 4);

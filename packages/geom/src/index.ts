@@ -89,6 +89,25 @@ export function boxBoxDepth(a: Obb, b: Obb): number {
   return best;
 }
 
+/**
+ * SAT separation of two oriented boxes: the largest gap over the 15 axes
+ * boxBoxManifold tests (the faces of both, then the edge crosses longer than
+ * 1e-6), negative when they overlap. boxBoxManifold returns null whenever
+ * this exceeds its margin, so a broadphase may drop such pairs without
+ * changing any manifold (the GPU box broadphase, physics-gpu broadphase.ts).
+ */
+export function boxBoxSeparation(a: Obb, b: Obb): number {
+  const d = sub(b.c, a.c);
+  const sep = (n: Vec3) => Math.abs(dot(d, n)) - radius(a, n) - radius(b, n);
+  let s = -Infinity;
+  for (const n of [...a.axes, ...b.axes]) s = Math.max(s, sep(n));
+  for (const u of a.axes) for (const v of b.axes) {
+    const c = cross(u, v), len = length(c);
+    if (len >= 1e-6) s = Math.max(s, sep(scale(c, 1 / len)));
+  }
+  return s;
+}
+
 /** Closest point on the box to p. */
 export function closestPointOnBox(b: Obb, p: Vec3): Vec3 {
   const d = sub(p, b.c);
