@@ -53,6 +53,8 @@
   "packages/physics-ref/test/collapse.test.ts": 8.3,
   "packages/render/test/ao.test.ts": 0.1,
   "packages/render/test/floor.test.ts": 0.3,
+  "packages/render/test/hall-gpu.test.ts": 6,
+  "packages/render/test/hall.test.ts": 0.3,
   "packages/render/test/lod.test.ts": 0.1,
   "packages/render/test/materials.test.ts": 1.7,
   "packages/render/test/noise.test.ts": 0,
