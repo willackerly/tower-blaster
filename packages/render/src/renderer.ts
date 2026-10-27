@@ -20,6 +20,7 @@ import { BOX_CUBE_VERTS, BOX_FAN_VERTS, Frame, SCENE_WGSL, sceneWgsl, SHADOW_SIZ
 import { GROUND_LAYER, GROUNDS, Materials, patchThreshold, STONES, WOOD } from './materials.ts';
 import { ADAPTED_EXPOSURE_OFFSET, Atmosphere, medium, sunAtGround, sunDiscRadiance } from './atmosphere.ts';
 import { SnapshotSource, type BodySource } from './source.ts';
+import { hallArch, hallInside, hallMesh, HALL_VERTEX, type HallParams } from './hall.ts';
 
 export { BOX_CUBE_VERTS, BOX_FAN_VERTS, BOX_VERTS, SPHERE_VERTS } from './shaders.ts';
 
@@ -171,6 +172,22 @@ export function lookUniforms(l: LookParams, metres = 1): Record<string, number |
   };
 }
 
+/**
+ * The hall's Frame uniforms (hallLook, hallShade; shaders.ts) for a look and an eye (world units,
+ * metres per unit): on (hallLook.x) only with a hall and the eye inside it; off, the renderer
+ * draws no hall.
+ */
+export function hallUniforms(l: LookParams, metres: number, eye: V3, groundY: number): Record<string, number[]> {
+  const h = l.atmosphere ? l.hall : undefined;
+  if (!h) return { hallLook: [0, metres, 0, 0], hallShade: [0, 0, 0, 0] };
+  const p = h.params;
+  const on = hallInside(p, [eye[0] * metres, (eye[1] - groundY) * metres, eye[2] * metres]);
+  return {
+    hallLook: [on ? 1 : 0, metres, h.glass, h.iron],
+    hallShade: [(p.clear * Math.PI) / 180 / hallArch(p).spring, p.bar / (p.ribDepth - 2 * p.chord), p.balustrade, 0],
+  };
+}
+
 export class Renderer {
   readonly format: GPUTextureFormat;
   look: LookParams = CANDY_NIGHT;
@@ -180,7 +197,7 @@ export class Renderer {
   private readonly shadowLayout: GPUBindGroupLayout;
   private readonly pipes: Record<PipeName, GPURenderPipeline>;
   /** Pipelines and sky of looks with an atmosphere, made on first use. */
-  private real: { pipes: Record<RealPipe, GPURenderPipeline>; woodBox: () => GPURenderPipeline; atmosphere: Atmosphere; materials: Materials; layout: GPUBindGroupLayout; bind: GPUBindGroup } | null = null;
+  private real: { pipes: Record<RealPipe, GPURenderPipeline>; woodBox: () => GPURenderPipeline; hall: () => { opaque: GPURenderPipeline; glass: GPURenderPipeline }; atmosphere: Atmosphere; materials: Materials; layout: GPUBindGroupLayout; bind: GPUBindGroup } | null = null;
   private readonly makeReal: () => NonNullable<Renderer['real']>;
   private lastSun: V3 = SUN;
   private readonly facePipe: () => GPURenderPipeline;
@@ -213,6 +230,10 @@ export class Renderer {
   private readonly overlayColours: GPUBuffer;
   private overlayCount = 0;
   private readonly floorBuf: GPUBuffer;
+  /** The look has a hall and the eye is inside it (hallUniforms): the hall is drawn. */
+  private hallOn = false;
+  /** The hall's mesh on the GPU, for the hall it was built from. */
+  private hallGpu: { params: HallParams; opaque: GPUBuffer; glass: GPUBuffer; opaqueCount: number; glassCount: number } | null = null;
   private readonly floorData = new Float32Array(FLOOR_VERTS * 3);
   private floorCount = 0;
   private lastTime = 0;
@@ -374,6 +395,29 @@ export class Renderer {
       // The wood's box pipeline (REAL_WOOD), compiled the first time a look's stone is pine.
       let wood: GPURenderPipeline | undefined;
       const woodBox = () => (wood ??= opts.flatBoxes ? pipes.box : color('vsBox', 'fsBox', 'back', SEG.box, { ...m, constants: { ...boxConsts, REAL_WOOD: 1 } }));
+      // The hall (hall.ts), compiled the first time a look has one: its mesh's
+      // opaque surfaces (lattices by alpha to coverage) and its glazing,
+      // premultiplied over the sky.
+      let hallPipes: { opaque: GPURenderPipeline; glass: GPURenderPipeline } | undefined;
+      const hallBuffers: GPUVertexBufferLayout[] = [{
+        arrayStride: 4 * HALL_VERTEX,
+        attributes: [
+          { shaderLocation: 0, offset: 0, format: 'float32x3' }, { shaderLocation: 1, offset: 12, format: 'float32x3' },
+          { shaderLocation: 2, offset: 24, format: 'float32x2' }, { shaderLocation: 3, offset: 32, format: 'float32x2' },
+        ],
+      }];
+      const hallPipe = (fs: string, blend: boolean) => device.createRenderPipeline({
+        layout: m.layout,
+        vertex: { module: m.module, entryPoint: 'vsHall', buffers: hallBuffers },
+        fragment: {
+          module: m.module, entryPoint: fs,
+          targets: [blend ? { format: HDR_FORMAT, blend: { color: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha', operation: 'add' }, alpha: { srcFactor: 'zero', dstFactor: 'one', operation: 'add' } } } : { format: HDR_FORMAT }],
+        },
+        primitive: { topology: 'triangle-list', cullMode: 'none' },
+        depthStencil: { format: 'depth24plus', depthWriteEnabled: true, depthCompare: 'less' },
+        multisample: { count: SAMPLES, alphaToCoverageEnabled: !blend },
+      });
+      const hall = () => (hallPipes ??= { opaque: hallPipe('fsHall', false), glass: hallPipe('fsHallGlass', true) });
       const pipes: Record<RealPipe, GPURenderPipeline> = {
         box: color('vsBox', opts.flatBoxes ? 'fsBoxFlat' : 'fsBox', 'back', SEG.box, { ...m, constants: opts.flatBoxes ? {} : boxConsts }),
         // Past the stone's fade-out (stoneLodDepth): the same shading without the stone code.
@@ -411,7 +455,7 @@ export class Renderer {
           { binding: 5, resource: materials.sampler }, { binding: 6, resource: device.createSampler({ label: 'shadow gather' }) },
         ],
       });
-      return { pipes, woodBox, atmosphere, materials, layout, bind };
+      return { pipes, woodBox, hall, atmosphere, materials, layout, bind };
     };
   }
 
@@ -544,6 +588,24 @@ export class Renderer {
     this.depth = this.device.createTexture({ size: [w, h], format: 'depth24plus', sampleCount: SAMPLES, usage: GPUTextureUsage.RENDER_ATTACHMENT, label: 'depth msaa' });
   }
 
+  /** The hall's vertex buffers, rebuilt when its params change (hallSize). */
+  private hallMesh(params: HallParams): NonNullable<Renderer['hallGpu']> {
+    const g = this.hallGpu;
+    if (g && JSON.stringify(g.params) === JSON.stringify(params)) return g;
+    g?.opaque.destroy();
+    g?.glass.destroy();
+    const mesh = hallMesh(params);
+    const upload = (data: Float32Array, label: string) => {
+      const b = this.device.createBuffer({ size: Math.max(data.byteLength, 16), usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST, label });
+      this.device.queue.writeBuffer(b, 0, data);
+      return b;
+    };
+    return (this.hallGpu = {
+      params, opaque: upload(mesh.opaque, 'hall opaque'), glass: upload(mesh.glass, 'hall glass'),
+      opaqueCount: mesh.opaque.length / HALL_VERTEX, glassCount: mesh.glass.length / HALL_VERTEX,
+    });
+  }
+
   private writeFrame(f: FrameParams): CullFrame {
     const toWorld = translation(f.eye);
     const viewProj = multiply(f.viewProj, toWorld);
@@ -558,6 +620,8 @@ export class Renderer {
     this.lastTime = f.time ?? 0;
     const inv = invert(viewProj);
     this.floorCount = floorFan(floorPolygon(inv, f.groundY - f.eye[1]), this.floorData).count;
+    const hall = hallUniforms(this.look, f.metres ?? 1, f.eye, f.groundY);
+    this.hallOn = hall.hallLook![0] === 1;
     if (this.floorCount) this.device.queue.writeBuffer(this.floorBuf, 0, this.floorData, 0, this.floorCount * 3);
     writeStruct(this.frameData, Frame, 0, {
       viewProj, lightViewProj, invViewProj: inv,
@@ -569,6 +633,7 @@ export class Renderer {
       ...this.aoUniforms(f.eye),
       heat: this.toggles.heat && this.look.effects !== false ? 1 : 0, viewport: this.viewport(), dt: f.dt ?? 0, trailHead: (this.lights.nextFrame + TRAIL - 1) % TRAIL,
       ...this.atmosphereUniforms(f, sun, fit),
+      ...hall,
     });
     this.device.queue.writeBuffer(this.frameBuf, 0, this.frameData);
     return { viewProj, lightViewProj, eye: f.eye, alpha: f.alpha ?? 1, noCull: f.noCull ?? false };
@@ -668,6 +733,13 @@ export class Renderer {
         p.setPipeline(pipes.overlay);
         p.draw(SPHERE_VERTS, this.overlayCount);
       }
+      // The hall's opaque surfaces after the bodies (what they hide is never shaded), before the floor.
+      const hall = real && this.hallOn ? { pipes: real.hall(), mesh: this.hallMesh(this.look.hall!.params) } : null;
+      if (hall) {
+        p.setPipeline(hall.pipes.opaque);
+        p.setVertexBuffer(0, hall.mesh.opaque);
+        p.draw(hall.mesh.opaqueCount);
+      }
       if (this.floorCount) {
         p.setPipeline(pipes.ground);
         p.setVertexBuffer(0, this.floorBuf);
@@ -675,6 +747,11 @@ export class Renderer {
       }
       p.setPipeline(pipes.sky);
       p.draw(3);
+      if (hall) {
+        p.setPipeline(hall.pipes.glass);
+        p.setVertexBuffer(0, hall.mesh.glass);
+        p.draw(hall.mesh.glassCount);
+      }
       if (this.toggles.sparks && effects) {
         p.setPipeline(this.pipes.spark);
         p.drawIndirect(this.sparks.args, 0);
@@ -784,6 +861,8 @@ export class Renderer {
     this.fxBuf?.destroy();
     this.overlayBuf.destroy();
     this.floorBuf.destroy();
+    this.hallGpu?.opaque.destroy();
+    this.hallGpu?.glass.destroy();
     this.overlayColours.destroy();
     this.sparks.destroy();
     this.lights.destroy();
