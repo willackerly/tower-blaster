@@ -400,10 +400,11 @@ const QUAD = array<vec2f, 6>(vec2f(-1.0, -1.0), vec2f(1.0, -1.0), vec2f(1.0, 1.0
   let suv = lc.xy * vec2f(0.5, -0.5) + 0.5;
   let inside = all(suv > vec2f(0.0)) && all(suv < vec2f(1.0)) && lc.z < 1.0;
   let vis = select(1.0, textureSampleCompareLevel(shadowMap, shadowSampler, suv, lc.z - fr.shadowParams.y), inside);
-  // Stone powder, lighter than the blocks; a thick cloud scatters many times, so half its phase is isotropic.
-  let albedo = mix(fr.blockAlbedo.rgb, fr.floor, 0.3) * 1.1;
+  // Stone powder, lighter than the blocks, or soil raised by a landing (bit 12), lighter than the ground;
+  // a thick cloud scatters many times, so half its phase is isotropic.
+  let albedo = select(mix(fr.blockAlbedo.rgb, fr.floor, 0.3) * 1.1, mix(fr.blockAlbedo.rgb, fr.floor, 0.7) * 1.2, ((s.packed >> 12u) & 1u) == 1u);
   let lit = albedo * (fr.sunColor * vis * 0.5 * (0.5 + 0.5 * hg4pi(dot(fr.sun, normalize(rel)), 0.4)) + 0.5 * (atmoAmbient[0].rgb + atmoAmbient[1].rgb));
-  let alpha = fr.debris.y * pow(1.0 - t, 1.5) * smoothstep(0.0, 0.06, t);
+  let alpha = fr.debris.y * mix(0.5, 1.0, fract(seed * 13.7)) * pow(1.0 - t, 1.5) * smoothstep(0.0, 0.06, t);
   let corner = QUAD[vi];
   let p = rel + facing(rel, corner, r, 6.2831853 * fract(seed * 7.13) + s.age * (seed - 0.5));
   o.clip = fr.viewProj * vec4f(p, 1.0);
