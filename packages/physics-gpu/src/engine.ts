@@ -1,15 +1,17 @@
 // The GPU AVBD pipeline behind the engine contract: prepare (sweeps) ->
 // broadphase -> match (pair history) -> narrowphase -> colouring -> solve,
 // one command buffer per step. Parameters are the reference solver's (physics-ref AvbdParams), so
-// the two engines can be run side by side on the same settings.
-import { type BodyDesc, emptySnapshot, type EngineInfo, inertiaOf, type InputEvent, massOf, type PhysicsEngine, type SceneDesc, type Snapshot } from '@tb/engine-api';
+// the two engines can be run side by side on the same settings. With AvbdParams.restitution on,
+// the solve ends with the restitution pass (restitution.ts).
+import { type BodyDesc, DEFAULT_RESTITUTION_COMBINE, emptySnapshot, type EngineInfo, inertiaOf, type InputEvent, massOf, type PhysicsEngine, type SceneDesc, type Snapshot, type Vec3 } from '@tb/engine-api';
 import { boundingRadius } from '@tb/geom';
 import { assertStorageFits, createDevice, isSoftwareAdapter, Readback } from '@tb/gpu';
-import { type AvbdParams, avbdVariant, checkGapSlop, checkRestitution, DEFAULT_AVBD } from '@tb/physics-ref';
-import { Body, BodyProps, readField, Shape, SolverBody, writeStruct } from '@tb/schema';
+import { type AvbdParams, avbdVariant, checkGapSlop, checkRestitution, DEFAULT_AVBD, RESTITUTION_DEFAULTS } from '@tb/physics-ref';
+import { Body, BodyProps, readField, RestSlot, Shape, SolverBody, writeStruct } from '@tb/schema';
 import { Broadphase } from './broadphase.ts';
 import { Coloring } from './coloring.ts';
 import { Narrowphase } from './narrowphase.ts';
+import { restitutionWord } from './restitution.ts';
 import { AvbdSolver, DEFAULT_DISPATCH, defaultTailThreads, HESSIAN_FORMS, type HessianForm, type SolverDispatch } from './solver.ts';
 
 export interface GpuEngineOptions {
@@ -66,6 +68,45 @@ export interface GpuDiagnostics {
   colorOverflow: number;
 }
 
+/**
+ * What the last step's restitution pass did, as the reference's
+ * StepStats.restitution: the points it bounced (P > 0), the normal impulse it
+ * applied in all (N s, supports included), and the impulse it took from the
+ * ground (ground normals are +y). Read back from the pass's state, summed in
+ * f64. The reference's momentum (the bodies' total linear momentum change)
+ * is not kept here: it equals groundImpulse to rounding.
+ */
+export interface GpuRestitutionStats {
+  contacts: number;
+  impulse: number;
+  groundImpulse: Vec3;
+}
+
+/**
+ * GpuRestitutionStats from a copy of the pass's state (AvbdSolver.restSlots)
+ * after a step that wrote `pairsWritten` pair slots for n bodies.
+ */
+export function restitutionStatsOf(slots: ArrayBuffer, pairsWritten: number, maxPairs: number, n: number): GpuRestitutionStats {
+  const f = new Float32Array(slots), u = new Uint32Array(slots), stride = RestSlot.size / 4;
+  const at = (name: string) => RestSlot.fields.find((x) => x.name === name)!.offset / 4;
+  const P = at('P'), flags = at('flags');
+  const out: GpuRestitutionStats = { contacts: 0, impulse: 0, groundImpulse: [0, 0, 0] };
+  const add = (k: number, ground: boolean) => {
+    const fl = u[k * stride + flags]!;
+    for (let q = 0; q < 4; q++) {
+      // Bit q: the point bounces; bit q + 4: it is a support.
+      if (!((fl >> q) & 0x11)) continue;
+      const pq = f[k * stride + P + q]!;
+      out.impulse += pq;
+      if (ground) out.groundImpulse[1] += pq;
+      if ((fl >> q) & 1 && pq > 0) out.contacts++;
+    }
+  };
+  for (let k = 0; k < pairsWritten; k++) add(k, false);
+  for (let i = 0; i < n; i++) add(maxPairs + i, true);
+  return out;
+}
+
 export class GpuAvbdEngine implements PhysicsEngine {
   readonly info: EngineInfo;
   stepIndex = 0;
@@ -92,7 +133,6 @@ export class GpuAvbdEngine implements PhysicsEngine {
     if (!this.params.postStabilize) throw new Error('GpuAvbdEngine: only postStabilize = true is implemented');
     // The same AvbdParams as the reference, switch on or off.
     checkRestitution(this.params);
-    if (this.params.restitution) throw new Error('GpuAvbdEngine: restitution is not implemented on the GPU yet (AvbdParams.restitution)');
     checkGapSlop(this.params);
     const check = (k: 'capacity' | 'spare' | 'pairsPerBody' | 'maxRadius' | 'colorTail' | 'tailThreads' | 'colorRounds', ok: (v: number) => boolean, what: string) => {
       const v = opts[k];
@@ -115,6 +155,9 @@ export class GpuAvbdEngine implements PhysicsEngine {
   }
 
   async init(scene: SceneDesc): Promise<void> {
+    // As the reference, switch on or off; checked before anything changes.
+    const groundE = scene.ground?.restitution;
+    if (groundE !== undefined && !(groundE >= 0 && groundE <= 1)) throw new Error(`GpuAvbdEngine: SceneDesc.ground.restitution must be in [0, 1], got ${groundE}`);
     this.failure = null;
     this.dispose();
     const generation = this.generation;
@@ -178,7 +221,10 @@ export class GpuAvbdEngine implements PhysicsEngine {
         bodies, props, spheres, sweep, prev, manifolds: np.manifolds, groundManifolds: np.groundManifolds,
         pairs: bp.pairs, total: bp.total, offsets: bp.offsets,
         order: col.order, colorStart: col.colorStart, dispatch: col.dispatch, rowStart: col.rowStart, rowLength: col.rowLength, adjSlot: col.adjSlot,
-      }, this.dispatch, p.gapSlop ?? 0);
+      }, this.dispatch, p.gapSlop ?? 0, p.restitution ? {
+        threshold: p.restitutionThreshold ?? RESTITUTION_DEFAULTS.restitutionThreshold, rounds: p.restitutionRounds ?? RESTITUTION_DEFAULTS.restitutionRounds,
+        groundRestitution: scene.ground?.restitution ?? 0, combine: scene.restitutionCombine ?? DEFAULT_RESTITUTION_COMBINE,
+      } : null);
       parts = { bodies, shapes, props, spheres, sweep, prev, bp, np, col, solver, readback: new Readback(device) };
     } catch (e) {
       thrown = e;
@@ -218,7 +264,7 @@ export class GpuAvbdEngine implements PhysicsEngine {
     const m = massOf(b);
     one(Body, { pos: b.pos, invMass: 1 / m, rot: b.rot, linVel: b.linVel, flags: 1, angVel: b.angVel, shape: i }, parts!.bodies);
     one(Shape, b.shape.kind === 'box' ? { half: b.shape.half, kind: 0 } : { half: [b.shape.radius, 0, 0], kind: 1 }, parts!.shapes);
-    one(BodyProps, { inertia: inertiaOf(b), mass: m, friction: b.friction, radius: boundingRadius(b.shape), sphere: b.shape.kind === 'sphere' ? 1 : 0 }, parts!.props);
+    one(BodyProps, { inertia: inertiaOf(b), mass: m, friction: b.friction, radius: boundingRadius(b.shape), sphere: b.shape.kind === 'sphere' ? 1 : 0, restitution: restitutionWord(b.restitution) }, parts!.props);
     // prevVel = initial velocity, as the reference (no adaptive warm-start kick on the first step).
     one(SolverBody, { prevVel: b.linVel }, parts!.solver.solver);
   }
@@ -320,6 +366,20 @@ export class GpuAvbdEngine implements PhysicsEngine {
     const [t, c] = await Promise.all([parts.readback.read(parts.bp.total), parts.readback.read(parts.col.info)]);
     const total = new Uint32Array(t), info = new Uint32Array(c);
     return { pairsRequired: total[5]!, pairsWritten: total[3]!, colors: info[0]!, uncolored: info[1]!, colorOverflow: info[2]! };
+  }
+
+  /**
+   * The last step's restitution pass (GpuRestitutionStats), or null while
+   * AvbdParams.restitution is off. Reads the pass's whole state back: for
+   * tests and tools, not every step.
+   */
+  async restitutionStats(): Promise<GpuRestitutionStats | null> {
+    const { device, parts } = this;
+    if (!device || !parts) throw new Error('init() first');
+    const slots = parts.solver.restSlots;
+    if (!slots) return null;
+    const [t, r] = await Promise.all([parts.readback.read(parts.bp.total), parts.readback.read(slots)]);
+    return restitutionStatsOf(r, new Uint32Array(t)[3]!, parts.solver.maxPairs, this.n);
   }
 
   private static free(p: NonNullable<GpuAvbdEngine['parts']>): void {

@@ -122,7 +122,7 @@ export const BodyProps = defineStruct(
     ['friction', 'f32'],
     ['radius', 'f32', 'bounding sphere radius'],
     ['sphere', 'u32', '1 for a sphere (radius is its radius), 0 for a box: picks rolling contacts (SolverParams.rollingContacts)'],
-    ['pad1', 'u32'],
+    ['restitution', 'f32', 'BodyDesc.restitution; read only by the restitution pass (AvbdParams.restitution)'],
   ],
   'Constant per-body properties for the solver, written by the host.',
 );
@@ -206,6 +206,28 @@ export const SolverParams = defineStruct(
   'Per-step uniforms of the GPU AVBD solver.',
 );
 
+/**
+ * The GPU restitution pass's state (physics-gpu/src/restitution.ts), one per
+ * contact slot: the pair slots, then one ground slot per body (the contact
+ * buffer's slot order). Its buffer exists only while AvbdParams.restitution is
+ * on. A ground slot's record also carries its body's part in the pass (bit 8
+ * of flags, and split).
+ */
+export const RestSlot = defineStruct(
+  'RestSlot',
+  [
+    ['vnTarget', 'vec4f', 'per point q: the normal velocity the pass raises it to (-e vn0 if it bounces, the solve\'s vn if it is a support)'],
+    ['P', 'vec4f', 'per point q: the normal impulse the pass has applied there so far, N s (>= 0)'],
+    ['lin', 'vec3f', 'this round\'s linear impulse on body b, the sum of dP n (body a takes -lin)'],
+    ['flags', 'u32', 'bits 0-3: point q bounces; bits 4-7: point q is a support; bit 8 (ground slots): the body is in a bouncing manifold'],
+    ['angB', 'vec3f', 'this round\'s angular impulse on body b, the sum of dP (rbw x n)'],
+    ['b', 'u32', 'body b of the slot'],
+    ['angA', 'vec3f', 'this round\'s angular impulse on body a, the sum of -dP (raw x n)'],
+    ['split', 'u32', 'ground slots: the pass\'s manifolds the body is in (its mass split); 0 if it is not in the pass'],
+  ],
+  'Restitution pass state per contact slot (allocated only while AvbdParams.restitution is on).',
+);
+
 export const ColorParams = defineStruct(
   'ColorParams',
   [
@@ -217,4 +239,4 @@ export const ColorParams = defineStruct(
   'Per-dispatch uniforms (bound with a dynamic offset).',
 );
 
-export const ALL_STRUCTS = [SimParams, Body, RenderRecord, Shape, Manifold, ImpactEvent, Spark, FxState, BodyProps, SolverBody, SolverContact, SolverParams, ColorParams];
+export const ALL_STRUCTS = [SimParams, Body, RenderRecord, Shape, Manifold, ImpactEvent, Spark, FxState, BodyProps, SolverBody, SolverContact, SolverParams, ColorParams, RestSlot];

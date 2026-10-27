@@ -396,16 +396,28 @@ describe('GPU AVBD engine: engine contract (friction rule, integrator)', () => {
     expect(await mu(undefined)).toBe(await mu('average'));
   });
 
-  it('restitution (AvbdParams.restitution) throws until it is ported, its params are checked as in the reference, and while off its keys stay out of the variant', () => {
-    expect(() => new GpuAvbdEngine({ restitution: true })).toThrow('GpuAvbdEngine: restitution is not implemented on the GPU yet');
+  it('restitution (AvbdParams.restitution) is accepted, its params and the ground\'s are checked as in the reference, and it is in the variant exactly while it is on, as there', async () => {
+    // Its effect on the GPU: engine-restitution.test.ts.
+    expect(() => new GpuAvbdEngine({ restitution: true })).not.toThrow();
     // The reference's checks, switch on or off.
-    for (const [p, msg] of [[{ restitutionThreshold: -1 }, 'restitutionThreshold must be a finite number >= 0, got -1'], [{ restitutionRounds: 0 }, 'restitutionRounds must be an integer >= 1, got 0']] as const) {
+    for (const [p, msg] of [[{ restitutionThreshold: -1 }, 'restitutionThreshold must be a finite number >= 0, got -1'], [{ restitutionThreshold: Number.NaN }, 'restitutionThreshold must be a finite number >= 0, got NaN'], [{ restitutionRounds: 0 }, 'restitutionRounds must be an integer >= 1, got 0'], [{ restitution: true, restitutionRounds: 2.5 }, 'restitutionRounds must be an integer >= 1, got 2.5']] as const) {
       expect(() => new AvbdReferenceEngine(p)).toThrow(msg);
       expect(() => new GpuAvbdEngine(p)).toThrow(msg);
+    }
+    for (const p of [{}, { restitution: false }, { restitution: false, restitutionThreshold: 2, restitutionRounds: 3 }, { restitution: true }, { restitution: true, restitutionRounds: 3 }, { restitution: true, restitutionThreshold: 0, gapSlop: 3e-5 }]) {
+      expect(new GpuAvbdEngine(p).info.variant, JSON.stringify(p)).toEqual(new AvbdReferenceEngine(p).info.variant);
     }
     const keys = Object.keys(new GpuAvbdEngine().info.variant);
     expect(Object.keys(new GpuAvbdEngine({ restitution: false, restitutionThreshold: 2, restitutionRounds: 3 }).info.variant)).toEqual(keys);
     expect(keys.some((k) => k.startsWith('restitution'))).toBe(false);
+    expect(new GpuAvbdEngine({ restitution: true }).info.variant).toMatchObject({ restitution: true, restitutionThreshold: 1, restitutionRounds: 8 });
+    // The ground's restitution, in [0, 1], checked by init() before anything changes, switch on or off (as the reference).
+    const ground = (e: number) => ({ ...sceneOf([cube([0, 0.5, 0])]), ground: { y: 0, friction: 0.6, restitution: e } });
+    for (const e of [-0.1, 1.5, Number.NaN]) {
+      await expect(new AvbdReferenceEngine().init(ground(e))).rejects.toThrow(`SceneDesc.ground.restitution must be in [0, 1], got ${e}`);
+      await expect(new GpuAvbdEngine().init(ground(e))).rejects.toThrow(`GpuAvbdEngine: SceneDesc.ground.restitution must be in [0, 1], got ${e}`);
+      await expect(new GpuAvbdEngine({ restitution: true }).init(ground(e))).rejects.toThrow(`GpuAvbdEngine: SceneDesc.ground.restitution must be in [0, 1], got ${e}`);
+    }
   });
 
   it('the loaded-gap slop (AvbdParams.gapSlop) is accepted, checked as in the reference, and in the variant exactly while it is on, as there', () => {

@@ -46,6 +46,7 @@
   "packages/physics-gpu/test/engine-gapslop.test.ts": 230,
   "packages/physics-gpu/test/engine-knock.test.ts": 102.2,
   "packages/physics-gpu/test/engine-rest.test.ts": 106.4,
+  "packages/physics-gpu/test/engine-restitution.test.ts": 240.1,
   "packages/physics-gpu/test/engine-scale.test.ts": 12.1,
   "packages/physics-gpu/test/engine-stacks.test.ts": 74.7,
   "packages/physics-gpu/test/engine.test.ts": 85.4,

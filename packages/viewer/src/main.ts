@@ -6,15 +6,15 @@
 // per frame (maxSteps allows catch-up). Slower engines fall into slow motion,
 // shown as sim speed.
 import { makeEngine, parseSpec } from '@tb/bench';
-import { type BodyDesc, type InputEvent, type PhysicsEngine, type SceneDesc, type Snapshot } from '@tb/engine-api';
+import { type BodyDesc, type EngineInfo, type InputEvent, type PhysicsEngine, type Snapshot } from '@tb/engine-api';
 import { boundingRadius } from '@tb/geom';
 import { DEFAULT_AVBD } from '@tb/physics-ref';
-import { buildScenario, SCENARIOS } from '@tb/scenarios';
+import { SCENARIOS } from '@tb/scenarios';
 import { clampPitch, frame, rayThrough, viewProj, eyeOf, orbitAt, poseOf, type CameraPose, type Orbit } from './camera.ts';
 import { alphaAt, newArrivals, newClock, newPacer, pauseLatch, runFree, stepsDue, taskYield, trackSimSpeed, Window } from './loop.ts';
 import type { V3 } from './math.ts';
 import { escapeHtml } from './html.ts';
-import { engineSpec, froudeSpeed, parseViewerConfig, presetSearch, toSearch, type ViewerConfig, withOption, worldEngineSpec, worldScene } from './params.ts';
+import { bounceBody, bounceOn, engineSpec, froudeSpeed, parseViewerConfig, presetSearch, toSearch, type ViewerConfig, viewerScene, withOption, worldEngineSpec } from './params.ts';
 import { projectileBody, projectileShape, pushRadiusLimit } from './projectile.ts';
 import { mountControls } from './controls.ts';
 import { createDevice } from '@tb/gpu';
@@ -62,6 +62,8 @@ interface ViewerHandle {
   resets: number;
   /** Steps submitted before the step before reported done, so queued behind it (loop=free pipelining; see runFree). */
   overlapped: number;
+  /** The running engine's EngineInfo.variant (its params as built: Bounce's restitution, a world scale's scaling). */
+  variant: EngineInfo['variant'];
   /** Where the camera is now. */
   camera(): CameraPose;
   /** Fire a ball through normalized device coords (0, 0 = centre). */
@@ -74,7 +76,7 @@ declare global { interface Window { __viewer: ViewerHandle } }
 const canvas = document.getElementById('c') as HTMLCanvasElement;
 const hud = document.getElementById('hud')!;
 const errorBox = document.getElementById('error')!;
-const handle: ViewerHandle = { status: 'loading', frames: 0, bodies: 0, awake: 0, stepIndex: 0, msPerStep: NaN, snapMs: NaN, resets: 0, overlapped: 0, camera: () => ({ target: [0, 0, 0], yaw: 0, pitch: 0, distance: 1 }), fire: () => {}, capture: async () => null, inputs: [] };
+const handle: ViewerHandle = { status: 'loading', frames: 0, bodies: 0, awake: 0, stepIndex: 0, msPerStep: NaN, snapMs: NaN, resets: 0, overlapped: 0, variant: {}, camera: () => ({ target: [0, 0, 0], yaw: 0, pitch: 0, distance: 1 }), fire: () => {}, capture: async () => null, inputs: [] };
 window.__viewer = handle;
 
 function fail(e: unknown) {
@@ -84,11 +86,6 @@ function fail(e: unknown) {
   errorBox.style.display = 'block';
   errorBox.textContent = `Error: ${msg}`;
   console.error(e);
-}
-
-function sceneFor(c: ViewerConfig): SceneDesc {
-  const s = worldScene(buildScenario(c.scenario, c.params, c.seed), c.scale, c.substeps);
-  return c.sleep === null ? s : { ...s, sleep: c.sleep };
 }
 
 function bounds(bodies: BodyDesc[]): { min: V3; max: V3 } {
@@ -145,7 +142,7 @@ async function main() {
   renderer.device.addEventListener('uncapturederror', (e) => fail((e as GPUUncapturedErrorEvent).error.message));
 
   let engine: PhysicsEngine = viewerEngine(config);
-  let scene = sceneFor(config);
+  let scene = viewerScene(config);
   // Engine body i has shape shapes[i]: initial bodies, then spawns in
   // (step, push order), the same order the engine applies them.
   let events: InputEvent[] = [];
@@ -203,7 +200,7 @@ async function main() {
   // (scene, camera, the source's bodies) switches in one synchronous block after the last
   // await: no frame sees an empty source or the new camera on the old scene.
   async function load(want: ViewerConfig) {
-    const next = sceneFor(want); // throws on bad params before anything is torn down
+    const next = viewerScene(want); // throws on bad params before anything is torn down
     engine.dispose();
     engine = viewerEngine(want);
     pushLimit = pushRadiusLimit(engineSpec(want.engine, want.projectile), next);
@@ -212,6 +209,7 @@ async function main() {
     const s = await engine.snapshot();
     config = want;
     scene = next;
+    handle.variant = engine.info.variant;
     events = [...scene.inputs];
     shapes = [...scene.bodies];
     source.reset(scene.bodies);
@@ -306,7 +304,9 @@ async function main() {
   handle.fire = (x = 0, y = 0) => {
     if (resetting) return;
     const { origin, dir } = rayThrough(orbit, aspect(), x, y);
-    const ev: InputEvent = { step: engine.stepIndex, kind: 'spawn', body: projectileBody({ ...config.projectile, speed: config.projectile.speed * froudeSpeed(config.scale) }, origin, dir) };
+    const body = projectileBody({ ...config.projectile, speed: config.projectile.speed * froudeSpeed(config.scale) }, origin, dir);
+    // With Bounce on, the projectile bounces at the scene's e too (viewerScene).
+    const ev: InputEvent = { step: engine.stepIndex, kind: 'spawn', body: bounceOn(config.engine) ? bounceBody(body, config.bounce) : body };
     try {
       engine.push([ev]);
     } catch (e) {

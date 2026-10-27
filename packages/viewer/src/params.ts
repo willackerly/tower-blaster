@@ -2,13 +2,16 @@
 // ?scenario=S4&param.N=3000&engine=rapier&sleep=1&loop=frame&maxSteps=2&proj=cube&proj.size=2
 // (engine: a @tb/bench spec; the default is the GPU engine; proj*: see projectile.ts;
 // look=real with real.* knobs: see parseRealOptions in @tb/render; cam: see parseCamera; scale=0.25: quarter-metre cubes, substeps=2;
-// view.pitch=17&view.fit=1.1&view.fov=45: how a scene without cam is framed, see parseFraming)
+// view.pitch=17&view.fit=1.1&view.fov=45: how a scene without cam is framed, see parseFraming;
+// engine=avbd-gpu:restitution=true&bounce.e=0.7: Bounce, one feature under two keys: the switch is the
+// engine option restitution (an AvbdParams key, so it travels with the spec), bounce.e the e it then gives
+// every surface (the viewer's own, as no engine has one); see bounceOn and ViewerConfig.bounce)
 import { parseSpec } from '@tb/bench';
 import type { BodyDesc, SceneDesc, Vec3 } from '@tb/engine-api';
 import { boundingRadius } from '@tb/geom';
-import { froudeParams } from '@tb/physics-ref';
+import { type AvbdParams, froudeParams } from '@tb/physics-ref';
 import { LOOKS, parseRealOptions, type RealOptions, writeRealOptions } from '@tb/render';
-import { SCENARIOS } from '@tb/scenarios';
+import { buildScenario, SCENARIOS } from '@tb/scenarios';
 import { type CameraPose, DEFAULT_FRAMING, type Framing, FRAMING_LIMITS } from './camera.ts';
 import { MAX_STEPS_LIMIT } from './loop.ts';
 import { DEFAULT_PROJECTILE, parseProjectile, type Projectile, projectileShape, writeProjectile } from './projectile.ts';
@@ -62,7 +65,23 @@ export interface ViewerConfig {
   camera: CameraPose | null;
   /** How a scene without a start camera is framed, and the field of view either way. */
   view: Framing;
+  /**
+   * Bounce's e (URL key bounce.e, 0 to 1, default DEFAULT_BOUNCE): while the engine spec
+   * turns restitution on (bounceOn), every body, spawn and fired projectile and the ground
+   * get this restitution (bounceScene), so under the scenes' combine rule (average) every
+   * pair bounces at e. Off, the scene is the scenario's. Kept whether Bounce is on or not.
+   */
+  bounce: number;
 }
+
+/**
+ * Bounce's default e. The scenarios' bodies and ground have restitution 0 and the fired
+ * ball 0.1, so restitution on with nothing else bounces only the ball, at 0.05 under
+ * average: next to nothing. 0.5 bounces visibly and stays in the range the reference was
+ * checked for energy at (e <= 0.9; e = 1 is not energy-safe: physics-ref avbd.ts). What
+ * it does to the default ball's shots, against Rapier: docs/plan.md, Restitution, Viewer.
+ */
+export const DEFAULT_BOUNCE = 0.5;
 
 /** scale's accepted range, and the most substeps. */
 export const SCALE_LIMITS = [0.01, 10] as const;
@@ -100,7 +119,7 @@ export const defaultScale = (scenario: string) => SCENARIOS[scenario]?.scale ?? 
 /** How much faster than the unit world a world at this scale moves (speeds, in cube units per second). */
 export const froudeSpeed = (scale: number) => 1 / Math.sqrt(scale);
 
-export const DEFAULT_CONFIG: ViewerConfig = { engine: 'avbd-gpu', scenario: 'S4', params: { N: 2000, F: 4, H: 12 }, seed: 1, sleep: null, autofire: 0, offscreen: false, look: 'candy', real: {}, loop: 'free', pipeline: true, maxSteps: 1, projectile: DEFAULT_PROJECTILE, scale: 1, substeps: 1, camera: null, view: DEFAULT_FRAMING };
+export const DEFAULT_CONFIG: ViewerConfig = { engine: 'avbd-gpu', scenario: 'S4', params: { N: 2000, F: 4, H: 12 }, seed: 1, sleep: null, autofire: 0, offscreen: false, look: 'candy', real: {}, loop: 'free', pipeline: true, maxSteps: 1, projectile: DEFAULT_PROJECTILE, scale: 1, substeps: 1, camera: null, view: DEFAULT_FRAMING, bounce: DEFAULT_BOUNCE };
 
 export function parseViewerConfig(search: string): ViewerConfig {
   const q = new URLSearchParams(search);
@@ -129,6 +148,8 @@ export function parseViewerConfig(search: string): ViewerConfig {
   if (!(scale >= SCALE_LIMITS[0] && scale <= SCALE_LIMITS[1])) throw new Error(`scale must be a number from ${SCALE_LIMITS[0]} to ${SCALE_LIMITS[1]} (metres per cube): ${q.get('scale')}`);
   const substeps = Number(q.get('substeps') ?? autoSubsteps(scale));
   if (!Number.isInteger(substeps) || substeps < 1 || substeps > MAX_SUBSTEPS) throw new Error(`substeps must be an integer from 1 to ${MAX_SUBSTEPS}: ${q.get('substeps')}`);
+  const bounce = Number(q.get('bounce.e') ?? DEFAULT_BOUNCE);
+  if (!(bounce >= 0 && bounce <= 1) || q.get('bounce.e') === '') throw new Error(`bounce.e must be a number from 0 to 1: ${q.get('bounce.e')}`);
   return {
     engine: q.get('engine') ?? DEFAULT_CONFIG.engine,
     scenario,
@@ -147,6 +168,7 @@ export function parseViewerConfig(search: string): ViewerConfig {
     substeps,
     camera: parseCamera(q.get('cam')),
     view: parseFraming(q),
+    bounce,
   };
 }
 
@@ -194,23 +216,24 @@ export function toSearch(c: ViewerConfig): string {
   if (c.substeps !== autoSubsteps(c.scale)) q.set('substeps', String(c.substeps));
   if (c.camera) q.set('cam', writeCamera(c.camera));
   writeFraming(c.view, q);
+  if (c.bounce !== DEFAULT_BOUNCE) q.set('bounce.e', String(c.bounce));
   return `?${q}`;
 }
 
 /**
- * A preset's search with how the viewer runs (engine, loop, pipeline,
- * substeps set by hand), the projectile, the look, the framing and a chosen scale kept (a scale left
+ * A preset's search with how the viewer runs (engine, Bounce included, loop, pipeline,
+ * substeps set by hand), the projectile, the look, the framing, Bounce's e and a chosen scale kept (a scale left
  * at the current scenario's default becomes the preset's default), which is
  * where its button takes you (framed afresh: no camera).
  */
-export function presetSearch(preset: string, cur: Pick<ViewerConfig, 'engine' | 'loop' | 'pipeline' | 'maxSteps' | 'projectile'> & Partial<Pick<ViewerConfig, 'look' | 'real' | 'substeps' | 'scale' | 'scenario' | 'view'>>): string {
-  const { engine, loop, pipeline, maxSteps, projectile, look = DEFAULT_CONFIG.look, real = {}, view = DEFAULT_CONFIG.view } = cur;
+export function presetSearch(preset: string, cur: Pick<ViewerConfig, 'engine' | 'loop' | 'pipeline' | 'maxSteps' | 'projectile'> & Partial<Pick<ViewerConfig, 'look' | 'real' | 'substeps' | 'scale' | 'scenario' | 'view' | 'bounce'>>): string {
+  const { engine, loop, pipeline, maxSteps, projectile, look = DEFAULT_CONFIG.look, real = {}, view = DEFAULT_CONFIG.view, bounce = DEFAULT_BOUNCE } = cur;
   const next = parseViewerConfig(preset);
   const chosen = cur.scale !== undefined && cur.scenario !== undefined && cur.scale !== defaultScale(cur.scenario);
   const scale = chosen ? cur.scale! : next.scale;
   // Substeps set by hand stay; otherwise the new scale's own.
   const substeps = cur.substeps !== undefined && cur.substeps !== autoSubsteps(cur.scale ?? 1) ? cur.substeps : autoSubsteps(scale);
-  return toSearch({ ...next, engine, loop, pipeline, maxSteps, projectile, look, real, substeps, scale, view });
+  return toSearch({ ...next, engine, loop, pipeline, maxSteps, projectile, look, real, substeps, scale, view, bounce });
 }
 
 /** Bodies fired balls may add on the engines whose id tables are sized at init (GPU AVBD, the tiers). */
@@ -234,17 +257,58 @@ export function engineSpec(spec: string, projectile: Projectile = DEFAULT_PROJEC
  * The engine spec for a world at this scale: the AVBD engines' penalties
  * (and beta) scaled by 1/scale and their spin cap by 1/sqrt(scale)
  * (froudeParams), taken from the spec's own values or the defaults, so the
- * world moves exactly as the unit world played faster. Other engines get
- * the stronger gravity alone.
+ * world moves exactly as the unit world played faster; with restitution on,
+ * its threshold (a speed) scaled by 1/sqrt(scale) too, which froudeParams
+ * does only while the switch is on, so a spec without it gains no key.
+ * Other engines get the stronger gravity alone.
  */
 export function worldEngineSpec(spec: string, scale: number): string {
   const { name, options } = parseSpec(spec);
-  if (scale === 1 || (name !== 'avbd-gpu' && name !== 'avbd-ref')) return spec;
-  const own = Object.fromEntries(FROUDE_KEYS.filter((k) => options[k] !== undefined).map((k) => [k, Number(options[k])]));
+  if (scale === 1 || !AVBD_ENGINES.has(name)) return spec;
+  const own = Object.fromEntries(FROUDE_KEYS.filter((k) => options[k] !== undefined).map((k) => [k, Number(options[k])])) as Partial<AvbdParams>;
+  // The switch as the spec gives it: the engines take any truthy value as on, and froudeParams does too.
+  if (options.restitution !== undefined) own.restitution = options.restitution as boolean;
   const scaled = froudeParams(own, 1 / scale);
-  return FROUDE_KEYS.reduce((out, k) => withOption(out, k, scaled[k] as number), spec);
+  return FROUDE_KEYS.reduce((out, k) => (scaled[k] === undefined ? out : withOption(out, k, scaled[k] as number)), spec);
 }
-const FROUDE_KEYS = ['beta', 'penaltyMin', 'penaltyMax', 'maxAngularSpeed'] as const;
+const FROUDE_KEYS = ['beta', 'penaltyMin', 'penaltyMax', 'maxAngularSpeed', 'restitutionThreshold'] as const;
+
+/** The engines whose spec takes AvbdParams, restitution included. */
+export const AVBD_ENGINES: ReadonlySet<string> = new Set(['avbd-gpu', 'avbd-ref']);
+
+/**
+ * Whether the spec turns restitution on (the panel's Bounce): an AVBD engine
+ * whose restitution option is on (true; like the engines, any truthy value).
+ */
+export function bounceOn(spec: string): boolean {
+  const { name, options } = parseSpec(spec);
+  return AVBD_ENGINES.has(name) && !!options.restitution;
+}
+
+/** The body with restitution e. */
+export const bounceBody = (b: BodyDesc, e: number): BodyDesc => ({ ...b, restitution: e });
+
+/** The scene with every body, every spawn and the ground (if any) at restitution e (Bounce on). */
+export function bounceScene(scene: SceneDesc, e: number): SceneDesc {
+  return {
+    ...scene,
+    ground: scene.ground && { ...scene.ground, restitution: e },
+    bodies: scene.bodies.map((b) => bounceBody(b, e)),
+    inputs: scene.inputs.map((ev) => (ev.kind === 'spawn' ? { ...ev, body: bounceBody(ev.body, e) } : ev)),
+  };
+}
+
+/**
+ * The scene a config runs: the scenario, at Bounce's e while the engine
+ * spec turns restitution on (bounceOn; off, the scenario's own bodies and
+ * ground), in the world at the config's scale and substeps (worldScene),
+ * with the config's sleep if it sets one.
+ */
+export function viewerScene(c: ViewerConfig): SceneDesc {
+  const built = buildScenario(c.scenario, c.params, c.seed);
+  const s = worldScene(bounceOn(c.engine) ? bounceScene(built, c.bounce) : built, c.scale, c.substeps);
+  return c.sleep === null ? s : { ...s, sleep: c.sleep };
+}
 
 /** spec with one option set, or removed when value is undefined; the other options keep their order. */
 export function withOption(spec: string, key: string, value: number | boolean | undefined): string {

@@ -27,14 +27,18 @@ cubes" is gravity 4 g in cube units, nothing else resized.
   `froudeParams(p, k)` (physics-ref) scales beta, penaltyMin and penaltyMax
   by k = 1 / scale and maxAngularSpeed by sqrt(k); `worldEngineSpec` applies
   it to the AVBD engines (avbd-gpu, avbd-ref), from the spec's own values or
-  the defaults. Everything else in AvbdParams is a length, a ratio or a
-  count, and the load cap's pairLoad and the stiffness floor
-  sqrt(m_a m_b) / dt^2 scale on their own. Tests: on the CPU (f64), 4 g at
-  dt with froudeParams(4) is the unit world at 2 dt, twice as fast, to the
-  bit (both are powers of two; measured without froudeParams: 1.07 m apart).
-  On the GPU (f32, whose divisions and square roots need not round alike)
-  the same comparison holds to 25 um on a non-chaotic scene, 1.9 mm without
-  froudeParams.
+  the defaults. With restitution on (the viewer's Bounce, engine option
+  `restitution=true`), restitutionThreshold is a speed too and scales by
+  sqrt(k), from the spec's value or 1 m/s; off, froudeParams adds no
+  threshold, so the spec is the one it was before restitution existed. A
+  restitution coefficient is a ratio of speeds and stays. Everything else in
+  AvbdParams is a length, a ratio or a count, and the load cap's pairLoad
+  and the stiffness floor sqrt(m_a m_b) / dt^2 scale on their own. Tests: on
+  the CPU (f64), 4 g at dt with froudeParams(4) is the unit world at 2 dt,
+  twice as fast, to the bit (both are powers of two; measured without
+  froudeParams: 1.07 m apart). On the GPU (f32, whose divisions and square
+  roots need not round alike) the same comparison holds to 25 um on a
+  non-chaotic scene, 1.9 mm without froudeParams.
 - The cost: a world at scale s stepped at 1/60 s is the unit world stepped
   at 1/(60 sqrt(s)) s, so quarter-metre cubes at 60 Hz are 1 m cubes at
   30 Hz. That matters. Measured once on the GPU (SwiftShader, 2026-10-27;

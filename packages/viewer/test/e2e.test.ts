@@ -219,6 +219,8 @@ describe('viewer', () => {
     const unit = await firedSpeed(55);
     await page.locator('#controls summary').click();
     const scene = page.locator('#scene-form');
+    // Bounce is the AVBD engines' restitution switch: off and disabled on Rapier.
+    expect({ checked: await scene.locator('input[name=bounce]').isChecked(), disabled: await scene.locator('input[name=bounce]').isDisabled() }).toEqual({ checked: false, disabled: true });
     // The browser's own form check must pass the default and a size off any step grid, or submit does nothing.
     const valid = () => scene.locator('input[name=scale]').evaluate((el) => (el as HTMLInputElement).validity.valid);
     expect(await valid()).toBe(true);
@@ -235,6 +237,70 @@ describe('viewer', () => {
     expect(url.searchParams.get('substeps')).toBeNull(); // 2 is 0.25's own
     expect(errors).toEqual([]);
     await page.close();
+  });
+
+  it('the panel\'s Bounce turns the GPU engine\'s restitution on, scaled for the world, gives what a click fires its e, and the URL keeps both', async (ctx) => {
+    if (!browser) return ctx.skip();
+    // Quarter-metre cubes: the engine's threshold (1 m/s) must reach it scaled by sqrt(4) (froudeParams).
+    const { page, errors } = await open('/?scenario=S1&param.F=3&param.H=6&param.gap=0.02&offscreen=1&engine=avbd-gpu&scale=0.25');
+    const status = await page.evaluate(() => ({ s: window.__viewer.status, e: window.__viewer.error }));
+    if (status.s === 'error' && /WebGPU|adapter/.test(status.e ?? '') && !requireWebGPU()) return ctx.skip();
+    expect(status).toEqual({ s: 'running', e: undefined });
+    const variant = () => page.evaluate(() => window.__viewer.variant);
+    expect(await variant()).not.toHaveProperty('restitution');
+    await page.locator('#controls summary').click();
+    const scene = page.locator('#scene-form');
+    const box = scene.locator('input[name=bounce]');
+    expect(await box.isChecked()).toBe(false);
+    expect(await box.isDisabled()).toBe(false);
+    expect(await scene.locator('.bounce').isHidden()).toBe(true);
+    await box.check();
+    expect(await scene.locator('.bounce').isVisible()).toBe(true);
+    expect(await scene.locator('input[name=bounceE]').inputValue()).toBe('0.5');
+    // Any e in [0, 1] passes the browser's own form check, or submit would do nothing.
+    const valid = () => scene.locator('input[name=bounceE]').evaluate((el) => (el as HTMLInputElement).validity.valid);
+    await scene.locator('input[name=bounceE]').fill('0.33');
+    expect(await valid()).toBe(true);
+    await scene.locator('input[name=bounceE]').fill('0.7');
+    expect(await valid()).toBe(true);
+    expect(await scene.locator('.out').innerText()).toBe('54 bodies, 4 g in cube units, 2x as fast, 2x physics cost, bouncing at e 0.7');
+    await scene.locator('button').click();
+    await page.waitForFunction(() => window.__viewer.status !== 'running' || (window.__viewer.resets === 2 && window.__viewer.stepIndex > 5), undefined, { timeout: 60_000 });
+    expect(await page.evaluate(() => ({ s: window.__viewer.status, e: window.__viewer.error }))).toEqual({ s: 'running', e: undefined });
+    expect(await variant()).toMatchObject({ restitution: true, restitutionThreshold: 2, restitutionRounds: 8 });
+    const url = new URL(page.url());
+    expect(url.searchParams.get('engine')).toBe('avbd-gpu:restitution=true');
+    expect(url.searchParams.get('bounce.e')).toBe('0.7');
+    // What a click fires bounces at e too.
+    await page.evaluate(() => window.__viewer.fire(0, 0));
+    await page.waitForFunction(() => window.__viewer.bodies === 55, undefined, { timeout: 30_000 });
+    expect(await page.evaluate(() => window.__viewer.inputs[0]!.body.restitution)).toBe(0.7);
+    // The pass runs with the ball in the tower, and the GPU reports no error (one would stop the viewer).
+    const fired = await page.evaluate(() => window.__viewer.stepIndex);
+    await page.waitForFunction((n) => window.__viewer.status !== 'running' || window.__viewer.stepIndex > n + 30, fired, { timeout: 60_000 });
+    expect(await page.evaluate(() => ({ s: window.__viewer.status, e: window.__viewer.error }))).toEqual({ s: 'running', e: undefined });
+    expect(await page.locator('#hud').innerText()).toContain('avbd-gpu:restitution=true');
+    expect(errors).toEqual([]);
+    await page.close();
+
+    // The URL alone brings it back; off again removes the engine option and keeps the e.
+    const again = await open(url.pathname + url.search);
+    expect(await again.page.evaluate(() => ({ s: window.__viewer.status, v: window.__viewer.variant.restitution }))).toEqual({ s: 'running', v: true });
+    await again.page.locator('#controls summary').click();
+    const s2 = again.page.locator('#scene-form');
+    expect(await s2.locator('input[name=bounce]').isChecked()).toBe(true);
+    expect(await s2.locator('input[name=bounceE]').inputValue()).toBe('0.7');
+    await s2.locator('input[name=bounce]').uncheck();
+    expect(await s2.locator('.out').innerText()).toBe('54 bodies, 4 g in cube units, 2x as fast, 2x physics cost');
+    await s2.locator('button').click();
+    await again.page.waitForFunction(() => window.__viewer.status !== 'running' || (window.__viewer.resets === 2 && window.__viewer.stepIndex > 5), undefined, { timeout: 60_000 });
+    expect(await again.page.evaluate(() => window.__viewer.status)).toBe('running');
+    expect(await again.page.evaluate(() => window.__viewer.variant)).not.toHaveProperty('restitution');
+    const off = new URL(again.page.url());
+    expect(off.searchParams.get('engine')).toBe('avbd-gpu');
+    expect(off.searchParams.get('bounce.e')).toBe('0.7');
+    expect(again.errors).toEqual([]);
+    await again.page.close();
   });
 
   it('the panel\'s camera framing moves the camera now, goes into the URL, and R keeps it', async (ctx) => {

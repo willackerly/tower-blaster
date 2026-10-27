@@ -1,11 +1,11 @@
 // Page-side drivers for the GPU physics tests (bundled by loadBundle).
 import { createDevice, sharedDevice, isSoftwareAdapter, readBuffer, type Readback } from '@tb/gpu';
 import { boundingRadius, groundManifold, NO_AXIS, quatNormalize, shapeManifold, spherePairs, supportArea, type Manifold as CpuManifold } from '@tb/geom';
-import { Body, BodyProps, field, Manifold, readStruct, Shape, SolverBody, SolverContact, writeStruct } from '@tb/schema';
+import { Body, BodyProps, field, Manifold, readField, readStruct, Shape, SolverBody, SolverContact, writeStruct } from '@tb/schema';
 import type { BodyDesc, InputEvent, Quat, Vec3 } from '@tb/engine-api';
 import { buildScenario } from '@tb/scenarios';
 import { bodiesAt } from '@tb/engine-api';
-import { AvbdSolver, Broadphase, Coloring, DEFAULT_DISPATCH, GpuAvbdEngine, type GpuEngineOptions, type HessianForm, MAX_COLORS, Narrowphase } from '../src/index.ts';
+import { AvbdSolver, Broadphase, Coloring, DEFAULT_DISPATCH, GpuAvbdEngine, type GpuEngineOptions, type GpuRestitutionStats, type HessianForm, MAX_COLORS, Narrowphase, restitutionStatsOf } from '../src/index.ts';
 import { type AvbdParams, DEFAULT_AVBD } from '@tb/physics-ref';
 import type { SceneDesc } from '@tb/engine-api';
 import { colorGraph } from '@tb/physics-ref';
@@ -414,6 +414,64 @@ export async function simulateGpu(scene: SceneDesc, steps: number, params: Parti
   const error = await device.popErrorScope();
   e.dispose();
   return { error: error?.message ?? null, snaps, maxColors, worst, wallMs };
+}
+
+/**
+ * A run with a snapshot after every step (snaps[0] is the start) and, if
+ * `stats`, the restitution pass's stats after every step (as
+ * GpuAvbdEngine.restitutionStats; null while it is off), and `live`, what
+ * GpuAvbdEngine.restitutionStats() itself reads after the last step. Each step's bodies
+ * (and the pass's state) are copied on the GPU into a history read once at
+ * the end, so the steps are not held up by a read each.
+ */
+export async function steppedRun(scene: SceneDesc, steps: number, params: Partial<AvbdParams>, opts: Omit<GpuEngineOptions, 'device'> = {}, stats = false) {
+  const { device } = await sharedDevice();
+  device.pushErrorScope('validation');
+  const e = new GpuAvbdEngine(params, { ...opts, device });
+  await e.init(scene);
+  const inner = e as unknown as { n: number; capacity: number; parts: { bodies: GPUBuffer; bp: { total: GPUBuffer }; solver: AvbdSolver } };
+  const { bodies, bp, solver } = inner.parts;
+  const bodyBytes = inner.capacity * Body.size;
+  const slots = stats ? solver.restSlots : null;
+  const slotBytes = slots ? slots.size : 0;
+  const mk = (size: number) => device.createBuffer({ size: Math.max(16, size), usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC });
+  const hist = mk((steps + 1) * bodyBytes), shist = slots ? mk(steps * slotBytes) : null, thist = slots ? mk(steps * 32) : null;
+  const ns = [inner.n];
+  const copy = (k: number) => {
+    const enc = device.createCommandEncoder();
+    enc.copyBufferToBuffer(bodies, 0, hist, k * bodyBytes, bodyBytes);
+    if (slots && k > 0) {
+      enc.copyBufferToBuffer(slots, 0, shist!, (k - 1) * slotBytes, slotBytes);
+      enc.copyBufferToBuffer(bp.total, 0, thist!, (k - 1) * 32, 32);
+    }
+    device.queue.submit([enc.finish()]);
+  };
+  copy(0);
+  for (let k = 1; k <= steps; k++) {
+    e.step();
+    copy(k);
+    ns.push(inner.n);
+  }
+  const h = await readBuffer(device, hist);
+  const snaps: PlainSnapshot[] = ns.map((n, k) => {
+    const buf = h.slice(k * bodyBytes, k * bodyBytes + Math.max(1, n) * Body.size);
+    const get = (name: string, c: number) => Array.from(readField(buf, Body, name, n, new Float64Array(c * n)));
+    return { step: k, pos: get('pos', 3), rot: get('rot', 4), linVel: get('linVel', 3), angVel: get('angVel', 3) };
+  });
+  const st: Array<GpuRestitutionStats | null> = [];
+  if (stats) {
+    if (shist) {
+      const [sh, th] = [await readBuffer(device, shist), new Uint32Array(await readBuffer(device, thist!))];
+      for (let k = 0; k < steps; k++) st.push(restitutionStatsOf(sh.slice(k * slotBytes, (k + 1) * slotBytes), th[8 * k + 3]!, solver.maxPairs, ns[k + 1]!));
+    } else for (let k = 0; k < steps; k++) st.push(null);
+  }
+  // The engine's own readback of the last step's pass, to hold against the history's.
+  const live = stats ? await e.restitutionStats() : null;
+  const diagnostics = await e.diagnostics();
+  const error = await device.popErrorScope();
+  for (const b of [hist, shist, thist]) b?.destroy();
+  e.dispose();
+  return { error: error?.message ?? null, snaps, stats: st, live, diagnostics };
 }
 
 /**
