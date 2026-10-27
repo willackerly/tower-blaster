@@ -43,7 +43,7 @@ export function keystoneSpec(c: KeystoneLevel): ReduceSpec {
     outputs: [
       { op: 'count', where: awakeInc }, // nAwake
       { op: 'max', x: { norm2: 'linVel' }, where: awakeInc }, // maxSpeed
-      { op: 'max', x: { norm2: 'angVel' }, where: awakeInc }, // maxAngSpeed
+      { op: 'max', x: { norm2: 'angVel' }, where: { and: ['awake', structure] } }, // maxAngSpeed: structure only
       { op: 'sum', x: P(1), weight: 1, shift: 16, where: structure }, // pe_mJ
       { op: 'count', where: { and: [structure, { cmp: { norm2: { disp: 0 } }, op: '>', k: Math.floor((0.5 * h * 2 ** 16) ** 2) }] } }, // displaced
       { op: 'count', where: { and: [structure, { not: { and: inLot(0.5 * h) } }] } }, // outOfLot

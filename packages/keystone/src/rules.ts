@@ -32,6 +32,12 @@ export interface Reductions {
   /** Awake bodies, not counting ammo that has rolled away or come to rest on the ground. */
   nAwake: number;
   maxSpeed: number;
+  /**
+   * Over awake structure bodies only. Live ammo counts by its speed: a ball
+   * rolling slowly on a level top spins above QUIET_SPIN (0.24 rad/s at 1.4
+   * cm/s for a 0.1 m marble) and would hold a shot open to the cap, while the
+   * spin of a ball alone moves nothing.
+   */
   maxAngSpeed: number;
   /** Potential energy of the structure, sum of round(m g y * 1000) in index order. */
   pe_mJ: number;
@@ -92,7 +98,7 @@ export function reduceCpu(s: Snapshot, prevLinVel: Float64Array | null, c: Compi
     if (s.awake[i]) {
       r.nAwake++;
       r.maxSpeed = Math.max(r.maxSpeed, Math.hypot(s.linVel[3 * i]!, s.linVel[3 * i + 1]!, s.linVel[3 * i + 2]!));
-      r.maxAngSpeed = Math.max(r.maxAngSpeed, Math.hypot(s.angVel[3 * i]!, s.angVel[3 * i + 1]!, s.angVel[3 * i + 2]!));
+      if (structure) r.maxAngSpeed = Math.max(r.maxAngSpeed, Math.hypot(s.angVel[3 * i]!, s.angVel[3 * i + 1]!, s.angVel[3 * i + 2]!));
     }
     if (!structure) continue;
     const x = s.pos[3 * i]!, y = s.pos[3 * i + 1]!, z = s.pos[3 * i + 2]!;
