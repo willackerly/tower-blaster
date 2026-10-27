@@ -126,6 +126,10 @@ importers:
       '@tb/viewer':
         specifier: workspace:*
         version: link:../viewer
+    devDependencies:
+      '@tb/metrics':
+        specifier: workspace:*
+        version: link:../metrics
 
   packages/geom: {}
 

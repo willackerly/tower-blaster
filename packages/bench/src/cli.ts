@@ -69,8 +69,9 @@ const sceneKey = (s: SceneDesc) => ({ id: s.id, params: s.params, seed: s.seed, 
 async function cmdRun(a: Args) {
   const scene = sceneFrom(a);
   const engine = makeEngine(String(a.flags.engine ?? 'rapier'));
-  const [blocks] = await timeInterleaved([engine], scene, timingOpts(a));
-  const record: Record<string, unknown> = { schema: 1, kind: 'run', env: env(), engine: engine.info, scene: sceneKey(scene), timing: timingSummary(blocks!) };
+  const timing = timingOpts(a);
+  const [blocks] = await timeInterleaved([engine], scene, timing);
+  const record: Record<string, unknown> = { schema: 1, kind: 'run', env: env(), engine: engine.info, scene: sceneKey(scene), warmup: timing.warmup, timing: timingSummary(blocks!) };
   if (a.flags.quality) {
     const steps = int(a, 'quality-steps', 600);
     const q = qualityRun(engine, scene, { steps, sampleEvery: int(a, 'sample-every', 30) });
@@ -85,9 +86,10 @@ async function cmdRun(a: Args) {
 async function cmdCompare(a: Args) {
   const scene = sceneFrom(a);
   const ea = makeEngine(String(a.flags.a ?? 'rapier')), eb = makeEngine(String(a.flags.b ?? 'rapier'));
-  const [ba, bb] = await timeInterleaved([ea, eb], scene, timingOpts(a));
+  const timing = timingOpts(a);
+  const [ba, bb] = await timeInterleaved([ea, eb], scene, timing);
   const cmp = compareBlocks(ba!, bb!, Number(a.flags.threshold ?? 0.02));
-  emit(a, { schema: 1, kind: 'compare', env: env(), a: ea.info, b: eb.info, scene: sceneKey(scene), timingA: timingSummary(ba!), timingB: timingSummary(bb!), comparison: cmp });
+  emit(a, { schema: 1, kind: 'compare', env: env(), a: ea.info, b: eb.info, scene: sceneKey(scene), warmup: timing.warmup, timingA: timingSummary(ba!), timingB: timingSummary(bb!), comparison: cmp });
   ea.dispose(); eb.dispose();
 }
 

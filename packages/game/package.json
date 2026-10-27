@@ -14,5 +14,8 @@
     "@tb/physics-gpu": "workspace:*",
     "@tb/render": "workspace:*",
     "@tb/viewer": "workspace:*"
+  },
+  "devDependencies": {
+    "@tb/metrics": "workspace:*"
   }
 }

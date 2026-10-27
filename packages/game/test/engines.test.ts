@@ -1,17 +1,18 @@
 import { describe, expect, it } from 'vitest';
-import { compileLevel, L1, L4 } from '@tb/keystone';
-import { engineKind, GPU_ITERATIONS, gpuOptions, makeEngine } from '../src/engines.ts';
+import { AVBD_GAP_SLOP, AVBD_ITERATIONS, compileLevel, L1, L4 } from '@tb/keystone';
+import { engineKind, gpuOptions, makeEngine } from '../src/engines.ts';
 
 describe('engine choice', () => {
-  it('defaults to Rapier, accepts gpu, and names the choices for anything else', () => {
-    expect(engineKind(null)).toBe('rapier');
-    expect(engineKind('')).toBe('rapier');
+  it('defaults to the GPU solver, accepts rapier, and names the choices for anything else', () => {
+    expect(engineKind(null)).toBe('gpu');
+    expect(engineKind('')).toBe('gpu');
+    expect(engineKind('rapier')).toBe('rapier');
     expect(engineKind('gpu')).toBe('gpu');
     expect(() => engineKind('physx')).toThrow(/unknown engine physx: use rapier or gpu/);
   });
-  it('the GPU engine runs 20 iterations with one substep (no device needed to build it)', () => {
+  it('the GPU engine runs at the settings par lines are pinned at, with one substep (no device needed to build it)', () => {
     const e = makeEngine('gpu', compileLevel(L1));
-    expect(e.info.variant.iterations).toBe(GPU_ITERATIONS);
+    expect(e.info.variant).toMatchObject({ iterations: AVBD_ITERATIONS, gapSlop: AVBD_GAP_SLOP });
     expect(e.info.integrator?.substeps).toBe(1);
     expect(makeEngine('rapier', compileLevel(L1)).info.name).toBe('rapier');
   });

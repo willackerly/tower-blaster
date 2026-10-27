@@ -51,6 +51,19 @@ describe('GPU AVBD engine: the loaded-gap slop (AvbdParams.gapSlop)', () => {
     expect(await kicked({ gapSlop: 3e-5 }, column(), { colorTail: 0, hessian: 'array' })).toEqual(on);
   });
 
+  // The fused dual (AvbdParams.dualFusion) runs the dual update inside the primal and, from the side array, in the
+  // dualPairsSide/dualGroundSide kernels: each gets the constant, so with it the floats are the unfused ones, as off
+  // (engine-fused.test.ts). Built without it in any of them, the excused gap would count in full there and differ.
+  // The lattice colouring (colorMode) only reorders the bodies: with the slop on it still changes the floats.
+  it('with the fused dual, in the side array and in place, it is the same floats; with the lattice colouring it acts', { timeout: 300_000 }, async (ctx) => {
+    if (!gpu) return ctx.skip();
+    const on = await kicked({ gapSlop: 3e-5 });
+    expect(await kicked({ gapSlop: 3e-5, dualFusion: true })).toEqual(on);
+    expect(await kicked({ gapSlop: 3e-5, dualFusion: true }, column(), { solveContactsRW: true })).toEqual(on);
+    expect(await kicked({ gapSlop: 3e-5, dualFusion: true }, column(), { colorTail: 0 })).toEqual(on);
+    expect(await kicked({ gapSlop: 3e-5, colorMode: 3 })).not.toEqual(await kicked({ colorMode: 3 }));
+  });
+
   // Defect B (the reference's header). Measured on SwiftShader (2026-10-27), max speed over steps 1201-1500 and
   // the largest sideways offset at step 1500: without the slop 0.17 m/s and 11.5 mm at 10 iterations, 0.015 m/s
   // and 3.4 mm at 20 (the reference: 0.25 and 0.016 m/s); with it 8.1e-5 m/s and 0.020 mm, 1.1e-5 m/s and

@@ -1,5 +1,5 @@
-// Keystone, playable: the rules from @tb/keystone on Rapier or the GPU
-// solver (?engine=gpu), drawn by @tb/render. Physics only runs while a shot
+// Keystone, playable: the rules from @tb/keystone on the GPU solver (or
+// Rapier with ?engine=rapier), drawn by @tb/render. Physics only runs while a shot
 // is in play, at a pace the Pacer sets (hit-stop, slow motion, fast-forward);
 // between shots the world is frozen, so a session is exactly (level, shots)
 // and replays headless.
@@ -33,6 +33,8 @@ interface GameHandle {
   result: LevelScore | null;
   /** Feedback events seen this attempt, by type. */
   counts: Record<string, number>;
+  /** Wall time of this level's load (engine build and pre-settle), and of each live step since, in ms. */
+  timing: { loadMs: number; stepMs: number[] };
   fire(shot: Shot): boolean;
   /** Aim at normalized device coords with the selected ammo, as hovering there would. */
   aim(ndcX: number, ndcY: number): Aimed | null;
@@ -45,15 +47,16 @@ interface GameHandle {
   /** The same shots from the same level on a fresh engine, built as the live one, on this device. */
   replay(shots: Shot[]): Promise<SessionState>;
 }
-interface SessionState { step: number; phase: string; strokes: number; hash: string }
+const sum = (a: Uint8Array) => a.reduce((x, y) => x + y, 0);
+interface SessionState { step: number; phase: string; strokes: number; heritageBroken: number; hash: string }
 declare global { interface Window { __game: GameHandle } }
 
 const $ = (id: string) => document.getElementById(id)!;
 const canvas = $('c') as HTMLCanvasElement, hudEl = $('hud'), bannerEl = $('banner'), resultEl = $('result'), errorEl = $('error');
 const handle: GameHandle = {
-  status: 'loading', engine: '', level: '', phase: 'loading', ready: false, frames: 0, stepIndex: 0, strokes: 0, bodies: 0, fast: false, result: null, counts: {},
+  status: 'loading', engine: '', level: '', phase: 'loading', ready: false, frames: 0, stepIndex: 0, strokes: 0, bodies: 0, fast: false, result: null, counts: {}, timing: { loadMs: 0, stepMs: [] },
   fire: () => false, aim: () => null, select: () => false, load: async () => {}, retry: async () => {}, capture: async () => null,
-  state: () => ({ step: 0, phase: 'loading', strokes: 0, hash: '' }), replay: async () => ({ step: 0, phase: 'loading', strokes: 0, hash: '' }),
+  state: () => ({ step: 0, phase: 'loading', strokes: 0, heritageBroken: 0, hash: '' }), replay: async () => ({ step: 0, phase: 'loading', strokes: 0, heritageBroken: 0, hash: '' }),
 };
 window.__game = handle;
 
@@ -143,12 +146,14 @@ async function main() {
 
   async function loadNow(i: number, retry: boolean) {
     levelIdx = i;
+    const t0 = performance.now();
     c = compileLevel(LEVELS[i]!);
     engine?.dispose();
     engine = makeEngine(kind, c, device);
     substeps = engine.info.integrator?.substeps ?? SUBSTEPS;
     driver = new Driver(engine, c);
     await driver.reset();
+    handle.timing = { loadMs: performance.now() - t0, stepMs: [] };
     descs = [...c.scene.bodies];
     source.reset(c.scene.bodies);
     source.update(driver.snapshot, descs);
@@ -271,12 +276,12 @@ async function main() {
   handle.aim = (x, y) => { pointer = [x, y]; updateAim(); return aimed; };
   handle.load = (id) => load(levelOf(id)).catch(fail);
   handle.retry = () => load(levelIdx, true).catch(fail);
-  handle.state = () => ({ step: driver.engine.stepIndex, phase: driver.session.phase, strokes: driver.session.strokes, hash: snapshotHash(driver.snapshot) });
+  handle.state = () => ({ step: driver.engine.stepIndex, phase: driver.session.phase, strokes: driver.session.strokes, heritageBroken: sum(driver.session.heritageBroken), hash: snapshotHash(driver.snapshot) });
   handle.replay = async (shots) => {
     const e = makeEngine(kind, c, device);
     try {
       const r = await runSession(e, c, shots);
-      return { step: r.steps, phase: r.session.phase, strokes: r.session.strokes, hash: snapshotHash(r.snapshot) };
+      return { step: r.steps, phase: r.session.phase, strokes: r.session.strokes, heritageBroken: sum(r.session.heritageBroken), hash: snapshotHash(r.snapshot) };
     } finally { e.dispose(); }
   };
 
@@ -391,7 +396,9 @@ async function main() {
       for (let i = 0; i < n; i++) {
         const t0 = performance.now();
         const fb = await driver.step();
-        stepMs.push(performance.now() - t0);
+        const ms = performance.now() - t0;
+        stepMs.push(ms);
+        handle.timing.stepMs.push(ms);
         onFeedback(fb);
         if (pacer.frozen || driver.session.phase !== 'running') break;
       }

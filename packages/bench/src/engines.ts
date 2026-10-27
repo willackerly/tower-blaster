@@ -2,7 +2,7 @@
 import type { InputEvent, PhysicsEngine, SceneDesc, StepReport } from '@tb/engine-api';
 import { RapierEngine, RapierHost } from '@tb/adapter-rapier';
 import { TieredEngine } from '@tb/lattice';
-import { AvbdReferenceEngine } from '@tb/physics-ref';
+import { type AvbdParams, AvbdReferenceEngine } from '@tb/physics-ref';
 import { GpuAvbdEngine, type GpuEngineOptions } from '@tb/physics-gpu';
 
 type Options = Record<string, number | boolean | string>;
@@ -11,12 +11,12 @@ const REGISTRY: Record<string, (o: Options) => PhysicsEngine> = {
   rapier: (o) => new RapierEngine(o.iterations !== undefined ? { iterations: Number(o.iterations) } : {}),
   // Options are AvbdParams fields, e.g. avbd-ref:iterations=4,sweep=false.
   'avbd-ref': (o) => new AvbdReferenceEngine(o),
-  // Same AvbdParams, plus the GpuEngineOptions that size its buffers (capacity, spare,
-  // pairsPerBody, maxRadius) or shape its dispatch (colorTail, indirectColors, tailThreads, colorRounds,
-  // hessian, boxBroadphase), which the engine checks; needs WebGPU, so it runs in the browser runner, not the Node CLI.
+  // Same AvbdParams (dualFusion and records too: avbd-gpu:records=1), plus the GpuEngineOptions that size
+  // its buffers (capacity, spare, pairsPerBody, maxRadius) or shape its dispatch (colorTail, indirectColors,
+  // tailThreads, colorRounds, hessian, boxBroadphase, solveContactsRW), which the engine checks; needs WebGPU,
+  // so it runs in the browser runner, not the Node CLI.
   'avbd-gpu': (o) => {
-    const { capacity, spare, pairsPerBody, maxRadius, colorTail, indirectColors, tailThreads, colorRounds, hessian, boxBroadphase, ...params } = o;
-    const opts = Object.fromEntries(Object.entries({ capacity, spare, pairsPerBody, maxRadius, colorTail, indirectColors, tailThreads, colorRounds, hessian, boxBroadphase }).filter(([, v]) => v !== undefined)) as GpuEngineOptions;
+    const { params, opts } = gpuEngineArgs(o);
     return new GpuAvbdEngine(params, opts);
   },
   // Dormant lattice tier over a Rapier host; other options are TierParams (e.g. tiered:vWake=0.5).
@@ -25,6 +25,13 @@ const REGISTRY: Record<string, (o: Options) => PhysicsEngine> = {
     return new TieredEngine(new RapierHost(iterations !== undefined ? { iterations: Number(iterations) } : {}), tier);
   },
 };
+
+/** An avbd-gpu spec's options split into the engine's AvbdParams and GpuEngineOptions (also used by pnpm bench:probe). */
+export function gpuEngineArgs(o: Options): { params: Partial<AvbdParams>; opts: GpuEngineOptions } {
+  const { capacity, spare, pairsPerBody, maxRadius, colorTail, indirectColors, tailThreads, colorRounds, hessian, boxBroadphase, solveContactsRW, ...params } = o;
+  const opts = Object.fromEntries(Object.entries({ capacity, spare, pairsPerBody, maxRadius, colorTail, indirectColors, tailThreads, colorRounds, hessian, boxBroadphase, solveContactsRW }).filter(([, v]) => v !== undefined)) as GpuEngineOptions;
+  return { params: params as Partial<AvbdParams>, opts };
+}
 
 /** Engine options whose value is a word rather than a number or boolean. */
 const WORD_OPTIONS = new Set(['hessian']);

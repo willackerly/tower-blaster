@@ -33,14 +33,14 @@ jobs:
   # on vitest.durations.json; refresh it with `pnpm test:durations` when files are
   # added or get slower.
   test:
-    name: test ${{ matrix.shard }}/4
+    name: test ${{ matrix.shard }}/8
     runs-on: ubuntu-latest
-    # A shard takes ~3-4 min; runners vary ~2x.
+    # A shard takes ~5-9 min (8 shards; the GPU files dominate); runners vary ~2x.
     timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4]
+        shard: [1, 2, 3, 4, 5, 6, 7, 8]
     env:
       # GPU-correctness tests must run (on SwiftShader) rather than skip.
       REQUIRE_WEBGPU: '1'
@@ -58,7 +58,7 @@ jobs:
       # system libvulkan removed), and the runner image already has Chromium's
       # libraries, so a slow apt mirror can't stall the run.
       - run: pnpm exec playwright install chromium
-      - run: pnpm test --shard=${{ matrix.shard }}/4 --reporter=default --reporter=json --outputFile.json=.vitest-report.json
+      - run: pnpm test --shard=${{ matrix.shard }}/8 --reporter=default --reporter=json --outputFile.json=.vitest-report.json
       # This runner's per-file times, one line, for refreshing vitest.durations.json.
       - name: Shard file times
         if: ${{ !cancelled() }}

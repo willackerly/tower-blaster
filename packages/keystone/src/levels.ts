@@ -1,22 +1,24 @@
-// Starter levels, one per behaviour the mechanics probe found usable on
-// Rapier (pnpm keystone:probe): shear, lintel tip, pick-off, catapult,
-// dominoes. Coordinates are in cells (h); see LevelDef. Par lines are the most
-// robust clean solutions pnpm keystone:bot found (docs/game/findings.md), and
-// tests replay them. lGold is provisional: about 0.9 x the par line's leverage.
+// Starter levels, one per behaviour the mechanics probe found usable
+// (pnpm keystone:probe): shear, lintel tip, pick-off, catapult, dominoes.
+// Coordinates are in cells (h); see LevelDef. Par lines are the most robust
+// clean solutions pnpm keystone:bot found on the f64 AVBD reference at
+// AVBD_ITERATIONS and AVBD_GAP_SLOP (docs/game/findings.md), and tests replay
+// them. lGold is the lower quartile of the leverage the par line's clean
+// neighbours on the nudge grid reach (pnpm keystone:par).
 import type { LevelDef } from './level.ts';
 
 type V3 = [number, number, number];
 
-/** W1-1, shear. A slender tower: a cannonball brings most of the crowns down, a second shot cleans up. */
+/** W1-1, shear. A slender tower (the probe's B2): one cannonball low on it brings the crowns down. */
 export const L1: LevelDef = {
-  id: 'L1', name: 'Open Fire', version: 2, world: 1,
-  parts: [{ kind: 'block', at: [-1.5, 0, -1.5], size: [3, 12, 3], material: 'plaster', courses: [{ k: 11, role: 'crown' }] }],
+  id: 'L1', name: 'Open Fire', version: 3, world: 1,
+  parts: [{ kind: 'block', at: [-1, 0, -1], size: [2, 10, 2], material: 'plaster', courses: [{ k: 9, role: 'crown' }] }],
   lot: { min: [-7, -7], max: [7, 7] },
-  crownLine: 2, objective: { kind: 'crowns' }, par: 2,
+  crownLine: 2, objective: { kind: 'crowns' }, par: 1,
   rack: ['cannonball', 'cannonball', 'marble', 'marble'],
   launcher: { radius: 14, y: 2, dropY: 16 },
-  lGold: 1.0,
-  solutions: { par: [{ ammo: 'cannonball', az: 360, y: 8, yaw: 0, pitch: 505, power: 100 }, { ammo: 'cannonball', az: 180, y: 8, yaw: -46, pitch: 526, power: 60 }] },
+  lGold: 0.71,
+  solutions: { par: [{ ammo: 'cannonball', az: 360, y: 8, yaw: 0, pitch: 207, power: 100 }] },
 };
 
 /** W1-2, lintel tip. Fell one column and the lintel sheds its crowns; fell the other and it lands on the pavilion. */
@@ -33,8 +35,8 @@ export const L2: LevelDef = {
   crownLine: 2, objective: { kind: 'crowns' }, par: 1,
   rack: ['marble', 'marble', 'cannonball'],
   launcher: { radius: 16, y: 2, dropY: 18 },
-  lGold: 2.5,
-  solutions: { par: [{ ammo: 'cannonball', az: 360, y: 8, yaw: 16, pitch: 363, power: 100 }] },
+  lGold: 1.5,
+  solutions: { par: [{ ammo: 'cannonball', az: 540, y: 8, yaw: 0, pitch: 616, power: 100 }] },
 };
 
 /** W1-3, pick-off. Crowns sit between heritage cubes on top of a wall: take them without touching their neighbours. */
@@ -48,8 +50,8 @@ export const L3: LevelDef = {
   crownLine: 2, objective: { kind: 'crowns' }, par: 2,
   rack: ['marble', 'marble', 'marble', 'cannonball'],
   launcher: { radius: 14, y: 8, dropY: 14 },
-  lGold: 0.25,
-  solutions: { par: [{ ammo: 'cannonball', az: 540, y: 8, yaw: -42, pitch: 192, power: 60 }, { ammo: 'marble', az: 180, y: 8, yaw: -42, pitch: 290, power: 60 }] },
+  lGold: 1.3,
+  solutions: { par: [{ ammo: 'marble', az: 540, y: 8, yaw: -42, pitch: 27, power: 100 }, { ammo: 'marble', az: 180, y: 8, yaw: -42, pitch: 382, power: 60 }] },
 };
 
 /** W2-1, catapult. A slab on a central pier with its crown end on a prop: drop the anvil on the free end. */
@@ -67,8 +69,8 @@ export const L4: LevelDef = {
   crownLine: 2, objective: { kind: 'crowns' }, par: 1,
   rack: ['drop', 'marble', 'marble'],
   launcher: { radius: 14, y: 2, dropY: 12 },
-  lGold: 0.4,
-  solutions: { par: [{ ammo: 'drop', x: 34, z: -4 }] },
+  lGold: 0.18,
+  solutions: { par: [{ ammo: 'drop', x: 10, z: -4 }] },
 };
 
 /** W2-2, dominoes. Five slender columns; the crown sits on the last. */
@@ -82,8 +84,8 @@ export const L5: LevelDef = {
   crownLine: 2, objective: { kind: 'crowns' }, par: 1,
   rack: ['marble', 'marble', 'cannonball'],
   launcher: { radius: 18, y: 2, dropY: 14 },
-  lGold: 10,
-  solutions: { par: [{ ammo: 'marble', az: 0, y: 8, yaw: 0, pitch: 272, power: 60 }] },
+  lGold: 5,
+  solutions: { par: [{ ammo: 'marble', az: 0, y: 8, yaw: 0, pitch: 249, power: 60 }] },
 };
 
 export const LEVELS: readonly LevelDef[] = [L1, L2, L3, L4, L5];

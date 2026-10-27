@@ -1,8 +1,8 @@
 import { afterAll, describe, expect, it } from 'vitest';
 import { RapierEngine } from '@tb/adapter-rapier';
-import { AVBD_GAP_SLOP, AVBD_ITERATIONS, L1, type Shot, snapshotHash } from '@tb/keystone';
+import { AVBD_GAP_SLOP, AVBD_ITERATIONS, L1, PRESETTLE_STEPS, type Shot, snapshotHash } from '@tb/keystone';
 import { AvbdReferenceEngine } from '@tb/physics-ref';
-import { B1, B3, CASES, candidates, engineSubsteps, inlineRunner, labArgs, makeEngine, makeRunner, nudge, poolRunner, POWER_NUDGES, RAPIER_SUBSTEPS, runProbe, solveOneShot, YAW_NUDGES } from '@tb/keystone-lab';
+import { B1, B3, CASES, candidates, goldLine, quantile, engineSubsteps, inlineRunner, labArgs, makeEngine, makeRunner, nudge, poolRunner, POWER_NUDGES, RAPIER_SUBSTEPS, runProbe, solveOneShot, YAW_NUDGES } from '@tb/keystone-lab';
 
 describe('nudge', () => {
   const launch: Shot = { ammo: 'marble', az: 10, y: 4, yaw: 5, pitch: 100, power: 99 };
@@ -39,11 +39,11 @@ describe('lab engines', () => {
     expect(labArgs(['L1', '--engine', 'ref', '--iterations', '30', '--jobs', '3', '--shots', '2', 'L2'], 8)).toEqual({
       spec: { kind: 'ref', iterations: 30 }, jobs: 3, flags: new Map([['engine', 'ref'], ['iterations', '30'], ['jobs', '3'], ['shots', '2']]), ids: ['L1', 'L2'],
     });
-    expect(labArgs([], 8)).toMatchObject({ spec: { kind: 'rapier' }, jobs: 8, ids: [] });
+    expect(labArgs([], 8)).toMatchObject({ spec: { kind: 'ref' }, jobs: 8, ids: [] });
     expect(() => labArgs(['--engine', 'gpu'], 1)).toThrow(/unknown engine gpu/);
     expect(() => labArgs(['--jobs', '0'], 1)).toThrow(/--jobs/);
     expect(labArgs(['--engine', 'ref', '--gap-slop', '0'], 1).spec).toEqual({ kind: 'ref', gapSlop: 0 });
-    expect(() => labArgs(['--gap-slop', '1e-5'], 1)).toThrow(/--engine ref/);
+    expect(() => labArgs(['--engine', 'rapier', '--gap-slop', '1e-5'], 1)).toThrow(/--engine ref/);
     expect(() => labArgs(['--engine', 'ref', '--gap-slop', '-1'], 1)).toThrow(/metres >= 0/);
   });
 });
@@ -83,12 +83,36 @@ describe('runners', () => {
   });
 });
 
+describe('gold line', () => {
+  const result = (values: number[]) => ({ id: 'L', title: '', nominal: true, successRate: 1, grid: [], ms: 0, values });
+  it('quantile interpolates between order statistics, whatever the input order', () => {
+    expect(quantile([4, 1, 3, 2, 5], 0.25)).toBe(2);
+    expect(quantile([1, 2], 0.25)).toBe(1.25);
+    expect(quantile([7], 0.25)).toBe(7);
+    expect(quantile([], 0.25)).toBeNaN();
+  });
+  it('is the lower quartile of clean leverages, rounded down to two significant figures', () => {
+    expect(goldLine(result([1.2345, 2, 3, 4, 5]))).toBe(2);
+    expect(goldLine(result([0.4567, 0.4567, 0.5, 0.6, 0.7]))).toBe(0.45);
+    expect(goldLine(result([12.89, 13, 14]))).toBe(12);
+    expect(goldLine(result([0.3, 0.3]))).toBe(0.3);
+    expect(goldLine(result([0, 0, 0, 1]))).toBe(0);
+    expect(goldLine(result([]))).toBeNull();
+  });
+});
+
 describe('mechanics probe', () => {
   it('runs a case over the full nudge grid', async () => {
     const r = await runProbe(B3, inlineRunner({ kind: 'rapier' }));
     expect(r.grid).toHaveLength(YAW_NUDGES.length);
     expect(r.grid.every((row) => row.length === POWER_NUDGES.length)).toBe(true);
     expect(r.successRate).toBeGreaterThanOrEqual(0);
+    expect(r.values).toEqual([]);
+  });
+  it('a case with a value records it for each success, in grid order', async () => {
+    const r = await runProbe({ ...B3, value: (p) => p.steps }, inlineRunner({ kind: 'rapier' }));
+    expect(r.values).toHaveLength(r.grid.flat().filter(Boolean).length);
+    expect(r.values.every((v) => Number.isInteger(v) && v > PRESETTLE_STEPS)).toBe(true);
   });
   // The kill gate from the design: at least 3 of the 6 loose-stack
   // behaviours must survive the nudges. About 30 s, so opt-in.

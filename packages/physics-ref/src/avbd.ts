@@ -222,7 +222,7 @@
 //   (0.11 under max).
 import { type BodyDesc, combineFriction, combineRestitution, DEFAULT_RESTITUTION_COMBINE, inertiaOf, massOf, type Quat, type SceneDesc, type Vec3 } from '@tb/engine-api';
 import { boundingRadius, cross, dot, groundManifold, NO_AXIS, quatMul, quatNormalize, rotate, shapeManifold, spherePairs } from '@tb/geom';
-import { colorGraph } from './coloring.ts';
+import { COLOR_MODES, COLOR_PRIORITIES, colorGraph, colorGraphWith, latticeParity, latticePreferences } from './coloring.ts';
 import { solveSpd6 } from './linalg.ts';
 
 export interface AvbdParams {
@@ -252,6 +252,28 @@ export interface AvbdParams {
   maxSweep: number;
   /** Scale the friction stiffness by the cone clamp, k_t min(1, bound / |z|), while sliding (else k_t J J^T, as the reference). */
   slidingHessian: boolean;
+  /**
+   * Lattice-preferred colouring (coloring.ts), opt-in and experimental
+   * (perf-competition round 2, "latticecolor"): off when absent or 0, and
+   * EngineInfo.variant lists it only while it is on (avbdVariant). 1, eight
+   * colours; 2, four colours with the corner offset as kernel (the face+edge
+   * rule); 3, four colours with the in-plane diagonal as kernel (the
+   * column-and-layer product); 4, as 3 but only for bodies whose every
+   * neighbour is on the lattice and none shares their 4-colour (the lattice
+   * interior; no fallback colour). Cubes on the world lattice take their pattern
+   * colour when no higher-priority neighbour holds it; everything else keeps
+   * the default choice. Only the update order changes, but the order changes
+   * the trajectory, and neither 3 nor 4 has passed the quality checks yet
+   * (coloring.ts, "Quality").
+   */
+  colorMode?: number;
+  /**
+   * Colouring priority, opt-in and experimental: the hash when absent or 0
+   * (EngineInfo.variant lists it only while it is on); 1, largest degree
+   * first, then the hash (KNOCKT collapses early in every body order tried:
+   * coloring.ts, "Quality").
+   */
+  colorPriority?: number;
   /**
    * Load floor, m: a reused contact's normal penalty starts the step at least
    * |lambda_n| / restDepth, the stiffness at which last step's normal force
@@ -317,6 +339,57 @@ export interface AvbdParams {
    * here such a value changed no float of the kicked column either).
    */
   gapSlop?: number;
+  /**
+   * Fused dual, opt-in (perf-competition round 2, "dualFusion"): off when
+   * absent or false, and EngineInfo.variant lists it only while it is on
+   * (avbdVariant). A contact's C depends only on its two bodies, and neither
+   * has moved between the end of sweep it and the visit, in sweep it + 1, of
+   * the one that sweep reaches first (the lower colour, the earlier in colour
+   * order; the body itself for a ground contact). So that visit runs sweep
+   * it's dual update first, with sweep it's alpha, and both visits then read
+   * its result, as they would after the separate dual pass: the same
+   * arithmetic on the same values (a loaded point's gapSlop included), so the
+   * same bits, without the pass. The last main iteration's update still runs
+   * as a pass after its sweep, as without fusion, so the stabilization sweep,
+   * the restitution pass and the next step's collide() see what they always
+   * did. With records = 2 the same holds per record: its first visit runs the
+   * record's update (its points' normal rows, then its friction). The GPU
+   * engine does the same (SolverDispatch.dualFusion), without the I - 1 dual
+   * dispatches between sweeps.
+   */
+  dualFusion?: boolean;
+  /**
+   * Manifold records, opt-in (perf-competition round 2, "records"): off when
+   * absent or 0, and EngineInfo.variant lists it only while it is on
+   * (avbdVariant). The GPU engine can solve each contact manifold of 1-4
+   * points as one record, so a body's walk visits a record per touching pair
+   * instead of a point.
+   * - 0 (or unset): points, as above.
+   * - 1: the exact record. Every point keeps its own three rows, penalties,
+   *   anchors and friction, so the physics is that of points; only the GPU's
+   *   memory layout changes. Here it is the same as 0.
+   * - 2: the centre-friction record (round 1's entrant "patch", its patch = 4,
+   *   carried onto rolling contacts and the load cap). Each point keeps its
+   *   normal row, force and penalty (load floor and cap included, and
+   *   gapSlop's excused gap), always at this step's narrowphase point: points
+   *   keep no anchors. The points' friction rows are replaced by one friction
+   *   state at the manifold's centre (FrictionRecord): two tangent rows and a
+   *   twist row about n scaled by the points' RMS radius rt, clamped together
+   *   to the ball of radius mu |sum lambda_n| (the ellipsoidal limit surface),
+   *   with one penalty k_t that ramps by nc beta, nc being the record's points
+   *   (4 x beta for a face, as the entrant's patchRamp). Static friction keeps
+   *   the centre's anchors, or, for a rolling contact, carries its slip. A
+   *   one-point record is then a point's friction (rt = 0), with the normal
+   *   row taken fresh. With restitution, restitute() zeroes a bounced point's
+   *   force as it does with points, and that takes the point's share out of
+   *   its record's friction bound: a record whose points all bounced carries
+   *   no friction into the next step (its first evaluation clamps lamT to the
+   *   ball of radius 0 and its first dual update sets lamT to 0, so zeroing
+   *   lamT in restitute() as well changes nothing; records.test.ts), and one
+   *   with loaded points left keeps its friction within their bound, as those
+   *   points keep theirs.
+   */
+  records?: number;
 }
 
 export const DEFAULT_AVBD: AvbdParams = {
@@ -328,13 +401,16 @@ export const DEFAULT_AVBD: AvbdParams = {
 /** The restitution keys' defaults while AvbdParams.restitution is on (Box2D's threshold is 1 m/s too; rounds: see restitute()). */
 export const RESTITUTION_DEFAULTS = { restitutionThreshold: 1, restitutionRounds: 8 } as const;
 
+/** AvbdParams.records: 0 points, 1 the exact record (here the same as 0), 2 the centre-friction record. */
+export const RECORD_MODES = [0, 1, 2] as const;
+
 /**
  * Opt-in switches and the params that only matter while they are on, with
  * their defaults. EngineInfo.variant leaves a switch and its params out while
  * it is off (avbdVariant), so adding one does not change the result keys of
  * runs that do not use it.
  */
-export const OPT_IN: Partial<Record<keyof AvbdParams, Partial<AvbdParams>>> = { restitution: RESTITUTION_DEFAULTS, gapSlop: {} };
+export const OPT_IN: Partial<Record<keyof AvbdParams, Partial<AvbdParams>>> = { restitution: RESTITUTION_DEFAULTS, gapSlop: {}, dualFusion: {}, records: {}, colorMode: {}, colorPriority: {} };
 
 /** EngineInfo.variant for these params: every param, but an opt-in switch and its params only while it is on, with their defaults filled in. */
 export function avbdVariant(p: AvbdParams): Record<string, number | boolean> {
@@ -358,6 +434,26 @@ export function checkRestitution(p: Partial<AvbdParams>): void {
   const t = p.restitutionThreshold, r = p.restitutionRounds;
   if (t !== undefined && !(Number.isFinite(t) && t >= 0)) throw new Error(`AvbdParams.restitutionThreshold must be a finite number >= 0, got ${t}`);
   if (r !== undefined && !(Number.isInteger(r) && r >= 1)) throw new Error(`AvbdParams.restitutionRounds must be an integer >= 1, got ${r}`);
+}
+
+/** Throws on dualFusion that is not a boolean. */
+export function checkDualFusion(p: Partial<AvbdParams>): void {
+  const f = p.dualFusion;
+  if (f !== undefined && typeof f !== 'boolean') throw new Error(`AvbdParams.dualFusion must be a boolean, got ${f}`);
+}
+
+/** Throws on records out of range (RECORD_MODES). */
+export function checkRecords(p: Partial<AvbdParams>): void {
+  const r = p.records;
+  if (r !== undefined && !(RECORD_MODES as readonly unknown[]).includes(r)) throw new Error(`AvbdParams.records must be one of ${RECORD_MODES.join(', ')}, got ${r}`);
+}
+
+/** Throws on colorMode or colorPriority out of range (COLOR_MODES, COLOR_PRIORITIES). */
+export function checkColoring(p: Partial<AvbdParams>): void {
+  for (const [k, allowed] of [['colorMode', COLOR_MODES], ['colorPriority', COLOR_PRIORITIES]] as const) {
+    const v = p[k];
+    if (v !== undefined && !(allowed as readonly unknown[]).includes(v)) throw new Error(`AvbdParams.${k} must be one of ${allowed.join(', ')}, got ${v}`);
+  }
 }
 
 export const GROUND = -1;
@@ -386,6 +482,40 @@ export interface Contact {
   stick: boolean;
   /** Loaded-gap slop: the part of the start gap c0_n the main iterations do not count, min(c0_n, gapSlop) at a loaded point, else 0. */
   gs: number;
+}
+
+/**
+ * AvbdParams.records = 2: a manifold's friction, one state at the centre of its
+ * points (see AvbdParams.records). The points are this step's Contacts of the
+ * pair; only their normal rows are solved.
+ */
+export interface FrictionRecord {
+  a: number;
+  b: number;
+  n: Vec3;
+  t1: Vec3;
+  t2: Vec3;
+  mu: number;
+  /** The points (normal rows), nc of them. */
+  points: Contact[];
+  nc: number;
+  /** Lever arms of the centre, the mean of the points' (world, start of the step; a's is 0 for the ground). */
+  rac: Vec3;
+  rbc: Vec3;
+  /** RMS distance of the points from the centre in the contact plane: the twist row's lever. */
+  rt: number;
+  /** Friction anchors of the centre in a's frame (world for the ground) and b's frame. */
+  ra: Vec3;
+  rb: Vec3;
+  /** C at the start of the step along t1, t2 (the twist row starts at 0). */
+  c0t: [number, number];
+  /** Friction force along t1, t2 and the twist row, its penalty, and whether the last dual update held it inside the ball. */
+  lamT: Vec3;
+  kT: number;
+  stick: boolean;
+  /** Rows T1, T2, twist for a and b: 3 rows x 6 (linear, angular). */
+  ja: Float64Array;
+  jb: Float64Array;
 }
 
 export interface BodyState {
@@ -422,6 +552,8 @@ export interface StepStats {
   contacts: number;
   manifolds: number;
   colors: number;
+  /** Each body's colour in the last step. */
+  colorOf?: Int32Array;
   /**
    * What this step's restitution pass did (all 0 with the switch off): the
    * points it bounced, the normal impulse it applied in all (N s, supports
@@ -439,6 +571,8 @@ export interface StepStats {
 export class AvbdWorld {
   readonly bodies: BodyState[] = [];
   contacts: Contact[] = [];
+  /** AvbdParams.records = 2: one per manifold, its points among contacts; empty otherwise. */
+  records: FrictionRecord[] = [];
   /** Last step's SAT axis per touching pair (key `a,b`), preferred by this step's narrowphase. */
   axes = new Map<string, number>();
   stats: StepStats = { contacts: 0, manifolds: 0, colors: 0, restitution: { contacts: 0, impulse: 0, momentum: [0, 0, 0], groundImpulse: [0, 0, 0] } };
@@ -523,9 +657,14 @@ export class AvbdWorld {
       if (list) list.push(c); else old.set(key, [c]);
     }
     const out: Contact[] = [];
+    const records2 = p.records === 2;
+    const oldRecords = new Map<string, FrictionRecord>();
+    for (const q of this.records) oldRecords.set(`${q.a},${q.b}`, q);
+    const outRecords: FrictionRecord[] = [];
     let manifolds = 0;
     const emit = (a: number, b: number, normal: Vec3, points: Array<{ point: Vec3; depth: number }>, mu: number) => {
       manifolds++;
+      const first = out.length;
       const prev = old.get(`${a},${b}`) ?? [];
       const taken = new Set<Contact>();
       const A = a === GROUND ? null : bodies[a]!, B = bodies[b]!;
@@ -608,6 +747,9 @@ export class AvbdWorld {
         const gs = slop > 0 && !roll && lambda[0] < 0 && c0[0] > 0 ? Math.min(c0[0], slop) : 0;
         out.push({ a, b, ra, rb, raw: raw ?? [0, 0, 0], rbw, n: normal, t1, t2, mu, c0, ja, jb, lambda, k, stick, gs });
       }
+      // records = 2: the points above solve their normal rows only, and never stick (their friction is never
+      // updated), so they always take this step's narrowphase points; the friction goes to the centre.
+      if (records2) outRecords.push(this.frictionRecord(a, b, normal, mu, out.slice(first), roll, oldRecords.get(`${a},${b}`)));
     };
     // Speculative contacts: each body's margin grows by how far any of its
     // points can move this step, so fast bodies are caught before they
@@ -640,8 +782,80 @@ export class AvbdWorld {
       });
     }
     this.contacts = out;
+    this.records = outRecords;
     this.stats.contacts = out.length;
     this.stats.manifolds = manifolds;
+  }
+
+  /**
+   * AvbdParams.records = 2: the friction record of a manifold whose points
+   * (this step's contacts of the pair, fresh) were just made, warm-started from
+   * last step's record of the pair, q.
+   * - Centre: the mean of the points' lever arms (rac, rbc) and of their
+   *   anchors (ra, rb); rt is the points' RMS distance from it in the plane.
+   * - Force: as a world vector, re-expressed in the new basis (as points
+   *   carry theirs); the twist row's force times rt is a torque about n,
+   *   carried as such (0 when rt is, a one-point record).
+   * - Penalty: decayed by gamma within [nc penaltyMin, nc penaltyMax].
+   * - Static friction held at the end of last step keeps the centre's anchors
+   *   unless they drifted apart by stickThreshold, as a point's; a rolling
+   *   contact carries its slip c0_t + J_t dx instead (see collide()).
+   */
+  frictionRecord(a: number, b: number, n: Vec3, mu: number, points: Contact[], roll: boolean, q: FrictionRecord | undefined): FrictionRecord {
+    const { p, bodies } = this;
+    const A = a === GROUND ? null : bodies[a]!, B = bodies[b]!;
+    const nc = points.length;
+    const [t1, t2] = tangentBasis(n);
+    const mean = (f: (c: Contact) => Vec3): Vec3 => {
+      let s: Vec3 = [0, 0, 0];
+      for (const c of points) s = add3(s, f(c));
+      return [s[0] / nc, s[1] / nc, s[2] / nc];
+    };
+    const rac = mean((c) => c.raw), rbc = mean((c) => c.rbw);
+    let ra = mean((c) => c.ra), rb = mean((c) => c.rb);
+    let rt2 = 0;
+    for (const c of points) { const o = sub3(c.rbw, rbc); rt2 += dot(o, t1) ** 2 + dot(o, t2) ** 2; }
+    const rt = Math.sqrt(rt2 / nc);
+    let lamT: Vec3 = [0, 0, 0], kT = p.penaltyMin, stick = false;
+    let slip: [number, number] | null = null;
+    if (q) {
+      const f: Vec3 = [q.lamT[0] * q.t1[0] + q.lamT[1] * q.t2[0], q.lamT[0] * q.t1[1] + q.lamT[1] * q.t2[1], q.lamT[0] * q.t1[2] + q.lamT[1] * q.t2[2]];
+      lamT = [dot(f, t1), dot(f, t2), rt > 0 ? (q.lamT[2] * q.rt * dot(q.n, n)) / rt : 0];
+      kT = Math.min(nc * p.penaltyMax, Math.max(nc * p.penaltyMin, q.kT * p.gamma));
+      if (!p.postStabilize) lamT = [lamT[0] * p.alpha * p.gamma, lamT[1] * p.alpha * p.gamma, lamT[2] * p.alpha * p.gamma];
+      if (q.stick && roll) {
+        const s = this.recordSlipAfter(q), s1 = dot(s, t1), s2 = dot(s, t2);
+        if (Math.hypot(s1, s2) < p.stickThreshold) { stick = true; slip = [s1, s2]; }
+      } else if (q.stick) {
+        const pa = A ? add3(A.pos, rotate(A.rot, q.ra)) : q.ra, d = sub3(add3(B.pos, rotate(B.rot, q.rb)), pa);
+        if (Math.hypot(dot(d, t1), dot(d, t2)) < p.stickThreshold) { stick = true; ra = q.ra; rb = q.rb; }
+      }
+    }
+    const pa = A ? add3(A.pos, rotate(A.rot, ra)) : ra, d = sub3(add3(B.pos, rotate(B.rot, rb)), pa);
+    const c0t: [number, number] = [dot(d, t1), dot(d, t2)];
+    if (slip) { c0t[0] += slip[0]; c0t[1] += slip[1]; }
+    const ja = new Float64Array(18), jb = new Float64Array(18);
+    [t1, t2].forEach((u, r) => {
+      const xb = cross(rbc, u);
+      jb.set([u[0], u[1], u[2], xb[0], xb[1], xb[2]], 6 * r);
+      if (A) {
+        const xa = cross(rac, u);
+        ja.set([-u[0], -u[1], -u[2], -xa[0], -xa[1], -xa[2]], 6 * r);
+      }
+    });
+    jb.set([0, 0, 0, rt * n[0], rt * n[1], rt * n[2]], 12);
+    if (A) ja.set([0, 0, 0, -rt * n[0], -rt * n[1], -rt * n[2]], 12);
+    return { a, b, n, t1, t2, mu, points, nc, rac, rbc, rt, ra, rb, c0t, lamT, kT, stick, ja, jb };
+  }
+
+  /** A record's slip at the end of last step, as a world vector: its tangential C at the final dx, c0_t + J_t dx (slipAfter of its centre). */
+  recordSlipAfter(q: FrictionRecord): Vec3 {
+    const zero = new Float64Array(6);
+    const db = this.lastDx[q.b] ?? zero, da = q.a === GROUND ? zero : this.lastDx[q.a] ?? zero;
+    const ub = add3([db[0]!, db[1]!, db[2]!], cross([db[3]!, db[4]!, db[5]!], q.rbc));
+    const ua = add3([da[0]!, da[1]!, da[2]!], cross([da[3]!, da[4]!, da[5]!], q.rac));
+    const u = sub3(ub, ua), s1 = q.c0t[0] + dot(q.t1, u), s2 = q.c0t[1] + dot(q.t2, u);
+    return [s1 * q.t1[0] + s2 * q.t2[0], s1 * q.t1[1] + s2 * q.t2[1], s1 * q.t1[2] + s2 * q.t2[2]];
   }
 
   /** How far a contact's point on b moved relative to a's over last step, J dx as a world vector: (dp + phi x r) on b minus a. */
@@ -929,12 +1143,25 @@ export class AvbdWorld {
         adj[c.a]!.add(c.b); adj[c.b]!.add(c.a);
       }
     });
-    const color = colorGraph(adj.map((s) => [...s].sort((x, y) => x - y)));
+    // records = 2 (see AvbdParams.records): each body's walk visits its records instead (the contacts are their points).
+    const records = this.records, records2 = p.records === 2;
+    const touchingR: number[][] = records2 ? Array.from({ length: n }, () => []) : [];
+    records.forEach((q, ri) => {
+      touchingR[q.b]!.push(ri);
+      if (q.a !== GROUND) touchingR[q.a]!.push(ri);
+    });
+    const lists = adj.map((s) => [...s].sort((x, y) => x - y));
+    const mode = p.colorMode ?? 0, degreeFirst = (p.colorPriority ?? 0) === 1;
+    const gy = this.scene.ground?.y ?? 0;
+    const cubeHalf = (b: BodyState) => (b.desc.shape.kind === 'box' && b.desc.shape.half[0] === b.desc.shape.half[1] && b.desc.shape.half[0] === b.desc.shape.half[2] ? b.desc.shape.half[0] : null);
+    const color = mode === 0 && !degreeFirst ? colorGraph(lists)
+      : colorGraphWith(lists, { degreeFirst, ...(mode ? { prefer: latticePreferences(lists, bodies.map((b) => latticeParity(b.pos, b.rot, cubeHalf(b), gy)), mode) } : {}) });
     let colors = 0;
     for (let i = 0; i < n; i++) colors = Math.max(colors, color[i]! + 1);
     const byColor: number[][] = Array.from({ length: colors }, () => []);
     for (let i = 0; i < n; i++) byColor[color[i]!]!.push(i);
     this.stats.colors = colors;
+    this.stats.colorOf = color;
 
     // Start-of-step state, inertial targets and warm-started guesses.
     // dx[i] = [position - start position, rotation vector since the start].
@@ -1002,7 +1229,105 @@ export class AvbdWorld {
       return s;
     };
 
+    // Dual update of one contact at the current dx: forces and penalties.
+    const dualUpdate = (c: Contact, alpha: number) => {
+      evalC(c, alpha);
+      const bound = c.mu * Math.abs(c.lambda[0]);
+      c.lambda[0] = Math.min(0, c.k[0] * C[0]! + c.lambda[0]);
+      if (c.lambda[0] < 0) c.k[0] = Math.min(c.k[0] + p.beta * Math.abs(C[0]!), p.penaltyMax);
+      const f1 = c.k[1] * C[1]! + c.lambda[1], f2 = c.k[1] * C[2]! + c.lambda[2];
+      const fl = Math.hypot(f1, f2);
+      // Trial force inside the cone: static friction held, or k_t is still too low to tell (a new
+      // contact in an impact), which the drift check at reuse (collide) catches. The last main
+      // iteration's answer stands.
+      c.stick = fl < bound;
+      if (fl < bound) {
+        c.lambda[1] = f1; c.lambda[2] = f2;
+        c.k[1] = c.k[2] = Math.min(c.k[1] + p.beta * Math.hypot(C[1]!, C[2]!), p.penaltyMax);
+      } else {
+        const s = fl > 0 ? bound / fl : 0;
+        c.lambda[1] = f1 * s; c.lambda[2] = f2 * s;
+      }
+    };
+    // dualFusion: the body whose visit runs each contact's deferred dual update (records = 2: each
+    // record's; the earlier in colour order, b for a ground contact), and whether one is pending,
+    // with its alpha.
+    let firstVisitor: Int32Array | null = null, pendingDual = false, dualAlpha = 1;
+    if (p.dualFusion) {
+      const visit = new Int32Array(n);
+      let o = 0;
+      for (const group of byColor) for (const i of group) visit[i] = o++;
+      firstVisitor = Int32Array.from<{ a: number; b: number }>(records2 ? records : contacts, (c) => (c.a === GROUND || visit[c.b]! < visit[c.a]! ? c.b : c.a));
+    }
+
     const lhs = new Float64Array(36), rhs = new Float64Array(6), step = new Float64Array(6);
+
+    // records = 2: a point's normal row alone (C along n at the current dx, as evalC's row 0, a loaded point's gapSlop
+    // included), and a record's friction: its rows T1, T2 and twist (C_t; the twist row starts at 0) and their force,
+    // the trial force z = k_t C_t + lambda_t clamped to the ball mu |sum of the points' lambda_n| (returns the clamp's
+    // scale s, as evalF).
+    const evalC0 = (c: Contact, alpha: number) => {
+      const c0 = c.c0[0]!;
+      let v = c0 < 0 ? (1 - alpha) * c0 : (c.gs > 0 && alpha === 1 ? c0 - c.gs : c0);
+      const db = dx[c.b]!;
+      for (let k = 0; k < 6; k++) v += c.jb[k]! * db[k]!;
+      if (c.a !== GROUND) { const da = dx[c.a]!; for (let k = 0; k < 6; k++) v += c.ja[k]! * da[k]!; }
+      return v;
+    };
+    const CT = new Float64Array(3), FT = new Float64Array(3);
+    const evalCT = (q: FrictionRecord, alpha: number) => {
+      const db = dx[q.b]!, da = q.a !== GROUND ? dx[q.a]! : null;
+      for (let r = 0; r < 3; r++) {
+        let v = r < 2 ? (1 - alpha) * q.c0t[r]! : 0;
+        for (let k = 0; k < 6; k++) v += q.jb[6 * r + k]! * db[k]!;
+        if (da) for (let k = 0; k < 6; k++) v += q.ja[6 * r + k]! * da[k]!;
+        CT[r] = v;
+      }
+    };
+    const recordBound = (q: FrictionRecord) => {
+      let s = 0;
+      for (const c of q.points) s += c.lambda[0];
+      return q.mu * Math.abs(s);
+    };
+    const evalFT = (q: FrictionRecord) => {
+      const bound = recordBound(q);
+      const z0 = q.kT * CT[0]! + q.lamT[0], z1 = q.kT * CT[1]! + q.lamT[1], z2 = q.kT * CT[2]! + q.lamT[2];
+      const zl = Math.hypot(z0, z1, z2);
+      const s = zl > bound ? (zl > 0 ? bound / zl : 0) : 1;
+      FT[0] = z0 * s; FT[1] = z1 * s; FT[2] = z2 * s;
+      return s;
+    };
+    // A record's dual update: the points' normal rows, then its friction against the bound of the points' forces
+    // before this update (as a point's), its penalty ramping by nc beta up to nc penaltyMax.
+    const recordDual = (q: FrictionRecord, alpha: number) => {
+      const bound = recordBound(q);
+      for (const c of q.points) {
+        const c0 = evalC0(c, alpha);
+        c.lambda[0] = Math.min(0, c.k[0] * c0 + c.lambda[0]);
+        if (c.lambda[0] < 0) c.k[0] = Math.min(c.k[0] + p.beta * Math.abs(c0), p.penaltyMax);
+      }
+      evalCT(q, alpha);
+      const z0 = q.kT * CT[0]! + q.lamT[0], z1 = q.kT * CT[1]! + q.lamT[1], z2 = q.kT * CT[2]! + q.lamT[2];
+      const zl = Math.hypot(z0, z1, z2);
+      q.stick = zl < bound;
+      if (zl < bound) {
+        q.lamT[0] = z0; q.lamT[1] = z1; q.lamT[2] = z2;
+        q.kT = Math.min(q.kT + q.nc * p.beta * Math.hypot(CT[0]!, CT[1]!, CT[2]!), q.nc * p.penaltyMax);
+      } else {
+        const s = zl > 0 ? bound / zl : 0;
+        q.lamT[0] = z0 * s; q.lamT[1] = z1 * s; q.lamT[2] = z2 * s;
+      }
+    };
+    // rhs += J_r f and lhs += k J_r J_r^T for row r of J (at off).
+    const addRow = (J: Float64Array, off: number, f: number, k: number) => {
+      for (let u = 0; u < 6; u++) rhs[u] = rhs[u]! + J[off + u]! * f;
+      if (k === 0) return;
+      for (let u = 0; u < 6; u++) {
+        const ju = k * J[off + u]!;
+        for (let v = 0; v < 6; v++) lhs[6 * u + v] = lhs[6 * u + v]! + ju * J[off + v]!;
+      }
+    };
+
     const total = p.iterations + (p.postStabilize ? 1 : 0);
     for (let it = 0; it < total; it++) {
       const alpha = p.postStabilize ? (it < p.iterations ? 1 : 0) : p.alpha;
@@ -1024,8 +1349,19 @@ export class AvbdWorld {
             }
             rhs[3 + r] = s / (h * h);
           }
-          for (const ci of touching[i]!) {
+          if (records2) for (const ri of touchingR[i]!) {
+            const q = records[ri]!;
+            if (pendingDual && firstVisitor![ri] === i) recordDual(q, dualAlpha);
+            for (const c of q.points) addRow(c.b === i ? c.jb : c.ja, 0, Math.min(0, c.k[0] * evalC0(c, alpha) + c.lambda[0]), c.k[0]);
+            evalCT(q, alpha);
+            const s = evalFT(q);
+            // The sliding Hessian as a point's (see below), on all three rows.
+            const kt = p.slidingHessian ? q.kT * s : q.kT, J = q.b === i ? q.jb : q.ja;
+            for (let r = 0; r < 3; r++) addRow(J, 6 * r, FT[r]!, kt);
+          }
+          if (!records2) for (const ci of touching[i]!) {
             const c = contacts[ci]!;
+            if (pendingDual && firstVisitor![ci] === i) dualUpdate(c, dualAlpha);
             evalC(c, alpha);
             const s = evalF(c);
             const J = c.b === i ? c.jb : c.ja;
@@ -1061,26 +1397,18 @@ export class AvbdWorld {
           for (let k = 0; k < 6; k++) d[k] = d[k]! - step[k]!;
         }
       }
-      // Dual: update forces and penalties (not in the stabilization pass).
+      // Dual: update forces and penalties (not in the stabilization pass). With dualFusion,
+      // this sweep's visits ran the last one's, and this one is deferred to the next main sweep's,
+      // except after the last main sweep.
+      pendingDual = false;
       if (it < p.iterations) {
-        for (const c of contacts) {
-          evalC(c, alpha);
-          const bound = c.mu * Math.abs(c.lambda[0]);
-          c.lambda[0] = Math.min(0, c.k[0] * C[0]! + c.lambda[0]);
-          if (c.lambda[0] < 0) c.k[0] = Math.min(c.k[0] + p.beta * Math.abs(C[0]!), p.penaltyMax);
-          const f1 = c.k[1] * C[1]! + c.lambda[1], f2 = c.k[1] * C[2]! + c.lambda[2];
-          const fl = Math.hypot(f1, f2);
-          // Trial force inside the cone: static friction held, or k_t is still too low to tell (a new
-          // contact in an impact), which the drift check at reuse (collide) catches. The last main
-          // iteration's answer stands.
-          c.stick = fl < bound;
-          if (fl < bound) {
-            c.lambda[1] = f1; c.lambda[2] = f2;
-            c.k[1] = c.k[2] = Math.min(c.k[1] + p.beta * Math.hypot(C[1]!, C[2]!), p.penaltyMax);
-          } else {
-            const s = fl > 0 ? bound / fl : 0;
-            c.lambda[1] = f1 * s; c.lambda[2] = f2 * s;
-          }
+        if (firstVisitor && it + 1 < p.iterations) {
+          pendingDual = true; dualAlpha = alpha;
+        } else if (records2) {
+          // The records' points are the contacts: recordDual() updates their normal rows.
+          for (const q of records) recordDual(q, alpha);
+        } else {
+          for (const c of contacts) dualUpdate(c, alpha);
         }
       }
       // Velocities from the last main iteration (BDF1); stabilization moves positions only.

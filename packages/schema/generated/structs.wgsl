@@ -100,7 +100,7 @@ struct SolverBody {
   sweep: f32, // @12 speculative margin growth: how far the body can move this step
   q0: vec4f, // @16 rotation at the start of the step
   dp: vec3f, // @32 position minus x0 (the primal variable)
-  pad0: u32, // @44
+  visit: u32, // @44 this step's position in the colour order (SolverDispatch.dualFusion only; else unused)
   phi: vec3f, // @48 rotation vector since q0 (the primal variable)
   pad1: u32, // @60
   tp: vec3f, // @64 inertial target for dp: h v + h^2 g
@@ -131,6 +131,96 @@ struct SolverContact {
   lt: vec2f, // @112 friction force along t1, t2
   b: u32, // @120
   inCone: u32, // @124 1 if the last dual update's trial friction was inside the cone (static friction held)
+}
+
+// A contact point's dual state while the fused dual (SolverDispatch.dualFusion) updates it in the sweep, so the solve kernel's contacts stay read-only.
+// size 24 B, align 8
+struct ContactDual {
+  lt: vec2f, // @0 friction force along t1, t2
+  lambdaN: f32, // @8 normal force
+  kN: f32, // @12 normal penalty
+  kT: f32, // @16 tangent penalty
+}
+
+// AvbdParams.records = 1: the 1-4 SolverContact points of one manifold, every field of each kept (the exact record).
+// size 384 B, align 16
+struct SolverRecord {
+  n: vec3f, // @0 normal from a to b, fixed over the step; t1 = tangent1(n), t2 = n x t1 as for a SolverContact
+  mu: f32, // @12
+  a: u32, // @16 body a, 0xffffffff for the ground
+  b: u32, // @20
+  count: u32, // @24 points in use, 0..4: point q is in use if q < count
+  flags: u32, // @28 bit q: point q's SolverContact.stick; bit 4 + q: its SolverContact.inCone
+  rawX: vec4f, // @32 a's lever arm in world space at the start of the step, x of points 0..3
+  rawY: vec4f, // @48
+  rawZ: vec4f, // @64
+  rbwX: vec4f, // @80 b's lever arm
+  rbwY: vec4f, // @96
+  rbwZ: vec4f, // @112
+  c0N: vec4f, // @128 constraint at the start of the step along n
+  c0T1: vec4f, // @144 along t1
+  c0T2: vec4f, // @160 along t2
+  kN: vec4f, // @176 normal penalty
+  lambdaN: vec4f, // @192 normal force (<= 0 pushes apart)
+  kT: vec4f, // @208 tangent penalty (shared by both rows)
+  lt1: vec4f, // @224 friction force along t1
+  lt2: vec4f, // @240 along t2
+  raX: vec4f, // @256 anchor in a's frame (world for the ground); setup only from here on
+  raY: vec4f, // @272
+  raZ: vec4f, // @288
+  rbX: vec4f, // @304 anchor in b's frame
+  rbY: vec4f, // @320
+  rbZ: vec4f, // @336
+  pad0: vec4u, // @352 to 384 B = 3 lines of 128 B, so every record starts on a line and its hot block is 2 lines
+  pad1: vec4u, // @368
+}
+
+// AvbdParams.records = 2: one manifold's 1-4 points, normal rows only, and one friction state at their centre (the reference's FrictionRecord).
+// size 384 B, align 16
+struct CentreRecord {
+  n: vec3f, // @0 normal from a to b, fixed over the step; t1 = tangent1(n), t2 = n x t1
+  mu: f32, // @12
+  a: u32, // @16 body a, 0xffffffff for the ground
+  b: u32, // @20
+  count: u32, // @24 points in use, 0..4
+  stick: u32, // @28 1 if the friction's last dual update was inside the ball (static friction held)
+  rawX: vec4f, // @32 point q's lever arm on a (world, start of the step), x of points 0..3
+  rawY: vec4f, // @48
+  rawZ: vec4f, // @64
+  rbwX: vec4f, // @80 on b
+  rbwY: vec4f, // @96
+  rbwZ: vec4f, // @112
+  c0N: vec4f, // @128 point q: constraint at the start of the step along n
+  kN: vec4f, // @144 normal penalty
+  lambdaN: vec4f, // @160 normal force (<= 0 pushes apart)
+  rac: vec3f, // @176 the centre's lever arm on a (world, start of the step): the mean of the points'
+  rt: f32, // @188 RMS distance of the points from the centre in the contact plane: the twist row's lever
+  rbc: vec3f, // @192 on b
+  kT: f32, // @204 penalty of the three friction rows
+  lamT: vec3f, // @208 friction force along t1, t2 and the twist row
+  pad0: u32, // @220
+  c0t: vec2f, // @224 constraint at the start of the step along t1, t2 (the twist row starts at 0); the hot block ends here, at 232 B
+  pad3: vec2u, // @232
+  rbX: vec4f, // @240 point q's anchor in b's frame (matching); setup only from here on
+  rbY: vec4f, // @256
+  rbZ: vec4f, // @272
+  ra: vec3f, // @288 the centre's friction anchor in a's frame (world for the ground)
+  pad1: u32, // @300
+  rb: vec3f, // @304 in b's frame
+  pad2: u32, // @316
+  pad4: vec4u, // @320 to 384 B = 3 lines of 128 B, so every record starts on a line and its hot block is 2 lines
+  pad5: vec4u, // @336
+  pad6: vec4u, // @352
+  pad7: vec4u, // @368
+}
+
+// A CentreRecord's dual state while the fused dual (SolverDispatch.dualFusion) updates it in the sweep (records 1 keeps a ContactDual per point).
+// size 48 B, align 16
+struct CentreDual {
+  kN: vec4f, // @0 normal penalty of points 0..3
+  lambdaN: vec4f, // @16 normal force
+  lamT: vec3f, // @32 friction force along t1, t2 and the twist row
+  kT: f32, // @44 penalty of the three friction rows
 }
 
 // Per-step uniforms of the GPU AVBD solver.
@@ -171,7 +261,7 @@ struct SolverParams {
 struct ColorParams {
   color: u32, // @0 colour swept by this primal dispatch
   alpha: f32, // @4 1 in the main iterations, 0 in post-stabilization
-  pad0: u32, // @8
+  fuse: u32, // @8 SolverDispatch.dualFusion: 0 no fused dual update, 1 the step's first (last state in the contacts), 2 later ones
   pad1: u32, // @12
 }
 

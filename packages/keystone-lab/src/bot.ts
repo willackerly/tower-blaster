@@ -5,7 +5,7 @@
 import { type BlockPart, type LevelDef, type Shot } from '@tb/keystone';
 import { aimCells, RAPIER_SUBSTEPS } from './cases.ts';
 import { engineSubsteps } from './engines.ts';
-import { runProbe, type ProbeResult } from './probe.ts';
+import { quantile, runProbe, type ProbeResult } from './probe.ts';
 import type { Runner } from './runner.ts';
 
 export interface Candidate { label: string; shot: Shot }
@@ -97,7 +97,28 @@ export async function solveOneShot(level: LevelDef, runner: Runner, cands = cand
   return { tried: cands.length, solutions, best };
 }
 
-/** The probe grid around the last shot of a solution, succeeding when the level clears with no heritage broken. */
+/**
+ * The probe grid around the last shot of a solution, succeeding when the
+ * level clears with no heritage broken; values are those runs' leverage.
+ */
 export function audit(level: LevelDef, shots: Shot[], runner: Runner): Promise<ProbeResult> {
-  return runProbe({ id: level.id, title: `${level.name} par audit`, level, shots: () => shots, success: (r) => r.session.phase === 'cleared' && r.session.heritageBroken.every((x) => !x) }, runner);
+  return runProbe({
+    id: level.id, title: `${level.name} par audit`, level, shots: () => shots,
+    success: (r) => r.session.phase === 'cleared' && r.session.heritageBroken.every((x) => !x),
+    value: (r) => r.session.score!.leverage,
+  }, runner);
+}
+
+/**
+ * The gold-leverage line (third star) from a par line's audit: the lower
+ * quartile of the leverage its clean neighbours reach, rounded down to two
+ * significant figures, so about three in four near-par shots earn it.
+ * Null when nothing in the grid cleared.
+ */
+export function goldLine(a: ProbeResult): number | null {
+  const q = quantile(a.values, 0.25);
+  if (!Number.isFinite(q)) return null;
+  if (q <= 0) return 0;
+  const p = 10 ** (Math.floor(Math.log10(q)) - 1);
+  return Number((Math.floor(q / p + 1e-9) * p).toPrecision(2));
 }

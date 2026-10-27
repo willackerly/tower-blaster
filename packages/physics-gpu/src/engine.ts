@@ -6,13 +6,13 @@
 import { type BodyDesc, DEFAULT_RESTITUTION_COMBINE, emptySnapshot, type EngineInfo, inertiaOf, type InputEvent, massOf, type PhysicsEngine, type SceneDesc, type Snapshot, type Vec3 } from '@tb/engine-api';
 import { boundingRadius } from '@tb/geom';
 import { assertStorageFits, createDevice, isSoftwareAdapter, Readback } from '@tb/gpu';
-import { type AvbdParams, avbdVariant, checkGapSlop, checkRestitution, DEFAULT_AVBD, RESTITUTION_DEFAULTS } from '@tb/physics-ref';
+import { type AvbdParams, avbdVariant, checkColoring, checkDualFusion, checkGapSlop, checkRecords, checkRestitution, DEFAULT_AVBD, RESTITUTION_DEFAULTS } from '@tb/physics-ref';
 import { Body, BodyProps, readField, RestSlot, Shape, SolverBody, writeStruct } from '@tb/schema';
 import { Broadphase } from './broadphase.ts';
 import { Coloring } from './coloring.ts';
 import { Narrowphase } from './narrowphase.ts';
 import { restitutionWord } from './restitution.ts';
-import { AvbdSolver, DEFAULT_DISPATCH, defaultTailThreads, HESSIAN_FORMS, type HessianForm, type SolverDispatch } from './solver.ts';
+import { AvbdSolver, DEFAULT_DISPATCH, defaultTailThreads, HESSIAN_FORMS, type HessianForm, type RecordMode, type SolverDispatch } from './solver.ts';
 
 export interface GpuEngineOptions {
   /** Use this device instead of creating one (it is then not destroyed by dispose()). */
@@ -58,6 +58,12 @@ export interface GpuEngineOptions {
    * a pile (their bounding spheres are 42x their volume); 2% fewer for cubes.
    */
   boxBroadphase?: boolean;
+  /**
+   * The solve kernel binds the contacts read_write (SolverDispatch.solveContactsRW; default
+   * false). With AvbdParams.dualFusion the fused dual update then writes the contact records in
+   * place instead of a side array; without, only the binding changes, to time it against.
+   */
+  solveContactsRW?: boolean;
 }
 
 export interface GpuDiagnostics {
@@ -124,6 +130,8 @@ export class GpuAvbdEngine implements PhysicsEngine {
   private cellSize = 1;
   /** The primal dispatch init() chose, with the adapter's default tail width filled in; null before init. */
   dispatch: SolverDispatch | null = null;
+  /** The solver's contact layout (AvbdParams.records): 0 points, 1 exact records, 2 centre-friction records. */
+  readonly records: RecordMode;
   private parts: { bodies: GPUBuffer; shapes: GPUBuffer; props: GPUBuffer; spheres: GPUBuffer; sweep: GPUBuffer; prev: GPUBuffer; bp: Broadphase; np: Narrowphase; col: Coloring; solver: AvbdSolver; readback: Readback } | null = null;
   /** Counts dispose() calls (init() makes one), so an init() that awaited across another knows it was overtaken. */
   private generation = 0;
@@ -134,6 +142,9 @@ export class GpuAvbdEngine implements PhysicsEngine {
     // The same AvbdParams as the reference, switch on or off.
     checkRestitution(this.params);
     checkGapSlop(this.params);
+    checkDualFusion(this.params);
+    checkRecords(this.params);
+    checkColoring(this.params);
     const check = (k: 'capacity' | 'spare' | 'pairsPerBody' | 'maxRadius' | 'colorTail' | 'tailThreads' | 'colorRounds', ok: (v: number) => boolean, what: string) => {
       const v = opts[k];
       if (v !== undefined && !(typeof v === 'number' && ok(v))) throw new Error(`GpuAvbdEngine: GpuEngineOptions.${k} must be ${what}, got ${v}`);
@@ -145,12 +156,21 @@ export class GpuAvbdEngine implements PhysicsEngine {
     check('colorTail', (v) => Number.isInteger(v) && v >= 0 && v <= 63, 'an integer from 0 to 63');
     check('tailThreads', (v) => Number.isInteger(v) && v >= 1 && v <= 256, 'an integer from 1 to 256');
     check('colorRounds', (v) => Number.isInteger(v) && v >= 2 && v % 2 === 0, 'an even integer >= 2');
-    for (const k of ['indirectColors', 'boxBroadphase'] as const) if (opts[k] !== undefined && typeof opts[k] !== 'boolean') throw new Error(`GpuAvbdEngine: GpuEngineOptions.${k} must be a boolean, got ${opts[k]}`);
+    for (const k of ['indirectColors', 'boxBroadphase', 'solveContactsRW'] as const) if (opts[k] !== undefined && typeof opts[k] !== 'boolean') throw new Error(`GpuAvbdEngine: GpuEngineOptions.${k} must be a boolean, got ${opts[k]}`);
     if (opts.hessian !== undefined && !HESSIAN_FORMS.includes(opts.hessian)) throw new Error(`GpuAvbdEngine: GpuEngineOptions.hessian must be one of ${HESSIAN_FORMS.join(', ')}, got ${opts.hessian}`);
+    // Manifold records (AvbdParams.records, checked above): the solver's contact layout, in the register form only.
+    const records = (this.params.records ?? 0) as RecordMode;
+    if (records !== 0 && (opts.hessian ?? DEFAULT_DISPATCH.hessian) !== 'registers') throw new Error(`GpuAvbdEngine: AvbdParams.records ${records} needs GpuEngineOptions.hessian registers, got ${opts.hessian}`);
+    // The records' setup and walk do not mark loaded gaps yet; the reference applies gapSlop with records.
+    if (records !== 0 && this.params.gapSlop) throw new Error(`GpuAvbdEngine: AvbdParams.gapSlop is not implemented with AvbdParams.records ${records} on the GPU yet`);
+    // The restitution pass reads and resets the point form's contacts (restitution.ts), and was never built with the fused dual.
+    if (records !== 0 && this.params.restitution) throw new Error(`GpuAvbdEngine: AvbdParams.restitution is not implemented with AvbdParams.records ${records} on the GPU yet`);
+    if (this.params.dualFusion && this.params.restitution) throw new Error('GpuAvbdEngine: AvbdParams.restitution is not implemented with AvbdParams.dualFusion on the GPU yet');
+    this.records = records;
     // Every param, but an opt-in switch and its params only while it is on (avbdVariant): result keys do not change.
     const variant: Record<string, number | boolean | string> = avbdVariant(this.params);
     // Options that size the buffers or shape the dispatch change the work per step (e.g. the broadphase's key bits), so they are part of the variant.
-    for (const k of ['capacity', 'spare', 'pairsPerBody', 'maxRadius', 'colorTail', 'indirectColors', 'tailThreads', 'colorRounds', 'hessian', 'boxBroadphase'] as const) if (opts[k] !== undefined) variant[k] = opts[k];
+    for (const k of ['capacity', 'spare', 'pairsPerBody', 'maxRadius', 'colorTail', 'indirectColors', 'tailThreads', 'colorRounds', 'hessian', 'boxBroadphase', 'solveContactsRW'] as const) if (opts[k] !== undefined) variant[k] = opts[k];
     this.info = { name: 'avbd-gpu', variant, backend: 'webgpu', integrator: { substeps: 1 } };
   }
 
@@ -176,6 +196,9 @@ export class GpuAvbdEngine implements PhysicsEngine {
       colorTail: this.opts.colorTail ?? DEFAULT_DISPATCH.colorTail, indirectColors: this.opts.indirectColors ?? DEFAULT_DISPATCH.indirectColors,
       tailThreads: this.opts.tailThreads ?? defaultTailThreads(adapter ? isSoftwareAdapter(adapter) : false),
       hessian: this.opts.hessian ?? DEFAULT_DISPATCH.hessian,
+      // The fused dual and the contacts binding: present only when on, so the default dispatch is the one without them.
+      ...(this.params.dualFusion ? { dualFusion: true } : {}),
+      ...(this.opts.solveContactsRW ? { solveContactsRW: true } : {}),
     };
     this.scene = scene;
     const all = [...scene.bodies, ...scene.inputs.map((e) => e.body)];
@@ -186,10 +209,10 @@ export class GpuAvbdEngine implements PhysicsEngine {
     this.rmax = all.reduce((m, b) => Math.max(m, boundingRadius(b.shape)), this.opts.maxRadius ?? 0);
     // Every overlapping (inflated) pair must lie in adjacent cells.
     this.cellSize = Math.max(1e-3, 2 * (this.rmax + (p.sweep ? p.maxSweep : 0)) + p.margin);
-    // The contact buffer is the largest (1 KB per pair slot; a manifold is
-    // 96 B), so checking it first means no stage throws halfway through
-    // allocating, which would leak what it had made.
-    assertStorageFits(device, AvbdSolver.contactBytes(this.capacity, maxPairs), 'avbd contacts');
+    // The contact buffer is the largest (1 KB per pair slot, 768 B with
+    // records; a manifold is 96 B), so checking it first means no stage throws
+    // halfway through allocating, which would leak what it had made.
+    assertStorageFits(device, AvbdSolver.contactBytes(this.capacity, maxPairs, this.records), 'avbd contacts');
     const buf = (bytes: number, label: string) => (assertStorageFits(device, bytes, label), device.createBuffer({ size: Math.max(16, bytes), usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC, label }));
     // A pipeline that fails to build (e.g. on Metal, a kernel whose register use
     // lowers maxTotalThreadsPerThreadgroup below its workgroup size) is an error
@@ -216,12 +239,12 @@ export class GpuAvbdEngine implements PhysicsEngine {
       const prev = buf(maxPairs * 8, 'pair history lookup');
       const bp = new Broadphase(device, spheres, this.capacity, maxPairs, undefined, this.opts.boxBroadphase ? { bodies, shapes, sweep } : undefined);
       const np = new Narrowphase(device, bodies, shapes, bp.pairs, bp.total, this.capacity, maxPairs, sweep, prev);
-      const col = new Coloring(device, np.manifolds, bp.total, this.capacity, maxPairs, this.opts.colorRounds);
+      const col = new Coloring(device, np.manifolds, bp.total, this.capacity, maxPairs, this.opts.colorRounds, { colorMode: p.colorMode ?? 0, colorPriority: p.colorPriority ?? 0, bodies, shapes });
       const solver = new AvbdSolver(device, this.capacity, maxPairs, {
         bodies, props, spheres, sweep, prev, manifolds: np.manifolds, groundManifolds: np.groundManifolds,
         pairs: bp.pairs, total: bp.total, offsets: bp.offsets,
         order: col.order, colorStart: col.colorStart, dispatch: col.dispatch, rowStart: col.rowStart, rowLength: col.rowLength, adjSlot: col.adjSlot,
-      }, this.dispatch, p.gapSlop ?? 0, p.restitution ? {
+      }, this.dispatch, this.records, p.gapSlop ?? 0, p.restitution ? {
         threshold: p.restitutionThreshold ?? RESTITUTION_DEFAULTS.restitutionThreshold, rounds: p.restitutionRounds ?? RESTITUTION_DEFAULTS.restitutionRounds,
         groundRestitution: scene.ground?.restitution ?? 0, combine: scene.restitutionCombine ?? DEFAULT_RESTITUTION_COMBINE,
       } : null);
@@ -243,7 +266,7 @@ export class GpuAvbdEngine implements PhysicsEngine {
       const d = this.dispatch;
       if (parts) GpuAvbdEngine.free(parts);
       this.dispose();
-      throw new Error(`GpuAvbdEngine: init() could not build the GPU pipelines (hessian ${d.hessian}, tailThreads ${d.tailThreads}): ${failed.message}`);
+      throw new Error(`GpuAvbdEngine: init() could not build the GPU pipelines (hessian ${d.hessian}, tailThreads ${d.tailThreads}${this.records ? `, records ${this.records}` : ''}): ${failed.message}`);
     }
     this.parts = parts;
     this.n = 0;
@@ -327,7 +350,7 @@ export class GpuAvbdEngine implements PhysicsEngine {
     parts.solver.match(pass);
     parts.np.encode(pass, n, { margin: p.margin, ground: scene.ground ? { y: scene.ground.y } : null });
     pass.end();
-    parts.col.encode(enc, n);
+    parts.col.encode(enc, n, scene.ground?.y ?? 0);
     parts.solver.solve(enc, n, p.iterations, solveTimestamps);
     device.queue.submit([enc.finish()]);
     this.stepIndex++;

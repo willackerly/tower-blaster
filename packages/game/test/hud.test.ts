@@ -37,15 +37,15 @@ describe('formatting', () => {
     expect(hudHtml({ ...base, chips: [], reachable: false })).toMatch(/Out of reach/);
   });
   it('the result card lists every score line in order, then the total, stamp and stars', () => {
-    const shot = { ke: 1000, dPE_mJ: 2_000_000, leverage: 2, crownsDown: 9, crownsTotal: 9, heritageNew: 0, displaced: 50, outOfLot: 0, spawnStep: 0, settleStep: 100 };
-    const score = levelScore(L1, [shot, shot], true, 108);
-    const html = resultHtml(L1, score, 2, true);
+    const shot = { ke: 1000, dPE_mJ: 2_000_000, leverage: 2, crownsDown: 4, crownsTotal: 4, heritageNew: 0, displaced: 30, outOfLot: 0, spawnStep: 0, settleStep: 100 };
+    const score = levelScore(L1, [shot], true, 40);
+    const html = resultHtml(L1, score, 1, true);
     const labels = [...html.matchAll(/<div class="line[^"]*"[^>]*><span>([^<]+)<\/span>/g)].map((m) => m[1]);
     expect(labels).toEqual([...score.lines.map((l) => l.label), 'Total']);
     expect(html).toMatch(/>PAR</);
     expect(html).toContain(starsText(score.stars));
     expect(html).toMatch(/data-act="next"/);
-    expect(resultHtml(L1, score, 2, false)).not.toMatch(/data-act="next"/);
+    expect(resultHtml(L1, score, 1, false)).not.toMatch(/data-act="next"/);
     expect(html).toContain(`(${['Brute', 'Clean', 'Elegant', 'Keystone'][tier(score.leverage)]})`);
   });
 });
