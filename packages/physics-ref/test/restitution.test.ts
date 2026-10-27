@@ -10,9 +10,10 @@
 // is exactly constant, so a sample's speed at touching height y_c needs no
 // interpolation. A step-based rule loses about (1 + e) g h / 2 of rebound
 // against it (gravity acts over the impact step): 2.5-7% at 5-10 m/s, up to
-// 24% at 2 m/s (the restitution gates' 1-D model).
+// 24% at 2 m/s (a 1-D model of the rule: a hard contact, then -e times the
+// start-of-step normal velocity).
 import { describe, expect, it } from 'vitest';
-import { type BodyDesc, type CombineRule, combineRestitution, type SceneDesc, type Vec3 } from '@tb/engine-api';
+import { type BodyDesc, type CombineRule, combineRestitution, DEFAULT_RESTITUTION_COMBINE, type SceneDesc, type Vec3 } from '@tb/engine-api';
 import { rotate } from '@tb/geom';
 import { nonFinite } from '@tb/metrics';
 import { buildScenario } from '@tb/scenarios';
@@ -20,7 +21,7 @@ import { AvbdReferenceEngine, type AvbdParams, AvbdWorld, DEFAULT_AVBD, RESTITUT
 
 const G = 9.81, H = 1 / 60;
 const ON: Partial<AvbdParams> = { restitution: true };
-const rotZ = (a: number): [number, number, number, number] => [0, 0, 0 - Math.sin(a / 2), Math.cos(a / 2)];
+const rotZ = (a: number): [number, number, number, number] => [0, 0, -Math.sin(a / 2), Math.cos(a / 2)];
 const cube = (pos: Vec3, o: { e?: number; linVel?: Vec3; rot?: [number, number, number, number]; density?: number; friction?: number } = {}): BodyDesc => ({
   shape: { kind: 'box', half: [0.5, 0.5, 0.5] }, pos, rot: o.rot ?? [0, 0, 0, 1], linVel: o.linVel ?? [0, 0, 0], angVel: [0, 0, 0], density: o.density ?? 1, friction: o.friction ?? 0.6, restitution: o.e ?? 0, tag: 0,
 });
@@ -168,18 +169,20 @@ describe('restitution on', () => {
   it('at 2 and 3 m/s the bounce is within the step-based band, [0.75, 1] x e', async () => {
     for (const shape of ['sphere', 'cube', 'edge'] as const) for (const e of [0.3, 0.9]) for (const v of [2, 3]) {
       const r = await drop(shape, v, e);
-      // Measured 0.760 (sphere, e 0.3, 2 m/s; the 1-D model of the rule gives 0.762) to 0.896.
+      // Measured 0.760 (sphere, e 0.3, 2 m/s; the 1-D model of the rule gives 0.762, so the bar is 0.012 under
+      // the model) to 0.896.
       expect(r.eV / e, `${shape} e ${e} at ${v} m/s`).toBeGreaterThan(0.75);
       expect(r.eV / e, `${shape} e ${e} at ${v} m/s`).toBeLessThan(1);
     }
   });
 
   it('the ground\'s restitution combines with the body\'s: e 0.6 on a ground of 0.6 bounces at 0.6, on the default ground (0) at 0.3 under average, 0.6 under max', async () => {
-    const band = async (o: { groundE?: number; rule?: CombineRule }, e: number) => (await drop('sphere', 5, 0.6, ON, o)).eV / e;
-    // The step-based band at 5 m/s: measured 0.956 (pair e 0.6), 0.930 (0.3) and 0.905 (0.2); the 1-D model gives 0.956, 0.929 and 0.902.
-    for (const [o, e] of [[{ groundE: 0.6 }, 0.6], [{ groundE: undefined }, 0.3], [{ groundE: undefined, rule: 'max' }, 0.6], [{ groundE: 0.2, rule: 'min' }, 0.2]] as const) {
-      expect(await band(o, e), JSON.stringify(o)).toBeGreaterThan(0.9);
-      expect(await band(o, e), JSON.stringify(o)).toBeLessThan(1);
+    // The step-based band at 5 m/s, which the 1-D model of the rule puts at 0.956 for a pair e of 0.6, 0.929 for
+    // 0.3 and 0.902 for 0.2: measured 0.956, 0.930, 0.956 and 0.905. Each bar is its model's value less 0.02.
+    for (const [o, e, model] of [[{ groundE: 0.6 }, 0.6, 0.956], [{ groundE: undefined }, 0.3, 0.929], [{ groundE: undefined, rule: 'max' }, 0.6, 0.956], [{ groundE: 0.2, rule: 'min' }, 0.2, 0.902]] as const) {
+      const eV = (await drop('sphere', 5, 0.6, ON, o)).eV / e;
+      expect(eV, JSON.stringify(o)).toBeGreaterThan(model - 0.02);
+      expect(eV, JSON.stringify(o)).toBeLessThan(1);
     }
   });
 
@@ -198,6 +201,7 @@ describe('restitution on', () => {
 
   it('a contact that reaches the threshold speed bounces (>=, as Box2D), one just below does not', async () => {
     expect((await pair('sphere', 1, 1, 1, 0.6, 0.6)).eEff).toBeCloseTo(0.6, 9);
+    // Measured 0: below the threshold the two stay together.
     expect((await pair('sphere', 0.999, 1, 1, 0.6, 0.6)).eEff).toBeLessThan(0.1);
   });
 
@@ -205,6 +209,7 @@ describe('restitution on', () => {
     for (const [mA, mB] of [[1, 1], [1, 5], [5, 1]] as const) for (const v of [3, 5]) for (const e of [0.3, 0.9]) {
       const r = await pair(kind, v, mA, mB, e, e);
       const id = `${kind} ${mA}:${mB} at ${v} m/s, e ${e}`;
+      // Measured: eEff / e 1 to 6.7e-16, the pass's momentum change at most 3.6e-16 of the momentum, spin 0.
       expect(r.eEff / e, id).toBeCloseTo(1, 6);
       // At these speeds the solve keeps momentum too, so the end state is the 1-D formula's.
       expect(r.vA / v, id).toBeCloseTo((mA - mB * e) / (mA + mB), 4);
@@ -216,14 +221,17 @@ describe('restitution on', () => {
 
   it('two coefficients combine by SceneDesc.restitutionCombine (default average), in either order, clamped to [0, 1]', async () => {
     for (const rule of [undefined, 'average', 'min', 'max', 'multiply'] as const) for (const [eA, eB] of [[0.2, 0.8], [0.8, 0.2]]) {
-      const want = combineRestitution(rule ?? 'average', eA!, eB!);
+      const want = combineRestitution(rule ?? DEFAULT_RESTITUTION_COMBINE, eA!, eB!);
+      // Measured: the combined e to 2.8e-17.
       expect((await pair('sphere', 5, 1, 1, eA!, eB!, ON, rule)).eEff, `${rule} ${eA}/${eB}`).toBeCloseTo(want, 6);
     }
     expect((await pair('sphere', 5, 1, 1, 1.5, 1.5)).eEff).toBeCloseTo(1, 6);
+    // The pair's e, -0.1, is clamped to 0: no bounce. Measured 0.0185, the solve's own rebound.
     expect((await pair('sphere', 5, 1, 1, 0.6, -0.8)).eEff).toBeLessThan(0.1);
   });
 
   it('a flat cube and a cube balanced on its edge bounce straight: no spin (centroid step)', async () => {
+    // Measured at most 8.3e-10 rad/s.
     for (const shape of ['cube', 'edge'] as const) for (const e of [0.3, 0.9]) for (const v of [3, 10]) {
       expect((await drop(shape, v, e)).spinMax, `${shape} e ${e} at ${v} m/s`).toBeLessThan(1e-6);
     }
@@ -232,6 +240,7 @@ describe('restitution on', () => {
   it('frictionless oblique impacts keep the tangential velocity and gain no spin', async () => {
     for (const shape of ['sphere', 'cube'] as const) {
       const r = await drop(shape, 5, 0.6, ON, { vt: 4 });
+      // Measured: eV 0.573-0.585 (the bar is 0.9 e), |vt' / vt - 1| 0, spin 0.
       expect(r.eV).toBeGreaterThan(0.54);
       expect(Math.abs(r.vtOut / 4 - 1)).toBeLessThan(1e-6);
       expect(r.spinMax).toBeLessThan(1e-6);
@@ -240,11 +249,13 @@ describe('restitution on', () => {
 
   it('bounces only off a contact that carried force: a speculative contact a step early does not turn the body around', async () => {
     // At these speeds the contact is found a step before touching (the margin grows with speed), and that step
-    // it has no force. Bounced there, the ball turned around 2-17 mm above the ground.
+    // it has no force. Bounced there, the ball turned around 2-17 mm above the ground. Measured: every drop reaches
+    // it (minY -8.5e-5 to -5.5e-9 m).
     for (const v of [1.5, 2.75, 5.5, 9.25]) expect((await drop('sphere', v, 0.9)).minY, `${v} m/s`).toBeLessThan(1e-3);
   });
 
   it('energy never grows: drops at every speed, including e = 1', async () => {
+    // Measured at most 1.9e-15.
     for (const shape of ['sphere', 'cube', 'edge'] as const) for (const e of [0.6, 1]) for (const v of [1, 2, 5, 10]) {
       expect((await drop(shape, v, e)).eGain, `${shape} e ${e} at ${v} m/s`).toBeLessThan(1e-9);
     }
@@ -263,20 +274,37 @@ describe('restitution on', () => {
     // Measured 0 in all three (without supports, eight rounds gained 6.2e-4).
     for (const r of [one, four, eight]) expect(r.gain).toBeLessThan(1e-9);
     // It converges from below: measured 0.741 of the energy kept after one round, 0.973 after four (elastic: 1).
+    // (At e 1 it overshoots beyond 8 rounds: 1.0019 at 16, 1.0034 at 64; see restitute().)
     expect(one.end).toBeGreaterThan(0.7);
     expect(four.end).toBeGreaterThan(0.95);
   });
 
-  it('a cube dropped flat onto two cubes (two bouncing manifolds) gains no energy and comes to rest', async () => {
+  it('a cube dropped flat onto two cubes (two bouncing manifolds) gains no energy, comes to rest, and pins the pass\'s details', async () => {
     const e = 0.9, scene = sceneOf([cube([-0.55, 0.5, 0], { e }), cube([0.55, 0.5, 0], { e }), cube([0, 1.5 + 25 / (2 * G), 0], { e })], { groundE: e });
     const eng = new AvbdReferenceEngine(ON);
     await eng.init(scene);
     const E0 = shadowEnergy(eng, scene.gravity);
-    let eMax = E0, up = 0;
-    for (let k = 0; k < 600; k++) { eng.step(); eMax = Math.max(eMax, shadowEnergy(eng, scene.gravity)); up = Math.max(up, eng.world!.bodies[2]!.linVel[1]); }
+    let eMax = E0, up = 0, second: Vec3 = [0, 0, 0];
+    for (let k = 1; k <= 600; k++) {
+      eng.step();
+      eMax = Math.max(eMax, shadowEnergy(eng, scene.gravity));
+      up = Math.max(up, eng.world!.bodies[2]!.linVel[1]);
+      if (k === 100) second = [...eng.world!.bodies[2]!.linVel];
+    }
+    // Measured: gain 0, end speed 1.0e-16 m/s.
     expect((eMax - E0) / Math.abs(E0)).toBeLessThan(1e-9);
-    expect(up).toBeGreaterThan(1); // it bounced
-    expect(maxSpeed(eng)).toBeLessThan(1e-3);
+    expect(maxSpeed(eng)).toBeLessThan(1e-9);
+    // The first rebound off the two resting cubes: measured 3.843 m/s (supports held at 0 instead of at the solve's
+    // normal velocity: 3.772).
+    expect(up).toBeGreaterThan(3.8);
+    // The pass's details have no measure of their own, so this run pins them by the top cube's velocity at step
+    // 100, after its second landing. A 1e-12 m change of its start moves that by at most 4e-11 m/s; each of these
+    // moves it by 1e-4 m/s or more: zeroing a bounced point's force where its impulse was 0 (the reset needs
+    // P > 0), supports at unloaded points too, supports held at 0 (above), a centroid step that may pull. A
+    // solver change that moves it needs these re-measured.
+    expect(second[0]).toBeCloseTo(0.03865229182299252, 6);
+    expect(second[1]).toBeCloseTo(0.023948944869160167, 6);
+    expect(second[2]).toBeCloseTo(0.041232210571120045, 6);
   });
 
   it.for([10, 20])('resting stacks with e = 0.5 on every body still rest (%i iterations)', async (iterations) => {
@@ -288,7 +316,8 @@ describe('restitution on', () => {
         eng.step();
         if (k > 300) maxV = Math.max(maxV, maxSpeed(eng));
       }
-      expect(maxV, s.id).toBeLessThan(1e-3);
+      // Measured at most 1.4e-16 m/s.
+      expect(maxV, s.id).toBeLessThan(1e-9);
     }
   });
 
@@ -302,8 +331,9 @@ describe('restitution on', () => {
       if (k > 120) up = Math.max(up, eng.world!.bodies[10]!.linVel[1]);
       if (k > 1200) late = Math.max(late, maxSpeed(eng));
     }
-    expect(up).toBeGreaterThan(0.5);
-    expect(late).toBeLessThan(1e-3);
+    // Measured: up 2.23 m/s, late 7.6e-17 m/s.
+    expect(up).toBeGreaterThan(2);
+    expect(late).toBeLessThan(1e-9);
   });
 
   it('never pulls bodies together: a 144 kg ball (e 0.6) at 20 m/s onto a 10-cube column of e 0.05 leaves it standing', async () => {
@@ -321,7 +351,7 @@ describe('restitution on', () => {
     const moved = Math.max(...bodies.map((b, i) => Math.hypot(...[0, 1, 2].map((r) => eng.world!.bodies[i]!.pos[r]! - b.pos[r]!))));
     // Measured 7.7e-8 m and 2.7e-13 m/s.
     expect(moved).toBeLessThan(0.3);
-    expect(late).toBeLessThan(1e-3);
+    expect(late).toBeLessThan(1e-9);
   });
 
   it('a ball knocks a tower of e 0.3 down without NaNs or energy gain', async () => {
@@ -331,16 +361,20 @@ describe('restitution on', () => {
       await eng.init(scene);
       eng.step();
       const E0 = shadowEnergy(eng, scene.gravity);
-      let eMax = E0, bad = 0;
+      let eMax = E0, bad = 0, bounced = eng.world!.stats.restitution.contacts;
       for (let k = 0; k < 180; k++) {
         eng.step();
         eMax = Math.max(eMax, shadowEnergy(eng, scene.gravity));
         bad += nonFinite(eng.snapshot());
+        bounced += eng.world!.stats.restitution.contacts;
       }
-      return { gain: (eMax - E0) / Math.abs(E0), bad };
+      return { gain: (eMax - E0) / Math.abs(E0), bad, bounced };
     };
-    // A single collapse is chaotic, so its deepest penetration is gated over 9 speeds by the restitution gates (G8), not here.
+    // A single collapse is chaotic, so its deepest penetration is no measure here (over 9 ball speeds the median
+    // was 1.36 x off's under average, 0.93 x under max).
     const on = await run(ON), off = await run({});
+    // Measured: 486 points bounced, no non-finite value, a gain of 0 (off: 0).
+    expect(on.bounced).toBeGreaterThan(100);
     expect(on.bad).toBe(0);
     expect(on.gain).toBeLessThan(Math.max(off.gain, 0) + 1e-9);
   });
@@ -349,10 +383,14 @@ describe('restitution on', () => {
     const run = async () => {
       const eng = new AvbdReferenceEngine(ON);
       await eng.init(withE(knock(13), 0.5));
-      for (let k = 0; k < 90; k++) eng.step();
-      return state(eng);
+      let bounced = 0;
+      for (let k = 0; k < 90; k++) { eng.step(); bounced += eng.world!.stats.restitution.contacts; }
+      return [bounced, ...state(eng)];
     };
-    expect(await run()).toEqual(await run());
+    const a = await run();
+    // Measured: 63 points bounced.
+    expect(a[0]).toBeGreaterThan(20);
+    expect(await run()).toEqual(a);
   });
 });
 
@@ -429,16 +467,17 @@ describe('restitution on: the force a bounced point keeps', () => {
       await eng.init(scene);
       const top = scene.bodies.length - 1, y0 = scene.bodies[top]!.pos[1];
       let late = 0, minTop = Infinity;
-      for (let k = 1; k <= 900; k++) {
+      for (let k = 1; k <= 600; k++) {
         eng.step();
         minTop = Math.min(minTop, eng.world!.bodies[top]!.pos[1]);
-        if (k > 600) late = Math.max(late, maxSpeed(eng));
+        if (k > 400) late = Math.max(late, maxSpeed(eng));
       }
       return { late, sag: y0 - minTop };
     };
     const on = await run({ ...ON, restitutionThreshold: 0 }), off = await run({});
-    // Measured: late speed 2.2e-16 m/s, sag 0.1121 m against off's 0.1111 (1.06e-3 more). Zeroing every bounced
-    // point's force dropped the load floor and cap: the column moved at 1.04 m/s and sank 3.13 m.
+    // Measured: late speed 2.1e-16 m/s, sag 0.0539 m against off's 0.0550 (1.06e-3 less; both deepest before step
+    // 600). Zeroing every bounced point's force dropped the load floor and cap: the column moved at 1.04 m/s and sank
+    // 3.13 m.
     expect(on.late).toBeLessThan(1e-9);
     expect(Math.abs(on.sag - off.sag)).toBeLessThan(2e-3);
   });
@@ -464,14 +503,15 @@ describe('restitution stats (AvbdWorld.stats.restitution)', () => {
   it('count the bounced points and their impulse; between bodies the momentum change is 0, on the ground it is the ground\'s impulse', async () => {
     const pairs = await run(zeroG([ball([-0.75, 0, 0], { e: 0.6, linVel: [5, 0, 0] }), ball([0.75, 0, 0], { e: 0.6, mass: 5 })]), ON, 60);
     expect(pairs.contacts).toBe(1);
-    // 1 kg at 5 m/s onto 5 kg, e 0.6: at least the rebound's e x the reduced mass x 5 m/s, at most the whole
-    // impact's (1 + e) x. Measured 6.667, the whole: the contact caught them at the end of the step.
-    expect(pairs.impulse).toBeGreaterThan(0.6 * (5 / 6) * 5);
+    // 1 kg at 5 m/s onto 5 kg, e 0.6: at most the whole impact's (1 + e) x the reduced mass x 5 m/s. Measured
+    // 6.667, the whole: the contact caught them at the end of the step, so the bar is 0.95 x the whole.
+    expect(pairs.impulse).toBeGreaterThan(0.95 * 1.6 * (5 / 6) * 5);
     expect(pairs.impulse).toBeLessThan(1.6 * (5 / 6) * 5 + 1e-9);
     // Measured 8.9e-16 N s (rounding).
     expect(pairs.momentum).toBeLessThan(1e-12);
     expect(pairs.ground).toBe(0);
     const s = withE(knock(15), 0.6), knocked = await run({ ...s, ground: { ...s.ground!, restitution: 0.6 } }, ON, 120);
+    // Measured: 382 points bounced.
     expect(knocked.contacts).toBeGreaterThan(0);
     expect(knocked.ground).toBeGreaterThan(0);
     // Measured 7.2e-15 N s against a ground impulse of up to 22.8 N s in a step.
@@ -486,6 +526,8 @@ describe('restitution stats (AvbdWorld.stats.restitution)', () => {
     expect(r.contacts).toBe(1);
     // The supports passed the bounce on to the ground: measured 3.48 N s in a step. Counted with them, contacts was 5.
     expect(r.ground).toBeGreaterThan(1);
+    // Measured 7.41 N s in all: 3.93 at the ball's point and 3.48 at the cube's ground points (without them 3.93).
+    expect(r.impulse).toBeGreaterThan(r.ground + 1);
   });
 
   it('stay 0 with restitution off', async () => {
