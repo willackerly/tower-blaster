@@ -27,8 +27,8 @@ describe('checkSpec (§2, §3.3)', () => {
     expect(() => check(spec)).not.toThrow();
     // Record: nAwake 2, two maxes 4 each, pe 7, displaced 2, outOfLot 2, heightHist 2 + 64 + 1, impacts 2 + 48 + 1.
     // Program: 10 distinct scalars (P0, P1, P2, the structure bit, norm2 of linVel, angVel, disp 0 and dv,
-    // aabb hi y, the impacts class field), 53 predicate nodes, 8 outputs, 63 i32 edges, one dv scalar.
-    expect(specCost(spec)).toEqual({ recordWords: 139, programWords: 4 * 10 + 4 * 53 + 4 * 8 + 63 + 3 });
+    // aabb hi y, the impacts class field), 44 predicate nodes (maxAngSpeed is structure only), 8 outputs, 63 i32 edges, one dv scalar.
+    expect(specCost(spec)).toEqual({ recordWords: 139, programWords: 4 * 10 + 4 * 44 + 4 * 8 + 63 + 3 });
   });
 
   it.each<[string, ReduceSpec, RegExp]>([

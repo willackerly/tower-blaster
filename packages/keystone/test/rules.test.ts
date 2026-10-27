@@ -70,6 +70,21 @@ describe('reductions', () => {
     s.pos.set([0, 2, 0], 3 * n); // in flight over the lot
     expect(reduceCpu(s, null, c, baselineOf(s, c, 0), 1).maxSpeed).toBe(3);
   });
+  it('counts spin for the structure only: live ammo counts by its speed', () => {
+    const s = atHome(1), n = c.meta.n;
+    // A marble rolling slowly on a level top: slower than QUIET_SPEED, spinning faster than QUIET_SPIN.
+    s.awake[n] = 1; s.pos.set([0, 5, 0], 3 * n); s.linVel.set([0.014, 0, 0], 3 * n); s.angVel.set([0, 0.1, -0.24], 3 * n);
+    const r = reduceCpu(s, null, c, baselineOf(s, c, 0), 1);
+    expect(r.nAwake).toBe(1);
+    expect(r.maxSpeed).toBeCloseTo(0.014);
+    expect(r.maxAngSpeed).toBe(0);
+    expect(settleUpdate({ quietSince: 1 - SETTLE_QUIET + 1 }, r, -100).settled).toBe(true);
+    // A structure body spinning in place still holds the shot open.
+    s.awake[0] = 1; s.angVel.set([0, 0.24, 0], 0);
+    const r2 = reduceCpu(s, null, c, baselineOf(s, c, 0), 1);
+    expect(r2.maxAngSpeed).toBeCloseTo(0.24);
+    expect(settleUpdate({ quietSince: 1 - SETTLE_QUIET + 1 }, r2, -100).settled).toBe(false);
+  });
 });
 
 describe('settling', () => {

@@ -3,7 +3,7 @@ import { type BodyDesc, bodiesAt, type CombineRule, freeFlight, type InputEvent,
 import { drift, energy, jitter, nonFinite, penetration, survival } from '@tb/metrics';
 import { buildScenario } from '@tb/scenarios';
 import { appliedMu, slideMu, slideScene, THROW, throwScene } from '@tb/testkit';
-import { AvbdReferenceEngine, type AvbdParams, colorGraph, DEFAULT_AVBD, GROUND, outranks, solveSpd6, tangentBasis } from '../src/index.ts';
+import { AvbdReferenceEngine, type AvbdParams, colorGraph, DEFAULT_AVBD, froudeParams, GROUND, outranks, solveSpd6, tangentBasis } from '../src/index.ts';
 
 const cube = (pos: Vec3, linVel: Vec3 = [0, 0, 0]): BodyDesc => ({
   shape: { kind: 'box', half: [0.5, 0.5, 0.5] }, pos, rot: [0, 0, 0, 1], linVel, angVel: [0, 0, 0], density: 1, friction: 0.6, restitution: 0, tag: 0,
@@ -861,6 +861,52 @@ describe('engine contract: friction rule and integrator', () => {
       expect(s.pos[k]!).toBeCloseTo(want.pos[k]!, 9);
       expect(s.linVel[k]!).toBeCloseTo(want.vel[k]!, 9);
     }
+  });
+});
+
+describe('froudeParams: k x gravity is the same world, sqrt(k) x faster', () => {
+  // A tower of 2x2x4 cubes, a turned cube on top, hit from the side by a cube at 6 m/s
+  // (cube on cube, cube on ground, sliding and tumbling), 90 steps.
+  const bodies = (vs: number): BodyDesc[] => {
+    const out: BodyDesc[] = [];
+    for (let y = 0; y < 4; y++) for (let x = 0; x < 2; x++) for (let z = 0; z < 2; z++) out.push(cube([x - 0.5, 0.5 + y, z - 0.5]));
+    out.push({ ...cube([0, 4.6, 0]), rot: [0, Math.sin(0.3), 0, Math.cos(0.3)] });
+    out.push(cube([-4, 1.6, 0.2], [6 * vs, 0, 0]));
+    return out;
+  };
+  const run = async (k: number, steps: number) => {
+    const slow = { ...sceneOf(bodies(1)), dt: Math.sqrt(k) / 60 }; // gravity g, steps sqrt(k) times as long
+    const fast = { ...sceneOf(bodies(Math.sqrt(k)), [0, -G * k, 0]), dt: 1 / 60 }; // gravity k g, the viewer's step
+    const a = await simulate(slow, steps), b = await simulate(fast, steps, froudeParams({}, k));
+    let dp = 0, dv = 0, dw = 0, moved = 0;
+    for (let i = 0; i < a.s1.count; i++) for (let c = 0; c < 3; c++) {
+      dp = Math.max(dp, Math.abs(a.s1.pos[3 * i + c]! - b.s1.pos[3 * i + c]!));
+      dv = Math.max(dv, Math.abs(a.s1.linVel[3 * i + c]! * Math.sqrt(k) - b.s1.linVel[3 * i + c]!));
+      dw = Math.max(dw, Math.abs(a.s1.angVel[3 * i + c]! * Math.sqrt(k) - b.s1.angVel[3 * i + c]!));
+      moved = Math.max(moved, Math.abs(a.s1.pos[3 * i + c]! - a.s0.pos[3 * i + c]!));
+    }
+    return { dp, dv, dw, moved };
+  };
+
+  it('k = 4 (factors that are powers of two): the same floats, step for step', async () => {
+    const r = await run(4, 90);
+    expect(r.moved).toBeGreaterThan(1); // the hit knocked the tower about
+    expect(r.dp).toBe(0);
+    expect(r.dv).toBe(0);
+    expect(r.dw).toBe(0);
+  });
+
+  it('k = 2.25: equal to rounding', async () => {
+    const r = await run(2.25, 30);
+    expect(r.moved).toBeGreaterThan(0.1);
+    expect(r.dp).toBeLessThan(1e-9);
+    expect(r.dv).toBeLessThan(1e-8);
+  });
+
+  it('only forces and speeds change: lengths and rates stay, unset fields take the defaults', () => {
+    const p = froudeParams({ iterations: 7, beta: 10 }, 4);
+    expect(p).toEqual({ iterations: 7, beta: 40, penaltyMin: DEFAULT_AVBD.penaltyMin * 4, penaltyMax: DEFAULT_AVBD.penaltyMax * 4, maxAngularSpeed: DEFAULT_AVBD.maxAngularSpeed * 2 });
+    expect(() => froudeParams({}, 0)).toThrow();
   });
 });
 

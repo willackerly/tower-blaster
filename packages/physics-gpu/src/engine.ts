@@ -48,6 +48,14 @@ export interface GpuEngineOptions {
   hessian?: HessianForm;
   /** Jones-Plassmann rounds (even, default 64). Fewer leave bodies uncoloured; for tests of that path. */
   colorRounds?: number;
+  /**
+   * The broadphase's box test (broadphase.ts; default false): box pairs that
+   * the narrowphase's separating axes keep further apart than its margin are
+   * dropped before they take a pair slot. It changes no contact, only how
+   * many slots a step needs: 2.1-2.3x fewer for Kapla planks, standing or in
+   * a pile (their bounding spheres are 42x their volume); 2% fewer for cubes.
+   */
+  boxBroadphase?: boolean;
 }
 
 export interface GpuDiagnostics {
@@ -96,12 +104,12 @@ export class GpuAvbdEngine implements PhysicsEngine {
     check('colorTail', (v) => Number.isInteger(v) && v >= 0 && v <= 63, 'an integer from 0 to 63');
     check('tailThreads', (v) => Number.isInteger(v) && v >= 1 && v <= 256, 'an integer from 1 to 256');
     check('colorRounds', (v) => Number.isInteger(v) && v >= 2 && v % 2 === 0, 'an even integer >= 2');
-    if (opts.indirectColors !== undefined && typeof opts.indirectColors !== 'boolean') throw new Error(`GpuAvbdEngine: GpuEngineOptions.indirectColors must be a boolean, got ${opts.indirectColors}`);
+    for (const k of ['indirectColors', 'boxBroadphase'] as const) if (opts[k] !== undefined && typeof opts[k] !== 'boolean') throw new Error(`GpuAvbdEngine: GpuEngineOptions.${k} must be a boolean, got ${opts[k]}`);
     if (opts.hessian !== undefined && !HESSIAN_FORMS.includes(opts.hessian)) throw new Error(`GpuAvbdEngine: GpuEngineOptions.hessian must be one of ${HESSIAN_FORMS.join(', ')}, got ${opts.hessian}`);
     // Every param, but an opt-in switch and its params only while it is on (avbdVariant): result keys do not change.
     const variant: Record<string, number | boolean | string> = avbdVariant(this.params);
     // Options that size the buffers or shape the dispatch change the work per step (e.g. the broadphase's key bits), so they are part of the variant.
-    for (const k of ['capacity', 'spare', 'pairsPerBody', 'maxRadius', 'colorTail', 'indirectColors', 'tailThreads', 'colorRounds', 'hessian'] as const) if (opts[k] !== undefined) variant[k] = opts[k];
+    for (const k of ['capacity', 'spare', 'pairsPerBody', 'maxRadius', 'colorTail', 'indirectColors', 'tailThreads', 'colorRounds', 'hessian', 'boxBroadphase'] as const) if (opts[k] !== undefined) variant[k] = opts[k];
     this.info = { name: 'avbd-gpu', variant, backend: 'webgpu', integrator: { substeps: 1 } };
   }
 
@@ -162,7 +170,7 @@ export class GpuAvbdEngine implements PhysicsEngine {
       const spheres = buf(this.capacity * 16, 'inflated spheres');
       const sweep = buf(this.capacity * 4, 'sweep');
       const prev = buf(maxPairs * 8, 'pair history lookup');
-      const bp = new Broadphase(device, spheres, this.capacity, maxPairs);
+      const bp = new Broadphase(device, spheres, this.capacity, maxPairs, undefined, this.opts.boxBroadphase ? { bodies, shapes, sweep } : undefined);
       const np = new Narrowphase(device, bodies, shapes, bp.pairs, bp.total, this.capacity, maxPairs, sweep, prev);
       const col = new Coloring(device, np.manifolds, bp.total, this.capacity, maxPairs, this.opts.colorRounds);
       const solver = new AvbdSolver(device, this.capacity, maxPairs, {

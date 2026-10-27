@@ -430,7 +430,7 @@ const inc: Pred = { or: [structure, live] };
 |---|---|---|
 | nAwake | `count`, `and(awake, inc)` | Same rule; ammo "live" uses integer box tests |
 | maxSpeed | `max`, `norm2(linVel)`, `and(awake, inc)` | Settle: `max < ⌈(0.05·2^16)²⌉ = 10,737,419`. Display: `Math.sqrt(max) / 65536` |
-| maxAngSpeed | same over `angVel` | QUIET_SPIN: `< ⌈(0.2·2^16)²⌉ = 171,798,692` |
+| maxAngSpeed | `max`, `norm2(angVel)`, `and(awake, structure)` | Structure only: live ammo counts by speed. QUIET_SPIN: `< ⌈(0.2·2^16)²⌉ = 171,798,692` |
 | pe_mJ | `sum`, x = P(1), weight = word 1, shift 16, where `structure` | Σ ⌊w·y_q/2^16⌋ mJ, an exact `number` |
 | displaced | `count`, `and(structure, { cmp: { norm2: { disp: 0 } }, op: '>', k: ⌊(0.5h·2^16)²⌋ })` | h = 0.5 gives 2^28 exactly, so exactly 0.5 h is still not displaced |
 | outOfLot | `count`, `and(structure, { not: { and: inLot(0.5 h) } })` | Equivalent to the four strict tests on integers |

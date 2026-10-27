@@ -78,6 +78,36 @@ rules the code follows; the doc has the reasoning.
   seam to see (render.test.ts: within 2 of 255). `stoneDetail` 0 sends
   every box to `boxFar`. `real-no-lod` measures what the split saves.
 
+## Pine (Kapla step K3.3)
+
+- `pine` is a fifth stone (`real.stone=pine`, Scene panel) with a pale maritime
+  pine palette. Its layer bakes isotropic fibres, streaks and sparse resin
+  canals; `woodAt` (shaders.ts) samples it `WOOD_STRETCH` (8) times longer
+  along the grain, which runs along each block's longest body axis, so the
+  noise reads as fibres. End faces sample it unstretched at half strength,
+  darker (0.82) and rougher (+0.1).
+- Growth rings (`woodRings`, materials.ts, with a WGSL twin) are a 3D field:
+  cylinders about a pith line 8 to 40 rings off the block's centre in a
+  hashed direction, tilted 3% to the grain, with a small wobble along it.
+  End faces show arcs; the long faces the stripes and long arches of
+  flat-sawn boards; edges match. Spacing is `WOOD_RING_M` (5 mm) times 0.7
+  to 1.3 per block, times `stoneScale`. Latewood is the outer 0.28 to 0.38 of
+  each ring, 28% darker, normalized so the block keeps its palette colour on
+  average. The rings fade to that mean as a pixel's footprint passes a fifth
+  to half a ring (the phase changes at most 1 per ring of distance; the
+  CPU tests measure 1.0004), and everything fades by the stone fade-out, so
+  `boxFar` matches (the LOD seam test draws 0 differing pixels).
+- Cost. The wood code is compiled only into a second box pipeline
+  (`REAL_WOOD`), built the first time a look's stone is pine. The stone
+  looks' pipelines are unchanged: their frames are bit-identical to before
+  (checked for limestone, granite, sandstone, concrete and both grounds),
+  so they carry none of its registers. Its own cost on the M5 Max is not
+  measured yet.
+- Units. Rings and fibres are metres times `stoneScale`. In S15 (unit: one
+  plank width, 23.4 mm) they are right once the world-scale change divides
+  the stone tile by metres per unit; until then, `stoneScale` 42.7 gives
+  the true size but is past the knob's range.
+
 ## What step 4 built
 
 - Ground materials in the same arrays as the stones, after them:
@@ -219,7 +249,7 @@ rules the code follows; the doc has the reasoning.
   through the `CHIP_BASE` override.
 - Knobs: `dust` and `chips` (multipliers on the per-dv counts; 0 turns one
   off, both 0 skip the passes), `dustSize` (m, 1.6) and `dustOpacity`
-  (0.6). Bench variant `real-dust`: 64 impacts a frame around the view's
+  (0.6). (Retuned on 2026-10-27, see below.) Bench variant `real-dust`: 64 impacts a frame around the view's
   focus with 1/60 s steps, warmed up 4 s so the counts and ages are steady
   (the bench's "Particles alive" column shows how many); real against it is
   the worst steady cost. On the M5 Max at 638cab8 (about 5,280 alive) real
@@ -253,6 +283,95 @@ rules the code follows; the doc has the reasoning.
   - a CPU-side budget (the CPU does not know how many events a frame has
     without a readback).
 
+## Dust after Will's collapse screenshot (2026-10-27)
+
+Will's render of a toppled tower showed the dust as one uniform tan
+sausage along the rubble: every light knock of the collapse raised a big
+puff (1.6 m, 0.6 opaque), and puffs rose as a column. He asked for much
+smaller, fainter dust from harder impacts only, thrown the way the impact
+goes, and little from two faces meeting flat.
+
+- Face weight (detector, debris mode). A box's speed change dv is read in
+  its own frame: the face normal nearest dv is the contact normal, and how
+  far dv leans off it says what kind of knock it was (sine 0 square on a
+  face, 0.71 an edge, 0.82 a corner, or the friction's share of a scrape).
+  The event's strength is |dv| times a weight from `dustFace` (square
+  face-on) to 1 (smoothstep over a lean of 0.15 to 0.6), and must pass
+  `dustThreshold`. Spheres always count in full. Strength drives the
+  counts and the size class of puffs and chips alike, so face-on knocks
+  chip less too. Sparks mode is unchanged (weight 1, normal = dir), so the
+  other looks stay bit for bit.
+- `ImpactEvent` gains the contact normal and the raw |dv| (32 to 48 bytes).
+- Launch. A puff leaves along the contact plane (a ring round a landing),
+  plus `dustSlide` (1.5) times the push's part off the normal, against
+  it: a scrape throws its dust on along the slide. A little lift (0.1 to
+  0.4 of the in-plane speed), and buoyancy halved (`dustRise` 0.3), so
+  dust spreads low instead of rising as a column. Chips fly as before.
+- Colour. A puff raised by a landing on the ground (normal up, within
+  15 cm of it; packed bit 12) is soil, the floor's albedo mixed 70% in;
+  others are stone powder as before. Each puff's opacity varies 0.5 to 1x.
+- Defaults: `dustSize` 0.9 m (was 1.6), `dustOpacity` 0.4 (0.6),
+  `dustThreshold` 2 m/s (1.2), `dustFace` 0.15. In the headless S14 tower
+  collapse (3x3x16, ball at 40 m/s) puffs spawned by 4.3 s fell from 1,565
+  to 699 with the face weight alone (threshold 2); `dustFace` 0.3 instead of
+  0.15 adds only 3%: in a tumbling collapse most knocks are edges, corners
+  and scrapes, so the threshold is the main lever on the amount.
+- Knobs: `real.dustThreshold`, `real.dustFace` (with `real.dustSize`,
+  `real.dustOpacity`, `real.dust`, `real.chips`), in the viewer's Look panel.
+- Tests: the twin of the face weight (face, edge, corner, scrape, lean,
+  sphere); the detector on the GPU against it in debris mode, and unweighted
+  in sparks mode; the launch directions (a landing's ring and lift, a
+  scrape's slide, a side knock's upright fan) and the ground bit; the GPU
+  spawn against its twin with injected normals (scrapes and level normals
+  included).
+
+## Ground from height (after Will's screenshot, 2026-10-27)
+
+Seen from 20 to 60 m up, the ground read as "a super low pixel texture
+blurred": the 2 m tile mips to its mean within tens of metres, leaving only
+the one 64 m macro field, whose 0.5 m texels and strong tint showed as soft
+coloured blotches.
+
+- Macro at three scales (`groundMacro`): 64 m, 13.6 m (1/4.7) and 2.9 m
+  (1/22), each turned so the repeats never line up, mixed about 1/f
+  (brightness weights 0.5, 0.35, 0.25). Each scale stops at its own finest
+  level, so the finer ones fade as their texels pass the pixel. Tint cut
+  from 0.25 to 0.1: variation is mostly luminance, as on real ground.
+- Patches of the other ground (dirt in gravel, gravel in dirt) where the two
+  finer scales' mean passes a threshold: a third material fetch (pair) at
+  1.37x the tile, mixed in by a smoothstep a few pixels wide.
+  `groundPatches` is the share of ground under them; `patchThreshold`
+  maps it through the patch field's distribution (close to normal, mean
+  0.503, sd 0.12, measured from the bake's CPU twin; materials.test.ts
+  checks shares 1 to 30% within 25%). The far ground (`groundFar`) mixes
+  the two materials' means the same way, so the 600 m cut stays invisible.
+- Relief: a height field from the 64 m and 13.6 m scales at coarse levels
+  (2 and 1.7 m texels), `groundRelief` metres deep (hollows where the
+  patches gather), shaded by tilting the normal by its slope. The slope
+  comes from screen derivatives of the height, solved through the 2x2
+  Jacobian of the ground position, so no extra taps for the gradient. The
+  heights go through a cubic B-spline (four bilinear taps each; Sigg and
+  Hadwiger): the first cut used bilinear, whose slope jumps at every texel,
+  and the low sun drew a grid of flat 1.7 m facets. Faded out between 0.5
+  and 1 m pixels, where it could only alias. 0: no relief, no taps.
+- Defaults: `groundRelief` 1 m, `groundPatches` 0.05. Taps per floor pixel:
+  4 material + 2 patch material + 3 macro + 8 relief (tiny mips, cached);
+  was 4 + 1. Cost on the M5: to be measured (`real` minus
+  `real-flat-ground`).
+- Alternatives considered: analytic gradient noise for the relief (exact
+  slope, no taps, but the relief would no longer follow the patches and
+  costs tens of ALU per octave); a finer level for the relief (brings back
+  the grain that made close views smudgy); a second macro fetch at 2.71x
+  (Opus review) to break horizon bands, not needed once the finer scales
+  were in. Still open: small rocks with shadows (Opus review).
+- Tests: the ground checks gain plain (no relief, no patches), relief 2 m
+  and patches 0.3: relief raises the 16 px block contrast, ordered by
+  depth; patches of dirt calm the gravel's fine detail; every case keeps
+  the floor's mean brightness within 8%.
+- World scale helps too (Opus review): at 25 cm cubes the ground tile and
+  the haze shrink with the world, which puts gravel at pixel scale from
+  the high camera; that conversion lands with the `scale` knob.
+
 ## Floor and ambient (fixes after the stone step's screenshots)
 
 - Contact darkening (within 1.5 m of the floor) is for what stands on the
@@ -275,6 +394,40 @@ rules the code follows; the doc has the reasoning.
   towers from sky-blue to warm, as sunlit walls make them. Step 2 replaces
   both with proper sky lighting. Bench variant `real-no-floor-sky`.
 - The clearcoat lobe only runs where there is a coat (the ball).
+
+## Shadow fill (after the Opus review, 2026-10-27)
+
+The Opus review of Will's renders saw ground shadows as "near-black navy".
+They are what the model says they should be. The sky alone lights an open
+shadow with this share of the sunlit floor's light (CLEAR_DAY, visibility
+40 km, the default ground; `atmosphere.ts` on the CPU, cosine-weighted):
+
+| sun elevation (deg) | 5 | 10 | 15 | 20 | 35 | 50 | 70 |
+|---|---|---|---|---|---|---|---|
+| shadow / sunlit floor | 0.76 | 0.50 | 0.39 | 0.32 | 0.22 | 0.18 | 0.16 |
+
+and the sky's light is blue (r : g : b about 0.62 : 0.72 : 1 at 35 degrees).
+That is what a camera records, but on screen, next to sunlit stone, it
+reads as a hole. Real scenes also have terrain, haze and everything off
+screen bouncing the sun into shadows. The model has none of those.
+
+- New knob `real.shadowFill` (0 to 2, default 0.5): the sky's light gains
+  that multiple of the sunlit ground's radiance (`atmoAmbient[1]`, albedo
+  times sun plus sky). It is added where the sky is seen (times the floor's
+  and AO's sky visibility), so streets between towers stay as they were.
+  0 is the old look exactly. 0.5 lifts an open shadow at 35 degrees from
+  0.22 to 0.29 of the sunlit floor, 1 to 0.35. The lift comes from the
+  ground's colour, so the shadows warm toward neutral too.
+- Considered: scaling the sky light. That would brighten everything lit
+  by the sky and keep the shadows navy. Also considered: lifting the
+  darks in post (a toe in the tone curve). That greys every dark,
+  including block crevices and AO, which are right as they are.
+- Measured on SwiftShader (render-real-ground floor test, sRGB luma), going
+  from fill 0 to 1: open shadow 54 to 77, red / blue 0.74 to 0.99, sunlit
+  floor 127 to 135. The exposure meter does not count the fill, so the
+  sunlit parts stay put.
+- Cost: one multiply-add per shaded pixel. It sits in the existing Frame
+  slot `groundShape.z`.
 
 ## Steps
 

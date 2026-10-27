@@ -8,6 +8,7 @@
   "scripts": {
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:durations": "vitest run --reporter=default --reporter=json --outputFile.json=.vitest-report.json && tsx packages/testkit/src/durations-cli.ts .vitest-report.json",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "codegen": "tsx packages/schema/src/cli.ts",
     "bench": "tsx packages/bench/src/cli.ts",

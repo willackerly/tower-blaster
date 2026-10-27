@@ -4,10 +4,10 @@ export { runRenderBench, renderBenchMarkdown } from '../src/bench.ts';
 // checks GPU output against a CPU reference in the page and returns a small
 // summary, so large arrays never cross the Playwright boundary.
 import { emptySnapshot, TAG_BALL, type BodyDesc, type Snapshot } from '@tb/engine-api';
-import { createDevice, readBuffer } from '@tb/gpu';
+import { readBuffer, sharedDevice } from '@tb/gpu';
 import { Body, RenderRecord, Shape, TIER, readStruct } from '@tb/schema';
 import {
-  agx, AGX_WGSL, LOOKS, realLook, type RealOptions, type LookParams, fromHalf, Atmosphere, CLEAR_DAY, transmittance, transmittanceHMu, multiScattering, skyViewDir, skyRadiance, skyViewUv, sampleTransmittance, ambientOf, distanceToGround, meteredIlluminance, Materials, heightNormal, STONES, GROUNDS, MATERIAL_LAYERS, MACRO_LAYER, layerTile, materialSample, macroSample, adaptedExposure, LUMA, R_TOP, R_GROUND, FX_WORDS, packFx, toHalf, bevelNormal, BEVEL_WGSL, oklabToLinear, OKLAB_WGSL, Post,
+  agx, AGX_WGSL, LOOKS, realLook, type RealOptions, type LookParams, fromHalf, Atmosphere, CLEAR_DAY, transmittance, transmittanceHMu, multiScattering, skyViewDir, skyRadiance, skyViewUv, sampleTransmittance, ambientOf, distanceToGround, meteredIlluminance, Materials, heightNormal, STONES, GROUNDS, MATERIAL_LAYERS, WOOD_WGSL, WOOD_RING_M, woodRings, PCG_WGSL, pcg3d, MACRO_LAYER, layerTile, materialSample, macroSample, adaptedExposure, LUMA, R_TOP, R_GROUND, FX_WORDS, packFx, toHalf, bevelNormal, BEVEL_WGSL, oklabToLinear, OKLAB_WGSL, Post,
   Culler, cullReference, FLOOR_REACH, GpuBodySource, invert, listMatches, lookAt, makeGpuBodies, multiply, packBodies, perspective, Renderer, SEG, SEGMENTS, SnapshotSource, transform,
   translation, normalize, BOX_VERTS, SPHERE_VERTS, SUN, Sparks, CTL, MAX_EVENTS, flashSlot, FLASHES, MAX_BALLS, TRAIL, Lights, LIGHTS, LIGHT_META, LIGHT_PACKED, MATERIAL, AoVolume, aoGrid, aoFrame, splatReference, composeReference, AO_FOOT_WGSL, AO_SAMPLE_WGSL, AO_SEAM_WGSL, AO_ONE, type SplatBody, unpackImpacts, unpackSparks, spawnReference, stepReference, debrisSpawnReference, dustStepReference, chipStepReference, type SparkState, type Impact, type BodySource, type CullFrame, type FrameParams, type RendererOptions, type V3,
 } from '../src/index.ts';
@@ -60,7 +60,7 @@ export interface CullCase { seed: number; count: number; capacity: number; alpha
  * third of the bodies get an FX scale (some 0, i.e. hidden), half anchored.
  */
 export async function cull(cases: CullCase[]) {
-  const { device } = await createDevice({ timestamps: false });
+  const { device } = await sharedDevice({ timestamps: false });
   const out: Array<{ seed: number; error: string | null; lists: Array<string | null>; counts: number[]; argsOk: boolean; recordErr: number; listed: number }> = [];
   device.pushErrorScope('validation');
   for (const c of cases) {
@@ -128,7 +128,6 @@ export async function cull(cases: CullCase[]) {
   }
   const err = await device.popErrorScope();
   if (err) out.forEach((o) => { o.error = err.message; });
-  device.destroy();
   return out;
 }
 
@@ -210,7 +209,7 @@ function probeScene(seed: number): BodyDesc[] {
 
 /** ID pixels at probes away from edges (stable under a 2 px shift) must equal the CPU raycast. */
 export async function idProbes(seed: number) {
-  const { device } = await createDevice({ timestamps: false });
+  const { device } = await sharedDevice({ timestamps: false });
   device.pushErrorScope('validation');
   const descs = probeScene(seed);
   const src = new SnapshotSource(device);
@@ -232,7 +231,6 @@ export async function idProbes(seed: number) {
   }
   const err = await device.popErrorScope();
   rend.destroy();
-  device.destroy();
   const covered = ids.reduce((a, v) => a + (v ? 1 : 0), 0) / ids.length;
   return { probes, hitProbes, mismatches, examples, covered, error: err?.message ?? null };
 }
@@ -245,7 +243,7 @@ function diffIds(a: Uint32Array, b: Uint32Array): number {
 
 /** A dense random cloud around the camera: culling must not change a single ID pixel. */
 export async function cullInvariance(seed: number, count: number) {
-  const { device } = await createDevice({ timestamps: false });
+  const { device } = await sharedDevice({ timestamps: false });
   device.pushErrorScope('validation');
   const r = rng(seed);
   const descs: BodyDesc[] = [];
@@ -264,13 +262,12 @@ export async function cullInvariance(seed: number, count: number) {
   const drawn = new Set(culled.ids).size - 1;
   const err = await device.popErrorScope();
   rend.destroy();
-  device.destroy();
   return { diff: diffIds(culled.ids, all.ids), drawnBoxes: counts[1]!, drawnSpheres: counts[5]!, distinctOnScreen: drawn, error: err?.message ?? null };
 }
 
 /** prev = A, current = B: alpha 0 draws A, alpha 1 draws B, alpha 0.5 lands halfway. */
 export async function interpolation(seed: number) {
-  const { device } = await createDevice({ timestamps: false });
+  const { device } = await sharedDevice({ timestamps: false });
   device.pushErrorScope('validation');
   const a = probeScene(seed);
   const b = a.map((d, i) => ({ ...d, pos: [d.pos[0] + (i === 0 ? 2 : 0.2), d.pos[1] + 0.1, d.pos[2]] as V3, rot: i % 2 ? d.rot : randomQuat(rng(seed + i)) }));
@@ -305,7 +302,6 @@ export async function interpolation(seed: number) {
   const c0 = centroid(await at(0)), c5 = centroid(await at(0.5)), c1 = centroid(await at(1));
   const err = await device.popErrorScope();
   rend.destroy();
-  device.destroy();
   return { diff0: diffIds(i0, idsA), diff1: diffIds(i1, idsB), pixels: W * H, c0, c5, c1, error: err?.message ?? null };
 }
 
@@ -315,7 +311,7 @@ export async function interpolation(seed: number) {
  * most 1 KB (uniforms only).
  */
 export async function gpuSource(seed: number) {
-  const { device } = await createDevice({ timestamps: false });
+  const { device } = await sharedDevice({ timestamps: false });
   device.pushErrorScope('validation');
   const descs = probeScene(seed);
   const f = camera([9, 5, 10], [0, 0, 0]);
@@ -349,7 +345,6 @@ export async function gpuSource(seed: number) {
   const err = await device.popErrorScope();
   rend.destroy();
   src.destroy();
-  device.destroy();
   return { diff: diffIds(idsSnap, idsGpu), prevEqual, bytesPerFrame: bytes / FRAMES, callsPerFrame: calls / FRAMES, error: err?.message ?? null };
 }
 
@@ -359,7 +354,7 @@ export async function gpuSource(seed: number) {
  * are uploaded. Dormant (lattice-tier) bodies are still drawn.
  */
 export async function tierUploads(seed: number) {
-  const { device } = await createDevice({ timestamps: false });
+  const { device } = await sharedDevice({ timestamps: false });
   device.pushErrorScope('validation');
   const r = rng(seed);
   const descs: BodyDesc[] = [];
@@ -394,7 +389,6 @@ export async function tierUploads(seed: number) {
   const drawn = new Set(ids);
   const err = await device.popErrorScope();
   rend.destroy();
-  device.destroy();
   return { steps, dormantDrawn: [0, 10, 199].map((i) => drawn.has(i + 1)), error: err?.message ?? null };
 }
 
@@ -422,7 +416,7 @@ function aabbFace(lo: V3, hi: V3, o: V3, d: V3): number {
  * at arbitrary sub-pixel positions.
  */
 export async function towerFaces() {
-  const { device } = await createDevice({ timestamps: false });
+  const { device } = await sharedDevice({ timestamps: false });
   device.pushErrorScope('validation');
   const F = 6, Ht = 10, ox = 0.37, oz = -0.21;
   const descs: BodyDesc[] = [];
@@ -451,7 +445,6 @@ export async function towerFaces() {
   }
   const err = await device.popErrorScope();
   rend.destroy();
-  device.destroy();
   return { checked, wrong, unstable, examples, error: err?.message ?? null };
 }
 
@@ -493,7 +486,7 @@ async function mapGpu(device: GPUDevice, lib: string, body: string, inputs: Floa
  * and radii. Returns the largest absolute difference of each.
  */
 export async function lookTwins(seed: number, n = 4096) {
-  const { device } = await createDevice({ timestamps: false });
+  const { device } = await sharedDevice({ timestamps: false });
   device.pushErrorScope('validation');
   const r = rng(seed);
   const f32 = Math.fround;
@@ -526,7 +519,6 @@ export async function lookTwins(seed: number, n = 4096) {
     want.forEach((v, k) => { bevErr = Math.max(bevErr, Math.abs(v - bevGpu[4 * i + k]!)); });
   });
   const err = await device.popErrorScope();
-  device.destroy();
   return { agxErr, labErr, bevErr, error: err?.message ?? null };
 }
 
@@ -539,7 +531,7 @@ export async function lookTwins(seed: number, n = 4096) {
  * monotonically from the pixel; nothing is NaN or infinite.
  */
 export async function bloomEnergy(karis: boolean) {
-  const { device } = await createDevice({ timestamps: false });
+  const { device } = await sharedDevice({ timestamps: false });
   device.pushErrorScope('validation');
   const w = 256, h = 192, cx = 128, cy = 96, value = 1000;
   const hdr = device.createTexture({ size: [w, h], format: 'rgba16float', usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST | GPUTextureUsage.RENDER_ATTACHMENT });
@@ -572,7 +564,6 @@ export async function bloomEnergy(karis: boolean) {
   post.destroy();
   hdr.destroy();
   const err = await device.popErrorScope();
-  device.destroy();
   return { meanRatio, rises, finite, levels, error: err?.message ?? null };
 }
 
@@ -600,7 +591,7 @@ function probeMismatches(ids: Uint32Array, f: FrameParams, descs: BodyDesc[]) {
  * restores the original image.
  */
 export async function fxScale(seed: number) {
-  const { device } = await createDevice({ timestamps: false });
+  const { device } = await sharedDevice({ timestamps: false });
   device.pushErrorScope('validation');
   const r = rng(seed);
   const descs: BodyDesc[] = [];
@@ -637,7 +628,6 @@ export async function fxScale(seed: number) {
   for (let i = 0; i < after.length; i++) if (after[i] !== before[i]) restored++;
   const err = await device.popErrorScope();
   rend.destroy();
-  device.destroy();
   return { ...scaledCheck, hiddenSeen, restoreDiff: restored, error: err?.message ?? null };
 }
 
@@ -647,7 +637,7 @@ export async function fxScale(seed: number) {
  * of and behind the box.
  */
 export async function fxColour() {
-  const { device } = await createDevice({ timestamps: false });
+  const { device } = await sharedDevice({ timestamps: false });
   device.pushErrorScope('validation');
   const descs = [box([0, 0, 0], [1, 1, 1], [0, 0, 0, 1])];
   const src = new SnapshotSource(device);
@@ -699,7 +689,6 @@ export async function fxColour() {
   const backBehindBox = mask[back[1] * W + back[0]] !== 0;
   const err = await device.popErrorScope();
   rend.destroy();
-  device.destroy();
   return { plain, red, glow, flashMid, flashDone, frontDelta, backDelta, backBehindBox, error: err?.message ?? null };
 }
 
@@ -713,7 +702,7 @@ export async function fxColour() {
  * and the shadow maps' texel differences.
  */
 export async function fanVsCube(seed: number, cameras = 50) {
-  const { device } = await createDevice({ timestamps: false });
+  const { device } = await sharedDevice({ timestamps: false });
   device.pushErrorScope('validation');
   const r = rng(seed);
   const descs: BodyDesc[] = [];
@@ -759,7 +748,6 @@ export async function fanVsCube(seed: number, cameras = 50) {
   const err = await device.popErrorScope();
   fan.destroy();
   cube.destroy();
-  device.destroy();
   return { differ, pixels, covered, texels, coverDiff, over1mm, over1cm, maxDiff, error: err?.message ?? null };
 }
 
@@ -781,7 +769,7 @@ export interface ShadowCheckOptions {
 }
 
 export async function shadowCheck(kind: 'float' | 'contact' | 'grazing', { format, real }: ShadowCheckOptions = {}) {
-  const { device } = await createDevice({ timestamps: false });
+  const { device } = await sharedDevice({ timestamps: false });
   device.pushErrorScope('validation');
   const sun = SUN;
   const descs: BodyDesc[] = [];
@@ -875,7 +863,6 @@ export async function shadowCheck(kind: 'float' | 'contact' | 'grazing', { forma
   const cp = centroid(cen[0]!), cm = centroid(cen[1]!);
   const err = await device.popErrorScope();
   rend.destroy();
-  device.destroy();
   return {
     lit, shaded, predicted, measured, iou: both / (predicted + measured - both || 1), wrong, used: litL.length + shadeL.length,
     centroidErr: predicted ? Math.hypot(cp[0]! - cm[0]!, cp[1]! - cm[1]!) : 0, leak, maxStep,
@@ -890,7 +877,7 @@ export async function shadowCheck(kind: 'float' | 'contact' | 'grazing', { forma
  * horizon (the pixels next to the other class).
  */
 export async function floorCoverage(eye: V3, target: V3, groundY: number) {
-  const { device } = await createDevice({ timestamps: false });
+  const { device } = await sharedDevice({ timestamps: false });
   device.pushErrorScope('validation');
   const src = new SnapshotSource(device);
   src.update(snapshotOf([]), []);
@@ -918,13 +905,12 @@ export async function floorCoverage(eye: V3, target: V3, groundY: number) {
   }
   const err = await device.popErrorScope();
   rend.destroy();
-  device.destroy();
   return { checked, floor, wrong, error: err?.message ?? null };
 }
 
 /** Frames at tiny output sizes (a hidden or minimised canvas): no validation error, and the scene still shows. */
 export async function tinyFrames(sizes: [number, number][]) {
-  const { device } = await createDevice({ timestamps: false });
+  const { device } = await sharedDevice({ timestamps: false });
   const descs = [box([0, 0.5, 0], [0.5, 0.5, 0.5], [0, 0, 0, 1])];
   const src = new SnapshotSource(device);
   src.update(snapshotOf(descs), descs);
@@ -941,7 +927,6 @@ export async function tinyFrames(sizes: [number, number][]) {
     const err = await device.popErrorScope();
     out.push({ size, meanLuma, error: thrown ?? err?.message ?? null });
   }
-  device.destroy();
   return out;
 }
 
@@ -971,10 +956,10 @@ function sparkShapes(): ArrayBuffer {
   return out;
 }
 
-async function sparkFrame(device: GPUDevice, sp: Sparks, src: BodySource, dt = 0, groundY = -100, mode: 'sparks' | 'debris' = 'sparks') {
+async function sparkFrame(device: GPUDevice, sp: Sparks, src: BodySource, dt = 0, groundY = -100, mode: 'sparks' | 'debris' = 'sparks', dvScale = 1) {
   const enc = device.createCommandEncoder();
   const pass = enc.beginComputePass();
-  sp.encode(pass, src, { dt, groundY, mode });
+  sp.encode(pass, src, { dt, groundY, mode, dvScale });
   pass.end();
   device.queue.submit([enc.finish()]);
   const ctl = Array.from(new Uint32Array(await readBuffer(device, sp.ctl)));
@@ -988,7 +973,7 @@ async function sparkFrame(device: GPUDevice, sp: Sparks, src: BodySource, dt = 0
  * change, new slots).
  */
 export async function sparkDetect() {
-  const { device } = await createDevice({ timestamps: false });
+  const { device } = await sharedDevice({ timestamps: false });
   device.pushErrorScope('validation');
   const cap = 12;
   const base: RawBody[] = Array.from({ length: 10 }, (_, i) => ({ pos: [i * 3, 2, 0] as V3, vel: [0, -1, 0] as V3, shape: 0 }));
@@ -1026,7 +1011,6 @@ export async function sparkDetect() {
   const again = await sparkFrame(device, sp, src);
   const err = await device.popErrorScope();
   sp.destroy();
-  device.destroy();
   return {
     first: first.ctl[CTL.events], still: still.ctl[CTL.events], after: after.ctl[CTL.events],
     step: step.events.sort((a, b) => (a.packed & 0xffffff) - (b.packed & 0xffffff)), spawned: step.ctl[CTL.spawned],
@@ -1034,9 +1018,35 @@ export async function sparkDetect() {
   };
 }
 
+/**
+ * The debris detector's face weight and normal: boxes and a sphere, turned
+ * or not, each given one speed change; first in debris mode, then the same
+ * step in sparks mode (unweighted, normal = dir).
+ */
+export async function debrisDetect(cases: Array<{ dv: V3; rot?: [number, number, number, number]; sphere?: boolean }>, dvScale = 1) {
+  const { device } = await sharedDevice({ timestamps: false });
+  device.pushErrorScope('validation');
+  const cap = cases.length;
+  const base: RawBody[] = cases.map((c, i) => ({ pos: [i * 3, 2, 0] as V3, vel: [0, 0, 0] as V3, shape: c.sphere ? 2 : 0, ...(c.rot ? { rot: c.rot } : {}) }));
+  const next: RawBody[] = base.map((b, i) => ({ ...b, vel: cases[i]!.dv }));
+  const looks = new Uint32Array(cap);
+  const run = async (mode: 'sparks' | 'debris') => {
+    const src = rawSource(device, bodyWords(base, cap), bodyWords(base, cap), sparkShapes(), looks, cap, cap) as BodySource & { count: number };
+    const sp = new Sparks(device);
+    await sparkFrame(device, sp, src, 0, -100, mode, dvScale); // first sight
+    device.queue.writeBuffer(src.bodies, 0, bodyWords(next, cap));
+    const r = await sparkFrame(device, sp, src, 0, -100, mode, dvScale);
+    sp.destroy();
+    return r.events.sort((a, b) => (a.packed & 0xffffff) - (b.packed & 0xffffff)).map((e) => ({ slot: e.packed & 0xffffff, strength: e.strength, raw: e.raw!, normal: e.normal!, dir: e.dir }));
+  };
+  const debris = await run('debris'), sparks = await run('sparks');
+  const err = await device.popErrorScope();
+  return { debris, sparks, error: err?.message ?? null };
+}
+
 /** Spawn and flight against the CPU twins: three injected bursts, then frames of flight with ground bounces. */
 export async function sparkSim(frames: number) {
-  const { device } = await createDevice({ timestamps: false });
+  const { device } = await sharedDevice({ timestamps: false });
   device.pushErrorScope('validation');
   const src = rawSource(device, new ArrayBuffer(4 * Body.size), new ArrayBuffer(4 * Body.size), sparkShapes(), new Uint32Array(4), 0, 4);
   const sp = new Sparks(device);
@@ -1087,7 +1097,6 @@ export async function sparkSim(frames: number) {
   const argsDead = Array.from(new Uint32Array(await readBuffer(device, sp.args)));
   const err = await device.popErrorScope();
   sp.destroy();
-  device.destroy();
   return {
     born: born.length, want: want.length, spawned: s0.ctl[CTL.spawned], unmatched, spawnErr, alive, aliveRef, bounced, simErr,
     aliveCtl: last.ctl[CTL.alive], argsFlying, aliveDead: dead.ctl[CTL.alive], argsDead, pool: sp.pool, error: err?.message ?? null,
@@ -1101,21 +1110,25 @@ export async function sparkSim(frames: number) {
  * to sparks mode clears the pool.
  */
 export async function debrisSim(frames: number) {
-  const { device } = await createDevice({ timestamps: false });
+  const { device } = await sharedDevice({ timestamps: false });
   device.pushErrorScope('validation');
   const src = rawSource(device, new ArrayBuffer(4 * Body.size), new ArrayBuffer(4 * Body.size), sparkShapes(), new Uint32Array(4), 0, 4);
   const sp = new Sparks(device);
   sp.debris = { ...sp.debris, dustBudget: 96, chipBudget: 192 }; // room for several of each per burst: the copies' seeds and launch spread are compared too
   const [dustPool, chipPool] = sp.rings;
   const r = rng(5);
-  const bursts = Array.from({ length: 24 }, (_, i) => ({
-    pos: [(r() - 0.5) * 8, i % 3 === 0 ? 0.12 : 0.2 + 2 * r(), (r() - 0.5) * 8] as V3,
-    dir: [r() - 0.5, i % 3 === 0 ? -1 : r(), r() - 0.5] as V3, // every third just above the floor, aimed down: its puffs must stop at 10 cm
-    strength: 3 + 25 * r(),
-  }));
-  for (const b of bursts) sp.inject(b.pos, b.dir, b.strength);
+  const unit3 = (v: number[]) => { const l = Math.hypot(...v); return v.map((x) => x / l) as V3; };
+  const bursts = Array.from({ length: 24 }, (_, i) => {
+    // Every third just above the floor with a level normal (puffs fan out in an upright plane, half
+    // of them down: they must stop at 10 cm); every third a scrape (dir leans off its normal); the rest dir alone.
+    const pos = [(r() - 0.5) * 8, i % 3 === 0 ? 0.12 : 0.2 + 2 * r(), (r() - 0.5) * 8] as V3;
+    const dir = [r() - 0.5, i % 3 === 0 ? -0.2 : r(), r() - 0.5] as V3;
+    const normal = i % 3 === 0 ? unit3([dir[0], 0, dir[2]]) : i % 3 === 1 ? unit3([r() - 0.5, r(), r() - 0.5]) : undefined;
+    return { pos, dir, normal, strength: 3 + 25 * r() };
+  });
+  for (const b of bursts) sp.inject(b.pos, b.dir, b.strength, b.normal);
   const f32v = (v: number[]) => v.map((x) => Math.fround(x)) as V3;
-  const events: Impact[] = bursts.map((b) => { const l = Math.hypot(...b.dir); return { pos: f32v(b.pos), dir: f32v(b.dir.map((x) => x / l)), strength: Math.fround(b.strength), packed: 0xffffff | (1 << 24) }; });
+  const events: Impact[] = bursts.map((b) => ({ pos: f32v(b.pos), dir: f32v(unit3(b.dir)), strength: Math.fround(b.strength), packed: 0xffffff | (1 << 24), ...(b.normal ? { normal: f32v(b.normal) } : {}) }));
   const frame0 = sp.nextFrame;
   const s0 = await sparkFrame(device, sp, src, 0, 0, 'debris');
   const slots = unpackSparks(await readBuffer(device, sp.sparks));
@@ -1165,7 +1178,6 @@ export async function debrisSim(frames: number) {
   const sw = await sparkFrame(device, sp, src, dt, 0, 'sparks');
   const err = await device.popErrorScope();
   sp.destroy();
-  device.destroy();
   return {
     dustPool, chipPool, wantDust: want.dust.length, wantChips: want.chips.length, bornDust, bornChips, spawned: s0.ctl[CTL.spawned], outside, unmatched, spawnErr,
     alive, aliveCtl: last.ctl[CTL.alive], simErr, bounced, floored, rose, dustMinY, chipMinY, argsFlying, aliveDead: dead.ctl[CTL.alive], argsDead, aliveAfterSwitch: sw.ctl[CTL.alive],
@@ -1175,7 +1187,7 @@ export async function debrisSim(frames: number) {
 
 /** A debris flood: 64 strong bursts a frame for frames of dt each (rate: both buckets' refill per second, null for the defaults). */
 export async function debrisFlood(frames: number, dt: number, rate: number | null) {
-  const { device } = await createDevice({ timestamps: false });
+  const { device } = await sharedDevice({ timestamps: false });
   device.pushErrorScope('validation');
   const src = rawSource(device, new ArrayBuffer(4 * Body.size), new ArrayBuffer(4 * Body.size), sparkShapes(), new Uint32Array(4), 0, 4);
   const sp = new Sparks(device);
@@ -1193,13 +1205,12 @@ export async function debrisFlood(frames: number, dt: number, rate: number | nul
   const ctl = Array.from(new Uint32Array(await readBuffer(device, sp.ctl)));
   const err = await device.popErrorScope();
   sp.destroy();
-  device.destroy();
   return { dustSpawned, chipSpawned, dust: live(0, dustPool), chips: live(dustPool, dustPool + chipPool), outside: live(dustPool + chipPool, slots.length), dustHead: ctl[CTL.dustHead], chipHead: ctl[CTL.chipHead], dustPool, chipPool, error: err?.message ?? null };
 }
 
 /** A flood: every one of 100k bodies hit at once. Events and sparks stay within their budgets. */
 export async function sparkFlood(n: number) {
-  const { device } = await createDevice({ timestamps: false });
+  const { device } = await sharedDevice({ timestamps: false });
   device.pushErrorScope('validation');
   const bs: RawBody[] = Array.from({ length: n }, (_, i) => ({ pos: [(i % 300) * 1.1, 1 + Math.floor(i / 90000), Math.floor(i / 300) % 300] as V3, vel: [0, 0, 0] as V3, shape: 0 }));
   const src = rawSource(device, bodyWords(bs, n), bodyWords(bs, n), sparkShapes(), new Uint32Array(n), n, n);
@@ -1211,7 +1222,6 @@ export async function sparkFlood(n: number) {
   const slots = new Set(hit.events.map((e) => e.packed & 0xffffff));
   const err = await device.popErrorScope();
   sp.destroy();
-  device.destroy();
   return { ctl: hit.ctl, events: hit.events.length, distinct: slots.size, live, error: err?.message ?? null };
 }
 
@@ -1221,7 +1231,7 @@ export async function sparkFlood(n: number) {
  * a wall is hidden by depth.
  */
 export async function sparkDraw() {
-  const { device } = await createDevice({ timestamps: false });
+  const { device } = await sharedDevice({ timestamps: false });
   device.pushErrorScope('validation');
   const descs = [box([2, 1, -5], [2, 2, 0.3], [0, 0, 0, 1])];
   const src = new SnapshotSource(device);
@@ -1250,7 +1260,6 @@ export async function sparkDraw() {
   }
   const err = await device.popErrorScope();
   rend.destroy();
-  device.destroy();
   return { near, stray, behindWall, maxWall, wallPixels: ids.reduce((s, v) => s + (v ? 1 : 0), 0), error: err?.message ?? null };
 }
 
@@ -1260,7 +1269,7 @@ export async function sparkDraw() {
  * chips 0 draws exactly the frame with sparks off.
  */
 export async function debrisDraw(frames: number) {
-  const { device } = await createDevice({ timestamps: false });
+  const { device } = await sharedDevice({ timestamps: false });
   device.pushErrorScope('validation');
   const descs = [box([2, 1, -5], [2, 2, 0.3], [0, 0, 0, 1])];
   const src = new SnapshotSource(device);
@@ -1302,7 +1311,6 @@ export async function debrisDraw(frames: number) {
     } else if (d > 1) stray++;
   }
   const err = await device.popErrorScope();
-  device.destroy();
   return { near, nearDust, nearChips, stray, behindWall, maxWall, zeroDiff, wallPixels: ids.reduce((s, v) => s + (v === 1 ? 1 : 0), 0), error: err?.message ?? null };
 }
 
@@ -1322,7 +1330,7 @@ function meanOver(px: { data: number[]; bytesPerRow: number }, ids: Uint32Array,
 
 /** The ball light: a cube 2 m from the ball brightens, one 20 m away does not change. */
 export async function ballLight() {
-  const { device } = await createDevice({ timestamps: false });
+  const { device } = await sharedDevice({ timestamps: false });
   device.pushErrorScope('validation');
   const descs = [ball([0, 1, 0], 0.3), box([2, 1, 0], [0.5, 0.5, 0.5], [0, 0, 0, 1]), box([0, 1, -20], [2, 2, 2], [0, 0, 0, 1])];
   const src = new SnapshotSource(device);
@@ -1351,13 +1359,12 @@ export async function ballLight() {
   }
   const err = await device.popErrorScope();
   rend.destroy();
-  device.destroy();
   return { near, far, ground: [groundOn / gn, groundOff / gn], gn, balls: src.balls, error: err?.message ?? null };
 }
 
 /** Flash lights against the CPU slot rule: the strongest bid per slot wins, then decays; a weaker later bid does not replace it. */
 export async function flashLights() {
-  const { device } = await createDevice({ timestamps: false });
+  const { device } = await sharedDevice({ timestamps: false });
   device.pushErrorScope('validation');
   const src = new SnapshotSource(device);
   const rend = new Renderer(device, { size: [W, H] }, { sparkPool: 1024 });
@@ -1411,13 +1418,12 @@ export async function flashLights() {
   const replaced = flashes3[k0 * 8 + 3] === Math.fround(5 + 2 * cfg.flashTau) && Math.abs(flashes3[k0 * 8 + 4]! - cfg.flashIntensity) < 1e-5;
   const err = await device.popErrorScope();
   rend.destroy();
-  device.destroy();
   return { slotsLit, wrongLit, posErr, iErr, kept, decay, replaced, pack, error: err?.message ?? null };
 }
 
 /** The ball trail: samples newest first in time order at the drawn positions; the ribbon lights the path behind the ball, not ahead. */
 export async function ballTrail(frames: number) {
-  const { device } = await createDevice({ timestamps: false });
+  const { device } = await sharedDevice({ timestamps: false });
   device.pushErrorScope('validation');
   const at = (i: number): V3 => [-3 + i * 0.4, 1.5, 0];
   const descs = [ball(at(0), 0.25)];
@@ -1462,7 +1468,6 @@ export async function ballTrail(frames: number) {
   }
   const err = await device.popErrorScope();
   rend.destroy();
-  device.destroy();
   return { ordered, posErr, used, behind, farBehind, ahead, error: err?.message ?? null };
 }
 
@@ -1477,7 +1482,7 @@ const heatOf = (state: ArrayBuffer) => Array.from(new Uint32Array(state)).filter
  * source is gone.
  */
 export async function heatScript() {
-  const { device } = await createDevice({ timestamps: false });
+  const { device } = await sharedDevice({ timestamps: false });
   device.pushErrorScope('validation');
   const cap = 10, s = Math.sin(Math.PI / 8), c = Math.cos(Math.PI / 8);
   const base: RawBody[] = [
@@ -1512,13 +1517,12 @@ export async function heatScript() {
   const gone = await state();
   const err = await device.popErrorScope();
   sp.destroy();
-  device.destroy();
   return { seen, hit, later, gone, hot: [a.ctl[CTL.hot], b.ctl[CTL.hot]], cfg: sp.config, error: err?.message ?? null };
 }
 
 /** The glow gain against the hot count: 1 up to HOT_FULL hot bodies, HOT_FULL / hot beyond. */
 export async function heatGain(n: number) {
-  const { device } = await createDevice({ timestamps: false });
+  const { device } = await sharedDevice({ timestamps: false });
   device.pushErrorScope('validation');
   const bs: RawBody[] = Array.from({ length: n }, (_, i) => ({ pos: [(i % 300) * 1.1, 1 + Math.floor(i / 90000) * 2, Math.floor(i / 300) % 300] as V3, vel: [0, 0, 0] as V3, shape: 0 }));
   const src = rawSource(device, bodyWords(bs, n), bodyWords(bs, n), sparkShapes(), new Uint32Array(n), n, n);
@@ -1541,7 +1545,6 @@ export async function heatGain(n: number) {
   sp.destroy();
   lights.destroy();
   records.destroy();
-  device.destroy();
   return { cold: { hot: cold.ctl[CTL.hot], gain: cold.gain, lit: cold.lit }, hot: { hot: hot.ctl[CTL.hot], gain: hot.gain }, error: err?.message ?? null };
 }
 
@@ -1551,7 +1554,7 @@ export async function heatGain(n: number) {
  * Sparks, flashes, bloom and fog are off so only the glow changes pixels.
  */
 export async function heatImage(crowd: number, crowdHot: boolean, dv = 15, heat = true) {
-  const { device } = await createDevice({ timestamps: false });
+  const { device } = await sharedDevice({ timestamps: false });
   device.pushErrorScope('validation');
   const descs = [box([-1.5, 1, 0], [0.6, 0.6, 0.6], [0, 0, 0, 1]), box([1.5, 1, 0], [0.6, 0.6, 0.6], [0, 0, 0, 1])];
   for (let i = 0; i < crowd; i++) descs.push(box([(i % 80) * 1.2 - 48, 0.5, 60 + Math.floor(i / 80) * 1.2], [0.4, 0.4, 0.4], [0, 0, 0, 1]));
@@ -1575,7 +1578,6 @@ export async function heatImage(crowd: number, crowdHot: boolean, dv = 15, heat 
   const ids = (await rend.renderIds(f)).ids;
   const err = await device.popErrorScope();
   rend.destroy();
-  device.destroy();
   const m = (px: typeof cold, id: number) => meanOver(px, ids, id).mean;
   return { hit: [m(cold, 1), m(hot, 1)], twin: [m(cold, 2), m(hot, 2)], n: meanOver(hot, ids, 1).n, error: err?.message ?? null };
 }
@@ -1593,7 +1595,7 @@ export async function heatImage(crowd: number, crowdHot: boolean, dv = 15, heat 
  * stale records the splat must not use.
  */
 export async function aoSplat(seed: number, n: number, rotated: boolean) {
-  const { device } = await createDevice({ timestamps: false });
+  const { device } = await sharedDevice({ timestamps: false });
   device.pushErrorScope('validation');
   const r = rng(seed);
   const grid = aoGrid({ center: [0, 4, 0], half: [20, 6, 20] });
@@ -1677,7 +1679,6 @@ export async function aoSplat(seed: number, n: number, rotated: boolean) {
   }
   const same = (a: Uint32Array, b: Uint32Array) => a.every((x, i) => x === b[i]);
   const err = await device.popErrorScope();
-  device.destroy();
   return {
     voxels: want.length, touched: want.reduce((c, x) => c + (x ? 1 : 0), 0), mismatched, maxDiff, relDiff: absDiff / (total || 1),
     stable: same(fwd.occ, fwd.again), orderFree: same(fwd.occ, rev.occ), splatted: fwd.recs.length, error: err?.message ?? null,
@@ -1686,7 +1687,7 @@ export async function aoSplat(seed: number, n: number, rotated: boolean) {
 
 /** aoFoot on the GPU for given (rot, half, sphere) cases, to compare with aoFootReference. */
 export async function aoFootGpu(cases: { rot: number[]; half: number[]; sphere: boolean }[]) {
-  const { device } = await createDevice({ timestamps: false });
+  const { device } = await sharedDevice({ timestamps: false });
   device.pushErrorScope('validation');
   const module = device.createShaderModule({
     code: /* wgsl */ `
@@ -1714,7 +1715,6 @@ ${AO_FOOT_WGSL}
   device.queue.submit([enc.finish()]);
   const res = new Float32Array(await readBuffer(device, out));
   const err = await device.popErrorScope();
-  device.destroy();
   return { foot: cases.map((_, i) => Array.from(res.slice(i * 4, i * 4 + 3))), error: err?.message ?? null };
 }
 
@@ -1736,7 +1736,7 @@ async function readVolume(device: GPUDevice, tex: GPUTexture, level: number, dim
 
 /** Compose against its CPU twin on a random accumulator (sparse, some over-full voxels, some full layers). */
 export async function aoCompose(seed: number) {
-  const { device } = await createDevice({ timestamps: false });
+  const { device } = await sharedDevice({ timestamps: false });
   device.pushErrorScope('validation');
   const grid = aoGrid({ center: [0, 4, 0], half: [10, 6, 8] });
   const r = rng(seed);
@@ -1764,13 +1764,12 @@ export async function aoCompose(seed: number) {
   }
   ao.destroy();
   const err = await device.popErrorScope();
-  device.destroy();
   return { levels, error: err?.message ?? null };
 }
 
 /** A fixed scene's pixels, hashed: towers, rubble, a ball, the floor. For before/after checks of a change that must not alter the image. */
 export async function sceneHash(toggles: Record<string, boolean> = {}, format?: GPUTextureFormat) {
-  const { device } = await createDevice({ timestamps: false });
+  const { device } = await sharedDevice({ timestamps: false });
   device.pushErrorScope('validation');
   const descs: BodyDesc[] = [];
   for (let t = 0; t < 4; t++) for (let y = 0; y < 6; y++) descs.push(box([t * 3 - 4.5, 0.5 + y, -3], [0.5, 0.5, 0.5], [0, 0, 0, 1], t));
@@ -1790,7 +1789,6 @@ export async function sceneHash(toggles: Record<string, boolean> = {}, format?: 
   for (const b of px.data) h = Math.imul(h ^ b, 16777619) >>> 0;
   const err = await device.popErrorScope();
   rend.destroy();
-  device.destroy();
   return { hash: h, error: err?.message ?? null };
 }
 
@@ -1838,7 +1836,7 @@ function goldenRenderer(device: GPUDevice, src: BodySource, look: LookParams, si
  * timing.
  */
 export async function lookHashes(looks: string[], size: [number, number] = [320, 180]) {
-  const { device } = await createDevice({ timestamps: false });
+  const { device } = await sharedDevice({ timestamps: false });
   device.pushErrorScope('validation');
   const src = goldenScene(device);
   const hashes: Record<string, number> = {};
@@ -1855,7 +1853,6 @@ export async function lookHashes(looks: string[], size: [number, number] = [320,
     rend.destroy();
   }
   const err = await device.popErrorScope();
-  device.destroy();
   return { hashes, error: err?.message ?? null };
 }
 
@@ -1865,7 +1862,7 @@ export async function lookHashes(looks: string[], size: [number, number] = [320,
  * the top and bottom rows of sky (looking up from the low view) when sky is set.
  */
 export async function lookFrame(look: string | Partial<RealOptions>, eye: V3, target: V3, size: [number, number] = [320, 180], far = 400) {
-  const { device } = await createDevice({ timestamps: false });
+  const { device } = await sharedDevice({ timestamps: false });
   device.pushErrorScope('validation');
   const src = goldenScene(device);
   const rend = goldenRenderer(device, src, typeof look === 'string' ? LOOKS[look]! : realLook(look), size);
@@ -1874,7 +1871,6 @@ export async function lookFrame(look: string | Partial<RealOptions>, eye: V3, ta
   const stats = (await rend.render(f, true, true))!;
   const err = await device.popErrorScope();
   rend.destroy();
-  device.destroy();
   return { width: size[0], height: size[1], data: stats.pixels!.data, bytesPerRow: stats.pixels!.bytesPerRow, meanLuma: stats.meanLuma, error: err?.message ?? null };
 }
 
@@ -1891,7 +1887,7 @@ function fnv(data: ArrayLike<number>): number {
  * count of the point lights (lights.ts meta) after the frame.
  */
 export async function realChecks(looks: Array<string | (Partial<RealOptions> & Pick<RendererOptions, 'realDiag' | 'stoneLod'>)>, size: [number, number] = [320, 180], view: [V3, V3] = [[0, 2, 9], [0, 2.6, -1]]) {
-  const { device } = await createDevice({ timestamps: false });
+  const { device } = await sharedDevice({ timestamps: false });
   device.pushErrorScope('validation');
   const src = goldenScene(device);
   const [eye, target] = view;
@@ -1928,7 +1924,6 @@ export async function realChecks(looks: Array<string | (Partial<RealOptions> & P
     rend.destroy();
   }
   const err = await device.popErrorScope();
-  device.destroy();
   return { frames: out, horizonRow, error: err?.message ?? null };
 }
 
@@ -1941,7 +1936,7 @@ export async function realChecks(looks: Array<string | (Partial<RealOptions> & P
  * 16 x 16 pixel blocks).
  */
 export async function groundChecks(looks: Array<Partial<RealOptions> & Pick<RendererOptions, 'realDiag'>>, size: [number, number] = [320, 180]) {
-  const { device } = await createDevice({ timestamps: false });
+  const { device } = await sharedDevice({ timestamps: false });
   device.pushErrorScope('validation');
   const src = goldenScene(device);
   const eye: V3 = [0, 5, 22], target: V3 = [0, 0, 34];
@@ -1972,8 +1967,42 @@ export async function groundChecks(looks: Array<Partial<RealOptions> & Pick<Rend
     rend.destroy();
   }
   const err = await device.popErrorScope();
-  device.destroy();
   return { frames: out, error: err?.message ?? null };
+}
+
+/**
+ * The real look's ground, air and sky in a world of other metres per unit
+ * (FrameParams.metres): an empty arena seen from [0, 5, 22] towards
+ * [0, 0, 34] at metres 1, and from those points times 1/metres at each
+ * other metres, which is the same view of the same metric world. Per case,
+ * against the first: the most and the mean any pixel's sRGB channel
+ * differs, and whether the frames are the same to the bit.
+ */
+export async function metricGround(metres: number[], real: Partial<RealOptions> = {}, size: [number, number] = [320, 180]) {
+  const { device } = await sharedDevice({ timestamps: false });
+  device.pushErrorScope('validation');
+  const src = new SnapshotSource(device);
+  src.reset([]);
+  src.update(snapshotOf([]), []);
+  const frames: Uint8Array[] = [];
+  for (const m of metres) {
+    const eye: V3 = [0, 5 / m, 22 / m], target: V3 = [0, 0, 34 / m];
+    const rend = goldenRenderer(device, src, realLook({ sunElevation: 35, sunAzimuth: 90, ...real }), size);
+    const f: FrameParams = { viewProj: multiply(perspective(0.9, size[0] / size[1], 0.1 / m, 2000 / m), lookAt(eye, target)), eye, groundY: 0, time: 1, dt: 0, alpha: 1, metres: m };
+    await rend.render(f);
+    const { data, bytesPerRow } = (await rend.render(f, true, true))!.pixels!;
+    const px = new Uint8Array(size[0] * size[1] * 4);
+    for (let y = 0; y < size[1]; y++) for (let x = 0; x < size[0] * 4; x++) px[y * size[0] * 4 + x] = data[y * bytesPerRow + x]!;
+    frames.push(px);
+    rend.destroy();
+  }
+  const out = frames.map((px) => {
+    let max = 0, sum = 0;
+    for (let i = 0; i < px.length; i++) { if (i % 4 === 3) continue; const d = Math.abs(px[i]! - frames[0]![i]!); max = Math.max(max, d); sum += d; }
+    return { max, mean: sum / ((px.length * 3) / 4), same: fnv(px) === fnv(frames[0]!) };
+  });
+  const err = await device.popErrorScope();
+  return { cases: out, error: err?.message ?? null };
 }
 
 /**
@@ -1983,7 +2012,7 @@ export async function groundChecks(looks: Array<Partial<RealOptions> & Pick<Rend
  * the middle 60% of columns.
  */
 export async function groundSeam(looks: Array<Partial<RealOptions>>, size: [number, number] = [320, 180]) {
-  const { device } = await createDevice({ timestamps: false });
+  const { device } = await sharedDevice({ timestamps: false });
   device.pushErrorScope('validation');
   const src = goldenScene(device);
   const pitch = (24 * Math.PI) / 180;
@@ -2015,7 +2044,6 @@ export async function groundSeam(looks: Array<Partial<RealOptions>>, size: [numb
     rend.destroy();
   }
   const err = await device.popErrorScope();
-  device.destroy();
   return { cut, rows, error: err?.message ?? null };
 }
 
@@ -2027,7 +2055,7 @@ export async function groundSeam(looks: Array<Partial<RealOptions>>, size: [numb
  * 10 degrees, over all of them).
  */
 export async function hillChecks(looks: Array<Partial<RealOptions> & Pick<RendererOptions, 'realDiag'>>, size: [number, number] = [320, 180]) {
-  const { device } = await createDevice({ timestamps: false });
+  const { device } = await sharedDevice({ timestamps: false });
   device.pushErrorScope('validation');
   const src = goldenScene(device);
   const eye: V3 = [0, 2, 40], fov = 0.9;
@@ -2052,7 +2080,6 @@ export async function hillChecks(looks: Array<Partial<RealOptions> & Pick<Render
     rend.destroy();
   }
   const err = await device.popErrorScope();
-  device.destroy();
   return { frames: out, error: err?.message ?? null };
 }
 
@@ -2065,7 +2092,7 @@ export interface AoProbe { p: V3; n: V3; own: number; /** For the seam cavity: t
  * own: the probe's body (its footprint is subtracted), or -1 (floor).
  */
 export async function aoProbe(bodies: AoProbeBody[], probes: AoProbe[], center: V3 = [0, 4, 0], half: V3 = [12, 8, 12]) {
-  const { device } = await createDevice({ timestamps: false });
+  const { device } = await sharedDevice({ timestamps: false });
   device.pushErrorScope('validation');
   const n = bodies.length;
   const bw = new ArrayBuffer(n * Body.size), sw = new ArrayBuffer(n * Shape.size);
@@ -2156,7 +2183,6 @@ ${AO_SEAM_WGSL}
   const err = await device.popErrorScope();
   ao.destroy();
   culler.destroy();
-  device.destroy();
   return { ao: probes.map((_, k) => [res[4 * k]!, res[4 * k + 1]!] as [number, number]), seam: probes.map((_, k) => res[4 * k + 2]!), error: err?.message ?? null };
 }
 
@@ -2186,7 +2212,7 @@ function aoScene(device: GPUDevice, opts: RendererOptions = {}) {
 }
 
 export async function aoImage() {
-  const { device } = await createDevice({ timestamps: false });
+  const { device } = await sharedDevice({ timestamps: false });
   device.pushErrorScope('validation');
   const { rend, f } = aoScene(device);
   const on = (await rend.render(f, true, true))!.pixels!;
@@ -2212,7 +2238,6 @@ export async function aoImage() {
   }
   const err = await device.popErrorScope();
   rend.destroy();
-  device.destroy();
   return { foot: [footOn / nf, footOff / nf], nf, near: [nearOn / nn, nearOff / nn], nn, openDiff, openChanged, no, cubeDiff, cubeChanged, nc, ballDiff, nb, error: err?.message ?? null };
 }
 
@@ -2225,7 +2250,7 @@ export async function aoImage() {
  * horizontal edge) and the free top edge (within 0.08 m of y = 2).
  */
 export async function seamImage(opts: RendererOptions = {}) {
-  const { device } = await createDevice({ timestamps: false });
+  const { device } = await sharedDevice({ timestamps: false });
   device.pushErrorScope('validation');
   const descs = [box([0, 0.5, 0], [0.5, 0.5, 0.5], [0, 0, 0, 1], 1), box([0, 1.5, 0], [0.5, 0.5, 0.5], [0, 0, 0, 1], 2)];
   const src = new SnapshotSource(device);
@@ -2255,7 +2280,6 @@ export async function seamImage(opts: RendererOptions = {}) {
   }
   const err = await device.popErrorScope();
   rend.destroy();
-  device.destroy();
   const r = (a: number[]) => ({ ratio: a[0]! / a[1]!, n: a[2]! });
   return { shared: r(acc.shared), mid: r(acc.mid), top: r(acc.top), error: err?.message ?? null };
 }
@@ -2265,7 +2289,7 @@ export async function seamImage(opts: RendererOptions = {}) {
  * groundY, the grid and whether the volume was reallocated.
  */
 export async function aoFloorFit(floors: number[]) {
-  const { device } = await createDevice({ timestamps: false });
+  const { device } = await sharedDevice({ timestamps: false });
   device.pushErrorScope('validation');
   const descs = [box([0, 0.5, 0], [0.5, 0.5, 0.5], [0, 0, 0, 1], 1)];
   const src = new SnapshotSource(device);
@@ -2284,7 +2308,6 @@ export async function aoFloorFit(floors: number[]) {
   }
   const err = await device.popErrorScope();
   rend.destroy();
-  device.destroy();
   return { out, error: err?.message ?? null };
 }
 
@@ -2294,7 +2317,7 @@ export async function aoFloorFit(floors: number[]) {
  * the target as seamImage's: per-channel byte differences.
  */
 export async function seamVsNone(scale: number) {
-  const { device } = await createDevice({ timestamps: false });
+  const { device } = await sharedDevice({ timestamps: false });
   device.pushErrorScope('validation');
   const descs = [box([0, 0.5, 0], [0.5, 0.5, 0.5], [0, 0, 0, 1], 1), box([0, 1.5, 0], [0.5, 0.5, 0.5], [0, 0, 0, 1], 2)];
   const src = new SnapshotSource(device);
@@ -2323,7 +2346,6 @@ export async function seamVsNone(scale: number) {
     if (d) changed++;
   }
   const err = await device.popErrorScope();
-  device.destroy();
   return { maxDiff, changed, boxPx, error: err?.message ?? null };
 }
 
@@ -2355,7 +2377,7 @@ async function readLut(device: GPUDevice, tex: GPUTexture): Promise<{ rgb: { w: 
  * (texels sampled with a stride) and the ambient pair.
  */
 export async function atmosphereTwins(sun: V3, eyeKm: number, visibility = CLEAR_DAY.visibility) {
-  const { device } = await createDevice({ timestamps: false });
+  const { device } = await sharedDevice({ timestamps: false });
   device.pushErrorScope('validation');
   const a = { ...CLEAR_DAY, visibility };
   const atmo = new Atmosphere(device);
@@ -2409,7 +2431,6 @@ export async function atmosphereTwins(sun: V3, eyeKm: number, visibility = CLEAR
   worst.exposure = rel(amb[8]!, adaptedExposure(I, a.sunIlluminance, 1.3, 0.75));
   const err = await device.popErrorScope();
   atmo.destroy();
-  device.destroy();
   return { worst, skyWorstAt, finite, ambient: { sky: Array.from(amb.slice(0, 3)), ground: Array.from(amb.slice(4, 7)) }, exposure: amb[8]!, illuminance: amb[9]!, sunIlluminanceLuma: LUMA.reduce((s, w, c) => s + w * a.sunIlluminance[c]!, 0), error: err?.message ?? null };
 }
 
@@ -2437,7 +2458,7 @@ async function readLayer(device: GPUDevice, tex: GPUTexture, layer: number, mip:
  * four parents.
  */
 export async function materialBake() {
-  const { device } = await createDevice({ timestamps: false });
+  const { device } = await sharedDevice({ timestamps: false });
   device.pushErrorScope('validation');
   const mats = new Materials(device);
   const out = [];
@@ -2477,7 +2498,6 @@ export async function materialBake() {
   }
   const err = await device.popErrorScope();
   mats.destroy();
-  device.destroy();
   return { layers: out, error: err?.message ?? null };
 }
 
@@ -2491,7 +2511,7 @@ export async function materialBake() {
  * under it (<name>Sky).
  */
 export async function floorChecks(looks: Array<Partial<RealOptions> & Pick<RendererOptions, 'realDiag'>>, size: [number, number] = [320, 180]) {
-  const { device } = await createDevice({ timestamps: false });
+  const { device } = await sharedDevice({ timestamps: false });
   device.pushErrorScope('validation');
   const descs: BodyDesc[] = [
     box([-5, 4, -2.5], [5, 4, 0.5], [0, 0, 0, 1]), box([-5, 4, 2.5], [5, 4, 0.5], [0, 0, 0, 1]), // the street, z in (-2, 2)
@@ -2544,7 +2564,6 @@ export async function floorChecks(looks: Array<Partial<RealOptions> & Pick<Rende
     rend.destroy();
   }
   const err = await device.popErrorScope();
-  device.destroy();
   return { frames: out, error: err?.message ?? null };
 }
 
@@ -2554,7 +2573,7 @@ export async function floorChecks(looks: Array<Partial<RealOptions> & Pick<Rende
  * and count of differing 8-bit channel values, and how many boxes each list drew.
  */
 export async function stoneLodSeam(o: Partial<RealOptions>, size: [number, number] = [320, 180], view: [V3, V3] = [[0, 2, 9], [0, 2.6, -1]]) {
-  const { device } = await createDevice({ timestamps: false });
+  const { device } = await sharedDevice({ timestamps: false });
   device.pushErrorScope('validation');
   const src = goldenScene(device);
   const [eye, target] = view;
@@ -2577,8 +2596,92 @@ export async function stoneLodSeam(o: Partial<RealOptions>, size: [number, numbe
     maxDiff = Math.max(maxDiff, d);
   }
   const err = await device.popErrorScope();
-  device.destroy();
   return { maxDiff, differing, lod: { boxes: a.boxes, farBoxes: a.farBoxes }, noLod: { boxes: b.boxes, farBoxes: b.farBoxes }, error: err?.message ?? null };
+}
+
+// ---------------------------------------------------------------- wood
+
+/**
+ * woodRings' WGSL against its CPU twin on n random points, blocks and pixel
+ * footprints (from a tenth of a ring to two); the largest differences, and
+ * how many points were left out at a ring's end.
+ */
+export async function woodTwins(seed: number, n = 4096) {
+  const { device } = await sharedDevice({ timestamps: false });
+  device.pushErrorScope('validation');
+  const r = rng(seed);
+  const f32 = Math.fround;
+  // Hashes made on both sides from a small slot number, as the shader makes them (raw u32 bits
+  // passed through a float buffer would not survive: the GPU may canonicalize NaN patterns).
+  const fl = new Float32Array(n * 12);
+  const cases = Array.from({ length: n }, (_, i) => {
+    const q: V3 = [f32((r() - 0.5) * 0.06), f32((r() - 0.5) * 0.06), f32((r() - 0.5) * 1.2)];
+    const slot = Math.floor(r() * 1e6), h = pcg3d(slot, 0x3779, 0x9e3d);
+    const ring = f32(WOOD_RING_M * (0.5 + 2 * r())), pxM = f32(ring * 10 ** (r() * 1.3 - 1));
+    fl.set([...q, 0, slot, 0, 0, 0, ring, pxM, 0, 0], 12 * i);
+    return { q, h, ring, pxM };
+  });
+  const out = await mapGpu(device, `${PCG_WGSL}${WOOD_WGSL}`, 'ys[i] = vec4f(woodRings(a.xyz, pcg3d(vec3u(u32(b.x), 0x3779u, 0x9e3du)), c.x, c.y), 0.0, 0.0);', fl, n);
+  let albedoErr = 0, lateErr = 0, worst: unknown = null, boundary = 0;
+  cases.forEach(({ q, h, ring, pxM }, i) => {
+    const w = woodRings(q[0], q[1], q[2], h, ring, pxM);
+    // Within 2e-3 of a ring's end, f32 rounding (sin and cos of tens of radians) may put the point in the next ring: latewood ends sharply.
+    if (Math.min(w.phase, 1 - w.phase) < 2e-3) { boundary++; return; }
+    const ea = Math.abs(w.albedo - out[4 * i]!), el = Math.abs(w.late - out[4 * i + 1]!);
+    if (ea > albedoErr) { albedoErr = ea; worst = { q, h, ring, pxM, cpu: w, gpu: [out[4 * i], out[4 * i + 1]] }; }
+    lateErr = Math.max(lateErr, el);
+  });
+  const err = await device.popErrorScope();
+  return { albedoErr, lateErr, boundary, n, worst, error: err?.message ?? null };
+}
+
+/**
+ * One plank (Kapla proportions, 1.2 m long, lying on the floor along x, or
+ * along z when turned), seen from 41 cm above, per look: the frame's hash,
+ * the mean luma of a patch inside its top face, and that patch's mean
+ * |luma step| along screen x (world x) and along screen y (world z). Grain
+ * along the plank makes steps across it larger.
+ */
+export async function woodFace(looks: Array<Partial<RealOptions> & { turned?: boolean } & Pick<RendererOptions, 'realDiag'>>, size: [number, number] = [320, 180]) {
+  const { device } = await sharedDevice({ timestamps: false });
+  device.pushErrorScope('validation');
+  const eye: V3 = [0, 0.45, 0.02], target: V3 = [0, 0.04, 0];
+  const f: FrameParams = { viewProj: multiply(perspective(0.9, size[0] / size[1], 0.05, 50), lookAt(eye, target)), eye, groundY: 0, time: 1, dt: 0, alpha: 1 };
+  const plank = (turned: boolean) => {
+    const s = Math.SQRT1_2, descs = [box([0, 0.04, 0], [0.6, 0.04, 0.12], turned ? [0, s, 0, s] : [0, 0, 0, 1])];
+    const src = new SnapshotSource(device);
+    src.reset(descs);
+    src.update(snapshotOf(descs), descs);
+    return src;
+  };
+  const planks = [plank(false), plank(true)];
+  // One renderer per bench diagnostic, its look switched between frames as the Scene panel does.
+  const renderers = new Map<string, Renderer>();
+  const out = [];
+  for (const { turned, realDiag, ...o } of looks) {
+    let rend = renderers.get(realDiag ?? '');
+    if (!rend) {
+      rend = new Renderer(device, { size }, { format: 'rgba8unorm', realDiag });
+      rend.setShadowBounds([0, 0, 0], 2, [1, 1, 1]);
+      renderers.set(realDiag ?? '', rend);
+    }
+    rend.look = realLook({ groundDetail: 0, hills: 0, ...o });
+    rend.setSource(planks[turned ? 1 : 0]!);
+    await rend.render(f);
+    const { data, bytesPerRow } = (await rend.render(f, true, true))!.pixels!;
+    const luma = (x: number, y: number) => { const k = y * bytesPerRow + 4 * x; return 0.2126 * data[k]! + 0.7152 * data[k + 1]! + 0.0722 * data[k + 2]!; };
+    let mean = 0, dx = 0, dy = 0, cnt = 0;
+    for (let y = 60; y < 120; y++) for (let x = 120; x < 200; x++) {
+      mean += luma(x, y);
+      dx += Math.abs(luma(x + 1, y) - luma(x, y));
+      dy += Math.abs(luma(x, y + 1) - luma(x, y));
+      cnt++;
+    }
+    out.push({ hash: fnv(data), meanLuma: mean / cnt, alongX: dx / cnt, alongZ: dy / cnt });
+  }
+  for (const rend of renderers.values()) rend.destroy();
+  const err = await device.popErrorScope();
+  return { frames: out, error: err?.message ?? null };
 }
 
 // ---------------------------------------------------------------- soft shadows
@@ -2615,7 +2718,7 @@ export interface PenumbraCase {
  * and far in the light. Several cases share one device.
  */
 export async function penumbraChecks(cases: PenumbraCase[]) {
-  const { device } = await createDevice({ timestamps: false });
+  const { device } = await sharedDevice({ timestamps: false });
   device.pushErrorScope('validation');
   // agx is monotone on grey: invert its green channel by bisection.
   const lut = Array.from({ length: 1025 }, (_, i) => agx([i / 1024, i / 1024, i / 1024])[1]);
@@ -2648,13 +2751,12 @@ export async function penumbraChecks(cases: PenumbraCase[]) {
     out.push({ x10: at(0.1), x50: at(0.5), x90: at(0.9), want10: solve(0.1), want90: solve(0.9), texel, half, band: band.length, dark: median(dark), lit: median(lit) });
   }
   const err = await device.popErrorScope();
-  device.destroy();
   return { cases: out, error: err?.message ?? null };
 }
 
 /** The frames (green channel) of penumbra cases, to compare renderer setups bit for bit. */
 export async function penumbraFrames(cases: PenumbraCase[]) {
-  const { device } = await createDevice({ timestamps: false });
+  const { device } = await sharedDevice({ timestamps: false });
   device.pushErrorScope('validation');
   const frames: number[][] = [];
   for (const c of cases) {
@@ -2664,7 +2766,6 @@ export async function penumbraFrames(cases: PenumbraCase[]) {
     frames.push(g);
   }
   const err = await device.popErrorScope();
-  device.destroy();
   return { frames, error: err?.message ?? null };
 }
 

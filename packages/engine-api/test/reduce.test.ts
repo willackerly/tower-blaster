@@ -392,7 +392,8 @@ describe('the keystone spec (§4) on a hand-built state', () => {
     // Structure 0-12 less the sleeper, plus the live ammo 13 and 16.
     expect(out[KEYSTONE.nAwake]).toEqual({ n: 14, invalid: 0 });
     expect(out[KEYSTONE.maxSpeed]).toEqual({ n: 14, invalid: 0, max: (3 * 65536) ** 2 });
-    expect(out[KEYSTONE.maxAngSpeed]).toEqual({ n: 14, invalid: 0, max: (3 * 65536) ** 2 });
+    // Spin counts for the structure only: 0-12 less the sleeper.
+    expect(out[KEYSTONE.maxAngSpeed]).toEqual({ n: 12, invalid: 0, max: (3 * 65536) ** 2 });
     // Σ ⌊9810·y_q / 2^16⌋: 76 + 76 - 1 + 0 + 965 + 965 + 5·2452 + 9810 + 19620.
     expect(out[KEYSTONE.pe]).toEqual({ n: 13, invalid: 0, sum: 43771, sat: 0 });
     expect(out[KEYSTONE.displaced]).toEqual({ n: 1, invalid: 0 });

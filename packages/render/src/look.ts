@@ -61,15 +61,18 @@ export interface LookParams {
   /**
    * With an atmosphere: the ground's material (materials.ts GROUNDS), texture scale (1 = a tile per
    * GROUND_TILE metres), texture strength (0: flat floor, nothing sampled) and macro variation (0 to 1):
-   * brightness, tint and a second, coarser scale that hide the tile's repeat.
+   * brightness, tint and a second, coarser scale that hide the tile's repeat. relief: the macro
+   * relief's depth (m, 0: flat); patches: the share of the ground under patches of the other ground
+   * (0 to 1, patchThreshold). Both default to 0 when left out.
    */
-  ground?: { kind: Ground; scale: number; detail: number; variation: number };
+  ground?: { kind: Ground; scale: number; detail: number; variation: number; relief?: number; patches?: number };
   /** With an atmosphere: hills on the horizon, their greatest height (degrees above the horizon; 0: none) and distance (km). */
   hills?: { height: number; distance: number };
   /** With an atmosphere: sun shadow penumbrae as wide as the sun's disc times softness (0: the stylized looks' 3x3 taps). Default 1. */
-  shadow?: { softness: number };
+  /** fill: light from the sunlit ground around that reaches what the sky lights (real look; 0: the sky alone). */
+  shadow?: { softness: number; fill?: number };
   /** With an atmosphere and effects off: impact dust and chips, as multiples of the default amounts (0: none), and a puff's full size (m). */
-  debris?: { dust: number; chips: number; size: number; opacity: number };
+  debris?: { dust: number; chips: number; size: number; opacity: number; threshold?: number; face?: number };
   /** false: none of the stylized effects (sparks, ball trail, heat glow, ball and impact lights). Default true. */
   effects?: boolean;
 }
@@ -158,25 +161,43 @@ export interface RealOptions {
   groundDetail: number;
   groundScale: number;
   groundVariation: number;
+  /** A gentle relief over tens of metres, its depth in metres (0: flat), and the share of the ground under patches of the other ground (0 to 1). */
+  groundRelief: number;
+  groundPatches: number;
   /** Hills on the horizon: their greatest height in degrees above it (0: none) and how far away they are, km. */
   hills: number;
   hillDistance: number;
   /** The sun's angular diameter, degrees (0.53 is the real one): the disc in the sky and, times shadowSoftness, how fast shadows soften with distance (0: hard 3x3 taps). */
   sunSize: number;
   shadowSoftness: number;
+  /**
+   * Light from the sunlit ground around added to the sky's, as a multiple of
+   * the ground's radiance (0: the sky alone, as before). The sky alone gives
+   * the floor's shadows 22% of the sunlit floor's light at 35 degrees (15% at
+   * 70, 50% at 10), which is what a camera records but reads near-black and
+   * navy on screen; terrain, haze and everything off-screen bounce more.
+   */
+  shadowFill: number;
   /** Impacts throw dust puffs and stone chips (multiples of the default amounts, 0: none); a puff grows to a radius of about dustSize metres (half that for the softest hits, twice for the hardest), dustOpacity opaque at its centre. */
   dust: number;
   chips: number;
   dustSize: number;
   dustOpacity: number;
+  /**
+   * Which knocks raise dust: a body's speed change (m/s) must pass
+   * dustThreshold after the face weight, which counts dustFace of a square
+   * face-on knock and all of an edge, corner or scrape (sparks.ts dustFace).
+   */
+  dustThreshold: number;
+  dustFace: number;
 }
 
 export const REAL_DEFAULTS: RealOptions = {
   sunElevation: 35, sunAzimuth: 140, visibility: 40, sunStrength: 1, groundAlbedo: [0.2, 0.19, 0.17], exposure: 1.1, autoExposure: 0.75,
   stone: 'limestone', stoneDetail: 1, stoneScale: 1, stoneFade: 8, wear: 0.5, dirt: 0.4,
-  groundMaterial: 'gravel', groundDetail: 1, groundScale: 1, groundVariation: 0.5, hills: 1.5, hillDistance: 6,
-  sunSize: 0.53, shadowSoftness: 1,
-  dust: 1, chips: 1, dustSize: 1.6, dustOpacity: 0.6,
+  groundMaterial: 'gravel', groundDetail: 1, groundScale: 1, groundVariation: 0.5, groundRelief: 1, groundPatches: 0.05, hills: 1.5, hillDistance: 6,
+  sunSize: 0.53, shadowSoftness: 1, shadowFill: 0.5,
+  dust: 1, chips: 1, dustSize: 0.9, dustOpacity: 0.4, dustThreshold: 2, dustFace: 0.15,
 };
 
 /** Direction toward the sun from elevation and azimuth in degrees. */
@@ -206,10 +227,10 @@ export function realLook(o: Partial<RealOptions> = {}): LookParams {
     bevel: 0.012,
     ramp: STONE_PALETTES[r.stone].map(hex) as LookParams['ramp'],
     stone: { kind: r.stone, scale: r.stoneScale, wear: r.wear, dirt: r.dirt, detail: r.stoneDetail, fade: r.stoneFade / 100 },
-    ground: { kind: r.groundMaterial, scale: r.groundScale, detail: r.groundDetail, variation: r.groundVariation },
+    ground: { kind: r.groundMaterial, scale: r.groundScale, detail: r.groundDetail, variation: r.groundVariation, relief: r.groundRelief, patches: r.groundPatches },
     hills: { height: r.hills, distance: r.hillDistance },
-    shadow: { softness: r.shadowSoftness },
-    debris: { dust: r.dust, chips: r.chips, size: r.dustSize, opacity: r.dustOpacity },
+    shadow: { softness: r.shadowSoftness, fill: r.shadowFill },
+    debris: { dust: r.dust, chips: r.chips, size: r.dustSize, opacity: r.dustOpacity, threshold: r.dustThreshold, face: r.dustFace },
     hueStep: 4,
     ball: hex('#8A8D90'),
     ballEmissive: 0,
@@ -238,14 +259,19 @@ export const REAL_KNOBS = {
   groundDetail: { label: 'ground texture 0-1', min: 0, max: 1, step: 0.05 },
   groundScale: { label: 'ground texture scale', min: 0.1, max: 10, step: 0.1 },
   groundVariation: { label: 'ground variation 0-1', min: 0, max: 1, step: 0.05 },
+  groundRelief: { label: 'ground relief (m)', min: 0, max: 5, step: 0.05 },
+  groundPatches: { label: 'ground patches (share) 0-1', min: 0, max: 1, step: 0.005 },
   hills: { label: 'horizon hills (deg)', min: 0, max: 10, step: 0.1 },
   hillDistance: { label: 'hill distance (km)', min: 0.5, max: 100, step: 0.5 },
   sunSize: { label: 'sun size (deg)', min: 0.05, max: 5, step: 0.01 },
   shadowSoftness: { label: 'shadow softness x (0: hard)', min: 0, max: 4, step: 0.1 },
+  shadowFill: { label: 'shadow fill (ground bounce) 0-2', min: 0, max: 2, step: 0.05 },
   dust: { label: 'impact dust x', min: 0, max: 4, step: 0.1 },
   chips: { label: 'impact chips x', min: 0, max: 4, step: 0.1 },
   dustSize: { label: 'dust puff radius (m)', min: 0.1, max: 5, step: 0.1 },
   dustOpacity: { label: 'dust puff opacity', min: 0, max: 1, step: 0.05 },
+  dustThreshold: { label: 'dust from knocks over (m/s)', min: 0.2, max: 20, step: 0.1 },
+  dustFace: { label: 'dust from flat face-on knocks 0-1', min: 0, max: 1, step: 0.05 },
 } as const;
 export type RealKnob = keyof typeof REAL_KNOBS;
 

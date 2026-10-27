@@ -1,4 +1,4 @@
-// pnpm bench:suite [--engine rapier] [--sizes 1000,2000,5000] [--timing-mode latency|throughput] [--channel chrome] [--headed] [--node-label NAME]
+// pnpm bench:suite [--engine rapier] [--sizes 1000,2000,5000] [--cases kapla,city] [--timing-mode latency|throughput] [--channel chrome] [--headed] [--node-label NAME]
 // Runs the standard suite in one browser, writes results/suite-<time>.jsonl
 // and a Markdown summary next to it, and prints the summary.
 import { mkdirSync } from 'node:fs';
@@ -6,7 +6,7 @@ import { cpus, hostname } from 'node:os';
 import { execSync } from 'node:child_process';
 import { exitNow } from '@tb/testkit';
 import { openRunner } from './orchestrate.ts';
-import { standardSuite } from './suite.ts';
+import { selectCases, standardSuite } from './suite.ts';
 import { runSuite } from './suite-run.ts';
 
 const argv = process.argv.slice(2);
@@ -21,7 +21,8 @@ const sizes = typeof flag('sizes') === 'string' ? (flag('sizes') as string).spli
 const channel = flag('channel');
 const mode = flag('timing-mode') ?? 'latency';
 if (mode !== 'latency' && mode !== 'throughput') throw new Error(`--timing-mode must be latency or throughput, got "${String(mode)}"`);
-const suite = standardSuite(engine, sizes, mode);
+const cases = flag('cases');
+const suite = selectCases(standardSuite(engine, sizes, mode), typeof cases === 'string' ? cases : undefined);
 
 let git = 'unknown';
 try { git = execSync('git rev-parse --short HEAD', { stdio: ['ignore', 'pipe', 'ignore'] }).toString().trim(); } catch { /* not a checkout */ }

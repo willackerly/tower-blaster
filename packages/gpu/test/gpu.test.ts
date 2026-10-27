@@ -21,6 +21,19 @@ function call<K extends keyof D>(name: K, ...args: Parameters<D[K]>): Promise<Aw
   ) as Promise<Awaited<ReturnType<D[K]>>>;
 }
 
+describe('sharedDevice', () => {
+  it('gives one device per option set, drops scopes a failed caller left, and replaces a lost device', async (ctx) => {
+    if (!gpu) return ctx.skip();
+    const r = await call('sharedDevices');
+    expect(r.same).toBe(true);
+    expect(r.distinct).toBe(true);
+    expect(r.uncaptured).not.toBeNull();
+    expect(r.replaced).toBe(true);
+    expect(r.replacedError).toBeNull();
+    expect(r.sameAfter).toBe(true);
+  });
+});
+
 describe('GpuProfiler', () => {
   it('reports per-label pass times and the frame span for every frame in flight', async (ctx) => {
     if (!gpu) return ctx.skip();

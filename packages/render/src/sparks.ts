@@ -86,8 +86,17 @@ export interface DebrisParams {
   chipBudget: number;
   dustRate: number;
   chipRate: number;
-  /** Detector threshold in debris mode (m/s; sparks use SparkParams.dvMin): a lighter knock than a spark needs still raises dust. */
+  /** Detector threshold in debris mode (m/s; sparks use SparkParams.dvMin), on the speed change times the face weight. */
   dustDv: number;
+  /**
+   * Face weight: a box knocked square on a face (its speed change along
+   * that face's normal) counts dustFace of its speed change, an edge,
+   * corner or scrape all of it (smoothstep over the push's lean off the
+   * normal, sine 0.15 to 0.6). Spheres always count in full.
+   */
+  dustFace: number;
+  /** How hard a scrape throws its puffs along the slide (x the friction's share of the push). */
+  dustSlide: number;
   /** Expected puffs per m/s above dustDv (at most DUST_PER_EVENT); chips per m/s above chipDv (at most CHIPS_PER_EVENT). Fractions round up by chance. */
   dustPerDv: number;
   chipDv: number;
@@ -102,7 +111,7 @@ export interface DebrisParams {
   chipFriction: number;
 }
 
-export const DEFAULT_DEBRIS: DebrisParams = { dustBudget: 384, chipBudget: 768, dustRate: 600, chipRate: 1500, dustDv: 1.2, dustPerDv: 1.5, chipDv: 3, chipPerDv: 1, dustDrag: 1.6, dustRise: 0.6, dustSpeed: 2.5, chipSpeed: 6, chipBounce: 0.25, chipFriction: 0.55 };
+export const DEFAULT_DEBRIS: DebrisParams = { dustBudget: 384, chipBudget: 768, dustRate: 600, chipRate: 1500, dustDv: 2, dustFace: 0.15, dustSlide: 1.5, dustPerDv: 1.5, chipDv: 3, chipPerDv: 1, dustDrag: 1.6, dustRise: 0.3, dustSpeed: 2.5, chipSpeed: 6, chipBounce: 0.25, chipFriction: 0.55 };
 
 /**
  * Control words: event count, pool head, events dropped, sparks spawned, hot
@@ -162,14 +171,27 @@ fn newDebris(e: ImpactEvent, j: u32, frame: u32, kind: u32, speed0: f32) -> Spar
   let h1 = pcg(h0);
   let h2 = pcg(h1);
   let h3 = pcg(h2);
+  let speed = speed0 * mix(select(0.4, 0.3, kind == 1u), 1.0, unit(h2)) * min(1.0, 0.3 + e.strength / 12.0);
+  if (kind == 1u) {
+    // A puff leaves the contact along its plane (a ring round a landing),
+    // thrown on along a scrape (the slide is against the friction's push,
+    // dir's part off the normal), with a little lift. Bit 12: raised from
+    // the ground (a landing on it), so it takes the ground's colour.
+    let n = e.normal;
+    let slide = e.dir - dot(e.dir, n) * n;
+    let e1 = normalize(cross(n, select(vec3f(1.0, 0.0, 0.0), vec3f(0.0, 0.0, 1.0), abs(n.x) > 0.9)));
+    let e2 = cross(n, e1);
+    let psi = 6.2831853 * unit(h1);
+    let d = normalize(cos(psi) * e1 + sin(psi) * e2 - p.dustSlide * slide + vec3f(0.0, mix(0.1, 0.4, unit(h0)), 0.0));
+    let ground = select(0u, 1u, n.y > 0.7 && e.pos.y < p.groundY + 0.15);
+    return Spark(e.pos, 0.0, d * speed, (h3 >> 24u) | (debrisClass(e.strength) << 8u) | (ground << 12u) | (h0 & 0xffffe000u));
+  }
   let z = 2.0 * unit(h0) - 1.0;
   let phi = 6.2831853 * unit(h1);
   let rr = sqrt(max(0.0, 1.0 - z * z));
   var u = vec3f(rr * cos(phi), rr * sin(phi), z);
   if (dot(u, e.dir) < 0.0) { u = -u; }
-  let lift = select(0.5, 0.6, kind == 1u);
-  let d = normalize(u + select(0.8, 0.5, kind == 1u) * e.dir + vec3f(0.0, lift, 0.0));
-  let speed = speed0 * mix(select(0.4, 0.3, kind == 1u), 1.0, unit(h2)) * min(1.0, 0.3 + e.strength / 12.0);
+  let d = normalize(u + 0.8 * e.dir + vec3f(0.0, 0.5, 0.0));
   return Spark(e.pos, 0.0, d * speed, (h3 >> 24u) | (debrisClass(e.strength) << 8u) | (h0 & 0xfffff000u));
 }
 `;
@@ -191,7 +213,7 @@ struct SparkParams {
   chipPool: u32, dustPerDv: f32, chipDv: f32, chipPerDv: f32,
   dustDrag: f32, dustRise: f32, chipBounce: f32, chipFriction: f32,
   dustSpeed: f32, chipSpeed: f32, dustRate: f32, chipRate: f32,
-  dustDv: f32, pad3: f32, pad4: f32, pad5: f32,
+  dustDv: f32, dustFace: f32, dustSlide: f32, dvScale: f32,
 }
 
 @group(0) @binding(0) var<uniform> p: SparkParams;
@@ -225,16 +247,29 @@ fn detect(@builtin(global_invocation_id) id: vec3u) {
   let seen = (st.bits >> 24u) == 1u && ((st.bits >> 16u) & 0xffu) == tier;
   if (live && seen && continuous) {
     let dv = b.linVel - st.prevLinVel;
-    let s = length(dv);
-    if (s > select(p.dvMin, p.dustDv, p.mode == 1u)) {
+    let d = dv / max(length(dv), 1e-30);
+    let s = length(dv) * p.dvScale;
+    let sh = shapes[b.shape];
+    let dl = qrot(vec4f(-b.rot.xyz, b.rot.w), d);
+    // Debris: a box's face normal nearest the push, and how far the push
+    // leans off it (0 face on, 0.71 an edge, 0.82 a corner, or the share of
+    // a scrape's friction). Flat face-on knocks raise dustFace of the dust;
+    // edges, corners and scrapes all of it. Spheres take it all.
+    var n = d;
+    var w = 1.0;
+    if (p.mode == 1u && sh.kind != 1u) {
+      let ax = abs(dl);
+      let m = max(ax.x, max(ax.y, ax.z));
+      let nl = select(select(vec3f(0.0, 0.0, sign(dl.z)), vec3f(0.0, sign(dl.y), 0.0), ax.y >= ax.z), vec3f(sign(dl.x), 0.0, 0.0), ax.x >= ax.y && ax.x >= ax.z);
+      n = qrot(b.rot, nl);
+      w = mix(p.dustFace, 1.0, smoothstep(0.15, 0.6, sqrt(max(1.0 - m * m, 0.0))));
+    }
+    if (s * w > select(p.dvMin, p.dustDv, p.mode == 1u)) {
       let k = atomicAdd(&ctl[${CTL.events}], 1u);
       if (k < ${MAX_EVENTS}u) {
-        let d = dv / s;
-        let sh = shapes[b.shape];
         // Support distance along -d: where the push came from.
-        let dl = qrot(vec4f(-b.rot.xyz, b.rot.w), d);
         let r = select(dot(abs(dl), sh.half), sh.half.x, sh.kind == 1u);
-        events[k] = ImpactEvent(b.pos - d * r, s, d, i | (((looks[i] >> 12u) & 0xfu) << 28u));
+        events[k] = ImpactEvent(b.pos - d * r, s * w, d, i | (((looks[i] >> 12u) & 0xfu) << 28u), n, s);
       } else {
         atomicAdd(&ctl[${CTL.dropped}], 1u);
       }
@@ -246,7 +281,7 @@ fn detect(@builtin(global_invocation_id) id: vec3u) {
   if (live) {
     heat = unpack2x16float(st.bits).x * exp(-p.dt / p.heatTau);
     if (seen && continuous) {
-      heat = max(heat, clamp((length(b.linVel - st.prevLinVel) - p.heatDv) / p.heatRange, 0.0, 1.0));
+      heat = max(heat, clamp((length(b.linVel - st.prevLinVel) * p.dvScale - p.heatDv) / p.heatRange, 0.0, 1.0));
     }
     if (((looks[i] >> 12u) & 0xfu) != ${MATERIAL.ball}u) { heat = max(heat, ballContact(i, b)); }
     if (heat > 0.05) { atomicAdd(&ctl[${CTL.hot}], 1u); }
@@ -443,7 +478,8 @@ export function pcg(v: number): number {
 const unit = (h: number) => fr((h >>> 8) / 16777216);
 
 export interface SparkState { pos: V3; age: number; vel: V3; packed: number }
-export interface Impact { pos: V3; strength: number; dir: V3; packed: number }
+/** normal defaults to dir and raw to strength (an injected impact). */
+export interface Impact { pos: V3; strength: number; dir: V3; packed: number; normal?: V3; raw?: number }
 
 export const sparkLife = (packed: number) => fr(0.4 + fr(fr(0.8 * (packed & 0xff)) / 255));
 
@@ -478,32 +514,66 @@ export function chipCount(e: Impact, d: DebrisParams, frame: number): number {
 export const debrisClass = (strength: number) => Math.min(15, Math.floor(strength));
 const debrisEvent = (t: number, n: number, kind: number, frame: number) => ((pcg(u32(frame ^ u32(kind << 30))) % n) + t * EVENT_STRIDE) % n;
 
-/** CPU twin of newDebris (kind 1: puff, 2: chip). */
-export function newDebrisReference(e: Impact, j: number, frame: number, kind: 1 | 2, speed0: number): SparkState {
+const dot3 = (a: V3, b: V3) => fr(fr(fr(a[0] * b[0]) + fr(a[1] * b[1])) + fr(a[2] * b[2]));
+const norm3 = (v: V3) => { const l = fr(Math.hypot(...v)); return v.map((x) => fr(x / l)) as V3; };
+const cross3 = (a: V3, b: V3): V3 => [fr(fr(a[1] * b[2]) - fr(a[2] * b[1])), fr(fr(a[2] * b[0]) - fr(a[0] * b[2])), fr(fr(a[0] * b[1]) - fr(a[1] * b[0]))];
+
+const qrot3 = (q: readonly number[], v: V3): V3 => {
+  const t = cross3([q[0]!, q[1]!, q[2]!], v).map((x) => 2 * x) as V3, u = cross3([q[0]!, q[1]!, q[2]!], t);
+  return [0, 1, 2].map((k) => v[k]! + q[3]! * t[k]! + u[k]!) as V3;
+};
+
+/**
+ * The debris detector's reading of a speed change dv of a body turned by rot
+ * (x, y, z, w): the contact normal (a box's face normal nearest dv, a
+ * sphere's dv) and the face weight (dustFace for dv square on a face, 1 for
+ * an edge, corner or scrape; spheres 1). The GPU works in f32: within 1e-5.
+ */
+export function debrisWeight(dv: V3, rot: readonly number[], sphere: boolean, dustFace: number): { normal: V3; weight: number } {
+  const l = Math.hypot(...dv), d = dv.map((x) => x / l) as V3;
+  if (sphere) return { normal: d, weight: 1 };
+  const dl = qrot3([-rot[0]!, -rot[1]!, -rot[2]!, rot[3]!], d), ax = dl.map(Math.abs);
+  const k = ax[0]! >= ax[1]! && ax[0]! >= ax[2]! ? 0 : ax[1]! >= ax[2]! ? 1 : 2, m = ax[k]!;
+  const nl: V3 = [0, 0, 0];
+  nl[k] = Math.sign(dl[k]!);
+  const x = Math.min(Math.max((Math.sqrt(Math.max(1 - m * m, 0)) - 0.15) / 0.45, 0), 1);
+  return { normal: qrot3(rot, nl), weight: dustFace + (1 - dustFace) * x * x * (3 - 2 * x) };
+}
+
+/** CPU twin of newDebris (kind 1: puff, 2: chip; groundY: the frame's ground height, for a puff's ground bit). */
+export function newDebrisReference(e: Impact, j: number, frame: number, kind: 1 | 2, d: DebrisParams, groundY = 0): SparkState {
   const h0 = pcg(bitsOf(e.pos[0]) ^ pcg(bitsOf(e.pos[2]) ^ pcg(u32(j ^ u32(frame << 16) ^ u32(kind << 30)))));
   const h1 = pcg(h0), h2 = pcg(h1), h3 = pcg(h2);
+  const lo = kind === 1 ? 0.3 : 0.4, t = unit(h2), speed0 = kind === 1 ? d.dustSpeed : d.chipSpeed;
+  const speed = fr(fr(speed0 * fr(fr(lo * fr(1 - t)) + t)) * Math.min(1, fr(0.3 + fr(e.strength / 12))));
+  if (kind === 1) {
+    const n = e.normal ?? e.dir, dn = dot3(e.dir, n);
+    const slide = e.dir.map((x, k) => fr(x - fr(dn * n[k]!))) as V3;
+    const e1 = norm3(cross3(n, Math.abs(n[0]) > 0.9 ? [0, 0, 1] : [1, 0, 0])), e2 = cross3(n, e1);
+    const psi = fr(6.2831853 * unit(h1)), c = fr(Math.cos(psi)), sn = fr(Math.sin(psi)), lift = fr(0.1 + fr(0.3 * unit(h0)));
+    const v = norm3([0, 1, 2].map((k) => fr(fr(fr(fr(c * e1[k]!) + fr(sn * e2[k]!)) - fr(d.dustSlide * slide[k]!)) + (k === 1 ? lift : 0))) as V3);
+    const ground = n[1] > 0.7 && e.pos[1] < fr(groundY + 0.15) ? 1 : 0;
+    return { pos: [...e.pos] as V3, age: 0, vel: v.map((x) => fr(x * speed)) as V3, packed: u32((h3 >>> 24) | (debrisClass(e.strength) << 8) | (ground << 12) | (h0 & 0xffffe000)) };
+  }
   const z = fr(2 * unit(h0) - 1), phi = fr(6.2831853 * unit(h1)), rr = fr(Math.sqrt(Math.max(0, fr(1 - fr(z * z)))));
   let u: V3 = [fr(rr * fr(Math.cos(phi))), fr(rr * fr(Math.sin(phi))), z];
   if (u[0] * e.dir[0] + u[1] * e.dir[1] + u[2] * e.dir[2] < 0) u = [-u[0], -u[1], -u[2]];
-  const w = kind === 1 ? 0.5 : 0.8, lift = kind === 1 ? 0.6 : 0.5;
-  const v = u.map((x, k) => fr(fr(x + fr(w * e.dir[k]!)) + (k === 1 ? lift : 0))) as V3;
+  const v = u.map((x, k) => fr(fr(x + fr(0.8 * e.dir[k]!)) + (k === 1 ? 0.5 : 0))) as V3;
   const l = fr(Math.hypot(...v));
-  const lo = kind === 1 ? 0.3 : 0.4, t = unit(h2);
-  const speed = fr(fr(speed0 * fr(fr(lo * fr(1 - t)) + t)) * Math.min(1, fr(0.3 + fr(e.strength / 12))));
   return { pos: [...e.pos] as V3, age: 0, vel: v.map((x) => fr(fr(x / l) * speed)) as V3, packed: u32((h3 >>> 24) | (debrisClass(e.strength) << 8) | (h0 & 0xfffff000)) };
 }
 
 /** The puffs and chips one frame's events spawn in debris mode, in thread order (tokens: whole particles in each bucket; default full). */
-export function debrisSpawnReference(events: Impact[], frame: number, d: DebrisParams, tokens: [number, number] = [d.dustBudget, d.chipBudget]): { dust: SparkState[]; chips: SparkState[] } {
+export function debrisSpawnReference(events: Impact[], frame: number, d: DebrisParams, tokens: [number, number] = [d.dustBudget, d.chipBudget], groundY = 0): { dust: SparkState[]; chips: SparkState[] } {
   const n = Math.min(events.length, MAX_EVENTS), dust: SparkState[] = [], chips: SparkState[] = [];
   if (!n) return { dust, chips };
   for (let t = 0; t < Math.min(d.dustBudget, SPAWN_BUDGET, tokens[0]); t++) {
     const e = events[debrisEvent(t, n, 1, frame)]!, j = Math.floor(t / n);
-    if (j < dustCount(e, d, frame)) dust.push(newDebrisReference(e, j, frame, 1, d.dustSpeed));
+    if (j < dustCount(e, d, frame)) dust.push(newDebrisReference(e, j, frame, 1, d, groundY));
   }
   for (let t = 0; t < Math.min(d.chipBudget, SPAWN_BUDGET - d.dustBudget, tokens[1]); t++) {
     const e = events[debrisEvent(t, n, 2, frame)]!, j = Math.floor(t / n);
-    if (j < chipCount(e, d, frame)) chips.push(newDebrisReference(e, j, frame, 2, d.chipSpeed));
+    if (j < chipCount(e, d, frame)) chips.push(newDebrisReference(e, j, frame, 2, d, groundY));
   }
   return { dust, chips };
 }
@@ -598,11 +668,11 @@ export class Sparks {
     this.pipes = { detect: pipe('detect'), spawn: pipe('spawn'), simulate: pipe('simulate'), writeArgs: pipe('writeArgs') };
   }
 
-  /** CPU-authored impacts (game events, tests), spawned on the next frame. */
-  inject(pos: V3, dir: V3, strength: number): void {
+  /** CPU-authored impacts (game events, tests), spawned on the next frame; the contact normal (unit) defaults to dir. */
+  inject(pos: V3, dir: V3, strength: number, normal?: V3): void {
     if (this.injected.length >= MAX_INJECT) return;
     const l = Math.hypot(...dir) || 1;
-    this.injected.push({ pos, dir: [dir[0] / l, dir[1] / l, dir[2] / l], strength, packed: 0xffffff | (1 << 24) });
+    this.injected.push({ pos, dir: [dir[0] / l, dir[1] / l, dir[2] / l], strength, packed: 0xffffff | (1 << 24), ...(normal ? { normal } : {}) });
   }
 
   /**
@@ -636,8 +706,11 @@ export class Sparks {
    * Record detect, spawn and simulate into an open compute pass. detect:
    * false skips the detector (injected events only). mode 'debris' makes
    * puffs and chips instead of sparks; switching modes kills every particle.
+   * dvScale (default 1): the detector reads a body's speed change times this,
+   * so a world played faster (Renderer FrameParams.metres) knocks as its unit
+   * world would; the caller runs the particles faster by dt to match.
    */
-  encode(pass: GPUComputePassEncoder, source: BodySource, f: { dt: number; groundY: number; detect?: boolean; mode?: 'sparks' | 'debris' }): void {
+  encode(pass: GPUComputePassEncoder, source: BodySource, f: { dt: number; groundY: number; detect?: boolean; mode?: 'sparks' | 'debris'; dvScale?: number }): void {
     this.bind(source);
     const q = this.device.queue, pr = this.config, db = this.debris, mode = f.mode ?? 'sparks';
     if (mode !== this.mode) { this.clear(); this.mode = mode; }
@@ -651,7 +724,7 @@ export class Sparks {
     for (let k = 0; k < 4; k++) u[16 + k] = balls[k] ?? 0xffffffff;
     fl.set([pr.heatDv, pr.heatRange, pr.heatTau, pr.contact], 20);
     u.set([mode === 'debris' ? 1 : 0, db.dustBudget, db.chipBudget, this.rings[0], this.rings[1]], 24);
-    fl.set([db.dustPerDv, db.chipDv, db.chipPerDv, db.dustDrag, db.dustRise, db.chipBounce, db.chipFriction, db.dustSpeed, db.chipSpeed, db.dustRate, db.chipRate, db.dustDv], 29);
+    fl.set([db.dustPerDv, db.chipDv, db.chipPerDv, db.dustDrag, db.dustRise, db.chipBounce, db.chipFriction, db.dustSpeed, db.chipSpeed, db.dustRate, db.chipRate, db.dustDv, db.dustFace, db.dustSlide, f.dvScale ?? 1], 29);
     q.writeBuffer(this.params, 0, buf);
     // Injected events first; the detector appends after them.
     const inj = this.injected.splice(0);
@@ -692,8 +765,8 @@ export class Sparks {
 }
 
 export function packImpacts(es: Impact[]): ArrayBuffer {
-  const out = new ArrayBuffer(es.length * ImpactEvent.size), f = new Float32Array(out), u = new Uint32Array(out);
-  es.forEach((e, i) => { f.set(e.pos, i * 8); f[i * 8 + 3] = e.strength; f.set(e.dir, i * 8 + 4); u[i * 8 + 7] = e.packed; });
+  const out = new ArrayBuffer(es.length * ImpactEvent.size), f = new Float32Array(out), u = new Uint32Array(out), W = ImpactEvent.size / 4;
+  es.forEach((e, i) => { f.set(e.pos, i * W); f[i * W + 3] = e.strength; f.set(e.dir, i * W + 4); u[i * W + 7] = e.packed; f.set(e.normal ?? e.dir, i * W + 8); f[i * W + 11] = e.raw ?? e.strength; });
   return out;
 }
 
@@ -704,7 +777,7 @@ export function unpackSparks(data: ArrayBuffer): SparkState[] {
 }
 
 export function unpackImpacts(data: ArrayBuffer, n: number): Impact[] {
-  const f = new Float32Array(data), u = new Uint32Array(data), out: Impact[] = [];
-  for (let i = 0; i < n; i++) out.push({ pos: [f[i * 8]!, f[i * 8 + 1]!, f[i * 8 + 2]!], strength: f[i * 8 + 3]!, dir: [f[i * 8 + 4]!, f[i * 8 + 5]!, f[i * 8 + 6]!], packed: u[i * 8 + 7]! });
+  const f = new Float32Array(data), u = new Uint32Array(data), out: Impact[] = [], W = ImpactEvent.size / 4;
+  for (let i = 0; i < n; i++) out.push({ pos: [f[i * W]!, f[i * W + 1]!, f[i * W + 2]!], strength: f[i * W + 3]!, dir: [f[i * W + 4]!, f[i * W + 5]!, f[i * W + 6]!], packed: u[i * W + 7]!, normal: [f[i * W + 8]!, f[i * W + 9]!, f[i * W + 10]!], raw: f[i * W + 11]! });
   return out;
 }

@@ -7,8 +7,13 @@ import {
   albedoHex, alphaAt, arrived, hexAlbedo, realOverrides, DEFAULT_PROJECTILE, engineSpec, escapeHtml, eyeOf, frame, FREE_MAX_LAG_MS, GPU_SPARE, invert, MAX_STEPS_LIMIT, multiply,
   newArrivals, newClock, newPacer, PACE_SLACK, parseProjectile, pauseLatch, parseViewerConfig, presetSearch, projectileBody, projectileMass, proposeScene,
   pushRadiusLimit, rayThrough, runFree, SIM_SPEED_TAU, stepDue, stepped, stepsDue, taskYield, toSearch, trackSimSpeed, transform, viewProj, Window,
-  withOption, type FreeHooks, type Orbit,
+  withOption, type FreeHooks, type Orbit, orbitAt, parseCamera, parseSceneFile, poseOf, SCENE_FILE_FORMAT, sceneFile, sceneFileName, type ViewerConfig,
+  autoSubsteps, froudeSpeed, MAX_SUBSTEPS, SCALE_LIMITS, sceneSummary, worldEngineSpec, worldScene,
+  DEFAULT_FRAMING, FRAMING_LIMITS, framingFrom, parseFraming,
 } from '../src/index.ts';
+import { SCENARIOS } from '@tb/scenarios';
+import { parseSpec } from '@tb/bench';
+import { DEFAULT_AVBD } from '@tb/physics-ref';
 
 const orbit: Orbit = { target: [1, 2, 3], yaw: 0.7, pitch: 0.4, distance: 25, fovY: 0.9 };
 
@@ -764,6 +769,69 @@ describe('viewer config', () => {
   });
 });
 
+describe('world scale (scale, substeps)', () => {
+  it('parses, defaults to 1 and 1, round-trips, and leaves the defaults out of the URL', () => {
+    expect(parseViewerConfig('')).toMatchObject({ scale: 1, substeps: 1 });
+    expect(toSearch(parseViewerConfig(''))).not.toMatch(/scale|substeps/);
+    const c = parseViewerConfig('?scenario=S14&scale=0.25&substeps=3');
+    expect(c).toMatchObject({ scale: 0.25, substeps: 3 });
+    expect(parseViewerConfig(toSearch(c))).toEqual(c);
+    // Substeps default to the scale's own (autoSubsteps), and only others go in the URL, 1 included.
+    expect(parseViewerConfig('?scale=0.25')).toMatchObject({ scale: 0.25, substeps: 2 });
+    expect(toSearch(parseViewerConfig('?scale=0.25'))).not.toMatch(/substeps/);
+    const one = parseViewerConfig('?scale=0.25&substeps=1');
+    expect(toSearch(one)).toMatch(/substeps=1/);
+    expect(parseViewerConfig(toSearch(one))).toEqual(one);
+    expect(parseViewerConfig(`?scale=${SCALE_LIMITS[0]}&substeps=${MAX_SUBSTEPS}`)).toMatchObject({ scale: SCALE_LIMITS[0], substeps: MAX_SUBSTEPS });
+  });
+  it('rejects a scale outside its range or not a number, and substeps that are not a whole number from 1 to MAX_SUBSTEPS', () => {
+    for (const v of ['0', '-1', '11', 'big', '']) expect(() => parseViewerConfig(`?scale=${v}`)).toThrow(/scale must be a number from 0.01 to 10/);
+    for (const v of ['0', '9', '1.5', 'two']) expect(() => parseViewerConfig(`?substeps=${v}`)).toThrow(/substeps must be an integer from 1 to 8/);
+  });
+  it('a preset keeps a chosen scale and substeps set by hand; a scale left at its default stays the default', () => {
+    const cur = parseViewerConfig('?scenario=S14&scale=0.25&substeps=3');
+    expect(parseViewerConfig(presetSearch('?scenario=S4', cur))).toMatchObject({ scenario: 'S4', scale: 0.25, substeps: 3 });
+    expect(parseViewerConfig(presetSearch('?scenario=S4', parseViewerConfig('?scenario=S14&scale=0.25')))).toMatchObject({ scale: 0.25, substeps: 2 });
+    expect(parseViewerConfig(presetSearch('?scenario=S4', parseViewerConfig('?scenario=S14')))).toMatchObject({ scale: 1, substeps: 1 });
+  });
+  it('autoSubsteps keeps each step no coarser than the unit world\'s 1/60 s', () => {
+    expect([1, 2, 10, 0.5, 0.25, 0.2, 0.0625, 0.01].map(autoSubsteps)).toEqual([1, 1, 1, 2, 2, 3, 4, 8]);
+    for (const s of [0.03, 0.11, 0.25, 0.4, 0.7, 1]) if (autoSubsteps(s) < MAX_SUBSTEPS) expect(1 / Math.sqrt(s) / autoSubsteps(s)).toBeLessThanOrEqual(1 + 1e-12);
+  });
+  it('worldScene: gravity 1/scale as strong, starting and spawned velocities froudeSpeed as fast, steps split by substeps', () => {
+    const s = buildScenario('S5', {}, 1);
+    expect(worldScene(s, 1, 1)).toBe(s);
+    const w = worldScene(s, 0.25, 3);
+    expect(w.gravity).toEqual([0, -9.81 * 4, 0]);
+    expect(w.dt).toBeCloseTo(1 / 180, 15);
+    expect(froudeSpeed(0.25)).toBe(2);
+    s.bodies.forEach((b, i) => { expect(w.bodies[i]!.linVel).toEqual(b.linVel.map((v) => v * 2)); expect(w.bodies[i]!.angVel).toEqual(b.angVel.map((v) => v * 2)); expect(w.bodies[i]!.pos).toEqual(b.pos); });
+    expect(s.inputs.length).toBeGreaterThan(0); // S5 fires a ball
+    s.inputs.forEach((e, i) => {
+      const f = w.inputs[i]!;
+      expect(f.step).toBe(e.step * 3);
+      if (e.kind === 'spawn' && f.kind === 'spawn') expect(f.body.linVel).toEqual(e.body.linVel.map((v) => v * 2));
+    });
+    // The time of every event is kept: step x dt.
+    s.inputs.forEach((e, i) => expect(w.inputs[i]!.step * w.dt).toBeCloseTo(e.step * s.dt, 12));
+  });
+  it('worldEngineSpec scales the AVBD engines\' penalties, beta and spin cap (froudeParams), their own values or the defaults, and leaves other engines alone', () => {
+    expect(worldEngineSpec('avbd-gpu', 1)).toBe('avbd-gpu');
+    const g = parseSpec(worldEngineSpec('avbd-gpu:iterations=20', 0.25)).options;
+    expect(g).toMatchObject({ iterations: 20, beta: DEFAULT_AVBD.beta * 4, penaltyMin: DEFAULT_AVBD.penaltyMin * 4, penaltyMax: DEFAULT_AVBD.penaltyMax * 4, maxAngularSpeed: DEFAULT_AVBD.maxAngularSpeed * 2 });
+    expect(parseSpec(worldEngineSpec('avbd-ref:beta=1000', 0.25)).options).toMatchObject({ beta: 4000 });
+    expect(worldEngineSpec('rapier', 0.25)).toBe('rapier');
+  });
+  it('proposeScene checks the cube size and substeps; the summary says what they do', () => {
+    const c = parseViewerConfig('?scenario=S14');
+    expect(proposeScene(c, 'S14', c.params, 1, 0.25, 2)).toMatchObject({ ok: true, config: { scale: 0.25, substeps: 2 } });
+    expect(proposeScene(c, 'S14', c.params, 1, 0, 1)).toMatchObject({ ok: false, error: expect.stringMatching(/cube edge/) });
+    expect(proposeScene(c, 'S14', c.params, 1, 1, 9)).toMatchObject({ ok: false, error: expect.stringMatching(/substeps/) });
+    expect(sceneSummary(1200, 1, 1)).toBe('1,200 bodies');
+    expect(sceneSummary(1200, 0.25, 2)).toBe('1,200 bodies, 4 g in cube units, 2x as fast, 2x physics cost');
+  });
+});
+
 describe('look', () => {
   it('round-trips the look and the real knobs through the URL; a preset keeps them', () => {
     const c = parseViewerConfig('?look=real&real.sunElevation=4&real.visibility=12&real.ground=0.3,0.25,0.2&real.stone=granite&real.groundMaterial=dirt&real.groundScale=2');
@@ -845,5 +913,226 @@ describe('scene controls', () => {
     expect(proposeScene(c, 'S14', { towers: 0 }, 1)).toMatchObject({ ok: false, error: expect.stringMatching(/towers/) });
     expect(proposeScene(c, 'S14', { towers: NaN }, 1)).toMatchObject({ ok: false });
     expect(proposeScene(c, 'S14', {}, 1.5)).toMatchObject({ ok: false, error: expect.stringMatching(/seed/) });
+  });
+});
+
+describe('camera in the URL', () => {
+  it('round-trips a pose, rounded to mm and mrad, and an orbit at it keeps it', () => {
+    const pose = poseOf({ target: [1.23456, 2, -3.0004], yaw: 0.12345, pitch: 0.5, distance: 40.0001, fovY: 0.9 });
+    expect(pose).toEqual({ target: [1.235, 2, -3], yaw: 0.123, pitch: 0.5, distance: 40 });
+    const c = { ...parseViewerConfig('?scenario=S1'), camera: pose };
+    expect(toSearch(c)).toContain('cam=1.235%2C2%2C-3%2C0.123%2C0.5%2C40');
+    expect(parseViewerConfig(toSearch(c))).toEqual(c);
+    expect(poseOf(orbitAt(pose))).toEqual(pose);
+    expect(orbitAt({ ...pose, pitch: 3 }).pitch).toBe(1.45); // clamped as dragging clamps it
+    expect(parseViewerConfig('').camera).toBeNull();
+    expect(toSearch(parseViewerConfig(''))).not.toContain('cam');
+    for (const bad of ['1,2,3', '1,2,3,4,5,x', '1,2,3,4,5,0']) expect(() => parseCamera(bad)).toThrow(/cam must be/);
+  });
+  it('a preset and a rebuilt scene are framed afresh: the start camera is dropped', () => {
+    const c = parseViewerConfig('?scenario=S1&cam=0,5,0,1,0.3,20');
+    expect(parseViewerConfig(presetSearch('?scenario=S1', c)).camera).toBeNull();
+    const p = proposeScene(c, 'S1', { F: 3 }, 1);
+    expect(p.ok && p.config.camera).toBe(null);
+  });
+});
+
+describe('framing (view.*)', () => {
+  const box: [[number, number, number], [number, number, number]] = [[-6, 0, -4], [6, 16, 4]];
+  const corners = (min: number[], max: number[]) => [min[0]!, max[0]!].flatMap((x) => [min[1]!, max[1]!].flatMap((y) => [min[2]!, max[2]!].map((z) => [x, y, z] as [number, number, number])));
+
+  // The framing before view.*: 21.8 degrees up, 50 degrees of view, 1.35x the distance at which the bounding sphere fills it.
+  const before = (min: number[], max: number[]): Orbit => {
+    const fovY = (50 * Math.PI) / 180, radius = Math.hypot(max[0]! - min[0]!, max[1]! - min[1]!, max[2]! - min[2]!) / 2;
+    return { ...frame(min as [number, number, number], max as [number, number, number]), pitch: 0.38, fovY, distance: Math.max(8, (radius / Math.sin(fovY / 2)) * 1.35) };
+  };
+
+  it('the default is lower: the eye about half as high above the target as before, for a city and a tall tower', () => {
+    const rise = (o: Orbit) => eyeOf(o)[1] - o.target[1];
+    const boxes: (typeof box)[] = [box, [[-17.5, 0, -17.5], [17.5, 12.5, 7.5]], [[-2, 0, -2], [2, 30, 2]]];
+    for (const b of boxes) {
+      const r = rise(frame(...b)) / rise(before(...b));
+      expect(r, JSON.stringify(b)).toBeGreaterThan(0.35);
+      expect(r, JSON.stringify(b)).toBeLessThan(0.6);
+    }
+  });
+
+  it('fit 1 is the closest distance at which the whole box is on a square screen', () => {
+    fc.assert(fc.property(
+      fc.double({ min: FRAMING_LIMITS.pitch[0], max: FRAMING_LIMITS.pitch[1], noNaN: true }),
+      fc.double({ min: FRAMING_LIMITS.fov[0], max: FRAMING_LIMITS.fov[1], noNaN: true }),
+      fc.tuple(fc.double({ min: 0.5, max: 60, noNaN: true }), fc.double({ min: 1, max: 60, noNaN: true }), fc.double({ min: 0.5, max: 60, noNaN: true })),
+      (pitch, fov, [w, h, d]) => {
+        const b: typeof box = [[-w / 2, 0, -d / 2], [w / 2, h, d / 2]];
+        const ndc = (fit: number, aspect: number) => {
+          const m = viewProj(frame(...b, { pitch, fit, fov }), aspect);
+          return Math.max(...corners(...b).map((c) => { const p = transform(m, c); return p[3] > 0 ? Math.max(Math.abs(p[0] / p[3]), Math.abs(p[1] / p[3])) : Infinity; }));
+        };
+        const o = frame(...b, { pitch, fit: 1, fov });
+        if (o.distance === 8) return ndc(1, 1) <= 1 + 1e-9; // the 8 m floor: farther than needed
+        return Math.abs(ndc(1, 1) - 1) < 1e-6 && ndc(1.2, 16 / 9) < 1;
+      }));
+  });
+
+  it('the default framing keeps every scenario\'s bodies on screen, wide or 4:3', () => {
+    for (const id of Object.keys(SCENARIOS)) {
+      const bodies = buildScenario(id, {}, 1).bodies;
+      const min: [number, number, number] = [Infinity, 0, Infinity], max: [number, number, number] = [-Infinity, 1, -Infinity];
+      for (const b of bodies) for (let k = 0; k < 3; k++) { min[k] = Math.min(min[k]!, b.pos[k]! - 1); max[k] = Math.max(max[k]!, b.pos[k]! + 1); }
+      const o = frame(min, max);
+      for (const aspect of [16 / 9, 4 / 3]) {
+        const m = viewProj(o, aspect);
+        const off = bodies.filter((b) => { const p = transform(m, b.pos); return !(p[3] > 0 && Math.abs(p[0] / p[3]) <= 1 && Math.abs(p[1] / p[3]) <= 1); });
+        expect([id, aspect, off.length]).toEqual([id, aspect, 0]);
+      }
+    }
+  });
+
+  it('any framing at fit 1.2 or more keeps the whole box on screen (fit 1 just fits the bounding sphere, and the target sits a little below its centre)', () => {
+    fc.assert(fc.property(
+      fc.double({ min: FRAMING_LIMITS.pitch[0], max: FRAMING_LIMITS.pitch[1], noNaN: true }),
+      fc.double({ min: 1.2, max: FRAMING_LIMITS.fit[1], noNaN: true }),
+      fc.double({ min: FRAMING_LIMITS.fov[0], max: FRAMING_LIMITS.fov[1], noNaN: true }),
+      (pitch, fit, fov) => {
+        const o = frame(...box, { pitch, fit, fov });
+        const m = viewProj(o, 16 / 9);
+        return corners(...box).every((c) => {
+          const p = transform(m, c);
+          return p[3] > 0 && Math.abs(p[0] / p[3]) <= 1 && Math.abs(p[1] / p[3]) <= 1;
+        });
+      }));
+  });
+
+  it('parses, round-trips, leaves the defaults out of the URL and rejects what is out of range', () => {
+    expect(parseViewerConfig('').view).toEqual(DEFAULT_FRAMING);
+    expect(toSearch(parseViewerConfig(''))).not.toContain('view.');
+    const c = parseViewerConfig('?view.pitch=21.77&view.fit=1.35&view.fov=50');
+    expect(c.view).toEqual({ pitch: 21.77, fit: 1.35, fov: 50 });
+    expect(parseViewerConfig(toSearch(c))).toEqual(c);
+    expect(toSearch(parseViewerConfig('?view.fov=45&view.fit=2'))).toMatch(/view\.fit=2(&|$)/);
+    expect(toSearch(parseViewerConfig('?view.fov=45&view.fit=2'))).not.toContain('view.fov');
+    for (const bad of ['view.pitch=0', 'view.pitch=90', 'view.fit=0.1', 'view.fov=200', 'view.fov=x']) expect(() => parseFraming(new URLSearchParams(bad)), bad).toThrow(/view\.\w+ must be a number from/);
+  });
+
+  it('a preset keeps the framing, and a start camera takes its field of view', () => {
+    const c = parseViewerConfig('?scenario=S1&view.pitch=8&view.fov=30');
+    expect(parseViewerConfig(presetSearch('?scenario=S14', c)).view).toEqual({ ...DEFAULT_FRAMING, pitch: 8, fov: 30 });
+    expect(orbitAt({ target: [0, 0, 0], yaw: 0, pitch: 0.3, distance: 9 }, 30).fovY).toBeCloseTo(Math.PI / 6, 12);
+  });
+
+  it('the panel checks its values against the same limits', () => {
+    expect(framingFrom({ pitch: 10, fit: 1, fov: 60 })).toEqual({ pitch: 10, fit: 1, fov: 60 });
+    expect(() => framingFrom({ pitch: 10, fit: 1, fov: NaN })).toThrow(/field of view \(deg\) must be from 10 to 120/);
+    expect(() => framingFrom({ pitch: 90, fit: 1, fov: 45 })).toThrow(/camera pitch/);
+  });
+});
+
+describe('scene file', () => {
+  const at = new Date(2026, 9, 27, 1, 5);
+  const pose = { target: [1, 2, 3] as [number, number, number], yaw: 0.6, pitch: 0.4, distance: 30 };
+  const roundTrip = (c: ViewerConfig, camera = c.camera) => parseSceneFile(JSON.stringify(sceneFile(c, 'x', camera, at)));
+  /** What a config loads back as: every scenario param written out, the page's offscreen flag left behind. */
+  const settled = (c: ViewerConfig): ViewerConfig => ({ ...c, params: { ...SCENARIOS[c.scenario]!.defaults, ...c.params }, offscreen: false });
+
+  it('lists every scenario param and real knob, splits the engine spec, and keeps the name and camera', () => {
+    const c = parseViewerConfig('?scenario=S14&param.towers=3&engine=avbd-gpu:iterations=20,hessian=register&look=real&real.sunElevation=6&proj=cube&proj.mass=50');
+    const f = sceneFile(c, '  Sunset city  ', pose, at);
+    expect(f).toMatchObject({
+      format: SCENE_FILE_FORMAT, version: 1, name: 'Sunset city', savedAt: at.toISOString(),
+      scene: { scenario: 'S14', params: { ...SCENARIOS.S14!.defaults, towers: 3 }, seed: 1, sleep: null, scale: 1 },
+      engine: { name: 'avbd-gpu', options: { iterations: 20, hessian: 'register' } },
+      loop: { mode: 'free', pipeline: true, maxSteps: 1, substeps: 1 },
+      projectile: { shape: 'cube', size: 1.4, mass: 50, speed: 40 },
+      look: { preset: 'real', real: { ...REAL_DEFAULTS, sunElevation: 6 } },
+      camera: pose,
+      view: DEFAULT_FRAMING,
+    });
+    expect(Object.keys(f.look.real).sort()).toEqual(Object.keys(REAL_DEFAULTS).sort());
+  });
+
+  it('loads back the config it was saved from, through JSON, for any URL the viewer takes', () => {
+    const urls = [
+      '', '?scenario=S1&param.gap=0.02&engine=rapier', '?scenario=S4&param.N=10000&param.F=6&param.H=20&sleep=0&seed=7&autofire=120',
+      '?engine=tiered&loop=frame&maxSteps=3', '?pipeline=0&proj=cube&proj.size=3&proj.mass=200&proj.speed=15',
+      '?look=hazy', '?scenario=S3&param.running=true&look=real&real.sunElevation=4&real.visibility=12&real.ground=0.3,0.25,0.2&real.stone=granite&real.groundMaterial=dirt',
+      '?scenario=S1&cam=0,4.5,0,0.8,0.3,25', '?scenario=S1&view.pitch=8&view.fov=30', '?view.fit=2.5&cam=0,1,0,0,0.1,9', '?offscreen=1&engine=avbd-gpu:iterations=40,sweep=false', '?scenario=S14&scale=0.25&substeps=2&loop=frame&maxSteps=2',
+    ];
+    for (const u of urls) {
+      const c = parseViewerConfig(u);
+      const back = roundTrip(c);
+      expect(back.name).toBe('x');
+      expect(back.config, u).toEqual(settled(c));
+      // A loaded file is a URL like any other: the address bar reproduces it.
+      expect(parseViewerConfig(toSearch(back.config))).toEqual(back.config);
+    }
+    expect(roundTrip(parseViewerConfig('?scenario=S1'), pose).config.camera).toEqual(pose);
+  });
+
+  it('any projectile and real knobs survive a round trip', () => {
+    // + 0: a URL, like JSON, writes -0 as 0.
+    const knob = (k: keyof typeof REAL_KNOBS) => fc.option(fc.double({ min: REAL_KNOBS[k].min, max: REAL_KNOBS[k].max, noNaN: true }).map((x) => x + 0), { nil: undefined });
+    fc.assert(fc.property(
+      fc.record({ shape: fc.constantFrom('ball' as const, 'cube' as const), size: fc.double({ min: 0.1, max: 20, noNaN: true }), mass: fc.option(fc.double({ min: 0.01, max: 1e6, noNaN: true })), speed: fc.double({ min: 0, max: 500, noNaN: true }) }),
+      knob('sunElevation'), knob('visibility'), knob('dustOpacity'),
+      (projectile, sunElevation, visibility, dustOpacity) => {
+        const real = Object.fromEntries(Object.entries({ sunElevation, visibility, dustOpacity }).filter(([, v]) => v !== undefined));
+        const c = { ...parseViewerConfig('?look=real'), projectile, real };
+        const back = roundTrip(c).config;
+        expect(back.projectile).toEqual(projectile);
+        // Knobs that equal today's default are dropped on load (the URL stays short); the rest come back exactly.
+        expect(back.real).toEqual(Object.fromEntries(Object.entries(real).filter(([k, v]) => v !== REAL_DEFAULTS[k as keyof typeof REAL_DEFAULTS])));
+      }));
+  });
+
+  it('loading drops real knobs at their defaults, so the URL is as short as the panel keeps it', () => {
+    const c = parseViewerConfig('?look=real&real.sunElevation=6');
+    expect(toSearch(roundTrip(c).config)).toBe(toSearch(settled(c)));
+    expect(toSearch(roundTrip(c).config)).not.toMatch(/real\.(?!sunElevation)/);
+  });
+
+  it('a hand-written file may leave out what it does not change', () => {
+    const { config, name } = parseSceneFile(JSON.stringify({ format: SCENE_FILE_FORMAT, version: 1, scene: { scenario: 's12' }, engine: { name: 'rapier' } }));
+    expect(name).toBe('');
+    expect(config).toEqual({ ...parseViewerConfig('?scenario=S12&engine=rapier') });
+  });
+
+  it('names the download after the name, or after the scenario and the local time', () => {
+    expect(sceneFileName('Sunset city: 10k!', 'S4', at)).toBe('sunset-city-10k.json');
+    expect(sceneFileName('  ', 'S4', at)).toBe('S4-20261027-0105.json');
+    expect(sceneFileName('../../etc/passwd', 'S4', at)).toBe('etc-passwd.json');
+    expect(sceneFileName('城市', 'S14', at)).toBe('S14-20261027-0105.json');
+    expect(sceneFileName('a'.repeat(100), 'S4', at)).toBe(`${'a'.repeat(60)}.json`);
+  });
+
+  it('refuses files it can not read, saying why', () => {
+    const good = sceneFile(parseViewerConfig('?scenario=S1'), '', pose, at);
+    const bad = (edit: (f: Record<string, any>) => void) => {
+      const f = structuredClone(good) as Record<string, any>;
+      edit(f);
+      return () => parseSceneFile(JSON.stringify(f));
+    };
+    expect(() => parseSceneFile('{nope')).toThrow(/not a JSON file/);
+    expect(() => parseSceneFile('[]')).toThrow(/must be an object/);
+    expect(bad((f) => { f.format = 'something-else'; })).toThrow(/not a tower-blaster viewer scene/);
+    expect(bad((f) => { f.version = 2; })).toThrow(/newer than this viewer reads/);
+    expect(bad((f) => { f.secne = f.scene; })).toThrow(/unknown key secne/);
+    expect(bad((f) => { f.look.real.sunElevaton = 3; })).toThrow(/look.real: unknown key sunElevaton/);
+    expect(bad((f) => { f.scene.params.N = 5; })).toThrow(/scene.params \(S1\): unknown key N/);
+    expect(bad((f) => { f.scene.scenario = 'S99'; })).toThrow(/unknown scenario S99/);
+    expect(bad((f) => { f.scene.seed = 1.5; })).toThrow(/scene.seed must be an integer/);
+    expect(bad((f) => { f.scene.params.H = '6'; })).toThrow(/scene.params.H must be a number/);
+    expect(bad((f) => { f.engine.name = 'warp'; })).toThrow(/unknown engine warp/);
+    expect(bad((f) => { f.engine.options = { iterations: 'many' }; })).toThrow(/takes a number/);
+    expect(bad((f) => { f.engine.options = { 'a,b': 1 }; })).toThrow(/bad option name/);
+    expect(bad((f) => { f.look.real.sunElevation = 120; })).toThrow(/real.sunElevation must be a number from -10 to 90/);
+    expect(bad((f) => { f.look.real.stone = 'cheese'; })).toThrow(/look.real.stone must be one of/);
+    expect(bad((f) => { f.look.preset = 'photo'; })).toThrow(/unknown look photo/);
+    expect(bad((f) => { f.projectile.size = 50; })).toThrow(/proj.size must be a number from 0.1 to 20/);
+    expect(bad((f) => { f.loop = { mode: 'free', pipeline: true, maxSteps: 2 }; })).toThrow(/maxSteps applies to loop=frame/);
+    expect(bad((f) => { f.camera.distance = 0; })).toThrow(/cam must be/);
+    expect(bad((f) => { f.camera.target = [1, 2]; })).toThrow(/camera.target must be three numbers/);
+    expect(bad((f) => { f.view.zoom = 2; })).toThrow(/view: unknown key zoom/);
+    expect(bad((f) => { f.view.fov = 'wide'; })).toThrow(/view.fov must be a number/);
+    expect(bad((f) => { f.view.pitch = 0; })).toThrow(/view.pitch must be a number from/);
   });
 });

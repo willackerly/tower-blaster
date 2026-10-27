@@ -6,7 +6,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { chromium, type Browser } from 'playwright';
 import { createServer, type ViteDevServer } from 'vite';
 import { requireWebGPU, WEBGPU_ARGS } from '@tb/testkit';
-import { writeFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { deflateSync } from 'node:zlib';
 
 /** Minimal RGBA PNG encoder for debug screenshots of offscreen frames. */
@@ -205,6 +205,129 @@ describe('viewer', () => {
     await again.page.close();
   });
 
+  it('the panel\'s cube size brings its substeps, rebuilds at that scale, and the URL keeps it', async (ctx) => {
+    if (!browser) return ctx.skip();
+    const { page, errors } = await open('/?scenario=S1&param.F=3&param.H=6&param.gap=0.02&offscreen=1&engine=rapier');
+    const status = await page.evaluate(() => ({ s: window.__viewer.status, e: window.__viewer.error }));
+    if (status.s === 'error' && /WebGPU|adapter/.test(status.e ?? '') && !requireWebGPU()) return ctx.skip();
+    expect(status).toEqual({ s: 'running', e: undefined });
+    const firedSpeed = async (bodies: number) => {
+      await page.evaluate(() => window.__viewer.fire(0, 0));
+      await page.waitForFunction((n) => window.__viewer.bodies === n, bodies, { timeout: 30_000 });
+      return page.evaluate(() => Math.hypot(...window.__viewer.inputs.at(-1)!.body.linVel));
+    };
+    const unit = await firedSpeed(55);
+    await page.locator('#controls summary').click();
+    const scene = page.locator('#scene-form');
+    // The browser's own form check must pass the default and a size off any step grid, or submit does nothing.
+    const valid = () => scene.locator('input[name=scale]').evaluate((el) => (el as HTMLInputElement).validity.valid);
+    expect(await valid()).toBe(true);
+    await scene.locator('input[name=scale]').fill('0.25');
+    expect(await valid()).toBe(true);
+    expect(await scene.locator('input[name=substeps]').inputValue()).toBe('2');
+    expect(await scene.locator('.out').innerText()).toBe('54 bodies, 4 g in cube units, 2x as fast, 2x physics cost');
+    await scene.locator('button').click();
+    await page.waitForFunction(() => window.__viewer.status !== 'running' || (window.__viewer.resets === 2 && window.__viewer.stepIndex > 5), undefined, { timeout: 60_000 });
+    expect(await page.evaluate(() => window.__viewer.status)).toBe('running');
+    expect(await firedSpeed(55)).toBeCloseTo(2 * unit, 9);
+    const url = new URL(page.url());
+    expect(url.searchParams.get('scale')).toBe('0.25');
+    expect(url.searchParams.get('substeps')).toBeNull(); // 2 is 0.25's own
+    expect(errors).toEqual([]);
+    await page.close();
+  });
+
+  it('the panel\'s camera framing moves the camera now, goes into the URL, and R keeps it', async (ctx) => {
+    if (!browser) return ctx.skip();
+    const { page, errors } = await open('/?scenario=S1&param.F=3&param.H=6&param.gap=0.02&offscreen=1&engine=rapier');
+    const status = await page.evaluate(() => ({ s: window.__viewer.status, e: window.__viewer.error }));
+    if (status.s === 'error' && /WebGPU|adapter/.test(status.e ?? '') && !requireWebGPU()) return ctx.skip();
+    expect(status).toEqual({ s: 'running', e: undefined });
+    const pose = () => page.evaluate(() => window.__viewer.camera());
+    expect((await pose()).pitch).toBeCloseTo((12 * Math.PI) / 180, 3);
+    const far = (await pose()).distance;
+    await page.locator('#controls summary').click();
+    const view = page.locator('#view-form');
+    await view.locator('input[name=pitch]').fill('30');
+    await view.locator('input[name=fit]').fill('2');
+    expect((await pose()).pitch).toBeCloseTo((30 * Math.PI) / 180, 3);
+    expect((await pose()).distance).toBeGreaterThan(1.5 * far);
+    await view.locator('input[name=fov]').fill('500');
+    expect(await view.locator('.out').innerText()).toMatch(/field of view \(deg\) must be from 10 to 120/);
+    const url = new URL(page.url());
+    expect(Object.fromEntries([...url.searchParams].filter(([k]) => k.startsWith('view.')))).toEqual({ 'view.pitch': '30', 'view.fit': '2' });
+    await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur()); // keys typed into the panel are not commands
+    await page.keyboard.press('r');
+    await page.waitForFunction(() => window.__viewer.resets === 2, undefined, { timeout: 60_000 });
+    expect((await pose()).pitch).toBeCloseTo((30 * Math.PI) / 180, 3);
+    expect(errors).toEqual([]);
+    await page.close();
+  });
+
+  it('downloads the setup as named JSON, and loading a file rebuilds that setup in place, camera and all', async (ctx) => {
+    if (!browser) return ctx.skip();
+    const { page, errors } = await open('/?scenario=S1&param.F=3&param.H=6&param.gap=0.02&offscreen=1&engine=rapier&look=real&real.sunElevation=12');
+    const status = await page.evaluate(() => ({ s: window.__viewer.status, e: window.__viewer.error }));
+    if (status.s === 'error' && /WebGPU|adapter/.test(status.e ?? '') && !requireWebGPU()) return ctx.skip();
+    expect(status).toEqual({ s: 'running', e: undefined });
+    await page.waitForFunction(() => window.__viewer.stepIndex > 5, undefined, { timeout: 60_000 });
+    await page.evaluate(() => { (window as unknown as { marker: number }).marker = 1; });
+    const hasMarker = () => page.evaluate(() => (window as unknown as { marker?: number }).marker === 1);
+    const camera = () => page.evaluate(() => window.__viewer.camera());
+    await page.locator('#controls summary').click();
+    const form = page.locator('#file-form');
+
+    // Download: the name goes into the file and its file name; the camera is where it is now.
+    await form.locator('input[name=name]').fill('My tower: v1');
+    const [download] = await Promise.all([page.waitForEvent('download'), form.locator('button[type=submit]').click()]);
+    expect(download.suggestedFilename()).toBe('my-tower-v1.json');
+    const saved = JSON.parse(readFileSync((await download.path())!, 'utf8'));
+    expect(saved).toMatchObject({
+      format: 'tower-blaster/viewer-scene', version: 1, name: 'My tower: v1',
+      scene: { scenario: 'S1', params: { F: 3, H: 6, gap: 0.02 }, seed: 1, sleep: null },
+      engine: { name: 'rapier', options: {} },
+      look: { preset: 'real', real: { sunElevation: 12, visibility: 40 } },
+    });
+    expect(saved.camera).toEqual(await camera());
+    expect(await form.locator('.out').innerText()).toBe('Saved my-tower-v1.json');
+
+    // Load an edited copy: another scene, engine and camera, rebuilt without a page load.
+    const wall = { ...saved, name: 'Wall', scene: { scenario: 'S3', params: { W: 6, H: 4, running: false }, seed: 1, sleep: null }, engine: { name: 'tiered', options: {} }, camera: { target: [0, 2, 0], yaw: 1, pitch: 0.3, distance: 30 } };
+    const pick = (name: string, doc: unknown) => form.locator('input[type=file]').setInputFiles({ name, mimeType: 'application/json', buffer: Buffer.from(JSON.stringify(doc)) });
+    await pick('wall.json', wall);
+    await page.waitForFunction(() => window.__viewer.status !== 'running' || (window.__viewer.resets === 2 && window.__viewer.stepIndex > 5), undefined, { timeout: 60_000 });
+    expect(await page.evaluate(() => ({ s: window.__viewer.status, e: window.__viewer.error, bodies: window.__viewer.bodies }))).toEqual({ s: 'running', e: undefined, bodies: 24 });
+    expect(await camera()).toEqual(wall.camera);
+    expect(await hasMarker()).toBe(true);
+    expect(await page.locator('#hud').innerText()).toContain('Loaded Wall');
+    expect(await form.locator('input[name=name]').inputValue()).toBe('Wall');
+    expect(await page.locator('#scene-form input[name="param.W"]').inputValue()).toBe('6');
+    const url = new URL(page.url()).searchParams;
+    expect([url.get('scenario'), url.get('engine'), url.get('cam'), url.get('real.sunElevation'), url.get('real.visibility')]).toEqual(['S3', 'tiered', '0,2,0,1,0.3,30', '12', null]);
+    expect(await page.locator('#presets button.on').allInnerTexts()).toContain('Tiered (CPU)');
+    // R restarts at the loaded camera.
+    await page.keyboard.press('r');
+    await page.waitForFunction(() => window.__viewer.resets === 3, undefined, { timeout: 60_000 });
+    expect(await camera()).toEqual(wall.camera);
+
+    // A file the viewer can't read says why and changes nothing.
+    await pick('future.json', { ...wall, version: 2 });
+    await expect.poll(() => form.locator('.out').innerText()).toMatch(/^future\.json: scene file version 2 is newer/);
+    expect(await form.locator('.out').getAttribute('class')).toContain('warn');
+    expect(await page.evaluate(() => window.__viewer.resets)).toBe(3);
+
+    // Another loop needs a page load; the page then starts as the file says.
+    await pick('frame.json', { ...wall, loop: { mode: 'frame', pipeline: true, maxSteps: 2 } });
+    await page.waitForURL(/loop=frame/, { timeout: 30_000 });
+    await page.waitForFunction(() => window.__viewer?.status === 'running' && window.__viewer.stepIndex > 5, undefined, { timeout: 60_000 });
+    expect(await hasMarker()).toBe(false);
+    expect(await camera()).toEqual(wall.camera);
+    expect(await page.locator('#hud').innerText()).toContain('loop frame');
+    expect(new URL(page.url()).searchParams.get('offscreen')).toBe('1'); // the page's own setting is kept
+    expect(errors).toEqual([]);
+    await page.close();
+  });
+
   // loop=free with an engine that steps synchronously and slower than real time (the f64
   // reference at 30 iterations, ~100-150 ms a step here and still over 16.7 ms on a host
   // five times faster): steps are always due, so without a task boundary between them the
@@ -253,6 +376,7 @@ describe('viewer', () => {
     expect(Date.now() - t0).toBeLessThan(15_000);
     await page.waitForFunction((k) => window.__viewer.stepIndex > k + 3, before, { timeout: 10_000, polling: 250 });
     // R resets on the physics loop while frames keep drawing; afterwards the new scene is on screen and stepping.
+    await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur()); // keys typed into the panel are not commands
     await page.keyboard.press('r');
     await page.waitForFunction(() => window.__viewer.resets === 2 && window.__viewer.stepIndex > 3, undefined, { timeout: 60_000, polling: 250 });
     expect((await page.evaluate(() => window.__viewer.capture(false)))!.bodyFraction).toBeGreaterThan(0.05);
@@ -267,6 +391,7 @@ describe('viewer', () => {
     if (status.s === 'error' && /WebGPU|adapter/.test(status.e ?? '') && !requireWebGPU()) return ctx.skip();
     expect(status).toEqual({ s: 'running', e: undefined });
     await page.waitForFunction(() => window.__viewer.frames > 10 && window.__viewer.stepIndex > 5, undefined, { timeout: 60_000, polling: 250 });
+    await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur()); // keys typed into the panel are not commands
     await page.keyboard.press('r');
     await page.waitForFunction(() => window.__viewer.resets === 2 && window.__viewer.stepIndex > 3, undefined, { timeout: 60_000, polling: 250 });
     // Serial, a step is never queued behind the one before. That only tells pipelining apart when
@@ -289,6 +414,7 @@ describe('viewer', () => {
     await page.waitForFunction(() => window.__viewer.frames > 10 && window.__viewer.stepIndex > 5, undefined, { timeout: 60_000 });
     await page.evaluate(() => window.__viewer.fire(0, 0));
     await page.waitForFunction(() => window.__viewer.bodies === 55, undefined, { timeout: 30_000 });
+    await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur()); // keys typed into the panel are not commands
     await page.keyboard.press('r');
     await page.waitForFunction(() => window.__viewer.resets === 2 && window.__viewer.stepIndex > 3, undefined, { timeout: 60_000, polling: 250 });
     expect(await page.evaluate(() => window.__viewer.bodies)).toBe(54);

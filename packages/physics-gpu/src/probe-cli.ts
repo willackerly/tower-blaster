@@ -1,4 +1,5 @@
 // pnpm bench:probe [--channel chrome] [--headed] [--quick] [--only p1,p2,...] [--reps N] [--polls N] [--hessian registers|array]
+//   [--scenario S15 --param planks=10000 --param towers=1 --gravity-scale 42.735 --pairs-per-body 32 --box-broadphase --checkpoints 60,300]
 // The solver probe (probe.ts): adapter limits (P1), the real solver's
 // per-colour structure and times on the S4 city (P2), synthetic per-point
 // kernels (P3) and synchronization costs (P4: a = workgroupBarrier,
@@ -29,6 +30,20 @@ if (only) {
 }
 if (value('reps')) opts.reps = Number(value('reps'));
 if (value('polls')) opts.maxPolls = Number(value('polls'));
+const scenario = value('scenario');
+if (scenario) opts.scenario = scenario;
+const params: Record<string, number | boolean> = {};
+argv.forEach((a, i) => {
+  if (a !== '--param') return;
+  const [k, v] = (argv[i + 1] ?? '').split('=');
+  if (!k || v === undefined) throw new Error('--param: expected key=value');
+  params[k] = v === 'true' ? true : v === 'false' ? false : Number(v);
+});
+if (Object.keys(params).length) opts.params = params;
+if (value('gravity-scale')) opts.gravityScale = Number(value('gravity-scale'));
+if (value('pairs-per-body')) opts.pairsPerBody = Number(value('pairs-per-body'));
+if (flag('box-broadphase')) opts.boxBroadphase = true;
+if (value('checkpoints')) opts.checkpoints = value('checkpoints')!.split(',').map(Number);
 const hessian = value('hessian');
 if (hessian !== undefined) {
   if (!(HESSIAN_FORMS as readonly string[]).includes(hessian)) throw new Error(`--hessian: must be one of ${HESSIAN_FORMS.join(', ')}, got ${hessian}`);
