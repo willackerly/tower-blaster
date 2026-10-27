@@ -4,11 +4,43 @@ on:
     branches: [main]
   pull_request:
 
+# A new push to a PR cancels that PR's run still in progress; main's runs all finish.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
-  check:
+  static:
+    name: typecheck and bench self-check
     runs-on: ubuntu-latest
-    # The tests take ~16 min on the runner; the rest is headroom for a slow apt mirror on a cache miss.
-    timeout-minutes: 45
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm typecheck
+      - name: Benchmark harness self-check (A/A and injected slowdown)
+        run: pnpm bench selfcheck
+
+  # The suite is CPU-bound on SwiftShader (a 4-core runner stays saturated), so it
+  # runs as shards on separate runners. planShards (vitest.config.ts) balances them
+  # on vitest.durations.json; refresh it with `pnpm test:durations` when files are
+  # added or get slower.
+  test:
+    name: test ${{ matrix.shard }}/4
+    runs-on: ubuntu-latest
+    # A shard takes ~3-4 min; runners vary ~2x.
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
     env:
       # GPU-correctness tests must run (on SwiftShader) rather than skip.
       REQUIRE_WEBGPU: '1'
@@ -22,25 +54,22 @@ jobs:
           node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      # The runner's apt mirror sometimes crawls (40 kB/s: 16 min for the two installs below,
-      # 30 s normally), so their packages are cached and fetched only on a miss. The key follows
-      # the lockfile, which pins Playwright and so the browser's dependency list.
-      - name: Cache apt packages
-        uses: actions/cache@v4
-        with:
-          path: ~/apt-cache
-          key: apt-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
-          restore-keys: apt-${{ runner.os }}-
-      - name: Keep apt packages in the cache directory
-        run: |
-          mkdir -p ~/apt-cache/partial
-          printf 'Dir::Cache::Archives "%s";\nBinary::apt::APT::Keep-Downloaded-Packages "true";\n' ~/apt-cache | sudo tee /etc/apt/apt.conf.d/90apt-cache
-      - name: Vulkan loader for SwiftShader WebGPU
-        run: sudo apt-get update && sudo apt-get install -y libvulkan1 mesa-vulkan-drivers
-      - run: pnpm exec playwright install --with-deps chromium
-      - name: Make the apt cache readable for saving
-        run: sudo rm -rf ~/apt-cache/lock ~/apt-cache/partial && sudo chown -R "$USER" ~/apt-cache && du -sh ~/apt-cache
-      - run: pnpm typecheck
-      - run: pnpm test
-      - name: Benchmark harness self-check (A/A and injected slowdown)
-        run: pnpm bench selfcheck
+      # No apt: Chrome brings its own Vulkan loader and SwiftShader (WebGPU works with the
+      # system libvulkan removed), and the runner image already has Chromium's
+      # libraries, so a slow apt mirror can't stall the run.
+      - run: pnpm exec playwright install chromium
+      - run: pnpm test --shard=${{ matrix.shard }}/4 --reporter=default --reporter=json --outputFile.json=.vitest-report.json
+      # This runner's per-file times, one line, for refreshing vitest.durations.json.
+      - name: Shard file times
+        if: ${{ !cancelled() }}
+        run: pnpm exec tsx packages/testkit/src/durations-cli.ts --print .vitest-report.json
+
+  # The one status to require: green only when every job above is. Skipped, not
+  # failed, when a newer push cancels the run.
+  check:
+    needs: [static, test]
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - run: test "${{ needs.static.result }}" = success && test "${{ needs.test.result }}" = success

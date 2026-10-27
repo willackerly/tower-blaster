@@ -92,3 +92,4 @@ export * from './contract.ts';
 export * from './collapse.ts';
 export * from './observe.ts';
 export * from './teardown.ts';
+export * from './shard.ts';
