@@ -295,6 +295,53 @@ goes, and little from two faces meeting flat.
   spawn against its twin with injected normals (scrapes and level normals
   included).
 
+## Ground from height (after Will's screenshot, 2026-10-27)
+
+Seen from 20 to 60 m up, the ground read as "a super low pixel texture
+blurred": the 2 m tile mips to its mean within tens of metres, leaving only
+the one 64 m macro field, whose 0.5 m texels and strong tint showed as soft
+coloured blotches.
+
+- Macro at three scales (`groundMacro`): 64 m, 13.6 m (1/4.7) and 2.9 m
+  (1/22), each turned so the repeats never line up, mixed about 1/f
+  (brightness weights 0.5, 0.35, 0.25). Each scale stops at its own finest
+  level, so the finer ones fade as their texels pass the pixel. Tint cut
+  from 0.25 to 0.1: variation is mostly luminance, as on real ground.
+- Patches of the other ground (dirt in gravel, gravel in dirt) where the two
+  finer scales' mean passes a threshold: a third material fetch (pair) at
+  1.37x the tile, mixed in by a smoothstep a few pixels wide.
+  `groundPatches` is the share of ground under them; `patchThreshold`
+  maps it through the patch field's distribution (close to normal, mean
+  0.503, sd 0.12, measured from the bake's CPU twin; materials.test.ts
+  checks shares 1 to 30% within 25%). The far ground (`groundFar`) mixes
+  the two materials' means the same way, so the 600 m cut stays invisible.
+- Relief: a height field from the 64 m and 13.6 m scales at coarse levels
+  (2 and 1.7 m texels), `groundRelief` metres deep (hollows where the
+  patches gather), shaded by tilting the normal by its slope. The slope
+  comes from screen derivatives of the height, solved through the 2x2
+  Jacobian of the ground position, so no extra taps for the gradient. The
+  heights go through a cubic B-spline (four bilinear taps each; Sigg and
+  Hadwiger): the first cut used bilinear, whose slope jumps at every texel,
+  and the low sun drew a grid of flat 1.7 m facets. Faded out between 0.5
+  and 1 m pixels, where it could only alias. 0: no relief, no taps.
+- Defaults: `groundRelief` 1 m, `groundPatches` 0.05. Taps per floor pixel:
+  4 material + 2 patch material + 3 macro + 8 relief (tiny mips, cached);
+  was 4 + 1. Cost on the M5: to be measured (`real` minus
+  `real-flat-ground`).
+- Alternatives considered: analytic gradient noise for the relief (exact
+  slope, no taps, but the relief would no longer follow the patches and
+  costs tens of ALU per octave); a finer level for the relief (brings back
+  the grain that made close views smudgy); a second macro fetch at 2.71x
+  (Opus review) to break horizon bands, not needed once the finer scales
+  were in. Still open: small rocks with shadows (Opus review).
+- Tests: the ground checks gain plain (no relief, no patches), relief 2 m
+  and patches 0.3: relief raises the 16 px block contrast, ordered by
+  depth; patches of dirt calm the gravel's fine detail; every case keeps
+  the floor's mean brightness within 8%.
+- World scale helps too (Opus review): at 25 cm cubes the ground tile and
+  the haze shrink with the world, which puts gravel at pixel scale from
+  the high camera; that conversion lands with the `scale` knob.
+
 ## Floor and ambient (fixes after the stone step's screenshots)
 
 - Contact darkening (within 1.5 m of the floor) is for what stands on the

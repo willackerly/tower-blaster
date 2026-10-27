@@ -6,25 +6,34 @@ import { describe, expect, it } from 'vitest';
 import { gpu, call } from './harness.ts';
 
 describe('drawing', () => {
-  it('real look ground: textured floor keeps its brightness, gravel and dirt differ, variation shows, texture 0 is the flat floor', async (ctx) => {
+  it('real look ground: textured floor keeps its brightness, gravel and dirt differ, variation, relief and patches show, texture 0 is the flat floor', async (ctx) => {
     if (!gpu) return ctx.skip();
-    const r = await call('groundChecks', [{ groundDetail: 0, hills: 0 }, { realDiag: 'ground-off' }, {}, { groundMaterial: 'dirt' }, { groundVariation: 0 }, { groundVariation: 1 }, { groundScale: 4 }]);
+    const bare = { groundRelief: 0, groundPatches: 0 };
+    const r = await call('groundChecks', [{ groundDetail: 0, hills: 0 }, { realDiag: 'ground-off' }, {}, { groundMaterial: 'dirt' }, { groundVariation: 0, ...bare }, { groundVariation: 1, ...bare }, { groundScale: 4 }, bare, { ...bare, groundRelief: 2 }, { ...bare, groundPatches: 0.3 }]);
     expect(r.error).toBeNull();
-    const [flat, off, gravel, dirt, still, varied, coarse] = r.frames;
+    const [flat, off, gravel, dirt, still, varied, coarse, plain, relief, patches] = r.frames;
     // Compiled out, the ground knobs do nothing, and the frame is texture 0's to the bit.
     expect(off!.hash).toBe(flat!.hash);
     // Measured on SwiftShader (mean luma; fine detail, mean |luma - neighbours|; coarse, std of 16 px block means):
-    // flat 123.1, 0.42, 2.4 (dither and the light's gradient); gravel 120.6, 1.50, 2.8; dirt 120.6, 0.65, 2.8;
-    // variation 0: 122.8, 1.51, 2.2; variation 1: 118.2, 1.49, 4.5; scale 4: 125.0, 1.80, 2.8.
+    // flat 123.1, 0.42, 2.4 (dither and the light's gradient); gravel 121.1, 1.48, 3.0; dirt 121.1, 0.68, 3.1;
+    // without relief and patches: 121.7, 1.50, 2.6; and variation 0: 122.8, 1.51, 2.2; variation 1: 120.5, 1.51, 3.5;
+    // relief 2 m: 120.2, 1.54, 4.6; patches 0.3: 121.7, 1.24, 2.6; scale 4: 123.8, 1.72, 2.5.
     // Without macro variation the floor keeps its brightness within 5%; with it, this 20 m patch is one sample of a 64 m field.
     expect(Math.abs(still!.mean - flat!.mean) / flat!.mean).toBeLessThan(0.05);
-    for (const f of [gravel, dirt, varied, coarse]) expect(Math.abs(f!.mean - flat!.mean) / flat!.mean).toBeLessThan(0.08);
+    for (const f of [gravel, dirt, varied, coarse, relief, patches]) expect(Math.abs(f!.mean - flat!.mean) / flat!.mean).toBeLessThan(0.08);
     expect(gravel!.detail).toBeGreaterThan(2.5 * flat!.detail);
     expect(dirt!.detail).toBeGreaterThan(1.3 * flat!.detail);
     expect(gravel!.detail).toBeGreaterThan(1.5 * dirt!.detail);
-    expect(coarse!.detail).toBeGreaterThan(1.1 * gravel!.detail); // pebbles 4x larger: more of them span pixels (1.20x since step 5's stone tones, 1.24x before)
-    expect(varied!.coarse).toBeGreaterThan(2 * still!.coarse);
-  }, 180_000); // seven renderers, each baking its materials: 37 s alone on SwiftShader, over 60 s in the full suite
+    expect(coarse!.detail).toBeGreaterThan(1.1 * plain!.detail); // pebbles 4x larger: more of them span pixels
+    // Variation 1 vs 0: 1.6x (2.1x before the macro layer's brightness was split over three scales, 2026-10-27).
+    expect(varied!.coarse).toBeGreaterThan(1.4 * still!.coarse);
+    // The relief shows as metre-scale shading, growing with its depth (1.16x at the default 1 m, 1.8x at 2 m) ...
+    expect(relief!.coarse).toBeGreaterThan(1.5 * plain!.coarse);
+    expect(gravel!.coarse).toBeGreaterThan(plain!.coarse);
+    expect(gravel!.coarse).toBeLessThan(relief!.coarse);
+    // ... and patches of dirt calm the gravel's fine detail where they lie (0.83x at a 0.3 share).
+    expect(patches!.detail).toBeLessThan(0.9 * plain!.detail);
+  }, 240_000); // ten renderers, each baking its materials: 40 s alone on SwiftShader, about 90 s in the full suite
 
   it('real look ground: no seam where the floor polygon ends and the sky pass shades the ground on', async (ctx) => {
     if (!gpu) return ctx.skip();

@@ -9,7 +9,7 @@ import { SPARK_COMMON } from './sparks.ts';
 import { LIGHT_META, LIGHT_PACKED, LIGHT_VEC4, MAX_BALLS, TRAIL } from './lights.ts';
 import { AO_FOOT_WGSL, AO_SAMPLE_WGSL, AO_SEAM_WGSL } from './ao.ts';
 import { ATMO_COMMON_WGSL } from './atmosphere.ts';
-import { GROUND_TILE, MACRO_LAYER, MACRO_TILE, MATERIAL_MIPS, MATERIAL_SIZE, MATERIAL_TILE } from './materials.ts';
+import { GROUND_LAYER, GROUND_TILE, GROUNDS, MACRO_LAYER, MACRO_TILE, MATERIAL_MIPS, MATERIAL_SIZE, MATERIAL_TILE } from './materials.ts';
 import { PCG_WGSL } from './noise.ts';
 
 export const SHADOW_SIZE = 2048;
@@ -53,6 +53,7 @@ export const Frame = defineStruct('Frame', [
   ['blockAlbedo', 'vec4f', 'real look: the blocks\' mean linear albedo (the ramp\'s)'],
   ['aoFloorSky', 'vec4f', 'real look: floor sky map placement, uv = (rel.xz - xy) * zw (AoVolume.floorSkyFrame)'],
   ['ground', 'vec4f', 'real look: ground layer (materials.ts), texture scale, texture strength (0: none, nothing sampled), macro variation'],
+  ['groundShape', 'vec4f', 'real look: ground relief (m, the coarse macro scale\'s; half that at the next), patch threshold (macro value; above 1: no patches), unused x2'],
   ['hills', 'vec4f', 'real look: horizon hills\' greatest height (radians, 0: none) and distance (m)'],
   ['debris', 'vec4f', 'real look: dust puff size (m, fully grown), puff opacity, chip size (m), unused'],
   ['shadowSoft', 'vec4f', 'real look: tan of the penumbra half angle (0: 3x3 taps), blocker search radius (texels), light depth range (m), steepest receiver plane (depth per uv)'],
@@ -249,61 +250,139 @@ fn floorSky(rel: vec3f) -> f32 {
 // The ground (realism step 4): its material (materials.ts) at two scales,
 // the second ${GROUND_B}x coarser and turned 0.6 rad so their repeats never
 // line up, blended by the macro layer, which also varies brightness and
-// tint over tens of metres. Texture 0 (or REAL_GROUND false) is the flat
-// floor, with nothing sampled. a: GGX alpha, Toksvig-widened where the
+// tint from tens of metres down to about one, lays patches of the other
+// ground (at a third scale, 1.37x) and a gentle relief the low sun picks
+// out (after Will's high-camera screenshot, 2026-10-27: one coarse layer
+// read as a blurred low-res texture). Texture 0 (or REAL_GROUND false) is
+// the flat floor, with nothing sampled. a: GGX alpha, Toksvig-widened where the
 // mips (and the blend) average bumps away.
 struct GroundHit { albedo: vec3f, a: f32, n: vec3f, cavity: f32 }
 const GROUND_ROT = mat2x2f(0.8253356, 0.5646425, -0.5646425, 0.8253356);
 const MACRO_MIN_LOD = 2.0; // the macro layer's finest level: 0.5 m texels at scale 1
 
-// Brightness and tint (rgb) and the coarse scale's weight (a), at the macro
-// layer's level for a footprint of pxM metres (never finer than MACRO_MIN_LOD).
-fn groundMacro(p: vec2f, pxM: f32) -> vec4f {
+// The macro layer at three scales (MACRO_TILE, 1/4.7 and 1/22 of it, each
+// turned so the repeats never line up), for a footprint of pxM metres: a
+// 1/f mix from tens of metres down to about one, the scale the 2 m ground
+// tile averages away at a distance. Brightness and tint (tone), two
+// weights: the coarse scale's (b) and the patches of the other ground
+// (other: dirt in gravel, gravel in dirt), where the two finer scales'
+// mean passes fr.groundShape.y (materials.ts patchThreshold), with edges
+// that stay a few pixels wide; and the relief h (metres): hollows where
+// the patches gather, rises between, fr.groundShape.x deep at the coarse
+// scale and half that at the next, read from coarse levels (2 m texels)
+// so it stays a gentle swell, not the finer octaves' grain, through a
+// cubic B-spline: bilinear's slope jumps at every texel, which the low
+// sun showed as a grid of flat facets. Faded out past 1 m pixels, where
+// it would only alias.
+struct Macro { tone: vec3f, b: f32, other: f32, h: f32 }
+
+// The macro layer's b at mip level lod (a whole number) through a cubic
+// B-spline, smooth in value and slope: four bilinear taps (Sigg and
+// Hadwiger, GPU Gems 2 ch. 20).
+fn macroSmooth(uv: vec2f, lod: f32) -> f32 {
+  let n = f32(${MATERIAL_SIZE}u >> u32(lod));
+  let t = uv * n - 0.5;
+  let i = floor(t);
+  let f = t - i;
+  let f2 = f * f;
+  let f3 = f2 * f;
+  let w0 = (1.0 - 3.0 * f + 3.0 * f2 - f3) / 6.0;
+  let w1 = (4.0 - 6.0 * f2 + 3.0 * f3) / 6.0;
+  let w3 = f3 / 6.0;
+  let g0 = w0 + w1;
+  let g1 = 1.0 - g0;
+  let a = (i - 0.5 + w1 / g0) / n;
+  let c = (i + 1.5 + w3 / g1) / n;
+  let s = vec4f(
+    textureSampleLevel(stoneDetail, stoneSamp, a, ${MACRO_LAYER}, lod).b,
+    textureSampleLevel(stoneDetail, stoneSamp, vec2f(c.x, a.y), ${MACRO_LAYER}, lod).b,
+    textureSampleLevel(stoneDetail, stoneSamp, vec2f(a.x, c.y), ${MACRO_LAYER}, lod).b,
+    textureSampleLevel(stoneDetail, stoneSamp, c, ${MACRO_LAYER}, lod).b);
+  return mix(mix(s.x, s.y, g1.x), mix(s.z, s.w, g1.x), g1.y);
+}
+const MACRO_R1 = mat2x2f(0.4535961, 0.8912074, -0.8912074, 0.4535961);
+const MACRO_R2 = mat2x2f(-0.6662760, 0.7457052, -0.7457052, -0.6662760);
+fn macroAt(uv: vec2f, sizeM: f32, pxM: f32, minLod: f32) -> vec4f {
+  let lod = clamp(log2(pxM * ${MATERIAL_SIZE.toFixed(1)} / sizeM), minLod, ${(MATERIAL_MIPS - 1).toFixed(1)});
+  return textureSampleLevel(stoneDetail, stoneSamp, uv, ${MACRO_LAYER}, lod);
+}
+fn groundMacro(p: vec2f, pxM: f32) -> Macro {
   let size = ${MACRO_TILE.toFixed(1)} * fr.ground.y;
-  let lod = clamp(log2(pxM * ${MATERIAL_SIZE.toFixed(1)} / size), MACRO_MIN_LOD, ${(MATERIAL_MIPS - 1).toFixed(1)});
-  let m = textureSampleLevel(stoneDetail, stoneSamp, p / size + vec2f(0.31, 0.17), ${MACRO_LAYER}, lod);
+  let uv0 = p / size + vec2f(0.31, 0.17);
+  let m0 = macroAt(uv0, size, pxM, MACRO_MIN_LOD);
+  let uv1 = MACRO_R1 * p / (size / 4.7) + vec2f(0.77, 0.05);
+  let m1 = macroAt(uv1, size / 4.7, pxM, 3.5);
+  let m2 = macroAt(MACRO_R2 * p / (size / 22.0) + vec2f(0.13, 0.59), size / 22.0, pxM, 4.0);
   let v = fr.ground.w;
-  return vec4f((1.0 + 0.5 * v * (2.0 * m.r - 1.0)) * (1.0 + 0.25 * v * (2.0 * m.g - 1.0) * vec3f(1.0, 0.0, -1.0)), smoothstep(0.3, 0.7, m.b));
+  let br = 0.5 * (m0.r - 0.5) + 0.35 * (m1.r - 0.5) + 0.25 * (m2.r - 0.5);
+  let tint = 0.6 * (m0.g - 0.5) + 0.4 * (m1.g - 0.5);
+  let edge = max(0.06, 2.0 * pxM / size * 22.0);
+  let pf = 0.55 * m1.b + 0.45 * m2.b;
+  let at = fr.groundShape.y;
+  let other = smoothstep(at - edge, at + edge, pf);
+  var h = 0.0;
+  if (fr.groundShape.x > 0.0) { // uniform: no relief, no taps
+    h = -fr.groundShape.x * (1.0 - smoothstep(0.5, 1.0, pxM)) * ((macroSmooth(uv0, 4.0) - 0.5) + 0.5 * (macroSmooth(uv1, 6.0) - 0.5));
+  }
+  return Macro((1.0 + v * 2.0 * br * 0.5) * (1.0 + 0.1 * v * 2.0 * tint * vec3f(1.0, 0.0, -1.0)), smoothstep(0.3, 0.7, m0.b), other, h);
 }
 
 // The ground at world xz p; w: fwidth(p).
 fn groundAt(p: vec2f, w: vec2f) -> GroundHit {
   if (!REAL_GROUND || fr.ground.z <= 0.0) { return GroundHit(vec3f(1.0), 0.36, vec3f(0.0, 1.0, 0.0), 1.0); } // uniform: skips every sample
   let layer = i32(fr.ground.x);
+  let other = ${GROUND_LAYER} + (layer - ${GROUND_LAYER} + 1) % ${GROUNDS.length};
   let tile = ${GROUND_TILE.toFixed(1)} * fr.ground.y;
   let uvA = p / tile;
   let uvB = GROUND_ROT * p / (tile * ${GROUND_B}) + vec2f(0.43, 0.71);
+  let uvC = MACRO_R1 * p / (tile * 1.37) + vec2f(0.21, 0.37);
   let dA = textureSample(stoneDetail, stoneSamp, uvA, layer);
   let nA = textureSample(stoneNormal, stoneSamp, uvA, layer);
   let dB = textureSample(stoneDetail, stoneSamp, uvB, layer);
   let nB = textureSample(stoneNormal, stoneSamp, uvB, layer);
+  let dC = textureSample(stoneDetail, stoneSamp, uvC, other);
+  let nC = textureSample(stoneNormal, stoneSamp, uvC, other);
   let mac = groundMacro(p, max(w.x, w.y));
   let k = fr.ground.z;
-  let b = mac.a;
-  // uvB = R p, so B's slope in p is R^T times its slope in uv.
+  let b = mac.b;
+  let q = mac.other;
+  // uvB = R p, so B's slope in p is R^T times its slope in uv; likewise C.
   let tB = nB.xyz * 2.0 - 1.0;
-  let t = mix(nA.xyz * 2.0 - 1.0, vec3f(transpose(GROUND_ROT) * tB.xy, tB.z), b);
+  let tC = nC.xyz * 2.0 - 1.0;
+  let t = mix(mix(nA.xyz * 2.0 - 1.0, vec3f(transpose(GROUND_ROT) * tB.xy, tB.z), b), vec3f(transpose(MACRO_R1) * tC.xy, tC.z), q);
   let len = mix(1.0, min(max(length(t), 1e-4), 1.0), k);
   let slope = t.xy / max(t.z, 0.2) * k;
-  let rough = mix(0.6, mix(dA.a, dB.a, b), k);
+  let rough = mix(0.6, mix(mix(dA.a, dB.a, b), dC.a, q), k);
   let a = sqrt(min(rough * rough * rough * rough + 2.0 * (1.0 - len) / len, 1.0));
-  return GroundHit(mix(vec3f(1.0), mix(dA.rgb, dB.rgb, b) * 2.0, k) * mac.rgb, a, normalize(vec3f(slope.x, 1.0, slope.y)), mix(1.0, mix(nA.a, nB.a, b), k));
+  let alb = mix(mix(dA.rgb, dB.rgb, b), dC.rgb, q) * 2.0;
+  // The relief's slope g in world xz from screen derivatives, [dp/dx; dp/dy] g = [dh/dx; dh/dy]:
+  // free next to the samples, and exact enough: h is smooth over a 2x2 quad.
+  let px = dpdx(p);
+  let py = dpdy(p);
+  let det = px.x * py.y - px.y * py.x;
+  let hx = dpdx(mac.h);
+  let hy = dpdy(mac.h);
+  let g = select(vec2f(0.0), vec2f(hx * py.y - hy * px.y, px.x * hy - py.x * hx) / det, abs(det) > 1e-12);
+  return GroundHit(mix(vec3f(1.0), alb, k) * mac.tone, a, normalize(vec3f(slope.x - g.x, 1.0, slope.y - g.y)), mix(1.0, mix(mix(nA.a, nB.a, b), nC.a, q), k));
 }
 
 // The ground past the floor polygon (fsSky, non-uniform control flow, so no
 // implicit derivatives), for a footprint of pxM metres: what groundAt gives
 // where the texture has mipped down to its mean (its 1x1 level), under the
-// same macro variation.
+// same macro variation and patches (no relief: flat to a pixel this far).
 fn groundFar(p: vec2f, pxM: f32) -> GroundHit {
   if (!REAL_GROUND || fr.ground.z <= 0.0) { return GroundHit(vec3f(1.0), 0.36, vec3f(0.0, 1.0, 0.0), 1.0); }
   let layer = i32(fr.ground.x);
-  let d = textureSampleLevel(stoneDetail, stoneSamp, vec2f(0.5), layer, ${(MATERIAL_MIPS - 1).toFixed(1)});
-  let n = textureSampleLevel(stoneNormal, stoneSamp, vec2f(0.5), layer, ${(MATERIAL_MIPS - 1).toFixed(1)});
+  let other = ${GROUND_LAYER} + (layer - ${GROUND_LAYER} + 1) % ${GROUNDS.length};
+  let mac = groundMacro(p, pxM);
+  let top = ${(MATERIAL_MIPS - 1).toFixed(1)};
+  let d = mix(textureSampleLevel(stoneDetail, stoneSamp, vec2f(0.5), layer, top), textureSampleLevel(stoneDetail, stoneSamp, vec2f(0.5), other, top), mac.other);
+  let n = mix(textureSampleLevel(stoneNormal, stoneSamp, vec2f(0.5), layer, top), textureSampleLevel(stoneNormal, stoneSamp, vec2f(0.5), other, top), mac.other);
   let k = fr.ground.z;
   let len = mix(1.0, min(max(length(n.xyz * 2.0 - 1.0), 1e-4), 1.0), k);
   let rough = mix(0.6, d.a, k);
   let a = sqrt(min(rough * rough * rough * rough + 2.0 * (1.0 - len) / len, 1.0));
-  return GroundHit(mix(vec3f(1.0), d.rgb * 2.0, k) * groundMacro(p, pxM).rgb, a, vec3f(0.0, 1.0, 0.0), mix(1.0, n.a, k));
+  return GroundHit(mix(vec3f(1.0), d.rgb * 2.0, k) * mac.tone, a, vec3f(0.0, 1.0, 0.0), mix(1.0, n.a, k));
 }
 
 // Hills on the horizon (realism step 4): a ridge at most hills.x radians
