@@ -1,6 +1,6 @@
 // The reference AVBD solver behind the engine contract.
 import { emptySnapshot, type EngineInfo, type InputEvent, type PhysicsEngine, type SceneDesc, type Snapshot } from '@tb/engine-api';
-import { type AvbdParams, avbdVariant, AvbdWorld, checkRestitution, DEFAULT_AVBD } from './avbd.ts';
+import { type AvbdParams, avbdVariant, AvbdWorld, checkGapSlop, checkRestitution, DEFAULT_AVBD } from './avbd.ts';
 
 export class AvbdReferenceEngine implements PhysicsEngine {
   readonly info: EngineInfo;
@@ -12,7 +12,8 @@ export class AvbdReferenceEngine implements PhysicsEngine {
   constructor(params: Partial<AvbdParams> = {}) {
     this.params = { ...DEFAULT_AVBD, ...params };
     checkRestitution(this.params);
-    // Every param, but the restitution switch and its params only while it is on (avbdVariant).
+    checkGapSlop(this.params);
+    // Every param, but an opt-in switch (restitution, gapSlop) and its params only while it is on (avbdVariant).
     const variant = avbdVariant(this.params);
     // Free flight converges to the inertial target x + h v + h^2 g: one semi-implicit Euler step.
     this.info = { name: 'avbd-ref', variant, backend: 'js-f64', integrator: { substeps: 1 } };
