@@ -83,10 +83,67 @@
 // of 5 ball speeds, each run's start moved by up to 1e-6 m (the scene of
 // physics-gpu/test/engine.test.ts).
 //
+// Loaded-gap slop (gapSlop, opt-in), for stacks that rock after a shot and
+// never come to rest (defect B, 2026-10-27). Post-stabilization lifts a body
+// out of the penetration it started the step with, without velocity, and so
+// leaves the other points it bears on a few um in the air. The next main
+// iterations counted that gap in full (speculative contacts, below) and
+// dropped the body back, now with velocity, onto contacts that return 36-68%
+// of the work: the lift became a torque (normal rows carry 90-102% of the
+// stabilization pass's energy input). An 8-cube column kicked sideways by up
+// to 0.01 m/s per cube swayed for good at 0.25 m/s at 10 iterations (0.016
+// at 20), and a kicked 4x4x25 tower swayed with growing amplitude (a cube
+// 274 mm off its start, at 0.23 m/s, by step 2400). Sub-um gaps also open at
+// points that stay loaded through the main iterations' own unconverged
+// rocking, so excusing only the part the stabilization opened cut the
+// column's sway 10x at 10 iterations but only 1.26x at 20. With gapSlop, a
+// point still loaded from last step counts its gap less gapSlop in the main
+// iterations. At 30 um the stabilization's energy input on that column falls
+// from 2-4 mJ to 6e-11 J per 100 steps (20 iterations), and the column comes
+// to rest (8e-5 m/s at 10 iterations, 1e-5 at 20, 22 of 22 kick draws each);
+// kicked 4x4x25 and 8x8x25 towers keep a bounded sway of about 0.5 mm at
+// under 7e-4 m/s (from 274 and 12 mm, growing); a kicked plank tower, slabs
+// on rods and a cantilever come to rest. The slop is capped because the same
+// rule on large gaps damps real rocking: S13's far side over the rigid
+// column at 20 iterations is 0.897 without it, 0.892 / 0.877 / 0.859 with
+// 10 / 30 / 50 um, 0.803 uncapped. At 10 iterations it stops working below
+// 10 um (5 um cured 2 of 6 kick draws); at 20, 3 um still cures the column.
+// It is off by default because:
+// - It is a length, measured on unit cubes at 1/60 s. A 4 x 0.1 x 1 m plank on
+//   a 0.1 m pivot, at 0.58 of its tipping torque, rocks for good unless it is
+//   at least 1e-4 (20 iterations) or 2e-4 (10); a column of 0.1 m cubes at 10
+//   iterations needs 1e-4 (at 3e-5 it sways a little more than without it,
+//   0.077 against 0.069 m/s); S13 from its unjittered start is at its bounds
+//   by 5e-5. Stacks with 1000:1 mass ratios keep a slowly growing shear sway
+//   at every slop tried (3e-5 to 3e-4), cut 5-7x (S9 at 10 iterations: 0.050
+//   to 0.010 m/s).
+// - It delays a lift-off by up to gapSlop of travel. At 10 iterations S13 with
+//   its start moved by up to 1e-6 m gives 0.582-0.613 (median 0.603, 12
+//   draws, 3 below the 0.6 bound of collapse.test.ts) against 0.614-0.632.
+// - Keystone's first par shots (docs/plan.md has the ensembles): at 20
+//   iterations more settle under the 600-step cap with it (L5 12 of 16
+//   against 9 of 16, L2 6 of 6 against 5 of 6, L1 1 of 8 both), but the
+//   settle's real-rest check fails more often on L2 (5 of 6 against 2 of 5:
+//   bodies moving by position more than their velocities say).
+// - A gap it excuses closes slowly: a 25 um lift under a resting column
+//   shrinks about 6% per step (in 2 steps without it).
+// It never pulls (lambda_n <= 0) and never raises a body (its support is at
+// most gapSlop above the real one, and never above the body's start). A
+// point that lifts off while still loaded keeps its warm-started push for up
+// to gapSlop further: at most |lambda_n| gapSlop of work per step it stays
+// loaded. With restitution off that includes the step after a bounce, where
+// lambda_n is the impact's force; restitute() zeroes lambda at a point it
+// bounces apart, so with restitution on the slop never acts there (the two
+// were not measured together beyond that). Rolling contacts carry none of
+// the pump and are left alone; spheres without rollingContacts get the slop.
+// The GPU engine throws while it is on.
+//
 // Departures from the 2D reference, each needed in 3D or by our pipeline:
 // - Speculative contacts: a positive gap at the start of the step is not
-//   error, so it always counts in full (only penetration is scaled by
-//   1 - alpha). With alpha = 1 a body would otherwise hover on the margin.
+//   error, so it counts in full (only penetration is scaled by 1 - alpha).
+//   With alpha = 1 a body would otherwise hover on the margin. The one
+//   exception is gapSlop (above): a point still loaded from last step counts
+//   its gap less gapSlop in the main iterations.
 // - Persistence matches contact points by their anchor on body b (within
 //   matchDistance) instead of clipping feature ids, and carries the friction
 //   force as a world vector so a rotated tangent basis does not scramble it.
@@ -234,6 +291,19 @@ export interface AvbdParams {
    * integer >= 1.
    */
   restitutionRounds?: number;
+  /**
+   * Loaded-gap slop, m, opt-in (defect B, see the header): off when absent or
+   * 0, and EngineInfo.variant lists it only while it is on (avbdVariant). With
+   * postStabilize, a contact point that bore load at the end of last step
+   * (warm-started lambda_n < 0), not a rolling contact, counts its start gap
+   * less gapSlop (never below 0) in the main iterations, as they already
+   * ignore its start-of-step penetration; the stabilization pass still counts
+   * the full gap, so it eases the body down onto its support without
+   * velocity. Unloaded points (every speculative contact, a body that has
+   * lifted off) count their gap in full. 3e-5 is the value measured (unit
+   * cubes at 1/60 s); a finite number >= 0. See "Loaded gaps" in step().
+   */
+  gapSlop?: number;
 }
 
 export const DEFAULT_AVBD: AvbdParams = {
@@ -251,7 +321,7 @@ export const RESTITUTION_DEFAULTS = { restitutionThreshold: 1, restitutionRounds
  * it is off (avbdVariant), so adding one does not change the result keys of
  * runs that do not use it.
  */
-export const OPT_IN: Partial<Record<keyof AvbdParams, Partial<AvbdParams>>> = { restitution: RESTITUTION_DEFAULTS };
+export const OPT_IN: Partial<Record<keyof AvbdParams, Partial<AvbdParams>>> = { restitution: RESTITUTION_DEFAULTS, gapSlop: {} };
 
 /** EngineInfo.variant for these params: every param, but an opt-in switch and its params only while it is on, with their defaults filled in. */
 export function avbdVariant(p: AvbdParams): Record<string, number | boolean> {
@@ -262,6 +332,12 @@ export function avbdVariant(p: AvbdParams): Record<string, number | boolean> {
     else for (const k of [s, ...Object.keys(defaults)]) delete out[k];
   }
   return out;
+}
+
+/** Throws on gapSlop out of range. */
+export function checkGapSlop(p: Partial<AvbdParams>): void {
+  const g = p.gapSlop;
+  if (g !== undefined && !(Number.isFinite(g) && g >= 0)) throw new Error(`AvbdParams.gapSlop must be a finite number >= 0, got ${g}`);
 }
 
 /** Throws on a restitution param out of range, whether the switch is on or not. */
@@ -295,6 +371,8 @@ export interface Contact {
   lambda: Vec3;
   k: Vec3;
   stick: boolean;
+  /** Loaded-gap slop: the part of the start gap c0_n the main iterations do not count, min(c0_n, gapSlop) at a loaded point, else 0. */
+  gs: number;
 }
 
 export interface BodyState {
@@ -423,6 +501,8 @@ export class AvbdWorld {
    */
   collide(): void {
     const { p, bodies } = this;
+    // Loaded-gap slop (see step()); it acts only with post-stabilization.
+    const slop = p.postStabilize ? (p.gapSlop ?? 0) : 0;
     const old = new Map<string, Contact[]>();
     for (const c of this.contacts) {
       const key = `${c.a},${c.b}`;
@@ -511,7 +591,9 @@ export class AvbdWorld {
             ja.set([-u[0], -u[1], -u[2], -xa[0], -xa[1], -xa[2]], 6 * r);
           }
         });
-        out.push({ a, b, ra, rb, raw: raw ?? [0, 0, 0], rbw, n: normal, t1, t2, mu, c0, ja, jb, lambda, k, stick });
+        // Loaded-gap slop (see step()): a point that bore load at the end of last step, not a rolling contact.
+        const gs = slop > 0 && !roll && lambda[0] < 0 && c0[0] > 0 ? Math.min(c0[0], slop) : 0;
+        out.push({ a, b, ra, rb, raw: raw ?? [0, 0, 0], rbw, n: normal, t1, t2, mu, c0, ja, jb, lambda, k, stick, gs });
       }
     };
     // Speculative contacts: each body's margin grows by how far any of its
@@ -868,12 +950,19 @@ export class AvbdWorld {
     });
 
     // Constraint value of row r of contact c at the current dx.
+    //
+    // Loaded gaps (gapSlop, see the header): at a point loaded at the end of
+    // last step, the main iterations count the start gap less gs = min(c0_n,
+    // gapSlop), as they ignore its start penetration, so the gap a lift left is
+    // not turned into a fall with velocity; the stabilization pass counts it in
+    // full and eases the body down without velocity. gs <= c0_n, so the support
+    // is never above the body's start, and the force stays a push (lambda_n <= 0).
     const C = new Float64Array(3);
     const evalC = (c: Contact, alpha: number) => {
       for (let r = 0; r < 3; r++) {
         const c0 = c.c0[r]!;
-        // Start-of-step penetration is error (scaled by 1 - alpha); a gap is not.
-        let v = r === 0 ? (c0 < 0 ? (1 - alpha) * c0 : c0) : (1 - alpha) * c0;
+        // Start-of-step penetration is error (scaled by 1 - alpha); a gap is not, less a loaded point's slop in the main iterations.
+        let v = r === 0 ? (c0 < 0 ? (1 - alpha) * c0 : (c.gs > 0 && alpha === 1 ? c0 - c.gs : c0)) : (1 - alpha) * c0;
         const db = dx[c.b]!;
         for (let k = 0; k < 6; k++) v += c.jb[6 * r + k]! * db[k]!;
         if (c.a !== GROUND) { const da = dx[c.a]!; for (let k = 0; k < 6; k++) v += c.ja[6 * r + k]! * da[k]!; }
@@ -1009,8 +1098,8 @@ const sub3 = (a: Vec3, b: Vec3): Vec3 => [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
  * spin cap is a speed, and so is restitution's threshold (scaled only while
  * restitution is on, from RESTITUTION_DEFAULTS when unset, so an off world
  * gains no key); lengths (margin, slop, restDepth, matchDistance,
- * stickThreshold, maxSweep) and the dimensionless rest stay. Fields of p
- * that are not set take DEFAULT_AVBD's.
+ * stickThreshold, maxSweep, gapSlop) and the dimensionless rest stay. Fields
+ * of p that are not set take DEFAULT_AVBD's.
  */
 export function froudeParams(p: Partial<AvbdParams>, k: number): Partial<AvbdParams> {
   if (!(k > 0)) throw new Error(`froudeParams: k must be > 0: ${k}`);

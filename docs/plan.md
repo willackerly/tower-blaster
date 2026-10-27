@@ -39,6 +39,23 @@ Full report with research, measurements and sources: https://claude.ai/artifact/
 | S10 | Far from origin |
 | S11 | Determinism canary |
 
+## Loaded-gap slop (AVBD reference)
+
+Opt-in and off by default (`AvbdParams.gapSlop`, metres; off when absent or 0, and then the reference is bit-identical to before). The GPU engine throws on it until it is ported. Full description: the header of `packages/physics-ref/src/avbd.ts`.
+
+- **What it fixes (defect B).** Post-stabilization lifts a body out of its start-of-step penetration without velocity and leaves its other loaded points a few um in the air; the next main iterations counted that gap in full and dropped the body back with velocity, so rocking stacks gained energy every step and never came to rest (a sideways-kicked 8-cube column at 10 iterations, kicked packed towers). With `gapSlop`, a point still loaded from last step, not a rolling contact, counts its start gap less `gapSlop` in the main iterations. At 3e-5 m those cases come to rest or keep a bounded sub-mm sway.
+- **Why it is off.** It is a fixed length, measured on unit cubes at 1/60 s: a plank on a narrow pivot and 0.1 m cubes need 1e-4 or more, while S13's rocking test is at its bounds by 5e-5, and at 10 iterations 3e-5 already puts S13 at its bound once the start is re-rolled (3 of 12 draws below). On Keystone it settles more shots but L2's real-rest check fails more often (table). Round 3 of the defect B work is evaluating scale-free versions (the length taken from the contact manifold or from the warm λ/k); the default and the GPU port wait for its verdict.
+- **Keystone's first par shots** (reference, f64; each run's start moved by up to 1e-6 m; the settle rule of `rules.ts` on main, spin counted on the structure only; 2026-10-27). "Settled" counts runs under the 600-step cap; "real rest fails" counts settles where a body still moves by position more than its velocity says; "late v" is the median over runs of the structure's largest speed late in the run.
+
+  | Level, iterations | runs | settled, off / on | median steps, off / on | real rest fails, off / on | late v (m/s), off / on |
+  |---|---|---|---|---|---|
+  | L5, 20 | 16 | 9 / 12 | 568 / 462 | 1 / 0 | 4.0e-2 / 3.5e-2 |
+  | L2, 20 | 6 | 5 / 6 | 439 / 389 | 2 / 5 | 3.5e-2 / 2.8e-2 |
+  | L1, 20 | 8 | 1 / 1 | 600 / 600 | 0 / 0 | 8.4e-2 / 6.3e-2 |
+  | L5, 40 | 16 | 14 / 16 | 428 / 340 | 1 / 2 | 1.3e-2 / 6.8e-4 |
+
+  At 20 iterations the unsettled shots are mostly the convergence of tall columns, with or without the slop. At 40 iterations they settle either way, but what is left moving without the slop is mostly this pump (late v 20x lower with it). Outcomes differ run by run either way, as the moved starts already make them: L5 scores 2 stars in 13-15 of 16 runs off or on (else 3), and L2 gets 3 stars in 2-3 of 6.
+
 ## Restitution (AVBD reference)
 
 Opt-in and off by default (`AvbdParams.restitution`); off, the reference is bit-identical to before. The GPU engine throws on it until it is ported, and Keystone keeps it off. Full description: the header and `restitute()` in `packages/physics-ref/src/avbd.ts`.

@@ -718,10 +718,14 @@ describe('stacks and towers', () => {
   // the floor alone (the 8-cube case below: 0.25 m/s with the cap, 0.18 with
   // the floor alone, 0.39 with neither; over 22 draws of the kick 0.12-0.26,
   // 0.17-0.18 and 0.31-0.62). 4x4x25 and 8x8x25 towers slow to 8e-4 and
-  // 5e-4 m/s by step 1500, then grow again (7e-3 and 3e-3 m/s over steps
-  // 2101-2400). postStabilize off (2e-5) or 100 iterations (1e-9) damp it, so
+  // 5e-4 m/s by step 1500, then grow again (0.23 and 0.021 m/s over steps
+  // 2101-2400 at cb697a2, a cube of the 4x4x25 274 mm off its start, same
+  // kick). postStabilize off (2e-5) or 100 iterations (1e-9) damp it, so
   // it is post-stabilization at low iteration counts, not the floor or the cap
-  // (2026-10-26). The it.fails case below tracks it.
+  // (2026-10-26). The it.fails case below tracks it at the defaults. The
+  // loaded-gap slop (gapSlop 3e-5, off by default, see avbd.ts) stops it: that
+  // case comes to rest at 8e-5 m/s (10 iterations) and 1e-5 (20), as do 22
+  // other draws of the kick (2026-10-27).
   type Kick = (linVel: Vec3, rnd: () => number) => void;
   const column = async (H: number, params: Partial<AvbdParams>, { F = 1, steps = 600, win = 300, kick }: { F?: number; steps?: number; win?: number; kick?: Kick } = {}) => {
     const scene = buildScenario('S1', { F, H, gap: 0 }, 1);
@@ -755,9 +759,72 @@ describe('stacks and towers', () => {
     expect(r.maxV).toBeLessThan(1e-3);
     expect(r.side).toBeLessThan(1e-3);
   });
+  const sideways: Kick = (v, rnd) => { v[0] += 0.01 * (2 * rnd() - 1); v[2] += 0.01 * (2 * rnd() - 1); };
   it.fails('a settled 8-cube column kicked sideways at up to 0.01 m/s per cube comes back to rest (known: post-stabilization rocking)', async () => {
-    const kick: Kick = (v, rnd) => { v[0] += 0.01 * (2 * rnd() - 1); v[2] += 0.01 * (2 * rnd() - 1); };
-    expect((await column(8, {}, { steps: 1500, kick })).maxV).toBeLessThan(1e-3);
+    expect((await column(8, {}, { steps: 1500, kick: sideways })).maxV).toBeLessThan(1e-3);
+  });
+  it.each([10, 20])('with the loaded-gap slop (gapSlop 3e-5) that column comes back to rest (%i iterations)', async (iterations) => {
+    const r = await column(8, { iterations, gapSlop: 3e-5 }, { steps: 1500, kick: sideways });
+    expect(r.maxV).toBeLessThan(1e-3); // 8.2e-5 m/s at 10 iterations, 1.1e-5 at 20 (without it 0.25 and 0.016)
+    expect(r.side).toBeLessThan(1e-3); // no lean left over (0.019 and 0.024 mm)
+  });
+  // The kicked column's state after 450 steps (the kick at 401), and a hover probe: the top 4 cubes of the
+  // settled column lifted by 25 um, then the largest lift left after each of 60 steps.
+  const kicked = async (params: Partial<AvbdParams>, scene = buildScenario('S1', { F: 1, H: 8, gap: 0 }, 1)) => {
+    const e = new AvbdReferenceEngine(params);
+    await e.init(scene);
+    let seed = 12345;
+    const rnd = () => { seed = (seed * 1103515245 + 12345) % 2147483648; return seed / 2147483648; };
+    for (let i = 1; i <= 450; i++) {
+      if (i === 401) for (const b of e.world!.bodies) sideways(b.linVel, rnd);
+      e.step();
+    }
+    return e.snapshot();
+  };
+  it('gapSlop 0 or absent is the same floats, and its key stays out of the variant', async () => {
+    const off = await kicked({});
+    expect(await kicked({ gapSlop: 0 })).toEqual(off);
+    expect(await kicked({ gapSlop: 3e-5 })).not.toEqual(off); // the scene exercises it
+    expect(Object.keys(new AvbdReferenceEngine({ gapSlop: 0 }).info.variant)).toEqual(Object.keys(new AvbdReferenceEngine().info.variant));
+    expect(new AvbdReferenceEngine({ gapSlop: 3e-5 }).info.variant.gapSlop).toBe(3e-5);
+    for (const g of [-1e-5, Number.NaN, Number.POSITIVE_INFINITY]) expect(() => new AvbdReferenceEngine({ gapSlop: g })).toThrow('AvbdParams.gapSlop must be a finite number >= 0');
+  });
+  it('gapSlop does nothing without post-stabilization, and leaves rolling contacts alone', async () => {
+    // alpha 1, so the main iterations' own alpha === 1 test would apply it: only the postStabilize gate stops it.
+    expect(await kicked({ postStabilize: false, alpha: 1, gapSlop: 3e-5 })).toEqual(await kicked({ postStabilize: false, alpha: 1 }));
+    // A ball on a cube on a ball on the ground: every contact rolls (rollingContacts is on by default).
+    const ball = (y: number): BodyDesc => ({ ...cube([0, y, 0]), shape: { kind: 'sphere', radius: 0.5 } });
+    const balls = sceneOf([ball(0.5), cube([0, 1.5, 0]), ball(2.5)]);
+    expect(await kicked({ gapSlop: 3e-5 }, balls)).toEqual(await kicked({}, balls));
+  });
+  it('gapSlop leaves unloaded points alone: a cube dropped flat lands as without it', async () => {
+    // Fresh (speculative) contacts carry no force, so their gap counts in full and nothing is stopped short.
+    for (const bodies of [[cube([0, 0.51, 0])], [cube([0, 0.5, 0]), cube([0, 1.52, 0])]]) {
+      const scene = sceneOf(bodies);
+      expect((await simulate(scene, 60, { gapSlop: 3e-5 })).s1).toEqual((await simulate(scene, 60)).s1);
+    }
+  });
+  it('with gapSlop 3e-5 a lifted stack comes back down, never rising, over a few dozen steps', async () => {
+    const lifted = async (params: Partial<AvbdParams>, by = 25e-6) => {
+      const e = new AvbdReferenceEngine(params);
+      await e.init(buildScenario('S1', { F: 1, H: 8, gap: 0 }, 1));
+      for (let i = 0; i < 400; i++) e.step();
+      const top = e.world!.bodies.slice(4), y0 = top.map((b) => b.pos[1]);
+      for (const b of top) b.pos[1] += by;
+      const lift: number[] = [];
+      for (let i = 0; i < 60; i++) { e.step(); lift.push(Math.max(...top.map((b, k) => b.pos[1] - y0[k]!))); }
+      return lift;
+    };
+    // Measured: 25.0 um after the first step (it rests on the excused gap), 11.9 after 10, 6.4 after 20,
+    // 0.71 after 60; without the slop the lift is gone within 2 steps.
+    const on = await lifted({ gapSlop: 3e-5 });
+    expect(on[0]).toBeGreaterThan(20e-6); // it rests on the excused gap (6.5 um without the slop)
+    expect(Math.max(...on)).toBeLessThan(25e-6 + 1e-9); // never above where it was put (up to 1.8e-13 m over: solver round-off)
+    expect(on[19]).toBeLessThan(10e-6);
+    expect(on[59]).toBeLessThan(2e-6);
+    // Lifted 100 um, more than the slop: only gapSlop of the gap is excused (48.1 um after the first step,
+    // 100.0 if the whole gap were, 25.8 without the slop).
+    expect((await lifted({ gapSlop: 3e-5 }, 100e-6))[0]).toBeLessThan(75e-6);
   });
   it('a column of 24 cubes under one 100x as heavy comes to rest (S9)', async () => {
     // With the floor alone it boils too (0.30 m/s over steps 301-600). With k_n dropped to the cap at once
