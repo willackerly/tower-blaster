@@ -18,7 +18,7 @@ export interface SuiteCase {
 }
 
 function baseCfg(engines: string[], scenario: string, params: RunConfig['params'], sleep: boolean | null, timing: Partial<TimingOptions> = {}): RunConfig {
-  return { engines, scenario, params, seed: 1, sleep, timing: { ...DEFAULT_TIMING, warmup: 60, blockSteps: 30, blocks: 6, ...timing }, qualitySteps: 0, autorun: false };
+  return { engines, scenario, params, seed: 1, sleep, bounce: null, timing: { ...DEFAULT_TIMING, warmup: 60, blockSteps: 30, blocks: 6, ...timing }, qualitySteps: 0, autorun: false };
 }
 
 /**

@@ -1,6 +1,7 @@
 // Run configuration carried in the page URL, so a run is a shareable link
 // and the orchestrator needs no other channel into the page.
-import type { Params } from '@tb/scenarios';
+import type { SceneDesc } from '@tb/engine-api';
+import { bounceScene, buildScenario, type Params } from '@tb/scenarios';
 import { DEFAULT_TIMING, type TimingOptions } from '@tb/bench';
 
 export interface RunConfig {
@@ -11,6 +12,11 @@ export interface RunConfig {
   seed: number;
   /** Override the scenario's sleep setting. */
   sleep: boolean | null;
+  /**
+   * Every body, spawn and the ground at this restitution (bounceScene), so an
+   * engine with restitution on bounces; null: the scenario's own (0).
+   */
+  bounce: number | null;
   timing: TimingOptions;
   /** Also run a quality pass of this many steps (0 = none). */
   qualitySteps: number;
@@ -50,6 +56,9 @@ export function parseConfig(search: string): RunConfig {
     params[k.slice(6)] = v === 'true' ? true : v === 'false' ? false : num(v, k);
   }
   const sleep = q.get('sleep');
+  const bounceText = q.get('bounce');
+  const bounce = bounceText === null ? null : Number(bounceText);
+  if (bounce !== null && (bounceText!.trim() === '' || !(bounce >= 0 && bounce <= 1))) throw new Error(`bounce must be a number from 0 to 1, got "${bounceText}"`);
   const get = (k: string, d: number) => (q.has(k) ? num(q.get(k)!, k) : d);
   const mode = q.get('timingMode') ?? 'latency';
   if (mode !== 'latency' && mode !== 'throughput') throw new Error(`timingMode must be latency or throughput, got "${mode}"`);
@@ -59,6 +68,7 @@ export function parseConfig(search: string): RunConfig {
     params,
     seed: get('seed', 1),
     sleep: sleep === null ? null : sleep === 'true',
+    bounce,
     timing: { warmup: get('warmup', DEFAULT_TIMING.warmup), blockSteps: get('blockSteps', DEFAULT_TIMING.blockSteps), blocks: get('blocks', DEFAULT_TIMING.blocks), mode },
     qualitySteps: get('qualitySteps', 0),
     autorun: q.get('autorun') === '1',
@@ -72,6 +82,7 @@ export function toQuery(c: RunConfig): string {
   for (const [k, v] of Object.entries(c.params)) q.set(`param.${k}`, String(v));
   q.set('seed', String(c.seed));
   if (c.sleep !== null) q.set('sleep', String(c.sleep));
+  if (c.bounce !== null) q.set('bounce', String(c.bounce));
   q.set('warmup', String(c.timing.warmup));
   q.set('blockSteps', String(c.timing.blockSteps));
   q.set('blocks', String(c.timing.blocks));
@@ -79,4 +90,17 @@ export function toQuery(c: RunConfig): string {
   if (c.qualitySteps) q.set('qualitySteps', String(c.qualitySteps));
   if (c.autorun) q.set('autorun', '1');
   return `?${q.toString()}`;
+}
+
+/** The scene a config runs: the scenario, with the config's sleep and bounce if it sets them. */
+export function runScene(c: RunConfig): SceneDesc {
+  const built = buildScenario(c.scenario, c.params, c.seed);
+  const scene = c.bounce === null ? built : bounceScene(built, c.bounce);
+  if (c.sleep !== null) scene.sleep = c.sleep;
+  return scene;
+}
+
+/** What a result record says about the scene it ran (bounce only when the config sets one). */
+export function sceneKey(c: RunConfig, scene: SceneDesc) {
+  return { id: scene.id, params: scene.params, seed: scene.seed, sleep: scene.sleep, ...(c.bounce === null ? {} : { bounce: c.bounce }), bodies: scene.bodies.length, inputs: scene.inputs.length };
 }

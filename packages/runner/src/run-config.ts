@@ -1,16 +1,13 @@
 // Executes a RunConfig in the page and produces the same result records as
 // the Node CLI, plus the browser environment.
-import { buildScenario } from '@tb/scenarios';
 import { compareBlocks, makeEngine, qualityGates, qualityRun, timeInterleaved, timingSummary } from '@tb/bench';
-import type { RunConfig } from './config.ts';
+import { type RunConfig, runScene, sceneKey } from './config.ts';
 import { browserEnv, timingProblems } from './env.ts';
 
 export async function execute(c: RunConfig, onProgress: (msg: string) => void = () => {}) {
   const env = await browserEnv();
-  const scene = buildScenario(c.scenario, c.params, c.seed);
-  if (c.sleep !== null) scene.sleep = c.sleep;
+  const scene = runScene(c);
   const engines = c.engines.map(makeEngine);
-  const sceneKey = { id: scene.id, params: scene.params, seed: scene.seed, sleep: scene.sleep, bodies: scene.bodies.length, inputs: scene.inputs.length };
   onProgress(`timing ${c.engines.join(' vs ')} on ${scene.id} (${scene.bodies.length} bodies)`);
   const blocks = await timeInterleaved(engines, scene, c.timing);
   const problems = timingProblems(env, engines.map((e) => e.info.backend));
@@ -19,7 +16,7 @@ export async function execute(c: RunConfig, onProgress: (msg: string) => void = 
     kind: engines.length === 2 ? 'compare' : 'run',
     env: { browser: env, time: new Date().toISOString() },
     engines: engines.map((e) => e.info),
-    scene: sceneKey,
+    scene: sceneKey(c, scene),
     // The steps run before the first block: the blocks time steps warmup + 1 to warmup + blocks x stepsPerBlock.
     warmup: c.timing.warmup,
     timing: blocks.map(timingSummary),
