@@ -61,7 +61,7 @@
   "packages/render/test/render-bench.test.ts": 200,
   "packages/render/test/render-real-ground.test.ts": 200.7,
   "packages/render/test/render-real-stones.test.ts": 189.1,
-  "packages/render/test/render-real-wood.test.ts": 85,
+  "packages/render/test/render-real-wood.test.ts": 55.1,
   "packages/render/test/render.test.ts": 220.1,
   "packages/render/test/shadowfit.test.ts": 12.6,
   "packages/runner/test/config.test.ts": 0,
