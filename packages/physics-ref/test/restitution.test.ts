@@ -258,12 +258,12 @@ describe('restitution on', () => {
     const e = 1, box: BodyDesc = { ...cube([0, 0, 0], { e }), shape: { kind: 'box', half: [0.5, 1, 0.5] } };
     return gainOf(zeroG([cube([-1.3, 0.5, 0], { e, density: 2, linVel: [4, 0, 0] }), cube([-1.3, -0.5, 0], { e, density: 2, linVel: [4, 0, 0] }), box]), { ...ON, restitutionRounds: rounds }, 90);
   };
-  it('two cubes striking a box side by side (e = 1) gain no energy, in one round or four (mass splitting)', async () => {
-    const one = await twoOnOne(1), four = await twoOnOne(4);
-    // Measured 0 in both.
-    for (const r of [one, four]) expect(r.gain).toBeLessThan(1e-9);
-    // It converges from below: measured 0.876 of the energy kept after one round, 0.976 after four (elastic: 1).
-    expect(one.end).toBeGreaterThan(0.85);
+  it('two cubes striking a box side by side (e = 1) gain no energy, in one round, four or eight (mass splitting)', async () => {
+    const one = await twoOnOne(1), four = await twoOnOne(4), eight = await twoOnOne(8);
+    // Measured 0 in all three (without supports, eight rounds gained 6.2e-4).
+    for (const r of [one, four, eight]) expect(r.gain).toBeLessThan(1e-9);
+    // It converges from below: measured 0.741 of the energy kept after one round, 0.973 after four (elastic: 1).
+    expect(one.end).toBeGreaterThan(0.7);
     expect(four.end).toBeGreaterThan(0.95);
   });
 
@@ -319,7 +319,7 @@ describe('restitution on', () => {
       if (k > 816) late = Math.max(late, maxSpeed(eng));
     }
     const moved = Math.max(...bodies.map((b, i) => Math.hypot(...[0, 1, 2].map((r) => eng.world!.bodies[i]!.pos[r]! - b.pos[r]!))));
-    // Measured 1.2e-7 m and 9.4e-17 m/s.
+    // Measured 8.3e-8 m and 5.5e-13 m/s.
     expect(moved).toBeLessThan(0.3);
     expect(late).toBeLessThan(1e-3);
   });
@@ -353,5 +353,54 @@ describe('restitution on', () => {
       return state(eng);
     };
     expect(await run()).toEqual(await run());
+  });
+});
+
+describe('restitution on: supports', () => {
+  // Every other loaded contact of a body in a bouncing manifold holds it during the pass (depth 1).
+  it('a 510 kg ball (e 0.9, 10 m/s) bouncing off a 1 kg cube on the ground gains no energy, and both come to rest', async () => {
+    const r = 0.25, mb = 510, v = 10, e = 0.9;
+    const scene = sceneOf([cube([0, 0.5, 0], { e }), ball([0, 1 + r + 0.3, 0], { e, radius: r, mass: mb, linVel: [0, -v, 0] })], { groundE: e });
+    const { gain, late } = await gainOf(scene, ON, 600, mb * (0.5 * v * v + G * 0.3));
+    // Measured 0 and 1.2e-17 m/s. Without supports the pass drove the cube into the ground at 19 m/s, the two
+    // then threw each other about: a gain of 8.17 x the impact's energy, and bodies at 81.8 m/s after 10 s.
+    expect(gain).toBeLessThan(1e-9);
+    expect(late).toBeLessThan(1e-9);
+  });
+
+  it('a 1 kg ball (e 0.9, 20 m/s) onto a 0.4 kg cube lying on the ground gains no energy', async () => {
+    const v = 20, e = 0.9;
+    const scene = sceneOf([cube([0, 0.5, 0], { e, density: 0.4 }), ball([0, 1.8, 0], { e, linVel: [0, -v, 0] })], { groundE: e });
+    // Measured 0 (without supports 2.45 x the impact's energy).
+    expect((await gainOf(scene, ON, 600, 0.5 * v * v + G * 0.3)).gain).toBeLessThan(1e-7);
+  });
+
+  /** A 1 kg ball dropped at v onto a cube settled on the ground (e on all three): its first rebound over its impact speed, at contact. */
+  const offRestingCube = async (v: number, e: number, params: Partial<AvbdParams>) => {
+    const yc = 1.5, spawn = 120;
+    const eng = new AvbdReferenceEngine(params);
+    await eng.init({ ...sceneOf([cube([0, 0.5, 0], { e })], { groundE: e }), inputs: [{ step: spawn, kind: 'spawn', body: ball([0, yc + v * v / (2 * G), 0], { e }) }] });
+    for (let k = 0; k <= spawn; k++) eng.step();
+    const atContact = (y: number, vy: number) => Math.sqrt(Math.max(0, (vy - G * H / 2) ** 2 + 2 * G * (y - yc)));
+    const b = () => eng.world!.bodies[1]!;
+    let prev = { y: b().pos[1], vy: b().linVel[1] }, vIn = 0;
+    for (let k = 0; k < Math.ceil(3 * v / (G * H)) + 60; k++) {
+      eng.step();
+      const cur = { y: b().pos[1], vy: b().linVel[1] }, free = Math.abs(cur.vy - prev.vy + G * H) < 1e-4;
+      if (!vIn && !free) vIn = atContact(prev.y, prev.vy);
+      else if (vIn && prev.vy > 0 && free) return atContact(prev.y, prev.vy) / vIn;
+      prev = cur;
+    }
+    return 0;
+  };
+
+  it('the cost: a ball bounces softer off a body that rests on others, and more rounds give back more (default 8)', async () => {
+    const at = (rounds?: number) => offRestingCube(3, 0.9, rounds ? { ...ON, restitutionRounds: rounds } : ON);
+    const four = await at(4), eight = await at(), sixteen = await at(16);
+    // e 0.9 at 3 m/s: measured 0.154, 0.490 and 0.729 of the approach (Rapier: 0.45-0.49).
+    expect(four).toBeLessThan(eight);
+    expect(eight).toBeGreaterThan(0.45);
+    expect(eight).toBeLessThan(sixteen);
+    expect(sixteen).toBeLessThan(0.9);
   });
 });

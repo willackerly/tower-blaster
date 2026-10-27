@@ -180,7 +180,7 @@ export const DEFAULT_AVBD: AvbdParams = {
 };
 
 /** The restitution keys' defaults while AvbdParams.restitution is on (Box2D's threshold is 1 m/s too; rounds: see restitute()). */
-export const RESTITUTION_DEFAULTS = { restitutionThreshold: 1, restitutionRounds: 4 } as const;
+export const RESTITUTION_DEFAULTS = { restitutionThreshold: 1, restitutionRounds: 8 } as const;
 
 /**
  * Opt-in switches and the params that only matter while they are on, with
@@ -509,6 +509,18 @@ export class AvbdWorld {
    *   penalty rebound already above the target is left as it is). It never
    *   pulls bodies together, and acts along n only: friction is what the
    *   solve gave (bounded by mu |lambda_n|, as Box2D's restitution leaves it).
+   * - Supports, depth 1: every other loaded point (lambda_n < 0) of a body in
+   *   a bouncing manifold takes part too, as a one-sided constraint that keeps
+   *   its normal velocity at no less than the solve left it (target vn, P >=
+   *   0). Without them the struck body is free for the impulse: a 510 kg ball
+   *   (e 0.9, 10 m/s) bouncing off a 1 kg cube on the ground drove the cube
+   *   into the ground at 19 m/s, the two then threw each other about (a gain
+   *   of 8.17 x the impact's energy, bodies at 81.8 m/s after 10 s); a 1 kg
+   *   ball onto a 0.4 kg cube on the ground gained 2.45 x. With them: no
+   *   gain, and both come to rest. The cost is a softer bounce off a body
+   *   that rests on others: a ball of e 0.9 at 3 m/s rebounds off a resting
+   *   cube at 0.15 of its approach with 4 rounds, 0.49 with 8 and 0.73 with
+   *   16, against 0.45-0.49 in Rapier.
    * - The points of one manifold are solved together: each round first takes
    *   the impulse at their centroid that brings the centroid's normal
    *   velocity to the mean target (exact line search along equal per-point
@@ -529,8 +541,9 @@ export class AvbdWorld {
    *   overshoot (two manifolds pushing one body the same way: two cubes
    *   striking a box side by side at e 1 gained 32% of the energy in one
    *   round). It converges from below, so restitutionRounds trades bounce for
-   *   work: a body struck from two sides at once needs several rounds (4 by
-   *   default, RESTITUTION_DEFAULTS); the GPU will pay about 2 dispatches a
+   *   work: a body held by its supports, or struck from two sides at once,
+   *   needs several rounds. 8 by default (RESTITUTION_DEFAULTS), for the
+   *   bounce off a resting cube above; the GPU will pay about 2 dispatches a
    *   round, and only with the switch on.
    * - A point that bounced (P > 0) starts the next step with no force
    *   (lambda 0): its impact force carried as a warm start would push the
@@ -547,7 +560,7 @@ export class AvbdWorld {
     const rounds = p.restitutionRounds ?? RESTITUTION_DEFAULTS.restitutionRounds;
     const rule = this.scene.restitutionCombine ?? DEFAULT_RESTITUTION_COMBINE, groundE = this.scene.ground?.restitution ?? 0;
     const n = bodies.length;
-    // Normal velocity of contact c (row 0 of its Jacobian) at the start of the step.
+    // Normal velocity of contact c (row 0 of its Jacobian): at the start of the step, and now.
     const vnStart = (c: Contact) => {
       let s = 0;
       for (let k = 0; k < 3; k++) s += c.jb[k]! * v0[c.b]![k]!;
@@ -556,6 +569,13 @@ export class AvbdWorld {
         for (let k = 0; k < 3; k++) s += c.ja[k]! * v0[c.a]![k]!;
         for (let k = 0; k < 3; k++) s += c.ja[3 + k]! * w0[c.a]![k]!;
       }
+      return s;
+    };
+    const vnNow = (c: Contact) => {
+      const B = bodies[c.b]!;
+      let s = 0;
+      for (let k = 0; k < 3; k++) s += c.jb[k]! * B.linVel[k]! + c.jb[3 + k]! * B.angVel[k]!;
+      if (c.a !== GROUND) { const A = bodies[c.a]!; for (let k = 0; k < 3; k++) s += c.ja[k]! * A.linVel[k]! + c.ja[3 + k]! * A.angVel[k]!; }
       return s;
     };
     // The contact manifolds, [first, end) in contacts: collide() emits each manifold's points together, and a pair has one manifold.
@@ -567,9 +587,10 @@ export class AvbdWorld {
       manifolds.push([i, j]);
       i = j;
     }
-    // The pass's manifolds: the bouncing points of each contact manifold.
-    interface Rows { a: number; b: number; pts: Contact[]; target: number[]; P: Float64Array; dP: Float64Array }
+    // The pass's manifolds: the bouncing points of a manifold, then the supports of their bodies (bounce false).
+    interface Rows { a: number; b: number; pts: Contact[]; target: number[]; P: Float64Array; dP: Float64Array; bounce: boolean }
     const ms: Rows[] = [];
+    const rows = (a: number, b: number, pts: Contact[], target: number[], bounce: boolean): Rows => ({ a, b, pts, target, P: new Float64Array(pts.length), dP: new Float64Array(pts.length), bounce });
     for (const [i, j] of manifolds) {
       const c = contacts[i]!;
       const e = Math.min(1, Math.max(0, combineRestitution(rule, c.a === GROUND ? groundE : bodies[c.a]!.desc.restitution, bodies[c.b]!.desc.restitution)));
@@ -581,9 +602,21 @@ export class AvbdWorld {
         const u = vnStart(ck);
         if (u <= -threshold) { pts.push(ck); target.push(-e * u); }
       }
-      if (pts.length) ms.push({ a: c.a, b: c.b, pts, target, P: new Float64Array(pts.length), dP: new Float64Array(pts.length) });
+      if (pts.length) ms.push(rows(c.a, c.b, pts, target, true));
     }
     if (!ms.length) return;
+    const taken = new Set<Contact>(), involved = new Set<number>();
+    for (const m of ms) { for (const c of m.pts) taken.add(c); involved.add(m.b); if (m.a !== GROUND) involved.add(m.a); }
+    for (const [i, j] of manifolds) {
+      const c = contacts[i]!;
+      if (!involved.has(c.b) && !(c.a !== GROUND && involved.has(c.a))) continue;
+      const pts: Contact[] = [], target: number[] = [];
+      for (let k = i; k < j; k++) {
+        const ck = contacts[k]!;
+        if (!taken.has(ck) && ck.lambda[0] < 0) { pts.push(ck); target.push(vnNow(ck)); }
+      }
+      if (pts.length) ms.push(rows(c.a, c.b, pts, target, false));
+    }
     // The pass's manifolds per body (mass splitting), world inverse inertia at the start of the step (the Jacobians' pose).
     const split = new Int32Array(n);
     for (const m of ms) { split[m.b]!++; if (m.a !== GROUND) split[m.a]!++; }
@@ -671,7 +704,7 @@ export class AvbdWorld {
       b.angVel = [u[6 * i + 3]!, u[6 * i + 4]!, u[6 * i + 5]!];
     }
     // A bounced point starts the next step with no force (see above).
-    for (const m of ms) m.pts.forEach((c, k) => { if (m.P[k]! > 0) c.lambda = [0, 0, 0]; });
+    for (const m of ms) if (m.bounce) m.pts.forEach((c, k) => { if (m.P[k]! > 0) c.lambda = [0, 0, 0]; });
   }
 
   step(): void {
