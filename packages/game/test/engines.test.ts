@@ -3,9 +3,10 @@ import { AVBD_GAP_SLOP, AVBD_ITERATIONS, compileLevel, L1, L4 } from '@tb/keysto
 import { engineKind, gpuOptions, makeEngine } from '../src/engines.ts';
 
 describe('engine choice', () => {
-  it('defaults to Rapier, accepts gpu, and names the choices for anything else', () => {
-    expect(engineKind(null)).toBe('rapier');
-    expect(engineKind('')).toBe('rapier');
+  it('defaults to the GPU solver, accepts rapier, and names the choices for anything else', () => {
+    expect(engineKind(null)).toBe('gpu');
+    expect(engineKind('')).toBe('gpu');
+    expect(engineKind('rapier')).toBe('rapier');
     expect(engineKind('gpu')).toBe('gpu');
     expect(() => engineKind('physx')).toThrow(/unknown engine physx: use rapier or gpu/);
   });

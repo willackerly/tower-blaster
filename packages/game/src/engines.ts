@@ -9,7 +9,12 @@ import { GpuAvbdEngine, type GpuEngineOptions } from '@tb/physics-gpu';
 
 export const ENGINES = ['rapier', 'gpu'] as const;
 export type EngineKind = (typeof ENGINES)[number];
-export const DEFAULT_ENGINE: EngineKind = 'rapier';
+/**
+ * The GPU solver plays by default: par lines are pinned on its f64 reference
+ * and each one clears on it (par-gpu tests, SwiftShader and Metal). Rapier
+ * stays one `?engine=rapier` away, for comparison and for weak GPUs.
+ */
+export const DEFAULT_ENGINE: EngineKind = 'gpu';
 
 /**
  * The GPU solver's settings: the ones par lines are pinned at on the f64

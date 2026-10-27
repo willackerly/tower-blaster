@@ -1,6 +1,7 @@
 // The game page in headless Chromium (SwiftShader in CI): it loads a level,
 // aims, plays L1's par line, shows the result card, and scores exactly what
-// the headless driver scores for the same shots.
+// the headless driver scores for the same shots. It runs on Rapier, which is
+// fast on a CPU; par-gpu-L*.test.ts play every level on the default GPU solver.
 import { describe, expect, it } from 'vitest';
 import { RapierEngine } from '@tb/adapter-rapier';
 import { compileLevel, L1, runSession, type Shot } from '@tb/keystone';
@@ -11,7 +12,7 @@ const game = gamePage();
 describe('game page', () => {
   it('plays the L1 par line to a result card that matches the headless score', async (ctx) => {
     if (!game.browser()) return ctx.skip();
-    const o = await game.open('/?level=L1&offscreen=1');
+    const o = await game.open('/?level=L1&offscreen=1&engine=rapier');
     if (!o) return ctx.skip();
     const { page, errors } = o;
     await ready(page);
@@ -26,7 +27,7 @@ describe('game page', () => {
     expect(stats!.distinctColors).toBeGreaterThan(50);
 
     await page.evaluate(() => { window.__game.fast = true; });
-    // Pinned on the AVBD reference; this line also clears L1 on Rapier, the page's default engine.
+    // Pinned on the AVBD reference; this line also clears L1 on Rapier.
     const shots = L1.solutions!.par as Shot[];
     for (const shot of shots) {
       await ready(page);
