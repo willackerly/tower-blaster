@@ -1,6 +1,6 @@
 import { afterAll, describe, expect, it } from 'vitest';
 import { RapierEngine } from '@tb/adapter-rapier';
-import { AVBD_ITERATIONS, L1, type Shot, snapshotHash } from '@tb/keystone';
+import { AVBD_GAP_SLOP, AVBD_ITERATIONS, L1, type Shot, snapshotHash } from '@tb/keystone';
 import { AvbdReferenceEngine } from '@tb/physics-ref';
 import { B1, B3, CASES, candidates, engineSubsteps, inlineRunner, labArgs, makeEngine, makeRunner, nudge, poolRunner, POWER_NUDGES, RAPIER_SUBSTEPS, runProbe, solveOneShot, YAW_NUDGES } from '@tb/keystone-lab';
 
@@ -19,11 +19,13 @@ describe('nudge', () => {
 });
 
 describe('lab engines', () => {
-  it('builds Rapier and the reference (at AVBD_ITERATIONS unless told otherwise)', () => {
+  it('builds Rapier and the reference (at AVBD_ITERATIONS and AVBD_GAP_SLOP unless told otherwise)', () => {
     expect(makeEngine({ kind: 'rapier' })).toBeInstanceOf(RapierEngine);
     const ref = makeEngine({ kind: 'ref' });
     expect(ref).toBeInstanceOf(AvbdReferenceEngine);
     expect(ref.info.variant.iterations).toBe(AVBD_ITERATIONS);
+    expect(ref.info.variant.gapSlop).toBe(AVBD_GAP_SLOP);
+    expect(makeEngine({ kind: 'ref', gapSlop: 0 }).info.variant.gapSlop).toBeUndefined();
     expect(makeEngine({ kind: 'ref', iterations: 7 }).info.variant.iterations).toBe(7);
   });
   it('aims with each engine\'s substeps', () => {
@@ -40,6 +42,9 @@ describe('lab engines', () => {
     expect(labArgs([], 8)).toMatchObject({ spec: { kind: 'rapier' }, jobs: 8, ids: [] });
     expect(() => labArgs(['--engine', 'gpu'], 1)).toThrow(/unknown engine gpu/);
     expect(() => labArgs(['--jobs', '0'], 1)).toThrow(/--jobs/);
+    expect(labArgs(['--engine', 'ref', '--gap-slop', '0'], 1).spec).toEqual({ kind: 'ref', gapSlop: 0 });
+    expect(() => labArgs(['--gap-slop', '1e-5'], 1)).toThrow(/--engine ref/);
+    expect(() => labArgs(['--engine', 'ref', '--gap-slop', '-1'], 1)).toThrow(/metres >= 0/);
   });
 });
 

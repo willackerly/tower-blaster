@@ -8,7 +8,7 @@ import { chromium, type Browser, type Page } from 'playwright';
 import { createServer, type ViteDevServer } from 'vite';
 import { RapierEngine } from '@tb/adapter-rapier';
 import { requireWebGPU, WEBGPU_ARGS } from '@tb/testkit';
-import { compileLevel, L1, L4, runSession, type Shot } from '@tb/keystone';
+import { compileLevel, L1, L4, PRESETTLE_STEPS, runSession, type Shot } from '@tb/keystone';
 
 let server: ViteDevServer | null = null;
 let browser: Browser | null = null;
@@ -27,12 +27,12 @@ beforeAll(async () => {
 afterAll(async () => { await browser?.close(); await server?.close(); });
 
 /** Open the page; null means no WebGPU adapter here (skip unless required). */
-async function open(search: string): Promise<{ page: Page; errors: string[] } | null> {
+async function open(search: string, timeout = 60_000): Promise<{ page: Page; errors: string[] } | null> {
   const page = await browser!.newPage({ viewport: { width: 640, height: 400 } });
   const errors: string[] = [];
   page.on('pageerror', (e) => errors.push(e.message));
   await page.goto(new URL(search, origin).toString());
-  await page.waitForFunction(() => window.__game?.status !== 'loading', undefined, { timeout: 60_000, polling: 250 });
+  await page.waitForFunction(() => window.__game?.status !== 'loading', undefined, { timeout, polling: 250 });
   const st = await page.evaluate(() => ({ s: window.__game.status, e: window.__game.error }));
   if (st.s === 'error' && /WebGPU|adapter/.test(st.e ?? '') && !requireWebGPU()) { await page.close(); return null; }
   expect(st).toEqual({ s: 'running', e: undefined });
@@ -95,10 +95,11 @@ describe('game page', () => {
   // solver at a few hundred ms per step, so this test takes minutes as it is.
   it('plays on the GPU solver, and a replay on the same device is bit-identical', async (ctx) => {
     if (!browser) return ctx.skip();
-    const o = await open('/?level=L4&offscreen=1&engine=gpu');
+    // Loading runs the pre-settle: 300 steps at AVBD_ITERATIONS (40), over a minute on CI's SwiftShader.
+    const o = await open('/?level=L4&offscreen=1&engine=gpu', 300_000);
     if (!o) return ctx.skip();
     const { page, errors } = o;
-    await ready(page);
+    await ready(page, 300_000);
     expect(await page.evaluate(() => ({ engine: window.__game.engine, bodies: window.__game.bodies }))).toEqual({ engine: 'gpu', bodies: 38 });
     // The arc preview follows the GPU's one substep and still finds the structure.
     await page.evaluate(() => window.__game.select('marble'));
@@ -113,7 +114,7 @@ describe('game page', () => {
     await page.waitForFunction((n) => window.__game.result !== null || (window.__game.ready && window.__game.strokes === n), shots.length, { timeout: 600_000, polling: 250 });
     const live = await page.evaluate(() => window.__game.state());
     expect(live.strokes).toBe(shots.length);
-    expect(live.step).toBeGreaterThan(90);
+    expect(live.step).toBeGreaterThan(PRESETTLE_STEPS);
     expect(await page.evaluate((s) => window.__game.replay(s), shots)).toEqual(live);
     expect(errors).toEqual([]);
     await page.close();
