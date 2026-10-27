@@ -1103,7 +1103,7 @@ describe('drawing', () => {
     if (!gpu) return ctx.skip();
     const r = await call('materialBake');
     expect(r.error).toBeNull();
-    expect(r.layers.map((l) => l.layer)).toEqual(['limestone', 'sandstone', 'granite', 'concrete', 'gravel', 'dirt', 'macro']);
+    expect(r.layers.map((l) => l.layer)).toEqual(['limestone', 'sandstone', 'granite', 'concrete', 'pine', 'gravel', 'dirt', 'macro']);
     // Measured on SwiftShader: twin within 0.5 of an 8-bit step (rounding), mips within 0.5 step,
     // the wrap jump within 1.1x the jump between neighbours inside.
     for (const l of r.layers) {
