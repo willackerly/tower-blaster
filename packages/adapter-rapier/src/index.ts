@@ -2,7 +2,7 @@
 // contract. Used as a reference for quality metrics and as the number every
 // GPU variant has to beat by a wide margin.
 import RAPIER from '@dimforge/rapier3d-simd-compat';
-import { type BodyDesc, emptySnapshot, type EngineInfo, type InputEvent, type PhysicsEngine, type SceneDesc, type Snapshot } from '@tb/engine-api';
+import { type BodyDesc, DEFAULT_RESTITUTION_COMBINE, emptySnapshot, type EngineInfo, type InputEvent, type PhysicsEngine, type SceneDesc, type Snapshot } from '@tb/engine-api';
 import { createBody, createGround, initRapier, RULES } from './bodies.ts';
 
 export interface RapierOptions {
@@ -18,6 +18,7 @@ export class RapierEngine implements PhysicsEngine {
   private pending: InputEvent[] = [];
   private sleep = true;
   private combine = RAPIER.CoefficientCombineRule.Average;
+  private restitutionCombine = RAPIER.CoefficientCombineRule.Average;
 
   constructor(private readonly opts: RapierOptions = {}) {
     // Rapier takes one substep per solver iteration.
@@ -32,7 +33,12 @@ export class RapierEngine implements PhysicsEngine {
     world.timestep = scene.dt;
     if (this.opts.iterations) world.numSolverIterations = this.opts.iterations;
     this.combine = RULES[scene.frictionCombine ?? 'average'];
-    if (scene.ground) createGround(world, scene.ground).setFrictionCombineRule(this.combine);
+    this.restitutionCombine = RULES[scene.restitutionCombine ?? DEFAULT_RESTITUTION_COMBINE];
+    if (scene.ground) {
+      const ground = createGround(world, scene.ground);
+      ground.setFrictionCombineRule(this.combine);
+      ground.setRestitutionCombineRule(this.restitutionCombine);
+    }
     this.world = world;
     this.sleep = scene.sleep;
     this.bodies = [];
@@ -43,8 +49,9 @@ export class RapierEngine implements PhysicsEngine {
 
   private add(b: BodyDesc): void {
     const { body, collider } = createBody(this.world!, b, this.sleep, RAPIER.RigidBodyDesc.dynamic());
-    // Every collider carries the scene's rule (Rapier uses the higher-priority rule of a pair).
+    // Every collider carries the scene's rules (Rapier uses the higher-priority rule of a pair).
     collider.setFrictionCombineRule(this.combine);
+    collider.setRestitutionCombineRule(this.restitutionCombine);
     this.bodies.push(body);
   }
 

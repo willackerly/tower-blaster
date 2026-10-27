@@ -5,7 +5,7 @@
 import { type BodyDesc, emptySnapshot, type EngineInfo, inertiaOf, type InputEvent, massOf, type PhysicsEngine, type SceneDesc, type Snapshot } from '@tb/engine-api';
 import { boundingRadius } from '@tb/geom';
 import { assertStorageFits, createDevice, isSoftwareAdapter, Readback } from '@tb/gpu';
-import { type AvbdParams, DEFAULT_AVBD } from '@tb/physics-ref';
+import { type AvbdParams, avbdVariant, checkRestitution, DEFAULT_AVBD } from '@tb/physics-ref';
 import { Body, BodyProps, readField, Shape, SolverBody, writeStruct } from '@tb/schema';
 import { Broadphase } from './broadphase.ts';
 import { Coloring } from './coloring.ts';
@@ -90,6 +90,9 @@ export class GpuAvbdEngine implements PhysicsEngine {
   constructor(params: Partial<AvbdParams> = {}, private readonly opts: GpuEngineOptions = {}) {
     this.params = { ...DEFAULT_AVBD, ...params };
     if (!this.params.postStabilize) throw new Error('GpuAvbdEngine: only postStabilize = true is implemented');
+    // The same AvbdParams as the reference, switch on or off.
+    checkRestitution(this.params);
+    if (this.params.restitution) throw new Error('GpuAvbdEngine: restitution is not implemented on the GPU yet (AvbdParams.restitution)');
     const check = (k: 'capacity' | 'spare' | 'pairsPerBody' | 'maxRadius' | 'colorTail' | 'tailThreads' | 'colorRounds', ok: (v: number) => boolean, what: string) => {
       const v = opts[k];
       if (v !== undefined && !(typeof v === 'number' && ok(v))) throw new Error(`GpuAvbdEngine: GpuEngineOptions.${k} must be ${what}, got ${v}`);
@@ -103,8 +106,8 @@ export class GpuAvbdEngine implements PhysicsEngine {
     check('colorRounds', (v) => Number.isInteger(v) && v >= 2 && v % 2 === 0, 'an even integer >= 2');
     for (const k of ['indirectColors', 'boxBroadphase'] as const) if (opts[k] !== undefined && typeof opts[k] !== 'boolean') throw new Error(`GpuAvbdEngine: GpuEngineOptions.${k} must be a boolean, got ${opts[k]}`);
     if (opts.hessian !== undefined && !HESSIAN_FORMS.includes(opts.hessian)) throw new Error(`GpuAvbdEngine: GpuEngineOptions.hessian must be one of ${HESSIAN_FORMS.join(', ')}, got ${opts.hessian}`);
-    const variant: Record<string, number | boolean | string> = {};
-    for (const [k, v] of Object.entries(this.params)) variant[k] = v;
+    // Every param, but an opt-in switch and its params only while it is on (avbdVariant): result keys do not change.
+    const variant: Record<string, number | boolean | string> = avbdVariant(this.params);
     // Options that size the buffers or shape the dispatch change the work per step (e.g. the broadphase's key bits), so they are part of the variant.
     for (const k of ['capacity', 'spare', 'pairsPerBody', 'maxRadius', 'colorTail', 'indirectColors', 'tailThreads', 'colorRounds', 'hessian', 'boxBroadphase'] as const) if (opts[k] !== undefined) variant[k] = opts[k];
     this.info = { name: 'avbd-gpu', variant, backend: 'webgpu', integrator: { substeps: 1 } };

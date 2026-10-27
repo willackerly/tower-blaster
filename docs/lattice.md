@@ -174,10 +174,13 @@ and the rules run on top.
   init table, in each filled `CellChange` (centre `origin + index * edge`
   in f64, plus `rot`) and in the snapshot. A scene built off its grid by
   up to `posTol` gets snapped there.
-- `HostWorld` carries `SceneDesc.frictionCombine`. `RapierHost` sets it on
-  every collider, voxel lattices and ground included, since Rapier uses the
-  higher-priority rule of a pair. The testkit slide on `TieredEngine`
-  matches `RapierEngine` bit for bit under each rule.
+- `HostWorld` carries `SceneDesc.frictionCombine`, `restitutionCombine`
+  and the ground's `restitution`. `RapierHost` sets both rules on every
+  collider, voxel lattices and ground included, since Rapier uses the
+  higher-priority rule of a pair, and gives the ground its restitution (0
+  when unset). The testkit slide on `TieredEngine` matches `RapierEngine`
+  bit for bit under each friction rule, and a dropped cube's bounce under
+  each restitution rule.
 - Rubble freezes at the pose the tiers recorded, sent with the static
   change, so a host whose state lags (`stateLag > 0`) puts it where the
   snapshot says it is. In Rapier, turning a sleeping body static wakes its

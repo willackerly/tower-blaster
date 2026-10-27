@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { combineFriction, freeFlight } from '../src/index.ts';
+import { combineFriction, combineRestitution, DEFAULT_RESTITUTION_COMBINE, freeFlight } from '../src/index.ts';
 
 describe('combineFriction', () => {
   it('follows Rapier\'s four rules', () => {
@@ -7,6 +7,13 @@ describe('combineFriction', () => {
     expect(combineFriction('min', 0.3, 0.9)).toBe(0.3);
     expect(combineFriction('max', 0.3, 0.9)).toBe(0.9);
     expect(combineFriction('multiply', 0.3, 0.9)).toBeCloseTo(0.27, 15);
+  });
+});
+
+describe('combineRestitution', () => {
+  it('follows the same four rules, and defaults to Rapier\'s average', () => {
+    for (const rule of ['average', 'min', 'max', 'multiply'] as const) expect(combineRestitution(rule, 0.05, 0.6)).toBe(combineFriction(rule, 0.05, 0.6));
+    expect(combineRestitution(DEFAULT_RESTITUTION_COMBINE, 0.05, 0.6)).toBeCloseTo(0.325, 15);
   });
 });
 

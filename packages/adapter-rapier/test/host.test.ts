@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { type BodyDesc, type CombineRule, combineFriction, type HostWorld, massOf, MODE_DYNAMIC, MODE_OFF, MODE_STATIC, type ModeChange } from '@tb/engine-api';
+import { type BodyDesc, type CombineRule, combineFriction, DEFAULT_RESTITUTION_COMBINE, type HostWorld, massOf, MODE_DYNAMIC, MODE_OFF, MODE_STATIC, type ModeChange } from '@tb/engine-api';
 import { stateHash } from '@tb/metrics';
 import { buildScenario } from '@tb/scenarios';
 import { appliedMu, SLIDE, slideMu, slideScene } from '@tb/testkit';
@@ -235,5 +235,18 @@ describe('RapierHost', () => {
       for (const onCells of [false, true]) expect((await slide(undefined, onCells)).mu).toBe((await slide('average', onCells)).mu);
       expect(combineFriction('average', SLIDE.body, SLIDE.ground)).toBeCloseTo(0.6, 12);
     });
+  });
+
+  it.for(['average', 'min', 'max', 'multiply', undefined] as const)('HostWorld.restitutionCombine %s reaches every collider, ground and lattice cells alike, and the ground takes ground.restitution', async (rule) => {
+    const table = [cube([0, 0.5, 0]), cube([0, 3, 0])];
+    const h = new RapierHost();
+    await h.init({ ...world, ground: { y: 0, friction: 0.6, restitution: 0.4 }, ...(rule ? { restitutionCombine: rule } : {}) }, table, [{ origin: [0, 0.5, 0], edge: 1, dims: [1, 1, 1], friction: 0.6 }]);
+    h.apply({ changes: [on(1, MODE_DYNAMIC, table[1]!)], wake: [], cells: [{ lattice: 0, i: 0, j: 0, k: 0, id: 0, rot: [0, 0, 0, 1] }] });
+    const rules: number[] = [], restitution: number[] = [];
+    (h as unknown as { world: RAPIER.World }).world.forEachCollider((c) => { rules.push(c.restitutionCombineRule()); restitution.push(c.restitution()); });
+    // Ground, the lattice's voxels, the dynamic cube; unset is the default (average, Rapier's own).
+    expect(rules).toEqual(Array(3).fill(RULES[rule ?? DEFAULT_RESTITUTION_COMBINE]));
+    expect(restitution[0]).toBeCloseTo(0.4, 6);
+    h.dispose();
   });
 });
