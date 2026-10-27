@@ -98,7 +98,7 @@
 //   and a sliding contact's stiffness is the secant of that clamp (see step()).
 // - Bodies are swept by graph colour (see coloring.ts), the order the
 //   parallel GPU version uses, so the two can be compared step by step.
-import { type BodyDesc, combineFriction, inertiaOf, massOf, type Quat, type SceneDesc, type Vec3 } from '@tb/engine-api';
+import { type BodyDesc, combineFriction, combineRestitution, DEFAULT_RESTITUTION_COMBINE, inertiaOf, massOf, type Quat, type SceneDesc, type Vec3 } from '@tb/engine-api';
 import { boundingRadius, cross, dot, groundManifold, NO_AXIS, quatMul, quatNormalize, rotate, shapeManifold, spherePairs } from '@tb/geom';
 import { colorGraph } from './coloring.ts';
 import { solveSpd6 } from './linalg.ts';
@@ -159,9 +159,9 @@ export interface AvbdParams {
    */
   capFall: number;
   /**
-   * Restitution, opt-in: off when absent or false. Off, the step does no
-   * extra work and never reads BodyDesc.restitution, so impacts are close to
-   * perfectly inelastic. The restitution keys are not in
+   * Restitution, opt-in (see restitute()): off when absent or false. Off, the
+   * step does no extra work and never reads BodyDesc.restitution, so impacts
+   * are close to perfectly inelastic. The restitution keys are not in
    * DEFAULT_AVBD (their defaults are RESTITUTION_DEFAULTS), and
    * EngineInfo.variant lists them only while the switch is on (avbdVariant),
    * so the result keys of runs without it are as they were before it existed.
@@ -169,7 +169,7 @@ export interface AvbdParams {
   restitution?: boolean;
   /** Normal approach speed at the start of the step, m/s, from which a contact bounces (>=, as Box2D's threshold). */
   restitutionThreshold?: number;
-  /** Rounds of the restitution pass. */
+  /** Rounds of the restitution pass (see restitute()). */
   restitutionRounds?: number;
 }
 
@@ -179,7 +179,7 @@ export const DEFAULT_AVBD: AvbdParams = {
   rollingContacts: true, loadCap: 1.25, capFall: 0.85,
 };
 
-/** The restitution keys' defaults while AvbdParams.restitution is on (Box2D's threshold is 1 m/s too). */
+/** The restitution keys' defaults while AvbdParams.restitution is on (Box2D's threshold is 1 m/s too; rounds: see restitute()). */
 export const RESTITUTION_DEFAULTS = { restitutionThreshold: 1, restitutionRounds: 4 } as const;
 
 /**
@@ -488,6 +488,192 @@ export class AvbdWorld {
     return [s1 * c.t1[0] + s2 * c.t2[0], s1 * c.t1[1] + s2 * c.t2[1], s1 * c.t1[2] + s2 * c.t2[2]];
   }
 
+  /**
+   * Restitution (AvbdParams.restitution): a velocity pass once the step's
+   * velocities are final (after post-stabilization, which moves positions
+   * only), as XPBD (Mueller et al. 2020) and Box2D v3 (applyRestitution) do.
+   * Positions are not touched: the bounce shows from the next step on.
+   *
+   * - A contact point bounces if the coefficient of its pair, e =
+   *   combineRestitution(SceneDesc.restitutionCombine, e_a, e_b) clamped to
+   *   [0, 1] (the ground's e is SceneDesc.ground.restitution, default 0), is
+   *   above 0, it approached at restitutionThreshold or faster at the start of
+   *   the step (its normal relative velocity vn0 = J_n u0 from the
+   *   start-of-step velocities, after the angular clamp, is -threshold or
+   *   less), and it ended the step loaded (lambda_n < 0). A resting contact
+   *   has vn0 ~ 0 (v = dx / h of a body at rest), so it never qualifies.
+   * - Its target is the normal velocity -e vn0. Normal impulses P >= 0 per
+   *   point (equal and opposite on the two bodies, so momentum is kept to
+   *   rounding) raise each point's normal velocity to its target: the pass
+   *   sets the rebound, it does not add e vn0 to whatever the solve left (a
+   *   penalty rebound already above the target is left as it is). It never
+   *   pulls bodies together, and acts along n only: friction is what the
+   *   solve gave (bounded by mu |lambda_n|, as Box2D's restitution leaves it).
+   * - The points of one manifold are solved together: each round first takes
+   *   the impulse at their centroid that brings the centroid's normal
+   *   velocity to the mean target (exact line search along equal per-point
+   *   impulses), then one Gauss-Seidel sweep over the points. A flat or
+   *   balanced landing (equal targets, impulse through the centre of mass) is
+   *   done by the centroid step with no spin; a sweep over the points alone
+   *   would leave spin behind (the 4 corners of a unit cube, 1 m/s target:
+   *   0.4 rad/s after one sweep, 8e-6 after 6), as Rapier's flat cubes show
+   *   (3.6 rad/s). Each step is an exact minimization of the pass's convex
+   *   quadratic along one direction, so it cannot overshoot.
+   * - Manifolds are coupled by mass splitting (Tonge, Benevolenski and
+   *   Voroshilov 2012): every round, each manifold solves against a copy of
+   *   last round's velocities in which each of its bodies has its mass and
+   *   inertia divided by the number of the pass's manifolds it is in, and
+   *   then every body takes the sum of its manifolds' impulses with its own
+   *   mass. That is Jacobi across manifolds (the GPU can run one thread per
+   *   manifold, then one per body), and it converges where plain Jacobi would
+   *   overshoot (two manifolds pushing one body the same way: two cubes
+   *   striking a box side by side at e 1 gained 32% of the energy in one
+   *   round). It converges from below, so restitutionRounds trades bounce for
+   *   work: a body struck from two sides at once needs several rounds (4 by
+   *   default, RESTITUTION_DEFAULTS); the GPU will pay about 2 dispatches a
+   *   round, and only with the switch on.
+   * - A point that bounced (P > 0) starts the next step with no force
+   *   (lambda 0): its impact force carried as a warm start would push the
+   *   bodies apart again (a ball of e 0.3 dropped at 5 m/s rebounded at
+   *   1.04 e).
+   * After post-stabilization, because that pass reads lambda; it moves
+   * positions only, so before or after makes no other difference. Rolling
+   * contacts need nothing more: a sphere's lever arm is along n, so its
+   * impulse goes through the centre.
+   */
+  restitute(v0: Vec3[], w0: Vec3[], q0: Quat[]): void {
+    const { p, bodies, contacts } = this;
+    const threshold = p.restitutionThreshold ?? RESTITUTION_DEFAULTS.restitutionThreshold;
+    const rounds = p.restitutionRounds ?? RESTITUTION_DEFAULTS.restitutionRounds;
+    const rule = this.scene.restitutionCombine ?? DEFAULT_RESTITUTION_COMBINE, groundE = this.scene.ground?.restitution ?? 0;
+    const n = bodies.length;
+    // Normal velocity of contact c (row 0 of its Jacobian) at the start of the step.
+    const vnStart = (c: Contact) => {
+      let s = 0;
+      for (let k = 0; k < 3; k++) s += c.jb[k]! * v0[c.b]![k]!;
+      for (let k = 0; k < 3; k++) s += c.jb[3 + k]! * w0[c.b]![k]!;
+      if (c.a !== GROUND) {
+        for (let k = 0; k < 3; k++) s += c.ja[k]! * v0[c.a]![k]!;
+        for (let k = 0; k < 3; k++) s += c.ja[3 + k]! * w0[c.a]![k]!;
+      }
+      return s;
+    };
+    // The contact manifolds, [first, end) in contacts: collide() emits each manifold's points together, and a pair has one manifold.
+    const manifolds: Array<[number, number]> = [];
+    for (let i = 0; i < contacts.length;) {
+      const c = contacts[i]!;
+      let j = i + 1;
+      while (j < contacts.length && contacts[j]!.a === c.a && contacts[j]!.b === c.b) j++;
+      manifolds.push([i, j]);
+      i = j;
+    }
+    // The pass's manifolds: the bouncing points of each contact manifold.
+    interface Rows { a: number; b: number; pts: Contact[]; target: number[]; P: Float64Array; dP: Float64Array }
+    const ms: Rows[] = [];
+    for (const [i, j] of manifolds) {
+      const c = contacts[i]!;
+      const e = Math.min(1, Math.max(0, combineRestitution(rule, c.a === GROUND ? groundE : bodies[c.a]!.desc.restitution, bodies[c.b]!.desc.restitution)));
+      if (!(e > 0)) continue;
+      const pts: Contact[] = [], target: number[] = [];
+      for (let k = i; k < j; k++) {
+        const ck = contacts[k]!;
+        if (!(ck.lambda[0] < 0)) continue;
+        const u = vnStart(ck);
+        if (u <= -threshold) { pts.push(ck); target.push(-e * u); }
+      }
+      if (pts.length) ms.push({ a: c.a, b: c.b, pts, target, P: new Float64Array(pts.length), dP: new Float64Array(pts.length) });
+    }
+    if (!ms.length) return;
+    // The pass's manifolds per body (mass splitting), world inverse inertia at the start of the step (the Jacobians' pose).
+    const split = new Int32Array(n);
+    for (const m of ms) { split[m.b]!++; if (m.a !== GROUND) split[m.a]!++; }
+    const invI: Float64Array[] = [];
+    for (let i = 0; i < n; i++) {
+      if (!split[i]) continue;
+      const b = bodies[i]!, I = new Float64Array(9), q = q0[i]!;
+      const ax = [rotate(q, [1, 0, 0]), rotate(q, [0, 1, 0]), rotate(q, [0, 0, 1])];
+      for (let r = 0; r < 3; r++) for (let c = 0; c < 3; c++) I[3 * r + c] = ax[0]![r]! * ax[0]![c]! / b.inertia[0] + ax[1]![r]! * ax[1]![c]! / b.inertia[1] + ax[2]![r]! * ax[2]![c]! / b.inertia[2];
+      invI[i] = I;
+    }
+    // Velocities u = (v, w) per body.
+    const u = new Float64Array(6 * n);
+    for (let i = 0; i < n; i++) if (split[i]) { u.set(bodies[i]!.linVel, 6 * i); u.set(bodies[i]!.angVel, 6 * i + 3); }
+    // Body i's velocity change per unit impulse along row J (6), with its mass and inertia divided by s: s M^-1 J.
+    const resp = (i: number, J: ArrayLike<number>, s: number, out: Float64Array) => {
+      const im = s / bodies[i]!.mass, I = invI[i]!;
+      for (let k = 0; k < 3; k++) out[k] = J[k]! * im;
+      for (let r = 0; r < 3; r++) out[3 + r] = s * (I[3 * r]! * J[3]! + I[3 * r + 1]! * J[4]! + I[3 * r + 2]! * J[5]!);
+    };
+    const dot6 = (x: ArrayLike<number>, y: ArrayLike<number>) => {
+      let s = 0;
+      for (let k = 0; k < 6; k++) s += x[k]! * y[k]!;
+      return s;
+    };
+    const ra = new Float64Array(6), rb = new Float64Array(6), ja = new Float64Array(6), jb = new Float64Array(6);
+    for (let round = 0; round < rounds; round++) {
+      for (const m of ms) {
+        const A = m.a !== GROUND, K = m.pts.length;
+        const sa = A ? split[m.a]! : 0, sb = split[m.b]!;
+        // This manifold's copy of last round's velocities.
+        const la = A ? u.slice(6 * m.a, 6 * m.a + 6) : null, lb = u.slice(6 * m.b, 6 * m.b + 6);
+        m.dP.fill(0);
+        // For rows (ra6, rb6) of a and b: their normal velocity on the copies, an impulse d along them, their inverse effective mass.
+        const vn = (ra6: ArrayLike<number>, rb6: ArrayLike<number>) => dot6(rb6, lb) + (la ? dot6(ra6, la) : 0);
+        const kick = (ra6: ArrayLike<number>, rb6: ArrayLike<number>, d: number) => {
+          resp(m.b, rb6, sb, rb);
+          for (let k = 0; k < 6; k++) lb[k] = lb[k]! + rb[k]! * d;
+          if (la) { resp(m.a, ra6, sa, ra); for (let k = 0; k < 6; k++) la[k] = la[k]! + ra[k]! * d; }
+        };
+        const inv = (ra6: ArrayLike<number>, rb6: ArrayLike<number>) => {
+          resp(m.b, rb6, sb, rb);
+          let w = dot6(rb6, rb);
+          if (la) { resp(m.a, ra6, sa, ra); w += dot6(ra6, ra); }
+          return w;
+        };
+        if (K > 1) {
+          // Centroid step: equal impulses d / K on every point, d from an exact line search.
+          ja.fill(0); jb.fill(0);
+          let T = 0, minP = Infinity;
+          m.pts.forEach((c, k) => {
+            for (let r = 0; r < 6; r++) { ja[r] = ja[r]! + c.ja[r]!; jb[r] = jb[r]! + c.jb[r]!; }
+            T += m.target[k]!;
+            minP = Math.min(minP, m.P[k]!);
+          });
+          for (let r = 0; r < 6; r++) { ja[r] = ja[r]! / K; jb[r] = jb[r]! / K; }
+          T /= K;
+          let d = (T - vn(ja, jb)) / inv(ja, jb);
+          if (d < 0) d = Math.max(d, -K * minP);
+          kick(ja, jb, d);
+          for (let k = 0; k < K; k++) { m.P[k] = m.P[k]! + d / K; m.dP[k] = m.dP[k]! + d / K; }
+        }
+        // One Gauss-Seidel sweep over the points, each point's total impulse kept >= 0.
+        m.pts.forEach((c, k) => {
+          const P = Math.max(0, m.P[k]! + (m.target[k]! - vn(c.ja, c.jb)) / inv(c.ja, c.jb)), d = P - m.P[k]!;
+          m.P[k] = P;
+          m.dP[k] = m.dP[k]! + d;
+          kick(c.ja, c.jb, d);
+        });
+      }
+      // Every body takes its manifolds' impulses with its own mass.
+      for (const m of ms) {
+        m.pts.forEach((c, k) => {
+          const d = m.dP[k]!;
+          resp(m.b, c.jb, 1, rb);
+          for (let r = 0; r < 6; r++) u[6 * m.b + r] = u[6 * m.b + r]! + rb[r]! * d;
+          if (m.a !== GROUND) { resp(m.a, c.ja, 1, ra); for (let r = 0; r < 6; r++) u[6 * m.a + r] = u[6 * m.a + r]! + ra[r]! * d; }
+        });
+      }
+    }
+    for (let i = 0; i < n; i++) {
+      if (!split[i]) continue;
+      const b = bodies[i]!;
+      b.linVel = [u[6 * i]!, u[6 * i + 1]!, u[6 * i + 2]!];
+      b.angVel = [u[6 * i + 3]!, u[6 * i + 4]!, u[6 * i + 5]!];
+    }
+    // A bounced point starts the next step with no force (see above).
+    for (const m of ms) m.pts.forEach((c, k) => { if (m.P[k]! > 0) c.lambda = [0, 0, 0]; });
+  }
+
   step(): void {
     const { p, bodies } = this;
     const h = this.scene.dt, gv = this.scene.gravity;
@@ -534,6 +720,8 @@ export class AvbdWorld {
         dx[i]![3 + k] = h * b.angVel[k]!;
       }
     }
+    // Restitution reads the start-of-step velocities (after the angular clamp) at the end of the step.
+    const start = p.restitution ? { v: bodies.map((b) => [...b.linVel] as Vec3), w: bodies.map((b) => [...b.angVel] as Vec3) } : null;
     // World inertia at the start of the step, row-major 3x3.
     const inertiaW = bodies.map((b) => {
       const I = new Float64Array(9);
@@ -661,6 +849,8 @@ export class AvbdWorld {
         }
       }
     }
+    // Restitution: after post-stabilization, on the final velocities.
+    if (start) this.restitute(start.v, start.w, q0);
     for (let i = 0; i < n; i++) {
       const b = bodies[i]!, d = dx[i]!;
       b.pos = [x0[i]![0] + d[0]!, x0[i]![1] + d[1]!, x0[i]![2] + d[2]!];
