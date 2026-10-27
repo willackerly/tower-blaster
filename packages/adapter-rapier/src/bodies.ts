@@ -12,7 +12,7 @@ export const initRapier = () => (ready ??= RAPIER.init());
  * collider presses on an edge of a voxel collider, e.g. a ball rolling down
  * a dormant tower to its foot (test/voxel-panic.test.ts).
  */
-/** SceneDesc.frictionCombine in Rapier. Rapier uses the higher-priority rule of a pair, so every collider gets it. */
+/** SceneDesc.frictionCombine and restitutionCombine in Rapier. Rapier uses the higher-priority rule of a pair, so every collider gets them. */
 export const RULES: Record<CombineRule, RAPIER.CoefficientCombineRule> = {
   average: RAPIER.CoefficientCombineRule.Average,
   min: RAPIER.CoefficientCombineRule.Min,
@@ -77,6 +77,8 @@ export function icosphere(sub: number): { points: Float32Array; volume: number }
   return out;
 }
 
-export function createGround(w: RAPIER.World, ground: { y: number; friction: number }) {
-  return w.createCollider(RAPIER.ColliderDesc.cuboid(1e4, 0.5, 1e4).setTranslation(0, ground.y - 0.5, 0).setFriction(ground.friction));
+export function createGround(w: RAPIER.World, ground: { y: number; friction: number; restitution?: number }) {
+  const e = ground.restitution;
+  if (e !== undefined && !(e >= 0 && e <= 1)) throw new Error(`SceneDesc.ground.restitution must be in [0, 1], got ${e}`);
+  return w.createCollider(RAPIER.ColliderDesc.cuboid(1e4, 0.5, 1e4).setTranslation(0, ground.y - 0.5, 0).setFriction(ground.friction).setRestitution(ground.restitution ?? 0));
 }

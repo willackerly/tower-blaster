@@ -164,7 +164,7 @@ export function lookUniforms(l: LookParams, metres = 1): Record<string, number |
     stone: l.stone ? [STONES.indexOf(l.stone.kind), l.stone.scale / metres, l.stone.wear, l.stone.dirt] : [0, 1, 0, 0],
     stoneDetail: [l.stone?.detail ?? 0, (l.stone?.fade ?? 1) / metres, 0, 0],
     ground: l.ground ? [GROUND_LAYER + GROUNDS.indexOf(l.ground.kind), l.ground.scale / metres, l.ground.detail, l.ground.variation] : [GROUND_LAYER, 1, 0, 0],
-    groundShape: [(l.ground?.relief ?? 0) / metres, patchThreshold(l.ground?.patches ?? 0), 0, 0],
+    groundShape: [(l.ground?.relief ?? 0) / metres, patchThreshold(l.ground?.patches ?? 0), l.shadow?.fill ?? 0, 0],
     hills: l.hills ? [(l.hills.height * Math.PI) / 180, (l.hills.distance * 1000) / metres, 0, 0] : [0, 1000, 0, 0],
     debris: [l.debris?.size ?? REAL_DEFAULTS.dustSize, l.debris?.opacity ?? REAL_DEFAULTS.dustOpacity, CHIP_SIZE, 0],
     blockAlbedo: [...[0, 1, 2].map((k) => l.ramp.reduce((acc, c) => acc + srgbToLinear(c[k]!), 0) / l.ramp.length), 0],

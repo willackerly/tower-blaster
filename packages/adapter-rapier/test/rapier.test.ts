@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { bodiesAt, type BodyDesc, type CombineRule, freeFlight, type InputEvent, type SceneDesc } from '@tb/engine-api';
+import { bodiesAt, type BodyDesc, type CombineRule, combineRestitution, DEFAULT_RESTITUTION_COMBINE, freeFlight, type InputEvent, type SceneDesc } from '@tb/engine-api';
 import { buildScenario } from '@tb/scenarios';
 import { appliedMu, slideMu, slideScene, THROW, throwScene } from '@tb/testkit';
 import RAPIER from '@dimforge/rapier3d-simd-compat';
@@ -139,5 +139,62 @@ describe('RapierEngine: engine contract (friction rule, integrator)', () => {
     const other = freeFlight(THROW.pos, THROW.vel, scene.gravity, scene.dt, iterations === 1 ? 2 : iterations - 1, THROW.steps);
     expect(Math.abs(other.pos[1]! - want.pos[1]!)).toBeGreaterThan(1e-2 / iterations);
     e.dispose();
+  });
+});
+
+describe('RapierEngine: restitution (SceneDesc.restitutionCombine, ground.restitution)', () => {
+  const ball = (x: number, y: number, e: number, vx: number): BodyDesc => ({
+    shape: { kind: 'sphere', radius: 0.5 }, pos: [x, y, 0], rot: [0, 0, 0, 1], linVel: [vx, 0, 0], angVel: [0, 0, 0], density: 1, friction: 0.5, restitution: e, tag: 0,
+  });
+  const scene = (bodies: BodyDesc[], o: Partial<SceneDesc>): SceneDesc => ({ id: 'restitution', params: {}, seed: 0, gravity: [0, 0, 0], dt: 1 / 60, ground: null, sleep: false, bodies, inputs: [], ...o });
+  /** Zero-g head-on spheres of restitution 0.2 (at 5 m/s) and 0.8: the four rules give 0.5, 0.2, 0.8 and 0.16. */
+  const part = async (rule: CombineRule | undefined) => {
+    const e = new RapierEngine();
+    await e.init(scene([ball(-0.75, 0, 0.2, 5), ball(0.75, 0, 0.8, 0)], rule ? { restitutionCombine: rule } : {}));
+    for (let i = 0; i < 30; i++) e.step();
+    const s = e.snapshot();
+    e.dispose();
+    return (s.linVel[3]! - s.linVel[0]!) / 5;
+  };
+  /** A ball of restitution 0.6 dropped onto the ground at 5 m/s: its largest upward speed after the impact over the impact speed. */
+  const bounce = async (ground: SceneDesc['ground'], rule?: CombineRule) => {
+    const e = new RapierEngine();
+    await e.init(scene([ball(0, 0.5 + 25 / (2 * 9.81), 0.6, 0)], { gravity: [0, -9.81, 0], ground, ...(rule ? { restitutionCombine: rule } : {}) }));
+    let down = 0, up = 0;
+    for (let i = 0; i < 90; i++) {
+      e.step();
+      const vy = e.snapshot().linVel[1]!;
+      if (vy > 0) up = Math.max(up, vy);
+      else if (!up) down = Math.max(down, -vy);
+    }
+    e.dispose();
+    return up / down;
+  };
+
+  it.for(['average', 'min', 'max', 'multiply'] as const)('%s reaches Rapier: a pair parts at the combined restitution', async (rule) => {
+    // Rapier's sphere pairs are exact to f32: within 3.8e-8 (multiply), 2026-10-27.
+    expect(Math.abs((await part(rule)) - combineRestitution(rule, 0.2, 0.8))).toBeLessThan(1e-6);
+  });
+
+  it('defaults to DEFAULT_RESTITUTION_COMBINE, average, which is Rapier\'s own: unset is bit for bit the same', async () => {
+    expect(DEFAULT_RESTITUTION_COMBINE).toBe('average');
+    expect(await part(undefined)).toBe(await part('average'));
+  });
+
+  it('every collider, ground included, carries the rule', async () => {
+    const e = new RapierEngine();
+    await e.init(scene([ball(-0.75, 1, 0.2, 5), ball(0.75, 1, 0.8, 0)], { ground: { y: 0, friction: 0.5 }, restitutionCombine: 'min' }));
+    const rules: number[] = [];
+    (e as unknown as { world: RAPIER.World }).world.forEachCollider((c) => rules.push(c.restitutionCombineRule()));
+    expect(rules).toEqual(Array(3).fill(RAPIER.CoefficientCombineRule.Min));
+    e.dispose();
+  });
+
+  it('the ground\'s restitution (default 0) combines with a body\'s: a ball of 0.6 rebounds at 0.3 on the default ground, 0.6 on a ground of 0.6', async () => {
+    // Measured 0.3 and 0.6 to 2.8e-8 (f32), 2026-10-27.
+    expect(Math.abs((await bounce({ y: 0, friction: 0.5 })) - 0.3)).toBeLessThan(1e-6);
+    expect(Math.abs((await bounce({ y: 0, friction: 0.5, restitution: 0.6 })) - 0.6)).toBeLessThan(1e-6);
+    expect(Math.abs((await bounce({ y: 0, friction: 0.5 }, 'max')) - 0.6)).toBeLessThan(1e-6);
+    for (const r of [-0.1, 1.5, NaN]) await expect(new RapierEngine().init(scene([], { ground: { y: 0, friction: 0.5, restitution: r } }))).rejects.toThrow(`ground.restitution must be in [0, 1], got ${r}`);
   });
 });

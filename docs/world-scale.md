@@ -89,3 +89,28 @@ so a knock raises the dust it would in the unit world.
   they do ("4 g in cube units, 2x as fast, 2x physics cost"). The saved JSON keeps
   them in `scene.scale` and `loop.substeps`.
 - `ScenarioDef.scale`: a scenario's default (none sets one yet).
+
+## Camera framing (`view.*`)
+
+Will also asked to be "generally lower to the ground". A scene without a
+start camera (`cam`) is framed by `frame(min, max, view)` (viewer
+camera.ts). Its knobs live in the URL (`view.pitch`, `view.fit` and
+`view.fov`), in the panel's Camera section (applied live: the camera jumps
+to the new framing) and in saved files (`view`).
+
+- The default is pitch 12 degrees, field of view 45 degrees, fit 1.05.
+  Before, it was 21.8 degrees and 50 degrees, at 1.35 times the distance
+  where the box's bounding sphere filled the view.
+- Fit now measures the box rather than its sphere. 1 is the closest
+  distance at which all eight corners of the box are inside a square view.
+  The sphere was loose for wide, flat scenes like the city and tight for
+  tall towers: at 12 degrees and fit 0.9, S1's tower ran off the top. A
+  property test checks that fit 1 puts the furthest corner exactly on the
+  edge, for any box, pitch and field of view.
+- The values were picked from renders of S4 and S14 at 22, 17, 12 and 8
+  degrees. 12 puts the eye about half as high above the target as before
+  and still shows the back rows. 8 hides them.
+- A test frames every scenario's defaults and checks that all bodies are
+  on screen at 16:9 and 4:3.
+- The framing is in cube units, so at `scale=0.25` the eye is also 4x lower
+  in metres.

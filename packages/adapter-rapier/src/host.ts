@@ -6,7 +6,7 @@
 // broadphase entry however many cubes it holds.
 import RAPIER from '@dimforge/rapier3d-simd-compat';
 import {
-  type BodyDesc, type BodyMode, type EngineInfo, type HostBatch, type HostCaps, type HostLattice, type HostState, type HostWorld,
+  type BodyDesc, type BodyMode, DEFAULT_RESTITUTION_COMBINE, type EngineInfo, type HostBatch, type HostCaps, type HostLattice, type HostState, type HostWorld,
   MODE_DYNAMIC, MODE_OFF, MODE_STATIC, type PhysicsHost, type Quat, type Vec3,
 } from '@tb/engine-api';
 import { boundingRadius, signedDepth } from '@tb/geom';
@@ -31,6 +31,7 @@ export class RapierHost implements PhysicsHost {
   private sleep = true;
   private dt = 1 / 60;
   private combine = RAPIER.CoefficientCombineRule.Average;
+  private restitutionCombine = RAPIER.CoefficientCombineRule.Average;
   private steps = 0;
   private lattices: Array<HostLattice & { cells: Int32Array; collider: RAPIER.Collider | null }> = [];
   private events: RAPIER.EventQueue | null = null;
@@ -50,9 +51,14 @@ export class RapierHost implements PhysicsHost {
     const w = new RAPIER.World({ x: world.gravity[0], y: world.gravity[1], z: world.gravity[2] });
     w.timestep = world.dt;
     if (this.opts.iterations) w.numSolverIterations = this.opts.iterations;
-    // Every collider carries the scene's friction rule: bodies, ground and voxel lattices.
+    // Every collider carries the scene's friction and restitution rules: bodies, ground and voxel lattices.
     this.combine = RULES[world.frictionCombine ?? 'average'];
-    if (world.ground) createGround(w, world.ground).setFrictionCombineRule(this.combine);
+    this.restitutionCombine = RULES[world.restitutionCombine ?? DEFAULT_RESTITUTION_COMBINE];
+    if (world.ground) {
+      const ground = createGround(w, world.ground);
+      ground.setFrictionCombineRule(this.combine);
+      ground.setRestitutionCombineRule(this.restitutionCombine);
+    }
     this.world = w;
     this.table = table.slice(); // spare ids get their description later (ModeChange.body)
     this.bodies = new Array(table.length);
@@ -111,6 +117,7 @@ export class RapierHost implements PhysicsHost {
         const desc = c.mode === MODE_STATIC ? RAPIER.RigidBodyDesc.fixed() : RAPIER.RigidBodyDesc.dynamic();
         entry = this.bodies[c.id] = createBody(w, { ...this.table[c.id]!, pos: c.pos!, rot: c.rot!, linVel: [0, 0, 0], angVel: [0, 0, 0] }, this.sleep, desc, SPHERE_HULL);
         entry.collider.setFrictionCombineRule(this.combine);
+        entry.collider.setRestitutionCombineRule(this.restitutionCombine);
         this.bodyOfCollider.set(entry.collider.handle, c.id);
       } else {
         if (prev === MODE_OFF) entry.body.setEnabled(true);
@@ -156,6 +163,7 @@ export class RapierHost implements PhysicsHost {
             .setTranslation(l.origin[0] - l.edge / 2, l.origin[1] - l.edge / 2, l.origin[2] - l.edge / 2)
             .setFriction(l.friction)
             .setFrictionCombineRule(this.combine)
+            .setRestitutionCombineRule(this.restitutionCombine)
             .setActiveEvents(RAPIER.ActiveEvents.CONTACT_FORCE_EVENTS)
             .setContactForceEventThreshold(0),
         );

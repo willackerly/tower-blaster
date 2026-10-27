@@ -19,6 +19,11 @@ export interface BodyDesc {
   angVel: Vec3;
   density: number;
   friction: number;
+  /**
+   * Coefficient of restitution, combined with the other surface's by
+   * SceneDesc.restitutionCombine. The AVBD reference clamps the combined value
+   * to [0, 1]; the Rapier adapter passes it to Rapier as given.
+   */
   restitution: number;
   /** Free-form grouping used by metrics: tower index, or a TAG_* role. */
   tag: number;
@@ -38,12 +43,14 @@ export interface SceneDesc {
   gravity: Vec3;
   /** Fixed physics step in seconds. */
   dt: number;
-  /** Infinite ground plane at y, or none. */
-  ground: { y: number; friction: number } | null;
+  /** Infinite ground plane at y, or none. Its restitution, in [0, 1] (default 0), combines with a body's by restitutionCombine. */
+  ground: { y: number; friction: number; restitution?: number } | null;
   /** Whether engines may put bodies to sleep. */
   sleep: boolean;
   /** How the friction of two touching surfaces combines (ground included). Default 'average', as Rapier. */
   frictionCombine?: CombineRule;
+  /** How the restitution of two touching surfaces combines (ground included). Default DEFAULT_RESTITUTION_COMBINE. */
+  restitutionCombine?: CombineRule;
   bodies: BodyDesc[];
   /** Sorted by step. Spawned bodies get indices after `bodies`, in event order. */
   inputs: InputEvent[];
@@ -90,6 +97,14 @@ export function combineFriction(rule: CombineRule, a: number, b: number): number
     case 'max': return Math.max(a, b);
     case 'multiply': return a * b;
   }
+}
+
+/** SceneDesc.restitutionCombine when it is unset, in every engine that applies restitution (Rapier; the AVBD reference with AvbdParams.restitution on): Rapier's own default. */
+export const DEFAULT_RESTITUTION_COMBINE: CombineRule = 'average';
+
+/** The restitution of two touching surfaces, by the same rules as friction (the ground's is SceneDesc.ground.restitution, default 0). */
+export function combineRestitution(rule: CombineRule, a: number, b: number): number {
+  return combineFriction(rule, a, b);
 }
 
 /**

@@ -1,6 +1,6 @@
 // The reference AVBD solver behind the engine contract.
 import { emptySnapshot, type EngineInfo, type InputEvent, type PhysicsEngine, type SceneDesc, type Snapshot } from '@tb/engine-api';
-import { type AvbdParams, AvbdWorld, DEFAULT_AVBD } from './avbd.ts';
+import { type AvbdParams, avbdVariant, AvbdWorld, checkRestitution, DEFAULT_AVBD } from './avbd.ts';
 
 export class AvbdReferenceEngine implements PhysicsEngine {
   readonly info: EngineInfo;
@@ -11,13 +11,16 @@ export class AvbdReferenceEngine implements PhysicsEngine {
 
   constructor(params: Partial<AvbdParams> = {}) {
     this.params = { ...DEFAULT_AVBD, ...params };
-    const variant: Record<string, number | boolean> = {};
-    for (const [k, v] of Object.entries(this.params)) variant[k] = v;
+    checkRestitution(this.params);
+    // Every param, but the restitution switch and its params only while it is on (avbdVariant).
+    const variant = avbdVariant(this.params);
     // Free flight converges to the inertial target x + h v + h^2 g: one semi-implicit Euler step.
     this.info = { name: 'avbd-ref', variant, backend: 'js-f64', integrator: { substeps: 1 } };
   }
 
   async init(scene: SceneDesc): Promise<void> {
+    const e = scene.ground?.restitution;
+    if (e !== undefined && !(e >= 0 && e <= 1)) throw new Error(`AvbdReferenceEngine: SceneDesc.ground.restitution must be in [0, 1], got ${e}`);
     this.world = new AvbdWorld(scene, this.params);
     for (const b of scene.bodies) this.world.add(b);
     this.pending = [...scene.inputs].sort((a, b) => a.step - b.step);

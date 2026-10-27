@@ -98,7 +98,62 @@
 //   and a sliding contact's stiffness is the secant of that clamp (see step()).
 // - Bodies are swept by graph colour (see coloring.ts), the order the
 //   parallel GPU version uses, so the two can be compared step by step.
-import { type BodyDesc, combineFriction, inertiaOf, massOf, type Quat, type SceneDesc, type Vec3 } from '@tb/engine-api';
+//
+// Restitution is opt-in (AvbdParams.restitution, off by default): a velocity
+// pass after post-stabilization (see restitute()). A contact point that
+// carried force and approached at restitutionThreshold (1 m/s) or faster at
+// the start of the step is set to leave, at the end of that step, at e times
+// that normal speed. e is the pair's, combineRestitution under
+// SceneDesc.restitutionCombine (default average, Rapier's) clamped to [0, 1],
+// and the ground's own e is SceneDesc.ground.restitution (default 0: under
+// average a body bounces off the ground at half its e). restitutionRounds (8)
+// rounds of mass-split Jacobi solve the bouncing manifolds together with the
+// other loaded contacts of their bodies. Off, the step never reads
+// BodyDesc.restitution, and runs are bit-identical to those before it
+// existed. Its known limits, at 10 iterations, e being the pair's, under the
+// default average unless a rule is named:
+// - The bounce is step-based: gravity acts over the impact step, so measured
+//   at contact a drop's rebound falls short of e, by 2-7% at 5-10 m/s and more
+//   at low speed: at 2 m/s it keeps 0.76 of e at e 0.3, and 0.62 at e 0.15 (an
+//   e 0.3 body on the default ground).
+// - Energy can grow wherever the solve drifts momentum, at any e > 0. The pass
+//   keeps momentum to rounding (at most 7.1e-15 N s over 78 zero-g scenes);
+//   the gain is the solve's drift, which shows once contacts stop absorbing
+//   energy. In zero g: unit-cube pairs meeting head-on at 10 m/s end with
+//   1.023, 1.158 and 1.383 x their kinetic energy at e 0.3, 0.6 and 0.9 (1.061
+//   at e 0.9 and 20 iterations), a 1:5 pair 1.015 x at e 0.9; with the switch
+//   off the solve already moves those pairs' momentum by up to 46% (41% for
+//   1:1; 15% at 20 iterations). Chains of 3 and 5 unit cubes 0.05 m apart,
+//   struck at 10 m/s, end with 1.14 and 1.48 x at e 0.9 (none at 20
+//   iterations); there the solve drifts momentum 4.6 and 2.8 x as much as with
+//   the switch off (the chain of 5 from 10 to 17.0 N s, against 12.5). A chain
+//   of 5 spheres gains 23% at e 1 (2.6% at 20 iterations). Outside zero-g
+//   pairs and chains, no probe gains beyond the switch-off solve at e <= 0.9.
+// - e = 1 is not energy-safe: rods (0.2 x 2 x 0.2) dropped tilted from 1 m
+//   gained up to about 0.8 of their energy above lying flat (0.78 at 8 rounds,
+//   0.81 at 4, worst at 30 degrees), and with the ground at e 1 too (rule max)
+//   cubes dropped tilted gained up to 16% and tumbling ones 3.1% (a pair e of
+//   0.95, average with the ground at 1, gained 1.5% on one tilted cube).
+//   Beyond 8 rounds the pass overshoots at e = 1 (see restitute()).
+// - The pass's impulse is along n only: a cube landing on an edge, turned 30
+//   degrees, at mu 0.6 keeps 0.36-0.83 of the rigid impact's vertical rebound
+//   and spins at 1.66-3.06 x its spin (frictionless: 0.83-0.98 of the rebound,
+//   0.97-1.00 of the spin; rule max).
+// - Heavy on light: a body struck while it rests on others is held by them
+//   only as far as the rounds converge, and they converge more slowly the
+//   heavier the striker (see restitute()). A ball (radius 0.25) dropped
+//   at 10 m/s onto a 1 kg cube on the ground, e 0.6-0.9 everywhere, rebounds
+//   at 0.59-0.67 of e v at 1 kg, 0.27-0.32 at 5 kg and 0.02-0.04 at 50 kg (no
+//   better than with the switch off), and the pass drives the cube into the
+//   ground at about the bounce's speed: 4.7-5.7 m/s at 5 kg, 8.5-10 at 510 kg,
+//   against 0.09 and 0.80 off. No energy is gained, but the ball sinks deeper:
+//   at 510 kg up to 0.17 m into the cube over ball and cube e of 0.05-0.9
+//   (0.18 under max), against 0.11 m off, and from 2000 kg the ball can go
+//   through the cube to the ground (3 of 4 cases at 10-20 m/s), which off
+//   holds up to 5000 kg at 10 m/s. A 144 kg rubber ball (e 0.6) at 20 m/s on a
+//   10-cube plaster column (e 0.05) sinks 0.19 m into it, against 0.08 m off
+//   (0.11 under max).
+import { type BodyDesc, combineFriction, combineRestitution, DEFAULT_RESTITUTION_COMBINE, inertiaOf, massOf, type Quat, type SceneDesc, type Vec3 } from '@tb/engine-api';
 import { boundingRadius, cross, dot, groundManifold, NO_AXIS, quatMul, quatNormalize, rotate, shapeManifold, spherePairs } from '@tb/geom';
 import { colorGraph } from './coloring.ts';
 import { solveSpd6 } from './linalg.ts';
@@ -158,6 +213,27 @@ export interface AvbdParams {
    * once (see above).
    */
   capFall: number;
+  /**
+   * Restitution, opt-in (see restitute()): off when absent or false. Off, the
+   * step does no extra work and never reads BodyDesc.restitution, so impacts
+   * are close to perfectly inelastic. The restitution keys are not in
+   * DEFAULT_AVBD (their defaults are RESTITUTION_DEFAULTS), and
+   * EngineInfo.variant lists them only while the switch is on (avbdVariant),
+   * so the result keys of runs without it are as they were before it existed.
+   */
+  restitution?: boolean;
+  /**
+   * Normal approach speed at the start of the step, m/s, from which a contact
+   * bounces (>=, as Box2D's threshold). Default 1 (RESTITUTION_DEFAULTS); a
+   * finite number >= 0, where 0 lets any loaded approaching point bounce.
+   */
+  restitutionThreshold?: number;
+  /**
+   * Rounds of the restitution pass (see restitute()): more bounce off bodies
+   * that rest on others, for more work. Default 8 (RESTITUTION_DEFAULTS); an
+   * integer >= 1.
+   */
+  restitutionRounds?: number;
 }
 
 export const DEFAULT_AVBD: AvbdParams = {
@@ -165,6 +241,35 @@ export const DEFAULT_AVBD: AvbdParams = {
   margin: 0.02, slop: 0, stickThreshold: 0.01, matchDistance: 0.05, maxAngularSpeed: 50, slidingHessian: true, sweep: true, maxSweep: 1, restDepth: 0.003,
   rollingContacts: true, loadCap: 1.25, capFall: 0.85,
 };
+
+/** The restitution keys' defaults while AvbdParams.restitution is on (Box2D's threshold is 1 m/s too; rounds: see restitute()). */
+export const RESTITUTION_DEFAULTS = { restitutionThreshold: 1, restitutionRounds: 8 } as const;
+
+/**
+ * Opt-in switches and the params that only matter while they are on, with
+ * their defaults. EngineInfo.variant leaves a switch and its params out while
+ * it is off (avbdVariant), so adding one does not change the result keys of
+ * runs that do not use it.
+ */
+export const OPT_IN: Partial<Record<keyof AvbdParams, Partial<AvbdParams>>> = { restitution: RESTITUTION_DEFAULTS };
+
+/** EngineInfo.variant for these params: every param, but an opt-in switch and its params only while it is on, with their defaults filled in. */
+export function avbdVariant(p: AvbdParams): Record<string, number | boolean> {
+  const out: Record<string, number | boolean> = {};
+  for (const [k, v] of Object.entries(p)) if (v !== undefined) out[k] = v;
+  for (const [s, defaults] of Object.entries(OPT_IN)) {
+    if (out[s]) for (const [k, v] of Object.entries(defaults)) out[k] ??= v;
+    else for (const k of [s, ...Object.keys(defaults)]) delete out[k];
+  }
+  return out;
+}
+
+/** Throws on a restitution param out of range, whether the switch is on or not. */
+export function checkRestitution(p: Partial<AvbdParams>): void {
+  const t = p.restitutionThreshold, r = p.restitutionRounds;
+  if (t !== undefined && !(Number.isFinite(t) && t >= 0)) throw new Error(`AvbdParams.restitutionThreshold must be a finite number >= 0, got ${t}`);
+  if (r !== undefined && !(Number.isInteger(r) && r >= 1)) throw new Error(`AvbdParams.restitutionRounds must be an integer >= 1, got ${r}`);
+}
 
 export const GROUND = -1;
 
@@ -222,7 +327,19 @@ export function applyRotation(q: Quat, phi: Vec3): Quat {
   return quatNormalize(quatMul([phi[0] * s, phi[1] * s, phi[2] * s, Math.cos(t / 2)], q));
 }
 
-export interface StepStats { contacts: number; manifolds: number; colors: number }
+export interface StepStats {
+  contacts: number;
+  manifolds: number;
+  colors: number;
+  /**
+   * What this step's restitution pass did (all 0 with the switch off): the
+   * points it bounced, the normal impulse it applied in all (N s, supports
+   * included), the change of the bodies' total linear momentum, and the impulse
+   * it took from the ground. Every impulse between two bodies acts on both,
+   * equal and opposite, so momentum equals groundImpulse to rounding.
+   */
+  restitution: { contacts: number; impulse: number; momentum: Vec3; groundImpulse: Vec3 };
+}
 
 /**
  * Solver state for a set of bodies. step() advances one fixed step; callers
@@ -233,11 +350,11 @@ export class AvbdWorld {
   contacts: Contact[] = [];
   /** Last step's SAT axis per touching pair (key `a,b`), preferred by this step's narrowphase. */
   axes = new Map<string, number>();
-  stats: StepStats = { contacts: 0, manifolds: 0, colors: 0 };
+  stats: StepStats = { contacts: 0, manifolds: 0, colors: 0, restitution: { contacts: 0, impulse: 0, momentum: [0, 0, 0], groundImpulse: [0, 0, 0] } };
   /** Each body's last step, [position change, rotation vector] (what the GPU keeps in SolverBody.dp, phi until the next initBodies). */
   lastDx: Float64Array[] = [];
 
-  constructor(readonly scene: Pick<SceneDesc, 'gravity' | 'dt' | 'ground' | 'frictionCombine'>, readonly p: AvbdParams = DEFAULT_AVBD) {}
+  constructor(readonly scene: Pick<SceneDesc, 'gravity' | 'dt' | 'ground' | 'frictionCombine' | 'restitutionCombine'>, readonly p: AvbdParams = DEFAULT_AVBD) {}
 
   add(b: BodyDesc): void {
     this.bodies.push({
@@ -446,6 +563,254 @@ export class AvbdWorld {
     return [s1 * c.t1[0] + s2 * c.t2[0], s1 * c.t1[1] + s2 * c.t2[1], s1 * c.t1[2] + s2 * c.t2[2]];
   }
 
+  /**
+   * Restitution (AvbdParams.restitution): a velocity pass once the step's
+   * velocities are final (after post-stabilization, which moves positions
+   * only), as XPBD (Mueller et al. 2020) and Box2D v3 (applyRestitution) do.
+   * Positions are not touched: the bounce shows from the next step on.
+   *
+   * - A contact point bounces if the coefficient of its pair, e =
+   *   combineRestitution(SceneDesc.restitutionCombine, e_a, e_b) clamped to
+   *   [0, 1] (the ground's e is SceneDesc.ground.restitution, default 0), is
+   *   above 0, it approached at restitutionThreshold or faster at the start of
+   *   the step (its normal relative velocity vn0 = J_n u0 from the
+   *   start-of-step velocities, after the angular clamp, is -threshold or
+   *   less), and it ended the step loaded (lambda_n < 0). A resting contact
+   *   has vn0 ~ 0 (v = dx / h of a body at rest), so it never qualifies.
+   * - Its target is the normal velocity -e vn0. Normal impulses P >= 0 per
+   *   point (equal and opposite on the two bodies, so momentum is kept to
+   *   rounding) raise each point's normal velocity to its target: the pass
+   *   sets the rebound, it does not add e vn0 to whatever the solve left (a
+   *   penalty rebound already above the target is left as it is). It never
+   *   pulls bodies together, and acts along n only: friction is what the
+   *   solve gave (bounded by mu |lambda_n|, as Box2D's restitution leaves it).
+   * - Supports, depth 1: every other loaded point (lambda_n < 0) of a body in
+   *   a bouncing manifold takes part too, as a one-sided constraint that keeps
+   *   its normal velocity at no less than the solve left it (target vn, P >=
+   *   0). Without them the struck body is free for the impulse: a 510 kg ball
+   *   (e 0.9, 10 m/s) bouncing off a 1 kg cube on the ground drove the cube
+   *   into the ground at 19 m/s, the two then threw each other about (a gain
+   *   of 8.17 x the impact's energy, bodies at 81.8 m/s after 10 s); a 1 kg
+   *   ball onto a 0.4 kg cube on the ground gained 2.45 x. With them: no
+   *   gain, and both come to rest. The cost is a softer bounce off a body
+   *   that rests on others: a ball of e 0.9 at 3 m/s rebounds off a resting
+   *   cube at 0.15 of its approach with 4 rounds, 0.49 with 8 and 0.73 with
+   *   16, against 0.45-0.49 in Rapier. They hold the struck body only as far
+   *   as the rounds converge, and that takes longer the heavier the striker:
+   *   a 5 kg ball gets 0.19 of its approach at 8 rounds, and drives the cube
+   *   down at 1.75 m/s (0.07 with the switch off). The 510 kg ball above
+   *   still drives the cube into the ground at 10.0 m/s after 8 rounds (9.5
+   *   after 128), against 0.8 off, and comes back at 0.54 m/s against 1.61;
+   *   from 2000 kg a ball can go through the cube (see the header).
+   * - The points of one manifold are solved together: each round first takes
+   *   the impulse at their centroid that brings the centroid's normal
+   *   velocity to the mean target (exact line search along equal per-point
+   *   impulses), then one Gauss-Seidel sweep over the points. A flat or
+   *   balanced landing (equal targets, impulse through the centre of mass) is
+   *   done by the centroid step with no spin; a sweep over the points alone
+   *   would leave spin behind (the 4 corners of a unit cube, 1 m/s target:
+   *   0.4 rad/s after one sweep, 8e-6 after 6), as Rapier's flat cubes show
+   *   (3.6 rad/s). Each step is an exact minimization of the pass's convex
+   *   quadratic along one direction, so it cannot overshoot.
+   * - Manifolds are coupled by mass splitting (Tonge, Benevolenski and
+   *   Voroshilov 2012): every round, each manifold solves against a copy of
+   *   last round's velocities in which each of its bodies has its mass and
+   *   inertia divided by the number of the pass's manifolds it is in, and
+   *   then every body takes the sum of its manifolds' impulses with its own
+   *   mass. That is Jacobi across manifolds (the GPU can run one thread per
+   *   manifold, then one per body), and it converges where plain Jacobi would
+   *   overshoot (two manifolds pushing one body the same way: two cubes
+   *   striking a box side by side at e 1 gained 32% of the energy in one
+   *   round). Below e 1 no probe gained energy from more rounds (up to 32;
+   *   64 for the two cubes), so restitutionRounds trades bounce for work: a
+   *   body held by its supports, or struck from two sides at once, needs
+   *   several rounds. 8 by default (RESTITUTION_DEFAULTS), for the bounce
+   *   off a resting cube above; the GPU will pay about 2 dispatches a round,
+   *   and only with the switch on. More rounds are no cure for a heavy
+   *   striker: the 5 kg ball at 10 m/s (e 0.9) gets 0.30 of e at 8 rounds,
+   *   0.19 at 16 and 0.60 at 32, and a 144 kg ball sinks into a 10-cube
+   *   column up to 0.12 m at 8 rounds, 0.21 m at 32 (rule max). At e 1 more
+   *   rounds overshoot: the two cubes striking a box keep 0.99983 of the
+   *   energy at 8 rounds, 1.0019 at 16 and 1.0034 at 64.
+   * - A point that bounced and will separate (P > 0 and its target times h
+   *   beyond restDepth) starts the next step with no force (lambda 0): its
+   *   impact force carried as a warm start would push the bodies apart again
+   *   (a ball of e 0.3 dropped at 5 m/s rebounded at 1.04 e). A point whose
+   *   rebound stays within restDepth in a step keeps its force: a resting
+   *   stack under restitutionThreshold 0 bounces nothing to speak of, but
+   *   zeroing its forces dropped the load floor and cap, and S1 24 at e 0.9
+   *   moved at 1.04 m/s and sank 3.13 m.
+   * After post-stabilization, because that pass reads lambda; it moves
+   * positions only, so before or after makes no other difference. Rolling
+   * contacts need nothing more: a sphere's lever arm is along n, so its
+   * impulse goes through the centre.
+   */
+  restitute(v0: Vec3[], w0: Vec3[], q0: Quat[]): void {
+    const { p, bodies, contacts } = this;
+    const h = this.scene.dt;
+    const threshold = p.restitutionThreshold ?? RESTITUTION_DEFAULTS.restitutionThreshold;
+    const rounds = p.restitutionRounds ?? RESTITUTION_DEFAULTS.restitutionRounds;
+    const rule = this.scene.restitutionCombine ?? DEFAULT_RESTITUTION_COMBINE, groundE = this.scene.ground?.restitution ?? 0;
+    const st: StepStats['restitution'] = { contacts: 0, impulse: 0, momentum: [0, 0, 0], groundImpulse: [0, 0, 0] };
+    this.stats.restitution = st;
+    const n = bodies.length;
+    // Normal velocity of contact c (row 0 of its Jacobian): at the start of the step, and now.
+    const vnStart = (c: Contact) => {
+      let s = 0;
+      for (let k = 0; k < 3; k++) s += c.jb[k]! * v0[c.b]![k]!;
+      for (let k = 0; k < 3; k++) s += c.jb[3 + k]! * w0[c.b]![k]!;
+      if (c.a !== GROUND) {
+        for (let k = 0; k < 3; k++) s += c.ja[k]! * v0[c.a]![k]!;
+        for (let k = 0; k < 3; k++) s += c.ja[3 + k]! * w0[c.a]![k]!;
+      }
+      return s;
+    };
+    const vnNow = (c: Contact) => {
+      const B = bodies[c.b]!;
+      let s = 0;
+      for (let k = 0; k < 3; k++) s += c.jb[k]! * B.linVel[k]! + c.jb[3 + k]! * B.angVel[k]!;
+      if (c.a !== GROUND) { const A = bodies[c.a]!; for (let k = 0; k < 3; k++) s += c.ja[k]! * A.linVel[k]! + c.ja[3 + k]! * A.angVel[k]!; }
+      return s;
+    };
+    // The contact manifolds, [first, end) in contacts: collide() emits each manifold's points together, and a pair has one manifold.
+    const manifolds: Array<[number, number]> = [];
+    for (let i = 0; i < contacts.length;) {
+      const c = contacts[i]!;
+      let j = i + 1;
+      while (j < contacts.length && contacts[j]!.a === c.a && contacts[j]!.b === c.b) j++;
+      manifolds.push([i, j]);
+      i = j;
+    }
+    // The pass's manifolds: the bouncing points of a manifold, then the supports of their bodies (bounce false).
+    interface Rows { a: number; b: number; pts: Contact[]; target: number[]; P: Float64Array; dP: Float64Array; bounce: boolean }
+    const ms: Rows[] = [];
+    const rows = (a: number, b: number, pts: Contact[], target: number[], bounce: boolean): Rows => ({ a, b, pts, target, P: new Float64Array(pts.length), dP: new Float64Array(pts.length), bounce });
+    for (const [i, j] of manifolds) {
+      const c = contacts[i]!;
+      const e = Math.min(1, Math.max(0, combineRestitution(rule, c.a === GROUND ? groundE : bodies[c.a]!.desc.restitution, bodies[c.b]!.desc.restitution)));
+      if (!(e > 0)) continue;
+      const pts: Contact[] = [], target: number[] = [];
+      for (let k = i; k < j; k++) {
+        const ck = contacts[k]!;
+        if (!(ck.lambda[0] < 0)) continue;
+        const u = vnStart(ck);
+        if (u <= -threshold) { pts.push(ck); target.push(-e * u); }
+      }
+      if (pts.length) ms.push(rows(c.a, c.b, pts, target, true));
+    }
+    if (!ms.length) return;
+    const taken = new Set<Contact>(), involved = new Set<number>();
+    for (const m of ms) { for (const c of m.pts) taken.add(c); involved.add(m.b); if (m.a !== GROUND) involved.add(m.a); }
+    for (const [i, j] of manifolds) {
+      const c = contacts[i]!;
+      if (!involved.has(c.b) && !(c.a !== GROUND && involved.has(c.a))) continue;
+      const pts: Contact[] = [], target: number[] = [];
+      for (let k = i; k < j; k++) {
+        const ck = contacts[k]!;
+        if (!taken.has(ck) && ck.lambda[0] < 0) { pts.push(ck); target.push(vnNow(ck)); }
+      }
+      if (pts.length) ms.push(rows(c.a, c.b, pts, target, false));
+    }
+    // The pass's manifolds per body (mass splitting), world inverse inertia at the start of the step (the Jacobians' pose).
+    const split = new Int32Array(n);
+    for (const m of ms) { split[m.b]!++; if (m.a !== GROUND) split[m.a]!++; }
+    const invI: Float64Array[] = [];
+    for (let i = 0; i < n; i++) {
+      if (!split[i]) continue;
+      const b = bodies[i]!, I = new Float64Array(9), q = q0[i]!;
+      const ax = [rotate(q, [1, 0, 0]), rotate(q, [0, 1, 0]), rotate(q, [0, 0, 1])];
+      for (let r = 0; r < 3; r++) for (let c = 0; c < 3; c++) I[3 * r + c] = ax[0]![r]! * ax[0]![c]! / b.inertia[0] + ax[1]![r]! * ax[1]![c]! / b.inertia[1] + ax[2]![r]! * ax[2]![c]! / b.inertia[2];
+      invI[i] = I;
+    }
+    // Velocities u = (v, w) per body.
+    const u = new Float64Array(6 * n);
+    for (let i = 0; i < n; i++) if (split[i]) { u.set(bodies[i]!.linVel, 6 * i); u.set(bodies[i]!.angVel, 6 * i + 3); }
+    // Body i's velocity change per unit impulse along row J (6), with its mass and inertia divided by s: s M^-1 J.
+    const resp = (i: number, J: ArrayLike<number>, s: number, out: Float64Array) => {
+      const im = s / bodies[i]!.mass, I = invI[i]!;
+      for (let k = 0; k < 3; k++) out[k] = J[k]! * im;
+      for (let r = 0; r < 3; r++) out[3 + r] = s * (I[3 * r]! * J[3]! + I[3 * r + 1]! * J[4]! + I[3 * r + 2]! * J[5]!);
+    };
+    const dot6 = (x: ArrayLike<number>, y: ArrayLike<number>) => {
+      let s = 0;
+      for (let k = 0; k < 6; k++) s += x[k]! * y[k]!;
+      return s;
+    };
+    const ra = new Float64Array(6), rb = new Float64Array(6), ja = new Float64Array(6), jb = new Float64Array(6);
+    for (let round = 0; round < rounds; round++) {
+      for (const m of ms) {
+        const A = m.a !== GROUND, K = m.pts.length;
+        const sa = A ? split[m.a]! : 0, sb = split[m.b]!;
+        // This manifold's copy of last round's velocities.
+        const la = A ? u.slice(6 * m.a, 6 * m.a + 6) : null, lb = u.slice(6 * m.b, 6 * m.b + 6);
+        m.dP.fill(0);
+        // For rows (ra6, rb6) of a and b: their normal velocity on the copies, an impulse d along them, their inverse effective mass.
+        const vn = (ra6: ArrayLike<number>, rb6: ArrayLike<number>) => dot6(rb6, lb) + (la ? dot6(ra6, la) : 0);
+        const kick = (ra6: ArrayLike<number>, rb6: ArrayLike<number>, d: number) => {
+          resp(m.b, rb6, sb, rb);
+          for (let k = 0; k < 6; k++) lb[k] = lb[k]! + rb[k]! * d;
+          if (la) { resp(m.a, ra6, sa, ra); for (let k = 0; k < 6; k++) la[k] = la[k]! + ra[k]! * d; }
+        };
+        const inv = (ra6: ArrayLike<number>, rb6: ArrayLike<number>) => {
+          resp(m.b, rb6, sb, rb);
+          let w = dot6(rb6, rb);
+          if (la) { resp(m.a, ra6, sa, ra); w += dot6(ra6, ra); }
+          return w;
+        };
+        if (K > 1) {
+          // Centroid step: equal impulses d / K on every point, d from an exact line search.
+          ja.fill(0); jb.fill(0);
+          let T = 0, minP = Infinity;
+          m.pts.forEach((c, k) => {
+            for (let r = 0; r < 6; r++) { ja[r] = ja[r]! + c.ja[r]!; jb[r] = jb[r]! + c.jb[r]!; }
+            T += m.target[k]!;
+            minP = Math.min(minP, m.P[k]!);
+          });
+          for (let r = 0; r < 6; r++) { ja[r] = ja[r]! / K; jb[r] = jb[r]! / K; }
+          T /= K;
+          let d = (T - vn(ja, jb)) / inv(ja, jb);
+          if (d < 0) d = Math.max(d, -K * minP);
+          kick(ja, jb, d);
+          for (let k = 0; k < K; k++) { m.P[k] = m.P[k]! + d / K; m.dP[k] = m.dP[k]! + d / K; }
+        }
+        // One Gauss-Seidel sweep over the points, each point's total impulse kept >= 0.
+        m.pts.forEach((c, k) => {
+          const P = Math.max(0, m.P[k]! + (m.target[k]! - vn(c.ja, c.jb)) / inv(c.ja, c.jb)), d = P - m.P[k]!;
+          m.P[k] = P;
+          m.dP[k] = m.dP[k]! + d;
+          kick(c.ja, c.jb, d);
+        });
+      }
+      // Every body takes its manifolds' impulses with its own mass.
+      for (const m of ms) {
+        m.pts.forEach((c, k) => {
+          const d = m.dP[k]!;
+          resp(m.b, c.jb, 1, rb);
+          for (let r = 0; r < 6; r++) u[6 * m.b + r] = u[6 * m.b + r]! + rb[r]! * d;
+          if (m.a !== GROUND) { resp(m.a, c.ja, 1, ra); for (let r = 0; r < 6; r++) u[6 * m.a + r] = u[6 * m.a + r]! + ra[r]! * d; }
+        });
+      }
+    }
+    for (let i = 0; i < n; i++) {
+      if (!split[i]) continue;
+      const b = bodies[i]!, m = b.mass;
+      for (let k = 0; k < 3; k++) st.momentum[k] = st.momentum[k]! + m * (u[6 * i + k]! - b.linVel[k]!);
+      b.linVel = [u[6 * i]!, u[6 * i + 1]!, u[6 * i + 2]!];
+      b.angVel = [u[6 * i + 3]!, u[6 * i + 4]!, u[6 * i + 5]!];
+    }
+    for (const m of ms) {
+      m.pts.forEach((c, k) => {
+        const P = m.P[k]!;
+        st.impulse += P;
+        if (m.a === GROUND) for (let r = 0; r < 3; r++) st.groundImpulse[r] = st.groundImpulse[r]! + P * c.n[r]!;
+        if (!m.bounce || !(P > 0)) return;
+        st.contacts++;
+        // A bounced point that will separate starts the next step with no force (see above).
+        if (m.target[k]! * h > p.restDepth) c.lambda = [0, 0, 0];
+      });
+    }
+  }
+
   step(): void {
     const { p, bodies } = this;
     const h = this.scene.dt, gv = this.scene.gravity;
@@ -492,6 +857,8 @@ export class AvbdWorld {
         dx[i]![3 + k] = h * b.angVel[k]!;
       }
     }
+    // Restitution reads the start-of-step velocities (after the angular clamp) at the end of the step.
+    const start = p.restitution ? { v: bodies.map((b) => [...b.linVel] as Vec3), w: bodies.map((b) => [...b.angVel] as Vec3) } : null;
     // World inertia at the start of the step, row-major 3x3.
     const inertiaW = bodies.map((b) => {
       const I = new Float64Array(9);
@@ -619,6 +986,8 @@ export class AvbdWorld {
         }
       }
     }
+    // Restitution: after post-stabilization, on the final velocities.
+    if (start) this.restitute(start.v, start.w, q0);
     for (let i = 0; i < n; i++) {
       const b = bodies[i]!, d = dx[i]!;
       b.pos = [x0[i]![0] + d[0]!, x0[i]![1] + d[1]!, x0[i]![2] + d[2]!];
@@ -637,12 +1006,16 @@ const sub3 = (a: Vec3, b: Vec3): Vec3 => [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
  * that world moves exactly as the original stepped at dt sqrt(k): positions
  * equal step for step, velocities sqrt(k) times as fast. Forces scale by k,
  * so the penalties (force per length, and beta per length squared) do; the
- * spin cap is a speed; lengths (margin, slop, restDepth, matchDistance,
+ * spin cap is a speed, and so is restitution's threshold (scaled only while
+ * restitution is on, from RESTITUTION_DEFAULTS when unset, so an off world
+ * gains no key); lengths (margin, slop, restDepth, matchDistance,
  * stickThreshold, maxSweep) and the dimensionless rest stay. Fields of p
  * that are not set take DEFAULT_AVBD's.
  */
 export function froudeParams(p: Partial<AvbdParams>, k: number): Partial<AvbdParams> {
   if (!(k > 0)) throw new Error(`froudeParams: k must be > 0: ${k}`);
   const q = { ...DEFAULT_AVBD, ...p };
-  return { ...p, beta: q.beta * k, penaltyMin: q.penaltyMin * k, penaltyMax: q.penaltyMax * k, maxAngularSpeed: q.maxAngularSpeed * Math.sqrt(k) };
+  const out: Partial<AvbdParams> = { ...p, beta: q.beta * k, penaltyMin: q.penaltyMin * k, penaltyMax: q.penaltyMax * k, maxAngularSpeed: q.maxAngularSpeed * Math.sqrt(k) };
+  if (q.restitution) out.restitutionThreshold = (q.restitutionThreshold ?? RESTITUTION_DEFAULTS.restitutionThreshold) * Math.sqrt(k);
+  return out;
 }

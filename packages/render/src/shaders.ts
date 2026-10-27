@@ -54,7 +54,7 @@ export const Frame = defineStruct('Frame', [
   ['blockAlbedo', 'vec4f', 'real look: the blocks\' mean linear albedo (the ramp\'s)'],
   ['aoFloorSky', 'vec4f', 'real look: floor sky map placement, uv = (rel.xz - xy) * zw (AoVolume.floorSkyFrame)'],
   ['ground', 'vec4f', 'real look: ground layer (materials.ts), texture scale, texture strength (0: none, nothing sampled), macro variation'],
-  ['groundShape', 'vec4f', 'real look: ground relief (m, the coarse macro scale\'s; half that at the next), patch threshold (macro value; above 1: no patches), unused x2'],
+  ['groundShape', 'vec4f', 'real look: ground relief (m, the coarse macro scale\'s; half that at the next), patch threshold (macro value; above 1: no patches), shadow fill (x the ground radiance added to the sky light), unused'],
   ['hills', 'vec4f', 'real look: horizon hills\' greatest height (radians, 0: none) and distance (m)'],
   ['debris', 'vec4f', 'real look: dust puff size (m, fully grown), puff opacity, chip size (m), unused'],
   ['shadowSoft', 'vec4f', 'real look: tan of the penumbra half angle (0: 3x3 taps), blocker search radius (texels), light depth range (m), steepest receiver plane (depth per uv)'],
@@ -617,7 +617,9 @@ const REAL_SPEC = /* wgsl */ `  var spec = ggx(NoH, a) * smithVis(NoV, NoL, a);
 const REAL_CONTACT = 'mix(0.5 + 0.5 * smoothstep(0.0, 1.5, rel.y + fr.eye.y - fr.groundY), 1.0, max(n.y, 0.0))';
 // Where the AO volume hides the sky, the surface sees blocks instead, and
 // they are not black: realBounce, until sky lighting lands (realism step 2).
-const REAL_SKY_AMBIENT = 'atmoAmbient[0].rgb * ao.y + realBounce() * (1.0 - ao.y)';
+// The sky's light gains fr.groundShape.z of the sunlit ground's radiance
+// (RealOptions.shadowFill): bounce from what is around, off screen.
+const REAL_SKY_AMBIENT = '(atmoAmbient[0].rgb + fr.groundShape.z * atmoAmbient[1].rgb) * ao.y + realBounce() * (1.0 - ao.y)';
 
 // The real look's block (realism step 3): stone texture and relief, a palette
 // colour per block, chipped lighter edges, dirt toward the ground. Injected at
