@@ -1,12 +1,13 @@
-// The viewer's control panel: the scene (scenario, its params, seed, cube size and substeps), rebuilt
-// on demand, and the projectile and the look, applied as soon as a field changes; and the
-// whole setup saved to or loaded from a JSON file (scene-file.ts). The panel
+// The viewer's control panel: the scene (scenario, its params, seed, cube size, substeps and
+// Bounce), rebuilt on demand, and the projectile and the look, applied as soon as a field
+// changes; and the whole setup saved to or loaded from a JSON file (scene-file.ts). The panel
 // only proposes configs; main.ts decides how to apply them (live, or by reset).
+import { parseSpec } from '@tb/bench';
 import { type Env, ENVS, type Ground, GROUNDS, linearToSrgb, LOOKS, REAL_DEFAULTS, REAL_KNOBS, type RealKnob, type RealOptions, srgbToLinear, type Stone, STONES, type V3 } from '@tb/render';
 import { buildScenario, SCENARIOS } from '@tb/scenarios';
 import { type CameraPose, type Framing, FRAMING_LIMITS } from './camera.ts';
 import { escapeHtml } from './html.ts';
-import { autoSubsteps, MAX_SUBSTEPS, SCALE_LIMITS, type ViewerConfig } from './params.ts';
+import { autoSubsteps, AVBD_ENGINES, bounceOn, DEFAULT_BOUNCE, MAX_SUBSTEPS, SCALE_LIMITS, type ViewerConfig, withOption } from './params.ts';
 import { parseProjectile, type Projectile, projectileMass } from './projectile.ts';
 import { parseSceneFile, sceneFile, sceneFileName } from './scene-file.ts';
 
@@ -52,29 +53,42 @@ export function realOverrides(values: Record<RealKnob, number>, groundHex: strin
   return o;
 }
 
+/** The panel's Bounce: restitution on or off (the engine option), and the e every surface then gets (ViewerConfig.bounce). */
+export interface BounceChoice { on: boolean; e: number }
+
 /**
  * The scene a set of form values describes, or why it can't be built. Builds it
  * (cheap next to an engine init) so the panel can show the body count before a rebuild.
+ * Bounce on sets the engine option restitution=true, off removes it (an AVBD engine's
+ * only; the spec is left as it is when the switch does not change).
  */
-export function proposeScene(c: ViewerConfig, scenario: string, params: Record<string, number | boolean>, seed: number, scale = c.scale, substeps = c.substeps):
+export function proposeScene(c: ViewerConfig, scenario: string, params: Record<string, number | boolean>, seed: number, scale = c.scale, substeps = c.substeps,
+  bounce: BounceChoice = { on: bounceOn(c.engine), e: c.bounce }):
   { ok: true; config: ViewerConfig; bodies: number } | { ok: false; error: string } {
   try {
     if (!Number.isInteger(seed)) throw new Error('seed must be an integer');
     if (!(scale >= SCALE_LIMITS[0] && scale <= SCALE_LIMITS[1])) throw new Error(`cube edge must be from ${SCALE_LIMITS[0]} to ${SCALE_LIMITS[1]} m`);
     if (!Number.isInteger(substeps) || substeps < 1 || substeps > MAX_SUBSTEPS) throw new Error(`substeps must be a whole number from 1 to ${MAX_SUBSTEPS}`);
+    // e is checked only while Bounce is on (its field is hidden off); off, a bad e keeps the config's.
+    const okE = bounce.e >= 0 && bounce.e <= 1;
+    if (bounce.on && !okE) throw new Error('bounce e must be from 0 to 1');
+    const name = parseSpec(c.engine).name;
+    if (bounce.on && !AVBD_ENGINES.has(name)) throw new Error(`bounce needs an AVBD engine (GPU AVBD or avbd-ref), not ${name}`);
+    const engine = bounce.on === bounceOn(c.engine) ? c.engine : withOption(c.engine, 'restitution', bounce.on || undefined);
     // A rebuilt scene is framed afresh: a start camera chosen for the old one need not fit it.
-    const next: ViewerConfig = { ...c, scenario, params, seed, scale, substeps, camera: null };
+    const next: ViewerConfig = { ...c, scenario, params, seed, scale, substeps, camera: null, engine, bounce: okE ? bounce.e : c.bounce };
     return { ok: true, config: next, bodies: buildScenario(scenario, params, seed).bodies.length };
   } catch (e) {
     return { ok: false, error: e instanceof Error ? e.message : String(e) };
   }
 }
 
-/** The scene line under the form: bodies, and what the cube size and substeps do to the physics. */
-export function sceneSummary(bodies: number, scale: number, substeps: number): string {
+/** The scene line under the form: bodies, what the cube size and substeps do to the physics, and the bounce's e while Bounce is on (null: off). */
+export function sceneSummary(bodies: number, scale: number, substeps: number, bounce: number | null = null): string {
   const parts = [`${bodies.toLocaleString()} bodies`];
   if (scale !== 1) parts.push(`${+(1 / scale).toFixed(2)} g in cube units, ${+(1 / Math.sqrt(scale)).toFixed(2)}x as fast`);
   if (substeps !== 1) parts.push(`${substeps}x physics cost`);
+  if (bounce !== null) parts.push(`bouncing at e ${bounce}`);
   return parts.join(', ');
 }
 
@@ -103,6 +117,8 @@ export function mountControls(root: HTMLElement, hooks: ControlsHooks): { refres
       ${field('seed', 'seed', 1, 'step="1"')}
       ${field('scale', 'cube edge (m)', 1, `step="any" min="${SCALE_LIMITS[0]}" max="${SCALE_LIMITS[1]}"`)}
       ${field('substeps', 'physics substeps', 1, `step="1" min="1" max="${MAX_SUBSTEPS}"`)}
+      ${field('bounce', 'bounce', false)}
+      <div class="bounce">${field('bounceE', 'bounce e (0-1)', DEFAULT_BOUNCE, 'step="any" min="0" max="1"')}</div>
       <div class="out muted"></div>
       <button type="submit">Rebuild scene</button>
     </form>
@@ -150,6 +166,8 @@ export function mountControls(root: HTMLElement, hooks: ControlsHooks): { refres
   const rebuildButton = sceneForm.querySelector<HTMLButtonElement>('button')!;
   const viewForm = root.querySelector<HTMLFormElement>('#view-form')!;
   const viewOut = viewForm.querySelector<HTMLElement>('.out')!;
+  const bounceBox = input(sceneForm, 'bounce') as HTMLInputElement;
+  const bounceEBox = sceneForm.querySelector<HTMLElement>('.bounce')!;
 
   /** Param fields for a scenario: the config's values when it is the current one, else its defaults. */
   function showParams(scenario: string) {
@@ -164,12 +182,14 @@ export function mountControls(root: HTMLElement, hooks: ControlsHooks): { refres
     for (const el of paramsBox.querySelectorAll('input')) {
       params[el.name.slice(6)] = el.type === 'checkbox' ? el.checked : el.value === '' ? NaN : Number(el.value);
     }
-    return proposeScene(hooks.config(), scenario, params, Number(input(sceneForm, 'seed').value), Number(input(sceneForm, 'scale').value), Number(input(sceneForm, 'substeps').value));
+    const bounce = { on: bounceBox.checked, e: input(sceneForm, 'bounceE').value === '' ? NaN : Number(input(sceneForm, 'bounceE').value) };
+    return proposeScene(hooks.config(), scenario, params, Number(input(sceneForm, 'seed').value), Number(input(sceneForm, 'scale').value), Number(input(sceneForm, 'substeps').value), bounce);
   }
 
   function checkScene() {
+    bounceEBox.hidden = !bounceBox.checked;
     const p = sceneProposal();
-    sceneOut.textContent = p.ok ? sceneSummary(p.bodies, p.config.scale, p.config.substeps) : p.error;
+    sceneOut.textContent = p.ok ? sceneSummary(p.bodies, p.config.scale, p.config.substeps, bounceOn(p.config.engine) ? p.config.bounce : null) : p.error;
     sceneOut.classList.toggle('warn', !p.ok);
     rebuildButton.disabled = !p.ok;
   }
@@ -279,6 +299,11 @@ export function mountControls(root: HTMLElement, hooks: ControlsHooks): { refres
     input(sceneForm, 'seed').value = String(c.seed);
     input(sceneForm, 'scale').value = String(c.scale);
     input(sceneForm, 'substeps').value = String(c.substeps);
+    // Bounce is the AVBD engines' restitution switch; the others keep it off.
+    bounceBox.checked = bounceOn(c.engine);
+    bounceBox.disabled = !AVBD_ENGINES.has(parseSpec(c.engine).name);
+    bounceBox.title = bounceBox.disabled ? 'restitution: GPU AVBD or avbd-ref engines only' : 'restitution: every body and the ground bounce at e (Rebuild to apply)';
+    input(sceneForm, 'bounceE').value = String(c.bounce);
     showParams(c.scenario);
     checkScene();
     const p = c.projectile;

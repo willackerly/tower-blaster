@@ -172,7 +172,12 @@
 // rounds of mass-split Jacobi solve the bouncing manifolds together with the
 // other loaded contacts of their bodies. Off, the step never reads
 // BodyDesc.restitution, and runs are bit-identical to those before it
-// existed. Its known limits, at 10 iterations, e being the pair's, under the
+// existed. The GPU engine applies the same pass in f32
+// (physics-gpu/src/restitution.ts, whose header has its cost and its f32
+// departures: 6 + 2 x restitutionRounds dispatches a step while on; off, no
+// buffer, no pipeline and no dispatch). On SwiftShader its drops rebound at
+// the ratio here to 1.5e-6, and off it gives the floats it gave before the
+// port. Its known limits, at 10 iterations, e being the pair's, under the
 // default average unless a rule is named:
 // - The bounce is step-based: gravity acts over the impact step, so measured
 //   at contact a drop's rebound falls short of e, by 2-7% at 5-10 m/s and more
@@ -931,8 +936,9 @@ export class AvbdWorld {
    *   64 for the two cubes), so restitutionRounds trades bounce for work: a
    *   body held by its supports, or struck from two sides at once, needs
    *   several rounds. 8 by default (RESTITUTION_DEFAULTS), for the bounce
-   *   off a resting cube above; the GPU will pay about 2 dispatches a round,
-   *   and only with the switch on. More rounds are no cure for a heavy
+   *   off a resting cube above; the GPU pays 2 dispatches a round (6 + 2 x
+   *   rounds a step, physics-gpu/src/restitution.ts), and only with the
+   *   switch on. More rounds are no cure for a heavy
    *   striker: the 5 kg ball at 10 m/s (e 0.9) gets 0.30 of e at 8 rounds,
    *   0.19 at 16 and 0.60 at 32, and a 144 kg ball sinks into a 10-cube
    *   column up to 0.12 m at 8 rounds, 0.21 m at 32 (rule max). At e 1 more
@@ -942,10 +948,14 @@ export class AvbdWorld {
    *   beyond restDepth) starts the next step with no force (lambda 0): its
    *   impact force carried as a warm start would push the bodies apart again
    *   (a ball of e 0.3 dropped at 5 m/s rebounded at 1.04 e). A point whose
-   *   rebound stays within restDepth in a step keeps its force: a resting
-   *   stack under restitutionThreshold 0 bounces nothing to speak of, but
-   *   zeroing its forces dropped the load floor and cap, and S1 24 at e 0.9
-   *   moved at 1.04 m/s and sank 3.13 m.
+   *   rebound stays within restDepth in a step keeps its force: an
+   *   undisturbed resting stack under restitutionThreshold 0 bounces nothing
+   *   to speak of, but zeroing its forces dropped the load floor and cap, and
+   *   S1 24 at e 0.9 moved at 1.04 m/s and sank 3.13 m. Threshold 0 does not
+   *   rest a stack once it is struck: a cube landing at 3 m/s on an 8-cube
+   *   column (e 0.5 on every surface and the ground) left the column moving,
+   *   0.088 J and 8.9 mm of side drift 50 s into the run (the GPU's too),
+   *   where thresholds of 0.01 and 0.1 m/s rest it to rounding (1e-32 J).
    * After post-stabilization, because that pass reads lambda; it moves
    * positions only, so before or after makes no other difference. Rolling
    * contacts need nothing more: a sphere's lever arm is along n, so its

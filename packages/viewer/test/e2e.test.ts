@@ -1,13 +1,10 @@
 // The viewer in headless Chromium: it boots, renders a non-blank scene,
 // steps physics, and a fired ball becomes a new body. SwiftShader in CI.
-import { fileURLToPath } from 'node:url';
-import { platform } from 'node:os';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { chromium, type Browser } from 'playwright';
-import { createServer, type ViteDevServer } from 'vite';
-import { requireWebGPU, WEBGPU_ARGS } from '@tb/testkit';
+import { describe, expect, it } from 'vitest';
+import { requireWebGPU } from '@tb/testkit';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { deflateSync } from 'node:zlib';
+import { browser, open, useViewer } from './e2e-harness.ts';
 
 /** Minimal RGBA PNG encoder for debug screenshots of offscreen frames. */
 function encodePng(w: number, h: number, px: { data: number[]; bytesPerRow: number }): Buffer {
@@ -23,30 +20,7 @@ function encodePng(w: number, h: number, px: { data: number[]; bytesPerRow: numb
   return Buffer.concat([Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), chunk('IHDR', ihdr), chunk('IDAT', deflateSync(raw)), chunk('IEND', Buffer.alloc(0))]);
 }
 
-let server: ViteDevServer | null = null;
-let browser: Browser | null = null;
-let origin = '';
-
-beforeAll(async () => {
-  server = await createServer({ configFile: fileURLToPath(new URL('../vite.config.ts', import.meta.url)), server: { port: 0, host: '127.0.0.1' }, logLevel: 'silent' });
-  await server.listen();
-  origin = server.resolvedUrls!.local[0]!.replace('127.0.0.1', 'localhost');
-  try {
-    browser = await chromium.launch({ args: platform() === 'linux' ? WEBGPU_ARGS : ['--enable-unsafe-webgpu'] });
-  } catch (e) {
-    if (requireWebGPU()) throw e;
-  }
-}, 120_000);
-afterAll(async () => { await browser?.close(); await server?.close(); });
-
-async function open(search: string) {
-  const page = await browser!.newPage({ viewport: { width: 640, height: 400 } });
-  const errors: string[] = [];
-  page.on('pageerror', (e) => errors.push(e.message));
-  await page.goto(new URL(search, origin).toString());
-  await page.waitForFunction(() => window.__viewer?.status !== 'loading', undefined, { timeout: 60_000 });
-  return { page, errors };
-}
+useViewer();
 
 describe('viewer', () => {
   // The GPU case also picks 20 solver iterations, which its buttons show.
@@ -219,6 +193,8 @@ describe('viewer', () => {
     const unit = await firedSpeed(55);
     await page.locator('#controls summary').click();
     const scene = page.locator('#scene-form');
+    // Bounce is the AVBD engines' restitution switch: off and disabled on Rapier.
+    expect({ checked: await scene.locator('input[name=bounce]').isChecked(), disabled: await scene.locator('input[name=bounce]').isDisabled() }).toEqual({ checked: false, disabled: true });
     // The browser's own form check must pass the default and a size off any step grid, or submit does nothing.
     const valid = () => scene.locator('input[name=scale]').evaluate((el) => (el as HTMLInputElement).validity.valid);
     expect(await valid()).toBe(true);

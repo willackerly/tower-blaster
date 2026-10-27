@@ -37,12 +37,20 @@
 //   the ground lifted 25 um ends 0.09 um up (engine-gapslop.test.ts). Which
 //   f32 quantity sets it is not traced.
 //
+// - Restitution (AvbdParams.restitution, off by default) is a pass of its
+//   own after finalize, in restitution.ts (its header has the kernels, the
+//   dispatches and memory on, and the f32 departures). Its buffers and
+//   pipelines exist only while it is on (AvbdSolver's restitution); off,
+//   solve() encodes exactly what it did before the port, and no kernel here
+//   reads BodyProps.restitution.
+//
 // Each kernel binds at most 8 storage buffers (the WebGPU default limit).
 import type { CombineRule } from '@tb/engine-api';
 import { assertStorageFits, readBuffer } from '@tb/gpu';
 import { RECORD_MODES } from '@tb/physics-ref';
-import { Body, BodyProps, CentreDual, CentreRecord, ColorParams, ContactDual, field, Manifold, SolverBody, SolverContact, SolverParams, SolverRecord, type StructLayout, wgslStruct } from '@tb/schema';
+import { Body, BodyProps, CentreDual, CentreRecord, ColorParams, ContactDual, field, Manifold, RestSlot, SolverBody, SolverContact, SolverParams, SolverRecord, type StructLayout, wgslStruct } from '@tb/schema';
 import { MAX_COLORS } from './coloring.ts';
+import { REST_BODY_ARGS, REST_INFO_BYTES, REST_SLOT_ARGS, type RestBinding, type RestitutionConfig, restitutionConstants, restitutionKernels } from './restitution.ts';
 
 const WG = 64;
 /** Most threads the tail workgroup can have (SolverDispatch.tailThreads): WebGPU's default limit per workgroup. */
@@ -1764,6 +1772,9 @@ export class AvbdSolver {
   private readonly offHist: GPUBuffer;
   private readonly uniform: GPUBuffer;
   private readonly colorUniform: GPUBuffer;
+  /** The restitution pass's buffers (restitution.ts), only while it is on: a RestSlot per contact slot, and its counters and indirect arguments. */
+  readonly restSlots: GPUBuffer | null = null;
+  readonly restInfo: GPUBuffer | null = null;
   /** The fused dual's (SolverDispatch.dualFusion) mode, side array and colorStart copy; null when unused. */
   private readonly fusion: Fusion;
   private readonly duals: GPUBuffer | null = null;
@@ -1784,9 +1795,25 @@ export class AvbdSolver {
    * of the kicked column either (1e-50 to 1e-38; 1e-20 changed 92 of 104,
    * 2026-10-27), so the two agree in effect while EngineInfo.variant lists it.
    * With records 1 or 2 setup marks a point in the record's word (LOADED_BIT).
+   *
+   * restitution: the restitution pass's settings (restitution.ts) while
+   * AvbdParams.restitution is on, else null (the default): then the pass has
+   * no buffer and no pipeline, and solve() encodes no dispatch of it. It reads
+   * and resets the point form's contacts, so it throws with records 1 or 2. It
+   * also throws with the fused dual (SolverDispatch.dualFusion), which was
+   * never built or tested with it.
    */
-  constructor(private readonly device: GPUDevice, readonly capacity: number, readonly maxPairs: number, private readonly b: SolverBuffers, private readonly dispatch: SolverDispatch = DEFAULT_DISPATCH, readonly records: RecordMode = 0, readonly gapSlop = 0) {
+  constructor(private readonly device: GPUDevice, readonly capacity: number, readonly maxPairs: number, private readonly b: SolverBuffers, private readonly dispatch: SolverDispatch = DEFAULT_DISPATCH, readonly records: RecordMode = 0, readonly gapSlop = 0, readonly restitution: RestitutionConfig | null = null) {
     if (!(Number.isFinite(gapSlop) && gapSlop >= 0)) throw new Error(`AvbdSolver: gapSlop must be a finite number >= 0, got ${gapSlop}`);
+    if (restitution) {
+      const { threshold: t, rounds: r, groundRestitution: g, combine: c } = restitution;
+      if (!(Number.isFinite(t) && t >= 0)) throw new Error(`AvbdSolver: restitution.threshold must be a finite number >= 0, got ${t}`);
+      if (!(Number.isInteger(r) && r >= 1)) throw new Error(`AvbdSolver: restitution.rounds must be an integer >= 1, got ${r}`);
+      if (!(g >= 0 && g <= 1)) throw new Error(`AvbdSolver: restitution.groundRestitution must be in [0, 1], got ${g}`);
+      if (!COMBINE_RULES.includes(c)) throw new Error(`AvbdSolver: restitution.combine must be one of ${COMBINE_RULES.join(', ')}, got ${c}`);
+      if (records !== 0) throw new Error(`AvbdSolver: restitution is not implemented with records ${records} yet (the pass reads the point form's contacts)`);
+      if (dispatch.dualFusion) throw new Error('AvbdSolver: restitution is not implemented with dualFusion yet');
+    }
     if (!(Number.isInteger(dispatch.colorTail) && dispatch.colorTail >= 0 && dispatch.colorTail < MAX_COLORS)) throw new Error(`AvbdSolver: colorTail must be an integer from 0 to ${MAX_COLORS - 1}, got ${dispatch.colorTail}`);
     if (!(Number.isInteger(dispatch.tailThreads) && dispatch.tailThreads >= 1 && dispatch.tailThreads <= MAX_TAIL)) throw new Error(`AvbdSolver: tailThreads must be an integer from 1 to ${MAX_TAIL}, got ${dispatch.tailThreads}`);
     if (!HESSIAN_FORMS.includes(dispatch.hessian)) throw new Error(`AvbdSolver: hessian must be one of ${HESSIAN_FORMS.join(', ')}, got ${dispatch.hessian}`);
@@ -1857,6 +1884,22 @@ export class AvbdSolver {
     mk('avbd dual', code.dual, [['', 'dualPairs', 'dualGround', 'velocities', 'finalize', ...(side ? ['dualPairsSide', 'dualGroundSide'] : [])]], ['rw', 'rw', 'rw', 'r', 'u', ...(side ? ['r' as const] : [])],
       [['dual', [B.bodies, this.solver, this.contacts, this.meta, this.uniform, ...(side ? [this.duals!] : [])]]],
       slop('dualPairs', 'dualGround', ...(side ? ['dualPairsSide', 'dualGroundSide'] : [])));
+    if (restitution) {
+      const slots = buf((maxPairs + capacity) * RestSlot.size, 'avbd restitution slots');
+      const info = device.createBuffer({ size: REST_INFO_BYTES, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.INDIRECT | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST, label: 'avbd restitution info' });
+      this.restSlots = slots;
+      this.restInfo = info;
+      const values = restitutionConstants(restitution, COMBINE_RULES.indexOf(restitution.combine));
+      const res: Record<RestBinding, [Kind, GPUBuffer]> = {
+        contacts: ['r', this.contacts], contactsRw: ['rw', this.contacts], props: ['r', B.props], solver: ['r', this.solver],
+        bodies: ['r', B.bodies], bodiesRw: ['rw', B.bodies], rest: ['rw', slots], restRead: ['r', slots], info: ['rw', info],
+        stepInfo: ['r', this.meta], rowStart: ['r', B.rowStart], rowLength: ['r', B.rowLength], adjSlot: ['r', B.adjSlot], params: ['u', this.uniform],
+      };
+      for (const k of restitutionKernels(COMMON)) {
+        const constants = k.constants.length ? { [k.entry]: Object.fromEntries(k.constants.map((c) => [c, values[c]])) } : {};
+        mk(`avbd ${k.entry}`, k.code, [['', k.entry]], k.bindings.map((x) => res[x][0]), [[k.entry, k.bindings.map((x) => res[x][1])]], constants);
+      }
+    }
   }
 
   /** Per-step uniforms; call once per step before prepare(). */
@@ -1954,10 +1997,33 @@ export class AvbdSolver {
       }
       pass.setPipeline(this.pipes.finalize!);
       pass.dispatchWorkgroups(groups);
+      if (this.restitution) this.encodeRestitution(pass, groups, this.restitution.rounds);
     }
     pass.end();
     this.prevN = n;
     this.cur = 1 - this.cur;
+  }
+
+  /** The restitution pass (restitution.ts), after finalize: 6 + 2 rounds dispatches, all but 3 of them indirect and empty when no point bounces. */
+  private encodeRestitution(pass: GPUComputePassEncoder, groups: number, rounds: number): void {
+    const info = this.restInfo!;
+    const run = (entry: string, args: { direct: number } | { indirect: GPUBuffer; at: number }) => {
+      pass.setPipeline(this.pipes[entry]!);
+      pass.setBindGroup(0, this.binds[entry]!);
+      if ('direct' in args) pass.dispatchWorkgroups(args.direct);
+      else pass.dispatchWorkgroupsIndirect(args.indirect, args.at);
+    };
+    const slots = { indirect: info, at: REST_SLOT_ARGS }, bodies = { indirect: info, at: REST_BODY_ARGS };
+    run('restMark', { indirect: this.b.total, at: 0 });
+    run('restMarkBodies', { direct: groups });
+    run('restArgs', { direct: 1 });
+    run('restSupport', slots);
+    run('restCount', bodies);
+    for (let r = 0; r < rounds; r++) {
+      run('restManifold', slots);
+      run('restBodies', bodies);
+    }
+    run('restFinish', bodies);
   }
 
   /** The contact history half the last solve() read and wrote (p.cur in the uniforms it left). */
@@ -2042,6 +2108,6 @@ export class AvbdSolver {
   }
 
   destroy(): void {
-    for (const x of [this.solver, this.contacts, this.meta, this.pairHist, this.offHist, this.uniform, this.colorUniform, this.duals, this.colorStarts]) x?.destroy();
+    for (const x of [this.solver, this.contacts, this.meta, this.pairHist, this.offHist, this.uniform, this.colorUniform, this.duals, this.colorStarts, this.restSlots, this.restInfo]) x?.destroy();
   }
 }

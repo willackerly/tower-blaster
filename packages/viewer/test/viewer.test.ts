@@ -10,10 +10,11 @@ import {
   withOption, type FreeHooks, type Orbit, orbitAt, parseCamera, parseSceneFile, poseOf, SCENE_FILE_FORMAT, sceneFile, sceneFileName, type ViewerConfig,
   autoSubsteps, froudeSpeed, MAX_SUBSTEPS, SCALE_LIMITS, sceneSummary, worldEngineSpec, worldScene,
   DEFAULT_FRAMING, FRAMING_LIMITS, framingFrom, parseFraming,
+  bounceOn, bounceScene, DEFAULT_BOUNCE, viewerScene,
 } from '../src/index.ts';
 import { SCENARIOS } from '@tb/scenarios';
-import { parseSpec } from '@tb/bench';
-import { DEFAULT_AVBD } from '@tb/physics-ref';
+import { makeEngine, parseSpec } from '@tb/bench';
+import { DEFAULT_AVBD, froudeParams, RESTITUTION_DEFAULTS } from '@tb/physics-ref';
 
 const orbit: Orbit = { target: [1, 2, 3], yaw: 0.7, pitch: 0.4, distance: 25, fovY: 0.9 };
 
@@ -832,6 +833,105 @@ describe('world scale (scale, substeps)', () => {
   });
 });
 
+describe('bounce (restitution)', () => {
+  /** The spec the viewer builds its engine from (main.ts viewerEngine). */
+  const built = (c: ViewerConfig) => worldEngineSpec(engineSpec(c.engine, c.projectile), c.scale);
+
+  it('is off by default; the switch is the engine option restitution, e is bounce.e; both round-trip and the defaults stay out of the URL', () => {
+    const c = parseViewerConfig('');
+    expect(c.bounce).toBe(DEFAULT_BOUNCE);
+    expect(bounceOn(c.engine)).toBe(false);
+    expect(toSearch(c)).not.toMatch(/bounce|restitution/);
+    const on = parseViewerConfig('?scenario=S1&engine=avbd-gpu:iterations=20,restitution=true&bounce.e=0.7');
+    expect(on).toMatchObject({ engine: 'avbd-gpu:iterations=20,restitution=true', bounce: 0.7 });
+    expect(bounceOn(on.engine)).toBe(true);
+    expect(parseViewerConfig(toSearch(on))).toEqual(on);
+    // e is kept with the switch off, as the real look's knobs are whatever the look.
+    const kept = parseViewerConfig('?bounce.e=0');
+    expect(kept.bounce).toBe(0);
+    expect(parseViewerConfig(toSearch(kept))).toEqual(kept);
+    for (const v of ['-0.1', '1.5', 'high', '', 'NaN']) expect(() => parseViewerConfig(`?bounce.e=${v}`)).toThrow(/bounce.e must be a number from 0 to 1/);
+  });
+
+  it('bounceOn: the AVBD engines with restitution on, nothing else', () => {
+    expect(['avbd-gpu:restitution=true', 'avbd-ref:restitution=true', 'avbd-gpu:restitution=1'].map(bounceOn)).toEqual([true, true, true]);
+    expect(['avbd-gpu', 'avbd-gpu:restitution=false', 'avbd-ref:restitutionThreshold=0.5', 'rapier:restitution=true', 'tiered:restitution=true'].map(bounceOn)).toEqual([false, false, false, false, false]);
+  });
+
+  it('off, the scene is the scenario\'s, field for field; on, every body, spawn and the ground take e and nothing else changes', () => {
+    // S5 fires a ball (a spawn input); at scale 0.25 the world scene scales it too.
+    const c = parseViewerConfig('?scenario=S5&scale=0.25&sleep=0');
+    const plain = { ...worldScene(buildScenario('S5', c.params, c.seed), c.scale, c.substeps), sleep: false };
+    expect(viewerScene(c)).toEqual(plain);
+    expect(viewerScene({ ...c, engine: 'avbd-gpu:restitution=false' })).toEqual(plain);
+    expect(viewerScene({ ...c, engine: 'rapier:restitution=true' })).toEqual(plain);
+    expect(plain.bodies.every((b) => b.restitution === 0) && plain.ground!.restitution === undefined).toBe(true);
+    const on = viewerScene({ ...c, engine: 'avbd-gpu:restitution=true', bounce: 0.6 });
+    expect(plain.inputs.length).toBeGreaterThan(0);
+    expect(on.ground).toEqual({ ...plain.ground, restitution: 0.6 });
+    expect(on.bodies).toEqual(plain.bodies.map((b) => ({ ...b, restitution: 0.6 })));
+    expect(on.inputs).toEqual(plain.inputs.map((e) => (e.kind === 'spawn' ? { ...e, body: { ...e.body, restitution: 0.6 } } : e)));
+    expect({ ...on, bodies: [], inputs: [], ground: null }).toEqual({ ...plain, bodies: [], inputs: [], ground: null });
+    // A scene without a ground keeps none.
+    expect(bounceScene({ ...plain, ground: null }, 0.6).ground).toBeNull();
+  });
+
+  it('worldEngineSpec scales the threshold by 1/sqrt(scale) as froudeParams does, only while restitution is on', () => {
+    // Off: the same spec as before Bounce existed (no restitution key appears).
+    expect(parseSpec(worldEngineSpec('avbd-gpu', 0.25)).options).toEqual({ beta: DEFAULT_AVBD.beta * 4, penaltyMin: DEFAULT_AVBD.penaltyMin * 4, penaltyMax: DEFAULT_AVBD.penaltyMax * 4, maxAngularSpeed: DEFAULT_AVBD.maxAngularSpeed * 2 });
+    expect(parseSpec(worldEngineSpec('avbd-gpu:restitution=false,restitutionThreshold=0.5', 0.25)).options).toMatchObject({ restitution: false, restitutionThreshold: 0.5 });
+    // On: the default threshold or the spec's own, times sqrt(4).
+    const on = parseSpec(worldEngineSpec('avbd-gpu:restitution=true', 0.25)).options;
+    expect(on).toMatchObject({ restitution: true, restitutionThreshold: RESTITUTION_DEFAULTS.restitutionThreshold * 2 });
+    expect(on).toEqual({ restitution: true, ...froudeParams({ restitution: true }, 4) });
+    expect(parseSpec(worldEngineSpec('avbd-ref:restitution=true,restitutionThreshold=0.5', 0.25)).options).toMatchObject({ restitution: true, restitutionThreshold: 1 });
+    expect(parseSpec(worldEngineSpec('avbd-gpu:restitution=true', 0.01)).options.restitutionThreshold).toBeCloseTo(10, 12);
+    expect(worldEngineSpec('avbd-gpu:restitution=true', 1)).toBe('avbd-gpu:restitution=true');
+  });
+
+  it('the panel\'s switch sets and removes the engine option, which reaches the engine (scaled at a world scale) and the URL', () => {
+    const c = parseViewerConfig('?scenario=S1&param.F=3&param.H=6&engine=avbd-gpu:iterations=20&scale=0.25');
+    const p = proposeScene(c, 'S1', c.params, 1, c.scale, c.substeps, { on: true, e: 0.7 });
+    expect(p).toMatchObject({ ok: true, config: { engine: 'avbd-gpu:iterations=20,restitution=true', bounce: 0.7 } });
+    if (!p.ok) return;
+    expect(parseViewerConfig(toSearch(p.config))).toEqual(p.config);
+    expect(new URLSearchParams(toSearch(p.config)).get('engine')).toBe('avbd-gpu:iterations=20,restitution=true');
+    expect(new URLSearchParams(toSearch(p.config)).get('bounce.e')).toBe('0.7');
+    // The engines the viewer builds from it have the switch on and the threshold scaled.
+    for (const engine of [p.config.engine, withOption(p.config.engine, 'iterations', undefined).replace('avbd-gpu', 'avbd-ref')]) {
+      const variant = makeEngine(built({ ...p.config, engine })).info.variant;
+      expect(variant).toMatchObject({ restitution: true, restitutionThreshold: 2, restitutionRounds: RESTITUTION_DEFAULTS.restitutionRounds, beta: DEFAULT_AVBD.beta * 4 });
+    }
+    expect(viewerScene(p.config).bodies.every((b) => b.restitution === 0.7)).toBe(true);
+    // Off again: the option is removed, so the engine, its variant and the URL are as before.
+    const off = proposeScene(p.config, 'S1', c.params, 1, c.scale, c.substeps, { on: false, e: 0.7 });
+    expect(off).toMatchObject({ ok: true, config: { engine: 'avbd-gpu:iterations=20', bounce: 0.7 } });
+    if (!off.ok) return;
+    expect(makeEngine(built(off.config)).info.variant).toEqual(makeEngine(built(c)).info.variant);
+    expect(makeEngine(built(off.config)).info.variant).not.toHaveProperty('restitution');
+    expect(viewerScene(off.config)).toEqual(viewerScene(c));
+    // Left as it is, the spec is not rewritten (withOption would turn beta=1e5 into beta=100000).
+    const raw = { ...c, engine: 'avbd-gpu:beta=1e5' };
+    expect(proposeScene(raw, 'S1', c.params, 1)).toMatchObject({ ok: true, config: { engine: 'avbd-gpu:beta=1e5' } });
+    expect(proposeScene({ ...raw, engine: 'avbd-gpu:beta=1e5,restitution=true' }, 'S1', c.params, 1)).toMatchObject({ ok: true, config: { engine: 'avbd-gpu:beta=1e5,restitution=true' } });
+    // Other engines have no switch to turn on; e must be in [0, 1].
+    expect(proposeScene({ ...c, engine: 'rapier' }, 'S1', c.params, 1, 1, 1, { on: true, e: 0.5 })).toMatchObject({ ok: false, error: expect.stringMatching(/bounce needs an AVBD engine/) });
+    expect(proposeScene({ ...c, engine: 'rapier' }, 'S1', c.params, 1, 1, 1, { on: false, e: 0.5 })).toMatchObject({ ok: true, config: { engine: 'rapier' } });
+    for (const e of [-0.1, 1.1, NaN]) expect(proposeScene(c, 'S1', c.params, 1, 1, 1, { on: true, e })).toMatchObject({ ok: false, error: expect.stringMatching(/bounce e must be from 0 to 1/) });
+    // Off, the e field is hidden: a bad e there does not block Rebuild, and the config keeps its own e.
+    for (const e of [2, -0.1, NaN]) expect(proposeScene({ ...c, bounce: 0.3 }, 'S1', c.params, 1, 1, 1, { on: false, e })).toMatchObject({ ok: true, config: { engine: c.engine, bounce: 0.3 } });
+    expect(proposeScene({ ...c, bounce: 0.3 }, 'S1', c.params, 1, 1, 1, { on: false, e: 0.6 })).toMatchObject({ ok: true, config: { bounce: 0.6 } });
+    expect(sceneSummary(54, 1, 1, 0.7)).toBe('54 bodies, bouncing at e 0.7');
+    expect(sceneSummary(54, 0.25, 2, 0.5)).toBe('54 bodies, 4 g in cube units, 2x as fast, 2x physics cost, bouncing at e 0.5');
+  });
+
+  it('a preset keeps Bounce (the engine spec) and its e', () => {
+    const cur = parseViewerConfig('?scenario=S1&engine=avbd-gpu:restitution=true&bounce.e=0.8');
+    expect(parseViewerConfig(presetSearch('?scenario=S4', cur))).toMatchObject({ scenario: 'S4', engine: 'avbd-gpu:restitution=true', bounce: 0.8 });
+    expect(presetSearch('?scenario=S1', cur)).toBe(toSearch(cur));
+  });
+});
+
 describe('look', () => {
   it('round-trips the look and the real knobs through the URL; a preset keeps them', () => {
     const c = parseViewerConfig('?look=real&real.sunElevation=4&real.visibility=12&real.ground=0.3,0.25,0.2&real.stone=granite&real.groundMaterial=dirt&real.groundScale=2&real.env=hall&real.hallSize=0.5');
@@ -1042,7 +1142,7 @@ describe('scene file', () => {
     const f = sceneFile(c, '  Sunset city  ', pose, at);
     expect(f).toMatchObject({
       format: SCENE_FILE_FORMAT, version: 1, name: 'Sunset city', savedAt: at.toISOString(),
-      scene: { scenario: 'S14', params: { ...SCENARIOS.S14!.defaults, towers: 3 }, seed: 1, sleep: null, scale: 1 },
+      scene: { scenario: 'S14', params: { ...SCENARIOS.S14!.defaults, towers: 3 }, seed: 1, sleep: null, scale: 1, bounce: DEFAULT_BOUNCE },
       engine: { name: 'avbd-gpu', options: { iterations: 20, hessian: 'register' } },
       loop: { mode: 'free', pipeline: true, maxSteps: 1, substeps: 1 },
       projectile: { shape: 'cube', size: 1.4, mass: 50, speed: 40 },
@@ -1059,6 +1159,7 @@ describe('scene file', () => {
       '?engine=tiered&loop=frame&maxSteps=3', '?pipeline=0&proj=cube&proj.size=3&proj.mass=200&proj.speed=15',
       '?look=hazy', '?scenario=S3&param.running=true&look=real&real.sunElevation=4&real.visibility=12&real.ground=0.3,0.25,0.2&real.stone=granite&real.groundMaterial=dirt&real.env=hall',
       '?scenario=S1&cam=0,4.5,0,0.8,0.3,25', '?scenario=S1&view.pitch=8&view.fov=30', '?view.fit=2.5&cam=0,1,0,0,0.1,9', '?offscreen=1&engine=avbd-gpu:iterations=40,sweep=false', '?scenario=S14&scale=0.25&substeps=2&loop=frame&maxSteps=2',
+      '?scenario=S1&engine=avbd-gpu:restitution=true&bounce.e=0.8', '?engine=avbd-ref:restitution=true,restitutionThreshold=0.5&scale=0.25', '?engine=rapier&bounce.e=0',
     ];
     for (const u of urls) {
       const c = parseViewerConfig(u);
@@ -1123,6 +1224,8 @@ describe('scene file', () => {
     expect(bad((f) => { f.scene.params.N = 5; })).toThrow(/scene.params \(S1\): unknown key N/);
     expect(bad((f) => { f.scene.scenario = 'S99'; })).toThrow(/unknown scenario S99/);
     expect(bad((f) => { f.scene.seed = 1.5; })).toThrow(/scene.seed must be an integer/);
+    expect(bad((f) => { f.scene.bounce = 2; })).toThrow(/bounce.e must be a number from 0 to 1/);
+    expect(bad((f) => { f.scene.bounce = 'high'; })).toThrow(/scene.bounce must be a number/);
     expect(bad((f) => { f.scene.params.H = '6'; })).toThrow(/scene.params.H must be a number/);
     expect(bad((f) => { f.engine.name = 'warp'; })).toThrow(/unknown engine warp/);
     expect(bad((f) => { f.engine.options = { iterations: 'many' }; })).toThrow(/takes a number/);

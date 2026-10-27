@@ -90,7 +90,7 @@ struct BodyProps {
   friction: f32, // @16
   radius: f32, // @20 bounding sphere radius
   sphere: u32, // @24 1 for a sphere (radius is its radius), 0 for a box: picks rolling contacts (SolverParams.rollingContacts)
-  pad1: u32, // @28
+  restitution: f32, // @28 BodyDesc.restitution; read only by the restitution pass (AvbdParams.restitution)
 }
 
 // Per-body AVBD solver state.
@@ -263,4 +263,17 @@ struct ColorParams {
   alpha: f32, // @4 1 in the main iterations, 0 in post-stabilization
   fuse: u32, // @8 SolverDispatch.dualFusion: 0 no fused dual update, 1 the step's first (last state in the contacts), 2 later ones
   pad1: u32, // @12
+}
+
+// Restitution pass state per contact slot (allocated only while AvbdParams.restitution is on).
+// size 80 B, align 16
+struct RestSlot {
+  vnTarget: vec4f, // @0 per point q: the normal velocity the pass raises it to (-e vn0 if it bounces, the solve's vn if it is a support)
+  P: vec4f, // @16 per point q: the normal impulse the pass has applied there so far, N s (>= 0)
+  lin: vec3f, // @32 this round's linear impulse on body b, the sum of dP n (body a takes -lin)
+  flags: u32, // @44 bits 0-3: point q bounces; bits 4-7: point q is a support; bit 8 (ground slots): the body is in a bouncing manifold
+  angB: vec3f, // @48 this round's angular impulse on body b, the sum of dP (rbw x n)
+  b: u32, // @60 body b of the slot
+  angA: vec3f, // @64 this round's angular impulse on body a, the sum of -dP (raw x n)
+  split: u32, // @76 ground slots: the pass's manifolds the body is in (its mass split); 0 if it is not in the pass
 }
