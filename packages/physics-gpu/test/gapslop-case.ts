@@ -1,5 +1,5 @@
 // The loaded-gap slop's (AvbdParams.gapSlop) probe, shared by its test files
-// (engine-gapslop.test.ts, and with manifold records
+// (engine-gapslop.test.ts and engine-gapslop-column.test.ts, and with manifold records
 // engine-gapslop-records.test.ts and engine-gapslop-records-rest.test.ts, apart
 // so CI's shard planner can put them on different workers): the reference
 // test's 8-cube column (physics-ref/test/avbd.test.ts), kicked sideways.

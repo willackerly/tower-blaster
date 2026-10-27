@@ -4,7 +4,9 @@
 // as before, on it brings the sideways-kicked column back to rest, it leaves
 // rolling contacts and unloaded points alone (spheres without rollingContacts
 // get it), and a lifted stack or cube rests on the excused gap and comes down
-// as on the reference. With manifold records (AvbdParams.records):
+// as on the reference. The kicked column coming back to rest:
+// engine-gapslop-column.test.ts (its own file, for CI's shards). With manifold
+// records (AvbdParams.records):
 // engine-gapslop-records.test.ts and engine-gapslop-records-rest.test.ts. Its
 // checks and variant keys are in engine.test.ts.
 import { describe, expect, it } from 'vitest';
@@ -34,20 +36,6 @@ describe('GPU AVBD engine: the loaded-gap slop (AvbdParams.gapSlop)', () => {
   it('with the lattice colouring it acts', { timeout: 300_000 }, async (ctx) => {
     if (!gpu) return ctx.skip();
     expect(await kicked({ gapSlop: 3e-5, colorMode: 3 })).not.toEqual(await kicked({ colorMode: 3 }));
-  });
-
-  // Defect B (the reference's header). Measured on SwiftShader (2026-10-27), max speed over steps 1201-1500 and
-  // the largest sideways offset at step 1500: without the slop 0.17 m/s and 11.5 mm at 10 iterations, 0.015 m/s
-  // and 3.4 mm at 20 (the reference: 0.25 and 0.016 m/s); with it 8.1e-5 m/s and 0.020 mm, 1.1e-5 m/s and
-  // 0.024 mm (the reference: 8.2e-5 and 1.1e-5 m/s, 0.019 and 0.024 mm).
-  it.for([10, 20])('with gapSlop 3e-5 the sideways-kicked 8-cube column comes back to rest (%i iterations)', { timeout: 600_000 }, async (iterations, ctx) => {
-    if (!gpu) return ctx.skip();
-    const scene = column();
-    const r = await poked(scene, 1500, { iterations, gapSlop: 3e-5 }, { at: 400, dv: sideways(8), win: 300 });
-    let side = 0;
-    scene.bodies.forEach((b, i) => { side = Math.max(side, Math.hypot(r.final.pos[3 * i]! - b.pos[0], r.final.pos[3 * i + 2]! - b.pos[2])); });
-    expect(r.maxV).toBeLessThan(1e-3);
-    expect(side).toBeLessThan(1e-3); // no lean left over
   });
 
   it('it leaves rolling contacts alone, and spheres without rollingContacts get it: a ball on a cube on a ball, kicked', { timeout: 400_000 }, async (ctx) => {

@@ -2,7 +2,7 @@
 // colorMode, colorPriority): the lattice colouring in effect with records 2,
 // records 1 the point form bit for bit under the lattice colourings, and each
 // combination against the reference's same combination, within the single
-// variants' tolerances (records.test.ts, lattice-physics.test.ts).
+// variants' tolerances (records.test.ts, records-2.test.ts, lattice-physics-<modes>.test.ts).
 import { describe, expect, it } from 'vitest';
 import type { SceneDesc } from '@tb/engine-api';
 import { nonFinite } from '@tb/metrics';
@@ -84,7 +84,7 @@ describe('GPU AVBD engine: the opt-in variants together', () => {
   }
 
   describe('each combination against the reference\'s same combination', () => {
-    // lattice-physics.test.ts's bounds for a colorMode against the reference's: a 3x3x8 tower and an 8x8x5 block stand
+    // lattice-physics-<modes>.test.ts's bounds for a colorMode against the reference's: a 3x3x8 tower and an 8x8x5 block stand
     // for 120 steps, within 1e-3 of the reference variant and of where they started. A stand does that under any
     // colouring, so these are smoke tests of the combinations; that the colouring is applied is tested above (and in
     // lattice-colours and lattice-impact).

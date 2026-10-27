@@ -2,7 +2,7 @@
 // the f64 reference variant through an impact, for colorMode 4
 // (lattice-impact-case.ts): it follows the reference until the ball arrives,
 // on every split between direct colours and the tail. Apart from
-// lattice-physics.test.ts and the other modes' files so they run on separate
+// lattice-physics-<modes>.test.ts and the other modes' files so they run on separate
 // CI workers.
 import { describe, it } from 'vitest';
 import { gpu } from './lattice-harness.ts';

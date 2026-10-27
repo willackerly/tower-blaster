@@ -1,17 +1,11 @@
 // The quality protocol of pnpm bench:quality (quality.ts): the gates and the
 // equivalence rule, on the f64 reference in Node and on the GPU through the
-// CLI's own page entry (quality-entry.ts).
-import { fileURLToPath } from 'node:url';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+// CLI's own page entry (quality-entry.ts; Q5 there: quality-q5.test.ts).
+import { describe, expect, it } from 'vitest';
 import { AvbdReferenceEngine, type AvbdParams } from '@tb/physics-ref';
-import { loadBundle, openWebGPU, type WebGPUSession } from '@tb/testkit';
-import type { GpuEngineOptions } from '../src/index.ts';
-import { type CaseId, type CaseMetrics, caseScene, equivalent, evaluate, gates, QUALITY_CASES } from '../src/quality.ts';
+import { type CaseId, type CaseMetrics, caseScene, equivalent, evaluate, gates } from '../src/quality.ts';
 import { simulateCase } from '../src/quality-run.ts';
-import type * as Entry from '../src/quality-entry.ts';
-
-const CASE = (id: CaseId) => QUALITY_CASES.find((c) => c.id === id)!;
-const allTrue = (r: Record<string, boolean | null>) => Object.entries(r).filter(([, v]) => v === false).map(([k]) => k);
+import { AGAINST_REF, againstRef, allTrue, CASE, gpu, runGpu } from './quality-case.ts';
 
 describe('quality protocol: gates and equivalence', () => {
   const q2: CaseMetrics = { id: 'Q2', nonFinite: 0, tipping: 2.86, upright: 2.0, uprightErr: -0.017, before: 2, farSide: 1.6, farRatio: 0.897, turned: true };
@@ -58,36 +52,16 @@ describe('quality protocol: gates and equivalence', () => {
   });
 });
 
-let gpu: WebGPUSession | null = null;
-beforeAll(async () => {
-  gpu = await openWebGPU();
-  if (gpu) await loadBundle(gpu.page, fileURLToPath(new URL('../src/quality-entry.ts', import.meta.url)), '__quality');
-}, 120_000);
-afterAll(async () => { await gpu?.close(); });
-
-const runGpu = async (id: CaseId, params: Partial<AvbdParams>, opts: Omit<GpuEngineOptions, 'device'> = {}) => {
-  const c = CASE(id);
-  const out = await gpu!.page.evaluate(([s, st, ev, p, o]) => (window as unknown as { __quality: typeof Entry }).__quality.runGpuCase(s, st, ev, p, o), [caseScene(c), c.steps, c.every, params, opts] as const);
-  expect(out.error).toBeNull();
-  return { run: out.run!, m: evaluate(c, out.run!) };
-};
-
 describe('quality protocol on the GPU (pnpm bench:quality\'s page entry)', () => {
   it('Q4 (S12) through the entry passes the brief\'s gates', { timeout: 300_000 }, async (ctx) => {
     if (!gpu) return ctx.skip();
     const g = await runGpu('Q4', { iterations: 20 });
     expect(allTrue(gates(g.m, 20))).toEqual([]);
   });
-  // The brief's Q2 at 20 iterations and Q5, which the S12/S13 describe blocks of engine.test.ts do not gate on the GPU,
-  // against the brief's gates and against the f64 reference by the same equivalence rule.
-  it.for(['Q2', 'Q5'] as const)('%s at 20 iterations: the brief\'s gates, and equivalent to the f64 reference', { timeout: 600_000 }, async (id, ctx) => {
+  // The brief's Q2 at 20 iterations (and Q5, quality-q5.test.ts), which the S12/S13 describe blocks of engine.test.ts
+  // do not gate on the GPU, against the brief's gates and against the f64 reference by the same equivalence rule.
+  it(`Q2 ${AGAINST_REF}`, { timeout: 600_000 }, async (ctx) => {
     if (!gpu) return ctx.skip();
-    const p = { iterations: 20 };
-    const g = await runGpu(id, p);
-    const c = CASE(id);
-    const ref = evaluate(c, await simulateCase(new AvbdReferenceEngine(p), caseScene(c), c.steps, c.every));
-    console.log(id, JSON.stringify({ gpu: g.m, ref }));
-    expect(allTrue(gates(g.m, 20))).toEqual([]);
-    expect(allTrue(equivalent(ref, g.m, 20))).toEqual([]);
+    await againstRef('Q2');
   });
 });
