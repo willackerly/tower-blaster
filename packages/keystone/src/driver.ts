@@ -17,11 +17,19 @@ import type { Shot } from './shots.ts';
 export const PRESETTLE_STEPS = 300;
 
 /**
- * Solver iterations Keystone runs AVBD at. At the default 10, columns taller
- * than about 10 cubes bend and topple early; towers here reach 12 courses,
- * and a 20-cube column is within 1% of rigid at 20 (scenario S13).
+ * The AVBD settings Keystone plays and pins par lines at, on the reference
+ * and the GPU engine alike. Measured 2026-10-27 on first par shots re-rolled
+ * from starts 1e-6 m apart (f64 reference): a shot must settle before
+ * SETTLE_CAP. At 20 iterations L1's settled in 1 of 8 runs, columns still
+ * converging; at 30 with the slop L5 and L2 each capped once; only 40 with
+ * the slop kept all 30 L1, L2 and L5 runs under the cap (median 300 to 452
+ * steps), with no quiet faked by position corrections. The slop (3e-5 m, a
+ * loaded contact's gap the main iterations do not count) stops the
+ * post-stabilization pump that kept stacks rocking: late structure speed
+ * falls from 1.3e-2 to 6.8e-4 m/s on L5.
  */
-export const AVBD_ITERATIONS = 20;
+export const AVBD_ITERATIONS = 40;
+export const AVBD_GAP_SLOP = 3e-5;
 
 export class Driver {
   session!: Session;

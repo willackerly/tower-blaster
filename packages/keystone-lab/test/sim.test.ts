@@ -4,14 +4,13 @@
 import { describe, expect, it } from 'vitest';
 import { RapierEngine } from '@tb/adapter-rapier';
 import type { PhysicsEngine } from '@tb/engine-api';
-import { AvbdReferenceEngine } from '@tb/physics-ref';
 import { quatAngle } from '@tb/geom';
-import { RAPIER_SUBSTEPS } from '@tb/keystone-lab';
-import { AVBD_ITERATIONS, compileLevel, GRAVITY, L1, type LevelDef, LEVELS, predictArc, PRESETTLE_STEPS, QUIET_SPEED, QUIET_SPIN, runSession, SETTLE_QUIET, type Shot, shotToSpawn, snapshotHash } from '@tb/keystone';
+import { engineLabel, makeEngine, RAPIER_SUBSTEPS } from '@tb/keystone-lab';
+import { compileLevel, GRAVITY, L1, type LevelDef, LEVELS, predictArc, PRESETTLE_STEPS, QUIET_SPEED, QUIET_SPIN, runSession, SETTLE_QUIET, type Shot, shotToSpawn, snapshotHash } from '@tb/keystone';
 
 const ENGINES = [
   ['Rapier', () => new RapierEngine()],
-  [`AVBD (reference, ${AVBD_ITERATIONS} iterations)`, () => new AvbdReferenceEngine({ iterations: AVBD_ITERATIONS })],
+  [`AVBD (reference, ${engineLabel({ kind: 'ref' })})`, () => makeEngine({ kind: 'ref' })],
 ] as const;
 
 /** Init and run the pre-settle, counting the quiet steps (as the rules define quiet) at its end. */

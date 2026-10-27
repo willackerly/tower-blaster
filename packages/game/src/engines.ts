@@ -11,7 +11,10 @@ export const ENGINES = ['rapier', 'gpu'] as const;
 export type EngineKind = (typeof ENGINES)[number];
 export const DEFAULT_ENGINE: EngineKind = 'rapier';
 
-/** Solver iterations on the GPU: the ones the levels are tuned for. */
+/**
+ * Solver iterations on the GPU: the ones the levels are tuned for. The gap
+ * slop (AVBD_GAP_SLOP) joins them when the GPU engine supports it.
+ */
 export const GPU_ITERATIONS = AVBD_ITERATIONS;
 
 /** The `?engine=` value, or the default when absent. */
