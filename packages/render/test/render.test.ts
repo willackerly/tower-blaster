@@ -9,7 +9,7 @@ import { buildScenario } from '@tb/scenarios';
 import { Body, readStruct, Shape, TIER } from '@tb/schema';
 import { RapierHost } from '@tb/adapter-rapier';
 import { TieredEngine } from '@tb/lattice';
-import { ADAPT_MAX, ADAPT_REF, adaptedExposure, HAZY_DAY, linearToSrgb, lookByName, parseRealOptions, REAL_DEFAULTS, REAL_KNOBS, realLook, writeRealOptions, CLEAR_DAY, MIE_H, mieExtinction, multiTable, normalize, OZONE, OZONE_WIDTH, RAYLEIGH, RAYLEIGH_H, skyRadiance, skyViewDir, skyViewUv, sunAtGround, sunDiscRadiance, transmittance, transmittanceHMu, transmittanceTable, transmittanceUv } from '../src/index.ts';
+import { ADAPT_MAX, ADAPT_REF, adaptedExposure, HAZY_DAY, linearToSrgb, lookByName, lookUniforms, parseRealOptions, REAL_DEFAULTS, REAL_KNOBS, realLook, writeRealOptions, CLEAR_DAY, MIE_H, mieExtinction, multiTable, normalize, OZONE, OZONE_WIDTH, RAYLEIGH, RAYLEIGH_H, skyRadiance, skyViewDir, skyViewUv, sunAtGround, sunDiscRadiance, transmittance, transmittanceHMu, transmittanceTable, transmittanceUv } from '../src/index.ts';
 import { agx, aoFootReference, debrisClass, debrisSpawnReference, debrisWeight, newDebrisReference, chipCount, chipStepReference, CHIP_POOL, CHIPS_PER_EVENT, debrisRings, DEFAULT_DEBRIS, DEFAULT_SPARKS, dustCount, dustStepReference, DUST_PER_EVENT, DUST_POOL, bevelNormal, type V3, CANDY_NIGHT, CTL, HOT_FULL, MAX_EVENTS, SPAWN_BUDGET, FX_WORDS, packFx, tintWord, unpackFx, frustumPlanes, linearToOklab, listMatches, oklabToLinear, srgbToLinear, lookAt, lookOf, lookRange, MATERIAL, multiply, SEG, packBodies, changedRanges, drawnTier, packShapes, paletteOf, perspective, unpackLook } from '../src/index.ts';
 import { gpu, call, type D } from './harness.ts';
 
@@ -209,6 +209,20 @@ describe('look math (CPU twins)', () => {
 });
 
 describe('real look options', () => {
+  it('lookUniforms(look, metres): metric sizes in world units, the rest as at metres 1', () => {
+    const l = realLook({ stoneScale: 2, groundScale: 3, hillDistance: 6 });
+    const one = lookUniforms(l), q = lookUniforms(l, 0.25);
+    expect(lookUniforms(l, 1)).toEqual(one);
+    // Texture tiles 4x as many units, the fade footprint and the hills 4x as far.
+    expect(q.stone).toEqual([(one.stone as number[])[0], 8, ...(one.stone as number[]).slice(2)]);
+    expect(q.ground).toEqual([(one.ground as number[])[0], 12, ...(one.ground as number[]).slice(2)]);
+    expect((q.stoneDetail as number[])[1]).toBeCloseTo(4 * (one.stoneDetail as number[])[1]!, 12);
+    expect((q.hills as number[])[1]).toBe(24000);
+    expect((q.groundShape as number[])[0]).toBe(4 * (one.groundShape as number[])[0]!); // the relief's depth
+    // What belongs to the blocks keeps their units: debris sizes, bevel, colours.
+    for (const k of Object.keys(one).filter((k) => !['stone', 'ground', 'groundShape', 'stoneDetail', 'hills'].includes(k))) expect([k, q[k]]).toEqual([k, one[k]]);
+  });
+
   it('round-trip through URL keys, only the ones set, and realLook fills the rest', () => {
     const o = { sunElevation: 4, sunAzimuth: 200, visibility: 8, sunStrength: 1.5, exposure: 2, autoExposure: 0.5, groundAlbedo: [0.3, 0.25, 0.2] as V3, stone: 'granite' as const, stoneDetail: 0.5, stoneScale: 2, wear: 0.2, dirt: 0, groundMaterial: 'dirt' as const, groundDetail: 0.7, groundScale: 3, groundVariation: 0 };
     const q = new URLSearchParams();
@@ -509,6 +523,19 @@ describe('debris (real look impacts)', () => {
     // Sparks mode: every case over 2.5 m/s, at full strength, normal = dir.
     expect(r.sparks.map((e) => e.slot)).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8]);
     r.sparks.forEach((e) => { expect(e.strength).toBe(e.raw); expect(e.normal).toEqual(e.dir); });
+  }, 120_000);
+
+  it('dvScale: the detector reads speed changes times it, thresholds and all (a world played faster, FrameParams.metres)', async (ctx) => {
+    if (!gpu) return ctx.skip();
+    // Spheres (weight 1) knocked at 3, 6, 10 and 1 m/s in cube units, read at half: 1.5 (under both thresholds), 3, 5 and 0.5.
+    const r = await call('debrisDetect', [{ dv: [0, -3, 0], sphere: true }, { dv: [0, -6, 0], sphere: true }, { dv: [8, 0, -6], sphere: true }, { dv: [0, -1, 0], sphere: true }], 0.5);
+    expect(r.error).toBeNull();
+    for (const mode of [r.debris, r.sparks]) {
+      expect(mode.map((e) => e.slot)).toEqual([1, 2]);
+      expect(mode.map((e) => e.raw)).toEqual([3, 5]);
+      expect(mode.map((e) => e.strength)).toEqual([3, 5]);
+    }
+    expect(r.debris[1]!.dir.map((x) => +x.toFixed(6))).toEqual([0.8, 0, -0.6]); // the direction is the push's, unscaled
   }, 120_000);
 
   it('a budget smaller than the events samples all of them over frames, each frame different events; tokens limit a frame', () => {

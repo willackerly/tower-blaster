@@ -213,7 +213,7 @@ struct SparkParams {
   chipPool: u32, dustPerDv: f32, chipDv: f32, chipPerDv: f32,
   dustDrag: f32, dustRise: f32, chipBounce: f32, chipFriction: f32,
   dustSpeed: f32, chipSpeed: f32, dustRate: f32, chipRate: f32,
-  dustDv: f32, dustFace: f32, dustSlide: f32, pad5: f32,
+  dustDv: f32, dustFace: f32, dustSlide: f32, dvScale: f32,
 }
 
 @group(0) @binding(0) var<uniform> p: SparkParams;
@@ -247,8 +247,8 @@ fn detect(@builtin(global_invocation_id) id: vec3u) {
   let seen = (st.bits >> 24u) == 1u && ((st.bits >> 16u) & 0xffu) == tier;
   if (live && seen && continuous) {
     let dv = b.linVel - st.prevLinVel;
-    let s = length(dv);
-    let d = dv / max(s, 1e-30);
+    let d = dv / max(length(dv), 1e-30);
+    let s = length(dv) * p.dvScale;
     let sh = shapes[b.shape];
     let dl = qrot(vec4f(-b.rot.xyz, b.rot.w), d);
     // Debris: a box's face normal nearest the push, and how far the push
@@ -281,7 +281,7 @@ fn detect(@builtin(global_invocation_id) id: vec3u) {
   if (live) {
     heat = unpack2x16float(st.bits).x * exp(-p.dt / p.heatTau);
     if (seen && continuous) {
-      heat = max(heat, clamp((length(b.linVel - st.prevLinVel) - p.heatDv) / p.heatRange, 0.0, 1.0));
+      heat = max(heat, clamp((length(b.linVel - st.prevLinVel) * p.dvScale - p.heatDv) / p.heatRange, 0.0, 1.0));
     }
     if (((looks[i] >> 12u) & 0xfu) != ${MATERIAL.ball}u) { heat = max(heat, ballContact(i, b)); }
     if (heat > 0.05) { atomicAdd(&ctl[${CTL.hot}], 1u); }
@@ -706,8 +706,11 @@ export class Sparks {
    * Record detect, spawn and simulate into an open compute pass. detect:
    * false skips the detector (injected events only). mode 'debris' makes
    * puffs and chips instead of sparks; switching modes kills every particle.
+   * dvScale (default 1): the detector reads a body's speed change times this,
+   * so a world played faster (Renderer FrameParams.metres) knocks as its unit
+   * world would; the caller runs the particles faster by dt to match.
    */
-  encode(pass: GPUComputePassEncoder, source: BodySource, f: { dt: number; groundY: number; detect?: boolean; mode?: 'sparks' | 'debris' }): void {
+  encode(pass: GPUComputePassEncoder, source: BodySource, f: { dt: number; groundY: number; detect?: boolean; mode?: 'sparks' | 'debris'; dvScale?: number }): void {
     this.bind(source);
     const q = this.device.queue, pr = this.config, db = this.debris, mode = f.mode ?? 'sparks';
     if (mode !== this.mode) { this.clear(); this.mode = mode; }
@@ -721,7 +724,7 @@ export class Sparks {
     for (let k = 0; k < 4; k++) u[16 + k] = balls[k] ?? 0xffffffff;
     fl.set([pr.heatDv, pr.heatRange, pr.heatTau, pr.contact], 20);
     u.set([mode === 'debris' ? 1 : 0, db.dustBudget, db.chipBudget, this.rings[0], this.rings[1]], 24);
-    fl.set([db.dustPerDv, db.chipDv, db.chipPerDv, db.dustDrag, db.dustRise, db.chipBounce, db.chipFriction, db.dustSpeed, db.chipSpeed, db.dustRate, db.chipRate, db.dustDv, db.dustFace, db.dustSlide], 29);
+    fl.set([db.dustPerDv, db.chipDv, db.chipPerDv, db.dustDrag, db.dustRise, db.chipBounce, db.chipFriction, db.dustSpeed, db.chipSpeed, db.dustRate, db.chipRate, db.dustDv, db.dustFace, db.dustSlide, f.dvScale ?? 1], 29);
     q.writeBuffer(this.params, 0, buf);
     // Injected events first; the detector appends after them.
     const inj = this.injected.splice(0);

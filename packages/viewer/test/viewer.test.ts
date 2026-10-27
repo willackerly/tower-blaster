@@ -8,8 +8,11 @@ import {
   newArrivals, newClock, newPacer, PACE_SLACK, parseProjectile, pauseLatch, parseViewerConfig, presetSearch, projectileBody, projectileMass, proposeScene,
   pushRadiusLimit, rayThrough, runFree, SIM_SPEED_TAU, stepDue, stepped, stepsDue, taskYield, toSearch, trackSimSpeed, transform, viewProj, Window,
   withOption, type FreeHooks, type Orbit, orbitAt, parseCamera, parseSceneFile, poseOf, SCENE_FILE_FORMAT, sceneFile, sceneFileName, type ViewerConfig,
+  autoSubsteps, froudeSpeed, MAX_SUBSTEPS, SCALE_LIMITS, sceneSummary, worldEngineSpec, worldScene,
 } from '../src/index.ts';
 import { SCENARIOS } from '@tb/scenarios';
+import { parseSpec } from '@tb/bench';
+import { DEFAULT_AVBD } from '@tb/physics-ref';
 
 const orbit: Orbit = { target: [1, 2, 3], yaw: 0.7, pitch: 0.4, distance: 25, fovY: 0.9 };
 
@@ -765,6 +768,69 @@ describe('viewer config', () => {
   });
 });
 
+describe('world scale (scale, substeps)', () => {
+  it('parses, defaults to 1 and 1, round-trips, and leaves the defaults out of the URL', () => {
+    expect(parseViewerConfig('')).toMatchObject({ scale: 1, substeps: 1 });
+    expect(toSearch(parseViewerConfig(''))).not.toMatch(/scale|substeps/);
+    const c = parseViewerConfig('?scenario=S14&scale=0.25&substeps=3');
+    expect(c).toMatchObject({ scale: 0.25, substeps: 3 });
+    expect(parseViewerConfig(toSearch(c))).toEqual(c);
+    // Substeps default to the scale's own (autoSubsteps), and only others go in the URL, 1 included.
+    expect(parseViewerConfig('?scale=0.25')).toMatchObject({ scale: 0.25, substeps: 2 });
+    expect(toSearch(parseViewerConfig('?scale=0.25'))).not.toMatch(/substeps/);
+    const one = parseViewerConfig('?scale=0.25&substeps=1');
+    expect(toSearch(one)).toMatch(/substeps=1/);
+    expect(parseViewerConfig(toSearch(one))).toEqual(one);
+    expect(parseViewerConfig(`?scale=${SCALE_LIMITS[0]}&substeps=${MAX_SUBSTEPS}`)).toMatchObject({ scale: SCALE_LIMITS[0], substeps: MAX_SUBSTEPS });
+  });
+  it('rejects a scale outside its range or not a number, and substeps that are not a whole number from 1 to MAX_SUBSTEPS', () => {
+    for (const v of ['0', '-1', '11', 'big', '']) expect(() => parseViewerConfig(`?scale=${v}`)).toThrow(/scale must be a number from 0.01 to 10/);
+    for (const v of ['0', '9', '1.5', 'two']) expect(() => parseViewerConfig(`?substeps=${v}`)).toThrow(/substeps must be an integer from 1 to 8/);
+  });
+  it('a preset keeps a chosen scale and substeps set by hand; a scale left at its default stays the default', () => {
+    const cur = parseViewerConfig('?scenario=S14&scale=0.25&substeps=3');
+    expect(parseViewerConfig(presetSearch('?scenario=S4', cur))).toMatchObject({ scenario: 'S4', scale: 0.25, substeps: 3 });
+    expect(parseViewerConfig(presetSearch('?scenario=S4', parseViewerConfig('?scenario=S14&scale=0.25')))).toMatchObject({ scale: 0.25, substeps: 2 });
+    expect(parseViewerConfig(presetSearch('?scenario=S4', parseViewerConfig('?scenario=S14')))).toMatchObject({ scale: 1, substeps: 1 });
+  });
+  it('autoSubsteps keeps each step no coarser than the unit world\'s 1/60 s', () => {
+    expect([1, 2, 10, 0.5, 0.25, 0.2, 0.0625, 0.01].map(autoSubsteps)).toEqual([1, 1, 1, 2, 2, 3, 4, 8]);
+    for (const s of [0.03, 0.11, 0.25, 0.4, 0.7, 1]) if (autoSubsteps(s) < MAX_SUBSTEPS) expect(1 / Math.sqrt(s) / autoSubsteps(s)).toBeLessThanOrEqual(1 + 1e-12);
+  });
+  it('worldScene: gravity 1/scale as strong, starting and spawned velocities froudeSpeed as fast, steps split by substeps', () => {
+    const s = buildScenario('S5', {}, 1);
+    expect(worldScene(s, 1, 1)).toBe(s);
+    const w = worldScene(s, 0.25, 3);
+    expect(w.gravity).toEqual([0, -9.81 * 4, 0]);
+    expect(w.dt).toBeCloseTo(1 / 180, 15);
+    expect(froudeSpeed(0.25)).toBe(2);
+    s.bodies.forEach((b, i) => { expect(w.bodies[i]!.linVel).toEqual(b.linVel.map((v) => v * 2)); expect(w.bodies[i]!.angVel).toEqual(b.angVel.map((v) => v * 2)); expect(w.bodies[i]!.pos).toEqual(b.pos); });
+    expect(s.inputs.length).toBeGreaterThan(0); // S5 fires a ball
+    s.inputs.forEach((e, i) => {
+      const f = w.inputs[i]!;
+      expect(f.step).toBe(e.step * 3);
+      if (e.kind === 'spawn' && f.kind === 'spawn') expect(f.body.linVel).toEqual(e.body.linVel.map((v) => v * 2));
+    });
+    // The time of every event is kept: step x dt.
+    s.inputs.forEach((e, i) => expect(w.inputs[i]!.step * w.dt).toBeCloseTo(e.step * s.dt, 12));
+  });
+  it('worldEngineSpec scales the AVBD engines\' penalties, beta and spin cap (froudeParams), their own values or the defaults, and leaves other engines alone', () => {
+    expect(worldEngineSpec('avbd-gpu', 1)).toBe('avbd-gpu');
+    const g = parseSpec(worldEngineSpec('avbd-gpu:iterations=20', 0.25)).options;
+    expect(g).toMatchObject({ iterations: 20, beta: DEFAULT_AVBD.beta * 4, penaltyMin: DEFAULT_AVBD.penaltyMin * 4, penaltyMax: DEFAULT_AVBD.penaltyMax * 4, maxAngularSpeed: DEFAULT_AVBD.maxAngularSpeed * 2 });
+    expect(parseSpec(worldEngineSpec('avbd-ref:beta=1000', 0.25)).options).toMatchObject({ beta: 4000 });
+    expect(worldEngineSpec('rapier', 0.25)).toBe('rapier');
+  });
+  it('proposeScene checks the cube size and substeps; the summary says what they do', () => {
+    const c = parseViewerConfig('?scenario=S14');
+    expect(proposeScene(c, 'S14', c.params, 1, 0.25, 2)).toMatchObject({ ok: true, config: { scale: 0.25, substeps: 2 } });
+    expect(proposeScene(c, 'S14', c.params, 1, 0, 1)).toMatchObject({ ok: false, error: expect.stringMatching(/cube edge/) });
+    expect(proposeScene(c, 'S14', c.params, 1, 1, 9)).toMatchObject({ ok: false, error: expect.stringMatching(/substeps/) });
+    expect(sceneSummary(1200, 1, 1)).toBe('1,200 bodies');
+    expect(sceneSummary(1200, 0.25, 2)).toBe('1,200 bodies, 4 g in cube units, 2x as fast, 2x physics cost');
+  });
+});
+
 describe('look', () => {
   it('round-trips the look and the real knobs through the URL; a preset keeps them', () => {
     const c = parseViewerConfig('?look=real&real.sunElevation=4&real.visibility=12&real.ground=0.3,0.25,0.2&real.stone=granite&real.groundMaterial=dirt&real.groundScale=2');
@@ -882,9 +948,9 @@ describe('scene file', () => {
     const f = sceneFile(c, '  Sunset city  ', pose, at);
     expect(f).toMatchObject({
       format: SCENE_FILE_FORMAT, version: 1, name: 'Sunset city', savedAt: at.toISOString(),
-      scene: { scenario: 'S14', params: { ...SCENARIOS.S14!.defaults, towers: 3 }, seed: 1, sleep: null },
+      scene: { scenario: 'S14', params: { ...SCENARIOS.S14!.defaults, towers: 3 }, seed: 1, sleep: null, scale: 1 },
       engine: { name: 'avbd-gpu', options: { iterations: 20, hessian: 'register' } },
-      loop: { mode: 'free', pipeline: true, maxSteps: 1 },
+      loop: { mode: 'free', pipeline: true, maxSteps: 1, substeps: 1 },
       projectile: { shape: 'cube', size: 1.4, mass: 50, speed: 40 },
       look: { preset: 'real', real: { ...REAL_DEFAULTS, sunElevation: 6 } },
       camera: pose,
@@ -897,7 +963,7 @@ describe('scene file', () => {
       '', '?scenario=S1&param.gap=0.02&engine=rapier', '?scenario=S4&param.N=10000&param.F=6&param.H=20&sleep=0&seed=7&autofire=120',
       '?engine=tiered&loop=frame&maxSteps=3', '?pipeline=0&proj=cube&proj.size=3&proj.mass=200&proj.speed=15',
       '?look=hazy', '?scenario=S3&param.running=true&look=real&real.sunElevation=4&real.visibility=12&real.ground=0.3,0.25,0.2&real.stone=granite&real.groundMaterial=dirt',
-      '?scenario=S1&cam=0,4.5,0,0.8,0.3,25', '?offscreen=1&engine=avbd-gpu:iterations=40,sweep=false',
+      '?scenario=S1&cam=0,4.5,0,0.8,0.3,25', '?offscreen=1&engine=avbd-gpu:iterations=40,sweep=false', '?scenario=S14&scale=0.25&substeps=2&loop=frame&maxSteps=2',
     ];
     for (const u of urls) {
       const c = parseViewerConfig(u);

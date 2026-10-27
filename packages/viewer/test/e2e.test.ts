@@ -205,6 +205,38 @@ describe('viewer', () => {
     await again.page.close();
   });
 
+  it('the panel\'s cube size brings its substeps, rebuilds at that scale, and the URL keeps it', async (ctx) => {
+    if (!browser) return ctx.skip();
+    const { page, errors } = await open('/?scenario=S1&param.F=3&param.H=6&param.gap=0.02&offscreen=1&engine=rapier');
+    const status = await page.evaluate(() => ({ s: window.__viewer.status, e: window.__viewer.error }));
+    if (status.s === 'error' && /WebGPU|adapter/.test(status.e ?? '') && !requireWebGPU()) return ctx.skip();
+    expect(status).toEqual({ s: 'running', e: undefined });
+    const firedSpeed = async (bodies: number) => {
+      await page.evaluate(() => window.__viewer.fire(0, 0));
+      await page.waitForFunction((n) => window.__viewer.bodies === n, bodies, { timeout: 30_000 });
+      return page.evaluate(() => Math.hypot(...window.__viewer.inputs.at(-1)!.body.linVel));
+    };
+    const unit = await firedSpeed(55);
+    await page.locator('#controls summary').click();
+    const scene = page.locator('#scene-form');
+    // The browser's own form check must pass the default and a size off any step grid, or submit does nothing.
+    const valid = () => scene.locator('input[name=scale]').evaluate((el) => (el as HTMLInputElement).validity.valid);
+    expect(await valid()).toBe(true);
+    await scene.locator('input[name=scale]').fill('0.25');
+    expect(await valid()).toBe(true);
+    expect(await scene.locator('input[name=substeps]').inputValue()).toBe('2');
+    expect(await scene.locator('.out').innerText()).toBe('54 bodies, 4 g in cube units, 2x as fast, 2x physics cost');
+    await scene.locator('button').click();
+    await page.waitForFunction(() => window.__viewer.status !== 'running' || (window.__viewer.resets === 2 && window.__viewer.stepIndex > 5), undefined, { timeout: 60_000 });
+    expect(await page.evaluate(() => window.__viewer.status)).toBe('running');
+    expect(await firedSpeed(55)).toBeCloseTo(2 * unit, 9);
+    const url = new URL(page.url());
+    expect(url.searchParams.get('scale')).toBe('0.25');
+    expect(url.searchParams.get('substeps')).toBeNull(); // 2 is 0.25's own
+    expect(errors).toEqual([]);
+    await page.close();
+  });
+
   it('downloads the setup as named JSON, and loading a file rebuilds that setup in place, camera and all', async (ctx) => {
     if (!browser) return ctx.skip();
     const { page, errors } = await open('/?scenario=S1&param.F=3&param.H=6&param.gap=0.02&offscreen=1&engine=rapier&look=real&real.sunElevation=12');

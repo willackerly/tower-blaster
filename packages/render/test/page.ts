@@ -956,10 +956,10 @@ function sparkShapes(): ArrayBuffer {
   return out;
 }
 
-async function sparkFrame(device: GPUDevice, sp: Sparks, src: BodySource, dt = 0, groundY = -100, mode: 'sparks' | 'debris' = 'sparks') {
+async function sparkFrame(device: GPUDevice, sp: Sparks, src: BodySource, dt = 0, groundY = -100, mode: 'sparks' | 'debris' = 'sparks', dvScale = 1) {
   const enc = device.createCommandEncoder();
   const pass = enc.beginComputePass();
-  sp.encode(pass, src, { dt, groundY, mode });
+  sp.encode(pass, src, { dt, groundY, mode, dvScale });
   pass.end();
   device.queue.submit([enc.finish()]);
   const ctl = Array.from(new Uint32Array(await readBuffer(device, sp.ctl)));
@@ -1023,7 +1023,7 @@ export async function sparkDetect() {
  * or not, each given one speed change; first in debris mode, then the same
  * step in sparks mode (unweighted, normal = dir).
  */
-export async function debrisDetect(cases: Array<{ dv: V3; rot?: [number, number, number, number]; sphere?: boolean }>) {
+export async function debrisDetect(cases: Array<{ dv: V3; rot?: [number, number, number, number]; sphere?: boolean }>, dvScale = 1) {
   const { device } = await sharedDevice({ timestamps: false });
   device.pushErrorScope('validation');
   const cap = cases.length;
@@ -1033,9 +1033,9 @@ export async function debrisDetect(cases: Array<{ dv: V3; rot?: [number, number,
   const run = async (mode: 'sparks' | 'debris') => {
     const src = rawSource(device, bodyWords(base, cap), bodyWords(base, cap), sparkShapes(), looks, cap, cap) as BodySource & { count: number };
     const sp = new Sparks(device);
-    await sparkFrame(device, sp, src, 0, -100, mode); // first sight
+    await sparkFrame(device, sp, src, 0, -100, mode, dvScale); // first sight
     device.queue.writeBuffer(src.bodies, 0, bodyWords(next, cap));
-    const r = await sparkFrame(device, sp, src, 0, -100, mode);
+    const r = await sparkFrame(device, sp, src, 0, -100, mode, dvScale);
     sp.destroy();
     return r.events.sort((a, b) => (a.packed & 0xffffff) - (b.packed & 0xffffff)).map((e) => ({ slot: e.packed & 0xffffff, strength: e.strength, raw: e.raw!, normal: e.normal!, dir: e.dir }));
   };
@@ -1968,6 +1968,41 @@ export async function groundChecks(looks: Array<Partial<RealOptions> & Pick<Rend
   }
   const err = await device.popErrorScope();
   return { frames: out, error: err?.message ?? null };
+}
+
+/**
+ * The real look's ground, air and sky in a world of other metres per unit
+ * (FrameParams.metres): an empty arena seen from [0, 5, 22] towards
+ * [0, 0, 34] at metres 1, and from those points times 1/metres at each
+ * other metres, which is the same view of the same metric world. Per case,
+ * against the first: the most and the mean any pixel's sRGB channel
+ * differs, and whether the frames are the same to the bit.
+ */
+export async function metricGround(metres: number[], real: Partial<RealOptions> = {}, size: [number, number] = [320, 180]) {
+  const { device } = await sharedDevice({ timestamps: false });
+  device.pushErrorScope('validation');
+  const src = new SnapshotSource(device);
+  src.reset([]);
+  src.update(snapshotOf([]), []);
+  const frames: Uint8Array[] = [];
+  for (const m of metres) {
+    const eye: V3 = [0, 5 / m, 22 / m], target: V3 = [0, 0, 34 / m];
+    const rend = goldenRenderer(device, src, realLook({ sunElevation: 35, sunAzimuth: 90, ...real }), size);
+    const f: FrameParams = { viewProj: multiply(perspective(0.9, size[0] / size[1], 0.1 / m, 2000 / m), lookAt(eye, target)), eye, groundY: 0, time: 1, dt: 0, alpha: 1, metres: m };
+    await rend.render(f);
+    const { data, bytesPerRow } = (await rend.render(f, true, true))!.pixels!;
+    const px = new Uint8Array(size[0] * size[1] * 4);
+    for (let y = 0; y < size[1]; y++) for (let x = 0; x < size[0] * 4; x++) px[y * size[0] * 4 + x] = data[y * bytesPerRow + x]!;
+    frames.push(px);
+    rend.destroy();
+  }
+  const out = frames.map((px) => {
+    let max = 0, sum = 0;
+    for (let i = 0; i < px.length; i++) { if (i % 4 === 3) continue; const d = Math.abs(px[i]! - frames[0]![i]!); max = Math.max(max, d); sum += d; }
+    return { max, mean: sum / ((px.length * 3) / 4), same: fnv(px) === fnv(frames[0]!) };
+  });
+  const err = await device.popErrorScope();
+  return { cases: out, error: err?.message ?? null };
 }
 
 /**
