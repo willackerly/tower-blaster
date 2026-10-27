@@ -38,6 +38,7 @@ GPU engines (`avbd-gpu`) only submit work in `step()`, so the harness waits for 
 ```sh
 pnpm bench:suite --channel chrome       # about 5-10 minutes; writes results/suite-<time>.jsonl and .md
 pnpm bench:suite --engine avbd-gpu --timing-mode throughput --channel chrome
+pnpm bench:suite --engine avbd-gpu:boxBroadphase=true --cases kapla --channel chrome   # the Kapla cases only
 ```
 
 ### GPU primitives
