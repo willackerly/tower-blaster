@@ -10,7 +10,7 @@
   "packages/engine-api/test/spec.test.ts": 0,
   "packages/game/test/aim.test.ts": 0.1,
   "packages/game/test/audio.test.ts": 0,
-  "packages/game/test/e2e.test.ts": 70.9,
+  "packages/game/test/e2e.test.ts": 110,
   "packages/game/test/engines.test.ts": 0,
   "packages/game/test/hud.test.ts": 0,
   "packages/game/test/juice.test.ts": 0,
