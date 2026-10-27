@@ -376,8 +376,13 @@ export interface PlainSnapshot { step: number; pos: number[]; rot: number[]; lin
 /** Body `body`'s velocities set to these after `step` steps, as a reference test sets them mid-run (the engine has no setter). */
 export interface Kick { step: number; body: number; linVel: Vec3; angVel: Vec3 }
 
-/** Run a scene on the GPU engine; snapshot every `every` steps (and at the end). */
-export async function simulateGpu(scene: SceneDesc, steps: number, params: Partial<AvbdParams> = {}, every = 0, opts: Omit<GpuEngineOptions, 'device'> = {}, kicks: Kick[] = []) {
+/**
+ * Run a scene on the GPU engine; snapshot every `every` steps (and at the end).
+ * withContacts: also an FNV-1a digest of the whole contact buffer (both history
+ * halves: every point's record, dual state included) after the last step, and
+ * how many points of the last step's half are in use.
+ */
+export async function simulateGpu(scene: SceneDesc, steps: number, params: Partial<AvbdParams> = {}, every = 0, opts: Omit<GpuEngineOptions, 'device'> = {}, kicks: Kick[] = [], withContacts = false) {
   const { device } = await sharedDevice();
   device.pushErrorScope('validation');
   const e = new GpuAvbdEngine(params, { ...opts, device });
@@ -411,9 +416,20 @@ export async function simulateGpu(scene: SceneDesc, steps: number, params: Parti
   const d = await e.diagnostics();
   maxColors = Math.max(maxColors, d.colors);
   if (d.pairsRequired > d.pairsWritten || d.uncolored || d.colorOverflow) worst = d;
+  let contacts: { digest: number; used: number } | null = null;
+  if (withContacts) {
+    const { solver } = e.probeParts();
+    const words = new Uint32Array(await readBuffer(device, solver.contacts));
+    let h = 0x811c9dc5;
+    for (const w of words) h = Math.imul(h ^ w, 0x01000193) >>> 0;
+    const usedAt = field(SolverContact, 'used').offset / 4, stride = SolverContact.size / 4, half = words.length / 2;
+    let used = 0;
+    for (let k = solver.lastHalf * half; k < (solver.lastHalf + 1) * half; k += stride) if (words[k + usedAt]) used++;
+    contacts = { digest: h, used };
+  }
   const error = await device.popErrorScope();
   e.dispose();
-  return { error: error?.message ?? null, snaps, maxColors, worst, wallMs };
+  return { error: error?.message ?? null, snaps, maxColors, worst, wallMs, contacts };
 }
 
 
@@ -784,16 +800,21 @@ export async function dispatchPlan(scene: SceneDesc, opts: Omit<GpuEngineOptions
 }
 
 /** The code of the 'avbd solve' shader module the engine built at init, and the dispatch it chose. */
-export async function solveShader(scene: SceneDesc, opts: Omit<GpuEngineOptions, 'device'>) {
+export async function solveShader(scene: SceneDesc, opts: Omit<GpuEngineOptions, 'device'>, params: Partial<AvbdParams> = {}) {
   const { device } = await sharedDevice();
   const codes: string[] = [];
-  const create = device.createShaderModule.bind(device);
-  device.createShaderModule = (d: GPUShaderModuleDescriptor) => { if (d.label === 'avbd solve') codes.push(d.code); return create(d); };
-  const e = new GpuAvbdEngine({}, { ...opts, device });
-  await e.init(scene);
-  const out = { codes, dispatch: e.dispatch, variant: e.info.variant };
-  e.dispose();
-  return out;
+  // The device is shared by the page's drivers: the hook comes off again however init() ends.
+  const create = device.createShaderModule;
+  device.createShaderModule = (d: GPUShaderModuleDescriptor) => { if (d.label === 'avbd solve') codes.push(d.code); return create.call(device, d); };
+  try {
+    const e = new GpuAvbdEngine(params, { ...opts, device });
+    await e.init(scene);
+    const out = { codes, dispatch: e.dispatch, variant: e.info.variant };
+    e.dispose();
+    return out;
+  } finally {
+    device.createShaderModule = create;
+  }
 }
 
 /**

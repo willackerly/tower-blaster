@@ -304,6 +304,23 @@ export interface AvbdParams {
    * cubes at 1/60 s); a finite number >= 0. See "Loaded gaps" in step().
    */
   gapSlop?: number;
+  /**
+   * Fused dual, opt-in (perf-competition round 2, "dualFusion"): off when
+   * absent or false, and EngineInfo.variant lists it only while it is on
+   * (avbdVariant). A contact's C depends only on its two bodies, and neither
+   * has moved between the end of sweep it and the visit, in sweep it + 1, of
+   * the one that sweep reaches first (the lower colour, the earlier in colour
+   * order; the body itself for a ground contact). So that visit runs sweep
+   * it's dual update first, with sweep it's alpha, and both visits then read
+   * its result, as they would after the separate dual pass: the same
+   * arithmetic on the same values (a loaded point's gapSlop included), so the
+   * same bits, without the pass. The last main iteration's update still runs
+   * as a pass after its sweep, as without fusion, so the stabilization sweep,
+   * the restitution pass and the next step's collide() see what they always
+   * did. The GPU engine does the same (SolverDispatch.dualFusion), without the
+   * I - 1 dual dispatches between sweeps.
+   */
+  dualFusion?: boolean;
 }
 
 export const DEFAULT_AVBD: AvbdParams = {
@@ -321,7 +338,7 @@ export const RESTITUTION_DEFAULTS = { restitutionThreshold: 1, restitutionRounds
  * it is off (avbdVariant), so adding one does not change the result keys of
  * runs that do not use it.
  */
-export const OPT_IN: Partial<Record<keyof AvbdParams, Partial<AvbdParams>>> = { restitution: RESTITUTION_DEFAULTS, gapSlop: {} };
+export const OPT_IN: Partial<Record<keyof AvbdParams, Partial<AvbdParams>>> = { restitution: RESTITUTION_DEFAULTS, gapSlop: {}, dualFusion: {} };
 
 /** EngineInfo.variant for these params: every param, but an opt-in switch and its params only while it is on, with their defaults filled in. */
 export function avbdVariant(p: AvbdParams): Record<string, number | boolean> {
@@ -345,6 +362,12 @@ export function checkRestitution(p: Partial<AvbdParams>): void {
   const t = p.restitutionThreshold, r = p.restitutionRounds;
   if (t !== undefined && !(Number.isFinite(t) && t >= 0)) throw new Error(`AvbdParams.restitutionThreshold must be a finite number >= 0, got ${t}`);
   if (r !== undefined && !(Number.isInteger(r) && r >= 1)) throw new Error(`AvbdParams.restitutionRounds must be an integer >= 1, got ${r}`);
+}
+
+/** Throws on dualFusion that is not a boolean. */
+export function checkDualFusion(p: Partial<AvbdParams>): void {
+  const f = p.dualFusion;
+  if (f !== undefined && typeof f !== 'boolean') throw new Error(`AvbdParams.dualFusion must be a boolean, got ${f}`);
 }
 
 export const GROUND = -1;
@@ -984,6 +1007,37 @@ export class AvbdWorld {
       return s;
     };
 
+    // Dual update of one contact at the current dx: forces and penalties.
+    const dualUpdate = (c: Contact, alpha: number) => {
+      evalC(c, alpha);
+      const bound = c.mu * Math.abs(c.lambda[0]);
+      c.lambda[0] = Math.min(0, c.k[0] * C[0]! + c.lambda[0]);
+      if (c.lambda[0] < 0) c.k[0] = Math.min(c.k[0] + p.beta * Math.abs(C[0]!), p.penaltyMax);
+      const f1 = c.k[1] * C[1]! + c.lambda[1], f2 = c.k[1] * C[2]! + c.lambda[2];
+      const fl = Math.hypot(f1, f2);
+      // Trial force inside the cone: static friction held, or k_t is still too low to tell (a new
+      // contact in an impact), which the drift check at reuse (collide) catches. The last main
+      // iteration's answer stands.
+      c.stick = fl < bound;
+      if (fl < bound) {
+        c.lambda[1] = f1; c.lambda[2] = f2;
+        c.k[1] = c.k[2] = Math.min(c.k[1] + p.beta * Math.hypot(C[1]!, C[2]!), p.penaltyMax);
+      } else {
+        const s = fl > 0 ? bound / fl : 0;
+        c.lambda[1] = f1 * s; c.lambda[2] = f2 * s;
+      }
+    };
+    // dualFusion: the body whose visit runs each contact's deferred dual update (the earlier in
+    // colour order; b for a ground contact), and whether one is pending, with its alpha.
+    let firstVisitor: Int32Array | null = null, pendingDual = false, dualAlpha = 1;
+    if (p.dualFusion) {
+      const visit = new Int32Array(n);
+      let o = 0;
+      for (const group of byColor) for (const i of group) visit[i] = o++;
+      firstVisitor = new Int32Array(contacts.length);
+      contacts.forEach((c, ci) => { firstVisitor![ci] = c.a === GROUND || visit[c.b]! < visit[c.a]! ? c.b : c.a; });
+    }
+
     const lhs = new Float64Array(36), rhs = new Float64Array(6), step = new Float64Array(6);
     const total = p.iterations + (p.postStabilize ? 1 : 0);
     for (let it = 0; it < total; it++) {
@@ -1008,6 +1062,7 @@ export class AvbdWorld {
           }
           for (const ci of touching[i]!) {
             const c = contacts[ci]!;
+            if (pendingDual && firstVisitor![ci] === i) dualUpdate(c, dualAlpha);
             evalC(c, alpha);
             const s = evalF(c);
             const J = c.b === i ? c.jb : c.ja;
@@ -1043,27 +1098,12 @@ export class AvbdWorld {
           for (let k = 0; k < 6; k++) d[k] = d[k]! - step[k]!;
         }
       }
-      // Dual: update forces and penalties (not in the stabilization pass).
+      // Dual: update forces and penalties (not in the stabilization pass). With dualFusion,
+      // this sweep's visits ran the last one's, and this one is deferred to the next main sweep's,
+      // except after the last main sweep.
+      pendingDual = false;
       if (it < p.iterations) {
-        for (const c of contacts) {
-          evalC(c, alpha);
-          const bound = c.mu * Math.abs(c.lambda[0]);
-          c.lambda[0] = Math.min(0, c.k[0] * C[0]! + c.lambda[0]);
-          if (c.lambda[0] < 0) c.k[0] = Math.min(c.k[0] + p.beta * Math.abs(C[0]!), p.penaltyMax);
-          const f1 = c.k[1] * C[1]! + c.lambda[1], f2 = c.k[1] * C[2]! + c.lambda[2];
-          const fl = Math.hypot(f1, f2);
-          // Trial force inside the cone: static friction held, or k_t is still too low to tell (a new
-          // contact in an impact), which the drift check at reuse (collide) catches. The last main
-          // iteration's answer stands.
-          c.stick = fl < bound;
-          if (fl < bound) {
-            c.lambda[1] = f1; c.lambda[2] = f2;
-            c.k[1] = c.k[2] = Math.min(c.k[1] + p.beta * Math.hypot(C[1]!, C[2]!), p.penaltyMax);
-          } else {
-            const s = fl > 0 ? bound / fl : 0;
-            c.lambda[1] = f1 * s; c.lambda[2] = f2 * s;
-          }
-        }
+        if (firstVisitor && it + 1 < p.iterations) { pendingDual = true; dualAlpha = alpha; } else for (const c of contacts) dualUpdate(c, alpha);
       }
       // Velocities from the last main iteration (BDF1); stabilization moves positions only.
       if (it === p.iterations - 1) {

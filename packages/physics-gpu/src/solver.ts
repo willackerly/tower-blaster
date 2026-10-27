@@ -20,7 +20,7 @@
 // Each kernel binds at most 8 storage buffers (the WebGPU default limit).
 import type { CombineRule } from '@tb/engine-api';
 import { assertStorageFits } from '@tb/gpu';
-import { Body, BodyProps, ColorParams, Manifold, SolverBody, SolverContact, SolverParams, wgslStruct } from '@tb/schema';
+import { Body, BodyProps, ColorParams, ContactDual, Manifold, SolverBody, SolverContact, SolverParams, wgslStruct } from '@tb/schema';
 import { MAX_COLORS } from './coloring.ts';
 
 const WG = 64;
@@ -29,6 +29,8 @@ const MAX_TAIL = 256;
 const NONE = 0xffffffff;
 /** Uniform buffer offset alignment for the per-colour dynamic uniforms. */
 const DYN = 256;
+/** The per-colour uniforms' passes: main iterations, stabilization, and with the fused dual the step's first fused main sweep and the later ones. */
+const PASS = { main: 0, stab: 1, firstFused: 2, fused: 3 } as const;
 
 const COMMON = /* wgsl */ `
 ${wgslStruct(Body)}
@@ -427,6 +429,70 @@ const CONTACT_FORCE = /* wgsl */ `  let onB = ct.b == i;
   // energy), continuous across the cone boundary; see the reference's step().
   let kt = select(ct.kT, ct.kT * s, p.slidingHessian != 0u);`;
 
+/**
+ * Where the fused dual (SolverDispatch.dualFusion) keeps a contact's dual
+ * state during the sweeps: off; 'side', a ContactDual array beside the
+ * contacts, so the solve kernel binds them read-only; 'record', the contact
+ * records themselves, which the solve kernel then binds read_write.
+ */
+type Fusion = 'off' | 'side' | 'record';
+const fusionOf = (d: Pick<SolverDispatch, 'dualFusion' | 'solveContactsRW'>): Fusion => (!d.dualFusion ? 'off' : d.solveContactsRW ? 'record' : 'side');
+
+/** Replace `from`, which must occur exactly `count` times in `text`, by `to`. */
+function swap(text: string, from: string, to: string, count = 1): string {
+  const n = text.split(from).length - 1;
+  if (n !== count) throw new Error(`solver.ts: expected ${count} of ${JSON.stringify(from.slice(0, 60))} in a shader piece, found ${n}`);
+  return text.split(from).join(to);
+}
+
+/**
+ * CONTACT_FORCE with the fused dual: before its force, the first visit this
+ * sweep of a contact runs the dual update the last sweep deferred to it
+ * (dualPoint()'s arithmetic), and both visits read the dual state from du. A
+ * contact's C depends only on its two bodies, and neither has moved since the
+ * last sweep ended: the first visit is the earlier body in the colour order
+ * (SolverBody.visit; the body itself for a ground contact), and the other is
+ * solved a colour or more later. In the main sweeps cp.alpha is the dual's
+ * alpha (1), so this C is the one dualPoint() would evaluate, bit for bit.
+ * Needs ci, the contact's index, in scope.
+ */
+function contactForce(fusion: Fusion): string {
+  if (fusion === 'off') return CONTACT_FORCE;
+  const [bodies, force] = CONTACT_FORCE.split('\n  // Clamped forces:');
+  const visit = swap(swap(bodies!,
+    '    if (ct.a != NONE) { let o = solver[ct.a]; dpA = o.dp; phiA = o.phi; }',
+    '    if (ct.a != NONE) { let o = solver[ct.a]; dpA = o.dp; phiA = o.phi; first = me.visit < o.visit; }'),
+    '    let o = solver[ct.b]; dpB = o.dp; phiB = o.phi;',
+    '    let o = solver[ct.b]; dpB = o.dp; phiB = o.phi; first = me.visit < o.visit;');
+  const withFirst = swap(visit, '\n  if (onB) {', '\n  // The contact\'s first visit this sweep: the other body comes later in the colour order, or is the ground.\n  var first = true;\n  if (onB) {');
+  const store = fusion === 'side'
+    ? `  // Until the step's first fused update, the dual state is the record's (setup, warm start); then duals[di], which the
+  // first visit writes and the second reads.
+  let di = ci - p.cur * halfSize();
+  if (cp.fuse == 2u || (cp.fuse == 1u && !first)) { du = duals[di]; }`
+    : '  // The record holds the dual state (the solve kernel binds contacts read_write).';
+  const write = fusion === 'side' ? '    duals[di] = du;' : '    contacts[ci].lt = du.lt; contacts[ci].lambdaN = du.lambdaN; contacts[ci].kN = du.kN; contacts[ci].kT = du.kT;';
+  return `${withFirst}
+  var du = ContactDual(ct.lt, ct.lambdaN, ct.kN, ct.kT);
+${store}
+  if (cp.fuse != 0u && first) {
+    // The last sweep's dual update, deferred to here (dualPoint()).
+    let dbound = ct.mu * abs(du.lambdaN);
+    du.lambdaN = min(0.0, du.kN * C.x + du.lambdaN);
+    if (du.lambdaN < 0.0) { du.kN = min(du.kN + p.beta * abs(C.x), p.penaltyMax); }
+    let dz = du.kT * C.yz + du.lt;
+    let dfl = length(dz);
+    if (dfl < dbound) {
+      du.lt = dz;
+      du.kT = min(du.kT + p.beta * length(C.yz), p.penaltyMax);
+    } else {
+      du.lt = select(vec2f(0.0), dz * (dbound / dfl), dfl > 0.0);
+    }
+${write}
+  }
+  // Clamped forces:${force!.replace(/ct\.(kN|lambdaN|kT|lt)\b/g, 'du.$1')}`;
+}
+
 // accumulate() and solveBody() in the array form.
 const ARRAY_SOLVE = /* wgsl */ `
 // Add one contact's force and stiffness to body i's system.
@@ -513,6 +579,17 @@ fn solveBody(i: u32) {
 }
 `;
 
+/** ARRAY_SOLVE with the fused dual: accumulate() also takes the contact's index. */
+function arraySolve(fusion: Fusion): string {
+  if (fusion === 'off') return ARRAY_SOLVE;
+  let a = swap(ARRAY_SOLVE, CONTACT_FORCE, contactForce(fusion));
+  a = swap(a, 'fn accumulate(ct: SolverContact, i: u32)', 'fn accumulate(ct: SolverContact, ci: u32, i: u32)');
+  a = swap(a, 'let K = array<f32, 9>(ct.kN,', 'let K = array<f32, 9>(du.kN,');
+  a = swap(a, 'let ct = contacts[pairPoint(p.cur, slot, q)];', 'let ci = pairPoint(p.cur, slot, q);\n      let ct = contacts[ci];');
+  a = swap(a, 'let ct = contacts[groundPoint(p.cur, i, q)];', 'let ci = groundPoint(p.cur, i, q);\n    let ct = contacts[ci];');
+  return swap(a, 'accumulate(ct, i);', 'accumulate(ct, ci, i);', 2);
+}
+
 // The entry points, the same in both forms.
 const SOLVE_TAIL = /* wgsl */ `
 // Colour cp.color, one thread per body, dispatched with enough groups for every body.
@@ -571,7 +648,7 @@ fn primalTail(@builtin(local_invocation_index) lid: u32) {
  * - The contacts are read in the same order (the body's pair slots, then
  *   its ground slot), in one loop, so the update below is inlined once.
  */
-function registerSolveBody(): string {
+function registerSolveBody(fusion: Fusion = 'off'): string {
   const xyz = (k: number) => 'xyz'[k]!;
   const upTo = (n: number) => Array.from({ length: n }, (_, k) => k);
   const lower: Array<[number, number]> = upTo(6).flatMap((r) => upTo(r + 1).map((c): [number, number] => [r, c]));
@@ -589,7 +666,7 @@ function registerSolveBody(): string {
   for (let r = 0; r < 3; r++) update.push(`${ind}let J${r} = jrow(ct, ${r}u, onB);`);
   for (let r = 0; r < 3; r++) update.push(`${ind}${upTo(6).map((u) => `g${u} += J${r}[${u}] * F[${r}];`).join(' ')}`);
   for (let r = 0; r < 3; r++) {
-    const k = r === 0 ? 'ct.kN' : 'kt';
+    const k = r === 0 ? (fusion === 'off' ? 'ct.kN' : 'du.kN') : 'kt';
     update.push(`${ind}if (${k} != 0.0) {`);
     update.push(`${ind}  ${upTo(6).map((u) => `let k${u} = ${k} * J${r}[${u}];`).join(' ')}`);
     for (let a = 0; a < 6; a++) update.push(`${ind}  ${upTo(a + 1).map((c) => `h${a}${c} += k${a} * J${r}[${c}];`).join(' ')}`);
@@ -629,10 +706,10 @@ ${gradient.join('\n')}
     var base = groundPoint(p.cur, i, 0u);
     if (e < re) { base = pairPoint(p.cur, adjSlot[e], 0u); }
     for (var q = 0u; q < 4u; q++) {
-      let ct = contacts[base + q];
+${fusion === 'off' ? '' : '      let ci = base + q;\n'}      let ct = contacts[${fusion === 'off' ? 'base + q' : 'ci'}];
       if (ct.used == 0u) { break; }
       // (The body's own state is read again here, as accumulate() does.)
-${CONTACT_FORCE.replace(/^/gm, '    ')}
+${contactForce(fusion).replace(/^/gm, '    ')}
 ${update.join('\n')}
     }
   }
@@ -648,10 +725,52 @@ ${ldl.join('\n')}
 export const HESSIAN_FORMS = ['registers', 'array'] as const;
 export type HessianForm = (typeof HESSIAN_FORMS)[number];
 
-/** The primal shader (entry points primal and primalTail) with the system in the given form. */
-export function solveWgsl(hessian: HessianForm): string {
+/** Colour starts in the uniform that replaces the colorStart storage binding when the fused dual keeps a side array. */
+const COLOR_STARTS = Math.ceil((MAX_COLORS + 1) / 4);
+
+/**
+ * SOLVE_HEAD and SOLVE_TAIL for the fused dual and the contacts binding
+ * (SolverDispatch.dualFusion, solveContactsRW). 'side' adds the duals
+ * binding; the kernel already binds the default limit of 8 storage buffers,
+ * so colorStart becomes a uniform copy (solve() copies it each step). The
+ * fused kernels also get visitOrder(), which writes SolverBody.visit.
+ */
+function solveHead(fusion: Fusion, rw: boolean): string {
+  let h = rw ? swap(SOLVE_HEAD, 'var<storage, read> contacts', 'var<storage, read_write> contacts') : SOLVE_HEAD;
+  if (fusion === 'off') return h;
+  h = swap(h, `${wgslStruct(ColorParams)}\n`, `${wgslStruct(ColorParams)}\n${wgslStruct(ContactDual)}\n`);
+  if (fusion === 'record') return h;
+  h = swap(h, '@group(0) @binding(4) var<storage, read> colorStart: array<u32>;', `// colorStart (u32 x ${MAX_COLORS + 1}) as a uniform: a ninth storage binding would pass the default limit.
+@group(0) @binding(4) var<uniform> colorStarts: array<vec4u, ${COLOR_STARTS}>;
+fn colorStartAt(c: u32) -> u32 { return colorStarts[c / 4u][c % 4u]; }`);
+  return `${h}// Each contact point's dual state while the fused dual updates it, indexed within this step's half.
+@group(0) @binding(10) var<storage, read_write> duals: array<ContactDual>;
+`;
+}
+function solveTail(fusion: Fusion): string {
+  if (fusion === 'off') return SOLVE_TAIL;
+  const t = fusion === 'side' ? SOLVE_TAIL.replace(/colorStart\[([^\]]*)\]/g, 'colorStartAt($1)') : SOLVE_TAIL;
+  return `${t}
+
+// Each body's position in this step's colour order (SolverBody.visit), which
+// tells the fused dual which visit of a contact comes first. Colour 63's bodies
+// are solved in this order too, one after another.
+@compute @workgroup_size(${WG})
+fn visitOrder(@builtin(global_invocation_id) id: vec3u) {
+  if (id.x >= p.n) { return; }
+  solver[order[id.x]].visit = id.x;
+}`;
+}
+
+/**
+ * The primal shader (entry points primal and primalTail, and visitOrder with
+ * the fused dual) with the system in the given form. With dualFusion and
+ * solveContactsRW absent or false it is the shader without either.
+ */
+export function solveWgsl(hessian: HessianForm, d: Pick<SolverDispatch, 'dualFusion' | 'solveContactsRW'> = {}): string {
   if (!HESSIAN_FORMS.includes(hessian)) throw new Error(`solveWgsl: hessian must be one of ${HESSIAN_FORMS.join(', ')}, got ${hessian}`);
-  return hessian === 'array' ? SOLVE_HEAD + ARRAY_STORAGE + JROW + ARRAY_SOLVE + SOLVE_TAIL : SOLVE_HEAD + JROW + registerSolveBody() + SOLVE_TAIL;
+  const fusion = fusionOf(d), head = solveHead(fusion, !!d.solveContactsRW), tail = solveTail(fusion);
+  return hessian === 'array' ? head + ARRAY_STORAGE + JROW + arraySolve(fusion) + tail : head + JROW + registerSolveBody(fusion) + tail;
 }
 
 // Dual update (forces and penalties) and the end-of-step body updates.
@@ -721,7 +840,48 @@ fn finalize(@builtin(global_invocation_id) id: vec3u) {
   bodies[i].rot = applyRotation(s.q0, s.phi);
 }`;
 
-/** The other kernels' shaders; the primal's is solveWgsl(). */
+/**
+ * DUAL with the fused dual's side array (SolverDispatch.dualFusion without
+ * solveContactsRW): dualPairsSide and dualGroundSide run the step's last
+ * dual update from the state the sweeps left in duals, and write it to the
+ * records, where the stabilization sweep and the next step's setup read it.
+ */
+function dualWgsl(fusion: Fusion): string {
+  if (fusion !== 'side') return DUAL;
+  let d = swap(DUAL, `${EVAL}\n`, `${EVAL}\n${wgslStruct(ContactDual)}\n`);
+  d = swap(d, '@group(0) @binding(4) var<uniform> p: SolverParams;', `@group(0) @binding(4) var<uniform> p: SolverParams;
+// The fused dual's state (ContactDual) per contact point of this step's half.
+@group(0) @binding(5) var<storage, read> duals: array<ContactDual>;`);
+  d = swap(d, `fn dualPoint(idx: u32) {
+  var ct = contacts[idx];
+  if (ct.used == 0u) { return; }`, `fn dualPoint(idx: u32, fromSide: bool) {
+  var ct = contacts[idx];
+  if (ct.used == 0u) { return; }
+  if (fromSide) {
+    let du = duals[idx - p.cur * halfSize()];
+    ct.lt = du.lt; ct.lambdaN = du.lambdaN; ct.kN = du.kN; ct.kT = du.kT;
+  }`);
+  d = swap(d, 'dualPoint(pairPoint(p.cur, k, q));', 'dualPoint(pairPoint(p.cur, k, q), false);');
+  d = swap(d, 'dualPoint(groundPoint(p.cur, i, q));', 'dualPoint(groundPoint(p.cur, i, q), false);');
+  return swap(d, '\n// Velocities from the last main iteration (BDF1).', `
+@compute @workgroup_size(${WG})
+fn dualPairsSide(@builtin(global_invocation_id) id: vec3u) {
+  let k = id.x;
+  if (k >= stepInfo[3]) { return; }
+  for (var q = 0u; q < 4u; q++) { dualPoint(pairPoint(p.cur, k, q), true); }
+}
+
+@compute @workgroup_size(${WG})
+fn dualGroundSide(@builtin(global_invocation_id) id: vec3u) {
+  let i = id.x;
+  if (i >= p.n) { return; }
+  for (var q = 0u; q < 4u; q++) { dualPoint(groundPoint(p.cur, i, q), true); }
+}
+
+// Velocities from the last main iteration (BDF1).`);
+}
+
+/** The other kernels' shaders (DUAL without the fused dual's side array: dualWgsl()); the primal's is solveWgsl(). */
 export const SOLVER_WGSL = { PREP, MATCH, SETUP, INIT, DUAL };
 
 /** Index = SolverParams.frictionCombine; combineFriction in the setup kernels follows this order. */
@@ -785,6 +945,37 @@ export interface SolverDispatch {
    * so on other GPUs they may differ in the last bits.
    */
   hessian: HessianForm;
+  /**
+   * Fused dual (AvbdParams.dualFusion; absent or false: off). Each contact's
+   * dual update after main sweep k < I - 1 runs instead at the contact's first
+   * visit in sweep k + 1 (contactForce()), and the dual dispatches between
+   * those sweeps go: 2 (I - 1) fewer dual dispatches (2I - 3 fewer in all,
+   * as visitOrder() adds one), and no pass that re-reads
+   * every contact and both its bodies. The update after the last main sweep
+   * still runs as a pass, as without fusion. visitOrder() writes each body's
+   * position in the colour order once per step, which decides which visit is
+   * first: the earlier colour, or within colour 63 (uncoloured bodies, solved
+   * one after another in that order) the earlier body. Every split between
+   * direct colours and the tail visits a contact's bodies in that order, so
+   * none changes the result. Same arithmetic on the same values as the
+   * separate pass: bit-identical on SwiftShader. Assumes every used contact
+   * point is walked by both its bodies each sweep (true of the rows the
+   * colouring builds: maxEdges = 2 maxPairs, and setup marks the used points
+   * as a prefix). A walk that skipped one would be wrong, not just stale: in
+   * the side array the last pass copies duals[] for every used point, so a
+   * point no body walked would take whatever that entry last held. Any
+   * pruning or early-out in the walk must keep it complete or turn fusion off.
+   */
+  dualFusion?: boolean;
+  /**
+   * The solve kernel binds the contacts read_write (absent or false: read-only).
+   * With dualFusion the fused update then writes the records in place;
+   * without, the state lives in a side array (ContactDual, 24 B per point)
+   * and colorStart moves to a uniform, so the kernel stays at 8 storage
+   * buffers. Without dualFusion only the binding changes (to time the
+   * read-only path against it), not the result.
+   */
+  solveContactsRW?: boolean;
 }
 
 export const DEFAULT_DISPATCH: SolverDispatch = { colorTail: 8, indirectColors: false, tailThreads: MAX_TAIL, hessian: 'registers' };
@@ -842,6 +1033,12 @@ export class AvbdSolver {
   private readonly offHist: GPUBuffer;
   private readonly uniform: GPUBuffer;
   private readonly colorUniform: GPUBuffer;
+  /** The fused dual's (SolverDispatch.dualFusion) mode, side array and colorStart copy; null when unused. */
+  private readonly fusion: Fusion;
+  private readonly duals: GPUBuffer | null = null;
+  private readonly colorStarts: GPUBuffer | null = null;
+  /** solve()'s last iteration count, for encodeProbe(). */
+  private iterations = 0;
   private readonly pipes: Record<string, GPUComputePipeline> = {};
   private readonly binds: Record<string, GPUBindGroup> = {};
   private cur = 0;
@@ -851,6 +1048,8 @@ export class AvbdSolver {
     if (!(Number.isInteger(dispatch.colorTail) && dispatch.colorTail >= 0 && dispatch.colorTail < MAX_COLORS)) throw new Error(`AvbdSolver: colorTail must be an integer from 0 to ${MAX_COLORS - 1}, got ${dispatch.colorTail}`);
     if (!(Number.isInteger(dispatch.tailThreads) && dispatch.tailThreads >= 1 && dispatch.tailThreads <= MAX_TAIL)) throw new Error(`AvbdSolver: tailThreads must be an integer from 1 to ${MAX_TAIL}, got ${dispatch.tailThreads}`);
     if (!HESSIAN_FORMS.includes(dispatch.hessian)) throw new Error(`AvbdSolver: hessian must be one of ${HESSIAN_FORMS.join(', ')}, got ${dispatch.hessian}`);
+    for (const k of ['dualFusion', 'solveContactsRW'] as const) if (dispatch[k] !== undefined && typeof dispatch[k] !== 'boolean') throw new Error(`AvbdSolver: ${k} must be a boolean, got ${dispatch[k]}`);
+    this.fusion = fusionOf(dispatch);
     const buf = (bytes: number, label: string) => (assertStorageFits(device, bytes, label), device.createBuffer({ size: Math.max(16, bytes), usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST, label }));
     this.solver = buf(capacity * SolverBody.size, 'avbd solver bodies');
     this.contacts = buf(AvbdSolver.contactBytes(capacity, maxPairs), 'avbd contacts');
@@ -858,14 +1057,22 @@ export class AvbdSolver {
     this.pairHist = buf(2 * maxPairs * 8, 'avbd pair history');
     this.offHist = buf(2 * capacity * 4, 'avbd offset history');
     this.uniform = device.createBuffer({ size: SolverParams.size, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST, label: 'avbd params' });
-    // One entry per (colour, pass): alpha 1 for the main iterations, 0 for stabilization.
-    this.colorUniform = device.createBuffer({ size: 2 * MAX_COLORS * DYN, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST, label: 'avbd colour params' });
-    const cu = new ArrayBuffer(2 * MAX_COLORS * DYN);
-    for (let stab = 0; stab < 2; stab++) for (let c = 0; c < MAX_COLORS; c++) {
-      new Uint32Array(cu, (stab * MAX_COLORS + c) * DYN, 1)[0] = c;
-      new Float32Array(cu, (stab * MAX_COLORS + c) * DYN + 4, 1)[0] = stab ? 0 : 1;
+    // One entry per (colour, pass): alpha 1 for the main iterations, 0 for stabilization. With the
+    // fused dual, two more passes of main iterations: the step's first fused sweep and the later ones
+    // (ColorParams.fuse 1 and 2; PASS).
+    const passes = this.fusion === 'off' ? 2 : 4;
+    this.colorUniform = device.createBuffer({ size: passes * MAX_COLORS * DYN, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST, label: 'avbd colour params' });
+    const cu = new ArrayBuffer(passes * MAX_COLORS * DYN);
+    for (let pass = 0; pass < passes; pass++) for (let c = 0; c < MAX_COLORS; c++) {
+      new Uint32Array(cu, (pass * MAX_COLORS + c) * DYN, 1)[0] = c;
+      new Float32Array(cu, (pass * MAX_COLORS + c) * DYN + 4, 1)[0] = pass === PASS.stab ? 0 : 1;
+      if (pass >= PASS.firstFused) new Uint32Array(cu, (pass * MAX_COLORS + c) * DYN + 8, 1)[0] = pass === PASS.firstFused ? 1 : 2;
     }
     device.queue.writeBuffer(this.colorUniform, 0, cu);
+    if (this.fusion === 'side') {
+      this.duals = buf((maxPairs + capacity) * 4 * ContactDual.size, 'avbd fused dual state');
+      this.colorStarts = device.createBuffer({ size: COLOR_STARTS * 16, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST, label: 'avbd colour starts' });
+    }
     const mk = (name: string, code: string, entries: Array<[string, ...string[]]>, kinds: Kind[], groups: Array<[string, GPUBuffer[]]>, constants: Record<string, Record<string, number>> = {}) => {
       const layout = device.createBindGroupLayout({
         label: name,
@@ -891,11 +1098,14 @@ export class AvbdSolver {
     mk('avbd setup', SETUP, [['', 'pairSetup', 'groundSetup']], ['r', 'r', 'r', 'r', 'r', 'r', 'rw', 'r', 'u'],
       [['setup', [B.manifolds, B.groundManifolds, B.bodies, B.props, this.meta, B.prev, this.contacts, this.solver, this.uniform]]]);
     mk('avbd init', INIT, [['', 'initBodies']], ['rw', 'rw', 'u'], [['init', [B.bodies, this.solver, this.uniform]]]);
-    mk('avbd solve', solveWgsl(dispatch.hessian), [['', 'primal', 'primalTail']], ['r', 'rw', 'r', 'r', 'r', 'r', 'r', 'r', 'u', 'ud'],
-      [['solve', [B.props, this.solver, this.contacts, B.order, B.colorStart, B.rowStart, B.rowLength, B.adjSlot, this.uniform, this.colorUniform]]],
+    // The solve kernel: 8 storage buffers. The fused dual's side array takes colorStart's place among them (as a uniform copy).
+    const side = this.fusion === 'side';
+    const solveKinds: Kind[] = ['r', 'rw', dispatch.solveContactsRW ? 'rw' : 'r', 'r', side ? 'u' : 'r', 'r', 'r', 'r', 'u', 'ud', ...(side ? ['rw' as const] : [])];
+    mk('avbd solve', solveWgsl(dispatch.hessian, dispatch), [['', 'primal', 'primalTail', ...(this.fusion === 'off' ? [] : ['visitOrder'])]], solveKinds,
+      [['solve', [B.props, this.solver, this.contacts, B.order, side ? this.colorStarts! : B.colorStart, B.rowStart, B.rowLength, B.adjSlot, this.uniform, this.colorUniform, ...(side ? [this.duals!] : [])]]],
       { primalTail: { tailThreads: dispatch.tailThreads } });
-    mk('avbd dual', DUAL, [['', 'dualPairs', 'dualGround', 'velocities', 'finalize']], ['rw', 'rw', 'rw', 'r', 'u'],
-      [['dual', [B.bodies, this.solver, this.contacts, this.meta, this.uniform]]]);
+    mk('avbd dual', dualWgsl(this.fusion), [['', 'dualPairs', 'dualGround', 'velocities', 'finalize', ...(side ? ['dualPairsSide', 'dualGroundSide'] : [])]], ['rw', 'rw', 'rw', 'r', 'u', ...(side ? ['r' as const] : [])],
+      [['dual', [B.bodies, this.solver, this.contacts, this.meta, this.uniform, ...(side ? [this.duals!] : [])]]]);
   }
 
   /** Per-step uniforms; call once per step before prepare(). */
@@ -942,6 +1152,9 @@ export class AvbdSolver {
     encoder.copyBufferToBuffer(b.offsets, 0, this.offHist, this.cur * this.capacity * 4, this.capacity * 4);
     encoder.copyBufferToBuffer(b.total, 0, this.meta, 0, 32);
     encoder.copyBufferToBuffer(b.total, 12, this.meta, 32 + 4 * this.cur, 4);
+    if (this.colorStarts) encoder.copyBufferToBuffer(b.colorStart, 0, this.colorStarts, 0, (MAX_COLORS + 1) * 4);
+    this.iterations = iterations;
+    const fused = this.fusion !== 'off';
     const groups = Math.max(1, Math.ceil(n / WG));
     const pass = encoder.beginComputePass(timestampWrites ? { timestampWrites } : {});
     if (n > 0) {
@@ -953,12 +1166,18 @@ export class AvbdSolver {
       pass.setBindGroup(0, this.binds.init!);
       pass.setPipeline(this.pipes.initBodies!);
       pass.dispatchWorkgroups(groups);
+      if (fused) {
+        pass.setBindGroup(0, this.binds.solve!, [0]);
+        pass.setPipeline(this.pipes.visitOrder!);
+        pass.dispatchWorkgroups(groups);
+      }
       // Colours below `direct` get a dispatch each; the tail workgroup does the rest.
       const { indirectColors } = this.dispatch;
       const direct = indirectColors ? MAX_COLORS - 1 : this.dispatch.colorTail;
       for (let it = 0; it <= iterations; it++) {
-        const stab = it === iterations ? 1 : 0;
-        const colour = (c: number) => [(stab * MAX_COLORS + c) * DYN];
+        // The fused dual runs the last sweep's dual update in main sweeps 1 .. I - 1.
+        const at = it === iterations ? PASS.stab : !fused || it === 0 ? PASS.main : it === 1 ? PASS.firstFused : PASS.fused;
+        const colour = (c: number) => [(at * MAX_COLORS + c) * DYN];
         pass.setPipeline(this.pipes.primal!);
         for (let c = 0; c < direct; c++) {
           pass.setBindGroup(0, this.binds.solve!, colour(c));
@@ -969,10 +1188,12 @@ export class AvbdSolver {
         pass.setBindGroup(0, this.binds.solve!, colour(direct));
         pass.dispatchWorkgroups(1);
         pass.setBindGroup(0, this.binds.dual!);
-        if (it < iterations) {
-          pass.setPipeline(this.pipes.dualPairs!);
+        // With the fused dual, only the last main sweep's dual update is a pass; from the side array once a sweep has fused.
+        if (it < iterations && (!fused || it === iterations - 1)) {
+          const fromSide = this.fusion === 'side' && it > 0;
+          pass.setPipeline(fromSide ? this.pipes.dualPairsSide! : this.pipes.dualPairs!);
           pass.dispatchWorkgroupsIndirect(b.total, 0);
-          pass.setPipeline(this.pipes.dualGround!);
+          pass.setPipeline(fromSide ? this.pipes.dualGroundSide! : this.pipes.dualGround!);
           pass.dispatchWorkgroups(groups);
         }
         if (it === iterations - 1) {
@@ -1004,7 +1225,13 @@ export class AvbdSolver {
    * empty one, that is the dispatch's fixed cost. They run on the state the
    * last step left and change it: primal pieces only touch dp and phi, which
    * the next step's initBodies overwrites; the dual changes contact state,
-   * which the next step warm-starts from.
+   * which the next step warm-starts from. With the fused dual, the primal
+   * pieces run as a main sweep after the step's first fused one does (each
+   * contact's first visit runs a dual update), and the dual is the step's one
+   * dual pass, as solve() issued it. The fused update in a primal piece
+   * writes the side array, which the next step writes before it reads it, or
+   * in place (solveContactsRW) the contacts: there each rep of a primal piece
+   * changes contact state too.
    */
   encodeProbe(pass: GPUComputePassEncoder, n: number, piece: { primal: number } | 'tail' | 'dual', reps: number): void {
     if (n === 0) return;
@@ -1012,11 +1239,12 @@ export class AvbdSolver {
     const groups = Math.max(1, Math.ceil(n / WG));
     const direct = this.dispatch.indirectColors ? MAX_COLORS - 1 : this.dispatch.colorTail;
     if (piece === 'dual') {
+      const fromSide = this.fusion === 'side' && this.iterations > 1;
       pass.setBindGroup(0, this.binds.dual!);
       for (let r = 0; r < reps; r++) {
-        pass.setPipeline(this.pipes.dualPairs!);
+        pass.setPipeline(fromSide ? this.pipes.dualPairsSide! : this.pipes.dualPairs!);
         pass.dispatchWorkgroupsIndirect(b.total, 0);
-        pass.setPipeline(this.pipes.dualGround!);
+        pass.setPipeline(fromSide ? this.pipes.dualGroundSide! : this.pipes.dualGround!);
         pass.dispatchWorkgroups(groups);
       }
       return;
@@ -1024,7 +1252,8 @@ export class AvbdSolver {
     const c = piece === 'tail' ? direct : piece.primal;
     if (piece !== 'tail' && !(Number.isInteger(c) && c >= 0 && c < MAX_COLORS - 1)) throw new Error(`AvbdSolver.encodeProbe: colour ${c} has no primal dispatch (colours 0-${MAX_COLORS - 2} do; ${MAX_COLORS - 1} is solved serially)`);
     pass.setPipeline(piece === 'tail' ? this.pipes.primalTail! : this.pipes.primal!);
-    pass.setBindGroup(0, this.binds.solve!, [c * DYN]);
+    const at = this.fusion !== 'off' && this.iterations > 1 ? PASS.fused : PASS.main;
+    pass.setBindGroup(0, this.binds.solve!, [(at * MAX_COLORS + c) * DYN]);
     for (let r = 0; r < reps; r++) {
       if (piece === 'tail') pass.dispatchWorkgroups(1);
       else if (this.dispatch.indirectColors) pass.dispatchWorkgroupsIndirect(b.dispatch, 12 * c);
@@ -1033,6 +1262,6 @@ export class AvbdSolver {
   }
 
   destroy(): void {
-    for (const x of [this.solver, this.contacts, this.meta, this.pairHist, this.offHist, this.uniform, this.colorUniform]) x.destroy();
+    for (const x of [this.solver, this.contacts, this.meta, this.pairHist, this.offHist, this.uniform, this.colorUniform, this.duals, this.colorStarts]) x?.destroy();
   }
 }

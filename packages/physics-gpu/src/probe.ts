@@ -25,7 +25,8 @@ import { GpuProfiler, readBuffer, timeSubmit } from '@tb/gpu';
 import { buildScenario, type Params } from '@tb/scenarios';
 import { SolverContact } from '@tb/schema';
 import { MAX_COLORS } from './coloring.ts';
-import { GpuAvbdEngine } from './engine.ts';
+import type { AvbdParams } from '@tb/physics-ref';
+import { GpuAvbdEngine, type GpuEngineOptions } from './engine.ts';
 import { DEFAULT_DISPATCH, type HessianForm } from './solver.ts';
 import {
   barrierWgsl, BODY_PARAMS, exchangeRef, GRID_BARRIER_WGSL, KERNEL_PARAMS_BYTES, kernelParams, P3_EMPTY_WGSL, P3_VARIANT_INFO, P3_VARIANTS, p3Records,
@@ -54,6 +55,14 @@ export interface ProbeOptions {
   solveSteps: number;
   /** P2: the primal's form (SolverDispatch.hessian), to time one against the other. */
   hessian: HessianForm;
+  /**
+   * P2: the engine variant to time instead of the default (pnpm bench:probe --engine
+   * "avbd-gpu:key=value,..."): the spec, and its AvbdParams and GpuEngineOptions
+   * (bench's gpuEngineArgs). Absent: the default engine. The scenario, its params, gravityScale,
+   * hessian, pairsPerBody and boxBroadphase above apply either way; probe-engine.ts rejects a
+   * GpuEngineOptions field given both in the spec and as its own flag.
+   */
+  engine?: { spec: string; params: Partial<AvbdParams>; opts: Omit<GpuEngineOptions, 'device'> };
   /** P3 sweep. inner: dispatches per timed pass (the time reported is per dispatch). */
   p3Variants: P3Variant[];
   p3Sizes: number[];
@@ -175,6 +184,10 @@ export interface P2Result {
   scenario: string; params: Params; gravityScale: number; boxBroadphase: boolean; N: number; seed: number; iterations: number; R: number; checkpoints: Checkpoint[];
   /** The hessian form the engine built (SolverDispatch.hessian). */
   hessian: HessianForm;
+  /** ProbeOptions.engine's spec, when one was given. */
+  engine?: string;
+  /** Dual passes per step: the iterations, or 1 with the fused dual (AvbdParams.dualFusion), whose colour times then include the fused updates. */
+  dualPasses?: number;
   /** t = a + b W, t = a + b W + e bodies, t = a + e bodies, t = a + g Σpoints. */
   fits: Array<Fit | { model: string; singular: true }>;
   /** Over every direct colour with bodies: (t_c - empty dispatch) / W_c, in ns. */
@@ -460,14 +473,21 @@ async function colourStructure(e: GpuAvbdEngine): Promise<Omit<Checkpoint, 'step
 async function runP2(device: GPUDevice, timer: Timer, o: ProbeOptions): Promise<P2Result> {
   const built = buildScenario(o.scenario, o.scenario === 'S4' ? { N: o.N, ...o.params } : o.params, o.seed);
   const scene = { ...built, gravity: built.gravity.map((g) => g * o.gravityScale) as typeof built.gravity };
+  // --engine's AvbdParams and GpuEngineOptions, with --hessian, --pairs-per-body and --box-broadphase (probe-engine.ts rejects one given both ways).
+  const engineOpts: Omit<GpuEngineOptions, 'device'> = {
+    ...o.engine?.opts, hessian: o.engine?.opts.hessian ?? o.hessian,
+    ...(o.pairsPerBody ? { pairsPerBody: o.pairsPerBody } : {}), ...(o.boxBroadphase ? { boxBroadphase: true } : {}),
+  };
   const checkpoints: Checkpoint[] = [];
-  let iterations = 0, hessian = o.hessian;
+  let iterations = 0, hessian = o.hessian, dualPasses = 0;
   for (const step of o.checkpoints) {
     // A fresh engine per checkpoint: the probes below change contact state (the dual), which would carry into later steps.
-    const e = new GpuAvbdEngine({}, { device, hessian: o.hessian, ...(o.pairsPerBody ? { pairsPerBody: o.pairsPerBody } : {}), ...(o.boxBroadphase ? { boxBroadphase: true } : {}) });
+    const e = new GpuAvbdEngine(o.engine?.params ?? {}, { ...engineOpts, device });
     await e.init(scene);
     iterations = e.probeParts().iterations;
     hessian = e.probeParts().dispatch.hessian;
+    // With the fused dual, one dual pass per step (after the last main sweep), and none between the others.
+    dualPasses = e.probeParts().dispatch.dualFusion ? Math.min(1, iterations) : iterations;
     const timedFrom = Math.max(0, step - o.solveSteps);
     for (let s = 0; s < timedFrom; s++) {
       e.step();
@@ -503,7 +523,7 @@ async function runP2(device: GPUDevice, timer: Timer, o: ProbeOptions): Promise<
     const sumC = st.direct.reduce((s, c) => s + (c.t?.median ?? 0), 0);
     const check = {
       primal: (iterations + 1) * sumC,
-      predicted: (iterations + 1) * (sumC + (st.tail.t?.median ?? 0)) + iterations * dual.median,
+      predicted: (iterations + 1) * (sumC + (st.tail.t?.median ?? 0)) + dualPasses * dual.median,
       measured: solvePass?.median ?? null,
     };
     checkpoints.push({ step, ...st, dual, emptyDispatch, solvePass, check });
@@ -545,7 +565,10 @@ async function runP2(device: GPUDevice, timer: Timer, o: ProbeOptions): Promise<
       : share < 0.2 ? 'A colour costs about the same whatever its size: the slowest thread\'s serial walk (latency) sets it.' : 'Both the size and the slowest thread matter.'}`);
   }
   if (perPointNs) verdict.push(`Per critical-path point, (t_c − empty dispatch) / W_c = ${perPointNs.median.toFixed(0)} ns (p10 ${perPointNs.p10.toFixed(0)}, p90 ${perPointNs.p90.toFixed(0)}) over ${per.length} colours.`);
-  return { scenario: o.scenario, params: scene.params as Params, gravityScale: o.gravityScale, boxBroadphase: o.boxBroadphase, N: scene.bodies.length, seed: o.seed, iterations, R: o.R, checkpoints, hessian, fits, perPointNs, verdict };
+  return {
+    scenario: o.scenario, params: scene.params as Params, gravityScale: o.gravityScale, boxBroadphase: engineOpts.boxBroadphase === true, N: scene.bodies.length, seed: o.seed,
+    iterations, R: o.R, checkpoints, hessian, ...(o.engine ? { engine: o.engine.spec, dualPasses } : {}), fits, perPointNs, verdict,
+  };
 }
 
 // --- P3 --------------------------------------------------------------------
@@ -881,15 +904,17 @@ export function probeMarkdown(r: ProbeResult, header: string): string {
 
   if (r.p2) {
     const p = r.p2;
-    L.push('', `## P2 Real solver: ${p.scenario} ${JSON.stringify(p.params)}${p.gravityScale !== 1 ? ` gravity x${p.gravityScale}` : ''}${p.boxBroadphase ? ' box broadphase' : ''} N=${p.N} seed ${p.seed}, ${p.iterations} iterations (${p.iterations + 1} sweeps), hessian ${p.hessian}, R=${p.R} dispatches per timed pass`);
+    L.push('', `## P2 Real solver: ${p.scenario} ${JSON.stringify(p.params)}${p.gravityScale !== 1 ? ` gravity x${p.gravityScale}` : ''}${p.boxBroadphase ? ' box broadphase' : ''} N=${p.N} seed ${p.seed}, ${p.iterations} iterations (${p.iterations + 1} sweeps), hessian ${p.hessian}, R=${p.R} dispatches per timed pass${p.engine ? `, engine ${p.engine}` : ''}`);
+    // A variant with the fused dual has one dual pass per step, and its colour times include the fused updates.
+    const D = p.dualPasses ?? p.iterations, fusedNote = D !== p.iterations ? ` (the step's ${D} dual pass: the others are fused into the colour dispatches timed above)` : '';
     for (const c of p.checkpoints) {
       L.push('', `### Step ${c.step}: ${c.n} bodies, ${c.coloursUsed} colours (${c.uncolored} uncoloured), ${c.pairSlots} pair slots of ${c.pairsRequired} broadphase pairs, ${c.contactPairs} in contact, ${c.totalPoints} contact points`, '');
       const e0 = c.emptyDispatch?.median;
       L.push('| Colour | Bodies | W_c (max points) | Max loads | Σ points | t_c µs | (t_c − empty) / W_c ns |', '|---|---|---|---|---|---|---|');
       for (const d of c.direct) L.push(`| ${d.colour} | ${d.bodies} | ${d.W} | ${d.loads} | ${d.points} | ${us(d.t)} | ${d.t && d.W && e0 !== undefined ? f(((d.t.median - e0) * 1e6) / d.W) : '–'} |`);
       L.push(`| tail (${c.colorTail}+, ${c.tailThreads} threads) | ${c.tail.bodies} in ${c.tail.colours} colours + ${c.tail.serialBodies} serial | ${c.tail.Wcrit} (critical path) | | ${c.tail.points} | ${us(c.tail.t)} | ${c.tail.t && c.tail.Wcrit ? f((c.tail.t.median * 1e6) / c.tail.Wcrit) : '–'} (t / W, no baseline) |`);
-      L.push('', `ΣW (direct W_c + tail critical path) = **${c.sumW}**. Empty colour ${c.emptyColour ?? '–'}'s primal dispatch (the fixed cost): ${us(c.emptyDispatch)} µs. Dual update (pairs + ground): ${us(c.dual)} µs.`);
-      if (c.check) L.push('', `Consistency: (I+1)·Σ_c t_c = ${f(c.check.primal * 1000)} µs; (I+1)·(Σ_c t_c + t_tail) + I·t_dual = ${f(c.check.predicted * 1000)} µs; measured solve pass of steps ${c.step - (c.solvePass?.samples ?? 0)}–${c.step} = ${us(c.solvePass)} µs${c.check.measured ? ` (measured / predicted = ${f(c.check.measured / c.check.predicted)})` : ''}.`);
+      L.push('', `ΣW (direct W_c + tail critical path) = **${c.sumW}**. Empty colour ${c.emptyColour ?? '–'}'s primal dispatch (the fixed cost): ${us(c.emptyDispatch)} µs. Dual update (pairs + ground): ${us(c.dual)} µs${fusedNote}.`);
+      if (c.check) L.push('', `Consistency: (I+1)·Σ_c t_c = ${f(c.check.primal * 1000)} µs; (I+1)·(Σ_c t_c + t_tail) + ${D === p.iterations ? 'I' : D}·t_dual = ${f(c.check.predicted * 1000)} µs; measured solve pass of steps ${c.step - (c.solvePass?.samples ?? 0)}–${c.step} = ${us(c.solvePass)} µs${c.check.measured ? ` (measured / predicted = ${f(c.check.measured / c.check.predicted)})` : ''}.`);
     }
     L.push('', '### Fits over the direct colours of every checkpoint (t in µs; b, e, g in ns)', '');
     for (const x of p.fits) {

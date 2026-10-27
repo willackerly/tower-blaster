@@ -23,9 +23,26 @@ const num = (v: string, key: string) => {
   return n;
 };
 
+/**
+ * The engine specs in an engines list. Specs are comma-separated, and so are a
+ * spec's options, so a piece that is an option (key=value, no engine name
+ * before a colon) belongs to the spec before it: "avbd-gpu:iterations=20,
+ * dualFusion=true,avbd-gpu:iterations=20" is two engines, the first with two
+ * options. No engine name contains '=', so no other list changes meaning.
+ */
+export function splitEngines(list: string): string[] {
+  const specs: string[] = [];
+  for (const piece of list.split(',').map((s) => s.trim()).filter(Boolean)) {
+    const option = piece.includes('=') && !piece.split('=')[0]!.includes(':');
+    if (option && specs.length && specs.at(-1)!.includes(':')) specs[specs.length - 1] += `,${piece}`;
+    else specs.push(piece);
+  }
+  return specs;
+}
+
 export function parseConfig(search: string): RunConfig {
   const q = new URLSearchParams(search);
-  const engines = (q.get('engines') ?? 'rapier').split(',').map((s) => s.trim()).filter(Boolean);
+  const engines = splitEngines(q.get('engines') ?? 'rapier');
   if (engines.length < 1 || engines.length > 2) throw new Error('engines must list one or two engine specs');
   const params: Params = {};
   for (const [k, v] of q) {

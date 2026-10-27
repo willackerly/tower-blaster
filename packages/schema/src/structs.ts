@@ -134,7 +134,7 @@ export const SolverBody = defineStruct(
     ['sweep', 'f32', 'speculative margin growth: how far the body can move this step'],
     ['q0', 'vec4f', 'rotation at the start of the step'],
     ['dp', 'vec3f', 'position minus x0 (the primal variable)'],
-    ['pad0', 'u32'],
+    ['visit', 'u32', "this step's position in the colour order (SolverDispatch.dualFusion only; else unused)"],
     ['phi', 'vec3f', 'rotation vector since q0 (the primal variable)'],
     ['pad1', 'u32'],
     ['tp', 'vec3f', 'inertial target for dp: h v + h^2 g'],
@@ -169,6 +169,17 @@ export const SolverContact = defineStruct(
     ['inCone', 'u32', "1 if the last dual update's trial friction was inside the cone (static friction held)"],
   ],
   'One AVBD contact point (three rows), four per manifold.',
+);
+
+export const ContactDual = defineStruct(
+  'ContactDual',
+  [
+    ['lt', 'vec2f', 'friction force along t1, t2'],
+    ['lambdaN', 'f32', 'normal force'],
+    ['kN', 'f32', 'normal penalty'],
+    ['kT', 'f32', 'tangent penalty'],
+  ],
+  "A contact point's dual state while the fused dual (SolverDispatch.dualFusion) updates it in the sweep, so the solve kernel's contacts stay read-only.",
 );
 
 export const SolverParams = defineStruct(
@@ -211,10 +222,10 @@ export const ColorParams = defineStruct(
   [
     ['color', 'u32', 'colour swept by this primal dispatch'],
     ['alpha', 'f32', '1 in the main iterations, 0 in post-stabilization'],
-    ['pad0', 'u32'],
+    ['fuse', 'u32', "SolverDispatch.dualFusion: 0 no fused dual update, 1 the step's first (last state in the contacts), 2 later ones"],
     ['pad1', 'u32'],
   ],
   'Per-dispatch uniforms (bound with a dynamic offset).',
 );
 
-export const ALL_STRUCTS = [SimParams, Body, RenderRecord, Shape, Manifold, ImpactEvent, Spark, FxState, BodyProps, SolverBody, SolverContact, SolverParams, ColorParams];
+export const ALL_STRUCTS = [SimParams, Body, RenderRecord, Shape, Manifold, ImpactEvent, Spark, FxState, BodyProps, SolverBody, SolverContact, ContactDual, SolverParams, ColorParams];
