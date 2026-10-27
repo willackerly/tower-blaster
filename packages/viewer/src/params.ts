@@ -1,11 +1,12 @@
 // Viewer configuration from the URL, e.g.
 // ?scenario=S4&param.N=3000&engine=rapier&sleep=1&loop=frame&maxSteps=2&proj=cube&proj.size=2
 // (engine: a @tb/bench spec; the default is the GPU engine; proj*: see projectile.ts;
-// look=real with real.* knobs: see parseRealOptions in @tb/render)
+// look=real with real.* knobs: see parseRealOptions in @tb/render; cam: see parseCamera)
 import { parseSpec } from '@tb/bench';
 import { boundingRadius } from '@tb/geom';
 import { LOOKS, parseRealOptions, type RealOptions, writeRealOptions } from '@tb/render';
 import { SCENARIOS } from '@tb/scenarios';
+import type { CameraPose } from './camera.ts';
 import { MAX_STEPS_LIMIT } from './loop.ts';
 import { DEFAULT_PROJECTILE, parseProjectile, type Projectile, projectileShape, writeProjectile } from './projectile.ts';
 
@@ -39,9 +40,11 @@ export interface ViewerConfig {
   maxSteps: number;
   /** What a click fires. */
   projectile: Projectile;
+  /** Where the camera starts on every load and R; null = framed to fit the scene. */
+  camera: CameraPose | null;
 }
 
-export const DEFAULT_CONFIG: ViewerConfig = { engine: 'avbd-gpu', scenario: 'S4', params: { N: 2000, F: 4, H: 12 }, seed: 1, sleep: null, autofire: 0, offscreen: false, look: 'candy', real: {}, loop: 'free', pipeline: true, maxSteps: 1, projectile: DEFAULT_PROJECTILE };
+export const DEFAULT_CONFIG: ViewerConfig = { engine: 'avbd-gpu', scenario: 'S4', params: { N: 2000, F: 4, H: 12 }, seed: 1, sleep: null, autofire: 0, offscreen: false, look: 'candy', real: {}, loop: 'free', pipeline: true, maxSteps: 1, projectile: DEFAULT_PROJECTILE, camera: null };
 
 export function parseViewerConfig(search: string): ViewerConfig {
   const q = new URLSearchParams(search);
@@ -80,8 +83,19 @@ export function parseViewerConfig(search: string): ViewerConfig {
     pipeline: pipeline === '1',
     maxSteps,
     projectile: parseProjectile(q),
+    camera: parseCamera(q.get('cam')),
   };
 }
+
+/** URL key cam: target x,y,z, yaw, pitch (radians) and distance (m), as writeCamera writes it; absent = null. */
+export function parseCamera(raw: string | null): CameraPose | null {
+  if (raw === null || raw === '') return null;
+  const v = raw.split(',').map(Number);
+  if (v.length !== 6 || v.some((x) => !Number.isFinite(x)) || v[5]! <= 0) throw new Error(`cam must be six numbers, target x,y,z, yaw, pitch, distance > 0: ${raw}`);
+  return { target: [v[0]!, v[1]!, v[2]!], yaw: v[3]!, pitch: v[4]!, distance: v[5]! };
+}
+
+export const writeCamera = (p: CameraPose) => [...p.target, p.yaw, p.pitch, p.distance].join(',');
 
 export function toSearch(c: ViewerConfig): string {
   const q = new URLSearchParams({ scenario: c.scenario, engine: c.engine });
@@ -96,10 +110,11 @@ export function toSearch(c: ViewerConfig): string {
   if (c.pipeline !== DEFAULT_CONFIG.pipeline) q.set('pipeline', c.pipeline ? '1' : '0');
   if (c.maxSteps !== DEFAULT_CONFIG.maxSteps) q.set('maxSteps', String(c.maxSteps));
   writeProjectile(c.projectile, q);
+  if (c.camera) q.set('cam', writeCamera(c.camera));
   return `?${q}`;
 }
 
-/** A preset's search with how the viewer runs (engine, loop, pipeline), the projectile and the look kept, which is where its button takes you. */
+/** A preset's search with how the viewer runs (engine, loop, pipeline), the projectile and the look kept, which is where its button takes you (framed afresh: no camera). */
 export function presetSearch(preset: string, cur: Pick<ViewerConfig, 'engine' | 'loop' | 'pipeline' | 'maxSteps' | 'projectile'> & Partial<Pick<ViewerConfig, 'look' | 'real'>>): string {
   const { engine, loop, pipeline, maxSteps, projectile, look = DEFAULT_CONFIG.look, real = {} } = cur;
   return toSearch({ ...parseViewerConfig(preset), engine, loop, pipeline, maxSteps, projectile, look, real });
