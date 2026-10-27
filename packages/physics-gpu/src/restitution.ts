@@ -36,10 +36,23 @@
 // sum is in a fixed order and the pass is bit-reproducible; the only atomic
 // is the count of bouncing points, an integer.
 //
+// Contact layouts (AvbdParams.records): the kernels read a slot's points
+// through a view (POINT_VIEW, RECORD_VIEW below) of SolverContact points
+// (records 0) or of the slot's SolverRecord (records 1, the GPU default):
+// the same fields, so the two give the same floats (on SwiftShader,
+// engine-restitution-records.test.ts). The release zeroes the point's normal
+// and friction forces, as the reference's lambda = 0. With lambdaN 0 the
+// friction force is clamped to a cone of radius 0 at its next evaluation,
+// so a mutant that kept lt passed every records case; it is not equivalent,
+// though: where kT C_t is exactly 0 a kept lt still turns the sliding
+// Hessian's tangent rows off (solver.ts, CONTACT_FORCE). Keep both writes.
+// Centre-friction records (2) are not read here: the engine and the solver
+// refuse restitution with them.
+//
 // Memory while on: one RestSlot (80 B) per contact slot, (maxPairs +
-// capacity) x 80 B (pair slots, then one ground slot per body: 7.8% of the
-// contact buffer, which holds 1024 B per slot), and 28 B of counters and
-// arguments. Off: no buffer and no pipeline (the engine builds the pass only
+// capacity) x 80 B (pair slots, then one ground slot per body: 10.4% of the
+// contact buffer with records 1, which holds 768 B per slot, and 7.8% with
+// points, 1024 B), and 28 B of counters and arguments. Off: no buffer and no pipeline (the engine builds the pass only
 // while the switch is on), and the other kernels are unchanged but for
 // BodyProps.restitution, which takes the padding word BodyProps had (on
 // SwiftShader the floats off are those before the port).
@@ -178,9 +191,8 @@ fn pairE(ea: f32, eb: f32) -> f32 {
   return min(1.0, max(0.0, e));
 }
 
-// A point's normal row, the reference's jb and ja row 0: b's (n, rbw x n), a's (-n, -(raw x n)).
+// A point's normal row (ptRow): b's (n, rbw x n), a's (-n, -(raw x n)).
 struct NRow { n: vec3f, wb: vec3f, wa: vec3f }
-fn nrow(ct: SolverContact) -> NRow { return NRow(ct.n, cross(ct.rbw, ct.n), -cross(ct.raw, ct.n)); }
 // J u for b's velocities (vb, wb) and a's (va, wa; none for the ground).
 fn vnOf(r: NRow, vb: vec3f, wb: vec3f, va: vec3f, wa: vec3f, hasA: bool) -> f32 {
   var s = dot(r.n, vb) + dot(r.wb, wb);
@@ -269,6 +281,40 @@ fn solveGroup(mask: u32, rows: array<NRow, 4>, T: vec4f, P0: vec4f, A: Side, B: 
 fn groups(f: u32) -> u32 { return select(0u, 1u, (f & BOUNCE) != 0u) + select(0u, 1u, (f & SUPPORT) != 0u); }
 `;
 
+// The pass's view of a slot's points in the bound contact buffer, one per contact layout: slotOf(k) and groundOf(i)
+// are where pair slot k and body i's ground slot are (their first point, or their record), and the rest read
+// point q of the slot there, or release it. Points are in use from q = 0 up, so the walks stop at the first
+// unused one.
+const POINT_VIEW = /* wgsl */ `
+fn slotOf(k: u32) -> u32 { return pairPoint(p.cur, k, 0u); }
+fn groundOf(i: u32) -> u32 { return groundPoint(p.cur, i, 0u); }
+fn slotA(s: u32) -> u32 { return contacts[s].a; }
+fn slotB(s: u32) -> u32 { return contacts[s].b; }
+fn ptUsed(s: u32, q: u32) -> bool { return contacts[s + q].used != 0u; }
+// Loaded at the end of the step: pushing apart (lambdaN < 0).
+fn ptLoaded(s: u32, q: u32) -> bool { return contacts[s + q].lambdaN < 0.0; }
+// The point's normal row, the reference's jb and ja row 0: b's (n, rbw x n), a's (-n, -(raw x n)).
+fn ptRow(s: u32, q: u32) -> NRow { let ct = contacts[s + q]; return NRow(ct.n, cross(ct.rbw, ct.n), -cross(ct.raw, ct.n)); }
+`;
+// AvbdParams.records 1: the slot's SolverRecord (the same fields, point q in lane q of each vec4f; the solver's
+// pairRecord, groundRecord, recRaw and recRbw).
+const RECORD_VIEW = /* wgsl */ `
+fn slotOf(k: u32) -> u32 { return pairRecord(p.cur, k); }
+fn groundOf(i: u32) -> u32 { return groundRecord(p.cur, i); }
+fn slotA(s: u32) -> u32 { return records[s].a; }
+fn slotB(s: u32) -> u32 { return records[s].b; }
+fn ptUsed(s: u32, q: u32) -> bool { return q < records[s].count; }
+fn ptLoaded(s: u32, q: u32) -> bool { return records[s].lambdaN[q] < 0.0; }
+fn ptRow(s: u32, q: u32) -> NRow { let n = records[s].n; return NRow(n, cross(recRbw(s, q), n), -cross(recRaw(s, q), n)); }
+`;
+// restFinish's write: a released point starts the next step with no force (normal and friction).
+const POINT_RELEASE = /* wgsl */ `
+fn ptRelease(s: u32, q: u32) { contacts[s + q].lambdaN = 0.0; contacts[s + q].lt = vec2f(0.0); }
+`;
+const RECORD_RELEASE = /* wgsl */ `
+fn ptRelease(s: u32, q: u32) { records[s].lambdaN[q] = 0.0; records[s].lt1[q] = 0.0; records[s].lt2[q] = 0.0; }
+`;
+
 // The marks (restMark, restMarkBodies): contacts, props and solver bound.
 const MARK = /* wgsl */ `
 // A body's linear velocity at the start of the step: velocities() copied it into prevVel (with 0 iterations it
@@ -278,10 +324,10 @@ fn startVel(s: SolverBody) -> vec3f {
   return s.prevVel;
 }
 
-// The points of a slot (points from base, bodies b and a, a NONE for the ground) that bounce, with their targets:
+// The points of a slot (at s in the contact buffer, bodies b and a, a NONE for the ground) that bounce, with their targets:
 // loaded at the end of the step (lambdaN < 0) and approaching at restThreshold or faster at its start (J u0 <=
 // -restThreshold, u0 the start-of-step velocities after the angular clamp), if e > 0. Target -e J u0.
-fn mark(base: u32, e: f32, b: u32, a: u32) -> RestSlot {
+fn mark(s: u32, e: f32, b: u32, a: u32) -> RestSlot {
   var r: RestSlot;
   r.b = b;
   if (!(e > 0.0)) { return r; }
@@ -292,10 +338,9 @@ fn mark(base: u32, e: f32, b: u32, a: u32) -> RestSlot {
   var va = vec3f(0.0); var wa = vec3f(0.0);
   if (hasA) { let sa = solver[a]; va = startVel(sa); wa = sa.tphi / p.dt; }
   for (var q = 0u; q < 4u; q++) {
-    let ct = contacts[base + q];
-    if (ct.used == 0u) { break; }
-    if (!(ct.lambdaN < 0.0)) { continue; }
-    let u = vnOf(nrow(ct), vb, wb, va, wa, hasA);
+    if (!ptUsed(s, q)) { break; }
+    if (!ptLoaded(s, q)) { continue; }
+    let u = vnOf(ptRow(s, q), vb, wb, va, wa, hasA);
     if (u <= -restThreshold) {
       r.flags |= 1u << q;
       r.vnTarget[q] = -e * u;
@@ -311,10 +356,13 @@ const ENTRY: Record<string, string> = {
 fn restMark(@builtin(global_invocation_id) id: vec3u) {
   let k = id.x;
   if (k >= stepInfo[3]) { return; }
-  let base = pairPoint(p.cur, k, 0u);
-  let c = contacts[base];
+  let s = slotOf(k);
   var r: RestSlot;
-  if (c.used != 0u) { r = mark(base, pairE(props[c.a].restitution, props[c.b].restitution), c.b, c.a); }
+  if (ptUsed(s, 0u)) {
+    let a = slotA(s);
+    let b = slotB(s);
+    r = mark(s, pairE(props[a].restitution, props[b].restitution), b, a);
+  }
   rest[k] = r;
   let m = countOneBits(r.flags);
   if (m > 0u) { atomicAdd(&info[0], m); }
@@ -324,7 +372,7 @@ fn restMark(@builtin(global_invocation_id) id: vec3u) {
 fn restMarkBodies(@builtin(global_invocation_id) id: vec3u) {
   let i = id.x;
   if (i >= p.n) { return; }
-  var r = mark(groundPoint(p.cur, i, 0u), pairE(groundRestitution, props[i].restitution), i, NONE);
+  var r = mark(groundOf(i), pairE(groundRestitution, props[i].restitution), i, NONE);
   let m = countOneBits(r.flags);
   // The body is in the pass if one of its manifolds bounces: its other loaded points are then supports.
   var inPass = m > 0u;
@@ -357,20 +405,20 @@ fn restArgs() {
 fn restSupport(@builtin(global_invocation_id) id: vec3u) {
   let k = id.x;
   if (k >= stepInfo[3]) { return; }
-  let base = pairPoint(p.cur, k, 0u);
-  let c = contacts[base];
-  if (c.used == 0u) { return; }
-  if (((rest[groundRec(c.a)].flags | rest[groundRec(c.b)].flags) & IN_PASS) == 0u) { return; }
+  let s = slotOf(k);
+  if (!ptUsed(s, 0u)) { return; }
+  let a = slotA(s);
+  let b = slotB(s);
+  if (((rest[groundRec(a)].flags | rest[groundRec(b)].flags) & IN_PASS) == 0u) { return; }
   var r = rest[k];
-  let A = bodies[c.a];
-  let B = bodies[c.b];
+  let A = bodies[a];
+  let B = bodies[b];
   var sm = 0u;
   for (var q = 0u; q < 4u; q++) {
-    let ct = contacts[base + q];
-    if (ct.used == 0u) { break; }
-    if (((r.flags >> q) & 1u) != 0u || !(ct.lambdaN < 0.0)) { continue; }
+    if (!ptUsed(s, q)) { break; }
+    if (((r.flags >> q) & 1u) != 0u || !ptLoaded(s, q)) { continue; }
     sm |= 1u << q;
-    r.vnTarget[q] = vnOf(nrow(ct), B.linVel, B.angVel, A.linVel, A.angVel, true);
+    r.vnTarget[q] = vnOf(ptRow(s, q), B.linVel, B.angVel, A.linVel, A.angVel, true);
   }
   if (sm != 0u) {
     rest[k].flags = r.flags | (sm << 4u);
@@ -387,14 +435,13 @@ fn restCount(@builtin(global_invocation_id) id: vec3u) {
   var r = rest[gi];
   if ((r.flags & IN_PASS) != 0u) {
     let B = bodies[i];
-    let base = groundPoint(p.cur, i, 0u);
+    let gs = groundOf(i);
     var sm = 0u;
     for (var q = 0u; q < 4u; q++) {
-      let ct = contacts[base + q];
-      if (ct.used == 0u) { break; }
-      if (((r.flags >> q) & 1u) != 0u || !(ct.lambdaN < 0.0)) { continue; }
+      if (!ptUsed(gs, q)) { break; }
+      if (((r.flags >> q) & 1u) != 0u || !ptLoaded(gs, q)) { continue; }
       sm |= 1u << q;
-      r.vnTarget[q] = vnOf(nrow(ct), B.linVel, B.angVel, vec3f(0.0), vec3f(0.0), false);
+      r.vnTarget[q] = vnOf(ptRow(gs, q), B.linVel, B.angVel, vec3f(0.0), vec3f(0.0), false);
     }
     r.flags |= sm << 4u;
   }
@@ -421,14 +468,13 @@ fn restManifold(@builtin(global_invocation_id) id: vec3u) {
   let bm = r.flags & BOUNCE;
   let sm = (r.flags & SUPPORT) >> 4u;
   if ((bm | sm) == 0u) { return; }
-  let base = pairPoint(p.cur, k, 0u);
+  let s = slotOf(k);
   var rows: array<NRow, 4>;
   for (var q = 0u; q < 4u; q++) {
-    let ct = contacts[base + q];
-    if (ct.used == 0u) { break; }
-    rows[q] = nrow(ct);
+    if (!ptUsed(s, q)) { break; }
+    rows[q] = ptRow(s, q);
   }
-  let a = contacts[base].a;
+  let a = slotA(s);
   let A = sideAt(a, rest[groundRec(a)].split);
   let B = sideAt(r.b, rest[groundRec(r.b)].split);
   var P = r.P;
@@ -458,12 +504,11 @@ fn restBodies(@builtin(global_invocation_id) id: vec3u) {
   let bm = g.flags & BOUNCE;
   let sm = (g.flags & SUPPORT) >> 4u;
   if ((bm | sm) != 0u) {
-    let base = groundPoint(p.cur, i, 0u);
+    let gs = groundOf(i);
     var rows: array<NRow, 4>;
     for (var q = 0u; q < 4u; q++) {
-      let ct = contacts[base + q];
-      if (ct.used == 0u) { break; }
-      rows[q] = nrow(ct);
+      if (!ptUsed(gs, q)) { break; }
+      rows[q] = ptRow(gs, q);
     }
     let B = sideOf(b.linVel, b.angVel, f32(s), pr.mass, q0, pr.inertia);
     var P = g.P;
@@ -484,12 +529,9 @@ fn restBodies(@builtin(global_invocation_id) id: vec3u) {
   restFinish: /* wgsl */ `
 // A bounced point that will separate (P > 0 and its target times h beyond restDepth) starts the next step with
 // no force.
-fn release(r: RestSlot, base: u32) {
+fn release(r: RestSlot, s: u32) {
   for (var q = 0u; q < 4u; q++) {
-    if (((r.flags >> q) & 1u) != 0u && r.P[q] > 0.0 && r.vnTarget[q] * p.dt > p.restDepth) {
-      contacts[base + q].lambdaN = 0.0;
-      contacts[base + q].lt = vec2f(0.0);
-    }
+    if (((r.flags >> q) & 1u) != 0u && r.P[q] > 0.0 && r.vnTarget[q] * p.dt > p.restDepth) { ptRelease(s, q); }
   }
 }
 
@@ -498,12 +540,12 @@ fn release(r: RestSlot, base: u32) {
 fn restFinish(@builtin(global_invocation_id) id: vec3u) {
   let i = id.x;
   if (i >= p.n) { return; }
-  release(rest[groundRec(i)], groundPoint(p.cur, i, 0u));
+  release(rest[groundRec(i)], groundOf(i));
   let rs = rowStart[i];
   for (var e = rs; e < rs + rowLength[i]; e++) {
     let slot = adjSlot[e];
     let r = rest[slot];
-    if (r.b == i) { release(r, pairPoint(p.cur, slot, 0u)); }
+    if (r.b == i) { release(r, slotOf(slot)); }
   }
 }`,
 };
@@ -520,16 +562,31 @@ const KERNELS: Array<Omit<RestKernel, 'code'> & { mark?: boolean }> = [
 ];
 
 /**
+ * The contact layout the pass reads (AvbdParams.records): 0, SolverContact
+ * points; 1, SolverRecord records, with `head` the WGSL their accessors need
+ * (the SolverRecord struct and the solver's record indexing: pairRecord,
+ * groundRecord, recRaw, recRbw). Records 2 (centre friction) is not
+ * implemented.
+ */
+export type RestLayout = { records: 0 } | { records: 1; head: string };
+
+/**
  * The pass's kernels in encoding order (each its own module and layout, so
  * each binds only what it reads): `common` is the solver's shared WGSL (its
  * structs, NONE, qrot, pairPoint and groundPoint, which read the uniforms p).
+ * A kernel that binds the contacts reads them through the layout's view.
  */
-export function restitutionKernels(common: string): RestKernel[] {
-  return KERNELS.map(({ mark, ...k }) => ({
-    ...k,
-    code: `${common}\n${HEAD}\n${k.bindings.map((b, i) => DECL[b](i)).join('\n')}\n${mark ? MARK : ''}\n${ENTRY[k.entry]!}\n`,
-  }));
+export function restitutionKernels(common: string, layout: RestLayout = { records: 0 }): RestKernel[] {
+  const rec = layout.records === 1;
+  return KERNELS.map(({ mark, ...k }) => {
+    const reads = k.bindings.includes('contacts'), writes = k.bindings.includes('contactsRw');
+    const decls = k.bindings.map((b, i) => (rec && (b === 'contacts' || b === 'contactsRw') ? recordDecl(i, b === 'contactsRw') : DECL[b](i)));
+    const view = !(reads || writes) ? '' : (rec ? `${layout.head}\n${RECORD_VIEW}` : POINT_VIEW) + (writes ? (rec ? RECORD_RELEASE : POINT_RELEASE) : '');
+    return { ...k, code: `${common}\n${HEAD}\n${decls.join('\n')}\n${view}\n${mark ? MARK : ''}\n${ENTRY[k.entry]!}\n` };
+  });
 }
+
+const recordDecl = (i: number, rw: boolean) => `@group(0) @binding(${i}) var<storage, ${rw ? 'read_write' : 'read'}> records: array<SolverRecord>;`;
 
 /** The pipeline constants' values: threshold past f32's range is f32's largest (no approach is that fast). */
 export function restitutionConstants(c: RestitutionConfig, combineIndex: number): Record<'restThreshold' | 'groundRestitution' | 'restCombine', number> {

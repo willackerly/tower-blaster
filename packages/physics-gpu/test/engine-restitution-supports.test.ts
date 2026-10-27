@@ -129,7 +129,8 @@ describe('GPU AVBD engine: restitution on, at rest and in a knockdown', () => {
     expect(gain(on)).toBeLessThan(Math.max(gain(off), 0) + 1e-6);
     // The same floats again over the first 60 steps, and with the
     // array Hessian and the whole sweep in the tail (the pass reads only the solve's results, which are the same
-    // floats in every form on SwiftShader).
+    // floats in every form on SwiftShader). The array Hessian runs points (gpuRecordsLayout) and the others
+    // records 1, so the last line also crosses the two layouts (engine-restitution-records.test.ts).
     // Measured: 40 of the points bounced by step 60, the first in step 16.
     expect(on.stats.slice(0, 60).reduce((a, s) => a + s!.contacts, 0)).toBeGreaterThan(20);
     const first = floats(on).slice(0, 61);

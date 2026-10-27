@@ -19,18 +19,17 @@ const knock = () => buildScenario('S5', { N: 64, F: 2, H: 8, street: 2, fireStep
 describe('GPU AVBD engine: manifold records: the option and its layouts, records 1 bit for bit, records 2 against the reference', () => {
 
   describe('the option and its layouts', () => {
-    // records 1 is the GPU engine's default; points where only they are implemented (the array Hessian, restitution).
-    it('unset, the GPU engine solves with records 1, or points with the array Hessian or restitution; given, as given; the variant lists it when given', () => {
+    // records 1 is the GPU engine's default; points where only they are implemented (the array Hessian). Restitution
+    // runs on records 1 (engine-restitution-records.test.ts).
+    it('unset, the GPU engine solves with records 1, or points with the array Hessian; given, as given; the variant lists it when given', () => {
       expect(gpuRecordsLayout({})).toBe(1);
       expect(gpuRecordsLayout({}, { hessian: 'registers' })).toBe(1);
       expect(gpuRecordsLayout({}, { hessian: 'array' })).toBe(0);
-      expect(gpuRecordsLayout({ restitution: true })).toBe(0);
-      expect(gpuRecordsLayout({ restitution: false })).toBe(1);
       for (const records of [0, 1, 2]) expect(gpuRecordsLayout({ records })).toBe(records);
       expect(gpuRecordsLayout({ records: 0 }, { hessian: 'array' })).toBe(0);
-      expect(gpuRecordsLayout({ records: 2, restitution: true })).toBe(2);
-      // The engine takes it (restitution still throws on the GPU, so it is the helper's alone here).
+      // The engine takes it, with restitution on as off.
       expect([new GpuAvbdEngine().records, new GpuAvbdEngine({}, { hessian: 'array' }).records, new GpuAvbdEngine({ records: 0 }).records, new GpuAvbdEngine({ records: 2 }).records]).toEqual([1, 0, 0, 2]);
+      expect([new GpuAvbdEngine({ restitution: true }).records, new GpuAvbdEngine({ restitution: true }, { hessian: 'array' }).records, new GpuAvbdEngine({ records: 0, restitution: true }).records]).toEqual([1, 0, 0]);
       // avbd-gpu (unset) and avbd-gpu:records=0 are different engines: the variant lists records whenever it is given.
       expect(new GpuAvbdEngine().info.variant).not.toHaveProperty('records');
       expect(new GpuAvbdEngine({}, { hessian: 'array' }).info.variant).not.toHaveProperty('records');
