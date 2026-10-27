@@ -416,6 +416,53 @@ export async function simulateGpu(scene: SceneDesc, steps: number, params: Parti
   return { error: error?.message ?? null, snaps, maxColors, worst, wallMs };
 }
 
+/**
+ * A run poked once after `at` steps, as the reference's tests poke a world
+ * mid-run: every body's linear velocity gains dv[body] (read back, added and
+ * written as f32), and each body in `lift` is raised by `by` m. Then
+ * steps - at more steps. Returns the largest linear speed over the last `win`
+ * steps, the largest rise of a lifted body above where it was before the lift
+ * after each step from the poke on, up to `riseSteps` (both read every step,
+ * there only), and the final snapshot.
+ */
+export async function pokedRun(scene: SceneDesc, steps: number, params: Partial<AvbdParams>, opts: Omit<GpuEngineOptions, 'device'>,
+  poke: { at: number; dv?: Vec3[]; lift?: number[]; by?: number; win?: number; riseSteps?: number }) {
+  const { device } = await sharedDevice();
+  device.pushErrorScope('validation');
+  const e = new GpuAvbdEngine(params, { ...opts, device });
+  await e.init(scene);
+  const bodyBuf = (e as unknown as { parts: { bodies: GPUBuffer } }).parts.bodies;
+  const { at, dv = [], lift = [], by = 0, win = 0, riseSteps = 0 } = poke;
+  let maxV = 0, y0: number[] = [];
+  const rise: number[] = [];
+  const t0 = performance.now();
+  for (let i = 0; i < steps; i++) {
+    if (i === at) {
+      const s = await e.snapshot();
+      dv.forEach((d, b) => {
+        const v = [0, 1, 2].map((k) => s.linVel[3 * b + k]! + d[k]!);
+        device.queue.writeBuffer(bodyBuf, b * Body.size + field(Body, 'linVel').offset, Float32Array.from(v));
+      });
+      y0 = lift.map((b) => s.pos[3 * b + 1]!);
+      lift.forEach((b, k) => device.queue.writeBuffer(bodyBuf, b * Body.size + field(Body, 'pos').offset + 4, Float32Array.of(y0[k]! + by)));
+    }
+    e.step();
+    const inWin = i >= steps - win, inRise = lift.length > 0 && i >= at && i < at + riseSteps;
+    if (inWin || inRise) {
+      const s = await e.snapshot();
+      if (inWin) for (let b = 0; b < s.count; b++) maxV = Math.max(maxV, Math.hypot(s.linVel[3 * b]!, s.linVel[3 * b + 1]!, s.linVel[3 * b + 2]!));
+      if (inRise) rise.push(Math.max(...lift.map((b, k) => s.pos[3 * b + 1]! - y0[k]!)));
+    }
+  }
+  const s = await e.snapshot();
+  const wallMs = performance.now() - t0;
+  const final: PlainSnapshot = { step: e.stepIndex, pos: [...s.pos], rot: [...s.rot], linVel: [...s.linVel], angVel: [...s.angVel] };
+  const d = await e.diagnostics();
+  const error = await device.popErrorScope();
+  e.dispose();
+  return { error: error?.message ?? null, maxV, rise, final, diagnostics: d, wallMs };
+}
+
 
 /**
  * The Rapier push() test on the GPU engine: inputs pushed mid-run (one for a

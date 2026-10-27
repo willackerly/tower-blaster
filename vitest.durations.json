@@ -42,6 +42,7 @@
   "packages/metrics/test/metrics.test.ts": 1.6,
   "packages/physics-gpu/test/box-broadphase.test.ts": 137.5,
   "packages/physics-gpu/test/engine-dispatch.test.ts": 81.3,
+  "packages/physics-gpu/test/engine-gapslop.test.ts": 230,
   "packages/physics-gpu/test/engine-knock.test.ts": 102.2,
   "packages/physics-gpu/test/engine-rest.test.ts": 106.4,
   "packages/physics-gpu/test/engine-scale.test.ts": 12.1,

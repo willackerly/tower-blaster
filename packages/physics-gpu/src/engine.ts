@@ -94,7 +94,6 @@ export class GpuAvbdEngine implements PhysicsEngine {
     checkRestitution(this.params);
     if (this.params.restitution) throw new Error('GpuAvbdEngine: restitution is not implemented on the GPU yet (AvbdParams.restitution)');
     checkGapSlop(this.params);
-    if (this.params.gapSlop) throw new Error('GpuAvbdEngine: the loaded-gap slop is not implemented on the GPU yet (AvbdParams.gapSlop)');
     const check = (k: 'capacity' | 'spare' | 'pairsPerBody' | 'maxRadius' | 'colorTail' | 'tailThreads' | 'colorRounds', ok: (v: number) => boolean, what: string) => {
       const v = opts[k];
       if (v !== undefined && !(typeof v === 'number' && ok(v))) throw new Error(`GpuAvbdEngine: GpuEngineOptions.${k} must be ${what}, got ${v}`);
@@ -179,7 +178,7 @@ export class GpuAvbdEngine implements PhysicsEngine {
         bodies, props, spheres, sweep, prev, manifolds: np.manifolds, groundManifolds: np.groundManifolds,
         pairs: bp.pairs, total: bp.total, offsets: bp.offsets,
         order: col.order, colorStart: col.colorStart, dispatch: col.dispatch, rowStart: col.rowStart, rowLength: col.rowLength, adjSlot: col.adjSlot,
-      }, this.dispatch);
+      }, this.dispatch, p.gapSlop ?? 0);
       parts = { bodies, shapes, props, spheres, sweep, prev, bp, np, col, solver, readback: new Readback(device) };
     } catch (e) {
       thrown = e;
