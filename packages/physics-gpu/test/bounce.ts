@@ -1,4 +1,4 @@
-// Scenes and measures for the restitution tests (engine-restitution.test.ts),
+// Scenes and measures for the restitution tests (engine-restitution*.test.ts),
 // after physics-ref/test/restitution.test.ts: the same bodies and the same
 // "at contact" rebound measure, taken from per-step snapshots so the GPU's
 // runs (steppedRun in page.ts) and the reference's are measured alike.
@@ -6,6 +6,7 @@ import { expect } from 'vitest';
 import { type BodyDesc, type CombineRule, inertiaOf, massOf, type SceneDesc, type Snapshot, type Vec3 } from '@tb/engine-api';
 import { rotate } from '@tb/geom';
 import { type AvbdParams, AvbdReferenceEngine, type StepStats } from '@tb/physics-ref';
+import { buildScenario } from '@tb/scenarios';
 import type { GpuEngineOptions, GpuRestitutionStats } from '../src/index.ts';
 import { call, toSnap } from './harness.ts';
 
@@ -124,3 +125,23 @@ export function bounceOf(scene: SceneDesc, yc: number, r: Run) {
   }
   return { eV: vIn ? vOut / vIn : 0, vIn, spinMax, eGain: (eMax - E0) / Math.abs(E0), minY: minY - yc, vtOut, impactStep };
 }
+
+/** A scene of these bodies with no gravity and no ground. */
+export const zeroG = (bodies: BodyDesc[], rule?: CombineRule) => sceneOf(bodies, { gravity: [0, 0, 0], ground: false, rule });
+/** Every body's (and spawned body's) restitution set to e, and the ground's. */
+export const withE = (s: SceneDesc, e: number): SceneDesc => ({
+  ...s, ground: s.ground && { ...s.ground, restitution: e },
+  bodies: s.bodies.map((b) => ({ ...b, restitution: e })), inputs: s.inputs.map((ev) => ({ ...ev, body: { ...ev.body, restitution: e } })),
+});
+/** An S5 knockdown: a ball at this speed into a 48-cube city. */
+export const knock = (speed: number) => buildScenario('S5', { N: 48, F: 2, H: 12, fireStep: 0, speed, massRatio: 5, radius: 0.6 }, 1);
+/** Every snapshot's floats, for bit-for-bit comparisons. */
+export const floats = (r: Run) => r.snaps.map((s) => [...s.pos, ...s.rot, ...s.linVel, ...s.angVel]);
+/** The same scene, steps and params on the GPU and on the reference. */
+export const both = async (scene: SceneDesc, steps: number, params: Partial<AvbdParams>, stats = false) => ({ gpu: await gpuRun(scene, steps, params, {}, stats), ref: await refRun(scene, steps, params) });
+/** A body dropped onto the ground at v (dropScene), and its rebound on both engines (bounceOf). */
+export const drop = async (shape: Shape, v: number, e: number, params: Partial<AvbdParams> = ON, o: Parameters<typeof dropScene>[3] = {}) => {
+  const { scene, yc, steps } = dropScene(shape, v, e, o);
+  const r = await both(scene, steps, params);
+  return { gpu: bounceOf(scene, yc, r.gpu), ref: bounceOf(scene, yc, r.ref) };
+};

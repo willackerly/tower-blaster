@@ -55,8 +55,9 @@
   "packages/physics-gpu/test/engine-gapslop.test.ts": 253.3,
   "packages/physics-gpu/test/engine-knock.test.ts": 123.1,
   "packages/physics-gpu/test/engine-rest.test.ts": 190.7,
-  "packages/physics-gpu/test/engine-restitution-variants.test.ts": 22.6,
-  "packages/physics-gpu/test/engine-restitution.test.ts": 240.1,
+  "packages/physics-gpu/test/engine-restitution-supports.test.ts": 157.1,
+  "packages/physics-gpu/test/engine-restitution-variants.test.ts": 13.1,
+  "packages/physics-gpu/test/engine-restitution.test.ts": 179.2,
   "packages/physics-gpu/test/engine-scale.test.ts": 14.5,
   "packages/physics-gpu/test/engine-stacks.test.ts": 86.7,
   "packages/physics-gpu/test/engine-variants.test.ts": 532.6,
@@ -108,6 +109,7 @@
   "packages/testkit/test/observe.test.ts": 4.3,
   "packages/testkit/test/shard.test.ts": 0,
   "packages/testkit/test/teardown.test.ts": 1.7,
-  "packages/viewer/test/e2e.test.ts": 275.8,
+  "packages/viewer/test/e2e-bounce.test.ts": 80,
+  "packages/viewer/test/e2e.test.ts": 261.2,
   "packages/viewer/test/viewer.test.ts": 4.1
 }
