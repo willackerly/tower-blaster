@@ -103,10 +103,50 @@ rules the code follows; the doc has the reasoning.
   (checked for limestone, granite, sandstone, concrete and both grounds),
   so they carry none of its registers. Its own cost on the M5 Max is not
   measured yet.
-- Units. Rings and fibres are metres times `stoneScale`. In S15 (unit: one
-  plank width, 23.4 mm) they are right once the world-scale change divides
-  the stone tile by metres per unit; until then, `stoneScale` 42.7 gives
-  the true size but is past the knob's range.
+- Units. Rings and fibres are metres times `stoneScale`, in world units
+  through `FrameParams.metres` since the world-scale change (#60). S15
+  (unit: one plank width, 23.4 mm) gets its true size once it runs at
+  `scale` 0.0234, which waits on its stability at that scale.
+
+## The hall (Kapla step K3.2a)
+
+- `real.env=hall` (Scene panel: setting) puts the scene inside an
+  exhibition hall after Olympia's Grand Hall, where the 100k-plank record
+  tower stood: a 53 m glazed barrel vault on 13 lattice ribs, iron
+  columns, a gallery all round and glazed end screens (hall.ts, `OLYMPIA`,
+  traced analytically per pixel). Knobs: `real.hallSize` (1 = Olympia),
+  `real.hallGlass` (milkiness of the glazing, 0 clear to 1 opal; 0.5) and
+  `real.hallIron` (grey of the painted ironwork; 0.55). Its floor centre is
+  the world's origin on the floor, in metres through `FrameParams.metres`,
+  so it is the same hall in cube and plank units (a test renders it at
+  metres 1, 0.5 and 0.0234: no pixel inside a surface differs).
+- Drawing. After the sky, a full-screen triangle whose fragments trace the
+  hall from the eye (`fsHall`) and write the hit's depth (`frag_depth`,
+  depth test less-equal): bodies in front hide the hall and the hall's
+  columns and galleries hide bodies behind them (tested pixel by pixel
+  against the CPU trace). Rays that meet the floor first miss the hall and
+  draw nothing, so the floor is the ground pass's as before (those pixels
+  are bit-identical to the outdoor frame). Glazing is premultiplied over
+  the sky: clear glass transmits 80%, milky glass glows with the sky and
+  sun on its outer face instead; glazing bars (every 0.6 m down the slope),
+  purlins (every 2.6 m of arc) and the end screens' mullions and transoms
+  are antialiased lines. The trace assumes rays from inside, so the hall is
+  drawn only while the eye is inside it (`hallUniforms`); from outside the
+  frame is the outdoor one.
+- Cost. One trace per pixel above the floor (frag_depth turns off early
+  depth rejection, so pixels under bodies trace too). The trace now walks
+  the bay lines front to back from the eye and stops at the first whose
+  slab starts past the nearest hit so far: 3.5 of the 13 bay lines per ray
+  on average from near the centre (tested to find exactly what testing all
+  13 finds). `pnpm bench:render --variants full,real,real-hall --counts
+  10000` measures it (real-hall vs real); not measured on the M5 Max yet.
+- Not yet. Lighting is ambient only: the sky through the vault's glazed
+  share above, the floor's radiance below; the roof casts no shadow, so
+  bodies and floor are still sunlit as outdoors (K3.2b: sun visibility
+  through the roof, interior ambient). The floor is still the outdoor
+  ground (K3.2c: polished concrete). The ribs' webs and the balustrade's
+  lattice are hard-edged and alias at a distance; they need coverage with
+  the trace continued behind them (K3.4).
 
 ## What step 4 built
 

@@ -1,6 +1,6 @@
 // The hall's geometry (hall.ts), on its CPU twin: known rays and invariants.
 import { describe, expect, it } from 'vitest';
-import { HALL_MAT, hallArch, hallLattice, hallRibs, hallTraceCpu, OLYMPIA, type HallParams } from '../src/hall.ts';
+import { HALL_MAT, hallArch, hallInside, hallLattice, hallRibs, hallScaled, hallTraceCpu, OLYMPIA, type HallParams } from '../src/hall.ts';
 import type { V3 } from '../src/math.ts';
 
 const H = OLYMPIA;
@@ -100,9 +100,72 @@ describe('hall geometry (Olympia)', () => {
     expect(on / 20000).toBeCloseTo((2 * 0.1 * Math.SQRT2) / 1.6, 1);
   });
 
+  it('the front-to-back walk over the bay lines finds what testing every one finds', () => {
+    const r = rng(11);
+    const rays: Array<[V3, V3]> = [];
+    for (let i = 0; i < 20000; i++) {
+      const o: V3 = [(r() - 0.5) * 50, 0.2 + r() * 25, (r() - 0.5) * 130];
+      rays.push([o, unit([r() - 0.5, r() - 0.35, r() - 0.5])]);
+    }
+    // Level across the hall (d.z exactly 0), from on and beside the bay lines and their columns' and ribs' edges.
+    for (let k = 0; k < n; k++) for (const dz of [0, H.ribWidth / 2, H.column, H.column + 1e-9, -H.column, 1.3]) {
+      for (const d of [[1, 0, 0], unit([1, 1, 0]), unit([-0.2, 1, 0]), [0, 0, 1], [0, 0, -1]] as V3[]) rays.push([[3, 4, ribZ(k) + dz], d]);
+    }
+    let ribHits = 0;
+    for (const [o, d] of rays) {
+      const walk = hallTraceCpu(H, o, d), every = hallTraceCpu(H, o, d, true);
+      expect(walk.mat).toBe(every.mat);
+      expect(walk.t).toBe(every.t);
+      if (walk.mat === HALL_MAT.iron) ribHits++;
+    }
+    expect(ribHits).toBeGreaterThan(1000);
+  });
+
+  it('inside: above the floor, within the walls and end screens, under the vault', () => {
+    expect(hallInside(H, [0, 1.7, 0])).toBe(true);
+    expect(hallInside(H, [H.span / 2 + 1, 2, 60])).toBe(true); // in an aisle, under the gallery
+    expect(hallInside(H, [0, H.crown - 0.01, 0])).toBe(true);
+    expect(hallInside(H, [0, H.crown + 0.01, 0])).toBe(false);
+    expect(hallInside(H, [0, -0.01, 0])).toBe(false);
+    expect(hallInside(H, [H.span / 2 + H.galleryDepth + 0.01, 1, 0])).toBe(false);
+    expect(hallInside(H, [0, 1, H.length / 2 + 0.01])).toBe(false);
+    expect(hallInside(H, [H.span / 2, H.spring + 1, 0])).toBe(false); // above the aisle's ceiling, outside the vault
+  });
+
+  it('scaled: every length times s, the same hits at s times the distance', () => {
+    const s = 0.5, h = hallScaled(H, s);
+    expect(h.span).toBe(H.span * s);
+    expect(h.bay).toBe(H.bay * s);
+    expect(h.clear).toBe(H.clear);
+    const r = rng(5);
+    let same = 0;
+    for (let i = 0; i < 2000; i++) {
+      const o: V3 = [(r() - 0.5) * 50, 0.2 + r() * 25, (r() - 0.5) * 130], d = unit([r() - 0.5, r() - 0.35, r() - 0.5]);
+      const a = hallTraceCpu(H, o, d), b = hallTraceCpu(h, o.map((x) => x * s) as V3, d);
+      // The balustrade's rails and lattice are a fixed size (a person's), so they may differ.
+      if (a.mat === HALL_MAT.rail || b.mat === HALL_MAT.rail) continue;
+      if (a.mat === b.mat && (a.mat === HALL_MAT.none || Math.abs(b.t - a.t * s) < 1e-6 * (1 + a.t))) same++;
+    }
+    expect(same).toBeGreaterThan(0.97 * 2000);
+  });
+
   it('takes other proportions: a smaller hall still encloses its rays', () => {
     const small: HallParams = { ...H, span: 30, crown: 18, spring: 8, length: 60, bay: 6 };
     const hit = hallTraceCpu(small, [0, 1.7, 3], [0, 1, 0]);
     expect(hit.t).toBeCloseTo(18 - 1.7, 6);
+  });
+});
+
+describe('the render bench\'s hall (bench.ts real-hall)', () => {
+  it('is scaled until each world\'s eye is inside it, with room to spare', async () => {
+    const { buildWorld, hallSizeFor } = await import('../src/bench.ts');
+    for (const [world, n] of [['near', 10_000], ['near', 100_000], ['far', 10_000], ['far', 100_000]] as const) {
+      const { eye } = buildWorld(world, n);
+      const s = hallSizeFor(eye);
+      expect(hallInside(hallScaled(H, s), eye)).toBe(true);
+      expect(hallInside(hallScaled(H, s), eye.map((x) => x * 1.1) as V3)).toBe(true);
+      if (s > 1) expect(hallInside(hallScaled(H, s - 0.25), eye.map((x) => x * 1.1) as V3)).toBe(false);
+    }
+    expect(hallSizeFor([0, 1.7, 0])).toBe(1);
   });
 });

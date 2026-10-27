@@ -2,7 +2,7 @@
 // on demand, and the projectile and the look, applied as soon as a field changes; and the
 // whole setup saved to or loaded from a JSON file (scene-file.ts). The panel
 // only proposes configs; main.ts decides how to apply them (live, or by reset).
-import { type Ground, GROUNDS, linearToSrgb, LOOKS, REAL_DEFAULTS, REAL_KNOBS, type RealKnob, type RealOptions, srgbToLinear, type Stone, STONES, type V3 } from '@tb/render';
+import { type Env, ENVS, type Ground, GROUNDS, linearToSrgb, LOOKS, REAL_DEFAULTS, REAL_KNOBS, type RealKnob, type RealOptions, srgbToLinear, type Stone, STONES, type V3 } from '@tb/render';
 import { buildScenario, SCENARIOS } from '@tb/scenarios';
 import type { CameraPose } from './camera.ts';
 import { escapeHtml } from './html.ts';
@@ -38,7 +38,7 @@ export const albedoHex = (c: V3) => `#${c.map((x) => Math.round(255 * linearToSr
 export const hexAlbedo = (h: string): V3 => [1, 3, 5].map((i) => Math.round(1000 * srgbToLinear(parseInt(h.slice(i, i + 2), 16) / 255)) / 1000) as V3;
 
 /** The real look's options from panel values: only what differs from REAL_DEFAULTS, so the URL stays short. */
-export function realOverrides(values: Record<RealKnob, number>, groundHex: string, stone: Stone = REAL_DEFAULTS.stone, groundMaterial: Ground = REAL_DEFAULTS.groundMaterial): Partial<RealOptions> {
+export function realOverrides(values: Record<RealKnob, number>, groundHex: string, choices: Partial<Pick<RealOptions, 'stone' | 'groundMaterial' | 'env'>> = {}): Partial<RealOptions> {
   const o: Partial<RealOptions> = {};
   for (const key of Object.keys(REAL_KNOBS) as RealKnob[]) {
     const v = values[key], k = REAL_KNOBS[key];
@@ -46,8 +46,7 @@ export function realOverrides(values: Record<RealKnob, number>, groundHex: strin
     if (v !== REAL_DEFAULTS[key]) o[key] = v;
   }
   if (groundHex.toLowerCase() !== albedoHex(REAL_DEFAULTS.groundAlbedo)) o.groundAlbedo = hexAlbedo(groundHex);
-  if (stone !== REAL_DEFAULTS.stone) o.stone = stone;
-  if (groundMaterial !== REAL_DEFAULTS.groundMaterial) o.groundMaterial = groundMaterial;
+  for (const k of ['stone', 'groundMaterial', 'env'] as const) if (choices[k] !== undefined && choices[k] !== REAL_DEFAULTS[k]) (o as Record<string, unknown>)[k] = choices[k];
   return o;
 }
 
@@ -108,6 +107,7 @@ export function mountControls(root: HTMLElement, hooks: ControlsHooks): { refres
       <label class="f"><span>look</span><select name="look">${Object.keys(LOOKS).map((l) => `<option value="${l}">${l}</option>`).join('')}</select></label>
       <div class="real">
         <label class="f"><span>stone</span><select name="stone">${STONES.map((st) => `<option value="${st}">${st}</option>`).join('')}</select></label>
+        <label class="f"><span>setting</span><select name="env">${ENVS.map((e) => `<option value="${e}">${e}</option>`).join('')}</select></label>
         <label class="f"><span>ground</span><select name="groundMaterial">${GROUNDS.map((g) => `<option value="${g}">${g}</option>`).join('')}</select></label>
         ${(Object.entries(REAL_KNOBS) as [RealKnob, (typeof REAL_KNOBS)[RealKnob]][]).map(([key, k]) => field(key, k.label, REAL_DEFAULTS[key], `step="${k.step}" min="${k.min}" max="${k.max}"`)).join('')}
         <label class="f"><span>ground albedo</span><input type="color" name="ground" value="${albedoHex(REAL_DEFAULTS.groundAlbedo)}"></label>
@@ -198,7 +198,7 @@ export function mountControls(root: HTMLElement, hooks: ControlsHooks): { refres
     realBox.hidden = look !== 'real';
     try {
       const values = Object.fromEntries((Object.keys(REAL_KNOBS) as RealKnob[]).map((k) => [k, Number(input(lookForm, k).value)])) as Record<RealKnob, number>;
-      hooks.setLook(look, realOverrides(values, input(lookForm, 'ground').value, input(lookForm, 'stone').value as Stone, input(lookForm, 'groundMaterial').value as Ground));
+      hooks.setLook(look, realOverrides(values, input(lookForm, 'ground').value, { stone: input(lookForm, 'stone').value as Stone, groundMaterial: input(lookForm, 'groundMaterial').value as Ground, env: input(lookForm, 'env').value as Env }));
       lookOut.textContent = look === 'real' ? 'sun azimuth: clockwise from -z; visibility: 10 hazy, 40 clear, 150 crisp' : '';
       lookOut.classList.remove('warn');
     } catch (e) {
@@ -262,6 +262,7 @@ export function mountControls(root: HTMLElement, hooks: ControlsHooks): { refres
     input(lookForm, 'ground').value = albedoHex(real.groundAlbedo);
     input(lookForm, 'stone').value = real.stone;
     input(lookForm, 'groundMaterial').value = real.groundMaterial;
+    input(lookForm, 'env').value = real.env;
   }
   // Open or closed as the viewer last left it; open by default on a wide screen.
   const OPEN_KEY = 'tb.viewer.controls.open';

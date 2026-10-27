@@ -9,7 +9,7 @@ import { Body, RenderRecord, Shape, TIER, readStruct } from '@tb/schema';
 import {
   agx, AGX_WGSL, LOOKS, realLook, type RealOptions, type LookParams, fromHalf, Atmosphere, CLEAR_DAY, transmittance, transmittanceHMu, multiScattering, skyViewDir, skyRadiance, skyViewUv, sampleTransmittance, ambientOf, distanceToGround, meteredIlluminance, Materials, heightNormal, STONES, GROUNDS, MATERIAL_LAYERS, WOOD_WGSL, WOOD_RING_M, woodRings, PCG_WGSL, pcg3d, MACRO_LAYER, layerTile, materialSample, macroSample, adaptedExposure, LUMA, R_TOP, R_GROUND, FX_WORDS, packFx, toHalf, bevelNormal, BEVEL_WGSL, oklabToLinear, OKLAB_WGSL, Post,
   Culler, cullReference, FLOOR_REACH, GpuBodySource, invert, listMatches, lookAt, makeGpuBodies, multiply, packBodies, perspective, Renderer, SEG, SEGMENTS, SnapshotSource, transform,
-  translation, normalize, BOX_VERTS, SPHERE_VERTS, SUN, Sparks, CTL, MAX_EVENTS, flashSlot, FLASHES, MAX_BALLS, TRAIL, Lights, LIGHTS, LIGHT_META, LIGHT_PACKED, MATERIAL, AoVolume, aoGrid, aoFrame, splatReference, composeReference, AO_FOOT_WGSL, AO_SAMPLE_WGSL, AO_SEAM_WGSL, AO_ONE, type SplatBody, unpackImpacts, unpackSparks, spawnReference, stepReference, debrisSpawnReference, dustStepReference, chipStepReference, type SparkState, type Impact, type BodySource, type CullFrame, type FrameParams, type RendererOptions, type V3,
+  translation, normalize, hallTraceCpu, HALL_MAT, OLYMPIA, BOX_VERTS, SPHERE_VERTS, SUN, Sparks, CTL, MAX_EVENTS, flashSlot, FLASHES, MAX_BALLS, TRAIL, Lights, LIGHTS, LIGHT_META, LIGHT_PACKED, MATERIAL, AoVolume, aoGrid, aoFrame, splatReference, composeReference, AO_FOOT_WGSL, AO_SAMPLE_WGSL, AO_SEAM_WGSL, AO_ONE, type SplatBody, unpackImpacts, unpackSparks, spawnReference, stepReference, debrisSpawnReference, dustStepReference, chipStepReference, type SparkState, type Impact, type BodySource, type CullFrame, type FrameParams, type RendererOptions, type V3,
 } from '../src/index.ts';
 
 function rng(seed: number) {
@@ -2785,4 +2785,144 @@ async function penumbraFrame(device: GPUDevice, c: PenumbraCase) {
   const texel = rend.shadowFit!.texel;
   rend.destroy();
   return { f, px, texel, look, e, H, z0 };
+}
+
+// ---------------------------------------------------------------- hall
+
+/**
+ * The hall pass (Kapla step K3.2a) against the outdoor frame and against
+ * hallTraceCpu, which classifies each pixel by what its centre's ray hits:
+ * the golden scene (and an empty one: a single box under the floor) in the
+ * real look outdoors and in the hall, bloom off so pixels compare exactly.
+ * Classes count only pixels whose 3 x 3 neighbourhood agrees, so silhouettes
+ * and multisampled edges are left out. Per view:
+ * - none: the ray meets the floor first, so the hall draws nothing (max |hall - outdoor|);
+ * - opaque: hall wall, iron, panel or rail and no body: the share the hall changed;
+ * - glass: glazing and no body: the share the hall changed;
+ * - hidden: a column within 5 m in front of a body: max |hall - hall without bodies| (the column hides the body);
+ * - front: a body in front of hall more than 10 m away: max |hall - outdoor| (the body hides the hall).
+ * A body pixel is one where the golden scene and the empty one differ outdoors.
+ * allMax: max |hall - outdoor| over the whole frame (0 when the hall is not drawn).
+ */
+export async function hallFrames(views: Array<{ eye: V3; target: V3; metres?: number }>, size: [number, number] = [320, 180]) {
+  const { device } = await sharedDevice({ timestamps: false });
+  device.pushErrorScope('validation');
+  const scene = goldenScene(device);
+  const under = [box([0, -50, 0], [0.5, 0.5, 0.5], [0, 0, 0, 1], 0)];
+  const empty = new SnapshotSource(device);
+  empty.reset(under);
+  empty.update(snapshotOf(under), under);
+  const base = { groundDetail: 0, hills: 0 };
+  const outdoor = { ...realLook(base), bloomMix: 0 }, hall = { ...realLook({ ...base, env: 'hall' }), bloomMix: 0 };
+  const rend = goldenRenderer(device, scene, outdoor, size);
+  const frame = async (look: LookParams, src: BodySource, f: FrameParams) => {
+    rend.look = look;
+    rend.setSource(src);
+    await rend.render(f);
+    const { data, bytesPerRow } = (await rend.render(f, true, true))!.pixels!;
+    return (x: number, y: number) => { const k = y * bytesPerRow + 4 * x; return [data[k]!, data[k + 1]!, data[k + 2]!]; };
+  };
+  const diff = (a: number[], b: number[]) => Math.max(...a.map((v, i) => Math.abs(v - b[i]!)));
+  const out = [];
+  for (const { eye, target, metres = 1 } of views) {
+    const viewProj = multiply(perspective(0.9, size[0] / size[1], 0.1 / metres, 400 / metres), lookAt(eye, target));
+    const f: FrameParams = { viewProj, eye, groundY: 0, time: 1, dt: 0, alpha: 1, metres };
+    const A = await frame(hall, scene, f), B = await frame(hall, empty, f), C = await frame(outdoor, scene, f), D = await frame(outdoor, empty, f);
+    // What each pixel's centre ray hits, from the CPU twin.
+    const inv = invert(viewProj);
+    const cls: number[] = [], tOf: number[] = [];
+    for (let y = 0; y < size[1]; y++) for (let x = 0; x < size[0]; x++) {
+      const ndc = [((x + 0.5) / size[0]) * 2 - 1, 1 - ((y + 0.5) / size[1]) * 2, 1, 1];
+      const p = [0, 1, 2, 3].map((i) => ndc.reduce((acc, v, j) => acc + inv[j * 4 + i]! * v, 0));
+      const d = normalize([p[0]! / p[3]! - eye[0], p[1]! / p[3]! - eye[1], p[2]! / p[3]! - eye[2]]);
+      const hit = hallTraceCpu(OLYMPIA, [eye[0] * metres, eye[1] * metres, eye[2] * metres], d);
+      cls.push(hit.mat);
+      tOf.push(hit.t);
+    }
+    const isBody = (x: number, y: number) => diff(C(x, y), D(x, y)) > 0;
+    const all3 = (x: number, y: number, ok: (x: number, y: number) => boolean) => {
+      for (let j = -1; j <= 1; j++) for (let i = -1; i <= 1; i++) if (!ok(x + i, y + j)) return false;
+      return true;
+    };
+    let allMax = 0;
+    for (let y = 0; y < size[1]; y++) for (let x = 0; x < size[0]; x++) allMax = Math.max(allMax, diff(A(x, y), C(x, y)));
+    const s = { allMax, none: { n: 0, max: 0 }, opaque: { n: 0, changed: 0 }, glass: { n: 0, changed: 0 }, hidden: { n: 0, max: 0, outdoorMax: 0 }, front: { n: 0, max: 0 } };
+    const opaque: number[] = [HALL_MAT.wall, HALL_MAT.iron, HALL_MAT.panel, HALL_MAT.rail], glass: number[] = [HALL_MAT.glass, HALL_MAT.lantern, HALL_MAT.screen];
+    for (let y = 1; y < size[1] - 1; y++) for (let x = 1; x < size[0] - 1; x++) {
+      const c = (i: number, j: number) => cls[j * size[0] + i]!, t = (i: number, j: number) => tOf[j * size[0] + i]!;
+      const noBody = all3(x, y, (i, j) => !isBody(i, j)), body = all3(x, y, isBody);
+      if (all3(x, y, (i, j) => c(i, j) === HALL_MAT.none)) {
+        s.none.n++;
+        s.none.max = Math.max(s.none.max, diff(A(x, y), C(x, y)));
+      } else if (noBody && all3(x, y, (i, j) => opaque.includes(c(i, j)))) {
+        s.opaque.n++;
+        if (diff(A(x, y), C(x, y)) > 2) s.opaque.changed++;
+      } else if (noBody && all3(x, y, (i, j) => glass.includes(c(i, j)))) {
+        s.glass.n++;
+        if (diff(A(x, y), C(x, y)) > 2) s.glass.changed++;
+      } else if (body && all3(x, y, (i, j) => c(i, j) === HALL_MAT.iron && t(i, j) < 5)) {
+        s.hidden.n++;
+        s.hidden.max = Math.max(s.hidden.max, diff(A(x, y), B(x, y)));
+        s.hidden.outdoorMax = Math.max(s.hidden.outdoorMax, diff(C(x, y), D(x, y)));
+      } else if (body && all3(x, y, (i, j) => c(i, j) !== HALL_MAT.none && t(i, j) > 10)) {
+        s.front.n++;
+        s.front.max = Math.max(s.front.max, diff(A(x, y), C(x, y)));
+      }
+    }
+    out.push(s);
+  }
+  rend.destroy();
+  const err = await device.popErrorScope();
+  return { views: out, error: err?.message ?? null };
+}
+
+/** Frames of the hall look with no bodies, as RGBA hashes and rows, at each world scale (eye and planes scaled by 1 / metres). */
+export async function hallScale(metres: number[], eye: V3, target: V3, size: [number, number] = [320, 180]) {
+  const { device } = await sharedDevice({ timestamps: false });
+  device.pushErrorScope('validation');
+  const under = [box([0, -50, 0], [0.5, 0.5, 0.5], [0, 0, 0, 1], 0)];
+  const empty = new SnapshotSource(device);
+  empty.reset(under);
+  empty.update(snapshotOf(under), under);
+  const rend = goldenRenderer(device, empty, { ...realLook({ groundDetail: 0, hills: 0, env: 'hall' }), bloomMix: 0 }, size);
+  rend.setOverlay(new Float32Array(0)); // the golden overlay sphere is in world units
+  const frames: number[][] = [];
+  let bpr = 0;
+  for (const m of metres) {
+    const e = eye.map((x) => x / m) as V3, tg = target.map((x) => x / m) as V3;
+    const f: FrameParams = { viewProj: multiply(perspective(0.9, size[0] / size[1], 0.1 / m, 400 / m), lookAt(e, tg)), eye: e, groundY: 0, time: 1, dt: 0, alpha: 1, metres: m };
+    await rend.render(f);
+    const px = (await rend.render(f, true, true))!.pixels!;
+    frames.push(px.data.slice());
+    bpr = px.bytesPerRow;
+  }
+  rend.destroy();
+  // What each pixel's centre ray hits (CPU twin, the first scale's view), to tell edges from surfaces.
+  const m0 = metres[0]!, e0 = eye.map((x) => x / m0) as V3;
+  const inv = invert(multiply(perspective(0.9, size[0] / size[1], 0.1 / m0, 400 / m0), lookAt(e0, target.map((x) => x / m0) as V3)));
+  const cls: number[] = [];
+  for (let y = 0; y < size[1]; y++) for (let x = 0; x < size[0]; x++) {
+    const ndc = [((x + 0.5) / size[0]) * 2 - 1, 1 - ((y + 0.5) / size[1]) * 2, 1, 1];
+    const p = [0, 1, 2, 3].map((i) => ndc.reduce((acc, v, j) => acc + inv[j * 4 + i]! * v, 0));
+    cls.push(hallTraceCpu(OLYMPIA, eye, normalize([p[0]! / p[3]! - e0[0], p[1]! / p[3]! - e0[1], p[2]! / p[3]! - e0[2]])).mat);
+  }
+  // Largest channel difference from the first frame, how many pixels differ by more than 2, and how many of
+  // those are inside a surface (3 x 3 of one material) other than the hard-edged lattices (iron, rail).
+  const cmp = frames.slice(1).map((fr) => {
+    let max = 0, over = 0, inside = 0;
+    for (let y = 0; y < size[1]; y++) for (let x = 0; x < size[0]; x++) {
+      let d = 0;
+      for (let c = 0; c < 3; c++) d = Math.max(d, Math.abs(fr[y * bpr + 4 * x + c]! - frames[0]![y * bpr + 4 * x + c]!));
+      max = Math.max(max, d);
+      if (d <= 2) continue;
+      over++;
+      const k = cls[y * size[0] + x]!;
+      let uniform = x > 0 && y > 0 && x < size[0] - 1 && y < size[1] - 1;
+      for (let j = -1; j <= 1 && uniform; j++) for (let i = -1; i <= 1; i++) if (cls[(y + j) * size[0] + x + i] !== k) uniform = false;
+      if (uniform && k !== HALL_MAT.iron && k !== HALL_MAT.rail) inside++;
+    }
+    return { max, over, inside };
+  });
+  const err = await device.popErrorScope();
+  return { cmp, error: err?.message ?? null };
 }

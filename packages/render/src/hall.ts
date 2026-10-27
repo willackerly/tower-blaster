@@ -52,6 +52,19 @@ export const OLYMPIA: HallParams = {
   clear: 30, lantern: 2.5,
 };
 
+/** The hall scaled by s: every length times s, the glazing's angles kept. */
+export function hallScaled(h: HallParams, s: number): HallParams {
+  const o = { ...h };
+  for (const k of Object.keys(h) as (keyof HallParams)[]) if (k !== 'clear' && k !== 'lantern') o[k] = h[k] * s;
+  return o;
+}
+
+/** Is p (hall metres) inside the hall: above the floor, within the outer walls and end screens, under the vault? */
+export function hallInside(h: HallParams, p: V3): boolean {
+  const { R, yc } = hallArch(h);
+  return p[1] >= 0 && Math.abs(p[0]) <= h.span / 2 + h.galleryDepth && Math.abs(p[2]) <= h.length / 2 && (p[1] < h.spring || Math.hypot(p[0], p[1] - yc) <= R);
+}
+
 /** What a hall ray hit (HallHit.mat). */
 export const HALL_MAT = { none: 0, glass: 1, panel: 2, iron: 3, wall: 4, rail: 5, lantern: 6, screen: 7 } as const;
 
@@ -138,6 +151,17 @@ function annulus(o: V3, d: V3, yc: number, r0: number, r1: number, lo: number, h
   return [best, how];
 }
 
+/**
+ * Where the walk over the bay lines starts and which way it goes: from the
+ * line before the first whose slab |z - zk| <= m the ray can still reach
+ * (one early, so rounding never skips it), in the direction of d.z (up
+ * when it is 0). The GPU twin computes the same in f32.
+ */
+export function hallRibOrder(oz: number, dz: number, nr: number, bay: number, m: number): [number, number] {
+  const c = (nr - 1) / 2;
+  return dz >= 0 ? [Math.max(Math.ceil((oz - m) / bay + c) - 1, 0), 1] : [Math.min(Math.floor((oz + m) / bay + c) + 1, nr - 1), -1];
+}
+
 const at = (o: V3, d: V3, t: number): V3 => [o[0] + t * d[0], o[1] + t * d[1], o[2] + t * d[2]];
 const facing = (n: V3, d: V3): V3 => (n[0] * d[0] + n[1] * d[1] + n[2] * d[2] > 0 ? [-n[0], -n[1], -n[2]] : n);
 const fract = (x: number) => x - Math.floor(x);
@@ -154,8 +178,10 @@ export function hallLattice(s: number, h: number, p: number, w: number): boolean
  * - vault (glass, panel, lantern): angle from the crown (rad), z;
  * - rib: arc length along the rib's mid-radius, height in the web (0..1, chords outside);
  * - column: angle around it, y; wall, rail, screen: the plane's in-plane coordinates.
+ * all: test every bay line in index order, without the front-to-back early
+ * exit (the reference the walk is tested against).
  */
-export function hallTraceCpu(h: HallParams, o: V3, d: V3): HallHit {
+export function hallTraceCpu(h: HallParams, o: V3, d: V3, all = false): HallHit {
   const u = hallUniform(h);
   const a = u[0]!, hs = u[1]!, L2 = u[3]!, bay = u[4]!, rd = u[5]!, rw = u[6]!, ch = u[7]!;
   const rc = u[8]!, hg = u[9]!, gd = u[10]!, deck = u[11]!, R = u[12]!, yc = u[13]!, nr = u[14]!, ths = u[15]!;
@@ -204,9 +230,16 @@ export function hallTraceCpu(h: HallParams, o: V3, d: V3): HallHit {
       if (y >= 0 && y <= hb && Math.abs(p[2]) <= L2 && (y < 0.06 || y > hb - 0.08 || hallLattice(p[2], y / 0.3, 0.3, 0.025))) take(t, HALL_MAT.rail, [1, 0, 0], [p[2], y]);
     }
   }
-  // Columns and ribs, one per bay line.
-  for (let k = 0; k < nr; k++) {
+  // Columns and ribs, one per bay line, front to back along the ray's z
+  // (hallRibOrder): past the first whose slab starts beyond the nearest hit
+  // so far, none can be nearer. all: every bay line, in index order (tests).
+  const [k0, sz] = hallRibOrder(o[2], d[2], nr, bay, Math.max(rw / 2, rc));
+  for (let i = 0; i < nr; i++) {
+    const k = all ? i : k0 + i * sz;
+    if (k < 0 || k >= nr) break;
     const zk = (k - (nr - 1) / 2) * bay;
+    const ez = slab(o[2], d[2], zk, Math.max(rw / 2, rc));
+    if (!all && ez[0] <= ez[1] && ez[1] > 0 && ez[0] >= best.t) break;
     for (const sx of [-1, 1]) {
       // Vertical cylinder at (sx a, zk), solved from the ray's closest approach to its axis
       // (C = |o|^2 - rc^2 would cancel catastrophically in f32 tens of metres away).
@@ -357,8 +390,16 @@ fn hallTrace(hp: Hall, o: vec3f, d: vec3f) -> HallHit {
       }
     }
   }
-  for (var k = 0; k < nr; k++) {
-    let zk = (f32(k) - f32(nr - 1) / 2.0) * bay;
+  // Front to back along z, stopping at the first slab past the nearest hit (hallRibOrder).
+  let m = max(rw / 2.0, rc); let cm = f32(nr - 1) / 2.0;
+  var k0 = max(i32(ceil((o.z - m) / bay + cm)) - 1, 0); var sz = 1;
+  if (d.z < 0.0) { k0 = min(i32(floor((o.z + m) / bay + cm)) + 1, nr - 1); sz = -1; }
+  for (var i = 0; i < nr; i++) {
+    let k = k0 + i * sz;
+    if (k < 0 || k >= nr) { break; }
+    let zk = (f32(k) - cm) * bay;
+    let ez = hallSlab(o.z, d.z, zk, m);
+    if (ez.x <= ez.y && ez.y > 0.0 && ez.x >= best.t) { break; }
     for (var side = 0; side < 2; side++) {
       let sx = select(1.0, -1.0, side == 0);
       let ox = o.x - sx * a; let oz = o.z - zk;

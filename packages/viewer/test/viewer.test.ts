@@ -833,8 +833,8 @@ describe('world scale (scale, substeps)', () => {
 
 describe('look', () => {
   it('round-trips the look and the real knobs through the URL; a preset keeps them', () => {
-    const c = parseViewerConfig('?look=real&real.sunElevation=4&real.visibility=12&real.ground=0.3,0.25,0.2&real.stone=granite&real.groundMaterial=dirt&real.groundScale=2');
-    expect(c).toMatchObject({ look: 'real', real: { sunElevation: 4, visibility: 12, groundAlbedo: [0.3, 0.25, 0.2], stone: 'granite', groundMaterial: 'dirt', groundScale: 2 } });
+    const c = parseViewerConfig('?look=real&real.sunElevation=4&real.visibility=12&real.ground=0.3,0.25,0.2&real.stone=granite&real.groundMaterial=dirt&real.groundScale=2&real.env=hall&real.hallSize=0.5');
+    expect(c).toMatchObject({ look: 'real', real: { sunElevation: 4, visibility: 12, groundAlbedo: [0.3, 0.25, 0.2], stone: 'granite', groundMaterial: 'dirt', groundScale: 2, env: 'hall', hallSize: 0.5 } });
     expect(parseViewerConfig(toSearch(c))).toEqual(c);
     expect(toSearch(parseViewerConfig(''))).not.toMatch(/look|real/);
     expect(parseViewerConfig(presetSearch('?scenario=S1', c))).toMatchObject({ scenario: 'S1', look: 'real', real: c.real });
@@ -848,8 +848,9 @@ describe('look', () => {
     const hex = albedoHex(REAL_DEFAULTS.groundAlbedo);
     expect(realOverrides(values, hex)).toEqual({});
     expect(realOverrides({ ...values, sunElevation: 5 }, hex)).toEqual({ sunElevation: 5 });
-    expect(realOverrides(values, hex, 'granite')).toEqual({ stone: 'granite' });
-    expect(realOverrides(values, hex, 'granite', 'dirt')).toEqual({ stone: 'granite', groundMaterial: 'dirt' });
+    expect(realOverrides(values, hex, { stone: 'granite' })).toEqual({ stone: 'granite' });
+    expect(realOverrides(values, hex, { stone: 'granite', groundMaterial: 'dirt' })).toEqual({ stone: 'granite', groundMaterial: 'dirt' });
+    expect(realOverrides(values, hex, { stone: 'limestone', env: 'hall' })).toEqual({ env: 'hall' });
     expect(realOverrides(values, '#808080').groundAlbedo).toEqual(hexAlbedo('#808080'));
     expect(hexAlbedo('#808080')[0]).toBeCloseTo(0.216, 3);
     expect(() => realOverrides({ ...values, autoExposure: 2 }, hex)).toThrow(/auto exposure/);
@@ -962,7 +963,7 @@ describe('scene file', () => {
     const urls = [
       '', '?scenario=S1&param.gap=0.02&engine=rapier', '?scenario=S4&param.N=10000&param.F=6&param.H=20&sleep=0&seed=7&autofire=120',
       '?engine=tiered&loop=frame&maxSteps=3', '?pipeline=0&proj=cube&proj.size=3&proj.mass=200&proj.speed=15',
-      '?look=hazy', '?scenario=S3&param.running=true&look=real&real.sunElevation=4&real.visibility=12&real.ground=0.3,0.25,0.2&real.stone=granite&real.groundMaterial=dirt',
+      '?look=hazy', '?scenario=S3&param.running=true&look=real&real.sunElevation=4&real.visibility=12&real.ground=0.3,0.25,0.2&real.stone=granite&real.groundMaterial=dirt&real.env=hall',
       '?scenario=S1&cam=0,4.5,0,0.8,0.3,25', '?offscreen=1&engine=avbd-gpu:iterations=40,sweep=false', '?scenario=S14&scale=0.25&substeps=2&loop=frame&maxSteps=2',
     ];
     for (const u of urls) {
@@ -1034,6 +1035,7 @@ describe('scene file', () => {
     expect(bad((f) => { f.engine.options = { 'a,b': 1 }; })).toThrow(/bad option name/);
     expect(bad((f) => { f.look.real.sunElevation = 120; })).toThrow(/real.sunElevation must be a number from -10 to 90/);
     expect(bad((f) => { f.look.real.stone = 'cheese'; })).toThrow(/look.real.stone must be one of/);
+    expect(bad((f) => { f.look.real.env = 'moon'; })).toThrow(/look.real.env must be one of/);
     expect(bad((f) => { f.look.preset = 'photo'; })).toThrow(/unknown look photo/);
     expect(bad((f) => { f.projectile.size = 50; })).toThrow(/proj.size must be a number from 0.1 to 20/);
     expect(bad((f) => { f.loop = { mode: 'free', pipeline: true, maxSteps: 2 }; })).toThrow(/maxSteps applies to loop=frame/);

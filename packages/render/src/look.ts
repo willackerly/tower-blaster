@@ -4,6 +4,11 @@
 import type { V3 } from './math.ts';
 import { CLEAR_DAY, type AtmosphereParams } from './atmosphere.ts';
 import { type Ground, GROUNDS, type Stone, STONE_PALETTES, STONES } from './materials.ts';
+import { type HallParams, hallScaled, OLYMPIA } from './hall.ts';
+
+/** Where the scene stands: in the open, or inside the exhibition hall (hall.ts). */
+export const ENVS = ['outdoor', 'hall'] as const;
+export type Env = (typeof ENVS)[number];
 
 export interface LookParams {
   name: string;
@@ -74,6 +79,12 @@ export interface LookParams {
   debris?: { dust: number; chips: number; size: number; opacity: number; threshold?: number; face?: number };
   /** false: none of the stylized effects (sparks, ball trail, heat glow, ball and impact lights). Default true. */
   effects?: boolean;
+  /**
+   * With an atmosphere: the exhibition hall around the scene (hall.ts, metres, its floor centre at
+   * the world's origin on the floor), drawn while the eye is inside it; glass: how milky its
+   * glazing is (0 clear, 1 opal), iron: the grey of its painted ironwork (linear albedo).
+   */
+  hall?: { params: HallParams; glass: number; iron: number };
 }
 
 const hex = (h: string): V3 => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16) / 255) as V3;
@@ -181,6 +192,11 @@ export interface RealOptions {
    */
   dustThreshold: number;
   dustFace: number;
+  /** In the open or inside the hall (Olympia's Grand Hall times hallSize), its glazing's milkiness and its ironwork's grey (0 to 1). */
+  env: Env;
+  hallSize: number;
+  hallGlass: number;
+  hallIron: number;
 }
 
 export const REAL_DEFAULTS: RealOptions = {
@@ -189,6 +205,7 @@ export const REAL_DEFAULTS: RealOptions = {
   groundMaterial: 'gravel', groundDetail: 1, groundScale: 1, groundVariation: 0.5, groundRelief: 1, groundPatches: 0.05, hills: 1.5, hillDistance: 6,
   sunSize: 0.53, shadowSoftness: 1,
   dust: 1, chips: 1, dustSize: 0.9, dustOpacity: 0.4, dustThreshold: 2, dustFace: 0.15,
+  env: 'outdoor', hallSize: 1, hallGlass: 0.5, hallIron: 0.55,
 };
 
 /** Direction toward the sun from elevation and azimuth in degrees. */
@@ -222,6 +239,7 @@ export function realLook(o: Partial<RealOptions> = {}): LookParams {
     hills: { height: r.hills, distance: r.hillDistance },
     shadow: { softness: r.shadowSoftness },
     debris: { dust: r.dust, chips: r.chips, size: r.dustSize, opacity: r.dustOpacity, threshold: r.dustThreshold, face: r.dustFace },
+    ...(r.env === 'hall' ? { hall: { params: hallScaled(OLYMPIA, r.hallSize), glass: r.hallGlass, iron: r.hallIron } } : {}),
     hueStep: 4,
     ball: hex('#8A8D90'),
     ballEmissive: 0,
@@ -262,12 +280,15 @@ export const REAL_KNOBS = {
   dustOpacity: { label: 'dust puff opacity', min: 0, max: 1, step: 0.05 },
   dustThreshold: { label: 'dust from knocks over (m/s)', min: 0.2, max: 20, step: 0.1 },
   dustFace: { label: 'dust from flat face-on knocks 0-1', min: 0, max: 1, step: 0.05 },
+  hallSize: { label: 'hall size x (1: Olympia)', min: 0.05, max: 20, step: 0.05 },
+  hallGlass: { label: 'hall glass milkiness 0-1', min: 0, max: 1, step: 0.05 },
+  hallIron: { label: 'hall ironwork grey 0-1', min: 0, max: 1, step: 0.05 },
 } as const;
 export type RealKnob = keyof typeof REAL_KNOBS;
 
 /**
  * The real look's options from URL keys real.<knob>, real.stone (a STONES
- * name), real.groundMaterial (a GROUNDS name) and real.ground (linear albedo r,g,b, each 0 to 1); absent keys are left out, so realLook fills
+ * name), real.groundMaterial (a GROUNDS name), real.env (an ENVS name) and real.ground (linear albedo r,g,b, each 0 to 1); absent keys are left out, so realLook fills
  * them from REAL_DEFAULTS. Rejects values that are not numbers or are out of range.
  */
 export function parseRealOptions(q: URLSearchParams): Partial<RealOptions> {
@@ -289,6 +310,11 @@ export function parseRealOptions(q: URLSearchParams): Partial<RealOptions> {
     if (!(GROUNDS as readonly string[]).includes(material)) throw new Error(`real.groundMaterial must be one of ${GROUNDS.join(', ')}: ${material}`);
     o.groundMaterial = material as Ground;
   }
+  const env = q.get('real.env');
+  if (env !== null && env !== '') {
+    if (!(ENVS as readonly string[]).includes(env)) throw new Error(`real.env must be one of ${ENVS.join(', ')}: ${env}`);
+    o.env = env as Env;
+  }
   const ground = q.get('real.ground');
   if (ground !== null && ground !== '') {
     const v = ground.split(',').map(Number);
@@ -303,6 +329,7 @@ export function writeRealOptions(o: Partial<RealOptions>, q: URLSearchParams): v
   for (const key of Object.keys(REAL_KNOBS) as RealKnob[]) if (o[key] !== undefined) q.set(`real.${key}`, String(o[key]));
   if (o.stone) q.set('real.stone', o.stone);
   if (o.groundMaterial) q.set('real.groundMaterial', o.groundMaterial);
+  if (o.env) q.set('real.env', o.env);
   if (o.groundAlbedo) q.set('real.ground', o.groundAlbedo.join(','));
 }
 

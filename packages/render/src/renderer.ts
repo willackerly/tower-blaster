@@ -20,6 +20,7 @@ import { BOX_CUBE_VERTS, BOX_FAN_VERTS, Frame, SCENE_WGSL, sceneWgsl, SHADOW_SIZ
 import { GROUND_LAYER, GROUNDS, Materials, patchThreshold, STONES, WOOD } from './materials.ts';
 import { ADAPTED_EXPOSURE_OFFSET, Atmosphere, medium, sunAtGround, sunDiscRadiance } from './atmosphere.ts';
 import { SnapshotSource, type BodySource } from './source.ts';
+import { hallInside, hallUniform } from './hall.ts';
 
 export { BOX_CUBE_VERTS, BOX_FAN_VERTS, BOX_VERTS, SPHERE_VERTS } from './shaders.ts';
 
@@ -171,6 +172,21 @@ export function lookUniforms(l: LookParams, metres = 1): Record<string, number |
   };
 }
 
+/**
+ * The hall's Frame uniforms (hall0..hall5 and hallLook, shaders.ts) for a look and an eye (world
+ * units, metres per unit): on (hallLook.x) only with a hall and the eye inside it, since the
+ * trace assumes rays from inside; off, the renderer draws no hall pass.
+ */
+export function hallUniforms(l: LookParams, metres: number, eye: V3, groundY: number): Record<string, number[]> {
+  const h = l.atmosphere ? l.hall : undefined;
+  const on = h !== undefined && hallInside(h.params, [eye[0] * metres, (eye[1] - groundY) * metres, eye[2] * metres]);
+  const u = h ? hallUniform(h.params) : new Float32Array(24);
+  return {
+    ...Object.fromEntries([0, 1, 2, 3, 4, 5].map((k) => [`hall${k}`, Array.from(u.subarray(4 * k, 4 * k + 4))])),
+    hallLook: [on ? 1 : 0, metres, h?.glass ?? 0, h?.iron ?? 0],
+  };
+}
+
 export class Renderer {
   readonly format: GPUTextureFormat;
   look: LookParams = CANDY_NIGHT;
@@ -180,7 +196,7 @@ export class Renderer {
   private readonly shadowLayout: GPUBindGroupLayout;
   private readonly pipes: Record<PipeName, GPURenderPipeline>;
   /** Pipelines and sky of looks with an atmosphere, made on first use. */
-  private real: { pipes: Record<RealPipe, GPURenderPipeline>; woodBox: () => GPURenderPipeline; atmosphere: Atmosphere; materials: Materials; layout: GPUBindGroupLayout; bind: GPUBindGroup } | null = null;
+  private real: { pipes: Record<RealPipe, GPURenderPipeline>; woodBox: () => GPURenderPipeline; hall: () => GPURenderPipeline; atmosphere: Atmosphere; materials: Materials; layout: GPUBindGroupLayout; bind: GPUBindGroup } | null = null;
   private readonly makeReal: () => NonNullable<Renderer['real']>;
   private lastSun: V3 = SUN;
   private readonly facePipe: () => GPURenderPipeline;
@@ -213,6 +229,8 @@ export class Renderer {
   private readonly overlayColours: GPUBuffer;
   private overlayCount = 0;
   private readonly floorBuf: GPUBuffer;
+  /** The look has a hall and the eye is inside it (hallUniforms): the hall pass is drawn. */
+  private hallOn = false;
   private readonly floorData = new Float32Array(FLOOR_VERTS * 3);
   private floorCount = 0;
   private lastTime = 0;
@@ -374,6 +392,22 @@ export class Renderer {
       // The wood's box pipeline (REAL_WOOD), compiled the first time a look's stone is pine.
       let wood: GPURenderPipeline | undefined;
       const woodBox = () => (wood ??= opts.flatBoxes ? pipes.box : color('vsBox', 'fsBox', 'back', SEG.box, { ...m, constants: { ...boxConsts, REAL_WOOD: 1 } }));
+      // The hall (hall.ts), compiled the first time a look has one: a full-screen
+      // triangle whose fragments trace it and write its depth, so it hides what
+      // stands behind its columns and galleries and bodies hide it. Glazing is
+      // premultiplied over the sky drawn before it.
+      let hallPipe: GPURenderPipeline | undefined;
+      const hall = () => (hallPipe ??= device.createRenderPipeline({
+        layout: m.layout,
+        vertex: { module: m.module, entryPoint: 'vsSky' },
+        fragment: {
+          module: m.module, entryPoint: 'fsHall', constants: floorConsts,
+          targets: [{ format: HDR_FORMAT, blend: { color: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha', operation: 'add' }, alpha: { srcFactor: 'zero', dstFactor: 'one', operation: 'add' } } }],
+        },
+        primitive: { topology: 'triangle-list', cullMode: 'none' },
+        depthStencil: { format: 'depth24plus', depthWriteEnabled: true, depthCompare: 'less-equal' },
+        multisample: { count: SAMPLES },
+      }));
       const pipes: Record<RealPipe, GPURenderPipeline> = {
         box: color('vsBox', opts.flatBoxes ? 'fsBoxFlat' : 'fsBox', 'back', SEG.box, { ...m, constants: opts.flatBoxes ? {} : boxConsts }),
         // Past the stone's fade-out (stoneLodDepth): the same shading without the stone code.
@@ -411,7 +445,7 @@ export class Renderer {
           { binding: 5, resource: materials.sampler }, { binding: 6, resource: device.createSampler({ label: 'shadow gather' }) },
         ],
       });
-      return { pipes, woodBox, atmosphere, materials, layout, bind };
+      return { pipes, woodBox, hall, atmosphere, materials, layout, bind };
     };
   }
 
@@ -558,6 +592,8 @@ export class Renderer {
     this.lastTime = f.time ?? 0;
     const inv = invert(viewProj);
     this.floorCount = floorFan(floorPolygon(inv, f.groundY - f.eye[1]), this.floorData).count;
+    const hall = hallUniforms(this.look, f.metres ?? 1, f.eye, f.groundY);
+    this.hallOn = hall.hallLook![0] === 1;
     if (this.floorCount) this.device.queue.writeBuffer(this.floorBuf, 0, this.floorData, 0, this.floorCount * 3);
     writeStruct(this.frameData, Frame, 0, {
       viewProj, lightViewProj, invViewProj: inv,
@@ -569,6 +605,7 @@ export class Renderer {
       ...this.aoUniforms(f.eye),
       heat: this.toggles.heat && this.look.effects !== false ? 1 : 0, viewport: this.viewport(), dt: f.dt ?? 0, trailHead: (this.lights.nextFrame + TRAIL - 1) % TRAIL,
       ...this.atmosphereUniforms(f, sun, fit),
+      ...hall,
     });
     this.device.queue.writeBuffer(this.frameBuf, 0, this.frameData);
     return { viewProj, lightViewProj, eye: f.eye, alpha: f.alpha ?? 1, noCull: f.noCull ?? false };
@@ -675,6 +712,10 @@ export class Renderer {
       }
       p.setPipeline(pipes.sky);
       p.draw(3);
+      if (real && this.hallOn) {
+        p.setPipeline(real.hall());
+        p.draw(3);
+      }
       if (this.toggles.sparks && effects) {
         p.setPipeline(this.pipes.spark);
         p.drawIndirect(this.sparks.args, 0);
