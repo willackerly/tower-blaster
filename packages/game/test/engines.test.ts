@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { AVBD_GAP_SLOP, AVBD_ITERATIONS, compileLevel, L1, L4 } from '@tb/keystone';
-import { engineKind, gpuOptions, makeEngine } from '../src/engines.ts';
+import { driverOptions, engineKind, gpuOptions, makeEngine } from '../src/engines.ts';
 
 describe('engine choice', () => {
   it('defaults to the GPU solver, accepts rapier, and names the choices for anything else', () => {
@@ -15,6 +15,10 @@ describe('engine choice', () => {
     expect(e.info.variant).toMatchObject({ iterations: AVBD_ITERATIONS, gapSlop: AVBD_GAP_SLOP });
     expect(e.info.integrator?.substeps).toBe(1);
     expect(makeEngine('rapier', compileLevel(L1)).info.name).toBe('rapier');
+  });
+  it('pipelines the read-back on the GPU engine only (its step() only submits)', () => {
+    expect(driverOptions('gpu')).toEqual({ pipelined: true });
+    expect(driverOptions('rapier')).toEqual({ pipelined: false });
   });
   it('reserves a slot per rack item and room for the largest ammo', () => {
     const c1 = compileLevel(L1), h = c1.frame.unit;
