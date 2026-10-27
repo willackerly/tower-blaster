@@ -319,7 +319,7 @@ describe('restitution on', () => {
       if (k > 816) late = Math.max(late, maxSpeed(eng));
     }
     const moved = Math.max(...bodies.map((b, i) => Math.hypot(...[0, 1, 2].map((r) => eng.world!.bodies[i]!.pos[r]! - b.pos[r]!))));
-    // Measured 8.3e-8 m and 5.5e-13 m/s.
+    // Measured 7.7e-8 m and 2.7e-13 m/s.
     expect(moved).toBeLessThan(0.3);
     expect(late).toBeLessThan(1e-3);
   });
@@ -402,5 +402,28 @@ describe('restitution on: supports', () => {
     expect(eight).toBeGreaterThan(0.45);
     expect(eight).toBeLessThan(sixteen);
     expect(sixteen).toBeLessThan(0.9);
+  });
+});
+
+describe('restitution on: the force a bounced point keeps', () => {
+  it('a resting 24-cube column (e 0.9) under restitutionThreshold 0 still rests, sagging as with restitution off', async () => {
+    const s = withE({ ...buildScenario('S1', { F: 1, H: 24, gap: 0 }, 1), sleep: false }, 0.9), scene = { ...s, ground: { ...s.ground!, restitution: 0.9 } };
+    const run = async (params: Partial<AvbdParams>) => {
+      const eng = new AvbdReferenceEngine(params);
+      await eng.init(scene);
+      const top = scene.bodies.length - 1, y0 = scene.bodies[top]!.pos[1];
+      let late = 0, minTop = Infinity;
+      for (let k = 1; k <= 900; k++) {
+        eng.step();
+        minTop = Math.min(minTop, eng.world!.bodies[top]!.pos[1]);
+        if (k > 600) late = Math.max(late, maxSpeed(eng));
+      }
+      return { late, sag: y0 - minTop };
+    };
+    const on = await run({ ...ON, restitutionThreshold: 0 }), off = await run({});
+    // Measured: late speed 2.2e-16 m/s, sag 0.1121 m against off's 0.1111 (1.06e-3 more). Zeroing every bounced
+    // point's force dropped the load floor and cap: the column moved at 1.04 m/s and sank 3.13 m.
+    expect(on.late).toBeLessThan(1e-9);
+    expect(Math.abs(on.sag - off.sag)).toBeLessThan(2e-3);
   });
 });

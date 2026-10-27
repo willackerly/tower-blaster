@@ -545,10 +545,14 @@ export class AvbdWorld {
    *   needs several rounds. 8 by default (RESTITUTION_DEFAULTS), for the
    *   bounce off a resting cube above; the GPU will pay about 2 dispatches a
    *   round, and only with the switch on.
-   * - A point that bounced (P > 0) starts the next step with no force
-   *   (lambda 0): its impact force carried as a warm start would push the
-   *   bodies apart again (a ball of e 0.3 dropped at 5 m/s rebounded at
-   *   1.04 e).
+   * - A point that bounced and will separate (P > 0 and its target times h
+   *   beyond restDepth) starts the next step with no force (lambda 0): its
+   *   impact force carried as a warm start would push the bodies apart again
+   *   (a ball of e 0.3 dropped at 5 m/s rebounded at 1.04 e). A point whose
+   *   rebound stays within restDepth in a step keeps its force: a resting
+   *   stack under restitutionThreshold 0 bounces nothing to speak of, but
+   *   zeroing its forces dropped the load floor and cap, and S1 24 at e 0.9
+   *   moved at 1.04 m/s and sank 3.13 m.
    * After post-stabilization, because that pass reads lambda; it moves
    * positions only, so before or after makes no other difference. Rolling
    * contacts need nothing more: a sphere's lever arm is along n, so its
@@ -556,6 +560,7 @@ export class AvbdWorld {
    */
   restitute(v0: Vec3[], w0: Vec3[], q0: Quat[]): void {
     const { p, bodies, contacts } = this;
+    const h = this.scene.dt;
     const threshold = p.restitutionThreshold ?? RESTITUTION_DEFAULTS.restitutionThreshold;
     const rounds = p.restitutionRounds ?? RESTITUTION_DEFAULTS.restitutionRounds;
     const rule = this.scene.restitutionCombine ?? DEFAULT_RESTITUTION_COMBINE, groundE = this.scene.ground?.restitution ?? 0;
@@ -703,8 +708,8 @@ export class AvbdWorld {
       b.linVel = [u[6 * i]!, u[6 * i + 1]!, u[6 * i + 2]!];
       b.angVel = [u[6 * i + 3]!, u[6 * i + 4]!, u[6 * i + 5]!];
     }
-    // A bounced point starts the next step with no force (see above).
-    for (const m of ms) if (m.bounce) m.pts.forEach((c, k) => { if (m.P[k]! > 0) c.lambda = [0, 0, 0]; });
+    // A bounced point that will separate starts the next step with no force (see above).
+    for (const m of ms) if (m.bounce) m.pts.forEach((c, k) => { if (m.P[k]! > 0 && m.target[k]! * h > p.restDepth) c.lambda = [0, 0, 0]; });
   }
 
   step(): void {
