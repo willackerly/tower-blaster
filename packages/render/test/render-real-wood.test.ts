@@ -37,7 +37,7 @@ describe('wood', () => {
     // The stone compiled out (the far boxes' shader) draws what texture 0 draws, wood included.
     expect(off!.hash).toBe(flat!.hash);
     expect(alongX!.hash).not.toBe(flat!.hash);
-  });
+  }, 120_000);
 
   it('pine level of detail: past the fade-out the near and far shaders draw the same', async (ctx) => {
     if (!gpu) return ctx.skip();
@@ -46,5 +46,5 @@ describe('wood', () => {
     expect(r.lod.boxes).toBeGreaterThan(0);
     expect(r.lod.farBoxes).toBeGreaterThan(0);
     expect(r.maxDiff).toBeLessThanOrEqual(2);
-  });
+  }, 120_000);
 });

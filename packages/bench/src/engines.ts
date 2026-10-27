@@ -13,10 +13,10 @@ const REGISTRY: Record<string, (o: Options) => PhysicsEngine> = {
   'avbd-ref': (o) => new AvbdReferenceEngine(o),
   // Same AvbdParams, plus the GpuEngineOptions that size its buffers (capacity, spare,
   // pairsPerBody, maxRadius) or shape its dispatch (colorTail, indirectColors, tailThreads, colorRounds,
-  // hessian), which the engine checks; needs WebGPU, so it runs in the browser runner, not the Node CLI.
+  // hessian, boxBroadphase), which the engine checks; needs WebGPU, so it runs in the browser runner, not the Node CLI.
   'avbd-gpu': (o) => {
-    const { capacity, spare, pairsPerBody, maxRadius, colorTail, indirectColors, tailThreads, colorRounds, hessian, ...params } = o;
-    const opts = Object.fromEntries(Object.entries({ capacity, spare, pairsPerBody, maxRadius, colorTail, indirectColors, tailThreads, colorRounds, hessian }).filter(([, v]) => v !== undefined)) as GpuEngineOptions;
+    const { capacity, spare, pairsPerBody, maxRadius, colorTail, indirectColors, tailThreads, colorRounds, hessian, boxBroadphase, ...params } = o;
+    const opts = Object.fromEntries(Object.entries({ capacity, spare, pairsPerBody, maxRadius, colorTail, indirectColors, tailThreads, colorRounds, hessian, boxBroadphase }).filter(([, v]) => v !== undefined)) as GpuEngineOptions;
     return new GpuAvbdEngine(params, opts);
   },
   // Dormant lattice tier over a Rapier host; other options are TierParams (e.g. tiered:vWake=0.5).
