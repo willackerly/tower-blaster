@@ -121,8 +121,6 @@ export class GpuAvbdEngine implements PhysicsEngine {
     // Manifold records (AvbdParams.records, checked above): the solver's contact layout, in the register form only.
     const records = (this.params.records ?? 0) as RecordMode;
     if (records !== 0 && (opts.hessian ?? DEFAULT_DISPATCH.hessian) !== 'registers') throw new Error(`GpuAvbdEngine: AvbdParams.records ${records} needs GpuEngineOptions.hessian registers, got ${opts.hessian}`);
-    // The records' setup and walk do not mark loaded gaps yet; the reference applies gapSlop with records.
-    if (records !== 0 && this.params.gapSlop) throw new Error(`GpuAvbdEngine: AvbdParams.gapSlop is not implemented with AvbdParams.records ${records} on the GPU yet`);
     this.records = records;
     // Every param, but an opt-in switch and its params only while it is on (avbdVariant): result keys do not change.
     const variant: Record<string, number | boolean | string> = avbdVariant(this.params);

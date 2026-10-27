@@ -62,10 +62,15 @@ describe('GPU AVBD engine: manifold records: the option and its layouts, records
       expect(() => recordWgsl(3 as never)).toThrow('recordWgsl: records must be one of 0, 1, 2, got 3');
       expect(() => new GpuAvbdEngine({ records: 3 })).toThrow('AvbdParams.records must be one of 0, 1, 2, got 3');
       expect(() => new GpuAvbdEngine({ records: 1 }, { hessian: 'array' })).toThrow('GpuAvbdEngine: AvbdParams.records 1 needs GpuEngineOptions.hessian registers, got array');
-      // The records' setup does not mark loaded gaps yet (the reference applies gapSlop with records); off, both build.
-      for (const records of [1, 2]) {
-        expect(() => new GpuAvbdEngine({ records, gapSlop: 3e-5 })).toThrow(`GpuAvbdEngine: AvbdParams.gapSlop is not implemented with AvbdParams.records ${records} on the GPU yet`);
+      // The loaded-gap slop (AvbdParams.gapSlop) with records: setup marks a loaded point in the record (bit 8 + q of
+      // flags or stick), the primal and the dual read the mark behind the constant; engine-gapslop.test.ts runs it.
+      for (const records of [1, 2] as const) {
+        expect(new GpuAvbdEngine({ records, gapSlop: 3e-5 }).info.variant).toMatchObject({ records, gapSlop: 3e-5 });
         expect(() => new GpuAvbdEngine({ records, gapSlop: 0 })).not.toThrow();
+        const w = recordWgsl(records), word = records === 1 ? 'flags' : 'stick';
+        expect(w.setup).toContain('if (gapSlop > 0.0 && !roll && lambdaN < 0.0 && c0');
+        expect(w.setup).toContain(`records[dst].${word} = ${records === 1 ? 'flags' : 'stick | marks'};`);
+        for (const k of ['solve', 'dual'] as const) expect(w[k]).toMatch(records === 1 ? /if \(gapSlop > 0\.0 && recLoaded\(records\[\w+\]\.flags, q\)\) \{ ct\.used = 1u \| LOADED_GAP; \}/ : /evalN\(n, records\[\w+\]\.c0N\[q\], gapSlop > 0\.0 && recLoaded\(/);
       }
       expect(new GpuAvbdEngine({ records: 2 }).info.variant).toMatchObject({ records: 2 });
       expect(new GpuAvbdEngine().info.variant).not.toHaveProperty('records');

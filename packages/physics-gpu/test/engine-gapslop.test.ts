@@ -4,38 +4,16 @@
 // as before, on it brings the sideways-kicked column back to rest, it leaves
 // rolling contacts and unloaded points alone (spheres without rollingContacts
 // get it), and a lifted stack or cube rests on the excused gap and comes down
-// as on the reference. Its checks and variant keys are in engine.test.ts.
+// as on the reference. With manifold records (AvbdParams.records):
+// engine-gapslop-records.test.ts and engine-gapslop-records-rest.test.ts. Its
+// checks and variant keys are in engine.test.ts.
 import { describe, expect, it } from 'vitest';
-import { type BodyDesc, type SceneDesc, type Vec3 } from '@tb/engine-api';
+import { type BodyDesc, type SceneDesc } from '@tb/engine-api';
 import { type AvbdParams, AvbdReferenceEngine } from '@tb/physics-ref';
-import { buildScenario } from '@tb/scenarios';
-import type { GpuEngineOptions } from '../src/index.ts';
-import type * as Drivers from './page.ts';
-import { call, cube, gpu, sceneOf } from './harness.ts';
+import { column, kicked, poked, sideways, state } from './gapslop-case.ts';
+import { cube, gpu, sceneOf } from './harness.ts';
 
 describe('GPU AVBD engine: the loaded-gap slop (AvbdParams.gapSlop)', () => {
-  const column = () => buildScenario('S1', { F: 1, H: 8, gap: 0 }, 1);
-  // The reference test's sideways kick: before step 401 every body's velocity gains 0.01 (2 rnd - 1) m/s on x,
-  // then on z, drawn in body order from its LCG.
-  const sideways = (n: number): Vec3[] => {
-    let seed = 12345;
-    const rnd = () => { seed = (seed * 1103515245 + 12345) % 2147483648; return seed / 2147483648; };
-    return Array.from({ length: n }, (): Vec3 => { const x = 0.01 * (2 * rnd() - 1); return [x, 0, 0.01 * (2 * rnd() - 1)]; });
-  };
-  type Poke = Parameters<typeof Drivers.pokedRun>[4];
-  const poked = async (scene: SceneDesc, steps: number, params: Partial<AvbdParams>, poke: Poke, opts: Omit<GpuEngineOptions, 'device'> = {}) => {
-    const r = await call('pokedRun', scene, steps, params, opts, poke);
-    expect(r.error).toBeNull();
-    expect(r.diagnostics.uncolored).toBe(0);
-    expect(r.diagnostics.colorOverflow).toBe(0);
-    expect(r.diagnostics.pairsRequired).toBeLessThanOrEqual(r.diagnostics.pairsWritten);
-    return r;
-  };
-  const state = (s: Drivers.PlainSnapshot) => [s.pos, s.rot, s.linVel, s.angVel];
-  // The kicked column's state after 450 steps (the reference test's kicked()).
-  const kicked = async (params: Partial<AvbdParams>, scene = column(), opts: Omit<GpuEngineOptions, 'device'> = {}) =>
-    state((await poked(scene, 450, params, { at: 400, dv: sideways(scene.bodies.length) }, opts)).final);
-
   // The slop is a pipeline constant (solver.ts), passed only while it is on, so off the pipelines are built as
   // before: on SwiftShader, absent or 0, the engine gave the same floats as at 9c1ed93 (before the port) on this
   // case, at 20 iterations and with the array Hessian, and on a 3x3x8 tower, a ball knocking down two towers (S5),
