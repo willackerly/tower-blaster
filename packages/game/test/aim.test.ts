@@ -56,7 +56,7 @@ describe('ray casts', () => {
     const s = atHome();
     const y = 5.5 * h;
     const side = pick({ origin: [-20, y, 0.2], dir: [1, 0, 0] }, s, c)!;
-    expect(side.point[0]).toBeCloseTo(-1.5 * p + (p - h) / 2, 9);
+    expect(side.point[0]).toBeCloseTo(-p + (p - h) / 2, 9); // L1's -x face
     expect(Math.floor(c.meta.home[3 * side.body + 1]! / h)).toBe(5);
     const top = pick({ origin: [0.1, 50, 0.1], dir: [0, -1, 0] }, s, c)!;
     expect(c.meta.role[top.body]).toBe(1); // a crown on the top course
