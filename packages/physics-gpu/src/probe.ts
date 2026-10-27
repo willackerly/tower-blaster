@@ -22,7 +22,7 @@
 // submit), median with p10/p90. Numbers from software adapters (SwiftShader)
 // or without timestamps are not performance results; the result says so.
 import { GpuProfiler, readBuffer, timeSubmit } from '@tb/gpu';
-import { buildScenario } from '@tb/scenarios';
+import { buildScenario, type Params } from '@tb/scenarios';
 import { SolverContact } from '@tb/schema';
 import { MAX_COLORS } from './coloring.ts';
 import { GpuAvbdEngine } from './engine.ts';
@@ -41,6 +41,11 @@ export interface ProbeOptions {
   warmup: number;
   /** P2: S4 city of N cubes (defaults otherwise), checkpoints in steps, R repeats per timed pass, solve passes timed before each checkpoint. */
   N: number;
+  /** P2 on another scenario: its id and params (N is S4's only), scene gravity times gravityScale (S15 runs in plank-width units), and the engine's pairsPerBody. */
+  scenario: string;
+  params: Params;
+  gravityScale: number;
+  pairsPerBody: number | null;
   seed: number;
   checkpoints: number[];
   R: number;
@@ -75,6 +80,10 @@ export const DEFAULT_PROBE: ProbeOptions = {
   reps: 15,
   warmup: 3,
   N: 10000,
+  scenario: 'S4',
+  params: {},
+  gravityScale: 1,
+  pairsPerBody: null,
   seed: 1,
   checkpoints: [60, 300],
   R: 50,
@@ -139,6 +148,9 @@ export interface Checkpoint {
   coloursUsed: number;
   uncolored: number;
   pairSlots: number;
+  /** Bounding-sphere pairs the broadphase found (written or not), and the slots whose manifold has at least one point. */
+  pairsRequired: number;
+  contactPairs: number;
   colorTail: number;
   tailThreads: number;
   direct: ColourStat[];
@@ -157,7 +169,7 @@ export interface Checkpoint {
 /** A least-squares fit of t_c (µs) on the named regressors (coefficients in µs per unit); null where they cannot be told apart. */
 export interface Fit { model: string; coef: Record<string, number>; r2: number; adjR2: number; rmsUs: number; points: number }
 export interface P2Result {
-  scenario: string; N: number; seed: number; iterations: number; R: number; checkpoints: Checkpoint[];
+  scenario: string; params: Params; gravityScale: number; N: number; seed: number; iterations: number; R: number; checkpoints: Checkpoint[];
   /** The hessian form the engine built (SolverDispatch.hessian). */
   hessian: HessianForm;
   /** t = a + b W, t = a + b W + e bodies, t = a + e bodies, t = a + g Σpoints. */
@@ -433,20 +445,23 @@ async function colourStructure(e: GpuAvbdEngine): Promise<Omit<Checkpoint, 'step
   const serial = bodiesOf(MAX_COLORS - 1);
   for (const b of serial) { Wcrit += pointsOf[b]!; tailPoints += pointsOf[b]!; }
   const totalPoints = pointsOf.reduce((s, v) => s + v, 0);
+  let contactPairs = 0;
+  for (let k = 0; k < slots; k++) if (walk(pairPts, k) > 0) contactPairs++;
   return {
-    n, coloursUsed: d.colors, uncolored: d.uncolored, pairSlots: slots, colorTail: nd, tailThreads: dispatch.tailThreads, direct,
+    n, coloursUsed: d.colors, uncolored: d.uncolored, pairSlots: slots, pairsRequired: d.pairsRequired, contactPairs, colorTail: nd, tailThreads: dispatch.tailThreads, direct,
     tail: { colours: tailColours, bodies: tailBodies, serialBodies: serial.length, Wcrit, points: tailPoints, t: null },
     sumW: direct.reduce((s, c) => s + c.W, 0) + Wcrit, totalPoints, emptyColour,
   };
 }
 
 async function runP2(device: GPUDevice, timer: Timer, o: ProbeOptions): Promise<P2Result> {
-  const scene = buildScenario('S4', { N: o.N }, o.seed);
+  const built = buildScenario(o.scenario, o.scenario === 'S4' ? { N: o.N, ...o.params } : o.params, o.seed);
+  const scene = { ...built, gravity: built.gravity.map((g) => g * o.gravityScale) as typeof built.gravity };
   const checkpoints: Checkpoint[] = [];
   let iterations = 0, hessian = o.hessian;
   for (const step of o.checkpoints) {
     // A fresh engine per checkpoint: the probes below change contact state (the dual), which would carry into later steps.
-    const e = new GpuAvbdEngine({}, { device, hessian: o.hessian });
+    const e = new GpuAvbdEngine({}, { device, hessian: o.hessian, ...(o.pairsPerBody ? { pairsPerBody: o.pairsPerBody } : {}) });
     await e.init(scene);
     iterations = e.probeParts().iterations;
     hessian = e.probeParts().dispatch.hessian;
@@ -527,7 +542,7 @@ async function runP2(device: GPUDevice, timer: Timer, o: ProbeOptions): Promise<
       : share < 0.2 ? 'A colour costs about the same whatever its size: the slowest thread\'s serial walk (latency) sets it.' : 'Both the size and the slowest thread matter.'}`);
   }
   if (perPointNs) verdict.push(`Per critical-path point, (t_c − empty dispatch) / W_c = ${perPointNs.median.toFixed(0)} ns (p10 ${perPointNs.p10.toFixed(0)}, p90 ${perPointNs.p90.toFixed(0)}) over ${per.length} colours.`);
-  return { scenario: 'S4', N: o.N, seed: o.seed, iterations, R: o.R, checkpoints, hessian, fits, perPointNs, verdict };
+  return { scenario: o.scenario, params: scene.params as Params, gravityScale: o.gravityScale, N: scene.bodies.length, seed: o.seed, iterations, R: o.R, checkpoints, hessian, fits, perPointNs, verdict };
 }
 
 // --- P3 --------------------------------------------------------------------
@@ -863,9 +878,9 @@ export function probeMarkdown(r: ProbeResult, header: string): string {
 
   if (r.p2) {
     const p = r.p2;
-    L.push('', `## P2 Real solver: ${p.scenario} N=${p.N} seed ${p.seed}, ${p.iterations} iterations (${p.iterations + 1} sweeps), hessian ${p.hessian}, R=${p.R} dispatches per timed pass`);
+    L.push('', `## P2 Real solver: ${p.scenario} ${JSON.stringify(p.params)}${p.gravityScale !== 1 ? ` gravity x${p.gravityScale}` : ''} N=${p.N} seed ${p.seed}, ${p.iterations} iterations (${p.iterations + 1} sweeps), hessian ${p.hessian}, R=${p.R} dispatches per timed pass`);
     for (const c of p.checkpoints) {
-      L.push('', `### Step ${c.step}: ${c.n} bodies, ${c.coloursUsed} colours (${c.uncolored} uncoloured), ${c.pairSlots} pair slots, ${c.totalPoints} contact points`, '');
+      L.push('', `### Step ${c.step}: ${c.n} bodies, ${c.coloursUsed} colours (${c.uncolored} uncoloured), ${c.pairSlots} pair slots of ${c.pairsRequired} sphere pairs, ${c.contactPairs} in contact, ${c.totalPoints} contact points`, '');
       const e0 = c.emptyDispatch?.median;
       L.push('| Colour | Bodies | W_c (max points) | Max loads | Σ points | t_c µs | (t_c − empty) / W_c ns |', '|---|---|---|---|---|---|---|');
       for (const d of c.direct) L.push(`| ${d.colour} | ${d.bodies} | ${d.W} | ${d.loads} | ${d.points} | ${us(d.t)} | ${d.t && d.W && e0 !== undefined ? f(((d.t.median - e0) * 1e6) / d.W) : '–'} |`);

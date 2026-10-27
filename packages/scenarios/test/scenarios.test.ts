@@ -11,6 +11,7 @@ const SMALL: Record<string, Record<string, number | boolean>> = {
   S5: { N: 900, F: 4, H: 10 }, S6: { N: 600 }, S7: { N: 600 }, S8: { floors: 5, bays: 2 }, S9: { H: 6 },
   S10: { F: 3, H: 5 }, S11: { N: 200 }, S12: { W: 9, H: 7, holeW: 3, holeH: 2, holeY: 1, running: true }, S13: { H: 6, deg: 4 },
   S14: { towers: 5, W: 3, D: 2, H: 6, street: 1.5, vary: 0.5 },
+  S15: { planks: 800, toppleHeight: 0.5 },
 };
 
 function maxPenetration(bodies: BodyDesc[], groundY: number | null): number {
