@@ -1022,8 +1022,13 @@ describe('GPU AVBD engine: engine contract (friction rule, integrator)', () => {
     expect(await mu(undefined)).toBe(await mu('average'));
   });
 
-  it('restitution (AvbdParams.restitution) throws until it is ported, and while off its keys stay out of the variant', () => {
+  it('restitution (AvbdParams.restitution) throws until it is ported, its params are checked as in the reference, and while off its keys stay out of the variant', () => {
     expect(() => new GpuAvbdEngine({ restitution: true })).toThrow('GpuAvbdEngine: restitution is not implemented on the GPU yet');
+    // The reference's checks, switch on or off.
+    for (const [p, msg] of [[{ restitutionThreshold: -1 }, 'restitutionThreshold must be a finite number >= 0, got -1'], [{ restitutionRounds: 0 }, 'restitutionRounds must be an integer >= 1, got 0']] as const) {
+      expect(() => new AvbdReferenceEngine(p)).toThrow(msg);
+      expect(() => new GpuAvbdEngine(p)).toThrow(msg);
+    }
     const keys = Object.keys(new GpuAvbdEngine().info.variant);
     expect(Object.keys(new GpuAvbdEngine({ restitution: false, restitutionThreshold: 2, restitutionRounds: 3 }).info.variant)).toEqual(keys);
     expect(keys.some((k) => k.startsWith('restitution'))).toBe(false);

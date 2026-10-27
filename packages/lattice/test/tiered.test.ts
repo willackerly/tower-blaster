@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { MODE_STATIC, type SceneDesc } from '@tb/engine-api';
+import { combineRestitution, DEFAULT_RESTITUTION_COMBINE, MODE_STATIC, type SceneDesc } from '@tb/engine-api';
 import { RapierEngine, RapierHost } from '@tb/adapter-rapier';
 import { appliedMu, slideScene } from '@tb/testkit';
 import { buildScenario } from '@tb/scenarios';
@@ -123,6 +123,25 @@ describe('TieredEngine scene settings', () => {
       return appliedMu(v1, v11);
     };
     expect(await mu(new TieredEngine(new RapierHost()))).toBe(await mu(new RapierEngine()));
+  });
+
+  it.for(['average', 'min', 'max', 'multiply', undefined] as const)('restitutionCombine %s and the ground\'s restitution reach the host: a cube\'s bounce matches RapierEngine', async (rule) => {
+    // A cube of e 0.8 thrown down at 5 m/s from 0.5 m onto a ground of e 0.2 (impact at 5.9 m/s): its fastest rebound.
+    const scene: SceneDesc = {
+      ...slideScene(undefined), ground: { y: 0, friction: 0.6, restitution: 0.2 }, ...(rule ? { restitutionCombine: rule } : {}),
+      bodies: [{ shape: { kind: 'box', half: [0.5, 0.5, 0.5] }, pos: [0, 1, 0], rot: [0, 0, 0, 1], linVel: [0, -5, 0], angVel: [0, 0, 0], density: 1, friction: 0.6, restitution: 0.8, tag: 0 }],
+    };
+    const up = async (e: TieredEngine | RapierEngine) => {
+      await e.init(scene);
+      let best = 0;
+      for (let i = 0; i < 30; i++) { await e.step(); best = Math.max(best, (await e.snapshot()).linVel[1]!); }
+      e.dispose();
+      return best;
+    };
+    const tiered = await up(new TieredEngine(new RapierHost()));
+    expect(tiered).toBe(await up(new RapierEngine()));
+    // Measured 0.49, 0.20, 0.79 and 0.16 of the impact speed under average, min, max and multiply (unset: average's).
+    expect(tiered / Math.sqrt(25 + 2 * 9.81 * 0.5)).toBeCloseTo(combineRestitution(rule ?? DEFAULT_RESTITUTION_COMBINE, 0.8, 0.2), 1);
   });
 });
 
