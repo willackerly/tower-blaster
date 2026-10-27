@@ -59,7 +59,7 @@ The bot aims at every cell of every block face every two courses, plus anvil dro
 
 | Level | Behaviour | Par | Solutions found (reference) | Par line | Robustness | Gold line |
 |---|---|---|---|---|---|---|
-| L1 Open Fire | shear | 2 | 3 of 1,344 attempts | two cannonballs into the base course | 83% | 1.0 |
+| L1 Open Fire | shear | 1 | the probe's B2 shot (see below) | one cannonball low on the tower, at the seam between its columns | 100% | 0.71 |
 | L2 Lintel | lintel tip | 1 | 41 clean of 600 | a cannonball through the crowns on the lintel | 100% | 1.5 |
 | L3 Surgeon | pick-off | 2 | 68 clean of 840 | two marble pick-offs | 91% | 1.3 |
 | L4 Catapult | catapult | 1 | 7 of 211 | the anvil on the free end | 100% | 0.18 |
@@ -72,8 +72,10 @@ Under Rapier the lines were 100%, 77%, 97%, 80% and 100% robust.
 **What the reference changed for level design:**
 - **L3 and L4 now play as designed.** Two clean marble pick-offs beat a cannonball on L3, and on L4 the anvil on the catapult's free end is the robust move (on Rapier it only cleared by landing next to the crowns).
 - **L2:** felling a column, the level's idea, is fragile: the 5 highest-leverage lines (all column hits at 60% power, leverage 2.9 to 4.8) are 11 to 46% robust. A 100% cannonball through the crowns is robust at leverage about 2.5. All 41 clean solutions were audited for this.
-- **L1** is much harder: 3 clearing lines of 1,344 attempts, all brute cannonballs.
+- **L1** (a 3 × 3 × 12 tower, par 2) was much harder: 3 clearing lines of 1,344 attempts, all brute cannonballs, the best 83% robust, and that one failed on the GPU solver. As the first level it should be the easy one, so version 3 is the probe's B2 tower (2 × 2 × 10, four crowns) at par 1. B2's shot hits the seam between two columns at course 3, which the bot's candidates (cell centres, every two courses) never try; it is 100% robust on the reference and clears on Rapier too, so the game page's Rapier test plays it.
 - **L5:** the domino chain is still optional. The robust lines hit the crown column directly from +x.
+
+**On the GPU solver** (f32, SwiftShader in CI; `packages/game/test/par-gpu-L*.test.ts`) every par line clears with no heritage broken, played live in the game page. Each level takes one to three minutes there at 40 iterations, so each has its own test file for CI's shards.
 
 These are first-pass levels. They need playtesting and level-design passes, not more tuning in the dark. The bot makes each pass cheap: change the level, rerun the bot, and the par-line test tells you if the old solution broke.
 
