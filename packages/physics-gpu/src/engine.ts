@@ -184,7 +184,8 @@ export class GpuAvbdEngine implements PhysicsEngine {
     const variant: Record<string, number | boolean | string> = avbdVariant(this.params);
     // records as given, 0 included (avbdVariant drops it as off): on the GPU unset is not 0 but gpuRecordsLayout()'s
     // layout, so avbd-gpu (unset) and avbd-gpu:records=0 (points) are different engines. Results named avbd-gpu
-    // before records 1 became the default were points.
+    // before records 1 became the default were points, and so were those with restitution on until restitution
+    // ran on records 1 (gpuRecordsLayout gave it points): the same floats, other timings.
     if (this.params.records !== undefined) variant.records = this.params.records;
     // Options that size the buffers or shape the dispatch change the work per step (e.g. the broadphase's key bits), so they are part of the variant.
     for (const k of ['capacity', 'spare', 'pairsPerBody', 'maxRadius', 'colorTail', 'indirectColors', 'tailThreads', 'colorRounds', 'hessian', 'boxBroadphase', 'solveContactsRW'] as const) if (opts[k] !== undefined) variant[k] = opts[k];

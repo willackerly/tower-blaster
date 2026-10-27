@@ -41,11 +41,13 @@
 // (records 0) or of the slot's SolverRecord (records 1, the GPU default):
 // the same fields, so the two give the same floats (on SwiftShader,
 // engine-restitution-records.test.ts). The release zeroes the point's normal
-// and friction forces, as the reference's lambda = 0; with lambdaN 0 the
-// friction is clamped to a cone of radius 0 at its next evaluation, so
-// zeroing lt changes nothing observable (a mutant without it passed every
-// records case). Centre-friction records (2) are not read here: the engine
-// and the solver refuse restitution with them.
+// and friction forces, as the reference's lambda = 0. With lambdaN 0 the
+// friction force is clamped to a cone of radius 0 at its next evaluation,
+// so a mutant that kept lt passed every records case; it is not equivalent,
+// though: where kT C_t is exactly 0 a kept lt still turns the sliding
+// Hessian's tangent rows off (solver.ts, CONTACT_FORCE). Keep both writes.
+// Centre-friction records (2) are not read here: the engine and the solver
+// refuse restitution with them.
 //
 // Memory while on: one RestSlot (80 B) per contact slot, (maxPairs +
 // capacity) x 80 B (pair slots, then one ground slot per body: 10.4% of the
