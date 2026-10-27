@@ -91,6 +91,18 @@ Run one page at a time on the M5 Max (#76 head 31f94d4, `--no-file-parallelism`;
 
 A live step fits a 60 Hz frame, with little room for drawing. The pre-settle steps cost at most 2.3 to 6 ms each, and that time includes building the engine: the driver submits all 300 steps and reads the bodies back once. A live step instead waits for its own snapshot read-back before the next step is submitted, so most of a live step is likely the read-back round trip, not the solve. The lever is to pipeline the game's read-back, as the viewer does (#44). L2 and L4 each had one step of about 160 ms; the cause is not known yet.
 
+**Pipelined read-back** (#77, `DriverOptions.pipelined`, on for the GPU engine only): the driver submits step n+1 before it waits for step n's bodies, so the GPU solves while they come back. The rules see the same steps, and a shot ends one step later. The same run on the M5 Max (708ea65, `/mnt/project-files/par-gpu-metal-pipelined.txt`):
+
+| Level | Live step median | p95 | max | Median before |
+|---|---|---|---|---|
+| L1 | 2.31 ms | 6.15 ms | 27.10 ms | 9.75 ms |
+| L2 | 4.44 ms | 8.86 ms | 19.98 ms | 11.78 ms |
+| L3 | 3.43 ms | 6.90 ms | 22.25 ms | 11.56 ms |
+| L4 | 3.22 ms | 6.88 ms | 22.59 ms | 9.32 ms |
+| L5 | 2.85 ms | 5.63 ms | 14.43 ms | 7.72 ms |
+
+That is 2.6 to 4.2 times faster at the median, and the whole run took 31 s instead of 48 s. The live step median is now in line with the pre-settle's cost per step, so what is left is the solve itself. The 160 ms steps did not recur, but single steps of 14 to 27 ms remain, possibly the first step of each shot, which submits two steps and waits for the first. Every level still clears, each ending 1 to 3 steps later than before.
+
 These are first-pass levels. They need playtesting and level-design passes, not more tuning in the dark. The bot makes each pass cheap: change the level, rerun the bot, and the par-line test tells you if the old solution broke.
 
 ## 6. Smaller engine facts the game depends on

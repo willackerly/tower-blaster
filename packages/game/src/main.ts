@@ -10,7 +10,7 @@ import { createDevice } from '@tb/gpu';
 import { HAZY_DAY, lookByName, parseRealOptions, type PixelStats, Renderer, SnapshotSource } from '@tb/render';
 import { type Aimed, azFromYaw, pick, previewBeads, shotFor, SUBSTEPS } from './aim.ts';
 import { Synth, type Voice, voicesFor } from './audio.ts';
-import { type EngineKind, engineKind, makeEngine } from './engines.ts';
+import { driverOptions, type EngineKind, engineKind, makeEngine } from './engines.ts';
 import { hudHtml, nextSelection, rackChips, resultHtml } from './hud.ts';
 import { CameraJuice, contactJuice } from './juice.ts';
 import { Pacer } from './pacing.ts';
@@ -151,7 +151,7 @@ async function main() {
     engine?.dispose();
     engine = makeEngine(kind, c, device);
     substeps = engine.info.integrator?.substeps ?? SUBSTEPS;
-    driver = new Driver(engine, c);
+    driver = new Driver(engine, c, driverOptions(kind));
     await driver.reset();
     handle.timing = { loadMs: performance.now() - t0, stepMs: [] };
     descs = [...c.scene.bodies];
@@ -280,7 +280,7 @@ async function main() {
   handle.replay = async (shots) => {
     const e = makeEngine(kind, c, device);
     try {
-      const r = await runSession(e, c, shots);
+      const r = await runSession(e, c, shots, driverOptions(kind));
       return { step: r.steps, phase: r.session.phase, strokes: r.session.strokes, heritageBroken: sum(r.session.heritageBroken), hash: snapshotHash(r.snapshot) };
     } finally { e.dispose(); }
   };
