@@ -77,6 +77,20 @@ Under Rapier the lines were 100%, 77%, 97%, 80% and 100% robust.
 
 **On the GPU solver** (f32, SwiftShader in CI; `packages/game/test/par-gpu-L*.test.ts`) every par line clears with no heritage broken, played live in the game page. Each level takes one to three minutes there at 40 iterations, so each has its own test file for CI's shards.
 
+On Metal (M5 Max, Chrome, `TB_CHANNEL=chrome`; 2026-10-27, main 0739eae) all five clear too, in 5 to 8 s a level with the five files running at once. Step counts differ from SwiftShader's by up to 12% (565 against 526 on L1): the GPU solver is deterministic per device, not across devices, so par tests check the outcome, not the trajectory. The game's default engine is the GPU solver since then; `?engine=rapier` keeps Rapier. Each test logs the load time and the median and p95 ms per live step (physics only, the page draws no frames offscreen).
+
+Run one page at a time on the M5 Max (#76 head 31f94d4, `--no-file-parallelism`; `/mnt/project-files/par-gpu-metal-timing.txt`):
+
+| Level | Load (300-step pre-settle) | Live step median | p95 | max |
+|---|---|---|---|---|
+| L1 | 1.2 s | 9.75 ms | 11.43 ms | 12.40 ms |
+| L2 | 1.8 s | 11.78 ms | 14.20 ms | 158.94 ms |
+| L3 | 1.0 s | 11.56 ms | 14.83 ms | 19.00 ms |
+| L4 | 1.2 s | 9.32 ms | 11.19 ms | 166.81 ms |
+| L5 | 0.7 s | 7.72 ms | 13.08 ms | 15.47 ms |
+
+A live step fits a 60 Hz frame, with little room for drawing. The pre-settle steps cost at most 2.3 to 6 ms each, and that time includes building the engine: the driver submits all 300 steps and reads the bodies back once. A live step instead waits for its own snapshot read-back before the next step is submitted, so most of a live step is likely the read-back round trip, not the solve. The lever is to pipeline the game's read-back, as the viewer does (#44). L2 and L4 each had one step of about 160 ms; the cause is not known yet.
+
 These are first-pass levels. They need playtesting and level-design passes, not more tuning in the dark. The bot makes each pass cheap: change the level, rerun the bot, and the par-line test tells you if the old solution broke.
 
 ## 6. Smaller engine facts the game depends on

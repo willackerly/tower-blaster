@@ -6,6 +6,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Page } from 'playwright';
 import { LEVELS, type Shot } from '@tb/keystone';
+import { summarize } from '@tb/metrics';
 import { gamePage, playShots } from './page.ts';
 
 const MINUTES = 60_000;
@@ -23,11 +24,17 @@ export function parOnGpu(id: string, more: { before?(page: Page): Promise<void>;
       const { page, errors } = o;
       expect(await page.evaluate(() => window.__game.engine)).toBe('gpu');
       await more.before?.(page);
+      const settled = await page.evaluate(() => window.__game.state().step);
       const shots = def.solutions!.par as Shot[];
       await playShots(page, shots, 20 * MINUTES);
       const live = await page.evaluate(() => window.__game.state());
+      const { loadMs, stepMs } = await page.evaluate(() => window.__game.timing);
+      // Every live step is timed, and none before the first shot.
+      expect(stepMs.length).toBe(live.step - settled);
       const adapter = await page.evaluate(async () => { const i = (await navigator.gpu.requestAdapter())?.info; return i ? `${i.vendor} ${i.architecture} ${i.description}`.trim() : 'none'; });
-      console.log(`${id} on the GPU (${adapter}): ${live.phase}, ${live.step} steps`);
+      // Physics only (offscreen draws no frames). Real numbers only from a physical GPU.
+      const t = summarize(stepMs), f = (x: number) => x.toFixed(2);
+      console.log(`${id} on the GPU (${adapter}): ${live.phase}, ${live.step} steps; load ${(loadMs / 1000).toFixed(1)} s for ${settled} steps; live step ms median ${f(t.median)} p95 ${f(t.p95)} max ${f(t.max)} over ${t.n}`);
       expect({ phase: live.phase, strokes: live.strokes, heritageBroken: live.heritageBroken }).toEqual({ phase: 'cleared', strokes: def.par, heritageBroken: 0 });
       await more.after?.(page, shots);
       expect(errors).toEqual([]);
