@@ -1,14 +1,15 @@
 // Viewer configuration from the URL, e.g.
 // ?scenario=S4&param.N=3000&engine=rapier&sleep=1&loop=frame&maxSteps=2&proj=cube&proj.size=2
 // (engine: a @tb/bench spec; the default is the GPU engine; proj*: see projectile.ts;
-// look=real with real.* knobs: see parseRealOptions in @tb/render; cam: see parseCamera; scale=0.25: quarter-metre cubes, substeps=2)
+// look=real with real.* knobs: see parseRealOptions in @tb/render; cam: see parseCamera; scale=0.25: quarter-metre cubes, substeps=2;
+// view.pitch=17&view.fit=1.1&view.fov=45: how a scene without cam is framed, see parseFraming)
 import { parseSpec } from '@tb/bench';
 import type { BodyDesc, SceneDesc, Vec3 } from '@tb/engine-api';
 import { boundingRadius } from '@tb/geom';
 import { froudeParams } from '@tb/physics-ref';
 import { LOOKS, parseRealOptions, type RealOptions, writeRealOptions } from '@tb/render';
 import { SCENARIOS } from '@tb/scenarios';
-import type { CameraPose } from './camera.ts';
+import { type CameraPose, DEFAULT_FRAMING, type Framing, FRAMING_LIMITS } from './camera.ts';
 import { MAX_STEPS_LIMIT } from './loop.ts';
 import { DEFAULT_PROJECTILE, parseProjectile, type Projectile, projectileShape, writeProjectile } from './projectile.ts';
 
@@ -59,6 +60,8 @@ export interface ViewerConfig {
   substeps: number;
   /** Where the camera starts on every load and R; null = framed to fit the scene. */
   camera: CameraPose | null;
+  /** How a scene without a start camera is framed, and the field of view either way. */
+  view: Framing;
 }
 
 /** scale's accepted range, and the most substeps. */
@@ -97,7 +100,7 @@ export const defaultScale = (scenario: string) => SCENARIOS[scenario]?.scale ?? 
 /** How much faster than the unit world a world at this scale moves (speeds, in cube units per second). */
 export const froudeSpeed = (scale: number) => 1 / Math.sqrt(scale);
 
-export const DEFAULT_CONFIG: ViewerConfig = { engine: 'avbd-gpu', scenario: 'S4', params: { N: 2000, F: 4, H: 12 }, seed: 1, sleep: null, autofire: 0, offscreen: false, look: 'candy', real: {}, loop: 'free', pipeline: true, maxSteps: 1, projectile: DEFAULT_PROJECTILE, scale: 1, substeps: 1, camera: null };
+export const DEFAULT_CONFIG: ViewerConfig = { engine: 'avbd-gpu', scenario: 'S4', params: { N: 2000, F: 4, H: 12 }, seed: 1, sleep: null, autofire: 0, offscreen: false, look: 'candy', real: {}, loop: 'free', pipeline: true, maxSteps: 1, projectile: DEFAULT_PROJECTILE, scale: 1, substeps: 1, camera: null, view: DEFAULT_FRAMING };
 
 export function parseViewerConfig(search: string): ViewerConfig {
   const q = new URLSearchParams(search);
@@ -143,7 +146,25 @@ export function parseViewerConfig(search: string): ViewerConfig {
     scale,
     substeps,
     camera: parseCamera(q.get('cam')),
+    view: parseFraming(q),
   };
+}
+
+/** URL keys view.pitch, view.fit, view.fov (camera.ts Framing; degrees, multiple of a fit, degrees); absent ones are the defaults. */
+export function parseFraming(q: URLSearchParams): Framing {
+  const f = { ...DEFAULT_FRAMING };
+  for (const k of Object.keys(f) as (keyof Framing)[]) {
+    const raw = q.get(`view.${k}`);
+    if (raw === null || raw === '') continue;
+    const v = Number(raw), [lo, hi] = FRAMING_LIMITS[k];
+    if (!(v >= lo && v <= hi)) throw new Error(`view.${k} must be a number from ${lo} to ${hi}: ${raw}`);
+    f[k] = v;
+  }
+  return f;
+}
+
+export function writeFraming(f: Framing, q: URLSearchParams): void {
+  for (const k of Object.keys(DEFAULT_FRAMING) as (keyof Framing)[]) if (f[k] !== DEFAULT_FRAMING[k]) q.set(`view.${k}`, String(f[k]));
 }
 
 /** URL key cam: target x,y,z, yaw, pitch (radians) and distance (m), as writeCamera writes it; absent = null. */
@@ -172,23 +193,24 @@ export function toSearch(c: ViewerConfig): string {
   if (c.scale !== defaultScale(c.scenario)) q.set('scale', String(c.scale));
   if (c.substeps !== autoSubsteps(c.scale)) q.set('substeps', String(c.substeps));
   if (c.camera) q.set('cam', writeCamera(c.camera));
+  writeFraming(c.view, q);
   return `?${q}`;
 }
 
 /**
  * A preset's search with how the viewer runs (engine, loop, pipeline,
- * substeps set by hand), the projectile, the look and a chosen scale kept (a scale left
+ * substeps set by hand), the projectile, the look, the framing and a chosen scale kept (a scale left
  * at the current scenario's default becomes the preset's default), which is
  * where its button takes you (framed afresh: no camera).
  */
-export function presetSearch(preset: string, cur: Pick<ViewerConfig, 'engine' | 'loop' | 'pipeline' | 'maxSteps' | 'projectile'> & Partial<Pick<ViewerConfig, 'look' | 'real' | 'substeps' | 'scale' | 'scenario'>>): string {
-  const { engine, loop, pipeline, maxSteps, projectile, look = DEFAULT_CONFIG.look, real = {} } = cur;
+export function presetSearch(preset: string, cur: Pick<ViewerConfig, 'engine' | 'loop' | 'pipeline' | 'maxSteps' | 'projectile'> & Partial<Pick<ViewerConfig, 'look' | 'real' | 'substeps' | 'scale' | 'scenario' | 'view'>>): string {
+  const { engine, loop, pipeline, maxSteps, projectile, look = DEFAULT_CONFIG.look, real = {}, view = DEFAULT_CONFIG.view } = cur;
   const next = parseViewerConfig(preset);
   const chosen = cur.scale !== undefined && cur.scenario !== undefined && cur.scale !== defaultScale(cur.scenario);
   const scale = chosen ? cur.scale! : next.scale;
   // Substeps set by hand stay; otherwise the new scale's own.
   const substeps = cur.substeps !== undefined && cur.substeps !== autoSubsteps(cur.scale ?? 1) ? cur.substeps : autoSubsteps(scale);
-  return toSearch({ ...next, engine, loop, pipeline, maxSteps, projectile, look, real, substeps, scale });
+  return toSearch({ ...next, engine, loop, pipeline, maxSteps, projectile, look, real, substeps, scale, view });
 }
 
 /** Bodies fired balls may add on the engines whose id tables are sized at init (GPU AVBD, the tiers). */

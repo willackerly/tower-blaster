@@ -4,7 +4,7 @@
 // only proposes configs; main.ts decides how to apply them (live, or by reset).
 import { type Ground, GROUNDS, linearToSrgb, LOOKS, REAL_DEFAULTS, REAL_KNOBS, type RealKnob, type RealOptions, srgbToLinear, type Stone, STONES, type V3 } from '@tb/render';
 import { buildScenario, SCENARIOS } from '@tb/scenarios';
-import type { CameraPose } from './camera.ts';
+import { type CameraPose, type Framing, FRAMING_LIMITS } from './camera.ts';
 import { escapeHtml } from './html.ts';
 import { autoSubsteps, MAX_SUBSTEPS, SCALE_LIMITS, type ViewerConfig } from './params.ts';
 import { parseProjectile, type Projectile, projectileMass } from './projectile.ts';
@@ -27,6 +27,8 @@ export interface ControlsHooks {
   setProjectile(p: Projectile): void;
   /** Draw with this look from now on (real: the real look's knobs that differ from REAL_DEFAULTS). */
   setLook(look: string, real: Partial<RealOptions>): void;
+  /** Frame the scene this way from now on (and re-frame it now). */
+  setView(view: Framing): void;
   /** Where the camera is now (saved as where the scene starts). */
   camera(): CameraPose;
   /** Switch to this config, loaded from a file named name. */
@@ -77,6 +79,16 @@ export function sceneSummary(bodies: number, scale: number, substeps: number): s
   return parts.join(', ');
 }
 
+/** The framing panel's values as a Framing, or why not. */
+export const VIEW_FIELDS: { [K in keyof Framing]: string } = { pitch: 'camera pitch (deg)', fit: 'camera distance (x fit)', fov: 'field of view (deg)' };
+export function framingFrom(values: Record<keyof Framing, number>): Framing {
+  for (const k of Object.keys(VIEW_FIELDS) as (keyof Framing)[]) {
+    const [lo, hi] = FRAMING_LIMITS[k];
+    if (!(values[k] >= lo && values[k] <= hi)) throw new Error(`${VIEW_FIELDS[k]} must be from ${lo} to ${hi}`);
+  }
+  return { pitch: values.pitch, fit: values.fit, fov: values.fov };
+}
+
 const field = (name: string, label: string, value: number | boolean | string, attrs = '') =>
   typeof value === 'boolean'
     ? `<label class="f"><span>${escapeHtml(label)}</span><input type="checkbox" name="${name}"${value ? ' checked' : ''}></label>`
@@ -114,6 +126,11 @@ export function mountControls(root: HTMLElement, hooks: ControlsHooks): { refres
       </div>
       <div class="out muted"></div>
     </form>
+    <form id="view-form">
+      <div class="h">Camera</div>
+      ${(Object.keys(VIEW_FIELDS) as (keyof Framing)[]).map((k) => field(k, VIEW_FIELDS[k], 0, `step="any" min="${FRAMING_LIMITS[k][0]}" max="${FRAMING_LIMITS[k][1]}"`)).join('')}
+      <div class="out muted"></div>
+    </form>
     <form id="file-form">
       <div class="h">Configuration</div>
       <label class="f"><span>name</span><input type="text" name="name" placeholder="optional" maxlength="120"></label>
@@ -131,6 +148,8 @@ export function mountControls(root: HTMLElement, hooks: ControlsHooks): { refres
   const lookOut = lookForm.querySelector<HTMLElement>('.out')!;
   const input = (form: HTMLFormElement, name: string) => form.elements.namedItem(name) as HTMLInputElement | HTMLSelectElement;
   const rebuildButton = sceneForm.querySelector<HTMLButtonElement>('button')!;
+  const viewForm = root.querySelector<HTMLFormElement>('#view-form')!;
+  const viewOut = viewForm.querySelector<HTMLElement>('.out')!;
 
   /** Param fields for a scenario: the config's values when it is the current one, else its defaults. */
   function showParams(scenario: string) {
@@ -209,6 +228,19 @@ export function mountControls(root: HTMLElement, hooks: ControlsHooks): { refres
   lookForm.addEventListener('submit', (e) => e.preventDefault());
   lookForm.addEventListener('input', applyLook);
 
+  // Framing: applied live (the camera jumps to it); R and Rebuild frame the same way.
+  viewForm.addEventListener('submit', (e) => e.preventDefault());
+  viewForm.addEventListener('input', () => {
+    try {
+      hooks.setView(framingFrom(Object.fromEntries((Object.keys(VIEW_FIELDS) as (keyof Framing)[]).map((k) => [k, Number(input(viewForm, k).value)])) as Record<keyof Framing, number>));
+      viewOut.textContent = 'where R and Rebuild put the camera; drag to orbit';
+      viewOut.classList.remove('warn');
+    } catch (e) {
+      viewOut.textContent = e instanceof Error ? e.message : String(e);
+      viewOut.classList.add('warn');
+    }
+  });
+
   // Download: the current config and camera as JSON. Load: a file picked here, applied by main.ts.
   const fileForm = root.querySelector<HTMLFormElement>('#file-form')!;
   const fileOut = fileForm.querySelector<HTMLElement>('.out')!;
@@ -262,6 +294,7 @@ export function mountControls(root: HTMLElement, hooks: ControlsHooks): { refres
     input(lookForm, 'ground').value = albedoHex(real.groundAlbedo);
     input(lookForm, 'stone').value = real.stone;
     input(lookForm, 'groundMaterial').value = real.groundMaterial;
+    for (const k of Object.keys(VIEW_FIELDS) as (keyof Framing)[]) input(viewForm, k).value = String(c.view[k]);
   }
   // Open or closed as the viewer last left it; open by default on a wide screen.
   const OPEN_KEY = 'tb.viewer.controls.open';

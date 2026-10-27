@@ -9,6 +9,7 @@ import {
   pushRadiusLimit, rayThrough, runFree, SIM_SPEED_TAU, stepDue, stepped, stepsDue, taskYield, toSearch, trackSimSpeed, transform, viewProj, Window,
   withOption, type FreeHooks, type Orbit, orbitAt, parseCamera, parseSceneFile, poseOf, SCENE_FILE_FORMAT, sceneFile, sceneFileName, type ViewerConfig,
   autoSubsteps, froudeSpeed, MAX_SUBSTEPS, SCALE_LIMITS, sceneSummary, worldEngineSpec, worldScene,
+  DEFAULT_FRAMING, FRAMING_LIMITS, framingFrom, parseFraming,
 } from '../src/index.ts';
 import { SCENARIOS } from '@tb/scenarios';
 import { parseSpec } from '@tb/bench';
@@ -936,6 +937,96 @@ describe('camera in the URL', () => {
   });
 });
 
+describe('framing (view.*)', () => {
+  const box: [[number, number, number], [number, number, number]] = [[-6, 0, -4], [6, 16, 4]];
+  const corners = (min: number[], max: number[]) => [min[0]!, max[0]!].flatMap((x) => [min[1]!, max[1]!].flatMap((y) => [min[2]!, max[2]!].map((z) => [x, y, z] as [number, number, number])));
+
+  // The framing before view.*: 21.8 degrees up, 50 degrees of view, 1.35x the distance at which the bounding sphere fills it.
+  const before = (min: number[], max: number[]): Orbit => {
+    const fovY = (50 * Math.PI) / 180, radius = Math.hypot(max[0]! - min[0]!, max[1]! - min[1]!, max[2]! - min[2]!) / 2;
+    return { ...frame(min as [number, number, number], max as [number, number, number]), pitch: 0.38, fovY, distance: Math.max(8, (radius / Math.sin(fovY / 2)) * 1.35) };
+  };
+
+  it('the default is lower: the eye about half as high above the target as before, for a city and a tall tower', () => {
+    const rise = (o: Orbit) => eyeOf(o)[1] - o.target[1];
+    const boxes: (typeof box)[] = [box, [[-17.5, 0, -17.5], [17.5, 12.5, 7.5]], [[-2, 0, -2], [2, 30, 2]]];
+    for (const b of boxes) {
+      const r = rise(frame(...b)) / rise(before(...b));
+      expect(r, JSON.stringify(b)).toBeGreaterThan(0.35);
+      expect(r, JSON.stringify(b)).toBeLessThan(0.6);
+    }
+  });
+
+  it('fit 1 is the closest distance at which the whole box is on a square screen', () => {
+    fc.assert(fc.property(
+      fc.double({ min: FRAMING_LIMITS.pitch[0], max: FRAMING_LIMITS.pitch[1], noNaN: true }),
+      fc.double({ min: FRAMING_LIMITS.fov[0], max: FRAMING_LIMITS.fov[1], noNaN: true }),
+      fc.tuple(fc.double({ min: 0.5, max: 60, noNaN: true }), fc.double({ min: 1, max: 60, noNaN: true }), fc.double({ min: 0.5, max: 60, noNaN: true })),
+      (pitch, fov, [w, h, d]) => {
+        const b: typeof box = [[-w / 2, 0, -d / 2], [w / 2, h, d / 2]];
+        const ndc = (fit: number, aspect: number) => {
+          const m = viewProj(frame(...b, { pitch, fit, fov }), aspect);
+          return Math.max(...corners(...b).map((c) => { const p = transform(m, c); return p[3] > 0 ? Math.max(Math.abs(p[0] / p[3]), Math.abs(p[1] / p[3])) : Infinity; }));
+        };
+        const o = frame(...b, { pitch, fit: 1, fov });
+        if (o.distance === 8) return ndc(1, 1) <= 1 + 1e-9; // the 8 m floor: farther than needed
+        return Math.abs(ndc(1, 1) - 1) < 1e-6 && ndc(1.2, 16 / 9) < 1;
+      }));
+  });
+
+  it('the default framing keeps every scenario\'s bodies on screen, wide or 4:3', () => {
+    for (const id of Object.keys(SCENARIOS)) {
+      const bodies = buildScenario(id, {}, 1).bodies;
+      const min: [number, number, number] = [Infinity, 0, Infinity], max: [number, number, number] = [-Infinity, 1, -Infinity];
+      for (const b of bodies) for (let k = 0; k < 3; k++) { min[k] = Math.min(min[k]!, b.pos[k]! - 1); max[k] = Math.max(max[k]!, b.pos[k]! + 1); }
+      const o = frame(min, max);
+      for (const aspect of [16 / 9, 4 / 3]) {
+        const m = viewProj(o, aspect);
+        const off = bodies.filter((b) => { const p = transform(m, b.pos); return !(p[3] > 0 && Math.abs(p[0] / p[3]) <= 1 && Math.abs(p[1] / p[3]) <= 1); });
+        expect([id, aspect, off.length]).toEqual([id, aspect, 0]);
+      }
+    }
+  });
+
+  it('any framing at fit 1.2 or more keeps the whole box on screen (fit 1 just fits the bounding sphere, and the target sits a little below its centre)', () => {
+    fc.assert(fc.property(
+      fc.double({ min: FRAMING_LIMITS.pitch[0], max: FRAMING_LIMITS.pitch[1], noNaN: true }),
+      fc.double({ min: 1.2, max: FRAMING_LIMITS.fit[1], noNaN: true }),
+      fc.double({ min: FRAMING_LIMITS.fov[0], max: FRAMING_LIMITS.fov[1], noNaN: true }),
+      (pitch, fit, fov) => {
+        const o = frame(...box, { pitch, fit, fov });
+        const m = viewProj(o, 16 / 9);
+        return corners(...box).every((c) => {
+          const p = transform(m, c);
+          return p[3] > 0 && Math.abs(p[0] / p[3]) <= 1 && Math.abs(p[1] / p[3]) <= 1;
+        });
+      }));
+  });
+
+  it('parses, round-trips, leaves the defaults out of the URL and rejects what is out of range', () => {
+    expect(parseViewerConfig('').view).toEqual(DEFAULT_FRAMING);
+    expect(toSearch(parseViewerConfig(''))).not.toContain('view.');
+    const c = parseViewerConfig('?view.pitch=21.77&view.fit=1.35&view.fov=50');
+    expect(c.view).toEqual({ pitch: 21.77, fit: 1.35, fov: 50 });
+    expect(parseViewerConfig(toSearch(c))).toEqual(c);
+    expect(toSearch(parseViewerConfig('?view.fov=45&view.fit=2'))).toMatch(/view\.fit=2(&|$)/);
+    expect(toSearch(parseViewerConfig('?view.fov=45&view.fit=2'))).not.toContain('view.fov');
+    for (const bad of ['view.pitch=0', 'view.pitch=90', 'view.fit=0.1', 'view.fov=200', 'view.fov=x']) expect(() => parseFraming(new URLSearchParams(bad)), bad).toThrow(/view\.\w+ must be a number from/);
+  });
+
+  it('a preset keeps the framing, and a start camera takes its field of view', () => {
+    const c = parseViewerConfig('?scenario=S1&view.pitch=8&view.fov=30');
+    expect(parseViewerConfig(presetSearch('?scenario=S14', c)).view).toEqual({ ...DEFAULT_FRAMING, pitch: 8, fov: 30 });
+    expect(orbitAt({ target: [0, 0, 0], yaw: 0, pitch: 0.3, distance: 9 }, 30).fovY).toBeCloseTo(Math.PI / 6, 12);
+  });
+
+  it('the panel checks its values against the same limits', () => {
+    expect(framingFrom({ pitch: 10, fit: 1, fov: 60 })).toEqual({ pitch: 10, fit: 1, fov: 60 });
+    expect(() => framingFrom({ pitch: 10, fit: 1, fov: NaN })).toThrow(/field of view \(deg\) must be from 10 to 120/);
+    expect(() => framingFrom({ pitch: 90, fit: 1, fov: 45 })).toThrow(/camera pitch/);
+  });
+});
+
 describe('scene file', () => {
   const at = new Date(2026, 9, 27, 1, 5);
   const pose = { target: [1, 2, 3] as [number, number, number], yaw: 0.6, pitch: 0.4, distance: 30 };
@@ -954,6 +1045,7 @@ describe('scene file', () => {
       projectile: { shape: 'cube', size: 1.4, mass: 50, speed: 40 },
       look: { preset: 'real', real: { ...REAL_DEFAULTS, sunElevation: 6 } },
       camera: pose,
+      view: DEFAULT_FRAMING,
     });
     expect(Object.keys(f.look.real).sort()).toEqual(Object.keys(REAL_DEFAULTS).sort());
   });
@@ -963,7 +1055,7 @@ describe('scene file', () => {
       '', '?scenario=S1&param.gap=0.02&engine=rapier', '?scenario=S4&param.N=10000&param.F=6&param.H=20&sleep=0&seed=7&autofire=120',
       '?engine=tiered&loop=frame&maxSteps=3', '?pipeline=0&proj=cube&proj.size=3&proj.mass=200&proj.speed=15',
       '?look=hazy', '?scenario=S3&param.running=true&look=real&real.sunElevation=4&real.visibility=12&real.ground=0.3,0.25,0.2&real.stone=granite&real.groundMaterial=dirt',
-      '?scenario=S1&cam=0,4.5,0,0.8,0.3,25', '?offscreen=1&engine=avbd-gpu:iterations=40,sweep=false', '?scenario=S14&scale=0.25&substeps=2&loop=frame&maxSteps=2',
+      '?scenario=S1&cam=0,4.5,0,0.8,0.3,25', '?scenario=S1&view.pitch=8&view.fov=30', '?view.fit=2.5&cam=0,1,0,0,0.1,9', '?offscreen=1&engine=avbd-gpu:iterations=40,sweep=false', '?scenario=S14&scale=0.25&substeps=2&loop=frame&maxSteps=2',
     ];
     for (const u of urls) {
       const c = parseViewerConfig(u);
@@ -1039,5 +1131,8 @@ describe('scene file', () => {
     expect(bad((f) => { f.loop = { mode: 'free', pipeline: true, maxSteps: 2 }; })).toThrow(/maxSteps applies to loop=frame/);
     expect(bad((f) => { f.camera.distance = 0; })).toThrow(/cam must be/);
     expect(bad((f) => { f.camera.target = [1, 2]; })).toThrow(/camera.target must be three numbers/);
+    expect(bad((f) => { f.view.zoom = 2; })).toThrow(/view: unknown key zoom/);
+    expect(bad((f) => { f.view.fov = 'wide'; })).toThrow(/view.fov must be a number/);
+    expect(bad((f) => { f.view.pitch = 0; })).toThrow(/view.pitch must be a number from/);
   });
 });

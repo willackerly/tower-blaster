@@ -219,6 +219,9 @@ describe('real look options', () => {
     expect((q.stoneDetail as number[])[1]).toBeCloseTo(4 * (one.stoneDetail as number[])[1]!, 12);
     expect((q.hills as number[])[1]).toBe(24000);
     expect((q.groundShape as number[])[0]).toBe(4 * (one.groundShape as number[])[0]!); // the relief's depth
+    expect((q.groundShape as number[]).slice(1)).toEqual((one.groundShape as number[]).slice(1)); // patches, shadow fill
+    expect((lookUniforms(realLook({ shadowFill: 0.7 })).groundShape as number[])[2]).toBeCloseTo(0.7, 12);
+    expect((lookUniforms(lookByName('candy')).groundShape as number[])[2]).toBe(0); // the stylized looks: no fill
     // What belongs to the blocks keeps their units: debris sizes, bevel, colours.
     for (const k of Object.keys(one).filter((k) => !['stone', 'ground', 'groundShape', 'stoneDetail', 'hills'].includes(k))) expect([k, q[k]]).toEqual([k, one[k]]);
   });
