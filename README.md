@@ -27,7 +27,10 @@ pnpm runner                             # serve the runner page (cross-origin is
 pnpm bench:browser --engines rapier --scenario S4 --param N=10000 --channel chrome
 pnpm bench:browser --engines rapier,rapier:iterations=8 --scenario S1 --sleep false --headed
 pnpm bench:browser --engines avbd-gpu --scenario S7 --param N=10000 --timing-mode throughput --channel chrome
+pnpm bench:browser --engines avbd-gpu:records=0,avbd-gpu:records=0,restitution=true --scenario S7 --bounce 0.5 --timing-mode throughput --channel chrome
 ```
+
+`--bounce e` puts every body, spawn and the ground at restitution e (0 to 1), as the viewer's Bounce does; only an engine with `restitution=true` bounces, and the record's `scene.bounce` says it was set. The scenarios' own restitution is 0, so without it the pass has nothing to bounce.
 
 GPU engines (`avbd-gpu`) only submit work in `step()`, so the harness waits for it with the engine's `finish()`. `--timing-mode latency` (the default) waits after every step: the cost of a step to a caller that needs its result. `--timing-mode throughput` waits once per block, so the GPU can overlap steps: the sustained cost per step, one sample per block, so no per-step p99 (the suite leaves its p95, p99 and budget columns blank). For CPU engines the two agree up to median against mean. A GPU error or a lost device makes `finish()` reject, so the run fails rather than timing work that never ran.
 

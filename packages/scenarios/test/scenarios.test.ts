@@ -3,7 +3,7 @@ import fc from 'fast-check';
 import { describe, expect, it } from 'vitest';
 import { bodiesAt, type BodyDesc, massOf, TAG_BALL } from '@tb/engine-api';
 import { boundingRadius, groundDepth, shapeDepth, spherePairs } from '@tb/geom';
-import { buildScenario, rng, SCENARIOS } from '../src/index.ts';
+import { bounceScene, buildScenario, rng, SCENARIOS } from '../src/index.ts';
 
 /** Small versions of every scenario, fast enough to check exhaustively. */
 const SMALL: Record<string, Record<string, number | boolean>> = {
@@ -142,6 +142,22 @@ describe('scenario specifics', () => {
     };
     const hash = (id: string) => createHash('sha256').update(JSON.stringify(buildScenario(id))).digest('hex').slice(0, 16);
     expect(Object.fromEntries(Object.keys(pinned).map((id) => [id, hash(id)]))).toEqual(pinned);
+  });
+
+  it('bounceScene puts every body, every spawn and the ground at e, changes nothing else and leaves its argument alone', () => {
+    // S5 fires a ball (a spawn input). The scenarios' own bodies have restitution 0, and their ground none.
+    const plain = buildScenario('S5', SMALL.S5), before = structuredClone(plain);
+    expect(plain.inputs.length).toBeGreaterThan(0);
+    expect(plain.bodies.every((b) => b.restitution === 0) && plain.ground!.restitution === undefined).toBe(true);
+    const on = bounceScene(plain, 0.6);
+    expect(plain).toEqual(before);
+    expect(on.ground).toEqual({ ...plain.ground, restitution: 0.6 });
+    expect(on.bodies).toEqual(plain.bodies.map((b) => ({ ...b, restitution: 0.6 })));
+    expect(on.inputs).toEqual(plain.inputs.map((ev) => ({ ...ev, body: { ...ev.body, restitution: 0.6 } })));
+    expect({ ...on, bodies: [], inputs: [], ground: null }).toEqual({ ...plain, bodies: [], inputs: [], ground: null });
+    // e 0 is a value like any other, and a scene without a ground keeps none.
+    expect(bounceScene(on, 0).bodies.every((b) => b.restitution === 0)).toBe(true);
+    expect(bounceScene({ ...plain, ground: null }, 0.6).ground).toBeNull();
   });
 
   it('rejects unknown scenarios and params', () => {

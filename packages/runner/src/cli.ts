@@ -1,5 +1,6 @@
 // pnpm bench:browser --engines rapier --scenario S4 --param N=10000 [--headed] [--channel chrome]
-//   [--warmup N --block-steps N --blocks N --timing-mode latency|throughput --sleep true|false --seed N --quality-steps N --out f.jsonl]
+//   [--warmup N --block-steps N --blocks N --timing-mode latency|throughput --sleep true|false --bounce e --seed N --quality-steps N --out f.jsonl]
+// --bounce e puts every body, spawn and the ground at restitution e (0-1), for engines with restitution=true.
 // Runs the benchmark in a real browser tab. Exits non-zero if the timing
 // environment is not trustworthy (no isolation, coarse timer, software GPU)
 // unless --allow-invalid is given.
@@ -24,7 +25,7 @@ for (let i = 0; i < argv.length; i++) {
     q.set(`param.${k}`, v ?? '');
   } else flags[key] = value;
 }
-const map: Record<string, string> = { engines: 'engines', engine: 'engines', scenario: 'scenario', seed: 'seed', sleep: 'sleep', warmup: 'warmup', 'block-steps': 'blockSteps', blocks: 'blocks', 'timing-mode': 'timingMode', 'quality-steps': 'qualitySteps' };
+const map: Record<string, string> = { engines: 'engines', engine: 'engines', scenario: 'scenario', seed: 'seed', sleep: 'sleep', bounce: 'bounce', warmup: 'warmup', 'block-steps': 'blockSteps', blocks: 'blocks', 'timing-mode': 'timingMode', 'quality-steps': 'qualitySteps' };
 for (const [k, v] of Object.entries(flags)) if (map[k] && typeof v === 'string') q.set(map[k]!, v);
 
 const config = parseConfig(`?${q.toString()}`);

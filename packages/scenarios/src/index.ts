@@ -345,3 +345,20 @@ export function buildScenario(id: string, overrides: Params = {}, seed = 1): Sce
   for (const k of Object.keys(overrides)) if (!(k in def.defaults)) throw new Error(`${id} has no param ${k}`);
   return def.build({ ...def.defaults, ...overrides }, seed);
 }
+
+/** The body with restitution e. */
+export const bounceBody = (b: BodyDesc, e: number): BodyDesc => ({ ...b, restitution: e });
+
+/**
+ * The scene with every body, every spawn and the ground (if any) at
+ * restitution e: the viewer's Bounce and a bench run's --bounce. The
+ * scenarios' own bodies and ground have restitution 0.
+ */
+export function bounceScene(scene: SceneDesc, e: number): SceneDesc {
+  return {
+    ...scene,
+    ground: scene.ground && { ...scene.ground, restitution: e },
+    bodies: scene.bodies.map((b) => bounceBody(b, e)),
+    inputs: scene.inputs.map((ev) => (ev.kind === 'spawn' ? { ...ev, body: bounceBody(ev.body, e) } : ev)),
+  };
+}
