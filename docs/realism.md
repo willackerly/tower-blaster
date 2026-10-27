@@ -78,6 +78,36 @@ rules the code follows; the doc has the reasoning.
   seam to see (render.test.ts: within 2 of 255). `stoneDetail` 0 sends
   every box to `boxFar`. `real-no-lod` measures what the split saves.
 
+## Pine (Kapla step K3.3)
+
+- `pine` is a fifth stone (`real.stone=pine`, Scene panel) with a pale maritime
+  pine palette. Its layer bakes isotropic fibres, streaks and sparse resin
+  canals; `woodAt` (shaders.ts) samples it `WOOD_STRETCH` (8) times longer
+  along the grain, which runs along each block's longest body axis, so the
+  noise reads as fibres. End faces sample it unstretched at half strength,
+  darker (0.82) and rougher (+0.1).
+- Growth rings (`woodRings`, materials.ts, with a WGSL twin) are a 3D field:
+  cylinders about a pith line 8 to 40 rings off the block's centre in a
+  hashed direction, tilted 3% to the grain, with a small wobble along it.
+  End faces show arcs; the long faces the stripes and long arches of
+  flat-sawn boards; edges match. Spacing is `WOOD_RING_M` (5 mm) times 0.7
+  to 1.3 per block, times `stoneScale`. Latewood is the outer 0.28 to 0.38 of
+  each ring, 28% darker, normalized so the block keeps its palette colour on
+  average. The rings fade to that mean as a pixel's footprint passes a fifth
+  to half a ring (the phase changes at most 1 per ring of distance; the
+  CPU tests measure 1.0004), and everything fades by the stone fade-out, so
+  `boxFar` matches (the LOD seam test draws 0 differing pixels).
+- Cost. The wood code is compiled only into a second box pipeline
+  (`REAL_WOOD`), built the first time a look's stone is pine. The stone
+  looks' pipelines are unchanged: their frames are bit-identical to before
+  (checked for limestone, granite, sandstone, concrete and both grounds),
+  so they carry none of its registers. Its own cost on the M5 Max is not
+  measured yet.
+- Units. Rings and fibres are metres times `stoneScale`. In S15 (unit: one
+  plank width, 23.4 mm) they are right once the world-scale change divides
+  the stone tile by metres per unit; until then, `stoneScale` 42.7 gives
+  the true size but is past the knob's range.
+
 ## What step 4 built
 
 - Ground materials in the same arrays as the stones, after them:
