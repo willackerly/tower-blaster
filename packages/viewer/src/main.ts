@@ -151,6 +151,8 @@ async function main() {
   let events: InputEvent[] = [];
   let shapes: BodyDesc[] = [];
   let orbit: Orbit;
+  // The loaded scene's starting bodies' box, which the framing (config.view) fits.
+  let box: { min: V3; max: V3 } = { min: [0, 0, 0], max: [0, 0, 0] };
   const clock = newClock();
   // 30 steps (half a second of sim): a longer window lags the scene, whose step cost changes within seconds.
   const stepMs = new Window(30);
@@ -214,7 +216,8 @@ async function main() {
     shapes = [...scene.bodies];
     source.reset(scene.bodies);
     const b = bounds(scene.bodies);
-    orbit = want.camera ? orbitAt(want.camera) : frame(b.min, b.max);
+    box = b;
+    orbit = want.camera ? orbitAt(want.camera, want.view.fov) : frame(b.min, b.max, want.view);
     const c: V3 = [(b.min[0] + b.max[0]) / 2, (b.min[1] + b.max[1]) / 2, (b.min[2] + b.max[2]) / 2];
     renderer.setShadowBounds(c, Math.hypot(b.max[0] - b.min[0], b.max[1] - b.min[1], b.max[2] - b.min[2]) / 2 + 2);
     handle.inputs = [];
@@ -252,6 +255,14 @@ async function main() {
       nextConfig = next;
       resetNote = 'Rebuilt the scene: the GPU engine sizes its grid for the largest body when it starts';
       resetAsked = true;
+    },
+    setView(view) {
+      // Camera only: re-framed now (a start camera keeps its pose and takes the field of view).
+      config = { ...config, view };
+      if (nextConfig) nextConfig = { ...nextConfig, view };
+      orbit = config.camera ? { ...orbit, fovY: frame(box.min, box.max, view).fovY } : frame(box.min, box.max, view);
+      history.replaceState(null, '', toSearch(config));
+      presets(location.search);
     },
     camera: () => poseOf(orbit),
     load(next, name) {

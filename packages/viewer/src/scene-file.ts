@@ -1,5 +1,5 @@
 // A viewer setup saved as JSON (the panel's Download / Load): the scene, the engine and how
-// it is stepped, the projectile, the look and the camera. The file is self-contained: it
+// it is stepped, the projectile, the look, the camera and its framing. The file is self-contained: it
 // lists every scenario param and every real-look knob, so a later change of defaults does not
 // change a saved scene. Loading goes through the URL parser (parseViewerConfig), so a file
 // and a URL accept exactly the same values; unknown keys are refused, so a typo in a
@@ -7,8 +7,8 @@
 import { engineNames, parseSpec } from '@tb/bench';
 import { GROUNDS, REAL_DEFAULTS, REAL_KNOBS, type RealKnob, type RealOptions, STONES } from '@tb/render';
 import { SCENARIOS } from '@tb/scenarios';
-import type { CameraPose } from './camera.ts';
-import { parseViewerConfig, type ViewerConfig, writeCamera } from './params.ts';
+import { type CameraPose, DEFAULT_FRAMING, type Framing } from './camera.ts';
+import { parseViewerConfig, type ViewerConfig, writeCamera, writeFraming } from './params.ts';
 import { DEFAULT_PROJECTILE, type Projectile } from './projectile.ts';
 
 export const SCENE_FILE_FORMAT = 'tower-blaster/viewer-scene';
@@ -34,6 +34,8 @@ export interface SceneFile {
   look: { preset: string; real: RealOptions };
   /** Where the camera starts; null = framed to fit the scene. */
   camera: CameraPose | null;
+  /** How the scene is framed without a camera, and the field of view (ViewerConfig.view; absent, as in files saved before it: today's DEFAULT_FRAMING, so their saved camera shows at 45 rather than 50 degrees). */
+  view: Framing;
 }
 
 /** The file for a config, with the camera where it is now (null: framed to fit). */
@@ -50,6 +52,7 @@ export function sceneFile(c: ViewerConfig, name: string, camera: CameraPose | nu
     autofire: c.autofire,
     look: { preset: c.look, real: { ...REAL_DEFAULTS, ...c.real } },
     camera,
+    view: { ...c.view },
   };
 }
 
@@ -79,7 +82,7 @@ export function parseSceneFile(text: string): { config: ViewerConfig; name: stri
   if (root.format !== SCENE_FILE_FORMAT) throw new Error(`not a tower-blaster viewer scene (format should be "${SCENE_FILE_FORMAT}")`);
   if (typeof root.version !== 'number' || root.version > SCENE_FILE_VERSION) throw new Error(`scene file version ${String(root.version)} is newer than this viewer reads (${SCENE_FILE_VERSION}); pull main`);
   if (root.version !== SCENE_FILE_VERSION) throw new Error(`unknown scene file version ${root.version}`);
-  only(root, ['format', 'version', 'name', 'savedAt', 'scene', 'engine', 'loop', 'projectile', 'autofire', 'look', 'camera'], 'the file');
+  only(root, ['format', 'version', 'name', 'savedAt', 'scene', 'engine', 'loop', 'projectile', 'autofire', 'look', 'camera', 'view'], 'the file');
   const name = root.name === undefined ? '' : str(root.name, 'name');
 
   const q = new URLSearchParams();
@@ -150,6 +153,9 @@ export function parseSceneFile(text: string): { config: ViewerConfig; name: stri
     const target = vec3(cam.target, 'camera.target');
     q.set('cam', writeCamera({ target, yaw: num(cam.yaw, 'camera.yaw'), pitch: num(cam.pitch, 'camera.pitch'), distance: num(cam.distance, 'camera.distance') }));
   }
+  const view = object(root.view ?? {}, 'view');
+  only(view, Object.keys(DEFAULT_FRAMING), 'view');
+  writeFraming({ ...DEFAULT_FRAMING, ...Object.fromEntries(Object.entries(view).map(([k, v]) => [k, num(v, `view.${k}`)])) } as Framing, q);
   return { config: parseViewerConfig(`?${q}`), name };
 }
 

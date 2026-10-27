@@ -395,6 +395,40 @@ coloured blotches.
   both with proper sky lighting. Bench variant `real-no-floor-sky`.
 - The clearcoat lobe only runs where there is a coat (the ball).
 
+## Shadow fill (after the Opus review, 2026-10-27)
+
+The Opus review of Will's renders saw ground shadows as "near-black navy".
+They are what the model says they should be. The sky alone lights an open
+shadow with this share of the sunlit floor's light (CLEAR_DAY, visibility
+40 km, the default ground; `atmosphere.ts` on the CPU, cosine-weighted):
+
+| sun elevation (deg) | 5 | 10 | 15 | 20 | 35 | 50 | 70 |
+|---|---|---|---|---|---|---|---|
+| shadow / sunlit floor | 0.76 | 0.50 | 0.39 | 0.32 | 0.22 | 0.18 | 0.16 |
+
+and the sky's light is blue (r : g : b about 0.62 : 0.72 : 1 at 35 degrees).
+That is what a camera records, but on screen, next to sunlit stone, it
+reads as a hole. Real scenes also have terrain, haze and everything off
+screen bouncing the sun into shadows. The model has none of those.
+
+- New knob `real.shadowFill` (0 to 2, default 0.5): the sky's light gains
+  that multiple of the sunlit ground's radiance (`atmoAmbient[1]`, albedo
+  times sun plus sky). It is added where the sky is seen (times the floor's
+  and AO's sky visibility), so streets between towers stay as they were.
+  0 is the old look exactly. 0.5 lifts an open shadow at 35 degrees from
+  0.22 to 0.29 of the sunlit floor, 1 to 0.35. The lift comes from the
+  ground's colour, so the shadows warm toward neutral too.
+- Considered: scaling the sky light. That would brighten everything lit
+  by the sky and keep the shadows navy. Also considered: lifting the
+  darks in post (a toe in the tone curve). That greys every dark,
+  including block crevices and AO, which are right as they are.
+- Measured on SwiftShader (render-real-ground floor test, sRGB luma), going
+  from fill 0 to 1: open shadow 54 to 77, red / blue 0.74 to 0.99, sunlit
+  floor 127 to 135. The exposure meter does not count the fill, so the
+  sunlit parts stay put.
+- Cost: one multiply-add per shaded pixel. It sits in the existing Frame
+  slot `groundShape.z`.
+
 ## Steps
 
 Order of work: 1, 3, 4, then 5, 6, 2, 7 (textures do more for "real" than

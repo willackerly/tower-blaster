@@ -77,11 +77,12 @@ describe('drawing', () => {
     expect(off!.hash).toBe(flat!.hash);
   }, 180_000); // six renderers, each baking its materials
 
-  it('real look floor: open shadow lit by the whole sky; a street sees sunlit walls where the sky is hidden', async (ctx) => {
+  it('real look floor: open shadow lit by the whole sky; a street sees sunlit walls where the sky is hidden; shadow fill lifts the shadows, not the sun', async (ctx) => {
     if (!gpu) return ctx.skip();
-    const r = await call('floorChecks', [{}, { realDiag: 'no-floor-sky' }]);
+    // shadowFill 0: the sky's light alone, what these numbers were measured with.
+    const r = await call('floorChecks', [{ shadowFill: 0 }, { realDiag: 'no-floor-sky', shadowFill: 0 }, { shadowFill: 1 }]);
     expect(r.error).toBeNull();
-    const [f, vertical] = r.frames as NonNullable<typeof r.frames>;
+    const [f, vertical, filled] = r.frames as NonNullable<typeof r.frames>;
     // Measured on SwiftShader (sRGB luma): lit 127, open shadow 53; before the floor kept its contact
     // darkening, open shadow 31. In linear light 53 against 127 is about 0.15, the share of a clear
     // sky's light at 35 degrees of sun; 31 was about 0.05.
@@ -103,6 +104,12 @@ describe('drawing', () => {
     // In the open, the wall 9 m away hides 6% of the sky: a little more light, not less.
     expect(f!.openShadow / vertical!.openShadow - 1).toBeGreaterThanOrEqual(0);
     expect(f!.openShadow / vertical!.openShadow - 1).toBeLessThan(0.03);
+    // shadowFill 1 adds the sunlit ground's radiance to the sky's: the open shadow lifts (luma 54 to 77)
+    // and turns from navy to neutral (red / blue 0.74 to 0.99), the sunlit floor barely moves (127 to 135).
+    expect(filled!.openShadow).toBeGreaterThan(1.3 * f!.openShadow);
+    expect(filled!.lit).toBeLessThan(1.1 * f!.lit);
+    expect(filled!.openShadowRB).toBeGreaterThan(0.9);
+    expect(filled!.street).toBeGreaterThan(f!.street);
   });
 
   it('real look: blue sky paling to the horizon, exposure adapting to a low sun, no stylized lights', async (ctx) => {

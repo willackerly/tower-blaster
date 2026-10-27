@@ -237,6 +237,33 @@ describe('viewer', () => {
     await page.close();
   });
 
+  it('the panel\'s camera framing moves the camera now, goes into the URL, and R keeps it', async (ctx) => {
+    if (!browser) return ctx.skip();
+    const { page, errors } = await open('/?scenario=S1&param.F=3&param.H=6&param.gap=0.02&offscreen=1&engine=rapier');
+    const status = await page.evaluate(() => ({ s: window.__viewer.status, e: window.__viewer.error }));
+    if (status.s === 'error' && /WebGPU|adapter/.test(status.e ?? '') && !requireWebGPU()) return ctx.skip();
+    expect(status).toEqual({ s: 'running', e: undefined });
+    const pose = () => page.evaluate(() => window.__viewer.camera());
+    expect((await pose()).pitch).toBeCloseTo((12 * Math.PI) / 180, 3);
+    const far = (await pose()).distance;
+    await page.locator('#controls summary').click();
+    const view = page.locator('#view-form');
+    await view.locator('input[name=pitch]').fill('30');
+    await view.locator('input[name=fit]').fill('2');
+    expect((await pose()).pitch).toBeCloseTo((30 * Math.PI) / 180, 3);
+    expect((await pose()).distance).toBeGreaterThan(1.5 * far);
+    await view.locator('input[name=fov]').fill('500');
+    expect(await view.locator('.out').innerText()).toMatch(/field of view \(deg\) must be from 10 to 120/);
+    const url = new URL(page.url());
+    expect(Object.fromEntries([...url.searchParams].filter(([k]) => k.startsWith('view.')))).toEqual({ 'view.pitch': '30', 'view.fit': '2' });
+    await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur()); // keys typed into the panel are not commands
+    await page.keyboard.press('r');
+    await page.waitForFunction(() => window.__viewer.resets === 2, undefined, { timeout: 60_000 });
+    expect((await pose()).pitch).toBeCloseTo((30 * Math.PI) / 180, 3);
+    expect(errors).toEqual([]);
+    await page.close();
+  });
+
   it('downloads the setup as named JSON, and loading a file rebuilds that setup in place, camera and all', async (ctx) => {
     if (!browser) return ctx.skip();
     const { page, errors } = await open('/?scenario=S1&param.F=3&param.H=6&param.gap=0.02&offscreen=1&engine=rapier&look=real&real.sunElevation=12');
@@ -349,6 +376,7 @@ describe('viewer', () => {
     expect(Date.now() - t0).toBeLessThan(15_000);
     await page.waitForFunction((k) => window.__viewer.stepIndex > k + 3, before, { timeout: 10_000, polling: 250 });
     // R resets on the physics loop while frames keep drawing; afterwards the new scene is on screen and stepping.
+    await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur()); // keys typed into the panel are not commands
     await page.keyboard.press('r');
     await page.waitForFunction(() => window.__viewer.resets === 2 && window.__viewer.stepIndex > 3, undefined, { timeout: 60_000, polling: 250 });
     expect((await page.evaluate(() => window.__viewer.capture(false)))!.bodyFraction).toBeGreaterThan(0.05);
@@ -363,6 +391,7 @@ describe('viewer', () => {
     if (status.s === 'error' && /WebGPU|adapter/.test(status.e ?? '') && !requireWebGPU()) return ctx.skip();
     expect(status).toEqual({ s: 'running', e: undefined });
     await page.waitForFunction(() => window.__viewer.frames > 10 && window.__viewer.stepIndex > 5, undefined, { timeout: 60_000, polling: 250 });
+    await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur()); // keys typed into the panel are not commands
     await page.keyboard.press('r');
     await page.waitForFunction(() => window.__viewer.resets === 2 && window.__viewer.stepIndex > 3, undefined, { timeout: 60_000, polling: 250 });
     // Serial, a step is never queued behind the one before. That only tells pipelining apart when
@@ -385,6 +414,7 @@ describe('viewer', () => {
     await page.waitForFunction(() => window.__viewer.frames > 10 && window.__viewer.stepIndex > 5, undefined, { timeout: 60_000 });
     await page.evaluate(() => window.__viewer.fire(0, 0));
     await page.waitForFunction(() => window.__viewer.bodies === 55, undefined, { timeout: 30_000 });
+    await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur()); // keys typed into the panel are not commands
     await page.keyboard.press('r');
     await page.waitForFunction(() => window.__viewer.resets === 2 && window.__viewer.stepIndex > 3, undefined, { timeout: 60_000, polling: 250 });
     expect(await page.evaluate(() => window.__viewer.bodies)).toBe(54);
