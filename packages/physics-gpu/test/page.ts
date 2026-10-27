@@ -1,5 +1,5 @@
 // Page-side drivers for the GPU physics tests (bundled by loadBundle).
-import { createDevice, isSoftwareAdapter, readBuffer, type Readback } from '@tb/gpu';
+import { createDevice, sharedDevice, isSoftwareAdapter, readBuffer, type Readback } from '@tb/gpu';
 import { boundingRadius, groundManifold, NO_AXIS, quatNormalize, shapeManifold, spherePairs, supportArea, type Manifold as CpuManifold } from '@tb/geom';
 import { Body, BodyProps, field, Manifold, readStruct, Shape, SolverBody, SolverContact, writeStruct } from '@tb/schema';
 import type { BodyDesc, InputEvent, Quat, Vec3 } from '@tb/engine-api';
@@ -47,7 +47,7 @@ function input(c: BroadCase): { centers: Float64Array; radii: Float64Array } {
 export async function broadphase(c: BroadCase, repeat = 1) {
   const { centers, radii } = input(c);
   const n = radii.length;
-  const { device } = await createDevice();
+  const { device } = await sharedDevice();
   const spheres = new Float32Array(4 * Math.max(1, n));
   let rmax = 0;
   for (let i = 0; i < n; i++) {
@@ -89,7 +89,7 @@ export async function broadphase(c: BroadCase, repeat = 1) {
     deterministic: runs.every((r) => r.length === flat.length && r.every((x, k) => x === flat[k])),
   };
   bp.destroy();
-  device.destroy();
+  sb.destroy();
   return res;
 }
 
@@ -189,7 +189,7 @@ function randomPairs(c: NarrowCase): { bodies: BodyDesc[]; pairs: Array<[number,
  * (scenario) and compare every manifold with the double-precision oracle.
  */
 export async function narrowphase(c: NarrowCase) {
-  const { device } = await createDevice();
+  const { device } = await sharedDevice();
   let bodies: BodyDesc[];
   let pairs: Array<[number, number]>;
   if (c.kind === 'random') ({ bodies, pairs } = randomPairs(c));
@@ -252,9 +252,7 @@ export async function narrowphase(c: NarrowCase) {
     }
   });
   np.destroy();
-  sweepBuf.destroy();
-  prevBuf.destroy();
-  device.destroy();
+  for (const b of [bb, sb, pb, tb, sweepBuf, prevBuf]) b.destroy();
   return { error: error?.message ?? null, pairs: pairs.length, contacts, pairMismatch, pairTies, groundContacts, groundMismatch, groundTies, examples };
 }
 
@@ -277,7 +275,7 @@ export interface ColorCase {
  * broadphase and narrowphase first and take the graph from their output.
  */
 export async function coloring(c: ColorCase) {
-  const { device } = await createDevice();
+  const { device } = await sharedDevice();
   device.pushErrorScope('validation');
   let n: number, slots: number, manifolds: GPUBuffer, total: GPUBuffer;
   const owned: Array<{ destroy(): void }> = [];
@@ -364,7 +362,6 @@ export async function coloring(c: ColorCase) {
   const firstMismatch = colors.findIndex((x, i) => x !== ref[i]);
   col.destroy();
   for (const o of owned) o.destroy();
-  device.destroy();
   return {
     error: error?.message ?? null, n, edges, colorsUsed: info[0], uncolored: info[1], overflow: info[2], refColors: used,
     colorsMatch: firstMismatch < 0, firstMismatch, rowsMatch, orderMatch: order.every((x, k) => x === expectOrder[k]),
@@ -381,7 +378,7 @@ export interface Kick { step: number; body: number; linVel: Vec3; angVel: Vec3 }
 
 /** Run a scene on the GPU engine; snapshot every `every` steps (and at the end). */
 export async function simulateGpu(scene: SceneDesc, steps: number, params: Partial<AvbdParams> = {}, every = 0, opts: Omit<GpuEngineOptions, 'device'> = {}, kicks: Kick[] = []) {
-  const { device } = await createDevice();
+  const { device } = await sharedDevice();
   device.pushErrorScope('validation');
   const e = new GpuAvbdEngine(params, { ...opts, device });
   await e.init(scene);
@@ -416,7 +413,6 @@ export async function simulateGpu(scene: SceneDesc, steps: number, params: Parti
   if (d.pairsRequired > d.pairsWritten || d.uncolored || d.colorOverflow) worst = d;
   const error = await device.popErrorScope();
   e.dispose();
-  device.destroy();
   return { error: error?.message ?? null, snaps, maxColors, worst, wallMs };
 }
 
@@ -427,7 +423,7 @@ export async function simulateGpu(scene: SceneDesc, steps: number, params: Parti
  * recorded into scene.inputs. Returns both final snapshots.
  */
 export async function pushReplay(steps: number) {
-  const { device } = await createDevice();
+  const { device } = await sharedDevice();
   device.pushErrorScope('validation');
   const ball = (x: number, radius = 0.4): BodyDesc => ({ shape: { kind: 'sphere', radius }, pos: [x, 3, -6], rot: [0, 0, 0, 1], linVel: [0, 0, 12], angVel: [0, 0, 0], density: 5, friction: 0.5, restitution: 0.1, tag: -1 });
   const base = buildScenario('S1', { F: 2, H: 4, gap: 0.02 });
@@ -472,7 +468,6 @@ export async function pushReplay(steps: number) {
   const b = await replay.snapshot();
   replay.dispose();
   const error = await device.popErrorScope();
-  device.destroy();
   const plain = (s: typeof a) => ({ count: s.count, pos: [...s.pos], rot: [...s.rot] });
   return { error: error?.message ?? null, n: base.bodies.length, live: plain(a), replay: plain(b), rejected };
 }
@@ -490,7 +485,7 @@ export async function pushReplay(steps: number) {
  * within AXIS_TIE of flipping to (axisSlack).
  */
 export async function pairHistory(scene: SceneDesc, steps: number, opts: { pairsPerBody?: number } = {}) {
-  const { device } = await createDevice();
+  const { device } = await sharedDevice();
   device.pushErrorScope('validation');
   const e = new GpuAvbdEngine({}, { device, pairsPerBody: opts.pairsPerBody });
   await e.init(scene);
@@ -557,14 +552,14 @@ export async function pairHistory(scene: SceneDesc, steps: number, opts: { pairs
     last = cur;
   }
   const error = await device.popErrorScope();
-  e.dispose(); device.destroy();
+  e.dispose();
   return { error: error?.message ?? null, wrong, found, missed, axes, checked, axisMismatch, axisTies, presenceMismatch, hinted, overflowSteps, spawnPairs, examples };
 }
 const NONE_U32 = 0xffffffff;
 
 /** The largest tangential start-of-step drift |c0.yz| of any used contact, over every step of a run. */
 export async function anchorDrift(scene: SceneDesc, steps: number, params: Partial<AvbdParams> = {}) {
-  const { device } = await createDevice();
+  const { device } = await sharedDevice();
   device.pushErrorScope('validation');
   const e = new GpuAvbdEngine(params, { device });
   await e.init(scene);
@@ -580,19 +575,19 @@ export async function anchorDrift(scene: SceneDesc, steps: number, params: Parti
     }
   }
   const error = await device.popErrorScope();
-  e.dispose(); device.destroy();
+  e.dispose();
   return { error: error?.message ?? null, worst };
 }
 
 /** init() with a pair buffer too large for the device: the error it throws (null if none). */
 export async function initError(scene: SceneDesc, pairsPerBody: number) {
-  const { device } = await createDevice();
+  const { device } = await sharedDevice();
   device.pushErrorScope('validation');
   const e = new GpuAvbdEngine({}, { device, pairsPerBody });
   let message: string | null = null;
   try { await e.init(scene); } catch (err) { message = (err as Error).message; }
   const validation = await device.popErrorScope();
-  e.dispose(); device.destroy();
+  e.dispose();
   return { message, validation: validation?.message ?? null };
 }
 
@@ -652,7 +647,7 @@ type SnapshotParts = { parts: { bodies: GPUBuffer; readback: Readback; bp: { tot
  * one staging buffer.
  */
 export async function snapshotDecode(scene: SceneDesc, steps: number, flagged: number) {
-  const { device } = await createDevice();
+  const { device } = await sharedDevice();
   device.pushErrorScope('validation');
   const e = new GpuAvbdEngine({}, { device });
   await e.init(scene);
@@ -692,7 +687,6 @@ export async function snapshotDecode(scene: SceneDesc, steps: number, flagged: n
   const error = await device.popErrorScope();
   const res = { error: error?.message ?? null, count: s.count, compared, mismatches, examples, changedByStep, awake, created: parts.readback.created };
   e.dispose();
-  device.destroy();
   return res;
 }
 
@@ -702,7 +696,7 @@ export async function snapshotDecode(scene: SceneDesc, steps: number, flagged: n
  * dispose() destroys it, rejecting a snapshot still in flight.
  */
 export async function engineReadback(scene: SceneDesc, steps: number) {
-  const { device } = await createDevice();
+  const { device } = await sharedDevice();
   device.pushErrorScope('validation');
   const e = new GpuAvbdEngine({}, { device });
   await e.init(scene);
@@ -729,14 +723,14 @@ export async function engineReadback(scene: SceneDesc, steps: number) {
   };
   const destroyed = await Promise.all(buffers.map(isDestroyed));
   const readAfterDispose = await fails(() => rb.read(probe));
+  probe.destroy();
   const error = await device.popErrorScope();
-  device.destroy();
   return { error: error?.message ?? null, diagnostics, snapshotInFlight, destroyed, readAfterDispose };
 }
 
 /** Bodies counted and bytes read by snapshot() at each of `at` (step counts, ascending), with the buffer's capacity. */
 export async function snapshotSpawn(scene: SceneDesc, at: number[]) {
-  const { device } = await createDevice();
+  const { device } = await sharedDevice();
   device.pushErrorScope('validation');
   const e = new GpuAvbdEngine({}, { device });
   await e.init(scene);
@@ -751,7 +745,6 @@ export async function snapshotSpawn(scene: SceneDesc, at: number[]) {
   const error = await device.popErrorScope();
   const res = { error: error?.message ?? null, capacityBytes: parts.bodies.size, reads };
   e.dispose();
-  device.destroy();
   return res;
 }
 
@@ -760,7 +753,7 @@ export async function snapshotSpawn(scene: SceneDesc, at: number[]) {
  * compute pass encoder's dispatch methods while step() encodes.
  */
 export async function dispatchCounts(scene: SceneDesc, params: Partial<AvbdParams>, opts: Omit<GpuEngineOptions, 'device'>, warm = 3) {
-  const { device } = await createDevice();
+  const { device } = await sharedDevice();
   device.pushErrorScope('validation');
   const e = new GpuAvbdEngine(params, { ...opts, device });
   await e.init(scene);
@@ -775,26 +768,24 @@ export async function dispatchCounts(scene: SceneDesc, params: Partial<AvbdParam
   const d = await e.diagnostics();
   const error = await device.popErrorScope();
   e.dispose();
-  device.destroy();
   return { error: error?.message ?? null, ...counts, colors: d.colors };
 }
 
 /** The dispatch init() chose, and whether the adapter is software (which sets the tail width's default). */
 export async function dispatchPlan(scene: SceneDesc, opts: Omit<GpuEngineOptions, 'device'>) {
-  const { device } = await createDevice();
+  const { device } = await sharedDevice();
   const e = new GpuAvbdEngine({}, { ...opts, device });
   const before = e.dispatch;
   await e.init(scene);
   const info = (device as GPUDevice & { adapterInfo?: GPUAdapterInfo }).adapterInfo;
   const out = { before, dispatch: e.dispatch, software: info ? isSoftwareAdapter(info) : null, adapter: info ? `${info.vendor}/${info.architecture}/${info.description}` : null };
   e.dispose();
-  device.destroy();
   return out;
 }
 
 /** The code of the 'avbd solve' shader module the engine built at init, and the dispatch it chose. */
 export async function solveShader(scene: SceneDesc, opts: Omit<GpuEngineOptions, 'device'>) {
-  const { device } = await createDevice();
+  const { device } = await sharedDevice();
   const codes: string[] = [];
   const create = device.createShaderModule.bind(device);
   device.createShaderModule = (d: GPUShaderModuleDescriptor) => { if (d.label === 'avbd solve') codes.push(d.code); return create(d); };
@@ -802,7 +793,6 @@ export async function solveShader(scene: SceneDesc, opts: Omit<GpuEngineOptions,
   await e.init(scene);
   const out = { codes, dispatch: e.dispatch, variant: e.info.variant };
   e.dispose();
-  device.destroy();
   return out;
 }
 
@@ -817,7 +807,7 @@ export async function solveShader(scene: SceneDesc, opts: Omit<GpuEngineOptions,
  * against a fresh engine's.
  */
 export async function callsDuringInit(first: SceneDesc, second: SceneDesc, steps: number) {
-  const { device } = await createDevice();
+  const { device } = await sharedDevice();
   device.pushErrorScope('validation');
   const uncaptured: string[] = [];
   device.addEventListener('uncapturederror', (ev) => uncaptured.push((ev as GPUUncapturedErrorEvent).error.message));
@@ -862,7 +852,6 @@ export async function callsDuringInit(first: SceneDesc, second: SceneDesc, steps
   c.dispose();
   const error = await device.popErrorScope();
   await new Promise((r) => setTimeout(r, 50));
-  device.destroy();
   return { error: error?.message ?? null, uncaptured, calls, count: after.count, after, overtaken, reinit, clean };
 }
 
@@ -903,7 +892,7 @@ export async function solvePipelineFailure(scene: SceneDesc) {
  * Returns the bits of dp and phi of bodies 0 .. n-1 after the dispatch.
  */
 export async function primalKernel(hessian: HessianForm, n: number, seed: number) {
-  const { device } = await createDevice();
+  const { device } = await sharedDevice();
   device.pushErrorScope('validation');
   const total = 2 * n, perBody = 3, maxPairs = n * perBody;
   const usage = GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC;
@@ -999,6 +988,5 @@ export async function primalKernel(hessian: HessianForm, n: number, seed: number
   const error = await device.popErrorScope();
   solver.destroy();
   for (const b of Object.values(B)) b.destroy();
-  device.destroy();
   return { error: error?.message ?? null, bits, changed: bits.filter((b, k) => b !== before[k]).length, nonFinite, points, zeroRows };
 }
