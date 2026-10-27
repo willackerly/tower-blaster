@@ -1,6 +1,7 @@
 import fc from 'fast-check';
 import { describe, expect, it } from 'vitest';
-import { parseConfig, splitEngines, timingProblems, toQuery, type BrowserEnv, type RunConfig } from '../src/index.ts';
+import { bounceScene, buildScenario } from '@tb/scenarios';
+import { parseConfig, runScene, sceneKey, splitEngines, timingProblems, toQuery, type BrowserEnv, type RunConfig } from '../src/index.ts';
 
 describe('run config in the URL', () => {
   it('parses engines, scenario params and timing', () => {
@@ -36,6 +37,28 @@ describe('run config in the URL', () => {
     expect(() => parseConfig('?timingMode=fast')).toThrow(/latency or throughput/);
   });
 
+  it('bounce: absent is null and stays out of the URL; a number from 0 to 1 is taken, anything else is refused', () => {
+    const c = parseConfig('?scenario=S1');
+    expect(c.bounce).toBeNull();
+    expect(toQuery(c)).not.toMatch(/bounce/);
+    for (const v of [0, 0.5, 1]) expect(parseConfig(`?bounce=${v}`).bounce).toBe(v);
+    for (const v of ['-0.1', '1.5', 'x', '', ' ', 'NaN', 'Infinity']) expect(() => parseConfig(`?bounce=${v}`)).toThrow(/bounce must be a number from 0 to 1/);
+  });
+
+  it('runScene is the scenario at the config\'s bounce and sleep; sceneKey records the bounce only when it is set', () => {
+    // S5 fires a ball, so the spawn takes e too (bounceScene, scenarios.test.ts).
+    const c = parseConfig('?scenario=S5&param.N=900&param.F=4&param.H=10');
+    const plain = buildScenario('S5', c.params, c.seed), bounced = bounceScene(plain, 0.5);
+    expect(runScene(c)).toEqual(plain);
+    expect(runScene({ ...c, sleep: false })).toEqual({ ...plain, sleep: false });
+    expect(runScene({ ...c, bounce: 0.5 })).toEqual(bounced);
+    expect(runScene({ ...c, bounce: 0.5, sleep: false })).toEqual({ ...bounced, sleep: false });
+    expect(bounced.bodies.every((b) => b.restitution === 0.5) && bounced.inputs.length === 1).toBe(true);
+    const key = { id: 'S5', params: plain.params, seed: 1, sleep: plain.sleep, bodies: plain.bodies.length, inputs: 1 };
+    expect(sceneKey(c, runScene(c))).toStrictEqual(key);
+    expect(sceneKey({ ...c, bounce: 0.5 }, bounced)).toStrictEqual({ ...key, bounce: 0.5 });
+  });
+
   it('round-trips through toQuery', () => {
     const cfg = fc.record({
       engines: fc.constantFrom(['rapier'], ['rapier', 'rapier:iterations=6']),
@@ -43,6 +66,7 @@ describe('run config in the URL', () => {
       params: fc.dictionary(fc.constantFrom('N', 'F', 'H', 'running'), fc.oneof(fc.integer({ min: 1, max: 1e5 }), fc.boolean())),
       seed: fc.integer({ min: 0, max: 1e6 }),
       sleep: fc.constantFrom(null, true, false),
+      bounce: fc.oneof(fc.constant(null), fc.integer({ min: 0, max: 1000 }).map((i) => i / 1000)),
       timing: fc.record({ warmup: fc.nat(500), blockSteps: fc.integer({ min: 1, max: 500 }), blocks: fc.integer({ min: 1, max: 50 }), mode: fc.constantFrom('latency', 'throughput') }),
       qualitySteps: fc.nat(1000),
       autorun: fc.boolean(),

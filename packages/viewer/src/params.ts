@@ -11,7 +11,7 @@ import type { BodyDesc, SceneDesc, Vec3 } from '@tb/engine-api';
 import { boundingRadius } from '@tb/geom';
 import { type AvbdParams, froudeParams } from '@tb/physics-ref';
 import { LOOKS, parseRealOptions, type RealOptions, writeRealOptions } from '@tb/render';
-import { buildScenario, SCENARIOS } from '@tb/scenarios';
+import { bounceBody, bounceScene, buildScenario, SCENARIOS } from '@tb/scenarios';
 import { type CameraPose, DEFAULT_FRAMING, type Framing, FRAMING_LIMITS } from './camera.ts';
 import { MAX_STEPS_LIMIT } from './loop.ts';
 import { DEFAULT_PROJECTILE, parseProjectile, type Projectile, projectileShape, writeProjectile } from './projectile.ts';
@@ -285,18 +285,8 @@ export function bounceOn(spec: string): boolean {
   return AVBD_ENGINES.has(name) && !!options.restitution;
 }
 
-/** The body with restitution e. */
-export const bounceBody = (b: BodyDesc, e: number): BodyDesc => ({ ...b, restitution: e });
-
-/** The scene with every body, every spawn and the ground (if any) at restitution e (Bounce on). */
-export function bounceScene(scene: SceneDesc, e: number): SceneDesc {
-  return {
-    ...scene,
-    ground: scene.ground && { ...scene.ground, restitution: e },
-    bodies: scene.bodies.map((b) => bounceBody(b, e)),
-    inputs: scene.inputs.map((ev) => (ev.kind === 'spawn' ? { ...ev, body: bounceBody(ev.body, e) } : ev)),
-  };
-}
+// bounceBody and bounceScene (the body and the scene at Bounce's e) live in @tb/scenarios, shared with bench runs (--bounce).
+export { bounceBody, bounceScene };
 
 /**
  * The scene a config runs: the scenario, at Bounce's e while the engine

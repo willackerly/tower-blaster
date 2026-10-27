@@ -27,6 +27,12 @@ describe('runner page end to end', () => {
     expect((r.quality as { gates: Record<string, string | null> }).gates.finite).toBeNull();
   });
 
+  it('carries --bounce from the URL into the run, and the record says so', async () => {
+    const r = await runInBrowser(parseConfig(`${tiny}&engines=avbd-ref:restitution=true&bounce=0.5`));
+    expect(r.scene).toMatchObject({ id: 'S1', bounce: 0.5 });
+    expect((r.engines as Array<{ variant: Record<string, unknown> }>)[0]!.variant).toMatchObject({ restitution: true });
+  });
+
   it('times the GPU engine in latency and throughput modes', async (ctx) => {
     const probe = await openWebGPU();
     if (!probe) return ctx.skip();
