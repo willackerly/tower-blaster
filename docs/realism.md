@@ -147,7 +147,14 @@ rules the code follows; the doc has the reasoning.
   reference (`hallTraceCpu`, and its WGSL twin), now walking the bay lines
   front to back (3.5 of 13 per ray).
 - Cost. `pnpm bench:render --variants full,real,real-hall --counts
-  10000,100000` measures it (real-hall vs real).
+  10000,100000` measures it (real-hall vs real). M5 Max, 2560x1440, GPU
+  p50 (render-m5-d884332-hall.md): near 10k 2.358 ms (real 2.361, n.s.),
+  near 100k 3.751 (3.737, +0.3%), far 10k 0.977 (0.996), far 100k 3.007
+  (2.980, +1.0%): within noise, under both caps. The hall covers 27 to 36%
+  of those views (CPU trace from the bench cameras, hall scaled 1.25 to
+  7.25x), so it is drawn: its pixels cost about what the sky's did, which
+  the hall now hides (the sky pass draws only where nothing else did), and
+  its 25k triangles next to nothing.
 - Not yet. Lighting is ambient only: the sky through the vault's glazed
   share above, the floor's radiance below; the roof casts no shadow, so
   bodies and floor are still sunlit as outdoors (K3.2b: the roof into the
