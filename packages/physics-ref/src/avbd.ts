@@ -340,25 +340,6 @@ export interface AvbdParams {
    */
   gapSlop?: number;
   /**
-   * Fused dual, opt-in (perf-competition round 2, "dualFusion"): off when
-   * absent or false, and EngineInfo.variant lists it only while it is on
-   * (avbdVariant). A contact's C depends only on its two bodies, and neither
-   * has moved between the end of sweep it and the visit, in sweep it + 1, of
-   * the one that sweep reaches first (the lower colour, the earlier in colour
-   * order; the body itself for a ground contact). So that visit runs sweep
-   * it's dual update first, with sweep it's alpha, and both visits then read
-   * its result, as they would after the separate dual pass: the same
-   * arithmetic on the same values (a loaded point's gapSlop included), so the
-   * same bits, without the pass. The last main iteration's update still runs
-   * as a pass after its sweep, as without fusion, so the stabilization sweep,
-   * the restitution pass and the next step's collide() see what they always
-   * did. With records = 2 the same holds per record: its first visit runs the
-   * record's update (its points' normal rows, then its friction). The GPU
-   * engine does the same (SolverDispatch.dualFusion), without the I - 1 dual
-   * dispatches between sweeps.
-   */
-  dualFusion?: boolean;
-  /**
    * Manifold records (perf-competition round 2, "records"): off here when
    * absent or 0, and avbdVariant lists it only while it is on. The GPU engine
    * solves each contact manifold of 1-4 points as one record, so a body's
@@ -412,7 +393,7 @@ export const RECORD_MODES = [0, 1, 2] as const;
  * it is off (avbdVariant), so adding one does not change the result keys of
  * runs that do not use it.
  */
-export const OPT_IN: Partial<Record<keyof AvbdParams, Partial<AvbdParams>>> = { restitution: RESTITUTION_DEFAULTS, gapSlop: {}, dualFusion: {}, records: {}, colorMode: {}, colorPriority: {} };
+export const OPT_IN: Partial<Record<keyof AvbdParams, Partial<AvbdParams>>> = { restitution: RESTITUTION_DEFAULTS, gapSlop: {}, records: {}, colorMode: {}, colorPriority: {} };
 
 /** EngineInfo.variant for these params: every param, but an opt-in switch and its params only while it is on, with their defaults filled in. */
 export function avbdVariant(p: AvbdParams): Record<string, number | boolean> {
@@ -438,10 +419,18 @@ export function checkRestitution(p: Partial<AvbdParams>): void {
   if (r !== undefined && !(Number.isInteger(r) && r >= 1)) throw new Error(`AvbdParams.restitutionRounds must be an integer >= 1, got ${r}`);
 }
 
-/** Throws on dualFusion that is not a boolean. */
-export function checkDualFusion(p: Partial<AvbdParams>): void {
-  const f = p.dualFusion;
-  if (f !== undefined && typeof f !== 'boolean') throw new Error(`AvbdParams.dualFusion must be a boolean, got ${f}`);
+/**
+ * Engine options that were removed, and why. Given (any value), the AVBD engines throw (checkRemoved), so an old
+ * spec such as avbd-gpu:dualFusion=true cannot run the default under a variant that names the option.
+ */
+export const REMOVED_OPTIONS: Readonly<Record<string, string>> = {
+  dualFusion: 'AvbdParams.dualFusion (the fused dual) was removed after the M5 sweep of 2026-10-27: on Metal it made the primal\'s cost per contact point 41% higher (rule P allows 5%)',
+  solveContactsRW: 'GpuEngineOptions.solveContactsRW was removed with the fused dual (AvbdParams.dualFusion), after the M5 sweep of 2026-10-27',
+};
+
+/** Throws on an option that was removed (REMOVED_OPTIONS). */
+export function checkRemoved(o: object): void {
+  for (const [k, why] of Object.entries(REMOVED_OPTIONS)) if ((o as Record<string, unknown>)[k] !== undefined) throw new Error(why);
 }
 
 /** Throws on records out of range (RECORD_MODES). */
@@ -1251,17 +1240,6 @@ export class AvbdWorld {
         c.lambda[1] = f1 * s; c.lambda[2] = f2 * s;
       }
     };
-    // dualFusion: the body whose visit runs each contact's deferred dual update (records = 2: each
-    // record's; the earlier in colour order, b for a ground contact), and whether one is pending,
-    // with its alpha.
-    let firstVisitor: Int32Array | null = null, pendingDual = false, dualAlpha = 1;
-    if (p.dualFusion) {
-      const visit = new Int32Array(n);
-      let o = 0;
-      for (const group of byColor) for (const i of group) visit[i] = o++;
-      firstVisitor = Int32Array.from<{ a: number; b: number }>(records2 ? records : contacts, (c) => (c.a === GROUND || visit[c.b]! < visit[c.a]! ? c.b : c.a));
-    }
-
     const lhs = new Float64Array(36), rhs = new Float64Array(6), step = new Float64Array(6);
 
     // records = 2: a point's normal row alone (C along n at the current dx, as evalC's row 0, a loaded point's gapSlop
@@ -1353,7 +1331,6 @@ export class AvbdWorld {
           }
           if (records2) for (const ri of touchingR[i]!) {
             const q = records[ri]!;
-            if (pendingDual && firstVisitor![ri] === i) recordDual(q, dualAlpha);
             for (const c of q.points) addRow(c.b === i ? c.jb : c.ja, 0, Math.min(0, c.k[0] * evalC0(c, alpha) + c.lambda[0]), c.k[0]);
             evalCT(q, alpha);
             const s = evalFT(q);
@@ -1363,7 +1340,6 @@ export class AvbdWorld {
           }
           if (!records2) for (const ci of touching[i]!) {
             const c = contacts[ci]!;
-            if (pendingDual && firstVisitor![ci] === i) dualUpdate(c, dualAlpha);
             evalC(c, alpha);
             const s = evalF(c);
             const J = c.b === i ? c.jb : c.ja;
@@ -1399,14 +1375,9 @@ export class AvbdWorld {
           for (let k = 0; k < 6; k++) d[k] = d[k]! - step[k]!;
         }
       }
-      // Dual: update forces and penalties (not in the stabilization pass). With dualFusion,
-      // this sweep's visits ran the last one's, and this one is deferred to the next main sweep's,
-      // except after the last main sweep.
-      pendingDual = false;
+      // Dual: update forces and penalties (not in the stabilization pass).
       if (it < p.iterations) {
-        if (firstVisitor && it + 1 < p.iterations) {
-          pendingDual = true; dualAlpha = alpha;
-        } else if (records2) {
+        if (records2) {
           // The records' points are the contacts: recordDual() updates their normal rows.
           for (const q of records) recordDual(q, alpha);
         } else {

@@ -9,7 +9,7 @@
 // default since plan step 2b; array is the earlier form, to time against it).
 // --engine times another engine variant in P2, given as for pnpm bench
 // (packages/bench engines.ts): AvbdParams and GpuEngineOptions, e.g.
-// "avbd-gpu:iterations=20,dualFusion=true". Without it P2 runs the default. The
+// "avbd-gpu:iterations=20,records=2". Without it P2 runs the default. The
 // scenario flags apply either way; --hessian, --pairs-per-body and --box-broadphase
 // add to the spec's options (an option given both ways is an error).
 // Writes results/probe-<time>.{json,md}. Use real Chrome on the target

@@ -207,16 +207,13 @@ describe('engine registry and SlowedEngine', () => {
     for (const bad of ['matrix', 'Array', '1', 'true']) {
       expect(() => makeEngine(`avbd-gpu:hessian=${bad}`)).toThrow(`GpuEngineOptions.hessian must be one of registers, array, got ${bad}`);
     }
-    // The fused dual is a solver parameter (the reference has it too), the contacts binding a GpuEngineOptions field;
-    // the engine checks both, and records them in the variant only when given.
-    expect(makeEngine('avbd-gpu:dualFusion=true,solveContactsRW=true').info.variant).toMatchObject({ dualFusion: true, solveContactsRW: true });
-    expect(makeEngine('avbd-ref:dualFusion=true').info.variant).toMatchObject({ dualFusion: true });
-    expect(makeEngine('avbd-gpu:iterations=6').info.variant).not.toHaveProperty('dualFusion');
-    expect(makeEngine('avbd-gpu:iterations=6').info.variant).not.toHaveProperty('solveContactsRW');
-    expect(gpuEngineArgs(parseSpec('avbd-gpu:dualFusion=true,iterations=20,colorTail=4,solveContactsRW=false').options))
-      .toEqual({ params: { dualFusion: true, iterations: 20 }, opts: { colorTail: 4, solveContactsRW: false } });
-    expect(() => makeEngine('avbd-gpu:dualFusion=1')).toThrow('AvbdParams.dualFusion must be a boolean, got 1');
-    expect(() => makeEngine('avbd-gpu:solveContactsRW=1')).toThrow('GpuEngineOptions.solveContactsRW must be a boolean, got 1');
+    // gpuEngineArgs splits a spec into AvbdParams and GpuEngineOptions.
+    expect(gpuEngineArgs(parseSpec('avbd-gpu:records=2,iterations=20,colorTail=4,boxBroadphase=false').options))
+      .toEqual({ params: { records: 2, iterations: 20 }, opts: { colorTail: 4, boxBroadphase: false } });
+    // The fused dual (dualFusion, and its contacts binding solveContactsRW) was removed: an old spec throws on either
+    // engine instead of running the default under a variant that names it.
+    for (const spec of ['avbd-gpu:dualFusion=true', 'avbd-gpu:dualFusion=false', 'avbd-ref:dualFusion=true']) expect(() => makeEngine(spec)).toThrow(/dualFusion \(the fused dual\) was removed after the M5 sweep/);
+    expect(() => makeEngine('avbd-gpu:solveContactsRW=true')).toThrow(/solveContactsRW was removed with the fused dual/);
     // records (AvbdParams.records, manifold records) is a solver parameter both AVBD engines take and check; the
     // GPU engine needs the register form for it.
     expect(makeEngine('avbd-gpu:records=1,iterations=20').info.variant).toMatchObject({ records: 1, iterations: 20 });

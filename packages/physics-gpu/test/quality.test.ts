@@ -1,6 +1,6 @@
 // The quality protocol of pnpm bench:quality (quality.ts): the gates and the
 // equivalence rule, on the f64 reference in Node and on the GPU through the
-// CLI's own page entry (quality-entry.ts), with the fused dual on.
+// CLI's own page entry (quality-entry.ts).
 import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { AvbdReferenceEngine, type AvbdParams } from '@tb/physics-ref';
@@ -38,13 +38,13 @@ describe('quality protocol: gates and equivalence', () => {
     expect(allTrue(equivalent(q5, { ...q5, drift: 2e-4 }, 20))).toEqual(['noMoreDrift']);
     expect(allTrue(equivalent(q5, { ...q5, nonFinite: 3 }, 20))).toEqual(['passesWhatBasePasses']);
   });
-  it('on the f64 reference with dualFusion at 20 iterations, Q1, Q2, Q4 and Q5 pass the brief\'s gates (fused = unfused: physics-ref/test/dualfusion.test.ts)', { timeout: 600_000 }, async () => {
+  it('on the f64 reference at 20 iterations, Q1, Q2, Q4 and Q5 pass the brief\'s gates', { timeout: 600_000 }, async () => {
     const run = async (id: CaseId, p: Partial<AvbdParams>) => {
       const c = CASE(id);
       return evaluate(c, await simulateCase(new AvbdReferenceEngine(p), caseScene(c), c.steps, c.every));
     };
-    const fused = { iterations: 20, dualFusion: true };
-    const m = { Q1: await run('Q1', fused), Q2: await run('Q2', fused), Q4: await run('Q4', fused), Q5: await run('Q5', fused) };
+    const p = { iterations: 20 };
+    const m = { Q1: await run('Q1', p), Q2: await run('Q2', p), Q4: await run('Q4', p), Q5: await run('Q5', p) };
     for (const x of Object.values(m)) expect(allTrue(gates(x, 20)), x.id).toEqual([]);
     // The acceptance review's numbers (review-accept-1 §1): topple +0.59%, bend 0.041; upright -1.69%, far 0.897 of rigid.
     expect(m.Q1.toppleErr!).toBeCloseTo(0.0059, 3);
@@ -72,22 +72,17 @@ const runGpu = async (id: CaseId, params: Partial<AvbdParams>, opts: Omit<GpuEng
   return { run: out.run!, m: evaluate(c, out.run!) };
 };
 
-describe('quality protocol on the GPU (pnpm bench:quality\'s page entry), fused dual', () => {
-  it('Q4 (S12): fused, in place and off give the same state bit for bit through the entry, and pass', { timeout: 300_000 }, async (ctx) => {
+describe('quality protocol on the GPU (pnpm bench:quality\'s page entry)', () => {
+  it('Q4 (S12) through the entry passes the brief\'s gates', { timeout: 300_000 }, async (ctx) => {
     if (!gpu) return ctx.skip();
-    const off = await runGpu('Q4', { iterations: 20 });
-    const fused = await runGpu('Q4', { iterations: 20, dualFusion: true });
-    const inPlace = await runGpu('Q4', { iterations: 20, dualFusion: true }, { solveContactsRW: true });
-    expect(fused.run.last).toEqual(off.run.last);
-    expect(inPlace.run.last).toEqual(off.run.last);
-    expect(allTrue(gates(fused.m, 20))).toEqual([]);
-    expect(allTrue(equivalent(off.m, fused.m, 20))).toEqual([]);
+    const g = await runGpu('Q4', { iterations: 20 });
+    expect(allTrue(gates(g.m, 20))).toEqual([]);
   });
   // The brief's Q2 at 20 iterations and Q5, which the S12/S13 describe blocks of engine.test.ts do not gate on the GPU,
-  // fused, against the brief's gates and against the f64 reference with dualFusion by the same equivalence rule.
-  it.for(['Q2', 'Q5'] as const)('%s at 20 iterations, fused: the brief\'s gates, and equivalent to the f64 reference', { timeout: 600_000 }, async (id, ctx) => {
+  // against the brief's gates and against the f64 reference by the same equivalence rule.
+  it.for(['Q2', 'Q5'] as const)('%s at 20 iterations: the brief\'s gates, and equivalent to the f64 reference', { timeout: 600_000 }, async (id, ctx) => {
     if (!gpu) return ctx.skip();
-    const p = { iterations: 20, dualFusion: true };
+    const p = { iterations: 20 };
     const g = await runGpu(id, p);
     const c = CASE(id);
     const ref = evaluate(c, await simulateCase(new AvbdReferenceEngine(p), caseScene(c), c.steps, c.every));

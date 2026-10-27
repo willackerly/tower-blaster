@@ -30,16 +30,9 @@ describe('GPU AVBD engine: the loaded-gap slop (AvbdParams.gapSlop)', () => {
     expect(await kicked({ gapSlop: 3e-5 }, column(), { colorTail: 0, hessian: 'array' })).toEqual(on);
   });
 
-  // The fused dual (AvbdParams.dualFusion) runs the dual update inside the primal and, from the side array, in the
-  // dualPairsSide/dualGroundSide kernels: each gets the constant, so with it the floats are the unfused ones, as off
-  // (engine-fused.test.ts). Built without it in any of them, the excused gap would count in full there and differ.
   // The lattice colouring (colorMode) only reorders the bodies: with the slop on it still changes the floats.
-  it('with the fused dual, in the side array and in place, it is the same floats; with the lattice colouring it acts', { timeout: 300_000 }, async (ctx) => {
+  it('with the lattice colouring it acts', { timeout: 300_000 }, async (ctx) => {
     if (!gpu) return ctx.skip();
-    const on = await kicked({ gapSlop: 3e-5 });
-    expect(await kicked({ gapSlop: 3e-5, dualFusion: true })).toEqual(on);
-    expect(await kicked({ gapSlop: 3e-5, dualFusion: true }, column(), { solveContactsRW: true })).toEqual(on);
-    expect(await kicked({ gapSlop: 3e-5, dualFusion: true }, column(), { colorTail: 0 })).toEqual(on);
     expect(await kicked({ gapSlop: 3e-5, colorMode: 3 })).not.toEqual(await kicked({ colorMode: 3 }));
   });
 

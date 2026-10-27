@@ -100,7 +100,7 @@ struct SolverBody {
   sweep: f32, // @12 speculative margin growth: how far the body can move this step
   q0: vec4f, // @16 rotation at the start of the step
   dp: vec3f, // @32 position minus x0 (the primal variable)
-  visit: u32, // @44 this step's position in the colour order (SolverDispatch.dualFusion only; else unused)
+  pad0: u32, // @44
   phi: vec3f, // @48 rotation vector since q0 (the primal variable)
   pad1: u32, // @60
   tp: vec3f, // @64 inertial target for dp: h v + h^2 g
@@ -131,15 +131,6 @@ struct SolverContact {
   lt: vec2f, // @112 friction force along t1, t2
   b: u32, // @120
   inCone: u32, // @124 1 if the last dual update's trial friction was inside the cone (static friction held)
-}
-
-// A contact point's dual state while the fused dual (SolverDispatch.dualFusion) updates it in the sweep, so the solve kernel's contacts stay read-only.
-// size 24 B, align 8
-struct ContactDual {
-  lt: vec2f, // @0 friction force along t1, t2
-  lambdaN: f32, // @8 normal force
-  kN: f32, // @12 normal penalty
-  kT: f32, // @16 tangent penalty
 }
 
 // AvbdParams.records = 1: the 1-4 SolverContact points of one manifold, every field of each kept (the exact record).
@@ -214,15 +205,6 @@ struct CentreRecord {
   pad7: vec4u, // @368
 }
 
-// A CentreRecord's dual state while the fused dual (SolverDispatch.dualFusion) updates it in the sweep (records 1 keeps a ContactDual per point).
-// size 48 B, align 16
-struct CentreDual {
-  kN: vec4f, // @0 normal penalty of points 0..3
-  lambdaN: vec4f, // @16 normal force
-  lamT: vec3f, // @32 friction force along t1, t2 and the twist row
-  kT: f32, // @44 penalty of the three friction rows
-}
-
 // Per-step uniforms of the GPU AVBD solver.
 // size 128 B, align 16
 struct SolverParams {
@@ -261,7 +243,7 @@ struct SolverParams {
 struct ColorParams {
   color: u32, // @0 colour swept by this primal dispatch
   alpha: f32, // @4 1 in the main iterations, 0 in post-stabilization
-  fuse: u32, // @8 SolverDispatch.dualFusion: 0 no fused dual update, 1 the step's first (last state in the contacts), 2 later ones
+  pad0: u32, // @8
   pad1: u32, // @12
 }
 

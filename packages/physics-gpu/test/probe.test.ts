@@ -42,12 +42,14 @@ describe('solver probe defaults', () => {
 
   it('--engine takes an avbd-gpu spec as pnpm bench does, checked before the page runs; without it P2 runs the default engine', () => {
     expect(DEFAULT_PROBE).not.toHaveProperty('engine');
-    expect(probeEngine('avbd-gpu:iterations=20,dualFusion=true,colorTail=4')).toEqual({
-      spec: 'avbd-gpu:iterations=20,dualFusion=true,colorTail=4', params: { iterations: 20, dualFusion: true }, opts: { colorTail: 4 },
+    expect(probeEngine('avbd-gpu:iterations=20,records=2,colorTail=4')).toEqual({
+      spec: 'avbd-gpu:iterations=20,records=2,colorTail=4', params: { iterations: 20, records: 2 }, opts: { colorTail: 4 },
     });
     expect(probeEngine('avbd-gpu')).toEqual({ spec: 'avbd-gpu', params: {}, opts: {} });
     expect(() => probeEngine('avbd-ref:iterations=4')).toThrow(/must be avbd-gpu/);
-    expect(() => probeEngine('avbd-gpu:dualFusion=1')).toThrow('AvbdParams.dualFusion must be a boolean');
+    expect(() => probeEngine('avbd-gpu:records=3')).toThrow('AvbdParams.records must be one of 0, 1, 2, got 3');
+    // The fused dual was removed: an old spec with it throws instead of timing the default.
+    expect(() => probeEngine('avbd-gpu:dualFusion=true')).toThrow(/dualFusion \(the fused dual\) was removed/);
     expect(() => probeEngine('avbd-gpu:colorTail=64')).toThrow('GpuEngineOptions.colorTail must be');
     expect(() => probeEngine('avbd-gpu:sweep=off')).toThrow(/bad engine option/);
     expect(() => probeEngine('avbd-gpu:hessian=array', { hessian: 'registers' })).toThrow('give hessian in the spec or as --hessian, not both');
@@ -55,7 +57,7 @@ describe('solver probe defaults', () => {
     // #58's engine flags add to the spec's options; one given both ways is an error.
     expect(() => probeEngine('avbd-gpu:pairsPerBody=8', { pairsPerBody: 32 })).toThrow('give pairsPerBody in the spec or as --pairs-per-body, not both');
     expect(() => probeEngine('avbd-gpu:boxBroadphase=true', { boxBroadphase: true })).toThrow('give boxBroadphase in the spec or as --box-broadphase, not both');
-    expect(probeEngine('avbd-gpu:dualFusion=true', { hessian: 'array', pairsPerBody: 32, boxBroadphase: true }).opts).toEqual({});
+    expect(probeEngine('avbd-gpu:records=0', { hessian: 'array', pairsPerBody: 32, boxBroadphase: true }).opts).toEqual({});
     expect(probeEngine('avbd-gpu:boxBroadphase=true', { boxBroadphase: false }).opts).toEqual({ boxBroadphase: true });
   });
 });
@@ -73,34 +75,24 @@ describe('solver probe hooks', () => {
     expect(r.threw).toMatch(/solved serially/);
     if (r.timestamps) for (const t of r.solveMs) expect(t).toBeGreaterThanOrEqual(0);
   });
-
-  it('with the fused dual (side array) too: the primal pieces leave the trajectory bit-identical', { timeout: 300_000 }, async (ctx) => {
-    if (!gpu) return ctx.skip();
-    // They run fused colour dispatches, which write the side array; the next step's first fused sweep rewrites it before reading.
-    const r = await call('probeHooks', buildScenario('S5', { N: 64, F: 2, H: 8, street: 2, fireStep: 0, radius: 0.6, speed: 15 }, 1), 6, 3, { iterations: 4, dualFusion: true });
-    expect(r.error).toBeNull();
-    expect(r.b).toEqual(r.a);
-    expect(r.direct).toEqual([r.groups, r.groups, r.groups]);
-  });
 });
 
 describe('solver probe P2 with --engine', () => {
-  it('times the variant: its iterations and dispatch, one dual pass with the fused dual, and says so', { timeout: 600_000 }, async (ctx) => {
+  it('times the variant: its iterations and dispatch, and says so', { timeout: 600_000 }, async (ctx) => {
     if (!gpu) return ctx.skip();
-    const engine = probeEngine('avbd-gpu:iterations=3,dualFusion=true,colorTail=4');
+    const engine = probeEngine('avbd-gpu:iterations=3,colorTail=4');
     const r = await call('runProbe', { ...TINY, sections: ['p2'], checkpoints: [6], engine });
     expect(r.errors).toEqual([]);
     const p2 = r.p2!;
-    expect([p2.engine, p2.dualPasses, p2.iterations]).toEqual([engine.spec, 1, 3]);
+    expect([p2.engine, p2.iterations, p2.variant]).toEqual([engine.spec, 3, expect.objectContaining({ iterations: 3, colorTail: 4 })]);
     const c = p2.checkpoints[0]!;
     expect(c.colorTail).toBe(4);
     expect(c.direct).toHaveLength(4);
     expect(c.dual).not.toBeNull();
-    expect(c.check!.predicted).toBeCloseTo(4 * (c.direct.reduce((s, d) => s + d.t!.median, 0) + c.tail.t!.median) + c.dual!.median, 9);
+    expect(c.check!.predicted).toBeCloseTo(4 * (c.direct.reduce((s, d) => s + d.t!.median, 0) + c.tail.t!.median) + 3 * c.dual!.median, 9);
     const md = probeMarkdown(r, '## test');
     expect(md).toContain(`R=2 dispatches per timed pass, engine ${engine.spec}`);
-    expect(md).toContain('+ 1·t_dual');
-    expect(md).toContain("the step's 1 dual pass");
+    expect(md).toContain('+ I·t_dual');
   });
 
   it('reads the records layout (AvbdParams.records): records 1 has the point form\'s structure, read one record per slot', { timeout: 600_000 }, async (ctx) => {
@@ -156,16 +148,16 @@ describe('solver probe on another scenario', () => {
     if (!gpu) return ctx.skip();
     const params = { planks: 120, towers: 1, topple: false };
     // Two pair slots per plank are too few for the tower (the run above needs more): the flag reached the engine.
-    const engine = probeEngine('avbd-gpu:iterations=3,dualFusion=true,colorTail=4', { pairsPerBody: 2, boxBroadphase: true });
+    const engine = probeEngine('avbd-gpu:iterations=3,colorTail=4', { pairsPerBody: 2, boxBroadphase: true });
     const r = await call('runProbe', { ...TINY, sections: ['p2'], scenario: 'S15', params, gravityScale: 42.735, pairsPerBody: 2, boxBroadphase: true, checkpoints: [4], engine });
     expect(r.errors).toEqual([]);
     const p2 = r.p2!;
     expect([p2.scenario, p2.gravityScale, p2.boxBroadphase, p2.N]).toEqual(['S15', 42.735, true, buildScenario('S15', params, 1).bodies.length]);
-    expect([p2.engine, p2.iterations, p2.dualPasses, p2.dualFusion, p2.solveContactsRW]).toEqual([engine.spec, 3, 1, true, false]);
+    expect([p2.engine, p2.iterations]).toEqual([engine.spec, 3]);
     const c = p2.checkpoints[0]!;
     expect(c.colorTail).toBe(4);
     expect(c.pairSlots).toBeLessThan(c.pairsRequired);
-    expect(probeMarkdown(r, '## test')).toMatch(/S15 \{"planks":120.*gravity x42.735 box broadphase N=\d+ .*engine avbd-gpu:iterations=3,dualFusion=true,colorTail=4/);
+    expect(probeMarkdown(r, '## test')).toMatch(/S15 \{"planks":120.*gravity x42.735 box broadphase N=\d+ .*engine avbd-gpu:iterations=3,colorTail=4/);
   });
 });
 
@@ -223,7 +215,7 @@ describe('solver probe (every section, tiny)', () => {
     expect(md).toContain('hessian array');
     // Without --engine, P2's output is what it was before the option.
     expect(r.p2).not.toHaveProperty('engine');
-    expect(r.p2).not.toHaveProperty('dualPasses');
+    expect(r.p2).not.toHaveProperty('variant');
     expect(r.options).not.toHaveProperty('engine');
     expect(md).not.toContain(', engine ');
     expect(md).toContain('+ I·t_dual');

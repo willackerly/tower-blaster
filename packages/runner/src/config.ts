@@ -33,7 +33,7 @@ const num = (v: string, key: string) => {
  * The engine specs in an engines list. Specs are comma-separated, and so are a
  * spec's options, so a piece that is an option (key=value, no engine name
  * before a colon) belongs to the spec before it: "avbd-gpu:iterations=20,
- * dualFusion=true,avbd-gpu:iterations=20" is two engines, the first with two
+ * records=2,avbd-gpu:iterations=20" is two engines, the first with two
  * options. No engine name contains '=', so no other list changes meaning.
  */
 export function splitEngines(list: string): string[] {
