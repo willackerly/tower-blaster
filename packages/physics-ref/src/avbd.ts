@@ -212,7 +212,7 @@
 //   (0.11 under max).
 import { type BodyDesc, combineFriction, combineRestitution, DEFAULT_RESTITUTION_COMBINE, inertiaOf, massOf, type Quat, type SceneDesc, type Vec3 } from '@tb/engine-api';
 import { boundingRadius, cross, dot, groundManifold, NO_AXIS, quatMul, quatNormalize, rotate, shapeManifold, spherePairs } from '@tb/geom';
-import { colorGraph } from './coloring.ts';
+import { COLOR_MODES, COLOR_PRIORITIES, colorGraph, colorGraphWith, latticeParity, latticePreferences } from './coloring.ts';
 import { solveSpd6 } from './linalg.ts';
 
 export interface AvbdParams {
@@ -242,6 +242,28 @@ export interface AvbdParams {
   maxSweep: number;
   /** Scale the friction stiffness by the cone clamp, k_t min(1, bound / |z|), while sliding (else k_t J J^T, as the reference). */
   slidingHessian: boolean;
+  /**
+   * Lattice-preferred colouring (coloring.ts), opt-in and experimental
+   * (perf-competition round 2, "latticecolor"): off when absent or 0, and
+   * EngineInfo.variant lists it only while it is on (avbdVariant). 1, eight
+   * colours; 2, four colours with the corner offset as kernel (the face+edge
+   * rule); 3, four colours with the in-plane diagonal as kernel (the
+   * column-and-layer product); 4, as 3 but only for bodies whose every
+   * neighbour is on the lattice and none shares their 4-colour (the lattice
+   * interior; no fallback colour). Cubes on the world lattice take their pattern
+   * colour when no higher-priority neighbour holds it; everything else keeps
+   * the default choice. Only the update order changes, but the order changes
+   * the trajectory, and neither 3 nor 4 has passed the quality checks yet
+   * (coloring.ts, "Quality").
+   */
+  colorMode?: number;
+  /**
+   * Colouring priority, opt-in and experimental: the hash when absent or 0
+   * (EngineInfo.variant lists it only while it is on); 1, largest degree
+   * first, then the hash (KNOCKT collapses early in every body order tried:
+   * coloring.ts, "Quality").
+   */
+  colorPriority?: number;
   /**
    * Load floor, m: a reused contact's normal penalty starts the step at least
    * |lambda_n| / restDepth, the stiffness at which last step's normal force
@@ -373,7 +395,7 @@ export const RECORD_MODES = [0, 1, 2] as const;
  * it is off (avbdVariant), so adding one does not change the result keys of
  * runs that do not use it.
  */
-export const OPT_IN: Partial<Record<keyof AvbdParams, Partial<AvbdParams>>> = { restitution: RESTITUTION_DEFAULTS, gapSlop: {}, dualFusion: {}, records: {} };
+export const OPT_IN: Partial<Record<keyof AvbdParams, Partial<AvbdParams>>> = { restitution: RESTITUTION_DEFAULTS, gapSlop: {}, dualFusion: {}, records: {}, colorMode: {}, colorPriority: {} };
 
 /** EngineInfo.variant for these params: every param, but an opt-in switch and its params only while it is on, with their defaults filled in. */
 export function avbdVariant(p: AvbdParams): Record<string, number | boolean> {
@@ -410,6 +432,14 @@ export function checkRecords(p: Partial<AvbdParams>): void {
   const r = p.records;
   if (r !== undefined && !(RECORD_MODES as readonly unknown[]).includes(r)) throw new Error(`AvbdParams.records must be one of ${RECORD_MODES.join(', ')}, got ${r}`);
   if (r && p.dualFusion) throw new Error(`AvbdParams.records ${r} does not fuse the dual (dualFusion) yet`);
+}
+
+/** Throws on colorMode or colorPriority out of range (COLOR_MODES, COLOR_PRIORITIES). */
+export function checkColoring(p: Partial<AvbdParams>): void {
+  for (const [k, allowed] of [['colorMode', COLOR_MODES], ['colorPriority', COLOR_PRIORITIES]] as const) {
+    const v = p[k];
+    if (v !== undefined && !(allowed as readonly unknown[]).includes(v)) throw new Error(`AvbdParams.${k} must be one of ${allowed.join(', ')}, got ${v}`);
+  }
 }
 
 export const GROUND = -1;
@@ -508,6 +538,8 @@ export interface StepStats {
   contacts: number;
   manifolds: number;
   colors: number;
+  /** Each body's colour in the last step. */
+  colorOf?: Int32Array;
   /**
    * What this step's restitution pass did (all 0 with the switch off): the
    * points it bounced, the normal impulse it applied in all (N s, supports
@@ -1099,12 +1131,18 @@ export class AvbdWorld {
       touchingR[q.b]!.push(ri);
       if (q.a !== GROUND) touchingR[q.a]!.push(ri);
     });
-    const color = colorGraph(adj.map((s) => [...s].sort((x, y) => x - y)));
+    const lists = adj.map((s) => [...s].sort((x, y) => x - y));
+    const mode = p.colorMode ?? 0, degreeFirst = (p.colorPriority ?? 0) === 1;
+    const gy = this.scene.ground?.y ?? 0;
+    const cubeHalf = (b: BodyState) => (b.desc.shape.kind === 'box' && b.desc.shape.half[0] === b.desc.shape.half[1] && b.desc.shape.half[0] === b.desc.shape.half[2] ? b.desc.shape.half[0] : null);
+    const color = mode === 0 && !degreeFirst ? colorGraph(lists)
+      : colorGraphWith(lists, { degreeFirst, ...(mode ? { prefer: latticePreferences(lists, bodies.map((b) => latticeParity(b.pos, b.rot, cubeHalf(b), gy)), mode) } : {}) });
     let colors = 0;
     for (let i = 0; i < n; i++) colors = Math.max(colors, color[i]! + 1);
     const byColor: number[][] = Array.from({ length: colors }, () => []);
     for (let i = 0; i < n; i++) byColor[color[i]!]!.push(i);
     this.stats.colors = colors;
+    this.stats.colorOf = color;
 
     // Start-of-step state, inertial targets and warm-started guesses.
     // dx[i] = [position - start position, rotation vector since the start].

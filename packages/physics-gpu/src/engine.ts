@@ -5,7 +5,7 @@
 import { type BodyDesc, emptySnapshot, type EngineInfo, inertiaOf, type InputEvent, massOf, type PhysicsEngine, type SceneDesc, type Snapshot } from '@tb/engine-api';
 import { boundingRadius } from '@tb/geom';
 import { assertStorageFits, createDevice, isSoftwareAdapter, Readback } from '@tb/gpu';
-import { type AvbdParams, avbdVariant, checkDualFusion, checkGapSlop, checkRecords, checkRestitution, DEFAULT_AVBD } from '@tb/physics-ref';
+import { type AvbdParams, avbdVariant, checkColoring, checkDualFusion, checkGapSlop, checkRecords, checkRestitution, DEFAULT_AVBD } from '@tb/physics-ref';
 import { Body, BodyProps, readField, Shape, SolverBody, writeStruct } from '@tb/schema';
 import { Broadphase } from './broadphase.ts';
 import { Coloring } from './coloring.ts';
@@ -105,6 +105,7 @@ export class GpuAvbdEngine implements PhysicsEngine {
     if (this.params.gapSlop) throw new Error('GpuAvbdEngine: the loaded-gap slop is not implemented on the GPU yet (AvbdParams.gapSlop)');
     checkDualFusion(this.params);
     checkRecords(this.params);
+    checkColoring(this.params);
     const check = (k: 'capacity' | 'spare' | 'pairsPerBody' | 'maxRadius' | 'colorTail' | 'tailThreads' | 'colorRounds', ok: (v: number) => boolean, what: string) => {
       const v = opts[k];
       if (v !== undefined && !(typeof v === 'number' && ok(v))) throw new Error(`GpuAvbdEngine: GpuEngineOptions.${k} must be ${what}, got ${v}`);
@@ -191,7 +192,7 @@ export class GpuAvbdEngine implements PhysicsEngine {
       const prev = buf(maxPairs * 8, 'pair history lookup');
       const bp = new Broadphase(device, spheres, this.capacity, maxPairs, undefined, this.opts.boxBroadphase ? { bodies, shapes, sweep } : undefined);
       const np = new Narrowphase(device, bodies, shapes, bp.pairs, bp.total, this.capacity, maxPairs, sweep, prev);
-      const col = new Coloring(device, np.manifolds, bp.total, this.capacity, maxPairs, this.opts.colorRounds);
+      const col = new Coloring(device, np.manifolds, bp.total, this.capacity, maxPairs, this.opts.colorRounds, { colorMode: p.colorMode ?? 0, colorPriority: p.colorPriority ?? 0, bodies, shapes });
       const solver = new AvbdSolver(device, this.capacity, maxPairs, {
         bodies, props, spheres, sweep, prev, manifolds: np.manifolds, groundManifolds: np.groundManifolds,
         pairs: bp.pairs, total: bp.total, offsets: bp.offsets,
@@ -299,7 +300,7 @@ export class GpuAvbdEngine implements PhysicsEngine {
     parts.solver.match(pass);
     parts.np.encode(pass, n, { margin: p.margin, ground: scene.ground ? { y: scene.ground.y } : null });
     pass.end();
-    parts.col.encode(enc, n);
+    parts.col.encode(enc, n, scene.ground?.y ?? 0);
     parts.solver.solve(enc, n, p.iterations, solveTimestamps);
     device.queue.submit([enc.finish()]);
     this.stepIndex++;
