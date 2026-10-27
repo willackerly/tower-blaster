@@ -78,7 +78,9 @@ ${loads}
   return p;
 }
 struct Pose { dp: vec3f, phi: vec3f }
-// Constraint values and clamped forces, as the primal's evalC() and accumulate().
+// Constraint values and clamped forces, as the primal's evalC() and accumulate(). Without the loaded-gap slop
+// (AvbdParams.gapSlop): off, the default, the solver's uses of it sit behind a constant-false test, so this is
+// its per-point work as built off.
 struct Force { F: vec3f, kn: f32, kt: f32 }
 fn force(p: Pt, me: Pose, o: Pose) -> Force {
   let dpA = select(me.dp, o.dp, p.onB); let phiA = select(me.phi, o.phi, p.onB);

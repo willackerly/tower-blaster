@@ -136,7 +136,12 @@
 // bounces apart, so with restitution on the slop never acts there (the two
 // were not measured together beyond that). Rolling contacts carry none of
 // the pump and are left alone; spheres without rollingContacts get the slop.
-// The GPU engine throws while it is on.
+// The GPU engine applies the same rule in f32, as a pipeline constant
+// (physics-gpu/src/solver.ts; off, its pipelines are built as without it,
+// and on SwiftShader give the same floats). There the kicked column comes to
+// rest as here (SwiftShader: 8.1e-5 m/s at 10 iterations, 1.1e-5 at 20,
+// against 0.17 and 0.015 without it); an excused gap stops closing a few um
+// up in f32 (solver.ts).
 //
 // Departures from the 2D reference, each needed in 3D or by our pipeline:
 // - Speculative contacts: a positive gap at the start of the step is not
@@ -301,7 +306,10 @@ export interface AvbdParams {
    * the full gap, so it eases the body down onto its support without
    * velocity. Unloaded points (every speculative contact, a body that has
    * lifted off) count their gap in full. 3e-5 is the value measured (unit
-   * cubes at 1/60 s); a finite number >= 0. See "Loaded gaps" in step().
+   * cubes at 1/60 s); a finite number >= 0. See "Loaded gaps" in step(). The
+   * GPU engine applies it too, as an f32 pipeline constant fixed at
+   * construction (a value under f32's normal range, 1.2e-38, may be 0 there;
+   * here such a value changed no float of the kicked column either).
    */
   gapSlop?: number;
 }

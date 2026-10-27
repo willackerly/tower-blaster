@@ -117,7 +117,7 @@ struct SolverContact {
   n: vec3f, // @0 normal from a to b, fixed over the step
   mu: f32, // @12
   t1: vec3f, // @16 first tangent (t2 = n x t1)
-  used: u32, // @28 1 if this point is in use
+  used: u32, // @28 bit 0: the point is in use; bit 1 (LOADED_GAP): it was loaded at the end of last step and the loaded-gap slop applies (AvbdParams.gapSlop)
   ra: vec3f, // @32 anchor in a's frame (world for the ground)
   lambdaN: f32, // @44 normal force (<= 0 pushes apart)
   rb: vec3f, // @48 anchor in b's frame
