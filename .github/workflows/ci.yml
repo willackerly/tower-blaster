@@ -35,8 +35,8 @@ jobs:
   test:
     name: test ${{ matrix.shard }}/4
     runs-on: ubuntu-latest
-    # A shard takes ~3-4 min; the rest is headroom for a slow apt mirror on a cache miss.
-    timeout-minutes: 30
+    # A shard takes ~3-4 min; runners vary ~2x.
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
@@ -54,30 +54,17 @@ jobs:
           node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      # The runner's apt mirror sometimes crawls (40 kB/s: 16 min for the two installs below,
-      # 30 s normally), so their packages are cached and fetched only on a miss. The key follows
-      # the lockfile, which pins Playwright and so the browser's dependency list.
-      - name: Cache apt packages
-        uses: actions/cache@v4
-        with:
-          path: ~/apt-cache
-          key: apt-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
-          restore-keys: apt-${{ runner.os }}-
-      - name: Keep apt packages in the cache directory
-        run: |
-          mkdir -p ~/apt-cache/partial
-          printf 'Dir::Cache::Archives "%s";\nBinary::apt::APT::Keep-Downloaded-Packages "true";\n' ~/apt-cache | sudo tee /etc/apt/apt.conf.d/90apt-cache
-      - name: Vulkan loader for SwiftShader WebGPU
-        run: sudo apt-get update && sudo apt-get install -y libvulkan1 mesa-vulkan-drivers
-      - run: pnpm exec playwright install --with-deps chromium
-      - name: Make the apt cache readable for saving
-        run: sudo rm -rf ~/apt-cache/lock ~/apt-cache/partial && sudo chown -R "$USER" ~/apt-cache && du -sh ~/apt-cache
+      # No apt: Chrome brings its own Vulkan loader and SwiftShader (WebGPU works with the
+      # system libvulkan removed), and the runner image already has Chromium's
+      # libraries, so a slow apt mirror can't stall the run.
+      - run: pnpm exec playwright install chromium
       - run: pnpm test --shard=${{ matrix.shard }}/4
 
-  # The one status to require: green only when every job above is.
+  # The one status to require: green only when every job above is. Skipped, not
+  # failed, when a newer push cancels the run.
   check:
     needs: [static, test]
-    if: always()
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
