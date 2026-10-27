@@ -158,6 +158,19 @@ export interface AvbdParams {
    * once (see above).
    */
   capFall: number;
+  /**
+   * Restitution, opt-in: off when absent or false. Off, the step does no
+   * extra work and never reads BodyDesc.restitution, so impacts are close to
+   * perfectly inelastic. The restitution keys are not in
+   * DEFAULT_AVBD (their defaults are RESTITUTION_DEFAULTS), and
+   * EngineInfo.variant lists them only while the switch is on (avbdVariant),
+   * so the result keys of runs without it are as they were before it existed.
+   */
+  restitution?: boolean;
+  /** Normal approach speed at the start of the step, m/s, from which a contact bounces (>=, as Box2D's threshold). */
+  restitutionThreshold?: number;
+  /** Rounds of the restitution pass. */
+  restitutionRounds?: number;
 }
 
 export const DEFAULT_AVBD: AvbdParams = {
@@ -165,6 +178,35 @@ export const DEFAULT_AVBD: AvbdParams = {
   margin: 0.02, slop: 0, stickThreshold: 0.01, matchDistance: 0.05, maxAngularSpeed: 50, slidingHessian: true, sweep: true, maxSweep: 1, restDepth: 0.003,
   rollingContacts: true, loadCap: 1.25, capFall: 0.85,
 };
+
+/** The restitution keys' defaults while AvbdParams.restitution is on (Box2D's threshold is 1 m/s too). */
+export const RESTITUTION_DEFAULTS = { restitutionThreshold: 1, restitutionRounds: 4 } as const;
+
+/**
+ * Opt-in switches and the params that only matter while they are on, with
+ * their defaults. EngineInfo.variant leaves a switch and its params out while
+ * it is off (avbdVariant), so adding one does not change the result keys of
+ * runs that do not use it.
+ */
+export const OPT_IN: Partial<Record<keyof AvbdParams, Partial<AvbdParams>>> = { restitution: RESTITUTION_DEFAULTS };
+
+/** EngineInfo.variant for these params: every param, but an opt-in switch and its params only while it is on, with their defaults filled in. */
+export function avbdVariant(p: AvbdParams): Record<string, number | boolean> {
+  const out: Record<string, number | boolean> = {};
+  for (const [k, v] of Object.entries(p)) if (v !== undefined) out[k] = v;
+  for (const [s, defaults] of Object.entries(OPT_IN)) {
+    if (out[s]) for (const [k, v] of Object.entries(defaults)) out[k] ??= v;
+    else for (const k of [s, ...Object.keys(defaults)]) delete out[k];
+  }
+  return out;
+}
+
+/** Throws on a restitution param out of range, whether the switch is on or not. */
+export function checkRestitution(p: Partial<AvbdParams>): void {
+  const t = p.restitutionThreshold, r = p.restitutionRounds;
+  if (t !== undefined && !(Number.isFinite(t) && t >= 0)) throw new Error(`AvbdParams.restitutionThreshold must be a finite number >= 0, got ${t}`);
+  if (r !== undefined && !(Number.isInteger(r) && r >= 1)) throw new Error(`AvbdParams.restitutionRounds must be an integer >= 1, got ${r}`);
+}
 
 export const GROUND = -1;
 
@@ -237,7 +279,7 @@ export class AvbdWorld {
   /** Each body's last step, [position change, rotation vector] (what the GPU keeps in SolverBody.dp, phi until the next initBodies). */
   lastDx: Float64Array[] = [];
 
-  constructor(readonly scene: Pick<SceneDesc, 'gravity' | 'dt' | 'ground' | 'frictionCombine'>, readonly p: AvbdParams = DEFAULT_AVBD) {}
+  constructor(readonly scene: Pick<SceneDesc, 'gravity' | 'dt' | 'ground' | 'frictionCombine' | 'restitutionCombine'>, readonly p: AvbdParams = DEFAULT_AVBD) {}
 
   add(b: BodyDesc): void {
     this.bodies.push({
