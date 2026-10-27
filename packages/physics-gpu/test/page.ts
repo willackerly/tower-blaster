@@ -1,7 +1,7 @@
 // Page-side drivers for the GPU physics tests (bundled by loadBundle).
 import { createDevice, sharedDevice, isSoftwareAdapter, readBuffer, type Readback } from '@tb/gpu';
 import { boundingRadius, groundManifold, NO_AXIS, quatNormalize, shapeManifold, spherePairs, supportArea, type Manifold as CpuManifold } from '@tb/geom';
-import { Body, BodyProps, field, Manifold, readStruct, Shape, SolverBody, SolverContact, writeStruct } from '@tb/schema';
+import { Body, BodyProps, field, Manifold, readStruct, Shape, SolverBody, SolverContact, SolverRecord, writeStruct } from '@tb/schema';
 import type { BodyDesc, InputEvent, Quat, Vec3 } from '@tb/engine-api';
 import { buildScenario } from '@tb/scenarios';
 import { bodiesAt } from '@tb/engine-api';
@@ -618,7 +618,11 @@ export async function pairHistory(scene: SceneDesc, steps: number, opts: { pairs
 }
 const NONE_U32 = 0xffffffff;
 
-/** The largest tangential start-of-step drift |c0.yz| of any used contact, over every step of a run. */
+/**
+ * The largest tangential start-of-step drift |c0.yz| of any used contact point, over every step of a run: in the
+ * engine's layout, points (SolverContact) or the exact record (SolverRecord, its points q < count); records 2 keeps
+ * no per-point friction.
+ */
 export async function anchorDrift(scene: SceneDesc, steps: number, params: Partial<AvbdParams> = {}) {
   const { device } = await sharedDevice();
   device.pushErrorScope('validation');
@@ -630,9 +634,17 @@ export async function anchorDrift(scene: SceneDesc, steps: number, params: Parti
     e.step();
     // Both halves (this step's contacts and last step's): each was a step's contacts once.
     const v = new DataView(await readBuffer(device, contacts));
-    for (let k = 0; k < v.byteLength / SolverContact.size; k++) {
-      const c = readStruct(v, SolverContact, k);
-      if (c.used![0]) worst = Math.max(worst, Math.hypot(c.c0![1]!, c.c0![2]!));
+    if (e.records === 2) throw new Error('anchorDrift: records 2 keeps no per-point c0.yz');
+    if (e.records === 0) {
+      for (let k = 0; k < v.byteLength / SolverContact.size; k++) {
+        const c = readStruct(v, SolverContact, k);
+        if (c.used![0]) worst = Math.max(worst, Math.hypot(c.c0![1]!, c.c0![2]!));
+      }
+    } else {
+      for (let k = 0; k < v.byteLength / SolverRecord.size; k++) {
+        const r = readStruct(v, SolverRecord, k);
+        for (let q = 0; q < r.count![0]!; q++) worst = Math.max(worst, Math.hypot(r.c0T1![q]!, r.c0T2![q]!));
+      }
     }
   }
   const error = await device.popErrorScope();

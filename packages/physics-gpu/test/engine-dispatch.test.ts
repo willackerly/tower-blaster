@@ -218,7 +218,8 @@ describe('GPU AVBD engine: primal hessian form (named registers against the priv
     expect(new GpuAvbdEngine({}, { hessian: 'array' }).info.variant).toMatchObject({ hessian: 'array' });
     if (!gpu) return ctx.skip();
     const scene = buildScenario('S11', { N: 50 }, 7);
-    const def = await call('solveShader', scene, {});
+    // The point form's primal (records 0; unset is records 1, whose primal is recordWgsl()'s, and the array form is points).
+    const def = await call('solveShader', scene, {}, { records: 0 });
     expect(def.dispatch!.hessian).toBe('registers');
     expect(def.codes).toEqual([reg]);
     const set = await call('solveShader', scene, { hessian: 'array' });
@@ -230,7 +231,8 @@ describe('GPU AVBD engine: primal hessian form (named registers against the priv
     if (!gpu) return ctx.skip();
     const r = await call('solvePipelineFailure', buildScenario('S11', { N: 50 }, 7));
     expect(r.maxInvocations).toBeLessThan(512);
-    expect(r.message).toMatch(/^GpuAvbdEngine: init\(\) could not build the GPU pipelines \(hessian registers, tailThreads 256\): /);
+    // The default's layout, records 1 (gpuRecordsLayout), is named with the dispatch.
+    expect(r.message).toMatch(/^GpuAvbdEngine: init\(\) could not build the GPU pipelines \(hessian registers, tailThreads 256, records 1\): /);
     expect(r.message).toMatch(/primalTail/);
     // Nothing is left half-built: step() needs a new init(), which works once the shader does.
     expect(r.stepAfter).toBe('init() first');

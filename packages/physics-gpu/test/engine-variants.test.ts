@@ -75,19 +75,20 @@ describe('GPU AVBD engine: the opt-in variants together', () => {
     it('records 1 under colorMode 3 and 4, fused or not: the point form\'s bodies under the same colouring, bit for bit', { timeout: 300_000 }, async (ctx) => {
       if (!gpu) return ctx.skip();
       // The record buffer is laid out unlike the contacts, so only the bodies compare (records.test.ts, for the default colouring).
+      // The point form is records 0 (unset is records 1 on the GPU).
       const run = async (params: Partial<AvbdParams>) => {
         const r = await call('simulateGpu', knock(), 24, { iterations: 4, ...params }, 8, {});
         expect(r.error, JSON.stringify(params)).toBeNull();
         return r;
       };
-      const unlatticed = await run({});
+      const unlatticed = await run({ records: 0 });
       for (const colorMode of [3, 4]) {
-        const points = await run({ colorMode });
+        const points = await run({ colorMode, records: 0 });
         // The colouring is in effect: the order, and so the rounding, is not the default's.
         expect(state(points.snaps.at(-1)!)).not.toEqual(state(unlatticed.snaps.at(-1)!));
-        for (const p of [{ records: 1 }, { records: 1, dualFusion: true }, { records: 1, dualFusion: true, colorPriority: 1 }]) {
+        for (const p of [{}, { records: 1 }, { records: 1, dualFusion: true }, { records: 1, dualFusion: true, colorPriority: 1 }]) {
           const r = await run({ colorMode, ...p });
-          const base = p.colorPriority ? await run({ colorMode, colorPriority: 1 }) : points;
+          const base = 'colorPriority' in p ? await run({ colorMode, colorPriority: 1, records: 0 }) : points;
           expect(r.snaps.length).toBe(base.snaps.length);
           r.snaps.forEach((s, k) => expect(state(s), `colorMode ${colorMode} ${JSON.stringify(p)}, step ${s.step}`).toEqual(state(base.snaps[k]!)));
         }
@@ -127,7 +128,7 @@ describe('GPU AVBD engine: the opt-in variants together', () => {
         ['S1 4x4x10', buildScenario('S1', { F: 4, H: 10, gap: 0 }, 1), 120, 120, 4e-5],
       ];
       for (const [name, scene, steps, early, bound] of cases) {
-        const pts = await parity(scene, steps, {}, 10), rec = await parity(scene, steps, { records: 2, dualFusion: true }, 10);
+        const pts = await parity(scene, steps, { records: 0 }, 10), rec = await parity(scene, steps, { records: 2, dualFusion: true }, 10);
         console.log(`dualFusion + records 2 parity ${name}: points ${pts.worst.toExponential(2)} fused records 2 ${rec.worst.toExponential(2)}`);
         expect(nonFinite(toSnap(rec.last)), name).toBe(0);
         expect(rec.worst, name).toBeLessThan(Math.max(1e-5, 2 * pts.worst));

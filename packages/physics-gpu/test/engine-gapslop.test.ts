@@ -15,7 +15,8 @@ import { cube, gpu, sceneOf } from './harness.ts';
 
 describe('GPU AVBD engine: the loaded-gap slop (AvbdParams.gapSlop)', () => {
   // The slop is a pipeline constant (solver.ts), passed only while it is on, so off the pipelines are built as
-  // before: on SwiftShader, absent or 0, the engine gave the same floats as at 9c1ed93 (before the port) on this
+  // before. The default runs records 1 and the array form points, the same floats (records.test.ts). On
+  // SwiftShader, absent or 0, the engine gave the same floats as at 9c1ed93 (before the port) on this
   // case, at 20 iterations and with the array Hessian, and on a 3x3x8 tower, a ball knocking down two towers (S5),
   // the ball stack below and S13 leaning 2 deg (2026-10-27). On, 96 of the 104 floats here differ. The constant
   // goes to the setup, primal, tail and dual kernels; with colorTail 0 the tail sweeps every colour, and the array

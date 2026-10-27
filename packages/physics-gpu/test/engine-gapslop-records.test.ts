@@ -15,11 +15,13 @@ describe('GPU AVBD engine: the loaded-gap slop (AvbdParams.gapSlop) with manifol
   // dualGroundSide kernels) and in place, and with every colour in the tail. Without the mark in setup the records'
   // floats are those without the slop, which differ from the points' with it (checked 2026-10-27 by commenting the
   // mark out: this test and records 2's rest test fail).
-  it('records 1: the point form\'s floats with the slop, unfused, fused in the side array and in place; on differs from off', { timeout: 300_000 }, async (ctx) => {
+  // The points are records 0 (unset is records 1 on the GPU, gpuRecordsLayout).
+  it('records 1: the point form\'s floats with the slop, unset and given, unfused, fused in the side array and in place; on differs from off', { timeout: 300_000 }, async (ctx) => {
     if (!gpu) return ctx.skip();
-    const on = await kicked({ gapSlop: 3e-5 });
+    const on = await kicked({ gapSlop: 3e-5, records: 0 });
     const rec = await kicked({ gapSlop: 3e-5, records: 1 });
     expect(rec).toEqual(on);
+    expect(await kicked({ gapSlop: 3e-5 })).toEqual(on);
     expect(rec).not.toEqual(await kicked({ records: 1 }));
     expect(await kicked({ gapSlop: 3e-5, records: 1, dualFusion: true })).toEqual(on);
     expect(await kicked({ gapSlop: 3e-5, records: 1, dualFusion: true }, column(), { solveContactsRW: true })).toEqual(on);

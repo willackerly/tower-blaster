@@ -8,7 +8,7 @@ import { type AvbdParams, AvbdReferenceEngine } from '@tb/physics-ref';
 import { CentreRecord, field, SolverContact, SolverRecord } from '@tb/schema';
 import { buildScenario } from '@tb/scenarios';
 import { aboveHole, readColumn, rodRock, rodToppleTime, tippingAngle } from '@tb/testkit';
-import { AvbdSolver, GpuAvbdEngine, RECORD_MODES, recordWgsl, SOLVER_WGSL, solveWgsl } from '../src/index.ts';
+import { AvbdSolver, GpuAvbdEngine, gpuRecordsLayout, RECORD_MODES, recordWgsl, SOLVER_WGSL, solveWgsl } from '../src/index.ts';
 import type * as Drivers from './page.ts';
 import { call, cube, type D, G, gpu, runGpu, sceneOf, toSnap } from './harness.ts';
 
@@ -19,9 +19,29 @@ const knock = () => buildScenario('S5', { N: 64, F: 2, H: 8, street: 2, fireStep
 describe('GPU AVBD engine: manifold records: the option and its layouts, records 1 bit for bit, records 2 against the reference', () => {
 
   describe('the option and its layouts', () => {
+    // records 1 is the GPU engine's default; points where only they are implemented (the array Hessian, restitution).
+    it('unset, the GPU engine solves with records 1, or points with the array Hessian or restitution; given, as given; the variant lists it when given', () => {
+      expect(gpuRecordsLayout({})).toBe(1);
+      expect(gpuRecordsLayout({}, { hessian: 'registers' })).toBe(1);
+      expect(gpuRecordsLayout({}, { hessian: 'array' })).toBe(0);
+      expect(gpuRecordsLayout({ restitution: true })).toBe(0);
+      expect(gpuRecordsLayout({ restitution: false })).toBe(1);
+      for (const records of [0, 1, 2]) expect(gpuRecordsLayout({ records })).toBe(records);
+      expect(gpuRecordsLayout({ records: 0 }, { hessian: 'array' })).toBe(0);
+      expect(gpuRecordsLayout({ records: 2, restitution: true })).toBe(2);
+      // The engine takes it (restitution still throws on the GPU, so it is the helper's alone here).
+      expect([new GpuAvbdEngine().records, new GpuAvbdEngine({}, { hessian: 'array' }).records, new GpuAvbdEngine({ records: 0 }).records, new GpuAvbdEngine({ records: 2 }).records]).toEqual([1, 0, 0, 2]);
+      // avbd-gpu (unset) and avbd-gpu:records=0 are different engines: the variant lists records whenever it is given.
+      expect(new GpuAvbdEngine().info.variant).not.toHaveProperty('records');
+      expect(new GpuAvbdEngine({}, { hessian: 'array' }).info.variant).not.toHaveProperty('records');
+      for (const records of [0, 1, 2]) expect(new GpuAvbdEngine({ records }).info.variant).toMatchObject({ records });
+      // The reference is unchanged: records 0 is off there, as unset.
+      expect(new AvbdReferenceEngine({ records: 0 }).info.variant).not.toHaveProperty('records');
+    });
+
     // That the point form's modules are main's is a property of the branch, not of the code, so it is checked when
     // the branch is reviewed (the PR lists the module hashes against its base), not here: here, the engine builds
-    // exactly SOLVER_WGSL and solveWgsl() with records 0.
+    // exactly SOLVER_WGSL and solveWgsl() with records 0, and records 1's shaders unset.
     it('records 0 builds the point form\'s shaders; 1 and 2 bind records, only the hot block in the primal and dual, in the register form only', async (ctx) => {
       expect(RECORD_MODES).toEqual([0, 1, 2]);
       for (const h of ['registers', 'array'] as const) expect(recordWgsl(0, h)).toEqual({ setup: SOLVER_WGSL.SETUP, solve: solveWgsl(h), dual: SOLVER_WGSL.DUAL });
@@ -77,10 +97,15 @@ describe('GPU AVBD engine: manifold records: the option and its layouts, records
       expect(() => new AvbdReferenceEngine({ records: 4 })).toThrow('AvbdParams.records must be one of 0, 1, 2, got 4');
       if (!gpu) return ctx.skip();
       const scene = buildScenario('S11', { N: 50 }, 7);
-      const def = await call('solveShader', scene, {});
-      expect(def.modules['avbd setup']).toBe(SOLVER_WGSL.SETUP);
-      expect(def.modules['avbd solve']).toBe(solveWgsl('registers'));
-      expect(def.modules['avbd dual']).toBe(SOLVER_WGSL.DUAL);
+      const pts = await call('solveShader', scene, {}, { records: 0 });
+      expect(pts.modules['avbd setup']).toBe(SOLVER_WGSL.SETUP);
+      expect(pts.modules['avbd solve']).toBe(solveWgsl('registers'));
+      expect(pts.modules['avbd dual']).toBe(SOLVER_WGSL.DUAL);
+      const def = await call('solveShader', scene, {}), one = recordWgsl(1);
+      expect([def.modules['avbd setup'], def.modules['avbd solve'], def.modules['avbd dual']]).toEqual([one.setup, one.solve, one.dual]);
+      // The array Hessian unset is points.
+      const arr = await call('solveShader', scene, { hessian: 'array' });
+      expect([arr.modules['avbd setup'], arr.modules['avbd dual']]).toEqual([SOLVER_WGSL.SETUP, SOLVER_WGSL.DUAL]);
       for (const mode of [1, 2] as const) {
         const set = await call('solveShader', scene, {}, { records: mode });
         const w = recordWgsl(mode);
@@ -89,13 +114,14 @@ describe('GPU AVBD engine: manifold records: the option and its layouts, records
     });
   });
 
-  describe('records 1 (the exact record) is the point form, bit for bit', () => {
+  describe('records 1 (the exact record, the GPU default) is the point form, bit for bit', () => {
     // The scenes of the hessian-form tests (engine.test.ts), with the load cap
-    // and rolling contacts on as by default: records 1 against points at every
-    // step compared.
+    // and rolling contacts on as by default: the default (records unset, so
+    // records 1: gpuRecordsLayout) against points (records 0) at every step
+    // compared; `records` 1 runs explicit records 1 too.
     const state = (s: Drivers.PlainSnapshot) => [s.pos, s.rot, s.linVel, s.angVel];
-    const same = async (scene: SceneDesc, steps: number, params: Partial<AvbdParams>, opts: Parameters<D['simulateGpu']>[4] = {}, every = 0) => {
-      const [a, r] = [await call('simulateGpu', scene, steps, params, every, opts), await call('simulateGpu', scene, steps, { ...params, records: 1 }, every, opts)];
+    const same = async (scene: SceneDesc, steps: number, params: Partial<AvbdParams>, opts: Parameters<D['simulateGpu']>[4] = {}, every = 0, records?: 1) => {
+      const [a, r] = [await call('simulateGpu', scene, steps, { ...params, records: 0 }, every, opts), await call('simulateGpu', scene, steps, { ...params, ...(records ? { records } : {}) }, every, opts)];
       expect([a.error, r.error]).toEqual([null, null]);
       expect(r.snaps.length).toBe(a.snaps.length);
       a.snaps.forEach((s, k) => expect(state(r.snaps[k]!), `step ${s.step}`).toEqual(state(s)));
@@ -108,9 +134,10 @@ describe('GPU AVBD engine: manifold records: the option and its layouts, records
       return { a, r };
     };
 
-    it('two 2x2x8 towers and a ball: the same state, bit for bit, every 4 steps', { timeout: 120_000 }, async (ctx) => {
+    it('two 2x2x8 towers and a ball: the same state, bit for bit, every 4 steps, unset and with records 1', { timeout: 120_000 }, async (ctx) => {
       if (!gpu) return ctx.skip();
       await same(knock(), 24, {}, {}, 4);
+      await same(knock(), 24, {}, {}, 4, 1);
     });
 
     it('S11, 300 loose cubes landing: the same state, bit for bit', { timeout: 120_000 }, async (ctx) => {
@@ -194,7 +221,7 @@ describe('GPU AVBD engine: manifold records: the option and its layouts, records
         ['S1 4x4x10', buildScenario('S1', { F: 4, H: 10, gap: 0 }, 1), 120, 120, 4e-5],
       ];
       for (const [name, scene, steps, early, bound] of cases) {
-        const pts = await parity(scene, steps, {}, 10), rec = await parity(scene, steps, { records: 2 }, 10);
+        const pts = await parity(scene, steps, { records: 0 }, 10), rec = await parity(scene, steps, { records: 2 }, 10);
         console.log(`records parity ${name}: points ${pts.worst.toExponential(2)} records 2 ${rec.worst.toExponential(2)} (${JSON.stringify(rec.at.map(([s, w]) => [s, Number(w.toExponential(2))]))})`);
         expect(nonFinite(rec.g.s1), name).toBe(0);
         expect(rec.worst, name).toBeLessThan(Math.max(1e-5, 2 * pts.worst));
