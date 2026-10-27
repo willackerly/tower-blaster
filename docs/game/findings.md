@@ -49,25 +49,31 @@ Each behaviour is a tiny level, a nominal shot, and a success test. The shot is 
 
 **5 of 6 robust: the gate passes.** (4 of 6 under 'average' friction; the lintel became robust with 'min'.) Levels L1 to L5 were rebuilt around B2 to B6 (one each), replacing the panel's L1 to L5.
 
+**On the f64 AVBD reference at Keystone's settings** (40 iterations, 3e-5 m gap slop; 2026-10-27, `pnpm keystone:probe`) the gate still passes 5 of 6: B2 to B6 at 100%, B1 at 0%. At 40 iterations the dropped column lands on the cube below and topples forward, as on Rapier; at 20 iterations it was soft enough to stay upright in 26% of the grid. Raw results: `/mnt/project-files/game/probe-ref-40it-gapslop.json`.
+
 ## 5. Par lines from the solver bot
 
-The bot aims at every cell of every block face every two courses, plus anvil drops over every top cell, at 60% and 100% power. It extends the best 3 partial attempts to par depth. The 5 best clean solutions are audited over the same nudge grid, and the most robust becomes the par line in `levels.ts`. Tests replay every par line.
+The bot aims at every cell of every block face every two courses, plus anvil drops over every top cell, at 60% and 100% power. It extends the best 3 partial attempts to par depth. The 5 best clean solutions are audited over the same nudge grid, and the most robust becomes the par line in `levels.ts`. Tests replay every par line (`packages/keystone-lab/test/par.test.ts`).
 
-| Level | Behaviour | Par | Solutions found | Par line robustness |
-|---|---|---|---|---|
-| L1 Open Fire | shear | 2 | 91 of 1,344 attempts | 100% |
-| L2 Lintel | lintel tip | 1 | 41 clean of 600 | 77% (71% under 'average') |
-| L3 Surgeon | pick-off | 2 | 36 clean of 600 | 97% |
-| L4 Catapult | catapult | 1 | 23 of 211 | 80% |
-| L5 Dominoes | dominoes | 1 | 149 of 400 | 100% |
+**Par lines are pinned on the f64 AVBD reference** at AVBD_ITERATIONS and AVBD_GAP_SLOP since 2026-10-27, the settings the GPU game plays at. Of the Rapier par lines only L5's still cleared there. The reference is deterministic across machines: the M5 Max (arm64, 18 jobs) and the cloud VM (x64, 4 jobs) found the same L3 to L5 lines with the same grids. Each runner thread starts attempts from cached copies of the settled level and of shared first shots (`SessionCache`, #69), so the whole bot run takes 28 minutes on the M5 Max. Logs: `/mnt/project-files/game/keystone-bot-ref-40it-m5*.txt`.
 
-The gold-leverage line (third star) is provisional at about 0.9 × the par line's leverage. The bot should set it from the audit grid later.
+| Level | Behaviour | Par | Solutions found (reference) | Par line | Robustness | Gold line |
+|---|---|---|---|---|---|---|
+| L1 Open Fire | shear | 2 | 3 of 1,344 attempts | two cannonballs into the base course | 83% | 1.0 |
+| L2 Lintel | lintel tip | 1 | 41 clean of 600 | a cannonball through the crowns on the lintel | 100% | 1.5 |
+| L3 Surgeon | pick-off | 2 | 68 clean of 840 | two marble pick-offs | 91% | 1.3 |
+| L4 Catapult | catapult | 1 | 7 of 211 | the anvil on the free end | 100% | 0.18 |
+| L5 Dominoes | dominoes | 1 | 162 of 400 | a marble into the crown column from +x | 100% | 5 |
 
-**Level-design problems the bot exposed.** Most par lines are brute force, not the behaviour each level was built around:
-- **L5:** the bot's best line hits the crown column directly (from +x) and the chain runs backwards. The domino chain is optional.
-- **L3:** a cannonball into course 4 followed by a marble beats two clean pick-offs on robustness.
-- **L4:** the most robust anvil drop lands next to the crowns, not on the free end of the catapult.
-- **L1 and L2:** brute cannonballs win (leverage 1 to 3).
+Under Rapier the lines were 100%, 77%, 97%, 80% and 100% robust.
+
+**The gold-leverage line** (third star) is the lower quartile of the leverage the par line's clean neighbours on the nudge grid reach, rounded down to two significant figures (`goldLine`, `pnpm keystone:par`). About three in four near-par shots earn it.
+
+**What the reference changed for level design:**
+- **L3 and L4 now play as designed.** Two clean marble pick-offs beat a cannonball on L3, and on L4 the anvil on the catapult's free end is the robust move (on Rapier it only cleared by landing next to the crowns).
+- **L2:** felling a column, the level's idea, is fragile: the 5 highest-leverage lines (all column hits at 60% power, leverage 2.9 to 4.8) are 11 to 46% robust. A 100% cannonball through the crowns is robust at leverage about 2.5. All 41 clean solutions were audited for this.
+- **L1** is much harder: 3 clearing lines of 1,344 attempts, all brute cannonballs.
+- **L5:** the domino chain is still optional. The robust lines hit the crown column directly from +x.
 
 These are first-pass levels. They need playtesting and level-design passes, not more tuning in the dark. The bot makes each pass cheap: change the level, rerun the bot, and the par-line test tells you if the old solution broke.
 
