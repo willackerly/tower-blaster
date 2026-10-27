@@ -1,4 +1,4 @@
-// The viewer's control panel: the scene (scenario, its params, seed), rebuilt
+// The viewer's control panel: the scene (scenario, its params, seed, cube size and substeps), rebuilt
 // on demand, and the projectile and the look, applied as soon as a field changes; and the
 // whole setup saved to or loaded from a JSON file (scene-file.ts). The panel
 // only proposes configs; main.ts decides how to apply them (live, or by reset).
@@ -6,7 +6,7 @@ import { type Ground, GROUNDS, linearToSrgb, LOOKS, REAL_DEFAULTS, REAL_KNOBS, t
 import { buildScenario, SCENARIOS } from '@tb/scenarios';
 import type { CameraPose } from './camera.ts';
 import { escapeHtml } from './html.ts';
-import type { ViewerConfig } from './params.ts';
+import { autoSubsteps, MAX_SUBSTEPS, SCALE_LIMITS, type ViewerConfig } from './params.ts';
 import { parseProjectile, type Projectile, projectileMass } from './projectile.ts';
 import { parseSceneFile, sceneFile, sceneFileName } from './scene-file.ts';
 
@@ -55,16 +55,26 @@ export function realOverrides(values: Record<RealKnob, number>, groundHex: strin
  * The scene a set of form values describes, or why it can't be built. Builds it
  * (cheap next to an engine init) so the panel can show the body count before a rebuild.
  */
-export function proposeScene(c: ViewerConfig, scenario: string, params: Record<string, number | boolean>, seed: number):
+export function proposeScene(c: ViewerConfig, scenario: string, params: Record<string, number | boolean>, seed: number, scale = c.scale, substeps = c.substeps):
   { ok: true; config: ViewerConfig; bodies: number } | { ok: false; error: string } {
   try {
     if (!Number.isInteger(seed)) throw new Error('seed must be an integer');
+    if (!(scale >= SCALE_LIMITS[0] && scale <= SCALE_LIMITS[1])) throw new Error(`cube edge must be from ${SCALE_LIMITS[0]} to ${SCALE_LIMITS[1]} m`);
+    if (!Number.isInteger(substeps) || substeps < 1 || substeps > MAX_SUBSTEPS) throw new Error(`substeps must be a whole number from 1 to ${MAX_SUBSTEPS}`);
     // A rebuilt scene is framed afresh: a start camera chosen for the old one need not fit it.
-    const next: ViewerConfig = { ...c, scenario, params, seed, camera: null };
+    const next: ViewerConfig = { ...c, scenario, params, seed, scale, substeps, camera: null };
     return { ok: true, config: next, bodies: buildScenario(scenario, params, seed).bodies.length };
   } catch (e) {
     return { ok: false, error: e instanceof Error ? e.message : String(e) };
   }
+}
+
+/** The scene line under the form: bodies, and what the cube size and substeps do to the physics. */
+export function sceneSummary(bodies: number, scale: number, substeps: number): string {
+  const parts = [`${bodies.toLocaleString()} bodies`];
+  if (scale !== 1) parts.push(`${+(1 / scale).toFixed(2)} g in cube units, ${+(1 / Math.sqrt(scale)).toFixed(2)}x as fast`);
+  if (substeps !== 1) parts.push(`${substeps}x physics cost`);
+  return parts.join(', ');
 }
 
 const field = (name: string, label: string, value: number | boolean | string, attrs = '') =>
@@ -80,6 +90,8 @@ export function mountControls(root: HTMLElement, hooks: ControlsHooks): { refres
       <label class="f"><span>scenario</span><select name="scenario">${Object.values(SCENARIOS).map((s) => `<option value="${s.id}">${s.id} ${escapeHtml(s.title)}</option>`).join('')}</select></label>
       <div class="params"></div>
       ${field('seed', 'seed', 1, 'step="1"')}
+      ${field('scale', 'cube edge (m)', 1, `step="any" min="${SCALE_LIMITS[0]}" max="${SCALE_LIMITS[1]}"`)}
+      ${field('substeps', 'physics substeps', 1, `step="1" min="1" max="${MAX_SUBSTEPS}"`)}
       <div class="out muted"></div>
       <button type="submit">Rebuild scene</button>
     </form>
@@ -133,12 +145,12 @@ export function mountControls(root: HTMLElement, hooks: ControlsHooks): { refres
     for (const el of paramsBox.querySelectorAll('input')) {
       params[el.name.slice(6)] = el.type === 'checkbox' ? el.checked : el.value === '' ? NaN : Number(el.value);
     }
-    return proposeScene(hooks.config(), scenario, params, Number(input(sceneForm, 'seed').value));
+    return proposeScene(hooks.config(), scenario, params, Number(input(sceneForm, 'seed').value), Number(input(sceneForm, 'scale').value), Number(input(sceneForm, 'substeps').value));
   }
 
   function checkScene() {
     const p = sceneProposal();
-    sceneOut.textContent = p.ok ? `${p.bodies.toLocaleString()} bodies` : p.error;
+    sceneOut.textContent = p.ok ? sceneSummary(p.bodies, p.config.scale, p.config.substeps) : p.error;
     sceneOut.classList.toggle('warn', !p.ok);
     rebuildButton.disabled = !p.ok;
   }
@@ -157,6 +169,11 @@ export function mountControls(root: HTMLElement, hooks: ControlsHooks): { refres
     projOut.classList.remove('warn');
   }
 
+  // A new cube size brings its own substeps (autoSubsteps); set them after to override.
+  input(sceneForm, 'scale').addEventListener('input', () => {
+    const s = Number(input(sceneForm, 'scale').value);
+    if (s >= SCALE_LIMITS[0] && s <= SCALE_LIMITS[1]) input(sceneForm, 'substeps').value = String(autoSubsteps(s));
+  });
   input(sceneForm, 'scenario').addEventListener('change', () => { showParams(input(sceneForm, 'scenario').value); checkScene(); });
   sceneForm.addEventListener('input', checkScene);
   sceneForm.addEventListener('submit', (e) => {
@@ -228,6 +245,8 @@ export function mountControls(root: HTMLElement, hooks: ControlsHooks): { refres
     const c = hooks.config();
     input(sceneForm, 'scenario').value = c.scenario;
     input(sceneForm, 'seed').value = String(c.seed);
+    input(sceneForm, 'scale').value = String(c.scale);
+    input(sceneForm, 'substeps').value = String(c.substeps);
     showParams(c.scenario);
     checkScene();
     const p = c.projectile;

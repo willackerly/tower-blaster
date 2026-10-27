@@ -630,3 +630,19 @@ export class AvbdWorld {
 
 const add3 = (a: Vec3, b: Vec3): Vec3 => [a[0] + b[0], a[1] + b[1], a[2] + b[2]];
 const sub3 = (a: Vec3, b: Vec3): Vec3 => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+
+/**
+ * Params for a world whose gravity is k times as strong, as when its cubes
+ * stand for cubes 1/k the size (the viewer's scale). Stepped at the same dt,
+ * that world moves exactly as the original stepped at dt sqrt(k): positions
+ * equal step for step, velocities sqrt(k) times as fast. Forces scale by k,
+ * so the penalties (force per length, and beta per length squared) do; the
+ * spin cap is a speed; lengths (margin, slop, restDepth, matchDistance,
+ * stickThreshold, maxSweep) and the dimensionless rest stay. Fields of p
+ * that are not set take DEFAULT_AVBD's.
+ */
+export function froudeParams(p: Partial<AvbdParams>, k: number): Partial<AvbdParams> {
+  if (!(k > 0)) throw new Error(`froudeParams: k must be > 0: ${k}`);
+  const q = { ...DEFAULT_AVBD, ...p };
+  return { ...p, beta: q.beta * k, penaltyMin: q.penaltyMin * k, penaltyMax: q.penaltyMax * k, maxAngularSpeed: q.maxAngularSpeed * Math.sqrt(k) };
+}

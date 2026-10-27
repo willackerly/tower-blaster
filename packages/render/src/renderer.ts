@@ -57,6 +57,18 @@ export interface FrameParams {
   noCull?: boolean;
   /** Seconds since the last scene frame, for sparks (default: from time, at most 0.1). */
   dt?: number;
+  /**
+   * Metres per world unit (default 1). A world of quarter-metre cubes keeps
+   * its unit cubes and runs at 4 g (viewer `scale`); the renderer then draws
+   * what is metric at its real size, which in world units is 1/metres as
+   * large: the stone and ground textures, the ground's relief, the air's
+   * haze, the eye's height for the sky, the hills' distance. What belongs to
+   * the blocks keeps their units (bevel, AO, dust puffs and chips, which
+   * scale with what threw them), and the particles run 1/sqrt(metres) as
+   * fast, as the bodies do (Froude), their detector reading speed changes
+   * times sqrt(metres), so an impact raises what it would in the unit world.
+   */
+  metres?: number;
 }
 
 export type RenderTarget = { canvas: HTMLCanvasElement } | { size: [number, number] };
@@ -136,7 +148,7 @@ export function sunOf(l: LookParams): V3 {
 }
 
 /** Frame uniform values that come from a look preset (colours to OKLab / linear as the shader wants). */
-export function lookUniforms(l: LookParams): Record<string, number | number[]> {
+export function lookUniforms(l: LookParams, metres = 1): Record<string, number | number[]> {
   const lin = (c: V3) => c.map(srgbToLinear);
   // With an atmosphere, the sun's colour is the sunlight that reaches the ground (atmosphere.ts).
   const sunColor = l.atmosphere ? sunAtGround(l.atmosphere, sunOf(l)) : l.sunColor;
@@ -147,11 +159,12 @@ export function lookUniforms(l: LookParams): Record<string, number | number[]> {
     rimColor: l.rimColor, rimDir: normalize(l.rimDir), rimSize: l.rimSize,
     roughness: l.roughness, clearcoat: l.clearcoat, bevel: l.bevel, hueStep: (l.hueStep * Math.PI) / 180,
     ball: lin(l.ball), ballEmissive: l.ballEmissive, fogDensity: l.fogDensity, fogHeight: l.fogHeight, exposure: l.exposure,
-    stone: l.stone ? [STONES.indexOf(l.stone.kind), l.stone.scale, l.stone.wear, l.stone.dirt] : [0, 1, 0, 0],
-    stoneDetail: [l.stone?.detail ?? 0, l.stone?.fade ?? 1, 0, 0],
-    ground: l.ground ? [GROUND_LAYER + GROUNDS.indexOf(l.ground.kind), l.ground.scale, l.ground.detail, l.ground.variation] : [GROUND_LAYER, 1, 0, 0],
-    groundShape: [l.ground?.relief ?? 0, patchThreshold(l.ground?.patches ?? 0), 0, 0],
-    hills: l.hills ? [(l.hills.height * Math.PI) / 180, l.hills.distance * 1000, 0, 0] : [0, 1000, 0, 0],
+    // Metric sizes in world units (FrameParams.metres): a texture tile, the fade footprint, the relief, the hills' distance.
+    stone: l.stone ? [STONES.indexOf(l.stone.kind), l.stone.scale / metres, l.stone.wear, l.stone.dirt] : [0, 1, 0, 0],
+    stoneDetail: [l.stone?.detail ?? 0, (l.stone?.fade ?? 1) / metres, 0, 0],
+    ground: l.ground ? [GROUND_LAYER + GROUNDS.indexOf(l.ground.kind), l.ground.scale / metres, l.ground.detail, l.ground.variation] : [GROUND_LAYER, 1, 0, 0],
+    groundShape: [(l.ground?.relief ?? 0) / metres, patchThreshold(l.ground?.patches ?? 0), 0, 0],
+    hills: l.hills ? [(l.hills.height * Math.PI) / 180, (l.hills.distance * 1000) / metres, 0, 0] : [0, 1000, 0, 0],
     debris: [l.debris?.size ?? REAL_DEFAULTS.dustSize, l.debris?.opacity ?? REAL_DEFAULTS.dustOpacity, CHIP_SIZE, 0],
     blockAlbedo: [...[0, 1, 2].map((k) => l.ramp.reduce((acc, c) => acc + srgbToLinear(c[k]!), 0) / l.ramp.length), 0],
     ...Object.fromEntries(l.ramp.map((c, i) => [`ramp${i}`, [...linearToOklab(lin(c) as V3), 0]])),
@@ -546,7 +559,7 @@ export class Renderer {
       viewProj, lightViewProj, invViewProj: inv,
       eye: f.eye, time: f.time ?? 0, sun, groundY: f.groundY,
       focus: [focus[0] - f.eye[0], focus[1] - f.eye[1], focus[2] - f.eye[2]], capacity: this.culler?.capacity ?? 0,
-      ...lookUniforms(this.look),
+      ...lookUniforms(this.look, f.metres ?? 1),
       // Bias, all on the receiver: normal offset of 2 texels, depth bias of 1 texel + 1 cm.
       shadowParams: [2 * fit.texel, (fit.texel + 0.01) / fit.depthRange, fit.texel, 1 / this.shadowSize],
       ...this.aoUniforms(f.eye),
@@ -559,7 +572,7 @@ export class Renderer {
 
   /** Eye height above the floor, km, for the atmosphere (at least 1 m). */
   private eyeKm(f: FrameParams): number {
-    return Math.max(f.eye[1] - f.groundY, 1) / 1000;
+    return Math.max((f.eye[1] - f.groundY) * (f.metres ?? 1), 1) / 1000;
   }
 
   private atmosphereUniforms(f: FrameParams, sun: V3, fit: ShadowFit): Record<string, number | number[]> {
@@ -567,7 +580,7 @@ export class Renderer {
     if (!a) return {};
     const h = this.eyeKm(f);
     return {
-      atmoSigma: medium(a, h).extinction.map((x) => x / 1000), atmoEyeKm: h, sunDisc: sunDiscRadiance(a, sun, h), sunCos: Math.cos(a.sunRadius),
+      atmoSigma: medium(a, h).extinction.map((x) => (x / 1000) * (f.metres ?? 1)), atmoEyeKm: h, sunDisc: sunDiscRadiance(a, sun, h), sunCos: Math.cos(a.sunRadius),
       shadowSoft: pcssParams(Math.tan(a.sunRadius) * (this.look.shadow?.softness ?? 1), fit),
     };
   }
@@ -588,7 +601,7 @@ export class Renderer {
     if (ao) this.ao.clear(enc);
     // Material level of detail: in the real look, boxes past the stone's fade-out go to boxFar, all of them with no stone.
     const stone = !ids && this.look.atmosphere ? this.look.stone : undefined;
-    if (stone && this.stoneLod) cf.lodDepth = stone.detail > 0 ? stoneLodDepth(cf.viewProj, this.viewport()[1], stone.fade) : -NO_LOD;
+    if (stone && this.stoneLod) cf.lodDepth = stone.detail > 0 ? stoneLodDepth(cf.viewProj, this.viewport()[1], stone.fade / (f.metres ?? 1)) : -NO_LOD;
     const cp = enc.beginComputePass({ label: 'cull', ...stamp('cull') });
     culler.encode(cp, cf);
     if (ao) {
@@ -599,17 +612,19 @@ export class Renderer {
     const real = !ids && this.look.atmosphere ? (this.real ??= this.makeReal()) : null;
     if (real) real.atmosphere.encode(cp, this.look.atmosphere!, sunOf(this.look), this.eyeKm(f), this.look.exposure, this.look.autoExposure ?? 0);
     const effects = this.look.effects !== false;
+    // Particles run as fast as the world's bodies (FrameParams.metres).
+    const metres = f.metres ?? 1, froude = 1 / Math.sqrt(metres);
     // The real look's impacts throw dust and chips instead (sparks.ts debris mode).
     const debris = !ids && !effects && real !== null && this.toggles.sparks && (this.look.debris?.dust ?? 1) + (this.look.debris?.chips ?? 1) > 0;
     if (!ids && effects) {
-      if (this.toggles.sparks) this.sparks.encode(cp, this.source, { dt, groundY: f.groundY });
+      if (this.toggles.sparks) this.sparks.encode(cp, this.source, { dt: dt * froude, groundY: f.groundY, dvScale: Math.sqrt(metres) });
       this.lights.encode(cp, this.source, culler.records, this.sparks, { eye: f.eye, time: f.time ?? 0, ball: this.look.ball.map(srgbToLinear) as V3 });
     } else if (!ids) {
       this.lights.off();
       if (debris) {
         const d = this.look.debris;
         this.sparks.debris = { ...this.sparks.debris, dustPerDv: DEFAULT_DEBRIS.dustPerDv * (d?.dust ?? 1), chipPerDv: DEFAULT_DEBRIS.chipPerDv * (d?.chips ?? 1), dustDv: d?.threshold ?? DEFAULT_DEBRIS.dustDv, dustFace: d?.face ?? DEFAULT_DEBRIS.dustFace };
-        this.sparks.encode(cp, this.source, { dt, groundY: f.groundY, mode: 'debris' });
+        this.sparks.encode(cp, this.source, { dt: dt * froude, groundY: f.groundY, mode: 'debris', dvScale: Math.sqrt(metres) });
       }
     }
     cp.end();

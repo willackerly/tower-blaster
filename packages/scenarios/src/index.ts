@@ -14,6 +14,8 @@ export interface ScenarioDef {
   /** What the scenario is for, shown in reports. */
   catches: string;
   defaults: Params;
+  /** Metres per world unit the viewer draws and simulates it at unless asked otherwise (default 1: unit cubes are 1 m). */
+  scale?: number;
   build(params: Params, seed: number): SceneDesc;
 }
 

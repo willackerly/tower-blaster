@@ -322,7 +322,8 @@ fn groundMacro(p: vec2f, pxM: f32) -> Macro {
   let other = smoothstep(at - edge, at + edge, pf);
   var h = 0.0;
   if (fr.groundShape.x > 0.0) { // uniform: no relief, no taps
-    h = -fr.groundShape.x * (1.0 - smoothstep(0.5, 1.0, pxM)) * ((macroSmooth(uv0, 4.0) - 0.5) + 0.5 * (macroSmooth(uv1, 6.0) - 0.5));
+    // Faded out as pixels pass a quarter to a half of the coarse relief's texel (size / 32: 2 m at scale 1).
+    h = -fr.groundShape.x * (1.0 - smoothstep(0.25, 0.5, pxM / (size / 32.0))) * ((macroSmooth(uv0, 4.0) - 0.5) + 0.5 * (macroSmooth(uv1, 6.0) - 0.5));
   }
   return Macro((1.0 + v * 2.0 * br * 0.5) * (1.0 + 0.1 * v * 2.0 * tint * vec3f(1.0, 0.0, -1.0)), smoothstep(0.3, 0.7, m0.b), other, h);
 }

@@ -14,7 +14,7 @@ import { clampPitch, frame, rayThrough, viewProj, eyeOf, orbitAt, poseOf, type C
 import { alphaAt, newArrivals, newClock, newPacer, pauseLatch, runFree, stepsDue, taskYield, trackSimSpeed, Window } from './loop.ts';
 import type { V3 } from './math.ts';
 import { escapeHtml } from './html.ts';
-import { engineSpec, parseViewerConfig, presetSearch, toSearch, type ViewerConfig, withOption } from './params.ts';
+import { engineSpec, froudeSpeed, parseViewerConfig, presetSearch, toSearch, type ViewerConfig, withOption, worldEngineSpec, worldScene } from './params.ts';
 import { projectileBody, projectileShape, pushRadiusLimit } from './projectile.ts';
 import { mountControls } from './controls.ts';
 import { createDevice } from '@tb/gpu';
@@ -44,7 +44,7 @@ const ENGINES: Array<{ label: string; spec: string }> = [
 // early at the default 10; 20 cubes are rigid from 13 (physics-ref/test/collapse.test.ts).
 const GPU_ITERATIONS = [10, 20, 40];
 
-const viewerEngine = (c: ViewerConfig): PhysicsEngine => makeEngine(engineSpec(c.engine, c.projectile));
+const viewerEngine = (c: ViewerConfig): PhysicsEngine => makeEngine(worldEngineSpec(engineSpec(c.engine, c.projectile), c.scale));
 
 interface ViewerHandle {
   status: 'loading' | 'running' | 'error';
@@ -87,7 +87,7 @@ function fail(e: unknown) {
 }
 
 function sceneFor(c: ViewerConfig): SceneDesc {
-  const s = buildScenario(c.scenario, c.params, c.seed);
+  const s = worldScene(buildScenario(c.scenario, c.params, c.seed), c.scale, c.substeps);
   return c.sleep === null ? s : { ...s, sleep: c.sleep };
 }
 
@@ -295,7 +295,7 @@ async function main() {
   handle.fire = (x = 0, y = 0) => {
     if (resetting) return;
     const { origin, dir } = rayThrough(orbit, aspect(), x, y);
-    const ev: InputEvent = { step: engine.stepIndex, kind: 'spawn', body: projectileBody(config.projectile, origin, dir) };
+    const ev: InputEvent = { step: engine.stepIndex, kind: 'spawn', body: projectileBody({ ...config.projectile, speed: config.projectile.speed * froudeSpeed(config.scale) }, origin, dir) };
     try {
       engine.push([ev]);
     } catch (e) {
@@ -390,7 +390,7 @@ async function main() {
   async function draw(now: number, alpha: number) {
     const want = pendingCapture;
     pendingCapture = null;
-    const stats = await renderer.render({ viewProj: viewProj(orbit, aspect()), eye: eyeOf(orbit), focus: orbit.target, time: now / 1000, groundY: scene.ground?.y ?? 0, alpha }, !!want, want?.keep);
+    const stats = await renderer.render({ viewProj: viewProj(orbit, aspect()), eye: eyeOf(orbit), focus: orbit.target, time: now / 1000, groundY: scene.ground?.y ?? 0, alpha, metres: config.scale }, !!want, want?.keep);
     if (want) want.resolve(stats);
     handle.frames++;
     if (handle.frames % 10 === 1) drawHud();
@@ -410,7 +410,7 @@ async function main() {
     const frameMs = frameTime(now);
     resize();
     if (resetAsked) { resetAsked = false; await reset(); }
-    const n = paused ? 0 : stepsDue(clock, frameMs, scene.dt, config.maxSteps);
+    const n = paused ? 0 : stepsDue(clock, frameMs, scene.dt, config.maxSteps * config.substeps);
     // A GPU engine's step() only submits, so its steps are timed to completion with finish().
     // refresh() waits for the GPU anyway to read a snapshot back; the wait adds one
     // queue-completion round trip before that readback's copy is submitted.
@@ -419,7 +419,7 @@ async function main() {
       const ts = performance.now();
       await engine.step();
       if (!engine.finish) stepMs.push(performance.now() - ts);
-      if (config.autofire && engine.stepIndex === config.autofire) handle.fire(0, 0);
+      if (config.autofire && engine.stepIndex === config.autofire * config.substeps) handle.fire(0, 0);
     }
     if (n > 0 && engine.finish) {
       await engine.finish();
@@ -455,7 +455,7 @@ async function main() {
     async step() {
       await engine.step();
       stepsSinceFrame++;
-      if (config.autofire && engine.stepIndex === config.autofire) handle.fire(0, 0);
+      if (config.autofire && engine.stepIndex === config.autofire * config.substeps) handle.fire(0, 0);
       handle.stepIndex = engine.stepIndex;
     },
     finish: async () => { await engine.finish?.(); },

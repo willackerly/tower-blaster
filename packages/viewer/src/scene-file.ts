@@ -21,11 +21,12 @@ export interface SceneFile {
   name: string;
   /** ISO time it was saved; informational. */
   savedAt: string;
-  /** sleep: null = the scenario's own setting. */
-  scene: { scenario: string; params: Record<string, number | boolean>; seed: number; sleep: boolean | null };
+  /** sleep: null = the scenario's own setting; scale: metres per cube (ViewerConfig.scale; absent in older files: the scenario's default). */
+  scene: { scenario: string; params: Record<string, number | boolean>; seed: number; sleep: boolean | null; scale: number };
   /** A @tb/bench engine spec, split up (avbd-gpu:iterations=20 is { name: 'avbd-gpu', options: { iterations: 20 } }). */
   engine: { name: string; options: Record<string, number | boolean | string> };
-  loop: { mode: 'free' | 'frame'; pipeline: boolean; maxSteps: number };
+  /** substeps: physics steps per 1/60 s (absent in older files: 1). */
+  loop: { mode: 'free' | 'frame'; pipeline: boolean; maxSteps: number; substeps: number };
   projectile: Projectile;
   /** Fire at the centre after this many steps; 0 = off. */
   autofire: number;
@@ -42,9 +43,9 @@ export function sceneFile(c: ViewerConfig, name: string, camera: CameraPose | nu
     version: SCENE_FILE_VERSION,
     name: name.trim(),
     savedAt: savedAt.toISOString(),
-    scene: { scenario: c.scenario, params: { ...SCENARIOS[c.scenario]!.defaults, ...c.params }, seed: c.seed, sleep: c.sleep },
+    scene: { scenario: c.scenario, params: { ...SCENARIOS[c.scenario]!.defaults, ...c.params }, seed: c.seed, sleep: c.sleep, scale: c.scale },
     engine: parseSpec(c.engine),
-    loop: { mode: c.loop, pipeline: c.pipeline, maxSteps: c.maxSteps },
+    loop: { mode: c.loop, pipeline: c.pipeline, maxSteps: c.maxSteps, substeps: c.substeps },
     projectile: { ...c.projectile },
     autofire: c.autofire,
     look: { preset: c.look, real: { ...REAL_DEFAULTS, ...c.real } },
@@ -83,7 +84,7 @@ export function parseSceneFile(text: string): { config: ViewerConfig; name: stri
 
   const q = new URLSearchParams();
   const scene = object(root.scene, 'scene');
-  only(scene, ['scenario', 'params', 'seed', 'sleep'], 'scene');
+  only(scene, ['scenario', 'params', 'seed', 'sleep', 'scale'], 'scene');
   const scenario = str(scene.scenario, 'scene.scenario').toUpperCase();
   const def = SCENARIOS[scenario];
   if (!def) throw new Error(`unknown scenario ${scenario}; known: ${Object.keys(SCENARIOS).join(', ')}`);
@@ -93,6 +94,7 @@ export function parseSceneFile(text: string): { config: ViewerConfig; name: stri
   for (const [k, v] of Object.entries(params)) q.set(`param.${k}`, String(typeof v === 'boolean' ? v : num(v, `scene.params.${k}`)));
   if (scene.seed !== undefined) q.set('seed', String(int(scene.seed, 'scene.seed')));
   if (scene.sleep !== undefined && scene.sleep !== null) q.set('sleep', bool(scene.sleep, 'scene.sleep') ? '1' : '0');
+  if (scene.scale !== undefined) q.set('scale', String(num(scene.scale, 'scene.scale')));
 
   const engine = object(root.engine, 'engine');
   only(engine, ['name', 'options'], 'engine');
@@ -109,10 +111,11 @@ export function parseSceneFile(text: string): { config: ViewerConfig; name: stri
 
   if (root.loop !== undefined) {
     const loop = object(root.loop, 'loop');
-    only(loop, ['mode', 'pipeline', 'maxSteps'], 'loop');
+    only(loop, ['mode', 'pipeline', 'maxSteps', 'substeps'], 'loop');
     if (loop.mode !== undefined) q.set('loop', str(loop.mode, 'loop.mode'));
     if (loop.pipeline !== undefined) q.set('pipeline', bool(loop.pipeline, 'loop.pipeline') ? '1' : '0');
     if (loop.maxSteps !== undefined) q.set('maxSteps', String(int(loop.maxSteps, 'loop.maxSteps')));
+    if (loop.substeps !== undefined) q.set('substeps', String(int(loop.substeps, 'loop.substeps')));
   }
 
   if (root.projectile !== undefined) {

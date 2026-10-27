@@ -35,6 +35,15 @@ describe('drawing', () => {
     expect(patches!.detail).toBeLessThan(0.9 * plain!.detail);
   }, 240_000); // ten renderers, each baking its materials: 40 s alone on SwiftShader, about 90 s in the full suite
 
+  it('world scale: a world of quarter- or half-metre units draws its ground, air and sky as the unit world seen from as far in metres', async (ctx) => {
+    if (!gpu) return ctx.skip();
+    const r = await call('metricGround', [1, 0.25, 0.5, 2]);
+    expect(r.error).toBeNull();
+    // Powers of two scale every length exactly in f32, so the frames match but for rounding: measured, no channel
+    // off by more than 1 (of 255), and 1.2 to 4.6% of channels off by 1. A missed conversion (the haze, a tile) moves the whole frame.
+    for (const c of r.cases) { expect(c.max).toBeLessThanOrEqual(1); expect(c.mean).toBeLessThan(0.1); }
+  }, 120_000);
+
   it('real look ground: no seam where the floor polygon ends and the sky pass shades the ground on', async (ctx) => {
     if (!gpu) return ctx.skip();
     const r = await call('groundSeam', [{ groundDetail: 0 }, {}, { groundMaterial: 'dirt', groundVariation: 1 }]);
