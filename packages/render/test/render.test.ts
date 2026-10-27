@@ -11,7 +11,7 @@ import { RapierHost } from '@tb/adapter-rapier';
 import { TieredEngine } from '@tb/lattice';
 import { isSoftwareAdapter, loadBundle, openWebGPU, type WebGPUSession } from '@tb/testkit';
 import { ADAPT_MAX, ADAPT_REF, adaptedExposure, HAZY_DAY, linearToSrgb, lookByName, parseRealOptions, REAL_DEFAULTS, REAL_KNOBS, realLook, writeRealOptions, CLEAR_DAY, MIE_H, mieExtinction, multiTable, normalize, OZONE, OZONE_WIDTH, RAYLEIGH, RAYLEIGH_H, skyRadiance, skyViewDir, skyViewUv, sunAtGround, sunDiscRadiance, transmittance, transmittanceHMu, transmittanceTable, transmittanceUv } from '../src/index.ts';
-import { agx, aoFootReference, debrisClass, debrisSpawnReference, chipCount, chipStepReference, CHIP_POOL, CHIPS_PER_EVENT, debrisRings, DEFAULT_DEBRIS, DEFAULT_SPARKS, dustCount, dustStepReference, DUST_PER_EVENT, DUST_POOL, bevelNormal, type V3, CANDY_NIGHT, CTL, HOT_FULL, MAX_EVENTS, SPAWN_BUDGET, FX_WORDS, packFx, tintWord, unpackFx, frustumPlanes, linearToOklab, listMatches, oklabToLinear, srgbToLinear, lookAt, lookOf, lookRange, MATERIAL, multiply, SEG, packBodies, changedRanges, drawnTier, packShapes, paletteOf, perspective, unpackLook } from '../src/index.ts';
+import { agx, aoFootReference, debrisClass, debrisSpawnReference, debrisWeight, newDebrisReference, chipCount, chipStepReference, CHIP_POOL, CHIPS_PER_EVENT, debrisRings, DEFAULT_DEBRIS, DEFAULT_SPARKS, dustCount, dustStepReference, DUST_PER_EVENT, DUST_POOL, bevelNormal, type V3, CANDY_NIGHT, CTL, HOT_FULL, MAX_EVENTS, SPAWN_BUDGET, FX_WORDS, packFx, tintWord, unpackFx, frustumPlanes, linearToOklab, listMatches, oklabToLinear, srgbToLinear, lookAt, lookOf, lookRange, MATERIAL, multiply, SEG, packBodies, changedRanges, drawnTier, packShapes, paletteOf, perspective, unpackLook } from '../src/index.ts';
 import type * as Drivers from './page.ts';
 
 describe('looks', () => {
@@ -442,14 +442,90 @@ describe('debris (real look impacts)', () => {
     expect(mean((fr) => dustCount(e(100), { ...D, dustPerDv: 0 }, fr))).toBe(0);
     expect(mean((fr) => chipCount(e(D.chipDv), D, fr))).toBe(0); // chips need a harder hit than dust
     // Light knocks make dust now and then, at the expected rate (4000 draws: 3 sigma is under 0.025).
-    expect(Math.abs(mean((fr) => dustCount(e(1.5), D, fr)) - 0.45)).toBeLessThan(0.025);
-    expect(Math.abs(mean((fr) => dustCount(e(4, 3), D, fr)) - 4.2)).toBeLessThan(0.03);
+    expect(Math.abs(mean((fr) => dustCount(e(D.dustDv + 0.3), D, fr)) - 0.45)).toBeLessThan(0.025);
+    expect(Math.abs(mean((fr) => dustCount(e(D.dustDv + 2.8, 3), D, fr)) - 4.2)).toBeLessThan(0.03);
     expect(Math.abs(mean((fr) => chipCount(e(5.5, 5), D, fr)) - 2.5)).toBeLessThan(0.03);
     expect(mean((fr) => dustCount(e(100), D, fr))).toBe(DUST_PER_EVENT);
     expect(mean((fr) => chipCount(e(100), D, fr))).toBe(CHIPS_PER_EVENT);
     // Size classes: dv in whole m/s, at most 15.
     expect([0.9, 1, 10.5, 14.9, 15, 200].map(debrisClass)).toEqual([0, 1, 10, 14, 15, 15]);
   });
+
+  it('face weight: a square face-on knock counts dustFace of its speed change; edges, corners and scrapes count it all', () => {
+    const turn = (deg: number, axis: V3): [number, number, number, number] => { const h = (deg * Math.PI) / 360; return [axis[0] * Math.sin(h), axis[1] * Math.sin(h), axis[2] * Math.sin(h), Math.cos(h)]; };
+    const F = 0.15, I: [number, number, number, number] = [0, 0, 0, 1];
+    expect(debrisWeight([0, 5, 0], I, false, F)).toEqual({ normal: [0, 1, 0], weight: F }); // landing flat
+    expect(debrisWeight([0, 0, -5], I, false, F).normal).toEqual([0, 0, -1]);
+    const edge = debrisWeight([0, 5, 0], turn(40, [0, 0, 1]), false, F); // landing on an edge
+    expect(edge.weight).toBe(1);
+    expect(edge.normal[1]).toBeCloseTo(Math.cos((40 * Math.PI) / 180), 6); // the face nearest the push: turned 40 degrees from up
+    expect(debrisWeight([0, 5, 0], [0.3, 0.2, 0.1, 0.927], false, F).weight).toBe(1); // a corner
+    const scrape = debrisWeight([3, 4, 0], I, false, F); // a scrape: friction 0.6 of the push
+    expect(scrape.normal).toEqual([0, 1, 0]);
+    expect(scrape.weight).toBeCloseTo(1, 6);
+    const mild = debrisWeight([2, 6, 0], I, false, F).weight; // leaning 0.32 off the normal: part way
+    expect(mild).toBeGreaterThan(0.3);
+    expect(mild).toBeLessThan(0.5);
+    expect(debrisWeight([0, 3, 0], I, true, F)).toEqual({ normal: [0, 1, 0], weight: 1 }); // spheres: all of it
+    expect(debrisWeight([0, 5, 0], I, false, 1).weight).toBe(1); // dustFace 1: no weighting
+  });
+
+  it('a puff leaves along the contact plane, thrown on along a scrape; one raised from the ground takes its colour bit', () => {
+    const D = DEFAULT_DEBRIS;
+    const puffs = (dir: V3, normal: V3, y = 0.05) => Array.from({ length: 400 }, (_, j) => newDebrisReference({ pos: [0.3, y, 0.7], strength: 6, dir, normal, packed: 0 }, j % 8, j >> 3, 1, D, 0));
+    // A flat landing: a ring along the ground, a little lift, no side preferred.
+    const land = puffs([0, 1, 0], [0, 1, 0]);
+    const mean = (ps: typeof land, k: number) => ps.reduce((a, p) => a + p.vel[k]! / Math.hypot(...p.vel), 0) / ps.length;
+    for (const p of land) {
+      const l = Math.hypot(...p.vel);
+      expect(p.vel[1] / l).toBeGreaterThan(0.09); // lift 0.1 to 0.4 of the in-plane unit
+      expect(p.vel[1] / l).toBeLessThan(0.38);
+    }
+    expect(Math.abs(mean(land, 0))).toBeLessThan(0.1);
+    expect(Math.abs(mean(land, 2))).toBeLessThan(0.1);
+    // A scrape: the body slid along -x (friction pushed it +x), so its puffs go on along -x.
+    const s = Math.SQRT1_2, scrape = puffs([s, s, 0], [0, 1, 0]);
+    expect(mean(scrape, 0)).toBeLessThan(-0.6);
+    // A knock from the side: puffs fan out in the upright plane across it, not along it.
+    const side = puffs([1, 0, 0], [1, 0, 0], 1);
+    expect(Math.abs(mean(side, 0))).toBeLessThan(0.05);
+    expect(side.every((p) => Math.abs(p.vel[0]) < 1e-6)).toBe(true);
+    // Bit 12: raised from the ground (a landing within 15 cm of it), not by a knock in the air or from the side.
+    expect(land.every((p) => (p.packed >>> 12) & 1)).toBe(true);
+    expect(puffs([0, 1, 0], [0, 1, 0], 1).some((p) => (p.packed >>> 12) & 1)).toBe(false);
+    expect(side.some((p) => (p.packed >>> 12) & 1)).toBe(false);
+  });
+
+  it('the detector weighs debris knocks on the GPU as its twin does; sparks mode keeps the raw speed change', async (ctx) => {
+    if (!gpu) return ctx.skip();
+    const D = DEFAULT_DEBRIS;
+    const turn = (deg: number, axis: V3): [number, number, number, number] => { const h = (deg * Math.PI) / 360; return [axis[0] * Math.sin(h), axis[1] * Math.sin(h), axis[2] * Math.sin(h), Math.cos(h)]; };
+    const cases: Array<{ dv: V3; rot?: [number, number, number, number]; sphere?: boolean }> = [
+      { dv: [0, 5, 0] }, // flat landing: 0.75 m/s weighted, under the threshold
+      { dv: [0, 20, 0] }, // a hard flat landing: 3
+      { dv: [0, 5, 0], rot: turn(40, [0, 0, 1]) }, // an edge
+      { dv: [0, 4, 0], rot: [0.3, 0.2, 0.1, 0.927] }, // a corner
+      { dv: [3, 4, 0] }, // a scrape
+      { dv: [2, 6, 0] }, // a mild lean: part way
+      { dv: [0, 3, 0], sphere: true },
+      { dv: [0, -14, 0] }, // pushed down onto its top face: 2.1
+      { dv: [0, -12, 0] }, // 1.8: under
+    ];
+    const r = await call('debrisDetect', cases);
+    expect(r.error).toBeNull();
+    const want = cases.map((c, i) => ({ i, ...debrisWeight(c.dv, c.rot ?? [0, 0, 0, 1], !!c.sphere, D.dustFace), raw: Math.hypot(...c.dv) })).filter((w) => w.raw * w.weight > D.dustDv);
+    expect(r.debris.map((e) => e.slot)).toEqual([1, 2, 3, 4, 5, 6, 7]);
+    expect(want.map((w) => w.i)).toEqual([1, 2, 3, 4, 5, 6, 7]);
+    r.debris.forEach((e, k) => {
+      const w = want[k]!;
+      expect(e.raw).toBeCloseTo(w.raw, 4);
+      expect(Math.abs(e.strength - w.raw * w.weight)).toBeLessThan(1e-4 * w.raw);
+      e.normal.forEach((x, c) => expect(Math.abs(x - w.normal[c]!)).toBeLessThan(1e-5));
+    });
+    // Sparks mode: every case over 2.5 m/s, at full strength, normal = dir.
+    expect(r.sparks.map((e) => e.slot)).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8]);
+    r.sparks.forEach((e) => { expect(e.strength).toBe(e.raw); expect(e.normal).toEqual(e.dir); });
+  }, 120_000);
 
   it('a budget smaller than the events samples all of them over frames, each frame different events; tokens limit a frame', () => {
     const short = { ...DEFAULT_DEBRIS, dustBudget: 10, chipBudget: 24 };
@@ -501,7 +577,7 @@ describe('debris (real look impacts)', () => {
     expect(r.aliveCtl).toBe(r.alive);
     expect(r.simErr).toBeLessThan(1e-4); // measured 9.5e-7
     expect(r.bounced).toBeGreaterThan(10); // chips that hit the floor
-    expect(r.floored).toBeGreaterThan(5); // puffs that reached their 10 cm floor
+    expect(r.floored).toBeGreaterThan(1); // puffs that reached their 10 cm floor (measured 3: the level-normal bursts fan half their puffs downward)
     expect(r.rose).toBeGreaterThan(r.wantDust / 2); // most puffs drifting up by now
     expect(r.dustMinY).toBeGreaterThanOrEqual(Math.fround(0.1));
     expect(r.chipMinY).toBeGreaterThanOrEqual(0);

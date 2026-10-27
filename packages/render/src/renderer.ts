@@ -13,7 +13,7 @@ import { aoFrame, aoGrid, AoVolume } from './ao.ts';
 import { FLOOR_VERTS, floorFan, floorPolygon } from './floor.ts';
 import { fitShadow, frustumCorners, pcssParams, type Arena, type ShadowFit, type ShadowFitState } from './shadowfit.ts';
 import { FX_WORDS, packFx, tintWord, toHalf, type FxOptions, FX_ANCHOR } from './fx.ts';
-import { CANDY_NIGHT, linearToOklab, srgbToLinear, type LookParams } from './look.ts';
+import { CANDY_NIGHT, linearToOklab, REAL_DEFAULTS, srgbToLinear, type LookParams } from './look.ts';
 import { invert, lookAt, multiply, normalize, type Mat4, type V3 } from './math.ts';
 import { HDR_FORMAT, noStamp, Post, type Stamp } from './post.ts';
 import { BOX_CUBE_VERTS, BOX_FAN_VERTS, Frame, SCENE_WGSL, sceneWgsl, SHADOW_SIZE, SPHERE_VERTS } from './shaders.ts';
@@ -151,7 +151,7 @@ export function lookUniforms(l: LookParams): Record<string, number | number[]> {
     stoneDetail: [l.stone?.detail ?? 0, l.stone?.fade ?? 1, 0, 0],
     ground: l.ground ? [GROUND_LAYER + GROUNDS.indexOf(l.ground.kind), l.ground.scale, l.ground.detail, l.ground.variation] : [GROUND_LAYER, 1, 0, 0],
     hills: l.hills ? [(l.hills.height * Math.PI) / 180, l.hills.distance * 1000, 0, 0] : [0, 1000, 0, 0],
-    debris: [l.debris?.size ?? 1.6, l.debris?.opacity ?? 0.6, CHIP_SIZE, 0],
+    debris: [l.debris?.size ?? REAL_DEFAULTS.dustSize, l.debris?.opacity ?? REAL_DEFAULTS.dustOpacity, CHIP_SIZE, 0],
     blockAlbedo: [...[0, 1, 2].map((k) => l.ramp.reduce((acc, c) => acc + srgbToLinear(c[k]!), 0) / l.ramp.length), 0],
     ...Object.fromEntries(l.ramp.map((c, i) => [`ramp${i}`, [...linearToOklab(lin(c) as V3), 0]])),
   };
@@ -607,7 +607,7 @@ export class Renderer {
       this.lights.off();
       if (debris) {
         const d = this.look.debris;
-        this.sparks.debris = { ...this.sparks.debris, dustPerDv: DEFAULT_DEBRIS.dustPerDv * (d?.dust ?? 1), chipPerDv: DEFAULT_DEBRIS.chipPerDv * (d?.chips ?? 1) };
+        this.sparks.debris = { ...this.sparks.debris, dustPerDv: DEFAULT_DEBRIS.dustPerDv * (d?.dust ?? 1), chipPerDv: DEFAULT_DEBRIS.chipPerDv * (d?.chips ?? 1), dustDv: d?.threshold ?? DEFAULT_DEBRIS.dustDv, dustFace: d?.face ?? DEFAULT_DEBRIS.dustFace };
         this.sparks.encode(cp, this.source, { dt, groundY: f.groundY, mode: 'debris' });
       }
     }

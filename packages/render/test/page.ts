@@ -1034,6 +1034,33 @@ export async function sparkDetect() {
   };
 }
 
+/**
+ * The debris detector's face weight and normal: boxes and a sphere, turned
+ * or not, each given one speed change; first in debris mode, then the same
+ * step in sparks mode (unweighted, normal = dir).
+ */
+export async function debrisDetect(cases: Array<{ dv: V3; rot?: [number, number, number, number]; sphere?: boolean }>) {
+  const { device } = await createDevice({ timestamps: false });
+  device.pushErrorScope('validation');
+  const cap = cases.length;
+  const base: RawBody[] = cases.map((c, i) => ({ pos: [i * 3, 2, 0] as V3, vel: [0, 0, 0] as V3, shape: c.sphere ? 2 : 0, ...(c.rot ? { rot: c.rot } : {}) }));
+  const next: RawBody[] = base.map((b, i) => ({ ...b, vel: cases[i]!.dv }));
+  const looks = new Uint32Array(cap);
+  const run = async (mode: 'sparks' | 'debris') => {
+    const src = rawSource(device, bodyWords(base, cap), bodyWords(base, cap), sparkShapes(), looks, cap, cap) as BodySource & { count: number };
+    const sp = new Sparks(device);
+    await sparkFrame(device, sp, src, 0, -100, mode); // first sight
+    device.queue.writeBuffer(src.bodies, 0, bodyWords(next, cap));
+    const r = await sparkFrame(device, sp, src, 0, -100, mode);
+    sp.destroy();
+    return r.events.sort((a, b) => (a.packed & 0xffffff) - (b.packed & 0xffffff)).map((e) => ({ slot: e.packed & 0xffffff, strength: e.strength, raw: e.raw!, normal: e.normal!, dir: e.dir }));
+  };
+  const debris = await run('debris'), sparks = await run('sparks');
+  const err = await device.popErrorScope();
+  device.destroy();
+  return { debris, sparks, error: err?.message ?? null };
+}
+
 /** Spawn and flight against the CPU twins: three injected bursts, then frames of flight with ground bounces. */
 export async function sparkSim(frames: number) {
   const { device } = await createDevice({ timestamps: false });
@@ -1108,14 +1135,18 @@ export async function debrisSim(frames: number) {
   sp.debris = { ...sp.debris, dustBudget: 96, chipBudget: 192 }; // room for several of each per burst: the copies' seeds and launch spread are compared too
   const [dustPool, chipPool] = sp.rings;
   const r = rng(5);
-  const bursts = Array.from({ length: 24 }, (_, i) => ({
-    pos: [(r() - 0.5) * 8, i % 3 === 0 ? 0.12 : 0.2 + 2 * r(), (r() - 0.5) * 8] as V3,
-    dir: [r() - 0.5, i % 3 === 0 ? -1 : r(), r() - 0.5] as V3, // every third just above the floor, aimed down: its puffs must stop at 10 cm
-    strength: 3 + 25 * r(),
-  }));
-  for (const b of bursts) sp.inject(b.pos, b.dir, b.strength);
+  const unit3 = (v: number[]) => { const l = Math.hypot(...v); return v.map((x) => x / l) as V3; };
+  const bursts = Array.from({ length: 24 }, (_, i) => {
+    // Every third just above the floor with a level normal (puffs fan out in an upright plane, half
+    // of them down: they must stop at 10 cm); every third a scrape (dir leans off its normal); the rest dir alone.
+    const pos = [(r() - 0.5) * 8, i % 3 === 0 ? 0.12 : 0.2 + 2 * r(), (r() - 0.5) * 8] as V3;
+    const dir = [r() - 0.5, i % 3 === 0 ? -0.2 : r(), r() - 0.5] as V3;
+    const normal = i % 3 === 0 ? unit3([dir[0], 0, dir[2]]) : i % 3 === 1 ? unit3([r() - 0.5, r(), r() - 0.5]) : undefined;
+    return { pos, dir, normal, strength: 3 + 25 * r() };
+  });
+  for (const b of bursts) sp.inject(b.pos, b.dir, b.strength, b.normal);
   const f32v = (v: number[]) => v.map((x) => Math.fround(x)) as V3;
-  const events: Impact[] = bursts.map((b) => { const l = Math.hypot(...b.dir); return { pos: f32v(b.pos), dir: f32v(b.dir.map((x) => x / l)), strength: Math.fround(b.strength), packed: 0xffffff | (1 << 24) }; });
+  const events: Impact[] = bursts.map((b) => ({ pos: f32v(b.pos), dir: f32v(unit3(b.dir)), strength: Math.fround(b.strength), packed: 0xffffff | (1 << 24), ...(b.normal ? { normal: f32v(b.normal) } : {}) }));
   const frame0 = sp.nextFrame;
   const s0 = await sparkFrame(device, sp, src, 0, 0, 'debris');
   const slots = unpackSparks(await readBuffer(device, sp.sparks));
