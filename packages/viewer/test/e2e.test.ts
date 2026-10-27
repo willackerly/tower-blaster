@@ -6,7 +6,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { chromium, type Browser } from 'playwright';
 import { createServer, type ViteDevServer } from 'vite';
 import { requireWebGPU, WEBGPU_ARGS } from '@tb/testkit';
-import { writeFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { deflateSync } from 'node:zlib';
 
 /** Minimal RGBA PNG encoder for debug screenshots of offscreen frames. */
@@ -203,6 +203,70 @@ describe('viewer', () => {
     expect(await again.page.locator('#look-form select[name=look]').inputValue()).toBe('real');
     expect(again.errors).toEqual([]);
     await again.page.close();
+  });
+
+  it('downloads the setup as named JSON, and loading a file rebuilds that setup in place, camera and all', async (ctx) => {
+    if (!browser) return ctx.skip();
+    const { page, errors } = await open('/?scenario=S1&param.F=3&param.H=6&param.gap=0.02&offscreen=1&engine=rapier&look=real&real.sunElevation=12');
+    const status = await page.evaluate(() => ({ s: window.__viewer.status, e: window.__viewer.error }));
+    if (status.s === 'error' && /WebGPU|adapter/.test(status.e ?? '') && !requireWebGPU()) return ctx.skip();
+    expect(status).toEqual({ s: 'running', e: undefined });
+    await page.waitForFunction(() => window.__viewer.stepIndex > 5, undefined, { timeout: 60_000 });
+    await page.evaluate(() => { (window as unknown as { marker: number }).marker = 1; });
+    const hasMarker = () => page.evaluate(() => (window as unknown as { marker?: number }).marker === 1);
+    const camera = () => page.evaluate(() => window.__viewer.camera());
+    await page.locator('#controls summary').click();
+    const form = page.locator('#file-form');
+
+    // Download: the name goes into the file and its file name; the camera is where it is now.
+    await form.locator('input[name=name]').fill('My tower: v1');
+    const [download] = await Promise.all([page.waitForEvent('download'), form.locator('button[type=submit]').click()]);
+    expect(download.suggestedFilename()).toBe('my-tower-v1.json');
+    const saved = JSON.parse(readFileSync((await download.path())!, 'utf8'));
+    expect(saved).toMatchObject({
+      format: 'tower-blaster/viewer-scene', version: 1, name: 'My tower: v1',
+      scene: { scenario: 'S1', params: { F: 3, H: 6, gap: 0.02 }, seed: 1, sleep: null },
+      engine: { name: 'rapier', options: {} },
+      look: { preset: 'real', real: { sunElevation: 12, visibility: 40 } },
+    });
+    expect(saved.camera).toEqual(await camera());
+    expect(await form.locator('.out').innerText()).toBe('Saved my-tower-v1.json');
+
+    // Load an edited copy: another scene, engine and camera, rebuilt without a page load.
+    const wall = { ...saved, name: 'Wall', scene: { scenario: 'S3', params: { W: 6, H: 4, running: false }, seed: 1, sleep: null }, engine: { name: 'tiered', options: {} }, camera: { target: [0, 2, 0], yaw: 1, pitch: 0.3, distance: 30 } };
+    const pick = (name: string, doc: unknown) => form.locator('input[type=file]').setInputFiles({ name, mimeType: 'application/json', buffer: Buffer.from(JSON.stringify(doc)) });
+    await pick('wall.json', wall);
+    await page.waitForFunction(() => window.__viewer.status !== 'running' || (window.__viewer.resets === 2 && window.__viewer.stepIndex > 5), undefined, { timeout: 60_000 });
+    expect(await page.evaluate(() => ({ s: window.__viewer.status, e: window.__viewer.error, bodies: window.__viewer.bodies }))).toEqual({ s: 'running', e: undefined, bodies: 24 });
+    expect(await camera()).toEqual(wall.camera);
+    expect(await hasMarker()).toBe(true);
+    expect(await page.locator('#hud').innerText()).toContain('Loaded Wall');
+    expect(await form.locator('input[name=name]').inputValue()).toBe('Wall');
+    expect(await page.locator('#scene-form input[name="param.W"]').inputValue()).toBe('6');
+    const url = new URL(page.url()).searchParams;
+    expect([url.get('scenario'), url.get('engine'), url.get('cam'), url.get('real.sunElevation'), url.get('real.visibility')]).toEqual(['S3', 'tiered', '0,2,0,1,0.3,30', '12', null]);
+    expect(await page.locator('#presets button.on').allInnerTexts()).toContain('Tiered (CPU)');
+    // R restarts at the loaded camera.
+    await page.keyboard.press('r');
+    await page.waitForFunction(() => window.__viewer.resets === 3, undefined, { timeout: 60_000 });
+    expect(await camera()).toEqual(wall.camera);
+
+    // A file the viewer can't read says why and changes nothing.
+    await pick('future.json', { ...wall, version: 2 });
+    await expect.poll(() => form.locator('.out').innerText()).toMatch(/^future\.json: scene file version 2 is newer/);
+    expect(await form.locator('.out').getAttribute('class')).toContain('warn');
+    expect(await page.evaluate(() => window.__viewer.resets)).toBe(3);
+
+    // Another loop needs a page load; the page then starts as the file says.
+    await pick('frame.json', { ...wall, loop: { mode: 'frame', pipeline: true, maxSteps: 2 } });
+    await page.waitForURL(/loop=frame/, { timeout: 30_000 });
+    await page.waitForFunction(() => window.__viewer?.status === 'running' && window.__viewer.stepIndex > 5, undefined, { timeout: 60_000 });
+    expect(await hasMarker()).toBe(false);
+    expect(await camera()).toEqual(wall.camera);
+    expect(await page.locator('#hud').innerText()).toContain('loop frame');
+    expect(new URL(page.url()).searchParams.get('offscreen')).toBe('1'); // the page's own setting is kept
+    expect(errors).toEqual([]);
+    await page.close();
   });
 
   // loop=free with an engine that steps synchronously and slower than real time (the f64

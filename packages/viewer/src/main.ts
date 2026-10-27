@@ -10,7 +10,7 @@ import { type BodyDesc, type InputEvent, type PhysicsEngine, type SceneDesc, typ
 import { boundingRadius } from '@tb/geom';
 import { DEFAULT_AVBD } from '@tb/physics-ref';
 import { buildScenario, SCENARIOS } from '@tb/scenarios';
-import { clampPitch, frame, rayThrough, viewProj, eyeOf, type Orbit } from './camera.ts';
+import { clampPitch, frame, rayThrough, viewProj, eyeOf, orbitAt, poseOf, type CameraPose, type Orbit } from './camera.ts';
 import { alphaAt, newArrivals, newClock, newPacer, pauseLatch, runFree, stepsDue, taskYield, trackSimSpeed, Window } from './loop.ts';
 import type { V3 } from './math.ts';
 import { escapeHtml } from './html.ts';
@@ -62,6 +62,8 @@ interface ViewerHandle {
   resets: number;
   /** Steps submitted before the step before reported done, so queued behind it (loop=free pipelining; see runFree). */
   overlapped: number;
+  /** Where the camera is now. */
+  camera(): CameraPose;
   /** Fire a ball through normalized device coords (0, 0 = centre). */
   fire(ndcX?: number, ndcY?: number): void;
   capture(keepPixels?: boolean): Promise<PixelStats | null>;
@@ -72,7 +74,7 @@ declare global { interface Window { __viewer: ViewerHandle } }
 const canvas = document.getElementById('c') as HTMLCanvasElement;
 const hud = document.getElementById('hud')!;
 const errorBox = document.getElementById('error')!;
-const handle: ViewerHandle = { status: 'loading', frames: 0, bodies: 0, awake: 0, stepIndex: 0, msPerStep: NaN, snapMs: NaN, resets: 0, overlapped: 0, fire: () => {}, capture: async () => null, inputs: [] };
+const handle: ViewerHandle = { status: 'loading', frames: 0, bodies: 0, awake: 0, stepIndex: 0, msPerStep: NaN, snapMs: NaN, resets: 0, overlapped: 0, camera: () => ({ target: [0, 0, 0], yaw: 0, pitch: 0, distance: 1 }), fire: () => {}, capture: async () => null, inputs: [] };
 window.__viewer = handle;
 
 function fail(e: unknown) {
@@ -212,7 +214,7 @@ async function main() {
     shapes = [...scene.bodies];
     source.reset(scene.bodies);
     const b = bounds(scene.bodies);
-    orbit = frame(b.min, b.max);
+    orbit = want.camera ? orbitAt(want.camera) : frame(b.min, b.max);
     const c: V3 = [(b.min[0] + b.max[0]) / 2, (b.min[1] + b.max[1]) / 2, (b.min[2] + b.max[2]) / 2];
     renderer.setShadowBounds(c, Math.hypot(b.max[0] - b.min[0], b.max[1] - b.min[1], b.max[2] - b.min[2]) / 2 + 2);
     handle.inputs = [];
@@ -251,7 +253,20 @@ async function main() {
       resetNote = 'Rebuilt the scene: the GPU engine sizes its grid for the largest body when it starts';
       resetAsked = true;
     },
+    camera: () => poseOf(orbit),
+    load(next, name) {
+      const want = { ...next, offscreen: config.offscreen };
+      // The loop (free or frame) is chosen when the page starts, so another one needs a page load.
+      if (want.loop !== config.loop) {
+        location.search = toSearch(want);
+        return;
+      }
+      nextConfig = want;
+      resetNote = `Loaded ${name}`;
+      resetAsked = true;
+    },
   });
+  handle.camera = () => poseOf(orbit);
 
   function shapesFor(count: number): BodyDesc[] {
     while (shapes.length < count) shapes.push(events[shapes.length - scene.bodies.length]!.body);

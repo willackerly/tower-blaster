@@ -34,3 +34,18 @@ export function frame(min: V3, max: V3, fovY = (50 * Math.PI) / 180): Orbit {
 export function clampPitch(p: number): number {
   return Math.min(1.45, Math.max(0.02, p));
 }
+
+/** Where the camera starts (URL key cam, scene files): an Orbit without its field of view. */
+export interface CameraPose { target: V3; yaw: number; pitch: number; distance: number }
+
+const round3 = (x: number) => Math.round(x * 1000) / 1000;
+
+/** The pose of an orbit, to millimetres and milliradians, so URLs and files stay short. */
+export function poseOf(o: Orbit): CameraPose {
+  return { target: o.target.map(round3) as V3, yaw: round3(o.yaw), pitch: round3(o.pitch), distance: round3(o.distance) };
+}
+
+/** An orbit at a pose, with frame()'s field of view; the pitch is clamped as dragging clamps it. */
+export function orbitAt(p: CameraPose, fovY = (50 * Math.PI) / 180): Orbit {
+  return { target: [...p.target], yaw: p.yaw, pitch: clampPitch(p.pitch), distance: p.distance, fovY };
+}

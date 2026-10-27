@@ -7,7 +7,8 @@ on:
 jobs:
   check:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # The tests take ~16 min on the runner; the rest is headroom for a slow apt mirror on a cache miss.
+    timeout-minutes: 45
     env:
       # GPU-correctness tests must run (on SwiftShader) rather than skip.
       REQUIRE_WEBGPU: '1'
@@ -21,9 +22,24 @@ jobs:
           node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      # The runner's apt mirror sometimes crawls (40 kB/s: 16 min for the two installs below,
+      # 30 s normally), so their packages are cached and fetched only on a miss. The key follows
+      # the lockfile, which pins Playwright and so the browser's dependency list.
+      - name: Cache apt packages
+        uses: actions/cache@v4
+        with:
+          path: ~/apt-cache
+          key: apt-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: apt-${{ runner.os }}-
+      - name: Keep apt packages in the cache directory
+        run: |
+          mkdir -p ~/apt-cache/partial
+          printf 'Dir::Cache::Archives "%s";\nBinary::apt::APT::Keep-Downloaded-Packages "true";\n' ~/apt-cache | sudo tee /etc/apt/apt.conf.d/90apt-cache
       - name: Vulkan loader for SwiftShader WebGPU
         run: sudo apt-get update && sudo apt-get install -y libvulkan1 mesa-vulkan-drivers
       - run: pnpm exec playwright install --with-deps chromium
+      - name: Make the apt cache readable for saving
+        run: sudo rm -rf ~/apt-cache/lock ~/apt-cache/partial && sudo chown -R "$USER" ~/apt-cache && du -sh ~/apt-cache
       - run: pnpm typecheck
       - run: pnpm test
       - name: Benchmark harness self-check (A/A and injected slowdown)
