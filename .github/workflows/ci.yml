@@ -4,11 +4,43 @@ on:
     branches: [main]
   pull_request:
 
+# A new push to a PR cancels that PR's run still in progress; main's runs all finish.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
-  check:
+  static:
+    name: typecheck and bench self-check
     runs-on: ubuntu-latest
-    # The tests take ~16 min on the runner; the rest is headroom for a slow apt mirror on a cache miss.
-    timeout-minutes: 45
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm typecheck
+      - name: Benchmark harness self-check (A/A and injected slowdown)
+        run: pnpm bench selfcheck
+
+  # The suite is CPU-bound on SwiftShader (a 4-core runner stays saturated), so it
+  # runs as shards on separate runners. planShards (vitest.config.ts) balances them
+  # on vitest.durations.json; refresh it with `pnpm test:durations` when files are
+  # added or get slower.
+  test:
+    name: test ${{ matrix.shard }}/4
+    runs-on: ubuntu-latest
+    # A shard takes ~3-4 min; the rest is headroom for a slow apt mirror on a cache miss.
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
     env:
       # GPU-correctness tests must run (on SwiftShader) rather than skip.
       REQUIRE_WEBGPU: '1'
@@ -40,7 +72,13 @@ jobs:
       - run: pnpm exec playwright install --with-deps chromium
       - name: Make the apt cache readable for saving
         run: sudo rm -rf ~/apt-cache/lock ~/apt-cache/partial && sudo chown -R "$USER" ~/apt-cache && du -sh ~/apt-cache
-      - run: pnpm typecheck
-      - run: pnpm test
-      - name: Benchmark harness self-check (A/A and injected slowdown)
-        run: pnpm bench selfcheck
+      - run: pnpm test --shard=${{ matrix.shard }}/4
+
+  # The one status to require: green only when every job above is.
+  check:
+    needs: [static, test]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - run: test "${{ needs.static.result }}" = success && test "${{ needs.test.result }}" = success
