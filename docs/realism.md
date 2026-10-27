@@ -103,10 +103,63 @@ rules the code follows; the doc has the reasoning.
   (checked for limestone, granite, sandstone, concrete and both grounds),
   so they carry none of its registers. Its own cost on the M5 Max is not
   measured yet.
-- Units. Rings and fibres are metres times `stoneScale`. In S15 (unit: one
-  plank width, 23.4 mm) they are right once the world-scale change divides
-  the stone tile by metres per unit; until then, `stoneScale` 42.7 gives
-  the true size but is past the knob's range.
+- Units. Rings and fibres are metres times `stoneScale`, in world units
+  through `FrameParams.metres` since the world-scale change (#60). S15
+  (unit: one plank width, 23.4 mm) gets its true size once it runs at
+  `scale` 0.0234, which waits on its stability at that scale.
+
+## The hall (Kapla step K3.2a)
+
+- `real.env=hall` (Scene panel: setting) puts the scene inside an
+  exhibition hall after Olympia's Grand Hall, where the 100k-plank record
+  tower stood: a 53 m glazed barrel vault on 13 lattice ribs, iron
+  columns, a gallery all round and glazed end screens (hall.ts, `OLYMPIA`,
+  traced analytically per pixel). Knobs: `real.hallSize` (1 = Olympia),
+  `real.hallGlass` (milkiness of the glazing, 0 clear to 1 opal; 0.5) and
+  `real.hallIron` (grey of the painted ironwork; 0.55). Its floor centre is
+  the world's origin on the floor, in metres through `FrameParams.metres`,
+  so it is the same hall in cube and plank units (a test renders it at
+  metres 1, 0.5 and 0.0234: no pixel inside a surface differs).
+- Drawing. The hall is a mesh (`hallMesh`, about 25k triangles, nearly
+  all the ribs'), rasterized like any geometry: curved surfaces as facets
+  with their vertices on the true surface (arcs every 0.025 rad: within
+  2 mm), checked against the analytic trace on the CPU (the same surface
+  at the same distance on 98%+ of rays from inside; the rest at edges).
+  Opaque surfaces are drawn after the bodies, so pixels they hide are never
+  shaded, and before the floor; the ribs' web lattice and the balustrade
+  are flat faces whose bars the fragment shader cuts as antialiased
+  coverage, through alpha to coverage (4x MSAA), so they do not alias at a
+  distance. The glazing is drawn after the sky, premultiplied over it:
+  clear glass transmits 80%, milky glass glows with the sky and sun on its
+  outer face instead; glazing bars (every 0.6 m down the slope), purlins
+  (every 2.6 m of arc) and the end screens' mullions and transoms are
+  antialiased lines. Tested pixel by pixel against the CPU trace: rays at
+  the floor draw what they drew outdoors, bit for bit; columns hide bodies
+  behind them; bodies hide the hall behind them. The hall is drawn only
+  while the eye is inside it (`hallUniforms`); from outside, the frame is
+  the outdoor one.
+- Alternative measured and dropped: the first version traced the hall per
+  pixel in a full-screen pass writing `frag_depth` (PR #66's first
+  commit). Exact, but `frag_depth` turns off early depth rejection, so
+  every pixel traced: on the M5 Max at 2560x1440 it cost +1.00 ms (near
+  10k) and +1.13 ms (near 100k), over the 3 and 4 ms caps
+  (render-m5-58c79ca-hall.md). The analytic trace stays as the mesh's
+  reference (`hallTraceCpu`, and its WGSL twin), now walking the bay lines
+  front to back (3.5 of 13 per ray).
+- Cost. `pnpm bench:render --variants full,real,real-hall --counts
+  10000,100000` measures it (real-hall vs real). M5 Max, 2560x1440, GPU
+  p50 (render-m5-d884332-hall.md): near 10k 2.358 ms (real 2.361, n.s.),
+  near 100k 3.751 (3.737, +0.3%), far 10k 0.977 (0.996), far 100k 3.007
+  (2.980, +1.0%): within noise, under both caps. The hall covers 27 to 36%
+  of those views (CPU trace from the bench cameras, hall scaled 1.25 to
+  7.25x), so it is drawn: its pixels cost about what the sky's did, which
+  the hall now hides (the sky pass draws only where nothing else did), and
+  its 25k triangles next to nothing.
+- Not yet. Lighting is ambient only: the sky through the vault's glazed
+  share above, the floor's radiance below; the roof casts no shadow, so
+  bodies and floor are still sunlit as outdoors (K3.2b: the roof into the
+  shadow map, interior ambient). The floor is still the outdoor ground
+  (K3.2c: polished concrete).
 
 ## What step 4 built
 

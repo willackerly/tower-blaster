@@ -1,4 +1,4 @@
-// pnpm bench:render [--channel chrome] [--headed] [--quick] [--batches N]
+// pnpm bench:render [--channel chrome] [--headed] [--quick] [--batches N] [--variants full,real,real-hall] [--counts 10000]
 // Frame cost of the renderer on frozen 10k and 100k worlds (bench.ts) in a
 // real browser; writes results/render-<time>.{json,md}. Use real Chrome on
 // the target machine for numbers worth keeping; software adapters are
@@ -8,13 +8,25 @@ import { execSync } from 'node:child_process';
 import { cpus, hostname, platform } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { exitNow, loadBundle, openWebGPU } from '@tb/testkit';
-import { QUICK_RENDER_BENCH, renderBenchMarkdown, type RenderBenchOptions, type RenderBenchResult } from './bench.ts';
+import { DEFAULT_RENDER_BENCH, QUICK_RENDER_BENCH, renderBenchMarkdown, type RenderBenchOptions, type RenderBenchResult, type VariantName } from './bench.ts';
 
 const argv = process.argv.slice(2);
 const flag = (k: string) => argv.includes(`--${k}`);
 const value = (k: string) => { const i = argv.indexOf(`--${k}`); return i >= 0 ? argv[i + 1] : undefined; };
 
 const opts: Partial<RenderBenchOptions> = { ...(flag('quick') ? QUICK_RENDER_BENCH : {}), ...(value('batches') ? { batches: Number(value('batches')) } : {}) };
+// A subset of the variants (the marginal-cost table needs 'full' and each one's base, e.g. real for real-hall) and of the body counts.
+const variants = value('variants')?.split(',');
+if (variants) {
+  const bad = variants.filter((v) => !DEFAULT_RENDER_BENCH.variants.includes(v as VariantName));
+  if (bad.length) throw new Error(`unknown --variants ${bad.join(', ')}; known: ${DEFAULT_RENDER_BENCH.variants.join(', ')}`);
+  opts.variants = variants as VariantName[];
+}
+const counts = value('counts')?.split(',').map(Number);
+if (counts) {
+  if (counts.some((n) => !Number.isInteger(n) || n < 1)) throw new Error(`--counts takes whole numbers: ${value('counts')}`);
+  opts.counts = counts;
+}
 
 // Developer features lift Chrome's 100 µs timestamp quantization.
 const channel = value('channel');

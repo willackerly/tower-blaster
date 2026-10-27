@@ -5,7 +5,7 @@
 // and a URL accept exactly the same values; unknown keys are refused, so a typo in a
 // hand-edited file is an error rather than a silently ignored setting.
 import { engineNames, parseSpec } from '@tb/bench';
-import { GROUNDS, REAL_DEFAULTS, REAL_KNOBS, type RealKnob, type RealOptions, STONES } from '@tb/render';
+import { ENVS, GROUNDS, REAL_DEFAULTS, REAL_KNOBS, type RealKnob, type RealOptions, STONES } from '@tb/render';
 import { SCENARIOS } from '@tb/scenarios';
 import { type CameraPose, DEFAULT_FRAMING, type Framing } from './camera.ts';
 import { parseViewerConfig, type ViewerConfig, writeCamera, writeFraming } from './params.ts';
@@ -141,6 +141,7 @@ export function parseSceneFile(text: string): { config: ViewerConfig; name: stri
     }
     if (real.stone !== undefined && real.stone !== REAL_DEFAULTS.stone) q.set('real.stone', oneOf(real.stone, STONES, 'look.real.stone'));
     if (real.groundMaterial !== undefined && real.groundMaterial !== REAL_DEFAULTS.groundMaterial) q.set('real.groundMaterial', oneOf(real.groundMaterial, GROUNDS, 'look.real.groundMaterial'));
+    if (real.env !== undefined && real.env !== REAL_DEFAULTS.env) q.set('real.env', oneOf(real.env, ENVS, 'look.real.env'));
     if (real.groundAlbedo !== undefined) {
       const a = vec3(real.groundAlbedo, 'look.real.groundAlbedo');
       if (a.some((x, i) => x !== REAL_DEFAULTS.groundAlbedo[i])) q.set('real.ground', a.join(','));

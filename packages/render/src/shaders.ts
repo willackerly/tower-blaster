@@ -11,6 +11,7 @@ import { AO_FOOT_WGSL, AO_SAMPLE_WGSL, AO_SEAM_WGSL } from './ao.ts';
 import { ATMO_COMMON_WGSL } from './atmosphere.ts';
 import { GROUND_LAYER, GROUND_TILE, GROUNDS, MACRO_LAYER, MACRO_TILE, MATERIAL_MIPS, MATERIAL_SIZE, MATERIAL_TILE, WOOD, WOOD_RING_M, WOOD_STRETCH, WOOD_WGSL } from './materials.ts';
 import { PCG_WGSL } from './noise.ts';
+import { BALUSTRADE, HALL_MAT, HALL_PATTERN } from './hall.ts';
 
 export const SHADOW_SIZE = 2048;
 export const SPHERE_SEG = 24;
@@ -57,6 +58,8 @@ export const Frame = defineStruct('Frame', [
   ['hills', 'vec4f', 'real look: horizon hills\' greatest height (radians, 0: none) and distance (m)'],
   ['debris', 'vec4f', 'real look: dust puff size (m, fully grown), puff opacity, chip size (m), unused'],
   ['shadowSoft', 'vec4f', 'real look: tan of the penumbra half angle (0: 3x3 taps), blocker search radius (texels), light depth range (m), steepest receiver plane (depth per uv)'],
+  ['hallLook', 'vec4f', 'real look, hall: 1 while the eye is inside it (else it is not drawn), metres per world unit, glass milkiness, iron grey'],
+  ['hallShade', 'vec4f', 'real look, hall: glazed share of the vault, web lattice bar width (web panels), balustrade height (m), unused'],
 ], 'Per-frame uniforms of the scene pass.');
 
 // The real look's sky (atmosphere.ts): bind group 1, read by the scene
@@ -652,6 +655,113 @@ const REAL_FS_BOX = /* wgsl */ `fragPx = v.clip.xy;
   }
   `;
 
+// The exhibition hall (hall.ts, look.hall), around the scene while the eye
+// is inside it: its mesh (hallMesh, hall metres, its floor centre at the
+// world's origin on the floor), rasterized like any geometry, so hidden
+// pixels are rejected before shading. Opaque surfaces are drawn after the
+// bodies; the ribs' web lattice and the balustrade are cut in the fragment
+// shader as antialiased coverage, through alpha to coverage. Glazing is
+// drawn after the sky, premultiplied over it: glass transmits
+// HALL_GLASS_T, milky glass (hallLook.z) glows with the sky and sun on its
+// outer face instead; glazing bars and purlins are antialiased lines.
+// Lit by ambient light only until the hall's own lighting (Kapla step
+// K3.2b): the sky through the vault's glazed share above, the floor's
+// radiance below.
+const REAL_HALL_WGSL = /* wgsl */ `
+struct HallOut {
+  @builtin(position) clip: vec4f,
+  @location(0) rel: vec3f,
+  @location(1) n: vec3f,
+  @location(2) uv: vec2f,
+  @location(3) @interpolate(flat) mp: vec2f, // HALL_MAT, HALL_PATTERN
+}
+
+const HALL_PANEL = vec3f(0.5, 0.47, 0.42);
+const HALL_WALL = vec3f(0.42, 0.36, 0.3);
+const HALL_RAIL = vec3f(0.2, 0.045, 0.035);
+const HALL_IRON_TINT = vec3f(0.93, 0.97, 1.0);
+const HALL_GLASS_T = 0.8;
+
+@vertex fn vsHall(@location(0) pos: vec3f, @location(1) n: vec3f, @location(2) uv: vec2f, @location(3) mp: vec2f) -> HallOut {
+  var o: HallOut;
+  o.rel = pos / fr.hallLook.y + vec3f(-fr.eye.x, fr.groundY - fr.eye.y, -fr.eye.z);
+  o.clip = fr.viewProj * vec4f(o.rel, 1.0);
+  o.n = n;
+  o.uv = uv;
+  o.mp = mp;
+  return o;
+}
+
+// Coverage of bands hw wide either side of the integers at x, over a pixel
+// fw wide (in x): antialiased, and their mean cover 2 hw once a period is
+// under a pixel.
+fn hallBand(x: f32, hw: f32, fw: f32) -> f32 {
+  let cover = clamp((hw - abs(fract(x + 0.5) - 0.5)) / max(fw, 1e-6) + 0.5, 0.0, 1.0);
+  return mix(cover, 2.0 * hw, smoothstep(0.25, 1.0, fw));
+}
+
+// Lines w wide every s at x (all m) over a pixel fw wide.
+fn hallLines(x: f32, s: f32, w: f32, fw: f32) -> f32 {
+  return hallBand(x / s, 0.5 * w / s, fw / s);
+}
+
+// The surface's normal turned to the eye, and the light inside the hall from that side.
+fn hallAmbient(n: vec3f) -> vec3f {
+  return mix(atmoAmbient[1].rgb, atmoAmbient[0].rgb * HALL_GLASS_T * fr.hallShade.x, n.y * 0.5 + 0.5);
+}
+
+@fragment fn fsHall(v: HallOut) -> @location(0) vec4f {
+  let n0 = normalize(v.n);
+  let n = select(n0, -n0, dot(n0, v.rel) > 0.0);
+  let mat = u32(v.mp.x + 0.5);
+  let pat = u32(v.mp.y + 0.5);
+  // The lattices' two families of diagonals, in their periods (web: panels; balustrade: its pitch), and the bars' half-width.
+  let bal = pat == ${HALL_PATTERN.balustrade}u;
+  let q = select(v.uv, v.uv / ${BALUSTRADE.pitch}, bal);
+  let x1 = q.x - q.y;
+  let x2 = q.x + q.y;
+  let f1 = fwidth(x1);
+  let f2 = fwidth(x2);
+  let fx = fwidth(v.uv.x);
+  let fy = fwidth(v.uv.y);
+  let hw = select(fr.hallShade.y, ${BALUSTRADE.bar / BALUSTRADE.pitch}, bal) * 0.7071068;
+  var cover = 1.0;
+  if (pat != ${HALL_PATTERN.solid}u) {
+    cover = 1.0 - (1.0 - hallBand(x1, hw, f1)) * (1.0 - hallBand(x2, hw, f2));
+    if (bal) {
+      let rails = max(clamp((${BALUSTRADE.bottom} - v.uv.y) / max(fy, 1e-6) + 0.5, 0.0, 1.0), clamp((v.uv.y - (fr.hallShade.z - ${BALUSTRADE.top})) / max(fy, 1e-6) + 0.5, 0.0, 1.0));
+      cover = max(cover, rails);
+    }
+  }
+  var base = HALL_WALL;
+  if (mat == ${HALL_MAT.iron}u) { base = fr.hallLook.w * HALL_IRON_TINT; }
+  if (mat == ${HALL_MAT.rail}u) { base = HALL_RAIL; }
+  // Roof panels: darker along the purlins (every 2.6 m of arc).
+  if (mat == ${HALL_MAT.panel}u) { base = HALL_PANEL * (1.0 - 0.3 * hallLines(v.uv.x, 2.6, 0.15, fx)); }
+  return vec4f(fog(base * hallAmbient(n), v.rel), cover);
+}
+
+@fragment fn fsHallGlass(v: HallOut) -> @location(0) vec4f {
+  let n0 = normalize(v.n);
+  let n = select(n0, -n0, dot(n0, v.rel) > 0.0);
+  let fx = fwidth(v.uv.x);
+  let fy = fwidth(v.uv.y);
+  // End screens (uv: x, y): mullions and transoms; the vault (uv: arc length, z): glazing bars down the slope every 0.6 m, purlins every 2.6 m of arc.
+  var bars: f32;
+  if (u32(v.mp.x + 0.5) == ${HALL_MAT.screen}u) {
+    bars = 1.0 - (1.0 - hallLines(v.uv.x, 1.3, 0.08, fx)) * (1.0 - hallLines(v.uv.y, 1.6, 0.08, fy));
+  } else {
+    bars = 1.0 - (1.0 - hallLines(v.uv.y, 0.6, 0.05, fy)) * (1.0 - hallLines(v.uv.x, 2.6, 0.15, fx));
+  }
+  let milk = fr.hallLook.z;
+  let outer = -n; // n faces the eye, inside
+  let glow = HALL_GLASS_T * (atmoAmbient[0].rgb * (0.5 + 0.5 * outer.y) + fr.sunColor * max(dot(outer, fr.sun), 0.0));
+  let a = bars + (1.0 - bars) * (1.0 - HALL_GLASS_T * (1.0 - milk));
+  let rgb = bars * fr.hallLook.w * HALL_IRON_TINT * hallAmbient(n) + (1.0 - bars) * milk * glow;
+  return vec4f(fog(rgb / a, v.rel) * a, a);
+}
+`;
+
 /**
  * The scene shader. real: the variant for looks with an atmosphere (sky,
  * haze and ambient from atmosphere.ts, bind group 1); the other looks use
@@ -1166,6 +1276,7 @@ struct SOut { @builtin(position) clip: vec4f, @location(0) ndc: vec2f }
   return vec4f(mix(c, hill.rgb, hill.a), 1.0);` : 'return vec4f(select(skyColor(dir), fr.skyHorizon, dir.y < 0.0), 1.0);'}
 }
 
+${real ? REAL_HALL_WGSL : ''}
 // ---------------------------------------------------------------- sparks
 
 // A streak from the spark back along its velocity (1/45 s of travel), drawn
