@@ -270,6 +270,17 @@ export const CentreRecord = defineStruct(
   "AvbdParams.records = 2: one manifold's 1-4 points, normal rows only, and one friction state at their centre (the reference's FrictionRecord).",
 );
 
+export const CentreDual = defineStruct(
+  'CentreDual',
+  [
+    ['kN', 'vec4f', 'normal penalty of points 0..3'],
+    ['lambdaN', 'vec4f', 'normal force'],
+    ['lamT', 'vec3f', 'friction force along t1, t2 and the twist row'],
+    ['kT', 'f32', 'penalty of the three friction rows'],
+  ],
+  "A CentreRecord's dual state while the fused dual (SolverDispatch.dualFusion) updates it in the sweep (records 1 keeps a ContactDual per point).",
+);
+
 export const SolverParams = defineStruct(
   'SolverParams',
   [
@@ -316,4 +327,4 @@ export const ColorParams = defineStruct(
   'Per-dispatch uniforms (bound with a dynamic offset).',
 );
 
-export const ALL_STRUCTS = [SimParams, Body, RenderRecord, Shape, Manifold, ImpactEvent, Spark, FxState, BodyProps, SolverBody, SolverContact, ContactDual, SolverRecord, CentreRecord, SolverParams, ColorParams];
+export const ALL_STRUCTS = [SimParams, Body, RenderRecord, Shape, Manifold, ImpactEvent, Spark, FxState, BodyProps, SolverBody, SolverContact, ContactDual, SolverRecord, CentreRecord, CentreDual, SolverParams, ColorParams];

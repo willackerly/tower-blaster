@@ -339,8 +339,10 @@ export interface AvbdParams {
    * same bits, without the pass. The last main iteration's update still runs
    * as a pass after its sweep, as without fusion, so the stabilization sweep,
    * the restitution pass and the next step's collide() see what they always
-   * did. The GPU engine does the same (SolverDispatch.dualFusion), without the
-   * I - 1 dual dispatches between sweeps.
+   * did. With records = 2 the same holds per record: its first visit runs the
+   * record's update (its points' normal rows, then its friction). The GPU
+   * engine does the same (SolverDispatch.dualFusion), without the I - 1 dual
+   * dispatches between sweeps.
    */
   dualFusion?: boolean;
   /**
@@ -427,11 +429,10 @@ export function checkDualFusion(p: Partial<AvbdParams>): void {
   if (f !== undefined && typeof f !== 'boolean') throw new Error(`AvbdParams.dualFusion must be a boolean, got ${f}`);
 }
 
-/** Throws on records out of range (RECORD_MODES), or on records with dualFusion, which does not fuse a record's dual update yet. */
+/** Throws on records out of range (RECORD_MODES). */
 export function checkRecords(p: Partial<AvbdParams>): void {
   const r = p.records;
   if (r !== undefined && !(RECORD_MODES as readonly unknown[]).includes(r)) throw new Error(`AvbdParams.records must be one of ${RECORD_MODES.join(', ')}, got ${r}`);
-  if (r && p.dualFusion) throw new Error(`AvbdParams.records ${r} does not fuse the dual (dualFusion) yet`);
 }
 
 /** Throws on colorMode or colorPriority out of range (COLOR_MODES, COLOR_PRIORITIES). */
@@ -1230,15 +1231,15 @@ export class AvbdWorld {
         c.lambda[1] = f1 * s; c.lambda[2] = f2 * s;
       }
     };
-    // dualFusion: the body whose visit runs each contact's deferred dual update (the earlier in
-    // colour order; b for a ground contact), and whether one is pending, with its alpha.
+    // dualFusion: the body whose visit runs each contact's deferred dual update (records = 2: each
+    // record's; the earlier in colour order, b for a ground contact), and whether one is pending,
+    // with its alpha.
     let firstVisitor: Int32Array | null = null, pendingDual = false, dualAlpha = 1;
     if (p.dualFusion) {
       const visit = new Int32Array(n);
       let o = 0;
       for (const group of byColor) for (const i of group) visit[i] = o++;
-      firstVisitor = new Int32Array(contacts.length);
-      contacts.forEach((c, ci) => { firstVisitor![ci] = c.a === GROUND || visit[c.b]! < visit[c.a]! ? c.b : c.a; });
+      firstVisitor = Int32Array.from<{ a: number; b: number }>(records2 ? records : contacts, (c) => (c.a === GROUND || visit[c.b]! < visit[c.a]! ? c.b : c.a));
     }
 
     const lhs = new Float64Array(36), rhs = new Float64Array(6), step = new Float64Array(6);
@@ -1278,6 +1279,27 @@ export class AvbdWorld {
       FT[0] = z0 * s; FT[1] = z1 * s; FT[2] = z2 * s;
       return s;
     };
+    // A record's dual update: the points' normal rows, then its friction against the bound of the points' forces
+    // before this update (as a point's), its penalty ramping by nc beta up to nc penaltyMax.
+    const recordDual = (q: FrictionRecord, alpha: number) => {
+      const bound = recordBound(q);
+      for (const c of q.points) {
+        const c0 = evalC0(c, alpha);
+        c.lambda[0] = Math.min(0, c.k[0] * c0 + c.lambda[0]);
+        if (c.lambda[0] < 0) c.k[0] = Math.min(c.k[0] + p.beta * Math.abs(c0), p.penaltyMax);
+      }
+      evalCT(q, alpha);
+      const z0 = q.kT * CT[0]! + q.lamT[0], z1 = q.kT * CT[1]! + q.lamT[1], z2 = q.kT * CT[2]! + q.lamT[2];
+      const zl = Math.hypot(z0, z1, z2);
+      q.stick = zl < bound;
+      if (zl < bound) {
+        q.lamT[0] = z0; q.lamT[1] = z1; q.lamT[2] = z2;
+        q.kT = Math.min(q.kT + q.nc * p.beta * Math.hypot(CT[0]!, CT[1]!, CT[2]!), q.nc * p.penaltyMax);
+      } else {
+        const s = zl > 0 ? bound / zl : 0;
+        q.lamT[0] = z0 * s; q.lamT[1] = z1 * s; q.lamT[2] = z2 * s;
+      }
+    };
     // rhs += J_r f and lhs += k J_r J_r^T for row r of J (at off).
     const addRow = (J: Float64Array, off: number, f: number, k: number) => {
       for (let u = 0; u < 6; u++) rhs[u] = rhs[u]! + J[off + u]! * f;
@@ -1311,6 +1333,7 @@ export class AvbdWorld {
           }
           if (records2) for (const ri of touchingR[i]!) {
             const q = records[ri]!;
+            if (pendingDual && firstVisitor![ri] === i) recordDual(q, dualAlpha);
             for (const c of q.points) addRow(c.b === i ? c.jb : c.ja, 0, Math.min(0, c.k[0] * evalC0(c, alpha) + c.lambda[0]), c.k[0]);
             evalCT(q, alpha);
             const s = evalFT(q);
@@ -1361,31 +1384,11 @@ export class AvbdWorld {
       // except after the last main sweep.
       pendingDual = false;
       if (it < p.iterations) {
-        // records = 2: the points' normal rows, then the record's friction against the bound of the points' forces
-        // before this update (as a point's), its penalty ramping by nc beta up to nc penaltyMax.
-        for (const q of records) {
-          const bound = recordBound(q);
-          for (const c of q.points) {
-            const c0 = evalC0(c, alpha);
-            c.lambda[0] = Math.min(0, c.k[0] * c0 + c.lambda[0]);
-            if (c.lambda[0] < 0) c.k[0] = Math.min(c.k[0] + p.beta * Math.abs(c0), p.penaltyMax);
-          }
-          evalCT(q, alpha);
-          const z0 = q.kT * CT[0]! + q.lamT[0], z1 = q.kT * CT[1]! + q.lamT[1], z2 = q.kT * CT[2]! + q.lamT[2];
-          const zl = Math.hypot(z0, z1, z2);
-          q.stick = zl < bound;
-          if (zl < bound) {
-            q.lamT[0] = z0; q.lamT[1] = z1; q.lamT[2] = z2;
-            q.kT = Math.min(q.kT + q.nc * p.beta * Math.hypot(CT[0]!, CT[1]!, CT[2]!), q.nc * p.penaltyMax);
-          } else {
-            const s = zl > 0 ? bound / zl : 0;
-            q.lamT[0] = z0 * s; q.lamT[1] = z1 * s; q.lamT[2] = z2 * s;
-          }
-        }
-        if (records2) {
-          // Their points' normal rows were updated with the records above.
-        } else if (firstVisitor && it + 1 < p.iterations) {
+        if (firstVisitor && it + 1 < p.iterations) {
           pendingDual = true; dualAlpha = alpha;
+        } else if (records2) {
+          // The records' points are the contacts: recordDual() updates their normal rows.
+          for (const q of records) recordDual(q, alpha);
         } else {
           for (const c of contacts) dualUpdate(c, alpha);
         }

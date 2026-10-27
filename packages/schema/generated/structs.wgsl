@@ -214,6 +214,15 @@ struct CentreRecord {
   pad7: vec4u, // @368
 }
 
+// A CentreRecord's dual state while the fused dual (SolverDispatch.dualFusion) updates it in the sweep (records 1 keeps a ContactDual per point).
+// size 48 B, align 16
+struct CentreDual {
+  kN: vec4f, // @0 normal penalty of points 0..3
+  lambdaN: vec4f, // @16 normal force
+  lamT: vec3f, // @32 friction force along t1, t2 and the twist row
+  kT: f32, // @44 penalty of the three friction rows
+}
+
 // Per-step uniforms of the GPU AVBD solver.
 // size 128 B, align 16
 struct SolverParams {

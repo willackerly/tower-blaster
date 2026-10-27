@@ -1,4 +1,5 @@
 // The fused dual's kill rules (probe-compare.ts) on made-up P2 results and bench:browser records.
+import { DEFAULT_AVBD } from '@tb/physics-ref';
 import { describe, expect, it } from 'vitest';
 import { compareBrowser, compareMarkdown, compareP2, JUDGED_WINDOWS, killMs } from '../src/probe-compare.ts';
 import type { Checkpoint, P2Result } from '../src/probe.ts';
@@ -64,6 +65,20 @@ describe('probe-compare: P2, fused against off', () => {
     expect(compareP2(off20, p2(20, [checkpoint(60, { solve: 11.85 })])).kill).toHaveLength(1);
     expect(compareP2(off20, p2(20, [checkpoint(60, { solve: 11.75 })])).kill).toEqual([]);
   });
+  it('reports one sweep\'s colour time, the direct colours and with the tail (the colorMode and records lines)', () => {
+    // A city in 4 colours against 8 (made up: the first four of the default's times), as colorMode 3 would colour it.
+    const four = checkpoint(60, { solve: 4.2 });
+    four.direct = four.direct.slice(0, 4);
+    const c = compareP2(OFF, { ...p2(10, [four], 'off'), engine: 'avbd-gpu:colorMode=3', variant: { colorMode: 3 } });
+    expect(c.reported).toMatch(/^with colorMode on/);
+    const s = c.checkpoints[0]!.sweep!;
+    expect([s.direct.off, s.direct.on, s.withTail.off, s.withTail.on]).toEqual([0.3627, 0.1931, 0.428, 0.2584].map((x) => expect.closeTo(x, 9)));
+    expect(s.direct.ratio).toBeCloseTo(193.1 / 362.7, 9);
+    expect(compareMarkdown([c], [])).toContain('One sweep: direct colours 363 → 193 µs (**0.532x**), with the tail 428 → 258 µs (**0.604x**).');
+    // Not reported when a colour was not timed.
+    four.direct[0]!.t = null;
+    expect(compareP2(OFF, p2(10, [four])).checkpoints[0]!.sweep).toBeNull();
+  });
   it('refuses runs at different I, of different scenes or in the wrong order, and flags a structure that differs', () => {
     expect(() => compareP2(OFF, p2(20, OFF.checkpoints))).toThrow(/same I/);
     expect(() => compareP2(OFF, { ...OFF, N: 5000 })).toThrow(/different scenes/);
@@ -91,6 +106,12 @@ describe('probe-compare: only the side-array arm, in the judged windows, can kil
     // The binding-only A/B (solveContactsRW without dualFusion) is reported too.
     const binding = compareP2(OFF, { ...failing('off'), engine: 'avbd-gpu:solveContactsRW=true', solveContactsRW: true });
     expect([binding.reported, binding.kill]).toEqual([expect.stringMatching(/binding-only/), []]);
+    // So is the fused dual on top of another variant, or against one: the rules judge it alone against the default.
+    const records = { engine: 'avbd-gpu:records=2', variant: { records: 2 } };
+    const onRecords = compareP2({ ...OFF, ...records }, { ...failing('side'), engine: 'avbd-gpu:records=2,dualFusion=true', variant: { records: 2, dualFusion: true } });
+    expect([onRecords.reported, onRecords.kill]).toEqual(['with records on: the rules judge the fused dual alone against the default', []]);
+    const withColour = compareP2(OFF, { ...failing('side'), variant: { dualFusion: true, colorMode: 3 } });
+    expect([withColour.reported, withColour.kill]).toEqual([expect.stringMatching(/^with colorMode on/), []]);
   });
   it('P2: a checkpoint outside steps 60-240 and 300-480 is reported, not judged', () => {
     expect(JUDGED_WINDOWS).toEqual([[60, 240], [300, 480]]);
@@ -122,10 +143,18 @@ describe('probe-compare: bench:browser A/B records', () => {
     expect(i20).toMatchObject({ iterations: 20, kill: true });
     expect(i20.killMs).toBeCloseTo(1.2, 12);
     expect(compareMarkdown([], [pass])).toMatch(/\| pass \|/);
+    // The saving in percent of the base's step, for the other variants' rules: 0.7 of 8.5 ms; then each
+    // engine's block spread, 0.2 ms over the blocks of 8.5 and of 7.8 ms.
+    expect(compareMarkdown([], [pass])).toContain('| **0.700** | 8.2 | 2.4 / 2.6 | 0.60 |');
   });
   it('reports, but does not judge, other scenes and the binding-only A/B', () => {
     expect(compareBrowser(rec('S5', {}, { dualFusion: true }, 11, 11))).toMatchObject({ governs: false, kill: false });
     expect(compareBrowser(rec('S4', {}, { solveContactsRW: true }, 8.5, 8.5))).toMatchObject({ governs: false, kill: false });
+    // Combinations with the other variants: the fused dual on records 2 against records 2, all three against the default.
+    expect(compareBrowser(rec('S4', { records: 2 }, { records: 2, dualFusion: true }, 8.5, 8.4))).toMatchObject({ governs: false, kill: false, reported: 'with records on: the rules judge the fused dual alone against the default' });
+    expect(compareBrowser(rec('S4', {}, { records: 2, colorMode: 3, dualFusion: true }, 8.5, 8.4))).toMatchObject({ governs: false, kill: false, reported: expect.stringMatching(/^with records, colorMode on/) });
+    // Off is the default.
+    expect(compareBrowser(rec('S4', { records: 0 }, { records: 0, colorMode: 0, dualFusion: true }, 8.5, 7.8))).toMatchObject({ governs: true, kill: false });
     expect(() => compareBrowser(rec('S4', { iterations: 20 }, { dualFusion: true }, 8, 7))).toThrow(/iterations/);
   });
   it('reports, but does not judge, the in-place arm (review B1, first repro: 8.5 -> 8.0 ms killed it)', () => {
@@ -140,6 +169,21 @@ describe('probe-compare: bench:browser A/B records', () => {
     expect(r.reported).toMatch(/steps 0-150: the rule judges steps 60-240 and 300-480 only/);
     // Nor a record that does not say which steps it timed.
     expect(compareBrowser(rec('S4', {}, { dualFusion: true }, 8.5, 8.0, null))).toMatchObject({ governs: false, kill: false, window: null, reported: expect.stringMatching(/no warmup/) });
+  });
+  it('names each engine by what differs from the defaults, and gives the median saving of a cell timed more than once', () => {
+    // Variants as GpuAvbdEngine reports them: every AvbdParams entry, the opt-in switches only while on.
+    const gpu = (o: Record<string, unknown>) => ({ ...DEFAULT_AVBD, iterations: 20, ...o });
+    const runs = [23, 21, 22].map((pct) => rec('S4', gpu({}), gpu({ records: 1 }), 14, 14 * (1 - pct / 100)));
+    const rows = runs.map((r) => compareBrowser(r));
+    expect(rows[0]!.engines).toEqual(['avbd-gpu:iterations=20', 'avbd-gpu:iterations=20,records=1']);
+    expect(compareBrowser(rec('S4', gpu({}), gpu({ dualFusion: true, solveContactsRW: true }), 14, 13)).engines[1]).toBe('avbd-gpu:iterations=20,dualFusion=true,solveContactsRW=true');
+    // The records rule reads the median of the three runs per window.
+    const md = compareMarkdown([], [...rows, compareBrowser(rec('S4', gpu({}), gpu({ records: 1 }), 14, 11, 300))]);
+    expect(md).toContain('| S4 {"N":10000} | avbd-gpu:iterations=20 | avbd-gpu:iterations=20,records=1 | 60-240 | 3 | 23.0, 21.0, 22.0 | **22.0** |');
+    // A cell timed once has no line there, and nor does a record whose timing is not valid.
+    expect(md).not.toMatch(/\| 300-480 \| \d+ \|/);
+    const invalid = { ...runs[0]!, timingValid: false };
+    expect(compareMarkdown([], [compareBrowser(invalid), rows[1]!])).not.toContain('Cells timed more than once');
   });
   it('reports, but does not judge, a record whose timing is not valid (code review 1, item 5)', () => {
     const problems = ['page is not cross-origin isolated (timer clamped to 100 µs)'];

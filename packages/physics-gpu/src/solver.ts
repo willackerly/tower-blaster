@@ -21,7 +21,7 @@
 import type { CombineRule } from '@tb/engine-api';
 import { assertStorageFits, readBuffer } from '@tb/gpu';
 import { RECORD_MODES } from '@tb/physics-ref';
-import { Body, BodyProps, CentreRecord, ColorParams, ContactDual, field, Manifold, SolverBody, SolverContact, SolverParams, SolverRecord, wgslStruct } from '@tb/schema';
+import { Body, BodyProps, CentreDual, CentreRecord, ColorParams, ContactDual, field, Manifold, SolverBody, SolverContact, SolverParams, SolverRecord, type StructLayout, wgslStruct } from '@tb/schema';
 import { MAX_COLORS } from './coloring.ts';
 
 const WG = 64;
@@ -459,23 +459,34 @@ function swap(text: string, from: string, to: string, count = 1): string {
  */
 function contactForce(fusion: Fusion): string {
   if (fusion === 'off') return CONTACT_FORCE;
-  const [bodies, force] = CONTACT_FORCE.split('\n  // Clamped forces:');
-  const visit = swap(swap(bodies!,
+  const visit = swap(swap(CONTACT_FORCE,
     '    if (ct.a != NONE) { let o = solver[ct.a]; dpA = o.dp; phiA = o.phi; }',
     '    if (ct.a != NONE) { let o = solver[ct.a]; dpA = o.dp; phiA = o.phi; first = me.visit < o.visit; }'),
     '    let o = solver[ct.b]; dpB = o.dp; phiB = o.phi;',
     '    let o = solver[ct.b]; dpB = o.dp; phiB = o.phi; first = me.visit < o.visit;');
   const withFirst = swap(visit, '\n  if (onB) {', '\n  // The contact\'s first visit this sweep: the other body comes later in the colour order, or is the ground.\n  var first = true;\n  if (onB) {');
-  const store = fusion === 'side'
+  const load = fusion === 'side'
     ? `  // Until the step's first fused update, the dual state is the record's (setup, warm start); then duals[di], which the
   // first visit writes and the second reads.
   let di = ci - p.cur * halfSize();
   if (cp.fuse == 2u || (cp.fuse == 1u && !first)) { du = duals[di]; }`
     : '  // The record holds the dual state (the solve kernel binds contacts read_write).';
-  const write = fusion === 'side' ? '    duals[di] = du;' : '    contacts[ci].lt = du.lt; contacts[ci].lambdaN = du.lambdaN; contacts[ci].kN = du.kN; contacts[ci].kT = du.kT;';
-  return `${withFirst}
+  const store = fusion === 'side' ? '    duals[di] = du;' : '    contacts[ci].lt = du.lt; contacts[ci].lambdaN = du.lambdaN; contacts[ci].kN = du.kN; contacts[ci].kT = du.kT;';
+  return deferredDual(withFirst, load, store);
+}
+
+/**
+ * A point's force with the fused dual, from CONTACT_FORCE's text up to and
+ * including its C (`force`, with first in scope): du takes the point's dual
+ * state from ct, and `load` may take it from where the step's fused updates
+ * keep it; at the first visit the update the last sweep deferred runs on du
+ * (dualPoint()'s arithmetic) and `store` keeps it; the clamped forces read du.
+ */
+function deferredDual(force: string, load: string, store: string): string {
+  const [head, clamped] = force.split('\n  // Clamped forces:');
+  return `${head}
   var du = ContactDual(ct.lt, ct.lambdaN, ct.kN, ct.kT);
-${store}
+${load}
   if (cp.fuse != 0u && first) {
     // The last sweep's dual update, deferred to here (dualPoint()).
     let dbound = ct.mu * abs(du.lambdaN);
@@ -489,9 +500,9 @@ ${store}
     } else {
       du.lt = select(vec2f(0.0), dz * (dbound / dfl), dfl > 0.0);
     }
-${write}
+${store}
   }
-  // Clamped forces:${force!.replace(/ct\.(kN|lambdaN|kT|lt)\b/g, 'du.$1')}`;
+  // Clamped forces:${clamped!.replace(/ct\.(kN|lambdaN|kT|lt)\b/g, 'du.$1')}`;
 }
 
 // accumulate() and solveBody() in the array form.
@@ -698,7 +709,7 @@ ${contactForce(fusion).replace(/^/gm, '    ')}
 ${update.join('\n')}
     }
   }`;
-  const loop = records === 0 ? pointLoop : records === 1 ? exactRecordLoop(update) : centreRecordLoop();
+  const loop = records === 0 ? pointLoop : records === 1 ? exactRecordLoop(update, fusion) : centreRecordLoop(fusion);
   return /* wgsl */ `
 // One primal update of body i, 'registers' form: the array form's solveBody()
 // and accumulate() in named scalars (registerSolveBody() in solver.ts).
@@ -736,18 +747,20 @@ const COLOR_STARTS = Math.ceil((MAX_COLORS + 1) / 4);
  * (SolverDispatch.dualFusion, solveContactsRW). 'side' adds the duals
  * binding; the kernel already binds the default limit of 8 storage buffers,
  * so colorStart becomes a uniform copy (solve() copies it each step). The
- * fused kernels also get visitOrder(), which writes SolverBody.visit.
+ * fused kernels also get visitOrder(), which writes SolverBody.visit. `dual`
+ * is the dual state's struct: ContactDual per point (also records = 1), or
+ * CentreDual per record (records = 2).
  */
-function solveHead(fusion: Fusion, rw: boolean): string {
+function solveHead(fusion: Fusion, rw: boolean, dual: StructLayout = ContactDual): string {
   let h = rw ? swap(SOLVE_HEAD, 'var<storage, read> contacts', 'var<storage, read_write> contacts') : SOLVE_HEAD;
   if (fusion === 'off') return h;
-  h = swap(h, `${wgslStruct(ColorParams)}\n`, `${wgslStruct(ColorParams)}\n${wgslStruct(ContactDual)}\n`);
+  h = swap(h, `${wgslStruct(ColorParams)}\n`, `${wgslStruct(ColorParams)}\n${wgslStruct(dual)}\n`);
   if (fusion === 'record') return h;
   h = swap(h, '@group(0) @binding(4) var<storage, read> colorStart: array<u32>;', `// colorStart (u32 x ${MAX_COLORS + 1}) as a uniform: a ninth storage binding would pass the default limit.
 @group(0) @binding(4) var<uniform> colorStarts: array<vec4u, ${COLOR_STARTS}>;
 fn colorStartAt(c: u32) -> u32 { return colorStarts[c / 4u][c % 4u]; }`);
-  return `${h}// Each contact point's dual state while the fused dual updates it, indexed within this step's half.
-@group(0) @binding(10) var<storage, read_write> duals: array<ContactDual>;
+  return `${h}// Each ${dual === ContactDual ? 'contact point' : 'record'}'s dual state while the fused dual updates it, indexed within this step's half.
+@group(0) @binding(10) var<storage, read_write> duals: array<${dual.name}>;
 `;
 }
 function solveTail(fusion: Fusion): string {
@@ -900,7 +913,10 @@ fn dualGroundSide(@builtin(global_invocation_id) id: vec3u) {
 // - 2, the centre-friction record: the reference's FrictionRecord
 //   (AvbdParams.records says what it does): normal rows per point, one
 //   friction state of three rows at the centre.
-// Both run in the register form of the primal only.
+// Both run in the register form of the primal only. With the fused dual
+// (SolverDispatch.dualFusion) a record's first visit runs its deferred update
+// as a point's does: records 1 per point (a ContactDual per point in the side
+// array), records 2 for the whole record (a CentreDual).
 
 /** AvbdParams.records (physics-ref RECORD_MODES) on the GPU: 0 points (SolverContact), 1 the exact record (SolverRecord), 2 centre friction (CentreRecord). */
 export { RECORD_MODES };
@@ -981,6 +997,17 @@ const RECORD_WALK = /* wgsl */ `  // Pair records first, then the ground record 
     }
     let n = records[slot].n;`;
 
+/** RECORD_WALK with the fused dual: also whether this is the record's first visit this sweep (contactForce()'s first). */
+function recordWalk(fusion: Fusion): string {
+  if (fusion === 'off') return RECORD_WALK;
+  const visit = swap(swap(RECORD_WALK,
+    '      if (ia != NONE) { let o = solver[ia]; dpA = o.dp; phiA = o.phi; }',
+    '      if (ia != NONE) { let o = solver[ia]; dpA = o.dp; phiA = o.phi; first = me.visit < o.visit; }'),
+    '      let o = solver[ib]; dpB = o.dp; phiB = o.phi;',
+    '      let o = solver[ib]; dpB = o.dp; phiB = o.phi; first = me.visit < o.visit;');
+  return swap(visit, '\n    if (onB) {', '\n    // The record\'s first visit this sweep: the other body comes later in the colour order, or is the ground.\n    var first = true;\n    if (onB) {');
+}
+
 /** registerSolveBody()'s update for one row J (6 values) with force f and stiffness k: g += J f, and h += k J J^T unless k is 0. */
 function rowUpdate(J: string, f: string, k: string, ind: string): string[] {
   return [
@@ -992,10 +1019,22 @@ function rowUpdate(J: string, f: string, k: string, ind: string): string[] {
   ];
 }
 
-/** records = 1: each point as a SolverContact in registers, then the point form's force (CONTACT_FORCE after the partner) and update. */
-function exactRecordLoop(update: string[]): string {
-  const force = CONTACT_FORCE.slice(CONTACT_FORCE.indexOf('  let C = evalC('));
-  return `${RECORD_WALK}
+/**
+ * records = 1: each point as a SolverContact in registers, then the point
+ * form's force (CONTACT_FORCE after the partner) and update; with the fused
+ * dual, the point form's deferred update too (deferredDual()), its state in a
+ * ContactDual per point (side array) or in the record's lanes (in place).
+ */
+function exactRecordLoop(update: string[], fusion: Fusion = 'off'): string {
+  const C = CONTACT_FORCE.slice(CONTACT_FORCE.indexOf('  let C = evalC('));
+  const force = fusion === 'off' ? C : deferredDual(C, fusion === 'side'
+    ? `  // Until the step's first fused update, the dual state is the record's; then duals[di], a ContactDual per point.
+  let di = (slot - p.cur * recordHalf()) * 4u + q;
+  if (cp.fuse == 2u || (cp.fuse == 1u && !first)) { du = duals[di]; }`
+    : '  // The record holds the dual state (the solve kernel binds the records read_write).',
+  fusion === 'side' ? '    duals[di] = du;'
+    : '    records[slot].kN[q] = du.kN; records[slot].lambdaN[q] = du.lambdaN; records[slot].kT[q] = du.kT; records[slot].lt1[q] = du.lt.x; records[slot].lt2[q] = du.lt.y;');
+  return `${recordWalk(fusion)}
     let t1 = tangent1(n);
     let mu = records[slot].mu;
     for (var q = 0u; q < count; q++) {
@@ -1007,10 +1046,16 @@ ${update.join('\n')}
   }`;
 }
 
-/** records = 2: the points' normal rows, then the centre's three friction rows clamped together. */
-function centreRecordLoop(): string {
+/**
+ * records = 2: the points' normal rows, then the centre's three friction rows
+ * clamped together. With the fused dual the record's first visit runs the
+ * update the last sweep deferred (CENTRE_DUAL's arithmetic on the C's the
+ * forces use): each point's normal row in their loop, then the friction
+ * against the ball of the points' forces before it.
+ */
+function centreRecordLoop(fusion: Fusion = 'off'): string {
   const friction = seq(3).flatMap((r) => [`    let T${r} = frow(n, t1, t2, rac, rbc, rt, ${r}u, onB);`, ...rowUpdate(`T${r}`, `FT[${r}]`, 'kt', '    ')]);
-  return `${RECORD_WALK}
+  const loop = `${RECORD_WALK}
     // The points' normal rows (row 0 of jrow() on a SolverContact holding n and the lever arms).
     var ct: SolverContact;
     ct.n = n;
@@ -1043,6 +1088,52 @@ ${rowUpdate('J0', 'fN', 'kN', '      ').join('\n')}
     let kt = select(kT, kT * s, p.slidingHessian != 0u);
 ${friction.join('\n')}
   }`;
+  if (fusion === 'off') return loop;
+  const store = fusion === 'side' ? '      duals[di] = du;'
+    : '      records[slot].kN = du.kN; records[slot].lambdaN = du.lambdaN; records[slot].lamT = du.lamT; records[slot].kT = du.kT;';
+  let f = swap(loop, RECORD_WALK, recordWalk(fusion));
+  f = swap(f, "\n    // The points' normal rows (row 0 of jrow()", `
+    // The record's dual state: the record's until the step's first fused update${fusion === 'side' ? ', then duals[di]' : ''}.
+    var du = CentreDual(records[slot].kN, records[slot].lambdaN, records[slot].lamT, records[slot].kT);${fusion === 'side' ? `
+    let di = slot - p.cur * recordHalf();
+    if (cp.fuse == 2u || (cp.fuse == 1u && !first)) { du = duals[di]; }` : ''}
+    let deferred = cp.fuse != 0u && first;
+    var sumOld = 0.0;
+    // The points' normal rows (row 0 of jrow()`);
+  f = swap(f, `      let kN = records[slot].kN[q];
+      let lambdaN = records[slot].lambdaN[q];
+      sumN += lambdaN;
+      let fN = min(0.0, kN * evalN(n, records[slot].c0N[q], ct.raw, ct.rbw, ia != NONE, cp.alpha, dpA, phiA, dpB, phiB) + lambdaN);`,
+  `      let cn = evalN(n, records[slot].c0N[q], ct.raw, ct.rbw, ia != NONE, cp.alpha, dpA, phiA, dpB, phiB);
+      if (deferred) {
+        // The point's deferred normal update (dualRecord()).
+        sumOld += du.lambdaN[q];
+        du.lambdaN[q] = min(0.0, du.kN[q] * cn + du.lambdaN[q]);
+        if (du.lambdaN[q] < 0.0) { du.kN[q] = min(du.kN[q] + p.beta * abs(cn), p.penaltyMax); }
+      }
+      let kN = du.kN[q];
+      let lambdaN = du.lambdaN[q];
+      sumN += lambdaN;
+      let fN = min(0.0, kN * cn + lambdaN);`);
+  f = swap(f, `    let kT = records[slot].kT;
+    let CT = evalT(n, t1, t2, records[slot].c0t, rac, rbc, rt, ia != NONE, cp.alpha, dpA, phiA, dpB, phiB);`,
+  `    let CT = evalT(n, t1, t2, records[slot].c0t, rac, rbc, rt, ia != NONE, cp.alpha, dpA, phiA, dpB, phiB);
+    if (deferred) {
+      // The friction's deferred update (dualRecord()), against the ball of the points' forces before it.
+      let dbound = records[slot].mu * abs(sumOld);
+      let dz = du.kT * CT + du.lamT;
+      let dzl = length(dz);
+      let nc = f32(count);
+      if (dzl < dbound) {
+        du.lamT = dz;
+        du.kT = min(du.kT + nc * p.beta * length(CT), nc * p.penaltyMax);
+      } else {
+        du.lamT = select(vec3f(0.0), dz * (dbound / dzl), dzl > 0.0);
+      }
+${store}
+    }
+    let kT = du.kT;`);
+  return swap(f, '    let z = kT * CT + records[slot].lamT;', '    let z = kT * CT + du.lamT;');
 }
 
 // setup() on records: SETUP's bindings, helpers and entry points, with the
@@ -1393,26 +1484,68 @@ const CENTRE_DUAL = /* wgsl */ `fn dualRecord(idx: u32) {
 `;
 
 /**
+ * The record dual pass with the fused dual's side array (dualWgsl() for
+ * records): dualPairsSide and dualGroundSide first take the state the sweeps
+ * left in duals (a ContactDual per point, or a CentreDual per record) into the
+ * record, then run the step's last dual update on it.
+ */
+function sideRecordDual(records: 1 | 2): string {
+  let d = swap(records === 1 ? EXACT_DUAL : CENTRE_DUAL, 'fn dualRecord(idx: u32) {', 'fn dualRecord(idx: u32, fromSide: bool) {');
+  d = records === 1
+    ? swap(d, '    let C = evalC(ct, 1.0, dpA, phiA, B.dp, B.phi);', `    if (fromSide) {
+      let du = duals[(idx - p.cur * recordHalf()) * 4u + q];
+      ct.lt = du.lt; ct.lambdaN = du.lambdaN; ct.kN = du.kN; ct.kT = du.kT;
+    }
+    let C = evalC(ct, 1.0, dpA, phiA, B.dp, B.phi);`)
+    : swap(d, '  if (count == 0u) { return; }\n', `  if (count == 0u) { return; }
+  if (fromSide) {
+    let du = duals[idx - p.cur * recordHalf()];
+    records[idx].kN = du.kN; records[idx].lambdaN = du.lambdaN; records[idx].lamT = du.lamT; records[idx].kT = du.kT;
+  }
+`);
+  const entry = swap(swap(RECORD_DUAL_ENTRY, 'dualRecord(pairRecord(p.cur, k));', 'dualRecord(pairRecord(p.cur, k), false);'), 'dualRecord(groundRecord(p.cur, i));', 'dualRecord(groundRecord(p.cur, i), false);');
+  return `${d}${entry}@compute @workgroup_size(${WG})
+fn dualPairsSide(@builtin(global_invocation_id) id: vec3u) {
+  let k = id.x;
+  if (k >= stepInfo[3]) { return; }
+  dualRecord(pairRecord(p.cur, k), true);
+}
+
+@compute @workgroup_size(${WG})
+fn dualGroundSide(@builtin(global_invocation_id) id: vec3u) {
+  let i = id.x;
+  if (i >= p.n) { return; }
+  dualRecord(groundRecord(p.cur, i), true);
+}
+
+`;
+}
+
+/**
  * The setup, primal and dual shaders of a record mode and dispatch. 0 is the
  * point form (SOLVER_WGSL, solveWgsl(), dualWgsl()); 1 and 2 need the
- * register form, and do not fuse the dual.
+ * register form.
  */
 export function recordWgsl(records: RecordMode, hessian: HessianForm = 'registers', d: Pick<SolverDispatch, 'dualFusion' | 'solveContactsRW'> = {}): { setup: string; solve: string; dual: string } {
   if (!RECORD_MODES.includes(records)) throw new Error(`recordWgsl: records must be one of ${RECORD_MODES.join(', ')}, got ${records}`);
-  if (records === 0) return { setup: SETUP, solve: solveWgsl(hessian, d), dual: dualWgsl(fusionOf(d)) };
+  const fusion = fusionOf(d);
+  if (records === 0) return { setup: SETUP, solve: solveWgsl(hessian, d), dual: dualWgsl(fusion) };
   if (hessian !== 'registers') throw new Error(`recordWgsl: records ${records} needs hessian registers, got ${hessian}`);
-  if (d.dualFusion) throw new Error(`recordWgsl: records ${records} does not fuse the dual (dualFusion)`);
   const rw = d.solveContactsRW === true;
-  const struct = records === 1 ? SolverRecord : CentreRecord;
+  const struct = records === 1 ? SolverRecord : CentreRecord, dual = records === 1 ? ContactDual : CentreDual;
   const decl = (code: string, access: string) =>
     swap(code, `var<storage, ${access}> contacts: array<SolverContact>;`, `var<storage, ${access}> records: array<${struct.name}>;`) + wgslStruct(struct) + RECORD_COMMON + (records === 2 ? CENTRE_EVAL : '');
   const entry = swap(swap(swap(swap(SETUP_ENTRY,
     'pairPoint(p.cur, k, 0u)', 'pairRecord(p.cur, k)'), 'pairPoint(1u - p.cur, select(0u, ps, ps != NONE), 0u)', 'pairRecord(1u - p.cur, select(0u, ps, ps != NONE))'),
     'groundPoint(p.cur, i, 0u)', 'groundRecord(p.cur, i)'), 'groundPoint(1u - p.cur, i, 0u)', 'groundRecord(1u - p.cur, i)');
+  const dualHead = fusion !== 'side' ? DUAL_HEAD : swap(DUAL_HEAD, '@group(0) @binding(4) var<uniform> p: SolverParams;', `@group(0) @binding(4) var<uniform> p: SolverParams;
+// The fused dual's state (${dual.name}) per ${records === 1 ? 'contact point' : 'record'} of this step's half.
+@group(0) @binding(5) var<storage, read> duals: array<${dual.name}>;
+${wgslStruct(dual)}`);
   return {
     setup: decl(SETUP_HEAD, 'read_write') + (records === 1 ? EXACT_SETUP : CENTRE_SETUP) + entry,
-    solve: decl(solveHead('off', rw), rw ? 'read_write' : 'read') + JROW + registerSolveBody('off', records) + SOLVE_TAIL,
-    dual: decl(DUAL_HEAD, 'read_write') + (records === 1 ? EXACT_DUAL : CENTRE_DUAL) + RECORD_DUAL_ENTRY + DUAL_BODIES,
+    solve: decl(solveHead(fusion, rw, dual), rw ? 'read_write' : 'read') + JROW + registerSolveBody(fusion, records) + solveTail(fusion),
+    dual: decl(dualHead, 'read_write') + (fusion === 'side' ? sideRecordDual(records) : (records === 1 ? EXACT_DUAL : CENTRE_DUAL) + RECORD_DUAL_ENTRY) + DUAL_BODIES,
   };
 }
 
@@ -1500,6 +1633,10 @@ export interface SolverDispatch {
    * the side array the last pass copies duals[] for every used point, so a
    * point no body walked would take whatever that entry last held. Any
    * pruning or early-out in the walk must keep it complete or turn fusion off.
+   * With records (AvbdParams.records) the same holds per record in use:
+   * records 1 fuses each point's update (a ContactDual per point in the side
+   * array), records 2 the record's, its points' normal rows and its centre
+   * friction (a CentreDual per record).
    */
   dualFusion?: boolean;
   /**
@@ -1590,7 +1727,6 @@ export class AvbdSolver {
     for (const k of ['dualFusion', 'solveContactsRW'] as const) if (dispatch[k] !== undefined && typeof dispatch[k] !== 'boolean') throw new Error(`AvbdSolver: ${k} must be a boolean, got ${dispatch[k]}`);
     if (!RECORD_MODES.includes(records)) throw new Error(`AvbdSolver: records must be one of ${RECORD_MODES.join(', ')}, got ${records}`);
     if (records !== 0 && dispatch.hessian !== 'registers') throw new Error(`AvbdSolver: records ${records} needs hessian registers, got ${dispatch.hessian}`);
-    if (records !== 0 && dispatch.dualFusion) throw new Error(`AvbdSolver: records ${records} does not fuse the dual (dualFusion)`);
     this.fusion = fusionOf(dispatch);
     const code = recordWgsl(records, dispatch.hessian, dispatch);
     const buf = (bytes: number, label: string) => (assertStorageFits(device, bytes, label), device.createBuffer({ size: Math.max(16, bytes), usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST, label }));
@@ -1613,7 +1749,7 @@ export class AvbdSolver {
     }
     device.queue.writeBuffer(this.colorUniform, 0, cu);
     if (this.fusion === 'side') {
-      this.duals = buf((maxPairs + capacity) * 4 * ContactDual.size, 'avbd fused dual state');
+      this.duals = buf((maxPairs + capacity) * (records === 2 ? CentreDual.size : 4 * ContactDual.size), 'avbd fused dual state');
       this.colorStarts = device.createBuffer({ size: COLOR_STARTS * 16, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST, label: 'avbd colour starts' });
     }
     const mk = (name: string, code: string, entries: Array<[string, ...string[]]>, kinds: Kind[], groups: Array<[string, GPUBuffer[]]>, constants: Record<string, Record<string, number>> = {}) => {
