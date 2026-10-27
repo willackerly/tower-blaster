@@ -130,7 +130,7 @@ describe('solver probe on another scenario', () => {
     expect(r.errors).toEqual([]);
     const p2 = r.p2!;
     expect([p2.scenario, p2.gravityScale, p2.boxBroadphase, p2.N]).toEqual(['S15', 42.735, true, buildScenario('S15', params, 1).bodies.length]);
-    expect([p2.engine, p2.iterations, p2.dualPasses]).toEqual([engine.spec, 3, 1]);
+    expect([p2.engine, p2.iterations, p2.dualPasses, p2.dualFusion, p2.solveContactsRW]).toEqual([engine.spec, 3, 1, true, false]);
     const c = p2.checkpoints[0]!;
     expect(c.colorTail).toBe(4);
     expect(c.pairSlots).toBeLessThan(c.pairsRequired);

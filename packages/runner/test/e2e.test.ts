@@ -16,6 +16,8 @@ describe('runner page end to end', () => {
     expect(r.timingValid).toBe(true);
     const t = (r.timing as Array<{ blocks: number; stepsPerBlock: number }>)[0]!;
     expect([t.blocks, t.stepsPerBlock]).toEqual([4, 10]);
+    // The window the blocks timed (steps 6-45), which bench:probe-compare judges by.
+    expect(r.warmup).toBe(5);
   });
 
   it('compares two engines and runs a quality pass', async () => {

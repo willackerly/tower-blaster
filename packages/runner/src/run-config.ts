@@ -20,6 +20,8 @@ export async function execute(c: RunConfig, onProgress: (msg: string) => void = 
     env: { browser: env, time: new Date().toISOString() },
     engines: engines.map((e) => e.info),
     scene: sceneKey,
+    // The steps run before the first block: the blocks time steps warmup + 1 to warmup + blocks x stepsPerBlock.
+    warmup: c.timing.warmup,
     timing: blocks.map(timingSummary),
     timingValid: problems.length === 0,
     timingProblems: problems,

@@ -188,6 +188,9 @@ export interface P2Result {
   engine?: string;
   /** Dual passes per step: the iterations, or 1 with the fused dual (AvbdParams.dualFusion), whose colour times then include the fused updates. */
   dualPasses?: number;
+  /** With an engine spec, its dispatch's fused dual and contacts binding (SolverDispatch), so bench:probe-compare knows which arm it is. */
+  dualFusion?: boolean;
+  solveContactsRW?: boolean;
   /** t = a + b W, t = a + b W + e bodies, t = a + e bodies, t = a + g Σpoints. */
   fits: Array<Fit | { model: string; singular: true }>;
   /** Over every direct colour with bodies: (t_c - empty dispatch) / W_c, in ns. */
@@ -479,7 +482,7 @@ async function runP2(device: GPUDevice, timer: Timer, o: ProbeOptions): Promise<
     ...(o.pairsPerBody ? { pairsPerBody: o.pairsPerBody } : {}), ...(o.boxBroadphase ? { boxBroadphase: true } : {}),
   };
   const checkpoints: Checkpoint[] = [];
-  let iterations = 0, hessian = o.hessian, dualPasses = 0;
+  let iterations = 0, hessian = o.hessian, dualPasses = 0, fused = false, contactsRW = false;
   for (const step of o.checkpoints) {
     // A fresh engine per checkpoint: the probes below change contact state (the dual), which would carry into later steps.
     const e = new GpuAvbdEngine(o.engine?.params ?? {}, { ...engineOpts, device });
@@ -487,7 +490,9 @@ async function runP2(device: GPUDevice, timer: Timer, o: ProbeOptions): Promise<
     iterations = e.probeParts().iterations;
     hessian = e.probeParts().dispatch.hessian;
     // With the fused dual, one dual pass per step (after the last main sweep), and none between the others.
-    dualPasses = e.probeParts().dispatch.dualFusion ? Math.min(1, iterations) : iterations;
+    fused = e.probeParts().dispatch.dualFusion === true;
+    contactsRW = e.probeParts().dispatch.solveContactsRW === true;
+    dualPasses = fused ? Math.min(1, iterations) : iterations;
     const timedFrom = Math.max(0, step - o.solveSteps);
     for (let s = 0; s < timedFrom; s++) {
       e.step();
@@ -567,7 +572,7 @@ async function runP2(device: GPUDevice, timer: Timer, o: ProbeOptions): Promise<
   if (perPointNs) verdict.push(`Per critical-path point, (t_c − empty dispatch) / W_c = ${perPointNs.median.toFixed(0)} ns (p10 ${perPointNs.p10.toFixed(0)}, p90 ${perPointNs.p90.toFixed(0)}) over ${per.length} colours.`);
   return {
     scenario: o.scenario, params: scene.params as Params, gravityScale: o.gravityScale, boxBroadphase: engineOpts.boxBroadphase === true, N: scene.bodies.length, seed: o.seed,
-    iterations, R: o.R, checkpoints, hessian, ...(o.engine ? { engine: o.engine.spec, dualPasses } : {}), fits, perPointNs, verdict,
+    iterations, R: o.R, checkpoints, hessian, ...(o.engine ? { engine: o.engine.spec, dualPasses, dualFusion: fused, solveContactsRW: contactsRW } : {}), fits, perPointNs, verdict,
   };
 }
 
