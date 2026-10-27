@@ -92,7 +92,7 @@ export type WorldName = 'near' | 'far';
  * real-no-stone and real-stone-off draw the same shader. real-hall: real
  * inside the exhibition hall (hall.ts, Kapla step K3.2), scaled up until the
  * world's eye is inside it (hallSizeFor), so real-hall against real is the
- * hall pass's cost: a trace on every pixel above the floor.
+ * hall's cost.
  */
 export type VariantName = 'full' | 'no-shadow' | 'no-post' | 'no-sparks' | 'no-heat' | 'no-ao' | 'no-seam' | 'fan' | 'cube' | 'flat-fan' | 'flat-cube' | 'real' | 'real-no-stone' | 'real-stone-off' | 'real-step1' | 'real-no-lod' | 'real-no-floor-sky' | 'real-flat-ground' | 'real-no-pcss' | 'real-4096' | 'real-dust' | 'real-hall';
 
@@ -303,13 +303,14 @@ export function renderBenchMarkdown(r: RenderBenchResult, header: string): strin
   for (const c of r.cases) groups.set(`${c.world}:${c.bodies}`, [...(groups.get(`${c.world}:${c.bodies}`) ?? []), c]);
   for (const cs of groups.values()) {
     const by = (v: VariantName) => cs.find((c) => c.variant === v);
-    const diff = (b?: RenderCase, base = by('full')) => {
+    // A missing variant (a --variants subset) leaves its column blank, its base included.
+    const diff = (b: RenderCase | undefined, base: RenderCase | undefined) => {
       if (!base || !b || base.batches.length < 2) return '';
       const d = pairedPercentDiff(base.batches, b.batches);
       const pct = (x: number) => `${x >= 0 ? '+' : ''}${(100 * x).toFixed(1)}%`;
       return `${pct(d.estimate)} [${pct(d.lo)}, ${pct(d.hi)}]${verdict(d) === 'no-difference' ? ' n.s.' : ''}`;
     };
-    lines.push(`| ${cs[0]!.world} | ${cs[0]!.bodies.toLocaleString('en-US')} | ${diff(by('no-shadow'))} | ${diff(by('no-post'))} | ${diff(by('no-sparks'))} | ${diff(by('no-heat'))} | ${diff(by('no-ao'))} | ${diff(by('no-seam'))} | ${diff(by('fan'))} | ${diff(by('cube'))} | ${diff(by('flat-cube'), by('flat-fan'))} | ${diff(by('real'))} | ${diff(by('real'), by('real-no-stone'))} | ${diff(by('real-no-stone'), by('real-stone-off'))} | ${diff(by('real-stone-off'), by('real-step1'))} | ${diff(by('real'), by('real-no-lod'))} | ${diff(by('real'), by('real-no-floor-sky'))} | ${diff(by('real'), by('real-flat-ground'))} | ${diff(by('real'), by('real-no-pcss'))} | ${diff(by('real-4096'), by('real'))} | ${diff(by('real-dust'), by('real'))} | ${diff(by('real-hall'), by('real'))} |`);
+    lines.push(`| ${cs[0]!.world} | ${cs[0]!.bodies.toLocaleString('en-US')} | ${diff(by('no-shadow'), by('full'))} | ${diff(by('no-post'), by('full'))} | ${diff(by('no-sparks'), by('full'))} | ${diff(by('no-heat'), by('full'))} | ${diff(by('no-ao'), by('full'))} | ${diff(by('no-seam'), by('full'))} | ${diff(by('fan'), by('full'))} | ${diff(by('cube'), by('full'))} | ${diff(by('flat-cube'), by('flat-fan'))} | ${diff(by('real'), by('full'))} | ${diff(by('real'), by('real-no-stone'))} | ${diff(by('real-no-stone'), by('real-stone-off'))} | ${diff(by('real-stone-off'), by('real-step1'))} | ${diff(by('real'), by('real-no-lod'))} | ${diff(by('real'), by('real-no-floor-sky'))} | ${diff(by('real'), by('real-flat-ground'))} | ${diff(by('real'), by('real-no-pcss'))} | ${diff(by('real-4096'), by('real'))} | ${diff(by('real-dust'), by('real'))} | ${diff(by('real-hall'), by('real'))} |`);
   }
   return lines.join('\n');
 }

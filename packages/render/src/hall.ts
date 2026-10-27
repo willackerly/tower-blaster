@@ -65,6 +65,14 @@ export function hallInside(h: HallParams, p: V3): boolean {
   return p[1] >= 0 && Math.abs(p[0]) <= h.span / 2 + h.galleryDepth && Math.abs(p[2]) <= h.length / 2 && (p[1] < h.spring || Math.hypot(p[0], p[1] - yc) <= R);
 }
 
+/** The balustrade's bottom and top rails' heights and its lattice's pitch and bar width, m (a person's size, whatever the hall's). */
+export const BALUSTRADE = { bottom: 0.06, top: 0.08, pitch: 0.3, bar: 0.025 } as const;
+
+/** Is (z, y) on the balustrade (y up from the deck, below its height hb): a rail or a lattice bar? */
+export function hallBalustrade(z: number, y: number, hb: number): boolean {
+  return y < BALUSTRADE.bottom || y > hb - BALUSTRADE.top || hallLattice(z, y / BALUSTRADE.pitch, BALUSTRADE.pitch, BALUSTRADE.bar);
+}
+
 /** What a hall ray hit (HallHit.mat). */
 export const HALL_MAT = { none: 0, glass: 1, panel: 2, iron: 3, wall: 4, rail: 5, lantern: 6, screen: 7 } as const;
 
@@ -80,7 +88,7 @@ export function hallRibs(h: HallParams): number {
   return 2 * Math.floor((h.length / 2 - h.ribWidth) / h.bay) + 1;
 }
 
-/** The uniform block hallTrace reads (6 vec4f). */
+/** The uniform block hallTrace reads (6 vec4f; the last holds cos and sin of the spring's half-angle, so both twins use the same rounded values). */
 export function hallUniform(h: HallParams): Float32Array {
   const { R, yc, spring } = hallArch(h);
   const d = Math.PI / 180;
@@ -90,7 +98,7 @@ export function hallUniform(h: HallParams): Float32Array {
     h.column, h.gallery, h.galleryDepth, h.deck,
     R, yc, hallRibs(h), spring,
     h.balustrade, h.bar, h.clear * d, h.lantern * d,
-    0, 0, 0, 0,
+    Math.cos(spring), Math.sin(spring), 0, 0,
   ]);
 }
 
@@ -185,7 +193,7 @@ export function hallTraceCpu(h: HallParams, o: V3, d: V3, all = false): HallHit 
   const u = hallUniform(h);
   const a = u[0]!, hs = u[1]!, L2 = u[3]!, bay = u[4]!, rd = u[5]!, rw = u[6]!, ch = u[7]!;
   const rc = u[8]!, hg = u[9]!, gd = u[10]!, deck = u[11]!, R = u[12]!, yc = u[13]!, nr = u[14]!, ths = u[15]!;
-  const hb = u[16]!, bar = u[17]!, clear = u[18]!, lantern = u[19]!;
+  const hb = u[16]!, bar = u[17]!, clear = u[18]!, lantern = u[19]!, cs = u[20]!, ss = u[21]!;
   let best: HallHit = NONE;
   const take = (t: number, mat: number, n: V3, uv: [number, number]) => { if (t > 0 && t < best.t) best = { t, mat, n: facing(n, d), uv }; };
 
@@ -227,7 +235,7 @@ export function hallTraceCpu(h: HallParams, o: V3, d: V3, all = false): HallHit 
     // Balustrade on the column line: rails and a lattice between.
     if (Math.abs(d[0]) > 1e-12) {
       const t = (sx * a - o[0]) / d[0], p = at(o, d, t), y = p[1] - hg;
-      if (y >= 0 && y <= hb && Math.abs(p[2]) <= L2 && (y < 0.06 || y > hb - 0.08 || hallLattice(p[2], y / 0.3, 0.3, 0.025))) take(t, HALL_MAT.rail, [1, 0, 0], [p[2], y]);
+      if (y >= 0 && y <= hb && Math.abs(p[2]) <= L2 && hallBalustrade(p[2], y, hb)) take(t, HALL_MAT.rail, [1, 0, 0], [p[2], y]);
     }
   }
   // Columns and ribs, one per bay line, front to back along the ray's z
@@ -276,8 +284,130 @@ export function hallTraceCpu(h: HallParams, o: V3, d: V3, all = false): HallHit 
       const [s, hh] = uvOf(p);
       if (hallLattice(s, hh, rd - 2 * ch, bar)) take(t, HALL_MAT.iron, [0, 0, 1], [s, hh]);
     }
+    // The chords' ends at the springs: the planes through the vault's axis at angles +-ths.
+    for (const sg of [-1, 1]) {
+      const th = sg * ths, c = cs, sn = sg * ss, den = d[0] * c - d[1] * sn;
+      if (Math.abs(den) < 1e-12) continue;
+      const t = -(o[0] * c - (o[1] - yc) * sn) / den;
+      if (t <= 0 || t >= best.t || t < iz[0] || t > iz[1]) continue;
+      const p = at(o, d, t), rho = p[0] * sn + (p[1] - yc) * c;
+      if ((rho >= R - rd && rho <= R - rd + ch) || (rho >= R - ch && rho <= R)) take(t, HALL_MAT.iron, [c, -sn, 0], [(R - rd / 2) * th, (rho - (R - rd + ch)) / (rd - 2 * ch)]);
+    }
   }
   return best;
+}
+
+// ---------------------------------------------------------------- mesh
+
+/** Floats per hall mesh vertex: position (m), normal (either side: the shader turns it to the eye), uv, material (HALL_MAT), pattern (HALL_PATTERN). */
+export const HALL_VERTEX = 10;
+/**
+ * What the fragment shader cuts out of a face: nothing; the ribs' web
+ * lattice (uv: arc length at the web's middle in web panels, height in the
+ * web, 0 to 1); the balustrade's rails and lattice (uv: z, height above the
+ * deck, m). The CPU twin is hallLattice and hallBalustrade.
+ */
+export const HALL_PATTERN = { solid: 0, web: 1, balustrade: 2 } as const;
+
+/** The hall as triangles (hall metres): opaque surfaces, ordered near-first for early depth rejection (ribs, columns, balustrade, then the envelope), and the glazing. */
+export interface HallMesh { opaque: Float32Array; glass: Float32Array }
+
+/** Angles from a to b in equal steps of at most step, both ends included. */
+function steps(a: number, b: number, step: number): number[] {
+  const n = Math.max(1, Math.ceil((b - a) / step));
+  return Array.from({ length: n + 1 }, (_, i) => a + ((b - a) * i) / n);
+}
+
+/**
+ * The hall's surfaces as a triangle mesh, the rasterized counterpart of
+ * hallTraceCpu: the same surfaces, curved ones as facets with their
+ * vertices on the true surface (arcs every `arc` radians, columns of
+ * `column` sides), and the lattices as flat faces whose bars the fragment
+ * shader cuts (HALL_PATTERN). Faces hidden from inside are left out: the
+ * ribs' outer chords' backs (against the glass), and the decks' ends and
+ * backs (against the walls).
+ */
+export function hallMesh(h: HallParams, arc = 0.025, column = 16): HallMesh {
+  const { R, yc, spring: ths } = hallArch(h);
+  const a = h.span / 2, hs = h.spring, L2 = h.length / 2, gd = h.galleryDepth, rd = h.ribDepth, rw = h.ribWidth, ch = h.chord;
+  const d = Math.PI / 180, clear = h.clear * d, lantern = h.lantern * d;
+  const opaque: number[] = [], glass: number[] = [];
+  type Vtx = [V3, V3, [number, number]];
+  const tri = (out: number[], mat: number, pat: number, ...vs: Vtx[]) => { for (const [p, n, uv] of vs) out.push(...p, ...n, ...uv, mat, pat); };
+  const quad = (out: number[], mat: number, pat: number, v0: Vtx, v1: Vtx, v2: Vtx, v3: Vtx) => tri(out, mat, pat, v0, v1, v2, v0, v2, v3);
+  const ring = (r: number, th: number, z: number): V3 => [r * Math.sin(th), yc + r * Math.cos(th), z];
+  const radial = (th: number): V3 => [Math.sin(th), Math.cos(th), 0];
+  const zAxis: V3 = [0, 0, 1], xAxis: V3 = [1, 0, 0], yAxis: V3 = [0, 1, 0];
+  const nr = hallRibs(h);
+  const ribTh = steps(-ths, ths, arc);
+
+  // Ribs: the chords' faces seen from inside, solid; the webs' faces, latticed.
+  const p = rd - 2 * ch, sMid = R - rd / 2;
+  for (let k = 0; k < nr; k++) {
+    const zk = (k - (nr - 1) / 2) * h.bay, z0 = zk - rw / 2, z1 = zk + rw / 2;
+    for (let i = 0; i + 1 < ribTh.length; i++) {
+      const t0 = ribTh[i]!, t1 = ribTh[i + 1]!;
+      for (const r of [R - rd, R - rd + ch, R - ch]) {
+        quad(opaque, HALL_MAT.iron, HALL_PATTERN.solid, [ring(r, t0, z0), radial(t0), [sMid * t0, r]], [ring(r, t1, z0), radial(t1), [sMid * t1, r]], [ring(r, t1, z1), radial(t1), [sMid * t1, r]], [ring(r, t0, z1), radial(t0), [sMid * t0, r]]);
+      }
+      for (const z of [z0, z1]) {
+        for (const [r0, r1] of [[R - rd, R - rd + ch], [R - ch, R]] as const) {
+          quad(opaque, HALL_MAT.iron, HALL_PATTERN.solid, [ring(r0, t0, z), zAxis, [sMid * t0, r0]], [ring(r0, t1, z), zAxis, [sMid * t1, r0]], [ring(r1, t1, z), zAxis, [sMid * t1, r1]], [ring(r1, t0, z), zAxis, [sMid * t0, r1]]);
+        }
+        const r0 = R - rd + ch, r1 = R - ch;
+        quad(opaque, HALL_MAT.iron, HALL_PATTERN.web, [ring(r0, t0, z), zAxis, [(sMid * t0) / p, 0]], [ring(r0, t1, z), zAxis, [(sMid * t1) / p, 0]], [ring(r1, t1, z), zAxis, [(sMid * t1) / p, 1]], [ring(r1, t0, z), zAxis, [(sMid * t0) / p, 1]]);
+      }
+    }
+    // The chords' ends at the springs.
+    for (const th of [-ths, ths]) {
+      const n: V3 = [Math.cos(th), -Math.sin(th), 0];
+      for (const [r0, r1] of [[R - rd, R - rd + ch], [R - ch, R]] as const) {
+        quad(opaque, HALL_MAT.iron, HALL_PATTERN.solid, [ring(r0, th, z0), n, [sMid * th, r0]], [ring(r1, th, z0), n, [sMid * th, r1]], [ring(r1, th, z1), n, [sMid * th, r1]], [ring(r0, th, z1), n, [sMid * th, r0]]);
+      }
+    }
+    // Columns on the bay line.
+    for (const sx of [-1, 1]) {
+      const phi = steps(0, 2 * Math.PI, (2 * Math.PI) / column);
+      for (let i = 0; i + 1 < phi.length; i++) {
+        const f0 = phi[i]!, f1 = phi[i + 1]!;
+        const at = (f: number, y: number): V3 => [sx * a + h.column * Math.cos(f), y, zk + h.column * Math.sin(f)];
+        const n0: V3 = [Math.cos(f0), 0, Math.sin(f0)], n1: V3 = [Math.cos(f1), 0, Math.sin(f1)];
+        quad(opaque, HALL_MAT.iron, HALL_PATTERN.solid, [at(f0, 0), n0, [f0, 0]], [at(f1, 0), n1, [f1, 0]], [at(f1, hs), n1, [f1, hs]], [at(f0, hs), n0, [f0, hs]]);
+      }
+    }
+  }
+  for (const sx of [-1, 1]) {
+    const xa = sx * a, xw = sx * (a + gd), hg = h.gallery, hb = h.balustrade;
+    // Balustrade on the column line, latticed.
+    quad(opaque, HALL_MAT.rail, HALL_PATTERN.balustrade, [[xa, hg, -L2], xAxis, [-L2, 0]], [[xa, hg, L2], xAxis, [L2, 0]], [[xa, hg + hb, L2], xAxis, [L2, hb]], [[xa, hg + hb, -L2], xAxis, [-L2, hb]]);
+    // Gallery deck: top, underside, front.
+    for (const y of [hg, hg - h.deck]) quad(opaque, HALL_MAT.wall, HALL_PATTERN.solid, [[xa, y, -L2], yAxis, [-L2, y]], [[xw, y, -L2], yAxis, [-L2, y]], [[xw, y, L2], yAxis, [L2, y]], [[xa, y, L2], yAxis, [L2, y]]);
+    quad(opaque, HALL_MAT.wall, HALL_PATTERN.solid, [[xa, hg - h.deck, -L2], xAxis, [-L2, hg - h.deck]], [[xa, hg - h.deck, L2], xAxis, [L2, hg - h.deck]], [[xa, hg, L2], xAxis, [L2, hg]], [[xa, hg, -L2], xAxis, [-L2, hg]]);
+    // Outer wall, and the aisle's ceiling at the spring.
+    quad(opaque, HALL_MAT.wall, HALL_PATTERN.solid, [[xw, 0, -L2], xAxis, [-L2, 0]], [[xw, 0, L2], xAxis, [L2, 0]], [[xw, hs, L2], xAxis, [L2, hs]], [[xw, hs, -L2], xAxis, [-L2, hs]]);
+    quad(opaque, HALL_MAT.wall, HALL_PATTERN.solid, [[xa, hs, -L2], yAxis, [xa, -L2]], [[xw, hs, -L2], yAxis, [xw, -L2]], [[xw, hs, L2], yAxis, [xw, L2]], [[xa, hs, L2], yAxis, [xa, L2]]);
+  }
+  // End walls below the spring, and the glazed end screens above it (a fan over the arch's segment).
+  const screenTh = steps(-ths, ths, arc);
+  for (const zs of [-L2, L2]) {
+    const W = a + gd;
+    quad(opaque, HALL_MAT.wall, HALL_PATTERN.solid, [[-W, 0, zs], zAxis, [-W, 0]], [[W, 0, zs], zAxis, [W, 0]], [[W, hs, zs], zAxis, [W, hs]], [[-W, hs, zs], zAxis, [-W, hs]]);
+    for (let i = 0; i + 1 < screenTh.length; i++) {
+      const q0 = ring(R, screenTh[i]!, zs), q1 = ring(R, screenTh[i + 1]!, zs);
+      tri(glass, HALL_MAT.screen, HALL_PATTERN.solid, [[0, hs, zs], zAxis, [0, hs]], [q0, zAxis, [q0[0], q0[1]]], [q1, zAxis, [q1[0], q1[1]]]);
+    }
+  }
+  // The vault: roof panels at the sides, clear glass, the crown lantern; uv: arc length, z.
+  const bands = [-ths, -clear, -lantern, lantern, clear, ths];
+  for (let b = 0; b + 1 < bands.length; b++) {
+    const th = steps(bands[b]!, bands[b + 1]!, arc), mid = Math.abs((bands[b]! + bands[b + 1]!) / 2);
+    const mat = mid < lantern ? HALL_MAT.lantern : mid < clear ? HALL_MAT.glass : HALL_MAT.panel;
+    for (let i = 0; i + 1 < th.length; i++) {
+      const t0 = th[i]!, t1 = th[i + 1]!;
+      quad(mat === HALL_MAT.panel ? opaque : glass, mat, HALL_PATTERN.solid, [ring(R, t0, -L2), radial(t0), [R * t0, -L2]], [ring(R, t1, -L2), radial(t1), [R * t1, -L2]], [ring(R, t1, L2), radial(t1), [R * t1, L2]], [ring(R, t0, L2), radial(t0), [R * t0, L2]]);
+    }
+  }
+  return { opaque: new Float32Array(opaque), glass: new Float32Array(glass) };
 }
 
 // ---------------------------------------------------------------- WGSL
@@ -385,7 +515,7 @@ fn hallTrace(hp: Hall, o: vec3f, d: vec3f) -> HallHit {
     }
     if (abs(d.x) > 1e-12) {
       let t = (sx * a - o.x) / d.x; let p = o + t * d; let y = p.y - hg;
-      if (y >= 0.0 && y <= hb && abs(p.z) <= L2 && (y < 0.06 || y > hb - 0.08 || hallLattice(p.z, y / 0.3, 0.3, 0.025))) {
+      if (y >= 0.0 && y <= hb && abs(p.z) <= L2 && (y < ${BALUSTRADE.bottom} || y > hb - ${BALUSTRADE.top} || hallLattice(p.z, y / ${BALUSTRADE.pitch}, ${BALUSTRADE.pitch}, ${BALUSTRADE.bar}))) {
         hallTake(&best, d, t, ${HALL_MAT.rail}u, vec3f(1.0, 0.0, 0.0), vec2f(p.z, y));
       }
     }
@@ -434,6 +564,17 @@ fn hallTrace(hp: Hall, o: vec3f, d: vec3f) -> HallHit {
       if (r < R - rd + ch || r > R - ch || abs(th) > ths) { continue; }
       let s = (R - rd / 2.0) * th; let hh = (r - (R - rd + ch)) / (rd - 2.0 * ch);
       if (hallLattice(s, hh, rd - 2.0 * ch, bar)) { hallTake(&best, d, t, ${HALL_MAT.iron}u, vec3f(0.0, 0.0, 1.0), vec2f(s, hh)); }
+    }
+    for (var e = 0; e < 2; e++) {
+      let sg = select(1.0, -1.0, e == 0);
+      let th = sg * ths; let c = hp.g5.x; let sn = sg * hp.g5.y; let den = d.x * c - d.y * sn;
+      if (abs(den) < 1e-12) { continue; }
+      let t = -(o.x * c - (o.y - yc) * sn) / den;
+      if (t <= 0.0 || t >= best.t || t < iz.x || t > iz.y) { continue; }
+      let p = o + t * d; let rho = p.x * sn + (p.y - yc) * c;
+      if ((rho >= R - rd && rho <= R - rd + ch) || (rho >= R - ch && rho <= R)) {
+        hallTake(&best, d, t, ${HALL_MAT.iron}u, vec3f(c, -sn, 0.0), vec2f((R - rd / 2.0) * th, (rho - (R - rd + ch)) / (rd - 2.0 * ch)));
+      }
     }
   }
   if (best.t >= HALL_BIG) { best.t = HALL_BIG * 10.0; }

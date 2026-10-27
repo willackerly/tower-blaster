@@ -1,6 +1,6 @@
 // The hall's geometry (hall.ts), on its CPU twin: known rays and invariants.
 import { describe, expect, it } from 'vitest';
-import { HALL_MAT, hallArch, hallInside, hallLattice, hallRibs, hallScaled, hallTraceCpu, OLYMPIA, type HallParams } from '../src/hall.ts';
+import { HALL_MAT, HALL_PATTERN, HALL_VERTEX, hallArch, hallBalustrade, hallInside, hallLattice, hallMesh, hallRibs, hallScaled, hallTraceCpu, OLYMPIA, type HallParams } from '../src/hall.ts';
 import type { V3 } from '../src/math.ts';
 
 const H = OLYMPIA;
@@ -167,5 +167,82 @@ describe('the render bench\'s hall (bench.ts real-hall)', () => {
       if (s > 1) expect(hallInside(hallScaled(H, s - 0.25), eye.map((x) => x * 1.1) as V3)).toBe(false);
     }
     expect(hallSizeFor([0, 1.7, 0])).toBe(1);
+  });
+
+  it('a run of some variants leaves the marginal-cost columns of the others blank', async () => {
+    const { renderBenchMarkdown } = await import('../src/bench.ts');
+    const c = (variant: 'full' | 'real' | 'real-hall', ms: number) => ({
+      world: 'near' as const, bodies: 10_000, variant, frameMs: ms, frameCI: [ms, ms] as [number, number], gpuP50: ms, gpuP95: ms, gpuSumP50: ms,
+      passes: {}, drawn: { boxes: 1, farBoxes: 0, shadowBoxes: 1 }, particles: 0, batches: [ms, ms * 1.01, ms * 0.99, ms],
+    });
+    const md = renderBenchMarkdown({ adapter: 'x', software: false, timestamps: true, width: 1, height: 1, cases: [c('full', 1), c('real', 2), c('real-hall', 2.5)] }, 'h');
+    const row = md.split('\n').at(-1)!.split('|').map((x) => x.trim());
+    const head = md.split('\n').at(-3)!.split('|').map((x) => x.trim());
+    const col = (name: string) => row[head.indexOf(name)];
+    expect(col('Real look instead of candy')).toMatch(/^\+100\.0%/);
+    expect(col('Hall (real inside it vs real)')).toMatch(/^\+25\.0%/);
+    for (const name of ['Without shadow', 'Stone textures (real vs real without)', 'Floor sky view cones', 'Impact dust and chips, steady shower (vs none alive)']) expect(col(name), name).toBe('');
+  });
+});
+
+/** Nearest hit of a ray on the mesh's triangles (Moller-Trumbore), with the lattices cut as the fragment shader cuts them (at full resolution). */
+function meshTrace(tris: Float32Array[], o: V3, d: V3): { t: number; mat: number } {
+  let best = { t: Infinity, mat: HALL_MAT.none as number };
+  const V = HALL_VERTEX;
+  for (const buf of tris) for (let i = 0; i < buf.length; i += 3 * V) {
+    const p0 = [buf[i]!, buf[i + 1]!, buf[i + 2]!], e1 = [buf[i + V]! - p0[0]!, buf[i + V + 1]! - p0[1]!, buf[i + V + 2]! - p0[2]!], e2 = [buf[i + 2 * V]! - p0[0]!, buf[i + 2 * V + 1]! - p0[1]!, buf[i + 2 * V + 2]! - p0[2]!];
+    const q = [d[1] * e2[2]! - d[2] * e2[1]!, d[2] * e2[0]! - d[0] * e2[2]!, d[0] * e2[1]! - d[1] * e2[0]!];
+    const det = e1[0]! * q[0]! + e1[1]! * q[1]! + e1[2]! * q[2]!;
+    if (Math.abs(det) < 1e-12) continue;
+    const s = [o[0] - p0[0]!, o[1] - p0[1]!, o[2] - p0[2]!];
+    const u = (s[0]! * q[0]! + s[1]! * q[1]! + s[2]! * q[2]!) / det;
+    if (u < 0 || u > 1) continue;
+    const r = [s[1]! * e1[2]! - s[2]! * e1[1]!, s[2]! * e1[0]! - s[0]! * e1[2]!, s[0]! * e1[1]! - s[1]! * e1[0]!];
+    const v = (d[0] * r[0]! + d[1] * r[1]! + d[2] * r[2]!) / det;
+    if (v < 0 || u + v > 1) continue;
+    const t = (e2[0]! * r[0]! + e2[1]! * r[1]! + e2[2]! * r[2]!) / det;
+    if (t <= 0 || t >= best.t) continue;
+    const pat = buf[i + 9]!;
+    if (pat !== HALL_PATTERN.solid) {
+      const uv = [0, 1].map((c) => (1 - u - v) * buf[i + 6 + c]! + u * buf[i + V + 6 + c]! + v * buf[i + 2 * V + 6 + c]!);
+      const on = pat === HALL_PATTERN.web ? hallLattice(uv[0]!, uv[1]!, 1, H.bar / (H.ribDepth - 2 * H.chord)) : hallBalustrade(uv[0]!, uv[1]!, H.balustrade);
+      if (!on) continue;
+    }
+    best = { t, mat: buf[i + 8]! };
+  }
+  return best;
+}
+
+describe('the hall mesh (hallMesh)', () => {
+  const mesh = hallMesh(H);
+
+  it('is the traced hall in triangles: the same surface at the same distance, edges aside', () => {
+    expect(mesh.opaque.length % (3 * HALL_VERTEX)).toBe(0);
+    expect(mesh.glass.length % (3 * HALL_VERTEX)).toBe(0);
+    // About 25k triangles, nearly all of them the ribs'.
+    expect((mesh.opaque.length + mesh.glass.length) / (3 * HALL_VERTEX)).toBeLessThan(30_000);
+    const r = rng(17);
+    let same = 0, edges = 0, rays = 0;
+    const bad: unknown[] = [];
+    for (let i = 0; i < 700; i++) {
+      const o: V3 = [(r() - 0.5) * 50, 0.2 + r() * 25, (r() - 0.5) * 130];
+      const d = unit([r() - 0.5, r() - 0.35, r() - 0.5]);
+      // The trace is for rays from inside the hall and outside its solids (a rib's chords).
+      const inRib = Math.abs(((o[2] / H.bay + (n - 1) / 2 + 0.5) % 1 + 1) % 1 - 0.5) * H.bay < H.ribWidth / 2 + 0.01 && Math.hypot(o[0], o[1] - yc) > R - H.ribDepth - 0.01;
+      if (!hallInside(H, o) || inRib) continue;
+      const want = hallTraceCpu(H, o, d), got = meshTrace([mesh.opaque, mesh.glass], o, d);
+      rays++;
+      // Facets lie within 2 mm of the curved surfaces; a grazing ray sees that stretched by 1 / cos.
+      if (got.mat === want.mat && (want.mat === HALL_MAT.none || Math.abs(got.t - want.t) < 0.01 + 0.01 * want.t)) { same++; continue; }
+      const near = [[0.01, 0, 0], [0, 0.01, 0], [0, 0, 0.01], [-0.01, 0, 0], [0, -0.01, 0], [0, 0, -0.01]].some((e) => {
+        const q = hallTraceCpu(H, [o[0] + e[0]!, o[1] + e[1]!, o[2] + e[2]!], d);
+        return q.mat !== want.mat || Math.abs(q.t - want.t) > 0.05;
+      });
+      if (near) { edges++; continue; }
+      bad.push({ o, d, want, got });
+    }
+    expect(bad, JSON.stringify(bad.slice(0, 3))).toEqual([]);
+    expect(rays).toBeGreaterThan(500);
+    expect(same).toBeGreaterThan(0.98 * rays);
   });
 });

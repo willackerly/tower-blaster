@@ -120,33 +120,39 @@ rules the code follows; the doc has the reasoning.
   the world's origin on the floor, in metres through `FrameParams.metres`,
   so it is the same hall in cube and plank units (a test renders it at
   metres 1, 0.5 and 0.0234: no pixel inside a surface differs).
-- Drawing. After the sky, a full-screen triangle whose fragments trace the
-  hall from the eye (`fsHall`) and write the hit's depth (`frag_depth`,
-  depth test less-equal): bodies in front hide the hall and the hall's
-  columns and galleries hide bodies behind them (tested pixel by pixel
-  against the CPU trace). Rays that meet the floor first miss the hall and
-  draw nothing, so the floor is the ground pass's as before (those pixels
-  are bit-identical to the outdoor frame). Glazing is premultiplied over
-  the sky: clear glass transmits 80%, milky glass glows with the sky and
-  sun on its outer face instead; glazing bars (every 0.6 m down the slope),
-  purlins (every 2.6 m of arc) and the end screens' mullions and transoms
-  are antialiased lines. The trace assumes rays from inside, so the hall is
-  drawn only while the eye is inside it (`hallUniforms`); from outside the
-  frame is the outdoor one.
-- Cost. One trace per pixel above the floor (frag_depth turns off early
-  depth rejection, so pixels under bodies trace too). The trace now walks
-  the bay lines front to back from the eye and stops at the first whose
-  slab starts past the nearest hit so far: 3.5 of the 13 bay lines per ray
-  on average from near the centre (tested to find exactly what testing all
-  13 finds). `pnpm bench:render --variants full,real,real-hall --counts
-  10000` measures it (real-hall vs real); not measured on the M5 Max yet.
+- Drawing. The hall is a mesh (`hallMesh`, about 25k triangles, nearly
+  all the ribs'), rasterized like any geometry: curved surfaces as facets
+  with their vertices on the true surface (arcs every 0.025 rad: within
+  2 mm), checked against the analytic trace on the CPU (the same surface
+  at the same distance on 98%+ of rays from inside; the rest at edges).
+  Opaque surfaces are drawn after the bodies, so pixels they hide are never
+  shaded, and before the floor; the ribs' web lattice and the balustrade
+  are flat faces whose bars the fragment shader cuts as antialiased
+  coverage, through alpha to coverage (4x MSAA), so they do not alias at a
+  distance. The glazing is drawn after the sky, premultiplied over it:
+  clear glass transmits 80%, milky glass glows with the sky and sun on its
+  outer face instead; glazing bars (every 0.6 m down the slope), purlins
+  (every 2.6 m of arc) and the end screens' mullions and transoms are
+  antialiased lines. Tested pixel by pixel against the CPU trace: rays at
+  the floor draw what they drew outdoors, bit for bit; columns hide bodies
+  behind them; bodies hide the hall behind them. The hall is drawn only
+  while the eye is inside it (`hallUniforms`); from outside, the frame is
+  the outdoor one.
+- Alternative measured and dropped: the first version traced the hall per
+  pixel in a full-screen pass writing `frag_depth` (PR #66's first
+  commit). Exact, but `frag_depth` turns off early depth rejection, so
+  every pixel traced: on the M5 Max at 2560x1440 it cost +1.00 ms (near
+  10k) and +1.13 ms (near 100k), over the 3 and 4 ms caps
+  (render-m5-58c79ca-hall.md). The analytic trace stays as the mesh's
+  reference (`hallTraceCpu`, and its WGSL twin), now walking the bay lines
+  front to back (3.5 of 13 per ray).
+- Cost. `pnpm bench:render --variants full,real,real-hall --counts
+  10000,100000` measures it (real-hall vs real).
 - Not yet. Lighting is ambient only: the sky through the vault's glazed
   share above, the floor's radiance below; the roof casts no shadow, so
-  bodies and floor are still sunlit as outdoors (K3.2b: sun visibility
-  through the roof, interior ambient). The floor is still the outdoor
-  ground (K3.2c: polished concrete). The ribs' webs and the balustrade's
-  lattice are hard-edged and alias at a distance; they need coverage with
-  the trace continued behind them (K3.4).
+  bodies and floor are still sunlit as outdoors (K3.2b: the roof into the
+  shadow map, interior ambient). The floor is still the outdoor ground
+  (K3.2c: polished concrete).
 
 ## What step 4 built
 

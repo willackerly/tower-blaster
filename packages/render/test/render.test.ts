@@ -9,7 +9,7 @@ import { buildScenario } from '@tb/scenarios';
 import { Body, readStruct, Shape, TIER } from '@tb/schema';
 import { RapierHost } from '@tb/adapter-rapier';
 import { TieredEngine } from '@tb/lattice';
-import { ADAPT_MAX, ADAPT_REF, adaptedExposure, hallScaled, hallUniform, hallUniforms, HAZY_DAY, OLYMPIA, linearToSrgb, lookByName, lookUniforms, parseRealOptions, REAL_DEFAULTS, REAL_KNOBS, realLook, writeRealOptions, CLEAR_DAY, MIE_H, mieExtinction, multiTable, normalize, OZONE, OZONE_WIDTH, RAYLEIGH, RAYLEIGH_H, skyRadiance, skyViewDir, skyViewUv, sunAtGround, sunDiscRadiance, transmittance, transmittanceHMu, transmittanceTable, transmittanceUv } from '../src/index.ts';
+import { ADAPT_MAX, ADAPT_REF, adaptedExposure, hallArch, hallScaled, hallUniforms, HAZY_DAY, OLYMPIA, linearToSrgb, lookByName, lookUniforms, parseRealOptions, REAL_DEFAULTS, REAL_KNOBS, realLook, writeRealOptions, CLEAR_DAY, MIE_H, mieExtinction, multiTable, normalize, OZONE, OZONE_WIDTH, RAYLEIGH, RAYLEIGH_H, skyRadiance, skyViewDir, skyViewUv, sunAtGround, sunDiscRadiance, transmittance, transmittanceHMu, transmittanceTable, transmittanceUv } from '../src/index.ts';
 import { agx, aoFootReference, debrisClass, debrisSpawnReference, debrisWeight, newDebrisReference, chipCount, chipStepReference, CHIP_POOL, CHIPS_PER_EVENT, debrisRings, DEFAULT_DEBRIS, DEFAULT_SPARKS, dustCount, dustStepReference, DUST_PER_EVENT, DUST_POOL, bevelNormal, type V3, CANDY_NIGHT, CTL, HOT_FULL, MAX_EVENTS, SPAWN_BUDGET, FX_WORDS, packFx, tintWord, unpackFx, frustumPlanes, linearToOklab, listMatches, oklabToLinear, srgbToLinear, lookAt, lookOf, lookRange, MATERIAL, multiply, SEG, packBodies, changedRanges, drawnTier, packShapes, paletteOf, perspective, unpackLook } from '../src/index.ts';
 import { gpu, call, type D } from './harness.ts';
 
@@ -256,7 +256,11 @@ describe('real look options', () => {
     // Plank units (2.34 cm): the eye 1.7 m up at the centre is inside; 40 m up (above the 15.5 m crown) it is not.
     const u = hallUniforms(l, 0.0234, [0, 2 + 1.7 / 0.0234, 0], 2);
     expect(u.hallLook).toEqual([1, 0.0234, 0.2, 0.3]);
-    expect([0, 1, 2, 3, 4, 5].flatMap((k) => u[`hall${k}`]!)).toEqual(Array.from(hallUniform(hallScaled(OLYMPIA, 0.5))));
+    // Glazed share of the vault (30 of its ~74 degrees from the crown), web bar width in web panels, balustrade height (m, scaled with the hall).
+    const h = hallScaled(OLYMPIA, 0.5);
+    expect(u.hallShade![0]).toBeCloseTo((30 * Math.PI) / 180 / hallArch(h).spring, 12);
+    expect(u.hallShade![1]).toBeCloseTo(0.1 / (2.1 - 0.5), 12);
+    expect(u.hallShade![2]).toBe(0.55);
     expect(hallUniforms(l, 0.0234, [0, 2 + 40 / 0.0234, 0], 2).hallLook![0]).toBe(0);
     // In metres: the half-size hall ends 33.5 m from its centre.
     expect(hallUniforms(l, 1, [0, 3, 33], 2).hallLook![0]).toBe(1);
@@ -265,7 +269,7 @@ describe('real look options', () => {
     for (const look of [realLook(), { ...HAZY_DAY, hall: l.hall }]) {
       const off = hallUniforms(look, 1, [0, 1.7, 0], 0);
       expect(off.hallLook![0]).toBe(0);
-      expect(off.hall3).toEqual([0, 0, 0, 0]);
+      expect(off.hallShade).toEqual([0, 0, 0, 0]);
     }
   });
   it('the defaults sit inside the knob ranges, and looks resolve by name', () => {
@@ -1258,9 +1262,9 @@ describe('drawing', () => {
     expect(r.error).toBeNull();
     expect(r.diff).toBe(0);
     expect(r.prevEqual).toBe(true); // beforeStep() copied the state into prev
-    // Uniforms only (frame, cull, spark and light params, spark control reset): measured 1682 B (the debris params and counters added 24, the hall's
-    // 7 vec4 in the frame 112 + its padding). Any per-body upload is 41 x Body.size more.
-    expect(r.bytesPerFrame).toBeLessThanOrEqual(1728);
-    expect(1728).toBeLessThan(41 * Body.size);
+    // Uniforms only (frame, cull, spark and light params, spark control reset): measured 1602 B (the debris params and counters added 24, the
+    // hall's 2 vec4 in the frame 48 with padding). Any per-body upload is 41 x Body.size more.
+    expect(r.bytesPerFrame).toBeLessThanOrEqual(1650);
+    expect(1650).toBeLessThan(41 * Body.size);
   });
 });
