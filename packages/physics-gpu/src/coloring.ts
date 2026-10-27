@@ -19,22 +19,35 @@
 // The atomic fill leaves each row in scheduling order; rows are then sorted
 // by manifold slot so the solver, which walks a body's row to sum its
 // contact forces, is bit-for-bit reproducible.
+//
+// Opt-in (ColoringOptions, from AvbdParams.colorMode and colorPriority; the
+// reference's coloring.ts says why the rules are proper and what they buy):
+//   - colorMode 1-4: before the rounds, `cells` takes each body's lattice cell
+//     parities and `prefer` its preferred colour; a round then takes that
+//     colour when no higher-priority neighbour holds it. The priority, and so
+//     the rounds, are the default's. 4 colours instead of 9-11 on resting
+//     lattices of cubes; the same choice as today off the lattice.
+//   - colorPriority 1: largest degree first, then the hash (more rounds).
+// Both are experimental: the reference's coloring.ts gives their quality
+// record. Off, the shaders are the default's, character for character.
 import { assertStorageFits, RadixSorter, Scanner } from '@tb/gpu';
-import { Manifold, wgslStruct } from '@tb/schema';
+import { COLOR_MODES, COLOR_PRIORITIES, LATTICE_MIN_ALIGNED } from '@tb/physics-ref';
+import { Body, Manifold, Shape, wgslStruct } from '@tb/schema';
 
 const WG = 64;
 /** Colours are tracked in a 64-bit mask; a body needing more sets the overflow flag. */
 export const MAX_COLORS = 64;
 const UNCOLORED = 0xffffffff;
 
-const PRIORITY = /* wgsl */ `
+const HASH = /* wgsl */ `
 fn priority(i: u32) -> u32 {
   var x = i;
   x ^= x >> 16u; x *= 0x7feb352du;
   x ^= x >> 15u; x *= 0x846ca68bu;
   x ^= x >> 16u;
   return x;
-}
+}`;
+const PRIORITY = /* wgsl */ `${HASH}
 fn outranks(i: u32, j: u32) -> bool {
   let pi = priority(i);
   let pj = priority(j);
@@ -100,8 +113,27 @@ fn sortRows(@builtin(global_invocation_id) id: vec3u) {
   }
 }`;
 
-const ROUNDS = /* wgsl */ `
-${PRIORITY}
+/** Opt-in colouring rules (see the header); 0 is the default for each. */
+export interface ColoringOptions {
+  /** AvbdParams.colorMode: 0 none, 1 eight lattice colours, 2 four (corner kernel), 3 four (in-plane-diagonal kernel), 4 as 3 for the lattice interior only. */
+  colorMode?: number;
+  /** AvbdParams.colorPriority: 0 the hash, 1 largest degree first. */
+  colorPriority?: number;
+}
+
+// Largest degree first: the row length (neighbours with points) decides, then the hash.
+const DEGREE_FIRST = /* wgsl */ `${HASH}
+fn outranks(i: u32, j: u32) -> bool {
+  let di = rowLength[i];
+  let dj = rowLength[j];
+  if (di != dj) { return di > dj; }
+  let pi = priority(i);
+  let pj = priority(j);
+  return pi > pj || (pi == pj && i < j);
+}`;
+
+const roundsWgsl = (mode: number, degreeFirst: boolean) => /* wgsl */ `
+${degreeFirst ? DEGREE_FIRST : PRIORITY}
 struct Params { n: u32, maxEdges: u32 }
 @group(0) @binding(0) var<storage, read> rowStart: array<u32>;
 @group(0) @binding(1) var<storage, read> rowLength: array<u32>;
@@ -111,7 +143,9 @@ struct Params { n: u32, maxEdges: u32 }
 // [colours used, uncoloured after the last round, overflow, ...]
 @group(0) @binding(5) var<storage, read_write> info: array<atomic<u32>, 8>;
 @group(0) @binding(6) var<storage, read_write> order: array<u32>;
-@group(0) @binding(7) var<uniform> p: Params;
+@group(0) @binding(7) var<uniform> p: Params;${mode ? `
+// Each body's preferred colour (lattice cells, below), ${UNCOLORED} for none.
+@group(0) @binding(8) var<storage, read> pref: array<u32>;` : ''}
 
 @compute @workgroup_size(${WG})
 fn init(@builtin(global_invocation_id) id: vec3u) {
@@ -143,7 +177,10 @@ fn round(@builtin(global_invocation_id) id: vec3u) {
   var mine = 0u;
   if (used.x != 0xffffffffu) { mine = countTrailingZeros(~used.x); }
   else if (used.y != 0xffffffffu) { mine = 32u + countTrailingZeros(~used.y); }
-  else { mine = ${MAX_COLORS - 1}u; atomicStore(&info[2], 1u); }
+  else { mine = ${MAX_COLORS - 1}u; atomicStore(&info[2], 1u); }${mode ? `
+  // A preferred colour (< 8) is taken when no higher-priority neighbour holds it.
+  let want = pref[i];
+  if (want < 32u && (used.x & (1u << want)) == 0u) { mine = want; }` : ''}
   colorOut[i] = mine;
 }
 
@@ -156,6 +193,79 @@ fn finish(@builtin(global_invocation_id) id: vec3u) {
   if (c == ${UNCOLORED}u) { atomicAdd(&info[1], 1u); colorOut[i] = ${MAX_COLORS - 1}u; }
   else { atomicMax(&info[0], c + 1u); colorOut[i] = c; }
   order[i] = i;
+}`;
+
+// Lattice preferences (colorMode 1-4), as physics-ref's latticeParity,
+// latticeColor and latticePreferences, in f32: a body's cell parities from
+// its pose, then its preferred colour from its own and its row's. Two
+// kernels, since the second reads every neighbour's parities.
+const PREFER = (mode: number) => /* wgsl */ `
+${wgslStruct(Body)}
+${wgslStruct(Shape)}
+struct Params { n: u32, maxEdges: u32, groundY: f32 }
+@group(0) @binding(0) var<storage, read> bodies: array<Body>;
+@group(0) @binding(1) var<storage, read> shapes: array<Shape>;
+@group(0) @binding(2) var<storage, read> rowStart: array<u32>;
+@group(0) @binding(3) var<storage, read> rowLength: array<u32>;
+@group(0) @binding(4) var<storage, read> adj: array<u32>;
+// Cell parities (bit 0 x, 1 y, 2 z), ${UNCOLORED} off the lattice.
+@group(0) @binding(5) var<storage, read_write> parity: array<u32>;
+@group(0) @binding(6) var<storage, read_write> pref: array<u32>;
+@group(0) @binding(7) var<uniform> p: Params;
+
+// A cube in the world lattice of its own size: axes within ~11 deg of the
+// world's, centre within 0.15 cell of a cell centre or corner on each axis
+// (y from the ground); each parity on the nearer of the two lattices.
+@compute @workgroup_size(${WG})
+fn cells(@builtin(global_invocation_id) id: vec3u) {
+  let i = id.x;
+  if (i >= p.n) { return; }
+  let b = bodies[i];
+  let s = shapes[b.shape];
+  parity[i] = ${UNCOLORED}u;
+  if (s.kind != 0u || s.half.x != s.half.y || s.half.x != s.half.z || !(s.half.x > 0.0)) { return; }
+  let x = b.rot.x; let y = b.rot.y; let z = b.rot.z; let w = b.rot.w;
+  // Columns of the rotation matrix.
+  let c0 = vec3f(1.0 - 2.0 * (y * y + z * z), 2.0 * (x * y + w * z), 2.0 * (x * z - w * y));
+  let c1 = vec3f(2.0 * (x * y - w * z), 1.0 - 2.0 * (x * x + z * z), 2.0 * (y * z + w * x));
+  let c2 = vec3f(2.0 * (x * z + w * y), 2.0 * (y * z - w * x), 1.0 - 2.0 * (x * x + y * y));
+  let big = vec3f(max(max(abs(c0.x), abs(c0.y)), abs(c0.z)), max(max(abs(c1.x), abs(c1.y)), abs(c1.z)), max(max(abs(c2.x), abs(c2.y)), abs(c2.z)));
+  if (any(big < vec3f(0.98))) { return; }
+  let q = vec3f(b.pos.x, b.pos.y - p.groundY, b.pos.z) / (2.0 * s.half.x);
+  let h = 2.0 * q;
+  if (any(abs(h - round(h)) >= vec3f(0.3))) { return; }
+  let f = floor(q);
+  let cell = select(floor(q + 0.5), f, abs(q - f - 0.5) < vec3f(0.25));
+  let bit = vec3u(bitcast<vec3u>(vec3i(cell)) & vec3u(1u));
+  parity[i] = bit.x | (bit.y << 1u) | (bit.z << 2u);
+}
+
+fn color4(bits: u32) -> u32 {
+  let px = bits & 1u; let py = (bits >> 1u) & 1u; let pz = (bits >> 2u) & 1u;
+  ${mode === 1 ? 'return 4u * py + 2u * px + pz;' : mode === 2 ? 'return 2u * (px ^ py) + (py ^ pz);' : 'return 2u * (px ^ pz) + py;' /* 3 and 4 */}
+}
+
+// Prefer the pattern colour with ${LATTICE_MIN_ALIGNED} or more aligned neighbours;${mode === 4 ? ' only when every neighbour is aligned and none has the same 4-colour (the lattice interior);' : mode === 1 ? '' : ' with one of the same 4-colour, the fallback 4-colour + 4 x (x parity);'} else none.
+@compute @workgroup_size(${WG})
+fn prefer(@builtin(global_invocation_id) id: vec3u) {
+  let i = id.x;
+  if (i >= p.n) { return; }
+  let mine = parity[i];
+  pref[i] = ${UNCOLORED}u;
+  if (mine == ${UNCOLORED}u) { return; }
+  let c = color4(mine);
+  var aligned = 0u;
+  var clash = false;
+  let start = rowStart[i];
+  let end = min(start + rowLength[i], p.maxEdges);
+  for (var k = start; k < end; k++) {
+    let pu = parity[adj[k]];
+    if (pu == ${UNCOLORED}u) { continue; }
+    aligned++;
+    clash = clash || color4(pu) == c;
+  }
+  if (aligned < ${LATTICE_MIN_ALIGNED}u) { return; }
+  ${mode === 4 ? 'if (aligned == end - start && !clash) { pref[i] = c; }' : mode === 1 ? 'pref[i] = c;' : 'pref[i] = select(c, c + 4u * (mine & 1u), clash);'}
 }`;
 
 // Separate small module: colour ranges and per-colour indirect dispatch
@@ -222,14 +332,26 @@ export class Coloring {
   private readonly binds: [GPUBindGroup, GPUBindGroup];
   private readonly rangesPipe: GPUComputePipeline;
   private readonly rangesBind: GPUBindGroup;
+  /** colorMode 1-4: each body's lattice cell parities and preferred colour (u32, ${UNCOLORED} for none), and the kernels that fill them. */
+  readonly parity: GPUBuffer | null = null;
+  readonly pref: GPUBuffer | null = null;
+  private readonly prefer: { cells: GPUComputePipeline; prefer: GPUComputePipeline; bind: GPUBindGroup } | null = null;
 
   /**
    * @param manifolds narrowphase output, one per pair slot
    * @param total broadphase total buffer (u32 x 8; [3] = pair slots written)
    * @param rounds Jones-Plassmann rounds; info[1] > 0 means too few
+   * @param options opt-in rules; a colorMode needs the bodies and shapes, whose poses it reads
    */
-  constructor(private readonly device: GPUDevice, manifolds: GPUBuffer, private readonly total: GPUBuffer, readonly capacity: number, maxPairs: number, readonly rounds = 64) {
+  constructor(
+    private readonly device: GPUDevice, manifolds: GPUBuffer, private readonly total: GPUBuffer, readonly capacity: number, maxPairs: number, readonly rounds = 64,
+    readonly options: ColoringOptions & { bodies?: GPUBuffer; shapes?: GPUBuffer } = {},
+  ) {
     if (rounds % 2 !== 0) throw new Error('Coloring: rounds must be even (the result ends in the first buffer)');
+    const mode = options.colorMode ?? 0, priority = options.colorPriority ?? 0;
+    if (!(COLOR_MODES as readonly number[]).includes(mode)) throw new Error(`Coloring: colorMode must be one of ${COLOR_MODES.join(', ')}, got ${mode}`);
+    if (!(COLOR_PRIORITIES as readonly number[]).includes(priority)) throw new Error(`Coloring: colorPriority must be one of ${COLOR_PRIORITIES.join(', ')}, got ${priority}`);
+    if (mode && !(options.bodies && options.shapes)) throw new Error('Coloring: a colorMode needs the bodies and shapes buffers');
     this.maxEdges = 2 * maxPairs;
     const buf = (bytes: number, label: string, extra = 0) => (assertStorageFits(device, bytes, label), device.createBuffer({ size: Math.max(16, bytes), usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST | extra, label }));
     this.degree = buf(capacity * 4, 'col degree');
@@ -252,9 +374,11 @@ export class Coloring {
       bindGroupLayouts: [device.createBindGroupLayout({ entries: kinds.map((type, binding) => ({ binding, visibility: GPUShaderStage.COMPUTE, buffer: { type } })) })],
     });
     const graphLayout = layoutOf(['read-only-storage', 'read-only-storage', 'storage', 'storage', 'storage', 'storage', 'uniform', 'storage']);
-    const roundLayout = layoutOf(['read-only-storage', 'read-only-storage', 'read-only-storage', 'storage', 'storage', 'storage', 'storage', 'uniform']);
+    // With a colorMode the rounds bind 8 storage buffers, the default limit per stage: one more binding here
+    // fails pipeline creation on default limits, and only with a mode set (the default-path tests would not see it).
+    const roundLayout = layoutOf(['read-only-storage', 'read-only-storage', 'read-only-storage', 'storage', 'storage', 'storage', 'storage', 'uniform', ...(mode ? ['read-only-storage' as const] : [])]);
     const graph = device.createShaderModule({ code: GRAPH, label: 'coloring graph' });
-    const roundsModule = device.createShaderModule({ code: ROUNDS, label: 'coloring rounds' });
+    const roundsModule = device.createShaderModule({ code: roundsWgsl(mode, priority === 1), label: 'coloring rounds' });
     const mk = (layout: GPUPipelineLayout, module: GPUShaderModule, entryPoint: string) => device.createComputePipeline({ layout, compute: { module, entryPoint } });
     this.pipes = {
       countDegree: mk(graphLayout, graph, 'countDegree'), fill: mk(graphLayout, graph, 'fill'), sortRows: mk(graphLayout, graph, 'sortRows'),
@@ -263,9 +387,20 @@ export class Coloring {
     const entries = (buffers: GPUBuffer[]) => buffers.map((buffer, binding) => ({ binding, resource: { buffer } }));
     this.graphBind = device.createBindGroup({ layout: this.pipes.countDegree.getBindGroupLayout(0), entries: entries([manifolds, total, this.degree, this.rowStart, this.rowLength, this.adj, this.uniform, this.adjSlot]) });
     // After fill, rowLength (the fill cursor) holds each row's length.
+    if (mode) {
+      this.parity = buf(capacity * 4, 'col lattice parity');
+      this.pref = buf(capacity * 4, 'col lattice preference');
+      const layout = layoutOf(['read-only-storage', 'read-only-storage', 'read-only-storage', 'read-only-storage', 'read-only-storage', 'storage', 'storage', 'uniform']);
+      const module = device.createShaderModule({ code: PREFER(mode), label: 'coloring lattice preference' });
+      const cells = mk(layout, module, 'cells');
+      this.prefer = {
+        cells, prefer: mk(layout, module, 'prefer'),
+        bind: device.createBindGroup({ layout: cells.getBindGroupLayout(0), entries: entries([options.bodies!, options.shapes!, this.rowStart, this.rowLength, this.adj, this.parity, this.pref, this.uniform]) }),
+      };
+    }
     const bindWith = (cin: GPUBuffer, cout: GPUBuffer) => device.createBindGroup({
       layout: this.pipes.round.getBindGroupLayout(0),
-      entries: entries([this.rowStart, this.rowLength, this.adj, cin, cout, this.info, this.order, this.uniform]),
+      entries: entries([this.rowStart, this.rowLength, this.adj, cin, cout, this.info, this.order, this.uniform, ...(this.pref ? [this.pref] : [])]),
     });
     this.binds = [bindWith(this.ping[0], this.ping[1]), bindWith(this.ping[1], this.ping[0])];
     const rmod = device.createShaderModule({ code: RANGES, label: 'coloring ranges' });
@@ -276,9 +411,12 @@ export class Coloring {
     });
   }
 
-  encode(encoder: GPUCommandEncoder, n: number): void {
+  /** @param groundY the ground's height, from which a colorMode measures lattice cells in y (needed with one) */
+  encode(encoder: GPUCommandEncoder, n: number, groundY?: number): void {
     if (n > this.capacity) throw new Error(`Coloring: n ${n} exceeds capacity ${this.capacity}`);
-    this.device.queue.writeBuffer(this.uniform, 0, new Uint32Array([n, this.maxEdges]));
+    if (this.prefer && groundY === undefined) throw new Error('Coloring.encode: a colorMode measures lattice cells from the ground, so it needs groundY');
+    if (this.prefer) this.device.queue.writeBuffer(this.uniform, 0, new Uint32Array([n, this.maxEdges, new Uint32Array(Float32Array.of(groundY!).buffer)[0]!, 0]));
+    else this.device.queue.writeBuffer(this.uniform, 0, new Uint32Array([n, this.maxEdges]));
     this.device.queue.writeBuffer(this.rangesUniform, 0, new Uint32Array([n]));
     for (const b of [this.degree, this.rowLength, this.info]) encoder.clearBuffer(b);
     const groups = Math.max(1, Math.ceil(n / WG));
@@ -298,6 +436,13 @@ export class Coloring {
     pass.end();
     // A new pass, because the rounds read rowLength and adj through read-only bindings.
     pass = encoder.beginComputePass();
+    if (this.prefer) {
+      pass.setBindGroup(0, this.prefer.bind);
+      pass.setPipeline(this.prefer.cells);
+      pass.dispatchWorkgroups(groups);
+      pass.setPipeline(this.prefer.prefer);
+      pass.dispatchWorkgroups(groups);
+    }
     pass.setBindGroup(0, this.binds[0]);
     pass.setPipeline(this.pipes.init);
     pass.dispatchWorkgroups(groups);
@@ -325,5 +470,7 @@ export class Coloring {
     this.scanner.destroy();
     this.sorter.destroy();
     for (const b of [this.degree, this.rowStart, this.rowLength, this.adj, this.adjSlot, ...this.ping, this.order, this.colorStart, this.dispatch, this.info, this.uniform, this.rangesUniform]) b.destroy();
+    this.parity?.destroy();
+    this.pref?.destroy();
   }
 }

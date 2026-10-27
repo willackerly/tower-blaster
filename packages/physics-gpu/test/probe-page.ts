@@ -1,6 +1,7 @@
 // Page-side drivers for the solver probe tests (bundled by loadBundle).
 import { createDevice, GpuProfiler } from '@tb/gpu';
 import type { SceneDesc } from '@tb/engine-api';
+import type { AvbdParams } from '@tb/physics-ref';
 import { GpuAvbdEngine } from '../src/index.ts';
 
 export { runProbe } from '../src/probe.ts';
@@ -10,12 +11,12 @@ export { runProbe } from '../src/probe.ts';
  * step(); engine B runs probeStep() (when the device has timestamps) and,
  * after every step, every primal piece of the sweep and the tail through
  * encodeProbe(). Returns both final states, and the dispatches encodeProbe
- * issued for one colour and for the tail (workgroup counts).
+ * issued for one colour and for the tail (workgroup counts). params: both engines'.
  */
-export async function probeHooks(scene: SceneDesc, steps: number, reps: number) {
+export async function probeHooks(scene: SceneDesc, steps: number, reps: number, params: Partial<AvbdParams> = { iterations: 4 }) {
   const { device, timestamps } = await createDevice();
   device.pushErrorScope('validation');
-  const a = new GpuAvbdEngine({ iterations: 4 }, { device }), b = new GpuAvbdEngine({ iterations: 4 }, { device });
+  const a = new GpuAvbdEngine(params, { device }), b = new GpuAvbdEngine(params, { device });
   await a.init(scene);
   await b.init(scene);
   const prof = timestamps ? new GpuProfiler(device, 2) : null;
