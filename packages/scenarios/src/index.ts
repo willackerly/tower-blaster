@@ -1,7 +1,10 @@
-// Canonical benchmark scenes S1-S13, plus S14, a configurable city for the viewer. Each is a pure function of
+// Canonical benchmark scenes S1-S13, plus S14, a configurable city for the viewer, and S15, a Kapla tower. Each is a pure function of
 // (params, seed) so any engine, on any machine, starts from identical state.
-import { type BodyDesc, type Quat, type SceneDesc, type Vec3, TAG_BALL, TAG_DEBRIS, volumeOf } from '@tb/engine-api';
+import { type BodyDesc, type InputEvent, type Quat, type SceneDesc, type Vec3, TAG_BALL, TAG_DEBRIS, volumeOf } from '@tb/engine-api';
 import { quatNormalize, QUAT_IDENTITY } from '@tb/geom';
+import { buildPlanks, fitShape, KAPLA_SCALE } from './kapla.ts';
+
+export { KAPLA_SCALE, layout, plankCount, PLANK_L, PLANK_T, PLANK_W, STOREY } from './kapla.ts';
 
 export type Params = Record<string, number | boolean>;
 
@@ -291,8 +294,47 @@ const S14: ScenarioDef = {
   },
 };
 
+const S15: ScenarioDef = {
+  id: 'S15', title: 'Kapla tower', catches: 'thin planks, deep load paths, sphere-loose broadphase pairs (the 2023 100k-plank record)',
+  defaults: {
+    planks: 10000, cells: 0, slender: 15, towers: 5, setbacks: 4, taper: 0.35, spire: 0.15,
+    joint: 0.5, jitter: 0.15, friction: 0.45, topple: true, toppleAt: 2, toppleSide: 0, toppleSpeed: 1.5, toppleHeight: 0,
+  },
+  build(p, seed) {
+    // Units are plank widths (KAPLA_SCALE m); joint and jitter are in mm, toppleSpeed in m/s.
+    const frac = (k: string) => { const v = num(p, k); if (v < 0 || v > 1) throw new Error(`param ${k} must be from 0 to 1`); return v; };
+    const towers = int(p, 'towers');
+    if (towers !== 1 && towers !== 5) throw new Error('param towers must be 1 or 5');
+    const shape = fitShape({
+      cells: int(p, 'cells', 0), towers, setbacks: int(p, 'setbacks'), taper: frac('taper'), spire: frac('spire'),
+    }, int(p, 'planks'), num(p, 'slender'));
+    const mm = 1e-3 / KAPLA_SCALE;
+    const friction = num(p, 'friction');
+    const planks = buildPlanks(shape, num(p, 'joint') * mm, num(p, 'jitter') * mm, rng(seed));
+    const bodies = planks.map((k) => ({ ...box(k.pos, k.half, k.storey), friction }));
+    const inputs: InputEvent[] = [];
+    if (p.topple === true) {
+      // A ball rolls (toppleHeight 0) or flies level into the tower from the side at toppleSide degrees.
+      const radius = 2, th = (num(p, 'toppleSide') * Math.PI) / 180;
+      const top = planks.reduce((m, k) => Math.max(m, k.pos[1] + k.half[1]), 0);
+      const y = Math.max(radius, frac('toppleHeight') * top);
+      // Start one unit clear of every plank whose height band the ball crosses.
+      let reach = 0;
+      for (const k of planks)
+        if (Math.abs(k.pos[1] - y) < k.half[1] + radius) reach = Math.max(reach, Math.hypot(k.pos[0], k.pos[2]) + Math.hypot(k.half[0], k.half[2]));
+      const d = reach + radius + 1, v = num(p, 'toppleSpeed') / KAPLA_SCALE;
+      const ball: BodyDesc = {
+        shape: { kind: 'sphere', radius }, pos: [0 - d * Math.cos(th), y, 0 - d * Math.sin(th)], rot: QUAT_IDENTITY,
+        linVel: [v * Math.cos(th), 0, v * Math.sin(th)], angVel: [0, 0, 0], density: 4, friction, restitution: 0, tag: TAG_BALL,
+      };
+      inputs.push({ step: Math.round(num(p, 'toppleAt') * 60), kind: 'spawn', body: ball });
+    }
+    return scene('S15', p, seed, bodies, { inputs, ground: { y: 0, friction } });
+  },
+};
+
 export const SCENARIOS: Record<string, ScenarioDef> = Object.fromEntries(
-  [S1, S2, S3, S4, S5, S6, S7, S8, S9, S10, S11, S12, S13, S14].map((s) => [s.id, s]),
+  [S1, S2, S3, S4, S5, S6, S7, S8, S9, S10, S11, S12, S13, S14, S15].map((s) => [s.id, s]),
 );
 
 export function buildScenario(id: string, overrides: Params = {}, seed = 1): SceneDesc {

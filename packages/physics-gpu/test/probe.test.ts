@@ -55,6 +55,24 @@ describe('solver probe hooks', () => {
   });
 });
 
+describe('solver probe on another scenario', () => {
+  it('P2 runs S15 (a Kapla tower in plank-width units) with scaled gravity and reports its pairs', { timeout: 300_000 }, async (ctx) => {
+    if (!gpu) return ctx.skip();
+    const params = { planks: 120, towers: 1, topple: false };
+    const r = await call('runProbe', { ...TINY, sections: ['p2'], scenario: 'S15', params, gravityScale: 42.735, checkpoints: [4] });
+    expect(r.errors).toEqual([]);
+    expect(r.p2!.scenario).toBe('S15');
+    expect(r.p2!.gravityScale).toBe(42.735);
+    const c = r.p2!.checkpoints[0]!;
+    expect(c.n).toBe(buildScenario('S15', params, 1).bodies.length);
+    expect(r.p2!.N).toBe(c.n);
+    // Every plank rests on another or on the floor; most rest on two or more.
+    expect(c.contactPairs).toBeGreaterThan(c.n / 2);
+    expect(c.pairsRequired).toBeGreaterThanOrEqual(c.contactPairs);
+    expect(probeMarkdown(r, '## test')).toMatch(/S15 \{"planks":120.*gravity x42.735/);
+  });
+});
+
 describe('solver probe (every section, tiny)', () => {
   it('runs, and its kernels agree with their references', { timeout: 600_000 }, async (ctx) => {
     if (!gpu) return ctx.skip();
@@ -75,6 +93,9 @@ describe('solver probe (every section, tiny)', () => {
       expect(c.direct).toHaveLength(c.colorTail);
       expect(c.totalPoints).toBe(c.direct.reduce((s, d) => s + d.points, 0) + c.tail.points);
       expect(c.sumW).toBeGreaterThan(0);
+      expect(c.pairsRequired).toBeGreaterThanOrEqual(c.pairSlots);
+      expect(c.contactPairs).toBeGreaterThan(0);
+      expect(c.contactPairs).toBeLessThanOrEqual(c.pairSlots);
       for (const d of c.direct) expect(d.t).not.toBeNull();
       expect(c.tail.t).not.toBeNull();
       expect(c.dual).not.toBeNull();
