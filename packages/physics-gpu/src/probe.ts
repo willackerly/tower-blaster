@@ -23,7 +23,6 @@
 // or without timestamps are not performance results; the result says so.
 import { GpuProfiler, readBuffer, timeSubmit } from '@tb/gpu';
 import { buildScenario, type Params } from '@tb/scenarios';
-import { SolverContact } from '@tb/schema';
 import { MAX_COLORS } from './coloring.ts';
 import type { AvbdParams } from '@tb/physics-ref';
 import { GpuAvbdEngine, type GpuEngineOptions } from './engine.ts';
@@ -153,7 +152,8 @@ export interface P1Result {
   requestedLimits: 'all' | 'compute' | 'default';
 }
 
-export interface ColourStat { colour: number; bodies: number; W: number; points: number; loads: number; t: Stat | null }
+/** W: the most points one body of the colour walks; R: the most manifolds (slots with points), which records walk in place of points. */
+export interface ColourStat { colour: number; bodies: number; W: number; R: number; points: number; loads: number; t: Stat | null }
 export interface Checkpoint {
   step: number;
   n: number;
@@ -167,7 +167,7 @@ export interface Checkpoint {
   tailThreads: number;
   direct: ColourStat[];
   /** Colours colorTail .. 62 by the tail workgroup (critical path: its slowest thread, summed over colours), then colour 63 by one thread. */
-  tail: { colours: number; bodies: number; serialBodies: number; Wcrit: number; points: number; t: Stat | null };
+  tail: { colours: number; bodies: number; serialBodies: number; Wcrit: number; Rcrit: number; points: number; t: Stat | null };
   dual: Stat | null;
   /** The primal dispatch of an empty colour (one the sweep gives to the tail): the fixed cost of a direct colour's dispatch, every thread exiting at once. */
   emptyColour: number | null;
@@ -175,6 +175,8 @@ export interface Checkpoint {
   /** The solve pass of the solveSteps steps up to the checkpoint (setup, every sweep, duals, velocities, finalize). */
   solvePass: Stat | null;
   sumW: number;
+  /** As sumW, in manifolds: the walk with records (AvbdParams.records). */
+  sumR: number;
   totalPoints: number;
   check: { primal: number; predicted: number; measured: number | null } | null;
 }
@@ -408,7 +410,7 @@ function lsq(cols: number[][], y: number[]): { c: number[]; r2: number; adjR2: n
 
 async function colourStructure(e: GpuAvbdEngine): Promise<Omit<Checkpoint, 'step' | 'dual' | 'solvePass' | 'check' | 'emptyDispatch'>> {
   const pp = e.probeParts();
-  const { device, n, solver, col, maxPairs, capacity, dispatch } = pp;
+  const { device, n, solver, col, dispatch } = pp;
   const d = await e.diagnostics();
   const u32 = async (b: GPUBuffer, bytes: number, offset = 0) => new Uint32Array(await readBuffer(device, b, Math.max(4, bytes), offset));
   const colorStart = await u32(col.colorStart, (MAX_COLORS + 1) * 4);
@@ -420,56 +422,52 @@ async function colourStructure(e: GpuAvbdEngine): Promise<Omit<Checkpoint, 'step
   // Past maxEdges (an overflowed fill) the row holds nothing the probe can read; those entries count no points.
   edges = Math.min(edges, col.maxEdges);
   const adjSlot = await u32(col.adjSlot, edges * 4);
-  const CS = SolverContact.size, usedAt = SolverContact.fields.find((f) => f.name === 'used')!.offset / 4;
-  const half = solver.lastHalf, halfSize = (maxPairs + capacity) * 4;
   const slots = d.pairsWritten;
-  const pairPts = await u32(solver.contacts, slots * 4 * CS, half * halfSize * CS);
-  const groundPts = await u32(solver.contacts, n * 4 * CS, (half * halfSize + maxPairs * 4) * CS);
-  // Points a body's primal walks: used points of each slot in its row, then its ground slot; loads add the read that ends a partial slot.
-  const walk = (pts: Uint32Array, slot: number) => {
-    let k = 0;
-    while (k < 4 && pts[(slot * 4 + k) * (CS / 4) + usedAt] !== 0) k++;
-    return k;
-  };
-  const pointsOf = new Uint32Array(n), loadsOf = new Uint32Array(n);
+  const { pairs: pairPts, ground: groundPts } = await solver.slotPoints(slots, n);
+  // Points a body's primal walks: the points of each slot in its row, then of its ground slot. Loads count its reads: a
+  // slot's points and the read that ends a partial slot, or with records one record per slot. Manifolds count the slots with points.
+  const reads = (k: number) => (solver.records === 0 ? Math.min(4, k + 1) : 1);
+  const pointsOf = new Uint32Array(n), loadsOf = new Uint32Array(n), manifoldsOf = new Uint32Array(n);
   for (let i = 0; i < n; i++) {
-    let p = 0, l = 0;
+    let p = 0, l = 0, m = 0;
     for (let e2 = rowStart[i]!; e2 < rowStart[i]! + rowLength[i]!; e2++) {
       const s = adjSlot[e2] ?? NONE;
-      const k = s < slots ? walk(pairPts, s) : 0;
-      p += k; l += Math.min(4, k + 1);
+      const k = s < slots ? pairPts[s]! : 0;
+      p += k; l += reads(k); if (k) m++;
     }
-    const g = walk(groundPts, i);
-    p += g; l += Math.min(4, g + 1);
-    pointsOf[i] = p; loadsOf[i] = l;
+    const g = groundPts[i]!;
+    p += g; l += reads(g); if (g) m++;
+    pointsOf[i] = p; loadsOf[i] = l; manifoldsOf[i] = m;
   }
   const bodiesOf = (c: number) => Array.from(order.subarray(colorStart[c]!, colorStart[c + 1]!));
   const direct: ColourStat[] = [];
   const nd = dispatch.indirectColors ? MAX_COLORS - 1 : dispatch.colorTail;
   for (let c = 0; c < nd; c++) {
     const bs = bodiesOf(c);
-    direct.push({ colour: c, bodies: bs.length, W: bs.reduce((m, b) => Math.max(m, pointsOf[b]!), 0), points: bs.reduce((s, b) => s + pointsOf[b]!, 0), loads: bs.reduce((m, b) => Math.max(m, loadsOf[b]!), 0), t: null });
+    const most = (of: Uint32Array) => bs.reduce((m, b) => Math.max(m, of[b]!), 0);
+    direct.push({ colour: c, bodies: bs.length, W: most(pointsOf), R: most(manifoldsOf), points: bs.reduce((s, b) => s + pointsOf[b]!, 0), loads: most(loadsOf), t: null });
   }
-  let tailColours = 0, tailBodies = 0, Wcrit = 0, tailPoints = 0;
+  let tailColours = 0, tailBodies = 0, Wcrit = 0, Rcrit = 0, tailPoints = 0;
   for (let c = nd; c < MAX_COLORS - 1; c++) {
     const bs = bodiesOf(c);
     if (!bs.length) continue;
     tailColours++; tailBodies += bs.length;
-    const perThread = new Array<number>(dispatch.tailThreads).fill(0);
-    bs.forEach((b, k) => { perThread[k % dispatch.tailThreads]! += pointsOf[b]!; tailPoints += pointsOf[b]!; });
+    const perThread = new Array<number>(dispatch.tailThreads).fill(0), perThreadR = new Array<number>(dispatch.tailThreads).fill(0);
+    bs.forEach((b, k) => { perThread[k % dispatch.tailThreads]! += pointsOf[b]!; perThreadR[k % dispatch.tailThreads]! += manifoldsOf[b]!; tailPoints += pointsOf[b]!; });
     Wcrit += Math.max(...perThread);
+    Rcrit += Math.max(...perThreadR);
   }
   let emptyColour: number | null = null;
   for (let c = nd; c < MAX_COLORS - 1 && emptyColour === null; c++) if (colorStart[c + 1] === colorStart[c]) emptyColour = c;
   const serial = bodiesOf(MAX_COLORS - 1);
-  for (const b of serial) { Wcrit += pointsOf[b]!; tailPoints += pointsOf[b]!; }
+  for (const b of serial) { Wcrit += pointsOf[b]!; Rcrit += manifoldsOf[b]!; tailPoints += pointsOf[b]!; }
   const totalPoints = pointsOf.reduce((s, v) => s + v, 0);
   let contactPairs = 0;
-  for (let k = 0; k < slots; k++) if (walk(pairPts, k) > 0) contactPairs++;
+  for (let k = 0; k < slots; k++) if (pairPts[k]! > 0) contactPairs++;
   return {
     n, coloursUsed: d.colors, uncolored: d.uncolored, pairSlots: slots, pairsRequired: d.pairsRequired, contactPairs, colorTail: nd, tailThreads: dispatch.tailThreads, direct,
-    tail: { colours: tailColours, bodies: tailBodies, serialBodies: serial.length, Wcrit, points: tailPoints, t: null },
-    sumW: direct.reduce((s, c) => s + c.W, 0) + Wcrit, totalPoints, emptyColour,
+    tail: { colours: tailColours, bodies: tailBodies, serialBodies: serial.length, Wcrit, Rcrit, points: tailPoints, t: null },
+    sumW: direct.reduce((s, c) => s + c.W, 0) + Wcrit, sumR: direct.reduce((s, c) => s + c.R, 0) + Rcrit, totalPoints, emptyColour,
   };
 }
 
@@ -915,10 +913,10 @@ export function probeMarkdown(r: ProbeResult, header: string): string {
     for (const c of p.checkpoints) {
       L.push('', `### Step ${c.step}: ${c.n} bodies, ${c.coloursUsed} colours (${c.uncolored} uncoloured), ${c.pairSlots} pair slots of ${c.pairsRequired} broadphase pairs, ${c.contactPairs} in contact, ${c.totalPoints} contact points`, '');
       const e0 = c.emptyDispatch?.median;
-      L.push('| Colour | Bodies | W_c (max points) | Max loads | Σ points | t_c µs | (t_c − empty) / W_c ns |', '|---|---|---|---|---|---|---|');
-      for (const d of c.direct) L.push(`| ${d.colour} | ${d.bodies} | ${d.W} | ${d.loads} | ${d.points} | ${us(d.t)} | ${d.t && d.W && e0 !== undefined ? f(((d.t.median - e0) * 1e6) / d.W) : '–'} |`);
-      L.push(`| tail (${c.colorTail}+, ${c.tailThreads} threads) | ${c.tail.bodies} in ${c.tail.colours} colours + ${c.tail.serialBodies} serial | ${c.tail.Wcrit} (critical path) | | ${c.tail.points} | ${us(c.tail.t)} | ${c.tail.t && c.tail.Wcrit ? f((c.tail.t.median * 1e6) / c.tail.Wcrit) : '–'} (t / W, no baseline) |`);
-      L.push('', `ΣW (direct W_c + tail critical path) = **${c.sumW}**. Empty colour ${c.emptyColour ?? '–'}'s primal dispatch (the fixed cost): ${us(c.emptyDispatch)} µs. Dual update (pairs + ground): ${us(c.dual)} µs${fusedNote}.`);
+      L.push('| Colour | Bodies | W_c (max points) | R_c (max manifolds) | Max loads | Σ points | t_c µs | (t_c − empty) / W_c ns |', '|---|---|---|---|---|---|---|---|');
+      for (const d of c.direct) L.push(`| ${d.colour} | ${d.bodies} | ${d.W} | ${d.R} | ${d.loads} | ${d.points} | ${us(d.t)} | ${d.t && d.W && e0 !== undefined ? f(((d.t.median - e0) * 1e6) / d.W) : '–'} |`);
+      L.push(`| tail (${c.colorTail}+, ${c.tailThreads} threads) | ${c.tail.bodies} in ${c.tail.colours} colours + ${c.tail.serialBodies} serial | ${c.tail.Wcrit} (critical path) | ${c.tail.Rcrit} | | ${c.tail.points} | ${us(c.tail.t)} | ${c.tail.t && c.tail.Wcrit ? f((c.tail.t.median * 1e6) / c.tail.Wcrit) : '–'} (t / W, no baseline) |`);
+      L.push('', `ΣW (direct W_c + tail critical path) = **${c.sumW}**, ΣR = **${c.sumR}**. Empty colour ${c.emptyColour ?? '–'}'s primal dispatch (the fixed cost): ${us(c.emptyDispatch)} µs. Dual update (pairs + ground): ${us(c.dual)} µs${fusedNote}.`);
       if (c.check) L.push('', `Consistency: (I+1)·Σ_c t_c = ${f(c.check.primal * 1000)} µs; (I+1)·(Σ_c t_c + t_tail) + ${D === p.iterations ? 'I' : D}·t_dual = ${f(c.check.predicted * 1000)} µs; measured solve pass of steps ${c.step - (c.solvePass?.samples ?? 0)}–${c.step} = ${us(c.solvePass)} µs${c.check.measured ? ` (measured / predicted = ${f(c.check.measured / c.check.predicted)})` : ''}.`);
     }
     L.push('', '### Fits over the direct colours of every checkpoint (t in µs; b, e, g in ns)', '');

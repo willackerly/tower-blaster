@@ -182,6 +182,94 @@ export const ContactDual = defineStruct(
   "A contact point's dual state while the fused dual (SolverDispatch.dualFusion) updates it in the sweep, so the solve kernel's contacts stay read-only.",
 );
 
+// Manifold records (AvbdParams.records; perf-competition round 2): one record per
+// pair slot or ground slot instead of its 4 SolverContact points, so a body's
+// walk loads one record and one partner per touching pair. Field-major: each
+// vec4f holds one component of points 0..3 (lane q is point q), so 4 lanes per
+// record (lane q taking point q) read whole vec4s between them; one thread per
+// record (the walk in solver.ts) reads component q of each.
+// The hot block (the first 256 B of SolverRecord, the first 232 B of
+// CentreRecord) is all the primal and the dual read; the rest only setup reads.
+// Both records are padded to 384 B (3 lines of 128 B), so every record starts
+// on a 128 B line and its hot block is 2 lines in every slot. At 352 or 320 B
+// three slots in four (or one in two) would put it across 3 lines.
+
+export const SolverRecord = defineStruct(
+  'SolverRecord',
+  [
+    ['n', 'vec3f', 'normal from a to b, fixed over the step; t1 = tangent1(n), t2 = n x t1 as for a SolverContact'],
+    ['mu', 'f32'],
+    ['a', 'u32', 'body a, 0xffffffff for the ground'],
+    ['b', 'u32'],
+    ['count', 'u32', 'points in use, 0..4: point q is in use if q < count'],
+    ['flags', 'u32', "bit q: point q's SolverContact.stick; bit 4 + q: its SolverContact.inCone"],
+    ['rawX', 'vec4f', "a's lever arm in world space at the start of the step, x of points 0..3"],
+    ['rawY', 'vec4f'],
+    ['rawZ', 'vec4f'],
+    ['rbwX', 'vec4f', "b's lever arm"],
+    ['rbwY', 'vec4f'],
+    ['rbwZ', 'vec4f'],
+    ['c0N', 'vec4f', 'constraint at the start of the step along n'],
+    ['c0T1', 'vec4f', 'along t1'],
+    ['c0T2', 'vec4f', 'along t2'],
+    ['kN', 'vec4f', 'normal penalty'],
+    ['lambdaN', 'vec4f', 'normal force (<= 0 pushes apart)'],
+    ['kT', 'vec4f', 'tangent penalty (shared by both rows)'],
+    ['lt1', 'vec4f', 'friction force along t1'],
+    ['lt2', 'vec4f', 'along t2'],
+    ['raX', 'vec4f', "anchor in a's frame (world for the ground); setup only from here on"],
+    ['raY', 'vec4f'],
+    ['raZ', 'vec4f'],
+    ['rbX', 'vec4f', "anchor in b's frame"],
+    ['rbY', 'vec4f'],
+    ['rbZ', 'vec4f'],
+    ['pad0', 'vec4u', 'to 384 B = 3 lines of 128 B, so every record starts on a line and its hot block is 2 lines'],
+    ['pad1', 'vec4u'],
+  ],
+  'AvbdParams.records = 1: the 1-4 SolverContact points of one manifold, every field of each kept (the exact record).',
+);
+
+export const CentreRecord = defineStruct(
+  'CentreRecord',
+  [
+    ['n', 'vec3f', 'normal from a to b, fixed over the step; t1 = tangent1(n), t2 = n x t1'],
+    ['mu', 'f32'],
+    ['a', 'u32', 'body a, 0xffffffff for the ground'],
+    ['b', 'u32'],
+    ['count', 'u32', 'points in use, 0..4'],
+    ['stick', 'u32', "1 if the friction's last dual update was inside the ball (static friction held)"],
+    ['rawX', 'vec4f', "point q's lever arm on a (world, start of the step), x of points 0..3"],
+    ['rawY', 'vec4f'],
+    ['rawZ', 'vec4f'],
+    ['rbwX', 'vec4f', 'on b'],
+    ['rbwY', 'vec4f'],
+    ['rbwZ', 'vec4f'],
+    ['c0N', 'vec4f', 'point q: constraint at the start of the step along n'],
+    ['kN', 'vec4f', 'normal penalty'],
+    ['lambdaN', 'vec4f', 'normal force (<= 0 pushes apart)'],
+    ['rac', 'vec3f', "the centre's lever arm on a (world, start of the step): the mean of the points'"],
+    ['rt', 'f32', "RMS distance of the points from the centre in the contact plane: the twist row's lever"],
+    ['rbc', 'vec3f', 'on b'],
+    ['kT', 'f32', 'penalty of the three friction rows'],
+    ['lamT', 'vec3f', 'friction force along t1, t2 and the twist row'],
+    ['pad0', 'u32'],
+    ['c0t', 'vec2f', 'constraint at the start of the step along t1, t2 (the twist row starts at 0); the hot block ends here, at 232 B'],
+    ['pad3', 'vec2u'],
+    ['rbX', 'vec4f', "point q's anchor in b's frame (matching); setup only from here on"],
+    ['rbY', 'vec4f'],
+    ['rbZ', 'vec4f'],
+    ['ra', 'vec3f', "the centre's friction anchor in a's frame (world for the ground)"],
+    ['pad1', 'u32'],
+    ['rb', 'vec3f', "in b's frame"],
+    ['pad2', 'u32'],
+    ['pad4', 'vec4u', 'to 384 B = 3 lines of 128 B, so every record starts on a line and its hot block is 2 lines'],
+    ['pad5', 'vec4u'],
+    ['pad6', 'vec4u'],
+    ['pad7', 'vec4u'],
+  ],
+  "AvbdParams.records = 2: one manifold's 1-4 points, normal rows only, and one friction state at their centre (the reference's FrictionRecord).",
+);
+
 export const SolverParams = defineStruct(
   'SolverParams',
   [
@@ -228,4 +316,4 @@ export const ColorParams = defineStruct(
   'Per-dispatch uniforms (bound with a dynamic offset).',
 );
 
-export const ALL_STRUCTS = [SimParams, Body, RenderRecord, Shape, Manifold, ImpactEvent, Spark, FxState, BodyProps, SolverBody, SolverContact, ContactDual, SolverParams, ColorParams];
+export const ALL_STRUCTS = [SimParams, Body, RenderRecord, Shape, Manifold, ImpactEvent, Spark, FxState, BodyProps, SolverBody, SolverContact, ContactDual, SolverRecord, CentreRecord, SolverParams, ColorParams];

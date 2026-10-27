@@ -20,6 +20,7 @@ describe('run config in the URL', () => {
     expect(splitEngines('avbd-gpu,avbd-gpu:dualFusion=true')).toEqual(['avbd-gpu', 'avbd-gpu:dualFusion=true']);
     expect(splitEngines('avbd-gpu:iterations=20,dualFusion=true,avbd-gpu:iterations=20')).toEqual(['avbd-gpu:iterations=20,dualFusion=true', 'avbd-gpu:iterations=20']);
     expect(splitEngines('avbd-gpu:iterations=20, avbd-gpu:iterations=20,dualFusion=true,colorTail=4')).toEqual(['avbd-gpu:iterations=20', 'avbd-gpu:iterations=20,dualFusion=true,colorTail=4']);
+    expect(splitEngines('avbd-gpu:iterations=20,records=1,avbd-gpu:iterations=20,records=2,colorTail=4')).toEqual(['avbd-gpu:iterations=20,records=1', 'avbd-gpu:iterations=20,records=2,colorTail=4']);
     expect(splitEngines('rapier,rapier:iterations=8')).toEqual(['rapier', 'rapier:iterations=8']);
     // A stray option with no spec before it stays a piece of its own, which makeEngine rejects as an unknown engine.
     expect(splitEngines('iterations=4,rapier')).toEqual(['iterations=4', 'rapier']);

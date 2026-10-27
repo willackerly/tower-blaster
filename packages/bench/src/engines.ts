@@ -11,10 +11,10 @@ const REGISTRY: Record<string, (o: Options) => PhysicsEngine> = {
   rapier: (o) => new RapierEngine(o.iterations !== undefined ? { iterations: Number(o.iterations) } : {}),
   // Options are AvbdParams fields, e.g. avbd-ref:iterations=4,sweep=false.
   'avbd-ref': (o) => new AvbdReferenceEngine(o),
-  // Same AvbdParams (dualFusion too), plus the GpuEngineOptions that size its buffers (capacity,
-  // spare, pairsPerBody, maxRadius) or shape its dispatch (colorTail, indirectColors, tailThreads,
-  // colorRounds, hessian, boxBroadphase, solveContactsRW), which the engine checks; needs WebGPU, so it
-  // runs in the browser runner, not the Node CLI.
+  // Same AvbdParams (dualFusion and records too: avbd-gpu:records=1), plus the GpuEngineOptions that size
+  // its buffers (capacity, spare, pairsPerBody, maxRadius) or shape its dispatch (colorTail, indirectColors,
+  // tailThreads, colorRounds, hessian, boxBroadphase, solveContactsRW), which the engine checks; needs WebGPU,
+  // so it runs in the browser runner, not the Node CLI.
   'avbd-gpu': (o) => {
     const { params, opts } = gpuEngineArgs(o);
     return new GpuAvbdEngine(params, opts);

@@ -422,10 +422,8 @@ export async function simulateGpu(scene: SceneDesc, steps: number, params: Parti
     const words = new Uint32Array(await readBuffer(device, solver.contacts));
     let h = 0x811c9dc5;
     for (const w of words) h = Math.imul(h ^ w, 0x01000193) >>> 0;
-    const usedAt = field(SolverContact, 'used').offset / 4, stride = SolverContact.size / 4, half = words.length / 2;
-    let used = 0;
-    for (let k = solver.lastHalf * half; k < (solver.lastHalf + 1) * half; k += stride) if (words[k + usedAt]) used++;
-    contacts = { digest: h, used };
+    const counts = await solver.slotPoints(solver.maxPairs, solver.capacity);
+    contacts = { digest: h, used: [...counts.pairs, ...counts.ground].reduce((a, b) => a + b, 0) };
   }
   const error = await device.popErrorScope();
   e.dispose();
@@ -799,17 +797,18 @@ export async function dispatchPlan(scene: SceneDesc, opts: Omit<GpuEngineOptions
   return out;
 }
 
-/** The code of the 'avbd solve' shader module the engine built at init, and the dispatch it chose. */
+/** The code of the 'avbd solve' shader module the engine built at init (and of every module, by label), and the dispatch it chose. */
 export async function solveShader(scene: SceneDesc, opts: Omit<GpuEngineOptions, 'device'>, params: Partial<AvbdParams> = {}) {
   const { device } = await sharedDevice();
   const codes: string[] = [];
+  const modules: Record<string, string> = {};
   // The device is shared by the page's drivers: the hook comes off again however init() ends.
   const create = device.createShaderModule;
-  device.createShaderModule = (d: GPUShaderModuleDescriptor) => { if (d.label === 'avbd solve') codes.push(d.code); return create.call(device, d); };
+  device.createShaderModule = (d: GPUShaderModuleDescriptor) => { if (d.label === 'avbd solve') codes.push(d.code); modules[d.label ?? ''] = d.code; return create.call(device, d); };
   try {
     const e = new GpuAvbdEngine(params, { ...opts, device });
     await e.init(scene);
-    const out = { codes, dispatch: e.dispatch, variant: e.info.variant };
+    const out = { codes, modules, dispatch: e.dispatch, variant: e.info.variant };
     e.dispose();
     return out;
   } finally {

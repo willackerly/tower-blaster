@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { buildScenario } from '@tb/scenarios';
 import { isSoftwareAdapter, loadBundle, openWebGPU, type WebGPUSession } from '@tb/testkit';
-import { DEFAULT_PROBE, probeMarkdown, type ProbeOptions } from '../src/probe.ts';
+import { type Checkpoint, DEFAULT_PROBE, probeMarkdown, type ProbeOptions } from '../src/probe.ts';
 import { probeEngine } from '../src/probe-engine.ts';
 import { DEFAULT_DISPATCH } from '../src/solver.ts';
 import type * as Drivers from './probe-page.ts';
@@ -101,6 +101,33 @@ describe('solver probe P2 with --engine', () => {
     expect(md).toContain(`R=2 dispatches per timed pass, engine ${engine.spec}`);
     expect(md).toContain('+ 1·t_dual');
     expect(md).toContain("the step's 1 dual pass");
+  });
+
+  it('reads the records layout (AvbdParams.records): records 1 has the point form\'s structure, read one record per slot', { timeout: 600_000 }, async (ctx) => {
+    if (!gpu) return ctx.skip();
+    const run = async (spec: string) => {
+      const r = await call('runProbe', { ...TINY, sections: ['p2'], checkpoints: [6], hessian: 'registers', engine: probeEngine(spec) });
+      expect(r.errors).toEqual([]);
+      return r.p2!.checkpoints[0]!;
+    };
+    const [pts, rec1, rec2] = [await run('avbd-gpu:iterations=3'), await run('avbd-gpu:iterations=3,records=1'), await run('avbd-gpu:iterations=3,records=2')];
+    // records 1's trajectory is the point form's, bit for bit, so its colours and contacts are too.
+    const shape = (c: Checkpoint) => ({
+      colours: c.coloursUsed, direct: c.direct.map((d) => [d.bodies, d.W, d.R, d.points]), tail: [c.tail.bodies, c.tail.Wcrit, c.tail.Rcrit, c.tail.points],
+      sumW: c.sumW, sumR: c.sumR, totalPoints: c.totalPoints, contactPairs: c.contactPairs,
+    });
+    expect(shape(rec1)).toEqual(shape(pts));
+    expect(pts.sumR).toBeGreaterThan(0);
+    expect(pts.sumR).toBeLessThan(pts.sumW);
+    expect(pts.sumW).toBeLessThanOrEqual(4 * pts.sumR);
+    // One read per record, against a point form's read per point and the one that ends a partial slot.
+    const loads = (c: Checkpoint) => c.direct.reduce((s, d) => s + d.loads, 0);
+    expect(loads(rec1)).toBeLessThan(loads(pts));
+    // records 2, on its own trajectory: CentreRecord's count is read at its own stride.
+    expect(rec2.totalPoints).toBe(rec2.direct.reduce((s, d) => s + d.points, 0) + rec2.tail.points);
+    expect(rec2.sumR).toBeGreaterThan(0);
+    expect(rec2.totalPoints).toBeGreaterThan(0.9 * pts.totalPoints);
+    expect(rec2.totalPoints).toBeLessThan(1.1 * pts.totalPoints);
   });
 });
 

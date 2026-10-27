@@ -19,8 +19,9 @@
 //
 // Each kernel binds at most 8 storage buffers (the WebGPU default limit).
 import type { CombineRule } from '@tb/engine-api';
-import { assertStorageFits } from '@tb/gpu';
-import { Body, BodyProps, ColorParams, ContactDual, Manifold, SolverBody, SolverContact, SolverParams, wgslStruct } from '@tb/schema';
+import { assertStorageFits, readBuffer } from '@tb/gpu';
+import { RECORD_MODES } from '@tb/physics-ref';
+import { Body, BodyProps, CentreRecord, ColorParams, ContactDual, field, Manifold, SolverBody, SolverContact, SolverParams, SolverRecord, wgslStruct } from '@tb/schema';
 import { MAX_COLORS } from './coloring.ts';
 
 const WG = 64;
@@ -648,7 +649,7 @@ fn primalTail(@builtin(local_invocation_index) lid: u32) {
  * - The contacts are read in the same order (the body's pair slots, then
  *   its ground slot), in one loop, so the update below is inlined once.
  */
-function registerSolveBody(fusion: Fusion = 'off'): string {
+function registerSolveBody(fusion: Fusion = 'off', records: RecordMode = 0): string {
   const xyz = (k: number) => 'xyz'[k]!;
   const upTo = (n: number) => Array.from({ length: n }, (_, k) => k);
   const lower: Array<[number, number]> = upTo(6).flatMap((r) => upTo(r + 1).map((c): [number, number] => [r, c]));
@@ -683,6 +684,21 @@ function registerSolveBody(fusion: Fusion = 'off'): string {
   for (let r = 0; r < 6; r++) ldl.push(`  let z${r} = g${r}${upTo(r).map((k) => ` - l${r}${k} * z${k}`).join('')};`);
   for (let r = 0; r < 6; r++) ldl.push(`  let y${r} = z${r} / d${r};`);
   for (let r = 5; r >= 0; r--) ldl.push(`  let x${r} = y${r}${upTo(5 - r).map((m) => ` - l${r + 1 + m}${r} * x${r + 1 + m}`).join('')};`);
+  const pointLoop = `  // Pair slots first, then the ground slot (e == re).
+  let rs = rowStart[i];
+  let re = rs + rowLength[i];
+  for (var e = rs; e <= re; e++) {
+    var base = groundPoint(p.cur, i, 0u);
+    if (e < re) { base = pairPoint(p.cur, adjSlot[e], 0u); }
+    for (var q = 0u; q < 4u; q++) {
+${fusion === 'off' ? '' : '      let ci = base + q;\n'}      let ct = contacts[${fusion === 'off' ? 'base + q' : 'ci'}];
+      if (ct.used == 0u) { break; }
+      // (The body's own state is read again here, as accumulate() does.)
+${contactForce(fusion).replace(/^/gm, '    ')}
+${update.join('\n')}
+    }
+  }`;
+  const loop = records === 0 ? pointLoop : records === 1 ? exactRecordLoop(update) : centreRecordLoop();
   return /* wgsl */ `
 // One primal update of body i, 'registers' form: the array form's solveBody()
 // and accumulate() in named scalars (registerSolveBody() in solver.ts).
@@ -699,20 +715,7 @@ ${inertia.join('\n')}
   // The system's lower triangle, hRC = lhs[6R + C], and its right-hand side.
 ${hessian.join('\n')}
 ${gradient.join('\n')}
-  // Pair slots first, then the ground slot (e == re).
-  let rs = rowStart[i];
-  let re = rs + rowLength[i];
-  for (var e = rs; e <= re; e++) {
-    var base = groundPoint(p.cur, i, 0u);
-    if (e < re) { base = pairPoint(p.cur, adjSlot[e], 0u); }
-    for (var q = 0u; q < 4u; q++) {
-${fusion === 'off' ? '' : '      let ci = base + q;\n'}      let ct = contacts[${fusion === 'off' ? 'base + q' : 'ci'}];
-      if (ct.used == 0u) { break; }
-      // (The body's own state is read again here, as accumulate() does.)
-${contactForce(fusion).replace(/^/gm, '    ')}
-${update.join('\n')}
-    }
-  }
+${loop}
   // LDL^T, forward substitution, D^-1, back substitution.
 ${ldl.join('\n')}
   solver[i].dp = me.dp - vec3f(x0, x1, x2);
@@ -881,7 +884,539 @@ fn dualGroundSide(@builtin(global_invocation_id) id: vec3u) {
 // Velocities from the last main iteration (BDF1).`);
 }
 
-/** The other kernels' shaders (DUAL without the fused dual's side array: dualWgsl()); the primal's is solveWgsl(). */
+// Manifold records (AvbdParams.records; perf-competition round 2). The
+// contact buffer then holds one record per pair slot and ground slot instead
+// of their 4 SolverContact points (packages/schema: SolverRecord,
+// CentreRecord), so a body's walk loads its partner's state once per touching
+// pair and reads the pair's points from the record's hot block instead of from
+// 4 separate structs. Records are 384 B, so the hot block (256 B or 232 B) is
+// two 128 B lines in every slot; the primal and the dual read nothing else.
+// - 1, the exact record: each point keeps every SolverContact field. Setup,
+//   primal and dual do the point form's floating-point operations in the same
+//   order (t1 is recomputed from n as tangent1(n), which is how setup made
+//   it), so on SwiftShader the state is bit-identical to points; a compiler
+//   that contracts tangent1() differently in two kernels (Metal compiles with
+//   relaxed math) could round it differently in the last bit.
+// - 2, the centre-friction record: the reference's FrictionRecord
+//   (AvbdParams.records says what it does): normal rows per point, one
+//   friction state of three rows at the centre.
+// Both run in the register form of the primal only.
+
+/** AvbdParams.records (physics-ref RECORD_MODES) on the GPU: 0 points (SolverContact), 1 the exact record (SolverRecord), 2 centre friction (CentreRecord). */
+export { RECORD_MODES };
+export type RecordMode = (typeof RECORD_MODES)[number];
+
+const seq = (n: number) => Array.from({ length: n }, (_, k) => k);
+
+const RECORD_COMMON = /* wgsl */ `
+// Record half size: one record per pair slot, then one per body (ground).
+fn recordHalf() -> u32 { return p.maxPairs + p.capacity; }
+fn pairRecord(half: u32, slot: u32) -> u32 { return half * recordHalf() + slot; }
+fn groundRecord(half: u32, body: u32) -> u32 { return half * recordHalf() + p.maxPairs + body; }
+// Point q's lever arms on a and b.
+fn recRaw(r: u32, q: u32) -> vec3f { return vec3f(records[r].rawX[q], records[r].rawY[q], records[r].rawZ[q]); }
+fn recRbw(r: u32, q: u32) -> vec3f { return vec3f(records[r].rbwX[q], records[r].rbwY[q], records[r].rbwZ[q]); }
+`;
+
+// records = 2: a point's normal row at the current displacements (the x of
+// evalC), the centre's friction rows T1, T2 and twist (the twist row starts at
+// 0), and row r of those for body b: (u, rbc x u), the twist (0, rt n); for
+// body a, minus that with rac.
+const CENTRE_EVAL = /* wgsl */ `
+fn evalN(n: vec3f, c0n: f32, raw: vec3f, rbw: vec3f, hasA: bool, alpha: f32, dpA: vec3f, phiA: vec3f, dpB: vec3f, phiB: vec3f) -> f32 {
+  var c = select(c0n, (1.0 - alpha) * c0n, c0n < 0.0);
+  c += dot(n, dpB) + dot(cross(rbw, n), phiB);
+  if (hasA) { c -= dot(n, dpA) + dot(cross(raw, n), phiA); }
+  return c;
+}
+fn evalT(n: vec3f, t1: vec3f, t2: vec3f, c0t: vec2f, rac: vec3f, rbc: vec3f, rt: f32, hasA: bool, alpha: f32, dpA: vec3f, phiA: vec3f, dpB: vec3f, phiB: vec3f) -> vec3f {
+  var c = vec3f((1.0 - alpha) * c0t, 0.0);
+  c += vec3f(dot(t1, dpB) + dot(cross(rbc, t1), phiB), dot(t2, dpB) + dot(cross(rbc, t2), phiB), rt * dot(n, phiB));
+  if (hasA) { c -= vec3f(dot(t1, dpA) + dot(cross(rac, t1), phiA), dot(t2, dpA) + dot(cross(rac, t2), phiA), rt * dot(n, phiA)); }
+  return c;
+}
+fn frow(n: vec3f, t1: vec3f, t2: vec3f, rac: vec3f, rbc: vec3f, rt: f32, r: u32, onB: bool) -> array<f32, 6> {
+  if (r == 2u) {
+    let w = select(-rt * n, rt * n, onB);
+    return array<f32, 6>(0.0, 0.0, 0.0, w.x, w.y, w.z);
+  }
+  var u = t1;
+  if (r == 1u) { u = t2; }
+  var w = cross(rbc, u);
+  if (!onB) { w = -cross(rac, u); u = -u; }
+  return array<f32, 6>(u.x, u.y, u.z, w.x, w.y, w.z);
+}
+`;
+
+/** Point q of records = 1 record `rec` into the SolverContact ct (declared by the caller), with n, t1, mu, ia, ib read once per record. */
+const exactPoint = (rec: string, ind: string) => [
+  `ct.n = n; ct.t1 = t1; ct.mu = mu; ct.a = ia; ct.b = ib; ct.used = 1u;`,
+  `ct.raw = recRaw(${rec}, q);`,
+  `ct.rbw = recRbw(${rec}, q);`,
+  `ct.c0 = vec3f(records[${rec}].c0N[q], records[${rec}].c0T1[q], records[${rec}].c0T2[q]);`,
+  `ct.kN = records[${rec}].kN[q]; ct.lambdaN = records[${rec}].lambdaN[q]; ct.kT = records[${rec}].kT[q];`,
+  `ct.lt = vec2f(records[${rec}].lt1[q], records[${rec}].lt2[q]);`,
+].map((l) => ind + l).join('\n');
+
+// The primal's walk over body i's records starts the same in both modes: the
+// record, then its partner's state once (the point form reads it per point).
+const RECORD_WALK = /* wgsl */ `  // Pair records first, then the ground record (e == re).
+  let rs = rowStart[i];
+  let re = rs + rowLength[i];
+  for (var e = rs; e <= re; e++) {
+    var slot = groundRecord(p.cur, i);
+    if (e < re) { slot = pairRecord(p.cur, adjSlot[e]); }
+    let count = records[slot].count;
+    if (count == 0u) { continue; }
+    let ia = records[slot].a;
+    let ib = records[slot].b;
+    let onB = ib == i;
+    var dpA = vec3f(0.0); var phiA = vec3f(0.0); var dpB = vec3f(0.0); var phiB = vec3f(0.0);
+    if (onB) {
+      dpB = me.dp; phiB = me.phi;
+      if (ia != NONE) { let o = solver[ia]; dpA = o.dp; phiA = o.phi; }
+    } else {
+      dpA = me.dp; phiA = me.phi;
+      let o = solver[ib]; dpB = o.dp; phiB = o.phi;
+    }
+    let n = records[slot].n;`;
+
+/** registerSolveBody()'s update for one row J (6 values) with force f and stiffness k: g += J f, and h += k J J^T unless k is 0. */
+function rowUpdate(J: string, f: string, k: string, ind: string): string[] {
+  return [
+    `${ind}${seq(6).map((u) => `g${u} += ${J}[${u}] * ${f};`).join(' ')}`,
+    `${ind}if (${k} != 0.0) {`,
+    `${ind}  ${seq(6).map((u) => `let k${u} = ${k} * ${J}[${u}];`).join(' ')}`,
+    ...seq(6).map((a) => `${ind}  ${seq(a + 1).map((c) => `h${a}${c} += k${a} * ${J}[${c}];`).join(' ')}`),
+    `${ind}}`,
+  ];
+}
+
+/** records = 1: each point as a SolverContact in registers, then the point form's force (CONTACT_FORCE after the partner) and update. */
+function exactRecordLoop(update: string[]): string {
+  const force = CONTACT_FORCE.slice(CONTACT_FORCE.indexOf('  let C = evalC('));
+  return `${RECORD_WALK}
+    let t1 = tangent1(n);
+    let mu = records[slot].mu;
+    for (var q = 0u; q < count; q++) {
+      var ct: SolverContact;
+${exactPoint('slot', '      ')}
+${force.replace(/^/gm, '    ')}
+${update.join('\n')}
+    }
+  }`;
+}
+
+/** records = 2: the points' normal rows, then the centre's three friction rows clamped together. */
+function centreRecordLoop(): string {
+  const friction = seq(3).flatMap((r) => [`    let T${r} = frow(n, t1, t2, rac, rbc, rt, ${r}u, onB);`, ...rowUpdate(`T${r}`, `FT[${r}]`, 'kt', '    ')]);
+  return `${RECORD_WALK}
+    // The points' normal rows (row 0 of jrow() on a SolverContact holding n and the lever arms).
+    var ct: SolverContact;
+    ct.n = n;
+    var sumN = 0.0;
+    for (var q = 0u; q < count; q++) {
+      ct.raw = recRaw(slot, q);
+      ct.rbw = recRbw(slot, q);
+      let kN = records[slot].kN[q];
+      let lambdaN = records[slot].lambdaN[q];
+      sumN += lambdaN;
+      let fN = min(0.0, kN * evalN(n, records[slot].c0N[q], ct.raw, ct.rbw, ia != NONE, cp.alpha, dpA, phiA, dpB, phiB) + lambdaN);
+      let J0 = jrow(ct, 0u, onB);
+${rowUpdate('J0', 'fN', 'kN', '      ').join('\n')}
+    }
+    // The friction at the centre: rows T1, T2 and twist, clamped together to the ball mu |sum of lambda_n|, the
+    // sliding Hessian as a point's (k_t s on all three rows).
+    let t1 = tangent1(n);
+    let t2 = cross(n, t1);
+    let rac = records[slot].rac;
+    let rbc = records[slot].rbc;
+    let rt = records[slot].rt;
+    let kT = records[slot].kT;
+    let CT = evalT(n, t1, t2, records[slot].c0t, rac, rbc, rt, ia != NONE, cp.alpha, dpA, phiA, dpB, phiB);
+    let bound = records[slot].mu * abs(sumN);
+    let z = kT * CT + records[slot].lamT;
+    let zl = length(z);
+    var s = 1.0;
+    if (zl > bound) { s = select(0.0, bound / zl, zl > 0.0); }
+    let FT = array<f32, 3>(s * z.x, s * z.y, s * z.z);
+    let kt = select(kT, kT * s, p.slidingHessian != 0u);
+${friction.join('\n')}
+  }`;
+}
+
+// setup() on records: SETUP's bindings, helpers and entry points, with the
+// contact buffer read as records and each manifold's points kept in one.
+const SETUP_HEAD = SETUP.slice(0, SETUP.indexOf('// Fill the 4 points of manifold m'));
+const SETUP_ENTRY = SETUP.slice(SETUP.indexOf('@compute @workgroup_size'));
+
+// records = 1: setup() of the point form, the same operations per point, last
+// step's point o read from record old (in use if o < its count) and this
+// step's points written to record dst.
+const EXACT_SETUP = /* wgsl */ `
+fn setup(m: Manifold, a: u32, b: u32, mu: f32, dst: u32, old: u32, hasOld: bool) {
+  var taken = array<bool, 4>(false, false, false, false);
+  let n = m.normal;
+  let t1 = tangent1(n);
+  let t2 = cross(n, t1);
+  let sphereA = a != NONE && props[a].sphere != 0u;
+  let sphereB = props[b].sphere != 0u;
+  let roll = p.rollingContacts != 0u && (sphereA || sphereB);
+  var oldCount = 0u;
+  if (hasOld) { oldCount = records[old].count; }
+  let on = records[old].n;
+  let ot1 = tangent1(on);
+  let oflags = records[old].flags;
+  // The load cap's reference (AvbdParams.loadCap): last step's largest |lambdaN| on a point of this pair.
+  var pairLoad = 0.0;
+  if (hasOld && p.loadCap > 0.0) {
+    for (var o = 0u; o < 4u; o++) {
+      if (o < oldCount) { pairLoad = max(pairLoad, abs(records[old].lambdaN[o])); }
+    }
+  }
+  let onB = sphereB && (!sphereA || props[b].radius <= props[a].radius);
+  var dpA = vec3f(0.0); var phiA = vec3f(0.0);
+  if (roll && a != NONE) { dpA = solver[a].dp; phiA = solver[a].phi; }
+  var dpB = vec3f(0.0); var phiB = vec3f(0.0);
+  if (roll) { dpB = solver[b].dp; phiB = solver[b].phi; }
+  var flags = 0u;
+  for (var q = 0u; q < m.count; q++) {
+    let pt = point(m, q);
+    let wa = pt.xyz + n * (pt.w * 0.5);
+    let wb = pt.xyz - n * (pt.w * 0.5);
+    let B = bodies[b];
+    var ra = wa;
+    if (a != NONE) { ra = qrot(qconj(bodies[a].rot), wa - bodies[a].pos); }
+    var rb = qrot(qconj(B.rot), wb - B.pos);
+    var lambdaN = 0.0;
+    var lt = vec2f(0.0);
+    var kN = p.penaltyMin;
+    var kT = p.penaltyMin;
+    var stick = 0u;
+    var slip = vec2f(0.0);
+    var carry = false;
+    if (hasOld) {
+      var key = rb;
+      if (roll) { if (onB) { key = wb - B.pos; } else { key = wa - bodies[a].pos; } }
+      var best = 4u;
+      var bestD = p.matchDistance;
+      for (var o = 0u; o < 4u; o++) {
+        if (o >= oldCount || taken[o]) { continue; }
+        var ok = vec3f(records[old].rbX[o], records[old].rbY[o], records[old].rbZ[o]);
+        if (roll) { ok = select(recRaw(old, o), recRbw(old, o), onB); }
+        let d = length(ok - key);
+        if (d < bestD) { best = o; bestD = d; }
+      }
+      if (best < 4u) {
+        taken[best] = true;
+        let o = best;
+        let olambdaN = records[old].lambdaN[o];
+        let f = records[old].lt1[o] * ot1 + records[old].lt2[o] * cross(on, ot1);
+        lambdaN = olambdaN;
+        lt = vec2f(dot(f, t1), dot(f, t2));
+        kN = clamp(records[old].kN[o] * p.gamma, p.penaltyMin, p.penaltyMax);
+        var u = vec3f(0.0);
+        if (roll) { u = dpB + cross(phiB, recRbw(old, o)) - (dpA + cross(phiA, recRaw(old, o))); }
+        if (p.restDepth > 0.0) {
+          var kFloor = abs(olambdaN) / p.restDepth;
+          if (roll && a != NONE && abs(dot(on, u)) >= p.restDepth) { kFloor = min(kFloor, sqrt(props[a].mass * props[b].mass) / (p.dt * p.dt)); }
+          if (p.loadCap > 0.0) { kN = max(min(kN, max(p.loadCap * (pairLoad / p.restDepth), p.capFall * kN)), p.penaltyMin); }
+          kN = min(max(kN, kFloor), p.penaltyMax);
+        }
+        kT = clamp(records[old].kT[o] * p.gamma, p.penaltyMin, p.penaltyMax);
+        let inCone = (oflags >> (4u + o)) & 1u;
+        if (inCone != 0u && roll) {
+          let t2o = cross(on, ot1);
+          let sv = (records[old].c0T1[o] + dot(ot1, u)) * ot1 + (records[old].c0T2[o] + dot(t2o, u)) * t2o;
+          let st = vec2f(dot(sv, t1), dot(sv, t2));
+          if (length(st) < p.stickThreshold) { stick = 1u; slip = st; carry = true; }
+        } else if (inCone != 0u) {
+          let ora = vec3f(records[old].raX[o], records[old].raY[o], records[old].raZ[o]);
+          let orb = vec3f(records[old].rbX[o], records[old].rbY[o], records[old].rbZ[o]);
+          var opa = ora;
+          if (a != NONE) { opa = bodies[a].pos + qrot(bodies[a].rot, ora); }
+          let od = B.pos + qrot(B.rot, orb) - opa;
+          if (length(vec2f(dot(od, t1), dot(od, t2))) < p.stickThreshold) { stick = 1u; ra = ora; rb = orb; }
+        }
+      }
+    }
+    var raw = vec3f(0.0);
+    var pa = ra;
+    if (a != NONE) { raw = qrot(bodies[a].rot, ra); pa = bodies[a].pos + raw; }
+    let rbw = qrot(B.rot, rb);
+    let d = B.pos + rbw - pa;
+    var c0 = vec3f(dot(d, n) + p.slop, dot(d, t1), dot(d, t2));
+    if (carry) { c0 = vec3f(c0.x, c0.y + slip.x, c0.z + slip.y); }
+    records[dst].rawX[q] = raw.x; records[dst].rawY[q] = raw.y; records[dst].rawZ[q] = raw.z;
+    records[dst].rbwX[q] = rbw.x; records[dst].rbwY[q] = rbw.y; records[dst].rbwZ[q] = rbw.z;
+    records[dst].c0N[q] = c0.x; records[dst].c0T1[q] = c0.y; records[dst].c0T2[q] = c0.z;
+    records[dst].kN[q] = kN; records[dst].lambdaN[q] = lambdaN; records[dst].kT[q] = kT;
+    records[dst].lt1[q] = lt.x; records[dst].lt2[q] = lt.y;
+    records[dst].raX[q] = ra.x; records[dst].raY[q] = ra.y; records[dst].raZ[q] = ra.z;
+    records[dst].rbX[q] = rb.x; records[dst].rbY[q] = rb.y; records[dst].rbZ[q] = rb.z;
+    flags |= stick << q;
+  }
+  records[dst].n = n; records[dst].mu = mu; records[dst].a = a; records[dst].b = b;
+  records[dst].count = m.count; records[dst].flags = flags;
+}
+`;
+
+// records = 2: the reference's collide() for one manifold, then its
+// frictionRecord(). The points take this step's narrowphase points and keep
+// only their normal force and penalty, matched as the point form's (load floor
+// and cap included; they never stick). The centre: the mean of the points'
+// lever arms and anchors, rt their RMS distance from it in the plane; its force
+// warm-started as a world vector (the twist as a torque about n), its penalty
+// decayed within [nc penaltyMin, nc penaltyMax]; static friction keeps its
+// anchors unless they drifted apart by stickThreshold, or for a rolling
+// contact carries its slip c0_t + J_t dx.
+const CENTRE_SETUP = /* wgsl */ `
+fn setup(m: Manifold, a: u32, b: u32, mu: f32, dst: u32, old: u32, hasOld: bool) {
+  var taken = array<bool, 4>(false, false, false, false);
+  let n = m.normal;
+  let t1 = tangent1(n);
+  let t2 = cross(n, t1);
+  let sphereA = a != NONE && props[a].sphere != 0u;
+  let sphereB = props[b].sphere != 0u;
+  let roll = p.rollingContacts != 0u && (sphereA || sphereB);
+  var oldCount = 0u;
+  if (hasOld) { oldCount = records[old].count; }
+  let on = records[old].n;
+  var pairLoad = 0.0;
+  if (p.loadCap > 0.0) {
+    for (var o = 0u; o < oldCount; o++) { pairLoad = max(pairLoad, abs(records[old].lambdaN[o])); }
+  }
+  let onB = sphereB && (!sphereA || props[b].radius <= props[a].radius);
+  var dpA = vec3f(0.0); var phiA = vec3f(0.0);
+  if (roll && a != NONE) { dpA = solver[a].dp; phiA = solver[a].phi; }
+  var dpB = vec3f(0.0); var phiB = vec3f(0.0);
+  if (roll) { dpB = solver[b].dp; phiB = solver[b].phi; }
+  let B = bodies[b];
+  var sumRaw = vec3f(0.0); var sumRbw = vec3f(0.0); var sumRa = vec3f(0.0); var sumRb = vec3f(0.0);
+  for (var q = 0u; q < m.count; q++) {
+    let pt = point(m, q);
+    let wa = pt.xyz + n * (pt.w * 0.5);
+    let wb = pt.xyz - n * (pt.w * 0.5);
+    var ra = wa;
+    if (a != NONE) { ra = qrot(qconj(bodies[a].rot), wa - bodies[a].pos); }
+    let rb = qrot(qconj(B.rot), wb - B.pos);
+    var lambdaN = 0.0;
+    var kN = p.penaltyMin;
+    var key = rb;
+    if (roll) { if (onB) { key = wb - B.pos; } else { key = wa - bodies[a].pos; } }
+    var best = 4u;
+    var bestD = p.matchDistance;
+    for (var o = 0u; o < oldCount; o++) {
+      if (taken[o]) { continue; }
+      var ok = vec3f(records[old].rbX[o], records[old].rbY[o], records[old].rbZ[o]);
+      if (roll) { ok = select(recRaw(old, o), recRbw(old, o), onB); }
+      let d = length(ok - key);
+      if (d < bestD) { best = o; bestD = d; }
+    }
+    if (best < 4u) {
+      taken[best] = true;
+      let olambdaN = records[old].lambdaN[best];
+      lambdaN = olambdaN;
+      kN = clamp(records[old].kN[best] * p.gamma, p.penaltyMin, p.penaltyMax);
+      if (p.restDepth > 0.0) {
+        var kFloor = abs(olambdaN) / p.restDepth;
+        if (roll && a != NONE) {
+          let u = dpB + cross(phiB, recRbw(old, best)) - (dpA + cross(phiA, recRaw(old, best)));
+          if (abs(dot(on, u)) >= p.restDepth) { kFloor = min(kFloor, sqrt(props[a].mass * props[b].mass) / (p.dt * p.dt)); }
+        }
+        if (p.loadCap > 0.0) { kN = max(min(kN, max(p.loadCap * (pairLoad / p.restDepth), p.capFall * kN)), p.penaltyMin); }
+        kN = min(max(kN, kFloor), p.penaltyMax);
+      }
+    }
+    var raw = vec3f(0.0);
+    var pa = ra;
+    if (a != NONE) { raw = qrot(bodies[a].rot, ra); pa = bodies[a].pos + raw; }
+    let rbw = qrot(B.rot, rb);
+    let d = B.pos + rbw - pa;
+    records[dst].rawX[q] = raw.x; records[dst].rawY[q] = raw.y; records[dst].rawZ[q] = raw.z;
+    records[dst].rbwX[q] = rbw.x; records[dst].rbwY[q] = rbw.y; records[dst].rbwZ[q] = rbw.z;
+    records[dst].c0N[q] = dot(d, n) + p.slop;
+    records[dst].kN[q] = kN; records[dst].lambdaN[q] = lambdaN;
+    records[dst].rbX[q] = rb.x; records[dst].rbY[q] = rb.y; records[dst].rbZ[q] = rb.z;
+    sumRaw += raw; sumRbw += rbw; sumRa += ra; sumRb += rb;
+  }
+  var rac = vec3f(0.0); var rbc = vec3f(0.0); var cra = vec3f(0.0); var crb = vec3f(0.0); var rt = 0.0;
+  var lamT = vec3f(0.0); var kT = p.penaltyMin; var stick = 0u; var c0t = vec2f(0.0);
+  if (m.count > 0u) {
+    let nc = f32(m.count);
+    rac = sumRaw / nc; rbc = sumRbw / nc; cra = sumRa / nc; crb = sumRb / nc;
+    var rt2 = 0.0;
+    for (var q = 0u; q < m.count; q++) {
+      let o = recRbw(dst, q) - rbc;
+      rt2 += dot(o, t1) * dot(o, t1) + dot(o, t2) * dot(o, t2);
+    }
+    rt = sqrt(rt2 / nc);
+    var slip = vec2f(0.0);
+    var carry = false;
+    if (oldCount > 0u) {
+      let ot1 = tangent1(on);
+      let ot2 = cross(on, ot1);
+      let olam = records[old].lamT;
+      let f = olam.x * ot1 + olam.y * ot2;
+      var tw = 0.0;
+      if (rt > 0.0) { tw = (olam.z * records[old].rt * dot(on, n)) / rt; }
+      lamT = vec3f(dot(f, t1), dot(f, t2), tw);
+      kT = min(nc * p.penaltyMax, max(nc * p.penaltyMin, records[old].kT * p.gamma));
+      if (records[old].stick != 0u && roll) {
+        let u = dpB + cross(phiB, records[old].rbc) - (dpA + cross(phiA, records[old].rac));
+        let oc0t = records[old].c0t;
+        let sv = (oc0t.x + dot(ot1, u)) * ot1 + (oc0t.y + dot(ot2, u)) * ot2;
+        let st = vec2f(dot(sv, t1), dot(sv, t2));
+        if (length(st) < p.stickThreshold) { stick = 1u; slip = st; carry = true; }
+      } else if (records[old].stick != 0u) {
+        let ora = records[old].ra;
+        let orb = records[old].rb;
+        var opa = ora;
+        if (a != NONE) { opa = bodies[a].pos + qrot(bodies[a].rot, ora); }
+        let od = B.pos + qrot(B.rot, orb) - opa;
+        if (length(vec2f(dot(od, t1), dot(od, t2))) < p.stickThreshold) { stick = 1u; cra = ora; crb = orb; }
+      }
+    }
+    var pa = cra;
+    if (a != NONE) { pa = bodies[a].pos + qrot(bodies[a].rot, cra); }
+    let d = B.pos + qrot(B.rot, crb) - pa;
+    c0t = vec2f(dot(d, t1), dot(d, t2));
+    if (carry) { c0t += slip; }
+  }
+  records[dst].n = n; records[dst].mu = mu; records[dst].a = a; records[dst].b = b;
+  records[dst].count = m.count; records[dst].stick = stick;
+  records[dst].rac = rac; records[dst].rt = rt; records[dst].rbc = rbc; records[dst].kT = kT;
+  records[dst].lamT = lamT; records[dst].c0t = c0t; records[dst].ra = cra; records[dst].rb = crb;
+}
+`;
+
+const DUAL_HEAD = DUAL.slice(0, DUAL.indexOf('fn dualPoint('));
+const DUAL_BODIES = DUAL.slice(DUAL.indexOf('// Velocities from the last main iteration (BDF1).'));
+const RECORD_DUAL_ENTRY = /* wgsl */ `
+@compute @workgroup_size(${WG})
+fn dualPairs(@builtin(global_invocation_id) id: vec3u) {
+  let k = id.x;
+  if (k >= stepInfo[3]) { return; }
+  dualRecord(pairRecord(p.cur, k));
+}
+
+@compute @workgroup_size(${WG})
+fn dualGround(@builtin(global_invocation_id) id: vec3u) {
+  let i = id.x;
+  if (i >= p.n) { return; }
+  dualRecord(groundRecord(p.cur, i));
+}
+
+`;
+
+// records = 1: dualPoint() of the point form on each point, the partners' state read once.
+const EXACT_DUAL = /* wgsl */ `fn dualRecord(idx: u32) {
+  let count = records[idx].count;
+  if (count == 0u) { return; }
+  let ia = records[idx].a;
+  let ib = records[idx].b;
+  let B = solver[ib];
+  var dpA = vec3f(0.0); var phiA = vec3f(0.0);
+  if (ia != NONE) { let A = solver[ia]; dpA = A.dp; phiA = A.phi; }
+  let n = records[idx].n;
+  let t1 = tangent1(n);
+  let mu = records[idx].mu;
+  // The stick bits stay; the inCone bits are this update's.
+  var flags = records[idx].flags & 0xfu;
+  for (var q = 0u; q < count; q++) {
+    var ct: SolverContact;
+${exactPoint('idx', '    ')}
+    let C = evalC(ct, 1.0, dpA, phiA, B.dp, B.phi);
+    let bound = ct.mu * abs(ct.lambdaN);
+    ct.lambdaN = min(0.0, ct.kN * C.x + ct.lambdaN);
+    if (ct.lambdaN < 0.0) { ct.kN = min(ct.kN + p.beta * abs(C.x), p.penaltyMax); }
+    let z = ct.kT * C.yz + ct.lt;
+    let fl = length(z);
+    // Static friction held if the trial force is inside the cone; the last main iteration's answer stands.
+    if (fl < bound) {
+      flags |= 1u << (4u + q);
+      ct.lt = z;
+      ct.kT = min(ct.kT + p.beta * length(C.yz), p.penaltyMax);
+    } else {
+      ct.lt = select(vec2f(0.0), z * (bound / fl), fl > 0.0);
+    }
+    records[idx].lambdaN[q] = ct.lambdaN;
+    records[idx].kN[q] = ct.kN;
+    records[idx].kT[q] = ct.kT;
+    records[idx].lt1[q] = ct.lt.x;
+    records[idx].lt2[q] = ct.lt.y;
+  }
+  records[idx].flags = flags;
+}
+`;
+
+// records = 2: the reference's dual for a record: the points' normal rows, then
+// the centre's friction against the ball of the points' forces before this
+// update, its penalty ramping by nc beta up to nc penaltyMax.
+const CENTRE_DUAL = /* wgsl */ `fn dualRecord(idx: u32) {
+  let count = records[idx].count;
+  if (count == 0u) { return; }
+  let ia = records[idx].a;
+  let ib = records[idx].b;
+  let B = solver[ib];
+  var dpA = vec3f(0.0); var phiA = vec3f(0.0);
+  if (ia != NONE) { let A = solver[ia]; dpA = A.dp; phiA = A.phi; }
+  let n = records[idx].n;
+  var sumN = 0.0;
+  for (var q = 0u; q < count; q++) { sumN += records[idx].lambdaN[q]; }
+  let bound = records[idx].mu * abs(sumN);
+  for (var q = 0u; q < count; q++) {
+    let cn = evalN(n, records[idx].c0N[q], recRaw(idx, q), recRbw(idx, q), ia != NONE, 1.0, dpA, phiA, B.dp, B.phi);
+    var kN = records[idx].kN[q];
+    let lambdaN = min(0.0, kN * cn + records[idx].lambdaN[q]);
+    if (lambdaN < 0.0) { kN = min(kN + p.beta * abs(cn), p.penaltyMax); }
+    records[idx].lambdaN[q] = lambdaN;
+    records[idx].kN[q] = kN;
+  }
+  let t1 = tangent1(n);
+  let t2 = cross(n, t1);
+  let CT = evalT(n, t1, t2, records[idx].c0t, records[idx].rac, records[idx].rbc, records[idx].rt, ia != NONE, 1.0, dpA, phiA, B.dp, B.phi);
+  let kT = records[idx].kT;
+  let z = kT * CT + records[idx].lamT;
+  let zl = length(z);
+  let nc = f32(count);
+  // Static friction held if the trial force is inside the ball; the last main iteration's answer stands.
+  if (zl < bound) {
+    records[idx].stick = 1u;
+    records[idx].lamT = z;
+    records[idx].kT = min(kT + nc * p.beta * length(CT), nc * p.penaltyMax);
+  } else {
+    records[idx].stick = 0u;
+    records[idx].lamT = select(vec3f(0.0), z * (bound / zl), zl > 0.0);
+  }
+}
+`;
+
+/**
+ * The setup, primal and dual shaders of a record mode and dispatch. 0 is the
+ * point form (SOLVER_WGSL, solveWgsl(), dualWgsl()); 1 and 2 need the
+ * register form, and do not fuse the dual.
+ */
+export function recordWgsl(records: RecordMode, hessian: HessianForm = 'registers', d: Pick<SolverDispatch, 'dualFusion' | 'solveContactsRW'> = {}): { setup: string; solve: string; dual: string } {
+  if (!RECORD_MODES.includes(records)) throw new Error(`recordWgsl: records must be one of ${RECORD_MODES.join(', ')}, got ${records}`);
+  if (records === 0) return { setup: SETUP, solve: solveWgsl(hessian, d), dual: dualWgsl(fusionOf(d)) };
+  if (hessian !== 'registers') throw new Error(`recordWgsl: records ${records} needs hessian registers, got ${hessian}`);
+  if (d.dualFusion) throw new Error(`recordWgsl: records ${records} does not fuse the dual (dualFusion)`);
+  const rw = d.solveContactsRW === true;
+  const struct = records === 1 ? SolverRecord : CentreRecord;
+  const decl = (code: string, access: string) =>
+    swap(code, `var<storage, ${access}> contacts: array<SolverContact>;`, `var<storage, ${access}> records: array<${struct.name}>;`) + wgslStruct(struct) + RECORD_COMMON + (records === 2 ? CENTRE_EVAL : '');
+  const entry = swap(swap(swap(swap(SETUP_ENTRY,
+    'pairPoint(p.cur, k, 0u)', 'pairRecord(p.cur, k)'), 'pairPoint(1u - p.cur, select(0u, ps, ps != NONE), 0u)', 'pairRecord(1u - p.cur, select(0u, ps, ps != NONE))'),
+    'groundPoint(p.cur, i, 0u)', 'groundRecord(p.cur, i)'), 'groundPoint(1u - p.cur, i, 0u)', 'groundRecord(1u - p.cur, i)');
+  return {
+    setup: decl(SETUP_HEAD, 'read_write') + (records === 1 ? EXACT_SETUP : CENTRE_SETUP) + entry,
+    solve: decl(solveHead('off', rw), rw ? 'read_write' : 'read') + JROW + registerSolveBody('off', records) + SOLVE_TAIL,
+    dual: decl(DUAL_HEAD, 'read_write') + (records === 1 ? EXACT_DUAL : CENTRE_DUAL) + RECORD_DUAL_ENTRY + DUAL_BODIES,
+  };
+}
+
+/** The other kernels' shaders (DUAL without the fused dual's side array: dualWgsl(); without records: recordWgsl()); the primal's is solveWgsl(). */
 export const SOLVER_WGSL = { PREP, MATCH, SETUP, INIT, DUAL };
 
 /** Index = SolverParams.frictionCombine; combineFriction in the setup kernels follows this order. */
@@ -1020,13 +1555,17 @@ type Kind = 'r' | 'rw' | 'u' | 'ud';
  * and narrowphase read), then solve() after the colouring.
  */
 export class AvbdSolver {
-  /** Size of the contact buffer, the pipeline's largest (4 points per pair slot and ground slot, two history halves). */
-  static contactBytes(capacity: number, maxPairs: number): number {
-    return 2 * (maxPairs + capacity) * 4 * SolverContact.size;
+  /**
+   * Size of the contact buffer, the pipeline's largest (4 points per pair slot and ground slot, two history halves;
+   * with records, one record per slot).
+   */
+  static contactBytes(capacity: number, maxPairs: number, records: RecordMode = 0): number {
+    const slot = records === 0 ? 4 * SolverContact.size : records === 1 ? SolverRecord.size : CentreRecord.size;
+    return 2 * (maxPairs + capacity) * slot;
   }
 
   readonly solver: GPUBuffer;
-  /** Two halves of (maxPairs + capacity) * 4 contact points. */
+  /** Two halves of (maxPairs + capacity) * 4 contact points, or with records (AvbdParams.records) of maxPairs + capacity records. */
   readonly contacts: GPUBuffer;
   readonly meta: GPUBuffer;
   private readonly pairHist: GPUBuffer;
@@ -1044,15 +1583,19 @@ export class AvbdSolver {
   private cur = 0;
   private prevN = 0;
 
-  constructor(private readonly device: GPUDevice, readonly capacity: number, readonly maxPairs: number, private readonly b: SolverBuffers, private readonly dispatch: SolverDispatch = DEFAULT_DISPATCH) {
+  constructor(private readonly device: GPUDevice, readonly capacity: number, readonly maxPairs: number, private readonly b: SolverBuffers, private readonly dispatch: SolverDispatch = DEFAULT_DISPATCH, readonly records: RecordMode = 0) {
     if (!(Number.isInteger(dispatch.colorTail) && dispatch.colorTail >= 0 && dispatch.colorTail < MAX_COLORS)) throw new Error(`AvbdSolver: colorTail must be an integer from 0 to ${MAX_COLORS - 1}, got ${dispatch.colorTail}`);
     if (!(Number.isInteger(dispatch.tailThreads) && dispatch.tailThreads >= 1 && dispatch.tailThreads <= MAX_TAIL)) throw new Error(`AvbdSolver: tailThreads must be an integer from 1 to ${MAX_TAIL}, got ${dispatch.tailThreads}`);
     if (!HESSIAN_FORMS.includes(dispatch.hessian)) throw new Error(`AvbdSolver: hessian must be one of ${HESSIAN_FORMS.join(', ')}, got ${dispatch.hessian}`);
     for (const k of ['dualFusion', 'solveContactsRW'] as const) if (dispatch[k] !== undefined && typeof dispatch[k] !== 'boolean') throw new Error(`AvbdSolver: ${k} must be a boolean, got ${dispatch[k]}`);
+    if (!RECORD_MODES.includes(records)) throw new Error(`AvbdSolver: records must be one of ${RECORD_MODES.join(', ')}, got ${records}`);
+    if (records !== 0 && dispatch.hessian !== 'registers') throw new Error(`AvbdSolver: records ${records} needs hessian registers, got ${dispatch.hessian}`);
+    if (records !== 0 && dispatch.dualFusion) throw new Error(`AvbdSolver: records ${records} does not fuse the dual (dualFusion)`);
     this.fusion = fusionOf(dispatch);
+    const code = recordWgsl(records, dispatch.hessian, dispatch);
     const buf = (bytes: number, label: string) => (assertStorageFits(device, bytes, label), device.createBuffer({ size: Math.max(16, bytes), usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST, label }));
     this.solver = buf(capacity * SolverBody.size, 'avbd solver bodies');
-    this.contacts = buf(AvbdSolver.contactBytes(capacity, maxPairs), 'avbd contacts');
+    this.contacts = buf(AvbdSolver.contactBytes(capacity, maxPairs, records), 'avbd contacts');
     this.meta = buf(64, 'avbd meta');
     this.pairHist = buf(2 * maxPairs * 8, 'avbd pair history');
     this.offHist = buf(2 * capacity * 4, 'avbd offset history');
@@ -1095,16 +1638,16 @@ export class AvbdSolver {
     mk('avbd prepare', PREP, [['', 'prepare']], ['r', 'r', 'rw', 'rw', 'u'], [['prep', [B.bodies, B.props, B.spheres, B.sweep, this.uniform]]]);
     mk('avbd match', MATCH, [['', 'matchPairs']], ['r', 'r', 'r', 'r', 'r', 'r', 'rw', 'u'],
       [['match', [B.pairs, B.total, this.meta, this.pairHist, this.offHist, B.manifolds, B.prev, this.uniform]]]);
-    mk('avbd setup', SETUP, [['', 'pairSetup', 'groundSetup']], ['r', 'r', 'r', 'r', 'r', 'r', 'rw', 'r', 'u'],
+    mk('avbd setup', code.setup, [['', 'pairSetup', 'groundSetup']], ['r', 'r', 'r', 'r', 'r', 'r', 'rw', 'r', 'u'],
       [['setup', [B.manifolds, B.groundManifolds, B.bodies, B.props, this.meta, B.prev, this.contacts, this.solver, this.uniform]]]);
     mk('avbd init', INIT, [['', 'initBodies']], ['rw', 'rw', 'u'], [['init', [B.bodies, this.solver, this.uniform]]]);
     // The solve kernel: 8 storage buffers. The fused dual's side array takes colorStart's place among them (as a uniform copy).
     const side = this.fusion === 'side';
     const solveKinds: Kind[] = ['r', 'rw', dispatch.solveContactsRW ? 'rw' : 'r', 'r', side ? 'u' : 'r', 'r', 'r', 'r', 'u', 'ud', ...(side ? ['rw' as const] : [])];
-    mk('avbd solve', solveWgsl(dispatch.hessian, dispatch), [['', 'primal', 'primalTail', ...(this.fusion === 'off' ? [] : ['visitOrder'])]], solveKinds,
+    mk('avbd solve', code.solve, [['', 'primal', 'primalTail', ...(this.fusion === 'off' ? [] : ['visitOrder'])]], solveKinds,
       [['solve', [B.props, this.solver, this.contacts, B.order, side ? this.colorStarts! : B.colorStart, B.rowStart, B.rowLength, B.adjSlot, this.uniform, this.colorUniform, ...(side ? [this.duals!] : [])]]],
       { primalTail: { tailThreads: dispatch.tailThreads } });
-    mk('avbd dual', dualWgsl(this.fusion), [['', 'dualPairs', 'dualGround', 'velocities', 'finalize', ...(side ? ['dualPairsSide', 'dualGroundSide'] : [])]], ['rw', 'rw', 'rw', 'r', 'u', ...(side ? ['r' as const] : [])],
+    mk('avbd dual', code.dual, [['', 'dualPairs', 'dualGround', 'velocities', 'finalize', ...(side ? ['dualPairsSide', 'dualGroundSide'] : [])]], ['rw', 'rw', 'rw', 'r', 'u', ...(side ? ['r' as const] : [])],
       [['dual', [B.bodies, this.solver, this.contacts, this.meta, this.uniform, ...(side ? [this.duals!] : [])]]]);
   }
 
@@ -1212,6 +1755,35 @@ export class AvbdSolver {
   /** The contact history half the last solve() read and wrote (p.cur in the uniforms it left). */
   get lastHalf(): number {
     return 1 - this.cur;
+  }
+
+  /**
+   * Bench and tests only (the solver probe's colour structure, probe.ts; the
+   * test pages): the points in use in the first `slots` pair slots and the
+   * first `n` ground slots of lastHalf, read back. A slot's SolverContact
+   * points are in use up to the first unused one; with records, its record
+   * holds the count.
+   */
+  async slotPoints(slots: number, n: number): Promise<{ pairs: Uint32Array; ground: Uint32Array }> {
+    const read = async (bytes: number, offset: number) => new Uint32Array(await readBuffer(this.device, this.contacts, Math.max(4, bytes), offset));
+    const half = this.lastHalf, pairs = new Uint32Array(slots), ground = new Uint32Array(n);
+    if (this.records === 0) {
+      const CS = SolverContact.size, usedAt = field(SolverContact, 'used').offset / 4, halfSize = (this.maxPairs + this.capacity) * 4;
+      const used = (pts: Uint32Array, slot: number) => {
+        let k = 0;
+        while (k < 4 && pts[(slot * 4 + k) * (CS / 4) + usedAt] !== 0) k++;
+        return k;
+      };
+      const p = await read(slots * 4 * CS, half * halfSize * CS), g = await read(n * 4 * CS, (half * halfSize + this.maxPairs * 4) * CS);
+      for (let k = 0; k < slots; k++) pairs[k] = used(p, k);
+      for (let i = 0; i < n; i++) ground[i] = used(g, i);
+    } else {
+      const rec = this.records === 1 ? SolverRecord : CentreRecord, RS = rec.size, countAt = field(rec, 'count').offset / 4, halfSize = this.maxPairs + this.capacity;
+      const p = await read(slots * RS, half * halfSize * RS), g = await read(n * RS, (half * halfSize + this.maxPairs) * RS);
+      for (let k = 0; k < slots; k++) pairs[k] = p[k * (RS / 4) + countAt]!;
+      for (let i = 0; i < n; i++) ground[i] = g[i * (RS / 4) + countAt]!;
+    }
+    return { pairs, ground };
   }
 
   /**

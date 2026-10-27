@@ -10,9 +10,9 @@ const checkpoint = (step: number, o: { perPoint?: number; tail?: number; solve: 
   const e = 0.001294;
   return {
     step, n: 10000, coloursUsed: 10, uncolored: 0, pairSlots: 105022, pairsRequired: 105022, contactPairs: 98000, colorTail: 8, tailThreads: 256,
-    direct: T.map((t, colour) => ({ colour, bodies: 1000, W: 56, points: 60000, loads: 57, t: stat(e + (t / 1000 - e) * (o.perPoint ?? 1)) })),
-    tail: { colours: 2, bodies: 44, serialBodies: 0, Wcrit: 112, points: 2428, t: stat(0.0653 * (o.tail ?? 1)) },
-    dual: stat(o.dual ?? 0.122), emptyColour: 10, emptyDispatch: stat(e), solvePass: stat(o.solve), sumW: 560, totalPoints: 475910, check: null,
+    direct: T.map((t, colour) => ({ colour, bodies: 1000, W: 56, R: 14, points: 60000, loads: 57, t: stat(e + (t / 1000 - e) * (o.perPoint ?? 1)) })),
+    tail: { colours: 2, bodies: 44, serialBodies: 0, Wcrit: 112, Rcrit: 28, points: 2428, t: stat(0.0653 * (o.tail ?? 1)) },
+    dual: stat(o.dual ?? 0.122), emptyColour: 10, emptyDispatch: stat(e), solvePass: stat(o.solve), sumW: 560, sumR: 140, totalPoints: 475910, check: null,
   };
 };
 // What bench:probe records of each arm: the default engine (no spec), the fused dual in its side array, and in place.
