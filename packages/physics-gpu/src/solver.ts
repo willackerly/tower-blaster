@@ -27,8 +27,11 @@
 //   the contact stays 128 B, and evalC() recomputes the excused part,
 //   min(c0.x, gapSlop): on, that is two compares, an and, a min, a subtract
 //   and a select per evaluation, and no extra load (used is read anyway, for
-//   the end of a slot's points). In f32 an excused gap stops closing a few
-//   um up, by an amount that depends on where the scene is: a 25 um lift
+//   the end of a slot's points). With records (AvbdParams.records) setup
+//   keeps the mark in bit 8 + q of the record's flags (1) or stick (2) word
+//   (LOADED_BIT), read behind gapSlop > 0.0; records 1 hands it to evalC()
+//   as LOADED_GAP, records 2 to evalN(). In f32 an excused gap stops closing
+//   a few um up, by an amount that depends on where the scene is: a 25 um lift
 //   under the top 4 cubes of an 8-cube column ends 6.2 um up (3.5 um with the
 //   scene 6 m lower), where the reference's keeps closing, and one cube on
 //   the ground lifted 25 um ends 0.09 um up (engine-gapslop.test.ts). Which
@@ -970,15 +973,23 @@ fn groundRecord(half: u32, body: u32) -> u32 { return half * recordHalf() + p.ma
 // Point q's lever arms on a and b.
 fn recRaw(r: u32, q: u32) -> vec3f { return vec3f(records[r].rawX[q], records[r].rawY[q], records[r].rawZ[q]); }
 fn recRbw(r: u32, q: u32) -> vec3f { return vec3f(records[r].rbwX[q], records[r].rbwY[q], records[r].rbwZ[q]); }
+// Point q's loaded-gap mark (SolverContact.used's LOADED_GAP): bit LOADED_BIT + q of SolverRecord.flags or
+// CentreRecord.stick, free bits of a word the walk's line holds anyway, so the records keep their size and hot block.
+const LOADED_BIT = 8u;
+// Whether point q of a record whose flags (records 1) or stick (records 2) word is w is marked. Callers read w
+// behind gapSlop > 0.0, so off it is never loaded.
+fn recLoaded(w: u32, q: u32) -> bool { return ((w >> (LOADED_BIT + q)) & 1u) != 0u; }
 `;
 
 // records = 2: a point's normal row at the current displacements (the x of
-// evalC), the centre's friction rows T1, T2 and twist (the twist row starts at
+// evalC, a loaded point's gapSlop included), the centre's friction rows T1, T2 and twist (the twist row starts at
 // 0), and row r of those for body b: (u, rbc x u), the twist (0, rt n); for
 // body a, minus that with rac.
 const CENTRE_EVAL = /* wgsl */ `
-fn evalN(n: vec3f, c0n: f32, raw: vec3f, rbw: vec3f, hasA: bool, alpha: f32, dpA: vec3f, phiA: vec3f, dpB: vec3f, phiB: vec3f) -> f32 {
+fn evalN(n: vec3f, c0n: f32, loaded: bool, raw: vec3f, rbw: vec3f, hasA: bool, alpha: f32, dpA: vec3f, phiA: vec3f, dpB: vec3f, phiB: vec3f) -> f32 {
   var c = select(c0n, (1.0 - alpha) * c0n, c0n < 0.0);
+  // A loaded point's excused gap, as evalC()'s (the reference's evalC0).
+  if (gapSlop > 0.0 && alpha == 1.0 && loaded) { c = c0n - min(c0n, gapSlop); }
   c += dot(n, dpB) + dot(cross(rbw, n), phiB);
   if (hasA) { c -= dot(n, dpA) + dot(cross(raw, n), phiA); }
   return c;
@@ -1002,9 +1013,13 @@ fn frow(n: vec3f, t1: vec3f, t2: vec3f, rac: vec3f, rbc: vec3f, rt: f32, r: u32,
 }
 `;
 
-/** Point q of records = 1 record `rec` into the SolverContact ct (declared by the caller), with n, t1, mu, ia, ib read once per record. */
+/**
+ * Point q of records = 1 record `rec` into the SolverContact ct (declared by the caller), with n, t1, mu, ia, ib
+ * read once per record; a point setup marked gets LOADED_GAP, so evalC() excuses its gap as the point form's.
+ */
 const exactPoint = (rec: string, ind: string) => [
   `ct.n = n; ct.t1 = t1; ct.mu = mu; ct.a = ia; ct.b = ib; ct.used = 1u;`,
+  `if (gapSlop > 0.0 && recLoaded(records[${rec}].flags, q)) { ct.used = 1u | LOADED_GAP; }`,
   `ct.raw = recRaw(${rec}, q);`,
   `ct.rbw = recRbw(${rec}, q);`,
   `ct.c0 = vec3f(records[${rec}].c0N[q], records[${rec}].c0T1[q], records[${rec}].c0T2[q]);`,
@@ -1104,7 +1119,7 @@ function centreRecordLoop(fusion: Fusion = 'off'): string {
       let kN = records[slot].kN[q];
       let lambdaN = records[slot].lambdaN[q];
       sumN += lambdaN;
-      let fN = min(0.0, kN * evalN(n, records[slot].c0N[q], ct.raw, ct.rbw, ia != NONE, cp.alpha, dpA, phiA, dpB, phiB) + lambdaN);
+      let fN = min(0.0, kN * evalN(n, records[slot].c0N[q], gapSlop > 0.0 && recLoaded(records[slot].stick, q), ct.raw, ct.rbw, ia != NONE, cp.alpha, dpA, phiA, dpB, phiB) + lambdaN);
       let J0 = jrow(ct, 0u, onB);
 ${rowUpdate('J0', 'fN', 'kN', '      ').join('\n')}
     }
@@ -1141,8 +1156,8 @@ ${friction.join('\n')}
   f = swap(f, `      let kN = records[slot].kN[q];
       let lambdaN = records[slot].lambdaN[q];
       sumN += lambdaN;
-      let fN = min(0.0, kN * evalN(n, records[slot].c0N[q], ct.raw, ct.rbw, ia != NONE, cp.alpha, dpA, phiA, dpB, phiB) + lambdaN);`,
-  `      let cn = evalN(n, records[slot].c0N[q], ct.raw, ct.rbw, ia != NONE, cp.alpha, dpA, phiA, dpB, phiB);
+      let fN = min(0.0, kN * evalN(n, records[slot].c0N[q], gapSlop > 0.0 && recLoaded(records[slot].stick, q), ct.raw, ct.rbw, ia != NONE, cp.alpha, dpA, phiA, dpB, phiB) + lambdaN);`,
+  `      let cn = evalN(n, records[slot].c0N[q], gapSlop > 0.0 && recLoaded(records[slot].stick, q), ct.raw, ct.rbw, ia != NONE, cp.alpha, dpA, phiA, dpB, phiB);
       if (deferred) {
         // The point's deferred normal update (dualRecord()).
         sumOld += du.lambdaN[q];
@@ -1276,6 +1291,8 @@ fn setup(m: Manifold, a: u32, b: u32, mu: f32, dst: u32, old: u32, hasOld: bool)
     let d = B.pos + rbw - pa;
     var c0 = vec3f(dot(d, n) + p.slop, dot(d, t1), dot(d, t2));
     if (carry) { c0 = vec3f(c0.x, c0.y + slip.x, c0.z + slip.y); }
+    // Loaded-gap slop: the point form's mark (LOADED_GAP), on the warm-started lambdaN, kept in flags.
+    if (gapSlop > 0.0 && !roll && lambdaN < 0.0 && c0.x > 0.0) { flags |= 1u << (LOADED_BIT + q); }
     records[dst].rawX[q] = raw.x; records[dst].rawY[q] = raw.y; records[dst].rawZ[q] = raw.z;
     records[dst].rbwX[q] = rbw.x; records[dst].rbwY[q] = rbw.y; records[dst].rbwZ[q] = rbw.z;
     records[dst].c0N[q] = c0.x; records[dst].c0T1[q] = c0.y; records[dst].c0T2[q] = c0.z;
@@ -1322,6 +1339,7 @@ fn setup(m: Manifold, a: u32, b: u32, mu: f32, dst: u32, old: u32, hasOld: bool)
   if (roll) { dpB = solver[b].dp; phiB = solver[b].phi; }
   let B = bodies[b];
   var sumRaw = vec3f(0.0); var sumRbw = vec3f(0.0); var sumRa = vec3f(0.0); var sumRb = vec3f(0.0);
+  var marks = 0u;
   for (var q = 0u; q < m.count; q++) {
     let pt = point(m, q);
     let wa = pt.xyz + n * (pt.w * 0.5);
@@ -1362,9 +1380,12 @@ fn setup(m: Manifold, a: u32, b: u32, mu: f32, dst: u32, old: u32, hasOld: bool)
     if (a != NONE) { raw = qrot(bodies[a].rot, ra); pa = bodies[a].pos + raw; }
     let rbw = qrot(B.rot, rb);
     let d = B.pos + rbw - pa;
+    let c0n = dot(d, n) + p.slop;
+    // Loaded-gap slop (the reference's collide()): the point form's mark, on the warm-started lambdaN, kept in stick.
+    if (gapSlop > 0.0 && !roll && lambdaN < 0.0 && c0n > 0.0) { marks |= 1u << (LOADED_BIT + q); }
     records[dst].rawX[q] = raw.x; records[dst].rawY[q] = raw.y; records[dst].rawZ[q] = raw.z;
     records[dst].rbwX[q] = rbw.x; records[dst].rbwY[q] = rbw.y; records[dst].rbwZ[q] = rbw.z;
-    records[dst].c0N[q] = dot(d, n) + p.slop;
+    records[dst].c0N[q] = c0n;
     records[dst].kN[q] = kN; records[dst].lambdaN[q] = lambdaN;
     records[dst].rbX[q] = rb.x; records[dst].rbY[q] = rb.y; records[dst].rbZ[q] = rb.z;
     sumRaw += raw; sumRbw += rbw; sumRa += ra; sumRb += rb;
@@ -1391,13 +1412,14 @@ fn setup(m: Manifold, a: u32, b: u32, mu: f32, dst: u32, old: u32, hasOld: bool)
       if (rt > 0.0) { tw = (olam.z * records[old].rt * dot(on, n)) / rt; }
       lamT = vec3f(dot(f, t1), dot(f, t2), tw);
       kT = min(nc * p.penaltyMax, max(nc * p.penaltyMin, records[old].kT * p.gamma));
-      if (records[old].stick != 0u && roll) {
+      let ostick = (records[old].stick & 1u) != 0u;
+      if (ostick && roll) {
         let u = dpB + cross(phiB, records[old].rbc) - (dpA + cross(phiA, records[old].rac));
         let oc0t = records[old].c0t;
         let sv = (oc0t.x + dot(ot1, u)) * ot1 + (oc0t.y + dot(ot2, u)) * ot2;
         let st = vec2f(dot(sv, t1), dot(sv, t2));
         if (length(st) < p.stickThreshold) { stick = 1u; slip = st; carry = true; }
-      } else if (records[old].stick != 0u) {
+      } else if (ostick) {
         let ora = records[old].ra;
         let orb = records[old].rb;
         var opa = ora;
@@ -1413,7 +1435,7 @@ fn setup(m: Manifold, a: u32, b: u32, mu: f32, dst: u32, old: u32, hasOld: bool)
     if (carry) { c0t += slip; }
   }
   records[dst].n = n; records[dst].mu = mu; records[dst].a = a; records[dst].b = b;
-  records[dst].count = m.count; records[dst].stick = stick;
+  records[dst].count = m.count; records[dst].stick = stick | marks;
   records[dst].rac = rac; records[dst].rt = rt; records[dst].rbc = rbc; records[dst].kT = kT;
   records[dst].lamT = lamT; records[dst].c0t = c0t; records[dst].ra = cra; records[dst].rb = crb;
 }
@@ -1450,8 +1472,8 @@ const EXACT_DUAL = /* wgsl */ `fn dualRecord(idx: u32) {
   let n = records[idx].n;
   let t1 = tangent1(n);
   let mu = records[idx].mu;
-  // The stick bits stay; the inCone bits are this update's.
-  var flags = records[idx].flags & 0xfu;
+  // The stick bits and the loaded-gap marks stay; the inCone bits are this update's.
+  var flags = records[idx].flags & 0xf0fu;
   for (var q = 0u; q < count; q++) {
     var ct: SolverContact;
 ${exactPoint('idx', '    ')}
@@ -1491,11 +1513,14 @@ const CENTRE_DUAL = /* wgsl */ `fn dualRecord(idx: u32) {
   var dpA = vec3f(0.0); var phiA = vec3f(0.0);
   if (ia != NONE) { let A = solver[ia]; dpA = A.dp; phiA = A.phi; }
   let n = records[idx].n;
+  // The loaded-gap marks, which stay (bit 0 is this update's); off, never loaded.
+  var marks = 0u;
+  if (gapSlop > 0.0) { marks = records[idx].stick & ~1u; }
   var sumN = 0.0;
   for (var q = 0u; q < count; q++) { sumN += records[idx].lambdaN[q]; }
   let bound = records[idx].mu * abs(sumN);
   for (var q = 0u; q < count; q++) {
-    let cn = evalN(n, records[idx].c0N[q], recRaw(idx, q), recRbw(idx, q), ia != NONE, 1.0, dpA, phiA, B.dp, B.phi);
+    let cn = evalN(n, records[idx].c0N[q], gapSlop > 0.0 && recLoaded(marks, q), recRaw(idx, q), recRbw(idx, q), ia != NONE, 1.0, dpA, phiA, B.dp, B.phi);
     var kN = records[idx].kN[q];
     let lambdaN = min(0.0, kN * cn + records[idx].lambdaN[q]);
     if (lambdaN < 0.0) { kN = min(kN + p.beta * abs(cn), p.penaltyMax); }
@@ -1511,11 +1536,11 @@ const CENTRE_DUAL = /* wgsl */ `fn dualRecord(idx: u32) {
   let nc = f32(count);
   // Static friction held if the trial force is inside the ball; the last main iteration's answer stands.
   if (zl < bound) {
-    records[idx].stick = 1u;
+    records[idx].stick = marks | 1u;
     records[idx].lamT = z;
     records[idx].kT = min(kT + nc * p.beta * length(CT), nc * p.penaltyMax);
   } else {
-    records[idx].stick = 0u;
+    records[idx].stick = marks;
     records[idx].lamT = select(vec3f(0.0), z * (bound / zl), zl > 0.0);
   }
 }
@@ -1769,7 +1794,7 @@ export class AvbdSolver {
    * here (rounded or flushed); on the reference such a value changed no float
    * of the kicked column either (1e-50 to 1e-38; 1e-20 changed 92 of 104,
    * 2026-10-27), so the two agree in effect while EngineInfo.variant lists it.
-   * With records 1 or 2 it throws: their setup does not mark loaded gaps yet.
+   * With records 1 or 2 setup marks a point in the record's word (LOADED_BIT).
    *
    * restitution: the restitution pass's settings (restitution.ts) while
    * AvbdParams.restitution is on, else null (the default): then the pass has
@@ -1780,7 +1805,6 @@ export class AvbdSolver {
    */
   constructor(private readonly device: GPUDevice, readonly capacity: number, readonly maxPairs: number, private readonly b: SolverBuffers, private readonly dispatch: SolverDispatch = DEFAULT_DISPATCH, readonly records: RecordMode = 0, readonly gapSlop = 0, readonly restitution: RestitutionConfig | null = null) {
     if (!(Number.isFinite(gapSlop) && gapSlop >= 0)) throw new Error(`AvbdSolver: gapSlop must be a finite number >= 0, got ${gapSlop}`);
-    if (gapSlop > 0 && records !== 0) throw new Error(`AvbdSolver: gapSlop is not implemented with records ${records} yet (the records' setup does not mark loaded gaps)`);
     if (restitution) {
       const { threshold: t, rounds: r, groundRestitution: g, combine: c } = restitution;
       if (!(Number.isFinite(t) && t >= 0)) throw new Error(`AvbdSolver: restitution.threshold must be a finite number >= 0, got ${t}`);

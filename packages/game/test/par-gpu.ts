@@ -29,8 +29,9 @@ export function parOnGpu(id: string, more: { before?(page: Page): Promise<void>;
       await playShots(page, shots, 20 * MINUTES);
       const live = await page.evaluate(() => window.__game.state());
       const { loadMs, stepMs } = await page.evaluate(() => window.__game.timing);
-      // Every live step is timed, and none before the first shot.
-      expect(stepMs.length).toBe(live.step - settled);
+      // Every live driver step is timed, and none before the first shot. The read-back is
+      // pipelined on the GPU, so each shot's first driver step submits two engine steps.
+      expect(stepMs.length).toBe(live.step - settled - shots.length);
       const adapter = await page.evaluate(async () => { const i = (await navigator.gpu.requestAdapter())?.info; return i ? `${i.vendor} ${i.architecture} ${i.description}`.trim() : 'none'; });
       // Physics only (offscreen draws no frames). Real numbers only from a physical GPU.
       const t = summarize(stepMs), f = (x: number) => x.toFixed(2);

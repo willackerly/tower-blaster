@@ -3,7 +3,7 @@
 // records replay exactly.
 import { describe, expect, it } from 'vitest';
 import { RapierEngine } from '@tb/adapter-rapier';
-import type { PhysicsEngine } from '@tb/engine-api';
+import type { PhysicsEngine, Snapshot } from '@tb/engine-api';
 import { quatAngle } from '@tb/geom';
 import { engineLabel, makeEngine, RAPIER_SUBSTEPS } from '@tb/keystone-lab';
 import { compileLevel, GRAVITY, L1, type LevelDef, LEVELS, predictArc, PRESETTLE_STEPS, QUIET_SPEED, QUIET_SPIN, runSession, SETTLE_QUIET, type Shot, shotToSpawn, snapshotHash } from '@tb/keystone';
@@ -172,5 +172,33 @@ describe('sessions on Rapier', () => {
     while (e.stepIndex < live.steps) e.step();
     expect(snapshotHash(e.snapshot())).toBe(snapshotHash(live.snapshot));
     expect(live.session.inputs[0]!.step).toBe(PRESETTLE_STEPS);
+  });
+  it('a pipelined driver sees the same steps: one shot ends with the same score and feedback one step later, in the state serial play reaches one step on', async () => {
+    const c = compileLevel(L1), par = L1.solutions!.par! as Shot[];
+    const serial = await runSession(new RapierEngine(), c, par);
+    const piped = await runSession(new RapierEngine(), c, par, { pipelined: true });
+    expect(serial.session.phase).toBe('cleared');
+    expect(piped.session.score).toEqual(serial.session.score);
+    expect(piped.feedback).toEqual(serial.feedback);
+    expect(piped.steps).toBe(serial.steps + 1);
+    const e = new RapierEngine();
+    await e.init({ ...c.scene, inputs: serial.session.inputs.map(({ step, shot }) => shotToSpawn(c.frame, shot, step)) });
+    while (e.stepIndex < serial.steps + 1) e.step();
+    expect(snapshotHash(e.snapshot())).toBe(snapshotHash(piped.snapshot));
+    e.dispose();
+  });
+  it('a pipelined session fires each later shot from the world as it stands, and replays exactly through scene.inputs', async () => {
+    const c = compileLevel(L1);
+    const aiming: [string, string][] = [];
+    const live = await runSession(new RapierEngine(), c, shots, { pipelined: true, onAiming: (d) => aiming.push([snapshotHash(d.snapshot), snapshotHash(d.engine.snapshot() as Snapshot)]) });
+    expect(aiming.length).toBe(1);
+    expect(aiming[0]![0]).toBe(aiming[0]![1]);
+    expect(live.session.inputs.length).toBe(2);
+    const inputs = live.session.inputs.map(({ step, shot }) => shotToSpawn(c.frame, shot, step));
+    const e = new RapierEngine();
+    await e.init({ ...c.scene, inputs });
+    while (e.stepIndex < live.steps) e.step();
+    expect(snapshotHash(e.snapshot())).toBe(snapshotHash(live.snapshot));
+    e.dispose();
   });
 });

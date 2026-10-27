@@ -31,12 +31,28 @@ export const PRESETTLE_STEPS = 300;
 export const AVBD_ITERATIONS = 40;
 export const AVBD_GAP_SLOP = 3e-5;
 
+export interface DriverOptions {
+  /**
+   * Pipelined read-back: step n+1 is submitted before step n's snapshot is
+   * awaited, so a GPU engine solves while the bodies come back (step() only
+   * submits there). The rules see step n while the engine is at n+1, and a
+   * shot the rules end at step n leaves the world at step n+1. The observed
+   * steps are the same, so a one-shot session ends with the same score one
+   * step later; later shots start one step later, so a session replays
+   * exactly only on a driver with the same option.
+   */
+  pipelined?: boolean;
+}
+
 export class Driver {
   session!: Session;
+  /** The newest observed state; while aiming, the world as it stands. */
   snapshot!: Snapshot;
   private observer!: CpuObserver;
+  /** Pipelined only: the snapshot of the newest submitted step, not observed yet. */
+  private ahead: Promise<Snapshot> | null = null;
 
-  constructor(readonly engine: PhysicsEngine, readonly level: CompiledLevel) {}
+  constructor(readonly engine: PhysicsEngine, readonly level: CompiledLevel, readonly options: DriverOptions = {}) {}
 
   /**
    * Init the engine and let the structure settle before play: real engines
@@ -60,9 +76,37 @@ export class Driver {
   }
 
   async step(): Promise<Feedback[]> {
+    if (!this.options.pipelined) {
+      await this.engine.step();
+      this.snapshot = await this.engine.snapshot();
+      return this.session.observe(this.observer.observe(this.snapshot, this.engine.stepIndex, this.session.watchIdx));
+    }
+    if (!this.ahead) {
+      await this.engine.step();
+      this.ahead = this.read();
+    }
+    // snapshot() queues its copy when called, so it holds exactly the steps before it.
+    const n = this.engine.stepIndex;
     await this.engine.step();
-    this.snapshot = await this.engine.snapshot();
-    return this.session.observe(this.observer.observe(this.snapshot, this.engine.stepIndex, this.session.watchIdx));
+    this.snapshot = await this.ahead;
+    this.ahead = this.read();
+    const feedback = this.session.observe(this.observer.observe(this.snapshot, n, this.session.watchIdx));
+    if (this.session.phase !== 'running') await this.drain();
+    return feedback;
+  }
+
+  /** A read that may be dropped (a level load disposes the engine under it) without an unhandled rejection. */
+  private read(): Promise<Snapshot> {
+    const p = Promise.resolve(this.engine.snapshot());
+    p.catch(() => {});
+    return p;
+  }
+
+  /** Pipelined: take the snapshot of the step past the last observed one, so `snapshot` is the world as it stands. */
+  async drain(): Promise<void> {
+    const ahead = this.ahead;
+    this.ahead = null;
+    if (ahead) this.snapshot = await ahead;
   }
 }
 
@@ -72,8 +116,8 @@ export interface SessionResult { session: Session; feedback: Feedback[]; steps: 
  * Plays `shots` in order, each fired as soon as the session is aiming, until
  * the level ends, the shots run out, or `maxSteps`.
  */
-export async function runSession(engine: PhysicsEngine, level: CompiledLevel, shots: Shot[], opts: PlayOptions = {}): Promise<SessionResult> {
-  const d = new Driver(engine, level);
+export async function runSession(engine: PhysicsEngine, level: CompiledLevel, shots: Shot[], opts: PlayOptions & DriverOptions = {}): Promise<SessionResult> {
+  const d = new Driver(engine, level, { pipelined: opts.pipelined });
   await d.reset();
   return playShots(d, shots, 0, opts);
 }
@@ -104,6 +148,7 @@ export async function playShots(d: Driver, shots: Shot[], next: number, opts: Pl
     if (d.session.phase === 'cleared' || d.session.phase === 'failed') break;
     feedback.push(...(await d.step()));
   }
+  await d.drain();
   return { session: d.session, feedback, steps: engine.stepIndex, snapshot: d.snapshot };
 }
 

@@ -150,7 +150,7 @@ struct SolverRecord {
   a: u32, // @16 body a, 0xffffffff for the ground
   b: u32, // @20
   count: u32, // @24 points in use, 0..4: point q is in use if q < count
-  flags: u32, // @28 bit q: point q's SolverContact.stick; bit 4 + q: its SolverContact.inCone
+  flags: u32, // @28 bit q: point q's SolverContact.stick; bit 4 + q: its SolverContact.inCone; bit 8 + q: its LOADED_GAP (SolverContact.used bit 1)
   rawX: vec4f, // @32 a's lever arm in world space at the start of the step, x of points 0..3
   rawY: vec4f, // @48
   rawZ: vec4f, // @64
@@ -183,7 +183,7 @@ struct CentreRecord {
   a: u32, // @16 body a, 0xffffffff for the ground
   b: u32, // @20
   count: u32, // @24 points in use, 0..4
-  stick: u32, // @28 1 if the friction's last dual update was inside the ball (static friction held)
+  stick: u32, // @28 bit 0: the friction's last dual update was inside the ball (static friction held); bit 8 + q: point q's LOADED_GAP (as SolverRecord.flags)
   rawX: vec4f, // @32 point q's lever arm on a (world, start of the step), x of points 0..3
   rawY: vec4f, // @48
   rawZ: vec4f, // @64

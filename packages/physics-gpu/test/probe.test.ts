@@ -110,19 +110,23 @@ describe('solver probe P2 with --engine', () => {
       expect(r.errors).toEqual([]);
       return r.p2!.checkpoints[0]!;
     };
-    const [pts, rec1, rec2] = [await run('avbd-gpu:iterations=3'), await run('avbd-gpu:iterations=3,records=1'), await run('avbd-gpu:iterations=3,records=2')];
+    const [pts, rec1, rec2] = [await run('avbd-gpu:iterations=3,records=0'), await run('avbd-gpu:iterations=3,records=1'), await run('avbd-gpu:iterations=3,records=2')];
+    // The default (unset) is records 1 (gpuRecordsLayout): its structure and reads are records 1's.
+    const def = await run('avbd-gpu:iterations=3');
     // records 1's trajectory is the point form's, bit for bit, so its colours and contacts are too.
     const shape = (c: Checkpoint) => ({
       colours: c.coloursUsed, direct: c.direct.map((d) => [d.bodies, d.W, d.R, d.points]), tail: [c.tail.bodies, c.tail.Wcrit, c.tail.Rcrit, c.tail.points],
       sumW: c.sumW, sumR: c.sumR, totalPoints: c.totalPoints, contactPairs: c.contactPairs,
     });
     expect(shape(rec1)).toEqual(shape(pts));
+    expect(shape(def)).toEqual(shape(pts));
     expect(pts.sumR).toBeGreaterThan(0);
     expect(pts.sumR).toBeLessThan(pts.sumW);
     expect(pts.sumW).toBeLessThanOrEqual(4 * pts.sumR);
     // One read per record, against a point form's read per point and the one that ends a partial slot.
     const loads = (c: Checkpoint) => c.direct.reduce((s, d) => s + d.loads, 0);
     expect(loads(rec1)).toBeLessThan(loads(pts));
+    expect(loads(def)).toBe(loads(rec1));
     // records 2, on its own trajectory: CentreRecord's count is read at its own stride.
     expect(rec2.totalPoints).toBe(rec2.direct.reduce((s, d) => s + d.points, 0) + rec2.tail.points);
     expect(rec2.sumR).toBeGreaterThan(0);
