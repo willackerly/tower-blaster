@@ -9,16 +9,16 @@ import type { LevelDef } from './level.ts';
 
 type V3 = [number, number, number];
 
-/** W1-1, shear. A slender tower: a cannonball brings most of the crowns down, a second shot cleans up. */
+/** W1-1, shear. A slender tower (the probe's B2): one cannonball low on it brings the crowns down. */
 export const L1: LevelDef = {
-  id: 'L1', name: 'Open Fire', version: 2, world: 1,
-  parts: [{ kind: 'block', at: [-1.5, 0, -1.5], size: [3, 12, 3], material: 'plaster', courses: [{ k: 11, role: 'crown' }] }],
+  id: 'L1', name: 'Open Fire', version: 3, world: 1,
+  parts: [{ kind: 'block', at: [-1, 0, -1], size: [2, 10, 2], material: 'plaster', courses: [{ k: 9, role: 'crown' }] }],
   lot: { min: [-7, -7], max: [7, 7] },
-  crownLine: 2, objective: { kind: 'crowns' }, par: 2,
+  crownLine: 2, objective: { kind: 'crowns' }, par: 1,
   rack: ['cannonball', 'cannonball', 'marble', 'marble'],
   launcher: { radius: 14, y: 2, dropY: 16 },
-  lGold: 1.0,
-  solutions: { par: [{ ammo: 'cannonball', az: 360, y: 8, yaw: -46, pitch: 62, power: 100 }, { ammo: 'cannonball', az: 0, y: 8, yaw: 0, pitch: 62, power: 100 }] },
+  lGold: 0.71,
+  solutions: { par: [{ ammo: 'cannonball', az: 360, y: 8, yaw: 0, pitch: 207, power: 100 }] },
 };
 
 /** W1-2, lintel tip. Fell one column and the lintel sheds its crowns; fell the other and it lands on the pavilion. */

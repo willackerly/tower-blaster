@@ -37,7 +37,7 @@ describe('compileLevel', () => {
     }
   });
   it('has the expected body counts and stable order (courses bottom-up, then x, then z)', () => {
-    expect(LEVELS.map((d) => compileLevel(d).meta.n)).toEqual([108, 139, 40, 38, 45]);
+    expect(LEVELS.map((d) => compileLevel(d).meta.n)).toEqual([40, 139, 40, 38, 45]);
     const c = compileLevel(tiny([{ kind: 'block', at: [0, 0, 0], size: [2, 2, 2], material: 'plaster' }]));
     const ys = Array.from({ length: 8 }, (_, i) => c.meta.home[3 * i + 1]);
     expect(ys).toEqual([0.25, 0.25, 0.25, 0.25, 0.75, 0.75, 0.75, 0.75]);

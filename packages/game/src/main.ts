@@ -45,7 +45,8 @@ interface GameHandle {
   /** The same shots from the same level on a fresh engine, built as the live one, on this device. */
   replay(shots: Shot[]): Promise<SessionState>;
 }
-interface SessionState { step: number; phase: string; strokes: number; hash: string }
+const sum = (a: Uint8Array) => a.reduce((x, y) => x + y, 0);
+interface SessionState { step: number; phase: string; strokes: number; heritageBroken: number; hash: string }
 declare global { interface Window { __game: GameHandle } }
 
 const $ = (id: string) => document.getElementById(id)!;
@@ -53,7 +54,7 @@ const canvas = $('c') as HTMLCanvasElement, hudEl = $('hud'), bannerEl = $('bann
 const handle: GameHandle = {
   status: 'loading', engine: '', level: '', phase: 'loading', ready: false, frames: 0, stepIndex: 0, strokes: 0, bodies: 0, fast: false, result: null, counts: {},
   fire: () => false, aim: () => null, select: () => false, load: async () => {}, retry: async () => {}, capture: async () => null,
-  state: () => ({ step: 0, phase: 'loading', strokes: 0, hash: '' }), replay: async () => ({ step: 0, phase: 'loading', strokes: 0, hash: '' }),
+  state: () => ({ step: 0, phase: 'loading', strokes: 0, heritageBroken: 0, hash: '' }), replay: async () => ({ step: 0, phase: 'loading', strokes: 0, heritageBroken: 0, hash: '' }),
 };
 window.__game = handle;
 
@@ -271,12 +272,12 @@ async function main() {
   handle.aim = (x, y) => { pointer = [x, y]; updateAim(); return aimed; };
   handle.load = (id) => load(levelOf(id)).catch(fail);
   handle.retry = () => load(levelIdx, true).catch(fail);
-  handle.state = () => ({ step: driver.engine.stepIndex, phase: driver.session.phase, strokes: driver.session.strokes, hash: snapshotHash(driver.snapshot) });
+  handle.state = () => ({ step: driver.engine.stepIndex, phase: driver.session.phase, strokes: driver.session.strokes, heritageBroken: sum(driver.session.heritageBroken), hash: snapshotHash(driver.snapshot) });
   handle.replay = async (shots) => {
     const e = makeEngine(kind, c, device);
     try {
       const r = await runSession(e, c, shots);
-      return { step: r.steps, phase: r.session.phase, strokes: r.session.strokes, hash: snapshotHash(r.snapshot) };
+      return { step: r.steps, phase: r.session.phase, strokes: r.session.strokes, heritageBroken: sum(r.session.heritageBroken), hash: snapshotHash(r.snapshot) };
     } finally { e.dispose(); }
   };
 
