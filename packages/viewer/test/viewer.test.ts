@@ -7,8 +7,9 @@ import {
   albedoHex, alphaAt, arrived, hexAlbedo, realOverrides, DEFAULT_PROJECTILE, engineSpec, escapeHtml, eyeOf, frame, FREE_MAX_LAG_MS, GPU_SPARE, invert, MAX_STEPS_LIMIT, multiply,
   newArrivals, newClock, newPacer, PACE_SLACK, parseProjectile, pauseLatch, parseViewerConfig, presetSearch, projectileBody, projectileMass, proposeScene,
   pushRadiusLimit, rayThrough, runFree, SIM_SPEED_TAU, stepDue, stepped, stepsDue, taskYield, toSearch, trackSimSpeed, transform, viewProj, Window,
-  withOption, type FreeHooks, type Orbit,
+  withOption, type FreeHooks, type Orbit, orbitAt, parseCamera, parseSceneFile, poseOf, SCENE_FILE_FORMAT, sceneFile, sceneFileName, type ViewerConfig,
 } from '../src/index.ts';
+import { SCENARIOS } from '@tb/scenarios';
 
 const orbit: Orbit = { target: [1, 2, 3], yaw: 0.7, pitch: 0.4, distance: 25, fovY: 0.9 };
 
@@ -845,5 +846,132 @@ describe('scene controls', () => {
     expect(proposeScene(c, 'S14', { towers: 0 }, 1)).toMatchObject({ ok: false, error: expect.stringMatching(/towers/) });
     expect(proposeScene(c, 'S14', { towers: NaN }, 1)).toMatchObject({ ok: false });
     expect(proposeScene(c, 'S14', {}, 1.5)).toMatchObject({ ok: false, error: expect.stringMatching(/seed/) });
+  });
+});
+
+describe('camera in the URL', () => {
+  it('round-trips a pose, rounded to mm and mrad, and an orbit at it keeps it', () => {
+    const pose = poseOf({ target: [1.23456, 2, -3.0004], yaw: 0.12345, pitch: 0.5, distance: 40.0001, fovY: 0.9 });
+    expect(pose).toEqual({ target: [1.235, 2, -3], yaw: 0.123, pitch: 0.5, distance: 40 });
+    const c = { ...parseViewerConfig('?scenario=S1'), camera: pose };
+    expect(toSearch(c)).toContain('cam=1.235%2C2%2C-3%2C0.123%2C0.5%2C40');
+    expect(parseViewerConfig(toSearch(c))).toEqual(c);
+    expect(poseOf(orbitAt(pose))).toEqual(pose);
+    expect(orbitAt({ ...pose, pitch: 3 }).pitch).toBe(1.45); // clamped as dragging clamps it
+    expect(parseViewerConfig('').camera).toBeNull();
+    expect(toSearch(parseViewerConfig(''))).not.toContain('cam');
+    for (const bad of ['1,2,3', '1,2,3,4,5,x', '1,2,3,4,5,0']) expect(() => parseCamera(bad)).toThrow(/cam must be/);
+  });
+  it('a preset and a rebuilt scene are framed afresh: the start camera is dropped', () => {
+    const c = parseViewerConfig('?scenario=S1&cam=0,5,0,1,0.3,20');
+    expect(parseViewerConfig(presetSearch('?scenario=S1', c)).camera).toBeNull();
+    const p = proposeScene(c, 'S1', { F: 3 }, 1);
+    expect(p.ok && p.config.camera).toBe(null);
+  });
+});
+
+describe('scene file', () => {
+  const at = new Date(2026, 9, 27, 1, 5);
+  const pose = { target: [1, 2, 3] as [number, number, number], yaw: 0.6, pitch: 0.4, distance: 30 };
+  const roundTrip = (c: ViewerConfig, camera = c.camera) => parseSceneFile(JSON.stringify(sceneFile(c, 'x', camera, at)));
+  /** What a config loads back as: every scenario param written out, the page's offscreen flag left behind. */
+  const settled = (c: ViewerConfig): ViewerConfig => ({ ...c, params: { ...SCENARIOS[c.scenario]!.defaults, ...c.params }, offscreen: false });
+
+  it('lists every scenario param and real knob, splits the engine spec, and keeps the name and camera', () => {
+    const c = parseViewerConfig('?scenario=S14&param.towers=3&engine=avbd-gpu:iterations=20,hessian=register&look=real&real.sunElevation=6&proj=cube&proj.mass=50');
+    const f = sceneFile(c, '  Sunset city  ', pose, at);
+    expect(f).toMatchObject({
+      format: SCENE_FILE_FORMAT, version: 1, name: 'Sunset city', savedAt: at.toISOString(),
+      scene: { scenario: 'S14', params: { ...SCENARIOS.S14!.defaults, towers: 3 }, seed: 1, sleep: null },
+      engine: { name: 'avbd-gpu', options: { iterations: 20, hessian: 'register' } },
+      loop: { mode: 'free', pipeline: true, maxSteps: 1 },
+      projectile: { shape: 'cube', size: 1.4, mass: 50, speed: 40 },
+      look: { preset: 'real', real: { ...REAL_DEFAULTS, sunElevation: 6 } },
+      camera: pose,
+    });
+    expect(Object.keys(f.look.real).sort()).toEqual(Object.keys(REAL_DEFAULTS).sort());
+  });
+
+  it('loads back the config it was saved from, through JSON, for any URL the viewer takes', () => {
+    const urls = [
+      '', '?scenario=S1&param.gap=0.02&engine=rapier', '?scenario=S4&param.N=10000&param.F=6&param.H=20&sleep=0&seed=7&autofire=120',
+      '?engine=tiered&loop=frame&maxSteps=3', '?pipeline=0&proj=cube&proj.size=3&proj.mass=200&proj.speed=15',
+      '?look=hazy', '?scenario=S3&param.running=true&look=real&real.sunElevation=4&real.visibility=12&real.ground=0.3,0.25,0.2&real.stone=granite&real.groundMaterial=dirt',
+      '?scenario=S1&cam=0,4.5,0,0.8,0.3,25', '?offscreen=1&engine=avbd-gpu:iterations=40,sweep=false',
+    ];
+    for (const u of urls) {
+      const c = parseViewerConfig(u);
+      const back = roundTrip(c);
+      expect(back.name).toBe('x');
+      expect(back.config, u).toEqual(settled(c));
+      // A loaded file is a URL like any other: the address bar reproduces it.
+      expect(parseViewerConfig(toSearch(back.config))).toEqual(back.config);
+    }
+    expect(roundTrip(parseViewerConfig('?scenario=S1'), pose).config.camera).toEqual(pose);
+  });
+
+  it('any projectile and real knobs survive a round trip', () => {
+    // + 0: a URL, like JSON, writes -0 as 0.
+    const knob = (k: keyof typeof REAL_KNOBS) => fc.option(fc.double({ min: REAL_KNOBS[k].min, max: REAL_KNOBS[k].max, noNaN: true }).map((x) => x + 0), { nil: undefined });
+    fc.assert(fc.property(
+      fc.record({ shape: fc.constantFrom('ball' as const, 'cube' as const), size: fc.double({ min: 0.1, max: 20, noNaN: true }), mass: fc.option(fc.double({ min: 0.01, max: 1e6, noNaN: true })), speed: fc.double({ min: 0, max: 500, noNaN: true }) }),
+      knob('sunElevation'), knob('visibility'), knob('dustOpacity'),
+      (projectile, sunElevation, visibility, dustOpacity) => {
+        const real = Object.fromEntries(Object.entries({ sunElevation, visibility, dustOpacity }).filter(([, v]) => v !== undefined));
+        const c = { ...parseViewerConfig('?look=real'), projectile, real };
+        const back = roundTrip(c).config;
+        expect(back.projectile).toEqual(projectile);
+        // Knobs that equal today's default are dropped on load (the URL stays short); the rest come back exactly.
+        expect(back.real).toEqual(Object.fromEntries(Object.entries(real).filter(([k, v]) => v !== REAL_DEFAULTS[k as keyof typeof REAL_DEFAULTS])));
+      }));
+  });
+
+  it('loading drops real knobs at their defaults, so the URL is as short as the panel keeps it', () => {
+    const c = parseViewerConfig('?look=real&real.sunElevation=6');
+    expect(toSearch(roundTrip(c).config)).toBe(toSearch(settled(c)));
+    expect(toSearch(roundTrip(c).config)).not.toMatch(/real\.(?!sunElevation)/);
+  });
+
+  it('a hand-written file may leave out what it does not change', () => {
+    const { config, name } = parseSceneFile(JSON.stringify({ format: SCENE_FILE_FORMAT, version: 1, scene: { scenario: 's12' }, engine: { name: 'rapier' } }));
+    expect(name).toBe('');
+    expect(config).toEqual({ ...parseViewerConfig('?scenario=S12&engine=rapier') });
+  });
+
+  it('names the download after the name, or after the scenario and the local time', () => {
+    expect(sceneFileName('Sunset city: 10k!', 'S4', at)).toBe('sunset-city-10k.json');
+    expect(sceneFileName('  ', 'S4', at)).toBe('S4-20261027-0105.json');
+    expect(sceneFileName('../../etc/passwd', 'S4', at)).toBe('etc-passwd.json');
+    expect(sceneFileName('城市', 'S14', at)).toBe('S14-20261027-0105.json');
+    expect(sceneFileName('a'.repeat(100), 'S4', at)).toBe(`${'a'.repeat(60)}.json`);
+  });
+
+  it('refuses files it can not read, saying why', () => {
+    const good = sceneFile(parseViewerConfig('?scenario=S1'), '', pose, at);
+    const bad = (edit: (f: Record<string, any>) => void) => {
+      const f = structuredClone(good) as Record<string, any>;
+      edit(f);
+      return () => parseSceneFile(JSON.stringify(f));
+    };
+    expect(() => parseSceneFile('{nope')).toThrow(/not a JSON file/);
+    expect(() => parseSceneFile('[]')).toThrow(/must be an object/);
+    expect(bad((f) => { f.format = 'something-else'; })).toThrow(/not a tower-blaster viewer scene/);
+    expect(bad((f) => { f.version = 2; })).toThrow(/newer than this viewer reads/);
+    expect(bad((f) => { f.secne = f.scene; })).toThrow(/unknown key secne/);
+    expect(bad((f) => { f.look.real.sunElevaton = 3; })).toThrow(/look.real: unknown key sunElevaton/);
+    expect(bad((f) => { f.scene.params.N = 5; })).toThrow(/scene.params \(S1\): unknown key N/);
+    expect(bad((f) => { f.scene.scenario = 'S99'; })).toThrow(/unknown scenario S99/);
+    expect(bad((f) => { f.scene.seed = 1.5; })).toThrow(/scene.seed must be an integer/);
+    expect(bad((f) => { f.scene.params.H = '6'; })).toThrow(/scene.params.H must be a number/);
+    expect(bad((f) => { f.engine.name = 'warp'; })).toThrow(/unknown engine warp/);
+    expect(bad((f) => { f.engine.options = { iterations: 'many' }; })).toThrow(/takes a number/);
+    expect(bad((f) => { f.engine.options = { 'a,b': 1 }; })).toThrow(/bad option name/);
+    expect(bad((f) => { f.look.real.sunElevation = 120; })).toThrow(/real.sunElevation must be a number from -10 to 90/);
+    expect(bad((f) => { f.look.real.stone = 'cheese'; })).toThrow(/look.real.stone must be one of/);
+    expect(bad((f) => { f.look.preset = 'photo'; })).toThrow(/unknown look photo/);
+    expect(bad((f) => { f.projectile.size = 50; })).toThrow(/proj.size must be a number from 0.1 to 20/);
+    expect(bad((f) => { f.loop = { mode: 'free', pipeline: true, maxSteps: 2 }; })).toThrow(/maxSteps applies to loop=frame/);
+    expect(bad((f) => { f.camera.distance = 0; })).toThrow(/cam must be/);
+    expect(bad((f) => { f.camera.target = [1, 2]; })).toThrow(/camera.target must be three numbers/);
   });
 });
