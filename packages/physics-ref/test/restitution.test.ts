@@ -427,3 +427,53 @@ describe('restitution on: the force a bounced point keeps', () => {
     expect(Math.abs(on.sag - off.sag)).toBeLessThan(2e-3);
   });
 });
+
+describe('restitution stats (AvbdWorld.stats.restitution)', () => {
+  const run = async (scene: SceneDesc, params: Partial<AvbdParams>, steps: number) => {
+    const eng = new AvbdReferenceEngine(params);
+    await eng.init(scene);
+    let contacts = 0, impulse = 0, momentum = 0, ground = 0, offGround = 0;
+    for (let k = 0; k < steps; k++) {
+      eng.step();
+      const r = eng.world!.stats.restitution;
+      contacts += r.contacts;
+      impulse += r.impulse;
+      momentum = Math.max(momentum, Math.hypot(...r.momentum));
+      ground = Math.max(ground, Math.hypot(...r.groundImpulse));
+      offGround = Math.max(offGround, Math.hypot(r.momentum[0] - r.groundImpulse[0], r.momentum[1] - r.groundImpulse[1], r.momentum[2] - r.groundImpulse[2]));
+    }
+    return { contacts, impulse, momentum, ground, offGround };
+  };
+
+  it('count the bounced points and their impulse; between bodies the momentum change is 0, on the ground it is the ground\'s impulse', async () => {
+    const pairs = await run(zeroG([ball([-0.75, 0, 0], { e: 0.6, linVel: [5, 0, 0] }), ball([0.75, 0, 0], { e: 0.6, mass: 5 })]), ON, 60);
+    expect(pairs.contacts).toBe(1);
+    // 1 kg at 5 m/s onto 5 kg, e 0.6: at least the rebound's e x the reduced mass x 5 m/s, at most the whole
+    // impact's (1 + e) x. Measured 6.667, the whole: the contact caught them at the end of the step.
+    expect(pairs.impulse).toBeGreaterThan(0.6 * (5 / 6) * 5);
+    expect(pairs.impulse).toBeLessThan(1.6 * (5 / 6) * 5 + 1e-9);
+    // Measured 8.9e-16 N s (rounding).
+    expect(pairs.momentum).toBeLessThan(1e-12);
+    expect(pairs.ground).toBe(0);
+    const s = withE(knock(15), 0.6), knocked = await run({ ...s, ground: { ...s.ground!, restitution: 0.6 } }, ON, 120);
+    expect(knocked.contacts).toBeGreaterThan(0);
+    expect(knocked.ground).toBeGreaterThan(0);
+    // Measured 7.2e-15 N s against a ground impulse of up to 22.8 N s in a step.
+    expect(knocked.offGround).toBeLessThan(1e-12);
+  });
+
+  it('count only the points that bounced, not the supports that held their bodies (whose impulse counts)', async () => {
+    // A ball (e 0.9) at 5 m/s onto a cube resting on the ground, run to just after its first bounce: its one
+    // point bounces, and the cube's four ground points hold the cube.
+    const scene: SceneDesc = { ...sceneOf([cube([0, 0.5, 0], { e: 0.9 })], { groundE: 0.9 }), inputs: [{ step: 120, kind: 'spawn', body: ball([0, 1.5 + 25 / (2 * G), 0], { e: 0.9 }) }] };
+    const r = await run(scene, ON, 160);
+    expect(r.contacts).toBe(1);
+    // The supports passed the bounce on to the ground: measured 3.48 N s in a step. Counted with them, contacts was 5.
+    expect(r.ground).toBeGreaterThan(1);
+  });
+
+  it('stay 0 with restitution off', async () => {
+    const s = withE(knock(15), 0.6), off = await run({ ...s, ground: { ...s.ground!, restitution: 0.6 } }, {}, 60);
+    expect(off).toEqual({ contacts: 0, impulse: 0, momentum: 0, ground: 0, offGround: 0 });
+  });
+});

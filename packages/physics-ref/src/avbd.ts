@@ -98,6 +98,36 @@
 //   and a sliding contact's stiffness is the secant of that clamp (see step()).
 // - Bodies are swept by graph colour (see coloring.ts), the order the
 //   parallel GPU version uses, so the two can be compared step by step.
+//
+// Restitution is opt-in (AvbdParams.restitution, off by default): a velocity
+// pass after post-stabilization (see restitute()). A contact point that
+// carried force and approached at restitutionThreshold (1 m/s) or faster at
+// the start of the step leaves at e times that normal speed. e is the pair's,
+// combineRestitution under SceneDesc.restitutionCombine (default average,
+// Rapier's) clamped to [0, 1], and the ground's own e is
+// SceneDesc.ground.restitution (default 0: under average a body bounces off
+// the ground at half its e). restitutionRounds (8) rounds of mass-split
+// Jacobi solve the bouncing manifolds together with the other loaded contacts
+// of their bodies. Off, the step never reads BodyDesc.restitution, and runs
+// are bit-identical to those before it existed. Its known limits, at 10
+// iterations, e being the pair's:
+// - e = 1 is not energy-safe: rods (0.2 x 2 x 0.2) dropped tilted from 1 m
+//   gained up to about 0.8 of their energy above lying flat (0.78 at 8
+//   rounds, 0.81 at 4, worst at 30 degrees). Every probe is clean at
+//   e <= 0.9.
+// - The pass's impulse is along n only: a cube landing on an edge, turned 30
+//   degrees, at mu 0.6 keeps 0.36-0.83 of the rigid impact's vertical
+//   rebound and spins at 1.66-3.06 x its spin (frictionless: 0.83-0.98 of the
+//   rebound, 0.97-1.00 of the spin).
+// - A 510 kg ball (radius 0.25) landing at 10 m/s on a 1 kg cube on the
+//   ground sinks into it 0.18 m, against 0.11 m with the switch off.
+// - The restitution gates' energy check (G6) fails on zero-g box pairs
+//   meeting head-on at 10 m/s, and only there: a pair of unit cubes ends with
+//   1.023, 1.158 and 1.383 x its kinetic energy at e 0.3, 0.6 and 0.9 (1.061
+//   at e 0.9 and 20 iterations), a 1:5 pair 1.015 x at e 0.9. This is
+//   inherited, not added: with the switch off the solve already moves those
+//   pairs' momentum by up to 46% (41% for 1:1; 15% at 20 iterations), and the
+//   pass keeps momentum to rounding.
 import { type BodyDesc, combineFriction, combineRestitution, DEFAULT_RESTITUTION_COMBINE, inertiaOf, massOf, type Quat, type SceneDesc, type Vec3 } from '@tb/engine-api';
 import { boundingRadius, cross, dot, groundManifold, NO_AXIS, quatMul, quatNormalize, rotate, shapeManifold, spherePairs } from '@tb/geom';
 import { colorGraph } from './coloring.ts';
@@ -264,7 +294,19 @@ export function applyRotation(q: Quat, phi: Vec3): Quat {
   return quatNormalize(quatMul([phi[0] * s, phi[1] * s, phi[2] * s, Math.cos(t / 2)], q));
 }
 
-export interface StepStats { contacts: number; manifolds: number; colors: number }
+export interface StepStats {
+  contacts: number;
+  manifolds: number;
+  colors: number;
+  /**
+   * What this step's restitution pass did (all 0 with the switch off): the
+   * points it bounced, the normal impulse it applied in all (N s, supports
+   * included), the change of the bodies' total linear momentum, and the impulse
+   * it took from the ground. Every impulse between two bodies acts on both,
+   * equal and opposite, so momentum equals groundImpulse to rounding.
+   */
+  restitution: { contacts: number; impulse: number; momentum: Vec3; groundImpulse: Vec3 };
+}
 
 /**
  * Solver state for a set of bodies. step() advances one fixed step; callers
@@ -275,7 +317,7 @@ export class AvbdWorld {
   contacts: Contact[] = [];
   /** Last step's SAT axis per touching pair (key `a,b`), preferred by this step's narrowphase. */
   axes = new Map<string, number>();
-  stats: StepStats = { contacts: 0, manifolds: 0, colors: 0 };
+  stats: StepStats = { contacts: 0, manifolds: 0, colors: 0, restitution: { contacts: 0, impulse: 0, momentum: [0, 0, 0], groundImpulse: [0, 0, 0] } };
   /** Each body's last step, [position change, rotation vector] (what the GPU keeps in SolverBody.dp, phi until the next initBodies). */
   lastDx: Float64Array[] = [];
 
@@ -564,6 +606,8 @@ export class AvbdWorld {
     const threshold = p.restitutionThreshold ?? RESTITUTION_DEFAULTS.restitutionThreshold;
     const rounds = p.restitutionRounds ?? RESTITUTION_DEFAULTS.restitutionRounds;
     const rule = this.scene.restitutionCombine ?? DEFAULT_RESTITUTION_COMBINE, groundE = this.scene.ground?.restitution ?? 0;
+    const st: StepStats['restitution'] = { contacts: 0, impulse: 0, momentum: [0, 0, 0], groundImpulse: [0, 0, 0] };
+    this.stats.restitution = st;
     const n = bodies.length;
     // Normal velocity of contact c (row 0 of its Jacobian): at the start of the step, and now.
     const vnStart = (c: Contact) => {
@@ -704,12 +748,22 @@ export class AvbdWorld {
     }
     for (let i = 0; i < n; i++) {
       if (!split[i]) continue;
-      const b = bodies[i]!;
+      const b = bodies[i]!, m = b.mass;
+      for (let k = 0; k < 3; k++) st.momentum[k] = st.momentum[k]! + m * (u[6 * i + k]! - b.linVel[k]!);
       b.linVel = [u[6 * i]!, u[6 * i + 1]!, u[6 * i + 2]!];
       b.angVel = [u[6 * i + 3]!, u[6 * i + 4]!, u[6 * i + 5]!];
     }
-    // A bounced point that will separate starts the next step with no force (see above).
-    for (const m of ms) if (m.bounce) m.pts.forEach((c, k) => { if (m.P[k]! > 0 && m.target[k]! * h > p.restDepth) c.lambda = [0, 0, 0]; });
+    for (const m of ms) {
+      m.pts.forEach((c, k) => {
+        const P = m.P[k]!;
+        st.impulse += P;
+        if (m.a === GROUND) for (let r = 0; r < 3; r++) st.groundImpulse[r] = st.groundImpulse[r]! + P * c.n[r]!;
+        if (!m.bounce || !(P > 0)) return;
+        st.contacts++;
+        // A bounced point that will separate starts the next step with no force (see above).
+        if (m.target[k]! * h > p.restDepth) c.lambda = [0, 0, 0];
+      });
+    }
   }
 
   step(): void {
