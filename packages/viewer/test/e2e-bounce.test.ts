@@ -4,22 +4,31 @@
 // and over 60 s on a CI runner (2026-10-27), and e2e.test.ts is near the
 // 300 s per file that CI's shards allow.
 import { describe, expect, it } from 'vitest';
+import type { Page } from 'playwright';
 import { requireWebGPU } from '@tb/testkit';
 import { browser, open, useViewer } from './e2e-harness.ts';
 
 useViewer();
 
+// Larger than the other e2e cases' 640x400. At 640 px the presets move to the
+// bottom right (index.html's narrow layout), and with the HUD showing
+// 'avbd-gpu:restitution=true' the left column reached under them on CI's
+// fonts, covering the Bounce box (2026-10-27).
+const WIDE = { width: 800, height: 600 };
+/** The Scene panel open: it starts open on a window over 640 px wide (controls.ts), where a click on its summary closes it. */
+const openPanel = (page: Page) => page.locator('#controls').evaluate((d) => { (d as HTMLDetailsElement).open = true; });
+
 describe('viewer: Bounce', () => {
   it('the panel\'s Bounce turns the GPU engine\'s restitution on, scaled for the world, gives what a click fires its e, and the URL keeps both', { timeout: 240_000 }, async (ctx) => {
     if (!browser) return ctx.skip();
     // Quarter-metre cubes: the engine's threshold (1 m/s) must reach it scaled by sqrt(4) (froudeParams).
-    const { page, errors } = await open('/?scenario=S1&param.F=3&param.H=6&param.gap=0.02&offscreen=1&engine=avbd-gpu&scale=0.25');
+    const { page, errors } = await open('/?scenario=S1&param.F=3&param.H=6&param.gap=0.02&offscreen=1&engine=avbd-gpu&scale=0.25', WIDE);
     const status = await page.evaluate(() => ({ s: window.__viewer.status, e: window.__viewer.error }));
     if (status.s === 'error' && /WebGPU|adapter/.test(status.e ?? '') && !requireWebGPU()) return ctx.skip();
     expect(status).toEqual({ s: 'running', e: undefined });
     const variant = () => page.evaluate(() => window.__viewer.variant);
     expect(await variant()).not.toHaveProperty('restitution');
-    await page.locator('#controls summary').click();
+    await openPanel(page);
     const scene = page.locator('#scene-form');
     const box = scene.locator('input[name=bounce]');
     expect(await box.isChecked()).toBe(false);
@@ -55,9 +64,9 @@ describe('viewer: Bounce', () => {
     await page.close();
 
     // The URL alone brings it back; off again removes the engine option and keeps the e.
-    const again = await open(url.pathname + url.search);
+    const again = await open(url.pathname + url.search, WIDE);
     expect(await again.page.evaluate(() => ({ s: window.__viewer.status, v: window.__viewer.variant.restitution }))).toEqual({ s: 'running', v: true });
-    await again.page.locator('#controls summary').click();
+    await openPanel(again.page);
     const s2 = again.page.locator('#scene-form');
     expect(await s2.locator('input[name=bounce]').isChecked()).toBe(true);
     expect(await s2.locator('input[name=bounceE]').inputValue()).toBe('0.7');

@@ -28,9 +28,9 @@ export function useViewer(): void {
   afterAll(async () => { await browser?.close(); await server?.close(); });
 }
 
-/** A 640x400 page of the viewer at `search`, once it is past loading, and the page errors it collects. */
-export async function open(search: string) {
-  const page = await browser!.newPage({ viewport: { width: 640, height: 400 } });
+/** A page of the viewer at `search` (640x400 unless given), once it is past loading, and the page errors it collects. */
+export async function open(search: string, viewport = { width: 640, height: 400 }) {
+  const page = await browser!.newPage({ viewport });
   const errors: string[] = [];
   page.on('pageerror', (e) => errors.push(e.message));
   await page.goto(new URL(search, origin).toString());
