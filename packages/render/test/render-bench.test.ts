@@ -22,5 +22,5 @@ describe('drawing', () => {
     }
     expect(r.software).toBe(isSoftwareAdapter(gpu.adapter));
     expect(await call('renderBenchMarkdown', r, 'h')).toMatch(/Without heat glow/);
-  }, 180_000); // 42 cases on a software adapter, most of it the first frame of each renderer; 40 s timed out on CI beside the GPU physics and game tests (main, 8b5dd54), and 120 s when every case built its own renderer (b6bf9a2)
+  }, 360_000); // 42 cases on a software adapter, most of it the first frame of each renderer; 40 s timed out on CI beside the GPU physics and game tests (main, 8b5dd54), 120 s when every case built its own renderer (b6bf9a2), and 180 s on a slow shard runner (PR #56; ~160 s locally)
 });
