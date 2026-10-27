@@ -222,7 +222,9 @@ describe('engine registry and SlowedEngine', () => {
     expect(makeEngine('avbd-gpu:records=1,iterations=20').info.variant).toMatchObject({ records: 1, iterations: 20 });
     expect(makeEngine('avbd-ref:records=2').info.variant).toMatchObject({ records: 2 });
     expect(makeEngine('avbd-gpu:iterations=6').info.variant.records).toBeUndefined();
-    expect(makeEngine('avbd-gpu:records=0').info.variant).toEqual(makeEngine('avbd-gpu').info.variant);
+    // On the GPU unset is records 1 (gpuRecordsLayout), so an explicit records=0 (points) is another engine, named so.
+    expect(makeEngine('avbd-gpu:records=0').info.variant).toEqual({ ...makeEngine('avbd-gpu').info.variant, records: 0 });
+    expect(makeEngine('avbd-ref:records=0').info.variant).toEqual(makeEngine('avbd-ref').info.variant);
     expect(() => makeEngine('avbd-gpu:records=3')).toThrow('AvbdParams.records must be one of 0, 1, 2, got 3');
     expect(() => makeEngine('avbd-ref:records=3')).toThrow('AvbdParams.records must be one of 0, 1, 2, got 3');
     expect(() => makeEngine('avbd-gpu:records=1,hessian=array')).toThrow('AvbdParams.records 1 needs GpuEngineOptions.hessian registers, got array');

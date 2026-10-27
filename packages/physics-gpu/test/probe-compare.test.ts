@@ -153,8 +153,12 @@ describe('probe-compare: bench:browser A/B records', () => {
     // Combinations with the other variants: the fused dual on records 2 against records 2, all three against the default.
     expect(compareBrowser(rec('S4', { records: 2 }, { records: 2, dualFusion: true }, 8.5, 8.4))).toMatchObject({ governs: false, kill: false, reported: 'with records on: the rules judge the fused dual alone against the default' });
     expect(compareBrowser(rec('S4', {}, { records: 2, colorMode: 3, dualFusion: true }, 8.5, 8.4))).toMatchObject({ governs: false, kill: false, reported: expect.stringMatching(/^with records, colorMode on/) });
-    // Off is the default.
+    // colorMode 0 is the default; records 0 on both sides is the fused dual alone, on points.
     expect(compareBrowser(rec('S4', { records: 0 }, { records: 0, colorMode: 0, dualFusion: true }, 8.5, 7.8))).toMatchObject({ governs: true, kill: false });
+    // On the GPU unset is records 1 (gpuRecordsLayout): points on one side only is two layouts.
+    for (const [base, arm] of [[{ records: 0 }, { dualFusion: true }], [{}, { records: 0, dualFusion: true }]]) {
+      expect(compareBrowser(rec('S4', base!, arm!, 8.5, 7.8))).toMatchObject({ governs: false, kill: false, reported: expect.stringMatching(/^the base and the variant solve different contact layouts/) });
+    }
     expect(() => compareBrowser(rec('S4', { iterations: 20 }, { dualFusion: true }, 8, 7))).toThrow(/iterations/);
   });
   it('reports, but does not judge, the in-place arm (review B1, first repro: 8.5 -> 8.0 ms killed it)', () => {

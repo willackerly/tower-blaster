@@ -21,18 +21,21 @@ describe('GPU AVBD engine: fused dual (AvbdParams.dualFusion)', () => {
   // SwiftShader every body and every contact record must match the default
   // bit for bit, with the dual state in the side array (ContactDual, the
   // default with dualFusion) and in the records (solveContactsRW), on every
-  // split between direct colours and the tail.
+  // split between direct colours and the tail. These run the point form
+  // (records 0; unset is records 1 on the GPU, whose fused dual
+  // engine-variants.test.ts runs the same way); the S12/S13 gates the default.
+  const POINTS = { records: 0 } as const;
   const state = (s: Drivers.PlainSnapshot) => [s.pos, s.rot, s.linVel, s.angVel];
   type Variant = { params?: Partial<AvbdParams>; opts?: Omit<GpuEngineOptions, 'device'> };
   const FUSED: Variant = { params: { dualFusion: true } };
   const IN_PLACE: Variant = { params: { dualFusion: true }, opts: { solveContactsRW: true } };
   /** The scene without fusion (base options), then each variant (its own options, else the base's): every snapshot and the whole contact buffer the same. */
   const same = async (scene: SceneDesc, steps: number, params: Partial<AvbdParams>, variants: Variant[], every = 0, baseOpts: Omit<GpuEngineOptions, 'device'> = {}) => {
-    const base = await call('simulateGpu', scene, steps, params, every, baseOpts, [], true);
+    const base = await call('simulateGpu', scene, steps, { ...POINTS, ...params }, every, baseOpts, [], true);
     expect(base.error).toBeNull();
     expect(base.contacts!.used).toBeGreaterThan(10);
     for (const v of variants) {
-      const r = await call('simulateGpu', scene, steps, { ...params, ...v.params }, every, v.opts ?? baseOpts, [], true);
+      const r = await call('simulateGpu', scene, steps, { ...POINTS, ...params, ...v.params }, every, v.opts ?? baseOpts, [], true);
       const what = JSON.stringify(v);
       expect(r.error, what).toBeNull();
       expect(r.snaps.length).toBe(base.snaps.length);
@@ -136,7 +139,7 @@ describe('GPU AVBD engine: fused dual (AvbdParams.dualFusion)', () => {
     const def = await call('dispatchPlan', scene, {});
     expect(def.dispatch).not.toHaveProperty('dualFusion');
     for (const [v, code] of [[FUSED, solveWgsl('registers', { dualFusion: true })], [IN_PLACE, solveWgsl('registers', { dualFusion: true, solveContactsRW: true })]] as const) {
-      const r = await call('solveShader', scene, v.opts ?? {}, v.params);
+      const r = await call('solveShader', scene, v.opts ?? {}, { ...POINTS, ...v.params });
       expect(r.dispatch).toMatchObject({ dualFusion: true, ...v.opts });
       expect(r.codes).toEqual([code]);
     }

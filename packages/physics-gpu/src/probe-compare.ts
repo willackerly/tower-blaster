@@ -43,6 +43,9 @@ function reportedOnly(scene: string | undefined, base: Options | undefined, arm:
   if (scene !== 'S4') return `${scene ?? 'unknown scene'}: the rules judge S4 only`;
   const combined = [...new Set([...others(base), ...others(arm)])];
   if (combined.length) return `with ${combined.join(', ')} on: the rules judge the fused dual alone against the default`;
+  // records 0 is not one of the others (the fused dual's rules were set on points), but on the GPU unset is records 1
+  // (gpuRecordsLayout), so points on one side only is a different layout, not the fused dual alone.
+  if (base?.records !== arm?.records) return 'the base and the variant solve different contact layouts (records 0 against the default, records 1)';
   if (!isBase(base)) return 'the base is not the default (unfused, read-only contacts)';
   if (arm?.dualFusion !== true) return 'the variant does not fuse the dual (as in the binding-only A/B)';
   if (!isSideArm(arm)) return 'the in-place arm (solveContactsRW) decides only which storage ships';
