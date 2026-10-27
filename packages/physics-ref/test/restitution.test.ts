@@ -375,33 +375,49 @@ describe('restitution on: supports', () => {
     expect((await gainOf(scene, ON, 600, 0.5 * v * v + G * 0.3)).gain).toBeLessThan(1e-7);
   });
 
-  /** A 1 kg ball dropped at v onto a cube settled on the ground (e on all three): its first rebound over its impact speed, at contact. */
-  const offRestingCube = async (v: number, e: number, params: Partial<AvbdParams>) => {
+  /**
+   * A ball of `mass` kg dropped at v onto a cube settled on the ground (e on all three): its first rebound over its
+   * impact speed, at contact, and the cube's fastest speed down until then.
+   */
+  const offRestingCube = async (v: number, e: number, params: Partial<AvbdParams>, mass = 1) => {
     const yc = 1.5, spawn = 120;
     const eng = new AvbdReferenceEngine(params);
-    await eng.init({ ...sceneOf([cube([0, 0.5, 0], { e })], { groundE: e }), inputs: [{ step: spawn, kind: 'spawn', body: ball([0, yc + v * v / (2 * G), 0], { e }) }] });
+    await eng.init({ ...sceneOf([cube([0, 0.5, 0], { e })], { groundE: e }), inputs: [{ step: spawn, kind: 'spawn', body: ball([0, yc + v * v / (2 * G), 0], { e, mass }) }] });
     for (let k = 0; k <= spawn; k++) eng.step();
     const atContact = (y: number, vy: number) => Math.sqrt(Math.max(0, (vy - G * H / 2) ** 2 + 2 * G * (y - yc)));
     const b = () => eng.world!.bodies[1]!;
-    let prev = { y: b().pos[1], vy: b().linVel[1] }, vIn = 0;
+    let prev = { y: b().pos[1], vy: b().linVel[1] }, vIn = 0, down = 0;
     for (let k = 0; k < Math.ceil(3 * v / (G * H)) + 60; k++) {
       eng.step();
+      down = Math.max(down, -eng.world!.bodies[0]!.linVel[1]);
       const cur = { y: b().pos[1], vy: b().linVel[1] }, free = Math.abs(cur.vy - prev.vy + G * H) < 1e-4;
       if (!vIn && !free) vIn = atContact(prev.y, prev.vy);
-      else if (vIn && prev.vy > 0 && free) return atContact(prev.y, prev.vy) / vIn;
+      else if (vIn && prev.vy > 0 && free) return { eV: atContact(prev.y, prev.vy) / vIn, down };
       prev = cur;
     }
-    return 0;
+    return { eV: 0, down };
   };
 
   it('the cost: a ball bounces softer off a body that rests on others, and more rounds give back more (default 8)', async () => {
-    const at = (rounds?: number) => offRestingCube(3, 0.9, rounds ? { ...ON, restitutionRounds: rounds } : ON);
+    const at = async (rounds?: number) => (await offRestingCube(3, 0.9, rounds ? { ...ON, restitutionRounds: rounds } : ON)).eV;
     const four = await at(4), eight = await at(), sixteen = await at(16);
     // e 0.9 at 3 m/s: measured 0.154, 0.490 and 0.729 of the approach (Rapier: 0.45-0.49).
     expect(four).toBeLessThan(eight);
     expect(eight).toBeGreaterThan(0.45);
     expect(eight).toBeLessThan(sixteen);
     expect(sixteen).toBeLessThan(0.9);
+  });
+
+  // The supports converge at a rate set by the mass ratio (Jacobi), so the cost grows with the striker's mass.
+  // This pins a known limit (see restitute()): a change that lifts it fails here, and the docs should follow.
+  it('the cost grows with the striker\'s mass: a 5 kg ball bounces off the resting cube far softer than 1 kg, and drives it into the ground', async () => {
+    const one = await offRestingCube(3, 0.9, ON), five = await offRestingCube(3, 0.9, ON, 5), off = await offRestingCube(3, 0.9, {}, 5);
+    // e 0.9 at 3 m/s, 8 rounds: measured 0.490 of the approach at 1 kg and 0.187 at 5 kg; the cube is driven
+    // down at 1.75 m/s, against 0.066 with the switch off.
+    expect(five.eV).toBeLessThan(0.5 * one.eV);
+    expect(five.eV).toBeGreaterThan(0.1);
+    expect(five.down).toBeGreaterThan(1);
+    expect(off.down).toBeLessThan(0.2);
   });
 });
 

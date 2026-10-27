@@ -102,32 +102,57 @@
 // Restitution is opt-in (AvbdParams.restitution, off by default): a velocity
 // pass after post-stabilization (see restitute()). A contact point that
 // carried force and approached at restitutionThreshold (1 m/s) or faster at
-// the start of the step leaves at e times that normal speed. e is the pair's,
-// combineRestitution under SceneDesc.restitutionCombine (default average,
-// Rapier's) clamped to [0, 1], and the ground's own e is
-// SceneDesc.ground.restitution (default 0: under average a body bounces off
-// the ground at half its e). restitutionRounds (8) rounds of mass-split
-// Jacobi solve the bouncing manifolds together with the other loaded contacts
-// of their bodies. Off, the step never reads BodyDesc.restitution, and runs
-// are bit-identical to those before it existed. Its known limits, at 10
-// iterations, e being the pair's:
+// the start of the step is set to leave, at the end of that step, at e times
+// that normal speed. e is the pair's, combineRestitution under
+// SceneDesc.restitutionCombine (default average, Rapier's) clamped to [0, 1],
+// and the ground's own e is SceneDesc.ground.restitution (default 0: under
+// average a body bounces off the ground at half its e). restitutionRounds (8)
+// rounds of mass-split Jacobi solve the bouncing manifolds together with the
+// other loaded contacts of their bodies. Off, the step never reads
+// BodyDesc.restitution, and runs are bit-identical to those before it
+// existed. Its known limits, at 10 iterations, e being the pair's, under the
+// default average unless a rule is named:
+// - The bounce is step-based: gravity acts over the impact step, so measured
+//   at contact a drop's rebound falls short of e, by 2-7% at 5-10 m/s and more
+//   at low speed: at 2 m/s it keeps 0.76 of e at e 0.3, and 0.62 at e 0.15 (an
+//   e 0.3 body on the default ground).
+// - Energy can grow wherever the solve drifts momentum, at any e > 0. The pass
+//   keeps momentum to rounding (at most 7.1e-15 N s over 78 zero-g scenes);
+//   the gain is the solve's drift, which shows once contacts stop absorbing
+//   energy. In zero g: unit-cube pairs meeting head-on at 10 m/s end with
+//   1.023, 1.158 and 1.383 x their kinetic energy at e 0.3, 0.6 and 0.9 (1.061
+//   at e 0.9 and 20 iterations), a 1:5 pair 1.015 x at e 0.9; with the switch
+//   off the solve already moves those pairs' momentum by up to 46% (41% for
+//   1:1; 15% at 20 iterations). Chains of 3 and 5 unit cubes 0.05 m apart,
+//   struck at 10 m/s, end with 1.14 and 1.48 x at e 0.9 (none at 20
+//   iterations); there the solve drifts momentum 4.6 and 2.8 x as much as with
+//   the switch off (the chain of 5 from 10 to 17.0 N s, against 12.5). A chain
+//   of 5 spheres gains 23% at e 1 (2.6% at 20 iterations). Outside zero-g
+//   pairs and chains, no probe gains beyond the switch-off solve at e <= 0.9.
 // - e = 1 is not energy-safe: rods (0.2 x 2 x 0.2) dropped tilted from 1 m
-//   gained up to about 0.8 of their energy above lying flat (0.78 at 8
-//   rounds, 0.81 at 4, worst at 30 degrees). Every probe is clean at
-//   e <= 0.9.
+//   gained up to about 0.8 of their energy above lying flat (0.78 at 8 rounds,
+//   0.81 at 4, worst at 30 degrees), and with the ground at e 1 too (rule max)
+//   cubes dropped tilted gained up to 16% and tumbling ones 3.1% (a pair e of
+//   0.95, average with the ground at 1, gained 1.5% on one tilted cube).
+//   Beyond 8 rounds the pass overshoots at e = 1 (see restitute()).
 // - The pass's impulse is along n only: a cube landing on an edge, turned 30
-//   degrees, at mu 0.6 keeps 0.36-0.83 of the rigid impact's vertical
-//   rebound and spins at 1.66-3.06 x its spin (frictionless: 0.83-0.98 of the
-//   rebound, 0.97-1.00 of the spin).
-// - A 510 kg ball (radius 0.25) landing at 10 m/s on a 1 kg cube on the
-//   ground sinks into it 0.18 m, against 0.11 m with the switch off.
-// - The restitution gates' energy check (G6) fails on zero-g box pairs
-//   meeting head-on at 10 m/s, and only there: a pair of unit cubes ends with
-//   1.023, 1.158 and 1.383 x its kinetic energy at e 0.3, 0.6 and 0.9 (1.061
-//   at e 0.9 and 20 iterations), a 1:5 pair 1.015 x at e 0.9. This is
-//   inherited, not added: with the switch off the solve already moves those
-//   pairs' momentum by up to 46% (41% for 1:1; 15% at 20 iterations), and the
-//   pass keeps momentum to rounding.
+//   degrees, at mu 0.6 keeps 0.36-0.83 of the rigid impact's vertical rebound
+//   and spins at 1.66-3.06 x its spin (frictionless: 0.83-0.98 of the rebound,
+//   0.97-1.00 of the spin; rule max).
+// - Heavy on light: a body struck while it rests on others is held by them
+//   only as far as the rounds converge, and they converge more slowly the
+//   heavier the striker (see restitute()). A ball (radius 0.25) dropped
+//   at 10 m/s onto a 1 kg cube on the ground, e 0.6-0.9 everywhere, rebounds
+//   at 0.59-0.67 of e v at 1 kg, 0.27-0.32 at 5 kg and 0.02-0.04 at 50 kg (no
+//   better than with the switch off), and the pass drives the cube into the
+//   ground at about the bounce's speed: 4.7-5.7 m/s at 5 kg, 8.5-10 at 510 kg,
+//   against 0.09 and 0.80 off. No energy is gained, but the ball sinks deeper:
+//   at 510 kg up to 0.17 m into the cube over ball and cube e of 0.05-0.9
+//   (0.18 under max), against 0.11 m off, and from 2000 kg the ball can go
+//   through the cube to the ground (3 of 4 cases at 10-20 m/s), which off
+//   holds up to 5000 kg at 10 m/s. A 144 kg rubber ball (e 0.6) at 20 m/s on a
+//   10-cube plaster column (e 0.05) sinks 0.19 m into it, against 0.08 m off
+//   (0.11 under max).
 import { type BodyDesc, combineFriction, combineRestitution, DEFAULT_RESTITUTION_COMBINE, inertiaOf, massOf, type Quat, type SceneDesc, type Vec3 } from '@tb/engine-api';
 import { boundingRadius, cross, dot, groundManifold, NO_AXIS, quatMul, quatNormalize, rotate, shapeManifold, spherePairs } from '@tb/geom';
 import { colorGraph } from './coloring.ts';
@@ -197,9 +222,17 @@ export interface AvbdParams {
    * so the result keys of runs without it are as they were before it existed.
    */
   restitution?: boolean;
-  /** Normal approach speed at the start of the step, m/s, from which a contact bounces (>=, as Box2D's threshold). */
+  /**
+   * Normal approach speed at the start of the step, m/s, from which a contact
+   * bounces (>=, as Box2D's threshold). Default 1 (RESTITUTION_DEFAULTS); a
+   * finite number >= 0, where 0 lets any loaded approaching point bounce.
+   */
   restitutionThreshold?: number;
-  /** Rounds of the restitution pass (see restitute()). */
+  /**
+   * Rounds of the restitution pass (see restitute()): more bounce off bodies
+   * that rest on others, for more work. Default 8 (RESTITUTION_DEFAULTS); an
+   * integer >= 1.
+   */
   restitutionRounds?: number;
 }
 
@@ -562,7 +595,13 @@ export class AvbdWorld {
    *   gain, and both come to rest. The cost is a softer bounce off a body
    *   that rests on others: a ball of e 0.9 at 3 m/s rebounds off a resting
    *   cube at 0.15 of its approach with 4 rounds, 0.49 with 8 and 0.73 with
-   *   16, against 0.45-0.49 in Rapier.
+   *   16, against 0.45-0.49 in Rapier. They hold the struck body only as far
+   *   as the rounds converge, and that takes longer the heavier the striker:
+   *   a 5 kg ball gets 0.19 of its approach at 8 rounds, and drives the cube
+   *   down at 1.75 m/s (0.07 with the switch off). The 510 kg ball above
+   *   still drives the cube into the ground at 10.0 m/s after 8 rounds (9.5
+   *   after 128), against 0.8 off, and comes back at 0.54 m/s against 1.61;
+   *   from 2000 kg a ball can go through the cube (see the header).
    * - The points of one manifold are solved together: each round first takes
    *   the impulse at their centroid that brings the centroid's normal
    *   velocity to the mean target (exact line search along equal per-point
@@ -582,11 +621,17 @@ export class AvbdWorld {
    *   manifold, then one per body), and it converges where plain Jacobi would
    *   overshoot (two manifolds pushing one body the same way: two cubes
    *   striking a box side by side at e 1 gained 32% of the energy in one
-   *   round). It converges from below, so restitutionRounds trades bounce for
-   *   work: a body held by its supports, or struck from two sides at once,
-   *   needs several rounds. 8 by default (RESTITUTION_DEFAULTS), for the
-   *   bounce off a resting cube above; the GPU will pay about 2 dispatches a
-   *   round, and only with the switch on.
+   *   round). Below e 1 no probe gained energy from more rounds (up to 32;
+   *   64 for the two cubes), so restitutionRounds trades bounce for work: a
+   *   body held by its supports, or struck from two sides at once, needs
+   *   several rounds. 8 by default (RESTITUTION_DEFAULTS), for the bounce
+   *   off a resting cube above; the GPU will pay about 2 dispatches a round,
+   *   and only with the switch on. More rounds are no cure for a heavy
+   *   striker: the 5 kg ball at 10 m/s (e 0.9) gets 0.30 of e at 8 rounds,
+   *   0.19 at 16 and 0.60 at 32, and a 144 kg ball sinks into a 10-cube
+   *   column up to 0.12 m at 8 rounds, 0.21 m at 32 (rule max). At e 1 more
+   *   rounds overshoot: the two cubes striking a box keep 0.99983 of the
+   *   energy at 8 rounds, 1.0019 at 16 and 1.0034 at 64.
    * - A point that bounced and will separate (P > 0 and its target times h
    *   beyond restDepth) starts the next step with no force (lambda 0): its
    *   impact force carried as a warm start would push the bodies apart again
