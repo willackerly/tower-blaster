@@ -72,15 +72,33 @@ export interface SessionResult { session: Session; feedback: Feedback[]; steps: 
  * Plays `shots` in order, each fired as soon as the session is aiming, until
  * the level ends, the shots run out, or `maxSteps`.
  */
-export async function runSession(engine: PhysicsEngine, level: CompiledLevel, shots: Shot[], opts: { maxSteps?: number } = {}): Promise<SessionResult> {
+export async function runSession(engine: PhysicsEngine, level: CompiledLevel, shots: Shot[], opts: PlayOptions = {}): Promise<SessionResult> {
   const d = new Driver(engine, level);
   await d.reset();
-  const feedback: Feedback[] = [];
-  let next = 0;
+  return playShots(d, shots, 0, opts);
+}
+
+export interface PlayOptions {
+  /** Stop once the engine reaches this step (default 20,000). */
+  maxSteps?: number;
+  /** Called while aiming before each later shot `next` fires: the driver may be copied there and played on. */
+  onAiming?(d: Driver, next: number): void;
+}
+
+/**
+ * Play shots[next..] from a driver that is aiming before shot `next`: the
+ * rest of runSession. A driver copied at an onAiming call and played on from
+ * there ends in the same session, steps and snapshot as the whole session
+ * (the feedback holds this call's only).
+ */
+export async function playShots(d: Driver, shots: Shot[], next: number, opts: PlayOptions = {}): Promise<SessionResult> {
+  const engine = d.engine, feedback: Feedback[] = [];
   const max = opts.maxSteps ?? 20_000;
+  let announced = next;
   while (engine.stepIndex < max) {
     if (d.session.phase === 'aiming') {
       if (next >= shots.length) break;
+      if (next > announced) opts.onAiming?.(d, (announced = next));
       feedback.push(...d.fire(shots[next++]!));
     }
     if (d.session.phase === 'cleared' || d.session.phase === 'failed') break;

@@ -22,6 +22,7 @@
   "packages/gpu/test/adapter.test.ts": 0,
   "packages/gpu/test/gpu.test.ts": 81.5,
   "packages/gpu/test/reference.test.ts": 0,
+  "packages/keystone-lab/test/fork.test.ts": 50,
   "packages/keystone-lab/test/probe.test.ts": 15.2,
   "packages/keystone-lab/test/sim.test.ts": 326.8,
   "packages/keystone/test/boundary.test.ts": 0,
