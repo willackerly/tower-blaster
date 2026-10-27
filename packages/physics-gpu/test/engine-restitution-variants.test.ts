@@ -1,9 +1,10 @@
 // Restitution (AvbdParams.restitution) with the other opt-in solver variants on
-// the GPU (#72). The pass reads and resets the point form's contacts
-// (src/restitution.ts), so manifold records 1 and 2 refuse it, and so does the
-// fused dual, which was never built with it. Lattice colouring (colorMode)
-// changes only the colour order: the pass walks the contact graph's rows in
-// slot order, and bounces as the reference does with the same colouring.
+// the GPU (#72). The pass reads and resets points or exact records
+// (src/restitution.ts; records 1 in engine-restitution-records.test.ts), so
+// centre-friction records (2) refuse it, and so does the fused dual, which was
+// never built with it. Lattice colouring (colorMode) changes only the colour
+// order: the pass walks the contact graph's rows in slot order, and bounces as
+// the reference does with the same colouring.
 import { describe, expect, it } from 'vitest';
 import { DEFAULT_RESTITUTION_COMBINE } from '@tb/engine-api';
 import { AvbdSolver, DEFAULT_DISPATCH, GpuAvbdEngine, type RestitutionConfig, type SolverBuffers } from '../src/index.ts';
@@ -13,13 +14,12 @@ import { gpu } from './harness.ts';
 const CONFIG: RestitutionConfig = { threshold: 1, rounds: 8, groundRestitution: 0, combine: DEFAULT_RESTITUTION_COMBINE };
 
 describe('GPU AVBD engine: restitution with records, the fused dual and colorMode', () => {
-  it('is refused with records 1 or 2 and with dualFusion, in the engine and in the solver; records 0 builds', () => {
-    for (const records of [1, 2]) {
-      expect(() => new GpuAvbdEngine({ records, restitution: true })).toThrow(`GpuAvbdEngine: AvbdParams.restitution is not implemented with AvbdParams.records ${records} on the GPU yet`);
-      expect(() => new GpuAvbdEngine({ records, restitution: false })).not.toThrow();
-      // The solver checks before it touches the device, so neither needs one here.
-      expect(() => new AvbdSolver({} as GPUDevice, 1, 1, {} as SolverBuffers, DEFAULT_DISPATCH, records as 1 | 2, 0, CONFIG)).toThrow(`AvbdSolver: restitution is not implemented with records ${records} yet`);
-    }
+  it('is refused with records 2 and with dualFusion, in the engine and in the solver; records 0 and 1 build', () => {
+    expect(() => new GpuAvbdEngine({ records: 2, restitution: true })).toThrow('GpuAvbdEngine: AvbdParams.restitution is not implemented with AvbdParams.records 2 on the GPU yet');
+    expect(() => new GpuAvbdEngine({ records: 2, restitution: false })).not.toThrow();
+    // The solver checks before it touches the device, so neither needs one here.
+    expect(() => new AvbdSolver({} as GPUDevice, 1, 1, {} as SolverBuffers, DEFAULT_DISPATCH, 2, 0, CONFIG)).toThrow('AvbdSolver: restitution is not implemented with records 2 yet');
+    expect(() => new GpuAvbdEngine({ records: 1, restitution: true })).not.toThrow();
     expect(() => new GpuAvbdEngine({ dualFusion: true, restitution: true })).toThrow('GpuAvbdEngine: AvbdParams.restitution is not implemented with AvbdParams.dualFusion on the GPU yet');
     expect(() => new GpuAvbdEngine({ dualFusion: true })).not.toThrow();
     expect(() => new AvbdSolver({} as GPUDevice, 1, 1, {} as SolverBuffers, { ...DEFAULT_DISPATCH, dualFusion: true }, 0, 0, CONFIG)).toThrow('AvbdSolver: restitution is not implemented with dualFusion yet');

@@ -363,9 +363,9 @@ export interface AvbdParams {
    * absent or 0, and avbdVariant lists it only while it is on. The GPU engine
    * solves each contact manifold of 1-4 points as one record, so a body's
    * walk visits a record per touching pair instead of a point; there unset
-   * means 1 (points with the array Hessian or restitution: physics-gpu
-   * gpuRecordsLayout), and its EngineInfo.variant lists records whenever it
-   * is given, 0 included.
+   * means 1 (points with the array Hessian: physics-gpu gpuRecordsLayout),
+   * and its EngineInfo.variant lists records whenever it is given, 0
+   * included.
    * - 0 (or unset here): points, as above.
    * - 1: the exact record. Every point keeps its own three rows, penalties,
    *   anchors and friction, so the physics is that of points; only the GPU's

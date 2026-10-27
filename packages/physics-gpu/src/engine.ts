@@ -70,13 +70,13 @@ export interface GpuEngineOptions {
  * The contact layout (AvbdParams.records) a GpuAvbdEngine with these params and options solves with: params.records
  * when given (0 points, 1 the exact record, 2 centre friction); unset, 1, the GPU default since the M5 sweep of
  * 2026-10-27 (the point form's physics, bit for bit on SwiftShader; 26-38% faster per step on the M5), except 0
- * where only points are implemented: the array Hessian (GpuEngineOptions.hessian 'array') and restitution
- * (AvbdParams.restitution, whose GPU pass is built on SolverContact points). An explicit records 1 or 2 with the
- * array Hessian still throws in the engine.
+ * where only points are implemented: the array Hessian (GpuEngineOptions.hessian 'array'). An explicit records 1
+ * or 2 with the array Hessian still throws in the engine. Restitution (AvbdParams.restitution) runs on records 1
+ * as on points, the same floats.
  */
-export function gpuRecordsLayout(params: Pick<Partial<AvbdParams>, 'records' | 'restitution'>, opts: Pick<GpuEngineOptions, 'hessian'> = {}): RecordMode {
+export function gpuRecordsLayout(params: Pick<Partial<AvbdParams>, 'records'>, opts: Pick<GpuEngineOptions, 'hessian'> = {}): RecordMode {
   if (params.records !== undefined) return params.records as RecordMode;
-  return opts.hessian === 'array' || params.restitution ? 0 : 1;
+  return opts.hessian === 'array' ? 0 : 1;
 }
 
 export interface GpuDiagnostics {
@@ -175,8 +175,9 @@ export class GpuAvbdEngine implements PhysicsEngine {
     // unset, records 1, or points where only they are implemented (gpuRecordsLayout).
     const records = gpuRecordsLayout(this.params, opts);
     if (records !== 0 && (opts.hessian ?? DEFAULT_DISPATCH.hessian) !== 'registers') throw new Error(`GpuAvbdEngine: AvbdParams.records ${records} needs GpuEngineOptions.hessian registers, got ${opts.hessian}`);
-    // The restitution pass reads and resets the point form's contacts (restitution.ts), and was never built with the fused dual.
-    if (records !== 0 && this.params.restitution) throw new Error(`GpuAvbdEngine: AvbdParams.restitution is not implemented with AvbdParams.records ${records} on the GPU yet`);
+    // The restitution pass reads and resets points or exact records (restitution.ts), not centre-friction records, and was
+    // never built with the fused dual.
+    if (records === 2 && this.params.restitution) throw new Error('GpuAvbdEngine: AvbdParams.restitution is not implemented with AvbdParams.records 2 on the GPU yet');
     if (this.params.dualFusion && this.params.restitution) throw new Error('GpuAvbdEngine: AvbdParams.restitution is not implemented with AvbdParams.dualFusion on the GPU yet');
     this.records = records;
     // Every param, but an opt-in switch and its params only while it is on (avbdVariant): result keys do not change.
