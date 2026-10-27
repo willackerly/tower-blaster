@@ -28,8 +28,9 @@ export function engineLabel(spec: EngineSpec): string {
 
 /**
  * A CLI argument list: every `--name value` pair as a flag, the rest as ids.
- * `--engine rapier|ref`, `--iterations N`, `--gap-slop M` (metres, reference
- * only) and `--jobs N` are read here.
+ * `--engine ref|rapier` (the reference, which pins par lines, by default),
+ * `--iterations N`, `--gap-slop M` (metres, reference only) and `--jobs N`
+ * are read here.
  */
 export function labArgs(args: string[], defaultJobs: number): { spec: EngineSpec; jobs: number; flags: Map<string, string>; ids: string[] } {
   const flags = new Map<string, string>(), ids: string[] = [];
@@ -38,7 +39,7 @@ export function labArgs(args: string[], defaultJobs: number): { spec: EngineSpec
     if (a.startsWith('--')) flags.set(a.slice(2), args[++i] ?? '');
     else ids.push(a);
   }
-  const kind = flags.get('engine') ?? 'rapier';
+  const kind = flags.get('engine') ?? 'ref';
   if (!(LAB_ENGINES as readonly string[]).includes(kind)) throw new Error(`unknown engine ${kind}: use ${LAB_ENGINES.join(' or ')}`);
   const num = (name: string) => {
     const v = flags.get(name);

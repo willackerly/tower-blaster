@@ -23,6 +23,7 @@
     "viewer": "vite packages/viewer",
     "keystone:probe": "tsx packages/keystone-lab/src/cli.ts",
     "keystone:bot": "tsx packages/keystone-lab/src/bot-cli.ts",
+    "keystone:par": "tsx packages/keystone-lab/src/par-cli.ts",
     "game": "vite packages/game"
   },
   "devDependencies": {

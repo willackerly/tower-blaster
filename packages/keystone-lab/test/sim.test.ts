@@ -151,20 +151,6 @@ describe('shots on Rapier', () => {
   });
 });
 
-describe('par lines', () => {
-  // A physics or adapter change that breaks a level's recorded solution fails here.
-  it.each(LEVELS.map((l) => [l.id, l] as const))('%s: the recorded par line clears at par with no heritage broken', async (_id, def) => {
-    const shots = def.solutions?.par ?? [];
-    expect(shots.length).toBe(def.par);
-    const e = new RapierEngine();
-    const r = await runSession(e, compileLevel(def), shots);
-    e.dispose();
-    expect(r.session.phase).toBe('cleared');
-    expect(r.session.heritageBroken.every((x) => !x)).toBe(true);
-    expect(r.session.score!.stars).toBeGreaterThanOrEqual(2);
-  });
-});
-
 describe('sessions on Rapier', () => {
   const shots: Shot[] = [
     { ammo: 'cannonball', az: 360, y: 8, yaw: 0, pitch: 505, power: 100 },

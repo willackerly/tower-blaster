@@ -1,5 +1,5 @@
 // The game page in headless Chromium (SwiftShader in CI): it loads a level,
-// aims, plays L1's par line, shows the result card, and scores exactly what
+// aims, plays a clearing line on L1, shows the result card, and scores exactly what
 // the headless driver scores for the same shots.
 import { fileURLToPath } from 'node:url';
 import { platform } from 'node:os';
@@ -43,7 +43,7 @@ async function open(search: string, timeout = 60_000): Promise<{ page: Page; err
 const ready = (page: Page, timeout = 60_000) => page.waitForFunction(() => window.__game.ready || window.__game.result !== null, undefined, { timeout, polling: 250 });
 
 describe('game page', () => {
-  it('plays the L1 par line to a result card that matches the headless score', async (ctx) => {
+  it('plays L1 to a result card that matches the headless score', async (ctx) => {
     if (!browser) return ctx.skip();
     const o = await open('/?level=L1&offscreen=1');
     if (!o) return ctx.skip();
@@ -59,7 +59,11 @@ describe('game page', () => {
     expect(stats!.distinctColors).toBeGreaterThan(50);
 
     await page.evaluate(() => { window.__game.fast = true; });
-    const shots = L1.solutions!.par as Shot[];
+    // The page plays on Rapier by default, and par lines are pinned on the AVBD reference: this line clears L1 on Rapier.
+    const shots: Shot[] = [
+      { ammo: 'cannonball', az: 360, y: 8, yaw: 0, pitch: 505, power: 100 },
+      { ammo: 'cannonball', az: 180, y: 8, yaw: -46, pitch: 526, power: 60 },
+    ];
     for (const shot of shots) {
       await ready(page);
       expect(await page.evaluate((s) => window.__game.fire(s), shot)).toBe(true);
@@ -105,7 +109,7 @@ describe('game page', () => {
     await page.evaluate(() => window.__game.select('marble'));
     expect((await page.evaluate(() => window.__game.aim(0, 0)))?.reachable).toBe(true);
     await page.evaluate(() => { window.__game.fast = true; });
-    // The par line was pinned on Rapier, so it need not clear here: compare states, not scores.
+    // The par line is pinned on the f64 reference, so it need not clear here: compare states, not scores.
     const shots = L4.solutions!.par as Shot[];
     for (const shot of shots) {
       await ready(page);

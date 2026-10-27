@@ -14,6 +14,8 @@ export interface ProbeCase {
   /** Shots fired in order, aimed for an engine with this many substeps; only the last is nudged. */
   shots(substeps: number): Shot[];
   success(r: PlayResult, c: CompiledLevel): boolean;
+  /** A number to record for each successful attempt (the bot's audit: the session's leverage). */
+  value?(r: PlayResult): number;
 }
 
 /** Nudge offsets: yaw +-0.6 deg (7 values) by power +-3 % (5 values). */
@@ -34,16 +36,32 @@ export function nudge(s: Shot, a: number, power: number): Shot {
   return { ...s, yaw: s.yaw + a, power: clampP(s.power) };
 }
 
-export interface ProbeResult { id: string; title: string; nominal: boolean; successRate: number; grid: boolean[][]; ms: number }
+export interface ProbeResult {
+  id: string; title: string; nominal: boolean; successRate: number; grid: boolean[][]; ms: number;
+  /** pc.value of each successful attempt, grid order; empty without pc.value. */
+  values: number[];
+}
 
 export async function runProbe(pc: ProbeCase, runner: Runner): Promise<ProbeResult> {
   const c = compileLevel(pc.level);
   const t0 = performance.now();
   const shots = pc.shots(engineSubsteps(runner.spec)), lastIdx = shots.length - 1;
-  const attempt = async (s: Shot) => pc.success(await runner.play(pc.level, [...shots.slice(0, lastIdx), s]), c);
-  const grid = await Promise.all(YAW_NUDGES.map((a) => Promise.all(POWER_NUDGES.map((p) => attempt(nudge(shots[lastIdx]!, a, p))))));
-  const flat = grid.flat();
-  return { id: pc.id, title: pc.title, nominal: grid[3]![2]!, successRate: flat.filter(Boolean).length / flat.length, grid, ms: performance.now() - t0 };
+  const attempt = async (s: Shot) => {
+    const r = await runner.play(pc.level, [...shots.slice(0, lastIdx), s]);
+    const ok = pc.success(r, c);
+    return { ok, value: ok && pc.value ? pc.value(r) : null };
+  };
+  const cells = await Promise.all(YAW_NUDGES.map((a) => Promise.all(POWER_NUDGES.map((p) => attempt(nudge(shots[lastIdx]!, a, p))))));
+  const grid = cells.map((row) => row.map((x) => x.ok)), flat = grid.flat();
+  const values = cells.flat().flatMap((x) => (x.value === null ? [] : [x.value]));
+  return { id: pc.id, title: pc.title, nominal: grid[3]![2]!, successRate: flat.filter(Boolean).length / flat.length, grid, ms: performance.now() - t0, values };
+}
+
+/** The q-quantile of xs (linear between order statistics); NaN when empty. */
+export function quantile(xs: readonly number[], q: number): number {
+  if (!xs.length) return NaN;
+  const s = [...xs].sort((a, b) => a - b), i = q * (s.length - 1), lo = Math.floor(i);
+  return lo + 1 < s.length ? s[lo]! + (i - lo) * (s[lo + 1]! - s[lo]!) : s[lo]!;
 }
 
 export function gridText(g: boolean[][]): string {
