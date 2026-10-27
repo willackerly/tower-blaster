@@ -1,11 +1,17 @@
 // pnpm bench:probe [--channel chrome] [--headed] [--quick] [--only p1,p2,...] [--reps N] [--polls N] [--hessian registers|array]
 //   [--scenario S15 --param planks=10000 --param towers=1 --gravity-scale 42.735 --pairs-per-body 32 --box-broadphase --checkpoints 60,300]
+//   [--engine "avbd-gpu:key=value,..."]
 // The solver probe (probe.ts): adapter limits (P1), the real solver's
 // per-colour structure and times on the S4 city (P2), synthetic per-point
 // kernels (P3) and synchronization costs (P4: a = workgroupBarrier,
 // b = dispatch chain, c = grid barrier, d = workgroup tile; p4 = all four).
 // --hessian sets the primal's form for P2 (default registers, the engine's
 // default since plan step 2b; array is the earlier form, to time against it).
+// --engine times another engine variant in P2, given as for pnpm bench
+// (packages/bench engines.ts): AvbdParams and GpuEngineOptions, e.g.
+// "avbd-gpu:iterations=20,dualFusion=true". Without it P2 runs the default. The
+// scenario flags apply either way; --hessian, --pairs-per-body and --box-broadphase
+// add to the spec's options (an option given both ways is an error).
 // Writes results/probe-<time>.{json,md}. Use real Chrome on the target
 // machine for numbers worth keeping; software adapters are flagged as invalid.
 import { mkdirSync, writeFileSync } from 'node:fs';
@@ -15,6 +21,7 @@ import { fileURLToPath } from 'node:url';
 import { exitNow, loadBundle, openWebGPU } from '@tb/testkit';
 import { PROBE_SECTIONS, type ProbeOptions, type ProbeResult, type ProbeSection, probeMarkdown, QUICK_PROBE } from './probe.ts';
 import { HESSIAN_FORMS, type HessianForm } from './solver.ts';
+import { probeEngine } from './probe-engine.ts';
 
 const argv = process.argv.slice(2);
 const flag = (k: string) => argv.includes(`--${k}`);
@@ -49,6 +56,8 @@ if (hessian !== undefined) {
   if (!(HESSIAN_FORMS as readonly string[]).includes(hessian)) throw new Error(`--hessian: must be one of ${HESSIAN_FORMS.join(', ')}, got ${hessian}`);
   opts.hessian = hessian as HessianForm;
 }
+const engine = value('engine');
+if (engine !== undefined) opts.engine = probeEngine(engine, { hessian, pairsPerBody: opts.pairsPerBody ?? undefined, boxBroadphase: opts.boxBroadphase });
 
 // Developer features lift Chrome's 100 µs timestamp quantization.
 const extra = ['--enable-webgpu-developer-features'];

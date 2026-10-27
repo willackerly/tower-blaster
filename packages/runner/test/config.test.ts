@@ -1,6 +1,6 @@
 import fc from 'fast-check';
 import { describe, expect, it } from 'vitest';
-import { parseConfig, timingProblems, toQuery, type BrowserEnv, type RunConfig } from '../src/index.ts';
+import { parseConfig, splitEngines, timingProblems, toQuery, type BrowserEnv, type RunConfig } from '../src/index.ts';
 
 describe('run config in the URL', () => {
   it('parses engines, scenario params and timing', () => {
@@ -14,6 +14,20 @@ describe('run config in the URL', () => {
     expect(parseConfig('?engines=avbd-gpu&timingMode=throughput').timing.mode).toBe('throughput');
     expect(c.sleep).toBe(false);
     expect(c.autorun).toBe(true);
+  });
+
+  it('takes engine specs with several options: an option piece belongs to the spec before it', () => {
+    expect(splitEngines('avbd-gpu,avbd-gpu:dualFusion=true')).toEqual(['avbd-gpu', 'avbd-gpu:dualFusion=true']);
+    expect(splitEngines('avbd-gpu:iterations=20,dualFusion=true,avbd-gpu:iterations=20')).toEqual(['avbd-gpu:iterations=20,dualFusion=true', 'avbd-gpu:iterations=20']);
+    expect(splitEngines('avbd-gpu:iterations=20, avbd-gpu:iterations=20,dualFusion=true,colorTail=4')).toEqual(['avbd-gpu:iterations=20', 'avbd-gpu:iterations=20,dualFusion=true,colorTail=4']);
+    expect(splitEngines('avbd-gpu:iterations=20,records=1,avbd-gpu:iterations=20,records=2,colorTail=4')).toEqual(['avbd-gpu:iterations=20,records=1', 'avbd-gpu:iterations=20,records=2,colorTail=4']);
+    expect(splitEngines('rapier,rapier:iterations=8')).toEqual(['rapier', 'rapier:iterations=8']);
+    // A stray option with no spec before it stays a piece of its own, which makeEngine rejects as an unknown engine.
+    expect(splitEngines('iterations=4,rapier')).toEqual(['iterations=4', 'rapier']);
+    expect(splitEngines('rapier,iterations=4')).toEqual(['rapier', 'iterations=4']);
+    const c = parseConfig('?engines=avbd-gpu:iterations=20,dualFusion=true,avbd-gpu:iterations=20');
+    expect(c.engines).toEqual(['avbd-gpu:iterations=20,dualFusion=true', 'avbd-gpu:iterations=20']);
+    expect(parseConfig(toQuery(c)).engines).toEqual(c.engines);
   });
 
   it('rejects bad input', () => {
