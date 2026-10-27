@@ -1,9 +1,8 @@
-// The opt-in variants together (AvbdParams.dualFusion, records, colorMode and
-// colorPriority, and main's restitution and gapSlop). The fused dual is the
-// separate pass's arithmetic on the same values whatever the colouring, the
-// record mode and the other switches, so each combination with dualFusion must
-// match the same combination without it bit for bit, with records 2 per record
-// (its points' normal rows and its centre friction).
+// The opt-in variants together (AvbdParams.records, colorMode and
+// colorPriority, and main's restitution and gapSlop): each combination runs,
+// with finite state, and does what its switches say (records 2 keeps records,
+// restitution bounces points, gapSlop excuses loaded gaps, the lattice modes
+// colour the scenes differently from the default).
 import { describe, expect, it } from 'vitest';
 import type { SceneDesc } from '@tb/engine-api';
 import { buildScenario } from '@tb/scenarios';
@@ -35,9 +34,7 @@ function run(scene: SceneDesc, steps: number, params: Partial<AvbdParams>) {
   return { states, colours, records, bounced, slopped, contacts: w.contacts.length };
 }
 
-const bits = (x: Float64Array) => new Uint32Array(x.buffer);
-
-describe('the opt-in variants together: dualFusion with records and the lattice colouring', () => {
+describe('the opt-in variants together: records, the lattice colouring, restitution and gapSlop', () => {
   // S1 towers stand on the world lattice, so the lattice modes colour them differently from the default; the ball
   // into two towers breaks the lattice, so the colouring changes from step to step.
   const tower = buildScenario('S1', { F: 3, H: 6, gap: 0 }, 1);
@@ -47,7 +44,7 @@ describe('the opt-in variants together: dualFusion with records and the lattice 
   it.for([
     ['records 2, S13 20-cube column at 20 iterations', buildScenario('S13', { H: 20, deg: 4 }, 1), 80, { iterations: 20, records: 2 }],
     ['records 2, a ball into two towers (rolling contacts)', knock, 30, { iterations: 6, records: 2 }],
-    ['records 2, S1 tower at 2 iterations (one fused update)', tower, 40, { iterations: 2, records: 2 }],
+    ['records 2, S1 tower at 2 iterations', tower, 40, { iterations: 2, records: 2 }],
     ['records 1 (the point form here)', knock, 30, { iterations: 6, records: 1 }],
     ['colorMode 3, S1 tower', tower, 40, { iterations: 6, colorMode: 3 }],
     ['colorMode 4 and colorPriority 1, a ball into two towers', knock, 30, { iterations: 6, colorMode: 4, colorPriority: 1 }],
@@ -59,18 +56,16 @@ describe('the opt-in variants together: dualFusion with records and the lattice 
     ['restitution, colorMode 4, a ball into two towers', bouncy, 40, { iterations: 6, restitution: true, colorMode: 4 }],
     ['gapSlop, records 2, S1 tower', buildScenario('S1', { F: 3, H: 8, gap: 0 }, 1), 120, { records: 2, gapSlop: 3e-5 }],
     ['gapSlop, records 2 and colorMode 3, S13 12-cube column', buildScenario('S13', { H: 12, deg: 2 }, 1), 120, { records: 2, colorMode: 3, gapSlop: 3e-5 }],
-  ] as const)('with dualFusion, bit-identical to the same variants without: %s', ([, scene, steps, params]) => {
+  ] as const)('runs, with finite state, and exercises its switches: %s', ([, scene, steps, params]) => {
     const p: Partial<AvbdParams> = params;
-    const a = run(scene, steps, p), b = run(scene, steps, { ...p, dualFusion: true });
-    expect(b.states.length).toBe(steps);
+    const a = run(scene, steps, p);
+    expect(a.states.length).toBe(steps);
     expect(a.contacts).toBeGreaterThan(0);
     if (p.records === 2) expect(a.records).toBeGreaterThan(0);
     if (p.restitution) expect(a.bounced).toBeGreaterThan(0);
     if (p.gapSlop) expect(a.slopped).toBeGreaterThan(0);
     expect(Math.max(...a.colours.flat())).toBeGreaterThan(0);
-    expect(b.colours).toEqual(a.colours);
-    expect([b.bounced, b.slopped]).toEqual([a.bounced, a.slopped]);
-    b.states.forEach((s, k) => expect(bits(s), `step ${k}`).toEqual(bits(a.states[k]!)));
+    a.states.forEach((s, k) => expect(s.every(Number.isFinite), `step ${k}`).toBe(true));
   });
 
   it('the lattice modes colour those scenes differently from the default, so the cases above do not repeat it', () => {
@@ -81,11 +76,15 @@ describe('the opt-in variants together: dualFusion with records and the lattice 
   });
 
   it('every combination is accepted and recorded in the variant, with main\'s opt-in switches too', () => {
-    const all = { dualFusion: true, records: 2, colorMode: 3, colorPriority: 1 } as const;
+    const all = { records: 2, colorMode: 3, colorPriority: 1 } as const;
     expect(new AvbdReferenceEngine(all).info.variant).toMatchObject(all);
     expect(new AvbdReferenceEngine({ ...all, restitution: true, gapSlop: 3e-5 }).info.variant).toMatchObject({ ...all, restitution: true, restitutionRounds: 8, gapSlop: 3e-5 });
     // Off, none of them is in the variant: the default's keys.
-    const off = { dualFusion: false, records: 0, colorMode: 0, colorPriority: 0, restitution: false, gapSlop: 0 } as const;
+    const off = { records: 0, colorMode: 0, colorPriority: 0, restitution: false, gapSlop: 0 } as const;
     expect(new AvbdReferenceEngine(off).info.variant).toEqual(new AvbdReferenceEngine().info.variant);
+  });
+
+  it('the fused dual (AvbdParams.dualFusion) was removed: given, on or off, the engine throws instead of running without it', () => {
+    for (const dualFusion of [true, false]) expect(() => new AvbdReferenceEngine({ dualFusion } as never)).toThrow(/dualFusion \(the fused dual\) was removed after the M5 sweep .*41% higher/);
   });
 });

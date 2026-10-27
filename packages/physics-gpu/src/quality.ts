@@ -1,7 +1,7 @@
 // The brief's quality protocol Q1-Q5 (perf-competition brief §Q) for engine
 // variants, and whether a variant is equivalent to its base: pnpm
-// bench:quality runs it on the GPU in a real browser (quality-cli.ts), so the
-// fused dual's M5 gate is the same physics check as on the dev VM, not bit
+// bench:quality runs it on the GPU in a real browser (quality-cli.ts), so a
+// variant's M5 gate is the same physics check as on the dev VM, not bit
 // identity, which Metal's relaxed math does not promise. Node side: it reads
 // runs made by quality-run.ts.
 import { emptySnapshot, freeFlight, type SceneDesc } from '@tb/engine-api';

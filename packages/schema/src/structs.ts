@@ -134,7 +134,7 @@ export const SolverBody = defineStruct(
     ['sweep', 'f32', 'speculative margin growth: how far the body can move this step'],
     ['q0', 'vec4f', 'rotation at the start of the step'],
     ['dp', 'vec3f', 'position minus x0 (the primal variable)'],
-    ['visit', 'u32', "this step's position in the colour order (SolverDispatch.dualFusion only; else unused)"],
+    ['pad0', 'u32'],
     ['phi', 'vec3f', 'rotation vector since q0 (the primal variable)'],
     ['pad1', 'u32'],
     ['tp', 'vec3f', 'inertial target for dp: h v + h^2 g'],
@@ -169,17 +169,6 @@ export const SolverContact = defineStruct(
     ['inCone', 'u32', "1 if the last dual update's trial friction was inside the cone (static friction held)"],
   ],
   'One AVBD contact point (three rows), four per manifold.',
-);
-
-export const ContactDual = defineStruct(
-  'ContactDual',
-  [
-    ['lt', 'vec2f', 'friction force along t1, t2'],
-    ['lambdaN', 'f32', 'normal force'],
-    ['kN', 'f32', 'normal penalty'],
-    ['kT', 'f32', 'tangent penalty'],
-  ],
-  "A contact point's dual state while the fused dual (SolverDispatch.dualFusion) updates it in the sweep, so the solve kernel's contacts stay read-only.",
 );
 
 // Manifold records (AvbdParams.records; perf-competition round 2): one record per
@@ -270,17 +259,6 @@ export const CentreRecord = defineStruct(
   "AvbdParams.records = 2: one manifold's 1-4 points, normal rows only, and one friction state at their centre (the reference's FrictionRecord).",
 );
 
-export const CentreDual = defineStruct(
-  'CentreDual',
-  [
-    ['kN', 'vec4f', 'normal penalty of points 0..3'],
-    ['lambdaN', 'vec4f', 'normal force'],
-    ['lamT', 'vec3f', 'friction force along t1, t2 and the twist row'],
-    ['kT', 'f32', 'penalty of the three friction rows'],
-  ],
-  "A CentreRecord's dual state while the fused dual (SolverDispatch.dualFusion) updates it in the sweep (records 1 keeps a ContactDual per point).",
-);
-
 export const SolverParams = defineStruct(
   'SolverParams',
   [
@@ -343,10 +321,10 @@ export const ColorParams = defineStruct(
   [
     ['color', 'u32', 'colour swept by this primal dispatch'],
     ['alpha', 'f32', '1 in the main iterations, 0 in post-stabilization'],
-    ['fuse', 'u32', "SolverDispatch.dualFusion: 0 no fused dual update, 1 the step's first (last state in the contacts), 2 later ones"],
+    ['pad0', 'u32'],
     ['pad1', 'u32'],
   ],
   'Per-dispatch uniforms (bound with a dynamic offset).',
 );
 
-export const ALL_STRUCTS = [SimParams, Body, RenderRecord, Shape, Manifold, ImpactEvent, Spark, FxState, BodyProps, SolverBody, SolverContact, ContactDual, SolverRecord, CentreRecord, CentreDual, SolverParams, ColorParams, RestSlot];
+export const ALL_STRUCTS = [SimParams, Body, RenderRecord, Shape, Manifold, ImpactEvent, Spark, FxState, BodyProps, SolverBody, SolverContact, SolverRecord, CentreRecord, SolverParams, ColorParams, RestSlot];

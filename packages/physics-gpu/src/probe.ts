@@ -188,11 +188,6 @@ export interface P2Result {
   hessian: HessianForm;
   /** ProbeOptions.engine's spec, when one was given. */
   engine?: string;
-  /** Dual passes per step: the iterations, or 1 with the fused dual (AvbdParams.dualFusion), whose colour times then include the fused updates. */
-  dualPasses?: number;
-  /** With an engine spec, its dispatch's fused dual and contacts binding (SolverDispatch), so bench:probe-compare knows which arm it is. */
-  dualFusion?: boolean;
-  solveContactsRW?: boolean;
   /** With an engine spec, the engine's info.variant (the opt-in variants on, among them), so bench:probe-compare can tell a combination. */
   variant?: Record<string, number | boolean | string>;
   /** t = a + b W, t = a + b W + e bodies, t = a + e bodies, t = a + g Σpoints. */
@@ -482,18 +477,14 @@ async function runP2(device: GPUDevice, timer: Timer, o: ProbeOptions): Promise<
     ...(o.pairsPerBody ? { pairsPerBody: o.pairsPerBody } : {}), ...(o.boxBroadphase ? { boxBroadphase: true } : {}),
   };
   const checkpoints: Checkpoint[] = [];
-  let iterations = 0, hessian = o.hessian, dualPasses = 0, fused = false, contactsRW = false, variant: Record<string, number | boolean | string> = {};
+  let iterations = 0, hessian = o.hessian, variant: Record<string, number | boolean | string> = {};
   for (const step of o.checkpoints) {
     // A fresh engine per checkpoint: the probes below change contact state (the dual), which would carry into later steps.
     const e = new GpuAvbdEngine(o.engine?.params ?? {}, { ...engineOpts, device });
     await e.init(scene);
     iterations = e.probeParts().iterations;
     hessian = e.probeParts().dispatch.hessian;
-    // With the fused dual, one dual pass per step (after the last main sweep), and none between the others.
-    fused = e.probeParts().dispatch.dualFusion === true;
-    contactsRW = e.probeParts().dispatch.solveContactsRW === true;
     variant = e.info.variant;
-    dualPasses = fused ? Math.min(1, iterations) : iterations;
     const timedFrom = Math.max(0, step - o.solveSteps);
     for (let s = 0; s < timedFrom; s++) {
       e.step();
@@ -529,7 +520,7 @@ async function runP2(device: GPUDevice, timer: Timer, o: ProbeOptions): Promise<
     const sumC = st.direct.reduce((s, c) => s + (c.t?.median ?? 0), 0);
     const check = {
       primal: (iterations + 1) * sumC,
-      predicted: (iterations + 1) * (sumC + (st.tail.t?.median ?? 0)) + dualPasses * dual.median,
+      predicted: (iterations + 1) * (sumC + (st.tail.t?.median ?? 0)) + iterations * dual.median,
       measured: solvePass?.median ?? null,
     };
     checkpoints.push({ step, ...st, dual, emptyDispatch, solvePass, check });
@@ -573,7 +564,7 @@ async function runP2(device: GPUDevice, timer: Timer, o: ProbeOptions): Promise<
   if (perPointNs) verdict.push(`Per critical-path point, (t_c − empty dispatch) / W_c = ${perPointNs.median.toFixed(0)} ns (p10 ${perPointNs.p10.toFixed(0)}, p90 ${perPointNs.p90.toFixed(0)}) over ${per.length} colours.`);
   return {
     scenario: o.scenario, params: scene.params as Params, gravityScale: o.gravityScale, boxBroadphase: engineOpts.boxBroadphase === true, N: scene.bodies.length, seed: o.seed,
-    iterations, R: o.R, checkpoints, hessian, ...(o.engine ? { engine: o.engine.spec, dualPasses, dualFusion: fused, solveContactsRW: contactsRW, variant } : {}), fits, perPointNs, verdict,
+    iterations, R: o.R, checkpoints, hessian, ...(o.engine ? { engine: o.engine.spec, variant } : {}), fits, perPointNs, verdict,
   };
 }
 
@@ -911,16 +902,14 @@ export function probeMarkdown(r: ProbeResult, header: string): string {
   if (r.p2) {
     const p = r.p2;
     L.push('', `## P2 Real solver: ${p.scenario} ${JSON.stringify(p.params)}${p.gravityScale !== 1 ? ` gravity x${p.gravityScale}` : ''}${p.boxBroadphase ? ' box broadphase' : ''} N=${p.N} seed ${p.seed}, ${p.iterations} iterations (${p.iterations + 1} sweeps), hessian ${p.hessian}, R=${p.R} dispatches per timed pass${p.engine ? `, engine ${p.engine}` : ''}`);
-    // A variant with the fused dual has one dual pass per step, and its colour times include the fused updates.
-    const D = p.dualPasses ?? p.iterations, fusedNote = D !== p.iterations ? ` (the step's ${D} dual pass: the others are fused into the colour dispatches timed above)` : '';
     for (const c of p.checkpoints) {
       L.push('', `### Step ${c.step}: ${c.n} bodies, ${c.coloursUsed} colours (${c.uncolored} uncoloured), ${c.pairSlots} pair slots of ${c.pairsRequired} broadphase pairs, ${c.contactPairs} in contact, ${c.totalPoints} contact points`, '');
       const e0 = c.emptyDispatch?.median;
       L.push('| Colour | Bodies | W_c (max points) | R_c (max manifolds) | Max loads | Σ points | t_c µs | (t_c − empty) / W_c ns |', '|---|---|---|---|---|---|---|---|');
       for (const d of c.direct) L.push(`| ${d.colour} | ${d.bodies} | ${d.W} | ${d.R} | ${d.loads} | ${d.points} | ${us(d.t)} | ${d.t && d.W && e0 !== undefined ? f(((d.t.median - e0) * 1e6) / d.W) : '–'} |`);
       L.push(`| tail (${c.colorTail}+, ${c.tailThreads} threads) | ${c.tail.bodies} in ${c.tail.colours} colours + ${c.tail.serialBodies} serial | ${c.tail.Wcrit} (critical path) | ${c.tail.Rcrit} | | ${c.tail.points} | ${us(c.tail.t)} | ${c.tail.t && c.tail.Wcrit ? f((c.tail.t.median * 1e6) / c.tail.Wcrit) : '–'} (t / W, no baseline) |`);
-      L.push('', `ΣW (direct W_c + tail critical path) = **${c.sumW}**, ΣR = **${c.sumR}**. Empty colour ${c.emptyColour ?? '–'}'s primal dispatch (the fixed cost): ${us(c.emptyDispatch)} µs. Dual update (pairs + ground): ${us(c.dual)} µs${fusedNote}.`);
-      if (c.check) L.push('', `Consistency: (I+1)·Σ_c t_c = ${f(c.check.primal * 1000)} µs; (I+1)·(Σ_c t_c + t_tail) + ${D === p.iterations ? 'I' : D}·t_dual = ${f(c.check.predicted * 1000)} µs; measured solve pass of steps ${c.step - (c.solvePass?.samples ?? 0)}–${c.step} = ${us(c.solvePass)} µs${c.check.measured ? ` (measured / predicted = ${f(c.check.measured / c.check.predicted)})` : ''}.`);
+      L.push('', `ΣW (direct W_c + tail critical path) = **${c.sumW}**, ΣR = **${c.sumR}**. Empty colour ${c.emptyColour ?? '–'}'s primal dispatch (the fixed cost): ${us(c.emptyDispatch)} µs. Dual update (pairs + ground): ${us(c.dual)} µs.`);
+      if (c.check) L.push('', `Consistency: (I+1)·Σ_c t_c = ${f(c.check.primal * 1000)} µs; (I+1)·(Σ_c t_c + t_tail) + I·t_dual = ${f(c.check.predicted * 1000)} µs; measured solve pass of steps ${c.step - (c.solvePass?.samples ?? 0)}–${c.step} = ${us(c.solvePass)} µs${c.check.measured ? ` (measured / predicted = ${f(c.check.measured / c.check.predicted)})` : ''}.`);
     }
     L.push('', '### Fits over the direct colours of every checkpoint (t in µs; b, e, g in ns)', '');
     for (const x of p.fits) {

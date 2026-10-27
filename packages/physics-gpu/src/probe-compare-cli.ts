@@ -1,8 +1,8 @@
-// pnpm bench:probe-compare [--p2 off.json on.json]... [--browser records.jsonl]...
-// Applies the fused dual's kill rules (probe-compare.ts) to measured results:
-// pairs of bench:probe JSON files (P2 off, then on, at the same I) and
-// bench:browser JSONL files of A/B records (base first). Prints markdown and
-// exits 1 if a rule kills.
+// pnpm bench:probe-compare [--p2 base.json variant.json]... [--browser records.jsonl]...
+// A base and a variant side by side (probe-compare.ts), from measured results:
+// pairs of bench:probe JSON files (P2 base, then variant, at the same I) and
+// bench:browser JSONL files of A/B records (base first). Prints markdown; it
+// judges nothing (exit 1 only on bad input).
 import { readFileSync } from 'node:fs';
 import { type BrowserCompare, compareBrowser, compareMarkdown, compareP2, type P2Compare } from './probe-compare.ts';
 import type { P2Result } from './probe.ts';
@@ -19,8 +19,7 @@ for (let i = 0; i < argv.length; i++) {
   if (argv[i] === '--p2') { p2.push(compareP2(readP2(argv[i + 1]!), readP2(argv[i + 2]!))); i += 2; }
   else if (argv[i] === '--browser') {
     for (const line of readFileSync(argv[++i]!, 'utf8').split('\n')) if (line.trim()) browser.push(compareBrowser(JSON.parse(line)));
-  } else throw new Error(`unknown argument ${argv[i]}; usage: --p2 off.json on.json | --browser records.jsonl`);
+  } else throw new Error(`unknown argument ${argv[i]}; usage: --p2 base.json variant.json | --browser records.jsonl`);
 }
-if (!p2.length && !browser.length) throw new Error('usage: pnpm bench:probe-compare [--p2 off.json on.json]... [--browser records.jsonl]...');
+if (!p2.length && !browser.length) throw new Error('usage: pnpm bench:probe-compare [--p2 base.json variant.json]... [--browser records.jsonl]...');
 console.log(compareMarkdown(p2, browser));
-if (p2.some((c) => c.kill.length) || browser.some((b) => b.kill)) process.exitCode = 1;

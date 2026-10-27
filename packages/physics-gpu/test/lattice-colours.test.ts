@@ -3,7 +3,7 @@
 // reference rule (physics-ref coloring.ts) on the GPU's own poses and graph,
 // with and without the fallback colours. Off, the engine is the default.
 // The reference rule through an impact, per mode: lattice-rule-<set>.test.ts.
-// lattice-physics.test.ts, lattice-impact-<mode>.test.ts and lattice-gates.test.ts
+// lattice-physics-<modes>.test.ts, lattice-impact-<mode>.test.ts and lattice-gates.test.ts
 // run the trajectories.
 import { describe, expect, it } from 'vitest';
 import { buildScenario } from '@tb/scenarios';

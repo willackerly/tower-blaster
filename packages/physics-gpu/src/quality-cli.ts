@@ -1,12 +1,12 @@
 // pnpm bench:quality [--channel chrome] [--headed] [--iterations 20] [--cases Q1,Q2,...] [--arms "spec;spec;..."]
 // The brief's quality protocol Q1-Q5 (quality.ts) on the GPU engine in a
 // browser, for a base and its variants: each case's metrics and gates, and
-// whether each variant is equivalent to the base (the first arm). The
-// default arms are avbd-gpu at --iterations, then with dualFusion=true, then
-// with dualFusion=true,solveContactsRW=true: the fused dual's quality gate on
-// the target machine, where its result need not be bit-identical (Metal's
-// relaxed math). Arms are engine specs as for pnpm bench (engines.ts),
-// separated by ';'. Writes results/quality-<time>.{json,md}; exits 1 if a
+// whether each variant is equivalent to the base (the first arm): a
+// variant's quality gate on the target machine, where its result need not be
+// bit-identical (Metal's relaxed math). The default arm is avbd-gpu at
+// --iterations alone (the gates only). Arms are engine specs as for pnpm
+// bench (engines.ts), separated by ';', e.g. --arms
+// "avbd-gpu:iterations=20;avbd-gpu:iterations=20,records=2". Writes results/quality-<time>.{json,md}; exits 1 if a
 // variant is not equivalent, or a run fails.
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { execSync } from 'node:child_process';
@@ -27,7 +27,7 @@ const want = (value('cases') ?? 'Q1,Q2,Q3,Q4,Q5').split(',').map((s) => s.trim()
 const cases = QUALITY_CASES.filter((c) => want.includes(c.id));
 if (cases.length !== want.length) throw new Error(`--cases: known cases are ${QUALITY_CASES.map((c) => c.id).join(', ')}, got ${want.join(', ')}`);
 const base = `avbd-gpu:iterations=${iterations}`;
-const specs = (value('arms') ?? `${base};${base},dualFusion=true;${base},dualFusion=true,solveContactsRW=true`).split(';').map((s) => s.trim()).filter(Boolean);
+const specs = (value('arms') ?? base).split(';').map((s) => s.trim()).filter(Boolean);
 const arms = specs.map((s) => probeEngine(s));
 for (const a of arms) if ((a.params.iterations ?? 10) !== iterations) throw new Error(`--arms: ${a.spec} runs ${a.params.iterations ?? 10} iterations, but the gates are for --iterations ${iterations}`);
 

@@ -6,7 +6,7 @@
 import { type BodyDesc, DEFAULT_RESTITUTION_COMBINE, emptySnapshot, type EngineInfo, inertiaOf, type InputEvent, massOf, type PhysicsEngine, type SceneDesc, type Snapshot, type Vec3 } from '@tb/engine-api';
 import { boundingRadius } from '@tb/geom';
 import { assertStorageFits, createDevice, isSoftwareAdapter, Readback } from '@tb/gpu';
-import { type AvbdParams, avbdVariant, checkColoring, checkDualFusion, checkGapSlop, checkRecords, checkRestitution, DEFAULT_AVBD, RESTITUTION_DEFAULTS } from '@tb/physics-ref';
+import { type AvbdParams, avbdVariant, checkColoring, checkGapSlop, checkRecords, checkRemoved, checkRestitution, DEFAULT_AVBD, RESTITUTION_DEFAULTS } from '@tb/physics-ref';
 import { Body, BodyProps, readField, RestSlot, Shape, SolverBody, writeStruct } from '@tb/schema';
 import { Broadphase } from './broadphase.ts';
 import { Coloring } from './coloring.ts';
@@ -58,12 +58,6 @@ export interface GpuEngineOptions {
    * a pile (their bounding spheres are 42x their volume); 2% fewer for cubes.
    */
   boxBroadphase?: boolean;
-  /**
-   * The solve kernel binds the contacts read_write (SolverDispatch.solveContactsRW; default
-   * false). With AvbdParams.dualFusion the fused dual update then writes the contact records in
-   * place instead of a side array; without, only the binding changes, to time it against.
-   */
-  solveContactsRW?: boolean;
 }
 
 /**
@@ -155,7 +149,8 @@ export class GpuAvbdEngine implements PhysicsEngine {
     // The same AvbdParams as the reference, switch on or off.
     checkRestitution(this.params);
     checkGapSlop(this.params);
-    checkDualFusion(this.params);
+    checkRemoved(this.params);
+    checkRemoved(opts);
     checkRecords(this.params);
     checkColoring(this.params);
     const check = (k: 'capacity' | 'spare' | 'pairsPerBody' | 'maxRadius' | 'colorTail' | 'tailThreads' | 'colorRounds', ok: (v: number) => boolean, what: string) => {
@@ -169,16 +164,14 @@ export class GpuAvbdEngine implements PhysicsEngine {
     check('colorTail', (v) => Number.isInteger(v) && v >= 0 && v <= 63, 'an integer from 0 to 63');
     check('tailThreads', (v) => Number.isInteger(v) && v >= 1 && v <= 256, 'an integer from 1 to 256');
     check('colorRounds', (v) => Number.isInteger(v) && v >= 2 && v % 2 === 0, 'an even integer >= 2');
-    for (const k of ['indirectColors', 'boxBroadphase', 'solveContactsRW'] as const) if (opts[k] !== undefined && typeof opts[k] !== 'boolean') throw new Error(`GpuAvbdEngine: GpuEngineOptions.${k} must be a boolean, got ${opts[k]}`);
+    for (const k of ['indirectColors', 'boxBroadphase'] as const) if (opts[k] !== undefined && typeof opts[k] !== 'boolean') throw new Error(`GpuAvbdEngine: GpuEngineOptions.${k} must be a boolean, got ${opts[k]}`);
     if (opts.hessian !== undefined && !HESSIAN_FORMS.includes(opts.hessian)) throw new Error(`GpuAvbdEngine: GpuEngineOptions.hessian must be one of ${HESSIAN_FORMS.join(', ')}, got ${opts.hessian}`);
     // Manifold records (AvbdParams.records, checked above): the solver's contact layout, in the register form only;
     // unset, records 1, or points where only they are implemented (gpuRecordsLayout).
     const records = gpuRecordsLayout(this.params, opts);
     if (records !== 0 && (opts.hessian ?? DEFAULT_DISPATCH.hessian) !== 'registers') throw new Error(`GpuAvbdEngine: AvbdParams.records ${records} needs GpuEngineOptions.hessian registers, got ${opts.hessian}`);
-    // The restitution pass reads and resets points or exact records (restitution.ts), not centre-friction records, and was
-    // never built with the fused dual.
+    // The restitution pass reads and resets points or exact records (restitution.ts), not centre-friction records.
     if (records === 2 && this.params.restitution) throw new Error('GpuAvbdEngine: AvbdParams.restitution is not implemented with AvbdParams.records 2 on the GPU yet');
-    if (this.params.dualFusion && this.params.restitution) throw new Error('GpuAvbdEngine: AvbdParams.restitution is not implemented with AvbdParams.dualFusion on the GPU yet');
     this.records = records;
     // Every param, but an opt-in switch and its params only while it is on (avbdVariant): result keys do not change.
     const variant: Record<string, number | boolean | string> = avbdVariant(this.params);
@@ -188,7 +181,7 @@ export class GpuAvbdEngine implements PhysicsEngine {
     // ran on records 1 (gpuRecordsLayout gave it points): the same floats, other timings.
     if (this.params.records !== undefined) variant.records = this.params.records;
     // Options that size the buffers or shape the dispatch change the work per step (e.g. the broadphase's key bits), so they are part of the variant.
-    for (const k of ['capacity', 'spare', 'pairsPerBody', 'maxRadius', 'colorTail', 'indirectColors', 'tailThreads', 'colorRounds', 'hessian', 'boxBroadphase', 'solveContactsRW'] as const) if (opts[k] !== undefined) variant[k] = opts[k];
+    for (const k of ['capacity', 'spare', 'pairsPerBody', 'maxRadius', 'colorTail', 'indirectColors', 'tailThreads', 'colorRounds', 'hessian', 'boxBroadphase'] as const) if (opts[k] !== undefined) variant[k] = opts[k];
     this.info = { name: 'avbd-gpu', variant, backend: 'webgpu', integrator: { substeps: 1 } };
   }
 
@@ -214,9 +207,6 @@ export class GpuAvbdEngine implements PhysicsEngine {
       colorTail: this.opts.colorTail ?? DEFAULT_DISPATCH.colorTail, indirectColors: this.opts.indirectColors ?? DEFAULT_DISPATCH.indirectColors,
       tailThreads: this.opts.tailThreads ?? defaultTailThreads(adapter ? isSoftwareAdapter(adapter) : false),
       hessian: this.opts.hessian ?? DEFAULT_DISPATCH.hessian,
-      // The fused dual and the contacts binding: present only when on, so the default dispatch is the one without them.
-      ...(this.params.dualFusion ? { dualFusion: true } : {}),
-      ...(this.opts.solveContactsRW ? { solveContactsRW: true } : {}),
     };
     this.scene = scene;
     const all = [...scene.bodies, ...scene.inputs.map((e) => e.body)];
