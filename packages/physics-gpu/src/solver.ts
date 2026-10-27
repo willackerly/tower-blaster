@@ -16,6 +16,23 @@
 //   displacements: setup() runs before initBodies(), so they are still in
 //   SolverBody.dp and phi, and setup reads them there.
 // - Post-stabilization is always on (the reference's default).
+// - The loaded-gap slop (AvbdParams.gapSlop, off by default) is the WGSL
+//   override gapSlop, a pipeline constant fixed per AvbdSolver (the engine's
+//   params are fixed at construction). At 0, its default, no constant is
+//   passed, so every pipeline is built from the same descriptor as before
+//   the port, and each use sits behind a test that is constant false (that
+//   the compiler drops it is inferred, not inspected; on SwiftShader the
+//   floats are those before the port, on 5 scenes in 7 runs). setup() marks
+//   a point it applies to with bit 1 of SolverContact.used (LOADED_GAP), so
+//   the contact stays 128 B, and evalC() recomputes the excused part,
+//   min(c0.x, gapSlop): on, that is two compares, an and, a min, a subtract
+//   and a select per evaluation, and no extra load (used is read anyway, for
+//   the end of a slot's points). In f32 an excused gap stops closing a few
+//   um up, by an amount that depends on where the scene is: a 25 um lift
+//   under the top 4 cubes of an 8-cube column ends 6.2 um up (3.5 um with the
+//   scene 6 m lower), where the reference's keeps closing, and one cube on
+//   the ground lifted 25 um ends 0.09 um up (engine-gapslop.test.ts). Which
+//   f32 quantity sets it is not traced.
 //
 // Each kernel binds at most 8 storage buffers (the WebGPU default limit).
 import type { CombineRule } from '@tb/engine-api';
@@ -28,6 +45,8 @@ const WG = 64;
 /** Most threads the tail workgroup can have (SolverDispatch.tailThreads): WebGPU's default limit per workgroup. */
 const MAX_TAIL = 256;
 const NONE = 0xffffffff;
+/** The largest finite f32. */
+const F32_MAX = 3.4028234663852886e38;
 /** Uniform buffer offset alignment for the per-colour dynamic uniforms. */
 const DYN = 256;
 /** The per-colour uniforms' passes: main iterations, stabilization, and with the fused dual the step's first fused main sweep and the later ones. */
@@ -40,6 +59,10 @@ ${wgslStruct(SolverBody)}
 ${wgslStruct(SolverContact)}
 ${wgslStruct(SolverParams)}
 const NONE = ${NONE}u;
+// SolverContact.used bit 1: a loaded point under the loaded-gap slop (setup() sets it, evalC() reads it).
+const LOADED_GAP = 2u;
+// AvbdParams.gapSlop, m (AvbdSolver's gapSlop). 0, the default, is off: every use is behind gapSlop > 0.0.
+override gapSlop: f32 = 0.0;
 
 fn qrot(q: vec4f, v: vec3f) -> vec3f {
   let t = 2.0 * cross(q.xyz, v);
@@ -76,6 +99,10 @@ fn evalC(ct: SolverContact, alpha: f32, dpA: vec3f, phiA: vec3f, dpB: vec3f, phi
   let t2 = cross(ct.n, ct.t1);
   // Start-of-step penetration is error (scaled by 1 - alpha); a gap is not.
   var c = vec3f(select(ct.c0.x, (1.0 - alpha) * ct.c0.x, ct.c0.x < 0.0), (1.0 - alpha) * ct.c0.y, (1.0 - alpha) * ct.c0.z);
+  // Loaded gaps ("Loaded gaps" in the reference's step()): in the main iterations (alpha 1: the primal's and
+  // the dual's, never the stabilization pass) a point setup() marked counts its start gap less
+  // min(c0.x, gapSlop), so never below 0 and the support never above the body's start.
+  if (gapSlop > 0.0 && alpha == 1.0 && (ct.used & LOADED_GAP) != 0u) { c.x = ct.c0.x - min(ct.c0.x, gapSlop); }
   c += vec3f(
     dot(ct.n, dpB) + dot(cross(ct.rbw, ct.n), phiB),
     dot(ct.t1, dpB) + dot(cross(ct.rbw, ct.t1), phiB),
@@ -302,6 +329,9 @@ fn setup(m: Manifold, a: u32, b: u32, mu: f32, dst: u32, old: u32, hasOld: bool)
     ct.ra = ra; ct.rb = rb; ct.raw = raw; ct.rbw = rbw;
     ct.c0 = vec3f(dot(d, n) + p.slop, dot(d, t1), dot(d, t2));
     if (carry) { ct.c0 = vec3f(ct.c0.x, ct.c0.y + slip.x, ct.c0.z + slip.y); }
+    // Loaded-gap slop (the reference's collide()): a point that bore load at the end of last step (its
+    // warm-started lambdaN < 0; 0 for a fresh point), not a rolling contact, with a gap at the start of this one.
+    if (gapSlop > 0.0 && !roll && ct.lambdaN < 0.0 && ct.c0.x > 0.0) { ct.used = 1u | LOADED_GAP; }
     ct.a = a; ct.b = b;
     contacts[dst + q] = ct;
   }
@@ -1720,7 +1750,19 @@ export class AvbdSolver {
   private cur = 0;
   private prevN = 0;
 
-  constructor(private readonly device: GPUDevice, readonly capacity: number, readonly maxPairs: number, private readonly b: SolverBuffers, private readonly dispatch: SolverDispatch = DEFAULT_DISPATCH, readonly records: RecordMode = 0) {
+  /**
+   * gapSlop: AvbdParams.gapSlop, m (a finite number >= 0; 0, the default, is
+   * off). It goes to the setup, primal and dual pipelines as the WGSL
+   * override gapSlop, an f32, so it is fixed for this solver; writeParams()
+   * does not take it. A value under f32's normal range (1.2e-38) may act as 0
+   * here (rounded or flushed); on the reference such a value changed no float
+   * of the kicked column either (1e-50 to 1e-38; 1e-20 changed 92 of 104,
+   * 2026-10-27), so the two agree in effect while EngineInfo.variant lists it.
+   * With records 1 or 2 it throws: their setup does not mark loaded gaps yet.
+   */
+  constructor(private readonly device: GPUDevice, readonly capacity: number, readonly maxPairs: number, private readonly b: SolverBuffers, private readonly dispatch: SolverDispatch = DEFAULT_DISPATCH, readonly records: RecordMode = 0, readonly gapSlop = 0) {
+    if (!(Number.isFinite(gapSlop) && gapSlop >= 0)) throw new Error(`AvbdSolver: gapSlop must be a finite number >= 0, got ${gapSlop}`);
+    if (gapSlop > 0 && records !== 0) throw new Error(`AvbdSolver: gapSlop is not implemented with records ${records} yet (the records' setup does not mark loaded gaps)`);
     if (!(Number.isInteger(dispatch.colorTail) && dispatch.colorTail >= 0 && dispatch.colorTail < MAX_COLORS)) throw new Error(`AvbdSolver: colorTail must be an integer from 0 to ${MAX_COLORS - 1}, got ${dispatch.colorTail}`);
     if (!(Number.isInteger(dispatch.tailThreads) && dispatch.tailThreads >= 1 && dispatch.tailThreads <= MAX_TAIL)) throw new Error(`AvbdSolver: tailThreads must be an integer from 1 to ${MAX_TAIL}, got ${dispatch.tailThreads}`);
     if (!HESSIAN_FORMS.includes(dispatch.hessian)) throw new Error(`AvbdSolver: hessian must be one of ${HESSIAN_FORMS.join(', ')}, got ${dispatch.hessian}`);
@@ -1771,20 +1813,26 @@ export class AvbdSolver {
       }
     };
     const B = b;
+    // The loaded-gap slop's pipeline constant, for the entry points that read it; left at its default (0) while off,
+    // so the pipelines are built exactly as without it. Past f32's range it is f32's largest: no gap is that large.
+    const gs = gapSlop > 0 ? { gapSlop: Math.min(gapSlop, F32_MAX) } : null;
+    const slop = (...eps: string[]): Record<string, Record<string, number>> => (gs ? Object.fromEntries(eps.map((ep) => [ep, gs])) : {});
     mk('avbd prepare', PREP, [['', 'prepare']], ['r', 'r', 'rw', 'rw', 'u'], [['prep', [B.bodies, B.props, B.spheres, B.sweep, this.uniform]]]);
     mk('avbd match', MATCH, [['', 'matchPairs']], ['r', 'r', 'r', 'r', 'r', 'r', 'rw', 'u'],
       [['match', [B.pairs, B.total, this.meta, this.pairHist, this.offHist, B.manifolds, B.prev, this.uniform]]]);
     mk('avbd setup', code.setup, [['', 'pairSetup', 'groundSetup']], ['r', 'r', 'r', 'r', 'r', 'r', 'rw', 'r', 'u'],
-      [['setup', [B.manifolds, B.groundManifolds, B.bodies, B.props, this.meta, B.prev, this.contacts, this.solver, this.uniform]]]);
+      [['setup', [B.manifolds, B.groundManifolds, B.bodies, B.props, this.meta, B.prev, this.contacts, this.solver, this.uniform]]],
+      slop('pairSetup', 'groundSetup'));
     mk('avbd init', INIT, [['', 'initBodies']], ['rw', 'rw', 'u'], [['init', [B.bodies, this.solver, this.uniform]]]);
     // The solve kernel: 8 storage buffers. The fused dual's side array takes colorStart's place among them (as a uniform copy).
     const side = this.fusion === 'side';
     const solveKinds: Kind[] = ['r', 'rw', dispatch.solveContactsRW ? 'rw' : 'r', 'r', side ? 'u' : 'r', 'r', 'r', 'r', 'u', 'ud', ...(side ? ['rw' as const] : [])];
     mk('avbd solve', code.solve, [['', 'primal', 'primalTail', ...(this.fusion === 'off' ? [] : ['visitOrder'])]], solveKinds,
       [['solve', [B.props, this.solver, this.contacts, B.order, side ? this.colorStarts! : B.colorStart, B.rowStart, B.rowLength, B.adjSlot, this.uniform, this.colorUniform, ...(side ? [this.duals!] : [])]]],
-      { primalTail: { tailThreads: dispatch.tailThreads } });
+      { ...slop('primal'), primalTail: { tailThreads: dispatch.tailThreads, ...gs } });
     mk('avbd dual', code.dual, [['', 'dualPairs', 'dualGround', 'velocities', 'finalize', ...(side ? ['dualPairsSide', 'dualGroundSide'] : [])]], ['rw', 'rw', 'rw', 'r', 'u', ...(side ? ['r' as const] : [])],
-      [['dual', [B.bodies, this.solver, this.contacts, this.meta, this.uniform, ...(side ? [this.duals!] : [])]]]);
+      [['dual', [B.bodies, this.solver, this.contacts, this.meta, this.uniform, ...(side ? [this.duals!] : [])]]],
+      slop('dualPairs', 'dualGround', ...(side ? ['dualPairsSide', 'dualGroundSide'] : [])));
   }
 
   /** Per-step uniforms; call once per step before prepare(). */

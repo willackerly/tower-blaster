@@ -153,7 +153,7 @@ export const SolverContact = defineStruct(
     ['n', 'vec3f', 'normal from a to b, fixed over the step'],
     ['mu', 'f32'],
     ['t1', 'vec3f', 'first tangent (t2 = n x t1)'],
-    ['used', 'u32', '1 if this point is in use'],
+    ['used', 'u32', 'bit 0: the point is in use; bit 1 (LOADED_GAP): it was loaded at the end of last step and the loaded-gap slop applies (AvbdParams.gapSlop)'],
     ['ra', 'vec3f', "anchor in a's frame (world for the ground)"],
     ['lambdaN', 'f32', 'normal force (<= 0 pushes apart)'],
     ['rb', 'vec3f', "anchor in b's frame"],

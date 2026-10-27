@@ -62,6 +62,11 @@ describe('GPU AVBD engine: manifold records: the option and its layouts, records
       expect(() => recordWgsl(3 as never)).toThrow('recordWgsl: records must be one of 0, 1, 2, got 3');
       expect(() => new GpuAvbdEngine({ records: 3 })).toThrow('AvbdParams.records must be one of 0, 1, 2, got 3');
       expect(() => new GpuAvbdEngine({ records: 1 }, { hessian: 'array' })).toThrow('GpuAvbdEngine: AvbdParams.records 1 needs GpuEngineOptions.hessian registers, got array');
+      // The records' setup does not mark loaded gaps yet (the reference applies gapSlop with records); off, both build.
+      for (const records of [1, 2]) {
+        expect(() => new GpuAvbdEngine({ records, gapSlop: 3e-5 })).toThrow(`GpuAvbdEngine: AvbdParams.gapSlop is not implemented with AvbdParams.records ${records} on the GPU yet`);
+        expect(() => new GpuAvbdEngine({ records, gapSlop: 0 })).not.toThrow();
+      }
       expect(new GpuAvbdEngine({ records: 2 }).info.variant).toMatchObject({ records: 2 });
       expect(new GpuAvbdEngine().info.variant).not.toHaveProperty('records');
       expect(() => new AvbdReferenceEngine({ records: 4 })).toThrow('AvbdParams.records must be one of 0, 1, 2, got 4');

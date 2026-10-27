@@ -102,7 +102,6 @@ export class GpuAvbdEngine implements PhysicsEngine {
     checkRestitution(this.params);
     if (this.params.restitution) throw new Error('GpuAvbdEngine: restitution is not implemented on the GPU yet (AvbdParams.restitution)');
     checkGapSlop(this.params);
-    if (this.params.gapSlop) throw new Error('GpuAvbdEngine: the loaded-gap slop is not implemented on the GPU yet (AvbdParams.gapSlop)');
     checkDualFusion(this.params);
     checkRecords(this.params);
     checkColoring(this.params);
@@ -122,6 +121,8 @@ export class GpuAvbdEngine implements PhysicsEngine {
     // Manifold records (AvbdParams.records, checked above): the solver's contact layout, in the register form only.
     const records = (this.params.records ?? 0) as RecordMode;
     if (records !== 0 && (opts.hessian ?? DEFAULT_DISPATCH.hessian) !== 'registers') throw new Error(`GpuAvbdEngine: AvbdParams.records ${records} needs GpuEngineOptions.hessian registers, got ${opts.hessian}`);
+    // The records' setup and walk do not mark loaded gaps yet; the reference applies gapSlop with records.
+    if (records !== 0 && this.params.gapSlop) throw new Error(`GpuAvbdEngine: AvbdParams.gapSlop is not implemented with AvbdParams.records ${records} on the GPU yet`);
     this.records = records;
     // Every param, but an opt-in switch and its params only while it is on (avbdVariant): result keys do not change.
     const variant: Record<string, number | boolean | string> = avbdVariant(this.params);
@@ -197,7 +198,7 @@ export class GpuAvbdEngine implements PhysicsEngine {
         bodies, props, spheres, sweep, prev, manifolds: np.manifolds, groundManifolds: np.groundManifolds,
         pairs: bp.pairs, total: bp.total, offsets: bp.offsets,
         order: col.order, colorStart: col.colorStart, dispatch: col.dispatch, rowStart: col.rowStart, rowLength: col.rowLength, adjSlot: col.adjSlot,
-      }, this.dispatch, this.records);
+      }, this.dispatch, this.records, p.gapSlop ?? 0);
       parts = { bodies, shapes, props, spheres, sweep, prev, bp, np, col, solver, readback: new Readback(device) };
     } catch (e) {
       thrown = e;

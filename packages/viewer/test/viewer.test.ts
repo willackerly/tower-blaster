@@ -970,8 +970,10 @@ describe('framing (view.*)', () => {
           return Math.max(...corners(...b).map((c) => { const p = transform(m, c); return p[3] > 0 ? Math.max(Math.abs(p[0] / p[3]), Math.abs(p[1] / p[3])) : Infinity; }));
         };
         const o = frame(...b, { pitch, fit: 1, fov });
-        if (o.distance === 8) return ndc(1, 1) <= 1 + 1e-9; // the 8 m floor: farther than needed
-        return Math.abs(ndc(1, 1) - 1) < 1e-6 && ndc(1.2, 16 / 9) < 1;
+        // The matrices are float32: a corner close to the eye (small w) reads ~1e-6 off in NDC.
+        const tol = 1e-4;
+        if (o.distance === 8) return ndc(1, 1) <= 1 + tol; // the 8 m floor: farther than needed
+        return Math.abs(ndc(1, 1) - 1) < tol && ndc(1.2, 16 / 9) < 1;
       }));
   });
 

@@ -408,11 +408,16 @@ describe('GPU AVBD engine: engine contract (friction rule, integrator)', () => {
     expect(keys.some((k) => k.startsWith('restitution'))).toBe(false);
   });
 
-  it('the loaded-gap slop (AvbdParams.gapSlop) throws until it is ported, is checked as in the reference, and while 0 stays out of the variant', () => {
-    expect(() => new GpuAvbdEngine({ gapSlop: 3e-5 })).toThrow('GpuAvbdEngine: the loaded-gap slop is not implemented on the GPU yet');
-    expect(() => new AvbdReferenceEngine({ gapSlop: -1 })).toThrow('AvbdParams.gapSlop must be a finite number >= 0, got -1');
-    expect(() => new GpuAvbdEngine({ gapSlop: -1 })).toThrow('AvbdParams.gapSlop must be a finite number >= 0, got -1');
+  it('the loaded-gap slop (AvbdParams.gapSlop) is accepted, checked as in the reference, and in the variant exactly while it is on, as there', () => {
+    // Its effect on the GPU: engine-gapslop.test.ts.
+    for (const g of [-1, -1e-5, Number.NaN, Number.POSITIVE_INFINITY]) {
+      expect(() => new AvbdReferenceEngine({ gapSlop: g })).toThrow(`AvbdParams.gapSlop must be a finite number >= 0, got ${g}`);
+      expect(() => new GpuAvbdEngine({ gapSlop: g })).toThrow(`AvbdParams.gapSlop must be a finite number >= 0, got ${g}`);
+    }
+    for (const p of [{}, { gapSlop: 0 }, { gapSlop: 3e-5 }, { gapSlop: 1 }]) expect(new GpuAvbdEngine(p).info.variant).toEqual(new AvbdReferenceEngine(p).info.variant);
     expect(Object.keys(new GpuAvbdEngine({ gapSlop: 0 }).info.variant)).toEqual(Object.keys(new GpuAvbdEngine().info.variant));
+    expect('gapSlop' in new GpuAvbdEngine().info.variant).toBe(false);
+    expect(new GpuAvbdEngine({ gapSlop: 3e-5 }).info.variant.gapSlop).toBe(3e-5);
   });
 
   it('free flight is semi-implicit Euler with one substep, as EngineInfo.integrator says', async (ctx) => {
