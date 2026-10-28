@@ -1,4 +1,4 @@
-// A viewer setup saved as JSON (the panel's Download / Load): the scene (Bounce's e included), the
+// A viewer setup saved as JSON (the panel's Download / Load): the scene (a scenario or a Keystone level; Bounce's e included), the
 // engine (its options: Bounce is restitution) and how it is stepped, the projectile, the look, the
 // camera and its framing. The file is self-contained: it
 // lists every scenario param and every real-look knob, so a later change of defaults does not
@@ -9,7 +9,7 @@ import { engineNames, parseSpec } from '@tb/bench';
 import { ENVS, GROUNDS, REAL_DEFAULTS, REAL_KNOBS, type RealKnob, type RealOptions, STONES } from '@tb/render';
 import { SCENARIOS } from '@tb/scenarios';
 import { type CameraPose, DEFAULT_FRAMING, type Framing } from './camera.ts';
-import { parseViewerConfig, type ViewerConfig, writeCamera, writeFraming } from './params.ts';
+import { defaultPresettle, parseViewerConfig, type ViewerConfig, writeCamera, writeFraming } from './params.ts';
 import { DEFAULT_PROJECTILE, type Projectile } from './projectile.ts';
 
 export const SCENE_FILE_FORMAT = 'tower-blaster/viewer-scene';
@@ -25,12 +25,13 @@ export interface SceneFile {
   /**
    * sleep: null = the scenario's own setting; scale: metres per cube (ViewerConfig.scale; absent in older files: the scenario's default);
    * bounce: the e every surface gets while the engine's restitution option is on (ViewerConfig.bounce; absent in older files: DEFAULT_BOUNCE).
+   * A level's scene has level (a Keystone level id, ViewerConfig.level) in place of scenario, params and seed.
    */
-  scene: { scenario: string; params: Record<string, number | boolean>; seed: number; sleep: boolean | null; scale: number; bounce: number };
+  scene: ({ scenario: string; params: Record<string, number | boolean>; seed: number } | { level: string }) & { sleep: boolean | null; scale: number; bounce: number };
   /** A @tb/bench engine spec, split up (avbd-gpu:iterations=20 is { name: 'avbd-gpu', options: { iterations: 20 } }; Bounce on is restitution: true). */
   engine: { name: string; options: Record<string, number | boolean | string> };
-  /** substeps: physics steps per 1/60 s (absent in older files: 1). */
-  loop: { mode: 'free' | 'frame'; pipeline: boolean; maxSteps: number; substeps: number };
+  /** substeps: physics steps per 1/60 s (absent in older files: 1); presettle: steps run before the scene shows (absent: the scene's default, defaultPresettle). */
+  loop: { mode: 'free' | 'frame'; pipeline: boolean; maxSteps: number; substeps: number; presettle: number };
   projectile: Projectile;
   /** Fire at the centre after this many steps; 0 = off. */
   autofire: number;
@@ -49,9 +50,9 @@ export function sceneFile(c: ViewerConfig, name: string, camera: CameraPose | nu
     version: SCENE_FILE_VERSION,
     name: name.trim(),
     savedAt: savedAt.toISOString(),
-    scene: { scenario: c.scenario, params: { ...SCENARIOS[c.scenario]!.defaults, ...c.params }, seed: c.seed, sleep: c.sleep, scale: c.scale, bounce: c.bounce },
+    scene: { ...(c.level ? { level: c.level } : { scenario: c.scenario, params: { ...SCENARIOS[c.scenario]!.defaults, ...c.params }, seed: c.seed }), sleep: c.sleep, scale: c.scale, bounce: c.bounce },
     engine: parseSpec(c.engine),
-    loop: { mode: c.loop, pipeline: c.pipeline, maxSteps: c.maxSteps, substeps: c.substeps },
+    loop: { mode: c.loop, pipeline: c.pipeline, maxSteps: c.maxSteps, substeps: c.substeps, presettle: c.presettle },
     projectile: { ...c.projectile },
     autofire: c.autofire,
     look: { preset: c.look, real: { ...REAL_DEFAULTS, ...c.real } },
@@ -60,7 +61,7 @@ export function sceneFile(c: ViewerConfig, name: string, camera: CameraPose | nu
   };
 }
 
-/** The download's file name: the name made safe, or the scenario and local time (S4-20261027-0130.json). */
+/** The download's file name: the name made safe, or the scenario (or level) and local time (S4-20261027-0130.json). */
 export function sceneFileName(name: string, scenario: string, at = new Date()): string {
   const slug = name.trim().toLowerCase().replace(/[^a-z0-9._-]+/g, '-').replace(/^[-.]+|[-.]+$/g, '').slice(0, 60);
   if (slug) return `${slug}.json`;
@@ -91,15 +92,21 @@ export function parseSceneFile(text: string): { config: ViewerConfig; name: stri
 
   const q = new URLSearchParams();
   const scene = object(root.scene, 'scene');
-  only(scene, ['scenario', 'params', 'seed', 'sleep', 'scale', 'bounce'], 'scene');
-  const scenario = str(scene.scenario, 'scene.scenario').toUpperCase();
-  const def = SCENARIOS[scenario];
-  if (!def) throw new Error(`unknown scenario ${scenario}; known: ${Object.keys(SCENARIOS).join(', ')}`);
-  q.set('scenario', scenario);
-  const params = object(scene.params ?? {}, 'scene.params');
-  only(params, Object.keys(def.defaults), `scene.params (${scenario})`);
-  for (const [k, v] of Object.entries(params)) q.set(`param.${k}`, String(typeof v === 'boolean' ? v : num(v, `scene.params.${k}`)));
-  if (scene.seed !== undefined) q.set('seed', String(int(scene.seed, 'scene.seed')));
+  if (scene.level !== undefined) {
+    // A level is the whole scene: the URL parser refuses a scenario, params or seed beside it.
+    only(scene, ['level', 'sleep', 'scale', 'bounce'], 'scene (a level)');
+    q.set('level', str(scene.level, 'scene.level'));
+  } else {
+    only(scene, ['scenario', 'params', 'seed', 'sleep', 'scale', 'bounce'], 'scene');
+    const scenario = str(scene.scenario, 'scene.scenario').toUpperCase();
+    const def = SCENARIOS[scenario];
+    if (!def) throw new Error(`unknown scenario ${scenario}; known: ${Object.keys(SCENARIOS).join(', ')}`);
+    q.set('scenario', scenario);
+    const params = object(scene.params ?? {}, 'scene.params');
+    only(params, Object.keys(def.defaults), `scene.params (${scenario})`);
+    for (const [k, v] of Object.entries(params)) q.set(`param.${k}`, String(typeof v === 'boolean' ? v : num(v, `scene.params.${k}`)));
+    if (scene.seed !== undefined) q.set('seed', String(int(scene.seed, 'scene.seed')));
+  }
   if (scene.sleep !== undefined && scene.sleep !== null) q.set('sleep', bool(scene.sleep, 'scene.sleep') ? '1' : '0');
   if (scene.scale !== undefined) q.set('scale', String(num(scene.scale, 'scene.scale')));
   if (scene.bounce !== undefined) q.set('bounce.e', String(num(scene.bounce, 'scene.bounce')));
@@ -119,11 +126,12 @@ export function parseSceneFile(text: string): { config: ViewerConfig; name: stri
 
   if (root.loop !== undefined) {
     const loop = object(root.loop, 'loop');
-    only(loop, ['mode', 'pipeline', 'maxSteps', 'substeps'], 'loop');
+    only(loop, ['mode', 'pipeline', 'maxSteps', 'substeps', 'presettle'], 'loop');
     if (loop.mode !== undefined) q.set('loop', str(loop.mode, 'loop.mode'));
     if (loop.pipeline !== undefined) q.set('pipeline', bool(loop.pipeline, 'loop.pipeline') ? '1' : '0');
     if (loop.maxSteps !== undefined) q.set('maxSteps', String(int(loop.maxSteps, 'loop.maxSteps')));
     if (loop.substeps !== undefined) q.set('substeps', String(int(loop.substeps, 'loop.substeps')));
+    if (loop.presettle !== undefined) q.set('presettle', String(int(loop.presettle, 'loop.presettle')));
   }
 
   if (root.projectile !== undefined) {
