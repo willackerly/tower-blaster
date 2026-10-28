@@ -140,19 +140,32 @@ async function main() {
   const aspect = () => (offscreen ? 640 / 400 : canvas.width / Math.max(1, canvas.height));
   const courses = () => Math.ceil(c.height / c.frame.unit);
 
+  /** Loads queued or in flight: the frame loop stops stepping the outgoing level and keeps drawing it. */
+  let loading = 0;
   function load(i: number, retry = false): Promise<void> {
-    return exclusive(() => loadNow(i, retry));
+    loading++;
+    return exclusive(() => loadNow(i, retry)).finally(() => { loading--; });
   }
 
   async function loadNow(i: number, retry: boolean) {
-    levelIdx = i;
     const t0 = performance.now();
-    c = compileLevel(LEVELS[i]!);
+    // Build and pre-settle the new level aside: the GPU's pre-settle spans many
+    // frames, and every frame reads the current level, so it swaps in whole.
+    const next = compileLevel(LEVELS[i]!);
+    const nextEngine = makeEngine(kind, next, device);
+    const nextDriver = new Driver(nextEngine, next, driverOptions(kind));
+    try {
+      await nextDriver.reset();
+    } catch (e) {
+      nextEngine.dispose();
+      throw e;
+    }
     engine?.dispose();
-    engine = makeEngine(kind, c, device);
+    levelIdx = i;
+    c = next;
+    engine = nextEngine;
+    driver = nextDriver;
     substeps = engine.info.integrator?.substeps ?? SUBSTEPS;
-    driver = new Driver(engine, c, driverOptions(kind));
-    await driver.reset();
     handle.timing = { loadMs: performance.now() - t0, stepMs: [] };
     descs = [...c.scene.bodies];
     source.reset(c.scene.bodies);
@@ -389,7 +402,7 @@ async function main() {
       renderer.setFx(0, null, regrowScales(c, done ? Infinity : regrowT, regrowBuf), !done);
       if (done) { regrowT = null; aimDirty = true; }
     }
-    const running = driver.session.phase === 'running';
+    const running = !loading && driver.session.phase === 'running';
     if (running) await exclusive(async () => {
       if (driver.session.phase !== 'running') return; // a load got in first
       const n = pacer.stepsThisFrame(frameMs, c.scene.dt, { fastForward: fastHeld || handle.fast, stepMs: stepMs.quantile(0.5), budgetMs: 10 });
