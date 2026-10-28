@@ -15,7 +15,7 @@ import { clampPitch, frame, rayThrough, viewProj, eyeOf, orbitAt, poseOf, type C
 import { alphaAt, newArrivals, newClock, newPacer, pauseLatch, runFree, stepsDue, taskYield, trackSimSpeed, Window } from './loop.ts';
 import type { V3 } from './math.ts';
 import { escapeHtml } from './html.ts';
-import { bounceBody, bounceOn, engineSpec, froudeSpeed, levelDef, parseViewerConfig, presetSearch, sceneTitle, toSearch, type ViewerConfig, viewerScene, withOption, worldEngineSpec } from './params.ts';
+import { bounceBody, bounceOn, engineSpec, froudeSpeed, levelOf, parseViewerConfig, presetSearch, sceneTitle, toSearch, type ViewerConfig, viewerScene, withOption, worldEngineSpec } from './params.ts';
 import { projectileBody, projectileShape, pushRadiusLimit } from './projectile.ts';
 import { mountControls } from './controls.ts';
 import { createDevice } from '@tb/gpu';
@@ -235,7 +235,7 @@ async function main() {
     source.reset(scene.bodies);
     // A level draws as the game draws it: crowns gold, heritage celadon, materials tinted (@tb/game structureTints).
     if (fxSlots) renderer.clearFx(0, fxSlots);
-    const tints = want.level ? structureTints(compileLevel(levelDef(want.level)!)) : null;
+    const def = levelOf(want), tints = def ? structureTints(compileLevel(def)) : null;
     if (tints) renderer.setFx(0, tints);
     fxSlots = handle.tinted = tints?.length ?? 0;
     const b = bounds(scene.bodies);

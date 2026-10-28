@@ -6,7 +6,8 @@
 // engine=avbd-gpu:restitution=true&bounce.e=0.7: Bounce, one feature under two keys: the switch is the
 // engine option restitution (an AvbdParams key, so it travels with the spec), bounce.e the e it then gives
 // every surface (the viewer's own, as no engine has one); see bounceOn and ViewerConfig.bounce;
-// level=L2: a Keystone level instead of a scenario, presettle=300: steps run before it shows, see ViewerConfig.level)
+// level=L2: a Keystone level instead of a scenario, level.def=<base64url JSON>: a level of your own (level-file.ts),
+// presettle=300: steps run before it shows, see ViewerConfig.level)
 import { parseSpec } from '@tb/bench';
 import type { BodyDesc, SceneDesc, Vec3 } from '@tb/engine-api';
 import { boundingRadius } from '@tb/geom';
@@ -15,6 +16,7 @@ import { type AvbdParams, froudeParams } from '@tb/physics-ref';
 import { LOOKS, parseRealOptions, type RealOptions, writeRealOptions } from '@tb/render';
 import { bounceBody, bounceScene, buildScenario, SCENARIOS } from '@tb/scenarios';
 import { type CameraPose, DEFAULT_FRAMING, type Framing, FRAMING_LIMITS } from './camera.ts';
+import { decodeLevelParam, encodeLevelParam } from './level-file.ts';
 import { MAX_STEPS_LIMIT } from './loop.ts';
 import { DEFAULT_PROJECTILE, parseProjectile, type Projectile, projectileShape, writeProjectile } from './projectile.ts';
 
@@ -26,6 +28,11 @@ export interface ViewerConfig {
    * null: the scenario. While set, scenario, params and seed are unused (and kept, for the panel).
    */
   level: string | null;
+  /**
+   * A level of your own (URL key level.def, a file's scene.levelDef; level-file.ts) whose id is level,
+   * loaded in place of the built-in level of that id if there is one; null: level is a built-in one.
+   */
+  customLevel: LevelDef | null;
   scenario: string;
   params: Record<string, number | boolean>;
   seed: number;
@@ -141,7 +148,7 @@ export const MAX_PRESETTLE = 6000;
 /** How much faster than the unit world a world at this scale moves (speeds, in cube units per second). */
 export const froudeSpeed = (scale: number) => 1 / Math.sqrt(scale);
 
-export const DEFAULT_CONFIG: ViewerConfig = { engine: 'avbd-gpu', level: null, scenario: 'S4', params: { N: 2000, F: 4, H: 12 }, seed: 1, sleep: null, autofire: 0, presettle: 0, offscreen: false, look: 'candy', real: {}, loop: 'free', pipeline: true, maxSteps: 1, projectile: DEFAULT_PROJECTILE, scale: 1, substeps: 1, camera: null, view: DEFAULT_FRAMING, bounce: DEFAULT_BOUNCE };
+export const DEFAULT_CONFIG: ViewerConfig = { engine: 'avbd-gpu', level: null, customLevel: null, scenario: 'S4', params: { N: 2000, F: 4, H: 12 }, seed: 1, sleep: null, autofire: 0, presettle: 0, offscreen: false, look: 'candy', real: {}, loop: 'free', pipeline: true, maxSteps: 1, projectile: DEFAULT_PROJECTILE, scale: 1, substeps: 1, camera: null, view: DEFAULT_FRAMING, bounce: DEFAULT_BOUNCE };
 
 export function parseViewerConfig(search: string): ViewerConfig {
   const q = new URLSearchParams(search);
@@ -154,13 +161,17 @@ export function parseViewerConfig(search: string): ViewerConfig {
     if (typeof params[k.slice(6)] === 'number' && !Number.isFinite(params[k.slice(6)])) throw new Error(`param ${k} is not a number: ${v}`);
   }
   const hasParams = [...q.keys()].some((k) => k.startsWith('param.'));
-  let level: string | null = null;
-  if (q.has('level')) {
+  let level: string | null = null, customLevel: LevelDef | null = null;
+  if (q.has('level') && q.has('level.def')) throw new Error('level and level.def both name the level: give one');
+  if (q.has('level.def')) {
+    customLevel = decodeLevelParam(q.get('level.def')!);
+    level = customLevel.id;
+  } else if (q.has('level')) {
     const def = levelDef(q.get('level')!);
     if (!def) throw new Error(`unknown level ${q.get('level')}; known: ${LEVELS.map((l) => l.id).join(', ')}`);
-    if (q.has('scenario') || hasParams || q.has('seed')) throw new Error('level takes no scenario, param.* or seed: the level is the scene');
     level = def.id;
   }
+  if (level && (q.has('scenario') || hasParams || q.has('seed'))) throw new Error('level takes no scenario, param.* or seed: the level is the scene');
   const sleep = q.get('sleep');
   const maxSteps = Number(q.get('maxSteps') ?? DEFAULT_CONFIG.maxSteps);
   if (!Number.isInteger(maxSteps) || maxSteps < 1 || maxSteps > MAX_STEPS_LIMIT) throw new Error(`maxSteps must be an integer from 1 to ${MAX_STEPS_LIMIT}: ${q.get('maxSteps')}`);
@@ -184,6 +195,7 @@ export function parseViewerConfig(search: string): ViewerConfig {
   return {
     engine: q.get('engine') ?? DEFAULT_CONFIG.engine,
     level,
+    customLevel,
     scenario,
     params: hasParams ? params : scenario === DEFAULT_CONFIG.scenario ? { ...DEFAULT_CONFIG.params } : {},
     seed: Number(q.get('seed') ?? 1),
@@ -233,7 +245,7 @@ export function parseCamera(raw: string | null): CameraPose | null {
 export const writeCamera = (p: CameraPose) => [...p.target, p.yaw, p.pitch, p.distance].join(',');
 
 export function toSearch(c: ViewerConfig): string {
-  const q = new URLSearchParams(c.level ? { level: c.level, engine: c.engine } : { scenario: c.scenario, engine: c.engine });
+  const q = new URLSearchParams(c.customLevel ? { 'level.def': encodeLevelParam(c.customLevel), engine: c.engine } : c.level ? { level: c.level, engine: c.engine } : { scenario: c.scenario, engine: c.engine });
   if (!c.level) {
     for (const [k, v] of Object.entries(c.params)) q.set(`param.${k}`, String(v));
     if (c.seed !== 1) q.set('seed', String(c.seed));
@@ -331,15 +343,19 @@ export { bounceBody, bounceScene };
  * with the config's sleep if it sets one.
  */
 export function viewerScene(c: ViewerConfig): SceneDesc {
-  const built = c.level ? compileLevel(levelDef(c.level)!).scene : buildScenario(c.scenario, c.params, c.seed);
+  const def = levelOf(c);
+  const built = def ? compileLevel(def).scene : buildScenario(c.scenario, c.params, c.seed);
   const s = worldScene(bounceOn(c.engine) ? bounceScene(built, c.bounce) : built, c.scale, c.substeps);
   return c.sleep === null ? s : { ...s, sleep: c.sleep };
 }
 
-/** What the HUD calls the scene: the level's id and name, or the scenario's title. */
-export const sceneTitle = (c: Pick<ViewerConfig, 'level' | 'scenario'>) => {
-  const d = c.level ? levelDef(c.level) : undefined;
-  return d ? `${d.id} ${d.name}` : SCENARIOS[c.scenario]!.title;
+/** The level a config loads (its own or the built-in one), or null for a scenario. */
+export const levelOf = (c: Pick<ViewerConfig, 'level' | 'customLevel'>): LevelDef | null => c.customLevel ?? (c.level ? levelDef(c.level) ?? null : null);
+
+/** What the HUD calls the scene: the level's id and name (a level of your own says so), or the scenario's title. */
+export const sceneTitle = (c: Pick<ViewerConfig, 'level' | 'customLevel' | 'scenario'>) => {
+  const d = levelOf(c);
+  return d ? `${d.id} ${d.name}${c.customLevel ? ' (custom)' : ''}` : SCENARIOS[c.scenario]!.title;
 };
 
 /** spec with one option set, or removed when value is undefined; the other options keep their order. */
