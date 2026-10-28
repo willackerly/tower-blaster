@@ -11,7 +11,7 @@ import { Body, BodyProps, readField, RestSlot, Shape, SolverBody, writeStruct } 
 import { BlastPass, type DueBlast } from './blast.ts';
 import { assertPairDispatch, Broadphase } from './broadphase.ts';
 import { Coloring } from './coloring.ts';
-import { gpuHealth } from './health.ts';
+import { DEFAULT_PAIRS_PER_BODY, gpuHealth } from './health.ts';
 import { Narrowphase } from './narrowphase.ts';
 import { restitutionWord } from './restitution.ts';
 import { AvbdSolver, DEFAULT_DISPATCH, defaultTailThreads, HESSIAN_FORMS, type HessianForm, type RecordMode, type SolverDispatch } from './solver.ts';
@@ -20,10 +20,11 @@ export interface GpuEngineOptions {
   /** Use this device instead of creating one (it is then not destroyed by dispose()). */
   device?: GPUDevice;
   /**
-   * Pair buffer size per body (default 16): the buffer holds pairsPerBody x capacity broadphase
-   * pairs, and a step that finds more drops the rest (GpuDiagnostics.pairsOverflowSteps). init()
-   * refuses more than one indirect dispatch covers, 64 x maxComputeWorkgroupsPerDimension
-   * (4,194,240 at the default limit; assertPairDispatch).
+   * Pair buffer size per body (default DEFAULT_PAIRS_PER_BODY, 16): the buffer holds pairsPerBody x
+   * capacity broadphase pairs, and a step that finds more drops the rest (GpuDiagnostics.pairsOverflowSteps,
+   * health()). init() refuses more than one indirect dispatch covers, 64 x maxComputeWorkgroupsPerDimension
+   * (4,194,240 at the default limit; assertPairDispatch). The viewer adds 256 spare bodies to the capacity,
+   * S15 sets 32 with the box test.
    */
   pairsPerBody?: number;
   /**
@@ -255,7 +256,7 @@ export class GpuAvbdEngine implements PhysicsEngine {
     const all = [...scene.bodies, ...spawnedBodies(scene.inputs)];
     if (this.opts.capacity !== undefined && this.opts.capacity < all.length) throw new Error(`GpuAvbdEngine: capacity ${this.opts.capacity} is below the scene's ${all.length} bodies and inputs`);
     this.capacity = Math.max(1, this.opts.capacity ?? all.length + (this.opts.spare ?? 0));
-    const maxPairs = (this.opts.pairsPerBody ?? 16) * this.capacity;
+    const maxPairs = (this.opts.pairsPerBody ?? DEFAULT_PAIRS_PER_BODY) * this.capacity;
     const p = this.params;
     this.rmax = all.reduce((m, b) => Math.max(m, boundingRadius(b.shape)), this.opts.maxRadius ?? 0);
     // Every overlapping (inflated) pair must lie in adjacent cells.
