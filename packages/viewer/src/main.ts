@@ -9,12 +9,13 @@ import { makeEngine, parseSpec } from '@tb/bench';
 import { type BodyDesc, type EngineInfo, type InputEvent, type PhysicsEngine, type Snapshot, spawnedBodies } from '@tb/engine-api';
 import { boundingRadius } from '@tb/geom';
 import { DEFAULT_AVBD } from '@tb/physics-ref';
-import { SCENARIOS } from '@tb/scenarios';
+import { structureTints } from '@tb/game';
+import { AVBD_GAP_SLOP, AVBD_ITERATIONS, compileLevel } from '@tb/keystone';
 import { clampPitch, frame, rayThrough, viewProj, eyeOf, orbitAt, poseOf, type CameraPose, type Orbit } from './camera.ts';
 import { alphaAt, newArrivals, newClock, newPacer, pauseLatch, runFree, stepsDue, taskYield, trackSimSpeed, Window } from './loop.ts';
 import type { V3 } from './math.ts';
 import { escapeHtml } from './html.ts';
-import { bounceBody, bounceOn, engineSpec, froudeSpeed, parseViewerConfig, presetSearch, toSearch, type ViewerConfig, viewerScene, withOption, worldEngineSpec } from './params.ts';
+import { bounceBody, bounceOn, engineSpec, froudeSpeed, levelOf, parseViewerConfig, presetSearch, sceneTitle, toSearch, type ViewerConfig, viewerScene, withOption, worldEngineSpec } from './params.ts';
 import { projectileBody, projectileShape, pushRadiusLimit } from './projectile.ts';
 import { mountControls } from './controls.ts';
 import { createDevice } from '@tb/gpu';
@@ -44,6 +45,10 @@ const ENGINES: Array<{ label: string; spec: string }> = [
 // early at the default 10; 20 cubes are rigid from 13 (physics-ref/test/collapse.test.ts).
 const GPU_ITERATIONS = [10, 20, 40];
 
+/** The AVBD settings Keystone plays and pins par lines at (@tb/keystone AVBD_ITERATIONS, AVBD_GAP_SLOP), one button away. */
+const KEYSTONE_AVBD = { iterations: AVBD_ITERATIONS, gapSlop: AVBD_GAP_SLOP } as const;
+const keystoneAvbd = (spec: string) => withOption(withOption(spec, 'iterations', KEYSTONE_AVBD.iterations), 'gapSlop', KEYSTONE_AVBD.gapSlop);
+
 const viewerEngine = (c: ViewerConfig): PhysicsEngine => makeEngine(worldEngineSpec(engineSpec(c.engine, c.projectile), c.scale));
 
 interface ViewerHandle {
@@ -62,6 +67,8 @@ interface ViewerHandle {
   resets: number;
   /** Steps submitted before the step before reported done, so queued behind it (loop=free pipelining; see runFree). */
   overlapped: number;
+  /** Body slots drawn with a tint (a level's roles and materials, as the game draws them); 0 for a scenario. */
+  tinted: number;
   /** The running engine's EngineInfo.variant (its params as built: Bounce's restitution, a world scale's scaling). */
   variant: EngineInfo['variant'];
   /** Where the camera is now. */
@@ -76,7 +83,7 @@ declare global { interface Window { __viewer: ViewerHandle } }
 const canvas = document.getElementById('c') as HTMLCanvasElement;
 const hud = document.getElementById('hud')!;
 const errorBox = document.getElementById('error')!;
-const handle: ViewerHandle = { status: 'loading', frames: 0, bodies: 0, awake: 0, stepIndex: 0, msPerStep: NaN, snapMs: NaN, resets: 0, overlapped: 0, variant: {}, camera: () => ({ target: [0, 0, 0], yaw: 0, pitch: 0, distance: 1 }), fire: () => {}, capture: async () => null, inputs: [] };
+const handle: ViewerHandle = { status: 'loading', frames: 0, bodies: 0, awake: 0, stepIndex: 0, msPerStep: NaN, snapMs: NaN, resets: 0, overlapped: 0, tinted: 0, variant: {}, camera: () => ({ target: [0, 0, 0], yaw: 0, pitch: 0, distance: 1 }), fire: () => {}, capture: async () => null, inputs: [] };
 window.__viewer = handle;
 
 function fail(e: unknown) {
@@ -120,6 +127,15 @@ function presets(current: string) {
       };
       box.appendChild(b);
     }
+    const k = document.createElement('button');
+    k.textContent = 'Keystone settings';
+    k.title = `${KEYSTONE_AVBD.iterations} iterations and gapSlop ${KEYSTONE_AVBD.gapSlop}: what the game plays and pins par lines at`;
+    if (Number(options.iterations) === KEYSTONE_AVBD.iterations && Number(options.gapSlop) === KEYSTONE_AVBD.gapSlop) k.className = 'on';
+    k.onclick = () => {
+      const c = parseViewerConfig(location.search);
+      location.search = toSearch({ ...c, engine: keystoneAvbd(c.engine) });
+    };
+    box.appendChild(k);
   }
   for (const p of PRESETS) {
     const b = document.createElement('button');
@@ -168,6 +184,8 @@ async function main() {
   let resetNote = '';
   // Largest projectile the engine accepts without a rebuild (pushRadiusLimit).
   let pushLimit = Infinity;
+  // Body slots with a tint set (a level's roles and materials), cleared on the next load.
+  let fxSlots = 0;
 
   async function reset() {
     resetting = true;
@@ -205,6 +223,8 @@ async function main() {
     engine = viewerEngine(want);
     pushLimit = pushRadiusLimit(engineSpec(want.engine, want.projectile), next);
     await engine.init(next);
+    // Settle before the scene shows (ViewerConfig.presettle); the steps are submitted back to back, then one read.
+    for (let i = 0; i < want.presettle * want.substeps; i++) await engine.step();
     const t0 = performance.now();
     const s = await engine.snapshot();
     config = want;
@@ -213,6 +233,11 @@ async function main() {
     events = [...scene.inputs];
     shapes = [...scene.bodies];
     source.reset(scene.bodies);
+    // A level draws as the game draws it: crowns gold, heritage celadon, materials tinted (@tb/game structureTints).
+    if (fxSlots) renderer.clearFx(0, fxSlots);
+    const def = levelOf(want), tints = def ? structureTints(compileLevel(def)) : null;
+    if (tints) renderer.setFx(0, tints);
+    fxSlots = handle.tinted = tints?.length ?? 0;
     const b = bounds(scene.bodies);
     box = b;
     orbit = want.camera ? orbitAt(want.camera, want.view.fov) : frame(b.min, b.max, want.view);
@@ -382,7 +407,7 @@ async function main() {
     const over = med > 7.5;
     hud.innerHTML = `
       <div class="big">${handle.bodies.toLocaleString()} bodies</div>
-      <div class="muted">${SCENARIOS[config.scenario]!.title} · ${escapeHtml(config.engine)} (${escapeHtml(engine.info.backend)})</div>
+      <div class="muted">${escapeHtml(sceneTitle(config))} · ${escapeHtml(config.engine)} (${escapeHtml(engine.info.backend)})</div>
       <div class="row"><span>physics ms/step</span><span class="${over ? 'warn' : ''}">${fmt(med)} <span class="muted">p95 ${fmt(p95)}</span></span></div>
       <div class="row muted"><span>step</span><span>${handle.stepIndex.toLocaleString()} · loop ${config.loop}${config.loop === 'free' && !config.pipeline ? ' · pipeline off' : ''}</span></div>
       <div class="row"><span>awake</span><span>${awake.toLocaleString()}</span></div>
@@ -399,6 +424,8 @@ async function main() {
   let pendingCapture: { resolve: (s: PixelStats | null) => void; keep: boolean } | null = null;
   handle.capture = (keep = false) => new Promise((resolve) => { pendingCapture = { resolve, keep }; });
   const dtMs = () => scene.dt * 1000;
+  /** The engine step autofire fires at: autofire steps after the scene shows. */
+  const autofireStep = () => (config.presettle + config.autofire) * config.substeps;
 
   /** Draw one frame at alpha, answer a pending capture, and update the frame counters. */
   async function draw(now: number, alpha: number) {
@@ -433,7 +460,7 @@ async function main() {
       const ts = performance.now();
       await engine.step();
       if (!engine.finish) stepMs.push(performance.now() - ts);
-      if (config.autofire && engine.stepIndex === config.autofire * config.substeps) handle.fire(0, 0);
+      if (config.autofire && engine.stepIndex === autofireStep()) handle.fire(0, 0);
     }
     if (n > 0 && engine.finish) {
       await engine.finish();
@@ -469,7 +496,7 @@ async function main() {
     async step() {
       await engine.step();
       stepsSinceFrame++;
-      if (config.autofire && engine.stepIndex === config.autofire * config.substeps) handle.fire(0, 0);
+      if (config.autofire && engine.stepIndex === autofireStep()) handle.fire(0, 0);
       handle.stepIndex = engine.stepIndex;
     },
     finish: async () => { await engine.finish?.(); },

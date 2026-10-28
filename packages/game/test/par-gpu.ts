@@ -37,6 +37,8 @@ export function parOnGpu(id: string, more: { before?(page: Page): Promise<void>;
       const t = summarize(stepMs), f = (x: number) => x.toFixed(2);
       console.log(`${id} on the GPU (${adapter}): ${live.phase}, ${live.step} steps; load ${(loadMs / 1000).toFixed(1)} s for ${settled} steps; live step ms median ${f(t.median)} p95 ${f(t.p95)} max ${f(t.max)} over ${t.n}`);
       expect({ phase: live.phase, strokes: live.strokes, heritageBroken: live.heritageBroken }).toEqual({ phase: 'cleared', strokes: def.par, heritageBroken: 0 });
+      // The page reports its own errors (fail()) rather than throwing them.
+      expect(await page.evaluate(() => ({ status: window.__game.status, error: window.__game.error }))).toEqual({ status: 'running', error: undefined });
       await more.after?.(page, shots);
       expect(errors).toEqual([]);
       await page.close();

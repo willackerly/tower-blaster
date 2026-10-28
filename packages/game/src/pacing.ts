@@ -8,6 +8,14 @@ export const SLOWMO_OUT = 0.3; // s to ramp back up
 export const SLOWMO_MAX = 1.5; // s at most before ramping back on its own
 export const FAST_SCALE = 4;
 
+/**
+ * Juice that changes the sim's pace on a collision. Both are off unless asked
+ * for: `?keystone.hitstop=1` freezes a few frames on the ammo's first contact, and
+ * `?keystone.slowmo=1` slows time while a crown falls fast.
+ */
+export interface PaceFeel { hitStop: boolean; slowMo: boolean }
+export const paceFeel = (q: URLSearchParams): PaceFeel => ({ hitStop: q.get('keystone.hitstop') === '1', slowMo: q.get('keystone.slowmo') === '1' });
+
 export interface PacerOptions {
   /** Hold Space: run the sim this many times faster (no slow motion). */
   fastForward?: boolean;
