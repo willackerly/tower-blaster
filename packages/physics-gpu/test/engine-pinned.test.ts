@@ -4,7 +4,11 @@
 // against digests captured on SwiftShader before the fused dual was removed
 // (at 8a9a308, PR #79: records 1 the default). The removal must not change a
 // float: the other bit-for-bit tests compare layouts and dispatch splits with
-// each other, this one compares each against the build before it.
+// each other, this one compares each against the build before it. The pair
+// buffer cases (pairsPerBody 2, which drops pairs every step, and the box
+// test) were captured at dd7727f, before the broadphase's sticky overflow
+// counters: they pin today's truncation too, so a deliberate change of what
+// an overflowing step drops re-pins them.
 import { describe, expect, it } from 'vitest';
 import type { AvbdParams } from '@tb/physics-ref';
 import { buildScenario } from '@tb/scenarios';
@@ -23,7 +27,7 @@ const hex = (x: number) => `0x${x.toString(16).padStart(8, '0')}`;
 // A ball into two 2x2x8 towers (it reaches them at about step 17): contacts from the first step, and colours that change.
 const knock = () => buildScenario('S5', { N: 64, F: 2, H: 8, street: 2, fireStep: 0, radius: 0.6, speed: 15 }, 1);
 
-type Case = { name: string; params?: Partial<AvbdParams>; opts?: Omit<GpuEngineOptions, 'device'>; bodies: string; contacts: string };
+type Case = { name: string; params?: Partial<AvbdParams>; opts?: Omit<GpuEngineOptions, 'device'>; bodies: string; contacts: string; overflows?: boolean };
 const CASES: Case[] = [
   { name: 'default (records 1)', bodies: '0x121b9efe', contacts: '0x1c7ce49d' },
   { name: 'records 0 (points)', params: { records: 0 }, bodies: '0x121b9efe', contacts: '0x61e66bb3' },
@@ -35,6 +39,9 @@ const CASES: Case[] = [
   { name: 'gapSlop 3e-5, records 2', params: { gapSlop: 3e-5, records: 2 }, bodies: '0x984364f5', contacts: '0xbb83c076' },
   { name: 'every colour in the tail', opts: { colorTail: 0 }, bodies: '0x121b9efe', contacts: '0x1c7ce49d' },
   { name: 'indirect colour dispatches', opts: { indirectColors: true }, bodies: '0x121b9efe', contacts: '0x1c7ce49d' },
+  { name: 'pair buffer overflow (pairsPerBody 2)', opts: { pairsPerBody: 2 }, bodies: '0xe85232f1', contacts: '0xb15a8daa', overflows: true },
+  { name: 'box broadphase', opts: { boxBroadphase: true }, bodies: '0x121b9efe', contacts: '0x7749ac74' },
+  { name: 'box broadphase, pair buffer overflow (pairsPerBody 2)', opts: { boxBroadphase: true, pairsPerBody: 2 }, bodies: '0xd83d6300', contacts: '0x43aa2cd5', overflows: true },
 ];
 
 describe('GPU AVBD engine: the floats pinned against the build before the fused dual was removed', () => {
@@ -43,6 +50,8 @@ describe('GPU AVBD engine: the floats pinned against the build before the fused 
     const r = await call('simulateGpu', knock(), 30, { iterations: 6, ...c.params }, 0, c.opts ?? {}, [], true);
     expect(r.error).toBeNull();
     expect(r.contacts!.used).toBeGreaterThan(10);
+    // The last step's pairs: dropped where the case says so, and only there.
+    expect(r.worst.pairsRequired > r.worst.pairsWritten).toBe(!!c.overflows);
     const got = { bodies: hex(digest(r.snaps.at(-1)!)), contacts: hex(r.contacts!.digest) };
     expect(got).toEqual({ bodies: c.bodies, contacts: c.contacts });
   });
