@@ -81,14 +81,14 @@ describe('GPU AVBD engine: S12 and S13 with the lattice colouring, 20 iterations
     const hit = snaps.find((s) => cols.some((cl) => leanDeg(Float64Array.from(cl.flatMap((i) => [s.pos[3 * i]!, s.pos[3 * i + 1]!, s.pos[3 * i + 2]!])), 20) >= 30));
     return hit ? hit.step * dt : null;
   };
-  it.for([[3, 0], [4, 0]] as const)('Q6 (colorMode %s, colorPriority %s): a 2x2x20 tower tilted 8 deg falls as the default does, and as the reference variant', { timeout: 600_000 }, async ([colorMode, colorPriority], ctx) => {
+  it.for([[3, 0], [4, 0]] as const)('Q6 (colorMode %s, colorPriority %s): a 2x2x20 tower tilted 8 deg falls as the hash colouring (colorMode 0) does, and as the reference variant', { timeout: 600_000 }, async ([colorMode, colorPriority], ctx) => {
     if (!gpu) return ctx.skip();
     const scene = tilted(), steps = 240, p = { colorMode, colorPriority, iterations };
     const shape = await call('latticeRun', scene, 60, p, {}, [1, 10, 20, 40, 60]);
     expect(shape.error).toBeNull();
     for (const c of shape.checks) expect(c.mismatches).toBe(0);
     expect(shape.checks.reduce((a, c) => a + c.tookPreference, 0)).toBeGreaterThan(0);
-    const g = await runGpu(scene, steps, p, 1), g0 = await runGpu(scene, steps, { iterations }, 1);
+    const g = await runGpu(scene, steps, p, 1), g0 = await runGpu(scene, steps, { colorMode: 0, iterations }, 1);
     const ref = await runRef(scene, steps, p, 1);
     const tg = t30(g.snaps, scene.dt), t0 = t30(g0.snaps, scene.dt), tr = t30(ref, scene.dt);
     expect(tg).not.toBeNull();

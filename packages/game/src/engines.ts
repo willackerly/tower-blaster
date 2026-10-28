@@ -19,7 +19,11 @@ export const DEFAULT_ENGINE: EngineKind = 'gpu';
 /**
  * The GPU solver's settings: the ones par lines are pinned at on the f64
  * reference (AVBD_ITERATIONS and AVBD_GAP_SLOP). The slop builds on Metal
- * and costs nothing measurable there (M5 Max, S4 10k, 2026-10-27).
+ * and costs nothing measurable there (M5 Max, S4 10k, 2026-10-27). The
+ * colouring is the GPU's default, colorMode 3 (physics-gpu gpuColorMode),
+ * where the reference pins with colorMode 0: only the update order differs,
+ * and every par line clears under either on both engines (the par-gpu
+ * tests run colorMode 3; perf-competition r3-colormode).
  */
 export const GPU_PARAMS = { iterations: AVBD_ITERATIONS, gapSlop: AVBD_GAP_SLOP } as const;
 
