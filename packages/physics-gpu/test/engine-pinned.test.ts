@@ -11,7 +11,12 @@
 // layout and with the slop. The pair buffer cases (pairsPerBody 2, which
 // drops pairs every step, and the box test; colorMode 0) were captured at dd7727f, before the broadphase's sticky overflow
 // counters: they pin today's truncation too, so a deliberate change of what
-// an overflowing step drops re-pins them.
+// an overflowing step drops re-pins them. More pair room than a run needs
+// changes no float (pairsPerBody 32, room for every pair of the knock scene's
+// 65 bodies, as the game sizes its levels): the buffer's size only bounds the
+// broadphase's write and its counters, caps the colouring's edges at twice
+// it, and places the contact and history records, so the bodies are the
+// default's and only the contact buffer's digest moves.
 import { describe, expect, it } from 'vitest';
 import type { AvbdParams } from '@tb/physics-ref';
 import { buildScenario } from '@tb/scenarios';
@@ -36,6 +41,7 @@ const CASES: Case[] = [
   { name: 'default (records 1, colorMode 3)', bodies: '0x8077fb07', contacts: '0xf65833cc' },
   { name: 'colorMode 3', params: { colorMode: 3 }, bodies: '0x8077fb07', contacts: '0xf65833cc' },
   { name: 'default, every colour in the tail', opts: { colorTail: 0 }, bodies: '0x8077fb07', contacts: '0xf65833cc' },
+  { name: 'default, room for every pair (pairsPerBody 32: 2080 slots for 65 bodies)', opts: { pairsPerBody: 32 }, bodies: '0x8077fb07', contacts: '0xfd1b33cc' },
   // The hash colouring alone (the default before): explicit colorMode 0.
   { name: 'colorMode 0 (records 1)', params: { colorMode: 0 }, bodies: '0x121b9efe', contacts: '0x1c7ce49d' },
   { name: 'colorMode 0, records 0 (points)', params: { colorMode: 0, records: 0 }, bodies: '0x121b9efe', contacts: '0x61e66bb3' },
