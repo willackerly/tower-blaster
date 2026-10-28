@@ -249,10 +249,15 @@ describe('real look options', () => {
     expect(() => parseRealOptions(new URLSearchParams({ 'real.groundMaterial': 'lava' }))).toThrow(/real.groundMaterial/);
     expect(() => parseRealOptions(new URLSearchParams({ 'real.env': 'moon' }))).toThrow(/real.env/);
   });
-  it('the hall: in the look only with env hall, scaled by hallSize; drawn only while the eye is inside it', () => {
+  it('the hall: in the look only with env hall, scaled by hallSize; drawn inside (1) and, with its exterior on, outside (2)', () => {
     expect(realLook().hall).toBeUndefined();
-    const l = realLook({ env: 'hall', hallSize: 0.5, hallGlass: 0.2, hallIron: 0.3 });
-    expect(l.hall).toEqual({ params: hallScaled(OLYMPIA, 0.5), glass: 0.2, iron: 0.3 });
+    const l = realLook({ env: 'hall', hallSize: 0.5, hallGlass: 0.2, hallIron: 0.3, hallExterior: 0 });
+    expect(l.hall).toEqual({ params: hallScaled(OLYMPIA, 0.5), glass: 0.2, iron: 0.3, exterior: false });
+    expect(realLook({ env: 'hall' }).hall!.exterior).toBe(true); // on by default
+    const ext = realLook({ env: 'hall', hallSize: 0.5 });
+    expect(hallUniforms(ext, 1, [0, 3, 33], 2).hallLook![0]).toBe(1);
+    expect(hallUniforms(ext, 1, [0, 3, 34], 2).hallLook![0]).toBe(2);
+    expect(hallUniforms(ext, 0.0234, [0, 2 + 40 / 0.0234, 0], 2).hallLook![0]).toBe(2);
     // Plank units (2.34 cm): the eye 1.7 m up at the centre is inside; 40 m up (above the 15.5 m crown) it is not.
     const u = hallUniforms(l, 0.0234, [0, 2 + 1.7 / 0.0234, 0], 2);
     expect(u.hallLook).toEqual([1, 0.0234, 0.2, 0.3]);

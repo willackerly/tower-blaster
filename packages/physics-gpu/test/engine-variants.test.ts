@@ -8,7 +8,7 @@ import type { SceneDesc } from '@tb/engine-api';
 import { nonFinite } from '@tb/metrics';
 import { type AvbdParams, AvbdReferenceEngine } from '@tb/physics-ref';
 import { buildScenario } from '@tb/scenarios';
-import { GpuAvbdEngine } from '../src/index.ts';
+import { GPU_DEFAULT_COLOR_MODE, GpuAvbdEngine, gpuColorMode } from '../src/index.ts';
 import type * as Drivers from './page.ts';
 import { call, gpu, toSnap } from './harness.ts';
 
@@ -28,7 +28,7 @@ describe('GPU AVBD engine: the opt-in variants together', () => {
   describe('records with the lattice colouring', () => {
     it('colorMode 3 and 4 (4 with colorPriority 1), and both with records 2: they run, and with records 2 the colouring is in effect', { timeout: 300_000 }, async (ctx) => {
       if (!gpu) return ctx.skip();
-      const unlatticed = await call('simulateGpu', knock(), 24, { iterations: 4, records: 2 }, 8, {});
+      const unlatticed = await call('simulateGpu', knock(), 24, { iterations: 4, records: 2, colorMode: 0 }, 8, {});
       expect(unlatticed.error).toBeNull();
       for (const params of [{ colorMode: 3 }, { colorMode: 4, colorPriority: 1 }, { colorMode: 3, records: 2 }, { colorMode: 4, records: 2 }]) {
         const base = await checked(knock(), 24, { iterations: 4, ...params }, 8);
@@ -40,13 +40,13 @@ describe('GPU AVBD engine: the opt-in variants together', () => {
     it('records 1 under colorMode 3 and 4, also with colorPriority 1: the point form\'s bodies under the same colouring, bit for bit', { timeout: 300_000 }, async (ctx) => {
       if (!gpu) return ctx.skip();
       // The record buffer is laid out unlike the contacts, so only the bodies compare (records.test.ts, for the default colouring).
-      // The point form is records 0 (unset is records 1 on the GPU).
+      // The point form is records 0 (unset is records 1 on the GPU), the hash colouring colorMode 0 (unset is 3 on the GPU).
       const run = async (params: Partial<AvbdParams>) => {
         const r = await call('simulateGpu', knock(), 24, { iterations: 4, ...params }, 8, {});
         expect(r.error, JSON.stringify(params)).toBeNull();
         return r;
       };
-      const unlatticed = await run({ records: 0 });
+      const unlatticed = await run({ records: 0, colorMode: 0 });
       for (const colorMode of [3, 4]) {
         const points = await run({ colorMode, records: 0 });
         // The colouring is in effect: the order, and so the rounding, is not the default's.
@@ -59,6 +59,21 @@ describe('GPU AVBD engine: the opt-in variants together', () => {
         }
       }
     });
+  });
+
+  describe('colorMode 3, the GPU default (gpuColorMode)', () => {
+    it('unset, the GPU colours with colorMode 3, given, as given; the variant lists colorMode whenever it is given, 0 included', () => {
+      expect(GPU_DEFAULT_COLOR_MODE).toBe(3);
+      expect(gpuColorMode({})).toBe(3);
+      for (const colorMode of [0, 1, 2, 3, 4]) expect(gpuColorMode({ colorMode })).toBe(colorMode);
+      expect([new GpuAvbdEngine().colorMode, new GpuAvbdEngine({ colorMode: 0 }).colorMode, new GpuAvbdEngine({ colorMode: 4 }).colorMode]).toEqual([3, 0, 4]);
+      // avbd-gpu (unset) and avbd-gpu:colorMode=0 are different engines; avbd-gpu:colorMode=3 keeps its key.
+      expect(new GpuAvbdEngine().info.variant).not.toHaveProperty('colorMode');
+      for (const colorMode of [0, 3, 4]) expect(new GpuAvbdEngine({ colorMode }).info.variant).toMatchObject({ colorMode });
+      // The reference is unchanged: unset and 0 are the hash colouring there, and no variant.
+      expect(new AvbdReferenceEngine({ colorMode: 0 }).info.variant).not.toHaveProperty('colorMode');
+    });
+    // Unset against colorMode 3 bit for bit, with records 0, 1 and 2 and the slop: engine-pinned.test.ts.
   });
 
   /** Worst |GPU - reference| position over sampled steps, both with the same params (the reference in f64). */

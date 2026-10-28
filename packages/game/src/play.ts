@@ -5,15 +5,15 @@
 // (level, shots) and replays headless. The game page calls playKeystone with
 // its own elements; the viewer calls it for rules=keystone, with hooks for its
 // dev panels (docs/design/viewer-superset.md, step C).
-import type { BodyDesc, PhysicsEngine, Vec3 } from '@tb/engine-api';
-import { type AmmoKind, type CompiledLevel, compileLevel, Driver, type Feedback, type LevelDef, type LevelScore, runSession, type Shot, shotToSpawn, snapshotHash, TIER_NAMES } from '@tb/keystone';
+import { type BodyDesc, type InputEvent, type PhysicsEngine, spawnedBodies, type Vec3 } from '@tb/engine-api';
+import { type AmmoKind, type CompiledLevel, compileLevel, Driver, type Feedback, type LevelDef, type LevelScore, type PerStep, runSession, type Shot, shotToSpawn, snapshotHash, TIER_NAMES } from '@tb/keystone';
 import { Window } from '@tb/metrics';
 import { clampPitch, eyeOf, frame, type Orbit, rayThrough, viewProj } from '@tb/render/camera';
 import type { PixelStats, Renderer, SnapshotSource } from '@tb/render';
 import { type Aimed, azFromYaw, pick, previewBeads, shotFor, SUBSTEPS } from './aim.ts';
 import { Synth, type Voice, voicesFor } from './audio.ts';
 import { driverOptions, type EngineKind, makeEngine } from './engines.ts';
-import { hudHtml, nextSelection, rackChips, resultHtml } from './hud.ts';
+import { hudHtml, nextSelection, rackChips, resultHtml, starsText } from './hud.ts';
 import { CameraJuice, contactJuice } from './juice.ts';
 import { Pacer, type PaceFeel } from './pacing.ts';
 import { beadOverlay, regrowDuration, regrowScales, structureTints, TINT } from './scene.ts';
@@ -68,6 +68,37 @@ export function newGameHandle(): GameHandle {
   };
 }
 
+/** What playLine did: ok when every shot was fired and the last has settled; else why it stopped. */
+export interface LineResult { ok: boolean; fired: number; message: string }
+
+const until = (ok: () => boolean) => new Promise<void>((res) => { const t = () => (ok() ? res() : setTimeout(t, 50)); t(); });
+const shotsText = (n: number) => `${n} shot${n === 1 ? '' : 's'}`;
+
+/**
+ * Plays a line of shots on a running page: from a fresh attempt (handle.retry) unless `fresh`
+ * (the load's own attempt), each fired through handle.fire, the path a click takes, once the game
+ * is ready. Stops when the level changes, is retried or ends before the line does, or the rack
+ * cannot fire a shot; resolves once the last shot has settled. `fired` reports each shot as it goes.
+ */
+export async function playLine(handle: GameHandle, shots: readonly Shot[], fresh = false, fired?: (n: number) => void): Promise<LineResult> {
+  const id = handle.level;
+  const stop = (n: number, message: string): LineResult => ({ ok: false, fired: n, message });
+  if (!fresh) await handle.retry();
+  for (let i = 0; i < shots.length; i++) {
+    await until(() => handle.ready || handle.result !== null || handle.level !== id || handle.status === 'error');
+    if (handle.level !== id || handle.status === 'error') return stop(i, `stopped after ${i} of ${shotsText(shots.length)}: the level changed`);
+    if (handle.result) return stop(i, `the level ended after ${i} of ${shotsText(shots.length)}`);
+    // Retry (R) mid-line starts a fresh attempt: the rest of the line was not made for it.
+    if (handle.strokes !== i) return stop(i, `stopped after ${i} of ${shotsText(shots.length)}: the attempt was restarted`);
+    if (!handle.fire(shots[i]!)) return stop(i, `shot ${i + 1} (${shots[i]!.ammo}) could not be fired`);
+    fired?.(i + 1);
+  }
+  await until(() => handle.result !== null || handle.level !== id || handle.status === 'error' || (handle.ready && handle.strokes === shots.length));
+  if (handle.level !== id || handle.status === 'error') return stop(shots.length, `stopped after ${shotsText(shots.length)}: the level changed`);
+  const r = handle.result;
+  return { ok: true, fired: shots.length, message: r ? `played ${shotsText(shots.length)}: ${r.stamp}, ${starsText(r.stars)}` : `played ${shotsText(shots.length)}; the level is still open` };
+}
+
 /**
  * Called by playKeystone so a page can watch play without changing it. A hook
  * sees the driver as it stands; it must not step it or push to its engine (a
@@ -102,6 +133,12 @@ export interface KeystoneEnv {
   /** Shows an error; play stops (handle.status is 'error'). */
   fail(e: unknown): void;
   hooks?: KeystoneHooks;
+  /**
+   * Input decided from the observed state (the weapons runtime): a fresh hook per level load and
+   * per replay, called after every step as runSession calls PlayOptions.perStep, so a replay
+   * sees the same input.
+   */
+  perStep?(c: CompiledLevel): PerStep;
 }
 
 /** Frame the structure; face the par line's launcher when it has one. */
@@ -150,8 +187,20 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
   const voices: Voice[] = [];
 
   let c!: CompiledLevel, driver!: Driver, orbit!: Orbit;
-  // Body descriptions in slot order: the structure, then ammo as fired.
+  let perStep: PerStep | null = null;
+  // Body descriptions in slot order: the structure, then what was spawned (ammo as fired, and the
+  // input hook's), in the order the engine applies spawns: by step, then push order.
   let descs: BodyDesc[] = [];
+  let spawns: InputEvent[] = [];
+  const spawned = (evs: InputEvent[]) => {
+    for (const ev of evs) {
+      let i = spawns.length;
+      while (i > 0 && spawns[i - 1]!.step > ev.step) i--;
+      spawns.splice(i, 0, ev);
+    }
+    descs = [...c.scene.bodies, ...spawnedBodies(spawns)];
+    fxSlots = descs.length;
+  };
   let fxSlots = 0;
   let regrowBuf = new Float32Array(0);
   let selected: AmmoKind | null = null;
@@ -195,6 +244,8 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     substeps = engine.info.integrator?.substeps ?? SUBSTEPS;
     handle.timing = { loadMs: performance.now() - t0, stepMs: [] };
     descs = [...c.scene.bodies];
+    spawns = [];
+    perStep = env.perStep?.(c) ?? null;
     source.reset(c.scene.bodies);
     source.update(driver.snapshot, descs);
     // Fresh effects: role tints, and every body at scale 0 for Regrow.
@@ -321,8 +372,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     const step = driver.engine.stepIndex;
     const fb = driver.fire(shot);
     onFeedback(fb);
-    descs.push(shotToSpawn(c.frame, shot, step).body);
-    fxSlots = descs.length;
+    spawned([shotToSpawn(c.frame, shot, step)]);
     aimed = null;
     beads = null;
     sync();
@@ -346,7 +396,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
   handle.replay = async (shots) => {
     const e = makeEngine(kind, c, device);
     try {
-      const r = await runSession(e, c, shots, driverOptions(kind));
+      const r = await runSession(e, c, shots, { ...driverOptions(kind), perStep: env.perStep?.(c) });
       return { step: r.steps, phase: r.session.phase, strokes: r.session.strokes, heritageBroken: sum(r.session.heritageBroken), hash: snapshotHash(r.snapshot) };
     } finally { e.dispose(); }
   };
@@ -468,6 +518,11 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
         handle.timing.stepMs.push(ms);
         onFeedback(fb);
         hooks.stepped?.(fb, driver);
+        const input = perStep?.(driver);
+        if (input?.length) {
+          driver.push(input);
+          spawned(input);
+        }
         if (pacer.frozen || driver.session.phase !== 'running') break;
       }
       if (n > 0) source.update(driver.snapshot, descs);

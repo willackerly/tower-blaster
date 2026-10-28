@@ -2804,7 +2804,7 @@ async function penumbraFrame(device: GPUDevice, c: PenumbraCase) {
  * A body pixel is one where the golden scene and the empty one differ outdoors.
  * allMax: max |hall - outdoor| over the whole frame (0 when the hall is not drawn).
  */
-export async function hallFrames(views: Array<{ eye: V3; target: V3; metres?: number }>, size: [number, number] = [320, 180]) {
+export async function hallFrames(views: Array<{ eye: V3; target: V3; metres?: number; exterior?: boolean }>, size: [number, number] = [320, 180]) {
   const { device } = await sharedDevice({ timestamps: false });
   device.pushErrorScope('validation');
   const scene = goldenScene(device);
@@ -2813,7 +2813,8 @@ export async function hallFrames(views: Array<{ eye: V3; target: V3; metres?: nu
   empty.reset(under);
   empty.update(snapshotOf(under), under);
   const base = { groundDetail: 0, hills: 0 };
-  const outdoor = { ...realLook(base), bloomMix: 0 }, hall = { ...realLook({ ...base, env: 'hall' }), bloomMix: 0 };
+  const outdoor = { ...realLook(base), bloomMix: 0 };
+  const hallLook = (exterior: boolean) => ({ ...realLook({ ...base, env: 'hall', hallExterior: exterior ? 1 : 0 }), bloomMix: 0 });
   const rend = goldenRenderer(device, scene, outdoor, size);
   const frame = async (look: LookParams, src: BodySource, f: FrameParams) => {
     rend.look = look;
@@ -2824,7 +2825,8 @@ export async function hallFrames(views: Array<{ eye: V3; target: V3; metres?: nu
   };
   const diff = (a: number[], b: number[]) => Math.max(...a.map((v, i) => Math.abs(v - b[i]!)));
   const out = [];
-  for (const { eye, target, metres = 1 } of views) {
+  for (const { eye, target, metres = 1, exterior = false } of views) {
+    const hall = hallLook(exterior);
     const viewProj = multiply(perspective(0.9, size[0] / size[1], 0.1 / metres, 400 / metres), lookAt(eye, target));
     const f: FrameParams = { viewProj, eye, groundY: 0, time: 1, dt: 0, alpha: 1, metres };
     const A = await frame(hall, scene, f), B = await frame(hall, empty, f), C = await frame(outdoor, scene, f), D = await frame(outdoor, empty, f);
@@ -2844,9 +2846,15 @@ export async function hallFrames(views: Array<{ eye: V3; target: V3; metres?: nu
       for (let j = -1; j <= 1; j++) for (let i = -1; i <= 1; i++) if (!ok(x + i, y + j)) return false;
       return true;
     };
-    let allMax = 0;
-    for (let y = 0; y < size[1]; y++) for (let x = 0; x < size[0]; x++) allMax = Math.max(allMax, diff(A(x, y), C(x, y)));
-    const s = { allMax, none: { n: 0, max: 0 }, opaque: { n: 0, changed: 0 }, glass: { n: 0, changed: 0 }, hidden: { n: 0, max: 0, outdoorMax: 0 }, front: { n: 0, max: 0 } };
+    let allMax = 0, changed = 0, hiddenBodies = 0, bodies = 0;
+    for (let y = 0; y < size[1]; y++) for (let x = 0; x < size[0]; x++) {
+      const d = diff(A(x, y), C(x, y));
+      allMax = Math.max(allMax, d);
+      if (d > 2) changed++;
+      // Pixels where the bodies show outdoors, and how many of them the hall leaves as without bodies.
+      if (isBody(x, y)) { bodies++; if (diff(A(x, y), B(x, y)) === 0) hiddenBodies++; }
+    }
+    const s = { allMax, changed: changed / (size[0] * size[1]), bodies, hiddenBodies, none: { n: 0, max: 0 }, opaque: { n: 0, changed: 0 }, glass: { n: 0, changed: 0 }, hidden: { n: 0, max: 0, outdoorMax: 0 }, front: { n: 0, max: 0 } };
     const opaque: number[] = [HALL_MAT.wall, HALL_MAT.iron, HALL_MAT.panel, HALL_MAT.rail], glass: number[] = [HALL_MAT.glass, HALL_MAT.lantern, HALL_MAT.screen];
     for (let y = 1; y < size[1] - 1; y++) for (let x = 1; x < size[0] - 1; x++) {
       const c = (i: number, j: number) => cls[j * size[0] + i]!, t = (i: number, j: number) => tOf[j * size[0] + i]!;

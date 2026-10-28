@@ -8,16 +8,17 @@
 // every surface (the viewer's own, as no engine has one); see bounceOn and ViewerConfig.bounce;
 // level=L2: a Keystone level instead of a scenario, level.def=<base64url JSON>: a level of your own (level-file.ts),
 // presettle=300: steps run before it shows, see ViewerConfig.level; rules=keystone: play the level by the game's
-// rules, with keystone.hitstop=1 and keystone.slowmo=1 for its pace juice, see ViewerConfig.rules;
+// rules, with keystone.hitstop=1 and keystone.slowmo=1 for its pace juice, see ViewerConfig.rules, and
+// keystone.shots=<line> to play on load, see ViewerConfig.shots;
 // snd=1 with snd.* knobs: collision sound, see parseSoundOptions in @tb/audio)
 import { DEFAULT_SOUND, parseSoundOptions, type SoundOptions, writeSoundOptions } from '@tb/audio';
 import { parseSpec } from '@tb/bench';
 import type { BodyDesc, SceneDesc, Vec3 } from '@tb/engine-api';
-import type { EngineKind, PaceFeel } from '@tb/game';
+import { checkLine, type EngineKind, GAME_LOOK, gameLevel, lineOf, lookName, paceFeel, type PaceFeel } from '@tb/game';
 import { boundingRadius } from '@tb/geom';
-import { AVBD_ITERATIONS, compileLevel, LEVELS, type LevelDef, PRESETTLE_STEPS } from '@tb/keystone';
+import { AVBD_ITERATIONS, compileLevel, LEVELS, type LevelDef, PRESETTLE_STEPS, type Shot, writeShots } from '@tb/keystone';
 import { type AvbdParams, froudeParams } from '@tb/physics-ref';
-import { LOOKS, parseRealOptions, type RealOptions, writeRealOptions } from '@tb/render';
+import { parseRealOptions, type RealOptions, writeRealOptions } from '@tb/render';
 import { bounceBody, bounceScene, buildScenario, SCENARIOS } from '@tb/scenarios';
 import { type CameraPose, DEFAULT_FRAMING, type Framing, FRAMING_LIMITS } from './camera.ts';
 import { decodeLevelParam, encodeLevelParam } from './level-file.ts';
@@ -104,6 +105,12 @@ export interface ViewerConfig {
   /** Keystone's pace juice (URL keys keystone.hitstop, keystone.slowmo: 0 or 1, rules=keystone only; both off by default, as in the game). */
   feel: PaceFeel;
   /**
+   * A line of shots to play once the level has loaded (URL key keystone.shots, @tb/keystone
+   * writeShots text, rules=keystone only; the level's rack must hold them), for sharing a repro;
+   * null: none, the dev panel offers the level's par line instead.
+   */
+  shots: Shot[] | null;
+  /**
    * Bounce's e (URL key bounce.e, 0 to 1, default DEFAULT_BOUNCE): while the engine spec
    * turns restitution on (bounceOn), every body, spawn and fired projectile and the ground
    * get this restitution (bounceScene), so under the scenes' combine rule (average) every
@@ -122,6 +129,10 @@ export interface ViewerConfig {
 export const DEFAULT_BOUNCE = 0.5;
 
 export const RULES = ['sandbox', 'keystone'] as const;
+/** Keys that only mean something under rules=keystone (the game page's). */
+export const KEYSTONE_KEYS = ['keystone.hitstop', 'keystone.slowmo', 'keystone.shots'] as const;
+/** The look when ?look= is absent: the sandbox's candy, or the game's own under its rules. */
+export const defaultLook = (rules: Rules) => (rules === 'keystone' ? GAME_LOOK : DEFAULT_CONFIG.look);
 export type Rules = (typeof RULES)[number];
 
 /** scale's accepted range, and the most substeps. */
@@ -167,7 +178,7 @@ export const MAX_PRESETTLE = 6000;
 /** How much faster than the unit world a world at this scale moves (speeds, in cube units per second). */
 export const froudeSpeed = (scale: number) => 1 / Math.sqrt(scale);
 
-export const DEFAULT_CONFIG: ViewerConfig = { engine: 'avbd-gpu', level: null, customLevel: null, scenario: 'S4', params: { N: 2000, F: 4, H: 12 }, seed: 1, sleep: null, autofire: 0, presettle: 0, offscreen: false, look: 'candy', real: {}, loop: 'free', pipeline: true, maxSteps: 1, projectile: DEFAULT_PROJECTILE, scale: 1, substeps: 1, camera: null, view: DEFAULT_FRAMING, bounce: DEFAULT_BOUNCE, rules: 'sandbox', feel: { hitStop: false, slowMo: false }, sound: DEFAULT_SOUND };
+export const DEFAULT_CONFIG: ViewerConfig = { engine: 'avbd-gpu', level: null, customLevel: null, scenario: 'S4', params: { N: 2000, F: 4, H: 12 }, seed: 1, sleep: null, autofire: 0, presettle: 0, offscreen: false, look: 'candy', real: {}, loop: 'free', pipeline: true, maxSteps: 1, projectile: DEFAULT_PROJECTILE, scale: 1, substeps: 1, camera: null, view: DEFAULT_FRAMING, bounce: DEFAULT_BOUNCE, rules: 'sandbox', feel: { hitStop: false, slowMo: false }, shots: null, sound: DEFAULT_SOUND };
 
 export function parseViewerConfig(search: string): ViewerConfig {
   const q = new URLSearchParams(search);
@@ -186,16 +197,15 @@ export function parseViewerConfig(search: string): ViewerConfig {
     customLevel = decodeLevelParam(q.get('level.def')!);
     level = customLevel.id;
   } else if (q.has('level')) {
-    const def = levelDef(q.get('level')!);
-    if (!def) throw new Error(`unknown level ${q.get('level')}; known: ${LEVELS.map((l) => l.id).join(', ')}`);
-    level = def.id;
+    level = gameLevel(q.get('level')!).id;
   }
   if (level && (q.has('scenario') || hasParams || q.has('seed'))) throw new Error('level takes no scenario, param.* or seed: the level is the scene');
   const sleep = q.get('sleep');
   const maxSteps = Number(q.get('maxSteps') ?? DEFAULT_CONFIG.maxSteps);
   if (!Number.isInteger(maxSteps) || maxSteps < 1 || maxSteps > MAX_STEPS_LIMIT) throw new Error(`maxSteps must be an integer from 1 to ${MAX_STEPS_LIMIT}: ${q.get('maxSteps')}`);
-  const look = q.get('look') ?? DEFAULT_CONFIG.look;
-  if (!LOOKS[look]) throw new Error(`unknown look ${look}; known: ${Object.keys(LOOKS).join(', ')}`);
+  const rules = (q.get('rules') ?? 'sandbox') as Rules;
+  if (!RULES.includes(rules)) throw new Error(`rules must be ${RULES.join(' or ')}: ${q.get('rules')}`);
+  const look = lookName(q.get('look') ?? defaultLook(rules));
   // maxSteps is a frame-loop option, so a URL that sets it without a loop keeps meaning what it did before loop=free.
   const loop = q.get('loop') ?? (q.has('maxSteps') ? 'frame' : DEFAULT_CONFIG.loop);
   if (loop !== 'free' && loop !== 'frame') throw new Error(`loop must be free or frame: ${loop}`);
@@ -211,18 +221,14 @@ export function parseViewerConfig(search: string): ViewerConfig {
   if (!Number.isInteger(presettle) || presettle < 0 || presettle > MAX_PRESETTLE) throw new Error(`presettle must be a whole number of steps from 0 to ${MAX_PRESETTLE}: ${q.get('presettle')}`);
   const bounce = Number(q.get('bounce.e') ?? DEFAULT_BOUNCE);
   if (!(bounce >= 0 && bounce <= 1) || q.get('bounce.e') === '') throw new Error(`bounce.e must be a number from 0 to 1: ${q.get('bounce.e')}`);
-  const rules = (q.get('rules') ?? 'sandbox') as Rules;
-  if (!RULES.includes(rules)) throw new Error(`rules must be ${RULES.join(' or ')}: ${q.get('rules')}`);
-  const flag = (k: string) => {
-    const v = q.get(k);
-    if (v === null) return false;
-    if (rules !== 'keystone') throw new Error(`${k} applies to rules=keystone`);
-    if (v !== '0' && v !== '1') throw new Error(`${k} must be 0 or 1: ${v}`);
-    return v === '1';
-  };
-  const feel: PaceFeel = { hitStop: flag('keystone.hitstop'), slowMo: flag('keystone.slowmo') };
+  // The game's own keys, read as the game page reads them (@tb/game params.ts).
+  for (const k of KEYSTONE_KEYS) if (q.has(k) && rules !== 'keystone') throw new Error(`${k} applies to rules=keystone`);
+  const feel = paceFeel(q);
+  const shots = rules === 'keystone' && level ? lineOf(levelOf({ level, customLevel })!, q.get('keystone.shots')) : null;
+  // The game page's name for the GPU solver.
+  const engine = rules === 'keystone' && q.get('engine') === 'gpu' ? 'avbd-gpu' : q.get('engine') ?? DEFAULT_CONFIG.engine;
   const c: ViewerConfig = {
-    engine: q.get('engine') ?? DEFAULT_CONFIG.engine,
+    engine,
     level,
     customLevel,
     scenario,
@@ -246,6 +252,7 @@ export function parseViewerConfig(search: string): ViewerConfig {
     bounce,
     rules,
     feel,
+    shots,
   };
   if (rules === 'keystone') checkKeystone(c);
   return c;
@@ -275,6 +282,7 @@ export function checkKeystone(c: ViewerConfig): void {
     autofire: c.autofire !== 0, loop: c.loop !== DEFAULT_CONFIG.loop, pipeline: c.pipeline !== DEFAULT_CONFIG.pipeline, maxSteps: c.maxSteps !== DEFAULT_CONFIG.maxSteps,
   }).filter(([, v]) => v).map(([k]) => k);
   if (off.length) throw new Error(`rules=keystone plays the level as the game does, so ${off.join(', ')} must be left at the level's default`);
+  if (c.shots) checkLine(levelOf(c)!, c.shots);
 }
 
 /** URL keys view.pitch, view.fit, view.fov (camera.ts Framing; degrees, multiple of a fit, degrees); absent ones are the defaults. */
@@ -314,7 +322,7 @@ export function toSearch(c: ViewerConfig): string {
   if (c.autofire) q.set('autofire', String(c.autofire));
   if (c.presettle !== defaultPresettle(c.level)) q.set('presettle', String(c.presettle));
   if (c.offscreen) q.set('offscreen', '1');
-  if (c.look !== DEFAULT_CONFIG.look) q.set('look', c.look);
+  if (c.look !== defaultLook(c.rules)) q.set('look', c.look);
   writeRealOptions(c.real, q);
   writeSoundOptions(c.sound, q);
   if (c.loop !== DEFAULT_CONFIG.loop) q.set('loop', c.loop);
@@ -329,6 +337,7 @@ export function toSearch(c: ViewerConfig): string {
   if (c.rules !== DEFAULT_CONFIG.rules) q.set('rules', c.rules);
   if (c.feel.hitStop) q.set('keystone.hitstop', '1');
   if (c.feel.slowMo) q.set('keystone.slowmo', '1');
+  if (c.shots?.length) q.set('keystone.shots', writeShots(c.shots));
   return `?${q}`;
 }
 

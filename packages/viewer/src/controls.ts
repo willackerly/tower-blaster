@@ -11,8 +11,10 @@ import { buildScenario, SCENARIOS } from '@tb/scenarios';
 import { type CameraPose, type Framing, FRAMING_LIMITS } from './camera.ts';
 import { escapeHtml } from './html.ts';
 import { levelIssues, levelJson, parseLevelDef } from './level-file.ts';
-import { autoSubsteps, AVBD_ENGINES, bounceOn, checkKeystone, DEFAULT_BOUNCE, DEFAULT_CONFIG, defaultPresettle, keystoneEngine, levelDef, MAX_PRESETTLE, MAX_SUBSTEPS, type Rules, SCALE_LIMITS, type ViewerConfig, withOption } from './params.ts';
-import { parseProjectile, type Projectile, projectileMass } from './projectile.ts';
+import { autoSubsteps, AVBD_ENGINES, bounceOn, checkKeystone, DEFAULT_BOUNCE, DEFAULT_CONFIG, defaultLook, defaultPresettle, keystoneEngine, levelDef, MAX_PRESETTLE, MAX_SUBSTEPS, type Rules, SCALE_LIMITS, type ViewerConfig, withOption } from './params.ts';
+import { blastWeight, checkBlast } from '@tb/engine-api';
+import { DEFAULT_GRENADE, FUSES, GRENADE_LIMITS, type GrenadeSpec } from '@tb/weapons';
+import { GRENADE_BLAST_KEYS, GRENADE_NUMBERS, parseProjectile, type Projectile, projectileMass } from './projectile.ts';
 import { parseSceneFile, sceneFile, sceneFileName } from './scene-file.ts';
 import { autoSoundMaterial } from './sound-config.ts';
 
@@ -41,6 +43,21 @@ export interface ControlsHooks {
   camera(): CameraPose | null;
   /** Switch to this config, loaded from a file named name. */
   load(next: ViewerConfig, name: string): void;
+}
+
+/** The grenade's fields in the panel: label and step, by URL key (grenade.<key>). */
+export const GRENADE_FIELDS: Record<(typeof GRENADE_NUMBERS)[number] | (typeof GRENADE_BLAST_KEYS)[number], [string, string]> = {
+  delay: ['fuse delay (s)', 'any'], prox: ['proximity (m)', 'any'], arm: ['arms after (s)', 'any'],
+  radius: ['blast radius (m)', 'any'], impulse: ['impulse (N·s/m²)', 'any'], core: ['flat core (x radius)', 'any'], falloff: ['falloff power', '1'],
+  maxDv: ['max kick (m/s)', 'any'], maxSpeed: ['speed cap (m/s)', 'any'],
+};
+
+/** What a grenade's blast does to a scene cube (1 kg, 1 m) at a few distances, at scale 1. */
+export function grenadeSummary(g: GrenadeSpec): string {
+  const b = checkBlast({ centre: [0, 0, 0], ...g.blast });
+  const kick = (d: number) => (d < b.radius ? Math.min(b.maxDv, b.impulse * blastWeight(b, d) * 1.5) : 0);
+  const at = [1, 0.5 * b.radius, 0.8 * b.radius].map((d) => +d.toPrecision(2));
+  return `a cube at ${at.map((d) => `${d} m gets ${kick(d).toPrecision(2)}`).join(', ')} m/s`;
 }
 
 /** Linear albedo to a colour input's #rrggbb (sRGB) and back, to 3 decimals. */
@@ -80,6 +97,9 @@ export function underKeystone(c: ViewerConfig, feel: PaceFeel): ViewerConfig {
   return next;
 }
 
+/** The look under other rules: a look left at its rules' default (no look key in the URL) becomes the new rules' default, as editing the URL's rules would. */
+const lookFor = (c: ViewerConfig, rules: Rules) => (c.look === defaultLook(c.rules) ? defaultLook(rules) : c.look);
+
 /** The scene picker's value for a Keystone level (scenarios are their own id). */
 export const levelChoice = (id: string) => `level:${id}`;
 /** The scene picker's value for the level of your own the config holds (ViewerConfig.customLevel). */
@@ -116,11 +136,13 @@ export function proposeScene(c: ViewerConfig, scenario: string, params: Record<s
     const level = picked?.def.id ?? null;
     // Keystone's rules: the level as the game plays it, whatever the world fields say (the panel hides them).
     if (picked && rules.rules === 'keystone') {
-      const next = underKeystone({ ...c, level, customLevel: picked.custom ? picked.def : null }, rules.feel);
+      // A line of shots is the level's it was made on: another level drops it.
+      const same = level === c.level && (picked.custom ? picked.def === c.customLevel : !c.customLevel);
+      const next = underKeystone({ ...c, level, customLevel: picked.custom ? picked.def : null, shots: same ? c.shots : null, look: lookFor(c, 'keystone') }, rules.feel);
       return { ok: true, config: next, bodies: compileLevel(picked.def).scene.bodies.length };
     }
     // Rules are a level's: anything else is the sandbox.
-    c = { ...c, rules: 'sandbox', feel: { hitStop: false, slowMo: false } };
+    c = { ...c, rules: 'sandbox', feel: { hitStop: false, slowMo: false }, shots: null, look: lookFor(c, 'sandbox') };
     const settle = presettle ?? defaultPresettle(level);
     if (!Number.isInteger(settle) || settle < 0 || settle > MAX_PRESETTLE) throw new Error(`settle steps must be a whole number from 0 to ${MAX_PRESETTLE}`);
     if (picked) {
@@ -224,6 +246,12 @@ export function mountControls(root: HTMLElement, hooks: ControlsHooks): { refres
       ${field('size', 'size (m)', 0, 'step="0.1" min="0.1" max="20"')}
       ${field('mass', 'mass (kg)', '', 'step="any" min="0.01"')}
       ${field('speed', 'speed (m/s)', 0, 'step="1" min="0" max="500"')}
+      <label class="f"><span>weapon</span><select name="weapon"><option value="">none</option><option value="grenade">grenade</option></select></label>
+      <div class="grenade">
+        <label class="f"><span>fuse</span><select name="grenade.fuse">${FUSES.map((f) => `<option value="${f}"${f === DEFAULT_GRENADE.fuse ? ' selected' : ''}>${f === 'proxTimer' ? 'proximity, then delay' : f === 'prox' ? 'proximity' : 'timer'}</option>`).join('')}</select></label>
+        ${field('grenade.ground', 'ground sets it off', DEFAULT_GRENADE.ground)}
+        ${(Object.entries(GRENADE_FIELDS) as [keyof typeof GRENADE_FIELDS, [string, string]][]).map(([k, [label, step]]) => field(`grenade.${k}`, label, k in DEFAULT_GRENADE.blast ? DEFAULT_GRENADE.blast[k as keyof typeof DEFAULT_GRENADE.blast] : DEFAULT_GRENADE[k as (typeof GRENADE_NUMBERS)[number]], `step="${step}" min="${GRENADE_LIMITS[k][0]}" max="${GRENADE_LIMITS[k][1]}"`)).join('')}
+      </div>
       <div class="out muted"></div>
     </form>
     <form id="look-form">
@@ -257,6 +285,7 @@ export function mountControls(root: HTMLElement, hooks: ControlsHooks): { refres
       <label class="f"><span>name</span><input type="text" name="name" placeholder="optional" maxlength="120"></label>
       <div class="buttons"><button type="submit">Download</button><button type="button" name="load">Load…</button></div>
       <input type="file" name="file" accept=".json,application/json" hidden>
+      <div class="starts muted">start over: <a href="./" title="the default scene (default-scene.ts), what the viewer opens with">default scene</a> · <a href="./?defaults=factory" title="the built-in setup, without the default scene">factory setup</a></div>
       <div class="out muted"></div>
     </form>`;
   const sceneForm = root.querySelector<HTMLFormElement>('#scene-form')!;
@@ -332,17 +361,26 @@ export function mountControls(root: HTMLElement, hooks: ControlsHooks): { refres
     rebuildButton.disabled = !p.ok;
   }
 
+  const grenadeBox = projForm.querySelector<HTMLElement>('.grenade')!;
   function projectile(): Projectile {
     const q = new URLSearchParams();
     q.set('proj', input(projForm, 'shape').value);
     for (const k of ['size', 'mass', 'speed']) q.set(`proj.${k}`, input(projForm, k).value);
+    const weapon = input(projForm, 'weapon').value;
+    grenadeBox.hidden = weapon !== 'grenade';
+    if (weapon) {
+      q.set('proj.weapon', weapon);
+      q.set('grenade.fuse', input(projForm, 'grenade.fuse').value);
+      q.set('grenade.ground', (input(projForm, 'grenade.ground') as HTMLInputElement).checked ? '1' : '0');
+      for (const k of Object.keys(GRENADE_FIELDS)) q.set(`grenade.${k}`, input(projForm, `grenade.${k}`).value);
+    }
     return parseProjectile(q);
   }
 
   function showMass(p: Projectile) {
     const m = projectileMass(p);
     (input(projForm, 'mass') as HTMLInputElement).placeholder = `auto ${m.toPrecision(3)}`;
-    projOut.textContent = `${m.toPrecision(3)} kg, ${(m * p.speed).toPrecision(3)} kg·m/s (a cube is 1 kg)`;
+    projOut.textContent = `${m.toPrecision(3)} kg, ${(m * p.speed).toPrecision(3)} kg·m/s (a cube is 1 kg)${p.grenade ? `; ${grenadeSummary(p.grenade)}` : ''}`;
     projOut.classList.remove('warn');
   }
 
@@ -503,6 +541,16 @@ export function mountControls(root: HTMLElement, hooks: ControlsHooks): { refres
     input(projForm, 'size').value = String(p.size);
     input(projForm, 'mass').value = p.mass === null ? '' : String(p.mass);
     input(projForm, 'speed').value = String(p.speed);
+    // The grenade's fields keep their values while the weapon is off, so switching it back on restores them.
+    input(projForm, 'weapon').value = p.weapon ?? '';
+    grenadeBox.hidden = p.weapon !== 'grenade';
+    const g = p.grenade;
+    if (g) {
+      input(projForm, 'grenade.fuse').value = g.fuse;
+      (input(projForm, 'grenade.ground') as HTMLInputElement).checked = g.ground;
+      for (const k of GRENADE_NUMBERS) input(projForm, `grenade.${k}`).value = String(g[k]);
+      for (const k of GRENADE_BLAST_KEYS) input(projForm, `grenade.${k}`).value = String(g.blast[k]);
+    }
     showMass(p);
     input(lookForm, 'look').value = c.look;
     realBox.hidden = c.look !== 'real';

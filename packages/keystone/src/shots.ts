@@ -60,6 +60,41 @@ export function checkShot(s: Shot): void {
   assertInt('az', s.az, 0, 719); assertInt('y', s.y, 0, 4000); assertInt('yaw', s.yaw, -1800, 1800); assertInt('pitch', s.pitch, -890, 890);
 }
 
+/** Each ammo's fields after its name in shot text (writeShots), in this order. */
+const SHOT_FIELDS: Record<AmmoKind, readonly string[]> = {
+  marble: ['az', 'y', 'yaw', 'pitch', 'power'],
+  cannonball: ['az', 'y', 'yaw', 'pitch', 'power'],
+  cue: ['x', 'y', 'z', 'dir', 'power'],
+  drop: ['x', 'z'],
+};
+
+/**
+ * Shots as URL-safe text, for sharing a line: `ammo.f1.f2...` per shot (fields in SHOT_FIELDS
+ * order, integers as the shot holds them), shots joined by `_`; e.g. `cannonball.60.8.0.20.95_drop.4.-8`.
+ */
+export function writeShots(shots: readonly Shot[]): string {
+  return shots.map((s) => [s.ammo, ...SHOT_FIELDS[s.ammo].map((k) => (s as unknown as Record<string, number>)[k])].join('.')).join('_');
+}
+
+/** The shots writeShots wrote, each checked (checkShot); throws naming the shot at fault. Empty text is no shots. */
+export function readShots(text: string): Shot[] {
+  if (text === '') return [];
+  return text.split('_').map((part, i) => {
+    const [ammo, ...vals] = part.split('.');
+    const where = `shot ${i + 1} (${part})`;
+    if (!AMMO_KINDS.includes(ammo as AmmoKind)) throw new Error(`${where}: ammo must be one of ${AMMO_KINDS.join(', ')}`);
+    const fields = SHOT_FIELDS[ammo as AmmoKind];
+    if (vals.length !== fields.length) throw new Error(`${where}: ${ammo} takes ${fields.length} fields (${fields.join('.')}), got ${vals.length}`);
+    const shot: Record<string, unknown> = { ammo };
+    fields.forEach((k, j) => {
+      if (!/^-?\d+$/.test(vals[j]!)) throw new Error(`${where}: ${k} must be an integer, not ${vals[j] || 'empty'}`);
+      shot[k] = Number(vals[j]);
+    });
+    try { checkShot(shot as unknown as Shot); } catch (e) { throw new Error(`${where}: ${(e as Error).message}`); }
+    return shot as unknown as Shot;
+  });
+}
+
 /** Launcher position in metres for azimuth quanta az at height quanta y. */
 export function launcherPos(f: ShotFrame, az: number, y: number): Vec3 {
   const a = az * 0.5 * DEG, r = f.launcher.radius * f.pitch * f.unit;

@@ -8,7 +8,7 @@ describe('drawing', () => {
   it('bench:render completes and reports every case (numbers discarded)', async (ctx) => {
     if (!gpu) return ctx.skip();
     const r = await call('runRenderBench', { width: 160, height: 90, counts: [800], warmup: 1, batches: 2, batchFrames: 1, profiledFrames: 1, sparkPool: 1024, dustWarmup: 40 });
-    expect(r.cases.map((c) => `${c.world}:${c.variant}`)).toEqual(['near', 'far'].flatMap((w) => ['full', 'no-shadow', 'no-post', 'no-sparks', 'no-heat', 'no-ao', 'no-seam', 'fan', 'cube', 'flat-fan', 'flat-cube', 'real', 'real-no-stone', 'real-stone-off', 'real-step1', 'real-no-lod', 'real-no-floor-sky', 'real-flat-ground', 'real-no-pcss', 'real-4096', 'real-dust', 'real-hall'].map((v) => `${w}:${v}`)));
+    expect(r.cases.map((c) => `${c.world}:${c.variant}`)).toEqual(['near', 'far'].flatMap((w) => ['full', 'no-shadow', 'no-post', 'no-sparks', 'no-heat', 'no-ao', 'no-seam', 'fan', 'cube', 'flat-fan', 'flat-cube', 'real', 'real-no-stone', 'real-stone-off', 'real-step1', 'real-no-lod', 'real-no-floor-sky', 'real-flat-ground', 'real-no-pcss', 'real-4096', 'real-dust', 'real-hall', 'real-hall-out'].map((v) => `${w}:${v}`)));
     for (const c of r.cases) {
       expect(c.bodies).toBe(800);
       expect(c.frameMs).toBeGreaterThan(0);

@@ -133,6 +133,13 @@ describe('probe-compare: bench:browser A/B records', () => {
     expect(compareBrowser(rec('S4', { records: 0 }, { records: 0, colorMode: 3 }, 8.5, 7.8)).note).toBeNull();
     expect(compareMarkdown([], [compareBrowser(rec('S4', { records: 0 }, {}, 8.5, 7.8))])).toContain('| the base and the variant solve different contact layouts');
   });
+  it('notes colorMode 0 on one side only (unset is colorMode 3 on the GPU): two colourings', () => {
+    for (const [base, arm] of [[{ colorMode: 0 }, {}], [{}, { colorMode: 0, records: 2 }]]) {
+      expect(compareBrowser(rec('S4', base!, arm!, 8.5, 7.8)).note).toBe('the base and the variant colour differently (colorMode 0 against the default, colorMode 3)');
+    }
+    expect(compareBrowser(rec('S4', { colorMode: 0 }, { colorMode: 0, records: 2 }, 8.5, 7.8)).note).toBeNull();
+    expect(compareBrowser(rec('S4', {}, { colorMode: 3 }, 8.5, 7.8)).note).toBeNull();
+  });
   it('names each engine by what differs from the defaults, and gives the median saving of a cell timed more than once', () => {
     // Variants as GpuAvbdEngine reports them: every AvbdParams entry, the opt-in switches only while on.
     const gpu = (o: Record<string, unknown>) => ({ ...DEFAULT_AVBD, iterations: 20, ...o });

@@ -10,10 +10,11 @@ import { engineNames, parseSpec } from '@tb/bench';
 import { ENVS, GROUNDS, REAL_DEFAULTS, REAL_KNOBS, type RealKnob, type RealOptions, STONES } from '@tb/render';
 import { SCENARIOS } from '@tb/scenarios';
 import { type CameraPose, DEFAULT_FRAMING, type Framing } from './camera.ts';
-import type { LevelDef } from '@tb/keystone';
+import { AMMO_KINDS, type AmmoKind, type LevelDef, readShots, type Shot, writeShots } from '@tb/keystone';
 import { encodeLevelParam, parseLevelDef } from './level-file.ts';
 import { parseViewerConfig, type ViewerConfig, writeCamera, writeFraming } from './params.ts';
-import { DEFAULT_PROJECTILE, type Projectile } from './projectile.ts';
+import { DEFAULT_GRENADE, type GrenadeSpec } from '@tb/weapons';
+import { DEFAULT_PROJECTILE, parseGrenade, type Projectile, writeGrenade } from './projectile.ts';
 
 export const SCENE_FILE_FORMAT = 'tower-blaster/viewer-scene';
 export const SCENE_FILE_VERSION = 1;
@@ -36,15 +37,21 @@ export interface SceneFile {
   engine: { name: string; options: Record<string, number | boolean | string> };
   /** substeps: physics steps per 1/60 s (absent in older files: 1); presettle: steps run before the scene shows (absent: the scene's default, defaultPresettle). */
   loop: { mode: 'free' | 'frame'; pipeline: boolean; maxSteps: number; substeps: number; presettle: number };
-  projectile: Projectile;
+  /** shape, size, mass, speed, and weapon (absent: none) naming one of weapons. */
+  projectile: Omit<Projectile, 'grenade'>;
+  /**
+   * The weapons a projectile can carry, by name, every one listed whether fired or not (absent in older
+   * files: the defaults). Only grenade so far (@tb/weapons GrenadeSpec), in cube units at scale 1.
+   */
+  weapons: { grenade: GrenadeSpec };
   /** Fire at the centre after this many steps; 0 = off. */
   autofire: number;
   /** real: every knob of the real look, kept whatever the preset. */
   look: { preset: string; real: RealOptions };
   /** Where the camera starts; null = framed to fit the scene. */
   camera: CameraPose | null;
-  /** Present only under Keystone's rules (ViewerConfig.rules and feel); absent: the sandbox. */
-  rules?: { mode: 'keystone'; hitstop: boolean; slowmo: boolean };
+  /** Present only under Keystone's rules (ViewerConfig.rules, feel and shots: the line to play on load, absent for none); absent: the sandbox. */
+  rules?: { mode: 'keystone'; hitstop: boolean; slowmo: boolean; shots?: Shot[] };
   /** How the scene is framed without a camera, and the field of view (ViewerConfig.view; absent, as in files saved before it: today's DEFAULT_FRAMING, so their saved camera shows at 45 rather than 50 degrees). */
   view: Framing;
   /** Collision sound: on, material and every knob (absent in older files: off, the defaults). */
@@ -61,14 +68,19 @@ export function sceneFile(c: ViewerConfig, name: string, camera: CameraPose | nu
     scene: { ...(c.customLevel ? { levelDef: c.customLevel } : c.level ? { level: c.level } : { scenario: c.scenario, params: { ...SCENARIOS[c.scenario]!.defaults, ...c.params }, seed: c.seed }), sleep: c.sleep, scale: c.scale, bounce: c.bounce },
     engine: parseSpec(c.engine),
     loop: { mode: c.loop, pipeline: c.pipeline, maxSteps: c.maxSteps, substeps: c.substeps, presettle: c.presettle },
-    projectile: { ...c.projectile },
+    projectile: projectileOnly(c.projectile),
+    weapons: { grenade: structuredClone(c.projectile.grenade ?? DEFAULT_GRENADE) },
     autofire: c.autofire,
     look: { preset: c.look, real: { ...REAL_DEFAULTS, ...c.real } },
     camera,
     view: { ...c.view },
-    ...(c.rules === 'keystone' ? { rules: { mode: c.rules, hitstop: c.feel.hitStop, slowmo: c.feel.slowMo } } : {}),
+    ...(c.rules === 'keystone' ? { rules: { mode: c.rules, hitstop: c.feel.hitStop, slowmo: c.feel.slowMo, ...(c.shots?.length ? { shots: c.shots.map((x) => ({ ...x })) } : {}) } } : {}),
     sound: { ...c.sound },
   };
+}
+
+function projectileOnly({ grenade: _, ...p }: Projectile): Omit<Projectile, 'grenade'> {
+  return p;
 }
 
 /** The download's file name: the name made safe, or the scenario (or level) and local time (S4-20261027-0130.json). */
@@ -97,7 +109,7 @@ export function parseSceneFile(text: string): { config: ViewerConfig; name: stri
   if (root.format !== SCENE_FILE_FORMAT) throw new Error(`not a tower-blaster viewer scene (format should be "${SCENE_FILE_FORMAT}")`);
   if (typeof root.version !== 'number' || root.version > SCENE_FILE_VERSION) throw new Error(`scene file version ${String(root.version)} is newer than this viewer reads (${SCENE_FILE_VERSION}); pull main`);
   if (root.version !== SCENE_FILE_VERSION) throw new Error(`unknown scene file version ${root.version}`);
-  only(root, ['format', 'version', 'name', 'savedAt', 'scene', 'engine', 'loop', 'projectile', 'autofire', 'look', 'camera', 'view', 'rules', 'sound'], 'the file');
+  only(root, ['format', 'version', 'name', 'savedAt', 'scene', 'engine', 'loop', 'projectile', 'weapons', 'autofire', 'look', 'camera', 'view', 'rules', 'sound'], 'the file');
   const name = root.name === undefined ? '' : str(root.name, 'name');
 
   const q = new URLSearchParams();
@@ -149,10 +161,29 @@ export function parseSceneFile(text: string): { config: ViewerConfig; name: stri
 
   if (root.projectile !== undefined) {
     const p = object(root.projectile, 'projectile');
-    only(p, Object.keys(DEFAULT_PROJECTILE), 'projectile');
+    only(p, [...Object.keys(DEFAULT_PROJECTILE), 'weapon'], 'projectile');
     if (p.shape !== undefined) q.set('proj', str(p.shape, 'projectile.shape'));
     for (const k of ['size', 'speed'] as const) if (p[k] !== undefined) q.set(`proj.${k}`, String(num(p[k], `projectile.${k}`)));
     if (p.mass !== undefined && p.mass !== null) q.set('proj.mass', String(num(p.mass, 'projectile.mass')));
+    if (p.weapon !== undefined) q.set('proj.weapon', str(p.weapon, 'projectile.weapon'));
+  }
+  if (root.weapons !== undefined) {
+    const w = object(root.weapons, 'weapons');
+    only(w, ['grenade'], 'weapons');
+    if (w.grenade !== undefined) {
+      const g = object(w.grenade, 'weapons.grenade');
+      only(g, Object.keys(DEFAULT_GRENADE), 'weapons.grenade');
+      const blast = object(g.blast ?? {}, 'weapons.grenade.blast');
+      only(blast, Object.keys(DEFAULT_GRENADE.blast), 'weapons.grenade.blast');
+      const gq = new URLSearchParams();
+      if (g.fuse !== undefined) gq.set('grenade.fuse', str(g.fuse, 'weapons.grenade.fuse'));
+      if (g.ground !== undefined) gq.set('grenade.ground', bool(g.ground, 'weapons.grenade.ground') ? '1' : '0');
+      for (const k of ['delay', 'prox', 'arm'] as const) if (g[k] !== undefined) gq.set(`grenade.${k}`, String(num(g[k], `weapons.grenade.${k}`)));
+      for (const [k, v] of Object.entries(blast)) gq.set(`grenade.${k}`, String(num(v, `weapons.grenade.blast.${k}`)));
+      // Checked whether fired or not; only a grenade projectile carries it into the config.
+      const spec = parseGrenade(gq);
+      if (q.get('proj.weapon') === 'grenade') writeGrenade(spec, q);
+    }
   }
   if (root.autofire !== undefined) q.set('autofire', String(int(root.autofire, 'autofire')));
 
@@ -182,10 +213,11 @@ export function parseSceneFile(text: string): { config: ViewerConfig; name: stri
   }
   if (root.rules !== undefined) {
     const r = object(root.rules, 'rules');
-    only(r, ['mode', 'hitstop', 'slowmo'], 'rules');
+    only(r, ['mode', 'hitstop', 'slowmo', 'shots'], 'rules');
     q.set('rules', str(r.mode, 'rules.mode'));
     if (r.hitstop !== undefined) q.set('keystone.hitstop', bool(r.hitstop, 'rules.hitstop') ? '1' : '0');
     if (r.slowmo !== undefined) q.set('keystone.slowmo', bool(r.slowmo, 'rules.slowmo') ? '1' : '0');
+    if (r.shots !== undefined) q.set('keystone.shots', shotsText(r.shots));
   }
   const view = object(root.view ?? {}, 'view');
   only(view, Object.keys(DEFAULT_FRAMING), 'view');
@@ -200,6 +232,21 @@ export function parseSceneFile(text: string): { config: ViewerConfig; name: stri
     writeSoundOptions(o as unknown as SoundOptions, q); // the URL parser checks the ranges
   }
   return { config: parseViewerConfig(`?${q}`), name };
+}
+
+/** rules.shots as URL text: an array of shots, each with exactly its ammo's fields (readShots checks them). */
+function shotsText(v: unknown): string {
+  if (!Array.isArray(v) || v.length === 0) throw new Error('rules.shots must be a non-empty array of shots');
+  const shots = v.map((x, i) => {
+    const o = object(x, `rules.shots[${i}]`);
+    if (!AMMO_KINDS.includes(o.ammo as AmmoKind)) throw new Error(`rules.shots[${i}].ammo must be one of ${AMMO_KINDS.join(', ')}`);
+    return o as unknown as Shot;
+  });
+  const text = writeShots(shots);
+  let back: Shot[];
+  try { back = readShots(text); } catch (e) { throw new Error(`rules.shots: ${(e as Error).message}`); }
+  back.forEach((b, i) => only(shots[i] as unknown as Json, Object.keys(b), `rules.shots[${i}]`));
+  return text;
 }
 
 function object(v: unknown, where: string): Json {

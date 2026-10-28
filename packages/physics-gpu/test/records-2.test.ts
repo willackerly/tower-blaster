@@ -8,14 +8,15 @@ import { nonFinite } from '@tb/metrics';
 import { type AvbdParams, AvbdReferenceEngine } from '@tb/physics-ref';
 import { buildScenario } from '@tb/scenarios';
 import { aboveHole, readColumn, rodRock, rodToppleTime, tippingAngle } from '@tb/testkit';
+import { gpuColorMode } from '../src/index.ts';
 import type * as Drivers from './page.ts';
 import { cube, gpu, runGpu, sceneOf } from './harness.ts';
 
 describe('GPU AVBD engine: manifold records 2 against the reference', () => {
-  /** Worst |GPU - reference| position over sampled steps, both with the same params (the reference in f64). */
+  /** Worst |GPU - reference| position over sampled steps, both with the same params (the reference in f64, colouring as the GPU: gpuColorMode). */
   async function parity(scene: SceneDesc, steps: number, params: Partial<AvbdParams>, every: number) {
     const g = await runGpu(scene, steps, params, every);
-    const e = new AvbdReferenceEngine(params);
+    const e = new AvbdReferenceEngine({ ...params, colorMode: gpuColorMode(params) });
     await e.init(scene);
     let worst = 0;
     const at: Array<[number, number]> = [];

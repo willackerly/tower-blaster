@@ -27,7 +27,7 @@ describe('AVBD reference: blasts', () => {
     // Who is pushed: inside the radius, not excluded, not spawned after the blast.
     const k = expectedKicks(base[at]!);
     const pushed = Array.from({ length: k.length / 3 }, (_, i) => i).filter((i) => k[3 * i] || k[3 * i + 1] || k[3 * i + 2]);
-    expect(pushed).toEqual([0, 1, 2, 4, 5, 6, 9]);
+    expect(pushed).toEqual([0, 1, 2, 4, 5, 6, 9, 10]); // 10: spawned after the first blast, pushed by the second
   });
 
   it('a pushed blast replays a scene-input blast bit for bit', async () => {

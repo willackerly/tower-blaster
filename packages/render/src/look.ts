@@ -85,7 +85,7 @@ export interface LookParams {
    * the world's origin on the floor), drawn while the eye is inside it; glass: how milky its
    * glazing is (0 clear, 1 opal), iron: the grey of its painted ironwork (linear albedo).
    */
-  hall?: { params: HallParams; glass: number; iron: number };
+  hall?: { params: HallParams; glass: number; iron: number; exterior: boolean };
 }
 
 const hex = (h: string): V3 => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16) / 255) as V3;
@@ -206,6 +206,8 @@ export interface RealOptions {
   hallSize: number;
   hallGlass: number;
   hallIron: number;
+  /** 1: the hall is drawn with the eye outside it too, its shell lit as outdoors; 0: only from inside. */
+  hallExterior: number;
 }
 
 export const REAL_DEFAULTS: RealOptions = {
@@ -214,7 +216,7 @@ export const REAL_DEFAULTS: RealOptions = {
   groundMaterial: 'gravel', groundDetail: 1, groundScale: 1, groundVariation: 0.5, groundRelief: 1, groundPatches: 0.05, hills: 1.5, hillDistance: 6,
   sunSize: 0.53, shadowSoftness: 1, shadowFill: 0.5,
   dust: 1, chips: 1, dustSize: 0.9, dustOpacity: 0.4, dustThreshold: 2, dustFace: 0.15,
-  env: 'outdoor', hallSize: 1, hallGlass: 0.5, hallIron: 0.55,
+  env: 'outdoor', hallSize: 1, hallGlass: 0.5, hallIron: 0.55, hallExterior: 1,
 };
 
 /** Direction toward the sun from elevation and azimuth in degrees. */
@@ -248,7 +250,7 @@ export function realLook(o: Partial<RealOptions> = {}): LookParams {
     hills: { height: r.hills, distance: r.hillDistance },
     shadow: { softness: r.shadowSoftness, fill: r.shadowFill },
     debris: { dust: r.dust, chips: r.chips, size: r.dustSize, opacity: r.dustOpacity, threshold: r.dustThreshold, face: r.dustFace },
-    ...(r.env === 'hall' ? { hall: { params: hallScaled(OLYMPIA, r.hallSize), glass: r.hallGlass, iron: r.hallIron } } : {}),
+    ...(r.env === 'hall' ? { hall: { params: hallScaled(OLYMPIA, r.hallSize), glass: r.hallGlass, iron: r.hallIron, exterior: r.hallExterior >= 0.5 } } : {}),
     hueStep: 4,
     ball: hex('#8A8D90'),
     ballEmissive: 0,
@@ -293,6 +295,7 @@ export const REAL_KNOBS = {
   hallSize: { label: 'hall size x (1: Olympia)', min: 0.05, max: 20, step: 0.05 },
   hallGlass: { label: 'hall glass milkiness 0-1', min: 0, max: 1, step: 0.05 },
   hallIron: { label: 'hall ironwork grey 0-1', min: 0, max: 1, step: 0.05 },
+  hallExterior: { label: 'hall seen from outside (0/1)', min: 0, max: 1, step: 1 },
 } as const;
 export type RealKnob = keyof typeof REAL_KNOBS;
 
