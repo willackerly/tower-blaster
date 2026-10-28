@@ -7,7 +7,7 @@ import { gpu } from './lattice-harness.ts';
 import { RULE_CASE, ruleCase } from './lattice-rule-case.ts';
 
 describe('GPU AVBD engine: lattice colouring (AvbdParams.colorMode, colorPriority)', () => {
-  it.for<Partial<AvbdParams>>([{ colorPriority: 1 }, { colorMode: 4, colorPriority: 1 }])(`%j: ${RULE_CASE}`, { timeout: 600_000 }, async (params, ctx) => {
+  it.for<Partial<AvbdParams>>([{ colorMode: 0, colorPriority: 1 }, { colorMode: 4, colorPriority: 1 }])(`%j: ${RULE_CASE}`, { timeout: 600_000 }, async (params, ctx) => {
     if (!gpu) return ctx.skip();
     await ruleCase(params);
   });

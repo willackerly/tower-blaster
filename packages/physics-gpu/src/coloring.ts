@@ -20,16 +20,17 @@
 // by manifold slot so the solver, which walks a body's row to sum its
 // contact forces, is bit-for-bit reproducible.
 //
-// Opt-in (ColoringOptions, from AvbdParams.colorMode and colorPriority; the
-// reference's coloring.ts says why the rules are proper and what they buy):
+// Options (ColoringOptions, from AvbdParams.colorMode and colorPriority; the
+// reference's coloring.ts says why the rules are proper and what they buy;
+// the engine colours with colorMode 3 unless told otherwise, gpuColorMode):
 //   - colorMode 1-4: before the rounds, `cells` takes each body's lattice cell
 //     parities and `prefer` its preferred colour; a round then takes that
 //     colour when no higher-priority neighbour holds it. The priority, and so
-//     the rounds, are the default's. 4 colours instead of 9-11 on resting
-//     lattices of cubes; the same choice as today off the lattice.
+//     the rounds, are the hash colouring's. 4 colours instead of 9-11 on resting
+//     lattices of cubes; the hash colouring's choice off the lattice.
 //   - colorPriority 1: largest degree first, then the hash (more rounds).
-// Both are experimental: the reference's coloring.ts gives their quality
-// record. Off, the shaders are the default's, character for character.
+// The reference's coloring.ts gives their quality record. colorMode 0 with
+// colorPriority 0 builds the hash colouring's shaders, character for character.
 import { assertStorageFits, RadixSorter, Scanner } from '@tb/gpu';
 import { COLOR_MODES, COLOR_PRIORITIES, LATTICE_MIN_ALIGNED } from '@tb/physics-ref';
 import { Body, Manifold, Shape, wgslStruct } from '@tb/schema';
@@ -113,7 +114,7 @@ fn sortRows(@builtin(global_invocation_id) id: vec3u) {
   }
 }`;
 
-/** Opt-in colouring rules (see the header); 0 is the default for each. */
+/** Colouring rules (see the header); 0 is the hash colouring's for each (the engine passes colorMode 3 when unset, gpuColorMode). */
 export interface ColoringOptions {
   /** AvbdParams.colorMode: 0 none, 1 eight lattice colours, 2 four (corner kernel), 3 four (in-plane-diagonal kernel), 4 as 3 for the lattice interior only. */
   colorMode?: number;
@@ -374,8 +375,8 @@ export class Coloring {
       bindGroupLayouts: [device.createBindGroupLayout({ entries: kinds.map((type, binding) => ({ binding, visibility: GPUShaderStage.COMPUTE, buffer: { type } })) })],
     });
     const graphLayout = layoutOf(['read-only-storage', 'read-only-storage', 'storage', 'storage', 'storage', 'storage', 'uniform', 'storage']);
-    // With a colorMode the rounds bind 8 storage buffers, the default limit per stage: one more binding here
-    // fails pipeline creation on default limits, and only with a mode set (the default-path tests would not see it).
+    // With a colorMode (the engine's default, 3) the rounds bind 8 storage buffers, the default limit per stage:
+    // one more binding here fails pipeline creation on default limits (colorMode 0 tests would not see it).
     const roundLayout = layoutOf(['read-only-storage', 'read-only-storage', 'read-only-storage', 'storage', 'storage', 'storage', 'storage', 'uniform', ...(mode ? ['read-only-storage' as const] : [])]);
     const graph = device.createShaderModule({ code: GRAPH, label: 'coloring graph' });
     const roundsModule = device.createShaderModule({ code: roundsWgsl(mode, priority === 1), label: 'coloring rounds' });

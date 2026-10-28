@@ -15,7 +15,9 @@ describe('GPU AVBD engine: lattice colouring (AvbdParams.colorMode, colorPriorit
     for (const bad of [{ colorMode: 5 }, { colorMode: 1.5 }, { colorMode: -1 }, { colorPriority: 2 }]) expect(() => new GpuAvbdEngine(bad)).toThrow(/^AvbdParams\.color(Mode|Priority) must be one of/);
     expect(new GpuAvbdEngine({ colorMode: 2, colorPriority: 1 }).info.variant).toMatchObject({ colorMode: 2, colorPriority: 1 });
     expect(new GpuAvbdEngine({}).info.variant).not.toHaveProperty('colorMode');
-    expect(new GpuAvbdEngine({ colorMode: 0, colorPriority: 0 }).info.variant).toEqual(new GpuAvbdEngine({}).info.variant);
+    // colorPriority 0 is no variant; colorMode is listed whenever it is given (unset is 3 on the GPU, gpuColorMode).
+    expect(new GpuAvbdEngine({ colorPriority: 0 }).info.variant).toEqual(new GpuAvbdEngine({}).info.variant);
+    expect(new GpuAvbdEngine({ colorMode: 0 }).info.variant).toMatchObject({ colorMode: 0 });
   });
 
   it('a squeezed block has contacts along both kernels: the fallback colours take them (mode 4: no preference there), still the reference rule', { timeout: 300_000 }, async (ctx) => {
@@ -57,13 +59,15 @@ describe('GPU AVBD engine: lattice colouring (AvbdParams.colorMode, colorPriorit
     }
   });
 
-  it('given as 0, both options leave the engine bit-identical to the default', { timeout: 300_000 }, async (ctx) => {
+  it('colorPriority given as 0 and colorMode given as 3 leave the engine bit-identical to the default; colorMode 0 and 2 do not', { timeout: 300_000 }, async (ctx) => {
     if (!gpu) return ctx.skip();
     const base = await runGpu(impact(), 45, {}, 15);
-    const zero = await runGpu(impact(), 45, { colorMode: 0, colorPriority: 0 }, 15);
-    expect(zero.snaps).toEqual(base.snaps);
-    // And the option does change the order (so the tests below test something).
+    expect((await runGpu(impact(), 45, { colorMode: 3, colorPriority: 0 }, 15)).snaps).toEqual(base.snaps);
+    // The hash colouring alone (the default before colorMode 3) and another mode change the order (so the tests below test something).
+    const hash = await runGpu(impact(), 45, { colorMode: 0, colorPriority: 0 }, 15);
+    expect(hash.snaps).not.toEqual(base.snaps);
     const on = await runGpu(impact(), 45, { colorMode: 2 }, 15);
     expect(on.snaps).not.toEqual(base.snaps);
+    expect(on.snaps).not.toEqual(hash.snaps);
   });
 });
