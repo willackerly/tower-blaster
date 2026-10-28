@@ -3,7 +3,7 @@
 // camera-relative; the shading reads its colours and lights from the Frame
 // uniform (LookParams), so presets are data.
 import { defineStruct, FxState, RenderRecord, Spark, wgslStruct } from '@tb/schema';
-import { FX_EMISSIVE_MAX, FX_WGSL } from './fx.ts';
+import { FX_EMISSIVE_MAX, FX_PAINT, FX_WGSL } from './fx.ts';
 import { BEVEL_WGSL, OKLAB_WGSL } from './look.ts';
 import { SPARK_COMMON } from './sparks.ts';
 import { LIGHT_META, LIGHT_PACKED, LIGHT_VEC4, MAX_BALLS, TRAIL } from './lights.ts';
@@ -1157,11 +1157,14 @@ fn heatGlow(slot: u32, base: vec3f) -> vec3f {
   let dndy = dpdy(n);
   let isBall = material(v.look) == 1u;
   let w = fx[v.slot];
-  let base = select(albedo(v.look), fr.ball, isBall) * fxTint(w.x);
+  // Painted (FX_PAINT): the tint is the colour, and a ball's glow takes it too.
+  let paint = (w.y & ${FX_PAINT}u) != 0u;
+  let own = select(select(albedo(v.look), fr.ball, isBall), vec3f(1.0), paint);
+  let base = own * fxTint(w.x);
   var c = shade(base, v.rel, n, aaAlpha(0.04, n, dndx, dndy), aaAlpha(0.0049, n, dndx, dndy), 0.5, aoBody(v, n));
   c += base * fxGlow(w, fr.time);
   let NoV = max(dot(n, normalize(-v.rel)), 0.0);
-  c += select(vec3f(0.0), fr.ball * fr.ballEmissive * (0.35 + 0.65 * NoV), isBall);
+  c += select(vec3f(0.0), select(fr.ball, base, paint) * fr.ballEmissive * (0.35 + 0.65 * NoV), isBall);
   return vec4f(fog(c, v.rel), 1.0);
 }
 

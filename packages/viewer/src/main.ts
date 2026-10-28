@@ -15,15 +15,16 @@ import { AVBD_GAP_SLOP, AVBD_ITERATIONS, compileLevel, type Driver, LEVELS, type
 import { clampPitch, frame, rayThrough, viewProj, eyeOf, orbitAt, poseOf, type CameraPose, type Orbit } from './camera.ts';
 import { alphaAt, newArrivals, newClock, newPacer, pauseLatch, runFree, stepsDue, taskYield, trackSimSpeed, Window } from './loop.ts';
 import type { V3 } from './math.ts';
-import { HEALTH_MS, limitsHtml } from './health.ts';
+import { HEALTH_MS, limitFix, limitFixLabel, limitsHtml } from './health.ts';
 import { escapeHtml } from './html.ts';
-import { bounceBody, bounceOn, engineSpec, froudeSpeed, keystoneEngine, levelOf, parseViewerConfig, presetSearch, scenarioEngineSpec, sceneTitle, toSearch, type ViewerConfig, viewerScene, withOption, worldEngineSpec } from './params.ts';
-import { projectileBody, projectileShape, pushRadiusLimit, worldGrenade } from './projectile.ts';
+import { bounceOn, engineSpec, firedBody, froudeSpeed, keystoneEngine, levelOf, parseViewerConfig, presetSearch, scenarioEngineSpec, sceneTitle, toSearch, type ViewerConfig, viewerScene, withOption, worldEngineSpec } from './params.ts';
+import { projectileRadius, pushRadiusLimit, worldGrenade } from './projectile.ts';
 import { Grenades } from '@tb/weapons';
 import { mountControls } from './controls.ts';
+import { startSearch } from './default-scene.ts';
 import { type DevAction, mountDev } from './dev-panel.ts';
 import { createDevice } from '@tb/gpu';
-import { lookByName, Renderer, SnapshotSource, type PixelStats } from '@tb/render';
+import { lookByName, Renderer, SnapshotSource, srgbToLinear, type PixelStats } from '@tb/render';
 
 const PRESETS: Array<{ label: string; search: string }> = [
   { label: 'Tower 8×8×30', search: '?scenario=S1&param.gap=0.02' },
@@ -46,14 +47,15 @@ const ENGINES: Array<{ label: string; spec: string }> = [
 ];
 
 // Solver iterations for the GPU engine: a tall column flexes and topples
-// early at the default 10; 20 cubes are rigid from 13 (physics-ref/test/collapse.test.ts).
-const GPU_ITERATIONS = [10, 20, 40];
+// early at the default 10; 20 cubes are rigid from 13 (physics-ref/test/collapse.test.ts),
+// so 15 is the cheapest button with rigid columns.
+const GPU_ITERATIONS = [10, 15, 20, 40];
 
 /** The AVBD settings Keystone plays and pins par lines at (@tb/keystone AVBD_ITERATIONS, AVBD_GAP_SLOP), one button away. */
 const KEYSTONE_AVBD = { iterations: AVBD_ITERATIONS, gapSlop: AVBD_GAP_SLOP } as const;
 const keystoneAvbd = (spec: string) => withOption(withOption(spec, 'iterations', KEYSTONE_AVBD.iterations), 'gapSlop', KEYSTONE_AVBD.gapSlop);
 
-const viewerEngine = (c: ViewerConfig): PhysicsEngine => makeEngine(worldEngineSpec(engineSpec(scenarioEngineSpec(c.engine, c.scenario), c.projectile), c.scale));
+const viewerEngine = (c: ViewerConfig): PhysicsEngine => makeEngine(worldEngineSpec(engineSpec(scenarioEngineSpec(c.engine, c.scenario), c.projectile, c.scale), c.scale));
 
 interface ViewerHandle {
   status: 'loading' | 'running' | 'error';
@@ -73,6 +75,8 @@ interface ViewerHandle {
   overlapped: number;
   /** Body slots drawn with a tint (a level's roles and materials, as the game draws them); 0 for a scenario. */
   tinted: number;
+  /** Fired real things (proj=<name>) painted their colour, in the current look's (sRGB 0xrrggbb), by body id; cleared on load. */
+  painted: { id: number; colour: number }[];
   /** The running engine's EngineInfo.variant (its params as built: Bounce's restitution, a world scale's scaling). */
   variant: EngineInfo['variant'];
   /**
@@ -106,7 +110,7 @@ const GRENADE_LOOKAHEAD = 4;
 const canvas = document.getElementById('c') as HTMLCanvasElement;
 const hud = document.getElementById('hud')!;
 const errorBox = document.getElementById('error')!;
-const handle: ViewerHandle = { status: 'loading', frames: 0, bodies: 0, awake: 0, stepIndex: 0, msPerStep: NaN, snapMs: NaN, resets: 0, overlapped: 0, tinted: 0, variant: {}, health: null, camera: () => ({ target: [0, 0, 0], yaw: 0, pitch: 0, distance: 1 }), fire: () => {}, capture: async () => null, inputs: [], game: null, inputHook: null };
+const handle: ViewerHandle = { status: 'loading', frames: 0, bodies: 0, awake: 0, stepIndex: 0, msPerStep: NaN, snapMs: NaN, resets: 0, overlapped: 0, tinted: 0, painted: [], variant: {}, health: null, camera: () => ({ target: [0, 0, 0], yaw: 0, pitch: 0, distance: 1 }), fire: () => {}, capture: async () => null, inputs: [], game: null, inputHook: null };
 window.__viewer = handle;
 
 function fail(e: unknown) {
@@ -176,6 +180,9 @@ function presets(current: string) {
 }
 
 async function main() {
+  // A bare URL opens the default scene (or ?defaults=factory the built-in setup), written into the address bar.
+  const start = startSearch(location.search);
+  if (start !== location.search) history.replaceState(null, '', start);
   let config = parseViewerConfig(location.search);
   presets(location.search);
   const { device, adapter } = await createDevice({ timestamps: false });
@@ -220,6 +227,14 @@ async function main() {
   let inputHook: InputHook | null = null;
   // This load's fired grenades, waiting on their fuses (proj.weapon=grenade).
   let grenades: Grenades | null = null;
+  // This load's fired catalogue objects, painted their colours (the candy skin outside the real look).
+  let painted: { id: number; colour: { natural: number; candy: number } }[] = [];
+  const paint = (id: number, colour: { natural: number; candy: number }) => {
+    const c = config.look === 'real' ? colour.natural : colour.candy;
+    handle.painted = [...handle.painted.filter((p) => p.id !== id), { id, colour: c }];
+    renderer.setFx(id, { tint: [c >> 16, (c >> 8) & 0xff, c & 0xff].map((x) => srgbToLinear(x / 255)) as V3, paint: true });
+    fxSlots = Math.max(fxSlots, id + 1);
+  };
   // The engine's limits (handle.health), read at most every HEALTH_MS and one read at a time.
   let healthAt = -Infinity, healthBusy = false;
 
@@ -257,7 +272,7 @@ async function main() {
     const next = viewerScene(want); // throws on bad params before anything is torn down
     engine.dispose();
     engine = viewerEngine(want);
-    pushLimit = pushRadiusLimit(engineSpec(want.engine, want.projectile), next);
+    pushLimit = pushRadiusLimit(engineSpec(want.engine, want.projectile, want.scale), next);
     await engine.init(next);
     // Settle before the scene shows (ViewerConfig.presettle); the steps are submitted back to back, then one read.
     for (let i = 0; i < want.presettle * want.substeps; i++) await engine.step();
@@ -285,6 +300,8 @@ async function main() {
     notice = '';
     inputHook = handle.inputHook?.() ?? null;
     // The page reads the state about once a frame, so a fuse predicts that far ahead (Grenades).
+    painted = [];
+    handle.painted = [];
     grenades = new Grenades({ dt: next.dt, substeps: engine.info.integrator?.substeps ?? 1, gravity: next.gravity, groundY: next.ground?.y ?? null }, GRENADE_LOOKAHEAD * want.substeps);
     apply(s, t0, engine.stepIndex);
   }
@@ -300,9 +317,16 @@ async function main() {
     if (note) resetNote = note;
     resetAsked = true;
   }
-  // The HUD's fix button (limitsHtml): the engine spec that gives the limit room.
-  hud.addEventListener('click', (e) => {
-    const fix = (e.target as HTMLElement).closest<HTMLElement>('button[data-fix]')?.dataset.fix;
+  // The HUD: the text drawHud rewrites every few frames, and below it the fix button (limitFix), one
+  // element kept across redraws so that a press spanning a redraw still lands on it.
+  hud.textContent = '';
+  const hudText = hud.appendChild(document.createElement('div'));
+  const fixBox = hud.appendChild(document.createElement('div'));
+  fixBox.className = 'buttons';
+  fixBox.hidden = true;
+  const fixButton = fixBox.appendChild(document.createElement('button'));
+  fixButton.addEventListener('click', () => {
+    const fix = fixButton.dataset.fix;
     if (fix && !resetting && !resetAsked) rebuild({ ...config, engine: fix }, `Rebuilt with ${fix}`);
   });
 
@@ -314,6 +338,7 @@ async function main() {
       config = { ...config, look, real };
       if (nextConfig) nextConfig = { ...nextConfig, look, real };
       renderer.look = lookByName(look, real);
+      for (const f of painted) paint(f.id, f.colour);
       history.replaceState(null, '', toSearch(config));
       presets(location.search);
     },
@@ -324,7 +349,7 @@ async function main() {
         return;
       }
       const next = { ...config, projectile: p };
-      if (boundingRadius(projectileShape(p)) <= pushLimit) {
+      if (projectileRadius(p, config.scale) <= pushLimit) {
         config = next;
         history.replaceState(null, '', toSearch(config));
         return;
@@ -438,9 +463,8 @@ async function main() {
   handle.fire = (x = 0, y = 0) => {
     if (resetting) return;
     const { origin, dir } = rayThrough(orbit, aspect(), x, y);
-    const body = projectileBody({ ...config.projectile, speed: config.projectile.speed * froudeSpeed(config.scale) }, origin, dir);
-    // With Bounce on, the projectile bounces at the scene's e too (viewerScene).
-    const ev: InputEvent = { step: engine.stepIndex, kind: 'spawn', body: bounceOn(config.engine) ? bounceBody(body, config.bounce) : body };
+    const { body, colour } = firedBody(config, origin, dir);
+    const ev: InputEvent = { step: engine.stepIndex, kind: 'spawn', body };
     try {
       pushInput([ev]);
     } catch (e) {
@@ -450,10 +474,14 @@ async function main() {
       return;
     }
     const p = config.projectile;
+    // Engines number spawns after the scene's bodies in (step, push order), the order of events. A spawn
+    // another input pushes later for an earlier step would come first; nothing pushes one (#94's hooks could).
+    const id = scene.bodies.length + events.filter((e) => e.kind === 'spawn').indexOf(ev);
+    if (colour) {
+      painted.push({ id, colour });
+      paint(id, colour);
+    }
     if (p.weapon === 'grenade' && p.grenade && grenades) {
-      // Engines number spawns after the scene's bodies in (step, push order), the order of events. A spawn
-      // another input pushes later for an earlier step would come first; nothing pushes one (#94's hooks could).
-      const id = scene.bodies.length + events.filter((e) => e.kind === 'spawn').indexOf(ev);
       const [g, spec] = [grenades, worldGrenade(p.grenade, froudeSpeed(config.scale), config.substeps)];
       pushGrenade(() => g.launch(id, ev.step, spec, ev.body.shape));
     }
@@ -514,7 +542,7 @@ async function main() {
     handle.msPerStep = med;
     handle.snapMs = snapMs.quantile(0.5);
     const over = med > 7.5;
-    hud.innerHTML = `
+    hudText.innerHTML = `
       <div class="big">${handle.bodies.toLocaleString()} bodies</div>
       <div class="muted">${escapeHtml(sceneTitle(config))} · ${escapeHtml(config.engine)} (${escapeHtml(engine.info.backend)})</div>
       <div class="row"><span>physics ms/step</span><span class="${over ? 'warn' : ''}">${fmt(med)} <span class="muted">p95 ${fmt(p95)}</span></span></div>
@@ -523,8 +551,16 @@ async function main() {
       <div class="row"><span>fps</span><span>${fmt(fps)}</span></div>
       <div class="row"><span>sim speed</span><span class="${clock.simSpeed < 0.95 ? 'warn' : ''}">${(clock.simSpeed * 100).toFixed(0)}%</span></div>
       <div class="row"><span>snapshot + upload</span><span>${fmt(handle.snapMs)} ms</span></div>
-      <div class="row muted"><span>budget</span><span>7.5 ms/step</span></div>${handle.health ? `\n      ${limitsHtml(handle.health, config.engine)}` : ''}
+      <div class="row muted"><span>budget</span><span>7.5 ms/step</span></div>${handle.health ? `\n      ${limitsHtml(handle.health)}` : ''}
       <div class="muted">${escapeHtml(adapter.info.vendor)} ${escapeHtml(adapter.info.architecture)}${paused ? ' · <b>paused</b>' : ''}</div>${notice ? `\n      <div class="warn">${escapeHtml(notice)}</div>` : ''}`;
+    // The button's node stays; only a new fix changes its text.
+    const fix = limitFix(handle.health, config.engine);
+    if (fix === null) delete fixButton.dataset.fix;
+    else if (fixButton.dataset.fix !== fix) {
+      fixButton.dataset.fix = fix;
+      fixButton.textContent = limitFixLabel(handle.health)!;
+    }
+    fixBox.hidden = fix === null;
   }
 
   await reset();
@@ -540,6 +576,8 @@ async function main() {
   async function draw(now: number, alpha: number) {
     const want = pendingCapture;
     pendingCapture = null;
+    // No snapshot follows a step while paused, so the limits are read here: the steps before the pause still show.
+    if (paused && !resetting) pollHealth();
     const stats = await renderer.render({ viewProj: viewProj(orbit, aspect()), eye: eyeOf(orbit), focus: orbit.target, time: now / 1000, groundY: scene.ground?.y ?? 0, alpha, metres: config.scale }, !!want, want?.keep);
     if (want) want.resolve(stats);
     handle.frames++;

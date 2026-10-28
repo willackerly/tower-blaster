@@ -24,8 +24,8 @@ export async function execute(c: RunConfig, onProgress: (msg: string) => void = 
     timing: blocks.map(timingSummary),
     timingValid: problems.length === 0,
     timingProblems: problems,
-    // Each engine's limits (null without health()), and a sentence per limit that changed the
-    // physics: a run with any timed a different simulation from the one asked for.
+    // Each engine's limits over the timing (null without health()), and a sentence per limit that
+    // changed the physics: with any, the timing is of a different simulation from the one asked for.
     health: health.health,
     limitProblems: health.limitProblems,
   };
@@ -33,9 +33,9 @@ export async function execute(c: RunConfig, onProgress: (msg: string) => void = 
   if (c.qualitySteps > 0) {
     onProgress(`quality pass, ${c.qualitySteps} steps`);
     const q = await qualityRun(engines[0]!, scene, { steps: c.qualitySteps, sampleEvery: 30 });
+    // The quality run starts the engine again, so its limits are its own: with any, its metrics are of a different simulation.
     const qh = await engineHealth([engines[0]!], [`quality run (${c.engines[0]})`]);
-    record.quality = { ...q, series: undefined, gates: qualityGates(q, scene.inputs.length === 0), health: qh.health[0] };
-    health.limitProblems.push(...qh.limitProblems);
+    record.quality = { ...q, series: undefined, gates: qualityGates(q, scene.inputs.length === 0), health: qh.health[0], limitProblems: qh.limitProblems };
   }
   for (const e of engines) e.dispose();
   return record;
