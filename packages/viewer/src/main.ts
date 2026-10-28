@@ -80,13 +80,22 @@ interface ViewerHandle {
   inputs: InputEvent[];
   /** Under rules=keystone, the game's handle (as window.__game on the game page); null in the sandbox. */
   game: GameHandle | null;
+  /**
+   * Input decided from the observed state (the weapons runtime hooks here): a factory, called for a
+   * fresh hook on every load (and under Keystone's rules for every replay, so a replay sees the same
+   * input). The hook gets each snapshot the page reads and the engine step it is of: in the sandbox
+   * about one a frame, under Keystone's rules every step (@tb/keystone PlayOptions.perStep). The events
+   * it returns are pushed; each must be due after that step (step + 1 at the soonest). Set it, then R.
+   */
+  inputHook: (() => InputHook) | null;
 }
+type InputHook = (s: Snapshot, step: number) => InputEvent[];
 declare global { interface Window { __viewer: ViewerHandle } }
 
 const canvas = document.getElementById('c') as HTMLCanvasElement;
 const hud = document.getElementById('hud')!;
 const errorBox = document.getElementById('error')!;
-const handle: ViewerHandle = { status: 'loading', frames: 0, bodies: 0, awake: 0, stepIndex: 0, msPerStep: NaN, snapMs: NaN, resets: 0, overlapped: 0, tinted: 0, variant: {}, camera: () => ({ target: [0, 0, 0], yaw: 0, pitch: 0, distance: 1 }), fire: () => {}, capture: async () => null, inputs: [], game: null };
+const handle: ViewerHandle = { status: 'loading', frames: 0, bodies: 0, awake: 0, stepIndex: 0, msPerStep: NaN, snapMs: NaN, resets: 0, overlapped: 0, tinted: 0, variant: {}, camera: () => ({ target: [0, 0, 0], yaw: 0, pitch: 0, distance: 1 }), fire: () => {}, capture: async () => null, inputs: [], game: null, inputHook: null };
 window.__viewer = handle;
 
 function fail(e: unknown) {
@@ -196,6 +205,8 @@ async function main() {
   let pushLimit = Infinity;
   // Body slots with a tint set (a level's roles and materials), cleared on the next load.
   let fxSlots = 0;
+  // This load's input hook (handle.inputHook), or none.
+  let inputHook: InputHook | null = null;
 
   async function reset() {
     resetting = true;
@@ -255,7 +266,8 @@ async function main() {
     renderer.setShadowBounds(c, Math.hypot(b.max[0] - b.min[0], b.max[1] - b.min[1], b.max[2] - b.min[2]) / 2 + 2);
     handle.inputs = [];
     notice = '';
-    apply(s, t0);
+    inputHook = handle.inputHook?.() ?? null;
+    apply(s, t0, engine.stepIndex);
   }
 
   const controls = mountControls(document.getElementById('controls')!, {
@@ -326,11 +338,18 @@ async function main() {
   }
 
   // Snapshot read-back (from t0), then upload; snapMs times both. Pipelined reads overlap, so each keeps its own t0.
-  function apply(s: Snapshot, t0: number) {
+  // step: the engine step the snapshot is of, for the input hook.
+  function apply(s: Snapshot, t0: number, step: number) {
     source.update(s, shapesFor(s.count));
     snapMs.push(performance.now() - t0);
     handle.bodies = s.count;
     awake = handle.awake = s.awake.reduce((a, x) => a + x, 0);
+    const input = inputHook?.(s, step);
+    if (input?.length) {
+      const early = input.find((e) => e.step <= step);
+      if (early) throw new Error(`input hook: an event for step ${early.step} is not after the observed step ${step}`);
+      pushInput(input);
+    }
   }
   /**
    * Read the newest state back and upload it; resolves with the time it landed. Pipelined, the read
@@ -338,10 +357,22 @@ async function main() {
    */
   const refresh = async (done?: Promise<number>) => {
     const t0 = performance.now();
+    // A snapshot holds exactly the steps submitted before it is asked for (PhysicsEngine.snapshot).
+    const step = engine.stepIndex;
     const s = await engine.snapshot();
-    apply(s, done ? Math.max(t0, await done) : t0);
+    apply(s, done ? Math.max(t0, await done) : t0, step);
     return performance.now();
   };
+  /** Push input as a fired projectile is: into the engine, and in application order (stable by step) into events. */
+  function pushInput(evs: InputEvent[]) {
+    engine.push(evs);
+    for (const ev of evs) {
+      handle.inputs.push(ev);
+      let i = events.length;
+      while (i > 0 && events[i - 1]!.step > ev.step) i--;
+      events.splice(i, 0, ev);
+    }
+  }
   let awake = 0;
 
   handle.fire = (x = 0, y = 0) => {
@@ -351,18 +382,12 @@ async function main() {
     // With Bounce on, the projectile bounces at the scene's e too (viewerScene).
     const ev: InputEvent = { step: engine.stepIndex, kind: 'spawn', body: bounceOn(config.engine) ? bounceBody(body, config.bounce) : body };
     try {
-      engine.push([ev]);
+      pushInput([ev]);
     } catch (e) {
       // The GPU and tiered engines have room for GPU_SPARE fired projectiles (params.ts); R resets.
       notice = `${e instanceof Error ? e.message : String(e)} (press R to reset)`;
       drawHud();
-      return;
     }
-    handle.inputs.push(ev);
-    // Keep events in engine application order: stable by step.
-    let i = events.length;
-    while (i > 0 && events[i - 1]!.step > ev.step) i--;
-    events.splice(i, 0, ev);
   };
 
   // Pointer: drag orbits (right or shift: pan), a click without drag fires.
@@ -598,6 +623,11 @@ async function keystoneMode(config: ViewerConfig, device: GPUDevice, renderer: R
   await playKeystone({
     canvas, offscreen: cfg.offscreen, device, renderer, source, hud, ...gameOverlays(),
     levels, start: levels.findIndex((l) => l.id === def.id), engine: keystoneEngine(cfg.engine), feel: cfg.feel, fail: failGame,
+    // The page's input hook, every step (read when a level loads or a replay starts).
+    perStep() {
+      const hook = handle.inputHook?.();
+      return hook ? (d) => hook(d.snapshot, d.snapshotStep) : () => [];
+    },
     hooks: {
       loaded(c) {
         handle.tinted = c.meta.n;
