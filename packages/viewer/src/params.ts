@@ -164,6 +164,16 @@ export function worldScene(scene: SceneDesc, scale: number, substeps: number): S
 /** The scale a scenario runs at when the URL sets none; a level is in metres, so 1. */
 export const defaultScale = (scenario: string, level: string | null = null) => (level ? 1 : SCENARIOS[scenario]?.scale ?? 1);
 
+/** The framing a scene gets when the URL sets no view.*: DEFAULT_FRAMING under the scenario's own (ScenarioDef.view); a level's is the default. */
+export const defaultFraming = (scenario: string, level: string | null = null): Framing => (level ? DEFAULT_FRAMING : { ...DEFAULT_FRAMING, ...SCENARIOS[scenario]?.view });
+
+const sameFraming = (a: Framing, b: Framing) => (Object.keys(DEFAULT_FRAMING) as (keyof Framing)[]).every((k) => a[k] === b[k]);
+
+/** The framing kept on a switch of scene: one chosen by hand stays; one left at the old scene's default becomes the new scene's. */
+export function carriedFraming(view: Framing, from: { scenario: string; level: string | null }, to: { scenario: string; level: string | null }): Framing {
+  return sameFraming(view, defaultFraming(from.scenario, from.level)) ? defaultFraming(to.scenario, to.level) : view;
+}
+
 /** The Keystone level with this id (any case), or undefined. */
 export const levelDef = (id: string): LevelDef | undefined => LEVELS.find((l) => l.id === id.toUpperCase());
 
@@ -243,7 +253,7 @@ export function parseViewerConfig(search: string): ViewerConfig {
     scale,
     substeps,
     camera: parseCamera(q.get('cam')),
-    view: parseFraming(q),
+    view: parseFraming(q, defaultFraming(scenario, level)),
     bounce,
     rules,
     feel,
@@ -280,9 +290,9 @@ export function checkKeystone(c: ViewerConfig): void {
   if (c.shots) checkLine(levelOf(c)!, c.shots);
 }
 
-/** URL keys view.pitch, view.fit, view.fov (camera.ts Framing; degrees, multiple of a fit, degrees); absent ones are the defaults. */
-export function parseFraming(q: URLSearchParams): Framing {
-  const f = { ...DEFAULT_FRAMING };
+/** URL keys view.pitch, view.fit, view.fov, view.yaw, view.eye (camera.ts Framing; degrees, multiple of a fit, degrees, degrees, metres); absent ones are base's (the scene's defaultFraming). */
+export function parseFraming(q: URLSearchParams, base: Framing = DEFAULT_FRAMING): Framing {
+  const f = { ...base };
   for (const k of Object.keys(f) as (keyof Framing)[]) {
     const raw = q.get(`view.${k}`);
     if (raw === null || raw === '') continue;
@@ -293,8 +303,8 @@ export function parseFraming(q: URLSearchParams): Framing {
   return f;
 }
 
-export function writeFraming(f: Framing, q: URLSearchParams): void {
-  for (const k of Object.keys(DEFAULT_FRAMING) as (keyof Framing)[]) if (f[k] !== DEFAULT_FRAMING[k]) q.set(`view.${k}`, String(f[k]));
+export function writeFraming(f: Framing, q: URLSearchParams, base: Framing = DEFAULT_FRAMING): void {
+  for (const k of Object.keys(DEFAULT_FRAMING) as (keyof Framing)[]) if (f[k] !== base[k]) q.set(`view.${k}`, String(f[k]));
 }
 
 /** URL key cam: target x,y,z, yaw, pitch (radians) and distance (m), as writeCamera writes it; absent = null. */
@@ -326,7 +336,7 @@ export function toSearch(c: ViewerConfig): string {
   if (c.scale !== defaultScale(c.scenario, c.level)) q.set('scale', String(c.scale));
   if (c.substeps !== autoSubsteps(c.scale)) q.set('substeps', String(c.substeps));
   if (c.camera) q.set('cam', writeCamera(c.camera));
-  writeFraming(c.view, q);
+  writeFraming(c.view, q, defaultFraming(c.scenario, c.level));
   if (c.bounce !== DEFAULT_BOUNCE) q.set('bounce.e', String(c.bounce));
   if (c.rules !== DEFAULT_CONFIG.rules) q.set('rules', c.rules);
   if (c.feel.hitStop) q.set('keystone.hitstop', '1');
@@ -342,8 +352,9 @@ export function toSearch(c: ViewerConfig): string {
  * where its button takes you (framed afresh: no camera).
  */
 export function presetSearch(preset: string, cur: Pick<ViewerConfig, 'engine' | 'loop' | 'pipeline' | 'maxSteps' | 'projectile'> & Partial<Pick<ViewerConfig, 'look' | 'real' | 'substeps' | 'scale' | 'scenario' | 'level' | 'view' | 'bounce'>>): string {
-  const { engine, loop, pipeline, maxSteps, projectile, look = DEFAULT_CONFIG.look, real = {}, view = DEFAULT_CONFIG.view, bounce = DEFAULT_BOUNCE } = cur;
+  const { engine, loop, pipeline, maxSteps, projectile, look = DEFAULT_CONFIG.look, real = {}, bounce = DEFAULT_BOUNCE } = cur;
   const next = parseViewerConfig(preset);
+  const view = carriedFraming(cur.view ?? DEFAULT_CONFIG.view, { scenario: cur.scenario ?? DEFAULT_CONFIG.scenario, level: cur.level ?? null }, next);
   const chosen = cur.scale !== undefined && cur.scenario !== undefined && cur.scale !== defaultScale(cur.scenario, cur.level ?? null);
   const scale = chosen ? cur.scale! : next.scale;
   // Substeps set by hand stay; otherwise the new scale's own.
