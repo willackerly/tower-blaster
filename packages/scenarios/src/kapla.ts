@@ -107,22 +107,29 @@ export function storeyParts(rects: Rect[]) {
   return { a, b, nodes };
 }
 
-const perStoreyCache = new Map<string, number>();
-function perStorey(rects: Rect[]): number {
+const countCache = new Map<string, { flats: number; nodes: number }>();
+function counts(rects: Rect[]): { flats: number; nodes: number } {
   const key = rects.join(';');
-  let n = perStoreyCache.get(key);
+  let n = countCache.get(key);
   if (n === undefined) {
     const p = storeyParts(rects);
-    n = p.a.length + p.b.length + p.nodes.length;
-    perStoreyCache.set(key, n);
+    n = { flats: p.a.length + p.b.length, nodes: p.nodes.length };
+    countCache.set(key, n);
   }
   return n;
 }
 
+/** Planks in the tower buildPlanks builds: every storey, a setback's first storey laying its flats over the footprint below, and the cap. */
 export function plankCount(s: KaplaShape): number {
   let n = 0;
-  for (const seg of layout(s)) n += (seg.to - seg.from) * perStorey(seg.rects);
-  return n;
+  let below: Rect[] | null = null;
+  for (const seg of layout(s)) {
+    const c = counts(seg.rects);
+    n += (seg.to - seg.from) * (c.flats + c.nodes);
+    if (below) n += counts(below).flats - c.flats;
+    below = seg.rects;
+  }
+  return below ? n + counts(below).flats : n;
 }
 
 /**
@@ -155,6 +162,11 @@ export function fitShape(base: Omit<KaplaShape, 'storeys'>, target: number, slen
  * Every plank of the tower, storey by storey (A, B, then pillars), resting on
  * y = 0. joint: gap at each butt joint; jitter: uniform horizontal placement
  * noise, at most joint / 2 so butted planks never overlap.
+ *
+ * Every pillar carries flats: the first storey of a setback lays its A and B
+ * layers over the footprint below (capping the pillars the new tier leaves
+ * out) and stands its pillars where that layer put the B planks, and an A and
+ * B cap (storey `storeys`) closes the top.
  */
 export function buildPlanks(s: KaplaShape, joint: number, jitter: number, rand: () => number): Plank[] {
   // Pillars are T wide along x and carry the butted ends of the A planks above them.
@@ -164,12 +176,10 @@ export function buildPlanks(s: KaplaShape, joint: number, jitter: number, rand: 
   const d = (W + joint) / 2; // edge shift: half a width plus half a joint
   const j = () => (jitter > 0 ? (rand() * 2 - 1) * jitter : 0);
   const key = (i: number, k: number) => `${i},${k}`;
-  const out: Plank[] = [];
-  let pillarDz = new Map<string, number>(); // the storey below's pillar z shifts
-  for (const seg of layout(s)) {
-    const parts = storeyParts(seg.rects);
+  // One footprint's sides and nodes, and its edge shifts.
+  const grid = (rects: Rect[]) => {
+    const parts = storeyParts(rects);
     const aSet = new Set(parts.a.map(([i, k]) => key(i, k)));
-    const bSet = new Set(parts.b.map(([i, k]) => key(i, k)));
     // x shift of the B plank (i, k)-(i, k+1): +1 when only A planks on the right meet both its ends, -1 on the left.
     const side = (i: number, k: number) => (aSet.has(key(i - 1, k)) ? (aSet.has(key(i, k)) ? 0 : -1) : 1);
     const bDx = new Map(parts.b.map(([i, k]) => { const e = side(i, k), f = side(i, k + 1); return [key(i, k), e === f ? e : 0]; }));
@@ -179,16 +189,31 @@ export function buildPlanks(s: KaplaShape, joint: number, jitter: number, rand: 
       pDz.set(key(i, k), up !== undefined && down !== undefined ? 0 : up !== undefined ? 1 : -1);
       pDx.set(key(i, k), up !== undefined && down !== undefined ? (up === down ? up : 0) : (up ?? down!));
     }
-    for (let y = seg.from; y < seg.to; y++) {
-      const y0 = y * STOREY;
-      for (const [i, k] of parts.a) {
-        const e = pillarDz.get(key(i, k)) ?? 0, f = pillarDz.get(key(i + 1, k)) ?? 0;
-        out.push({ pos: [(i + 0.5) * P + j(), y0 + T / 2, k * P + (e === f ? e * d : 0) + j()], half: [L / 2, T / 2, W / 2], storey: y, role: PlankRole.A });
-      }
-      for (const [i, k] of parts.b) out.push({ pos: [i * P + bDx.get(key(i, k))! * d + j(), y0 + T + T / 2, (k + 0.5) * P + j()], half: [W / 2, T / 2, L / 2], storey: y, role: PlankRole.B });
-      for (const [i, k] of parts.nodes) out.push({ pos: [i * P + pDx.get(key(i, k))! * d + j(), y0 + 2 * T + L / 2, k * P + pDz.get(key(i, k))! * d + j()], half: [T / 2, L / 2, W / 2], storey: y, role: PlankRole.Pillar });
-      pillarDz = pDz;
+    return { parts, bDx, pDx, pDz };
+  };
+  type Grid = ReturnType<typeof grid>;
+  const out: Plank[] = [];
+  let pillarDz = new Map<string, number>(); // the storey below's pillar z shifts
+  const flats = (g: Grid, y: number) => {
+    const y0 = y * STOREY;
+    for (const [i, k] of g.parts.a) {
+      const e = pillarDz.get(key(i, k)) ?? 0, f = pillarDz.get(key(i + 1, k)) ?? 0;
+      out.push({ pos: [(i + 0.5) * P + j(), y0 + T / 2, k * P + (e === f ? e * d : 0) + j()], half: [L / 2, T / 2, W / 2], storey: y, role: PlankRole.A });
     }
+    for (const [i, k] of g.parts.b) out.push({ pos: [i * P + g.bDx.get(key(i, k))! * d + j(), y0 + T + T / 2, (k + 0.5) * P + j()], half: [W / 2, T / 2, L / 2], storey: y, role: PlankRole.B });
+  };
+  let below: Grid | null = null;
+  for (const seg of layout(s)) {
+    const g = grid(seg.rects);
+    for (let y = seg.from; y < seg.to; y++) {
+      // A setback's first storey: flats over the footprint below; its nodes include this one's, so the pillars stand on its B planks.
+      const f = y === seg.from && below ? below : g;
+      flats(f, y);
+      for (const [i, k] of g.parts.nodes) out.push({ pos: [i * P + f.pDx.get(key(i, k))! * d + j(), y * STOREY + 2 * T + L / 2, k * P + f.pDz.get(key(i, k))! * d + j()], half: [T / 2, L / 2, W / 2], storey: y, role: PlankRole.Pillar });
+      pillarDz = f.pDz;
+    }
+    below = g;
   }
+  if (below) flats(below, s.storeys);
   return out;
 }

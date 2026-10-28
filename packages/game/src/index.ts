@@ -4,3 +4,6 @@ export * from './hud.ts';
 export * from './juice.ts';
 export * from './pacing.ts';
 export * from './scene.ts';
+export * from './play.ts';
+export * from './engines.ts';
+export * from './ui.ts';

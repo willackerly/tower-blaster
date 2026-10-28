@@ -3,6 +3,7 @@
 // three times and reloads the page, which took 31-40 s on a loaded 4-core VM
 // and over 60 s on a CI runner (2026-10-27), and e2e.test.ts is near the
 // 300 s per file that CI's shards allow.
+import type { SpawnEvent } from '@tb/engine-api';
 import { describe, expect, it } from 'vitest';
 import type { Page } from 'playwright';
 import { requireWebGPU } from '@tb/testkit';
@@ -54,7 +55,7 @@ describe('viewer: Bounce', () => {
     // What a click fires bounces at e too.
     await page.evaluate(() => window.__viewer.fire(0, 0));
     await page.waitForFunction(() => window.__viewer.bodies === 55, undefined, { timeout: 30_000 });
-    expect(await page.evaluate(() => window.__viewer.inputs[0]!.body.restitution)).toBe(0.7);
+    expect(await page.evaluate(() => (window.__viewer.inputs[0] as SpawnEvent).body.restitution)).toBe(0.7);
     // The pass runs with the ball in the tower, and the GPU reports no error (one would stop the viewer).
     const fired = await page.evaluate(() => window.__viewer.stepIndex);
     await page.waitForFunction((n) => window.__viewer.status !== 'running' || window.__viewer.stepIndex > n + 30, fired, { timeout: 60_000 });

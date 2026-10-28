@@ -1,7 +1,7 @@
 // Runs a Session against any PhysicsEngine: step, observe, feed the rules,
 // push the spawns they produce. The interactive game and the headless tools
 // share this loop, so a recorded session replays through the same code.
-import type { PhysicsEngine, Snapshot } from '@tb/engine-api';
+import type { InputEvent, PhysicsEngine, Snapshot } from '@tb/engine-api';
 import type { CompiledLevel } from './level.ts';
 import { CpuObserver } from './rules.ts';
 import { type Feedback, Session } from './session.ts';
@@ -48,9 +48,21 @@ export class Driver {
   session!: Session;
   /** The newest observed state; while aiming, the world as it stands. */
   snapshot!: Snapshot;
+  /**
+   * How many engine steps `snapshot` holds. Serial, the engine's stepIndex; pipelined while
+   * running, one less: the step after the snapshot is already submitted. An event applies at the
+   * first step() whose stepIndex is at least event.step, so input pushed after seeing a snapshot
+   * and stamped snapshotStep + 1 applies at the same step on either driver (stamped
+   * engine.stepIndex it would not: one step later pipelined). keystone-lab driver-step.test.ts.
+   */
+  snapshotStep = 0;
+  /** Every event pushed besides the shots' spawns (push), in push order. */
+  readonly pushed: InputEvent[] = [];
   private observer!: CpuObserver;
   /** Pipelined only: the snapshot of the newest submitted step, not observed yet. */
   private ahead: Promise<Snapshot> | null = null;
+  /** The engine step of every spawn pushed so far, shots' and others', to number the next shot's body. */
+  private spawnSteps: number[] = [];
 
   constructor(readonly engine: PhysicsEngine, readonly level: CompiledLevel, readonly options: DriverOptions = {}) {}
 
@@ -63,22 +75,41 @@ export class Driver {
     await this.engine.init(this.level.scene);
     for (let i = 0; i < PRESETTLE_STEPS; i++) await this.engine.step();
     this.snapshot = await this.engine.snapshot();
+    this.snapshotStep = this.engine.stepIndex;
     this.session = new Session(this.level, this.snapshot.pos);
     this.observer = new CpuObserver(this.level, this.snapshot);
   }
 
   /** Fire now: the spawn applies at the next step. */
   fire(shot: Shot): Feedback[] {
-    const { spawn, feedback } = this.session.fire(shot, this.engine.stepIndex);
-    this.observer.setBaseline(this.snapshot, this.engine.stepIndex);
+    const step = this.engine.stepIndex;
+    // Engines number spawns by (step, push order); every spawn pushed before is due by now or later
+    // than this one (push's stamping rule), so the ammo comes after exactly those due by now.
+    const { spawn, feedback } = this.session.fire(shot, step, this.level.meta.n + this.spawnSteps.filter((s) => s <= step).length);
+    this.spawnSteps.push(step);
+    this.observer.setBaseline(this.snapshot, step);
     this.engine.push([spawn]);
     return feedback;
+  }
+
+  /**
+   * Push input decided from the observed state (a per-step hook: PlayOptions.perStep). Each
+   * event must be due after the step observed (event.step > snapshotStep, so snapshotStep + 1 at
+   * the soonest), which lands it at the same engine step on a serial and a pipelined driver.
+   * A spawn becomes a body after the bodies due before it, so a later shot's ammo is numbered past it.
+   */
+  push(events: InputEvent[]): void {
+    for (const e of events) if (e.step <= this.snapshotStep) throw new Error(`Driver.push: an event for step ${e.step} is not after the observed step ${this.snapshotStep}; stamp it snapshotStep + 1 or later`);
+    for (const e of events) if (e.kind === 'spawn') this.spawnSteps.push(e.step);
+    this.pushed.push(...events);
+    this.engine.push(events);
   }
 
   async step(): Promise<Feedback[]> {
     if (!this.options.pipelined) {
       await this.engine.step();
       this.snapshot = await this.engine.snapshot();
+      this.snapshotStep = this.engine.stepIndex;
       return this.session.observe(this.observer.observe(this.snapshot, this.engine.stepIndex, this.session.watchIdx));
     }
     if (!this.ahead) {
@@ -89,6 +120,7 @@ export class Driver {
     const n = this.engine.stepIndex;
     await this.engine.step();
     this.snapshot = await this.ahead;
+    this.snapshotStep = n;
     this.ahead = this.read();
     const feedback = this.session.observe(this.observer.observe(this.snapshot, n, this.session.watchIdx));
     if (this.session.phase !== 'running') await this.drain();
@@ -106,7 +138,10 @@ export class Driver {
   async drain(): Promise<void> {
     const ahead = this.ahead;
     this.ahead = null;
-    if (ahead) this.snapshot = await ahead;
+    if (ahead) {
+      this.snapshot = await ahead;
+      this.snapshotStep = this.engine.stepIndex;
+    }
   }
 }
 
@@ -127,7 +162,16 @@ export interface PlayOptions {
   maxSteps?: number;
   /** Called while aiming before each later shot `next` fires: the driver may be copied there and played on. */
   onAiming?(d: Driver, next: number): void;
+  /**
+   * Called after every driver step with the driver as it stands (d.snapshot is of step
+   * d.snapshotStep); the events it returns are pushed (Driver.push: each due after that step). The
+   * weapons runtime hooks here; the game page calls the same hook live, so replays see its input.
+   */
+  perStep?: PerStep;
 }
+
+/** A per-step hook: input decided from the observed state. One per session: it may keep state. */
+export type PerStep = (d: Driver) => InputEvent[];
 
 /**
  * Play shots[next..] from a driver that is aiming before shot `next`: the
@@ -147,6 +191,8 @@ export async function playShots(d: Driver, shots: Shot[], next: number, opts: Pl
     }
     if (d.session.phase === 'cleared' || d.session.phase === 'failed') break;
     feedback.push(...(await d.step()));
+    const input = opts.perStep?.(d);
+    if (input?.length) d.push(input);
   }
   await d.drain();
   return { session: d.session, feedback, steps: engine.stepIndex, snapshot: d.snapshot };

@@ -3,7 +3,7 @@
 // "at contact" rebound measure, taken from per-step snapshots so the GPU's
 // runs (steppedRun in page.ts) and the reference's are measured alike.
 import { expect } from 'vitest';
-import { type BodyDesc, type CombineRule, inertiaOf, massOf, type SceneDesc, type Snapshot, type Vec3 } from '@tb/engine-api';
+import { type BodyDesc, type CombineRule, inertiaOf, massOf, type SceneDesc, type Snapshot, type Vec3, spawnedBodies } from '@tb/engine-api';
 import { rotate } from '@tb/geom';
 import { type AvbdParams, AvbdReferenceEngine, type StepStats } from '@tb/physics-ref';
 import { buildScenario } from '@tb/scenarios';
@@ -31,7 +31,7 @@ export const sceneOf = (bodies: BodyDesc[], o: { gravity?: Vec3; ground?: boolea
 });
 
 /** Every body of the scene in body order, spawned ones included (the snapshot's order). */
-const allBodies = (s: SceneDesc) => [...s.bodies, ...[...s.inputs].sort((a, b) => a.step - b.step).map((ev) => ev.body)];
+const allBodies = (s: SceneDesc) => [...s.bodies, ...spawnedBodies([...s.inputs].sort((a, b) => a.step - b.step))];
 
 /** Semi-implicit Euler's invariant energy of the bodies present: 1/2 m |v + g h/2|^2 - m g.x + 1/2 w.I w. */
 export function shadowEnergy(scene: SceneDesc, s: Snapshot): number {
@@ -131,7 +131,7 @@ export const zeroG = (bodies: BodyDesc[], rule?: CombineRule) => sceneOf(bodies,
 /** Every body's (and spawned body's) restitution set to e, and the ground's. */
 export const withE = (s: SceneDesc, e: number): SceneDesc => ({
   ...s, ground: s.ground && { ...s.ground, restitution: e },
-  bodies: s.bodies.map((b) => ({ ...b, restitution: e })), inputs: s.inputs.map((ev) => ({ ...ev, body: { ...ev.body, restitution: e } })),
+  bodies: s.bodies.map((b) => ({ ...b, restitution: e })), inputs: s.inputs.map((ev) => (ev.kind === 'spawn' ? { ...ev, body: { ...ev.body, restitution: e } } : ev)),
 });
 /** An S5 knockdown: a ball at this speed into a 48-cube city. */
 export const knock = (speed: number) => buildScenario('S5', { N: 48, F: 2, H: 12, fireStep: 0, speed, massRatio: 5, radius: 0.6 }, 1);

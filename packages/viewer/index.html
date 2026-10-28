@@ -15,6 +15,21 @@
   #hud .row { display: flex; justify-content: space-between; gap: 16px; }
   #hud .muted, #help { color: #9aa3b8; }
   #hud .warn { color: #f5b169; }
+  #dev { flex-shrink: 0; font-variant-numeric: tabular-nums; }
+  #dev summary { cursor: pointer; font-weight: 600; }
+  #dev .dev { margin-top: 8px; display: flex; flex-direction: column; gap: 4px; max-width: 300px; }
+  #dev .f { display: flex; justify-content: space-between; gap: 8px; }
+  #dev .h { color: #9aa3b8; font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; margin-top: 4px; }
+  #dev .muted { color: #9aa3b8; }
+  #dev table { border-collapse: collapse; font-size: 12px; }
+  #dev th { color: #9aa3b8; font-weight: 500; text-align: right; padding: 0 4px; }
+  #dev td { text-align: right; padding: 0 4px; }
+  #dev code { font-size: 11px; word-break: break-all; color: #c9cfdc; }
+  #dev .buttons { display: flex; flex-wrap: wrap; gap: 6px; }
+  #dev button { font: inherit; padding: 5px 9px; border: 0; border-radius: 5px; background: #d8693f; color: #fff; cursor: pointer; }
+  #dev button:disabled { background: #2b3242; color: #9aa3b8; cursor: default; }
+  #dev .out { font-size: 12px; min-height: 1.45em; }
+  #dev .out.warn { color: #f5b169; }
   #presets { top: 12px; right: 12px; display: flex; flex-direction: column; gap: 6px; max-width: 200px; }
   #controls { min-height: 0; overflow-y: auto; }
   #controls summary { cursor: pointer; font-weight: 600; }
@@ -22,7 +37,7 @@
   #controls .h { color: #9aa3b8; font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; margin-top: 4px; }
   #controls .f { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
   #controls input[type=number], #controls input[type=text], #controls select { font: inherit; width: 96px; box-sizing: border-box; padding: 2px 5px; border: 1px solid #3a4459; border-radius: 4px; background: #1b2030; color: #e8ebf2; }
-  #controls select[name=scenario], #controls input[name=name] { width: 140px; }
+  #controls select[name=scenario], #controls select[name=rules], #controls input[name=name] { width: 140px; }
   #controls .buttons { display: flex; gap: 6px; }
   #controls .out { font-size: 12px; min-height: 1.45em; }
   #controls .out.warn { color: #f5b169; }

@@ -1,7 +1,9 @@
 // The CPU observer: any engine observed through snapshot() after every step,
 // evaluated with reduceRef. Exact by construction, so it is also what native
 // observers are compared with.
-import type { EngineInfo, GpuBodies, InputEvent, PhysicsEngine, SceneDesc, ShapeDesc, Snapshot, StepReport } from './index.ts';
+import type { EngineInfo, GpuBodies, InputEvent, PhysicsEngine, SceneDesc, ShapeDesc, Snapshot, SpawnEvent, StepReport } from './index.ts';
+
+const isSpawn = (e: InputEvent): e is SpawnEvent => e.kind === 'spawn';
 import {
   checkSpec, gatherRows, OBSERVER_CAPS, type Observation, type ObservedEngine, type ObserveOptions, type Observer,
   type ObserverCaps, reduceRef, type ReduceSpec,
@@ -113,7 +115,7 @@ class SnapshotObserved implements ObservedEngine {
   /** Shape per id, for the bodies that exist after the last step() call. */
   shapes: ShapeDesc[] = [];
   /** Spawns not yet applied, in the order every engine applies them: by step, then scene.inputs, then push order. */
-  private due: InputEvent[] = [];
+  private due: SpawnEvent[] = [];
   /** An async inner step() is unresolved: inputs pushed now could land in it or the next, so push() refuses. */
   private stepping = false;
   private scene: SceneDesc | null = null;
@@ -147,14 +149,14 @@ class SnapshotObserved implements ObservedEngine {
     this.scene = scene;
     // Ids as the engines assign them: the scene's bodies, then each input as it spawns.
     this.shapes = scene.bodies.map((b) => b.shape);
-    this.due = [...scene.inputs].sort((a, b) => a.step - b.step);
+    this.due = scene.inputs.filter(isSpawn).sort((a, b) => a.step - b.step);
   }
 
   /** Forwards to the engine, then queues the spawns with the engines' stable insertion. */
   push(events: InputEvent[]): void {
     if (this.stepping) throw new Error('push(): a step() is still running; await it first');
     this.inner.push(events);
-    for (const ev of events) {
+    for (const ev of events.filter(isSpawn)) {
       let i = this.due.length;
       while (i > 0 && this.due[i - 1]!.step > ev.step) i--;
       this.due.splice(i, 0, ev);

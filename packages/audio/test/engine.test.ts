@@ -1,0 +1,142 @@
+import { describe, expect, it } from 'vitest';
+import { type AudioFrame, BLOCK, cellOf, CollapseEngine, DV_EDGES, normInv, SOUND_MATERIALS, type SoundMaterial, TOP_FIELDS } from '@tb/audio';
+
+const SR = 48000, FRAME = 800; // 60 Hz
+const pine: SoundMaterial = SOUND_MATERIALS.pine;
+
+interface Cell { bin: number; sector?: number; count: number; a2: number }
+function frame(cells: Cell[], top: number[][] = [], sectors = 4): AudioFrame {
+  const n = DV_EDGES.length * sectors, counts = new Float32Array(n), a2 = new Float32Array(n);
+  for (const c of cells) { const k = cellOf(0, c.bin, c.sector ?? 1, sectors); counts[k]! += c.count; a2[k]! += c.a2; }
+  const t = new Float32Array(top.length * TOP_FIELDS);
+  top.forEach((x, j) => t.set(x, j * TOP_FIELDS));
+  return { dt: FRAME / SR, materials: 1, sectors, counts, a2, top: t };
+}
+
+function engine(seed = 1, m: SoundMaterial = pine, opts = {}) {
+  const e = new CollapseEngine({ sampleRate: SR, seed, fullScale: 1000, ...opts });
+  e.setMaterial(0, m);
+  return e;
+}
+
+/** Render `blocks` blocks, calling feed(blockIndex) before each; mono sum L + R (and energy L^2 + R^2). */
+function run(e: CollapseEngine, blocks: number, feed: (b: number) => void = () => {}) {
+  const L = new Float32Array(BLOCK), R = new Float32Array(BLOCK), mono = new Float32Array(blocks * BLOCK);
+  let energy = 0;
+  for (let b = 0; b < blocks; b++) {
+    feed(b);
+    e.render(L, R);
+    for (let i = 0; i < BLOCK; i++) { mono[b * BLOCK + i] = L[i]! + R[i]!; energy += L[i]! ** 2 + R[i]! ** 2; }
+  }
+  return { mono, energy };
+}
+const db = (x: number) => 10 * Math.log10(x);
+
+/** 60 Hz modulation: envelope power at 60/120/180 Hz over the mean of the 30-200 Hz modulation band (dB). */
+function buzz(x: Float32Array): number {
+  const hop = 48, n = Math.floor(x.length / hop), env = new Float64Array(n);
+  for (let i = 0; i < n; i++) { let s = 0; for (let j = 0; j < hop; j++) s += x[i * hop + j]! ** 2; env[i] = Math.sqrt(s / hop); }
+  const mean = env.reduce((a, b) => a + b, 0) / n, fs = SR / hop;
+  const power = (f: number) => { let re = 0, im = 0; for (let i = 0; i < n; i++) { const a = (2 * Math.PI * f * i) / fs; re += (env[i]! - mean) * Math.cos(a); im += (env[i]! - mean) * Math.sin(a); } return re * re + im * im; };
+  const lines = [60, 120, 180].map(power).reduce((a, b) => a + b, 0) / 3;
+  let band = 0, k = 0;
+  for (let f = 31; f < 200; f += 1.7) if (![60, 120, 180].some((h) => Math.abs(f - h) < 4)) { band += power(f); k++; }
+  return db(lines / (band / k));
+}
+
+describe('CollapseEngine', () => {
+  it('normInv is the standard normal quantile', () => {
+    expect(normInv(0.5)).toBeCloseTo(0, 9);
+    expect(normInv(0.975)).toBeCloseTo(1.959964, 5);
+    expect(normInv(0.001)).toBeCloseTo(-3.090232, 5);
+  });
+
+  it('is silent with no impacts and when muted, and never NaN', () => {
+    expect(run(engine(), 40).energy).toBe(0);
+    const e = engine(); e.muted = true;
+    expect(run(e, 40, (b) => b === 0 && e.push(frame([{ bin: 3, count: 50, a2: 50 }]))).energy).toBe(0);
+    const f = engine(1, pine, { fullScale: 1 });
+    const { mono } = run(f, 200, (b) => b % 6 === 0 && f.push(frame([{ bin: 5, count: 1e6, a2: 1e8 }], [[100, 0.5, 0, 0, 3]])));
+    expect(mono.every(Number.isFinite)).toBe(true);
+    expect(Math.max(...mono.map(Math.abs))).toBeLessThanOrEqual(2 * 0.9 + 1e-6); // limiter: each channel <= 0.9
+  });
+
+  it('n impacts sound 10 log10 n dB above one (incoherent sum), within 1 dB over seeds', () => {
+    let one = 0, many = 0;
+    // A single impact's energy varies a lot with where it lands, so average many.
+    for (let seed = 1; seed <= 400; seed++) { const a = engine(seed); one += run(a, 30, (b) => b === 0 && a.push(frame([{ bin: 2, count: 1, a2: 0.01 }]))).energy; }
+    for (let seed = 1; seed <= 12; seed++) { const c = engine(seed + 1000); many += run(c, 30, (b) => b === 0 && c.push(frame([{ bin: 2, count: 64, a2: 0.64 }]))).energy; }
+    one /= 400; many /= 12;
+    expect(db(many / one)).toBeGreaterThan(db(64) - 1);
+    expect(db(many / one)).toBeLessThan(db(64) + 1);
+  });
+
+  it('a foreground voice and the bank give one impact the same energy, within 1.5 dB over seeds', () => {
+    let fg = 0, bank = 0;
+    for (let seed = 1; seed <= 24; seed++) {
+      const a = engine(seed); fg += run(a, 60, (b) => b === 0 && a.push(frame([{ bin: 2, count: 1, a2: 0.0169 }], [[1.3, 10, -0.25, 0, normInv((seed - 0.5) / 24)]]))).energy;
+      const c = engine(seed); bank += run(c, 60, (b) => b === 0 && c.push(frame([{ bin: 2, count: 1, a2: 0.0169 }]))).energy;
+    }
+    expect(Math.abs(db(fg / bank))).toBeLessThan(1.5);
+  });
+
+  it('a click-only material carries the exact click kernel energy', () => {
+    const quiet = { ...pine, ringDb: -Infinity };
+    let bank = 0, fg = 0;
+    for (let seed = 1; seed <= 8; seed++) {
+      const a = engine(seed, quiet); bank += run(a, 40, (b) => b === 0 && a.push(frame([{ bin: 2, count: 1, a2: 1 }]))).energy;
+      const c = engine(seed, quiet); fg += run(c, 40, (b) => b === 0 && c.push(frame([{ bin: 2, sector: 2, count: 1, a2: 1 }], [[1.41, 1.41, 0, 0, 0]]))).energy;
+    }
+    // Both: A = 1 and the contact time of dv = 1.41 m/s; the voice plays the exact kernel, the bank a matched band-pass.
+    expect(Math.abs(db(bank / fg))).toBeLessThan(0.5);
+  });
+
+  it('spreads onsets over the frame: a steady dense stream has no 60 Hz buzz, aligned onsets do', () => {
+    const feed = (e: CollapseEngine) => { let next = 0; return (b: number) => { while (next <= b * BLOCK) { e.push(frame([{ bin: 2, count: 200, a2: 2 }])); next += FRAME; } }; };
+    const a = engine(3); const spread = buzz(run(a, 1500, feed(a)).mono.subarray(20000));
+    const c = engine(3); c.alignOnsets = true; const aligned = buzz(run(c, 1500, feed(c)).mono.subarray(20000));
+    expect(spread).toBeLessThan(3);
+    expect(aligned).toBeGreaterThan(spread + 6);
+  });
+
+  it('schedules a frame after the latency and keeps a steady stream gapless', () => {
+    const e = engine(); e.latency = 0.03;
+    const { mono } = run(e, 600, (b) => { if (b % 6 === 0 && b < 500) e.push(frame([{ bin: 3, count: 100, a2: 4 }])); });
+    const first = mono.findIndex((x) => x !== 0);
+    expect(first).toBeGreaterThanOrEqual(0.03 * SR - BLOCK);
+    expect(first).toBeLessThan(0.03 * SR + 2 * BLOCK);
+    // 10 ms windows from 50 ms to 500 blocks in: none silent.
+    for (let w = Math.round(0.05 * SR); w + 480 < 480 * BLOCK; w += 480) {
+      let s = 0; for (let i = w; i < w + 480; i++) s += mono[i]! ** 2;
+      expect(s).toBeGreaterThan(0);
+    }
+  });
+
+  it('a material change is live: four times the stiffness, twice the pitch', () => {
+    const pitch = (m: SoundMaterial) => {
+      const e = engine(5, { ...m, jitter: 0, clickDb: -Infinity });
+      const { mono } = run(e, 60, (b) => b === 0 && e.push(frame([], [[1, 1, 0, 0, 0]])));
+      let best = 0, bf = 0;
+      for (let f = 1000; f < 12000; f += 10) {
+        let re = 0, im = 0; for (let i = 0; i < 4096; i++) { const v = mono[1400 + i]!; re += v * Math.cos((2 * Math.PI * f * i) / SR); im += v * Math.sin((2 * Math.PI * f * i) / SR); }
+        if (re * re + im * im > best) { best = re * re + im * im; bf = f; }
+      }
+      return bf;
+    };
+    const f0 = pitch(pine), f1 = pitch({ ...pine, E: 4 * pine.E, G: 4 * pine.G! });
+    expect(f1 / f0).toBeGreaterThan(1.95);
+    expect(f1 / f0).toBeLessThan(2.05);
+    // And on a running engine, setMaterial swaps coefficients without dropping the ringing state.
+    const e = engine();
+    run(e, 20, (b) => b === 0 && e.push(frame([{ bin: 3, count: 50, a2: 5 }])));
+    e.setMaterial(0, { ...pine, eta: 0.02 });
+    expect(e.liveResonators()).toBeGreaterThan(0);
+  });
+
+  it('cost does not grow with the impact count', () => {
+    const live = (n: number) => { const e = engine(); run(e, 12, (b) => b === 0 && e.push(frame([0, 1, 2, 3, 4, 5].flatMap((bin) => [0, 1, 2, 3].map((sector) => ({ bin, sector, count: n, a2: n * 0.01 })))))); return e.liveResonators(); };
+    const C = 8, S = 4, M = 13;
+    expect(live(1e5)).toBeLessThanOrEqual(C * S * M);
+    expect(live(1e5)).toBe(live(1e3));
+  });
+});

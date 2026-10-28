@@ -21,7 +21,7 @@ const fr = opt('friction', '');
 if (fr !== '') {
   const mu = Number(fr);
   base.bodies.forEach((b) => { b.friction = mu; });
-  base.inputs.forEach((ev) => { ev.body.friction = mu; });
+  base.inputs.forEach((ev) => { if (ev.kind === 'spawn') ev.body.friction = mu; });
   if (base.ground) base.ground.friction = mu;
 }
 const steps = Number(opt('steps', '180'));
@@ -30,7 +30,7 @@ const perturb = Number(opt("perturb", "0.01"));
 
 function perturbed(k: number): SceneDesc {
   const s: SceneDesc = structuredClone(base);
-  for (const ev of s.inputs) ev.body.linVel = ev.body.linVel.map((v) => v * (1 + perturb * k)) as typeof ev.body.linVel;
+  for (const ev of s.inputs) if (ev.kind === 'spawn') ev.body.linVel = ev.body.linVel.map((v) => v * (1 + perturb * k)) as typeof ev.body.linVel;
   return s;
 }
 

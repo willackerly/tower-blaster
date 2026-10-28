@@ -1,7 +1,7 @@
 // Shots. Every player action is a quantised integer record, so a session is
 // replayed exactly from (level, shots) and a shot fits in a few bytes. A shot
 // becomes one engine spawn event; nothing else about the engine is touched.
-import { type BodyDesc, type InputEvent, massOf, TAG_BALL, type Vec3 } from '@tb/engine-api';
+import { type BodyDesc, massOf, type SpawnEvent, TAG_BALL, type Vec3 } from '@tb/engine-api';
 import { GRAVITY, MATERIALS, materialId, type MaterialName } from './materials.ts';
 
 export type AmmoKind = 'marble' | 'cannonball' | 'cue' | 'drop';
@@ -60,6 +60,41 @@ export function checkShot(s: Shot): void {
   assertInt('az', s.az, 0, 719); assertInt('y', s.y, 0, 4000); assertInt('yaw', s.yaw, -1800, 1800); assertInt('pitch', s.pitch, -890, 890);
 }
 
+/** Each ammo's fields after its name in shot text (writeShots), in this order. */
+const SHOT_FIELDS: Record<AmmoKind, readonly string[]> = {
+  marble: ['az', 'y', 'yaw', 'pitch', 'power'],
+  cannonball: ['az', 'y', 'yaw', 'pitch', 'power'],
+  cue: ['x', 'y', 'z', 'dir', 'power'],
+  drop: ['x', 'z'],
+};
+
+/**
+ * Shots as URL-safe text, for sharing a line: `ammo.f1.f2...` per shot (fields in SHOT_FIELDS
+ * order, integers as the shot holds them), shots joined by `_`; e.g. `cannonball.60.8.0.20.95_drop.4.-8`.
+ */
+export function writeShots(shots: readonly Shot[]): string {
+  return shots.map((s) => [s.ammo, ...SHOT_FIELDS[s.ammo].map((k) => (s as unknown as Record<string, number>)[k])].join('.')).join('_');
+}
+
+/** The shots writeShots wrote, each checked (checkShot); throws naming the shot at fault. Empty text is no shots. */
+export function readShots(text: string): Shot[] {
+  if (text === '') return [];
+  return text.split('_').map((part, i) => {
+    const [ammo, ...vals] = part.split('.');
+    const where = `shot ${i + 1} (${part})`;
+    if (!AMMO_KINDS.includes(ammo as AmmoKind)) throw new Error(`${where}: ammo must be one of ${AMMO_KINDS.join(', ')}`);
+    const fields = SHOT_FIELDS[ammo as AmmoKind];
+    if (vals.length !== fields.length) throw new Error(`${where}: ${ammo} takes ${fields.length} fields (${fields.join('.')}), got ${vals.length}`);
+    const shot: Record<string, unknown> = { ammo };
+    fields.forEach((k, j) => {
+      if (!/^-?\d+$/.test(vals[j]!)) throw new Error(`${where}: ${k} must be an integer, not ${vals[j] || 'empty'}`);
+      shot[k] = Number(vals[j]);
+    });
+    try { checkShot(shot as unknown as Shot); } catch (e) { throw new Error(`${where}: ${(e as Error).message}`); }
+    return shot as unknown as Shot;
+  });
+}
+
 /** Launcher position in metres for azimuth quanta az at height quanta y. */
 export function launcherPos(f: ShotFrame, az: number, y: number): Vec3 {
   const a = az * 0.5 * DEG, r = f.launcher.radius * f.pitch * f.unit;
@@ -83,7 +118,7 @@ export function ammoBody(kind: AmmoKind, unit: number, pos: Vec3, vel: Vec3, alo
 }
 
 /** The spawn event for a shot fired at engine step `step`. */
-export function shotToSpawn(f: ShotFrame, shot: Shot, step: number): InputEvent {
+export function shotToSpawn(f: ShotFrame, shot: Shot, step: number): SpawnEvent {
   checkShot(shot);
   const h = f.unit, ph = f.pitch * h;
   let body: BodyDesc;
@@ -102,7 +137,7 @@ export function shotToSpawn(f: ShotFrame, shot: Shot, step: number): InputEvent 
 }
 
 /** Energy the player spent on a shot: kinetic at launch, or potential above the ground for a drop. */
-export function ammoKE(ev: InputEvent): number {
+export function ammoKE(ev: SpawnEvent): number {
   const b = ev.body, m = massOf(b), v = b.linVel;
   return 0.5 * m * (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]) + (b.linVel.every((x) => x === 0) ? m * GRAVITY * b.pos[1] : 0);
 }
@@ -114,7 +149,7 @@ export function ammoKE(ev: InputEvent): number {
  * here: Rapier substeps once per solver iteration (4 by default), which puts
  * a single-substep prediction 6 cm off after one second.
  */
-export function predictArc(ev: InputEvent, g: Vec3, dt: number, steps: number, substeps = 1): Float64Array {
+export function predictArc(ev: SpawnEvent, g: Vec3, dt: number, steps: number, substeps = 1): Float64Array {
   const out = new Float64Array(3 * (steps + 1));
   const x = [...ev.body.pos], v = [...ev.body.linVel], h = dt / substeps;
   out.set(x, 0);

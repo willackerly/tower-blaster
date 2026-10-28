@@ -40,7 +40,7 @@ const sceneOf = (bodies: BodyDesc[], o: { gravity?: Vec3; ground?: boolean; grou
 });
 const zeroG = (bodies: BodyDesc[], rule?: CombineRule) => sceneOf(bodies, { gravity: [0, 0, 0], ground: false, rule });
 /** Every body's (and spawned body's) restitution set to e. */
-const withE = (s: SceneDesc, e: number): SceneDesc => ({ ...s, bodies: s.bodies.map((b) => ({ ...b, restitution: e })), inputs: s.inputs.map((ev) => ({ ...ev, body: { ...ev.body, restitution: e } })) });
+const withE = (s: SceneDesc, e: number): SceneDesc => ({ ...s, bodies: s.bodies.map((b) => ({ ...b, restitution: e })), inputs: s.inputs.map((ev) => (ev.kind === 'spawn' ? { ...ev, body: { ...ev.body, restitution: e } } : ev)) });
 const knock = (speed: number) => buildScenario('S5', { N: 48, F: 2, H: 12, fireStep: 0, speed, massRatio: 5, radius: 0.6 }, 1);
 const state = (e: AvbdReferenceEngine) => { const s = e.snapshot(); return [...s.pos, ...s.rot, ...s.linVel, ...s.angVel]; };
 const spin = (e: AvbdReferenceEngine, i = 0) => Math.hypot(...e.world!.bodies[i]!.angVel);

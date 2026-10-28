@@ -1,7 +1,7 @@
 // The GPU AVBD engine on stacks, towers and impacts against the f64 reference
 // (the knock-down statistics are in engine-knock.test.ts).
 import { describe, expect, it } from 'vitest';
-import { type BodyDesc, type SceneDesc } from '@tb/engine-api';
+import { type BodyDesc, type SceneDesc, type SpawnEvent } from '@tb/engine-api';
 import { drift, jitter, nonFinite, penetration, survival } from '@tb/metrics';
 import { buildScenario } from '@tb/scenarios';
 import { AvbdSolver } from '../src/index.ts';
@@ -98,7 +98,7 @@ describe('GPU AVBD engine: stacks, towers and impacts', () => {
     // The ball spawned mid-run, 0.2 m from the tower so it has (speculative)
     // pairs in its first step: those are new, the tower's keep their history.
     const late = knock(30);
-    late.inputs[0]!.body.pos[0] += 3.8;
+    (late.inputs[0] as SpawnEvent).body.pos[0] += 3.8;
     const spawn = await call('pairHistory', late, 60);
     ok(spawn);
     expect(spawn.found).toBeGreaterThan(5000);
