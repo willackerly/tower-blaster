@@ -5,7 +5,8 @@
 // and replays headless.
 import type { BodyDesc, PhysicsEngine, Vec3 } from '@tb/engine-api';
 import { type AmmoKind, type CompiledLevel, compileLevel, Driver, type Feedback, LEVELS, type LevelScore, runSession, type Shot, shotToSpawn, snapshotHash, TIER_NAMES } from '@tb/keystone';
-import { clampPitch, eyeOf, frame, type Orbit, rayThrough, viewProj, Window } from '@tb/viewer';
+import { Window } from '@tb/metrics';
+import { clampPitch, eyeOf, frame, type Orbit, rayThrough, viewProj } from '@tb/render/camera';
 import { createDevice } from '@tb/gpu';
 import { HAZY_DAY, lookByName, parseRealOptions, type PixelStats, Renderer, SnapshotSource } from '@tb/render';
 import { type Aimed, azFromYaw, pick, previewBeads, shotFor, SUBSTEPS } from './aim.ts';

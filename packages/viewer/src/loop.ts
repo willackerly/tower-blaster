@@ -324,17 +324,5 @@ export function taskYield(): { next(): Promise<void>; close(): void } {
   };
 }
 
-/** Rolling window of step times for the HUD. */
-export class Window {
-  private xs: number[] = [];
-  constructor(private readonly size = 120) {}
-  push(x: number) {
-    this.xs.push(x);
-    if (this.xs.length > this.size) this.xs.shift();
-  }
-  quantile(q: number): number {
-    if (!this.xs.length) return NaN;
-    const s = [...this.xs].sort((a, b) => a - b);
-    return s[Math.min(s.length - 1, Math.floor(q * s.length))]!;
-  }
-}
+// Window (the HUD's rolling step times) moved to @tb/metrics, which the game uses without the viewer.
+export { Window } from '@tb/metrics';
