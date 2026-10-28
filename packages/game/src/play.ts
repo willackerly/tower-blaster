@@ -5,7 +5,7 @@
 // (level, shots) and replays headless. The game page calls playKeystone with
 // its own elements; the viewer calls it for rules=keystone, with hooks for its
 // dev panels (docs/design/viewer-superset.md, step C).
-import { type BodyDesc, type InputEvent, type PhysicsEngine, spawnedBodies, type Vec3 } from '@tb/engine-api';
+import { type BodyDesc, type EngineHealth, type InputEvent, type PhysicsEngine, spawnedBodies, type Vec3 } from '@tb/engine-api';
 import { type AmmoKind, type CompiledLevel, compileLevel, Driver, type Feedback, type LevelDef, type LevelScore, type PerStep, runSession, type Shot, shotToSpawn, snapshotHash, TIER_NAMES } from '@tb/keystone';
 import { Window } from '@tb/metrics';
 import { clampPitch, EYE_ABOVE_GROUND, eyeOf, frame, type Orbit, rayThrough, viewProj } from '@tb/render/camera';
@@ -53,6 +53,11 @@ export interface GameHandle {
   state(): SessionState;
   /** The same shots from the same level on a fresh engine, built as the live one, on this device. */
   replay(shots: Shot[]): Promise<SessionState>;
+  /**
+   * The live engine's limits since this level loaded (PhysicsEngine.health), such as the GPU pair
+   * buffer's, or null for an engine without them (Rapier). Read between steps, so it changes no step.
+   */
+  health(): Promise<EngineHealth | null>;
 }
 export interface SessionState { step: number; phase: string; strokes: number; heritageBroken: number; hash: string }
 
@@ -64,7 +69,7 @@ export function newGameHandle(): GameHandle {
   return {
     status: 'loading', engine: '', level: '', phase: 'loading', ready: false, frames: 0, stepIndex: 0, strokes: 0, bodies: 0, fast: false, result: null, counts: {}, feel: { hitStop: false, slowMo: false }, resultShownAt: null, timing: { loadMs: 0, stepMs: [] },
     fire: () => false, aim: () => null, select: () => false, load: async () => {}, retry: async () => {}, capture: async () => null,
-    state: none, replay: async () => none(),
+    state: none, replay: async () => none(), health: async () => null,
   };
 }
 
@@ -399,6 +404,8 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
   handle.load = (id) => load(levelIndex(id)).catch(fail);
   handle.retry = () => load(levelIdx, true).catch(fail);
   handle.state = () => ({ step: driver.engine.stepIndex, phase: driver.session.phase, strokes: driver.session.strokes, heritageBroken: sum(driver.session.heritageBroken), hash: snapshotHash(driver.snapshot) });
+  // Between steps and loads, so neither a step nor a load's dispose runs under the read.
+  handle.health = () => exclusive(async () => (await driver.engine.health?.()) ?? null);
   handle.replay = async (shots) => {
     const e = makeEngine(kind, c, device);
     try {

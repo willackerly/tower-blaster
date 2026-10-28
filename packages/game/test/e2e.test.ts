@@ -58,6 +58,8 @@ describe('game page', () => {
     expect(shownAt).toBeGreaterThanOrEqual(lastCrown);
     expect(shownAt).toBeLessThan(r.feedback.find((f) => f.t === 'levelEnd')!.step);
     expect(await page.evaluate((s) => window.__game.replay(s), shots)).toEqual(live);
+    // Rapier reports no limits (PhysicsEngine.health is optional); the GPU's are checked in par-gpu.ts.
+    expect(await page.evaluate(() => window.__game.health())).toBeNull();
 
     // Keys typed into a form field (the viewer's panels share the page) are not game keys: N would load L2.
     await page.evaluate(() => { const i = document.createElement('input'); i.id = 'field'; document.body.append(i); });
