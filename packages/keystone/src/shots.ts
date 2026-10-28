@@ -1,7 +1,7 @@
 // Shots. Every player action is a quantised integer record, so a session is
 // replayed exactly from (level, shots) and a shot fits in a few bytes. A shot
 // becomes one engine spawn event; nothing else about the engine is touched.
-import { type BodyDesc, type InputEvent, massOf, TAG_BALL, type Vec3 } from '@tb/engine-api';
+import { type BodyDesc, massOf, type SpawnEvent, TAG_BALL, type Vec3 } from '@tb/engine-api';
 import { GRAVITY, MATERIALS, materialId, type MaterialName } from './materials.ts';
 
 export type AmmoKind = 'marble' | 'cannonball' | 'cue' | 'drop';
@@ -83,7 +83,7 @@ export function ammoBody(kind: AmmoKind, unit: number, pos: Vec3, vel: Vec3, alo
 }
 
 /** The spawn event for a shot fired at engine step `step`. */
-export function shotToSpawn(f: ShotFrame, shot: Shot, step: number): InputEvent {
+export function shotToSpawn(f: ShotFrame, shot: Shot, step: number): SpawnEvent {
   checkShot(shot);
   const h = f.unit, ph = f.pitch * h;
   let body: BodyDesc;
@@ -102,7 +102,7 @@ export function shotToSpawn(f: ShotFrame, shot: Shot, step: number): InputEvent 
 }
 
 /** Energy the player spent on a shot: kinetic at launch, or potential above the ground for a drop. */
-export function ammoKE(ev: InputEvent): number {
+export function ammoKE(ev: SpawnEvent): number {
   const b = ev.body, m = massOf(b), v = b.linVel;
   return 0.5 * m * (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]) + (b.linVel.every((x) => x === 0) ? m * GRAVITY * b.pos[1] : 0);
 }
@@ -114,7 +114,7 @@ export function ammoKE(ev: InputEvent): number {
  * here: Rapier substeps once per solver iteration (4 by default), which puts
  * a single-substep prediction 6 cm off after one second.
  */
-export function predictArc(ev: InputEvent, g: Vec3, dt: number, steps: number, substeps = 1): Float64Array {
+export function predictArc(ev: SpawnEvent, g: Vec3, dt: number, steps: number, substeps = 1): Float64Array {
   const out = new Float64Array(3 * (steps + 1));
   const x = [...ev.body.pos], v = [...ev.body.linVel], h = dt / substeps;
   out.set(x, 0);

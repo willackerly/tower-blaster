@@ -2,7 +2,7 @@
 // contract. Used as a reference for quality metrics and as the number every
 // GPU variant has to beat by a wide margin.
 import RAPIER from '@dimforge/rapier3d-simd-compat';
-import { type BodyDesc, DEFAULT_RESTITUTION_COMBINE, emptySnapshot, type EngineInfo, type InputEvent, type PhysicsEngine, type SceneDesc, type Snapshot } from '@tb/engine-api';
+import { blastArea, blastKick, type BodyDesc, checkBlast, DEFAULT_RESTITUTION_COMBINE, emptySnapshot, type EngineInfo, type InputEvent, massOf, type PhysicsEngine, type SceneDesc, type Snapshot } from '@tb/engine-api';
 import { createBody, createGround, initRapier, RULES } from './bodies.ts';
 
 export interface RapierOptions {
@@ -15,6 +15,8 @@ export class RapierEngine implements PhysicsEngine {
   stepIndex = 0;
   private world: RAPIER.World | null = null;
   private bodies: RAPIER.RigidBody[] = [];
+  /** Each body's description, for blasts. */
+  private descs: BodyDesc[] = [];
   private pending: InputEvent[] = [];
   private sleep = true;
   private combine = RAPIER.CoefficientCombineRule.Average;
@@ -26,6 +28,7 @@ export class RapierEngine implements PhysicsEngine {
   }
 
   async init(scene: SceneDesc): Promise<void> {
+    for (const ev of scene.inputs) if (ev.kind === 'blast') checkBlast(ev.blast);
     await initRapier();
     this.info.variant.version = RAPIER.version();
     this.dispose();
@@ -42,6 +45,7 @@ export class RapierEngine implements PhysicsEngine {
     this.world = world;
     this.sleep = scene.sleep;
     this.bodies = [];
+    this.descs = [];
     for (const b of scene.bodies) this.add(b);
     this.pending = [...scene.inputs].sort((a, b) => a.step - b.step);
     this.stepIndex = 0;
@@ -53,9 +57,11 @@ export class RapierEngine implements PhysicsEngine {
     collider.setFrictionCombineRule(this.combine);
     collider.setRestitutionCombineRule(this.restitutionCombine);
     this.bodies.push(body);
+    this.descs.push(b);
   }
 
   push(events: InputEvent[]): void {
+    for (const ev of events) if (ev.kind === 'blast') checkBlast(ev.blast);
     // Stable insertion keeps push order among events due at the same step.
     for (const ev of events) {
       let i = this.pending.length;
@@ -67,7 +73,19 @@ export class RapierEngine implements PhysicsEngine {
   step(): void {
     const w = this.world;
     if (!w) throw new Error('init() first');
-    while (this.pending.length && this.pending[0]!.step <= this.stepIndex) this.add(this.pending.shift()!.body);
+    while (this.pending.length && this.pending[0]!.step <= this.stepIndex) {
+      const ev = this.pending.shift()!;
+      if (ev.kind === 'spawn') { this.add(ev.body); continue; }
+      // A blast (engine-api blast.ts): mass and volume from the description, as the AVBD engines.
+      const b = checkBlast(ev.blast);
+      this.bodies.forEach((rb, id) => {
+        const p = rb.translation(), d = this.descs[id]!;
+        const dv = blastKick(b, id, [p.x, p.y, p.z], massOf(d), blastArea(d.shape));
+        if (!dv) return;
+        const v = rb.linvel();
+        rb.setLinvel({ x: v.x + dv[0], y: v.y + dv[1], z: v.z + dv[2] }, true);
+      });
+    }
     w.step();
     this.stepIndex++;
   }

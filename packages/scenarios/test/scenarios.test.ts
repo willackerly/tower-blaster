@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import fc from 'fast-check';
 import { describe, expect, it } from 'vitest';
-import { bodiesAt, type BodyDesc, massOf, TAG_BALL } from '@tb/engine-api';
+import { bodiesAt, type BodyDesc, massOf, TAG_BALL, type SpawnEvent } from '@tb/engine-api';
 import { boundingRadius, groundDepth, shapeDepth, spherePairs } from '@tb/geom';
 import { bounceScene, buildScenario, rng, SCENARIOS } from '../src/index.ts';
 
@@ -79,7 +79,7 @@ describe('scenario specifics', () => {
     expect(new Set(s4.bodies.map((b) => b.tag)).size).toBe(Math.ceil(10000 / 1600));
     const s5 = buildScenario('S5', { N: 3000, massRatio: 50 });
     expect(s5.bodies.length).toBe(3000);
-    const ball = s5.inputs[0]!.body;
+    const ball = (s5.inputs[0] as SpawnEvent).body;
     expect(ball.tag).toBe(TAG_BALL);
     expect(massOf(ball)).toBeCloseTo(50, 9);
     expect(ball.linVel[0]).toBeGreaterThan(0);
@@ -153,7 +153,7 @@ describe('scenario specifics', () => {
     expect(plain).toEqual(before);
     expect(on.ground).toEqual({ ...plain.ground, restitution: 0.6 });
     expect(on.bodies).toEqual(plain.bodies.map((b) => ({ ...b, restitution: 0.6 })));
-    expect(on.inputs).toEqual(plain.inputs.map((ev) => ({ ...ev, body: { ...ev.body, restitution: 0.6 } })));
+    expect(on.inputs).toEqual(plain.inputs.map((ev) => (ev.kind === 'spawn' ? { ...ev, body: { ...ev.body, restitution: 0.6 } } : ev)));
     expect({ ...on, bodies: [], inputs: [], ground: null }).toEqual({ ...plain, bodies: [], inputs: [], ground: null });
     // e 0 is a value like any other, and a scene without a ground keeps none.
     expect(bounceScene(on, 0).bodies.every((b) => b.restitution === 0)).toBe(true);

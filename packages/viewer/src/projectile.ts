@@ -2,7 +2,7 @@
 // The defaults reproduce the viewer's original ball exactly (radius 0.7,
 // density 8, 40 m/s), so a default setup fires the same body as before.
 import { parseSpec } from '@tb/bench';
-import { type BodyDesc, type SceneDesc, type ShapeDesc, TAG_BALL, volumeOf } from '@tb/engine-api';
+import { type BodyDesc, type SceneDesc, type ShapeDesc, spawnedBodies, TAG_BALL, volumeOf } from '@tb/engine-api';
 import { boundingRadius } from '@tb/geom';
 import type { V3 } from './math.ts';
 
@@ -79,6 +79,6 @@ export function writeProjectile(p: Projectile, q: URLSearchParams): void {
 export function pushRadiusLimit(spec: string, scene: SceneDesc): number {
   const { name, options } = parseSpec(spec);
   if (name !== 'avbd-gpu') return Infinity;
-  const all = [...scene.bodies, ...scene.inputs.map((e) => e.body)];
+  const all = [...scene.bodies, ...spawnedBodies(scene.inputs)];
   return all.reduce((m, b) => Math.max(m, boundingRadius(b.shape)), typeof options.maxRadius === 'number' ? options.maxRadius : 0);
 }

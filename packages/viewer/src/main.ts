@@ -6,7 +6,7 @@
 // per frame (maxSteps allows catch-up). Slower engines fall into slow motion,
 // shown as sim speed.
 import { makeEngine, parseSpec } from '@tb/bench';
-import { type BodyDesc, type EngineInfo, type InputEvent, type PhysicsEngine, type Snapshot } from '@tb/engine-api';
+import { type BodyDesc, type EngineInfo, type InputEvent, type PhysicsEngine, type Snapshot, spawnedBodies } from '@tb/engine-api';
 import { boundingRadius } from '@tb/geom';
 import { DEFAULT_AVBD } from '@tb/physics-ref';
 import { SCENARIOS } from '@tb/scenarios';
@@ -278,7 +278,10 @@ async function main() {
   handle.camera = () => poseOf(orbit);
 
   function shapesFor(count: number): BodyDesc[] {
-    while (shapes.length < count) shapes.push(events[shapes.length - scene.bodies.length]!.body);
+    if (shapes.length < count) {
+      const spawned = spawnedBodies(events);
+      while (shapes.length < count) shapes.push(spawned[shapes.length - scene.bodies.length]!);
+    }
     return shapes;
   }
 
