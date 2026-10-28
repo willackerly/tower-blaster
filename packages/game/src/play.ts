@@ -8,7 +8,7 @@
 import { type BodyDesc, type InputEvent, type PhysicsEngine, spawnedBodies, type Vec3 } from '@tb/engine-api';
 import { type AmmoKind, type CompiledLevel, compileLevel, Driver, type Feedback, type LevelDef, type LevelScore, type PerStep, runSession, type Shot, shotToSpawn, snapshotHash, TIER_NAMES } from '@tb/keystone';
 import { Window } from '@tb/metrics';
-import { clampPitch, eyeOf, frame, type Orbit, rayThrough, viewProj } from '@tb/render/camera';
+import { clampPitch, eyeOf, frame, HORIZON_PITCH, type Orbit, rayThrough, viewProj } from '@tb/render/camera';
 import type { PixelStats, Renderer, SnapshotSource } from '@tb/render';
 import { type Aimed, azFromYaw, pick, previewBeads, shotFor, SUBSTEPS } from './aim.ts';
 import { Synth, type Voice, voicesFor } from './audio.ts';
@@ -432,7 +432,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
       orbit.target = [orbit.target[0] - dx * cy * s, orbit.target[1] + dy * s, orbit.target[2] + dx * sy * s];
     } else {
       orbit.yaw -= dx * 0.005;
-      orbit.pitch = clampPitch(orbit.pitch + dy * 0.005);
+      orbit.pitch = clampPitch(orbit.pitch + dy * 0.005, HORIZON_PITCH);
     }
   });
   canvas.addEventListener('pointerup', (e) => {

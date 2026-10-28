@@ -12,7 +12,7 @@ import { boundingRadius } from '@tb/geom';
 import { DEFAULT_AVBD } from '@tb/physics-ref';
 import { GAME_HELP, gameOverlays, playLine, type GameHandle, installGameStyles, newGameHandle, playKeystone, structureTints } from '@tb/game';
 import { AVBD_GAP_SLOP, AVBD_ITERATIONS, compileLevel, type Driver, LEVELS, type Shot } from '@tb/keystone';
-import { clampPitch, frame, rayThrough, viewProj, eyeOf, orbitAt, poseOf, type CameraPose, type Orbit } from './camera.ts';
+import { clampPitch, EYE_ABOVE_GROUND, frame, rayThrough, viewProj, eyeOf, orbitAt, poseOf, type CameraPose, type Orbit } from './camera.ts';
 import { alphaAt, newArrivals, newClock, newPacer, pauseLatch, runFree, stepsDue, taskYield, trackSimSpeed, Window } from './loop.ts';
 import type { V3 } from './math.ts';
 import { escapeHtml } from './html.ts';
@@ -282,7 +282,7 @@ async function main() {
     fxSlots = handle.tinted = tints?.length ?? 0;
     const b = bounds(scene.bodies);
     box = b;
-    orbit = want.camera ? orbitAt(want.camera, want.view.fov) : frame(b.min, b.max, want.view, want.scale, next.ground?.y);
+    orbit = { ...(want.camera ? orbitAt(want.camera, want.view.fov) : frame(b.min, b.max, want.view, want.scale, next.ground?.y)), floor: (next.ground?.y ?? 0) + EYE_ABOVE_GROUND };
     const c: V3 = [(b.min[0] + b.max[0]) / 2, (b.min[1] + b.max[1]) / 2, (b.min[2] + b.max[2]) / 2];
     renderer.setShadowBounds(c, Math.hypot(b.max[0] - b.min[0], b.max[1] - b.min[1], b.max[2] - b.min[2]) / 2 + 2);
     handle.inputs = [];
@@ -336,7 +336,7 @@ async function main() {
       // Camera only: re-framed now (a start camera keeps its pose and takes the field of view).
       config = { ...config, view };
       if (nextConfig) nextConfig = { ...nextConfig, view };
-      orbit = config.camera ? { ...orbit, fovY: frame(box.min, box.max, view, config.scale, scene.ground?.y).fovY } : frame(box.min, box.max, view, config.scale, scene.ground?.y);
+      orbit = config.camera ? { ...orbit, fovY: frame(box.min, box.max, view, config.scale, scene.ground?.y).fovY } : { ...frame(box.min, box.max, view, config.scale, scene.ground?.y), floor: orbit.floor };
       history.replaceState(null, '', toSearch(config));
       presets(location.search);
     },
