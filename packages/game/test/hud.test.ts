@@ -48,4 +48,13 @@ describe('formatting', () => {
     expect(resultHtml(L1, score, 1, false)).not.toMatch(/data-act="next"/);
     expect(html).toContain(`(${['Brute', 'Clean', 'Elegant', 'Keystone'][tier(score.leverage)]})`);
   });
+  it('before the score, the card tallies: name, strokes and par, and the actions, no score lines or stamp', () => {
+    const html = resultHtml(L1, null, 1, true);
+    expect(html).toContain(L1.name);
+    expect(html).toMatch(/1 stroke · par 1/);
+    expect(html).toMatch(/tallying/);
+    expect(html).toMatch(/data-act="retry"/);
+    expect(html).toMatch(/data-act="next"/);
+    expect(html).not.toMatch(/class="stamp|Total/);
+  });
 });

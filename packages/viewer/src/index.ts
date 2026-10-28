@@ -6,3 +6,4 @@ export * from './math.ts';
 export * from './params.ts';
 export * from './projectile.ts';
 export * from './scene-file.ts';
+export * from './level-file.ts';

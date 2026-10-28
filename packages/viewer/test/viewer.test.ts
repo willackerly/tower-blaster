@@ -9,7 +9,7 @@ import {
   pushRadiusLimit, rayThrough, runFree, SIM_SPEED_TAU, stepDue, stepped, stepsDue, taskYield, toSearch, trackSimSpeed, transform, viewProj, Window,
   withOption, type FreeHooks, type Orbit, orbitAt, parseCamera, parseSceneFile, poseOf, SCENE_FILE_FORMAT, sceneFile, sceneFileName, type ViewerConfig,
   autoSubsteps, froudeSpeed, MAX_SUBSTEPS, SCALE_LIMITS, sceneSummary, worldEngineSpec, worldScene,
-  DEFAULT_FRAMING, FRAMING_LIMITS, framingFrom, parseFraming, clampPitch, eyeDistance, MAX_PITCH, MIN_EYE_DISTANCE, normalize,
+  DEFAULT_FRAMING, FRAMING_LIMITS, framingFrom, parseFraming, clampPitch, eyeDistance, MAX_PITCH, HORIZON_PITCH, MIN_EYE_DISTANCE, normalize,
   bounceOn, bounceScene, DEFAULT_BOUNCE, viewerScene,
 } from '../src/index.ts';
 import { SCENARIOS } from '@tb/scenarios';
@@ -1045,6 +1045,9 @@ describe('looking up (negative pitch, the floor)', () => {
     expect(clampPitch(-3)).toBe(-MAX_PITCH);
     expect(clampPitch(3)).toBe(MAX_PITCH);
     expect(clampPitch(-0.7)).toBe(-0.7);
+    // The game (no floor) keeps the old range: down from just above level.
+    expect(clampPitch(-0.7, HORIZON_PITCH)).toBe(HORIZON_PITCH);
+    expect(clampPitch(3, HORIZON_PITCH)).toBe(MAX_PITCH);
     expect(orbitAt({ target: [0, 0, 0], yaw: 0, pitch: -1, distance: 5 }).pitch).toBe(-1);
   });
 
