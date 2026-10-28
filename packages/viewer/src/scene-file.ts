@@ -12,7 +12,7 @@ import { SCENARIOS } from '@tb/scenarios';
 import { type CameraPose, DEFAULT_FRAMING, type Framing } from './camera.ts';
 import { AMMO_KINDS, type AmmoKind, type LevelDef, readShots, type Shot, writeShots } from '@tb/keystone';
 import { encodeLevelParam, parseLevelDef } from './level-file.ts';
-import { parseViewerConfig, type ViewerConfig, writeCamera, writeFraming } from './params.ts';
+import { defaultFraming, parseViewerConfig, type ViewerConfig, writeCamera, writeFraming } from './params.ts';
 import { DEFAULT_GRENADE, type GrenadeSpec } from '@tb/weapons';
 import { DEFAULT_PROJECTILE, parseGrenade, type Projectile, writeGrenade } from './projectile.ts';
 
@@ -223,7 +223,9 @@ export function parseSceneFile(text: string): { config: ViewerConfig; name: stri
   }
   const view = object(root.view ?? {}, 'view');
   only(view, Object.keys(DEFAULT_FRAMING), 'view');
-  writeFraming({ ...DEFAULT_FRAMING, ...Object.fromEntries(Object.entries(view).map(([k, v]) => [k, num(v, `view.${k}`)])) } as Framing, q);
+  // Keys a file lacks (older files: yaw and eye) are DEFAULT_FRAMING's, what they meant when saved; written against the scene's own default.
+  const p = parseViewerConfig(`?${q}`);
+  writeFraming({ ...DEFAULT_FRAMING, ...Object.fromEntries(Object.entries(view).map(([k, v]) => [k, num(v, `view.${k}`)])) } as Framing, q, defaultFraming(p.scenario, p.level));
   if (root.sound !== undefined) {
     const snd = object(root.sound, 'sound');
     only(snd, Object.keys(DEFAULT_SOUND), 'sound');

@@ -1,7 +1,7 @@
 import fc from 'fast-check';
 import { describe, expect, it } from 'vitest';
 import { bounceScene, buildScenario } from '@tb/scenarios';
-import { parseConfig, runScene, sceneKey, splitEngines, timingProblems, toQuery, type BrowserEnv, type RunConfig } from '../src/index.ts';
+import { exitCodeFor, parseConfig, runScene, sceneKey, splitEngines, timingProblems, toQuery, type BrowserEnv, type RunConfig } from '../src/index.ts';
 
 describe('run config in the URL', () => {
   it('parses engines, scenario params and timing', () => {
@@ -89,5 +89,19 @@ describe('timingProblems', () => {
     expect(timingProblems(sw, ['wasm-simd-st'])).toEqual([]);
     expect(timingProblems(sw, ['webgpu:x'])[0]).toMatch(/software/);
     expect(timingProblems(env({ gpu: null }), ['webgpu:x'])[0]).toMatch(/no WebGPU/);
+  });
+});
+
+describe('exitCodeFor', () => {
+  it('is 4 for a limit that changed the physics, else 3 for invalid timing, each unless allowed, else 0', () => {
+    const ok = { valid: true, limitProblems: [] }, invalid = { valid: false }, hit = { valid: true, limitProblems: ['engine 0 (avbd-gpu): contacts dropped'] };
+    expect(exitCodeFor([])).toBe(0);
+    expect(exitCodeFor([ok, { valid: true }])).toBe(0);
+    expect(exitCodeFor([ok, invalid])).toBe(3);
+    expect(exitCodeFor([ok, invalid], { invalid: true })).toBe(0);
+    expect(exitCodeFor([hit, ok])).toBe(4);
+    expect(exitCodeFor([invalid, hit])).toBe(4); // the physics first: those numbers are of another simulation
+    expect(exitCodeFor([invalid, hit], { limits: true })).toBe(3);
+    expect(exitCodeFor([invalid, hit], { limits: true, invalid: true })).toBe(0);
   });
 });

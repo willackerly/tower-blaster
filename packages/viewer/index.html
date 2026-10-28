@@ -15,6 +15,9 @@
   #hud .row { display: flex; justify-content: space-between; gap: 16px; }
   #hud .muted, #help { color: #9aa3b8; }
   #hud .warn { color: #f5b169; }
+  #hud .bad { color: #ff7a7a; max-width: 300px; }
+  #hud .buttons { margin: 4px 0; }
+  #hud button { font: inherit; padding: 5px 9px; border: 0; border-radius: 5px; background: #d8693f; color: #fff; cursor: pointer; }
   #dev { flex-shrink: 0; font-variant-numeric: tabular-nums; }
   #dev summary { cursor: pointer; font-weight: 600; }
   #dev .dev { margin-top: 8px; display: flex; flex-direction: column; gap: 4px; max-width: 300px; }
@@ -60,7 +63,7 @@
   <details id="controls" class="panel"></details>
 </div>
 <div id="presets" class="panel"></div>
-<div id="help" class="panel">drag: orbit · right-drag / shift-drag: pan · wheel: zoom · click: fire · space: fire at centre · R: reset · P: pause</div>
+<div id="help" class="panel">drag: orbit (up past the ground: look up) · right-drag / shift-drag: pan · wheel: zoom · click: fire · space: fire at centre · R: reset · P: pause</div>
 <div id="error" class="panel"></div>
 <script type="module" src="./src/main.ts"></script>
 </body>

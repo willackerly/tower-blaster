@@ -21,6 +21,11 @@ export interface ScenarioDef {
    * GpuEngineOptions, such as pairsPerBody, on avbd-gpu only): a scene that needs more iterations than the default.
    */
   avbd?: Record<string, number | boolean>;
+  /**
+   * How the viewer frames it unless asked otherwise: Framing fields (@tb/render camera.ts; pitch, fit, fov,
+   * yaw in degrees, eye in metres: above 0 from the ground, looking up) over the default framing.
+   */
+  view?: Partial<Record<'pitch' | 'fit' | 'fov' | 'yaw' | 'eye', number>>;
   build(params: Params, seed: number): SceneDesc;
 }
 
@@ -313,6 +318,10 @@ const S15: ScenarioDef = {
   // and fall), and a collapsed pile wants more pair slots than the default 16 per body (boxBroadphase
   // halves the need), or contacts are dropped and planks sink into each other.
   avbd: { iterations: 40, gapSlop: 3e-5, boxBroadphase: true, pairsPerBody: 32 },
+  // Looking up at the tower from near its base, standing (Will, 2026-10-28), on the side the ball knocks it toward
+  // (toppleSide 0: +x, yaw 90) and a little off it, so it falls toward the eye and past it. fit 0.7: close, so the
+  // spire's tip runs just off the top of the 70 degree view while the foot stays in (from renders at fit 1.05, 0.7 and 0.5).
+  view: { eye: 1.7, fov: 70, yaw: 70, fit: 0.7 },
   build(p, seed) {
     // Units are plank widths (KAPLA_SCALE m); joint and jitter are in mm, toppleSpeed in m/s at real size. Like every
     // scenario's, the scene's speeds are the unit world's (gravity 9.81 units/s^2), which a world at scale s plays

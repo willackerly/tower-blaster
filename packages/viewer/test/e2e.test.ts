@@ -216,7 +216,7 @@ describe('viewer', () => {
     await page.close();
   });
 
-  it('the panel\'s camera framing moves the camera now, goes into the URL, and R keeps it', async (ctx) => {
+  it('the panel\'s camera framing moves the camera now, goes into the URL, and R keeps it; dragging up looks up', async (ctx) => {
     if (!browser) return ctx.skip();
     const { page, errors } = await open('/?scenario=S1&param.F=3&param.H=6&param.gap=0.02&offscreen=1&engine=rapier');
     const status = await page.evaluate(() => ({ s: window.__viewer.status, e: window.__viewer.error }));
@@ -239,6 +239,17 @@ describe('viewer', () => {
     await page.keyboard.press('r');
     await page.waitForFunction(() => window.__viewer.resets === 2, undefined, { timeout: 60_000 });
     expect((await pose()).pitch).toBeCloseTo((30 * Math.PI) / 180, 3);
+    // Dragging up past the horizon looks up (pitch below 0); it stops 83 degrees short of straight up.
+    const box = (await page.locator('canvas').boundingBox())!;
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height - 20);
+    await page.mouse.down();
+    await page.mouse.move(box.x + box.width / 2, box.y + 20, { steps: 8 });
+    await page.mouse.up();
+    const up = (await pose()).pitch;
+    expect(up).toBeLessThan(-0.5);
+    expect(up).toBeGreaterThanOrEqual(-1.45);
+    const frames = await page.evaluate(() => window.__viewer.frames);
+    await page.waitForFunction((n) => window.__viewer.frames > n + 3, frames, { timeout: 30_000 });
     expect(errors).toEqual([]);
     await page.close();
   });

@@ -713,6 +713,7 @@ export async function pairHistory(scene: SceneDesc, steps: number, opts: { pairs
     last = cur;
   }
   const diagnostics = await e.diagnostics();
+  const health = await e.health();
   // init() makes new buffers, so the counters start again from zero.
   await e.init(scene);
   const reinit = await e.diagnostics();
@@ -722,7 +723,7 @@ export async function pairHistory(scene: SceneDesc, steps: number, opts: { pairs
   e.dispose();
   return {
     error: error?.message ?? null, wrong, found, missed, axes, checked, axisMismatch, axisTies, presenceMismatch, hinted, overflowSteps, spawnPairs, examples,
-    peak, lastRequired, stickyWrong, peakDrops, diagnostics, reinit, reinit5,
+    peak, lastRequired, stickyWrong, peakDrops, diagnostics, health, reinit, reinit5,
   };
 }
 const NONE_U32 = 0xffffffff;

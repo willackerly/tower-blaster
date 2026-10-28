@@ -9,7 +9,7 @@ import {
   pushRadiusLimit, rayThrough, runFree, SIM_SPEED_TAU, stepDue, stepped, stepsDue, taskYield, toSearch, trackSimSpeed, transform, viewProj, Window,
   withOption, type FreeHooks, type Orbit, orbitAt, parseCamera, parseSceneFile, poseOf, SCENE_FILE_FORMAT, sceneFile, sceneFileName, type ViewerConfig,
   autoSubsteps, froudeSpeed, MAX_SUBSTEPS, SCALE_LIMITS, sceneSummary, worldEngineSpec, worldScene,
-  DEFAULT_FRAMING, FRAMING_LIMITS, framingFrom, parseFraming,
+  DEFAULT_FRAMING, FRAMING_LIMITS, framingFrom, parseFraming, frameFromGround, defaultFraming, clampPitch, eyeDistance, MAX_PITCH, HORIZON_PITCH, MIN_EYE_DISTANCE, normalize,
   bounceOn, bounceScene, DEFAULT_BOUNCE, viewerScene, scenarioEngineSpec,
 } from '../src/index.ts';
 import { SCENARIOS } from '@tb/scenarios';
@@ -1058,6 +1058,64 @@ describe('camera in the URL', () => {
   });
 });
 
+describe('looking up (negative pitch, the floor)', () => {
+  const o: Orbit = { target: [2, 6, -1], yaw: 0.7, pitch: -0.5, distance: 30, fovY: 0.8, floor: 0.25 };
+
+  it('pitch clamps at 83 degrees either way, not at the horizon', () => {
+    expect(clampPitch(-3)).toBe(-MAX_PITCH);
+    expect(clampPitch(3)).toBe(MAX_PITCH);
+    expect(clampPitch(-0.7)).toBe(-0.7);
+    // The game (no floor) keeps the old range: down from just above level.
+    expect(clampPitch(-0.7, HORIZON_PITCH)).toBe(HORIZON_PITCH);
+    expect(clampPitch(3, HORIZON_PITCH)).toBe(MAX_PITCH);
+    expect(orbitAt({ target: [0, 0, 0], yaw: 0, pitch: -1, distance: 5 }).pitch).toBe(-1);
+  });
+
+  it('an eye that would go under the floor slides in along its line and stays on it', () => {
+    const e = eyeOf(o);
+    expect(e[1]).toBeCloseTo(0.25, 12);
+    expect(eyeDistance(o)).toBeCloseTo((6 - 0.25) / Math.sin(0.5), 12);
+    // Same direction from the target as without a floor.
+    const free = eyeOf({ ...o, floor: undefined });
+    const dir = (p: number[]) => normalize([p[0]! - 2, p[1]! - 6, p[2]! + 1]);
+    dir(e).forEach((x, k) => expect(x).toBeCloseTo(dir(free)[k]!, 12));
+    expect(free[1]).toBeLessThan(0); // what the floor prevents
+    // Above the floor, and looking down, the floor changes nothing; the target below the floor keeps a minimum distance.
+    expect(eyeOf({ ...o, pitch: -0.1 })).toEqual(eyeOf({ ...o, pitch: -0.1, floor: undefined }));
+    expect(eyeOf({ ...o, pitch: 0.4 })).toEqual(eyeOf({ ...o, pitch: 0.4, floor: undefined }));
+    expect(eyeDistance({ ...o, target: [0, 0, 0] })).toBe(MIN_EYE_DISTANCE);
+  });
+
+  it('dragging on past the floor keeps looking further up from it, and dragging back restores the distance', () => {
+    let prev = -Infinity;
+    for (let p = -0.3; p >= -MAX_PITCH; p -= 0.1) {
+      const q = { ...o, pitch: p };
+      expect(eyeOf(q)[1]).toBeGreaterThanOrEqual(0.25 - 1e-9);
+      const view = normalize(o.target.map((t, k) => t - eyeOf(q)[k]!) as [number, number, number]);
+      expect(view[1]).toBeGreaterThan(prev); // steeper up
+      prev = view[1];
+    }
+    expect(eyeDistance({ ...o, pitch: 0.3 })).toBe(30);
+  });
+
+  it('rays from an eye held up by the floor still re-project to their pixel', () => {
+    fc.assert(fc.property(fc.double({ min: -MAX_PITCH, max: -0.05, noNaN: true }), fc.double({ min: -0.9, max: 0.9, noNaN: true }), fc.double({ min: -0.9, max: 0.9, noNaN: true }), (pitch, x, y) => {
+      const q = { ...o, pitch };
+      const { origin, dir } = rayThrough(q, 1.6, x, y);
+      const p = transform(viewProj(q, 1.6), [origin[0] + 5 * dir[0], origin[1] + 5 * dir[1], origin[2] + 5 * dir[2]]);
+      return Math.abs(p[0] / p[3] - x) < 1e-3 && Math.abs(p[1] / p[3] - y) < 1e-3 && origin[1] >= 0.25 - 1e-9;
+    }));
+  });
+
+  it('a pose looking up round-trips through the URL and view.pitch takes it down to -45', () => {
+    const pose = { target: [0, 12, 0] as [number, number, number], yaw: 0.3, pitch: -0.9, distance: 20 };
+    const c = { ...parseViewerConfig('?scenario=S1'), camera: pose };
+    expect(parseViewerConfig(toSearch(c)).camera).toEqual(pose);
+    expect(parseViewerConfig('?view.pitch=-20').view.pitch).toBe(-20);
+    expect(() => parseViewerConfig('?view.pitch=-50')).toThrow(/view.pitch must be a number from -45 to 83/);
+  });
+});
+
 describe('framing (view.*)', () => {
   const box: [[number, number, number], [number, number, number]] = [[-6, 0, -4], [6, 16, 4]];
   const corners = (min: number[], max: number[]) => [min[0]!, max[0]!].flatMap((x) => [min[1]!, max[1]!].flatMap((y) => [min[2]!, max[2]!].map((z) => [x, y, z] as [number, number, number])));
@@ -1086,10 +1144,10 @@ describe('framing (view.*)', () => {
       (pitch, fov, [w, h, d]) => {
         const b: typeof box = [[-w / 2, 0, -d / 2], [w / 2, h, d / 2]];
         const ndc = (fit: number, aspect: number) => {
-          const m = viewProj(frame(...b, { pitch, fit, fov }), aspect);
+          const m = viewProj(frame(...b, { ...DEFAULT_FRAMING, pitch, fit, fov }), aspect);
           return Math.max(...corners(...b).map((c) => { const p = transform(m, c); return p[3] > 0 ? Math.max(Math.abs(p[0] / p[3]), Math.abs(p[1] / p[3])) : Infinity; }));
         };
-        const o = frame(...b, { pitch, fit: 1, fov });
+        const o = frame(...b, { ...DEFAULT_FRAMING, pitch, fit: 1, fov });
         // The matrices are float32: a corner close to the eye (small w) reads ~1e-6 off in NDC.
         const tol = 1e-4;
         if (o.distance === 8) return ndc(1, 1) <= 1 + tol; // the 8 m floor: farther than needed
@@ -1117,7 +1175,7 @@ describe('framing (view.*)', () => {
       fc.double({ min: 1.2, max: FRAMING_LIMITS.fit[1], noNaN: true }),
       fc.double({ min: FRAMING_LIMITS.fov[0], max: FRAMING_LIMITS.fov[1], noNaN: true }),
       (pitch, fit, fov) => {
-        const o = frame(...box, { pitch, fit, fov });
+        const o = frame(...box, { ...DEFAULT_FRAMING, pitch, fit, fov });
         const m = viewProj(o, 16 / 9);
         return corners(...box).every((c) => {
           const p = transform(m, c);
@@ -1130,11 +1188,11 @@ describe('framing (view.*)', () => {
     expect(parseViewerConfig('').view).toEqual(DEFAULT_FRAMING);
     expect(toSearch(parseViewerConfig(''))).not.toContain('view.');
     const c = parseViewerConfig('?view.pitch=21.77&view.fit=1.35&view.fov=50');
-    expect(c.view).toEqual({ pitch: 21.77, fit: 1.35, fov: 50 });
+    expect(c.view).toEqual({ ...DEFAULT_FRAMING, pitch: 21.77, fit: 1.35, fov: 50 });
     expect(parseViewerConfig(toSearch(c))).toEqual(c);
     expect(toSearch(parseViewerConfig('?view.fov=45&view.fit=2'))).toMatch(/view\.fit=2(&|$)/);
     expect(toSearch(parseViewerConfig('?view.fov=45&view.fit=2'))).not.toContain('view.fov');
-    for (const bad of ['view.pitch=0', 'view.pitch=90', 'view.fit=0.1', 'view.fov=200', 'view.fov=x']) expect(() => parseFraming(new URLSearchParams(bad)), bad).toThrow(/view\.\w+ must be a number from/);
+    for (const bad of ['view.pitch=-60', 'view.pitch=90', 'view.fit=0.1', 'view.fov=200', 'view.fov=x']) expect(() => parseFraming(new URLSearchParams(bad)), bad).toThrow(/view\.\w+ must be a number from/);
   });
 
   it('a preset keeps the framing, and a start camera takes its field of view', () => {
@@ -1143,10 +1201,83 @@ describe('framing (view.*)', () => {
     expect(orbitAt({ target: [0, 0, 0], yaw: 0, pitch: 0.3, distance: 9 }, 30).fovY).toBeCloseTo(Math.PI / 6, 12);
   });
 
+  it('frameFromGround: the eye at its height beside the box, on its yaw side, looking at the box\'s middle elevation; fit 1 just fits it vertically', () => {
+    fc.assert(fc.property(
+      fc.double({ min: 0.5, max: 20, noNaN: true }), fc.double({ min: 2, max: 600, noNaN: true }),
+      fc.double({ min: 0.05, max: 5, noNaN: true }), fc.double({ min: -180, max: 180, noNaN: true }), fc.double({ min: 30, max: 90, noNaN: true }),
+      (w, h, eye, yaw, fov) => {
+        const b: typeof box = [[-w / 2, 0, -w / 2], [w / 2, h, w / 2]];
+        const f = { ...DEFAULT_FRAMING, eye, yaw, fov, fit: 1 };
+        const o = frameFromGround(...b, f, eye);
+        const e = eyeOf(o);
+        if (Math.abs(e[1] - eye) > 1e-6 * h) return false; // at the eye's height over the box's bottom
+        const side = e[0] * Math.cos((yaw * Math.PI) / 180) - e[2] * Math.sin((yaw * Math.PI) / 180);
+        if (Math.abs(side) > 1e-6 * h || e[0] * Math.sin((yaw * Math.PI) / 180) + e[2] * Math.cos((yaw * Math.PI) / 180) <= w / 2) return false; // on the yaw side, outside the box
+        const ndcY = (fit: number) => {
+          const m = viewProj(frameFromGround(...b, { ...f, fit }, eye), 16 / 9);
+          return Math.max(...corners(...b).map((c) => { const p = transform(m, c); return p[3] > 0 ? Math.abs(p[1] / p[3]) : Infinity; }));
+        };
+        // The matrices are float32; and with the bisection, fit 1 is within a hair of touching, unless the eye is
+        // already as close as it can be (against the box: a short box, a wide view).
+        const against = Math.hypot(e[0], e[2]) < Math.SQRT2 * (w / 2) * 1.002;
+        // Under fit 1 the view is anchored at the bottom (the top runs off): every bottom corner in front of the eye and
+        // none under the screen's lower edge, the lowest one near it. The eye stays outside the box's footprint.
+        const o6 = frameFromGround(...b, { ...f, fit: 0.6 }, eye), close = viewProj(o6, 16 / 9);
+        const low = corners(...b).filter((c) => c[1] === 0).map((c) => transform(close, c));
+        const base = low.every((p) => p[3] > 0 && p[1] / p[3] >= -1 - 1e-3) && Math.min(...low.map((p) => p[1] / p[3])) < -0.9
+          && Math.hypot(eyeOf(o6)[0], eyeOf(o6)[2]) > Math.SQRT2 * (w / 2);
+        return ndcY(1) <= 1 + 1e-3 && (against || ndcY(1) > 0.97) && ndcY(1.3) < 1 && base;
+      }));
+    // A tall box from 1.7 above its base: the eye looks up (pitch below 0: under the target).
+    expect(frameFromGround([-1, 0, -1], [1, 30, 1], { ...DEFAULT_FRAMING, eye: 1.7, fov: 60 }, 1.7).pitch).toBeLessThan(-0.2);
+    // frame() takes it when eye is above 0, the eye in metres over metres per unit.
+    expect(frame([-1, 0, -1], [1, 30, 1], { ...DEFAULT_FRAMING, eye: 1.7, fov: 60 }, 0.0234)).toEqual(frameFromGround([-1, 0, -1], [1, 30, 1], { ...DEFAULT_FRAMING, eye: 1.7, fov: 60 }, 1.7 / 0.0234));
+  });
+
+  it('S15 opens looking up at its tower from 1.7 m beside the base, at real size and at scale 1, nearly every plank on screen', () => {
+    const c = parseViewerConfig('?scenario=S15');
+    expect(c.view).toEqual({ ...DEFAULT_FRAMING, ...SCENARIOS.S15!.view });
+    expect(c.view.eye).toBe(1.7);
+    expect(toSearch(c)).not.toContain('view.');
+    const bodies = buildScenario('S15', {}, 1).bodies;
+    const min: [number, number, number] = [Infinity, Infinity, Infinity], max: [number, number, number] = [-Infinity, -Infinity, -Infinity];
+    for (const b of bodies) for (let k = 0; k < 3; k++) { min[k] = Math.min(min[k]!, b.pos[k]! - 1); max[k] = Math.max(max[k]!, b.pos[k]! + 1); }
+    for (const scale of [KAPLA_SCALE, 1]) {
+      const o = frame(min, max, c.view, scale, 0); // the ground at y 0, as S15's scene has it
+      expect(eyeOf(o)[1] * scale).toBeCloseTo(1.7, 6);
+      expect(o.pitch).toBeLessThan(-0.15); // looking up
+      for (const aspect of [16 / 9, 4 / 3]) {
+        const m = viewProj(o, aspect);
+        const off = bodies.filter((b) => { const p = transform(m, b.pos); return !(p[3] > 0 && Math.abs(p[0] / p[3]) <= 1 && Math.abs(p[1] / p[3]) <= 1); });
+        // fit 0.7: close enough that the spire's top runs off the view, by design ("mostly in view"); the base stays in it.
+        expect(off.length / bodies.length, `${scale} ${aspect}`).toBeLessThan(0.08);
+        expect(off.length).toBeGreaterThan(0);
+        expect(Math.max(...bodies.filter((b) => b.pos[1] < 40).map((b) => { const p = transform(m, b.pos); return p[3] > 0 ? Math.abs(p[1] / p[3]) : Infinity; }))).toBeLessThan(1);
+      }
+      // At fit 1 it all fits.
+      const all = frame(min, max, { ...c.view, fit: 1 }, scale, 0);
+      expect(bodies.filter((b) => { const p = transform(viewProj(all, 16 / 9), b.pos); return !(p[3] > 0 && Math.abs(p[1] / p[3]) <= 1); }).length).toBe(0);
+    }
+    // The fall (toppleSide 0) heads for +x: the eye stands on that side.
+    expect(eyeOf(frame(min, max, c.view, KAPLA_SCALE, 0))[0]).toBeGreaterThan(0);
+  });
+
+  it('a scene switch carries a framing chosen by hand, and turns one left at the old scene\'s default into the new scene\'s', () => {
+    const s4 = parseViewerConfig('?scenario=S4');
+    const to15 = proposeScene(s4, 'S15', {}, 1, KAPLA_SCALE, 7);
+    expect(to15.ok && to15.config.view).toEqual(defaultFraming('S15'));
+    const hand = { ...s4, view: { ...s4.view, pitch: 30 } };
+    const kept = proposeScene(hand, 'S15', {}, 1, KAPLA_SCALE, 7);
+    expect(kept.ok && kept.config.view).toEqual(hand.view);
+    expect(parseViewerConfig(presetSearch('?scenario=S4', parseViewerConfig('?scenario=S15'))).view).toEqual(DEFAULT_FRAMING);
+    expect(parseViewerConfig(presetSearch('?scenario=S4', parseViewerConfig('?scenario=S15&view.fov=50'))).view).toEqual({ ...defaultFraming('S15'), fov: 50 });
+  });
+
   it('the panel checks its values against the same limits', () => {
-    expect(framingFrom({ pitch: 10, fit: 1, fov: 60 })).toEqual({ pitch: 10, fit: 1, fov: 60 });
-    expect(() => framingFrom({ pitch: 10, fit: 1, fov: NaN })).toThrow(/field of view \(deg\) must be from 10 to 120/);
-    expect(() => framingFrom({ pitch: 90, fit: 1, fov: 45 })).toThrow(/camera pitch/);
+    expect(framingFrom({ pitch: 10, fit: 1, fov: 60, yaw: 20, eye: 1.7 })).toEqual({ pitch: 10, fit: 1, fov: 60, yaw: 20, eye: 1.7 });
+    expect(() => framingFrom({ ...DEFAULT_FRAMING, fov: NaN })).toThrow(/field of view \(deg\) must be from 10 to 120/);
+    expect(() => framingFrom({ ...DEFAULT_FRAMING, pitch: 90 })).toThrow(/camera pitch/);
+    expect(() => framingFrom({ ...DEFAULT_FRAMING, eye: -1 })).toThrow(/eye height/);
   });
 });
 
@@ -1260,6 +1391,6 @@ describe('scene file', () => {
     expect(bad((f) => { f.camera.target = [1, 2]; })).toThrow(/camera.target must be three numbers/);
     expect(bad((f) => { f.view.zoom = 2; })).toThrow(/view: unknown key zoom/);
     expect(bad((f) => { f.view.fov = 'wide'; })).toThrow(/view.fov must be a number/);
-    expect(bad((f) => { f.view.pitch = 0; })).toThrow(/view.pitch must be a number from/);
+    expect(bad((f) => { f.view.pitch = -60; })).toThrow(/view.pitch must be a number from/);
   });
 });

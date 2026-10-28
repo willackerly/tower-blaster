@@ -7,14 +7,15 @@
 // shown as sim speed. rules=keystone hands the page to the game's loop (@tb/game
 // playKeystone; keystoneMode below), with the panel kept.
 import { makeEngine, parseSpec } from '@tb/bench';
-import { type BodyDesc, type EngineInfo, type InputEvent, type PhysicsEngine, type Snapshot, spawnedBodies } from '@tb/engine-api';
+import { type BodyDesc, type EngineHealth, type EngineInfo, type InputEvent, limitsHit, type PhysicsEngine, type Snapshot, spawnedBodies } from '@tb/engine-api';
 import { boundingRadius } from '@tb/geom';
 import { DEFAULT_AVBD } from '@tb/physics-ref';
 import { GAME_HELP, gameOverlays, playLine, type GameHandle, installGameStyles, newGameHandle, playKeystone, structureTints } from '@tb/game';
 import { AVBD_GAP_SLOP, AVBD_ITERATIONS, compileLevel, type Driver, LEVELS, type Shot } from '@tb/keystone';
-import { clampPitch, frame, rayThrough, viewProj, eyeOf, orbitAt, poseOf, type CameraPose, type Orbit } from './camera.ts';
+import { clampPitch, EYE_ABOVE_GROUND, frame, rayThrough, viewProj, eyeOf, orbitAt, poseOf, type CameraPose, type Orbit } from './camera.ts';
 import { alphaAt, newArrivals, newClock, newPacer, pauseLatch, runFree, stepsDue, taskYield, trackSimSpeed, Window } from './loop.ts';
 import type { V3 } from './math.ts';
+import { HEALTH_MS, limitFix, limitFixLabel, limitsHtml } from './health.ts';
 import { escapeHtml } from './html.ts';
 import { bounceOn, engineSpec, firedBody, froudeSpeed, keystoneEngine, levelOf, parseViewerConfig, presetSearch, scenarioEngineSpec, sceneTitle, toSearch, type ViewerConfig, viewerScene, withOption, worldEngineSpec } from './params.ts';
 import { projectileRadius, pushRadiusLimit, worldGrenade } from './projectile.ts';
@@ -80,6 +81,12 @@ interface ViewerHandle {
   painted: { id: number; colour: number }[];
   /** The running engine's EngineInfo.variant (its params as built: Bounce's restitution, a world scale's scaling). */
   variant: EngineInfo['variant'];
+  /**
+   * The running engine's limits as last read (PhysicsEngine.health, about every HEALTH_MS after a
+   * snapshot): null for an engine without health(), until the first read after each load, and
+   * under rules=keystone (the game's loop runs the engine there).
+   */
+  health: EngineHealth | null;
   /** Where the camera is now. */
   camera(): CameraPose;
   /** Fire a ball through normalized device coords (0, 0 = centre). */
@@ -107,7 +114,7 @@ const GRENADE_LOOKAHEAD = 4;
 const canvas = document.getElementById('c') as HTMLCanvasElement;
 const hud = document.getElementById('hud')!;
 const errorBox = document.getElementById('error')!;
-const handle: ViewerHandle = { status: 'loading', frames: 0, bodies: 0, awake: 0, stepIndex: 0, msPerStep: NaN, snapMs: NaN, resets: 0, overlapped: 0, tinted: 0, painted: [], variant: {}, camera: () => ({ target: [0, 0, 0], yaw: 0, pitch: 0, distance: 1 }), fire: () => {}, capture: async () => null, inputs: [], game: null, inputHook: null, sound: () => ({ status: 'off', error: '', posted: 0, stats: null }) };
+const handle: ViewerHandle = { status: 'loading', frames: 0, bodies: 0, awake: 0, stepIndex: 0, msPerStep: NaN, snapMs: NaN, resets: 0, overlapped: 0, tinted: 0, painted: [], variant: {}, health: null, camera: () => ({ target: [0, 0, 0], yaw: 0, pitch: 0, distance: 1 }), fire: () => {}, capture: async () => null, inputs: [], game: null, inputHook: null, sound: () => ({ status: 'off', error: '', posted: 0, stats: null }) };
 window.__viewer = handle;
 
 function fail(e: unknown) {
@@ -234,6 +241,8 @@ async function main() {
     renderer.setFx(id, { tint: [c >> 16, (c >> 8) & 0xff, c & 0xff].map((x) => srgbToLinear(x / 255)) as V3, paint: true });
     fxSlots = Math.max(fxSlots, id + 1);
   };
+  // The engine's limits (handle.health), read at most every HEALTH_MS and one read at a time.
+  let healthAt = -Infinity, healthBusy = false;
 
   async function reset() {
     resetting = true;
@@ -278,6 +287,8 @@ async function main() {
     config = want;
     scene = next;
     handle.variant = engine.info.variant;
+    handle.health = null;
+    healthAt = -Infinity;
     events = [...scene.inputs];
     shapes = [...scene.bodies];
     source.reset(scene.bodies);
@@ -290,7 +301,7 @@ async function main() {
     fxSlots = handle.tinted = tints?.length ?? 0;
     const b = bounds(scene.bodies);
     box = b;
-    orbit = want.camera ? orbitAt(want.camera, want.view.fov) : frame(b.min, b.max, want.view);
+    orbit = { ...(want.camera ? orbitAt(want.camera, want.view.fov) : frame(b.min, b.max, want.view, want.scale, next.ground?.y)), floor: (next.ground?.y ?? 0) + EYE_ABOVE_GROUND };
     const c: V3 = [(b.min[0] + b.max[0]) / 2, (b.min[1] + b.max[1]) / 2, (b.min[2] + b.max[2]) / 2];
     renderer.setShadowBounds(c, Math.hypot(b.max[0] - b.min[0], b.max[1] - b.min[1], b.max[2] - b.min[2]) / 2 + 2);
     handle.inputs = [];
@@ -303,17 +314,33 @@ async function main() {
     apply(s, t0, engine.stepIndex);
   }
 
+  /** Rebuild the scene and engine at next, between frames (resetNote is shown after). */
+  function rebuild(next: ViewerConfig, note = '') {
+    // Keystone's rules run the game's loop in place of this one: a page load.
+    if (next.rules === 'keystone') {
+      location.search = toSearch(next);
+      return;
+    }
+    nextConfig = next;
+    if (note) resetNote = note;
+    resetAsked = true;
+  }
+  // The HUD: the text drawHud rewrites every few frames, and below it the fix button (limitFix), one
+  // element kept across redraws so that a press spanning a redraw still lands on it.
+  hud.textContent = '';
+  const hudText = hud.appendChild(document.createElement('div'));
+  const fixBox = hud.appendChild(document.createElement('div'));
+  fixBox.className = 'buttons';
+  fixBox.hidden = true;
+  const fixButton = fixBox.appendChild(document.createElement('button'));
+  fixButton.addEventListener('click', () => {
+    const fix = fixButton.dataset.fix;
+    if (fix && !resetting && !resetAsked) rebuild({ ...config, engine: fix }, `Rebuilt with ${fix}`);
+  });
+
   const controls = mountControls(document.getElementById('controls')!, {
     config: () => config,
-    rebuild(next) {
-      // Keystone's rules run the game's loop in place of this one: a page load.
-      if (next.rules === 'keystone') {
-        location.search = toSearch(next);
-        return;
-      }
-      nextConfig = next;
-      resetAsked = true;
-    },
+    rebuild: (next) => rebuild(next),
     setLook(look, real) {
       // Shading only: live, nothing to rebuild. A queued rebuild keeps it too.
       config = { ...config, look, real };
@@ -354,7 +381,7 @@ async function main() {
       // Camera only: re-framed now (a start camera keeps its pose and takes the field of view).
       config = { ...config, view };
       if (nextConfig) nextConfig = { ...nextConfig, view };
-      orbit = config.camera ? { ...orbit, fovY: frame(box.min, box.max, view).fovY } : frame(box.min, box.max, view);
+      orbit = config.camera ? { ...orbit, fovY: frame(box.min, box.max, view, config.scale, scene.ground?.y).fovY } : { ...frame(box.min, box.max, view, config.scale, scene.ground?.y), floor: orbit.floor };
       history.replaceState(null, '', toSearch(config));
       presets(location.search);
     },
@@ -417,8 +444,29 @@ async function main() {
     const step = engine.stepIndex;
     const s = await engine.snapshot();
     apply(s, done ? Math.max(t0, await done) : t0, step);
+    pollHealth();
     return performance.now();
   };
+  /**
+   * Read the engine's limits now and then (HEALTH_MS), after a snapshot so never inside a step's
+   * timing; not awaited. A read for an engine a reset has since replaced is dropped. A limit hit
+   * for the first time redraws the HUD at once.
+   */
+  function pollHealth() {
+    const now = performance.now();
+    const e = engine, read = e.health?.bind(e);
+    if (!read || healthBusy || now - healthAt < HEALTH_MS) return;
+    const wasHit = limitsHit(handle.health).length > 0;
+    healthAt = now;
+    healthBusy = true;
+    read().then((h) => {
+      if (e !== engine) return;
+      handle.health = h;
+      if (!wasHit && limitsHit(h).length) drawHud();
+    }, (err: unknown) => {
+      if (e === engine) notice = `engine limits: ${err instanceof Error ? err.message : String(err)}`;
+    }).finally(() => { healthBusy = false; });
+  }
   /** Push input as a fired projectile is: into the engine, and in application order (stable by step) into events. */
   function pushInput(evs: InputEvent[]) {
     engine.push(evs);
@@ -513,7 +561,7 @@ async function main() {
     handle.msPerStep = med;
     handle.snapMs = snapMs.quantile(0.5);
     const over = med > 7.5;
-    hud.innerHTML = `
+    hudText.innerHTML = `
       <div class="big">${handle.bodies.toLocaleString()} bodies</div>
       <div class="muted">${escapeHtml(sceneTitle(config))} · ${escapeHtml(config.engine)} (${escapeHtml(engine.info.backend)})</div>
       <div class="row"><span>physics ms/step</span><span class="${over ? 'warn' : ''}">${fmt(med)} <span class="muted">p95 ${fmt(p95)}</span></span></div>
@@ -522,9 +570,17 @@ async function main() {
       <div class="row"><span>fps</span><span>${fmt(fps)}</span></div>
       <div class="row"><span>sim speed</span><span class="${clock.simSpeed < 0.95 ? 'warn' : ''}">${(clock.simSpeed * 100).toFixed(0)}%</span></div>
       <div class="row"><span>snapshot + upload</span><span>${fmt(handle.snapMs)} ms</span></div>
-      <div class="row muted"><span>budget</span><span>7.5 ms/step</span></div>${config.sound.on ? `
+      <div class="row muted"><span>budget</span><span>7.5 ms/step</span></div>${handle.health ? `\n      ${limitsHtml(handle.health)}` : ''}${config.sound.on ? `
       <div class="row"><span>sound</span><span class="${sound.status === 'error' ? 'warn' : ''}">${sound.status === 'waiting' ? 'click to start' : escapeHtml(sound.status === 'error' ? sound.error : sound.status)} · ${soundMaterialName(config)}</span></div>` : ''}
       <div class="muted">${escapeHtml(adapter.info.vendor)} ${escapeHtml(adapter.info.architecture)}${paused ? ' · <b>paused</b>' : ''}</div>${notice ? `\n      <div class="warn">${escapeHtml(notice)}</div>` : ''}`;
+    // The button's node stays; only a new fix changes its text.
+    const fix = limitFix(handle.health, config.engine);
+    if (fix === null) delete fixButton.dataset.fix;
+    else if (fixButton.dataset.fix !== fix) {
+      fixButton.dataset.fix = fix;
+      fixButton.textContent = limitFixLabel(handle.health)!;
+    }
+    fixBox.hidden = fix === null;
   }
 
   await reset();
@@ -540,6 +596,8 @@ async function main() {
   async function draw(now: number, alpha: number) {
     const want = pendingCapture;
     pendingCapture = null;
+    // No snapshot follows a step while paused, so the limits are read here: the steps before the pause still show.
+    if (paused && !resetting) pollHealth();
     const stats = await renderer.render({ viewProj: viewProj(orbit, aspect()), eye: eyeOf(orbit), focus: orbit.target, time: now / 1000, groundY: scene.ground?.y ?? 0, alpha, metres: config.scale }, !!want, want?.keep);
     if (want) want.resolve(stats);
     handle.frames++;

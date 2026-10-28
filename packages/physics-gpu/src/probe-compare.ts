@@ -17,7 +17,9 @@
 // leaves records unset, which on the GPU is records 1 (gpuRecordsLayout), or
 // one side colours with colorMode 0 and the other leaves it unset, which on
 // the GPU is colorMode 3 (gpuColorMode), and a bench:browser record when its
-// timing is not valid.
+// timing is not valid or an engine hit a limit that changed its physics during
+// the timing (limitProblems: the two arms then time different simulations).
+// Such records are left out of the median over repeated cells.
 // Times in the P2 JSON are ms; reported here in µs.
 import { type AvbdParams, DEFAULT_AVBD } from '@tb/physics-ref';
 import type { Checkpoint, P2Result } from './probe.ts';
@@ -121,7 +123,7 @@ export interface BrowserCompare {
   steps: number; baseMs: number; armMs: number; savingMs: number;
   /** Each engine's block medians, (max - min) / median, in %: the noise to read a small saving against. */
   spreadPct: [number, number];
-  /** Whether bench:browser found the timing valid; a note on the record (why not, or layoutNote), or null. */
+  /** Whether bench:browser found the timing valid and no engine hit a limit that changed its physics; a note on the record (why not, or layoutNote), or null. */
   valid: boolean; note: string | null;
 }
 
@@ -133,6 +135,8 @@ interface BrowserRecord {
   timing?: Array<{ blocks: number; stepsPerBlock: number; blockMedians: number[] }>;
   timingValid?: boolean;
   timingProblems?: string[];
+  /** One sentence per limit an engine hit during the timing that changed its physics (runner execute); records from before it have none. */
+  limitProblems?: string[];
 }
 /** An engine as the table names it: its name, I, and the entries of its variant that differ from DEFAULT_AVBD (the switches and engine options that make it an arm). */
 const specOf = (e: { name: string; variant?: Record<string, unknown> }) => {
@@ -151,8 +155,10 @@ export function compareBrowser(r: BrowserRecord): BrowserCompare {
   if (its[0] !== its[1]) throw new Error(`probe-compare: the engines run ${its[0]} and ${its[1]} iterations`);
   const steps = r.timing[0]!.blocks * r.timing[0]!.stepsPerBlock;
   const window: [number, number] | null = typeof r.warmup === 'number' ? [r.warmup, r.warmup + steps] : null;
-  const valid = r.timingValid !== false;
-  const note = (valid ? null : `the timing is not valid here (${r.timingProblems?.join('; ') || 'no reason given'})`)
+  const timingOk = r.timingValid !== false, limits = r.limitProblems ?? [];
+  const valid = timingOk && limits.length === 0;
+  const note = (timingOk ? null : `the timing is not valid here (${r.timingProblems?.join('; ') || 'no reason given'})`)
+    ?? (limits.length ? `an engine hit a limit that changed its physics, so the arms time different simulations (${limits.join('; ')})` : null)
     ?? layoutNote(r.engines[0]!.variant, r.engines[1]!.variant);
   const I = its[0]!, baseMs = median(r.timing[0]!.blockMedians), armMs = median(r.timing[1]!.blockMedians), savingMs = baseMs - armMs;
   return {

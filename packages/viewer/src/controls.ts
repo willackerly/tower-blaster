@@ -11,7 +11,7 @@ import { buildScenario, SCENARIOS } from '@tb/scenarios';
 import { type CameraPose, type Framing, FRAMING_LIMITS } from './camera.ts';
 import { escapeHtml } from './html.ts';
 import { levelIssues, levelJson, parseLevelDef } from './level-file.ts';
-import { autoSubsteps, AVBD_ENGINES, blockDensityOf, bounceOn, checkKeystone, DEFAULT_BOUNCE, DEFAULT_CONFIG, defaultLook, defaultPresettle, firedSpeed, keystoneEngine, levelDef, MAX_PRESETTLE, MAX_SUBSTEPS, type Rules, SCALE_LIMITS, type ViewerConfig, withOption } from './params.ts';
+import { autoSubsteps, AVBD_ENGINES, blockDensityOf, bounceOn, carriedFraming, checkKeystone, DEFAULT_BOUNCE, DEFAULT_CONFIG, defaultLook, defaultPresettle, firedSpeed, keystoneEngine, levelDef, MAX_PRESETTLE, MAX_SUBSTEPS, type Rules, SCALE_LIMITS, type ViewerConfig, withOption } from './params.ts';
 import { blastWeight, checkBlast } from '@tb/engine-api';
 import { DEFAULT_GRENADE, FUSES, GRENADE_LIMITS, type GrenadeSpec, isPreset, PRESET_NAMES, PROJECTILE_PRESETS } from '@tb/weapons';
 import { DEFAULT_PROJECTILE, GRENADE_BLAST_KEYS, GRENADE_NUMBERS, parseProjectile, presetProjectile, type Projectile, projectileMass, worldProjectile } from './projectile.ts';
@@ -176,14 +176,14 @@ export function proposeScene(c: ViewerConfig, scenario: string, params: Record<s
       // and a level of your own stays loaded (picked again from the picker) until another one replaces it.
       checkWorld(scale, substeps);
       const { okE, engine } = bounceChoice(c, bounce);
-      const next: ViewerConfig = { ...c, level, customLevel: picked.custom ? picked.def : null, scale, substeps, presettle: settle, camera: null, engine, bounce: okE ? bounce.e : c.bounce };
+      const next: ViewerConfig = { ...c, level, customLevel: picked.custom ? picked.def : null, scale, substeps, presettle: settle, camera: null, engine, bounce: okE ? bounce.e : c.bounce, view: carriedFraming(c.view, c, { scenario: c.scenario, level }) };
       return { ok: true, config: next, bodies: compileLevel(picked.def).scene.bodies.length };
     }
     if (!Number.isInteger(seed)) throw new Error('seed must be an integer');
     checkWorld(scale, substeps);
     const { okE, engine } = bounceChoice(c, bounce);
     // A rebuilt scene is framed afresh: a start camera chosen for the old one need not fit it.
-    const next: ViewerConfig = { ...c, level: null, customLevel: null, scenario, params, seed, scale, substeps, presettle: settle, camera: null, engine, bounce: okE ? bounce.e : c.bounce };
+    const next: ViewerConfig = { ...c, level: null, customLevel: null, scenario, params, seed, scale, substeps, presettle: settle, camera: null, engine, bounce: okE ? bounce.e : c.bounce, view: carriedFraming(c.view, c, { scenario, level: null }) };
     return { ok: true, config: next, bodies: buildScenario(scenario, params, seed).bodies.length };
   } catch (e) {
     return { ok: false, error: e instanceof Error ? e.message : String(e) };
@@ -228,13 +228,13 @@ export function sceneSummary(bodies: number, scale: number, substeps: number, bo
 }
 
 /** The framing panel's values as a Framing, or why not. */
-export const VIEW_FIELDS: { [K in keyof Framing]: string } = { pitch: 'camera pitch (deg)', fit: 'camera distance (x fit)', fov: 'field of view (deg)' };
+export const VIEW_FIELDS: { [K in keyof Framing]: string } = { pitch: 'camera pitch (deg)', fit: 'camera distance (x fit)', fov: 'field of view (deg)', yaw: 'camera side (yaw, deg)', eye: 'eye height (m; 0: orbit, else from the ground)' };
 export function framingFrom(values: Record<keyof Framing, number>): Framing {
   for (const k of Object.keys(VIEW_FIELDS) as (keyof Framing)[]) {
     const [lo, hi] = FRAMING_LIMITS[k];
     if (!(values[k] >= lo && values[k] <= hi)) throw new Error(`${VIEW_FIELDS[k]} must be from ${lo} to ${hi}`);
   }
-  return { pitch: values.pitch, fit: values.fit, fov: values.fov };
+  return { pitch: values.pitch, fit: values.fit, fov: values.fov, yaw: values.yaw, eye: values.eye };
 }
 
 const field = (name: string, label: string, value: number | boolean | string, attrs = '') =>

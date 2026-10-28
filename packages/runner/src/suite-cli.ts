@@ -1,10 +1,14 @@
-// pnpm bench:suite [--engine rapier] [--sizes 1000,2000,5000] [--cases kapla,city] [--timing-mode latency|throughput] [--channel chrome] [--headed] [--node-label NAME]
+// pnpm bench:suite [--engine rapier] [--sizes 1000,2000,5000] [--cases kapla,city] [--timing-mode latency|throughput] [--channel chrome] [--headed] [--node-label NAME] [--allow-limits]
 // Runs the standard suite in one browser, writes results/suite-<time>.jsonl
-// and a Markdown summary next to it, and prints the summary.
+// and a Markdown summary next to it, and prints the summary. Exits 3 if a
+// case's timing is not valid here, and 4 (first) if a case hit an engine limit
+// that changed its physics (the summary's Limits hit column), unless
+// --allow-limits is given.
 import { mkdirSync } from 'node:fs';
 import { cpus, hostname } from 'node:os';
 import { execSync } from 'node:child_process';
 import { exitNow } from '@tb/testkit';
+import { exitCodeFor } from './config.ts';
 import { openRunner } from './orchestrate.ts';
 import { selectCases, standardSuite } from './suite.ts';
 import { runSuite } from './suite-run.ts';
@@ -47,6 +51,6 @@ const header = (first: Record<string, unknown>) => {
 const { results, md, summary, stuck } = await runSuite(runner, suite, { jsonl, git, header });
 console.log(md);
 console.error(`\nwrote ${jsonl} and ${summary}`);
-if (results.some((r) => !r.valid)) process.exitCode = 3;
+process.exitCode = exitCodeFor(results, { limits: flag('allow-limits') === true });
 // A browser or server that did not close keeps Node alive.
 if (stuck.length) await exitNow();

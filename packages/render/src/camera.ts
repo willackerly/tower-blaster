@@ -2,16 +2,36 @@
 // picking ray is unit-testable without a GPU.
 import { invert, lookAt, multiply, normalize, perspective, transform, type Mat4, type V3 } from './math.ts';
 
-export interface Orbit { target: V3; yaw: number; pitch: number; distance: number; fovY: number }
+/**
+ * pitch: the eye's elevation seen from the target, radians; below 0 the eye
+ * is under the target, looking up. floor: the lowest the eye goes (the
+ * ground plus a margin). An eye that would go lower slides in along its line
+ * toward the target instead, so dragging on past the floor looks further up
+ * from the ground (eyeDistance); distance stays as set, so dragging back
+ * restores it. No floor: no limit.
+ */
+export interface Orbit { target: V3; yaw: number; pitch: number; distance: number; fovY: number; floor?: number }
+
+/** How far above the ground the viewer keeps the eye (Orbit.floor), world units. */
+export const EYE_ABOVE_GROUND = 0.25;
+/** Closest the eye comes to the target when the floor pushes it in. */
+export const MIN_EYE_DISTANCE = 0.5;
+
+/** How far the eye is from the target: the distance, or less where the floor stops it. */
+export function eyeDistance(o: Orbit): number {
+  if (o.floor === undefined || o.pitch >= 0) return o.distance;
+  return Math.min(o.distance, Math.max(MIN_EYE_DISTANCE, (o.target[1] - o.floor) / -Math.sin(o.pitch)));
+}
 
 export function eyeOf(o: Orbit): V3 {
-  const cp = Math.cos(o.pitch);
-  return [o.target[0] + o.distance * cp * Math.sin(o.yaw), o.target[1] + o.distance * Math.sin(o.pitch), o.target[2] + o.distance * cp * Math.cos(o.yaw)];
+  const cp = Math.cos(o.pitch), d = eyeDistance(o);
+  return [o.target[0] + d * cp * Math.sin(o.yaw), o.target[1] + d * Math.sin(o.pitch), o.target[2] + d * cp * Math.cos(o.yaw)];
 }
 
 export function viewProj(o: Orbit, aspect: number): Mat4 {
-  const near = Math.max(0.05, o.distance * 0.01);
-  return multiply(perspective(o.fovY, aspect, near, o.distance * 20 + 500), lookAt(eyeOf(o), o.target));
+  const d = eyeDistance(o);
+  const near = Math.max(0.05, d * 0.01);
+  return multiply(perspective(o.fovY, aspect, near, d * 20 + 500), lookAt(eyeOf(o), o.target));
 }
 
 /** World-space ray through normalized device coords (x, y in -1..1, y up). */
@@ -26,11 +46,14 @@ export function rayThrough(o: Orbit, aspect: number, ndcX: number, ndcY: number)
 
 /**
  * How a scene without a start camera is framed (URL keys view.*): the
- * camera's pitch above the horizon and vertical field of view, degrees, and
+ * camera's pitch (degrees; above 0 it looks down at the target, below 0 up) and vertical field of view, degrees, and
  * its distance as a multiple of the closest at which the whole box fits the
- * view (on a square screen; a wider one has room to spare at the sides).
+ * view (on a square screen; a wider one has room to spare at the sides);
+ * yaw, degrees, the side it looks from (90: from +x); eye, metres: 0 frames
+ * from the orbit's pitch, above 0 from the ground instead, the eye that high,
+ * looking up at the box from beside it (frameFromGround; pitch unused).
  */
-export interface Framing { pitch: number; fit: number; fov: number }
+export interface Framing { pitch: number; fit: number; fov: number; yaw: number; eye: number }
 
 /**
  * Lower and closer than before (Will, 2026-10-27: "generally be lower to the
@@ -40,18 +63,23 @@ export interface Framing { pitch: number; fit: number; fov: number }
  * 50 degrees of view, 1.35 times the distance at which the box's bounding
  * sphere filled it.
  */
-export const DEFAULT_FRAMING: Framing = { pitch: 12, fit: 1.05, fov: 45 };
-export const FRAMING_LIMITS: { [K in keyof Framing]: readonly [number, number] } = { pitch: [1.2, 83], fit: [0.3, 5], fov: [10, 120] };
+export const DEFAULT_FRAMING: Framing = { pitch: 12, fit: 1.05, fov: 45, yaw: 36, eye: 0 };
+// Pitch below 0 frames from under the target, looking up (the floor then brings the eye in).
+export const FRAMING_LIMITS: { [K in keyof Framing]: readonly [number, number] } = { pitch: [-45, 83], fit: [0.3, 5], fov: [10, 120], yaw: [-360, 360], eye: [0, 500] };
 
 const rad = (deg: number) => (deg * Math.PI) / 180;
 
 /**
  * Frame an axis-aligned box: look at a point a little below its centre from
- * a 3/4 view, at f's pitch and field of view, f.fit times as far as the
- * closest distance at which all eight corners are inside the view.
+ * f's yaw (36 degrees: a 3/4 view), at f's pitch and field of view, f.fit
+ * times as far as the closest distance at which all eight corners are inside
+ * the view. With f.eye above 0, from the ground instead (frameFromGround;
+ * metres: metres per world unit, for the eye's height over ground, the
+ * floor's height: the box's bottom unless given).
  */
-export function frame(min: V3, max: V3, f: Framing = DEFAULT_FRAMING): Orbit {
-  const fovY = rad(f.fov), yaw = Math.PI / 5, pitch = clampPitch(rad(f.pitch));
+export function frame(min: V3, max: V3, f: Framing = DEFAULT_FRAMING, metres = 1, ground = min[1]): Orbit {
+  if (f.eye > 0) return frameFromGround(min, max, f, f.eye / metres, ground);
+  const fovY = rad(f.fov), yaw = rad(f.yaw), pitch = clampPitch(rad(f.pitch));
   const target: V3 = [(min[0] + max[0]) / 2, (max[1] - min[1]) * 0.45 + min[1], (min[2] + max[2]) / 2];
   // Camera axes (they do not depend on the distance): forward, right, up.
   const cp = Math.cos(pitch), sp = Math.sin(pitch);
@@ -69,8 +97,53 @@ export function frame(min: V3, max: V3, f: Framing = DEFAULT_FRAMING): Orbit {
   return { target, yaw, pitch, distance: Math.max(8, d * f.fit), fovY };
 }
 
-export function clampPitch(p: number): number {
-  return Math.min(1.45, Math.max(0.02, p));
+/**
+ * Frame an axis-aligned box from the ground (Will, 2026-10-28: looking up at
+ * the Kapla tower from near its base): the eye `eye` world units above the
+ * ground (default: the box's bottom), on f's yaw side of its vertical axis, as close as it can be
+ * with all eight corners inside the view vertically (sideways a wider screen
+ * has room), then f.fit times as far; it looks up (or down) at the middle of
+ * the corners' elevations, or, at fit under 1 (too close for all of it), with
+ * the lowest corner just inside the bottom of the view: the base stays in
+ * view and the top runs off it. The orbit's target is where that line of sight
+ * meets the axis, so dragging turns the camera about the axis; its pitch is
+ * below 0 when looking up (the eye under the target).
+ */
+export function frameFromGround(min: V3, max: V3, f: Framing, eye: number, ground = min[1]): Orbit {
+  const fovY = rad(f.fov), yaw = rad(f.yaw), t = Math.tan(fovY / 2);
+  const cx = (min[0] + max[0]) / 2, cz = (min[2] + max[2]) / 2, ey = ground + eye;
+  const hx = Math.sin(yaw), hz = Math.cos(yaw); // from the axis toward the eye
+  const corners: V3[] = [];
+  for (const x of [min[0], max[0]]) for (const y of [min[1], max[1]]) for (const z of [min[2], max[2]]) corners.push([x, y, z]);
+  // At horizontal distance D: each corner's depth along the view (horizontal), its height over the eye, and so its elevation.
+  const look = (D: number, base = false) => {
+    const ex = cx + D * hx, ez = cz + D * hz;
+    const rel = corners.map(([x, y, z]) => ({ s: -((x - ex) * hx + (z - ez) * hz), h: y - ey }));
+    const el = rel.map((c) => Math.atan2(c.h, c.s));
+    const aim = base ? Math.min(...el) + 0.97 * (fovY / 2) : (Math.min(...el) + Math.max(...el)) / 2;
+    const p = Math.max(-MAX_PITCH, Math.min(MAX_PITCH, aim));
+    // In the camera's frame at pitch p (looking up by p): depth and height of each corner.
+    const fits = rel.every((c) => { const depth = c.s * Math.cos(p) + c.h * Math.sin(p), up = -c.s * Math.sin(p) + c.h * Math.cos(p); return depth > 0 && Math.abs(up) <= t * depth; });
+    return { p, fits };
+  };
+  const reach = Math.hypot((max[0] - min[0]) / 2, (max[2] - min[2]) / 2);
+  let lo = reach, hi = Math.max(2 * reach, 1);
+  while (!look(hi).fits && hi < 1e7) hi *= 2;
+  for (let i = 0; i < 60; i++) { const m = (lo + hi) / 2; if (look(m).fits) hi = m; else lo = m; }
+  // fit under 1 brings the eye in, but never inside the box's footprint (a circle of radius reach).
+  const D = Math.max(hi * f.fit, reach * 1.001), p = look(D, f.fit < 1).p;
+  return { target: [cx, ey + D * Math.tan(p), cz], yaw, pitch: -p, distance: D / Math.cos(p), fovY };
+}
+
+/** Pitch limit either way, radians (83 degrees): short of straight down or up, where yaw loses its meaning. */
+export const MAX_PITCH = 1.45;
+
+/** The lowest pitch before looking up was allowed: just above level (clampPitch(p, HORIZON_PITCH) for a camera with no floor). */
+export const HORIZON_PITCH = 0.02;
+
+/** Pitch as dragging keeps it: from looking up at MAX_PITCH (eye below the target), or from min, to looking down at MAX_PITCH. */
+export function clampPitch(p: number, min = -MAX_PITCH): number {
+  return Math.min(MAX_PITCH, Math.max(min, p));
 }
 
 /** Where the camera starts (URL key cam, scene files): an Orbit without its field of view. */
@@ -83,7 +156,7 @@ export function poseOf(o: Orbit): CameraPose {
   return { target: o.target.map(round3) as V3, yaw: round3(o.yaw), pitch: round3(o.pitch), distance: round3(o.distance) };
 }
 
-/** An orbit at a pose, with a field of view in degrees; the pitch is clamped as dragging clamps it. */
+/** An orbit at a pose, with a field of view in degrees; the pitch is clamped as dragging clamps it (the caller sets the floor). */
 export function orbitAt(p: CameraPose, fov = DEFAULT_FRAMING.fov): Orbit {
   return { target: [...p.target], yaw: p.yaw, pitch: clampPitch(p.pitch), distance: p.distance, fovY: rad(fov) };
 }
