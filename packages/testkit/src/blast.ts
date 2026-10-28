@@ -1,7 +1,7 @@
 // The shared blast case (engine-api blast.ts): every engine runs the same
 // scene with and without one blast and must change exactly the velocities
 // blastKick() says, and nothing else.
-import { blastArea, blastKick, type BodyDesc, checkBlast, type InputEvent, massOf, type SceneDesc, type Snapshot, type Vec3 } from '@tb/engine-api';
+import { blastArea, blastCentre, blastVelocity, type BodyDesc, checkBlast, type InputEvent, massOf, type SceneDesc, type Snapshot, type Vec3 } from '@tb/engine-api';
 
 /** The blast step and centre: bodies fly free well above any ground, apart enough never to touch. */
 export const BLAST_CASE = { step: 5, centre: [0, 50, 0] as Vec3, radius: 5 } as const;
@@ -13,8 +13,10 @@ const body = (shape: BodyDesc['shape'], pos: Vec3, linVel: Vec3, density: number
 /**
  * Bodies around the centre at distances 0 to 7 (radius 5), cubes, a slab and
  * spheres of several densities, some moving; at the blast step a body spawns
- * before the blast (pushed) and one after it (not pushed). Body 3 is excluded.
- * `withBlast` false gives the same scene without the blast, the baseline.
+ * before the blast (pushed) and one after it (not pushed by it). Body 3 is
+ * excluded. Then a second blast in the same step, centred below body 3 and
+ * capped at 12 m/s, pushes body 0 again (capped) and the second spawn.
+ * `withBlast` false gives the same scene without the blasts, the baseline.
  */
 export function blastScene(withBlast: boolean): SceneDesc {
   const [cx, cy, cz] = BLAST_CASE.centre;
@@ -35,27 +37,33 @@ export function blastScene(withBlast: boolean): SceneDesc {
     { step: at, kind: 'spawn', body: body(cube(0.3), [cx + 1, cy + 1, cz + 1.5], [0, 0, 0], 1) },
     ...(withBlast ? [{ step: at, kind: 'blast' as const, blast: { centre: [cx, cy, cz] as Vec3, radius: BLAST_CASE.radius, impulse: 40, exclude: [3], maxDv: 30 } }] : []),
     { step: at, kind: 'spawn', body: body(cube(0.3), [cx - 1, cy - 1.5, cz + 1.5], [0, 0, 0], 1) },
+    ...(withBlast ? [{ step: at, kind: 'blast' as const, blast: { centre: { body: 3, offset: [0, -0.5, 0] as Vec3 }, radius: 2.5, impulse: 30, exclude: [3], maxSpeed: 12 } }] : []),
   ];
   return { id: 'blast', params: {}, seed: 0, gravity: [0, -9.81, 0], dt: 1 / 60, ground: null, sleep: false, bodies, inputs };
 }
 
 /**
- * The speed change per body (3 per body, 0 where none) that the blast should
- * give, from the baseline's state after BLAST_CASE.step steps (`atBlast`,
- * spawns of that step not yet in it) and the spawned bodies' own poses.
+ * The velocity change per body (3 per body, 0 where none) the blasts should
+ * make, from the baseline's state after BLAST_CASE.step steps (`atBlast`,
+ * spawns of that step not yet in it) and the spawned bodies' own states.
  */
 export function expectedKicks(atBlast: Snapshot): Float64Array {
-  const scene = blastScene(true), bodies = [...scene.bodies], pos: Vec3[] = [];
-  for (let i = 0; i < atBlast.count; i++) pos.push([atBlast.pos[3 * i]!, atBlast.pos[3 * i + 1]!, atBlast.pos[3 * i + 2]!]);
-  const out = new Float64Array(3 * (bodies.length + 2));
+  const scene = blastScene(true), bodies = [...scene.bodies], pos: Vec3[] = [], vel: Vec3[] = [];
+  for (let i = 0; i < atBlast.count; i++) {
+    pos.push([atBlast.pos[3 * i]!, atBlast.pos[3 * i + 1]!, atBlast.pos[3 * i + 2]!]);
+    vel.push([atBlast.linVel[3 * i]!, atBlast.linVel[3 * i + 1]!, atBlast.linVel[3 * i + 2]!]);
+  }
+  const v0 = vel.map((v) => [...v]);
   for (const ev of scene.inputs) {
-    if (ev.kind === 'spawn') { bodies.push(ev.body); pos.push(ev.body.pos); continue; }
-    const b = checkBlast(ev.blast);
+    if (ev.kind === 'spawn') { bodies.push(ev.body); pos.push(ev.body.pos); vel.push([...ev.body.linVel]); v0.push([...ev.body.linVel]); continue; }
+    const b = checkBlast(ev.blast), centre = blastCentre(b, b.body >= 0 ? pos[b.body]! : null);
     bodies.forEach((d, id) => {
-      const k = blastKick(b, id, pos[id]!, massOf(d), blastArea(d.shape));
-      if (k) out.set(k, 3 * id);
+      const v = blastVelocity(b, centre, id, pos[id]!, vel[id]!, massOf(d), blastArea(d.shape));
+      if (v) vel[id] = v;
     });
   }
+  const out = new Float64Array(3 * bodies.length);
+  vel.forEach((v, id) => { for (let a = 0; a < 3; a++) out[3 * id + a] = v[a]! - v0[id]![a]!; });
   return out;
 }
 
