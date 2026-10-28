@@ -6,7 +6,7 @@ import { describe, expect, it } from 'vitest';
 import { gpu, call } from './harness.ts';
 
 describe('the hall', () => {
-  it('drawn where the trace hits it, hiding bodies behind its columns and hidden by bodies in front; nothing at the floor or with the eye outside', async (ctx) => {
+  it('drawn where the trace hits it, hiding bodies behind its columns and hidden by bodies in front; nothing at the floor, or with the eye outside and its exterior off', async (ctx) => {
     if (!gpu) return ctx.skip();
     const r = await call('hallFrames', [
       // Down the nave from near one end: towers, the vault, galleries and the far end screen.
@@ -36,6 +36,24 @@ describe('the hall', () => {
     expect(aisle!.hidden.outdoorMax).toBeGreaterThan(20);
     expect(aisle!.hidden.max).toBe(0);
     expect(outside!.allMax).toBe(0);
+  }, 120_000);
+
+  it('with its exterior on (the default), drawn from outside too: its roof hides the bodies under its opaque bands', async (ctx) => {
+    if (!gpu) return ctx.skip();
+    const r = await call('hallFrames', [
+      // Above the crown (31 m), looking down on the towers under the vault.
+      { eye: [0, 40, 14], target: [0, 2, -3], exterior: true },
+      // From the ground 30 m beyond the end screen (the hall is 134 m long), looking at it.
+      { eye: [0, 1.7, 97], target: [0, 12, 0], exterior: true },
+    ]);
+    expect(r.error).toBeNull();
+    const [above, end] = r.views as NonNullable<typeof r.views>;
+    // From above, the roof fills the view and hides most of the bodies (the glazed bands show some, through milky glass).
+    expect(above!.changed).toBeGreaterThan(0.9);
+    expect(above!.bodies).toBeGreaterThan(1000);
+    expect(above!.hiddenBodies).toBeGreaterThan(0.3 * above!.bodies);
+    // From the ground outside, the end of the hall fills a good part of the frame.
+    expect(end!.changed).toBeGreaterThan(0.3);
   }, 120_000);
 
   it('the same frame at any world scale (eye and planes in world units of 1 / metres)', async (ctx) => {
