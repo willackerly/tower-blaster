@@ -76,6 +76,7 @@ export async function gpuRun(scene: SceneDesc, steps: number, params: Partial<Av
   expect(r.diagnostics.uncolored).toBe(0);
   expect(r.diagnostics.colorOverflow).toBe(0);
   expect(r.diagnostics.pairsRequired).toBeLessThanOrEqual(r.diagnostics.pairsWritten);
+  expect(r.diagnostics.pairsOverflowSteps).toBe(0); // on any step of the run
   return { snaps: r.snaps.map(toSnap), stats: r.stats.map((x) => (x ? { ...x, momentum: [NaN, NaN, NaN] } : null)), live: r.live };
 }
 
