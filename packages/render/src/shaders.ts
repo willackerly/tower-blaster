@@ -58,7 +58,7 @@ export const Frame = defineStruct('Frame', [
   ['hills', 'vec4f', 'real look: horizon hills\' greatest height (radians, 0: none) and distance (m)'],
   ['debris', 'vec4f', 'real look: dust puff size (m, fully grown), puff opacity, chip size (m), unused'],
   ['shadowSoft', 'vec4f', 'real look: tan of the penumbra half angle (0: 3x3 taps), blocker search radius (texels), light depth range (m), steepest receiver plane (depth per uv)'],
-  ['hallLook', 'vec4f', 'real look, hall: 1 while the eye is inside it (else it is not drawn), metres per world unit, glass milkiness, iron grey'],
+  ['hallLook', 'vec4f', 'real look, hall: 1 while the eye is inside it, 2 outside it with its exterior on (else it is not drawn), metres per world unit, glass milkiness, iron grey'],
   ['hallShade', 'vec4f', 'real look, hall: glazed share of the vault, web lattice bar width (web panels), balustrade height (m), unused'],
 ], 'Per-frame uniforms of the scene pass.');
 
@@ -705,8 +705,13 @@ fn hallLines(x: f32, s: f32, w: f32, fw: f32) -> f32 {
   return hallBand(x / s, 0.5 * w / s, fw / s);
 }
 
-// The surface's normal turned to the eye, and the light inside the hall from that side.
+// n: the surface's normal turned to the eye. Inside, the light in the hall from that side: the sky through
+// the vault's glazed share above, the floor below. Outside (hallLook.x 2), what the eye sees is the shell's
+// outer face (and ironwork through the glass, lit the same): the sky's ambient and the sun, unshadowed.
 fn hallAmbient(n: vec3f) -> vec3f {
+  if (fr.hallLook.x > 1.5) {
+    return mix(atmoAmbient[1].rgb, atmoAmbient[0].rgb, n.y * 0.5 + 0.5) + fr.sunColor * max(dot(n, fr.sun), 0.0);
+  }
   return mix(atmoAmbient[1].rgb, atmoAmbient[0].rgb * HALL_GLASS_T * fr.hallShade.x, n.y * 0.5 + 0.5);
 }
 
@@ -754,7 +759,7 @@ fn hallAmbient(n: vec3f) -> vec3f {
     bars = 1.0 - (1.0 - hallLines(v.uv.y, 0.6, 0.05, fy)) * (1.0 - hallLines(v.uv.x, 2.6, 0.15, fx));
   }
   let milk = fr.hallLook.z;
-  let outer = -n; // n faces the eye, inside
+  let outer = select(-n, n, fr.hallLook.x > 1.5); // n faces the eye: inward from inside, outward from outside
   let glow = HALL_GLASS_T * (atmoAmbient[0].rgb * (0.5 + 0.5 * outer.y) + fr.sunColor * max(dot(outer, fr.sun), 0.0));
   let a = bars + (1.0 - bars) * (1.0 - HALL_GLASS_T * (1.0 - milk));
   let rgb = bars * fr.hallLook.w * HALL_IRON_TINT * hallAmbient(n) + (1.0 - bars) * milk * glow;

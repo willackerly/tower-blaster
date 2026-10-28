@@ -135,9 +135,20 @@ rules the code follows; the doc has the reasoning.
   (every 2.6 m of arc) and the end screens' mullions and transoms are
   antialiased lines. Tested pixel by pixel against the CPU trace: rays at
   the floor draw what they drew outdoors, bit for bit; columns hide bodies
-  behind them; bodies hide the hall behind them. The hall is drawn only
-  while the eye is inside it (`hallUniforms`); from outside, the frame is
-  the outdoor one.
+  behind them; bodies hide the hall behind them.
+- From outside (Will, 2026-10-28: the hall vanishing as the camera left it
+  felt broken). `real.hallExterior` (1, the default; 0: the hall only from
+  inside, as before) draws the same mesh with the eye outside it
+  (`hallUniforms`: hallLook.x 2). The shell's outer faces are lit as
+  outdoors (the sky's ambient and the sun, unshadowed, like the floor);
+  inside, the light is still the vault's. Ironwork seen through the glass
+  from outside is lit as outdoors too (it cannot tell which side it is on),
+  slightly too bright. Milky glazing from outside glows on the face the
+  eye sees. Tested: from above the crown the roof hides at least 30% of
+  the bodies' pixels and changes 90% of the frame; from the ground 30 m
+  past an end, 30%. Cost: `real-hall-out` in `pnpm bench:render` (the hall
+  scaled until each bench eye is just outside it; it then covers over 25%
+  of every bench view, CPU mesh trace).
 - Alternative measured and dropped: the first version traced the hall per
   pixel in a full-screen pass writing `frag_depth` (PR #66's first
   commit). Exact, but `frag_depth` turns off early depth rejection, so
