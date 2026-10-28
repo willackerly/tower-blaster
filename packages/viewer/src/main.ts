@@ -14,7 +14,7 @@ import { clampPitch, frame, rayThrough, viewProj, eyeOf, orbitAt, poseOf, type C
 import { alphaAt, newArrivals, newClock, newPacer, pauseLatch, runFree, stepsDue, taskYield, trackSimSpeed, Window } from './loop.ts';
 import type { V3 } from './math.ts';
 import { escapeHtml } from './html.ts';
-import { bounceBody, bounceOn, engineSpec, froudeSpeed, parseViewerConfig, presetSearch, toSearch, type ViewerConfig, viewerScene, withOption, worldEngineSpec } from './params.ts';
+import { bounceBody, bounceOn, engineSpec, froudeSpeed, parseViewerConfig, presetSearch, scenarioEngineSpec, toSearch, type ViewerConfig, viewerScene, withOption, worldEngineSpec } from './params.ts';
 import { projectileBody, projectileShape, pushRadiusLimit } from './projectile.ts';
 import { mountControls } from './controls.ts';
 import { createDevice } from '@tb/gpu';
@@ -44,7 +44,7 @@ const ENGINES: Array<{ label: string; spec: string }> = [
 // early at the default 10; 20 cubes are rigid from 13 (physics-ref/test/collapse.test.ts).
 const GPU_ITERATIONS = [10, 20, 40];
 
-const viewerEngine = (c: ViewerConfig): PhysicsEngine => makeEngine(worldEngineSpec(engineSpec(c.engine, c.projectile), c.scale));
+const viewerEngine = (c: ViewerConfig): PhysicsEngine => makeEngine(worldEngineSpec(engineSpec(scenarioEngineSpec(c.engine, c.scenario), c.projectile), c.scale));
 
 interface ViewerHandle {
   status: 'loading' | 'running' | 'error';
@@ -110,13 +110,15 @@ function presets(current: string) {
   }
   const { name, options } = parseSpec(config.engine);
   if (name === 'avbd-gpu') {
+    // The scenario's own count (ScenarioDef.avbd) is its default: that button clears the option.
+    const own = Number(parseSpec(scenarioEngineSpec('avbd-gpu', config.scenario)).options.iterations ?? DEFAULT_AVBD.iterations);
     for (const n of GPU_ITERATIONS) {
       const b = document.createElement('button');
       b.textContent = `${n} iterations`;
-      if ((options.iterations ?? DEFAULT_AVBD.iterations) === n) b.className = 'on';
+      if ((options.iterations ?? own) === n) b.className = 'on';
       b.onclick = () => {
         const c = parseViewerConfig(location.search);
-        location.search = toSearch({ ...c, engine: withOption(c.engine, 'iterations', n === DEFAULT_AVBD.iterations ? undefined : n) });
+        location.search = toSearch({ ...c, engine: withOption(c.engine, 'iterations', n === own ? undefined : n) });
       };
       box.appendChild(b);
     }

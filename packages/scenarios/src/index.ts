@@ -16,6 +16,11 @@ export interface ScenarioDef {
   defaults: Params;
   /** Metres per world unit the viewer draws and simulates it at unless asked otherwise (default 1: unit cubes are 1 m). */
   scale?: number;
+  /**
+   * AVBD engine options the viewer runs it with unless its engine spec sets them (the GPU engine's
+   * GpuEngineOptions, such as pairsPerBody, on avbd-gpu only): a scene that needs more iterations than the default.
+   */
+  avbd?: Record<string, number | boolean>;
   build(params: Params, seed: number): SceneDesc;
 }
 
@@ -300,10 +305,18 @@ const S15: ScenarioDef = {
   id: 'S15', title: 'Kapla tower', catches: 'thin planks, deep load paths, sphere-loose broadphase pairs (the 2023 100k-plank record)',
   defaults: {
     planks: 10000, cells: 0, slender: 15, towers: 5, setbacks: 4, taper: 0.35, spire: 0.15,
-    joint: 0.5, jitter: 0.15, friction: 0.45, topple: true, toppleAt: 2, toppleSide: 0, toppleSpeed: 1.5, toppleHeight: 0,
+    joint: 0.5, jitter: 0.15, friction: 0.45, topple: true, toppleAt: 2, toppleSide: 0, toppleSpeed: 10, toppleHeight: 0,
   },
+  // Real Kapla: a plank 117 mm long. The viewer runs it under real gravity (9.81 / KAPLA_SCALE units/s^2) with autoSubsteps.
+  scale: KAPLA_SCALE,
+  // Thin planks in deep stacks need the game's 40 iterations and loaded-gap slop to stand (at 10 they rock
+  // and fall), and a collapsed pile wants more pair slots than the default 16 per body (boxBroadphase
+  // halves the need), or contacts are dropped and planks sink into each other.
+  avbd: { iterations: 40, gapSlop: 3e-5, boxBroadphase: true, pairsPerBody: 32 },
   build(p, seed) {
-    // Units are plank widths (KAPLA_SCALE m); joint and jitter are in mm, toppleSpeed in m/s.
+    // Units are plank widths (KAPLA_SCALE m); joint and jitter are in mm, toppleSpeed in m/s at real size. Like every
+    // scenario's, the scene's speeds are the unit world's (gravity 9.81 units/s^2), which a world at scale s plays
+    // 1/sqrt(s) times as fast (the viewer's worldScene), so the ball starts at toppleSpeed / sqrt(KAPLA_SCALE) units/s.
     const frac = (k: string) => { const v = num(p, k); if (v < 0 || v > 1) throw new Error(`param ${k} must be from 0 to 1`); return v; };
     const towers = int(p, 'towers');
     if (towers !== 1 && towers !== 5) throw new Error('param towers must be 1 or 5');
@@ -324,7 +337,7 @@ const S15: ScenarioDef = {
       let reach = 0;
       for (const k of planks)
         if (Math.abs(k.pos[1] - y) < k.half[1] + radius) reach = Math.max(reach, Math.hypot(k.pos[0], k.pos[2]) + Math.hypot(k.half[0], k.half[2]));
-      const d = reach + radius + 1, v = num(p, 'toppleSpeed') / KAPLA_SCALE;
+      const d = reach + radius + 1, v = num(p, 'toppleSpeed') / Math.sqrt(KAPLA_SCALE);
       const ball: BodyDesc = {
         shape: { kind: 'sphere', radius }, pos: [0 - d * Math.cos(th), y, 0 - d * Math.sin(th)], rot: QUAT_IDENTITY,
         linVel: [v * Math.cos(th), 0, v * Math.sin(th)], angVel: [0, 0, 0], density: 4, friction, restitution: 0, tag: TAG_BALL,
