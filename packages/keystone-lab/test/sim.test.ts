@@ -1,35 +1,14 @@
-// Keystone on real engines: levels sit still (Rapier and the AVBD reference),
+// Keystone on real engines: levels sit still (Rapier and the AVBD reference;
+// the 10 s lean check is sim-lean.test.ts),
 // and on Rapier shots fly as predicted, sessions are deterministic, and
 // records replay exactly.
 import { describe, expect, it } from 'vitest';
 import { RapierEngine } from '@tb/adapter-rapier';
-import type { PhysicsEngine, Snapshot } from '@tb/engine-api';
+import type { Snapshot } from '@tb/engine-api';
 import { quatAngle } from '@tb/geom';
-import { engineLabel, makeEngine, RAPIER_SUBSTEPS } from '@tb/keystone-lab';
-import { compileLevel, GRAVITY, L1, type LevelDef, LEVELS, predictArc, PRESETTLE_STEPS, QUIET_SPEED, QUIET_SPIN, runSession, SETTLE_QUIET, type Shot, shotToSpawn, snapshotHash } from '@tb/keystone';
-
-const ENGINES = [
-  ['Rapier', () => new RapierEngine()],
-  [`AVBD (reference, ${engineLabel({ kind: 'ref' })})`, () => makeEngine({ kind: 'ref' })],
-] as const;
-
-/** Init and run the pre-settle, counting the quiet steps (as the rules define quiet) at its end. */
-async function presettle(e: PhysicsEngine, def: LevelDef) {
-  const c = compileLevel(def);
-  await e.init(c.scene);
-  let run = 0;
-  for (let t = 0; t < PRESETTLE_STEPS; t++) {
-    await e.step();
-    const s = await e.snapshot();
-    let v = 0, w = 0;
-    for (let i = 0; i < c.meta.n; i++) if (s.awake[i]) {
-      v = Math.max(v, Math.hypot(s.linVel[3 * i]!, s.linVel[3 * i + 1]!, s.linVel[3 * i + 2]!));
-      w = Math.max(w, Math.hypot(s.angVel[3 * i]!, s.angVel[3 * i + 1]!, s.angVel[3 * i + 2]!));
-    }
-    run = v < QUIET_SPEED && w < QUIET_SPIN ? run + 1 : 0;
-  }
-  return { c, run, settled: await e.snapshot() };
-}
+import { RAPIER_SUBSTEPS } from '@tb/keystone-lab';
+import { compileLevel, GRAVITY, L1, type LevelDef, LEVELS, predictArc, PRESETTLE_STEPS, runSession, SETTLE_QUIET, type Shot, shotToSpawn, snapshotHash } from '@tb/keystone';
+import { ENGINES, idle, presettle } from './idle.ts';
 
 describe.each(ENGINES)('levels on %s', (name, make) => {
   const levels = LEVELS.map((l) => [l.id, l] as const);
@@ -47,39 +26,14 @@ describe.each(ENGINES)('levels on %s', (name, make) => {
     if (name === 'Rapier') expect(settled.awake.every((a) => a === 0)).toBe(true); // the reference does not sleep
   }, 120_000);
 
-  /** Run the pre-settle, then `steps` more; the worst vertical and sideways move of any body since the pre-settle. */
-  const idle = async (def: LevelDef, steps: number) => {
-    const e = make();
-    const { c, settled } = await presettle(e, def);
-    let up = 0, side = 0;
-    for (let t = 0; t < steps; t++) {
-      await e.step();
-      const p = (await e.snapshot()).pos, q = settled.pos;
-      for (let i = 0; i < c.meta.n; i++) {
-        up = Math.max(up, Math.abs(p[3 * i + 1]! - q[3 * i + 1]!));
-        side = Math.max(side, Math.hypot(p[3 * i]! - q[3 * i]!, p[3 * i + 2]! - q[3 * i + 2]!));
-      }
-    }
-    e.dispose();
-    return { up, side };
-  };
-
   // Idle stacks must stay put, or a level changes before the first shot. On the
   // AVBD reference L1 and L2 used to rise 3.6 and 6.1 mm in these 2 s, out of
   // the compression of a 90-step pre-settle; PRESETTLE_STEPS covers it now.
   it.each(levels)('%s then sits still for 2 s (within 1 mm)', async (_id, def) => {
-    const { up, side } = await idle(def, 120);
+    const { up, side } = await idle(make, def, 120);
     expect(Math.max(up, side)).toBeLessThan(1e-3);
   }, 120_000);
 
-  // Resting stacks used to lean over by themselves on the AVBD reference,
-  // growing from rounding error: L2's portal moved 0.94 m sideways by 10 s
-  // (L1 55 mm, L3 6.7 mm). The load floor (AvbdParams.restDepth) fixed it;
-  // L2 now moves 0.27 mm (2026-10-26).
-  it('L2 does not lean in 10 s (within 1 mm sideways)', async () => {
-    const { side } = await idle(LEVELS.find((l) => l.id === 'L2')!, 600);
-    expect(side).toBeLessThan(1e-3);
-  }, 180_000);
 });
 
 describe('pre-settle on Rapier', () => {

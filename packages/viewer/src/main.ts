@@ -23,6 +23,8 @@ import { Grenades } from '@tb/weapons';
 import { mountControls } from './controls.ts';
 import { startSearch } from './default-scene.ts';
 import { type DevAction, mountDev } from './dev-panel.ts';
+import { type SoundStatus, ViewerSound } from './sound.ts';
+import { soundMaterialName } from './sound-config.ts';
 import { createDevice } from '@tb/gpu';
 import { lookByName, Renderer, SnapshotSource, srgbToLinear, type PixelStats } from '@tb/render';
 
@@ -101,6 +103,8 @@ interface ViewerHandle {
    * it returns are pushed; each must be due after that step (step + 1 at the soonest). Set it, then R.
    */
   inputHook: (() => InputHook) | null;
+  /** Collision sound: its state, frames posted to the audio thread and the thread's latest report. */
+  sound(): { status: SoundStatus; error: string; posted: number; stats: ViewerSound['stats'] };
 }
 type InputHook = (s: Snapshot, step: number) => InputEvent[];
 declare global { interface Window { __viewer: ViewerHandle } }
@@ -110,7 +114,7 @@ const GRENADE_LOOKAHEAD = 4;
 const canvas = document.getElementById('c') as HTMLCanvasElement;
 const hud = document.getElementById('hud')!;
 const errorBox = document.getElementById('error')!;
-const handle: ViewerHandle = { status: 'loading', frames: 0, bodies: 0, awake: 0, stepIndex: 0, msPerStep: NaN, snapMs: NaN, resets: 0, overlapped: 0, tinted: 0, painted: [], variant: {}, health: null, camera: () => ({ target: [0, 0, 0], yaw: 0, pitch: 0, distance: 1 }), fire: () => {}, capture: async () => null, inputs: [], game: null, inputHook: null };
+const handle: ViewerHandle = { status: 'loading', frames: 0, bodies: 0, awake: 0, stepIndex: 0, msPerStep: NaN, snapMs: NaN, resets: 0, overlapped: 0, tinted: 0, painted: [], variant: {}, health: null, camera: () => ({ target: [0, 0, 0], yaw: 0, pitch: 0, distance: 1 }), fire: () => {}, capture: async () => null, inputs: [], game: null, inputHook: null, sound: () => ({ status: 'off', error: '', posted: 0, stats: null }) };
 window.__viewer = handle;
 
 function fail(e: unknown) {
@@ -190,6 +194,8 @@ async function main() {
   const source = new SnapshotSource(device);
   renderer.setSource(source);
   renderer.look = lookByName(config.look, config.real);
+  const sound = new ViewerSound();
+  handle.sound = () => ({ status: sound.status, error: sound.error, posted: sound.posted, stats: sound.stats });
   renderer.device.lost.then((info) => fail(`GPU device lost: ${info.message}`));
   renderer.device.addEventListener('uncapturederror', (e) => fail((e as GPUUncapturedErrorEvent).error.message));
   if (config.rules === 'keystone') return keystoneMode(config, device, renderer, source);
@@ -286,6 +292,8 @@ async function main() {
     events = [...scene.inputs];
     shapes = [...scene.bodies];
     source.reset(scene.bodies);
+    sound.scene();
+    sound.configure(config);
     // A level draws as the game draws it: crowns gold, heritage celadon, materials tinted (@tb/game structureTints).
     if (fxSlots) renderer.clearFx(0, fxSlots);
     const def = levelOf(want), tints = def ? structureTints(compileLevel(def)) : null;
@@ -339,8 +347,18 @@ async function main() {
       if (nextConfig) nextConfig = { ...nextConfig, look, real };
       renderer.look = lookByName(look, real);
       for (const f of painted) paint(f.id, f.colour);
+      sound.configure(config); // snd.mat=auto follows the look
       history.replaceState(null, '', toSearch(config));
       presets(location.search);
+    },
+    setSound(o) {
+      // Live, like the look.
+      config = { ...config, sound: o };
+      if (nextConfig) nextConfig = { ...nextConfig, sound: o };
+      sound.configure(config);
+      history.replaceState(null, '', toSearch(config));
+      presets(location.search);
+      drawHud();
     },
     setProjectile(p) {
       // A rebuild already queued takes the projectile with it (and sizes its engine for it).
@@ -394,6 +412,7 @@ async function main() {
   // step: the engine step the snapshot is of, for the input hook.
   function apply(s: Snapshot, t0: number, step: number) {
     source.update(s, shapesFor(s.count));
+    sound.snapshot(s, shapes, eyeOf(orbit), orbit.target);
     snapMs.push(performance.now() - t0);
     handle.bodies = s.count;
     awake = handle.awake = s.awake.reduce((a, x) => a + x, 0);
@@ -551,7 +570,8 @@ async function main() {
       <div class="row"><span>fps</span><span>${fmt(fps)}</span></div>
       <div class="row"><span>sim speed</span><span class="${clock.simSpeed < 0.95 ? 'warn' : ''}">${(clock.simSpeed * 100).toFixed(0)}%</span></div>
       <div class="row"><span>snapshot + upload</span><span>${fmt(handle.snapMs)} ms</span></div>
-      <div class="row muted"><span>budget</span><span>7.5 ms/step</span></div>${handle.health ? `\n      ${limitsHtml(handle.health)}` : ''}
+      <div class="row muted"><span>budget</span><span>7.5 ms/step</span></div>${handle.health ? `\n      ${limitsHtml(handle.health)}` : ''}${config.sound.on ? `
+      <div class="row"><span>sound</span><span class="${sound.status === 'error' ? 'warn' : ''}">${sound.status === 'waiting' ? 'click to start' : escapeHtml(sound.status === 'error' ? sound.error : sound.status)} · ${soundMaterialName(config)}</span></div>` : ''}
       <div class="muted">${escapeHtml(adapter.info.vendor)} ${escapeHtml(adapter.info.architecture)}${paused ? ' · <b>paused</b>' : ''}</div>${notice ? `\n      <div class="warn">${escapeHtml(notice)}</div>` : ''}`;
     // The button's node stays; only a new fix changes its text.
     const fix = limitFix(handle.health, config.engine);
@@ -722,6 +742,7 @@ async function keystoneMode(config: ViewerConfig, device: GPUDevice, renderer: R
     },
     setProjectile: (projectile) => show({ ...cfg, projectile }),
     setView: (view) => show({ ...cfg, view }),
+    setSound: (sound) => show({ ...cfg, sound }),
     camera: () => null,
   });
   // The par and dev panel: the attempt as the driver holds it, a line to play, a replay check.

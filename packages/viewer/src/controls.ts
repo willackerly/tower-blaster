@@ -2,6 +2,7 @@
 // Bounce, and for a level the rules it plays by), rebuilt on demand, and the projectile and the look, applied as soon as a field
 // changes; and the whole setup saved to or loaded from a JSON file (scene-file.ts). The panel
 // only proposes configs; main.ts decides how to apply them (live, or by reset).
+import { checkSound, SOUND_KNOBS, SOUND_MATERIAL_NAMES, type SoundKnob, type SoundOptions } from '@tb/audio';
 import { parseSpec } from '@tb/bench';
 import { type Env, ENVS, type Ground, GROUNDS, linearToSrgb, LOOKS, REAL_DEFAULTS, REAL_KNOBS, type RealKnob, type RealOptions, srgbToLinear, type Stone, STONES, type V3 } from '@tb/render';
 import type { PaceFeel } from '@tb/game';
@@ -15,6 +16,7 @@ import { blastWeight, checkBlast } from '@tb/engine-api';
 import { DEFAULT_GRENADE, FUSES, GRENADE_LIMITS, type GrenadeSpec, isPreset, PRESET_NAMES, PROJECTILE_PRESETS } from '@tb/weapons';
 import { DEFAULT_PROJECTILE, GRENADE_BLAST_KEYS, GRENADE_NUMBERS, parseProjectile, presetProjectile, type Projectile, projectileMass, worldProjectile } from './projectile.ts';
 import { parseSceneFile, sceneFile, sceneFileName } from './scene-file.ts';
+import { autoSoundMaterial } from './sound-config.ts';
 
 /** Readable names for scenario params; the rest show their key. */
 export const PARAM_LABELS: Record<string, string> = {
@@ -33,6 +35,8 @@ export interface ControlsHooks {
   setProjectile(p: Projectile): void;
   /** Draw with this look from now on (real: the real look's knobs that differ from REAL_DEFAULTS). */
   setLook(look: string, real: Partial<RealOptions>): void;
+  /** Play collision sound this way from now on. */
+  setSound(o: SoundOptions): void;
   /** Frame the scene this way from now on (and re-frame it now). */
   setView(view: Framing): void;
   /** Where the camera is now (saved as where the scene starts); null: framed afresh (Keystone frames its level). */
@@ -292,6 +296,15 @@ export function mountControls(root: HTMLElement, hooks: ControlsHooks): { refres
       </div>
       <div class="out muted"></div>
     </form>
+    <form id="sound-form">
+      <div class="h">Sound</div>
+      ${field('on', 'collision sound', false)}
+      <div class="sound">
+        <label class="f"><span>material</span><select name="material"><option value="auto">auto</option>${SOUND_MATERIAL_NAMES.map((m) => `<option value="${m}">${m}</option>`).join('')}</select></label>
+        ${(Object.entries(SOUND_KNOBS) as [SoundKnob, (typeof SOUND_KNOBS)[SoundKnob]][]).map(([key, k]) => field(key, k.label, k.def, `step="${k.step}" min="${k.min}" max="${k.max}"`)).join('')}
+      </div>
+      <div class="out muted"></div>
+    </form>
     <form id="view-form">
       <div class="h">Camera</div>
       ${(Object.keys(VIEW_FIELDS) as (keyof Framing)[]).map((k) => field(k, VIEW_FIELDS[k], 0, `step="any" min="${FRAMING_LIMITS[k][0]}" max="${FRAMING_LIMITS[k][1]}"`)).join('')}
@@ -469,6 +482,7 @@ export function mountControls(root: HTMLElement, hooks: ControlsHooks): { refres
       hooks.setLook(look, realOverrides(values, input(lookForm, 'ground').value, { stone: input(lookForm, 'stone').value as Stone, groundMaterial: input(lookForm, 'groundMaterial').value as Ground, env: input(lookForm, 'env').value as Env }));
       lookOut.textContent = look === 'real' ? 'sun azimuth: clockwise from -z; visibility: 10 hazy, 40 clear, 150 crisp' : '';
       lookOut.classList.remove('warn');
+      soundNote(); // auto's material follows the look
     } catch (e) {
       lookOut.textContent = e instanceof Error ? e.message : String(e);
       lookOut.classList.add('warn');
@@ -476,6 +490,29 @@ export function mountControls(root: HTMLElement, hooks: ControlsHooks): { refres
   }
   lookForm.addEventListener('submit', (e) => e.preventDefault());
   lookForm.addEventListener('input', applyLook);
+
+  // Sound: applied live; auto picks the material from the scene and the look.
+  const soundForm = root.querySelector<HTMLFormElement>('#sound-form')!;
+  const soundBox = soundForm.querySelector<HTMLElement>('.sound')!;
+  const soundOut = soundForm.querySelector<HTMLElement>('.out')!;
+  const soundNote = () => {
+    const c = hooks.config();
+    soundOut.textContent = c.sound.on ? `${c.sound.material === 'auto' ? `auto: ${autoSoundMaterial(c)}` : c.sound.material}; the browser starts sound at your first click` : '';
+    soundOut.classList.remove('warn');
+  };
+  soundForm.addEventListener('submit', (e) => e.preventDefault());
+  soundForm.addEventListener('input', () => {
+    const on = (input(soundForm, 'on') as HTMLInputElement).checked;
+    soundBox.hidden = !on;
+    try {
+      const o = { on, material: input(soundForm, 'material').value, ...Object.fromEntries((Object.keys(SOUND_KNOBS) as SoundKnob[]).map((k) => [k, input(soundForm, k).value === '' ? NaN : Number(input(soundForm, k).value)])) } as SoundOptions;
+      hooks.setSound(checkSound(o));
+      soundNote();
+    } catch (e) {
+      soundOut.textContent = e instanceof Error ? e.message : String(e);
+      soundOut.classList.add('warn');
+    }
+  });
 
   // Framing: applied live (the camera jumps to it); R and Rebuild frame the same way.
   viewForm.addEventListener('submit', (e) => e.preventDefault());
@@ -563,9 +600,14 @@ export function mountControls(root: HTMLElement, hooks: ControlsHooks): { refres
     input(lookForm, 'groundMaterial').value = real.groundMaterial;
     input(lookForm, 'env').value = real.env;
     for (const k of Object.keys(VIEW_FIELDS) as (keyof Framing)[]) input(viewForm, k).value = String(c.view[k]);
-    // Under Keystone's rules the rack fires and the game frames its level: the projectile and the framing wait for the sandbox.
-    // (style, not hidden: the panel's CSS sets a form's display.)
-    projForm.style.display = viewForm.style.display = c.rules === 'keystone' ? 'none' : '';
+    // Under Keystone's rules the rack fires and the game frames its level: the projectile and the framing wait for the sandbox,
+    // and so does the sound, which the game's loop does not feed yet. (style, not hidden: the panel's CSS sets a form's display.)
+    projForm.style.display = viewForm.style.display = soundForm.style.display = c.rules === 'keystone' ? 'none' : '';
+    (input(soundForm, 'on') as HTMLInputElement).checked = c.sound.on;
+    soundBox.hidden = !c.sound.on;
+    input(soundForm, 'material').value = c.sound.material;
+    for (const k of Object.keys(SOUND_KNOBS) as SoundKnob[]) input(soundForm, k).value = String(c.sound[k]);
+    soundNote();
   }
   // Open or closed as the viewer last left it; open by default on a wide screen.
   const OPEN_KEY = 'tb.viewer.controls.open';
