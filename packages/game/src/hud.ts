@@ -57,7 +57,20 @@ export function hudHtml(s: HudState): string {
 }
 
 /** Result card: score lines slam in one by one, then the stamp and stars. */
-export function resultHtml(level: LevelDef, score: LevelScore, strokes: number, hasNext: boolean): string {
+/**
+ * The round-over card. With no score yet the round is known to be over (every
+ * crown is down) and the rest of the settle is still running: the card shows
+ * at once and tallies, and is drawn again with the score when it settles.
+ */
+export function resultHtml(level: LevelDef, score: LevelScore | null, strokes: number, hasNext: boolean): string {
+  const actions = `<div class="actions"><button data-act="retry"><kbd>R</kbd> Retry</button>${hasNext ? '<button data-act="next" class="primary"><kbd>N</kbd> Next</button>' : ''}</div>`;
+  if (!score) {
+    return `
+    <div class="name">${esc(level.name)}</div>
+    <div class="sub">${strokes} stroke${strokes === 1 ? '' : 's'} · par ${level.par}</div>
+    <div class="line tally"><span>All crowns down</span><span>tallying…</span></div>
+    ${actions}`;
+  }
   const lines = score.lines.map((l, i) => `<div class="line" style="animation-delay:${0.15 + 0.22 * i}s"><span>${esc(l.label)}</span><span class="${l.value < 0 ? 'bad' : ''}">${fmtPoints(l.value)}</span></div>`).join('');
   const after = 0.15 + 0.22 * score.lines.length;
   return `
@@ -67,5 +80,5 @@ export function resultHtml(level: LevelDef, score: LevelScore, strokes: number, 
     <div class="line total" style="animation-delay:${after}s"><span>Total</span><span>${fmtPoints(score.total)}</span></div>
     <div class="stamp s-${score.stamp.replace(/[^A-Z]/g, '').toLowerCase()}" style="animation-delay:${after + 0.3}s">${esc(score.stamp)}</div>
     <div class="stars" style="animation-delay:${after + 0.55}s">${starsText(score.stars)}</div>
-    <div class="actions"><button data-act="retry"><kbd>R</kbd> Retry</button>${hasNext ? '<button data-act="next" class="primary"><kbd>N</kbd> Next</button>' : ''}</div>`;
+    ${actions}`;
 }

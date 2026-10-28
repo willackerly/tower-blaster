@@ -19,7 +19,7 @@
 //  7. refresh the static proxy shell around dynamic bodies (with hysteresis);
 //  8. apply the batch atomically and step the host.
 import {
-  bodiesAt, type BodyDesc, type CellChange, type EngineInfo, emptySnapshot, type HostState, type InputEvent, massOf, MODE_DYNAMIC, MODE_OFF,
+  bodiesAt, type BodyDesc, type CellChange, type EngineInfo, emptySnapshot, type HostState, type InputEvent, type SpawnEvent, massOf, MODE_DYNAMIC, MODE_OFF,
   MODE_STATIC, type ModeChange, type PhysicsEngine, type PhysicsHost, type Quat, type SceneDesc, type Snapshot, type StepReport, type Vec3,
 } from '@tb/engine-api';
 import { boundingRadius, shapeDepth, signedDepth, signedGroundDepth } from '@tb/geom';
@@ -29,6 +29,15 @@ import { type Lattice } from './lattice.ts';
 import { detach, looseColumns, type SupportModel } from './support.ts';
 import { CUBE_ROTATIONS, nearestCubeRotation } from './symmetry.ts';
 import { TIER } from '@tb/schema';
+
+/**
+ * Blasts (BlastEvent) are refused for now: inside the radius they would have to
+ * wake dormant cells (wakeSphere) and kick them, and the tiers do neither yet.
+ */
+function spawnsOnly(events: readonly InputEvent[]): SpawnEvent[] {
+  if (events.some((e) => e.kind !== 'spawn')) throw new Error('TieredEngine: blast inputs are not supported yet');
+  return events as SpawnEvent[];
+}
 
 export const TIER_UNSPAWNED = 0;
 export const TIER_LATTICE = 1;
@@ -243,7 +252,7 @@ export class TieredEngine implements PhysicsEngine {
   private moverRot = new Map<number, Quat>();
   /** Per dynamic id: its row in this step's host state. */
   private row = new Map<number, number>();
-  private pending: InputEvent[] = [];
+  private pending: SpawnEvent[] = [];
   private queued: WakeRequest[] = [];
   private queuedThaws: Array<{ id: number; vel: null; cause: TransitionCause }> = [];
   private nextSpawn = 0;
@@ -263,6 +272,7 @@ export class TieredEngine implements PhysicsEngine {
   }
 
   async init(scene: SceneDesc): Promise<void> {
+    spawnsOnly(scene.inputs); // throws before anything changes
     this.scene = scene;
     this.table = bodiesAt(scene, Infinity);
     // Placeholders for pushed bodies: never switched on until push() describes them.
@@ -319,7 +329,7 @@ export class TieredEngine implements PhysicsEngine {
       this.tier[id] = TIER_ACTIVE;
       changes.push({ id, mode: MODE_DYNAMIC, pos: b.pos, rot: b.rot, linVel: b.linVel, angVel: b.angVel });
     });
-    this.pending = [...scene.inputs].sort((a, b) => a.step - b.step);
+    this.pending = spawnsOnly(scene.inputs).sort((a, b) => a.step - b.step);
     this.nextSpawn = scene.bodies.length;
     this.stepIndex = 0;
     // Native hosts get every dormant cell; others get proxies around the bodies that start active.
@@ -331,7 +341,7 @@ export class TieredEngine implements PhysicsEngine {
 
   /** Queue inputs after init (interactive play); same ordering rules as scene.inputs. */
   push(events: InputEvent[]): void {
-    for (const ev of events) {
+    for (const ev of spawnsOnly(events)) {
       const id = this.nextSpawn + this.pending.length;
       if (id >= this.table.length) throw new Error(`pushed spawn beyond the id table (${this.table.length} ids): reserve more with TierParams.spare`);
       this.pending.push(ev);

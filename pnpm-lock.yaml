@@ -122,19 +122,15 @@ importers:
       '@tb/keystone':
         specifier: workspace:*
         version: link:../keystone
+      '@tb/metrics':
+        specifier: workspace:*
+        version: link:../metrics
       '@tb/physics-gpu':
         specifier: workspace:*
         version: link:../physics-gpu
       '@tb/render':
         specifier: workspace:*
         version: link:../render
-      '@tb/viewer':
-        specifier: workspace:*
-        version: link:../viewer
-    devDependencies:
-      '@tb/metrics':
-        specifier: workspace:*
-        version: link:../metrics
 
   packages/geom: {}
 

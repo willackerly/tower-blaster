@@ -2,7 +2,7 @@
 // same step as points here; 2 replaces each manifold's per-point friction by
 // one friction state at the points' centre (FrictionRecord).
 import { describe, expect, it } from 'vitest';
-import { type BodyDesc, type SceneDesc, type Vec3 } from '@tb/engine-api';
+import { type BodyDesc, type SceneDesc, type SpawnEvent, type Vec3 } from '@tb/engine-api';
 import { nonFinite } from '@tb/metrics';
 import { buildScenario } from '@tb/scenarios';
 import { type ColumnSample, readColumn, rodRock, rodToppleTime, tippingAngle } from '@tb/testkit';
@@ -186,7 +186,7 @@ describe('manifold records on the reference (AvbdParams.records)', () => {
     // friction bound. A ball into two towers, every body's e 0.5 (the ball's 0.8), run twice: as is, and with every
     // record whose points restitute() all zeroed also getting lamT = 0.
     const s = knock();
-    const scene = { ...s, bodies: s.bodies.map((b) => ({ ...b, restitution: 0.5 })), inputs: s.inputs.map((ev) => ({ ...ev, body: { ...ev.body, restitution: 0.8 } })) };
+    const scene = { ...s, bodies: s.bodies.map((b) => ({ ...b, restitution: 0.5 })), inputs: s.inputs.map((ev) => (ev.kind === 'spawn' ? { ...ev, body: { ...ev.body, restitution: 0.8 } } : ev)) };
     const run = (zero: boolean) => {
       const w = new AvbdWorld(scene, { ...DEFAULT_AVBD, iterations: 6, records: 2, restitution: true });
       for (const b of scene.bodies) w.add(b);
@@ -206,7 +206,7 @@ describe('manifold records on the reference (AvbdParams.records)', () => {
       };
       const states: Float64Array[] = [];
       for (let k = 0; k < 40; k++) {
-        while (pending.length && pending[0]!.step <= k) w.add(pending.shift()!.body);
+        while (pending.length && pending[0]!.step <= k) w.add((pending.shift() as SpawnEvent).body);
         w.step();
         states.push(Float64Array.from([...w.bodies.flatMap((b) => [...b.pos, ...b.rot, ...b.linVel, ...b.angVel]), ...w.contacts.flatMap((c) => c.lambda)]));
       }
