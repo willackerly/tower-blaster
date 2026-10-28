@@ -137,5 +137,7 @@
   "packages/viewer/test/level.test.ts": 0,
   "packages/viewer/test/rules.test.ts": 0.1,
   "packages/viewer/test/shots-line.test.ts": 0.1,
-  "packages/viewer/test/viewer.test.ts": 2.7
+  "packages/viewer/test/viewer.test.ts": 2.7,
+  "packages/viewer/test/e2e-projectiles.test.ts": 20,
+  "packages/viewer/test/projectiles.test.ts": 5
 }
