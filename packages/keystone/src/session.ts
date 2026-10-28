@@ -2,7 +2,7 @@
 // watched bodies) and step indices: never frames, wall time, the camera or the
 // engine. It emits spawn events for the engine and feedback events for the
 // renderer, audio and pacing, which never flow back into the rules.
-import { type InputEvent, massOf, type Vec3 } from '@tb/engine-api';
+import { massOf, type SpawnEvent, type Vec3 } from '@tb/engine-api';
 import { GRAVITY } from './materials.ts';
 import type { CompiledLevel } from './level.ts';
 import { crownDown, heritageBroken, leverage, levelScore, type LevelScore, type Observation, type SettleState, settleUpdate, type ShotOutcome, skyline, tier } from './rules.ts';
@@ -78,12 +78,16 @@ export class Session {
   get strokes() { return this.outcomes.length + (this.live ? 1 : 0); }
   canFire(ammo: AmmoKind): boolean { return this.phase === 'aiming' && this.rackLeft.includes(ammo); }
 
-  /** Fire at engine step `step` (its current stepIndex). Returns the spawn to push. */
-  fire(shot: Shot, step: number): { spawn: InputEvent; feedback: Feedback[] } {
+  /**
+   * Fire at engine step `step` (its current stepIndex). Returns the spawn to push. `body` is the
+   * engine id the ammo will have: by default the structure's bodies then the ammo fired before;
+   * a driver that pushes other spawns (Driver.push) passes its own count.
+   */
+  fire(shot: Shot, step: number, body = this.level.meta.n + this.ammoCount): { spawn: SpawnEvent; feedback: Feedback[] } {
     if (!this.canFire(shot.ammo)) throw new Error(`cannot fire ${shot.ammo}: phase ${this.phase}, rack [${this.rackLeft.join(', ')}]`);
     const spawn = shotToSpawn(this.level.frame, shot, step);
     this.rackLeft.splice(this.rackLeft.indexOf(shot.ammo), 1);
-    const body = this.level.meta.n + this.ammoCount++;
+    this.ammoCount++;
     const ke = ammoKE(spawn);
     this.live = {
       shot, spawnStep: step, body, ke, mass: massOf(spawn.body), ammo: shot.ammo, settle: { quietSince: null }, contact: false, prevVel: null, tier: 0, slowMo: false,

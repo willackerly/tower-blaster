@@ -169,6 +169,32 @@ describe('the render bench\'s hall (bench.ts real-hall)', () => {
     expect(hallSizeFor([0, 1.7, 0])).toBe(1);
   });
 
+  it('real-hall-out: scaled down until each world\'s eye is outside it, and the hall then fills a good part of the view', async () => {
+    const { buildWorld, hallSizeOutside } = await import('../src/bench.ts');
+    const { lookAt, multiply, perspective, invert } = await import('../src/index.ts');
+    for (const [world, n] of [['near', 10_000], ['near', 100_000], ['far', 10_000], ['far', 100_000]] as const) {
+      const { eye, target } = buildWorld(world, n);
+      const s = hallSizeOutside(eye);
+      const h = hallScaled(H, s);
+      expect(hallInside(h, eye)).toBe(false);
+      expect(hallInside(h, eye.map((x) => x * 0.9) as V3)).toBe(false);
+      expect(hallInside(hallScaled(H, s + 0.25), eye.map((x) => x * 0.9) as V3)).toBe(true);
+      // Share of the bench's view (2560 x 1440, fov 0.9) whose rays meet the hall's mesh, on a coarse grid.
+      const { opaque, glass } = hallMesh(h);
+      const inv = invert(multiply(perspective(0.9, 16 / 9, 0.5, 2000), lookAt(eye, target)));
+      let hit = 0, all = 0;
+      for (let y = 0; y < 9; y++) for (let x = 0; x < 16; x++) {
+        const ndc = [((x + 0.5) / 16) * 2 - 1, 1 - ((y + 0.5) / 9) * 2, 1, 1];
+        const p = [0, 1, 2, 3].map((i) => ndc.reduce((acc, v, j) => acc + inv[j * 4 + i]! * v, 0));
+        const d = [p[0]! / p[3]! - eye[0], p[1]! / p[3]! - eye[1], p[2]! / p[3]! - eye[2]];
+        const l = Math.hypot(d[0]!, d[1]!, d[2]!);
+        all++;
+        if (meshTrace([opaque, glass], eye, [d[0]! / l, d[1]! / l, d[2]! / l]).mat !== HALL_MAT.none) hit++;
+      }
+      expect(hit / all, `${world} ${n}`).toBeGreaterThan(0.25);
+    }
+  });
+
   it('a run of some variants leaves the marginal-cost columns of the others blank', async () => {
     const { renderBenchMarkdown } = await import('../src/bench.ts');
     const c = (variant: 'full' | 'real' | 'real-hall', ms: number) => ({

@@ -3,12 +3,13 @@
 // one command buffer per step. Parameters are the reference solver's (physics-ref AvbdParams), so
 // the two engines can be run side by side on the same settings. With AvbdParams.restitution on,
 // the solve ends with the restitution pass (restitution.ts).
-import { type BodyDesc, DEFAULT_RESTITUTION_COMBINE, emptySnapshot, type EngineInfo, inertiaOf, type InputEvent, massOf, type PhysicsEngine, type SceneDesc, type Snapshot, type Vec3 } from '@tb/engine-api';
+import { type BodyDesc, checkBlast, checkBlastQueue, DEFAULT_RESTITUTION_COMBINE, emptySnapshot, type EngineInfo, inertiaOf, type InputEvent, massOf, type PhysicsEngine, type SceneDesc, type Snapshot, queueInputs, spawnedBodies, type Vec3 } from '@tb/engine-api';
 import { boundingRadius } from '@tb/geom';
 import { assertStorageFits, createDevice, isSoftwareAdapter, Readback } from '@tb/gpu';
 import { type AvbdParams, avbdVariant, checkColoring, checkGapSlop, checkRecords, checkRemoved, checkRestitution, DEFAULT_AVBD, RESTITUTION_DEFAULTS } from '@tb/physics-ref';
 import { Body, BodyProps, readField, RestSlot, Shape, SolverBody, writeStruct } from '@tb/schema';
-import { Broadphase } from './broadphase.ts';
+import { BlastPass, type DueBlast } from './blast.ts';
+import { assertPairDispatch, Broadphase } from './broadphase.ts';
 import { Coloring } from './coloring.ts';
 import { Narrowphase } from './narrowphase.ts';
 import { restitutionWord } from './restitution.ts';
@@ -17,7 +18,12 @@ import { AvbdSolver, DEFAULT_DISPATCH, defaultTailThreads, HESSIAN_FORMS, type H
 export interface GpuEngineOptions {
   /** Use this device instead of creating one (it is then not destroyed by dispose()). */
   device?: GPUDevice;
-  /** Pair buffer size per body. */
+  /**
+   * Pair buffer size per body (default 16): the buffer holds pairsPerBody x capacity broadphase
+   * pairs, and a step that finds more drops the rest (GpuDiagnostics.pairsOverflowSteps). init()
+   * refuses more than one indirect dispatch covers, 64 x maxComputeWorkgroupsPerDimension
+   * (4,194,240 at the default limit; assertPairDispatch).
+   */
   pairsPerBody?: number;
   /**
    * Room for push(): bodies the engine can hold (default: the scene's bodies
@@ -73,9 +79,37 @@ export function gpuRecordsLayout(params: Pick<Partial<AvbdParams>, 'records'>, o
   return opts.hessian === 'array' ? 0 : 1;
 }
 
+/**
+ * The lattice colouring (AvbdParams.colorMode) a GpuAvbdEngine with these params colours with: params.colorMode when
+ * given (0 the hash priority's greedy colouring alone, 1-4 the lattice preferences, physics-ref coloring.ts); unset,
+ * 3, the GPU default since 2026-10-28. On the M5 sweep (S4 10k at I = 20, with records 1) it cuts the colours of a
+ * resting city from 10 to 4 and the step from 9.6 to 5.2 ms (steps 60-240) and from 5.0 to 3.1 ms (steps 300-480),
+ * and against colorMode 0 it held every quality gate at the game's
+ * setting (40 iterations, gapSlop 3e-5) and at 20 iterations, within colorMode 0's own spread over body orders and
+ * 1e-6 m start jitters (f64 reference and SwiftShader), with every Keystone par line clearing as before
+ * (perf-competition r3-colormode). A scene with no cubes on the world lattice colours as with 0. The reference engine
+ * is unchanged: unset is 0 there.
+ */
+export const GPU_DEFAULT_COLOR_MODE = 3;
+export function gpuColorMode(params: Pick<Partial<AvbdParams>, 'colorMode'>): number {
+  return params.colorMode ?? GPU_DEFAULT_COLOR_MODE;
+}
+
 export interface GpuDiagnostics {
+  /** The last step's broadphase pairs: how many it found, and how many fit the pair buffer (the rest were dropped). */
   pairsRequired: number;
   pairsWritten: number;
+  /** The pair buffer's size (GpuEngineOptions.pairsPerBody x the engine's capacity). */
+  maxPairs: number;
+  /**
+   * Every step since init(), from the broadphase's sticky counters (broadphase.ts): the most
+   * pairs one required, and how many required more than maxPairs. A step that overflows drops
+   * the pairs between the bodies latest in index order, which then pass through each other.
+   */
+  pairsRequiredPeak: number;
+  pairsOverflowSteps: number;
+  /** Steps submitted since init(), which the counters cover unless the GPU rejected one (finish() reports that). */
+  steps: number;
   colors: number;
   uncolored: number;
   colorOverflow: number;
@@ -139,7 +173,9 @@ export class GpuAvbdEngine implements PhysicsEngine {
   dispatch: SolverDispatch | null = null;
   /** The solver's contact layout (gpuRecordsLayout(): AvbdParams.records, unset 1): 0 points, 1 exact records, 2 centre-friction records. */
   readonly records: RecordMode;
-  private parts: { bodies: GPUBuffer; shapes: GPUBuffer; props: GPUBuffer; spheres: GPUBuffer; sweep: GPUBuffer; prev: GPUBuffer; bp: Broadphase; np: Narrowphase; col: Coloring; solver: AvbdSolver; readback: Readback } | null = null;
+  /** The colouring's lattice preference (gpuColorMode(): AvbdParams.colorMode, unset 3). */
+  readonly colorMode: number;
+  private parts: { bodies: GPUBuffer; shapes: GPUBuffer; props: GPUBuffer; spheres: GPUBuffer; sweep: GPUBuffer; prev: GPUBuffer; bp: Broadphase; np: Narrowphase; col: Coloring; solver: AvbdSolver; blast: BlastPass; readback: Readback } | null = null;
   /** Counts dispose() calls (init() makes one), so an init() that awaited across another knows it was overtaken. */
   private generation = 0;
 
@@ -180,6 +216,11 @@ export class GpuAvbdEngine implements PhysicsEngine {
     // before records 1 became the default were points, and so were those with restitution on until restitution
     // ran on records 1 (gpuRecordsLayout gave it points): the same floats, other timings.
     if (this.params.records !== undefined) variant.records = this.params.records;
+    // colorMode the same way (avbdVariant drops 0 as off): unset is gpuColorMode()'s 3 on the GPU, so avbd-gpu (unset)
+    // and avbd-gpu:colorMode=0 (the hash colouring alone) are different engines, and avbd-gpu:colorMode=3 keeps the
+    // key it had. Results named avbd-gpu before colorMode 3 became the default were colorMode 0.
+    this.colorMode = gpuColorMode(this.params);
+    if (this.params.colorMode !== undefined) variant.colorMode = this.params.colorMode;
     // Options that size the buffers or shape the dispatch change the work per step (e.g. the broadphase's key bits), so they are part of the variant.
     for (const k of ['capacity', 'spare', 'pairsPerBody', 'maxRadius', 'colorTail', 'indirectColors', 'tailThreads', 'colorRounds', 'hessian', 'boxBroadphase'] as const) if (opts[k] !== undefined) variant[k] = opts[k];
     this.info = { name: 'avbd-gpu', variant, backend: 'webgpu', integrator: { substeps: 1 } };
@@ -189,6 +230,7 @@ export class GpuAvbdEngine implements PhysicsEngine {
     // As the reference, switch on or off; checked before anything changes.
     const groundE = scene.ground?.restitution;
     if (groundE !== undefined && !(groundE >= 0 && groundE <= 1)) throw new Error(`GpuAvbdEngine: SceneDesc.ground.restitution must be in [0, 1], got ${groundE}`);
+    checkBlastQueue(scene.bodies.length, [...scene.inputs].sort((a, b) => a.step - b.step));
     this.failure = null;
     this.dispose();
     const generation = this.generation;
@@ -209,7 +251,7 @@ export class GpuAvbdEngine implements PhysicsEngine {
       hessian: this.opts.hessian ?? DEFAULT_DISPATCH.hessian,
     };
     this.scene = scene;
-    const all = [...scene.bodies, ...scene.inputs.map((e) => e.body)];
+    const all = [...scene.bodies, ...spawnedBodies(scene.inputs)];
     if (this.opts.capacity !== undefined && this.opts.capacity < all.length) throw new Error(`GpuAvbdEngine: capacity ${this.opts.capacity} is below the scene's ${all.length} bodies and inputs`);
     this.capacity = Math.max(1, this.opts.capacity ?? all.length + (this.opts.spare ?? 0));
     const maxPairs = (this.opts.pairsPerBody ?? 16) * this.capacity;
@@ -217,6 +259,9 @@ export class GpuAvbdEngine implements PhysicsEngine {
     this.rmax = all.reduce((m, b) => Math.max(m, boundingRadius(b.shape)), this.opts.maxRadius ?? 0);
     // Every overlapping (inflated) pair must lie in adjacent cells.
     this.cellSize = Math.max(1e-3, 2 * (this.rmax + (p.sweep ? p.maxSweep : 0)) + p.margin);
+    // The per-pair kernels run as one indirect dispatch over the pairs written (Broadphase.total), and a
+    // dispatch past the device's workgroup limit does nothing at all: refuse a pair buffer it cannot cover.
+    assertPairDispatch(device, maxPairs, 'GpuAvbdEngine', 'lower pairsPerBody or capacity');
     // The contact buffer is the largest (1 KB per pair slot, 768 B with
     // records; a manifold is 96 B), so checking it first means no stage throws
     // halfway through allocating, which would leak what it had made.
@@ -247,7 +292,7 @@ export class GpuAvbdEngine implements PhysicsEngine {
       const prev = buf(maxPairs * 8, 'pair history lookup');
       const bp = new Broadphase(device, spheres, this.capacity, maxPairs, undefined, this.opts.boxBroadphase ? { bodies, shapes, sweep } : undefined);
       const np = new Narrowphase(device, bodies, shapes, bp.pairs, bp.total, this.capacity, maxPairs, sweep, prev);
-      const col = new Coloring(device, np.manifolds, bp.total, this.capacity, maxPairs, this.opts.colorRounds, { colorMode: p.colorMode ?? 0, colorPriority: p.colorPriority ?? 0, bodies, shapes });
+      const col = new Coloring(device, np.manifolds, bp.total, this.capacity, maxPairs, this.opts.colorRounds, { colorMode: this.colorMode, colorPriority: p.colorPriority ?? 0, bodies, shapes });
       const solver = new AvbdSolver(device, this.capacity, maxPairs, {
         bodies, props, spheres, sweep, prev, manifolds: np.manifolds, groundManifolds: np.groundManifolds,
         pairs: bp.pairs, total: bp.total, offsets: bp.offsets,
@@ -256,7 +301,7 @@ export class GpuAvbdEngine implements PhysicsEngine {
         threshold: p.restitutionThreshold ?? RESTITUTION_DEFAULTS.restitutionThreshold, rounds: p.restitutionRounds ?? RESTITUTION_DEFAULTS.restitutionRounds,
         groundRestitution: scene.ground?.restitution ?? 0, combine: scene.restitutionCombine ?? DEFAULT_RESTITUTION_COMBINE,
       } : null);
-      parts = { bodies, shapes, props, spheres, sweep, prev, bp, np, col, solver, readback: new Readback(device) };
+      parts = { bodies, shapes, props, spheres, sweep, prev, bp, np, col, solver, blast: new BlastPass(device, bodies, props, shapes, solver.solver), readback: new Readback(device) };
     } catch (e) {
       thrown = e;
     }
@@ -303,17 +348,17 @@ export class GpuAvbdEngine implements PhysicsEngine {
   push(events: InputEvent[]): void {
     if (!this.parts) throw new Error('init() first');
     // Checked before queueing any, so a rejected batch changes nothing.
-    if (this.n + this.pending.length + events.length > this.capacity) throw new Error(`GpuAvbdEngine: push() needs room for ${this.n + this.pending.length + events.length} bodies, capacity is ${this.capacity} (GpuEngineOptions.capacity or spare)`);
+    const room = this.n + spawnedBodies(this.pending).length + spawnedBodies(events).length;
+    if (room > this.capacity) throw new Error(`GpuAvbdEngine: push() needs room for ${room} bodies, capacity is ${this.capacity} (GpuEngineOptions.capacity or spare)`);
     for (const ev of events) {
+      if (ev.kind === 'blast') continue;
       const r = boundingRadius(ev.body.shape);
       if (r > this.rmax) throw new Error(`GpuAvbdEngine: pushed body radius ${r} exceeds ${this.rmax}, the largest the broadphase cells were sized for (GpuEngineOptions.maxRadius)`);
     }
     // Stable insertion keeps push order among events due at the same step.
-    for (const ev of events) {
-      let i = this.pending.length;
-      while (i > 0 && this.pending[i - 1]!.step > ev.step) i--;
-      this.pending.splice(i, 0, ev);
-    }
+    const pending = queueInputs(this.pending, events);
+    checkBlastQueue(this.n, pending);
+    this.pending = pending;
   }
 
   step(): void {
@@ -346,11 +391,18 @@ export class GpuAvbdEngine implements PhysicsEngine {
     const { device, parts, scene } = this;
     if (!device || !parts || !scene) throw new Error('init() first');
     if (this.failure) throw new Error(`GpuAvbdEngine: ${this.failure}`);
-    while (this.pending.length && this.pending[0]!.step <= this.stepIndex) this.add(this.pending.shift()!.body);
+    // Spawns are written now; a blast acts on the bodies that exist when it is due (ids below its count).
+    const blasts: DueBlast[] = [];
+    while (this.pending.length && this.pending[0]!.step <= this.stepIndex) {
+      const ev = this.pending.shift()!;
+      if (ev.kind === 'spawn') this.add(ev.body);
+      else blasts.push({ blast: checkBlast(ev.blast), count: this.n });
+    }
     const n = this.n, p = this.params;
     parts.solver.writeParams(n, scene.dt, scene.gravity, scene.ground, p, scene.frictionCombine);
     const enc = device.createCommandEncoder();
     let pass = enc.beginComputePass();
+    parts.blast.encode(pass, blasts);
     parts.solver.prepare(pass, n);
     pass.end();
     parts.bp.encode(enc, n, { cellSize: this.cellSize, margin: p.margin });
@@ -390,13 +442,17 @@ export class GpuAvbdEngine implements PhysicsEngine {
     return s;
   }
 
-  /** Pipeline health after the last step: pair buffer and colouring limits. */
+  /** Pipeline health: the pair buffer and colouring limits after the last step, and the pair buffer over every step since init(). */
   async diagnostics(): Promise<GpuDiagnostics> {
     const { device, parts } = this;
     if (!device || !parts) throw new Error('init() first');
+    const steps = this.stepIndex;
     const [t, c] = await Promise.all([parts.readback.read(parts.bp.total), parts.readback.read(parts.col.info)]);
     const total = new Uint32Array(t), info = new Uint32Array(c);
-    return { pairsRequired: total[5]!, pairsWritten: total[3]!, colors: info[0]!, uncolored: info[1]!, colorOverflow: info[2]! };
+    return {
+      pairsRequired: total[5]!, pairsWritten: total[3]!, maxPairs: parts.bp.maxPairs, pairsRequiredPeak: total[6]!, pairsOverflowSteps: total[7]!, steps,
+      colors: info[0]!, uncolored: info[1]!, colorOverflow: info[2]!,
+    };
   }
 
   /**
@@ -414,7 +470,7 @@ export class GpuAvbdEngine implements PhysicsEngine {
   }
 
   private static free(p: NonNullable<GpuAvbdEngine['parts']>): void {
-    p.solver.destroy(); p.col.destroy(); p.np.destroy(); p.bp.destroy(); p.readback.destroy();
+    p.solver.destroy(); p.blast.destroy(); p.col.destroy(); p.np.destroy(); p.bp.destroy(); p.readback.destroy();
     for (const b of [p.bodies, p.shapes, p.props, p.spheres, p.sweep, p.prev]) b.destroy();
   }
 

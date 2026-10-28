@@ -92,7 +92,15 @@ so a knock raises the dust it would in the unit world.
   when the size changes), under the seed; the line under them says what
   they do ("4 g in cube units, 2x as fast, 2x physics cost"). The saved JSON keeps
   them in `scene.scale` and `loop.substeps`.
-- `ScenarioDef.scale`: a scenario's default (none sets one yet).
+- `ScenarioDef.scale`: a scenario's default. S15 (Kapla) sets `KAPLA_SCALE`
+  (0.0234 m per unit, so a plank is 117 mm and 7 substeps); `scale=1` by hand
+  gives the earlier giant world (5 m planks), which is the same collapse
+  6.5x slower at a seventh of the physics cost.
+- `ScenarioDef.avbd`: AVBD options the viewer adds under the URL's engine
+  spec where it leaves them unset (`scenarioEngineSpec`; GPU buffer options
+  on avbd-gpu only). S15: 40 iterations, gapSlop 3e-5, boxBroadphase,
+  32 pair slots per body. The iteration buttons treat the scenario's count
+  as the default.
 
 ## Camera framing (`view.*`)
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { BodyDesc } from '@tb/engine-api';
+import type { BodyDesc, SpawnEvent } from '@tb/engine-api';
 import { buildScenario, KAPLA_SCALE, layout, plankCount, STOREY } from '../src/index.ts';
 import { fitShape } from '../src/kapla.ts';
 
@@ -96,7 +96,25 @@ describe('S15 Kapla tower', () => {
     const s = buildScenario('S15', { topple: false });
     const shape = fitShape({ cells: 0, towers: 5, setbacks: 4, taper: 0.35, spire: 0.15 }, 10000, 15);
     expect(plankCount(shape)).toBe(s.bodies.length);
-    expect(1 + Math.max(...s.bodies.map((b) => b.tag))).toBe(shape.storeys);
+    expect(Math.max(...s.bodies.map((b) => b.tag))).toBe(shape.storeys); // the cap is storey `storeys`
+  });
+
+  it.each([
+    ['default 10k', {}],
+    ['wide base, many setbacks', { cells: 9, setbacks: 6, taper: 0.2, planks: 6000 }],
+    ['1-cell column', { cells: 1, towers: 1, planks: 400 }],
+  ])('every pillar carries a flat plank, at setbacks and at the top too (%s)', (_, over) => {
+    const boxes = planksOf(buildScenario('S15', { topple: false, ...over }, 3));
+    const flats = boxes.filter((b) => b.half[1]! < 0.5);
+    const yKey = (y: number) => Math.round(y * 1e5);
+    const byBottom = new Map<number, Box[]>();
+    for (const b of flats) { const k = yKey(b.pos[1]! - b.half[1]!); (byBottom.get(k) ?? byBottom.set(k, []).get(k)!).push(b); }
+    const overlap = (a: Box, b: Box, ax: number) => Math.min(a.pos[ax]! + a.half[ax]!, b.pos[ax]! + b.half[ax]!) - Math.max(a.pos[ax]! - a.half[ax]!, b.pos[ax]! - b.half[ax]!);
+    const bare = boxes.filter((p) => p.half[1]! > 1).filter((p) => !(byBottom.get(yKey(p.pos[1]! + p.half[1]!)) ?? []).some((f) => overlap(p, f, 0) > 0.1 && overlap(p, f, 2) > 0.1));
+    expect(bare).toEqual([]);
+    // The top is the cap: an A layer and a B layer over the last footprint.
+    const top = Math.max(...boxes.map((b) => b.pos[1]! + b.half[1]!));
+    expect(boxes.filter((b) => Math.abs(b.pos[1]! + b.half[1]! - top) < 1e-6).every((b) => b.half[1]! < 0.5)).toBe(true);
   });
 
   it('the 100k default stands about as tall as the 27.46 m record', () => {
@@ -129,12 +147,13 @@ describe('S15 Kapla tower', () => {
   it('the topple ball starts clear of the tower and heads for its axis', () => {
     for (const toppleSide of [0, 37, 200]) {
       const s = buildScenario('S15', { planks: 2000, toppleSide });
-      const ball = s.inputs[0]!.body;
+      const ball = (s.inputs[0] as SpawnEvent).body;
       expect(s.inputs[0]!.step).toBe(120);
       const [x, , z] = ball.pos, [vx, , vz] = ball.linVel;
       expect((x * vz - z * vx) / Math.hypot(vx, vz)).toBeCloseTo(0, 9); // the line of flight passes through the axis
       expect(x * vx + z * vz).toBeLessThan(0);
-      expect(Math.hypot(vx, vz) * KAPLA_SCALE).toBeCloseTo(1.5, 9);
+      // Unit-world speed: at real size (scale KAPLA_SCALE, 1/sqrt(scale) as fast) it is toppleSpeed m/s.
+      expect(Math.hypot(vx, vz) / Math.sqrt(KAPLA_SCALE) * KAPLA_SCALE).toBeCloseTo(10, 9);
     }
     expect(STOREY * KAPLA_SCALE).toBeCloseTo(0.1326, 4);
   });

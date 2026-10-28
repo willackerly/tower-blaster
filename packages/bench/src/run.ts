@@ -177,7 +177,7 @@ export async function qualityRun(e: PhysicsEngine, scene: SceneDesc, opts: Quali
   const initial = scene.bodies.length;
   const untouched = Array.from({ length: initial }, (_, i) => i);
   const towerTags = [...new Set(scene.bodies.map((b) => b.tag).filter((t) => t >= 0))];
-  const fired = scene.inputs.some((ev) => ev.body.tag === TAG_BALL);
+  const fired = scene.inputs.some((ev) => ev.kind === 'spawn' && ev.body.tag === TAG_BALL);
   return {
     steps: opts.steps,
     bodies: last.count,

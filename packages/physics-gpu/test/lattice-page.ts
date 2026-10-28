@@ -2,9 +2,9 @@
 // colorPriority): lattice*.test.ts and scripts/lattice-structure.ts. Bundled by
 // loadBundle; the general drivers (simulateGpu) come from page.ts.
 import { readBuffer, sharedDevice } from '@tb/gpu';
-import type { SceneDesc } from '@tb/engine-api';
+import { type SceneDesc, spawnedBodies } from '@tb/engine-api';
 import { type AvbdParams, colorGraphWith, latticeParity, latticePreferences, outranks } from '@tb/physics-ref';
-import { GpuAvbdEngine, type GpuEngineOptions, MAX_COLORS } from '../src/index.ts';
+import { GpuAvbdEngine, type GpuEngineOptions, gpuColorMode, MAX_COLORS } from '../src/index.ts';
 
 export { simulateGpu } from './page.ts';
 
@@ -60,8 +60,9 @@ export async function latticeRun(scene: SceneDesc, steps: number, params: Partia
   const e = new GpuAvbdEngine(params, { ...opts, device });
   await e.init(scene);
   // Bodies in the engine's order: the scene's, then its inputs by step.
-  const descs = [...scene.bodies, ...[...scene.inputs].sort((a, b) => a.step - b.step).map((ev) => ev.body)];
-  const mode = params.colorMode ?? 0, degreeFirst = (params.colorPriority ?? 0) === 1;
+  const descs = [...scene.bodies, ...spawnedBodies([...scene.inputs].sort((a, b) => a.step - b.step))];
+  // The engine's mode: unset is 3 on the GPU (gpuColorMode).
+  const mode = gpuColorMode(params), degreeFirst = (params.colorPriority ?? 0) === 1;
   const gy = scene.ground?.y ?? 0;
   const checks: ColourCheck[] = [];
   const t0 = performance.now();

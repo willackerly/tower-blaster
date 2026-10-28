@@ -1,16 +1,19 @@
-// The viewer's control panel: the scene (scenario, its params, seed, cube size, substeps and
-// Bounce), rebuilt on demand, and the projectile and the look, applied as soon as a field
+// The viewer's control panel: the scene (scenario or level, its params, seed, cube size, substeps,
+// Bounce, and for a level the rules it plays by), rebuilt on demand, and the projectile and the look, applied as soon as a field
 // changes; and the whole setup saved to or loaded from a JSON file (scene-file.ts). The panel
 // only proposes configs; main.ts decides how to apply them (live, or by reset).
 import { parseSpec } from '@tb/bench';
 import { type Env, ENVS, type Ground, GROUNDS, linearToSrgb, LOOKS, REAL_DEFAULTS, REAL_KNOBS, type RealKnob, type RealOptions, srgbToLinear, type Stone, STONES, type V3 } from '@tb/render';
-import { compileLevel, LEVELS } from '@tb/keystone';
+import type { PaceFeel } from '@tb/game';
+import { AVBD_ITERATIONS, compileLevel, LEVELS, PRESETTLE_STEPS } from '@tb/keystone';
 import { buildScenario, SCENARIOS } from '@tb/scenarios';
 import { type CameraPose, type Framing, FRAMING_LIMITS } from './camera.ts';
 import { escapeHtml } from './html.ts';
 import { levelIssues, levelJson, parseLevelDef } from './level-file.ts';
-import { autoSubsteps, AVBD_ENGINES, bounceOn, DEFAULT_BOUNCE, defaultPresettle, levelDef, MAX_PRESETTLE, MAX_SUBSTEPS, SCALE_LIMITS, type ViewerConfig, withOption } from './params.ts';
-import { parseProjectile, type Projectile, projectileMass } from './projectile.ts';
+import { autoSubsteps, AVBD_ENGINES, bounceOn, checkKeystone, DEFAULT_BOUNCE, DEFAULT_CONFIG, defaultLook, defaultPresettle, keystoneEngine, levelDef, MAX_PRESETTLE, MAX_SUBSTEPS, type Rules, SCALE_LIMITS, type ViewerConfig, withOption } from './params.ts';
+import { blastWeight, checkBlast } from '@tb/engine-api';
+import { DEFAULT_GRENADE, FUSES, GRENADE_LIMITS, type GrenadeSpec } from '@tb/weapons';
+import { GRENADE_BLAST_KEYS, GRENADE_NUMBERS, parseProjectile, type Projectile, projectileMass } from './projectile.ts';
 import { parseSceneFile, sceneFile, sceneFileName } from './scene-file.ts';
 
 /** Readable names for scenario params; the rest show their key. */
@@ -32,10 +35,25 @@ export interface ControlsHooks {
   setLook(look: string, real: Partial<RealOptions>): void;
   /** Frame the scene this way from now on (and re-frame it now). */
   setView(view: Framing): void;
-  /** Where the camera is now (saved as where the scene starts). */
-  camera(): CameraPose;
+  /** Where the camera is now (saved as where the scene starts); null: framed afresh (Keystone frames its level). */
+  camera(): CameraPose | null;
   /** Switch to this config, loaded from a file named name. */
   load(next: ViewerConfig, name: string): void;
+}
+
+/** The grenade's fields in the panel: label and step, by URL key (grenade.<key>). */
+export const GRENADE_FIELDS: Record<(typeof GRENADE_NUMBERS)[number] | (typeof GRENADE_BLAST_KEYS)[number], [string, string]> = {
+  delay: ['fuse delay (s)', 'any'], prox: ['proximity (m)', 'any'], arm: ['arms after (s)', 'any'],
+  radius: ['blast radius (m)', 'any'], impulse: ['impulse (N·s/m²)', 'any'], core: ['flat core (x radius)', 'any'], falloff: ['falloff power', '1'],
+  maxDv: ['max kick (m/s)', 'any'], maxSpeed: ['speed cap (m/s)', 'any'],
+};
+
+/** What a grenade's blast does to a scene cube (1 kg, 1 m) at a few distances, at scale 1. */
+export function grenadeSummary(g: GrenadeSpec): string {
+  const b = checkBlast({ centre: [0, 0, 0], ...g.blast });
+  const kick = (d: number) => (d < b.radius ? Math.min(b.maxDv, b.impulse * blastWeight(b, d) * 1.5) : 0);
+  const at = [1, 0.5 * b.radius, 0.8 * b.radius].map((d) => +d.toPrecision(2));
+  return `a cube at ${at.map((d) => `${d} m gets ${kick(d).toPrecision(2)}`).join(', ')} m/s`;
 }
 
 /** Linear albedo to a colour input's #rrggbb (sRGB) and back, to 3 decimals. */
@@ -57,6 +75,26 @@ export function realOverrides(values: Record<RealKnob, number>, groundHex: strin
 
 /** The panel's Bounce: restitution on or off (the engine option), and the e every surface then gets (ViewerConfig.bounce). */
 export interface BounceChoice { on: boolean; e: number }
+
+/** The panel's rules for a level, and Keystone's pace juice (ViewerConfig.rules, feel). */
+export interface RulesChoice { rules: Rules; feel: PaceFeel }
+
+/**
+ * A config under Keystone's rules: the level's own physics and stepping (scale, substeps,
+ * presettle, sleep, the free loop, no autofire) and the game's engine of the same kind (an
+ * avbd-gpu spec's options dropped: the game sets its own), as the game plays it; throws when the
+ * engine has no game counterpart (keystoneEngine).
+ */
+export function underKeystone(c: ViewerConfig, feel: PaceFeel): ViewerConfig {
+  const { loop, pipeline, maxSteps } = DEFAULT_CONFIG;
+  const name = parseSpec(c.engine).name, engine = name === 'avbd-gpu' || name === 'rapier' ? name : c.engine;
+  const next: ViewerConfig = { ...c, rules: 'keystone', feel, engine, scale: 1, substeps: 1, presettle: PRESETTLE_STEPS, sleep: null, autofire: 0, loop, pipeline, maxSteps, camera: null };
+  checkKeystone(next);
+  return next;
+}
+
+/** The look under other rules: a look left at its rules' default (no look key in the URL) becomes the new rules' default, as editing the URL's rules would. */
+const lookFor = (c: ViewerConfig, rules: Rules) => (c.look === defaultLook(c.rules) ? defaultLook(rules) : c.look);
 
 /** The scene picker's value for a Keystone level (scenarios are their own id). */
 export const levelChoice = (id: string) => `level:${id}`;
@@ -87,11 +125,20 @@ export const withCustomLevel = (c: ViewerConfig, def: ViewerConfig['customLevel'
  * are then ignored (the config keeps its own). presettle undefined: the new scene's default.
  */
 export function proposeScene(c: ViewerConfig, scenario: string, params: Record<string, number | boolean>, seed: number, scale = c.scale, substeps = c.substeps,
-  bounce: BounceChoice = { on: bounceOn(c.engine), e: c.bounce }, presettle?: number):
+  bounce: BounceChoice = { on: bounceOn(c.engine), e: c.bounce }, presettle?: number, rules: RulesChoice = { rules: c.rules, feel: c.feel }):
   { ok: true; config: ViewerConfig; bodies: number } | { ok: false; error: string } {
   try {
     const picked = pickedLevel(c, scenario);
     const level = picked?.def.id ?? null;
+    // Keystone's rules: the level as the game plays it, whatever the world fields say (the panel hides them).
+    if (picked && rules.rules === 'keystone') {
+      // A line of shots is the level's it was made on: another level drops it.
+      const same = level === c.level && (picked.custom ? picked.def === c.customLevel : !c.customLevel);
+      const next = underKeystone({ ...c, level, customLevel: picked.custom ? picked.def : null, shots: same ? c.shots : null, look: lookFor(c, 'keystone') }, rules.feel);
+      return { ok: true, config: next, bodies: compileLevel(picked.def).scene.bodies.length };
+    }
+    // Rules are a level's: anything else is the sandbox.
+    c = { ...c, rules: 'sandbox', feel: { hitStop: false, slowMo: false }, shots: null, look: lookFor(c, 'sandbox') };
     const settle = presettle ?? defaultPresettle(level);
     if (!Number.isInteger(settle) || settle < 0 || settle > MAX_PRESETTLE) throw new Error(`settle steps must be a whole number from 0 to ${MAX_PRESETTLE}`);
     if (picked) {
@@ -172,12 +219,18 @@ export function mountControls(root: HTMLElement, hooks: ControlsHooks): { refres
       <div class="h">Scene</div>
       <label class="f"><span>scenario</span><select name="scenario"><optgroup label="Scenarios">${Object.values(SCENARIOS).map((s) => `<option value="${s.id}">${s.id} ${escapeHtml(s.title)}</option>`).join('')}</optgroup><optgroup label="Keystone levels">${LEVELS.map((l) => `<option value="${levelChoice(l.id)}">${l.id} ${escapeHtml(l.name)}</option>`).join('')}</optgroup><optgroup label="Your level" class="custom"><option value="${CUSTOM_LEVEL}"></option></optgroup></select></label>
       <div class="params"></div>
+      <div class="rules">
+        <label class="f"><span>rules</span><select name="rules"><option value="sandbox">sandbox</option><option value="keystone">Keystone (the game)</option></select></label>
+        <div class="feel">${field('hitstop', 'hit-stop on contact', false)}${field('slowmo', 'slow motion as crowns fall', false)}</div>
+      </div>
       <div class="seed">${field('seed', 'seed', 1, 'step="1"')}</div>
-      ${field('presettle', 'settle steps before start', 0, `step="1" min="0" max="${MAX_PRESETTLE}"`)}
-      ${field('scale', 'cube edge (m)', 1, `step="any" min="${SCALE_LIMITS[0]}" max="${SCALE_LIMITS[1]}"`)}
-      ${field('substeps', 'physics substeps', 1, `step="1" min="1" max="${MAX_SUBSTEPS}"`)}
-      ${field('bounce', 'bounce', false)}
-      <div class="bounce">${field('bounceE', 'bounce e (0-1)', DEFAULT_BOUNCE, 'step="any" min="0" max="1"')}</div>
+      <div class="world">
+        ${field('presettle', 'settle steps before start', 0, `step="1" min="0" max="${MAX_PRESETTLE}"`)}
+        ${field('scale', 'cube edge (m)', 1, `step="any" min="${SCALE_LIMITS[0]}" max="${SCALE_LIMITS[1]}"`)}
+        ${field('substeps', 'physics substeps', 1, `step="1" min="1" max="${MAX_SUBSTEPS}"`)}
+        ${field('bounce', 'bounce', false)}
+        <div class="bounce">${field('bounceE', 'bounce e (0-1)', DEFAULT_BOUNCE, 'step="any" min="0" max="1"')}</div>
+      </div>
       <div class="out muted"></div>
       <div class="issues warn small"></div>
       <button type="submit">Rebuild scene</button>
@@ -189,6 +242,12 @@ export function mountControls(root: HTMLElement, hooks: ControlsHooks): { refres
       ${field('size', 'size (m)', 0, 'step="0.1" min="0.1" max="20"')}
       ${field('mass', 'mass (kg)', '', 'step="any" min="0.01"')}
       ${field('speed', 'speed (m/s)', 0, 'step="1" min="0" max="500"')}
+      <label class="f"><span>weapon</span><select name="weapon"><option value="">none</option><option value="grenade">grenade</option></select></label>
+      <div class="grenade">
+        <label class="f"><span>fuse</span><select name="grenade.fuse">${FUSES.map((f) => `<option value="${f}"${f === DEFAULT_GRENADE.fuse ? ' selected' : ''}>${f === 'proxTimer' ? 'proximity, then delay' : f === 'prox' ? 'proximity' : 'timer'}</option>`).join('')}</select></label>
+        ${field('grenade.ground', 'ground sets it off', DEFAULT_GRENADE.ground)}
+        ${(Object.entries(GRENADE_FIELDS) as [keyof typeof GRENADE_FIELDS, [string, string]][]).map(([k, [label, step]]) => field(`grenade.${k}`, label, k in DEFAULT_GRENADE.blast ? DEFAULT_GRENADE.blast[k as keyof typeof DEFAULT_GRENADE.blast] : DEFAULT_GRENADE[k as (typeof GRENADE_NUMBERS)[number]], `step="${step}" min="${GRENADE_LIMITS[k][0]}" max="${GRENADE_LIMITS[k][1]}"`)).join('')}
+      </div>
       <div class="out muted"></div>
     </form>
     <form id="look-form">
@@ -213,6 +272,7 @@ export function mountControls(root: HTMLElement, hooks: ControlsHooks): { refres
       <label class="f"><span>name</span><input type="text" name="name" placeholder="optional" maxlength="120"></label>
       <div class="buttons"><button type="submit">Download</button><button type="button" name="load">Load…</button></div>
       <input type="file" name="file" accept=".json,application/json" hidden>
+      <div class="starts muted">start over: <a href="./" title="the default scene (default-scene.ts), what the viewer opens with">default scene</a> · <a href="./?defaults=factory" title="the built-in setup, without the default scene">factory setup</a></div>
       <div class="out muted"></div>
     </form>`;
   const sceneForm = root.querySelector<HTMLFormElement>('#scene-form')!;
@@ -231,6 +291,9 @@ export function mountControls(root: HTMLElement, hooks: ControlsHooks): { refres
   const bounceEBox = sceneForm.querySelector<HTMLElement>('.bounce')!;
 
   const seedBox = sceneForm.querySelector<HTMLElement>('.seed')!;
+  const rulesBox = sceneForm.querySelector<HTMLElement>('.rules')!;
+  const feelBox = sceneForm.querySelector<HTMLElement>('.feel')!;
+  const worldBox = sceneForm.querySelector<HTMLElement>('.world')!;
   const issuesBox = sceneForm.querySelector<HTMLElement>('.issues')!;
   const customGroup = sceneForm.querySelector<HTMLOptGroupElement>('optgroup.custom')!;
   // Outside the scene form, so Rebuild stays its only button.
@@ -245,6 +308,11 @@ export function mountControls(root: HTMLElement, hooks: ControlsHooks): { refres
     try { picked = pickedLevel(c, scenario); } catch { /* checkScene says why */ }
     seedBox.hidden = picked !== null;
     levelDownload.hidden = picked === null;
+    // Rules are a level's; under Keystone's the world fields are the level's own.
+    rulesBox.hidden = picked === null;
+    const keystone = picked !== null && input(sceneForm, 'rules').value === 'keystone';
+    feelBox.hidden = !keystone;
+    worldBox.hidden = keystone;
     issuesBox.textContent = '';
     if (picked) {
       const d = picked.def;
@@ -266,28 +334,40 @@ export function mountControls(root: HTMLElement, hooks: ControlsHooks): { refres
     }
     const bounce = { on: bounceBox.checked, e: input(sceneForm, 'bounceE').value === '' ? NaN : Number(input(sceneForm, 'bounceE').value) };
     const presettle = input(sceneForm, 'presettle').value === '' ? NaN : Number(input(sceneForm, 'presettle').value);
-    return proposeScene(hooks.config(), scenario, params, Number(input(sceneForm, 'seed').value), Number(input(sceneForm, 'scale').value), Number(input(sceneForm, 'substeps').value), bounce, presettle);
+    const rules: RulesChoice = { rules: input(sceneForm, 'rules').value as Rules, feel: { hitStop: (input(sceneForm, 'hitstop') as HTMLInputElement).checked, slowMo: (input(sceneForm, 'slowmo') as HTMLInputElement).checked } };
+    return proposeScene(hooks.config(), scenario, params, Number(input(sceneForm, 'seed').value), Number(input(sceneForm, 'scale').value), Number(input(sceneForm, 'substeps').value), bounce, presettle, rules);
   }
 
   function checkScene() {
     bounceEBox.hidden = !bounceBox.checked;
     const p = sceneProposal();
-    sceneOut.textContent = p.ok ? sceneSummary(p.bodies, p.config.scale, p.config.substeps, bounceOn(p.config.engine) ? p.config.bounce : null) : p.error;
+    sceneOut.textContent = !p.ok ? p.error : p.config.rules === 'keystone'
+      ? `${p.bodies.toLocaleString()} bodies, by Keystone's rules on ${keystoneEngine(p.config.engine) === 'gpu' ? `the GPU solver (${AVBD_ITERATIONS} iterations, gapSlop)` : 'Rapier'}`
+      : sceneSummary(p.bodies, p.config.scale, p.config.substeps, bounceOn(p.config.engine) ? p.config.bounce : null);
     sceneOut.classList.toggle('warn', !p.ok);
     rebuildButton.disabled = !p.ok;
   }
 
+  const grenadeBox = projForm.querySelector<HTMLElement>('.grenade')!;
   function projectile(): Projectile {
     const q = new URLSearchParams();
     q.set('proj', input(projForm, 'shape').value);
     for (const k of ['size', 'mass', 'speed']) q.set(`proj.${k}`, input(projForm, k).value);
+    const weapon = input(projForm, 'weapon').value;
+    grenadeBox.hidden = weapon !== 'grenade';
+    if (weapon) {
+      q.set('proj.weapon', weapon);
+      q.set('grenade.fuse', input(projForm, 'grenade.fuse').value);
+      q.set('grenade.ground', (input(projForm, 'grenade.ground') as HTMLInputElement).checked ? '1' : '0');
+      for (const k of Object.keys(GRENADE_FIELDS)) q.set(`grenade.${k}`, input(projForm, `grenade.${k}`).value);
+    }
     return parseProjectile(q);
   }
 
   function showMass(p: Projectile) {
     const m = projectileMass(p);
     (input(projForm, 'mass') as HTMLInputElement).placeholder = `auto ${m.toPrecision(3)}`;
-    projOut.textContent = `${m.toPrecision(3)} kg, ${(m * p.speed).toPrecision(3)} kg·m/s (a cube is 1 kg)`;
+    projOut.textContent = `${m.toPrecision(3)} kg, ${(m * p.speed).toPrecision(3)} kg·m/s (a cube is 1 kg)${p.grenade ? `; ${grenadeSummary(p.grenade)}` : ''}`;
     projOut.classList.remove('warn');
   }
 
@@ -303,6 +383,7 @@ export function mountControls(root: HTMLElement, hooks: ControlsHooks): { refres
     showParams(v);
     checkScene();
   });
+  input(sceneForm, 'rules').addEventListener('change', () => showParams(input(sceneForm, 'scenario').value));
   sceneForm.addEventListener('input', checkScene);
   // Level JSON: the picked level (built-in or your own) as a file to edit, and an edited one loaded back as your own.
   levelDownload.addEventListener('click', () => {
@@ -404,6 +485,9 @@ export function mountControls(root: HTMLElement, hooks: ControlsHooks): { refres
     customGroup.hidden = !c.customLevel;
     customGroup.firstElementChild!.textContent = c.customLevel ? `${c.customLevel.id} ${c.customLevel.name} (yours)` : '';
     input(sceneForm, 'scenario').value = sceneChoice(c);
+    input(sceneForm, 'rules').value = c.rules;
+    (input(sceneForm, 'hitstop') as HTMLInputElement).checked = c.feel.hitStop;
+    (input(sceneForm, 'slowmo') as HTMLInputElement).checked = c.feel.slowMo;
     input(sceneForm, 'seed').value = String(c.seed);
     input(sceneForm, 'presettle').value = String(c.presettle);
     input(sceneForm, 'scale').value = String(c.scale);
@@ -420,6 +504,16 @@ export function mountControls(root: HTMLElement, hooks: ControlsHooks): { refres
     input(projForm, 'size').value = String(p.size);
     input(projForm, 'mass').value = p.mass === null ? '' : String(p.mass);
     input(projForm, 'speed').value = String(p.speed);
+    // The grenade's fields keep their values while the weapon is off, so switching it back on restores them.
+    input(projForm, 'weapon').value = p.weapon ?? '';
+    grenadeBox.hidden = p.weapon !== 'grenade';
+    const g = p.grenade;
+    if (g) {
+      input(projForm, 'grenade.fuse').value = g.fuse;
+      (input(projForm, 'grenade.ground') as HTMLInputElement).checked = g.ground;
+      for (const k of GRENADE_NUMBERS) input(projForm, `grenade.${k}`).value = String(g[k]);
+      for (const k of GRENADE_BLAST_KEYS) input(projForm, `grenade.${k}`).value = String(g.blast[k]);
+    }
     showMass(p);
     input(lookForm, 'look').value = c.look;
     realBox.hidden = c.look !== 'real';
@@ -430,6 +524,9 @@ export function mountControls(root: HTMLElement, hooks: ControlsHooks): { refres
     input(lookForm, 'groundMaterial').value = real.groundMaterial;
     input(lookForm, 'env').value = real.env;
     for (const k of Object.keys(VIEW_FIELDS) as (keyof Framing)[]) input(viewForm, k).value = String(c.view[k]);
+    // Under Keystone's rules the rack fires and the game frames its level: the projectile and the framing wait for the sandbox.
+    // (style, not hidden: the panel's CSS sets a form's display.)
+    projForm.style.display = viewForm.style.display = c.rules === 'keystone' ? 'none' : '';
   }
   // Open or closed as the viewer last left it; open by default on a wide screen.
   const OPEN_KEY = 'tb.viewer.controls.open';

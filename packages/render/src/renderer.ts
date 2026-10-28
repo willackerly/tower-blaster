@@ -174,8 +174,8 @@ export function lookUniforms(l: LookParams, metres = 1): Record<string, number |
 
 /**
  * The hall's Frame uniforms (hallLook, hallShade; shaders.ts) for a look and an eye (world units,
- * metres per unit): on (hallLook.x) only with a hall and the eye inside it; off, the renderer
- * draws no hall.
+ * metres per unit): hallLook.x is 1 with a hall and the eye inside it, 2 with the eye outside
+ * and the hall's exterior on (its shell lit as outdoors), else 0: the renderer draws no hall.
  */
 export function hallUniforms(l: LookParams, metres: number, eye: V3, groundY: number): Record<string, number[]> {
   const h = l.atmosphere ? l.hall : undefined;
@@ -183,7 +183,7 @@ export function hallUniforms(l: LookParams, metres: number, eye: V3, groundY: nu
   const p = h.params;
   const on = hallInside(p, [eye[0] * metres, (eye[1] - groundY) * metres, eye[2] * metres]);
   return {
-    hallLook: [on ? 1 : 0, metres, h.glass, h.iron],
+    hallLook: [on ? 1 : h.exterior ? 2 : 0, metres, h.glass, h.iron],
     hallShade: [(p.clear * Math.PI) / 180 / hallArch(p).spring, p.bar / (p.ribDepth - 2 * p.chord), p.balustrade, 0],
   };
 }
@@ -230,7 +230,7 @@ export class Renderer {
   private readonly overlayColours: GPUBuffer;
   private overlayCount = 0;
   private readonly floorBuf: GPUBuffer;
-  /** The look has a hall and the eye is inside it (hallUniforms): the hall is drawn. */
+  /** The look has a hall and the eye is inside it, or its exterior is on (hallUniforms): the hall is drawn. */
   private hallOn = false;
   /** The hall's mesh on the GPU, for the hall it was built from. */
   private hallGpu: { params: HallParams; opaque: GPUBuffer; glass: GPUBuffer; opaqueCount: number; glassCount: number } | null = null;
@@ -621,7 +621,7 @@ export class Renderer {
     const inv = invert(viewProj);
     this.floorCount = floorFan(floorPolygon(inv, f.groundY - f.eye[1]), this.floorData).count;
     const hall = hallUniforms(this.look, f.metres ?? 1, f.eye, f.groundY);
-    this.hallOn = hall.hallLook![0] === 1;
+    this.hallOn = hall.hallLook![0]! > 0;
     if (this.floorCount) this.device.queue.writeBuffer(this.floorBuf, 0, this.floorData, 0, this.floorCount * 3);
     writeStruct(this.frameData, Frame, 0, {
       viewProj, lightViewProj, invViewProj: inv,

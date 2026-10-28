@@ -11,6 +11,9 @@ importers:
       '@tb/adapter-rapier':
         specifier: workspace:*
         version: link:packages/adapter-rapier
+      '@tb/audio':
+        specifier: workspace:*
+        version: link:packages/audio
       '@tb/bench':
         specifier: workspace:*
         version: link:packages/bench
@@ -62,6 +65,9 @@ importers:
       '@tb/viewer':
         specifier: workspace:*
         version: link:packages/viewer
+      '@tb/weapons':
+        specifier: workspace:*
+        version: link:packages/weapons
       '@types/node':
         specifier: 22.20.5
         version: 22.20.5
@@ -95,6 +101,8 @@ importers:
       '@dimforge/rapier3d-simd-compat':
         specifier: 0.21.0
         version: 0.21.0
+
+  packages/audio: {}
 
   packages/bench: {}
 
@@ -177,6 +185,15 @@ importers:
   packages/testkit: {}
 
   packages/viewer: {}
+
+  packages/weapons:
+    dependencies:
+      '@tb/engine-api':
+        specifier: workspace:*
+        version: link:../engine-api
+      '@tb/geom':
+        specifier: workspace:*
+        version: link:../geom
 
 packages:
 

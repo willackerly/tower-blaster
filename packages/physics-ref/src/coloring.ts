@@ -74,22 +74,42 @@ export function colorGraph(adj: ReadonlyArray<ReadonlyArray<number>>): Int32Arra
 // colours, exactly its higher-priority neighbours are coloured). The
 // priority, and so the number of rounds, is the default's.
 //
-// Quality, unresolved (f64 reference, I = 20, perf-competition round 2), so
-// every mode and colorPriority 1 stay experimental opt-ins:
-//   - KNOCKT, S5's ball into a 320-cube tower, over 20 body orders. Early
-//     collapses (more than 100 cubes moved by step 360): the default 4,
-//     colorMode 3 none, colorMode 4 6 of 19. Paired by order, mode 4's onset
-//     is earlier than mode 3's in 12 orders and later in 3 (one-sided
-//     permutation test p ~ 0.014; against the default p ~ 0.07).
+// Quality (perf-competition rounds 2 and 3; f64 reference and the GPU in f32
+// on SwiftShader, against colorMode 0 and against colorMode 0 with another
+// 1e-6 m start jitter, the default's own spread). colorMode 3 is the GPU
+// engine's default (physics-gpu gpuColorMode); here every mode stays opt-in:
+//   - Rest. Q5 (S1 4x4x20, 300 steps), modes 3 and 4 (the same floats at
+//     rest): drift 0.0012 against 0.0212 mm and sag 0.25 against 0.30 mm at 40
+//     iterations with gapSlop 3e-5 (the game's), 0.0041 against 0.0422 and 0.49
+//     against 0.62 mm at 20; the same penetration. One 8x8x25 tower of S4 for
+//     720 steps at 40: no cube moves 0.1 m in either, peak speed 2-4e-7
+//     against 0.8-1.5e-5 m/s.
+//   - KNOCKT, S5's ball into a 320-cube tower, over body orders. At 40
+//     iterations with the slop no mode collapses early (none of 20 orders
+//     moves more than 31 cubes by step 360); mode 3's onset is later (median
+//     275 against 260). At 20, over 20 orders, early collapses (more than 100
+//     cubes moved by step 360): colorMode 0 4, mode 3 none, mode 4 6 of 19
+//     (against 0, permutation p ~ 0.48). Mode 4 drops the preference wherever
+//     a neighbour leaves the lattice, so after the strike only 22-25% of the
+//     tower's on-lattice cubes keep their pattern colour (mode 3 51-56%,
+//     colorMode 0 17-19% by chance; steps 35-200, orders 8 and 17): it colours
+//     much as colorMode 0 does and inherits its order sensitivity; no mode biases the sweep between a
+//     support and its load (the lower body is swept first in 49-54% of
+//     vertical contacts, by count and by load, in every mode).
 //     colorPriority 1 alone collapses in 6 of 6.
-//   - Mode 3's worst point penetration there is larger than the default's:
-//     78.06 mm (order 10) against 53.52 mm over the 20 orders, and 28.67 mm
-//     (order 6) against 9.10 mm over orders 0-9. Its p99 is lower (1.60
-//     against 7.73 mm).
+//   - Penetration spikes there are debris events: at 40 iterations one sample
+//     over 5 mm in 20 orders for mode 3 (5.2 mm, two falling cubes pressed
+//     together) and for mode 4 (12.9 mm, a new contact between two cubes
+//     within one step), none for colorMode 0 in 40 runs; p99 is the same (0.61-
+//     0.63 mm). On the GPU (10 orders) no mode has a sample over 5 mm. At 20, maxima over 5 mm in 8 of 20 orders for colorMode 0
+//     (worst 53.5 mm), 7 for mode 3 (78.1 mm), 10 of 19 for mode 4 (66.0 mm);
+//     p99 1.60 mm for mode 3 against 7.73 for 0.
 //   - Structure. On Q6 (a 2x2x20 tower tilted 8 deg) mode 3 walks more points
 //     than the default: mean sum W 1.017x on the same graphs, 1.028x in steps
 //     200-270 (1.13x on its own trajectory). Mode 4 is 1.000x there, but
 //     1.015x in KNOCKT's steps 200-360, where mode 3 is at most 1.006x.
+//   - Single columns (Q1, Q2) take no preference (fewer than
+//     LATTICE_MIN_ALIGNED aligned neighbours): every mode is colorMode 0 there.
 
 /** Lattice preference modes (AvbdParams.colorMode): 0 none, 1 eight colours, 2 four (corner kernel), 3 four (in-plane-diagonal kernel), 4 as 3 for the lattice interior only. */
 export const COLOR_MODES = [0, 1, 2, 3, 4] as const;

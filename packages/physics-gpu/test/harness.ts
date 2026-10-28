@@ -30,6 +30,8 @@ export const toSnap = (p: Drivers.PlainSnapshot): Snapshot => {
 export async function runGpu(scene: SceneDesc, steps: number, params: Partial<AvbdParams> = {}, every = 0, kicks: Drivers.Kick[] = []) {
   const r = await call('simulateGpu', scene, steps, params, every, {}, kicks);
   expect(r.error).toBeNull();
+  // No step dropped broadphase pairs: every step, not only the sampled ones (the broadphase's sticky counter).
+  expect(r.final.pairsOverflowSteps).toBe(0);
   expect(r.worst.uncolored).toBe(0);
   expect(r.worst.colorOverflow).toBe(0);
   expect(r.worst.pairsRequired).toBeLessThanOrEqual(r.worst.pairsWritten);

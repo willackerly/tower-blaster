@@ -1,6 +1,7 @@
 // The one contract every physics implementation meets: the TypeScript
 // reference, CPU baselines (Rapier, Box3D, Jolt) and every GPU variant.
 // The game and the benchmark harness both drive engines only through this.
+import type { Blast } from './blast.ts';
 import type { ObserveOptions, Observer } from './observe.ts';
 
 export type Vec3 = [number, number, number];
@@ -32,8 +33,14 @@ export interface BodyDesc {
 export const TAG_BALL = -1;
 export const TAG_DEBRIS = -2;
 
-/** Something that happens at a given step, e.g. a ball is fired. */
-export type InputEvent = { step: number; kind: 'spawn'; body: BodyDesc };
+/** Something that happens at a given step: a body is added (a ball is fired), or a blast pushes the bodies around a point (blast.ts). */
+export type InputEvent = SpawnEvent | BlastEvent;
+export interface SpawnEvent { step: number; kind: 'spawn'; body: BodyDesc }
+/** Engines that do not apply blasts throw on push() and init() of one. */
+export interface BlastEvent { step: number; kind: 'blast'; blast: Blast }
+
+/** The bodies a list of events spawns, in order. */
+export const spawnedBodies = (events: readonly InputEvent[]): BodyDesc[] => events.flatMap((e) => (e.kind === 'spawn' ? [e.body] : []));
 
 export interface SceneDesc {
   /** Scenario id, e.g. "S1". */
@@ -195,7 +202,7 @@ export function emptySnapshot(count: number): Snapshot {
 /** Bodies present at `step` (initial bodies plus inputs spawned before it). */
 export function bodiesAt(scene: SceneDesc, step: number): BodyDesc[] {
   const out = scene.bodies.slice();
-  for (const ev of scene.inputs) if (ev.step < step) out.push(ev.body);
+  for (const ev of scene.inputs) if (ev.step < step && ev.kind === 'spawn') out.push(ev.body);
   return out;
 }
 
@@ -221,6 +228,7 @@ export function inertiaOf(b: BodyDesc): Vec3 {
   return [k * (hy * hy + hz * hz), k * (hx * hx + hz * hz), k * (hx * hx + hy * hy)];
 }
 
+export * from './blast.ts';
 export * from './host.ts';
 export * from './observe.ts';
 export * from './snapshot-observer.ts';
