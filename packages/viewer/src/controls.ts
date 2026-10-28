@@ -4,10 +4,11 @@
 // only proposes configs; main.ts decides how to apply them (live, or by reset).
 import { parseSpec } from '@tb/bench';
 import { type Env, ENVS, type Ground, GROUNDS, linearToSrgb, LOOKS, REAL_DEFAULTS, REAL_KNOBS, type RealKnob, type RealOptions, srgbToLinear, type Stone, STONES, type V3 } from '@tb/render';
+import { compileLevel, LEVELS } from '@tb/keystone';
 import { buildScenario, SCENARIOS } from '@tb/scenarios';
 import { type CameraPose, type Framing, FRAMING_LIMITS } from './camera.ts';
 import { escapeHtml } from './html.ts';
-import { autoSubsteps, AVBD_ENGINES, bounceOn, DEFAULT_BOUNCE, MAX_SUBSTEPS, SCALE_LIMITS, type ViewerConfig, withOption } from './params.ts';
+import { autoSubsteps, AVBD_ENGINES, bounceOn, DEFAULT_BOUNCE, defaultPresettle, levelDef, MAX_PRESETTLE, MAX_SUBSTEPS, SCALE_LIMITS, type ViewerConfig, withOption } from './params.ts';
 import { parseProjectile, type Projectile, projectileMass } from './projectile.ts';
 import { parseSceneFile, sceneFile, sceneFileName } from './scene-file.ts';
 
@@ -56,31 +57,56 @@ export function realOverrides(values: Record<RealKnob, number>, groundHex: strin
 /** The panel's Bounce: restitution on or off (the engine option), and the e every surface then gets (ViewerConfig.bounce). */
 export interface BounceChoice { on: boolean; e: number }
 
+/** The scene picker's value for a Keystone level (scenarios are their own id). */
+export const levelChoice = (id: string) => `level:${id}`;
+
 /**
  * The scene a set of form values describes, or why it can't be built. Builds it
  * (cheap next to an engine init) so the panel can show the body count before a rebuild.
  * Bounce on sets the engine option restitution=true, off removes it (an AVBD engine's
- * only; the spec is left as it is when the switch does not change).
+ * only; the spec is left as it is when the switch does not change). scenario is the
+ * picker's value: a scenario id, or levelChoice(id) for a level, whose params and seed
+ * are then ignored (the config keeps its own). presettle undefined: the new scene's default.
  */
 export function proposeScene(c: ViewerConfig, scenario: string, params: Record<string, number | boolean>, seed: number, scale = c.scale, substeps = c.substeps,
-  bounce: BounceChoice = { on: bounceOn(c.engine), e: c.bounce }):
+  bounce: BounceChoice = { on: bounceOn(c.engine), e: c.bounce }, presettle?: number):
   { ok: true; config: ViewerConfig; bodies: number } | { ok: false; error: string } {
   try {
+    const level = scenario.startsWith('level:') ? levelDef(scenario.slice(6))?.id ?? null : null;
+    if (scenario.startsWith('level:') && !level) throw new Error(`unknown level ${scenario.slice(6)}`);
+    const settle = presettle ?? defaultPresettle(level);
+    if (!Number.isInteger(settle) || settle < 0 || settle > MAX_PRESETTLE) throw new Error(`settle steps must be a whole number from 0 to ${MAX_PRESETTLE}`);
+    if (level) {
+      // A level is the whole scene: the config's scenario, params and seed stay for when the picker goes back to one.
+      checkWorld(scale, substeps);
+      const { okE, engine } = bounceChoice(c, bounce);
+      const next: ViewerConfig = { ...c, level, scale, substeps, presettle: settle, camera: null, engine, bounce: okE ? bounce.e : c.bounce };
+      return { ok: true, config: next, bodies: compileLevel(levelDef(level)!).scene.bodies.length };
+    }
     if (!Number.isInteger(seed)) throw new Error('seed must be an integer');
-    if (!(scale >= SCALE_LIMITS[0] && scale <= SCALE_LIMITS[1])) throw new Error(`cube edge must be from ${SCALE_LIMITS[0]} to ${SCALE_LIMITS[1]} m`);
-    if (!Number.isInteger(substeps) || substeps < 1 || substeps > MAX_SUBSTEPS) throw new Error(`substeps must be a whole number from 1 to ${MAX_SUBSTEPS}`);
-    // e is checked only while Bounce is on (its field is hidden off); off, a bad e keeps the config's.
-    const okE = bounce.e >= 0 && bounce.e <= 1;
-    if (bounce.on && !okE) throw new Error('bounce e must be from 0 to 1');
-    const name = parseSpec(c.engine).name;
-    if (bounce.on && !AVBD_ENGINES.has(name)) throw new Error(`bounce needs an AVBD engine (GPU AVBD or avbd-ref), not ${name}`);
-    const engine = bounce.on === bounceOn(c.engine) ? c.engine : withOption(c.engine, 'restitution', bounce.on || undefined);
+    checkWorld(scale, substeps);
+    const { okE, engine } = bounceChoice(c, bounce);
     // A rebuilt scene is framed afresh: a start camera chosen for the old one need not fit it.
-    const next: ViewerConfig = { ...c, scenario, params, seed, scale, substeps, camera: null, engine, bounce: okE ? bounce.e : c.bounce };
+    const next: ViewerConfig = { ...c, level: null, scenario, params, seed, scale, substeps, presettle: settle, camera: null, engine, bounce: okE ? bounce.e : c.bounce };
     return { ok: true, config: next, bodies: buildScenario(scenario, params, seed).bodies.length };
   } catch (e) {
     return { ok: false, error: e instanceof Error ? e.message : String(e) };
   }
+}
+
+function checkWorld(scale: number, substeps: number) {
+  if (!(scale >= SCALE_LIMITS[0] && scale <= SCALE_LIMITS[1])) throw new Error(`cube edge must be from ${SCALE_LIMITS[0]} to ${SCALE_LIMITS[1]} m`);
+  if (!Number.isInteger(substeps) || substeps < 1 || substeps > MAX_SUBSTEPS) throw new Error(`substeps must be a whole number from 1 to ${MAX_SUBSTEPS}`);
+}
+
+/** Bounce's switch as an engine spec, and whether its e is usable; throws when Bounce is asked of an engine without it. */
+function bounceChoice(c: ViewerConfig, bounce: BounceChoice): { okE: boolean; engine: string } {
+  // e is checked only while Bounce is on (its field is hidden off); off, a bad e keeps the config's.
+  const okE = bounce.e >= 0 && bounce.e <= 1;
+  if (bounce.on && !okE) throw new Error('bounce e must be from 0 to 1');
+  const name = parseSpec(c.engine).name;
+  if (bounce.on && !AVBD_ENGINES.has(name)) throw new Error(`bounce needs an AVBD engine (GPU AVBD or avbd-ref), not ${name}`);
+  return { okE, engine: bounce.on === bounceOn(c.engine) ? c.engine : withOption(c.engine, 'restitution', bounce.on || undefined) };
 }
 
 /** The scene line under the form: bodies, what the cube size and substeps do to the physics, and the bounce's e while Bounce is on (null: off). */
@@ -112,9 +138,10 @@ export function mountControls(root: HTMLElement, hooks: ControlsHooks): { refres
     <summary>Scene and projectile</summary>
     <form id="scene-form">
       <div class="h">Scene</div>
-      <label class="f"><span>scenario</span><select name="scenario">${Object.values(SCENARIOS).map((s) => `<option value="${s.id}">${s.id} ${escapeHtml(s.title)}</option>`).join('')}</select></label>
+      <label class="f"><span>scenario</span><select name="scenario"><optgroup label="Scenarios">${Object.values(SCENARIOS).map((s) => `<option value="${s.id}">${s.id} ${escapeHtml(s.title)}</option>`).join('')}</optgroup><optgroup label="Keystone levels">${LEVELS.map((l) => `<option value="${levelChoice(l.id)}">${l.id} ${escapeHtml(l.name)}</option>`).join('')}</optgroup></select></label>
       <div class="params"></div>
-      ${field('seed', 'seed', 1, 'step="1"')}
+      <div class="seed">${field('seed', 'seed', 1, 'step="1"')}</div>
+      ${field('presettle', 'settle steps before start', 0, `step="1" min="0" max="${MAX_PRESETTLE}"`)}
       ${field('scale', 'cube edge (m)', 1, `step="any" min="${SCALE_LIMITS[0]}" max="${SCALE_LIMITS[1]}"`)}
       ${field('substeps', 'physics substeps', 1, `step="1" min="1" max="${MAX_SUBSTEPS}"`)}
       ${field('bounce', 'bounce', false)}
@@ -169,9 +196,17 @@ export function mountControls(root: HTMLElement, hooks: ControlsHooks): { refres
   const bounceBox = input(sceneForm, 'bounce') as HTMLInputElement;
   const bounceEBox = sceneForm.querySelector<HTMLElement>('.bounce')!;
 
-  /** Param fields for a scenario: the config's values when it is the current one, else its defaults. */
+  const seedBox = sceneForm.querySelector<HTMLElement>('.seed')!;
+
+  /** Param fields for a scenario: the config's values when it is the current one, else its defaults. A level has none: a line about it instead. */
   function showParams(scenario: string) {
     const c = hooks.config();
+    seedBox.hidden = scenario.startsWith('level:');
+    if (scenario.startsWith('level:')) {
+      const d = levelDef(scenario.slice(6))!;
+      paramsBox.innerHTML = `<div class="muted">${escapeHtml(d.name)}: ${d.objective.kind === 'crowns' ? 'fell the crowns' : 'bring the skyline down'}, par ${d.par}, rack ${escapeHtml(d.rack.join(', '))}</div>`;
+      return;
+    }
     const values = { ...SCENARIOS[scenario]!.defaults, ...(scenario === c.scenario ? c.params : {}) };
     paramsBox.innerHTML = Object.entries(values).map(([k, v]) => field(`param.${k}`, PARAM_LABELS[k] ?? k, v, 'step="any"')).join('');
   }
@@ -183,7 +218,8 @@ export function mountControls(root: HTMLElement, hooks: ControlsHooks): { refres
       params[el.name.slice(6)] = el.type === 'checkbox' ? el.checked : el.value === '' ? NaN : Number(el.value);
     }
     const bounce = { on: bounceBox.checked, e: input(sceneForm, 'bounceE').value === '' ? NaN : Number(input(sceneForm, 'bounceE').value) };
-    return proposeScene(hooks.config(), scenario, params, Number(input(sceneForm, 'seed').value), Number(input(sceneForm, 'scale').value), Number(input(sceneForm, 'substeps').value), bounce);
+    const presettle = input(sceneForm, 'presettle').value === '' ? NaN : Number(input(sceneForm, 'presettle').value);
+    return proposeScene(hooks.config(), scenario, params, Number(input(sceneForm, 'seed').value), Number(input(sceneForm, 'scale').value), Number(input(sceneForm, 'substeps').value), bounce, presettle);
   }
 
   function checkScene() {
@@ -213,7 +249,13 @@ export function mountControls(root: HTMLElement, hooks: ControlsHooks): { refres
     const s = Number(input(sceneForm, 'scale').value);
     if (s >= SCALE_LIMITS[0] && s <= SCALE_LIMITS[1]) input(sceneForm, 'substeps').value = String(autoSubsteps(s));
   });
-  input(sceneForm, 'scenario').addEventListener('change', () => { showParams(input(sceneForm, 'scenario').value); checkScene(); });
+  // A new scene brings its own settle steps and cube size (a level's are the game's); set them after to override.
+  input(sceneForm, 'scenario').addEventListener('change', () => {
+    const v = input(sceneForm, 'scenario').value, level = v.startsWith('level:') ? v.slice(6) : null;
+    input(sceneForm, 'presettle').value = String(defaultPresettle(level));
+    showParams(v);
+    checkScene();
+  });
   sceneForm.addEventListener('input', checkScene);
   sceneForm.addEventListener('submit', (e) => {
     e.preventDefault();
@@ -272,7 +314,7 @@ export function mountControls(root: HTMLElement, hooks: ControlsHooks): { refres
     const file = sceneFile(c, name, hooks.camera());
     const a = document.createElement('a');
     a.href = URL.createObjectURL(new Blob([`${JSON.stringify(file, null, 2)}\n`], { type: 'application/json' }));
-    a.download = sceneFileName(name, c.scenario);
+    a.download = sceneFileName(name, c.level ?? c.scenario);
     a.click();
     setTimeout(() => URL.revokeObjectURL(a.href), 10_000);
     say(`Saved ${a.download}`);
@@ -295,8 +337,9 @@ export function mountControls(root: HTMLElement, hooks: ControlsHooks): { refres
   /** Shows the current config (after a load or a URL change). */
   function refresh() {
     const c = hooks.config();
-    input(sceneForm, 'scenario').value = c.scenario;
+    input(sceneForm, 'scenario').value = c.level ? levelChoice(c.level) : c.scenario;
     input(sceneForm, 'seed').value = String(c.seed);
+    input(sceneForm, 'presettle').value = String(c.presettle);
     input(sceneForm, 'scale').value = String(c.scale);
     input(sceneForm, 'substeps').value = String(c.substeps);
     // Bounce is the AVBD engines' restitution switch; the others keep it off.
@@ -304,7 +347,7 @@ export function mountControls(root: HTMLElement, hooks: ControlsHooks): { refres
     bounceBox.disabled = !AVBD_ENGINES.has(parseSpec(c.engine).name);
     bounceBox.title = bounceBox.disabled ? 'restitution: GPU AVBD or avbd-ref engines only' : 'restitution: every body and the ground bounce at e (Rebuild to apply)';
     input(sceneForm, 'bounceE').value = String(c.bounce);
-    showParams(c.scenario);
+    showParams(c.level ? levelChoice(c.level) : c.scenario);
     checkScene();
     const p = c.projectile;
     input(projForm, 'shape').value = p.shape;
