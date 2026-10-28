@@ -31,10 +31,30 @@
 // Kapla pile most sphere pairs are not near touching. The pairs kept are the
 // sphere pairs minus some, in the same order, so the narrowphase, colouring
 // and solve see the same contacts in the same order.
+//
+// Overflow: write keeps the first maxPairs pairs and drops the rest. Pairs are
+// grouped by their lower index, so what is dropped are the pairs between
+// bodies latest in index order (pushed bodies, fired balls among them), which
+// then pass through each other. finalize keeps two sticky counters for it,
+// never cleared, so a read at any time covers every encode since the buffer
+// was made (GpuAvbdEngine.init makes a new one): total[6], the most pairs an
+// encode has required, and total[7], the encodes that required more than
+// maxPairs. Nothing else reads them, so they change no float.
 import { assertStorageFits, RadixSorter, Scanner } from '@tb/gpu';
 import { Body, Shape, wgslStruct } from '@tb/schema';
 
 const WG = 64;
+
+/**
+ * Throws unless one indirect dispatch of WG-thread workgroups can cover maxPairs pairs: the
+ * narrowphase, colouring, solver and restitution kernels run over the pairs written with
+ * total[0..2] as their arguments, and a dispatch past maxComputeWorkgroupsPerDimension does nothing
+ * at all (4,194,240 pairs at the default limit of 65,535).
+ */
+export function assertPairDispatch(device: GPUDevice, maxPairs: number, who: string, remedy: string): void {
+  const limit = device.limits.maxComputeWorkgroupsPerDimension;
+  if (maxPairs > WG * limit) throw new Error(`${who}: ${maxPairs} pair slots exceed the ${WG * limit} one indirect dispatch covers (${WG} x maxComputeWorkgroupsPerDimension ${limit}); ${remedy}`);
+}
 
 /** Relative slack of the box test: about 80 f32 ulps of the larger of |d.n| and the projected extents. */
 export const SEP_SLACK = 1e-5;
@@ -112,7 +132,7 @@ struct Params { n: u32, mask: u32, maxPairs: u32, invCell: f32, margin: f32 }
 @group(0) @binding(4) var<storage, read_write> cellEnd: array<u32>;
 @group(0) @binding(5) var<storage, read_write> offsets: array<u32>;
 @group(0) @binding(6) var<storage, read_write> pairs: array<vec2u>;
-// [groupsX, 1, 1, written, lastCount, required]
+// [groupsX, 1, 1, written, lastCount, required, requiredPeak, overflowSteps] (the last two sticky; see the header)
 @group(0) @binding(7) var<storage, read_write> total: array<u32, 8>;
 @group(0) @binding(8) var<uniform> p: Params;
 
@@ -190,6 +210,8 @@ fn finalize() {
   total[2] = 1u;
   total[3] = w;
   total[5] = t;
+  total[6] = max(total[6], t);
+  if (t > p.maxPairs) { total[7] = total[7] + 1u; }
 }
 
 @compute @workgroup_size(${WG})
@@ -213,7 +235,11 @@ export interface BroadphaseBoxes { bodies: GPUBuffer; shapes: GPUBuffer; sweep: 
 export class Broadphase {
   /** vec2u (i, j) with i < j, grouped by i. */
   readonly pairs: GPUBuffer;
-  /** u32 x 8: [groupsX, 1, 1, written, -, required]; offset 0 feeds dispatchWorkgroupsIndirect at 64 threads per group. */
+  /**
+   * u32 x 8: [groupsX, 1, 1, written, -, required, requiredPeak, overflowSteps]; offset 0 feeds
+   * dispatchWorkgroupsIndirect at 64 threads per group. The last two count every encode since the
+   * buffer was made: the most pairs one required, and how many required more than maxPairs.
+   */
   readonly total: GPUBuffer;
   readonly keyBits: number;
   private readonly keys: GPUBuffer;
@@ -233,11 +259,13 @@ export class Broadphase {
   /**
    * @param spheres vec4f per body: centre xyz, bounding radius w
    * @param capacity maximum bodies
-   * @param maxPairs pair buffer size; more pairs are counted in `required` but not written
+   * @param maxPairs pair buffer size; more pairs are counted in `required` but not written. At most
+   *   WG x maxComputeWorkgroupsPerDimension (assertPairDispatch).
    * @param tableBits hash table size override (tests use a tiny table to force collisions)
    * @param boxes the box test's inputs (header); without them, sphere pairs only
    */
   constructor(private readonly device: GPUDevice, spheres: GPUBuffer, readonly capacity: number, readonly maxPairs: number, tableBits?: number, boxes?: BroadphaseBoxes) {
+    assertPairDispatch(device, maxPairs, 'Broadphase', 'lower maxPairs');
     // Table of at least 2 buckets per body keeps chains short.
     this.keyBits = tableBits ?? Math.max(4, Math.ceil(Math.log2(Math.max(2, 2 * capacity))));
     const table = 2 ** this.keyBits;
