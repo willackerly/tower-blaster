@@ -9,7 +9,9 @@ import { engineNames, parseSpec } from '@tb/bench';
 import { ENVS, GROUNDS, REAL_DEFAULTS, REAL_KNOBS, type RealKnob, type RealOptions, STONES } from '@tb/render';
 import { SCENARIOS } from '@tb/scenarios';
 import { type CameraPose, DEFAULT_FRAMING, type Framing } from './camera.ts';
-import { defaultPresettle, parseViewerConfig, type ViewerConfig, writeCamera, writeFraming } from './params.ts';
+import type { LevelDef } from '@tb/keystone';
+import { encodeLevelParam, parseLevelDef } from './level-file.ts';
+import { parseViewerConfig, type ViewerConfig, writeCamera, writeFraming } from './params.ts';
 import { DEFAULT_PROJECTILE, type Projectile } from './projectile.ts';
 
 export const SCENE_FILE_FORMAT = 'tower-blaster/viewer-scene';
@@ -25,9 +27,10 @@ export interface SceneFile {
   /**
    * sleep: null = the scenario's own setting; scale: metres per cube (ViewerConfig.scale; absent in older files: the scenario's default);
    * bounce: the e every surface gets while the engine's restitution option is on (ViewerConfig.bounce; absent in older files: DEFAULT_BOUNCE).
-   * A level's scene has level (a Keystone level id, ViewerConfig.level) in place of scenario, params and seed.
+   * A level's scene has level (a Keystone level id, ViewerConfig.level) in place of scenario, params and seed,
+   * or levelDef (a whole LevelDef, ViewerConfig.customLevel; level-file.ts) for a level of your own.
    */
-  scene: ({ scenario: string; params: Record<string, number | boolean>; seed: number } | { level: string }) & { sleep: boolean | null; scale: number; bounce: number };
+  scene: ({ scenario: string; params: Record<string, number | boolean>; seed: number } | { level: string } | { levelDef: LevelDef }) & { sleep: boolean | null; scale: number; bounce: number };
   /** A @tb/bench engine spec, split up (avbd-gpu:iterations=20 is { name: 'avbd-gpu', options: { iterations: 20 } }; Bounce on is restitution: true). */
   engine: { name: string; options: Record<string, number | boolean | string> };
   /** substeps: physics steps per 1/60 s (absent in older files: 1); presettle: steps run before the scene shows (absent: the scene's default, defaultPresettle). */
@@ -50,7 +53,7 @@ export function sceneFile(c: ViewerConfig, name: string, camera: CameraPose | nu
     version: SCENE_FILE_VERSION,
     name: name.trim(),
     savedAt: savedAt.toISOString(),
-    scene: { ...(c.level ? { level: c.level } : { scenario: c.scenario, params: { ...SCENARIOS[c.scenario]!.defaults, ...c.params }, seed: c.seed }), sleep: c.sleep, scale: c.scale, bounce: c.bounce },
+    scene: { ...(c.customLevel ? { levelDef: c.customLevel } : c.level ? { level: c.level } : { scenario: c.scenario, params: { ...SCENARIOS[c.scenario]!.defaults, ...c.params }, seed: c.seed }), sleep: c.sleep, scale: c.scale, bounce: c.bounce },
     engine: parseSpec(c.engine),
     loop: { mode: c.loop, pipeline: c.pipeline, maxSteps: c.maxSteps, substeps: c.substeps, presettle: c.presettle },
     projectile: { ...c.projectile },
@@ -92,7 +95,10 @@ export function parseSceneFile(text: string): { config: ViewerConfig; name: stri
 
   const q = new URLSearchParams();
   const scene = object(root.scene, 'scene');
-  if (scene.level !== undefined) {
+  if (scene.levelDef !== undefined) {
+    only(scene, ['levelDef', 'sleep', 'scale', 'bounce'], 'scene (a level of your own)');
+    q.set('level.def', encodeLevelParam(parseLevelDef(scene.levelDef, 'scene.levelDef')));
+  } else if (scene.level !== undefined) {
     // A level is the whole scene: the URL parser refuses a scenario, params or seed beside it.
     only(scene, ['level', 'sleep', 'scale', 'bounce'], 'scene (a level)');
     q.set('level', str(scene.level, 'scene.level'));

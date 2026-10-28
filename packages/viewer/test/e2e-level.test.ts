@@ -2,7 +2,8 @@
 // loads the game's bodies after the presettle, draws them with the game's
 // role tints, and a fired ball knocks them about. SwiftShader in CI.
 import { describe, expect, it } from 'vitest';
-import { compileLevel, L1 } from '@tb/keystone';
+import { compileLevel, L1, L5 } from '@tb/keystone';
+import { encodeLevelParam, levelJson } from '../src/index.ts';
 import { requireWebGPU } from '@tb/testkit';
 import { browser, open, useViewer } from './e2e-harness.ts';
 
@@ -57,6 +58,28 @@ describe('viewer with a level', () => {
     await page.locator('#scene-form button[type=submit]').click();
     await page.waitForFunction(() => window.__viewer.resets === 3 && window.__viewer.tinted === 0, undefined, { timeout: 60_000 });
     expect(new URL(page.url()).searchParams.get('scenario')).toBe('S1');
+    expect(errors).toEqual([]);
+    await page.close();
+  });
+
+  it('runs a level of your own from the URL, and the panel loads an edited level JSON in place', async (ctx) => {
+    if (!browser) return ctx.skip();
+    // L1 one course shorter, its crowns on the new top course.
+    const mine = { ...structuredClone(L1), id: 'short', name: 'Shorter', parts: [{ ...L1.parts[0]!, size: [2, 9, 2] as [number, number, number], courses: [{ k: 8, role: 'crown' as const }] }] };
+    const m = compileLevel(mine).scene.bodies.length;
+    const { page, errors } = await open(`/?level.def=${encodeLevelParam(mine)}&presettle=5&offscreen=1&engine=rapier`);
+    if (await page.evaluate(() => window.__viewer.status) === 'error' && !requireWebGPU()) return ctx.skip();
+    await page.waitForFunction((k) => window.__viewer.bodies === k && window.__viewer.tinted === k, m, { timeout: 60_000 });
+    expect(await page.locator('#hud').innerText()).toContain('short Shorter (custom)');
+    await page.evaluate(() => { (document.getElementById('controls') as HTMLDetailsElement).open = true; });
+    expect(await page.locator('#scene-form select[name=scenario]').inputValue()).toBe('custom');
+    // An edited L5 picked from disk becomes the level of your own, rebuilt in place.
+    const edited = { ...structuredClone(L5), id: 'dominoes-4', parts: L5.parts.slice(1) };
+    await page.locator('#level-file input[name=levelFile]').setInputFiles({ name: 'd4.level.json', mimeType: 'application/json', buffer: Buffer.from(levelJson(edited)) });
+    const k = compileLevel(edited).scene.bodies.length;
+    await page.waitForFunction((n) => window.__viewer.resets === 2 && window.__viewer.bodies === n, k, { timeout: 60_000 });
+    expect(new URL(page.url()).searchParams.get('level.def')).toBe(encodeLevelParam(edited));
+    expect(await page.locator('#hud').innerText()).toContain('dominoes-4');
     expect(errors).toEqual([]);
     await page.close();
   });

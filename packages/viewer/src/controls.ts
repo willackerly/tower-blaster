@@ -8,6 +8,7 @@ import { compileLevel, LEVELS } from '@tb/keystone';
 import { buildScenario, SCENARIOS } from '@tb/scenarios';
 import { type CameraPose, type Framing, FRAMING_LIMITS } from './camera.ts';
 import { escapeHtml } from './html.ts';
+import { levelIssues, levelJson, parseLevelDef } from './level-file.ts';
 import { autoSubsteps, AVBD_ENGINES, bounceOn, DEFAULT_BOUNCE, defaultPresettle, levelDef, MAX_PRESETTLE, MAX_SUBSTEPS, SCALE_LIMITS, type ViewerConfig, withOption } from './params.ts';
 import { parseProjectile, type Projectile, projectileMass } from './projectile.ts';
 import { parseSceneFile, sceneFile, sceneFileName } from './scene-file.ts';
@@ -59,6 +60,23 @@ export interface BounceChoice { on: boolean; e: number }
 
 /** The scene picker's value for a Keystone level (scenarios are their own id). */
 export const levelChoice = (id: string) => `level:${id}`;
+/** The scene picker's value for the level of your own the config holds (ViewerConfig.customLevel). */
+export const CUSTOM_LEVEL = 'custom';
+
+/** The level a picker value names: a built-in one, the config's own (CUSTOM_LEVEL), or null for a scenario; throws on an unknown one. */
+function pickedLevel(c: ViewerConfig, choice: string) {
+  if (choice === CUSTOM_LEVEL) {
+    if (!c.customLevel) throw new Error('no level of your own is loaded');
+    return { def: c.customLevel, custom: true };
+  }
+  if (!choice.startsWith('level:')) return null;
+  const def = levelDef(choice.slice(6));
+  if (!def) throw new Error(`unknown level ${choice.slice(6)}`);
+  return { def, custom: false };
+}
+
+/** The config that loads def, a level of your own, fresh: its presettle, framed afresh. */
+export const withCustomLevel = (c: ViewerConfig, def: ViewerConfig['customLevel'] & object): ViewerConfig => ({ ...c, level: def.id, customLevel: def, presettle: defaultPresettle(def.id), camera: null });
 
 /**
  * The scene a set of form values describes, or why it can't be built. Builds it
@@ -72,22 +90,23 @@ export function proposeScene(c: ViewerConfig, scenario: string, params: Record<s
   bounce: BounceChoice = { on: bounceOn(c.engine), e: c.bounce }, presettle?: number):
   { ok: true; config: ViewerConfig; bodies: number } | { ok: false; error: string } {
   try {
-    const level = scenario.startsWith('level:') ? levelDef(scenario.slice(6))?.id ?? null : null;
-    if (scenario.startsWith('level:') && !level) throw new Error(`unknown level ${scenario.slice(6)}`);
+    const picked = pickedLevel(c, scenario);
+    const level = picked?.def.id ?? null;
     const settle = presettle ?? defaultPresettle(level);
     if (!Number.isInteger(settle) || settle < 0 || settle > MAX_PRESETTLE) throw new Error(`settle steps must be a whole number from 0 to ${MAX_PRESETTLE}`);
-    if (level) {
-      // A level is the whole scene: the config's scenario, params and seed stay for when the picker goes back to one.
+    if (picked) {
+      // A level is the whole scene: the config's scenario, params and seed stay for when the picker goes back to one,
+      // and a level of your own stays loaded (picked again from the picker) until another one replaces it.
       checkWorld(scale, substeps);
       const { okE, engine } = bounceChoice(c, bounce);
-      const next: ViewerConfig = { ...c, level, scale, substeps, presettle: settle, camera: null, engine, bounce: okE ? bounce.e : c.bounce };
-      return { ok: true, config: next, bodies: compileLevel(levelDef(level)!).scene.bodies.length };
+      const next: ViewerConfig = { ...c, level, customLevel: picked.custom ? picked.def : null, scale, substeps, presettle: settle, camera: null, engine, bounce: okE ? bounce.e : c.bounce };
+      return { ok: true, config: next, bodies: compileLevel(picked.def).scene.bodies.length };
     }
     if (!Number.isInteger(seed)) throw new Error('seed must be an integer');
     checkWorld(scale, substeps);
     const { okE, engine } = bounceChoice(c, bounce);
     // A rebuilt scene is framed afresh: a start camera chosen for the old one need not fit it.
-    const next: ViewerConfig = { ...c, level: null, scenario, params, seed, scale, substeps, presettle: settle, camera: null, engine, bounce: okE ? bounce.e : c.bounce };
+    const next: ViewerConfig = { ...c, level: null, customLevel: null, scenario, params, seed, scale, substeps, presettle: settle, camera: null, engine, bounce: okE ? bounce.e : c.bounce };
     return { ok: true, config: next, bodies: buildScenario(scenario, params, seed).bodies.length };
   } catch (e) {
     return { ok: false, error: e instanceof Error ? e.message : String(e) };
@@ -107,6 +126,19 @@ function bounceChoice(c: ViewerConfig, bounce: BounceChoice): { okE: boolean; en
   const name = parseSpec(c.engine).name;
   if (bounce.on && !AVBD_ENGINES.has(name)) throw new Error(`bounce needs an AVBD engine (GPU AVBD or avbd-ref), not ${name}`);
   return { okE, engine: bounce.on === bounceOn(c.engine) ? c.engine : withOption(c.engine, 'restitution', bounce.on || undefined) };
+}
+
+/** The scene picker's value for a config. */
+const sceneChoice = (c: ViewerConfig) => (c.customLevel ? CUSTOM_LEVEL : c.level ? levelChoice(c.level) : c.scenario);
+
+/** Save text as a file through a temporary link; returns the file name. */
+function download(text: string, name: string): string {
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([text], { type: 'application/json' }));
+  a.download = name;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 10_000);
+  return name;
 }
 
 /** The scene line under the form: bodies, what the cube size and substeps do to the physics, and the bounce's e while Bounce is on (null: off). */
@@ -138,7 +170,7 @@ export function mountControls(root: HTMLElement, hooks: ControlsHooks): { refres
     <summary>Scene and projectile</summary>
     <form id="scene-form">
       <div class="h">Scene</div>
-      <label class="f"><span>scenario</span><select name="scenario"><optgroup label="Scenarios">${Object.values(SCENARIOS).map((s) => `<option value="${s.id}">${s.id} ${escapeHtml(s.title)}</option>`).join('')}</optgroup><optgroup label="Keystone levels">${LEVELS.map((l) => `<option value="${levelChoice(l.id)}">${l.id} ${escapeHtml(l.name)}</option>`).join('')}</optgroup></select></label>
+      <label class="f"><span>scenario</span><select name="scenario"><optgroup label="Scenarios">${Object.values(SCENARIOS).map((s) => `<option value="${s.id}">${s.id} ${escapeHtml(s.title)}</option>`).join('')}</optgroup><optgroup label="Keystone levels">${LEVELS.map((l) => `<option value="${levelChoice(l.id)}">${l.id} ${escapeHtml(l.name)}</option>`).join('')}</optgroup><optgroup label="Your level" class="custom"><option value="${CUSTOM_LEVEL}"></option></optgroup></select></label>
       <div class="params"></div>
       <div class="seed">${field('seed', 'seed', 1, 'step="1"')}</div>
       ${field('presettle', 'settle steps before start', 0, `step="1" min="0" max="${MAX_PRESETTLE}"`)}
@@ -147,8 +179,10 @@ export function mountControls(root: HTMLElement, hooks: ControlsHooks): { refres
       ${field('bounce', 'bounce', false)}
       <div class="bounce">${field('bounceE', 'bounce e (0-1)', DEFAULT_BOUNCE, 'step="any" min="0" max="1"')}</div>
       <div class="out muted"></div>
+      <div class="issues warn small"></div>
       <button type="submit">Rebuild scene</button>
     </form>
+    <div id="level-file" class="buttons"><button type="button" name="levelDownload">Download level</button><button type="button" name="levelLoad">Load level…</button><input type="file" name="levelFile" accept=".json,application/json" hidden></div>
     <form id="proj-form">
       <div class="h">Projectile</div>
       <label class="f"><span>shape</span><select name="shape"><option value="ball">ball</option><option value="cube">cube</option></select></label>
@@ -197,14 +231,27 @@ export function mountControls(root: HTMLElement, hooks: ControlsHooks): { refres
   const bounceEBox = sceneForm.querySelector<HTMLElement>('.bounce')!;
 
   const seedBox = sceneForm.querySelector<HTMLElement>('.seed')!;
+  const issuesBox = sceneForm.querySelector<HTMLElement>('.issues')!;
+  const customGroup = sceneForm.querySelector<HTMLOptGroupElement>('optgroup.custom')!;
+  // Outside the scene form, so Rebuild stays its only button.
+  const levelBox = root.querySelector<HTMLElement>('#level-file')!;
+  const levelDownload = levelBox.querySelector<HTMLButtonElement>('button[name=levelDownload]')!;
+  const levelPicker = levelBox.querySelector<HTMLInputElement>('input[name=levelFile]')!;
 
   /** Param fields for a scenario: the config's values when it is the current one, else its defaults. A level has none: a line about it instead. */
   function showParams(scenario: string) {
     const c = hooks.config();
-    seedBox.hidden = scenario.startsWith('level:');
-    if (scenario.startsWith('level:')) {
-      const d = levelDef(scenario.slice(6))!;
+    let picked: ReturnType<typeof pickedLevel> = null;
+    try { picked = pickedLevel(c, scenario); } catch { /* checkScene says why */ }
+    seedBox.hidden = picked !== null;
+    levelDownload.hidden = picked === null;
+    issuesBox.textContent = '';
+    if (picked) {
+      const d = picked.def;
       paramsBox.innerHTML = `<div class="muted">${escapeHtml(d.name)}: ${d.objective.kind === 'crowns' ? 'fell the crowns' : 'bring the skyline down'}, par ${d.par}, rack ${escapeHtml(d.rack.join(', '))}</div>`;
+      // A level with issues still loads (seeing it fail is the point); they are listed here.
+      const issues = levelIssues(d);
+      issuesBox.textContent = issues instanceof Error ? issues.message : issues.map((i) => `${i.code}: ${i.message}`).join('\n');
       return;
     }
     const values = { ...SCENARIOS[scenario]!.defaults, ...(scenario === c.scenario ? c.params : {}) };
@@ -251,12 +298,33 @@ export function mountControls(root: HTMLElement, hooks: ControlsHooks): { refres
   });
   // A new scene brings its own settle steps and cube size (a level's are the game's); set them after to override.
   input(sceneForm, 'scenario').addEventListener('change', () => {
-    const v = input(sceneForm, 'scenario').value, level = v.startsWith('level:') ? v.slice(6) : null;
+    const v = input(sceneForm, 'scenario').value, level = v.startsWith('level:') || v === CUSTOM_LEVEL ? v : null;
     input(sceneForm, 'presettle').value = String(defaultPresettle(level));
     showParams(v);
     checkScene();
   });
   sceneForm.addEventListener('input', checkScene);
+  // Level JSON: the picked level (built-in or your own) as a file to edit, and an edited one loaded back as your own.
+  levelDownload.addEventListener('click', () => {
+    let picked: ReturnType<typeof pickedLevel> = null;
+    try { picked = pickedLevel(hooks.config(), input(sceneForm, 'scenario').value); } catch { return; }
+    if (!picked) return;
+    download(levelJson(picked.def), sceneFileName(picked.def.id, picked.def.id).replace(/\.json$/, '.level.json'));
+  });
+  levelBox.querySelector<HTMLButtonElement>('button[name=levelLoad]')!.addEventListener('click', () => levelPicker.click());
+  levelPicker.addEventListener('change', async () => {
+    const f = levelPicker.files?.[0];
+    levelPicker.value = '';
+    if (!f) return;
+    try {
+      let v: unknown;
+      try { v = JSON.parse(await f.text()); } catch { throw new Error('not a JSON file'); }
+      hooks.rebuild(withCustomLevel(hooks.config(), parseLevelDef(v)));
+    } catch (e) {
+      sceneOut.textContent = `${f.name}: ${e instanceof Error ? e.message : String(e)}`;
+      sceneOut.classList.add('warn');
+    }
+  });
   sceneForm.addEventListener('submit', (e) => {
     e.preventDefault();
     const p = sceneProposal();
@@ -312,12 +380,8 @@ export function mountControls(root: HTMLElement, hooks: ControlsHooks): { refres
     e.preventDefault();
     const c = hooks.config(), name = input(fileForm, 'name').value;
     const file = sceneFile(c, name, hooks.camera());
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(new Blob([`${JSON.stringify(file, null, 2)}\n`], { type: 'application/json' }));
-    a.download = sceneFileName(name, c.level ?? c.scenario);
-    a.click();
-    setTimeout(() => URL.revokeObjectURL(a.href), 10_000);
-    say(`Saved ${a.download}`);
+    const saved = download(`${JSON.stringify(file, null, 2)}\n`, sceneFileName(name, c.level ?? c.scenario));
+    say(`Saved ${saved}`);
   });
   fileForm.querySelector<HTMLButtonElement>('button[name=load]')!.addEventListener('click', () => picker.click());
   picker.addEventListener('change', async () => {
@@ -337,7 +401,9 @@ export function mountControls(root: HTMLElement, hooks: ControlsHooks): { refres
   /** Shows the current config (after a load or a URL change). */
   function refresh() {
     const c = hooks.config();
-    input(sceneForm, 'scenario').value = c.level ? levelChoice(c.level) : c.scenario;
+    customGroup.hidden = !c.customLevel;
+    customGroup.firstElementChild!.textContent = c.customLevel ? `${c.customLevel.id} ${c.customLevel.name} (yours)` : '';
+    input(sceneForm, 'scenario').value = sceneChoice(c);
     input(sceneForm, 'seed').value = String(c.seed);
     input(sceneForm, 'presettle').value = String(c.presettle);
     input(sceneForm, 'scale').value = String(c.scale);
@@ -347,7 +413,7 @@ export function mountControls(root: HTMLElement, hooks: ControlsHooks): { refres
     bounceBox.disabled = !AVBD_ENGINES.has(parseSpec(c.engine).name);
     bounceBox.title = bounceBox.disabled ? 'restitution: GPU AVBD or avbd-ref engines only' : 'restitution: every body and the ground bounce at e (Rebuild to apply)';
     input(sceneForm, 'bounceE').value = String(c.bounce);
-    showParams(c.level ? levelChoice(c.level) : c.scenario);
+    showParams(sceneChoice(c));
     checkScene();
     const p = c.projectile;
     input(projForm, 'shape').value = p.shape;
