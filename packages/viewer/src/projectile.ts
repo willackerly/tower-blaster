@@ -1,9 +1,11 @@
-// What a click fires: a ball or a cube, its size, mass and launch speed.
-// The defaults reproduce the viewer's original ball exactly (radius 0.7,
-// density 8, 40 m/s), so a default setup fires the same body as before.
+// What a click fires: a ball or a cube, its size, mass and launch speed,
+// and optionally a weapon (a grenade: @tb/weapons). The defaults reproduce
+// the viewer's original ball exactly (radius 0.7, density 8, 40 m/s), so a
+// default setup fires the same body as before.
 import { parseSpec } from '@tb/bench';
 import { type BodyDesc, type SceneDesc, type ShapeDesc, spawnedBodies, TAG_BALL, volumeOf } from '@tb/engine-api';
 import { boundingRadius } from '@tb/geom';
+import { checkGrenade, DEFAULT_GRENADE, FUSES, type Fuse, type GrenadeBlast, type GrenadeSpec } from '@tb/weapons';
 import type { V3 } from './math.ts';
 
 export interface Projectile {
@@ -14,7 +16,14 @@ export interface Projectile {
   mass: number | null;
   /** Launch speed, m/s. */
   speed: number;
+  /** What it does besides hitting (URL key proj.weapon): absent, nothing; grenade, a fused blast. */
+  weapon?: Weapon;
+  /** With weapon grenade (and only then): its fuse and blast (URL keys grenade.*), in cube units at scale 1 (worldGrenade). */
+  grenade?: GrenadeSpec;
 }
+
+export const WEAPONS = ['grenade'] as const;
+export type Weapon = (typeof WEAPONS)[number];
 
 export const DEFAULT_PROJECTILE: Projectile = { shape: 'ball', size: 1.4, mass: null, speed: 40 };
 const DEFAULT_DENSITY = 8;
@@ -49,7 +58,51 @@ export function projectileBody(p: Projectile, origin: V3, dir: V3): BodyDesc {
   };
 }
 
-/** From URL keys proj (ball | cube), proj.size, proj.mass and proj.speed; absent keys keep the defaults. */
+/** The grenade's URL keys (grenade.<key>) and where each lives in a GrenadeSpec; ground is 0 or 1, fuse a word. */
+export const GRENADE_NUMBERS = ['delay', 'prox', 'arm'] as const;
+export const GRENADE_BLAST_KEYS = Object.keys(DEFAULT_GRENADE.blast) as (keyof GrenadeBlast)[];
+
+/** A grenade from URL keys grenade.*, absent keys at DEFAULT_GRENADE; checked (checkGrenade). */
+export function parseGrenade(q: URLSearchParams): GrenadeSpec {
+  const num = (key: string, fallback: number) => {
+    const raw = q.get(`grenade.${key}`);
+    if (raw === null) return fallback;
+    const v = raw === '' ? NaN : Number(raw);
+    if (!Number.isFinite(v)) throw new Error(`grenade.${key} must be a number: ${raw}`);
+    return v;
+  };
+  const fuse = q.get('grenade.fuse') ?? DEFAULT_GRENADE.fuse;
+  if (!FUSES.includes(fuse as Fuse)) throw new Error(`grenade.fuse must be one of ${FUSES.join(', ')}: ${fuse}`);
+  const ground = q.get('grenade.ground');
+  if (ground !== null && ground !== '0' && ground !== '1') throw new Error(`grenade.ground must be 0 or 1: ${ground}`);
+  const g: GrenadeSpec = {
+    fuse: fuse as Fuse,
+    delay: num('delay', DEFAULT_GRENADE.delay), prox: num('prox', DEFAULT_GRENADE.prox), arm: num('arm', DEFAULT_GRENADE.arm),
+    ground: ground === null ? DEFAULT_GRENADE.ground : ground === '1',
+    blast: Object.fromEntries(GRENADE_BLAST_KEYS.map((k) => [k, num(k, DEFAULT_GRENADE.blast[k])])) as unknown as GrenadeBlast,
+  };
+  return checkGrenade(g);
+}
+
+/** Writes the grenade's fields that differ from DEFAULT_GRENADE. */
+export function writeGrenade(g: GrenadeSpec, q: URLSearchParams): void {
+  if (g.fuse !== DEFAULT_GRENADE.fuse) q.set('grenade.fuse', g.fuse);
+  for (const k of GRENADE_NUMBERS) if (g[k] !== DEFAULT_GRENADE[k]) q.set(`grenade.${k}`, String(g[k]));
+  if (g.ground !== DEFAULT_GRENADE.ground) q.set('grenade.ground', g.ground ? '1' : '0');
+  for (const k of GRENADE_BLAST_KEYS) if (g.blast[k] !== DEFAULT_GRENADE.blast[k]) q.set(`grenade.${k}`, String(g.blast[k]));
+}
+
+/**
+ * A grenade for a world at this scale and substeps (ViewerConfig.scale, substeps): its speeds
+ * froudeSpeed times as fast, as the projectile's (impulse and maxDv), and its speed cap, a
+ * fraction of the sweep limit per step, substeps times as high. Lengths and times stay as set.
+ */
+export function worldGrenade(g: GrenadeSpec, froude: number, substeps: number): GrenadeSpec {
+  if (froude === 1 && substeps === 1) return g;
+  return { ...g, blast: { ...g.blast, impulse: g.blast.impulse * froude, maxDv: g.blast.maxDv * froude, maxSpeed: g.blast.maxSpeed * substeps } };
+}
+
+/** From URL keys proj (ball | cube), proj.size, proj.mass, proj.speed, proj.weapon and grenade.*; absent keys keep the defaults. */
 export function parseProjectile(q: URLSearchParams): Projectile {
   const shape = q.get('proj') ?? DEFAULT_PROJECTILE.shape;
   if (shape !== 'ball' && shape !== 'cube') throw new Error(`proj must be ball or cube: ${shape}`);
@@ -60,7 +113,18 @@ export function parseProjectile(q: URLSearchParams): Projectile {
     if (!Number.isFinite(v) || v < lo || v > hi) throw new Error(`proj.${key} must be a number from ${lo} to ${hi}: ${raw}`);
     return v;
   };
-  return { shape, size: num('size', DEFAULT_PROJECTILE.size)!, mass: num('mass', null), speed: num('speed', DEFAULT_PROJECTILE.speed)! };
+  const p: Projectile = { shape, size: num('size', DEFAULT_PROJECTILE.size)!, mass: num('mass', null), speed: num('speed', DEFAULT_PROJECTILE.speed)! };
+  const weapon = q.get('proj.weapon');
+  if (weapon !== null && !WEAPONS.includes(weapon as Weapon)) throw new Error(`proj.weapon must be ${WEAPONS.join(' or ')}: ${weapon}`);
+  const grenadeKeys = [...q.keys()].filter((k) => k.startsWith('grenade.'));
+  if (weapon !== 'grenade') {
+    if (grenadeKeys.length) throw new Error(`${grenadeKeys[0]} applies to proj.weapon=grenade`);
+    return p;
+  }
+  const known = new Set(['fuse', 'ground', ...GRENADE_NUMBERS, ...GRENADE_BLAST_KEYS].map((k) => `grenade.${k}`));
+  const unknown = grenadeKeys.find((k) => !known.has(k));
+  if (unknown) throw new Error(`unknown key ${unknown}; known: ${[...known].join(', ')}`);
+  return { ...p, weapon, grenade: parseGrenade(q) };
 }
 
 /** Writes the fields that differ from the defaults. */
@@ -69,6 +133,8 @@ export function writeProjectile(p: Projectile, q: URLSearchParams): void {
   if (p.size !== DEFAULT_PROJECTILE.size) q.set('proj.size', String(p.size));
   if (p.mass !== null) q.set('proj.mass', String(p.mass));
   if (p.speed !== DEFAULT_PROJECTILE.speed) q.set('proj.speed', String(p.speed));
+  if (p.weapon) q.set('proj.weapon', p.weapon);
+  if (p.weapon === 'grenade') writeGrenade(p.grenade ?? DEFAULT_GRENADE, q);
 }
 
 /**

@@ -17,7 +17,8 @@ import { alphaAt, newArrivals, newClock, newPacer, pauseLatch, runFree, stepsDue
 import type { V3 } from './math.ts';
 import { escapeHtml } from './html.ts';
 import { bounceBody, bounceOn, engineSpec, froudeSpeed, keystoneEngine, levelOf, parseViewerConfig, presetSearch, scenarioEngineSpec, sceneTitle, toSearch, type ViewerConfig, viewerScene, withOption, worldEngineSpec } from './params.ts';
-import { projectileBody, projectileShape, pushRadiusLimit } from './projectile.ts';
+import { projectileBody, projectileShape, pushRadiusLimit, worldGrenade } from './projectile.ts';
+import { Grenades } from '@tb/weapons';
 import { mountControls } from './controls.ts';
 import { type DevAction, mountDev } from './dev-panel.ts';
 import { createDevice } from '@tb/gpu';
@@ -92,6 +93,8 @@ interface ViewerHandle {
 }
 type InputHook = (s: Snapshot, step: number) => InputEvent[];
 declare global { interface Window { __viewer: ViewerHandle } }
+/** Steps of 1/60 s a proximity fuse predicts past each state the page reads (Grenades lookahead): a few frames. */
+const GRENADE_LOOKAHEAD = 4;
 
 const canvas = document.getElementById('c') as HTMLCanvasElement;
 const hud = document.getElementById('hud')!;
@@ -208,6 +211,8 @@ async function main() {
   let fxSlots = 0;
   // This load's input hook (handle.inputHook), or none.
   let inputHook: InputHook | null = null;
+  // This load's fired grenades, waiting on their fuses (proj.weapon=grenade).
+  let grenades: Grenades | null = null;
 
   async function reset() {
     resetting = true;
@@ -268,6 +273,8 @@ async function main() {
     handle.inputs = [];
     notice = '';
     inputHook = handle.inputHook?.() ?? null;
+    // The page reads the state about once a frame, so a fuse predicts that far ahead (Grenades).
+    grenades = new Grenades({ dt: next.dt, substeps: engine.info.integrator?.substeps ?? 1, gravity: next.gravity, groundY: next.ground?.y ?? null }, GRENADE_LOOKAHEAD * want.substeps);
     apply(s, t0, engine.stepIndex);
   }
 
@@ -351,6 +358,17 @@ async function main() {
       if (early) throw new Error(`input hook: an event for step ${early.step} is not after the observed step ${step}`);
       pushInput(input);
     }
+    const blasts = grenades?.observe(s, step, shapesFor(s.count));
+    if (blasts?.length) pushGrenade(() => blasts);
+  }
+  /** A grenade's blasts: an engine that refuses them (tiered) leaves a notice, not a stopped page. */
+  function pushGrenade(blasts: () => InputEvent[]) {
+    try {
+      pushInput(blasts());
+    } catch (e) {
+      notice = `grenade: ${e instanceof Error ? e.message : String(e)}`;
+      drawHud();
+    }
   }
   /**
    * Read the newest state back and upload it; resolves with the time it landed. Pipelined, the read
@@ -388,6 +406,15 @@ async function main() {
       // The GPU and tiered engines have room for GPU_SPARE fired projectiles (params.ts); R resets.
       notice = `${e instanceof Error ? e.message : String(e)} (press R to reset)`;
       drawHud();
+      return;
+    }
+    const p = config.projectile;
+    if (p.weapon === 'grenade' && p.grenade && grenades) {
+      // Engines number spawns after the scene's bodies in (step, push order), the order of events. A spawn
+      // another input pushes later for an earlier step would come first; nothing pushes one (#94's hooks could).
+      const id = scene.bodies.length + events.filter((e) => e.kind === 'spawn').indexOf(ev);
+      const [g, spec] = [grenades, worldGrenade(p.grenade, froudeSpeed(config.scale), config.substeps)];
+      pushGrenade(() => g.launch(id, ev.step, spec, ev.body.shape));
     }
   };
 

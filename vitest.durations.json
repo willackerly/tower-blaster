@@ -123,6 +123,7 @@
   "packages/viewer/test/dev-panel.test.ts": 0.1,
   "packages/viewer/test/e2e-bounce.test.ts": 21.5,
   "packages/viewer/test/e2e-dev.test.ts": 16,
+  "packages/viewer/test/e2e-grenade.test.ts": 20,
   "packages/viewer/test/e2e-input-hook.test.ts": 10,
   "packages/viewer/test/e2e-keystone-gpu.test.ts": 161.2,
   "packages/viewer/test/e2e-keystone.test.ts": 15,
