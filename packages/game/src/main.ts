@@ -13,7 +13,7 @@ import { Synth, type Voice, voicesFor } from './audio.ts';
 import { driverOptions, type EngineKind, engineKind, makeEngine } from './engines.ts';
 import { hudHtml, nextSelection, rackChips, resultHtml } from './hud.ts';
 import { CameraJuice, contactJuice } from './juice.ts';
-import { Pacer } from './pacing.ts';
+import { Pacer, paceFeel, type PaceFeel } from './pacing.ts';
 import { beadOverlay, regrowDuration, regrowScales, structureTints, TINT } from './scene.ts';
 
 interface GameHandle {
@@ -33,6 +33,10 @@ interface GameHandle {
   result: LevelScore | null;
   /** Feedback events seen this attempt, by type. */
   counts: Record<string, number>;
+  /** Pace juice in effect (`?keystone.hitstop=1`, `?keystone.slowmo=1`; both off by default). */
+  feel: PaceFeel;
+  /** Engine step at which this attempt's round-over card first showed, or null. */
+  resultShownAt: number | null;
   /** Wall time of this level's load (engine build and pre-settle), and of each live step since, in ms. */
   timing: { loadMs: number; stepMs: number[] };
   fire(shot: Shot): boolean;
@@ -54,7 +58,7 @@ declare global { interface Window { __game: GameHandle } }
 const $ = (id: string) => document.getElementById(id)!;
 const canvas = $('c') as HTMLCanvasElement, hudEl = $('hud'), bannerEl = $('banner'), resultEl = $('result'), errorEl = $('error');
 const handle: GameHandle = {
-  status: 'loading', engine: '', level: '', phase: 'loading', ready: false, frames: 0, stepIndex: 0, strokes: 0, bodies: 0, fast: false, result: null, counts: {}, timing: { loadMs: 0, stepMs: [] },
+  status: 'loading', engine: '', level: '', phase: 'loading', ready: false, frames: 0, stepIndex: 0, strokes: 0, bodies: 0, fast: false, result: null, counts: {}, feel: { hitStop: false, slowMo: false }, resultShownAt: null, timing: { loadMs: 0, stepMs: [] },
   fire: () => false, aim: () => null, select: () => false, load: async () => {}, retry: async () => {}, capture: async () => null,
   state: () => ({ step: 0, phase: 'loading', strokes: 0, heritageBroken: 0, hash: '' }), replay: async () => ({ step: 0, phase: 'loading', strokes: 0, heritageBroken: 0, hash: '' }),
 };
@@ -99,6 +103,7 @@ async function main() {
   };
   let levelIdx = levelOf(q.get('level') ?? LEVELS[0]!.id);
   const kind = engineKind(q.get('engine'));
+  const feel = handle.feel = paceFeel(q);
   handle.engine = kind;
 
   const { device } = await createDevice({ timestamps: false });
@@ -135,7 +140,8 @@ async function main() {
   let regrowT: number | null = null;
   let fastHeld = false;
   let lastHud = '', crownsShown = 0;
-  let resultTimer = 0;
+  /** Every crown is down: the round is known to be over, the card shows, and the rest of the settle runs at fast-forward. */
+  let ending = false;
 
   const aspect = () => (offscreen ? 640 / 400 : canvas.width / Math.max(1, canvas.height));
   const courses = () => Math.ceil(c.height / c.frame.unit);
@@ -180,7 +186,8 @@ async function main() {
     handle.result = null;
     handle.counts = {};
     handle.level = c.def.id;
-    clearTimeout(resultTimer);
+    ending = false;
+    handle.resultShownAt = null;
     resultEl.className = 'panel';
     document.body.classList.remove('ended');
     selected = nextSelection(c.def.rack, driver.session.rackLeft, retry ? selected : null);
@@ -223,7 +230,7 @@ async function main() {
             const v: Vec3 = [s.linVel[3 * b]!, s.linVel[3 * b + 1]!, s.linVel[3 * b + 2]!], l = Math.hypot(...v) || 1;
             renderer.burst([s.pos[3 * b]!, s.pos[3 * b + 1]!, s.pos[3 * b + 2]!], [v[0] / l, v[1] / l, v[2] / l], f.dv);
           }
-          pacer.hitStop(j.frames);
+          if (feel.hitStop) pacer.hitStop(j.frames);
           juice.shake(j.trauma);
           juice.kick(0.05);
           break;
@@ -232,8 +239,13 @@ async function main() {
           juice.shake(0.08);
           // A felled crown flashes once and stops glowing.
           renderer.setFx(f.body, { tint: TINT.crown, emissive: 0.9, flash: 0.5 });
+          if (c.def.objective.kind === 'crowns' && f.ordinal + 1 === c.meta.crowns.length && driver.session.phase === 'running') {
+            ending = true;
+            pacer.release();
+            showResult(null);
+          }
           break;
-        case 'slowMo': if (!fastHeld && !handle.fast) pacer.slowMo(); break;
+        case 'slowMo': if (feel.slowMo && !fastHeld && !handle.fast) pacer.slowMo(); break;
         case 'heritageCrack':
           juice.shake(0.3);
           banner('Heritage cracked', 'crack');
@@ -242,21 +254,31 @@ async function main() {
         case 'tier': banner(`${TIER_NAMES[f.tier]}!`); break;
         case 'settled':
           pacer.release();
+          // A crown back above the line (rare: a catapult) means the round goes on after all.
+          if (ending && driver.session.phase === 'aiming') { ending = false; hideResult(); }
           selected = nextSelection(c.def.rack, driver.session.rackLeft, selected);
           aimDirty = true;
           break;
-        case 'levelEnd': {
+        case 'levelEnd':
           handle.result = f.score;
-          const show = () => {
-            resultEl.innerHTML = resultHtml(c.def, f.score, driver.session.outcomes.length, levelIdx + 1 < LEVELS.length);
-            resultEl.className = 'panel show';
-            document.body.classList.add('ended');
-          };
-          resultTimer = window.setTimeout(show, f.cleared ? 700 : 300);
+          ending = false;
+          showResult(f.score);
           break;
-        }
       }
     }
+  }
+
+  function showResult(score: LevelScore | null) {
+    resultEl.innerHTML = resultHtml(c.def, score, driver.session.strokes, levelIdx + 1 < LEVELS.length);
+    resultEl.className = 'panel show';
+    document.body.classList.add('ended');
+    handle.resultShownAt ??= driver.engine.stepIndex;
+  }
+
+  function hideResult() {
+    resultEl.className = 'panel';
+    document.body.classList.remove('ended');
+    handle.resultShownAt = null;
   }
 
   /** Mirror state onto the test handle; called each frame and right after anything that changes it. */
@@ -405,7 +427,7 @@ async function main() {
     const running = !loading && driver.session.phase === 'running';
     if (running) await exclusive(async () => {
       if (driver.session.phase !== 'running') return; // a load got in first
-      const n = pacer.stepsThisFrame(frameMs, c.scene.dt, { fastForward: fastHeld || handle.fast, stepMs: stepMs.quantile(0.5), budgetMs: 10 });
+      const n = pacer.stepsThisFrame(frameMs, c.scene.dt, { fastForward: fastHeld || handle.fast || ending, stepMs: stepMs.quantile(0.5), budgetMs: ending ? 14 : 10 });
       for (let i = 0; i < n; i++) {
         const t0 = performance.now();
         const fb = await driver.step();

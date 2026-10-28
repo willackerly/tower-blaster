@@ -17,6 +17,8 @@ describe('game page', () => {
     const { page, errors } = o;
     await ready(page);
     expect(await page.evaluate(() => window.__game.bodies)).toBe(40);
+    // No pace juice unless asked for.
+    expect(await page.evaluate(() => window.__game.feel)).toEqual({ hitStop: false, slowMo: false });
 
     // Hovering the tower gives a reachable aim and preview beads. (L1's tower
     // is 1 m wide, and the centre ray runs down the 1 cm seam between its columns.)
@@ -33,7 +35,8 @@ describe('game page', () => {
       await ready(page);
       expect(await page.evaluate((s) => window.__game.fire(s), shot)).toBe(true);
     }
-    await page.waitForFunction(() => document.querySelector('#result.show') !== null, undefined, { timeout: 120_000 });
+    await page.waitForFunction(() => window.__game.result !== null, undefined, { timeout: 120_000, polling: 100 });
+    expect(await page.evaluate(() => document.querySelector('#result.show') !== null)).toBe(true);
     const result = await page.evaluate(() => ({ score: window.__game.result, counts: window.__game.counts, phase: window.__game.phase }));
     expect(result.phase).toBe('cleared');
     expect(result.counts.fired).toBe(1);
@@ -49,6 +52,11 @@ describe('game page', () => {
     // And the page's own replay agrees, pose for pose.
     const live = await page.evaluate(() => window.__game.state());
     expect(live).toMatchObject({ step: r.steps, phase: 'cleared' });
+    // The card showed as soon as the last crown was down, before the settle that scores it.
+    const shownAt = await page.evaluate(() => window.__game.resultShownAt);
+    const lastCrown = r.feedback.filter((f) => f.t === 'crownDown').at(-1)!.step;
+    expect(shownAt).toBeGreaterThanOrEqual(lastCrown);
+    expect(shownAt).toBeLessThan(r.feedback.find((f) => f.t === 'levelEnd')!.step);
     expect(await page.evaluate((s) => window.__game.replay(s), shots)).toEqual(live);
 
     // Retry regrows the level and resets the rack.
