@@ -253,9 +253,9 @@ export interface AvbdParams {
   /** Scale the friction stiffness by the cone clamp, k_t min(1, bound / |z|), while sliding (else k_t J J^T, as the reference). */
   slidingHessian: boolean;
   /**
-   * Lattice-preferred colouring (coloring.ts), opt-in and experimental
-   * (perf-competition round 2, "latticecolor"): off when absent or 0, and
-   * EngineInfo.variant lists it only while it is on (avbdVariant). 1, eight
+   * Lattice-preferred colouring (coloring.ts; perf-competition round 2,
+   * "latticecolor"): here off when absent or 0, and EngineInfo.variant lists
+   * it only while it is on (avbdVariant); 3 is the GPU engine's default. 1, eight
    * colours; 2, four colours with the corner offset as kernel (the face+edge
    * rule); 3, four colours with the in-plane diagonal as kernel (the
    * column-and-layer product); 4, as 3 but only for bodies whose every
@@ -263,8 +263,9 @@ export interface AvbdParams {
    * interior; no fallback colour). Cubes on the world lattice take their pattern
    * colour when no higher-priority neighbour holds it; everything else keeps
    * the default choice. Only the update order changes, but the order changes
-   * the trajectory, and neither 3 nor 4 has passed the quality checks yet
-   * (coloring.ts, "Quality").
+   * the trajectory (coloring.ts, "Quality"). Here unset is 0; on the GPU
+   * engine unset is 3 (physics-gpu gpuColorMode), and its EngineInfo.variant
+   * lists colorMode whenever it is given, 0 included.
    */
   colorMode?: number;
   /**
