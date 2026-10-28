@@ -3,6 +3,8 @@
   "packages/adapter-rapier/test/host.test.ts": 0.3,
   "packages/adapter-rapier/test/rapier.test.ts": 0.5,
   "packages/adapter-rapier/test/voxel-panic.test.ts": 0.3,
+  "packages/audio/test/options.test.ts": 0.3,
+  "packages/audio/test/tap.test.ts": 0.3,
   "packages/bench/test/run.test.ts": 0.9,
   "packages/engine-api/test/blast.test.ts": 0,
   "packages/engine-api/test/engine-api.test.ts": 0,
@@ -123,9 +125,11 @@
   "packages/viewer/test/e2e-keystone-gpu.test.ts": 190,
   "packages/viewer/test/e2e-keystone.test.ts": 15,
   "packages/viewer/test/e2e-level.test.ts": 18.7,
+  "packages/viewer/test/e2e-sound.test.ts": 25,
   "packages/viewer/test/e2e.test.ts": 180.3,
   "packages/viewer/test/level-file.test.ts": 0.1,
   "packages/viewer/test/level.test.ts": 0,
   "packages/viewer/test/rules.test.ts": 0.1,
+  "packages/viewer/test/sound.test.ts": 0.1,
   "packages/viewer/test/viewer.test.ts": 2.7
 }

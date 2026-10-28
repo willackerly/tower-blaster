@@ -8,7 +8,9 @@
 // every surface (the viewer's own, as no engine has one); see bounceOn and ViewerConfig.bounce;
 // level=L2: a Keystone level instead of a scenario, level.def=<base64url JSON>: a level of your own (level-file.ts),
 // presettle=300: steps run before it shows, see ViewerConfig.level; rules=keystone: play the level by the game's
-// rules, with keystone.hitstop=1 and keystone.slowmo=1 for its pace juice, see ViewerConfig.rules)
+// rules, with keystone.hitstop=1 and keystone.slowmo=1 for its pace juice, see ViewerConfig.rules;
+// snd=1 with snd.* knobs: collision sound, see parseSoundOptions in @tb/audio)
+import { DEFAULT_SOUND, parseSoundOptions, type SoundOptions, writeSoundOptions } from '@tb/audio';
 import { parseSpec } from '@tb/bench';
 import type { BodyDesc, SceneDesc, Vec3 } from '@tb/engine-api';
 import type { EngineKind, PaceFeel } from '@tb/game';
@@ -54,6 +56,8 @@ export interface ViewerConfig {
   look: string;
   /** The real look's knobs that differ from REAL_DEFAULTS (URL keys real.*); kept whatever the look. */
   real: Partial<RealOptions>;
+  /** Collision sound (URL keys snd, snd.*; off by default): applied live, like the look. */
+  sound: SoundOptions;
   /**
    * free (default): physics steps in its own loop, back to back while steps
    * are due, and every frame renders (stepDue, alphaAt). frame: each frame
@@ -163,7 +167,7 @@ export const MAX_PRESETTLE = 6000;
 /** How much faster than the unit world a world at this scale moves (speeds, in cube units per second). */
 export const froudeSpeed = (scale: number) => 1 / Math.sqrt(scale);
 
-export const DEFAULT_CONFIG: ViewerConfig = { engine: 'avbd-gpu', level: null, customLevel: null, scenario: 'S4', params: { N: 2000, F: 4, H: 12 }, seed: 1, sleep: null, autofire: 0, presettle: 0, offscreen: false, look: 'candy', real: {}, loop: 'free', pipeline: true, maxSteps: 1, projectile: DEFAULT_PROJECTILE, scale: 1, substeps: 1, camera: null, view: DEFAULT_FRAMING, bounce: DEFAULT_BOUNCE, rules: 'sandbox', feel: { hitStop: false, slowMo: false } };
+export const DEFAULT_CONFIG: ViewerConfig = { engine: 'avbd-gpu', level: null, customLevel: null, scenario: 'S4', params: { N: 2000, F: 4, H: 12 }, seed: 1, sleep: null, autofire: 0, presettle: 0, offscreen: false, look: 'candy', real: {}, loop: 'free', pipeline: true, maxSteps: 1, projectile: DEFAULT_PROJECTILE, scale: 1, substeps: 1, camera: null, view: DEFAULT_FRAMING, bounce: DEFAULT_BOUNCE, rules: 'sandbox', feel: { hitStop: false, slowMo: false }, sound: DEFAULT_SOUND };
 
 export function parseViewerConfig(search: string): ViewerConfig {
   const q = new URLSearchParams(search);
@@ -230,6 +234,7 @@ export function parseViewerConfig(search: string): ViewerConfig {
     offscreen: q.get('offscreen') === '1',
     look,
     real: parseRealOptions(q),
+    sound: parseSoundOptions(q),
     loop,
     pipeline: pipeline === '1',
     maxSteps,
@@ -311,6 +316,7 @@ export function toSearch(c: ViewerConfig): string {
   if (c.offscreen) q.set('offscreen', '1');
   if (c.look !== DEFAULT_CONFIG.look) q.set('look', c.look);
   writeRealOptions(c.real, q);
+  writeSoundOptions(c.sound, q);
   if (c.loop !== DEFAULT_CONFIG.loop) q.set('loop', c.loop);
   if (c.pipeline !== DEFAULT_CONFIG.pipeline) q.set('pipeline', c.pipeline ? '1' : '0');
   if (c.maxSteps !== DEFAULT_CONFIG.maxSteps) q.set('maxSteps', String(c.maxSteps));
@@ -328,18 +334,18 @@ export function toSearch(c: ViewerConfig): string {
 
 /**
  * A preset's search with how the viewer runs (engine, Bounce included, loop, pipeline,
- * substeps set by hand), the projectile, the look, the framing, Bounce's e and a chosen scale kept (a scale left
+ * substeps set by hand), the projectile, the look, the sound, the framing, Bounce's e and a chosen scale kept (a scale left
  * at the current scenario's default becomes the preset's default), which is
  * where its button takes you (framed afresh: no camera).
  */
-export function presetSearch(preset: string, cur: Pick<ViewerConfig, 'engine' | 'loop' | 'pipeline' | 'maxSteps' | 'projectile'> & Partial<Pick<ViewerConfig, 'look' | 'real' | 'substeps' | 'scale' | 'scenario' | 'level' | 'view' | 'bounce'>>): string {
-  const { engine, loop, pipeline, maxSteps, projectile, look = DEFAULT_CONFIG.look, real = {}, view = DEFAULT_CONFIG.view, bounce = DEFAULT_BOUNCE } = cur;
+export function presetSearch(preset: string, cur: Pick<ViewerConfig, 'engine' | 'loop' | 'pipeline' | 'maxSteps' | 'projectile'> & Partial<Pick<ViewerConfig, 'look' | 'real' | 'substeps' | 'scale' | 'scenario' | 'level' | 'view' | 'bounce' | 'sound'>>): string {
+  const { engine, loop, pipeline, maxSteps, projectile, look = DEFAULT_CONFIG.look, real = {}, view = DEFAULT_CONFIG.view, bounce = DEFAULT_BOUNCE, sound = DEFAULT_SOUND } = cur;
   const next = parseViewerConfig(preset);
   const chosen = cur.scale !== undefined && cur.scenario !== undefined && cur.scale !== defaultScale(cur.scenario, cur.level ?? null);
   const scale = chosen ? cur.scale! : next.scale;
   // Substeps set by hand stay; otherwise the new scale's own.
   const substeps = cur.substeps !== undefined && cur.substeps !== autoSubsteps(cur.scale ?? 1) ? cur.substeps : autoSubsteps(scale);
-  return toSearch({ ...next, engine, loop, pipeline, maxSteps, projectile, look, real, substeps, scale, view, bounce });
+  return toSearch({ ...next, engine, loop, pipeline, maxSteps, projectile, look, real, substeps, scale, view, bounce, sound });
 }
 
 /** Bodies fired balls may add on the engines whose id tables are sized at init (GPU AVBD, the tiers). */
