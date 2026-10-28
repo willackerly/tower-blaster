@@ -49,9 +49,11 @@ export class Driver {
   /** The newest observed state; while aiming, the world as it stands. */
   snapshot!: Snapshot;
   /**
-   * The engine step `snapshot` is of (the steps it holds). Serial, the engine's stepIndex;
-   * pipelined while running, one behind it (step snapshotStep + 1 is already submitted). Input
-   * pushed for step snapshotStep + 1 so applies at the same engine step on either driver.
+   * How many engine steps `snapshot` holds. Serial, the engine's stepIndex; pipelined while
+   * running, one less: the step after the snapshot is already submitted. An event applies at the
+   * first step() whose stepIndex is at least event.step, so input pushed after seeing a snapshot
+   * and stamped snapshotStep + 1 applies at the same step on either driver (stamped
+   * engine.stepIndex it would not: one step later pipelined). keystone-lab driver-step.test.ts.
    */
   snapshotStep = 0;
   private observer!: CpuObserver;
