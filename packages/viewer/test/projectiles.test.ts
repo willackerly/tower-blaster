@@ -87,20 +87,29 @@ describe('real things to throw', () => {
     });
   });
 
-  it('a fired body is no faster than the AVBD broadphase sweeps (0.8 of maxSweep a step), on those engines only', () => {
-    expect(launchSpeedCap(parseViewerConfig(''))).toBe(48);
-    expect(launchSpeedCap(parseViewerConfig('?scenario=S15'))).toBe(48 * 7);
-    expect(launchSpeedCap(parseViewerConfig('?engine=avbd-ref:maxSweep=0.5&substeps=2'))).toBe(48);
-    expect(launchSpeedCap(parseViewerConfig('?engine=avbd-gpu:sweep=false'))).toBe(Infinity);
-    expect(launchSpeedCap(parseViewerConfig('?engine=rapier'))).toBe(Infinity);
-    // A beach ball at real Kapla size would go 641 units/s, 1.9 plank widths a step: capped at 336.
-    const kapla = parseViewerConfig('?scenario=S15&proj=beachball');
-    expect(firedBody(kapla, [0, 0, 0], [1, 0, 0]).body.linVel).toEqual([336, 0, 0]);
-    // The default ball, in any world at its auto substeps, is under the cap (as it always went).
+  it('a real thing leaves no faster than the AVBD broadphase sees it (0.8 of maxSweep plus half its radius a step), on those engines only', () => {
+    expect(launchSpeedCap(parseViewerConfig(''), 0)).toBe(48);
+    expect(launchSpeedCap(parseViewerConfig(''), 1)).toBe(72);
+    expect(launchSpeedCap(parseViewerConfig('?scenario=S15'), 0)).toBe(48 * 7);
+    expect(launchSpeedCap(parseViewerConfig('?engine=avbd-ref:maxSweep=0.5&substeps=2'), 0)).toBe(48);
+    expect(launchSpeedCap(parseViewerConfig('?engine=avbd-gpu:sweep=false'), 0)).toBe(Infinity);
+    expect(launchSpeedCap(parseViewerConfig('?engine=rapier'), 0)).toBe(Infinity);
+    // A cannonball at real Kapla size would go 1,923 units/s, 4.6 plank widths a step, past the
+    // 1-unit sweep by more than its 3-unit radius: capped at 48 * 7 * (1 + 1.5) units/s.
+    const fire = (s: string) => firedBody(parseViewerConfig(s), [0, 0, 0], [1, 0, 0]).body.linVel[0];
+    expect(fire('?scenario=S15&proj=cannonball')).toBeCloseTo(48 * 7 * (1 + 0.07 / 0.0234 / 2), 9);
+    // Every other thing, there and at 1 m cubes, leaves at its own speed.
+    for (const name of PRESET_NAMES) {
+      const r = PROJECTILE_PRESETS[name];
+      expect(fire(`?proj=${name}`)).toBeCloseTo(r.speed, 9);
+      if (name !== 'cannonball') expect(fire(`?scenario=S15&proj=${name}`)).toBeCloseTo(r.speed / 0.0234, 6);
+    }
+    // A ball or cube leaves as set, as it always did, however fast (Will's 80 m/s ball included).
     for (const s of ['', '?scale=0.25', '?scenario=S15']) {
       const c = parseViewerConfig(s);
       expect(firedBody(c, [0, 0, 0], [1, 0, 0]).body.linVel[0]).toBeCloseTo(40 / Math.sqrt(c.scale), 9);
     }
+    expect(fire('?proj.speed=300')).toBe(300);
   });
 
   it('with Bounce on, a thing with its own bounce keeps it; a plain ball takes the scene\'s e', () => {
@@ -115,8 +124,9 @@ describe('real things to throw', () => {
     expect(projectileSummary(DEFAULT_PROJECTILE, parseViewerConfig(''))).toBe('11.5 kg (a cube is 1 kg), 460 kg·m/s');
     expect(projectileSummary(presetProjectile('beachball'), parseViewerConfig(''))).toBe('0.249 kg, 1/9,650 of a 1 m cube of block (2.40 t), 3.73 kg·m/s');
     expect(projectileSummary(presetProjectile('boulder'), parseViewerConfig(''))).toBe('425 t, 177x a 1 m cube of block (2.40 t), 3,400,000 kg·m/s');
-    expect(projectileSummary(presetProjectile('beachball'), parseViewerConfig('?scenario=S15'))).toBe(
-      '0.249 kg, 43.1x a 0.0234 m cube of block (0.00577 kg), 1.96 kg·m/s; launched at 7.86 m/s, the fastest this engine sees at this cube size (more substeps raise it)');
+    expect(projectileSummary(presetProjectile('beachball'), parseViewerConfig('?scenario=S15'))).toBe('0.249 kg, 43.1x a 0.0234 m cube of block (0.00577 kg), 3.73 kg·m/s');
+    expect(projectileSummary(presetProjectile('cannonball'), parseViewerConfig('?scenario=S15'))).toBe(
+      '10.3 kg, 1,790x a 0.0234 m cube of block (0.00577 kg), 203 kg·m/s; launched at 19.6 m/s, the fastest this engine sees at this cube size (more substeps raise it)');
   });
 });
 

@@ -409,15 +409,18 @@ export function scenarioEngineSpec(spec: string, scenario: string): string {
 export const AVBD_ENGINES: ReadonlySet<string> = new Set(['avbd-gpu', 'avbd-ref']);
 
 /**
- * Fastest a fired body may leave the camera in the engine c builds, units/s: as a blast's
- * maxSpeed (DEFAULT_BLAST_MAX_SPEED), 0.8 of what the AVBD broadphase sweeps a step (maxSweep,
- * 1 unit, per 1/(60 substeps) s), so a small fast projectile is not carried past a block
- * between steps. Infinity on the other engines (Rapier, tiered) and with sweep off.
+ * Fastest a real thing (proj=<name>) of this radius may leave the camera in the engine c builds,
+ * units/s. The AVBD broadphase looks maxSweep (1 unit) ahead each physics step, 1/(60 substeps)
+ * s; past that a contact is found late, so the cap keeps a step's travel to 0.8 of maxSweep plus
+ * half the radius (a blast's maxSpeed is the same 0.8, for bodies of any size): the thing is at
+ * most half its radius into a block it was not seen to reach, its centre never past a face. It
+ * binds only in small worlds (the Kapla tower's cannonball). Infinity on the other engines
+ * (Rapier, tiered) and with sweep off.
  */
-export function launchSpeedCap(c: Pick<ViewerConfig, 'engine' | 'substeps'>): number {
+export function launchSpeedCap(c: Pick<ViewerConfig, 'engine' | 'substeps'>, radius: number): number {
   const { name, options } = parseSpec(c.engine);
   if (!AVBD_ENGINES.has(name) || options.sweep === false) return Infinity;
-  return DEFAULT_BLAST_MAX_SPEED * (typeof options.maxSweep === 'number' ? options.maxSweep : 1) * c.substeps;
+  return DEFAULT_BLAST_MAX_SPEED * ((typeof options.maxSweep === 'number' ? options.maxSweep : 1) + radius / 2) * c.substeps;
 }
 
 /**
@@ -434,15 +437,19 @@ export { bounceBody, bounceScene };
 
 /**
  * What a click fires in c's world from origin along the unit vector dir (main.ts fire): the
- * projectile at the world's size, speed and density (worldProjectile), no faster than the engine
- * sweeps (launchSpeedCap); with Bounce on, at Bounce's e unless it has its own (a real thing's,
- * or proj.restitution). colour: a real thing's, for the page to paint it.
+ * projectile at the world's size, speed and density (worldProjectile), a real thing no faster
+ * than the engine sees (firedSpeed); with Bounce on, at Bounce's e unless it has its own (a real
+ * thing's, or proj.restitution). colour: a real thing's, for the page to paint it.
  */
 export function firedBody(c: ViewerConfig, origin: Vec3, dir: Vec3): { body: BodyDesc; colour: WorldProjectile['colour'] } {
   const w = worldProjectile(c.projectile, c.scale, blockDensityOf(c));
-  const body = worldBody({ ...w, speed: Math.min(w.speed, launchSpeedCap(c)) }, origin, dir);
+  const body = worldBody({ ...w, speed: firedSpeed(c, w) }, origin, dir);
   return { body: bounceOn(c.engine) && c.projectile.restitution === undefined ? bounceBody(body, c.bounce) : body, colour: w.colour };
 }
+
+/** The speed w leaves at, units/s: a real thing's capped at launchSpeedCap; a ball or cube's as set, as it always was. */
+export const firedSpeed = (c: ViewerConfig, w: WorldProjectile) =>
+  c.projectile.preset ? Math.min(w.speed, launchSpeedCap(c, boundingRadius(w.shape))) : w.speed;
 
 /**
  * The scene a config runs: the scenario or the level (compileLevel's scene), at Bounce's e while

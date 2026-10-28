@@ -10,7 +10,7 @@ import { buildScenario, SCENARIOS } from '@tb/scenarios';
 import { type CameraPose, type Framing, FRAMING_LIMITS } from './camera.ts';
 import { escapeHtml } from './html.ts';
 import { levelIssues, levelJson, parseLevelDef } from './level-file.ts';
-import { autoSubsteps, AVBD_ENGINES, blockDensityOf, bounceOn, checkKeystone, DEFAULT_BOUNCE, DEFAULT_CONFIG, defaultLook, defaultPresettle, keystoneEngine, launchSpeedCap, levelDef, MAX_PRESETTLE, MAX_SUBSTEPS, type Rules, SCALE_LIMITS, type ViewerConfig, withOption } from './params.ts';
+import { autoSubsteps, AVBD_ENGINES, blockDensityOf, bounceOn, checkKeystone, DEFAULT_BOUNCE, DEFAULT_CONFIG, defaultLook, defaultPresettle, firedSpeed, keystoneEngine, levelDef, MAX_PRESETTLE, MAX_SUBSTEPS, type Rules, SCALE_LIMITS, type ViewerConfig, withOption } from './params.ts';
 import { blastWeight, checkBlast } from '@tb/engine-api';
 import { DEFAULT_GRENADE, FUSES, GRENADE_LIMITS, type GrenadeSpec, isPreset, PRESET_NAMES, PROJECTILE_PRESETS } from '@tb/weapons';
 import { DEFAULT_PROJECTILE, GRENADE_BLAST_KEYS, GRENADE_NUMBERS, parseProjectile, presetProjectile, type Projectile, projectileMass, worldProjectile } from './projectile.ts';
@@ -65,13 +65,13 @@ const times = (x: number) => (x >= 100 ? Number(x.toPrecision(3)).toLocaleString
 /**
  * What the panel says the projectile is in c's world: a real thing's mass against a block's
  * (a cube of the scene's edge, scale m, at blockDensity: the ratio physics sees), a ball's or cube's
- * against a scene cube's 1 kg; and the launch speed when the engine caps it (launchSpeedCap).
+ * against a scene cube's 1 kg; and the launch speed when the engine caps it (firedSpeed).
  */
 export function projectileSummary(p: Projectile, c: ViewerConfig): string {
   const m = projectileMass(p);
   const w = worldProjectile(p, c.scale, blockDensityOf({ ...c, projectile: p }));
-  const cap = launchSpeedCap(c), capped = w.speed > cap;
-  const speed = capped ? p.speed * (cap / w.speed) : p.speed;
+  const fired = firedSpeed({ ...c, projectile: p }, w), capped = fired < w.speed;
+  const speed = p.speed * (fired / w.speed);
   let out: string;
   if (p.preset) {
     const block = blockDensityOf({ ...c, projectile: p }) * c.scale ** 3, r = m / block;
