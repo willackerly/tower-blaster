@@ -1,8 +1,17 @@
 import { describe, expect, it } from 'vitest';
-import { FAST_SCALE, Pacer, SLOWMO_IN, SLOWMO_MAX, SLOWMO_OUT, SLOWMO_SCALE } from '../src/pacing.ts';
+import { FAST_SCALE, Pacer, paceFeel, SLOWMO_IN, SLOWMO_MAX, SLOWMO_OUT, SLOWMO_SCALE } from '../src/pacing.ts';
 
 const DT = 1 / 60, FRAME = 1000 / 60;
 const run = (p: Pacer, frames: number, o = {}) => Array.from({ length: frames }, () => p.stepsThisFrame(FRAME, DT, o));
+
+describe('pace juice', () => {
+  it('is off unless the URL asks for it', () => {
+    expect(paceFeel(new URLSearchParams(''))).toEqual({ hitStop: false, slowMo: false });
+    expect(paceFeel(new URLSearchParams('?keystone.hitstop=1'))).toEqual({ hitStop: true, slowMo: false });
+    expect(paceFeel(new URLSearchParams('?keystone.slowmo=1&keystone.hitstop=1'))).toEqual({ hitStop: true, slowMo: true });
+    expect(paceFeel(new URLSearchParams('?keystone.slowmo=0'))).toEqual({ hitStop: false, slowMo: false });
+  });
+});
 
 describe('Pacer', () => {
   it('runs one step per 60 Hz frame at normal speed and catches up at most two', () => {
