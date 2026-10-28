@@ -30,6 +30,7 @@
   },
   "devDependencies": {
     "@tb/adapter-rapier": "workspace:*",
+    "@tb/audio": "workspace:*",
     "@tb/bench": "workspace:*",
     "@tb/engine-api": "workspace:*",
     "@tb/game": "workspace:*",
