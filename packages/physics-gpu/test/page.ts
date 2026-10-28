@@ -81,6 +81,7 @@ export async function broadphase(c: BroadCase, repeat = 1) {
   const res = {
     n, error: error?.message ?? null,
     written: total[3], required: total[5], indirectGroups: total[0], oracle: oracleExact.length,
+    peak: total[6], overflowSteps: total[7],
     duplicates: got.length - gotKeys.size,
     ordered: got.every((p) => p[0] < p[1]),
     groupedByI,
@@ -91,6 +92,36 @@ export async function broadphase(c: BroadCase, repeat = 1) {
   bp.destroy();
   sb.destroy();
   return res;
+}
+
+/**
+ * One Broadphase over a pile (every pair overlaps) encoded with the first
+ * ns[k] bodies in turn, total read after each: the sticky words 6 and 7
+ * (broadphase.ts) against the per-encode ones. `fresh` is total before any
+ * encode.
+ */
+export async function broadphaseSequence(n: number, maxPairs: number, ns: number[]) {
+  const { centers, radii } = input({ kind: 'pile', n, margin: 0 });
+  const { device } = await sharedDevice();
+  const spheres = new Float32Array(4 * n);
+  for (let i = 0; i < n; i++) spheres.set([centers[3 * i]!, centers[3 * i + 1]!, centers[3 * i + 2]!, radii[i]!], 4 * i);
+  const sb = device.createBuffer({ size: spheres.byteLength, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });
+  device.queue.writeBuffer(sb, 0, spheres);
+  const bp = new Broadphase(device, sb, n, maxPairs);
+  device.pushErrorScope('validation');
+  const fresh = Array.from(new Uint32Array(await readBuffer(device, bp.total)));
+  const after: Array<{ written: number; required: number; peak: number; overflowSteps: number }> = [];
+  for (const m of ns) {
+    const enc = device.createCommandEncoder();
+    bp.encode(enc, m, { cellSize: 1, margin: 0 }); // 2 r + margin, as broadphase() above
+    device.queue.submit([enc.finish()]);
+    const t = new Uint32Array(await readBuffer(device, bp.total));
+    after.push({ written: t[3]!, required: t[5]!, peak: t[6]!, overflowSteps: t[7]! });
+  }
+  const error = await device.popErrorScope();
+  bp.destroy();
+  sb.destroy();
+  return { error: error?.message ?? null, fresh, after };
 }
 
 // ---------- narrowphase ----------
@@ -623,16 +654,21 @@ export async function pairHistory(scene: SceneDesc, steps: number, opts: { pairs
       const m = readStruct(mv, Manifold, k);
       return { a: pv[2 * k]!, b: pv[2 * k + 1]!, count: m.count![0]!, axis: m.axis![0]!, prevSlot: hv[2 * k]!, prevAxis: hv[2 * k + 1]! };
     });
-    return { list, sweep: new Float32Array(sw!), overflow: t[5]! > t[3]! };
+    return { list, sweep: new Float32Array(sw!), overflow: t[5]! > t[3]!, required: t[5]!, sticky: [t[6]!, t[7]!] };
   };
   let wrong = 0, found = 0, missed = 0, axes = 0, checked = 0, axisMismatch = 0, axisTies = 0, presenceMismatch = 0, hinted = 0, overflowSteps = 0, spawnPairs = 0;
+  // The broadphase's sticky words against the running max and count of the per-step ones.
+  let peak = 0, stickyWrong = 0, peakDrops = 0;
   const examples: unknown[] = [];
   let last = (await read()).list;
   for (let s = 0; s < steps; s++) {
     const before = await state();
     e.step();
-    const { list: cur, sweep, overflow } = await read();
+    const { list: cur, sweep, overflow, required, sticky } = await read();
     if (overflow) overflowSteps++;
+    if (required < peak) peakDrops++;
+    peak = Math.max(peak, required);
+    if (sticky[0] !== peak || sticky[1] !== overflowSteps) stickyWrong++;
     spawnPairs += cur.filter((p) => Math.max(p.a, p.b) >= before.length).length;
     // The narrowphase's axis given its hint, against the reference given the same hint.
     for (const p of cur) {
@@ -670,9 +706,18 @@ export async function pairHistory(scene: SceneDesc, steps: number, opts: { pairs
     }
     last = cur;
   }
+  const diagnostics = await e.diagnostics();
+  // init() makes new buffers, so the counters start again from zero.
+  await e.init(scene);
+  const reinit = await e.diagnostics();
+  for (let s = 0; s < 5; s++) e.step();
+  const reinit5 = await e.diagnostics();
   const error = await device.popErrorScope();
   e.dispose();
-  return { error: error?.message ?? null, wrong, found, missed, axes, checked, axisMismatch, axisTies, presenceMismatch, hinted, overflowSteps, spawnPairs, examples };
+  return {
+    error: error?.message ?? null, wrong, found, missed, axes, checked, axisMismatch, axisTies, presenceMismatch, hinted, overflowSteps, spawnPairs, examples,
+    peak, stickyWrong, peakDrops, diagnostics, reinit, reinit5,
+  };
 }
 const NONE_U32 = 0xffffffff;
 

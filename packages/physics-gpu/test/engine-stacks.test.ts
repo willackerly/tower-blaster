@@ -72,6 +72,13 @@ describe('GPU AVBD engine: stacks, towers and impacts', () => {
       expect(r.axisMismatch, JSON.stringify(r.examples)).toBe(0);
       expect(r.axisTies, JSON.stringify(r.examples)).toBeLessThan(1e-3 * r.checked);
       expect(r.presenceMismatch, JSON.stringify(r.examples)).toBeLessThan(1e-3 * r.checked);
+      // The broadphase's sticky counters matched the running max and count of every step's own, and
+      // diagnostics() reports them over the whole run; a new init() starts them from zero.
+      expect(r.stickyWrong).toBe(0);
+      expect(r.diagnostics).toMatchObject({ pairsPeak: r.peak, pairOverflowSteps: r.overflowSteps, steps: 60 });
+      expect(r.reinit).toMatchObject({ pairsPeak: 0, pairOverflowSteps: 0, steps: 0 });
+      expect(r.reinit5.steps).toBe(5);
+      expect(r.reinit5.pairsPeak).toBeGreaterThan(0);
     };
     // A collapse, so pairs appear, vanish and change slots between steps.
     // 2026-10-25, after the friction fix: 12.3k pairs found, 254 where the
@@ -79,6 +86,11 @@ describe('GPU AVBD engine: stacks, towers and impacts', () => {
     const collapse = await call('pairHistory', knock(0), 60);
     ok(collapse);
     expect(collapse.found).toBeGreaterThan(5000);
+    // The collapse needs fewer pairs on some steps than before them (so a counter that kept the last count
+    // would differ from the peak), and never more than the buffer holds.
+    expect(collapse.peakDrops).toBeGreaterThan(0);
+    expect(collapse.overflowSteps).toBe(0);
+    expect(collapse.diagnostics.pairsPeak).toBeLessThanOrEqual(collapse.diagnostics.maxPairs);
     expect(collapse.axes).toBeGreaterThan(3000);
     expect(collapse.hinted).toBeGreaterThan(50);
     // The ball spawned mid-run, 0.2 m from the tower so it has (speculative)
@@ -93,6 +105,8 @@ describe('GPU AVBD engine: stacks, towers and impacts', () => {
     const overflow = await call('pairHistory', knock(0), 60, { pairsPerBody: 3 });
     ok(overflow);
     expect(overflow.overflowSteps).toBe(60);
+    expect(overflow.diagnostics.pairsPeak).toBeGreaterThan(overflow.diagnostics.maxPairs);
+    expect(overflow.reinit5.pairOverflowSteps).toBe(5);
     expect(overflow.found).toBeGreaterThan(1000);
   }, 180_000);
 
