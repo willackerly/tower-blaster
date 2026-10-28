@@ -8,7 +8,7 @@
 import { type BodyDesc, type InputEvent, type PhysicsEngine, spawnedBodies, type Vec3 } from '@tb/engine-api';
 import { type AmmoKind, type CompiledLevel, compileLevel, Driver, type Feedback, type LevelDef, type LevelScore, type PerStep, runSession, type Shot, shotToSpawn, snapshotHash, TIER_NAMES } from '@tb/keystone';
 import { Window } from '@tb/metrics';
-import { clampPitch, eyeOf, frame, HORIZON_PITCH, type Orbit, rayThrough, viewProj } from '@tb/render/camera';
+import { clampPitch, EYE_ABOVE_GROUND, eyeOf, frame, type Orbit, rayThrough, viewProj } from '@tb/render/camera';
 import type { PixelStats, Renderer, SnapshotSource } from '@tb/render';
 import { type Aimed, azFromYaw, pick, previewBeads, shotFor, SUBSTEPS } from './aim.ts';
 import { Synth, type Voice, voicesFor } from './audio.ts';
@@ -141,8 +141,8 @@ export interface KeystoneEnv {
   perStep?(c: CompiledLevel): PerStep;
 }
 
-/** Frame the structure; face the par line's launcher when it has one. */
-function viewOf(c: CompiledLevel): Orbit {
+/** Frame the structure; face the par line's launcher when it has one. The eye stays EYE_ABOVE_GROUND over the ground (y 0), as in the viewer. */
+export function viewOf(c: CompiledLevel): Orbit {
   const min: Vec3 = [Infinity, 0, Infinity], max: Vec3 = [-Infinity, c.height, -Infinity];
   for (let i = 0; i < c.meta.n; i++) for (const k of [0, 2] as const) {
     min[k] = Math.min(min[k], c.meta.home[3 * i + k]! - c.meta.half[3 * i + k]! - 1);
@@ -151,7 +151,13 @@ function viewOf(c: CompiledLevel): Orbit {
   const o = frame(min, max);
   const first = c.def.solutions?.par?.[0];
   if (first && 'az' in first) o.yaw = ((90 - first.az / 2) * Math.PI) / 180;
-  return o;
+  return { ...o, floor: EYE_ABOVE_GROUND };
+}
+
+/** An orbiting drag of (dx, dy) pixels: turns, and tilts from looking down to looking up (past level the floor brings the eye in). */
+export function orbitDrag(o: Orbit, dx: number, dy: number): void {
+  o.yaw -= dx * 0.005;
+  o.pitch = clampPitch(o.pitch + dy * 0.005);
 }
 
 /** Typing into a form field (the viewer's panels) is not a game key. */
@@ -431,8 +437,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
       const s = orbit.distance * 0.0015, cy = Math.cos(orbit.yaw), sy = Math.sin(orbit.yaw);
       orbit.target = [orbit.target[0] - dx * cy * s, orbit.target[1] + dy * s, orbit.target[2] + dx * sy * s];
     } else {
-      orbit.yaw -= dx * 0.005;
-      orbit.pitch = clampPitch(orbit.pitch + dy * 0.005, HORIZON_PITCH);
+      orbitDrag(orbit, dx, dy);
     }
   });
   canvas.addEventListener('pointerup', (e) => {

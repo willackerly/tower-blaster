@@ -138,7 +138,7 @@ export function frameFromGround(min: V3, max: V3, f: Framing, eye: number, groun
 /** Pitch limit either way, radians (83 degrees): short of straight down or up, where yaw loses its meaning. */
 export const MAX_PITCH = 1.45;
 
-/** The lowest pitch before looking up was allowed: just above level. The game, which sets no floor, still drags only down to it. */
+/** The lowest pitch before looking up was allowed: just above level (clampPitch(p, HORIZON_PITCH) for a camera with no floor). */
 export const HORIZON_PITCH = 0.02;
 
 /** Pitch as dragging keeps it: from looking up at MAX_PITCH (eye below the target), or from min, to looking down at MAX_PITCH. */
