@@ -7,7 +7,7 @@
 // shown as sim speed. rules=keystone hands the page to the game's loop (@tb/game
 // playKeystone; keystoneMode below), with the panel kept.
 import { makeEngine, parseSpec } from '@tb/bench';
-import { type BodyDesc, type EngineInfo, type InputEvent, type PhysicsEngine, type Snapshot, spawnedBodies } from '@tb/engine-api';
+import { type BodyDesc, type EngineHealth, type EngineInfo, type InputEvent, limitsHit, type PhysicsEngine, type Snapshot, spawnedBodies } from '@tb/engine-api';
 import { boundingRadius } from '@tb/geom';
 import { DEFAULT_AVBD } from '@tb/physics-ref';
 import { GAME_HELP, gameOverlays, playLine, type GameHandle, installGameStyles, newGameHandle, playKeystone, structureTints } from '@tb/game';
@@ -15,6 +15,7 @@ import { AVBD_GAP_SLOP, AVBD_ITERATIONS, compileLevel, type Driver, LEVELS, type
 import { clampPitch, frame, rayThrough, viewProj, eyeOf, orbitAt, poseOf, type CameraPose, type Orbit } from './camera.ts';
 import { alphaAt, newArrivals, newClock, newPacer, pauseLatch, runFree, stepsDue, taskYield, trackSimSpeed, Window } from './loop.ts';
 import type { V3 } from './math.ts';
+import { HEALTH_MS, limitsHtml } from './health.ts';
 import { escapeHtml } from './html.ts';
 import { bounceBody, bounceOn, engineSpec, froudeSpeed, keystoneEngine, levelOf, parseViewerConfig, presetSearch, scenarioEngineSpec, sceneTitle, toSearch, type ViewerConfig, viewerScene, withOption, worldEngineSpec } from './params.ts';
 import { projectileBody, projectileShape, pushRadiusLimit, worldGrenade } from './projectile.ts';
@@ -74,6 +75,12 @@ interface ViewerHandle {
   tinted: number;
   /** The running engine's EngineInfo.variant (its params as built: Bounce's restitution, a world scale's scaling). */
   variant: EngineInfo['variant'];
+  /**
+   * The running engine's limits as last read (PhysicsEngine.health, about every HEALTH_MS after a
+   * snapshot): null for an engine without health(), until the first read after each load, and
+   * under rules=keystone (the game's loop runs the engine there).
+   */
+  health: EngineHealth | null;
   /** Where the camera is now. */
   camera(): CameraPose;
   /** Fire a ball through normalized device coords (0, 0 = centre). */
@@ -99,7 +106,7 @@ const GRENADE_LOOKAHEAD = 4;
 const canvas = document.getElementById('c') as HTMLCanvasElement;
 const hud = document.getElementById('hud')!;
 const errorBox = document.getElementById('error')!;
-const handle: ViewerHandle = { status: 'loading', frames: 0, bodies: 0, awake: 0, stepIndex: 0, msPerStep: NaN, snapMs: NaN, resets: 0, overlapped: 0, tinted: 0, variant: {}, camera: () => ({ target: [0, 0, 0], yaw: 0, pitch: 0, distance: 1 }), fire: () => {}, capture: async () => null, inputs: [], game: null, inputHook: null };
+const handle: ViewerHandle = { status: 'loading', frames: 0, bodies: 0, awake: 0, stepIndex: 0, msPerStep: NaN, snapMs: NaN, resets: 0, overlapped: 0, tinted: 0, variant: {}, health: null, camera: () => ({ target: [0, 0, 0], yaw: 0, pitch: 0, distance: 1 }), fire: () => {}, capture: async () => null, inputs: [], game: null, inputHook: null };
 window.__viewer = handle;
 
 function fail(e: unknown) {
@@ -213,6 +220,8 @@ async function main() {
   let inputHook: InputHook | null = null;
   // This load's fired grenades, waiting on their fuses (proj.weapon=grenade).
   let grenades: Grenades | null = null;
+  // The engine's limits (handle.health), read at most every HEALTH_MS and one read at a time.
+  let healthAt = -Infinity, healthBusy = false;
 
   async function reset() {
     resetting = true;
@@ -257,6 +266,8 @@ async function main() {
     config = want;
     scene = next;
     handle.variant = engine.info.variant;
+    handle.health = null;
+    healthAt = -Infinity;
     events = [...scene.inputs];
     shapes = [...scene.bodies];
     source.reset(scene.bodies);
@@ -278,17 +289,26 @@ async function main() {
     apply(s, t0, engine.stepIndex);
   }
 
+  /** Rebuild the scene and engine at next, between frames (resetNote is shown after). */
+  function rebuild(next: ViewerConfig, note = '') {
+    // Keystone's rules run the game's loop in place of this one: a page load.
+    if (next.rules === 'keystone') {
+      location.search = toSearch(next);
+      return;
+    }
+    nextConfig = next;
+    if (note) resetNote = note;
+    resetAsked = true;
+  }
+  // The HUD's fix button (limitsHtml): the engine spec that gives the limit room.
+  hud.addEventListener('click', (e) => {
+    const fix = (e.target as HTMLElement).closest<HTMLElement>('button[data-fix]')?.dataset.fix;
+    if (fix && !resetting && !resetAsked) rebuild({ ...config, engine: fix }, `Rebuilt with ${fix}`);
+  });
+
   const controls = mountControls(document.getElementById('controls')!, {
     config: () => config,
-    rebuild(next) {
-      // Keystone's rules run the game's loop in place of this one: a page load.
-      if (next.rules === 'keystone') {
-        location.search = toSearch(next);
-        return;
-      }
-      nextConfig = next;
-      resetAsked = true;
-    },
+    rebuild: (next) => rebuild(next),
     setLook(look, real) {
       // Shading only: live, nothing to rebuild. A queued rebuild keeps it too.
       config = { ...config, look, real };
@@ -380,8 +400,29 @@ async function main() {
     const step = engine.stepIndex;
     const s = await engine.snapshot();
     apply(s, done ? Math.max(t0, await done) : t0, step);
+    pollHealth();
     return performance.now();
   };
+  /**
+   * Read the engine's limits now and then (HEALTH_MS), after a snapshot so never inside a step's
+   * timing; not awaited. A read for an engine a reset has since replaced is dropped. A limit hit
+   * for the first time redraws the HUD at once.
+   */
+  function pollHealth() {
+    const now = performance.now();
+    const e = engine, read = e.health?.bind(e);
+    if (!read || healthBusy || now - healthAt < HEALTH_MS) return;
+    const wasHit = limitsHit(handle.health).length > 0;
+    healthAt = now;
+    healthBusy = true;
+    read().then((h) => {
+      if (e !== engine) return;
+      handle.health = h;
+      if (!wasHit && limitsHit(h).length) drawHud();
+    }, (err: unknown) => {
+      if (e === engine) notice = `engine limits: ${err instanceof Error ? err.message : String(err)}`;
+    }).finally(() => { healthBusy = false; });
+  }
   /** Push input as a fired projectile is: into the engine, and in application order (stable by step) into events. */
   function pushInput(evs: InputEvent[]) {
     engine.push(evs);
@@ -482,7 +523,7 @@ async function main() {
       <div class="row"><span>fps</span><span>${fmt(fps)}</span></div>
       <div class="row"><span>sim speed</span><span class="${clock.simSpeed < 0.95 ? 'warn' : ''}">${(clock.simSpeed * 100).toFixed(0)}%</span></div>
       <div class="row"><span>snapshot + upload</span><span>${fmt(handle.snapMs)} ms</span></div>
-      <div class="row muted"><span>budget</span><span>7.5 ms/step</span></div>
+      <div class="row muted"><span>budget</span><span>7.5 ms/step</span></div>${handle.health ? `\n      ${limitsHtml(handle.health, config.engine)}` : ''}
       <div class="muted">${escapeHtml(adapter.info.vendor)} ${escapeHtml(adapter.info.architecture)}${paused ? ' · <b>paused</b>' : ''}</div>${notice ? `\n      <div class="warn">${escapeHtml(notice)}</div>` : ''}`;
   }
 
