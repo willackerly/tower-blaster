@@ -4,7 +4,7 @@
 import { readFileSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { emptySnapshot, TAG_BALL, type BodyDesc } from '@tb/engine-api';
+import { emptySnapshot, TAG_BALL, type BodyDesc, type SpawnEvent } from '@tb/engine-api';
 import { buildScenario } from '@tb/scenarios';
 import { Body, readStruct, Shape, TIER } from '@tb/schema';
 import { RapierHost } from '@tb/adapter-rapier';
@@ -37,7 +37,7 @@ describe('looks', () => {
 describe('packBodies / packShapes', () => {
   it('write the schema layouts, slot i = body i', () => {
     const scene = buildScenario('S5', { N: 64, F: 2, H: 4, fireStep: 0 });
-    const descs: BodyDesc[] = [...scene.bodies, scene.inputs[0]!.body];
+    const descs: BodyDesc[] = [...scene.bodies, (scene.inputs[0] as SpawnEvent).body];
     const s = emptySnapshot(descs.length);
     descs.forEach((b, i) => { s.pos.set(b.pos, 3 * i); s.rot.set(b.rot, 4 * i); s.linVel.set([i, 0, 0], 3 * i); s.awake[i] = i % 2; });
     const view = new DataView(packBodies(s, descs));

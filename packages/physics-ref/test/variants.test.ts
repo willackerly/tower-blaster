@@ -4,7 +4,7 @@
 // restitution bounces points, gapSlop excuses loaded gaps, the lattice modes
 // colour the scenes differently from the default).
 import { describe, expect, it } from 'vitest';
-import type { SceneDesc } from '@tb/engine-api';
+import type { SceneDesc, SpawnEvent } from '@tb/engine-api';
 import { buildScenario } from '@tb/scenarios';
 import { type AvbdParams, AvbdReferenceEngine, AvbdWorld, DEFAULT_AVBD } from '../src/index.ts';
 
@@ -19,7 +19,7 @@ function run(scene: SceneDesc, steps: number, params: Partial<AvbdParams>) {
   const states: Float64Array[] = [], colours: number[][] = [];
   let records = 0, bounced = 0, slopped = 0;
   for (let s = 0; s < steps; s++) {
-    while (pending.length && pending[0]!.step <= s) w.add(pending.shift()!.body);
+    while (pending.length && pending[0]!.step <= s) w.add((pending.shift() as SpawnEvent).body);
     w.step();
     colours.push([...w.stats.colorOf!]);
     records = Math.max(records, w.records.length);
@@ -40,7 +40,7 @@ describe('the opt-in variants together: records, the lattice colouring, restitut
   const tower = buildScenario('S1', { F: 3, H: 6, gap: 0 }, 1);
   const knock = buildScenario('S5', { N: 64, F: 2, H: 8, street: 2, fireStep: 0, radius: 0.6, speed: 15 }, 1);
   // The same with restitution (every cube's e 0.5, the ball's 0.8), so the restitution pass bounces points.
-  const bouncy = { ...knock, bodies: knock.bodies.map((b) => ({ ...b, restitution: 0.5 })), inputs: knock.inputs.map((e) => ({ ...e, body: { ...e.body, restitution: 0.8 } })) };
+  const bouncy = { ...knock, bodies: knock.bodies.map((b) => ({ ...b, restitution: 0.5 })), inputs: knock.inputs.map((e) => (e.kind === 'spawn' ? { ...e, body: { ...e.body, restitution: 0.8 } } : e)) };
   it.for([
     ['records 2, S13 20-cube column at 20 iterations', buildScenario('S13', { H: 20, deg: 4 }, 1), 80, { iterations: 20, records: 2 }],
     ['records 2, a ball into two towers (rolling contacts)', knock, 30, { iterations: 6, records: 2 }],

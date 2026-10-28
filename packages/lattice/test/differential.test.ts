@@ -1,3 +1,4 @@
+import { spawnedBodies } from '@tb/engine-api';
 // The tiered engine against plain Rapier (every cube dynamic) on the same
 // ball shot. The reference starts from a packed tower that never settles,
 // so individual cubes differ; the aggregate outcome must not.
@@ -49,7 +50,7 @@ describe('tiered vs all-dynamic Rapier, ball into a 1,600-cube tower', () => {
     // the reference (the ground pushes only vertically). Any momentum a
     // dormant cell absorbs while it is still static is lost.
     const scene = buildScenario('S5', { N: 1600 }, 1);
-    for (const b of [...scene.bodies, ...scene.inputs.map((ev) => ev.body)]) b.friction = 0;
+    for (const b of [...scene.bodies, ...spawnedBodies(scene.inputs)]) b.friction = 0;
     scene.ground!.friction = 0;
     const test = await trace(new TieredEngine(new RapierHost()), scene, 150);
     const p0 = 200; // ball: mass 10 at 20 m/s

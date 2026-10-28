@@ -7,7 +7,7 @@
 // shown as sim speed. rules=keystone hands the page to the game's loop (@tb/game
 // playKeystone; keystoneMode below), with the panel kept.
 import { makeEngine, parseSpec } from '@tb/bench';
-import { type BodyDesc, type EngineInfo, type InputEvent, type PhysicsEngine, type Snapshot } from '@tb/engine-api';
+import { type BodyDesc, type EngineInfo, type InputEvent, type PhysicsEngine, type Snapshot, spawnedBodies } from '@tb/engine-api';
 import { boundingRadius } from '@tb/geom';
 import { DEFAULT_AVBD } from '@tb/physics-ref';
 import { GAME_HELP, gameOverlays, type GameHandle, installGameStyles, newGameHandle, playKeystone, structureTints } from '@tb/game';
@@ -16,7 +16,7 @@ import { clampPitch, frame, rayThrough, viewProj, eyeOf, orbitAt, poseOf, type C
 import { alphaAt, newArrivals, newClock, newPacer, pauseLatch, runFree, stepsDue, taskYield, trackSimSpeed, Window } from './loop.ts';
 import type { V3 } from './math.ts';
 import { escapeHtml } from './html.ts';
-import { bounceBody, bounceOn, engineSpec, froudeSpeed, keystoneEngine, levelOf, parseViewerConfig, presetSearch, sceneTitle, toSearch, type ViewerConfig, viewerScene, withOption, worldEngineSpec } from './params.ts';
+import { bounceBody, bounceOn, engineSpec, froudeSpeed, keystoneEngine, levelOf, parseViewerConfig, presetSearch, scenarioEngineSpec, sceneTitle, toSearch, type ViewerConfig, viewerScene, withOption, worldEngineSpec } from './params.ts';
 import { projectileBody, projectileShape, pushRadiusLimit } from './projectile.ts';
 import { mountControls } from './controls.ts';
 import { createDevice } from '@tb/gpu';
@@ -50,7 +50,7 @@ const GPU_ITERATIONS = [10, 20, 40];
 const KEYSTONE_AVBD = { iterations: AVBD_ITERATIONS, gapSlop: AVBD_GAP_SLOP } as const;
 const keystoneAvbd = (spec: string) => withOption(withOption(spec, 'iterations', KEYSTONE_AVBD.iterations), 'gapSlop', KEYSTONE_AVBD.gapSlop);
 
-const viewerEngine = (c: ViewerConfig): PhysicsEngine => makeEngine(worldEngineSpec(engineSpec(c.engine, c.projectile), c.scale));
+const viewerEngine = (c: ViewerConfig): PhysicsEngine => makeEngine(worldEngineSpec(engineSpec(scenarioEngineSpec(c.engine, c.scenario), c.projectile), c.scale));
 
 interface ViewerHandle {
   status: 'loading' | 'running' | 'error';
@@ -121,22 +121,25 @@ function presets(current: string) {
     b.onclick = () => { location.search = toSearch({ ...parseViewerConfig(location.search), engine: e.spec }); };
     box.appendChild(b);
   }
-  const { name, options } = parseSpec(config.engine);
+  const { name } = parseSpec(config.engine);
   if (name === 'avbd-gpu' && !keystone) {
+    // The scenario's own options (ScenarioDef.avbd) are its defaults: its count's button clears the option, and the buttons light up for what runs.
+    const own = Number(parseSpec(scenarioEngineSpec('avbd-gpu', config.scenario)).options.iterations ?? DEFAULT_AVBD.iterations);
+    const runs = parseSpec(scenarioEngineSpec(config.engine, config.scenario)).options;
     for (const n of GPU_ITERATIONS) {
       const b = document.createElement('button');
       b.textContent = `${n} iterations`;
-      if ((options.iterations ?? DEFAULT_AVBD.iterations) === n) b.className = 'on';
+      if ((runs.iterations ?? own) === n) b.className = 'on';
       b.onclick = () => {
         const c = parseViewerConfig(location.search);
-        location.search = toSearch({ ...c, engine: withOption(c.engine, 'iterations', n === DEFAULT_AVBD.iterations ? undefined : n) });
+        location.search = toSearch({ ...c, engine: withOption(c.engine, 'iterations', n === own ? undefined : n) });
       };
       box.appendChild(b);
     }
     const k = document.createElement('button');
     k.textContent = 'Keystone settings';
     k.title = `${KEYSTONE_AVBD.iterations} iterations and gapSlop ${KEYSTONE_AVBD.gapSlop}: what the game plays and pins par lines at`;
-    if (Number(options.iterations) === KEYSTONE_AVBD.iterations && Number(options.gapSlop) === KEYSTONE_AVBD.gapSlop) k.className = 'on';
+    if (Number(runs.iterations) === KEYSTONE_AVBD.iterations && Number(runs.gapSlop) === KEYSTONE_AVBD.gapSlop) k.className = 'on';
     k.onclick = () => {
       const c = parseViewerConfig(location.search);
       location.search = toSearch({ ...c, engine: keystoneAvbd(c.engine) });
@@ -315,7 +318,10 @@ async function main() {
   handle.camera = () => poseOf(orbit);
 
   function shapesFor(count: number): BodyDesc[] {
-    while (shapes.length < count) shapes.push(events[shapes.length - scene.bodies.length]!.body);
+    if (shapes.length < count) {
+      const spawned = spawnedBodies(events);
+      while (shapes.length < count) shapes.push(spawned[shapes.length - scene.bodies.length]!);
+    }
     return shapes;
   }
 

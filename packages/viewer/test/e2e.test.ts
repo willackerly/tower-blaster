@@ -1,5 +1,6 @@
 // The viewer in headless Chromium: it boots, renders a non-blank scene,
 // steps physics, and a fired ball becomes a new body. SwiftShader in CI.
+import type { SpawnEvent } from '@tb/engine-api';
 import { describe, expect, it } from 'vitest';
 import { requireWebGPU } from '@tb/testkit';
 import { readFileSync, writeFileSync } from 'node:fs';
@@ -121,7 +122,7 @@ describe('viewer', () => {
     expect(await proj.locator('.out').innerText()).toMatch(/^200 kg, 3\.00e\+3 kg·m\/s/);
     await page.evaluate(() => window.__viewer.fire(0, 0));
     await page.waitForFunction(() => window.__viewer.bodies === 49, undefined, { timeout: 30_000 });
-    const fired = await page.evaluate(() => window.__viewer.inputs[0]!.body);
+    const fired = await page.evaluate(() => (window.__viewer.inputs[0] as SpawnEvent).body);
     expect(fired.shape).toEqual({ kind: 'box', half: [1.5, 1.5, 1.5] });
     expect(Math.hypot(...fired.linVel)).toBeCloseTo(15, 9);
     expect(fired.density * 27).toBeCloseTo(200, 9);
@@ -188,7 +189,7 @@ describe('viewer', () => {
     const firedSpeed = async (bodies: number) => {
       await page.evaluate(() => window.__viewer.fire(0, 0));
       await page.waitForFunction((n) => window.__viewer.bodies === n, bodies, { timeout: 30_000 });
-      return page.evaluate(() => Math.hypot(...window.__viewer.inputs.at(-1)!.body.linVel));
+      return page.evaluate(() => Math.hypot(...(window.__viewer.inputs.at(-1) as SpawnEvent).body.linVel));
     };
     const unit = await firedSpeed(55);
     await page.locator('#controls summary').click();
