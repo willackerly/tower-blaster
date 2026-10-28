@@ -8,6 +8,7 @@ import { HAZY_DAY, lookByName, parseRealOptions, Renderer, SnapshotSource } from
 import { engineKind } from './engines.ts';
 import { paceFeel } from './pacing.ts';
 import { type GameHandle, newGameHandle, playKeystone } from './play.ts';
+import { GAME_HELP, installGameStyles } from './ui.ts';
 
 declare global { interface Window { __game: GameHandle } }
 
@@ -15,6 +16,8 @@ const $ = (id: string) => document.getElementById(id)!;
 const canvas = $('c') as HTMLCanvasElement, errorEl = $('error');
 const handle = newGameHandle();
 window.__game = handle;
+installGameStyles();
+$('help').innerHTML = GAME_HELP;
 
 function fail(e: unknown) {
   const msg = e instanceof Error ? e.message : String(e);
