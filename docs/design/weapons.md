@@ -20,6 +20,13 @@ A    = a quarter of the body's surface (its mean silhouette): 2 (hx hy + hy hz +
 - Implemented by the reference, the GPU engine (`packages/physics-gpu/src/blast.ts`: one dispatch on steps that have blasts, none otherwise) and Rapier. `TieredEngine` refuses blasts until it wakes dormant cells in the radius (`wakeSphere` exists).
 - Tests: `@tb/testkit`'s `blast.ts` is one shared case (bodies in free flight around the centre, a spawn before and after the blast, an excluded id, and a second blast in the same step centred on a moving body with an offset and a speed cap); every engine must change exactly the velocities `blastKick` gives and leave every other body bit-identical (reference to 1e-12, Rapier and GPU to 1e-5 relative). The GPU also blasts a 6 x 4 x 6 block of cubes against the reference.
 
+**Grenades** (`packages/weapons/src/grenade.ts`, `@tb/weapons`): pure logic over snapshots. The caller fires the grenade's spawn, tells `Grenades.launch` about it and feeds `Grenades.observe` the states it reads; both return the blasts to push (centred on the grenade, excluding it).
+
+- Fuses: `timer` (due `delay` s after the spawn, known at launch, no observation needed), `prox` (the first step whose state has the grenade within `prox` of another body's surface or the ground, after `arm` s), `proxTimer` (`delay` s after that).
+- Proximity is decided from observed state k and is due at k + 1 at the soonest, so a pipelined reader lands it at the same engine step as a serial one. `observe` looks `lookahead` steps ahead along the grenade's exact free-flight path (`freeFlight`), with the other bodies where state k has them, and a trigger predicted for step j is due at j. So a reader observing every step with lookahead 1 and one observing every 4 steps with lookahead >= 4 detonate at the same step, bit for bit, while nothing near the path moves much (`packages/weapons/test/grenade.test.ts`, on the reference engine).
+- Distance is exact to spheres and oriented boxes, with the grenade taken as its bounding sphere. A coarse cull against the bounding sphere of the predicted path keeps the cost at one distance per body for the far ones.
+- `DEFAULT_GRENADE` is deliberately strong: radius 5, impulse 40 per m^2, flat core of 0.2 radius, so a 1 kg scene cube within 3 m gets the full 25 m/s.
+
 ## Known limits of the v1 blast
 
 | Limit | Consequence | Fix (planned step) |
@@ -32,7 +39,7 @@ A    = a quarter of the body's surface (its mean silhouette): 2 (hx hy + hy hz +
 ## Plan (each step lands with its tests)
 
 1. **Blast event** (done, #90).
-2. **Grenade in the viewer**. 2a (done): body-centred blasts and the final-speed cap in all three engines. 2b: `proj=grenade` with timer and proximity fuses, blast centred on the grenade (`centre: { body }`), configurable from the Scene panel and URL. Proximity in free flight is predicted exactly at fire time (`freeFlight`); otherwise it is evaluated on the observed step k and stamped k + 1, which applies at the same engine step on serial and pipelined read-back.
+2. **Grenade in the viewer**. 2a (done): body-centred blasts and the final-speed cap in all three engines. 2b-i (done): fuses as pure logic in `@tb/weapons`. 2b-ii: `proj.weapon=grenade` in the viewer, with timer and proximity fuses, blast centred on the grenade (`centre: { body }`), configurable from the Scene panel and URL. Proximity in free flight is predicted exactly at fire time (`freeFlight`); otherwise it is evaluated on the observed step k and stamped k + 1, which applies at the same engine step on serial and pipelined read-back.
 3. **Remove event** (tombstones) in all engines and the renderer; the grenade is consumed.
 4. **`@tb/weapons`**: a pure-data `WeaponSpec` (shell, rules of trigger -> actions, named child munitions as a tree of depth <= 3), a validator, a static body budget, and a deterministic runtime that turns observations into input events. Loaded from the viewer's scene file (`weapons` section, `projectile.weapon`).
 5. **Relative spawn** (split, duplicate, emit, fireworks): children placed in the parent's frame from its live state, momentum-conserving spreads, batched buffer writes.
