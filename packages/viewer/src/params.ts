@@ -12,11 +12,11 @@
 // keystone.shots=<line> to play on load, see ViewerConfig.shots)
 import { parseSpec } from '@tb/bench';
 import type { BodyDesc, SceneDesc, Vec3 } from '@tb/engine-api';
-import type { EngineKind, PaceFeel } from '@tb/game';
+import { checkLine, type EngineKind, GAME_LOOK, gameLevel, lineOf, lookName, paceFeel, type PaceFeel } from '@tb/game';
 import { boundingRadius } from '@tb/geom';
-import { AVBD_ITERATIONS, compileLevel, LEVELS, type LevelDef, PRESETTLE_STEPS, readShots, type Shot, writeShots } from '@tb/keystone';
+import { AVBD_ITERATIONS, compileLevel, LEVELS, type LevelDef, PRESETTLE_STEPS, type Shot, writeShots } from '@tb/keystone';
 import { type AvbdParams, froudeParams } from '@tb/physics-ref';
-import { LOOKS, parseRealOptions, type RealOptions, writeRealOptions } from '@tb/render';
+import { parseRealOptions, type RealOptions, writeRealOptions } from '@tb/render';
 import { bounceBody, bounceScene, buildScenario, SCENARIOS } from '@tb/scenarios';
 import { type CameraPose, DEFAULT_FRAMING, type Framing, FRAMING_LIMITS } from './camera.ts';
 import { decodeLevelParam, encodeLevelParam } from './level-file.ts';
@@ -125,6 +125,10 @@ export interface ViewerConfig {
 export const DEFAULT_BOUNCE = 0.5;
 
 export const RULES = ['sandbox', 'keystone'] as const;
+/** Keys that only mean something under rules=keystone (the game page's). */
+export const KEYSTONE_KEYS = ['keystone.hitstop', 'keystone.slowmo', 'keystone.shots'] as const;
+/** The look when ?look= is absent: the sandbox's candy, or the game's own under its rules. */
+export const defaultLook = (rules: Rules) => (rules === 'keystone' ? GAME_LOOK : DEFAULT_CONFIG.look);
 export type Rules = (typeof RULES)[number];
 
 /** scale's accepted range, and the most substeps. */
@@ -189,16 +193,15 @@ export function parseViewerConfig(search: string): ViewerConfig {
     customLevel = decodeLevelParam(q.get('level.def')!);
     level = customLevel.id;
   } else if (q.has('level')) {
-    const def = levelDef(q.get('level')!);
-    if (!def) throw new Error(`unknown level ${q.get('level')}; known: ${LEVELS.map((l) => l.id).join(', ')}`);
-    level = def.id;
+    level = gameLevel(q.get('level')!).id;
   }
   if (level && (q.has('scenario') || hasParams || q.has('seed'))) throw new Error('level takes no scenario, param.* or seed: the level is the scene');
   const sleep = q.get('sleep');
   const maxSteps = Number(q.get('maxSteps') ?? DEFAULT_CONFIG.maxSteps);
   if (!Number.isInteger(maxSteps) || maxSteps < 1 || maxSteps > MAX_STEPS_LIMIT) throw new Error(`maxSteps must be an integer from 1 to ${MAX_STEPS_LIMIT}: ${q.get('maxSteps')}`);
-  const look = q.get('look') ?? DEFAULT_CONFIG.look;
-  if (!LOOKS[look]) throw new Error(`unknown look ${look}; known: ${Object.keys(LOOKS).join(', ')}`);
+  const rules = (q.get('rules') ?? 'sandbox') as Rules;
+  if (!RULES.includes(rules)) throw new Error(`rules must be ${RULES.join(' or ')}: ${q.get('rules')}`);
+  const look = lookName(q.get('look') ?? defaultLook(rules));
   // maxSteps is a frame-loop option, so a URL that sets it without a loop keeps meaning what it did before loop=free.
   const loop = q.get('loop') ?? (q.has('maxSteps') ? 'frame' : DEFAULT_CONFIG.loop);
   if (loop !== 'free' && loop !== 'frame') throw new Error(`loop must be free or frame: ${loop}`);
@@ -214,22 +217,14 @@ export function parseViewerConfig(search: string): ViewerConfig {
   if (!Number.isInteger(presettle) || presettle < 0 || presettle > MAX_PRESETTLE) throw new Error(`presettle must be a whole number of steps from 0 to ${MAX_PRESETTLE}: ${q.get('presettle')}`);
   const bounce = Number(q.get('bounce.e') ?? DEFAULT_BOUNCE);
   if (!(bounce >= 0 && bounce <= 1) || q.get('bounce.e') === '') throw new Error(`bounce.e must be a number from 0 to 1: ${q.get('bounce.e')}`);
-  const rules = (q.get('rules') ?? 'sandbox') as Rules;
-  if (!RULES.includes(rules)) throw new Error(`rules must be ${RULES.join(' or ')}: ${q.get('rules')}`);
-  const flag = (k: string) => {
-    const v = q.get(k);
-    if (v === null) return false;
-    if (rules !== 'keystone') throw new Error(`${k} applies to rules=keystone`);
-    if (v !== '0' && v !== '1') throw new Error(`${k} must be 0 or 1: ${v}`);
-    return v === '1';
-  };
-  const feel: PaceFeel = { hitStop: flag('keystone.hitstop'), slowMo: flag('keystone.slowmo') };
-  const shotText = q.get('keystone.shots');
-  if (shotText !== null && rules !== 'keystone') throw new Error('keystone.shots applies to rules=keystone');
-  if (shotText === '') throw new Error('keystone.shots is empty: leave it out for no line');
-  const shots = shotText === null ? null : readShots(shotText);
+  // The game's own keys, read as the game page reads them (@tb/game params.ts).
+  for (const k of KEYSTONE_KEYS) if (q.has(k) && rules !== 'keystone') throw new Error(`${k} applies to rules=keystone`);
+  const feel = paceFeel(q);
+  const shots = rules === 'keystone' && level ? lineOf(levelOf({ level, customLevel })!, q.get('keystone.shots')) : null;
+  // The game page's name for the GPU solver.
+  const engine = rules === 'keystone' && q.get('engine') === 'gpu' ? 'avbd-gpu' : q.get('engine') ?? DEFAULT_CONFIG.engine;
   const c: ViewerConfig = {
-    engine: q.get('engine') ?? DEFAULT_CONFIG.engine,
+    engine,
     level,
     customLevel,
     scenario,
@@ -282,13 +277,7 @@ export function checkKeystone(c: ViewerConfig): void {
     autofire: c.autofire !== 0, loop: c.loop !== DEFAULT_CONFIG.loop, pipeline: c.pipeline !== DEFAULT_CONFIG.pipeline, maxSteps: c.maxSteps !== DEFAULT_CONFIG.maxSteps,
   }).filter(([, v]) => v).map(([k]) => k);
   if (off.length) throw new Error(`rules=keystone plays the level as the game does, so ${off.join(', ')} must be left at the level's default`);
-  if (c.shots) {
-    const def = levelOf(c)!;
-    for (const ammo of new Set(c.shots.map((s) => s.ammo))) {
-      const want = c.shots.filter((s) => s.ammo === ammo).length, have = def.rack.filter((a) => a === ammo).length;
-      if (want > have) throw new Error(`keystone.shots fires ${want} ${ammo} but ${def.id}'s rack holds ${have} (rack: ${def.rack.join(', ')})`);
-    }
-  }
+  if (c.shots) checkLine(levelOf(c)!, c.shots);
 }
 
 /** URL keys view.pitch, view.fit, view.fov (camera.ts Framing; degrees, multiple of a fit, degrees); absent ones are the defaults. */
@@ -328,7 +317,7 @@ export function toSearch(c: ViewerConfig): string {
   if (c.autofire) q.set('autofire', String(c.autofire));
   if (c.presettle !== defaultPresettle(c.level)) q.set('presettle', String(c.presettle));
   if (c.offscreen) q.set('offscreen', '1');
-  if (c.look !== DEFAULT_CONFIG.look) q.set('look', c.look);
+  if (c.look !== defaultLook(c.rules)) q.set('look', c.look);
   writeRealOptions(c.real, q);
   if (c.loop !== DEFAULT_CONFIG.loop) q.set('loop', c.loop);
   if (c.pipeline !== DEFAULT_CONFIG.pipeline) q.set('pipeline', c.pipeline ? '1' : '0');
