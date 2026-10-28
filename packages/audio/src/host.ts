@@ -19,8 +19,9 @@ export interface HostStats {
   frames: number;
   impacts: number;
   blocks: number;
-  /** Largest output sample since the last stats. */
+  /** Largest output sample since the last stats, and since the host started. */
   peak: number;
+  loudest: number;
   /** Bank resonators ringing now. */
   live: number;
   /** Impulses dropped for a full block bucket (their energy kept). */
@@ -41,6 +42,7 @@ export class CollapseHost {
   private impacts = 0;
   private blocks = 0;
   private peak = 0;
+  private loudest = 0;
 
   constructor(sampleRate: number, private readonly post: (s: HostStats) => void = () => {}, seed = 1) {
     this.engine = new CollapseEngine({ sampleRate, seed, fullScale: FULL_SCALE });
@@ -69,7 +71,8 @@ export class CollapseHost {
     this.engine.render(L, R);
     for (let i = 0; i < BLOCK; i++) this.peak = Math.max(this.peak, Math.abs(L[i]!), Math.abs(R[i]!));
     if (++this.blocks % STATS_EVERY === 0) {
-      this.post({ type: 'stats', frames: this.frames, impacts: this.impacts, blocks: this.blocks, peak: this.peak, live: this.engine.liveResonators(), overflow: this.engine.overflow });
+      this.loudest = Math.max(this.loudest, this.peak);
+      this.post({ type: 'stats', frames: this.frames, impacts: this.impacts, blocks: this.blocks, peak: this.peak, loudest: this.loudest, live: this.engine.liveResonators(), overflow: this.engine.overflow });
       this.peak = 0;
     }
   }

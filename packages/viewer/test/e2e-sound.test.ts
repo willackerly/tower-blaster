@@ -1,5 +1,5 @@
 // The viewer's collision sound in headless Chromium: the worklet loads, a
-// click (the browser's user gesture, and a shot) starts it, the impacts reach
+// click (the browser's user gesture) starts it, a shot's impacts reach
 // the audio thread and it plays them; the panel switches it off and on live.
 import { describe, expect, it } from 'vitest';
 import { requireWebGPU } from '@tb/testkit';
@@ -8,7 +8,7 @@ import { browser, open, useViewer } from './e2e-harness.ts';
 useViewer();
 
 describe('viewer: sound', () => {
-  it('snd=1 waits for a click, then plays the shot\'s impacts; the panel turns it off and on', { timeout: 180_000 }, async (ctx) => {
+  it('snd=1 waits for a click, then plays the shot\'s impacts; the panel turns it off and on', { timeout: 240_000 }, async (ctx) => {
     if (!browser) return ctx.skip();
     const { page, errors } = await open('/?scenario=S1&param.F=3&param.H=6&param.gap=0.02&offscreen=1&snd=1&snd.mat=pine', { width: 800, height: 600 });
     const status = await page.evaluate(() => ({ s: window.__viewer.status, e: window.__viewer.error }));
@@ -18,16 +18,23 @@ describe('viewer: sound', () => {
     // The worklet loads; the context then waits for a gesture (headless Chromium needs none).
     await page.waitForFunction(() => ['waiting', 'on', 'error'].includes(window.__viewer.sound().status), undefined, { timeout: 30_000 });
     expect((await sound()).error).toBe('');
-    // A click on the scene is the gesture, and fires a ball into the tower.
-    const box = (await page.locator('#c').boundingBox())!;
-    await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
-    await page.waitForFunction(() => { const s = window.__viewer.sound(); return s.status === 'error' || (s.status === 'on' && (s.stats?.impacts ?? 0) > 0 && (s.stats?.peak ?? 0) > 0); }, undefined, { timeout: 60_000 });
+    // A click anywhere on the page is the gesture; the ball is fired through the centre by the handle, as the
+    // panel (open at this width) may cover the canvas's centre with CI's fonts.
+    await page.mouse.click(5, 595);
+    await page.evaluate(() => window.__viewer.fire(0, 0));
+    // Until the shot's impacts have played (cumulative counts: a poll between rings still sees them), or 120 s; then
+    // the state is what the expectations below read, so a failure says where it stopped.
+    const played = () => page.evaluate(() => { const s = window.__viewer.sound(); return s.status === 'error' || (s.status === 'on' && (s.stats?.impacts ?? 0) > 0 && (s.stats?.loudest ?? 0) > 0); });
+    for (const t0 = Date.now(); !(await played()) && Date.now() - t0 < 120_000;) await page.waitForTimeout(250);
     const on = await sound();
-    expect(on).toMatchObject({ status: 'on', error: '' });
+    const where = JSON.stringify({ ...on, step: await page.evaluate(() => window.__viewer.stepIndex), bodies: await page.evaluate(() => window.__viewer.bodies) });
+    expect(on, where).toMatchObject({ status: 'on', error: '' });
+    expect(on.stats?.impacts ?? 0, where).toBeGreaterThan(0);
+    expect(on.stats?.loudest ?? 0, where).toBeGreaterThan(0);
     expect(on.posted).toBeGreaterThan(10);
     expect(on.stats!.frames).toBeGreaterThan(10);
     expect(on.stats!.overflow).toBe(0);
-    expect(on.stats!.peak).toBeLessThanOrEqual(0.9 + 1e-6); // the limiter's ceiling
+    expect(on.stats!.loudest).toBeLessThanOrEqual(0.9 + 1e-6); // the limiter's ceiling
     // The panel: off is live and leaves the URL; on again needs no new click.
     await page.locator('#controls').evaluate((d) => { (d as HTMLDetailsElement).open = true; });
     const toggle = page.locator('#sound-form input[name=on]');

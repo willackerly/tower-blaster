@@ -59,6 +59,7 @@ describe('CollapseHost (the worklet minus WebAudio)', () => {
     expect(stats).toHaveLength(1);
     expect(stats[0]).toMatchObject({ type: 'stats', frames: 1, impacts: 40, blocks: STATS_EVERY, overflow: 0 });
     expect(stats[0]!.peak).toBeGreaterThan(0);
+    expect(stats[0]!.loudest).toBe(stats[0]!.peak);
   });
 
   it('gain sets full scale, 0 mutes, and a bad gain is refused', () => {
