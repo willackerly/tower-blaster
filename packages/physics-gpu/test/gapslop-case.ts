@@ -26,6 +26,7 @@ export const poked = async (scene: SceneDesc, steps: number, params: Partial<Avb
   expect(r.diagnostics.uncolored).toBe(0);
   expect(r.diagnostics.colorOverflow).toBe(0);
   expect(r.diagnostics.pairsRequired).toBeLessThanOrEqual(r.diagnostics.pairsWritten);
+  expect(r.diagnostics.pairsOverflowSteps).toBe(0); // on any step of the run
   return r;
 };
 export const state = (s: Drivers.PlainSnapshot) => [s.pos, s.rot, s.linVel, s.angVel];
