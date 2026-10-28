@@ -13,7 +13,7 @@ const MINUTES = 60_000;
 describe('viewer under Keystone rules, GPU', () => {
   it('on the GPU solver, the par line clears and replays bit for bit on this device', async (ctx) => {
     if (!browser) return ctx.skip();
-    const o = await openRules('/?level=L1&rules=keystone&offscreen=1');
+    const o = await openRules('/?level=L1&rules=keystone&offscreen=1', undefined, 10 * MINUTES);
     if (!o) return ctx.skip();
     const { page, errors } = o;
     expect(await page.evaluate(() => window.__viewer.game!.engine)).toBe('gpu');

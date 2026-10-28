@@ -10,9 +10,13 @@ const MINUTES = 60_000;
 
 export const ready = (page: Page, timeout = 5 * MINUTES) => page.waitForFunction(() => window.__viewer.game!.ready || window.__viewer.game!.result !== null, undefined, { timeout, polling: 250 });
 
-/** Open under the rules; null when there is no WebGPU adapter here (skip unless required). */
-export async function openRules(search: string, viewport?: { width: number; height: number }) {
-  const o = await open(search, viewport);
+/**
+ * Open under the rules; null when there is no WebGPU adapter here (skip unless required). The page
+ * leaves loading only after the level's first load, pre-settle included, which on the GPU solver under
+ * SwiftShader takes minutes: `timeout` bounds it.
+ */
+export async function openRules(search: string, viewport?: { width: number; height: number }, timeout = MINUTES) {
+  const o = await open(search, viewport, timeout);
   const st = await o.page.evaluate(() => ({ s: window.__viewer.status, e: window.__viewer.error }));
   if (st.s === 'error' && /WebGPU|adapter/.test(st.e ?? '') && !requireWebGPU()) { await o.page.close(); return null; }
   expect(st).toEqual({ s: 'running', e: undefined });
