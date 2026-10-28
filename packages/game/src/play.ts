@@ -77,8 +77,8 @@ const shotsText = (n: number) => `${n} shot${n === 1 ? '' : 's'}`;
 /**
  * Plays a line of shots on a running page: from a fresh attempt (handle.retry) unless `fresh`
  * (the load's own attempt), each fired through handle.fire, the path a click takes, once the game
- * is ready. Stops when the level changes or ends before the line does, or the rack cannot fire a
- * shot; resolves once the last shot has settled. `fired` reports each shot as it goes.
+ * is ready. Stops when the level changes, is retried or ends before the line does, or the rack
+ * cannot fire a shot; resolves once the last shot has settled. `fired` reports each shot as it goes.
  */
 export async function playLine(handle: GameHandle, shots: readonly Shot[], fresh = false, fired?: (n: number) => void): Promise<LineResult> {
   const id = handle.level;
@@ -88,6 +88,8 @@ export async function playLine(handle: GameHandle, shots: readonly Shot[], fresh
     await until(() => handle.ready || handle.result !== null || handle.level !== id || handle.status === 'error');
     if (handle.level !== id || handle.status === 'error') return stop(i, `stopped after ${i} of ${shotsText(shots.length)}: the level changed`);
     if (handle.result) return stop(i, `the level ended after ${i} of ${shotsText(shots.length)}`);
+    // Retry (R) mid-line starts a fresh attempt: the rest of the line was not made for it.
+    if (handle.strokes !== i) return stop(i, `stopped after ${i} of ${shotsText(shots.length)}: the attempt was restarted`);
     if (!handle.fire(shots[i]!)) return stop(i, `shot ${i + 1} (${shots[i]!.ammo}) could not be fired`);
     fired?.(i + 1);
   }

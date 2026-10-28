@@ -24,6 +24,7 @@
   "packages/game/test/par-gpu-L4.test.ts": 166.2,
   "packages/game/test/par-gpu-L5.test.ts": 49.1,
   "packages/game/test/params.test.ts": 0.1,
+  "packages/game/test/play-line.test.ts": 0.1,
   "packages/game/test/scene.test.ts": 0,
   "packages/geom/test/geom.test.ts": 0.1,
   "packages/geom/test/manifold.test.ts": 0.4,
