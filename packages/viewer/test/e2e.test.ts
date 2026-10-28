@@ -24,8 +24,8 @@ function encodePng(w: number, h: number, px: { data: number[]; bytesPerRow: numb
 useViewer();
 
 describe('viewer', () => {
-  // The GPU case also picks 20 solver iterations, which its buttons show.
-  it.for([['avbd-gpu:iterations=20', 'GPU AVBD'], ['rapier', 'Rapier (CPU)'], ['tiered', 'Tiered (CPU)']] as const)('renders a tower, steps physics and fires a ball on %s', async ([engine, button], ctx) => {
+  // The GPU case also picks 15 solver iterations, which its buttons show.
+  it.for([['avbd-gpu:iterations=15', 'GPU AVBD'], ['rapier', 'Rapier (CPU)'], ['tiered', 'Tiered (CPU)']] as const)('renders a tower, steps physics and fires a ball on %s', async ([engine, button], ctx) => {
     if (!browser) return ctx.skip();
     const { page, errors } = await open(`/?scenario=S1&param.F=3&param.H=6&param.gap=0.02&offscreen=1&engine=${engine}`);
     const status = await page.evaluate(() => ({ s: window.__viewer.status, e: window.__viewer.error }));
@@ -48,7 +48,9 @@ describe('viewer', () => {
     expect(await page.locator('#hud').innerText()).toContain(engine);
     const on = await page.locator('#presets button.on').allInnerTexts();
     expect(on).toContain(button);
-    expect(on.includes('20 iterations')).toBe(engine.startsWith('avbd-gpu'));
+    expect(on.includes('15 iterations')).toBe(engine.startsWith('avbd-gpu'));
+    const counts = (await page.locator('#presets button').allInnerTexts()).filter((t) => t.endsWith(' iterations'));
+    expect(counts).toEqual(engine.startsWith('avbd-gpu') ? ['10 iterations', '15 iterations', '20 iterations', '40 iterations'] : []);
 
     // R reloads the scene between frames. The GPU engine's init() spans frames, and a
     // frame that stepped the engine mid-init stopped the viewer ('init() first').

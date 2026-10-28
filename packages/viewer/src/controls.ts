@@ -302,6 +302,7 @@ export function mountControls(root: HTMLElement, hooks: ControlsHooks): { refres
       <label class="f"><span>name</span><input type="text" name="name" placeholder="optional" maxlength="120"></label>
       <div class="buttons"><button type="submit">Download</button><button type="button" name="load">Load…</button></div>
       <input type="file" name="file" accept=".json,application/json" hidden>
+      <div class="starts muted">start over: <a href="./" title="the default scene (default-scene.ts), what the viewer opens with">default scene</a> · <a href="./?defaults=factory" title="the built-in setup, without the default scene">factory setup</a></div>
       <div class="out muted"></div>
     </form>`;
   const sceneForm = root.querySelector<HTMLFormElement>('#scene-form')!;
