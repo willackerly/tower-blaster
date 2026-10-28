@@ -126,3 +126,28 @@ to the new framing) and in saved files (`view`).
   on screen at 16:9 and 4:3.
 - The framing is in cube units, so at `scale=0.25` the eye is also 4x lower
   in metres.
+
+### Looking up (Will, 2026-10-28)
+
+"I'd also love to be able to look UP": the orbit's pitch was clamped to
+0.02 to 1.45 rad, so the eye never went below the target.
+
+- Pitch now runs from -1.45 to 1.45 rad (83 degrees either way). Below 0
+  the eye is under the target, looking up. Drag up past the horizon to get
+  there.
+- The eye never goes under the ground. `Orbit.floor` is the ground plus
+  `EYE_ABOVE_GROUND` (0.25 units). An eye that would go lower slides in
+  along its line toward the target (`eyeDistance`), so dragging further
+  keeps tilting the view up from the ground. The set distance is kept, so
+  dragging back restores it. To look up at a vault, pan the target up
+  (right-drag or shift-drag), then drag up.
+- Considered: a free-look camera (yaw and pitch about the eye). That is a
+  second control scheme. The orbit with a floor covers "stand at the base
+  and look up" with the same drag.
+- `view.pitch` goes down to -45 degrees, framing a scene from below.
+- Tests: viewer.test.ts "looking up" covers the clamp, the floor, the
+  monotone tilt and rays from a floor-held eye. The e2e test drags up.
+  The render-real-ground test "looking up" checks the sky to the zenith
+  (blue / red 2.0 to 2.3), that the exposure is the same as at the horizon
+  (the meter does not depend on the view), and that the hall's vault is
+  drawn overhead.

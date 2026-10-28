@@ -112,6 +112,41 @@ describe('drawing', () => {
     expect(filled!.street).toBeGreaterThan(f!.street);
   });
 
+  it('real look looking up (the viewer\'s negative pitch): sky to the zenith, no errors, the exposure as at the horizon', async (ctx) => {
+    if (!gpu) return ctx.skip();
+    const frames = [];
+    const views: [[number, number, number], [number, number, number]][] = [[[0, 2, 9], [0, 2.6, -1]], [[0, 1.5, 14], [0, 40, 0]], [[0, 0.3, 3], [0.2, 60, -0.5]]];
+    for (const [eye, target] of views) {
+      const r = await call('lookFrame', {}, eye, target);
+      expect(r.error).toBeNull();
+      const band = (r0: number, r1: number) => {
+        const m = [0, 0, 0];
+        for (let y = r0; y < r1; y++) for (let x = 0; x < r.width; x++) for (let c = 0; c < 3; c++) m[c] = m[c]! + r.data[y * r.bytesPerRow + 4 * x + c]! / ((r1 - r0) * r.width);
+        return m;
+      };
+      frames.push({ mean: r.meanLuma, top: band(0, 8), bottom: band(r.height - 8, r.height) });
+    }
+    // Measured on SwiftShader: mean luma 131 at the horizon, 88 and 95 looking up (the high sky is a deeper
+    // blue than the horizon's; the meter does not depend on the view, so this is the sky, not the exposure);
+    // blue / red 2.0 to 2.3 in the bands looking up, every channel at least 56.
+    // Inside the hall, the vault overhead.
+    const hall = await call('lookFrame', { env: 'hall' }, [0, 1.5, 14], [0, 40, 0]);
+    expect(hall.error).toBeNull();
+    // Measured 115 against the open sky's 88 from the same eye: the glazed vault, not the sky.
+    expect(Math.abs(hall.meanLuma - frames[1]!.mean)).toBeGreaterThan(10);
+    expect(hall.meanLuma).toBeGreaterThan(30);
+    expect(hall.meanLuma).toBeLessThan(230);
+    const [level, ...up] = frames;
+    for (const f of up) {
+      expect(f.mean).toBeGreaterThan(0.5 * level!.mean);
+      expect(f.mean).toBeLessThan(level!.mean);
+      for (const b of [f.top, f.bottom]) {
+        expect(b[2]! / b[0]!).toBeGreaterThan(1.4);
+        expect(Math.min(...b)).toBeGreaterThan(40);
+      }
+    }
+  });
+
   it('real look: blue sky paling to the horizon, exposure adapting to a low sun, no stylized lights', async (ctx) => {
     if (!gpu) return ctx.skip();
     const r = await call('realChecks', ['hazy', {}, { sunElevation: 4, sunAzimuth: 200 }, { sunElevation: 4, sunAzimuth: 200, autoExposure: 0 }]);
