@@ -3,7 +3,7 @@
 // one command buffer per step. Parameters are the reference solver's (physics-ref AvbdParams), so
 // the two engines can be run side by side on the same settings. With AvbdParams.restitution on,
 // the solve ends with the restitution pass (restitution.ts).
-import { type BodyDesc, checkBlast, checkBlastQueue, DEFAULT_RESTITUTION_COMBINE, emptySnapshot, type EngineInfo, inertiaOf, type InputEvent, massOf, type PhysicsEngine, type SceneDesc, type Snapshot, queueInputs, spawnedBodies, type Vec3 } from '@tb/engine-api';
+import { type BodyDesc, checkBlast, checkBlastQueue, DEFAULT_RESTITUTION_COMBINE, emptySnapshot, type EngineHealth, type EngineInfo, inertiaOf, type InputEvent, massOf, type PhysicsEngine, type SceneDesc, type Snapshot, queueInputs, spawnedBodies, type Vec3 } from '@tb/engine-api';
 import { boundingRadius } from '@tb/geom';
 import { assertStorageFits, createDevice, isSoftwareAdapter, Readback } from '@tb/gpu';
 import { type AvbdParams, avbdVariant, checkColoring, checkGapSlop, checkRecords, checkRemoved, checkRestitution, DEFAULT_AVBD, RESTITUTION_DEFAULTS } from '@tb/physics-ref';
@@ -11,6 +11,7 @@ import { Body, BodyProps, readField, RestSlot, Shape, SolverBody, writeStruct } 
 import { BlastPass, type DueBlast } from './blast.ts';
 import { assertPairDispatch, Broadphase } from './broadphase.ts';
 import { Coloring } from './coloring.ts';
+import { gpuHealth } from './health.ts';
 import { Narrowphase } from './narrowphase.ts';
 import { restitutionWord } from './restitution.ts';
 import { AvbdSolver, DEFAULT_DISPATCH, defaultTailThreads, HESSIAN_FORMS, type HessianForm, type RecordMode, type SolverDispatch } from './solver.ts';
@@ -453,6 +454,19 @@ export class GpuAvbdEngine implements PhysicsEngine {
       pairsRequired: total[5]!, pairsWritten: total[3]!, maxPairs: parts.bp.maxPairs, pairsRequiredPeak: total[6]!, pairsOverflowSteps: total[7]!, steps,
       colors: info[0]!, uncolored: info[1]!, colorOverflow: info[2]!,
     };
+  }
+
+  /**
+   * The engine's limits over every step since init() (engine-api EngineHealth, gpuHealth): the pair
+   * buffer, from diagnostics(). Two small reads; not for a timed region.
+   */
+  async health(): Promise<EngineHealth> {
+    const d = await this.diagnostics();
+    const { limits } = this.device!;
+    return gpuHealth(d, {
+      capacity: this.capacity, records: this.records, storageLimit: Math.min(limits.maxStorageBufferBindingSize, limits.maxBufferSize),
+      maxComputeWorkgroupsPerDimension: limits.maxComputeWorkgroupsPerDimension, boxBroadphase: !!this.opts.boxBroadphase,
+    });
   }
 
   /**

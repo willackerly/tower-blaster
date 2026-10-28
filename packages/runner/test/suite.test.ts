@@ -75,6 +75,32 @@ describe('standard suite', () => {
     expect(md).toContain('Throughput rows give the sustained cost per step');
   });
 
+  it('names the limits a case hit in its row and lists their sentences, with a dash for records without health', () => {
+    const rs: CaseResult[] = [
+      { name: 'rain-awake-1000', N: 1000, mode: 'latency', median: 2, p95: 2.5, p99: 3, valid: true },
+      { name: 'city-10k-awake', N: 10001, mode: 'latency', median: 6, p95: 7, p99: 7.2, valid: true, limits: [], limitProblems: [] },
+      { name: 'kapla-10k-topple', N: 10001, mode: 'latency', median: 9, p95: 10, p99: 11, valid: true, limits: ['pairs on 42 of 210 steps'], limitProblems: ['engine 0 (avbd-gpu): contacts dropped'] },
+    ];
+    const md = summaryMarkdown(rs, suite, '## test');
+    expect(md).toContain('| Case | Bodies | Median ms/step | p95 | p99 | Within 7.5 ms | Valid | Limits hit |\n|---|---|---|---|---|---|---|---|');
+    expect(md).toContain('| rain-awake-1000 | 1000 | 2.00 | 2.50 | 3.00 | yes | yes | – |');
+    expect(md).toContain('| city-10k-awake | 10001 | 6.00 | 7.00 | 7.20 | yes | yes | none |');
+    expect(md).toContain('| kapla-10k-topple | 10001 | 9.00 | 10.0 | 11.0 | no | yes | **pairs on 42 of 210 steps** |');
+    expect(md).toContain('time a different simulation from the one asked for:\n\n- `kapla-10k-topple`, engine 0 (avbd-gpu): contacts dropped');
+    expect(summaryMarkdown(rs.slice(0, 2), suite, '## test')).not.toContain('different simulation');
+  });
+
+  it('reads the limits from the record\'s health, leaving them out when no engine reported any', () => {
+    const base = { timing: [{ mode: 'latency', wallMs: { median: 1, p95: 2, p99: 3 } }], scene: { bodies: 5 }, timingValid: true };
+    const pairs = (steps: number) => ({ id: 'pairs', effect: 'physics', steps, peak: 9, room: 8, message: 'dropped' });
+    const speed = { id: 'slow', effect: 'speed', steps: 7, peak: 1, room: 1, message: 'slow' };
+    expect(caseResult(suite[0]!, base)).not.toHaveProperty('limits');
+    expect(caseResult(suite[0]!, { ...base, health: [null], limitProblems: [] })).not.toHaveProperty('limits');
+    expect(caseResult(suite[0]!, { ...base, health: [{ steps: 90, limits: [pairs(0), speed] }], limitProblems: [] })).toMatchObject({ limits: [], limitProblems: [] });
+    expect(caseResult(suite[0]!, { ...base, health: [{ steps: 90, limits: [pairs(12), speed] }], limitProblems: ['engine 0 (x): dropped'] }))
+      .toMatchObject({ limits: ['pairs on 12 of 90 steps'], limitProblems: ['engine 0 (x): dropped'] });
+  });
+
   it('reads the timing mode from the record, defaulting to latency for older records', () => {
     const record = (mode?: string) => ({ timing: [{ ...(mode ? { mode } : {}), wallMs: { median: 1, p95: 2, p99: 3 } }], scene: { bodies: 5 }, timingValid: true });
     expect(caseResult(suite[0]!, record('throughput'))).toMatchObject({ mode: 'throughput', N: 5, median: 1, p99: 3, valid: true });

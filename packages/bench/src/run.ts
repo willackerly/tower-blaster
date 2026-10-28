@@ -1,6 +1,6 @@
 // Timing and quality runs. Timing and quality are separate passes so that
 // snapshotting and metric computation never land inside a timed region.
-import { bodiesAt, type PhysicsEngine, type SceneDesc, type Snapshot, TAG_BALL } from '@tb/engine-api';
+import { bodiesAt, type EngineHealth, limitProblems, type PhysicsEngine, type SceneDesc, type Snapshot, TAG_BALL } from '@tb/engine-api';
 import {
   drift, driftSuspect, energy, energyGain, jitter, median, nonFinite, pairedPercentDiff, penetration,
   sleepRatio, stateHash, summarize, survival, verdict, type Interval, type Verdict,
@@ -114,6 +114,16 @@ export function timingSummary(blocks: BlockTiming[]) {
     // Null when not checked (throughput mode).
     driftSuspectBlocks: blocks.some((b) => b.driftSuspect === null) ? null : blocks.filter((b) => b.driftSuspect).length,
   };
+}
+
+/**
+ * Each engine's health() over the steps since its last init() (null for an
+ * engine without one), and one sentence per limit that changed the physics,
+ * labelled `labels[i]`. Read it after timing, never inside it.
+ */
+export async function engineHealth(engines: PhysicsEngine[], labels: string[]): Promise<{ health: Array<EngineHealth | null>; limitProblems: string[] }> {
+  const health = await Promise.all(engines.map((e) => (e.health ? e.health() : null)));
+  return { health, limitProblems: health.flatMap((h, i) => limitProblems(h, labels[i]!)) };
 }
 
 export interface Comparison { diff: Interval; verdict: Verdict; threshold: number }

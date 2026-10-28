@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { emptySnapshot, type PhysicsEngine, type SceneDesc } from '@tb/engine-api';
+import { emptySnapshot, type EngineHealth, type PhysicsEngine, type SceneDesc } from '@tb/engine-api';
 import { buildScenario } from '@tb/scenarios';
 import { RapierEngine } from '@tb/adapter-rapier';
-import { compareBlocks, gpuEngineArgs, makeEngine, parseSpec, qualityGates, qualityRun, SlowedEngine, slowdownArms, timeInterleaved, timingSummary } from '../src/index.ts';
+import { compareBlocks, engineHealth, gpuEngineArgs, makeEngine, parseSpec, qualityGates, qualityRun, SlowedEngine, slowdownArms, timeInterleaved, timingSummary } from '../src/index.ts';
 
 /** An engine whose step "takes" cost(step) ms on a fake clock, and logs its order. */
 function fakeEngine(name: string, clock: { t: number }, cost: (step: number) => number, log: string[]): PhysicsEngine {
@@ -160,6 +160,22 @@ describe('timing modes for engines that submit work and return (finish())', () =
     const blocks = await run(new SlowedEngine(fakeGpuEngine(clock, 1, 4), 0, () => clock.t), clock, 'latency');
     expect(blocks.flatMap((b) => b.samples)).toEqual(Array(30).fill(5));
     expect(new SlowedEngine(fakeEngine('A', clock, () => 1, []), 0).finish).toBeUndefined();
+  });
+
+  it('engineHealth reads every engine\'s health(), null without one, and labels the limits that changed the physics', async () => {
+    const clock = { t: 0 };
+    const limit = { id: 'pairs', effect: 'physics' as const, steps: 2, peak: 9, room: 8, message: 'dropped' };
+    const ok: EngineHealth = { steps: 3, limits: [{ ...limit, steps: 0 }] }, hit: EngineHealth = { steps: 3, limits: [limit] };
+    const engines = [fakeEngine('A', clock, () => 1, []), { ...fakeEngine('B', clock, () => 1, []), health: async () => ok }, { ...fakeEngine('C', clock, () => 1, []), health: async () => hit }];
+    expect(await engineHealth(engines, ['a', 'b', 'c'])).toEqual({ health: [null, ok, hit], limitProblems: ['c: dropped'] });
+  });
+
+  it('SlowedEngine passes health() through, and adds none to an engine without it', async () => {
+    const clock = { t: 0 };
+    const health: EngineHealth = { steps: 3, limits: [{ id: 'pairs', effect: 'physics', steps: 1, peak: 9, room: 8, message: 'dropped' }] };
+    const inner = { ...fakeEngine('A', clock, () => 1, []), health: async () => health };
+    expect(await new SlowedEngine(inner, 0).health!()).toBe(health);
+    expect(new SlowedEngine(fakeEngine('A', clock, () => 1, []), 0).health).toBeUndefined();
   });
 
   it('an engine without finish() gets the same per-step cost in both modes', async () => {

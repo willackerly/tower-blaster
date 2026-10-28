@@ -46,6 +46,17 @@ export function splitEngines(list: string): string[] {
   return specs;
 }
 
+/**
+ * A CLI's exit code for its runs: 4 if one hit an engine limit that changed
+ * its physics (limitProblems), unless allow.limits; else 3 if one's timing is
+ * not valid here, unless allow.invalid; else 0.
+ */
+export function exitCodeFor(runs: Array<{ valid: boolean; limitProblems?: string[] }>, allow: { invalid?: boolean; limits?: boolean } = {}): 0 | 3 | 4 {
+  if (!allow.limits && runs.some((r) => r.limitProblems?.length)) return 4;
+  if (!allow.invalid && runs.some((r) => !r.valid)) return 3;
+  return 0;
+}
+
 export function parseConfig(search: string): RunConfig {
   const q = new URLSearchParams(search);
   const engines = splitEngines(q.get('engines') ?? 'rapier');

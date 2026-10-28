@@ -34,7 +34,7 @@ pnpm bench:browser --engines avbd-gpu:records=0,avbd-gpu:records=0,restitution=t
 
 GPU engines (`avbd-gpu`) only submit work in `step()`, so the harness waits for it with the engine's `finish()`. `--timing-mode latency` (the default) waits after every step: the cost of a step to a caller that needs its result. `--timing-mode throughput` waits once per block, so the GPU can overlap steps: the sustained cost per step, one sample per block, so no per-step p99 (the suite leaves its p95, p99 and budget columns blank). For CPU engines the two agree up to median against mean. A GPU error or a lost device makes `finish()` reject, so the run fails rather than timing work that never ran.
 
-`bench:browser` serves the page, drives Chrome through Playwright with WebGPU developer features on (unquantized timestamps), and prints the page's result record. It exits with code 3 when timing can't be trusted there: no cross-origin isolation, a timer coarser than 20 µs, or a software GPU adapter for a GPU engine. Every run is also a URL, so the same benchmark can be opened by hand on any device.
+`bench:browser` serves the page, drives Chrome through Playwright with WebGPU developer features on (unquantized timestamps), and prints the page's result record. It exits with code 4 when an engine hit a limit that changed its physics, such as the GPU pair buffer dropping contacts: the record's `limitProblems` (and `quality.limitProblems` for the quality run) names the limit and the fix, such as `pairsPerBody=32`, and `--allow-limits` accepts the run. Otherwise it exits with code 3 when timing can't be trusted there: no cross-origin isolation, a timer coarser than 20 µs, or a software GPU adapter for a GPU engine (`--allow-invalid` accepts it). Every run is also a URL, so the same benchmark can be opened by hand on any device.
 
 ### Standard suite
 
@@ -43,6 +43,8 @@ pnpm bench:suite --channel chrome       # about 5-10 minutes; writes results/sui
 pnpm bench:suite --engine avbd-gpu --timing-mode throughput --channel chrome
 pnpm bench:suite --engine avbd-gpu:boxBroadphase=true --cases kapla --channel chrome   # the Kapla cases only
 ```
+
+The summary's Limits hit column names the limits each case hit that changed its physics. The suite exits with code 4 if any case hit one (unless `--allow-limits`), else 3 if any case's timing is not valid there. The suite builds each engine from the spec it is given, not from a scenario's viewer defaults, so the Kapla cases on `--engine avbd-gpu` can need `pairsPerBody=32,boxBroadphase=true`.
 
 ### GPU primitives
 

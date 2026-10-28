@@ -132,6 +132,43 @@ export interface StepReport {
   gpuMs?: number;
 }
 
+/**
+ * A fixed limit of an engine and how a run has met it, over every step since
+ * init(): e.g. the GPU engine's pair buffer, past which a step drops contacts.
+ */
+export interface EngineLimit {
+  /** Stable name, e.g. 'pairs'. */
+  id: string;
+  /** 'physics': a step that hits it computes the wrong motion (contacts dropped); 'speed': only a slower one. */
+  effect: 'physics' | 'speed';
+  /** Steps since init() that hit it. */
+  steps: number;
+  /** The most one step needed, and the room there is, in the limit's own unit (e.g. pairs). */
+  peak: number;
+  room: number;
+  /** One sentence for a person: what happened and what to do. */
+  message: string;
+  /** An engine option (the spec's key=value) that would give the run room, when one is known. */
+  fix?: { option: string; value: number | boolean };
+}
+
+/** The limits an engine has, each with how the steps since init() met it. */
+export interface EngineHealth {
+  /** Steps since init(): what the limits' counts cover. */
+  steps: number;
+  limits: EngineLimit[];
+}
+
+/** The limits that changed the physics: effect 'physics', hit on at least one step. */
+export function limitsHit(h: EngineHealth | null | undefined): EngineLimit[] {
+  return (h?.limits ?? []).filter((l) => l.effect === 'physics' && l.steps > 0);
+}
+
+/** One sentence per limit that changed the physics (limitsHit), naming whose. */
+export function limitProblems(h: EngineHealth | null | undefined, label: string): string[] {
+  return limitsHit(h).map((l) => `${label}: ${l.message}`);
+}
+
 export interface PhysicsEngine {
   readonly info: EngineInfo;
   init(scene: SceneDesc): Promise<void>;
@@ -168,6 +205,12 @@ export interface PhysicsEngine {
   gpu?(): GpuBodies | null;
   /** Exact reductions and sparse reads. Valid until the next init() or dispose(). Engines without it are wrapped with withSnapshotObserver(). */
   observe?(opts: ObserveOptions): Promise<Observer>;
+  /**
+   * The engine's fixed limits and how every step since init() met them
+   * (EngineHealth). Never called inside a timed region; it may read a few
+   * words back from the GPU. Engines with no such limit leave it out.
+   */
+  health?(): Promise<EngineHealth>;
   dispose(): void;
 }
 

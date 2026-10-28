@@ -1,10 +1,10 @@
 // The GPU AVBD engine on stacks, towers and impacts against the f64 reference
 // (the knock-down statistics are in engine-knock.test.ts).
 import { describe, expect, it } from 'vitest';
-import { type BodyDesc, type SceneDesc, type SpawnEvent } from '@tb/engine-api';
+import { type BodyDesc, limitProblems, type SceneDesc, type SpawnEvent } from '@tb/engine-api';
 import { drift, jitter, nonFinite, penetration, survival } from '@tb/metrics';
 import { buildScenario } from '@tb/scenarios';
-import { AvbdSolver } from '../src/index.ts';
+import { AvbdSolver, PAIR_FIX_HEADROOM } from '../src/index.ts';
 import { type D, gpu, call, runGpu, runRef, cube, sceneOf } from './harness.ts';
 
 describe('GPU AVBD engine: stacks, towers and impacts', () => {
@@ -80,6 +80,11 @@ describe('GPU AVBD engine: stacks, towers and impacts', () => {
       expect(r.reinit).toMatchObject({ pairsRequiredPeak: 0, pairsOverflowSteps: 0, steps: 0 });
       expect(r.reinit5.steps).toBe(5);
       expect(r.reinit5.pairsRequiredPeak).toBeGreaterThan(0);
+      // health() is the same counters as the engine-api pair limit (health.test.ts has the mapping).
+      expect(r.health.steps).toBe(60);
+      expect(r.health.limits).toHaveLength(1);
+      expect(r.health.limits[0]).toMatchObject({ id: 'pairs', effect: 'physics', steps: r.overflowSteps, peak: r.peak, room: r.diagnostics.maxPairs });
+      expect(limitProblems(r.health, 'gpu')).toHaveLength(r.overflowSteps > 0 ? 1 : 0);
     };
     // A collapse, so pairs appear, vanish and change slots between steps.
     // 2026-10-25, after the friction fix: 12.3k pairs found, 254 where the
@@ -110,6 +115,11 @@ describe('GPU AVBD engine: stacks, towers and impacts', () => {
     expect(overflow.diagnostics.pairsRequiredPeak).toBeGreaterThan(overflow.diagnostics.maxPairs);
     expect(overflow.reinit5.pairsOverflowSteps).toBe(5);
     expect(overflow.found).toBeGreaterThan(1000);
+    // Its suggested pairsPerBody holds the peak with the headroom (capacity = maxPairs / 3).
+    const fix = overflow.health.limits[0]!.fix!;
+    expect(fix.option).toBe('pairsPerBody');
+    expect((fix.value as number) * (overflow.diagnostics.maxPairs / 3)).toBeGreaterThanOrEqual(PAIR_FIX_HEADROOM * overflow.peak);
+    expect(collapse.health.limits[0]!.fix).toBeUndefined();
   }, 180_000);
 
   // init() awaits the GPU's error scopes after building its stages. A call in

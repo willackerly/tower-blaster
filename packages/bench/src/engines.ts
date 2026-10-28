@@ -1,5 +1,5 @@
 // Engine registry for the CLI: "name" or "name:key=value,key=value".
-import type { InputEvent, PhysicsEngine, SceneDesc, StepReport } from '@tb/engine-api';
+import type { EngineHealth, InputEvent, PhysicsEngine, SceneDesc, StepReport } from '@tb/engine-api';
 import { RapierEngine, RapierHost } from '@tb/adapter-rapier';
 import { TieredEngine } from '@tb/lattice';
 import { type AvbdParams, AvbdReferenceEngine } from '@tb/physics-ref';
@@ -71,8 +71,10 @@ export const engineNames = () => Object.keys(REGISTRY);
  */
 export class SlowedEngine implements PhysicsEngine {
   readonly finish?: () => Promise<void>;
+  readonly health?: () => Promise<EngineHealth>;
   constructor(private readonly inner: PhysicsEngine, private readonly fraction: number, private readonly clock: () => number = () => performance.now()) {
     if (inner.finish) this.finish = () => inner.finish!();
+    if (inner.health) this.health = () => inner.health!();
   }
   get info() { return { ...this.inner.info, variant: { ...this.inner.info.variant, slowed: this.fraction } }; }
   get stepIndex() { return this.inner.stepIndex; }

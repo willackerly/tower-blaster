@@ -25,6 +25,8 @@ describe('runner page end to end', () => {
     expect(r.kind).toBe('compare');
     expect(r.comparison).toHaveProperty('verdict');
     expect((r.quality as { gates: Record<string, string | null> }).gates.finite).toBeNull();
+    // Rapier reports no limits (no health()).
+    expect([r.health, r.limitProblems, (r.quality as { health: unknown }).health, (r.quality as { limitProblems: unknown }).limitProblems]).toEqual([[null, null], [], null, []]);
   });
 
   it('carries --bounce from the URL into the run, and the record says so', async () => {
@@ -47,5 +49,30 @@ describe('runner page end to end', () => {
       const gpu = (r.env as { browser: { gpu: { software: boolean } } }).browser.gpu;
       expect(r.timingValid).toBe(!gpu.software);
     }
+  });
+
+  it('records the GPU engine\'s limits over every step, and names a pair buffer too small for the scene', async (ctx) => {
+    const probe = await openWebGPU();
+    if (!probe) return ctx.skip();
+    await probe.close();
+    // 12 touching cubes have more pairs than 1 per body: every step drops some, in the timing and the quality run.
+    const small = 'avbd-gpu:iterations=4,pairsPerBody=1';
+    const r = await runInBrowser(parseConfig(`${tiny}&engines=${small},avbd-gpu:iterations=4&qualitySteps=20`));
+    expect(r.engines).toHaveLength(2);
+    type Health = { steps: number; limits: Array<{ id: string; steps: number; peak: number; room: number; fix?: { option: string; value: number } }> };
+    const [h0, h1] = r.health as [Health, Health];
+    expect([h0.steps, h1.steps]).toEqual([45, 45]); // warmup 5 + 4 blocks of 10
+    expect(h0.limits[0]).toMatchObject({ id: 'pairs', steps: 45, room: 12, fix: { option: 'pairsPerBody' } });
+    expect(h0.limits[0]!.peak).toBeGreaterThan(12);
+    expect(h1.limits[0]).toMatchObject({ id: 'pairs', steps: 0, room: 12 * 16 });
+    expect(h1.limits[0]!.fix).toBeUndefined();
+    const quality = r.quality as { health: Health; limitProblems: string[] };
+    expect(quality.health).toMatchObject({ steps: 20, limits: [{ id: 'pairs', steps: 20 }] });
+    // The timing's sentences and the quality run's are kept apart: each names what it changed.
+    const problems = r.limitProblems as string[];
+    expect(problems).toHaveLength(1);
+    expect(problems[0]).toMatch(new RegExp(`^engine 0 \\(${small}\\): contacts dropped on 45 of 45 steps: .*; pairsPerBody=\\d+ gives room`));
+    expect(quality.limitProblems).toHaveLength(1);
+    expect(quality.limitProblems[0]).toMatch(new RegExp(`^quality run \\(${small}\\): contacts dropped on 20 of 20 steps`));
   });
 });
