@@ -2,7 +2,7 @@
 // contract. Used as a reference for quality metrics and as the number every
 // GPU variant has to beat by a wide margin.
 import RAPIER from '@dimforge/rapier3d-simd-compat';
-import { blastArea, blastKick, type BodyDesc, checkBlast, DEFAULT_RESTITUTION_COMBINE, emptySnapshot, type EngineInfo, type InputEvent, massOf, type PhysicsEngine, type SceneDesc, type Snapshot } from '@tb/engine-api';
+import { blastArea, blastCentre, blastVelocity, type BodyDesc, checkBlast, checkBlastQueue, DEFAULT_RESTITUTION_COMBINE, emptySnapshot, type EngineInfo, type InputEvent, massOf, type PhysicsEngine, type SceneDesc, queueInputs, type Snapshot } from '@tb/engine-api';
 import { createBody, createGround, initRapier, RULES } from './bodies.ts';
 
 export interface RapierOptions {
@@ -28,7 +28,8 @@ export class RapierEngine implements PhysicsEngine {
   }
 
   async init(scene: SceneDesc): Promise<void> {
-    for (const ev of scene.inputs) if (ev.kind === 'blast') checkBlast(ev.blast);
+    const pending = [...scene.inputs].sort((a, b) => a.step - b.step);
+    checkBlastQueue(scene.bodies.length, pending);
     await initRapier();
     this.info.variant.version = RAPIER.version();
     this.dispose();
@@ -47,7 +48,7 @@ export class RapierEngine implements PhysicsEngine {
     this.bodies = [];
     this.descs = [];
     for (const b of scene.bodies) this.add(b);
-    this.pending = [...scene.inputs].sort((a, b) => a.step - b.step);
+    this.pending = pending;
     this.stepIndex = 0;
   }
 
@@ -61,13 +62,10 @@ export class RapierEngine implements PhysicsEngine {
   }
 
   push(events: InputEvent[]): void {
-    for (const ev of events) if (ev.kind === 'blast') checkBlast(ev.blast);
-    // Stable insertion keeps push order among events due at the same step.
-    for (const ev of events) {
-      let i = this.pending.length;
-      while (i > 0 && this.pending[i - 1]!.step > ev.step) i--;
-      this.pending.splice(i, 0, ev);
-    }
+    // Stable insertion keeps push order among events due at the same step; checked before anything changes.
+    const pending = queueInputs(this.pending, events);
+    checkBlastQueue(this.bodies.length, pending);
+    this.pending = pending;
   }
 
   step(): void {
@@ -78,12 +76,12 @@ export class RapierEngine implements PhysicsEngine {
       if (ev.kind === 'spawn') { this.add(ev.body); continue; }
       // A blast (engine-api blast.ts): mass and volume from the description, as the AVBD engines.
       const b = checkBlast(ev.blast);
+      const at = (rb: RAPIER.RigidBody): [number, number, number] => { const p = rb.translation(); return [p.x, p.y, p.z]; };
+      const centre = blastCentre(b, b.body >= 0 ? at(this.bodies[b.body]!) : null);
       this.bodies.forEach((rb, id) => {
-        const p = rb.translation(), d = this.descs[id]!;
-        const dv = blastKick(b, id, [p.x, p.y, p.z], massOf(d), blastArea(d.shape));
-        if (!dv) return;
-        const v = rb.linvel();
-        rb.setLinvel({ x: v.x + dv[0], y: v.y + dv[1], z: v.z + dv[2] }, true);
+        const d = this.descs[id]!, u = rb.linvel();
+        const v = blastVelocity(b, centre, id, at(rb), [u.x, u.y, u.z], massOf(d), blastArea(d.shape));
+        if (v) rb.setLinvel({ x: v[0], y: v[1], z: v[2] }, true);
       });
     }
     w.step();

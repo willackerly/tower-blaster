@@ -8,15 +8,21 @@
 // order, so the result does not depend on scheduling. A blast only pushes
 // bodies below its own count (the bodies that existed when it was due), as
 // on the reference, and adds the kick to SolverBody.prevVel too (the adaptive
-// warm start's previous velocity), as the reference does to prevLinVel. The
-// arithmetic is the reference's (blastArea, blastWeight) in f32.
-import { type Blast, MAX_BLAST_EXCLUDE } from '@tb/engine-api';
+// warm start's previous velocity), as the reference does to prevLinVel. A
+// body centre is read from Body.pos when the dispatch runs (blasts change
+// velocities only, so every thread reads the same position). The arithmetic
+// is the reference's (blastCentre, blastArea, blastWeight, blastVelocity) in
+// f32; the speed cap is applied after each blast, as there.
+import { type CheckedBlast, MAX_BLAST_EXCLUDE } from '@tb/engine-api';
 import { Body, BodyProps, Shape, SolverBody, wgslStruct } from '@tb/schema';
 
 const WG = 64;
 const HEADER = 4;
-/** centre (3), radius, impulse, falloff (u32), maxDv, count, nExclude, exclude (MAX_BLAST_EXCLUDE), core, padding. */
+/** point or offset (3), radius, impulse, falloff (u32), maxDv, count, nExclude, exclude (MAX_BLAST_EXCLUDE), core, centre body (NO_BODY: a point), maxSpeed. */
 const STRIDE = 20;
+const NO_BODY = 0xffffffff;
+/** maxSpeed Infinity goes up as the largest f32 (WGSL may assume no infinities). */
+const F32_MAX = 3.4028234663852886e38;
 
 const CODE = /* wgsl */ `
 ${wgslStruct(Body)}
@@ -41,14 +47,18 @@ fn blast(@builtin(global_invocation_id) id: vec3u) {
   // blastArea: a quarter of the surface.
   let area = select(2.0 * (h.x * h.y + h.y * h.z + h.z * h.x), 3.14159265358979 * h.x * h.x, s.kind == 1u);
   let areaPerMass = area / props[i].mass;
-  var kick = vec3f(0.0);
+  var v = b.linVel;
+  var pushed = false;
   for (var k = 0u; k < blasts[0]; k++) {
     let o = ${HEADER}u + k * ${STRIDE}u;
     if (i >= blasts[o + 7u]) { continue; }
     var excluded = false;
     for (var e = 0u; e < blasts[o + 8u]; e++) { if (blasts[o + 9u + e] == i) { excluded = true; } }
     if (excluded) { continue; }
-    let r = b.pos - vec3f(word(o), word(o + 1u), word(o + 2u));
+    // blastCentre: the point, or the centre body's position plus the offset.
+    var c = vec3f(word(o), word(o + 1u), word(o + 2u));
+    if (blasts[o + 18u] != 4294967295u) { c += bodies[blasts[o + 18u]].pos; }
+    let r = b.pos - c;
     let d = length(r);
     let radius = word(o + 3u);
     if (!(d < radius)) { continue; }
@@ -60,15 +70,21 @@ fn blast(@builtin(global_invocation_id) id: vec3u) {
       for (var e = 0u; e < blasts[o + 5u]; e++) { w *= t; }
     }
     let dv = min(word(o + 6u), word(o + 4u) * w * areaPerMass);
-    kick += select(vec3f(0.0, 1.0, 0.0), r / d, d > 0.0) * dv;
+    // blastVelocity: the kick, then the speed cap.
+    var u = v + select(vec3f(0.0, 1.0, 0.0), r / d, d > 0.0) * dv;
+    let speed = length(u);
+    let cap = word(o + 19u);
+    if (speed > cap) { u *= cap / speed; }
+    v = u;
+    pushed = true;
   }
-  if (all(kick == vec3f(0.0))) { return; }
-  bodies[i].linVel = b.linVel + kick;
-  solverBodies[i].prevVel += kick;
+  if (!pushed) { return; }
+  bodies[i].linVel = v;
+  solverBodies[i].prevVel += v - b.linVel;
 }`;
 
 /** A checked blast (checkBlast) and the bodies it acts on: ids below count. */
-export interface DueBlast { blast: Required<Blast>; count: number }
+export interface DueBlast { blast: CheckedBlast; count: number }
 
 export class BlastPass {
   private readonly pipe: GPUComputePipeline;
@@ -88,11 +104,13 @@ export class BlastPass {
     let n = 0;
     due.forEach(({ blast: b, count }, k) => {
       const o = HEADER + k * STRIDE;
-      f.set(b.centre, o);
+      f.set(b.point ?? b.offset, o);
       f[o + 3] = b.radius; f[o + 4] = b.impulse; words[o + 5] = b.falloff; f[o + 6] = b.maxDv;
       words[o + 7] = count; words[o + 8] = b.exclude.length;
       words.set(b.exclude.slice(0, MAX_BLAST_EXCLUDE), o + 9);
       f[o + 17] = b.core;
+      words[o + 18] = b.point ? NO_BODY : b.body;
+      f[o + 19] = Math.min(b.maxSpeed, F32_MAX);
       n = Math.max(n, count);
     });
     words[0] = due.length; words[1] = n;
