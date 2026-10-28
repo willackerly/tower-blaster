@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import fc from 'fast-check';
-import { buildScenario } from '@tb/scenarios';
+import { buildScenario, KAPLA_SCALE, PLANK_L } from '@tb/scenarios';
 import { massOf, TAG_BALL } from '@tb/engine-api';
 import { REAL_DEFAULTS, REAL_KNOBS } from '@tb/render';
 import {
@@ -10,7 +10,7 @@ import {
   withOption, type FreeHooks, type Orbit, orbitAt, parseCamera, parseSceneFile, poseOf, SCENE_FILE_FORMAT, sceneFile, sceneFileName, type ViewerConfig,
   autoSubsteps, froudeSpeed, MAX_SUBSTEPS, SCALE_LIMITS, sceneSummary, worldEngineSpec, worldScene,
   DEFAULT_FRAMING, FRAMING_LIMITS, framingFrom, parseFraming,
-  bounceOn, bounceScene, DEFAULT_BOUNCE, viewerScene,
+  bounceOn, bounceScene, DEFAULT_BOUNCE, viewerScene, scenarioEngineSpec,
 } from '../src/index.ts';
 import { SCENARIOS } from '@tb/scenarios';
 import { makeEngine, parseSpec } from '@tb/bench';
@@ -822,6 +822,26 @@ describe('world scale (scale, substeps)', () => {
     expect(g).toMatchObject({ iterations: 20, beta: DEFAULT_AVBD.beta * 4, penaltyMin: DEFAULT_AVBD.penaltyMin * 4, penaltyMax: DEFAULT_AVBD.penaltyMax * 4, maxAngularSpeed: DEFAULT_AVBD.maxAngularSpeed * 2 });
     expect(parseSpec(worldEngineSpec('avbd-ref:beta=1000', 0.25)).options).toMatchObject({ beta: 4000 });
     expect(worldEngineSpec('rapier', 0.25)).toBe('rapier');
+  });
+  it('S15 runs at real Kapla size by default: a plank 117 mm long, under real gravity in autoSubsteps', () => {
+    const c = parseViewerConfig('?scenario=S15');
+    expect(c.scale).toBe(KAPLA_SCALE);
+    expect(PLANK_L * c.scale).toBeCloseTo(0.117, 9);
+    expect(c.substeps).toBe(7);
+    expect(toSearch(c)).not.toMatch(/scale|substeps/);
+    expect(parseViewerConfig('?scenario=S15&scale=1')).toMatchObject({ scale: 1, substeps: 1 }); // the giant world, by hand
+  });
+  it('scenarioEngineSpec puts the scenario\'s AVBD options under the spec: the spec\'s own win, GPU options go to avbd-gpu only', () => {
+    const own = SCENARIOS.S15!.avbd!;
+    expect(parseSpec(scenarioEngineSpec('avbd-gpu', 'S15')).options).toEqual(own);
+    expect(parseSpec(scenarioEngineSpec('avbd-gpu:iterations=10,restitution=true', 'S15')).options).toEqual({ ...own, iterations: 10, restitution: true });
+    expect(parseSpec(scenarioEngineSpec('avbd-ref', 'S15')).options).toEqual({ iterations: own.iterations, gapSlop: own.gapSlop });
+    expect(scenarioEngineSpec('rapier', 'S15')).toBe('rapier');
+    expect(scenarioEngineSpec('tiered', 'S15')).toBe('tiered');
+    expect(scenarioEngineSpec('avbd-gpu', 'S4')).toBe('avbd-gpu');
+    // Both AVBD engines take them (the GPU engine checks its options when built, before init).
+    expect(() => makeEngine(scenarioEngineSpec('avbd-gpu', 'S15'))).not.toThrow();
+    expect(() => makeEngine(scenarioEngineSpec('avbd-ref', 'S15'))).not.toThrow();
   });
   it('proposeScene checks the cube size and substeps; the summary says what they do', () => {
     const c = parseViewerConfig('?scenario=S14');

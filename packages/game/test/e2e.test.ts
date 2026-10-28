@@ -59,6 +59,13 @@ describe('game page', () => {
     expect(shownAt).toBeLessThan(r.feedback.find((f) => f.t === 'levelEnd')!.step);
     expect(await page.evaluate((s) => window.__game.replay(s), shots)).toEqual(live);
 
+    // Keys typed into a form field (the viewer's panels share the page) are not game keys: N would load L2.
+    await page.evaluate(() => { const i = document.createElement('input'); i.id = 'field'; document.body.append(i); });
+    await page.locator('#field').press('n');
+    await page.waitForTimeout(1500);
+    expect(await page.evaluate(() => ({ level: window.__game.level, phase: window.__game.phase }))).toEqual({ level: 'L1', phase: 'cleared' });
+    await page.evaluate(() => document.getElementById('field')!.remove());
+
     // Retry regrows the level and resets the rack.
     await page.keyboard.press('r');
     await ready(page);

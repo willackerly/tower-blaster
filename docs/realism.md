@@ -105,8 +105,8 @@ rules the code follows; the doc has the reasoning.
   measured yet.
 - Units. Rings and fibres are metres times `stoneScale`, in world units
   through `FrameParams.metres` since the world-scale change (#60). S15
-  (unit: one plank width, 23.4 mm) gets its true size once it runs at
-  `scale` 0.0234, which waits on its stability at that scale.
+  (unit: one plank width, 23.4 mm) runs at `scale` 0.0234 by default, so
+  rings and fibres have their true size.
 
 ## The hall (Kapla step K3.2a)
 

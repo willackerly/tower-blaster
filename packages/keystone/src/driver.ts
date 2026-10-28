@@ -48,6 +48,14 @@ export class Driver {
   session!: Session;
   /** The newest observed state; while aiming, the world as it stands. */
   snapshot!: Snapshot;
+  /**
+   * How many engine steps `snapshot` holds. Serial, the engine's stepIndex; pipelined while
+   * running, one less: the step after the snapshot is already submitted. An event applies at the
+   * first step() whose stepIndex is at least event.step, so input pushed after seeing a snapshot
+   * and stamped snapshotStep + 1 applies at the same step on either driver (stamped
+   * engine.stepIndex it would not: one step later pipelined). keystone-lab driver-step.test.ts.
+   */
+  snapshotStep = 0;
   private observer!: CpuObserver;
   /** Pipelined only: the snapshot of the newest submitted step, not observed yet. */
   private ahead: Promise<Snapshot> | null = null;
@@ -63,6 +71,7 @@ export class Driver {
     await this.engine.init(this.level.scene);
     for (let i = 0; i < PRESETTLE_STEPS; i++) await this.engine.step();
     this.snapshot = await this.engine.snapshot();
+    this.snapshotStep = this.engine.stepIndex;
     this.session = new Session(this.level, this.snapshot.pos);
     this.observer = new CpuObserver(this.level, this.snapshot);
   }
@@ -79,6 +88,7 @@ export class Driver {
     if (!this.options.pipelined) {
       await this.engine.step();
       this.snapshot = await this.engine.snapshot();
+      this.snapshotStep = this.engine.stepIndex;
       return this.session.observe(this.observer.observe(this.snapshot, this.engine.stepIndex, this.session.watchIdx));
     }
     if (!this.ahead) {
@@ -89,6 +99,7 @@ export class Driver {
     const n = this.engine.stepIndex;
     await this.engine.step();
     this.snapshot = await this.ahead;
+    this.snapshotStep = n;
     this.ahead = this.read();
     const feedback = this.session.observe(this.observer.observe(this.snapshot, n, this.session.watchIdx));
     if (this.session.phase !== 'running') await this.drain();
@@ -106,7 +117,10 @@ export class Driver {
   async drain(): Promise<void> {
     const ahead = this.ahead;
     this.ahead = null;
-    if (ahead) this.snapshot = await ahead;
+    if (ahead) {
+      this.snapshot = await ahead;
+      this.snapshotStep = this.engine.stepIndex;
+    }
   }
 }
 

@@ -28,12 +28,12 @@ export function useViewer(): void {
   afterAll(async () => { await browser?.close(); await server?.close(); });
 }
 
-/** A page of the viewer at `search` (640x400 unless given), once it is past loading, and the page errors it collects. */
-export async function open(search: string, viewport = { width: 640, height: 400 }) {
+/** A page of the viewer at `search` (640x400 unless given), once it is past loading (within `timeout` ms), and the page errors it collects. */
+export async function open(search: string, viewport = { width: 640, height: 400 }, timeout = 60_000) {
   const page = await browser!.newPage({ viewport });
   const errors: string[] = [];
   page.on('pageerror', (e) => errors.push(e.message));
   await page.goto(new URL(search, origin).toString());
-  await page.waitForFunction(() => window.__viewer?.status !== 'loading', undefined, { timeout: 60_000 });
+  await page.waitForFunction(() => window.__viewer?.status !== 'loading', undefined, { timeout });
   return { page, errors };
 }

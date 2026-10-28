@@ -7,11 +7,13 @@
 // engine option restitution (an AvbdParams key, so it travels with the spec), bounce.e the e it then gives
 // every surface (the viewer's own, as no engine has one); see bounceOn and ViewerConfig.bounce;
 // level=L2: a Keystone level instead of a scenario, level.def=<base64url JSON>: a level of your own (level-file.ts),
-// presettle=300: steps run before it shows, see ViewerConfig.level)
+// presettle=300: steps run before it shows, see ViewerConfig.level; rules=keystone: play the level by the game's
+// rules, with keystone.hitstop=1 and keystone.slowmo=1 for its pace juice, see ViewerConfig.rules)
 import { parseSpec } from '@tb/bench';
 import type { BodyDesc, SceneDesc, Vec3 } from '@tb/engine-api';
+import type { EngineKind, PaceFeel } from '@tb/game';
 import { boundingRadius } from '@tb/geom';
-import { compileLevel, LEVELS, type LevelDef, PRESETTLE_STEPS } from '@tb/keystone';
+import { AVBD_ITERATIONS, compileLevel, LEVELS, type LevelDef, PRESETTLE_STEPS } from '@tb/keystone';
 import { type AvbdParams, froudeParams } from '@tb/physics-ref';
 import { LOOKS, parseRealOptions, type RealOptions, writeRealOptions } from '@tb/render';
 import { bounceBody, bounceScene, buildScenario, SCENARIOS } from '@tb/scenarios';
@@ -88,6 +90,16 @@ export interface ViewerConfig {
   /** How a scene without a start camera is framed, and the field of view either way. */
   view: Framing;
   /**
+   * sandbox (default): the scene as physics, fired at along the camera ray. keystone (a level only):
+   * the game's rules, played as the game page plays them (@tb/game playKeystone): the rack fires from
+   * the launcher ring, physics runs only while a shot is in play, and a session replays headless.
+   * The level is played as the game builds it, so the keys that change its physics or stepping must
+   * be at the level's defaults (keystoneEngine, checkKeystone); proj, cam and view are kept, unused.
+   */
+  rules: Rules;
+  /** Keystone's pace juice (URL keys keystone.hitstop, keystone.slowmo: 0 or 1, rules=keystone only; both off by default, as in the game). */
+  feel: PaceFeel;
+  /**
    * Bounce's e (URL key bounce.e, 0 to 1, default DEFAULT_BOUNCE): while the engine spec
    * turns restitution on (bounceOn), every body, spawn and fired projectile and the ground
    * get this restitution (bounceScene), so under the scenes' combine rule (average) every
@@ -104,6 +116,9 @@ export interface ViewerConfig {
  * it does to the default ball's shots, against Rapier: docs/plan.md, Restitution, Viewer.
  */
 export const DEFAULT_BOUNCE = 0.5;
+
+export const RULES = ['sandbox', 'keystone'] as const;
+export type Rules = (typeof RULES)[number];
 
 /** scale's accepted range, and the most substeps. */
 export const SCALE_LIMITS = [0.01, 10] as const;
@@ -148,7 +163,7 @@ export const MAX_PRESETTLE = 6000;
 /** How much faster than the unit world a world at this scale moves (speeds, in cube units per second). */
 export const froudeSpeed = (scale: number) => 1 / Math.sqrt(scale);
 
-export const DEFAULT_CONFIG: ViewerConfig = { engine: 'avbd-gpu', level: null, customLevel: null, scenario: 'S4', params: { N: 2000, F: 4, H: 12 }, seed: 1, sleep: null, autofire: 0, presettle: 0, offscreen: false, look: 'candy', real: {}, loop: 'free', pipeline: true, maxSteps: 1, projectile: DEFAULT_PROJECTILE, scale: 1, substeps: 1, camera: null, view: DEFAULT_FRAMING, bounce: DEFAULT_BOUNCE };
+export const DEFAULT_CONFIG: ViewerConfig = { engine: 'avbd-gpu', level: null, customLevel: null, scenario: 'S4', params: { N: 2000, F: 4, H: 12 }, seed: 1, sleep: null, autofire: 0, presettle: 0, offscreen: false, look: 'candy', real: {}, loop: 'free', pipeline: true, maxSteps: 1, projectile: DEFAULT_PROJECTILE, scale: 1, substeps: 1, camera: null, view: DEFAULT_FRAMING, bounce: DEFAULT_BOUNCE, rules: 'sandbox', feel: { hitStop: false, slowMo: false } };
 
 export function parseViewerConfig(search: string): ViewerConfig {
   const q = new URLSearchParams(search);
@@ -192,7 +207,17 @@ export function parseViewerConfig(search: string): ViewerConfig {
   if (!Number.isInteger(presettle) || presettle < 0 || presettle > MAX_PRESETTLE) throw new Error(`presettle must be a whole number of steps from 0 to ${MAX_PRESETTLE}: ${q.get('presettle')}`);
   const bounce = Number(q.get('bounce.e') ?? DEFAULT_BOUNCE);
   if (!(bounce >= 0 && bounce <= 1) || q.get('bounce.e') === '') throw new Error(`bounce.e must be a number from 0 to 1: ${q.get('bounce.e')}`);
-  return {
+  const rules = (q.get('rules') ?? 'sandbox') as Rules;
+  if (!RULES.includes(rules)) throw new Error(`rules must be ${RULES.join(' or ')}: ${q.get('rules')}`);
+  const flag = (k: string) => {
+    const v = q.get(k);
+    if (v === null) return false;
+    if (rules !== 'keystone') throw new Error(`${k} applies to rules=keystone`);
+    if (v !== '0' && v !== '1') throw new Error(`${k} must be 0 or 1: ${v}`);
+    return v === '1';
+  };
+  const feel: PaceFeel = { hitStop: flag('keystone.hitstop'), slowMo: flag('keystone.slowmo') };
+  const c: ViewerConfig = {
     engine: q.get('engine') ?? DEFAULT_CONFIG.engine,
     level,
     customLevel,
@@ -214,7 +239,37 @@ export function parseViewerConfig(search: string): ViewerConfig {
     camera: parseCamera(q.get('cam')),
     view: parseFraming(q),
     bounce,
+    rules,
+    feel,
   };
+  if (rules === 'keystone') checkKeystone(c);
+  return c;
+}
+
+/**
+ * The game engine a spec names under rules=keystone: the GPU solver (at Keystone's iterations and
+ * gapSlop, sized for the rack: @tb/game makeEngine) or Rapier, as the game page offers them.
+ */
+export function keystoneEngine(spec: string): EngineKind {
+  const { name, options } = parseSpec(spec);
+  if ((name !== 'avbd-gpu' && name !== 'rapier') || Object.keys(options).length) {
+    throw new Error(`rules=keystone plays on the game's engines, engine=avbd-gpu (at Keystone's ${AVBD_ITERATIONS} iterations and gapSlop) or engine=rapier, with no options: not ${spec}`);
+  }
+  return name === 'rapier' ? 'rapier' : 'gpu';
+}
+
+/**
+ * Throws unless c can be played by Keystone's rules as the game plays it: a level, a game engine
+ * (keystoneEngine), and every key that changes its physics or stepping at the level's default.
+ */
+export function checkKeystone(c: ViewerConfig): void {
+  if (!c.level) throw new Error('rules=keystone needs a level: level=L1 to L5, or level.def');
+  keystoneEngine(c.engine);
+  const off = Object.entries({
+    scale: c.scale !== 1, substeps: c.substeps !== 1, presettle: c.presettle !== PRESETTLE_STEPS, sleep: c.sleep !== null,
+    autofire: c.autofire !== 0, loop: c.loop !== DEFAULT_CONFIG.loop, pipeline: c.pipeline !== DEFAULT_CONFIG.pipeline, maxSteps: c.maxSteps !== DEFAULT_CONFIG.maxSteps,
+  }).filter(([, v]) => v).map(([k]) => k);
+  if (off.length) throw new Error(`rules=keystone plays the level as the game does, so ${off.join(', ')} must be left at the level's default`);
 }
 
 /** URL keys view.pitch, view.fit, view.fov (camera.ts Framing; degrees, multiple of a fit, degrees); absent ones are the defaults. */
@@ -265,6 +320,9 @@ export function toSearch(c: ViewerConfig): string {
   if (c.camera) q.set('cam', writeCamera(c.camera));
   writeFraming(c.view, q);
   if (c.bounce !== DEFAULT_BOUNCE) q.set('bounce.e', String(c.bounce));
+  if (c.rules !== DEFAULT_CONFIG.rules) q.set('rules', c.rules);
+  if (c.feel.hitStop) q.set('keystone.hitstop', '1');
+  if (c.feel.slowMo) q.set('keystone.slowmo', '1');
   return `?${q}`;
 }
 
@@ -320,6 +378,20 @@ export function worldEngineSpec(spec: string, scale: number): string {
   return FROUDE_KEYS.reduce((out, k) => (scaled[k] === undefined ? out : withOption(out, k, scaled[k] as number)), spec);
 }
 const FROUDE_KEYS = ['beta', 'penaltyMin', 'penaltyMax', 'maxAngularSpeed', 'restitutionThreshold'] as const;
+
+/** GpuEngineOptions keys (bench's gpuEngineArgs): a scenario's avbd options with these go to avbd-gpu only. */
+const GPU_OPTIONS: ReadonlySet<string> = new Set(['capacity', 'spare', 'pairsPerBody', 'maxRadius', 'colorTail', 'indirectColors', 'tailThreads', 'colorRounds', 'hessian', 'boxBroadphase']);
+
+/**
+ * The spec with the scenario's own AVBD options (ScenarioDef.avbd) under it: each one the spec
+ * leaves unset, on the AVBD engines (GPU options on avbd-gpu only). Other engines' specs are unchanged.
+ */
+export function scenarioEngineSpec(spec: string, scenario: string): string {
+  const { name, options } = parseSpec(spec);
+  const own = SCENARIOS[scenario]?.avbd;
+  if (!own || !AVBD_ENGINES.has(name)) return spec;
+  return Object.entries(own).reduce((out, [k, v]) => (options[k] === undefined && (name === 'avbd-gpu' || !GPU_OPTIONS.has(k)) ? withOption(out, k, v) : out), spec);
+}
 
 /** The engines whose spec takes AvbdParams, restitution included. */
 export const AVBD_ENGINES: ReadonlySet<string> = new Set(['avbd-gpu', 'avbd-ref']);
