@@ -3,7 +3,8 @@
 // all-zero record (a fresh buffer, or clearFx) means "no effect":
 //
 //   word 0  bits 0-23   255 - tint (r, g, b), 8 bits each; bits 24-31 emissive
-//   word 1  bits 0-15   f16(1 - scale); bit 16 anchor the scale at the base
+//   word 1  bits 0-15   f16(1 - scale); bit 16 anchor the scale at the base;
+//           bit 17 paint: on a sphere, the tint is its colour rather than a multiple of the look's
 //   word 2  f32 flash start (frame time, seconds)
 //   word 3  f32 flash duration (seconds); 0 = emissive is steady
 //
@@ -15,6 +16,7 @@ export const FX_WORDS = 4;
 /** HDR multiple of the albedo at emissive 1 (blooms well above 1). */
 export const FX_EMISSIVE_MAX = 16;
 export const FX_ANCHOR = 1 << 16;
+export const FX_PAINT = 1 << 17;
 
 export interface FxOptions {
   /** Multiplies the albedo, linear 0..1 per channel; [1, 1, 1] is none. */
@@ -25,6 +27,8 @@ export interface FxOptions {
   scale?: number;
   /** Grow from the body's base (-y in body space) instead of its centre. */
   anchor?: boolean;
+  /** Spheres: the tint is the colour (a fired object's own), not a multiple of the look's ball or albedo. */
+  paint?: boolean;
   /** Fade the emissive out over this many seconds from `flashAt`. */
   flash?: number;
   /** Flash start, frame time in seconds (default: the last rendered frame). */
@@ -57,12 +61,12 @@ export function fromHalf(h: number): number {
 export function packFx(fx: FxOptions, out: Uint32Array, o = 0, now = 0): void {
   const t = fx.tint ?? [1, 1, 1];
   out[o] = ((255 - byte(t[0])) | ((255 - byte(t[1])) << 8) | ((255 - byte(t[2])) << 16) | (byte(fx.emissive ?? 0) << 24)) >>> 0;
-  out[o + 1] = (toHalf(1 - Math.min(1, Math.max(0, fx.scale ?? 1))) | (fx.anchor ? FX_ANCHOR : 0)) >>> 0;
+  out[o + 1] = (toHalf(1 - Math.min(1, Math.max(0, fx.scale ?? 1))) | (fx.anchor ? FX_ANCHOR : 0) | (fx.paint ? FX_PAINT : 0)) >>> 0;
   out[o + 2] = fx.flash ? bits(fx.flashAt ?? now) : 0;
   out[o + 3] = fx.flash ? bits(fx.flash) : 0;
 }
 
-export interface Fx { tint: V3; emissive: number; scale: number; anchor: boolean; flashAt: number; flash: number }
+export interface Fx { tint: V3; emissive: number; scale: number; anchor: boolean; paint: boolean; flashAt: number; flash: number }
 
 export function unpackFx(w: Uint32Array, o = 0): Fx {
   const w0 = w[o]!, w1 = w[o + 1]!;
@@ -71,6 +75,7 @@ export function unpackFx(w: Uint32Array, o = 0): Fx {
     emissive: (w0 >>> 24) / 255,
     scale: 1 - fromHalf(w1 & 0xffff),
     anchor: (w1 & FX_ANCHOR) !== 0,
+    paint: (w1 & FX_PAINT) !== 0,
     flashAt: float(w[o + 2]!),
     flash: float(w[o + 3]!),
   };

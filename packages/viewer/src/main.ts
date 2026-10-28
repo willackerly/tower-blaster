@@ -16,14 +16,14 @@ import { clampPitch, frame, rayThrough, viewProj, eyeOf, orbitAt, poseOf, type C
 import { alphaAt, newArrivals, newClock, newPacer, pauseLatch, runFree, stepsDue, taskYield, trackSimSpeed, Window } from './loop.ts';
 import type { V3 } from './math.ts';
 import { escapeHtml } from './html.ts';
-import { bounceBody, bounceOn, engineSpec, froudeSpeed, keystoneEngine, levelOf, parseViewerConfig, presetSearch, scenarioEngineSpec, sceneTitle, toSearch, type ViewerConfig, viewerScene, withOption, worldEngineSpec } from './params.ts';
-import { projectileBody, projectileShape, pushRadiusLimit, worldGrenade } from './projectile.ts';
+import { bounceOn, engineSpec, firedBody, froudeSpeed, keystoneEngine, levelOf, parseViewerConfig, presetSearch, scenarioEngineSpec, sceneTitle, toSearch, type ViewerConfig, viewerScene, withOption, worldEngineSpec } from './params.ts';
+import { projectileRadius, pushRadiusLimit, worldGrenade } from './projectile.ts';
 import { Grenades } from '@tb/weapons';
 import { mountControls } from './controls.ts';
 import { startSearch } from './default-scene.ts';
 import { type DevAction, mountDev } from './dev-panel.ts';
 import { createDevice } from '@tb/gpu';
-import { lookByName, Renderer, SnapshotSource, type PixelStats } from '@tb/render';
+import { lookByName, Renderer, SnapshotSource, srgbToLinear, type PixelStats } from '@tb/render';
 
 const PRESETS: Array<{ label: string; search: string }> = [
   { label: 'Tower 8×8×30', search: '?scenario=S1&param.gap=0.02' },
@@ -54,7 +54,7 @@ const GPU_ITERATIONS = [10, 15, 20, 40];
 const KEYSTONE_AVBD = { iterations: AVBD_ITERATIONS, gapSlop: AVBD_GAP_SLOP } as const;
 const keystoneAvbd = (spec: string) => withOption(withOption(spec, 'iterations', KEYSTONE_AVBD.iterations), 'gapSlop', KEYSTONE_AVBD.gapSlop);
 
-const viewerEngine = (c: ViewerConfig): PhysicsEngine => makeEngine(worldEngineSpec(engineSpec(scenarioEngineSpec(c.engine, c.scenario), c.projectile), c.scale));
+const viewerEngine = (c: ViewerConfig): PhysicsEngine => makeEngine(worldEngineSpec(engineSpec(scenarioEngineSpec(c.engine, c.scenario), c.projectile, c.scale), c.scale));
 
 interface ViewerHandle {
   status: 'loading' | 'running' | 'error';
@@ -74,6 +74,8 @@ interface ViewerHandle {
   overlapped: number;
   /** Body slots drawn with a tint (a level's roles and materials, as the game draws them); 0 for a scenario. */
   tinted: number;
+  /** Fired real things (proj=<name>) painted their colour, in the current look's (sRGB 0xrrggbb), by body id; cleared on load. */
+  painted: { id: number; colour: number }[];
   /** The running engine's EngineInfo.variant (its params as built: Bounce's restitution, a world scale's scaling). */
   variant: EngineInfo['variant'];
   /** Where the camera is now. */
@@ -101,7 +103,7 @@ const GRENADE_LOOKAHEAD = 4;
 const canvas = document.getElementById('c') as HTMLCanvasElement;
 const hud = document.getElementById('hud')!;
 const errorBox = document.getElementById('error')!;
-const handle: ViewerHandle = { status: 'loading', frames: 0, bodies: 0, awake: 0, stepIndex: 0, msPerStep: NaN, snapMs: NaN, resets: 0, overlapped: 0, tinted: 0, variant: {}, camera: () => ({ target: [0, 0, 0], yaw: 0, pitch: 0, distance: 1 }), fire: () => {}, capture: async () => null, inputs: [], game: null, inputHook: null };
+const handle: ViewerHandle = { status: 'loading', frames: 0, bodies: 0, awake: 0, stepIndex: 0, msPerStep: NaN, snapMs: NaN, resets: 0, overlapped: 0, tinted: 0, painted: [], variant: {}, camera: () => ({ target: [0, 0, 0], yaw: 0, pitch: 0, distance: 1 }), fire: () => {}, capture: async () => null, inputs: [], game: null, inputHook: null };
 window.__viewer = handle;
 
 function fail(e: unknown) {
@@ -218,6 +220,14 @@ async function main() {
   let inputHook: InputHook | null = null;
   // This load's fired grenades, waiting on their fuses (proj.weapon=grenade).
   let grenades: Grenades | null = null;
+  // This load's fired catalogue objects, painted their colours (the candy skin outside the real look).
+  let painted: { id: number; colour: { natural: number; candy: number } }[] = [];
+  const paint = (id: number, colour: { natural: number; candy: number }) => {
+    const c = config.look === 'real' ? colour.natural : colour.candy;
+    handle.painted = [...handle.painted.filter((p) => p.id !== id), { id, colour: c }];
+    renderer.setFx(id, { tint: [c >> 16, (c >> 8) & 0xff, c & 0xff].map((x) => srgbToLinear(x / 255)) as V3, paint: true });
+    fxSlots = Math.max(fxSlots, id + 1);
+  };
 
   async function reset() {
     resetting = true;
@@ -253,7 +263,7 @@ async function main() {
     const next = viewerScene(want); // throws on bad params before anything is torn down
     engine.dispose();
     engine = viewerEngine(want);
-    pushLimit = pushRadiusLimit(engineSpec(want.engine, want.projectile), next);
+    pushLimit = pushRadiusLimit(engineSpec(want.engine, want.projectile, want.scale), next);
     await engine.init(next);
     // Settle before the scene shows (ViewerConfig.presettle); the steps are submitted back to back, then one read.
     for (let i = 0; i < want.presettle * want.substeps; i++) await engine.step();
@@ -279,6 +289,8 @@ async function main() {
     notice = '';
     inputHook = handle.inputHook?.() ?? null;
     // The page reads the state about once a frame, so a fuse predicts that far ahead (Grenades).
+    painted = [];
+    handle.painted = [];
     grenades = new Grenades({ dt: next.dt, substeps: engine.info.integrator?.substeps ?? 1, gravity: next.gravity, groundY: next.ground?.y ?? null }, GRENADE_LOOKAHEAD * want.substeps);
     apply(s, t0, engine.stepIndex);
   }
@@ -299,6 +311,7 @@ async function main() {
       config = { ...config, look, real };
       if (nextConfig) nextConfig = { ...nextConfig, look, real };
       renderer.look = lookByName(look, real);
+      for (const f of painted) paint(f.id, f.colour);
       history.replaceState(null, '', toSearch(config));
       presets(location.search);
     },
@@ -309,7 +322,7 @@ async function main() {
         return;
       }
       const next = { ...config, projectile: p };
-      if (boundingRadius(projectileShape(p)) <= pushLimit) {
+      if (projectileRadius(p, config.scale) <= pushLimit) {
         config = next;
         history.replaceState(null, '', toSearch(config));
         return;
@@ -402,9 +415,8 @@ async function main() {
   handle.fire = (x = 0, y = 0) => {
     if (resetting) return;
     const { origin, dir } = rayThrough(orbit, aspect(), x, y);
-    const body = projectileBody({ ...config.projectile, speed: config.projectile.speed * froudeSpeed(config.scale) }, origin, dir);
-    // With Bounce on, the projectile bounces at the scene's e too (viewerScene).
-    const ev: InputEvent = { step: engine.stepIndex, kind: 'spawn', body: bounceOn(config.engine) ? bounceBody(body, config.bounce) : body };
+    const { body, colour } = firedBody(config, origin, dir);
+    const ev: InputEvent = { step: engine.stepIndex, kind: 'spawn', body };
     try {
       pushInput([ev]);
     } catch (e) {
@@ -414,10 +426,14 @@ async function main() {
       return;
     }
     const p = config.projectile;
+    // Engines number spawns after the scene's bodies in (step, push order), the order of events. A spawn
+    // another input pushes later for an earlier step would come first; nothing pushes one (#94's hooks could).
+    const id = scene.bodies.length + events.filter((e) => e.kind === 'spawn').indexOf(ev);
+    if (colour) {
+      painted.push({ id, colour });
+      paint(id, colour);
+    }
     if (p.weapon === 'grenade' && p.grenade && grenades) {
-      // Engines number spawns after the scene's bodies in (step, push order), the order of events. A spawn
-      // another input pushes later for an earlier step would come first; nothing pushes one (#94's hooks could).
-      const id = scene.bodies.length + events.filter((e) => e.kind === 'spawn').indexOf(ev);
       const [g, spec] = [grenades, worldGrenade(p.grenade, froudeSpeed(config.scale), config.substeps)];
       pushGrenade(() => g.launch(id, ev.step, spec, ev.body.shape));
     }

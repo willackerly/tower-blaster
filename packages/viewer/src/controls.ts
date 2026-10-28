@@ -10,10 +10,10 @@ import { buildScenario, SCENARIOS } from '@tb/scenarios';
 import { type CameraPose, type Framing, FRAMING_LIMITS } from './camera.ts';
 import { escapeHtml } from './html.ts';
 import { levelIssues, levelJson, parseLevelDef } from './level-file.ts';
-import { autoSubsteps, AVBD_ENGINES, bounceOn, carriedFraming, checkKeystone, DEFAULT_BOUNCE, DEFAULT_CONFIG, defaultLook, defaultPresettle, keystoneEngine, levelDef, MAX_PRESETTLE, MAX_SUBSTEPS, type Rules, SCALE_LIMITS, type ViewerConfig, withOption } from './params.ts';
+import { autoSubsteps, AVBD_ENGINES, blockDensityOf, bounceOn, carriedFraming, checkKeystone, DEFAULT_BOUNCE, DEFAULT_CONFIG, defaultLook, defaultPresettle, firedSpeed, keystoneEngine, levelDef, MAX_PRESETTLE, MAX_SUBSTEPS, type Rules, SCALE_LIMITS, type ViewerConfig, withOption } from './params.ts';
 import { blastWeight, checkBlast } from '@tb/engine-api';
-import { DEFAULT_GRENADE, FUSES, GRENADE_LIMITS, type GrenadeSpec } from '@tb/weapons';
-import { GRENADE_BLAST_KEYS, GRENADE_NUMBERS, parseProjectile, type Projectile, projectileMass } from './projectile.ts';
+import { DEFAULT_GRENADE, FUSES, GRENADE_LIMITS, type GrenadeSpec, isPreset, PRESET_NAMES, PROJECTILE_PRESETS } from '@tb/weapons';
+import { DEFAULT_PROJECTILE, GRENADE_BLAST_KEYS, GRENADE_NUMBERS, parseProjectile, presetProjectile, type Projectile, projectileMass, worldProjectile } from './projectile.ts';
 import { parseSceneFile, sceneFile, sceneFileName } from './scene-file.ts';
 
 /** Readable names for scenario params; the rest show their key. */
@@ -54,6 +54,32 @@ export function grenadeSummary(g: GrenadeSpec): string {
   const kick = (d: number) => (d < b.radius ? Math.min(b.maxDv, b.impulse * blastWeight(b, d) * 1.5) : 0);
   const at = [1, 0.5 * b.radius, 0.8 * b.radius].map((d) => +d.toPrecision(2));
   return `a cube at ${at.map((d) => `${d} m gets ${kick(d).toPrecision(2)}`).join(', ')} m/s`;
+}
+
+/** What the scene's blocks might be made of, kg/m^3 (the panel's suggestions for Projectile.blockDensity). */
+export const BLOCK_MATERIALS: readonly [string, number][] = [['stone', 2400], ['brick', 1900], ['oak', 700], ['pine', 450], ['cardboard', 100], ['foam', 30]];
+
+const kg = (m: number) => (m >= 1000 ? `${(m / 1000).toPrecision(3)} t` : `${m.toPrecision(3)} kg`);
+const times = (x: number) => (x >= 100 ? Number(x.toPrecision(3)).toLocaleString('en-US') : x.toPrecision(3));
+
+/**
+ * What the panel says the projectile is in c's world: a real thing's mass against a block's
+ * (a cube of the scene's edge, scale m, at blockDensity: the ratio physics sees), a ball's or cube's
+ * against a scene cube's 1 kg; and the launch speed when the engine caps it (firedSpeed).
+ */
+export function projectileSummary(p: Projectile, c: ViewerConfig): string {
+  const m = projectileMass(p);
+  const w = worldProjectile(p, c.scale, blockDensityOf({ ...c, projectile: p }));
+  const fired = firedSpeed({ ...c, projectile: p }, w), capped = fired < w.speed;
+  const speed = p.speed * (fired / w.speed);
+  let out: string;
+  if (p.preset) {
+    const block = blockDensityOf({ ...c, projectile: p }) * c.scale ** 3, r = m / block;
+    out = `${kg(m)}, ${r >= 1 ? `${times(r)}x` : `1/${times(1 / r)} of`} a ${+c.scale.toPrecision(3)} m cube of block (${kg(block)})`;
+  } else out = `${m.toPrecision(3)} kg (a cube is 1 kg)`;
+  out += `, ${times(m * speed)} kg·m/s`;
+  if (capped) out += `; launched at ${speed.toPrecision(3)} m/s, the fastest this engine sees at this cube size (more substeps raise it)`;
+  return out;
 }
 
 /** Linear albedo to a colour input's #rrggbb (sRGB) and back, to 3 decimals. */
@@ -238,10 +264,14 @@ export function mountControls(root: HTMLElement, hooks: ControlsHooks): { refres
     <div id="level-file" class="buttons"><button type="button" name="levelDownload">Download level</button><button type="button" name="levelLoad">Load level…</button><input type="file" name="levelFile" accept=".json,application/json" hidden></div>
     <form id="proj-form">
       <div class="h">Projectile</div>
-      <label class="f"><span>shape</span><select name="shape"><option value="ball">ball</option><option value="cube">cube</option></select></label>
-      ${field('size', 'size (m)', 0, 'step="0.1" min="0.1" max="20"')}
+      <label class="f"><span>throw</span><select name="shape"><option value="ball">ball</option><option value="cube">cube</option><optgroup label="real things">${PRESET_NAMES.map((n) => `<option value="${n}">${escapeHtml(PROJECTILE_PRESETS[n].label)}</option>`).join('')}</optgroup></select></label>
+      ${field('size', 'size (m)', 0, 'step="any" min="0.1" max="20"')}
       ${field('mass', 'mass (kg)', '', 'step="any" min="0.01"')}
       ${field('speed', 'speed (m/s)', 0, 'step="1" min="0" max="500"')}
+      ${field('restitution', 'bounce e (Bounce on)', '', 'step="any" min="0" max="1" placeholder="scene e"')}
+      ${field('friction', 'friction', '', 'step="any" min="0" max="2" placeholder="0.5"')}
+      ${field('blockDensity', 'blocks are (kg/m³)', '', 'step="any" min="1" max="30000" list="block-densities"')}
+      <datalist id="block-densities">${BLOCK_MATERIALS.map(([name, d]) => `<option value="${d}" label="${name}"></option>`).join('')}</datalist>
       <label class="f"><span>weapon</span><select name="weapon"><option value="">none</option><option value="grenade">grenade</option></select></label>
       <div class="grenade">
         <label class="f"><span>fuse</span><select name="grenade.fuse">${FUSES.map((f) => `<option value="${f}"${f === DEFAULT_GRENADE.fuse ? ' selected' : ''}>${f === 'proxTimer' ? 'proximity, then delay' : f === 'prox' ? 'proximity' : 'timer'}</option>`).join('')}</select></label>
@@ -352,7 +382,7 @@ export function mountControls(root: HTMLElement, hooks: ControlsHooks): { refres
   function projectile(): Projectile {
     const q = new URLSearchParams();
     q.set('proj', input(projForm, 'shape').value);
-    for (const k of ['size', 'mass', 'speed']) q.set(`proj.${k}`, input(projForm, k).value);
+    for (const k of ['size', 'mass', 'speed', 'restitution', 'friction', 'blockDensity']) q.set(`proj.${k}`, input(projForm, k).value);
     const weapon = input(projForm, 'weapon').value;
     grenadeBox.hidden = weapon !== 'grenade';
     if (weapon) {
@@ -365,11 +395,19 @@ export function mountControls(root: HTMLElement, hooks: ControlsHooks): { refres
   }
 
   function showMass(p: Projectile) {
-    const m = projectileMass(p);
+    const c = hooks.config(), m = projectileMass(p);
     (input(projForm, 'mass') as HTMLInputElement).placeholder = `auto ${m.toPrecision(3)}`;
-    projOut.textContent = `${m.toPrecision(3)} kg, ${(m * p.speed).toPrecision(3)} kg·m/s (a cube is 1 kg)${p.grenade ? `; ${grenadeSummary(p.grenade)}` : ''}`;
+    (input(projForm, 'blockDensity') as HTMLInputElement).placeholder = `auto ${blockDensityOf({ ...c, projectile: { ...p, blockDensity: undefined } })}`;
+    projOut.textContent = [projectileSummary(p, c), p.grenade ? grenadeSummary(p.grenade) : ''].filter(Boolean).join('; ');
     projOut.classList.remove('warn');
   }
+  // A new thing to throw brings its own size, speed, bounce and friction (a real thing's, or the ball's); set them after to override.
+  input(projForm, 'shape').addEventListener('change', () => {
+    const kind = input(projForm, 'shape').value;
+    const p = isPreset(kind) ? presetProjectile(kind) : DEFAULT_PROJECTILE;
+    for (const k of ['size', 'speed'] as const) input(projForm, k).value = String(p[k]);
+    for (const k of ['mass', 'restitution', 'friction'] as const) input(projForm, k).value = p[k] == null ? '' : String(p[k]);
+  });
 
   // A new cube size brings its own substeps (autoSubsteps); set them after to override.
   input(sceneForm, 'scale').addEventListener('input', () => {
@@ -500,10 +538,11 @@ export function mountControls(root: HTMLElement, hooks: ControlsHooks): { refres
     showParams(sceneChoice(c));
     checkScene();
     const p = c.projectile;
-    input(projForm, 'shape').value = p.shape;
+    input(projForm, 'shape').value = p.preset ?? p.shape;
     input(projForm, 'size').value = String(p.size);
     input(projForm, 'mass').value = p.mass === null ? '' : String(p.mass);
     input(projForm, 'speed').value = String(p.speed);
+    for (const k of ['restitution', 'friction', 'blockDensity'] as const) input(projForm, k).value = p[k] === undefined ? '' : String(p[k]);
     // The grenade's fields keep their values while the weapon is off, so switching it back on restores them.
     input(projForm, 'weapon').value = p.weapon ?? '';
     grenadeBox.hidden = p.weapon !== 'grenade';

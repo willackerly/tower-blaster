@@ -157,9 +157,11 @@ export function parseSceneFile(text: string): { config: ViewerConfig; name: stri
 
   if (root.projectile !== undefined) {
     const p = object(root.projectile, 'projectile');
-    only(p, [...Object.keys(DEFAULT_PROJECTILE), 'weapon'], 'projectile');
+    only(p, [...Object.keys(DEFAULT_PROJECTILE), 'preset', 'restitution', 'friction', 'blockDensity', 'weapon'], 'projectile');
     if (p.shape !== undefined) q.set('proj', str(p.shape, 'projectile.shape'));
-    for (const k of ['size', 'speed'] as const) if (p[k] !== undefined) q.set(`proj.${k}`, String(num(p[k], `projectile.${k}`)));
+    // A real thing (PROJECTILE_PRESETS) is a ball whose unset fields are its own.
+    if (p.preset !== undefined) q.set('proj', str(p.preset, 'projectile.preset'));
+    for (const k of ['size', 'speed', 'restitution', 'friction', 'blockDensity'] as const) if (p[k] !== undefined) q.set(`proj.${k}`, String(num(p[k], `projectile.${k}`)));
     if (p.mass !== undefined && p.mass !== null) q.set('proj.mass', String(num(p.mass, 'projectile.mass')));
     if (p.weapon !== undefined) q.set('proj.weapon', str(p.weapon, 'projectile.weapon'));
   }

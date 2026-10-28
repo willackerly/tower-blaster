@@ -1018,7 +1018,7 @@ describe('projectile', () => {
   });
   it('rejects shapes and values out of range', () => {
     const q = (s: string) => parseProjectile(new URLSearchParams(s));
-    expect(() => q('proj=cone')).toThrow(/ball or cube/);
+    expect(() => q('proj=cone')).toThrow(/proj must be one of ball, cube, beachball, .*: cone/);
     for (const s of ['proj.size=0', 'proj.size=21', 'proj.mass=0', 'proj.speed=-1', 'proj.speed=fast']) expect(() => q(s)).toThrow(/from/);
     expect(q('proj.mass=')).toEqual(DEFAULT_PROJECTILE);
   });
