@@ -161,4 +161,15 @@ describe('probe-compare: bench:browser A/B records', () => {
     expect(r).toMatchObject({ valid: false, note: `the timing is not valid here (${problems[0]})` });
     expect(compareMarkdown([], [r])).toContain(`| the timing is not valid here (${problems[0]}) |`);
   });
+  it('notes a record whose engine hit a limit that changed its physics, and leaves it out of the repeated cells', () => {
+    const hit = ['engine 0 (avbd-gpu): contacts dropped on 5 of 240 steps'];
+    const r = compareBrowser({ ...rec('S15', {}, { boxBroadphase: true }, 9, 6), limitProblems: hit });
+    expect(r).toMatchObject({ valid: false, note: `an engine hit a limit that changed its physics, so the arms time different simulations (${hit[0]})` });
+    expect(compareMarkdown([], [r])).toContain(`| an engine hit a limit that changed its physics, so the arms time different simulations (${hit[0]}) |`);
+    // Invalid timing is named first; a record with no limit hit (or from before limits were recorded) stays valid.
+    expect(compareBrowser({ ...rec('S15', {}, {}, 9, 6), limitProblems: hit, timingValid: false }).note).toMatch(/^the timing is not valid here/);
+    expect(compareBrowser({ ...rec('S15', {}, {}, 9, 6), limitProblems: [] })).toMatchObject({ valid: true, note: null });
+    const ok = compareBrowser(rec('S15', {}, {}, 9, 6));
+    expect(compareMarkdown([], [r, r, ok])).not.toContain('Cells timed more than once');
+  });
 });
