@@ -14,8 +14,10 @@
 //   step, the saving in ms and in percent of the base's step, each engine's
 //   block spread, and the median saving of a cell timed more than once.
 // A pair is flagged when one side solves points (records 0) and the other
-// leaves records unset, which on the GPU is records 1 (gpuRecordsLayout), and
-// a bench:browser record when its timing is not valid.
+// leaves records unset, which on the GPU is records 1 (gpuRecordsLayout), or
+// one side colours with colorMode 0 and the other leaves it unset, which on
+// the GPU is colorMode 3 (gpuColorMode), and a bench:browser record when its
+// timing is not valid.
 // Times in the P2 JSON are ms; reported here in µs.
 import { type AvbdParams, DEFAULT_AVBD } from '@tb/physics-ref';
 import type { Checkpoint, P2Result } from './probe.ts';
@@ -23,12 +25,16 @@ import type { Checkpoint, P2Result } from './probe.ts';
 /** Rule P: the per-point cost, and the tail's per critical-path point, may rise at most this much. */
 export const MAX_PER_POINT_RISE = 0.05;
 
-type Options = { records?: unknown };
-/** Why the base and the variant are not the same contact layout although neither seems to change it, or null. */
+type Options = { records?: unknown; colorMode?: unknown };
+/** Why the base and the variant are not the same contact layout or colouring although neither seems to change it, or null. */
 function layoutNote(base: Options | undefined, arm: Options | undefined): string | null {
-  // On the GPU unset is records 1 (gpuRecordsLayout), so points on one side only is two layouts.
-  const unsetAndPoints = (a: Options | undefined, b: Options | undefined) => a?.records === undefined && b?.records === 0;
-  return unsetAndPoints(base, arm) || unsetAndPoints(arm, base) ? 'the base and the variant solve different contact layouts (records 0 against the default, records 1)' : null;
+  // On the GPU unset is records 1 (gpuRecordsLayout), so points on one side only is two layouts;
+  // and unset is colorMode 3 (gpuColorMode), so colorMode 0 on one side only is two colourings.
+  const unsetAnd = (k: keyof Options, v: number) => (a: Options | undefined, b: Options | undefined) => a?.[k] === undefined && b?.[k] === v;
+  const points = unsetAnd('records', 0), hash = unsetAnd('colorMode', 0);
+  if (points(base, arm) || points(arm, base)) return 'the base and the variant solve different contact layouts (records 0 against the default, records 1)';
+  if (hash(base, arm) || hash(arm, base)) return 'the base and the variant colour differently (colorMode 0 against the default, colorMode 3)';
+  return null;
 }
 
 const median = (xs: number[]) => {

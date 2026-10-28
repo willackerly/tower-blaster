@@ -62,7 +62,7 @@
   "packages/physics-gpu/test/engine-gapslop-records.test.ts": 97.8,
   "packages/physics-gpu/test/engine-gapslop.test.ts": 226.6,
   "packages/physics-gpu/test/engine-knock.test.ts": 108.3,
-  "packages/physics-gpu/test/engine-pinned.test.ts": 18.2,
+  "packages/physics-gpu/test/engine-pinned.test.ts": 44.7,
   "packages/physics-gpu/test/engine-rest.test.ts": 131.4,
   "packages/physics-gpu/test/engine-restitution-records.test.ts": 189.1,
   "packages/physics-gpu/test/engine-restitution-supports.test.ts": 82.3,

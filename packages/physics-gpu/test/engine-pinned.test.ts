@@ -4,7 +4,11 @@
 // against digests captured on SwiftShader before the fused dual was removed
 // (at 8a9a308, PR #79: records 1 the default). The removal must not change a
 // float: the other bit-for-bit tests compare layouts and dispatch splits with
-// each other, this one compares each against the build before it.
+// each other, this one compares each against the build before it. Since
+// colorMode 3 became the GPU default (gpuColorMode) the default is pinned to
+// colorMode 3's digests, the cases about the hash colouring name colorMode 0,
+// and unset is checked against an explicit colorMode 3 on every contact
+// layout and with the slop.
 import { describe, expect, it } from 'vitest';
 import type { AvbdParams } from '@tb/physics-ref';
 import { buildScenario } from '@tb/scenarios';
@@ -25,16 +29,20 @@ const knock = () => buildScenario('S5', { N: 64, F: 2, H: 8, street: 2, fireStep
 
 type Case = { name: string; params?: Partial<AvbdParams>; opts?: Omit<GpuEngineOptions, 'device'>; bodies: string; contacts: string };
 const CASES: Case[] = [
-  { name: 'default (records 1)', bodies: '0x121b9efe', contacts: '0x1c7ce49d' },
-  { name: 'records 0 (points)', params: { records: 0 }, bodies: '0x121b9efe', contacts: '0x61e66bb3' },
-  { name: 'records 0, array Hessian', params: { records: 0 }, opts: { hessian: 'array' }, bodies: '0x121b9efe', contacts: '0x61e66bb3' },
-  { name: 'records 2', params: { records: 2 }, bodies: '0x27fa48c1', contacts: '0xacfb43ab' },
+  // The default since colorMode 3 became the GPU's (gpuColorMode): colorMode 3's floats, bit for bit, in either dispatch.
+  { name: 'default (records 1, colorMode 3)', bodies: '0x8077fb07', contacts: '0xf65833cc' },
   { name: 'colorMode 3', params: { colorMode: 3 }, bodies: '0x8077fb07', contacts: '0xf65833cc' },
+  { name: 'default, every colour in the tail', opts: { colorTail: 0 }, bodies: '0x8077fb07', contacts: '0xf65833cc' },
+  // The hash colouring alone (the default before): explicit colorMode 0.
+  { name: 'colorMode 0 (records 1)', params: { colorMode: 0 }, bodies: '0x121b9efe', contacts: '0x1c7ce49d' },
+  { name: 'colorMode 0, records 0 (points)', params: { colorMode: 0, records: 0 }, bodies: '0x121b9efe', contacts: '0x61e66bb3' },
+  { name: 'colorMode 0, records 0, array Hessian', params: { colorMode: 0, records: 0 }, opts: { hessian: 'array' }, bodies: '0x121b9efe', contacts: '0x61e66bb3' },
+  { name: 'colorMode 0, records 2', params: { colorMode: 0, records: 2 }, bodies: '0x27fa48c1', contacts: '0xacfb43ab' },
   { name: 'colorMode 4, colorPriority 1, records 2', params: { colorMode: 4, colorPriority: 1, records: 2 }, bodies: '0x70875c84', contacts: '0x7da56860' },
-  { name: 'gapSlop 3e-5', params: { gapSlop: 3e-5 }, bodies: '0xd7dd78aa', contacts: '0x19f83d1c' },
-  { name: 'gapSlop 3e-5, records 2', params: { gapSlop: 3e-5, records: 2 }, bodies: '0x984364f5', contacts: '0xbb83c076' },
-  { name: 'every colour in the tail', opts: { colorTail: 0 }, bodies: '0x121b9efe', contacts: '0x1c7ce49d' },
-  { name: 'indirect colour dispatches', opts: { indirectColors: true }, bodies: '0x121b9efe', contacts: '0x1c7ce49d' },
+  { name: 'colorMode 0, gapSlop 3e-5', params: { colorMode: 0, gapSlop: 3e-5 }, bodies: '0xd7dd78aa', contacts: '0x19f83d1c' },
+  { name: 'colorMode 0, gapSlop 3e-5, records 2', params: { colorMode: 0, gapSlop: 3e-5, records: 2 }, bodies: '0x984364f5', contacts: '0xbb83c076' },
+  { name: 'colorMode 0, every colour in the tail', params: { colorMode: 0 }, opts: { colorTail: 0 }, bodies: '0x121b9efe', contacts: '0x1c7ce49d' },
+  { name: 'colorMode 0, indirect colour dispatches', params: { colorMode: 0 }, opts: { indirectColors: true }, bodies: '0x121b9efe', contacts: '0x1c7ce49d' },
 ];
 
 describe('GPU AVBD engine: the floats pinned against the build before the fused dual was removed', () => {
@@ -45,5 +53,22 @@ describe('GPU AVBD engine: the floats pinned against the build before the fused 
     expect(r.contacts!.used).toBeGreaterThan(10);
     const got = { bodies: hex(digest(r.snaps.at(-1)!)), contacts: hex(r.contacts!.digest) };
     expect(got).toEqual({ bodies: c.bodies, contacts: c.contacts });
+  });
+});
+
+describe('GPU AVBD engine: colorMode 3 is the default (gpuColorMode)', () => {
+  const state = (s: Drivers.PlainSnapshot) => [s.pos, s.rot, s.linVel, s.angVel];
+  it('unset is colorMode 3 bit for bit, and not colorMode 0, with records 1, 0 and 2 and with the slop: every 6th step\'s bodies', { timeout: 300_000 }, async (ctx) => {
+    if (!gpu) return ctx.skip();
+    for (const extra of [{}, { records: 0 }, { records: 2 }, { gapSlop: 3e-5 }] as Array<Partial<AvbdParams>>) {
+      const run = async (params: Partial<AvbdParams>) => {
+        const r = await call('simulateGpu', knock(), 30, { iterations: 4, ...extra, ...params }, 6, {});
+        expect(r.error, JSON.stringify(params)).toBeNull();
+        return r.snaps.map(state);
+      };
+      const unset = await run({});
+      expect(unset, JSON.stringify(extra)).toEqual(await run({ colorMode: 3 }));
+      expect(unset.at(-1), JSON.stringify(extra)).not.toEqual((await run({ colorMode: 0 })).at(-1));
+    }
   });
 });

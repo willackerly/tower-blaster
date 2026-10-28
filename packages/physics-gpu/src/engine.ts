@@ -74,6 +74,22 @@ export function gpuRecordsLayout(params: Pick<Partial<AvbdParams>, 'records'>, o
   return opts.hessian === 'array' ? 0 : 1;
 }
 
+/**
+ * The lattice colouring (AvbdParams.colorMode) a GpuAvbdEngine with these params colours with: params.colorMode when
+ * given (0 the hash priority's greedy colouring alone, 1-4 the lattice preferences, physics-ref coloring.ts); unset,
+ * 3, the GPU default since 2026-10-28. On the M5 sweep (S4 10k at I = 20, with records 1) it cuts the colours of a
+ * resting city from 10 to 4 and the step from 9.6 to 5.2 ms (steps 60-240) and from 5.0 to 3.1 ms (steps 300-480),
+ * and against colorMode 0 it held every quality gate at the game's
+ * setting (40 iterations, gapSlop 3e-5) and at 20 iterations, within colorMode 0's own spread over body orders and
+ * 1e-6 m start jitters (f64 reference and SwiftShader), with every Keystone par line clearing as before
+ * (perf-competition r3-colormode). A scene with no cubes on the world lattice colours as with 0. The reference engine
+ * is unchanged: unset is 0 there.
+ */
+export const GPU_DEFAULT_COLOR_MODE = 3;
+export function gpuColorMode(params: Pick<Partial<AvbdParams>, 'colorMode'>): number {
+  return params.colorMode ?? GPU_DEFAULT_COLOR_MODE;
+}
+
 export interface GpuDiagnostics {
   pairsRequired: number;
   pairsWritten: number;
@@ -140,6 +156,8 @@ export class GpuAvbdEngine implements PhysicsEngine {
   dispatch: SolverDispatch | null = null;
   /** The solver's contact layout (gpuRecordsLayout(): AvbdParams.records, unset 1): 0 points, 1 exact records, 2 centre-friction records. */
   readonly records: RecordMode;
+  /** The colouring's lattice preference (gpuColorMode(): AvbdParams.colorMode, unset 3). */
+  readonly colorMode: number;
   private parts: { bodies: GPUBuffer; shapes: GPUBuffer; props: GPUBuffer; spheres: GPUBuffer; sweep: GPUBuffer; prev: GPUBuffer; bp: Broadphase; np: Narrowphase; col: Coloring; solver: AvbdSolver; blast: BlastPass; readback: Readback } | null = null;
   /** Counts dispose() calls (init() makes one), so an init() that awaited across another knows it was overtaken. */
   private generation = 0;
@@ -181,6 +199,11 @@ export class GpuAvbdEngine implements PhysicsEngine {
     // before records 1 became the default were points, and so were those with restitution on until restitution
     // ran on records 1 (gpuRecordsLayout gave it points): the same floats, other timings.
     if (this.params.records !== undefined) variant.records = this.params.records;
+    // colorMode the same way (avbdVariant drops 0 as off): unset is gpuColorMode()'s 3 on the GPU, so avbd-gpu (unset)
+    // and avbd-gpu:colorMode=0 (the hash colouring alone) are different engines, and avbd-gpu:colorMode=3 keeps the
+    // key it had. Results named avbd-gpu before colorMode 3 became the default were colorMode 0.
+    this.colorMode = gpuColorMode(this.params);
+    if (this.params.colorMode !== undefined) variant.colorMode = this.params.colorMode;
     // Options that size the buffers or shape the dispatch change the work per step (e.g. the broadphase's key bits), so they are part of the variant.
     for (const k of ['capacity', 'spare', 'pairsPerBody', 'maxRadius', 'colorTail', 'indirectColors', 'tailThreads', 'colorRounds', 'hessian', 'boxBroadphase'] as const) if (opts[k] !== undefined) variant[k] = opts[k];
     this.info = { name: 'avbd-gpu', variant, backend: 'webgpu', integrator: { substeps: 1 } };
@@ -249,7 +272,7 @@ export class GpuAvbdEngine implements PhysicsEngine {
       const prev = buf(maxPairs * 8, 'pair history lookup');
       const bp = new Broadphase(device, spheres, this.capacity, maxPairs, undefined, this.opts.boxBroadphase ? { bodies, shapes, sweep } : undefined);
       const np = new Narrowphase(device, bodies, shapes, bp.pairs, bp.total, this.capacity, maxPairs, sweep, prev);
-      const col = new Coloring(device, np.manifolds, bp.total, this.capacity, maxPairs, this.opts.colorRounds, { colorMode: p.colorMode ?? 0, colorPriority: p.colorPriority ?? 0, bodies, shapes });
+      const col = new Coloring(device, np.manifolds, bp.total, this.capacity, maxPairs, this.opts.colorRounds, { colorMode: this.colorMode, colorPriority: p.colorPriority ?? 0, bodies, shapes });
       const solver = new AvbdSolver(device, this.capacity, maxPairs, {
         bodies, props, spheres, sweep, prev, manifolds: np.manifolds, groundManifolds: np.groundManifolds,
         pairs: bp.pairs, total: bp.total, offsets: bp.offsets,
