@@ -151,3 +151,35 @@ to the new framing) and in saved files (`view`).
   (blue / red 2.0 to 2.3), that the exposure is the same as at the horizon
   (the meter does not depend on the view), and that the hall's vault is
   drawn overhead.
+
+### Standing at the base, and per-scene defaults (Will, 2026-10-28)
+
+"I'd love to be 'looking up at it' by default ... from the base of it":
+a negative orbit pitch alone puts the eye on a sphere around the box's
+centre, so for a tall tower it ends up far away or pressed to the floor.
+Two framing knobs place the eye as a person would stand:
+
+- `view.eye` is the eye's height over the ground in metres (0, the
+  default, keeps the orbit framing). It is converted by the scene's
+  metres per unit, so 1.7 is a standing eye at real Kapla scale and at
+  `scale=1` alike. With it, `frame` hands off to `frameFromGround`: the
+  eye at that height on the `view.yaw` side of the box's vertical axis,
+  at the nearest distance where all eight corners fit the view vertically
+  (bisection), times `view.fit`, aimed at the middle of the corners'
+  elevations. Under fit 1 the lowest corner sits just inside the bottom
+  edge and the top runs off. The eye never goes inside the box's
+  footprint. The orbit's target is where the line of sight meets the
+  axis, so dragging still turns about the tower.
+- `view.yaw` (degrees, default 36) is the camera's side, for both modes.
+- A scenario can carry its own framing (`ScenarioDef.view`). URL, panel
+  and scene files write `view.*` only where they differ from that scene's
+  default. A scene switch keeps a framing set by hand, and one left at the
+  old scene's default takes the new scene's.
+- S15 (Kapla): eye 1.7 m, fov 70, yaw 70 (the side the ball topples it
+  toward, a little off it), fit 0.7. At 10k planks the eye is about 6 m
+  from the axis. The values were picked from renders at fit 1.05, 0.7
+  and 0.5 (`/mnt/project-files/kapla/up-10k-*.png`).
+- Tests: the viewer.test.ts property "frameFromGround" covers the eye's
+  height and side, fit 1 just fitting and the bottom anchor under fit 1.
+  "S15 opens looking up" covers real scale and scale 1, and "a scene
+  switch carries a framing" covers scene switches.
