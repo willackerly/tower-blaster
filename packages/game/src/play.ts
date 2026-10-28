@@ -13,7 +13,7 @@ import type { PixelStats, Renderer, SnapshotSource } from '@tb/render';
 import { type Aimed, azFromYaw, pick, previewBeads, shotFor, SUBSTEPS } from './aim.ts';
 import { Synth, type Voice, voicesFor } from './audio.ts';
 import { driverOptions, type EngineKind, makeEngine } from './engines.ts';
-import { hudHtml, nextSelection, rackChips, resultHtml } from './hud.ts';
+import { hudHtml, nextSelection, rackChips, resultHtml, starsText } from './hud.ts';
 import { CameraJuice, contactJuice } from './juice.ts';
 import { Pacer, type PaceFeel } from './pacing.ts';
 import { beadOverlay, regrowDuration, regrowScales, structureTints, TINT } from './scene.ts';
@@ -66,6 +66,37 @@ export function newGameHandle(): GameHandle {
     fire: () => false, aim: () => null, select: () => false, load: async () => {}, retry: async () => {}, capture: async () => null,
     state: none, replay: async () => none(),
   };
+}
+
+/** What playLine did: ok when every shot was fired and the last has settled; else why it stopped. */
+export interface LineResult { ok: boolean; fired: number; message: string }
+
+const until = (ok: () => boolean) => new Promise<void>((res) => { const t = () => (ok() ? res() : setTimeout(t, 50)); t(); });
+const shotsText = (n: number) => `${n} shot${n === 1 ? '' : 's'}`;
+
+/**
+ * Plays a line of shots on a running page: from a fresh attempt (handle.retry) unless `fresh`
+ * (the load's own attempt), each fired through handle.fire, the path a click takes, once the game
+ * is ready. Stops when the level changes, is retried or ends before the line does, or the rack
+ * cannot fire a shot; resolves once the last shot has settled. `fired` reports each shot as it goes.
+ */
+export async function playLine(handle: GameHandle, shots: readonly Shot[], fresh = false, fired?: (n: number) => void): Promise<LineResult> {
+  const id = handle.level;
+  const stop = (n: number, message: string): LineResult => ({ ok: false, fired: n, message });
+  if (!fresh) await handle.retry();
+  for (let i = 0; i < shots.length; i++) {
+    await until(() => handle.ready || handle.result !== null || handle.level !== id || handle.status === 'error');
+    if (handle.level !== id || handle.status === 'error') return stop(i, `stopped after ${i} of ${shotsText(shots.length)}: the level changed`);
+    if (handle.result) return stop(i, `the level ended after ${i} of ${shotsText(shots.length)}`);
+    // Retry (R) mid-line starts a fresh attempt: the rest of the line was not made for it.
+    if (handle.strokes !== i) return stop(i, `stopped after ${i} of ${shotsText(shots.length)}: the attempt was restarted`);
+    if (!handle.fire(shots[i]!)) return stop(i, `shot ${i + 1} (${shots[i]!.ammo}) could not be fired`);
+    fired?.(i + 1);
+  }
+  await until(() => handle.result !== null || handle.level !== id || handle.status === 'error' || (handle.ready && handle.strokes === shots.length));
+  if (handle.level !== id || handle.status === 'error') return stop(shots.length, `stopped after ${shotsText(shots.length)}: the level changed`);
+  const r = handle.result;
+  return { ok: true, fired: shots.length, message: r ? `played ${shotsText(shots.length)}: ${r.stamp}, ${starsText(r.stars)}` : `played ${shotsText(shots.length)}; the level is still open` };
 }
 
 /**
