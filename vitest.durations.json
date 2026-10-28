@@ -27,6 +27,7 @@
   "packages/gpu/test/adapter.test.ts": 0,
   "packages/gpu/test/gpu.test.ts": 52.9,
   "packages/gpu/test/reference.test.ts": 0,
+  "packages/keystone-lab/test/driver-step.test.ts": 2,
   "packages/keystone-lab/test/fork.test.ts": 54.1,
   "packages/keystone-lab/test/par.test.ts": 56.6,
   "packages/keystone-lab/test/probe.test.ts": 10.4,
@@ -110,10 +111,14 @@
   "packages/schema/test/gpu-layout.test.ts": 0.7,
   "packages/schema/test/layout.test.ts": 0.2,
   "packages/testkit/test/collapse.test.ts": 0,
+  "packages/testkit/test/layering.test.ts": 0,
   "packages/testkit/test/observe.test.ts": 2.8,
   "packages/testkit/test/shard.test.ts": 0,
   "packages/testkit/test/teardown.test.ts": 1.7,
   "packages/viewer/test/e2e-bounce.test.ts": 21.5,
+  "packages/viewer/test/e2e-level.test.ts": 18.7,
   "packages/viewer/test/e2e.test.ts": 180.3,
+  "packages/viewer/test/level-file.test.ts": 0.1,
+  "packages/viewer/test/level.test.ts": 0,
   "packages/viewer/test/viewer.test.ts": 2.7
 }
