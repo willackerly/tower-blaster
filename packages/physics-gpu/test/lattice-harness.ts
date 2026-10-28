@@ -31,6 +31,8 @@ export async function runGpu(scene: SceneDesc, steps: number, params: Partial<Av
   expect(r.error).toBeNull();
   expect(r.worst.uncolored).toBe(0);
   expect(r.worst.colorOverflow).toBe(0);
+  // No step dropped broadphase pairs (the sticky counter covers every step, not only the sampled ones).
+  expect(r.final.pairsOverflowSteps).toBe(0);
   return r;
 }
 export async function runRef(scene: SceneDesc, steps: number, params: Partial<AvbdParams>, every = 0) {

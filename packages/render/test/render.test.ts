@@ -359,7 +359,7 @@ describe('atmosphere (CPU twin)', () => {
 
 describe('fx records', () => {
   it('all-zero words mean no effect', () => {
-    expect(unpackFx(new Uint32Array(FX_WORDS))).toEqual({ tint: [1, 1, 1], emissive: 0, scale: 1, anchor: false, flashAt: 0, flash: 0 });
+    expect(unpackFx(new Uint32Array(FX_WORDS))).toEqual({ tint: [1, 1, 1], emissive: 0, scale: 1, anchor: false, paint: false, flashAt: 0, flash: 0 });
     const w = new Uint32Array(FX_WORDS);
     packFx({}, w);
     expect(Array.from(w)).toEqual([0, 0, 0, 0]);
@@ -373,8 +373,11 @@ describe('fx records', () => {
       u.tint.forEach((v, k) => expect(Math.abs(v - [0.2, 0.5, 1][k]!)).toBeLessThan(1 / 255));
       expect(Math.abs(u.emissive - 0.75)).toBeLessThan(1 / 255);
       expect(Math.abs(u.scale - s)).toBeLessThan(5e-4);
-      expect(u).toMatchObject({ anchor: true, flash: Math.fround(0.3), flashAt: 12.5 });
+      expect(u).toMatchObject({ anchor: true, paint: false, flash: Math.fround(0.3), flashAt: 12.5 });
     }
+    packFx({ tint: [0.2, 0.5, 1], paint: true, anchor: false, scale: 0.5 }, w);
+    expect(unpackFx(w)).toMatchObject({ paint: true, anchor: false });
+    expect(Math.abs(unpackFx(w).scale - 0.5)).toBeLessThan(5e-4);
     // Hidden must be exactly 0, not a tiny positive scale.
     packFx({ scale: 0 }, w);
     expect(unpackFx(w).scale).toBe(0);
@@ -1082,6 +1085,25 @@ describe('drawing', () => {
       expect(r.hiddenSeen).toBe(0);
       expect(r.restoreDiff).toBe(0);
     }
+  });
+
+  it('FX paint makes a ball the tint\'s colour, in the candy and the real look', async (ctx) => {
+    if (!gpu) return ctx.skip();
+    const r = await call('fxPaint');
+    expect(r.error).toBeNull();
+    const luma = (c: number[]) => 0.2126 * c[0]! + 0.7152 * c[1]! + 0.0722 * c[2]!;
+    for (const look of ['candy', 'real'] as const) {
+      const { plain, painted } = r.looks[look]!;
+      // Plain is the look's ball (peach or grey); painted reads blue (the candy ball glows far
+      // into HDR, so its tone map leaves it pastel).
+      expect(plain[2]!, look).toBeLessThan(plain[0]! + 5);
+      expect(painted[2]!, look).toBeGreaterThan(painted[0]! + 50);
+      expect(painted[2]!, look).toBeGreaterThan(painted[1]! + 50);
+    }
+    // A tint multiplies the look's ball: the candy ball's glow ignores it, the real look's grey darkens it; paint does neither.
+    const { tinted: ct, painted: cp } = r.looks.candy!, { tinted: rt, painted: rp } = r.looks.real!;
+    expect(cp[2]! - cp[0]!).toBeGreaterThan(ct[2]! - ct[0]! + 50);
+    expect(luma(rp)).toBeGreaterThan(luma(rt) + 30);
   });
 
   it('FX tint, glow, flash and overlay show in the final image', async (ctx) => {

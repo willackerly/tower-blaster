@@ -7,7 +7,7 @@ import { emptySnapshot, TAG_BALL, type BodyDesc, type Snapshot } from '@tb/engin
 import { readBuffer, sharedDevice } from '@tb/gpu';
 import { Body, RenderRecord, Shape, TIER, readStruct } from '@tb/schema';
 import {
-  agx, AGX_WGSL, LOOKS, realLook, type RealOptions, type LookParams, fromHalf, Atmosphere, CLEAR_DAY, transmittance, transmittanceHMu, multiScattering, skyViewDir, skyRadiance, skyViewUv, sampleTransmittance, ambientOf, distanceToGround, meteredIlluminance, Materials, heightNormal, STONES, GROUNDS, MATERIAL_LAYERS, WOOD_WGSL, WOOD_RING_M, woodRings, PCG_WGSL, pcg3d, MACRO_LAYER, layerTile, materialSample, macroSample, adaptedExposure, LUMA, R_TOP, R_GROUND, FX_WORDS, packFx, toHalf, bevelNormal, BEVEL_WGSL, oklabToLinear, OKLAB_WGSL, Post,
+  agx, AGX_WGSL, LOOKS, lookByName, realLook, type RealOptions, type LookParams, fromHalf, Atmosphere, CLEAR_DAY, transmittance, transmittanceHMu, multiScattering, skyViewDir, skyRadiance, skyViewUv, sampleTransmittance, ambientOf, distanceToGround, meteredIlluminance, Materials, heightNormal, STONES, GROUNDS, MATERIAL_LAYERS, WOOD_WGSL, WOOD_RING_M, woodRings, PCG_WGSL, pcg3d, MACRO_LAYER, layerTile, materialSample, macroSample, adaptedExposure, LUMA, R_TOP, R_GROUND, FX_WORDS, packFx, toHalf, bevelNormal, BEVEL_WGSL, oklabToLinear, OKLAB_WGSL, Post,
   Culler, cullReference, FLOOR_REACH, GpuBodySource, invert, listMatches, lookAt, makeGpuBodies, multiply, packBodies, perspective, Renderer, SEG, SEGMENTS, SnapshotSource, transform,
   translation, normalize, hallTraceCpu, HALL_MAT, OLYMPIA, BOX_VERTS, SPHERE_VERTS, SUN, Sparks, CTL, MAX_EVENTS, flashSlot, FLASHES, MAX_BALLS, TRAIL, Lights, LIGHTS, LIGHT_META, LIGHT_PACKED, MATERIAL, AoVolume, aoGrid, aoFrame, splatReference, composeReference, AO_FOOT_WGSL, AO_SAMPLE_WGSL, AO_SEAM_WGSL, AO_ONE, type SplatBody, unpackImpacts, unpackSparks, spawnReference, stepReference, debrisSpawnReference, dustStepReference, chipStepReference, type SparkState, type Impact, type BodySource, type CullFrame, type FrameParams, type RendererOptions, type V3,
 } from '../src/index.ts';
@@ -690,6 +690,48 @@ export async function fxColour() {
   const err = await device.popErrorScope();
   rend.destroy();
   return { plain, red, glow, flashMid, flashDone, frontDelta, backDelta, backBehindBox, error: err?.message ?? null };
+}
+
+/**
+ * A fired ball's colour (FX_PAINT): mean colour of its pixels, plain (the look's ball), tinted
+ * blue (a multiple of it) and painted blue (the colour itself), in the candy and real looks.
+ */
+export async function fxPaint() {
+  const { device } = await sharedDevice({ timestamps: false });
+  device.pushErrorScope('validation');
+  const descs = [ball([0, 0, 0], 1)];
+  const src = new SnapshotSource(device);
+  src.update(snapshotOf(descs), descs);
+  const rend = new Renderer(device, { size: [W, H] });
+  rend.setSource(src);
+  const f = { ...camera([3, 2, 4], [0, 0, 0]), time: 10 };
+  const mask = (await rend.renderIds(f)).ids;
+  const mean = async () => {
+    const { data, bytesPerRow } = (await rend.render(f, true, true))!.pixels!;
+    const sum = [0, 0, 0];
+    let n = 0;
+    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+      if (!mask[y * W + x]) continue;
+      const o = y * bytesPerRow + 4 * x;
+      for (let k = 0; k < 3; k++) sum[k]! += data[o + k]!;
+      n++;
+    }
+    return sum.map((v) => v / n);
+  };
+  const out: Record<string, { plain: number[]; tinted: number[]; painted: number[] }> = {};
+  for (const look of ['candy', 'real'] as const) {
+    rend.look = lookByName(look);
+    rend.clearFx(0);
+    const plain = await mean();
+    rend.setFx(0, { tint: [0.1, 0.15, 0.9] });
+    const tinted = await mean();
+    rend.setFx(0, { tint: [0.1, 0.15, 0.9], paint: true });
+    const painted = await mean();
+    out[look] = { plain, tinted, painted };
+  }
+  const err = await device.popErrorScope();
+  rend.destroy();
+  return { looks: out, error: err?.message ?? null };
 }
 
 // ---------------------------------------------------------------- hexagon fan

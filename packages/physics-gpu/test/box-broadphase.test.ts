@@ -50,7 +50,8 @@ describe('GPU AVBD engine with the box test: the same state, bit for bit, in few
     if (!gpu) return ctx.skip();
     const r = await call('boxEngine', 'S15', { planks: 600, towers: 1, toppleAt: 0.3, toppleHeight: 0.5 }, 150, 10);
     expect(r).toMatchObject({ firstDiff: -1, maxDiff: 0 });
-    expect(r.off.pairsRequired).toBe(r.off.pairsWritten);
+    // Neither arm dropped a pair on any step, so the two really solve the same contacts.
+    expect([r.off.pairsOverflowSteps, r.on.pairsOverflowSteps]).toEqual([0, 0]);
     expect(r.on.pairsRequired).toBeLessThan(0.6 * r.off.pairsRequired);
   });
 
@@ -58,6 +59,7 @@ describe('GPU AVBD engine with the box test: the same state, bit for bit, in few
     if (!gpu) return ctx.skip();
     const r = await call('boxEngine', 'S5', { N: 600, F: 3, H: 6, fireStep: 5 }, 90, 10);
     expect(r).toMatchObject({ firstDiff: -1, maxDiff: 0 });
+    expect([r.off.pairsOverflowSteps, r.on.pairsOverflowSteps]).toEqual([0, 0]);
     expect(r.on.pairsRequired).toBeLessThanOrEqual(r.off.pairsRequired);
   });
 });
