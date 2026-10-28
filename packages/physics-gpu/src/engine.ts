@@ -3,7 +3,7 @@
 // one command buffer per step. Parameters are the reference solver's (physics-ref AvbdParams), so
 // the two engines can be run side by side on the same settings. With AvbdParams.restitution on,
 // the solve ends with the restitution pass (restitution.ts).
-import { type BodyDesc, checkBlast, DEFAULT_RESTITUTION_COMBINE, emptySnapshot, type EngineInfo, inertiaOf, type InputEvent, massOf, type PhysicsEngine, type SceneDesc, type Snapshot, spawnedBodies, type Vec3 } from '@tb/engine-api';
+import { type BodyDesc, checkBlast, checkBlastQueue, DEFAULT_RESTITUTION_COMBINE, emptySnapshot, type EngineInfo, inertiaOf, type InputEvent, massOf, type PhysicsEngine, type SceneDesc, type Snapshot, queueInputs, spawnedBodies, type Vec3 } from '@tb/engine-api';
 import { boundingRadius } from '@tb/geom';
 import { assertStorageFits, createDevice, isSoftwareAdapter, Readback } from '@tb/gpu';
 import { type AvbdParams, avbdVariant, checkColoring, checkGapSlop, checkRecords, checkRemoved, checkRestitution, DEFAULT_AVBD, RESTITUTION_DEFAULTS } from '@tb/physics-ref';
@@ -190,7 +190,7 @@ export class GpuAvbdEngine implements PhysicsEngine {
     // As the reference, switch on or off; checked before anything changes.
     const groundE = scene.ground?.restitution;
     if (groundE !== undefined && !(groundE >= 0 && groundE <= 1)) throw new Error(`GpuAvbdEngine: SceneDesc.ground.restitution must be in [0, 1], got ${groundE}`);
-    for (const ev of scene.inputs) if (ev.kind === 'blast') checkBlast(ev.blast);
+    checkBlastQueue(scene.bodies.length, [...scene.inputs].sort((a, b) => a.step - b.step));
     this.failure = null;
     this.dispose();
     const generation = this.generation;
@@ -308,16 +308,14 @@ export class GpuAvbdEngine implements PhysicsEngine {
     const room = this.n + spawnedBodies(this.pending).length + spawnedBodies(events).length;
     if (room > this.capacity) throw new Error(`GpuAvbdEngine: push() needs room for ${room} bodies, capacity is ${this.capacity} (GpuEngineOptions.capacity or spare)`);
     for (const ev of events) {
-      if (ev.kind === 'blast') { checkBlast(ev.blast); continue; }
+      if (ev.kind === 'blast') continue;
       const r = boundingRadius(ev.body.shape);
       if (r > this.rmax) throw new Error(`GpuAvbdEngine: pushed body radius ${r} exceeds ${this.rmax}, the largest the broadphase cells were sized for (GpuEngineOptions.maxRadius)`);
     }
     // Stable insertion keeps push order among events due at the same step.
-    for (const ev of events) {
-      let i = this.pending.length;
-      while (i > 0 && this.pending[i - 1]!.step > ev.step) i--;
-      this.pending.splice(i, 0, ev);
-    }
+    const pending = queueInputs(this.pending, events);
+    checkBlastQueue(this.n, pending);
+    this.pending = pending;
   }
 
   step(): void {
