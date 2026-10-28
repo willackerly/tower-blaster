@@ -17,7 +17,12 @@ import { AvbdSolver, DEFAULT_DISPATCH, defaultTailThreads, HESSIAN_FORMS, type H
 export interface GpuEngineOptions {
   /** Use this device instead of creating one (it is then not destroyed by dispose()). */
   device?: GPUDevice;
-  /** Pair buffer size per body. */
+  /**
+   * Pair buffer size per body (default 16): the buffer holds pairsPerBody x capacity broadphase
+   * pairs, and a step that finds more drops the rest (GpuDiagnostics.pairsOverflowSteps). init()
+   * refuses more than one indirect dispatch covers, 64 x maxComputeWorkgroupsPerDimension
+   * (4,194,240 at the default limit; assertPairDispatch).
+   */
   pairsPerBody?: number;
   /**
    * Room for push(): bodies the engine can hold (default: the scene's bodies
@@ -77,16 +82,16 @@ export interface GpuDiagnostics {
   /** The last step's broadphase pairs: how many it found, and how many fit the pair buffer (the rest were dropped). */
   pairsRequired: number;
   pairsWritten: number;
-  /** The pair buffer's size (GpuEngineOptions.pairsPerBody x capacity). */
+  /** The pair buffer's size (GpuEngineOptions.pairsPerBody x the engine's capacity). */
   maxPairs: number;
   /**
    * Every step since init(), from the broadphase's sticky counters (broadphase.ts): the most
    * pairs one required, and how many required more than maxPairs. A step that overflows drops
-   * the pairs of the bodies latest in index order, which then pass through each other.
+   * the pairs between the bodies latest in index order, which then pass through each other.
    */
-  pairsPeak: number;
-  pairOverflowSteps: number;
-  /** Steps since init(): the steps the counters cover. */
+  pairsRequiredPeak: number;
+  pairsOverflowSteps: number;
+  /** Steps submitted since init(), which the counters cover unless the GPU rejected one (finish() reports that). */
   steps: number;
   colors: number;
   uncolored: number;
@@ -231,7 +236,7 @@ export class GpuAvbdEngine implements PhysicsEngine {
     this.cellSize = Math.max(1e-3, 2 * (this.rmax + (p.sweep ? p.maxSweep : 0)) + p.margin);
     // The per-pair kernels run as one indirect dispatch over the pairs written (Broadphase.total), and a
     // dispatch past the device's workgroup limit does nothing at all: refuse a pair buffer it cannot cover.
-    assertPairDispatch(device, maxPairs, 'GpuAvbdEngine');
+    assertPairDispatch(device, maxPairs, 'GpuAvbdEngine', 'lower pairsPerBody or capacity');
     // The contact buffer is the largest (1 KB per pair slot, 768 B with
     // records; a manifold is 96 B), so checking it first means no stage throws
     // halfway through allocating, which would leak what it had made.
@@ -413,7 +418,7 @@ export class GpuAvbdEngine implements PhysicsEngine {
     const [t, c] = await Promise.all([parts.readback.read(parts.bp.total), parts.readback.read(parts.col.info)]);
     const total = new Uint32Array(t), info = new Uint32Array(c);
     return {
-      pairsRequired: total[5]!, pairsWritten: total[3]!, maxPairs: parts.bp.maxPairs, pairsPeak: total[6]!, pairOverflowSteps: total[7]!, steps,
+      pairsRequired: total[5]!, pairsWritten: total[3]!, maxPairs: parts.bp.maxPairs, pairsRequiredPeak: total[6]!, pairsOverflowSteps: total[7]!, steps,
       colors: info[0]!, uncolored: info[1]!, colorOverflow: info[2]!,
     };
   }

@@ -447,6 +447,8 @@ export async function simulateGpu(scene: SceneDesc, steps: number, params: Parti
   const d = await e.diagnostics();
   maxColors = Math.max(maxColors, d.colors);
   if (d.pairsRequired > d.pairsWritten || d.uncolored || d.colorOverflow) worst = d;
+  // The last step's diagnostics, which also carry the sticky pair counters over the whole run.
+  const final = d;
   let contacts: { digest: number; used: number } | null = null;
   if (withContacts) {
     const { solver } = e.probeParts();
@@ -458,7 +460,7 @@ export async function simulateGpu(scene: SceneDesc, steps: number, params: Parti
   }
   const error = await device.popErrorScope();
   e.dispose();
-  return { error: error?.message ?? null, snaps, maxColors, worst, wallMs, contacts };
+  return { error: error?.message ?? null, snaps, maxColors, worst, final, wallMs, contacts };
 }
 
 /**
@@ -633,6 +635,9 @@ export async function pushReplay(steps: number) {
  * plane, which the narrowphase tests bound. axisTies counts the axis
  * mismatches where the GPU's axis is one the reference's own choice was
  * within AXIS_TIE of flipping to (axisSlack).
+ * The broadphase's sticky counters (total[6..7]) are checked against the
+ * running max and count of every step's own (stickyWrong), and
+ * diagnostics() is read after the run, after a new init() and 5 steps on.
  */
 export async function pairHistory(scene: SceneDesc, steps: number, opts: { pairsPerBody?: number } = {}) {
   const { device } = await sharedDevice();
@@ -658,7 +663,7 @@ export async function pairHistory(scene: SceneDesc, steps: number, opts: { pairs
   };
   let wrong = 0, found = 0, missed = 0, axes = 0, checked = 0, axisMismatch = 0, axisTies = 0, presenceMismatch = 0, hinted = 0, overflowSteps = 0, spawnPairs = 0;
   // The broadphase's sticky words against the running max and count of the per-step ones.
-  let peak = 0, stickyWrong = 0, peakDrops = 0;
+  let peak = 0, stickyWrong = 0, peakDrops = 0, lastRequired = 0;
   const examples: unknown[] = [];
   let last = (await read()).list;
   for (let s = 0; s < steps; s++) {
@@ -668,6 +673,7 @@ export async function pairHistory(scene: SceneDesc, steps: number, opts: { pairs
     if (overflow) overflowSteps++;
     if (required < peak) peakDrops++;
     peak = Math.max(peak, required);
+    lastRequired = required;
     if (sticky[0] !== peak || sticky[1] !== overflowSteps) stickyWrong++;
     spawnPairs += cur.filter((p) => Math.max(p.a, p.b) >= before.length).length;
     // The narrowphase's axis given its hint, against the reference given the same hint.
@@ -716,7 +722,7 @@ export async function pairHistory(scene: SceneDesc, steps: number, opts: { pairs
   e.dispose();
   return {
     error: error?.message ?? null, wrong, found, missed, axes, checked, axisMismatch, axisTies, presenceMismatch, hinted, overflowSteps, spawnPairs, examples,
-    peak, stickyWrong, peakDrops, diagnostics, reinit, reinit5,
+    peak, lastRequired, stickyWrong, peakDrops, diagnostics, reinit, reinit5,
   };
 }
 const NONE_U32 = 0xffffffff;
@@ -755,11 +761,14 @@ export async function anchorDrift(scene: SceneDesc, steps: number, params: Parti
   return { error: error?.message ?? null, worst };
 }
 
-/** init() with a pair buffer too large for the device: the error it throws (null if none). */
-export async function initError(scene: SceneDesc, pairsPerBody: number) {
+/**
+ * init() with a pair buffer (or capacity) too large for the device or for one indirect dispatch: the
+ * error it throws (null if none), any validation error, and the device limits the refusals depend on.
+ */
+export async function initError(scene: SceneDesc, pairsPerBody: number, capacity?: number) {
   const { device } = await sharedDevice();
   device.pushErrorScope('validation');
-  const e = new GpuAvbdEngine({}, { device, pairsPerBody });
+  const e = new GpuAvbdEngine({}, { device, pairsPerBody, capacity });
   let message: string | null = null;
   try { await e.init(scene); } catch (err) { message = (err as Error).message; }
   const validation = await device.popErrorScope();

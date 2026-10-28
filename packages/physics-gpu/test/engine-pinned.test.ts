@@ -1,6 +1,6 @@
 // The GPU engine's floats pinned: a ball into two towers (S5) on the default
-// and on every remaining option that changes the solver's shaders or the
-// order of its arithmetic, each run's final bodies and whole contact buffer
+// and on every remaining option that changes the solver's or the broadphase's
+// shaders or the order of their arithmetic, each run's final bodies and whole contact buffer
 // against digests captured on SwiftShader before the fused dual was removed
 // (at 8a9a308, PR #79: records 1 the default). The removal must not change a
 // float: the other bit-for-bit tests compare layouts and dispatch splits with
@@ -44,14 +44,15 @@ const CASES: Case[] = [
   { name: 'box broadphase, pair buffer overflow (pairsPerBody 2)', opts: { boxBroadphase: true, pairsPerBody: 2 }, bodies: '0xd83d6300', contacts: '0x43aa2cd5', overflows: true },
 ];
 
-describe('GPU AVBD engine: the floats pinned against the build before the fused dual was removed', () => {
+describe('GPU AVBD engine: the floats pinned against earlier builds', () => {
   it.for(CASES)('$name', { timeout: 300_000 }, async (c, ctx) => {
     if (!gpu) return ctx.skip();
     const r = await call('simulateGpu', knock(), 30, { iterations: 6, ...c.params }, 0, c.opts ?? {}, [], true);
     expect(r.error).toBeNull();
     expect(r.contacts!.used).toBeGreaterThan(10);
-    // The last step's pairs: dropped where the case says so, and only there.
-    expect(r.worst.pairsRequired > r.worst.pairsWritten).toBe(!!c.overflows);
+    // Pairs dropped on every one of the 30 steps where the case says so, and on none elsewhere (the sticky counters).
+    expect(r.final).toMatchObject({ steps: 30, pairsOverflowSteps: c.overflows ? 30 : 0 });
+    expect(r.final.pairsRequiredPeak > r.final.maxPairs).toBe(!!c.overflows);
     const got = { bodies: hex(digest(r.snaps.at(-1)!)), contacts: hex(r.contacts!.digest) };
     expect(got).toEqual({ bodies: c.bodies, contacts: c.contacts });
   });

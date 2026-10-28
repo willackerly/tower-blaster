@@ -76,10 +76,10 @@ describe('GPU AVBD engine: stacks, towers and impacts', () => {
       // The broadphase's sticky counters matched the running max and count of every step's own, and
       // diagnostics() reports them over the whole run; a new init() starts them from zero.
       expect(r.stickyWrong).toBe(0);
-      expect(r.diagnostics).toMatchObject({ pairsPeak: r.peak, pairOverflowSteps: r.overflowSteps, steps: 60 });
-      expect(r.reinit).toMatchObject({ pairsPeak: 0, pairOverflowSteps: 0, steps: 0 });
+      expect(r.diagnostics).toMatchObject({ pairsRequired: r.lastRequired, pairsRequiredPeak: r.peak, pairsOverflowSteps: r.overflowSteps, steps: 60 });
+      expect(r.reinit).toMatchObject({ pairsRequiredPeak: 0, pairsOverflowSteps: 0, steps: 0 });
       expect(r.reinit5.steps).toBe(5);
-      expect(r.reinit5.pairsPeak).toBeGreaterThan(0);
+      expect(r.reinit5.pairsRequiredPeak).toBeGreaterThan(0);
     };
     // A collapse, so pairs appear, vanish and change slots between steps.
     // 2026-10-25, after the friction fix: 12.3k pairs found, 254 where the
@@ -90,8 +90,9 @@ describe('GPU AVBD engine: stacks, towers and impacts', () => {
     // The collapse needs fewer pairs on some steps than before them (so a counter that kept the last count
     // would differ from the peak), and never more than the buffer holds.
     expect(collapse.peakDrops).toBeGreaterThan(0);
+    expect(collapse.lastRequired).toBeLessThan(collapse.peak); // so the peak is not the last step's word
     expect(collapse.overflowSteps).toBe(0);
-    expect(collapse.diagnostics.pairsPeak).toBeLessThanOrEqual(collapse.diagnostics.maxPairs);
+    expect(collapse.diagnostics.pairsRequiredPeak).toBeLessThanOrEqual(collapse.diagnostics.maxPairs);
     expect(collapse.axes).toBeGreaterThan(3000);
     expect(collapse.hinted).toBeGreaterThan(50);
     // The ball spawned mid-run, 0.2 m from the tower so it has (speculative)
@@ -106,8 +107,8 @@ describe('GPU AVBD engine: stacks, towers and impacts', () => {
     const overflow = await call('pairHistory', knock(0), 60, { pairsPerBody: 3 });
     ok(overflow);
     expect(overflow.overflowSteps).toBe(60);
-    expect(overflow.diagnostics.pairsPeak).toBeGreaterThan(overflow.diagnostics.maxPairs);
-    expect(overflow.reinit5.pairOverflowSteps).toBe(5);
+    expect(overflow.diagnostics.pairsRequiredPeak).toBeGreaterThan(overflow.diagnostics.maxPairs);
+    expect(overflow.reinit5.pairsOverflowSteps).toBe(5);
     expect(overflow.found).toBeGreaterThan(1000);
   }, 180_000);
 
@@ -139,15 +140,14 @@ describe('GPU AVBD engine: stacks, towers and impacts', () => {
     const scene = buildScenario('S9', { H: 10, ratio: 1 }, 1), n = scene.bodies.length + scene.inputs.length;
     // A pair buffer one indirect dispatch cannot cover is refused first (its kernels would run nothing at all).
     const over = await call('initError', scene, 1e6);
-    const cover = 64 * over.limits.maxComputeWorkgroupsPerDimension;
-    expect(over.message).toBe(`GpuAvbdEngine: ${1e6 * n} pair slots exceed the ${cover} one indirect dispatch covers (64 x maxComputeWorkgroupsPerDimension ${over.limits.maxComputeWorkgroupsPerDimension}); lower pairsPerBody or capacity`);
+    const limit = over.limits.maxComputeWorkgroupsPerDimension;
+    expect(over.message).toBe(`GpuAvbdEngine: ${1e6 * n} pair slots exceed the ${64 * limit} one indirect dispatch covers (64 x maxComputeWorkgroupsPerDimension ${limit}); lower pairsPerBody or capacity`);
     expect(over.validation).toBeNull();
-    // The most the dispatch covers: then the contact buffer, the largest, is checked before anything is allocated
-    // (3.2 GB here, past SwiftShader's 1 GiB; a device that would take it is not asked to).
-    const most = Math.floor(cover / n);
-    const bytes = AvbdSolver.contactBytes(n, most * n, 1);
-    if (bytes <= Math.min(over.limits.maxStorageBufferBindingSize, over.limits.maxBufferSize)) return;
-    const r = await call('initError', scene, most);
+    // Within the dispatch, a contact buffer past the device's limit: the largest buffer, checked before anything is
+    // allocated. Room for 4M bodies at one pair slot each is 2 x 8M x 384 B = 6.1 GB at records 1, past any device's.
+    const capacity = 4e6;
+    expect(AvbdSolver.contactBytes(capacity, capacity, 1)).toBeGreaterThan(Math.min(over.limits.maxStorageBufferBindingSize, over.limits.maxBufferSize));
+    const r = await call('initError', scene, 1, capacity);
     expect(r.message).toMatch(/^avbd contacts: \d+ bytes exceeds the device's \d+-byte storage binding limit$/);
     expect(r.validation).toBeNull();
   });
