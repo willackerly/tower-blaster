@@ -9,7 +9,7 @@ import {
   pushRadiusLimit, rayThrough, runFree, SIM_SPEED_TAU, stepDue, stepped, stepsDue, taskYield, toSearch, trackSimSpeed, transform, viewProj, Window,
   withOption, type FreeHooks, type Orbit, orbitAt, parseCamera, parseSceneFile, poseOf, SCENE_FILE_FORMAT, sceneFile, sceneFileName, type ViewerConfig,
   autoSubsteps, froudeSpeed, MAX_SUBSTEPS, SCALE_LIMITS, sceneSummary, worldEngineSpec, worldScene,
-  DEFAULT_FRAMING, FRAMING_LIMITS, framingFrom, parseFraming,
+  DEFAULT_FRAMING, FRAMING_LIMITS, framingFrom, parseFraming, clampPitch, eyeDistance, MAX_PITCH, MIN_EYE_DISTANCE, normalize,
   bounceOn, bounceScene, DEFAULT_BOUNCE, viewerScene,
 } from '../src/index.ts';
 import { SCENARIOS } from '@tb/scenarios';
@@ -1038,6 +1038,61 @@ describe('camera in the URL', () => {
   });
 });
 
+describe('looking up (negative pitch, the floor)', () => {
+  const o: Orbit = { target: [2, 6, -1], yaw: 0.7, pitch: -0.5, distance: 30, fovY: 0.8, floor: 0.25 };
+
+  it('pitch clamps at 83 degrees either way, not at the horizon', () => {
+    expect(clampPitch(-3)).toBe(-MAX_PITCH);
+    expect(clampPitch(3)).toBe(MAX_PITCH);
+    expect(clampPitch(-0.7)).toBe(-0.7);
+    expect(orbitAt({ target: [0, 0, 0], yaw: 0, pitch: -1, distance: 5 }).pitch).toBe(-1);
+  });
+
+  it('an eye that would go under the floor slides in along its line and stays on it', () => {
+    const e = eyeOf(o);
+    expect(e[1]).toBeCloseTo(0.25, 12);
+    expect(eyeDistance(o)).toBeCloseTo((6 - 0.25) / Math.sin(0.5), 12);
+    // Same direction from the target as without a floor.
+    const free = eyeOf({ ...o, floor: undefined });
+    const dir = (p: number[]) => normalize([p[0]! - 2, p[1]! - 6, p[2]! + 1]);
+    dir(e).forEach((x, k) => expect(x).toBeCloseTo(dir(free)[k]!, 12));
+    expect(free[1]).toBeLessThan(0); // what the floor prevents
+    // Above the floor, and looking down, the floor changes nothing; the target below the floor keeps a minimum distance.
+    expect(eyeOf({ ...o, pitch: -0.1 })).toEqual(eyeOf({ ...o, pitch: -0.1, floor: undefined }));
+    expect(eyeOf({ ...o, pitch: 0.4 })).toEqual(eyeOf({ ...o, pitch: 0.4, floor: undefined }));
+    expect(eyeDistance({ ...o, target: [0, 0, 0] })).toBe(MIN_EYE_DISTANCE);
+  });
+
+  it('dragging on past the floor keeps looking further up from it, and dragging back restores the distance', () => {
+    let prev = -Infinity;
+    for (let p = -0.3; p >= -MAX_PITCH; p -= 0.1) {
+      const q = { ...o, pitch: p };
+      expect(eyeOf(q)[1]).toBeGreaterThanOrEqual(0.25 - 1e-9);
+      const view = normalize(o.target.map((t, k) => t - eyeOf(q)[k]!) as [number, number, number]);
+      expect(view[1]).toBeGreaterThan(prev); // steeper up
+      prev = view[1];
+    }
+    expect(eyeDistance({ ...o, pitch: 0.3 })).toBe(30);
+  });
+
+  it('rays from an eye held up by the floor still re-project to their pixel', () => {
+    fc.assert(fc.property(fc.double({ min: -MAX_PITCH, max: -0.05, noNaN: true }), fc.double({ min: -0.9, max: 0.9, noNaN: true }), fc.double({ min: -0.9, max: 0.9, noNaN: true }), (pitch, x, y) => {
+      const q = { ...o, pitch };
+      const { origin, dir } = rayThrough(q, 1.6, x, y);
+      const p = transform(viewProj(q, 1.6), [origin[0] + 5 * dir[0], origin[1] + 5 * dir[1], origin[2] + 5 * dir[2]]);
+      return Math.abs(p[0] / p[3] - x) < 1e-3 && Math.abs(p[1] / p[3] - y) < 1e-3 && origin[1] >= 0.25 - 1e-9;
+    }));
+  });
+
+  it('a pose looking up round-trips through the URL and view.pitch takes it down to -45', () => {
+    const pose = { target: [0, 12, 0] as [number, number, number], yaw: 0.3, pitch: -0.9, distance: 20 };
+    const c = { ...parseViewerConfig('?scenario=S1'), camera: pose };
+    expect(parseViewerConfig(toSearch(c)).camera).toEqual(pose);
+    expect(parseViewerConfig('?view.pitch=-20').view.pitch).toBe(-20);
+    expect(() => parseViewerConfig('?view.pitch=-50')).toThrow(/view.pitch must be a number from -45 to 83/);
+  });
+});
+
 describe('framing (view.*)', () => {
   const box: [[number, number, number], [number, number, number]] = [[-6, 0, -4], [6, 16, 4]];
   const corners = (min: number[], max: number[]) => [min[0]!, max[0]!].flatMap((x) => [min[1]!, max[1]!].flatMap((y) => [min[2]!, max[2]!].map((z) => [x, y, z] as [number, number, number])));
@@ -1114,7 +1169,7 @@ describe('framing (view.*)', () => {
     expect(parseViewerConfig(toSearch(c))).toEqual(c);
     expect(toSearch(parseViewerConfig('?view.fov=45&view.fit=2'))).toMatch(/view\.fit=2(&|$)/);
     expect(toSearch(parseViewerConfig('?view.fov=45&view.fit=2'))).not.toContain('view.fov');
-    for (const bad of ['view.pitch=0', 'view.pitch=90', 'view.fit=0.1', 'view.fov=200', 'view.fov=x']) expect(() => parseFraming(new URLSearchParams(bad)), bad).toThrow(/view\.\w+ must be a number from/);
+    for (const bad of ['view.pitch=-60', 'view.pitch=90', 'view.fit=0.1', 'view.fov=200', 'view.fov=x']) expect(() => parseFraming(new URLSearchParams(bad)), bad).toThrow(/view\.\w+ must be a number from/);
   });
 
   it('a preset keeps the framing, and a start camera takes its field of view', () => {
@@ -1240,6 +1295,6 @@ describe('scene file', () => {
     expect(bad((f) => { f.camera.target = [1, 2]; })).toThrow(/camera.target must be three numbers/);
     expect(bad((f) => { f.view.zoom = 2; })).toThrow(/view: unknown key zoom/);
     expect(bad((f) => { f.view.fov = 'wide'; })).toThrow(/view.fov must be a number/);
-    expect(bad((f) => { f.view.pitch = 0; })).toThrow(/view.pitch must be a number from/);
+    expect(bad((f) => { f.view.pitch = -60; })).toThrow(/view.pitch must be a number from/);
   });
 });

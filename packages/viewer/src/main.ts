@@ -10,7 +10,7 @@ import { type BodyDesc, type EngineInfo, type InputEvent, type PhysicsEngine, ty
 import { boundingRadius } from '@tb/geom';
 import { DEFAULT_AVBD } from '@tb/physics-ref';
 import { SCENARIOS } from '@tb/scenarios';
-import { clampPitch, frame, rayThrough, viewProj, eyeOf, orbitAt, poseOf, type CameraPose, type Orbit } from './camera.ts';
+import { clampPitch, EYE_ABOVE_GROUND, frame, rayThrough, viewProj, eyeOf, orbitAt, poseOf, type CameraPose, type Orbit } from './camera.ts';
 import { alphaAt, newArrivals, newClock, newPacer, pauseLatch, runFree, stepsDue, taskYield, trackSimSpeed, Window } from './loop.ts';
 import type { V3 } from './math.ts';
 import { escapeHtml } from './html.ts';
@@ -215,7 +215,7 @@ async function main() {
     source.reset(scene.bodies);
     const b = bounds(scene.bodies);
     box = b;
-    orbit = want.camera ? orbitAt(want.camera, want.view.fov) : frame(b.min, b.max, want.view);
+    orbit = { ...(want.camera ? orbitAt(want.camera, want.view.fov) : frame(b.min, b.max, want.view)), floor: (next.ground?.y ?? 0) + EYE_ABOVE_GROUND };
     const c: V3 = [(b.min[0] + b.max[0]) / 2, (b.min[1] + b.max[1]) / 2, (b.min[2] + b.max[2]) / 2];
     renderer.setShadowBounds(c, Math.hypot(b.max[0] - b.min[0], b.max[1] - b.min[1], b.max[2] - b.min[2]) / 2 + 2);
     handle.inputs = [];
@@ -258,7 +258,7 @@ async function main() {
       // Camera only: re-framed now (a start camera keeps its pose and takes the field of view).
       config = { ...config, view };
       if (nextConfig) nextConfig = { ...nextConfig, view };
-      orbit = config.camera ? { ...orbit, fovY: frame(box.min, box.max, view).fovY } : frame(box.min, box.max, view);
+      orbit = config.camera ? { ...orbit, fovY: frame(box.min, box.max, view).fovY } : { ...frame(box.min, box.max, view), floor: orbit.floor };
       history.replaceState(null, '', toSearch(config));
       presets(location.search);
     },
