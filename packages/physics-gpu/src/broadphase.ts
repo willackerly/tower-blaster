@@ -53,7 +53,13 @@ const WG = 64;
  */
 export function assertPairDispatch(device: GPUDevice, maxPairs: number, who: string, remedy: string): void {
   const limit = device.limits.maxComputeWorkgroupsPerDimension;
-  if (maxPairs > WG * limit) throw new Error(`${who}: ${maxPairs} pair slots exceed the ${WG * limit} one indirect dispatch covers (${WG} x maxComputeWorkgroupsPerDimension ${limit}); ${remedy}`);
+  const cover = pairDispatchCover(limit);
+  if (maxPairs > cover) throw new Error(`${who}: ${maxPairs} pair slots exceed the ${cover} one indirect dispatch covers (${WG} x maxComputeWorkgroupsPerDimension ${limit}); ${remedy}`);
+}
+
+/** The most pairs one indirect dispatch covers at this maxComputeWorkgroupsPerDimension (see assertPairDispatch). */
+export function pairDispatchCover(workgroupLimit: number): number {
+  return WG * workgroupLimit;
 }
 
 /** Relative slack of the box test: about 80 f32 ulps of the larger of |d.n| and the projected extents. */

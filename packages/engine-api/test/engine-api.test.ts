@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { combineFriction, combineRestitution, DEFAULT_RESTITUTION_COMBINE, freeFlight } from '../src/index.ts';
+import { combineFriction, combineRestitution, DEFAULT_RESTITUTION_COMBINE, type EngineLimit, freeFlight, limitProblems, limitsHit } from '../src/index.ts';
 
 describe('combineFriction', () => {
   it('follows Rapier\'s four rules', () => {
@@ -14,6 +14,21 @@ describe('combineRestitution', () => {
   it('follows the same four rules, and defaults to Rapier\'s average', () => {
     for (const rule of ['average', 'min', 'max', 'multiply'] as const) expect(combineRestitution(rule, 0.05, 0.6)).toBe(combineFriction(rule, 0.05, 0.6));
     expect(combineRestitution(DEFAULT_RESTITUTION_COMBINE, 0.05, 0.6)).toBeCloseTo(0.325, 15);
+  });
+});
+
+describe('limitsHit and limitProblems', () => {
+  const limit = (l: Partial<EngineLimit>): EngineLimit => ({ id: 'pairs', effect: 'physics', steps: 0, peak: 10, room: 20, message: 'contacts dropped', ...l });
+  it('names each physics limit hit on some step, and nothing else', () => {
+    const hit = limit({ steps: 4 });
+    expect(limitsHit({ steps: 30, limits: [limit({}), hit, limit({ effect: 'speed', steps: 4 })] })).toEqual([hit]);
+    expect(limitsHit(null)).toEqual([]);
+    expect(limitProblems(null, 'e')).toEqual([]);
+    expect(limitProblems(undefined, 'e')).toEqual([]);
+    expect(limitProblems({ steps: 30, limits: [limit({})] }, 'e')).toEqual([]);
+    expect(limitProblems({ steps: 30, limits: [limit({ effect: 'speed', steps: 4 })] }, 'e')).toEqual([]);
+    expect(limitProblems({ steps: 30, limits: [limit({ steps: 4 }), limit({ id: 'x', effect: 'speed', steps: 9 }), limit({ id: 'y', steps: 1, message: 'other' })] }, 'engine 0 (avbd-gpu)'))
+      .toEqual(['engine 0 (avbd-gpu): contacts dropped', 'engine 0 (avbd-gpu): other']);
   });
 });
 

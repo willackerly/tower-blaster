@@ -1,5 +1,6 @@
 // The standard benchmark suite: one command, one results file, comparable
 // across machines and commits.
+import { type EngineHealth, limitsHit } from '@tb/engine-api';
 import { loglogFit } from '@tb/metrics';
 import { DEFAULT_TIMING, type TimingMode, type TimingOptions } from '@tb/bench';
 import type { RunConfig } from './config.ts';
@@ -88,14 +89,22 @@ export function selectCases(suite: SuiteCase[], patterns: string | undefined): S
 /**
  * One case's numbers. In 'throughput' mode a sample is a block's mean step, so
  * p95 and p99 are over a handful of block means and can't show a slow step.
+ * `limits` names each engine limit that changed the physics, with the steps it
+ * hit on (e.g. "pairs on 42 of 420 steps"); it is absent when no engine in the
+ * record reported its limits (no health(), or a record from before them).
+ * `limitProblems` are the record's sentences for them, fix included.
  */
-export interface CaseResult { name: string; series?: string; N: number; mode: TimingMode; median: number; p95: number; p99: number; valid: boolean }
+export interface CaseResult { name: string; series?: string; N: number; mode: TimingMode; median: number; p95: number; p99: number; valid: boolean; limits?: string[]; limitProblems?: string[] }
 
 export function caseResult(c: SuiteCase, record: Record<string, unknown>): CaseResult {
   const timing = (record.timing as Array<{ mode?: TimingMode; wallMs: { median: number; p95: number; p99: number } }>)[0]!;
   const t = timing.wallMs;
   const scene = record.scene as { bodies: number };
-  return { name: c.name, ...(c.series ? { series: c.series } : {}), N: scene.bodies, mode: timing.mode ?? 'latency', median: t.median, p95: t.p95, p99: t.p99, valid: record.timingValid === true };
+  const health = ((record.health as Array<EngineHealth | null> | undefined) ?? []).filter((h) => h !== null);
+  return {
+    name: c.name, ...(c.series ? { series: c.series } : {}), N: scene.bodies, mode: timing.mode ?? 'latency', median: t.median, p95: t.p95, p99: t.p99, valid: record.timingValid === true,
+    ...(health.length ? { limits: health.flatMap((h) => limitsHit(h).map((l) => `${l.id} on ${l.steps} of ${h.steps} steps`)), limitProblems: (record.limitProblems as string[] | undefined) ?? [] } : {}),
+  };
 }
 
 /**
@@ -111,11 +120,17 @@ export function nAtBudget(points: Array<{ N: number; ms: number }>, budgetMs = S
 
 export function summaryMarkdown(results: CaseResult[], suite: SuiteCase[], header: string): string {
   const fmt = (x: number) => (x >= 100 ? x.toFixed(0) : x >= 10 ? x.toFixed(1) : x.toFixed(2));
-  const lines = [header, '', '| Case | Bodies | Median ms/step | p95 | p99 | Within 7.5 ms | Valid |', '|---|---|---|---|---|---|---|'];
+  const lines = [header, '', '| Case | Bodies | Median ms/step | p95 | p99 | Within 7.5 ms | Valid | Limits hit |', '|---|---|---|---|---|---|---|---|'];
   for (const r of results) {
     // The budget is a per-step p99, which only latency mode measures.
     const tail = r.mode === 'latency' ? [fmt(r.p95), fmt(r.p99), r.p99 <= STEP_BUDGET_MS ? 'yes' : 'no'] : ['–', '–', '–'];
-    lines.push(`| ${r.name} | ${r.N} | ${fmt(r.median)} | ${tail.join(' | ')} | ${r.valid ? 'yes' : 'NO'} |`);
+    const limits = r.limits === undefined ? '–' : r.limits.length ? `**${r.limits.join(', ')}**` : 'none';
+    lines.push(`| ${r.name} | ${r.N} | ${fmt(r.median)} | ${tail.join(' | ')} | ${r.valid ? 'yes' : 'NO'} | ${limits} |`);
+  }
+  const hit = results.filter((r) => r.limitProblems?.length);
+  if (hit.length) {
+    lines.push('', 'These cases hit an engine limit that changed the physics, so their rows time a different simulation from the one asked for:', '');
+    for (const r of hit) for (const p of r.limitProblems!) lines.push(`- \`${r.name}\`, ${p}`);
   }
   if (results.some((r) => r.mode === 'throughput')) {
     lines.push('', 'Throughput rows give the sustained cost per step (the median over blocks of each block\'s mean step). A block mean hides a slow step, so they leave p95, p99 and the budget column to a latency run.');

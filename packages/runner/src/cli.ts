@@ -1,13 +1,16 @@
 // pnpm bench:browser --engines rapier --scenario S4 --param N=10000 [--headed] [--channel chrome]
 //   [--warmup N --block-steps N --blocks N --timing-mode latency|throughput --sleep true|false --bounce e --seed N --quality-steps N --out f.jsonl]
+//   [--allow-invalid] [--allow-limits]
 // --bounce e puts every body, spawn and the ground at restitution e (0-1), for engines with restitution=true.
-// Runs the benchmark in a real browser tab. Exits non-zero if the timing
+// Runs the benchmark in a real browser tab. Exits 3 if the timing
 // environment is not trustworthy (no isolation, coarse timer, software GPU)
-// unless --allow-invalid is given.
+// unless --allow-invalid is given, and 4 (first) if an engine hit a limit that
+// changed its physics, e.g. the GPU pair buffer dropped contacts, unless
+// --allow-limits is given: the record (limitProblems) says which and the fix.
 import { appendFileSync, mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { exitNow } from '@tb/testkit';
-import { parseConfig } from './config.ts';
+import { exitCodeFor, parseConfig } from './config.ts';
 import { openRunner } from './orchestrate.ts';
 
 const argv = process.argv.slice(2);
@@ -42,10 +45,10 @@ try {
     mkdirSync(dirname(flags.out), { recursive: true });
     appendFileSync(flags.out, JSON.stringify(result) + '\n');
   }
-  if (!result.timingValid && !flags['allow-invalid']) {
-    console.error(`timing not valid here: ${(result.timingProblems as string[]).join('; ')}`);
-    process.exitCode = 3;
-  }
+  const limits = result.limitProblems as string[];
+  if (!result.timingValid) console.error(`timing not valid here: ${(result.timingProblems as string[]).join('; ')}`);
+  if (limits.length) console.error(`the physics hit an engine limit, so this timed a different simulation:\n${limits.map((l) => `  ${l}`).join('\n')}`);
+  process.exitCode = exitCodeFor([{ valid: result.timingValid === true, limitProblems: limits }], { invalid: !!flags['allow-invalid'], limits: !!flags['allow-limits'] });
 } finally {
   stuck = await runner.close();
 }

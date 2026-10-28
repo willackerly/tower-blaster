@@ -1,6 +1,6 @@
 // Executes a RunConfig in the page and produces the same result records as
 // the Node CLI, plus the browser environment.
-import { compareBlocks, makeEngine, qualityGates, qualityRun, timeInterleaved, timingSummary } from '@tb/bench';
+import { compareBlocks, engineHealth, makeEngine, qualityGates, qualityRun, timeInterleaved, timingSummary } from '@tb/bench';
 import { type RunConfig, runScene, sceneKey } from './config.ts';
 import { browserEnv, timingProblems } from './env.ts';
 
@@ -10,6 +10,8 @@ export async function execute(c: RunConfig, onProgress: (msg: string) => void = 
   const engines = c.engines.map(makeEngine);
   onProgress(`timing ${c.engines.join(' vs ')} on ${scene.id} (${scene.bodies.length} bodies)`);
   const blocks = await timeInterleaved(engines, scene, c.timing);
+  // Over every step since init(): warmup and the timed blocks.
+  const health = await engineHealth(engines, c.engines.map((spec, i) => `engine ${i} (${spec})`));
   const problems = timingProblems(env, engines.map((e) => e.info.backend));
   const record: Record<string, unknown> = {
     schema: 1,
@@ -22,12 +24,18 @@ export async function execute(c: RunConfig, onProgress: (msg: string) => void = 
     timing: blocks.map(timingSummary),
     timingValid: problems.length === 0,
     timingProblems: problems,
+    // Each engine's limits (null without health()), and a sentence per limit that changed the
+    // physics: a run with any timed a different simulation from the one asked for.
+    health: health.health,
+    limitProblems: health.limitProblems,
   };
   if (engines.length === 2) record.comparison = compareBlocks(blocks[0]!, blocks[1]!);
   if (c.qualitySteps > 0) {
     onProgress(`quality pass, ${c.qualitySteps} steps`);
     const q = await qualityRun(engines[0]!, scene, { steps: c.qualitySteps, sampleEvery: 30 });
-    record.quality = { ...q, series: undefined, gates: qualityGates(q, scene.inputs.length === 0) };
+    const qh = await engineHealth([engines[0]!], [`quality run (${c.engines[0]})`]);
+    record.quality = { ...q, series: undefined, gates: qualityGates(q, scene.inputs.length === 0), health: qh.health[0] };
+    health.limitProblems.push(...qh.limitProblems);
   }
   for (const e of engines) e.dispose();
   return record;
