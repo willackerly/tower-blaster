@@ -29,12 +29,13 @@ describe('viewer: engine limits', () => {
     expect(await button.innerText()).toBe(`Rebuild with pairsPerBody=${before.fix!.value}`);
     expect(await page.locator('#hud div.bad').first().innerText()).toMatch(/^contacts dropped on \d+ of \d+ steps: a step needed \d+ broadphase pairs and the buffer holds 352/);
 
-    // A slow press, held across HUD redraws (every 10 frames): the button is one element kept across them, so the click lands.
+    // A slow press, held across a HUD redraw (every 10 frames, which rewrites the HUD's text: the marked
+    // element goes): the button is one element kept across redraws, so the click lands.
     const box = (await button.boundingBox())!;
     await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
     await page.mouse.down();
-    const frames = await page.evaluate(() => window.__viewer.frames);
-    await page.waitForFunction((f) => window.__viewer.frames >= f + 25, frames, { timeout: 30_000 });
+    await page.evaluate(() => { (document.querySelector('#hud .big') as HTMLElement).dataset.mark = 'before'; });
+    await page.waitForFunction(() => !document.querySelector('#hud .big[data-mark]'), undefined, { timeout: 120_000 });
     await page.mouse.up();
     await page.waitForFunction(() => window.__viewer.status !== 'running' || (window.__viewer.resets === 2 && window.__viewer.health !== null), undefined, { timeout: 60_000 });
     expect(await page.evaluate(() => ({ s: window.__viewer.status, e: window.__viewer.error }))).toEqual({ s: 'running', e: undefined });
