@@ -14,7 +14,15 @@ export const FAST_SCALE = 4;
  * `?keystone.slowmo=1` slows time while a crown falls fast.
  */
 export interface PaceFeel { hitStop: boolean; slowMo: boolean }
-export const paceFeel = (q: URLSearchParams): PaceFeel => ({ hitStop: q.get('keystone.hitstop') === '1', slowMo: q.get('keystone.slowmo') === '1' });
+/** The URL's keystone.hitstop and keystone.slowmo: 0 or 1 each, off when absent; any other value is refused. */
+export function paceFeel(q: URLSearchParams): PaceFeel {
+  const flag = (k: string) => {
+    const v = q.get(k);
+    if (v !== null && v !== '0' && v !== '1') throw new Error(`${k} must be 0 or 1: ${v}`);
+    return v === '1';
+  };
+  return { hitStop: flag('keystone.hitstop'), slowMo: flag('keystone.slowmo') };
+}
 
 export interface PacerOptions {
   /** Hold Space: run the sim this many times faster (no slow motion). */

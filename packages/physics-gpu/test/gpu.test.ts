@@ -37,17 +37,47 @@ describe('GPU broadphase vs the double-precision oracle', () => {
     expect(r.error).toBeNull();
     expect(r).toMatchObject({ duplicates: 0, ordered: true, groupedByI: true, missing: 0, extra: 0, deterministic: true });
     expect(r.written).toBe(r.required);
+    // Two encodes of the same bodies: the peak is this count, and neither overflowed.
+    expect([r.peak, r.overflowSteps]).toEqual([r.required, 0]);
     expect(r.indirectGroups).toBe(Math.ceil(r.written! / 64));
     if (c.kind === 'scenario') expect(r.oracle).toBeGreaterThan(r.n); // the cases are dense enough to mean something
   });
 
   it('reports the required count and writes only valid pairs when the buffer is too small', async (ctx) => {
     if (!gpu) return ctx.skip();
-    const r = await call('broadphase', { kind: 'pile', n: 300, margin: 0, maxPairs: 1000 });
+    const r = await call('broadphase', { kind: 'pile', n: 300, margin: 0, maxPairs: 1000 }, 3);
     expect(r.error).toBeNull();
     expect(r.required).toBe(300 * 299 / 2);
     expect(r.written).toBe(1000);
     expect(r).toMatchObject({ duplicates: 0, ordered: true, extra: 0 });
+    // Three encodes, each over the buffer.
+    expect([r.peak, r.overflowSteps]).toEqual([300 * 299 / 2, 3]);
+  });
+
+  // The per-pair kernels run as one indirect dispatch of 64-thread workgroups over the pairs written: up to
+  // 64 x 65535 pairs at the default limit (a 33.5 MB pair buffer), and not one more.
+  it('refuses a pair buffer one indirect dispatch cannot cover, and takes one it can', async (ctx) => {
+    if (!gpu) return ctx.skip();
+    await expect(call('broadphase', { kind: 'cloud', n: 1, margin: 0, maxPairs: 64 * 65535 + 1 }))
+      .rejects.toThrow('Broadphase: 4194241 pair slots exceed the 4194240 one indirect dispatch covers (64 x maxComputeWorkgroupsPerDimension 65535); lower maxPairs');
+    const r = await call('broadphase', { kind: 'cloud', n: 1, margin: 0, maxPairs: 64 * 65535 });
+    expect(r.error).toBeNull();
+    expect([r.written, r.required]).toEqual([0, 0]);
+  });
+
+  // A pile, so n bodies need n(n-1)/2 pairs: 780, 1225, 44850, 45 and 990 against 990 slots. The
+  // peak must hold through the smaller counts after it (a word that kept the last count fails), and
+  // only the encodes over 990 count: the last fills the buffer exactly and drops nothing (counting
+  // every encode, or one that fills it, fails).
+  it('keeps the peak pairs required and the encodes that overflowed, from the buffer\'s creation on', async (ctx) => {
+    if (!gpu) return ctx.skip();
+    const r = await call('broadphaseSequence', 300, 990, [40, 50, 300, 10, 45]);
+    expect(r.error).toBeNull();
+    expect(r.fresh.slice(6)).toEqual([0, 0]);
+    expect(r.after.map((a) => a.required)).toEqual([780, 1225, 44850, 45, 990]);
+    expect(r.after.map((a) => a.written)).toEqual([780, 990, 990, 45, 990]);
+    expect(r.after.map((a) => a.peak)).toEqual([780, 1225, 44850, 44850, 44850]);
+    expect(r.after.map((a) => a.overflowSteps)).toEqual([0, 1, 2, 2, 2]);
   });
 });
 

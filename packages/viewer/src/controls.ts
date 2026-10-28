@@ -10,7 +10,7 @@ import { buildScenario, SCENARIOS } from '@tb/scenarios';
 import { type CameraPose, type Framing, FRAMING_LIMITS } from './camera.ts';
 import { escapeHtml } from './html.ts';
 import { levelIssues, levelJson, parseLevelDef } from './level-file.ts';
-import { autoSubsteps, AVBD_ENGINES, bounceOn, checkKeystone, DEFAULT_BOUNCE, DEFAULT_CONFIG, defaultPresettle, keystoneEngine, levelDef, MAX_PRESETTLE, MAX_SUBSTEPS, type Rules, SCALE_LIMITS, type ViewerConfig, withOption } from './params.ts';
+import { autoSubsteps, AVBD_ENGINES, bounceOn, checkKeystone, DEFAULT_BOUNCE, DEFAULT_CONFIG, defaultLook, defaultPresettle, keystoneEngine, levelDef, MAX_PRESETTLE, MAX_SUBSTEPS, type Rules, SCALE_LIMITS, type ViewerConfig, withOption } from './params.ts';
 import { blastWeight, checkBlast } from '@tb/engine-api';
 import { DEFAULT_GRENADE, FUSES, GRENADE_LIMITS, type GrenadeSpec } from '@tb/weapons';
 import { GRENADE_BLAST_KEYS, GRENADE_NUMBERS, parseProjectile, type Projectile, projectileMass } from './projectile.ts';
@@ -93,6 +93,9 @@ export function underKeystone(c: ViewerConfig, feel: PaceFeel): ViewerConfig {
   return next;
 }
 
+/** The look under other rules: a look left at its rules' default (no look key in the URL) becomes the new rules' default, as editing the URL's rules would. */
+const lookFor = (c: ViewerConfig, rules: Rules) => (c.look === defaultLook(c.rules) ? defaultLook(rules) : c.look);
+
 /** The scene picker's value for a Keystone level (scenarios are their own id). */
 export const levelChoice = (id: string) => `level:${id}`;
 /** The scene picker's value for the level of your own the config holds (ViewerConfig.customLevel). */
@@ -131,11 +134,11 @@ export function proposeScene(c: ViewerConfig, scenario: string, params: Record<s
     if (picked && rules.rules === 'keystone') {
       // A line of shots is the level's it was made on: another level drops it.
       const same = level === c.level && (picked.custom ? picked.def === c.customLevel : !c.customLevel);
-      const next = underKeystone({ ...c, level, customLevel: picked.custom ? picked.def : null, shots: same ? c.shots : null }, rules.feel);
+      const next = underKeystone({ ...c, level, customLevel: picked.custom ? picked.def : null, shots: same ? c.shots : null, look: lookFor(c, 'keystone') }, rules.feel);
       return { ok: true, config: next, bodies: compileLevel(picked.def).scene.bodies.length };
     }
     // Rules are a level's: anything else is the sandbox.
-    c = { ...c, rules: 'sandbox', feel: { hitStop: false, slowMo: false }, shots: null };
+    c = { ...c, rules: 'sandbox', feel: { hitStop: false, slowMo: false }, shots: null, look: lookFor(c, 'sandbox') };
     const settle = presettle ?? defaultPresettle(level);
     if (!Number.isInteger(settle) || settle < 0 || settle > MAX_PRESETTLE) throw new Error(`settle steps must be a whole number from 0 to ${MAX_PRESETTLE}`);
     if (picked) {

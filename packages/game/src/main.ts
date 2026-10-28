@@ -1,13 +1,14 @@
 // The game page: Keystone (playKeystone, play.ts) on the GPU solver, or Rapier
 // with ?engine=rapier, in the maquette look. ?level=L2 starts on another level,
 // ?look= and real.* change the look, ?keystone.hitstop=1 and ?keystone.slowmo=1
-// turn on pace juice, ?offscreen=1 (tests) draws only for captures.
+// turn on pace juice, ?keystone.shots= plays a line once loaded, ?offscreen=1
+// (tests) draws only for captures. The keys are params.ts's, which the viewer
+// reads too under rules=keystone, so the same link opens in either page.
 import { LEVELS } from '@tb/keystone';
 import { createDevice } from '@tb/gpu';
-import { HAZY_DAY, lookByName, parseRealOptions, Renderer, SnapshotSource } from '@tb/render';
-import { engineKind } from './engines.ts';
-import { paceFeel } from './pacing.ts';
-import { type GameHandle, newGameHandle, playKeystone } from './play.ts';
+import { lookByName, parseRealOptions, Renderer, SnapshotSource } from '@tb/render';
+import { parseGameParams } from './params.ts';
+import { type GameHandle, newGameHandle, playKeystone, playLine } from './play.ts';
 import { GAME_HELP, installGameStyles } from './ui.ts';
 
 declare global { interface Window { __game: GameHandle } }
@@ -30,12 +31,8 @@ function fail(e: unknown) {
 
 async function main() {
   const q = new URLSearchParams(location.search);
-  const offscreen = q.get('offscreen') === '1';
-  const id = (q.get('level') ?? LEVELS[0]!.id).toUpperCase();
-  const start = LEVELS.findIndex((l) => l.id === id);
-  if (start < 0) throw new Error(`unknown level ${id}; known: ${LEVELS.map((l) => l.id).join(', ')}`);
-  const engine = engineKind(q.get('engine'));
-  const feel = paceFeel(q);
+  const { level, engine, feel, look, shots, offscreen } = parseGameParams(q);
+  const start = LEVELS.indexOf(level);
   handle.feel = feel;
   handle.engine = engine;
 
@@ -45,15 +42,31 @@ async function main() {
   renderer.setSource(source);
   // The maquette look by default: tints read true on its pale albedo (?look=candy for the rainbow;
   // ?look=real with real.* knobs, parseRealOptions in @tb/render).
-  renderer.look = lookByName(q.get('look') ?? '', parseRealOptions(q), HAZY_DAY);
+  renderer.look = lookByName(look, parseRealOptions(q));
   device.lost.then((info) => fail(`GPU device lost: ${info.message}`));
   device.addEventListener('uncapturederror', (e) => fail((e as GPUUncapturedErrorEvent).error.message));
 
+  let shown = level.id;
   await playKeystone({
     canvas, offscreen, device, renderer, source, hud: $('hud'), banner: $('banner'), result: $('result'),
     levels: LEVELS, start, engine, feel, fail,
-    hooks: { loaded: (c) => { if (!offscreen) history.replaceState(null, '', `?level=${c.def.id}`); } },
+    hooks: {
+      // The URL follows the level, keeping the other keys; a line is the level's it was made on.
+      loaded: (c) => {
+        if (c.def.id === shown) return;
+        shown = c.def.id;
+        const u = new URLSearchParams(location.search);
+        u.set('level', c.def.id);
+        u.delete('keystone.shots');
+        history.replaceState(null, '', `?${u}`);
+      },
+    },
   }, handle);
+  // A link with a line plays it once, on the attempt the page opened with.
+  if (shots) {
+    const r = await playLine(handle, shots, true);
+    if (!r.ok) console.warn(`keystone.shots: ${r.message}`);
+  }
 }
 
 main().catch(fail);

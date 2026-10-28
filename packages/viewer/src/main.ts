@@ -10,7 +10,7 @@ import { makeEngine, parseSpec } from '@tb/bench';
 import { type BodyDesc, type EngineInfo, type InputEvent, type PhysicsEngine, type Snapshot, spawnedBodies } from '@tb/engine-api';
 import { boundingRadius } from '@tb/geom';
 import { DEFAULT_AVBD } from '@tb/physics-ref';
-import { GAME_HELP, gameOverlays, starsText, type GameHandle, installGameStyles, newGameHandle, playKeystone, structureTints } from '@tb/game';
+import { GAME_HELP, gameOverlays, playLine, type GameHandle, installGameStyles, newGameHandle, playKeystone, structureTints } from '@tb/game';
 import { AVBD_GAP_SLOP, AVBD_ITERATIONS, compileLevel, type Driver, LEVELS, type Shot } from '@tb/keystone';
 import { clampPitch, frame, rayThrough, viewProj, eyeOf, orbitAt, poseOf, type CameraPose, type Orbit } from './camera.ts';
 import { alphaAt, newArrivals, newClock, newPacer, pauseLatch, runFree, stepsDue, taskYield, trackSimSpeed, Window } from './loop.ts';
@@ -664,22 +664,10 @@ async function keystoneMode(config: ViewerConfig, device: GPUDevice, renderer: R
     });
   };
   const report = (text: string, bad = false) => { status = text; warn = bad; showDev(); };
-  const until = (ok: () => boolean) => new Promise<void>((res) => { const t = () => (ok() ? res() : setTimeout(t, 50)); t(); });
-  /** Fire the shots in turn, each once the game is ready, from a fresh attempt unless this is the load's own. */
-  async function playLine(shots: readonly Shot[], fresh: boolean) {
-    const id = game.level;
-    if (!fresh) await game.retry();
-    for (let i = 0; i < shots.length; i++) {
-      await until(() => game.ready || game.result !== null || game.level !== id || game.status === 'error');
-      if (game.level !== id || game.status === 'error') return report(`stopped after ${i} of ${shots.length} shots: the level changed`, true);
-      if (game.result) return report(`the level ended after ${i} of ${shots.length} shots`, true);
-      if (!game.fire(shots[i]!)) return report(`shot ${i + 1} (${shots[i]!.ammo}) could not be fired: the rack has ${driver?.session.rackLeft.join(', ') || 'nothing'} left`, true);
-      report(`playing: shot ${i + 1} of ${shots.length} fired`);
-    }
-    await until(() => game.result !== null || game.level !== id || game.status === 'error' || (game.ready && game.strokes === shots.length));
-    const r = game.result;
-    const played = `played ${shots.length} shot${shots.length === 1 ? '' : 's'}`;
-    report(r ? `${played}: ${r.stamp}, ${starsText(r.stars)}` : `${played}; the level is still open`);
+  /** Plays a line (playLine, @tb/game), saying how far it got. */
+  async function playShots(shots: readonly Shot[], fresh: boolean) {
+    const r = await playLine(game, shots, fresh, (n) => report(`playing: shot ${n} of ${shots.length} fired`));
+    report(r.message, !r.ok);
   }
   async function devAction(a: DevAction) {
     if (busy) return;
@@ -687,7 +675,7 @@ async function keystoneMode(config: ViewerConfig, device: GPUDevice, renderer: R
     try {
       if (a === 'play') {
         const line = cfg.shots ?? levelOf(cfg)!.solutions?.par;
-        if (line) { report('playing the line'); await playLine(line, false); }
+        if (line) { report('playing the line'); await playShots(line, false); }
       } else if (a === 'check') {
         report('replaying the attempt on a fresh engine');
         const live = game.state(), again = await game.replay(attempt());
@@ -739,7 +727,7 @@ async function keystoneMode(config: ViewerConfig, device: GPUDevice, renderer: R
   if (cfg.shots) {
     busy = true;
     report('playing the line from the link');
-    playLine(cfg.shots, true).catch((e) => report(e instanceof Error ? e.message : String(e), true)).finally(() => { busy = false; showDev(); });
+    playShots(cfg.shots, true).catch((e) => report(e instanceof Error ? e.message : String(e), true)).finally(() => { busy = false; showDev(); });
   }
 }
 

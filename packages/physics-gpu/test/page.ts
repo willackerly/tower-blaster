@@ -81,6 +81,7 @@ export async function broadphase(c: BroadCase, repeat = 1) {
   const res = {
     n, error: error?.message ?? null,
     written: total[3], required: total[5], indirectGroups: total[0], oracle: oracleExact.length,
+    peak: total[6], overflowSteps: total[7],
     duplicates: got.length - gotKeys.size,
     ordered: got.every((p) => p[0] < p[1]),
     groupedByI,
@@ -91,6 +92,36 @@ export async function broadphase(c: BroadCase, repeat = 1) {
   bp.destroy();
   sb.destroy();
   return res;
+}
+
+/**
+ * One Broadphase over a pile (every pair overlaps) encoded with the first
+ * ns[k] bodies in turn, total read after each: the sticky words 6 and 7
+ * (broadphase.ts) against the per-encode ones. `fresh` is total before any
+ * encode.
+ */
+export async function broadphaseSequence(n: number, maxPairs: number, ns: number[]) {
+  const { centers, radii } = input({ kind: 'pile', n, margin: 0 });
+  const { device } = await sharedDevice();
+  const spheres = new Float32Array(4 * n);
+  for (let i = 0; i < n; i++) spheres.set([centers[3 * i]!, centers[3 * i + 1]!, centers[3 * i + 2]!, radii[i]!], 4 * i);
+  const sb = device.createBuffer({ size: spheres.byteLength, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });
+  device.queue.writeBuffer(sb, 0, spheres);
+  const bp = new Broadphase(device, sb, n, maxPairs);
+  device.pushErrorScope('validation');
+  const fresh = Array.from(new Uint32Array(await readBuffer(device, bp.total)));
+  const after: Array<{ written: number; required: number; peak: number; overflowSteps: number }> = [];
+  for (const m of ns) {
+    const enc = device.createCommandEncoder();
+    bp.encode(enc, m, { cellSize: 1, margin: 0 }); // 2 r + margin, as broadphase() above
+    device.queue.submit([enc.finish()]);
+    const t = new Uint32Array(await readBuffer(device, bp.total));
+    after.push({ written: t[3]!, required: t[5]!, peak: t[6]!, overflowSteps: t[7]! });
+  }
+  const error = await device.popErrorScope();
+  bp.destroy();
+  sb.destroy();
+  return { error: error?.message ?? null, fresh, after };
 }
 
 // ---------- narrowphase ----------
@@ -416,6 +447,8 @@ export async function simulateGpu(scene: SceneDesc, steps: number, params: Parti
   const d = await e.diagnostics();
   maxColors = Math.max(maxColors, d.colors);
   if (d.pairsRequired > d.pairsWritten || d.uncolored || d.colorOverflow) worst = d;
+  // The last step's diagnostics, which also carry the sticky pair counters over the whole run.
+  const final = d;
   let contacts: { digest: number; used: number } | null = null;
   if (withContacts) {
     const { solver } = e.probeParts();
@@ -427,7 +460,7 @@ export async function simulateGpu(scene: SceneDesc, steps: number, params: Parti
   }
   const error = await device.popErrorScope();
   e.dispose();
-  return { error: error?.message ?? null, snaps, maxColors, worst, wallMs, contacts };
+  return { error: error?.message ?? null, snaps, maxColors, worst, final, wallMs, contacts };
 }
 
 /**
@@ -602,6 +635,9 @@ export async function pushReplay(steps: number) {
  * plane, which the narrowphase tests bound. axisTies counts the axis
  * mismatches where the GPU's axis is one the reference's own choice was
  * within AXIS_TIE of flipping to (axisSlack).
+ * The broadphase's sticky counters (total[6..7]) are checked against the
+ * running max and count of every step's own (stickyWrong), and
+ * diagnostics() is read after the run, after a new init() and 5 steps on.
  */
 export async function pairHistory(scene: SceneDesc, steps: number, opts: { pairsPerBody?: number } = {}) {
   const { device } = await sharedDevice();
@@ -623,16 +659,22 @@ export async function pairHistory(scene: SceneDesc, steps: number, opts: { pairs
       const m = readStruct(mv, Manifold, k);
       return { a: pv[2 * k]!, b: pv[2 * k + 1]!, count: m.count![0]!, axis: m.axis![0]!, prevSlot: hv[2 * k]!, prevAxis: hv[2 * k + 1]! };
     });
-    return { list, sweep: new Float32Array(sw!), overflow: t[5]! > t[3]! };
+    return { list, sweep: new Float32Array(sw!), overflow: t[5]! > t[3]!, required: t[5]!, sticky: [t[6]!, t[7]!] };
   };
   let wrong = 0, found = 0, missed = 0, axes = 0, checked = 0, axisMismatch = 0, axisTies = 0, presenceMismatch = 0, hinted = 0, overflowSteps = 0, spawnPairs = 0;
+  // The broadphase's sticky words against the running max and count of the per-step ones.
+  let peak = 0, stickyWrong = 0, peakDrops = 0, lastRequired = 0;
   const examples: unknown[] = [];
   let last = (await read()).list;
   for (let s = 0; s < steps; s++) {
     const before = await state();
     e.step();
-    const { list: cur, sweep, overflow } = await read();
+    const { list: cur, sweep, overflow, required, sticky } = await read();
     if (overflow) overflowSteps++;
+    if (required < peak) peakDrops++;
+    peak = Math.max(peak, required);
+    lastRequired = required;
+    if (sticky[0] !== peak || sticky[1] !== overflowSteps) stickyWrong++;
     spawnPairs += cur.filter((p) => Math.max(p.a, p.b) >= before.length).length;
     // The narrowphase's axis given its hint, against the reference given the same hint.
     for (const p of cur) {
@@ -670,9 +712,18 @@ export async function pairHistory(scene: SceneDesc, steps: number, opts: { pairs
     }
     last = cur;
   }
+  const diagnostics = await e.diagnostics();
+  // init() makes new buffers, so the counters start again from zero.
+  await e.init(scene);
+  const reinit = await e.diagnostics();
+  for (let s = 0; s < 5; s++) e.step();
+  const reinit5 = await e.diagnostics();
   const error = await device.popErrorScope();
   e.dispose();
-  return { error: error?.message ?? null, wrong, found, missed, axes, checked, axisMismatch, axisTies, presenceMismatch, hinted, overflowSteps, spawnPairs, examples };
+  return {
+    error: error?.message ?? null, wrong, found, missed, axes, checked, axisMismatch, axisTies, presenceMismatch, hinted, overflowSteps, spawnPairs, examples,
+    peak, lastRequired, stickyWrong, peakDrops, diagnostics, reinit, reinit5,
+  };
 }
 const NONE_U32 = 0xffffffff;
 
@@ -710,16 +761,20 @@ export async function anchorDrift(scene: SceneDesc, steps: number, params: Parti
   return { error: error?.message ?? null, worst };
 }
 
-/** init() with a pair buffer too large for the device: the error it throws (null if none). */
-export async function initError(scene: SceneDesc, pairsPerBody: number) {
+/**
+ * init() with a pair buffer (or capacity) too large for the device or for one indirect dispatch: the
+ * error it throws (null if none), any validation error, and the device limits the refusals depend on.
+ */
+export async function initError(scene: SceneDesc, pairsPerBody: number, capacity?: number) {
   const { device } = await sharedDevice();
   device.pushErrorScope('validation');
-  const e = new GpuAvbdEngine({}, { device, pairsPerBody });
+  const e = new GpuAvbdEngine({}, { device, pairsPerBody, capacity });
   let message: string | null = null;
   try { await e.init(scene); } catch (err) { message = (err as Error).message; }
   const validation = await device.popErrorScope();
   e.dispose();
-  return { message, validation: validation?.message ?? null };
+  const { maxComputeWorkgroupsPerDimension, maxStorageBufferBindingSize, maxBufferSize } = device.limits;
+  return { message, validation: validation?.message ?? null, limits: { maxComputeWorkgroupsPerDimension, maxStorageBufferBindingSize, maxBufferSize } };
 }
 
 /**
