@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { BodyDesc } from '@tb/engine-api';
+import type { BodyDesc, SpawnEvent } from '@tb/engine-api';
 import { buildScenario, KAPLA_SCALE, layout, plankCount, STOREY } from '../src/index.ts';
 import { fitShape } from '../src/kapla.ts';
 
@@ -129,7 +129,7 @@ describe('S15 Kapla tower', () => {
   it('the topple ball starts clear of the tower and heads for its axis', () => {
     for (const toppleSide of [0, 37, 200]) {
       const s = buildScenario('S15', { planks: 2000, toppleSide });
-      const ball = s.inputs[0]!.body;
+      const ball = (s.inputs[0] as SpawnEvent).body;
       expect(s.inputs[0]!.step).toBe(120);
       const [x, , z] = ball.pos, [vx, , vz] = ball.linVel;
       expect((x * vz - z * vx) / Math.hypot(vx, vz)).toBeCloseTo(0, 9); // the line of flight passes through the axis

@@ -1,5 +1,5 @@
 // The reference AVBD solver behind the engine contract.
-import { emptySnapshot, type EngineInfo, type InputEvent, type PhysicsEngine, type SceneDesc, type Snapshot } from '@tb/engine-api';
+import { blastArea, blastKick, checkBlast, emptySnapshot, type EngineInfo, type InputEvent, type PhysicsEngine, type SceneDesc, type Snapshot } from '@tb/engine-api';
 import { type AvbdParams, avbdVariant, AvbdWorld, checkColoring, checkGapSlop, checkRecords, checkRemoved, checkRestitution, DEFAULT_AVBD } from './avbd.ts';
 
 export class AvbdReferenceEngine implements PhysicsEngine {
@@ -25,6 +25,7 @@ export class AvbdReferenceEngine implements PhysicsEngine {
   async init(scene: SceneDesc): Promise<void> {
     const e = scene.ground?.restitution;
     if (e !== undefined && !(e >= 0 && e <= 1)) throw new Error(`AvbdReferenceEngine: SceneDesc.ground.restitution must be in [0, 1], got ${e}`);
+    for (const ev of scene.inputs) if (ev.kind === 'blast') checkBlast(ev.blast);
     this.world = new AvbdWorld(scene, this.params);
     for (const b of scene.bodies) this.world.add(b);
     this.pending = [...scene.inputs].sort((a, b) => a.step - b.step);
@@ -32,6 +33,7 @@ export class AvbdReferenceEngine implements PhysicsEngine {
   }
 
   push(events: InputEvent[]): void {
+    for (const ev of events) if (ev.kind === 'blast') checkBlast(ev.blast);
     // Stable insertion keeps push order among events due at the same step.
     for (const ev of events) {
       let i = this.pending.length;
@@ -43,7 +45,19 @@ export class AvbdReferenceEngine implements PhysicsEngine {
   step(): void {
     const w = this.world;
     if (!w) throw new Error('init() first');
-    while (this.pending.length && this.pending[0]!.step <= this.stepIndex) w.add(this.pending.shift()!.body);
+    while (this.pending.length && this.pending[0]!.step <= this.stepIndex) {
+      const ev = this.pending.shift()!;
+      if (ev.kind === 'spawn') { w.add(ev.body); continue; }
+      // A blast (blast.ts) pushes the bodies that exist now, before the step starts.
+      const b = checkBlast(ev.blast);
+      w.bodies.forEach((body, id) => {
+        const dv = blastKick(b, id, body.pos, body.mass, blastArea(body.desc.shape));
+        if (!dv) return;
+        body.linVel = [body.linVel[0] + dv[0], body.linVel[1] + dv[1], body.linVel[2] + dv[2]];
+        // The adaptive warm start compares linVel with prevLinVel: the kick is not an acceleration (blast.ts).
+        body.prevLinVel = [body.prevLinVel[0] + dv[0], body.prevLinVel[1] + dv[1], body.prevLinVel[2] + dv[2]];
+      });
+    }
     w.step();
     this.stepIndex++;
   }
