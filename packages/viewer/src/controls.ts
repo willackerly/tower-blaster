@@ -1,15 +1,16 @@
-// The viewer's control panel: the scene (scenario, its params, seed, cube size, substeps and
-// Bounce), rebuilt on demand, and the projectile and the look, applied as soon as a field
+// The viewer's control panel: the scene (scenario or level, its params, seed, cube size, substeps,
+// Bounce, and for a level the rules it plays by), rebuilt on demand, and the projectile and the look, applied as soon as a field
 // changes; and the whole setup saved to or loaded from a JSON file (scene-file.ts). The panel
 // only proposes configs; main.ts decides how to apply them (live, or by reset).
 import { parseSpec } from '@tb/bench';
 import { type Env, ENVS, type Ground, GROUNDS, linearToSrgb, LOOKS, REAL_DEFAULTS, REAL_KNOBS, type RealKnob, type RealOptions, srgbToLinear, type Stone, STONES, type V3 } from '@tb/render';
-import { compileLevel, LEVELS } from '@tb/keystone';
+import type { PaceFeel } from '@tb/game';
+import { AVBD_ITERATIONS, compileLevel, LEVELS, PRESETTLE_STEPS } from '@tb/keystone';
 import { buildScenario, SCENARIOS } from '@tb/scenarios';
 import { type CameraPose, type Framing, FRAMING_LIMITS } from './camera.ts';
 import { escapeHtml } from './html.ts';
 import { levelIssues, levelJson, parseLevelDef } from './level-file.ts';
-import { autoSubsteps, AVBD_ENGINES, bounceOn, DEFAULT_BOUNCE, defaultPresettle, levelDef, MAX_PRESETTLE, MAX_SUBSTEPS, SCALE_LIMITS, type ViewerConfig, withOption } from './params.ts';
+import { autoSubsteps, AVBD_ENGINES, bounceOn, checkKeystone, DEFAULT_BOUNCE, DEFAULT_CONFIG, defaultPresettle, keystoneEngine, levelDef, MAX_PRESETTLE, MAX_SUBSTEPS, type Rules, SCALE_LIMITS, type ViewerConfig, withOption } from './params.ts';
 import { parseProjectile, type Projectile, projectileMass } from './projectile.ts';
 import { parseSceneFile, sceneFile, sceneFileName } from './scene-file.ts';
 
@@ -32,8 +33,8 @@ export interface ControlsHooks {
   setLook(look: string, real: Partial<RealOptions>): void;
   /** Frame the scene this way from now on (and re-frame it now). */
   setView(view: Framing): void;
-  /** Where the camera is now (saved as where the scene starts). */
-  camera(): CameraPose;
+  /** Where the camera is now (saved as where the scene starts); null: framed afresh (Keystone frames its level). */
+  camera(): CameraPose | null;
   /** Switch to this config, loaded from a file named name. */
   load(next: ViewerConfig, name: string): void;
 }
@@ -57,6 +58,23 @@ export function realOverrides(values: Record<RealKnob, number>, groundHex: strin
 
 /** The panel's Bounce: restitution on or off (the engine option), and the e every surface then gets (ViewerConfig.bounce). */
 export interface BounceChoice { on: boolean; e: number }
+
+/** The panel's rules for a level, and Keystone's pace juice (ViewerConfig.rules, feel). */
+export interface RulesChoice { rules: Rules; feel: PaceFeel }
+
+/**
+ * A config under Keystone's rules: the level's own physics and stepping (scale, substeps,
+ * presettle, sleep, the free loop, no autofire) and the game's engine of the same kind (an
+ * avbd-gpu spec's options dropped: the game sets its own), as the game plays it; throws when the
+ * engine has no game counterpart (keystoneEngine).
+ */
+export function underKeystone(c: ViewerConfig, feel: PaceFeel): ViewerConfig {
+  const { loop, pipeline, maxSteps } = DEFAULT_CONFIG;
+  const name = parseSpec(c.engine).name, engine = name === 'avbd-gpu' || name === 'rapier' ? name : c.engine;
+  const next: ViewerConfig = { ...c, rules: 'keystone', feel, engine, scale: 1, substeps: 1, presettle: PRESETTLE_STEPS, sleep: null, autofire: 0, loop, pipeline, maxSteps, camera: null };
+  checkKeystone(next);
+  return next;
+}
 
 /** The scene picker's value for a Keystone level (scenarios are their own id). */
 export const levelChoice = (id: string) => `level:${id}`;
@@ -87,11 +105,18 @@ export const withCustomLevel = (c: ViewerConfig, def: ViewerConfig['customLevel'
  * are then ignored (the config keeps its own). presettle undefined: the new scene's default.
  */
 export function proposeScene(c: ViewerConfig, scenario: string, params: Record<string, number | boolean>, seed: number, scale = c.scale, substeps = c.substeps,
-  bounce: BounceChoice = { on: bounceOn(c.engine), e: c.bounce }, presettle?: number):
+  bounce: BounceChoice = { on: bounceOn(c.engine), e: c.bounce }, presettle?: number, rules: RulesChoice = { rules: c.rules, feel: c.feel }):
   { ok: true; config: ViewerConfig; bodies: number } | { ok: false; error: string } {
   try {
     const picked = pickedLevel(c, scenario);
     const level = picked?.def.id ?? null;
+    // Keystone's rules: the level as the game plays it, whatever the world fields say (the panel hides them).
+    if (picked && rules.rules === 'keystone') {
+      const next = underKeystone({ ...c, level, customLevel: picked.custom ? picked.def : null }, rules.feel);
+      return { ok: true, config: next, bodies: compileLevel(picked.def).scene.bodies.length };
+    }
+    // Rules are a level's: anything else is the sandbox.
+    c = { ...c, rules: 'sandbox', feel: { hitStop: false, slowMo: false } };
     const settle = presettle ?? defaultPresettle(level);
     if (!Number.isInteger(settle) || settle < 0 || settle > MAX_PRESETTLE) throw new Error(`settle steps must be a whole number from 0 to ${MAX_PRESETTLE}`);
     if (picked) {
@@ -172,12 +197,18 @@ export function mountControls(root: HTMLElement, hooks: ControlsHooks): { refres
       <div class="h">Scene</div>
       <label class="f"><span>scenario</span><select name="scenario"><optgroup label="Scenarios">${Object.values(SCENARIOS).map((s) => `<option value="${s.id}">${s.id} ${escapeHtml(s.title)}</option>`).join('')}</optgroup><optgroup label="Keystone levels">${LEVELS.map((l) => `<option value="${levelChoice(l.id)}">${l.id} ${escapeHtml(l.name)}</option>`).join('')}</optgroup><optgroup label="Your level" class="custom"><option value="${CUSTOM_LEVEL}"></option></optgroup></select></label>
       <div class="params"></div>
+      <div class="rules">
+        <label class="f"><span>rules</span><select name="rules"><option value="sandbox">sandbox</option><option value="keystone">Keystone (the game)</option></select></label>
+        <div class="feel">${field('hitstop', 'hit-stop on contact', false)}${field('slowmo', 'slow motion as crowns fall', false)}</div>
+      </div>
       <div class="seed">${field('seed', 'seed', 1, 'step="1"')}</div>
-      ${field('presettle', 'settle steps before start', 0, `step="1" min="0" max="${MAX_PRESETTLE}"`)}
-      ${field('scale', 'cube edge (m)', 1, `step="any" min="${SCALE_LIMITS[0]}" max="${SCALE_LIMITS[1]}"`)}
-      ${field('substeps', 'physics substeps', 1, `step="1" min="1" max="${MAX_SUBSTEPS}"`)}
-      ${field('bounce', 'bounce', false)}
-      <div class="bounce">${field('bounceE', 'bounce e (0-1)', DEFAULT_BOUNCE, 'step="any" min="0" max="1"')}</div>
+      <div class="world">
+        ${field('presettle', 'settle steps before start', 0, `step="1" min="0" max="${MAX_PRESETTLE}"`)}
+        ${field('scale', 'cube edge (m)', 1, `step="any" min="${SCALE_LIMITS[0]}" max="${SCALE_LIMITS[1]}"`)}
+        ${field('substeps', 'physics substeps', 1, `step="1" min="1" max="${MAX_SUBSTEPS}"`)}
+        ${field('bounce', 'bounce', false)}
+        <div class="bounce">${field('bounceE', 'bounce e (0-1)', DEFAULT_BOUNCE, 'step="any" min="0" max="1"')}</div>
+      </div>
       <div class="out muted"></div>
       <div class="issues warn small"></div>
       <button type="submit">Rebuild scene</button>
@@ -231,6 +262,9 @@ export function mountControls(root: HTMLElement, hooks: ControlsHooks): { refres
   const bounceEBox = sceneForm.querySelector<HTMLElement>('.bounce')!;
 
   const seedBox = sceneForm.querySelector<HTMLElement>('.seed')!;
+  const rulesBox = sceneForm.querySelector<HTMLElement>('.rules')!;
+  const feelBox = sceneForm.querySelector<HTMLElement>('.feel')!;
+  const worldBox = sceneForm.querySelector<HTMLElement>('.world')!;
   const issuesBox = sceneForm.querySelector<HTMLElement>('.issues')!;
   const customGroup = sceneForm.querySelector<HTMLOptGroupElement>('optgroup.custom')!;
   // Outside the scene form, so Rebuild stays its only button.
@@ -245,6 +279,11 @@ export function mountControls(root: HTMLElement, hooks: ControlsHooks): { refres
     try { picked = pickedLevel(c, scenario); } catch { /* checkScene says why */ }
     seedBox.hidden = picked !== null;
     levelDownload.hidden = picked === null;
+    // Rules are a level's; under Keystone's the world fields are the level's own.
+    rulesBox.hidden = picked === null;
+    const keystone = picked !== null && input(sceneForm, 'rules').value === 'keystone';
+    feelBox.hidden = !keystone;
+    worldBox.hidden = keystone;
     issuesBox.textContent = '';
     if (picked) {
       const d = picked.def;
@@ -266,13 +305,16 @@ export function mountControls(root: HTMLElement, hooks: ControlsHooks): { refres
     }
     const bounce = { on: bounceBox.checked, e: input(sceneForm, 'bounceE').value === '' ? NaN : Number(input(sceneForm, 'bounceE').value) };
     const presettle = input(sceneForm, 'presettle').value === '' ? NaN : Number(input(sceneForm, 'presettle').value);
-    return proposeScene(hooks.config(), scenario, params, Number(input(sceneForm, 'seed').value), Number(input(sceneForm, 'scale').value), Number(input(sceneForm, 'substeps').value), bounce, presettle);
+    const rules: RulesChoice = { rules: input(sceneForm, 'rules').value as Rules, feel: { hitStop: (input(sceneForm, 'hitstop') as HTMLInputElement).checked, slowMo: (input(sceneForm, 'slowmo') as HTMLInputElement).checked } };
+    return proposeScene(hooks.config(), scenario, params, Number(input(sceneForm, 'seed').value), Number(input(sceneForm, 'scale').value), Number(input(sceneForm, 'substeps').value), bounce, presettle, rules);
   }
 
   function checkScene() {
     bounceEBox.hidden = !bounceBox.checked;
     const p = sceneProposal();
-    sceneOut.textContent = p.ok ? sceneSummary(p.bodies, p.config.scale, p.config.substeps, bounceOn(p.config.engine) ? p.config.bounce : null) : p.error;
+    sceneOut.textContent = !p.ok ? p.error : p.config.rules === 'keystone'
+      ? `${p.bodies.toLocaleString()} bodies, by Keystone's rules on ${keystoneEngine(p.config.engine) === 'gpu' ? `the GPU solver (${AVBD_ITERATIONS} iterations, gapSlop)` : 'Rapier'}`
+      : sceneSummary(p.bodies, p.config.scale, p.config.substeps, bounceOn(p.config.engine) ? p.config.bounce : null);
     sceneOut.classList.toggle('warn', !p.ok);
     rebuildButton.disabled = !p.ok;
   }
@@ -303,6 +345,7 @@ export function mountControls(root: HTMLElement, hooks: ControlsHooks): { refres
     showParams(v);
     checkScene();
   });
+  input(sceneForm, 'rules').addEventListener('change', () => showParams(input(sceneForm, 'scenario').value));
   sceneForm.addEventListener('input', checkScene);
   // Level JSON: the picked level (built-in or your own) as a file to edit, and an edited one loaded back as your own.
   levelDownload.addEventListener('click', () => {
@@ -404,6 +447,9 @@ export function mountControls(root: HTMLElement, hooks: ControlsHooks): { refres
     customGroup.hidden = !c.customLevel;
     customGroup.firstElementChild!.textContent = c.customLevel ? `${c.customLevel.id} ${c.customLevel.name} (yours)` : '';
     input(sceneForm, 'scenario').value = sceneChoice(c);
+    input(sceneForm, 'rules').value = c.rules;
+    (input(sceneForm, 'hitstop') as HTMLInputElement).checked = c.feel.hitStop;
+    (input(sceneForm, 'slowmo') as HTMLInputElement).checked = c.feel.slowMo;
     input(sceneForm, 'seed').value = String(c.seed);
     input(sceneForm, 'presettle').value = String(c.presettle);
     input(sceneForm, 'scale').value = String(c.scale);
@@ -430,6 +476,9 @@ export function mountControls(root: HTMLElement, hooks: ControlsHooks): { refres
     input(lookForm, 'groundMaterial').value = real.groundMaterial;
     input(lookForm, 'env').value = real.env;
     for (const k of Object.keys(VIEW_FIELDS) as (keyof Framing)[]) input(viewForm, k).value = String(c.view[k]);
+    // Under Keystone's rules the rack fires and the game frames its level: the projectile and the framing wait for the sandbox.
+    // (style, not hidden: the panel's CSS sets a form's display.)
+    projForm.style.display = viewForm.style.display = c.rules === 'keystone' ? 'none' : '';
   }
   // Open or closed as the viewer last left it; open by default on a wide screen.
   const OPEN_KEY = 'tb.viewer.controls.open';

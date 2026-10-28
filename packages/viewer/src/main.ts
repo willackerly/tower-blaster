@@ -4,18 +4,19 @@
 // snapshots (a CPU engine blocks the thread while it steps, so its frames run
 // between steps); loop=frame steps, reads back and renders in series, one step
 // per frame (maxSteps allows catch-up). Slower engines fall into slow motion,
-// shown as sim speed.
+// shown as sim speed. rules=keystone hands the page to the game's loop (@tb/game
+// playKeystone; keystoneMode below), with the panel kept.
 import { makeEngine, parseSpec } from '@tb/bench';
 import { type BodyDesc, type EngineInfo, type InputEvent, type PhysicsEngine, type Snapshot, spawnedBodies } from '@tb/engine-api';
 import { boundingRadius } from '@tb/geom';
 import { DEFAULT_AVBD } from '@tb/physics-ref';
-import { structureTints } from '@tb/game';
-import { AVBD_GAP_SLOP, AVBD_ITERATIONS, compileLevel } from '@tb/keystone';
+import { GAME_HELP, gameOverlays, type GameHandle, installGameStyles, newGameHandle, playKeystone, structureTints } from '@tb/game';
+import { AVBD_GAP_SLOP, AVBD_ITERATIONS, compileLevel, LEVELS } from '@tb/keystone';
 import { clampPitch, frame, rayThrough, viewProj, eyeOf, orbitAt, poseOf, type CameraPose, type Orbit } from './camera.ts';
 import { alphaAt, newArrivals, newClock, newPacer, pauseLatch, runFree, stepsDue, taskYield, trackSimSpeed, Window } from './loop.ts';
 import type { V3 } from './math.ts';
 import { escapeHtml } from './html.ts';
-import { bounceBody, bounceOn, engineSpec, froudeSpeed, levelOf, parseViewerConfig, presetSearch, scenarioEngineSpec, sceneTitle, toSearch, type ViewerConfig, viewerScene, withOption, worldEngineSpec } from './params.ts';
+import { bounceBody, bounceOn, engineSpec, froudeSpeed, keystoneEngine, levelOf, parseViewerConfig, presetSearch, scenarioEngineSpec, sceneTitle, toSearch, type ViewerConfig, viewerScene, withOption, worldEngineSpec } from './params.ts';
 import { projectileBody, projectileShape, pushRadiusLimit } from './projectile.ts';
 import { mountControls } from './controls.ts';
 import { createDevice } from '@tb/gpu';
@@ -77,13 +78,15 @@ interface ViewerHandle {
   fire(ndcX?: number, ndcY?: number): void;
   capture(keepPixels?: boolean): Promise<PixelStats | null>;
   inputs: InputEvent[];
+  /** Under rules=keystone, the game's handle (as window.__game on the game page); null in the sandbox. */
+  game: GameHandle | null;
 }
 declare global { interface Window { __viewer: ViewerHandle } }
 
 const canvas = document.getElementById('c') as HTMLCanvasElement;
 const hud = document.getElementById('hud')!;
 const errorBox = document.getElementById('error')!;
-const handle: ViewerHandle = { status: 'loading', frames: 0, bodies: 0, awake: 0, stepIndex: 0, msPerStep: NaN, snapMs: NaN, resets: 0, overlapped: 0, tinted: 0, variant: {}, camera: () => ({ target: [0, 0, 0], yaw: 0, pitch: 0, distance: 1 }), fire: () => {}, capture: async () => null, inputs: [] };
+const handle: ViewerHandle = { status: 'loading', frames: 0, bodies: 0, awake: 0, stepIndex: 0, msPerStep: NaN, snapMs: NaN, resets: 0, overlapped: 0, tinted: 0, variant: {}, camera: () => ({ target: [0, 0, 0], yaw: 0, pitch: 0, distance: 1 }), fire: () => {}, capture: async () => null, inputs: [], game: null };
 window.__viewer = handle;
 
 function fail(e: unknown) {
@@ -108,7 +111,10 @@ function presets(current: string) {
   const box = document.getElementById('presets')!;
   box.replaceChildren();
   const config = parseViewerConfig(current);
+  // Keystone's rules play on the game's two engines, at its own settings.
+  const keystone = config.rules === 'keystone';
   for (const e of ENGINES) {
+    if (keystone && e.spec !== 'avbd-gpu' && e.spec !== 'rapier') continue;
     const b = document.createElement('button');
     b.textContent = e.label;
     if (parseSpec(config.engine).name === e.spec) b.className = 'on';
@@ -116,7 +122,7 @@ function presets(current: string) {
     box.appendChild(b);
   }
   const { name } = parseSpec(config.engine);
-  if (name === 'avbd-gpu') {
+  if (name === 'avbd-gpu' && !keystone) {
     // The scenario's own options (ScenarioDef.avbd) are its defaults: its count's button clears the option, and the buttons light up for what runs.
     const own = Number(parseSpec(scenarioEngineSpec('avbd-gpu', config.scenario)).options.iterations ?? DEFAULT_AVBD.iterations);
     const runs = parseSpec(scenarioEngineSpec(config.engine, config.scenario)).options;
@@ -159,6 +165,7 @@ async function main() {
   renderer.look = lookByName(config.look, config.real);
   renderer.device.lost.then((info) => fail(`GPU device lost: ${info.message}`));
   renderer.device.addEventListener('uncapturederror', (e) => fail((e as GPUUncapturedErrorEvent).error.message));
+  if (config.rules === 'keystone') return keystoneMode(config, device, renderer, source);
 
   let engine: PhysicsEngine = viewerEngine(config);
   let scene = viewerScene(config);
@@ -254,6 +261,11 @@ async function main() {
   const controls = mountControls(document.getElementById('controls')!, {
     config: () => config,
     rebuild(next) {
+      // Keystone's rules run the game's loop in place of this one: a page load.
+      if (next.rules === 'keystone') {
+        location.search = toSearch(next);
+        return;
+      }
       nextConfig = next;
       resetAsked = true;
     },
@@ -293,8 +305,8 @@ async function main() {
     camera: () => poseOf(orbit),
     load(next, name) {
       const want = { ...next, offscreen: config.offscreen };
-      // The loop (free or frame) is chosen when the page starts, so another one needs a page load.
-      if (want.loop !== config.loop) {
+      // The loop (free or frame, or Keystone's) is chosen when the page starts, so another one needs a page load.
+      if (want.loop !== config.loop || want.rules === 'keystone') {
         location.search = toSearch(want);
         return;
       }
@@ -541,6 +553,62 @@ async function main() {
     void physics().catch(fail);
     requestAnimationFrame(() => void frameLoop().catch(fail));
   }
+}
+
+/**
+ * rules=keystone: the level played by the game's loop (@tb/game playKeystone), exactly as the game page
+ * plays it, so a session replays headless with runSession. The game's HUD takes the viewer's HUD panel,
+ * its banner and result card float over the page, and the panel stays: the look, projectile and framing
+ * change live (the last two are kept for the sandbox); a new scene, rules or engine reloads the page.
+ */
+async function keystoneMode(config: ViewerConfig, device: GPUDevice, renderer: Renderer, source: SnapshotSource) {
+  installGameStyles();
+  hud.classList.add('kg-hud');
+  const help = document.getElementById('help')!;
+  help.classList.add('kg-help');
+  help.innerHTML = GAME_HELP;
+  const game = handle.game = newGameHandle();
+  const failGame = (e: unknown) => {
+    game.status = 'error';
+    game.error = e instanceof Error ? e.message : String(e);
+    fail(e);
+  };
+  let cfg = config;
+  const show = (next: ViewerConfig) => {
+    cfg = next;
+    history.replaceState(null, '', toSearch(cfg));
+    presets(location.search);
+  };
+  const go = (next: ViewerConfig) => { location.search = toSearch({ ...next, offscreen: cfg.offscreen }); };
+  const controls = mountControls(document.getElementById('controls')!, {
+    config: () => cfg,
+    rebuild: go,
+    load: (next) => go(next),
+    setLook(look, real) {
+      renderer.look = lookByName(look, real);
+      show({ ...cfg, look, real });
+    },
+    setProjectile: (projectile) => show({ ...cfg, projectile }),
+    setView: (view) => show({ ...cfg, view }),
+    camera: () => null,
+  });
+  // A built-in level walks the game's levels (N, P, Next); a level of your own is the only one.
+  const def = levelOf(cfg)!;
+  const levels = cfg.customLevel ? [def] : LEVELS;
+  await playKeystone({
+    canvas, offscreen: cfg.offscreen, device, renderer, source, hud, ...gameOverlays(),
+    levels, start: levels.findIndex((l) => l.id === def.id), engine: keystoneEngine(cfg.engine), feel: cfg.feel, fail: failGame,
+    hooks: {
+      loaded(c) {
+        handle.tinted = c.meta.n;
+        if (c.def.id === cfg.level) return;
+        show({ ...cfg, level: c.def.id });
+        controls.refresh();
+      },
+    },
+  }, game);
+  handle.capture = game.capture;
+  handle.status = 'running';
 }
 
 main().catch(fail);

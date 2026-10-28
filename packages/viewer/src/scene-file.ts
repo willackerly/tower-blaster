@@ -42,6 +42,8 @@ export interface SceneFile {
   look: { preset: string; real: RealOptions };
   /** Where the camera starts; null = framed to fit the scene. */
   camera: CameraPose | null;
+  /** Present only under Keystone's rules (ViewerConfig.rules and feel); absent: the sandbox. */
+  rules?: { mode: 'keystone'; hitstop: boolean; slowmo: boolean };
   /** How the scene is framed without a camera, and the field of view (ViewerConfig.view; absent, as in files saved before it: today's DEFAULT_FRAMING, so their saved camera shows at 45 rather than 50 degrees). */
   view: Framing;
 }
@@ -61,6 +63,7 @@ export function sceneFile(c: ViewerConfig, name: string, camera: CameraPose | nu
     look: { preset: c.look, real: { ...REAL_DEFAULTS, ...c.real } },
     camera,
     view: { ...c.view },
+    ...(c.rules === 'keystone' ? { rules: { mode: c.rules, hitstop: c.feel.hitStop, slowmo: c.feel.slowMo } } : {}),
   };
 }
 
@@ -90,7 +93,7 @@ export function parseSceneFile(text: string): { config: ViewerConfig; name: stri
   if (root.format !== SCENE_FILE_FORMAT) throw new Error(`not a tower-blaster viewer scene (format should be "${SCENE_FILE_FORMAT}")`);
   if (typeof root.version !== 'number' || root.version > SCENE_FILE_VERSION) throw new Error(`scene file version ${String(root.version)} is newer than this viewer reads (${SCENE_FILE_VERSION}); pull main`);
   if (root.version !== SCENE_FILE_VERSION) throw new Error(`unknown scene file version ${root.version}`);
-  only(root, ['format', 'version', 'name', 'savedAt', 'scene', 'engine', 'loop', 'projectile', 'autofire', 'look', 'camera', 'view'], 'the file');
+  only(root, ['format', 'version', 'name', 'savedAt', 'scene', 'engine', 'loop', 'projectile', 'autofire', 'look', 'camera', 'view', 'rules'], 'the file');
   const name = root.name === undefined ? '' : str(root.name, 'name');
 
   const q = new URLSearchParams();
@@ -172,6 +175,13 @@ export function parseSceneFile(text: string): { config: ViewerConfig; name: stri
     only(cam, ['target', 'yaw', 'pitch', 'distance'], 'camera');
     const target = vec3(cam.target, 'camera.target');
     q.set('cam', writeCamera({ target, yaw: num(cam.yaw, 'camera.yaw'), pitch: num(cam.pitch, 'camera.pitch'), distance: num(cam.distance, 'camera.distance') }));
+  }
+  if (root.rules !== undefined) {
+    const r = object(root.rules, 'rules');
+    only(r, ['mode', 'hitstop', 'slowmo'], 'rules');
+    q.set('rules', str(r.mode, 'rules.mode'));
+    if (r.hitstop !== undefined) q.set('keystone.hitstop', bool(r.hitstop, 'rules.hitstop') ? '1' : '0');
+    if (r.slowmo !== undefined) q.set('keystone.slowmo', bool(r.slowmo, 'rules.slowmo') ? '1' : '0');
   }
   const view = object(root.view ?? {}, 'view');
   only(view, Object.keys(DEFAULT_FRAMING), 'view');

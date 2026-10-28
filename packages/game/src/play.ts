@@ -90,7 +90,7 @@ export interface KeystoneEnv {
   device: GPUDevice;
   renderer: Renderer;
   source: SnapshotSource;
-  /** The game's HUD, banner and result card (styled by the game page's CSS). */
+  /** The game's HUD, banner and result card: kg-hud, kg-banner and kg-result elements (ui.ts; gameOverlays makes the last two). */
   hud: HTMLElement;
   banner: HTMLElement;
   result: HTMLElement;
@@ -209,7 +209,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     handle.level = c.def.id;
     ending = false;
     handle.resultShownAt = null;
-    env.result.className = 'panel';
+    env.result.classList.remove('show');
     document.body.classList.remove('ended');
     selected = nextSelection(c.def.rack, driver.session.rackLeft, retry ? selected : null);
     if (!retry) {
@@ -230,9 +230,10 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
 
   function banner(text: string, cls = '') {
     env.banner.textContent = text;
-    env.banner.className = cls;
+    env.banner.classList.remove('show', 'crack');
+    if (cls) env.banner.classList.add(cls);
     void env.banner.offsetWidth; // restart the animation
-    env.banner.className = `show ${cls}`;
+    env.banner.classList.add('show');
   }
 
   function updateAim() {
@@ -298,13 +299,13 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
 
   function showResult(score: LevelScore | null) {
     env.result.innerHTML = resultHtml(c.def, score, driver.session.strokes, levelIdx + 1 < levels.length);
-    env.result.className = 'panel show';
+    env.result.classList.add('show');
     document.body.classList.add('ended');
     handle.resultShownAt ??= driver.engine.stepIndex;
   }
 
   function hideResult() {
-    env.result.className = 'panel';
+    env.result.classList.remove('show');
     document.body.classList.remove('ended');
     handle.resultShownAt = null;
   }
