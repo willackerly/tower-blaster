@@ -321,6 +321,20 @@ export function worldEngineSpec(spec: string, scale: number): string {
 }
 const FROUDE_KEYS = ['beta', 'penaltyMin', 'penaltyMax', 'maxAngularSpeed', 'restitutionThreshold'] as const;
 
+/** GpuEngineOptions keys (bench's gpuEngineArgs): a scenario's avbd options with these go to avbd-gpu only. */
+const GPU_OPTIONS: ReadonlySet<string> = new Set(['capacity', 'spare', 'pairsPerBody', 'maxRadius', 'colorTail', 'indirectColors', 'tailThreads', 'colorRounds', 'hessian', 'boxBroadphase']);
+
+/**
+ * The spec with the scenario's own AVBD options (ScenarioDef.avbd) under it: each one the spec
+ * leaves unset, on the AVBD engines (GPU options on avbd-gpu only). Other engines' specs are unchanged.
+ */
+export function scenarioEngineSpec(spec: string, scenario: string): string {
+  const { name, options } = parseSpec(spec);
+  const own = SCENARIOS[scenario]?.avbd;
+  if (!own || !AVBD_ENGINES.has(name)) return spec;
+  return Object.entries(own).reduce((out, [k, v]) => (options[k] === undefined && (name === 'avbd-gpu' || !GPU_OPTIONS.has(k)) ? withOption(out, k, v) : out), spec);
+}
+
 /** The engines whose spec takes AvbdParams, restitution included. */
 export const AVBD_ENGINES: ReadonlySet<string> = new Set(['avbd-gpu', 'avbd-ref']);
 
