@@ -19,6 +19,7 @@ import { escapeHtml } from './html.ts';
 import { bounceBody, bounceOn, engineSpec, froudeSpeed, keystoneEngine, levelOf, parseViewerConfig, presetSearch, scenarioEngineSpec, sceneTitle, toSearch, type ViewerConfig, viewerScene, withOption, worldEngineSpec } from './params.ts';
 import { projectileBody, projectileShape, pushRadiusLimit } from './projectile.ts';
 import { mountControls } from './controls.ts';
+import { startSearch } from './default-scene.ts';
 import { type DevAction, mountDev } from './dev-panel.ts';
 import { createDevice } from '@tb/gpu';
 import { lookByName, Renderer, SnapshotSource, type PixelStats } from '@tb/render';
@@ -44,8 +45,9 @@ const ENGINES: Array<{ label: string; spec: string }> = [
 ];
 
 // Solver iterations for the GPU engine: a tall column flexes and topples
-// early at the default 10; 20 cubes are rigid from 13 (physics-ref/test/collapse.test.ts).
-const GPU_ITERATIONS = [10, 20, 40];
+// early at the default 10; 20 cubes are rigid from 13 (physics-ref/test/collapse.test.ts),
+// so 15 is the cheapest button with rigid columns.
+const GPU_ITERATIONS = [10, 15, 20, 40];
 
 /** The AVBD settings Keystone plays and pins par lines at (@tb/keystone AVBD_ITERATIONS, AVBD_GAP_SLOP), one button away. */
 const KEYSTONE_AVBD = { iterations: AVBD_ITERATIONS, gapSlop: AVBD_GAP_SLOP } as const;
@@ -166,6 +168,9 @@ function presets(current: string) {
 }
 
 async function main() {
+  // A bare URL opens the default scene (or ?defaults=factory the built-in setup), written into the address bar.
+  const start = startSearch(location.search);
+  if (start !== location.search) history.replaceState(null, '', start);
   let config = parseViewerConfig(location.search);
   presets(location.search);
   const { device, adapter } = await createDevice({ timestamps: false });
