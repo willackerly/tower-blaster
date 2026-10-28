@@ -3,7 +3,7 @@ import { RapierEngine } from '@tb/adapter-rapier';
 import { emptySnapshot, type Snapshot, type Vec3 } from '@tb/engine-api';
 import { quatFromAxisAngle } from '@tb/geom';
 import { closestApproach, compileLevel, GRAVITY, L1, L4, launcherPos, predictArc, shotToSpawn } from '@tb/keystone';
-import { eyeOf, frame } from '@tb/viewer';
+import { eyeOf, frame } from '@tb/render/camera';
 import { azFromYaw, pick, previewBeads, rayBox, raySphere, REACH, shotFor, SUBSTEPS } from '../src/aim.ts';
 
 const c = compileLevel(L1);
