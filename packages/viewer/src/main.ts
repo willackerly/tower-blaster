@@ -10,8 +10,8 @@ import { makeEngine, parseSpec } from '@tb/bench';
 import { type BodyDesc, type EngineInfo, type InputEvent, type PhysicsEngine, type Snapshot, spawnedBodies } from '@tb/engine-api';
 import { boundingRadius } from '@tb/geom';
 import { DEFAULT_AVBD } from '@tb/physics-ref';
-import { GAME_HELP, gameOverlays, type GameHandle, installGameStyles, newGameHandle, playKeystone, structureTints } from '@tb/game';
-import { AVBD_GAP_SLOP, AVBD_ITERATIONS, compileLevel, LEVELS } from '@tb/keystone';
+import { GAME_HELP, gameOverlays, starsText, type GameHandle, installGameStyles, newGameHandle, playKeystone, structureTints } from '@tb/game';
+import { AVBD_GAP_SLOP, AVBD_ITERATIONS, compileLevel, type Driver, LEVELS, type Shot } from '@tb/keystone';
 import { clampPitch, frame, rayThrough, viewProj, eyeOf, orbitAt, poseOf, type CameraPose, type Orbit } from './camera.ts';
 import { alphaAt, newArrivals, newClock, newPacer, pauseLatch, runFree, stepsDue, taskYield, trackSimSpeed, Window } from './loop.ts';
 import type { V3 } from './math.ts';
@@ -19,6 +19,7 @@ import { escapeHtml } from './html.ts';
 import { bounceBody, bounceOn, engineSpec, froudeSpeed, keystoneEngine, levelOf, parseViewerConfig, presetSearch, scenarioEngineSpec, sceneTitle, toSearch, type ViewerConfig, viewerScene, withOption, worldEngineSpec } from './params.ts';
 import { projectileBody, projectileShape, pushRadiusLimit } from './projectile.ts';
 import { mountControls } from './controls.ts';
+import { type DevAction, mountDev } from './dev-panel.ts';
 import { createDevice } from '@tb/gpu';
 import { lookByName, Renderer, SnapshotSource, type PixelStats } from '@tb/render';
 
@@ -617,6 +618,67 @@ async function keystoneMode(config: ViewerConfig, device: GPUDevice, renderer: R
     setView: (view) => show({ ...cfg, view }),
     camera: () => null,
   });
+  // The par and dev panel: the attempt as the driver holds it, a line to play, a replay check.
+  const devEl = document.createElement('details');
+  devEl.id = 'dev';
+  devEl.className = 'panel';
+  devEl.open = true;
+  document.getElementById('left')!.append(devEl);
+  let driver: Driver | null = null, busy = false, status = '', warn = false;
+  const attempt = (): Shot[] => driver?.session.inputs.map((i) => i.shot) ?? [];
+  const dev = mountDev(devEl, (a) => { void devAction(a); });
+  const showDev = () => {
+    const level = driver?.level.def ?? levelOf(cfg)!;
+    const par = level.solutions?.par;
+    const s = driver?.session;
+    dev.show({
+      level, line: cfg.shots ? { from: 'link', shots: cfg.shots } : par?.length ? { from: 'par', shots: par } : null,
+      attempt: attempt(), outcomes: s?.outcomes ?? [], score: s?.score ?? null, running: s?.phase === 'running', busy, status, warn,
+    });
+  };
+  const report = (text: string, bad = false) => { status = text; warn = bad; showDev(); };
+  const until = (ok: () => boolean) => new Promise<void>((res) => { const t = () => (ok() ? res() : setTimeout(t, 50)); t(); });
+  /** Fire the shots in turn, each once the game is ready, from a fresh attempt unless this is the load's own. */
+  async function playLine(shots: readonly Shot[], fresh: boolean) {
+    const id = game.level;
+    if (!fresh) await game.retry();
+    for (let i = 0; i < shots.length; i++) {
+      await until(() => game.ready || game.result !== null || game.level !== id || game.status === 'error');
+      if (game.level !== id || game.status === 'error') return report(`stopped after ${i} of ${shots.length} shots: the level changed`, true);
+      if (game.result) return report(`the level ended after ${i} of ${shots.length} shots`, true);
+      if (!game.fire(shots[i]!)) return report(`shot ${i + 1} (${shots[i]!.ammo}) could not be fired: the rack has ${driver?.session.rackLeft.join(', ') || 'nothing'} left`, true);
+      report(`playing: shot ${i + 1} of ${shots.length} fired`);
+    }
+    await until(() => game.result !== null || game.level !== id || game.status === 'error' || (game.ready && game.strokes === shots.length));
+    const r = game.result;
+    const played = `played ${shots.length} shot${shots.length === 1 ? '' : 's'}`;
+    report(r ? `${played}: ${r.stamp}, ${starsText(r.stars)}` : `${played}; the level is still open`);
+  }
+  async function devAction(a: DevAction) {
+    if (busy) return;
+    busy = true;
+    try {
+      if (a === 'play') {
+        const line = cfg.shots ?? levelOf(cfg)!.solutions?.par;
+        if (line) { report('playing the line'); await playLine(line, false); }
+      } else if (a === 'check') {
+        report('replaying the attempt on a fresh engine');
+        const live = game.state(), again = await game.replay(attempt());
+        const same = JSON.stringify(again) === JSON.stringify(live);
+        const say = (s: typeof live) => `step ${s.step}, ${s.phase}, hash ${s.hash}`;
+        report(same ? `replay matches: ${say(again)}` : `replay differs: live ${say(live)}; replay ${say(again)}`, !same);
+      } else {
+        const shots = attempt();
+        show({ ...cfg, shots });
+        report(`the link and Download now carry this attempt (${shots.length} shot${shots.length === 1 ? '' : 's'})`);
+      }
+    } catch (e) {
+      report(e instanceof Error ? e.message : String(e), true);
+    } finally {
+      busy = false;
+      showDev();
+    }
+  }
   // A built-in level walks the game's levels (N, P, Next); a level of your own is the only one.
   const def = levelOf(cfg)!;
   const levels = cfg.customLevel ? [def] : LEVELS;
@@ -629,16 +691,29 @@ async function keystoneMode(config: ViewerConfig, device: GPUDevice, renderer: R
       return hook ? (d) => hook(d.snapshot, d.snapshotStep) : () => [];
     },
     hooks: {
-      loaded(c) {
+      loaded(c, d) {
         handle.tinted = c.meta.n;
-        if (c.def.id === cfg.level) return;
-        show({ ...cfg, level: c.def.id });
-        controls.refresh();
+        driver = d;
+        if (c.def.id !== cfg.level) {
+          // A line is the level's it was made on.
+          show({ ...cfg, level: c.def.id, shots: null });
+          controls.refresh();
+          status = ''; warn = false;
+        }
+        showDev();
       },
+      fired: showDev,
+      stepped(feedback) { if (feedback.some((f) => f.t === 'settled')) showDev(); },
     },
   }, game);
   handle.capture = game.capture;
   handle.status = 'running';
+  // A link with a line plays it once, on the attempt the page opened with.
+  if (cfg.shots) {
+    busy = true;
+    report('playing the line from the link');
+    playLine(cfg.shots, true).catch((e) => report(e instanceof Error ? e.message : String(e), true)).finally(() => { busy = false; showDev(); });
+  }
 }
 
 main().catch(fail);

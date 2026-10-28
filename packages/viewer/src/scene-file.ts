@@ -9,7 +9,7 @@ import { engineNames, parseSpec } from '@tb/bench';
 import { ENVS, GROUNDS, REAL_DEFAULTS, REAL_KNOBS, type RealKnob, type RealOptions, STONES } from '@tb/render';
 import { SCENARIOS } from '@tb/scenarios';
 import { type CameraPose, DEFAULT_FRAMING, type Framing } from './camera.ts';
-import type { LevelDef } from '@tb/keystone';
+import { AMMO_KINDS, type AmmoKind, type LevelDef, readShots, type Shot, writeShots } from '@tb/keystone';
 import { encodeLevelParam, parseLevelDef } from './level-file.ts';
 import { parseViewerConfig, type ViewerConfig, writeCamera, writeFraming } from './params.ts';
 import { DEFAULT_PROJECTILE, type Projectile } from './projectile.ts';
@@ -42,8 +42,8 @@ export interface SceneFile {
   look: { preset: string; real: RealOptions };
   /** Where the camera starts; null = framed to fit the scene. */
   camera: CameraPose | null;
-  /** Present only under Keystone's rules (ViewerConfig.rules and feel); absent: the sandbox. */
-  rules?: { mode: 'keystone'; hitstop: boolean; slowmo: boolean };
+  /** Present only under Keystone's rules (ViewerConfig.rules, feel and shots: the line to play on load, absent for none); absent: the sandbox. */
+  rules?: { mode: 'keystone'; hitstop: boolean; slowmo: boolean; shots?: Shot[] };
   /** How the scene is framed without a camera, and the field of view (ViewerConfig.view; absent, as in files saved before it: today's DEFAULT_FRAMING, so their saved camera shows at 45 rather than 50 degrees). */
   view: Framing;
 }
@@ -63,7 +63,7 @@ export function sceneFile(c: ViewerConfig, name: string, camera: CameraPose | nu
     look: { preset: c.look, real: { ...REAL_DEFAULTS, ...c.real } },
     camera,
     view: { ...c.view },
-    ...(c.rules === 'keystone' ? { rules: { mode: c.rules, hitstop: c.feel.hitStop, slowmo: c.feel.slowMo } } : {}),
+    ...(c.rules === 'keystone' ? { rules: { mode: c.rules, hitstop: c.feel.hitStop, slowmo: c.feel.slowMo, ...(c.shots?.length ? { shots: c.shots.map((x) => ({ ...x })) } : {}) } } : {}),
   };
 }
 
@@ -178,15 +178,31 @@ export function parseSceneFile(text: string): { config: ViewerConfig; name: stri
   }
   if (root.rules !== undefined) {
     const r = object(root.rules, 'rules');
-    only(r, ['mode', 'hitstop', 'slowmo'], 'rules');
+    only(r, ['mode', 'hitstop', 'slowmo', 'shots'], 'rules');
     q.set('rules', str(r.mode, 'rules.mode'));
     if (r.hitstop !== undefined) q.set('keystone.hitstop', bool(r.hitstop, 'rules.hitstop') ? '1' : '0');
     if (r.slowmo !== undefined) q.set('keystone.slowmo', bool(r.slowmo, 'rules.slowmo') ? '1' : '0');
+    if (r.shots !== undefined) q.set('keystone.shots', shotsText(r.shots));
   }
   const view = object(root.view ?? {}, 'view');
   only(view, Object.keys(DEFAULT_FRAMING), 'view');
   writeFraming({ ...DEFAULT_FRAMING, ...Object.fromEntries(Object.entries(view).map(([k, v]) => [k, num(v, `view.${k}`)])) } as Framing, q);
   return { config: parseViewerConfig(`?${q}`), name };
+}
+
+/** rules.shots as URL text: an array of shots, each with exactly its ammo's fields (readShots checks them). */
+function shotsText(v: unknown): string {
+  if (!Array.isArray(v) || v.length === 0) throw new Error('rules.shots must be a non-empty array of shots');
+  const shots = v.map((x, i) => {
+    const o = object(x, `rules.shots[${i}]`);
+    if (!AMMO_KINDS.includes(o.ammo as AmmoKind)) throw new Error(`rules.shots[${i}].ammo must be one of ${AMMO_KINDS.join(', ')}`);
+    return o as unknown as Shot;
+  });
+  const text = writeShots(shots);
+  let back: Shot[];
+  try { back = readShots(text); } catch (e) { throw new Error(`rules.shots: ${(e as Error).message}`); }
+  back.forEach((b, i) => only(shots[i] as unknown as Json, Object.keys(b), `rules.shots[${i}]`));
+  return text;
 }
 
 function object(v: unknown, where: string): Json {

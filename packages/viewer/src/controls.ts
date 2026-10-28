@@ -112,11 +112,13 @@ export function proposeScene(c: ViewerConfig, scenario: string, params: Record<s
     const level = picked?.def.id ?? null;
     // Keystone's rules: the level as the game plays it, whatever the world fields say (the panel hides them).
     if (picked && rules.rules === 'keystone') {
-      const next = underKeystone({ ...c, level, customLevel: picked.custom ? picked.def : null }, rules.feel);
+      // A line of shots is the level's it was made on: another level drops it.
+      const same = level === c.level && (picked.custom ? picked.def === c.customLevel : !c.customLevel);
+      const next = underKeystone({ ...c, level, customLevel: picked.custom ? picked.def : null, shots: same ? c.shots : null }, rules.feel);
       return { ok: true, config: next, bodies: compileLevel(picked.def).scene.bodies.length };
     }
     // Rules are a level's: anything else is the sandbox.
-    c = { ...c, rules: 'sandbox', feel: { hitStop: false, slowMo: false } };
+    c = { ...c, rules: 'sandbox', feel: { hitStop: false, slowMo: false }, shots: null };
     const settle = presettle ?? defaultPresettle(level);
     if (!Number.isInteger(settle) || settle < 0 || settle > MAX_PRESETTLE) throw new Error(`settle steps must be a whole number from 0 to ${MAX_PRESETTLE}`);
     if (picked) {

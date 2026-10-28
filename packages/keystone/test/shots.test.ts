@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import fc from 'fast-check';
 import { freeFlight, massOf } from '@tb/engine-api';
-import { aimAt, ammoKE, closestApproach, compileLevel, decodeRecord, encodeRecord, GRAVITY, L1, launchDir, predictArc, type SessionRecord, type Shot, shotToSpawn, speedOf } from '@tb/keystone';
+import { aimAt, ammoKE, closestApproach, compileLevel, decodeRecord, encodeRecord, GRAVITY, L1, launchDir, predictArc, readShots, type SessionRecord, type Shot, shotToSpawn, speedOf, writeShots } from '@tb/keystone';
 
 const c = compileLevel(L1);
 const f = c.frame;
@@ -104,5 +104,39 @@ describe('aimAt search', () => {
       }
       expect(a.error).toBeLessThanOrEqual(best + 0.01);
     }), { numRuns: 15 });
+  });
+});
+
+describe('shot text (writeShots, readShots)', () => {
+  const line: Shot[] = [
+    { ammo: 'cannonball', az: 60, y: 8, yaw: -15, pitch: 20, power: 95 },
+    { ammo: 'marble', az: 0, y: 4, yaw: 900, pitch: -890, power: 0 },
+    { ammo: 'cue', x: -12, y: 3, z: 40, dir: 3, power: 100 },
+    { ammo: 'drop', x: 4, z: -8 },
+  ];
+  it('writes each ammo\'s fields in order and reads them back exactly', () => {
+    const text = writeShots(line);
+    expect(text).toBe('cannonball.60.8.-15.20.95_marble.0.4.900.-890.0_cue.-12.3.40.3.100_drop.4.-8');
+    expect(encodeURIComponent(text)).toBe(text);
+    expect(readShots(text)).toEqual(line);
+    expect(readShots('')).toEqual([]);
+    expect(writeShots([])).toBe('');
+  });
+  it('round-trips any valid shot', () => {
+    const int = (lo: number, hi: number) => fc.integer({ min: lo, max: hi });
+    const shot: fc.Arbitrary<Shot> = fc.oneof(
+      fc.record({ ammo: fc.constantFrom('marble' as const, 'cannonball' as const), az: int(0, 719), y: int(0, 4000), yaw: int(-1800, 1800), pitch: int(-890, 890), power: int(0, 100) }),
+      fc.record({ ammo: fc.constant('cue' as const), x: int(-4000, 4000), y: int(0, 4000), z: int(-4000, 4000), dir: fc.constantFrom(0 as const, 1 as const, 2 as const, 3 as const), power: int(0, 100) }),
+      fc.record({ ammo: fc.constant('drop' as const), x: int(-4000, 4000), z: int(-4000, 4000) }),
+    );
+    fc.assert(fc.property(fc.array(shot, { maxLength: 6 }), (shots) => { expect(readShots(writeShots(shots))).toEqual(shots); }));
+  });
+  it('refuses text that is not a valid line, naming the shot', () => {
+    expect(() => readShots('bomb.1.2')).toThrow(/shot 1 \(bomb\.1\.2\): ammo must be one of/);
+    expect(() => readShots('drop.4.-8_drop.4')).toThrow(/shot 2 .*drop takes 2 fields \(x\.z\), got 1/);
+    expect(() => readShots('drop.4.1e2')).toThrow(/z must be an integer, not 1e2/);
+    expect(() => readShots('drop.4.')).toThrow(/z must be an integer, not empty/);
+    expect(() => readShots('marble.720.4.0.0.30')).toThrow(/shot 1 .*shot\.az = 720/);
+    expect(() => readShots('drop.1.1_')).toThrow(/shot 2 \(\): ammo/);
   });
 });
