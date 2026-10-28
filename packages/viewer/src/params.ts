@@ -13,7 +13,7 @@
 // snd=1 with snd.* knobs: collision sound, see parseSoundOptions in @tb/audio)
 import { DEFAULT_SOUND, parseSoundOptions, type SoundOptions, writeSoundOptions } from '@tb/audio';
 import { parseSpec } from '@tb/bench';
-import type { BodyDesc, SceneDesc, Vec3 } from '@tb/engine-api';
+import { type BodyDesc, DEFAULT_BLAST_MAX_SPEED, type SceneDesc, type Vec3 } from '@tb/engine-api';
 import { checkLine, type EngineKind, GAME_LOOK, gameLevel, lineOf, lookName, paceFeel, type PaceFeel } from '@tb/game';
 import { boundingRadius } from '@tb/geom';
 import { AVBD_ITERATIONS, compileLevel, LEVELS, type LevelDef, PRESETTLE_STEPS, type Shot, writeShots } from '@tb/keystone';
@@ -23,7 +23,7 @@ import { bounceBody, bounceScene, buildScenario, SCENARIOS } from '@tb/scenarios
 import { type CameraPose, DEFAULT_FRAMING, type Framing, FRAMING_LIMITS } from './camera.ts';
 import { decodeLevelParam, encodeLevelParam } from './level-file.ts';
 import { MAX_STEPS_LIMIT } from './loop.ts';
-import { DEFAULT_PROJECTILE, parseProjectile, type Projectile, projectileShape, writeProjectile } from './projectile.ts';
+import { DEFAULT_PROJECTILE, defaultBlockDensity, parseProjectile, type Projectile, projectileRadius, worldBody, type WorldProjectile, worldProjectile, writeProjectile } from './projectile.ts';
 
 export interface ViewerConfig {
   engine: string;
@@ -167,6 +167,9 @@ export function worldScene(scene: SceneDesc, scale: number, substeps: number): S
 
 /** The scale a scenario runs at when the URL sets none; a level is in metres, so 1. */
 export const defaultScale = (scenario: string, level: string | null = null) => (level ? 1 : SCENARIOS[scenario]?.scale ?? 1);
+
+/** The real density a block of density 1 in c's scene stands for, kg/m^3 (Projectile.blockDensity, else the scene's default). */
+export const blockDensityOf = (c: Pick<ViewerConfig, 'projectile' | 'scenario' | 'level' | 'customLevel'>) => c.projectile.blockDensity ?? defaultBlockDensity(c.scenario, c.level ?? (c.customLevel ? c.customLevel.id : null));
 
 /** The Keystone level with this id (any case), or undefined. */
 export const levelDef = (id: string): LevelDef | undefined => LEVELS.find((l) => l.id === id.toUpperCase());
@@ -366,11 +369,11 @@ export const GPU_SPARE = 256;
  * sets maxRadius. That changes nothing while the projectile is no larger than the scene's largest
  * body (the engine takes the larger of the two), which holds for the default ball in every scene.
  */
-export function engineSpec(spec: string, projectile: Projectile = DEFAULT_PROJECTILE): string {
+export function engineSpec(spec: string, projectile: Projectile = DEFAULT_PROJECTILE, scale = 1): string {
   const { name, options } = parseSpec(spec);
   if (name !== 'avbd-gpu' && name !== 'tiered') return spec;
   let out = options.spare === undefined ? withOption(spec, 'spare', GPU_SPARE) : spec;
-  if (name === 'avbd-gpu' && options.maxRadius === undefined) out = withOption(out, 'maxRadius', boundingRadius(projectileShape(projectile)));
+  if (name === 'avbd-gpu' && options.maxRadius === undefined) out = withOption(out, 'maxRadius', projectileRadius(projectile, scale));
   return out;
 }
 
@@ -412,6 +415,21 @@ export function scenarioEngineSpec(spec: string, scenario: string): string {
 export const AVBD_ENGINES: ReadonlySet<string> = new Set(['avbd-gpu', 'avbd-ref']);
 
 /**
+ * Fastest a real thing (proj=<name>) of this radius may leave the camera in the engine c builds,
+ * units/s. The AVBD broadphase looks maxSweep (1 unit) ahead each physics step, 1/(60 substeps)
+ * s; past that a contact is found late, so the cap keeps a step's travel to 0.8 of maxSweep plus
+ * half the radius (a blast's maxSpeed is the same 0.8, for bodies of any size): the thing is at
+ * most half its radius into a block it was not seen to reach, its centre never past a face. It
+ * binds only in small worlds (the Kapla tower's cannonball). Infinity on the other engines
+ * (Rapier, tiered) and with sweep off.
+ */
+export function launchSpeedCap(c: Pick<ViewerConfig, 'engine' | 'substeps'>, radius: number): number {
+  const { name, options } = parseSpec(c.engine);
+  if (!AVBD_ENGINES.has(name) || options.sweep === false) return Infinity;
+  return DEFAULT_BLAST_MAX_SPEED * ((typeof options.maxSweep === 'number' ? options.maxSweep : 1) + radius / 2) * c.substeps;
+}
+
+/**
  * Whether the spec turns restitution on (the panel's Bounce): an AVBD engine
  * whose restitution option is on (true; like the engines, any truthy value).
  */
@@ -422,6 +440,22 @@ export function bounceOn(spec: string): boolean {
 
 // bounceBody and bounceScene (the body and the scene at Bounce's e) live in @tb/scenarios, shared with bench runs (--bounce).
 export { bounceBody, bounceScene };
+
+/**
+ * What a click fires in c's world from origin along the unit vector dir (main.ts fire): the
+ * projectile at the world's size, speed and density (worldProjectile), a real thing no faster
+ * than the engine sees (firedSpeed); with Bounce on, at Bounce's e unless it has its own (a real
+ * thing's, or proj.restitution). colour: a real thing's, for the page to paint it.
+ */
+export function firedBody(c: ViewerConfig, origin: Vec3, dir: Vec3): { body: BodyDesc; colour: WorldProjectile['colour'] } {
+  const w = worldProjectile(c.projectile, c.scale, blockDensityOf(c));
+  const body = worldBody({ ...w, speed: firedSpeed(c, w) }, origin, dir);
+  return { body: bounceOn(c.engine) && c.projectile.restitution === undefined ? bounceBody(body, c.bounce) : body, colour: w.colour };
+}
+
+/** The speed w leaves at, units/s: a real thing's capped at launchSpeedCap; a ball or cube's as set, as it always was. */
+export const firedSpeed = (c: ViewerConfig, w: WorldProjectile) =>
+  c.projectile.preset ? Math.min(w.speed, launchSpeedCap(c, boundingRadius(w.shape))) : w.speed;
 
 /**
  * The scene a config runs: the scenario or the level (compileLevel's scene), at Bounce's e while

@@ -121,7 +121,7 @@ describe('viewer', () => {
     await proj.locator('input[name=speed]').fill('15');
     await proj.locator('input[name=mass]').fill('200');
     await proj.locator('input[name=mass]').dispatchEvent('change');
-    expect(await proj.locator('.out').innerText()).toMatch(/^200 kg, 3\.00e\+3 kg·m\/s/);
+    expect(await proj.locator('.out').innerText()).toBe('200 kg (a cube is 1 kg), 3,000 kg·m/s');
     await page.evaluate(() => window.__viewer.fire(0, 0));
     await page.waitForFunction(() => window.__viewer.bodies === 49, undefined, { timeout: 30_000 });
     const fired = await page.evaluate(() => (window.__viewer.inputs[0] as SpawnEvent).body);
