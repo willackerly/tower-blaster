@@ -764,7 +764,8 @@ export async function initError(scene: SceneDesc, pairsPerBody: number) {
   try { await e.init(scene); } catch (err) { message = (err as Error).message; }
   const validation = await device.popErrorScope();
   e.dispose();
-  return { message, validation: validation?.message ?? null };
+  const { maxComputeWorkgroupsPerDimension, maxStorageBufferBindingSize, maxBufferSize } = device.limits;
+  return { message, validation: validation?.message ?? null, limits: { maxComputeWorkgroupsPerDimension, maxStorageBufferBindingSize, maxBufferSize } };
 }
 
 /**

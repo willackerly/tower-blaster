@@ -44,6 +44,17 @@ import { Body, Shape, wgslStruct } from '@tb/schema';
 
 const WG = 64;
 
+/**
+ * Throws unless one indirect dispatch of WG-thread workgroups can cover maxPairs pairs: the
+ * narrowphase, colouring, solver and restitution kernels run over the pairs written with
+ * total[0..2] as their arguments, and a dispatch past maxComputeWorkgroupsPerDimension does nothing
+ * at all (4,194,240 pairs at the default limit of 65,535).
+ */
+export function assertPairDispatch(device: GPUDevice, maxPairs: number, who: string): void {
+  const limit = device.limits.maxComputeWorkgroupsPerDimension;
+  if (maxPairs > WG * limit) throw new Error(`${who}: ${maxPairs} pair slots exceed the ${WG * limit} one indirect dispatch covers (${WG} x maxComputeWorkgroupsPerDimension ${limit}); lower pairsPerBody or capacity`);
+}
+
 /** Relative slack of the box test: about 80 f32 ulps of the larger of |d.n| and the projected extents. */
 export const SEP_SLACK = 1e-5;
 
@@ -247,11 +258,13 @@ export class Broadphase {
   /**
    * @param spheres vec4f per body: centre xyz, bounding radius w
    * @param capacity maximum bodies
-   * @param maxPairs pair buffer size; more pairs are counted in `required` but not written
+   * @param maxPairs pair buffer size; more pairs are counted in `required` but not written. At most
+   *   WG x maxComputeWorkgroupsPerDimension (assertPairDispatch).
    * @param tableBits hash table size override (tests use a tiny table to force collisions)
    * @param boxes the box test's inputs (header); without them, sphere pairs only
    */
   constructor(private readonly device: GPUDevice, spheres: GPUBuffer, readonly capacity: number, readonly maxPairs: number, tableBits?: number, boxes?: BroadphaseBoxes) {
+    assertPairDispatch(device, maxPairs, 'Broadphase');
     // Table of at least 2 buckets per body keeps chains short.
     this.keyBits = tableBits ?? Math.max(4, Math.ceil(Math.log2(Math.max(2, 2 * capacity))));
     const table = 2 ** this.keyBits;

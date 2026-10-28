@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest';
 import { type BodyDesc, type SceneDesc } from '@tb/engine-api';
 import { drift, jitter, nonFinite, penetration, survival } from '@tb/metrics';
 import { buildScenario } from '@tb/scenarios';
+import { AvbdSolver } from '../src/index.ts';
 import { type D, gpu, call, runGpu, runRef, cube, sceneOf } from './harness.ts';
 
 describe('GPU AVBD engine: stacks, towers and impacts', () => {
@@ -135,8 +136,18 @@ describe('GPU AVBD engine: stacks, towers and impacts', () => {
 
   it('init() names the buffer that does not fit the device instead of failing validation later', async (ctx) => {
     if (!gpu) return ctx.skip();
-    const r = await call('initError', buildScenario('S9', { H: 10, ratio: 1 }, 1), 1e6);
-    // Checked before anything is allocated: the contact buffer is the largest.
+    const scene = buildScenario('S9', { H: 10, ratio: 1 }, 1), n = scene.bodies.length + scene.inputs.length;
+    // A pair buffer one indirect dispatch cannot cover is refused first (its kernels would run nothing at all).
+    const over = await call('initError', scene, 1e6);
+    const cover = 64 * over.limits.maxComputeWorkgroupsPerDimension;
+    expect(over.message).toBe(`GpuAvbdEngine: ${1e6 * n} pair slots exceed the ${cover} one indirect dispatch covers (64 x maxComputeWorkgroupsPerDimension ${over.limits.maxComputeWorkgroupsPerDimension}); lower pairsPerBody or capacity`);
+    expect(over.validation).toBeNull();
+    // The most the dispatch covers: then the contact buffer, the largest, is checked before anything is allocated
+    // (3.2 GB here, past SwiftShader's 1 GiB; a device that would take it is not asked to).
+    const most = Math.floor(cover / n);
+    const bytes = AvbdSolver.contactBytes(n, most * n, 1);
+    if (bytes <= Math.min(over.limits.maxStorageBufferBindingSize, over.limits.maxBufferSize)) return;
+    const r = await call('initError', scene, most);
     expect(r.message).toMatch(/^avbd contacts: \d+ bytes exceeds the device's \d+-byte storage binding limit$/);
     expect(r.validation).toBeNull();
   });

@@ -54,6 +54,13 @@ describe('GPU broadphase vs the double-precision oracle', () => {
     expect([r.peak, r.overflowSteps]).toEqual([300 * 299 / 2, 3]);
   });
 
+  // The per-pair kernels run as one indirect dispatch of 64-thread workgroups over the pairs written.
+  it('refuses a pair buffer one indirect dispatch cannot cover', async (ctx) => {
+    if (!gpu) return ctx.skip();
+    await expect(call('broadphase', { kind: 'cloud', n: 1, margin: 0, maxPairs: 64 * 65535 + 1 }))
+      .rejects.toThrow('Broadphase: 4194241 pair slots exceed the 4194240 one indirect dispatch covers (64 x maxComputeWorkgroupsPerDimension 65535)');
+  });
+
   // A pile, so n bodies need n(n-1)/2 pairs: 780, 1225, 44850, 45 and 990 against 1000 slots. The
   // peak must hold through the smaller counts after it (a word that kept the last count fails), and
   // only the encodes over 1000 count (one that counted every encode fails).

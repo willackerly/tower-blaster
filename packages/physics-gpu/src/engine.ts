@@ -8,7 +8,7 @@ import { boundingRadius } from '@tb/geom';
 import { assertStorageFits, createDevice, isSoftwareAdapter, Readback } from '@tb/gpu';
 import { type AvbdParams, avbdVariant, checkColoring, checkGapSlop, checkRecords, checkRemoved, checkRestitution, DEFAULT_AVBD, RESTITUTION_DEFAULTS } from '@tb/physics-ref';
 import { Body, BodyProps, readField, RestSlot, Shape, SolverBody, writeStruct } from '@tb/schema';
-import { Broadphase } from './broadphase.ts';
+import { assertPairDispatch, Broadphase } from './broadphase.ts';
 import { Coloring } from './coloring.ts';
 import { Narrowphase } from './narrowphase.ts';
 import { restitutionWord } from './restitution.ts';
@@ -229,6 +229,9 @@ export class GpuAvbdEngine implements PhysicsEngine {
     this.rmax = all.reduce((m, b) => Math.max(m, boundingRadius(b.shape)), this.opts.maxRadius ?? 0);
     // Every overlapping (inflated) pair must lie in adjacent cells.
     this.cellSize = Math.max(1e-3, 2 * (this.rmax + (p.sweep ? p.maxSweep : 0)) + p.margin);
+    // The per-pair kernels run as one indirect dispatch over the pairs written (Broadphase.total), and a
+    // dispatch past the device's workgroup limit does nothing at all: refuse a pair buffer it cannot cover.
+    assertPairDispatch(device, maxPairs, 'GpuAvbdEngine');
     // The contact buffer is the largest (1 KB per pair slot, 768 B with
     // records; a manifold is 96 B), so checking it first means no stage throws
     // halfway through allocating, which would leak what it had made.
