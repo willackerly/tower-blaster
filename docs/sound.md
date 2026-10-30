@@ -94,6 +94,32 @@ limiter starts. Three faults, found on a capture of the viewer's own frames
    volume 0. Limiting then starts at +12 dB (3.4 dB taken off, where it was
    8.7 dB without the cut).
 
+Checked on every material in both captures (`capture-cli.ts scene=city` and
+`scene=kapla`, a 3,000-plank Kapla topple heard standing 6 m away), before
+(f51ef21) and after:
+
+| Scene, material | Peak at volume 0 | Steepest gain step at +12 dB | Energy above 1 kHz | Spectrum change (bands with 1% of the energy) |
+|---|---|---|---|---|
+| city, stone 1 m | 0.43 -> 0.34 | 3.5 -> 0.05 dB a sample | -25.9 -> -41.0 dB | 16 Hz -5.1 (low cut), 256 Hz -2.5, the treble carpet gone |
+| city, stone 0.25 m | 0.10 -> 0.10 | (no limiting) | -15.5 -> -18.6 dB | 1 kHz -2.0, the rest within 0.6 |
+| city, acrylic | 0.90 -> 0.90 | 9.2 -> 0.33 | unchanged | within 0.1 dB |
+| city, pine | 0.15 -> 0.16 | (no limiting) | unchanged | within 0.1 dB |
+| Kapla, pine | 0.90 -> 0.90 | 5.2 -> 0.16 | unchanged | within 0.1 dB |
+| Kapla, acrylic | 0.90 -> 0.90 | 7.5 -> 0.68 | unchanged | 512 Hz +0.4, the rest within 0.1 |
+| Kapla, stone (2.3 cm) | 0.21 -> 0.15 | (no limiting) | unchanged (all above 1 kHz) | 1-4 kHz +2.5 to +4.7, 16 kHz -10.7: its click, now exact |
+
+Acrylic and pine ring: their modes carry the sound, so the bank's click
+change does not show, and only the limiter's steps go. At volume 0 the
+acrylic city and the Kapla tower already touch the limiter on their loudest
+transients (4 and 3 dB taken off, for under a millisecond in all); that was
+where the old limiter stepped. The bank-click test covers stone at 1 m,
+0.25 m and Kapla size, acrylic and pine. One limit it found: a click
+shorter than ~16 samples (stone blocks under ~3 cm: 8 samples at Kapla
+size) is sampled too coarsely for its top octave, in the voices' kernel and
+in the bank alike. Against the band-limited pulse, 16 kHz reads 4.6 dB low
+in one and 4.8 dB high in the other. That band is 20+ dB under the click's
+own. Band-limited kernels for both would fix it.
+
 Stone city before and after, energy above 1 kHz: -27 dB of the total before,
 -37 dB after. The audio thread's cost is unchanged (both ~15% of a VM core;
 a sanity check only, not a performance result). Stone now sounds like what
