@@ -45,7 +45,7 @@ export class ViewerSound {
     if (this.status === 'error') return;
     if (!this.ctx) { this.starting ??= this.start(); return; }
     this.send({ type: 'material', slot: 0, material: soundMaterial(c), edge: c.scale });
-    this.send({ type: 'gain', gain: soundGain(c) });
+    this.send({ type: 'gain', gain: soundGain(c), lowcut: c.sound.lowcut });
     this.resume();
   }
 

@@ -10,14 +10,22 @@
 //               Each frame's histogram is turned back into impulses: n per
 //               cell (at most maxImpulses, carrying the cell's sum A^2 exactly),
 //               dv log-uniform in the bin, a random contact point and class.
-//   clicks      the rigid-body click of every impact, as one band-pass
-//               resonator per (material, bin, sector) tuned to 1 / contact time.
+//   clicks      the rigid-body click of every impact (one cycle of a sine as
+//               long as the contact, clickKernel), exactly: per (material, bin,
+//               sector) an undamped resonator with that period, fed each
+//               impulse and, one period later, its negative, which stops it.
 //
 // Impulse times are spread uniformly over the frame they arrived in, never on
 // the frame start: aligned onsets buzz at the frame rate (+13 dB in the study).
 // A frame is scheduled `latency` seconds after it arrives, or right after the
 // previous frame, so frames neither overlap nor leave gaps; the clock resyncs if
 // the two drift apart by more than `resync`.
+//
+// Master: Pa to full scale, a low cut (2nd-order Butterworth high-pass at
+// `lowcut` Hz: below ~35 Hz no speaker plays it, yet a big block's thump puts
+// a third of its energy there, which only uses up headroom), then a lookahead
+// peak limiter (Limiter): gain changes are ramps, never steps, so heavy
+// limiting does not crackle.
 import { binOf, DV_EDGES, TOP_FIELDS, type AudioFrame } from './frame.ts';
 import type { SoundMaterial } from './material.ts';
 import { clickKernel, contactTime, modes, pulseSpectrum, type Modes } from './modes.ts';
@@ -25,6 +33,9 @@ import { clickKernel, contactTime, modes, pulseSpectrum, type Modes } from './mo
 export const BLOCK = 128;
 const RING = 64; // blocks of scheduling horizon (171 ms at 48 kHz)
 const BUCKET = 4096; // impulses per block, at most
+/** Limiter ceiling (each channel) and lookahead, samples. */
+export const CEILING = 0.9;
+export const LOOKAHEAD = 64;
 
 export interface EngineOptions {
   sampleRate: number;
@@ -54,9 +65,10 @@ interface MatState {
   y1: Float32Array; y2: Float32Array;
   x: Float32Array; // BLOCK inputs per resonator
   live: Uint8Array; // resonator has input or ringing state this block
-  /** Click band-pass per (bin, sector). */
-  ca1: Float32Array; ca2: Float32Array; cy1: Float32Array; cy2: Float32Array; cx: Float32Array;
-  clickPeak: Float64Array; // per bin: impulse into the click band-pass per (m/s of dv per m)
+  /** Click resonator per (bin, sector): its period D (samples, per bin), 2 cos(2 pi / D), state, input and the input's last D samples. */
+  cD: Int32Array; cc: Float64Array; cy1: Float64Array; cy2: Float64Array; cx: Float32Array; cring: Float64Array[];
+  cLast: Float64Array; // per (bin, sector): absolute sample of its last input (-Infinity: none)
+  clickPeak: Float64Array; // per bin: impulse into the click resonator per (m/s of dv per m)
   binT: Float64Array; // per bin: contact time
   w: Float64Array; // scratch weights
 }
@@ -113,6 +125,8 @@ export class CollapseEngine {
   latency: number;
   resync: number;
   fullScale: number;
+  /** Master high-pass corner, Hz (0: off). */
+  lowcut = 35;
   muted = false;
   /** Debug: put every impulse on its frame's first sample (the study's buzz). */
   alignOnsets = false;
@@ -122,7 +136,8 @@ export class CollapseEngine {
   private now = 0; // absolute sample of the next block
   private nextFrame = -1; // absolute sample where the next frame starts
   private sector = new Float32Array(0);
-  private limit = 1;
+  readonly limiter = new Limiter();
+  readonly highpass = new HighPass();
   // Impulse buckets, by block: t (sample in block), material, class, sector, A, dv.
   private bt = new Uint16Array(RING * BUCKET);
   private bm = new Uint8Array(RING * BUCKET);
@@ -162,9 +177,9 @@ export class CollapseEngine {
       a1: new Float32Array(n), a2: new Float32Array(n), b: new Float32Array(n),
       y1: keep ? old.y1 : new Float32Array(n), y2: keep ? old.y2 : new Float32Array(n),
       x: keep ? old.x : new Float32Array(n * BLOCK), live: keep ? old.live : new Uint8Array(n),
-      ca1: new Float32Array(DV_EDGES.length * S), ca2: new Float32Array(DV_EDGES.length * S),
-      cy1: keep ? old.cy1 : new Float32Array(DV_EDGES.length * S), cy2: keep ? old.cy2 : new Float32Array(DV_EDGES.length * S),
-      cx: keep ? old.cx : new Float32Array(DV_EDGES.length * S * BLOCK),
+      cD: new Int32Array(DV_EDGES.length), cc: new Float64Array(DV_EDGES.length),
+      cy1: new Float64Array(DV_EDGES.length * S), cy2: new Float64Array(DV_EDGES.length * S),
+      cx: keep ? old.cx : new Float32Array(DV_EDGES.length * S * BLOCK), cring: [], cLast: new Float64Array(DV_EDGES.length * S).fill(-Infinity),
       clickPeak: new Float64Array(DV_EDGES.length), binT: new Float64Array(DV_EDGES.length), w: new Float64Array(md.freq.length),
     };
     for (let c = 0; c < C; c++) st.mult[c] = Math.exp(m.jitter * normInv((c + 0.5) / C));
@@ -175,15 +190,22 @@ export class CollapseEngine {
     for (let bin = 0; bin < DV_EDGES.length; bin++) {
       const dv = DV_EDGES[bin]! * Math.SQRT2, T = contactTime(m, dv, edge);
       st.binT[bin] = T;
-      // A heavily damped band-pass at 1/T (Q 0.7), differentiated, scaled so one impulse carries the
-      // energy of the exact click kernel (clickKernel) for a unit dv at 1 m.
-      const [a1, a2] = coeffs(1 / T, (0.7 * T) / Math.PI, this.sr);
-      for (let s = 0; s < S; s++) { st.ca1[bin * S + s] = a1; st.ca2[bin * S + s] = a2; }
-      const ker = clickKernel(m, T, this.sr, edge);
-      let ek = 0, er = 0, y1 = 0, y2 = 0;
-      for (const x of ker) ek += x * x;
-      for (let i = 0; i < 64 * Math.ceil(T * this.sr) + 64; i++) { const y = a1 * y1 + a2 * y2 + (i === 0 ? 1 : 0); er += (y - y1) ** 2; y2 = y1; y1 = y; }
-      st.clickPeak[bin] = Math.sqrt(ek / er);
+      // y = 2 cos(th) y1 - y2 + u, th = 2 pi / D, answers an impulse with sin((n + 1) th) / sin(th): one
+      // cycle of the kernel's sine is D samples, and the same impulse negated D samples later ends it
+      // (u = x - x[n - D]). Scaled so one impulse carries the exact kernel's energy (clickKernel) for a
+      // unit dv at 1 m; the cycle's energy is D / 2 / sin(th)^2.
+      const D = Math.max(4, Math.round(T * this.sr)), th = (2 * Math.PI) / D;
+      st.cD[bin] = D; st.cc[bin] = 2 * Math.cos(th);
+      let ek = 0;
+      for (const x of clickKernel(m, T, this.sr, edge)) ek += x * x;
+      st.clickPeak[bin] = Math.sqrt(ek / (D / 2)) * Math.sin(th);
+      for (let s = 0; s < S; s++) st.cring.push(new Float64Array(D));
+    }
+    // A click under way keeps playing through a change that keeps its period.
+    if (keep) for (let r = 0; r < st.cring.length; r++) {
+      const bin = Math.floor(r / S);
+      if (old.cD[bin] !== st.cD[bin]) continue;
+      st.cring[r] = old.cring[r]!; st.cy1[r] = old.cy1[r]!; st.cy2[r] = old.cy2[r]!; st.cLast[r] = old.cLast[r]!;
     }
     this.mats[i] = st;
   }
@@ -283,16 +305,19 @@ export class CollapseEngine {
         st.y1[r] = y1; st.y2[r] = y2;
         if (peak < 1e-7) { st.live[r] = 0; st.y1[r] = 0; st.y2[r] = 0; }
       }
-      for (let r = 0; r < st.ca1.length; r++) {
-        const a1 = st.ca1[r]!, a2 = st.ca2[r]!, o = r * BLOCK, so = (r % S) * BLOCK;
-        let y1 = st.cy1[r]!, y2 = st.cy2[r]!;
-        if (y1 === 0 && y2 === 0 && !st.cx.subarray(o, o + BLOCK).some((x) => x !== 0)) continue;
+      for (let r = 0; r < st.cring.length; r++) {
+        const D = st.cD[Math.floor(r / S)]!, c = st.cc[Math.floor(r / S)]!, ring = st.cring[r]!, o = r * BLOCK, so = (r % S) * BLOCK;
+        let y1 = st.cy1[r]!, y2 = st.cy2[r]!, last = st.cLast[r]!;
+        // Idle: no input for a period (the ring holds only zeros) and the last cycle ended.
+        if (this.now - last > D && y1 === 0 && y2 === 0 && !st.cx.subarray(o, o + BLOCK).some((x) => x !== 0)) continue;
         for (let i = 0; i < BLOCK; i++) {
-          // Differentiated so the click has no DC (an accelerating body leaves no net pressure).
-          const y = a1 * y1 + a2 * y2 + st.cx[o + i]!;
-          st.cx[o + i] = 0; sec[so + i]! += y - y1; y2 = y1; y1 = y;
+          const x = st.cx[o + i]!, k = (this.now + i) % D, y = c * y1 - y2 + x - ring[k]!;
+          if (x !== 0) last = this.now + i;
+          ring[k] = x; st.cx[o + i] = 0; sec[so + i]! += y; y2 = y1; y1 = y;
         }
-        st.cy1[r] = Math.abs(y1) < 1e-9 ? 0 : y1; st.cy2[r] = Math.abs(y2) < 1e-9 ? 0 : y2;
+        // A finished cycle leaves rounding (~1e-16 of it); clear it once the ring is empty.
+        if (this.now + BLOCK - last > D && Math.abs(y1) < 1e-9 && Math.abs(y2) < 1e-9) { y1 = 0; y2 = 0; }
+        st.cy1[r] = y1; st.cy2[r] = y2; st.cLast[r] = last;
       }
     }
     for (let s = 0; s < S; s++) {
@@ -317,13 +342,11 @@ export class CollapseEngine {
       v.age += BLOCK - from;
       if (v.age > 7 * v.life) v.on = false;
     }
-    // Master: Pa to full scale, then a peak limiter (instant attack, 150 ms release).
-    const g = this.muted ? 0 : 1 / this.fullScale, rel = Math.exp(-BLOCK / (0.15 * this.sr));
-    let peak = 0;
-    for (let i = 0; i < BLOCK; i++) peak = Math.max(peak, Math.abs(L[i]! * g), Math.abs(R[i]! * g));
-    this.limit = Math.min(1, Math.max(this.limit, 0) / rel, peak > 0.9 ? 0.9 / peak : 1);
-    const gain = g * this.limit;
-    for (let i = 0; i < BLOCK; i++) { L[i]! *= gain; R[i]! *= gain; }
+    // Master: Pa to full scale, then the limiter.
+    const g = this.muted ? 0 : 1 / this.fullScale;
+    for (let i = 0; i < BLOCK; i++) { L[i]! *= g; R[i]! *= g; }
+    if (this.lowcut > 0) this.highpass.process(L, R, this.lowcut, this.sr);
+    this.limiter.process(L, R, this.sr);
     this.now += BLOCK;
   }
 
@@ -332,5 +355,67 @@ export class CollapseEngine {
     let n = 0;
     for (const st of this.mats) if (st) for (const x of st.live) n += x;
     return n + this.voices.filter((v) => v.on).reduce((s, v) => s + v.M, 0);
+  }
+}
+
+/** 2nd-order Butterworth high-pass (RBJ, Q 1/sqrt(2)), stereo; the corner can change between calls (the state carries on). */
+export class HighPass {
+  private f = -1;
+  private b0 = 1; private b1 = 0; private b2 = 0; private a1 = 0; private a2 = 0;
+  private s = new Float64Array(8); // x1 x2 y1 y2, left then right
+
+  process(L: Float32Array, R: Float32Array, f: number, sr: number): void {
+    if (f !== this.f) {
+      const w = (2 * Math.PI * Math.min(f, 0.45 * sr)) / sr, al = Math.sin(w) / Math.SQRT2, a0 = 1 + al, c = Math.cos(w);
+      this.f = f; this.b0 = (1 + c) / 2 / a0; this.b1 = -(1 + c) / a0; this.b2 = this.b0; this.a1 = (-2 * c) / a0; this.a2 = (1 - al) / a0;
+    }
+    const { b0, b1, b2, a1, a2, s } = this;
+    for (const [x, o] of [[L, 0], [R, 4]] as const) {
+      let x1 = s[o]!, x2 = s[o + 1]!, y1 = s[o + 2]!, y2 = s[o + 3]!;
+      for (let i = 0; i < x.length; i++) { const v = x[i]!, y = b0 * v + b1 * x1 + b2 * x2 - a1 * y1 - a2 * y2; x2 = x1; x1 = v; y2 = y1; y1 = y; x[i] = y; }
+      s[o] = x1; s[o + 1] = x2; s[o + 2] = y1; s[o + 3] = y2;
+    }
+  }
+}
+
+/**
+ * Lookahead peak limiter: the output is the input LOOKAHEAD - 1 samples late, times a gain that never
+ * lets a channel past CEILING and never steps. Each input sample n needs the gain r[n] = min(1, CEILING /
+ * peak). The gain is the mean of h over the last LOOKAHEAD samples, h[j] = the least r over the
+ * LOOKAHEAD samples up to j. Every one of those h covers the sample now being played (n - LOOKAHEAD + 1),
+ * so the mean is at most its r: the gain ramps down across the lookahead and arrives in time. It then
+ * rises no faster than the release allows. The old limiter set one gain per 128-sample block: up to
+ * 12 dB steps at block edges under heavy limiting, heard as crackle.
+ */
+export class Limiter {
+  release = 0.15; // s per 1/e of gain recovery
+  /** Lowest gain since the last reset of this probe (set it to 1 to read the next stretch). */
+  minGain = 1;
+  private dl = new Float32Array(LOOKAHEAD); // input, left and right, the last LOOKAHEAD samples
+  private dr = new Float32Array(LOOKAHEAD);
+  private need = new Float64Array(LOOKAHEAD).fill(1); // r of the last LOOKAHEAD inputs
+  private below = 0; // of need, how many are under 1
+  private hold = new Float64Array(LOOKAHEAD).fill(1); // h of the last LOOKAHEAD inputs
+  private sum = LOOKAHEAD; // of hold
+  private gain = 1;
+  private n = 0;
+
+  process(L: Float32Array, R: Float32Array, sr: number): void {
+    const up = Math.exp(1 / (this.release * sr)), need = this.need;
+    for (let i = 0; i < L.length; i++) {
+      const k = this.n % LOOKAHEAD, p = Math.max(Math.abs(L[i]!), Math.abs(R[i]!)), r = p > CEILING ? CEILING / p : 1;
+      this.below += (r < 1 ? 1 : 0) - (need[k]! < 1 ? 1 : 0);
+      need[k] = r;
+      let h = 1;
+      if (this.below > 0) for (let j = 0; j < LOOKAHEAD; j++) h = Math.min(h, need[j]!);
+      this.sum += h - this.hold[k]!; this.hold[k] = h;
+      if (this.below === 0 && this.sum > LOOKAHEAD - 1e-9) this.sum = LOOKAHEAD; // all 1 again: drop the running sum's rounding
+      this.gain = Math.min(this.sum / LOOKAHEAD, this.gain * up, 1);
+      this.minGain = Math.min(this.minGain, this.gain);
+      this.dl[k] = L[i]!; this.dr[k] = R[i]!;
+      const o = (k + 1) % LOOKAHEAD; // written LOOKAHEAD - 1 samples ago
+      L[i] = this.dl[o]! * this.gain; R[i] = this.dr[o]! * this.gain;
+      this.n++;
+    }
   }
 }

@@ -13,6 +13,7 @@
 //   snd.spread=2        body-to-body pitch spread x
 //   snd.dv=0.25         slowest speed change that sounds, m/s
 //   snd.voices=8        loudest impacts a frame played as their own voices
+//   snd.lowcut=35       master high-pass, Hz (0: off): below it only headroom is spent
 import { SOUND_MATERIALS, type SoundMaterial } from './material.ts';
 
 export type SoundMaterialName = keyof typeof SOUND_MATERIALS;
@@ -27,6 +28,7 @@ export const SOUND_KNOBS = {
   spread: { label: 'pitch spread x', min: 0, max: 5, step: 0.1, def: 1 },
   dv: { label: 'quietest hit (m/s)', min: 0.05, max: 5, step: 0.05, def: 0.25 },
   voices: { label: 'loudest hits as voices', min: 0, max: 32, step: 1, def: 8 },
+  lowcut: { label: 'low cut (Hz)', min: 0, max: 300, step: 5, def: 35 },
 } as const;
 export type SoundKnob = keyof typeof SOUND_KNOBS;
 
