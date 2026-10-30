@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { type AudioFrame, BLOCK, cellOf, CollapseEngine, DV_EDGES, normInv, SOUND_MATERIALS, type SoundMaterial, TOP_FIELDS } from '@tb/audio';
+import { type AudioFrame, BLOCK, cellOf, CollapseEngine, contactTime, DV_EDGES, normInv, SOUND_MATERIALS, type SoundMaterial, TOP_FIELDS } from '@tb/audio';
 
 const SR = 48000, FRAME = 800; // 60 Hz
 const pine: SoundMaterial = SOUND_MATERIALS.pine;
@@ -42,6 +42,21 @@ function buzz(x: Float32Array): number {
   let band = 0, k = 0;
   for (let f = 31; f < 200; f += 1.7) if (![60, 120, 180].some((h) => Math.abs(f - h) < 4)) { band += power(f); k++; }
   return db(lines / (band / k));
+}
+
+/** Energy per octave band (16 Hz to 24 kHz, 11 bands) of x, zero-padded to 2^15 samples. */
+function octaves(x: Float32Array): number[] {
+  const N = 1 << 15, re = new Float64Array(N), im = new Float64Array(N);
+  re.set(x.subarray(0, N));
+  for (let i = 1, j = 0; i < N; i++) { let bit = N >> 1; for (; j & bit; bit >>= 1) j ^= bit; j ^= bit; if (i < j) [re[i], re[j]] = [re[j]!, re[i]!]; }
+  for (let len = 2; len <= N; len <<= 1) for (let i = 0; i < N; i += len) for (let k = 0; k < len / 2; k++) {
+    const a = (-2 * Math.PI * k) / len, wr = Math.cos(a), wi = Math.sin(a), p = i + k, q = p + len / 2;
+    const vr = re[q]! * wr - im[q]! * wi, vi = re[q]! * wi + im[q]! * wr;
+    re[q] = re[p]! - vr; im[q] = im[p]! - vi; re[p]! += vr; im[p]! += vi;
+  }
+  const out = new Array<number>(11).fill(0);
+  for (let k = 1; k < N / 2; k++) out[Math.min(10, Math.max(0, Math.floor(Math.log2((k * SR) / N / 16))))]! += re[k]! ** 2 + im[k]! ** 2;
+  return out;
 }
 
 describe('CollapseEngine', () => {
@@ -89,6 +104,34 @@ describe('CollapseEngine', () => {
     }
     // Both: A = 1 and the contact time of dv = 1.41 m/s; the voice plays the exact kernel, the bank a matched band-pass.
     expect(Math.abs(db(bank / fg))).toBeLessThan(0.5);
+  });
+
+  // The bank's click used to be an impulse into a damped band-pass, differentiated: right energy, but
+  // its first sample was a full-band spike, so a 1 m stone block's 60 Hz thump came out as a tick
+  // 34-46 dB too bright at 1-4 kHz, and a stone collapse (all bank) as crackle.
+  it.each([['stone, 1 m blocks', SOUND_MATERIALS.stone, 1], ['acrylic', SOUND_MATERIALS.acrylic, 1], ['pine', pine, 1]] as const)('the bank plays the exact click kernel, band for band (%s)', (_name, m, edge) => {
+    const quiet = { ...m, ringDb: -Infinity }, bin = 2, dv = DV_EDGES[bin] * Math.SQRT2; // the bin's own contact time
+    const play = (voice: boolean) => {
+      const e = new CollapseEngine({ sampleRate: SR, seed: 1, fullScale: 1e6 });
+      e.setMaterial(0, quiet, edge);
+      return run(e, 300, (b) => b === 0 && e.push(frame([{ bin, sector: 2, count: 1, a2: 1 }], voice ? [[dv, dv, 0, 0, 0]] : []))).mono;
+    };
+    const fg = octaves(play(true)), bank = octaves(play(false)), total = fg.reduce((a, b) => a + b, 0);
+    // Within 1 dB where the click is (bands with 1% of its energy), 3 dB in its faint skirts: the bank's
+    // cycle is a whole number of samples (20 for acrylic and pine, so up to 2.5% off the contact time).
+    fg.forEach((x, k) => { if (x > 1e-4 * total) expect(Math.abs(db(bank[k]! / x)), `octave ${16 * 2 ** k} Hz`).toBeLessThan(x > 0.01 * total ? 1 : 3); });
+  });
+
+  it('a click ends after one contact time: nothing rings on', () => {
+    const e = engine(1, { ...SOUND_MATERIALS.stone, ringDb: -Infinity });
+    e.setMaterial(0, { ...SOUND_MATERIALS.stone, ringDb: -Infinity }, 1);
+    e.lowcut = 0; // the master high-pass has a tail of its own
+    const { mono } = run(e, 200, (b) => b === 0 && e.push(frame([{ bin: 3, count: 1, a2: 1 }])));
+    const first = mono.findIndex((x) => x !== 0), T = contactTime(SOUND_MATERIALS.stone, DV_EDGES[3] * Math.SQRT2, 1);
+    expect(first).toBeGreaterThan(0);
+    const peak = Math.max(...mono.map(Math.abs)), after = mono.subarray(first + Math.ceil(T * SR) + 2);
+    expect(Math.max(...after.map(Math.abs))).toBeLessThan(1e-9 * peak);
+    expect(after.subarray(BLOCK).every((x) => x === 0)).toBe(true); // and its resonator went idle
   });
 
   it('spreads onsets over the frame: a steady dense stream has no 60 Hz buzz, aligned onsets do', () => {

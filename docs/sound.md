@@ -54,6 +54,7 @@ it. Keys (`@tb/audio` options.ts):
 | `snd.spread` | 1 | body-to-body pitch spread x |
 | `snd.dv` | 0.25 | slowest speed change that sounds, m/s |
 | `snd.voices` | 8 | loudest impacts a frame as their own voices (0: bank only) |
+| `snd.lowcut` | 35 | master high-pass, Hz (0: off) |
 
 How it runs: the viewer already reads every step's snapshot back, so a
 `FrameTap` (tap.ts) turns the newest one into an AudioFrame at most every
@@ -63,6 +64,41 @@ main thread's share is one pass over the bodies; the synthesis is on the audio
 thread. Fired balls are silent (their own sound is not modelled yet), and
 under `rules=keystone` the sound waits: the game's loop does not feed it yet,
 and the game keeps its own feedback sounds (`@tb/game` audio.ts).
+
+## Distortion (2026-10-30)
+
+Will heard the city in stone as distorted. It was not clipping: at the
+default camera the stone city peaks at 13 Pa, under the 27 Pa where the
+limiter starts. Three faults, found on a capture of the viewer's own frames
+(`capture-cli.ts`, a 10k city knocked down by the default ball on Rapier,
+12.6k impacts in 7 s) rendered by `levels-cli.ts`:
+
+1. The bank's click (where ~99% of impacts play) was an impulse into a
+   damped band-pass, then differentiated. Its energy was right but its first
+   sample was a full-band spike. A 1 m stone block's click is a 60 Hz thump
+   (16 ms contact), and the bank played it 34-46 dB too bright at 1-4 kHz.
+   The whole stone collapse was a carpet of treble ticks: crackle. Now each
+   (bin, sector) has an undamped resonator with the contact's period, fed
+   the impulse and, one period later, its negative. That is the exact kernel,
+   one sine cycle, and nothing rings on. Acrylic's and pine's clicks were
+   too bright too (5-13 dB above 4 kHz), but their modes covered it.
+2. The limiter set one gain per 128-sample block. At +12 dB of volume it
+   stepped up to 3.5 dB, and at +20 dB up to 9.4 dB, between two samples at
+   block edges. Now it is a lookahead limiter (63 samples, 1.3 ms): the gain
+   ramps over the lookahead and never steps (the steepest change is 0.05
+   dB a sample at +12 dB and 0.18 at +20 dB), and the output still never
+   passes 0.9.
+3. A big block's thump puts a third of its energy under 32 Hz. No speaker
+   plays it, but it used up the limiter's headroom. A 35 Hz Butterworth
+   high-pass (`snd.lowcut`) takes the stone city's peak from 0.61 to 0.34 at
+   volume 0. Limiting then starts at +12 dB (3.4 dB taken off, where it was
+   8.7 dB without the cut).
+
+Stone city before and after, energy above 1 kHz: -27 dB of the total before,
+-37 dB after. The audio thread's cost is unchanged (both ~15% of a VM core;
+a sanity check only, not a performance result). Stone now sounds like what
+the model says 1 m concrete blocks are: dull thumps. Its crunch is the grit
+layer (S8), which is not built yet.
 
 ## Plan (each step lands with its test)
 
@@ -75,7 +111,8 @@ and the game keeps its own feedback sounds (`@tb/game` audio.ts).
 4. S4 GPU audio reduce in the render detect pass, plus readback. Deferred:
    the CPU tap costs ~10 ns a body on the main thread, so it waits for an M5
    measurement (S10), or for snapshots to stop coming back to the CPU.
-5. S5 AudioWorklet engine (foreground, bank, sectors, limiter). Done.
+5. S5 AudioWorklet engine (foreground, bank, sectors, limiter). Done; exact
+   bank clicks, lookahead limiter and low cut 2026-10-30.
 6. S6 viewer Sound section and `snd.*` URL params. Done.
 7. S7 ground and hall: floor resonators, reverb tied to `real.env`.
 8. S8 granular bills for non-modal layers (stone grit: `gritDb` is not played yet).

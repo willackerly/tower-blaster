@@ -10,8 +10,8 @@ export type SoundMessage =
   | { type: 'frame'; frame: AudioFrame }
   /** Material slot i (null: silent). edge: the body's edge in metres (shell and cube materials without their own size). */
   | { type: 'material'; slot: number; material: SoundMaterial | null; edge: number }
-  /** Master gain (linear, before the limiter) and mute. */
-  | { type: 'gain'; gain: number; muted?: boolean };
+  /** Master gain (linear, before the limiter), mute, and the low cut (Hz, 0 off; absent: unchanged). */
+  | { type: 'gain'; gain: number; muted?: boolean; lowcut?: number };
 
 export interface HostStats {
   type: 'stats';
@@ -62,6 +62,10 @@ export class CollapseHost {
         if (!(m.gain >= 0 && Number.isFinite(m.gain))) throw new Error(`gain must be a finite number >= 0: ${m.gain}`);
         this.engine.fullScale = m.gain > 0 ? FULL_SCALE / m.gain : FULL_SCALE;
         this.engine.muted = m.gain === 0 || (m.muted ?? false);
+        if (m.lowcut !== undefined) {
+          if (!(m.lowcut >= 0 && Number.isFinite(m.lowcut))) throw new Error(`lowcut must be a finite number >= 0: ${m.lowcut}`);
+          this.engine.lowcut = m.lowcut;
+        }
         break;
     }
   }

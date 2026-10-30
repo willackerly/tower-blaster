@@ -5,6 +5,7 @@ describe('sound options', () => {
   it('are off with defaults when the URL says nothing, and round-trip what differs', () => {
     expect(parseSoundOptions(new URLSearchParams())).toEqual(DEFAULT_SOUND);
     expect(DEFAULT_SOUND.on).toBe(false);
+    expect(DEFAULT_SOUND.lowcut).toBe(new CollapseHost(48000).engine.lowcut);
     const o = parseSoundOptions(new URLSearchParams('snd=1&snd.mat=pine&snd.volume=-6&snd.pitch=-5&snd.voices=0'));
     expect(o).toEqual({ ...DEFAULT_SOUND, on: true, material: 'pine', volume: -6, pitch: -5, voices: 0 });
     const q = new URLSearchParams();
@@ -62,7 +63,7 @@ describe('CollapseHost (the worklet minus WebAudio)', () => {
     expect(stats[0]!.loudest).toBe(stats[0]!.peak);
   });
 
-  it('gain sets full scale, 0 mutes, and a bad gain is refused', () => {
+  it('gain sets full scale, 0 mutes, it carries the low cut, and a bad gain or cut is refused', () => {
     const h = new CollapseHost(48000);
     h.onMessage({ type: 'gain', gain: 2 });
     expect(h.engine.fullScale).toBe(FULL_SCALE / 2);
@@ -72,5 +73,11 @@ describe('CollapseHost (the worklet minus WebAudio)', () => {
     h.onMessage({ type: 'gain', gain: 1, muted: true });
     expect(h.engine.muted).toBe(true);
     expect(() => h.onMessage({ type: 'gain', gain: -1 })).toThrow(/gain/);
+    expect(h.engine.lowcut).toBe(35); // the default, also snd.lowcut's
+    h.onMessage({ type: 'gain', gain: 1, lowcut: 0 });
+    expect(h.engine.lowcut).toBe(0);
+    h.onMessage({ type: 'gain', gain: 1 });
+    expect(h.engine.lowcut).toBe(0); // absent: unchanged
+    expect(() => h.onMessage({ type: 'gain', gain: 1, lowcut: NaN })).toThrow(/lowcut/);
   });
 });
