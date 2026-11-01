@@ -156,5 +156,7 @@
   "packages/viewer/test/rules.test.ts": 0.1,
   "packages/viewer/test/shots-line.test.ts": 0.1,
   "packages/viewer/test/sound.test.ts": 0.1,
-  "packages/viewer/test/viewer.test.ts": 2.7
+  "packages/viewer/test/viewer.test.ts": 2.7,
+  "packages/weapons/test/runtime.test.ts": 2,
+  "packages/weapons/test/spec.test.ts": 0.3
 }
