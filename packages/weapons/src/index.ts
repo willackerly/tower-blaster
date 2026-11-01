@@ -4,3 +4,4 @@ export * from './grenade.ts';
 export * from './projectiles.ts';
 export * from './runtime.ts';
 export * from './spec.ts';
+export * from './yield.ts';

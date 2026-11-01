@@ -1,7 +1,8 @@
 // Runs a Session against any PhysicsEngine: step, observe, feed the rules,
 // push the spawns they produce. The interactive game and the headless tools
 // share this loop, so a recorded session replays through the same code.
-import type { InputEvent, PhysicsEngine, Snapshot } from '@tb/engine-api';
+import { type BodyDesc, type InputEvent, type PhysicsEngine, type Snapshot, spawnedBodies } from '@tb/engine-api';
+import { Arsenal } from './arsenal.ts';
 import { type CompiledLevel, physicsOf } from './level.ts';
 import { CpuObserver } from './rules.ts';
 import { type Feedback, Session } from './session.ts';
@@ -63,6 +64,14 @@ export class Driver {
   private ahead: Promise<Snapshot> | null = null;
   /** The engine step of every spawn pushed so far, shots' and others', to number the next shot's body. */
   private spawnSteps: number[] = [];
+  /** Every spawn so far in the order the engine numbers them (by step, then push order), for the bodies list. */
+  private spawns: InputEvent[] = [];
+  /** The structure then every spawned body, by engine id. */
+  private bodies: BodyDesc[] = [];
+  /** The fired weapons' fuses (w- items), one per session. */
+  private arsenal!: Arsenal;
+  /** Blasts pushed whose 'blast' feedback waits for the first state that shows them. */
+  private blastsDue: Extract<Feedback, { t: 'blast' }>[] = [];
 
   constructor(readonly engine: PhysicsEngine, readonly level: CompiledLevel, readonly options: DriverOptions = {}) {}
 
@@ -80,6 +89,23 @@ export class Driver {
     this.snapshotStep = this.engine.stepIndex;
     this.session = new Session(this.level, this.snapshot.pos);
     this.observer = new CpuObserver(this.level, this.snapshot);
+    this.spawns = [];
+    this.bodies = [...this.level.scene.bodies];
+    this.arsenal = new Arsenal(this.level, this.engine.info.integrator?.substeps ?? 1);
+    this.blastsDue = [];
+  }
+
+  /** Notes spawns in the engine's numbering order: by step, after those due at the same step. */
+  private noteSpawns(events: readonly InputEvent[]): void {
+    let added = false;
+    for (const e of events) {
+      if (e.kind !== 'spawn') continue;
+      let i = this.spawns.length;
+      while (i > 0 && this.spawns[i - 1]!.step > e.step) i--;
+      this.spawns.splice(i, 0, e);
+      added = true;
+    }
+    if (added) this.bodies = [...this.level.scene.bodies, ...spawnedBodies(this.spawns)];
   }
 
   /** Fire now: the spawn applies at the next step. */
@@ -87,10 +113,16 @@ export class Driver {
     const step = this.engine.stepIndex;
     // Engines number spawns by (step, push order); every spawn pushed before is due by now or later
     // than this one (push's stamping rule), so the ammo comes after exactly those due by now.
-    const { spawn, feedback } = this.session.fire(shot, step, this.level.meta.n + this.spawnSteps.filter((s) => s <= step).length);
+    const body = this.level.meta.n + this.spawnSteps.filter((s) => s <= step).length;
+    const { spawn, feedback } = this.session.fire(shot, step, body);
     this.spawnSteps.push(step);
+    this.noteSpawns([spawn]);
     this.observer.setBaseline(this.snapshot, step);
-    this.engine.push([spawn]);
+    // A weapon's fuse starts with its spawn: what it knows at launch (a timer's blast) goes in with it.
+    const armed = this.arsenal.launch(shot.ammo, body, step, spawn.body.shape);
+    this.pushed.push(...armed);
+    this.engine.push([spawn, ...armed]);
+    this.blastsDue.push(...blasts(armed));
     return feedback;
   }
 
@@ -103,8 +135,25 @@ export class Driver {
   push(events: InputEvent[]): void {
     for (const e of events) if (e.step <= this.snapshotStep) throw new Error(`Driver.push: an event for step ${e.step} is not after the observed step ${this.snapshotStep}; stamp it snapshotStep + 1 or later`);
     for (const e of events) if (e.kind === 'spawn') this.spawnSteps.push(e.step);
+    this.noteSpawns(events);
     this.pushed.push(...events);
     this.engine.push(events);
+  }
+
+  /** Pushes the fired weapons' input from the state just observed (due after it); whether one is still to go off. */
+  private arm(feedback: Feedback[]): boolean {
+    const input = this.arsenal.observe(this.snapshot, this.snapshotStep, this.bodies);
+    if (input.length) {
+      this.push(input);
+      this.blastsDue.push(...blasts(input));
+    }
+    // A blast shows in the first state after the step it is due at (the engine applies it stepping from there).
+    const shown = this.blastsDue.filter((b) => b.step < this.snapshotStep);
+    if (shown.length) {
+      feedback.push(...shown);
+      this.blastsDue = this.blastsDue.filter((b) => b.step >= this.snapshotStep);
+    }
+    return this.arsenal.pending(this.snapshotStep);
   }
 
   /** End an outcome level now (Session.bank): the world is frozen while aiming, so the step is the observed one. */
@@ -117,7 +166,8 @@ export class Driver {
       await this.engine.step();
       this.snapshot = await this.engine.snapshot();
       this.snapshotStep = this.engine.stepIndex;
-      return this.session.observe(this.observer.observe(this.snapshot, this.engine.stepIndex, this.session.watchIdx));
+      const out: Feedback[] = [], hold = this.arm(out);
+      return [...out, ...this.session.observe(this.observer.observe(this.snapshot, this.engine.stepIndex, this.session.watchIdx), hold)];
     }
     if (!this.ahead) {
       await this.engine.step();
@@ -129,7 +179,8 @@ export class Driver {
     this.snapshot = await this.ahead;
     this.snapshotStep = n;
     this.ahead = this.read();
-    const feedback = this.session.observe(this.observer.observe(this.snapshot, n, this.session.watchIdx));
+    const out: Feedback[] = [], hold = this.arm(out);
+    const feedback = [...out, ...this.session.observe(this.observer.observe(this.snapshot, n, this.session.watchIdx), hold)];
     if (this.session.phase !== 'running') await this.drain();
     return feedback;
   }
@@ -150,6 +201,11 @@ export class Driver {
       this.snapshotStep = this.engine.stepIndex;
     }
   }
+}
+
+/** A 'blast' feedback for each blast among `events`. */
+function blasts(events: readonly InputEvent[]): Extract<Feedback, { t: 'blast' }>[] {
+  return events.flatMap((e) => (e.kind === 'blast' ? [{ t: 'blast' as const, step: e.step, body: typeof e.blast.centre === 'object' && 'body' in e.blast.centre ? e.blast.centre.body : -1, radius: e.blast.radius }] : []));
 }
 
 export interface SessionResult { session: Session; feedback: Feedback[]; steps: number; snapshot: Snapshot }

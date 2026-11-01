@@ -4,9 +4,10 @@
 // renderer, audio and pacing, which never flow back into the rules.
 import { massOf, type SpawnEvent, type Vec3 } from '@tb/engine-api';
 import { GRAVITY } from './materials.ts';
+import { itemYield } from './arsenal.ts';
 import { castStars, type CompiledLevel, type Scoring, scoringOf } from './level.ts';
 import { collapseFraction, floorPotential_mJ, homePotential_mJ, homeSkyline, objectiveMet, type OutcomeFacts, outcomeScore } from './outcome.ts';
-import { crownDown, heritageBroken, leverage, levelScore, type LevelScore, type Observation, type Reductions, type SettleState, settleUpdate, type ShotOutcome, skyline, tier } from './rules.ts';
+import { crownDown, heritageBroken, leverage, levelScore, type LevelScore, type Observation, type Reductions, type SettleState, SETTLE_CAP, settleUpdate, type ShotOutcome, skyline, tier } from './rules.ts';
 import type { RackItem } from './rack.ts';
 import { ammoKE, type Shot, shotToSpawn } from './shots.ts';
 
@@ -21,6 +22,8 @@ export type Feedback =
   | { t: 'slowMo'; step: number; body: number }
   | { t: 'tier'; step: number; leverage: number; tier: number }
   | { t: 'impacts'; step: number; hist: Uint32Array; total: number }
+  /** A fired weapon's blast, due at `step`, shows in the state just observed (Driver, arsenal.ts): centred on `body`, `radius` m. */
+  | { t: 'blast'; step: number; body: number; radius: number }
   | { t: 'settled'; step: number; shot: number; outcome: ShotOutcome }
   | { t: 'levelEnd'; step: number; cleared: boolean; score: LevelScore };
 
@@ -28,6 +31,8 @@ export type Feedback =
 export const SLOWMO_VY = -1.5;
 
 interface Live {
+  /** Nominal yield of the item's weapon, J (0 without one): charged with ke in energy fired. */
+  yield: number;
   shot: Shot;
   spawnStep: number;
   body: number;
@@ -106,9 +111,9 @@ export class Session {
     const spawn = shotToSpawn(this.level.frame, shot, step);
     this.rackLeft.splice(this.rackLeft.indexOf(shot.ammo), 1);
     this.ammoCount++;
-    const ke = ammoKE(spawn);
+    const ke = ammoKE(spawn), yieldJ = itemYield(this.level, shot.ammo);
     this.live = {
-      shot, spawnStep: step, body, ke, mass: massOf(spawn.body), ammo: shot.ammo, settle: { quietSince: null }, contact: false, prevVel: null, tier: 0, slowMo: false,
+      shot, spawnStep: step, body, ke, yield: yieldJ, mass: massOf(spawn.body), ammo: shot.ammo, settle: { quietSince: null }, contact: false, prevVel: null, tier: 0, slowMo: false,
       crownsBefore: this.crownDown.reduce((a, x) => a + x, 0), heritageBefore: this.heritageBroken.reduce((a, x) => a + x, 0),
     };
     this.inputs.push({ step, shot });
@@ -118,7 +123,12 @@ export class Session {
     return { spawn, feedback: [{ t: 'fired', step, ammo: shot.ammo, body, ke }] };
   }
 
-  observe(o: Observation): Feedback[] {
+  /**
+   * The rules' view of one observed state. `hold`: a fired weapon is still to go off
+   * (Driver: a live fuse or a blast due later), so the shot does not settle before
+   * SETTLE_CAP however quiet the structure is.
+   */
+  observe(o: Observation, hold = false): Feedback[] {
     const L = this.live;
     if (!L || this.phase !== 'running') return [];
     const c = this.level, m = c.meta, w = o.watched, out: Feedback[] = [], step = o.step;
@@ -152,7 +162,7 @@ export class Session {
       }
     }
 
-    this.liveLeverage = leverage(o.basePe_mJ - o.red.pe_mJ, L.ke);
+    this.liveLeverage = leverage(o.basePe_mJ - o.red.pe_mJ, L.ke + L.yield);
     this.liveCollapse = this.collapse(o.red.pe_mJ);
     const t = tier(this.liveLeverage);
     if (t > L.tier) { L.tier = t; out.push({ t: 'tier', step, leverage: this.liveLeverage, tier: t }); }
@@ -161,13 +171,13 @@ export class Session {
 
     const s = settleUpdate(L.settle, o.red, L.spawnStep);
     L.settle = s.state;
-    if (!s.settled) return out;
+    if (!s.settled || (hold && o.step - L.spawnStep < SETTLE_CAP)) return out;
 
     // Settle: crowns are judged on where they lie now.
     for (let k = 0; k < nc; k++) this.crownDown[k] = crownDown(c, pos(k)) ? 1 : 0;
     const crownsTotal = this.crownDown.reduce((a, x) => a + x, 0);
     const outcome: ShotOutcome = {
-      ke: L.ke, dPE_mJ: o.basePe_mJ - o.red.pe_mJ, leverage: this.liveLeverage,
+      ke: L.ke, yield: L.yield, dPE_mJ: o.basePe_mJ - o.red.pe_mJ, leverage: this.liveLeverage,
       crownsDown: Math.max(0, crownsTotal - L.crownsBefore), crownsTotal,
       heritageNew: this.heritageBroken.reduce((a, x) => a + x, 0) - L.heritageBefore,
       displaced: o.red.displaced, outOfLot: o.red.outOfLot, pe_mJ: o.red.pe_mJ, spawnStep: L.spawnStep, settleStep: step,
@@ -208,7 +218,7 @@ export class Session {
   outcomeFacts(): OutcomeFacts {
     const c = this.level, m = c.meta, last = this.lastSettle;
     const pe = last ? last.red.pe_mJ : this.startPe_mJ;
-    const fired = this.outcomes.reduce((a, o) => a + o.ke, 0);
+    const fired = this.outcomes.reduce((a, o) => a + o.ke + o.yield, 0);
     const start = homeSkyline(c, this.home);
     return {
       met: this.objectiveDone,

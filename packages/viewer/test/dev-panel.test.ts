@@ -5,7 +5,7 @@ import { L1, type Shot, type ShotOutcome, writeShots } from '@tb/keystone';
 import { type DevView, devHtml } from '../src/index.ts';
 
 const par = L1.solutions!.par as Shot[];
-const outcome: ShotOutcome = { ke: 1, dPE_mJ: 2500, leverage: 0.5, crownsDown: 3, crownsTotal: 3, heritageNew: 1, displaced: 0, outOfLot: 0, pe_mJ: 0, spawnStep: 10, settleStep: 250 };
+const outcome: ShotOutcome = { ke: 1, yield: 0, dPE_mJ: 2500, leverage: 0.5, crownsDown: 3, crownsTotal: 3, heritageNew: 1, displaced: 0, outOfLot: 0, pe_mJ: 0, spawnStep: 10, settleStep: 250 };
 const base: DevView = { level: L1, line: { from: 'par', shots: par }, attempt: [], outcomes: [], score: null, running: false, busy: false, status: '', warn: false };
 const enabled = (html: string) => [...html.matchAll(/<button type="button" name="(\w+)"( disabled)?/g)].filter((m) => !m[2]).map((m) => m[1]);
 
