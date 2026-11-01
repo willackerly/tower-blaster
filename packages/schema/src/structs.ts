@@ -333,6 +333,10 @@ export const SleepBody = defineStruct(
     ['anchorPos', 'vec3f', 'position when the quiet window began'],
     ['quiet', 'u32', 'steps the body has been quiet in a row (saturates)'],
     ['anchorRot', 'vec4f', 'rotation when the quiet window began'],
+    ['wakes', 'u32', 'times it has been woken (saturates): it needs steps << min(wakes, 4) quiet steps to sleep again'],
+    ['slept', 'u32', '1 if it was asleep at the end of last step (a blast may have woken it since)'],
+    ['pad0', 'u32'],
+    ['pad1', 'u32'],
   ],
   'Per-body sleep bookkeeping (physics-gpu sleep.ts; GpuEngineOptions.sleep).',
 );
@@ -344,6 +348,10 @@ export const SleepParams = defineStruct(
     ['steps', 'u32', 'quiet steps a body needs to sleep (T)'],
     ['speed', 'f32', 'v_sleep: |v| + |w| r must stay below it, units/s'],
     ['drift', 'f32', 'the window displacement a body may have, as a fraction of its bounding radius'],
+    ['wakeSpeed', 'f32', 'an awake body touching a sleeper wakes it when |v| + |w| r exceeds this, units/s'],
+    ['wakeDepth', 'f32', 'a contact between an awake body and a sleeper wakes it when it is this deep, units'],
+    ['pad0', 'u32'],
+    ['pad1', 'u32'],
   ],
   'Uniforms of the sleep pass.',
 );

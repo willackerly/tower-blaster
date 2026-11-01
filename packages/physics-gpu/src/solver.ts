@@ -74,6 +74,9 @@ const NONE = ${NONE}u;
 const LOADED_GAP = 2u;
 // AvbdParams.gapSlop, m (AvbdSolver's gapSlop). 0, the default, is off: every use is behind gapSlop > 0.0.
 override gapSlop: f32 = 0.0;
+// Per-body sleep (GpuEngineOptions.sleep; sleep.ts), fixed per AvbdSolver: off, the default, no constant is passed, and
+// every use is behind sleepOn, so the pipelines are built as without it.
+override sleepOn: bool = false;
 
 fn qrot(q: vec4f, v: vec3f) -> vec3f {
   let t = 2.0 * cross(q.xyz, v);
@@ -151,6 +154,17 @@ fn prepare(@builtin(global_invocation_id) id: vec3u) {
   spheres[i] = vec4f(b.pos, r + s);
 }`;
 
+// Sleep (sleepOn): a sleeper is an anchor. Its pose is fixed, its velocity 0; initBodies gives it no target and
+// no guess (dp = phi = 0), the colouring gives it no colour, so the primal never moves it, and velocities and
+// finalize leave it alone. Contacts between two sleepers (or a sleeper and the ground) are frozen: setup copies
+// last step's state forward unchanged and the dual leaves it, so a body woken later starts from the loads it slept
+// with. Needs a binding named bodies.
+const SLEEPING = /* wgsl */ `
+fn sleeping(f: u32) -> bool { return sleepOn && (f & 1u) == 0u && ((f >> 8u) & 0xffu) != ${TIER.free}u; }
+// A contact between a and b (a NONE: the ground) whose ends are all asleep.
+fn frozen(a: u32, b: u32) -> bool { return sleepOn && sleeping(bodies[b].flags) && (a == NONE || sleeping(bodies[a].flags)); }
+`;
+
 // Before the narrowphase: each pair's slot and SAT axis last step.
 const MATCH = /* wgsl */ `
 ${COMMON}
@@ -209,6 +223,7 @@ ${wgslStruct(Manifold)}
 @group(0) @binding(7) var<storage, read> solver: array<SolverBody>;
 @group(0) @binding(8) var<uniform> p: SolverParams;
 
+${SLEEPING}
 fn point(m: Manifold, q: u32) -> vec4f {
   switch q {
     case 0u: { return m.p0; }
@@ -350,6 +365,9 @@ fn setup(m: Manifold, a: u32, b: u32, mu: f32, dst: u32, old: u32, hasOld: bool)
   }
 }
 
+// A frozen contact (sleep): last step's points as they were.
+fn freeze(dst: u32, old: u32) { for (var q = 0u; q < 4u; q++) { contacts[dst + q] = contacts[old + q]; } }
+
 @compute @workgroup_size(${WG})
 fn pairSetup(@builtin(global_invocation_id) id: vec3u) {
   let k = id.x;
@@ -358,6 +376,7 @@ fn pairSetup(@builtin(global_invocation_id) id: vec3u) {
   let a = m.a;
   let b = m.b;
   let ps = prev[k].x;
+  if (ps != NONE && frozen(a, b)) { freeze(pairPoint(p.cur, k, 0u), pairPoint(1u - p.cur, ps, 0u)); return; }
   let mu = combineFriction(props[a].friction, props[b].friction);
   setup(m, a, b, mu, pairPoint(p.cur, k, 0u), pairPoint(1u - p.cur, select(0u, ps, ps != NONE), 0u), ps != NONE);
 }
@@ -368,6 +387,7 @@ fn groundSetup(@builtin(global_invocation_id) id: vec3u) {
   if (i >= p.n) { return; }
   var m = groundManifolds[i];
   if (p.hasGround == 0u) { m.count = 0u; }
+  if (i < p.prevN && frozen(NONE, i)) { freeze(groundPoint(p.cur, i, 0u), groundPoint(1u - p.cur, i, 0u)); return; }
   let mu = combineFriction(props[i].friction, p.groundFriction);
   setup(m, NONE, i, mu, groundPoint(p.cur, i, 0u), groundPoint(1u - p.cur, i, 0u), i < p.prevN);
 }`;
@@ -378,7 +398,7 @@ ${COMMON}
 @group(0) @binding(0) var<storage, read_write> bodies: array<Body>;
 @group(0) @binding(1) var<storage, read_write> solver: array<SolverBody>;
 @group(0) @binding(2) var<uniform> p: SolverParams;
-
+${SLEEPING}
 @compute @workgroup_size(${WG})
 fn initBodies(@builtin(global_invocation_id) id: vec3u) {
   let i = id.x;
@@ -388,7 +408,8 @@ fn initBodies(@builtin(global_invocation_id) id: vec3u) {
   if (ws > p.maxAngularSpeed) { b.angVel = b.angVel * (p.maxAngularSpeed / ws); bodies[i].angVel = b.angVel; }
   var s = solver[i];
   // A removed body (tier free): no target and no guess, so with no contacts it stays exactly where it is, at rest.
-  if (((b.flags >> 8u) & 0xffu) == ${TIER.free}u) {
+  // A sleeper the same (an anchor; the primal never visits it).
+  if (((b.flags >> 8u) & 0xffu) == ${TIER.free}u || sleeping(b.flags)) {
     s.x0 = b.pos; s.q0 = b.rot; s.tp = vec3f(0.0); s.tphi = vec3f(0.0); s.dp = vec3f(0.0); s.phi = vec3f(0.0);
     solver[i] = s;
     return;
@@ -725,9 +746,11 @@ ${EVAL}
 @group(0) @binding(3) var<storage, read> stepInfo: array<u32, 16>;
 @group(0) @binding(4) var<uniform> p: SolverParams;
 
+${SLEEPING}
 fn dualPoint(idx: u32) {
   var ct = contacts[idx];
   if (ct.used == 0u) { return; }
+  if (frozen(ct.a, ct.b)) { return; }
   let B = solver[ct.b];
   var dpA = vec3f(0.0); var phiA = vec3f(0.0);
   if (ct.a != NONE) { let A = solver[ct.a]; dpA = A.dp; phiA = A.phi; }
@@ -767,6 +790,7 @@ fn dualGround(@builtin(global_invocation_id) id: vec3u) {
 fn velocities(@builtin(global_invocation_id) id: vec3u) {
   let i = id.x;
   if (i >= p.n) { return; }
+  if (sleeping(bodies[i].flags)) { return; }
   let s = solver[i];
   solver[i].prevVel = bodies[i].linVel;
   bodies[i].linVel = s.dp / p.dt;
@@ -777,6 +801,7 @@ fn velocities(@builtin(global_invocation_id) id: vec3u) {
 fn finalize(@builtin(global_invocation_id) id: vec3u) {
   let i = id.x;
   if (i >= p.n) { return; }
+  if (sleeping(bodies[i].flags)) { return; }
   let s = solver[i];
   bodies[i].pos = s.x0 + s.dp;
   bodies[i].rot = applyRotation(s.q0, s.phi);
@@ -1207,6 +1232,12 @@ fn setup(m: Manifold, a: u32, b: u32, mu: f32, dst: u32, old: u32, hasOld: bool)
 }
 `;
 
+// A frozen contact (sleep) on records: last step's record as it was. The entry's freeze() calls name points
+// (pairPoint, groundPoint), which recordWgsl() swaps for records as it does the setup() calls.
+const RECORD_FREEZE = /* wgsl */ `
+fn freeze(dst: u32, old: u32) { records[dst] = records[old]; }
+`;
+
 const DUAL_HEAD = DUAL.slice(0, DUAL.indexOf('fn dualPoint('));
 const DUAL_BODIES = DUAL.slice(DUAL.indexOf('// Velocities from the last main iteration (BDF1).'));
 const RECORD_DUAL_ENTRY = /* wgsl */ `
@@ -1232,6 +1263,7 @@ const EXACT_DUAL = /* wgsl */ `fn dualRecord(idx: u32) {
   if (count == 0u) { return; }
   let ia = records[idx].a;
   let ib = records[idx].b;
+  if (frozen(ia, ib)) { return; }
   let B = solver[ib];
   var dpA = vec3f(0.0); var phiA = vec3f(0.0);
   if (ia != NONE) { let A = solver[ia]; dpA = A.dp; phiA = A.phi; }
@@ -1275,6 +1307,7 @@ const CENTRE_DUAL = /* wgsl */ `fn dualRecord(idx: u32) {
   if (count == 0u) { return; }
   let ia = records[idx].a;
   let ib = records[idx].b;
+  if (frozen(ia, ib)) { return; }
   let B = solver[ib];
   var dpA = vec3f(0.0); var phiA = vec3f(0.0);
   if (ia != NONE) { let A = solver[ia]; dpA = A.dp; phiA = A.phi; }
@@ -1323,11 +1356,12 @@ export function recordWgsl(records: RecordMode, hessian: HessianForm = 'register
   const struct = records === 1 ? SolverRecord : CentreRecord;
   const decl = (code: string, access: string) =>
     swap(code, `var<storage, ${access}> contacts: array<SolverContact>;`, `var<storage, ${access}> records: array<${struct.name}>;`) + wgslStruct(struct) + RECORD_COMMON + (records === 2 ? CENTRE_EVAL : '');
-  const entry = swap(swap(swap(swap(SETUP_ENTRY,
-    'pairPoint(p.cur, k, 0u)', 'pairRecord(p.cur, k)'), 'pairPoint(1u - p.cur, select(0u, ps, ps != NONE), 0u)', 'pairRecord(1u - p.cur, select(0u, ps, ps != NONE))'),
-    'groundPoint(p.cur, i, 0u)', 'groundRecord(p.cur, i)'), 'groundPoint(1u - p.cur, i, 0u)', 'groundRecord(1u - p.cur, i)');
+  const entry = swap(swap(swap(swap(swap(SETUP_ENTRY,
+    'pairPoint(p.cur, k, 0u)', 'pairRecord(p.cur, k)', 2), 'pairPoint(1u - p.cur, select(0u, ps, ps != NONE), 0u)', 'pairRecord(1u - p.cur, select(0u, ps, ps != NONE))'),
+    'pairPoint(1u - p.cur, ps, 0u)', 'pairRecord(1u - p.cur, ps)'),
+    'groundPoint(p.cur, i, 0u)', 'groundRecord(p.cur, i)', 2), 'groundPoint(1u - p.cur, i, 0u)', 'groundRecord(1u - p.cur, i)', 2);
   return {
-    setup: decl(SETUP_HEAD, 'read_write') + (records === 1 ? EXACT_SETUP : CENTRE_SETUP) + entry,
+    setup: decl(SETUP_HEAD, 'read_write') + (records === 1 ? EXACT_SETUP : CENTRE_SETUP) + RECORD_FREEZE + entry,
     solve: decl(SOLVE_HEAD, 'read') + JROW + registerSolveBody(records) + SOLVE_TAIL,
     dual: decl(DUAL_HEAD, 'read_write') + (records === 1 ? EXACT_DUAL : CENTRE_DUAL) + RECORD_DUAL_ENTRY + DUAL_BODIES,
   };
@@ -1483,7 +1517,7 @@ export class AvbdSolver {
    * view of either (restitutionKernels), so the two bounce the same floats;
    * it throws with records 2 (centre friction), which it does not read yet.
    */
-  constructor(private readonly device: GPUDevice, readonly capacity: number, readonly maxPairs: number, private readonly b: SolverBuffers, private readonly dispatch: SolverDispatch = DEFAULT_DISPATCH, readonly records: RecordMode = 0, readonly gapSlop = 0, readonly restitution: RestitutionConfig | null = null) {
+  constructor(private readonly device: GPUDevice, readonly capacity: number, readonly maxPairs: number, private readonly b: SolverBuffers, private readonly dispatch: SolverDispatch = DEFAULT_DISPATCH, readonly records: RecordMode = 0, readonly gapSlop = 0, readonly restitution: RestitutionConfig | null = null, readonly sleep = false) {
     if (!(Number.isFinite(gapSlop) && gapSlop >= 0)) throw new Error(`AvbdSolver: gapSlop must be a finite number >= 0, got ${gapSlop}`);
     if (restitution) {
       const { threshold: t, rounds: r, groundRestitution: g, combine: c } = restitution;
@@ -1492,6 +1526,8 @@ export class AvbdSolver {
       if (!(g >= 0 && g <= 1)) throw new Error(`AvbdSolver: restitution.groundRestitution must be in [0, 1], got ${g}`);
       if (!COMBINE_RULES.includes(c)) throw new Error(`AvbdSolver: restitution.combine must be one of ${COMBINE_RULES.join(', ')}, got ${c}`);
       if (records === 2) throw new Error('AvbdSolver: restitution is not implemented with records 2 yet (the pass reads points or exact records)');
+      // The pass moves bodies after finalize; it does not know sleepers are anchors yet.
+      if (sleep) throw new Error('AvbdSolver: restitution is not implemented with sleep yet');
     }
     if (!(Number.isInteger(dispatch.colorTail) && dispatch.colorTail >= 0 && dispatch.colorTail < MAX_COLORS)) throw new Error(`AvbdSolver: colorTail must be an integer from 0 to ${MAX_COLORS - 1}, got ${dispatch.colorTail}`);
     if (!(Number.isInteger(dispatch.tailThreads) && dispatch.tailThreads >= 1 && dispatch.tailThreads <= MAX_TAIL)) throw new Error(`AvbdSolver: tailThreads must be an integer from 1 to ${MAX_TAIL}, got ${dispatch.tailThreads}`);
@@ -1538,20 +1574,27 @@ export class AvbdSolver {
     // so the pipelines are built exactly as without it. Past f32's range it is f32's largest: no gap is that large.
     const gs = gapSlop > 0 ? { gapSlop: Math.min(gapSlop, F32_MAX) } : null;
     const slop = (...eps: string[]): Record<string, Record<string, number>> => (gs ? Object.fromEntries(eps.map((ep) => [ep, gs])) : {});
+    // Sleep's pipeline constant (sleepOn), likewise passed only while it is on, to the kernels that read it.
+    const asleep = (...eps: string[]): Record<string, Record<string, number>> => (sleep ? Object.fromEntries(eps.map((ep) => [ep, { sleepOn: 1 }])) : {});
+    const both = (a: Record<string, Record<string, number>>, b: Record<string, Record<string, number>>) => {
+      const out = { ...a };
+      for (const [ep, c] of Object.entries(b)) out[ep] = { ...out[ep], ...c };
+      return out;
+    };
     mk('avbd prepare', PREP, [['', 'prepare']], ['r', 'r', 'rw', 'rw', 'u'], [['prep', [B.bodies, B.props, B.spheres, B.sweep, this.uniform]]]);
     mk('avbd match', MATCH, [['', 'matchPairs']], ['r', 'r', 'r', 'r', 'r', 'r', 'rw', 'u'],
       [['match', [B.pairs, B.total, this.meta, this.pairHist, this.offHist, B.manifolds, B.prev, this.uniform]]]);
     mk('avbd setup', code.setup, [['', 'pairSetup', 'groundSetup']], ['r', 'r', 'r', 'r', 'r', 'r', 'rw', 'r', 'u'],
       [['setup', [B.manifolds, B.groundManifolds, B.bodies, B.props, this.meta, B.prev, this.contacts, this.solver, this.uniform]]],
-      slop('pairSetup', 'groundSetup'));
-    mk('avbd init', INIT, [['', 'initBodies']], ['rw', 'rw', 'u'], [['init', [B.bodies, this.solver, this.uniform]]]);
+      both(slop('pairSetup', 'groundSetup'), asleep('pairSetup', 'groundSetup')));
+    mk('avbd init', INIT, [['', 'initBodies']], ['rw', 'rw', 'u'], [['init', [B.bodies, this.solver, this.uniform]]], asleep('initBodies'));
     // The solve kernel: 8 storage buffers.
     mk('avbd solve', code.solve, [['', 'primal', 'primalTail']], ['r', 'rw', 'r', 'r', 'r', 'r', 'r', 'r', 'u', 'ud'],
       [['solve', [B.props, this.solver, this.contacts, B.order, B.colorStart, B.rowStart, B.rowLength, B.adjSlot, this.uniform, this.colorUniform]]],
       { ...slop('primal'), primalTail: { tailThreads: dispatch.tailThreads, ...gs } });
     mk('avbd dual', code.dual, [['', 'dualPairs', 'dualGround', 'velocities', 'finalize']], ['rw', 'rw', 'rw', 'r', 'u'],
       [['dual', [B.bodies, this.solver, this.contacts, this.meta, this.uniform]]],
-      slop('dualPairs', 'dualGround'));
+      both(slop('dualPairs', 'dualGround'), asleep('dualPairs', 'dualGround', 'velocities', 'finalize')));
     if (restitution) {
       const slots = buf((maxPairs + capacity) * RestSlot.size, 'avbd restitution slots');
       const info = device.createBuffer({ size: REST_INFO_BYTES, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.INDIRECT | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST, label: 'avbd restitution info' });

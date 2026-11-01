@@ -67,7 +67,10 @@ describe('GPU AVBD engine: manifold records: the option and its layouts, records
       for (const [mode, struct, hot, unpadded] of [[1, SolverRecord, 256, 352], [2, CentreRecord, 232, 320]] as const) {
         const w = recordWgsl(mode);
         for (const k of ['setup', 'solve', 'dual'] as const) {
-          const src = code(w[k]);
+          // Sleep's frozen contact (solver.ts RECORD_FREEZE) copies a whole record in setup: the one access without a field.
+          const freeze = 'records[dst] = records[old];';
+          expect(code(w[k]).split(freeze).length - 1, `${struct.name} ${k}`).toBe(k === 'setup' ? 1 : 0);
+          const src = code(w[k]).replace(freeze, '');
           const used = [...src.matchAll(/records\[(\w+)\]\.(\w+)/g)].map((m) => m[2]!);
           // Every access has that form, so none is missed.
           expect(used.length, `${struct.name} ${k}`).toBe(src.split('records[').length - 1);

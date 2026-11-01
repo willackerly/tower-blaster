@@ -213,7 +213,7 @@ describe('engine registry and SlowedEngine', () => {
       ['colorTail', '64', 'an integer from 0 to 63'], ['colorRounds', '3', 'an even integer >= 2'], ['indirectColors', '1', 'a boolean'],
       ['tailThreads', '0', 'an integer from 1 to 256'], ['tailThreads', '257', 'an integer from 1 to 256'], ['boxBroadphase', '1', 'a boolean'],
       ['sleep', '1', 'a boolean'], ['sleepSpeed', '-1', 'a finite number >= 0'], ['sleepSteps', '0', 'an integer >= 1'], ['sleepSteps', '2.5', 'an integer >= 1'],
-      ['sleepDrift', '-0.1', 'a finite number >= 0'],
+      ['sleepDrift', '-0.1', 'a finite number >= 0'], ['wakeSpeed', '-1', 'a finite number >= 0'], ['wakeDepth', '-0.01', 'a finite number >= 0'],
     ] as const) {
       expect(() => makeEngine(`avbd-gpu:${k}=${bad}`)).toThrow(`GpuEngineOptions.${k} must be ${what}`);
     }
@@ -228,7 +228,9 @@ describe('engine registry and SlowedEngine', () => {
     // Per-body sleep (E2) and its thresholds: opt-in options, in the variant only when given.
     expect(makeEngine('avbd-gpu:sleep=true,sleepSpeed=0.1,sleepSteps=20,sleepDrift=0.05').info.variant).toMatchObject({ sleep: true, sleepSpeed: 0.1, sleepSteps: 20, sleepDrift: 0.05 });
     expect(Object.keys(makeEngine('avbd-gpu').info.variant).filter((k) => k.startsWith('sleep'))).toEqual([]);
-    expect(gpuEngineArgs(parseSpec('avbd-gpu:sleep=true,sleepSteps=40,iterations=8').options)).toEqual({ params: { iterations: 8 }, opts: { sleep: true, sleepSteps: 40 } });
+    expect(gpuEngineArgs(parseSpec('avbd-gpu:sleep=true,sleepSteps=40,iterations=8,wakeSpeed=0.2,wakeDepth=0.02').options)).toEqual({ params: { iterations: 8 }, opts: { sleep: true, sleepSteps: 40, wakeSpeed: 0.2, wakeDepth: 0.02 } });
+    // Restitution does not know sleepers yet.
+    expect(() => makeEngine('avbd-gpu:sleep=true,restitution=true')).toThrow('GpuEngineOptions.sleep is not implemented with AvbdParams.restitution yet');
     // gpuEngineArgs splits a spec into AvbdParams and GpuEngineOptions.
     expect(gpuEngineArgs(parseSpec('avbd-gpu:records=2,iterations=20,colorTail=4,boxBroadphase=false').options))
       .toEqual({ params: { records: 2, iterations: 20 }, opts: { colorTail: 4, boxBroadphase: false } });
