@@ -17,6 +17,8 @@
 //     grid barrier across workgroups (bounded spins), and the workgroup-tile
 //     pattern (K colour phases x M iterations in one dispatch) against the
 //     same work as K x M dispatches.
+// P5, P6  the sleep probes (probe-sleep.ts): a step's time stage by stage on
+//     a settled scene, and island labelling on its contact graph.
 //
 // Times are GPU timestamps around one compute pass per sample (each its own
 // submit), median with p10/p90. Numbers from software adapters (SwiftShader)
@@ -25,14 +27,15 @@ import { GpuProfiler, readBuffer, timeSubmit } from '@tb/gpu';
 import { buildScenario, type Params } from '@tb/scenarios';
 import { MAX_COLORS } from './coloring.ts';
 import type { AvbdParams } from '@tb/physics-ref';
-import { GpuAvbdEngine, type GpuEngineOptions } from './engine.ts';
+import { GpuAvbdEngine, type GpuEngineOptions, STEP_STAGES } from './engine.ts';
+import { contactEdges, type P5Result, type P6Result, runP5, runP6 } from './probe-sleep.ts';
 import { DEFAULT_DISPATCH, type HessianForm } from './solver.ts';
 import {
   barrierWgsl, BODY_PARAMS, exchangeRef, GRID_BARRIER_WGSL, KERNEL_PARAMS_BYTES, kernelParams, P3_EMPTY_WGSL, P3_VARIANT_INFO, P3_VARIANTS, p3Records,
   p3Reference, p3Wgsl, type P3Variant, type PoseOrder, posesFor, PROBE_TILE, probePoses, tileRecords, tileRef, tileWgsl,
 } from './probe-kernels.ts';
 
-export const PROBE_SECTIONS = ['p1', 'p2', 'p3', 'p4a', 'p4b', 'p4c', 'p4d'] as const;
+export const PROBE_SECTIONS = ['p1', 'p2', 'p3', 'p4a', 'p4b', 'p4c', 'p4d', 'p5', 'p6'] as const;
 export type ProbeSection = (typeof PROBE_SECTIONS)[number];
 
 export interface ProbeOptions {
@@ -83,6 +86,9 @@ export interface ProbeOptions {
   tileK: number[];
   tileIters: number[];
   tilePoints: number;
+  /** P5 (probe-sleep.ts): steps to settle the scenario before timing, then steps timed stage by stage. P6 runs on the last one's contact graph. */
+  p5Settle: number;
+  p5Steps: number;
 }
 
 export const DEFAULT_PROBE: ProbeOptions = {
@@ -118,6 +124,8 @@ export const DEFAULT_PROBE: ProbeOptions = {
   tileK: [4, 8],
   tileIters: [1, 4, 8],
   tilePoints: 16,
+  p5Settle: 300,
+  p5Steps: 30,
 };
 
 /** --quick: every section, smaller (a couple of minutes on a real GPU). */
@@ -126,6 +134,7 @@ export const QUICK_PROBE: Partial<ProbeOptions> = {
   p3Sizes: [32, 128], p3Points: [8, 56], p3Threads: [64, 2048], p3Inner: 2, p3Reps: 5,
   barrierRounds: 200, gridGroups: [1, 2, 8, 32, 128], gridRounds: 200,
   tileGroups: [8, 128], tileThreads: [64], tileK: [8], tileIters: [1, 8],
+  p5Settle: 60, p5Steps: 10,
 };
 
 export interface Stat { median: number; p10: number; p90: number; samples: number }
@@ -220,6 +229,8 @@ export interface ProbeResult {
   p2?: P2Result;
   p3?: P3Result;
   p4: Partial<P4Result>;
+  p5?: P5Result;
+  p6?: P6Result;
   errors: Array<{ section: string; message: string }>;
   wallSeconds: Record<string, number>;
 }
@@ -468,14 +479,18 @@ async function colourStructure(e: GpuAvbdEngine): Promise<Omit<Checkpoint, 'step
   };
 }
 
-async function runP2(device: GPUDevice, timer: Timer, o: ProbeOptions): Promise<P2Result> {
-  const built = buildScenario(o.scenario, o.scenario === 'S4' ? { N: o.N, ...o.params } : o.params, o.seed);
-  const scene = { ...built, gravity: built.gravity.map((g) => g * o.gravityScale) as typeof built.gravity };
-  // --engine's AvbdParams and GpuEngineOptions, with --hessian, --pairs-per-body and --box-broadphase (probe-engine.ts rejects one given both ways).
-  const engineOpts: Omit<GpuEngineOptions, 'device'> = {
+/** --engine's AvbdParams and GpuEngineOptions, with --hessian, --pairs-per-body and --box-broadphase (probe-engine.ts rejects one given both ways). */
+function engineOptions(o: ProbeOptions): Omit<GpuEngineOptions, 'device'> {
+  return {
     ...o.engine?.opts, hessian: o.engine?.opts.hessian ?? o.hessian,
     ...(o.pairsPerBody ? { pairsPerBody: o.pairsPerBody } : {}), ...(o.boxBroadphase ? { boxBroadphase: true } : {}),
   };
+}
+
+async function runP2(device: GPUDevice, timer: Timer, o: ProbeOptions): Promise<P2Result> {
+  const built = buildScenario(o.scenario, o.scenario === 'S4' ? { N: o.N, ...o.params } : o.params, o.seed);
+  const scene = { ...built, gravity: built.gravity.map((g) => g * o.gravityScale) as typeof built.gravity };
+  const engineOpts = engineOptions(o);
   const checkpoints: Checkpoint[] = [];
   let iterations = 0, hessian = o.hessian, variant: Record<string, number | boolean | string> = {};
   for (const step of o.checkpoints) {
@@ -872,15 +887,29 @@ export async function runProbe(opts: Partial<ProbeOptions> = {}): Promise<ProbeR
   if (has('p4d')) await section('p4d', () => runTile(device, timer, o, p4));
   // Last: the only section that could, if a bound were missing, keep the GPU busy.
   if (has('p4c')) await section('p4c', () => runGrid(device, timer, o, p4));
+  let p5: P5Result | undefined, p6: P6Result | undefined;
+  if (has('p5') || has('p6')) {
+    // P6 labels the contact graph P5 leaves (P5's settle runs either way; only P5's timings are dropped without p5).
+    const r = await section('p5', () => runP5(device, timestamps, o, engineOptions(o)));
+    if (r) {
+      if (has('p5')) p5 = r.result;
+      if (has('p6')) {
+        const engine = r.engine;
+        p6 = await section('p6', async () => runP6(device, r.result.N, await contactEdges(engine), (record) => timer.stat(record, o.reps, o.warmup)));
+      }
+      r.engine.dispose();
+    }
+  }
   timer.destroy();
   wallSeconds.total = (performance.now() - t0) / 1000;
   device.destroy();
-  return { software, timestamps, valid: !software && timestamps, options: o, p1, ...(p2 ? { p2 } : {}), ...(p3 ? { p3 } : {}), p4, errors, wallSeconds };
+  return { software, timestamps, valid: !software && timestamps, options: o, p1, ...(p2 ? { p2 } : {}), ...(p3 ? { p3 } : {}), p4, ...(p5 ? { p5 } : {}), ...(p6 ? { p6 } : {}), errors, wallSeconds };
 }
 
 // --- Markdown --------------------------------------------------------------
 
 const f = (x: number | null | undefined, d = 3) => (x === null || x === undefined || !Number.isFinite(x) ? '–' : Math.abs(x) >= 100 ? x.toFixed(0) : Math.abs(x) >= 10 ? x.toFixed(1) : x.toFixed(d));
+const ms = (s: Stat | null | undefined) => (s ? `${f(s.median)} (${f(s.p10)}–${f(s.p90)})` : '–');
 const us = (s: Stat | null | undefined) => (s ? `${f(s.median * 1000)} (${f(s.p10 * 1000)}–${f(s.p90 * 1000)})` : '–');
 
 export function probeMarkdown(r: ProbeResult, header: string): string {
@@ -968,6 +997,21 @@ export function probeMarkdown(r: ProbeResult, header: string): string {
     for (const t of q4.tile ?? []) L.push(`| ${t.threads} | ${t.K} | ${t.G} | ${t.M} | ${t.points} | ${us(t.tile)} | ${us(t.split)} | ${f(t.ratio)} | ${f(t.usPerPhaseTile)} | ${f(t.usPerPhaseSplit)} | ${t.tileErr === null ? '' : t.tileErr.toExponential(1)} | ${t.splitDiff.toExponential(1)} |`);
     for (const s of q4.tileSkipped ?? []) L.push(`- skipped: ${s}`);
     L.push('', 'Each workgroup owns K·threads bodies (poses in shared memory in the tile kernel, in global memory in the split one); each body walks its points with the (d) math. Split / tile above 1 is what the chunked solver saves.');
+  }
+  if (r.p5) {
+    const p = r.p5;
+    L.push('', `## P5 Stages of a step: ${p.scenario} ${JSON.stringify(p.params)} N=${p.N}, ${p.iterations} iterations, after ${p.settle} steps; ${p.pairs} pair slots, ${p.colors} colours (${p.uncolored} uncoloured)`, '');
+    if (Object.keys(p.variant).length) L.push(`Engine variant: ${JSON.stringify(p.variant)}`, '');
+    if (p.timestamps) {
+      L.push('| Stage | ms | Share of step |', '|---|---|---|');
+      for (const s of STEP_STAGES) L.push(`| ${s} | ${ms(p.stages[s])} | ${f((100 * p.stages[s].median) / p.step.median, 1)}% |`);
+      L.push(`| step (first marker to last) | ${ms(p.step)} | |`, '', 'ms, median (p10–p90) over the timed steps. Each stage is the gap between beginning-of-pass timestamps of 1-thread marker passes that read what the stage wrote; the step includes the six markers.');
+    } else L.push(`No GPU timestamps: step wall time (submit to done) ${ms(p.step)} ms; no stage split.`);
+  }
+  if (r.p6) {
+    const p = r.p6;
+    L.push('', `## P6 Island labelling on that step's contact graph: ${p.N} bodies, ${p.edges} contact edges, ${p.islands} islands (largest ${p.largest})`, '');
+    L.push(`Init, hook (union-find by compare-exchange), compress, per-island minimum, broadcast: ${us(p.t)} µs per step. Labels match a CPU union-find: ${p.correct ? 'yes' : '**no**'}.`);
   }
   L.push('', `Wall time: ${Object.entries(r.wallSeconds).map(([k, v]) => `${k} ${v.toFixed(1)} s`).join(', ')}.`);
   return L.join('\n');
