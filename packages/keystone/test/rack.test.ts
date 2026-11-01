@@ -68,8 +68,11 @@ describe('what an item fires', () => {
     const want = { beachball: 0.002, basketball: 0.005, bowlingball: 0.06, cannonball: 0.09, wreckingball: 25, boulder: 3500 };
     for (const [p, w] of Object.entries(want)) expect(Math.abs(ratio(p) / w - 1), p).toBeLessThan(0.07);
   });
-  it('a w- item flies in the grenade shell whatever its weapon; p- and w- shots spawn like the marble does', () => {
-    expect(itemSpec('w-grenade', 0.5)).toEqual(itemSpec('w-other', 0.5));
+  it('a grenade item flies in the grenade shell whatever its key; p- and w- shots spawn like the marble does', () => {
+    const other = compileLevel({ ...L1, rack: ['w-other'], weapons: { other: { ...KEYSTONE_GRENADE, fuse: 'timer' } } });
+    expect(itemSpec('w-other', other.frame)).toEqual(itemSpec('w-grenade', 0.5));
+    // Any other weapon's shell is the level's: a bare unit only knows the default grenade's.
+    expect(() => itemSpec('w-other', 0.5)).toThrow(/its shell comes from the level/);
     expect(itemSpec('w-grenade', 0.5).size).toEqual({ radius: (GRENADE_SHELL.size as { radius: number }).radius * 0.5 });
     const f = compileLevel(L1).frame;
     fc.assert(fc.property(fc.constantFrom<RackItem>(...PRESET_ITEMS, 'w-grenade'), fc.integer({ min: 0, max: 719 }), fc.integer({ min: 0, max: 40 }), fc.integer({ min: -300, max: 300 }), fc.integer({ min: -400, max: 800 }), fc.integer({ min: 0, max: 100 }), (ammo, az, y, yaw, pitch, power) => {

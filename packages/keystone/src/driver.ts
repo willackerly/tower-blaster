@@ -1,7 +1,7 @@
 // Runs a Session against any PhysicsEngine: step, observe, feed the rules,
 // push the spawns they produce. The interactive game and the headless tools
 // share this loop, so a recorded session replays through the same code.
-import { type BodyDesc, type InputEvent, type PhysicsEngine, type Snapshot, spawnedBodies } from '@tb/engine-api';
+import { type BodyDesc, type InputEvent, type PhysicsEngine, type Snapshot, type SpawnEvent, spawnedBodies } from '@tb/engine-api';
 import { Arsenal } from './arsenal.ts';
 import { type CompiledLevel, physicsOf } from './level.ts';
 import { CpuObserver } from './rules.ts';
@@ -67,7 +67,7 @@ export class Driver {
   /** Every spawn so far in the order the engine numbers them (by step, then push order), for the bodies list. */
   private spawns: InputEvent[] = [];
   /** The structure then every spawned body, by engine id. */
-  private bodies: BodyDesc[] = [];
+  private descs: BodyDesc[] = [];
   /** The fired weapons' fuses (w- items), one per session. */
   private arsenal!: Arsenal;
   /** Blasts pushed whose 'blast' feedback waits for the first state that shows them. */
@@ -90,7 +90,7 @@ export class Driver {
     this.session = new Session(this.level, this.snapshot.pos);
     this.observer = new CpuObserver(this.level, this.snapshot);
     this.spawns = [];
-    this.bodies = [...this.level.scene.bodies];
+    this.descs = [...this.level.scene.bodies];
     this.arsenal = new Arsenal(this.level, this.engine.info.integrator?.substeps ?? 1);
     this.blastsDue = [];
   }
@@ -105,7 +105,19 @@ export class Driver {
       this.spawns.splice(i, 0, e);
       added = true;
     }
-    if (added) this.bodies = [...this.level.scene.bodies, ...spawnedBodies(this.spawns)];
+    if (added) this.descs = [...this.level.scene.bodies, ...spawnedBodies(this.spawns)];
+  }
+
+  /** Every body by engine id: the structure, then each spawn (the shots', a weapon's children) in the order the engine applies them. */
+  get bodies(): readonly BodyDesc[] {
+    return this.descs;
+  }
+
+  /** The engine id of a spawn pushed through this driver (the same event object). */
+  private idOf(spawn: SpawnEvent): number {
+    const i = this.spawns.indexOf(spawn);
+    if (i < 0) throw new Error(`Driver: a spawn due at step ${spawn.step} was not pushed through this driver`);
+    return this.level.meta.n + i;
   }
 
   /** Fire now: the spawn applies at the next step. */
@@ -142,7 +154,7 @@ export class Driver {
 
   /** Pushes the fired weapons' input from the state just observed (due after it); whether one is still to go off. */
   private arm(feedback: Feedback[]): boolean {
-    const input = this.arsenal.observe(this.snapshot, this.snapshotStep, this.bodies);
+    const input = this.arsenal.observe(this.snapshot, this.snapshotStep, this.descs, (sp) => this.idOf(sp));
     if (input.length) {
       this.push(input);
       this.blastsDue.push(...blasts(input));

@@ -4,7 +4,7 @@
 // (docs/design/viewer-superset.md, step F). A key's bad value is refused with
 // a message naming it; keys a page doesn't know are left to it (the look's
 // real.* knobs, the viewer's own).
-import { checkPhysics, isRackItem, itemRef, LEVELS, type LevelDef, levelWeapon, MAX_RACK, type PhysicsBlock, RACK_ITEM_NAMES, type RackItem, readShots, SCORINGS, type Scoring, type Shot } from '@tb/keystone';
+import { checkPhysics, isRackItem, itemRef, LEVELS, type LevelDef, MAX_RACK, type PhysicsBlock, RACK_ITEM_NAMES, type RackItem, readShots, SCORINGS, type Scoring, type Shot, weaponOf } from '@tb/keystone';
 import { LOOKS } from '@tb/render';
 import { type EngineKind, engineKind } from './engines.ts';
 import { paceFeel, type PaceFeel } from './pacing.ts';
@@ -125,7 +125,7 @@ export function rackOf(def: LevelDef, text: string | null): RackItem[] | null {
   return items.map((name) => {
     if (!isRackItem(name)) throw new Error(`keystone.rack: ${name || 'an empty name'} is not one of ${RACK_ITEM_NAMES}`);
     const ref = itemRef(name)!;
-    if (ref.kind === 'weapon' && !levelWeapon(def, ref.key)) throw new Error(`keystone.rack: ${def.id} has no weapons.${ref.key} for ${name}`);
+    if (ref.kind === 'weapon' && !weaponOf(def, ref.key)) throw new Error(`keystone.rack: ${def.id} has no weapons.${ref.key} for ${name}`);
     return name;
   });
 }

@@ -5,8 +5,8 @@
 // (level, shots) and replays headless. The game page calls playKeystone with
 // its own elements; the viewer calls it for rules=keystone, with hooks for its
 // dev panels (docs/design/viewer-superset.md, step C).
-import { type BodyDesc, type InputEvent, type PhysicsEngine, spawnedBodies, type Vec3 } from '@tb/engine-api';
-import { type RackItem, type CompiledLevel, compileLevel, Driver, type Feedback, type LevelDef, type LevelScore, type PerStep, runSession, type Shot, shotToSpawn, snapshotHash, TIER_NAMES } from '@tb/keystone';
+import { type BodyDesc, type PhysicsEngine, type Vec3 } from '@tb/engine-api';
+import { type RackItem, type CompiledLevel, compileLevel, Driver, type Feedback, type LevelDef, type LevelScore, type PerStep, runSession, type Shot, snapshotHash, TIER_NAMES } from '@tb/keystone';
 import { Window } from '@tb/metrics';
 import { clampPitch, EYE_ABOVE_GROUND, eyeOf, frame, type Orbit, rayThrough, viewProj } from '@tb/render/camera';
 import type { PixelStats, Renderer, SnapshotSource } from '@tb/render';
@@ -198,17 +198,12 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
 
   let c!: CompiledLevel, driver!: Driver, orbit!: Orbit;
   let perStep: PerStep | null = null;
-  // Body descriptions in slot order: the structure, then what was spawned (ammo as fired, and the
-  // input hook's), in the order the engine applies spawns: by step, then push order.
-  let descs: BodyDesc[] = [];
-  let spawns: InputEvent[] = [];
-  const spawned = (evs: InputEvent[]) => {
-    for (const ev of evs) {
-      let i = spawns.length;
-      while (i > 0 && spawns[i - 1]!.step > ev.step) i--;
-      spawns.splice(i, 0, ev);
-    }
-    descs = [...c.scene.bodies, ...spawnedBodies(spawns)];
+  // Body descriptions in slot order: the driver's (the structure, then every spawn: ammo as fired,
+  // a weapon's children, the input hook's, in the order the engine applies them).
+  let descs: readonly BodyDesc[] = [];
+  const spawned = () => {
+    if (driver.bodies.length === descs.length) return;
+    descs = driver.bodies;
     fxSlots = descs.length;
   };
   let fxSlots = 0;
@@ -253,8 +248,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     driver = nextDriver;
     substeps = engine.info.integrator?.substeps ?? SUBSTEPS;
     handle.timing = { loadMs: performance.now() - t0, stepMs: [] };
-    descs = [...c.scene.bodies];
-    spawns = [];
+    descs = driver.bodies;
     perStep = env.perStep?.(c) ?? null;
     source.reset(c.scene.bodies);
     source.update(driver.snapshot, descs);
@@ -385,10 +379,9 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
 
   function fire(shot: Shot): boolean {
     if (regrowT !== null || !driver.session.canFire(shot.ammo)) return false;
-    const step = driver.engine.stepIndex;
     const fb = driver.fire(shot);
     onFeedback(fb);
-    spawned([shotToSpawn(c.frame, shot, step)]);
+    spawned();
     aimed = null;
     beads = null;
     sync();
@@ -549,10 +542,8 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
         onFeedback(fb);
         hooks.stepped?.(fb, driver);
         const input = perStep?.(driver);
-        if (input?.length) {
-          driver.push(input);
-          spawned(input);
-        }
+        if (input?.length) driver.push(input);
+        spawned();
         if (pacer.frozen || driver.session.phase !== 'running') break;
       }
       if (n > 0) source.update(driver.snapshot, descs);

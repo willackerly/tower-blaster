@@ -124,7 +124,7 @@ Cast cost: about 64 + 3 x 16 x 8 + 50 = 500 line plays, each from the start, sin
 | Keystone ammo: marble, cannonball, cue, drop | `marble` etc. (unchanged) | as today | launch KE / `m g y` | exists |
 | Real projectiles: beach ball, basketball, bowling ball, cannonball, wrecking ball, boulder | `p-<preset>`, e.g. `p-wreckingball` | `PROJECTILE_PRESETS`: real diameter and restitution; density converted at the level's model scale (625 = real stone 2400, so x 0.26) | launch KE | presets exist; rack entry is G3 |
 | Grenade | `w-grenade` | the grenade shell; fuse and blast from the level's `weapons.grenade` (else `DEFAULT_GRENADE`); consumed after F4 | launch KE + nominal yield | logic exists; rack entry is G3 |
-| Scripted weapon | `w-<name>` | the level's `weapons[name]` `WeaponSpec` | launch KE + static yield budget | after V3 |
+| Scripted weapon | `w-<name>` | the level's `weapons[name]` `WeaponSpec` (viewer cube units, scaled to the level's commonest block: arsenal.ts `cubeScale`); `w-firework`, `w-cluster` built in | launch KE + static yield budget | G3.4 |
 
 - **Shots.** Every launched item uses `LaunchShot`'s quantised fields (azimuth, height, yaw, pitch, power); only the name changes, so shot text stays a few bytes (`p-wreckingball.60.8.0.20.95_w-grenade.120.4.0.35.80`). Bare names keep parsing as today. Power maps to 50 to 100% of a preset's own speed, capped by `launchSpeedCap`; the grenade's shell speed range is part of its spec.
 - **Rack size.** `MAX_RACK` goes from 6 to 8 for outcome levels; keys 1 to 8 pick.

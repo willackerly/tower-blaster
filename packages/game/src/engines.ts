@@ -4,7 +4,7 @@
 // are sized at init from these options).
 import { RapierEngine } from '@tb/adapter-rapier';
 import type { PhysicsEngine, ShapeDesc } from '@tb/engine-api';
-import { AVBD_GAP_SLOP, AVBD_ITERATIONS, ammoBody, type CompiledLevel, type DriverOptions, physicsOf } from '@tb/keystone';
+import { AVBD_GAP_SLOP, AVBD_ITERATIONS, ammoBody, type CompiledLevel, type DriverOptions, physicsOf, rackBodies } from '@tb/keystone';
 import { GpuAvbdEngine, type GpuEngineOptions } from '@tb/physics-gpu';
 
 export const ENGINES = ['rapier', 'gpu'] as const;
@@ -37,11 +37,12 @@ export function engineKind(param: string | null): EngineKind {
 
 export const radiusOf = (s: ShapeDesc): number => (s.kind === 'sphere' ? s.radius : Math.hypot(...s.half));
 
-/** Room the GPU engine reserves at init for every body the rack can fire. */
+/** Room the GPU engine reserves at init for every body the rack can fire (a weapon's whole budget: keystone rackBodies). */
 export function gpuOptions(c: CompiledLevel): Required<Pick<GpuEngineOptions, 'capacity' | 'maxRadius'>> {
   const rack = c.def.rack;
-  const maxRadius = Math.max(0, ...rack.map((k) => radiusOf(ammoBody(k, c.frame.unit, [0, 0, 0], [0, 0, 0]).shape)));
-  return { capacity: c.scene.bodies.length + rack.length, maxRadius };
+  // A weapon's children count and reach too (its arm: every munition it can spawn).
+  const maxRadius = Math.max(0, ...rack.map((k) => c.arms[k]?.maxRadius ?? radiusOf(ammoBody(k, c.frame, [0, 0, 0], [0, 0, 0]).shape)));
+  return { capacity: c.scene.bodies.length + rackBodies(rack, c.arms), maxRadius };
 }
 
 /**
