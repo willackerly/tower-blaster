@@ -47,11 +47,13 @@ export interface RestCase {
   iterations: number;
   gapSlop: boolean;
   frames: number;
+  /** Kapla only: engine steps a frame, in place of autoSubsteps(KAPLA_SCALE) (7); the E5 hold study (kapla-hold.test.ts) sweeps it. */
+  substeps?: number;
   /** Record the structure every 60 frames (rest-page RestSample; REST_TRACE=1 turns it on for every case). */
   trace?: boolean;
 }
 
-export const caseName = (c: RestCase) => `${c.structure} ${c.n} ${c.mode}, ${c.iterations} it, gapSlop ${c.gapSlop ? 'on' : 'off'}, ${c.frames} frames`;
+export const caseName = (c: RestCase) => `${c.structure} ${c.n} ${c.mode}, ${c.iterations} it${c.substeps === undefined ? '' : ` x ${c.substeps} substeps`}, gapSlop ${c.gapSlop ? 'on' : 'off'}, ${c.frames} frames`;
 
 const STRIKE_FRAME = 60;
 
@@ -71,6 +73,7 @@ export function restSetup(c: RestCase): { scene: SceneDesc; params: Partial<Avbd
   const struck = c.mode === 'struck';
   const slop = c.gapSlop ? { gapSlop: AVBD_GAP_SLOP } : { gapSlop: 0 };
   let scene: SceneDesc, params: Partial<AvbdParams> = { iterations: c.iterations, ...slop }, opts: Omit<GpuEngineOptions, 'device'> = {}, substeps = 1, thick = 1;
+  if (c.substeps !== undefined && (c.structure !== 'kapla' || !Number.isInteger(c.substeps) || c.substeps < 1)) throw new Error(`${caseName(c)}: substeps is for the Kapla tower only, a whole number from 1`);
   if (c.structure === 'wall') scene = wall(c.n, struck);
   else if (c.structure === 'city') scene = struck ? buildScenario('S5', { N: c.n, fireStep: STRIKE_FRAME }, 1) : buildScenario('S4', { N: c.n }, 1);
   else {
@@ -78,7 +81,7 @@ export function restSetup(c: RestCase): { scene: SceneDesc; params: Partial<Avbd
     // iterations and slop, at real plank size.
     const { iterations: _i, gapSlop: _g, boxBroadphase, pairsPerBody } = SCENARIOS.S15!.avbd as Record<string, number | boolean>;
     opts = { boxBroadphase: boxBroadphase as boolean, pairsPerBody: pairsPerBody as number };
-    substeps = autoSubsteps(KAPLA_SCALE);
+    substeps = c.substeps ?? autoSubsteps(KAPLA_SCALE);
     scene = worldScene(buildScenario('S15', { planks: c.n, topple: struck }, 1), KAPLA_SCALE, substeps);
     params = froudeParams(params, 1 / KAPLA_SCALE);
     thick = Math.min(...scene.bodies.map((b) => (b.shape.kind === 'box' ? 2 * Math.min(...b.shape.half) : 2 * b.shape.radius)));
@@ -132,9 +135,10 @@ export function restSuite(cases: RestCase[]): void {
       for (const l of lines) console.log(l);
       if (process.env.REST_LOG) appendFileSync(process.env.REST_LOG, `${lines.join('\n')}\n`);
       if (plan.trace) {
-        // The trace samples the run every sampleEvery frames, and its last sample is the end state.
+        // The trace samples the run every sampleEvery frames; when the run ends on a sample, that sample is the end state.
         expect(r.trace.map((s) => s.frame)).toEqual(Array.from({ length: Math.floor(plan.frames / plan.sampleEvery) }, (_, k) => (k + 1) * plan.sampleEvery));
-        expect([r.trace.at(-1)!.meanY, r.trace.at(-1)!.top, r.trace.at(-1)!.maxSpeed]).toEqual([r.meanY[2], r.topEnd, r.endSpeed]);
+        const last = r.trace.at(-1);
+        if (last && last.frame === plan.frames) expect([last.meanY, last.top, last.maxSpeed]).toEqual([r.meanY[2], r.topEnd, r.endSpeed]);
       }
       expect(r.movers.length).toBe(Math.min(r.moved, 8));
       expect(r.error).toBeNull();

@@ -468,8 +468,12 @@ export interface Exploration {
   engine: string;
   n: number;
   seed: number;
-  /** Per shot k (after k + 1 shots settled): the competent plays' collapse, crowns down, heritage broken and objective rate. */
-  shots: Array<{ collapse: ReturnType<typeof summary>; crowns: ReturnType<typeof summary>; heritage: ReturnType<typeof summary>; met: number }>;
+  /**
+   * Per shot k (after k + 1 shots settled): the competent plays' collapse, crowns down, heritage broken and
+   * objective rate, over the `plays` that got there. A play that ended early (it banked) counts at its last
+   * settle; one that ran out of steps counts only at the settles it reached.
+   */
+  shots: Array<{ plays: number; collapse: ReturnType<typeof summary>; crowns: ReturnType<typeof summary>; heritage: ReturnType<typeof summary>; met: number }>;
   /** Engine steps per play, and the plays that hit a limit or ran out of steps. */
   steps: ReturnType<typeof summary>;
   limited: number;
@@ -485,15 +489,21 @@ export async function exploreLevel(level: LevelDef, player: CastPlayer, n: numbe
   const c = compileLevel(level);
   const lines = competentIntents(c, n, seed, powers).map((its) => its.map((it) => intentShot(c, it, player.substeps)));
   const plays = await player.play(level, lines);
-  const at = (k: number, f: (s: CastSample) => number) => plays.map((p) => { const s = p.samples[k] ?? p.samples.at(-1); return s ? f(s) : 0; });
   return {
     level: level.id, hash: c.hash, bodies: c.meta.n, adapter: player.adapter, engine: player.engine, n, seed,
-    shots: level.rack.map((_, k) => ({ collapse: summary(at(k, (s) => s.collapse)), crowns: summary(at(k, (s) => s.crowns)), heritage: summary(at(k, (s) => s.heritage)), met: at(k, (s) => (s.met ? 1 : 0)).reduce((a, x) => a + x, 0) / n })),
+    shots: level.rack.map((_, k) => shotSummary(plays, k)),
     steps: summary(plays.map((p) => p.steps)),
     limited: plays.filter((p) => p.limits.length).length,
     incomplete: plays.filter((p) => !p.complete).length,
     lines: plays.map((p, k) => ({ phase: 'competent', shots: writeShots(lines[k]!), samples: p.samples, steps: p.steps, complete: p.complete, hash: p.hash, limits: p.limits })),
   };
+}
+
+/** Exploration row k: the plays that settled shot k, or ended complete before it (counted at their last settle). */
+export function shotSummary(plays: readonly CastPlay[], k: number): Exploration['shots'][number] {
+  const got = plays.flatMap((p) => { const s = p.samples[k] ?? (p.complete ? p.samples.at(-1) : undefined); return s ? [s] : []; });
+  const of = (f: (s: CastSample) => number) => summary(got.length ? got.map(f) : [NaN]);
+  return { plays: got.length, collapse: of((s) => s.collapse), crowns: of((s) => s.crowns), heritage: of((s) => s.heritage), met: got.length ? got.filter((s) => s.met).length / got.length : NaN };
 }
 
 /** An exploration as a markdown table: one row per shot. */
@@ -502,9 +512,9 @@ export function explorationMarkdown(e: Exploration, extra = ''): string {
   return [
     `### ${e.level}: ${e.bodies} bodies, ${e.n} competent plays on ${e.adapter} (${e.engine}), seed ${e.seed}${extra}`,
     '',
-    '| after shot | collapse P10 / P25 / P50 / P75 / P90 | crowns down P50 (max) | heritage broken P50 (max) | objective met |',
-    '|---|---|---|---|---|',
-    ...e.shots.map((s, k) => `| ${k + 1} | ${q(s.collapse)} | ${s.crowns.p50} (${s.crowns.max}) | ${s.heritage.p50} (${s.heritage.max}) | ${(100 * s.met).toFixed(0)}% |`),
+    '| after shot | plays | collapse P10 / P25 / P50 / P75 / P90 | crowns down P50 (max) | heritage broken P50 (max) | objective met |',
+    '|---|---|---|---|---|---|',
+    ...e.shots.map((s, k) => s.plays ? `| ${k + 1} | ${s.plays} | ${q(s.collapse)} | ${s.crowns.p50} (${s.crowns.max}) | ${s.heritage.p50} (${s.heritage.max}) | ${(100 * s.met).toFixed(0)}% |` : `| ${k + 1} | 0 | none got here | | | |`),
     '',
     `Steps per play P50 ${e.steps.p50}, max ${e.steps.max}; plays with a limit hit ${e.limited}, out of steps ${e.incomplete}.`,
     '',

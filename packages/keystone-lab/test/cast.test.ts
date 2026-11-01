@@ -2,8 +2,8 @@
 // samples, its seeded sampling, and the whole recipe on a synthetic player
 // (every number checkable by hand) and on Rapier with a tiny recipe.
 import { describe, expect, it } from 'vitest';
-import { aimAt, type CastPlay, compileLevel, launcherPos, type LaunchShot, type LevelDef, scenarioLevel, type Shot } from '@tb/keystone';
-import { castLevel, exposedFaces, faceSectors, facingAzimuth, FACE_SECTORS, REACH, type CastPlayer, type CastRecipe, competentIntents, compareCasts, endValue, HEIGHT_BANDS, higherBetter, intentShot, moveIntents, nodeCastPlayer, nudgeLine, playsOf, quantile, rng, roundEasier, SHORT_RECIPE, streamSeed, surfaceTarget, withWallTime } from '../src/index.ts';
+import { aimAt, type CastPlay, type CastSample, compileLevel, launcherPos, type LaunchShot, type LevelDef, scenarioLevel, type Shot } from '@tb/keystone';
+import { castLevel, exposedFaces, faceSectors, facingAzimuth, FACE_SECTORS, REACH, type CastPlayer, type CastRecipe, competentIntents, compareCasts, endValue, HEIGHT_BANDS, higherBetter, intentShot, moveIntents, nodeCastPlayer, nudgeLine, playsOf, quantile, rng, roundEasier, SHORT_RECIPE, shotSummary, streamSeed, surfaceTarget, withWallTime } from '../src/index.ts';
 
 /** A 10 x 4 wall of plaster cubes along x as an outcome level, rack of two cannonballs. */
 const WALL: LevelDef = { ...scenarioLevel('S3', { W: 10, H: 4 }, 1, { rack: ['cannonball', 'cannonball'] }), id: 'T1' };
@@ -26,6 +26,16 @@ describe('statistics', () => {
   });
   it('skyline is the one metric where lower is better', () => {
     expect(['collapse', 'crowns', 'score', 'skyline'].map((m) => higherBetter(m as never))).toEqual([true, true, true, false]);
+  });
+  it('an exploration row counts a play that ran out of steps only at the settles it reached; one that banked, at its last', () => {
+    const sample = (shots: number, collapse: number): CastSample => ({ shots, step: 100 * shots, met: collapse >= 0.2, collapse, crowns: 0, skyline: 1 - collapse, score: 0, heritage: 0 });
+    const play = (complete: boolean, ...c: number[]): CastPlay => ({ samples: c.map((x, k) => sample(k + 1, x)), complete, steps: 1, hash: '', limits: [] });
+    // Out of steps after shot 1 (the SwiftShader smoke on B1a), banked after shot 2, and one full play.
+    const plays = [play(false, 0.07), play(true, 0.1, 0.3), play(true, 0.2, 0.4, 0.6)];
+    expect(shotSummary(plays, 0)).toMatchObject({ plays: 3, met: 1 / 3, collapse: { p50: 0.1, max: 0.2 } });
+    expect(shotSummary(plays, 1)).toMatchObject({ plays: 2, met: 1, collapse: { min: 0.3, max: 0.4 } });
+    expect(shotSummary(plays, 2)).toMatchObject({ plays: 2, met: 1, collapse: { min: 0.3, max: 0.6 } });
+    expect(shotSummary([play(false, 0.07)], 1).plays).toBe(0);
   });
 });
 

@@ -5,6 +5,7 @@
 // AVBD_ITERATIONS and AVBD_GAP_SLOP (docs/game/findings.md), and tests replay
 // them. lGold is the lower quartile of the leverage the par line's clean
 // neighbours on the nudge grid reach (pnpm keystone:par).
+import { BIG_LEVELS } from './big-levels.ts';
 import type { LevelDef } from './level.ts';
 
 type V3 = [number, number, number];
@@ -88,11 +89,25 @@ export const L5: LevelDef = {
   solutions: { par: [{ ammo: 'marble', az: 0, y: 8, yaw: 0, pitch: 249, power: 60 }] },
 };
 
+/** The chamber levels, scored on par (the game's default series). */
 export const LEVELS: readonly LevelDef[] = [L1, L2, L3, L4, L5];
 
-/** A built-in level by id, any case; throws naming the known ones. */
+/** Every built-in level's series: the chamber levels (L1 to L5) and the big levels (B1 on). A level plays on into the rest of its own series. */
+export const SERIES: readonly (readonly LevelDef[])[] = [LEVELS, BIG_LEVELS];
+
+/** The series holding the built-in level with this id (any case), or undefined. */
+export function seriesOf(id: string): readonly LevelDef[] | undefined {
+  return SERIES.find((s) => s.some((l) => l.id === id.toUpperCase()));
+}
+
+/** A built-in level (chamber or big) by id, any case, or undefined. */
+export function findLevel(id: string): LevelDef | undefined {
+  return seriesOf(id)?.find((l) => l.id === id.toUpperCase());
+}
+
+/** A built-in level (chamber or big) by id, any case; throws naming the known ones. */
 export function levelById(id: string): LevelDef {
-  const def = LEVELS.find((l) => l.id === id.toUpperCase());
-  if (!def) throw new Error(`unknown level ${id.toUpperCase()}; known: ${LEVELS.map((l) => l.id).join(', ')}`);
+  const def = findLevel(id);
+  if (!def) throw new Error(`unknown level ${id.toUpperCase()}; known: ${SERIES.flat().map((l) => l.id).join(', ')}`);
   return def;
 }
