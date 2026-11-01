@@ -5,7 +5,8 @@
 // --engine gpu drives it (keystone-lab cast-browser.ts): SwiftShader in CI,
 // Metal with --channel chrome on a Mac. No rendering: physics only.
 // ?engine=rapier plays on Rapier instead, for comparison.
-import { type CastPlay, castPlay, compileLevel, type LevelDef, readShots } from '@tb/keystone';
+import { type CastPlay, castPlay, compileLevel, type LevelDef, physicsOf, readShots } from '@tb/keystone';
+import { limitProblems } from '@tb/engine-api';
 import { createDevice, isSoftwareAdapter } from '@tb/gpu';
 import { driverOptions, engineKind, makeEngine } from './engines.ts';
 
@@ -18,12 +19,21 @@ export interface CastHandle {
   engine: string;
   /** Each line (writeShots text) from the level's start on a fresh engine, in order; ms is each play's wall time. */
   play(level: LevelDef, lines: string[], maxSteps?: number): Promise<Array<CastPlay & { ms: number }>>;
+  /**
+   * The level at rest on a fresh engine: its pre-settle as the game runs it, then `steps` more with
+   * nothing fired. Reports the most any structure body moved over those steps and how far the top
+   * fell, in cells (h), with the engine's limit report; ms is the whole run's wall time.
+   */
+  rest(level: LevelDef, steps: number): Promise<RestReport>;
 }
+
+export interface RestReport { presettle: number; steps: number; maxMove: number; topDrop: number; limits: string[]; ms: number }
 
 declare global { interface Window { __cast: CastHandle } }
 
 const log = document.getElementById('log')!;
-const handle: CastHandle = { status: 'loading', adapter: '', software: false, engine: '', play: async () => { throw new Error('the cast page is not ready'); } };
+const notReady = async (): Promise<never> => { throw new Error('the cast page is not ready'); };
+const handle: CastHandle = { status: 'loading', adapter: '', software: false, engine: '', play: notReady, rest: notReady };
 window.__cast = handle;
 
 async function main() {
@@ -45,6 +55,25 @@ async function main() {
       log.textContent = `${handle.adapter} (${kind}): ${++plays} plays; last ${text}`;
     }
     return out;
+  };
+  handle.rest = async (level, steps) => {
+    const c = compileLevel(level), n = c.meta.n, h = c.frame.unit, presettle = physicsOf(level).presettle;
+    const e = makeEngine(kind, c, device), t0 = performance.now();
+    try {
+      await e.init(c.scene);
+      for (let i = 0; i < presettle; i++) await e.step();
+      const a = Float32Array.from((await e.snapshot()).pos.subarray(0, 3 * n));
+      for (let i = 0; i < steps; i++) await e.step();
+      const b = (await e.snapshot()).pos;
+      let maxMove = 0, topA = -Infinity, topB = -Infinity;
+      for (let i = 0; i < n; i++) {
+        maxMove = Math.max(maxMove, Math.hypot(b[3 * i]! - a[3 * i]!, b[3 * i + 1]! - a[3 * i + 1]!, b[3 * i + 2]! - a[3 * i + 2]!));
+        topA = Math.max(topA, a[3 * i + 1]!);
+        topB = Math.max(topB, b[3 * i + 1]!);
+      }
+      const limits = limitProblems(e.health ? await e.health() : null, e.info.name);
+      return { presettle, steps, maxMove: maxMove / h, topDrop: (topA - topB) / h, limits, ms: performance.now() - t0 };
+    } finally { e.dispose(); }
   };
   handle.status = 'ready';
   log.textContent = `${handle.adapter} (${kind}): ready`;

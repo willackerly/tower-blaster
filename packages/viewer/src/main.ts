@@ -11,7 +11,7 @@ import { type BodyDesc, type EngineHealth, type EngineInfo, type InputEvent, lim
 import { boundingRadius } from '@tb/geom';
 import { DEFAULT_AVBD } from '@tb/physics-ref';
 import { GAME_HELP, gameOverlays, playLine, type GameHandle, installGameStyles, newGameHandle, playKeystone, structureTints, withRules } from '@tb/game';
-import { AVBD_GAP_SLOP, AVBD_ITERATIONS, compileLevel, type Driver, LEVELS, type Shot } from '@tb/keystone';
+import { AVBD_GAP_SLOP, AVBD_ITERATIONS, compileLevel, type Driver, seriesOf, type Shot } from '@tb/keystone';
 import { clampPitch, EYE_ABOVE_GROUND, frame, rayThrough, viewProj, eyeOf, orbitAt, poseOf, type CameraPose, type Orbit } from './camera.ts';
 import { alphaAt, newArrivals, newClock, newPacer, pauseLatch, runFree, stepsDue, taskYield, trackSimSpeed, Window } from './loop.ts';
 import type { V3 } from './math.ts';
@@ -807,10 +807,10 @@ async function keystoneMode(config: ViewerConfig, device: GPUDevice, renderer: R
       showDev();
     }
   }
-  // A built-in level walks the game's levels (N, P, Next), under the link's rule overrides; a level of
+  // A built-in level walks its series of the game's levels (N, P, Next), under the link's rule overrides; a level of
   // your own, or a scenario as a level (scenarioLevel), is the only one.
   const def = levelOf(cfg)!;
-  const levels = cfg.customLevel || !cfg.level ? [def] : LEVELS.map((d) => withRules(d, cfg.keystone));
+  const levels = cfg.customLevel || !cfg.level ? [def] : seriesOf(cfg.level)!.map((d) => withRules(d, cfg.keystone));
   await playKeystone({
     canvas, offscreen: cfg.offscreen, device, renderer, source, hud, ...gameOverlays(),
     levels, start: levels.findIndex((l) => l.id === def.id), engine: keystoneEngine(cfg.engine), feel: cfg.feel, fail: failGame,

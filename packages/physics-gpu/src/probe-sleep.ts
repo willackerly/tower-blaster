@@ -27,6 +27,7 @@ import type { ProbeOptions, Stat } from './probe.ts';
 export interface P5Result {
   scenario: string;
   params: Record<string, number | boolean>;
+  /** Bodies in the engine after the timed steps: the scene's, plus any it spawned (S5's ball, S15's topple ball). */
   N: number;
   iterations: number;
   variant: Record<string, number | boolean | string>;
@@ -124,7 +125,7 @@ export async function runP5(device: GPUDevice, timestamps: boolean, o: ProbeOpti
   return {
     engine: e,
     result: {
-      scenario: o.scenario, params: scene.params as Record<string, number | boolean>, N: scene.bodies.length, iterations: pp.iterations, variant: e.info.variant, settle: o.p5Settle,
+      scenario: o.scenario, params: scene.params as Record<string, number | boolean>, N: e.probeParts().n, iterations: pp.iterations, variant: e.info.variant, settle: o.p5Settle,
       stages: Object.fromEntries(STEP_STAGES.map((s) => [s, per[s].length ? stat(per[s]) : empty])) as Record<StepStage, Stat>,
       step: stat(steps), pairs: d.pairsWritten, colors: d.colors, uncolored: d.uncolored, timestamps: !!resolve,
     },
@@ -218,6 +219,9 @@ export async function contactEdges(e: GpuAvbdEngine): Promise<Uint32Array> {
  */
 export async function runP6(device: GPUDevice, n: number, edges: Uint32Array, sample: (record: (pass: GPUComputePassEncoder) => void) => Promise<Stat>): Promise<P6Result> {
   const m = edges.length / 2;
+  // An id past n would read and write outside the island buffers (and miscount on the CPU side too).
+  const bad = edges.findIndex((v) => v >= n);
+  if (bad >= 0) throw new Error(`P6: edge ${bad >> 1} names body ${edges[bad]}, but there are ${n}`);
   const buf = (bytes: number, usage = GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST) => device.createBuffer({ size: Math.max(16, Math.ceil(bytes / 16) * 16), usage });
   const uni = device.createBuffer({ size: 16, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
   device.queue.writeBuffer(uni, 0, new Uint32Array([n, m, 60, 0]));

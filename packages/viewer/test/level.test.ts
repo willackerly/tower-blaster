@@ -18,6 +18,9 @@ describe('levels in the viewer', () => {
     expect([c.scenario, c.params, c.seed]).toEqual([DEFAULT_CONFIG.scenario, DEFAULT_CONFIG.params, DEFAULT_CONFIG.seed]);
     expect(parseViewerConfig('').level).toBeNull();
     expect(parseViewerConfig('').presettle).toBe(0);
+    // A big level too (@tb/keystone BIG_LEVELS).
+    expect(parseViewerConfig('?level=b1').level).toBe('B1');
+    expect(levelDef('b1')?.scoring).toBe('outcome');
   });
 
   it('round-trips through the URL, which names the level and no scenario, params or seed', () => {
