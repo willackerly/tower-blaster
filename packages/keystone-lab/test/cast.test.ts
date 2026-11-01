@@ -211,6 +211,11 @@ describe('castLevel on a synthetic player', () => {
     const r = await castLevel(WALL, synthetic(), { recipe: TINY });
     expect(withWallTime(r, 59 * 60_000).gates.budget!.pass).toBe(true);
     expect(withWallTime(r, 61 * 60_000).gates.budget!.pass).toBe(false);
+    const raised = withWallTime(r, 170 * 60_000, 200 * 60_000).gates.budget!;
+    expect(raised.pass).toBe(true);
+    expect(raised.need).toBe(200 * 60_000);
+    expect(raised.note).toMatch(/raised from 60 to 200 min/);
+    expect(withWallTime(r, 59 * 60_000).gates.budget!.note).not.toMatch(/raised/);
   });
   it('refuses a par level', async () => {
     await expect(castLevel({ ...WALL, scoring: 'par' }, synthetic(), { recipe: TINY })).rejects.toThrow(/par level/);

@@ -1,7 +1,7 @@
 // pnpm keystone:cast <level> [--engine gpu|ref|rapier] [--channel chrome] [--headed]
 //   [--seed N] [--metric collapse|crowns|skyline|score] [--recipe short|full|C,L,M,K,N]
 //   [--out cast.json] [--md cast.md] [--compare other.json] [--max-steps N] [--explore N]
-//   [--cloud-of cast.json [--n 16]]
+//   [--cloud-of cast.json [--n 16]] [--budget-min 60]
 // <level>: a built-in level id, or --level-file path.json (a LevelDef), or
 // --scenario S3 --param W=50 ... (the automatic scenario level), or --draft B1a
 // (keystone-lab drafts.ts). --explore N plays N competent lines only and
@@ -14,12 +14,14 @@
 // Metal with --channel chrome on a Mac); ref and rapier play in this thread.
 // Prints the thresholds and gates, writes the whole cast as JSON (--out) and
 // its summary as markdown (--md). --compare runs the recast and cross-device
-// gates against an earlier cast's JSON. Exits 2 when a gate fails, 4 when a
+// gates against an earlier cast's JSON. --budget-min raises the budget gate's
+// 60 min for a level whose cast cannot fit it (10k levels: about 3 h), and the
+// gate's note records the raise. Exits 2 when a gate fails, 4 when a
 // play hit an engine limit (as bench:browser does).
 import { readFileSync, writeFileSync } from 'node:fs';
 import { type LevelDef, levelById, scenarioLevel, STAR_METRICS, type StarMetric } from '@tb/keystone';
 import { exitNow } from '@tb/testkit';
-import { castLevel, castMarkdown, cloudCheck, exploreLevel, explorationMarkdown, type CastPlayer, type CastRecipe, type CastResult, compareCasts, FULL_RECIPE, nodeCastPlayer, playsOf, SHORT_RECIPE, withWallTime } from './cast.ts';
+import { CAST_BUDGET_MS, castLevel, castMarkdown, cloudCheck, exploreLevel, explorationMarkdown, type CastPlayer, type CastRecipe, type CastResult, compareCasts, FULL_RECIPE, nodeCastPlayer, playsOf, SHORT_RECIPE, withWallTime } from './cast.ts';
 import { openBrowserCastPlayer } from './cast-browser.ts';
 import { draftByName } from './drafts.ts';
 
@@ -53,6 +55,9 @@ function recipe(): CastRecipe {
 const def = level(), rec = recipe(), engine = flags.get('engine') ?? 'gpu';
 const metric = flags.get('metric') as StarMetric | undefined;
 if (metric !== undefined && !(STAR_METRICS as readonly string[]).includes(metric)) throw new Error(`--metric is one of ${STAR_METRICS.join(', ')}`);
+const budgetMin = Number(flags.get('budget-min') ?? CAST_BUDGET_MS / 60_000);
+if (!(budgetMin > 0)) throw new Error(`--budget-min needs a positive number of minutes: ${flags.get('budget-min')}`);
+const budgetMs = budgetMin * 60_000;
 const maxSteps = flags.has('max-steps') ? Number(flags.get('max-steps')) : undefined;
 let player: CastPlayer, close = async (): Promise<string[]> => [];
 if (engine === 'gpu' || engine === 'gpu-rapier') {
@@ -113,7 +118,7 @@ try {
       last = now;
     },
   });
-  const r = withWallTime(r0, performance.now() - t0);
+  const r = withWallTime(r0, performance.now() - t0, budgetMs);
   console.log(castMarkdown(r));
   console.log(`stars: ${JSON.stringify(r.stars)}`);
   if (flags.has('compare')) {

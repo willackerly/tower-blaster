@@ -441,9 +441,13 @@ export async function castLevel(level: LevelDef, player: CastPlayer, opts: CastO
   };
 }
 
-/** Adds the budget gate once the caller has timed the cast. */
+/**
+ * Adds the budget gate once the caller has timed the cast. A 10k level's short recipe takes about 3 h on the M5
+ * (a play is about a minute at 40 iterations), so its cast passes a larger budget and the gate's note says so.
+ */
 export function withWallTime(r: CastResult, wallMs: number, budgetMs = CAST_BUDGET_MS): CastResult {
-  return { ...r, wallMs, gates: { ...r.gates, budget: { pass: wallMs <= budgetMs, value: wallMs, need: budgetMs, note: 'wall time of the cast, ms (judged on the M5 Max)' } } };
+  const waived = budgetMs > CAST_BUDGET_MS ? `; budget raised from ${CAST_BUDGET_MS / 60_000} to ${budgetMs / 60_000} min for this level (--budget-min)` : '';
+  return { ...r, wallMs, gates: { ...r.gates, budget: { pass: wallMs <= budgetMs, value: wallMs, need: budgetMs, note: `wall time of the cast, ms (judged on the M5 Max)${waived}` } } };
 }
 
 /**
