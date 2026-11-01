@@ -116,6 +116,8 @@ interface MatState {
   y1: Float32Array; y2: Float32Array;
   x: Float32Array; // BLOCK inputs per resonator
   live: Uint8Array; // resonator has input or ringing state this block
+  nLive: number; // of live, how many are set (0: the bank is idle and not scanned)
+  cIn: Uint8Array; // per (bin, sector): input this block
   /** Click resonator per (bin, sector): its period D (samples, per bin), 2 cos(2 pi / D), state, input and the input's last D samples. */
   cD: Int32Array; cc: Float64Array; cy1: Float64Array; cy2: Float64Array; cx: Float32Array; cring: Float64Array[];
   cLast: Float64Array; // per (bin, sector): absolute sample of its last input (-Infinity: none)
@@ -216,6 +218,8 @@ export class CollapseEngine {
   gritOverflow = 0;
   /** Grains scheduled (a probe for tests and stats). */
   grains = 0;
+  /** Resonator samples computed, bank and clicks (a cost probe: idle materials add none). */
+  work = 0;
 
   constructor(opts: EngineOptions) {
     this.sr = opts.sampleRate;
@@ -251,7 +255,8 @@ export class CollapseEngine {
       m, md, edge, M, mult: new Float64Array(C),
       a1: new Float32Array(n), a2: new Float32Array(n), b: new Float32Array(n),
       y1: keep ? old.y1 : new Float32Array(n), y2: keep ? old.y2 : new Float32Array(n),
-      x: keep ? old.x : new Float32Array(n * BLOCK), live: keep ? old.live : new Uint8Array(n),
+      x: keep ? old.x : new Float32Array(n * BLOCK), live: keep ? old.live : new Uint8Array(n), nLive: keep ? old.nLive : 0,
+      cIn: keep ? old.cIn : new Uint8Array(DV_EDGES.length * S),
       cD: new Int32Array(DV_EDGES.length), cc: new Float64Array(DV_EDGES.length),
       cy1: new Float64Array(DV_EDGES.length * S), cy2: new Float64Array(DV_EDGES.length * S),
       cx: keep ? old.cx : new Float32Array(DV_EDGES.length * S * BLOCK), cring: [], cLast: new Float64Array(DV_EDGES.length * S).fill(-Infinity),
@@ -394,15 +399,18 @@ export class CollapseEngine {
       const base = (cls * S + s) * st.M;
       for (let k = 0; k < st.M; k++) {
         const amp = A * w[k]! * pulseSpectrum(st.md.freq[k]! * mult, T) * st.md.gain[k]!;
-        st.x[(base + k) * BLOCK + t]! += amp; st.live[base + k] = 1;
+        st.x[(base + k) * BLOCK + t]! += amp;
+        if (!st.live[base + k]) { st.live[base + k] = 1; st.nLive++; }
       }
       st.cx[(bin * S + s) * BLOCK + t]! += A * st.clickPeak[bin]!;
+      st.cIn[bin * S + s] = 1;
     }
     this.bn[slot] = 0;
     // Bank and clicks, into the sector buses.
     for (const st of this.mats) {
       if (!st) continue;
-      for (let r = 0; r < st.live.length; r++) {
+      // Idle materials (nothing ringing, no input) cost nothing: a game holds ten slots, most of them silent.
+      for (let r = 0; st.nLive > 0 && r < st.live.length; r++) {
         if (!st.live[r]) continue;
         const a1 = st.a1[r]!, a2 = st.a2[r]!, b = st.b[r]!, o = r * BLOCK, s = Math.floor(r / st.M) % S, so = s * BLOCK;
         let y1 = st.y1[r]!, y2 = st.y2[r]!, peak = 0;
@@ -412,13 +420,16 @@ export class CollapseEngine {
           peak = Math.max(peak, Math.abs(y));
         }
         st.y1[r] = y1; st.y2[r] = y2;
-        if (peak < 1e-7) { st.live[r] = 0; st.y1[r] = 0; st.y2[r] = 0; }
+        this.work += BLOCK;
+        if (peak < 1e-7) { st.live[r] = 0; st.nLive--; st.y1[r] = 0; st.y2[r] = 0; }
       }
       for (let r = 0; r < st.cring.length; r++) {
         const D = st.cD[Math.floor(r / S)]!, c = st.cc[Math.floor(r / S)]!, ring = st.cring[r]!, o = r * BLOCK, so = (r % S) * BLOCK;
         let y1 = st.cy1[r]!, y2 = st.cy2[r]!, last = st.cLast[r]!;
         // Idle: no input for a period (the ring holds only zeros) and the last cycle ended.
-        if (this.now - last > D && y1 === 0 && y2 === 0 && !st.cx.subarray(o, o + BLOCK).some((x) => x !== 0)) continue;
+        if (this.now - last > D && y1 === 0 && y2 === 0 && !st.cIn[r]) continue;
+        st.cIn[r] = 0;
+        this.work += BLOCK;
         for (let i = 0; i < BLOCK; i++) {
           const x = st.cx[o + i]!, k = (this.now + i) % D, y = c * y1 - y2 + x - ring[k]!;
           if (x !== 0) last = this.now + i;

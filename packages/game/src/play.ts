@@ -8,10 +8,15 @@
 // dev panels (docs/design/viewer-superset.md, step C).
 import { type BodyDesc, type EngineHealth, limitsHit, type PhysicsEngine, type Vec3 } from '@tb/engine-api';
 import { type RackItem, type CompiledLevel, compileLevel, Driver, type Feedback, type LevelDef, type LevelScore, type PerStep, runSession, type Shot, snapshotHash, TIER_NAMES } from '@tb/keystone';
-import { clampPitch, EYE_ABOVE_GROUND, eyeOf, frame, type Orbit, rayThrough, viewProj } from '@tb/render/camera';
+import { clampPitch, eyeOf, type Orbit, rayThrough, viewProj } from '@tb/render/camera';
 import type { PixelStats, Renderer, SnapshotSource } from '@tb/render';
+import type { HostStats } from '@tb/audio';
 import { type Aimed, azFromYaw, pick, previewBeads, shotFor, SUBSTEPS } from './aim.ts';
 import { Synth, type Voice, voicesFor } from './audio.ts';
+import { CollapseSound, type CollapseStatus } from './collapse-sound.ts';
+import type { GameSoundMode } from './sound-map.ts';
+import { viewOf } from './view.ts';
+export { viewOf } from './view.ts';
 import { driverOptions, type EngineKind, gpuEngineOptions, makeEngine, roomAfter } from './engines.ts';
 import { hudHtml, nextSelection, rackChips, resultHtml, starsText } from './hud.ts';
 import { FollowCam } from './follow.ts';
@@ -85,11 +90,22 @@ export interface GameHandle {
    * ends it), and a round that dropped pairs builds the level's later rounds with room (roomAfter).
    */
   limitsHit: string[];
+  /** The collision sound (off until the first click or key; 'off' for good under keystone.sound=synth). */
+  sound(): SoundState;
 }
+export interface SoundState { mode: GameSoundMode; status: CollapseStatus; error: string; posted: number; stats: HostStats | null }
 export interface SessionState { step: number; phase: string; strokes: number; heritageBroken: number; hash: string }
 
 const sum = (a: Uint8Array) => a.reduce((x, y) => x + y, 0);
 const median = (xs: number[]) => { if (!xs.length) return NaN; const s = [...xs].sort((a, b) => a - b); return s[Math.floor(s.length / 2)]!; };
+
+/** The page's last stage: a fast compressor at -1 dBFS, so the cues and the collision sound (each limited) never clip together. */
+function safetyLimiter(ctx: AudioContext): AudioNode {
+  const c = ctx.createDynamicsCompressor();
+  c.threshold.value = -1; c.knee.value = 0; c.ratio.value = 20; c.attack.value = 0.001; c.release.value = 0.1;
+  c.connect(ctx.destination);
+  return c;
+}
 
 /** A handle with nothing loaded yet, for a page to publish before playKeystone fills it in. */
 export function newGameHandle(): GameHandle {
@@ -98,6 +114,7 @@ export function newGameHandle(): GameHandle {
     status: 'loading', engine: '', level: '', phase: 'loading', ready: false, frames: 0, stepIndex: 0, strokes: 0, bodies: 0, collapse: 0, fast: false, pace: { timeScale: 1, speed: 1, tag: '', tailSkip: false, costMs: NaN }, view: { target: [0, 0, 0], distance: 0, following: false }, result: null, counts: {}, feel: { ...DEFAULT_FEEL }, resultShownAt: null, timing: { loadMs: 0, stepMs: [], moving: [], frameMs: [], costMs: [] },
     fire: () => false, bank: () => false, aim: () => null, select: () => false, load: async () => {}, retry: async () => {}, capture: async () => null,
     state: none, replay: async () => none(), health: async () => null, pairsPerBody: 0, limitsHit: [],
+    sound: () => ({ mode: 'collapse', status: 'off', error: '', posted: 0, stats: null }),
   };
 }
 
@@ -172,19 +189,10 @@ export interface KeystoneEnv {
    * sees the same input.
    */
   perStep?(c: CompiledLevel): PerStep;
-}
-
-/** Frame the structure; face the par line's launcher when it has one. The eye stays EYE_ABOVE_GROUND over the ground (y 0), as in the viewer. */
-export function viewOf(c: CompiledLevel): Orbit {
-  const min: Vec3 = [Infinity, 0, Infinity], max: Vec3 = [-Infinity, c.height, -Infinity];
-  for (let i = 0; i < c.meta.n; i++) for (const k of [0, 2] as const) {
-    min[k] = Math.min(min[k], c.meta.home[3 * i + k]! - c.meta.half[3 * i + k]! - 1);
-    max[k] = Math.max(max[k], c.meta.home[3 * i + k]! + c.meta.half[3 * i + k]! + 1);
-  }
-  const o = frame(min, max);
-  const first = c.def.solutions?.par?.[0];
-  if (first && 'az' in first) o.yaw = ((90 - first.az / 2) * Math.PI) / 180;
-  return { ...o, floor: EYE_ABOVE_GROUND };
+  /** Impacts: @tb/audio's collapse synth (the default) or the old pentatonic voices ('synth'); the cues play either way. */
+  sound?: GameSoundMode;
+  /** The collapse sound's level, dB over the game's (GAME_SOUND_DB). */
+  impactsDb?: number;
 }
 
 /** An orbiting drag of (dx, dy) pixels: turns, and tilts from looking down to looking up (past level the floor brings the eye in). */
@@ -230,6 +238,9 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
   let arrivals = newArrivals();
   let synth: Synth | null = null;
   let muted = false;
+  const soundMode = env.sound ?? 'collapse';
+  const collapse = soundMode === 'collapse' ? new CollapseSound(env.impactsDb ?? 0) : null;
+  handle.sound = () => ({ mode: soundMode, status: collapse?.status ?? 'off', error: collapse?.error ?? '', posted: collapse?.posted ?? 0, stats: collapse?.stats ?? null });
   const voices: Voice[] = [];
 
   let c!: CompiledLevel, driver!: Driver, orbit!: Orbit;
@@ -314,6 +325,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     handle.timing = { loadMs: performance.now() - t0, stepMs: [], moving: [], frameMs: [], costMs: [] };
     descs = driver.bodies;
     perStep = env.perStep?.(c) ?? null;
+    collapse?.load(c);
     source.reset(c.scene.bodies);
     source.update(driver.snapshot, descs);
     // Fresh effects: role tints, and every body at scale 0 for Regrow.
@@ -375,7 +387,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
   function onFeedback(fb: Feedback[]) {
     for (const f of fb) {
       handle.counts[f.t] = (handle.counts[f.t] ?? 0) + 1;
-      voices.push(...voicesFor(f));
+      voices.push(...voicesFor(f, { impacts: !collapse }));
       switch (f.t) {
         case 'fired': juice.kick(f.ammo === 'cannonball' ? 0.05 : 0.03); break;
         case 'contact': {
@@ -509,9 +521,18 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
   };
 
   // Audio needs a user gesture before it may start.
+  // One context for the cues (Synth) and the collision sound, summed into a last safety limiter.
   const wakeAudio = () => {
-    if (!synth) { try { synth = new Synth(new AudioContext()); synth.muted = muted; } catch { return; } }
+    if (!synth) {
+      try {
+        const ctx = new AudioContext({ latencyHint: 'interactive' }), master = safetyLimiter(ctx);
+        synth = new Synth(ctx, master);
+        synth.muted = muted;
+        collapse?.setMuted(muted);
+      } catch { return; }
+    }
     if (synth.ctx.state === 'suspended') void synth.ctx.resume();
+    collapse?.wake(synth.ctx, synth.master);
   };
 
   // Pointer: hover aims, a click without drag fires, drag orbits (right or shift: pan).
@@ -577,7 +598,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     if (k === 'r') void handle.retry();
     if (k === 'n' && levelIdx + 1 < levels.length) void load(levelIdx + 1).catch(fail);
     if (k === 'p' && levelIdx > 0) void load(levelIdx - 1).catch(fail);
-    if (k === 'm') { muted = !muted; if (synth) synth.muted = muted; }
+    if (k === 'm') { muted = !muted; if (synth) synth.muted = muted; collapse?.setMuted(muted); }
   });
   addEventListener('keyup', (e) => { if (e.key === ' ') fastHeld = false; });
 
@@ -621,6 +642,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     }
     const running = !loading && driver.session.phase === 'running';
     if (running) handle.timing.frameMs.push(frameMs);
+    else collapse?.pause(); // between shots: the next step's audio frame starts afresh
     if (follow.active) {
       const red = loading ? undefined : driver.observed?.red;
       follow.update(orbit, dt, running, red?.movingBox ?? null, red?.nMoving ?? 0, c.frame.unit, followClip);
@@ -685,6 +707,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
       spawned();
       if (red && feel.tailSkip && d.session.phase === 'running') tail.update(red.nMoving, c.meta.n, d.session.liveCollapse);
       source.update(d.snapshot, descs);
+      collapse?.frame(d.snapshot, descs, eyeOf(orbit), orbit.target);
       arrived(arrivals, performance.now(), 1000 * c.scene.dt);
       // Steps run between frames: mirror what this one changed (phase, strokes) now, so the handle
       // never shows a step's result while still saying running until the next frame.

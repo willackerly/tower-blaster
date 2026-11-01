@@ -113,6 +113,9 @@ importers:
       '@tb/adapter-rapier':
         specifier: workspace:*
         version: link:../adapter-rapier
+      '@tb/audio':
+        specifier: workspace:*
+        version: link:../audio
       '@tb/engine-api':
         specifier: workspace:*
         version: link:../engine-api
@@ -131,6 +134,9 @@ importers:
       '@tb/physics-gpu':
         specifier: workspace:*
         version: link:../physics-gpu
+      '@tb/physics-ref':
+        specifier: workspace:*
+        version: link:../physics-ref
       '@tb/render':
         specifier: workspace:*
         version: link:../render

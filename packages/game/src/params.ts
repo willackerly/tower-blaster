@@ -8,6 +8,7 @@ import { BIG_LEVELS, checkPhysics, checkSettle, isRackItem, itemRef, levelById, 
 import { LOOKS } from '@tb/render';
 import { type EngineKind, engineKind } from './engines.ts';
 import { paceFeel, type PaceFeel } from './pacing.ts';
+import type { GameSoundMode } from './sound-map.ts';
 
 /** The game's look when ?look= is absent: the maquette, whose pale albedo shows the role tints true. */
 export const GAME_LOOK = 'hazy';
@@ -92,6 +93,19 @@ export interface GameParams {
   shots: Shot[] | null;
   /** ?offscreen=1 (tests): draw only for captures. */
   offscreen: boolean;
+  /** ?keystone.sound=synth: impacts as the old pentatonic voices instead of the collision sound (collapse, the default). */
+  sound: GameSoundMode;
+  /** ?keystone.impacts=-6: the collision sound's level, dB over the game's own (-40 to 20). */
+  impactsDb: number;
+}
+
+/** ?keystone.sound and ?keystone.impacts. */
+export function gameSound(q: URLSearchParams): Pick<GameParams, 'sound' | 'impactsDb'> {
+  const mode = q.get('keystone.sound') ?? 'collapse';
+  if (mode !== 'collapse' && mode !== 'synth') throw new Error(`keystone.sound must be collapse or synth: ${mode}`);
+  const t = q.get('keystone.impacts'), db = t === null ? 0 : t.trim() === '' ? NaN : Number(t);
+  if (!(db >= -40 && db <= 20)) throw new Error(`keystone.impacts (dB) must be from -40 to 20: ${t}`);
+  return { sound: mode, impactsDb: db };
 }
 
 /**
@@ -155,5 +169,6 @@ export function parseGameParams(q: URLSearchParams): GameParams {
     look: lookName(q.get('look') ?? GAME_LOOK),
     shots: lineOf(level, q.get('keystone.shots')),
     offscreen: q.get('offscreen') === '1',
+    ...gameSound(q),
   };
 }

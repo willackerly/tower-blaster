@@ -55,6 +55,18 @@ export const SOUND_MATERIALS = {
   acrylic: { model: 'shell', size: 0.08, wall: 0.0025, E: 3.2e9, nu: 0.37, rho: 1190, eta: 0.02, jitter: 0.005, R: 0.02, mstar: 0.7, ringDb: 0, clickDb: 0, gritDb: -Infinity },
   /** Real look: stone or concrete block at the body's own size. */
   stone: { model: 'cube', E: 30e9, nu: 0.2, rho: 2300, eta: 0.015, jitter: 0.02, R: 0.002, mstar: 0.7, ringDb: 0, clickDb: 0, gritDb: -6 },
+  // Keystone's materials (the game). Its blocks are model-scale maquettes (@tb/keystone materials.ts):
+  // plaster and iron are hollow, so they ring as shells; ice and rubber are solid.
+  /** Hollow plaster maquette block, 2 cm walls: a damped bonk (~300 Hz at 0.5 m) that crumbles. */
+  plaster: { model: 'shell', wall: 0.02, E: 5e9, nu: 0.25, rho: 1000, eta: 0.04, jitter: 0.03, R: 0.01, mstar: 0.7, ringDb: 0, clickDb: 0, gritDb: -6 },
+  /** Hollow cast-iron box, 6 mm walls: a long clang (~200 Hz at 0.5 m, rings near a second). */
+  iron: { model: 'shell', wall: 0.006, E: 170e9, nu: 0.27, rho: 7200, eta: 0.002, jitter: 0.01, R: 0.01, mstar: 0.7, ringDb: -6, clickDb: 0, gritDb: -Infinity },
+  /** Solid ice: a thud a little brighter and longer than stone's, and it cracks. */
+  ice: { model: 'cube', E: 9e9, nu: 0.33, rho: 917, eta: 0.005, jitter: 0.02, R: 0.002, mstar: 0.7, ringDb: 0, clickDb: 0, gritDb: -6 },
+  /** Solid rubber: a dull, low bomp (its contact lasts tens of ms). */
+  rubber: { model: 'cube', E: 0.05e9, nu: 0.45, rho: 1100, eta: 0.1, jitter: 0.03, R: 0.02, mstar: 0.7, ringDb: 0, clickDb: 0, gritDb: -Infinity },
+  /** Solid steel (Keystone's ammo): a hard knock with a faint long ring. */
+  steel: { model: 'cube', E: 200e9, nu: 0.29, rho: 7800, eta: 0.0005, jitter: 0.005, R: 0.01, mstar: 0.7, ringDb: 0, clickDb: 0, gritDb: -Infinity },
 } as const satisfies Record<string, SoundMaterial>;
 
 const POSITIVE = ['E', 'nu', 'rho', 'eta', 'R', 'mstar'] as const;

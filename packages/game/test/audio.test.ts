@@ -48,6 +48,18 @@ describe('voices for feedback', () => {
     expect(crack[1]!.freq / crack[0]!.freq).toBeCloseTo(Math.SQRT2, 3);
     expect(voicesFor({ t: 'slowMo', step: 0, body: 0 })).toEqual([]);
   });
+  it('with the collision sound on, impacts and contacts make no voices; every cue still does', () => {
+    const hist = new Uint32Array(6 * BANDS); hist[3] = 5;
+    expect(voicesFor({ t: 'impacts', step: 0, hist, total: 5 }, { impacts: false })).toEqual([]);
+    expect(voicesFor({ t: 'contact', step: 0, body: 0, dv: 3, impulse: 3000 }, { impacts: false })).toEqual([]);
+    const cues: Feedback[] = [
+      { t: 'fired', step: 0, ammo: 'marble', body: 0, ke: 1 }, { t: 'crownDown', step: 0, body: 0, ordinal: 0 }, { t: 'heritageCrack', step: 0, body: 0 },
+      { t: 'tier', step: 0, leverage: 20, tier: 2 }, { t: 'levelEnd', step: 0, cleared: true, score },
+    ];
+    for (const e of cues) expect(voicesFor(e, { impacts: false })).toEqual(voicesFor(e));
+    expect(voicesFor({ t: 'impacts', step: 0, hist, total: 5 }).length).toBe(1); // and by default as before
+  });
+
   it('limits a collapse to the loudest voices', () => {
     const vs: Voice[] = Array.from({ length: 20 }, (_, k) => ({ kind: 'tone', freq: 440, gain: k / 100, decay: 0.1, delay: 0 }));
     const kept = limitVoices(vs);

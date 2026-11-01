@@ -65,8 +65,66 @@ How it runs: the viewer already reads every step's snapshot back, so a
 `tb-collapse` (worklet.ts, a thin shell over host.ts's `CollapseHost`). The
 main thread's share is one pass over the bodies; the synthesis is on the audio
 thread. Fired balls are silent (their own sound is not modelled yet), and
-under `rules=keystone` the sound waits: the game's loop does not feed it yet,
-and the game keeps its own feedback sounds (`@tb/game` audio.ts).
+under `rules=keystone` the viewer's own sound waits and the game's plays (In
+the game, below).
+
+## In the game (2026-11-01)
+
+The game page (and the viewer under `rules=keystone`) plays the same collapse
+synth for its impacts. `@tb/game` collapse-sound.ts taps the snapshot the game
+already has on the CPU once per physics step (the game's physics loop,
+physics-loop.ts; the audio frame spans the wall time since the last step, so
+slow motion stretches it), and posts it to the same worklet on the page's one AudioContext.
+The old synth (audio.ts) keeps the cues: launch whump, crown arpeggio,
+heritage tritone, tier bowl and level end. Its `impacts` and `contact` voices
+are off unless `keystone.sound=synth`. Both paths meet in a last fast
+compressor at -1 dBFS, so the two never clip together. It starts on the first
+click or key, and M mutes both.
+
+Sounds by body (sound-map.ts): one slot per Keystone material, then one per
+ammo kind, so each sounds at its own size.
+
+| Keystone | Sound | Model, at 0.5 m |
+|---|---|---|
+| plaster (hollow maquette) | `plaster` | shell, 2 cm walls: a damped bonk at ~300 Hz; grit |
+| stone | `stone` | cube: a thud with grit |
+| iron (hollow) | `iron` | shell, 6 mm walls: a clang at ~200 Hz ringing near a second (ringDb -6) |
+| ice | `ice` | cube: a thud, a little brighter than stone; grit |
+| rubber | `rubber` | cube: a dull bomp (34 ms contact) |
+| marble, cannonball, drop | `steel` at 0.2, 0.5, 0.4 m | cube: a hard knock |
+| cue | `steel` as a 1.2 m bar | plank (free-free beam): it rings |
+| a rack grenade's shell | `steel` as the marble | (iron, marble-sized) |
+| rack projectiles (`p-<preset>`) | silent for now | each needs its own material (rubber, resin, stone) |
+
+Level: the game's camera is ~10 m from 0.5 m blocks, where the viewer's city
+is 75 m from 1 m ones, so at the viewer's level every par line limits by 18-19
+dB. `GAME_SOUND_DB` = -22 puts the loudest at ~0.6, and `keystone.impacts=`
+(dB) moves it. `sound-cli.ts` plays each par line on the AVBD reference and
+renders it from the game camera (WAVs in /mnt/project-files/sound/game/):
+
+| Level | Impacts (slot) | Peak at the game level | Limited |
+|---|---|---|---|
+| L1 | plaster 480, cannonball 5 | 0.60 | 0 dB |
+| L2 | plaster 425, stone 13, cannonball 4 | 0.59 | 0 |
+| L3 | plaster 84, marble 19 | 0.64 | 0 |
+| L4 | plaster 154, drop 9 | 0.13 | 0 |
+| L5 | plaster 484, marble 10 | 0.35 | 0 |
+
+Tests: game sound-map.test.ts checks every slot's sound and size, the ammo
+kind of every ammo body, and the L1 par line on Rapier rendered under the
+limiter with at most 3 dB of limiting. e2e-sound.test.ts covers the page:
+the first key starts it, the par line's impacts reach the worklet and peak
+under 0.9, and `keystone.sound=synth` creates nothing. The materials' tests
+(audio modes.test.ts) check that plaster and iron ring, ice, rubber and steel
+thud, and only stone, ice and plaster shed grit.
+
+Cost: the game holds ten slots, most of them silent. Silent materials used to
+cost ~1.5% of a core each, scanning idle banks and click resonators every block.
+Now a material with nothing ringing and no input is skipped (an engine test
+holds its work at zero). L1's capture costs 16% of a VM core where it was 32%
+(`cost-cli.ts`; VM figures are sanity checks only, the M5 gives the real
+number). The hand balances (plaster's
+and iron's levels, the game level) wait for S9's recordings and a listen.
 
 ## Distortion (2026-10-30)
 
@@ -208,4 +266,4 @@ next layer; it waits for recordings (S9).
 8. S8 granular non-modal layers: stone grit done (2026-11-01, Grit above); splinters and rubble sliding not yet.
 9. S9 calibration from recordings (example-guided, Ren et al. 2013).
 10. S10 M5 bench (`pnpm bench:audio`): audio-thread load and the tap's main-thread cost at 10k and 100k.
-11. S11 game adoption (game thread's call), and ball and level materials.
+11. S11 game adoption, and ball and level materials. Done (2026-11-01, In the game above).

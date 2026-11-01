@@ -2,7 +2,8 @@
 // with ?engine=rapier, in the maquette look. A bare URL opens the slice (B1, then B2
 // and B3); ?level=L2 starts on another level (L1 to L5: the chamber levels, par),
 // ?keystone.rack= gives it another rack, ?look= and real.* change the look, ?keystone.hitstop=1 and ?keystone.slowmo=1
-// turn on pace juice, ?keystone.shots= plays a line once loaded, ?offscreen=1
+// turn on pace juice, ?keystone.sound=synth plays impacts as the old pentatonic voices and
+// ?keystone.impacts=-6 sets the collision sound's level (dB), ?keystone.shots= plays a line once loaded, ?offscreen=1
 // (tests) draws only for captures. The keys are params.ts's, which the viewer
 // reads too under rules=keystone, so the same link opens in either page.
 import { seriesOf } from '@tb/keystone';
@@ -32,7 +33,7 @@ function fail(e: unknown) {
 
 async function main() {
   const q = new URLSearchParams(location.search);
-  const { level, rack, rules, engine, feel, look, shots, offscreen } = parseGameParams(q);
+  const { level, rack, rules, engine, feel, look, shots, offscreen, sound, impactsDb } = parseGameParams(q);
   // ?keystone.rack replaces the opening level's rack (its def, so retry keeps it); other levels keep their own.
   // The rule overrides (keystone.scoring, keystone.autobank, physics) apply to every level; stars cast on
   // another engine do not apply (onEngine).
@@ -55,7 +56,7 @@ async function main() {
   let shown = level.id;
   await playKeystone({
     canvas, offscreen, device, renderer, source, hud: $('hud'), banner: $('banner'), result: $('result'),
-    levels, start, engine, feel, fail,
+    levels, start, engine, feel, fail, sound, impactsDb,
     hooks: {
       // The URL follows the level, keeping the other keys; a line and a rack are the level's they were made for.
       loaded: (c) => {

@@ -35,7 +35,12 @@ const TIMBRE: Record<string, { kind: Voice['kind']; wave?: Wave; octave: number;
   steel: { kind: 'tone', wave: 'triangle', octave: 2, decay: 0.3 },
 };
 
-export function voicesFor(fb: Feedback): Voice[] {
+/**
+ * opts.impacts false: the collision sound (@tb/audio, collapse-sound.ts) plays the impacts, so
+ * `impacts` and `contact` make no voices here; the cues (launch, crowns, heritage, tier, level end) stay.
+ */
+export function voicesFor(fb: Feedback, opts: { impacts?: boolean } = {}): Voice[] {
+  if (opts.impacts === false && (fb.t === 'impacts' || fb.t === 'contact')) return [];
   switch (fb.t) {
     case 'fired':
       // A soft whump, heavier for heavier shots.
@@ -88,16 +93,19 @@ export function limitVoices(vs: Voice[], max = MAX_VOICES): Voice[] {
 /** WebAudio renderer for voices. Created on the first user gesture (autoplay policy). */
 export class Synth {
   private readonly out: GainNode;
+  /** Where the page's sounds meet (the synth's own output goes here too). */
+  readonly master: AudioNode;
   private readonly noise: AudioBuffer;
   muted = false;
 
-  constructor(readonly ctx: AudioContext) {
+  constructor(readonly ctx: AudioContext, dest: AudioNode = ctx.destination) {
+    this.master = dest;
     const comp = ctx.createDynamicsCompressor();
     comp.threshold.value = -14;
     comp.ratio.value = 6;
     this.out = ctx.createGain();
     this.out.gain.value = 0.7;
-    this.out.connect(comp).connect(ctx.destination);
+    this.out.connect(comp).connect(dest);
     // One second of white noise from a fixed LCG: no randomness at runtime.
     this.noise = ctx.createBuffer(1, ctx.sampleRate, ctx.sampleRate);
     const d = this.noise.getChannelData(0);
