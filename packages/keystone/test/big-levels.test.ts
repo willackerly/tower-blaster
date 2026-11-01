@@ -2,7 +2,7 @@
 // compiles and validates clean on the GPU budget, is reachable by id and plays
 // on in its own series, and the shared building blocks hold their shapes.
 import { describe, expect, it } from 'vitest';
-import { B1, B3, BIG_LEVELS, compileLevel, findLevel, L2, LEVELS, levelById, SERIES, seriesOf, thirdBondWall, validateLevel } from '@tb/keystone';
+import { B1, B3, BIG_LEVELS, castStars, compileLevel, findLevel, L2, LEVELS, levelById, SERIES, seriesOf, thirdBondWall, validateLevel } from '@tb/keystone';
 
 describe('big levels', () => {
   it.each(BIG_LEVELS.map((d) => d.id))('%s compiles and validates clean on the GPU, scored on outcome', (id) => {
@@ -17,6 +17,16 @@ describe('big levels', () => {
     expect(c.meta.n).toBe(1000);
     expect(B1.rack).toEqual(['w-bomb', 'w-bomb', 'w-bomb']);
     expect(B1.objective).toEqual({ kind: 'collapse', min: 0.4 });
+  });
+
+  it('B1 plays by its cast stars: their hash is the level\'s (any change to B1 drops them until it is recast)', () => {
+    const c = compileLevel(B1);
+    expect(B1.stars?.hash).toBe(c.hash);
+    expect(castStars(c)).toBe(B1.stars);
+    // One star at the objective, two at the competent median, three at the nudge cloud's lower quartile.
+    expect(B1.stars!.t2).toBeGreaterThan(0.4);
+    expect(B1.stars!.t3).toBeGreaterThan(B1.stars!.t2);
+    expect(castStars(compileLevel({ ...B1, rack: ['w-bomb', 'w-bomb'] }))).toBeUndefined();
   });
 
   it('B3 Ten Thousand: 10,000 stone cubes, three bombs, collapse 0.4, within the GPU engine\'s body limit', () => {

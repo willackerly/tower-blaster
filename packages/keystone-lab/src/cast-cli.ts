@@ -1,7 +1,7 @@
 // pnpm keystone:cast <level> [--engine gpu|ref|rapier] [--channel chrome] [--headed]
 //   [--seed N] [--metric collapse|crowns|skyline|score] [--recipe short|full|C,L,M,K,N]
 //   [--out cast.json] [--md cast.md] [--compare other.json] [--max-steps N] [--explore N]
-//   [--cloud-of cast.json [--n 16]] [--budget-min 60]
+//   [--cloud-of cast.json [--n 16]] [--budget-min 60] [--pool a.json,b.json]
 // <level>: a built-in level id, or --level-file path.json (a LevelDef), or
 // --scenario S3 --param W=50 ... (the automatic scenario level), or --draft B1a
 // (keystone-lab drafts.ts). --explore N plays N competent lines only and
@@ -14,14 +14,16 @@
 // Metal with --channel chrome on a Mac); ref and rapier play in this thread.
 // Prints the thresholds and gates, writes the whole cast as JSON (--out) and
 // its summary as markdown (--md). --compare runs the recast and cross-device
-// gates against an earlier cast's JSON. --budget-min raises the budget gate's
+// gates against an earlier cast's JSON. --pool a.json,b.json plays nothing: it
+// pools casts of the level (a cast and its recasts) into one set of stars
+// (poolCasts) and prints them as the LevelDef's stars. --budget-min raises the budget gate's
 // 60 min for a level whose cast cannot fit it (10k levels: about 3 h), and the
 // gate's note records the raise. Exits 2 when a gate fails, 4 when a
 // play hit an engine limit (as bench:browser does).
 import { readFileSync, writeFileSync } from 'node:fs';
-import { type LevelDef, levelById, scenarioLevel, STAR_METRICS, type StarMetric } from '@tb/keystone';
+import { compileLevel, type LevelDef, levelById, scenarioLevel, STAR_METRICS, type StarMetric } from '@tb/keystone';
 import { exitNow } from '@tb/testkit';
-import { CAST_BUDGET_MS, castLevel, castMarkdown, cloudCheck, exploreLevel, explorationMarkdown, type CastPlayer, type CastRecipe, type CastResult, compareCasts, FULL_RECIPE, nodeCastPlayer, playsOf, SHORT_RECIPE, withWallTime } from './cast.ts';
+import { CAST_BUDGET_MS, castLevel, castMarkdown, cloudCheck, exploreLevel, explorationMarkdown, type CastPlayer, type CastRecipe, type CastResult, compareCasts, FULL_RECIPE, nodeCastPlayer, playsOf, poolCasts, SHORT_RECIPE, withWallTime } from './cast.ts';
 import { openBrowserCastPlayer } from './cast-browser.ts';
 import { draftByName } from './drafts.ts';
 
@@ -58,6 +60,27 @@ if (metric !== undefined && !(STAR_METRICS as readonly string[]).includes(metric
 const budgetMin = Number(flags.get('budget-min') ?? CAST_BUDGET_MS / 60_000);
 if (!(budgetMin > 0)) throw new Error(`--budget-min needs a positive number of minutes: ${flags.get('budget-min')}`);
 const budgetMs = budgetMin * 60_000;
+if (flags.has('pool')) {
+  const casts = flags.get('pool')!.split(',').map((f) => JSON.parse(readFileSync(f, 'utf8')) as CastResult);
+  const p = poolCasts(casts), hash = compileLevel(def).hash;
+  if (p.stars.hash !== hash) throw new Error(`pool: the casts are of ${def.id} hash ${p.stars.hash}, but it hashes ${hash} now: recast`);
+  const f3 = (x: number) => x.toFixed(3), row = (name: string, x: typeof p.cloud) => `| ${name} | ${x.n} | ${[x.min, x.p10, x.p25, x.p50, x.p75, x.p90, x.max].map(f3).join(' | ')} |`;
+  const md = [
+    `### ${def.id} stars pooled from seeds ${p.seeds.join(', ')} on ${p.stars.castOn} (${p.stars.engine}), ${p.stars.n} plays`,
+    '',
+    `T2 ${f3(p.stars.t2)} (median of every competent end, raw ${f3(p.raw.t2)}), T3 ${f3(p.stars.t3)} (lower quartile of every nudge cloud, raw ${f3(p.raw.t3)}), beat the bot above ${f3(p.raw.best)}. Per seed: ${casts.map((r) => `seed ${r.seed} T2 ${f3(r.raw.t2)} T3 ${f3(r.raw.t3)}`).join('; ')}.`,
+    '',
+    '| Cloud | n | min | P10 | P25 | P50 | P75 | P90 | max |',
+    '|---|---|---|---|---|---|---|---|---|',
+    row('competent ends', p.competent),
+    row('nudge cloud ends', p.cloud),
+  ].join('\n');
+  console.log(md);
+  console.log(`stars: ${JSON.stringify(p.stars)}`);
+  if (flags.has('out')) writeFileSync(flags.get('out')!, JSON.stringify(p, null, 1));
+  if (flags.has('md')) writeFileSync(flags.get('md')!, md);
+  process.exit();
+}
 const maxSteps = flags.has('max-steps') ? Number(flags.get('max-steps')) : undefined;
 let player: CastPlayer, close = async (): Promise<string[]> => [];
 if (engine === 'gpu' || engine === 'gpu-rapier') {

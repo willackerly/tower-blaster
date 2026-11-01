@@ -5,10 +5,12 @@
 // in a test file's budget (BIG_REST_MAX bodies: B1's 1,000 at about 0.35 to
 // 0.47 s a step: 300 pre-settle plus 150 steps took 198 s here) for
 // REST_STEPS (default 100 on SwiftShader; the spec's 600 with TB_CHANNEL=chrome on Metal,
-// where every big level runs). The levels' showcase lines replay on Metal once
-// their stars are cast (spectacle-mode.md section 11, G5.2).
+// where every big level runs). A cast level's showcase line (solutions.ace, its
+// cast's best line) replays and meets the objective with no limit hit, on a real
+// GPU or with PHYSICS_GPU_SLOW=1 only: a 3-shot line on B1 is about 1,800 steps,
+// some 12 min on SwiftShader (spectacle-mode.md section 11, G5.2).
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { BIG_LEVELS, compileLevel } from '@tb/keystone';
+import { BIG_LEVELS, castStars, compileLevel, writeShots } from '@tb/keystone';
 import { requireWebGPU } from '@tb/testkit';
 import { type BrowserCastPlayer, openBrowserCastPlayer } from '../src/cast-browser.ts';
 
@@ -16,6 +18,8 @@ const MINUTES = 60_000;
 const channel = process.env.TB_CHANNEL;
 /** Largest level loaded on SwiftShader; every level on a real GPU (TB_CHANNEL) or with PHYSICS_GPU_SLOW=1. */
 const BIG_REST_MAX = channel || process.env.PHYSICS_GPU_SLOW === '1' ? Infinity : 1000;
+/** Showcase lines replay on a real GPU or with PHYSICS_GPU_SLOW=1. */
+const SHOWCASE = Boolean(channel) || process.env.PHYSICS_GPU_SLOW === '1';
 const REST_STEPS = Number(process.env.REST_STEPS ?? (channel ? 600 : 100));
 /** The rest bound in cells (h): the spec's for the big levels. */
 const BOUND = 0.05;
@@ -40,6 +44,16 @@ describe('big levels at rest on the GPU solver', () => {
     expect(r.limits).toEqual([]);
     expect(r.maxMove).toBeLessThan(BOUND);
     expect(Math.abs(r.topDrop)).toBeLessThan(BOUND);
+  }, 30 * MINUTES);
+  for (const { def } of sized.filter((l) => l.def.solutions?.ace && castStars(compileLevel(l.def)))) it.runIf(SHOWCASE)(`${def.id}'s showcase line meets the objective with no limit hit`, async (ctx) => {
+    if (!player) return ctx.skip();
+    const line = def.solutions!.ace!, [p] = await player.play(def, [line]);
+    const end = p!.samples.at(-1)!, stars = def.stars!;
+    console.log(`${def.id} showcase ${writeShots(line)} on ${player.adapter}: collapse ${end.collapse.toFixed(4)} after ${p!.samples.length} settles, ${p!.steps} steps (stars ${stars.t2} / ${stars.t3}, cast on ${stars.castOn})`);
+    expect(p!.limits).toEqual([]);
+    expect(p!.complete).toBe(true);
+    expect(p!.samples.length).toBe(line.length);
+    expect(end.met).toBe(true);
   }, 30 * MINUTES);
   it('every big level is either checked here or named as too big for this adapter', () => {
     const skipped = sized.filter((l) => l.n > BIG_REST_MAX).map((l) => `${l.def.id} (${l.n})`);
