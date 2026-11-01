@@ -6,6 +6,7 @@
   "dependencies": {
     "@tb/engine-api": "workspace:*",
     "@tb/geom": "workspace:*",
-    "@tb/scenarios": "workspace:*"
+    "@tb/scenarios": "workspace:*",
+    "@tb/weapons": "workspace:*"
   }
 }

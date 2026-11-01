@@ -27,7 +27,7 @@ describe('sound options', () => {
   });
 
   it('knobs at their defaults leave a material as it is; pitch +12 doubles every mode of every model', () => {
-    const knobs = { ring: 0, click: 0, damping: 1, pitch: 0, spread: 1 };
+    const knobs = { ring: 0, click: 0, grit: 0, damping: 1, pitch: 0, spread: 1 };
     for (const m of Object.values(SOUND_MATERIALS)) {
       expect(tunedMaterial(m, knobs)).toEqual(m);
       // Every mode an octave up (those pushed past the 18 kHz cut are gone).
@@ -36,8 +36,9 @@ describe('sound options', () => {
       expect(up.length).toBe(want.length);
       up.forEach((f, k) => expect(f / want[k]!).toBeCloseTo(1, 9));
     }
-    const t = tunedMaterial(SOUND_MATERIALS.pine, { ring: 3, click: -2, damping: 2, pitch: 0, spread: 2 });
-    expect([t.ringDb, t.clickDb, t.eta, t.jitter]).toEqual([3, -2, 0.02, 0.06]);
+    const t = tunedMaterial(SOUND_MATERIALS.pine, { ring: 3, click: -2, grit: 6, damping: 2, pitch: 0, spread: 2 });
+    expect([t.ringDb, t.clickDb, t.gritDb, t.eta, t.jitter]).toEqual([3, -2, -Infinity, 0.02, 0.06]); // pine has no grit to raise
+    expect(tunedMaterial(SOUND_MATERIALS.stone, { ...knobs, grit: -6 }).gritDb).toBe(SOUND_MATERIALS.stone.gritDb - 6);
     const base = modes(SOUND_MATERIALS.pine), damped = modes(t);
     expect(damped.tau[0]! / base.tau[0]!).toBeCloseTo(0.5, 9);
   });
