@@ -4,6 +4,7 @@
 // hash pins the exact scene a recorded solution was made against.
 import { type BodyDesc, massOf, type SceneDesc, type Vec3 } from '@tb/engine-api';
 import { DEFAULT_GAP, DEFAULT_UNIT, encodeTag, GRAVITY, MATERIALS, materialId, type MaterialName, type Role, ROLES } from './materials.ts';
+import { peOf_mJ } from './rules.ts';
 import { type ScenarioPart, scenarioBodies } from './scenario-part.ts';
 import { AMMO, type AmmoKind, type LauncherDef, type Shot, type ShotFrame, speedOf } from './shots.ts';
 
@@ -87,7 +88,6 @@ export interface LevelDef {
 export const scoringOf = (d: LevelDef): Scoring => d.scoring ?? 'par';
 
 export const ROLE_ID: Record<Role, number> = { plain: 0, crown: 1, heritage: 2 };
-export const MAX_BODIES = 2500;
 export const MAX_RACK = 6;
 
 /** Per structure body, index-aligned with scene.bodies. Ammo is appended after these at runtime. */
@@ -211,43 +211,89 @@ function bodiesDigest(bodies: readonly BodyDesc[]): string {
   return a.toString(16).padStart(8, '0');
 }
 
-export interface Issue { code: 'count' | 'overlap' | 'unsupported' | 'mass-ratio' | 'tunnelling' | 'crown-start' | 'rack' | 'empty'; message: string; bodies?: number[] }
+export interface Issue { code: 'count' | 'overlap' | 'unsupported' | 'mass-ratio' | 'tunnelling' | 'crown-start' | 'rack' | 'empty' | 'watched' | 'flat'; message: string; bodies?: number[] }
 
-const aabb = (m: BodyMeta, i: number) => {
-  const c = [m.home[3 * i]!, m.home[3 * i + 1]!, m.home[3 * i + 2]!], e = [m.half[3 * i]!, m.half[3 * i + 1]!, m.half[3 * i + 2]!];
-  return { lo: c.map((x, k) => x - e[k]!), hi: c.map((x, k) => x + e[k]!) };
+/** The engines a level can be checked for: their structure budgets differ. */
+export type LevelEngine = 'rapier' | 'gpu';
+/** Bodies an engine plays a level with: Rapier's prototype budget, the GPU solver's slice budget (raised by GPU sleep, E2). */
+export const ENGINE_MAX_BODIES: Record<LevelEngine, number> = { rapier: 2500, gpu: 10_000 };
+/**
+ * The engine a level is checked for when none is named: chamber (par) levels play on every engine, so
+ * Rapier's budget; outcome levels are the GPU's (spectacle-mode.md, section 8).
+ */
+export const defaultEngineOf = (d: LevelDef): LevelEngine => (scoringOf(d) === 'outcome' ? 'gpu' : 'rapier');
+/** Crowns plus heritage: they are read as watched bodies every step, and the 100k path reads at most 64. */
+export const MAX_WATCHED = 64;
+
+export interface ValidateOptions { engine?: LevelEngine }
+
+interface Box { lo: [number, number, number]; hi: [number, number, number] }
+
+const aabb = (m: BodyMeta, i: number): Box => {
+  const lo: [number, number, number] = [0, 0, 0], hi: [number, number, number] = [0, 0, 0];
+  for (let k = 0; k < 3; k++) { lo[k] = m.home[3 * i + k]! - m.half[3 * i + k]!; hi[k] = m.home[3 * i + k]! + m.half[3 * i + k]!; }
+  return { lo, hi };
 };
 
-/** Pairs whose AABBs, grown by `margin` on every side, overlap. Sweep on x. */
-function nearPairs(m: BodyMeta, margin: number): Array<[number, number]> {
-  const boxes = Array.from({ length: m.n }, (_, i) => aabb(m, i));
-  const order = boxes.map((_, i) => i).sort((a, b) => boxes[a]!.lo[0]! - boxes[b]!.lo[0]!);
-  const out: Array<[number, number]> = [];
-  for (let s = 0; s < order.length; s++) {
-    const i = order[s]!, A = boxes[i]!;
-    for (let t = s + 1; t < order.length; t++) {
-      const j = order[t]!, B = boxes[j]!;
-      if (B.lo[0]! > A.hi[0]! + 2 * margin) break;
-      if ([0, 1, 2].every((k) => A.lo[k]! - margin < B.hi[k]! + margin && B.lo[k]! - margin < A.hi[k]! + margin)) out.push(i < j ? [i, j] : [j, i]);
+/**
+ * Pairs (i < j, sorted) whose AABBs, grown by `margin` on every side, overlap. A uniform grid with
+ * cells of the median grown extent: each body goes in every cell its grown box covers, and a pair is
+ * reported only from the cell holding the low corner of the two grown boxes' intersection, so once.
+ * Near-linear for lattices (each cell holds a few bodies); long bodies span cells instead of growing them.
+ */
+function nearPairs(boxes: readonly Box[], margin: number): Array<[number, number]> {
+  const n = boxes.length;
+  if (n < 2) return [];
+  const ext = boxes.map((b) => Math.max(b.hi[0] - b.lo[0], b.hi[1] - b.lo[1], b.hi[2] - b.lo[2]) + 2 * margin).sort((a, b) => a - b);
+  const cell = Math.max(ext[n >> 1]!, 1e-9);
+  const OFF = 1 << 16, K = 1 << 17;
+  const ix = (x: number) => Math.floor(x / cell);
+  const grid = new Map<number, number[]>();
+  for (let i = 0; i < n; i++) {
+    const b = boxes[i]!;
+    const a0 = ix(b.lo[0] - margin), a1 = ix(b.hi[0] + margin), b0 = ix(b.lo[1] - margin), b1 = ix(b.hi[1] + margin), c0 = ix(b.lo[2] - margin), c1 = ix(b.hi[2] + margin);
+    for (let x = a0; x <= a1; x++) for (let y = b0; y <= b1; y++) for (let z = c0; z <= c1; z++) {
+      const key = ((x + OFF) * K + (y + OFF)) * K + (z + OFF);
+      const list = grid.get(key);
+      if (list) list.push(i); else grid.set(key, [i]);
     }
   }
-  return out;
+  const out: Array<[number, number]> = [];
+  for (const [key, list] of grid) {
+    const cz = (key % K) - OFF, cy = (Math.floor(key / K) % K) - OFF, cx = Math.floor(key / K / K) - OFF;
+    for (let s = 0; s < list.length; s++) for (let t = s + 1; t < list.length; t++) {
+      const i = list[s]!, j = list[t]!, A = boxes[i]!, B = boxes[j]!;
+      let near = true;
+      for (let k = 0; k < 3 && near; k++) near = A.lo[k]! - margin < B.hi[k]! + margin && B.lo[k]! - margin < A.hi[k]! + margin;
+      if (!near) continue;
+      // The intersection's low corner is in exactly one cell: report the pair there only.
+      if (ix(Math.max(A.lo[0], B.lo[0]) - margin) !== cx || ix(Math.max(A.lo[1], B.lo[1]) - margin) !== cy || ix(Math.max(A.lo[2], B.lo[2]) - margin) !== cz) continue;
+      out.push(i < j ? [i, j] : [j, i]);
+    }
+  }
+  return out.sort((a, b) => a[0] - b[0] || a[1] - b[1]);
 }
 
 /**
- * Static checks that keep levels solvable and the solver honest. The physical
- * check (the level sits still on a real engine) lives in the sim package.
+ * Static checks that keep levels solvable and the solver honest, near-linear in the body count so a
+ * 10k level validates in well under a second or two. The physical check (the level sits still on a
+ * real engine) lives in the sim package. `engine` picks the body budget (default defaultEngineOf).
  */
-export function validateLevel(c: CompiledLevel): Issue[] {
+export function validateLevel(c: CompiledLevel, opts: ValidateOptions = {}): Issue[] {
   const { def, meta: m } = c, h = c.frame.unit, issues: Issue[] = [];
+  const engine = opts.engine ?? defaultEngineOf(def), max = ENGINE_MAX_BODIES[engine];
   if (m.n === 0) issues.push({ code: 'empty', message: 'level has no bodies' });
-  if (m.n > MAX_BODIES) issues.push({ code: 'count', message: `${m.n} bodies > ${MAX_BODIES} (Rapier prototype budget)` });
+  if (m.n > max) issues.push({ code: 'count', message: `${m.n} bodies > ${max} (the ${engine} engine's budget)` });
   if (def.rack.length === 0 || def.rack.length > MAX_RACK || def.par < 1 || def.par > def.rack.length) issues.push({ code: 'rack', message: `rack of ${def.rack.length} with par ${def.par}: need 1 <= par <= rack <= ${MAX_RACK}` });
+  const watched = m.crowns.length + m.heritage.length;
+  if (watched > MAX_WATCHED) issues.push({ code: 'watched', message: `${m.crowns.length} crowns + ${m.heritage.length} heritage = ${watched} watched bodies > ${MAX_WATCHED}: judge big structures by collapse, skyline or footprint` });
 
   const eps = 1e-4 * h;
-  const box = (i: number) => aabb(m, i);
-  for (const [i, j] of nearPairs(m, 0.1 * h)) {
-    const A = box(i), B = box(j);
+  const boxes = Array.from({ length: m.n }, (_, i) => aabb(m, i));
+  // One pass at the wider margin; the support relation below needs a subset of these pairs.
+  const pairs = nearPairs(boxes, 0.1 * h);
+  for (const [i, j] of pairs) {
+    const A = boxes[i]!, B = boxes[j]!;
     const depth = Math.min(...[0, 1, 2].map((k) => Math.min(A.hi[k]!, B.hi[k]!) - Math.max(A.lo[k]!, B.lo[k]!)));
     if (depth > eps) issues.push({ code: 'overlap', message: `bodies ${i} and ${j} overlap by ${(depth / h).toFixed(3)} h`, bodies: [i, j] });
     const ratio = Math.max(m.mass[i]! / m.mass[j]!, m.mass[j]! / m.mass[i]!);
@@ -256,11 +302,10 @@ export function validateLevel(c: CompiledLevel): Issue[] {
 
   // Loose support: a body off the ground must rest on bodies whose tops meet
   // its bottom, with its centre over the bounding box of those contacts.
-  const boxes = Array.from({ length: m.n }, (_, i) => box(i));
   // above[j] = bodies resting directly on j; below[j] = what j rests on.
   const above: number[][] = Array.from({ length: m.n }, () => []);
   const below: number[][] = Array.from({ length: m.n }, () => []);
-  for (const [i, j] of nearPairs(m, 0.01 * h)) {
+  for (const [i, j] of pairs) {
     const A = boxes[i]!, B = boxes[j]!;
     const ox = Math.min(A.hi[0]!, B.hi[0]!) - Math.max(A.lo[0]!, B.lo[0]!), oz = Math.min(A.hi[2]!, B.hi[2]!) - Math.max(A.lo[2]!, B.lo[2]!);
     if (ox <= eps || oz <= eps) continue;
@@ -282,12 +327,10 @@ export function validateLevel(c: CompiledLevel): Issue[] {
     const A = boxes[i]!;
     if (A.lo[1]! < eps) continue;
     let x0 = Infinity, x1 = -Infinity, z0 = Infinity, z1 = -Infinity;
-    for (let j = 0; j < m.n; j++) {
+    for (const j of below[i]!) {
       const B = boxes[j]!;
-      if (j === i || Math.abs(B.hi[1]! - A.lo[1]!) > eps) continue;
-      const ox0 = Math.max(A.lo[0]!, B.lo[0]!), ox1 = Math.min(A.hi[0]!, B.hi[0]!), oz0 = Math.max(A.lo[2]!, B.lo[2]!), oz1 = Math.min(A.hi[2]!, B.hi[2]!);
-      if (ox1 - ox0 <= eps || oz1 - oz0 <= eps) continue;
-      x0 = Math.min(x0, ox0); x1 = Math.max(x1, ox1); z0 = Math.min(z0, oz0); z1 = Math.max(z1, oz1);
+      x0 = Math.min(x0, Math.max(A.lo[0]!, B.lo[0]!)); x1 = Math.max(x1, Math.min(A.hi[0]!, B.hi[0]!));
+      z0 = Math.min(z0, Math.max(A.lo[2]!, B.lo[2]!)); z1 = Math.max(z1, Math.min(A.hi[2]!, B.hi[2]!));
     }
     // Centre of mass of the body and everything resting on it, so a lever
     // whose own centre overhangs its supports passes if its load balances it.
@@ -296,6 +339,14 @@ export function validateLevel(c: CompiledLevel): Issue[] {
     for (const j of load) { mx += m.mass[j]! * m.home[3 * j]!; mz += m.mass[j]! * m.home[3 * j + 2]!; mm += m.mass[j]!; }
     const cx = mx / mm, cz = mz / mm;
     if (!(cx > x0 + eps && cx < x1 - eps && cz > z0 + eps && cz < z1 - eps)) issues.push({ code: 'unsupported', message: `body ${i} at y=${(A.lo[1]! / h).toFixed(2)} h: the centre of mass of it and its load is not over its supports`, bodies: [i] });
+  }
+
+  // Nothing to bring down: the structure's energy over lying flat is under one common block falling one h.
+  if (m.n > 0) {
+    let pe0 = 0, floor = 0;
+    for (let i = 0; i < m.n; i++) { pe0 += peOf_mJ(m.mass[i]!, m.home[3 * i + 1]!); floor += peOf_mJ(m.mass[i]!, Math.min(m.half[3 * i]!, m.half[3 * i + 1]!, m.half[3 * i + 2]!)); }
+    const block = commonMass(m), least = peOf_mJ(block, h);
+    if (pe0 - floor < least) issues.push({ code: 'flat', message: `the structure holds ${((pe0 - floor) / 1000).toFixed(1)} J over lying flat, under one ${block.toFixed(1)} kg block falling 1 h (${(least / 1000).toFixed(1)} J): nothing to bring down` });
   }
 
   // No continuous collision on the GPU path: one step of the fastest ammo must
@@ -314,6 +365,15 @@ export function validateLevel(c: CompiledLevel): Issue[] {
     if (y < def.crownLine * h || x < c.lot.min[0] || x > c.lot.max[0] || z < c.lot.min[1] || z > c.lot.max[1]) issues.push({ code: 'crown-start', message: `crown ${i} starts already down`, bodies: [i] });
   }
   return issues;
+}
+
+/** The most common structure body mass (ties: the lighter), for the `flat` check. */
+function commonMass(m: BodyMeta): number {
+  const count = new Map<number, number>();
+  for (let i = 0; i < m.n; i++) count.set(m.mass[i]!, (count.get(m.mass[i]!) ?? 0) + 1);
+  let best = m.mass[0]!, k = 0;
+  for (const [mass, c] of count) if (c > k || (c === k && mass < best)) { best = mass; k = c; }
+  return best;
 }
 
 export const roleName = (id: number): Role | 'ammo' => ROLES[id] ?? 'ammo';
