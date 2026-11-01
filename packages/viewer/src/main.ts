@@ -18,8 +18,8 @@ import type { V3 } from './math.ts';
 import { HEALTH_MS, limitFix, limitFixLabel, limitsHtml } from './health.ts';
 import { escapeHtml } from './html.ts';
 import { bounceOn, engineSpec, firedBody, froudeSpeed, keystoneEngine, levelOf, parseViewerConfig, presetSearch, scenarioEngineSpec, sceneTitle, toSearch, type ViewerConfig, viewerScene, withOption, worldEngineSpec } from './params.ts';
-import { projectileRadius, pushRadiusLimit, worldGrenade } from './projectile.ts';
-import { Grenades } from '@tb/weapons';
+import { projectileRadius, pushRadiusLimit, worldGrenade, worldWeapon } from './projectile.ts';
+import { WeaponRuntime } from '@tb/weapons';
 import { mountControls } from './controls.ts';
 import { startSearch } from './default-scene.ts';
 import { type DevAction, mountDev } from './dev-panel.ts';
@@ -108,7 +108,7 @@ interface ViewerHandle {
 }
 type InputHook = (s: Snapshot, step: number) => InputEvent[];
 declare global { interface Window { __viewer: ViewerHandle } }
-/** Steps of 1/60 s a proximity fuse predicts past each state the page reads (Grenades lookahead): a few frames. */
+/** Steps of 1/60 s a proximity fuse predicts past each state the page reads (WeaponRuntime lookahead): a few frames. */
 const GRENADE_LOOKAHEAD = 4;
 
 const canvas = document.getElementById('c') as HTMLCanvasElement;
@@ -231,8 +231,8 @@ async function main() {
   let fxSlots = 0;
   // This load's input hook (handle.inputHook), or none.
   let inputHook: InputHook | null = null;
-  // This load's fired grenades, waiting on their fuses (proj.weapon=grenade).
-  let grenades: Grenades | null = null;
+  // This load's fired weapons, waiting on their triggers (proj.weapon: the grenade or a WeaponSpec).
+  let grenades: WeaponRuntime | null = null;
   // This load's fired catalogue objects, painted their colours (the candy skin outside the real look).
   let painted: { id: number; colour: { natural: number; candy: number } }[] = [];
   const paint = (id: number, colour: { natural: number; candy: number }) => {
@@ -307,10 +307,10 @@ async function main() {
     handle.inputs = [];
     notice = '';
     inputHook = handle.inputHook?.() ?? null;
-    // The page reads the state about once a frame, so a fuse predicts that far ahead (Grenades).
+    // The page reads the state about once a frame, so a fuse predicts that far ahead (WeaponRuntime).
     painted = [];
     handle.painted = [];
-    grenades = new Grenades({ dt: next.dt, substeps: engine.info.integrator?.substeps ?? 1, gravity: next.gravity, groundY: next.ground?.y ?? null }, GRENADE_LOOKAHEAD * want.substeps);
+    grenades = new WeaponRuntime({ dt: next.dt, substeps: engine.info.integrator?.substeps ?? 1, gravity: next.gravity, groundY: next.ground?.y ?? null }, GRENADE_LOOKAHEAD * want.substeps);
     apply(s, t0, engine.stepIndex);
   }
 
@@ -422,15 +422,16 @@ async function main() {
       if (early) throw new Error(`input hook: an event for step ${early.step} is not after the observed step ${step}`);
       pushInput(input);
     }
-    const blasts = grenades?.observe(s, step, shapesFor(s.count));
+    // A split child's id: its spawn's place in the queue, which is in the engines' order (pushInput).
+    const blasts = grenades?.observe(s, step, shapesFor(s.count), (ev) => scene.bodies.length + events.filter((e) => e.kind === 'spawn').indexOf(ev));
     if (blasts?.length) pushGrenade(() => blasts);
   }
-  /** A grenade's blasts: an engine that refuses them (tiered) leaves a notice, not a stopped page. */
+  /** A weapon's events: an engine that refuses them (tiered) leaves a notice, not a stopped page. */
   function pushGrenade(blasts: () => InputEvent[]) {
     try {
       pushInput(blasts());
     } catch (e) {
-      notice = `grenade: ${e instanceof Error ? e.message : String(e)}`;
+      notice = `weapon: ${e instanceof Error ? e.message : String(e)}`;
       drawHud();
     }
   }
@@ -502,6 +503,9 @@ async function main() {
     }
     if (p.weapon === 'grenade' && p.grenade && grenades) {
       const [g, spec] = [grenades, worldGrenade(p.grenade, froudeSpeed(config.scale), config.substeps)];
+      pushGrenade(() => g.launch(id, ev.step, spec, ev.body.shape));
+    } else if (p.weapon && p.spec && grenades) {
+      const [g, spec] = [grenades, worldWeapon(p.spec, froudeSpeed(config.scale), config.substeps)];
       pushGrenade(() => g.launch(id, ev.step, spec, ev.body.shape));
     }
   };
