@@ -1,17 +1,22 @@
 // The game page's URL keys (params.ts), which the viewer reads too under
 // rules=keystone: defaults, accepted spellings, and refused values named.
 import { describe, expect, it } from 'vitest';
-import { B1, L1, L2, L3, type Shot, writeShots } from '@tb/keystone';
+import { B1, BIG_LEVELS, L1, L2, L3, seriesOf, type Shot, writeShots } from '@tb/keystone';
 import { compileLevel } from '@tb/keystone';
-import { GAME_LOOK, levelRules, onEngine, parseGameParams, withRules, writeLevelRules } from '../src/params.ts';
+import { DEFAULT_LEVEL, GAME_LOOK, levelRules, onEngine, parseGameParams, withRules, writeLevelRules } from '../src/params.ts';
 import { DEFAULT_FEEL } from '../src/pacing.ts';
 
 const parse = (search: string) => parseGameParams(new URLSearchParams(search));
 const par = L1.solutions!.par as Shot[];
 
 describe('game URL keys', () => {
-  it('defaults to the first level on the GPU solver in the maquette look, no juice and no line', () => {
-    expect(parse('')).toEqual({ level: L1, rack: null, rules: {}, engine: 'gpu', feel: DEFAULT_FEEL, look: GAME_LOOK, shots: null, offscreen: false });
+  it('a bare URL opens the slice\'s first level (B1) on the GPU solver in the maquette look, no juice and no line', () => {
+    expect(parse('')).toEqual({ level: B1, rack: null, rules: {}, engine: 'gpu', feel: DEFAULT_FEEL, look: GAME_LOOK, shots: null, offscreen: false });
+    expect(DEFAULT_LEVEL).toBe('B1');
+    expect(seriesOf(DEFAULT_LEVEL)).toBe(BIG_LEVELS);
+    // The chamber levels stay one key away, with par scoring.
+    expect(parse('?level=L1').level).toBe(L1);
+    expect(parse('?level=L1').level.scoring ?? 'par').toBe('par');
     expect(GAME_LOOK).toBe('hazy');
   });
 
@@ -40,7 +45,7 @@ describe('game URL keys', () => {
     expect(() => parse(`?keystone.rack=${Array(9).fill('marble').join(',')}`)).toThrow(/keystone.rack must list 1 to 8 items/);
     expect(() => parse('?keystone.rack=marble,nuke')).toThrow(/keystone.rack: nuke is not one of marble, cannonball/);
     expect(() => parse('?keystone.rack=marble,')).toThrow(/keystone.rack: an empty name is not one of/);
-    expect(() => parse('?keystone.rack=w-big')).toThrow(/keystone.rack: L1 has no weapons.big for w-big/);
+    expect(() => parse('?level=L1&keystone.rack=w-big')).toThrow(/keystone.rack: L1 has no weapons.big for w-big/);
   });
 
   it('opens a big level by id with its outcome scoring; a chamber level keeps par', () => {
@@ -51,13 +56,13 @@ describe('game URL keys', () => {
   });
 
   it('refuses bad values, naming the key', () => {
-    expect(() => parse('?level=L99')).toThrow(/unknown level L99; known: L1, L2, L3, L4, L5, B1/);
+    expect(() => parse('?level=L99')).toThrow(/unknown level L99; known: L1, L2, L3, L4, L5, B1, B2, B3/);
     expect(() => parse('?engine=physx')).toThrow(/unknown engine physx: use rapier or gpu/);
     expect(() => parse('?keystone.hitstop=yes')).toThrow(/keystone.hitstop must be 0 or 1: yes/);
     expect(() => parse('?keystone.slowmo=')).toThrow(/keystone.slowmo must be 0 or 1: $/);
     expect(() => parse('?look=neon')).toThrow(/unknown look neon; known: candy, hazy, real/);
     expect(() => parse('?keystone.shots=')).toThrow(/keystone.shots is empty/);
-    expect(() => parse('?keystone.shots=drop.0.0')).toThrow(/fires 1 drop but L1's rack holds 0/);
+    expect(() => parse('?level=L1&keystone.shots=drop.0.0')).toThrow(/fires 1 drop but L1's rack holds 0/);
     expect(() => parse('?keystone.shots=marble.0')).toThrow(/shot 1 .*marble takes 5 fields/);
   });
 });
@@ -69,7 +74,7 @@ describe('rule overrides', () => {
     expect(p.level).toEqual({ ...L1, scoring: 'outcome', autobank: true, custom: true });
     expect(compileLevel(p.level).hash).not.toBe(compileLevel(L1).hash);
     // The defaults written out are the level itself.
-    expect(compileLevel(parse('?keystone.scoring=par&keystone.autobank=0').level).hash).toBe(compileLevel(L1).hash);
+    expect(compileLevel(parse('?level=L1&keystone.scoring=par&keystone.autobank=0').level).hash).toBe(compileLevel(L1).hash);
     expect(withRules(L1, {})).toBe(L1);
     expect(levelRules(new URLSearchParams('?keystone.autobank=0'))).toEqual({ autobank: false });
   });
