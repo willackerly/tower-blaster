@@ -37,7 +37,7 @@ describe('formatting', () => {
     expect(hudHtml({ ...base, chips: [], reachable: false })).toMatch(/Out of reach/);
   });
   it('the result card lists every score line in order, then the total, stamp and stars', () => {
-    const shot = { ke: 1000, dPE_mJ: 2_000_000, leverage: 2, crownsDown: 4, crownsTotal: 4, heritageNew: 0, displaced: 30, outOfLot: 0, spawnStep: 0, settleStep: 100 };
+    const shot = { ke: 1000, dPE_mJ: 2_000_000, leverage: 2, crownsDown: 4, crownsTotal: 4, heritageNew: 0, displaced: 30, outOfLot: 0, pe_mJ: 0, spawnStep: 0, settleStep: 100 };
     const score = levelScore(L1, [shot], true, 40);
     const html = resultHtml(L1, score, 1, true);
     const labels = [...html.matchAll(/<div class="line[^"]*"[^>]*><span>([^<]+)<\/span>/g)].map((m) => m[1]);
