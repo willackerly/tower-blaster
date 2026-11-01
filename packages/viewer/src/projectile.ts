@@ -1,6 +1,7 @@
 // What a click fires: a ball or a cube, its size, mass and launch speed,
 // or a real object from @tb/weapons' catalogue (beach ball to the Raiders
-// boulder), and optionally a weapon (a grenade). The defaults reproduce the
+// boulder), and optionally a weapon (a grenade, or a WeaponSpec: a built-in
+// such as the firework, or one of your own from weapon.def). The defaults reproduce the
 // viewer's original ball exactly (radius 0.7, density 8, 40 m/s), so a
 // default setup fires the same body as before.
 //
@@ -13,7 +14,11 @@
 import { parseSpec } from '@tb/bench';
 import { type BodyDesc, type SceneDesc, type ShapeDesc, spawnedBodies, TAG_BALL, volumeOf } from '@tb/engine-api';
 import { boundingRadius } from '@tb/geom';
-import { checkGrenade, DEFAULT_GRENADE, FUSES, type Fuse, type GrenadeBlast, type GrenadeSpec, isPreset, PRESET_NAMES, type PresetName, PROJECTILE_PRESETS, STONE_DENSITY } from '@tb/weapons';
+import { DEFAULT_BLAST_MAX_DV, DEFAULT_BLAST_MAX_SPEED } from '@tb/engine-api';
+import {
+  BUILTIN_WEAPONS, checkGrenade, checkWeapon, DEFAULT_GRENADE, FUSES, type Fuse, type GrenadeBlast, type GrenadeSpec, isPreset, parseWeapon, PRESET_NAMES, type PresetName,
+  PROJECTILE_PRESETS, scaleWeapon, STONE_DENSITY, type WeaponSpec, writeWeapon,
+} from '@tb/weapons';
 import type { V3 } from './math.ts';
 
 export interface Projectile {
@@ -32,14 +37,23 @@ export interface Projectile {
   friction?: number;
   /** Real density a scene block of density 1 stands for, kg/m^3, for a preset's mass (URL key proj.blockDensity); default blockDensityOf the scene. */
   blockDensity?: number;
-  /** What it does besides hitting (URL key proj.weapon): absent, nothing; grenade, a fused blast. */
-  weapon?: Weapon;
+  /**
+   * What it does besides hitting (URL key proj.weapon): absent, nothing; grenade, a fused blast;
+   * another name, the WeaponSpec in spec (a built-in, BUILTIN_WEAPONS, or one of your own).
+   */
+  weapon?: string;
   /** With weapon grenade (and only then): its fuse and blast (URL keys grenade.*), in cube units at scale 1 (worldGrenade). */
   grenade?: GrenadeSpec;
+  /**
+   * With any other weapon (and only then): its spec, in cube units at scale 1 (worldWeapon), riding
+   * on the projectile as the grenade does (the spec's shell is the game rack's). URL key weapon.def
+   * (base64url JSON) for one that is not a built-in as it stands.
+   */
+  spec?: WeaponSpec;
 }
 
-export const WEAPONS = ['grenade'] as const;
-export type Weapon = (typeof WEAPONS)[number];
+/** proj.weapon values: the grenade and the built-in specs (any other name comes with weapon.def). */
+export const WEAPONS: readonly string[] = ['grenade', ...Object.keys(BUILTIN_WEAPONS)];
 
 export const DEFAULT_PROJECTILE: Projectile = { shape: 'ball', size: 1.4, mass: null, speed: 40 };
 const DEFAULT_DENSITY = 8;
@@ -163,6 +177,43 @@ export function worldGrenade(g: GrenadeSpec, froude: number, substeps: number): 
   return { ...g, blast: { ...g.blast, impulse: g.blast.impulse * froude, maxDv: g.blast.maxDv * froude, maxSpeed: g.blast.maxSpeed * substeps } };
 }
 
+/**
+ * A WeaponSpec for a world at this scale and substeps, as worldGrenade: speeds (spreads), blast
+ * impulse and maxDv froudeSpeed times, the speed cap substeps times (unset ones from the
+ * engine's defaults first), lengths and times as set.
+ */
+export function worldWeapon(spec: WeaponSpec, froude: number, substeps: number): WeaponSpec {
+  if (froude === 1 && substeps === 1) return spec;
+  const filled = JSON.parse(JSON.stringify(spec), (k, v) => (k === 'blast' ? { maxDv: DEFAULT_BLAST_MAX_DV, maxSpeed: DEFAULT_BLAST_MAX_SPEED, ...v } : v)) as WeaponSpec;
+  return scaleWeapon(filled, { speed: froude, impulse: froude, maxDv: froude, maxSpeed: substeps });
+}
+
+/** The URL key weapon.def: the spec's canonical JSON, compact, as base64url (UTF-8). */
+export function encodeWeaponParam(spec: WeaponSpec): string {
+  const bytes = new TextEncoder().encode(JSON.stringify(JSON.parse(writeWeapon(spec))));
+  let bin = '';
+  for (const b of bytes) bin += String.fromCharCode(b);
+  return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+
+export function decodeWeaponParam(raw: string): WeaponSpec {
+  let text: string;
+  try {
+    const bin = atob(raw.replace(/-/g, '+').replace(/_/g, '/'));
+    text = new TextDecoder('utf-8', { fatal: true }).decode(Uint8Array.from(bin, (c) => c.charCodeAt(0)));
+  } catch {
+    throw new Error('weapon.def is not base64url-encoded UTF-8');
+  }
+  try {
+    return parseWeapon(text);
+  } catch (e) {
+    throw new Error(`weapon.def: ${e instanceof Error ? e.message : String(e)}`);
+  }
+}
+
+/** A spec's proj.weapon name: its own, else custom. */
+export const weaponName = (spec: WeaponSpec) => spec.name ?? 'custom';
+
 /** The fields a preset starts from: its real size and speed, its own density (mass null), bounce and friction. */
 export function presetProjectile(name: PresetName): Projectile {
   const r = PROJECTILE_PRESETS[name];
@@ -186,12 +237,16 @@ export function parseProjectile(q: URLSearchParams): Projectile {
     const v = num(k);
     if (v !== undefined) p[k] = v;
   }
-  const weapon = q.get('proj.weapon');
-  if (weapon !== null && !WEAPONS.includes(weapon as Weapon)) throw new Error(`proj.weapon must be ${WEAPONS.join(' or ')}: ${weapon}`);
+  const def = q.get('weapon.def');
+  const custom = def === null ? null : decodeWeaponParam(def);
+  const weapon = q.get('proj.weapon') ?? (custom ? weaponName(custom) : null);
+  if (custom && weapon !== weaponName(custom)) throw new Error(`weapon.def is the weapon "${weaponName(custom)}", but proj.weapon is ${weapon}`);
+  if (weapon !== null && !custom && !WEAPONS.includes(weapon)) throw new Error(`proj.weapon must be one of ${WEAPONS.join(', ')} (or a weapon of your own, with weapon.def): ${weapon}`);
+  if (weapon === 'grenade' && custom) throw new Error('proj.weapon=grenade has its own keys (grenade.*), not weapon.def');
   const grenadeKeys = [...q.keys()].filter((k) => k.startsWith('grenade.'));
   if (weapon !== 'grenade') {
     if (grenadeKeys.length) throw new Error(`${grenadeKeys[0]} applies to proj.weapon=grenade`);
-    return p;
+    return weapon === null ? p : { ...p, weapon, spec: custom ?? BUILTIN_WEAPONS[weapon]! };
   }
   const known = new Set(['fuse', 'ground', ...GRENADE_NUMBERS, ...GRENADE_BLAST_KEYS].map((k) => `grenade.${k}`));
   const unknown = grenadeKeys.find((k) => !known.has(k));
@@ -210,6 +265,10 @@ export function writeProjectile(p: Projectile, q: URLSearchParams): void {
   if (p.blockDensity !== undefined) q.set('proj.blockDensity', String(p.blockDensity));
   if (p.weapon) q.set('proj.weapon', p.weapon);
   if (p.weapon === 'grenade') writeGrenade(p.grenade ?? DEFAULT_GRENADE, q);
+  else if (p.weapon && p.spec) {
+    const builtin = BUILTIN_WEAPONS[p.weapon];
+    if (!builtin || writeWeapon(builtin) !== writeWeapon(checkWeapon(p.spec))) q.set('weapon.def', encodeWeaponParam(p.spec));
+  }
 }
 
 /**

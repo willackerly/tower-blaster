@@ -13,8 +13,8 @@ import { type CameraPose, DEFAULT_FRAMING, type Framing } from './camera.ts';
 import { isRackItem, type LevelDef, RACK_ITEM_NAMES, readShots, type Shot, writeShots } from '@tb/keystone';
 import { encodeLevelParam, parseLevelDef } from './level-file.ts';
 import { defaultFraming, parseViewerConfig, type ViewerConfig, writeCamera, writeFraming } from './params.ts';
-import { DEFAULT_GRENADE, type GrenadeSpec } from '@tb/weapons';
-import { DEFAULT_PROJECTILE, parseGrenade, type Projectile, writeGrenade } from './projectile.ts';
+import { checkWeapon, DEFAULT_GRENADE, type GrenadeSpec, isWeaponSpec, WEAPON_NAME, WEAPON_SPEC_VERSION, type WeaponSpec } from '@tb/weapons';
+import { DEFAULT_PROJECTILE, parseGrenade, type Projectile, writeGrenade, writeProjectile } from './projectile.ts';
 
 export const SCENE_FILE_FORMAT = 'tower-blaster/viewer-scene';
 export const SCENE_FILE_VERSION = 1;
@@ -38,12 +38,14 @@ export interface SceneFile {
   /** substeps: physics steps per 1/60 s (absent in older files: 1); presettle: steps run before the scene shows (absent: the scene's default, defaultPresettle). */
   loop: { mode: 'free' | 'frame'; pipeline: boolean; maxSteps: number; substeps: number; presettle: number };
   /** shape, size, mass, speed, and weapon (absent: none) naming one of weapons. */
-  projectile: Omit<Projectile, 'grenade'>;
+  projectile: Omit<Projectile, 'grenade' | 'spec'>;
   /**
-   * The weapons a projectile can carry, by name, every one listed whether fired or not (absent in older
-   * files: the defaults). Only grenade so far (@tb/weapons GrenadeSpec), in cube units at scale 1.
+   * The weapons a projectile can carry, by name, in cube units at scale 1: grenade (@tb/weapons
+   * GrenadeSpec, listed whether fired or not; absent in older files: the default), and the fired
+   * WeaponSpec under its name when the projectile carries one (a file may list more; proj.weapon
+   * picks).
    */
-  weapons: { grenade: GrenadeSpec };
+  weapons: { grenade: GrenadeSpec } & { [name: string]: GrenadeSpec | WeaponSpec };
   /** Fire at the centre after this many steps; 0 = off. */
   autofire: number;
   /** real: every knob of the real look, kept whatever the preset. */
@@ -69,7 +71,7 @@ export function sceneFile(c: ViewerConfig, name: string, camera: CameraPose | nu
     engine: parseSpec(c.engine),
     loop: { mode: c.loop, pipeline: c.pipeline, maxSteps: c.maxSteps, substeps: c.substeps, presettle: c.presettle },
     projectile: projectileOnly(c.projectile),
-    weapons: { grenade: structuredClone(c.projectile.grenade ?? DEFAULT_GRENADE) },
+    weapons: { grenade: structuredClone(c.projectile.grenade ?? DEFAULT_GRENADE), ...(c.projectile.weapon && c.projectile.spec ? { [c.projectile.weapon]: structuredClone(c.projectile.spec) } : {}) },
     autofire: c.autofire,
     look: { preset: c.look, real: { ...REAL_DEFAULTS, ...c.real } },
     camera,
@@ -79,7 +81,7 @@ export function sceneFile(c: ViewerConfig, name: string, camera: CameraPose | nu
   };
 }
 
-function projectileOnly({ grenade: _, ...p }: Projectile): Omit<Projectile, 'grenade'> {
+function projectileOnly({ grenade: _, spec: _s, ...p }: Projectile): Omit<Projectile, 'grenade' | 'spec'> {
   return p;
 }
 
@@ -169,9 +171,23 @@ export function parseSceneFile(text: string): { config: ViewerConfig; name: stri
     if (p.mass !== undefined && p.mass !== null) q.set('proj.mass', String(num(p.mass, 'projectile.mass')));
     if (p.weapon !== undefined) q.set('proj.weapon', str(p.weapon, 'projectile.weapon'));
   }
+  const wq = new URLSearchParams();
   if (root.weapons !== undefined) {
     const w = object(root.weapons, 'weapons');
-    only(w, ['grenade'], 'weapons');
+    for (const [name, v] of Object.entries(w)) {
+      if (name === 'grenade') continue;
+      if (!WEAPON_NAME.test(name)) throw new Error(`weapons.${name}: weapon names match ${WEAPON_NAME}`);
+      if (!isWeaponSpec(v)) throw new Error(`weapons.${name} must be a WeaponSpec (with version ${WEAPON_SPEC_VERSION}); only grenade has its own fields`);
+      let spec: WeaponSpec;
+      try {
+        spec = checkWeapon({ ...v, name });
+      } catch (e) {
+        throw new Error(`weapons.${name}: ${e instanceof Error ? e.message : String(e)}`);
+      }
+      // Checked whether fired or not; the fired one goes into the config as a projectile would carry it.
+      if (q.get('proj.weapon') === name) writeProjectile({ ...DEFAULT_PROJECTILE, weapon: name, spec }, wq);
+    }
+    for (const [k, v] of wq) q.set(k, v);
     if (w.grenade !== undefined) {
       const g = object(w.grenade, 'weapons.grenade');
       only(g, Object.keys(DEFAULT_GRENADE), 'weapons.grenade');
