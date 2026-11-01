@@ -196,5 +196,7 @@
   "packages/weapons/test/spec.test.ts": 0.3,
   "packages/weapons/test/yield.test.ts": 0,
   "packages/physics-gpu/test/engine-sleep.test.ts": 50.0,
-  "packages/physics-gpu/test/engine-sleep-wake.test.ts": 35.0
+  "packages/physics-gpu/test/engine-sleep-wake.test.ts": 35.0,
+  "packages/physics-gpu/test/engine-sleep-diff-s5.test.ts": 170.0,
+  "packages/physics-gpu/test/engine-sleep-diff-s14.test.ts": 205.0
 }
