@@ -334,6 +334,11 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
             showResult(null);
           }
           break;
+        case 'blast':
+          // A weapon went off: a hard shake, scaled by the blast's reach in cube edges.
+          juice.shake(Math.min(1, 0.15 * (f.radius / c.frame.unit)));
+          juice.kick(0.08);
+          break;
         case 'slowMo': if (feel.slowMo && !fastHeld && !handle.fast) pacer.slowMo(); break;
         case 'heritageCrack':
           juice.shake(0.3);

@@ -211,7 +211,10 @@ export function tier(L: number): 0 | 1 | 2 | 3 {
 }
 
 export interface ShotOutcome {
+  /** Launch energy, J: kinetic, or potential for a drop (ammoKE). */
   ke: number;
+  /** A weapon's nominal blast yield, J (arsenal.ts itemYield; 0 without one). Energy fired is ke + yield. */
+  yield: number;
   dPE_mJ: number;
   leverage: number;
   /** Crowns that went down during this shot, and the running total. */
@@ -240,7 +243,7 @@ export function stampOf(strokes: number, par: number): string {
 
 export function levelScore(def: LevelDef, shots: ShotOutcome[], cleared: boolean, structureCount: number): LevelScore {
   const s = shots.length, par = def.par;
-  const ke = shots.reduce((a, o) => a + o.ke, 0), dpe = shots.reduce((a, o) => a + o.dPE_mJ, 0);
+  const ke = shots.reduce((a, o) => a + o.ke + o.yield, 0), dpe = shots.reduce((a, o) => a + o.dPE_mJ, 0);
   const L = leverage(dpe, ke);
   const cmax = Math.min(12, Math.max(0, ...shots.map((o) => o.crownsDown)));
   const broken = shots.reduce((a, o) => a + o.heritageNew, 0);

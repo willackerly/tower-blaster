@@ -10,3 +10,11 @@ export const PRESET_LINE: Shot[] = [
   { ammo: 'p-bowlingball', az: 360, y: 8, yaw: 0, pitch: 442, power: 100 },
   { ammo: 'p-wreckingball', az: 540, y: 8, yaw: 0, pitch: 176, power: 100 },
 ];
+
+/**
+ * A grenade on L1 (rack-grenade-gpu.test.ts; the reference and Rapier cases are keystone-lab
+ * rack-grenade.test.ts): aimed at the tower's middle from L1's par launcher, its proximity
+ * fuse sets it off on the tower's face and the blast brings the crowns down.
+ */
+export const GRENADE_RACK: RackItem[] = ['w-grenade', 'w-grenade', 'marble'];
+export const GRENADE_LINE: Shot[] = [{ ammo: 'w-grenade', az: 360, y: 8, yaw: 0, pitch: 176, power: 100 }];
