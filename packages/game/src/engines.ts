@@ -3,7 +3,7 @@
 // bit-identical (the GPU engine is deterministic per device, and its buffers
 // are sized at init from these options).
 import { RapierEngine } from '@tb/adapter-rapier';
-import type { PhysicsEngine, ShapeDesc } from '@tb/engine-api';
+import { type EngineHealth, limitsHit, type PhysicsEngine, type ShapeDesc } from '@tb/engine-api';
 import { AVBD_GAP_SLOP, AVBD_ITERATIONS, ammoBody, type CompiledLevel, type DriverOptions } from '@tb/keystone';
 import { everyPairPerBody, GpuAvbdEngine, type GpuEngineOptions } from '@tb/physics-gpu';
 
@@ -39,16 +39,30 @@ export const radiusOf = (s: ShapeDesc): number => (s.kind === 'sphere' ? s.radiu
 
 /**
  * Room the GPU engine reserves at init for every body the rack can fire, and a pair buffer that holds
- * every pair of them (everyPairPerBody), so no shot can drop a contact: the game shows no engine
- * limits. Its blocks are 0.5 m and the broadphase's sweep is in metres, so a packed block moving at
- * about 3.3 m/s already reaches past its 26 neighbours, inside the rack's speeds. A level of tens to
- * a hundred-odd bodies costs at most a few thousand slots more than the default 16 per body.
+ * every pair of them (everyPairPerBody), so no shot can drop a contact. Its blocks are 0.5 m and the
+ * broadphase's sweep is in metres, so a packed block moving at about 3.3 m/s already reaches past its
+ * 26 neighbours, inside the rack's speeds. A level of tens to a hundred-odd bodies costs at most a few
+ * thousand slots more than the default 16 per body. Past 362 bodies and rack every pair no longer fits
+ * everyPairPerBody's slots, so `pairsPerBody` (the room an earlier round of the level asked for,
+ * roomAfter) replaces it when given.
  */
-export function gpuOptions(c: CompiledLevel): Required<Pick<GpuEngineOptions, 'capacity' | 'maxRadius' | 'pairsPerBody'>> {
+export function gpuOptions(c: CompiledLevel, pairsPerBody?: number): Required<Pick<GpuEngineOptions, 'capacity' | 'maxRadius' | 'pairsPerBody'>> {
   const rack = c.def.rack;
   const maxRadius = Math.max(0, ...rack.map((k) => radiusOf(ammoBody(k, c.frame.unit, [0, 0, 0], [0, 0, 0]).shape)));
   const capacity = c.scene.bodies.length + rack.length;
-  return { capacity, maxRadius, pairsPerBody: everyPairPerBody(capacity) };
+  return { capacity, maxRadius, pairsPerBody: pairsPerBody ?? everyPairPerBody(capacity) };
+}
+
+/**
+ * The pair room per body for a level's next round, after a round played at `pairsPerBody` whose engine
+ * reported `health` (read once the round is over): the engine's own fix (health.ts pairFix: room for
+ * 1.25 x the peak, or the most the device holds) when the round dropped pairs, else unchanged. Never
+ * less than before, so a level's room only grows; null health (Rapier) changes nothing.
+ */
+export function roomAfter(pairsPerBody: number, health: EngineHealth | null): number {
+  const pairs = limitsHit(health).find((l) => l.id === 'pairs');
+  const fix = pairs?.fix?.option === 'pairsPerBody' && typeof pairs.fix.value === 'number' ? pairs.fix.value : 0;
+  return Math.max(pairsPerBody, fix);
 }
 
 /**
@@ -58,7 +72,8 @@ export function gpuOptions(c: CompiledLevel): Required<Pick<GpuEngineOptions, 'c
  */
 export const driverOptions = (kind: EngineKind): DriverOptions => ({ pipelined: kind === 'gpu' });
 
-export function makeEngine(kind: EngineKind, c: CompiledLevel, device?: GPUDevice): PhysicsEngine {
+/** The engine for one round of level c; `pairsPerBody` as gpuOptions takes it (GPU only). */
+export function makeEngine(kind: EngineKind, c: CompiledLevel, device?: GPUDevice, pairsPerBody?: number): PhysicsEngine {
   if (kind === 'rapier') return new RapierEngine();
-  return new GpuAvbdEngine({ ...GPU_PARAMS }, { device, ...gpuOptions(c) });
+  return new GpuAvbdEngine({ ...GPU_PARAMS }, { device, ...gpuOptions(c, pairsPerBody) });
 }

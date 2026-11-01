@@ -20,6 +20,7 @@
   "packages/game/test/hud.test.ts": 0,
   "packages/game/test/juice.test.ts": 0,
   "packages/game/test/pacing.test.ts": 0,
+  "packages/game/test/pair-room-gpu.test.ts": 75,
   "packages/game/test/par-gpu-L1.test.ts": 39.3,
   "packages/game/test/par-gpu-L2.test.ts": 103.8,
   "packages/game/test/par-gpu-L3.test.ts": 45.8,

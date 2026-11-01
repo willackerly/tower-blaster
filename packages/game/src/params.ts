@@ -23,6 +23,11 @@ export interface GameParams {
   shots: Shot[] | null;
   /** ?offscreen=1 (tests): draw only for captures. */
   offscreen: boolean;
+  /**
+   * ?pairsPerBody=N (tests, repros): the GPU pair buffer's room per body for each level's first round,
+   * in place of every pair (KeystoneEnv.pairsPerBody); null when absent.
+   */
+  pairsPerBody: number | null;
 }
 
 /** A built-in level by id, any case; throws naming the known ones. */
@@ -49,6 +54,14 @@ export function lineOf(def: LevelDef, text: string | null): Shot[] | null {
   return shots;
 }
 
+/** ?pairsPerBody: null when absent, else a positive integer. */
+export function pairsPerBodyOf(text: string | null): number | null {
+  if (text === null) return null;
+  const v = Number(text);
+  if (text.trim() === '' || !Number.isInteger(v) || v < 1) throw new Error(`pairsPerBody must be a positive integer: ${text}`);
+  return v;
+}
+
 /** A look name; throws naming the known ones. */
 export function lookName(name: string): string {
   if (!LOOKS[name]) throw new Error(`unknown look ${name}; known: ${Object.keys(LOOKS).join(', ')}`);
@@ -64,5 +77,6 @@ export function parseGameParams(q: URLSearchParams): GameParams {
     look: lookName(q.get('look') ?? GAME_LOOK),
     shots: lineOf(level, q.get('keystone.shots')),
     offscreen: q.get('offscreen') === '1',
+    pairsPerBody: pairsPerBodyOf(q.get('pairsPerBody')),
   };
 }
