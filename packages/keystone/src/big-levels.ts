@@ -7,6 +7,7 @@
 // with the drafts so a draft that wins becomes a level unchanged.
 import { DEFAULT_GRENADE, grenadeAsSpec, type WeaponSpec } from '@tb/weapons';
 import type { LevelDef, Part } from './level.ts';
+import { readShots } from './shots.ts';
 import type { ScenarioPart } from './scenario-part.ts';
 import type { MaterialName } from './materials.ts';
 import type { RackItem } from './rack.ts';
@@ -59,6 +60,11 @@ export const RAM: WeaponSpec = { version: 1, name: 'ram', shell: { shape: { kind
 export const B1: LevelDef = outcomeLevel('B1', 'Long Wall', thirdBondWall(40, 25, 'plaster'), [20.2, 0.5], 25, ['w-bomb', 'w-bomb', 'w-bomb'], {
   objective: { kind: 'collapse', min: 0.4 },
   weapons: { bomb: BOMB },
+  // Cast on the M5 Max (Metal) at main f5d6e92, short recipe, seeds 1 and 2 pooled (pnpm keystone:cast B1 --pool):
+  // every gate passed on both, recast |T3 1 - T3 2| 0.0015 < 0.0044. docs/game/levels/B1.md.
+  // The showcase (solutions.ace) is seed 1's best line: its 50 nudges ended at collapse 0.895 to 0.955.
+  solutions: { ace: readShots('w-bomb.521.8.54.372.66_w-bomb.607.8.-192.247.95_w-bomb.195.8.-230.127.91') },
+  stars: { metric: 'collapse', t2: 0.7, t3: 0.94, best: 0.9583025426945702, castOn: 'apple metal-3', engine: 'gpu', hash: '18cf21360845bb8b', n: 372, seed: 1 },
 });
 
 /**

@@ -3,7 +3,7 @@
 // (every number checkable by hand) and on Rapier with a tiny recipe.
 import { describe, expect, it } from 'vitest';
 import { aimAt, type CastPlay, type CastSample, compileLevel, readShots, writeShots, launcherPos, type LaunchShot, type LevelDef, scenarioLevel, type Shot } from '@tb/keystone';
-import { castLevel, cloudCheck, exposedFaces, faceSectors, facingAzimuth, FACE_SECTORS, REACH, type CastPlayer, type CastRecipe, competentIntents, compareCasts, endValue, HEIGHT_BANDS, higherBetter, intentShot, moveIntents, nodeCastPlayer, nudgeLine, playsOf, quantile, rng, roundEasier, SHORT_RECIPE, shotSummary, streamSeed, surfaceTarget, withWallTime } from '../src/index.ts';
+import { bootstrapT3, castLevel, cloudCheck, exposedFaces, faceSectors, facingAzimuth, FACE_SECTORS, REACH, type CastPlayer, type CastRecipe, competentIntents, compareCasts, endValue, HEIGHT_BANDS, higherBetter, intentShot, moveIntents, nodeCastPlayer, nudgeLine, phaseEnds, playsOf, poolCasts, quantile, rng, roundEasier, SHORT_RECIPE, shotSummary, streamSeed, surfaceTarget, withWallTime } from '../src/index.ts';
 
 /** A 10 x 4 wall of plaster cubes along x as an outcome level, rack of two cannonballs. */
 const WALL: LevelDef = { ...scenarioLevel('S3', { W: 10, H: 4 }, 1, { rack: ['cannonball', 'cannonball'] }), id: 'T1' };
@@ -184,12 +184,39 @@ describe('castLevel on a synthetic player', () => {
     expect(played.map((l) => writeShots(l))).not.toEqual(cast.lines.filter((l) => l.phase === 'cloud').slice(0, 8).map((l) => l.shots));
     const ends = k.lines.map((l) => l.samples.at(-1)!.collapse);
     expect(k.t3).toBe(quantile(ends, 0.25));
-    expect(k.crossDevice.pass).toBe(k.t3 >= cast.bootstrap.lo && k.t3 <= cast.bootstrap.hi);
-    expect(k.against).toEqual({ adapter: 'synthetic', seed: 3, t3: cast.raw.t3, lo: cast.bootstrap.lo, hi: cast.bootstrap.hi });
+    // The gate's interval is for a cloud of 8 plays: the cast's own cloud resampled 8 at a time.
+    const iv = bootstrapT3('collapse', phaseEnds(cast, 'cloud'), 1, 2000, 8);
+    expect(k.crossDevice.pass).toBe(k.t3 >= iv.lo && k.t3 <= iv.hi);
+    expect(k.against).toEqual({ adapter: 'synthetic', seed: 3, t3: cast.raw.t3, lo: iv.lo, hi: iv.hi });
     expect(k.limits.pass && k.complete.pass).toBe(true);
     // Repeatable, and refused on a level that does not hash as the cast's.
     expect(await cloudCheck(WALL, synthetic(), cast, 8, 1)).toEqual(k);
     await expect(cloudCheck({ ...WALL, rack: ['cannonball'] }, synthetic(), cast, 8)).rejects.toThrow(/hashes .* but the cast was of/);
+  });
+  it('a quartile of fewer plays spreads wider: the bootstrap interval at a smaller draw contains the full one', () => {
+    const xs = Array.from({ length: 50 }, (_, k) => 0.9 + 0.001 * ((k * 37) % 50));
+    const full = bootstrapT3('collapse', xs, 1), small = bootstrapT3('collapse', xs, 1, 2000, 8);
+    expect(bootstrapT3('collapse', xs, 1, 2000, 50)).toEqual(full);
+    expect(small.lo).toBeLessThanOrEqual(full.lo);
+    expect(small.hi).toBeGreaterThanOrEqual(full.hi);
+    expect(small.halfWidth).toBeGreaterThan(1.5 * full.halfWidth);
+  });
+  it('pools casts of one level on one device: T2 over every competent play, T3 over every nudge cloud', async () => {
+    const a = await castLevel(WALL, synthetic(), { recipe: TINY, seed: 3 }), b = await castLevel(WALL, synthetic(), { recipe: TINY, seed: 4 });
+    const p = poolCasts([a, b]);
+    const comp = [...phaseEnds(a, 'competent'), ...phaseEnds(b, 'competent')], cloud = [...phaseEnds(a, 'cloud'), ...phaseEnds(b, 'cloud')];
+    expect(p.raw.t2).toBe(quantile(comp, 0.5));
+    expect(p.raw.t3).toBe(quantile(cloud, 0.25));
+    expect(p.raw.best).toBe(Math.max(a.raw.best, b.raw.best));
+    expect(p.stars).toMatchObject({ metric: 'collapse', t2: roundEasier(p.raw.t2, true), hash: a.hash, n: a.n + b.n, seed: 3 });
+    expect(p.stars.t3).toBeGreaterThanOrEqual(p.stars.t2);
+    expect(p.seeds).toEqual([3, 4]);
+    expect(p.competent.n).toBe(2 * TINY.competent);
+    // One cast pools to its own stars.
+    expect(poolCasts([a]).stars).toEqual(a.stars);
+    expect(() => poolCasts([a, { ...b, hash: 'other' }])).toThrow(/is not of T1/);
+    expect(() => poolCasts([a, { ...b, adapter: 'apple metal-3' }])).toThrow(/is not of/);
+    expect(() => poolCasts([])).toThrow(/no casts/);
   });
   it('the climb keeps a line only when its mini-cloud beats the current one', async () => {
     const r = await castLevel(WALL, synthetic(), { recipe: TINY, seed: 9 });

@@ -308,12 +308,13 @@ export function summary(xs: readonly number[]): { n: number; p10: number; p25: n
 
 /**
  * Bootstrap (`b` resamples, seeded) of the player-worse quartile of xs, T3's statistic: the 90%
- * interval and its half-width.
+ * interval and its half-width. Each resample draws `size` values (default xs.length): a smaller size
+ * gives the interval a cloud of that many plays would land in, which is wider.
  */
-export function bootstrapT3(metric: StarMetric, xs: readonly number[], seed: number, b = 2000): { lo: number; hi: number; halfWidth: number } {
+export function bootstrapT3(metric: StarMetric, xs: readonly number[], seed: number, b = 2000, size = xs.length): { lo: number; hi: number; halfWidth: number } {
   if (!xs.length) return { lo: NaN, hi: NaN, halfWidth: NaN };
   const r = rng(streamSeed(seed, 'bootstrap')), stats: number[] = [];
-  for (let k = 0; k < b; k++) stats.push(lowerQ(metric, Array.from(xs, () => xs[Math.floor(r() * xs.length)]!), 0.25));
+  for (let k = 0; k < b; k++) stats.push(lowerQ(metric, Array.from({ length: size }, () => xs[Math.floor(r() * xs.length)]!), 0.25));
   const lo = quantile(stats, 0.05), hi = quantile(stats, 0.95);
   return { lo, hi, halfWidth: (hi - lo) / 2 };
 }
@@ -368,6 +369,19 @@ export interface CastOptions {
 /** Budget gate: a cast at most 60 min on the target machine (spectacle-mode.md section 6). */
 export const CAST_BUDGET_MS = 60 * 60_000;
 
+/**
+ * T2 (median of the competent ends), T3 (player-worse quartile of the nudge cloud's ends) and the best value
+ * seen, raw and rounded toward easier, with T3 never easier than T2 (a level where aiming does not beat a
+ * typical attempt fails the skill gate instead).
+ */
+export function thresholds(metric: StarMetric, compEnd: readonly number[], cloudEnd: readonly number[], all: readonly number[]): { raw: CastResult['raw']; t2: number; t3: number } {
+  const hb = higherBetter(metric);
+  const raw = { t2: quantile(compEnd, 0.5), t3: lowerQ(metric, cloudEnd, 0.25), best: all.length ? (hb ? Math.max(...all) : Math.min(...all)) : NaN };
+  const t2 = roundEasier(raw.t2, hb);
+  const t3 = hb ? Math.max(t2, roundEasier(raw.t3, hb)) : Math.min(t2, roundEasier(raw.t3, hb));
+  return { raw, t2, t3 };
+}
+
 /** Casts an outcome level's stars on `player`: the plays, the thresholds and the gates. */
 export async function castLevel(level: LevelDef, player: CastPlayer, opts: CastOptions = {}): Promise<CastResult> {
   const c = compileLevel(level);
@@ -416,10 +430,7 @@ export async function castLevel(level: LevelDef, player: CastPlayer, opts: CastO
   // 4. Thresholds.
   const all = lines.flatMap((l) => l.samples.map((s) => sampleValue(s, metric)));
   const hb = higherBetter(metric);
-  const raw = { t2: quantile(compEnd, 0.5), t3: lowerQ(metric, cloudEnd, 0.25), best: all.length ? (hb ? Math.max(...all) : Math.min(...all)) : NaN };
-  const t2 = roundEasier(raw.t2, hb);
-  // T3 is never easier than T2: a level where aiming does not beat a typical attempt fails the skill gate instead.
-  const t3 = hb ? Math.max(t2, roundEasier(raw.t3, hb)) : Math.min(t2, roundEasier(raw.t3, hb));
+  const { raw, t2, t3 } = thresholds(metric, compEnd, cloudEnd, all);
 
   // 5. Gates.
   const boot = bootstrapT3(metric, cloudEnd, seed), range = metricRange(metric, c, all);
@@ -463,6 +474,27 @@ export function compareCasts(a: CastResult, b: CastResult): { recast: Gate; cros
   };
 }
 
+/** The ends of a cast's plays in one phase, by its metric. */
+export const phaseEnds = (r: CastResult, phase: CastLine['phase']): number[] => r.lines.filter((l) => l.phase === phase).map((l) => endValue(l, r.metric));
+
+/**
+ * Stars from several casts of one level on one device (a cast and its recasts with other seeds), pooled: T2 is
+ * the median of every competent play and T3 the player-worse quartile of every nudge cloud. T2 from 64 plays
+ * moves with the seed (B1 on the M5: 0.659 and 0.735, 90% intervals about 0.1 wide) while T3 does not (0.944,
+ * 0.946); pooling halves T2's variance at no extra plays. Refuses casts of another level hash, metric or device.
+ */
+export function poolCasts(casts: readonly CastResult[]): { raw: CastResult['raw']; stars: StarsDef; competent: CastResult['competent']; cloud: CastResult['cloud']; seeds: number[] } {
+  const a = casts[0];
+  if (!a) throw new Error('pool: no casts');
+  for (const b of casts) {
+    if (b.hash !== a.hash || b.metric !== a.metric || b.adapter !== a.adapter || b.engine !== a.engine) throw new Error(`pool: cast seed ${b.seed} (${b.hash}, ${b.metric}, ${b.adapter} ${b.engine}) is not of ${a.level} ${a.hash} by ${a.metric} on ${a.adapter} ${a.engine}`);
+  }
+  const comp = casts.flatMap((r) => phaseEnds(r, 'competent')), cloud = casts.flatMap((r) => phaseEnds(r, 'cloud'));
+  const all = casts.flatMap((r) => r.lines.flatMap((l) => l.samples.map((s) => sampleValue(s, a.metric))));
+  const { raw, t2, t3 } = thresholds(a.metric, comp, cloud, all), n = casts.reduce((k, r) => k + r.n, 0);
+  return { raw, stars: { metric: a.metric, t2, t3, best: raw.best, castOn: a.adapter, engine: a.engine, hash: a.hash, n, seed: a.seed }, competent: summary(comp), cloud: summary(cloud), seeds: casts.map((r) => r.seed) };
+}
+
 /** A nudge cloud of another device's best line, played here: the cross-device gate at a smaller N than a whole cast. */
 export interface CloudCheck {
   level: string;
@@ -494,11 +526,13 @@ export async function cloudCheck(level: LevelDef, player: CastPlayer, cast: Cast
   const plays = await player.play(level, batch);
   const ends = plays.map((p) => endValue(p, cast.metric)), t3 = lowerQ(cast.metric, ends, 0.25);
   const limited = plays.filter((p) => p.limits.length).length, incomplete = plays.filter((p) => !p.complete).length;
-  const { lo, hi } = cast.bootstrap;
+  // The interval a cloud of n plays would land in on the cast's device: the cast's own cloud resampled n at a time
+  // (at n below the cast's 50 the quartile spreads wider than the cast's bootstrap interval).
+  const { lo, hi, halfWidth } = bootstrapT3(cast.metric, phaseEnds(cast, 'cloud'), seed, 2000, n);
   return {
     level: level.id, hash: c.hash, adapter: player.adapter, engine: player.engine,
     against: { adapter: cast.adapter, seed: cast.seed, t3: cast.raw.t3, lo, hi }, n, seed, t3, cloud: summary(ends),
-    crossDevice: { pass: t3 >= lo && t3 <= hi, value: t3, need: cast.bootstrap.halfWidth, note: `T3 of ${n} nudges on ${player.adapter} inside ${cast.adapter}'s 90% interval [${lo.toFixed(3)}, ${hi.toFixed(3)}]` },
+    crossDevice: { pass: t3 >= lo && t3 <= hi, value: t3, need: halfWidth, note: `T3 of ${n} nudges on ${player.adapter} inside ${cast.adapter}'s 90% interval for ${n} plays [${lo.toFixed(3)}, ${hi.toFixed(3)}]` },
     limits: { pass: limited === 0, value: limited, need: 0, note: 'plays where the engine hit a limit that changed the physics' },
     complete: { pass: incomplete === 0, value: incomplete, need: 0, note: 'plays that ran out of steps before every shot settled' },
     lines: plays.map((p, k) => ({ phase: 'cloud', shots: writeShots(batch[k]!), samples: p.samples, steps: p.steps, complete: p.complete, hash: p.hash, limits: p.limits })),
