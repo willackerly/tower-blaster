@@ -2,7 +2,7 @@
 // game's loop and play shots through window.__viewer.game.
 import { expect } from 'vitest';
 import type { Page } from 'playwright';
-import type { Shot } from '@tb/keystone';
+import { aimAt, compileLevel, launcherPos, type LevelDef, type Shot } from '@tb/keystone';
 import { requireWebGPU } from '@tb/testkit';
 import { open } from './e2e-harness.ts';
 
@@ -34,3 +34,22 @@ export async function play(page: Page, shots: Shot[]) {
   return page.evaluate(() => ({ state: window.__viewer.game!.state(), score: window.__viewer.game!.result }));
 }
 
+
+/**
+ * A cannonball at full power from launcher azimuth `az` (0.5 deg quanta) at the level's launcher
+ * height, aimed (aimAt) at the centre of the structure body nearest the launcher whose centre is
+ * between yLo and yHi h up; with the compiled level and the aim's miss distance (m).
+ */
+export function aimAtNearest(def: LevelDef, az: number, yLo: number, yHi: number) {
+  const c = compileLevel(def), h = c.frame.unit, y = 4 * def.launcher.y, from = launcherPos(c.frame, az, y);
+  let best = -1, dist = Infinity;
+  for (let i = 0; i < c.meta.n; i++) {
+    const by = c.meta.home[3 * i + 1]! / h;
+    if (by < yLo || by > yHi) continue;
+    const d = Math.hypot(c.meta.home[3 * i]! - from[0], c.meta.home[3 * i + 2]! - from[2]);
+    if (d < dist) { dist = d; best = i; }
+  }
+  if (best < 0) throw new Error(`no body between ${yLo} and ${yHi} h`);
+  const target: [number, number, number] = [c.meta.home[3 * best]!, c.meta.home[3 * best + 1]!, c.meta.home[3 * best + 2]!];
+  return { c, ...aimAt(c.frame, 'cannonball', { az, y, power: 100 }, target, { dt: c.scene.dt }) };
+}

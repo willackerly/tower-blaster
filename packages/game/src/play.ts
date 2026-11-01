@@ -31,6 +31,8 @@ export interface GameHandle {
   stepIndex: number;
   strokes: number;
   bodies: number;
+  /** Outcome levels' live collapse fraction D (Session.liveCollapse): 0 until a shot runs. */
+  collapse: number;
   /** Run the sim at fast-forward speed (as if Space were held). */
   fast: boolean;
   result: LevelScore | null;
@@ -64,7 +66,7 @@ const sum = (a: Uint8Array) => a.reduce((x, y) => x + y, 0);
 export function newGameHandle(): GameHandle {
   const none = (): SessionState => ({ step: 0, phase: 'loading', strokes: 0, heritageBroken: 0, hash: '' });
   return {
-    status: 'loading', engine: '', level: '', phase: 'loading', ready: false, frames: 0, stepIndex: 0, strokes: 0, bodies: 0, fast: false, result: null, counts: {}, feel: { hitStop: false, slowMo: false }, resultShownAt: null, timing: { loadMs: 0, stepMs: [] },
+    status: 'loading', engine: '', level: '', phase: 'loading', ready: false, frames: 0, stepIndex: 0, strokes: 0, bodies: 0, collapse: 0, fast: false, result: null, counts: {}, feel: { hitStop: false, slowMo: false }, resultShownAt: null, timing: { loadMs: 0, stepMs: [] },
     fire: () => false, bank: () => false, aim: () => null, select: () => false, load: async () => {}, retry: async () => {}, capture: async () => null,
     state: none, replay: async () => none(),
   };
@@ -378,7 +380,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
   /** Mirror state onto the handle; called each frame and right after anything that changes it. */
   function sync() {
     const s = driver.session;
-    Object.assign(handle, { phase: s.phase, ready: s.phase === 'aiming' && regrowT === null, stepIndex: driver.engine.stepIndex, strokes: s.strokes, bodies: driver.snapshot.count });
+    Object.assign(handle, { phase: s.phase, ready: s.phase === 'aiming' && regrowT === null, stepIndex: driver.engine.stepIndex, strokes: s.strokes, bodies: driver.snapshot.count, collapse: s.liveCollapse });
   }
 
   function fire(shot: Shot): boolean {

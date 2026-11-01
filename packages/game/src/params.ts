@@ -21,7 +21,7 @@ export const GAME_LOOK = 'hazy';
  */
 export interface LevelRules { scoring?: Scoring; autobank?: boolean; physics?: PhysicsBlock }
 
-const PHYSICS_KEYS = { 'keystone.iterations': 'iterations', 'keystone.gapSlop': 'gapSlop', 'keystone.bounce': 'bounce' } as const;
+const PHYSICS_KEYS = { 'keystone.iterations': 'iterations', 'keystone.gapSlop': 'gapSlop', 'keystone.bounce': 'bounce', 'keystone.presettle': 'presettle' } as const;
 /** Every URL key levelRules reads. */
 export const LEVEL_RULE_KEYS = ['keystone.scoring', 'keystone.autobank', ...Object.keys(PHYSICS_KEYS)] as readonly string[];
 

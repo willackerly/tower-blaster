@@ -247,11 +247,12 @@ export function parseSceneFile(text: string): { config: ViewerConfig; name: stri
     if (r.autobank !== undefined) lr.autobank = bool(r.autobank, 'rules.autobank');
     if (r.physics !== undefined) {
       const ph = object(r.physics, 'rules.physics');
-      only(ph, ['iterations', 'gapSlop', 'bounce'], 'rules.physics');
+      only(ph, ['iterations', 'gapSlop', 'bounce', 'presettle'], 'rules.physics');
       lr.physics = {};
       if (ph.iterations !== undefined) lr.physics.iterations = num(ph.iterations, 'rules.physics.iterations');
       if (ph.gapSlop !== undefined) lr.physics.gapSlop = num(ph.gapSlop, 'rules.physics.gapSlop');
       if (ph.bounce !== undefined) lr.physics.bounce = ph.bounce === null ? null : num(ph.bounce, 'rules.physics.bounce');
+      if (ph.presettle !== undefined) lr.physics.presettle = num(ph.presettle, 'rules.physics.presettle');
     }
     writeLevelRules(lr, q);
   }

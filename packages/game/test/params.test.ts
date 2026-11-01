@@ -74,6 +74,8 @@ describe('rule overrides', () => {
     expect(() => parse('?keystone.iterations=')).toThrow(/keystone.iterations: must be a whole number/);
     expect(() => parse('?keystone.gapSlop=-1')).toThrow(/keystone.gapSlop: must be from 0 to 0.01 m/);
     expect(() => parse('?keystone.bounce=2')).toThrow(/keystone.bounce: must be from 0 to 1, or null for off/);
+    expect(parse('?keystone.presettle=30').level.physics).toEqual({ presettle: 30 });
+    expect(() => parse('?keystone.presettle=7000')).toThrow(/keystone.presettle: must be a whole number from 0 to 6000: 7000/);
   });
   it('a level cast on another engine plays as custom there', () => {
     const cast = { ...L1, stars: { metric: 'collapse' as const, t2: 0.2, t3: 0.4, engine: 'gpu' } };

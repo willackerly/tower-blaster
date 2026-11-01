@@ -83,7 +83,7 @@ interface ViewerHandle {
   variant: EngineInfo['variant'];
   /**
    * The running engine's limits as last read (PhysicsEngine.health, about every HEALTH_MS after a
-   * snapshot; under rules=keystone after each load and each settled shot): null for an engine without
+   * snapshot; under rules=keystone at each load and settled shot too): null for an engine without
    * health(), and until the first read after each load.
    */
   health: EngineHealth | null;
@@ -756,12 +756,13 @@ async function keystoneMode(config: ViewerConfig, device: GPUDevice, renderer: R
   devEl.open = true;
   document.getElementById('left')!.append(devEl);
   let driver: Driver | null = null, busy = false, status = '', warn = false;
-  /** The game's engine's limits into handle.health (one read at a time; a level load drops a read in flight). */
-  let healthBusy = false;
-  const readHealth = (d: Driver) => {
+  /** The game's engine's limits into handle.health (one read at a time, at most every HEALTH_MS; a level load drops a read in flight). */
+  let healthBusy = false, healthAt = -Infinity;
+  const readHealth = (d: Driver, now = performance.now()) => {
     const read = d.engine.health?.bind(d.engine);
     if (!read || healthBusy) return;
     healthBusy = true;
+    healthAt = now;
     read().then((h) => { if (driver === d) handle.health = h; }).catch(() => {}).finally(() => { healthBusy = false; });
   };
   const attempt = (): Shot[] => driver?.session.inputs.map((i) => i.shot) ?? [];
@@ -834,9 +835,9 @@ async function keystoneMode(config: ViewerConfig, device: GPUDevice, renderer: R
       },
       fired: showDev,
       stepped(feedback) {
-        if (!feedback.some((f) => f.t === 'settled')) return;
-        showDev();
-        if (driver) readHealth(driver);
+        const settled = feedback.some((f) => f.t === 'settled'), now = performance.now();
+        if (settled) showDev();
+        if (driver && (settled || now - healthAt >= HEALTH_MS)) readHealth(driver, now);
       },
     },
   }, game);
