@@ -4,7 +4,7 @@
 // turn on pace juice, ?keystone.shots= plays a line once loaded, ?offscreen=1
 // (tests) draws only for captures. The keys are params.ts's, which the viewer
 // reads too under rules=keystone, so the same link opens in either page.
-import { LEVELS } from '@tb/keystone';
+import { seriesOf } from '@tb/keystone';
 import { createDevice } from '@tb/gpu';
 import { lookByName, parseRealOptions, Renderer, SnapshotSource } from '@tb/render';
 import { onEngine, parseGameParams, withRules } from './params.ts';
@@ -35,8 +35,9 @@ async function main() {
   // ?keystone.rack replaces the opening level's rack (its def, so retry keeps it); other levels keep their own.
   // The rule overrides (keystone.scoring, keystone.autobank, physics) apply to every level; stars cast on
   // another engine do not apply (onEngine).
-  const start = LEVELS.findIndex((l) => l.id === level.id);
-  const levels = LEVELS.map((l, i) => onEngine(i === start ? level : withRules(l, rules), engine));
+  // The opening level plays on into the rest of its series (the chamber levels, or the big levels).
+  const series = seriesOf(level.id)!, start = series.findIndex((l) => l.id === level.id);
+  const levels = series.map((l, i) => onEngine(i === start ? level : withRules(l, rules), engine));
   handle.feel = feel;
   handle.engine = engine;
 

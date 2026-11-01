@@ -4,7 +4,7 @@
 // (docs/design/viewer-superset.md, step F). A key's bad value is refused with
 // a message naming it; keys a page doesn't know are left to it (the look's
 // real.* knobs, the viewer's own).
-import { checkPhysics, checkSettle, isRackItem, itemRef, LEVELS, type LevelDef, MAX_RACK, type PhysicsBlock, RACK_ITEM_NAMES, type RackItem, readShots, SCORINGS, type Scoring, type SettleRule, type Shot, weaponOf } from '@tb/keystone';
+import { checkPhysics, checkSettle, isRackItem, itemRef, LEVELS, levelById, type LevelDef, MAX_RACK, type PhysicsBlock, RACK_ITEM_NAMES, type RackItem, readShots, SCORINGS, type Scoring, type SettleRule, type Shot, weaponOf } from '@tb/keystone';
 import { LOOKS } from '@tb/render';
 import { type EngineKind, engineKind } from './engines.ts';
 import { paceFeel, type PaceFeel } from './pacing.ts';
@@ -94,12 +94,8 @@ export interface GameParams {
   offscreen: boolean;
 }
 
-/** A built-in level by id, any case; throws naming the known ones. */
-export function gameLevel(id: string): LevelDef {
-  const def = LEVELS.find((l) => l.id === id.toUpperCase());
-  if (!def) throw new Error(`unknown level ${id.toUpperCase()}; known: ${LEVELS.map((l) => l.id).join(', ')}`);
-  return def;
-}
+/** A built-in level (chamber L1 to L5 or big B1 on) by id, any case; throws naming the known ones. */
+export const gameLevel = (id: string): LevelDef => levelById(id);
 
 /** Throws unless def's rack holds every shot of the line. */
 export function checkLine(def: LevelDef, shots: readonly Shot[]): void {
