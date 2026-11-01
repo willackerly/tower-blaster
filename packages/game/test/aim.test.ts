@@ -4,7 +4,7 @@ import { emptySnapshot, type Snapshot, type Vec3 } from '@tb/engine-api';
 import { quatFromAxisAngle } from '@tb/geom';
 import { closestApproach, compileLevel, GRAVITY, L1, L4, launcherPos, predictArc, shotToSpawn } from '@tb/keystone';
 import { eyeOf, frame } from '@tb/render/camera';
-import { azFromYaw, pick, previewBeads, rayBox, raySphere, REACH, shotFor, SUBSTEPS } from '../src/aim.ts';
+import { azFromYaw, launchY, pick, previewBeads, rayBox, raySphere, REACH, shotFor, SUBSTEPS } from '../src/aim.ts';
 
 const c = compileLevel(L1);
 const h = c.frame.unit, p = c.frame.pitch * h;
@@ -15,6 +15,19 @@ function atHome(): Snapshot {
   return s;
 }
 const dir = (v: Vec3): Vec3 => { const l = Math.hypot(...v); return [v[0] / l, v[1] / l, v[2] / l]; };
+
+describe('launch height', () => {
+  it("is the launcher's for Keystone ammo and every preset that fits, and lifts the boulder clear of the ground", () => {
+    const base = Math.round(L1.launcher.y * 4);
+    for (const a of ['marble', 'cannonball', 'w-grenade', 'p-beachball', 'p-wreckingball'] as const) expect(launchY(c, a), a).toBe(base);
+    // 6.7 m across at h = 0.5 m: radius 6.7 h, so 27 quarter-h, its bottom 0.025 m above the ground.
+    expect(launchY(c, 'p-boulder')).toBe(27);
+    const a = shotFor(compileLevel({ ...L1, rack: ['p-boulder'] }), 'p-boulder', 360, 100, [0, 2, 0])!;
+    expect(a.shot).toMatchObject({ y: 27 });
+    const ev = shotToSpawn(c.frame, a.shot, 0);
+    expect(ev.body.pos[1] - (ev.body.shape as { radius: number }).radius).toBeGreaterThanOrEqual(0);
+  });
+});
 
 describe('launcher follows the camera', () => {
   it('puts the launcher on the eye side of the lot for any yaw', () => {

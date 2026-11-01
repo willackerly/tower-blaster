@@ -3,7 +3,7 @@
 // becomes one engine spawn event; nothing else about the engine is touched.
 import { type BodyDesc, massOf, type SpawnEvent, TAG_BALL, type Vec3 } from '@tb/engine-api';
 import { GRAVITY } from './materials.ts';
-import { AMMO, isRackItem, itemSpec, type LaunchItem, RACK_ITEM_NAMES, type RackItem, speedOf } from './rack.ts';
+import { AMMO, isRackItem, type ItemFrame, type ItemSpec, itemSpec, type LaunchItem, RACK_ITEM_NAMES, type RackItem, speedOf } from './rack.ts';
 
 /**
  * Fired from the launcher ring: az in 0.5 deg, y in 1/4 h, yaw and pitch in 0.1 deg, power in %.
@@ -19,8 +19,11 @@ export type Shot = LaunchShot | CueShot | DropShot;
 /** Where a level's shots come from; lengths in h, horizontal ones in cells. */
 export interface LauncherDef { radius: number; y: number; dropY: number }
 
-/** The level frame a shot needs: metres per h, horizontal cell pitch, lot centre and launcher. */
-export interface ShotFrame { unit: number; pitch: number; centre: [number, number]; launcher: LauncherDef }
+/**
+ * The level frame a shot needs: metres per h, horizontal cell pitch, lot centre and launcher, and
+ * the shells of the rack's weapons by item name (compileLevel; rack.ts itemSpec).
+ */
+export interface ShotFrame { unit: number; pitch: number; centre: [number, number]; launcher: LauncherDef; shells?: Readonly<Record<string, ItemSpec>> }
 
 const DEG = Math.PI / 180;
 const CUE_STANDOFF = 0.1; // h between the rod tip and the target point at spawn
@@ -86,9 +89,9 @@ export function launchDir(az: number, yaw: number, pitch: number): Vec3 {
 
 const CUE_DIRS: Vec3[] = [[1, 0, 0], [-1, 0, 0], [0, 0, 1], [0, 0, -1]];
 
-/** The body rack item `kind` fires at pos with velocity vel, in a level of `unit` m per h; alongZ turns a box's x onto z. */
-export function ammoBody(kind: RackItem, unit: number, pos: Vec3, vel: Vec3, alongZ = false): BodyDesc {
-  const spec = itemSpec(kind, unit);
+/** The body rack item `kind` fires at pos with velocity vel, at `at` (a level's frame, or its m per h); alongZ turns a box's x onto z. */
+export function ammoBody(kind: RackItem, at: ItemFrame, pos: Vec3, vel: Vec3, alongZ = false): BodyDesc {
+  const spec = itemSpec(kind, at);
   const shape: BodyDesc['shape'] = 'radius' in spec.size
     ? { kind: 'sphere', radius: spec.size.radius }
     : { kind: 'box', half: alongZ ? [spec.size.half[2], spec.size.half[1], spec.size.half[0]] : spec.size.half };
@@ -108,8 +111,8 @@ export function shotToSpawn(f: ShotFrame, shot: Shot, step: number): SpawnEvent 
     const back = (half + CUE_STANDOFF) * h, v = speedOf('cue', shot.power);
     body = ammoBody('cue', h, [tip[0] - d[0] * back, tip[1], tip[2] - d[2] * back], [d[0] * v, 0, d[2] * v], shot.dir >= 2);
   } else {
-    const p = launcherPos(f, shot.az, shot.y), d = launchDir(shot.az, shot.yaw, shot.pitch), v = speedOf(shot.ammo, shot.power);
-    body = ammoBody(shot.ammo, h, p, [d[0] * v, d[1] * v, d[2] * v]);
+    const p = launcherPos(f, shot.az, shot.y), d = launchDir(shot.az, shot.yaw, shot.pitch), v = speedOf(shot.ammo, shot.power, f);
+    body = ammoBody(shot.ammo, f, p, [d[0] * v, d[1] * v, d[2] * v]);
   }
   return { step, kind: 'spawn', body };
 }

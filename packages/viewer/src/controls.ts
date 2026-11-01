@@ -1,20 +1,20 @@
 // The viewer's control panel: the scene (scenario or level, its params, seed, cube size, substeps,
-// Bounce, and for a level the rules it plays by), rebuilt on demand, and the projectile and the look, applied as soon as a field
+// Bounce, and the rules it plays by: a scenario under Keystone's is a level), rebuilt on demand, and the projectile and the look, applied as soon as a field
 // changes; and the whole setup saved to or loaded from a JSON file (scene-file.ts). The panel
 // only proposes configs; main.ts decides how to apply them (live, or by reset).
 import { checkSound, SOUND_KNOBS, SOUND_MATERIAL_NAMES, type SoundKnob, type SoundOptions } from '@tb/audio';
 import { parseSpec } from '@tb/bench';
 import { type Env, ENVS, type Ground, GROUNDS, linearToSrgb, LOOKS, REAL_DEFAULTS, REAL_KNOBS, type RealKnob, type RealOptions, srgbToLinear, type Stone, STONES, type V3 } from '@tb/render';
-import type { PaceFeel } from '@tb/game';
-import { AVBD_ITERATIONS, compileLevel, LEVELS, PRESETTLE_STEPS } from '@tb/keystone';
+import { objectiveText, type PaceFeel } from '@tb/game';
+import { AUTO_LEVEL, AVBD_ITERATIONS, compileLevel, LEVELS, PRESETTLE_STEPS, scenarioLevel } from '@tb/keystone';
 import { buildScenario, SCENARIOS } from '@tb/scenarios';
 import { type CameraPose, type Framing, FRAMING_LIMITS } from './camera.ts';
 import { escapeHtml } from './html.ts';
 import { levelIssues, levelJson, parseLevelDef } from './level-file.ts';
 import { autoSubsteps, AVBD_ENGINES, blockDensityOf, bounceOn, carriedFraming, checkKeystone, DEFAULT_BOUNCE, DEFAULT_CONFIG, defaultLook, defaultPresettle, firedSpeed, keystoneEngine, levelDef, MAX_PRESETTLE, MAX_SUBSTEPS, type Rules, SCALE_LIMITS, type ViewerConfig, withOption } from './params.ts';
 import { blastWeight, checkBlast } from '@tb/engine-api';
-import { DEFAULT_GRENADE, FUSES, GRENADE_LIMITS, type GrenadeSpec, isPreset, PRESET_NAMES, PROJECTILE_PRESETS } from '@tb/weapons';
-import { DEFAULT_PROJECTILE, GRENADE_BLAST_KEYS, GRENADE_NUMBERS, parseProjectile, presetProjectile, type Projectile, projectileMass, worldProjectile } from './projectile.ts';
+import { BUILTIN_WEAPONS, checkWeapon, DEFAULT_GRENADE, FUSES, GRENADE_LIMITS, type GrenadeSpec, isPreset, PRESET_NAMES, PROJECTILE_PRESETS, validateWeapon, weaponBudget, type WeaponSpec, writeWeapon } from '@tb/weapons';
+import { DEFAULT_PROJECTILE, encodeWeaponParam, GRENADE_BLAST_KEYS, GRENADE_NUMBERS, parseProjectile, presetProjectile, type Projectile, projectileMass, WEAPONS, weaponName, worldProjectile } from './projectile.ts';
 import { parseSceneFile, sceneFile, sceneFileName } from './scene-file.ts';
 import { autoSoundMaterial } from './sound-config.ts';
 
@@ -162,12 +162,20 @@ export function proposeScene(c: ViewerConfig, scenario: string, params: Record<s
     const level = picked?.def.id ?? null;
     // Keystone's rules: the level as the game plays it, whatever the world fields say (the panel hides them).
     if (picked && rules.rules === 'keystone') {
-      // A line of shots is the level's it was made on: another level drops it.
+      // A line of shots and a rack are the level's they were given for: another level drops them.
       const same = level === c.level && (picked.custom ? picked.def === c.customLevel : !c.customLevel);
-      const next = underKeystone({ ...c, level, customLevel: picked.custom ? picked.def : null, shots: same ? c.shots : null, look: lookFor(c, 'keystone') }, rules.feel);
+      const next = underKeystone({ ...c, level, customLevel: picked.custom ? picked.def : null, shots: same ? c.shots : null, rack: same ? c.rack : null, look: lookFor(c, 'keystone') }, rules.feel);
       return { ok: true, config: next, bodies: compileLevel(picked.def).scene.bodies.length };
     }
-    // Rules are a level's: anything else is the sandbox.
+    // A scenario under Keystone's rules is a level (scenarioLevel): its params and seed build it, the rest is the game's.
+    if (rules.rules === 'keystone') {
+      if (!Number.isInteger(seed)) throw new Error('seed must be an integer');
+      const def = scenarioLevel(scenario, params, seed);
+      const same = !c.level && c.scenario === scenario && c.seed === seed && JSON.stringify(c.params) === JSON.stringify(params);
+      const next = underKeystone({ ...c, level: null, customLevel: null, scenario, params, seed, shots: same ? c.shots : null, rack: same ? c.rack : null, look: lookFor(c, 'keystone') }, rules.feel);
+      return { ok: true, config: next, bodies: compileLevel(def).scene.bodies.length };
+    }
+    // Anything else is the sandbox.
     c = { ...c, rules: 'sandbox', feel: { hitStop: false, slowMo: false }, shots: null, look: lookFor(c, 'sandbox') };
     const settle = presettle ?? defaultPresettle(level);
     if (!Number.isInteger(settle) || settle < 0 || settle > MAX_PRESETTLE) throw new Error(`settle steps must be a whole number from 0 to ${MAX_PRESETTLE}`);
@@ -176,14 +184,14 @@ export function proposeScene(c: ViewerConfig, scenario: string, params: Record<s
       // and a level of your own stays loaded (picked again from the picker) until another one replaces it.
       checkWorld(scale, substeps);
       const { okE, engine } = bounceChoice(c, bounce);
-      const next: ViewerConfig = { ...c, level, customLevel: picked.custom ? picked.def : null, scale, substeps, presettle: settle, camera: null, engine, bounce: okE ? bounce.e : c.bounce, view: carriedFraming(c.view, c, { scenario: c.scenario, level }) };
+      const next: ViewerConfig = { ...c, level, customLevel: picked.custom ? picked.def : null, rack: null, scale, substeps, presettle: settle, camera: null, engine, bounce: okE ? bounce.e : c.bounce, view: carriedFraming(c.view, c, { scenario: c.scenario, level }) };
       return { ok: true, config: next, bodies: compileLevel(picked.def).scene.bodies.length };
     }
     if (!Number.isInteger(seed)) throw new Error('seed must be an integer');
     checkWorld(scale, substeps);
     const { okE, engine } = bounceChoice(c, bounce);
     // A rebuilt scene is framed afresh: a start camera chosen for the old one need not fit it.
-    const next: ViewerConfig = { ...c, level: null, customLevel: null, scenario, params, seed, scale, substeps, presettle: settle, camera: null, engine, bounce: okE ? bounce.e : c.bounce, view: carriedFraming(c.view, c, { scenario, level: null }) };
+    const next: ViewerConfig = { ...c, level: null, customLevel: null, rack: null, scenario, params, seed, scale, substeps, presettle: settle, camera: null, engine, bounce: okE ? bounce.e : c.bounce, view: carriedFraming(c.view, c, { scenario, level: null }) };
     return { ok: true, config: next, bodies: buildScenario(scenario, params, seed).bodies.length };
   } catch (e) {
     return { ok: false, error: e instanceof Error ? e.message : String(e) };
@@ -207,6 +215,13 @@ function bounceChoice(c: ViewerConfig, bounce: BounceChoice): { okE: boolean; en
 
 /** The scene picker's value for a config. */
 const sceneChoice = (c: ViewerConfig) => (c.customLevel ? CUSTOM_LEVEL : c.level ? levelChoice(c.level) : c.scenario);
+
+/** A weapon spec's line under the projectile form: what one shot can spawn and set off, and the validator's warnings. */
+export function weaponSummary(spec: WeaponSpec): string {
+  const b = weaponBudget(spec), blasts = b.blasts.reduce((a, x) => a + x.count, 0);
+  const warns = validateWeapon(spec).issues.filter((i) => i.level === 'warn').map((i) => `${i.code} at ${i.path}`);
+  return [`${weaponName(spec)}: up to ${b.bodies} bodies and ${blasts} blast${blasts === 1 ? '' : 's'} a shot`, ...warns].join('; ');
+}
 
 /** Save text as a file through a temporary link; returns the file name. */
 function download(text: string, name: string): string {
@@ -276,7 +291,8 @@ export function mountControls(root: HTMLElement, hooks: ControlsHooks): { refres
       ${field('friction', 'friction', '', 'step="any" min="0" max="2" placeholder="0.5"')}
       ${field('blockDensity', 'blocks are (kg/m³)', '', 'step="any" min="1" max="30000" list="block-densities"')}
       <datalist id="block-densities">${BLOCK_MATERIALS.map(([name, d]) => `<option value="${d}" label="${name}"></option>`).join('')}</datalist>
-      <label class="f"><span>weapon</span><select name="weapon"><option value="">none</option><option value="grenade">grenade</option></select></label>
+      <label class="f"><span>weapon</span><select name="weapon"><option value="">none</option>${WEAPONS.map((w) => `<option value="${w}">${w}</option>`).join('')}<option value="" data-custom hidden></option></select></label>
+      <div class="spec buttons"><button type="button" name="weaponDownload">Download weapon</button><button type="button" name="weaponLoad">Load weapon…</button><input type="file" name="weaponFile" accept=".json,application/json" hidden></div>
       <div class="grenade">
         <label class="f"><span>fuse</span><select name="grenade.fuse">${FUSES.map((f) => `<option value="${f}"${f === DEFAULT_GRENADE.fuse ? ' selected' : ''}>${f === 'proxTimer' ? 'proximity, then delay' : f === 'prox' ? 'proximity' : 'timer'}</option>`).join('')}</select></label>
         ${field('grenade.ground', 'ground sets it off', DEFAULT_GRENADE.ground)}
@@ -334,7 +350,6 @@ export function mountControls(root: HTMLElement, hooks: ControlsHooks): { refres
   const bounceEBox = sceneForm.querySelector<HTMLElement>('.bounce')!;
 
   const seedBox = sceneForm.querySelector<HTMLElement>('.seed')!;
-  const rulesBox = sceneForm.querySelector<HTMLElement>('.rules')!;
   const feelBox = sceneForm.querySelector<HTMLElement>('.feel')!;
   const worldBox = sceneForm.querySelector<HTMLElement>('.world')!;
   const issuesBox = sceneForm.querySelector<HTMLElement>('.issues')!;
@@ -351,22 +366,23 @@ export function mountControls(root: HTMLElement, hooks: ControlsHooks): { refres
     try { picked = pickedLevel(c, scenario); } catch { /* checkScene says why */ }
     seedBox.hidden = picked !== null;
     levelDownload.hidden = picked === null;
-    // Rules are a level's; under Keystone's the world fields are the level's own.
-    rulesBox.hidden = picked === null;
-    const keystone = picked !== null && input(sceneForm, 'rules').value === 'keystone';
+    // Under Keystone's rules the world fields are the level's own; a scenario plays as a level (scenarioLevel).
+    const keystone = input(sceneForm, 'rules').value === 'keystone';
     feelBox.hidden = !keystone;
     worldBox.hidden = keystone;
     issuesBox.textContent = '';
     if (picked) {
       const d = picked.def;
-      paramsBox.innerHTML = `<div class="muted">${escapeHtml(d.name)}: ${d.objective.kind === 'crowns' ? 'fell the crowns' : 'bring the skyline down'}, par ${d.par}, rack ${escapeHtml(d.rack.join(', '))}</div>`;
+      paramsBox.innerHTML = `<div class="muted">${escapeHtml(d.name)}: ${escapeHtml(objectiveText(d.objective))}, par ${d.par}, rack ${escapeHtml(d.rack.join(', '))}</div>`;
       // A level with issues still loads (seeing it fail is the point); they are listed here.
       const issues = levelIssues(d);
       issuesBox.textContent = issues instanceof Error ? issues.message : issues.map((i) => `${i.code}: ${i.message}`).join('\n');
       return;
     }
     const values = { ...SCENARIOS[scenario]!.defaults, ...(scenario === c.scenario ? c.params : {}) };
-    paramsBox.innerHTML = Object.entries(values).map(([k, v]) => field(`param.${k}`, PARAM_LABELS[k] ?? k, v, 'step="any"')).join('');
+    // Under Keystone's rules a scenario is an automatic level (scenarioLevel): what it asks, above its params.
+    const auto = keystone ? `<div class="muted">as a level: ${escapeHtml(objectiveText({ kind: 'collapse', min: AUTO_LEVEL.objective }))}, rack ${escapeHtml(AUTO_LEVEL.rack.join(', '))}, no roles (a level file can add them)</div>` : '';
+    paramsBox.innerHTML = auto + Object.entries(values).map(([k, v]) => field(`param.${k}`, PARAM_LABELS[k] ?? k, v, 'step="any"')).join('');
   }
 
   function sceneProposal() {
@@ -392,13 +408,32 @@ export function mountControls(root: HTMLElement, hooks: ControlsHooks): { refres
   }
 
   const grenadeBox = projForm.querySelector<HTMLElement>('.grenade')!;
+  const specBox = projForm.querySelector<HTMLElement>('.spec')!;
+  const weaponPicker = specBox.querySelector<HTMLInputElement>('input[name=weaponFile]')!;
+  const downloadWeapon = specBox.querySelector<HTMLButtonElement>('button[name=weaponDownload]')!;
+  const customOption = projForm.querySelector<HTMLOptionElement>('option[data-custom]')!;
+  // A weapon of your own (loaded, or from the link's weapon.def): offered in the picker under its name.
+  let custom: WeaponSpec | null = null;
+  function offerCustom(spec: WeaponSpec | null) {
+    custom = spec;
+    customOption.hidden = !spec;
+    customOption.value = customOption.textContent = spec ? weaponName(spec) : '';
+  }
+  /** The spec a weapon name picks: your own under its name, else the built-in. */
+  const specOf = (name: string): WeaponSpec | null => (custom && weaponName(custom) === name ? custom : (BUILTIN_WEAPONS[name] ?? null));
   function projectile(): Projectile {
     const q = new URLSearchParams();
     q.set('proj', input(projForm, 'shape').value);
     for (const k of ['size', 'mass', 'speed', 'restitution', 'friction', 'blockDensity']) q.set(`proj.${k}`, input(projForm, k).value);
     const weapon = input(projForm, 'weapon').value;
     grenadeBox.hidden = weapon !== 'grenade';
-    if (weapon) {
+    specBox.hidden = weapon === 'grenade';
+    downloadWeapon.disabled = !specOf(weapon);
+    if (weapon && weapon !== 'grenade') {
+      q.set('proj.weapon', weapon);
+      const spec = specOf(weapon);
+      if (spec && spec !== BUILTIN_WEAPONS[weapon]) q.set('weapon.def', encodeWeaponParam(spec));
+    } else if (weapon) {
       q.set('proj.weapon', weapon);
       q.set('grenade.fuse', input(projForm, 'grenade.fuse').value);
       q.set('grenade.ground', (input(projForm, 'grenade.ground') as HTMLInputElement).checked ? '1' : '0');
@@ -411,7 +446,7 @@ export function mountControls(root: HTMLElement, hooks: ControlsHooks): { refres
     const c = hooks.config(), m = projectileMass(p);
     (input(projForm, 'mass') as HTMLInputElement).placeholder = `auto ${m.toPrecision(3)}`;
     (input(projForm, 'blockDensity') as HTMLInputElement).placeholder = `auto ${blockDensityOf({ ...c, projectile: { ...p, blockDensity: undefined } })}`;
-    projOut.textContent = [projectileSummary(p, c), p.grenade ? grenadeSummary(p.grenade) : ''].filter(Boolean).join('; ');
+    projOut.textContent = [projectileSummary(p, c), p.grenade ? grenadeSummary(p.grenade) : '', p.spec ? weaponSummary(p.spec) : ''].filter(Boolean).join('; ');
     projOut.classList.remove('warn');
   }
   // A new thing to throw brings its own size, speed, bounce and friction (a real thing's, or the ball's); set them after to override.
@@ -461,6 +496,30 @@ export function mountControls(root: HTMLElement, hooks: ControlsHooks): { refres
     e.preventDefault();
     const p = sceneProposal();
     if (p.ok) hooks.rebuild(p.config);
+  });
+  // Weapon JSON: the picked spec as a file to edit, and an edited one loaded back as your own (validateWeapon's issues listed if it is refused).
+  downloadWeapon.addEventListener('click', () => {
+    const spec = specOf(input(projForm, 'weapon').value);
+    if (spec) download(`${writeWeapon(spec)}\n`, `${weaponName(spec)}.weapon.json`);
+  });
+  specBox.querySelector<HTMLButtonElement>('button[name=weaponLoad]')!.addEventListener('click', () => weaponPicker.click());
+  weaponPicker.addEventListener('change', async () => {
+    const f = weaponPicker.files?.[0];
+    weaponPicker.value = '';
+    if (!f) return;
+    try {
+      let v: unknown;
+      try { v = JSON.parse(await f.text()); } catch { throw new Error('not a JSON file'); }
+      const spec = checkWeapon(v);
+      offerCustom(spec);
+      input(projForm, 'weapon').value = weaponName(spec);
+      const p = projectile();
+      showMass(p);
+      hooks.setProjectile(p);
+    } catch (e) {
+      projOut.textContent = `${f.name}: ${e instanceof Error ? e.message : String(e)}`;
+      projOut.classList.add('warn');
+    }
   });
   projForm.addEventListener('submit', (e) => e.preventDefault());
   projForm.addEventListener('change', () => {
@@ -581,8 +640,11 @@ export function mountControls(root: HTMLElement, hooks: ControlsHooks): { refres
     input(projForm, 'speed').value = String(p.speed);
     for (const k of ['restitution', 'friction', 'blockDensity'] as const) input(projForm, k).value = p[k] === undefined ? '' : String(p[k]);
     // The grenade's fields keep their values while the weapon is off, so switching it back on restores them.
+    if (p.spec && p.weapon && BUILTIN_WEAPONS[p.weapon] !== p.spec && (!BUILTIN_WEAPONS[p.weapon] || writeWeapon(BUILTIN_WEAPONS[p.weapon]!) !== writeWeapon(p.spec))) offerCustom(p.spec);
     input(projForm, 'weapon').value = p.weapon ?? '';
     grenadeBox.hidden = p.weapon !== 'grenade';
+    specBox.hidden = p.weapon === 'grenade';
+    downloadWeapon.disabled = !p.spec;
     const g = p.grenade;
     if (g) {
       input(projForm, 'grenade.fuse').value = g.fuse;

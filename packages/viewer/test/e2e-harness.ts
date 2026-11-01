@@ -2,6 +2,7 @@
 // the WebGPU flags on Linux), started once per file, and a page opener. A
 // file calls useViewer() at its top; browser is null when no browser could
 // be launched and REQUIRE_WEBGPU is unset, and its tests then skip.
+// TB_CHANNEL=chrome runs them in the installed Chrome (the real GPU).
 import { fileURLToPath } from 'node:url';
 import { platform } from 'node:os';
 import { afterAll, beforeAll } from 'vitest';
@@ -20,7 +21,9 @@ export function useViewer(): void {
     await server.listen();
     origin = server.resolvedUrls!.local[0]!.replace('127.0.0.1', 'localhost');
     try {
-      browser = await chromium.launch({ args: platform() === 'linux' ? WEBGPU_ARGS : ['--enable-unsafe-webgpu'] });
+      // TB_CHANNEL=chrome: the installed Chrome, so the real GPU (Metal on a Mac), as the game's tests.
+      const channel = process.env.TB_CHANNEL;
+      browser = await chromium.launch({ args: platform() === 'linux' ? WEBGPU_ARGS : ['--enable-unsafe-webgpu'], ...(channel ? { channel } : {}) });
     } catch (e) {
       if (requireWebGPU()) throw e;
     }

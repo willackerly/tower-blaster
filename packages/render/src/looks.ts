@@ -9,7 +9,7 @@ export const MATERIAL = { candy: 0, ball: 1, debris: 2 } as const;
 export interface LookRange { minY: number; maxY: number }
 
 /** Height range of the scene's bodies, for the colour ramp. */
-export function lookRange(bodies: BodyDesc[]): LookRange {
+export function lookRange(bodies: readonly BodyDesc[]): LookRange {
   let minY = Infinity, maxY = -Infinity;
   for (const b of bodies) {
     if (b.tag < 0) continue;

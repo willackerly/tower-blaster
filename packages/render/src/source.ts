@@ -24,7 +24,7 @@ export interface BodySource {
 }
 
 /** Ball slots among descs[from..]. */
-function ballSlots(descs: BodyDesc[], from: number, to: number): number[] {
+function ballSlots(descs: readonly BodyDesc[], from: number, to: number): number[] {
   const out: number[] = [];
   for (let i = from; i < to; i++) if (descs[i]!.tag === TAG_BALL) out.push(i);
   return out;
@@ -50,7 +50,7 @@ export const drawnTier = (t: number): number => (t === TIER.lattice ? TIER.rubbl
  * slot or only those in `ranges` ([from, to) pairs; the rest of `out` is
  * left as it was).
  */
-export function packBodies(s: Snapshot, descs: BodyDesc[], out?: ArrayBuffer, ranges: ReadonlyArray<readonly [number, number]> = [[0, s.count]]): ArrayBuffer {
+export function packBodies(s: Snapshot, descs: readonly BodyDesc[], out?: ArrayBuffer, ranges: ReadonlyArray<readonly [number, number]> = [[0, s.count]]): ArrayBuffer {
   const bytes = Math.max(Body.size, s.count * Body.size);
   const data = out && out.byteLength >= bytes ? out : new ArrayBuffer(bytes);
   const f = new Float32Array(data), u = new Uint32Array(data);
@@ -90,7 +90,7 @@ export function changedRanges(s: Snapshot, prevTier: Uint8Array | null, prevCoun
 }
 
 /** Shape[] words, one per body. */
-export function packShapes(descs: BodyDesc[], from = 0): Uint32Array {
+export function packShapes(descs: readonly BodyDesc[], from = 0): Uint32Array {
   const n = descs.length - from;
   const data = new ArrayBuffer(Math.max(Shape.size, n * Shape.size));
   const f = new Float32Array(data), u = new Uint32Array(data);
@@ -107,7 +107,7 @@ export function packShapes(descs: BodyDesc[], from = 0): Uint32Array {
   return u;
 }
 
-function packLooks(descs: BodyDesc[], from: number, range: LookRange): Uint32Array {
+function packLooks(descs: readonly BodyDesc[], from: number, range: LookRange): Uint32Array {
   const out = new Uint32Array(Math.max(1, descs.length - from));
   for (let i = from; i < descs.length; i++) out[i - from] = lookOf(descs[i]!, i, range);
   return out;
@@ -137,7 +137,7 @@ export class SnapshotSource implements BodySource {
    * Set the ramp range from the scene's initial bodies; call once per scene
    * before update(). Spawned bodies reuse it.
    */
-  reset(initial: BodyDesc[]): void {
+  reset(initial: readonly BodyDesc[]): void {
     this.range = lookRange(initial);
     this.count = 0;
     this.described = 0;
@@ -158,7 +158,7 @@ export class SnapshotSource implements BodySource {
   }
 
   /** The current state becomes prev, then the snapshot becomes current. */
-  update(s: Snapshot, descs: BodyDesc[]): void {
+  update(s: Snapshot, descs: readonly BodyDesc[]): void {
     if (descs.length < s.count) throw new Error(`SnapshotSource: ${s.count} bodies but ${descs.length} descriptions`);
     this.range ??= lookRange(descs.slice(0, s.count));
     const fresh = s.count > this.capacity;
@@ -234,7 +234,7 @@ export class GpuBodySource implements BodySource {
   }
 
   /** Upload looks for bodies spawned since the last call (descs in slot order). */
-  describe(descs: BodyDesc[]): void {
+  describe(descs: readonly BodyDesc[]): void {
     const n = Math.min(descs.length, this.capacity);
     if (n <= this.described) return;
     this.gpu.device.queue.writeBuffer(this.looks, this.described * 4, packLooks(descs.slice(0, n), this.described, this.range));
@@ -249,7 +249,7 @@ export class GpuBodySource implements BodySource {
 }
 
 /** Test helper: an engine-like GpuBodies built from descriptions (CPU-authored, same layouts). */
-export function makeGpuBodies(device: GPUDevice, descs: BodyDesc[], capacity = descs.length): GpuBodies & { write(s: Snapshot): void } {
+export function makeGpuBodies(device: GPUDevice, descs: readonly BodyDesc[], capacity = descs.length): GpuBodies & { write(s: Snapshot): void } {
   const bodies = device.createBuffer({ size: Math.max(16, capacity * Body.size), usage: storage(), label: 'test bodies' });
   const shapes = device.createBuffer({ size: Math.max(16, capacity * Shape.size), usage: storage(), label: 'test shapes' });
   device.queue.writeBuffer(shapes, 0, packShapes(descs));

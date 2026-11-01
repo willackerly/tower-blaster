@@ -35,8 +35,9 @@
 // The centre is a point, or a body: { body, offset } is that body's position
 // when the blast is due (plus offset, world frame), read from the engine's
 // live state, so a grenade goes off where it is, not where a reader one step
-// behind last saw it. The body must exist when the blast is due; engines
-// refuse the event otherwise (checkBlastQueue).
+// behind last saw it. The body must exist, and not be removed, when the
+// blast is due; engines refuse the event otherwise (remove.ts checkInputQueue).
+// A blast never pushes a removed body.
 //
 // After each blast's kick a pushed body's speed is capped at maxSpeed
 // (scaled, direction kept), so stacked kicks or a fast body cannot outrun
@@ -44,9 +45,9 @@
 // previous velocity by the same amount.
 //
 // Not covered yet (docs/design/weapons.md): waking dormant lattice cells
-// inside the radius (TieredEngine refuses blasts), occlusion (a body behind
-// another is pushed as hard), and removing the grenade (`exclude` keeps it
-// out of its own blast).
+// inside the radius (TieredEngine refuses blasts) and occlusion (a body
+// behind another is pushed as hard). The grenade is removed by a RemoveEvent
+// after its blast (remove.ts); `exclude` keeps it out of the blast itself.
 import type { InputEvent, ShapeDesc, Vec3 } from './index.ts';
 
 /** A blast centred on a body: its position when the blast is due, plus `offset` (world frame, m; default 0). */
@@ -121,20 +122,6 @@ export function checkBlast(b: Blast): CheckedBlast {
   if (!(typeof maxSpeed === 'number' && maxSpeed > 0)) throw new Error(`blast.maxSpeed must be a number > 0 (Infinity: no cap), got ${maxSpeed}`);
   if (!Array.isArray(exclude) || exclude.length > MAX_BLAST_EXCLUDE || !exclude.every((i) => Number.isInteger(i) && i >= 0 && i < 2 ** 32)) throw new Error(`blast.exclude must be at most ${MAX_BLAST_EXCLUDE} body ids, got ${JSON.stringify(exclude)}`);
   return { point, body, offset, radius: b.radius, impulse: b.impulse, falloff, core, maxDv, maxSpeed, exclude };
-}
-
-/**
- * Throws unless every blast in `queue` (the events an engine will apply, in
- * order) passes checkBlast and, when centred on a body, names one that
- * exists when it is due: one of the `existing` bodies or a spawn before it.
- */
-export function checkBlastQueue(existing: number, queue: readonly InputEvent[]): void {
-  let n = existing;
-  for (const ev of queue) {
-    if (ev.kind === 'spawn') { n++; continue; }
-    const b = checkBlast(ev.blast);
-    if (b.body >= n) throw new Error(`blast at step ${ev.step} is centred on body ${b.body}, which does not exist then (${n} bodies)`);
-  }
 }
 
 /** The blast's centre, given the position of its body when it is due (ignored for a point centre). */

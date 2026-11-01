@@ -10,7 +10,7 @@ import { makeEngine, parseSpec } from '@tb/bench';
 import { type BodyDesc, type EngineHealth, type EngineInfo, type InputEvent, limitsHit, type PhysicsEngine, type Snapshot, spawnedBodies } from '@tb/engine-api';
 import { boundingRadius } from '@tb/geom';
 import { DEFAULT_AVBD } from '@tb/physics-ref';
-import { GAME_HELP, gameOverlays, playLine, type GameHandle, installGameStyles, newGameHandle, playKeystone, structureTints } from '@tb/game';
+import { GAME_HELP, gameOverlays, playLine, type GameHandle, installGameStyles, newGameHandle, playKeystone, structureTints, withRules } from '@tb/game';
 import { AVBD_GAP_SLOP, AVBD_ITERATIONS, compileLevel, type Driver, LEVELS, type Shot } from '@tb/keystone';
 import { clampPitch, EYE_ABOVE_GROUND, frame, rayThrough, viewProj, eyeOf, orbitAt, poseOf, type CameraPose, type Orbit } from './camera.ts';
 import { alphaAt, newArrivals, newClock, newPacer, pauseLatch, runFree, stepsDue, taskYield, trackSimSpeed, Window } from './loop.ts';
@@ -18,8 +18,8 @@ import type { V3 } from './math.ts';
 import { HEALTH_MS, limitFix, limitFixLabel, limitsHtml } from './health.ts';
 import { escapeHtml } from './html.ts';
 import { bounceOn, engineSpec, firedBody, froudeSpeed, keystoneEngine, levelOf, parseViewerConfig, presetSearch, scenarioEngineSpec, sceneTitle, toSearch, type ViewerConfig, viewerScene, withOption, worldEngineSpec } from './params.ts';
-import { projectileRadius, pushRadiusLimit, worldGrenade } from './projectile.ts';
-import { Grenades } from '@tb/weapons';
+import { projectileRadius, pushRadiusLimit, worldGrenade, worldWeapon } from './projectile.ts';
+import { WeaponRuntime } from '@tb/weapons';
 import { mountControls } from './controls.ts';
 import { startSearch } from './default-scene.ts';
 import { type DevAction, mountDev } from './dev-panel.ts';
@@ -83,8 +83,8 @@ interface ViewerHandle {
   variant: EngineInfo['variant'];
   /**
    * The running engine's limits as last read (PhysicsEngine.health, about every HEALTH_MS after a
-   * snapshot): null for an engine without health(), until the first read after each load, and
-   * under rules=keystone (the game's loop runs the engine there).
+   * snapshot; under rules=keystone at each load and settled shot too): null for an engine without
+   * health(), and until the first read after each load.
    */
   health: EngineHealth | null;
   /** Where the camera is now. */
@@ -108,7 +108,7 @@ interface ViewerHandle {
 }
 type InputHook = (s: Snapshot, step: number) => InputEvent[];
 declare global { interface Window { __viewer: ViewerHandle } }
-/** Steps of 1/60 s a proximity fuse predicts past each state the page reads (Grenades lookahead): a few frames. */
+/** Steps of 1/60 s a proximity fuse predicts past each state the page reads (WeaponRuntime lookahead): a few frames. */
 const GRENADE_LOOKAHEAD = 4;
 
 const canvas = document.getElementById('c') as HTMLCanvasElement;
@@ -231,8 +231,8 @@ async function main() {
   let fxSlots = 0;
   // This load's input hook (handle.inputHook), or none.
   let inputHook: InputHook | null = null;
-  // This load's fired grenades, waiting on their fuses (proj.weapon=grenade).
-  let grenades: Grenades | null = null;
+  // This load's fired weapons, waiting on their triggers (proj.weapon: the grenade or a WeaponSpec).
+  let grenades: WeaponRuntime | null = null;
   // This load's fired catalogue objects, painted their colours (the candy skin outside the real look).
   let painted: { id: number; colour: { natural: number; candy: number } }[] = [];
   const paint = (id: number, colour: { natural: number; candy: number }) => {
@@ -307,10 +307,10 @@ async function main() {
     handle.inputs = [];
     notice = '';
     inputHook = handle.inputHook?.() ?? null;
-    // The page reads the state about once a frame, so a fuse predicts that far ahead (Grenades).
+    // The page reads the state about once a frame, so a fuse predicts that far ahead (WeaponRuntime).
     painted = [];
     handle.painted = [];
-    grenades = new Grenades({ dt: next.dt, substeps: engine.info.integrator?.substeps ?? 1, gravity: next.gravity, groundY: next.ground?.y ?? null }, GRENADE_LOOKAHEAD * want.substeps);
+    grenades = new WeaponRuntime({ dt: next.dt, substeps: engine.info.integrator?.substeps ?? 1, gravity: next.gravity, groundY: next.ground?.y ?? null }, GRENADE_LOOKAHEAD * want.substeps);
     apply(s, t0, engine.stepIndex);
   }
 
@@ -422,15 +422,16 @@ async function main() {
       if (early) throw new Error(`input hook: an event for step ${early.step} is not after the observed step ${step}`);
       pushInput(input);
     }
-    const blasts = grenades?.observe(s, step, shapesFor(s.count));
+    // A split child's id: its spawn's place in the queue, which is in the engines' order (pushInput).
+    const blasts = grenades?.observe(s, step, shapesFor(s.count), (ev) => scene.bodies.length + events.filter((e) => e.kind === 'spawn').indexOf(ev));
     if (blasts?.length) pushGrenade(() => blasts);
   }
-  /** A grenade's blasts: an engine that refuses them (tiered) leaves a notice, not a stopped page. */
+  /** A weapon's events: an engine that refuses them (tiered) leaves a notice, not a stopped page. */
   function pushGrenade(blasts: () => InputEvent[]) {
     try {
       pushInput(blasts());
     } catch (e) {
-      notice = `grenade: ${e instanceof Error ? e.message : String(e)}`;
+      notice = `weapon: ${e instanceof Error ? e.message : String(e)}`;
       drawHud();
     }
   }
@@ -502,6 +503,9 @@ async function main() {
     }
     if (p.weapon === 'grenade' && p.grenade && grenades) {
       const [g, spec] = [grenades, worldGrenade(p.grenade, froudeSpeed(config.scale), config.substeps)];
+      pushGrenade(() => g.launch(id, ev.step, spec, ev.body.shape));
+    } else if (p.weapon && p.spec && grenades) {
+      const [g, spec] = [grenades, worldWeapon(p.spec, froudeSpeed(config.scale), config.substeps)];
       pushGrenade(() => g.launch(id, ev.step, spec, ev.body.shape));
     }
   };
@@ -752,6 +756,15 @@ async function keystoneMode(config: ViewerConfig, device: GPUDevice, renderer: R
   devEl.open = true;
   document.getElementById('left')!.append(devEl);
   let driver: Driver | null = null, busy = false, status = '', warn = false;
+  /** The game's engine's limits into handle.health (one read at a time, at most every HEALTH_MS; a level load drops a read in flight). */
+  let healthBusy = false, healthAt = -Infinity;
+  const readHealth = (d: Driver, now = performance.now()) => {
+    const read = d.engine.health?.bind(d.engine);
+    if (!read || healthBusy) return;
+    healthBusy = true;
+    healthAt = now;
+    read().then((h) => { if (driver === d) handle.health = h; }).catch(() => {}).finally(() => { healthBusy = false; });
+  };
   const attempt = (): Shot[] => driver?.session.inputs.map((i) => i.shot) ?? [];
   const dev = mountDev(devEl, (a) => { void devAction(a); });
   const showDev = () => {
@@ -794,9 +807,10 @@ async function keystoneMode(config: ViewerConfig, device: GPUDevice, renderer: R
       showDev();
     }
   }
-  // A built-in level walks the game's levels (N, P, Next); a level of your own is the only one.
+  // A built-in level walks the game's levels (N, P, Next), under the link's rule overrides; a level of
+  // your own, or a scenario as a level (scenarioLevel), is the only one.
   const def = levelOf(cfg)!;
-  const levels = cfg.customLevel ? [def] : LEVELS;
+  const levels = cfg.customLevel || !cfg.level ? [def] : LEVELS.map((d) => withRules(d, cfg.keystone));
   await playKeystone({
     canvas, offscreen: cfg.offscreen, device, renderer, source, hud, ...gameOverlays(),
     levels, start: levels.findIndex((l) => l.id === def.id), engine: keystoneEngine(cfg.engine), feel: cfg.feel, fail: failGame,
@@ -809,7 +823,9 @@ async function keystoneMode(config: ViewerConfig, device: GPUDevice, renderer: R
       loaded(c, d) {
         handle.tinted = c.meta.n;
         driver = d;
-        if (c.def.id !== cfg.level) {
+        handle.health = null;
+        readHealth(d);
+        if (cfg.level && c.def.id !== cfg.level) {
           // A line is the level's it was made on.
           show({ ...cfg, level: c.def.id, shots: null });
           controls.refresh();
@@ -818,7 +834,11 @@ async function keystoneMode(config: ViewerConfig, device: GPUDevice, renderer: R
         showDev();
       },
       fired: showDev,
-      stepped(feedback) { if (feedback.some((f) => f.t === 'settled')) showDev(); },
+      stepped(feedback) {
+        const settled = feedback.some((f) => f.t === 'settled'), now = performance.now();
+        if (settled) showDev();
+        if (driver && (settled || now - healthAt >= HEALTH_MS)) readHealth(driver, now);
+      },
     },
   }, game);
   handle.capture = game.capture;

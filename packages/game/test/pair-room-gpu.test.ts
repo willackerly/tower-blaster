@@ -2,7 +2,8 @@
 // a round that drops broadphase pairs is reported once it is over, and the
 // level's later rounds are built with the room the engine names (roomAfter).
 // Every level holds every pair of its bodies (gpuOptions), so the test starts
-// L1 at 2 pairs per body (?pairsPerBody=2), which the pre-settle overflows.
+// L1 at 2 pairs per body (?keystone.pairsPerBody=2, its physics block), which
+// the pre-settle overflows.
 import { describe, expect, it } from 'vitest';
 import { limitsHit } from '@tb/engine-api';
 import { compileLevel, L1 } from '@tb/keystone';
@@ -15,7 +16,7 @@ describe('game: a round that drops pairs', () => {
   const game = gamePage();
   it('is reported when it ends, and the level\'s next round gets the room the engine names', async (ctx) => {
     if (!game.browser()) return ctx.skip();
-    const o = await game.open('/?level=L1&offscreen=1&engine=gpu&pairsPerBody=2', 10 * MINUTES);
+    const o = await game.open('/?level=L1&offscreen=1&engine=gpu&keystone.pairsPerBody=2', 10 * MINUTES);
     if (!o) return ctx.skip();
     const { page, errors } = o;
     const read = () => page.evaluate(async () => ({ pairsPerBody: window.__game.pairsPerBody, limitsHit: window.__game.limitsHit, health: await window.__game.health(), step: window.__game.state().step }));

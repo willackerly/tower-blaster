@@ -5,14 +5,14 @@
 // (level, shots) and replays headless. The game page calls playKeystone with
 // its own elements; the viewer calls it for rules=keystone, with hooks for its
 // dev panels (docs/design/viewer-superset.md, step C).
-import { type BodyDesc, type EngineHealth, type InputEvent, limitsHit, type PhysicsEngine, spawnedBodies, type Vec3 } from '@tb/engine-api';
-import { type RackItem, type CompiledLevel, compileLevel, Driver, type Feedback, type LevelDef, type LevelScore, type PerStep, runSession, type Shot, shotToSpawn, snapshotHash, TIER_NAMES } from '@tb/keystone';
+import { type BodyDesc, type EngineHealth, limitsHit, type PhysicsEngine, type Vec3 } from '@tb/engine-api';
+import { type RackItem, type CompiledLevel, compileLevel, Driver, type Feedback, type LevelDef, type LevelScore, type PerStep, runSession, type Shot, snapshotHash, TIER_NAMES } from '@tb/keystone';
 import { Window } from '@tb/metrics';
 import { clampPitch, EYE_ABOVE_GROUND, eyeOf, frame, type Orbit, rayThrough, viewProj } from '@tb/render/camera';
 import type { PixelStats, Renderer, SnapshotSource } from '@tb/render';
 import { type Aimed, azFromYaw, pick, previewBeads, shotFor, SUBSTEPS } from './aim.ts';
 import { Synth, type Voice, voicesFor } from './audio.ts';
-import { driverOptions, type EngineKind, gpuOptions, makeEngine, roomAfter } from './engines.ts';
+import { driverOptions, type EngineKind, gpuEngineOptions, makeEngine, roomAfter } from './engines.ts';
 import { hudHtml, nextSelection, rackChips, resultHtml, starsText } from './hud.ts';
 import { CameraJuice, contactJuice } from './juice.ts';
 import { Pacer, type PaceFeel } from './pacing.ts';
@@ -31,6 +31,8 @@ export interface GameHandle {
   stepIndex: number;
   strokes: number;
   bodies: number;
+  /** Outcome levels' live collapse fraction D (Session.liveCollapse): 0 until a shot runs. */
+  collapse: number;
   /** Run the sim at fast-forward speed (as if Space were held). */
   fast: boolean;
   result: LevelScore | null;
@@ -43,6 +45,8 @@ export interface GameHandle {
   /** Wall time of this level's load (engine build and pre-settle), and of each live step since, in ms. */
   timing: { loadMs: number; stepMs: number[] };
   fire(shot: Shot): boolean;
+  /** Outcome levels: end the level now, keeping the rack left (key B, the HUD's Bank button); false when it cannot. */
+  bank(): boolean;
   /** Aim at normalized device coords with the selected ammo, as hovering there would. */
   aim(ndcX: number, ndcY: number): Aimed | null;
   select(ammo: RackItem): boolean;
@@ -58,7 +62,7 @@ export interface GameHandle {
    * buffer's, or null for an engine without them (Rapier). Read between steps, so it changes no step.
    */
   health(): Promise<EngineHealth | null>;
-  /** The live GPU engine's pair room per body (gpuOptions; 0 on Rapier). */
+  /** The live GPU engine's pair room per body (gpuEngineOptions; 0 on Rapier). */
   pairsPerBody: number;
   /**
    * What the last round that hit an engine limit said (EngineLimit.message per limit), empty while
@@ -75,8 +79,8 @@ const sum = (a: Uint8Array) => a.reduce((x, y) => x + y, 0);
 export function newGameHandle(): GameHandle {
   const none = (): SessionState => ({ step: 0, phase: 'loading', strokes: 0, heritageBroken: 0, hash: '' });
   return {
-    status: 'loading', engine: '', level: '', phase: 'loading', ready: false, frames: 0, stepIndex: 0, strokes: 0, bodies: 0, fast: false, result: null, counts: {}, feel: { hitStop: false, slowMo: false }, resultShownAt: null, timing: { loadMs: 0, stepMs: [] },
-    fire: () => false, aim: () => null, select: () => false, load: async () => {}, retry: async () => {}, capture: async () => null,
+    status: 'loading', engine: '', level: '', phase: 'loading', ready: false, frames: 0, stepIndex: 0, strokes: 0, bodies: 0, collapse: 0, fast: false, result: null, counts: {}, feel: { hitStop: false, slowMo: false }, resultShownAt: null, timing: { loadMs: 0, stepMs: [] },
+    fire: () => false, bank: () => false, aim: () => null, select: () => false, load: async () => {}, retry: async () => {}, capture: async () => null,
     state: none, replay: async () => none(), health: async () => null, pairsPerBody: 0, limitsHit: [],
   };
 }
@@ -147,11 +151,6 @@ export interface KeystoneEnv {
   fail(e: unknown): void;
   hooks?: KeystoneHooks;
   /**
-   * The GPU pair buffer's room per body for each level's first round, in place of every pair
-   * (gpuOptions); for tests and repros of a round that drops pairs (the game page's ?pairsPerBody=).
-   */
-  pairsPerBody?: number;
-  /**
    * Input decided from the observed state (the weapons runtime): a fresh hook per level load and
    * per replay, called after every step as runSession calls PlayOptions.perStep, so a replay
    * sees the same input.
@@ -218,17 +217,12 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
 
   let c!: CompiledLevel, driver!: Driver, orbit!: Orbit;
   let perStep: PerStep | null = null;
-  // Body descriptions in slot order: the structure, then what was spawned (ammo as fired, and the
-  // input hook's), in the order the engine applies spawns: by step, then push order.
-  let descs: BodyDesc[] = [];
-  let spawns: InputEvent[] = [];
-  const spawned = (evs: InputEvent[]) => {
-    for (const ev of evs) {
-      let i = spawns.length;
-      while (i > 0 && spawns[i - 1]!.step > ev.step) i--;
-      spawns.splice(i, 0, ev);
-    }
-    descs = [...c.scene.bodies, ...spawnedBodies(spawns)];
+  // Body descriptions in slot order: the driver's (the structure, then every spawn: ammo as fired,
+  // a weapon's children, the input hook's, in the order the engine applies them).
+  let descs: readonly BodyDesc[] = [];
+  const spawned = () => {
+    if (driver.bodies.length === descs.length) return;
+    descs = driver.bodies;
     fxSlots = descs.length;
   };
   let fxSlots = 0;
@@ -265,7 +259,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     if (steps <= reportedSteps) return;
     reportedSteps = steps;
     handle.limitsHit = hit.map((l) => l.message);
-    const before = livePairs ?? gpuOptions(c).pairsPerBody, after = roomAfter(before, h);
+    const before = gpuEngineOptions(c, livePairs).pairsPerBody!, after = roomAfter(before, h);
     if (after > before) room.set(c.def, after);
     console.warn(`${c.def.id}: engine limit hit (${handle.limitsHit.join('; ')}); later rounds of this level get pairsPerBody=${room.get(c.def) ?? before}`);
     banner(after > before ? 'Physics limit hit: next round gets more room' : 'Physics limit hit', 'crack');
@@ -278,7 +272,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     // Build and pre-settle the new level aside: the GPU's pre-settle spans many
     // frames, and every frame reads the current level, so it swaps in whole.
     const next = compileLevel(levels[i]!);
-    const nextPairs = room.get(levels[i]!) ?? env.pairsPerBody;
+    const nextPairs = room.get(levels[i]!);
     const nextEngine = makeEngine(kind, next, device, nextPairs);
     const nextDriver = new Driver(nextEngine, next, driverOptions(kind));
     try {
@@ -294,11 +288,10 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     driver = nextDriver;
     livePairs = nextPairs;
     reportedSteps = 0;
-    handle.pairsPerBody = kind === 'gpu' ? gpuOptions(c, livePairs).pairsPerBody : 0;
+    handle.pairsPerBody = kind === 'gpu' ? gpuEngineOptions(c, livePairs).pairsPerBody! : 0;
     substeps = engine.info.integrator?.substeps ?? SUBSTEPS;
     handle.timing = { loadMs: performance.now() - t0, stepMs: [] };
-    descs = [...c.scene.bodies];
-    spawns = [];
+    descs = driver.bodies;
     perStep = env.perStep?.(c) ?? null;
     source.reset(c.scene.bodies);
     source.update(driver.snapshot, descs);
@@ -373,11 +366,17 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
           juice.shake(0.08);
           // A felled crown flashes once and stops glowing.
           renderer.setFx(f.body, { tint: TINT.crown, emissive: 0.9, flash: 0.5 });
-          if (c.def.objective.kind === 'crowns' && f.ordinal + 1 === c.meta.crowns.length && driver.session.phase === 'running') {
+          // Only where the clear ends the level: par levels, and outcome levels with autobank.
+          if (c.def.objective.kind === 'crowns' && f.ordinal + 1 === c.meta.crowns.length && driver.session.phase === 'running' && (driver.session.scoring === 'par' || c.def.autobank)) {
             ending = true;
             pacer.release();
             showResult(null);
           }
+          break;
+        case 'blast':
+          // A weapon went off: a hard shake, scaled by the blast's reach in cube edges.
+          juice.shake(Math.min(1, 0.15 * (f.radius / c.frame.unit)));
+          juice.kick(0.08);
           break;
         case 'slowMo': if (feel.slowMo && !fastHeld && !handle.fast) pacer.slowMo(); break;
         case 'heritageCrack':
@@ -420,19 +419,27 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
   /** Mirror state onto the handle; called each frame and right after anything that changes it. */
   function sync() {
     const s = driver.session;
-    Object.assign(handle, { phase: s.phase, ready: s.phase === 'aiming' && regrowT === null, stepIndex: driver.engine.stepIndex, strokes: s.strokes, bodies: driver.snapshot.count });
+    Object.assign(handle, { phase: s.phase, ready: s.phase === 'aiming' && regrowT === null, stepIndex: driver.engine.stepIndex, strokes: s.strokes, bodies: driver.snapshot.count, collapse: s.liveCollapse });
   }
 
   function fire(shot: Shot): boolean {
     if (regrowT !== null || !driver.session.canFire(shot.ammo)) return false;
-    const step = driver.engine.stepIndex;
     const fb = driver.fire(shot);
     onFeedback(fb);
-    spawned([shotToSpawn(c.frame, shot, step)]);
+    spawned();
     aimed = null;
     beads = null;
     sync();
     hooks.fired?.(shot, fb, driver);
+    return true;
+  }
+
+  function bank(): boolean {
+    if (regrowT !== null || !driver.session.canBank()) return false;
+    onFeedback(driver.bank());
+    aimed = null;
+    beads = null;
+    sync();
     return true;
   }
 
@@ -444,6 +451,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
   }
 
   handle.fire = fire;
+  handle.bank = bank;
   handle.select = select;
   handle.aim = (x, y) => { pointer = [x, y]; updateAim(); return aimed; };
   handle.load = (id) => load(levelIndex(id)).catch(fail);
@@ -506,6 +514,9 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     orbit.distance = Math.min(200, Math.max(3, orbit.distance * Math.exp(e.deltaY * 0.001)));
     aimDirty = true;
   }, { passive: false });
+  env.hud.addEventListener('click', (e) => {
+    if ((e.target as HTMLElement).closest('button')?.dataset.act === 'bank') bank();
+  });
   env.result.addEventListener('click', (e) => {
     const act = (e.target as HTMLElement).closest('button')?.dataset.act;
     if (act === 'retry') void handle.retry();
@@ -519,6 +530,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     const chip = rackChips(c.def.rack, driver.session.rackLeft, selected).find((x) => x.key === e.key);
     if (chip) select(chip.ammo);
     if (k === 'q' || k === 'e') { power = Math.max(0, Math.min(100, power + (k === 'e' ? 10 : -10))); aimDirty = true; }
+    if (k === 'b') bank();
     if (k === 'r') void handle.retry();
     if (k === 'n' && levelIdx + 1 < levels.length) void load(levelIdx + 1).catch(fail);
     if (k === 'p' && levelIdx > 0) void load(levelIdx - 1).catch(fail);
@@ -540,6 +552,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
       heritageBroken: s.heritageBroken.reduce((a, x) => a + x, 0), heritageTotal: c.meta.heritage.length,
       chips: rackChips(c.def.rack, s.rackLeft, selected), power, liveLeverage: s.liveLeverage, phase: s.phase,
       reachable: s.phase === 'aiming' && aimed ? aimed.reachable : null,
+      collapse: s.liveCollapse, met: s.objectiveDone, canBank: regrowT === null && s.canBank(),
     });
     if (crownsDown > crownsShown) html = html.replace('class="crowns"', 'class="crowns pop"');
     crownsShown = crownsDown;
@@ -576,10 +589,8 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
         onFeedback(fb);
         hooks.stepped?.(fb, driver);
         const input = perStep?.(driver);
-        if (input?.length) {
-          driver.push(input);
-          spawned(input);
-        }
+        if (input?.length) driver.push(input);
+        spawned();
         if (pacer.frozen || driver.session.phase !== 'running') break;
       }
       if (n > 0) source.update(driver.snapshot, descs);

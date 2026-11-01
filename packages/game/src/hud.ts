@@ -1,7 +1,7 @@
 // HUD and result card. Formatting is pure and tested; the DOM side only
 // writes strings into fixed elements. Level text is authored in this repo,
 // but everything still goes through esc().
-import { itemRef, type LevelDef, type LevelScore, type RackItem, tier, TIER_NAMES } from '@tb/keystone';
+import { itemRef, type LevelDef, type LevelScore, type Objective, type RackItem, scoringOf, tier, TIER_NAMES } from '@tb/keystone';
 import { PROJECTILE_PRESETS } from '@tb/weapons';
 
 export const esc = (s: string) => s.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
@@ -47,7 +47,28 @@ export interface HudState {
   liveLeverage: number;
   phase: string;
   reachable: boolean | null;
+  /** Outcome levels: collapse fraction D now, the objective met at the last settle, and whether a bank is possible. */
+  collapse?: number;
+  met?: boolean;
+  canBank?: boolean;
 }
+
+export const pct = (x: number) => `${Math.floor(100 * x)}%`;
+
+/** What the objective asks, in a few words. */
+export function objectiveText(o: Objective): string {
+  switch (o.kind) {
+    case 'crowns': return 'fell every crown';
+    case 'skyline': return `skyline under ${o.maxH} h`;
+    case 'collapse': return `bring ${pct(o.min)} down`;
+  }
+}
+
+/** Shown on a level made by overrides (LevelDef.custom). */
+export const CUSTOM_NOTE = 'custom: stars not recorded';
+
+/** Outcome levels: the Bank button (key B), shown while a bank is possible. */
+export const BANK_BUTTON = '<button data-act="bank" class="bank"><kbd>B</kbd> Bank</button>';
 
 export function hudHtml(s: HudState): string {
   const d = s.level;
@@ -55,14 +76,21 @@ export function hudHtml(s: HudState): string {
   const heritage = s.heritageTotal ? `<div class="row"><span>Heritage</span><span class="${s.heritageBroken ? 'bad' : 'ok'}">${s.heritageBroken ? `${s.heritageBroken} cracked` : 'intact'}</span></div>` : '';
   const power = s.chips.find((c) => c.selected)?.ammo === 'drop' ? '' : `<div class="row"><span>Power <kbd>Q</kbd><kbd>E</kbd></span><span class="bar"><i style="width:${s.power}%"></i></span></div>`;
   const reach = s.reachable === false ? '<div class="bad small">Out of reach at this power</div>' : '';
+  const outcome = scoringOf(d) === 'outcome';
+  const head = outcome
+    ? `<div class="row"><span>Shot ${s.strokes}</span><span>Down <b class="down">${pct(s.collapse ?? 0)}</b></span></div>
+    <div class="row"><span>Objective</span><span class="${s.met ? 'ok' : ''}">${esc(objectiveText(d.objective))}${s.met ? ' ✓' : ''}</span></div>`
+    : `<div class="row"><span>Par ${d.par}</span><span>Stroke ${s.strokes}</span></div>`;
+  const crowns = !outcome || s.crownsTotal ? `<div class="row"><span>Crowns</span><span class="crowns">${s.crownsDown} / ${s.crownsTotal}</span></div>` : '';
   return `
     <div class="title">W${d.world}-${esc(d.id.replace(/^L/, ''))} · ${esc(d.name)}</div>
-    <div class="row"><span>Par ${d.par}</span><span>Stroke ${s.strokes}</span></div>
-    <div class="row"><span>Crowns</span><span class="crowns">${s.crownsDown} / ${s.crownsTotal}</span></div>
+    ${d.custom ? `<div class="small custom">${CUSTOM_NOTE}</div>` : ''}
+    ${head}
+    ${crowns}
     ${heritage}
     <div class="row"><span>Leverage</span><span>${fmtLeverage(s.liveLeverage)}</span></div>
     <div class="chips">${chips}</div>
-    ${power}${reach}`;
+    ${power}${reach}${outcome && s.canBank ? `<div class="row">${BANK_BUTTON}<span class="small">end here, keep the rack</span></div>` : ''}`;
 }
 
 /** Result card: score lines slam in one by one, then the stamp and stars. */
@@ -72,11 +100,13 @@ export function hudHtml(s: HudState): string {
  * at once and tallies, and is drawn again with the score when it settles.
  */
 export function resultHtml(level: LevelDef, score: LevelScore | null, strokes: number, hasNext: boolean): string {
+  const outcome = scoringOf(level) === 'outcome';
+  const shotsText = `${strokes} ${outcome ? 'shot' : 'stroke'}${strokes === 1 ? '' : 's'}${outcome ? '' : ` · par ${level.par}`}`;
   const actions = `<div class="actions"><button data-act="retry"><kbd>R</kbd> Retry</button>${hasNext ? '<button data-act="next" class="primary"><kbd>N</kbd> Next</button>' : ''}</div>`;
   if (!score) {
     return `
     <div class="name">${esc(level.name)}</div>
-    <div class="sub">${strokes} stroke${strokes === 1 ? '' : 's'} · par ${level.par}</div>
+    <div class="sub">${shotsText}</div>
     <div class="line tally"><span>All crowns down</span><span>tallying…</span></div>
     ${actions}`;
   }
@@ -84,7 +114,8 @@ export function resultHtml(level: LevelDef, score: LevelScore | null, strokes: n
   const after = 0.15 + 0.22 * score.lines.length;
   return `
     <div class="name">${esc(level.name)}</div>
-    <div class="sub">${strokes} stroke${strokes === 1 ? '' : 's'} · par ${level.par} · leverage ${fmtLeverage(score.leverage)} (${tierName(tier(score.leverage))})</div>
+    ${level.custom ? `<div class="sub custom">${CUSTOM_NOTE}</div>` : ''}
+    <div class="sub">${shotsText}${'outcome' in score ? ` · ${pct((score as { outcome: { collapse: number } }).outcome.collapse)} down` : ''} · leverage ${fmtLeverage(score.leverage)} (${tierName(tier(score.leverage))})</div>
     ${lines}
     <div class="line total" style="animation-delay:${after}s"><span>Total</span><span>${fmtPoints(score.total)}</span></div>
     <div class="stamp s-${score.stamp.replace(/[^A-Z]/g, '').toLowerCase()}" style="animation-delay:${after + 0.3}s">${esc(score.stamp)}</div>

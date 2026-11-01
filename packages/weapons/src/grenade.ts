@@ -1,7 +1,9 @@
 // Grenades: a fired body with a fuse that ends in a blast centred on itself
-// (engine-api blast.ts, centre { body }). Pure logic over snapshots: the
-// caller fires the grenade's spawn, tells Grenades about it (launch), and
-// feeds it the states it observes (observe); both return the blasts to push.
+// (engine-api blast.ts, centre { body }), after which the grenade is spent:
+// a RemoveEvent at the same step takes it out of the world (engine-api
+// remove.ts). Pure logic over snapshots: the caller fires the grenade's
+// spawn, tells Grenades about it (launch), and feeds it the states it
+// observes (observe); both return the events to push (blast, then removal).
 //
 // Fuses:
 // - timer: the blast is due `delay` s after the spawn step, known at launch,
@@ -24,10 +26,11 @@
 // once (prox >= 0), so the prediction is never used past a contact.
 //
 // Distances are exact for spheres and boxes (box: point to oriented box);
-// the grenade counts as its bounding sphere. A coarse test against the
+// the grenade counts as its bounding sphere. Removed bodies (tier TIER_FREE,
+// such as an earlier grenade's tombstone) are not sensed. A coarse test against the
 // bounding sphere of the predicted path keeps observe() at one distance
 // per body for the far ones.
-import { type BlastEvent, checkBlast, freeFlight, type ShapeDesc, type Snapshot, type Vec3 } from '@tb/engine-api';
+import { checkBlast, type InputEvent, TIER_FREE, freeFlight, type ShapeDesc, type Snapshot, type Vec3 } from '@tb/engine-api';
 import { boundingRadius } from '@tb/geom';
 
 export type Fuse = 'timer' | 'prox' | 'proxTimer';
@@ -105,7 +108,7 @@ interface Live {
 }
 
 /** Steps for a duration, rounded to the nearest. */
-const stepsOf = (s: number, dt: number) => Math.round(s / dt);
+export const stepsOf = (s: number, dt: number) => Math.round(s / dt);
 
 export class Grenades {
   private live: Live[] = [];
@@ -123,27 +126,28 @@ export class Grenades {
 
   /**
    * A grenade was fired: body `id`, whose spawn is due at engine step `step`.
-   * Returns the input to push after the spawn: a timer fuse's blast; nothing for the others.
+   * Returns the input to push after the spawn: a timer fuse's blast and removal; nothing for the others.
    */
-  launch(id: number, step: number, spec: GrenadeSpec, shape: ShapeDesc): BlastEvent[] {
+  launch(id: number, step: number, spec: GrenadeSpec, shape: ShapeDesc): InputEvent[] {
     checkGrenade(spec);
-    if (spec.fuse === 'timer') return [blastOf(id, step + stepsOf(spec.delay, this.world.dt), spec)];
+    if (spec.fuse === 'timer') return detonation(id, step + stepsOf(spec.delay, this.world.dt), spec);
     this.live.push({ id, spec, radius: boundingRadius(shape), armStep: step + stepsOf(spec.arm, this.world.dt) });
     return [];
   }
 
   /**
-   * The blasts set off by the state after `step` steps (s), each due after `step`.
+   * The blasts (each followed by its grenade's removal) set off by the state
+   * after `step` steps (s), each due after `step`.
    * shapes: every body's shape by id, at least s.count of them.
    */
-  observe(s: Snapshot, step: number, shapes: readonly { shape: ShapeDesc }[]): BlastEvent[] {
-    const out: BlastEvent[] = [];
+  observe(s: Snapshot, step: number, shapes: readonly { shape: ShapeDesc }[]): InputEvent[] {
+    const out: InputEvent[] = [];
     this.live = this.live.filter((g) => {
       // Not spawned yet as of this state.
       if (g.id >= s.count) return true;
       const j = this.trigger(g, s, step, shapes);
       if (j === null) return true;
-      out.push(blastOf(g.id, g.spec.fuse === 'prox' ? j : j + stepsOf(g.spec.delay, this.world.dt), g.spec));
+      out.push(...detonation(g.id, g.spec.fuse === 'prox' ? j : j + stepsOf(g.spec.delay, this.world.dt), g.spec));
       return false;
     });
     return out;
@@ -151,38 +155,64 @@ export class Grenades {
 
   /** The step the fuse is set off at (> step), or null if not within the lookahead. */
   private trigger(g: Live, s: Snapshot, step: number, shapes: readonly { shape: ShapeDesc }[]): number | null {
-    const { dt, substeps, gravity, groundY } = this.world;
-    const prox = g.spec.prox, sense = g.spec.ground && groundY !== null;
-    // The grenade's position at each step from the observed one, while it flies free.
-    let p: Vec3 = [s.pos[3 * g.id]!, s.pos[3 * g.id + 1]!, s.pos[3 * g.id + 2]!];
-    let v: Vec3 = [s.linVel[3 * g.id]!, s.linVel[3 * g.id + 1]!, s.linVel[3 * g.id + 2]!];
-    const path: { step: number; p: Vec3 }[] = [];
-    for (let j = step; j <= step + this.lookahead; j++) {
-      if (j > step) ({ pos: p, vel: v } = freeFlight(p, v, gravity, dt, substeps, 1));
-      if (j >= g.armStep) path.push({ step: j, p });
-    }
-    if (!path.length) return null;
-    // Bounding sphere of the path points; bodies farther than prox from it cannot set the fuse off.
-    const lo = [0, 1, 2].map((k) => Math.min(...path.map((q) => q.p[k]!))), hi = [0, 1, 2].map((k) => Math.max(...path.map((q) => q.p[k]!)));
-    const mid = [0, 1, 2].map((k) => (lo[k]! + hi[k]!) / 2), reach = Math.hypot(hi[0]! - lo[0]!, hi[1]! - lo[1]!, hi[2]! - lo[2]!) / 2 + g.radius + prox;
-    const near: number[] = [];
-    for (let i = 0; i < s.count; i++) {
-      if (i === g.id) continue;
-      const d = Math.hypot(s.pos[3 * i]! - mid[0]!, s.pos[3 * i + 1]! - mid[1]!, s.pos[3 * i + 2]! - mid[2]!);
-      if (d - boundingRadius(shapes[i]!.shape) <= reach) near.push(i);
-    }
-    for (const { step: j, p: q } of path) {
-      let gap = sense ? q[1] - groundY! : Infinity;
-      for (const i of near) gap = Math.min(gap, surfaceDistance(shapes[i]!.shape, s, i, q));
-      if (gap - g.radius <= prox) return Math.max(j, step + 1);
-    }
-    return null;
+    const path = flightPath(s, g.id, step, this.lookahead, this.world).filter((q) => q.step >= g.armStep);
+    return proximityStep(path, s, step, g.id, g.radius, g.spec.prox, g.spec.ground ? this.world.groundY : null, shapes);
   }
 }
 
-/** The blast of grenade `id`, due at `step`: centred on it, not pushing it. */
-function blastOf(id: number, step: number, spec: GrenadeSpec): BlastEvent {
-  return { step, kind: 'blast', blast: { centre: { body: id }, exclude: [id], ...spec.blast } };
+/** A munition's predicted state at an engine step: its pose after `step` steps if it flies free. */
+export interface PathPoint { step: number; p: Vec3; v: Vec3 }
+
+/**
+ * Body `id`'s state at steps step .. step + lookahead: the observed one (s,
+ * after `step` steps), then free flight (the engines' integrator, freeFlight).
+ */
+export function flightPath(s: Snapshot, id: number, step: number, lookahead: number, world: GrenadeWorld): PathPoint[] {
+  const { dt, substeps, gravity } = world;
+  let p: Vec3 = [s.pos[3 * id]!, s.pos[3 * id + 1]!, s.pos[3 * id + 2]!];
+  let v: Vec3 = [s.linVel[3 * id]!, s.linVel[3 * id + 1]!, s.linVel[3 * id + 2]!];
+  const out: PathPoint[] = [{ step, p, v }];
+  for (let j = step + 1; j <= step + lookahead; j++) {
+    ({ pos: p, vel: v } = freeFlight(p, v, gravity, dt, substeps, 1));
+    out.push({ step: j, p, v });
+  }
+  return out;
+}
+
+/**
+ * The first step of `path` (armed points only) at which a munition (body
+ * `self`, bounding radius `radius`) comes within `prox` of another body's
+ * surface in s, or of the ground at groundY (null: not sensed), as due after
+ * the observed `step` (at least step + 1); null if none does. Removed bodies
+ * are not sensed. A coarse test against the bounding sphere of the path keeps
+ * it at one distance per far body.
+ */
+export function proximityStep(path: readonly PathPoint[], s: Snapshot, step: number, self: number, radius: number, prox: number, groundY: number | null, shapes: readonly { shape: ShapeDesc }[]): number | null {
+  if (!path.length) return null;
+  // Bounding sphere of the path points; bodies farther than prox from it cannot set the fuse off.
+  const lo = [0, 1, 2].map((k) => Math.min(...path.map((q) => q.p[k]!))), hi = [0, 1, 2].map((k) => Math.max(...path.map((q) => q.p[k]!)));
+  const mid = [0, 1, 2].map((k) => (lo[k]! + hi[k]!) / 2), reach = Math.hypot(hi[0]! - lo[0]!, hi[1]! - lo[1]!, hi[2]! - lo[2]!) / 2 + radius + prox;
+  const near: number[] = [];
+  for (let i = 0; i < s.count; i++) {
+    // Removed bodies (a spent grenade's tombstone) are not there.
+    if (i === self || s.tier?.[i] === TIER_FREE) continue;
+    const d = Math.hypot(s.pos[3 * i]! - mid[0]!, s.pos[3 * i + 1]! - mid[1]!, s.pos[3 * i + 2]! - mid[2]!);
+    if (d - boundingRadius(shapes[i]!.shape) <= reach) near.push(i);
+  }
+  for (const { step: j, p: q } of path) {
+    let gap = groundY !== null ? q[1] - groundY : Infinity;
+    for (const i of near) gap = Math.min(gap, surfaceDistance(shapes[i]!.shape, s, i, q));
+    if (gap - radius <= prox) return Math.max(j, step + 1);
+  }
+  return null;
+}
+
+/** Grenade `id` going off at `step`: its blast (centred on it, not pushing it), then its removal. */
+export function detonation(id: number, step: number, spec: GrenadeSpec): InputEvent[] {
+  return [
+    { step, kind: 'blast', blast: { centre: { body: id }, exclude: [id], ...spec.blast } },
+    { step, kind: 'remove', id },
+  ];
 }
 
 /** Distance from point q to the surface of body i (0 inside), from its pose in s. */

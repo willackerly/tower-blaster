@@ -4,7 +4,7 @@
 // are sized at init from these options).
 import { RapierEngine } from '@tb/adapter-rapier';
 import { type EngineHealth, limitsHit, type PhysicsEngine, type ShapeDesc } from '@tb/engine-api';
-import { AVBD_GAP_SLOP, AVBD_ITERATIONS, ammoBody, type CompiledLevel, type DriverOptions } from '@tb/keystone';
+import { AVBD_GAP_SLOP, AVBD_ITERATIONS, ammoBody, type CompiledLevel, type DriverOptions, physicsOf, rackBodies } from '@tb/keystone';
 import { everyPairPerBody, GpuAvbdEngine, type GpuEngineOptions } from '@tb/physics-gpu';
 
 export const ENGINES = ['rapier', 'gpu'] as const;
@@ -38,18 +38,19 @@ export function engineKind(param: string | null): EngineKind {
 export const radiusOf = (s: ShapeDesc): number => (s.kind === 'sphere' ? s.radius : Math.hypot(...s.half));
 
 /**
- * Room the GPU engine reserves at init for every body the rack can fire, and a pair buffer that holds
- * every pair of them (everyPairPerBody), so no shot can drop a contact. Its blocks are 0.5 m and the
- * broadphase's sweep is in metres, so a packed block moving at about 3.3 m/s already reaches past its
- * 26 neighbours, inside the rack's speeds. A level of tens to a hundred-odd bodies costs at most a few
- * thousand slots more than the default 16 per body. Past 362 bodies and rack every pair no longer fits
- * everyPairPerBody's slots, so `pairsPerBody` (the room an earlier round of the level asked for,
- * roomAfter) replaces it when given.
+ * Room the GPU engine reserves at init for every body the rack can fire (a weapon's whole budget:
+ * keystone rackBodies), and a pair buffer that holds every pair of them (everyPairPerBody), so no
+ * shot can drop a contact. Its blocks are 0.5 m and the broadphase's sweep is in metres, so a packed
+ * block moving at about 3.3 m/s already reaches past its 26 neighbours, inside the rack's speeds. A
+ * level of tens to a hundred-odd bodies costs at most a few thousand slots more than the default 16
+ * per body. Past 362 bodies and rack every pair no longer fits everyPairPerBody's slots; `pairsPerBody`
+ * replaces it when given (gpuEngineOptions: the room a round asked for, or the level's physics block).
  */
 export function gpuOptions(c: CompiledLevel, pairsPerBody?: number): Required<Pick<GpuEngineOptions, 'capacity' | 'maxRadius' | 'pairsPerBody'>> {
   const rack = c.def.rack;
-  const maxRadius = Math.max(0, ...rack.map((k) => radiusOf(ammoBody(k, c.frame.unit, [0, 0, 0], [0, 0, 0]).shape)));
-  const capacity = c.scene.bodies.length + rack.length;
+  // A weapon's children count and reach too (its arm: every munition it can spawn).
+  const maxRadius = Math.max(0, ...rack.map((k) => c.arms[k]?.maxRadius ?? radiusOf(ammoBody(k, c.frame, [0, 0, 0], [0, 0, 0]).shape)));
+  const capacity = c.scene.bodies.length + rackBodies(rack, c.arms);
   return { capacity, maxRadius, pairsPerBody: pairsPerBody ?? everyPairPerBody(capacity) };
 }
 
@@ -72,8 +73,32 @@ export function roomAfter(pairsPerBody: number, health: EngineHealth | null): nu
  */
 export const driverOptions = (kind: EngineKind): DriverOptions => ({ pipelined: kind === 'gpu' });
 
-/** The engine for one round of level c; `pairsPerBody` as gpuOptions takes it (GPU only). */
+/** The GPU solver's params (physics-ref AvbdParams, as GpuAvbdEngine takes them). */
+export type GpuParams = NonNullable<ConstructorParameters<typeof GpuAvbdEngine>[0]>;
+
+/**
+ * The GPU solver's params for a level: its physics block (LevelDef.physics; absent, GPU_PARAMS), and
+ * the restitution pass on when the block sets a bounce (the compiled scene already carries the e).
+ */
+export function gpuParams(c: CompiledLevel): GpuParams {
+  const p = physicsOf(c.def);
+  return { iterations: p.iterations, gapSlop: p.gapSlop, ...(p.bounce !== null ? { restitution: true } : {}) };
+}
+
+/**
+ * gpuOptions with the pair room a round of the level asked for (`pairsPerBody`, play.ts roomAfter), else
+ * the level's physics block's when it sets one, else every pair.
+ */
+export function gpuEngineOptions(c: CompiledLevel, pairsPerBody?: number): GpuEngineOptions {
+  return gpuOptions(c, pairsPerBody ?? physicsOf(c.def).pairsPerBody);
+}
+
+/**
+ * The engine a level plays on. Rapier takes the scene as compiled (Bounce's e is on its bodies and
+ * ground); its own iterations are not AVBD's, so the block's iterations and slop are the GPU's only.
+ * `pairsPerBody` as gpuEngineOptions takes it (GPU only).
+ */
 export function makeEngine(kind: EngineKind, c: CompiledLevel, device?: GPUDevice, pairsPerBody?: number): PhysicsEngine {
   if (kind === 'rapier') return new RapierEngine();
-  return new GpuAvbdEngine({ ...GPU_PARAMS }, { device, ...gpuOptions(c, pairsPerBody) });
+  return new GpuAvbdEngine(gpuParams(c), { device, ...gpuEngineOptions(c, pairsPerBody) });
 }
