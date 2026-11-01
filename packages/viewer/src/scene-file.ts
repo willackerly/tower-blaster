@@ -10,7 +10,7 @@ import { engineNames, parseSpec } from '@tb/bench';
 import { ENVS, GROUNDS, REAL_DEFAULTS, REAL_KNOBS, type RealKnob, type RealOptions, STONES } from '@tb/render';
 import { SCENARIOS } from '@tb/scenarios';
 import { type CameraPose, DEFAULT_FRAMING, type Framing } from './camera.ts';
-import { AMMO_KINDS, type AmmoKind, type LevelDef, readShots, type Shot, writeShots } from '@tb/keystone';
+import { isRackItem, type LevelDef, RACK_ITEM_NAMES, readShots, type Shot, writeShots } from '@tb/keystone';
 import { encodeLevelParam, parseLevelDef } from './level-file.ts';
 import { defaultFraming, parseViewerConfig, type ViewerConfig, writeCamera, writeFraming } from './params.ts';
 import { DEFAULT_GRENADE, type GrenadeSpec } from '@tb/weapons';
@@ -243,7 +243,7 @@ function shotsText(v: unknown): string {
   if (!Array.isArray(v) || v.length === 0) throw new Error('rules.shots must be a non-empty array of shots');
   const shots = v.map((x, i) => {
     const o = object(x, `rules.shots[${i}]`);
-    if (!AMMO_KINDS.includes(o.ammo as AmmoKind)) throw new Error(`rules.shots[${i}].ammo must be one of ${AMMO_KINDS.join(', ')}`);
+    if (typeof o.ammo !== 'string' || !isRackItem(o.ammo)) throw new Error(`rules.shots[${i}].ammo must be one of ${RACK_ITEM_NAMES}`);
     return o as unknown as Shot;
   });
   const text = writeShots(shots);
