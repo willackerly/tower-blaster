@@ -7,7 +7,7 @@
 import { LEVELS } from '@tb/keystone';
 import { createDevice } from '@tb/gpu';
 import { lookByName, parseRealOptions, Renderer, SnapshotSource } from '@tb/render';
-import { parseGameParams } from './params.ts';
+import { parseGameParams, withRules } from './params.ts';
 import { type GameHandle, newGameHandle, playKeystone, playLine } from './play.ts';
 import { GAME_HELP, installGameStyles } from './ui.ts';
 
@@ -31,8 +31,9 @@ function fail(e: unknown) {
 
 async function main() {
   const q = new URLSearchParams(location.search);
-  const { level, engine, feel, look, shots, offscreen } = parseGameParams(q);
-  const start = LEVELS.indexOf(level);
+  const { level, rules, engine, feel, look, shots, offscreen } = parseGameParams(q);
+  const levels = LEVELS.map((d) => withRules(d, rules));
+  const start = levels.findIndex((d) => d.id === level.id);
   handle.feel = feel;
   handle.engine = engine;
 
@@ -49,7 +50,7 @@ async function main() {
   let shown = level.id;
   await playKeystone({
     canvas, offscreen, device, renderer, source, hud: $('hud'), banner: $('banner'), result: $('result'),
-    levels: LEVELS, start, engine, feel, fail,
+    levels, start, engine, feel, fail,
     hooks: {
       // The URL follows the level, keeping the other keys; a line is the level's it was made on.
       loaded: (c) => {
