@@ -327,4 +327,25 @@ export const ColorParams = defineStruct(
   'Per-dispatch uniforms (bound with a dynamic offset).',
 );
 
-export const ALL_STRUCTS = [SimParams, Body, RenderRecord, Shape, Manifold, ImpactEvent, Spark, FxState, BodyProps, SolverBody, SolverContact, SolverRecord, CentreRecord, SolverParams, ColorParams, RestSlot];
+export const SleepBody = defineStruct(
+  'SleepBody',
+  [
+    ['anchorPos', 'vec3f', 'position when the quiet window began'],
+    ['quiet', 'u32', 'steps the body has been quiet in a row (saturates)'],
+    ['anchorRot', 'vec4f', 'rotation when the quiet window began'],
+  ],
+  'Per-body sleep bookkeeping (physics-gpu sleep.ts; GpuEngineOptions.sleep).',
+);
+
+export const SleepParams = defineStruct(
+  'SleepParams',
+  [
+    ['n', 'u32', 'bodies in use'],
+    ['steps', 'u32', 'quiet steps a body needs to sleep (T)'],
+    ['speed', 'f32', 'v_sleep: |v| + |w| r must stay below it, units/s'],
+    ['drift', 'f32', 'the window displacement a body may have, as a fraction of its bounding radius'],
+  ],
+  'Uniforms of the sleep pass.',
+);
+
+export const ALL_STRUCTS = [SimParams, Body, RenderRecord, Shape, Manifold, ImpactEvent, Spark, FxState, BodyProps, SolverBody, SolverContact, SolverRecord, CentreRecord, SolverParams, ColorParams, RestSlot, SleepBody, SleepParams];

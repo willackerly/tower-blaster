@@ -259,3 +259,20 @@ struct RestSlot {
   angA: vec3f, // @64 this round's angular impulse on body a, the sum of -dP (raw x n)
   split: u32, // @76 ground slots: the pass's manifolds the body is in (its mass split); 0 if it is not in the pass
 }
+
+// Per-body sleep bookkeeping (physics-gpu sleep.ts; GpuEngineOptions.sleep).
+// size 32 B, align 16
+struct SleepBody {
+  anchorPos: vec3f, // @0 position when the quiet window began
+  quiet: u32, // @12 steps the body has been quiet in a row (saturates)
+  anchorRot: vec4f, // @16 rotation when the quiet window began
+}
+
+// Uniforms of the sleep pass.
+// size 16 B, align 4
+struct SleepParams {
+  n: u32, // @0 bodies in use
+  steps: u32, // @4 quiet steps a body needs to sleep (T)
+  speed: f32, // @8 v_sleep: |v| + |w| r must stay below it, units/s
+  drift: f32, // @12 the window displacement a body may have, as a fraction of its bounding radius
+}

@@ -14,6 +14,7 @@ import { Coloring } from './coloring.ts';
 import { DEFAULT_PAIRS_PER_BODY, gpuHealth } from './health.ts';
 import { Narrowphase } from './narrowphase.ts';
 import { restitutionWord } from './restitution.ts';
+import { checkSleepRule, DEFAULT_SLEEP, SleepPass, type SleepRule } from './sleep.ts';
 import { AvbdSolver, DEFAULT_DISPATCH, defaultTailThreads, HESSIAN_FORMS, type HessianForm, type RecordMode, type SolverDispatch } from './solver.ts';
 
 export interface GpuEngineOptions {
@@ -66,6 +67,23 @@ export interface GpuEngineOptions {
    * a pile (their bounding spheres are 42x their volume); 2% fewer for cubes.
    */
   boxBroadphase?: boolean;
+  /**
+   * Per-body sleep (sleep.ts; roadmap E2), opt-in: off when absent or false, and EngineInfo.variant lists it and
+   * its thresholds only when they are given. It acts only on a scene with SceneDesc.sleep set. So far (E2 step 1)
+   * it is bookkeeping alone: Body.flags bit 0 and Snapshot.awake say which bodies the sleep rule would put to
+   * sleep, and the trajectory is the same, bit for bit, as with it off. sleepSpeed (v_sleep, scene units/s,
+   * default 0.05), sleepSteps (T, default 30) and sleepDrift (the window displacement as a fraction of the
+   * bounding radius, default 0.02) set the rule (DEFAULT_SLEEP).
+   */
+  sleep?: boolean;
+  sleepSpeed?: number;
+  sleepSteps?: number;
+  sleepDrift?: number;
+}
+
+/** The sleep rule these options set (DEFAULT_SLEEP where they leave a threshold out). */
+export function sleepRuleOf(opts: Pick<GpuEngineOptions, 'sleepSpeed' | 'sleepSteps' | 'sleepDrift'>): SleepRule {
+  return { speed: opts.sleepSpeed ?? DEFAULT_SLEEP.speed, steps: opts.sleepSteps ?? DEFAULT_SLEEP.steps, drift: opts.sleepDrift ?? DEFAULT_SLEEP.drift };
 }
 
 /**
@@ -187,7 +205,7 @@ export class GpuAvbdEngine implements PhysicsEngine {
   readonly records: RecordMode;
   /** The colouring's lattice preference (gpuColorMode(): AvbdParams.colorMode, unset 3). */
   readonly colorMode: number;
-  private parts: { bodies: GPUBuffer; shapes: GPUBuffer; props: GPUBuffer; spheres: GPUBuffer; sweep: GPUBuffer; prev: GPUBuffer; bp: Broadphase; np: Narrowphase; col: Coloring; solver: AvbdSolver; blast: BlastPass; readback: Readback } | null = null;
+  private parts: { bodies: GPUBuffer; shapes: GPUBuffer; props: GPUBuffer; spheres: GPUBuffer; sweep: GPUBuffer; prev: GPUBuffer; bp: Broadphase; np: Narrowphase; col: Coloring; solver: AvbdSolver; blast: BlastPass; readback: Readback; sleep: SleepPass | null } | null = null;
   /** Counts dispose() calls (init() makes one), so an init() that awaited across another knows it was overtaken. */
   private generation = 0;
 
@@ -212,7 +230,8 @@ export class GpuAvbdEngine implements PhysicsEngine {
     check('colorTail', (v) => Number.isInteger(v) && v >= 0 && v <= 63, 'an integer from 0 to 63');
     check('tailThreads', (v) => Number.isInteger(v) && v >= 1 && v <= 256, 'an integer from 1 to 256');
     check('colorRounds', (v) => Number.isInteger(v) && v >= 2 && v % 2 === 0, 'an even integer >= 2');
-    for (const k of ['indirectColors', 'boxBroadphase'] as const) if (opts[k] !== undefined && typeof opts[k] !== 'boolean') throw new Error(`GpuAvbdEngine: GpuEngineOptions.${k} must be a boolean, got ${opts[k]}`);
+    for (const k of ['indirectColors', 'boxBroadphase', 'sleep'] as const) if (opts[k] !== undefined && typeof opts[k] !== 'boolean') throw new Error(`GpuAvbdEngine: GpuEngineOptions.${k} must be a boolean, got ${opts[k]}`);
+    try { checkSleepRule(sleepRuleOf(opts)); } catch (e) { throw new Error(`GpuAvbdEngine: GpuEngineOptions.${(e as Error).message}`); }
     if (opts.hessian !== undefined && !HESSIAN_FORMS.includes(opts.hessian)) throw new Error(`GpuAvbdEngine: GpuEngineOptions.hessian must be one of ${HESSIAN_FORMS.join(', ')}, got ${opts.hessian}`);
     // Manifold records (AvbdParams.records, checked above): the solver's contact layout, in the register form only;
     // unset, records 1, or points where only they are implemented (gpuRecordsLayout).
@@ -234,7 +253,7 @@ export class GpuAvbdEngine implements PhysicsEngine {
     this.colorMode = gpuColorMode(this.params);
     if (this.params.colorMode !== undefined) variant.colorMode = this.params.colorMode;
     // Options that size the buffers or shape the dispatch change the work per step (e.g. the broadphase's key bits), so they are part of the variant.
-    for (const k of ['capacity', 'spare', 'pairsPerBody', 'maxRadius', 'colorTail', 'indirectColors', 'tailThreads', 'colorRounds', 'hessian', 'boxBroadphase'] as const) if (opts[k] !== undefined) variant[k] = opts[k];
+    for (const k of ['capacity', 'spare', 'pairsPerBody', 'maxRadius', 'colorTail', 'indirectColors', 'tailThreads', 'colorRounds', 'hessian', 'boxBroadphase', 'sleep', 'sleepSpeed', 'sleepSteps', 'sleepDrift'] as const) if (opts[k] !== undefined) variant[k] = opts[k];
     this.info = { name: 'avbd-gpu', variant, backend: 'webgpu', integrator: { substeps: 1 } };
   }
 
@@ -313,7 +332,9 @@ export class GpuAvbdEngine implements PhysicsEngine {
         threshold: p.restitutionThreshold ?? RESTITUTION_DEFAULTS.restitutionThreshold, rounds: p.restitutionRounds ?? RESTITUTION_DEFAULTS.restitutionRounds,
         groundRestitution: scene.ground?.restitution ?? 0, combine: scene.restitutionCombine ?? DEFAULT_RESTITUTION_COMBINE,
       } : null);
-      parts = { bodies, shapes, props, spheres, sweep, prev, bp, np, col, solver, blast: new BlastPass(device, bodies, props, shapes, solver.solver), readback: new Readback(device) };
+      // Sleep only where both the engine and the scene allow it.
+      const sleep = this.opts.sleep && scene.sleep ? new SleepPass(device, sleepRuleOf(this.opts), this.capacity, bodies, props, np.manifolds, bp.total) : null;
+      parts = { bodies, shapes, props, spheres, sweep, prev, bp, np, col, solver, blast: new BlastPass(device, bodies, props, shapes, solver.solver), readback: new Readback(device), sleep };
     } catch (e) {
       thrown = e;
     }
@@ -356,6 +377,7 @@ export class GpuAvbdEngine implements PhysicsEngine {
     one(BodyProps, { inertia: inertiaOf(b), mass: m, friction: b.friction, radius: boundingRadius(b.shape), sphere: b.shape.kind === 'sphere' ? 1 : 0, restitution: restitutionWord(b.restitution) }, parts!.props);
     // prevVel = initial velocity, as the reference (no adaptive warm-start kick on the first step).
     one(SolverBody, { prevVel: b.linVel }, parts!.solver.solver);
+    parts!.sleep?.add(i, b.pos, b.rot);
   }
 
   /**
@@ -459,6 +481,7 @@ export class GpuAvbdEngine implements PhysicsEngine {
     parts.col.encode(enc, n, scene.ground?.y ?? 0);
     mark?.(enc, 'coloring');
     parts.solver.solve(enc, n, p.iterations, solveTimestamps);
+    parts.sleep?.encode(enc, n);
     mark?.(enc, 'solve');
     device.queue.submit([enc.finish()]);
     this.stepIndex++;
@@ -533,7 +556,7 @@ export class GpuAvbdEngine implements PhysicsEngine {
   }
 
   private static free(p: NonNullable<GpuAvbdEngine['parts']>): void {
-    p.solver.destroy(); p.blast.destroy(); p.col.destroy(); p.np.destroy(); p.bp.destroy(); p.readback.destroy();
+    p.solver.destroy(); p.blast.destroy(); p.sleep?.destroy(); p.col.destroy(); p.np.destroy(); p.bp.destroy(); p.readback.destroy();
     for (const b of [p.bodies, p.shapes, p.props, p.spheres, p.sweep, p.prev]) b.destroy();
   }
 

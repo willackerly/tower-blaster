@@ -13,7 +13,8 @@ const REGISTRY: Record<string, (o: Options) => PhysicsEngine> = {
   'avbd-ref': (o) => new AvbdReferenceEngine(o),
   // Same AvbdParams (records too: avbd-gpu:records=2), plus the GpuEngineOptions that size
   // its buffers (capacity, spare, pairsPerBody, maxRadius) or shape its dispatch (colorTail, indirectColors,
-  // tailThreads, colorRounds, hessian, boxBroadphase), which the engine checks; needs WebGPU,
+  // tailThreads, colorRounds, hessian, boxBroadphase) or turn on per-body sleep (sleep, sleepSpeed, sleepSteps,
+  // sleepDrift), which the engine checks; needs WebGPU,
   // so it runs in the browser runner, not the Node CLI.
   'avbd-gpu': (o) => {
     const { params, opts } = gpuEngineArgs(o);
@@ -28,8 +29,8 @@ const REGISTRY: Record<string, (o: Options) => PhysicsEngine> = {
 
 /** An avbd-gpu spec's options split into the engine's AvbdParams and GpuEngineOptions (also used by pnpm bench:probe). */
 export function gpuEngineArgs(o: Options): { params: Partial<AvbdParams>; opts: GpuEngineOptions } {
-  const { capacity, spare, pairsPerBody, maxRadius, colorTail, indirectColors, tailThreads, colorRounds, hessian, boxBroadphase, ...params } = o;
-  const opts = Object.fromEntries(Object.entries({ capacity, spare, pairsPerBody, maxRadius, colorTail, indirectColors, tailThreads, colorRounds, hessian, boxBroadphase }).filter(([, v]) => v !== undefined)) as GpuEngineOptions;
+  const { capacity, spare, pairsPerBody, maxRadius, colorTail, indirectColors, tailThreads, colorRounds, hessian, boxBroadphase, sleep, sleepSpeed, sleepSteps, sleepDrift, ...params } = o;
+  const opts = Object.fromEntries(Object.entries({ capacity, spare, pairsPerBody, maxRadius, colorTail, indirectColors, tailThreads, colorRounds, hessian, boxBroadphase, sleep, sleepSpeed, sleepSteps, sleepDrift }).filter(([, v]) => v !== undefined)) as GpuEngineOptions;
   return { params: params as Partial<AvbdParams>, opts };
 }
 
