@@ -69,21 +69,25 @@ export interface GpuEngineOptions {
   boxBroadphase?: boolean;
   /**
    * Per-body sleep (sleep.ts; roadmap E2), opt-in: off when absent or false, and EngineInfo.variant lists it and
-   * its thresholds only when they are given. It acts only on a scene with SceneDesc.sleep set. So far (E2 step 1)
-   * it is bookkeeping alone: Body.flags bit 0 and Snapshot.awake say which bodies the sleep rule would put to
-   * sleep, and the trajectory is the same, bit for bit, as with it off. sleepSpeed (v_sleep, scene units/s,
-   * default 0.05), sleepSteps (T, default 30) and sleepDrift (the window displacement as a fraction of the
-   * bounding radius, default 0.02) set the rule (DEFAULT_SLEEP).
+   * its thresholds only when they are given. It acts only on a scene with SceneDesc.sleep set. A body that has been
+   * quiet long enough sleeps: it stops moving and is no longer solved, and the bodies touching it solve against it
+   * as an anchor (Snapshot.awake 0). Moving or pressing into it, a blast, or losing a contact wakes it with every
+   * sleeper it touches, transitively. sleepSpeed (v_sleep, scene units/s, default 0.05), sleepSteps (T, default
+   * 30), sleepDrift (the window displacement as a fraction of the bounding radius, default 0.02), wakeSpeed (default
+   * 0.1 units/s) and wakeDepth (default 0.01 units) set the rule (DEFAULT_SLEEP). Not with AvbdParams.restitution yet.
    */
   sleep?: boolean;
   sleepSpeed?: number;
   sleepSteps?: number;
   sleepDrift?: number;
+  wakeSpeed?: number;
+  wakeDepth?: number;
 }
 
 /** The sleep rule these options set (DEFAULT_SLEEP where they leave a threshold out). */
-export function sleepRuleOf(opts: Pick<GpuEngineOptions, 'sleepSpeed' | 'sleepSteps' | 'sleepDrift'>): SleepRule {
-  return { speed: opts.sleepSpeed ?? DEFAULT_SLEEP.speed, steps: opts.sleepSteps ?? DEFAULT_SLEEP.steps, drift: opts.sleepDrift ?? DEFAULT_SLEEP.drift };
+export function sleepRuleOf(opts: Pick<GpuEngineOptions, 'sleepSpeed' | 'sleepSteps' | 'sleepDrift' | 'wakeSpeed' | 'wakeDepth'>): SleepRule {
+  const d = DEFAULT_SLEEP;
+  return { speed: opts.sleepSpeed ?? d.speed, steps: opts.sleepSteps ?? d.steps, drift: opts.sleepDrift ?? d.drift, wakeSpeed: opts.wakeSpeed ?? d.wakeSpeed, wakeDepth: opts.wakeDepth ?? d.wakeDepth };
 }
 
 /**
@@ -232,6 +236,7 @@ export class GpuAvbdEngine implements PhysicsEngine {
     check('colorRounds', (v) => Number.isInteger(v) && v >= 2 && v % 2 === 0, 'an even integer >= 2');
     for (const k of ['indirectColors', 'boxBroadphase', 'sleep'] as const) if (opts[k] !== undefined && typeof opts[k] !== 'boolean') throw new Error(`GpuAvbdEngine: GpuEngineOptions.${k} must be a boolean, got ${opts[k]}`);
     try { checkSleepRule(sleepRuleOf(opts)); } catch (e) { throw new Error(`GpuAvbdEngine: GpuEngineOptions.${(e as Error).message}`); }
+    if (opts.sleep && this.params.restitution) throw new Error('GpuAvbdEngine: GpuEngineOptions.sleep is not implemented with AvbdParams.restitution yet');
     if (opts.hessian !== undefined && !HESSIAN_FORMS.includes(opts.hessian)) throw new Error(`GpuAvbdEngine: GpuEngineOptions.hessian must be one of ${HESSIAN_FORMS.join(', ')}, got ${opts.hessian}`);
     // Manifold records (AvbdParams.records, checked above): the solver's contact layout, in the register form only;
     // unset, records 1, or points where only they are implemented (gpuRecordsLayout).
@@ -253,7 +258,7 @@ export class GpuAvbdEngine implements PhysicsEngine {
     this.colorMode = gpuColorMode(this.params);
     if (this.params.colorMode !== undefined) variant.colorMode = this.params.colorMode;
     // Options that size the buffers or shape the dispatch change the work per step (e.g. the broadphase's key bits), so they are part of the variant.
-    for (const k of ['capacity', 'spare', 'pairsPerBody', 'maxRadius', 'colorTail', 'indirectColors', 'tailThreads', 'colorRounds', 'hessian', 'boxBroadphase', 'sleep', 'sleepSpeed', 'sleepSteps', 'sleepDrift'] as const) if (opts[k] !== undefined) variant[k] = opts[k];
+    for (const k of ['capacity', 'spare', 'pairsPerBody', 'maxRadius', 'colorTail', 'indirectColors', 'tailThreads', 'colorRounds', 'hessian', 'boxBroadphase', 'sleep', 'sleepSpeed', 'sleepSteps', 'sleepDrift', 'wakeSpeed', 'wakeDepth'] as const) if (opts[k] !== undefined) variant[k] = opts[k];
     this.info = { name: 'avbd-gpu', variant, backend: 'webgpu', integrator: { substeps: 1 } };
   }
 
@@ -323,6 +328,8 @@ export class GpuAvbdEngine implements PhysicsEngine {
       const prev = buf(maxPairs * 8, 'pair history lookup');
       const bp = new Broadphase(device, spheres, this.capacity, maxPairs, undefined, this.opts.boxBroadphase ? { bodies, shapes, sweep } : undefined);
       const np = new Narrowphase(device, bodies, shapes, bp.pairs, bp.total, this.capacity, maxPairs, sweep, prev);
+      // Sleep only where both the engine and the scene allow it.
+      const sleeps = !!this.opts.sleep && scene.sleep;
       const col = new Coloring(device, np.manifolds, bp.total, this.capacity, maxPairs, this.opts.colorRounds, { colorMode: this.colorMode, colorPriority: p.colorPriority ?? 0, bodies, shapes });
       const solver = new AvbdSolver(device, this.capacity, maxPairs, {
         bodies, props, spheres, sweep, prev, manifolds: np.manifolds, groundManifolds: np.groundManifolds,
@@ -331,9 +338,8 @@ export class GpuAvbdEngine implements PhysicsEngine {
       }, this.dispatch, this.records, p.gapSlop ?? 0, p.restitution ? {
         threshold: p.restitutionThreshold ?? RESTITUTION_DEFAULTS.restitutionThreshold, rounds: p.restitutionRounds ?? RESTITUTION_DEFAULTS.restitutionRounds,
         groundRestitution: scene.ground?.restitution ?? 0, combine: scene.restitutionCombine ?? DEFAULT_RESTITUTION_COMBINE,
-      } : null);
-      // Sleep only where both the engine and the scene allow it.
-      const sleep = this.opts.sleep && scene.sleep ? new SleepPass(device, sleepRuleOf(this.opts), this.capacity, bodies, props, np.manifolds, bp.total) : null;
+      } : null, sleeps);
+      const sleep = sleeps ? new SleepPass(device, sleepRuleOf(this.opts), this.capacity, bodies, props, np.manifolds, bp.total) : null;
       parts = { bodies, shapes, props, spheres, sweep, prev, bp, np, col, solver, blast: new BlastPass(device, bodies, props, shapes, solver.solver), readback: new Readback(device), sleep };
     } catch (e) {
       thrown = e;
@@ -459,11 +465,18 @@ export class GpuAvbdEngine implements PhysicsEngine {
     while (this.pending.length && this.pending[0]!.step <= this.stepIndex) {
       const ev = this.pending.shift()!;
       if (ev.kind === 'spawn') this.add(ev.body);
-      else if (ev.kind === 'remove') this.remove(ev.id);
+      else if (ev.kind === 'remove') {
+        this.remove(ev.id);
+        // With sleep, everything that could touch the removed body wakes (sleep.ts): a blast of no impulse and no speed
+        // cap around it, which changes no velocity but sets the awake bit of every body in reach. The reach is two of
+        // the largest bounding radii plus both bodies' margins, so it covers every body that can have touched it.
+        if (parts.sleep) blasts.push({ blast: checkBlast({ centre: { body: ev.id }, radius: 2 * this.rmax + 2 * this.params.margin, impulse: 0, maxSpeed: Infinity }), count: this.n });
+      }
       else blasts.push({ blast: checkBlast(ev.blast), count: this.n });
     }
     const n = this.n, p = this.params;
     parts.solver.writeParams(n, scene.dt, scene.gravity, scene.ground, p, scene.frictionCombine);
+    parts.sleep?.writeParams(n);
     const enc = device.createCommandEncoder();
     mark?.(enc, 'start');
     let pass = enc.beginComputePass();
@@ -477,11 +490,12 @@ export class GpuAvbdEngine implements PhysicsEngine {
     parts.solver.match(pass);
     parts.np.encode(pass, n, { margin: p.margin, ground: scene.ground ? { y: scene.ground.y } : null });
     pass.end();
+    parts.sleep?.encodeWake(enc, n);
     mark?.(enc, 'narrowphase');
-    parts.col.encode(enc, n, scene.ground?.y ?? 0);
+    parts.col.encode(enc, n, scene.ground?.y ?? 0, parts.sleep?.seed);
     mark?.(enc, 'coloring');
     parts.solver.solve(enc, n, p.iterations, solveTimestamps);
-    parts.sleep?.encode(enc, n);
+    parts.sleep?.encodeSleep(enc, n);
     mark?.(enc, 'solve');
     device.queue.submit([enc.finish()]);
     this.stepIndex++;

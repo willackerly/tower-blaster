@@ -261,18 +261,26 @@ struct RestSlot {
 }
 
 // Per-body sleep bookkeeping (physics-gpu sleep.ts; GpuEngineOptions.sleep).
-// size 32 B, align 16
+// size 48 B, align 16
 struct SleepBody {
   anchorPos: vec3f, // @0 position when the quiet window began
   quiet: u32, // @12 steps the body has been quiet in a row (saturates)
   anchorRot: vec4f, // @16 rotation when the quiet window began
+  wakes: u32, // @32 times it has been woken (saturates): it needs steps << min(wakes, 4) quiet steps to sleep again
+  slept: u32, // @36 1 if it was asleep at the end of last step (a blast may have woken it since)
+  pad0: u32, // @40
+  pad1: u32, // @44
 }
 
 // Uniforms of the sleep pass.
-// size 16 B, align 4
+// size 32 B, align 4
 struct SleepParams {
   n: u32, // @0 bodies in use
   steps: u32, // @4 quiet steps a body needs to sleep (T)
   speed: f32, // @8 v_sleep: |v| + |w| r must stay below it, units/s
   drift: f32, // @12 the window displacement a body may have, as a fraction of its bounding radius
+  wakeSpeed: f32, // @16 an awake body touching a sleeper wakes it when |v| + |w| r exceeds this, units/s
+  wakeDepth: f32, // @20 a contact between an awake body and a sleeper wakes it when it is this deep, units
+  pad0: u32, // @24
+  pad1: u32, // @28
 }

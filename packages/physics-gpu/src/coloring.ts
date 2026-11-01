@@ -39,6 +39,12 @@ const WG = 64;
 /** Colours are tracked in a 64-bit mask; a body needing more sets the overflow flag. */
 export const MAX_COLORS = 64;
 const UNCOLORED = 0xffffffff;
+/**
+ * A sleeper's colour (sleep.ts): given in Coloring.encode()'s seed, it is never solved. Neighbours ignore it in the
+ * rounds (it is neither uncoloured nor below MAX_COLORS), it is not counted, and its sort key sorts it after the last
+ * colour, so colorStart[MAX_COLORS] is where the sleepers begin and no primal dispatch reaches them.
+ */
+export const SLEEPER_COLOR = MAX_COLORS;
 
 const HASH = /* wgsl */ `
 fn priority(i: u32) -> u32 {
@@ -192,6 +198,7 @@ fn finish(@builtin(global_invocation_id) id: vec3u) {
   if (i >= p.n) { return; }
   let c = colorIn[i];
   if (c == ${UNCOLORED}u) { atomicAdd(&info[1], 1u); colorOut[i] = ${MAX_COLORS - 1}u; }
+  else if (c == ${SLEEPER_COLOR}u) { colorOut[i] = c; }
   else { atomicMax(&info[0], c + 1u); colorOut[i] = c; }
   order[i] = i;
 }`;
@@ -412,8 +419,12 @@ export class Coloring {
     });
   }
 
-  /** @param groundY the ground's height, from which a colorMode measures lattice cells in y (needed with one) */
-  encode(encoder: GPUCommandEncoder, n: number, groundY?: number): void {
+  /**
+   * @param groundY the ground's height, from which a colorMode measures lattice cells in y (needed with one)
+   * @param seed u32 per body to start the rounds from instead of every body uncoloured: SLEEPER_COLOR for a sleeper,
+   * 0xffffffff for the rest (sleep.ts writes it). Without one, the encode is what it was before sleep.
+   */
+  encode(encoder: GPUCommandEncoder, n: number, groundY?: number, seed?: GPUBuffer): void {
     if (n > this.capacity) throw new Error(`Coloring: n ${n} exceeds capacity ${this.capacity}`);
     if (this.prefer && groundY === undefined) throw new Error('Coloring.encode: a colorMode measures lattice cells from the ground, so it needs groundY');
     if (this.prefer) this.device.queue.writeBuffer(this.uniform, 0, new Uint32Array([n, this.maxEdges, new Uint32Array(Float32Array.of(groundY!).buffer)[0]!, 0]));
@@ -435,6 +446,7 @@ export class Coloring {
     pass.setPipeline(this.pipes.sortRows);
     pass.dispatchWorkgroups(groups);
     pass.end();
+    if (seed && n > 0) encoder.copyBufferToBuffer(seed, 0, this.ping[0], 0, n * 4);
     // A new pass, because the rounds read rowLength and adj through read-only bindings.
     pass = encoder.beginComputePass();
     if (this.prefer) {
@@ -445,8 +457,10 @@ export class Coloring {
       pass.dispatchWorkgroups(groups);
     }
     pass.setBindGroup(0, this.binds[0]);
-    pass.setPipeline(this.pipes.init);
-    pass.dispatchWorkgroups(groups);
+    if (!seed) {
+      pass.setPipeline(this.pipes.init);
+      pass.dispatchWorkgroups(groups);
+    }
     pass.setPipeline(this.pipes.round);
     for (let r = 0; r < this.rounds; r++) {
       pass.setBindGroup(0, this.binds[r % 2]!);

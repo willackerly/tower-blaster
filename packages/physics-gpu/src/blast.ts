@@ -82,6 +82,8 @@ fn blast(@builtin(global_invocation_id) id: vec3u) {
   }
   if (!pushed) { return; }
   bodies[i].linVel = v;
+  // A pushed sleeper wakes (sleep.ts; awake already without sleep, so off this writes what was there).
+  bodies[i].flags = b.flags | 1u;
   solverBodies[i].prevVel += v - b.linVel;
 }`;
 
