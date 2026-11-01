@@ -140,6 +140,9 @@ importers:
       '@tb/render':
         specifier: workspace:*
         version: link:../render
+      '@tb/weapons':
+        specifier: workspace:*
+        version: link:../weapons
 
   packages/geom: {}
 
@@ -153,6 +156,9 @@ importers:
       '@tb/geom':
         specifier: workspace:*
         version: link:../geom
+      '@tb/weapons':
+        specifier: workspace:*
+        version: link:../weapons
 
   packages/keystone-lab:
     dependencies:

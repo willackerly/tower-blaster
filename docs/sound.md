@@ -92,6 +92,8 @@ ammo kind, so each sounds at its own size.
 | rubber | `rubber` | cube: a dull bomp (34 ms contact) |
 | marble, cannonball, drop | `steel` at 0.2, 0.5, 0.4 m | cube: a hard knock |
 | cue | `steel` as a 1.2 m bar | plank (free-free beam): it rings |
+| a rack grenade's shell | `steel` as the marble | (iron, marble-sized) |
+| rack projectiles (`p-<preset>`) | silent for now | each needs its own material (rubber, resin, stone) |
 
 Level: the game's camera is ~10 m from 0.5 m blocks, where the viewer's city
 is 75 m from 1 m ones, so at the viewer's level every par line limits by 18-19

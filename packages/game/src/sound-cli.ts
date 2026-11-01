@@ -7,10 +7,10 @@
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { AvbdReferenceEngine } from '@tb/physics-ref';
 import { type AudioFrame, BLOCK, CollapseEngine, FrameTap, FULL_SCALE } from '@tb/audio';
-import { AMMO_KINDS, AVBD_GAP_SLOP, AVBD_ITERATIONS, compileLevel, LEVELS, runSession, type Shot } from '@tb/keystone';
+import { AMMO_KINDS, ammoBody, AVBD_GAP_SLOP, AVBD_ITERATIONS, compileLevel, LEVELS, runSession, type Shot } from '@tb/keystone';
 import type { PhysicsEngine } from '@tb/engine-api';
 import { eyeOf } from '@tb/render/camera';
-import { AMMO_SLOT, GAME_SOUND_DB, slotSounds, SOUND_SLOTS } from './sound-map.ts';
+import { GAME_SOUND_DB, slotSounds, SOUND_SLOTS, soundSlotOf } from './sound-map.ts';
 import { viewOf } from './view.ts';
 
 const kv = Object.fromEntries(process.argv.slice(2).map((a) => a.split('=') as [string, string]));
@@ -30,7 +30,7 @@ export async function capture(id: string, engine: PhysicsEngine = new AvbdRefere
     perStep: (d) => {
       const s = d.snapshot;
       // Structure by its material; spawn k is shot k's ammo (no other spawns in a par line).
-      for (; n < s.count; n++) tap.setMaterial(n, n < c.meta.n ? c.meta.material[n]! : AMMO_SLOT + AMMO_KINDS.indexOf(shots[n - c.meta.n]!.ammo));
+      for (; n < s.count; n++) tap.setMaterial(n, soundSlotOf(c, n < c.meta.n ? c.scene.bodies[n]! : ammoBody(shots[n - c.meta.n]!.ammo, c.frame.unit, [0, 0, 0], [0, 0, 0]), n));
       const fr = tap.frame(s, { metres: 1, camera: { pos: eye, right: [-f[1]! / l, 0, f[0]! / l] }, dvMin: 0.25, dt: c.scene.dt, top: 8 });
       frames.push(fr);
       for (let i = 0; i < fr.counts.length; i++) slots[Math.floor(i / (fr.counts.length / SOUND_SLOTS))]! += fr.counts[i]!;

@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest';
 import { RapierEngine } from '@tb/adapter-rapier';
 import { CEILING, parseSoundMaterial } from '@tb/audio';
 import { AMMO_KINDS, ammoBody, compileLevel, L1, MATERIALS } from '@tb/keystone';
+import { PRESET_NAMES } from '@tb/weapons';
 import { capture, render } from '../src/sound-cli.ts';
 import { AMMO_SLOT, ammoKindOf, GAME_SOUND_DB, KEYSTONE_SOUNDS, slotSounds, SOUND_SLOTS, soundSlotOf } from '../src/sound-map.ts';
 
@@ -22,8 +23,11 @@ describe('game sound slots', () => {
     expect(ammo('cue').material.dims!.map((x) => x / h)).toEqual([2.4, 0.2, 0.2].map((x) => expect.closeTo(x, 9)));
   });
 
-  it('knows each ammo kind from its body, at any cube size and either cue direction', () => {
+  it('knows each ammo kind from its body, at any cube size and either cue direction; real-world projectiles are silent for now', () => {
     for (const h of [0.5, 1, 0.25]) for (const k of AMMO_KINDS) for (const alongZ of [false, true]) expect(ammoKindOf(ammoBody(k, h, [0, 0, 0], [0, 0, 0], alongZ), h)).toBe(k);
+    expect(ammoKindOf(ammoBody('w-grenade', 0.5, [0, 0, 0], [0, 0, 0]), 0.5)).toBe('marble'); // an iron shell, marble-sized
+    const c = compileLevel(L1);
+    for (const p of PRESET_NAMES) expect(soundSlotOf(c, ammoBody(`p-${p}`, c.frame.unit, [0, 0, 0], [0, 0, 0]), c.meta.n)).toBe(-1);
   });
 
   it('structure bodies sound as their material, spawned ones as their ammo', () => {

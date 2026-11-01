@@ -21,6 +21,26 @@ describe('level files', () => {
     }
   });
 
+  it('reads racks and solutions holding presets and weapons (p-, w-)', () => {
+    const d: LevelDef = { ...structuredClone(L2), rack: ['p-wreckingball', 'w-grenade', 'cannonball'], solutions: { par: [{ ammo: 'w-grenade', az: 540, y: 8, yaw: 0, pitch: 300, power: 80 }] } };
+    expect(parseLevelDef(JSON.parse(levelJson(d)))).toEqual(d);
+    expect(() => parseLevelDef({ ...d, rack: ['p-nuke'] })).toThrow(/level.rack\[0\] must be one of marble, cannonball, cue, drop, p-<preset> \(beachball/);
+  });
+
+  it('reads back the outcome fields: scoring, cast stars, the collapse objective and a footprint limit on any objective', () => {
+    const outcome: LevelDef = { ...structuredClone(L2), id: 'big', scoring: 'outcome', objective: { kind: 'collapse', min: 0.4, footprintMax: 0.2 }, stars: { metric: 'collapse', t2: 0.45, t3: 0.6, best: 0.81, castOn: 'apple metal-3', engine: 'gpu', hash: 'abc', n: 64, seed: 1 } };
+    expect(parseLevelDef(JSON.parse(levelJson(outcome)))).toEqual(outcome);
+    const crowns: LevelDef = { ...structuredClone(L2), objective: { kind: 'crowns', footprintMax: 0.1 }, stars: { metric: 'skyline', t2: 0.5, t3: 0.3 } };
+    expect(parseLevelDef(JSON.parse(levelJson(crowns)))).toEqual(crowns);
+    expect(decodeLevelParam(encodeLevelParam(outcome))).toEqual(outcome);
+    const bad = (edit: (d: Record<string, any>) => void) => { const d = structuredClone(outcome) as Record<string, any>; edit(d); return () => parseLevelDef(d); };
+    expect(bad((d) => { d.scoring = 'golf'; })).toThrow(/level.scoring must be one of par, outcome/);
+    expect(bad((d) => { d.objective.min = 1.5; })).toThrow(/level.objective.min must be from 0 to 1/);
+    expect(bad((d) => { d.stars.metric = 'joy'; })).toThrow(/level.stars.metric must be one of collapse, crowns, skyline, score/);
+    expect(bad((d) => { d.stars.t4 = 1; })).toThrow(/level.stars: unknown key t4/);
+    expect(bad((d) => { d.stars.n = 1.5; })).toThrow(/level.stars.n must be a whole number/);
+  });
+
   it('refuses what is not a level, saying where', () => {
     const bad = (edit: (d: Record<string, any>) => void) => {
       const d = structuredClone(L2) as Record<string, any>;

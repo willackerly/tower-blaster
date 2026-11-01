@@ -3,7 +3,7 @@
 // ammo kind (all steel, each at its own size: a 20 cm marble knocks, a 50 cm
 // cannonball thuds, the cue is a steel rod that rings as a bar). Pure, so
 // node tests cover it; collapse-sound.ts runs it.
-import { AMMO, AMMO_KINDS, type AmmoKind, type CompiledLevel, MATERIALS } from '@tb/keystone';
+import { AMMO, AMMO_KINDS, type AmmoKind, type CompiledLevel, MATERIALS, materialId } from '@tb/keystone';
 import { SOUND_MATERIALS, type SoundMaterial } from '@tb/audio';
 import type { BodyDesc } from '@tb/engine-api';
 
@@ -36,6 +36,7 @@ export interface SlotSound { material: SoundMaterial; edge: number }
 
 /** Steel shear modulus, Pa: the cue rings as a free-free bar (plank model). */
 const STEEL_G = 79e9;
+const STEEL_DENSITY = MATERIALS[materialId('steel')]!.density, IRON_DENSITY = MATERIALS[materialId('iron')]!.density;
 
 /** The sound of each slot for a level: structure slots at the level's cube edge, ammo at its own size (metres). */
 export function slotSounds(c: CompiledLevel): SlotSound[] {
@@ -51,17 +52,21 @@ export function slotSounds(c: CompiledLevel): SlotSound[] {
   return [...structure, ...ammo];
 }
 
-/** The ammo kind a spawned body is, from its shape (Keystone's ammoBody sizes in cube edges h). */
-export function ammoKindOf(b: BodyDesc, h: number): AmmoKind {
+/**
+ * The Keystone ammo kind a spawned body is, from its shape, or null for anything else. Keystone's
+ * ammo is steel (and a rack grenade flies in an iron marble-sized shell); the rack's real-world
+ * projectiles (p-<preset>) have their own materials and are silent until they get sounds.
+ */
+export function ammoKindOf(b: BodyDesc, h: number): AmmoKind | null {
+  if (b.density !== STEEL_DENSITY && b.density !== IRON_DENSITY) return null;
   if (b.shape.kind === 'sphere') return b.shape.radius / h < 0.35 ? 'marble' : 'cannonball';
-  const half = b.shape.kind === 'box' ? b.shape.half : null;
-  if (!half) return 'marble';
-  const [a, , d] = [...half].sort((x, y) => y - x) as [number, number, number];
+  const [a, , d] = [...b.shape.half].sort((x, y) => y - x) as [number, number, number];
   return a > 3 * d ? 'cue' : 'drop';
 }
 
-/** Sound slot of body i: its Keystone material for the structure (the first c.meta.n), else its ammo kind's. */
+/** Sound slot of body i: its Keystone material for the structure (the first c.meta.n), else its ammo kind's (-1: silent). */
 export function soundSlotOf(c: CompiledLevel, b: BodyDesc, i: number): number {
   if (i < c.meta.n) return c.meta.material[i]!;
-  return AMMO_SLOT + AMMO_KINDS.indexOf(ammoKindOf(b, c.frame.unit));
+  const k = ammoKindOf(b, c.frame.unit);
+  return k ? AMMO_SLOT + AMMO_KINDS.indexOf(k) : -1;
 }
