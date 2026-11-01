@@ -473,12 +473,8 @@ export function withWallTime(r: CastResult, wallMs: number, budgetMs = CAST_BUDG
 }
 
 /**
- * The stable gate's second half: a recast with another seed moves T3 by less than the first cast's
- * bootstrap half-width. The cross-device gate: T3 cast on one device lies inside another's
- * bootstrap 90% interval. Both on the raw T3.
- */
-/**
- * The cross-device gate: T3 played on one device against the interval it would land in on the cast's device.
+ * The cross-device check (advisory since 2026-11-01: cross-computer fidelity is deferred, and the stars stay the
+ * cast device's): T3 played on one device against the interval it would land in on the cast's device.
  * It passes unless the device is harder (T3 past the player-worse end of the interval): the stars are the cast
  * device's, so a device where the same aim does better only makes them easier to earn there, while one where it
  * does worse would make them unfair. The note says whether T3 sat inside the interval or shifted, and which way.
@@ -492,6 +488,10 @@ export function crossDeviceGate(metric: StarMetric, t3: number, iv: { lo: number
   return { pass: !harder, value: t3, need: iv.halfWidth, note: `${what} on ${here} against ${there}'s 90% interval [${iv.lo.toFixed(3)}, ${iv.hi.toFixed(3)}]: ${where}` };
 }
 
+/**
+ * The stable gate's second half: a recast with another seed moves T3 by less than the first cast's bootstrap
+ * half-width (raw T3). With it, the advisory cross-device check of b's T3 against a's interval.
+ */
 export function compareCasts(a: CastResult, b: CastResult): { recast: Gate; crossDevice: Gate } {
   const d = Math.abs(a.raw.t3 - b.raw.t3);
   return {
