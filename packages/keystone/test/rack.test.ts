@@ -70,7 +70,7 @@ describe('what an item fires', () => {
   });
   it('a w- item flies in the grenade shell whatever its weapon; p- and w- shots spawn like the marble does', () => {
     expect(itemSpec('w-grenade', 0.5)).toEqual(itemSpec('w-other', 0.5));
-    expect(itemSpec('w-grenade', 0.5).size).toEqual({ radius: GRENADE_SHELL.size.radius * 0.5 } as never);
+    expect(itemSpec('w-grenade', 0.5).size).toEqual({ radius: (GRENADE_SHELL.size as { radius: number }).radius * 0.5 });
     const f = compileLevel(L1).frame;
     fc.assert(fc.property(fc.constantFrom<RackItem>(...PRESET_ITEMS, 'w-grenade'), fc.integer({ min: 0, max: 719 }), fc.integer({ min: 0, max: 40 }), fc.integer({ min: -300, max: 300 }), fc.integer({ min: -400, max: 800 }), fc.integer({ min: 0, max: 100 }), (ammo, az, y, yaw, pitch, power) => {
       const shot = { ammo, az, y, yaw, pitch, power } as Shot, ev = shotToSpawn(f, shot, 9);
