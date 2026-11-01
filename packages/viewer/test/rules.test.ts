@@ -3,11 +3,12 @@
 // (docs/design/viewer-superset.md, step C).
 import { describe, expect, it } from 'vitest';
 import { compileLevel, L1, L2, PRESETTLE_STEPS, scenarioLevel } from '@tb/keystone';
+import { DEFAULT_FEEL } from '@tb/game';
 import {
   CUSTOM_LEVEL, DEFAULT_CONFIG, encodeLevelParam, keystoneEngine, levelChoice, levelOf, sceneTitle, parseSceneFile, parseViewerConfig, presetSearch, proposeScene, sceneFile, toSearch, underKeystone, withCustomLevel,
 } from '../src/index.ts';
 
-const feelOff = { hitStop: false, slowMo: false };
+const feelOff = { ...DEFAULT_FEEL };
 
 describe('Keystone rules in the viewer', () => {
   it('parses rules=keystone on a level, with the game\'s pace juice off unless asked for, and round-trips', () => {
@@ -19,7 +20,7 @@ describe('Keystone rules in the viewer', () => {
       const p = parseViewerConfig(u);
       expect(parseViewerConfig(toSearch(p)), u).toEqual(p);
     }
-    expect(parseViewerConfig('?level=L4&rules=keystone&keystone.hitstop=1&keystone.slowmo=0').feel).toEqual({ hitStop: true, slowMo: false });
+    expect(parseViewerConfig('?level=L4&rules=keystone&keystone.hitstop=1&keystone.slowmo=0').feel).toEqual({ ...DEFAULT_FEEL, hitStop: true });
     expect(toSearch(parseViewerConfig('?level=L1&rules=keystone&keystone.slowmo=0'))).toBe('?level=L1&engine=avbd-gpu&rules=keystone');
   });
 
@@ -54,7 +55,7 @@ describe('Keystone rules in the viewer', () => {
   it('the panel puts a level under the rules as the game plays it, and anything else back in the sandbox', () => {
     // From a sandbox level at another scale and settle, on a tuned GPU spec: the game's world and engine.
     const c = parseViewerConfig('?level=L2&scale=0.5&presettle=10&engine=avbd-gpu:iterations=20&autofire=30');
-    const p = proposeScene(c, levelChoice('L2'), {}, 1, 0.5, 2, undefined, 10, { rules: 'keystone', feel: { hitStop: true, slowMo: false } });
+    const p = proposeScene(c, levelChoice('L2'), {}, 1, 0.5, 2, undefined, 10, { rules: 'keystone', feel: { ...DEFAULT_FEEL, hitStop: true } });
     expect(p).toMatchObject({ ok: true, config: { rules: 'keystone', feel: { hitStop: true, slowMo: false }, engine: 'avbd-gpu', scale: 1, substeps: 1, presettle: PRESETTLE_STEPS, autofire: 0 } });
     if (!p.ok) return;
     expect(parseViewerConfig(toSearch(p.config))).toEqual(p.config);
@@ -68,6 +69,9 @@ describe('Keystone rules in the viewer', () => {
     expect(proposeScene(mine, CUSTOM_LEVEL, {}, 1)).toMatchObject({ ok: true, config: { level: 'mine', rules: 'keystone' } });
     expect(proposeScene({ ...c, engine: 'avbd-ref' }, levelChoice('L2'), {}, 1, 1, 1, undefined, undefined, { rules: 'keystone', feel: feelOff })).toMatchObject({ ok: false, error: /game's engines/ });
     expect(underKeystone({ ...DEFAULT_CONFIG }, feelOff)).toMatchObject({ level: null, scenario: 'S4', rules: 'keystone' });
+    // The panel's physics budget field is checked like the URL key.
+    expect(proposeScene(c, levelChoice('L2'), {}, 1, 1, 1, undefined, undefined, { rules: 'keystone', feel: { ...feelOff, budgetMs: NaN } })).toMatchObject({ ok: false, error: /physics budget must be from 0 to 1000 ms/ });
+    expect(proposeScene(c, levelChoice('L2'), {}, 1, 1, 1, undefined, undefined, { rules: 'keystone', feel: { ...feelOff, budgetMs: 0, tailSkip: false } })).toMatchObject({ ok: true, config: { feel: { budgetMs: 0, tailSkip: false } } });
     // A preset button goes to its scenario in the sandbox.
     expect(parseViewerConfig(presetSearch('?scenario=S3', p.config)).rules).toBe('sandbox');
   });
@@ -107,6 +111,13 @@ describe('Keystone rules in the viewer', () => {
     expect(compileLevel(levelOf(back)!).hash).toBe(compileLevel(levelOf(sc)!).hash);
     expect(sceneFile(c, '', null).rules).toMatchObject({ scoring: 'outcome', autobank: false, settle: 'v1', physics: { iterations: 20, bounce: 0.4, gapSlop: 0 } });
     expect(sceneFile(parseViewerConfig('?level=L1&rules=keystone'), '', null).rules).toEqual({ mode: 'keystone', hitstop: false, slowmo: false });
+    // The pace switches (budget, tail skip) ride along in the URL and the scene file, and only when not the default.
+    const paced = parseViewerConfig('?level=L1&rules=keystone&keystone.budget=0&keystone.tailskip=0');
+    expect(paced.feel).toEqual({ ...DEFAULT_FEEL, budgetMs: 0, tailSkip: false });
+    expect(parseViewerConfig(toSearch(paced))).toEqual(paced);
+    expect(sceneFile(paced, '', null).rules).toMatchObject({ budget: 0, tailskip: false });
+    expect(parseSceneFile(JSON.stringify(sceneFile(paced, '', null))).config).toEqual(paced);
+    expect(() => parseViewerConfig('?level=L1&keystone.budget=0')).toThrow(/keystone.budget applies to rules=keystone/);
     const f = sceneFile(c, '', null);
     expect(() => parseSceneFile(JSON.stringify({ ...f, rules: { ...f.rules, physics: { substeps: 2 } } }))).toThrow(/rules.physics: unknown key substeps/);
     expect(() => parseSceneFile(JSON.stringify({ ...f, rules: { ...f.rules, physics: { iterations: 0 } } }))).toThrow(/keystone.iterations: must be a whole number/);

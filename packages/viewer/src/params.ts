@@ -15,7 +15,7 @@
 import { DEFAULT_SOUND, parseSoundOptions, type SoundOptions, writeSoundOptions } from '@tb/audio';
 import { parseSpec } from '@tb/bench';
 import { type BodyDesc, DEFAULT_BLAST_MAX_SPEED, type SceneDesc, type Vec3 } from '@tb/engine-api';
-import { checkLine, type EngineKind, GAME_LOOK, gameLevel, LEVEL_RULE_KEYS, type LevelRules, levelRules, lineOf, lookName, paceFeel, type PaceFeel, rackOf, withRules, writeLevelRules } from '@tb/game';
+import { checkLine, type EngineKind, GAME_LOOK, gameLevel, LEVEL_RULE_KEYS, type LevelRules, levelRules, lineOf, lookName, DEFAULT_FEEL, paceFeel, type PaceFeel, rackOf, withRules, writeLevelRules, writePaceFeel } from '@tb/game';
 import { boundingRadius } from '@tb/geom';
 import { AVBD_ITERATIONS, compileLevel, findLevel, type LevelDef, PRESETTLE_STEPS, type RackItem, scenarioLevel, type Shot, writeShots } from '@tb/keystone';
 import { type AvbdParams, froudeParams } from '@tb/physics-ref';
@@ -109,7 +109,7 @@ export interface ViewerConfig {
    * withRules(level, keystone), a custom run. {} otherwise.
    */
   keystone: LevelRules;
-  /** Keystone's pace juice (URL keys keystone.hitstop, keystone.slowmo: 0 or 1, rules=keystone only; both off by default, as in the game). */
+  /** Keystone's pace (URL keys keystone.hitstop, keystone.slowmo, keystone.tailskip: 0 or 1, keystone.budget: ms; rules=keystone only; @tb/game DEFAULT_FEEL by default, as in the game). */
   feel: PaceFeel;
   /**
    * A line of shots to play once the level has loaded (URL key keystone.shots, @tb/keystone
@@ -144,7 +144,7 @@ export const DEFAULT_BOUNCE = 0.5;
 
 export const RULES = ['sandbox', 'keystone'] as const;
 /** Keys that only mean something under rules=keystone (the game page's). */
-export const KEYSTONE_KEYS = ['keystone.hitstop', 'keystone.slowmo', 'keystone.shots', 'keystone.rack', ...LEVEL_RULE_KEYS] as const;
+export const KEYSTONE_KEYS = ['keystone.hitstop', 'keystone.slowmo', 'keystone.budget', 'keystone.tailskip', 'keystone.shots', 'keystone.rack', ...LEVEL_RULE_KEYS] as const;
 /** The look when ?look= is absent: the sandbox's candy, or the game's own under its rules. */
 export const defaultLook = (rules: Rules) => (rules === 'keystone' ? GAME_LOOK : DEFAULT_CONFIG.look);
 export type Rules = (typeof RULES)[number];
@@ -205,7 +205,7 @@ export const MAX_PRESETTLE = 6000;
 /** How much faster than the unit world a world at this scale moves (speeds, in cube units per second). */
 export const froudeSpeed = (scale: number) => 1 / Math.sqrt(scale);
 
-export const DEFAULT_CONFIG: ViewerConfig = { engine: 'avbd-gpu', level: null, customLevel: null, scenario: 'S4', params: { N: 2000, F: 4, H: 12 }, seed: 1, sleep: null, autofire: 0, presettle: 0, offscreen: false, look: 'candy', real: {}, loop: 'free', pipeline: true, maxSteps: 1, projectile: DEFAULT_PROJECTILE, scale: 1, substeps: 1, camera: null, view: DEFAULT_FRAMING, bounce: DEFAULT_BOUNCE, rules: 'sandbox', keystone: {}, feel: { hitStop: false, slowMo: false }, shots: null, rack: null, sound: DEFAULT_SOUND };
+export const DEFAULT_CONFIG: ViewerConfig = { engine: 'avbd-gpu', level: null, customLevel: null, scenario: 'S4', params: { N: 2000, F: 4, H: 12 }, seed: 1, sleep: null, autofire: 0, presettle: 0, offscreen: false, look: 'candy', real: {}, loop: 'free', pipeline: true, maxSteps: 1, projectile: DEFAULT_PROJECTILE, scale: 1, substeps: 1, camera: null, view: DEFAULT_FRAMING, bounce: DEFAULT_BOUNCE, rules: 'sandbox', keystone: {}, feel: { ...DEFAULT_FEEL }, shots: null, rack: null, sound: DEFAULT_SOUND };
 
 export function parseViewerConfig(search: string): ViewerConfig {
   const q = new URLSearchParams(search);
@@ -369,8 +369,7 @@ export function toSearch(c: ViewerConfig): string {
   writeFraming(c.view, q, defaultFraming(c.scenario, c.level));
   if (c.bounce !== DEFAULT_BOUNCE) q.set('bounce.e', String(c.bounce));
   if (c.rules !== DEFAULT_CONFIG.rules) q.set('rules', c.rules);
-  if (c.feel.hitStop) q.set('keystone.hitstop', '1');
-  if (c.feel.slowMo) q.set('keystone.slowmo', '1');
+  writePaceFeel(c.feel, q);
   if (c.shots?.length) q.set('keystone.shots', writeShots(c.shots));
   if (c.rules === 'keystone' && c.rack) q.set('keystone.rack', c.rack.join(','));
   if (c.rules === 'keystone') writeLevelRules(c.keystone, q);

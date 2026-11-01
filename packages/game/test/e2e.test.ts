@@ -6,6 +6,7 @@ import { describe, expect, it } from 'vitest';
 import { RapierEngine } from '@tb/adapter-rapier';
 import { compileLevel, L1, runSession, type Shot } from '@tb/keystone';
 import { withRules } from '../src/params.ts';
+import { DEFAULT_FEEL } from '../src/pacing.ts';
 import { gamePage, ready } from './page.ts';
 
 const game = gamePage();
@@ -19,7 +20,7 @@ describe('game page', () => {
     await ready(page);
     expect(await page.evaluate(() => window.__game.bodies)).toBe(40);
     // No pace juice unless asked for.
-    expect(await page.evaluate(() => window.__game.feel)).toEqual({ hitStop: false, slowMo: false });
+    expect(await page.evaluate(() => window.__game.feel)).toEqual(DEFAULT_FEEL);
 
     // Hovering the tower gives a reachable aim and preview beads. (L1's tower
     // is 1 m wide, and the centre ray runs down the 1 cm seam between its columns.)

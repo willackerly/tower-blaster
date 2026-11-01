@@ -5,7 +5,7 @@
 import { checkSound, SOUND_KNOBS, SOUND_MATERIAL_NAMES, type SoundKnob, type SoundOptions } from '@tb/audio';
 import { parseSpec } from '@tb/bench';
 import { type Env, ENVS, type Ground, GROUNDS, linearToSrgb, LOOKS, REAL_DEFAULTS, REAL_KNOBS, type RealKnob, type RealOptions, srgbToLinear, type Stone, STONES, type V3 } from '@tb/render';
-import { objectiveText, type PaceFeel } from '@tb/game';
+import { checkPaceFeel, DEFAULT_BUDGET_MS, DEFAULT_FEEL, objectiveText, type PaceFeel } from '@tb/game';
 import { AUTO_LEVEL, AVBD_ITERATIONS, BIG_LEVELS, compileLevel, LEVELS, PRESETTLE_STEPS, scenarioLevel } from '@tb/keystone';
 import { buildScenario, SCENARIOS } from '@tb/scenarios';
 import { type CameraPose, type Framing, FRAMING_LIMITS } from './camera.ts';
@@ -161,6 +161,7 @@ export function proposeScene(c: ViewerConfig, scenario: string, params: Record<s
     const picked = pickedLevel(c, scenario);
     const level = picked?.def.id ?? null;
     // Keystone's rules: the level as the game plays it, whatever the world fields say (the panel hides them).
+    if (rules.rules === 'keystone') checkPaceFeel(rules.feel);
     if (picked && rules.rules === 'keystone') {
       // A line of shots and a rack are the level's they were given for: another level drops them.
       const same = level === c.level && (picked.custom ? picked.def === c.customLevel : !c.customLevel);
@@ -176,7 +177,7 @@ export function proposeScene(c: ViewerConfig, scenario: string, params: Record<s
       return { ok: true, config: next, bodies: compileLevel(def).scene.bodies.length };
     }
     // Anything else is the sandbox.
-    c = { ...c, rules: 'sandbox', feel: { hitStop: false, slowMo: false }, shots: null, look: lookFor(c, 'sandbox') };
+    c = { ...c, rules: 'sandbox', feel: { ...DEFAULT_FEEL }, shots: null, look: lookFor(c, 'sandbox') };
     const settle = presettle ?? defaultPresettle(level);
     if (!Number.isInteger(settle) || settle < 0 || settle > MAX_PRESETTLE) throw new Error(`settle steps must be a whole number from 0 to ${MAX_PRESETTLE}`);
     if (picked) {
@@ -266,7 +267,7 @@ export function mountControls(root: HTMLElement, hooks: ControlsHooks): { refres
       <div class="params"></div>
       <div class="rules">
         <label class="f"><span>rules</span><select name="rules"><option value="sandbox">sandbox</option><option value="keystone">Keystone (the game)</option></select></label>
-        <div class="feel">${field('hitstop', 'hit-stop on contact', false)}${field('slowmo', 'slow motion as crowns fall', false)}</div>
+        <div class="feel">${field('hitstop', 'hit-stop on contact', false)}${field('slowmo', 'slow motion as crowns fall', false)}${field('budget', 'physics budget, ms per 1/60 s (0: no valve)', DEFAULT_BUDGET_MS, 'step="any" min="0" max="1000"')}${field('tailskip', 'fast-forward the tail of a shot', true)}</div>
       </div>
       <div class="seed">${field('seed', 'seed', 1, 'step="1"')}</div>
       <div class="world">
@@ -393,7 +394,10 @@ export function mountControls(root: HTMLElement, hooks: ControlsHooks): { refres
     }
     const bounce = { on: bounceBox.checked, e: input(sceneForm, 'bounceE').value === '' ? NaN : Number(input(sceneForm, 'bounceE').value) };
     const presettle = input(sceneForm, 'presettle').value === '' ? NaN : Number(input(sceneForm, 'presettle').value);
-    const rules: RulesChoice = { rules: input(sceneForm, 'rules').value as Rules, feel: { hitStop: (input(sceneForm, 'hitstop') as HTMLInputElement).checked, slowMo: (input(sceneForm, 'slowmo') as HTMLInputElement).checked } };
+    const rules: RulesChoice = { rules: input(sceneForm, 'rules').value as Rules, feel: {
+      hitStop: (input(sceneForm, 'hitstop') as HTMLInputElement).checked, slowMo: (input(sceneForm, 'slowmo') as HTMLInputElement).checked,
+      budgetMs: input(sceneForm, 'budget').value === '' ? NaN : Number(input(sceneForm, 'budget').value), tailSkip: (input(sceneForm, 'tailskip') as HTMLInputElement).checked,
+    } };
     return proposeScene(hooks.config(), scenario, params, Number(input(sceneForm, 'seed').value), Number(input(sceneForm, 'scale').value), Number(input(sceneForm, 'substeps').value), bounce, presettle, rules);
   }
 
@@ -622,6 +626,8 @@ export function mountControls(root: HTMLElement, hooks: ControlsHooks): { refres
     input(sceneForm, 'rules').value = c.rules;
     (input(sceneForm, 'hitstop') as HTMLInputElement).checked = c.feel.hitStop;
     (input(sceneForm, 'slowmo') as HTMLInputElement).checked = c.feel.slowMo;
+    input(sceneForm, 'budget').value = String(c.feel.budgetMs);
+    (input(sceneForm, 'tailskip') as HTMLInputElement).checked = c.feel.tailSkip;
     input(sceneForm, 'seed').value = String(c.seed);
     input(sceneForm, 'presettle').value = String(c.presettle);
     input(sceneForm, 'scale').value = String(c.scale);

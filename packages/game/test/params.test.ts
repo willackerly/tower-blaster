@@ -4,19 +4,20 @@ import { describe, expect, it } from 'vitest';
 import { B1, L1, L2, L3, type Shot, writeShots } from '@tb/keystone';
 import { compileLevel } from '@tb/keystone';
 import { GAME_LOOK, levelRules, onEngine, parseGameParams, withRules, writeLevelRules } from '../src/params.ts';
+import { DEFAULT_FEEL } from '../src/pacing.ts';
 
 const parse = (search: string) => parseGameParams(new URLSearchParams(search));
 const par = L1.solutions!.par as Shot[];
 
 describe('game URL keys', () => {
   it('defaults to the first level on the GPU solver in the maquette look, no juice and no line', () => {
-    expect(parse('')).toEqual({ level: L1, rack: null, rules: {}, engine: 'gpu', feel: { hitStop: false, slowMo: false }, look: GAME_LOOK, shots: null, offscreen: false });
+    expect(parse('')).toEqual({ level: L1, rack: null, rules: {}, engine: 'gpu', feel: DEFAULT_FEEL, look: GAME_LOOK, shots: null, offscreen: false });
     expect(GAME_LOOK).toBe('hazy');
   });
 
   it('reads every key, a level in any case and the viewer\'s name for the GPU solver, and leaves other keys alone', () => {
     expect(parse(`?level=l3&engine=rapier&keystone.hitstop=1&keystone.slowmo=0&look=real&real.sunElevation=6&offscreen=1&scenario=S4&cam=1,2,3,0,0,9`)).toEqual({
-      level: L3, rack: null, rules: {}, engine: 'rapier', feel: { hitStop: true, slowMo: false }, look: 'real', shots: null, offscreen: true,
+      level: L3, rack: null, rules: {}, engine: 'rapier', feel: { ...DEFAULT_FEEL, hitStop: true }, look: 'real', shots: null, offscreen: true,
     });
     expect(parse('?engine=avbd-gpu').engine).toBe('gpu');
     expect(parse('?engine=gpu').engine).toBe('gpu');
