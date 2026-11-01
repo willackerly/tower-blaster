@@ -22,6 +22,8 @@ export interface CastSample {
   skyline: number;
   /** The outcome tally's total banked here (outcomeTally, no cast stars needed). */
   score: number;
+  /** Heritage bodies broken so far (three stars need none). */
+  heritage: number;
 }
 
 /** One played line: a sample at every settle (the last is the end), the engine steps, the end state's hash and any engine limit hit. */
@@ -41,7 +43,7 @@ export const sampleValue = (s: CastSample, metric: StarMetric): number => (metri
 /** The sample of a session as it stands at its last settle, banked there. */
 export function sampleOf(session: Session, step: number): CastSample {
   const f = session.outcomeFacts(), score = outcomeScore(f, undefined);
-  return { shots: session.outcomes.length, step, met: f.met, collapse: f.collapse, crowns: metricValue('crowns', f, 0), skyline: f.skylineRatio, score: score.total };
+  return { shots: session.outcomes.length, step, met: f.met, collapse: f.collapse, crowns: metricValue('crowns', f, 0), skyline: f.skylineRatio, score: score.total, heritage: f.heritageBroken };
 }
 
 export interface CastPlayOptions extends DriverOptions {

@@ -1,8 +1,11 @@
 // pnpm keystone:cast <level> [--engine gpu|ref|rapier] [--channel chrome] [--headed]
 //   [--seed N] [--metric collapse|crowns|skyline|score] [--recipe short|full|C,L,M,K,N]
-//   [--out cast.json] [--md cast.md] [--compare other.json] [--max-steps N]
+//   [--out cast.json] [--md cast.md] [--compare other.json] [--max-steps N] [--explore N]
 // <level>: a built-in level id, or --level-file path.json (a LevelDef), or
-// --scenario S3 --param W=50 ... (the automatic scenario level).
+// --scenario S3 --param W=50 ... (the automatic scenario level), or --draft B1a
+// (keystone-lab drafts.ts). --explore N plays N competent lines only and
+// reports collapse, crowns and heritage after each shot (exploreLevel), for
+// designing a level before casting it.
 // Casts an outcome level's stars (roadmap G5.1, spectacle-mode.md section 6):
 // the GPU engine through the game's cast page by default (SwiftShader here,
 // Metal with --channel chrome on a Mac); ref and rapier play in this thread.
@@ -13,8 +16,9 @@
 import { readFileSync, writeFileSync } from 'node:fs';
 import { type LevelDef, levelById, scenarioLevel, STAR_METRICS, type StarMetric } from '@tb/keystone';
 import { exitNow } from '@tb/testkit';
-import { castLevel, castMarkdown, type CastPlayer, type CastRecipe, type CastResult, compareCasts, FULL_RECIPE, nodeCastPlayer, playsOf, SHORT_RECIPE, withWallTime } from './cast.ts';
+import { castLevel, castMarkdown, exploreLevel, explorationMarkdown, type CastPlayer, type CastRecipe, type CastResult, compareCasts, FULL_RECIPE, nodeCastPlayer, playsOf, SHORT_RECIPE, withWallTime } from './cast.ts';
 import { openBrowserCastPlayer } from './cast-browser.ts';
+import { draftByName } from './drafts.ts';
 
 const argv = process.argv.slice(2), flags = new Map<string, string>(), params: Record<string, number | boolean> = {}, ids: string[] = [];
 for (let i = 0; i < argv.length; i++) {
@@ -28,6 +32,7 @@ for (let i = 0; i < argv.length; i++) {
 
 function level(): LevelDef {
   if (flags.has('level-file')) return JSON.parse(readFileSync(flags.get('level-file')!, 'utf8')) as LevelDef;
+  if (flags.has('draft')) return draftByName(flags.get('draft')!);
   if (flags.has('scenario')) return scenarioLevel(flags.get('scenario')!, params, Number(flags.get('seed-scene') ?? 1));
   if (ids.length !== 1) throw new Error('name one level: an id, --level-file path.json, or --scenario S3 --param k=v');
   return levelById(ids[0]!);
@@ -54,6 +59,26 @@ if (engine === 'gpu' || engine === 'gpu-rapier') {
 } else if (engine === 'ref' || engine === 'rapier') player = nodeCastPlayer({ kind: engine });
 else throw new Error(`--engine is gpu, gpu-rapier (Rapier in the page), ref or rapier: ${engine}`);
 
+if (flags.has('explore')) {
+  const n = Number(flags.get('explore'));
+  if (!Number.isInteger(n) || n < 1) throw new Error(`--explore needs a whole number of plays: ${flags.get('explore')}`);
+  console.log(`explore ${def.id} on ${player.adapter} (${player.engine}): ${n} competent plays`);
+  let stuck: string[] = [];
+  try {
+    const t0 = performance.now(), e = await exploreLevel(def, player, n, Number(flags.get('seed') ?? 1));
+    const ms = performance.now() - t0, playMs = 'playMs' in player ? (player.playMs as number[]) : [];
+    const stepMs = playMs.length ? playMs.reduce((a, x) => a + x, 0) / e.lines.reduce((a, l) => a + l.steps, 0) : NaN;
+    const md = explorationMarkdown(e, `; ${(ms / 60_000).toFixed(1)} min, ${stepMs.toFixed(2)} ms per step in the page (pre-settle included${'software' in player && player.software ? '; software adapter, not a performance result' : ''})`);
+    console.log(md);
+    if (flags.has('out')) writeFileSync(flags.get('out')!, JSON.stringify({ ...e, ms, stepMs, def }, null, 1));
+    if (flags.has('md')) writeFileSync(flags.get('md')!, md);
+    process.exitCode = e.limited ? 4 : 0;
+  } finally {
+    stuck = await close();
+  }
+  if (stuck.length) await exitNow();
+  process.exit();
+}
 console.log(`cast ${def.id} on ${player.adapter} (${player.engine}): ${playsOf(rec)} plays, seed ${flags.get('seed') ?? 1}`);
 let stuck: string[] = [];
 let failed = false, limited = false;

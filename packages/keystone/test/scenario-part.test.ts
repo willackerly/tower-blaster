@@ -2,7 +2,7 @@
 // bodies in a level, in order, at the level's scale, with roles by selector.
 import { describe, expect, it } from 'vitest';
 import type { BodyDesc, Vec3 } from '@tb/engine-api';
-import { AUTO_LEVEL, compileLevel, decodeTag, type LevelDef, MATERIALS, type Part, ROLE_ID, type ScenarioPart, scenarioLevel, validateLevel } from '@tb/keystone';
+import { AUTO_LEVEL, compileLevel, launcherPos, outsideLot, decodeTag, type LevelDef, MATERIALS, type Part, ROLE_ID, type ScenarioPart, scenarioLevel, validateLevel } from '@tb/keystone';
 import { buildScenario, type Params, SCENARIOS } from '@tb/scenarios';
 
 const buildScenarioDefaults = (id: string) => SCENARIOS[id]!.defaults;
@@ -127,6 +127,11 @@ describe('scenario parts', () => {
         const x = c.meta.home[3 * i]!, z = c.meta.home[3 * i + 2]!;
         expect(x > c.lot.min[0] && x < c.lot.max[0] && z > c.lot.min[1] && z < c.lot.max[1], `body ${i} in the lot`).toBe(true);
         expect(Math.hypot(x, z), `body ${i} inside the launcher ring`).toBeLessThan(r);
+      }
+      // Every shot is live from launch: the launcher ring lies within 4 h of the lot (validateLevel's launcher issue).
+      for (let az = 0; az < 720; az += 15) {
+        const p = launcherPos(c.frame, az, 8);
+        expect(outsideLot(c, p[0], p[2], 4 * h), `launcher at ${az / 2} deg within 4 h of the lot`).toBe(false);
       }
     });
     it('S15 keeps the planks\' exact layout (gap 0); the rack and material can be chosen; same inputs, same level', () => {
