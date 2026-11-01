@@ -6,7 +6,7 @@
 import { describe, expect, it } from 'vitest';
 import type { PhysicsEngine } from '@tb/engine-api';
 import { SlowedEngine } from '@tb/bench';
-import { DEFAULT_BUDGET_MS, Pacer, valve } from '../src/pacing.ts';
+import { Pacer, valve } from '../src/pacing.ts';
 import { type PhysicsHooks, runPhysics, type StepRun } from '../src/physics-loop.ts';
 
 const DT_MS = 1000 / 60;
@@ -78,15 +78,17 @@ async function cpuRun(innerMs: number, fraction: number, budgetMs: number, frame
 }
 
 const expected = (costMs: number, budgetMs: number) => Math.min(valve(budgetMs, costMs), DT_MS / costMs);
+/** A budget under a whole step (the default, DEFAULT_BUDGET_MS, is a whole step), so the valve itself sets the speed. */
+const BUDGET_MS = 14;
 
 describe('the physics loop: time scale tracks the step budget', () => {
   it('GPU-like engine: sim speed = min(budget / cost clamped to [0.25, 1], dt / cost)', async () => {
     const rows: string[] = [];
     for (const cost of [3, 8, 11, 14, 16, 18, 20, 28, 40, 56, 100]) {
-      const r = await gpuRun(cost, DEFAULT_BUDGET_MS);
-      rows.push(`${cost}: ${r.speed.toFixed(3)} (want ${expected(cost, DEFAULT_BUDGET_MS).toFixed(3)})`);
-      expect(r.speed, rows.at(-1)).toBeGreaterThan(expected(cost, DEFAULT_BUDGET_MS) * 0.97);
-      expect(r.speed, rows.at(-1)).toBeLessThan(expected(cost, DEFAULT_BUDGET_MS) * 1.03);
+      const r = await gpuRun(cost, BUDGET_MS);
+      rows.push(`${cost}: ${r.speed.toFixed(3)} (want ${expected(cost, BUDGET_MS).toFixed(3)})`);
+      expect(r.speed, rows.at(-1)).toBeGreaterThan(expected(cost, BUDGET_MS) * 0.97);
+      expect(r.speed, rows.at(-1)).toBeLessThan(expected(cost, BUDGET_MS) * 1.03);
     }
   });
 

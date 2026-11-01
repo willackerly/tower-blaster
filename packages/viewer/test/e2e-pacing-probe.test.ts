@@ -15,7 +15,7 @@
 // The Keystone grenade barely moves a 10k scene (collapse 0 at 74b57c2), so
 // the heavy cases fire @tb/weapons' cluster (6 bomblets, about 60 grenades of
 // energy) from a rack of just that; the rendered cluster cases compare the
-// valve's budget at 14 ms (the default), 16.7 ms and off (G4.4); one more
+// valve's budget at 16.7 ms (the default), 14 ms and off (G4.4); one more
 // rendered case saves a screenshot every 2 s, for reviewing the camera.
 // Not a performance result unless run on the physical GPU (CLAUDE.md).
 import { appendFileSync, mkdirSync, writeFileSync } from 'node:fs';
@@ -67,7 +67,7 @@ const ALL: Case[] = [
   { name: 'blocks-grenade-40-rendered', scene: BLOCKS, ammo: 'w-grenade', iterations: 40, rendered: true },
   { name: 'blocks-cluster-40', scene: BLOCKS, ammo: 'w-cluster', iterations: 40, rendered: false },
   { name: 'blocks-cluster-40-rendered', scene: BLOCKS, ammo: 'w-cluster', iterations: 40, rendered: true },
-  { name: 'blocks-cluster-40-rendered-b16.7', scene: BLOCKS, ammo: 'w-cluster', iterations: 40, rendered: true, budgetMs: 16.7 },
+  { name: 'blocks-cluster-40-rendered-b14', scene: BLOCKS, ammo: 'w-cluster', iterations: 40, rendered: true, budgetMs: 14 },
   { name: 'blocks-cluster-40-rendered-b0', scene: BLOCKS, ammo: 'w-cluster', iterations: 40, rendered: true, budgetMs: 0 },
   { name: 'city-cluster-40-rendered', scene: CITY, ammo: 'w-cluster', iterations: 40, rendered: true },
   // For reviewing the follow camera (G4.3): a screenshot every 2 s into TB_PROBE_OUT. Its timings are not used (screenshots stall frames).

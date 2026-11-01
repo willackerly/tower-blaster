@@ -111,6 +111,23 @@ describe('follow camera', async () => {
     expect(o.distance).toBe(start.distance);
   });
 
+  it('frames every box seen this shot: it grows with the collapse and does not dive in on the last stragglers', () => {
+    const o = home(), cam = new FollowCam();
+    cam.start(o);
+    const big = [-6, 0, -6, 6, 5, 6];
+    run(cam, o, 4, true, big);
+    const held: Orbit = { ...o, target: [...o.target] };
+    expect(inView(o, big)).toBe(true);
+    // The collapse dies down to a few bodies (still at least FOLLOW_MIN_MOVING) in one corner: the frame holds.
+    run(cam, o, 4, true, [4, 0, 4, 5, 1, 5], FOLLOW_MIN_MOVING);
+    o.target.forEach((x, k) => expect(x).toBeCloseTo(held.target[k]!, 2));
+    expect(o.distance).toBeCloseTo(held.distance, 2);
+    expect(inView(o, big)).toBe(true);
+    // And grows when it spreads further.
+    run(cam, o, 4, true, [-6, 0, -6, 14, 5, 6]);
+    expect(inView(o, [-6, 0, -6, 14, 5, 6])).toBe(true);
+  });
+
   it('stays home while too little moves, and leaves the camera to the player once they touch it', () => {
     const o = home(), start: Orbit = { ...o, target: [...o.target] }, cam = new FollowCam();
     cam.start(o);

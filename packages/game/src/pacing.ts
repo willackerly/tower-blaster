@@ -58,11 +58,13 @@ export const FRAME_MS = 1000 / 60;
 /** The valve never slows time below this (spectacle-mode.md, section 9). */
 export const VALVE_MIN = 0.25;
 /**
- * Physics budget (ms of step cost per 1/60 s of sim time) when a level or URL sets none: the 16.7 ms
- * of a 60 Hz sim step minus about 3 ms for the frames drawn meanwhile (the photoreal frame cap at 10k,
- * docs/realism.md). Over it, time slows. URL key keystone.budget; 0 turns the valve off.
+ * Physics budget (ms of step cost per 1/60 s of sim time) when a level or URL sets none: a whole 60 Hz
+ * step, so time slows only as far as the GPU must, and the HUD says so. Over it, time slows. URL key
+ * keystone.budget; 0 turns the valve off. G4.4 on the M5 Max (10k, a cluster blast, steps of about
+ * 19 ms): frames were the same at 14 ms, 16.7 ms and off (p99 18.6 ms), while 14 ms held the sim at
+ * 0.70x real time against 0.82x, so no budget is held back for the frames (spectacle-mode.md, G4.4).
  */
-export const DEFAULT_BUDGET_MS = 14;
+export const DEFAULT_BUDGET_MS = 16.7;
 /** No juice, the valve at its default budget, the tail skip on. */
 export const DEFAULT_FEEL: Readonly<PaceFeel> = { hitStop: false, slowMo: false, budgetMs: DEFAULT_BUDGET_MS, tailSkip: true, follow: true };
 /**
