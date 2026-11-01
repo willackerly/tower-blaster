@@ -29,6 +29,8 @@ export interface RestSample {
   /** Largest body speed, and how many bodies move faster than tol per second. */
   maxSpeed: number;
   fast: number;
+  /** Structure bodies asleep (snapshot awake 0). */
+  asleep: number;
   meanY: number;
   top: number;
 }
@@ -55,6 +57,11 @@ export interface RestResult {
   topEnd: number;
   /** Mean height of the structure's centres at the start (frame 0), the window's start and end. */
   meanY: [number, number, number];
+  /** How far structure bodies moved from frame 0 to the window's start: the settling before the window (with sleep, the creep before they slept). */
+  creep: { max: number; p99: number };
+  /** Structure bodies asleep at the end, and how many asleep at the window's start are awake at the end. */
+  asleep: number;
+  woken: number;
   /** The (up to) MOVERS bodies that moved most over the window, largest first, if they moved more than tol. */
   movers: RestMover[];
   /** Every sampleEvery frames from frame sampleEvery to the end when plan.trace (else empty). */
@@ -75,25 +82,27 @@ export async function restRun(scene: SceneDesc, params: Partial<AvbdParams>, opt
   try {
     await e.init(scene);
     const pos = async () => (await e.snapshot()).pos.slice(0, 3 * n);
+    const sleepers = async () => (await e.snapshot()).awake.slice(0, n).map((a) => (a ? 0 : 1));
     const top = (p: ArrayLike<number>) => { let t = -Infinity; for (let i = 0; i < n; i++) t = Math.max(t, p[3 * i + 1]!); return t; };
     const mean = (p: ArrayLike<number>) => { let t = 0; for (let i = 0; i < n; i++) t += p[3 * i + 1]!; return t / n; };
     // Units per second: a body faster than tol a second counts as fast.
     const sample = async (frame: number): Promise<RestSample> => {
       const s = await e.snapshot();
-      let maxSpeed = 0, fast = 0;
+      let maxSpeed = 0, fast = 0, asleep = 0;
       for (let i = 0; i < n; i++) {
+        if (!s.awake[i]) asleep++;
         const v = Math.hypot(s.linVel[3 * i]!, s.linVel[3 * i + 1]!, s.linVel[3 * i + 2]!);
         maxSpeed = Math.max(maxSpeed, v);
         if (v > plan.tol) fast++;
       }
-      return { frame, maxSpeed, fast, meanY: mean(s.pos), top: top(s.pos) };
+      return { frame, maxSpeed, fast, asleep, meanY: mean(s.pos), top: top(s.pos) };
     };
     const p0 = await pos();
-    let from: Float64Array | null = null, windowSpeed = 0;
+    let from: Float64Array | null = null, windowSpeed = 0, slept: Uint8Array | null = null;
     const trace: RestSample[] = [];
     const t0 = performance.now();
     for (let f = 0; f < plan.frames; f++) {
-      if (f === plan.watchFrom) from = await pos();
+      if (f === plan.watchFrom) { from = await pos(); slept = await sleepers(); }
       for (let k = 0; k < plan.substeps; k++) e.step();
       // Bound the queue on slow adapters.
       if (f % 20 === 19) await e.finish();
@@ -121,13 +130,19 @@ export async function restRun(scene: SceneDesc, params: Partial<AvbdParams>, opt
       movers.splice(MOVERS - 1, 1, { body: i, disp: d, from: at(from, i), end: at(end, i) });
       movers.sort((a, b) => b.disp - a.disp);
     }
-    const endSpeed = (await sample(plan.frames)).maxSpeed;
+    const last = await sample(plan.frames), endSpeed = last.maxSpeed;
+    const sleptEnd = await sleepers();
+    const creeps = Array.from({ length: n }, (_, i) => Math.hypot(from![3 * i]! - p0[3 * i]!, from![3 * i + 1]! - p0[3 * i + 1]!, from![3 * i + 2]! - p0[3 * i + 2]!)).sort((a, b) => a - b);
+    const creep = { max: creeps.at(-1) ?? 0, p99: creeps[Math.min(n - 1, Math.floor(0.99 * n))] ?? 0 };
+    let woken = 0;
+    slept ??= new Uint8Array(n);
+    for (let i = 0; i < n; i++) if (slept[i] && !sleptEnd[i]) woken++;
     const health = await e.health();
     const error = await device.popErrorScope();
     const info = adapter.info;
     return {
       error: error?.message ?? null, adapter: `${info.vendor} ${info.architecture} ${info.description}`.trim(),
-      maxDisp, moved, endSpeed, windowSpeed: Math.max(windowSpeed, endSpeed), topFrom: top(from), topEnd: top(end),
+      maxDisp, moved, endSpeed, windowSpeed: Math.max(windowSpeed, endSpeed), asleep: last.asleep, woken, creep, topFrom: top(from), topEnd: top(end),
       meanY: [mean(p0), mean(from), mean(end)], movers, trace, health, wallMs, stepsPerSecond: (plan.frames * plan.substeps) / (wallMs / 1000),
     };
   } finally {

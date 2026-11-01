@@ -198,5 +198,8 @@
   "packages/physics-gpu/test/engine-sleep.test.ts": 50.0,
   "packages/physics-gpu/test/engine-sleep-wake.test.ts": 35.0,
   "packages/physics-gpu/test/engine-sleep-diff-s5.test.ts": 170.0,
-  "packages/physics-gpu/test/engine-sleep-diff-s14.test.ts": 205.0
+  "packages/physics-gpu/test/engine-sleep-diff-s14.test.ts": 205.0,
+  "packages/physics-gpu/test/engine-settle.test.ts": 20.0,
+  "packages/physics-gpu/test/kapla-sleep.test.ts": 167.0,
+  "packages/physics-gpu/test/kapla-sleep-topple.test.ts": 259.6
 }
