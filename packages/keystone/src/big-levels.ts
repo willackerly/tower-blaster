@@ -137,6 +137,11 @@ export function cathedralLevel(id: string, rack: RackItem[], extra: Partial<Leve
  */
 export const B2: LevelDef = cathedralLevel('B2', ['w-bomb', 'w-ram', 'w-ram'], {
   weapons: { bomb: BOMB, ram: RAM },
+  // Cast on the M5 Max (Metal) at main 29fc193, short recipe, seed 1, metric score: every gate passed (103 min).
+  // Seed 2 is queued as the recast; its stars will be pooled with these. docs/game/levels/B2.md.
+  // The showcase (solutions.ace) is seed 1's best line: its 50 nudges ended at score 1,791 to 3,711.
+  solutions: { ace: readShots('w-bomb.500.8.155.173.79_w-ram.711.8.273.259.95_w-ram.528.8.216.481.80') },
+  stars: { metric: 'score', t2: 770, t3: 3200, best: 3805, castOn: 'apple metal-3', engine: 'gpu', hash: 'c75fbd9832e6814b', n: 186, seed: 1 },
 });
 
 /** The slice's levels in play order (the game's series when one of them is opened). */

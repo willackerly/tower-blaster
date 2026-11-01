@@ -46,7 +46,17 @@ describe('big levels', () => {
     for (const i of m.crowns) expect(roofAt.has(at(m, i))).toBe(true);
     // Heritage sits in a different tower: no crown is heritage.
     expect(Array.from(m.crowns).filter((i) => m.heritage.includes(i))).toEqual([]);
-    expect(B2.stars).toBeUndefined();
+  });
+
+  it('B2 plays by its cast stars on score: their hash is the level\'s, and the showcase line parses', () => {
+    const c = compileLevel(B2);
+    expect(B2.stars).toMatchObject({ metric: 'score', hash: c.hash, engine: 'gpu' });
+    expect(castStars(c)).toBe(B2.stars);
+    expect(B2.stars!.t3).toBeGreaterThan(B2.stars!.t2);
+    expect(B2.stars!.best).toBeGreaterThanOrEqual(B2.stars!.t3);
+    expect(B2.solutions?.ace?.map((s) => s.ammo)).toEqual(B2.rack);
+    // Moving the crowns to the whole roof is another level: the stars drop until it is recast.
+    expect(castStars(compileLevel(cathedralLevel('B2', B2.rack, { weapons: B2.weapons, stars: B2.stars }, 'roof')))).toBeUndefined();
   });
 
   it('B3 Ten Thousand: 10,000 stone cubes, three bombs, collapse 0.4, within the GPU engine\'s body limit', () => {
