@@ -162,9 +162,9 @@ export function proposeScene(c: ViewerConfig, scenario: string, params: Record<s
     const level = picked?.def.id ?? null;
     // Keystone's rules: the level as the game plays it, whatever the world fields say (the panel hides them).
     if (picked && rules.rules === 'keystone') {
-      // A line of shots is the level's it was made on: another level drops it.
+      // A line of shots and a rack are the level's they were given for: another level drops them.
       const same = level === c.level && (picked.custom ? picked.def === c.customLevel : !c.customLevel);
-      const next = underKeystone({ ...c, level, customLevel: picked.custom ? picked.def : null, shots: same ? c.shots : null, look: lookFor(c, 'keystone') }, rules.feel);
+      const next = underKeystone({ ...c, level, customLevel: picked.custom ? picked.def : null, shots: same ? c.shots : null, rack: same ? c.rack : null, look: lookFor(c, 'keystone') }, rules.feel);
       return { ok: true, config: next, bodies: compileLevel(picked.def).scene.bodies.length };
     }
     // A scenario under Keystone's rules is a level (scenarioLevel): its params and seed build it, the rest is the game's.
@@ -172,7 +172,7 @@ export function proposeScene(c: ViewerConfig, scenario: string, params: Record<s
       if (!Number.isInteger(seed)) throw new Error('seed must be an integer');
       const def = scenarioLevel(scenario, params, seed);
       const same = !c.level && c.scenario === scenario && c.seed === seed && JSON.stringify(c.params) === JSON.stringify(params);
-      const next = underKeystone({ ...c, level: null, customLevel: null, scenario, params, seed, shots: same ? c.shots : null, look: lookFor(c, 'keystone') }, rules.feel);
+      const next = underKeystone({ ...c, level: null, customLevel: null, scenario, params, seed, shots: same ? c.shots : null, rack: same ? c.rack : null, look: lookFor(c, 'keystone') }, rules.feel);
       return { ok: true, config: next, bodies: compileLevel(def).scene.bodies.length };
     }
     // Anything else is the sandbox.
@@ -184,14 +184,14 @@ export function proposeScene(c: ViewerConfig, scenario: string, params: Record<s
       // and a level of your own stays loaded (picked again from the picker) until another one replaces it.
       checkWorld(scale, substeps);
       const { okE, engine } = bounceChoice(c, bounce);
-      const next: ViewerConfig = { ...c, level, customLevel: picked.custom ? picked.def : null, scale, substeps, presettle: settle, camera: null, engine, bounce: okE ? bounce.e : c.bounce, view: carriedFraming(c.view, c, { scenario: c.scenario, level }) };
+      const next: ViewerConfig = { ...c, level, customLevel: picked.custom ? picked.def : null, rack: null, scale, substeps, presettle: settle, camera: null, engine, bounce: okE ? bounce.e : c.bounce, view: carriedFraming(c.view, c, { scenario: c.scenario, level }) };
       return { ok: true, config: next, bodies: compileLevel(picked.def).scene.bodies.length };
     }
     if (!Number.isInteger(seed)) throw new Error('seed must be an integer');
     checkWorld(scale, substeps);
     const { okE, engine } = bounceChoice(c, bounce);
     // A rebuilt scene is framed afresh: a start camera chosen for the old one need not fit it.
-    const next: ViewerConfig = { ...c, level: null, customLevel: null, scenario, params, seed, scale, substeps, presettle: settle, camera: null, engine, bounce: okE ? bounce.e : c.bounce, view: carriedFraming(c.view, c, { scenario, level: null }) };
+    const next: ViewerConfig = { ...c, level: null, customLevel: null, rack: null, scenario, params, seed, scale, substeps, presettle: settle, camera: null, engine, bounce: okE ? bounce.e : c.bounce, view: carriedFraming(c.view, c, { scenario, level: null }) };
     return { ok: true, config: next, bodies: buildScenario(scenario, params, seed).bodies.length };
   } catch (e) {
     return { ok: false, error: e instanceof Error ? e.message : String(e) };

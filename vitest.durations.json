@@ -172,6 +172,7 @@
   "packages/viewer/test/level-file.test.ts": 0.1,
   "packages/viewer/test/level.test.ts": 0,
   "packages/viewer/test/projectiles.test.ts": 5,
+  "packages/viewer/test/rack.test.ts": 4.3,
   "packages/viewer/test/rules.test.ts": 0.1,
   "packages/viewer/test/shots-line.test.ts": 0.1,
   "packages/viewer/test/sound.test.ts": 0.1,
