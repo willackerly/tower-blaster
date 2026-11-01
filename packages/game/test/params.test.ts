@@ -10,17 +10,36 @@ const par = L1.solutions!.par as Shot[];
 
 describe('game URL keys', () => {
   it('defaults to the first level on the GPU solver in the maquette look, no juice and no line', () => {
-    expect(parse('')).toEqual({ level: L1, rules: {}, engine: 'gpu', feel: { hitStop: false, slowMo: false }, look: GAME_LOOK, shots: null, offscreen: false });
+    expect(parse('')).toEqual({ level: L1, rack: null, rules: {}, engine: 'gpu', feel: { hitStop: false, slowMo: false }, look: GAME_LOOK, shots: null, offscreen: false });
     expect(GAME_LOOK).toBe('hazy');
   });
 
   it('reads every key, a level in any case and the viewer\'s name for the GPU solver, and leaves other keys alone', () => {
     expect(parse(`?level=l3&engine=rapier&keystone.hitstop=1&keystone.slowmo=0&look=real&real.sunElevation=6&offscreen=1&scenario=S4&cam=1,2,3,0,0,9`)).toEqual({
-      level: L3, rules: {}, engine: 'rapier', feel: { hitStop: true, slowMo: false }, look: 'real', shots: null, offscreen: true,
+      level: L3, rack: null, rules: {}, engine: 'rapier', feel: { hitStop: true, slowMo: false }, look: 'real', shots: null, offscreen: true,
     });
     expect(parse('?engine=avbd-gpu').engine).toBe('gpu');
     expect(parse('?engine=gpu').engine).toBe('gpu');
     expect(parse(`?level=L1&keystone.shots=${writeShots(par)}`).shots).toEqual(par);
+  });
+
+  it('keystone.rack replaces the level\'s rack, and a line may then fire the new items', () => {
+    const line = 'p-wreckingball.360.8.0.200.100_w-grenade.360.8.0.300.80';
+    const p = parse(`?level=L1&keystone.rack=p-wreckingball,w-grenade,marble&keystone.shots=${line}`);
+    expect(p.rack).toEqual(['p-wreckingball', 'w-grenade', 'marble']);
+    expect(p.level).toEqual({ ...L1, rack: ['p-wreckingball', 'w-grenade', 'marble'] });
+    expect(p.shots!.map((s) => s.ammo)).toEqual(['p-wreckingball', 'w-grenade']);
+    expect(parse('?level=L1').level).toBe(L1);
+    // The line is checked against the new rack, not the level's own.
+    expect(() => parse(`?level=L1&keystone.rack=marble&keystone.shots=${writeShots(par)}`)).toThrow(/fires 1 cannonball but L1's rack holds 0 \(rack: marble\)/);
+  });
+
+  it('refuses a bad keystone.rack, naming the key', () => {
+    expect(() => parse('?keystone.rack=')).toThrow(/keystone.rack must list 1 to 8 items/);
+    expect(() => parse(`?keystone.rack=${Array(9).fill('marble').join(',')}`)).toThrow(/keystone.rack must list 1 to 8 items/);
+    expect(() => parse('?keystone.rack=marble,nuke')).toThrow(/keystone.rack: nuke is not one of marble, cannonball/);
+    expect(() => parse('?keystone.rack=marble,')).toThrow(/keystone.rack: an empty name is not one of/);
+    expect(() => parse('?keystone.rack=w-big')).toThrow(/keystone.rack: L1 has no weapons.big for w-big/);
   });
 
   it('refuses bad values, naming the key', () => {

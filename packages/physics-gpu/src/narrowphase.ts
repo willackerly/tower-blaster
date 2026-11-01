@@ -6,7 +6,7 @@
 // axis as the first candidate) so the two agree, not merely look alike.
 import { EDGE_ABS, EDGE_REL, FACE_ABS, FACE_INSET, FACE_REL } from '@tb/geom';
 import { assertStorageFits } from '@tb/gpu';
-import { Body, Manifold, Shape, wgslStruct } from '@tb/schema';
+import { Body, Manifold, Shape, TIER, wgslStruct } from '@tb/schema';
 
 const WG = 64;
 const NONE = 0xffffffff;
@@ -323,7 +323,8 @@ fn groundMain(@builtin(global_invocation_id) id: vec3u) {
   let i = id.x;
   if (i >= p.n) { return; }
   var m = emptyManifold(i, NONE);
-  if (p.hasGround == 0u) { ground[i] = m; return; }
+  // No ground, or a removed body (tier free, engine-api remove.ts): no ground contact.
+  if (p.hasGround == 0u || ((bodies[i].flags >> 8u) & 0xffu) == ${TIER.free}u) { ground[i] = m; return; }
   margin = p.margin + sweep[i];
   let s = shapes[bodies[i].shape];
   let c = bodies[i].pos;

@@ -3,7 +3,7 @@
 // grenade near the tower; either is centred on the grenade, which it does not
 // push, and throws the tower about. Rapier, then the GPU engine, headless Chromium.
 import { describe, expect, it } from 'vitest';
-import type { BlastEvent, InputEvent, SpawnEvent } from '@tb/engine-api';
+import type { BlastEvent, InputEvent, RemoveEvent, SpawnEvent } from '@tb/engine-api';
 import { DEFAULT_GRENADE } from '@tb/weapons';
 import { browser, open, useViewer } from './e2e-harness.ts';
 
@@ -20,16 +20,19 @@ async function fire(search: string) {
 }
 
 describe('the grenade in the viewer', () => {
-  it('a timer fuse: its blast goes in with the spawn, due delay s later, centred on the grenade', async (ctx) => {
+  it('a timer fuse: its blast and the grenade\'s removal go in with the spawn, due delay s later, centred on the grenade', async (ctx) => {
     if (!browser) return ctx.skip();
     const o = await fire(`${SCENE}&grenade.fuse=timer&grenade.delay=0.5`);
     if (!o) return ctx.skip();
     const { page, errors, n } = o;
     const inputs = await page.evaluate(() => window.__viewer.inputs) as InputEvent[];
-    expect(inputs.map((e) => e.kind)).toEqual(['spawn', 'blast']);
-    const [spawn, blast] = inputs as [SpawnEvent, BlastEvent];
+    expect(inputs.map((e) => e.kind)).toEqual(['spawn', 'blast', 'remove']);
+    const [spawn, blast, remove] = inputs as [SpawnEvent, BlastEvent, RemoveEvent];
     expect(blast).toEqual({ step: spawn.step + 30, kind: 'blast', blast: { centre: { body: n }, exclude: [n], ...DEFAULT_GRENADE.blast } });
+    expect(remove).toEqual({ step: blast.step, kind: 'remove', id: n });
     await page.waitForFunction((s) => window.__viewer.stepIndex > s + 5, blast.step, { timeout: 60_000 });
+    // Spent: the next spawn still gets the next id (slots are not reused), and the page keeps running.
+    expect(await page.evaluate(() => window.__viewer.bodies)).toBe(n + 1);
     expect(errors).toEqual([]);
     expect(await page.evaluate(() => window.__viewer.status)).toBe('running');
     await page.close();
@@ -48,7 +51,7 @@ describe('the grenade in the viewer', () => {
     await page.waitForFunction((s) => window.__viewer.stepIndex > s + 10, blast.step, { timeout: 60_000 });
     // Thrown: most of the tower's cubes are awake and moving.
     expect(await page.evaluate(() => window.__viewer.awake)).toBeGreaterThan(n / 2);
-    expect(await page.evaluate(() => window.__viewer.inputs.length)).toBe(2);
+    expect(await page.evaluate(() => window.__viewer.inputs.map((e) => e.kind))).toEqual(['spawn', 'blast', 'remove']);
     expect(errors).toEqual([]);
     await page.close();
   });
