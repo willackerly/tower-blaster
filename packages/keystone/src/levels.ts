@@ -89,3 +89,10 @@ export const L5: LevelDef = {
 };
 
 export const LEVELS: readonly LevelDef[] = [L1, L2, L3, L4, L5];
+
+/** A built-in level by id, any case; throws naming the known ones. */
+export function levelById(id: string): LevelDef {
+  const def = LEVELS.find((l) => l.id === id.toUpperCase());
+  if (!def) throw new Error(`unknown level ${id.toUpperCase()}; known: ${LEVELS.map((l) => l.id).join(', ')}`);
+  return def;
+}
