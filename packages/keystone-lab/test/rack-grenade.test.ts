@@ -73,6 +73,13 @@ describe('grenade in the rack', () => {
     expect(o.yield).toBe(itemYield(c, 'w-grenade'));
     expect(o.leverage).toBe(leverage(o.dPE_mJ, o.ke + o.yield));
     expect(o.crownsDown).toBe(4);
+    // An outcome level's leverage (outcomeFacts) charges it too: the same shot on L1 scored by outcome.
+    const out = compileLevel({ ...def, scoring: 'outcome', objective: { kind: 'collapse', min: 0.01 } });
+    const so = (await play(ref, out, LINE, false)).r.session, f = so.outcomeFacts(), oo = so.outcomes[0]!;
+    expect(oo.yield).toBe(itemYield(out, 'w-grenade'));
+    // One shot from the home pose: the level's leverage is the shot's, ke + yield charged (ke alone would be several times it).
+    expect(f.leverage).toBeCloseTo(oo.leverage, 6);
+    expect(f.leverage).toBeLessThan(leverage(oo.dPE_mJ, oo.ke) / 2);
     // The page shakes on the blast's feedback, given once, from the first state that shows it.
     expect(serial.r.feedback.filter((f) => f.t === 'blast')).toEqual([{ t: 'blast', step: 327, body: c.meta.n, radius: 1.5 }]);
     expect(piped.r.feedback.filter((f) => f.t === 'blast')).toEqual([{ t: 'blast', step: 327, body: c.meta.n, radius: 1.5 }]);

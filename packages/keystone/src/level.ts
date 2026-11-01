@@ -89,6 +89,8 @@ export interface LevelDef {
   scoring?: Scoring;
   /** Outcome levels: the cast star thresholds; absent, stars are uncast (only the objective's star). */
   stars?: StarsDef;
+  /** Outcome levels: end at the first settle where the objective is met, as par levels do (URL key keystone.autobank). Default: end at a bank or an empty rack. */
+  autobank?: boolean;
 }
 
 export const scoringOf = (d: LevelDef): Scoring => d.scoring ?? 'par';
@@ -203,9 +205,10 @@ export function compileLevel(def: LevelDef): CompiledLevel {
   const lot = { min: [def.lot.min[0] * p, def.lot.min[1] * p] as [number, number], max: [def.lot.max[0] * p, def.lot.max[1] * p] as [number, number] };
   const frame: ShotFrame = { unit: h, pitch: pitchOf(def), centre: [(lot.min[0] + lot.max[0]) / 2, (lot.min[1] + lot.max[1]) / 2], launcher: def.launcher };
   // Solutions don't change the scene, and the stars are cast against the hash (StarsDef.hash).
-  // scoring 'par' is the default, so writing it out names the same level.
+  // scoring 'par' and autobank false are the defaults, so writing them out names the same level.
   const { solutions: _omit, stars: _stars, ...geometry } = def;
   if (geometry.scoring === 'par') delete geometry.scoring;
+  if (geometry.autobank === false) delete geometry.autobank;
   return { def, scene, meta, frame, lot, height, hash: hashString(JSON.stringify(geometry)) };
 }
 

@@ -1,7 +1,7 @@
 // The state machine driven by synthetic body states: no engine involved.
 import { describe, expect, it } from 'vitest';
 import { emptySnapshot, type Snapshot } from '@tb/engine-api';
-import { compileLevel, CpuObserver, type Feedback, GRAVITY, type LevelDef, SETTLE_MIN, SETTLE_QUIET, Session, type Shot } from '@tb/keystone';
+import { compileLevel, CpuObserver, type Feedback, GRAVITY, homeSkyline, type LevelDef, type OutcomeScore, peOf_mJ, SETTLE_MIN, SETTLE_QUIET, Session, type Shot } from '@tb/keystone';
 
 const def: LevelDef = {
   id: 'S', name: 's', version: 1, world: 0, lot: { min: [-4, -4], max: [4, 4] }, crownLine: 2, objective: { kind: 'crowns' }, par: 1,
@@ -112,5 +112,79 @@ describe('Session', () => {
     se.fire(marble, 0);
     const fb = play(se, obs, s, still(SETTLE_MIN + SETTLE_QUIET), 0);
     expect(fb.filter((f) => f.t === 'heritageCrack')).toHaveLength(0);
+  });
+});
+
+describe('Session, outcome levels', () => {
+  // The same two bodies scored on what comes down: three items, so a shot can settle with two left.
+  const out: LevelDef = { ...def, id: 'SO', scoring: 'outcome', rack: ['marble', 'marble', 'cannonball'], par: 3 };
+  const oc = compileLevel(out);
+  const drop = (w: Snapshot) => { w.awake[crown] = 1; w.linVel.set([0, -3, 0], 3 * crown); w.pos[3 * crown + 1] = 0.25; };
+  const run = (se: Session, obs: CpuObserver, s: Snapshot, frames: Array<(s: Snapshot, t: number) => void>, start: number) => {
+    const fb: Feedback[] = [];
+    frames.forEach((mutate, t) => { mutate(s, t); fb.push(...se.observe(obs.observe(s, start + 1 + t, se.watchIdx))); });
+    return fb;
+  };
+  const fresh = () => { const s = world(3), obs = new CpuObserver(oc, s); return { se: new Session(oc), s, obs }; };
+
+  it('refuses a bank on a par level, before any shot, and while a shot runs', () => {
+    expect(() => new Session(c).bank(0)).toThrow(/par level ends at its clear/);
+    const { se } = fresh();
+    expect(se.canBank()).toBe(false);
+    expect(() => se.bank(0)).toThrow(/no shot has settled yet/);
+    se.fire(marble, 0);
+    expect(se.canBank()).toBe(false);
+    expect(() => se.bank(1)).toThrow(/phase running/);
+  });
+
+  it('a clear does not end the level: it aims again with the objective met, and a bank ends it with the rack left', () => {
+    const { se, s, obs } = fresh();
+    se.fire(marble, 0);
+    const fb = run(se, obs, s, [drop, ...still(SETTLE_MIN + SETTLE_QUIET)], 0);
+    expect(fb.filter((f) => f.t === 'levelEnd')).toEqual([]);
+    expect(se.phase).toBe('aiming');
+    expect(se.objectiveDone).toBe(true);
+    expect(se.liveCollapse).toBeGreaterThan(0);
+    const [end] = se.bank(200);
+    expect(end).toMatchObject({ t: 'levelEnd', step: 200, cleared: true });
+    expect(se.phase).toBe('cleared');
+    const score = se.score as OutcomeScore;
+    // The crown fell from course 2 to the ground: D is its drop over what the level could release.
+    const m = oc.meta, h = oc.frame.unit;
+    const pe0 = Array.from({ length: m.n }, (_, i) => peOf_mJ(m.mass[i]!, m.home[3 * i + 1]!)).reduce((a, b) => a + b);
+    const floor = Array.from({ length: m.n }, (_, i) => peOf_mJ(m.mass[i]!, h / 2)).reduce((a, b) => a + b);
+    const D = (peOf_mJ(m.mass[crown]!, m.home[3 * crown + 1]!) - peOf_mJ(m.mass[crown]!, 0.25)) / (pe0 - floor);
+    expect(score.outcome.collapse).toBe(D);
+    expect(score.lines).toEqual(expect.arrayContaining([{ label: 'Objective', value: 1000 }, { label: 'Collapse', value: Math.floor(3000 * D) }, { label: 'Rack left', value: 800 }, { label: 'Combo', value: 50 }]));
+    expect(score).toMatchObject({ stars: 1, stamp: `${Math.floor(100 * D)}% DOWN`, outcome: { uncast: true } });
+    expect(() => se.bank(201)).toThrow(/phase cleared/);
+    expect(() => se.fire(marble, 201)).toThrow(/phase cleared/);
+  });
+
+  it('the level ends when the rack runs out, failed when the objective is not met, with no rack-left line', () => {
+    const { se, s, obs } = fresh();
+    const shots: Shot[] = [marble, marble, { ...marble, ammo: 'cannonball' }];
+    let fb: Feedback[] = [];
+    shots.forEach((shot, k) => {
+      se.fire(shot, 100 * k);
+      obs.setBaseline(s, 100 * k);
+      fb = run(se, obs, s, still(SETTLE_MIN + SETTLE_QUIET), 100 * k);
+    });
+    expect(fb.at(-1)).toMatchObject({ t: 'levelEnd', cleared: false });
+    expect(se.phase).toBe('failed');
+    expect(se.score!.lines.map((l) => l.label)).toEqual(['Collapse', 'Leverage', 'Combo']);
+    expect(se.score).toMatchObject({ stars: 0, stamp: 'INCOMPLETE', outcome: { collapse: 0 } });
+    // No height bin holds the 3 bodies a skyline needs here, so the ratio falls back to 1 (unchanged).
+    expect(homeSkyline(oc)).toBe(0);
+    expect(se.outcomeFacts().skylineRatio).toBe(1);
+  });
+
+  it('autobank ends at the first settle where the objective is met', () => {
+    const ac = compileLevel({ ...out, autobank: true }), s = world(3), obs = new CpuObserver(ac, s), se = new Session(ac);
+    se.fire(marble, 0);
+    const fb = run(se, obs, s, [drop, ...still(SETTLE_MIN + SETTLE_QUIET)], 0);
+    expect(fb.at(-1)).toMatchObject({ t: 'levelEnd', cleared: true });
+    expect(se.score!.lines).toContainEqual({ label: 'Rack left', value: 800 });
+    expect(ac.hash).not.toBe(oc.hash); // autobank changes when the level ends, so it is part of the level
   });
 });

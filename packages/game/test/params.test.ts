@@ -2,20 +2,21 @@
 // rules=keystone: defaults, accepted spellings, and refused values named.
 import { describe, expect, it } from 'vitest';
 import { L1, L3, type Shot, writeShots } from '@tb/keystone';
-import { GAME_LOOK, parseGameParams } from '../src/params.ts';
+import { compileLevel } from '@tb/keystone';
+import { GAME_LOOK, levelRules, parseGameParams, withRules } from '../src/params.ts';
 
 const parse = (search: string) => parseGameParams(new URLSearchParams(search));
 const par = L1.solutions!.par as Shot[];
 
 describe('game URL keys', () => {
   it('defaults to the first level on the GPU solver in the maquette look, no juice and no line', () => {
-    expect(parse('')).toEqual({ level: L1, rack: null, engine: 'gpu', feel: { hitStop: false, slowMo: false }, look: GAME_LOOK, shots: null, offscreen: false });
+    expect(parse('')).toEqual({ level: L1, rack: null, rules: {}, engine: 'gpu', feel: { hitStop: false, slowMo: false }, look: GAME_LOOK, shots: null, offscreen: false });
     expect(GAME_LOOK).toBe('hazy');
   });
 
   it('reads every key, a level in any case and the viewer\'s name for the GPU solver, and leaves other keys alone', () => {
     expect(parse(`?level=l3&engine=rapier&keystone.hitstop=1&keystone.slowmo=0&look=real&real.sunElevation=6&offscreen=1&scenario=S4&cam=1,2,3,0,0,9`)).toEqual({
-      level: L3, rack: null, engine: 'rapier', feel: { hitStop: true, slowMo: false }, look: 'real', shots: null, offscreen: true,
+      level: L3, rack: null, rules: {}, engine: 'rapier', feel: { hitStop: true, slowMo: false }, look: 'real', shots: null, offscreen: true,
     });
     expect(parse('?engine=avbd-gpu').engine).toBe('gpu');
     expect(parse('?engine=gpu').engine).toBe('gpu');
@@ -50,5 +51,22 @@ describe('game URL keys', () => {
     expect(() => parse('?keystone.shots=')).toThrow(/keystone.shots is empty/);
     expect(() => parse('?keystone.shots=drop.0.0')).toThrow(/fires 1 drop but L1's rack holds 0/);
     expect(() => parse('?keystone.shots=marble.0')).toThrow(/shot 1 .*marble takes 5 fields/);
+  });
+});
+
+describe('rule overrides', () => {
+  it('keystone.scoring and keystone.autobank make the level they name, with its own hash', () => {
+    const p = parse('?level=L1&keystone.scoring=outcome&keystone.autobank=1');
+    expect(p.rules).toEqual({ scoring: 'outcome', autobank: true });
+    expect(p.level).toEqual({ ...L1, scoring: 'outcome', autobank: true });
+    expect(compileLevel(p.level).hash).not.toBe(compileLevel(L1).hash);
+    // The defaults written out are the level itself.
+    expect(compileLevel(parse('?keystone.scoring=par&keystone.autobank=0').level).hash).toBe(compileLevel(L1).hash);
+    expect(withRules(L1, {})).toBe(L1);
+    expect(levelRules(new URLSearchParams('?keystone.autobank=0'))).toEqual({ autobank: false });
+  });
+  it('refuses bad values, naming the key', () => {
+    expect(() => parse('?keystone.scoring=golf')).toThrow(/keystone.scoring must be par or outcome: golf/);
+    expect(() => parse('?keystone.autobank=yes')).toThrow(/keystone.autobank must be 0 or 1: yes/);
   });
 });
