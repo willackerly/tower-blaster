@@ -1,6 +1,6 @@
 // The game page: Keystone (playKeystone, play.ts) on the GPU solver, or Rapier
 // with ?engine=rapier, in the maquette look. ?level=L2 starts on another level,
-// ?look= and real.* change the look, ?keystone.hitstop=1 and ?keystone.slowmo=1
+// ?keystone.rack= gives it another rack, ?look= and real.* change the look, ?keystone.hitstop=1 and ?keystone.slowmo=1
 // turn on pace juice, ?keystone.shots= plays a line once loaded, ?offscreen=1
 // (tests) draws only for captures. The keys are params.ts's, which the viewer
 // reads too under rules=keystone, so the same link opens in either page.
@@ -31,9 +31,11 @@ function fail(e: unknown) {
 
 async function main() {
   const q = new URLSearchParams(location.search);
-  const { level, rules, engine, feel, look, shots, offscreen } = parseGameParams(q);
-  const levels = LEVELS.map((d) => withRules(d, rules));
-  const start = levels.findIndex((d) => d.id === level.id);
+  const { level, rack, rules, engine, feel, look, shots, offscreen } = parseGameParams(q);
+  // ?keystone.rack replaces the opening level's rack (its def, so retry keeps it); other levels keep their own.
+  // The rule overrides (keystone.scoring, keystone.autobank) apply to every level.
+  const start = LEVELS.findIndex((l) => l.id === level.id);
+  const levels = LEVELS.map((l, i) => (i === start ? level : withRules(l, rules)));
   handle.feel = feel;
   handle.engine = engine;
 
@@ -52,13 +54,16 @@ async function main() {
     canvas, offscreen, device, renderer, source, hud: $('hud'), banner: $('banner'), result: $('result'),
     levels, start, engine, feel, fail,
     hooks: {
-      // The URL follows the level, keeping the other keys; a line is the level's it was made on.
+      // The URL follows the level, keeping the other keys; a line and a rack are the level's they were made for.
       loaded: (c) => {
         if (c.def.id === shown) return;
         shown = c.def.id;
         const u = new URLSearchParams(location.search);
         u.set('level', c.def.id);
         u.delete('keystone.shots');
+        // The override stays the opening level's: shown with it, gone from the others.
+        if (rack && c.def.id === level.id) u.set('keystone.rack', rack.join(','));
+        else u.delete('keystone.rack');
         history.replaceState(null, '', `?${u}`);
       },
     },

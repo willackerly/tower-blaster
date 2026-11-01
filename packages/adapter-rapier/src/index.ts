@@ -2,7 +2,7 @@
 // contract. Used as a reference for quality metrics and as the number every
 // GPU variant has to beat by a wide margin.
 import RAPIER from '@dimforge/rapier3d-simd-compat';
-import { blastArea, blastCentre, blastVelocity, type BodyDesc, checkBlast, checkBlastQueue, DEFAULT_RESTITUTION_COMBINE, emptySnapshot, type EngineInfo, type InputEvent, massOf, type PhysicsEngine, type SceneDesc, queueInputs, type Snapshot } from '@tb/engine-api';
+import { blastArea, blastCentre, blastVelocity, type BodyDesc, checkBlast, checkInputQueue, DEFAULT_RESTITUTION_COMBINE, emptySnapshot, type EngineInfo, type InputEvent, massOf, type PhysicsEngine, type SceneDesc, queueInputs, type Snapshot, TIER_FREE } from '@tb/engine-api';
 import { createBody, createGround, initRapier, RULES } from './bodies.ts';
 
 export interface RapierOptions {
@@ -17,6 +17,8 @@ export class RapierEngine implements PhysicsEngine {
   private bodies: RAPIER.RigidBody[] = [];
   /** Each body's description, for blasts. */
   private descs: BodyDesc[] = [];
+  /** Removed bodies (remove.ts): disabled in Rapier, so they touch nothing and stay where they were, at rest. */
+  private gone = new Set<number>();
   private pending: InputEvent[] = [];
   private sleep = true;
   private combine = RAPIER.CoefficientCombineRule.Average;
@@ -29,7 +31,7 @@ export class RapierEngine implements PhysicsEngine {
 
   async init(scene: SceneDesc): Promise<void> {
     const pending = [...scene.inputs].sort((a, b) => a.step - b.step);
-    checkBlastQueue(scene.bodies.length, pending);
+    checkInputQueue(scene.bodies.length, pending);
     await initRapier();
     this.info.variant.version = RAPIER.version();
     this.dispose();
@@ -47,6 +49,7 @@ export class RapierEngine implements PhysicsEngine {
     this.sleep = scene.sleep;
     this.bodies = [];
     this.descs = [];
+    this.gone = new Set();
     for (const b of scene.bodies) this.add(b);
     this.pending = pending;
     this.stepIndex = 0;
@@ -64,7 +67,7 @@ export class RapierEngine implements PhysicsEngine {
   push(events: InputEvent[]): void {
     // Stable insertion keeps push order among events due at the same step; checked before anything changes.
     const pending = queueInputs(this.pending, events);
-    checkBlastQueue(this.bodies.length, pending);
+    checkInputQueue(this.bodies.length, pending, this.gone);
     this.pending = pending;
   }
 
@@ -74,11 +77,21 @@ export class RapierEngine implements PhysicsEngine {
     while (this.pending.length && this.pending[0]!.step <= this.stepIndex) {
       const ev = this.pending.shift()!;
       if (ev.kind === 'spawn') { this.add(ev.body); continue; }
+      if (ev.kind === 'remove') {
+        // A removal (remove.ts): at rest, then out of the simulation (a disabled body and its colliders take part in nothing).
+        const rb = this.bodies[ev.id]!;
+        rb.setLinvel({ x: 0, y: 0, z: 0 }, false);
+        rb.setAngvel({ x: 0, y: 0, z: 0 }, false);
+        rb.setEnabled(false);
+        this.gone.add(ev.id);
+        continue;
+      }
       // A blast (engine-api blast.ts): mass and volume from the description, as the AVBD engines.
       const b = checkBlast(ev.blast);
       const at = (rb: RAPIER.RigidBody): [number, number, number] => { const p = rb.translation(); return [p.x, p.y, p.z]; };
       const centre = blastCentre(b, b.body >= 0 ? at(this.bodies[b.body]!) : null);
       this.bodies.forEach((rb, id) => {
+        if (this.gone.has(id)) return;
         const d = this.descs[id]!, u = rb.linvel();
         const v = blastVelocity(b, centre, id, at(rb), [u.x, u.y, u.z], massOf(d), blastArea(d.shape));
         if (v) rb.setLinvel({ x: v[0], y: v[1], z: v[2] }, true);
@@ -96,8 +109,9 @@ export class RapierEngine implements PhysicsEngine {
       s.rot.set([q.x, q.y, q.z, q.w], 4 * i);
       s.linVel.set([v.x, v.y, v.z], 3 * i);
       s.angVel.set([a.x, a.y, a.z], 3 * i);
-      s.awake[i] = rb.isSleeping() ? 0 : 1;
+      s.awake[i] = rb.isSleeping() || this.gone.has(i) ? 0 : 1;
     });
+    if (this.gone.size) s.tier = Uint8Array.from({ length: this.bodies.length }, (_, i) => (this.gone.has(i) ? TIER_FREE : 0));
     return s;
   }
 

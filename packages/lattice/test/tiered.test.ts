@@ -25,6 +25,15 @@ describe('TieredEngine on Rapier', () => {
     e.dispose();
   });
 
+  it('refuses blasts and removals by name (the tiers do neither yet), at push and at init', async () => {
+    const scene = buildScenario('S1', { F: 1, H: 2 }, 1), e = new TieredEngine(new RapierHost());
+    await e.init(scene);
+    expect(() => e.push([{ step: 1, kind: 'remove', id: 0 }])).toThrow(/TieredEngine: remove inputs are not supported yet/);
+    expect(() => e.push([{ step: 1, kind: 'blast', blast: { centre: [0, 0, 0], radius: 1, impulse: 1 } }])).toThrow(/TieredEngine: blast inputs are not supported yet/);
+    e.dispose();
+    await expect(new TieredEngine(new RapierHost()).init({ ...scene, inputs: [{ step: 1, kind: 'remove', id: 0 }] })).rejects.toThrow(/remove inputs/);
+  });
+
   it('an intact tower costs nothing: no host bodies, no proxies, exact poses', async () => {
     const scene = buildScenario('S1', { F: 4, H: 12 }, 1);
     const { e, problems } = await run(scene, 60, 10);
