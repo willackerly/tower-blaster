@@ -14,6 +14,7 @@ import { type Aimed, azFromYaw, pick, previewBeads, shotFor, SUBSTEPS } from './
 import { Synth, type Voice, voicesFor } from './audio.ts';
 import { driverOptions, type EngineKind, gpuEngineOptions, makeEngine, roomAfter } from './engines.ts';
 import { hudHtml, nextSelection, rackChips, resultHtml, starsText } from './hud.ts';
+import { FollowCam } from './follow.ts';
 import { CameraJuice, contactJuice } from './juice.ts';
 import { alphaAt, arrived, DEFAULT_FEEL, newArrivals, Pacer, type PaceFeel, slowTag, SpeedMeter, TailSkip } from './pacing.ts';
 import { runPhysics } from './physics-loop.ts';
@@ -42,6 +43,8 @@ export interface GameHandle {
    * time), whether the tail skip is on, and the median step cost the valve reads (ms).
    */
   pace: { timeScale: number; speed: number; tag: string; tailSkip: boolean; costMs: number };
+  /** The camera's orbit target and distance (m) now, and whether the follow camera is moving it (follow.ts; `?keystone.follow=0` off). */
+  view: { target: [number, number, number]; distance: number; following: boolean };
   result: LevelScore | null;
   /** Feedback events seen this attempt, by type. */
   counts: Record<string, number>;
@@ -92,7 +95,7 @@ const median = (xs: number[]) => { if (!xs.length) return NaN; const s = [...xs]
 export function newGameHandle(): GameHandle {
   const none = (): SessionState => ({ step: 0, phase: 'loading', strokes: 0, heritageBroken: 0, hash: '' });
   return {
-    status: 'loading', engine: '', level: '', phase: 'loading', ready: false, frames: 0, stepIndex: 0, strokes: 0, bodies: 0, collapse: 0, fast: false, pace: { timeScale: 1, speed: 1, tag: '', tailSkip: false, costMs: NaN }, result: null, counts: {}, feel: { ...DEFAULT_FEEL }, resultShownAt: null, timing: { loadMs: 0, stepMs: [], moving: [], frameMs: [], costMs: [] },
+    status: 'loading', engine: '', level: '', phase: 'loading', ready: false, frames: 0, stepIndex: 0, strokes: 0, bodies: 0, collapse: 0, fast: false, pace: { timeScale: 1, speed: 1, tag: '', tailSkip: false, costMs: NaN }, view: { target: [0, 0, 0], distance: 0, following: false }, result: null, counts: {}, feel: { ...DEFAULT_FEEL }, resultShownAt: null, timing: { loadMs: 0, stepMs: [], moving: [], frameMs: [], costMs: [] },
     fire: () => false, bank: () => false, aim: () => null, select: () => false, load: async () => {}, retry: async () => {}, capture: async () => null,
     state: none, replay: async () => none(), health: async () => null, pairsPerBody: 0, limitsHit: [],
   };
@@ -223,7 +226,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
   // a GPU step may still be awaiting its readback.
   let lock: Promise<unknown> = Promise.resolve();
   const exclusive = <T>(fn: () => Promise<T>): Promise<T> => { const r = lock.then(fn); lock = r.catch(() => {}); return r; };
-  const pacer = new Pacer(), juice = new CameraJuice(), speed = new SpeedMeter(), tail = new TailSkip();
+  const pacer = new Pacer(), juice = new CameraJuice(), speed = new SpeedMeter(), tail = new TailSkip(), follow = new FollowCam();
   let arrivals = newArrivals();
   let synth: Synth | null = null;
   let muted = false;
@@ -240,6 +243,8 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     fxSlots = descs.length;
   };
   let fxSlots = 0;
+  /** What the follow camera frames at most: the lot and a margin, up to half again the structure's height. */
+  let followClip = new Float64Array(6);
   /** A physics step is in flight (physics-loop.ts): the session may already read aiming, but the step is not done. */
   let stepping = false;
   let regrowBuf = new Float32Array(0);
@@ -321,6 +326,9 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     tail.reset();
     arrivals = newArrivals();
     juice.reset();
+    follow.reset();
+    const m = 4 * c.frame.unit;
+    followClip = Float64Array.of(c.lot.min[0] - m, 0, c.lot.min[1] - m, c.lot.max[0] + m, 1.5 * c.height + m, c.lot.max[1] + m);
     handle.result = null;
     handle.counts = {};
     handle.level = c.def.id;
@@ -441,6 +449,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     Object.assign(handle, { phase: stepping ? 'running' : s.phase, ready: !stepping && s.phase === 'aiming' && regrowT === null, stepIndex: driver.engine.stepIndex, strokes: s.strokes, bodies: driver.snapshot.count, collapse: s.liveCollapse });
     const running = s.phase === 'running', v = running ? speed.speed(performance.now()) : 1, costs = handle.timing.costMs;
     handle.pace = { timeScale: running ? pacer.timeScale : 1, speed: v, tag: running && !fastHeld && !handle.fast && !ending && !tail.on ? slowTag(v) : '', tailSkip: tail.on, costMs: median(costs.slice(-60)) };
+    handle.view = { target: [...orbit.target], distance: orbit.distance, following: follow.active };
   }
 
   function fire(shot: Shot): boolean {
@@ -449,6 +458,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     // A shot's pace starts fresh: no tail yet, and at real time until its steps say otherwise.
     tail.reset();
     speed.reset();
+    if (feel.follow) follow.start(orbit);
     onFeedback(fb);
     spawned();
     aimed = null;
@@ -517,6 +527,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     drag.moved += Math.abs(dx) + Math.abs(dy);
     drag.x = e.clientX;
     drag.y = e.clientY;
+    if (drag.moved >= 5) follow.grab(); // the player has the camera: the follow lets go for this shot
     if (drag.pan) {
       const s = orbit.distance * 0.0015, cy = Math.cos(orbit.yaw), sy = Math.sin(orbit.yaw);
       orbit.target = [orbit.target[0] - dx * cy * s, orbit.target[1] + dy * s, orbit.target[2] + dx * sy * s];
@@ -535,6 +546,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
   canvas.addEventListener('pointerleave', () => { pointer = null; aimDirty = true; });
   canvas.addEventListener('wheel', (e) => {
     e.preventDefault();
+    follow.grab();
     orbit.distance = Math.min(200, Math.max(3, orbit.distance * Math.exp(e.deltaY * 0.001)));
     aimDirty = true;
   }, { passive: false });
@@ -602,6 +614,11 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     }
     const running = !loading && driver.session.phase === 'running';
     if (running) handle.timing.frameMs.push(frameMs);
+    if (follow.active) {
+      const red = loading ? undefined : driver.observed?.red;
+      follow.update(orbit, dt, running, red?.movingBox ?? null, red?.nMoving ?? 0, c.frame.unit, followClip);
+      aimDirty = true;
+    }
     if (aimDirty) updateAim();
     sync();
 

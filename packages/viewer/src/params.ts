@@ -109,7 +109,7 @@ export interface ViewerConfig {
    * withRules(level, keystone), a custom run. {} otherwise.
    */
   keystone: LevelRules;
-  /** Keystone's pace (URL keys keystone.hitstop, keystone.slowmo, keystone.tailskip: 0 or 1, keystone.budget: ms; rules=keystone only; @tb/game DEFAULT_FEEL by default, as in the game). */
+  /** Keystone's pace (URL keys keystone.hitstop, keystone.slowmo, keystone.tailskip, keystone.follow: 0 or 1, keystone.budget: ms; rules=keystone only; @tb/game DEFAULT_FEEL by default, as in the game). */
   feel: PaceFeel;
   /**
    * A line of shots to play once the level has loaded (URL key keystone.shots, @tb/keystone
@@ -144,7 +144,7 @@ export const DEFAULT_BOUNCE = 0.5;
 
 export const RULES = ['sandbox', 'keystone'] as const;
 /** Keys that only mean something under rules=keystone (the game page's). */
-export const KEYSTONE_KEYS = ['keystone.hitstop', 'keystone.slowmo', 'keystone.budget', 'keystone.tailskip', 'keystone.shots', 'keystone.rack', ...LEVEL_RULE_KEYS] as const;
+export const KEYSTONE_KEYS = ['keystone.hitstop', 'keystone.slowmo', 'keystone.budget', 'keystone.tailskip', 'keystone.follow', 'keystone.shots', 'keystone.rack', ...LEVEL_RULE_KEYS] as const;
 /** The look when ?look= is absent: the sandbox's candy, or the game's own under its rules. */
 export const defaultLook = (rules: Rules) => (rules === 'keystone' ? GAME_LOOK : DEFAULT_CONFIG.look);
 export type Rules = (typeof RULES)[number];

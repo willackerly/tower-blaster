@@ -20,21 +20,23 @@ function steps(p: Pacer, frames: number, frameMs = DT_MS, o = {}, t0 = 0): numbe
 const sum = (xs: number[]) => xs.reduce((a, b) => a + b, 0);
 
 describe('pace feel', () => {
-  it('juice is off unless the URL asks for it; the valve and the tail skip are on', () => {
+  it('juice is off unless the URL asks for it; the valve, the tail skip and the follow camera are on', () => {
     expect(paceFeel(new URLSearchParams(''))).toEqual(DEFAULT_FEEL);
-    expect(DEFAULT_FEEL).toEqual({ hitStop: false, slowMo: false, budgetMs: DEFAULT_BUDGET_MS, tailSkip: true });
+    expect(DEFAULT_FEEL).toEqual({ hitStop: false, slowMo: false, budgetMs: DEFAULT_BUDGET_MS, tailSkip: true, follow: true });
     expect(paceFeel(new URLSearchParams('?keystone.hitstop=1'))).toEqual({ ...DEFAULT_FEEL, hitStop: true });
     expect(paceFeel(new URLSearchParams('?keystone.slowmo=1&keystone.hitstop=1'))).toEqual({ ...DEFAULT_FEEL, hitStop: true, slowMo: true });
     expect(paceFeel(new URLSearchParams('?keystone.slowmo=0'))).toEqual(DEFAULT_FEEL);
     expect(paceFeel(new URLSearchParams('?keystone.budget=0&keystone.tailskip=0'))).toEqual({ ...DEFAULT_FEEL, budgetMs: 0, tailSkip: false });
     expect(paceFeel(new URLSearchParams('?keystone.budget=16.7')).budgetMs).toBe(16.7);
+    expect(paceFeel(new URLSearchParams('?keystone.follow=0'))).toEqual({ ...DEFAULT_FEEL, follow: false });
+    expect(() => paceFeel(new URLSearchParams('?keystone.follow=2'))).toThrow(/keystone.follow must be 0 or 1: 2/);
   });
   it('refuses bad values, naming the key, and writes back only what differs from the default', () => {
     expect(() => paceFeel(new URLSearchParams('?keystone.budget=-1'))).toThrow(/keystone.budget must be from 0 to 1000 ms/);
     expect(() => paceFeel(new URLSearchParams('?keystone.budget='))).toThrow(/keystone.budget must be/);
     expect(() => paceFeel(new URLSearchParams('?keystone.tailskip=yes'))).toThrow(/keystone.tailskip must be 0 or 1: yes/);
     expect(() => checkPaceFeel({ ...DEFAULT_FEEL, budgetMs: NaN })).toThrow(/physics budget must be/);
-    for (const f of [DEFAULT_FEEL, { ...DEFAULT_FEEL, hitStop: true, budgetMs: 0 }, { ...DEFAULT_FEEL, slowMo: true, tailSkip: false, budgetMs: 20 }]) {
+    for (const f of [DEFAULT_FEEL, { ...DEFAULT_FEEL, hitStop: true, budgetMs: 0 }, { ...DEFAULT_FEEL, slowMo: true, tailSkip: false, budgetMs: 20 }, { ...DEFAULT_FEEL, follow: false }]) {
       const q = new URLSearchParams();
       writePaceFeel(f, q);
       expect(paceFeel(q)).toEqual(f);
