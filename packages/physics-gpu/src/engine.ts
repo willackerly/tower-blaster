@@ -72,8 +72,8 @@ export interface GpuEngineOptions {
    * Per-body sleep (sleep.ts; roadmap E2), opt-in: off when absent or false, and EngineInfo.variant lists it and
    * its thresholds only when they are given. It acts only on a scene with SceneDesc.sleep set. A body that has been
    * quiet long enough sleeps: it stops moving and is no longer solved, and the bodies touching it solve against it
-   * as an anchor (Snapshot.awake 0). Moving or pressing into it, a blast, or losing a contact wakes it with every
-   * sleeper it touches, transitively. sleepSpeed (v_sleep, scene units/s, default 0.05), sleepSteps (T, default
+   * as an anchor (Snapshot.awake 0). An awake body moving into it, a contact pressing deeper than wakeDepth, a blast,
+   * or the removal of a body it may touch wakes it with every sleeper it touches, transitively. sleepSpeed (v_sleep, scene units/s, default 0.05), sleepSteps (T, default
    * 30), sleepDrift (the window displacement as a fraction of the bounding radius, default 0.02), wakeSpeed (default
    * 0.1 units/s) and wakeDepth (default 0.01 units) set the rule (DEFAULT_SLEEP). Not with AvbdParams.restitution yet.
    */
@@ -83,6 +83,16 @@ export interface GpuEngineOptions {
   sleepDrift?: number;
   wakeSpeed?: number;
   wakeDepth?: number;
+  /**
+   * Settle (roadmap E2 step 2b): the first settleSteps steps after init() solve with settleIterations instead of
+   * AvbdParams.iterations, then the rest with AvbdParams.iterations. For a structure that holds only at more
+   * iterations than its collapse needs, such as the real-size Kapla tower (120 to stand, 40 to fall): with sleep it
+   * settles at the high count and falls asleep, and what wakes it later runs at the low one. Both or neither; off
+   * when absent, and EngineInfo.variant lists them only when given. Steps before settleSteps are bit-identical to an
+   * engine at AvbdParams.iterations = settleIterations.
+   */
+  settleSteps?: number;
+  settleIterations?: number;
 }
 
 /** The sleep rule these options set (DEFAULT_SLEEP where they leave a threshold out). */
@@ -224,7 +234,7 @@ export class GpuAvbdEngine implements PhysicsEngine {
     checkRemoved(opts);
     checkRecords(this.params);
     checkColoring(this.params);
-    const check = (k: 'capacity' | 'spare' | 'pairsPerBody' | 'maxRadius' | 'colorTail' | 'tailThreads' | 'colorRounds', ok: (v: number) => boolean, what: string) => {
+    const check = (k: 'capacity' | 'spare' | 'pairsPerBody' | 'maxRadius' | 'colorTail' | 'tailThreads' | 'colorRounds' | 'settleSteps' | 'settleIterations', ok: (v: number) => boolean, what: string) => {
       const v = opts[k];
       if (v !== undefined && !(typeof v === 'number' && ok(v))) throw new Error(`GpuAvbdEngine: GpuEngineOptions.${k} must be ${what}, got ${v}`);
     };
@@ -235,6 +245,9 @@ export class GpuAvbdEngine implements PhysicsEngine {
     check('colorTail', (v) => Number.isInteger(v) && v >= 0 && v <= 63, 'an integer from 0 to 63');
     check('tailThreads', (v) => Number.isInteger(v) && v >= 1 && v <= 256, 'an integer from 1 to 256');
     check('colorRounds', (v) => Number.isInteger(v) && v >= 2 && v % 2 === 0, 'an even integer >= 2');
+    check('settleSteps', (v) => Number.isInteger(v) && v >= 0, 'a non-negative integer');
+    check('settleIterations', (v) => Number.isInteger(v) && v >= 1, 'a positive integer');
+    if ((opts.settleSteps === undefined) !== (opts.settleIterations === undefined)) throw new Error('GpuAvbdEngine: GpuEngineOptions.settleSteps and settleIterations go together');
     for (const k of ['indirectColors', 'boxBroadphase', 'sleep'] as const) if (opts[k] !== undefined && typeof opts[k] !== 'boolean') throw new Error(`GpuAvbdEngine: GpuEngineOptions.${k} must be a boolean, got ${opts[k]}`);
     try { checkSleepRule(sleepRuleOf(opts)); } catch (e) { throw new Error(`GpuAvbdEngine: GpuEngineOptions.${(e as Error).message}`); }
     if (opts.sleep && this.params.restitution) throw new Error('GpuAvbdEngine: GpuEngineOptions.sleep is not implemented with AvbdParams.restitution yet');
@@ -259,7 +272,7 @@ export class GpuAvbdEngine implements PhysicsEngine {
     this.colorMode = gpuColorMode(this.params);
     if (this.params.colorMode !== undefined) variant.colorMode = this.params.colorMode;
     // Options that size the buffers or shape the dispatch change the work per step (e.g. the broadphase's key bits), so they are part of the variant.
-    for (const k of ['capacity', 'spare', 'pairsPerBody', 'maxRadius', 'colorTail', 'indirectColors', 'tailThreads', 'colorRounds', 'hessian', 'boxBroadphase', 'sleep', 'sleepSpeed', 'sleepSteps', 'sleepDrift', 'wakeSpeed', 'wakeDepth'] as const) if (opts[k] !== undefined) variant[k] = opts[k];
+    for (const k of ['capacity', 'spare', 'pairsPerBody', 'maxRadius', 'colorTail', 'indirectColors', 'tailThreads', 'colorRounds', 'hessian', 'boxBroadphase', 'sleep', 'sleepSpeed', 'sleepSteps', 'sleepDrift', 'wakeSpeed', 'wakeDepth', 'settleSteps', 'settleIterations'] as const) if (opts[k] !== undefined) variant[k] = opts[k];
     this.info = { name: 'avbd-gpu', variant, backend: 'webgpu', integrator: { substeps: 1 } };
   }
 
@@ -475,7 +488,8 @@ export class GpuAvbdEngine implements PhysicsEngine {
       }
       else blasts.push({ blast: checkBlast(ev.blast), count: this.n });
     }
-    const n = this.n, p = this.params;
+    const n = this.n, settling = this.stepIndex < (this.opts.settleSteps ?? 0);
+    const p = settling ? { ...this.params, iterations: this.opts.settleIterations! } : this.params;
     parts.solver.writeParams(n, scene.dt, scene.gravity, scene.ground, p, scene.frictionCombine);
     parts.sleep?.writeParams(n);
     const enc = device.createCommandEncoder();

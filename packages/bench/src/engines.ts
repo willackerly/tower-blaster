@@ -14,7 +14,7 @@ const REGISTRY: Record<string, (o: Options) => PhysicsEngine> = {
   // Same AvbdParams (records too: avbd-gpu:records=2), plus the GpuEngineOptions that size
   // its buffers (capacity, spare, pairsPerBody, maxRadius) or shape its dispatch (colorTail, indirectColors,
   // tailThreads, colorRounds, hessian, boxBroadphase) or turn on per-body sleep (sleep, sleepSpeed, sleepSteps,
-  // sleepDrift, wakeSpeed, wakeDepth), which the engine checks; needs WebGPU,
+  // sleepDrift, wakeSpeed, wakeDepth) or settle at more iterations (settleSteps, settleIterations), which the engine checks; needs WebGPU,
   // so it runs in the browser runner, not the Node CLI.
   'avbd-gpu': (o) => {
     const { params, opts } = gpuEngineArgs(o);
@@ -29,8 +29,8 @@ const REGISTRY: Record<string, (o: Options) => PhysicsEngine> = {
 
 /** An avbd-gpu spec's options split into the engine's AvbdParams and GpuEngineOptions (also used by pnpm bench:probe). */
 export function gpuEngineArgs(o: Options): { params: Partial<AvbdParams>; opts: GpuEngineOptions } {
-  const { capacity, spare, pairsPerBody, maxRadius, colorTail, indirectColors, tailThreads, colorRounds, hessian, boxBroadphase, sleep, sleepSpeed, sleepSteps, sleepDrift, wakeSpeed, wakeDepth, ...params } = o;
-  const opts = Object.fromEntries(Object.entries({ capacity, spare, pairsPerBody, maxRadius, colorTail, indirectColors, tailThreads, colorRounds, hessian, boxBroadphase, sleep, sleepSpeed, sleepSteps, sleepDrift, wakeSpeed, wakeDepth }).filter(([, v]) => v !== undefined)) as GpuEngineOptions;
+  const { capacity, spare, pairsPerBody, maxRadius, colorTail, indirectColors, tailThreads, colorRounds, hessian, boxBroadphase, sleep, sleepSpeed, sleepSteps, sleepDrift, wakeSpeed, wakeDepth, settleSteps, settleIterations, ...params } = o;
+  const opts = Object.fromEntries(Object.entries({ capacity, spare, pairsPerBody, maxRadius, colorTail, indirectColors, tailThreads, colorRounds, hessian, boxBroadphase, sleep, sleepSpeed, sleepSteps, sleepDrift, wakeSpeed, wakeDepth, settleSteps, settleIterations }).filter(([, v]) => v !== undefined)) as GpuEngineOptions;
   return { params: params as Partial<AvbdParams>, opts };
 }
 

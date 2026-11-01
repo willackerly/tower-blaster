@@ -51,9 +51,24 @@ export interface RestCase {
   substeps?: number;
   /** Record the structure every 60 frames (rest-page RestSample; REST_TRACE=1 turns it on for every case). */
   trace?: boolean;
+  /** Per-body sleep (GpuEngineOptions.sleep, and SceneDesc.sleep on the scene), with these rule overrides (E2 step 2b). */
+  sleep?: Pick<GpuEngineOptions, 'sleepSpeed' | 'sleepSteps' | 'sleepDrift' | 'wakeSpeed' | 'wakeDepth'>;
+  /** Solve the first `frames` frames at `iterations` (GpuEngineOptions.settleSteps / settleIterations), then at the case's. */
+  settle?: { frames: number; iterations: number };
+  /** The window's first frame, in place of the mode's (idle: frame 120, or a quarter of the run if shorter; struck: half way). */
+  watchFrom?: number;
+  /** 'hold' (default): the verdict below. 'collapse': the structure must come down instead (its mean height to under a tenth). */
+  expect?: 'hold' | 'collapse';
+  /** With sleep: every structure body is asleep at this frame (a multiple of 60; the case is traced). */
+  asleepBy?: number;
 }
 
-export const caseName = (c: RestCase) => `${c.structure} ${c.n} ${c.mode}, ${c.iterations} it${c.substeps === undefined ? '' : ` x ${c.substeps} substeps`}, gapSlop ${c.gapSlop ? 'on' : 'off'}, ${c.frames} frames`;
+const sleepName = (r: NonNullable<RestCase['sleep']>) => {
+  const kv = Object.entries(r).filter(([, v]) => v !== undefined).map(([k, v]) => `${k} ${v}`);
+  return `, sleep${kv.length ? ` (${kv.join(', ')})` : ''}`;
+};
+
+export const caseName = (c: RestCase) => `${c.structure} ${c.n} ${c.mode}, ${c.iterations} it${c.substeps === undefined ? '' : ` x ${c.substeps} substeps`}, gapSlop ${c.gapSlop ? 'on' : 'off'}${c.settle ? `, settle ${c.settle.frames} frames at ${c.settle.iterations} it` : ''}${c.sleep ? sleepName(c.sleep) : ''}, ${c.frames} frames${c.watchFrom === undefined ? '' : `, window from ${c.watchFrom}`}${c.expect === 'collapse' ? ', must collapse' : ''}`;
 
 const STRIKE_FRAME = 60;
 
@@ -86,9 +101,13 @@ export function restSetup(c: RestCase): { scene: SceneDesc; params: Partial<Avbd
     params = froudeParams(params, 1 / KAPLA_SCALE);
     thick = Math.min(...scene.bodies.map((b) => (b.shape.kind === 'box' ? 2 * Math.min(...b.shape.half) : 2 * b.shape.radius)));
   }
+  if (c.sleep) { scene = { ...scene, sleep: true }; opts = { ...opts, sleep: true, ...c.sleep }; }
+  if (c.asleepBy !== undefined && (!c.sleep || c.asleepBy % 60 !== 0 || c.asleepBy < 60 || c.asleepBy > c.frames)) throw new Error(`${caseName(c)}: asleepBy needs sleep and a multiple of 60 frames within the run`);
+  if (c.watchFrom !== undefined && !(Number.isInteger(c.watchFrom) && c.watchFrom >= 0 && c.watchFrom < c.frames)) throw new Error(`${caseName(c)}: watchFrom must be a frame of the run`);
+  if (c.settle) opts = { ...opts, settleSteps: c.settle.frames * substeps, settleIterations: c.settle.iterations };
   return {
     scene, params, opts,
-    plan: { frames: c.frames, substeps, watchFrom: struck ? Math.floor(c.frames / 2) : Math.min(120, Math.floor(c.frames / 4)), structure: scene.bodies.length, tol: 0.1 * thick, sampleEvery: 60, trace: c.trace ?? false },
+    plan: { frames: c.frames, substeps, watchFrom: c.watchFrom ?? (struck ? Math.floor(c.frames / 2) : Math.min(120, Math.floor(c.frames / 4))), structure: scene.bodies.length, tol: 0.1 * thick, sampleEvery: 60, trace: (c.trace ?? false) || c.asleepBy !== undefined },
   };
 }
 
@@ -125,12 +144,12 @@ export function restSuite(cases: RestCase[]): void {
       const { scene, params, opts, plan } = restSetup(process.env.REST_TRACE === '1' ? { ...c, trace: true } : c);
       const r: RestResult = await gpu.page.evaluate(([s, p, o, pl]) => (window as unknown as { __rest: typeof import('./rest-page.ts') }).__rest.restRun(s, p, o, pl), [scene, params, opts, plan] as const);
       const f = (x: number) => x.toExponential(2);
-      const line = `rest: ${caseName(c)} (${r.adapter}): window from frame ${plan.watchFrom}, max move ${f(r.maxDisp)} (tol ${plan.tol.toFixed(3)}), ${r.moved} moved; speed end ${f(r.endSpeed)} window max ${f(r.windowSpeed)}; top ${r.topFrom.toFixed(3)} -> ${r.topEnd.toFixed(3)}; mean y ${r.meanY.map((y) => y.toFixed(3)).join(' -> ')}; limits ${limitsHit(r.health).length}; ${(r.wallMs / 1000).toFixed(1)} s, ${r.stepsPerSecond.toFixed(0)} steps/s`;
+      const line = `rest: ${caseName(c)} (${r.adapter}): window from frame ${plan.watchFrom}, max move ${f(r.maxDisp)} (tol ${plan.tol.toFixed(3)}), ${r.moved} moved; speed end ${f(r.endSpeed)} window max ${f(r.windowSpeed)};${c.sleep ? ` asleep at end ${r.asleep}, woken ${r.woken};` : ''} creep to window max ${f(r.creep.max)} p99 ${f(r.creep.p99)}; top ${r.topFrom.toFixed(3)} -> ${r.topEnd.toFixed(3)}; mean y ${r.meanY.map((y) => y.toFixed(3)).join(' -> ')}; limits ${limitsHit(r.health).length}; ${(r.wallMs / 1000).toFixed(1)} s, ${r.stepsPerSecond.toFixed(0)} steps/s`;
       const v = (p: number[]) => `(${p.map((x) => x.toFixed(2)).join(', ')})`;
       const lines = [
         line,
         ...(r.movers.length ? [`rest-movers: ${caseName(c)}: ${r.movers.map((m) => `#${m.body} ${f(m.disp)} ${v(m.from)} -> ${v(m.end)}`).join('; ')}`] : []),
-        ...r.trace.map((s: RestSample) => `rest-trace: ${caseName(c)}: frame ${s.frame} max speed ${f(s.maxSpeed)} fast ${s.fast} mean y ${s.meanY.toFixed(3)} top ${s.top.toFixed(3)}`),
+        ...r.trace.map((s: RestSample) => `rest-trace: ${caseName(c)}: frame ${s.frame} max speed ${f(s.maxSpeed)} fast ${s.fast}${c.sleep ? ` asleep ${s.asleep}` : ''} mean y ${s.meanY.toFixed(3)} top ${s.top.toFixed(3)}`),
       ];
       for (const l of lines) console.log(l);
       if (process.env.REST_LOG) appendFileSync(process.env.REST_LOG, `${lines.join('\n')}\n`);
@@ -143,6 +162,11 @@ export function restSuite(cases: RestCase[]): void {
       expect(r.movers.length).toBe(Math.min(r.moved, 8));
       expect(r.error).toBeNull();
       expect(limitsHit(r.health).map((l) => l.message)).toEqual([]);
+      if (c.asleepBy !== undefined) expect(r.trace.find((t) => t.frame === c.asleepBy)!.asleep, `asleep at frame ${c.asleepBy}`).toBe(plan.structure);
+      if (c.expect === 'collapse') {
+        expect(r.meanY[2], `mean height ${r.meanY[0]} -> ${r.meanY[2]}`).toBeLessThan(0.1 * r.meanY[0]);
+        return;
+      }
       expect({ moved: r.moved, maxDispUnderTol: r.maxDisp <= plan.tol, topHeld: Math.abs(r.topEnd - r.topFrom) <= plan.tol }).toEqual({ moved: 0, maxDispUnderTol: true, topHeld: true });
     });
   });
