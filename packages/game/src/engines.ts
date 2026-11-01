@@ -4,7 +4,7 @@
 // are sized at init from these options).
 import { RapierEngine } from '@tb/adapter-rapier';
 import type { PhysicsEngine, ShapeDesc } from '@tb/engine-api';
-import { AVBD_GAP_SLOP, AVBD_ITERATIONS, ammoBody, type CompiledLevel, type DriverOptions } from '@tb/keystone';
+import { AVBD_GAP_SLOP, AVBD_ITERATIONS, ammoBody, type CompiledLevel, type DriverOptions, physicsOf } from '@tb/keystone';
 import { GpuAvbdEngine, type GpuEngineOptions } from '@tb/physics-gpu';
 
 export const ENGINES = ['rapier', 'gpu'] as const;
@@ -51,7 +51,29 @@ export function gpuOptions(c: CompiledLevel): Required<Pick<GpuEngineOptions, 'c
  */
 export const driverOptions = (kind: EngineKind): DriverOptions => ({ pipelined: kind === 'gpu' });
 
+/** The GPU solver's params (physics-ref AvbdParams, as GpuAvbdEngine takes them). */
+export type GpuParams = NonNullable<ConstructorParameters<typeof GpuAvbdEngine>[0]>;
+
+/**
+ * The GPU solver's params for a level: its physics block (LevelDef.physics; absent, GPU_PARAMS), and
+ * the restitution pass on when the block sets a bounce (the compiled scene already carries the e).
+ */
+export function gpuParams(c: CompiledLevel): GpuParams {
+  const p = physicsOf(c.def);
+  return { iterations: p.iterations, gapSlop: p.gapSlop, ...(p.bounce !== null ? { restitution: true } : {}) };
+}
+
+/** gpuOptions plus the level's own pair buffer when its physics block sets one. */
+export function gpuEngineOptions(c: CompiledLevel): GpuEngineOptions {
+  const p = physicsOf(c.def);
+  return { ...gpuOptions(c), ...(p.pairsPerBody !== undefined ? { pairsPerBody: p.pairsPerBody } : {}) };
+}
+
+/**
+ * The engine a level plays on. Rapier takes the scene as compiled (Bounce's e is on its bodies and
+ * ground); its own iterations are not AVBD's, so the block's iterations and slop are the GPU's only.
+ */
 export function makeEngine(kind: EngineKind, c: CompiledLevel, device?: GPUDevice): PhysicsEngine {
   if (kind === 'rapier') return new RapierEngine();
-  return new GpuAvbdEngine({ ...GPU_PARAMS }, { device, ...gpuOptions(c) });
+  return new GpuAvbdEngine(gpuParams(c), { device, ...gpuEngineOptions(c) });
 }

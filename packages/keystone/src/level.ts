@@ -83,6 +83,77 @@ export interface LevelDef {
   stars?: StarsDef;
   /** Outcome levels: end at the first settle where the objective is met, as par levels do (URL key keystone.autobank). Default: end at a bank or an empty rack. */
   autobank?: boolean;
+  /** The physics the level plays at (default Keystone's: PHYSICS_DEFAULTS). Part of the level hash, so stars cast at one setting never show at another. */
+  physics?: PhysicsBlock;
+  /**
+   * Made from an authored level by overrides (URL keys keystone.*): it plays, but cast stars do not
+   * apply ("custom: stars not recorded"). Not part of the hash: the overrides already are.
+   */
+  custom?: boolean;
+}
+
+/** A level's physics settings (spectacle-mode.md, section 8). Absent fields take PHYSICS_DEFAULTS. */
+export interface PhysicsBlock {
+  /** AVBD iterations (GPU solver and reference). */
+  iterations?: number;
+  /** Loaded-gap slop, m (0: off). */
+  gapSlop?: number;
+  /** Restitution e for the structure and the ground, with the engine's restitution pass on; null: off. */
+  bounce?: number | null;
+  /** The GPU engine's pair buffer per body; absent: the game's sizing rule. */
+  pairsPerBody?: number;
+  /** Steps run after init before play starts. */
+  presettle?: number;
+}
+
+/**
+ * Keystone's settings, as every par line is pinned at: 40 iterations, 3e-5 m slop, no Bounce, 300
+ * pre-settle steps (driver.ts AVBD_ITERATIONS, AVBD_GAP_SLOP, PRESETTLE_STEPS give the reasons).
+ */
+export const PHYSICS_DEFAULTS = { iterations: 40, gapSlop: 3e-5, bounce: null, presettle: 300 } as const satisfies PhysicsBlock;
+export type ResolvedPhysics = { iterations: number; gapSlop: number; bounce: number | null; presettle: number; pairsPerBody?: number };
+
+export function physicsOf(d: LevelDef): ResolvedPhysics {
+  const p = d.physics ?? {};
+  return {
+    iterations: p.iterations ?? PHYSICS_DEFAULTS.iterations, gapSlop: p.gapSlop ?? PHYSICS_DEFAULTS.gapSlop,
+    bounce: p.bounce === undefined ? PHYSICS_DEFAULTS.bounce : p.bounce, presettle: p.presettle ?? PHYSICS_DEFAULTS.presettle,
+    ...(p.pairsPerBody !== undefined ? { pairsPerBody: p.pairsPerBody } : {}),
+  };
+}
+
+/** Throws unless every physics field is in range, naming it. */
+export function checkPhysics(p: PhysicsBlock, where = 'physics'): void {
+  const int = (v: number | undefined, k: string, lo: number, hi: number) => {
+    if (v !== undefined && !(Number.isInteger(v) && v >= lo && v <= hi)) throw new Error(`${where}.${k} must be a whole number from ${lo} to ${hi}: ${v}`);
+  };
+  int(p.iterations, 'iterations', 1, 200);
+  int(p.pairsPerBody, 'pairsPerBody', 1, 256);
+  int(p.presettle, 'presettle', 0, 6000);
+  if (p.gapSlop !== undefined && !(Number.isFinite(p.gapSlop) && p.gapSlop >= 0 && p.gapSlop <= 0.01)) throw new Error(`${where}.gapSlop must be from 0 to 0.01 m: ${p.gapSlop}`);
+  if (p.bounce !== undefined && p.bounce !== null && !(p.bounce >= 0 && p.bounce <= 1)) throw new Error(`${where}.bounce must be from 0 to 1, or null for off: ${p.bounce}`);
+}
+
+/** The physics block with fields at their defaults left out (absent when nothing is left): what the hash sees. */
+function physicsKey(p: PhysicsBlock | undefined): PhysicsBlock | undefined {
+  if (!p) return undefined;
+  const out: PhysicsBlock = {};
+  if (p.iterations !== undefined && p.iterations !== PHYSICS_DEFAULTS.iterations) out.iterations = p.iterations;
+  if (p.gapSlop !== undefined && p.gapSlop !== PHYSICS_DEFAULTS.gapSlop) out.gapSlop = p.gapSlop;
+  if (p.bounce !== undefined && p.bounce !== PHYSICS_DEFAULTS.bounce) out.bounce = p.bounce;
+  if (p.presettle !== undefined && p.presettle !== PHYSICS_DEFAULTS.presettle) out.presettle = p.presettle;
+  if (p.pairsPerBody !== undefined) out.pairsPerBody = p.pairsPerBody;
+  return Object.keys(out).length ? out : undefined;
+}
+
+/**
+ * The level's cast stars if they apply to this compiled level: none on a custom run, and none when the
+ * cast recorded another level hash (the level, its physics or its rules changed since).
+ */
+export function castStars(c: CompiledLevel): StarsDef | undefined {
+  const s = c.def.stars;
+  if (!s || c.def.custom || (s.hash !== undefined && s.hash !== c.hash)) return undefined;
+  return s;
 }
 
 export const scoringOf = (d: LevelDef): Scoring => d.scoring ?? 'par';
@@ -138,7 +209,9 @@ export function hashString(s: string): string {
 }
 
 export function compileLevel(def: LevelDef): CompiledLevel {
+  if (def.physics) checkPhysics(def.physics);
   const h = unitOf(def), p = pitchOf(def) * h;
+  const bounce = physicsOf(def).bounce;
   const bodies: BodyDesc[] = [];
   const roles: number[] = [], mats: number[] = [], parts: number[] = [];
   const add = (b: BodyDesc, role: Role, material: MaterialName, part: number) => { bodies.push(b); roles.push(ROLE_ID[role]); mats.push(materialId(material)); parts.push(part); };
@@ -186,15 +259,20 @@ export function compileLevel(def: LevelDef): CompiledLevel {
     id: `keystone:${def.id}`, params: { version: def.version }, seed: 0, gravity: [0, -GRAVITY, 0], dt: 1 / 60,
     // 'min' lets one slick face make a slip plane: ice on plaster is ice, not
     // the 0.325 the default average gives (docs/game/findings.md, section 3).
-    ground: { y: 0, friction: MATERIALS[0].friction }, sleep: true, frictionCombine: 'min', bodies, inputs: [],
+    ground: { y: 0, friction: MATERIALS[0].friction, ...(bounce !== null ? { restitution: bounce } : {}) }, sleep: true, frictionCombine: 'min', bodies, inputs: [],
   };
+  // Bounce: the structure and the ground at e (the engine's restitution pass is turned on from the same block).
+  if (bounce !== null) for (const b of bodies) b.restitution = bounce;
   const lot = { min: [def.lot.min[0] * p, def.lot.min[1] * p] as [number, number], max: [def.lot.max[0] * p, def.lot.max[1] * p] as [number, number] };
   const frame: ShotFrame = { unit: h, pitch: pitchOf(def), centre: [(lot.min[0] + lot.max[0]) / 2, (lot.min[1] + lot.max[1]) / 2], launcher: def.launcher };
   // Solutions don't change the scene, and the stars are cast against the hash (StarsDef.hash).
-  // scoring 'par' and autobank false are the defaults, so writing them out names the same level.
-  const { solutions: _omit, stars: _stars, ...geometry } = def;
+  // scoring 'par', autobank false and physics at its defaults are the defaults, so writing them out names the same level;
+  // custom marks overrides the hash already holds.
+  const { solutions: _omit, stars: _stars, custom: _custom, ...geometry } = def;
   if (geometry.scoring === 'par') delete geometry.scoring;
   if (geometry.autobank === false) delete geometry.autobank;
+  const physics = physicsKey(geometry.physics);
+  if (physics) geometry.physics = physics; else delete geometry.physics;
   // A scenario part names its bodies by (id, params, seed): the bodies themselves join the hash, so a
   // change to the scenario's builder is a different level too. Levels without one hash as before.
   const built = def.parts.some((pt) => pt.kind === 'scenario') ? `|${bodiesDigest(bodies)}` : '';

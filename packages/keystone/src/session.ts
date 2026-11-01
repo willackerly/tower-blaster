@@ -4,7 +4,7 @@
 // renderer, audio and pacing, which never flow back into the rules.
 import { massOf, type SpawnEvent, type Vec3 } from '@tb/engine-api';
 import { GRAVITY } from './materials.ts';
-import { type CompiledLevel, type Scoring, scoringOf } from './level.ts';
+import { castStars, type CompiledLevel, type Scoring, scoringOf } from './level.ts';
 import { collapseFraction, floorPotential_mJ, homePotential_mJ, homeSkyline, objectiveMet, type OutcomeFacts, outcomeScore } from './outcome.ts';
 import { crownDown, heritageBroken, leverage, levelScore, type LevelScore, type Observation, type Reductions, type SettleState, settleUpdate, type ShotOutcome, skyline, tier } from './rules.ts';
 import { type AmmoKind, ammoKE, type Shot, shotToSpawn } from './shots.ts';
@@ -226,7 +226,7 @@ export class Session {
 
   private end(step: number): Feedback {
     this.phase = this.objectiveDone ? 'cleared' : 'failed';
-    this.score = outcomeScore(this.outcomeFacts(), this.level.def.stars);
+    this.score = outcomeScore(this.outcomeFacts(), castStars(this.level), this.level.def.stars?.metric);
     return { t: 'levelEnd', step, cleared: this.objectiveDone, score: this.score };
   }
 }

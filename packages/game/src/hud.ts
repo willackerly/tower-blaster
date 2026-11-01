@@ -55,6 +55,9 @@ export function objectiveText(o: Objective): string {
   }
 }
 
+/** Shown on a level made by overrides (LevelDef.custom). */
+export const CUSTOM_NOTE = 'custom: stars not recorded';
+
 /** Outcome levels: the Bank button (key B), shown while a bank is possible. */
 export const BANK_BUTTON = '<button data-act="bank" class="bank"><kbd>B</kbd> Bank</button>';
 
@@ -72,6 +75,7 @@ export function hudHtml(s: HudState): string {
   const crowns = !outcome || s.crownsTotal ? `<div class="row"><span>Crowns</span><span class="crowns">${s.crownsDown} / ${s.crownsTotal}</span></div>` : '';
   return `
     <div class="title">W${d.world}-${esc(d.id.replace(/^L/, ''))} · ${esc(d.name)}</div>
+    ${d.custom ? `<div class="small custom">${CUSTOM_NOTE}</div>` : ''}
     ${head}
     ${crowns}
     ${heritage}
@@ -101,6 +105,7 @@ export function resultHtml(level: LevelDef, score: LevelScore | null, strokes: n
   const after = 0.15 + 0.22 * score.lines.length;
   return `
     <div class="name">${esc(level.name)}</div>
+    ${level.custom ? `<div class="sub custom">${CUSTOM_NOTE}</div>` : ''}
     <div class="sub">${shotsText}${'outcome' in score ? ` · ${pct((score as { outcome: { collapse: number } }).outcome.collapse)} down` : ''} · leverage ${fmtLeverage(score.leverage)} (${tierName(tier(score.leverage))})</div>
     ${lines}
     <div class="line total" style="animation-delay:${after}s"><span>Total</span><span>${fmtPoints(score.total)}</span></div>

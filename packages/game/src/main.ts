@@ -7,7 +7,7 @@
 import { LEVELS } from '@tb/keystone';
 import { createDevice } from '@tb/gpu';
 import { lookByName, parseRealOptions, Renderer, SnapshotSource } from '@tb/render';
-import { parseGameParams, withRules } from './params.ts';
+import { onEngine, parseGameParams, withRules } from './params.ts';
 import { type GameHandle, newGameHandle, playKeystone, playLine } from './play.ts';
 import { GAME_HELP, installGameStyles } from './ui.ts';
 
@@ -32,7 +32,7 @@ function fail(e: unknown) {
 async function main() {
   const q = new URLSearchParams(location.search);
   const { level, rules, engine, feel, look, shots, offscreen } = parseGameParams(q);
-  const levels = LEVELS.map((d) => withRules(d, rules));
+  const levels = LEVELS.map((d) => onEngine(withRules(d, rules), engine));
   const start = levels.findIndex((d) => d.id === level.id);
   handle.feel = feel;
   handle.engine = engine;

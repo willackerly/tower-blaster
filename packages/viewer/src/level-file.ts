@@ -6,7 +6,7 @@
 // Whether the level is any good (overlaps, unsupported bodies, tunnelling ammo)
 // is validateLevel's question; the panel shows its issues without refusing.
 import {
-  AMMO_KINDS, type AmmoKind, checkShot, compileLevel, type CourseOverride, type Issue, type LevelDef, MATERIALS, type MaterialName, type Part, type Role, type RoleRule, ROLES, type ScenarioPart, SCORINGS, type Scoring, type Shot,
+  AMMO_KINDS, type AmmoKind, checkPhysics, checkShot, compileLevel, type CourseOverride, type Issue, type LevelDef, MATERIALS, type MaterialName, type Part, type PhysicsBlock, type Role, type RoleRule, ROLES, type ScenarioPart, SCORINGS, type Scoring, type Shot,
   STAR_METRICS, type StarMetric, type StarsDef, validateLevel,
 } from '@tb/keystone';
 import { SCENARIOS } from '@tb/scenarios';
@@ -21,7 +21,7 @@ const MATERIAL_NAMES = MATERIALS.map((m) => m.name) as readonly string[];
 /** The LevelDef a JSON value describes, or an error saying where it is wrong. */
 export function parseLevelDef(v: unknown, where = 'level'): LevelDef {
   const o = object(v, where);
-  only(o, ['format', 'id', 'name', 'version', 'world', 'unit', 'gap', 'parts', 'lot', 'crownLine', 'objective', 'par', 'rack', 'launcher', 'lGold', 'solutions', 'scoring', 'stars'], where);
+  only(o, ['format', 'id', 'name', 'version', 'world', 'unit', 'gap', 'parts', 'lot', 'crownLine', 'objective', 'par', 'rack', 'launcher', 'lGold', 'solutions', 'scoring', 'stars', 'autobank', 'physics', 'custom'], where);
   if (o.format !== undefined && o.format !== LEVEL_FILE_FORMAT) throw new Error(`${where}.format should be "${LEVEL_FILE_FORMAT}"`);
   const id = str(o.id, `${where}.id`);
   if (!/^[\w-]{1,32}$/.test(id)) throw new Error(`${where}.id must be 1 to 32 letters, digits, - or _`);
@@ -46,6 +46,9 @@ export function parseLevelDef(v: unknown, where = 'level'): LevelDef {
   }
   if (o.scoring !== undefined) def.scoring = oneOf(o.scoring, SCORINGS, `${where}.scoring`) as Scoring;
   if (o.stars !== undefined) def.stars = stars(o.stars, `${where}.stars`);
+  if (o.autobank !== undefined) def.autobank = bool(o.autobank, `${where}.autobank`);
+  if (o.custom !== undefined) def.custom = bool(o.custom, `${where}.custom`);
+  if (o.physics !== undefined) def.physics = physics(o.physics, `${where}.physics`);
   return def;
 }
 
@@ -58,6 +61,18 @@ function stars(v: unknown, where: string): StarsDef {
   for (const k of ['castOn', 'engine', 'hash'] as const) if (o[k] !== undefined) s[k] = str(o[k], `${where}.${k}`);
   for (const k of ['n', 'seed'] as const) if (o[k] !== undefined) s[k] = int(o[k], `${where}.${k}`);
   return s;
+}
+
+/** A level's physics block (@tb/keystone PhysicsBlock), ranges as checkPhysics. */
+function physics(v: unknown, where: string): PhysicsBlock {
+  const o = object(v, where);
+  only(o, ['iterations', 'gapSlop', 'bounce', 'pairsPerBody', 'presettle'], where);
+  const p: PhysicsBlock = {};
+  for (const k of ['iterations', 'pairsPerBody', 'presettle'] as const) if (o[k] !== undefined) p[k] = int(o[k], `${where}.${k}`);
+  if (o.gapSlop !== undefined) p.gapSlop = num(o.gapSlop, `${where}.gapSlop`);
+  if (o.bounce !== undefined) p.bounce = o.bounce === null ? null : num(o.bounce, `${where}.bounce`);
+  checkPhysics(p, where);
+  return p;
 }
 
 function part(v: unknown, where: string): Part {

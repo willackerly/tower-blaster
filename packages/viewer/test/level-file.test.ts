@@ -35,6 +35,16 @@ describe('level files', () => {
     expect(bad((d) => { d.stars.n = 1.5; })).toThrow(/level.stars.n must be a whole number/);
   });
 
+  it('reads back the physics block, autobank and custom, and refuses values out of range', () => {
+    const def: LevelDef = { ...structuredClone(L2), scoring: 'outcome', autobank: true, custom: true, physics: { iterations: 20, gapSlop: 0, bounce: null, pairsPerBody: 24, presettle: 120 } };
+    expect(parseLevelDef(JSON.parse(levelJson(def)))).toEqual(def);
+    expect(parseLevelDef(JSON.parse(levelJson({ ...def, physics: { bounce: 0.4 } }))).physics).toEqual({ bounce: 0.4 });
+    const bad = (physics: unknown) => () => parseLevelDef({ ...structuredClone(L2), physics });
+    expect(bad({ iterations: 0 })).toThrow(/level.physics.iterations must be a whole number from 1 to 200/);
+    expect(bad({ bounce: 'yes' })).toThrow(/level.physics.bounce must be a number/);
+    expect(bad({ substeps: 2 })).toThrow(/level.physics: unknown key substeps/);
+  });
+
   it('reads back a scenario part with its role rules, and refuses a bad one, saying where', () => {
     const city: LevelDef = {
       ...structuredClone(L2), id: 'city', scoring: 'outcome', objective: { kind: 'collapse', min: 0.3 },
