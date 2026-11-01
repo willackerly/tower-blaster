@@ -4,7 +4,7 @@
 // hash pins the exact scene a recorded solution was made against.
 import { type BodyDesc, massOf, type SceneDesc, type Vec3 } from '@tb/engine-api';
 import { DEFAULT_GAP, DEFAULT_UNIT, encodeTag, GRAVITY, MATERIALS, materialId, type MaterialName, type Role, ROLES } from './materials.ts';
-import { peOf_mJ } from './rules.ts';
+import { peOf_mJ, SETTLE_RULES, type SettleRule } from './rules.ts';
 import { type Arm, levelArm, rackArms } from './arsenal.ts';
 import { isRackItem, itemRef, type LevelWeapon, RACK_ITEM_NAMES, rackBodies, type RackItem, speedOf, WEAPON_KEY } from './rack.ts';
 import { type ScenarioPart, scenarioBodies, scenarioKey } from './scenario-part.ts';
@@ -97,6 +97,12 @@ export interface LevelDef {
   stars?: StarsDef;
   /** Outcome levels: end at the first settle where the objective is met, as par levels do (URL key keystone.autobank). Default: end at a bank or an empty rack. */
   autobank?: boolean;
+  /**
+   * How a shot settles (rules.ts SETTLE_RULES; URL key keystone.settle). Default by scoring (settleOf):
+   * v1 for par levels, whose lines are pinned on it, and v2 for outcome levels, whose big structures
+   * keep a few blocks rocking long after the collapse is over. Part of the hash when not the default.
+   */
+  settle?: SettleRule;
   /** The physics the level plays at (default Keystone's: PHYSICS_DEFAULTS). Part of the level hash, so stars cast at one setting never show at another. */
   physics?: PhysicsBlock;
   /**
@@ -171,6 +177,13 @@ export function castStars(c: CompiledLevel): StarsDef | undefined {
 }
 
 export const scoringOf = (d: LevelDef): Scoring => d.scoring ?? 'par';
+/** The settle rule a level plays by: its own, else v1 for par scoring and v2 for outcome scoring. */
+export const settleOf = (d: LevelDef): SettleRule => d.settle ?? (scoringOf(d) === 'outcome' ? 'v2' : 'v1');
+/** Throws unless v is a settle rule, naming `where`. */
+export function checkSettle(v: unknown, where = 'settle'): SettleRule {
+  if (!(SETTLE_RULES as readonly unknown[]).includes(v)) throw new Error(`${where} must be ${SETTLE_RULES.join(' or ')}: ${String(v)}`);
+  return v as SettleRule;
+}
 
 export const ROLE_ID: Record<Role, number> = { plain: 0, crown: 1, heritage: 2 };
 export const MAX_RACK = 8;
@@ -233,6 +246,7 @@ export function hashString(s: string): string {
 
 export function compileLevel(def: LevelDef): CompiledLevel {
   if (def.physics) checkPhysics(def.physics);
+  if (def.settle !== undefined) checkSettle(def.settle);
   const h = unitOf(def), p = pitchOf(def) * h;
   const bounce = physicsOf(def).bounce;
   const bodies: BodyDesc[] = [];
@@ -289,11 +303,13 @@ export function compileLevel(def: LevelDef): CompiledLevel {
   const lot = { min: [def.lot.min[0] * p, def.lot.min[1] * p] as [number, number], max: [def.lot.max[0] * p, def.lot.max[1] * p] as [number, number] };
   const frame: ShotFrame = { unit: h, pitch: pitchOf(def), centre: [(lot.min[0] + lot.max[0]) / 2, (lot.min[1] + lot.max[1]) / 2], launcher: def.launcher };
   // Solutions don't change the scene, and the stars are cast against the hash (StarsDef.hash).
-  // scoring 'par', autobank false and physics at its defaults are the defaults, so writing them out names the same level;
+  // scoring 'par', autobank false, the scoring's settle rule and physics at its defaults are the defaults, so writing them out names the same level;
   // custom marks overrides the hash already holds.
   const { solutions: _omit, stars: _stars, custom: _custom, ...geometry } = def;
   if (geometry.scoring === 'par') delete geometry.scoring;
   if (geometry.autobank === false) delete geometry.autobank;
+  // The scoring's own settle rule hashes as absent: levels hash as before settle v2 existed.
+  if (geometry.settle !== undefined && geometry.settle === settleOf({ ...def, settle: undefined })) delete geometry.settle;
   const physics = physicsKey(geometry.physics);
   if (physics) geometry.physics = physics; else delete geometry.physics;
   geometry.parts = geometry.parts.map((pt) => (pt.kind === 'scenario' ? scenarioKey(pt) : pt));

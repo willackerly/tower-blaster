@@ -247,6 +247,14 @@ Each row is one PR with its tests, `pnpm check` green, merged on green CI. Proof
 | G4.3 | Collapse-front camera from `movingBox` | `game/test/camera.test.ts`: the frame contains every moving body and eases back at settle; renders reviewed. |
 | G4.4 | Metal pacing bench at 10k (Mac idle) | a bench file in project files: frame p95 at most 33 ms, physics at least 0.95x real time at 60 Hz at each slice level's settings, or the level's declared slow motion. |
 
+**As built (G4.1, 2026-11-01).** Where the code differs from the plan above:
+
+- **Where the rule lives.** `settle` is a top-level `LevelDef` field beside `scoring` and `autobank`, not in the physics block: it is a rule (when a shot ends), not an engine setting, and its default depends on the scoring. `settleOf(def)`: the level's own, else v1 for par scoring and v2 for outcome scoring. The scoring's own rule hashes as absent, so every level hashes as before; the other rule is a different level (custom from the URL: `keystone.settle`, scene file `rules.settle`, level file `settle`).
+- **v2 also waits for live spawned bodies** (`Reductions.ammoSpeed`, the fastest awake spawned body that `ammoLive` keeps, under `QUIET_SPEED`). Without it a long shot still in flight at `SETTLE_MIN + SETTLE_QUIET` steps would settle with the ball in the air: a ball moves no structure body until it lands. Spin is not counted for spawned bodies, as in v1.
+- **Caps.** v1 `SETTLE_CAP` 600 as before; v2 `SETTLE_CAP_V2` 1,800, which also bounds a pending weapon's hold. The cap is per rule, not per size tier: chamber levels play v1 and hall and city levels v2, so the two coincide; a level wanting the other cap picks the other rule.
+- **Tests.** `keystone/test/rules.test.ts` (allowance table; k stragglers at the allowance settle and k + 1 never do, at 50, 2,500 and 10,000 bodies; a step over the allowance restarts the quiet run; live ammo holds v2; caps; v1 and v2 disagree on crafted states in both directions; each of five mutants of the rule fails a case) and `session.test.ts` (defaults by scoring; a lone creeping block holds v1 to 600 while v2 lets it go after the quiet run; a pending weapon holds v2 to 1,800; hashes). Par tests are unchanged: they play v1.
+- **Probe.** `viewer/test/e2e-pacing-probe.test.ts` (real GPU only, `TB_CHANNEL=chrome`; `TB_PROBE_SMALL=1` checks it on tiny scenes on SwiftShader) traces `nMoving`, step and frame times after a cannonball into the 10k S4 city and a grenade into the 10k S14 blocks, at 40 and 20 iterations, so v2's allowance is checked against Metal before big levels rely on it. The game handle now records `timing.moving` (nMoving per live step) and `timing.frameMs` (frame intervals while a shot runs).
+
 ### G5: three to five big levels (needs G2, G3, G4, F1, F3; E4 soft)
 
 | Step | Content | Proof |

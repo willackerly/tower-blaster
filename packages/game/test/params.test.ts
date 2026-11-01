@@ -3,7 +3,7 @@
 import { describe, expect, it } from 'vitest';
 import { L1, L3, type Shot, writeShots } from '@tb/keystone';
 import { compileLevel } from '@tb/keystone';
-import { GAME_LOOK, levelRules, onEngine, parseGameParams, withRules } from '../src/params.ts';
+import { GAME_LOOK, levelRules, onEngine, parseGameParams, withRules, writeLevelRules } from '../src/params.ts';
 
 const parse = (search: string) => parseGameParams(new URLSearchParams(search));
 const par = L1.solutions!.par as Shot[];
@@ -64,6 +64,17 @@ describe('rule overrides', () => {
     expect(compileLevel(parse('?keystone.scoring=par&keystone.autobank=0').level).hash).toBe(compileLevel(L1).hash);
     expect(withRules(L1, {})).toBe(L1);
     expect(levelRules(new URLSearchParams('?keystone.autobank=0'))).toEqual({ autobank: false });
+  });
+  it('keystone.settle picks the settle rule: the scoring\'s own is the same level, the other a custom one', () => {
+    const p = parse('?level=L1&keystone.settle=v2');
+    expect(p.rules).toEqual({ settle: 'v2' });
+    expect(p.level).toEqual({ ...L1, settle: 'v2', custom: true });
+    expect(compileLevel(p.level).hash).not.toBe(compileLevel(L1).hash);
+    expect(compileLevel(parse('?level=L1&keystone.settle=v1').level).hash).toBe(compileLevel(L1).hash);
+    const q = new URLSearchParams();
+    writeLevelRules({ settle: 'v1' }, q);
+    expect(levelRules(q)).toEqual({ settle: 'v1' });
+    expect(() => parse('?keystone.settle=v3')).toThrow(/keystone.settle must be v1 or v2: v3/);
   });
   it('the physics keys set the level\'s physics block; off turns Bounce off', () => {
     const p = parse('?level=L2&keystone.iterations=20&keystone.gapSlop=0&keystone.bounce=0.4');

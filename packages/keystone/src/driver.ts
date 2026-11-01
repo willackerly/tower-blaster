@@ -4,7 +4,7 @@
 import { type BodyDesc, type InputEvent, type PhysicsEngine, type Snapshot, type SpawnEvent, spawnedBodies } from '@tb/engine-api';
 import { Arsenal } from './arsenal.ts';
 import { type CompiledLevel, physicsOf } from './level.ts';
-import { CpuObserver } from './rules.ts';
+import { CpuObserver, type Observation } from './rules.ts';
 import { type Feedback, Session } from './session.ts';
 import type { Shot } from './shots.ts';
 
@@ -57,6 +57,8 @@ export class Driver {
    * engine.stepIndex it would not: one step later pipelined). keystone-lab driver-step.test.ts.
    */
   snapshotStep = 0;
+  /** The rules' view of `snapshot` (null before the first step after reset): its reductions (nMoving, movingBox) feed pacing and the camera. */
+  observed: Observation | null = null;
   /** Every event pushed besides the shots' spawns (push), in push order. */
   readonly pushed: InputEvent[] = [];
   private observer!: CpuObserver;
@@ -93,6 +95,7 @@ export class Driver {
     this.descs = [...this.level.scene.bodies];
     this.arsenal = new Arsenal(this.level, this.engine.info.integrator?.substeps ?? 1);
     this.blastsDue = [];
+    this.observed = null;
   }
 
   /** Notes spawns in the engine's numbering order: by step, after those due at the same step. */
@@ -179,7 +182,8 @@ export class Driver {
       this.snapshot = await this.engine.snapshot();
       this.snapshotStep = this.engine.stepIndex;
       const out: Feedback[] = [], hold = this.arm(out);
-      return [...out, ...this.session.observe(this.observer.observe(this.snapshot, this.engine.stepIndex, this.session.watchIdx), hold)];
+      this.observed = this.observer.observe(this.snapshot, this.engine.stepIndex, this.session.watchIdx);
+      return [...out, ...this.session.observe(this.observed, hold)];
     }
     if (!this.ahead) {
       await this.engine.step();
@@ -192,7 +196,8 @@ export class Driver {
     this.snapshotStep = n;
     this.ahead = this.read();
     const out: Feedback[] = [], hold = this.arm(out);
-    const feedback = [...out, ...this.session.observe(this.observer.observe(this.snapshot, n, this.session.watchIdx), hold)];
+    this.observed = this.observer.observe(this.snapshot, n, this.session.watchIdx);
+    const feedback = [...out, ...this.session.observe(this.observed, hold)];
     if (this.session.phase !== 'running') await this.drain();
     return feedback;
   }

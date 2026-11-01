@@ -3,7 +3,7 @@ import { emptySnapshot, type Snapshot } from '@tb/engine-api';
 import { quatFromAxisAngle } from '@tb/geom';
 import {
   aabbTop, baselineOf, compileLevel, crownDown, DEFAULT_GOLD, GRAVITY, HEIGHT_BINS, heritageBroken, type LevelDef, levelScore, leverage, peOf_mJ,
-  potential_mJ, reduceCpu, type Reductions, SETTLE_CAP, SETTLE_MIN, SETTLE_QUIET, settleUpdate, type ShotOutcome, skyline, stampOf, tier,
+  potential_mJ, quietUnder, reduceCpu, type Reductions, SETTLE_CAP, SETTLE_CAP_V2, SETTLE_MIN, SETTLE_QUIET, settleAllowance, settleCap, type SettleRule, settleUpdate, type ShotOutcome, skyline, stampOf, tier,
 } from '@tb/keystone';
 
 const def: LevelDef = {
@@ -88,7 +88,7 @@ describe('reductions', () => {
 });
 
 describe('settling', () => {
-  const red = (step: number, speed: number, awake = 1): Reductions => ({ step, nAwake: awake, maxSpeed: speed, maxAngSpeed: 0, pe_mJ: 0, displaced: 0, outOfLot: 0, heightHist: new Uint32Array(64), impacts: new Uint32Array(48), nMoving: 0, movingBox: new Float64Array(6) });
+  const red = (step: number, speed: number, awake = 1): Reductions => ({ step, nAwake: awake, maxSpeed: speed, maxAngSpeed: 0, pe_mJ: 0, displaced: 0, outOfLot: 0, heightHist: new Uint32Array(64), impacts: new Uint32Array(48), nMoving: 0, movingBox: new Float64Array(6), ammoSpeed: 0 });
   function run(speeds: number[], spawn = 0) {
     let st = { quietSince: null as number | null };
     for (let i = 0; i < speeds.length; i++) {
@@ -110,6 +110,72 @@ describe('settling', () => {
     expect(u.settled).toBe(false);
     expect(settleUpdate(st, red(SETTLE_MIN, 0, 0), 0).settled).toBe(true);
     expect(run(Array(SETTLE_CAP + 5).fill(2))).toBe(SETTLE_CAP);
+  });
+});
+
+describe('settle v2: a few stragglers per thousand', () => {
+  const N = 10_000, A = settleAllowance(N);
+  /** Reductions with `moving` structure bodies moving (the fastest at 1 m/s) and live ammo at ammoSpeed. */
+  const red = (step: number, moving: number, ammoSpeed = 0): Reductions => ({
+    step, nAwake: N, maxSpeed: moving ? 1 : 0.01, maxAngSpeed: 0, pe_mJ: 0, displaced: 0, outOfLot: 0, heightHist: new Uint32Array(64), impacts: new Uint32Array(48),
+    nMoving: moving, movingBox: new Float64Array(6), ammoSpeed,
+  });
+  function run(moving: (i: number) => number, steps: number, rule: SettleRule = 'v2', n = N, ammo: (i: number) => number = () => 0) {
+    let st = { quietSince: null as number | null };
+    for (let i = 0; i < steps; i++) {
+      const u = settleUpdate(st, red(1 + i, moving(i), ammo(i)), 0, rule, n);
+      st = u.state;
+      if (u.settled) return 1 + i;
+    }
+    return null;
+  }
+  it('allows max(2, floor(n / 1000)) moving bodies', () => {
+    expect([0, 1, 999, 1000, 2999, 3000, 9999, 10_000, 100_000].map(settleAllowance)).toEqual([2, 2, 2, 2, 2, 3, 9, 10, 100]);
+  });
+  it('settles with k stragglers at the allowance, and not with one more', () => {
+    for (const n of [50, 2500, N]) {
+      const a = settleAllowance(n);
+      expect(run(() => a, 100, 'v2', n)).toBe(SETTLE_QUIET);
+      expect(run(() => a + 1, 100, 'v2', n)).toBeNull();
+    }
+  });
+  it(`counts ${SETTLE_QUIET} consecutive quiet steps, and one step over the allowance restarts them`, () => {
+    expect(run((i) => (i < 40 ? 500 : A), 200)).toBe(40 + SETTLE_QUIET);
+    expect(run((i) => (i < 40 ? 500 : i === 60 ? A + 1 : A), 200)).toBe(61 + SETTLE_QUIET);
+  });
+  it('waits for live ammo however quiet the structure is: a ball in flight moves no block', () => {
+    expect(run(() => 0, 200, 'v2', N, (i) => (i < 50 ? 12 : 0))).toBe(50 + SETTLE_QUIET);
+    // Under QUIET_SPEED (a ball rolling slowly on a top) counts as quiet, as in v1.
+    expect(run(() => 0, 200, 'v2', N, () => 0.049)).toBe(SETTLE_QUIET);
+  });
+  it(`caps at ${SETTLE_CAP_V2} steps (v1: ${SETTLE_CAP})`, () => {
+    expect(settleCap('v1')).toBe(SETTLE_CAP);
+    expect(settleCap('v2')).toBe(SETTLE_CAP_V2);
+    expect(run(() => 5000, SETTLE_CAP_V2 + 5)).toBe(SETTLE_CAP_V2);
+    expect(run(() => 5000, SETTLE_CAP_V2 + 5, 'v1')).toBe(SETTLE_CAP);
+  });
+  it('v1 ignores nMoving and ammoSpeed: every awake body quiet, as before', () => {
+    // A state v2 calls quiet (stragglers within the allowance) and v1 does not, and the reverse.
+    const loose = red(1, A); // maxSpeed 1 m/s
+    expect(quietUnder('v2', loose, N)).toBe(true);
+    expect(quietUnder('v1', loose, N)).toBe(false);
+    const still = { ...red(1, 0), maxSpeed: 0.01, nMoving: A + 1 };
+    expect(quietUnder('v1', still, N)).toBe(true);
+    expect(quietUnder('v2', still, N)).toBe(false);
+    // Nothing awake is quiet under both.
+    expect(quietUnder('v2', { ...red(1, A + 5, 3), nAwake: 0 }, N)).toBe(true);
+  });
+});
+
+describe('ammoSpeed', () => {
+  it('is the fastest live awake spawned body; the structure and dead ammo do not count', () => {
+    const s = atHome(3), n = c.meta.n;
+    s.awake[0] = 1; s.linVel.set([5, 0, 0], 0); // structure: not ammo
+    s.awake[n] = 1; s.pos.set([0, 2, 0], 3 * n); s.linVel.set([0, 0, 2], 3 * n); // live
+    s.awake[n + 1] = 1; s.pos.set([0, 0.1, 0], 3 * (n + 1)); s.linVel.set([7, 0, 0], 3 * (n + 1)); // on the ground: dead
+    s.awake[n + 2] = 0; s.pos.set([0, 3, 0], 3 * (n + 2)); s.linVel.set([9, 0, 0], 3 * (n + 2)); // asleep
+    expect(reduceCpu(s, null, c, baselineOf(s, c, 0), 1).ammoSpeed).toBe(2);
+    expect(reduceCpu(atHome(), null, c, baselineOf(atHome(), c, 0), 1).ammoSpeed).toBe(0);
   });
 });
 

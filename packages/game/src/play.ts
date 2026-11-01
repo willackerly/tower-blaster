@@ -42,8 +42,12 @@ export interface GameHandle {
   feel: PaceFeel;
   /** Engine step at which this attempt's round-over card first showed, or null. */
   resultShownAt: number | null;
-  /** Wall time of this level's load (engine build and pre-settle), and of each live step since, in ms. */
-  timing: { loadMs: number; stepMs: number[] };
+  /**
+   * Wall time of this level's load (engine build and pre-settle), and of each live step since, in ms;
+   * moving: each live step's structure bodies in motion (Reductions.nMoving, what settle v2 counts);
+   * frameMs: the time between frames while a shot runs (frame pacing).
+   */
+  timing: { loadMs: number; stepMs: number[]; moving: number[]; frameMs: number[] };
   fire(shot: Shot): boolean;
   /** Outcome levels: end the level now, keeping the rack left (key B, the HUD's Bank button); false when it cannot. */
   bank(): boolean;
@@ -66,7 +70,7 @@ const sum = (a: Uint8Array) => a.reduce((x, y) => x + y, 0);
 export function newGameHandle(): GameHandle {
   const none = (): SessionState => ({ step: 0, phase: 'loading', strokes: 0, heritageBroken: 0, hash: '' });
   return {
-    status: 'loading', engine: '', level: '', phase: 'loading', ready: false, frames: 0, stepIndex: 0, strokes: 0, bodies: 0, collapse: 0, fast: false, result: null, counts: {}, feel: { hitStop: false, slowMo: false }, resultShownAt: null, timing: { loadMs: 0, stepMs: [] },
+    status: 'loading', engine: '', level: '', phase: 'loading', ready: false, frames: 0, stepIndex: 0, strokes: 0, bodies: 0, collapse: 0, fast: false, result: null, counts: {}, feel: { hitStop: false, slowMo: false }, resultShownAt: null, timing: { loadMs: 0, stepMs: [], moving: [], frameMs: [] },
     fire: () => false, bank: () => false, aim: () => null, select: () => false, load: async () => {}, retry: async () => {}, capture: async () => null,
     state: none, replay: async () => none(),
   };
@@ -247,7 +251,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     engine = nextEngine;
     driver = nextDriver;
     substeps = engine.info.integrator?.substeps ?? SUBSTEPS;
-    handle.timing = { loadMs: performance.now() - t0, stepMs: [] };
+    handle.timing = { loadMs: performance.now() - t0, stepMs: [], moving: [], frameMs: [] };
     descs = driver.bodies;
     perStep = env.perStep?.(c) ?? null;
     source.reset(c.scene.bodies);
@@ -530,6 +534,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
       if (done) { regrowT = null; aimDirty = true; }
     }
     const running = !loading && driver.session.phase === 'running';
+    if (running) handle.timing.frameMs.push(frameMs);
     if (running) await exclusive(async () => {
       if (driver.session.phase !== 'running') return; // a load got in first
       const n = pacer.stepsThisFrame(frameMs, c.scene.dt, { fastForward: fastHeld || handle.fast || ending, stepMs: stepMs.quantile(0.5), budgetMs: ending ? 14 : 10 });
@@ -539,6 +544,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
         const ms = performance.now() - t0;
         stepMs.push(ms);
         handle.timing.stepMs.push(ms);
+        handle.timing.moving.push(driver.observed?.red.nMoving ?? 0);
         onFeedback(fb);
         hooks.stepped?.(fb, driver);
         const input = perStep?.(driver);
