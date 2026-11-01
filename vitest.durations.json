@@ -119,6 +119,8 @@
   "packages/physics-gpu/test/quality.test.ts": 70.8,
   "packages/physics-gpu/test/records-2.test.ts": 107.5,
   "packages/physics-gpu/test/records.test.ts": 185.3,
+  "packages/physics-gpu/test/rest-stability-struck.test.ts": 215,
+  "packages/physics-gpu/test/rest-stability.test.ts": 112,
   "packages/physics-gpu/test/sat-slack.test.ts": 0.2,
   "packages/physics-ref/test/avbd.test.ts": 99.8,
   "packages/physics-ref/test/blast.test.ts": 0.2,
