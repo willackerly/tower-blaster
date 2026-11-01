@@ -306,6 +306,23 @@ Each row is one PR with its tests, `pnpm check` green, merged on green CI. Proof
 - **Exploration report.** A play that ran out of steps no longer carries its last settle into later shots' rows: each row counts the plays that got there (`shotSummary`). The SwiftShader smoke on B1a showed it (one play, 1,500-step cap, settled shot 1 only).
 - **Rapier proxy, 8 competent plays each** (not the game's solver; Metal decides): B1b (two wrecking balls, a bomb) 1.3% then 4.6% then 35% median, so the wrecking ball is close to a dud at this wall and the bomb does the work; B1c (three bombs) 17%, 40%, 54% median, objective 0.2 met by 38%, 100%, 100%. B2a (5,184 cubes): the bomb takes 17% of the city at once and breaks heritage; the 16 crowns never all came down (best 15 of 16), so the crowns objective needs fewer crowns (the roof's middle 4) and a surgical rack. B4a: columns of loose cubes rammed along a straight row chain end to end (6 columns at spacing 4 to 6), but B4a's first domino sits at the spiral's centre behind the others (rammed along its tangent it took 9 to 20%), and a 30-column chain run inward from the edge was still falling when settle v1's 600-step cap ended the shot (6 to 8%): a domino level needs settle v2's 30 s cap and a chain that finishes inside it (about 15 columns at 1.7 s each).
 
+**Metal exploration (G5, 2026-11-01, M5 Max, main 74b57c2 with settle v2, 16 competent plays a draft, no limit hit, none out of steps; files `g5-explore-*` in project files).** Collapse median (P10 to P90) after the last shot, and the step cost:
+
+| Draft | Bodies | Rack | Collapse after last shot | Objective met | ms a step | Shots at the 1,800 cap |
+|---|---|---|---|---|---|---|
+| B1a | 1,000 | ram, ram, bomb | 0.42 (0.26 to 0.75) | 94% | 5.1 | 11, 14, 14 of 16 |
+| B1b | 1,000 | wrecking ball x2, bomb | 0.58 (0.29 to 0.78) | 100% | 5.0 | 11, 15, 13 |
+| B1c | 1,000 | bomb x3 | 0.70 (0.50 to 0.89) | 100% (81% after one) | 5.1 | 6, 5, 5 |
+| B2a | 5,184 | bomb, ram, ram, drop | 0.30; heritage broken median 25 of 32 | 6% (16 crowns) | 13.6 | 0 |
+| B2b | 5,184 | bomb x2, wrecking ball, drop | 0.36; heritage 25.5 of 32 | 0% | 13.2 | 0 |
+| B3a | 10,000 | bomb x2, wrecking ball (stone, fat) | 0.42 (0.30 to 0.63) | 100% | 20.1 | 0 to 2 |
+| B3b | 10,000 | same (stone, slim) | 0.47 (0.36 to 0.59) | 94% | 19.7 | 0 to 2 |
+| B3c | 10,000 | bomb x2, ram (plaster, slim) | 0.57 (0.35 to 0.66) | 100% | 20.6 | 0 to 1 |
+
+- **B1 is B1c** (three bombs, collapse 0.4). On the open wall lot, shots that leave a ball on the ground run to settle v2's 1,800-step cap in most plays (a rolling ball stays live above `QUIET_SPEED`), which also makes B1a and B1b plays 30 s a shot; reported to G4.
+- **B2:** a bomb in the 5k city takes about 20% of it and breaks the cathedral, and the 16 roof crowns rarely all fall (max 16, objective met 0 to 6%). B2c (the roof's middle 4 as crowns, three rams and a drop) is next on Metal; on Rapier no competent play brought them down but three rams aimed at the tower's top did (4 of 4 after the first, heritage 0 to 2).
+- **B3:** the third item (wrecking ball or ram) added nothing after two bombs. The skyline stayed 1.0 in every play (some tower always stands at full height), so the spec's skyline objective is out: B3 is judged on collapse. A 10k play costs about 52 s at 40 iterations, so the short recipe (186 plays) would take about 2.7 h against the 60 min budget; B3d and B3e (three bombs, stone, 40 and 20 iterations) measure what 20 iterations buys.
+
 ### Slice levels (proposals; the cast and the gates decide)
 
 Ids B1 to B5 (B for big) so they never clash with scenario ids S1 to S15.

@@ -49,9 +49,11 @@ export const BOMB: WeaponSpec = grenadeAsSpec(DEFAULT_GRENADE, { shape: { kind: 
 export const RAM: WeaponSpec = { version: 1, name: 'ram', shell: { shape: { kind: 'sphere', radius: 2 }, density: 0.25, speed: [15, 30] }, rules: [] };
 
 /**
- * B1 Long Wall: 1,000 plaster cubes, a wall 40 long and 25 high in third bond, three bombs.
- * Provisional until the Metal exploration (drafts B1a-c): on Rapier as a proxy three bombs took
- * a competent player's median collapse to 0.54 (P10 0.33), a wrecking ball or a ram 1 to 6% a shot.
+ * B1 Long Wall: 1,000 plaster cubes, a wall 40 long and 25 high in third bond, three bombs, collapse 0.4.
+ * Chosen from the Metal exploration (drafts B1a-c, 16 competent plays each, M5 Max): three bombs took a
+ * competent player's median collapse to 0.42, 0.65, 0.70 shot by shot (objective met by 81%, 100%, 100%) and
+ * settled soonest; two wrecking balls and a bomb (B1b) needed the ammo-ratio exception and ran most shots to
+ * the settle cap; two rams and a bomb (B1a) reached 0.42 only with the bomb.
  */
 export const B1: LevelDef = outcomeLevel('B1', 'Long Wall', thirdBondWall(40, 25, 'plaster'), [20.2, 0.5], 25, ['w-bomb', 'w-bomb', 'w-bomb'], {
   objective: { kind: 'collapse', min: 0.4 },

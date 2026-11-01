@@ -100,6 +100,11 @@ export const DRAFTS: Readonly<Record<string, LevelDef>> = {
   B3a: b3('B3a', 'stone', 8, 6, ['w-bomb', 'w-bomb', 'p-wreckingball'], ARMS),
   B3b: b3('B3b', 'stone', 5, 3, ['w-bomb', 'w-bomb', 'p-wreckingball'], ARMS),
   B3c: b3('B3c', 'plaster', 5, 3, ['w-bomb', 'w-bomb', 'w-ram'], ARMS),
+  // After the Metal exploration (2026-11-01): the third item (wrecking ball, ram) added nothing after two bombs,
+  // and a 10k cast at 40 iterations (about 52 s a play on the M5) would take 3 h for the short recipe. Three
+  // bombs on B3b's city, at 40 iterations and at 20 (the spec's rule 1: a level may set its own physics).
+  B3d: b3('B3d', 'stone', 5, 3, ['w-bomb', 'w-bomb', 'w-bomb'], ARMS),
+  B3e: b3('B3e', 'stone', 5, 3, ['w-bomb', 'w-bomb', 'w-bomb'], { ...ARMS, physics: { iterations: 20 } }),
   // B4 Domino Boulevard: 30 slender columns on a spiral, 1,680 cubes; crowns on the outermost (the chain runs outward from the centre).
   B4a: outcome('B4a', 'Domino Boulevard', domino.parts, [domino.half, domino.half], 14, ['marble', 'marble', 'w-ram'], { ...ARMS, objective: { kind: 'crowns' } }),
 };
