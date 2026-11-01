@@ -3,6 +3,7 @@ export * from './audio.ts';
 export * from './hud.ts';
 export * from './juice.ts';
 export * from './pacing.ts';
+export * from './frame-rate.ts';
 export * from './scene.ts';
 export * from './play.ts';
 export * from './engines.ts';

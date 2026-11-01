@@ -5,7 +5,7 @@
 import { checkSound, SOUND_KNOBS, SOUND_MATERIAL_NAMES, type SoundKnob, type SoundOptions } from '@tb/audio';
 import { parseSpec } from '@tb/bench';
 import { type Env, ENVS, type Ground, GROUNDS, linearToSrgb, LOOKS, REAL_DEFAULTS, REAL_KNOBS, type RealKnob, type RealOptions, srgbToLinear, type Stone, STONES, type V3 } from '@tb/render';
-import { checkPaceFeel, DEFAULT_BUDGET_MS, DEFAULT_FEEL, objectiveText, type PaceFeel } from '@tb/game';
+import { checkPaceFeel, DEFAULT_BUDGET_MS, DEFAULT_FEEL, type FrameMode, objectiveText, type PaceFeel } from '@tb/game';
 import { AUTO_LEVEL, AVBD_ITERATIONS, BIG_LEVELS, compileLevel, LEVELS, PRESETTLE_STEPS, scenarioLevel } from '@tb/keystone';
 import { buildScenario, SCENARIOS } from '@tb/scenarios';
 import { type CameraPose, type Framing, FRAMING_LIMITS } from './camera.ts';
@@ -267,7 +267,7 @@ export function mountControls(root: HTMLElement, hooks: ControlsHooks): { refres
       <div class="params"></div>
       <div class="rules">
         <label class="f"><span>rules</span><select name="rules"><option value="sandbox">sandbox</option><option value="keystone">Keystone (the game)</option></select></label>
-        <div class="feel">${field('hitstop', 'hit-stop on contact', false)}${field('slowmo', 'slow motion as crowns fall', false)}${field('budget', 'physics budget, ms per 1/60 s (0: no valve)', DEFAULT_BUDGET_MS, 'step="any" min="0" max="1000"')}${field('tailskip', 'fast-forward the tail of a shot', true)}${field('follow', 'camera follows the collapse', true)}</div>
+        <div class="feel">${field('hitstop', 'hit-stop on contact', false)}${field('slowmo', 'slow motion as crowns fall', false)}${field('budget', 'physics budget, ms per 1/60 s (0: no valve)', DEFAULT_BUDGET_MS, 'step="any" min="0" max="1000"')}${field('tailskip', 'fast-forward the tail of a shot', true)}${field('follow', 'camera follows the collapse', true)}<label class="f"><span>frames drawn</span><select name="frames"><option value="all">every frame</option><option value="half">half on a fast display</option><option value="auto">half while physics is behind</option></select></label></div>
       </div>
       <div class="seed">${field('seed', 'seed', 1, 'step="1"')}</div>
       <div class="world">
@@ -397,7 +397,7 @@ export function mountControls(root: HTMLElement, hooks: ControlsHooks): { refres
     const rules: RulesChoice = { rules: input(sceneForm, 'rules').value as Rules, feel: {
       hitStop: (input(sceneForm, 'hitstop') as HTMLInputElement).checked, slowMo: (input(sceneForm, 'slowmo') as HTMLInputElement).checked,
       budgetMs: input(sceneForm, 'budget').value === '' ? NaN : Number(input(sceneForm, 'budget').value), tailSkip: (input(sceneForm, 'tailskip') as HTMLInputElement).checked,
-      follow: (input(sceneForm, 'follow') as HTMLInputElement).checked,
+      follow: (input(sceneForm, 'follow') as HTMLInputElement).checked, frames: input(sceneForm, 'frames').value as FrameMode,
     } };
     return proposeScene(hooks.config(), scenario, params, Number(input(sceneForm, 'seed').value), Number(input(sceneForm, 'scale').value), Number(input(sceneForm, 'substeps').value), bounce, presettle, rules);
   }
@@ -630,6 +630,7 @@ export function mountControls(root: HTMLElement, hooks: ControlsHooks): { refres
     input(sceneForm, 'budget').value = String(c.feel.budgetMs);
     (input(sceneForm, 'tailskip') as HTMLInputElement).checked = c.feel.tailSkip;
     (input(sceneForm, 'follow') as HTMLInputElement).checked = c.feel.follow;
+    input(sceneForm, 'frames').value = c.feel.frames;
     input(sceneForm, 'seed').value = String(c.seed);
     input(sceneForm, 'presettle').value = String(c.presettle);
     input(sceneForm, 'scale').value = String(c.scale);

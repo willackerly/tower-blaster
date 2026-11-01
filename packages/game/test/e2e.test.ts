@@ -129,6 +129,33 @@ describe('game page', () => {
     await page.close();
   });
 
+  it('?keystone.frames reaches the frame governor, and a capture draws whatever it decides', async (ctx) => {
+    if (!game.browser()) return ctx.skip();
+    const o = await game.open('/?level=L1&offscreen=1&engine=rapier&keystone.frames=half');
+    if (!o) return ctx.skip();
+    const { page, errors } = o;
+    await ready(page);
+    expect(await page.evaluate(() => window.__game.feel.frames)).toBe('half');
+    await page.waitForFunction(() => window.__game.draws.drawn + window.__game.draws.skipped > 10, undefined, { timeout: 60_000 });
+    // Headless rAF runs at 60 Hz or less, which is never decimated (frame-rate.ts factorFor): every frame is drawn.
+    const draws = await page.evaluate(() => window.__game.draws);
+    expect(draws.decimating).toBe(true);
+    expect(draws.drawn).toBeGreaterThan(10);
+    const stats = await page.evaluate(() => window.__game.capture());
+    expect(stats!.bodyFraction).toBeGreaterThan(0.02);
+    expect(errors).toEqual([]);
+    await page.close();
+  });
+
+  it('refuses an unknown ?keystone.frames', async (ctx) => {
+    if (!game.browser()) return ctx.skip();
+    const page = await game.browser()!.newPage();
+    await page.goto(game.url('/?level=L1&engine=rapier&offscreen=1&keystone.frames=60'));
+    await page.waitForFunction(() => window.__game?.status === 'error', undefined, { timeout: 60_000 });
+    expect(await page.locator('#error').innerText()).toMatch(/keystone.frames must be one of all, half, auto: 60/);
+    await page.close();
+  });
+
   it('names the engines when ?engine= is unknown', async (ctx) => {
     if (!game.browser()) return ctx.skip();
     const page = await game.browser()!.newPage();
