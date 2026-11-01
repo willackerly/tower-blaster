@@ -7,6 +7,7 @@
 // with the drafts so a draft that wins becomes a level unchanged.
 import { DEFAULT_GRENADE, grenadeAsSpec, type WeaponSpec } from '@tb/weapons';
 import type { LevelDef, Part } from './level.ts';
+import type { ScenarioPart } from './scenario-part.ts';
 import type { MaterialName } from './materials.ts';
 import type { RackItem } from './rack.ts';
 
@@ -60,5 +61,27 @@ export const B1: LevelDef = outcomeLevel('B1', 'Long Wall', thirdBondWall(40, 25
   weapons: { bomb: BOMB },
 });
 
+/**
+ * A city of 10,000 cubes (S4: N 10000, towers F x F and 25 high, `street` cells apart) as an outcome level.
+ * S4 lays ceil(sqrt(towers)) towers a side; the footprint half-extent follows from that.
+ */
+export function cityLevel(id: string, name: string, material: MaterialName, F: number, street: number, rack: RackItem[], extra: Partial<LevelDef> = {}): LevelDef {
+  const side = Math.ceil(Math.sqrt(Math.ceil(10000 / (F * F * 25)))), half = (side * (F + street) - street) / 2 + 0.5;
+  const part: ScenarioPart = { kind: 'scenario', id: 'S4', params: { N: 10000, F, H: 25, street }, material };
+  return outcomeLevel(id, name, [part], [half, half], 25, rack, extra);
+}
+
+/**
+ * B3 Ten Thousand: the S4 city at 10,000 stone cubes (towers 5 x 5 x 25, streets 3), three bombs, collapse 0.4.
+ * From the Metal exploration (drafts B3a-e): a third bomb beats a wrecking ball or a ram after two bombs
+ * (which added nothing); the skyline stayed 1.0 in every play (some tower always stands), so the level is
+ * judged on collapse; 20 iterations (B3e) ran every shot to settle v2's cap for about the same outcomes, so
+ * it keeps the game's 40. Competent median collapse 0.32, 0.46, 0.48 shot by shot (objective met 88%, 100%, 100%).
+ */
+export const B3: LevelDef = cityLevel('B3', 'Ten Thousand', 'stone', 5, 3, ['w-bomb', 'w-bomb', 'w-bomb'], {
+  objective: { kind: 'collapse', min: 0.4 },
+  weapons: { bomb: BOMB },
+});
+
 /** The slice's levels in play order (the game's series when one of them is opened). */
-export const BIG_LEVELS: readonly LevelDef[] = [B1];
+export const BIG_LEVELS: readonly LevelDef[] = [B1, B3];

@@ -5,7 +5,7 @@
 // ball, 15 m/s, misses the top of B1's wall from the far azimuths: 83%).
 import { describe, expect, it } from 'vitest';
 import { aimAt, compileLevel, type LaunchShot, validateLevel } from '@tb/keystone';
-import { competentIntents, DRAFTS, intentShot, REACH, surfaceTarget } from '../src/index.ts';
+import { competentIntents, DRAFTS, exposedFaces, intentShot, REACH, surfaceTarget, targetFaces } from '../src/index.ts';
 
 describe('draft big levels', () => {
   it.each(Object.keys(DRAFTS))('%s compiles and validates clean on the GPU', (name) => {
@@ -33,5 +33,18 @@ describe('draft big levels', () => {
       if (aimAt(c.frame, shot.ammo, { az: shot.az, y: shot.y, power: shot.power }, surfaceTarget(c, it).point).error <= REACH * c.frame.unit) reached++;
     }
     expect(reached / launched).toBeGreaterThanOrEqual(0.8);
+  });
+  it('on a crowns level the competent player aims at the crown tower; elsewhere at any exposed face', () => {
+    const b2 = compileLevel(DRAFTS.B2c!), m = b2.meta, g = b2.frame.unit * b2.frame.pitch;
+    const cx = m.crowns.map((i) => m.home[3 * i]!), cz = m.crowns.map((i) => m.home[3 * i + 2]!);
+    // The crown tower is 4 x 4; its middle 4 crowns span 2 cells, so its bodies lie within 2 cells of them.
+    const nearCrowns = (i: number) => m.home[3 * i]! > Math.min(...cx) - 2.5 * g && m.home[3 * i]! < Math.max(...cx) + 2.5 * g && m.home[3 * i + 2]! > Math.min(...cz) - 2.5 * g && m.home[3 * i + 2]! < Math.max(...cz) + 2.5 * g;
+    const faces = targetFaces(b2);
+    expect(faces.flat().length).toBeGreaterThan(0);
+    expect(faces.flat().every(nearCrowns)).toBe(true);
+    for (const line of competentIntents(b2, 16, 1)) for (const it of line) if (it.item !== 'drop') expect(nearCrowns(surfaceTarget(b2, it).body)).toBe(true);
+    // A collapse level aims anywhere.
+    const b1 = compileLevel(DRAFTS.B1c!);
+    expect(targetFaces(b1)).toEqual(exposedFaces(b1));
   });
 });
