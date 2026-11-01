@@ -54,7 +54,7 @@ export const SOUND_MATERIALS = {
   /** Bright game brick: hollow acrylic (PMMA), as if 8 cm with 2.5 mm walls. */
   acrylic: { model: 'shell', size: 0.08, wall: 0.0025, E: 3.2e9, nu: 0.37, rho: 1190, eta: 0.02, jitter: 0.005, R: 0.02, mstar: 0.7, ringDb: 0, clickDb: 0, gritDb: -Infinity },
   /** Real look: stone or concrete block at the body's own size. */
-  stone: { model: 'cube', E: 30e9, nu: 0.2, rho: 2300, eta: 0.015, jitter: 0.02, R: 0.002, mstar: 0.7, ringDb: 0, clickDb: 0, gritDb: 0 },
+  stone: { model: 'cube', E: 30e9, nu: 0.2, rho: 2300, eta: 0.015, jitter: 0.02, R: 0.002, mstar: 0.7, ringDb: 0, clickDb: 0, gritDb: -6 },
 } as const satisfies Record<string, SoundMaterial>;
 
 const POSITIVE = ['E', 'nu', 'rho', 'eta', 'R', 'mstar'] as const;

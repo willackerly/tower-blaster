@@ -20,7 +20,7 @@ Full report with research, measurements and sources: https://claude.ai/artifact/
 | P3 | Physics pipeline and solver bake-off | G2: quality gates pass and N_max ≥ 10k |
 | P4 | Lattice world model, activation, settle, overflow | G3: 100k world idle under 1 ms, peak within budget |
 | P5 | Rendering MVP (parallel with P3/P4) | |
-| P6 | Game loop and feel | |
+| P6 | Game loop and feel (Keystone: docs/game/keystone-design.md; spectacle mode: docs/game/spectacle-mode.md) | |
 | P7 | Full quality and device scaling | |
 
 ## Scenario suite

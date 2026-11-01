@@ -21,6 +21,12 @@ describe('level files', () => {
     }
   });
 
+  it('reads racks and solutions holding presets and weapons (p-, w-)', () => {
+    const d: LevelDef = { ...structuredClone(L2), rack: ['p-wreckingball', 'w-grenade', 'cannonball'], solutions: { par: [{ ammo: 'w-grenade', az: 540, y: 8, yaw: 0, pitch: 300, power: 80 }] } };
+    expect(parseLevelDef(JSON.parse(levelJson(d)))).toEqual(d);
+    expect(() => parseLevelDef({ ...d, rack: ['p-nuke'] })).toThrow(/level.rack\[0\] must be one of marble, cannonball, cue, drop, p-<preset> \(beachball/);
+  });
+
   it('reads back the outcome fields: scoring, cast stars, the collapse objective and a footprint limit on any objective', () => {
     const outcome: LevelDef = { ...structuredClone(L2), id: 'big', scoring: 'outcome', objective: { kind: 'collapse', min: 0.4, footprintMax: 0.2 }, stars: { metric: 'collapse', t2: 0.45, t3: 0.6, best: 0.81, castOn: 'apple metal-3', engine: 'gpu', hash: 'abc', n: 64, seed: 1 } };
     expect(parseLevelDef(JSON.parse(levelJson(outcome)))).toEqual(outcome);
