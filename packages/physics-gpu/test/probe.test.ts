@@ -32,6 +32,7 @@ const TINY: Partial<ProbeOptions> = {
   barrierRounds: 20, barrierThreads: [64, 256],
   gridGroups: [1, 2, 4], gridRounds: 10, maxPolls: 20_000,
   tileGroups: [2], tileThreads: [64], tileK: [4], tileIters: [1, 2], tilePoints: 4,
+  p5Settle: 8, p5Steps: 2,
 };
 
 describe('solver probe defaults', () => {
@@ -209,6 +210,10 @@ describe('solver probe (every section, tiny)', () => {
       if (t.tileErr !== null) expect(t.tileErr).toBeLessThan(1e-4);
     }
     expect(p4.tile!.some((t) => t.tileErr !== null)).toBe(true);
+
+    // P5, P6 (probe-sleep.test.ts covers them): they ran on P2's scene, and the island labels are right.
+    expect([r.p5!.N, r.p6!.N]).toEqual([300, 300]);
+    expect(r.p6!.correct).toBe(true);
 
     const md = probeMarkdown(r, '## test');
     expect(md).toContain('## P4(d)');
