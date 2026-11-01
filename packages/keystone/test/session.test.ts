@@ -1,7 +1,7 @@
 // The state machine driven by synthetic body states: no engine involved.
 import { describe, expect, it } from 'vitest';
 import { emptySnapshot, type Snapshot } from '@tb/engine-api';
-import { compileLevel, CpuObserver, type Feedback, GRAVITY, homeSkyline, type LevelDef, type OutcomeScore, peOf_mJ, SETTLE_MIN, SETTLE_QUIET, Session, type Shot } from '@tb/keystone';
+import { compileLevel, CpuObserver, type Feedback, GRAVITY, homeSkyline, type LevelDef, type OutcomeScore, peOf_mJ, SETTLE_CAP, SETTLE_CAP_V2, SETTLE_MIN, SETTLE_QUIET, Session, settleOf, type Shot } from '@tb/keystone';
 
 const def: LevelDef = {
   id: 'S', name: 's', version: 1, world: 0, lot: { min: [-4, -4], max: [4, 4] }, crownLine: 2, objective: { kind: 'crowns' }, par: 1,
@@ -186,5 +186,49 @@ describe('Session, outcome levels', () => {
     expect(fb.at(-1)).toMatchObject({ t: 'levelEnd', cleared: true });
     expect(se.score!.lines).toContainEqual({ label: 'Rack left', value: 800 });
     expect(ac.hash).not.toBe(oc.hash); // autobank changes when the level ends, so it is part of the level
+  });
+});
+
+describe('Session, settle rules', () => {
+  const out: LevelDef = { ...def, id: 'SV', scoring: 'outcome', rack: ['marble', 'marble'], par: 2 };
+  /** One structure body (the heritage block) creeping at 0.1 m/s for good, everything else still; the marble at rest. */
+  const creeping = (steps: number) => Array.from({ length: steps }, () => (s: Snapshot) => {
+    s.awake.fill(0); s.linVel.fill(0);
+    s.awake[heritage] = 1; s.linVel[3 * heritage] = 0.1;
+  });
+  const settleStep = (d: LevelDef, steps: number) => {
+    const lc = compileLevel(d), s = world(1), obs = new CpuObserver(lc, s), se = new Session(lc);
+    se.fire(marble, 0);
+    return (play(se, obs, s, creeping(steps), 0).find((f) => f.t === 'settled') as Extract<Feedback, { t: 'settled' }> | undefined)?.step ?? null;
+  };
+  it('par levels settle by v1 and outcome levels by v2, unless the level says', () => {
+    expect(settleOf(def)).toBe('v1');
+    expect(settleOf(out)).toBe('v2');
+    expect(settleOf({ ...out, settle: 'v1' })).toBe('v1');
+    expect(settleOf({ ...def, settle: 'v2' })).toBe('v2');
+    expect(new Session(compileLevel(out)).settleRule).toBe('v2');
+  });
+  it('a lone creeping block holds a v1 shot to its cap; v2 lets it go after the quiet run', () => {
+    expect(settleStep(out, SETTLE_CAP_V2 + 10)).toBe(SETTLE_QUIET);
+    expect(settleStep({ ...out, settle: 'v1' }, SETTLE_CAP_V2 + 10)).toBe(SETTLE_CAP);
+    expect(settleStep({ ...def, settle: 'v2' }, SETTLE_CAP_V2 + 10)).toBe(SETTLE_QUIET);
+  });
+  it('a pending weapon holds a v2 shot to the v2 cap', () => {
+    const lc = compileLevel(out), s = world(1), obs = new CpuObserver(lc, s), se = new Session(lc);
+    se.fire(marble, 0);
+    let at: number | null = null;
+    for (let t = 0; t < SETTLE_CAP_V2 + 5 && at === null; t++) {
+      s.awake.fill(0); s.linVel.fill(0);
+      if (se.observe(obs.observe(s, 1 + t, se.watchIdx), true).some((f) => f.t === 'settled')) at = 1 + t;
+    }
+    expect(at).toBe(SETTLE_CAP_V2);
+  });
+  it('the scoring\'s own rule hashes as absent; the other one is a different level', () => {
+    const h = (d: LevelDef) => compileLevel(d).hash;
+    expect(h({ ...out, settle: 'v2' })).toBe(h(out));
+    expect(h({ ...def, settle: 'v1' })).toBe(h(def));
+    expect(h({ ...out, settle: 'v1' })).not.toBe(h(out));
+    expect(h({ ...def, settle: 'v2' })).not.toBe(h(def));
+    expect(() => compileLevel({ ...def, settle: 'v3' as never })).toThrow(/settle must be v1 or v2: v3/);
   });
 });

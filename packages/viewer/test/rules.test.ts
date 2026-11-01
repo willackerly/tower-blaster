@@ -87,10 +87,10 @@ describe('Keystone rules in the viewer', () => {
   });
 
   it('the game\'s rule overrides (keystone.*) make a custom run, round-trip, and need the rules', () => {
-    const u = '?level=L1&rules=keystone&keystone.scoring=outcome&keystone.autobank=0&keystone.iterations=20&keystone.bounce=0.4&keystone.gapSlop=0';
+    const u = '?level=L1&rules=keystone&keystone.scoring=outcome&keystone.autobank=0&keystone.settle=v1&keystone.iterations=20&keystone.bounce=0.4&keystone.gapSlop=0';
     const c = parseViewerConfig(u);
-    expect(c.keystone).toEqual({ scoring: 'outcome', autobank: false, physics: { iterations: 20, bounce: 0.4, gapSlop: 0 } });
-    expect(levelOf(c)).toEqual({ ...L1, custom: true, scoring: 'outcome', autobank: false, physics: { iterations: 20, bounce: 0.4, gapSlop: 0 } });
+    expect(c.keystone).toEqual({ scoring: 'outcome', autobank: false, settle: 'v1', physics: { iterations: 20, bounce: 0.4, gapSlop: 0 } });
+    expect(levelOf(c)).toEqual({ ...L1, custom: true, scoring: 'outcome', autobank: false, settle: 'v1', physics: { iterations: 20, bounce: 0.4, gapSlop: 0 } });
     expect(sceneTitle(c)).toMatch(/\(custom\)$/);
     expect(parseViewerConfig(toSearch(c))).toEqual(c);
     expect(parseViewerConfig(toSearch(parseViewerConfig('?level=L1&rules=keystone&keystone.bounce=off'))).keystone).toEqual({ physics: { bounce: null } });
@@ -105,7 +105,7 @@ describe('Keystone rules in the viewer', () => {
     const back = parseSceneFile(JSON.stringify(sceneFile(sc, '', null))).config;
     expect({ ...back, params: sc.params }).toEqual(sc);
     expect(compileLevel(levelOf(back)!).hash).toBe(compileLevel(levelOf(sc)!).hash);
-    expect(sceneFile(c, '', null).rules).toMatchObject({ scoring: 'outcome', autobank: false, physics: { iterations: 20, bounce: 0.4, gapSlop: 0 } });
+    expect(sceneFile(c, '', null).rules).toMatchObject({ scoring: 'outcome', autobank: false, settle: 'v1', physics: { iterations: 20, bounce: 0.4, gapSlop: 0 } });
     expect(sceneFile(parseViewerConfig('?level=L1&rules=keystone'), '', null).rules).toEqual({ mode: 'keystone', hitstop: false, slowmo: false });
     const f = sceneFile(c, '', null);
     expect(() => parseSceneFile(JSON.stringify({ ...f, rules: { ...f.rules, physics: { substeps: 2 } } }))).toThrow(/rules.physics: unknown key substeps/);
