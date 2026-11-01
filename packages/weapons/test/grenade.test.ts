@@ -94,6 +94,17 @@ describe('grenades', () => {
     expect(v[0]).toBeGreaterThan(10);
   });
 
+  it('a proximity fuse does not sense removed bodies (a spent grenade\'s tombstone)', () => {
+    const g = new Grenades(world(false), 0), shapes = [{ shape: BOX }, { shape: BALL }];
+    const snap = (tier?: number[]): Snapshot => ({
+      count: 2, pos: Float64Array.from([0, 5, 0, 0, 5, 0.5]), rot: Float64Array.from([0, 0, 0, 1, 0, 0, 0, 1]),
+      linVel: new Float64Array(6), angVel: new Float64Array(6), awake: Uint8Array.from([1, 1]), ...(tier ? { tier: Uint8Array.from(tier) } : {}),
+    } as Snapshot);
+    g.launch(1, 0, spec({ arm: 0 }), BALL);
+    expect(g.observe(snap([255, 0]), 0, shapes)).toEqual([]);
+    expect(g.observe(snap([0, 0]), 0, shapes)).toEqual(detonation(1, 1, spec({ arm: 0 })));
+  });
+
   it('without lookahead a reader observing every step goes off one step late; a sparse one late by up to its gap', async () => {
     const j = predicted(DEFAULT_GRENADE.prox);
     expect((await run(spec(), 1, 0, j + 5)).blasts.map((b) => b.step)).toEqual([j + 1]);

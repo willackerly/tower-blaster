@@ -26,10 +26,11 @@
 // once (prox >= 0), so the prediction is never used past a contact.
 //
 // Distances are exact for spheres and boxes (box: point to oriented box);
-// the grenade counts as its bounding sphere. A coarse test against the
+// the grenade counts as its bounding sphere. Removed bodies (tier TIER_FREE,
+// such as an earlier grenade's tombstone) are not sensed. A coarse test against the
 // bounding sphere of the predicted path keeps observe() at one distance
 // per body for the far ones.
-import { checkBlast, type InputEvent, freeFlight, type ShapeDesc, type Snapshot, type Vec3 } from '@tb/engine-api';
+import { checkBlast, type InputEvent, TIER_FREE, freeFlight, type ShapeDesc, type Snapshot, type Vec3 } from '@tb/engine-api';
 import { boundingRadius } from '@tb/geom';
 
 export type Fuse = 'timer' | 'prox' | 'proxTimer';
@@ -170,7 +171,8 @@ export class Grenades {
     const mid = [0, 1, 2].map((k) => (lo[k]! + hi[k]!) / 2), reach = Math.hypot(hi[0]! - lo[0]!, hi[1]! - lo[1]!, hi[2]! - lo[2]!) / 2 + g.radius + prox;
     const near: number[] = [];
     for (let i = 0; i < s.count; i++) {
-      if (i === g.id) continue;
+      // Removed bodies (a spent grenade's tombstone) are not there.
+      if (i === g.id || s.tier?.[i] === TIER_FREE) continue;
       const d = Math.hypot(s.pos[3 * i]! - mid[0]!, s.pos[3 * i + 1]! - mid[1]!, s.pos[3 * i + 2]! - mid[2]!);
       if (d - boundingRadius(shapes[i]!.shape) <= reach) near.push(i);
     }
