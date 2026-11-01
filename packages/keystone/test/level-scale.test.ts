@@ -38,13 +38,16 @@ function randomLevel(seed: number): LevelDef {
   return { ...base, id: `R${seed}`, parts, crownLine: int(0, 3) };
 }
 
-/** The checks both versions make, in a canonical order (the new one sorts its pairs; the old one swept on x). */
-const OLD_CODES = new Set<Issue['code']>(['count', 'overlap', 'unsupported', 'mass-ratio', 'tunnelling', 'crown-start', 'rack', 'empty']);
+/**
+ * The checks both versions make, in a canonical order (the new one sorts its pairs; the old one swept
+ * on x). The per-item rack checks are not among them: they are rackIssues', unchanged by the grid.
+ */
+const OLD_CODES = new Set<Issue['code']>(['count', 'overlap', 'unsupported', 'mass-ratio', 'crown-start', 'rack', 'empty']);
 const canon = (issues: Issue[]) => issues.filter((i) => OLD_CODES.has(i.code)).map((i) => `${i.code}|${i.message}`).sort();
 
 describe('validateLevel at scale', () => {
   it('gives the old validator\'s issues on every shipped level and 200 random small ones', () => {
-    for (const def of LEVELS) expect(validateLevel(compileLevel(def)), def.id).toEqual(validateLevelRef(compileLevel(def)));
+    for (const def of LEVELS) expect(canon(validateLevel(compileLevel(def))), def.id).toEqual(canon(validateLevelRef(compileLevel(def))));
     const seen = new Set<string>();
     for (let seed = 1; seed <= 200; seed++) {
       const c = compileLevel(randomLevel(seed));
@@ -66,6 +69,13 @@ describe('validateLevel at scale', () => {
     expect(issues).toEqual([]);
     expect(ms).toBeLessThan(2000);
     expect(validateLevel(c, { engine: 'rapier' }).map((i) => i.code)).toEqual(['count']);
+  });
+
+  it('the GPU budget is the structure\'s; Rapier\'s counts what the rack adds too (capacity)', () => {
+    const wall = (W: number): LevelDef => ({ ...base, scoring: 'outcome', objective: { kind: 'collapse', min: 0.3 }, rack: ['cannonball', 'cannonball'], lot: { min: [-60, -2], max: [60, 2] }, parts: [{ kind: 'scenario', id: 'S3', params: { W, H: 25 }, material: 'plaster' }] });
+    const codes = (d: LevelDef, engine: 'rapier' | 'gpu') => validateLevel(compileLevel(d), { engine }).map((i) => i.code).filter((k) => k === 'count' || k === 'capacity');
+    expect(codes(wall(100), 'rapier')).toEqual(['capacity']); // 2,500 + 2
+    expect(codes(wall(100), 'gpu')).toEqual([]);
   });
 
   it('counts bodies against the engine\'s budget: Rapier\'s for par levels, the GPU\'s for outcome levels', () => {

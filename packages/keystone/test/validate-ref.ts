@@ -1,8 +1,10 @@
 // validateLevel as it was before the scale work (G2.4), kept verbatim as the
 // reference the new one is checked against (level-scale.test.ts): the sweep on
 // x for near pairs and the all-pairs support pass, O(n^2) in the worst case.
-// Only the imports and the export name differ.
-import { AMMO, type CompiledLevel, GRAVITY, type Issue, MAX_RACK, speedOf } from '@tb/keystone';
+// Only the imports and the export name differ, and the per-item rack checks
+// (tunnelling and the rest) are left out: they moved to rackIssues with the
+// rack items (G3.1) and never touched the near-pair search.
+import { type CompiledLevel, type Issue, MAX_RACK } from '@tb/keystone';
 
 type BodyMeta = CompiledLevel['meta'];
 const MAX_BODIES = 2500;
@@ -90,17 +92,6 @@ export function validateLevelRef(c: CompiledLevel): Issue[] {
     for (const j of load) { mx += m.mass[j]! * m.home[3 * j]!; mz += m.mass[j]! * m.home[3 * j + 2]!; mm += m.mass[j]!; }
     const cx = mx / mm, cz = mz / mm;
     if (!(cx > x0 + eps && cx < x1 - eps && cz > z0 + eps && cz < z1 - eps)) issues.push({ code: 'unsupported', message: `body ${i} at y=${(A.lo[1]! / h).toFixed(2)} h: the centre of mass of it and its load is not over its supports`, bodies: [i] });
-  }
-
-  // No continuous collision on the GPU path: one step of the fastest ammo must
-  // not carry it through the thinnest body.
-  let thin = Infinity;
-  for (let i = 0; i < m.n; i++) thin = Math.min(thin, 2 * Math.min(m.half[3 * i]!, m.half[3 * i + 1]!, m.half[3 * i + 2]!));
-  for (const kind of new Set(def.rack)) {
-    const s = AMMO[kind].size, size = 'radius' in s ? 2 * s.radius * h : 2 * Math.min(...s.half) * h;
-    const v = kind === 'drop' ? Math.sqrt(2 * GRAVITY * def.launcher.dropY * h) : speedOf(kind, 100);
-    const reach = v * c.scene.dt;
-    if (reach > 0.8 * (size + thin)) issues.push({ code: 'tunnelling', message: `${kind} moves ${reach.toFixed(3)} m per step, more than 0.8 x (${size.toFixed(3)} + thinnest body ${thin.toFixed(3)}) m` });
   }
 
   for (const i of m.crowns) {
