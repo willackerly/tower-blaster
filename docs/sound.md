@@ -113,7 +113,14 @@ limiter with at most 3 dB of limiting. e2e-sound.test.ts covers the page:
 the first key starts it, the par line's impacts reach the worklet and peak
 under 0.9, and `keystone.sound=synth` creates nothing. The materials' tests
 (audio modes.test.ts) check that plaster and iron ring, ice, rubber and steel
-thud, and only stone, ice and plaster shed grit. The hand balances (plaster's
+thud, and only stone, ice and plaster shed grit.
+
+Cost: the game holds ten slots, most of them silent. Silent materials used to
+cost ~1.5% of a core each, scanning idle banks and click resonators every block.
+Now a material with nothing ringing and no input is skipped (an engine test
+holds its work at zero). L1's capture costs 16% of a VM core where it was 32%
+(`cost-cli.ts`; VM figures are sanity checks only, the M5 gives the real
+number). The hand balances (plaster's
 and iron's levels, the game level) wait for S9's recordings and a listen.
 
 ## Distortion (2026-10-30)

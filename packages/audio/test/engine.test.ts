@@ -128,4 +128,16 @@ describe('CollapseEngine', () => {
     expect(live(1e5)).toBeLessThanOrEqual(C * S * M);
     expect(live(1e5)).toBe(live(1e3));
   });
+
+  it('idle materials cost nothing: no resonator runs until an impact, and none once it has died away', () => {
+    const e = new CollapseEngine({ sampleRate: SR, seed: 1 });
+    for (let i = 0; i < 10; i++) e.setMaterial(i, i % 2 ? SOUND_MATERIALS.stone : pine, 0.5);
+    run(e, 100);
+    expect(e.work).toBe(0);
+    run(e, 200, (b) => b === 0 && e.push(frame([{ bin: 3, count: 20, a2: 2 }])));
+    expect(e.work).toBeGreaterThan(0);
+    const w = e.work;
+    run(e, 100);
+    expect(e.work).toBe(w);
+  });
 });
