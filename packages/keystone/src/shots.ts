@@ -2,33 +2,14 @@
 // replayed exactly from (level, shots) and a shot fits in a few bytes. A shot
 // becomes one engine spawn event; nothing else about the engine is touched.
 import { type BodyDesc, massOf, type SpawnEvent, TAG_BALL, type Vec3 } from '@tb/engine-api';
-import { GRAVITY, MATERIALS, materialId, type MaterialName } from './materials.ts';
+import { GRAVITY } from './materials.ts';
+import { AMMO, isRackItem, itemSpec, type LaunchItem, RACK_ITEM_NAMES, type RackItem, speedOf } from './rack.ts';
 
-export type AmmoKind = 'marble' | 'cannonball' | 'cue' | 'drop';
-export const AMMO_KINDS: readonly AmmoKind[] = ['marble', 'cannonball', 'cue', 'drop'];
-
-export interface AmmoSpec {
-  /** Sphere radius, or box half-extents along (+x, y, z) before turning, in h. */
-  size: { radius: number } | { half: Vec3 };
-  material: MaterialName;
-  /** Launch speed range in m/s, mapped linearly from power 0..100. */
-  vMin: number;
-  vMax: number;
-}
-
-export const AMMO: Record<AmmoKind, AmmoSpec> = {
-  // The scalpel: knocks out or shoves one cube.
-  marble: { size: { radius: 0.2 }, material: 'steel', vMin: 5, vMax: 15 },
-  // Brute force: about 7x the marble's energy, so it costs leverage.
-  cannonball: { size: { radius: 0.5 }, material: 'steel', vMin: 5, vMax: 12 },
-  // The Jenga push: a rod fired along its own axis at a face.
-  cue: { size: { half: [1.2, 0.1, 0.1] }, material: 'steel', vMin: 1.5, vMax: 5 },
-  // An anvil released at rest above the structure.
-  drop: { size: { half: [0.4, 0.4, 0.4] }, material: 'steel', vMin: 0, vMax: 0 },
-};
-
-/** Fired from the launcher ring: az in 0.5 deg, y in 1/4 h, yaw and pitch in 0.1 deg, power in %. */
-export interface LaunchShot { ammo: 'marble' | 'cannonball'; az: number; y: number; yaw: number; pitch: number; power: number }
+/**
+ * Fired from the launcher ring: az in 0.5 deg, y in 1/4 h, yaw and pitch in 0.1 deg, power in %.
+ * Any launch item (marble, cannonball, p-<preset>, w-<weapon>; rack.ts) takes the same fields.
+ */
+export interface LaunchShot { ammo: LaunchItem; az: number; y: number; yaw: number; pitch: number; power: number }
 /** A cue tip at (x, y, z) in 1/4 cells, pushing along +x, -x, +z or -z. */
 export interface CueShot { ammo: 'cue'; x: number; y: number; z: number; dir: 0 | 1 | 2 | 3; power: number }
 /** An anvil released above (x, z) in 1/4 cells. */
@@ -44,13 +25,12 @@ export interface ShotFrame { unit: number; pitch: number; centre: [number, numbe
 const DEG = Math.PI / 180;
 const CUE_STANDOFF = 0.1; // h between the rod tip and the target point at spawn
 
-export const speedOf = (ammo: AmmoKind, power: number) => AMMO[ammo].vMin + ((AMMO[ammo].vMax - AMMO[ammo].vMin) * power) / 100;
-
 function assertInt(name: string, v: number, lo: number, hi: number) {
   if (!Number.isInteger(v) || v < lo || v > hi) throw new Error(`shot.${name} = ${v}, want an integer in [${lo}, ${hi}]`);
 }
 
 export function checkShot(s: Shot): void {
+  if (!isRackItem(s.ammo)) throw new Error(`shot.ammo = ${JSON.stringify(s.ammo)}, want one of ${RACK_ITEM_NAMES}`);
   if (s.ammo === 'drop') { assertInt('x', s.x, -4000, 4000); assertInt('z', s.z, -4000, 4000); return; }
   assertInt('power', s.power, 0, 100);
   if (s.ammo === 'cue') {
@@ -60,20 +40,17 @@ export function checkShot(s: Shot): void {
   assertInt('az', s.az, 0, 719); assertInt('y', s.y, 0, 4000); assertInt('yaw', s.yaw, -1800, 1800); assertInt('pitch', s.pitch, -890, 890);
 }
 
-/** Each ammo's fields after its name in shot text (writeShots), in this order. */
-const SHOT_FIELDS: Record<AmmoKind, readonly string[]> = {
-  marble: ['az', 'y', 'yaw', 'pitch', 'power'],
-  cannonball: ['az', 'y', 'yaw', 'pitch', 'power'],
-  cue: ['x', 'y', 'z', 'dir', 'power'],
-  drop: ['x', 'z'],
-};
+const LAUNCH_FIELDS = ['az', 'y', 'yaw', 'pitch', 'power'] as const;
+/** An item's fields after its name in shot text (writeShots), in this order: every launch item's are LaunchShot's. */
+export const shotFields = (ammo: RackItem): readonly string[] => (ammo === 'drop' ? ['x', 'z'] : ammo === 'cue' ? ['x', 'y', 'z', 'dir', 'power'] : LAUNCH_FIELDS);
 
 /**
  * Shots as URL-safe text, for sharing a line: `ammo.f1.f2...` per shot (fields in SHOT_FIELDS
- * order, integers as the shot holds them), shots joined by `_`; e.g. `cannonball.60.8.0.20.95_drop.4.-8`.
+ * order, integers as the shot holds them), shots joined by `_`; e.g. `cannonball.60.8.0.20.95_drop.4.-8` or
+ * `p-wreckingball.60.8.0.20.95_w-grenade.120.4.0.35.80`. Item names never hold `.` or `_` (rack.ts).
  */
 export function writeShots(shots: readonly Shot[]): string {
-  return shots.map((s) => [s.ammo, ...SHOT_FIELDS[s.ammo].map((k) => (s as unknown as Record<string, number>)[k])].join('.')).join('_');
+  return shots.map((s) => [s.ammo, ...shotFields(s.ammo).map((k) => (s as unknown as Record<string, number>)[k])].join('.')).join('_');
 }
 
 /** The shots writeShots wrote, each checked (checkShot); throws naming the shot at fault. Empty text is no shots. */
@@ -82,8 +59,8 @@ export function readShots(text: string): Shot[] {
   return text.split('_').map((part, i) => {
     const [ammo, ...vals] = part.split('.');
     const where = `shot ${i + 1} (${part})`;
-    if (!AMMO_KINDS.includes(ammo as AmmoKind)) throw new Error(`${where}: ammo must be one of ${AMMO_KINDS.join(', ')}`);
-    const fields = SHOT_FIELDS[ammo as AmmoKind];
+    if (!isRackItem(ammo!)) throw new Error(`${where}: ammo must be one of ${RACK_ITEM_NAMES}`);
+    const fields = shotFields(ammo);
     if (vals.length !== fields.length) throw new Error(`${where}: ${ammo} takes ${fields.length} fields (${fields.join('.')}), got ${vals.length}`);
     const shot: Record<string, unknown> = { ammo };
     fields.forEach((k, j) => {
@@ -109,12 +86,13 @@ export function launchDir(az: number, yaw: number, pitch: number): Vec3 {
 
 const CUE_DIRS: Vec3[] = [[1, 0, 0], [-1, 0, 0], [0, 0, 1], [0, 0, -1]];
 
-export function ammoBody(kind: AmmoKind, unit: number, pos: Vec3, vel: Vec3, alongZ = false): BodyDesc {
-  const spec = AMMO[kind], m = MATERIALS[materialId(spec.material)]!;
+/** The body rack item `kind` fires at pos with velocity vel, in a level of `unit` m per h; alongZ turns a box's x onto z. */
+export function ammoBody(kind: RackItem, unit: number, pos: Vec3, vel: Vec3, alongZ = false): BodyDesc {
+  const spec = itemSpec(kind, unit);
   const shape: BodyDesc['shape'] = 'radius' in spec.size
-    ? { kind: 'sphere', radius: spec.size.radius * unit }
-    : { kind: 'box', half: (alongZ ? [spec.size.half[2], spec.size.half[1], spec.size.half[0]] : spec.size.half).map((x) => x * unit) as Vec3 };
-  return { shape, pos, rot: [0, 0, 0, 1], linVel: vel, angVel: [0, 0, 0], density: m.density, friction: m.friction, restitution: m.restitution, tag: TAG_BALL };
+    ? { kind: 'sphere', radius: spec.size.radius }
+    : { kind: 'box', half: alongZ ? [spec.size.half[2], spec.size.half[1], spec.size.half[0]] : spec.size.half };
+  return { shape, pos, rot: [0, 0, 0, 1], linVel: vel, angVel: [0, 0, 0], density: spec.density, friction: spec.friction, restitution: spec.restitution, tag: TAG_BALL };
 }
 
 /** The spawn event for a shot fired at engine step `step`. */
@@ -181,7 +159,7 @@ export interface Aim { shot: LaunchShot; error: number }
  * quantisation; pitch is searched coarse-to-fine over [-45, 80] degrees,
  * preferring the flatter arc on ties. Unreachable targets return the closest miss.
  */
-export function aimAt(f: ShotFrame, ammo: 'marble' | 'cannonball', at: { az: number; y: number; power: number }, target: Vec3, opts: { dt?: number; maxSteps?: number; substeps?: number } = {}): Aim {
+export function aimAt(f: ShotFrame, ammo: LaunchItem, at: { az: number; y: number; power: number }, target: Vec3, opts: { dt?: number; maxSteps?: number; substeps?: number } = {}): Aim {
   const dt = opts.dt ?? 1 / 60, maxSteps = opts.maxSteps ?? 240, substeps = opts.substeps ?? 1;
   const p = launcherPos(f, at.az, at.y);
   const th = Math.atan2(target[2] - p[2], target[0] - p[0]);

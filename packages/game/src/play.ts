@@ -6,7 +6,7 @@
 // its own elements; the viewer calls it for rules=keystone, with hooks for its
 // dev panels (docs/design/viewer-superset.md, step C).
 import { type BodyDesc, type InputEvent, type PhysicsEngine, spawnedBodies, type Vec3 } from '@tb/engine-api';
-import { type AmmoKind, type CompiledLevel, compileLevel, Driver, type Feedback, type LevelDef, type LevelScore, type PerStep, runSession, type Shot, shotToSpawn, snapshotHash, TIER_NAMES } from '@tb/keystone';
+import { type RackItem, type CompiledLevel, compileLevel, Driver, type Feedback, type LevelDef, type LevelScore, type PerStep, runSession, type Shot, shotToSpawn, snapshotHash, TIER_NAMES } from '@tb/keystone';
 import { Window } from '@tb/metrics';
 import { clampPitch, EYE_ABOVE_GROUND, eyeOf, frame, type Orbit, rayThrough, viewProj } from '@tb/render/camera';
 import type { PixelStats, Renderer, SnapshotSource } from '@tb/render';
@@ -45,7 +45,7 @@ export interface GameHandle {
   fire(shot: Shot): boolean;
   /** Aim at normalized device coords with the selected ammo, as hovering there would. */
   aim(ndcX: number, ndcY: number): Aimed | null;
-  select(ammo: AmmoKind): boolean;
+  select(ammo: RackItem): boolean;
   load(id: string): Promise<void>;
   retry(): Promise<void>;
   capture(keepPixels?: boolean): Promise<PixelStats | null>;
@@ -209,7 +209,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
   };
   let fxSlots = 0;
   let regrowBuf = new Float32Array(0);
-  let selected: AmmoKind | null = null;
+  let selected: RackItem | null = null;
   let power = 100;
   let aimed: Aimed | null = null, beads: Float64Array | null = null, aimDirty = false;
   let pointer: [number, number] | null = null;
@@ -386,7 +386,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     return true;
   }
 
-  function select(a: AmmoKind): boolean {
+  function select(a: RackItem): boolean {
     if (!driver.session.rackLeft.includes(a)) return false;
     selected = a;
     aimDirty = true;

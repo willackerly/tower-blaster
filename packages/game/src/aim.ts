@@ -3,7 +3,7 @@
 // ring, so the player always shoots away from the eye.
 import type { Quat, Snapshot, Vec3 } from '@tb/engine-api';
 import { rotate } from '@tb/geom';
-import { aimAt, type AmmoKind, type CompiledLevel, GRAVITY, predictArc, type Shot, shotToSpawn } from '@tb/keystone';
+import { aimAt, type RackItem, type CompiledLevel, GRAVITY, predictArc, type Shot, shotToSpawn } from '@tb/keystone';
 
 /**
  * Substeps per step for the arc, when the engine doesn't report them
@@ -84,7 +84,7 @@ export function pick(r: Ray, s: Snapshot, c: CompiledLevel, groundY = 0): Hit | 
 export interface Aimed { shot: Shot; error: number; reachable: boolean }
 
 /** The quantised shot of `ammo` that best reaches `target` from azimuth `az` at `power`. */
-export function shotFor(c: CompiledLevel, ammo: AmmoKind, az: number, power: number, target: Vec3, substeps = SUBSTEPS): Aimed | null {
+export function shotFor(c: CompiledLevel, ammo: RackItem, az: number, power: number, target: Vec3, substeps = SUBSTEPS): Aimed | null {
   const f = c.frame, ph = f.pitch * f.unit;
   if (ammo === 'drop') {
     const shot: Shot = { ammo, x: Math.round((4 * target[0]) / ph), z: Math.round((4 * target[2]) / ph) };

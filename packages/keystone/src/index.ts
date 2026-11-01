@@ -1,4 +1,5 @@
 export * from './materials.ts';
+export * from './rack.ts';
 export * from './shots.ts';
 export * from './level.ts';
 export * from './rules.ts';

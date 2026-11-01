@@ -21,6 +21,12 @@ describe('level files', () => {
     }
   });
 
+  it('reads racks and solutions holding presets and weapons (p-, w-)', () => {
+    const d: LevelDef = { ...structuredClone(L2), rack: ['p-wreckingball', 'w-grenade', 'cannonball'], solutions: { par: [{ ammo: 'w-grenade', az: 540, y: 8, yaw: 0, pitch: 300, power: 80 }] } };
+    expect(parseLevelDef(JSON.parse(levelJson(d)))).toEqual(d);
+    expect(() => parseLevelDef({ ...d, rack: ['p-nuke'] })).toThrow(/level.rack\[0\] must be one of marble, cannonball, cue, drop, p-<preset> \(beachball/);
+  });
+
   it('refuses what is not a level, saying where', () => {
     const bad = (edit: (d: Record<string, any>) => void) => {
       const d = structuredClone(L2) as Record<string, any>;

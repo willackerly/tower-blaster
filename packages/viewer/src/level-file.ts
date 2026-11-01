@@ -5,7 +5,7 @@
 // in a hand-edited level is an error rather than a silently different level.
 // Whether the level is any good (overlaps, unsupported bodies, tunnelling ammo)
 // is validateLevel's question; the panel shows its issues without refusing.
-import { AMMO_KINDS, type AmmoKind, checkShot, compileLevel, type CourseOverride, type Issue, type LevelDef, MATERIALS, type MaterialName, type Part, type Role, ROLES, type Shot, validateLevel } from '@tb/keystone';
+import { checkShot, compileLevel, type CourseOverride, type Issue, type LevelDef, MATERIALS, type MaterialName, type Part, isRackItem, RACK_ITEM_NAMES, type RackItem, type Role, ROLES, type Shot, validateLevel } from '@tb/keystone';
 
 export const LEVEL_FILE_FORMAT = 'tower-blaster/keystone-level';
 
@@ -28,7 +28,7 @@ export function parseLevelDef(v: unknown, where = 'level'): LevelDef {
     crownLine: num(o.crownLine, `${where}.crownLine`),
     objective: objective(o.objective, `${where}.objective`),
     par: int(o.par, `${where}.par`),
-    rack: arr(o.rack, `${where}.rack`).map((a, i) => oneOf(a, AMMO_KINDS, `${where}.rack[${i}]`) as AmmoKind),
+    rack: arr(o.rack, `${where}.rack`).map((a, i) => rackItem(a, `${where}.rack[${i}]`)),
     launcher: launcher(o.launcher, `${where}.launcher`),
   };
   if (o.unit !== undefined) def.unit = positive(o.unit, `${where}.unit`);
@@ -99,6 +99,11 @@ function objective(v: unknown, where: string): LevelDef['objective'] {
   return { kind, maxH: num(o.maxH, `${where}.maxH`), ...(o.footprintMax !== undefined ? { footprintMax: num(o.footprintMax, `${where}.footprintMax`) } : {}) };
 }
 
+function rackItem(v: unknown, where: string): RackItem {
+  if (typeof v !== 'string' || !isRackItem(v)) throw new Error(`${where} must be one of ${RACK_ITEM_NAMES}`);
+  return v;
+}
+
 function launcher(v: unknown, where: string): LevelDef['launcher'] {
   const o = object(v, where);
   only(o, ['radius', 'y', 'dropY'], where);
@@ -107,7 +112,7 @@ function launcher(v: unknown, where: string): LevelDef['launcher'] {
 
 function shot(v: unknown, where: string): Shot {
   const o = object(v, where);
-  const ammo = oneOf(o.ammo, AMMO_KINDS, `${where}.ammo`);
+  const ammo = rackItem(o.ammo, `${where}.ammo`);
   const keys = ammo === 'drop' ? ['x', 'z'] : ammo === 'cue' ? ['x', 'y', 'z', 'dir', 'power'] : ['az', 'y', 'yaw', 'pitch', 'power'];
   only(o, ['ammo', ...keys], where);
   const s = { ammo, ...Object.fromEntries(keys.map((k) => [k, int(o[k], `${where}.${k}`)])) } as Shot;

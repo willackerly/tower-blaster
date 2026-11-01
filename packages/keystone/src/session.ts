@@ -6,12 +6,13 @@ import { massOf, type SpawnEvent, type Vec3 } from '@tb/engine-api';
 import { GRAVITY } from './materials.ts';
 import type { CompiledLevel } from './level.ts';
 import { crownDown, heritageBroken, leverage, levelScore, type LevelScore, type Observation, type SettleState, settleUpdate, type ShotOutcome, skyline, tier } from './rules.ts';
-import { type AmmoKind, ammoKE, type Shot, shotToSpawn } from './shots.ts';
+import type { RackItem } from './rack.ts';
+import { ammoKE, type Shot, shotToSpawn } from './shots.ts';
 
 export type Phase = 'aiming' | 'running' | 'cleared' | 'failed';
 
 export type Feedback =
-  | { t: 'fired'; step: number; ammo: AmmoKind; body: number; ke: number }
+  | { t: 'fired'; step: number; ammo: RackItem; body: number; ke: number }
   /** The ammo's velocity changed by more than gravity explains: it hit something. Drives hit-stop. */
   | { t: 'contact'; step: number; body: number; dv: number; impulse: number }
   | { t: 'crownDown'; step: number; body: number; ordinal: number }
@@ -31,7 +32,7 @@ interface Live {
   body: number;
   ke: number;
   mass: number;
-  ammo: AmmoKind;
+  ammo: RackItem;
   settle: SettleState;
   contact: boolean;
   prevVel: Vec3 | null;
@@ -43,7 +44,7 @@ interface Live {
 
 export class Session {
   phase: Phase = 'aiming';
-  rackLeft: AmmoKind[];
+  rackLeft: RackItem[];
   readonly outcomes: ShotOutcome[] = [];
   readonly inputs: { step: number; shot: Shot }[] = [];
   /** Crowns down as of the last settle (authoritative), and live for feedback. */
@@ -76,7 +77,7 @@ export class Session {
   }
 
   get strokes() { return this.outcomes.length + (this.live ? 1 : 0); }
-  canFire(ammo: AmmoKind): boolean { return this.phase === 'aiming' && this.rackLeft.includes(ammo); }
+  canFire(ammo: RackItem): boolean { return this.phase === 'aiming' && this.rackLeft.includes(ammo); }
 
   /**
    * Fire at engine step `step` (its current stepIndex). Returns the spawn to push. `body` is the
