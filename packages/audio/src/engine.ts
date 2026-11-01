@@ -14,6 +14,15 @@
 //               long as the contact, clickKernel), exactly: per (material, bin,
 //               sector) an undamped resonator with that period, fed each
 //               impulse and, one period later, its negative, which stops it.
+//   grit        chips knocked off hard hits (materials with a finite gritDb:
+//               stone), plan S8: each impact over GRIT.dvMin sheds a Poisson
+//               number of tiny bright grains (one of GRAIN_VARIANTS kernels,
+//               ~1.5-12 kHz) over an exponential spread after it. Foreground
+//               impacts and the bank's rebuilt impulses shed them alike, so a
+//               grain carries a known energy (gritEnergy) whichever path it
+//               came from; above maxGrains a cell and frame, fewer grains carry
+//               the same energy. Grit draws from its own random stream: the
+//               modes and clicks are bit for bit the same with it on or off.
 //
 // Impulse times are spread uniformly over the frame they arrived in, never on
 // the frame start: aligned onsets buzz at the frame rate (+13 dB in the study).
@@ -28,7 +37,7 @@
 // limiting does not crackle.
 import { binOf, DV_EDGES, TOP_FIELDS, type AudioFrame } from './frame.ts';
 import type { SoundMaterial } from './material.ts';
-import { clickKernel, contactTime, modes, pulseSpectrum, type Modes } from './modes.ts';
+import { clickKernel, contactTime, gauss, modes, pulseSpectrum, soundSize, type Modes } from './modes.ts';
 
 export const BLOCK = 128;
 const RING = 64; // blocks of scheduling horizon (171 ms at 48 kHz)
@@ -36,6 +45,46 @@ const BUCKET = 4096; // impulses per block, at most
 /** Limiter ceiling (each channel) and lookahead, samples. */
 export const CEILING = 0.9;
 export const LOOKAHEAD = 64;
+
+/**
+ * Grit, the study's chip model (/mnt/project-files/sound/scripts/snd.py, add_grit) made exact in energy:
+ * an impact of speed change dv (m/s) at A = dv / distance sheds Poisson(min(perDv dv, most)) grains when
+ * dv > dvMin, each delayed by an exponential of mean spread (s, for a refEdge block; sqrt(edge / refEdge)
+ * for others, as chips fall from higher), with a lognormal(0, sigma) amplitude normalised to mean square 1.
+ * A grain's energy (sum of squares at 48 kHz, Pa^2) is (pa 10^(gritDb / 20) (edge / refEdge)^1.5 A dv)^2:
+ * chip energy in proportion to the block's volume. pa matches the study's grain (0.02 Pa per (m/s)^2/m,
+ * peak 1 on a 9-sample Hann derivative) for a 25 cm block.
+ */
+export const GRIT = { dvMin: 0.6, perDv: 3, most: 30, spread: 0.02, refEdge: 0.25, sigma: 0.7, pa: 0.02 } as const;
+/** Grain kernels (chip sizes): lengths 4 to 32 samples at 48 kHz, log spaced. */
+export const GRAIN_VARIANTS = 16;
+const GRING = 128; // blocks of grain horizon (341 ms at 48 kHz): a frame up to `resync` ahead plus the spread's tail
+const GBUCKET = 1024; // grains per block, at most
+
+/** Hann derivative of `len` samples (the study's chip click), scaled to energy `energy`. */
+function hannStep(len: number, energy: number): Float32Array {
+  const h = (n: number) => 0.5 - 0.5 * Math.cos((2 * Math.PI * n) / len), out = new Float32Array(len);
+  let e = 0;
+  for (let i = 0; i < len; i++) { out[i] = h(i + 1) - h(i); e += out[i]! ** 2; }
+  for (let i = 0; i < len; i++) out[i]! *= Math.sqrt(energy / e);
+  return out;
+}
+
+/** The grain kernels at a sample rate: unit energy at 48 kHz (energy in proportion to the rate, as a fixed-length pulse's). */
+export function grainKernels(sr: number): Float32Array[] {
+  return Array.from({ length: GRAIN_VARIANTS }, (_, j) => hannStep(Math.max(3, Math.round(4 * 8 ** (j / (GRAIN_VARIANTS - 1)) * (sr / 48000))), sr / 48000));
+}
+
+/** Pa^2 at 48 kHz per (A dv)^2 of one grain of material m on a block of `edge` metres (0: no grit). */
+export function gritEnergy(m: SoundMaterial, edge = 1): number {
+  if (!(m.gritDb > -Infinity)) return 0;
+  // The study's grain: peak 0.02 on diff(hanning(10)) (9 samples), lognormal(0, 0.7) amplitude (mean square e^0.98).
+  const ref = hannStep(9, 1), peak = Math.max(...ref.map(Math.abs)), study = (GRIT.pa / peak) ** 2 * Math.exp(2 * GRIT.sigma ** 2);
+  return study * 10 ** (m.gritDb / 10) * (soundSize(m, edge) / GRIT.refEdge) ** 3;
+}
+
+/** Expected grains of one impact. */
+export const gritGrains = (dv: number): number => (dv > GRIT.dvMin ? Math.min(GRIT.perDv * dv, GRIT.most) : 0);
 
 export interface EngineOptions {
   sampleRate: number;
@@ -46,6 +95,8 @@ export interface EngineOptions {
   voices?: number;
   /** Most impulses rebuilt per histogram cell and frame (above: fewer, stronger ones of the same energy). */
   maxImpulses?: number;
+  /** Most grit grains per histogram cell and frame, expected (above: fewer, stronger ones of the same energy). */
+  maxGrains?: number;
   latency?: number;
   resync?: number;
   /** Pressure (Pa at the listener) that maps to full scale before the limiter. */
@@ -71,6 +122,8 @@ interface MatState {
   clickPeak: Float64Array; // per bin: impulse into the click resonator per (m/s of dv per m)
   binT: Float64Array; // per bin: contact time
   w: Float64Array; // scratch weights
+  /** Grit: amplitude per (A dv) of a unit-energy grain kernel (0: none), and the grains' mean delay in samples. */
+  gritAmp: number; gritDelay: number;
 }
 
 interface Voice {
@@ -122,6 +175,7 @@ export class CollapseEngine {
   readonly classes: number;
   readonly sectors: number;
   readonly maxImpulses: number;
+  readonly maxGrains: number;
   latency: number;
   resync: number;
   fullScale: number;
@@ -133,6 +187,10 @@ export class CollapseEngine {
   private mats: (MatState | null)[] = [];
   private voices: Voice[];
   private rand: () => number;
+  private grand: () => number; // grit's own stream
+  private kernels: Float32Array[];
+  private gbus: Float32Array; // per sector: this block and the next DMAX samples of grains
+  private gw: number;
   private now = 0; // absolute sample of the next block
   private nextFrame = -1; // absolute sample where the next frame starts
   private sector = new Float32Array(0);
@@ -148,17 +206,34 @@ export class CollapseEngine {
   private bn = new Uint32Array(RING);
   /** Impulses dropped for a full bucket (their energy goes to the bucket's last impulse). */
   overflow = 0;
+  // Grain buckets, by block: t, sector, kernel, amplitude.
+  private gt = new Uint16Array(GRING * GBUCKET);
+  private gs = new Uint8Array(GRING * GBUCKET);
+  private gv = new Uint8Array(GRING * GBUCKET);
+  private ga = new Float32Array(GRING * GBUCKET);
+  private gn = new Uint32Array(GRING);
+  /** Grains merged into a full bucket's last (their energy kept). */
+  gritOverflow = 0;
+  /** Grains scheduled (a probe for tests and stats). */
+  grains = 0;
 
   constructor(opts: EngineOptions) {
     this.sr = opts.sampleRate;
     this.classes = opts.classes ?? 8;
     this.sectors = opts.sectors ?? 4;
     this.maxImpulses = opts.maxImpulses ?? 256;
+    this.maxGrains = opts.maxGrains ?? 64;
     this.latency = opts.latency ?? 0.03;
     this.resync = opts.resync ?? 0.12;
     this.fullScale = opts.fullScale ?? 30;
     this.rand = mulberry(opts.seed ?? 1);
+    this.grand = mulberry((opts.seed ?? 1) ^ 0x5bd1e995);
     this.sector = new Float32Array(this.sectors * BLOCK);
+    this.kernels = grainKernels(this.sr);
+    const dmax = Math.max(...this.kernels.map((k) => k.length));
+    if (dmax > BLOCK) throw new Error(`grain kernels longer than a block at ${this.sr} Hz`);
+    this.gw = BLOCK + dmax;
+    this.gbus = new Float32Array(this.sectors * this.gw);
     this.voices = Array.from({ length: opts.voices ?? 48 }, () => ({
       on: false, mat: 0, age: 0, life: 0, level: 0, gl: 0, gr: 0, M: 0,
       a1: new Float32Array(64), a2: new Float32Array(64), y1: new Float32Array(64), y2: new Float32Array(64), amp: new Float32Array(64),
@@ -181,6 +256,8 @@ export class CollapseEngine {
       cy1: new Float64Array(DV_EDGES.length * S), cy2: new Float64Array(DV_EDGES.length * S),
       cx: keep ? old.cx : new Float32Array(DV_EDGES.length * S * BLOCK), cring: [], cLast: new Float64Array(DV_EDGES.length * S).fill(-Infinity),
       clickPeak: new Float64Array(DV_EDGES.length), binT: new Float64Array(DV_EDGES.length), w: new Float64Array(md.freq.length),
+      gritAmp: Math.sqrt(gritEnergy(m, edge)),
+      gritDelay: GRIT.spread * Math.sqrt(soundSize(m, edge) / GRIT.refEdge) * this.sr,
     };
     for (let c = 0; c < C; c++) st.mult[c] = Math.exp(m.jitter * normInv((c + 0.5) / C));
     for (let c = 0; c < C; c++) for (let s = 0; s < S; s++) for (let k = 0; k < M; k++) {
@@ -224,7 +301,10 @@ export class CollapseEngine {
       const o = j * TOP_FIELDS, dv = f.top[o]!, dist = f.top[o + 1]!, pan = f.top[o + 2]!, mat = f.top[o + 3]!;
       const s = Math.min(S - 1, Math.max(0, Math.floor(((pan + 1) / 2) * S))), c = (mat * DV_EDGES.length + binOf(dv)) * S + s;
       counts[c] = Math.max(0, counts[c]! - 1); a2[c] = Math.max(0, a2[c]! - (dv / dist) ** 2);
-      this.voice(mat, dv, dist, pan, f.top[o + 4]!, start + (this.alignOnsets ? 0 : Math.floor(this.rand() * len)));
+      const at = start + (this.alignOnsets ? 0 : Math.floor(this.rand() * len));
+      this.voice(mat, dv, dist, pan, f.top[o + 4]!, at);
+      const st = this.mats[mat];
+      if (st && st.gritAmp > 0) this.grit(st, at, s, (dv / dist) * dv, gritGrains(dv), 1);
     }
     for (let mat = 0; mat < f.materials; mat++) {
       if (!this.mats[mat]) continue;
@@ -236,8 +316,17 @@ export class CollapseEngine {
         let sum = 0;
         const dvs: number[] = [];
         for (let e = 0; e < k; e++) { const dv = lo * (hi / lo) ** this.rand(); dvs.push(dv); sum += dv * dv; }
-        const g = Math.sqrt(a2[c]! / sum);
-        for (const dv of dvs) this.impulse(start + (this.alignOnsets ? 0 : Math.floor(this.rand() * len)), mat, Math.min(this.classes - 1, Math.floor(this.rand() * this.classes)), s, g * dv, dv);
+        const g = Math.sqrt(a2[c]! / sum), st = this.mats[mat]!;
+        // Grit: impulse e stands for n / k impacts (its A^2 is theirs summed), so it sheds their grains,
+        // n / k gritGrains(dv) of them, times q to keep the cell under maxGrains; each grain's amplitude is
+        // over sqrt(n / k q), so the energy is what the impacts' own grains would carry.
+        let q = 0;
+        if (st.gritAmp > 0) { let lam = 0; for (const dv of dvs) lam += gritGrains(dv); lam *= n / k; q = lam > 0 ? Math.min(1, this.maxGrains / lam) * (n / k) : 0; }
+        for (const dv of dvs) {
+          const at = start + (this.alignOnsets ? 0 : Math.floor(this.rand() * len));
+          this.impulse(at, mat, Math.min(this.classes - 1, Math.floor(this.rand() * this.classes)), s, g * dv, dv);
+          if (q > 0) this.grit(st, at, s, g * dv * dv, gritGrains(dv) * q, 1 / Math.sqrt(q));
+        }
       }
     }
   }
@@ -250,6 +339,26 @@ export class CollapseEngine {
     const q = slot * BUCKET + j;
     this.bt[q] = at - blk * BLOCK; this.bm[q] = mat; this.bc[q] = cls; this.bs[q] = sector; this.bA[q] = A; this.bdv[q] = dv;
     this.bn[slot] = j + 1;
+  }
+
+  /** Schedule Poisson(lam) grains after sample `at` in a sector, each of amplitude gain * Adv * the material's per grain. */
+  private grit(st: MatState, at: number, sector: number, Adv: number, lam: number, gain: number): void {
+    if (!(lam > 0)) return;
+    const r = this.grand, amp = st.gritAmp * Adv * gain, norm = Math.exp(-(GRIT.sigma ** 2)), nowBlk = Math.floor(this.now / BLOCK);
+    // Poisson by products of uniforms (Knuth): lam is at most GRIT.most n / k q <= maxGrains here.
+    const stop = Math.exp(-lam);
+    for (let p = r(); p > stop; p *= r()) {
+      let t = at + Math.floor(-Math.log(1 - r()) * st.gritDelay), blk = Math.floor(t / BLOCK);
+      // A tail past the horizon (rare: frames run at most `resync` ahead) plays in its last block instead.
+      if (blk - nowBlk >= GRING) { blk = nowBlk + GRING - 1; t = blk * BLOCK + (t % BLOCK); }
+      const slot = blk % GRING, v = Math.min(GRAIN_VARIANTS - 1, Math.floor(r() * GRAIN_VARIANTS)), a = amp * norm * Math.exp(GRIT.sigma * gauss(r));
+      this.grains++;
+      const j = this.gn[slot]!;
+      if (j >= GBUCKET) { this.gritOverflow++; const q = slot * GBUCKET + GBUCKET - 1; this.ga[q] = Math.hypot(this.ga[q]!, a); continue; }
+      const q = slot * GBUCKET + j;
+      this.gt[q] = t - blk * BLOCK; this.gs[q] = sector; this.gv[q] = v; this.ga[q] = a;
+      this.gn[slot] = j + 1;
+    }
   }
 
   private voice(mat: number, dv: number, dist: number, pan: number, z: number, at: number): void {
@@ -319,6 +428,19 @@ export class CollapseEngine {
         if (this.now + BLOCK - last > D && Math.abs(y1) < 1e-9 && Math.abs(y2) < 1e-9) { y1 = 0; y2 = 0; }
         st.cy1[r] = y1; st.cy2[r] = y2; st.cLast[r] = last;
       }
+    }
+    // Grit grains: kernels into the grain bus (a grain may run into the next block), this block into the sectors.
+    const gslot = Math.floor(this.now / BLOCK) % GRING, gn = this.gn[gslot]!, gb = this.gbus, W = this.gw;
+    for (let j = 0; j < gn; j++) {
+      const q = gslot * GBUCKET + j, k = this.kernels[this.gv[q]!]!, a = this.ga[q]!, o = this.gs[q]! * W + this.gt[q]!;
+      for (let i = 0; i < k.length; i++) gb[o + i]! += a * k[i]!;
+    }
+    this.gn[gslot] = 0;
+    for (let s = 0; s < S; s++) {
+      const o = s * W;
+      for (let i = 0; i < BLOCK; i++) sec[s * BLOCK + i]! += gb[o + i]!;
+      gb.copyWithin(o, o + BLOCK, o + W);
+      gb.fill(0, o + W - BLOCK, o + W);
     }
     for (let s = 0; s < S; s++) {
       const [gl, gr] = panGains(-1 + (2 * s + 1) / S);
