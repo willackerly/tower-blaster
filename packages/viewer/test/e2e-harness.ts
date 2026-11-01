@@ -2,7 +2,8 @@
 // the WebGPU flags on Linux), started once per file, and a page opener. A
 // file calls useViewer() at its top; browser is null when no browser could
 // be launched and REQUIRE_WEBGPU is unset, and its tests then skip.
-// TB_CHANNEL=chrome runs them in the installed Chrome (the real GPU).
+// TB_CHANNEL=chrome runs them in the installed Chrome (the real GPU); TB_HEADED=1
+// shows the window, for frame-rate measurements at the display's own rate.
 import { fileURLToPath } from 'node:url';
 import { platform } from 'node:os';
 import { afterAll, beforeAll } from 'vitest';
@@ -23,7 +24,8 @@ export function useViewer(): void {
     try {
       // TB_CHANNEL=chrome: the installed Chrome, so the real GPU (Metal on a Mac), as the game's tests.
       const channel = process.env.TB_CHANNEL;
-      browser = await chromium.launch({ args: platform() === 'linux' ? WEBGPU_ARGS : ['--enable-unsafe-webgpu'], ...(channel ? { channel } : {}) });
+      // TB_HEADED=1: a visible window, so rAF runs at the display's rate (a 120 Hz ProMotion panel); headless runs at 60.
+      browser = await chromium.launch({ args: platform() === 'linux' ? WEBGPU_ARGS : ['--enable-unsafe-webgpu'], headless: process.env.TB_HEADED !== '1', ...(channel ? { channel } : {}) });
     } catch (e) {
       if (requireWebGPU()) throw e;
     }

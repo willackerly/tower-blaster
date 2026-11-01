@@ -19,7 +19,8 @@
 // rendered case saves a screenshot every 2 s, for reviewing the camera.
 // The frames cases are the pipelining audit's A/B (docs/pipelining.md): the
 // same rendered cluster shots with keystone.frames=half and auto, against the
-// default (every frame), on a 120 Hz display. TB_PROBE_CASES=<regex> runs
+// default (every frame), on a 120 Hz display (TB_HEADED=1: headless Chrome
+// runs rAF at 60 Hz, which is never decimated). TB_PROBE_CASES=<regex> runs
 // only the cases whose name matches (e.g. 'cluster-40-rendered').
 // Not a performance result unless run on the physical GPU (CLAUDE.md).
 import { appendFileSync, mkdirSync, writeFileSync } from 'node:fs';

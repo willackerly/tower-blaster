@@ -182,8 +182,10 @@ through the coordinator.
   - Lower look quality during collapses: changes the look mid-shot. Rejected.
   - Give frames a fixed GPU budget and let the valve see it: that is what
     happens now implicitly. It does not free anything.
-- **Measure (M5, 120 Hz, headed).** The G4 probe now has four A/B cases:
-  `TB_CHANNEL=chrome TB_PROBE_CASES='cluster-40-rendered' TB_PROBE_OUT=$HOME/tb-e7-frames-<sha> pnpm vitest run packages/viewer/test/e2e-pacing-probe.test.ts --no-file-parallelism`.
+- **Measure (M5, 120 Hz, headed).** The G4 probe now has four A/B cases. It
+  must run headed (`TB_HEADED=1`), because headless Chrome runs rAF at 60 Hz,
+  which is never decimated:
+  `TB_CHANNEL=chrome TB_HEADED=1 TB_PROBE_CASES='cluster-40-rendered' TB_PROBE_OUT=$HOME/tb-e7-frames-<sha> pnpm vitest run packages/viewer/test/e2e-pacing-probe.test.ts --no-file-parallelism`.
   That runs blocks and city, each with all, half and auto (plus the
   budget-variant blocks cases). Compare `pace.speedMedian`, `wallMs` (shot
   length), `frameMs` p95/p99 (drawn-frame pacing) and `draws`.
