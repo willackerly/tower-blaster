@@ -5,6 +5,7 @@
   "exports": { ".": "./src/index.ts" },
   "dependencies": {
     "@tb/engine-api": "workspace:*",
-    "@tb/geom": "workspace:*"
+    "@tb/geom": "workspace:*",
+    "@tb/weapons": "workspace:*"
   }
 }

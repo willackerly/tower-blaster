@@ -13,6 +13,7 @@
     "@tb/keystone": "workspace:*",
     "@tb/metrics": "workspace:*",
     "@tb/physics-gpu": "workspace:*",
-    "@tb/render": "workspace:*"
+    "@tb/render": "workspace:*",
+    "@tb/weapons": "workspace:*"
   }
 }

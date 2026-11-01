@@ -1,12 +1,15 @@
 // Session records: a level hash, the engine and the quantised shots with the
 // step each was fired at. Varint-packed and base64url, so a whole attempt is
 // a short link and a replay is exact on the same engine build.
+import { isLaunchItem, type LaunchItem } from './rack.ts';
 import { type Shot } from './shots.ts';
 
 export interface SessionRecord { v: 1; level: string; levelHash: string; engine: string; inputs: { step: number; shot: Shot }[] }
 
 const AMMO_CODE = { marble: 0, cannonball: 1, cue: 2, drop: 3 } as const;
 const AMMO_NAME = ['marble', 'cannonball', 'cue', 'drop'] as const;
+/** A launch item by name (p-<preset>, w-<weapon>): the code, then the name, then a launch shot's fields. Records from before decode unchanged. */
+const NAMED = 4;
 
 class Writer {
   bytes: number[] = [];
@@ -45,7 +48,8 @@ export function encodeRecord(r: SessionRecord): string {
   let last = 0;
   for (const { step, shot } of r.inputs) {
     w.uint(step - last); last = step;
-    w.uint(AMMO_CODE[shot.ammo]);
+    if (Object.hasOwn(AMMO_CODE, shot.ammo)) w.uint(AMMO_CODE[shot.ammo as keyof typeof AMMO_CODE]);
+    else { w.uint(NAMED); w.str(shot.ammo); }
     if (shot.ammo === 'drop') { w.int(shot.x); w.int(shot.z); }
     else if (shot.ammo === 'cue') { w.int(shot.x); w.int(shot.y); w.int(shot.z); w.uint(shot.dir); w.uint(shot.power); }
     else { w.uint(shot.az); w.int(shot.y); w.int(shot.yaw); w.int(shot.pitch); w.uint(shot.power); }
@@ -62,12 +66,12 @@ export function decodeRecord(s: string): SessionRecord {
   let step = 0;
   for (let k = 0; k < n; k++) {
     step += r.uint();
-    const ammo = AMMO_NAME[r.uint()];
-    if (!ammo) throw new Error('bad ammo code');
+    const code = r.uint(), ammo = code === NAMED ? r.str() : AMMO_NAME[code];
+    if (!ammo || (code === NAMED && !isLaunchItem(ammo))) throw new Error(`bad ammo ${code === NAMED ? JSON.stringify(ammo) : `code ${code}`}`);
     let shot: Shot;
     if (ammo === 'drop') shot = { ammo, x: r.int(), z: r.int() };
     else if (ammo === 'cue') shot = { ammo, x: r.int(), y: r.int(), z: r.int(), dir: r.uint() as 0 | 1 | 2 | 3, power: r.uint() };
-    else shot = { ammo, az: r.uint(), y: r.int(), yaw: r.int(), pitch: r.int(), power: r.uint() };
+    else shot = { ammo: ammo as LaunchItem, az: r.uint(), y: r.int(), yaw: r.int(), pitch: r.int(), power: r.uint() };
     inputs.push({ step, shot });
   }
   return { v: 1, level, levelHash, engine, inputs };
