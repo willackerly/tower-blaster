@@ -72,8 +72,9 @@ the game, below).
 
 The game page (and the viewer under `rules=keystone`) plays the same collapse
 synth for its impacts. `@tb/game` collapse-sound.ts taps the snapshot the game
-already has on the CPU once per drawn frame in which physics stepped, as the
-viewer does, and posts it to the same worklet on the page's one AudioContext.
+already has on the CPU once per physics step (the game's physics loop,
+physics-loop.ts; the audio frame spans the wall time since the last step, so
+slow motion stretches it), and posts it to the same worklet on the page's one AudioContext.
 The old synth (audio.ts) keeps the cues: launch whump, crown arpeggio,
 heritage tritone, tier bowl and level end. Its `impacts` and `contact` voices
 are off unless `keystone.sound=synth`. Both paths meet in a last fast

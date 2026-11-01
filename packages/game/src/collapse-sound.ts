@@ -1,5 +1,5 @@
 // The game's collision sound: @tb/audio's collapse synth in an AudioWorklet,
-// fed one AudioFrame per drawn frame in which physics stepped, from the
+// fed one AudioFrame per physics step (physics-loop.ts), from the
 // snapshot the game already has on the CPU (FrameTap). It replaces the
 // synth's impact and contact voices (audio.ts); the crown, heritage, tier,
 // level-end and launch cues stay there. Created on the first user gesture.
@@ -55,7 +55,7 @@ export class CollapseSound {
     this.post({ type: 'gain', gain: this.gain, muted: m });
   }
 
-  /** After the frame's steps: the snapshot (metres, real time), the bodies in slot order and the camera. */
+  /** After a physics step: the snapshot (metres; the frame spans the real time since the last one), the bodies in slot order and the camera. */
   frame(s: Snapshot, descs: readonly BodyDesc[], eye: Vec3, target: Vec3): void {
     const c = this.level;
     if (!c || !this.node || this.status !== 'on') return;
