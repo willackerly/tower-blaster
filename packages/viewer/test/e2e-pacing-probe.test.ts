@@ -60,7 +60,8 @@ const ALL: Case[] = [
   { name: 'blocks-grenade-20', scene: BLOCKS, ammo: 'w-grenade', iterations: 20, rendered: false },
   { name: 'blocks-grenade-40-rendered', scene: BLOCKS, ammo: 'w-grenade', iterations: 40, rendered: true },
 ];
-const CASES = SMALL ? ALL.filter((k) => k.iterations === 40) : ALL;
+// Rendered frames take up to a second on SwiftShader: the rendered case is a real GPU's only.
+const CASES = SMALL ? ALL.filter((k) => k.iterations === 40 && !k.rendered) : ALL;
 
 describe.runIf(RUN)('G4 probe: a 10k level\'s shot on a real GPU', () => {
   for (const k of CASES) {
@@ -75,7 +76,14 @@ describe.runIf(RUN)('G4 probe: a 10k level\'s shot on a real GPU', () => {
       await ready(page, 10 * MINUTES);
       await page.evaluate((fast) => { window.__viewer.game!.fast = fast; }, !k.rendered);
       expect(await page.evaluate((s) => window.__viewer.game!.fire(s), shot)).toBe(true);
-      await page.waitForFunction(() => { const g = window.__viewer.game!; return g.ready && g.strokes === 1; }, undefined, { timeout: 20 * MINUTES, polling: 500 });
+      // Until the shot settles, the pace every 250 ms: the valve's time scale, the sim speed reached, the HUD tag.
+      const pace: Array<{ t: number; timeScale: number; speed: number; tag: string; tailSkip: boolean; costMs: number }> = [];
+      const t0 = Date.now();
+      while (!(await page.evaluate(() => { const g = window.__viewer.game!; return g.ready && g.strokes === 1; }))) {
+        if (Date.now() - t0 > 20 * MINUTES) throw new Error('the shot did not settle in 20 min');
+        pace.push({ t: Date.now() - t0, ...(await page.evaluate(() => window.__viewer.game!.pace)) });
+        await page.waitForTimeout(250);
+      }
       const t = await page.evaluate(() => { const g = window.__viewer.game!; return { ...g.timing, collapse: g.collapse, bodies: g.bodies }; });
       const health = await page.evaluate(() => window.__viewer.health);
       const n = compileLevel(def).meta.n, allowance = settleAllowance(n);
@@ -86,13 +94,14 @@ describe.runIf(RUN)('G4 probe: a 10k level\'s shot on a real GPU', () => {
         case: k.name, search, steps: t.stepMs.length, loadMs: Math.round(t.loadMs), collapse: t.collapse, allowance,
         stepMs: { median: q(t.stepMs, 0.5), p95: q(t.stepMs, 0.95), max: Math.max(...t.stepMs) },
         frameMs: k.rendered ? { n: t.frameMs.length, median: q(t.frameMs, 0.5), p95: q(t.frameMs, 0.95), p99: q(t.frameMs, 0.99), max: Math.max(...t.frameMs) } : null,
+        pace: { speedMin: Math.min(...pace.map((p) => p.speed)), speedMedian: q(pace.map((p) => p.speed), 0.5), tagged: pace.filter((p) => p.tag).length, samples: pace.length, tailSkipAt: pace.find((p) => p.tailSkip)?.t ?? null },
         moving: { peak: Math.max(...t.moving), last: t.moving.at(-1), every60, quietFromAllowance: quietFrom(allowance), quietFrom1pct: quietFrom(n / 100), quietFrom0: quietFrom(0) },
         limits: health ? limitsHit(health) : null,
       };
       console.log(`G4 probe ${JSON.stringify(summary)}`);
       if (OUT) {
         mkdirSync(OUT, { recursive: true });
-        writeFileSync(join(OUT, `${k.name}.json`), JSON.stringify({ summary, stepMs: t.stepMs, moving: t.moving, frameMs: t.frameMs }));
+        writeFileSync(join(OUT, `${k.name}.json`), JSON.stringify({ summary, stepMs: t.stepMs, costMs: t.costMs, moving: t.moving, frameMs: t.frameMs, pace }));
       }
       expect(errors).toEqual([]);
       await page.close();

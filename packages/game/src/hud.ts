@@ -51,6 +51,8 @@ export interface HudState {
   collapse?: number;
   met?: boolean;
   canBank?: boolean;
+  /** The slow-motion tag while physics runs slower than real time ('×0.8'; pacing.ts slowTag), '' or absent at real time. */
+  pace?: string;
 }
 
 export const pct = (x: number) => `${Math.floor(100 * x)}%`;
@@ -83,7 +85,7 @@ export function hudHtml(s: HudState): string {
     : `<div class="row"><span>Par ${d.par}</span><span>Stroke ${s.strokes}</span></div>`;
   const crowns = !outcome || s.crownsTotal ? `<div class="row"><span>Crowns</span><span class="crowns">${s.crownsDown} / ${s.crownsTotal}</span></div>` : '';
   return `
-    <div class="title">W${d.world}-${esc(d.id.replace(/^L/, ''))} · ${esc(d.name)}</div>
+    <div class="title">W${d.world}-${esc(d.id.replace(/^L/, ''))} · ${esc(d.name)}${s.pace ? ` <span class="pace" title="physics is running slower than real time">${esc(s.pace)}</span>` : ''}</div>
     ${d.custom ? `<div class="small custom">${CUSTOM_NOTE}</div>` : ''}
     ${head}
     ${crowns}

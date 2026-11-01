@@ -12,6 +12,7 @@ export const GAME_CSS = `
   .kg-hud .title { font-size: 17px; font-weight: 650; margin-bottom: 4px; }
   .kg-hud .row { display: flex; justify-content: space-between; gap: 16px; align-items: center; }
   .kg-hud .crowns { color: #f7b955; font-weight: 650; }
+  .kg-hud .pace { font-size: 12px; font-weight: 650; padding: 1px 6px; border-radius: 4px; background: #3a4459; color: #9fc3ff; vertical-align: 2px; }
   .kg-hud .crowns.pop { animation: kg-pop 0.35s ease-out; }
   .kg-hud .chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0 6px; }
   .kg-hud .chip { padding: 4px 8px; border-radius: 6px; background: #2b3242; }

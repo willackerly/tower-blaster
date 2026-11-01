@@ -5,7 +5,7 @@
 // case is e2e-keystone-gpu.test.ts.
 import { describe, expect, it } from 'vitest';
 import { RapierEngine } from '@tb/adapter-rapier';
-import { driverOptions } from '@tb/game';
+import { DEFAULT_FEEL, driverOptions } from '@tb/game';
 import { compileLevel, L1, L2, type LevelDef, runSession, type Shot, snapshotHash } from '@tb/keystone';
 import { encodeLevelParam } from '../src/index.ts';
 import { browser, useViewer } from './e2e-harness.ts';
@@ -25,7 +25,7 @@ describe('viewer under Keystone rules', () => {
     // The game's HUD in the viewer's panel; the viewer's help shows the game's keys.
     expect(await page.locator('#hud.kg-hud').innerText()).toMatch(new RegExp(L1.name));
     expect(await page.locator('#help').innerText()).toMatch(/Retry|retry/);
-    expect(await page.evaluate(() => ({ engine: window.__viewer.game!.engine, feel: window.__viewer.game!.feel, bodies: window.__viewer.game!.bodies }))).toEqual({ engine: 'rapier', feel: { hitStop: false, slowMo: false }, bodies: 40 });
+    expect(await page.evaluate(() => ({ engine: window.__viewer.game!.engine, feel: window.__viewer.game!.feel, bodies: window.__viewer.game!.bodies }))).toEqual({ engine: 'rapier', feel: DEFAULT_FEEL, bodies: 40 });
 
     const shots = L1.solutions!.par as Shot[];
     const live = await play(page, shots);
@@ -75,7 +75,7 @@ describe('viewer under Keystone rules', () => {
     await page.waitForURL(/rules=keystone/, { timeout: MINUTES });
     await page.waitForFunction(() => window.__viewer?.game?.status === 'running', undefined, { timeout: MINUTES });
     expect(new URL(page.url()).search).toBe('?level=L1&engine=rapier&offscreen=1&rules=keystone&keystone.slowmo=1');
-    expect(await page.evaluate(() => window.__viewer.game!.feel)).toEqual({ hitStop: false, slowMo: true });
+    expect(await page.evaluate(() => window.__viewer.game!.feel)).toEqual({ ...DEFAULT_FEEL, slowMo: true });
     expect(errors).toEqual([]);
     await page.close();
   });

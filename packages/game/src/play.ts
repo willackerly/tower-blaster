@@ -1,13 +1,13 @@
 // Keystone, played: the rules from @tb/keystone on a PhysicsEngine, drawn by
 // @tb/render, with the game's aim, HUD, juice and audio. Physics only runs
-// while a shot is in play, at a pace the Pacer sets (hit-stop, slow motion,
-// fast-forward); between shots the world is frozen, so a session is exactly
+// while a shot is in play, in a loop of its own (physics-loop.ts) at a pace the
+// Pacer sets (hit-stop, slow motion, fast-forward, the valve, the tail skip),
+// while the frames draw on their own; between shots the world is frozen, so a session is exactly
 // (level, shots) and replays headless. The game page calls playKeystone with
 // its own elements; the viewer calls it for rules=keystone, with hooks for its
 // dev panels (docs/design/viewer-superset.md, step C).
 import { type BodyDesc, type EngineHealth, limitsHit, type PhysicsEngine, type Vec3 } from '@tb/engine-api';
 import { type RackItem, type CompiledLevel, compileLevel, Driver, type Feedback, type LevelDef, type LevelScore, type PerStep, runSession, type Shot, snapshotHash, TIER_NAMES } from '@tb/keystone';
-import { Window } from '@tb/metrics';
 import { clampPitch, EYE_ABOVE_GROUND, eyeOf, frame, type Orbit, rayThrough, viewProj } from '@tb/render/camera';
 import type { PixelStats, Renderer, SnapshotSource } from '@tb/render';
 import { type Aimed, azFromYaw, pick, previewBeads, shotFor, SUBSTEPS } from './aim.ts';
@@ -15,7 +15,8 @@ import { Synth, type Voice, voicesFor } from './audio.ts';
 import { driverOptions, type EngineKind, gpuEngineOptions, makeEngine, roomAfter } from './engines.ts';
 import { hudHtml, nextSelection, rackChips, resultHtml, starsText } from './hud.ts';
 import { CameraJuice, contactJuice } from './juice.ts';
-import { Pacer, type PaceFeel } from './pacing.ts';
+import { alphaAt, arrived, DEFAULT_FEEL, newArrivals, Pacer, type PaceFeel, slowTag, SpeedMeter, TailSkip } from './pacing.ts';
+import { runPhysics } from './physics-loop.ts';
 import { beadOverlay, regrowDuration, regrowScales, structureTints, TINT } from './scene.ts';
 
 /** What a page (and its tests) can see and do while Keystone plays: window.__game on the game page. */
@@ -35,6 +36,12 @@ export interface GameHandle {
   collapse: number;
   /** Run the sim at fast-forward speed (as if Space were held). */
   fast: boolean;
+  /**
+   * Pacing now: the valve's time scale (budget / step cost, in [0.25, 1]; up to 4 at fast-forward),
+   * the sim speed reached (sim time per real time, measured), the HUD's slow-motion tag ('' at real
+   * time), whether the tail skip is on, and the median step cost the valve reads (ms).
+   */
+  pace: { timeScale: number; speed: number; tag: string; tailSkip: boolean; costMs: number };
   result: LevelScore | null;
   /** Feedback events seen this attempt, by type. */
   counts: Record<string, number>;
@@ -45,9 +52,10 @@ export interface GameHandle {
   /**
    * Wall time of this level's load (engine build and pre-settle), and of each live step since, in ms;
    * moving: each live step's structure bodies in motion (Reductions.nMoving, what settle v2 counts);
-   * frameMs: the time between frames while a shot runs (frame pacing).
+   * frameMs: the time between frames while a shot runs (frame pacing); costMs: each step's cost as the
+   * valve reads it (a GPU step's own time on the GPU, physics-loop.ts), in order of landing.
    */
-  timing: { loadMs: number; stepMs: number[]; moving: number[]; frameMs: number[] };
+  timing: { loadMs: number; stepMs: number[]; moving: number[]; frameMs: number[]; costMs: number[] };
   fire(shot: Shot): boolean;
   /** Outcome levels: end the level now, keeping the rack left (key B, the HUD's Bank button); false when it cannot. */
   bank(): boolean;
@@ -78,12 +86,13 @@ export interface GameHandle {
 export interface SessionState { step: number; phase: string; strokes: number; heritageBroken: number; hash: string }
 
 const sum = (a: Uint8Array) => a.reduce((x, y) => x + y, 0);
+const median = (xs: number[]) => { if (!xs.length) return NaN; const s = [...xs].sort((a, b) => a - b); return s[Math.floor(s.length / 2)]!; };
 
 /** A handle with nothing loaded yet, for a page to publish before playKeystone fills it in. */
 export function newGameHandle(): GameHandle {
   const none = (): SessionState => ({ step: 0, phase: 'loading', strokes: 0, heritageBroken: 0, hash: '' });
   return {
-    status: 'loading', engine: '', level: '', phase: 'loading', ready: false, frames: 0, stepIndex: 0, strokes: 0, bodies: 0, collapse: 0, fast: false, result: null, counts: {}, feel: { hitStop: false, slowMo: false }, resultShownAt: null, timing: { loadMs: 0, stepMs: [], moving: [], frameMs: [] },
+    status: 'loading', engine: '', level: '', phase: 'loading', ready: false, frames: 0, stepIndex: 0, strokes: 0, bodies: 0, collapse: 0, fast: false, pace: { timeScale: 1, speed: 1, tag: '', tailSkip: false, costMs: NaN }, result: null, counts: {}, feel: { ...DEFAULT_FEEL }, resultShownAt: null, timing: { loadMs: 0, stepMs: [], moving: [], frameMs: [], costMs: [] },
     fire: () => false, bank: () => false, aim: () => null, select: () => false, load: async () => {}, retry: async () => {}, capture: async () => null,
     state: none, replay: async () => none(), health: async () => null, pairsPerBody: 0, limitsHit: [],
   };
@@ -214,7 +223,8 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
   // a GPU step may still be awaiting its readback.
   let lock: Promise<unknown> = Promise.resolve();
   const exclusive = <T>(fn: () => Promise<T>): Promise<T> => { const r = lock.then(fn); lock = r.catch(() => {}); return r; };
-  const pacer = new Pacer(), juice = new CameraJuice(), stepMs = new Window(60);
+  const pacer = new Pacer(), juice = new CameraJuice(), speed = new SpeedMeter(), tail = new TailSkip();
+  let arrivals = newArrivals();
   let synth: Synth | null = null;
   let muted = false;
   const voices: Voice[] = [];
@@ -230,6 +240,8 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     fxSlots = descs.length;
   };
   let fxSlots = 0;
+  /** A physics step is in flight (physics-loop.ts): the session may already read aiming, but the step is not done. */
+  let stepping = false;
   let regrowBuf = new Float32Array(0);
   let selected: RackItem | null = null;
   let power = 100;
@@ -294,7 +306,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     reportedSteps = 0;
     handle.pairsPerBody = kind === 'gpu' ? gpuEngineOptions(c, livePairs).pairsPerBody! : 0;
     substeps = engine.info.integrator?.substeps ?? SUBSTEPS;
-    handle.timing = { loadMs: performance.now() - t0, stepMs: [], moving: [], frameMs: [] };
+    handle.timing = { loadMs: performance.now() - t0, stepMs: [], moving: [], frameMs: [], costMs: [] };
     descs = driver.bodies;
     perStep = env.perStep?.(c) ?? null;
     source.reset(c.scene.bodies);
@@ -305,6 +317,9 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     renderer.setFx(0, structureTints(c), regrowBuf, true);
     fxSlots = c.meta.n;
     pacer.reset();
+    speed.reset();
+    tail.reset();
+    arrivals = newArrivals();
     juice.reset();
     handle.result = null;
     handle.counts = {};
@@ -423,12 +438,17 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
   /** Mirror state onto the handle; called each frame and right after anything that changes it. */
   function sync() {
     const s = driver.session;
-    Object.assign(handle, { phase: s.phase, ready: s.phase === 'aiming' && regrowT === null, stepIndex: driver.engine.stepIndex, strokes: s.strokes, bodies: driver.snapshot.count, collapse: s.liveCollapse });
+    Object.assign(handle, { phase: stepping ? 'running' : s.phase, ready: !stepping && s.phase === 'aiming' && regrowT === null, stepIndex: driver.engine.stepIndex, strokes: s.strokes, bodies: driver.snapshot.count, collapse: s.liveCollapse });
+    const running = s.phase === 'running', v = running ? speed.speed(performance.now()) : 1, costs = handle.timing.costMs;
+    handle.pace = { timeScale: running ? pacer.timeScale : 1, speed: v, tag: running && !fastHeld && !handle.fast && !ending && !tail.on ? slowTag(v) : '', tailSkip: tail.on, costMs: median(costs.slice(-60)) };
   }
 
   function fire(shot: Shot): boolean {
-    if (regrowT !== null || !driver.session.canFire(shot.ammo)) return false;
+    if (stepping || regrowT !== null || !driver.session.canFire(shot.ammo)) return false;
     const fb = driver.fire(shot);
+    // A shot's pace starts fresh: no tail yet, and at real time until its steps say otherwise.
+    tail.reset();
+    speed.reset();
     onFeedback(fb);
     spawned();
     aimed = null;
@@ -439,7 +459,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
   }
 
   function bank(): boolean {
-    if (regrowT !== null || !driver.session.canBank()) return false;
+    if (stepping || regrowT !== null || !driver.session.canBank()) return false;
     onFeedback(driver.bank());
     aimed = null;
     beads = null;
@@ -556,7 +576,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
       heritageBroken: s.heritageBroken.reduce((a, x) => a + x, 0), heritageTotal: c.meta.heritage.length,
       chips: rackChips(c.def.rack, s.rackLeft, selected), power, liveLeverage: s.liveLeverage, phase: s.phase,
       reachable: s.phase === 'aiming' && aimed ? aimed.reachable : null,
-      collapse: s.liveCollapse, met: s.objectiveDone, canBank: regrowT === null && s.canBank(),
+      collapse: s.liveCollapse, met: s.objectiveDone, canBank: !stepping && regrowT === null && s.canBank(), pace: handle.pace.tag,
     });
     if (crownsDown > crownsShown) html = html.replace('class="crowns"', 'class="crowns pop"');
     crownsShown = crownsDown;
@@ -582,25 +602,6 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     }
     const running = !loading && driver.session.phase === 'running';
     if (running) handle.timing.frameMs.push(frameMs);
-    if (running) await exclusive(async () => {
-      if (driver.session.phase !== 'running') return; // a load got in first
-      const n = pacer.stepsThisFrame(frameMs, c.scene.dt, { fastForward: fastHeld || handle.fast || ending, stepMs: stepMs.quantile(0.5), budgetMs: ending ? 14 : 10 });
-      for (let i = 0; i < n; i++) {
-        const t0 = performance.now();
-        const fb = await driver.step();
-        const ms = performance.now() - t0;
-        stepMs.push(ms);
-        handle.timing.stepMs.push(ms);
-        handle.timing.moving.push(driver.observed?.red.nMoving ?? 0);
-        onFeedback(fb);
-        hooks.stepped?.(fb, driver);
-        const input = perStep?.(driver);
-        if (input?.length) driver.push(input);
-        spawned();
-        if (pacer.frozen || driver.session.phase !== 'running') break;
-      }
-      if (n > 0) source.update(driver.snapshot, descs);
-    });
     if (aimDirty) updateAim();
     sync();
 
@@ -610,7 +611,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     renderer.setOverlay(o?.xyzr ?? new Float32Array(0), o?.colours);
     const want = pendingCapture;
     pendingCapture = null;
-    const fp = { viewProj: viewProj(view, aspect()), eye: eyeOf(view), focus: orbit.target, time: now / 1000, groundY: 0, alpha: running ? pacer.alpha(c.scene.dt) : 1 };
+    const fp = { viewProj: viewProj(view, aspect()), eye: eyeOf(view), focus: orbit.target, time: now / 1000, groundY: 0, alpha: running ? alphaAt(arrivals, now, 1000 * c.scene.dt) : 1 };
     // Offscreen (tests), nobody sees a frame and nothing throttles requestAnimationFrame
     // to the GPU: on SwiftShader a frame takes up to a second, so frames would queue
     // without bound and every readback (a step's, a replay's) wait behind them.
@@ -625,5 +626,46 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     if (handle.status === 'running') requestAnimationFrame(() => void tick().catch(fail));
   };
   requestAnimationFrame(() => void tick().catch(fail));
+
+  // Physics, in its own loop: a step runs when one is due and never inside a frame (physics-loop.ts).
+  const nextFrame = () => new Promise<void>((res) => requestAnimationFrame(() => res()));
+  const channel = new MessageChannel(), tasks: Array<() => void> = [];
+  channel.port1.onmessage = () => tasks.shift()?.();
+  const task = () => new Promise<void>((res) => { tasks.push(res); channel.port2.postMessage(null); });
+  const fastNow = () => fastHeld || handle.fast || ending || tail.on;
+  void runPhysics({
+    now: () => performance.now(),
+    alive: () => handle.status === 'running',
+    active: () => !loading && driver.session.phase === 'running',
+    dtMs: () => 1000 * c.scene.dt,
+    options: () => ({ fastForward: fastNow(), budgetMs: feel.budgetMs }),
+    idle: nextFrame,
+    task,
+    step: () => exclusive(async () => {
+      if (loading || driver.session.phase !== 'running') return null; // a load got in first, or the shot ended
+      const d = driver, started = performance.now();
+      // A step that ends the shot leaves the session aiming before it returns (the pipelined driver
+      // still awaits the last read): until it has, no frame may show it ready, and no shot or bank may go in.
+      stepping = true;
+      let fb: Feedback[];
+      try { fb = await d.step(); } finally { stepping = false; }
+      const submitted = performance.now();
+      handle.timing.stepMs.push(submitted - started);
+      const red = d.observed?.red;
+      handle.timing.moving.push(red?.nMoving ?? 0);
+      speed.step(submitted, c.scene.dt);
+      onFeedback(fb);
+      hooks.stepped?.(fb, d);
+      const input = perStep?.(d);
+      if (input?.length) d.push(input);
+      spawned();
+      if (red && feel.tailSkip && d.session.phase === 'running') tail.update(red.nMoving, c.meta.n, d.session.liveCollapse);
+      source.update(d.snapshot, descs);
+      arrived(arrivals, performance.now(), 1000 * c.scene.dt);
+      // A GPU step only submits: its cost is read when the GPU reports it done.
+      const done = d.engine.finish ? d.engine.finish().then(() => performance.now()) : undefined;
+      return { started, submitted, done, yielded: !!d.engine.finish };
+    }),
+  }, pacer, undefined, (ms) => handle.timing.costMs.push(ms)).catch(fail);
   return handle;
 }
