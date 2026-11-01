@@ -33,19 +33,30 @@ const b3 = (id: string, material: MaterialName, F: number, street: number, rack:
 
 const B2_PARAMS = { towers: 25, W: 4, D: 4, H: 16, street: 4, vary: 0.4 };
 const B2_SEED = 3;
-function b2(id: string, rack: RackItem[], extra: Partial<LevelDef> = {}): LevelDef {
+/**
+ * B2 with the crowns on the tallest tower's roof: the whole roof course (16), or its middle 4, which
+ * come down when the tower does (on Rapier a ram or bomb took at most 15 of the 16 roof cubes below the line).
+ */
+function b2(id: string, rack: RackItem[], extra: Partial<LevelDef> = {}, crowns: 'roof' | 'middle' = 'roof'): LevelDef {
   const t = tallestTower(B2_PARAMS, B2_SEED), side = Math.ceil(Math.sqrt(B2_PARAMS.towers)), centre = Math.floor(B2_PARAMS.towers / 2);
   const part: ScenarioPart = {
     kind: 'scenario', id: 'S14', params: B2_PARAMS, seed: B2_SEED, material: 'plaster',
     roles: [
       // The cathedral: the middle tower's top two courses are heritage (32 watched bodies).
       { role: 'heritage', tag: centre, course: [Math.max(0, tallestOf(centre) - 2), 1000] },
-      // Sixteen crowns: the tallest tower's roof course.
-      { role: 'crown', tag: t.tag, top: true },
+      // Crowns: the tallest tower's roof course (16), or the 4 in its middle.
+      crowns === 'roof' ? { role: 'crown', tag: t.tag, top: true } : { role: 'crown', tag: t.tag, top: true, box: middleOf(t.tag) },
     ],
   };
   const half = (side * (B2_PARAMS.W + B2_PARAMS.street) - B2_PARAMS.street) / 2 + 0.5;
   return outcome(id, 'Spare the Cathedral', [part], [half, half], t.height, rack, { objective: { kind: 'crowns', footprintMax: 0.05 }, ...extra });
+}
+/** A box around the middle 4 columns of S14 tower `tag` in B2's build (scenario units), every height. */
+function middleOf(tag: number): { min: [number, number, number]; max: [number, number, number] } {
+  let x = 0, z = 0, k = 0;
+  for (const b of buildScenario('S14', B2_PARAMS, B2_SEED).bodies) if (b.tag === tag) { x += b.pos[0]; z += b.pos[2]; k++; }
+  x /= k; z /= k;
+  return { min: [x - 1, -1e9, z - 1], max: [x + 1, 1e9, z + 1] };
 }
 /** Height in cubes of S14 tower `tag` in B2's build. */
 function tallestOf(tag: number): number {
@@ -84,6 +95,7 @@ export const DRAFTS: Readonly<Record<string, LevelDef>> = {
   // B2 Spare the Cathedral: about 5k plaster cubes in 25 towers; crowns on the tallest, the middle one heritage.
   B2a: b2('B2a', ['w-bomb', 'w-ram', 'w-ram', 'drop'], ARMS),
   B2b: b2('B2b', ['w-bomb', 'w-bomb', 'p-wreckingball', 'drop'], { ...ARMS, limits: { ammoRatio: 25 } }),
+  B2c: b2('B2c', ['w-ram', 'w-ram', 'w-ram', 'drop'], ARMS, 'middle'),
   // B3 Ten Thousand: the S4 city at 10k; the spec's fat stone towers against slimmer, closer ones, and plaster.
   B3a: b3('B3a', 'stone', 8, 6, ['w-bomb', 'w-bomb', 'p-wreckingball'], ARMS),
   B3b: b3('B3b', 'stone', 5, 3, ['w-bomb', 'w-bomb', 'p-wreckingball'], ARMS),
