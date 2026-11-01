@@ -18,3 +18,11 @@ export const PRESET_LINE: Shot[] = [
  */
 export const GRENADE_RACK: RackItem[] = ['w-grenade', 'w-grenade', 'marble'];
 export const GRENADE_LINE: Shot[] = [{ ammo: 'w-grenade', az: 360, y: 8, yaw: 0, pitch: 176, power: 100 }];
+
+/**
+ * A firework on L1 (rack-weapons-gpu.test.ts; the reference and Rapier cases are keystone-lab
+ * rack-weapons.test.ts): the built-in WeaponSpec scaled to L1, aimed at the tower's middle at 30%
+ * power: it splits into 12 stars on the bounce and they bring the crowns down.
+ */
+export const FIREWORK_RACK: RackItem[] = ['w-firework', 'w-cluster'];
+export const FIREWORK_LINE: Shot[] = [{ ammo: 'w-firework', az: 360, y: 8, yaw: 0, pitch: 176, power: 30 }];

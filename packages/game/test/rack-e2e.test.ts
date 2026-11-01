@@ -6,17 +6,17 @@
 import { describe, expect, it } from 'vitest';
 import { RapierEngine } from '@tb/adapter-rapier';
 import { AMMO_KINDS, compileLevel, isLaunchItem, L1, MAX_RACK, type RackItem, runSession, type Shot, snapshotHash, writeShots } from '@tb/keystone';
-import { PRESET_NAMES } from '@tb/weapons';
+import { BUILTIN_WEAPONS, PRESET_NAMES } from '@tb/weapons';
 import { launchY } from '../src/aim.ts';
 import { driverOptions } from '../src/engines.ts';
 import { gamePage } from './page.ts';
 
 const game = gamePage();
 
-/** Two loads that between them fire every item once (L1's own weapons: w-grenade is KEYSTONE_GRENADE). */
+/** Two loads that between them fire every item once (L1 has no weapons of its own: w-grenade is KEYSTONE_GRENADE, the others @tb/weapons' built-ins). */
 const RACKS: RackItem[][] = [
   ['marble', 'cannonball', 'drop', 'w-grenade', 'p-beachball', 'p-bowlingball', 'p-wreckingball', 'p-boulder'],
-  ['cue', 'p-basketball', 'p-cannonball'],
+  ['cue', 'p-basketball', 'p-cannonball', 'w-firework', 'w-cluster'],
 ];
 
 /** A miss: launched sideways from azimuth 0 (clear of the ground, however big), or a drop or cue push 20 cells off the lot. */
@@ -29,7 +29,7 @@ function miss(c: ReturnType<typeof compileLevel>, ammo: RackItem): Shot {
 
 describe('every rack item on the game page', () => {
   it('the racks hold every item once, and no more than MAX_RACK each', () => {
-    expect(RACKS.flat().sort()).toEqual([...AMMO_KINDS, ...PRESET_NAMES.map((p) => `p-${p}`), 'w-grenade'].sort());
+    expect(RACKS.flat().sort()).toEqual([...AMMO_KINDS, ...PRESET_NAMES.map((p) => `p-${p}`), 'w-grenade', ...Object.keys(BUILTIN_WEAPONS).map((k) => `w-${k}`)].sort());
     for (const r of RACKS) expect(r.length).toBeLessThanOrEqual(MAX_RACK);
   });
 
@@ -50,7 +50,10 @@ describe('every rack item on the game page', () => {
       expect(r.session.outcomes.map((x) => x.crownsDown)).toEqual(line.map(() => 0));
       expect(live).toEqual({ step: r.steps, phase: 'failed', strokes: line.length, heritageBroken: 0, hash: snapshotHash(r.snapshot) });
       const counts = await page.evaluate(() => window.__game.counts);
-      expect({ fired: counts.fired, blast: counts.blast ?? 0 }).toEqual({ fired: line.length, blast: rack.includes('w-grenade') ? 1 : 0 });
+      // Every blast a weapon can set off goes off (each built-in's munitions all blast before they go).
+      const blasts = rack.reduce((a, x) => a + (c.arms[x]?.blasts.reduce((b, y) => b + y.count, 0) ?? 0), 0);
+      expect(blasts).toBe(rack.includes('w-grenade') ? 1 : 12 + 6);
+      expect({ fired: counts.fired, blast: counts.blast ?? 0 }).toEqual({ fired: line.length, blast: blasts });
       expect(await page.evaluate((s) => window.__game.replay(s), line)).toEqual(live);
       expect(errors).toEqual([]);
       await page.close();

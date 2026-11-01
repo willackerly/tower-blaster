@@ -89,7 +89,7 @@ export interface Aimed { shot: Shot; error: number; reachable: boolean }
  * underground and be thrown up by the ground contact). Keystone's own ammo never needs lifting.
  */
 export function launchY(c: CompiledLevel, ammo: LaunchItem): number {
-  const s = ammoBody(ammo, c.frame.unit, [0, 0, 0], [0, 0, 0]).shape;
+  const s = ammoBody(ammo, c.frame, [0, 0, 0], [0, 0, 0]).shape;
   const r = s.kind === 'sphere' ? s.radius : 0;
   return Math.max(Math.round(c.frame.launcher.y * 4), Math.ceil((4 * r) / c.frame.unit));
 }
