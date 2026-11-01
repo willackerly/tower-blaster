@@ -8,6 +8,7 @@
 //   snd.volume=-6       master, dB
 //   snd.ring=3          the modes (ringing), dB over the material's
 //   snd.click=-3        the contact click, dB over the material's
+//   snd.grit=6          chips off hard hits (stone only), dB over the material's
 //   snd.damping=2       loss factor x: rings die twice as fast
 //   snd.pitch=-5        semitones (stiffness x 2^(st/6), so every mode moves)
 //   snd.spread=2        body-to-body pitch spread x
@@ -23,6 +24,7 @@ export const SOUND_KNOBS = {
   volume: { label: 'volume (dB)', min: -40, max: 20, step: 1, def: 0 },
   ring: { label: 'ring (dB)', min: -40, max: 20, step: 1, def: 0 },
   click: { label: 'click (dB)', min: -40, max: 20, step: 1, def: 0 },
+  grit: { label: 'grit (dB, stone)', min: -40, max: 20, step: 1, def: 0 },
   damping: { label: 'damping x', min: 0.1, max: 10, step: 0.1, def: 1 },
   pitch: { label: 'pitch (semitones)', min: -24, max: 24, step: 1, def: 0 },
   spread: { label: 'pitch spread x', min: 0, max: 5, step: 0.1, def: 1 },
@@ -78,7 +80,7 @@ export function writeSoundOptions(o: SoundOptions, q: URLSearchParams): void {
 }
 
 /** The material the knobs make of a base material. */
-export function tunedMaterial(base: SoundMaterial, o: Pick<SoundOptions, 'ring' | 'click' | 'damping' | 'pitch' | 'spread'>): SoundMaterial {
+export function tunedMaterial(base: SoundMaterial, o: Pick<SoundOptions, 'ring' | 'click' | 'grit' | 'damping' | 'pitch' | 'spread'>): SoundMaterial {
   const stiff = 2 ** (o.pitch / 6);
   return {
     ...base,
@@ -88,5 +90,6 @@ export function tunedMaterial(base: SoundMaterial, o: Pick<SoundOptions, 'ring' 
     jitter: Math.min(0.49, base.jitter * o.spread),
     ringDb: base.ringDb + o.ring,
     clickDb: base.clickDb + o.click,
+    gritDb: base.gritDb + o.grit,
   };
 }

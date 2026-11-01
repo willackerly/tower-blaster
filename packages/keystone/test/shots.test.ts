@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import fc from 'fast-check';
 import { freeFlight, massOf } from '@tb/engine-api';
+import { PRESET_NAMES } from '@tb/weapons';
 import { aimAt, ammoKE, closestApproach, compileLevel, decodeRecord, encodeRecord, GRAVITY, L1, launchDir, predictArc, readShots, type SessionRecord, type Shot, shotToSpawn, speedOf, writeShots } from '@tb/keystone';
 
 const c = compileLevel(L1);
@@ -87,6 +88,28 @@ describe('session records', () => {
     expect(s.length).toBeLessThanOrEqual(200);
     expect(s).toMatch(/^[A-Za-z0-9_-]+$/);
   });
+  it('records of Keystone ammo encode byte for byte as on main (pinned), so old links decode unchanged', () => {
+    const old: SessionRecord = { v: 1, level: 'L1', levelHash: c.hash, engine: 'avbd-ref', inputs: [
+      { step: 300, shot: { ammo: 'cannonball', az: 360, y: 8, yaw: 0, pitch: 207, power: 100 } },
+      { step: 700, shot: { ammo: 'cue', x: -3, y: 4, z: 2, dir: 1, power: 50 } },
+      { step: 1200, shot: { ammo: 'drop', x: 4, z: -8 } },
+      { step: 1500, shot: { ammo: 'marble', az: 10, y: 8, yaw: -12, pitch: 300, power: 0 } },
+    ] };
+    const pinned = 'AQJMMRA4YmYxOGE4ZWU3YzhiODcxCGF2YmQtcmVmBKwCAegCEACeA2SQAwIFCAQBMvQDAwgPrAIAChAX2AQA';
+    expect(encodeRecord(old)).toBe(pinned);
+    expect(decodeRecord(pinned)).toEqual(old);
+  });
+  it('records presets and weapons by name, round-tripping exactly', () => {
+    const named: SessionRecord = { ...rec, inputs: [
+      ...rec.inputs,
+      ...PRESET_NAMES.map((p, i) => ({ step: 2000 + 100 * i, shot: { ammo: `p-${p}` as const, az: 7 * i, y: 8, yaw: -1 - i, pitch: 100 + i, power: 50 + i } })),
+      { step: 3000, shot: { ammo: 'w-grenade', az: 120, y: 4, yaw: 0, pitch: 35, power: 80 } },
+      { step: 3100, shot: { ammo: 'w-z9', az: 0, y: 0, yaw: 0, pitch: 0, power: 0 } },
+    ] };
+    expect(decodeRecord(encodeRecord(named))).toEqual(named);
+    const bad = encodeRecord({ ...rec, inputs: [{ step: 1, shot: { ammo: 'w-Nope' as 'w-x', az: 0, y: 0, yaw: 0, pitch: 0, power: 0 } }] });
+    expect(() => decodeRecord(bad)).toThrow(/bad ammo "w-Nope"/);
+  });
   it('rejects unknown versions and truncated input', () => {
     expect(() => decodeRecord(encodeRecord({ ...rec, v: 2 as 1 }))).toThrow(/version/);
     expect(() => decodeRecord(encodeRecord(rec).slice(0, 20))).toThrow();
@@ -122,10 +145,16 @@ describe('shot text (writeShots, readShots)', () => {
     expect(readShots('')).toEqual([]);
     expect(writeShots([])).toBe('');
   });
-  it('round-trips any valid shot', () => {
+  it('writes presets and weapons with the launch fields under their own names', () => {
+    const named: Shot[] = [{ ammo: 'p-wreckingball', az: 60, y: 8, yaw: 0, pitch: 20, power: 95 }, { ammo: 'w-grenade', az: 120, y: 4, yaw: 0, pitch: 35, power: 80 }];
+    expect(writeShots(named)).toBe('p-wreckingball.60.8.0.20.95_w-grenade.120.4.0.35.80');
+    expect(readShots('p-wreckingball.60.8.0.20.95_w-grenade.120.4.0.35.80')).toEqual(named);
+  });
+  it('round-trips any valid shot, of every rack item', () => {
     const int = (lo: number, hi: number) => fc.integer({ min: lo, max: hi });
+    const key = fc.stringMatching(/^[a-z][a-z0-9]{0,23}$/);
     const shot: fc.Arbitrary<Shot> = fc.oneof(
-      fc.record({ ammo: fc.constantFrom('marble' as const, 'cannonball' as const), az: int(0, 719), y: int(0, 4000), yaw: int(-1800, 1800), pitch: int(-890, 890), power: int(0, 100) }),
+      fc.record({ ammo: fc.oneof(fc.constantFrom('marble' as const, 'cannonball' as const, ...PRESET_NAMES.map((p) => `p-${p}` as const)), key.map((k) => `w-${k}` as const)), az: int(0, 719), y: int(0, 4000), yaw: int(-1800, 1800), pitch: int(-890, 890), power: int(0, 100) }),
       fc.record({ ammo: fc.constant('cue' as const), x: int(-4000, 4000), y: int(0, 4000), z: int(-4000, 4000), dir: fc.constantFrom(0 as const, 1 as const, 2 as const, 3 as const), power: int(0, 100) }),
       fc.record({ ammo: fc.constant('drop' as const), x: int(-4000, 4000), z: int(-4000, 4000) }),
     );
@@ -138,5 +167,9 @@ describe('shot text (writeShots, readShots)', () => {
     expect(() => readShots('drop.4.')).toThrow(/z must be an integer, not empty/);
     expect(() => readShots('marble.720.4.0.0.30')).toThrow(/shot 1 .*shot\.az = 720/);
     expect(() => readShots('drop.1.1_')).toThrow(/shot 2 \(\): ammo/);
+    expect(() => readShots('p-nuke.1.2.3.4.5')).toThrow(/shot 1 \(p-nuke.*ammo must be one of marble, cannonball, cue, drop, p-<preset> \(beachball/);
+    expect(() => readShots('w-Grenade.1.2.3.4.5')).toThrow(/shot 1 .*ammo must be one of/);
+    expect(() => readShots('w-grenade.1.2.3.4')).toThrow(/w-grenade takes 5 fields \(az\.y\.yaw\.pitch\.power\), got 4/);
+    expect(() => shotToSpawn(f, { ammo: 'w-' as 'w-x', az: 0, y: 0, yaw: 0, pitch: 0, power: 0 }, 0)).toThrow(/shot\.ammo = "w-"/);
   });
 });
