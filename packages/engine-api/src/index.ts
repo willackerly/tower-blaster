@@ -33,11 +33,16 @@ export interface BodyDesc {
 export const TAG_BALL = -1;
 export const TAG_DEBRIS = -2;
 
-/** Something that happens at a given step: a body is added (a ball is fired), or a blast pushes the bodies around a point (blast.ts). */
-export type InputEvent = SpawnEvent | BlastEvent;
+/**
+ * Something that happens at a given step: a body is added (a ball is fired), a blast pushes the bodies
+ * around a point (blast.ts), or a body is taken out of the world (remove.ts).
+ */
+export type InputEvent = SpawnEvent | BlastEvent | RemoveEvent;
 export interface SpawnEvent { step: number; kind: 'spawn'; body: BodyDesc }
 /** Engines that do not apply blasts throw on push() and init() of one. */
 export interface BlastEvent { step: number; kind: 'blast'; blast: Blast }
+/** Body `id` leaves the world: its slot becomes a tombstone (remove.ts). Engines that do not remove bodies throw on push() and init() of one. */
+export interface RemoveEvent { step: number; kind: 'remove'; id: number }
 
 /** The bodies a list of events spawns, in order. */
 export const spawnedBodies = (events: readonly InputEvent[]): BodyDesc[] => events.flatMap((e) => (e.kind === 'spawn' ? [e.body] : []));
@@ -73,9 +78,11 @@ export interface Snapshot {
   awake: Uint8Array; // 1 per body
   /**
    * Per body, the tier it is in, in the renderer's Body.flags encoding
-   * (@tb/schema TIER: active 0, rubble 1, lattice 2). Set by engines that
-   * keep tiers (TieredEngine); absent means every body is active. A body
-   * that is not active does not move until its tier changes.
+   * (@tb/schema TIER: active 0, rubble 1, lattice 2; free 255, TIER_FREE, a
+   * removed body: remove.ts). Set by engines that keep tiers (TieredEngine)
+   * and, once a body is removed, by every engine; absent means every body is
+   * active. A body that is not active does not move until its tier changes
+   * (a removed one never).
    */
   tier?: Uint8Array;
 }
@@ -274,4 +281,5 @@ export function inertiaOf(b: BodyDesc): Vec3 {
 export * from './blast.ts';
 export * from './host.ts';
 export * from './observe.ts';
+export * from './remove.ts';
 export * from './snapshot-observer.ts';

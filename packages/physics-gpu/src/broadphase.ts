@@ -169,6 +169,8 @@ fn ranges(@builtin(global_invocation_id) id: vec3u) {
 // Visit every partner j > i of body i in a fixed order. write = false counts.
 fn visit(i: u32, write: bool, base: u32) -> u32 {
   let si = spheres[i];
+  // A negative radius: a removed body (solver prepare), in no pair.
+  if (si.w < 0.0) { return 0u; }
   let ci = cellOf(si.xyz);${boxes ? '\n  let oi = obbOf(i);' : ''}
   var found = 0u;
   for (var dz = -1; dz <= 1; dz++) {
@@ -183,7 +185,7 @@ fn visit(i: u32, write: bool, base: u32) -> u32 {
           let j = vals[k];
           if (j <= i) { continue; }
           let sj = spheres[j];
-          if (any(cellOf(sj.xyz) != nc)) { continue; }
+          if (sj.w < 0.0 || any(cellOf(sj.xyz) != nc)) { continue; }
           let d = sj.xyz - si.xyz;
           let reach = si.w + sj.w + p.margin;
           if (dot(d, d) <= reach * reach${boxes ? ' && mayTouch(oi, obbOf(j))' : ''}) {

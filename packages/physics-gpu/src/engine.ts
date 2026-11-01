@@ -3,11 +3,11 @@
 // one command buffer per step. Parameters are the reference solver's (physics-ref AvbdParams), so
 // the two engines can be run side by side on the same settings. With AvbdParams.restitution on,
 // the solve ends with the restitution pass (restitution.ts).
-import { type BodyDesc, checkBlast, checkBlastQueue, DEFAULT_RESTITUTION_COMBINE, emptySnapshot, type EngineHealth, type EngineInfo, inertiaOf, type InputEvent, massOf, type PhysicsEngine, type SceneDesc, type Snapshot, queueInputs, spawnedBodies, type Vec3 } from '@tb/engine-api';
+import { type BodyDesc, checkBlast, checkInputQueue, DEFAULT_RESTITUTION_COMBINE, emptySnapshot, type EngineHealth, type EngineInfo, inertiaOf, type InputEvent, massOf, type PhysicsEngine, type SceneDesc, type Snapshot, queueInputs, spawnedBodies, TIER_FREE, type Vec3 } from '@tb/engine-api';
 import { boundingRadius } from '@tb/geom';
 import { assertStorageFits, createDevice, isSoftwareAdapter, Readback } from '@tb/gpu';
 import { type AvbdParams, avbdVariant, checkColoring, checkGapSlop, checkRecords, checkRemoved, checkRestitution, DEFAULT_AVBD, RESTITUTION_DEFAULTS } from '@tb/physics-ref';
-import { Body, BodyProps, readField, RestSlot, Shape, SolverBody, writeStruct } from '@tb/schema';
+import { Body, BodyProps, field, readField, RestSlot, Shape, SolverBody, writeStruct } from '@tb/schema';
 import { BlastPass, type DueBlast } from './blast.ts';
 import { assertPairDispatch, Broadphase } from './broadphase.ts';
 import { Coloring } from './coloring.ts';
@@ -166,6 +166,8 @@ export class GpuAvbdEngine implements PhysicsEngine {
   private readonly onGpuError = (ev: Event) => { this.failure ??= `GPU error: ${(ev as GPUUncapturedErrorEvent).error.message}`; };
   private scene: SceneDesc | null = null;
   private pending: InputEvent[] = [];
+  /** Removed bodies (engine-api remove.ts): their slots are tombstones (tier free), which every stage skips. */
+  private gone = new Set<number>();
   private n = 0;
   private capacity = 0;
   private rmax = 0;
@@ -231,7 +233,7 @@ export class GpuAvbdEngine implements PhysicsEngine {
     // As the reference, switch on or off; checked before anything changes.
     const groundE = scene.ground?.restitution;
     if (groundE !== undefined && !(groundE >= 0 && groundE <= 1)) throw new Error(`GpuAvbdEngine: SceneDesc.ground.restitution must be in [0, 1], got ${groundE}`);
-    checkBlastQueue(scene.bodies.length, [...scene.inputs].sort((a, b) => a.step - b.step));
+    checkInputQueue(scene.bodies.length, [...scene.inputs].sort((a, b) => a.step - b.step));
     this.failure = null;
     this.dispose();
     const generation = this.generation;
@@ -324,6 +326,7 @@ export class GpuAvbdEngine implements PhysicsEngine {
     }
     this.parts = parts;
     this.n = 0;
+    this.gone = new Set();
     for (const b of scene.bodies) this.add(b);
     this.pending = [...scene.inputs].sort((a, b) => a.step - b.step);
     this.stepIndex = 0;
@@ -346,19 +349,33 @@ export class GpuAvbdEngine implements PhysicsEngine {
     one(SolverBody, { prevVel: b.linVel }, parts!.solver.solver);
   }
 
+  /**
+   * Make body i a tombstone (engine-api remove.ts): at rest, tier free and asleep, in Body[] before the step's
+   * work runs. The kernels skip it from then on (prepare, broadphase, ground contacts, solver start, blasts); a
+   * blast due before the removal in the same step pushes it, then this stops it, as the reference does.
+   */
+  private remove(i: number): void {
+    const { device, parts } = this;
+    const at = (name: string) => i * Body.size + field(Body, name).offset;
+    device!.queue.writeBuffer(parts!.bodies, at('linVel'), new Float32Array(3));
+    device!.queue.writeBuffer(parts!.bodies, at('angVel'), new Float32Array(3));
+    device!.queue.writeBuffer(parts!.bodies, at('flags'), new Uint32Array([TIER_FREE << 8]));
+    this.gone.add(i);
+  }
+
   push(events: InputEvent[]): void {
     if (!this.parts) throw new Error('init() first');
     // Checked before queueing any, so a rejected batch changes nothing.
     const room = this.n + spawnedBodies(this.pending).length + spawnedBodies(events).length;
     if (room > this.capacity) throw new Error(`GpuAvbdEngine: push() needs room for ${room} bodies, capacity is ${this.capacity} (GpuEngineOptions.capacity or spare)`);
     for (const ev of events) {
-      if (ev.kind === 'blast') continue;
+      if (ev.kind !== 'spawn') continue;
       const r = boundingRadius(ev.body.shape);
       if (r > this.rmax) throw new Error(`GpuAvbdEngine: pushed body radius ${r} exceeds ${this.rmax}, the largest the broadphase cells were sized for (GpuEngineOptions.maxRadius)`);
     }
     // Stable insertion keeps push order among events due at the same step.
     const pending = queueInputs(this.pending, events);
-    checkBlastQueue(this.n, pending);
+    checkInputQueue(this.n, pending, this.gone);
     this.pending = pending;
   }
 
@@ -397,6 +414,7 @@ export class GpuAvbdEngine implements PhysicsEngine {
     while (this.pending.length && this.pending[0]!.step <= this.stepIndex) {
       const ev = this.pending.shift()!;
       if (ev.kind === 'spawn') this.add(ev.body);
+      else if (ev.kind === 'remove') this.remove(ev.id);
       else blasts.push({ blast: checkBlast(ev.blast), count: this.n });
     }
     const n = this.n, p = this.params;
@@ -440,6 +458,8 @@ export class GpuAvbdEngine implements PhysicsEngine {
     // Bit 0 only: bits 8-15 are the tier's.
     const flags = readField(buf, Body, 'flags', n, new Uint32Array(n));
     for (let i = 0; i < n; i++) s.awake[i] = flags[i]! & 1;
+    // Tiers only once a body is removed (Snapshot.tier: absent, every body is active).
+    if (this.gone.size) s.tier = Uint8Array.from(flags, (f) => (f >> 8) & 0xff);
     return s;
   }
 
