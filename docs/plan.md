@@ -102,3 +102,39 @@ Opt-in and off by default (`AvbdParams.restitution`); off, the reference is bit-
   - Chains of 3 and 5 unit cubes 0.05 m apart, struck at 10 m/s, end at 1.14 and 1.48x at e 0.9 (none at 20 iterations). There the solve drifts momentum 4.6 and 2.8x as much as with the switch off (the chain of 5 from 10 to 17.0 N s, against 12.5). A chain of 5 spheres gains 23% at e 1 (2.6% at 20 iterations).
   - The check cannot pass until the solve's drift is fixed.
 - **Viewer.** The Scene panel's `bounce` box (off by default; the AVBD engines only, disabled on Rapier and the tiers) is the engine option `restitution=true` (`?engine=avbd-gpu:restitution=true`), applied by Rebuild scene. While it is on, every body, spawn, fired projectile and the ground get the restitution `bounce e` (URL key `bounce.e`, 0 to 1, default 0.5; saved in the setup JSON as `scene.bounce`): the scenarios' surfaces are all 0 and the fired ball 0.1, so the switch alone would bounce only the ball, at 0.05 under average. One e on every surface makes every pair bounce at e under average, min and max. Off, the viewer's scene and engine spec are exactly as before. At a cube size s other than 1 m, `worldEngineSpec` scales the threshold by 1/sqrt(s) with the rest of `froudeParams`. 0.5 is visible and well inside the e <= 0.9 the energy probes cover. A CPU probe (reference against Rapier, which applies restitution always, at the same e; not a test) fired the viewer's default ball (11.5 kg, 40 m/s) at mid-height into small scenes and took the highest any cube rose in 4 s. At e 0.5 the reference reached 12.2 m on a 3x3x6 tower (Rapier 14.7; with Bounce off 6.9, and Rapier at the scenes' own e 13.2), 10.5 on a 2x2x10 tower (13.5), 8.7 on a C = 8 pyramid (16.2) and 7.3 on a 10x6 wall (7.2). Aimed 0.25 m higher at the 3x3x6 tower, the pass threw a top cube (2.9 m above the ball) up at 16 m/s, to 18.4 m against Rapier's 9.2, in one step with 28 bouncing points. It takes a heavy, fast striker: a 1 kg ball at 40 m/s, or the default ball at 15 m/s, on the same aim tops out at 7.2 and 6.4 m (Rapier 6.3 and 6.6). So it is likely heavy on light (above); it was not traced further. On that shot (e 0.3 to 0.9) the largest total mechanical energy after the shot was 1.0000 x its value then, to 4 decimals. On 300 falling cubes (S6) it was 0.9999 x its start.
+
+## GPU pair buffer
+
+The GPU broadphase pairs bodies i < j whose bounding spheres overlap, |c_i - c_j| <= r_i + r_j + margin (0.02), each radius grown by the step's sweep, min(maxSweep = 1, dt (|v| + dt |g| + |w| r)), in world units. It writes at most `pairsPerBody` x capacity pairs a step; a step that needs more drops the pairs between the bodies latest in index order, which then pass through each other (`packages/physics-gpu/src/broadphase.ts`). A drop is never silent: every GPU test harness fails on one (#105), the bench and suite exit 4 and name the fix (#106), the viewer's HUD says so in red with a Rebuild button (#109), and the game's par lines on the GPU must hit none (`packages/game/test/par-gpu.ts`).
+
+**Room per path.**
+
+| Path | Room | Why |
+|---|---|---|
+| Engine default (bench, suite, probe, quality, GPU tests) | 16 (`DEFAULT_PAIRS_PER_BODY`) x (bodies + inputs) | holds every scenario at its defaults, below |
+| Viewer | 16 x (bodies + inputs + 256 spare) | the spare is for fired projectiles |
+| Viewer, S15 Kapla | 32 x capacity, box test on (`ScenarioDef.avbd`) | a collapsed 2k-plank pile needs 23-28 per plank by the sphere test, about half with the box test |
+| Game | every pair of the level's bodies and rack (`everyPairPerBody`): L1 22, L2 71, L3 22, L4 20, L5 24 per body | the game shows no limits, and its 0.5 m blocks reach past their 26 neighbours from about 3.3 m/s, inside the rack's speeds |
+
+**Measured demand** (headless SwiftShader, 2026-10-28; pair counts, which are geometry, never timings; peak pairs per body at capacity = bodies, sphere test / box test):
+
+| Case | Peak per body |
+|---|---|
+| S1 packed tower 8x8x30 at rest | 10.59 / 10.59 (the 26-neighbour lattice count, 20,336; `pair-room.test.ts`) |
+| S4 city at rest (2k; 10k by a CPU count: 10.50) | 10.35 / 10.35 |
+| S5 city 2k with its ball | 10.35 / 10.35 |
+| S8 slab and rod tower | 10.38 / 3.63 |
+| S14 buildings | 8.35 / 8.35 |
+| S7 rain 2k; S6 heap 2k | 5.59 / 3.62; 4.19 / 2.55 |
+| S11, S3, S12, S2, S13, S9 | 3.89 or less |
+| S1 hit low by a 200 kg ball at 40 m/s; S5 2k hit at 80 m/s | 10.66; 11.12 |
+| S3 wall hit by a size-5 ball at 80 m/s (the viewer's default scene) | 4.29 |
+| S1 with the default grenade's blast inside, at y 5 and y 15; at its foot | 13.44, 13.46; 10.99 |
+| Game par lines (L1-L5), against 16 per body | 233 of 704, 776 of 2272, 129 of 704, 98 of 656, 78 of 768 slots |
+
+A resting unit-cube lattice pairs each cube with its 26 neighbours only, at most 13 per body. Moving packed blocks need more as the sweep grows: inside a block of unit cubes all moving faster than about 7.3 m/s each cube also reaches the cubes two apart (16 per body), past about 14.4 m/s the next shell (28), past about 20.8 m/s 40, and at the full sweep 125. The default grenade, the worst default case, needs 84% of the tightest room and is pinned by `packages/physics-gpu/test/pair-room.test.ts`.
+
+**What can still drop, and how it shows.** In the viewer (HUD in red, with Rebuild): a grenade with stronger knobs in a packed block (a larger `radius` or `impulse`, or higher `maxDv` and `maxSpeed`: the default caps a blasted body at 48 m/s, a sweep of 0.8), a packed block falling faster than about 14 m/s, S8's Scene-panel variants (at rest, by a CPU count, bay 12 needs 20.6 per body and fits the viewer's spare by 4%; rodHeight 0.3 needs 18.2), and S15 with the box test turned off. In the bench and suite (exit 4): the same S8 variants at capacity = bodies, and S15 collapses on a plain `avbd-gpu` spec, since the suite builds engines from the spec given. In the game: a custom level of more than 362 bodies and rack no longer holds every pair (it keeps at least 65,536 slots, or 16 per body), and the game shows no limits.
+
+**Deferred** (2026-10-28, the series stopped here): growing the buffer on overflow and replaying the step; the box test by default or automatically for thin bodies, which needs an M5 measurement first; a default scaled by capacity; S8's own viewer defaults; limits in bench:quality and a failing bench:probe; a limits notice on the game page and in the viewer's `rules=keystone` HUD (`GameHandle.health()` is there for it); M5 measurements of S15 pile demand at 10k and 100k planks.
+

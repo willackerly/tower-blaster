@@ -86,6 +86,7 @@
   "packages/physics-gpu/test/lattice-rule-candidates.test.ts": 71.3,
   "packages/physics-gpu/test/lattice-rule-patterns.test.ts": 52.6,
   "packages/physics-gpu/test/lattice-rule-priority.test.ts": 43.8,
+  "packages/physics-gpu/test/pair-room.test.ts": 90,
   "packages/physics-gpu/test/probe-compare.test.ts": 0,
   "packages/physics-gpu/test/probe.test.ts": 56.6,
   "packages/physics-gpu/test/quality-q5.test.ts": 141.8,
