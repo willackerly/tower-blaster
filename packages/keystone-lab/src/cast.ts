@@ -477,11 +477,26 @@ export function withWallTime(r: CastResult, wallMs: number, budgetMs = CAST_BUDG
  * bootstrap half-width. The cross-device gate: T3 cast on one device lies inside another's
  * bootstrap 90% interval. Both on the raw T3.
  */
+/**
+ * The cross-device gate: T3 played on one device against the interval it would land in on the cast's device.
+ * It passes unless the device is harder (T3 past the player-worse end of the interval): the stars are the cast
+ * device's, so a device where the same aim does better only makes them easier to earn there, while one where it
+ * does worse would make them unfair. The note says whether T3 sat inside the interval or shifted, and which way.
+ * B1's first check (6 nudges on SwiftShader, collapse 0.948 to 0.954, five above Metal's P90) shifted easier by
+ * 0.0035 past the top of the interval for 6 plays: every play earned three stars, and the two-sided gate it replaces failed it.
+ */
+export function crossDeviceGate(metric: StarMetric, t3: number, iv: { lo: number; hi: number; halfWidth: number }, here: string, there: string, what = 'T3'): Gate {
+  const hb = higherBetter(metric), worse = hb ? iv.lo : iv.hi, better = hb ? iv.hi : iv.lo;
+  const harder = good(metric, t3) < good(metric, worse), easier = good(metric, t3) > good(metric, better);
+  const where = harder ? `harder on ${here} by ${Math.abs(t3 - worse).toFixed(4)}` : easier ? `easier on ${here} by ${Math.abs(t3 - better).toFixed(4)} (passes: the stars only get easier there)` : 'inside';
+  return { pass: !harder, value: t3, need: iv.halfWidth, note: `${what} on ${here} against ${there}'s 90% interval [${iv.lo.toFixed(3)}, ${iv.hi.toFixed(3)}]: ${where}` };
+}
+
 export function compareCasts(a: CastResult, b: CastResult): { recast: Gate; crossDevice: Gate } {
   const d = Math.abs(a.raw.t3 - b.raw.t3);
   return {
     recast: { pass: d < a.bootstrap.halfWidth, value: d, need: a.bootstrap.halfWidth, note: `|T3 ${a.adapter} seed ${a.seed} - T3 ${b.adapter} seed ${b.seed}|` },
-    crossDevice: { pass: b.raw.t3 >= a.bootstrap.lo && b.raw.t3 <= a.bootstrap.hi, value: b.raw.t3, need: a.bootstrap.halfWidth, note: `T3 on ${b.adapter} inside ${a.adapter}'s 90% interval [${a.bootstrap.lo.toFixed(3)}, ${a.bootstrap.hi.toFixed(3)}]` },
+    crossDevice: crossDeviceGate(a.metric, b.raw.t3, a.bootstrap, b.adapter, a.adapter),
   };
 }
 
@@ -543,7 +558,7 @@ export async function cloudCheck(level: LevelDef, player: CastPlayer, cast: Cast
   return {
     level: level.id, hash: c.hash, adapter: player.adapter, engine: player.engine,
     against: { adapter: cast.adapter, seed: cast.seed, t3: cast.raw.t3, lo, hi }, n, seed, t3, cloud: summary(ends),
-    crossDevice: { pass: t3 >= lo && t3 <= hi, value: t3, need: halfWidth, note: `T3 of ${n} nudges on ${player.adapter} inside ${cast.adapter}'s 90% interval for ${n} plays [${lo.toFixed(3)}, ${hi.toFixed(3)}]` },
+    crossDevice: crossDeviceGate(cast.metric, t3, { lo, hi, halfWidth }, player.adapter, cast.adapter, `T3 of ${n} nudges`),
     limits: { pass: limited === 0, value: limited, need: 0, note: 'plays where the engine hit a limit that changed the physics' },
     complete: { pass: incomplete === 0, value: incomplete, need: 0, note: 'plays that ran out of steps before every shot settled' },
     lines: plays.map((p, k) => ({ phase: 'cloud', shots: writeShots(batch[k]!), samples: p.samples, steps: p.steps, complete: p.complete, hash: p.hash, limits: p.limits })),

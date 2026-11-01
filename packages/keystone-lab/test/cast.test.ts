@@ -3,7 +3,7 @@
 // (every number checkable by hand) and on Rapier with a tiny recipe.
 import { describe, expect, it } from 'vitest';
 import { aimAt, type CastPlay, type CastSample, compileLevel, readShots, writeShots, launcherPos, type LaunchShot, type LevelDef, scenarioLevel, type Shot } from '@tb/keystone';
-import { bootstrapT3, castLevel, cloudCheck, exposedFaces, faceSectors, facingAzimuth, FACE_SECTORS, REACH, type CastPlayer, type CastRecipe, competentIntents, compareCasts, endValue, HEIGHT_BANDS, higherBetter, intentShot, moveIntents, nodeCastPlayer, nudgeLine, phaseEnds, playsOf, poolCasts, quantile, rng, roundEasier, SHORT_RECIPE, shotSummary, streamSeed, surfaceTarget, withWallTime } from '../src/index.ts';
+import { bootstrapT3, castLevel, cloudCheck, crossDeviceGate, exposedFaces, faceSectors, facingAzimuth, FACE_SECTORS, REACH, type CastPlayer, type CastRecipe, competentIntents, compareCasts, endValue, HEIGHT_BANDS, higherBetter, intentShot, moveIntents, nodeCastPlayer, nudgeLine, phaseEnds, playsOf, poolCasts, quantile, rng, roundEasier, SHORT_RECIPE, shotSummary, streamSeed, surfaceTarget, withWallTime } from '../src/index.ts';
 
 /** A 10 x 4 wall of plaster cubes along x as an outcome level, rack of two cannonballs. */
 const WALL: LevelDef = { ...scenarioLevel('S3', { W: 10, H: 4 }, 1, { rack: ['cannonball', 'cannonball'] }), id: 'T1' };
@@ -186,12 +186,29 @@ describe('castLevel on a synthetic player', () => {
     expect(k.t3).toBe(quantile(ends, 0.25));
     // The gate's interval is for a cloud of 8 plays: the cast's own cloud resampled 8 at a time.
     const iv = bootstrapT3('collapse', phaseEnds(cast, 'cloud'), 1, 2000, 8);
-    expect(k.crossDevice.pass).toBe(k.t3 >= iv.lo && k.t3 <= iv.hi);
+    expect(k.crossDevice.pass).toBe(k.t3 >= iv.lo);
     expect(k.against).toEqual({ adapter: 'synthetic', seed: 3, t3: cast.raw.t3, lo: iv.lo, hi: iv.hi });
     expect(k.limits.pass && k.complete.pass).toBe(true);
     // Repeatable, and refused on a level that does not hash as the cast's.
     expect(await cloudCheck(WALL, synthetic(), cast, 8, 1)).toEqual(k);
     await expect(cloudCheck({ ...WALL, rack: ['cannonball'] }, synthetic(), cast, 8)).rejects.toThrow(/hashes .* but the cast was of/);
+  });
+  it('the cross-device gate fails a harder device only: a shift the player\'s way passes and says so', () => {
+    const iv = { lo: 0.937, hi: 0.946, halfWidth: 0.0045 };
+    const inside = crossDeviceGate('collapse', 0.94, iv, 'swiftshader', 'metal');
+    expect(inside.pass).toBe(true);
+    expect(inside.note).toMatch(/: inside$/);
+    // B1 on SwiftShader: T3 0.9523 over Metal's 0.946.
+    const easier = crossDeviceGate('collapse', 0.9523, iv, 'swiftshader', 'metal');
+    expect(easier.pass).toBe(true);
+    expect(easier.note).toMatch(/easier on swiftshader by 0\.0063/);
+    const harder = crossDeviceGate('collapse', 0.93, iv, 'swiftshader', 'metal');
+    expect(harder.pass).toBe(false);
+    expect(harder.note).toMatch(/harder on swiftshader by 0\.0070/);
+    // Skyline: lower is better, so a higher T3 is the harder side.
+    const sky = { lo: 0.2, hi: 0.3, halfWidth: 0.05 };
+    expect(crossDeviceGate('skyline', 0.35, sky, 'a', 'b').pass).toBe(false);
+    expect(crossDeviceGate('skyline', 0.15, sky, 'a', 'b').pass).toBe(true);
   });
   it('a quartile of fewer plays spreads wider: the bootstrap interval at a smaller draw contains the full one', () => {
     const xs = Array.from({ length: 50 }, (_, k) => 0.9 + 0.001 * ((k * 37) % 50));
