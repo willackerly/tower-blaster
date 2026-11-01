@@ -11,6 +11,7 @@ import { CLOSE_TIMEOUT_MS, closeWithin, launchChromium, WEBGPU_ARGS } from '@tb/
 import { type CastPlay, type LevelDef, readShots, writeShots } from '@tb/keystone';
 import type { RestReport } from '../../game/src/cast-page.ts';
 import type { CastPlayer } from './cast.ts';
+import { withPageRetry } from './page-retry.ts';
 
 export interface BrowserCastOptions {
   /** Playwright channel: "chrome" for the installed Chrome (the real GPU on a Mac). */
@@ -22,6 +23,16 @@ export interface BrowserCastOptions {
   maxSteps?: number;
   /** Lines per page.evaluate call: smaller batches report progress sooner (default 4). */
   batch?: number;
+  /** Times a batch is replayed on a reopened page after the page is lost under it (default 2). */
+  retries?: number;
+}
+
+/** A way to lose the cast page, for tests: navigate it away (its context is destroyed) or close it. */
+export type PageFault = 'navigate' | 'close';
+
+async function injectFault(p: Page, f: PageFault): Promise<void> {
+  if (f === 'navigate') await p.goto('about:blank').catch(() => undefined);
+  else await p.close().catch(() => undefined);
 }
 
 export interface BrowserCastPlayer extends CastPlayer {
@@ -29,6 +40,10 @@ export interface BrowserCastPlayer extends CastPlayer {
   software: boolean;
   /** Wall time of each play in the page, ms, in play order. */
   readonly playMs: number[];
+  /** One line per page lost mid-batch and reopened (when, what was running, the error): empty on a clean cast. */
+  readonly reopens: string[];
+  /** Test hook: loses the page about 0.5 s into the next batch (or rest), so the reopen and replay path runs. */
+  injectFault(kind: PageFault): void;
   /** The level at rest on the page's engine (the cast page's rest: pre-settle, then `steps` with nothing fired). */
   rest(level: LevelDef, steps: number): Promise<RestReport>;
   close(): Promise<string[]>;
@@ -51,23 +66,51 @@ export async function openBrowserCastPlayer(opts: BrowserCastOptions = {}): Prom
     ...(opts.channel ? { channel: opts.channel } : {}),
   }).catch(async (e: unknown) => { await server.close(); throw e; });
   const close = () => closeWithin([['browser', closeBrowser], ['vite server', () => server.close()]], CLOSE_TIMEOUT_MS);
-  let page: Page;
-  try {
-    page = await browser.newPage();
+  const url = new URL(`/cast.html?engine=${opts.engine ?? 'gpu'}`, origin).toString();
+  // Opens the cast page and waits until it is ready; the previous page, if any, is closed first.
+  let page: Page | null = null;
+  const openPage = async (): Promise<Page> => {
+    if (page) await page.close().catch(() => undefined);
+    const p = await browser.newPage();
+    page = p;
     const errors: string[] = [];
-    page.on('pageerror', (e) => errors.push(e.message));
-    await page.goto(new URL(`/cast.html?engine=${opts.engine ?? 'gpu'}`, origin).toString());
-    await page.waitForFunction(() => window.__cast?.status !== 'loading', undefined, { timeout: 120_000, polling: 250 });
-    const st = await page.evaluate(() => ({ status: window.__cast.status, error: window.__cast.error }));
+    p.on('pageerror', (e) => errors.push(e.message));
+    await p.goto(url);
+    await p.waitForFunction(() => window.__cast?.status !== 'loading', undefined, { timeout: 120_000, polling: 250 });
+    const st = await p.evaluate(() => ({ status: window.__cast.status, error: window.__cast.error }));
     if (st.status !== 'ready') throw new Error(`the cast page failed: ${st.error}${errors.length ? `; ${errors.join('; ')}` : ''}`);
+    return p;
+  };
+  let info: { adapter: string; software: boolean; engine: string };
+  try {
+    const p = await openPage();
+    info = await p.evaluate(() => ({ adapter: window.__cast.adapter, software: window.__cast.software, engine: window.__cast.engine }));
   } catch (e) {
     await close();
     throw e;
   }
-  const info = await page.evaluate(() => ({ adapter: window.__cast.adapter, software: window.__cast.software, engine: window.__cast.engine }));
-  const playMs: number[] = [], batch = Math.max(1, opts.batch ?? 4);
+  const playMs: number[] = [], reopens: string[] = [], batch = Math.max(1, opts.batch ?? 4);
+  let fault: PageFault | null = null;
+  // Runs fn on the live page; a page lost under it (see page-retry.ts) is reopened and fn run again.
+  const onPage = <T>(what: string, fn: (p: Page) => Promise<T>): Promise<T> => withPageRetry(
+    () => {
+      const p = page!, run = fn(p);
+      if (fault) { const f = fault; fault = null; setTimeout(() => { void injectFault(p, f); }, 500); }
+      return run;
+    },
+    async () => {
+      const p = await openPage();
+      const again = await p.evaluate(() => window.__cast.adapter);
+      // The replayed batch must run on the same adapter, or its results would not belong to this cast.
+      if (again !== info.adapter) throw new Error(`the reopened cast page has adapter ${again}, not ${info.adapter}`);
+    },
+    { retries: opts.retries ?? 2, onLost: (e, n) => {
+      const msg = `${new Date().toISOString()} ${what}: page lost (${e instanceof Error ? e.message.split('\n')[0] : String(e)}); reopened, attempt ${n + 1}`;
+      reopens.push(msg);
+      console.error(`cast: ${msg}`);
+    } });
   return {
-    adapter: info.adapter, software: info.software, engine: info.engine, playMs,
+    adapter: info.adapter, software: info.software, engine: info.engine, playMs, reopens,
     // The game aims for the GPU engine's one substep per step; Rapier substeps once per iteration (4).
     substeps: info.engine === 'rapier' ? 4 : 1,
     async play(level, lines) {
@@ -76,12 +119,14 @@ export async function openBrowserCastPlayer(opts: BrowserCastOptions = {}): Prom
         const text = lines.slice(k, k + batch).map((l) => writeShots(l));
         // Shot text holds integers only (readShots checks each shot), so a line crosses to the page exactly.
         for (const t of text) readShots(t);
-        const got = await page.evaluate(([lv, ls, max]) => window.__cast.play(lv, ls, max ?? undefined), [level, text, opts.maxSteps ?? null] as const);
+        // Each play starts from the level on a fresh engine, so a batch replayed on a reopened page returns the same plays.
+        const got = await onPage(`plays ${k + 1}-${k + text.length}`, (p) => p.evaluate(([lv, ls, max]) => window.__cast.play(lv, ls, max ?? undefined), [level, text, opts.maxSteps ?? null] as const));
         for (const { ms, ...p } of got) { playMs.push(ms); out.push(p); }
       }
       return out;
     },
-    rest: (level, steps) => page.evaluate(([lv, n]) => window.__cast.rest(lv, n), [level, steps] as const),
+    rest: (level, steps) => onPage('rest', (p) => p.evaluate(([lv, n]) => window.__cast.rest(lv, n), [level, steps] as const)),
+    injectFault(kind) { fault = kind; },
     close,
   };
 }

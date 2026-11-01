@@ -84,9 +84,12 @@ if (flags.has('pool')) {
 }
 const maxSteps = flags.has('max-steps') ? Number(flags.get('max-steps')) : undefined;
 let player: CastPlayer, close = async (): Promise<string[]> => [];
+// Pages lost mid-batch and reopened (cast-browser.ts): listed after the cast so a recovered cast says so.
+let reopens: readonly string[] = [];
+const reopenNote = () => reopens.length ? `\n\nThe cast page was lost and reopened ${reopens.length} time(s); each batch it lost was replayed whole on the new page:\n${reopens.map((r) => `- ${r}`).join('\n')}\n` : '';
 if (engine === 'gpu' || engine === 'gpu-rapier') {
   const p = await openBrowserCastPlayer({ engine: engine === 'gpu' ? 'gpu' : 'rapier', ...(flags.has('channel') ? { channel: flags.get('channel')! } : {}), headed: flags.has('headed'), ...(maxSteps !== undefined ? { maxSteps } : {}) });
-  player = p; close = p.close;
+  player = p; close = p.close; reopens = p.reopens;
   if (p.software) console.log(`note: ${p.adapter} is a software adapter: the cast is valid, its timings are not performance results`);
 } else if (engine === 'ref' || engine === 'rapier') player = nodeCastPlayer({ kind: engine });
 else throw new Error(`--engine is gpu, gpu-rapier (Rapier in the page), ref or rapier: ${engine}`);
@@ -144,7 +147,7 @@ try {
     },
   });
   const r = withWallTime(r0, performance.now() - t0, budgetMs);
-  console.log(castMarkdown(r));
+  console.log(castMarkdown(r) + reopenNote());
   console.log(`stars: ${JSON.stringify(r.stars)}`);
   if (flags.has('compare')) {
     const other = JSON.parse(readFileSync(flags.get('compare')!, 'utf8')) as CastResult;
@@ -153,8 +156,8 @@ try {
     console.log(`cross-device (advisory): ${cmp.crossDevice.pass ? 'pass' : 'harder here'} (${cmp.crossDevice.note})`);
     failed ||= !cmp.recast.pass;
   }
-  if (flags.has('out')) writeFileSync(flags.get('out')!, JSON.stringify(r, null, 1));
-  if (flags.has('md')) writeFileSync(flags.get('md')!, castMarkdown(r));
+  if (flags.has('out')) writeFileSync(flags.get('out')!, JSON.stringify(reopens.length ? { ...r, reopens } : r, null, 1));
+  if (flags.has('md')) writeFileSync(flags.get('md')!, castMarkdown(r) + reopenNote());
   failed ||= Object.values(r.gates).some((g) => g && !g.pass);
   limited = !r.gates.limits.pass;
 } finally {

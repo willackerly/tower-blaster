@@ -36,6 +36,21 @@ describe('cast on the GPU solver', () => {
     console.log(`cast page on ${player.adapter}: ${a!.steps} steps, collapse ${a!.samples[0]!.collapse.toFixed(3)}, plays ${player.playMs.map((ms) => (ms / 1000).toFixed(1)).join(', ')} s`);
   }, 10 * MINUTES);
 
+  it('a page lost under a batch is reopened and the batch replayed: same plays as an undisturbed page', async (ctx) => {
+    if (!player) return ctx.skip();
+    const c = compileLevel(TINY), line = competentIntents(c, 1, 5)[0]!.map((it) => intentShot(c, it, player!.substeps));
+    const [clean] = await player.play(TINY, [line]);
+    for (const kind of ['navigate', 'close'] as const) {
+      const before = player.reopens.length;
+      player.injectFault(kind);
+      const [again] = await player.play(TINY, [line]);
+      expect(player.reopens.length, kind).toBe(before + 1);
+      expect(player.reopens.at(-1)).toMatch(/plays 1-1: page lost/);
+      expect(again, kind).toEqual(clean);
+    }
+    console.log(`reopens: ${player.reopens.join(' | ')}`);
+  }, 10 * MINUTES);
+
   it('a small cast runs end to end: every play complete, no limit hit, thresholds ordered', async (ctx) => {
     if (!player) return ctx.skip();
     const r = await castLevel(TINY, player, { recipe: { competent: 3, climbLines: 1, climbMoves: 1, climbNudges: 1, cloud: 2 }, seed: 1 });
