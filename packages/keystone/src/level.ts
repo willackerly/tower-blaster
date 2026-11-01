@@ -4,6 +4,7 @@
 // hash pins the exact scene a recorded solution was made against.
 import { type BodyDesc, massOf, type SceneDesc, type Vec3 } from '@tb/engine-api';
 import { DEFAULT_GAP, DEFAULT_UNIT, encodeTag, GRAVITY, MATERIALS, materialId, type MaterialName, type Role, ROLES } from './materials.ts';
+import { type ScenarioPart, scenarioBodies } from './scenario-part.ts';
 import { AMMO, type AmmoKind, type LauncherDef, type Shot, type ShotFrame, speedOf } from './shots.ts';
 
 /** A course (layer) override inside a block: change material or role, or leave cells out. */
@@ -21,7 +22,7 @@ export interface CourseOverride {
 export interface BlockPart { kind: 'block'; at: Vec3; size: Vec3; material: MaterialName; role?: Role; courses?: CourseOverride[] }
 /** One box body; `at` is (centre x, bottom y, centre z) and `half` its half-extents, in h. */
 export interface BoxPart { kind: 'slab' | 'rod'; at: Vec3; half: Vec3; material: MaterialName; role?: Role }
-export type Part = BlockPart | BoxPart;
+export type Part = BlockPart | BoxPart | ScenarioPart;
 
 /**
  * What the level asks for; meeting it is the first star. footprintMax (a fraction of the structure
@@ -120,9 +121,9 @@ export interface CompiledLevel {
 export const unitOf = (d: LevelDef) => d.unit ?? DEFAULT_UNIT;
 export const pitchOf = (d: LevelDef) => 1 + (d.gap ?? DEFAULT_GAP);
 
-function body(pos: Vec3, half: Vec3, material: MaterialName, role: Role, part: number): BodyDesc {
+function body(pos: Vec3, half: Vec3, material: MaterialName, role: Role, part: number, rot: BodyDesc['rot'] = [0, 0, 0, 1]): BodyDesc {
   const m = MATERIALS[materialId(material)]!;
-  return { shape: { kind: 'box', half }, pos, rot: [0, 0, 0, 1], linVel: [0, 0, 0], angVel: [0, 0, 0], density: m.density, friction: m.friction, restitution: m.restitution, tag: encodeTag(role, part) };
+  return { shape: { kind: 'box', half }, pos, rot, linVel: [0, 0, 0], angVel: [0, 0, 0], density: m.density, friction: m.friction, restitution: m.restitution, tag: encodeTag(role, part) };
 }
 
 /** FNV-1a over a string, twice with different offsets: 64 bits as hex. */
@@ -155,6 +156,8 @@ export function compileLevel(def: LevelDef): CompiledLevel {
         const pos: Vec3 = [(part.at[0] + i + 0.5) * p, (part.at[1] + k + 0.5) * h, (part.at[2] + j + 0.5) * p];
         add(body(pos, [h / 2, h / 2, h / 2], material, role, pi), role, material, pi);
       }
+    } else if (part.kind === 'scenario') {
+      for (const b of scenarioBodies(part, h, pitchOf(def))) add(body(b.pos, b.half, part.material, b.role, pi, b.rot), b.role, part.material, pi);
     } else {
       const half = part.half.map((x) => x * h) as Vec3;
       const pos: Vec3 = [part.at[0] * p, part.at[1] * h + half[1], part.at[2] * p];
@@ -192,7 +195,20 @@ export function compileLevel(def: LevelDef): CompiledLevel {
   const { solutions: _omit, stars: _stars, ...geometry } = def;
   if (geometry.scoring === 'par') delete geometry.scoring;
   if (geometry.autobank === false) delete geometry.autobank;
-  return { def, scene, meta, frame, lot, height, hash: hashString(JSON.stringify(geometry)) };
+  // A scenario part names its bodies by (id, params, seed): the bodies themselves join the hash, so a
+  // change to the scenario's builder is a different level too. Levels without one hash as before.
+  const built = def.parts.some((pt) => pt.kind === 'scenario') ? `|${bodiesDigest(bodies)}` : '';
+  return { def, scene, meta, frame, lot, height, hash: hashString(JSON.stringify(geometry) + built) };
+}
+
+/** FNV-1a over the bytes of every body's pose and half-extents (f64). */
+function bodiesDigest(bodies: readonly BodyDesc[]): string {
+  const f = new Float64Array(10 * bodies.length);
+  bodies.forEach((b, i) => { f.set(b.pos, 10 * i); f.set(b.rot, 10 * i + 3); f.set((b.shape as { half: Vec3 }).half, 10 * i + 7); });
+  const u = new Uint8Array(f.buffer);
+  let a = 0x811c9dc5;
+  for (let i = 0; i < u.length; i++) a = Math.imul(a ^ u[i]!, 0x01000193) >>> 0;
+  return a.toString(16).padStart(8, '0');
 }
 
 export interface Issue { code: 'count' | 'overlap' | 'unsupported' | 'mass-ratio' | 'tunnelling' | 'crown-start' | 'rack' | 'empty'; message: string; bodies?: number[] }

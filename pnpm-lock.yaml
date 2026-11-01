@@ -147,6 +147,9 @@ importers:
       '@tb/geom':
         specifier: workspace:*
         version: link:../geom
+      '@tb/scenarios':
+        specifier: workspace:*
+        version: link:../scenarios
 
   packages/keystone-lab:
     dependencies:

@@ -1,6 +1,7 @@
 export * from './materials.ts';
 export * from './shots.ts';
 export * from './level.ts';
+export * from './scenario-part.ts';
 export * from './rules.ts';
 export * from './outcome.ts';
 export * from './session.ts';

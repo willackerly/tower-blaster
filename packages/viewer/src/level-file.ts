@@ -6,9 +6,10 @@
 // Whether the level is any good (overlaps, unsupported bodies, tunnelling ammo)
 // is validateLevel's question; the panel shows its issues without refusing.
 import {
-  AMMO_KINDS, type AmmoKind, checkShot, compileLevel, type CourseOverride, type Issue, type LevelDef, MATERIALS, type MaterialName, type Part, type Role, ROLES, SCORINGS, type Scoring, type Shot,
+  AMMO_KINDS, type AmmoKind, checkShot, compileLevel, type CourseOverride, type Issue, type LevelDef, MATERIALS, type MaterialName, type Part, type Role, type RoleRule, ROLES, type ScenarioPart, SCORINGS, type Scoring, type Shot,
   STAR_METRICS, type StarMetric, type StarsDef, validateLevel,
 } from '@tb/keystone';
+import { SCENARIOS } from '@tb/scenarios';
 
 export const LEVEL_FILE_FORMAT = 'tower-blaster/keystone-level';
 
@@ -61,7 +62,8 @@ function stars(v: unknown, where: string): StarsDef {
 
 function part(v: unknown, where: string): Part {
   const o = object(v, where);
-  const kind = oneOf(o.kind, ['block', 'slab', 'rod'], `${where}.kind`);
+  const kind = oneOf(o.kind, ['block', 'slab', 'rod', 'scenario'], `${where}.kind`);
+  if (kind === 'scenario') return scenarioPart(o, where);
   const material = oneOf(o.material, MATERIAL_NAMES, `${where}.material`) as MaterialName;
   const role = o.role === undefined ? undefined : (oneOf(o.role, ROLES, `${where}.role`) as Role);
   if (kind === 'block') {
@@ -76,6 +78,43 @@ function part(v: unknown, where: string): Part {
   const half = vec3(o.half, `${where}.half`);
   if (half.some((x) => !(x > 0))) throw new Error(`${where}.half must be three numbers above 0`);
   return { kind, at: vec3(o.at, `${where}.at`), half, material, ...(role ? { role } : {}) };
+}
+
+/** A scenario as a part (@tb/keystone ScenarioPart); its params are checked by building it, at compile. */
+function scenarioPart(o: Json, where: string): ScenarioPart {
+  only(o, ['kind', 'id', 'params', 'seed', 'at', 'material', 'role', 'roles', 'gap'], where);
+  const p: ScenarioPart = { kind: 'scenario', id: oneOf(o.id, Object.keys(SCENARIOS), `${where}.id`), material: oneOf(o.material, MATERIAL_NAMES, `${where}.material`) as MaterialName };
+  if (o.params !== undefined) {
+    const params = object(o.params, `${where}.params`);
+    for (const [k, x] of Object.entries(params)) if (typeof x !== 'boolean') num(x, `${where}.params.${k}`);
+    p.params = params as Record<string, number | boolean>;
+  }
+  if (o.seed !== undefined) p.seed = int(o.seed, `${where}.seed`);
+  if (o.at !== undefined) p.at = vec3(o.at, `${where}.at`);
+  if (o.role !== undefined) p.role = oneOf(o.role, ROLES, `${where}.role`) as Role;
+  if (o.gap !== undefined) p.gap = num(o.gap, `${where}.gap`);
+  if (o.roles !== undefined) p.roles = arr(o.roles, `${where}.roles`).map((r, i) => roleRule(r, `${where}.roles[${i}]`));
+  return p;
+}
+
+function roleRule(v: unknown, where: string): RoleRule {
+  const o = object(v, where);
+  only(o, ['role', 'box', 'course', 'top', 'tag'], where);
+  const r: RoleRule = { role: oneOf(o.role, ROLES, `${where}.role`) as Role };
+  if (o.box !== undefined) {
+    const b = object(o.box, `${where}.box`);
+    only(b, ['min', 'max'], `${where}.box`);
+    r.box = { min: vec3(b.min, `${where}.box.min`), max: vec3(b.max, `${where}.box.max`) };
+  }
+  if (o.course !== undefined) {
+    if (Array.isArray(o.course)) {
+      if (o.course.length !== 2) throw new Error(`${where}.course must be a whole number or two of them`);
+      r.course = [int(o.course[0], `${where}.course[0]`), int(o.course[1], `${where}.course[1]`)];
+    } else r.course = int(o.course, `${where}.course`);
+  }
+  if (o.top !== undefined) r.top = bool(o.top, `${where}.top`);
+  if (o.tag !== undefined) r.tag = Array.isArray(o.tag) ? o.tag.map((x, i) => int(x, `${where}.tag[${i}]`)) : int(o.tag, `${where}.tag`);
+  return r;
 }
 
 function course(v: unknown, where: string): CourseOverride {
