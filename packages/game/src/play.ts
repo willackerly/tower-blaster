@@ -443,10 +443,17 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     handle.resultShownAt = null;
   }
 
-  /** Mirror state onto the handle; called each frame and right after anything that changes it. */
-  function sync() {
+  /** Mirror the round's state onto the handle: each frame, and after each physics step (which runs between frames). */
+  function syncState() {
     const s = driver.session;
     Object.assign(handle, { phase: stepping ? 'running' : s.phase, ready: !stepping && s.phase === 'aiming' && regrowT === null, stepIndex: driver.engine.stepIndex, strokes: s.strokes, bodies: driver.snapshot.count, collapse: s.liveCollapse });
+  }
+
+  /** Mirror state, pace and view onto the handle; called each frame and right after anything that changes it.
+   * Pace and view are what the frame drew (the HUD tag, the camera), so only a frame mirrors them. */
+  function sync() {
+    syncState();
+    const s = driver.session;
     const running = s.phase === 'running', v = running ? speed.speed(performance.now()) : 1, costs = handle.timing.costMs;
     handle.pace = { timeScale: running ? pacer.timeScale : 1, speed: v, tag: running && !fastHeld && !handle.fast && !ending && !tail.on ? slowTag(v) : '', tailSkip: tail.on, costMs: median(costs.slice(-60)) };
     handle.view = { target: [...orbit.target], distance: orbit.distance, following: follow.active };
@@ -679,6 +686,9 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
       if (red && feel.tailSkip && d.session.phase === 'running') tail.update(red.nMoving, c.meta.n, d.session.liveCollapse);
       source.update(d.snapshot, descs);
       arrived(arrivals, performance.now(), 1000 * c.scene.dt);
+      // Steps run between frames: mirror what this one changed (phase, strokes) now, so the handle
+      // never shows a step's result while still saying running until the next frame.
+      syncState();
       // A GPU step only submits: its cost is read when the GPU reports it done.
       const done = d.engine.finish ? d.engine.finish().then(() => performance.now()) : undefined;
       return { started, submitted, done, yielded: !!d.engine.finish };

@@ -31,6 +31,17 @@ describe('game page', () => {
     expect(stats!.distinctColors).toBeGreaterThan(50);
 
     await page.evaluate(() => { window.__game.fast = true; });
+    // The handle never shows a result while it still says running: physics steps run between
+    // frames, so whatever a step changes must reach the handle with it, not on the next frame.
+    await page.evaluate(() => {
+      const w = window as unknown as { __torn: string[] };
+      w.__torn = [];
+      const id = setInterval(() => {
+        const g = window.__game;
+        if (g.result !== null && g.phase === 'running') w.__torn.push(`step ${g.stepIndex}`);
+        if (g.result !== null) clearInterval(id);
+      }, 0);
+    });
     // Pinned on the AVBD reference; this line also clears L1 on Rapier.
     const shots = L1.solutions!.par as Shot[];
     for (const shot of shots) {
@@ -40,6 +51,7 @@ describe('game page', () => {
     await page.waitForFunction(() => window.__game.result !== null, undefined, { timeout: 120_000, polling: 100 });
     expect(await page.evaluate(() => document.querySelector('#result.show') !== null)).toBe(true);
     const result = await page.evaluate(() => ({ score: window.__game.result, counts: window.__game.counts, phase: window.__game.phase }));
+    expect(await page.evaluate(() => (window as unknown as { __torn: string[] }).__torn)).toEqual([]);
     expect(result.phase).toBe('cleared');
     expect(result.counts.fired).toBe(1);
     expect(result.counts.contact).toBeGreaterThanOrEqual(1);
