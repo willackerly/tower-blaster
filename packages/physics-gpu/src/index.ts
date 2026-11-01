@@ -6,3 +6,4 @@ export * from './restitution.ts';
 export * from './engine.ts';
 export * from './sleep.ts';
 export * from './health.ts';
+export * from './snapshot.ts';

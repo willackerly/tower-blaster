@@ -21,8 +21,9 @@ import { driverOptions, type EngineKind, gpuEngineOptions, makeEngine, roomAfter
 import { hudHtml, nextSelection, rackChips, resultHtml, starsText } from './hud.ts';
 import { FollowCam } from './follow.ts';
 import { CameraJuice, contactJuice } from './juice.ts';
-import { alphaAt, arrived, DEFAULT_FEEL, newArrivals, Pacer, type PaceFeel, slowTag, SpeedMeter, TailSkip } from './pacing.ts';
-import { runPhysics } from './physics-loop.ts';
+import { alphaAt, arrived, DEFAULT_FEEL, newArrivals, Pacer, type PaceFeel, SLOW_TAG_BELOW, slowTag, SpeedMeter, TailSkip } from './pacing.ts';
+import { COST_WINDOW, runPhysics } from './physics-loop.ts';
+import { CLEAR_SHARE, FrameGovernor } from './frame-rate.ts';
 import { beadOverlay, regrowDuration, regrowScales, structureTints, TINT } from './scene.ts';
 
 /** What a page (and its tests) can see and do while Keystone plays: window.__game on the game page. */
@@ -60,10 +61,13 @@ export interface GameHandle {
   /**
    * Wall time of this level's load (engine build and pre-settle), and of each live step since, in ms;
    * moving: each live step's structure bodies in motion (Reductions.nMoving, what settle v2 counts);
-   * frameMs: the time between frames while a shot runs (frame pacing); costMs: each step's cost as the
-   * valve reads it (a GPU step's own time on the GPU, physics-loop.ts), in order of landing.
+   * frameMs: the time between drawn frames while a shot runs (frame pacing; with keystone.frames=all,
+   * every display frame); costMs: each step's cost as the valve reads it (a GPU step's own time on the
+   * GPU, physics-loop.ts), in order of landing.
    */
   timing: { loadMs: number; stepMs: number[]; moving: number[]; frameMs: number[]; costMs: number[] };
+  /** Display frames drawn and skipped (keystone.frames, frame-rate.ts), and whether decimation is on now (a display under 110 Hz skips nothing even then). */
+  draws: { drawn: number; skipped: number; decimating: boolean };
   fire(shot: Shot): boolean;
   /** Outcome levels: end the level now, keeping the rack left (key B, the HUD's Bank button); false when it cannot. */
   bank(): boolean;
@@ -111,7 +115,7 @@ function safetyLimiter(ctx: AudioContext): AudioNode {
 export function newGameHandle(): GameHandle {
   const none = (): SessionState => ({ step: 0, phase: 'loading', strokes: 0, heritageBroken: 0, hash: '' });
   return {
-    status: 'loading', engine: '', level: '', phase: 'loading', ready: false, frames: 0, stepIndex: 0, strokes: 0, bodies: 0, collapse: 0, fast: false, pace: { timeScale: 1, speed: 1, tag: '', tailSkip: false, costMs: NaN }, view: { target: [0, 0, 0], distance: 0, following: false }, result: null, counts: {}, feel: { ...DEFAULT_FEEL }, resultShownAt: null, timing: { loadMs: 0, stepMs: [], moving: [], frameMs: [], costMs: [] },
+    status: 'loading', engine: '', level: '', phase: 'loading', ready: false, frames: 0, stepIndex: 0, strokes: 0, bodies: 0, collapse: 0, fast: false, pace: { timeScale: 1, speed: 1, tag: '', tailSkip: false, costMs: NaN }, view: { target: [0, 0, 0], distance: 0, following: false }, result: null, counts: {}, feel: { ...DEFAULT_FEEL }, resultShownAt: null, timing: { loadMs: 0, stepMs: [], moving: [], frameMs: [], costMs: [] }, draws: { drawn: 0, skipped: 0, decimating: false },
     fire: () => false, bank: () => false, aim: () => null, select: () => false, load: async () => {}, retry: async () => {}, capture: async () => null,
     state: none, replay: async () => none(), health: async () => null, pairsPerBody: 0, limitsHit: [],
     sound: () => ({ mode: 'collapse', status: 'off', error: '', posted: 0, stats: null }),
@@ -625,7 +629,8 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
 
   await load(levelIdx);
   handle.status = 'running';
-  let last = performance.now();
+  let last = performance.now(), lastDrawn = NaN;
+  const frames = new FrameGovernor(feel.frames);
   let pendingCapture: { resolve: (s: PixelStats | null) => void; keep: boolean } | null = null;
   handle.capture = (keep = false) => new Promise((resolve) => { pendingCapture = { resolve, keep }; });
 
@@ -633,6 +638,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     const now = performance.now(), frameMs = now - last;
     last = now;
     const dt = Math.min(frameMs / 1000, 0.1);
+    const want = pendingCapture;
     resize();
     if (regrowT !== null) {
       regrowT += dt;
@@ -641,8 +647,16 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
       if (done) { regrowT = null; aimDirty = true; }
     }
     const running = !loading && driver.session.phase === 'running';
-    if (running) handle.timing.frameMs.push(frameMs);
-    else collapse?.pause(); // between shots: the next step's audio frame starts afresh
+    // Physics is behind when the sim runs under the HUD's slow-motion speed without being asked to
+    // (slow-motion juice, fast-forward); it has headroom when steps cost under CLEAR_SHARE of a step.
+    const fast = fastHeld || handle.fast || ending || tail.on, costMs = median(handle.timing.costMs.slice(-COST_WINDOW));
+    const draw = frames.frame(now, { idle: !running, behind: running && !fast && !pacer.slowing && speed.speed(now) < SLOW_TAG_BELOW, clear: costMs < CLEAR_SHARE * 1000 * c.scene.dt }, !!want);
+    handle.draws = { drawn: frames.drawn, skipped: frames.skipped, decimating: frames.decimating };
+    if (draw) {
+      if (running && !Number.isNaN(lastDrawn)) handle.timing.frameMs.push(now - lastDrawn);
+      lastDrawn = now;
+    }
+    if (!running) collapse?.pause(); // between shots: the next step's audio frame starts afresh
     if (follow.active) {
       const red = loading ? undefined : driver.observed?.red;
       follow.update(orbit, dt, running, red?.movingBox ?? null, red?.nMoving ?? 0, c.frame.unit, followClip);
@@ -655,14 +669,13 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     const view: Orbit = { ...orbit, yaw: orbit.yaw + shake.yaw, pitch: orbit.pitch + shake.pitch, fovY: orbit.fovY * shake.fovScale };
     const o = beads ? beadOverlay(beads, aimed?.reachable ?? true) : null;
     renderer.setOverlay(o?.xyzr ?? new Float32Array(0), o?.colours);
-    const want = pendingCapture;
     pendingCapture = null;
     const fp = { viewProj: viewProj(view, aspect()), eye: eyeOf(view), focus: orbit.target, time: now / 1000, groundY: 0, alpha: running ? alphaAt(arrivals, now, 1000 * c.scene.dt) : 1 };
     // Offscreen (tests), nobody sees a frame and nothing throttles requestAnimationFrame
     // to the GPU: on SwiftShader a frame takes up to a second, so frames would queue
     // without bound and every readback (a step's, a replay's) wait behind them.
     // There, draw only for a capture.
-    if (!offscreen || want) {
+    if ((!offscreen && draw) || want) {
       const stats = await renderer.render(fp, !!want, want?.keep);
       if (want) want.resolve(stats);
     }

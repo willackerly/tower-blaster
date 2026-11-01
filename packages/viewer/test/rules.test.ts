@@ -112,10 +112,10 @@ describe('Keystone rules in the viewer', () => {
     expect(sceneFile(c, '', null).rules).toMatchObject({ scoring: 'outcome', autobank: false, settle: 'v1', physics: { iterations: 20, bounce: 0.4, gapSlop: 0 } });
     expect(sceneFile(parseViewerConfig('?level=L1&rules=keystone'), '', null).rules).toEqual({ mode: 'keystone', hitstop: false, slowmo: false });
     // The pace switches (budget, tail skip) ride along in the URL and the scene file, and only when not the default.
-    const paced = parseViewerConfig('?level=L1&rules=keystone&keystone.budget=0&keystone.tailskip=0&keystone.follow=0');
-    expect(paced.feel).toEqual({ ...DEFAULT_FEEL, budgetMs: 0, tailSkip: false, follow: false });
+    const paced = parseViewerConfig('?level=L1&rules=keystone&keystone.budget=0&keystone.tailskip=0&keystone.follow=0&keystone.frames=auto');
+    expect(paced.feel).toEqual({ ...DEFAULT_FEEL, budgetMs: 0, tailSkip: false, follow: false, frames: 'auto' });
     expect(parseViewerConfig(toSearch(paced))).toEqual(paced);
-    expect(sceneFile(paced, '', null).rules).toMatchObject({ budget: 0, tailskip: false, follow: false });
+    expect(sceneFile(paced, '', null).rules).toMatchObject({ budget: 0, tailskip: false, follow: false, frames: 'auto' });
     expect(parseSceneFile(JSON.stringify(sceneFile(paced, '', null))).config).toEqual(paced);
     expect(() => parseViewerConfig('?level=L1&keystone.budget=0')).toThrow(/keystone.budget applies to rules=keystone/);
     const f = sceneFile(c, '', null);

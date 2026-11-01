@@ -17,6 +17,11 @@
 // energy) from a rack of just that; the rendered cluster cases compare the
 // valve's budget at 16.7 ms (the default), 14 ms and off (G4.4); one more
 // rendered case saves a screenshot every 2 s, for reviewing the camera.
+// The frames cases are the pipelining audit's A/B (docs/pipelining.md): the
+// same rendered cluster shots with keystone.frames=half and auto, against the
+// default (every frame), on a 120 Hz display (TB_HEADED=1: headless Chrome
+// runs rAF at 60 Hz, which is never decimated). TB_PROBE_CASES=<regex> runs
+// only the cases whose name matches (e.g. 'cluster-40-rendered').
 // Not a performance result unless run on the physical GPU (CLAUDE.md).
 import { appendFileSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -58,7 +63,7 @@ function shotAt(def: LevelDef, ammo: LaunchItem, yLo: number, yHi: number): Shot
 const q = (xs: number[], p: number) => { const s = [...xs].sort((a, b) => a - b); return s.length ? s[Math.min(s.length - 1, Math.floor(p * s.length))]! : NaN; };
 
 /** budgetMs: keystone.budget (absent: the default); the cluster cases' rack is just the cluster. */
-interface Case { name: string; scene: Scene; ammo: 'cannonball' | 'w-grenade' | 'w-cluster'; iterations: 40 | 20; rendered: boolean; budgetMs?: number; screenshots?: boolean }
+interface Case { name: string; scene: Scene; ammo: 'cannonball' | 'w-grenade' | 'w-cluster'; iterations: 40 | 20; rendered: boolean; budgetMs?: number; frames?: 'half' | 'auto'; screenshots?: boolean }
 const ALL: Case[] = [
   { name: 'city-cannonball-40', scene: CITY, ammo: 'cannonball', iterations: 40, rendered: false },
   { name: 'blocks-grenade-40', scene: BLOCKS, ammo: 'w-grenade', iterations: 40, rendered: false },
@@ -70,11 +75,16 @@ const ALL: Case[] = [
   { name: 'blocks-cluster-40-rendered-b14', scene: BLOCKS, ammo: 'w-cluster', iterations: 40, rendered: true, budgetMs: 14 },
   { name: 'blocks-cluster-40-rendered-b0', scene: BLOCKS, ammo: 'w-cluster', iterations: 40, rendered: true, budgetMs: 0 },
   { name: 'city-cluster-40-rendered', scene: CITY, ammo: 'w-cluster', iterations: 40, rendered: true },
+  { name: 'blocks-cluster-40-rendered-half', scene: BLOCKS, ammo: 'w-cluster', iterations: 40, rendered: true, frames: 'half' },
+  { name: 'blocks-cluster-40-rendered-auto', scene: BLOCKS, ammo: 'w-cluster', iterations: 40, rendered: true, frames: 'auto' },
+  { name: 'city-cluster-40-rendered-half', scene: CITY, ammo: 'w-cluster', iterations: 40, rendered: true, frames: 'half' },
+  { name: 'city-cluster-40-rendered-auto', scene: CITY, ammo: 'w-cluster', iterations: 40, rendered: true, frames: 'auto' },
   // For reviewing the follow camera (G4.3): a screenshot every 2 s into TB_PROBE_OUT. Its timings are not used (screenshots stall frames).
   { name: 'city-cluster-40-screenshots', scene: CITY, ammo: 'w-cluster', iterations: 40, rendered: true, screenshots: true },
 ];
 // Rendered frames take up to a second on SwiftShader: the rendered case is a real GPU's only.
-const CASES = SMALL ? ALL.filter((k) => k.iterations === 40 && !k.rendered) : ALL;
+const ONLY = process.env.TB_PROBE_CASES ? new RegExp(process.env.TB_PROBE_CASES) : null;
+const CASES = (SMALL ? ALL.filter((k) => k.iterations === 40 && !k.rendered) : ALL).filter((k) => !ONLY || ONLY.test(k.name));
 
 describe.runIf(RUN)('G4 probe: a 10k level\'s shot on a real GPU', () => {
   for (const k of CASES) {
@@ -84,7 +94,7 @@ describe.runIf(RUN)('G4 probe: a 10k level\'s shot on a real GPU', () => {
       const base = scenarioLevel(k.scene.scenario, k.scene.params, 1);
       const def: LevelDef = k.ammo === 'w-cluster' ? { ...base, rack: ['w-cluster'] } : base;
       const shot = shotAt(def, k.ammo, 3, 6);
-      const search = `/?${k.scene.search}&rules=keystone${k.iterations !== 40 ? `&keystone.iterations=${k.iterations}` : ''}${k.ammo === 'w-cluster' ? '&keystone.rack=w-cluster' : ''}${k.budgetMs !== undefined ? `&keystone.budget=${k.budgetMs}` : ''}${SMALL ? '&keystone.presettle=30' : ''}${k.rendered ? '' : '&offscreen=1'}`;
+      const search = `/?${k.scene.search}&rules=keystone${k.iterations !== 40 ? `&keystone.iterations=${k.iterations}` : ''}${k.ammo === 'w-cluster' ? '&keystone.rack=w-cluster' : ''}${k.budgetMs !== undefined ? `&keystone.budget=${k.budgetMs}` : ''}${k.frames ? `&keystone.frames=${k.frames}` : ''}${SMALL ? '&keystone.presettle=30' : ''}${k.rendered ? '' : '&offscreen=1'}`;
       const o = await openRules(search, k.rendered && !SMALL ? { width: 1440, height: 900 } : undefined, 10 * MINUTES);
       if (!o) return ctx.skip();
       const { page, errors } = o;
@@ -103,14 +113,15 @@ describe.runIf(RUN)('G4 probe: a 10k level\'s shot on a real GPU', () => {
         }
         await page.waitForTimeout(250);
       }
-      const t = await page.evaluate(() => { const g = window.__viewer.game!; return { ...g.timing, collapse: g.collapse, bodies: g.bodies }; });
+      const wallMs = Date.now() - t0;
+      const t = await page.evaluate(() => { const g = window.__viewer.game!; return { ...g.timing, collapse: g.collapse, bodies: g.bodies, draws: g.draws }; });
       const health = await page.evaluate(() => window.__viewer.health);
       const n = compileLevel(def).meta.n, allowance = settleAllowance(n);
       // The first step from which nMoving stays at or under x for good: when a v2 with that allowance could have ended.
       const quietFrom = (x: number) => { let i = t.moving.length; while (i > 0 && t.moving[i - 1]! <= x) i--; return i; };
       const every60 = t.moving.filter((_, i) => i % 60 === 0);
       const summary = {
-        case: k.name, search, steps: t.stepMs.length, loadMs: Math.round(t.loadMs), collapse: t.collapse, allowance,
+        case: k.name, search, steps: t.stepMs.length, wallMs, loadMs: Math.round(t.loadMs), collapse: t.collapse, allowance, draws: t.draws,
         stepMs: { median: q(t.stepMs, 0.5), p95: q(t.stepMs, 0.95), max: Math.max(...t.stepMs) },
         frameMs: k.rendered ? { n: t.frameMs.length, median: q(t.frameMs, 0.5), p95: q(t.frameMs, 0.95), p99: q(t.frameMs, 0.99), max: Math.max(...t.frameMs) } : null,
         pace: { speedMin: Math.min(...pace.map((p) => p.speed)), speedMedian: q(pace.map((p) => p.speed), 0.5), tagged: pace.filter((p) => p.tag).length, samples: pace.length, tailSkipAt: pace.find((p) => p.tailSkip)?.t ?? null },

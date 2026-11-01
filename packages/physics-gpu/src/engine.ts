@@ -7,13 +7,14 @@ import { type BodyDesc, checkBlast, checkInputQueue, DEFAULT_RESTITUTION_COMBINE
 import { boundingRadius } from '@tb/geom';
 import { assertStorageFits, createDevice, isSoftwareAdapter, Readback } from '@tb/gpu';
 import { type AvbdParams, avbdVariant, checkColoring, checkGapSlop, checkRecords, checkRemoved, checkRestitution, DEFAULT_AVBD, RESTITUTION_DEFAULTS } from '@tb/physics-ref';
-import { Body, BodyProps, field, readField, RestSlot, Shape, SolverBody, writeStruct } from '@tb/schema';
+import { Body, BodyProps, field, RestSlot, Shape, SolverBody, writeStruct } from '@tb/schema';
 import { BlastPass, type DueBlast } from './blast.ts';
 import { assertPairDispatch, Broadphase } from './broadphase.ts';
 import { Coloring } from './coloring.ts';
 import { DEFAULT_PAIRS_PER_BODY, gpuHealth } from './health.ts';
 import { Narrowphase } from './narrowphase.ts';
 import { restitutionWord } from './restitution.ts';
+import { decodeBodies } from './snapshot.ts';
 import { checkSleepRule, DEFAULT_SLEEP, SleepPass, type SleepRule } from './sleep.ts';
 import { AvbdSolver, DEFAULT_DISPATCH, defaultTailThreads, HESSIAN_FORMS, type HessianForm, type RecordMode, type SolverDispatch } from './solver.ts';
 
@@ -514,19 +515,10 @@ export class GpuAvbdEngine implements PhysicsEngine {
   /** Reads the n bodies only (not the capacity), through the engine's staging pool. */
   async snapshot(): Promise<Snapshot> {
     const n = this.n;
-    const s = emptySnapshot(n);
-    if (!this.device || !this.parts || n === 0) return s;
+    if (!this.device || !this.parts || n === 0) return emptySnapshot(n);
     const buf = await this.parts.readback.read(this.parts.bodies, n * Body.size);
-    readField(buf, Body, 'pos', n, s.pos);
-    readField(buf, Body, 'rot', n, s.rot);
-    readField(buf, Body, 'linVel', n, s.linVel);
-    readField(buf, Body, 'angVel', n, s.angVel);
-    // Bit 0 only: bits 8-15 are the tier's.
-    const flags = readField(buf, Body, 'flags', n, new Uint32Array(n));
-    for (let i = 0; i < n; i++) s.awake[i] = flags[i]! & 1;
-    // Tiers only once a body is removed (Snapshot.tier: absent, every body is active).
-    if (this.gone.size) s.tier = Uint8Array.from(flags, (f) => (f >> 8) & 0xff);
-    return s;
+    // Awake is flags bit 0 (bits 8-15 are the tier's). Tiers only once a body is removed (Snapshot.tier: absent, every body is active).
+    return decodeBodies(buf, n, this.gone.size > 0);
   }
 
   /** Pipeline health: the pair buffer and colouring limits after the last step, and the pair buffer over every step since init(). */
