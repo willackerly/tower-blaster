@@ -1,0 +1,83 @@
+// The game's collision sound, offline: plays each level's par line on the AVBD reference (which pins them; the GPU solver the page plays on matches it),
+// taps one AudioFrame per step from the game's opening camera (viewOf) as the page does, and renders
+// it through @tb/audio's collapse synth with the game's sound slots (sound-map.ts). Per level: the
+// impacts per slot, the peak at volume 0 (the limiter's ceiling is 0.9), how much it limited, and the
+// energy above 1 kHz. A capture is plain data, so a change to the synth is checked on the same frames.
+// usage: tsx packages/game/src/sound-cli.ts [levels=L1,L2 wav=dir frames=dir (writes captures) from=dir (reads them) db=GAME_SOUND_DB]
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { AvbdReferenceEngine } from '@tb/physics-ref';
+import { type AudioFrame, BLOCK, CollapseEngine, FrameTap, FULL_SCALE } from '@tb/audio';
+import { AMMO_KINDS, AVBD_GAP_SLOP, AVBD_ITERATIONS, compileLevel, LEVELS, runSession, type Shot } from '@tb/keystone';
+import type { PhysicsEngine } from '@tb/engine-api';
+import { eyeOf } from '@tb/render/camera';
+import { AMMO_SLOT, GAME_SOUND_DB, slotSounds, SOUND_SLOTS } from './sound-map.ts';
+import { viewOf } from './view.ts';
+
+const kv = Object.fromEntries(process.argv.slice(2).map((a) => a.split('=') as [string, string]));
+for (const k of Object.keys(kv)) if (!['levels', 'wav', 'frames', 'from', 'db'].includes(k)) throw new Error(`unknown option ${k}`);
+const ids = (kv.levels ?? LEVELS.map((l) => l.id).join(',')).split(',');
+const SR = 48000;
+
+/** The frames the page's tap would post for this level's par line (one per step: the game steps once a 60 Hz frame). */
+export async function capture(id: string, engine: PhysicsEngine = new AvbdReferenceEngine({ iterations: AVBD_ITERATIONS, gapSlop: AVBD_GAP_SLOP })): Promise<{ frames: AudioFrame[]; slots: number[] }> {
+  const def = LEVELS.find((l) => l.id === id);
+  if (!def) throw new Error(`unknown level ${id}`);
+  const c = compileLevel(def), shots = (def.solutions?.par ?? []) as Shot[];
+  const o = viewOf(c), eye = eyeOf(o), f = [o.target[0] - eye[0], o.target[2] - eye[2]], l = Math.hypot(f[0]!, f[1]!);
+  const tap = new FrameTap({ materials: SOUND_SLOTS, sectors: 4 }), frames: AudioFrame[] = [], slots = new Array<number>(SOUND_SLOTS).fill(0);
+  let n = 0;
+  await runSession(engine, c, shots, {
+    perStep: (d) => {
+      const s = d.snapshot;
+      // Structure by its material; spawn k is shot k's ammo (no other spawns in a par line).
+      for (; n < s.count; n++) tap.setMaterial(n, n < c.meta.n ? c.meta.material[n]! : AMMO_SLOT + AMMO_KINDS.indexOf(shots[n - c.meta.n]!.ammo));
+      const fr = tap.frame(s, { metres: 1, camera: { pos: eye, right: [-f[1]! / l, 0, f[0]! / l] }, dvMin: 0.25, dt: c.scene.dt, top: 8 });
+      frames.push(fr);
+      for (let i = 0; i < fr.counts.length; i++) slots[Math.floor(i / (fr.counts.length / SOUND_SLOTS))]! += fr.counts[i]!;
+      return [];
+    },
+  });
+  return { frames, slots };
+}
+
+/** Render frames through the level's slot sounds at the game's master gain (dB over @tb/audio's full scale). */
+export function render(id: string, frames: AudioFrame[], db = GAME_SOUND_DB): { L: Float32Array; R: Float32Array; minGain: number } {
+  const c = compileLevel(LEVELS.find((l) => l.id === id)!), e = new CollapseEngine({ sampleRate: SR, seed: 1, fullScale: FULL_SCALE / 10 ** (db / 20) });
+  slotSounds(c).forEach((x, i) => e.setMaterial(i, x.material, x.edge));
+  const n = Math.ceil((frames.reduce((s, f) => s + f.dt, 0) * SR) / BLOCK) + 160, L = new Float32Array(n * BLOCK), R = new Float32Array(n * BLOCK);
+  const l = new Float32Array(BLOCK), r = new Float32Array(BLOCK);
+  let due = 0, b = 0;
+  const out = () => { e.render(l, r); L.set(l, b * BLOCK); R.set(r, b * BLOCK); b++; };
+  for (const f of frames) { e.push(f); for (due += f.dt * SR; due >= BLOCK && b < n; due -= BLOCK) out(); }
+  while (b < n) out();
+  return { L, R, minGain: e.limiter.minGain };
+}
+
+function load(path: string): { frames: AudioFrame[]; slots: number[] } {
+  const j = JSON.parse(readFileSync(path, 'utf8')) as { slots: number[]; frames: { dt: number; materials: number; sectors: number; counts: number[]; a2: number[]; top: number[] }[] };
+  return { slots: j.slots, frames: j.frames.map((f) => ({ ...f, counts: Float32Array.from(f.counts), a2: Float32Array.from(f.a2), top: Float32Array.from(f.top) })) };
+}
+
+function wav(path: string, L: Float32Array, R: Float32Array) {
+  const n = L.length, buf = Buffer.alloc(44 + n * 4), q = (x: number) => Math.max(-32768, Math.min(32767, Math.round(x * 32767)));
+  buf.write('RIFF', 0); buf.writeUInt32LE(36 + n * 4, 4); buf.write('WAVEfmt ', 8); buf.writeUInt32LE(16, 16); buf.writeUInt16LE(1, 20); buf.writeUInt16LE(2, 22);
+  buf.writeUInt32LE(SR, 24); buf.writeUInt32LE(SR * 4, 28); buf.writeUInt16LE(4, 32); buf.writeUInt16LE(16, 34); buf.write('data', 36); buf.writeUInt32LE(n * 4, 40);
+  for (let i = 0; i < n; i++) { buf.writeInt16LE(q(L[i]!), 44 + 4 * i); buf.writeInt16LE(q(R[i]!), 46 + 4 * i); }
+  writeFileSync(path, buf);
+}
+
+if (import.meta.url === `file://${process.argv[1]}`) {
+  const names = ['plaster', 'stone', 'iron', 'ice', 'rubber', 'steel', ...AMMO_KINDS];
+  for (const dir of [kv.wav, kv.frames]) if (dir) mkdirSync(dir, { recursive: true });
+  const rows = [];
+  for (const id of ids) {
+    const { frames, slots } = kv.from ? load(`${kv.from}/${id}.json`) : await capture(id);
+    if (kv.frames) writeFileSync(`${kv.frames}/${id}.json`, JSON.stringify({ slots, frames: frames.map((f) => ({ ...f, counts: [...f.counts], a2: [...f.a2], top: [...f.top] })) }));
+    const v0 = render(id, frames, kv.db === undefined ? GAME_SOUND_DB : Number(kv.db));
+    let peak = 0;
+    for (let i = 0; i < v0.L.length; i++) peak = Math.max(peak, Math.abs(v0.L[i]!), Math.abs(v0.R[i]!));
+    if (kv.wav) wav(`${kv.wav}/${id}.wav`, v0.L, v0.R);
+    rows.push({ level: id, seconds: +(frames.length / 60).toFixed(1), impacts: Object.fromEntries(slots.map((x, i) => [names[i], x]).filter(([, x]) => x)), peak: +peak.toFixed(2), 'limited dB': +(20 * Math.log10(v0.minGain)).toFixed(1) });
+  }
+  for (const r of rows) console.log(JSON.stringify(r));
+}

@@ -8,3 +8,4 @@ export * from './play.ts';
 export * from './engines.ts';
 export * from './ui.ts';
 export * from './params.ts';
+export * from './sound-map.ts';

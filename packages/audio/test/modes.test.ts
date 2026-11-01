@@ -113,3 +113,24 @@ describe('config', () => {
     expect(parseSoundMaterial({ eta: 0.02 }, pine).eta).toBe(0.02);
   });
 });
+
+describe("Keystone's materials (the game)", () => {
+  const s = SOUND_MATERIALS, low = (m: SoundMaterial, edge: number) => { const md = modes(m, edge), i = md.freq.indexOf(Math.min(...md.freq)); return { f: md.freq[i]!, tau: md.tau[i]! }; };
+  it('every one is a valid material', () => {
+    for (const k of ['plaster', 'iron', 'ice', 'rubber', 'steel'] as const) expect(parseSoundMaterial(s[k])).toEqual(s[k]);
+  });
+  it('a hollow plaster block bonks (~300 Hz at 0.5 m, damped); a hollow iron one clangs (lower, rings near a second)', () => {
+    const p = low(s.plaster, 0.5), fe = low(s.iron, 0.5);
+    expect(p.f).toBeGreaterThan(250); expect(p.f).toBeLessThan(350);
+    expect(p.tau).toBeLessThan(0.05);
+    expect(fe.f).toBeLessThan(p.f);
+    expect(fe.tau).toBeGreaterThan(0.5);
+    // Both ring: their contact is short against the lowest mode's period, unlike a solid block's.
+    expect(contactTime(s.plaster, 2, 0.5) * p.f).toBeLessThan(1.5);
+    expect(contactTime(s.iron, 2, 0.5) * fe.f).toBeLessThan(0.5);
+  });
+  it('solid ice, rubber and steel thud; only stone, ice and plaster shed grit', () => {
+    for (const k of ['ice', 'rubber', 'steel'] as const) expect(contactTime(s[k], 2, 0.5) * low(s[k], 0.5).f).toBeGreaterThan(3);
+    expect(Object.entries(s).filter(([, m]) => m.gritDb > -Infinity).map(([k]) => k).sort()).toEqual(['ice', 'plaster', 'stone']);
+  });
+});

@@ -1,7 +1,8 @@
 // The game page: Keystone (playKeystone, play.ts) on the GPU solver, or Rapier
 // with ?engine=rapier, in the maquette look. ?level=L2 starts on another level,
 // ?look= and real.* change the look, ?keystone.hitstop=1 and ?keystone.slowmo=1
-// turn on pace juice, ?keystone.shots= plays a line once loaded, ?offscreen=1
+// turn on pace juice, ?keystone.sound=synth plays impacts as the old pentatonic voices and
+// ?keystone.impacts=-6 sets the collision sound's level (dB), ?keystone.shots= plays a line once loaded, ?offscreen=1
 // (tests) draws only for captures. The keys are params.ts's, which the viewer
 // reads too under rules=keystone, so the same link opens in either page.
 import { LEVELS } from '@tb/keystone';
@@ -31,7 +32,7 @@ function fail(e: unknown) {
 
 async function main() {
   const q = new URLSearchParams(location.search);
-  const { level, engine, feel, look, shots, offscreen } = parseGameParams(q);
+  const { level, engine, feel, look, shots, offscreen, sound, impactsDb } = parseGameParams(q);
   const start = LEVELS.indexOf(level);
   handle.feel = feel;
   handle.engine = engine;
@@ -49,7 +50,7 @@ async function main() {
   let shown = level.id;
   await playKeystone({
     canvas, offscreen, device, renderer, source, hud: $('hud'), banner: $('banner'), result: $('result'),
-    levels: LEVELS, start, engine, feel, fail,
+    levels: LEVELS, start, engine, feel, fail, sound, impactsDb,
     hooks: {
       // The URL follows the level, keeping the other keys; a line is the level's it was made on.
       loaded: (c) => {
