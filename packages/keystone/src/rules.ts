@@ -17,6 +17,37 @@ export const SETTLE_QUIET = 30;
 /** ...but never sooner than this after the spawn, and always by the cap. */
 export const SETTLE_MIN = 20;
 export const SETTLE_CAP = 600;
+/**
+ * Settle v2's cap (spectacle-mode.md, section 9): 30 s at 60 Hz. A big
+ * structure's collapse runs longer than a chamber's, and its tail of a few
+ * rocking blocks would otherwise hold the shot open to it every time.
+ */
+export const SETTLE_CAP_V2 = 1800;
+/**
+ * How a shot settles. v1: every awake body quiet (speed under QUIET_SPEED and,
+ * for the structure, spin under QUIET_SPIN) for SETTLE_QUIET steps, or
+ * SETTLE_CAP; par levels pin their lines on it. v2: at most
+ * settleAllowance(n) structure bodies moving (Reductions.nMoving) and every
+ * live spawned body under QUIET_SPEED, for SETTLE_QUIET steps, or
+ * SETTLE_CAP_V2. v3, outcome levels' default: as v2, or else the structure is
+ * frozen: nothing live (ammo included) faster than FROZEN_SPEED,
+ * and the collapse D and the displaced count unchanged (D within FROZEN_D) for
+ * FROZEN_STEPS steps, however many bodies still move. A standing wall can ring
+ * for the whole cap with a hundred blocks swaying a few centimetres at 0.1 to
+ * 0.3 m/s while nothing changes (G5's B1, 2026-11-01); v3 ends that shot, and
+ * settles no later than v2 anywhere.
+ */
+export const SETTLE_RULES = ['v1', 'v2', 'v3'] as const;
+export type SettleRule = (typeof SETTLE_RULES)[number];
+/** Structure bodies settle v2 lets still move: a few stragglers per thousand, at least 2. */
+export const settleAllowance = (n: number) => Math.max(2, Math.floor(n / 1000));
+export const settleCap = (rule: SettleRule) => (rule === 'v1' ? SETTLE_CAP : SETTLE_CAP_V2);
+/** Settle v3's frozen structure: no live body faster than this (m/s; any fall passes it within 0.05 s), */
+export const FROZEN_SPEED = 0.5;
+/** for this many steps, */
+export const FROZEN_STEPS = 60;
+/** with the collapse D within this of where the run began (and the displaced count the same). */
+export const FROZEN_D = 1e-4;
 export const QUIET_SPEED = 0.05; // m/s
 export const QUIET_SPIN = 0.2; // rad/s
 /** Displacement (in h) beyond which a body counts as moved by a shot. */
@@ -56,6 +87,11 @@ export interface Reductions {
    * camera); +Infinity mins and -Infinity maxes when nothing moves. Min and max are exact in any order.
    */
   movingBox: Float64Array;
+  /**
+   * The fastest live spawned body (ammo, a weapon's children: index n and up, counted as for nAwake),
+   * m/s; 0 when none is awake. Settle v2 waits for it: a ball still in flight moves no structure body.
+   */
+  ammoSpeed: number;
 }
 
 export interface Watched { idx: Int32Array; pos: Float64Array; rot: Float64Array; linVel: Float64Array }
@@ -99,7 +135,7 @@ export function reduceCpu(s: Snapshot, prevLinVel: Float64Array | null, c: Compi
   const { meta: m } = c, h = c.frame.unit, dt = c.scene.dt;
   const r: Reductions = {
     step, nAwake: 0, maxSpeed: 0, maxAngSpeed: 0, pe_mJ: 0, displaced: 0, outOfLot: 0, heightHist: new Uint32Array(HEIGHT_BINS), impacts: new Uint32Array(MATERIALS.length * BANDS),
-    nMoving: 0, movingBox: Float64Array.of(Infinity, Infinity, Infinity, -Infinity, -Infinity, -Infinity),
+    nMoving: 0, movingBox: Float64Array.of(Infinity, Infinity, Infinity, -Infinity, -Infinity, -Infinity), ammoSpeed: 0,
   };
   const top = Math.max(c.height, 1e-9);
   for (let i = 0; i < s.count; i++) {
@@ -109,6 +145,7 @@ export function reduceCpu(s: Snapshot, prevLinVel: Float64Array | null, c: Compi
       r.nAwake++;
       const v = Math.hypot(s.linVel[3 * i]!, s.linVel[3 * i + 1]!, s.linVel[3 * i + 2]!);
       r.maxSpeed = Math.max(r.maxSpeed, v);
+      if (!structure) r.ammoSpeed = Math.max(r.ammoSpeed, v);
       if (structure) {
         const w = Math.hypot(s.angVel[3 * i]!, s.angVel[3 * i + 1]!, s.angVel[3 * i + 2]!);
         r.maxAngSpeed = Math.max(r.maxAngSpeed, w);
@@ -171,14 +208,43 @@ export class CpuObserver {
 
 // ---- Settling ----
 
-export interface SettleState { quietSince: number | null }
+/** quietSince: the first step of the current quiet run. v3's frozen run: its first step and the D and displaced count there. */
+export interface SettleState { quietSince: number | null; frozenSince?: number | null; frozenD?: number; frozenDisplaced?: number }
 
-export function settleUpdate(st: SettleState, r: Reductions, spawnStep: number): { state: SettleState; settled: boolean } {
-  const quiet = r.nAwake === 0 || (r.maxSpeed < QUIET_SPEED && r.maxAngSpeed < QUIET_SPIN);
+/** Whether one observed state counts as quiet under `rule`, for a structure of n bodies. */
+export function quietUnder(rule: SettleRule, r: Reductions, n: number): boolean {
+  if (r.nAwake === 0) return true;
+  if (rule === 'v1') return r.maxSpeed < QUIET_SPEED && r.maxAngSpeed < QUIET_SPIN;
+  return r.nMoving <= settleAllowance(n) && r.ammoSpeed < QUIET_SPEED;
+}
+
+/**
+ * Whether one observed state could be part of v3's frozen run: no live body, structure or ammo, as fast as FROZEN_SPEED
+ * (Reductions.maxSpeed counts both). A ram rolling on at 9 cm/s with nothing changing held a B1 shot 15 s under v2's ammo
+ * rule. D and displaced are checked over the run.
+ */
+export const frozenCandidate = (r: Reductions): boolean => r.maxSpeed < FROZEN_SPEED;
+
+/**
+ * One step of the settle rule (v1 unless given; v2 and v3 need the structure's body count n, v3 the
+ * collapse D now, Session.liveCollapse). Settled SETTLE_QUIET consecutive quiet steps in, or (v3)
+ * FROZEN_STEPS frozen ones, but never before SETTLE_MIN steps after the spawn, at once when nothing
+ * is awake (from SETTLE_MIN), and always at the rule's cap.
+ */
+export function settleUpdate(st: SettleState, r: Reductions, spawnStep: number, rule: SettleRule = 'v1', n = 0, d = 0): { state: SettleState; settled: boolean } {
+  const quiet = quietUnder(rule, r, n);
   const quietSince = quiet ? (st.quietSince ?? r.step) : null;
   const old = r.step - spawnStep;
-  const settled = old >= SETTLE_CAP || (old >= SETTLE_MIN && (r.nAwake === 0 || (quietSince !== null && r.step - quietSince + 1 >= SETTLE_QUIET)));
-  return { state: { quietSince }, settled };
+  let state: SettleState = { quietSince }, frozen = false;
+  if (rule === 'v3') {
+    // A frozen run continues while nothing is fast, D stays within FROZEN_D of where it began and the displaced count holds; otherwise it starts over here.
+    const keep = frozenCandidate(r) && st.frozenSince != null && Math.abs(d - st.frozenD!) <= FROZEN_D && r.displaced === st.frozenDisplaced;
+    state = keep ? { quietSince, frozenSince: st.frozenSince, frozenD: st.frozenD, frozenDisplaced: st.frozenDisplaced }
+      : frozenCandidate(r) ? { quietSince, frozenSince: r.step, frozenD: d, frozenDisplaced: r.displaced } : { quietSince, frozenSince: null };
+    frozen = state.frozenSince != null && r.step - state.frozenSince + 1 >= FROZEN_STEPS;
+  }
+  const settled = old >= settleCap(rule) || (old >= SETTLE_MIN && (r.nAwake === 0 || frozen || (quietSince !== null && r.step - quietSince + 1 >= SETTLE_QUIET)));
+  return { state, settled };
 }
 
 // ---- Objectives ----
@@ -211,7 +277,10 @@ export function tier(L: number): 0 | 1 | 2 | 3 {
 }
 
 export interface ShotOutcome {
+  /** Launch energy, J: kinetic, or potential for a drop (ammoKE). */
   ke: number;
+  /** A weapon's nominal blast yield, J (arsenal.ts itemYield; 0 without one). Energy fired is ke + yield. */
+  yield: number;
   dPE_mJ: number;
   leverage: number;
   /** Crowns that went down during this shot, and the running total. */
@@ -240,7 +309,7 @@ export function stampOf(strokes: number, par: number): string {
 
 export function levelScore(def: LevelDef, shots: ShotOutcome[], cleared: boolean, structureCount: number): LevelScore {
   const s = shots.length, par = def.par;
-  const ke = shots.reduce((a, o) => a + o.ke, 0), dpe = shots.reduce((a, o) => a + o.dPE_mJ, 0);
+  const ke = shots.reduce((a, o) => a + o.ke + o.yield, 0), dpe = shots.reduce((a, o) => a + o.dPE_mJ, 0);
   const L = leverage(dpe, ke);
   const cmax = Math.min(12, Math.max(0, ...shots.map((o) => o.crownsDown)));
   const broken = shots.reduce((a, o) => a + o.heritageNew, 0);

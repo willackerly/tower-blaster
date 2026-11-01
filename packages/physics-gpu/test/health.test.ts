@@ -1,10 +1,10 @@
 // gpuHealth and pairFix (health.ts): the GPU engine's limits as engine-api
-// EngineHealth, on hand-made diagnostics; no GPU needed. The engine's own
+// EngineHealth, on hand-made diagnostics; and everyPairPerBody's sizes. No GPU needed. The engine's own
 // health() on a real overflow is in engine-stacks.test.ts.
 import { describe, expect, it } from 'vitest';
 import { limitProblems } from '@tb/engine-api';
 import type { GpuDiagnostics } from '../src/engine.ts';
-import { gpuHealth, type GpuHealthContext, maxPairsPerBody, PAIR_FIX_HEADROOM, pairFix } from '../src/health.ts';
+import { DEFAULT_PAIRS_PER_BODY, EVERY_PAIR_SLOTS, everyPairPerBody, gpuHealth, type GpuHealthContext, maxPairsPerBody, PAIR_FIX_HEADROOM, pairFix } from '../src/health.ts';
 import { AvbdSolver } from '../src/solver.ts';
 
 const ctx = (o: Partial<GpuHealthContext> = {}): GpuHealthContext =>
@@ -120,6 +120,27 @@ describe('gpuHealth', () => {
           }
         }
       }
+    }
+  });
+});
+
+describe('everyPairPerBody', () => {
+  const pairs = (c: number) => (c * (c - 1)) / 2;
+  it('holds every pair of the bodies through capacity 362 and not past it, and never fewer per body than the default', () => {
+    for (let c = 1; c <= 400; c++) {
+      const v = everyPairPerBody(c);
+      expect(v, `capacity ${c}`).toBeGreaterThanOrEqual(DEFAULT_PAIRS_PER_BODY);
+      expect(v * c >= pairs(c), `capacity ${c}`).toBe(c <= 362);
+    }
+    // The game's levels (capacity = bodies + rack), the viewer's 1920-cube tower with its 256 spare, and from 4096 on the default.
+    expect([41, 44, 48, 142, 362, 363, 2176, 4095, 4096, 10000].map(everyPairPerBody)).toEqual([20, 22, 24, 71, 181, 180, 30, 16, 16, 16]);
+  });
+
+  it('gives at most EVERY_PAIR_SLOTS slots past the default, and its contacts fit the default 128 MiB binding up to 4096 bodies', () => {
+    for (let c = 1; c <= 200_000; c += c < 5000 ? 1 : 997) {
+      const v = everyPairPerBody(c);
+      expect(v * c, `capacity ${c}`).toBeLessThanOrEqual(Math.max(EVERY_PAIR_SLOTS, DEFAULT_PAIRS_PER_BODY * c));
+      if (c <= 4096) for (const records of [0, 1, 2] as const) expect(AvbdSolver.contactBytes(c, v * c, records), `capacity ${c}, records ${records}`).toBeLessThanOrEqual(2 ** 27);
     }
   });
 });

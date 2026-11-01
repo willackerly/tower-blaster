@@ -1,30 +1,101 @@
 import { describe, expect, it } from 'vitest';
-import { FAST_SCALE, Pacer, paceFeel, SLOWMO_IN, SLOWMO_MAX, SLOWMO_OUT, SLOWMO_SCALE } from '../src/pacing.ts';
+import {
+  alphaAt, arrived, checkPaceFeel, DEFAULT_BUDGET_MS, DEFAULT_FEEL, FAST_SCALE, FRAME_MS, MAX_LAG_MS, newArrivals, Pacer, paceFeel, SLOWMO_IN, SLOWMO_MAX, SLOWMO_OUT, SLOWMO_SCALE, slowTag,
+  SpeedMeter, stepCost, TAIL_GAIN, TAIL_STEPS, TailSkip, valve, VALVE_MIN, writePaceFeel,
+} from '../src/pacing.ts';
 
-const DT = 1 / 60, FRAME = 1000 / 60;
-const run = (p: Pacer, frames: number, o = {}) => Array.from({ length: frames }, () => p.stepsThisFrame(FRAME, DT, o));
+const DT_MS = 1000 / 60;
 
-describe('pace juice', () => {
-  it('is off unless the URL asks for it', () => {
-    expect(paceFeel(new URLSearchParams(''))).toEqual({ hitStop: false, slowMo: false });
-    expect(paceFeel(new URLSearchParams('?keystone.hitstop=1'))).toEqual({ hitStop: true, slowMo: false });
-    expect(paceFeel(new URLSearchParams('?keystone.slowmo=1&keystone.hitstop=1'))).toEqual({ hitStop: true, slowMo: true });
-    expect(paceFeel(new URLSearchParams('?keystone.slowmo=0'))).toEqual({ hitStop: false, slowMo: false });
+/** Frames of frameMs from t = 0: at each, as many steps as are due (a loop that asks again after each step). */
+function steps(p: Pacer, frames: number, frameMs = DT_MS, o = {}, t0 = 0): number[] {
+  const out: number[] = [];
+  for (let f = 0; f < frames; f++) {
+    const now = t0 + f * frameMs;
+    let n = 0;
+    while (n < 16 && p.due(now, DT_MS, o)) { p.stepped(DT_MS); n++; }
+    out.push(n);
+  }
+  return out;
+}
+const sum = (xs: number[]) => xs.reduce((a, b) => a + b, 0);
+
+describe('pace feel', () => {
+  it('juice is off unless the URL asks for it; the valve, the tail skip and the follow camera are on', () => {
+    expect(paceFeel(new URLSearchParams(''))).toEqual(DEFAULT_FEEL);
+    expect(DEFAULT_FEEL).toEqual({ hitStop: false, slowMo: false, budgetMs: DEFAULT_BUDGET_MS, tailSkip: true, follow: true });
+    expect(paceFeel(new URLSearchParams('?keystone.hitstop=1'))).toEqual({ ...DEFAULT_FEEL, hitStop: true });
+    expect(paceFeel(new URLSearchParams('?keystone.slowmo=1&keystone.hitstop=1'))).toEqual({ ...DEFAULT_FEEL, hitStop: true, slowMo: true });
+    expect(paceFeel(new URLSearchParams('?keystone.slowmo=0'))).toEqual(DEFAULT_FEEL);
+    expect(paceFeel(new URLSearchParams('?keystone.budget=0&keystone.tailskip=0'))).toEqual({ ...DEFAULT_FEEL, budgetMs: 0, tailSkip: false });
+    expect(paceFeel(new URLSearchParams('?keystone.budget=16.7')).budgetMs).toBe(16.7);
+    expect(paceFeel(new URLSearchParams('?keystone.follow=0'))).toEqual({ ...DEFAULT_FEEL, follow: false });
+    expect(() => paceFeel(new URLSearchParams('?keystone.follow=2'))).toThrow(/keystone.follow must be 0 or 1: 2/);
+  });
+  it('refuses bad values, naming the key, and writes back only what differs from the default', () => {
+    expect(() => paceFeel(new URLSearchParams('?keystone.budget=-1'))).toThrow(/keystone.budget must be from 0 to 1000 ms/);
+    expect(() => paceFeel(new URLSearchParams('?keystone.budget='))).toThrow(/keystone.budget must be/);
+    expect(() => paceFeel(new URLSearchParams('?keystone.tailskip=yes'))).toThrow(/keystone.tailskip must be 0 or 1: yes/);
+    expect(() => checkPaceFeel({ ...DEFAULT_FEEL, budgetMs: NaN })).toThrow(/physics budget must be/);
+    for (const f of [DEFAULT_FEEL, { ...DEFAULT_FEEL, hitStop: true, budgetMs: 0 }, { ...DEFAULT_FEEL, slowMo: true, tailSkip: false, budgetMs: 20 }, { ...DEFAULT_FEEL, follow: false }]) {
+      const q = new URLSearchParams();
+      writePaceFeel(f, q);
+      expect(paceFeel(q)).toEqual(f);
+    }
+    const q = new URLSearchParams();
+    writePaceFeel(DEFAULT_FEEL, q);
+    expect(q.toString()).toBe('');
+  });
+});
+
+describe('valve', () => {
+  it('is budget / step time clamped to [0.25, 1]', () => {
+    for (const [budget, step] of [[14, 5], [14, 14], [14, 18], [14, 28], [14, 56], [14, 200], [10, 20], [16.7, 18]] as const) {
+      expect(valve(budget, step)).toBeCloseTo(Math.min(1, Math.max(VALVE_MIN, budget / step)), 12);
+    }
+    expect(valve(14, 28)).toBe(0.5);
+    expect(valve(14, 1000)).toBe(VALVE_MIN);
+    expect(valve(14, 1)).toBe(1);
+  });
+  it('lets fast-forward run up to its own scale, and is off with no budget or no measured step', () => {
+    expect(valve(14, 3.5, FAST_SCALE)).toBe(FAST_SCALE);
+    expect(valve(14, 7, FAST_SCALE)).toBe(2);
+    expect(valve(0, 50)).toBe(1);
+    expect(valve(14, NaN)).toBe(1);
+    expect(valve(14, 0)).toBe(1);
+  });
+});
+
+describe('stepCost', () => {
+  it('counts from the later of submit and the step before\'s done', () => {
+    expect(stepCost(100, 118, 90)).toBe(18); // the GPU was idle: from submit
+    expect(stepCost(100, 136, 118)).toBe(18); // queued behind a running step: from its done
+    expect(stepCost(100, 101, -Infinity)).toBe(1);
   });
 });
 
 describe('Pacer', () => {
-  it('runs one step per 60 Hz frame at normal speed and catches up at most two', () => {
-    const p = new Pacer();
-    expect(run(p, 10)).toEqual(Array(10).fill(1));
-    expect(p.stepsThisFrame(100, DT)).toBe(2);
+  it('runs one step per 60 Hz frame, and one every other frame at 120 Hz', () => {
+    expect(steps(new Pacer(), 10)).toEqual(Array(10).fill(1));
+    const hi = steps(new Pacer(), 120, DT_MS / 2);
+    expect(sum(hi)).toBeGreaterThanOrEqual(59);
+    expect(sum(hi)).toBeLessThanOrEqual(61);
+    expect(Math.max(...hi)).toBe(1);
   });
-  it('hit-stop gives zero steps for exactly N frames, the longer request winning', () => {
+  it('catches up after a short stall, but drops owed time beyond MAX_LAG_MS (slow motion, not a burst)', () => {
     const p = new Pacer();
+    steps(p, 5);
+    let n = 0;
+    while (p.due(5 * DT_MS + 500, DT_MS)) { p.stepped(DT_MS); n++; }
+    expect(n).toBe(Math.floor(MAX_LAG_MS / DT_MS) + 1);
+  });
+  it('hit-stop holds steps for N 60 Hz frames, the longer request winning', () => {
+    const p = new Pacer();
+    steps(p, 3);
     p.hitStop(3); p.hitStop(5); p.hitStop(2);
-    expect(p.frozen).toBe(true);
-    expect(run(p, 7)).toEqual([0, 0, 0, 0, 0, 1, 1]);
-    expect(p.frozen).toBe(false);
+    const after = steps(p, 9, DT_MS, {}, 3 * DT_MS);
+    expect(after.slice(0, 5)).toEqual([0, 0, 0, 0, 0]);
+    expect(after.slice(5)).toEqual([1, 1, 1, 1]);
+    expect(FRAME_MS).toBe(DT_MS);
   });
   it('slow motion follows its curve: ramp down, hold, ramp back after release', () => {
     expect(Pacer.curve(0, null)).toBe(1);
@@ -33,39 +104,85 @@ describe('Pacer', () => {
     expect(Pacer.curve(1 + SLOWMO_OUT / 2, 1)).toBeCloseTo((1 + SLOWMO_SCALE) / 2, 12);
     expect(Pacer.curve(SLOWMO_MAX + SLOWMO_OUT, null)).toBe(1); // never held forever
   });
-  it('slow motion runs about 0.3 steps per frame while held, then recovers', () => {
+  it('slow motion runs about 0.3 steps per frame while held, on real time, then recovers', () => {
     const p = new Pacer();
     p.slowMo();
-    run(p, 10);
-    const held = run(p, 30).reduce((a, b) => a + b);
+    steps(p, 10);
+    const held = sum(steps(p, 30, DT_MS, {}, 10 * DT_MS));
     expect(held).toBeGreaterThanOrEqual(8);
     expect(held).toBeLessThanOrEqual(10);
     p.release();
-    run(p, 30);
+    steps(p, 30, DT_MS, {}, 40 * DT_MS);
     expect(p.slowing).toBe(false);
-    expect(run(p, 5)).toEqual([1, 1, 1, 1, 1]);
+    expect(steps(p, 5, DT_MS, {}, 70 * DT_MS)).toEqual([1, 1, 1, 1, 1]);
   });
-  it('fast-forward runs four steps a frame', () => {
-    const p = new Pacer();
-    expect(run(p, 3, { fastForward: true })).toEqual([FAST_SCALE, FAST_SCALE, FAST_SCALE]);
+  it('fast-forward runs four steps a 60 Hz frame', () => {
+    expect(steps(new Pacer(), 4, DT_MS, { fastForward: true }).slice(1)).toEqual([FAST_SCALE, FAST_SCALE, FAST_SCALE]);
   });
-  it('the valve slows time when steps cost more than the budget, never below a quarter', () => {
+  it('the valve sets the time scale from the step cost and the budget', () => {
     const p = new Pacer();
-    run(p, 60, { stepMs: 20, budgetMs: 10 }); // twice over budget: half speed
-    expect(p.timeScale).toBeCloseTo(0.5, 6);
-    run(p, 1, { stepMs: 1000, budgetMs: 10 });
-    expect(p.timeScale).toBe(0.25);
-    run(p, 1, { stepMs: 1, budgetMs: 10 });
+    p.due(0, DT_MS, { stepMs: 28, budgetMs: 14 });
+    expect(p.timeScale).toBe(0.5);
+    p.due(1, DT_MS, { stepMs: 1000, budgetMs: 14 });
+    expect(p.timeScale).toBe(VALVE_MIN);
+    p.due(2, DT_MS, { stepMs: 5, budgetMs: 14 });
     expect(p.timeScale).toBe(1);
+    // At half speed a step is due every other 60 Hz frame.
+    const q = new Pacer();
+    expect(sum(steps(q, 60, DT_MS, { stepMs: 28, budgetMs: 14 }))).toBe(30);
   });
-  it('alpha is the fraction of a step owed, and holds still during hit-stop', () => {
-    const p = new Pacer();
-    p.stepsThisFrame(FRAME / 2, DT);
-    expect(p.alpha(DT)).toBeCloseTo(0.5, 9);
-    p.hitStop(2);
-    p.stepsThisFrame(FRAME, DT);
-    expect(p.alpha(DT)).toBeCloseTo(0.5, 9);
-    p.reset();
-    expect(p.alpha(DT)).toBe(0);
+});
+
+describe('SpeedMeter', () => {
+  it('reads sim time per real time from the steps as they complete', () => {
+    for (const rate of [60, 45, 30, 15]) {
+      const m = new SpeedMeter();
+      for (let t = 0; t <= 4000; t += 1000 / rate) m.step(t, 1 / 60);
+      expect(m.speed(4000)).toBeCloseTo(rate / 60, 1);
+    }
+  });
+  it('starts as if at real time, and falls when steps stop', () => {
+    const m = new SpeedMeter();
+    expect(m.speed(0)).toBe(1);
+    m.step(0, 1 / 60);
+    expect(m.speed(2000)).toBeLessThan(0.05);
+  });
+  it('the HUD tag shows the speed only under 0.95', () => {
+    expect([1, 0.96, 0.95, 0.8, 0.75, 0.25].map(slowTag)).toEqual(['', '', '', '×0.8', '×0.75', '×0.25']);
+  });
+});
+
+describe('TailSkip', () => {
+  const n = 10_000;
+  it(`turns on once under 1% move and D gained under ${TAIL_GAIN} over ${TAIL_STEPS} steps, and stays on`, () => {
+    const t = new TailSkip();
+    // A collapse: D climbing fast while thousands move.
+    for (let i = 0; i < 200; i++) expect(t.update(3000, n, i * 0.002)).toBe(false);
+    // The tail: 50 rocking, D creeping by 1e-5 a step (6e-4 over 60).
+    let on = -1;
+    for (let i = 0; i < 200 && on < 0; i++) if (t.update(50, n, 0.4 + i * 1e-5)) on = i;
+    expect(on).toBe(TAIL_STEPS);
+    expect(t.update(5000, n, 0.9)).toBe(true);
+    t.reset();
+    expect(t.on).toBe(false);
+  });
+  it('waits while D still gains or too many move, and needs a full window', () => {
+    const t = new TailSkip();
+    for (let i = 0; i < 300; i++) expect(t.update(50, n, i * 2e-5)).toBe(false); // 1.2e-3 over 60
+    const u = new TailSkip();
+    for (let i = 0; i < 300; i++) expect(u.update(100, n, 0.4)).toBe(false); // exactly 1%: not under
+    const w = new TailSkip();
+    for (let i = 0; i < TAIL_STEPS; i++) expect(w.update(0, n, 0.4)).toBe(false);
+    expect(w.update(0, n, 0.4)).toBe(true);
+  });
+});
+
+describe('arrivals (moved from the viewer)', () => {
+  it('alpha ramps over the usual interval between snapshots', () => {
+    const a = newArrivals();
+    expect(alphaAt(a, 0, DT_MS)).toBe(1);
+    arrived(a, 0, DT_MS);
+    arrived(a, 20, DT_MS);
+    expect(alphaAt(a, 30, DT_MS)).toBeCloseTo(0.5, 9);
   });
 });

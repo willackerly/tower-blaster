@@ -3,15 +3,15 @@
 // one command buffer per step. Parameters are the reference solver's (physics-ref AvbdParams), so
 // the two engines can be run side by side on the same settings. With AvbdParams.restitution on,
 // the solve ends with the restitution pass (restitution.ts).
-import { type BodyDesc, checkBlast, checkBlastQueue, DEFAULT_RESTITUTION_COMBINE, emptySnapshot, type EngineHealth, type EngineInfo, inertiaOf, type InputEvent, massOf, type PhysicsEngine, type SceneDesc, type Snapshot, queueInputs, spawnedBodies, type Vec3 } from '@tb/engine-api';
+import { type BodyDesc, checkBlast, checkInputQueue, DEFAULT_RESTITUTION_COMBINE, emptySnapshot, type EngineHealth, type EngineInfo, inertiaOf, type InputEvent, massOf, type PhysicsEngine, type SceneDesc, type Snapshot, queueInputs, spawnedBodies, TIER_FREE, type Vec3 } from '@tb/engine-api';
 import { boundingRadius } from '@tb/geom';
 import { assertStorageFits, createDevice, isSoftwareAdapter, Readback } from '@tb/gpu';
 import { type AvbdParams, avbdVariant, checkColoring, checkGapSlop, checkRecords, checkRemoved, checkRestitution, DEFAULT_AVBD, RESTITUTION_DEFAULTS } from '@tb/physics-ref';
-import { Body, BodyProps, readField, RestSlot, Shape, SolverBody, writeStruct } from '@tb/schema';
+import { Body, BodyProps, field, readField, RestSlot, Shape, SolverBody, writeStruct } from '@tb/schema';
 import { BlastPass, type DueBlast } from './blast.ts';
 import { assertPairDispatch, Broadphase } from './broadphase.ts';
 import { Coloring } from './coloring.ts';
-import { gpuHealth } from './health.ts';
+import { DEFAULT_PAIRS_PER_BODY, gpuHealth } from './health.ts';
 import { Narrowphase } from './narrowphase.ts';
 import { restitutionWord } from './restitution.ts';
 import { AvbdSolver, DEFAULT_DISPATCH, defaultTailThreads, HESSIAN_FORMS, type HessianForm, type RecordMode, type SolverDispatch } from './solver.ts';
@@ -20,10 +20,11 @@ export interface GpuEngineOptions {
   /** Use this device instead of creating one (it is then not destroyed by dispose()). */
   device?: GPUDevice;
   /**
-   * Pair buffer size per body (default 16): the buffer holds pairsPerBody x capacity broadphase
-   * pairs, and a step that finds more drops the rest (GpuDiagnostics.pairsOverflowSteps). init()
-   * refuses more than one indirect dispatch covers, 64 x maxComputeWorkgroupsPerDimension
-   * (4,194,240 at the default limit; assertPairDispatch).
+   * Pair buffer size per body (default DEFAULT_PAIRS_PER_BODY, 16): the buffer holds pairsPerBody x
+   * capacity broadphase pairs, and a step that finds more drops the rest (GpuDiagnostics.pairsOverflowSteps,
+   * health()). init() refuses more than one indirect dispatch covers, 64 x maxComputeWorkgroupsPerDimension
+   * (4,194,240 at the default limit; assertPairDispatch). The viewer adds 256 spare bodies to the capacity,
+   * S15 sets 32 with the box test.
    */
   pairsPerBody?: number;
   /**
@@ -155,6 +156,14 @@ export function restitutionStatsOf(slots: ArrayBuffer, pairsWritten: number, max
   return out;
 }
 
+/**
+ * A step's stages in the order encodeStep() runs them (GpuAvbdEngine.probeStages): blasts and prepare (sweeps and
+ * inflated spheres), the broadphase (grid sort and pair lists), match and the narrowphase, the colouring, and the
+ * solve (contact setup, every sweep and dual update, finalize, the restitution pass).
+ */
+export const STEP_STAGES = ['prepare', 'broadphase', 'narrowphase', 'coloring', 'solve'] as const;
+export type StepStage = (typeof STEP_STAGES)[number];
+
 export class GpuAvbdEngine implements PhysicsEngine {
   readonly info: EngineInfo;
   stepIndex = 0;
@@ -166,6 +175,8 @@ export class GpuAvbdEngine implements PhysicsEngine {
   private readonly onGpuError = (ev: Event) => { this.failure ??= `GPU error: ${(ev as GPUUncapturedErrorEvent).error.message}`; };
   private scene: SceneDesc | null = null;
   private pending: InputEvent[] = [];
+  /** Removed bodies (engine-api remove.ts): their slots are tombstones (tier free), which every stage skips. */
+  private gone = new Set<number>();
   private n = 0;
   private capacity = 0;
   private rmax = 0;
@@ -231,7 +242,7 @@ export class GpuAvbdEngine implements PhysicsEngine {
     // As the reference, switch on or off; checked before anything changes.
     const groundE = scene.ground?.restitution;
     if (groundE !== undefined && !(groundE >= 0 && groundE <= 1)) throw new Error(`GpuAvbdEngine: SceneDesc.ground.restitution must be in [0, 1], got ${groundE}`);
-    checkBlastQueue(scene.bodies.length, [...scene.inputs].sort((a, b) => a.step - b.step));
+    checkInputQueue(scene.bodies.length, [...scene.inputs].sort((a, b) => a.step - b.step));
     this.failure = null;
     this.dispose();
     const generation = this.generation;
@@ -255,7 +266,7 @@ export class GpuAvbdEngine implements PhysicsEngine {
     const all = [...scene.bodies, ...spawnedBodies(scene.inputs)];
     if (this.opts.capacity !== undefined && this.opts.capacity < all.length) throw new Error(`GpuAvbdEngine: capacity ${this.opts.capacity} is below the scene's ${all.length} bodies and inputs`);
     this.capacity = Math.max(1, this.opts.capacity ?? all.length + (this.opts.spare ?? 0));
-    const maxPairs = (this.opts.pairsPerBody ?? 16) * this.capacity;
+    const maxPairs = (this.opts.pairsPerBody ?? DEFAULT_PAIRS_PER_BODY) * this.capacity;
     const p = this.params;
     this.rmax = all.reduce((m, b) => Math.max(m, boundingRadius(b.shape)), this.opts.maxRadius ?? 0);
     // Every overlapping (inflated) pair must lie in adjacent cells.
@@ -324,6 +335,7 @@ export class GpuAvbdEngine implements PhysicsEngine {
     }
     this.parts = parts;
     this.n = 0;
+    this.gone = new Set();
     for (const b of scene.bodies) this.add(b);
     this.pending = [...scene.inputs].sort((a, b) => a.step - b.step);
     this.stepIndex = 0;
@@ -346,19 +358,33 @@ export class GpuAvbdEngine implements PhysicsEngine {
     one(SolverBody, { prevVel: b.linVel }, parts!.solver.solver);
   }
 
+  /**
+   * Make body i a tombstone (engine-api remove.ts): at rest, tier free and asleep, in Body[] before the step's
+   * work runs. The kernels skip it from then on (prepare, broadphase, ground contacts, solver start, blasts); a
+   * blast due before the removal in the same step pushes it, then this stops it, as the reference does.
+   */
+  private remove(i: number): void {
+    const { device, parts } = this;
+    const at = (name: string) => i * Body.size + field(Body, name).offset;
+    device!.queue.writeBuffer(parts!.bodies, at('linVel'), new Float32Array(3));
+    device!.queue.writeBuffer(parts!.bodies, at('angVel'), new Float32Array(3));
+    device!.queue.writeBuffer(parts!.bodies, at('flags'), new Uint32Array([TIER_FREE << 8]));
+    this.gone.add(i);
+  }
+
   push(events: InputEvent[]): void {
     if (!this.parts) throw new Error('init() first');
     // Checked before queueing any, so a rejected batch changes nothing.
     const room = this.n + spawnedBodies(this.pending).length + spawnedBodies(events).length;
     if (room > this.capacity) throw new Error(`GpuAvbdEngine: push() needs room for ${room} bodies, capacity is ${this.capacity} (GpuEngineOptions.capacity or spare)`);
     for (const ev of events) {
-      if (ev.kind === 'blast') continue;
+      if (ev.kind !== 'spawn') continue;
       const r = boundingRadius(ev.body.shape);
       if (r > this.rmax) throw new Error(`GpuAvbdEngine: pushed body radius ${r} exceeds ${this.rmax}, the largest the broadphase cells were sized for (GpuEngineOptions.maxRadius)`);
     }
     // Stable insertion keeps push order among events due at the same step.
     const pending = queueInputs(this.pending, events);
-    checkBlastQueue(this.n, pending);
+    checkInputQueue(this.n, pending, this.gone);
     this.pending = pending;
   }
 
@@ -375,20 +401,34 @@ export class GpuAvbdEngine implements PhysicsEngine {
   }
 
   /**
+   * Bench only (the sleep probe, probe-sleep.ts): step() with `mark` called in the step's command encoder
+   * at the start and after each of STEP_STAGES, between passes, so the probe can put a timestamped pass
+   * there. The work submitted is step()'s, plus whatever `mark` encodes.
+   */
+  probeStages(mark: (enc: GPUCommandEncoder, at: 'start' | StepStage) => void): void {
+    this.encodeStep(undefined, mark);
+  }
+
+  /**
    * Bench only (the solver probe): the device and the stages of the last
    * step, to read its colour structure and time pieces of its sweep
-   * (AvbdSolver.encodeProbe). step() does not use this.
+   * (AvbdSolver.encodeProbe), and the buffers each stage ends by writing
+   * (the sleep probe's markers read them, so they wait for the stage). step() does not use this.
    */
-  probeParts(): { device: GPUDevice; n: number; iterations: number; dispatch: SolverDispatch; solver: AvbdSolver; col: Coloring; total: GPUBuffer; maxPairs: number; capacity: number } {
+  probeParts(): {
+    device: GPUDevice; n: number; iterations: number; dispatch: SolverDispatch; solver: AvbdSolver; col: Coloring; total: GPUBuffer; maxPairs: number; capacity: number;
+    pairs: GPUBuffer; bodies: GPUBuffer; spheres: GPUBuffer; manifolds: GPUBuffer;
+  } {
     const { device, parts } = this;
     if (!device || !parts) throw new Error('init() first');
     return {
       device, n: this.n, iterations: this.params.iterations, solver: parts.solver, col: parts.col, total: parts.bp.total,
       maxPairs: parts.solver.maxPairs, capacity: this.capacity, dispatch: this.dispatch!,
+      pairs: parts.bp.pairs, bodies: parts.bodies, spheres: parts.spheres, manifolds: parts.np.manifolds,
     };
   }
 
-  private encodeStep(solveTimestamps?: GPUComputePassTimestampWrites): void {
+  private encodeStep(solveTimestamps?: GPUComputePassTimestampWrites, mark?: (enc: GPUCommandEncoder, at: 'start' | StepStage) => void): void {
     const { device, parts, scene } = this;
     if (!device || !parts || !scene) throw new Error('init() first');
     if (this.failure) throw new Error(`GpuAvbdEngine: ${this.failure}`);
@@ -397,22 +437,29 @@ export class GpuAvbdEngine implements PhysicsEngine {
     while (this.pending.length && this.pending[0]!.step <= this.stepIndex) {
       const ev = this.pending.shift()!;
       if (ev.kind === 'spawn') this.add(ev.body);
+      else if (ev.kind === 'remove') this.remove(ev.id);
       else blasts.push({ blast: checkBlast(ev.blast), count: this.n });
     }
     const n = this.n, p = this.params;
     parts.solver.writeParams(n, scene.dt, scene.gravity, scene.ground, p, scene.frictionCombine);
     const enc = device.createCommandEncoder();
+    mark?.(enc, 'start');
     let pass = enc.beginComputePass();
     parts.blast.encode(pass, blasts);
     parts.solver.prepare(pass, n);
     pass.end();
+    mark?.(enc, 'prepare');
     parts.bp.encode(enc, n, { cellSize: this.cellSize, margin: p.margin });
+    mark?.(enc, 'broadphase');
     pass = enc.beginComputePass();
     parts.solver.match(pass);
     parts.np.encode(pass, n, { margin: p.margin, ground: scene.ground ? { y: scene.ground.y } : null });
     pass.end();
+    mark?.(enc, 'narrowphase');
     parts.col.encode(enc, n, scene.ground?.y ?? 0);
+    mark?.(enc, 'coloring');
     parts.solver.solve(enc, n, p.iterations, solveTimestamps);
+    mark?.(enc, 'solve');
     device.queue.submit([enc.finish()]);
     this.stepIndex++;
   }
@@ -440,6 +487,8 @@ export class GpuAvbdEngine implements PhysicsEngine {
     // Bit 0 only: bits 8-15 are the tier's.
     const flags = readField(buf, Body, 'flags', n, new Uint32Array(n));
     for (let i = 0; i < n; i++) s.awake[i] = flags[i]! & 1;
+    // Tiers only once a body is removed (Snapshot.tier: absent, every body is active).
+    if (this.gone.size) s.tier = Uint8Array.from(flags, (f) => (f >> 8) & 0xff);
     return s;
   }
 

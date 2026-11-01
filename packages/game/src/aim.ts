@@ -3,7 +3,7 @@
 // ring, so the player always shoots away from the eye.
 import type { Quat, Snapshot, Vec3 } from '@tb/engine-api';
 import { rotate } from '@tb/geom';
-import { aimAt, type RackItem, type CompiledLevel, GRAVITY, predictArc, type Shot, shotToSpawn } from '@tb/keystone';
+import { aimAt, ammoBody, type CompiledLevel, type LaunchItem, type RackItem, GRAVITY, predictArc, type Shot, shotToSpawn } from '@tb/keystone';
 
 /**
  * Substeps per step for the arc, when the engine doesn't report them
@@ -83,6 +83,17 @@ export function pick(r: Ray, s: Snapshot, c: CompiledLevel, groundY = 0): Hit | 
 
 export interface Aimed { shot: Shot; error: number; reachable: boolean }
 
+/**
+ * Launch height for a launch item, in 1/4 h: the level's launcher height, or high enough that
+ * the item leaves clear of the ground (a 6.7 m boulder from a 1 m launcher would start half
+ * underground and be thrown up by the ground contact). Keystone's own ammo never needs lifting.
+ */
+export function launchY(c: CompiledLevel, ammo: LaunchItem): number {
+  const s = ammoBody(ammo, c.frame, [0, 0, 0], [0, 0, 0]).shape;
+  const r = s.kind === 'sphere' ? s.radius : 0;
+  return Math.max(Math.round(c.frame.launcher.y * 4), Math.ceil((4 * r) / c.frame.unit));
+}
+
 /** The quantised shot of `ammo` that best reaches `target` from azimuth `az` at `power`. */
 export function shotFor(c: CompiledLevel, ammo: RackItem, az: number, power: number, target: Vec3, substeps = SUBSTEPS): Aimed | null {
   const f = c.frame, ph = f.pitch * f.unit;
@@ -92,7 +103,7 @@ export function shotFor(c: CompiledLevel, ammo: RackItem, az: number, power: num
     return { shot, error: err, reachable: true };
   }
   if (ammo === 'cue') return null; // no starter level racks a cue yet
-  const a = aimAt(f, ammo, { az, y: Math.round(f.launcher.y * 4), power }, target, { substeps });
+  const a = aimAt(f, ammo, { az, y: launchY(c, ammo), power }, target, { substeps });
   return { shot: a.shot, error: a.error, reachable: a.error <= REACH };
 }
 

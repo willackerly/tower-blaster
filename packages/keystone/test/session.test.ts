@@ -1,7 +1,7 @@
 // The state machine driven by synthetic body states: no engine involved.
 import { describe, expect, it } from 'vitest';
 import { emptySnapshot, type Snapshot } from '@tb/engine-api';
-import { compileLevel, CpuObserver, type Feedback, GRAVITY, type LevelDef, SETTLE_MIN, SETTLE_QUIET, Session, type Shot } from '@tb/keystone';
+import { compileLevel, CpuObserver, type Feedback, GRAVITY, homeSkyline, type LevelDef, type OutcomeScore, peOf_mJ, SETTLE_CAP, SETTLE_CAP_V2, SETTLE_MIN, SETTLE_QUIET, Session, settleOf, type Shot } from '@tb/keystone';
 
 const def: LevelDef = {
   id: 'S', name: 's', version: 1, world: 0, lot: { min: [-4, -4], max: [4, 4] }, crownLine: 2, objective: { kind: 'crowns' }, par: 1,
@@ -112,5 +112,129 @@ describe('Session', () => {
     se.fire(marble, 0);
     const fb = play(se, obs, s, still(SETTLE_MIN + SETTLE_QUIET), 0);
     expect(fb.filter((f) => f.t === 'heritageCrack')).toHaveLength(0);
+  });
+});
+
+describe('Session, outcome levels', () => {
+  // The same two bodies scored on what comes down: three items, so a shot can settle with two left.
+  const out: LevelDef = { ...def, id: 'SO', scoring: 'outcome', rack: ['marble', 'marble', 'cannonball'], par: 3 };
+  const oc = compileLevel(out);
+  const drop = (w: Snapshot) => { w.awake[crown] = 1; w.linVel.set([0, -3, 0], 3 * crown); w.pos[3 * crown + 1] = 0.25; };
+  const run = (se: Session, obs: CpuObserver, s: Snapshot, frames: Array<(s: Snapshot, t: number) => void>, start: number) => {
+    const fb: Feedback[] = [];
+    frames.forEach((mutate, t) => { mutate(s, t); fb.push(...se.observe(obs.observe(s, start + 1 + t, se.watchIdx))); });
+    return fb;
+  };
+  const fresh = () => { const s = world(3), obs = new CpuObserver(oc, s); return { se: new Session(oc), s, obs }; };
+
+  it('refuses a bank on a par level, before any shot, and while a shot runs', () => {
+    expect(() => new Session(c).bank(0)).toThrow(/par level ends at its clear/);
+    const { se } = fresh();
+    expect(se.canBank()).toBe(false);
+    expect(() => se.bank(0)).toThrow(/no shot has settled yet/);
+    se.fire(marble, 0);
+    expect(se.canBank()).toBe(false);
+    expect(() => se.bank(1)).toThrow(/phase running/);
+  });
+
+  it('a clear does not end the level: it aims again with the objective met, and a bank ends it with the rack left', () => {
+    const { se, s, obs } = fresh();
+    se.fire(marble, 0);
+    const fb = run(se, obs, s, [drop, ...still(SETTLE_MIN + SETTLE_QUIET)], 0);
+    expect(fb.filter((f) => f.t === 'levelEnd')).toEqual([]);
+    expect(se.phase).toBe('aiming');
+    expect(se.objectiveDone).toBe(true);
+    expect(se.liveCollapse).toBeGreaterThan(0);
+    const [end] = se.bank(200);
+    expect(end).toMatchObject({ t: 'levelEnd', step: 200, cleared: true });
+    expect(se.phase).toBe('cleared');
+    const score = se.score as OutcomeScore;
+    // The crown fell from course 2 to the ground: D is its drop over what the level could release.
+    const m = oc.meta, h = oc.frame.unit;
+    const pe0 = Array.from({ length: m.n }, (_, i) => peOf_mJ(m.mass[i]!, m.home[3 * i + 1]!)).reduce((a, b) => a + b);
+    const floor = Array.from({ length: m.n }, (_, i) => peOf_mJ(m.mass[i]!, h / 2)).reduce((a, b) => a + b);
+    const D = (peOf_mJ(m.mass[crown]!, m.home[3 * crown + 1]!) - peOf_mJ(m.mass[crown]!, 0.25)) / (pe0 - floor);
+    expect(score.outcome.collapse).toBe(D);
+    expect(score.lines).toEqual(expect.arrayContaining([{ label: 'Objective', value: 1000 }, { label: 'Collapse', value: Math.floor(3000 * D) }, { label: 'Rack left', value: 800 }, { label: 'Combo', value: 50 }]));
+    expect(score).toMatchObject({ stars: 1, stamp: `${Math.floor(100 * D)}% DOWN`, outcome: { uncast: true } });
+    expect(() => se.bank(201)).toThrow(/phase cleared/);
+    expect(() => se.fire(marble, 201)).toThrow(/phase cleared/);
+  });
+
+  it('the level ends when the rack runs out, failed when the objective is not met, with no rack-left line', () => {
+    const { se, s, obs } = fresh();
+    const shots: Shot[] = [marble, marble, { ...marble, ammo: 'cannonball' }];
+    let fb: Feedback[] = [];
+    shots.forEach((shot, k) => {
+      se.fire(shot, 100 * k);
+      obs.setBaseline(s, 100 * k);
+      fb = run(se, obs, s, still(SETTLE_MIN + SETTLE_QUIET), 100 * k);
+    });
+    expect(fb.at(-1)).toMatchObject({ t: 'levelEnd', cleared: false });
+    expect(se.phase).toBe('failed');
+    expect(se.score!.lines.map((l) => l.label)).toEqual(['Collapse', 'Leverage', 'Combo']);
+    expect(se.score).toMatchObject({ stars: 0, stamp: 'INCOMPLETE', outcome: { collapse: 0 } });
+    // No height bin holds the 3 bodies a skyline needs here, so the ratio falls back to 1 (unchanged).
+    expect(homeSkyline(oc)).toBe(0);
+    expect(se.outcomeFacts().skylineRatio).toBe(1);
+  });
+
+  it('autobank ends at the first settle where the objective is met', () => {
+    const ac = compileLevel({ ...out, autobank: true }), s = world(3), obs = new CpuObserver(ac, s), se = new Session(ac);
+    se.fire(marble, 0);
+    const fb = run(se, obs, s, [drop, ...still(SETTLE_MIN + SETTLE_QUIET)], 0);
+    expect(fb.at(-1)).toMatchObject({ t: 'levelEnd', cleared: true });
+    expect(se.score!.lines).toContainEqual({ label: 'Rack left', value: 800 });
+    expect(ac.hash).not.toBe(oc.hash); // autobank changes when the level ends, so it is part of the level
+  });
+});
+
+describe('Session, settle rules', () => {
+  const out: LevelDef = { ...def, id: 'SV', scoring: 'outcome', rack: ['marble', 'marble'], par: 2 };
+  /** One structure body (the heritage block) creeping at 0.1 m/s for good, everything else still; the marble at rest. */
+  const creeping = (steps: number) => Array.from({ length: steps }, () => (s: Snapshot) => {
+    s.awake.fill(0); s.linVel.fill(0);
+    s.awake[heritage] = 1; s.linVel[3 * heritage] = 0.1;
+  });
+  const settleStep = (d: LevelDef, steps: number) => {
+    const lc = compileLevel(d), s = world(1), obs = new CpuObserver(lc, s), se = new Session(lc);
+    se.fire(marble, 0);
+    return (play(se, obs, s, creeping(steps), 0).find((f) => f.t === 'settled') as Extract<Feedback, { t: 'settled' }> | undefined)?.step ?? null;
+  };
+  it('par levels settle by v1 and outcome levels by v3, unless the level says', () => {
+    expect(settleOf(def)).toBe('v1');
+    expect(settleOf(out)).toBe('v3');
+    expect(settleOf({ ...out, settle: 'v2' })).toBe('v2');
+    expect(settleOf({ ...out, settle: 'v1' })).toBe('v1');
+    expect(settleOf({ ...def, settle: 'v2' })).toBe('v2');
+    expect(new Session(compileLevel(out)).settleRule).toBe('v3');
+  });
+  it('a lone creeping block holds a v1 shot to its cap; v2 lets it go after the quiet run', () => {
+    expect(settleStep(out, SETTLE_CAP_V2 + 10)).toBe(SETTLE_QUIET);
+    expect(settleStep({ ...out, settle: 'v1' }, SETTLE_CAP_V2 + 10)).toBe(SETTLE_CAP);
+    expect(settleStep({ ...def, settle: 'v2' }, SETTLE_CAP_V2 + 10)).toBe(SETTLE_QUIET);
+  });
+  it('a pending weapon holds a v2 shot to the v2 cap', () => {
+    const lc = compileLevel(out), s = world(1), obs = new CpuObserver(lc, s), se = new Session(lc);
+    se.fire(marble, 0);
+    let at: number | null = null;
+    for (let t = 0; t < SETTLE_CAP_V2 + 5 && at === null; t++) {
+      s.awake.fill(0); s.linVel.fill(0);
+      if (se.observe(obs.observe(s, 1 + t, se.watchIdx), true).some((f) => f.t === 'settled')) at = 1 + t;
+    }
+    expect(at).toBe(SETTLE_CAP_V2);
+  });
+  it('par\'s v1 and outcome\'s v2 hash as absent (as before v3); outcome\'s default v3 and every other rule is a different level', () => {
+    const h = (d: LevelDef) => compileLevel(d).hash;
+    // The hashes these levels had before v3 (main at 2a4a436, where outcome levels defaulted to v2).
+    expect(h(def)).toBe('d10e20fcf6e35479');
+    expect(h({ ...out, settle: 'v2' })).toBe('c5fa2b075688c510');
+    expect(h({ ...def, settle: 'v1' })).toBe(h(def));
+    expect(h({ ...out, settle: 'v3' })).toBe(h(out));
+    expect(h(out)).not.toBe(h({ ...out, settle: 'v2' })); // stars cast under v2 never show under v3
+    expect(h({ ...out, settle: 'v1' })).not.toBe(h(out));
+    expect(h({ ...def, settle: 'v2' })).not.toBe(h(def));
+    expect(h({ ...def, settle: 'v3' })).not.toBe(h({ ...def, settle: 'v2' }));
+    expect(() => compileLevel({ ...def, settle: 'v9' as never })).toThrow(/settle must be v1 or v2 or v3: v9/);
   });
 });

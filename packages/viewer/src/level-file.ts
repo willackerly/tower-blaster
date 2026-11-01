@@ -6,9 +6,10 @@
 // Whether the level is any good (overlaps, unsupported bodies, tunnelling ammo)
 // is validateLevel's question; the panel shows its issues without refusing.
 import {
-  checkShot, compileLevel, type CourseOverride, type Issue, type LevelDef, MATERIALS, type MaterialName, type Part, isRackItem, RACK_ITEM_NAMES, type RackItem, type Role, ROLES, SCORINGS, type Scoring, type Shot,
+  checkPhysics, checkSettle, checkShot, compileLevel, type CourseOverride, type Issue, type LevelDef, MATERIALS, type MaterialName, type Part, type PhysicsBlock, isRackItem, RACK_ITEM_NAMES, type RackItem, type Role, type RoleRule, ROLES, type ScenarioPart, SCORINGS, type Scoring, type Shot,
   STAR_METRICS, type StarMetric, type StarsDef, validateLevel,
 } from '@tb/keystone';
+import { SCENARIOS } from '@tb/scenarios';
 
 export const LEVEL_FILE_FORMAT = 'tower-blaster/keystone-level';
 
@@ -20,7 +21,7 @@ const MATERIAL_NAMES = MATERIALS.map((m) => m.name) as readonly string[];
 /** The LevelDef a JSON value describes, or an error saying where it is wrong. */
 export function parseLevelDef(v: unknown, where = 'level'): LevelDef {
   const o = object(v, where);
-  only(o, ['format', 'id', 'name', 'version', 'world', 'unit', 'gap', 'parts', 'lot', 'crownLine', 'objective', 'par', 'rack', 'launcher', 'lGold', 'solutions', 'scoring', 'stars'], where);
+  only(o, ['format', 'id', 'name', 'version', 'world', 'unit', 'gap', 'parts', 'lot', 'crownLine', 'objective', 'par', 'rack', 'launcher', 'lGold', 'solutions', 'scoring', 'stars', 'autobank', 'settle', 'physics', 'custom'], where);
   if (o.format !== undefined && o.format !== LEVEL_FILE_FORMAT) throw new Error(`${where}.format should be "${LEVEL_FILE_FORMAT}"`);
   const id = str(o.id, `${where}.id`);
   if (!/^[\w-]{1,32}$/.test(id)) throw new Error(`${where}.id must be 1 to 32 letters, digits, - or _`);
@@ -45,6 +46,10 @@ export function parseLevelDef(v: unknown, where = 'level'): LevelDef {
   }
   if (o.scoring !== undefined) def.scoring = oneOf(o.scoring, SCORINGS, `${where}.scoring`) as Scoring;
   if (o.stars !== undefined) def.stars = stars(o.stars, `${where}.stars`);
+  if (o.autobank !== undefined) def.autobank = bool(o.autobank, `${where}.autobank`);
+  if (o.settle !== undefined) def.settle = checkSettle(o.settle, `${where}.settle`);
+  if (o.custom !== undefined) def.custom = bool(o.custom, `${where}.custom`);
+  if (o.physics !== undefined) def.physics = physics(o.physics, `${where}.physics`);
   return def;
 }
 
@@ -59,9 +64,22 @@ function stars(v: unknown, where: string): StarsDef {
   return s;
 }
 
+/** A level's physics block (@tb/keystone PhysicsBlock), ranges as checkPhysics. */
+function physics(v: unknown, where: string): PhysicsBlock {
+  const o = object(v, where);
+  only(o, ['iterations', 'gapSlop', 'bounce', 'pairsPerBody', 'presettle'], where);
+  const p: PhysicsBlock = {};
+  for (const k of ['iterations', 'pairsPerBody', 'presettle'] as const) if (o[k] !== undefined) p[k] = int(o[k], `${where}.${k}`);
+  if (o.gapSlop !== undefined) p.gapSlop = num(o.gapSlop, `${where}.gapSlop`);
+  if (o.bounce !== undefined) p.bounce = o.bounce === null ? null : num(o.bounce, `${where}.bounce`);
+  checkPhysics(p, where);
+  return p;
+}
+
 function part(v: unknown, where: string): Part {
   const o = object(v, where);
-  const kind = oneOf(o.kind, ['block', 'slab', 'rod'], `${where}.kind`);
+  const kind = oneOf(o.kind, ['block', 'slab', 'rod', 'scenario'], `${where}.kind`);
+  if (kind === 'scenario') return scenarioPart(o, where);
   const material = oneOf(o.material, MATERIAL_NAMES, `${where}.material`) as MaterialName;
   const role = o.role === undefined ? undefined : (oneOf(o.role, ROLES, `${where}.role`) as Role);
   if (kind === 'block') {
@@ -76,6 +94,43 @@ function part(v: unknown, where: string): Part {
   const half = vec3(o.half, `${where}.half`);
   if (half.some((x) => !(x > 0))) throw new Error(`${where}.half must be three numbers above 0`);
   return { kind, at: vec3(o.at, `${where}.at`), half, material, ...(role ? { role } : {}) };
+}
+
+/** A scenario as a part (@tb/keystone ScenarioPart); its params are checked by building it, at compile. */
+function scenarioPart(o: Json, where: string): ScenarioPart {
+  only(o, ['kind', 'id', 'params', 'seed', 'at', 'material', 'role', 'roles', 'gap'], where);
+  const p: ScenarioPart = { kind: 'scenario', id: oneOf(o.id, Object.keys(SCENARIOS), `${where}.id`), material: oneOf(o.material, MATERIAL_NAMES, `${where}.material`) as MaterialName };
+  if (o.params !== undefined) {
+    const params = object(o.params, `${where}.params`);
+    for (const [k, x] of Object.entries(params)) if (typeof x !== 'boolean') num(x, `${where}.params.${k}`);
+    p.params = params as Record<string, number | boolean>;
+  }
+  if (o.seed !== undefined) p.seed = int(o.seed, `${where}.seed`);
+  if (o.at !== undefined) p.at = vec3(o.at, `${where}.at`);
+  if (o.role !== undefined) p.role = oneOf(o.role, ROLES, `${where}.role`) as Role;
+  if (o.gap !== undefined) p.gap = num(o.gap, `${where}.gap`);
+  if (o.roles !== undefined) p.roles = arr(o.roles, `${where}.roles`).map((r, i) => roleRule(r, `${where}.roles[${i}]`));
+  return p;
+}
+
+function roleRule(v: unknown, where: string): RoleRule {
+  const o = object(v, where);
+  only(o, ['role', 'box', 'course', 'top', 'tag'], where);
+  const r: RoleRule = { role: oneOf(o.role, ROLES, `${where}.role`) as Role };
+  if (o.box !== undefined) {
+    const b = object(o.box, `${where}.box`);
+    only(b, ['min', 'max'], `${where}.box`);
+    r.box = { min: vec3(b.min, `${where}.box.min`), max: vec3(b.max, `${where}.box.max`) };
+  }
+  if (o.course !== undefined) {
+    if (Array.isArray(o.course)) {
+      if (o.course.length !== 2) throw new Error(`${where}.course must be a whole number or two of them`);
+      r.course = [int(o.course[0], `${where}.course[0]`), int(o.course[1], `${where}.course[1]`)];
+    } else r.course = int(o.course, `${where}.course`);
+  }
+  if (o.top !== undefined) r.top = bool(o.top, `${where}.top`);
+  if (o.tag !== undefined) r.tag = Array.isArray(o.tag) ? o.tag.map((x, i) => int(x, `${where}.tag[${i}]`)) : int(o.tag, `${where}.tag`);
+  return r;
 }
 
 function course(v: unknown, where: string): CourseOverride {

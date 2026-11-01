@@ -24,7 +24,9 @@ export function call<K extends keyof D>(name: K, ...args: Parameters<D[K]>): Pro
 
 export const toSnap = (p: Drivers.PlainSnapshot): Snapshot => {
   const s = emptySnapshot(p.pos.length / 3);
-  s.pos.set(p.pos); s.rot.set(p.rot); s.linVel.set(p.linVel); s.angVel.set(p.angVel); s.awake.fill(1);
+  s.pos.set(p.pos); s.rot.set(p.rot); s.linVel.set(p.linVel); s.angVel.set(p.angVel);
+  if (p.awake) s.awake.set(p.awake); else s.awake.fill(1);
+  if (p.tier) s.tier = Uint8Array.from(p.tier);
   return s;
 };
 export async function runGpu(scene: SceneDesc, steps: number, params: Partial<AvbdParams> = {}, every = 0, kicks: Drivers.Kick[] = []) {

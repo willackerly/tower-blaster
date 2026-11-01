@@ -520,6 +520,8 @@ export interface BodyState {
   linVel: Vec3;
   angVel: Vec3;
   prevLinVel: Vec3;
+  /** Taken out of the world (engine-api remove.ts): it touches nothing and stays where it is, at rest. */
+  removed?: boolean;
 }
 
 /** Tangent basis continuous everywhere except near n = +-E (a direction no lattice normal takes). */
@@ -578,6 +580,14 @@ export class AvbdWorld {
       desc: b, mass: massOf(b), inertia: inertiaOf(b),
       pos: [...b.pos], rot: [...b.rot], linVel: [...b.linVel], angVel: [...b.angVel], prevLinVel: [...b.linVel],
     });
+  }
+
+  /** Takes body i out of the world (engine-api remove.ts): from the next step it touches nothing and stays where it is, at rest. */
+  remove(i: number): void {
+    const b = this.bodies[i];
+    if (!b || b.removed) throw new Error(`AvbdWorld.remove: no body ${i} to remove`);
+    b.removed = true;
+    b.linVel = [0, 0, 0]; b.angVel = [0, 0, 0]; b.prevLinVel = [0, 0, 0];
   }
 
   /**
@@ -757,7 +767,11 @@ export class AvbdWorld {
     const inflated = radii.map((r, i) => r + sweep[i]!);
     const rule = this.scene.frictionCombine ?? 'average';
     const axes = new Map<string, number>();
-    for (const [i, j] of spherePairs(centers, inflated, p.margin)) {
+    // Removed bodies (remove.ts) are left out of the broadphase, so its cells are sized as if they had gone.
+    const live = bodies.some((b) => b.removed) ? bodies.flatMap((b, i) => (b.removed ? [] : [i])) : null;
+    const candidates = !live ? spherePairs(centers, inflated, p.margin)
+      : spherePairs(live.flatMap((i) => [centers[3 * i]!, centers[3 * i + 1]!, centers[3 * i + 2]!]), live.map((i) => inflated[i]!), p.margin).map(([a, b]) => [live[a]!, live[b]!] as const);
+    for (const [i, j] of candidates) {
       const A = bodies[i]!, B = bodies[j]!;
       const key = `${i},${j}`;
       const m = shapeManifold(A.desc.shape, A.pos, A.rot, B.desc.shape, B.pos, B.rot, p.margin + sweep[i]! + sweep[j]!, true, this.axes.get(key) ?? NO_AXIS);
@@ -769,6 +783,7 @@ export class AvbdWorld {
     const g = this.scene.ground;
     if (g) {
       bodies.forEach((B, i) => {
+        if (B.removed) return;
         const m = groundManifold(B.desc.shape, B.pos, B.rot, g.y, p.margin + sweep[i]!);
         if (m) emit(GROUND, i, m.normal, m.points, combineFriction(rule, B.desc.friction, g.friction));
       });
@@ -1163,6 +1178,8 @@ export class AvbdWorld {
     const target = bodies.map(() => new Float64Array(6));
     for (let i = 0; i < n; i++) {
       const b = bodies[i]!;
+      // A removed body's target and guess stay 0: no contacts, so it stays exactly where it is, at rest.
+      if (b.removed) continue;
       const w = b.angVel, ws = Math.hypot(w[0], w[1], w[2]);
       if (ws > p.maxAngularSpeed) b.angVel = [w[0] * p.maxAngularSpeed / ws, w[1] * p.maxAngularSpeed / ws, w[2] * p.maxAngularSpeed / ws];
       const v = b.linVel;

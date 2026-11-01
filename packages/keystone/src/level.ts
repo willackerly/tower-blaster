@@ -4,9 +4,11 @@
 // hash pins the exact scene a recorded solution was made against.
 import { type BodyDesc, massOf, type SceneDesc, type Vec3 } from '@tb/engine-api';
 import { DEFAULT_GAP, DEFAULT_UNIT, encodeTag, GRAVITY, MATERIALS, materialId, type MaterialName, type Role, ROLES } from './materials.ts';
-import type { GrenadeSpec } from '@tb/weapons';
-import { isRackItem, itemRef, levelWeapon, RACK_ITEM_NAMES, rackBodies, type RackItem, speedOf, WEAPON_KEY } from './rack.ts';
-import { ammoBody, type LauncherDef, type Shot, type ShotFrame } from './shots.ts';
+import { peOf_mJ, SETTLE_RULES, type SettleRule } from './rules.ts';
+import { type Arm, levelArm, rackArms } from './arsenal.ts';
+import { isRackItem, itemRef, type LevelWeapon, RACK_ITEM_NAMES, rackBodies, type RackItem, speedOf, WEAPON_KEY } from './rack.ts';
+import { type ScenarioPart, scenarioBodies, scenarioKey } from './scenario-part.ts';
+import { ammoBody, type LauncherDef, launcherPos, type Shot, type ShotFrame } from './shots.ts';
 
 /** A course (layer) override inside a block: change material or role, or leave cells out. */
 export interface CourseOverride {
@@ -23,7 +25,7 @@ export interface CourseOverride {
 export interface BlockPart { kind: 'block'; at: Vec3; size: Vec3; material: MaterialName; role?: Role; courses?: CourseOverride[] }
 /** One box body; `at` is (centre x, bottom y, centre z) and `half` its half-extents, in h. */
 export interface BoxPart { kind: 'slab' | 'rod'; at: Vec3; half: Vec3; material: MaterialName; role?: Role }
-export type Part = BlockPart | BoxPart;
+export type Part = BlockPart | BoxPart | ScenarioPart;
 
 /**
  * What the level asks for; meeting it is the first star. footprintMax (a fraction of the structure
@@ -73,8 +75,12 @@ export interface LevelDef {
   par: number;
   /** What the player may fire, one entry per shot (rack.ts names). */
   rack: RackItem[];
-  /** Weapons the rack's w-<key> items fire, by key; lengths (blast radius, prox) in h, the rest SI (levelWeapon). */
-  weapons?: Record<string, GrenadeSpec>;
+  /**
+   * Weapons the rack's w-<key> items fire, by key: a GrenadeSpec with lengths (blast radius,
+   * prox) in h and the rest SI (levelWeapon), or a @tb/weapons WeaponSpec in the viewer's
+   * cube units, scaled to the level's commonest block (arsenal.ts cubeScale).
+   */
+  weapons?: Record<string, LevelWeapon>;
   /** Validator limits a level may relax. */
   limits?: {
     /** Most a rack item's mass may be over the lightest structure body's (default AMMO_RATIO, at most AMMO_RATIO_MAX). */
@@ -89,12 +95,98 @@ export interface LevelDef {
   scoring?: Scoring;
   /** Outcome levels: the cast star thresholds; absent, stars are uncast (only the objective's star). */
   stars?: StarsDef;
+  /** Outcome levels: end at the first settle where the objective is met, as par levels do (URL key keystone.autobank). Default: end at a bank or an empty rack. */
+  autobank?: boolean;
+  /**
+   * How a shot settles (rules.ts SETTLE_RULES; URL key keystone.settle). Default by scoring (settleOf):
+   * v1 for par levels, whose lines are pinned on it, and v3 for outcome levels, whose big structures
+   * keep blocks rocking long after the collapse is over. In the hash unless par's v1 or outcome's v2
+   * (the rules those levels were hashed under before v3), so a v3 level hashes apart from its v2 self.
+   */
+  settle?: SettleRule;
+  /** The physics the level plays at (default Keystone's: PHYSICS_DEFAULTS). Part of the level hash, so stars cast at one setting never show at another. */
+  physics?: PhysicsBlock;
+  /**
+   * Made from an authored level by overrides (URL keys keystone.*): it plays, but cast stars do not
+   * apply ("custom: stars not recorded"). Not part of the hash: the overrides already are.
+   */
+  custom?: boolean;
+}
+
+/** A level's physics settings (spectacle-mode.md, section 8). Absent fields take PHYSICS_DEFAULTS. */
+export interface PhysicsBlock {
+  /** AVBD iterations (GPU solver and reference). */
+  iterations?: number;
+  /** Loaded-gap slop, m (0: off). */
+  gapSlop?: number;
+  /** Restitution e for the structure and the ground, with the engine's restitution pass on; null: off. */
+  bounce?: number | null;
+  /** The GPU engine's pair buffer per body; absent: the game's sizing rule. */
+  pairsPerBody?: number;
+  /** Steps run after init before play starts. */
+  presettle?: number;
+}
+
+/**
+ * Keystone's settings, as every par line is pinned at: 40 iterations, 3e-5 m slop, no Bounce, 300
+ * pre-settle steps (driver.ts AVBD_ITERATIONS, AVBD_GAP_SLOP, PRESETTLE_STEPS give the reasons).
+ */
+export const PHYSICS_DEFAULTS = { iterations: 40, gapSlop: 3e-5, bounce: null, presettle: 300 } as const satisfies PhysicsBlock;
+export type ResolvedPhysics = { iterations: number; gapSlop: number; bounce: number | null; presettle: number; pairsPerBody?: number };
+
+export function physicsOf(d: LevelDef): ResolvedPhysics {
+  const p = d.physics ?? {};
+  return {
+    iterations: p.iterations ?? PHYSICS_DEFAULTS.iterations, gapSlop: p.gapSlop ?? PHYSICS_DEFAULTS.gapSlop,
+    bounce: p.bounce === undefined ? PHYSICS_DEFAULTS.bounce : p.bounce, presettle: p.presettle ?? PHYSICS_DEFAULTS.presettle,
+    ...(p.pairsPerBody !== undefined ? { pairsPerBody: p.pairsPerBody } : {}),
+  };
+}
+
+/** Throws unless every physics field is in range, naming it. */
+export function checkPhysics(p: PhysicsBlock, where = 'physics'): void {
+  const int = (v: number | undefined, k: string, lo: number, hi: number) => {
+    if (v !== undefined && !(Number.isInteger(v) && v >= lo && v <= hi)) throw new Error(`${where}.${k} must be a whole number from ${lo} to ${hi}: ${v}`);
+  };
+  int(p.iterations, 'iterations', 1, 200);
+  int(p.pairsPerBody, 'pairsPerBody', 1, 256);
+  int(p.presettle, 'presettle', 0, 6000);
+  if (p.gapSlop !== undefined && !(Number.isFinite(p.gapSlop) && p.gapSlop >= 0 && p.gapSlop <= 0.01)) throw new Error(`${where}.gapSlop must be from 0 to 0.01 m: ${p.gapSlop}`);
+  if (p.bounce !== undefined && p.bounce !== null && !(p.bounce >= 0 && p.bounce <= 1)) throw new Error(`${where}.bounce must be from 0 to 1, or null for off: ${p.bounce}`);
+}
+
+/** The physics block with fields at their defaults left out (absent when nothing is left): what the hash sees. */
+function physicsKey(p: PhysicsBlock | undefined): PhysicsBlock | undefined {
+  if (!p) return undefined;
+  const out: PhysicsBlock = {};
+  if (p.iterations !== undefined && p.iterations !== PHYSICS_DEFAULTS.iterations) out.iterations = p.iterations;
+  if (p.gapSlop !== undefined && p.gapSlop !== PHYSICS_DEFAULTS.gapSlop) out.gapSlop = p.gapSlop;
+  if (p.bounce !== undefined && p.bounce !== PHYSICS_DEFAULTS.bounce) out.bounce = p.bounce;
+  if (p.presettle !== undefined && p.presettle !== PHYSICS_DEFAULTS.presettle) out.presettle = p.presettle;
+  if (p.pairsPerBody !== undefined) out.pairsPerBody = p.pairsPerBody;
+  return Object.keys(out).length ? out : undefined;
+}
+
+/**
+ * The level's cast stars if they apply to this compiled level: none on a custom run, and none when the
+ * cast recorded another level hash (the level, its physics or its rules changed since).
+ */
+export function castStars(c: CompiledLevel): StarsDef | undefined {
+  const s = c.def.stars;
+  if (!s || c.def.custom || (s.hash !== undefined && s.hash !== c.hash)) return undefined;
+  return s;
 }
 
 export const scoringOf = (d: LevelDef): Scoring => d.scoring ?? 'par';
+/** The settle rule a level plays by: its own, else v1 for par scoring and v3 for outcome scoring. */
+export const settleOf = (d: LevelDef): SettleRule => d.settle ?? (scoringOf(d) === 'outcome' ? 'v3' : 'v1');
+/** Throws unless v is a settle rule, naming `where`. */
+export function checkSettle(v: unknown, where = 'settle'): SettleRule {
+  if (!(SETTLE_RULES as readonly unknown[]).includes(v)) throw new Error(`${where} must be ${SETTLE_RULES.join(' or ')}: ${String(v)}`);
+  return v as SettleRule;
+}
 
 export const ROLE_ID: Record<Role, number> = { plain: 0, crown: 1, heritage: 2 };
-export const MAX_BODIES = 2500;
 export const MAX_RACK = 8;
 /**
  * Rack item mass over the lightest structure body's, default and ceiling. AVBD drives a
@@ -125,6 +217,8 @@ export interface CompiledLevel {
   scene: SceneDesc;
   meta: BodyMeta;
   frame: ShotFrame;
+  /** The rack's weapons resolved, by item name (arsenal.ts rackArms; frame.shells holds their shells). */
+  arms: Readonly<Record<string, Arm>>;
   /** World-space lot rectangle in metres. */
   lot: { min: [number, number]; max: [number, number] };
   /** Structure height in metres (top of the highest body). */
@@ -135,9 +229,9 @@ export interface CompiledLevel {
 export const unitOf = (d: LevelDef) => d.unit ?? DEFAULT_UNIT;
 export const pitchOf = (d: LevelDef) => 1 + (d.gap ?? DEFAULT_GAP);
 
-function body(pos: Vec3, half: Vec3, material: MaterialName, role: Role, part: number): BodyDesc {
+function body(pos: Vec3, half: Vec3, material: MaterialName, role: Role, part: number, rot: BodyDesc['rot'] = [0, 0, 0, 1]): BodyDesc {
   const m = MATERIALS[materialId(material)]!;
-  return { shape: { kind: 'box', half }, pos, rot: [0, 0, 0, 1], linVel: [0, 0, 0], angVel: [0, 0, 0], density: m.density, friction: m.friction, restitution: m.restitution, tag: encodeTag(role, part) };
+  return { shape: { kind: 'box', half }, pos, rot, linVel: [0, 0, 0], angVel: [0, 0, 0], density: m.density, friction: m.friction, restitution: m.restitution, tag: encodeTag(role, part) };
 }
 
 /** FNV-1a over a string, twice with different offsets: 64 bits as hex. */
@@ -152,7 +246,10 @@ export function hashString(s: string): string {
 }
 
 export function compileLevel(def: LevelDef): CompiledLevel {
+  if (def.physics) checkPhysics(def.physics);
+  if (def.settle !== undefined) checkSettle(def.settle);
   const h = unitOf(def), p = pitchOf(def) * h;
+  const bounce = physicsOf(def).bounce;
   const bodies: BodyDesc[] = [];
   const roles: number[] = [], mats: number[] = [], parts: number[] = [];
   const add = (b: BodyDesc, role: Role, material: MaterialName, part: number) => { bodies.push(b); roles.push(ROLE_ID[role]); mats.push(materialId(material)); parts.push(part); };
@@ -170,6 +267,8 @@ export function compileLevel(def: LevelDef): CompiledLevel {
         const pos: Vec3 = [(part.at[0] + i + 0.5) * p, (part.at[1] + k + 0.5) * h, (part.at[2] + j + 0.5) * p];
         add(body(pos, [h / 2, h / 2, h / 2], material, role, pi), role, material, pi);
       }
+    } else if (part.kind === 'scenario') {
+      for (const b of scenarioBodies(part, h, pitchOf(def))) add(body(b.pos, b.half, part.material, b.role, pi, b.rot), b.role, part.material, pi);
     } else {
       const half = part.half.map((x) => x * h) as Vec3;
       const pos: Vec3 = [part.at[0] * p, part.at[1] * h + half[1], part.at[2] * p];
@@ -198,61 +297,139 @@ export function compileLevel(def: LevelDef): CompiledLevel {
     id: `keystone:${def.id}`, params: { version: def.version }, seed: 0, gravity: [0, -GRAVITY, 0], dt: 1 / 60,
     // 'min' lets one slick face make a slip plane: ice on plaster is ice, not
     // the 0.325 the default average gives (docs/game/findings.md, section 3).
-    ground: { y: 0, friction: MATERIALS[0].friction }, sleep: true, frictionCombine: 'min', bodies, inputs: [],
+    ground: { y: 0, friction: MATERIALS[0].friction, ...(bounce !== null ? { restitution: bounce } : {}) }, sleep: true, frictionCombine: 'min', bodies, inputs: [],
   };
+  // Bounce: the structure and the ground at e (the engine's restitution pass is turned on from the same block).
+  if (bounce !== null) for (const b of bodies) b.restitution = bounce;
   const lot = { min: [def.lot.min[0] * p, def.lot.min[1] * p] as [number, number], max: [def.lot.max[0] * p, def.lot.max[1] * p] as [number, number] };
   const frame: ShotFrame = { unit: h, pitch: pitchOf(def), centre: [(lot.min[0] + lot.max[0]) / 2, (lot.min[1] + lot.max[1]) / 2], launcher: def.launcher };
   // Solutions don't change the scene, and the stars are cast against the hash (StarsDef.hash).
-  // scoring 'par' is the default, so writing it out names the same level.
-  const { solutions: _omit, stars: _stars, ...geometry } = def;
+  // scoring 'par', autobank false, the scoring's settle rule and physics at its defaults are the defaults, so writing them out names the same level;
+  // custom marks overrides the hash already holds.
+  const { solutions: _omit, stars: _stars, custom: _custom, ...geometry } = def;
   if (geometry.scoring === 'par') delete geometry.scoring;
-  return { def, scene, meta, frame, lot, height, hash: hashString(JSON.stringify(geometry)) };
+  if (geometry.autobank === false) delete geometry.autobank;
+  // The settle rule a level plays by hashes as absent when it is the one its scoring used before v3 (par v1, outcome v2), so those
+  // levels hash as they did; any other, outcome levels' default v3 included, is written out, so stars cast under v2 never show under v3.
+  const settleRule = settleOf(def);
+  if (settleRule === (scoringOf(def) === 'outcome' ? 'v2' : 'v1')) delete geometry.settle; else geometry.settle = settleRule;
+  const physics = physicsKey(geometry.physics);
+  if (physics) geometry.physics = physics; else delete geometry.physics;
+  geometry.parts = geometry.parts.map((pt) => (pt.kind === 'scenario' ? scenarioKey(pt) : pt));
+  // A scenario part names its bodies by (id, params, seed): the bodies themselves join the hash, so a
+  // change to the scenario's builder is a different level too. Levels without one hash as before.
+  const built = def.parts.some((pt) => pt.kind === 'scenario') ? `|${bodiesDigest(bodies)}` : '';
+  const c: CompiledLevel = { def, scene, meta, frame, arms: {}, lot, height, hash: hashString(JSON.stringify(geometry) + built) };
+  const arms = rackArms(c);
+  c.arms = arms;
+  frame.shells = Object.fromEntries(Object.entries(arms).map(([k, a]) => [k, a.shell]));
+  return c;
+}
+
+/** FNV-1a over the bytes of every body's pose and half-extents (f64). */
+function bodiesDigest(bodies: readonly BodyDesc[]): string {
+  const f = new Float64Array(10 * bodies.length);
+  bodies.forEach((b, i) => { f.set(b.pos, 10 * i); f.set(b.rot, 10 * i + 3); f.set((b.shape as { half: Vec3 }).half, 10 * i + 7); });
+  const u = new Uint8Array(f.buffer);
+  let a = 0x811c9dc5;
+  for (let i = 0; i < u.length; i++) a = Math.imul(a ^ u[i]!, 0x01000193) >>> 0;
+  return a.toString(16).padStart(8, '0');
 }
 
 export interface Issue {
-  code: 'count' | 'capacity' | 'overlap' | 'unsupported' | 'mass-ratio' | 'ammo-ratio' | 'dud' | 'tunnelling' | 'crown-start' | 'rack' | 'weapon' | 'empty';
+  code: 'count' | 'capacity' | 'launcher' | 'overlap' | 'unsupported' | 'mass-ratio' | 'ammo-ratio' | 'dud' | 'tunnelling' | 'crown-start' | 'rack' | 'weapon' | 'empty' | 'watched' | 'flat';
   message: string;
   bodies?: number[];
   /** Legal but worth knowing (a dud item): the level still plays as authored. */
   warning?: true;
 }
 
-const aabb = (m: BodyMeta, i: number) => {
-  const c = [m.home[3 * i]!, m.home[3 * i + 1]!, m.home[3 * i + 2]!], e = [m.half[3 * i]!, m.half[3 * i + 1]!, m.half[3 * i + 2]!];
-  return { lo: c.map((x, k) => x - e[k]!), hi: c.map((x, k) => x + e[k]!) };
+/** The engines a level can be checked for: their structure budgets differ. */
+export type LevelEngine = 'rapier' | 'gpu';
+/**
+ * Bodies an engine plays a level with: Rapier's prototype budget, the GPU solver's slice budget (raised
+ * by GPU sleep, E2). Rapier's counts the rack's bodies too (`capacity`); the GPU's is the structure's,
+ * the solver bar, since the GPU engine sizes its buffers per level for the structure plus the rack.
+ */
+export const ENGINE_MAX_BODIES: Record<LevelEngine, number> = { rapier: 2500, gpu: 10_000 };
+/**
+ * The engine a level is checked for when none is named: chamber (par) levels play on every engine, so
+ * Rapier's budget; outcome levels are the GPU's (spectacle-mode.md, section 8).
+ */
+export const defaultEngineOf = (d: LevelDef): LevelEngine => (scoringOf(d) === 'outcome' ? 'gpu' : 'rapier');
+/** Crowns plus heritage: they are read as watched bodies every step, and the 100k path reads at most 64. */
+export const MAX_WATCHED = 64;
+
+export interface ValidateOptions { engine?: LevelEngine }
+
+interface Box { lo: [number, number, number]; hi: [number, number, number] }
+
+const aabb = (m: BodyMeta, i: number): Box => {
+  const lo: [number, number, number] = [0, 0, 0], hi: [number, number, number] = [0, 0, 0];
+  for (let k = 0; k < 3; k++) { lo[k] = m.home[3 * i + k]! - m.half[3 * i + k]!; hi[k] = m.home[3 * i + k]! + m.half[3 * i + k]!; }
+  return { lo, hi };
 };
 
-/** Pairs whose AABBs, grown by `margin` on every side, overlap. Sweep on x. */
-function nearPairs(m: BodyMeta, margin: number): Array<[number, number]> {
-  const boxes = Array.from({ length: m.n }, (_, i) => aabb(m, i));
-  const order = boxes.map((_, i) => i).sort((a, b) => boxes[a]!.lo[0]! - boxes[b]!.lo[0]!);
-  const out: Array<[number, number]> = [];
-  for (let s = 0; s < order.length; s++) {
-    const i = order[s]!, A = boxes[i]!;
-    for (let t = s + 1; t < order.length; t++) {
-      const j = order[t]!, B = boxes[j]!;
-      if (B.lo[0]! > A.hi[0]! + 2 * margin) break;
-      if ([0, 1, 2].every((k) => A.lo[k]! - margin < B.hi[k]! + margin && B.lo[k]! - margin < A.hi[k]! + margin)) out.push(i < j ? [i, j] : [j, i]);
+/**
+ * Pairs (i < j, sorted) whose AABBs, grown by `margin` on every side, overlap. A uniform grid with
+ * cells of the median grown extent: each body goes in every cell its grown box covers, and a pair is
+ * reported only from the cell holding the low corner of the two grown boxes' intersection, so once.
+ * Near-linear for lattices (each cell holds a few bodies); long bodies span cells instead of growing them.
+ */
+function nearPairs(boxes: readonly Box[], margin: number): Array<[number, number]> {
+  const n = boxes.length;
+  if (n < 2) return [];
+  const ext = boxes.map((b) => Math.max(b.hi[0] - b.lo[0], b.hi[1] - b.lo[1], b.hi[2] - b.lo[2]) + 2 * margin).sort((a, b) => a - b);
+  const cell = Math.max(ext[n >> 1]!, 1e-9);
+  const OFF = 1 << 16, K = 1 << 17;
+  const ix = (x: number) => Math.floor(x / cell);
+  const grid = new Map<number, number[]>();
+  for (let i = 0; i < n; i++) {
+    const b = boxes[i]!;
+    const a0 = ix(b.lo[0] - margin), a1 = ix(b.hi[0] + margin), b0 = ix(b.lo[1] - margin), b1 = ix(b.hi[1] + margin), c0 = ix(b.lo[2] - margin), c1 = ix(b.hi[2] + margin);
+    for (let x = a0; x <= a1; x++) for (let y = b0; y <= b1; y++) for (let z = c0; z <= c1; z++) {
+      const key = ((x + OFF) * K + (y + OFF)) * K + (z + OFF);
+      const list = grid.get(key);
+      if (list) list.push(i); else grid.set(key, [i]);
     }
   }
-  return out;
+  const out: Array<[number, number]> = [];
+  for (const [key, list] of grid) {
+    const cz = (key % K) - OFF, cy = (Math.floor(key / K) % K) - OFF, cx = Math.floor(key / K / K) - OFF;
+    for (let s = 0; s < list.length; s++) for (let t = s + 1; t < list.length; t++) {
+      const i = list[s]!, j = list[t]!, A = boxes[i]!, B = boxes[j]!;
+      let near = true;
+      for (let k = 0; k < 3 && near; k++) near = A.lo[k]! - margin < B.hi[k]! + margin && B.lo[k]! - margin < A.hi[k]! + margin;
+      if (!near) continue;
+      // The intersection's low corner is in exactly one cell: report the pair there only.
+      if (ix(Math.max(A.lo[0], B.lo[0]) - margin) !== cx || ix(Math.max(A.lo[1], B.lo[1]) - margin) !== cy || ix(Math.max(A.lo[2], B.lo[2]) - margin) !== cz) continue;
+      out.push(i < j ? [i, j] : [j, i]);
+    }
+  }
+  return out.sort((a, b) => a[0] - b[0] || a[1] - b[1]);
 }
 
 /**
- * Static checks that keep levels solvable and the solver honest. The physical
- * check (the level sits still on a real engine) lives in the sim package.
+ * Static checks that keep levels solvable and the solver honest, near-linear in the body count so a
+ * 10k level validates in well under a second or two. The physical check (the level sits still on a
+ * real engine) lives in the sim package. `engine` picks the body budget (default defaultEngineOf).
  */
-export function validateLevel(c: CompiledLevel): Issue[] {
+export function validateLevel(c: CompiledLevel, opts: ValidateOptions = {}): Issue[] {
   const { def, meta: m } = c, h = c.frame.unit, issues: Issue[] = [];
+  const engine = opts.engine ?? defaultEngineOf(def), max = ENGINE_MAX_BODIES[engine];
   if (m.n === 0) issues.push({ code: 'empty', message: 'level has no bodies' });
-  if (m.n > MAX_BODIES) issues.push({ code: 'count', message: `${m.n} bodies > ${MAX_BODIES} (Rapier prototype budget)` });
-  else if (m.n + rackBodies(def.rack.filter(isRackItem)) > MAX_BODIES) issues.push({ code: 'capacity', message: `${m.n} bodies + ${rackBodies(def.rack.filter(isRackItem))} the rack can add > ${MAX_BODIES}` });
+  if (m.n > max) issues.push({ code: 'count', message: `${m.n} bodies > ${max} (the ${engine} engine's budget)` });
+  else if (engine === 'rapier' && m.n + rackBodies(def.rack.filter(isRackItem), c.arms) > max) issues.push({ code: 'capacity', message: `${m.n} bodies + ${rackBodies(def.rack.filter(isRackItem), c.arms)} the rack can add > ${max} (the ${engine} engine's budget)` });
   if (def.rack.length === 0 || def.rack.length > MAX_RACK || def.par < 1 || def.par > def.rack.length) issues.push({ code: 'rack', message: `rack of ${def.rack.length} with par ${def.par}: need 1 <= par <= rack <= ${MAX_RACK}` });
+  const watched = m.crowns.length + m.heritage.length;
+  if (watched > MAX_WATCHED) issues.push({ code: 'watched', message: `${m.crowns.length} crowns + ${m.heritage.length} heritage = ${watched} watched bodies > ${MAX_WATCHED}: judge big structures by collapse, skyline or footprint` });
 
   const eps = 1e-4 * h;
-  const box = (i: number) => aabb(m, i);
-  for (const [i, j] of nearPairs(m, 0.1 * h)) {
-    const A = box(i), B = box(j);
+  const boxes = Array.from({ length: m.n }, (_, i) => aabb(m, i));
+  // One pass at the wider margin; the support relation below needs a subset of these pairs.
+  const pairs = nearPairs(boxes, 0.1 * h);
+  for (const [i, j] of pairs) {
+    const A = boxes[i]!, B = boxes[j]!;
     const depth = Math.min(...[0, 1, 2].map((k) => Math.min(A.hi[k]!, B.hi[k]!) - Math.max(A.lo[k]!, B.lo[k]!)));
     if (depth > eps) issues.push({ code: 'overlap', message: `bodies ${i} and ${j} overlap by ${(depth / h).toFixed(3)} h`, bodies: [i, j] });
     const ratio = Math.max(m.mass[i]! / m.mass[j]!, m.mass[j]! / m.mass[i]!);
@@ -261,11 +438,10 @@ export function validateLevel(c: CompiledLevel): Issue[] {
 
   // Loose support: a body off the ground must rest on bodies whose tops meet
   // its bottom, with its centre over the bounding box of those contacts.
-  const boxes = Array.from({ length: m.n }, (_, i) => box(i));
   // above[j] = bodies resting directly on j; below[j] = what j rests on.
   const above: number[][] = Array.from({ length: m.n }, () => []);
   const below: number[][] = Array.from({ length: m.n }, () => []);
-  for (const [i, j] of nearPairs(m, 0.01 * h)) {
+  for (const [i, j] of pairs) {
     const A = boxes[i]!, B = boxes[j]!;
     const ox = Math.min(A.hi[0]!, B.hi[0]!) - Math.max(A.lo[0]!, B.lo[0]!), oz = Math.min(A.hi[2]!, B.hi[2]!) - Math.max(A.lo[2]!, B.lo[2]!);
     if (ox <= eps || oz <= eps) continue;
@@ -287,12 +463,10 @@ export function validateLevel(c: CompiledLevel): Issue[] {
     const A = boxes[i]!;
     if (A.lo[1]! < eps) continue;
     let x0 = Infinity, x1 = -Infinity, z0 = Infinity, z1 = -Infinity;
-    for (let j = 0; j < m.n; j++) {
+    for (const j of below[i]!) {
       const B = boxes[j]!;
-      if (j === i || Math.abs(B.hi[1]! - A.lo[1]!) > eps) continue;
-      const ox0 = Math.max(A.lo[0]!, B.lo[0]!), ox1 = Math.min(A.hi[0]!, B.hi[0]!), oz0 = Math.max(A.lo[2]!, B.lo[2]!), oz1 = Math.min(A.hi[2]!, B.hi[2]!);
-      if (ox1 - ox0 <= eps || oz1 - oz0 <= eps) continue;
-      x0 = Math.min(x0, ox0); x1 = Math.max(x1, ox1); z0 = Math.min(z0, oz0); z1 = Math.max(z1, oz1);
+      x0 = Math.min(x0, Math.max(A.lo[0]!, B.lo[0]!)); x1 = Math.max(x1, Math.min(A.hi[0]!, B.hi[0]!));
+      z0 = Math.min(z0, Math.max(A.lo[2]!, B.lo[2]!)); z1 = Math.max(z1, Math.min(A.hi[2]!, B.hi[2]!));
     }
     // Centre of mass of the body and everything resting on it, so a lever
     // whose own centre overhangs its supports passes if its load balances it.
@@ -303,13 +477,47 @@ export function validateLevel(c: CompiledLevel): Issue[] {
     if (!(cx > x0 + eps && cx < x1 - eps && cz > z0 + eps && cz < z1 - eps)) issues.push({ code: 'unsupported', message: `body ${i} at y=${(A.lo[1]! / h).toFixed(2)} h: the centre of mass of it and its load is not over its supports`, bodies: [i] });
   }
 
+  // Nothing to bring down: the structure's energy over lying flat is under one common block falling one h.
+  if (m.n > 0) {
+    let pe0 = 0, floor = 0;
+    for (let i = 0; i < m.n; i++) { pe0 += peOf_mJ(m.mass[i]!, m.home[3 * i + 1]!); floor += peOf_mJ(m.mass[i]!, Math.min(m.half[3 * i]!, m.half[3 * i + 1]!, m.half[3 * i + 2]!)); }
+    const block = commonMass(m), least = peOf_mJ(block, h);
+    if (pe0 - floor < least) issues.push({ code: 'flat', message: `the structure holds ${((pe0 - floor) / 1000).toFixed(1)} J over lying flat, under one ${block.toFixed(1)} kg block falling 1 h (${(least / 1000).toFixed(1)} J): nothing to bring down` });
+  }
+
   issues.push(...rackIssues(c));
+  if (scoringOf(def) === 'outcome') issues.push(...launcherIssues(c));
 
   for (const i of m.crowns) {
     const x = m.home[3 * i]!, y = m.home[3 * i + 1]!, z = m.home[3 * i + 2]!;
     if (y < def.crownLine * h || x < c.lot.min[0] || x > c.lot.max[0] || z < c.lot.min[1] || z > c.lot.max[1]) issues.push({ code: 'crown-start', message: `crown ${i} starts already down`, bodies: [i] });
   }
   return issues;
+}
+
+/**
+ * Outcome levels: every launcher position must be within 4 h of the lot, where the rules count
+ * ammo as live (rules.ts ammoLive). From beyond it a shot flies uncounted, and a structure
+ * quiet before the ammo arrives settles the shot before it lands (a long wall's ends, a city's
+ * corners). Par levels keep their launchers: their recorded lines settle where they do.
+ */
+function launcherIssues(c: CompiledLevel): Issue[] {
+  const grow = 4 * c.frame.unit, y = Math.round(4 * c.def.launcher.y), out: number[] = [];
+  for (let az = 0; az < 720; az++) {
+    const p = launcherPos(c.frame, az, y);
+    if (p[0] < c.lot.min[0] - grow || p[0] > c.lot.max[0] + grow || p[2] < c.lot.min[1] - grow || p[2] > c.lot.max[1] + grow) out.push(az);
+  }
+  if (!out.length) return [];
+  return [{ code: 'launcher', message: `${out.length} of 720 launcher azimuths (first ${out[0]! / 2} deg) are over 4 h outside the lot, where a shot is not live: it could settle before it lands; grow the lot to the launcher ring less 3 cells` }];
+}
+
+/** The most common structure body mass (ties: the lighter), for the `flat` check. */
+function commonMass(m: BodyMeta): number {
+  const count = new Map<number, number>();
+  for (let i = 0; i < m.n; i++) count.set(m.mass[i]!, (count.get(m.mass[i]!) ?? 0) + 1);
+  let best = m.mass[0]!, k = 0;
+  for (const [mass, c] of count) if (c > k || (c === k && mass < best)) { best = mass; k = c; }
+  return best;
 }
 
 /**
@@ -329,26 +537,36 @@ function rackIssues(c: CompiledLevel): Issue[] {
   if (!(ratioMax > 0 && ratioMax <= AMMO_RATIO_MAX)) issues.push({ code: 'ammo-ratio', message: `limits.ammoRatio ${ratioMax} must be above 0 and at most ${AMMO_RATIO_MAX}` });
   for (const key of Object.keys(def.weapons ?? {})) {
     if (!WEAPON_KEY.test(key)) issues.push({ code: 'weapon', message: `weapons.${key}: a key is 1 to 24 lower case letters and digits, starting with a letter` });
-    else try { levelWeapon(def, key); } catch (e) { issues.push({ code: 'weapon', message: `weapons.${key}: ${(e as Error).message}` }); }
+    else try { levelArm(c, key); } catch (e) { issues.push({ code: 'weapon', message: `weapons.${key}: ${(e as Error).message}` }); }
   }
+  const tunnel = (what: string, size: number, v: number) => {
+    const reach = v * dt;
+    if (reach > 0.8 * (size + thin)) issues.push({ code: 'tunnelling', message: `${what} moves ${reach.toFixed(3)} m per step, more than 0.8 x (${size.toFixed(3)} + thinnest body ${thin.toFixed(3)}) m` });
+  };
+  const sizeOf = (s: BodyDesc['shape']) => (s.kind === 'sphere' ? 2 * s.radius : s.kind === 'box' ? 2 * Math.min(...s.half) : 0);
+  const heavy = (what: string, mass: number) => {
+    const ratio = mass / lightest;
+    if (m.n > 0 && ratio > ratioMax) issues.push({ code: 'ammo-ratio', message: `${what} (${mass.toFixed(1)} kg) is ${ratio.toFixed(1)} x the lightest structure body (${lightest.toFixed(1)} kg), over ${ratioMax}` });
+  };
   for (const item of new Set<string>(def.rack)) {
     const ref = itemRef(item);
     if (!ref) { issues.push({ code: 'rack', message: `rack item ${JSON.stringify(item)} is not one of ${RACK_ITEM_NAMES}` }); continue; }
-    let weapon = null;
+    let arm: Arm | null = null;
     if (ref.kind === 'weapon') {
-      try { weapon = levelWeapon(def, ref.key); } catch { continue; } // reported above
-      if (!weapon) { issues.push({ code: 'weapon', message: `${item}: the level has no weapons.${ref.key}` }); continue; }
+      if (def.weapons && Object.hasOwn(def.weapons, ref.key)) { arm = c.arms[item] ?? null; if (!arm) continue; } // reported above
+      else try { arm = levelArm(c, ref.key); } catch (e) { issues.push({ code: 'weapon', message: `${item}: ${(e as Error).message}` }); continue; }
     }
-    const b = ammoBody(item as RackItem, h, [0, 0, 0], [0, 0, 0]), s = b.shape, mass = massOf(b);
-    const size = s.kind === 'sphere' ? 2 * s.radius : s.kind === 'box' ? 2 * Math.min(...s.half) : 0;
-    const v = item === 'drop' ? Math.sqrt(2 * GRAVITY * def.launcher.dropY * h) : speedOf(item as RackItem, 100);
-    const reach = v * dt;
-    if (reach > 0.8 * (size + thin)) issues.push({ code: 'tunnelling', message: `${item} moves ${reach.toFixed(3)} m per step, more than 0.8 x (${size.toFixed(3)} + thinnest body ${thin.toFixed(3)}) m` });
-    if (weapon && weapon.blast.maxSpeed * dt > 0.8 * 2 * thin) issues.push({ code: 'tunnelling', message: `${item}'s blast can kick a body to ${weapon.blast.maxSpeed} m/s, ${(weapon.blast.maxSpeed * dt).toFixed(3)} m per step, more than 0.8 x twice the thinnest body ${thin.toFixed(3)} m` });
+    const b = ammoBody(item as RackItem, c.frame, [0, 0, 0], [0, 0, 0]), mass = massOf(b);
+    const v = item === 'drop' ? Math.sqrt(2 * GRAVITY * def.launcher.dropY * h) : speedOf(item as RackItem, 100, c.frame);
+    tunnel(item, sizeOf(b.shape), v);
+    heavy(item, mass);
+    if (arm) {
+      // A weapon's children (each at its speed bound: the shell's top speed plus the spreads that threw it) and its blasts' kicks.
+      for (const x of arm.munitions.slice(1)) { tunnel(`${item}'s ${x.path}`, sizeOf(x.shape), x.speed); heavy(`${item}'s ${x.path}`, x.mass); }
+      for (const { path, blast } of arm.blasts) if (blast.maxSpeed * dt > 0.8 * 2 * thin) issues.push({ code: 'tunnelling', message: `${item}'s blast${arm.blasts.length > 1 ? ` (${path})` : ''} can kick a body to ${blast.maxSpeed} m/s, ${(blast.maxSpeed * dt).toFixed(3)} m per step, more than 0.8 x twice the thinnest body ${thin.toFixed(3)} m` });
+    }
     if (m.n === 0) continue;
-    const ratio = mass / lightest;
-    if (ratio > ratioMax) issues.push({ code: 'ammo-ratio', message: `${item} (${mass.toFixed(1)} kg) is ${ratio.toFixed(1)} x the lightest structure body (${lightest.toFixed(1)} kg), over ${ratioMax}` });
-    if (!weapon && item !== 'drop' && isDud(c, mass, 0.5 * mass * v * v)) issues.push({ code: 'dud', warning: true, message: `${item}: one head-on hit at full power (${(0.5 * mass * v * v).toFixed(0)} J) cannot tip any structure body` });
+    if (!arm && item !== 'drop' && isDud(c, mass, 0.5 * mass * v * v)) issues.push({ code: 'dud', warning: true, message: `${item}: one head-on hit at full power (${(0.5 * mass * v * v).toFixed(0)} J) cannot tip any structure body` });
   }
   return issues;
 }

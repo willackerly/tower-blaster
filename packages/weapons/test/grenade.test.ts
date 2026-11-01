@@ -2,9 +2,9 @@
 // blast off, and that a reader observing every few steps with enough
 // lookahead detonates at the same step, bit for bit, as one observing every step.
 import { describe, expect, it } from 'vitest';
-import { type BlastEvent, type BodyDesc, freeFlight, type SceneDesc, type ShapeDesc, type Snapshot, type Vec3 } from '@tb/engine-api';
+import { type BlastEvent, type BodyDesc, freeFlight, type InputEvent, type SceneDesc, type ShapeDesc, type Snapshot, type Vec3 } from '@tb/engine-api';
 import { AvbdReferenceEngine } from '@tb/physics-ref';
-import { checkGrenade, DEFAULT_GRENADE, type GrenadeSpec, Grenades, type GrenadeWorld, surfaceDistance } from '../src/index.ts';
+import { checkGrenade, DEFAULT_GRENADE, detonation, type GrenadeSpec, Grenades, type GrenadeWorld, surfaceDistance } from '../src/index.ts';
 
 const DT = 1 / 60;
 const body = (shape: ShapeDesc, pos: Vec3, linVel: Vec3 = [0, 0, 0]): BodyDesc => ({ shape, pos, rot: [0, 0, 0, 1], linVel, angVel: [0, 0, 0], density: 1, friction: 0.5, restitution: 0, tag: 0 });
@@ -20,7 +20,8 @@ const world = (ground = true): GrenadeWorld => ({ dt: DT, substeps: 1, gravity: 
 const LAUNCH = body(BALL, [0, 1.5, 0], [15, 3, 0]);
 const spec = (g: Partial<GrenadeSpec> = {}): GrenadeSpec => ({ ...DEFAULT_GRENADE, ...g });
 
-interface Run { blasts: BlastEvent[]; snaps: Snapshot[]; pending: number }
+/** events: everything Grenades returned, in order; blasts: its blasts. */
+interface Run { events: InputEvent[]; blasts: BlastEvent[]; snaps: Snapshot[]; pending: number }
 
 /** Fire `grenade` at step 0, observe the state every `cadence` steps, push what Grenades returns. */
 async function run(g: GrenadeSpec, cadence: number, lookahead: number, steps: number, opts: { grenade?: BodyDesc; ground?: boolean } = {}): Promise<Run> {
@@ -28,8 +29,8 @@ async function run(g: GrenadeSpec, cadence: number, lookahead: number, steps: nu
   const e = new AvbdReferenceEngine();
   await e.init(sc);
   const grenades = new Grenades(world(opts.ground ?? true), lookahead);
-  const blasts = grenades.launch(id, 0, g, grenade.shape);
-  e.push([{ step: 0, kind: 'spawn', body: grenade }, ...blasts]);
+  const events = grenades.launch(id, 0, g, grenade.shape);
+  e.push([{ step: 0, kind: 'spawn', body: grenade }, ...events]);
   const shapes = [...sc.bodies, grenade], snaps = [e.snapshot()];
   for (let k = 1; k <= steps; k++) {
     e.step();
@@ -38,9 +39,9 @@ async function run(g: GrenadeSpec, cadence: number, lookahead: number, steps: nu
     const ev = grenades.observe(snaps[k]!, e.stepIndex, shapes);
     for (const b of ev) expect(b.step).toBeGreaterThan(k);
     e.push(ev);
-    blasts.push(...ev);
+    events.push(...ev);
   }
-  return { blasts, snaps, pending: grenades.pending };
+  return { events, blasts: events.filter((b) => b.kind === 'blast'), snaps, pending: grenades.pending };
 }
 
 /** The first step at which the free-flying grenade is within prox of the target cube's surface (or the ground), from the scene alone. */
@@ -58,8 +59,25 @@ function predicted(prox: number, from = 0, launch = LAUNCH, ground = true): numb
 describe('grenades', () => {
   it('a timer fuse is known at launch: its blast is due delay s after the spawn, centred on the grenade', async () => {
     const r = await run(spec({ fuse: 'timer', delay: 0.5 }), 1, 1, 40);
-    expect(r.blasts).toEqual([{ step: 30, kind: 'blast', blast: { centre: { body: 2 }, exclude: [2], ...DEFAULT_GRENADE.blast } }]);
+    expect(r.events).toEqual([{ step: 30, kind: 'blast', blast: { centre: { body: 2 }, exclude: [2], ...DEFAULT_GRENADE.blast } }, { step: 30, kind: 'remove', id: 2 }]);
     expect(r.pending).toBe(0);
+  });
+
+  it('a grenade is spent when it goes off: removed at its blast step, frozen where it went off, tier free', async () => {
+    const j = predicted(DEFAULT_GRENADE.prox);
+    const r = await run(spec(), 1, 1, j + 20);
+    expect(r.events).toEqual(detonation(2, j, DEFAULT_GRENADE));
+    // Still there (in flight) in the state the blast is due after; gone from the next one on.
+    expect(r.snaps[j]!.tier).toBeUndefined();
+    const at = [...r.snaps[j]!.pos.subarray(6, 9)];
+    for (const k of [j + 1, j + 20]) {
+      expect(r.snaps[k]!.tier![2]).toBe(255);
+      expect(r.snaps[k]!.awake[2]).toBe(0);
+      expect([...r.snaps[k]!.pos.subarray(6, 9)]).toEqual(at);
+      expect([...r.snaps[k]!.linVel.subarray(6, 9)]).toEqual([0, 0, 0]);
+    }
+    // The cube it went off by flew as it would have: the blast came first, so the removal does not change its kick.
+    expect(r.snaps[j + 1]!.linVel[0]).toBeGreaterThan(10);
   });
 
   it('a proximity fuse goes off at the first step within prox of the target, whatever the reader cadence (given lookahead)', async () => {
@@ -74,6 +92,17 @@ describe('grenades', () => {
     // The blast threw the target cube away from the grenade, hard (DEFAULT_GRENADE is meant to be special).
     const v = runs[0]!.snaps[j + 1]!.linVel;
     expect(v[0]).toBeGreaterThan(10);
+  });
+
+  it('a proximity fuse does not sense removed bodies (a spent grenade\'s tombstone)', () => {
+    const g = new Grenades(world(false), 0), shapes = [{ shape: BOX }, { shape: BALL }];
+    const snap = (tier?: number[]): Snapshot => ({
+      count: 2, pos: Float64Array.from([0, 5, 0, 0, 5, 0.5]), rot: Float64Array.from([0, 0, 0, 1, 0, 0, 0, 1]),
+      linVel: new Float64Array(6), angVel: new Float64Array(6), awake: Uint8Array.from([1, 1]), ...(tier ? { tier: Uint8Array.from(tier) } : {}),
+    } as Snapshot);
+    g.launch(1, 0, spec({ arm: 0 }), BALL);
+    expect(g.observe(snap([255, 0]), 0, shapes)).toEqual([]);
+    expect(g.observe(snap([0, 0]), 0, shapes)).toEqual(detonation(1, 1, spec({ arm: 0 })));
   });
 
   it('without lookahead a reader observing every step goes off one step late; a sparse one late by up to its gap', async () => {

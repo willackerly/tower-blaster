@@ -402,7 +402,7 @@ export async function coloring(c: ColorCase) {
   };
 }
 
-export interface PlainSnapshot { step: number; pos: number[]; rot: number[]; linVel: number[]; angVel: number[] }
+export interface PlainSnapshot { step: number; pos: number[]; rot: number[]; linVel: number[]; angVel: number[]; awake?: number[]; tier?: number[] }
 
 /** Body `body`'s velocities set to these after `step` steps, as a reference test sets them mid-run (the engine has no setter). */
 export interface Kick { step: number; body: number; linVel: Vec3; angVel: Vec3 }
@@ -427,7 +427,7 @@ export async function simulateGpu(scene: SceneDesc, steps: number, params: Parti
   const snaps: PlainSnapshot[] = [];
   const take = async () => {
     const s = await e.snapshot();
-    snaps.push({ step: e.stepIndex, pos: [...s.pos], rot: [...s.rot], linVel: [...s.linVel], angVel: [...s.angVel] });
+    snaps.push({ step: e.stepIndex, pos: [...s.pos], rot: [...s.rot], linVel: [...s.linVel], angVel: [...s.angVel], awake: [...s.awake], ...(s.tier ? { tier: [...s.tier] } : {}) });
   };
   await take();
   const t0 = performance.now();

@@ -12,6 +12,7 @@ export const GAME_CSS = `
   .kg-hud .title { font-size: 17px; font-weight: 650; margin-bottom: 4px; }
   .kg-hud .row { display: flex; justify-content: space-between; gap: 16px; align-items: center; }
   .kg-hud .crowns { color: #f7b955; font-weight: 650; }
+  .kg-hud .pace { font-size: 12px; font-weight: 650; padding: 1px 6px; border-radius: 4px; background: #3a4459; color: #9fc3ff; vertical-align: 2px; }
   .kg-hud .crowns.pop { animation: kg-pop 0.35s ease-out; }
   .kg-hud .chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0 6px; }
   .kg-hud .chip { padding: 4px 8px; border-radius: 6px; background: #2b3242; }
@@ -34,6 +35,8 @@ export const GAME_CSS = `
   .kg-result .actions { display: flex; gap: 8px; margin-top: 14px; }
   .kg-result button { font: inherit; padding: 7px 12px; border: 0; border-radius: 6px; background: #2b3242; color: #e8ebf2; cursor: pointer; }
   .kg-result button.primary { background: #d8693f; }
+  .kg-hud button.bank { font: inherit; padding: 4px 10px; border: 0; border-radius: 6px; background: #d8693f; color: #fff; cursor: pointer; margin-top: 6px; }
+  .kg-hud .down { color: #f7b955; }
   @keyframes kg-slam { from { opacity: 0; transform: scale(1.6); } to { opacity: 1; transform: scale(1); } }
   @keyframes kg-stamp { from { opacity: 0; transform: rotate(-6deg) scale(2.4); } to { opacity: 1; transform: rotate(-6deg) scale(1); } }
   @keyframes kg-rise { from { opacity: 0; transform: translate(-50%, -44%); } to { opacity: 1; transform: translate(-50%, -50%); } }
@@ -43,7 +46,7 @@ export const GAME_CSS = `
 `;
 
 /** The help line for the game's controls (the game page's, and the viewer's under Keystone rules). */
-export const GAME_HELP = 'hover: aim · click: fire · drag: orbit (the launcher follows you) · wheel: zoom · <kbd>1</kbd>–<kbd>4</kbd> ammo · <kbd>Q</kbd>/<kbd>E</kbd> power · hold <kbd>Space</kbd>: fast · <kbd>R</kbd> retry · <kbd>N</kbd>/<kbd>P</kbd> level · <kbd>M</kbd> mute';
+export const GAME_HELP = 'hover: aim · click: fire · drag: orbit (the launcher follows you) · wheel: zoom · <kbd>1</kbd>–<kbd>4</kbd> ammo · <kbd>Q</kbd>/<kbd>E</kbd> power · hold <kbd>Space</kbd>: fast · <kbd>B</kbd> bank (outcome levels) · <kbd>R</kbd> retry · <kbd>N</kbd>/<kbd>P</kbd> level · <kbd>M</kbd> mute';
 
 /** Add GAME_CSS to the document once. */
 export function installGameStyles(doc: Document = document): void {

@@ -48,7 +48,7 @@
 import type { CombineRule } from '@tb/engine-api';
 import { assertStorageFits, readBuffer } from '@tb/gpu';
 import { RECORD_MODES } from '@tb/physics-ref';
-import { Body, BodyProps, CentreRecord, ColorParams, field, Manifold, RestSlot, SolverBody, SolverContact, SolverParams, SolverRecord, wgslStruct } from '@tb/schema';
+import { Body, BodyProps, CentreRecord, ColorParams, field, Manifold, RestSlot, SolverBody, SolverContact, SolverParams, SolverRecord, TIER, wgslStruct } from '@tb/schema';
 import { MAX_COLORS } from './coloring.ts';
 import { REST_BODY_ARGS, REST_INFO_BYTES, REST_SLOT_ARGS, type RestBinding, type RestitutionConfig, restitutionConstants, restitutionKernels } from './restitution.ts';
 
@@ -141,6 +141,8 @@ fn prepare(@builtin(global_invocation_id) id: vec3u) {
   let i = id.x;
   if (i >= p.n) { return; }
   let b = bodies[i];
+  // A removed body (tier free, engine-api remove.ts): a negative radius, which the broadphase skips.
+  if (((b.flags >> 8u) & 0xffu) == ${TIER.free}u) { sweep[i] = 0.0; spheres[i] = vec4f(b.pos, -1.0); return; }
   let r = props[i].radius;
   let v = length(b.linVel) + p.dt * length(p.gravity) + length(b.angVel) * r;
   var s = 0.0;
@@ -385,6 +387,12 @@ fn initBodies(@builtin(global_invocation_id) id: vec3u) {
   let ws = length(b.angVel);
   if (ws > p.maxAngularSpeed) { b.angVel = b.angVel * (p.maxAngularSpeed / ws); bodies[i].angVel = b.angVel; }
   var s = solver[i];
+  // A removed body (tier free): no target and no guess, so with no contacts it stays exactly where it is, at rest.
+  if (((b.flags >> 8u) & 0xffu) == ${TIER.free}u) {
+    s.x0 = b.pos; s.q0 = b.rot; s.tp = vec3f(0.0); s.tphi = vec3f(0.0); s.dp = vec3f(0.0); s.phi = vec3f(0.0);
+    solver[i] = s;
+    return;
+  }
   let h = p.dt;
   let g = p.gravity;
   let gl2 = dot(g, g);

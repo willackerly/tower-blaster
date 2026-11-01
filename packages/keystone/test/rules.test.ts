@@ -2,8 +2,8 @@ import { describe, expect, it } from 'vitest';
 import { emptySnapshot, type Snapshot } from '@tb/engine-api';
 import { quatFromAxisAngle } from '@tb/geom';
 import {
-  aabbTop, baselineOf, compileLevel, crownDown, DEFAULT_GOLD, GRAVITY, HEIGHT_BINS, heritageBroken, type LevelDef, levelScore, leverage, peOf_mJ,
-  potential_mJ, reduceCpu, type Reductions, SETTLE_CAP, SETTLE_MIN, SETTLE_QUIET, settleUpdate, type ShotOutcome, skyline, stampOf, tier,
+  aabbTop, baselineOf, compileLevel, crownDown, DEFAULT_GOLD, FROZEN_D, FROZEN_SPEED, FROZEN_STEPS, GRAVITY, HEIGHT_BINS, heritageBroken, type LevelDef, levelScore, leverage, peOf_mJ,
+  potential_mJ, quietUnder, reduceCpu, type Reductions, SETTLE_CAP, SETTLE_CAP_V2, SETTLE_MIN, SETTLE_QUIET, settleAllowance, settleCap, type SettleRule, type SettleState, settleUpdate, type ShotOutcome, skyline, stampOf, tier,
 } from '@tb/keystone';
 
 const def: LevelDef = {
@@ -88,7 +88,7 @@ describe('reductions', () => {
 });
 
 describe('settling', () => {
-  const red = (step: number, speed: number, awake = 1): Reductions => ({ step, nAwake: awake, maxSpeed: speed, maxAngSpeed: 0, pe_mJ: 0, displaced: 0, outOfLot: 0, heightHist: new Uint32Array(64), impacts: new Uint32Array(48), nMoving: 0, movingBox: new Float64Array(6) });
+  const red = (step: number, speed: number, awake = 1): Reductions => ({ step, nAwake: awake, maxSpeed: speed, maxAngSpeed: 0, pe_mJ: 0, displaced: 0, outOfLot: 0, heightHist: new Uint32Array(64), impacts: new Uint32Array(48), nMoving: 0, movingBox: new Float64Array(6), ammoSpeed: 0 });
   function run(speeds: number[], spawn = 0) {
     let st = { quietSince: null as number | null };
     for (let i = 0; i < speeds.length; i++) {
@@ -110,6 +110,118 @@ describe('settling', () => {
     expect(u.settled).toBe(false);
     expect(settleUpdate(st, red(SETTLE_MIN, 0, 0), 0).settled).toBe(true);
     expect(run(Array(SETTLE_CAP + 5).fill(2))).toBe(SETTLE_CAP);
+  });
+});
+
+describe('settle v2: a few stragglers per thousand', () => {
+  const N = 10_000, A = settleAllowance(N);
+  /** Reductions with `moving` structure bodies moving (the fastest at 1 m/s) and live ammo at ammoSpeed. */
+  const red = (step: number, moving: number, ammoSpeed = 0): Reductions => ({
+    step, nAwake: N, maxSpeed: moving ? 1 : 0.01, maxAngSpeed: 0, pe_mJ: 0, displaced: 0, outOfLot: 0, heightHist: new Uint32Array(64), impacts: new Uint32Array(48),
+    nMoving: moving, movingBox: new Float64Array(6), ammoSpeed,
+  });
+  function run(moving: (i: number) => number, steps: number, rule: SettleRule = 'v2', n = N, ammo: (i: number) => number = () => 0) {
+    let st = { quietSince: null as number | null };
+    for (let i = 0; i < steps; i++) {
+      const u = settleUpdate(st, red(1 + i, moving(i), ammo(i)), 0, rule, n);
+      st = u.state;
+      if (u.settled) return 1 + i;
+    }
+    return null;
+  }
+  it('allows max(2, floor(n / 1000)) moving bodies', () => {
+    expect([0, 1, 999, 1000, 2999, 3000, 9999, 10_000, 100_000].map(settleAllowance)).toEqual([2, 2, 2, 2, 2, 3, 9, 10, 100]);
+  });
+  it('settles with k stragglers at the allowance, and not with one more', () => {
+    for (const n of [50, 2500, N]) {
+      const a = settleAllowance(n);
+      expect(run(() => a, 100, 'v2', n)).toBe(SETTLE_QUIET);
+      expect(run(() => a + 1, 100, 'v2', n)).toBeNull();
+    }
+  });
+  it(`counts ${SETTLE_QUIET} consecutive quiet steps, and one step over the allowance restarts them`, () => {
+    expect(run((i) => (i < 40 ? 500 : A), 200)).toBe(40 + SETTLE_QUIET);
+    expect(run((i) => (i < 40 ? 500 : i === 60 ? A + 1 : A), 200)).toBe(61 + SETTLE_QUIET);
+  });
+  it('waits for live ammo however quiet the structure is: a ball in flight moves no block', () => {
+    expect(run(() => 0, 200, 'v2', N, (i) => (i < 50 ? 12 : 0))).toBe(50 + SETTLE_QUIET);
+    // Under QUIET_SPEED (a ball rolling slowly on a top) counts as quiet, as in v1.
+    expect(run(() => 0, 200, 'v2', N, () => 0.049)).toBe(SETTLE_QUIET);
+  });
+  it(`caps at ${SETTLE_CAP_V2} steps (v1: ${SETTLE_CAP})`, () => {
+    expect(settleCap('v1')).toBe(SETTLE_CAP);
+    expect(settleCap('v2')).toBe(SETTLE_CAP_V2);
+    expect(run(() => 5000, SETTLE_CAP_V2 + 5)).toBe(SETTLE_CAP_V2);
+    expect(run(() => 5000, SETTLE_CAP_V2 + 5, 'v1')).toBe(SETTLE_CAP);
+  });
+  it('v1 ignores nMoving and ammoSpeed: every awake body quiet, as before', () => {
+    // A state v2 calls quiet (stragglers within the allowance) and v1 does not, and the reverse.
+    const loose = red(1, A); // maxSpeed 1 m/s
+    expect(quietUnder('v2', loose, N)).toBe(true);
+    expect(quietUnder('v1', loose, N)).toBe(false);
+    const still = { ...red(1, 0), maxSpeed: 0.01, nMoving: A + 1 };
+    expect(quietUnder('v1', still, N)).toBe(true);
+    expect(quietUnder('v2', still, N)).toBe(false);
+    // Nothing awake is quiet under both.
+    expect(quietUnder('v2', { ...red(1, A + 5, 3), nAwake: 0 }, N)).toBe(true);
+  });
+});
+
+describe('settle v3: v2, or a frozen structure', () => {
+  const N = 1000, A = settleAllowance(N);
+  /** A wall ringing: `moving` bodies (over the allowance) at maxSpeed, the collapse D and displaced as given, live ammo at ammoSpeed. */
+  const red = (step: number, o: { moving?: number; maxSpeed?: number; displaced?: number; ammoSpeed?: number } = {}): Reductions => ({
+    step, nAwake: N, maxSpeed: o.maxSpeed ?? 0.3, maxAngSpeed: 0, pe_mJ: 0, displaced: o.displaced ?? 40, outOfLot: 0, heightHist: new Uint32Array(64), impacts: new Uint32Array(48),
+    nMoving: o.moving ?? 150, movingBox: new Float64Array(6), ammoSpeed: o.ammoSpeed ?? 0,
+  });
+  /** The step a run of `steps` settles at (null: not within them), with reductions r(i) and D d(i). */
+  function run(r: (i: number) => Reductions, d: (i: number) => number, steps: number, rule: SettleRule = 'v3') {
+    let st: SettleState = { quietSince: null };
+    for (let i = 0; i < steps; i++) {
+      const u = settleUpdate(st, r(i), 0, rule, N, d(i));
+      st = u.state;
+      if (u.settled) return 1 + i;
+    }
+    return null;
+  }
+  it(`a ringing wall (150 bodies at 0.3 m/s, nothing changing) settles after ${FROZEN_STEPS} frozen steps; v2 holds it to the cap`, () => {
+    expect(run((i) => red(1 + i), () => 0.0694, SETTLE_CAP_V2 + 5)).toBe(FROZEN_STEPS);
+    expect(run((i) => red(1 + i), () => 0.0694, SETTLE_CAP_V2 + 5, 'v2')).toBe(SETTLE_CAP_V2);
+  });
+  it(`a fall (a body over ${FROZEN_SPEED} m/s) restarts the frozen run`, () => {
+    expect(run((i) => red(1 + i, { maxSpeed: i === 30 ? FROZEN_SPEED : 0.3 }), () => 0.07, 400)).toBe(31 + FROZEN_STEPS);
+    expect(run((i) => red(1 + i, { maxSpeed: 0.6 }), () => 0.07, SETTLE_CAP_V2 + 5)).toBe(SETTLE_CAP_V2);
+  });
+  it(`a slow slump (D gaining over ${FROZEN_D} in a run) or a slide (displaced growing) is not frozen`, () => {
+    // D up 2e-6 a step: 1.2e-4 over the run, so each run breaks before its end.
+    expect(run((i) => red(1 + i), (i) => 0.07 + 2e-6 * i, SETTLE_CAP_V2 + 5)).toBe(SETTLE_CAP_V2);
+    // 1.5e-6 a step: 9e-5 over the run, within FROZEN_D: settles.
+    expect(run((i) => red(1 + i), (i) => 0.07 + 1.5e-6 * i, 400)).toBe(FROZEN_STEPS);
+    expect(run((i) => red(1 + i, { displaced: 40 + Math.floor(i / 50) }), () => 0.07, SETTLE_CAP_V2 + 5)).toBe(SETTLE_CAP_V2);
+    // D falling back counts as change too.
+    expect(run((i) => red(1 + i), (i) => 0.07 - 2e-6 * i, SETTLE_CAP_V2 + 5)).toBe(SETTLE_CAP_V2);
+  });
+  it(`live ammo counts as any body: a ball in flight (over ${FROZEN_SPEED} m/s) holds it, one rolling slowly with nothing changing does not`, () => {
+    // Reductions.maxSpeed counts live ammo; ammoSpeed alone is what v2 reads.
+    expect(run((i) => red(1 + i, { ammoSpeed: i < 300 ? 12 : 0.087, maxSpeed: i < 300 ? 12 : 0.3 }), () => 0.07, 600)).toBe(300 + FROZEN_STEPS);
+    expect(run((i) => red(1 + i, { ammoSpeed: 0.087 }), () => 0.07, 600)).toBe(FROZEN_STEPS);
+    expect(run((i) => red(1 + i, { ammoSpeed: 0.087 }), () => 0.07, SETTLE_CAP_V2 + 5, 'v2')).toBe(SETTLE_CAP_V2);
+  });
+  it('is v2 where v2 settles: stragglers within the allowance settle after the quiet run, not the frozen one', () => {
+    expect(run((i) => red(1 + i, { moving: A, maxSpeed: 1 }), (i) => 0.07 + 0.01 * i, 200)).toBe(SETTLE_QUIET);
+    expect(settleCap('v3')).toBe(SETTLE_CAP_V2);
+  });
+});
+
+describe('ammoSpeed', () => {
+  it('is the fastest live awake spawned body; the structure and dead ammo do not count', () => {
+    const s = atHome(3), n = c.meta.n;
+    s.awake[0] = 1; s.linVel.set([5, 0, 0], 0); // structure: not ammo
+    s.awake[n] = 1; s.pos.set([0, 2, 0], 3 * n); s.linVel.set([0, 0, 2], 3 * n); // live
+    s.awake[n + 1] = 1; s.pos.set([0, 0.1, 0], 3 * (n + 1)); s.linVel.set([7, 0, 0], 3 * (n + 1)); // on the ground: dead
+    s.awake[n + 2] = 0; s.pos.set([0, 3, 0], 3 * (n + 2)); s.linVel.set([9, 0, 0], 3 * (n + 2)); // asleep
+    expect(reduceCpu(s, null, c, baselineOf(s, c, 0), 1).ammoSpeed).toBe(2);
+    expect(reduceCpu(atHome(), null, c, baselineOf(atHome(), c, 0), 1).ammoSpeed).toBe(0);
   });
 });
 
@@ -141,7 +253,7 @@ describe('objectives and score', () => {
   it('stamps', () => {
     expect([[1, 2], [1, 3], [2, 4], [3, 4], [4, 4], [5, 4], [6, 4], [9, 4]].map(([s, p]) => stampOf(s!, p!))).toEqual(['ACE', 'ACE', 'EAGLE', 'BIRDIE', 'PAR', 'BOGEY', 'DOUBLE BOGEY', '+5']);
   });
-  const shot = (o: Partial<ShotOutcome>): ShotOutcome => ({ ke: 1000, dPE_mJ: 0, leverage: 0, crownsDown: 0, crownsTotal: 0, heritageNew: 0, displaced: 0, outOfLot: 0, pe_mJ: 0, spawnStep: 0, settleStep: 0, ...o });
+  const shot = (o: Partial<ShotOutcome>): ShotOutcome => ({ ke: 1000, yield: 0, dPE_mJ: 0, leverage: 0, crownsDown: 0, crownsTotal: 0, heritageNew: 0, displaced: 0, outOfLot: 0, pe_mJ: 0, spawnStep: 0, settleStep: 0, ...o });
   it('reproduces the worked example: one marble on a par-1 level, L = 48, six crowns', () => {
     const s = levelScore({ ...def, par: 1 }, [shot({ ke: 1000, dPE_mJ: 48_000_000, crownsDown: 6 })], true, c.meta.n);
     expect(s.lines).toEqual([{ label: 'Strokes', value: 3000 }, { label: 'Leverage', value: Math.floor(300 * Math.log2(49)) }, { label: 'Combo', value: 1050 }]);
