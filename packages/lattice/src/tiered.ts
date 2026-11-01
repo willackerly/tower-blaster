@@ -31,11 +31,13 @@ import { CUBE_ROTATIONS, nearestCubeRotation } from './symmetry.ts';
 import { TIER } from '@tb/schema';
 
 /**
- * Blasts (BlastEvent) are refused for now: inside the radius they would have to
- * wake dormant cells (wakeSphere) and kick them, and the tiers do neither yet.
+ * Blasts (BlastEvent) and removals (RemoveEvent) are refused for now: inside a
+ * blast's radius the tiers would have to wake dormant cells (wakeSphere) and
+ * kick them, and a removed dormant cell would have to leave the lattice.
  */
 function spawnsOnly(events: readonly InputEvent[]): SpawnEvent[] {
-  if (events.some((e) => e.kind !== 'spawn')) throw new Error('TieredEngine: blast inputs are not supported yet');
+  const other = events.find((e) => e.kind !== 'spawn');
+  if (other) throw new Error(`TieredEngine: ${other.kind} inputs are not supported yet`);
   return events as SpawnEvent[];
 }
 

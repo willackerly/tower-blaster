@@ -1,7 +1,9 @@
 // Grenades: a fired body with a fuse that ends in a blast centred on itself
-// (engine-api blast.ts, centre { body }). Pure logic over snapshots: the
-// caller fires the grenade's spawn, tells Grenades about it (launch), and
-// feeds it the states it observes (observe); both return the blasts to push.
+// (engine-api blast.ts, centre { body }), after which the grenade is spent:
+// a RemoveEvent at the same step takes it out of the world (engine-api
+// remove.ts). Pure logic over snapshots: the caller fires the grenade's
+// spawn, tells Grenades about it (launch), and feeds it the states it
+// observes (observe); both return the events to push (blast, then removal).
 //
 // Fuses:
 // - timer: the blast is due `delay` s after the spawn step, known at launch,
@@ -27,7 +29,7 @@
 // the grenade counts as its bounding sphere. A coarse test against the
 // bounding sphere of the predicted path keeps observe() at one distance
 // per body for the far ones.
-import { type BlastEvent, checkBlast, freeFlight, type ShapeDesc, type Snapshot, type Vec3 } from '@tb/engine-api';
+import { checkBlast, type InputEvent, freeFlight, type ShapeDesc, type Snapshot, type Vec3 } from '@tb/engine-api';
 import { boundingRadius } from '@tb/geom';
 
 export type Fuse = 'timer' | 'prox' | 'proxTimer';
@@ -123,27 +125,28 @@ export class Grenades {
 
   /**
    * A grenade was fired: body `id`, whose spawn is due at engine step `step`.
-   * Returns the input to push after the spawn: a timer fuse's blast; nothing for the others.
+   * Returns the input to push after the spawn: a timer fuse's blast and removal; nothing for the others.
    */
-  launch(id: number, step: number, spec: GrenadeSpec, shape: ShapeDesc): BlastEvent[] {
+  launch(id: number, step: number, spec: GrenadeSpec, shape: ShapeDesc): InputEvent[] {
     checkGrenade(spec);
-    if (spec.fuse === 'timer') return [blastOf(id, step + stepsOf(spec.delay, this.world.dt), spec)];
+    if (spec.fuse === 'timer') return detonation(id, step + stepsOf(spec.delay, this.world.dt), spec);
     this.live.push({ id, spec, radius: boundingRadius(shape), armStep: step + stepsOf(spec.arm, this.world.dt) });
     return [];
   }
 
   /**
-   * The blasts set off by the state after `step` steps (s), each due after `step`.
+   * The blasts (each followed by its grenade's removal) set off by the state
+   * after `step` steps (s), each due after `step`.
    * shapes: every body's shape by id, at least s.count of them.
    */
-  observe(s: Snapshot, step: number, shapes: readonly { shape: ShapeDesc }[]): BlastEvent[] {
-    const out: BlastEvent[] = [];
+  observe(s: Snapshot, step: number, shapes: readonly { shape: ShapeDesc }[]): InputEvent[] {
+    const out: InputEvent[] = [];
     this.live = this.live.filter((g) => {
       // Not spawned yet as of this state.
       if (g.id >= s.count) return true;
       const j = this.trigger(g, s, step, shapes);
       if (j === null) return true;
-      out.push(blastOf(g.id, g.spec.fuse === 'prox' ? j : j + stepsOf(g.spec.delay, this.world.dt), g.spec));
+      out.push(...detonation(g.id, g.spec.fuse === 'prox' ? j : j + stepsOf(g.spec.delay, this.world.dt), g.spec));
       return false;
     });
     return out;
@@ -180,9 +183,12 @@ export class Grenades {
   }
 }
 
-/** The blast of grenade `id`, due at `step`: centred on it, not pushing it. */
-function blastOf(id: number, step: number, spec: GrenadeSpec): BlastEvent {
-  return { step, kind: 'blast', blast: { centre: { body: id }, exclude: [id], ...spec.blast } };
+/** Grenade `id` going off at `step`: its blast (centred on it, not pushing it), then its removal. */
+export function detonation(id: number, step: number, spec: GrenadeSpec): InputEvent[] {
+  return [
+    { step, kind: 'blast', blast: { centre: { body: id }, exclude: [id], ...spec.blast } },
+    { step, kind: 'remove', id },
+  ];
 }
 
 /** Distance from point q to the surface of body i (0 inside), from its pose in s. */
