@@ -4,7 +4,7 @@
 // (docs/design/viewer-superset.md, step F). A key's bad value is refused with
 // a message naming it; keys a page doesn't know are left to it (the look's
 // real.* knobs, the viewer's own).
-import { isRackItem, itemRef, LEVELS, type LevelDef, MAX_RACK, RACK_ITEM_NAMES, type RackItem, readShots, SCORINGS, type Scoring, type Shot, weaponOf } from '@tb/keystone';
+import { checkPhysics, isRackItem, itemRef, LEVELS, type LevelDef, MAX_RACK, type PhysicsBlock, RACK_ITEM_NAMES, type RackItem, readShots, SCORINGS, type Scoring, type Shot, weaponOf } from '@tb/keystone';
 import { LOOKS } from '@tb/render';
 import { type EngineKind, engineKind } from './engines.ts';
 import { paceFeel, type PaceFeel } from './pacing.ts';
@@ -14,10 +14,26 @@ export const GAME_LOOK = 'hazy';
 
 /**
  * Rule overrides from the URL (docs/game/spectacle-mode.md, section 10): ?keystone.scoring=par|outcome
- * scores any level either way, ?keystone.autobank=1|0 ends an outcome level at its first clear (or not).
- * Each is part of the level it makes (its hash), so stars cast for the level do not apply to it.
+ * scores any level either way, ?keystone.autobank=1|0 ends an outcome level at its first clear (or not),
+ * ?keystone.iterations, ?keystone.gapSlop and ?keystone.bounce (e, or off) change its physics block.
+ * Each is part of the level it makes (its hash), and the level is marked custom: stars cast for the
+ * authored level do not apply to it.
  */
-export interface LevelRules { scoring?: Scoring; autobank?: boolean }
+export interface LevelRules { scoring?: Scoring; autobank?: boolean; physics?: PhysicsBlock }
+
+const PHYSICS_KEYS = { 'keystone.iterations': 'iterations', 'keystone.gapSlop': 'gapSlop', 'keystone.bounce': 'bounce', 'keystone.presettle': 'presettle' } as const;
+/** Every URL key levelRules reads. */
+export const LEVEL_RULE_KEYS = ['keystone.scoring', 'keystone.autobank', ...Object.keys(PHYSICS_KEYS)] as readonly string[];
+
+/** The URL keys for r, as levelRules reads them back. */
+export function writeLevelRules(r: LevelRules, q: URLSearchParams): void {
+  if (r.scoring !== undefined) q.set('keystone.scoring', r.scoring);
+  if (r.autobank !== undefined) q.set('keystone.autobank', r.autobank ? '1' : '0');
+  for (const [key, field] of Object.entries(PHYSICS_KEYS)) {
+    const v = r.physics?.[field];
+    if (v !== undefined) q.set(key, v === null ? 'off' : String(v));
+  }
+}
 
 export function levelRules(q: URLSearchParams): LevelRules {
   const r: LevelRules = {};
@@ -30,13 +46,30 @@ export function levelRules(q: URLSearchParams): LevelRules {
     if (ab !== '0' && ab !== '1') throw new Error(`keystone.autobank must be 0 or 1: ${ab}`);
     r.autobank = ab === '1';
   }
+  for (const [key, field] of Object.entries(PHYSICS_KEYS)) {
+    const v = q.get(key);
+    if (v === null) continue;
+    const x = field === 'bounce' && v === 'off' ? null : v.trim() === '' ? NaN : Number(v);
+    const one: PhysicsBlock = { [field]: x };
+    try { checkPhysics(one, 'keystone'); } catch (e) { throw new Error(`${key}: ${(e as Error).message.replace(/^keystone\.\w+ /, '')}`); }
+    r.physics = { ...r.physics, ...one };
+  }
   return r;
 }
 
 /** def with the URL's rule overrides (none: def itself). */
 export function withRules(def: LevelDef, r: LevelRules): LevelDef {
-  if (r.scoring === undefined && r.autobank === undefined) return def;
-  return { ...def, ...(r.scoring !== undefined ? { scoring: r.scoring } : {}), ...(r.autobank !== undefined ? { autobank: r.autobank } : {}) };
+  if (r.scoring === undefined && r.autobank === undefined && r.physics === undefined) return def;
+  return {
+    ...def, custom: true,
+    ...(r.scoring !== undefined ? { scoring: r.scoring } : {}), ...(r.autobank !== undefined ? { autobank: r.autobank } : {}),
+    ...(r.physics !== undefined ? { physics: { ...def.physics, ...r.physics } } : {}),
+  };
+}
+
+/** def as played on engine `kind`: custom when its stars were cast on another engine. */
+export function onEngine(def: LevelDef, kind: string): LevelDef {
+  return def.stars?.engine !== undefined && def.stars.engine !== kind && !def.custom ? { ...def, custom: true } : def;
 }
 
 export interface GameParams {

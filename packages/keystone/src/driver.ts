@@ -3,7 +3,7 @@
 // share this loop, so a recorded session replays through the same code.
 import { type BodyDesc, type InputEvent, type PhysicsEngine, type Snapshot, type SpawnEvent, spawnedBodies } from '@tb/engine-api';
 import { Arsenal } from './arsenal.ts';
-import type { CompiledLevel } from './level.ts';
+import { type CompiledLevel, physicsOf } from './level.ts';
 import { CpuObserver } from './rules.ts';
 import { type Feedback, Session } from './session.ts';
 import type { Shot } from './shots.ts';
@@ -82,7 +82,9 @@ export class Driver {
    */
   async reset(): Promise<void> {
     await this.engine.init(this.level.scene);
-    for (let i = 0; i < PRESETTLE_STEPS; i++) await this.engine.step();
+    // PRESETTLE_STEPS unless the level's physics block sets its own.
+    const presettle = physicsOf(this.level.def).presettle;
+    for (let i = 0; i < presettle; i++) await this.engine.step();
     this.snapshot = await this.engine.snapshot();
     this.snapshotStep = this.engine.stepIndex;
     this.session = new Session(this.level, this.snapshot.pos);

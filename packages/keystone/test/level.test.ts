@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { combineFriction, TAG_BALL } from '@tb/engine-api';
-import { AMMO_RATIO, AMMO_RATIO_MAX, compileLevel, decodeTag, encodeTag, isDud, KEYSTONE_GRENADE, type LevelDef, LEVELS, MATERIALS, MAX_BODIES, MAX_RACK, type RackItem, ROLES, validateLevel } from '@tb/keystone';
+import { AMMO_RATIO, AMMO_RATIO_MAX, compileLevel, decodeTag, encodeTag, isDud, KEYSTONE_GRENADE, type LevelDef, LEVELS, ENGINE_MAX_BODIES, MATERIALS, MAX_RACK, type RackItem, ROLES, validateLevel } from '@tb/keystone';
 
 const tiny = (parts: LevelDef['parts'], extra: Partial<LevelDef> = {}): LevelDef => ({
   id: 'T', name: 't', version: 1, world: 0, parts, lot: { min: [-6, -6], max: [6, 6] }, crownLine: 1,
@@ -157,7 +157,7 @@ describe('validateLevel: rack items (spectacle-mode.md section 7)', () => {
   });
   it('capacity: the structure fits the engine but not with every rack item fired; count when the structure alone does not fit', () => {
     const wall = (nz: number, rack: RackItem[]) => tiny([{ kind: 'block', at: [-25, 0, -25], size: [50, 1, nz], material: 'stone' }], { rack, lot: { min: [-30, -30], max: [30, 30] }, launcher: { radius: 40, y: 1, dropY: 10 } });
-    expect(MAX_BODIES).toBe(2500);
+    expect(ENGINE_MAX_BODIES.rapier).toBe(2500);
     expect(codes(wall(49, ['marble']))).not.toContain('capacity'); // 2450 + 1
     expect(codes(wall(50, ['marble']))).toContain('capacity'); // 2500 + 1
     expect(codes(wall(50, ['marble']))).not.toContain('count');

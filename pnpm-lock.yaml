@@ -150,6 +150,9 @@ importers:
       '@tb/geom':
         specifier: workspace:*
         version: link:../geom
+      '@tb/scenarios':
+        specifier: workspace:*
+        version: link:../scenarios
       '@tb/weapons':
         specifier: workspace:*
         version: link:../weapons

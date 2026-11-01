@@ -3,6 +3,7 @@ export * from './rack.ts';
 export * from './arsenal.ts';
 export * from './shots.ts';
 export * from './level.ts';
+export * from './scenario-part.ts';
 export * from './rules.ts';
 export * from './outcome.ts';
 export * from './session.ts';

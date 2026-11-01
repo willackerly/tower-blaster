@@ -1,16 +1,17 @@
 // The rules package stays engine-, DOM- and clock-free: it may import only the
 // engine contract, scalar geometry, the weapons catalogue and logic (the rack's
-// items) and itself, and never read time or randomness, so the same inputs
-// always give the same game. @tb/weapons is held to the same rules here, so
-// the guarantee holds through it.
+// items), the scenarios (scenario parts, G2.3) and itself, and never read time
+// or randomness, so the same inputs always give the same game. @tb/weapons and
+// @tb/scenarios are held to the same rules here, so the guarantee holds through them.
 import { readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
-const ALLOWED = ['@tb/engine-api', '@tb/geom', '@tb/weapons'];
+const ALLOWED = ['@tb/engine-api', '@tb/geom', '@tb/weapons', '@tb/scenarios'];
 const packages = [
   { name: '@tb/keystone', dir: fileURLToPath(new URL('../src/', import.meta.url)), allowed: ALLOWED },
   { name: '@tb/weapons', dir: fileURLToPath(new URL('../../weapons/src/', import.meta.url)), allowed: ['@tb/engine-api', '@tb/geom'] },
+  { name: '@tb/scenarios', dir: fileURLToPath(new URL('../../scenarios/src/', import.meta.url)), allowed: ['@tb/engine-api', '@tb/geom'] },
 ];
 
 for (const pkg of packages) {

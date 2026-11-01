@@ -7,7 +7,7 @@
 import { LEVELS } from '@tb/keystone';
 import { createDevice } from '@tb/gpu';
 import { lookByName, parseRealOptions, Renderer, SnapshotSource } from '@tb/render';
-import { parseGameParams, withRules } from './params.ts';
+import { onEngine, parseGameParams, withRules } from './params.ts';
 import { type GameHandle, newGameHandle, playKeystone, playLine } from './play.ts';
 import { GAME_HELP, installGameStyles } from './ui.ts';
 
@@ -33,9 +33,10 @@ async function main() {
   const q = new URLSearchParams(location.search);
   const { level, rack, rules, engine, feel, look, shots, offscreen } = parseGameParams(q);
   // ?keystone.rack replaces the opening level's rack (its def, so retry keeps it); other levels keep their own.
-  // The rule overrides (keystone.scoring, keystone.autobank) apply to every level.
+  // The rule overrides (keystone.scoring, keystone.autobank, physics) apply to every level; stars cast on
+  // another engine do not apply (onEngine).
   const start = LEVELS.findIndex((l) => l.id === level.id);
-  const levels = LEVELS.map((l, i) => (i === start ? level : withRules(l, rules)));
+  const levels = LEVELS.map((l, i) => onEngine(i === start ? level : withRules(l, rules), engine));
   handle.feel = feel;
   handle.engine = engine;
 
