@@ -136,11 +136,12 @@ describe('game page', () => {
     const { page, errors } = o;
     await ready(page);
     expect(await page.evaluate(() => window.__game.feel.frames)).toBe('half');
-    await page.waitForFunction(() => window.__game.draws.drawn + window.__game.draws.skipped > 10, undefined, { timeout: 60_000 });
-    // Headless rAF runs at 60 Hz or less, which is never decimated (frame-rate.ts factorFor): every frame is drawn.
+    // How many frames a headless rAF skips depends on the rate it runs at (60 Hz or less is never decimated,
+    // an unthrottled one may be: frame-rate.ts factorFor), so only the governor's state is checked here.
+    await page.waitForFunction(() => window.__game.draws.drawn > 10, undefined, { timeout: 60_000 });
     const draws = await page.evaluate(() => window.__game.draws);
     expect(draws.decimating).toBe(true);
-    expect(draws.drawn).toBeGreaterThan(10);
+    expect(draws.skipped).toBeLessThanOrEqual(3 * draws.drawn + 3); // MAX_FACTOR 4: at most 3 skipped per drawn
     const stats = await page.evaluate(() => window.__game.capture());
     expect(stats!.bodyFraction).toBeGreaterThan(0.02);
     expect(errors).toEqual([]);
