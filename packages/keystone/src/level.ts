@@ -99,8 +99,9 @@ export interface LevelDef {
   autobank?: boolean;
   /**
    * How a shot settles (rules.ts SETTLE_RULES; URL key keystone.settle). Default by scoring (settleOf):
-   * v1 for par levels, whose lines are pinned on it, and v2 for outcome levels, whose big structures
-   * keep a few blocks rocking long after the collapse is over. Part of the hash when not the default.
+   * v1 for par levels, whose lines are pinned on it, and v3 for outcome levels, whose big structures
+   * keep blocks rocking long after the collapse is over. In the hash unless par's v1 or outcome's v2
+   * (the rules those levels were hashed under before v3), so a v3 level hashes apart from its v2 self.
    */
   settle?: SettleRule;
   /** The physics the level plays at (default Keystone's: PHYSICS_DEFAULTS). Part of the level hash, so stars cast at one setting never show at another. */
@@ -177,8 +178,8 @@ export function castStars(c: CompiledLevel): StarsDef | undefined {
 }
 
 export const scoringOf = (d: LevelDef): Scoring => d.scoring ?? 'par';
-/** The settle rule a level plays by: its own, else v1 for par scoring and v2 for outcome scoring. */
-export const settleOf = (d: LevelDef): SettleRule => d.settle ?? (scoringOf(d) === 'outcome' ? 'v2' : 'v1');
+/** The settle rule a level plays by: its own, else v1 for par scoring and v3 for outcome scoring. */
+export const settleOf = (d: LevelDef): SettleRule => d.settle ?? (scoringOf(d) === 'outcome' ? 'v3' : 'v1');
 /** Throws unless v is a settle rule, naming `where`. */
 export function checkSettle(v: unknown, where = 'settle'): SettleRule {
   if (!(SETTLE_RULES as readonly unknown[]).includes(v)) throw new Error(`${where} must be ${SETTLE_RULES.join(' or ')}: ${String(v)}`);
@@ -308,8 +309,10 @@ export function compileLevel(def: LevelDef): CompiledLevel {
   const { solutions: _omit, stars: _stars, custom: _custom, ...geometry } = def;
   if (geometry.scoring === 'par') delete geometry.scoring;
   if (geometry.autobank === false) delete geometry.autobank;
-  // The scoring's own settle rule hashes as absent: levels hash as before settle v2 existed.
-  if (geometry.settle !== undefined && geometry.settle === settleOf({ ...def, settle: undefined })) delete geometry.settle;
+  // The settle rule a level plays by hashes as absent when it is the one its scoring used before v3 (par v1, outcome v2), so those
+  // levels hash as they did; any other, outcome levels' default v3 included, is written out, so stars cast under v2 never show under v3.
+  const settleRule = settleOf(def);
+  if (settleRule === (scoringOf(def) === 'outcome' ? 'v2' : 'v1')) delete geometry.settle; else geometry.settle = settleRule;
   const physics = physicsKey(geometry.physics);
   if (physics) geometry.physics = physics; else delete geometry.physics;
   geometry.parts = geometry.parts.map((pt) => (pt.kind === 'scenario' ? scenarioKey(pt) : pt));

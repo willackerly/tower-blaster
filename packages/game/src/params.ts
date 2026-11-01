@@ -15,7 +15,7 @@ export const GAME_LOOK = 'hazy';
 /**
  * Rule overrides from the URL (docs/game/spectacle-mode.md, section 10): ?keystone.scoring=par|outcome
  * scores any level either way, ?keystone.autobank=1|0 ends an outcome level at its first clear (or not),
- * ?keystone.settle=v1|v2 picks how a shot settles (default: v1 for par levels, v2 for outcome levels),
+ * ?keystone.settle=v1|v2|v3 picks how a shot settles (default: v1 for par levels, v3 for outcome levels),
  * ?keystone.iterations, ?keystone.gapSlop, ?keystone.bounce (e, or off), ?keystone.presettle and
  * ?keystone.pairsPerBody (the GPU pair room per body, in place of every pair) change its physics block.
  * Each is part of the level it makes (its hash), and the level is marked custom: stars cast for the

@@ -201,12 +201,13 @@ describe('Session, settle rules', () => {
     se.fire(marble, 0);
     return (play(se, obs, s, creeping(steps), 0).find((f) => f.t === 'settled') as Extract<Feedback, { t: 'settled' }> | undefined)?.step ?? null;
   };
-  it('par levels settle by v1 and outcome levels by v2, unless the level says', () => {
+  it('par levels settle by v1 and outcome levels by v3, unless the level says', () => {
     expect(settleOf(def)).toBe('v1');
-    expect(settleOf(out)).toBe('v2');
+    expect(settleOf(out)).toBe('v3');
+    expect(settleOf({ ...out, settle: 'v2' })).toBe('v2');
     expect(settleOf({ ...out, settle: 'v1' })).toBe('v1');
     expect(settleOf({ ...def, settle: 'v2' })).toBe('v2');
-    expect(new Session(compileLevel(out)).settleRule).toBe('v2');
+    expect(new Session(compileLevel(out)).settleRule).toBe('v3');
   });
   it('a lone creeping block holds a v1 shot to its cap; v2 lets it go after the quiet run', () => {
     expect(settleStep(out, SETTLE_CAP_V2 + 10)).toBe(SETTLE_QUIET);
@@ -223,12 +224,17 @@ describe('Session, settle rules', () => {
     }
     expect(at).toBe(SETTLE_CAP_V2);
   });
-  it('the scoring\'s own rule hashes as absent; the other one is a different level', () => {
+  it('par\'s v1 and outcome\'s v2 hash as absent (as before v3); outcome\'s default v3 and every other rule is a different level', () => {
     const h = (d: LevelDef) => compileLevel(d).hash;
-    expect(h({ ...out, settle: 'v2' })).toBe(h(out));
+    // The hashes these levels had before v3 (main at 2a4a436, where outcome levels defaulted to v2).
+    expect(h(def)).toBe('d10e20fcf6e35479');
+    expect(h({ ...out, settle: 'v2' })).toBe('c5fa2b075688c510');
     expect(h({ ...def, settle: 'v1' })).toBe(h(def));
+    expect(h({ ...out, settle: 'v3' })).toBe(h(out));
+    expect(h(out)).not.toBe(h({ ...out, settle: 'v2' })); // stars cast under v2 never show under v3
     expect(h({ ...out, settle: 'v1' })).not.toBe(h(out));
     expect(h({ ...def, settle: 'v2' })).not.toBe(h(def));
-    expect(() => compileLevel({ ...def, settle: 'v3' as never })).toThrow(/settle must be v1 or v2: v3/);
+    expect(h({ ...def, settle: 'v3' })).not.toBe(h({ ...def, settle: 'v2' }));
+    expect(() => compileLevel({ ...def, settle: 'v9' as never })).toThrow(/settle must be v1 or v2 or v3: v9/);
   });
 });

@@ -68,7 +68,7 @@ export class Session {
   watchIdx: Int32Array;
   /** Par (end at clear) or outcome (end at a bank or an empty rack; LevelDef.autobank ends at the first clear too). */
   readonly scoring: Scoring;
-  /** How this level's shots settle (settleOf: v1 for par levels, v2 for outcome levels unless the level says). */
+  /** How this level's shots settle (settleOf: v1 for par levels, v3 for outcome levels unless the level says). */
   readonly settleRule: SettleRule;
   /** Collapse fraction D now, for the HUD (while a shot runs), and whether the objective was met at the last settle. */
   liveCollapse = 0;
@@ -172,7 +172,7 @@ export class Session {
     const total = o.red.impacts.reduce((a, x) => a + x, 0);
     if (total) out.push({ t: 'impacts', step, hist: o.red.impacts, total });
 
-    const s = settleUpdate(L.settle, o.red, L.spawnStep, this.settleRule, m.n);
+    const s = settleUpdate(L.settle, o.red, L.spawnStep, this.settleRule, m.n, this.liveCollapse);
     L.settle = s.state;
     if (!s.settled || (hold && o.step - L.spawnStep < settleCap(this.settleRule))) return out;
 
