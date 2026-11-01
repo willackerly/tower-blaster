@@ -14,7 +14,7 @@ import { isRackItem, type LevelDef, RACK_ITEM_NAMES, type RackItem, readShots, t
 import { encodeLevelParam, parseLevelDef } from './level-file.ts';
 import { defaultFraming, parseViewerConfig, type ViewerConfig, writeCamera, writeFraming } from './params.ts';
 import { checkWeapon, DEFAULT_GRENADE, type GrenadeSpec, isWeaponSpec, WEAPON_NAME, WEAPON_SPEC_VERSION, type WeaponSpec } from '@tb/weapons';
-import { type LevelRules, writeLevelRules } from '@tb/game';
+import { DEFAULT_FEEL, type LevelRules, writeLevelRules } from '@tb/game';
 import { DEFAULT_PROJECTILE, parseGrenade, type Projectile, writeGrenade, writeProjectile } from './projectile.ts';
 
 export const SCENE_FILE_FORMAT = 'tower-blaster/viewer-scene';
@@ -58,7 +58,7 @@ export interface SceneFile {
    * absent for none; scoring, autobank, settle and physics: the game's rule overrides, ViewerConfig.keystone,
    * absent when not overridden); absent: the sandbox.
    */
-  rules?: { mode: 'keystone'; hitstop: boolean; slowmo: boolean; shots?: Shot[]; rack?: RackItem[] } & LevelRules;
+  rules?: { mode: 'keystone'; hitstop: boolean; slowmo: boolean; budget?: number; tailskip?: boolean; follow?: boolean; shots?: Shot[]; rack?: RackItem[] } & LevelRules;
   /** How the scene is framed without a camera, and the field of view (ViewerConfig.view; absent, as in files saved before it: today's DEFAULT_FRAMING, so their saved camera shows at 45 rather than 50 degrees). */
   view: Framing;
   /** Collision sound: on, material and every knob (absent in older files: off, the defaults). */
@@ -81,7 +81,7 @@ export function sceneFile(c: ViewerConfig, name: string, camera: CameraPose | nu
     look: { preset: c.look, real: { ...REAL_DEFAULTS, ...c.real } },
     camera,
     view: { ...c.view },
-    ...(c.rules === 'keystone' ? { rules: { mode: c.rules, hitstop: c.feel.hitStop, slowmo: c.feel.slowMo, ...(c.shots?.length ? { shots: c.shots.map((x) => ({ ...x })) } : {}), ...(c.rack ? { rack: [...c.rack] } : {}), ...structuredClone(c.keystone) } } : {}),
+    ...(c.rules === 'keystone' ? { rules: { mode: c.rules, hitstop: c.feel.hitStop, slowmo: c.feel.slowMo, ...(c.feel.budgetMs !== DEFAULT_FEEL.budgetMs ? { budget: c.feel.budgetMs } : {}), ...(c.feel.tailSkip ? {} : { tailskip: false }), ...(c.feel.follow ? {} : { follow: false }), ...(c.shots?.length ? { shots: c.shots.map((x) => ({ ...x })) } : {}), ...(c.rack ? { rack: [...c.rack] } : {}), ...structuredClone(c.keystone) } } : {}),
     sound: { ...c.sound },
   };
 }
@@ -236,10 +236,13 @@ export function parseSceneFile(text: string): { config: ViewerConfig; name: stri
   }
   if (root.rules !== undefined) {
     const r = object(root.rules, 'rules');
-    only(r, ['mode', 'hitstop', 'slowmo', 'shots', 'rack', 'scoring', 'autobank', 'settle', 'physics'], 'rules');
+    only(r, ['mode', 'hitstop', 'slowmo', 'budget', 'tailskip', 'follow', 'shots', 'rack', 'scoring', 'autobank', 'settle', 'physics'], 'rules');
     q.set('rules', str(r.mode, 'rules.mode'));
     if (r.hitstop !== undefined) q.set('keystone.hitstop', bool(r.hitstop, 'rules.hitstop') ? '1' : '0');
     if (r.slowmo !== undefined) q.set('keystone.slowmo', bool(r.slowmo, 'rules.slowmo') ? '1' : '0');
+    if (r.budget !== undefined) q.set('keystone.budget', String(num(r.budget, 'rules.budget')));
+    if (r.tailskip !== undefined) q.set('keystone.tailskip', bool(r.tailskip, 'rules.tailskip') ? '1' : '0');
+    if (r.follow !== undefined) q.set('keystone.follow', bool(r.follow, 'rules.follow') ? '1' : '0');
     if (r.shots !== undefined) q.set('keystone.shots', shotsText(r.shots));
     // The rack as its URL key (rackOf checks the names against the level).
     if (r.rack !== undefined) {
