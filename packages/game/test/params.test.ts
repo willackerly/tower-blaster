@@ -1,7 +1,7 @@
 // The game page's URL keys (params.ts), which the viewer reads too under
 // rules=keystone: defaults, accepted spellings, and refused values named.
 import { describe, expect, it } from 'vitest';
-import { L1, L3, type Shot, writeShots } from '@tb/keystone';
+import { B1, L1, L2, L3, type Shot, writeShots } from '@tb/keystone';
 import { compileLevel } from '@tb/keystone';
 import { GAME_LOOK, levelRules, onEngine, parseGameParams, withRules } from '../src/params.ts';
 
@@ -42,8 +42,15 @@ describe('game URL keys', () => {
     expect(() => parse('?keystone.rack=w-big')).toThrow(/keystone.rack: L1 has no weapons.big for w-big/);
   });
 
+  it('opens a big level by id with its outcome scoring; a chamber level keeps par', () => {
+    expect(parse('?level=b1').level).toBe(B1);
+    expect(parse('?level=B1').level.scoring).toBe('outcome');
+    expect(parse('?level=L2').level).toBe(L2);
+    expect(parse('?level=L2').level.scoring ?? 'par').toBe('par');
+  });
+
   it('refuses bad values, naming the key', () => {
-    expect(() => parse('?level=L99')).toThrow(/unknown level L99; known: L1, L2/);
+    expect(() => parse('?level=L99')).toThrow(/unknown level L99; known: L1, L2, L3, L4, L5, B1/);
     expect(() => parse('?engine=physx')).toThrow(/unknown engine physx: use rapier or gpu/);
     expect(() => parse('?keystone.hitstop=yes')).toThrow(/keystone.hitstop must be 0 or 1: yes/);
     expect(() => parse('?keystone.slowmo=')).toThrow(/keystone.slowmo must be 0 or 1: $/);

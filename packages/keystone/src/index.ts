@@ -9,5 +9,6 @@ export * from './outcome.ts';
 export * from './session.ts';
 export * from './driver.ts';
 export * from './record.ts';
+export * from './big-levels.ts';
 export * from './levels.ts';
 export * from './cast-play.ts';

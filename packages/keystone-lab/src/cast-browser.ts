@@ -8,7 +8,8 @@ import { platform } from 'node:os';
 import type { Page } from 'playwright';
 import { createServer } from 'vite';
 import { CLOSE_TIMEOUT_MS, closeWithin, launchChromium, WEBGPU_ARGS } from '@tb/testkit';
-import { type CastPlay, readShots, writeShots } from '@tb/keystone';
+import { type CastPlay, type LevelDef, readShots, writeShots } from '@tb/keystone';
+import type { RestReport } from '../../game/src/cast-page.ts';
 import type { CastPlayer } from './cast.ts';
 
 export interface BrowserCastOptions {
@@ -28,6 +29,8 @@ export interface BrowserCastPlayer extends CastPlayer {
   software: boolean;
   /** Wall time of each play in the page, ms, in play order. */
   readonly playMs: number[];
+  /** The level at rest on the page's engine (the cast page's rest: pre-settle, then `steps` with nothing fired). */
+  rest(level: LevelDef, steps: number): Promise<RestReport>;
   close(): Promise<string[]>;
 }
 
@@ -78,6 +81,7 @@ export async function openBrowserCastPlayer(opts: BrowserCastOptions = {}): Prom
       }
       return out;
     },
+    rest: (level, steps) => page.evaluate(([lv, n]) => window.__cast.rest(lv, n), [level, steps] as const),
     close,
   };
 }

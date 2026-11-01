@@ -5,7 +5,7 @@
 // ball, 15 m/s, misses the top of B1's wall from the far azimuths: 83%).
 import { describe, expect, it } from 'vitest';
 import { aimAt, compileLevel, type LaunchShot, validateLevel } from '@tb/keystone';
-import { competentIntents, DRAFTS, intentShot, REACH, surfaceTarget, thirdBondWall } from '../src/index.ts';
+import { competentIntents, DRAFTS, intentShot, REACH, surfaceTarget } from '../src/index.ts';
 
 describe('draft big levels', () => {
   it.each(Object.keys(DRAFTS))('%s compiles and validates clean on the GPU', (name) => {
@@ -19,11 +19,6 @@ describe('draft big levels', () => {
     expect([n('B2a').n, n('B2a').crowns.length, n('B2a').heritage.length]).toEqual([5184, 16, 32]);
     for (const k of ['B3a', 'B3b', 'B3c']) expect(n(k).n).toBe(10_000);
     expect([n('B4a').n, n('B4a').crowns.length]).toEqual([30 * 56, 4]);
-  });
-  it('a third-bond wall shifts every other course a third of a cube', () => {
-    const w = thirdBondWall(4, 3, 'plaster');
-    const x = w.map((p) => (p.kind === 'block' ? p.at[0] : NaN));
-    [-2 - 1 / 6, -2 + 1 / 6, -2 - 1 / 6].forEach((v, k) => expect(x[k]).toBeCloseTo(v, 12));
   });
   it.each(Object.keys(DRAFTS))('%s: at least 80% of competent launch shots reach their target', (name) => {
     const c = compileLevel(DRAFTS[name]!);

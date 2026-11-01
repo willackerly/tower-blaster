@@ -17,7 +17,7 @@ import { parseSpec } from '@tb/bench';
 import { type BodyDesc, DEFAULT_BLAST_MAX_SPEED, type SceneDesc, type Vec3 } from '@tb/engine-api';
 import { checkLine, type EngineKind, GAME_LOOK, gameLevel, LEVEL_RULE_KEYS, type LevelRules, levelRules, lineOf, lookName, paceFeel, type PaceFeel, rackOf, withRules, writeLevelRules } from '@tb/game';
 import { boundingRadius } from '@tb/geom';
-import { AVBD_ITERATIONS, compileLevel, LEVELS, type LevelDef, PRESETTLE_STEPS, type RackItem, scenarioLevel, type Shot, writeShots } from '@tb/keystone';
+import { AVBD_ITERATIONS, compileLevel, findLevel, type LevelDef, PRESETTLE_STEPS, type RackItem, scenarioLevel, type Shot, writeShots } from '@tb/keystone';
 import { type AvbdParams, froudeParams } from '@tb/physics-ref';
 import { parseRealOptions, type RealOptions, writeRealOptions } from '@tb/render';
 import { bounceBody, bounceScene, buildScenario, SCENARIOS } from '@tb/scenarios';
@@ -29,7 +29,7 @@ import { DEFAULT_PROJECTILE, defaultBlockDensity, parseProjectile, type Projecti
 export interface ViewerConfig {
   engine: string;
   /**
-   * A Keystone level (L1 to L5, @tb/keystone LEVELS) to load instead of the scenario: its bodies,
+   * A built-in Keystone level (L1 to L5 or B1 on: @tb/keystone LEVELS, BIG_LEVELS) to load instead of the scenario: its bodies,
    * materials, friction rule (min) and sleep, in metres (scale 1: its cubes are its unit, 0.5 m).
    * null: the scenario. While set, scenario, params and seed are unused (and kept, for the panel).
    */
@@ -195,8 +195,8 @@ export function carriedFraming(view: Framing, from: { scenario: string; level: s
 /** The real density a block of density 1 in c's scene stands for, kg/m^3 (Projectile.blockDensity, else the scene's default). */
 export const blockDensityOf = (c: Pick<ViewerConfig, 'projectile' | 'scenario' | 'level' | 'customLevel'>) => c.projectile.blockDensity ?? defaultBlockDensity(c.scenario, c.level ?? (c.customLevel ? c.customLevel.id : null));
 
-/** The Keystone level with this id (any case), or undefined. */
-export const levelDef = (id: string): LevelDef | undefined => LEVELS.find((l) => l.id === id.toUpperCase());
+/** The built-in Keystone level (chamber L1 to L5 or big B1 on) with this id (any case), or undefined. */
+export const levelDef = (id: string): LevelDef | undefined => findLevel(id);
 
 /** Steps run before a scene shows when the URL sets none: a level's (a scenario's under rules=keystone too), as the game plays it; none for a scenario. */
 export const defaultPresettle = (level: string | null, rules: Rules = 'sandbox') => (level || rules === 'keystone' ? PRESETTLE_STEPS : 0);
