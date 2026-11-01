@@ -2,7 +2,9 @@
 // While a shot runs it moves the player's orbit (target and distance; never
 // yaw, pitch or field of view, which stay the player's) toward a frame of the
 // moving structure bodies (Reductions.movingBox, padded), with a critically
-// damped spring, so a collapse that spreads stays in view; once the shot has
+// damped spring, so a collapse that spreads stays in view. The box only grows
+// during a shot (every box seen since fire, together), so the camera never
+// dives in on the last few stragglers of a 10k collapse; once the shot has
 // settled it eases back to where the player had the camera when they fired.
 // Any orbit, pan or zoom by the player during the shot ends it for that shot,
 // leaving the camera where it is. Render-only: nothing here reaches the physics.
@@ -57,6 +59,8 @@ export class FollowCam {
   private home: { target: V3; distance: number } | null = null;
   /** Spring velocities: target x, y, z, distance. */
   private vel = [0, 0, 0, 0];
+  /** Every moving box this shot, together (null until enough moved): what the camera frames. */
+  private seen: Float64Array | null = null;
   /** The player moved the camera during this shot: follow is off until the next. */
   grabbed = false;
   /** Whether the camera is being moved now (following, or easing back). */
@@ -67,21 +71,27 @@ export class FollowCam {
     this.home = { target: [...o.target] as V3, distance: o.distance };
     this.vel = [0, 0, 0, 0];
     this.grabbed = false;
+    this.seen = null;
   }
   /** The player orbited, panned or zoomed: leave the camera to them. */
   grab() { this.grabbed = true; }
   /** A level load or retry: nothing to follow or return to. */
-  reset() { this.home = null; this.vel = [0, 0, 0, 0]; this.grabbed = false; }
+  reset() { this.home = null; this.vel = [0, 0, 0, 0]; this.grabbed = false; this.seen = null; }
 
   /**
-   * Move o by dt seconds. While `running` with `moving` structure bodies in `box` (at least
-   * FOLLOW_MIN_MOVING), head for followGoal (box cut to `clip`); otherwise (the shot settled, or too
-   * little moves) head home. Once home after the shot, stop.
+   * Move o by dt seconds. Each box with `moving` structure bodies (at least FOLLOW_MIN_MOVING) joins
+   * the shot's box; while `running` with a box, head for followGoal of it (cut to `clip`), so the
+   * frame grows as the collapse spreads and holds as it dies down; otherwise (nothing has moved
+   * enough yet, or the shot is over) head home. Once home after the shot, stop.
    */
   update(o: Orbit, dt: number, running: boolean, box: ArrayLike<number> | null, moving: number, unit: number, clip?: ArrayLike<number>): void {
     if (!this.active || !(dt > 0)) return;
     const home = this.home!;
-    const goal = (running && box && moving >= FOLLOW_MIN_MOVING ? followGoal(o, box, unit, home.distance, clip) : null) ?? home;
+    if (running && box && moving >= FOLLOW_MIN_MOVING && box.length >= 6 && Array.from(box).every(Number.isFinite)) {
+      const u = this.seen ??= Float64Array.of(Infinity, Infinity, Infinity, -Infinity, -Infinity, -Infinity);
+      for (let k = 0; k < 3; k++) { u[k] = Math.min(u[k]!, box[k]!); u[3 + k] = Math.max(u[3 + k]!, box[3 + k]!); }
+    }
+    const goal = (running && this.seen ? followGoal(o, this.seen, unit, home.distance, clip) : null) ?? home;
     for (let k = 0; k < 3; k++) [o.target[k], this.vel[k]] = spring(o.target[k]!, this.vel[k]!, goal.target[k]!, FOLLOW_RATE, dt);
     [o.distance, this.vel[3]] = spring(o.distance, this.vel[3]!, goal.distance, FOLLOW_RATE, dt);
     // Back home after the shot: land exactly and stop, so aiming starts from the player's own view.
