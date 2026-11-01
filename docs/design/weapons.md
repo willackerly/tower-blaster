@@ -69,7 +69,7 @@ A    = a quarter of the body's surface (its mean silhouette): 2 (hx hy + hy hz +
 | Limit | Consequence | Fix (planned step) |
 |---|---|---|
 | the speed cap can slow a body | a body already faster than `maxSpeed` inside the radius leaves slower than it came | intended (it guards the sweep); `maxSpeed: Infinity` for scenes that want none |
-| pair pool is 16 per body | a blasted packed tower can need more pairs; overflow drops contacts silently | assert `pairsRequired <= pairsWritten` in blast tests; raise `pairsPerBody` for weapon scenes |
+| pair pool is 16 per body | the default grenade inside the default S1 tower needs 13.5 per body (`packages/physics-gpu/test/pair-room.test.ts`); stronger knobs or faster packed blocks can need more, and then the viewer's HUD says so in red with a Rebuild button | done: drops are loud everywhere (docs/plan.md, GPU pair buffer); GPU blast tests fail on any dropped pair |
 | no occlusion | a body behind another is pushed as hard | none planned |
 
 ## Plan (each step lands with its tests)

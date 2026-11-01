@@ -15,13 +15,14 @@ export const GAME_LOOK = 'hazy';
 /**
  * Rule overrides from the URL (docs/game/spectacle-mode.md, section 10): ?keystone.scoring=par|outcome
  * scores any level either way, ?keystone.autobank=1|0 ends an outcome level at its first clear (or not),
- * ?keystone.iterations, ?keystone.gapSlop and ?keystone.bounce (e, or off) change its physics block.
+ * ?keystone.iterations, ?keystone.gapSlop, ?keystone.bounce (e, or off), ?keystone.presettle and
+ * ?keystone.pairsPerBody (the GPU pair room per body, in place of every pair) change its physics block.
  * Each is part of the level it makes (its hash), and the level is marked custom: stars cast for the
  * authored level do not apply to it.
  */
 export interface LevelRules { scoring?: Scoring; autobank?: boolean; physics?: PhysicsBlock }
 
-const PHYSICS_KEYS = { 'keystone.iterations': 'iterations', 'keystone.gapSlop': 'gapSlop', 'keystone.bounce': 'bounce', 'keystone.presettle': 'presettle' } as const;
+const PHYSICS_KEYS = { 'keystone.iterations': 'iterations', 'keystone.gapSlop': 'gapSlop', 'keystone.bounce': 'bounce', 'keystone.presettle': 'presettle', 'keystone.pairsPerBody': 'pairsPerBody' } as const;
 /** Every URL key levelRules reads. */
 export const LEVEL_RULE_KEYS = ['keystone.scoring', 'keystone.autobank', ...Object.keys(PHYSICS_KEYS)] as readonly string[];
 

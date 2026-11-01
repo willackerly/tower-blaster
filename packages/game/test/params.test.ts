@@ -76,6 +76,8 @@ describe('rule overrides', () => {
     expect(() => parse('?keystone.bounce=2')).toThrow(/keystone.bounce: must be from 0 to 1, or null for off/);
     expect(parse('?keystone.presettle=30').level.physics).toEqual({ presettle: 30 });
     expect(() => parse('?keystone.presettle=7000')).toThrow(/keystone.presettle: must be a whole number from 0 to 6000: 7000/);
+    expect(parse('?keystone.pairsPerBody=2').level).toMatchObject({ custom: true, physics: { pairsPerBody: 2 } });
+    for (const bad of ['0', '257', '2.5', '']) expect(() => parse(`?keystone.pairsPerBody=${bad}`), bad).toThrow(/keystone.pairsPerBody: must be a whole number from 1 to 256/);
   });
   it('a level cast on another engine plays as custom there', () => {
     const cast = { ...L1, stars: { metric: 'collapse' as const, t2: 0.2, t3: 0.4, engine: 'gpu' } };
