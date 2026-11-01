@@ -33,7 +33,7 @@ import { buildScenario, KAPLA_SCALE, SCENARIOS } from '@tb/scenarios';
 import { autoSubsteps, worldScene } from '@tb/viewer';
 import type { GpuEngineOptions } from '../src/index.ts';
 import { loadBundle, openWebGPU, type WebGPUSession } from '@tb/testkit';
-import type { RestPlan, RestResult } from './rest-page.ts';
+import type { RestPlan, RestResult, RestSample } from './rest-page.ts';
 
 export const STRUCTURES = ['wall', 'city', 'kapla'] as const;
 export type Structure = (typeof STRUCTURES)[number];
@@ -49,6 +49,8 @@ export interface RestCase {
   frames: number;
   /** Kapla only: engine steps a frame, in place of autoSubsteps(KAPLA_SCALE) (7); the E5 hold study (kapla-hold.test.ts) sweeps it. */
   substeps?: number;
+  /** Record the structure every 60 frames (rest-page RestSample; REST_TRACE=1 turns it on for every case). */
+  trace?: boolean;
 }
 
 export const caseName = (c: RestCase) => `${c.structure} ${c.n} ${c.mode}, ${c.iterations} it${c.substeps === undefined ? '' : ` x ${c.substeps} substeps`}, gapSlop ${c.gapSlop ? 'on' : 'off'}, ${c.frames} frames`;
@@ -86,7 +88,7 @@ export function restSetup(c: RestCase): { scene: SceneDesc; params: Partial<Avbd
   }
   return {
     scene, params, opts,
-    plan: { frames: c.frames, substeps, watchFrom: struck ? Math.floor(c.frames / 2) : Math.min(120, Math.floor(c.frames / 4)), structure: scene.bodies.length, tol: 0.1 * thick, sampleEvery: 60 },
+    plan: { frames: c.frames, substeps, watchFrom: struck ? Math.floor(c.frames / 2) : Math.min(120, Math.floor(c.frames / 4)), structure: scene.bodies.length, tol: 0.1 * thick, sampleEvery: 60, trace: c.trace ?? false },
   };
 }
 
@@ -101,7 +103,11 @@ export function restMatrix(sizes: number[], frames: number): RestCase[] {
 /**
  * Registers a vitest suite (this file's browser, beforeAll / afterAll, one test per case): each case
  * logs a line starting "rest:" with what it measured (also appended to the file REST_LOG names) and
- * fails naming the bound it broke. REST_ONLY=<text> keeps the cases whose name contains it.
+ * fails naming the bound it broke. REST_ONLY=<text> keeps the cases whose name contains it. A case
+ * whose bodies moved also logs the largest movers ("rest-movers:", where each was at the window's
+ * start and end), and a traced case (RestCase.trace, or REST_TRACE=1) logs one "rest-trace:" line
+ * every 60 frames from the start, so a failure shows when the motion began and whether it is a
+ * late topple (bodies falling from height) or creep (bodies sliding at their height).
  */
 export function restSuite(cases: RestCase[]): void {
   let gpu: WebGPUSession | null = null;
@@ -116,12 +122,25 @@ export function restSuite(cases: RestCase[]): void {
   describe('GPU AVBD engine: structures stay at rest at the game\'s settings', () => {
     it.for(mine.map((c) => [caseName(c), c] as const))('%s', { timeout: 3_600_000 }, async ([, c], ctx) => {
       if (!gpu) return ctx.skip();
-      const { scene, params, opts, plan } = restSetup(c);
+      const { scene, params, opts, plan } = restSetup(process.env.REST_TRACE === '1' ? { ...c, trace: true } : c);
       const r: RestResult = await gpu.page.evaluate(([s, p, o, pl]) => (window as unknown as { __rest: typeof import('./rest-page.ts') }).__rest.restRun(s, p, o, pl), [scene, params, opts, plan] as const);
       const f = (x: number) => x.toExponential(2);
       const line = `rest: ${caseName(c)} (${r.adapter}): window from frame ${plan.watchFrom}, max move ${f(r.maxDisp)} (tol ${plan.tol.toFixed(3)}), ${r.moved} moved; speed end ${f(r.endSpeed)} window max ${f(r.windowSpeed)}; top ${r.topFrom.toFixed(3)} -> ${r.topEnd.toFixed(3)}; mean y ${r.meanY.map((y) => y.toFixed(3)).join(' -> ')}; limits ${limitsHit(r.health).length}; ${(r.wallMs / 1000).toFixed(1)} s, ${r.stepsPerSecond.toFixed(0)} steps/s`;
-      console.log(line);
-      if (process.env.REST_LOG) appendFileSync(process.env.REST_LOG, `${line}\n`);
+      const v = (p: number[]) => `(${p.map((x) => x.toFixed(2)).join(', ')})`;
+      const lines = [
+        line,
+        ...(r.movers.length ? [`rest-movers: ${caseName(c)}: ${r.movers.map((m) => `#${m.body} ${f(m.disp)} ${v(m.from)} -> ${v(m.end)}`).join('; ')}`] : []),
+        ...r.trace.map((s: RestSample) => `rest-trace: ${caseName(c)}: frame ${s.frame} max speed ${f(s.maxSpeed)} fast ${s.fast} mean y ${s.meanY.toFixed(3)} top ${s.top.toFixed(3)}`),
+      ];
+      for (const l of lines) console.log(l);
+      if (process.env.REST_LOG) appendFileSync(process.env.REST_LOG, `${lines.join('\n')}\n`);
+      if (plan.trace) {
+        // The trace samples the run every sampleEvery frames; when the run ends on a sample, that sample is the end state.
+        expect(r.trace.map((s) => s.frame)).toEqual(Array.from({ length: Math.floor(plan.frames / plan.sampleEvery) }, (_, k) => (k + 1) * plan.sampleEvery));
+        const last = r.trace.at(-1);
+        if (last && last.frame === plan.frames) expect([last.meanY, last.top, last.maxSpeed]).toEqual([r.meanY[2], r.topEnd, r.endSpeed]);
+      }
+      expect(r.movers.length).toBe(Math.min(r.moved, 8));
       expect(r.error).toBeNull();
       expect(limitsHit(r.health).map((l) => l.message)).toEqual([]);
       expect({ moved: r.moved, maxDispUnderTol: r.maxDisp <= plan.tol, topHeld: Math.abs(r.topEnd - r.topFrom) <= plan.tol }).toEqual({ moved: 0, maxDispUnderTol: true, topHeld: true });
