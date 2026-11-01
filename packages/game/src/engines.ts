@@ -5,7 +5,7 @@
 import { RapierEngine } from '@tb/adapter-rapier';
 import type { PhysicsEngine, ShapeDesc } from '@tb/engine-api';
 import { AVBD_GAP_SLOP, AVBD_ITERATIONS, ammoBody, type CompiledLevel, type DriverOptions } from '@tb/keystone';
-import { GpuAvbdEngine, type GpuEngineOptions } from '@tb/physics-gpu';
+import { everyPairPerBody, GpuAvbdEngine, type GpuEngineOptions } from '@tb/physics-gpu';
 
 export const ENGINES = ['rapier', 'gpu'] as const;
 export type EngineKind = (typeof ENGINES)[number];
@@ -37,11 +37,18 @@ export function engineKind(param: string | null): EngineKind {
 
 export const radiusOf = (s: ShapeDesc): number => (s.kind === 'sphere' ? s.radius : Math.hypot(...s.half));
 
-/** Room the GPU engine reserves at init for every body the rack can fire. */
-export function gpuOptions(c: CompiledLevel): Required<Pick<GpuEngineOptions, 'capacity' | 'maxRadius'>> {
+/**
+ * Room the GPU engine reserves at init for every body the rack can fire, and a pair buffer that holds
+ * every pair of them (everyPairPerBody), so no shot can drop a contact: the game shows no engine
+ * limits. Its blocks are 0.5 m and the broadphase's sweep is in metres, so a packed block moving at
+ * about 3.3 m/s already reaches past its 26 neighbours, inside the rack's speeds. A level of tens to
+ * a hundred-odd bodies costs at most a few thousand slots more than the default 16 per body.
+ */
+export function gpuOptions(c: CompiledLevel): Required<Pick<GpuEngineOptions, 'capacity' | 'maxRadius' | 'pairsPerBody'>> {
   const rack = c.def.rack;
   const maxRadius = Math.max(0, ...rack.map((k) => radiusOf(ammoBody(k, c.frame.unit, [0, 0, 0], [0, 0, 0]).shape)));
-  return { capacity: c.scene.bodies.length + rack.length, maxRadius };
+  const capacity = c.scene.bodies.length + rack.length;
+  return { capacity, maxRadius, pairsPerBody: everyPairPerBody(capacity) };
 }
 
 /**

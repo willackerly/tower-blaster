@@ -7,8 +7,9 @@
 import { describe, expect, it } from 'vitest';
 import type { Page } from 'playwright';
 import { limitsHit } from '@tb/engine-api';
-import { LEVELS, type Shot } from '@tb/keystone';
+import { compileLevel, LEVELS, type Shot } from '@tb/keystone';
 import { summarize } from '@tb/metrics';
+import { gpuOptions } from '../src/engines.ts';
 import { gamePage, playShots } from './page.ts';
 
 const MINUTES = 60_000;
@@ -44,6 +45,9 @@ export function parOnGpu(id: string, more: { before?(page: Page): Promise<void>;
       expect({ phase: live.phase, strokes: live.strokes, heritageBroken: live.heritageBroken }).toEqual({ phase: 'cleared', strokes: def.par, heritageBroken: 0 });
       expect(health.steps).toBe(live.step);
       expect(limitsHit(health).map((l) => l.message)).toEqual([]);
+      // The page's engine took the game's room for every pair of the level's bodies and rack (gpuOptions).
+      const { capacity } = gpuOptions(compileLevel(def));
+      expect(pairs.room).toBeGreaterThanOrEqual((capacity * (capacity - 1)) / 2);
       // The page reports its own errors (fail()) rather than throwing them.
       expect(await page.evaluate(() => ({ status: window.__game.status, error: window.__game.error }))).toEqual({ status: 'running', error: undefined });
       await more.after?.(page, shots);

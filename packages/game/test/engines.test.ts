@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { AVBD_GAP_SLOP, AVBD_ITERATIONS, compileLevel, L1, L4 } from '@tb/keystone';
+import { AVBD_GAP_SLOP, AVBD_ITERATIONS, compileLevel, L1, L4, LEVELS } from '@tb/keystone';
+import { everyPairPerBody } from '@tb/physics-gpu';
 import { driverOptions, engineKind, gpuOptions, makeEngine } from '../src/engines.ts';
 
 describe('engine choice', () => {
@@ -22,9 +23,18 @@ describe('engine choice', () => {
   });
   it('reserves a slot per rack item and room for the largest ammo', () => {
     const c1 = compileLevel(L1), h = c1.frame.unit;
-    expect(gpuOptions(c1)).toEqual({ capacity: c1.meta.n + c1.def.rack.length, maxRadius: 0.5 * h }); // cannonballs
+    const capacity = c1.meta.n + c1.def.rack.length;
+    expect(gpuOptions(c1)).toEqual({ capacity, maxRadius: 0.5 * h, pairsPerBody: everyPairPerBody(capacity) }); // cannonballs
     const c4 = compileLevel(L4);
     expect(c4.def.rack).toContain('drop');
     expect(gpuOptions(c4).maxRadius).toBeCloseTo(Math.sqrt(3) * 0.4 * c4.frame.unit, 12); // the anvil's corner
+  });
+  it('sizes the pair buffer for every pair of the level\'s bodies and rack, in live play and replay alike', () => {
+    for (const def of LEVELS) {
+      const c = compileLevel(def), o = gpuOptions(c);
+      expect(o.pairsPerBody * o.capacity, def.id).toBeGreaterThanOrEqual((o.capacity * (o.capacity - 1)) / 2);
+      // makeEngine builds live play's engine and replay()'s: both take it.
+      expect(makeEngine('gpu', c).info.variant, def.id).toMatchObject({ capacity: o.capacity, pairsPerBody: o.pairsPerBody });
+    }
   });
 });
