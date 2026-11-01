@@ -8,7 +8,7 @@
 // building blocks (outcomeLevel, thirdBondWall, BOMB, RAM) are @tb/keystone's
 // (big-levels.ts), so a winning draft becomes a level unchanged.
 import { buildScenario } from '@tb/scenarios';
-import { BOMB, type LevelDef, type MaterialName, outcomeLevel as outcome, type Part, RAM, type RackItem, type ScenarioPart, thirdBondWall } from '@tb/keystone';
+import { BOMB, cityLevel, type LevelDef, type MaterialName, outcomeLevel as outcome, type Part, RAM, type RackItem, type ScenarioPart, thirdBondWall } from '@tb/keystone';
 
 /** The tallest tower of an S14 build (its tag) and its height in cubes. */
 function tallestTower(params: Record<string, number>, seed: number): { tag: number; height: number; count: number } {
@@ -22,14 +22,8 @@ function tallestTower(params: Record<string, number>, seed: number): { tag: numb
 const B1_WALL = thirdBondWall(40, 25, 'plaster');
 const b1 = (id: string, rack: RackItem[], extra: Partial<LevelDef> = {}) => outcome(id, 'Long Wall', B1_WALL, [20.2, 0.5], 25, rack, extra);
 
-const S4_CITY = (material: MaterialName, F: number, street: number): ScenarioPart => ({ kind: 'scenario', id: 'S4', params: { N: 10000, F, H: 25, street }, material });
-/** S4's footprint half-extent in cells for N 10000, H 25: ceil(sqrt(towers)) per side. */
-function cityHalf(F: number, street: number): number {
-  const side = Math.ceil(Math.sqrt(Math.ceil(10000 / (F * F * 25))));
-  return (side * (F + street) - street) / 2 + 0.5;
-}
 const b3 = (id: string, material: MaterialName, F: number, street: number, rack: RackItem[], extra: Partial<LevelDef> = {}) =>
-  outcome(id, 'Ten Thousand', [S4_CITY(material, F, street)], [cityHalf(F, street), cityHalf(F, street)], 25, rack, extra);
+  cityLevel(id, 'Ten Thousand', material, F, street, rack, extra);
 
 const B2_PARAMS = { towers: 25, W: 4, D: 4, H: 16, street: 4, vary: 0.4 };
 const B2_SEED = 3;

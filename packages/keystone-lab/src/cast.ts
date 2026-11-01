@@ -106,6 +106,34 @@ export interface Intent { item: RackItem; dir: number; yFrac: number; lateral: n
 
 /** Exposed side faces by direction: body indices whose face in that direction has nothing within 0.3 h in front of it. */
 const exposedCache = new WeakMap<CompiledLevel, number[][]>();
+const targetCache = new WeakMap<CompiledLevel, number[][]>();
+
+/**
+ * The exposed faces a competent player aims at: on a crowns level, those of the bodies under or beside
+ * the crowns (their horizontal box grown by one cell, so the crown tower or column), since that is what
+ * the level asks to bring down; on any other level, every exposed face. Falls back to every exposed face
+ * when no crown body shows one.
+ */
+export function targetFaces(c: CompiledLevel): number[][] {
+  const hit = targetCache.get(c);
+  if (hit) return hit;
+  const all = exposedFaces(c), m = c.meta;
+  let out = all;
+  if (c.def.objective.kind === 'crowns' && m.crowns.length) {
+    const g = c.frame.unit * c.frame.pitch;
+    let x0 = Infinity, x1 = -Infinity, z0 = Infinity, z1 = -Infinity;
+    for (const i of m.crowns) {
+      x0 = Math.min(x0, m.home[3 * i]! - m.half[3 * i]!); x1 = Math.max(x1, m.home[3 * i]! + m.half[3 * i]!);
+      z0 = Math.min(z0, m.home[3 * i + 2]! - m.half[3 * i + 2]!); z1 = Math.max(z1, m.home[3 * i + 2]! + m.half[3 * i + 2]!);
+    }
+    const under = (i: number) => m.home[3 * i]! > x0 - g && m.home[3 * i]! < x1 + g && m.home[3 * i + 2]! > z0 - g && m.home[3 * i + 2]! < z1 + g;
+    const near = all.map((f) => f.filter(under));
+    if (near.some((f) => f.length)) out = near;
+  }
+  targetCache.set(c, out);
+  return out;
+}
+
 export function exposedFaces(c: CompiledLevel): number[][] {
   const hit = exposedCache.get(c);
   if (hit) return hit;
@@ -139,7 +167,7 @@ export function exposedFaces(c: CompiledLevel): number[][] {
  */
 export function surfaceTarget(c: CompiledLevel, it: Intent): { body: number; point: Vec3; normal: [number, number] } {
   const m = c.meta, h = c.frame.unit, [dx, dz] = FACE_DIRS[it.dir]!, yT = Math.max(0, Math.min(1, it.yFrac)) * c.height;
-  const faces = exposedFaces(c)[it.dir]!;
+  const faces = targetFaces(c)[it.dir]!;
   if (!faces.length) return { body: -1, point: [c.frame.centre[0], yT, c.frame.centre[1]], normal: [dx, dz] };
   let cand = faces.filter((i) => Math.abs(m.home[3 * i + 1]! - yT) <= m.half[3 * i + 1]! + 0.25 * h);
   if (!cand.length) {
@@ -195,7 +223,7 @@ export const REACH = 0.1;
 
 /** The face sectors given to each direction: FACE_SECTORS shared out by exposed face count (largest remainders). */
 export function faceSectors(c: CompiledLevel): number[] {
-  const counts = exposedFaces(c).map((f) => f.length), total = counts.reduce((a, x) => a + x, 0);
+  const counts = targetFaces(c).map((f) => f.length), total = counts.reduce((a, x) => a + x, 0);
   if (!total) return [FACE_SECTORS, 0, 0, 0];
   const raw = counts.map((k) => (FACE_SECTORS * k) / total), out = raw.map(Math.floor);
   const order = raw.map((x, i) => i).sort((a, b) => raw[b]! - out[b]! - (raw[a]! - out[a]!) || a - b);
