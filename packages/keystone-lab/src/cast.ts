@@ -285,10 +285,21 @@ export const higherBetter = (metric: StarMetric): boolean => metric !== 'skyline
 /** A metric value turned so that larger is better. */
 const good = (metric: StarMetric, v: number) => (higherBetter(metric) ? v : -v);
 
-/** A play's metric at its end (its last settle); nothing settled counts as nothing achieved. */
+/**
+ * A play's metric as the player would bank it. Once the objective is met the player may bank at any settle, so
+ * the play is worth its best met settle; until then there is nothing worth banking and it is worth its last
+ * settle. Nothing settled counts as nothing achieved. For collapse, crowns and skyline, which only grow (shrink)
+ * shot by shot, this is the last settle; it matters for score, where every shot after the objective costs the
+ * rack-left bonus and may break heritage (B2: a competent play that met it on shot 1 scored 3,870 there and 2,680
+ * at its end). Alternatives: the last settle (a player who never banks), or the first met settle (one who banks at
+ * once, which undersells a skilled player who fires one more shot for collapse).
+ */
 export function endValue(p: CastPlay, metric: StarMetric): number {
-  const s = p.samples.at(-1);
-  return s ? sampleValue(s, metric) : metric === 'skyline' ? 1 : 0;
+  const last = p.samples.at(-1);
+  if (!last) return metric === 'skyline' ? 1 : 0;
+  let best: number | null = null;
+  for (const s of p.samples) if (s.met) { const v = sampleValue(s, metric); if (best === null || good(metric, v) > good(metric, best)) best = v; }
+  return best ?? sampleValue(last, metric);
 }
 
 /** Rounded to two significant figures toward easier: down when higher is better, up for skyline. */

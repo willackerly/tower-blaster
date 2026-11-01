@@ -235,6 +235,14 @@ describe('castLevel on a synthetic player', () => {
   it('nothing settled counts as nothing achieved; the budget gate judges the wall time', async () => {
     expect(endValue({ samples: [], complete: false, steps: 0, hash: '', limits: [] }, 'collapse')).toBe(0);
     expect(endValue({ samples: [], complete: false, steps: 0, hash: '', limits: [] }, 'skyline')).toBe(1);
+    // Banked: the best met settle once the objective is met (score falls with every shot after it), else the last.
+    const at = (met: boolean, score: number, collapse: number): CastSample => ({ shots: 1, step: 1, met, collapse, crowns: 0, skyline: 1 - collapse, score, heritage: 0 });
+    const play = (...s: CastSample[]): CastPlay => ({ samples: s, complete: true, steps: 1, hash: '', limits: [] });
+    expect(endValue(play(at(true, 3870, 0.1), at(true, 3482, 0.2), at(true, 2680, 0.29)), 'score')).toBe(3870);
+    expect(endValue(play(at(false, 900, 0.1), at(true, 2000, 0.2), at(true, 2500, 0.3)), 'score')).toBe(2500);
+    expect(endValue(play(at(false, 1200, 0.1), at(false, -14000, 0.3)), 'score')).toBe(-14000);
+    expect(endValue(play(at(true, 3870, 0.1), at(true, 2680, 0.29)), 'collapse')).toBe(0.29);
+    expect(endValue(play(at(true, 3870, 0.1), at(true, 2680, 0.29)), 'skyline')).toBeCloseTo(0.71, 12);
     const r = await castLevel(WALL, synthetic(), { recipe: TINY });
     expect(withWallTime(r, 59 * 60_000).gates.budget!.pass).toBe(true);
     expect(withWallTime(r, 61 * 60_000).gates.budget!.pass).toBe(false);
