@@ -5,6 +5,7 @@
 import { describe, expect, it } from 'vitest';
 import { RapierEngine } from '@tb/adapter-rapier';
 import { compileLevel, L1, runSession, type Shot } from '@tb/keystone';
+import { withRules } from '../src/params.ts';
 import { gamePage, ready } from './page.ts';
 
 const game = gamePage();
@@ -71,6 +72,44 @@ describe('game page', () => {
     await ready(page);
     expect(await page.evaluate(() => ({ phase: window.__game.phase, strokes: window.__game.strokes, result: window.__game.result }))).toEqual({ phase: 'aiming', strokes: 0, result: null });
     expect(await page.locator('#result').isVisible()).toBe(false);
+    expect(errors).toEqual([]);
+    await page.close();
+  });
+
+  it('an outcome level (L1 scored on what comes down) aims again after its clear, banks from the HUD, and scores as headless', async (ctx) => {
+    if (!game.browser()) return ctx.skip();
+    const o = await game.open('/?level=L1&keystone.scoring=outcome&offscreen=1&engine=rapier');
+    if (!o) return ctx.skip();
+    const { page, errors } = o;
+    await ready(page);
+    await page.evaluate(() => { window.__game.fast = true; });
+    const shots = L1.solutions!.par as Shot[];
+    expect(await page.evaluate(() => window.__game.bank())).toBe(false); // nothing has settled yet
+    expect(await page.evaluate((s) => window.__game.fire(s), shots[0]!)).toBe(true);
+    // Every crown comes down, and the level stays open: three items are left to fire or bank.
+    await page.waitForFunction(() => window.__game.ready && window.__game.strokes === 1, undefined, { timeout: 120_000, polling: 100 });
+    expect(await page.evaluate(() => ({ phase: window.__game.phase, result: window.__game.result, crowns: window.__game.counts.crownDown }))).toEqual({ phase: 'aiming', result: null, crowns: 4 });
+    expect(await page.locator('#result').isVisible()).toBe(false);
+    const hud = await page.locator('#hud').innerText();
+    expect(hud).toMatch(/fell every crown ✓/);
+    expect(hud).toMatch(/Down \d+%/);
+    await page.locator('#hud button[data-act="bank"]').click();
+    await page.waitForFunction(() => window.__game.result !== null, undefined, { timeout: 30_000, polling: 100 });
+    const card = await page.locator('#result').innerText();
+    expect(card).toMatch(/Rack left/);
+    expect(card).toMatch(/\d+% DOWN/);
+    expect(card).not.toMatch(/par/i);
+    const score = await page.evaluate(() => window.__game.result);
+    expect(score!.lines).toContainEqual({ label: 'Rack left', value: 1200 });
+    expect(score!.stars).toBe(1); // uncast: the objective's star only
+
+    // (level, shots) is the whole session: headless, the shots run out and it banks there.
+    const r = await runSession(new RapierEngine(), compileLevel(withRules(L1, { scoring: 'outcome' })), shots);
+    expect(r.session.phase).toBe('cleared');
+    expect(score).toEqual(r.session.score);
+    const live = await page.evaluate(() => window.__game.state());
+    expect(live).toMatchObject({ step: r.steps, phase: 'cleared', strokes: 1 });
+    expect(await page.evaluate((s) => window.__game.replay(s), shots)).toEqual(live);
     expect(errors).toEqual([]);
     await page.close();
   });

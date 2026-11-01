@@ -4,7 +4,7 @@
 // (docs/design/viewer-superset.md, step F). A key's bad value is refused with
 // a message naming it; keys a page doesn't know are left to it (the look's
 // real.* knobs, the viewer's own).
-import { isRackItem, itemRef, LEVELS, type LevelDef, levelWeapon, MAX_RACK, RACK_ITEM_NAMES, type RackItem, readShots, type Shot } from '@tb/keystone';
+import { isRackItem, itemRef, LEVELS, type LevelDef, levelWeapon, MAX_RACK, RACK_ITEM_NAMES, type RackItem, readShots, SCORINGS, type Scoring, type Shot } from '@tb/keystone';
 import { LOOKS } from '@tb/render';
 import { type EngineKind, engineKind } from './engines.ts';
 import { paceFeel, type PaceFeel } from './pacing.ts';
@@ -12,11 +12,39 @@ import { paceFeel, type PaceFeel } from './pacing.ts';
 /** The game's look when ?look= is absent: the maquette, whose pale albedo shows the role tints true. */
 export const GAME_LOOK = 'hazy';
 
+/**
+ * Rule overrides from the URL (docs/game/spectacle-mode.md, section 10): ?keystone.scoring=par|outcome
+ * scores any level either way, ?keystone.autobank=1|0 ends an outcome level at its first clear (or not).
+ * Each is part of the level it makes (its hash), so stars cast for the level do not apply to it.
+ */
+export interface LevelRules { scoring?: Scoring; autobank?: boolean }
+
+export function levelRules(q: URLSearchParams): LevelRules {
+  const r: LevelRules = {};
+  const sc = q.get('keystone.scoring'), ab = q.get('keystone.autobank');
+  if (sc !== null) {
+    if (!(SCORINGS as readonly string[]).includes(sc)) throw new Error(`keystone.scoring must be ${SCORINGS.join(' or ')}: ${sc}`);
+    r.scoring = sc as Scoring;
+  }
+  if (ab !== null) {
+    if (ab !== '0' && ab !== '1') throw new Error(`keystone.autobank must be 0 or 1: ${ab}`);
+    r.autobank = ab === '1';
+  }
+  return r;
+}
+
+/** def with the URL's rule overrides (none: def itself). */
+export function withRules(def: LevelDef, r: LevelRules): LevelDef {
+  if (r.scoring === undefined && r.autobank === undefined) return def;
+  return { ...def, ...(r.scoring !== undefined ? { scoring: r.scoring } : {}), ...(r.autobank !== undefined ? { autobank: r.autobank } : {}) };
+}
+
 export interface GameParams {
-  /** ?level=L1 to L5 (any case; the first level when absent), with its rack replaced when ?keystone.rack is given. */
+  /** ?level=L1 to L5 (any case; the first level when absent), with its rack replaced when ?keystone.rack is given and the rule overrides applied. */
   level: LevelDef;
   /** ?keystone.rack: the rack the level opened with instead of its own (rackOf), or null. */
   rack: RackItem[] | null;
+  rules: LevelRules;
   engine: EngineKind;
   feel: PaceFeel;
   /** ?look=candy | hazy | real (GAME_LOOK when absent); the real look's knobs are @tb/render parseRealOptions. */
@@ -76,10 +104,11 @@ export function lookName(name: string): string {
 }
 
 export function parseGameParams(q: URLSearchParams): GameParams {
+  const rules = levelRules(q);
   const authored = gameLevel(q.get('level') ?? LEVELS[0]!.id), rack = rackOf(authored, q.get('keystone.rack'));
-  const level = rack ? { ...authored, rack } : authored;
+  const level = withRules(rack ? { ...authored, rack } : authored, rules);
   return {
-    level, rack,
+    level, rack, rules,
     engine: engineKind(q.get('engine')),
     feel: paceFeel(q),
     look: lookName(q.get('look') ?? GAME_LOOK),

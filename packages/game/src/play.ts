@@ -43,6 +43,8 @@ export interface GameHandle {
   /** Wall time of this level's load (engine build and pre-settle), and of each live step since, in ms. */
   timing: { loadMs: number; stepMs: number[] };
   fire(shot: Shot): boolean;
+  /** Outcome levels: end the level now, keeping the rack left (key B, the HUD's Bank button); false when it cannot. */
+  bank(): boolean;
   /** Aim at normalized device coords with the selected ammo, as hovering there would. */
   aim(ndcX: number, ndcY: number): Aimed | null;
   select(ammo: RackItem): boolean;
@@ -63,7 +65,7 @@ export function newGameHandle(): GameHandle {
   const none = (): SessionState => ({ step: 0, phase: 'loading', strokes: 0, heritageBroken: 0, hash: '' });
   return {
     status: 'loading', engine: '', level: '', phase: 'loading', ready: false, frames: 0, stepIndex: 0, strokes: 0, bodies: 0, fast: false, result: null, counts: {}, feel: { hitStop: false, slowMo: false }, resultShownAt: null, timing: { loadMs: 0, stepMs: [] },
-    fire: () => false, aim: () => null, select: () => false, load: async () => {}, retry: async () => {}, capture: async () => null,
+    fire: () => false, bank: () => false, aim: () => null, select: () => false, load: async () => {}, retry: async () => {}, capture: async () => null,
     state: none, replay: async () => none(),
   };
 }
@@ -325,7 +327,8 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
           juice.shake(0.08);
           // A felled crown flashes once and stops glowing.
           renderer.setFx(f.body, { tint: TINT.crown, emissive: 0.9, flash: 0.5 });
-          if (c.def.objective.kind === 'crowns' && f.ordinal + 1 === c.meta.crowns.length && driver.session.phase === 'running') {
+          // Only where the clear ends the level: par levels, and outcome levels with autobank.
+          if (c.def.objective.kind === 'crowns' && f.ordinal + 1 === c.meta.crowns.length && driver.session.phase === 'running' && (driver.session.scoring === 'par' || c.def.autobank)) {
             ending = true;
             pacer.release();
             showResult(null);
@@ -386,6 +389,15 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     return true;
   }
 
+  function bank(): boolean {
+    if (regrowT !== null || !driver.session.canBank()) return false;
+    onFeedback(driver.bank());
+    aimed = null;
+    beads = null;
+    sync();
+    return true;
+  }
+
   function select(a: RackItem): boolean {
     if (!driver.session.rackLeft.includes(a)) return false;
     selected = a;
@@ -394,6 +406,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
   }
 
   handle.fire = fire;
+  handle.bank = bank;
   handle.select = select;
   handle.aim = (x, y) => { pointer = [x, y]; updateAim(); return aimed; };
   handle.load = (id) => load(levelIndex(id)).catch(fail);
@@ -454,6 +467,9 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     orbit.distance = Math.min(200, Math.max(3, orbit.distance * Math.exp(e.deltaY * 0.001)));
     aimDirty = true;
   }, { passive: false });
+  env.hud.addEventListener('click', (e) => {
+    if ((e.target as HTMLElement).closest('button')?.dataset.act === 'bank') bank();
+  });
   env.result.addEventListener('click', (e) => {
     const act = (e.target as HTMLElement).closest('button')?.dataset.act;
     if (act === 'retry') void handle.retry();
@@ -467,6 +483,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     const chip = rackChips(c.def.rack, driver.session.rackLeft, selected).find((x) => x.key === e.key);
     if (chip) select(chip.ammo);
     if (k === 'q' || k === 'e') { power = Math.max(0, Math.min(100, power + (k === 'e' ? 10 : -10))); aimDirty = true; }
+    if (k === 'b') bank();
     if (k === 'r') void handle.retry();
     if (k === 'n' && levelIdx + 1 < levels.length) void load(levelIdx + 1).catch(fail);
     if (k === 'p' && levelIdx > 0) void load(levelIdx - 1).catch(fail);
@@ -488,6 +505,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
       heritageBroken: s.heritageBroken.reduce((a, x) => a + x, 0), heritageTotal: c.meta.heritage.length,
       chips: rackChips(c.def.rack, s.rackLeft, selected), power, liveLeverage: s.liveLeverage, phase: s.phase,
       reachable: s.phase === 'aiming' && aimed ? aimed.reachable : null,
+      collapse: s.liveCollapse, met: s.objectiveDone, canBank: regrowT === null && s.canBank(),
     });
     if (crownsDown > crownsShown) html = html.replace('class="crowns"', 'class="crowns pop"');
     crownsShown = crownsDown;

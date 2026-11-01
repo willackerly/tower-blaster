@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { L1, L2, levelScore, tier } from '@tb/keystone';
-import { esc, fmtLeverage, fmtPoints, hudHtml, nextSelection, rackChips, resultHtml, starsText } from '../src/hud.ts';
+import { L1, L2, levelScore, outcomeScore, tier } from '@tb/keystone';
+import { BANK_BUTTON, esc, fmtLeverage, fmtPoints, hudHtml, nextSelection, objectiveText, rackChips, resultHtml, starsText } from '../src/hud.ts';
 
 describe('rack', () => {
   it('groups by kind in first-seen order with counts and keys', () => {
@@ -56,5 +56,30 @@ describe('formatting', () => {
     expect(html).toMatch(/data-act="retry"/);
     expect(html).toMatch(/data-act="next"/);
     expect(html).not.toMatch(/class="stamp|Total/);
+  });
+  it('an outcome level: shots, how much is down, the objective with a check once met, and Bank while possible', () => {
+    const def = { ...L2, scoring: 'outcome' as const, objective: { kind: 'collapse' as const, min: 0.4 } };
+    const base = { level: def, strokes: 1, crownsDown: 0, crownsTotal: 0, heritageBroken: 0, heritageTotal: 0, power: 60, liveLeverage: 0, phase: 'aiming', reachable: null, chips: [] };
+    const html = hudHtml({ ...base, collapse: 0.374, met: false, canBank: true });
+    expect(html).toMatch(/Shot 1/);
+    expect(html).toMatch(/37%/);
+    expect(html).toMatch(/bring 40% down</);
+    expect(html).toContain(BANK_BUTTON);
+    expect(html).not.toMatch(/Par|Crowns/);
+    expect(hudHtml({ ...base, collapse: 0.5, met: true, canBank: false })).toMatch(/bring 40% down ✓/);
+    expect(hudHtml({ ...base, collapse: 0.5, met: true, canBank: false })).not.toContain('data-act="bank"');
+    // Par levels never show Bank.
+    expect(hudHtml({ ...base, level: L2, canBank: true })).not.toContain('data-act="bank"');
+    expect(objectiveText({ kind: 'crowns' })).toBe('fell every crown');
+    expect(objectiveText({ kind: 'skyline', maxH: 3 })).toBe('skyline under 3 h');
+  });
+  it('an outcome result card: shots without par, how much came down, and the outcome stamp', () => {
+    const def = { ...L1, scoring: 'outcome' as const };
+    const score = outcomeScore({ met: true, collapse: 0.62, leverage: 1, comboMax: 4, hasCrowns: true, rackLeft: 3, heritageBroken: 0, outOfLot: 0, crownsDown: 4, skylineRatio: 0.3 }, undefined);
+    const html = resultHtml(def, score, 1, false);
+    expect(html).toMatch(/1 shot · 62% down · leverage/);
+    expect(html).not.toMatch(/par/);
+    expect(html).toMatch(/>62% DOWN</);
+    expect(html).toMatch(/Rack left/);
   });
 });

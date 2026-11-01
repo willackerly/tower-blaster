@@ -105,6 +105,11 @@ export class Driver {
     this.engine.push(events);
   }
 
+  /** End an outcome level now (Session.bank): the world is frozen while aiming, so the step is the observed one. */
+  bank(): Feedback[] {
+    return this.session.bank(this.snapshotStep);
+  }
+
   async step(): Promise<Feedback[]> {
     if (!this.options.pipelined) {
       await this.engine.step();
@@ -168,6 +173,11 @@ export interface PlayOptions {
    * weapons runtime hooks here; the game page calls the same hook live, so replays see its input.
    */
   perStep?: PerStep;
+  /**
+   * An outcome level still open when the shots run out is banked there (default true): a recorded
+   * session is (level, shots) and ends after its last shot. false leaves it aiming (a bot sampling each settle).
+   */
+  bank?: boolean;
 }
 
 /** A per-step hook: input decided from the observed state. One per session: it may keep state. */
@@ -185,7 +195,10 @@ export async function playShots(d: Driver, shots: Shot[], next: number, opts: Pl
   let announced = next;
   while (engine.stepIndex < max) {
     if (d.session.phase === 'aiming') {
-      if (next >= shots.length) break;
+      if (next >= shots.length) {
+        if (opts.bank !== false && d.session.canBank()) feedback.push(...d.bank());
+        break;
+      }
       if (next > announced) opts.onAiming?.(d, (announced = next));
       feedback.push(...d.fire(shots[next++]!));
     }

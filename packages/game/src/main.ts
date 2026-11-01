@@ -7,7 +7,7 @@
 import { LEVELS } from '@tb/keystone';
 import { createDevice } from '@tb/gpu';
 import { lookByName, parseRealOptions, Renderer, SnapshotSource } from '@tb/render';
-import { parseGameParams } from './params.ts';
+import { parseGameParams, withRules } from './params.ts';
 import { type GameHandle, newGameHandle, playKeystone, playLine } from './play.ts';
 import { GAME_HELP, installGameStyles } from './ui.ts';
 
@@ -31,10 +31,11 @@ function fail(e: unknown) {
 
 async function main() {
   const q = new URLSearchParams(location.search);
-  const { level, rack, engine, feel, look, shots, offscreen } = parseGameParams(q);
+  const { level, rack, rules, engine, feel, look, shots, offscreen } = parseGameParams(q);
   // ?keystone.rack replaces the opening level's rack (its def, so retry keeps it); other levels keep their own.
+  // The rule overrides (keystone.scoring, keystone.autobank) apply to every level.
   const start = LEVELS.findIndex((l) => l.id === level.id);
-  const levels = rack ? LEVELS.map((l, i) => (i === start ? level : l)) : LEVELS;
+  const levels = LEVELS.map((l, i) => (i === start ? level : withRules(l, rules)));
   handle.feel = feel;
   handle.engine = engine;
 
