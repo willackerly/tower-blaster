@@ -1,11 +1,14 @@
 // pnpm keystone:cast <level> [--engine gpu|ref|rapier] [--channel chrome] [--headed]
 //   [--seed N] [--metric collapse|crowns|skyline|score] [--recipe short|full|C,L,M,K,N]
 //   [--out cast.json] [--md cast.md] [--compare other.json] [--max-steps N] [--explore N]
+//   [--cloud-of cast.json [--n 16]]
 // <level>: a built-in level id, or --level-file path.json (a LevelDef), or
 // --scenario S3 --param W=50 ... (the automatic scenario level), or --draft B1a
 // (keystone-lab drafts.ts). --explore N plays N competent lines only and
 // reports collapse, crowns and heritage after each shot (exploreLevel), for
-// designing a level before casting it.
+// designing a level before casting it. --cloud-of cast.json plays --n (default
+// 16) nudges of that cast's best line here and runs the cross-device gate on
+// them (cloudCheck): the spec's SwiftShader check of a Metal cast at small N.
 // Casts an outcome level's stars (roadmap G5.1, spectacle-mode.md section 6):
 // the GPU engine through the game's cast page by default (SwiftShader here,
 // Metal with --channel chrome on a Mac); ref and rapier play in this thread.
@@ -16,7 +19,7 @@
 import { readFileSync, writeFileSync } from 'node:fs';
 import { type LevelDef, levelById, scenarioLevel, STAR_METRICS, type StarMetric } from '@tb/keystone';
 import { exitNow } from '@tb/testkit';
-import { castLevel, castMarkdown, exploreLevel, explorationMarkdown, type CastPlayer, type CastRecipe, type CastResult, compareCasts, FULL_RECIPE, nodeCastPlayer, playsOf, SHORT_RECIPE, withWallTime } from './cast.ts';
+import { castLevel, castMarkdown, cloudCheck, exploreLevel, explorationMarkdown, type CastPlayer, type CastRecipe, type CastResult, compareCasts, FULL_RECIPE, nodeCastPlayer, playsOf, SHORT_RECIPE, withWallTime } from './cast.ts';
 import { openBrowserCastPlayer } from './cast-browser.ts';
 import { draftByName } from './drafts.ts';
 
@@ -73,6 +76,23 @@ if (flags.has('explore')) {
     if (flags.has('out')) writeFileSync(flags.get('out')!, JSON.stringify({ ...e, ms, stepMs, def }, null, 1));
     if (flags.has('md')) writeFileSync(flags.get('md')!, md);
     process.exitCode = e.limited ? 4 : 0;
+  } finally {
+    stuck = await close();
+  }
+  if (stuck.length) await exitNow();
+  process.exit();
+}
+if (flags.has('cloud-of')) {
+  const cast = JSON.parse(readFileSync(flags.get('cloud-of')!, 'utf8')) as CastResult, n = Number(flags.get('n') ?? 16);
+  if (!Number.isInteger(n) || n < 1) throw new Error(`--n needs a whole number of plays: ${flags.get('n')}`);
+  console.log(`cloud check ${def.id} on ${player.adapter} (${player.engine}): ${n} nudges of ${cast.adapter}'s best line ${cast.bestLine.shots}`);
+  let stuck: string[] = [];
+  try {
+    const t0 = performance.now(), k = await cloudCheck(def, player, cast, n, Number(flags.get('seed') ?? 1));
+    const g = (name: string, x: { pass: boolean; value: number; note: string }) => `${name}: ${x.pass ? 'pass' : 'FAIL'} (${x.value.toFixed(4)}; ${x.note})`;
+    console.log([`T3 here ${k.t3.toFixed(4)} vs ${cast.adapter} ${cast.raw.t3.toFixed(4)}; ${((performance.now() - t0) / 60_000).toFixed(1)} min`, g('cross-device', k.crossDevice), g('no limit hit', k.limits), g('complete', k.complete)].join('\n'));
+    if (flags.has('out')) writeFileSync(flags.get('out')!, JSON.stringify(k, null, 1));
+    process.exitCode = !k.limits.pass ? 4 : !k.crossDevice.pass || !k.complete.pass ? 2 : 0;
   } finally {
     stuck = await close();
   }

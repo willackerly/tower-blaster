@@ -11,7 +11,7 @@
 // the best line. T2 = median of the competent ends, T3 = lower quartile of the
 // nudge cloud, both rounded toward easier to two significant figures.
 import type { Vec3 } from '@tb/engine-api';
-import { aimAt, castPlay, type CastPlay, type CastSample, type CompiledLevel, compileLevel, isLaunchItem, type LevelDef, type RackItem, sampleValue, type Shot, type StarMetric, type StarsDef, writeShots } from '@tb/keystone';
+import { aimAt, castPlay, type CastPlay, type CastSample, type CompiledLevel, compileLevel, isLaunchItem, type LevelDef, type RackItem, readShots, sampleValue, type Shot, type StarMetric, type StarsDef, writeShots } from '@tb/keystone';
 import { type EngineSpec, engineSubsteps, makeEngine } from './engines.ts';
 import { quantile } from './probe.ts';
 
@@ -428,6 +428,48 @@ export function compareCasts(a: CastResult, b: CastResult): { recast: Gate; cros
   return {
     recast: { pass: d < a.bootstrap.halfWidth, value: d, need: a.bootstrap.halfWidth, note: `|T3 ${a.adapter} seed ${a.seed} - T3 ${b.adapter} seed ${b.seed}|` },
     crossDevice: { pass: b.raw.t3 >= a.bootstrap.lo && b.raw.t3 <= a.bootstrap.hi, value: b.raw.t3, need: a.bootstrap.halfWidth, note: `T3 on ${b.adapter} inside ${a.adapter}'s 90% interval [${a.bootstrap.lo.toFixed(3)}, ${a.bootstrap.hi.toFixed(3)}]` },
+  };
+}
+
+/** A nudge cloud of another device's best line, played here: the cross-device gate at a smaller N than a whole cast. */
+export interface CloudCheck {
+  level: string;
+  hash: string;
+  adapter: string;
+  engine: string;
+  /** The cast whose best line and bootstrap interval this checks. */
+  against: { adapter: string; seed: number; t3: number; lo: number; hi: number };
+  n: number;
+  seed: number;
+  t3: number;
+  cloud: ReturnType<typeof summary>;
+  crossDevice: Gate;
+  limits: Gate;
+  complete: Gate;
+  lines: CastLine[];
+}
+
+/**
+ * Plays `n` nudges of `cast`'s best line on this player and checks the spec's cross-device gate: T3 (the
+ * player-worse quartile of these ends) inside `cast`'s bootstrap 90% interval. The nudges come from their
+ * own seeded stream, so they are not the cast's own cloud replayed. The level must hash as the cast's did.
+ */
+export async function cloudCheck(level: LevelDef, player: CastPlayer, cast: CastResult, n: number, seed = 1): Promise<CloudCheck> {
+  const c = compileLevel(level);
+  if (c.hash !== cast.hash) throw new Error(`cloud check: ${level.id} hashes ${c.hash} here but the cast was of ${cast.hash}`);
+  const best = readShots(cast.bestLine.shots), r = rng(streamSeed(seed, 'cross-device'));
+  const batch = Array.from({ length: n }, () => nudgeLine(best, r));
+  const plays = await player.play(level, batch);
+  const ends = plays.map((p) => endValue(p, cast.metric)), t3 = lowerQ(cast.metric, ends, 0.25);
+  const limited = plays.filter((p) => p.limits.length).length, incomplete = plays.filter((p) => !p.complete).length;
+  const { lo, hi } = cast.bootstrap;
+  return {
+    level: level.id, hash: c.hash, adapter: player.adapter, engine: player.engine,
+    against: { adapter: cast.adapter, seed: cast.seed, t3: cast.raw.t3, lo, hi }, n, seed, t3, cloud: summary(ends),
+    crossDevice: { pass: t3 >= lo && t3 <= hi, value: t3, need: cast.bootstrap.halfWidth, note: `T3 of ${n} nudges on ${player.adapter} inside ${cast.adapter}'s 90% interval [${lo.toFixed(3)}, ${hi.toFixed(3)}]` },
+    limits: { pass: limited === 0, value: limited, need: 0, note: 'plays where the engine hit a limit that changed the physics' },
+    complete: { pass: incomplete === 0, value: incomplete, need: 0, note: 'plays that ran out of steps before every shot settled' },
+    lines: plays.map((p, k) => ({ phase: 'cloud', shots: writeShots(batch[k]!), samples: p.samples, steps: p.steps, complete: p.complete, hash: p.hash, limits: p.limits })),
   };
 }
 
