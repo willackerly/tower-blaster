@@ -8,6 +8,7 @@
 import { DEFAULT_GRENADE, grenadeAsSpec, type WeaponSpec } from '@tb/weapons';
 import type { LevelDef, Part } from './level.ts';
 import { readShots } from './shots.ts';
+import { buildScenario } from '@tb/scenarios';
 import type { ScenarioPart } from './scenario-part.ts';
 import type { MaterialName } from './materials.ts';
 import type { RackItem } from './rack.ts';
@@ -89,5 +90,54 @@ export const B3: LevelDef = cityLevel('B3', 'Ten Thousand', 'stone', 5, 3, ['w-b
   weapons: { bomb: BOMB },
 });
 
+/** B2's town: S14, 25 towers 4 x 4 cubes and up to 16 high (heights varied 40%), streets 4, seed 3: 5,184 plaster cubes. */
+export const B2_TOWN = { params: { towers: 25, W: 4, D: 4, H: 16, street: 4, vary: 0.4 }, seed: 3 } as const;
+
+/** Each tower of B2's town by tag: its centre (x, z) and its height in cubes. */
+function townTowers(): Map<number, { x: number; z: number; top: number; k: number }> {
+  const towers = new Map<number, { x: number; z: number; top: number; k: number }>();
+  for (const b of buildScenario('S14', { ...B2_TOWN.params }, B2_TOWN.seed).bodies) {
+    const t = towers.get(b.tag) ?? { x: 0, z: 0, top: 0, k: 0 };
+    t.x += b.pos[0]; t.z += b.pos[2]; t.top = Math.max(t.top, b.pos[1] + 0.5); t.k++;
+    towers.set(b.tag, t);
+  }
+  for (const t of towers.values()) { t.x /= t.k; t.z /= t.k; }
+  return towers;
+}
+
+/**
+ * A "Spare the Cathedral" level on B2's town: crowns on the tallest tower's roof (the whole roof course, 16, or
+ * the 4 in its middle, `crowns`), heritage on the middle tower's top two courses (the cathedral, 32 watched
+ * bodies), objective every crown down, footprint limit 0.05.
+ */
+export function cathedralLevel(id: string, rack: RackItem[], extra: Partial<LevelDef> = {}, crowns: 'roof' | 'middle' = 'middle'): LevelDef {
+  const { params, seed } = B2_TOWN, towers = townTowers();
+  let tag = 0;
+  for (const [t, v] of towers) if (v.top > towers.get(tag)!.top) tag = t;
+  const tallest = towers.get(tag)!, centre = Math.floor(params.towers / 2), side = Math.ceil(Math.sqrt(params.towers));
+  const part: ScenarioPart = {
+    kind: 'scenario', id: 'S14', params: { ...params }, seed, material: 'plaster',
+    roles: [
+      { role: 'heritage', tag: centre, course: [Math.max(0, towers.get(centre)!.top - 2), 1000] },
+      crowns === 'roof' ? { role: 'crown', tag, top: true }
+        : { role: 'crown', tag, top: true, box: { min: [tallest.x - 1, -1e9, tallest.z - 1], max: [tallest.x + 1, 1e9, tallest.z + 1] } },
+    ],
+  };
+  const half = (side * (params.W + params.street) - params.street) / 2 + 0.5;
+  return outcomeLevel(id, 'Spare the Cathedral', [part], [half, half], tallest.top, rack, { objective: { kind: 'crowns', footprintMax: 0.05 }, ...extra });
+}
+
+/**
+ * B2 Spare the Cathedral: 5,184 plaster cubes in 25 towers; bring down the 4 crowns in the middle of the tallest
+ * roof with a bomb and two rams, sparing the cathedral (the middle tower's top two courses). Stars by score
+ * (the tally: heritage broken costs 500 a cube, unused rack items earn 400). From the Metal explorations: aimed
+ * anywhere, competent play downed the crowns in 0 to 6% of plays (B2a-c); aimed at the crown tower (#144), the
+ * whole 16-cube roof fell in 13% (median 10 of 16) and the middle 4 in 31% (B2d, median 3 of 4) with the
+ * cathedral intact in the median play. A drop after the rams (B2d) and a third ram (B2e) changed neither.
+ */
+export const B2: LevelDef = cathedralLevel('B2', ['w-bomb', 'w-ram', 'w-ram'], {
+  weapons: { bomb: BOMB, ram: RAM },
+});
+
 /** The slice's levels in play order (the game's series when one of them is opened). */
-export const BIG_LEVELS: readonly LevelDef[] = [B1, B3];
+export const BIG_LEVELS: readonly LevelDef[] = [B1, B2, B3];

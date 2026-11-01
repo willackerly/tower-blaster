@@ -7,17 +7,7 @@
 // objectives come from data, not guesses. Nothing here is a shipped level; the
 // building blocks (outcomeLevel, thirdBondWall, BOMB, RAM) are @tb/keystone's
 // (big-levels.ts), so a winning draft becomes a level unchanged.
-import { buildScenario } from '@tb/scenarios';
-import { BOMB, cityLevel, type LevelDef, type MaterialName, outcomeLevel as outcome, type Part, RAM, type RackItem, type ScenarioPart, thirdBondWall } from '@tb/keystone';
-
-/** The tallest tower of an S14 build (its tag) and its height in cubes. */
-function tallestTower(params: Record<string, number>, seed: number): { tag: number; height: number; count: number } {
-  const tops = new Map<number, number>();
-  for (const b of buildScenario('S14', params, seed).bodies) tops.set(b.tag, Math.max(tops.get(b.tag) ?? 0, b.pos[1] + 0.5));
-  let tag = 0;
-  for (const [t, y] of tops) if (y > tops.get(tag)!) tag = t;
-  return { tag, height: tops.get(tag)!, count: tops.size };
-}
+import { BOMB, cathedralLevel, cityLevel, type LevelDef, type MaterialName, outcomeLevel as outcome, type Part, RAM, type RackItem, thirdBondWall } from '@tb/keystone';
 
 const B1_WALL = thirdBondWall(40, 25, 'plaster');
 const b1 = (id: string, rack: RackItem[], extra: Partial<LevelDef> = {}) => outcome(id, 'Long Wall', B1_WALL, [20.2, 0.5], 25, rack, extra);
@@ -25,39 +15,8 @@ const b1 = (id: string, rack: RackItem[], extra: Partial<LevelDef> = {}) => outc
 const b3 = (id: string, material: MaterialName, F: number, street: number, rack: RackItem[], extra: Partial<LevelDef> = {}) =>
   cityLevel(id, 'Ten Thousand', material, F, street, rack, extra);
 
-const B2_PARAMS = { towers: 25, W: 4, D: 4, H: 16, street: 4, vary: 0.4 };
-const B2_SEED = 3;
-/**
- * B2 with the crowns on the tallest tower's roof: the whole roof course (16), or its middle 4, which
- * come down when the tower does (on Rapier a ram or bomb took at most 15 of the 16 roof cubes below the line).
- */
-function b2(id: string, rack: RackItem[], extra: Partial<LevelDef> = {}, crowns: 'roof' | 'middle' = 'roof'): LevelDef {
-  const t = tallestTower(B2_PARAMS, B2_SEED), side = Math.ceil(Math.sqrt(B2_PARAMS.towers)), centre = Math.floor(B2_PARAMS.towers / 2);
-  const part: ScenarioPart = {
-    kind: 'scenario', id: 'S14', params: B2_PARAMS, seed: B2_SEED, material: 'plaster',
-    roles: [
-      // The cathedral: the middle tower's top two courses are heritage (32 watched bodies).
-      { role: 'heritage', tag: centre, course: [Math.max(0, tallestOf(centre) - 2), 1000] },
-      // Crowns: the tallest tower's roof course (16), or the 4 in its middle.
-      crowns === 'roof' ? { role: 'crown', tag: t.tag, top: true } : { role: 'crown', tag: t.tag, top: true, box: middleOf(t.tag) },
-    ],
-  };
-  const half = (side * (B2_PARAMS.W + B2_PARAMS.street) - B2_PARAMS.street) / 2 + 0.5;
-  return outcome(id, 'Spare the Cathedral', [part], [half, half], t.height, rack, { objective: { kind: 'crowns', footprintMax: 0.05 }, ...extra });
-}
-/** A box around the middle 4 columns of S14 tower `tag` in B2's build (scenario units), every height. */
-function middleOf(tag: number): { min: [number, number, number]; max: [number, number, number] } {
-  let x = 0, z = 0, k = 0;
-  for (const b of buildScenario('S14', B2_PARAMS, B2_SEED).bodies) if (b.tag === tag) { x += b.pos[0]; z += b.pos[2]; k++; }
-  x /= k; z /= k;
-  return { min: [x - 1, -1e9, z - 1], max: [x + 1, 1e9, z + 1] };
-}
-/** Height in cubes of S14 tower `tag` in B2's build. */
-function tallestOf(tag: number): number {
-  let top = 0;
-  for (const b of buildScenario('S14', B2_PARAMS, B2_SEED).bodies) if (b.tag === tag) top = Math.max(top, b.pos[1] + 0.5);
-  return top;
-}
+/** B2 drafts: @tb/keystone's cathedralLevel with the whole roof course (16) or its middle 4 as crowns. */
+const b2 = (id: string, rack: RackItem[], extra: Partial<LevelDef> = {}, crowns: 'roof' | 'middle' = 'roof') => cathedralLevel(id, rack, extra, crowns);
 
 /** Domino Boulevard: 2 x 2 columns 14 tall on a spiral, each 5 cells from the last along it (a fallen column reaches the next); the last one's top course is the crowns. */
 function dominoes(n: number): { parts: Part[]; half: number } {
@@ -90,6 +49,10 @@ export const DRAFTS: Readonly<Record<string, LevelDef>> = {
   B2a: b2('B2a', ['w-bomb', 'w-ram', 'w-ram', 'drop'], ARMS),
   B2b: b2('B2b', ['w-bomb', 'w-bomb', 'p-wreckingball', 'drop'], { ...ARMS, limits: { ammoRatio: 25 } }),
   B2c: b2('B2c', ['w-ram', 'w-ram', 'w-ram', 'drop'], ARMS, 'middle'),
+  // After the crown-aimed exploration (#144): the middle 4 crowns with B2a's bomb-led rack, and with a third ram.
+  // B2d won (objective 31%, median 3 of 4 crowns, cathedral intact in the median play) and is B2 without the drop.
+  B2d: b2('B2d', ['w-bomb', 'w-ram', 'w-ram', 'drop'], ARMS, 'middle'),
+  B2e: b2('B2e', ['w-bomb', 'w-ram', 'w-ram', 'w-ram', 'drop'], ARMS, 'middle'),
   // B3 Ten Thousand: the S4 city at 10k; the spec's fat stone towers against slimmer, closer ones, and plaster.
   B3a: b3('B3a', 'stone', 8, 6, ['w-bomb', 'w-bomb', 'p-wreckingball'], ARMS),
   B3b: b3('B3b', 'stone', 5, 3, ['w-bomb', 'w-bomb', 'p-wreckingball'], ARMS),
