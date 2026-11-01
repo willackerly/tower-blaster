@@ -8,7 +8,8 @@
 // reports collapse, crowns and heritage after each shot (exploreLevel), for
 // designing a level before casting it. --cloud-of cast.json plays --n (default
 // 16) nudges of that cast's best line here and runs the cross-device gate on
-// them (cloudCheck): the spec's SwiftShader check of a Metal cast at small N.
+// them (cloudCheck): the spec's SwiftShader check of a Metal cast at small N,
+// advisory since 2026-11-01 (exit 2 only for incomplete plays, 4 for limits).
 // Casts an outcome level's stars (roadmap G5.1, spectacle-mode.md section 6):
 // the GPU engine through the game's cast page by default (SwiftShader here,
 // Metal with --channel chrome on a Mac); ref and rapier play in this thread.
@@ -118,9 +119,10 @@ if (flags.has('cloud-of')) {
   try {
     const t0 = performance.now(), k = await cloudCheck(def, player, cast, n, Number(flags.get('seed') ?? 1));
     const g = (name: string, x: { pass: boolean; value: number; note: string }) => `${name}: ${x.pass ? 'pass' : 'FAIL'} (${x.value.toFixed(4)}; ${x.note})`;
-    console.log([`T3 here ${k.t3.toFixed(4)} vs ${cast.adapter} ${cast.raw.t3.toFixed(4)}; ${((performance.now() - t0) / 60_000).toFixed(1)} min`, g('cross-device', k.crossDevice), g('no limit hit', k.limits), g('complete', k.complete)].join('\n'));
+    console.log([`T3 here ${k.t3.toFixed(4)} vs ${cast.adapter} ${cast.raw.t3.toFixed(4)}; ${((performance.now() - t0) / 60_000).toFixed(1)} min`, g('cross-device (advisory)', k.crossDevice), g('no limit hit', k.limits), g('complete', k.complete)].join('\n'));
     if (flags.has('out')) writeFileSync(flags.get('out')!, JSON.stringify(k, null, 1));
-    process.exitCode = !k.limits.pass ? 4 : !k.crossDevice.pass || !k.complete.pass ? 2 : 0;
+    // Cross-device is advisory (Will, 2026-11-01): it is reported, never a failed gate.
+    process.exitCode = !k.limits.pass ? 4 : !k.complete.pass ? 2 : 0;
   } finally {
     stuck = await close();
   }
@@ -148,8 +150,8 @@ try {
     const other = JSON.parse(readFileSync(flags.get('compare')!, 'utf8')) as CastResult;
     const cmp = compareCasts(other, r);
     console.log(`recast vs ${flags.get('compare')}: ${cmp.recast.pass ? 'pass' : 'FAIL'} (${cmp.recast.note} = ${cmp.recast.value.toFixed(4)}, need < ${cmp.recast.need.toFixed(4)})`);
-    console.log(`cross-device: ${cmp.crossDevice.pass ? 'pass' : 'FAIL'} (${cmp.crossDevice.note})`);
-    failed ||= !cmp.recast.pass || !cmp.crossDevice.pass;
+    console.log(`cross-device (advisory): ${cmp.crossDevice.pass ? 'pass' : 'harder here'} (${cmp.crossDevice.note})`);
+    failed ||= !cmp.recast.pass;
   }
   if (flags.has('out')) writeFileSync(flags.get('out')!, JSON.stringify(r, null, 1));
   if (flags.has('md')) writeFileSync(flags.get('md')!, castMarkdown(r));
