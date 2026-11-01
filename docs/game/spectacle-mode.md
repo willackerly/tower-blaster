@@ -1,0 +1,291 @@
+# Spectacle mode: game mode spec and vertical slice plan
+
+Status 2026-11-01. Roadmap node G1 (`/mnt/project-files/plan/roadmap-dag.md`). Nothing here is built yet. This spec sits on top of [keystone-design.md](keystone-design.md) and [findings.md](findings.md); where they disagree about outcome-scored levels, this page wins. Par-scored levels (L1 to L5) keep their rules unchanged.
+
+**Inherited decisions (Will, 2026-11-01, all roadmap defaults accepted):**
+
+- Q1: the game is the **spectacle hybrid**: Keystone's shell (levels, rack, rules, replays, bot) with 1k to 10k block structures, scored on what happens, with stars cast from the bot's perturbed outcomes.
+- Q2: Bounce is on in big levels at e 0.3 to 0.5 once restitution hardening (E4) lands, and off in small precise levels.
+- Q4: physics in real time at 60 Hz up to 10k bodies on the M5 Max; 30 fps is the hard floor everywhere.
+- The advanced weapons language (`WeaponSpec`, V3) comes soon, so the rack is designed for scripted weapons from the start, alongside the grenade and the six real projectiles.
+- Standing rules: every choice is a switchable option (URL key, Scene panel, scene file); the viewer stays a superset of the game; Claude merges PRs once checks pass.
+
+## 1. The mode in one paragraph
+
+A level is a big structure (1k to 10k blocks), an objective, and a small rack of 2 to 6 things to throw or detonate. You read the structure, fire, and watch it come down; rubble stays between shots and physics freezes while you aim. After any settled shot you may **bank** (end the level and keep the unused rack as points) or fire again. The level ends when you bank or the rack is empty. Stars measure one legible outcome (by default, **how much of the structure came down**) against thresholds the bot cast from many perturbed plays of the level on the M5. The score tally adds efficiency (energy released per energy fired), crowns, unused rack, and the heritage and footprint penalties, for personal bests and replays. Par and golf stamps stay on the five small levels only.
+
+**Why this shape.** Par lines cannot be pinned at 10k: the outcome of one shot is chaotic, and the GPU solver is deterministic per device, not across devices, so a par line that clears on the M5 can fail on another GPU (findings section 5: SwiftShader and Metal step counts differ by up to 12% on 40-body levels). A threshold that is a quantile of an outcome distribution survives both: a different device draws from nearly the same distribution, and a shot near a good shot lands in the same band. Stars on one named metric ("bring 72% down") keep the goal legible before the first shot.
+
+## 2. What stays and what changes
+
+| Piece | Par levels (L1 to L5) | Outcome levels (new) |
+|---|---|---|
+| Driver, presettle, freeze between shots, replays from `(level, shots)` | unchanged | unchanged |
+| Session observations (reductions + watched bodies) | unchanged | adds `nMoving` and `movingBox` reductions (section 9) |
+| Objective kinds | crowns, skyline | crowns, skyline, and a new `collapse` |
+| Level ends | at clear, or rack empty | at bank, or rack empty (`keystone.autobank=1` restores end-at-clear) |
+| Stars | par + lGold | one star metric with cast thresholds T2, T3 |
+| Score tally | strokes, leverage, combo, ace, heritage, footprint | objective, collapse, leverage, combo, rack left, heritage, footprint |
+| Rack | marble, cannonball, cue, drop | those plus real projectiles, the grenade, `WeaponSpec` weapons |
+| Settle rule | v1 (every awake body quiet) | v2 (all but a few bodies quiet; section 9) |
+| Physics | 40 it, gapSlop 3e-5, no Bounce | per level, pinned in the level hash (section 8) |
+
+A `LevelDef` gets one new field, `scoring: 'par' | 'outcome'` (default `par`, so every existing level and test is unchanged).
+
+## 3. Objectives and constraints
+
+Exactly one objective per level; meeting it is the first star.
+
+| Objective | Met when, at the end of the level | Exists today |
+|---|---|---|
+| `crowns` | every crown is down: centre below `crownLine` or outside the lot | yes |
+| `skyline` `{ maxH, footprintMax? }` | settled skyline height at most `maxH` h | yes |
+| `collapse` `{ min }` | collapse fraction D (section 4) at least `min` | new |
+
+Constraints (optional, any level): **heritage** (sticky break at 0.3 h or 15 degrees, as today; any break caps the level at one star) and **footprint** (fraction of structure bodies outside the lot grown by 0.5 h at most `footprintMax`; the excess costs points, not stars).
+
+**Crown budget.** At most 64 crowns plus heritage bodies per level, because they are read as watched bodies every step and the 100k path reads at most 64 (design section 7). Big structures are judged by reductions (collapse, skyline, footprint), not by watching thousands of bodies. Validator issue `watched`.
+
+## 4. Measures
+
+All are pure functions of observed state and step indices, never frames or wall time. Integer fields are exact so a GPU reduction can match them bit for bit later (engine ask 3, E3).
+
+- **Potential energy** PE: as today, `sum of round(m g y * 1000)` mJ over structure bodies.
+- **Floor energy** PE_floor: the energy of every structure body lying flat on the ground on its largest face: `sum of peOf_mJ(m_i, min half-extent_i)`. Static per level.
+- **Collapse fraction** `D = clamp((PE(B0) - PE(end)) / (PE(B0) - PE_floor), 0, 1)`, B0 the level baseline after presettle. Scale-free: the same number means the same thing at 1k and 10k. Validator issue `flat` when `PE(B0) - PE_floor` is under one plain block falling one h (nothing to bring down).
+- **Energy fired** E_fired, summed over shots:
+  - a launched thing: `1/2 m v^2` at spawn (today's `ammoKE`); a drop: `m g y_spawn`;
+  - a blast: its **nominal yield** Y, a static function of the blast's parameters: the kinetic energy it would give a solid fill of the level's most common structure block (material and size) at rest, filling its sphere, with `maxDv` and `maxSpeed` applied: `Y = integral over the ball of 1/2 rho_fill min(maxDv, maxSpeed, I w(d) A/m)^2 dV`, with rho_fill = block mass / pitch volume and A/m that block's (blast.ts's A). Computed by fixed 1,024-shell midpoint quadrature with integer falloff (repeated multiply, no `Math.pow`), so it is the same on every machine;
+  - a `WeaponSpec` weapon: launch KE plus the static yield of every action its spec can take, from the V3 validator's budget (ask to V3, section 7).
+- **Leverage** `L = max(0, PE(B0) - PE(end)) / E_fired`, J per J, as today but with blasts counted.
+- **Skyline, footprint, crowns, heritage**: as today (`rules.ts`).
+
+Why nominal yield and not the energy a blast actually injects (which the rules could compute from the observed state with `blastKick`): measured injection grows with the number of bodies inside the radius, so a grenade placed in the dense base, the clever shot, would cost more energy and score lower leverage than one wasted in the air. Nominal yield makes placement the skill, and it is static (validator, budget, no runtime cost, device-independent).
+
+## 5. Level end and banking
+
+- After a shot settles with rack left, the phase is `aiming`. The player may fire, or bank (key B, a button on the result chip). Banking is refused while a shot is running.
+- The level ends at a bank or when the last shot settles. The objective is judged at the end, and shown live as a check mark for feedback.
+- Nothing new is recorded: a session is still `(level, shots)`. The end is after the last shot; the unused rack is `rack - shots`. Replays need no bank record.
+- `keystone.autobank=1` ends the level at the first settle where the objective is met (Keystone's behaviour), for levels or players that want it.
+- Quickdraw (firing while a shot is still running) stays off: per-shot attribution and the settle baseline need settled shots. It is an option (`keystone.quickdraw=1`) for a later playtest, unofficial until its rules are specified.
+
+## 6. Score tally and stars
+
+### Tally (outcome levels)
+
+```
+Objective   +1000 if met
+Collapse    floor(3000 x D)
+Leverage    floor(300 x log2(1 + L))
+Combo       50 x T(min(C_max, 12)),  T(n) = n(n+1)/2   (C_max = most crowns down in one shot; levels with crowns)
+Rack left   +400 x unused items                        (only if the objective is met)
+Heritage    -500 x broken
+Footprint   -floor(3000 x max(0, f_out - footprintMax)) (levels with a footprint limit)
+```
+
+The weights make collapse the dominant line on big levels, keep leverage as the "clever beats strong" line from the design, and make banking early worth about one more 13%-collapse shot. They are constants in one table (`OUTCOME_WEIGHTS`) and re-fit after the playtest, not per level.
+
+### Stars
+
+- **Star metric.** Each outcome level names one: `collapse` (D, default), `crowns` (crowns down), `skyline` (end height over start height, lower is better) or `score` (the tally total). `keystone.stars=<metric>` overrides it; thresholds that were not cast for that metric show as "uncast".
+- One star: the objective met. Two stars: metric at least T2. Three stars: metric at least T3, and no heritage broken.
+- **Beat the bot** (a badge, the successor of the Ace): metric above the best value any bot play reached when the level was cast.
+- **Official runs.** Stars and personal bests are kept only when the level, its physics block and the engine kind are the ones the thresholds were cast with (the level hash, section 8). Any override of physics, rack or star metric plays fine and is labelled "custom: stars not recorded".
+
+### Casting thresholds (the bot)
+
+`pnpm keystone:cast <level> --engine gpu` (browser runner, Metal on the Mac; the reference engine for chamber levels):
+
+1. **Competent plays.** N_r = 64 lines. Each shot picks a rack item in order and aims with `aimAt` at a structure surface point drawn from a seeded stratified sample (azimuth, height third, face), power 60 to 100%. Every line fires the whole rack. Record the metric after every settle, so banking at each point is also a sample.
+2. **Best line.** Hill-climb the 3 best competent lines by one-quantum moves (16 moves each), keeping the line whose 8-nudge mini-cloud has the highest lower quartile.
+3. **Nudge cloud.** 50 perturbations of the best line, each shot jittered within the design's hand noise (yaw plus or minus 0.6 degrees, power plus or minus 3%), seeded.
+4. **Thresholds.** T2 = median of the competent plays' end metrics (a typical attempt). T3 = lower quartile of the nudge cloud (three in four near-best plays earn it, as lGold today). Both rounded toward easier to 2 significant figures. Beat-the-bot = maximum seen.
+5. **Write back.** `stars: { metric, t2, t3, best, castOn: <adapter>, engine, hash, n, seed }` into the level, plus the cloud summary (P10, P25, P50, P75, P90 of both clouds) in `docs/game/levels/<id>.md`.
+
+**Gates.** A level ships only if all hold; otherwise it is redesigned:
+
+| Gate | Rule | Why |
+|---|---|---|
+| Fair | the best line meets the objective in at least 80% of its nudge cloud | the old par-robustness bar, applied to the objective |
+| Skill matters | T3 - T2 at least 10% of the metric's range (0.1 for D) | if aiming does not beat a typical attempt, stars are noise |
+| Stable | casting again with another seed moves T3 by less than its bootstrap 90% interval half-width, and that half-width is under 0.05 D | thresholds are a property of the level, not of the draw |
+| Cross-device | on one 1k level, T3 cast on SwiftShader (smaller N) lies inside Metal's bootstrap 90% interval | statistical fairness across devices, the reason for casting |
+| Budget | a cast takes at most 60 min on the M5 at 10k | casts run on idle Mac time (overnight batches) |
+
+Cast cost: about 64 + 3 x 16 x 8 + 50 = 500 line plays, each from the start, since nothing can be forked on the GPU yet. At 10k, a 3-shot line is about 3 x 600 steps; at the estimated 10 ms a step (40 it; F2 will measure) that is 18 s a line, so the full recipe is about 2.5 h, over budget. Two levers, in order: cut the hill-climb to 2 lines x 8 moves x 4 nudges (N about 180, about 55 min), and the GPU fork engine ask below. The budget gate decides which recipe a level uses; the recipe is recorded with the thresholds.
+
+**Engine ask (new, optional): GPU fork.** `GpuAvbdEngine.fork()`: a device-side copy of every state buffer into a second engine of the same capacity, so a bot can branch shared prefixes (as `SessionCache` does on the reference) bit-identically. It would cut cast time 2 to 3x. Proof: fork at step k, run both copies and an unforked run 300 steps, all three hashes equal on SwiftShader and Metal. Not needed for the slice.
+
+## 7. The rack
+
+| Item | Shot text name | Body | Energy fired | Status |
+|---|---|---|---|---|
+| Keystone ammo: marble, cannonball, cue, drop | `marble` etc. (unchanged) | as today | launch KE / `m g y` | exists |
+| Real projectiles: beach ball, basketball, bowling ball, cannonball, wrecking ball, boulder | `p-<preset>`, e.g. `p-wreckingball` | `PROJECTILE_PRESETS`: real diameter and restitution; density converted at the level's model scale (625 = real stone 2400, so x 0.26) | launch KE | presets exist; rack entry is G3 |
+| Grenade | `w-grenade` | the grenade shell; fuse and blast from the level's `weapons.grenade` (else `DEFAULT_GRENADE`); consumed after F4 | launch KE + nominal yield | logic exists; rack entry is G3 |
+| Scripted weapon | `w-<name>` | the level's `weapons[name]` `WeaponSpec` | launch KE + static yield budget | after V3 |
+
+- **Shots.** Every launched item uses `LaunchShot`'s quantised fields (azimuth, height, yaw, pitch, power); only the name changes, so shot text stays a few bytes (`p-wreckingball.60.8.0.20.95_w-grenade.120.4.0.35.80`). Bare names keep parsing as today. Power maps to 50 to 100% of a preset's own speed, capped by `launchSpeedCap`; the grenade's shell speed range is part of its spec.
+- **Rack size.** `MAX_RACK` goes from 6 to 8 for outcome levels; keys 1 to 8 pick.
+- **Validator rules per item** (`validateLevel`):
+  - `tunnelling`: today's rule with the item's real top speed and size.
+  - `mass-ratio`: item mass over the lightest structure body at most `limits.ammoRatio` (default 20, as the design). A level may raise it to 100 only with a passing heavy-ball probe (the item at top speed into one block on the ground: the block sinks under 0.1 h and nothing goes NaN), the E4 weakness in test form.
+  - `dud` (warning): the most energy one head-on hit can pass, `KE x 4 mu / (1 + mu)^2` with mu the mass ratio, is under the energy to tip one plain block on its edge (`0.207 m g h`). A dud is legal (a beach ball can be a joke item) but the panel says so.
+  - `capacity`: engine capacity = structure bodies + the sum of each item's body budget (1 for a thrown thing; a `WeaponSpec`'s static budget).
+- **What the physics says about real projectiles at Keystone scale.** Against a 0.5 m plaster block (31 kg model): beach ball 0.002x its mass, basketball 0.005x, bowling ball 0.06x, real cannonball 0.09x, Keystone cannonball 16x, wrecking ball 25x (10x stone), boulder 3,500x. So the beach ball, basketball and bowling ball are duds against plaster (the bowling ball can pass at most 29 J of its 136 J; tipping a block takes 32 J) and only matter in toy-scale levels (Kapla, cardboard); the real cannonball is not a dud (about 800 J passed at 45 m/s); the wrecking ball fits stone levels; and the boulder fails `mass-ratio` everywhere unless a probe passes: it is a finale item, not a slice item. Level material and rack are chosen together.
+- **Ask to V3 (`WeaponSpec`).** The validator must give, statically, each spec's body budget (for capacity) and nominal energy (launch KE plus yield of every reachable action, children included) so the rack can score it. A spec'd grenade must replay bit-equal to the built-in grenade on the reference (V3's own proof), so `w-grenade` can move onto the language without breaking replays.
+
+## 8. Structure sizes and physics settings
+
+### Tiers
+
+| Tier | Bodies | Levels | Scoring | Engine |
+|---|---|---|---|---|
+| Chamber | 40 to 400 | L1 to L5 | par (unchanged) | GPU, Rapier, reference |
+| Hall | 1k to 3k | slice level B1 (onboarding spectacle) | outcome | GPU (Rapier for comparison) |
+| City | 5k to 10k | slice levels B2, B3 | outcome | GPU |
+| Mega | 30k to 100k | after E2, E3, E6 | outcome | GPU with sleep |
+
+`MAX_BODIES` becomes per engine: Rapier 2,500 (unchanged), GPU 10,000 for the slice (raised by E2). Validator issue `count` names the engine.
+
+### Per-level physics block
+
+```
+physics?: {
+  iterations?: number        // default 40 (Keystone's AVBD_ITERATIONS)
+  gapSlop?: number           // default 3e-5
+  bounce?: number | null     // restitution e for structure bodies with the engine's restitution on; null = off (default)
+  pairsPerBody?: number      // GPU pair buffer; default from F1's sizing rule
+  presettle?: number         // default 300 steps
+  settle?: 'v1' | 'v2'       // default v1 for par levels, v2 for outcome levels
+}
+```
+
+The block is part of the level hash, so stars cast at one setting are never shown against another (section 6, official runs). Substeps stay 1: Keystone levels are in metres at h = 0.5 m and every pinned line was made that way. Unit h stays 0.5 m for continuity (a 1 m cube variant is the same cost at one substep and is a per-level choice).
+
+**Choosing a big level's settings** (recorded in `docs/game/levels/<id>.md` with the numbers):
+
+1. Iterations: the lower of 20 and 40 at which the structure passes F3's rest test (3,600 idle steps, no body drifts 0.05 h) and the best line's objective rate at 20 is inside the 40-iteration rate's 90% interval. Otherwise 40.
+2. Bounce: off until E4 lands. Then e in [0.3, 0.5] (Q2), the value whose nudge cloud has the widest skill gap (T3 - T2), recast.
+3. Budget on the M5 (G4's bench): live step p95 at most 11 ms at the chosen settings (16.7 ms at 60 Hz minus the photoreal frame cap of 3 ms minus headroom). Over budget: drop to 20 iterations if rule 1 allows, else shrink the structure, else declare the level's slow motion (the valve, section 9) and say so in its notes.
+4. No limit hit: `health()` reports no pair, contact or colour overflow in any cast play (F1).
+
+| Level type | iterations | gapSlop | bounce | Notes |
+|---|---|---|---|---|
+| Chamber (L1 to L5) | 40 | 3e-5 | off | unchanged; par lines pinned here |
+| Hall, City (before E4) | 20 or 40 by rule 1 | 3e-5 | off | most likely 40 at 10k (estimate about 10 ms/step) |
+| Hall, City (after E4) | as above | 3e-5 | 0.3 to 0.5 | +5 to 9% step cost on the M5 (measured for Bounce) |
+
+## 9. Pacing at scale
+
+- **Settle v2.** Settled at the first step at least 20 after the spawn with 30 consecutive steps where the count of awake structure bodies moving faster than `QUIET_SPEED` or spinning faster than `QUIET_SPIN` (`nMoving`, a new integer reduction) is at most `max(2, floor(n / 1000))`, or at the cap: 600 steps (Chamber), 1,800 (Hall and City, 30 s). v1 is today's rule; chamber levels keep it, so every par line settles on the same step as before.
+- **Valve.** Today's awake-adaptive valve (`Pacer`, `budgetMs` 10, `stepMs` median of 60) stays; G4 feeds it the GPU's pipelined step time and adds a HUD tag ("x0.6") while it slows time, so overload reads as intended slow motion, never stutter. Hit-stop and the crown slow motion stay off by default (`keystone.hitstop=1`, `keystone.slowmo=1`).
+- **Tail skip.** Once `nMoving` is under 1% of the structure and collapse has gained under 0.1% over 60 steps, the pacer runs at the fast-forward rate until settle (`keystone.tailskip=0` turns it off). It changes when steps run, never which steps run, so replays are unchanged.
+- **Camera.** Follows the collapse front: a new reduction `movingBox` (the AABB of moving structure bodies, every 4 steps), framed by the existing critically damped spring with 20% padding; grabbing orbit always takes over.
+- **Sound.** The impacts histogram already feeds juice; G6 swaps the synth for `@tb/audio`'s collapse engine (8 loudest voices plus the resonator bank), whose cost does not grow with N.
+
+## 10. Options (URL key, Scene panel, scene file)
+
+Every rule above is switchable. The viewer under `rules=keystone` reads them through `@tb/game` `params.ts` (one parser for both pages).
+
+| Key | Values (default first) | Effect |
+|---|---|---|
+| `keystone.scoring` | level's own, `par`, `outcome` | scorer; overriding marks the run custom |
+| `keystone.stars` | level's own, `collapse`, `crowns`, `skyline`, `score` | star metric |
+| `keystone.autobank` | `0`, `1` | end at first clear |
+| `keystone.quickdraw` | `0`, `1` | fire while running (custom) |
+| `keystone.tailskip` | `1`, `0` | fast-forward the tail |
+| `keystone.settle` | level's own, `v1`, `v2` | settle rule (custom) |
+| `keystone.rack` | level's own, comma list of item names | rack override (custom) |
+| `keystone.iterations`, `keystone.gapSlop`, `bounce` | level's own | physics override (custom) |
+| `scenario=<S>&rules=keystone` | | any scenario as a level: no roles, objective `collapse` 0.3, stars uncast, rack from `keystone.rack` (default `cannonball,cannonball,w-grenade`) |
+| scene file | `keystone: { scoring, stars, autobank, ... }`, `scene.levelDef` with scenario parts | the same, saved |
+
+## 11. Vertical slice plan
+
+Each row is one PR with its tests, `pnpm check` green, merged on green CI. Proofs name the test files they add.
+
+### G2: rules on any scene (needs G1)
+
+| Step | Content | Proof |
+|---|---|---|
+| G2.1 | Outcome measures in `@tb/keystone`: PE_floor, D, `nMoving`, `movingBox`, `outcomeScore`, star evaluation; `scoring` field (default `par`) | `keystone/test/outcome.test.ts`: D is 0 for the settled level and 1 for a synthetic all-flat snapshot, monotone in each body's height, equal under any body order; tally lines on a table of cases; mutants of each weight and threshold comparison fail a case. Every par test unchanged. |
+| G2.2 | Banking and end of level for outcome levels (`Session`), `autobank`; game HUD: tally v2, Bank button, objective check | `keystone/test/session.test.ts` new cases: bank refused while running, bank after a settle ends with the right rack-left line, rack empty ends, autobank ends at first clear; `game/test/e2e.test.ts` case on Rapier: one shot, bank, tally shown. |
+| G2.3 | Scenario parts: `{ kind: 'scenario', id, params, seed, at, material, roles: RoleRule[] }` compiled to bodies at the level's pitch; role selectors by box, course, top of column and scenario tag | `keystone/test/scenario-part.test.ts`: S3, S4, S14 bodies equal the scenario's positions times the pitch, in order; each selector picks the expected ids; the level hash changes with params and seed. |
+| G2.4 | `validateLevel` at scale: the O(n^2) support pass becomes a spatial hash; `count` per engine; `watched`, `flat` issues | `keystone/test/level-scale.test.ts`: the old and new validator give the same issues on L1 to L5 and 200 random small levels (property test); a 10k S4 level validates in under 2 s. |
+| G2.5 | Physics block in `LevelDef` (hash), engines built from it (`gpuOptions`, restitution, pairsPerBody); custom-run label | `game/test/engines.test.ts`: each field reaches the engine options; the hash changes with each field; an override marks the session custom and records no stars. |
+| G2.6 | Viewer: `scenario=...&rules=keystone` auto level, roles and objective in the panel | `viewer/test/rules.test.ts` cases; e2e (GPU, SwiftShader): a 10k S4 auto level loads under `rules=keystone`, a cannonball scores D > 0, no limit hit. |
+| G2.7 | Cast tool v0 on the reference for chamber levels: `pnpm keystone:cast L1`, outcome stars for L1 to L5 as a dry run of the machinery | `keystone-lab/test/cast.test.ts`: quantiles exact on known samples, rounding toward easier, T2 <= T3 enforced, same seed same thresholds. |
+
+### G3: weapons in the rack (needs G1; F4 soft; G3.4 needs V3)
+
+| Step | Content | Proof |
+|---|---|---|
+| G3.1 | `RackItem` names (`p-`, `w-`), shot text, model-scale density conversion, validator rules `mass-ratio`, `dud`, `tunnelling`, `capacity` per item; `MAX_RACK` 8 | `keystone/test/shots.test.ts`: round trips for every item, old lines parse unchanged; `keystone/test/level.test.ts`: each issue fires on a crafted level and not on its fixed twin. |
+| G3.2 | Real projectiles fire from the rack | `game/test/rack-presets.test.ts` (Rapier and GPU): each preset spawns at its converted mass and capped speed; a line with presets replays to the same hash with `driverOptions(kind)` on the same device. |
+| G3.3 | Grenade in the rack through `PlayOptions.perStep`; nominal yield in E_fired | `weapons/test/yield.test.ts`: Y within 3% of a discrete sum over a resting lattice of cubes for radius at least 4 h, Y scales as radius cubed where `maxDv` binds everywhere, zero impulse gives zero; `game/test/rack-grenade.test.ts`: a grenade line replays bit-equal on GPU (same device) and on the reference; leverage uses Y. |
+| G3.4 | `WeaponSpec` items from the level's `weapons` (after V3) | the spec'd grenade line equals the `w-grenade` line bit for bit on the reference; budget and energy come from V3's validator. |
+
+### G4: pacing at scale (needs F2)
+
+| Step | Content | Proof |
+|---|---|---|
+| G4.1 | Settle v2 and the per-tier cap | `keystone/test/rules.test.ts`: synthetic reductions settle with k stragglers at the allowance and not at allowance + 1; v1 unchanged; par tests settle on the same steps. |
+| G4.2 | Valve on GPU step time, HUD tag, tail skip | `game/test/pacing.test.ts`: time scale equals budget / step time clamped to [0.25, 1]; tail skip never changes the steps a session runs (same hash with and without). |
+| G4.3 | Collapse-front camera from `movingBox` | `game/test/camera.test.ts`: the frame contains every moving body and eases back at settle; renders reviewed. |
+| G4.4 | Metal pacing bench at 10k (Mac idle) | a bench file in project files: frame p95 at most 33 ms, physics at least 0.95x real time at 60 Hz at each slice level's settings, or the level's declared slow motion. |
+
+### G5: three to five big levels (needs G2, G3, G4, F1, F3; E4 soft)
+
+| Step | Content | Proof |
+|---|---|---|
+| G5.1 | GPU cast runner: a browser page that plays lines offscreen and writes the cloud as JSON; Metal on the Mac, SwiftShader in CI | the same line twice gives the same hash on one device; a 1k cast on SwiftShader with N 16 completes in CI under 300 s. |
+| G5.2 | Level B1 "Long Wall" (Hall) authored, settings chosen (section 8), cast, gates | `game/test/level-B1.test.ts` (SwiftShader): loads, rests 600 steps with no body moving 0.05 h, the recorded showcase line meets the objective, no limit hit; the cross-device gate runs on this level; `docs/game/levels/B1.md` holds the cloud. |
+| G5.3 | Level B2 "Spare the Cathedral" (City, about 5k) | same shape of test and notes |
+| G5.4 | Level B3 "Ten Thousand" (City, 10k) | same, plus the M5 budget row from G4.4 |
+| G5.5 | Optional B4, B5 (below); the game page's default becomes the slice (B1 to B3), chamber levels stay at `level=L1` to `L5` | `game/test/params.test.ts`: bare URL opens B1; `level=L2` still opens L2 with par scoring. |
+
+### Slice levels (proposals; the cast and the gates decide)
+
+Ids B1 to B5 (B for big) so they never clash with scenario ids S1 to S15.
+
+
+| Id | Name | Structure | Objective, stars | Rack (draft) |
+|---|---|---|---|---|
+| B1 | Long Wall | S3 wall 50 x 20, running bond, plaster (1,000) | collapse at least 0.4; stars on collapse | cannonball, cannonball, p-wreckingball |
+| B2 | Spare the Cathedral | S14 buildings (9 towers of 4 x 4 x 12 plus taller ones, about 5k); one tower is heritage, 16 crowns on the tallest roof | crowns; stars on collapse; footprint limit | w-grenade, cannonball, cannonball, drop |
+| B3 | Ten Thousand | S4 city, 10k, stone | skyline at most 40% of start; stars on collapse | w-grenade, w-grenade, p-wreckingball |
+| B4 | Domino Boulevard | slender towers in a spiral (design section 6), 3k to 10k | crowns on the last tower; stars on collapse | marble, cannonball |
+| B5 | Kapla Spire | S15 at a size E5 says runs in real time (likely about 3k planks) | collapse; stars on collapse | p-bowlingball, p-basketball, p-beachball (toy scale, where they are not duds) |
+
+Level 1's job is the first-minute promise (G7 measures it): a collapse within 20 s of loading, so its first shot is pre-aimed.
+
+## 12. Alternatives considered
+
+- **Pinned par lines at 10k.** Rejected: per-device determinism and chaos make a pinned line unverifiable on other GPUs, and the bot cannot afford the par-robustness search at 10k. Kept for chamber levels.
+- **Stars on the composite score.** Simpler, one number, and it rewards banking. Rejected as the default because "3,412 points" is not a goal a player can aim at before the first shot, while "72% down" is; `score` remains a star metric option for the playtest to compare.
+- **Several per-metric thresholds per star** (collapse and leverage for three stars). More expressive, but each extra metric multiplies the cast and makes the target harder to read. Leverage lives in the tally instead.
+- **Measured blast energy instead of nominal yield.** Rejected (section 4): it penalises good placement.
+- **Unlimited ammo, score-attack** (Rubble Garden). The design panel scored it lowest for fun (no failure, no tension), and the rack is what makes the hybrid a game rather than the sandbox, which the viewer already is.
+- **A run mode** (shuffled levels, rack as a pouch, BREAKLINE). Good second mode if the playtest shows content starvation; out of the slice.
+- **Quickdraw on by default.** Rejected for v1: firing into a running collapse blurs which shot did what and has no settle baseline; it is an option for the playtest.
+- **New authored part kinds for big structures instead of importing scenarios.** Rejected: scenarios already have parameters, seeds, viewer controls and Will's saved scenes; a scenario part reuses all of it, and authored blocks and slabs still work beside it.
+- **Settle v2 everywhere.** Rejected: it would move the settle step of every pinned par line. Chamber levels keep v1.
+
+## 13. Risks
+
+| Risk | Watch | Response |
+|---|---|---|
+| Collapses at 10k are so chaotic that aiming does not matter | the "skill matters" gate (T3 - T2) | redesign the level around a load path (lintels, cores) the X-ray can show; fewer, heavier rack items |
+| Cast too slow on the M5 | the budget gate | shorter recipe; the GPU fork ask |
+| 10k at 40 iterations over the 11 ms step budget | F2, G4.4 | 20 iterations where the rest test allows; smaller City levels; declared slow motion |
+| Big levels hit pair or colour limits | `health()` in every cast play | F1 sizing; `pairsPerBody` in the physics block |
+| Bounce at game mass ratios drives blocks into the ground | E4's probes | Bounce stays off until E4; per-item `mass-ratio` probe |
+| The thresholds feel arbitrary to players | playtest question (j) | show the bot's distribution on the result card ("better than 64% of bot plays") |
+
+Playtest additions to the design's list (G9): **(i)** does anyone bank early, and does the rack-left line change behaviour; **(j)** can players say what the star target was after the level; **(k)** spectacle rating of B3 against B1 ("is 10k better than 1k?").
+
+## 14. Defaults this spec proceeds on
+
+Will said to proceed on recommended defaults; these are the new ones, each one option away from the alternative: stars on collapse fraction (not the composite score); banking on; Quickdraw off; the game page's bare URL switches to the slice once G5.5 lands, with par levels kept at `level=L1` to `L5`; real light balls only in toy-scale levels; the boulder stays out of the slice.

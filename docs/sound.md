@@ -16,8 +16,10 @@ with renders, metrics and scripts in /mnt/project-files/sound/.
   drive becomes noise of the same energy (Cook's PhISEM).
 - **Onsets** are spread over the frame, never on frame starts (that buzzes at
   60 Hz, +13 dB in the study).
-- **Non-modal layers** (stone grit, splinters, rubble sliding) use pre-mixed
-  granular "bills" with >= 16 variants and random offsets (step S8).
+- **Non-modal layers** (stone grit, splinters, rubble sliding) are granular,
+  with >= 16 grain variants and random offsets (step S8). Stone grit is
+  built (see Grit below) as grains synthesised per impact, not pre-mixed
+  bills: at its grain rates it costs the same and keeps each hit's own count.
 - Audio runs in an AudioWorklet. The histogram comes from the snapshots on
   the CPU for now; a GPU reduce (S4) would read back about 1 KB a frame with
   one frame of lag, inside the 125 ms audio-late tolerance of ITU-R BT.1359.
@@ -49,6 +51,7 @@ it. Keys (`@tb/audio` options.ts):
 | `snd.mat` | auto | pine, acrylic, stone; auto = pine for Kapla (S15), the real look's stone (pine or stone), else acrylic |
 | `snd.volume` | 0 | master, dB |
 | `snd.ring`, `snd.click` | 0 | the modes and the contact click, dB over the material's |
+| `snd.grit` | 0 | chips off hard hits (stone only), dB over the material's |
 | `snd.damping` | 1 | loss factor x |
 | `snd.pitch` | 0 | semitones (stiffness x 2^(st/6)) |
 | `snd.spread` | 1 | body-to-body pitch spread x |
@@ -124,7 +127,68 @@ Stone city before and after, energy above 1 kHz: -27 dB of the total before,
 -37 dB after. The audio thread's cost is unchanged (both ~15% of a VM core;
 a sanity check only, not a performance result). Stone now sounds like what
 the model says 1 m concrete blocks are: dull thumps. Its crunch is the grit
-layer (S8), which is not built yet.
+layer (S8), below.
+
+## Grit (2026-11-01)
+
+Chips knocked off hard hits: what makes stone crunch rather than thump.
+The model is the study's (`add_grit` in /mnt/project-files/sound/scripts/snd.py),
+made exact in energy so the bank and the foreground voices agree:
+
+- An impact with speed change dv > 0.6 m/s sheds Poisson(min(3 dv, 30))
+  grains. Each is one of 16 Hann-derivative kernels, 4 to 32 samples long at
+  48 kHz (chip sizes; ~1.5-12 kHz), with a lognormal(0, 0.7) amplitude, delayed
+  by an exponential of mean 20 ms x sqrt(edge / 25 cm) (chips fall further
+  from a bigger block: 40 ms at 1 m).
+- A grain's energy is gritEnergy (A dv)^2, A = dv / distance. gritEnergy
+  matches the study's grain on a 25 cm block and goes with the block's volume
+  (edge^3): chip energy as a share of the impact's. `gritDb` sets it, and
+  `snd.grit` moves it live.
+- The bank rebuilds its impulses from the histogram (n impacts as k <= 256
+  impulses), so impulse i sheds n / k impacts' grains. Above 64 expected
+  grains a cell and frame (`maxGrains`), fewer grains carry the same energy.
+- Grit draws from its own random stream: with it on, the modes and clicks
+  are bit for bit what they were.
+
+Tests (`packages/audio/test/grit.test.ts`): the energy law in the foreground
+(within 0.25 dB) and in the bank, capped and not (0.35 dB); every grain is
+played whole across block edges (each kernel sums to zero, so the output
+must); soft hits, pine and acrylic shed none; grit only adds (grit on minus
+grit off is the grit-only render, to float rounding); it is impulsive and
+bright (kurtosis over 8, 90% of its energy at 1-16 kHz); its spread follows
+the block size; and it stays under the limiter when grains overflow. A
+mutation check: dropping the bank's 1 / sqrt(q), cutting grains at block
+edges, or sharing the random stream each fails a test.
+
+Level, on the stone city capture (1 m blocks, volume 0):
+
+| `gritDb` | Energy above 1 kHz | A-weighted energy vs no grit | Peak |
+|---|---|---|---|
+| none (main) | -41.0 dB | 0 | 0.34 |
+| -18 | -36.5 | +0.1 | 0.34 |
+| -12 (`snd.grit=-6`) | -31.9 | +0.4 | 0.34 |
+| **-6 (default)** | -26.4 | +1.4 | 0.34 |
+| 0 (the study's, `snd.grit=6`) | -20.5 | +4.0 | 0.37 |
+
+The default is -6: the crunch is clearly there, and the thump still carries
+the loudness. Before the distortion fix the bank's broken click put a similar
+-27 dB above 1 kHz, but on every impact's onset, which is what clipping does
+to a transient; grit is on hard hits only and spread after them. WAVs:
+/mnt/project-files/sound/grit/. Every other case in the per-material check
+(city acrylic and pine, Kapla pine and acrylic) is bit-identical to main.
+The 25 cm city gets +0.3 dB at 1 kHz, and Kapla-size stone (2.3 cm) almost
+none: its grit is 31 dB under a 25 cm block's (volume scaling), the one
+place the scaling is a guess S9 should check. Cost: in the noise of the
+audio thread (a VM sanity check, not a performance result; ~3.5k grains a
+second in the city collapse).
+
+Alternatives weighed: pre-mixed bills (the study's plan) fix the grains per
+impact and their spread in the bill; per-grain synthesis costs the same at
+these rates and lets dv set the count. PhISEM (noise through resonant
+filters, energy-driven) is cheaper still at huge densities but turns into
+hiss, while chips are crackle. A fracture impulse into the block's own modes
+(a short, full-band "crack" instead of the Hertz thump) is the most physical
+next layer; it waits for recordings (S9).
 
 ## Plan (each step lands with its test)
 
@@ -141,7 +205,7 @@ layer (S8), which is not built yet.
    bank clicks, lookahead limiter and low cut 2026-10-30.
 6. S6 viewer Sound section and `snd.*` URL params. Done.
 7. S7 ground and hall: floor resonators, reverb tied to `real.env`.
-8. S8 granular bills for non-modal layers (stone grit: `gritDb` is not played yet).
+8. S8 granular non-modal layers: stone grit done (2026-11-01, Grit above); splinters and rubble sliding not yet.
 9. S9 calibration from recordings (example-guided, Ren et al. 2013).
 10. S10 M5 bench (`pnpm bench:audio`): audio-thread load and the tap's main-thread cost at 10k and 100k.
 11. S11 game adoption (game thread's call), and ball and level materials.
