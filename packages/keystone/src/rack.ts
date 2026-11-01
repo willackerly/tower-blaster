@@ -6,12 +6,15 @@
 //   real diameter, restitution, friction and launch speed, with its density at
 //   Keystone's model scale (MODEL_DENSITY). Fired from the launcher ring at 50% to
 //   100% of its own speed.
-// - w-<key>: a weapon, the level's weapons[key] (a GrenadeSpec in the level's units,
-//   levelWeapon), fired in a GRENADE_SHELL from the launcher ring. w-grenade on a level
-//   with no weapons.grenade is KEYSTONE_GRENADE. WeaponSpec weapons join under the
-//   same names once the language exists (roadmap V3).
+// - w-<key>: a weapon, the level's weapons[key], fired from the launcher ring: a
+//   GrenadeSpec (lengths in h, the rest SI: levelWeapon) in a GRENADE_SHELL, or a
+//   @tb/weapons WeaponSpec in its own shell, written in the viewer's cube units and
+//   scaled to the level (arsenal.ts levelArm). A level without weapons[key] gets
+//   w-grenade as KEYSTONE_GRENADE and w-firework, w-cluster as @tb/weapons' built-ins
+//   (weaponOf). An item's shell, speed and body count then come from the compiled
+//   level (CompiledLevel.arms, ShotFrame.shells).
 import type { Vec3 } from '@tb/engine-api';
-import { checkGrenade, type GrenadeSpec, isPreset, PRESET_NAMES, type PresetName, PROJECTILE_PRESETS, STONE_DENSITY } from '@tb/weapons';
+import { BUILTIN_WEAPONS, checkGrenade, type GrenadeSpec, isPreset, type WeaponSpec, PRESET_NAMES, type PresetName, PROJECTILE_PRESETS, STONE_DENSITY } from '@tb/weapons';
 import { DEFAULT_UNIT, MATERIALS, materialId, type MaterialName } from './materials.ts';
 
 export type AmmoKind = 'marble' | 'cannonball' | 'cue' | 'drop';
@@ -106,10 +109,26 @@ export interface ItemSpec {
   vMax: number;
 }
 
-/** What item `name` fires in a level of `unit` metres per h. Throws on a name that is not a rack item. */
-export function itemSpec(name: RackItem, unit: number): ItemSpec {
+/**
+ * Where an item is fired: the level's metres per h and the shells of its w- items
+ * (ShotFrame.shells, from compileLevel). A bare unit stands for a level whose only weapon
+ * is the default grenade.
+ */
+export type ItemFrame = number | { unit: number; shells?: Readonly<Record<string, ItemSpec>> };
+
+/**
+ * What item `name` fires at `at`. A w- item takes its shell from the frame's shells; without
+ * one only w-grenade resolves (GRENADE_SHELL). Throws on a name that is not a rack item.
+ */
+export function itemSpec(name: RackItem, at: ItemFrame): ItemSpec {
   const r = itemRef(name);
   if (!r) throw new Error(`rack item ${JSON.stringify(name)} is not one of ${RACK_ITEM_NAMES}`);
+  const unit = typeof at === 'number' ? at : at.unit;
+  if (r.kind === 'weapon') {
+    const own = typeof at === 'number' ? undefined : at.shells?.[name];
+    if (own) return own;
+    if (r.key !== 'grenade') throw new Error(`${name}: its shell comes from the level's weapons (fire it through the compiled level's frame)`);
+  }
   if (r.kind === 'preset') {
     const p = PROJECTILE_PRESETS[r.preset];
     return { size: { radius: p.diameter / 2 }, density: p.density * MODEL_DENSITY, friction: p.friction, restitution: p.restitution, vMin: p.speed / 2, vMax: p.speed };
@@ -119,27 +138,40 @@ export function itemSpec(name: RackItem, unit: number): ItemSpec {
   return { size, density: m.density, friction: m.friction, restitution: m.restitution, vMin: a.vMin, vMax: a.vMax };
 }
 
-/** Launch speed, m/s, of `name` at power 0..100: linear over its speed range. */
-export function speedOf(name: RackItem, power: number): number {
-  const { vMin, vMax } = itemSpec(name, DEFAULT_UNIT);
+/** Launch speed, m/s, of `name` at power 0..100 (fired at `at`): linear over its speed range. */
+export function speedOf(name: RackItem, power: number, at: ItemFrame = DEFAULT_UNIT): number {
+  const { vMin, vMax } = itemSpec(name, at);
   return vMin + ((vMax - vMin) * power) / 100;
 }
 
+/** A level's weapons entry: a GrenadeSpec (lengths in h, the rest SI) or a WeaponSpec (the viewer's cube units). */
+export type LevelWeapon = GrenadeSpec | WeaponSpec;
+
 /**
- * Weapon `key` of a level in world units (lengths times the level's unit), checked
- * (checkGrenade); w-grenade without one is KEYSTONE_GRENADE. Null if the level has no
- * such weapon.
+ * Weapon `key` of a level as written: its own weapons[key], or the default (w-grenade:
+ * KEYSTONE_GRENADE; w-firework, w-cluster: @tb/weapons BUILTIN_WEAPONS). Null if none.
+ * Unchecked: levelWeapon and arsenal.ts levelArm check and scale it.
  */
-export function levelWeapon(def: { unit?: number; weapons?: Record<string, GrenadeSpec> }, key: string): GrenadeSpec | null {
-  const own = def.weapons && Object.hasOwn(def.weapons, key) ? def.weapons[key]! : null;
-  const g = own ?? (key === 'grenade' ? KEYSTONE_GRENADE : null);
-  if (!g) return null;
+export function weaponOf(def: { weapons?: Record<string, LevelWeapon> }, key: string): LevelWeapon | null {
+  if (def.weapons && Object.hasOwn(def.weapons, key)) return def.weapons[key]!;
+  if (key === 'grenade') return KEYSTONE_GRENADE;
+  return Object.hasOwn(BUILTIN_WEAPONS, key) ? BUILTIN_WEAPONS[key]! : null;
+}
+
+/**
+ * Grenade `key` of a level in world units (lengths times the level's unit), checked
+ * (checkGrenade); w-grenade without one is KEYSTONE_GRENADE. Null if the level has no
+ * such weapon or it is a WeaponSpec (arsenal.ts levelArm scales those).
+ */
+export function levelWeapon(def: { unit?: number; weapons?: Record<string, LevelWeapon> }, key: string): GrenadeSpec | null {
+  const g = weaponOf(def, key);
+  if (!g || 'version' in g) return null;
   const h = def.unit ?? DEFAULT_UNIT;
   return checkGrenade({ ...g, prox: g.prox * h, blast: { ...g.blast, radius: g.blast.radius * h } });
 }
 
-/** Engine bodies an item can add when fired: one for a thrown thing (a WeaponSpec's static budget, after V3). */
-export const itemBodies = (_name: RackItem): number => 1;
+/** Engine bodies an item can add when fired: one for a thrown thing, a weapon's static budget (arms: CompiledLevel.arms). */
+export const itemBodies = (name: RackItem, arms?: Readonly<Record<string, { bodies: number }>>): number => arms?.[name]?.bodies ?? 1;
 
 /** Engine bodies the whole rack can add: what an engine must hold beyond the structure. */
-export const rackBodies = (rack: readonly RackItem[]): number => rack.reduce((a, x) => a + itemBodies(x), 0);
+export const rackBodies = (rack: readonly RackItem[], arms?: Readonly<Record<string, { bodies: number }>>): number => rack.reduce((a, x) => a + itemBodies(x, arms), 0);

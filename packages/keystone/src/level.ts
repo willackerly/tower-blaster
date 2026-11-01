@@ -4,8 +4,8 @@
 // hash pins the exact scene a recorded solution was made against.
 import { type BodyDesc, massOf, type SceneDesc, type Vec3 } from '@tb/engine-api';
 import { DEFAULT_GAP, DEFAULT_UNIT, encodeTag, GRAVITY, MATERIALS, materialId, type MaterialName, type Role, ROLES } from './materials.ts';
-import type { GrenadeSpec } from '@tb/weapons';
-import { isRackItem, itemRef, levelWeapon, RACK_ITEM_NAMES, rackBodies, type RackItem, speedOf, WEAPON_KEY } from './rack.ts';
+import { type Arm, levelArm, rackArms } from './arsenal.ts';
+import { isRackItem, itemRef, type LevelWeapon, RACK_ITEM_NAMES, rackBodies, type RackItem, speedOf, WEAPON_KEY } from './rack.ts';
 import { ammoBody, type LauncherDef, type Shot, type ShotFrame } from './shots.ts';
 
 /** A course (layer) override inside a block: change material or role, or leave cells out. */
@@ -73,8 +73,12 @@ export interface LevelDef {
   par: number;
   /** What the player may fire, one entry per shot (rack.ts names). */
   rack: RackItem[];
-  /** Weapons the rack's w-<key> items fire, by key; lengths (blast radius, prox) in h, the rest SI (levelWeapon). */
-  weapons?: Record<string, GrenadeSpec>;
+  /**
+   * Weapons the rack's w-<key> items fire, by key: a GrenadeSpec with lengths (blast radius,
+   * prox) in h and the rest SI (levelWeapon), or a @tb/weapons WeaponSpec in the viewer's
+   * cube units, scaled to the level's commonest block (arsenal.ts cubeScale).
+   */
+  weapons?: Record<string, LevelWeapon>;
   /** Validator limits a level may relax. */
   limits?: {
     /** Most a rack item's mass may be over the lightest structure body's (default AMMO_RATIO, at most AMMO_RATIO_MAX). */
@@ -127,6 +131,8 @@ export interface CompiledLevel {
   scene: SceneDesc;
   meta: BodyMeta;
   frame: ShotFrame;
+  /** The rack's weapons resolved, by item name (arsenal.ts rackArms; frame.shells holds their shells). */
+  arms: Readonly<Record<string, Arm>>;
   /** World-space lot rectangle in metres. */
   lot: { min: [number, number]; max: [number, number] };
   /** Structure height in metres (top of the highest body). */
@@ -209,7 +215,11 @@ export function compileLevel(def: LevelDef): CompiledLevel {
   const { solutions: _omit, stars: _stars, ...geometry } = def;
   if (geometry.scoring === 'par') delete geometry.scoring;
   if (geometry.autobank === false) delete geometry.autobank;
-  return { def, scene, meta, frame, lot, height, hash: hashString(JSON.stringify(geometry)) };
+  const c: CompiledLevel = { def, scene, meta, frame, arms: {}, lot, height, hash: hashString(JSON.stringify(geometry)) };
+  const arms = rackArms(c);
+  c.arms = arms;
+  frame.shells = Object.fromEntries(Object.entries(arms).map(([k, a]) => [k, a.shell]));
+  return c;
 }
 
 export interface Issue {
@@ -249,7 +259,7 @@ export function validateLevel(c: CompiledLevel): Issue[] {
   const { def, meta: m } = c, h = c.frame.unit, issues: Issue[] = [];
   if (m.n === 0) issues.push({ code: 'empty', message: 'level has no bodies' });
   if (m.n > MAX_BODIES) issues.push({ code: 'count', message: `${m.n} bodies > ${MAX_BODIES} (Rapier prototype budget)` });
-  else if (m.n + rackBodies(def.rack.filter(isRackItem)) > MAX_BODIES) issues.push({ code: 'capacity', message: `${m.n} bodies + ${rackBodies(def.rack.filter(isRackItem))} the rack can add > ${MAX_BODIES}` });
+  else if (m.n + rackBodies(def.rack.filter(isRackItem), c.arms) > MAX_BODIES) issues.push({ code: 'capacity', message: `${m.n} bodies + ${rackBodies(def.rack.filter(isRackItem), c.arms)} the rack can add > ${MAX_BODIES}` });
   if (def.rack.length === 0 || def.rack.length > MAX_RACK || def.par < 1 || def.par > def.rack.length) issues.push({ code: 'rack', message: `rack of ${def.rack.length} with par ${def.par}: need 1 <= par <= rack <= ${MAX_RACK}` });
 
   const eps = 1e-4 * h;
@@ -332,26 +342,36 @@ function rackIssues(c: CompiledLevel): Issue[] {
   if (!(ratioMax > 0 && ratioMax <= AMMO_RATIO_MAX)) issues.push({ code: 'ammo-ratio', message: `limits.ammoRatio ${ratioMax} must be above 0 and at most ${AMMO_RATIO_MAX}` });
   for (const key of Object.keys(def.weapons ?? {})) {
     if (!WEAPON_KEY.test(key)) issues.push({ code: 'weapon', message: `weapons.${key}: a key is 1 to 24 lower case letters and digits, starting with a letter` });
-    else try { levelWeapon(def, key); } catch (e) { issues.push({ code: 'weapon', message: `weapons.${key}: ${(e as Error).message}` }); }
+    else try { levelArm(c, key); } catch (e) { issues.push({ code: 'weapon', message: `weapons.${key}: ${(e as Error).message}` }); }
   }
+  const tunnel = (what: string, size: number, v: number) => {
+    const reach = v * dt;
+    if (reach > 0.8 * (size + thin)) issues.push({ code: 'tunnelling', message: `${what} moves ${reach.toFixed(3)} m per step, more than 0.8 x (${size.toFixed(3)} + thinnest body ${thin.toFixed(3)}) m` });
+  };
+  const sizeOf = (s: BodyDesc['shape']) => (s.kind === 'sphere' ? 2 * s.radius : s.kind === 'box' ? 2 * Math.min(...s.half) : 0);
+  const heavy = (what: string, mass: number) => {
+    const ratio = mass / lightest;
+    if (m.n > 0 && ratio > ratioMax) issues.push({ code: 'ammo-ratio', message: `${what} (${mass.toFixed(1)} kg) is ${ratio.toFixed(1)} x the lightest structure body (${lightest.toFixed(1)} kg), over ${ratioMax}` });
+  };
   for (const item of new Set<string>(def.rack)) {
     const ref = itemRef(item);
     if (!ref) { issues.push({ code: 'rack', message: `rack item ${JSON.stringify(item)} is not one of ${RACK_ITEM_NAMES}` }); continue; }
-    let weapon = null;
+    let arm: Arm | null = null;
     if (ref.kind === 'weapon') {
-      try { weapon = levelWeapon(def, ref.key); } catch { continue; } // reported above
-      if (!weapon) { issues.push({ code: 'weapon', message: `${item}: the level has no weapons.${ref.key}` }); continue; }
+      if (def.weapons && Object.hasOwn(def.weapons, ref.key)) { arm = c.arms[item] ?? null; if (!arm) continue; } // reported above
+      else try { arm = levelArm(c, ref.key); } catch (e) { issues.push({ code: 'weapon', message: `${item}: ${(e as Error).message}` }); continue; }
     }
-    const b = ammoBody(item as RackItem, h, [0, 0, 0], [0, 0, 0]), s = b.shape, mass = massOf(b);
-    const size = s.kind === 'sphere' ? 2 * s.radius : s.kind === 'box' ? 2 * Math.min(...s.half) : 0;
-    const v = item === 'drop' ? Math.sqrt(2 * GRAVITY * def.launcher.dropY * h) : speedOf(item as RackItem, 100);
-    const reach = v * dt;
-    if (reach > 0.8 * (size + thin)) issues.push({ code: 'tunnelling', message: `${item} moves ${reach.toFixed(3)} m per step, more than 0.8 x (${size.toFixed(3)} + thinnest body ${thin.toFixed(3)}) m` });
-    if (weapon && weapon.blast.maxSpeed * dt > 0.8 * 2 * thin) issues.push({ code: 'tunnelling', message: `${item}'s blast can kick a body to ${weapon.blast.maxSpeed} m/s, ${(weapon.blast.maxSpeed * dt).toFixed(3)} m per step, more than 0.8 x twice the thinnest body ${thin.toFixed(3)} m` });
+    const b = ammoBody(item as RackItem, c.frame, [0, 0, 0], [0, 0, 0]), mass = massOf(b);
+    const v = item === 'drop' ? Math.sqrt(2 * GRAVITY * def.launcher.dropY * h) : speedOf(item as RackItem, 100, c.frame);
+    tunnel(item, sizeOf(b.shape), v);
+    heavy(item, mass);
+    if (arm) {
+      // A weapon's children (each at its speed bound: the shell's top speed plus the spreads that threw it) and its blasts' kicks.
+      for (const x of arm.munitions.slice(1)) { tunnel(`${item}'s ${x.path}`, sizeOf(x.shape), x.speed); heavy(`${item}'s ${x.path}`, x.mass); }
+      for (const { path, blast } of arm.blasts) if (blast.maxSpeed * dt > 0.8 * 2 * thin) issues.push({ code: 'tunnelling', message: `${item}'s blast${arm.blasts.length > 1 ? ` (${path})` : ''} can kick a body to ${blast.maxSpeed} m/s, ${(blast.maxSpeed * dt).toFixed(3)} m per step, more than 0.8 x twice the thinnest body ${thin.toFixed(3)} m` });
+    }
     if (m.n === 0) continue;
-    const ratio = mass / lightest;
-    if (ratio > ratioMax) issues.push({ code: 'ammo-ratio', message: `${item} (${mass.toFixed(1)} kg) is ${ratio.toFixed(1)} x the lightest structure body (${lightest.toFixed(1)} kg), over ${ratioMax}` });
-    if (!weapon && item !== 'drop' && isDud(c, mass, 0.5 * mass * v * v)) issues.push({ code: 'dud', warning: true, message: `${item}: one head-on hit at full power (${(0.5 * mass * v * v).toFixed(0)} J) cannot tip any structure body` });
+    if (!arm && item !== 'drop' && isDud(c, mass, 0.5 * mass * v * v)) issues.push({ code: 'dud', warning: true, message: `${item}: one head-on hit at full power (${(0.5 * mass * v * v).toFixed(0)} J) cannot tip any structure body` });
   }
   return issues;
 }
