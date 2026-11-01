@@ -4,7 +4,7 @@
 // page reads them (@tb/game parseGameParams), and a value the game page
 // refuses the viewer refuses too.
 import { describe, expect, it } from 'vitest';
-import { parseGameParams } from '@tb/game';
+import { DEFAULT_LEVEL, parseGameParams } from '@tb/game';
 import { L1, L4, type Shot, writeShots } from '@tb/keystone';
 import { parseRealOptions } from '@tb/render';
 import { keystoneEngine, levelChoice, parseViewerConfig, proposeScene, toSearch } from '../src/index.ts';
@@ -23,10 +23,10 @@ const GAME_URLS = [
   `?level=L4&engine=rapier&keystone.shots=${writeShots(L4.solutions!.par as Shot[])}&offscreen=1`,
 ];
 
-/** The viewer's URL for a game URL: the same keys, under the rules (the viewer needs a level named). */
+/** The viewer's URL for a game URL: the same keys, under the rules (the viewer needs a level named: the game page's default, DEFAULT_LEVEL, when the game URL names none). */
 const viewerUrl = (game: string) => {
   const q = new URLSearchParams(game);
-  if (!q.has('level')) q.set('level', 'L1');
+  if (!q.has('level')) q.set('level', DEFAULT_LEVEL);
   q.set('rules', 'keystone');
   return `?${q}`;
 };

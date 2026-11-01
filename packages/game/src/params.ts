@@ -4,7 +4,7 @@
 // (docs/design/viewer-superset.md, step F). A key's bad value is refused with
 // a message naming it; keys a page doesn't know are left to it (the look's
 // real.* knobs, the viewer's own).
-import { checkPhysics, checkSettle, isRackItem, itemRef, LEVELS, levelById, type LevelDef, MAX_RACK, type PhysicsBlock, RACK_ITEM_NAMES, type RackItem, readShots, SCORINGS, type Scoring, type SettleRule, type Shot, weaponOf } from '@tb/keystone';
+import { BIG_LEVELS, checkPhysics, checkSettle, isRackItem, itemRef, levelById, type LevelDef, MAX_RACK, type PhysicsBlock, RACK_ITEM_NAMES, type RackItem, readShots, SCORINGS, type Scoring, type SettleRule, type Shot, weaponOf } from '@tb/keystone';
 import { LOOKS } from '@tb/render';
 import { type EngineKind, engineKind } from './engines.ts';
 import { paceFeel, type PaceFeel } from './pacing.ts';
@@ -79,7 +79,7 @@ export function onEngine(def: LevelDef, kind: string): LevelDef {
 }
 
 export interface GameParams {
-  /** ?level=L1 to L5 (any case; the first level when absent), with its rack replaced when ?keystone.rack is given and the rule overrides applied. */
+  /** ?level=B1 to B3 or L1 to L5 (any case; DEFAULT_LEVEL, B1, when absent), with its rack replaced when ?keystone.rack is given and the rule overrides applied. */
   level: LevelDef;
   /** ?keystone.rack: the rack the level opened with instead of its own (rackOf), or null. */
   rack: RackItem[] | null;
@@ -93,6 +93,12 @@ export interface GameParams {
   /** ?offscreen=1 (tests): draw only for captures. */
   offscreen: boolean;
 }
+
+/**
+ * The level a bare URL opens: the spectacle slice's first (B1 Long Wall, roadmap G5.5); its series plays on into
+ * B2 and B3. The chamber levels stay at ?level=L1 to L5, with par scoring.
+ */
+export const DEFAULT_LEVEL = BIG_LEVELS[0]!.id;
 
 /** A built-in level (chamber L1 to L5 or big B1 on) by id, any case; throws naming the known ones. */
 export const gameLevel = (id: string): LevelDef => levelById(id);
@@ -140,7 +146,7 @@ export function lookName(name: string): string {
 
 export function parseGameParams(q: URLSearchParams): GameParams {
   const rules = levelRules(q);
-  const authored = gameLevel(q.get('level') ?? LEVELS[0]!.id), rack = rackOf(authored, q.get('keystone.rack'));
+  const authored = gameLevel(q.get('level') ?? DEFAULT_LEVEL), rack = rackOf(authored, q.get('keystone.rack'));
   const level = withRules(rack ? { ...authored, rack } : authored, rules);
   return {
     level, rack, rules,

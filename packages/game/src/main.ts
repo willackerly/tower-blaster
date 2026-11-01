@@ -1,5 +1,6 @@
 // The game page: Keystone (playKeystone, play.ts) on the GPU solver, or Rapier
-// with ?engine=rapier, in the maquette look. ?level=L2 starts on another level,
+// with ?engine=rapier, in the maquette look. A bare URL opens the slice (B1, then B2
+// and B3); ?level=L2 starts on another level (L1 to L5: the chamber levels, par),
 // ?keystone.rack= gives it another rack, ?look= and real.* change the look, ?keystone.hitstop=1 and ?keystone.slowmo=1
 // turn on pace juice, ?keystone.shots= plays a line once loaded, ?offscreen=1
 // (tests) draws only for captures. The keys are params.ts's, which the viewer
