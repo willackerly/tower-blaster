@@ -22,7 +22,7 @@ import { hudHtml, nextSelection, rackChips, resultHtml, starsText } from './hud.
 import { FollowCam } from './follow.ts';
 import { CameraJuice, contactJuice } from './juice.ts';
 import { alphaAt, arrived, DEFAULT_FEEL, newArrivals, Pacer, type PaceFeel, SLOW_TAG_BELOW, slowTag, SpeedMeter, TailSkip } from './pacing.ts';
-import { COST_WINDOW, runPhysics } from './physics-loop.ts';
+import { COST_WINDOW, runPhysics, wakeable } from './physics-loop.ts';
 import { CLEAR_SHARE, FrameGovernor } from './frame-rate.ts';
 import { beadOverlay, regrowDuration, regrowScales, structureTints, TINT } from './scene.ts';
 
@@ -475,9 +475,14 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     handle.view = { target: [...orbit.target], distance: orbit.distance, following: follow.active };
   }
 
+  /** The physics loop's idle wait: the next frame, or a fire, whichever comes first (physics-loop.ts wakeable). */
+  const physicsIdle = wakeable(() => new Promise<void>((res) => requestAnimationFrame(() => res())));
+
   function fire(shot: Shot): boolean {
     if (stepping || regrowT !== null || !driver.session.canFire(shot.ammo)) return false;
     const fb = driver.fire(shot);
+    // The shot's first step goes in now, not at the next frame.
+    physicsIdle.kick();
     // A shot's pace starts fresh: no tail yet, and at real time until its steps say otherwise.
     tail.reset();
     speed.reset();
@@ -687,7 +692,6 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
   requestAnimationFrame(() => void tick().catch(fail));
 
   // Physics, in its own loop: a step runs when one is due and never inside a frame (physics-loop.ts).
-  const nextFrame = () => new Promise<void>((res) => requestAnimationFrame(() => res()));
   const channel = new MessageChannel(), tasks: Array<() => void> = [];
   channel.port1.onmessage = () => tasks.shift()?.();
   const task = () => new Promise<void>((res) => { tasks.push(res); channel.port2.postMessage(null); });
@@ -698,7 +702,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     active: () => !loading && driver.session.phase === 'running',
     dtMs: () => 1000 * c.scene.dt,
     options: () => ({ fastForward: fastNow(), budgetMs: feel.budgetMs }),
-    idle: nextFrame,
+    idle: physicsIdle.wait,
     task,
     step: () => exclusive(async () => {
       if (loading || driver.session.phase !== 'running') return null; // a load got in first, or the shot ended

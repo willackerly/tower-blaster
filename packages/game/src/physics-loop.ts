@@ -41,6 +41,27 @@ export interface PhysicsHooks {
   task(): Promise<void>;
 }
 
+/**
+ * A wait for the next frame that kick() ends early (pipelining audit P4, docs/pipelining.md). The
+ * physics loop idles on it while no shot runs; fire() kicks it, so a shot's first step is submitted at
+ * the click instead of at the next frame (up to 8.3 ms later at 120 Hz). A kick while nothing waits
+ * does nothing: the loop is busy and sees the shot on its next pass.
+ */
+export function wakeable(next: () => Promise<void>): { wait(): Promise<void>; kick(): void; readonly waiting: boolean } {
+  let wake: (() => void) | null = null;
+  return {
+    wait() {
+      return new Promise<void>((resolve) => {
+        const done = () => { if (wake === done) wake = null; resolve(); };
+        wake = done;
+        void next().then(done, done);
+      });
+    },
+    kick() { wake?.(); },
+    get waiting() { return wake !== null; },
+  };
+}
+
 /** Step costs the valve reads: the median of the last 60 (the old frame loop's window). */
 export const COST_WINDOW = 60;
 

@@ -7,7 +7,7 @@ import { describe, expect, it } from 'vitest';
 import type { PhysicsEngine } from '@tb/engine-api';
 import { SlowedEngine } from '@tb/bench';
 import { Pacer, valve } from '../src/pacing.ts';
-import { type PhysicsHooks, runPhysics, type StepRun } from '../src/physics-loop.ts';
+import { type PhysicsHooks, runPhysics, type StepRun, wakeable } from '../src/physics-loop.ts';
 
 const DT_MS = 1000 / 60;
 const SECONDS = 10, WARM_MS = 2000;
@@ -161,5 +161,65 @@ describe('the physics loop: time scale tracks the step budget', () => {
     expect(at.filter((t) => t < 1000 + 2 * DT_MS).length).toBeLessThanOrEqual(3);
     expect(ran).toBeGreaterThan(110);
     expect(ran).toBeLessThan(125);
+  });
+});
+
+describe('wakeable (P4: a fire wakes the idle physics loop)', () => {
+  /** A frame clock the test advances by hand. */
+  function frames() {
+    const waiting: Array<() => void> = [];
+    return { next: () => new Promise<void>((r) => { waiting.push(r); }), tick: () => { for (const r of waiting.splice(0)) r(); } };
+  }
+  const flush = () => new Promise<void>((r) => setTimeout(r, 0));
+
+  it('wait() ends at the next frame, or at a kick, whichever comes first; a kick with nobody waiting does nothing', async () => {
+    const f = frames(), w = wakeable(f.next);
+    w.kick();
+    let done = false;
+    void w.wait().then(() => { done = true; });
+    expect(w.waiting).toBe(true);
+    await flush();
+    expect(done).toBe(false);
+    w.kick();
+    await flush();
+    expect(done).toBe(true);
+    expect(w.waiting).toBe(false);
+    // The frame that comes later ends nothing new.
+    f.tick();
+    let second = false;
+    void w.wait().then(() => { second = true; });
+    f.tick();
+    await flush();
+    expect(second).toBe(true);
+  });
+
+  it("a shot's first step is submitted at the fire, with no frame passing", async () => {
+    const f = frames(), w = wakeable(f.next);
+    let active = false, alive = true, now = 0;
+    const steps: number[] = [];
+    const h: PhysicsHooks = {
+      now: () => now,
+      alive: () => alive,
+      active: () => active,
+      dtMs: () => DT_MS,
+      options: () => ({}),
+      idle: w.wait,
+      task: async () => {},
+      step: async (): Promise<StepRun> => {
+        steps.push(now);
+        alive = false; // one step is enough
+        return { started: now, submitted: now, yielded: true };
+      },
+    };
+    const loop = runPhysics(h, new Pacer());
+    await flush();
+    expect(w.waiting).toBe(true);
+    expect(steps).toEqual([]);
+    // The click: the shot starts and kicks the loop; no frame is ticked.
+    now = 3;
+    active = true;
+    w.kick();
+    await loop;
+    expect(steps).toEqual([3]);
   });
 });
