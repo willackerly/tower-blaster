@@ -2,8 +2,8 @@
 // samples, its seeded sampling, and the whole recipe on a synthetic player
 // (every number checkable by hand) and on Rapier with a tiny recipe.
 import { describe, expect, it } from 'vitest';
-import { aimAt, type CastPlay, type CastSample, compileLevel, launcherPos, type LaunchShot, type LevelDef, scenarioLevel, type Shot } from '@tb/keystone';
-import { castLevel, exposedFaces, faceSectors, facingAzimuth, FACE_SECTORS, REACH, type CastPlayer, type CastRecipe, competentIntents, compareCasts, endValue, HEIGHT_BANDS, higherBetter, intentShot, moveIntents, nodeCastPlayer, nudgeLine, playsOf, quantile, rng, roundEasier, SHORT_RECIPE, shotSummary, streamSeed, surfaceTarget, withWallTime } from '../src/index.ts';
+import { aimAt, type CastPlay, type CastSample, compileLevel, readShots, writeShots, launcherPos, type LaunchShot, type LevelDef, scenarioLevel, type Shot } from '@tb/keystone';
+import { castLevel, cloudCheck, exposedFaces, faceSectors, facingAzimuth, FACE_SECTORS, REACH, type CastPlayer, type CastRecipe, competentIntents, compareCasts, endValue, HEIGHT_BANDS, higherBetter, intentShot, moveIntents, nodeCastPlayer, nudgeLine, playsOf, quantile, rng, roundEasier, SHORT_RECIPE, shotSummary, streamSeed, surfaceTarget, withWallTime } from '../src/index.ts';
 
 /** A 10 x 4 wall of plaster cubes along x as an outcome level, rack of two cannonballs. */
 const WALL: LevelDef = { ...scenarioLevel('S3', { W: 10, H: 4 }, 1, { rack: ['cannonball', 'cannonball'] }), id: 'T1' };
@@ -172,6 +172,24 @@ describe('castLevel on a synthetic player', () => {
     const cmp = compareCasts(a, b);
     expect(cmp.recast.value).toBe(0);
     expect(cmp.crossDevice.pass).toBe(true);
+  });
+  it('a cloud check plays nudges of the cast\'s best line and gates its T3 on the cast\'s interval', async () => {
+    const cast = await castLevel(WALL, synthetic(), { recipe: TINY, seed: 3 });
+    const played: Shot[][] = [];
+    const k = await cloudCheck(WALL, synthetic(played), cast, 8, 1);
+    expect(played.length).toBe(8);
+    // Every play is the best line nudged: the same ammo, shot by shot, and not the cast's own cloud.
+    const best = readShots(cast.bestLine.shots);
+    for (const line of played) expect(line.map((s) => s.ammo)).toEqual(best.map((s) => s.ammo));
+    expect(played.map((l) => writeShots(l))).not.toEqual(cast.lines.filter((l) => l.phase === 'cloud').slice(0, 8).map((l) => l.shots));
+    const ends = k.lines.map((l) => l.samples.at(-1)!.collapse);
+    expect(k.t3).toBe(quantile(ends, 0.25));
+    expect(k.crossDevice.pass).toBe(k.t3 >= cast.bootstrap.lo && k.t3 <= cast.bootstrap.hi);
+    expect(k.against).toEqual({ adapter: 'synthetic', seed: 3, t3: cast.raw.t3, lo: cast.bootstrap.lo, hi: cast.bootstrap.hi });
+    expect(k.limits.pass && k.complete.pass).toBe(true);
+    // Repeatable, and refused on a level that does not hash as the cast's.
+    expect(await cloudCheck(WALL, synthetic(), cast, 8, 1)).toEqual(k);
+    await expect(cloudCheck({ ...WALL, rack: ['cannonball'] }, synthetic(), cast, 8)).rejects.toThrow(/hashes .* but the cast was of/);
   });
   it('the climb keeps a line only when its mini-cloud beats the current one', async () => {
     const r = await castLevel(WALL, synthetic(), { recipe: TINY, seed: 9 });
