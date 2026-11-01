@@ -80,6 +80,7 @@ describe('P6 island labelling', () => {
       expect(r.islands, name).toBe(new Set(cpu).size);
       if (islands > 0) expect(r.islands, name).toBe(islands);
     }
+    await expect(call('islands', 4, [0, 1, 2, 4])).rejects.toThrow('P6: edge 1 names body 4, but there are 4');
   });
 
   it('reads the contact graph of a real step: edges join distinct bodies, and a city of separate towers makes at least one island per tower', { timeout: 300_000 }, async (ctx) => {
@@ -99,18 +100,20 @@ describe('P6 island labelling', () => {
 const TINY: Partial<ProbeOptions> = { reps: 2, warmup: 1, p5Settle: 20, p5Steps: 3 };
 
 describe('P5 and P6 sections', () => {
-  it('run on a city and on a Kapla tower: a stage split (with timestamps) that adds up to the step, and correct island labels', { timeout: 600_000 }, async (ctx) => {
+  it('run on a city, a Kapla tower and a scene that spawns a body: a stage split (with timestamps) that adds up to the step, and correct island labels', { timeout: 600_000 }, async (ctx) => {
     if (!gpu) return ctx.skip();
     const runs: Array<Partial<ProbeOptions> & { scenario: string; params: Params }> = [
       { scenario: 'S14', params: { towers: 4, W: 3, D: 3, H: 6 } },
       { scenario: 'S15', params: { planks: 120, towers: 1, topple: false }, gravityScale: 42.735, pairsPerBody: 32, boxBroadphase: true },
+      // A body spawned during the settle (S5's ball at step 5): N and the island graph count it.
+      { scenario: 'S5', params: { N: 96, F: 2, H: 8, street: 2, fireStep: 5, radius: 0.6, speed: 15 } },
     ];
     for (const run of runs) {
       const r = await call('runProbe', { ...TINY, ...run, sections: ['p5', 'p6'] });
       expect(r.errors, run.scenario).toEqual([]);
       expect(r.p2, run.scenario).toBeUndefined();
       const p5 = r.p5!, p6 = r.p6!;
-      expect(p5.N).toBe(buildScenario(run.scenario, run.params, 1).bodies.length);
+      expect(p5.N).toBe(buildScenario(run.scenario, run.params, 1).bodies.length + (run.scenario === 'S5' ? 1 : 0));
       expect([p5.scenario, p5.settle, p5.iterations]).toEqual([run.scenario, 20, expect.any(Number)]);
       expect(p5.step.samples).toBe(3);
       if (p5.timestamps) {
