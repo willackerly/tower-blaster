@@ -9,14 +9,15 @@
 // level=L2: a Keystone level instead of a scenario, level.def=<base64url JSON>: a level of your own (level-file.ts),
 // presettle=300: steps run before it shows, see ViewerConfig.level; rules=keystone: play the level by the game's
 // rules, with keystone.hitstop=1 and keystone.slowmo=1 for its pace juice, see ViewerConfig.rules, and
-// keystone.shots=<line> to play on load, see ViewerConfig.shots;
+// keystone.shots=<line> to play on load, see ViewerConfig.shots, and keystone.rack=<items> to play it with another
+// rack (p-<preset>, w-<weapon> included), see ViewerConfig.rack;
 // snd=1 with snd.* knobs: collision sound, see parseSoundOptions in @tb/audio)
 import { DEFAULT_SOUND, parseSoundOptions, type SoundOptions, writeSoundOptions } from '@tb/audio';
 import { parseSpec } from '@tb/bench';
 import { type BodyDesc, DEFAULT_BLAST_MAX_SPEED, type SceneDesc, type Vec3 } from '@tb/engine-api';
-import { checkLine, type EngineKind, GAME_LOOK, gameLevel, LEVEL_RULE_KEYS, type LevelRules, levelRules, lineOf, lookName, paceFeel, type PaceFeel, withRules, writeLevelRules } from '@tb/game';
+import { checkLine, type EngineKind, GAME_LOOK, gameLevel, LEVEL_RULE_KEYS, type LevelRules, levelRules, lineOf, lookName, paceFeel, type PaceFeel, rackOf, withRules, writeLevelRules } from '@tb/game';
 import { boundingRadius } from '@tb/geom';
-import { AVBD_ITERATIONS, compileLevel, LEVELS, type LevelDef, PRESETTLE_STEPS, scenarioLevel, type Shot, writeShots } from '@tb/keystone';
+import { AVBD_ITERATIONS, compileLevel, LEVELS, type LevelDef, PRESETTLE_STEPS, type RackItem, scenarioLevel, type Shot, writeShots } from '@tb/keystone';
 import { type AvbdParams, froudeParams } from '@tb/physics-ref';
 import { parseRealOptions, type RealOptions, writeRealOptions } from '@tb/render';
 import { bounceBody, bounceScene, buildScenario, SCENARIOS } from '@tb/scenarios';
@@ -117,6 +118,13 @@ export interface ViewerConfig {
    */
   shots: Shot[] | null;
   /**
+   * The rack the level is played with instead of its own (URL key keystone.rack, a comma list of
+   * @tb/keystone rack item names, rules=keystone only; @tb/game rackOf checks it against the level):
+   * any of Keystone's ammo, p-<preset>, w-<weapon> (the level's weapons, w-grenade and the built-in
+   * WeaponSpecs), at most MAX_RACK. null: the level's own. Its hash changes with it, as in the game.
+   */
+  rack: RackItem[] | null;
+  /**
    * Bounce's e (URL key bounce.e, 0 to 1, default DEFAULT_BOUNCE): while the engine spec
    * turns restitution on (bounceOn), every body, spawn and fired projectile and the ground
    * get this restitution (bounceScene), so under the scenes' combine rule (average) every
@@ -136,7 +144,7 @@ export const DEFAULT_BOUNCE = 0.5;
 
 export const RULES = ['sandbox', 'keystone'] as const;
 /** Keys that only mean something under rules=keystone (the game page's). */
-export const KEYSTONE_KEYS = ['keystone.hitstop', 'keystone.slowmo', 'keystone.shots', ...LEVEL_RULE_KEYS] as const;
+export const KEYSTONE_KEYS = ['keystone.hitstop', 'keystone.slowmo', 'keystone.shots', 'keystone.rack', ...LEVEL_RULE_KEYS] as const;
 /** The look when ?look= is absent: the sandbox's candy, or the game's own under its rules. */
 export const defaultLook = (rules: Rules) => (rules === 'keystone' ? GAME_LOOK : DEFAULT_CONFIG.look);
 export type Rules = (typeof RULES)[number];
@@ -197,7 +205,7 @@ export const MAX_PRESETTLE = 6000;
 /** How much faster than the unit world a world at this scale moves (speeds, in cube units per second). */
 export const froudeSpeed = (scale: number) => 1 / Math.sqrt(scale);
 
-export const DEFAULT_CONFIG: ViewerConfig = { engine: 'avbd-gpu', level: null, customLevel: null, scenario: 'S4', params: { N: 2000, F: 4, H: 12 }, seed: 1, sleep: null, autofire: 0, presettle: 0, offscreen: false, look: 'candy', real: {}, loop: 'free', pipeline: true, maxSteps: 1, projectile: DEFAULT_PROJECTILE, scale: 1, substeps: 1, camera: null, view: DEFAULT_FRAMING, bounce: DEFAULT_BOUNCE, rules: 'sandbox', keystone: {}, feel: { hitStop: false, slowMo: false }, shots: null, sound: DEFAULT_SOUND };
+export const DEFAULT_CONFIG: ViewerConfig = { engine: 'avbd-gpu', level: null, customLevel: null, scenario: 'S4', params: { N: 2000, F: 4, H: 12 }, seed: 1, sleep: null, autofire: 0, presettle: 0, offscreen: false, look: 'candy', real: {}, loop: 'free', pipeline: true, maxSteps: 1, projectile: DEFAULT_PROJECTILE, scale: 1, substeps: 1, camera: null, view: DEFAULT_FRAMING, bounce: DEFAULT_BOUNCE, rules: 'sandbox', keystone: {}, feel: { hitStop: false, slowMo: false }, shots: null, rack: null, sound: DEFAULT_SOUND };
 
 export function parseViewerConfig(search: string): ViewerConfig {
   const q = new URLSearchParams(search);
@@ -246,7 +254,9 @@ export function parseViewerConfig(search: string): ViewerConfig {
   const keystone = rules === 'keystone' ? levelRules(q) : {};
   const sceneParams = hasParams ? params : scenario === DEFAULT_CONFIG.scenario ? { ...DEFAULT_CONFIG.params } : {};
   const seed = Number(q.get('seed') ?? 1);
-  const shots = rules === 'keystone' ? lineOf(levelOf({ level, customLevel, rules, scenario, params: sceneParams, seed, keystone })!, q.get('keystone.shots')) : null;
+  // The rack is checked against the level as written, the line against the level as played (its rack replaced).
+  const rack = rules === 'keystone' ? rackOf(levelOf({ level, customLevel, rules, scenario, params: sceneParams, seed })!, q.get('keystone.rack')) : null;
+  const shots = rules === 'keystone' ? lineOf(levelOf({ level, customLevel, rules, scenario, params: sceneParams, seed, keystone, rack })!, q.get('keystone.shots')) : null;
   // The game page's name for the GPU solver.
   const engine = rules === 'keystone' && q.get('engine') === 'gpu' ? 'avbd-gpu' : q.get('engine') ?? DEFAULT_CONFIG.engine;
   const c: ViewerConfig = {
@@ -276,6 +286,7 @@ export function parseViewerConfig(search: string): ViewerConfig {
     keystone,
     feel,
     shots,
+    rack,
   };
   if (rules === 'keystone') checkKeystone(c);
   return c;
@@ -361,6 +372,7 @@ export function toSearch(c: ViewerConfig): string {
   if (c.feel.hitStop) q.set('keystone.hitstop', '1');
   if (c.feel.slowMo) q.set('keystone.slowmo', '1');
   if (c.shots?.length) q.set('keystone.shots', writeShots(c.shots));
+  if (c.rules === 'keystone' && c.rack) q.set('keystone.rack', c.rack.join(','));
   if (c.rules === 'keystone') writeLevelRules(c.keystone, q);
   return `?${q}`;
 }
@@ -496,8 +508,9 @@ export function viewerScene(c: ViewerConfig): SceneDesc {
  * The level a config loads (its own or the built-in one), or null for a scenario; under rules=keystone a
  * scenario is a level too (@tb/keystone scenarioLevel), and the game's rule overrides apply (withRules).
  */
-export function levelOf(c: Pick<ViewerConfig, 'level' | 'customLevel'> & Partial<Pick<ViewerConfig, 'rules' | 'scenario' | 'params' | 'seed' | 'keystone'>>): LevelDef | null {
-  const def = c.customLevel ?? (c.level ? levelDef(c.level) ?? null : c.rules === 'keystone' && c.scenario ? scenarioLevel(c.scenario, c.params ?? {}, c.seed ?? 1) : null);
+export function levelOf(c: Pick<ViewerConfig, 'level' | 'customLevel'> & Partial<Pick<ViewerConfig, 'rules' | 'scenario' | 'params' | 'seed' | 'keystone' | 'rack'>>): LevelDef | null {
+  const authored = c.customLevel ?? (c.level ? levelDef(c.level) ?? null : c.rules === 'keystone' && c.scenario ? scenarioLevel(c.scenario, c.params ?? {}, c.seed ?? 1) : null);
+  const def = authored && c.rules === 'keystone' && c.rack ? { ...authored, rack: c.rack } : authored;
   return def && c.rules === 'keystone' && c.keystone ? withRules(def, c.keystone) : def;
 }
 

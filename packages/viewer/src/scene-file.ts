@@ -10,7 +10,7 @@ import { engineNames, parseSpec } from '@tb/bench';
 import { ENVS, GROUNDS, REAL_DEFAULTS, REAL_KNOBS, type RealKnob, type RealOptions, STONES } from '@tb/render';
 import { SCENARIOS } from '@tb/scenarios';
 import { type CameraPose, DEFAULT_FRAMING, type Framing } from './camera.ts';
-import { isRackItem, type LevelDef, RACK_ITEM_NAMES, readShots, type Shot, writeShots } from '@tb/keystone';
+import { isRackItem, type LevelDef, RACK_ITEM_NAMES, type RackItem, readShots, type Shot, writeShots } from '@tb/keystone';
 import { encodeLevelParam, parseLevelDef } from './level-file.ts';
 import { defaultFraming, parseViewerConfig, type ViewerConfig, writeCamera, writeFraming } from './params.ts';
 import { checkWeapon, DEFAULT_GRENADE, type GrenadeSpec, isWeaponSpec, WEAPON_NAME, WEAPON_SPEC_VERSION, type WeaponSpec } from '@tb/weapons';
@@ -54,11 +54,11 @@ export interface SceneFile {
   /** Where the camera starts; null = framed to fit the scene. */
   camera: CameraPose | null;
   /**
-   * Present only under Keystone's rules (ViewerConfig.rules, feel and shots: the line to play on load,
+   * Present only under Keystone's rules (ViewerConfig.rules, feel and shots: the line to play on load, rack: the rack played instead of the level's (ViewerConfig.rack),
    * absent for none; scoring, autobank and physics: the game's rule overrides, ViewerConfig.keystone,
    * absent when not overridden); absent: the sandbox.
    */
-  rules?: { mode: 'keystone'; hitstop: boolean; slowmo: boolean; shots?: Shot[] } & LevelRules;
+  rules?: { mode: 'keystone'; hitstop: boolean; slowmo: boolean; shots?: Shot[]; rack?: RackItem[] } & LevelRules;
   /** How the scene is framed without a camera, and the field of view (ViewerConfig.view; absent, as in files saved before it: today's DEFAULT_FRAMING, so their saved camera shows at 45 rather than 50 degrees). */
   view: Framing;
   /** Collision sound: on, material and every knob (absent in older files: off, the defaults). */
@@ -81,7 +81,7 @@ export function sceneFile(c: ViewerConfig, name: string, camera: CameraPose | nu
     look: { preset: c.look, real: { ...REAL_DEFAULTS, ...c.real } },
     camera,
     view: { ...c.view },
-    ...(c.rules === 'keystone' ? { rules: { mode: c.rules, hitstop: c.feel.hitStop, slowmo: c.feel.slowMo, ...(c.shots?.length ? { shots: c.shots.map((x) => ({ ...x })) } : {}), ...structuredClone(c.keystone) } } : {}),
+    ...(c.rules === 'keystone' ? { rules: { mode: c.rules, hitstop: c.feel.hitStop, slowmo: c.feel.slowMo, ...(c.shots?.length ? { shots: c.shots.map((x) => ({ ...x })) } : {}), ...(c.rack ? { rack: [...c.rack] } : {}), ...structuredClone(c.keystone) } } : {}),
     sound: { ...c.sound },
   };
 }
@@ -236,11 +236,16 @@ export function parseSceneFile(text: string): { config: ViewerConfig; name: stri
   }
   if (root.rules !== undefined) {
     const r = object(root.rules, 'rules');
-    only(r, ['mode', 'hitstop', 'slowmo', 'shots', 'scoring', 'autobank', 'physics'], 'rules');
+    only(r, ['mode', 'hitstop', 'slowmo', 'shots', 'rack', 'scoring', 'autobank', 'physics'], 'rules');
     q.set('rules', str(r.mode, 'rules.mode'));
     if (r.hitstop !== undefined) q.set('keystone.hitstop', bool(r.hitstop, 'rules.hitstop') ? '1' : '0');
     if (r.slowmo !== undefined) q.set('keystone.slowmo', bool(r.slowmo, 'rules.slowmo') ? '1' : '0');
     if (r.shots !== undefined) q.set('keystone.shots', shotsText(r.shots));
+    // The rack as its URL key (rackOf checks the names against the level).
+    if (r.rack !== undefined) {
+      if (!Array.isArray(r.rack) || !r.rack.every((x) => typeof x === 'string')) throw new Error('rules.rack must be an array of rack item names');
+      q.set('keystone.rack', r.rack.join(','));
+    }
     // The game's rule overrides, as their URL keys (levelRules checks the values).
     const lr: LevelRules = {};
     if (r.scoring !== undefined) lr.scoring = str(r.scoring, 'rules.scoring') as LevelRules['scoring'];
