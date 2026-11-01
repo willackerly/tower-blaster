@@ -192,5 +192,6 @@
   "packages/weapons/test/grenade.test.ts": 0.6,
   "packages/weapons/test/runtime.test.ts": 2,
   "packages/weapons/test/spec.test.ts": 0.3,
-  "packages/weapons/test/yield.test.ts": 0
+  "packages/weapons/test/yield.test.ts": 0,
+  "packages/physics-gpu/test/engine-sleep.test.ts": 42.0
 }
