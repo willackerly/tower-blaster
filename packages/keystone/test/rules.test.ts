@@ -88,7 +88,7 @@ describe('reductions', () => {
 });
 
 describe('settling', () => {
-  const red = (step: number, speed: number, awake = 1): Reductions => ({ step, nAwake: awake, maxSpeed: speed, maxAngSpeed: 0, pe_mJ: 0, displaced: 0, outOfLot: 0, heightHist: new Uint32Array(64), impacts: new Uint32Array(48) });
+  const red = (step: number, speed: number, awake = 1): Reductions => ({ step, nAwake: awake, maxSpeed: speed, maxAngSpeed: 0, pe_mJ: 0, displaced: 0, outOfLot: 0, heightHist: new Uint32Array(64), impacts: new Uint32Array(48), nMoving: 0, movingBox: new Float64Array(6) });
   function run(speeds: number[], spawn = 0) {
     let st = { quietSince: null as number | null };
     for (let i = 0; i < speeds.length; i++) {
@@ -141,7 +141,7 @@ describe('objectives and score', () => {
   it('stamps', () => {
     expect([[1, 2], [1, 3], [2, 4], [3, 4], [4, 4], [5, 4], [6, 4], [9, 4]].map(([s, p]) => stampOf(s!, p!))).toEqual(['ACE', 'ACE', 'EAGLE', 'BIRDIE', 'PAR', 'BOGEY', 'DOUBLE BOGEY', '+5']);
   });
-  const shot = (o: Partial<ShotOutcome>): ShotOutcome => ({ ke: 1000, dPE_mJ: 0, leverage: 0, crownsDown: 0, crownsTotal: 0, heritageNew: 0, displaced: 0, outOfLot: 0, spawnStep: 0, settleStep: 0, ...o });
+  const shot = (o: Partial<ShotOutcome>): ShotOutcome => ({ ke: 1000, dPE_mJ: 0, leverage: 0, crownsDown: 0, crownsTotal: 0, heritageNew: 0, displaced: 0, outOfLot: 0, pe_mJ: 0, spawnStep: 0, settleStep: 0, ...o });
   it('reproduces the worked example: one marble on a par-1 level, L = 48, six crowns', () => {
     const s = levelScore({ ...def, par: 1 }, [shot({ ke: 1000, dPE_mJ: 48_000_000, crownsDown: 6 })], true, c.meta.n);
     expect(s.lines).toEqual([{ label: 'Strokes', value: 3000 }, { label: 'Leverage', value: Math.floor(300 * Math.log2(49)) }, { label: 'Combo', value: 1050 }]);

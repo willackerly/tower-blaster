@@ -49,6 +49,13 @@ export interface Reductions {
   heightHist: Uint32Array;
   /** Impacts this step by material (6) x home height band (8). */
   impacts: Uint32Array;
+  /** Awake structure bodies moving faster than QUIET_SPEED or spinning faster than QUIET_SPIN (settle v2, the tail skip). */
+  nMoving: number;
+  /**
+   * The box around the centres of those bodies, [min x, y, z, max x, y, z] in metres (the collapse-front
+   * camera); +Infinity mins and -Infinity maxes when nothing moves. Min and max are exact in any order.
+   */
+  movingBox: Float64Array;
 }
 
 export interface Watched { idx: Int32Array; pos: Float64Array; rot: Float64Array; linVel: Float64Array }
@@ -90,15 +97,30 @@ export function ammoLive(c: CompiledLevel, s: Snapshot, i: number): boolean {
 
 export function reduceCpu(s: Snapshot, prevLinVel: Float64Array | null, c: CompiledLevel, base: Baseline, step: number): Reductions {
   const { meta: m } = c, h = c.frame.unit, dt = c.scene.dt;
-  const r: Reductions = { step, nAwake: 0, maxSpeed: 0, maxAngSpeed: 0, pe_mJ: 0, displaced: 0, outOfLot: 0, heightHist: new Uint32Array(HEIGHT_BINS), impacts: new Uint32Array(MATERIALS.length * BANDS) };
+  const r: Reductions = {
+    step, nAwake: 0, maxSpeed: 0, maxAngSpeed: 0, pe_mJ: 0, displaced: 0, outOfLot: 0, heightHist: new Uint32Array(HEIGHT_BINS), impacts: new Uint32Array(MATERIALS.length * BANDS),
+    nMoving: 0, movingBox: Float64Array.of(Infinity, Infinity, Infinity, -Infinity, -Infinity, -Infinity),
+  };
   const top = Math.max(c.height, 1e-9);
   for (let i = 0; i < s.count; i++) {
     const structure = i < m.n;
     if (!structure && !ammoLive(c, s, i)) continue;
     if (s.awake[i]) {
       r.nAwake++;
-      r.maxSpeed = Math.max(r.maxSpeed, Math.hypot(s.linVel[3 * i]!, s.linVel[3 * i + 1]!, s.linVel[3 * i + 2]!));
-      if (structure) r.maxAngSpeed = Math.max(r.maxAngSpeed, Math.hypot(s.angVel[3 * i]!, s.angVel[3 * i + 1]!, s.angVel[3 * i + 2]!));
+      const v = Math.hypot(s.linVel[3 * i]!, s.linVel[3 * i + 1]!, s.linVel[3 * i + 2]!);
+      r.maxSpeed = Math.max(r.maxSpeed, v);
+      if (structure) {
+        const w = Math.hypot(s.angVel[3 * i]!, s.angVel[3 * i + 1]!, s.angVel[3 * i + 2]!);
+        r.maxAngSpeed = Math.max(r.maxAngSpeed, w);
+        if (v > QUIET_SPEED || w > QUIET_SPIN) {
+          r.nMoving++;
+          for (let k = 0; k < 3; k++) {
+            const x = s.pos[3 * i + k]!;
+            r.movingBox[k] = Math.min(r.movingBox[k]!, x);
+            r.movingBox[3 + k] = Math.max(r.movingBox[3 + k]!, x);
+          }
+        }
+      }
     }
     if (!structure) continue;
     const x = s.pos[3 * i]!, y = s.pos[3 * i + 1]!, z = s.pos[3 * i + 2]!;
@@ -198,6 +220,8 @@ export interface ShotOutcome {
   heritageNew: number;
   displaced: number;
   outOfLot: number;
+  /** The structure's potential energy at the settle (the level's end, after its last shot). */
+  pe_mJ: number;
   spawnStep: number;
   settleStep: number;
 }
