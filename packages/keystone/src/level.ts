@@ -7,7 +7,7 @@ import { DEFAULT_GAP, DEFAULT_UNIT, encodeTag, GRAVITY, MATERIALS, materialId, t
 import { peOf_mJ } from './rules.ts';
 import type { GrenadeSpec } from '@tb/weapons';
 import { isRackItem, itemRef, levelWeapon, RACK_ITEM_NAMES, rackBodies, type RackItem, speedOf, WEAPON_KEY } from './rack.ts';
-import { type ScenarioPart, scenarioBodies } from './scenario-part.ts';
+import { type ScenarioPart, scenarioBodies, scenarioKey } from './scenario-part.ts';
 import { ammoBody, type LauncherDef, type Shot, type ShotFrame } from './shots.ts';
 
 /** A course (layer) override inside a block: change material or role, or leave cells out. */
@@ -290,6 +290,7 @@ export function compileLevel(def: LevelDef): CompiledLevel {
   if (geometry.autobank === false) delete geometry.autobank;
   const physics = physicsKey(geometry.physics);
   if (physics) geometry.physics = physics; else delete geometry.physics;
+  geometry.parts = geometry.parts.map((pt) => (pt.kind === 'scenario' ? scenarioKey(pt) : pt));
   // A scenario part names its bodies by (id, params, seed): the bodies themselves join the hash, so a
   // change to the scenario's builder is a different level too. Levels without one hash as before.
   const built = def.parts.some((pt) => pt.kind === 'scenario') ? `|${bodiesDigest(bodies)}` : '';

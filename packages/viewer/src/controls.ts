@@ -1,12 +1,12 @@
 // The viewer's control panel: the scene (scenario or level, its params, seed, cube size, substeps,
-// Bounce, and for a level the rules it plays by), rebuilt on demand, and the projectile and the look, applied as soon as a field
+// Bounce, and the rules it plays by: a scenario under Keystone's is a level), rebuilt on demand, and the projectile and the look, applied as soon as a field
 // changes; and the whole setup saved to or loaded from a JSON file (scene-file.ts). The panel
 // only proposes configs; main.ts decides how to apply them (live, or by reset).
 import { checkSound, SOUND_KNOBS, SOUND_MATERIAL_NAMES, type SoundKnob, type SoundOptions } from '@tb/audio';
 import { parseSpec } from '@tb/bench';
 import { type Env, ENVS, type Ground, GROUNDS, linearToSrgb, LOOKS, REAL_DEFAULTS, REAL_KNOBS, type RealKnob, type RealOptions, srgbToLinear, type Stone, STONES, type V3 } from '@tb/render';
-import type { PaceFeel } from '@tb/game';
-import { AVBD_ITERATIONS, compileLevel, LEVELS, PRESETTLE_STEPS } from '@tb/keystone';
+import { objectiveText, type PaceFeel } from '@tb/game';
+import { AUTO_LEVEL, AVBD_ITERATIONS, compileLevel, LEVELS, PRESETTLE_STEPS, scenarioLevel } from '@tb/keystone';
 import { buildScenario, SCENARIOS } from '@tb/scenarios';
 import { type CameraPose, type Framing, FRAMING_LIMITS } from './camera.ts';
 import { escapeHtml } from './html.ts';
@@ -167,7 +167,15 @@ export function proposeScene(c: ViewerConfig, scenario: string, params: Record<s
       const next = underKeystone({ ...c, level, customLevel: picked.custom ? picked.def : null, shots: same ? c.shots : null, look: lookFor(c, 'keystone') }, rules.feel);
       return { ok: true, config: next, bodies: compileLevel(picked.def).scene.bodies.length };
     }
-    // Rules are a level's: anything else is the sandbox.
+    // A scenario under Keystone's rules is a level (scenarioLevel): its params and seed build it, the rest is the game's.
+    if (rules.rules === 'keystone') {
+      if (!Number.isInteger(seed)) throw new Error('seed must be an integer');
+      const def = scenarioLevel(scenario, params, seed);
+      const same = !c.level && c.scenario === scenario && c.seed === seed && JSON.stringify(c.params) === JSON.stringify(params);
+      const next = underKeystone({ ...c, level: null, customLevel: null, scenario, params, seed, shots: same ? c.shots : null, look: lookFor(c, 'keystone') }, rules.feel);
+      return { ok: true, config: next, bodies: compileLevel(def).scene.bodies.length };
+    }
+    // Anything else is the sandbox.
     c = { ...c, rules: 'sandbox', feel: { hitStop: false, slowMo: false }, shots: null, look: lookFor(c, 'sandbox') };
     const settle = presettle ?? defaultPresettle(level);
     if (!Number.isInteger(settle) || settle < 0 || settle > MAX_PRESETTLE) throw new Error(`settle steps must be a whole number from 0 to ${MAX_PRESETTLE}`);
@@ -334,7 +342,6 @@ export function mountControls(root: HTMLElement, hooks: ControlsHooks): { refres
   const bounceEBox = sceneForm.querySelector<HTMLElement>('.bounce')!;
 
   const seedBox = sceneForm.querySelector<HTMLElement>('.seed')!;
-  const rulesBox = sceneForm.querySelector<HTMLElement>('.rules')!;
   const feelBox = sceneForm.querySelector<HTMLElement>('.feel')!;
   const worldBox = sceneForm.querySelector<HTMLElement>('.world')!;
   const issuesBox = sceneForm.querySelector<HTMLElement>('.issues')!;
@@ -351,22 +358,23 @@ export function mountControls(root: HTMLElement, hooks: ControlsHooks): { refres
     try { picked = pickedLevel(c, scenario); } catch { /* checkScene says why */ }
     seedBox.hidden = picked !== null;
     levelDownload.hidden = picked === null;
-    // Rules are a level's; under Keystone's the world fields are the level's own.
-    rulesBox.hidden = picked === null;
-    const keystone = picked !== null && input(sceneForm, 'rules').value === 'keystone';
+    // Under Keystone's rules the world fields are the level's own; a scenario plays as a level (scenarioLevel).
+    const keystone = input(sceneForm, 'rules').value === 'keystone';
     feelBox.hidden = !keystone;
     worldBox.hidden = keystone;
     issuesBox.textContent = '';
     if (picked) {
       const d = picked.def;
-      paramsBox.innerHTML = `<div class="muted">${escapeHtml(d.name)}: ${d.objective.kind === 'crowns' ? 'fell the crowns' : 'bring the skyline down'}, par ${d.par}, rack ${escapeHtml(d.rack.join(', '))}</div>`;
+      paramsBox.innerHTML = `<div class="muted">${escapeHtml(d.name)}: ${escapeHtml(objectiveText(d.objective))}, par ${d.par}, rack ${escapeHtml(d.rack.join(', '))}</div>`;
       // A level with issues still loads (seeing it fail is the point); they are listed here.
       const issues = levelIssues(d);
       issuesBox.textContent = issues instanceof Error ? issues.message : issues.map((i) => `${i.code}: ${i.message}`).join('\n');
       return;
     }
     const values = { ...SCENARIOS[scenario]!.defaults, ...(scenario === c.scenario ? c.params : {}) };
-    paramsBox.innerHTML = Object.entries(values).map(([k, v]) => field(`param.${k}`, PARAM_LABELS[k] ?? k, v, 'step="any"')).join('');
+    // Under Keystone's rules a scenario is an automatic level (scenarioLevel): what it asks, above its params.
+    const auto = keystone ? `<div class="muted">as a level: ${escapeHtml(objectiveText({ kind: 'collapse', min: AUTO_LEVEL.objective }))}, rack ${escapeHtml(AUTO_LEVEL.rack.join(', '))}, no roles (a level file can add them)</div>` : '';
+    paramsBox.innerHTML = auto + Object.entries(values).map(([k, v]) => field(`param.${k}`, PARAM_LABELS[k] ?? k, v, 'step="any"')).join('');
   }
 
   function sceneProposal() {

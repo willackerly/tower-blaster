@@ -10,7 +10,7 @@ import { makeEngine, parseSpec } from '@tb/bench';
 import { type BodyDesc, type EngineHealth, type EngineInfo, type InputEvent, limitsHit, type PhysicsEngine, type Snapshot, spawnedBodies } from '@tb/engine-api';
 import { boundingRadius } from '@tb/geom';
 import { DEFAULT_AVBD } from '@tb/physics-ref';
-import { GAME_HELP, gameOverlays, playLine, type GameHandle, installGameStyles, newGameHandle, playKeystone, structureTints } from '@tb/game';
+import { GAME_HELP, gameOverlays, playLine, type GameHandle, installGameStyles, newGameHandle, playKeystone, structureTints, withRules } from '@tb/game';
 import { AVBD_GAP_SLOP, AVBD_ITERATIONS, compileLevel, type Driver, LEVELS, type Shot } from '@tb/keystone';
 import { clampPitch, EYE_ABOVE_GROUND, frame, rayThrough, viewProj, eyeOf, orbitAt, poseOf, type CameraPose, type Orbit } from './camera.ts';
 import { alphaAt, newArrivals, newClock, newPacer, pauseLatch, runFree, stepsDue, taskYield, trackSimSpeed, Window } from './loop.ts';
@@ -83,8 +83,8 @@ interface ViewerHandle {
   variant: EngineInfo['variant'];
   /**
    * The running engine's limits as last read (PhysicsEngine.health, about every HEALTH_MS after a
-   * snapshot): null for an engine without health(), until the first read after each load, and
-   * under rules=keystone (the game's loop runs the engine there).
+   * snapshot; under rules=keystone after each load and each settled shot): null for an engine without
+   * health(), and until the first read after each load.
    */
   health: EngineHealth | null;
   /** Where the camera is now. */
@@ -752,6 +752,14 @@ async function keystoneMode(config: ViewerConfig, device: GPUDevice, renderer: R
   devEl.open = true;
   document.getElementById('left')!.append(devEl);
   let driver: Driver | null = null, busy = false, status = '', warn = false;
+  /** The game's engine's limits into handle.health (one read at a time; a level load drops a read in flight). */
+  let healthBusy = false;
+  const readHealth = (d: Driver) => {
+    const read = d.engine.health?.bind(d.engine);
+    if (!read || healthBusy) return;
+    healthBusy = true;
+    read().then((h) => { if (driver === d) handle.health = h; }).catch(() => {}).finally(() => { healthBusy = false; });
+  };
   const attempt = (): Shot[] => driver?.session.inputs.map((i) => i.shot) ?? [];
   const dev = mountDev(devEl, (a) => { void devAction(a); });
   const showDev = () => {
@@ -794,9 +802,10 @@ async function keystoneMode(config: ViewerConfig, device: GPUDevice, renderer: R
       showDev();
     }
   }
-  // A built-in level walks the game's levels (N, P, Next); a level of your own is the only one.
+  // A built-in level walks the game's levels (N, P, Next), under the link's rule overrides; a level of
+  // your own, or a scenario as a level (scenarioLevel), is the only one.
   const def = levelOf(cfg)!;
-  const levels = cfg.customLevel ? [def] : LEVELS;
+  const levels = cfg.customLevel || !cfg.level ? [def] : LEVELS.map((d) => withRules(d, cfg.keystone));
   await playKeystone({
     canvas, offscreen: cfg.offscreen, device, renderer, source, hud, ...gameOverlays(),
     levels, start: levels.findIndex((l) => l.id === def.id), engine: keystoneEngine(cfg.engine), feel: cfg.feel, fail: failGame,
@@ -809,7 +818,9 @@ async function keystoneMode(config: ViewerConfig, device: GPUDevice, renderer: R
       loaded(c, d) {
         handle.tinted = c.meta.n;
         driver = d;
-        if (c.def.id !== cfg.level) {
+        handle.health = null;
+        readHealth(d);
+        if (cfg.level && c.def.id !== cfg.level) {
           // A line is the level's it was made on.
           show({ ...cfg, level: c.def.id, shots: null });
           controls.refresh();
@@ -818,7 +829,11 @@ async function keystoneMode(config: ViewerConfig, device: GPUDevice, renderer: R
         showDev();
       },
       fired: showDev,
-      stepped(feedback) { if (feedback.some((f) => f.t === 'settled')) showDev(); },
+      stepped(feedback) {
+        if (!feedback.some((f) => f.t === 'settled')) return;
+        showDev();
+        if (driver) readHealth(driver);
+      },
     },
   }, game);
   handle.capture = game.capture;

@@ -6,7 +6,9 @@
 // all of them, beside authored blocks and slabs.
 import type { BodyDesc, Vec3 } from '@tb/engine-api';
 import { buildScenario, type Params, SCENARIOS } from '@tb/scenarios';
+import type { LevelDef } from './level.ts';
 import type { MaterialName, Role } from './materials.ts';
+import type { RackItem } from './rack.ts';
 
 /**
  * Which bodies of a scenario part get a role. Every condition given must hold (an empty rule picks
@@ -102,4 +104,49 @@ export function scenarioBodies(part: ScenarioPart, h: number, pitch: number): Sc
       role,
     };
   });
+}
+
+/**
+ * The part as the level hash sees it: params at the scenario's defaults and seed 1 left out, the
+ * other params in key order, so writing a default out names the same level.
+ */
+export function scenarioKey(part: ScenarioPart): ScenarioPart {
+  const defaults = SCENARIOS[part.id]?.defaults ?? {};
+  const params = Object.fromEntries(Object.entries(part.params ?? {}).filter(([k, v]) => defaults[k] !== v).sort(([a], [b]) => (a < b ? -1 : 1)));
+  const { params: _p, seed, ...rest } = part;
+  return { ...rest, ...(Object.keys(params).length ? { params } : {}), ...(seed !== undefined && seed !== 1 ? { seed } : {}) };
+}
+
+/** What an automatic level gives a scenario (spectacle-mode.md, section 10) unless told otherwise. */
+export const AUTO_LEVEL = { objective: 0.3, rack: ['cannonball', 'cannonball', 'w-grenade'], material: 'plaster' } as const;
+
+/**
+ * Any scenario as an outcome level: its bodies as one scenario part with no roles, objective "bring 30%
+ * down", stars uncast, a launcher ring just outside the structure, and the rack given (default two
+ * cannonballs and the built-in grenade, spectacle-mode.md section 10). The lot is the structure's footprint grown by 2 cells. S15's planks keep their exact
+ * layout (gap 0); cube scenes get the level's gap.
+ */
+export function scenarioLevel(id: string, params: Params = {}, seed = 1, opts: { rack?: readonly RackItem[]; material?: MaterialName } = {}): LevelDef {
+  const def = SCENARIOS[id];
+  if (!def) throw new Error(`unknown scenario ${id}; known: ${Object.keys(SCENARIOS).join(', ')}`);
+  const bodies = buildScenario(id, params, seed).bodies;
+  let x0 = Infinity, x1 = -Infinity, z0 = Infinity, z1 = -Infinity, top = 0;
+  for (const b of bodies) {
+    const half = b.shape.kind === 'box' ? b.shape.half : [b.shape.radius, b.shape.radius, b.shape.radius];
+    x0 = Math.min(x0, b.pos[0] - half[0]!); x1 = Math.max(x1, b.pos[0] + half[0]!);
+    z0 = Math.min(z0, b.pos[2] - half[2]!); z1 = Math.max(z1, b.pos[2] + half[2]!);
+    top = Math.max(top, b.pos[1] + half[1]!);
+  }
+  if (!bodies.length) { x0 = z0 = -1; x1 = z1 = 1; }
+  const rack = [...(opts.rack ?? AUTO_LEVEL.rack)];
+  const part: ScenarioPart = { kind: 'scenario', id, ...(Object.keys(params).length ? { params } : {}), seed, material: opts.material ?? AUTO_LEVEL.material, ...(id === 'S15' ? { gap: 0 } : {}) };
+  return {
+    id, name: def.title, version: 1, world: 0, scoring: 'outcome',
+    parts: [part],
+    lot: { min: [x0 - 2, z0 - 2], max: [x1 + 2, z1 + 2] },
+    crownLine: 2,
+    objective: { kind: 'collapse', min: AUTO_LEVEL.objective },
+    par: rack.length, rack,
+    launcher: { radius: Math.hypot(x1 - x0, z1 - z0) / 2 + 4, y: 2, dropY: Math.ceil(top) + 4 },
+  };
 }

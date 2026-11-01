@@ -2,8 +2,10 @@
 // bodies in a level, in order, at the level's scale, with roles by selector.
 import { describe, expect, it } from 'vitest';
 import type { BodyDesc, Vec3 } from '@tb/engine-api';
-import { compileLevel, decodeTag, type LevelDef, MATERIALS, type Part, ROLE_ID, type ScenarioPart } from '@tb/keystone';
-import { buildScenario, type Params } from '@tb/scenarios';
+import { AUTO_LEVEL, compileLevel, decodeTag, type LevelDef, MATERIALS, type Part, ROLE_ID, type ScenarioPart, scenarioLevel, validateLevel } from '@tb/keystone';
+import { buildScenario, type Params, SCENARIOS } from '@tb/scenarios';
+
+const buildScenarioDefaults = (id: string) => SCENARIOS[id]!.defaults;
 
 const level = (parts: Part[], extra: Partial<LevelDef> = {}): LevelDef => ({
   id: 'SP', name: 'scenario part', version: 1, world: 0, lot: { min: [-40, -40], max: [40, 40] }, crownLine: 2, objective: { kind: 'collapse', min: 0.3 },
@@ -95,6 +97,9 @@ describe('scenario parts', () => {
     const all = [hash({}), hash({ seed: 2 }), hash({ params: { ...base.params, H: 5 } }), hash({ at: [1, 0, 0] }), hash({ gap: 0 }), hash({ id: 'S3', params: { W: 4, H: 4 } })];
     expect(new Set(all).size).toBe(all.length);
     expect(hash({})).toBe(hash({})); // and is a pure function of the level
+    // Params at the scenario's defaults, seed 1 and key order name the same level.
+    expect(hash({ params: { vary: 0.5, H: 4, D: 2, W: 2, towers: 2, street: buildScenarioDefaults('S14').street! } })).toBe(hash({}));
+    expect(hash({ seed: undefined })).toBe(hash({}));
   });
 
   it('refuses an unknown scenario or param, naming it', () => {
@@ -107,5 +112,30 @@ describe('scenario parts', () => {
     const c = compileLevel(level([{ kind: 'scenario', id: 'S4', material: 'stone' }]));
     expect(c.meta.n).toBe(10_000);
     expect(performance.now() - t0).toBeLessThan(1000);
+  });
+
+  describe('scenarioLevel: any scenario as an outcome level', () => {
+    it.each([
+      ['S3', {}], ['S4', { N: 300, F: 4, H: 6 }], ['S14', {}], ['S4', {}],
+    ] as Array<[string, Params]>)('%s %j: compiles and validates clean on the GPU, the lot and the launcher ring outside the structure', (id, params) => {
+      const d = scenarioLevel(id, params, 3), c = compileLevel(d);
+      expect(d).toMatchObject({ id, scoring: 'outcome', objective: { kind: 'collapse', min: AUTO_LEVEL.objective }, rack: AUTO_LEVEL.rack, par: AUTO_LEVEL.rack.length });
+      expect(c.meta.n).toBe(buildScenario(id, params, 3).bodies.length);
+      expect(validateLevel(c)).toEqual([]);
+      const h = c.frame.unit, r = d.launcher.radius * c.frame.pitch * h;
+      for (let i = 0; i < c.meta.n; i++) {
+        const x = c.meta.home[3 * i]!, z = c.meta.home[3 * i + 2]!;
+        expect(x > c.lot.min[0] && x < c.lot.max[0] && z > c.lot.min[1] && z < c.lot.max[1], `body ${i} in the lot`).toBe(true);
+        expect(Math.hypot(x, z), `body ${i} inside the launcher ring`).toBeLessThan(r);
+      }
+    });
+    it('S15 keeps the planks\' exact layout (gap 0); the rack and material can be chosen; same inputs, same level', () => {
+      const d = scenarioLevel('S15', { planks: 400, towers: 1 }, 2, { rack: ['marble', 'drop'], material: 'stone' });
+      expect(d.parts).toEqual([{ kind: 'scenario', id: 'S15', params: { planks: 400, towers: 1 }, seed: 2, material: 'stone', gap: 0 }]);
+      expect([d.rack, d.par]).toEqual([['marble', 'drop'], 2]);
+      expect(scenarioLevel('S4', {}, 1)).toEqual(scenarioLevel('S4', {}, 1));
+      expect(compileLevel(scenarioLevel('S4', {}, 1)).hash).not.toBe(compileLevel(scenarioLevel('S4', {}, 2)).hash);
+      expect(() => scenarioLevel('S99')).toThrow(/unknown scenario S99/);
+    });
   });
 });
