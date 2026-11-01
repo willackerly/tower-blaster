@@ -110,7 +110,7 @@ The weights make collapse the dominant line on big levels, keep leverage as the 
 | Fair | the best line meets the objective in at least 80% of its nudge cloud | the old par-robustness bar, applied to the objective |
 | Skill matters | T3 - T2 at least 10% of the metric's range (0.1 for D) | if aiming does not beat a typical attempt, stars are noise |
 | Stable | casting again with another seed moves T3 by less than its bootstrap 90% interval half-width, and that half-width is under 0.05 D | thresholds are a property of the level, not of the draw |
-| Cross-device | on one 1k level, T3 cast on SwiftShader (smaller N) lies inside Metal's bootstrap 90% interval | statistical fairness across devices, the reason for casting |
+| Cross-device | on one 1k level, T3 of nudges played on SwiftShader (smaller N) is not below the interval that many Metal nudges would land in (one-sided since G5: a device where the same aim does better only makes the stars easier there; B1's check shifted 0.0035 easier, docs/game/levels/B1.md) | statistical fairness across devices, the reason for casting |
 | Budget | a cast takes at most 60 min on the M5 at 10k | casts run on idle Mac time (overnight batches) |
 
 Cast cost: about 64 + 3 x 16 x 8 + 50 = 500 line plays, each from the start, since nothing can be forked on the GPU yet. At 10k, a 3-shot line is about 3 x 600 steps; at the estimated 10 ms a step (40 it; F2 will measure) that is 18 s a line, so the full recipe is about 2.5 h, over budget. Two levers, in order: cut the hill-climb to 2 lines x 8 moves x 4 nudges (N about 180, about 55 min), and the GPU fork engine ask below. The budget gate decides which recipe a level uses; the recipe is recorded with the thresholds.
