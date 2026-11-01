@@ -5,9 +5,9 @@
 import { massOf, type SpawnEvent, type Vec3 } from '@tb/engine-api';
 import { GRAVITY } from './materials.ts';
 import { itemYield } from './arsenal.ts';
-import { castStars, type CompiledLevel, type Scoring, scoringOf } from './level.ts';
+import { castStars, type CompiledLevel, type Scoring, scoringOf, settleOf } from './level.ts';
 import { collapseFraction, floorPotential_mJ, homePotential_mJ, homeSkyline, objectiveMet, type OutcomeFacts, outcomeScore } from './outcome.ts';
-import { crownDown, heritageBroken, leverage, levelScore, type LevelScore, type Observation, type Reductions, type SettleState, SETTLE_CAP, settleUpdate, type ShotOutcome, skyline, tier } from './rules.ts';
+import { crownDown, heritageBroken, leverage, levelScore, type LevelScore, type Observation, type Reductions, type SettleRule, type SettleState, settleCap, settleUpdate, type ShotOutcome, skyline, tier } from './rules.ts';
 import type { RackItem } from './rack.ts';
 import { ammoKE, type Shot, shotToSpawn } from './shots.ts';
 
@@ -68,6 +68,8 @@ export class Session {
   watchIdx: Int32Array;
   /** Par (end at clear) or outcome (end at a bank or an empty rack; LevelDef.autobank ends at the first clear too). */
   readonly scoring: Scoring;
+  /** How this level's shots settle (settleOf: v1 for par levels, v2 for outcome levels unless the level says). */
+  readonly settleRule: SettleRule;
   /** Collapse fraction D now, for the HUD (while a shot runs), and whether the objective was met at the last settle. */
   liveCollapse = 0;
   objectiveDone = false;
@@ -88,6 +90,7 @@ export class Session {
     this.startPe_mJ = homePotential_mJ(level, this.home);
     this.floorPe_mJ = floorPotential_mJ(level);
     this.scoring = scoringOf(level.def);
+    this.settleRule = settleOf(level.def);
     this.rackLeft = [...level.def.rack];
     this.crownDown = new Uint8Array(level.meta.crowns.length);
     this.crownLive = new Uint8Array(level.meta.crowns.length);
@@ -126,7 +129,7 @@ export class Session {
   /**
    * The rules' view of one observed state. `hold`: a fired weapon is still to go off
    * (Driver: a live fuse or a blast due later), so the shot does not settle before
-   * SETTLE_CAP however quiet the structure is.
+   * the settle rule's cap however quiet the structure is.
    */
   observe(o: Observation, hold = false): Feedback[] {
     const L = this.live;
@@ -169,9 +172,9 @@ export class Session {
     const total = o.red.impacts.reduce((a, x) => a + x, 0);
     if (total) out.push({ t: 'impacts', step, hist: o.red.impacts, total });
 
-    const s = settleUpdate(L.settle, o.red, L.spawnStep);
+    const s = settleUpdate(L.settle, o.red, L.spawnStep, this.settleRule, m.n);
     L.settle = s.state;
-    if (!s.settled || (hold && o.step - L.spawnStep < SETTLE_CAP)) return out;
+    if (!s.settled || (hold && o.step - L.spawnStep < settleCap(this.settleRule))) return out;
 
     // Settle: crowns are judged on where they lie now.
     for (let k = 0; k < nc; k++) this.crownDown[k] = crownDown(c, pos(k)) ? 1 : 0;

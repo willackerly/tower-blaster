@@ -17,6 +17,25 @@ export const SETTLE_QUIET = 30;
 /** ...but never sooner than this after the spawn, and always by the cap. */
 export const SETTLE_MIN = 20;
 export const SETTLE_CAP = 600;
+/**
+ * Settle v2's cap (spectacle-mode.md, section 9): 30 s at 60 Hz. A big
+ * structure's collapse runs longer than a chamber's, and its tail of a few
+ * rocking blocks would otherwise hold the shot open to it every time.
+ */
+export const SETTLE_CAP_V2 = 1800;
+/**
+ * How a shot settles. v1: every awake body quiet (speed under QUIET_SPEED and,
+ * for the structure, spin under QUIET_SPIN) for SETTLE_QUIET steps, or
+ * SETTLE_CAP; par levels pin their lines on it. v2: at most
+ * settleAllowance(n) structure bodies moving (Reductions.nMoving) and every
+ * live spawned body under QUIET_SPEED, for SETTLE_QUIET steps, or
+ * SETTLE_CAP_V2; outcome levels' default.
+ */
+export const SETTLE_RULES = ['v1', 'v2'] as const;
+export type SettleRule = (typeof SETTLE_RULES)[number];
+/** Structure bodies settle v2 lets still move: a few stragglers per thousand, at least 2. */
+export const settleAllowance = (n: number) => Math.max(2, Math.floor(n / 1000));
+export const settleCap = (rule: SettleRule) => (rule === 'v2' ? SETTLE_CAP_V2 : SETTLE_CAP);
 export const QUIET_SPEED = 0.05; // m/s
 export const QUIET_SPIN = 0.2; // rad/s
 /** Displacement (in h) beyond which a body counts as moved by a shot. */
@@ -56,6 +75,11 @@ export interface Reductions {
    * camera); +Infinity mins and -Infinity maxes when nothing moves. Min and max are exact in any order.
    */
   movingBox: Float64Array;
+  /**
+   * The fastest live spawned body (ammo, a weapon's children: index n and up, counted as for nAwake),
+   * m/s; 0 when none is awake. Settle v2 waits for it: a ball still in flight moves no structure body.
+   */
+  ammoSpeed: number;
 }
 
 export interface Watched { idx: Int32Array; pos: Float64Array; rot: Float64Array; linVel: Float64Array }
@@ -99,7 +123,7 @@ export function reduceCpu(s: Snapshot, prevLinVel: Float64Array | null, c: Compi
   const { meta: m } = c, h = c.frame.unit, dt = c.scene.dt;
   const r: Reductions = {
     step, nAwake: 0, maxSpeed: 0, maxAngSpeed: 0, pe_mJ: 0, displaced: 0, outOfLot: 0, heightHist: new Uint32Array(HEIGHT_BINS), impacts: new Uint32Array(MATERIALS.length * BANDS),
-    nMoving: 0, movingBox: Float64Array.of(Infinity, Infinity, Infinity, -Infinity, -Infinity, -Infinity),
+    nMoving: 0, movingBox: Float64Array.of(Infinity, Infinity, Infinity, -Infinity, -Infinity, -Infinity), ammoSpeed: 0,
   };
   const top = Math.max(c.height, 1e-9);
   for (let i = 0; i < s.count; i++) {
@@ -109,6 +133,7 @@ export function reduceCpu(s: Snapshot, prevLinVel: Float64Array | null, c: Compi
       r.nAwake++;
       const v = Math.hypot(s.linVel[3 * i]!, s.linVel[3 * i + 1]!, s.linVel[3 * i + 2]!);
       r.maxSpeed = Math.max(r.maxSpeed, v);
+      if (!structure) r.ammoSpeed = Math.max(r.ammoSpeed, v);
       if (structure) {
         const w = Math.hypot(s.angVel[3 * i]!, s.angVel[3 * i + 1]!, s.angVel[3 * i + 2]!);
         r.maxAngSpeed = Math.max(r.maxAngSpeed, w);
@@ -173,11 +198,23 @@ export class CpuObserver {
 
 export interface SettleState { quietSince: number | null }
 
-export function settleUpdate(st: SettleState, r: Reductions, spawnStep: number): { state: SettleState; settled: boolean } {
-  const quiet = r.nAwake === 0 || (r.maxSpeed < QUIET_SPEED && r.maxAngSpeed < QUIET_SPIN);
+/** Whether one observed state counts as quiet under `rule`, for a structure of n bodies. */
+export function quietUnder(rule: SettleRule, r: Reductions, n: number): boolean {
+  if (r.nAwake === 0) return true;
+  if (rule === 'v1') return r.maxSpeed < QUIET_SPEED && r.maxAngSpeed < QUIET_SPIN;
+  return r.nMoving <= settleAllowance(n) && r.ammoSpeed < QUIET_SPEED;
+}
+
+/**
+ * One step of the settle rule (v1 unless given; v2 needs the structure's body count n). Settled
+ * SETTLE_QUIET consecutive quiet steps in, but never before SETTLE_MIN steps after the spawn, at
+ * once when nothing is awake (from SETTLE_MIN), and always at the rule's cap.
+ */
+export function settleUpdate(st: SettleState, r: Reductions, spawnStep: number, rule: SettleRule = 'v1', n = 0): { state: SettleState; settled: boolean } {
+  const quiet = quietUnder(rule, r, n);
   const quietSince = quiet ? (st.quietSince ?? r.step) : null;
   const old = r.step - spawnStep;
-  const settled = old >= SETTLE_CAP || (old >= SETTLE_MIN && (r.nAwake === 0 || (quietSince !== null && r.step - quietSince + 1 >= SETTLE_QUIET)));
+  const settled = old >= settleCap(rule) || (old >= SETTLE_MIN && (r.nAwake === 0 || (quietSince !== null && r.step - quietSince + 1 >= SETTLE_QUIET)));
   return { state: { quietSince }, settled };
 }
 
