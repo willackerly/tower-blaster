@@ -23,7 +23,35 @@ export interface BlockPart { kind: 'block'; at: Vec3; size: Vec3; material: Mate
 export interface BoxPart { kind: 'slab' | 'rod'; at: Vec3; half: Vec3; material: MaterialName; role?: Role }
 export type Part = BlockPart | BoxPart;
 
-export type Objective = { kind: 'crowns' } | { kind: 'skyline'; maxH: number; footprintMax?: number };
+/**
+ * What the level asks for; meeting it is the first star. footprintMax (a fraction of the structure
+ * bodies allowed outside the lot grown by 0.5 h): on par levels part of the skyline objective, as
+ * before; on outcome levels a constraint on any objective that costs points, not stars
+ * (docs/game/spectacle-mode.md, section 3).
+ */
+export type Objective =
+  | { kind: 'crowns'; footprintMax?: number }
+  | { kind: 'skyline'; maxH: number; footprintMax?: number }
+  /** Collapse fraction D (outcome.ts collapseFraction) at least `min`, from 0 to 1. */
+  | { kind: 'collapse'; min: number; footprintMax?: number };
+
+/** How a level is scored: par (strokes, golf stamps; L1 to L5) or outcome (what came down; the spectacle mode). */
+export const SCORINGS = ['par', 'outcome'] as const;
+export type Scoring = (typeof SCORINGS)[number];
+
+/**
+ * The one metric an outcome level's stars are measured on: collapse (D, higher is better), crowns
+ * (crowns down), skyline (end skyline over start skyline, lower is better) or score (the tally total).
+ */
+export const STAR_METRICS = ['collapse', 'crowns', 'skyline', 'score'] as const;
+export type StarMetric = (typeof STAR_METRICS)[number];
+
+/**
+ * Thresholds cast by the bot for an outcome level (spectacle-mode.md, section 6): two stars at t2,
+ * three at t3 (and no heritage broken); `best` is the best bot play (beat the bot). The rest records
+ * how they were cast. Not part of the level hash: the cast records the hash it was made against.
+ */
+export interface StarsDef { metric: StarMetric; t2: number; t3: number; best?: number; castOn?: string; engine?: string; hash?: string; n?: number; seed?: number }
 
 export interface LevelDef {
   id: string;
@@ -47,7 +75,13 @@ export interface LevelDef {
   lGold?: number;
   /** Recorded solutions, replayed by tests. */
   solutions?: { par?: Shot[]; ace?: Shot[] };
+  /** Default 'par': every level before the spectacle mode, scored as before. */
+  scoring?: Scoring;
+  /** Outcome levels: the cast star thresholds; absent, stars are uncast (only the objective's star). */
+  stars?: StarsDef;
 }
+
+export const scoringOf = (d: LevelDef): Scoring => d.scoring ?? 'par';
 
 export const ROLE_ID: Record<Role, number> = { plain: 0, crown: 1, heritage: 2 };
 export const MAX_BODIES = 2500;
@@ -151,7 +185,10 @@ export function compileLevel(def: LevelDef): CompiledLevel {
   };
   const lot = { min: [def.lot.min[0] * p, def.lot.min[1] * p] as [number, number], max: [def.lot.max[0] * p, def.lot.max[1] * p] as [number, number] };
   const frame: ShotFrame = { unit: h, pitch: pitchOf(def), centre: [(lot.min[0] + lot.max[0]) / 2, (lot.min[1] + lot.max[1]) / 2], launcher: def.launcher };
-  const { solutions: _omit, ...geometry } = def; // solutions don't change the scene
+  // Solutions don't change the scene, and the stars are cast against the hash (StarsDef.hash).
+  // scoring 'par' is the default, so writing it out names the same level.
+  const { solutions: _omit, stars: _stars, ...geometry } = def;
+  if (geometry.scoring === 'par') delete geometry.scoring;
   return { def, scene, meta, frame, lot, height, hash: hashString(JSON.stringify(geometry)) };
 }
 

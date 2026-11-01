@@ -5,7 +5,8 @@
 import { massOf, type SpawnEvent, type Vec3 } from '@tb/engine-api';
 import { GRAVITY } from './materials.ts';
 import type { CompiledLevel } from './level.ts';
-import { crownDown, heritageBroken, leverage, levelScore, type LevelScore, type Observation, type SettleState, settleUpdate, type ShotOutcome, skyline, tier } from './rules.ts';
+import { collapseFraction, floorPotential_mJ, homePotential_mJ, objectiveMet } from './outcome.ts';
+import { crownDown, heritageBroken, leverage, levelScore, type LevelScore, type Observation, type SettleState, settleUpdate, type ShotOutcome, tier } from './rules.ts';
 import { type AmmoKind, ammoKE, type Shot, shotToSpawn } from './shots.ts';
 
 export type Phase = 'aiming' | 'running' | 'cleared' | 'failed';
@@ -65,15 +66,23 @@ export class Session {
    * pre-settle); heritage is judged against it. Defaults to the authored poses.
    */
   readonly home: Float64Array;
+  /** The structure's potential energy at home, PE(B0), and lying flat, PE_floor: the collapse fraction's range. */
+  readonly startPe_mJ: number;
+  readonly floorPe_mJ: number;
 
   constructor(readonly level: CompiledLevel, home?: Float64Array) {
     this.home = (home ?? level.meta.home).slice(0, 3 * level.meta.n);
+    this.startPe_mJ = homePotential_mJ(level, this.home);
+    this.floorPe_mJ = floorPotential_mJ(level);
     this.rackLeft = [...level.def.rack];
     this.crownDown = new Uint8Array(level.meta.crowns.length);
     this.crownLive = new Uint8Array(level.meta.crowns.length);
     this.heritageBroken = new Uint8Array(level.meta.heritage.length);
     this.watchIdx = Int32Array.from([...level.meta.crowns, ...level.meta.heritage]);
   }
+
+  /** Collapse fraction D with the structure at potential energy pe_mJ. */
+  collapse(pe_mJ: number): number { return collapseFraction(this.startPe_mJ, pe_mJ, this.floorPe_mJ); }
 
   get strokes() { return this.outcomes.length + (this.live ? 1 : 0); }
   canFire(ammo: AmmoKind): boolean { return this.phase === 'aiming' && this.rackLeft.includes(ammo); }
@@ -151,17 +160,14 @@ export class Session {
       ke: L.ke, dPE_mJ: o.basePe_mJ - o.red.pe_mJ, leverage: this.liveLeverage,
       crownsDown: Math.max(0, crownsTotal - L.crownsBefore), crownsTotal,
       heritageNew: this.heritageBroken.reduce((a, x) => a + x, 0) - L.heritageBefore,
-      displaced: o.red.displaced, outOfLot: o.red.outOfLot, spawnStep: L.spawnStep, settleStep: step,
+      displaced: o.red.displaced, outOfLot: o.red.outOfLot, pe_mJ: o.red.pe_mJ, spawnStep: L.spawnStep, settleStep: step,
     };
     this.outcomes.push(outcome);
     this.live = null;
     this.watchIdx = Int32Array.from([...m.crowns, ...m.heritage]);
     out.push({ t: 'settled', step, shot: this.outcomes.length - 1, outcome });
 
-    const obj = c.def.objective;
-    const cleared = obj.kind === 'crowns'
-      ? nc > 0 && crownsTotal === nc
-      : skyline(o.red.heightHist, c.height) <= obj.maxH * c.frame.unit + 1e-9 && (obj.footprintMax === undefined || o.red.outOfLot <= obj.footprintMax * m.n);
+    const cleared = objectiveMet(c, { red: o.red, crownsTotal, collapse: this.collapse(o.red.pe_mJ) }, 'par');
     if (cleared || this.rackLeft.length === 0) {
       this.phase = cleared ? 'cleared' : 'failed';
       this.score = levelScore(c.def, this.outcomes, cleared, m.n);

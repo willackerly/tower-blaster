@@ -5,7 +5,10 @@
 // in a hand-edited level is an error rather than a silently different level.
 // Whether the level is any good (overlaps, unsupported bodies, tunnelling ammo)
 // is validateLevel's question; the panel shows its issues without refusing.
-import { AMMO_KINDS, type AmmoKind, checkShot, compileLevel, type CourseOverride, type Issue, type LevelDef, MATERIALS, type MaterialName, type Part, type Role, ROLES, type Shot, validateLevel } from '@tb/keystone';
+import {
+  AMMO_KINDS, type AmmoKind, checkShot, compileLevel, type CourseOverride, type Issue, type LevelDef, MATERIALS, type MaterialName, type Part, type Role, ROLES, SCORINGS, type Scoring, type Shot,
+  STAR_METRICS, type StarMetric, type StarsDef, validateLevel,
+} from '@tb/keystone';
 
 export const LEVEL_FILE_FORMAT = 'tower-blaster/keystone-level';
 
@@ -17,7 +20,7 @@ const MATERIAL_NAMES = MATERIALS.map((m) => m.name) as readonly string[];
 /** The LevelDef a JSON value describes, or an error saying where it is wrong. */
 export function parseLevelDef(v: unknown, where = 'level'): LevelDef {
   const o = object(v, where);
-  only(o, ['format', 'id', 'name', 'version', 'world', 'unit', 'gap', 'parts', 'lot', 'crownLine', 'objective', 'par', 'rack', 'launcher', 'lGold', 'solutions'], where);
+  only(o, ['format', 'id', 'name', 'version', 'world', 'unit', 'gap', 'parts', 'lot', 'crownLine', 'objective', 'par', 'rack', 'launcher', 'lGold', 'solutions', 'scoring', 'stars'], where);
   if (o.format !== undefined && o.format !== LEVEL_FILE_FORMAT) throw new Error(`${where}.format should be "${LEVEL_FILE_FORMAT}"`);
   const id = str(o.id, `${where}.id`);
   if (!/^[\w-]{1,32}$/.test(id)) throw new Error(`${where}.id must be 1 to 32 letters, digits, - or _`);
@@ -40,7 +43,20 @@ export function parseLevelDef(v: unknown, where = 'level'): LevelDef {
     def.solutions = {};
     for (const k of ['par', 'ace'] as const) if (s[k] !== undefined) def.solutions[k] = arr(s[k], `${where}.solutions.${k}`).map((x, i) => shot(x, `${where}.solutions.${k}[${i}]`));
   }
+  if (o.scoring !== undefined) def.scoring = oneOf(o.scoring, SCORINGS, `${where}.scoring`) as Scoring;
+  if (o.stars !== undefined) def.stars = stars(o.stars, `${where}.stars`);
   return def;
+}
+
+/** An outcome level's cast thresholds (@tb/keystone StarsDef). */
+function stars(v: unknown, where: string): StarsDef {
+  const o = object(v, where);
+  only(o, ['metric', 't2', 't3', 'best', 'castOn', 'engine', 'hash', 'n', 'seed'], where);
+  const s: StarsDef = { metric: oneOf(o.metric, STAR_METRICS, `${where}.metric`) as StarMetric, t2: num(o.t2, `${where}.t2`), t3: num(o.t3, `${where}.t3`) };
+  if (o.best !== undefined) s.best = num(o.best, `${where}.best`);
+  for (const k of ['castOn', 'engine', 'hash'] as const) if (o[k] !== undefined) s[k] = str(o[k], `${where}.${k}`);
+  for (const k of ['n', 'seed'] as const) if (o[k] !== undefined) s[k] = int(o[k], `${where}.${k}`);
+  return s;
 }
 
 function part(v: unknown, where: string): Part {
@@ -90,13 +106,20 @@ function lot(v: unknown, where: string): LevelDef['lot'] {
 
 function objective(v: unknown, where: string): LevelDef['objective'] {
   const o = object(v, where);
-  const kind = oneOf(o.kind, ['crowns', 'skyline'], `${where}.kind`);
+  const kind = oneOf(o.kind, ['crowns', 'skyline', 'collapse'], `${where}.kind`);
+  const footprint = o.footprintMax !== undefined ? { footprintMax: num(o.footprintMax, `${where}.footprintMax`) } : {};
   if (kind === 'crowns') {
-    only(o, ['kind'], where);
-    return { kind };
+    only(o, ['kind', 'footprintMax'], where);
+    return { kind, ...footprint };
+  }
+  if (kind === 'collapse') {
+    only(o, ['kind', 'min', 'footprintMax'], where);
+    const min = num(o.min, `${where}.min`);
+    if (min < 0 || min > 1) throw new Error(`${where}.min must be from 0 to 1 (a collapse fraction)`);
+    return { kind, min, ...footprint };
   }
   only(o, ['kind', 'maxH', 'footprintMax'], where);
-  return { kind, maxH: num(o.maxH, `${where}.maxH`), ...(o.footprintMax !== undefined ? { footprintMax: num(o.footprintMax, `${where}.footprintMax`) } : {}) };
+  return { kind, maxH: num(o.maxH, `${where}.maxH`), ...footprint };
 }
 
 function launcher(v: unknown, where: string): LevelDef['launcher'] {
