@@ -10,6 +10,10 @@
 // test (boxBroadphase) is named as a hint only: it is exact and needs about
 // half the pairs for long, thin bodies such as Kapla planks, but no fewer
 // where a sphere is involved, so it is no sure fix.
+//
+// Sizes: DEFAULT_PAIRS_PER_BODY is the engine's when pairsPerBody is unset,
+// and everyPairPerBody a buffer that holds every pair of a small world (the
+// game's levels, which show no limits).
 import type { EngineHealth, EngineLimit } from '@tb/engine-api';
 import { pairDispatchCover } from './broadphase.ts';
 import type { GpuDiagnostics } from './engine.ts';
@@ -23,6 +27,28 @@ export interface GpuHealthContext {
   storageLimit: number;
   maxComputeWorkgroupsPerDimension: number;
   boxBroadphase: boolean;
+}
+
+/**
+ * The pair buffer's size per body when GpuEngineOptions.pairsPerBody is unset. Every scenario at its
+ * defaults needs at most 10.6 per body at rest and 11.1 under a heavy ball, and the default grenade's
+ * blast inside the default S1 tower 13.5 (SwiftShader, 2026-10-28). A resting unit-cube lattice pairs each
+ * cube with its 26 neighbours only, 13 per body; moving packed blocks need more, as the sweep grows.
+ */
+export const DEFAULT_PAIRS_PER_BODY = 16;
+
+/** The most pair slots everyPairPerBody gives once every pair no longer fits in them. */
+export const EVERY_PAIR_SLOTS = 2 ** 16;
+
+/**
+ * pairsPerBody for a buffer that holds every pair of `capacity` bodies, so that no step can drop one
+ * however the bodies move: ceil((capacity - 1) / 2) per body, which reaches every pair through
+ * capacity 362 (65,522 slots); past that floor(EVERY_PAIR_SLOTS / capacity); and never below
+ * DEFAULT_PAIRS_PER_BODY. Up to capacity 4096 its contacts fit the default 128 MiB storage binding in
+ * every record layout, and from there on it is the default.
+ */
+export function everyPairPerBody(capacity: number): number {
+  return Math.max(DEFAULT_PAIRS_PER_BODY, Math.min(Math.ceil((capacity - 1) / 2), Math.floor(EVERY_PAIR_SLOTS / capacity)));
 }
 
 /** How much more than the peak a suggested pair buffer holds, when the device can hold that much. */

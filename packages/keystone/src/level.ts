@@ -8,7 +8,7 @@ import { peOf_mJ, SETTLE_RULES, type SettleRule } from './rules.ts';
 import { type Arm, levelArm, rackArms } from './arsenal.ts';
 import { isRackItem, itemRef, type LevelWeapon, RACK_ITEM_NAMES, rackBodies, type RackItem, speedOf, WEAPON_KEY } from './rack.ts';
 import { type ScenarioPart, scenarioBodies, scenarioKey } from './scenario-part.ts';
-import { ammoBody, type LauncherDef, type Shot, type ShotFrame } from './shots.ts';
+import { ammoBody, type LauncherDef, launcherPos, type Shot, type ShotFrame } from './shots.ts';
 
 /** A course (layer) override inside a block: change material or role, or leave cells out. */
 export interface CourseOverride {
@@ -334,7 +334,7 @@ function bodiesDigest(bodies: readonly BodyDesc[]): string {
 }
 
 export interface Issue {
-  code: 'count' | 'capacity' | 'overlap' | 'unsupported' | 'mass-ratio' | 'ammo-ratio' | 'dud' | 'tunnelling' | 'crown-start' | 'rack' | 'weapon' | 'empty' | 'watched' | 'flat';
+  code: 'count' | 'capacity' | 'launcher' | 'overlap' | 'unsupported' | 'mass-ratio' | 'ammo-ratio' | 'dud' | 'tunnelling' | 'crown-start' | 'rack' | 'weapon' | 'empty' | 'watched' | 'flat';
   message: string;
   bodies?: number[];
   /** Legal but worth knowing (a dud item): the level still plays as authored. */
@@ -483,12 +483,29 @@ export function validateLevel(c: CompiledLevel, opts: ValidateOptions = {}): Iss
   }
 
   issues.push(...rackIssues(c));
+  if (scoringOf(def) === 'outcome') issues.push(...launcherIssues(c));
 
   for (const i of m.crowns) {
     const x = m.home[3 * i]!, y = m.home[3 * i + 1]!, z = m.home[3 * i + 2]!;
     if (y < def.crownLine * h || x < c.lot.min[0] || x > c.lot.max[0] || z < c.lot.min[1] || z > c.lot.max[1]) issues.push({ code: 'crown-start', message: `crown ${i} starts already down`, bodies: [i] });
   }
   return issues;
+}
+
+/**
+ * Outcome levels: every launcher position must be within 4 h of the lot, where the rules count
+ * ammo as live (rules.ts ammoLive). From beyond it a shot flies uncounted, and a structure
+ * quiet before the ammo arrives settles the shot before it lands (a long wall's ends, a city's
+ * corners). Par levels keep their launchers: their recorded lines settle where they do.
+ */
+function launcherIssues(c: CompiledLevel): Issue[] {
+  const grow = 4 * c.frame.unit, y = Math.round(4 * c.def.launcher.y), out: number[] = [];
+  for (let az = 0; az < 720; az++) {
+    const p = launcherPos(c.frame, az, y);
+    if (p[0] < c.lot.min[0] - grow || p[0] > c.lot.max[0] + grow || p[2] < c.lot.min[1] - grow || p[2] > c.lot.max[1] + grow) out.push(az);
+  }
+  if (!out.length) return [];
+  return [{ code: 'launcher', message: `${out.length} of 720 launcher azimuths (first ${out[0]! / 2} deg) are over 4 h outside the lot, where a shot is not live: it could settle before it lands; grow the lot to the launcher ring less 3 cells` }];
 }
 
 /** The most common structure body mass (ties: the lighter), for the `flat` check. */

@@ -123,7 +123,8 @@ export const AUTO_LEVEL = { objective: 0.3, rack: ['cannonball', 'cannonball', '
 /**
  * Any scenario as an outcome level: its bodies as one scenario part with no roles, objective "bring 30%
  * down", stars uncast, a launcher ring just outside the structure, and the rack given (default two
- * cannonballs and the built-in grenade, spectacle-mode.md section 10). The lot is the structure's footprint grown by 2 cells. S15's planks keep their exact
+ * cannonballs and the built-in grenade, spectacle-mode.md section 10). The lot is the structure's footprint grown by 2 cells, and at
+ * least to 3 cells inside the launcher ring so every shot is live from launch. S15's planks keep their exact
  * layout (gap 0); cube scenes get the level's gap.
  */
 export function scenarioLevel(id: string, params: Params = {}, seed = 1, opts: { rack?: readonly RackItem[]; material?: MaterialName } = {}): LevelDef {
@@ -139,14 +140,18 @@ export function scenarioLevel(id: string, params: Params = {}, seed = 1, opts: {
   }
   if (!bodies.length) { x0 = z0 = -1; x1 = z1 = 1; }
   const rack = [...(opts.rack ?? AUTO_LEVEL.rack)];
+  const radius = Math.hypot(x1 - x0, z1 - z0) / 2 + 4;
+  // The lot reaches to 3 cells inside the launcher ring, so a shot is live from launch (rules.ts ammoLive counts ammo
+  // within 4 h of the lot): a shot from beyond it could settle before it lands (validateLevel's launcher issue).
+  const cx = (x0 + x1) / 2, cz = (z0 + z1) / 2, reach = radius - 3;
   const part: ScenarioPart = { kind: 'scenario', id, ...(Object.keys(params).length ? { params } : {}), seed, material: opts.material ?? AUTO_LEVEL.material, ...(id === 'S15' ? { gap: 0 } : {}) };
   return {
     id, name: def.title, version: 1, world: 0, scoring: 'outcome',
     parts: [part],
-    lot: { min: [x0 - 2, z0 - 2], max: [x1 + 2, z1 + 2] },
+    lot: { min: [Math.min(x0 - 2, cx - reach), Math.min(z0 - 2, cz - reach)], max: [Math.max(x1 + 2, cx + reach), Math.max(z1 + 2, cz + reach)] },
     crownLine: 2,
     objective: { kind: 'collapse', min: AUTO_LEVEL.objective },
     par: rack.length, rack,
-    launcher: { radius: Math.hypot(x1 - x0, z1 - z0) / 2 + 4, y: 2, dropY: Math.ceil(top) + 4 },
+    launcher: { radius, y: 2, dropY: Math.ceil(top) + 4 },
   };
 }

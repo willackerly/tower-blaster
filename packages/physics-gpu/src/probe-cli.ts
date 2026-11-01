@@ -1,10 +1,12 @@
 // pnpm bench:probe [--channel chrome] [--headed] [--quick] [--only p1,p2,...] [--reps N] [--polls N] [--hessian registers|array]
 //   [--scenario S15 --param planks=10000 --param towers=1 --gravity-scale 42.735 --pairs-per-body 32 --box-broadphase --checkpoints 60,300]
-//   [--engine "avbd-gpu:key=value,..."]
+//   [--engine "avbd-gpu:key=value,..."] [--p5-settle N] [--p5-steps N]
 // The solver probe (probe.ts): adapter limits (P1), the real solver's
 // per-colour structure and times on the S4 city (P2), synthetic per-point
 // kernels (P3) and synchronization costs (P4: a = workgroupBarrier,
-// b = dispatch chain, c = grid barrier, d = workgroup tile; p4 = all four).
+// b = dispatch chain, c = grid barrier, d = workgroup tile; p4 = all four),
+// and the sleep probes (probe-sleep.ts): the stages of a step after
+// --p5-settle steps (P5) and island labelling on its contact graph (P6).
 // --hessian sets the primal's form for P2 (default registers, the engine's
 // default since plan step 2b; array is the earlier form, to time against it).
 // --engine times another engine variant in P2, given as for pnpm bench
@@ -37,6 +39,8 @@ if (only) {
 }
 if (value('reps')) opts.reps = Number(value('reps'));
 if (value('polls')) opts.maxPolls = Number(value('polls'));
+if (value('p5-settle')) opts.p5Settle = Number(value('p5-settle'));
+if (value('p5-steps')) opts.p5Steps = Number(value('p5-steps'));
 const scenario = value('scenario');
 if (scenario) opts.scenario = scenario;
 const params: Record<string, number | boolean> = {};

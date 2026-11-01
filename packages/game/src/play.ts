@@ -5,14 +5,14 @@
 // (level, shots) and replays headless. The game page calls playKeystone with
 // its own elements; the viewer calls it for rules=keystone, with hooks for its
 // dev panels (docs/design/viewer-superset.md, step C).
-import { type BodyDesc, type PhysicsEngine, type Vec3 } from '@tb/engine-api';
+import { type BodyDesc, type EngineHealth, limitsHit, type PhysicsEngine, type Vec3 } from '@tb/engine-api';
 import { type RackItem, type CompiledLevel, compileLevel, Driver, type Feedback, type LevelDef, type LevelScore, type PerStep, runSession, type Shot, snapshotHash, TIER_NAMES } from '@tb/keystone';
 import { Window } from '@tb/metrics';
 import { clampPitch, EYE_ABOVE_GROUND, eyeOf, frame, type Orbit, rayThrough, viewProj } from '@tb/render/camera';
 import type { PixelStats, Renderer, SnapshotSource } from '@tb/render';
 import { type Aimed, azFromYaw, pick, previewBeads, shotFor, SUBSTEPS } from './aim.ts';
 import { Synth, type Voice, voicesFor } from './audio.ts';
-import { driverOptions, type EngineKind, makeEngine } from './engines.ts';
+import { driverOptions, type EngineKind, gpuEngineOptions, makeEngine, roomAfter } from './engines.ts';
 import { hudHtml, nextSelection, rackChips, resultHtml, starsText } from './hud.ts';
 import { CameraJuice, contactJuice } from './juice.ts';
 import { Pacer, type PaceFeel } from './pacing.ts';
@@ -61,6 +61,19 @@ export interface GameHandle {
   state(): SessionState;
   /** The same shots from the same level on a fresh engine, built as the live one, on this device. */
   replay(shots: Shot[]): Promise<SessionState>;
+  /**
+   * The live engine's limits since this level loaded (PhysicsEngine.health), such as the GPU pair
+   * buffer's, or null for an engine without them (Rapier). Read between steps, so it changes no step.
+   */
+  health(): Promise<EngineHealth | null>;
+  /** The live GPU engine's pair room per body (gpuEngineOptions; 0 on Rapier). */
+  pairsPerBody: number;
+  /**
+   * What the last round that hit an engine limit said (EngineLimit.message per limit), empty while
+   * none has. Each round is checked once it is over (the round-over card, or a load or retry that
+   * ends it), and a round that dropped pairs builds the level's later rounds with room (roomAfter).
+   */
+  limitsHit: string[];
 }
 export interface SessionState { step: number; phase: string; strokes: number; heritageBroken: number; hash: string }
 
@@ -72,7 +85,7 @@ export function newGameHandle(): GameHandle {
   return {
     status: 'loading', engine: '', level: '', phase: 'loading', ready: false, frames: 0, stepIndex: 0, strokes: 0, bodies: 0, collapse: 0, fast: false, result: null, counts: {}, feel: { hitStop: false, slowMo: false }, resultShownAt: null, timing: { loadMs: 0, stepMs: [], moving: [], frameMs: [] },
     fire: () => false, bank: () => false, aim: () => null, select: () => false, load: async () => {}, retry: async () => {}, capture: async () => null,
-    state: none, replay: async () => none(),
+    state: none, replay: async () => none(), health: async () => null, pairsPerBody: 0, limitsHit: [],
   };
 }
 
@@ -189,6 +202,12 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
 
   // One engine per level load: the GPU engine sizes its buffers for the level's rack at init.
   let engine: PhysicsEngine | null = null;
+  // Pair room per body a level's later rounds are built with, once a round of it dropped pairs
+  // (roomAfter); live play and replay() build with the live round's (livePairs).
+  const room = new Map<LevelDef, number>();
+  let livePairs: number | undefined;
+  // Pair-buffer drops of the live round already reported, so a round checked twice warns once.
+  let reportedSteps = 0;
   // The arc preview integrates as the engine does, so it is exact on any engine.
   let substeps = SUBSTEPS;
   // Level loads and physics steps take turns: a load disposes the engine, and
@@ -232,12 +251,33 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     return exclusive(() => loadNow(i, retry)).finally(() => { loading--; });
   }
 
+  /**
+   * The live round's engine limits (PhysicsEngine.health) once it is over: a limit hit is reported
+   * (handle.limitsHit, the console, a banner) and, for the pair buffer, the level's later rounds get
+   * the room the engine names (roomAfter). Runs under the exclusive lock, between steps.
+   */
+  async function checkRound(): Promise<void> {
+    const h = (await driver.engine.health?.()) ?? null;
+    const hit = limitsHit(h);
+    const steps = hit.reduce((a, l) => a + l.steps, 0);
+    if (steps <= reportedSteps) return;
+    reportedSteps = steps;
+    handle.limitsHit = hit.map((l) => l.message);
+    const before = gpuEngineOptions(c, livePairs).pairsPerBody!, after = roomAfter(before, h);
+    if (after > before) room.set(c.def, after);
+    console.warn(`${c.def.id}: engine limit hit (${handle.limitsHit.join('; ')}); later rounds of this level get pairsPerBody=${room.get(c.def) ?? before}`);
+    banner(after > before ? 'Physics limit hit: next round gets more room' : 'Physics limit hit', 'crack');
+  }
+
   async function loadNow(i: number, retry: boolean) {
     const t0 = performance.now();
+    // The round being left is over: check what it hit before its engine goes.
+    if (engine) await checkRound();
     // Build and pre-settle the new level aside: the GPU's pre-settle spans many
     // frames, and every frame reads the current level, so it swaps in whole.
     const next = compileLevel(levels[i]!);
-    const nextEngine = makeEngine(kind, next, device);
+    const nextPairs = room.get(levels[i]!);
+    const nextEngine = makeEngine(kind, next, device, nextPairs);
     const nextDriver = new Driver(nextEngine, next, driverOptions(kind));
     try {
       await nextDriver.reset();
@@ -250,6 +290,9 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     c = next;
     engine = nextEngine;
     driver = nextDriver;
+    livePairs = nextPairs;
+    reportedSteps = 0;
+    handle.pairsPerBody = kind === 'gpu' ? gpuEngineOptions(c, livePairs).pairsPerBody! : 0;
     substeps = engine.info.integrator?.substeps ?? SUBSTEPS;
     handle.timing = { loadMs: performance.now() - t0, stepMs: [], moving: [], frameMs: [] };
     descs = driver.bodies;
@@ -357,6 +400,8 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
           handle.result = f.score;
           ending = false;
           showResult(f.score);
+          // The round is over: check its limits once this step is done (checkRound).
+          void exclusive(checkRound).catch(fail);
           break;
       }
     }
@@ -416,8 +461,10 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
   handle.load = (id) => load(levelIndex(id)).catch(fail);
   handle.retry = () => load(levelIdx, true).catch(fail);
   handle.state = () => ({ step: driver.engine.stepIndex, phase: driver.session.phase, strokes: driver.session.strokes, heritageBroken: sum(driver.session.heritageBroken), hash: snapshotHash(driver.snapshot) });
+  // Between steps and loads, so neither a step nor a load's dispose runs under the read.
+  handle.health = () => exclusive(async () => (await driver.engine.health?.()) ?? null);
   handle.replay = async (shots) => {
-    const e = makeEngine(kind, c, device);
+    const e = makeEngine(kind, c, device, livePairs);
     try {
       const r = await runSession(e, c, shots, { ...driverOptions(kind), perStep: env.perStep?.(c) });
       return { step: r.steps, phase: r.session.phase, strokes: r.session.strokes, heritageBroken: sum(r.session.heritageBroken), hash: snapshotHash(r.snapshot) };
