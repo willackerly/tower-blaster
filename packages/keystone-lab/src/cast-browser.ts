@@ -33,7 +33,10 @@ export interface BrowserCastPlayer extends CastPlayer {
 
 /** Opens the cast page on a browser and returns a player bound to it; close() it when done. */
 export async function openBrowserCastPlayer(opts: BrowserCastOptions = {}): Promise<BrowserCastPlayer> {
-  const server = await createServer({ configFile: fileURLToPath(new URL('../../game/vite.config.ts', import.meta.url)), server: { port: 0, host: '127.0.0.1' }, logLevel: 'silent' });
+  const server = await createServer({
+    configFile: fileURLToPath(new URL('../../game/vite.config.ts', import.meta.url)),
+    // No file watching or HMR: an edit or a checkout while a cast runs must not reload the page under it.
+    server: { port: 0, host: '127.0.0.1', watch: null, hmr: false }, logLevel: 'silent' });
   await server.listen();
   const base = server.resolvedUrls?.local[0];
   if (!base) { await server.close(); throw new Error('vite did not report a URL'); }

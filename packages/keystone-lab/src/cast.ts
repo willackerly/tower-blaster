@@ -88,54 +88,91 @@ export function nodeCastPlayer(spec: EngineSpec): CastPlayer {
 
 // ---- Aiming at the structure ----
 
-/** Azimuth sectors (of 720 half-degree quanta) and height thirds the competent plays are stratified over. */
-export const AZ_SECTORS = 8;
+/** Horizontal face directions: +x, -x, +z, -z. */
+export const FACE_DIRS: ReadonlyArray<[number, number]> = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+/** Face sectors per height band the competent plays are stratified over (shared out among the face directions by exposed area), and height thirds. */
+export const FACE_SECTORS = 8;
 export const HEIGHT_BANDS = 3;
+/** Most a competent shot comes in away from a face's normal, degrees. */
+export const MAX_SKEW = 25;
 
 /**
- * What a bot shot means to do, before it is turned into quantised shot fields: from azimuth `az`
- * (0.5 deg) hit the structure at height `yFrac` of its height, `lateral` of the way across it as
- * seen from there (0 = left edge, 1 = right edge), at `power` %.
+ * What a bot shot means to do, before it becomes quantised shot fields: hit an exposed face of
+ * direction `dir` (FACE_DIRS) at height `yFrac` of the structure, `lateral` of the way along those
+ * faces (0 to 1), fired from the launcher ring point that faces it, turned `skew` (-1 to 1, times
+ * MAX_SKEW) off the face's normal, at `power` %. A competent player walks round to face what they shoot.
  */
-export interface Intent { item: RackItem; az: number; yFrac: number; lateral: number; power: number }
+export interface Intent { item: RackItem; dir: number; yFrac: number; lateral: number; skew: number; power: number }
 
-/**
- * The structure surface point an intent aims at: among the bodies at that height, the one nearest
- * the lateral line that is frontmost toward the launcher, on its face toward the launcher. Uses the
- * authored poses (the bot aims before seeing the world, as a competent but unseeing player would).
- */
-export function surfaceTarget(c: CompiledLevel, it: Intent): { body: number; point: Vec3 } {
-  const m = c.meta, h = c.frame.unit, [cx, cz] = c.frame.centre;
-  const a = it.az * 0.5 * (Math.PI / 180), ux = Math.cos(a), uz = Math.sin(a), wx = -uz, wz = ux;
-  const yT = Math.max(0, Math.min(1, it.yFrac)) * c.height;
-  if (m.n === 0) return { body: -1, point: [cx, yT, cz] };
-  // Bodies whose vertical extent reaches the height, else the nearest in height.
-  let cand: number[] = [];
-  for (let i = 0; i < m.n; i++) if (Math.abs(m.home[3 * i + 1]! - yT) <= m.half[3 * i + 1]! + 0.25 * h) cand.push(i);
-  if (!cand.length) {
-    let best = Infinity;
-    for (let i = 0; i < m.n; i++) best = Math.min(best, Math.abs(m.home[3 * i + 1]! - yT));
-    for (let i = 0; i < m.n; i++) if (Math.abs(m.home[3 * i + 1]! - yT) <= best + 1e-9) cand.push(i);
+/** Exposed side faces by direction: body indices whose face in that direction has nothing within 0.3 h in front of it. */
+const exposedCache = new WeakMap<CompiledLevel, number[][]>();
+export function exposedFaces(c: CompiledLevel): number[][] {
+  const hit = exposedCache.get(c);
+  if (hit) return hit;
+  const m = c.meta, h = c.frame.unit, cell = h;
+  const key = (x: number, y: number, z: number) => `${Math.floor(x / cell)},${Math.floor(y / cell)},${Math.floor(z / cell)}`;
+  const grid = new Map<string, number[]>();
+  for (let i = 0; i < m.n; i++) {
+    const lo = [0, 1, 2].map((k) => m.home[3 * i + k]! - m.half[3 * i + k]!), hi = [0, 1, 2].map((k) => m.home[3 * i + k]! + m.half[3 * i + k]!);
+    for (let x = Math.floor(lo[0]! / cell); x <= Math.floor(hi[0]! / cell); x++) for (let y = Math.floor(lo[1]! / cell); y <= Math.floor(hi[1]! / cell); y++) for (let z = Math.floor(lo[2]! / cell); z <= Math.floor(hi[2]! / cell); z++) {
+      const k = `${x},${y},${z}`, list = grid.get(k);
+      if (list) list.push(i); else grid.set(k, [i]);
+    }
   }
-  const lat = (i: number) => (m.home[3 * i]! - cx) * wx + (m.home[3 * i + 2]! - cz) * wz;
-  const fwd = (i: number) => (m.home[3 * i]! - cx) * ux + (m.home[3 * i + 2]! - cz) * uz;
-  let v0 = Infinity, v1 = -Infinity;
-  for (const i of cand) { v0 = Math.min(v0, lat(i)); v1 = Math.max(v1, lat(i)); }
-  const vT = v0 + Math.max(0, Math.min(1, it.lateral)) * (v1 - v0);
-  const latHalf = (i: number) => Math.abs(wx) * m.half[3 * i]! + Math.abs(wz) * m.half[3 * i + 2]!;
-  const onLine = cand.filter((i) => Math.abs(lat(i) - vT) <= latHalf(i) + 0.25 * h);
-  if (onLine.length) cand = onLine;
-  else {
-    const d = Math.min(...cand.map((i) => Math.abs(lat(i) - vT)));
-    cand = cand.filter((i) => Math.abs(lat(i) - vT) <= d + 1e-9);
-  }
-  const body = cand.reduce((b, i) => (fwd(i) > fwd(b) + 1e-9 ? i : b));
-  const face = Math.abs(ux) * m.half[3 * body]! + Math.abs(uz) * m.half[3 * body + 2]!;
-  const hy = m.half[3 * body + 1]!, by = m.home[3 * body + 1]!;
-  return { body, point: [m.home[3 * body]! + ux * face, Math.max(by - 0.9 * hy, Math.min(by + 0.9 * hy, yT)), m.home[3 * body + 2]! + uz * face] };
+  const inside = (p: Vec3, self: number) => (grid.get(key(...p)) ?? []).some((j) => j !== self && [0, 1, 2].every((k) => Math.abs(p[k]! - m.home[3 * j + k]!) < m.half[3 * j + k]!));
+  const out = FACE_DIRS.map(([dx, dz]) => {
+    const list: number[] = [];
+    for (let i = 0; i < m.n; i++) {
+      const p: Vec3 = [m.home[3 * i]! + dx * (m.half[3 * i]! + 0.3 * h), m.home[3 * i + 1]!, m.home[3 * i + 2]! + dz * (m.half[3 * i + 2]! + 0.3 * h)];
+      if (!inside(p, i)) list.push(i);
+    }
+    return list;
+  });
+  exposedCache.set(c, out);
+  return out;
 }
 
-/** The shot an intent fires: a launch aimed with aimAt from the launcher's height, or an anvil dropped over the target body. */
+/**
+ * The exposed face an intent aims at: among the exposed faces of its direction at its height (else
+ * the nearest in height), the one nearest its lateral point along them, frontmost on ties; the point is
+ * on that face at the intended height. Authored poses: the bot aims before seeing the world.
+ */
+export function surfaceTarget(c: CompiledLevel, it: Intent): { body: number; point: Vec3; normal: [number, number] } {
+  const m = c.meta, h = c.frame.unit, [dx, dz] = FACE_DIRS[it.dir]!, yT = Math.max(0, Math.min(1, it.yFrac)) * c.height;
+  const faces = exposedFaces(c)[it.dir]!;
+  if (!faces.length) return { body: -1, point: [c.frame.centre[0], yT, c.frame.centre[1]], normal: [dx, dz] };
+  let cand = faces.filter((i) => Math.abs(m.home[3 * i + 1]! - yT) <= m.half[3 * i + 1]! + 0.25 * h);
+  if (!cand.length) {
+    const best = Math.min(...faces.map((i) => Math.abs(m.home[3 * i + 1]! - yT)));
+    cand = faces.filter((i) => Math.abs(m.home[3 * i + 1]! - yT) <= best + 1e-9);
+  }
+  // Along the faces: the coordinate across the normal (x for z faces, z for x faces).
+  const along = (i: number) => (dx !== 0 ? m.home[3 * i + 2]! : m.home[3 * i]!), fwd = (i: number) => dx * m.home[3 * i]! + dz * m.home[3 * i + 2]!;
+  let t0 = Infinity, t1 = -Infinity;
+  for (const i of cand) { t0 = Math.min(t0, along(i)); t1 = Math.max(t1, along(i)); }
+  const tT = t0 + Math.max(0, Math.min(1, it.lateral)) * (t1 - t0);
+  const body = cand.reduce((b, i) => {
+    const db = Math.abs(along(b) - tT), di = Math.abs(along(i) - tT);
+    return di < db - 1e-9 || (Math.abs(di - db) <= 1e-9 && fwd(i) > fwd(b)) ? i : b;
+  });
+  const hy = m.half[3 * body + 1]!, by = m.home[3 * body + 1]!;
+  return { body, point: [m.home[3 * body]! + dx * m.half[3 * body]!, Math.max(by - 0.9 * hy, Math.min(by + 0.9 * hy, yT)), m.home[3 * body + 2]! + dz * m.half[3 * body + 2]!], normal: [dx, dz] };
+}
+
+/** The launcher azimuth (0.5 deg quanta) on the ring where a ray from `point` along `normal` turned by `skewDeg` meets it. */
+export function facingAzimuth(c: CompiledLevel, point: Vec3, normal: [number, number], skewDeg: number): number {
+  const a = Math.atan2(normal[1], normal[0]) + (skewDeg * Math.PI) / 180, vx = Math.cos(a), vz = Math.sin(a);
+  const R = c.frame.launcher.radius * c.frame.pitch * c.frame.unit, px = point[0] - c.frame.centre[0], pz = point[2] - c.frame.centre[1];
+  // |p + s v| = R, s > 0 (p is inside the ring, so one positive root).
+  const b = px * vx + pz * vz, s = -b + Math.sqrt(Math.max(0, b * b - (px * px + pz * pz - R * R)));
+  const az = Math.round((Math.atan2(pz + s * vz, px + s * vx) * 180) / Math.PI * 2);
+  return ((az % 720) + 720) % 720;
+}
+
+/**
+ * The shot an intent fires: a launch aimed with aimAt from the ring point facing the target (at the
+ * intent's power, or more if the target is out of reach there), or an anvil dropped over the target body.
+ */
 export function intentShot(c: CompiledLevel, it: Intent, substeps: number): Shot {
   const t = surfaceTarget(c, it);
   if (it.item === 'drop') {
@@ -144,17 +181,38 @@ export function intentShot(c: CompiledLevel, it: Intent, substeps: number): Shot
     return { ammo: 'drop', x: q(c.meta.home[3 * b]!), z: q(c.meta.home[3 * b + 2]!) };
   }
   if (!isLaunchItem(it.item)) throw new Error(`the cast cannot aim ${it.item}: only launched items and drops`);
-  return aimAt(c.frame, it.item, { az: it.az, y: Math.round(4 * c.frame.launcher.y), power: it.power }, t.point, { substeps }).shot;
+  // A competent player who cannot reach the target at the drawn power fires harder: the least power, in steps
+  // of 5 up to 100, whose arc passes within a tenth of a block of it (at 100, the closest miss).
+  const y = Math.round(4 * c.frame.launcher.y), item = it.item, az = facingAzimuth(c, t.point, t.normal, it.skew * MAX_SKEW);
+  const aim = (power: number) => aimAt(c.frame, item, { az, y, power }, t.point, { substeps });
+  let a = aim(it.power);
+  for (let p = it.power + 5; a.error > REACH * c.frame.unit && p <= 100 + 4; p += 5) a = aim(Math.min(100, p));
+  return a.shot;
+}
+
+/** How close (in blocks) an aimed arc must pass the target for the cast to call it reached. */
+export const REACH = 0.1;
+
+/** The face sectors given to each direction: FACE_SECTORS shared out by exposed face count (largest remainders). */
+export function faceSectors(c: CompiledLevel): number[] {
+  const counts = exposedFaces(c).map((f) => f.length), total = counts.reduce((a, x) => a + x, 0);
+  if (!total) return [FACE_SECTORS, 0, 0, 0];
+  const raw = counts.map((k) => (FACE_SECTORS * k) / total), out = raw.map(Math.floor);
+  const order = raw.map((x, i) => i).sort((a, b) => raw[b]! - out[b]! - (raw[a]! - out[a]!) || a - b);
+  for (let k = 0, left = FACE_SECTORS - out.reduce((a, x) => a + x, 0); k < left; k++) out[order[k]!]!++;
+  return out;
 }
 
 /**
  * The competent plays' intents: `n` lines, each firing the whole rack in order. Every shot slot is
- * stratified over azimuth sector x height third (24 strata dealt out in shuffled rounds, so 64 lines
- * cover each stratum 2 or 3 times per slot); within a stratum the azimuth, height, lateral point and
- * power (powers[0] to powers[1] %) are uniform.
+ * stratified over face sector x height third (FACE_SECTORS x HEIGHT_BANDS strata dealt out in seeded
+ * shuffled rounds; face sectors are shared among the four face directions by exposed area, so a
+ * wall's broad faces get them all and its ends none); within a stratum the height, lateral point,
+ * skew and power (powers[0] to powers[1] %) are uniform.
  */
 export function competentIntents(c: CompiledLevel, n: number, seed: number, powers: [number, number] = [60, 100]): Intent[][] {
-  const rack = c.def.rack, strata = AZ_SECTORS * HEIGHT_BANDS, sector = 720 / AZ_SECTORS;
+  const rack = c.def.rack, strata = FACE_SECTORS * HEIGHT_BANDS;
+  const dirOf = faceSectors(c).flatMap((k, d) => Array<number>(k).fill(d));
   const deal = rack.map((_, slot) => {
     const out: number[] = [];
     for (let round = 0; out.length < n; round++) {
@@ -165,23 +223,22 @@ export function competentIntents(c: CompiledLevel, n: number, seed: number, powe
     return out.slice(0, n);
   });
   return Array.from({ length: n }, (_, line) => rack.map((item, slot) => {
-    const s = deal[slot]![line]!, r = rng(streamSeed(seed, 'intent', line, slot));
-    const az = (s % AZ_SECTORS) * sector + Math.floor(r() * sector), band = Math.floor(s / AZ_SECTORS);
-    return { item, az, yFrac: (band + r()) / HEIGHT_BANDS, lateral: r(), power: randInt(r, powers[0], powers[1]) };
+    const s = deal[slot]![line]!, r = rng(streamSeed(seed, 'intent', line, slot)), band = Math.floor(s / FACE_SECTORS);
+    return { item, dir: dirOf[s % FACE_SECTORS]!, yFrac: (band + r()) / HEIGHT_BANDS, lateral: r(), skew: 2 * r() - 1, power: randInt(r, powers[0], powers[1]) };
   }));
 }
 
 /**
- * One hill-climb move: one shot of the line re-aimed a step away in one of azimuth (5 deg),
- * height (5% of the structure), lateral point (5% across) or power (5%).
+ * One hill-climb move: one shot of the line re-aimed a step away in one of height (5% of the
+ * structure), lateral point (5% along the faces), skew (5 deg) or power (5%).
  */
 export function moveIntents(line: readonly Intent[], r: () => number): Intent[] {
   const k = Math.floor(r() * line.length), kind = Math.floor(r() * 4), sign = r() < 0.5 ? -1 : 1;
-  const it = { ...line[k]! }, clamp01 = (x: number) => Math.max(0, Math.min(1, x));
-  if (kind === 0) it.az = (((it.az + 10 * sign) % 720) + 720) % 720;
-  else if (kind === 1) it.yFrac = clamp01(it.yFrac + 0.05 * sign);
-  else if (kind === 2) it.lateral = clamp01(it.lateral + 0.05 * sign);
-  else it.power = Math.max(50, Math.min(100, it.power + 5 * sign));
+  const it = { ...line[k]! }, clamp = (x: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, x));
+  if (kind === 0) it.yFrac = clamp(it.yFrac + 0.05 * sign, 0, 1);
+  else if (kind === 1) it.lateral = clamp(it.lateral + 0.05 * sign, 0, 1);
+  else if (kind === 2) it.skew = clamp(it.skew + (5 / MAX_SKEW) * sign, -1, 1);
+  else it.power = clamp(it.power + 5 * sign, 50, 100);
   return line.map((x, i) => (i === k ? it : x));
 }
 
@@ -397,6 +454,59 @@ export function castMarkdown(r: CastResult): string {
     '| Gate | Result | Value | Need | What |',
     '|---|---|---|---|---|',
     ...[gate('fair', r.gates.fair), gate('skill matters', r.gates.skill), gate('stable', r.gates.stable), gate('no limit hit', r.gates.limits), gate('complete', r.gates.complete), gate('budget', r.gates.budget)].filter(Boolean),
+    '',
+  ].join('\n');
+}
+
+// ---- Exploration (designing a level before casting it) ----
+
+export interface Exploration {
+  level: string;
+  hash: string;
+  bodies: number;
+  adapter: string;
+  engine: string;
+  n: number;
+  seed: number;
+  /** Per shot k (after k + 1 shots settled): the competent plays' collapse, crowns down, heritage broken and objective rate. */
+  shots: Array<{ collapse: ReturnType<typeof summary>; crowns: ReturnType<typeof summary>; heritage: ReturnType<typeof summary>; met: number }>;
+  /** Engine steps per play, and the plays that hit a limit or ran out of steps. */
+  steps: ReturnType<typeof summary>;
+  limited: number;
+  incomplete: number;
+  lines: CastLine[];
+}
+
+/**
+ * The competent plays alone (castLevel's step 1): what a typical player gets after each shot, for
+ * choosing a level's structure, rack and objective before casting its stars.
+ */
+export async function exploreLevel(level: LevelDef, player: CastPlayer, n: number, seed = 1, powers?: [number, number]): Promise<Exploration> {
+  const c = compileLevel(level);
+  const lines = competentIntents(c, n, seed, powers).map((its) => its.map((it) => intentShot(c, it, player.substeps)));
+  const plays = await player.play(level, lines);
+  const at = (k: number, f: (s: CastSample) => number) => plays.map((p) => { const s = p.samples[k] ?? p.samples.at(-1); return s ? f(s) : 0; });
+  return {
+    level: level.id, hash: c.hash, bodies: c.meta.n, adapter: player.adapter, engine: player.engine, n, seed,
+    shots: level.rack.map((_, k) => ({ collapse: summary(at(k, (s) => s.collapse)), crowns: summary(at(k, (s) => s.crowns)), heritage: summary(at(k, (s) => s.heritage)), met: at(k, (s) => (s.met ? 1 : 0)).reduce((a, x) => a + x, 0) / n })),
+    steps: summary(plays.map((p) => p.steps)),
+    limited: plays.filter((p) => p.limits.length).length,
+    incomplete: plays.filter((p) => !p.complete).length,
+    lines: plays.map((p, k) => ({ phase: 'competent', shots: writeShots(lines[k]!), samples: p.samples, steps: p.steps, complete: p.complete, hash: p.hash, limits: p.limits })),
+  };
+}
+
+/** An exploration as a markdown table: one row per shot. */
+export function explorationMarkdown(e: Exploration, extra = ''): string {
+  const q = (s: ReturnType<typeof summary>) => `${f3(s.p10)} / ${f3(s.p25)} / ${f3(s.p50)} / ${f3(s.p75)} / ${f3(s.p90)}`;
+  return [
+    `### ${e.level}: ${e.bodies} bodies, ${e.n} competent plays on ${e.adapter} (${e.engine}), seed ${e.seed}${extra}`,
+    '',
+    '| after shot | collapse P10 / P25 / P50 / P75 / P90 | crowns down P50 (max) | heritage broken P50 (max) | objective met |',
+    '|---|---|---|---|---|',
+    ...e.shots.map((s, k) => `| ${k + 1} | ${q(s.collapse)} | ${s.crowns.p50} (${s.crowns.max}) | ${s.heritage.p50} (${s.heritage.max}) | ${(100 * s.met).toFixed(0)}% |`),
+    '',
+    `Steps per play P50 ${e.steps.p50}, max ${e.steps.max}; plays with a limit hit ${e.limited}, out of steps ${e.incomplete}.`,
     '',
   ].join('\n');
 }
