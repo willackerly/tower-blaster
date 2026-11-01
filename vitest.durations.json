@@ -150,6 +150,7 @@
   "packages/viewer/test/e2e-limits.test.ts": 20,
   "packages/viewer/test/e2e-projectiles.test.ts": 20,
   "packages/viewer/test/e2e-sound.test.ts": 95.1,
+  "packages/viewer/test/e2e-weapon-spec.test.ts": 12,
   "packages/viewer/test/e2e.test.ts": 180.3,
   "packages/viewer/test/game-url.test.ts": 0.1,
   "packages/viewer/test/level-file.test.ts": 0.1,
@@ -158,5 +159,8 @@
   "packages/viewer/test/rules.test.ts": 0.1,
   "packages/viewer/test/shots-line.test.ts": 0.1,
   "packages/viewer/test/sound.test.ts": 0.1,
-  "packages/viewer/test/viewer.test.ts": 2.7
+  "packages/viewer/test/viewer.test.ts": 2.7,
+  "packages/viewer/test/weapon-spec.test.ts": 0.3,
+  "packages/weapons/test/runtime.test.ts": 2,
+  "packages/weapons/test/spec.test.ts": 0.3
 }
