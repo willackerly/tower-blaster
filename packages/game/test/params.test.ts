@@ -82,7 +82,8 @@ describe('rule overrides', () => {
     const q = new URLSearchParams();
     writeLevelRules({ settle: 'v1' }, q);
     expect(levelRules(q)).toEqual({ settle: 'v1' });
-    expect(() => parse('?keystone.settle=v3')).toThrow(/keystone.settle must be v1 or v2: v3/);
+    expect(parse('?level=L1&keystone.settle=v3').rules).toEqual({ settle: 'v3' });
+    expect(() => parse('?keystone.settle=v9')).toThrow(/keystone.settle must be v1 or v2 or v3: v9/);
   });
   it('the physics keys set the level\'s physics block; off turns Bounce off', () => {
     const p = parse('?level=L2&keystone.iterations=20&keystone.gapSlop=0&keystone.bounce=0.4');

@@ -158,7 +158,7 @@ physics?: {
   bounce?: number | null     // restitution e for structure bodies with the engine's restitution on; null = off (default)
   pairsPerBody?: number      // GPU pair buffer; default from F1's sizing rule
   presettle?: number         // default 300 steps
-  settle?: 'v1' | 'v2'       // default v1 for par levels, v2 for outcome levels
+  settle?: 'v1' | 'v2' | 'v3'  // default v1 for par levels, v3 for outcome levels (v2 before settle v3)
 }
 ```
 
@@ -291,6 +291,20 @@ Each row is one PR with its tests, `pnpm check` green, merged on green CI. Proof
 - **Physics at least 0.95x real time** is not met at 10k under a heavy blast on M5 (0.64 to 0.86x). So the G4.4 row passes on its other branch, declared slow motion: the HUD carried the tag in 84 to 96% of the samples while the cluster shots ran (the rest: the first moments, before the speed meter falls under 0.95, and the tail skip's fast-forward). Reaching real time takes fewer steps' worth of work, which is the sleep and dormancy work (E1 to E4), not pacing.
 - **Lowering iterations while most bodies are awake: not adopted.** At 20 iterations a 10k step costs 9.7 ms against 18.1 ms. But the 10k city falls apart at rest: after one cannonball it hits the 1,800-step cap, still with 734 bodies moving, and collapse 0.027 against 0.015 at 40 iterations. That fails the rest gate (F3), and the Kapla study found the same (10 iterations collapses). Nothing switches iterations during a shot.
 - **The camera, reviewed from the screenshot case.** It frames the spreading collapse well, and the "×0.64" tag reads clearly in the title. The tail showed one fault: with only the last few stragglers moving, the frame shrank onto them and the camera dived in on a corner of rubble. The frame now holds every moving box seen since fire together, so it grows with the collapse and never shrinks during a shot (`camera.test.ts`: "does not dive in on the last stragglers", which fails without the change).
+
+**As built (settle v3, 2026-11-01).** G5's first Metal explore runs (at 74b57c2) hit v2's 1,800-step cap on most B1 shots, a 1,000-block plaster wall, even with bombs only. A step-by-step trace of B1a's first competent line on SwiftShader (shot 1: a ram) showed the cause. The ram was not it: it left the lot plus 4 cells 150 steps after launch and stopped counting. (It rolls on at a constant 2.85 m/s: the engines have no rolling resistance.) The wall was: from step 360 to the cap, 50 to 230 blocks high in the standing wall (median 17 to 20 cells up) moved at 0.1 to 0.3 m/s, mostly sideways. Yet their median displacement stayed 0.1 cell, and D held at 0.0694 from step 360 to 1,800, ending at 0.0696. The wall rings: blocks sway a few centimetres while nothing changes. The count of such bodies says nothing about whether the shot is over.
+
+- **v3, outcome levels' new default** (`rules.ts`): settled as v2 (stragglers within the allowance for 30 steps), or once the structure is frozen. Frozen means: for `FROZEN_STEPS` 60 steps, no live body, ammo included, faster than `FROZEN_SPEED` 0.5 m/s, and D within `FROZEN_D` 1e-4 and the displaced count unchanged since the run began. Any fall passes 0.5 m/s within 0.05 s, so a collapse still under way never counts as frozen. v3 settles no later than v2 anywhere, and the cap stays 1,800. Replayed under v3 on SwiftShader, that line's three shots (ram, ram, bomb) settle in 429, 447 and 507 steps, where v2 took 1,801, 1,801 and 1,800 steps. The first shot settles with D at 0.0694, the value D held until v2's cap.
+- **The hash.** Par levels' v1 and outcome levels' v2 still hash as absent, so every existing level and every explicit v2 level keeps its hash (pinned in `session.test.ts`). An outcome level under v3, now the default, hashes apart from its v2 self, so stars cast under v2 never show under v3. `keystone.settle=v1|v2|v3` picks a rule, as before.
+- **Ammo in the frozen branch.** v2 holds a shot while any live spawned body exceeds `QUIET_SPEED`, and a ball with no rolling resistance can roll on inside the lot. In the same trace, shot 2's ram rolled at 9 cm/s for 15 s after D stopped changing. In v3's frozen branch, ammo is just another body: under 0.5 m/s with nothing changing, the shot is over. A ball still in flight, or rolling fast enough to matter, is over 0.5 m/s and holds the shot. Rolling resistance in the engines would be the physical fix; that is engine work and not part of this.
+- **Alternatives.** Displacement over a window instead of speed: it needs a position history per body, and a slow real slide moves as far in 1 s as a sway does. A higher QUIET_SPEED: 0.3 m/s is a visible slide, and the wall rang at up to 0.3. Scaling the allowance up: 230 of 1,000 is not a few stragglers. D frozen is what the score reads, so a shot whose score can no longer change is over.
+- **Tests.** `rules.test.ts` "settle v3":
+  - A ringing wall settles after 60 frozen steps, where v2 holds it to the cap.
+  - A fall restarts the run.
+  - A slump (D gaining 1.2e-4 over a run, or falling back) or a slide (displaced growing) never counts as frozen; 9e-5 over a run does.
+  - Ammo in flight holds it; a ram rolling at 9 cm/s with nothing changing does not (v2 holds it to the cap).
+  - Where v2 settles, v3 settles the same.
+  - Each of five mutants of the rule fails a case.
 
 ### G5: three to five big levels (needs G2, G3, G4, F1, F3; E4 soft)
 

@@ -2,8 +2,8 @@ import { describe, expect, it } from 'vitest';
 import { emptySnapshot, type Snapshot } from '@tb/engine-api';
 import { quatFromAxisAngle } from '@tb/geom';
 import {
-  aabbTop, baselineOf, compileLevel, crownDown, DEFAULT_GOLD, GRAVITY, HEIGHT_BINS, heritageBroken, type LevelDef, levelScore, leverage, peOf_mJ,
-  potential_mJ, quietUnder, reduceCpu, type Reductions, SETTLE_CAP, SETTLE_CAP_V2, SETTLE_MIN, SETTLE_QUIET, settleAllowance, settleCap, type SettleRule, settleUpdate, type ShotOutcome, skyline, stampOf, tier,
+  aabbTop, baselineOf, compileLevel, crownDown, DEFAULT_GOLD, FROZEN_D, FROZEN_SPEED, FROZEN_STEPS, GRAVITY, HEIGHT_BINS, heritageBroken, type LevelDef, levelScore, leverage, peOf_mJ,
+  potential_mJ, quietUnder, reduceCpu, type Reductions, SETTLE_CAP, SETTLE_CAP_V2, SETTLE_MIN, SETTLE_QUIET, settleAllowance, settleCap, type SettleRule, type SettleState, settleUpdate, type ShotOutcome, skyline, stampOf, tier,
 } from '@tb/keystone';
 
 const def: LevelDef = {
@@ -164,6 +164,52 @@ describe('settle v2: a few stragglers per thousand', () => {
     expect(quietUnder('v2', still, N)).toBe(false);
     // Nothing awake is quiet under both.
     expect(quietUnder('v2', { ...red(1, A + 5, 3), nAwake: 0 }, N)).toBe(true);
+  });
+});
+
+describe('settle v3: v2, or a frozen structure', () => {
+  const N = 1000, A = settleAllowance(N);
+  /** A wall ringing: `moving` bodies (over the allowance) at maxSpeed, the collapse D and displaced as given, live ammo at ammoSpeed. */
+  const red = (step: number, o: { moving?: number; maxSpeed?: number; displaced?: number; ammoSpeed?: number } = {}): Reductions => ({
+    step, nAwake: N, maxSpeed: o.maxSpeed ?? 0.3, maxAngSpeed: 0, pe_mJ: 0, displaced: o.displaced ?? 40, outOfLot: 0, heightHist: new Uint32Array(64), impacts: new Uint32Array(48),
+    nMoving: o.moving ?? 150, movingBox: new Float64Array(6), ammoSpeed: o.ammoSpeed ?? 0,
+  });
+  /** The step a run of `steps` settles at (null: not within them), with reductions r(i) and D d(i). */
+  function run(r: (i: number) => Reductions, d: (i: number) => number, steps: number, rule: SettleRule = 'v3') {
+    let st: SettleState = { quietSince: null };
+    for (let i = 0; i < steps; i++) {
+      const u = settleUpdate(st, r(i), 0, rule, N, d(i));
+      st = u.state;
+      if (u.settled) return 1 + i;
+    }
+    return null;
+  }
+  it(`a ringing wall (150 bodies at 0.3 m/s, nothing changing) settles after ${FROZEN_STEPS} frozen steps; v2 holds it to the cap`, () => {
+    expect(run((i) => red(1 + i), () => 0.0694, SETTLE_CAP_V2 + 5)).toBe(FROZEN_STEPS);
+    expect(run((i) => red(1 + i), () => 0.0694, SETTLE_CAP_V2 + 5, 'v2')).toBe(SETTLE_CAP_V2);
+  });
+  it(`a fall (a body over ${FROZEN_SPEED} m/s) restarts the frozen run`, () => {
+    expect(run((i) => red(1 + i, { maxSpeed: i === 30 ? FROZEN_SPEED : 0.3 }), () => 0.07, 400)).toBe(31 + FROZEN_STEPS);
+    expect(run((i) => red(1 + i, { maxSpeed: 0.6 }), () => 0.07, SETTLE_CAP_V2 + 5)).toBe(SETTLE_CAP_V2);
+  });
+  it(`a slow slump (D gaining over ${FROZEN_D} in a run) or a slide (displaced growing) is not frozen`, () => {
+    // D up 2e-6 a step: 1.2e-4 over the run, so each run breaks before its end.
+    expect(run((i) => red(1 + i), (i) => 0.07 + 2e-6 * i, SETTLE_CAP_V2 + 5)).toBe(SETTLE_CAP_V2);
+    // 1.5e-6 a step: 9e-5 over the run, within FROZEN_D: settles.
+    expect(run((i) => red(1 + i), (i) => 0.07 + 1.5e-6 * i, 400)).toBe(FROZEN_STEPS);
+    expect(run((i) => red(1 + i, { displaced: 40 + Math.floor(i / 50) }), () => 0.07, SETTLE_CAP_V2 + 5)).toBe(SETTLE_CAP_V2);
+    // D falling back counts as change too.
+    expect(run((i) => red(1 + i), (i) => 0.07 - 2e-6 * i, SETTLE_CAP_V2 + 5)).toBe(SETTLE_CAP_V2);
+  });
+  it(`live ammo counts as any body: a ball in flight (over ${FROZEN_SPEED} m/s) holds it, one rolling slowly with nothing changing does not`, () => {
+    // Reductions.maxSpeed counts live ammo; ammoSpeed alone is what v2 reads.
+    expect(run((i) => red(1 + i, { ammoSpeed: i < 300 ? 12 : 0.087, maxSpeed: i < 300 ? 12 : 0.3 }), () => 0.07, 600)).toBe(300 + FROZEN_STEPS);
+    expect(run((i) => red(1 + i, { ammoSpeed: 0.087 }), () => 0.07, 600)).toBe(FROZEN_STEPS);
+    expect(run((i) => red(1 + i, { ammoSpeed: 0.087 }), () => 0.07, SETTLE_CAP_V2 + 5, 'v2')).toBe(SETTLE_CAP_V2);
+  });
+  it('is v2 where v2 settles: stragglers within the allowance settle after the quiet run, not the frozen one', () => {
+    expect(run((i) => red(1 + i, { moving: A, maxSpeed: 1 }), (i) => 0.07 + 0.01 * i, 200)).toBe(SETTLE_QUIET);
+    expect(settleCap('v3')).toBe(SETTLE_CAP_V2);
   });
 });
 
