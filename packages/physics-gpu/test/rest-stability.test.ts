@@ -12,12 +12,14 @@
 //   TB_CHANNEL=chrome PHYSICS_GPU_SLOW=1 REST_SIZES=1000,10000 REQUIRE_WEBGPU=1 \
 //     REST_LOG=rest.txt pnpm vitest run packages/physics-gpu/test/rest-stability.test.ts
 // (installed Chrome, so Metal on a Mac); REST_ONLY=<text> keeps the cases whose
-// name contains it (e.g. REST_ONLY='city 1000').
+// name contains it (e.g. REST_ONLY='city 1000'); REST_TRACE=1 logs every case's
+// structure each second (max speed, bodies moving, mean and top height).
 import { type RestCase, restMatrix, restSuite } from './rest-stability.ts';
 
 const slow = process.env.PHYSICS_GPU_SLOW === '1';
 const sizes = (process.env.REST_SIZES ?? '1000').split(',').map(Number);
 const frames = Number(process.env.REST_FRAMES ?? 3600);
-const CI: RestCase[] = [{ structure: 'wall', mode: 'idle', n: 400, iterations: 40, gapSlop: true, frames: 600 }];
+// Traced, so the trace's bookkeeping is checked in CI (10 snapshots of 400 bodies).
+const CI: RestCase[] = [{ structure: 'wall', mode: 'idle', n: 400, iterations: 40, gapSlop: true, frames: 600, trace: true }];
 
 restSuite(slow ? restMatrix(sizes, frames) : CI);

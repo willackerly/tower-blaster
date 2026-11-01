@@ -152,4 +152,16 @@ Measured on SwiftShader (2026-11-01, 3,600 frames, 1,000 cubes; max move over th
 | wall struck, 40 it, gapSlop | 3.65 mm | 1.9e-3 |
 | city struck, 40 it, gapSlop | 1.40 mm | 5.8e-4 |
 
-All held, including the idle city at 20 iterations without the slop. The 10k idle city, where defect B was seen boiling in the viewer (2026-10-26), runs only on the real GPU. Struck rubble keeps a slow residual motion (a few cm/s at most, decaying), well under the bound. Kapla and 10k sizes run only on a physical GPU (a 1k Kapla minute is 25,200 engine steps): see the M5 results when they land.
+All held, including the idle city at 20 iterations without the slop. The 10k idle city, where defect B was seen boiling in the viewer (2026-10-26), runs only on the real GPU. Struck rubble keeps a slow residual motion (a few cm/s at most, decaying), well under the bound. Kapla and 10k sizes run only on a physical GPU (a 1k Kapla minute is 25,200 engine steps).
+
+Measured on the M5 Max (Metal, main 1f4fe36, 2026-11-01, 3,600 frames; `/mnt/project-files/m5-1f4fe36-rest.txt`), no engine limit hit in any case:
+
+| Structure | Idle (20, 40 it; slop on, off) | Struck, 40 it | Struck, 20 it |
+|---|---|---|---|
+| wall 1k | holds (max move 2-4 mm) | holds (15 mm on, 88 mm off) | fails: 11-30 bodies creep (end speed 0.25-0.28) |
+| wall 10k | holds (2-4 mm) | holds (2 mm on, 46 mm off) | on holds (79 mm); off fails (5 moved) |
+| city 1k | holds (0.7-1.5 mm) | holds (4.5 mm on, 17 mm off) | on holds (41 mm); off fails (19 moved) |
+| city 10k | holds (4-8 mm) | fails: 12-25 bodies move 8-13 m in the second half, then stop | fails (30 / 698 moved) |
+| Kapla 1k, 10k | fails: the standing tower collapses within the minute at 20 and 40 it | fails (rubble creeps) | fails |
+
+Idle structures at the game's sizes hold everywhere outside Kapla, including the 10k city where defect B was once seen. Struck rubble at 20 iterations never comes to rest: on SwiftShader with `REST_TRACE=1` (wall 1k struck, 20 it) the largest speed stays at 0.15-0.4 a second for the whole minute with no fall in mean height, and the bodies that move most are columns of the top courses beside the impact sliding about 0.1 in the strike direction per 30 s (creep, not a topple). Kapla's long-run collapse belongs to roadmap E5 (the iterations decision was judged at 2.5 s). The 10k city's late movers at 40 iterations need a trace on the real GPU (`REST_TRACE=1` logs the structure every second and, for any failing case, the largest movers' start and end positions).
