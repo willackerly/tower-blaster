@@ -4,9 +4,9 @@
 import { describe, expect, it } from 'vitest';
 import fc from 'fast-check';
 import { blastArea, blastKick, checkBlast, massOf } from '@tb/engine-api';
-import { DEFAULT_GRENADE, PRESET_NAMES, PROJECTILE_PRESETS, STONE_DENSITY } from '@tb/weapons';
+import { CLUSTER, DEFAULT_GRENADE, FIREWORK, PRESET_NAMES, PROJECTILE_PRESETS, STONE_DENSITY, type WeaponSpec } from '@tb/weapons';
 import {
-  AMMO, AMMO_KINDS, ammoBody, compileLevel, GRENADE_SHELL, hashString, isLaunchItem, isRackItem, itemRef, itemSpec, KEYSTONE_GRENADE, L1, levelWeapon, LEVELS,
+  AMMO, AMMO_KINDS, ammoBody, BIG_LEVELS, compileLevel, GRENADE_SHELL, hashString, isLaunchItem, isRackItem, itemRef, itemSpec, KEYSTONE_GRENADE, L1, levelWeapon, LEVELS,
   MATERIALS, MODEL_DENSITY, rackBodies, type RackItem, type Shot, shotToSpawn, speedOf,
 } from '@tb/keystone';
 
@@ -113,5 +113,21 @@ describe('weapons by key (levelWeapon)', () => {
     expect(kick(world, 250)).toBeCloseTo(7.68, 6);
     expect(kick(world, 625)).toBeCloseTo(3.072, 6);
     expect(kick(DEFAULT_GRENADE, 250)).toBeCloseTo(0.48, 6);
+  });
+});
+
+describe('a defaulted weapon is part of the level hash', () => {
+  it('a w- item without the level\'s own weapon hashes as the built-in written out, so retuning a built-in is a new level', () => {
+    const fw = compileLevel({ ...L1, rack: ['w-firework'] });
+    expect(fw.hash).toBe(compileLevel({ ...L1, rack: ['w-firework'], weapons: { firework: FIREWORK } }).hash);
+    const retuned: WeaponSpec = { ...FIREWORK, shell: { ...FIREWORK.shell, speed: [20, 40] } };
+    expect(compileLevel({ ...L1, rack: ['w-firework'], weapons: { firework: retuned } }).hash).not.toBe(fw.hash);
+    expect(compileLevel({ ...L1, rack: ['w-grenade'] }).hash).toBe(compileLevel({ ...L1, rack: ['w-grenade'], weapons: { grenade: KEYSTONE_GRENADE } }).hash);
+    expect(compileLevel({ ...L1, rack: ['w-cluster', 'w-firework'] }).hash).toBe(compileLevel({ ...L1, rack: ['w-cluster', 'w-firework'], weapons: { cluster: CLUSTER, firework: FIREWORK } }).hash);
+  });
+  it('levels whose racks default no weapon hash as before (main 984ae51): the shipped ones, B1 and B2 with their cast stars', () => {
+    expect([...LEVELS, ...BIG_LEVELS].map((d) => `${d.id}:${compileLevel(d).hash}`).join(' ')).toBe(
+      'L1:8bf18a8ee7c8b871 L2:e7376366e5ca1e8f L3:a0e04f152baeb2aa L4:3360c5054e55a940 L5:22b48f7125bd6c78 B1:18cf21360845bb8b B2:c75fbd9832e6814b B3:f11e947a868b602f',
+    );
   });
 });

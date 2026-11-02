@@ -6,7 +6,7 @@ import { type BodyDesc, massOf, type SceneDesc, type Vec3 } from '@tb/engine-api
 import { DEFAULT_GAP, DEFAULT_UNIT, encodeTag, GRAVITY, MATERIALS, materialId, type MaterialName, type Role, ROLES } from './materials.ts';
 import { peOf_mJ, SETTLE_RULES, type SettleRule } from './rules.ts';
 import { type Arm, levelArm, rackArms } from './arsenal.ts';
-import { isRackItem, itemRef, type LevelWeapon, RACK_ITEM_NAMES, rackBodies, type RackItem, speedOf, WEAPON_KEY } from './rack.ts';
+import { isRackItem, itemRef, type LevelWeapon, RACK_ITEM_NAMES, rackBodies, type RackItem, speedOf, WEAPON_KEY, weaponOf } from './rack.ts';
 import { type ScenarioPart, scenarioBodies, scenarioKey } from './scenario-part.ts';
 import { ammoBody, type LauncherDef, launcherPos, type Shot, type ShotFrame } from './shots.ts';
 
@@ -335,6 +335,16 @@ export function compileLevel(def: LevelDef): CompiledLevel {
   const physics = physicsKey(geometry.physics);
   if (physics) geometry.physics = physics; else delete geometry.physics;
   geometry.parts = geometry.parts.map((pt) => (pt.kind === 'scenario' ? scenarioKey(pt) : pt));
+  // A w- item the level gives no weapon of its own plays the built-in (rack.ts weaponOf): the built-in joins the
+  // hash as if written out, so retuning one drops stars cast with it. Levels whose rack has none hash as before.
+  const defaulted: Record<string, LevelWeapon> = {};
+  for (const item of def.rack) {
+    const ref = itemRef(item);
+    if (ref?.kind !== 'weapon' || (def.weapons && Object.hasOwn(def.weapons, ref.key))) continue;
+    const w = weaponOf(def, ref.key);
+    if (w) defaulted[ref.key] = w;
+  }
+  if (Object.keys(defaulted).length) geometry.weapons = { ...geometry.weapons, ...defaulted };
   // A scenario part names its bodies by (id, params, seed): the bodies themselves join the hash, so a
   // change to the scenario's builder is a different level too. Levels without one hash as before.
   const built = def.parts.some((pt) => pt.kind === 'scenario') ? `|${bodiesDigest(bodies)}` : '';
