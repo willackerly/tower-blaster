@@ -3,7 +3,8 @@ import { describe, expect, it } from 'vitest';
 import { B1, B2, B3, BIG_LEVELS, compileLevel, L1, LEVELS } from '@tb/keystone';
 import { bestText, doorHtml, doorLevels, doorMode, doorOnLoad, nextLevel, openerFor, preaimMode, rackText, starTargets, thresholdText } from '../src/door.ts';
 import type { LevelRecord } from '../src/progress.ts';
-import { DEFAULT_SETTINGS, parseSettings, SETTINGS_KEY, SettingsStore, urlSettings } from '../src/settings.ts';
+import { cameraFeel, DEFAULT_SETTINGS, parseSettings, SETTINGS_KEY, SettingsStore, urlSettings } from '../src/settings.ts';
+import { paceFeel } from '../src/pacing.ts';
 import { memoryKeyValue } from '../src/progress.ts';
 
 const q = (s: string) => new URLSearchParams(s);
@@ -90,7 +91,7 @@ describe('door levels', () => {
     expect(html).toContain(`Back to ${LEVELS[0]!.name}`);
     expect(html.match(/<li class="got/g)).toHaveLength(2);
     expect(html).toContain('<span class="earned">★★</span><span class="unearned">☆</span>');
-    for (const act of ['how', 'sound', 'look', 'sharp', 'reset', 'close']) expect(html).toContain(`data-act="${act}"`);
+    for (const act of ['how', 'sound', 'look', 'sharp', 'camera', 'reset', 'close']) expect(html).toContain(`data-act="${act}"`);
     expect(html).toContain('class="how"');
     expect(doorHtml({ levels, current: -1, settings: DEFAULT_SETTINGS, howTo: false })).not.toContain('data-act="close"');
     // Back to the level is the Play button already when the next level is the loaded one.
@@ -112,7 +113,22 @@ describe('settings', () => {
     expect(parseSettings(null)).toEqual(DEFAULT_SETTINGS);
     expect(parseSettings('nope')).toEqual(DEFAULT_SETTINGS);
     expect(parseSettings('{"sound":false,"look":"nope","sharp":3}')).toEqual({ ...DEFAULT_SETTINGS, sound: false });
-    expect(parseSettings('{"look":"real","sharp":1}')).toEqual({ sound: true, look: 'real', sharp: 1 });
+    expect(parseSettings('{"look":"real","sharp":1}')).toEqual({ sound: true, look: 'real', sharp: 1, camera: 'still' });
+    // Settings stored before the Camera setting open still, as does anything but its two values.
+    expect(DEFAULT_SETTINGS.camera).toBe('still');
+    expect(parseSettings('{"camera":"dynamic"}')).toEqual({ ...DEFAULT_SETTINGS, camera: 'dynamic' });
+    expect(parseSettings('{"camera":true}')).toEqual(DEFAULT_SETTINGS);
+  });
+  it('the camera motions: the URL\'s keystone.follow and keystone.shake each where they say, else the Camera setting', () => {
+    const at = (search: string, camera: 'still' | 'dynamic') => { const u = q(search); return cameraFeel(paceFeel(u), u, camera); };
+    expect(at('', 'still')).toEqual({ follow: false, shake: false });
+    expect(at('', 'dynamic')).toEqual({ follow: true, shake: true });
+    expect(at('keystone.follow=1', 'still')).toEqual({ follow: true, shake: false });
+    expect(at('keystone.shake=0', 'dynamic')).toEqual({ follow: true, shake: false });
+    expect(at('keystone.follow=0&keystone.shake=1', 'dynamic')).toEqual({ follow: false, shake: true });
+    const html = (camera: 'still' | 'dynamic') => doorHtml({ levels: [], current: -1, settings: { ...DEFAULT_SETTINGS, camera }, howTo: false });
+    expect(html('still')).toContain('data-act="camera" data-arg="still" class="on"');
+    expect(html('dynamic')).toContain('data-act="camera" data-arg="dynamic" class="on"');
   });
   it('URL keys: sound=on|off, sharp=1|2, look (checked by the page); bad values refused', () => {
     expect(urlSettings(q('sound=off&sharp=1&look=candy'))).toEqual({ sound: false, sharp: 1, look: 'candy' });
@@ -122,10 +138,10 @@ describe('settings', () => {
   it('the URL wins for the visit; a change is stored and replaces the URL\'s say on that field', () => {
     const kv = memoryKeyValue({ [SETTINGS_KEY]: '{"look":"real"}' });
     const s = new SettingsStore(kv, q('look=candy&sound=off'));
-    expect(s.current).toEqual({ sound: false, look: 'candy', sharp: 2 });
-    expect(s.set({ look: 'hazy' })).toEqual({ sound: false, look: 'hazy', sharp: 2 });
-    expect(JSON.parse(kv.getItem(SETTINGS_KEY)!)).toEqual({ sound: true, look: 'hazy', sharp: 2 });
-    expect(new SettingsStore(kv).current).toEqual({ sound: true, look: 'hazy', sharp: 2 });
+    expect(s.current).toEqual({ sound: false, look: 'candy', sharp: 2, camera: 'still' });
+    expect(s.set({ look: 'hazy' })).toEqual({ sound: false, look: 'hazy', sharp: 2, camera: 'still' });
+    expect(JSON.parse(kv.getItem(SETTINGS_KEY)!)).toEqual({ sound: true, look: 'hazy', sharp: 2, camera: 'still' });
+    expect(new SettingsStore(kv).current).toEqual({ sound: true, look: 'hazy', sharp: 2, camera: 'still' });
   });
   it('storage that throws keeps settings in memory', () => {
     const bad = { getItem: () => { throw new Error('x'); }, setItem: () => { throw new Error('x'); }, removeItem: () => {} };

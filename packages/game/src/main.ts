@@ -16,7 +16,7 @@ import { doorMode, doorOnLoad, openerFor, preaimMode } from './door.ts';
 import { lookName, onEngine, parseGameParams, withRules } from './params.ts';
 import { browserKeyValue, memoryKeyValue, type ProgressStore, progressStore } from './progress.ts';
 import { bankAfterLine, type SessionFacts, sessionFile, sessionFileName } from './session-file.ts';
-import { type Settings, SettingsStore } from './settings.ts';
+import { CAMERA_KEYS, cameraFeel, type Settings, SettingsStore } from './settings.ts';
 import { NO_WEBGPU_HTML, webgpuMissing } from './support.ts';
 import { type GameHandle, newGameHandle, playKeystone, playLine } from './play.ts';
 import { GAME_HELP, installGameStyles } from './ui.ts';
@@ -50,6 +50,9 @@ async function main() {
   window.__progress = progress;
   const settings = new SettingsStore(q.get('progress') === 'off' ? memoryKeyValue() : browserKeyValue() ?? memoryKeyValue(), q);
   const look = lookName(settings.current.look);
+  // The camera motions: the URL's keystone.follow / keystone.shake where it says, else the Camera setting.
+  // One object, read live by the game: a change applies to the shake at once and to the follow from the next shot.
+  Object.assign(feel, cameraFeel(feel, q, settings.current.camera));
   const door = doorMode(q), preaim = preaimMode(q), bank = bankAfterLine(q);
   // ?keystone.rack replaces the opening level's rack (its def, so retry keeps it); other levels keep their own.
   // The rule overrides (keystone.scoring, keystone.autobank, physics) apply to every level; stars cast on
@@ -79,9 +82,10 @@ async function main() {
       if (changed === 'look') renderer.look = lookByName(lookName(st.look), parseRealOptions(q));
       if (changed === 'sound') handle.setMuted(!st.sound);
       if (changed === 'sharp') handle.maxDpr = st.sharp;
-      // The setting now says it: the URL key that set it for this visit goes.
-      const u = new URLSearchParams(location.search);
-      if (u.has(changed)) { u.delete(changed); history.replaceState(null, '', `?${u}`); }
+      if (changed === 'camera') Object.assign(feel, cameraFeel(feel, new URLSearchParams(), st.camera));
+      // The setting now says it: the URL keys that set it for this visit go.
+      const u = new URLSearchParams(location.search), keys = changed === 'camera' ? CAMERA_KEYS : [changed];
+      if (keys.some((k) => u.has(k))) { for (const k of keys) u.delete(k); history.replaceState(null, '', `?${u}`); }
     },
   });
   window.__door = front;

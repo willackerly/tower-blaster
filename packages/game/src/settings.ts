@@ -4,15 +4,21 @@
 //   sound: on | off            (the M key toggles it in play)
 //   look:  hazy | real | candy (the URL's ?look=)
 //   sharp: 2 | 1               (the most device pixels per CSS pixel the canvas draws; 1 halves the work on a 2x screen)
+//   camera: still | dynamic    (dynamic: the camera follows the collapse and shakes on hits; the URL's say is
+//                               keystone.follow and keystone.shake, one each, see cameraFeel)
 import { LOOKS } from '@tb/render';
+import type { PaceFeel } from './pacing.ts';
 import { GAME_LOOK } from './params.ts';
 import type { KeyValue } from './progress.ts';
 
 export const SETTINGS_KEY = 'tb.settings.v1';
 
-export interface Settings { sound: boolean; look: string; sharp: 1 | 2 }
+/** still: the camera moves only when the player moves it (the default since the 2026-11-02 playtest); dynamic: it follows and shakes too. */
+export type CameraSetting = 'still' | 'dynamic';
 
-export const DEFAULT_SETTINGS: Settings = { sound: true, look: GAME_LOOK, sharp: 2 };
+export interface Settings { sound: boolean; look: string; sharp: 1 | 2; camera: CameraSetting }
+
+export const DEFAULT_SETTINGS: Settings = { sound: true, look: GAME_LOOK, sharp: 2, camera: 'still' };
 
 /** The looks the front door offers, in its order, with their names there. */
 export const LOOK_CHOICES: ReadonlyArray<{ look: string; label: string }> = [
@@ -29,7 +35,20 @@ export function parseSettings(text: string | null): Settings {
     sound: typeof o.sound === 'boolean' ? o.sound : DEFAULT_SETTINGS.sound,
     look: typeof o.look === 'string' && LOOKS[o.look] ? o.look : DEFAULT_SETTINGS.look,
     sharp: o.sharp === 1 || o.sharp === 2 ? o.sharp : DEFAULT_SETTINGS.sharp,
+    camera: o.camera === 'still' || o.camera === 'dynamic' ? o.camera : DEFAULT_SETTINGS.camera,
   };
+}
+
+/** The URL keys that say what the camera setting says (cameraFeel), dropped from the URL when the setting changes. */
+export const CAMERA_KEYS = ['keystone.follow', 'keystone.shake'] as const;
+
+/**
+ * The camera motions in effect: each of keystone.follow and keystone.shake where the URL says it (feel was read
+ * from that URL), else the Camera setting's (dynamic: both on, still: both off).
+ */
+export function cameraFeel(feel: PaceFeel, q: URLSearchParams, camera: CameraSetting): Pick<PaceFeel, 'follow' | 'shake'> {
+  const on = camera === 'dynamic';
+  return { follow: q.has('keystone.follow') ? feel.follow : on, shake: q.has('keystone.shake') ? feel.shake : on };
 }
 
 /** The URL's say over settings: ?look=, ?sound=on|off, ?sharp=1|2 (bad values are refused, as every game key is). */

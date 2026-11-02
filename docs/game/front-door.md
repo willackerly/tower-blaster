@@ -10,7 +10,7 @@ A bare URL (`pnpm game`, or the playtest link) opens the door over B1, which loa
 - **How to play**: four lines on aiming, freezing, stars and banking.
 - One **card per level** of the series. Each card shows the id, the name, the block count and the rack, then the three star targets (the objective; T2 and T3 from the cast in the metric's own words, such as "70% down" or "3,200 points, heritage intact"), and the best play. On a phone the targets shrink to one line ("★ 40% · ★★ 70% · ★★★ 94%").
 
-Below the cards are three settings: **Sound** (On or Off), **Look** (Maquette, Photoreal or Candy) and **Sharpness** (Full, or Fast, which caps the canvas at 1 device pixel per CSS pixel). A two-click **Forget my progress** link sits under them.
+Below the cards are four settings: **Sound** (On or Off), **Look** (Maquette, Photoreal or Candy), **Camera** (Still, the default: it moves only when the player moves it; or Dynamic: it follows the collapse and shakes on hits, i.e. `keystone.follow=1` and `keystone.shake=1`) and **Sharpness** (Full, or Fast, which caps the canvas at 1 device pixel per CSS pixel). The URL's `keystone.follow` and `keystone.shake` each win over Camera for the visit, and a Camera click drops them from the URL. A Camera change applies to the shake at once and to the follow from the next shot. A two-click **Forget my progress** link sits under them.
 
 In play, **Menu** (top right) or **Esc** brings the door back. While the door is open it holds the keyboard, so the game's keys (N, R, F and so on) wait.
 
@@ -26,6 +26,7 @@ On a first visit, B1's HUD offers **F Fire the first shot**: the first shot of B
 | `sound` | `on`, `off` | stored, else `on` |
 | `look` | `hazy`, `real`, `candy` | stored, else `hazy` |
 | `sharp` | `2`, `1` | stored, else `2` |
+| `keystone.follow`, `keystone.shake` | `1`, `0` (each) | the stored Camera setting (`still`: both off), else off |
 
 When the player changes a setting on the door, it is stored and its URL key is dropped, so a reload keeps the choice.
 

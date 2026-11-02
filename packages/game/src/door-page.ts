@@ -84,6 +84,7 @@ export function installDoor(o: DoorOptions, doc: Document = document): DoorPage 
       case 'sound': set({ sound: !o.settings.current.sound }); break;
       case 'look': set({ look: arg }); break;
       case 'sharp': set({ sharp: arg === '1' ? 1 : 2 }); break;
+      case 'camera': set({ camera: arg === 'dynamic' ? 'dynamic' : 'still' }); break;
       case 'reset':
         if (armedReset) { o.progress.reset(); armedReset = false; } else armedReset = true;
         draw();
