@@ -107,10 +107,11 @@ export function hudHtml(s: HudState): string {
  * crown is down) and the rest of the settle is still running: the card shows
  * at once and tallies, and is drawn again with the score when it settles.
  */
-export function resultHtml(level: LevelDef, score: LevelScore | null, strokes: number, hasNext: boolean): string {
+export function resultHtml(level: LevelDef, score: LevelScore | null, strokes: number, hasNext: boolean, canSave = false): string {
   const outcome = scoringOf(level) === 'outcome';
   const shotsText = `${strokes} ${outcome ? 'shot' : 'stroke'}${strokes === 1 ? '' : 's'}${outcome ? '' : ` · par ${level.par}`}`;
-  const actions = `<div class="actions"><button data-act="retry"><kbd>R</kbd> Retry</button>${hasNext ? '<button data-act="next" class="primary"><kbd>N</kbd> Next</button>' : ''}</div>`;
+  const save = canSave && score ? '<button data-act="save" title="Download this round as a file to send back">Save session</button>' : '';
+  const actions = `<div class="actions"><button data-act="retry"><kbd>R</kbd> Retry</button>${save}${hasNext ? '<button data-act="next" class="primary"><kbd>N</kbd> Next</button>' : ''}</div>`;
   if (!score) {
     return `
     <div class="name">${esc(level.name)}</div>

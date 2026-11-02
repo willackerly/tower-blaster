@@ -171,6 +171,8 @@ export interface KeystoneHooks {
   fired?(shot: Shot, feedback: Feedback[], d: Driver): void;
   /** One driver step ran; d.snapshot is of engine step d.snapshotStep. */
   stepped?(feedback: Feedback[], d: Driver): void;
+  /** The player banked (key B, the HUD's button, GameHandle.bank): the round ends with the rack left. */
+  banked?(c: CompiledLevel, d: Driver): void;
   /** The round is over and scored (the result card's tally): a page records progress here. */
   ended?(c: CompiledLevel, score: LevelScore, d: Driver): void;
 }
@@ -213,6 +215,8 @@ export interface KeystoneEnv {
   opener?(c: CompiledLevel): Shot | null;
   /** Start muted (the front door's Sound setting; key M toggles). */
   muted?: boolean;
+  /** The result card's Save session button (shown when given): the page saves the round just ended. */
+  onSave?(): void;
 }
 
 /** An orbiting drag of (dx, dy) pixels: turns, and tilts from looking down to looking up (past level the floor brings the eye in). */
@@ -466,7 +470,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
   }
 
   function showResult(score: LevelScore | null) {
-    env.result.innerHTML = resultHtml(c.def, score, driver.session.strokes, levelIdx + 1 < levels.length);
+    env.result.innerHTML = resultHtml(c.def, score, driver.session.strokes, levelIdx + 1 < levels.length, Boolean(env.onSave));
     env.result.classList.add('show');
     document.body.classList.add('ended');
     handle.resultShownAt ??= driver.engine.stepIndex;
@@ -531,6 +535,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
 
   function bank(): boolean {
     if (stepping || regrowT !== null || !driver.session.canBank()) return false;
+    hooks.banked?.(c, driver);
     onFeedback(driver.bank());
     aimed = null;
     beads = null;
@@ -631,6 +636,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
   env.result.addEventListener('click', (e) => {
     const act = (e.target as HTMLElement).closest('button')?.dataset.act;
     if (act === 'retry') void handle.retry();
+    if (act === 'save') env.onSave?.();
     if (act === 'next' && levelIdx + 1 < levels.length) void load(levelIdx + 1).catch(fail);
   });
   addEventListener('keydown', (e) => {

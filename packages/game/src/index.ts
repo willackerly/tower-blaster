@@ -13,3 +13,5 @@ export * from './sound-map.ts';
 export * from './progress.ts';
 export * from './door.ts';
 export * from './settings.ts';
+export * from './session-file.ts';
+export * from './support.ts';
