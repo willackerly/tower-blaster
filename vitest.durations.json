@@ -154,6 +154,8 @@
   "packages/physics-ref/test/variants.test.ts": 13.1,
   "packages/playtest/test/gate.test.ts": 0.1,
   "packages/playtest/test/playtest.test.ts": 5,
+  "packages/playtest/test/smoke-browser.test.ts": 20,
+  "packages/playtest/test/smoke.test.ts": 0.1,
   "packages/render/test/ao.test.ts": 0.1,
   "packages/render/test/floor.test.ts": 0.3,
   "packages/render/test/hall-gpu.test.ts": 1,
