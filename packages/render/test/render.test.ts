@@ -222,8 +222,10 @@ describe('real look options', () => {
     expect((q.groundShape as number[]).slice(1)).toEqual((one.groundShape as number[]).slice(1)); // patches, shadow fill
     expect((lookUniforms(realLook({ shadowFill: 0.7 })).groundShape as number[])[2]).toBeCloseTo(0.7, 12);
     expect((lookUniforms(lookByName('candy')).groundShape as number[])[2]).toBe(0); // the stylized looks: no fill
+    // Rocks lie on the metric ground: their size, cell and clumping lattice 4x as many units; their share as is.
+    expect(q.rocks).toEqual([(one.rocks as number[])[0], ...(one.rocks as number[]).slice(1).map((x) => 4 * x)]);
     // What belongs to the blocks keeps their units: debris sizes, bevel, colours.
-    for (const k of Object.keys(one).filter((k) => !['stone', 'ground', 'groundShape', 'stoneDetail', 'hills'].includes(k))) expect([k, q[k]]).toEqual([k, one[k]]);
+    for (const k of Object.keys(one).filter((k) => !['stone', 'ground', 'groundShape', 'stoneDetail', 'hills', 'rocks'].includes(k))) expect([k, q[k]]).toEqual([k, one[k]]);
   });
 
   it('round-trip through URL keys, only the ones set, and realLook fills the rest', () => {

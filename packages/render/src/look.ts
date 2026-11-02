@@ -70,7 +70,7 @@ export interface LookParams {
    * relief's depth (m, 0: flat); patches: the share of the ground under patches of the other ground
    * (0 to 1, patchThreshold). Both default to 0 when left out.
    */
-  ground?: { kind: Ground; scale: number; detail: number; variation: number; relief?: number; patches?: number };
+  ground?: { kind: Ground; scale: number; detail: number; variation: number; relief?: number; patches?: number; rocks?: number; rockSize?: number };
   /**
    * With an atmosphere: hills on the horizon, their greatest height (degrees above the horizon; 0: none) and distance (km);
    * cover: their albedo from the floor's (0, bare ground) to dry scrub's (1); ridges: 1, or 2 with a lower one in front.
@@ -180,6 +180,14 @@ export interface RealOptions {
   groundRelief: number;
   groundPatches: number;
   /**
+   * Small rocks on the ground (rocks.ts, 2026-11-02): the share of ground
+   * cells (rockSize x ROCK_CELL wide) holding one where the clumping field
+   * is at its mean (0: none, the default; the floor shader skips them), and
+   * their size in metres (radii 0.35x to 1.95x, mostly small).
+   */
+  rocks: number;
+  rockSize: number;
+  /**
    * Hills on the horizon: their greatest height in degrees above it (0: none) and how far away they are, km;
    * their cover, from bare ground in the floor's albedo (0) to dry scrub (1, about a third as bright),
    * and how many ridges (1, or 2: a lower one at half the distance in front of it).
@@ -238,7 +246,7 @@ export interface RealOptions {
 export const REAL_DEFAULTS: RealOptions = {
   sunElevation: 35, sunAzimuth: 140, visibility: 40, sunStrength: 1, groundAlbedo: [0.2, 0.19, 0.17], exposure: 1.1, autoExposure: 0.75,
   stone: 'limestone', stoneDetail: 1, stoneScale: 1, stoneFade: 8, wear: 0.5, dirt: 0.4,
-  groundMaterial: 'gravel', groundDetail: 1, groundScale: 1, groundVariation: 0.5, groundRelief: 1, groundPatches: 0.05, hills: 2.2, hillDistance: 6, hillCover: 0.75, hillRidges: 2,
+  groundMaterial: 'gravel', groundDetail: 1, groundScale: 1, groundVariation: 0.5, groundRelief: 1, groundPatches: 0.05, rocks: 0, rockSize: 0.12, hills: 2.2, hillDistance: 6, hillCover: 0.75, hillRidges: 2,
   sunSize: 0.53, shadowSoftness: 1, shadowFill: 0.5,
   dust: 1, chips: 1, dustSize: 0.9, dustOpacity: 0.4, dustThreshold: 2, dustFace: 0.15, dustErode: 0.7, dustThin: 0.3, dustSkirt: 0.9,
   env: 'outdoor', hallSize: 1, hallGlass: 0.5, hallIron: 0.55, hallExterior: 1,
@@ -271,7 +279,7 @@ export function realLook(o: Partial<RealOptions> = {}): LookParams {
     bevel: 0.012,
     ramp: STONE_PALETTES[r.stone].map(hex) as LookParams['ramp'],
     stone: { kind: r.stone, scale: r.stoneScale, wear: r.wear, dirt: r.dirt, detail: r.stoneDetail, fade: r.stoneFade / 100 },
-    ground: { kind: r.groundMaterial, scale: r.groundScale, detail: r.groundDetail, variation: r.groundVariation, relief: r.groundRelief, patches: r.groundPatches },
+    ground: { kind: r.groundMaterial, scale: r.groundScale, detail: r.groundDetail, variation: r.groundVariation, relief: r.groundRelief, patches: r.groundPatches, rocks: r.rocks, rockSize: r.rockSize },
     hills: { height: r.hills, distance: r.hillDistance, cover: r.hillCover, ridges: r.hillRidges },
     shadow: { softness: r.shadowSoftness, fill: r.shadowFill },
     debris: { dust: r.dust, chips: r.chips, size: r.dustSize, opacity: r.dustOpacity, threshold: r.dustThreshold, face: r.dustFace, skirt: r.dustSkirt, erode: r.dustErode, thin: r.dustThin },
@@ -306,6 +314,8 @@ export const REAL_KNOBS = {
   groundVariation: { label: 'ground variation 0-1', min: 0, max: 1, step: 0.05 },
   groundRelief: { label: 'ground relief (m)', min: 0, max: 5, step: 0.05 },
   groundPatches: { label: 'ground patches (share) 0-1', min: 0, max: 1, step: 0.005 },
+  rocks: { label: 'small rocks (share of cells) 0-1', min: 0, max: 1, step: 0.05 },
+  rockSize: { label: 'rock radius (m)', min: 0.02, max: 0.5, step: 0.01 },
   hills: { label: 'horizon hills (deg)', min: 0, max: 10, step: 0.1 },
   hillDistance: { label: 'hill distance (km)', min: 0.5, max: 100, step: 0.5 },
   hillCover: { label: 'hill scrub cover (0 bare, 1 full)', min: 0, max: 1, step: 0.05 },

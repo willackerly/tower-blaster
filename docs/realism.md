@@ -427,7 +427,8 @@ coloured blotches.
   costs tens of ALU per octave); a finer level for the relief (brings back
   the grain that made close views smudgy); a second macro fetch at 2.71x
   (Opus review) to break horizon bands, not needed once the finer scales
-  were in. Still open: small rocks with shadows (Opus review).
+  were in. Small rocks with shadows (Opus review): see "Small rocks"
+  below (2026-11-02, opt-in).
 - Tests: the ground checks gain plain (no relief, no patches), relief 2 m
   and patches 0.3: relief raises the 16 px block contrast, ordered by
   depth; patches of dirt calm the gravel's fine detail; every case keeps
@@ -553,6 +554,70 @@ test's summed pixels equal main's exactly):
   it; render-real-dust.test.ts draws an air burst and a ground burst with
   each knob alone and checks roughness, area, summed density and the
   ground puff's aspect against the knob off.
+
+## Small rocks (V1 backlog, 2026-11-02, opt-in)
+
+"Small rocks with shadows" (Opus review of the ground from height). Drawn
+by the floor's fragment shader (rocks.ts), not as geometry, and off by
+default: `real.rocks` 0 skips them on a uniform (frames bit-identical to
+before: checked on the ground and real-look test frames).
+
+- Placement: a grid of cells `ROCK_CELL` (5) x `rockSize` wide; a cell
+  holds a rock with chance `rocks` times a clumping field (value noise on a
+  3 m lattice, `min(2 smoothstep(0.25, 0.75, n), 1)`: bare stretches and
+  patches). Each rock is placed, sized (0.35 to 1.95 x `rockSize`, skewed
+  by u^3 so most are small), turned, flattened (narrower radius 0.55 to 1
+  of the wider) and toned by the cell's hash (pcg4d); `rockIn` is the CPU
+  twin.
+- Shape: an ellipsoid 0.65 of its narrower radius high, sunk 12% into the
+  ground (its base meets the ground at an angle, no tangent seam), the rim
+  wobbling by about a tenth (2 and 3 lobes).
+- Seeing it: the eye's ray is intersected analytically with the rocks of
+  the 3x3 cells around the point half way back along it to the tallest
+  rock's height, and the nearest hit is shaded: its own normal, its
+  height (so the blocks' shadows fall on it through the shadow map), the
+  ground's grain on it. A rock's top hides the ground behind it. The first
+  cut painted each footprint flat on the ground (shaded with the dome's
+  normals): from a standing camera every rock read as a hollow, since the
+  far half's normals face away from the eye.
+- Shadows: the ray from the point seen toward the sun against the other
+  rocks' ellipsoids (closest approach), sharp to a pixel (the sun's
+  penumbra at a few centimetres is under a millimetre); a private
+  `sunVis` multiplies the direct sun only (1 everywhere else, so other
+  pixels are unchanged). Contact darkening 0.85 at a rock's foot over 0.12
+  of its footprint, on the side away from the sun only (all round, it read
+  as a crater rim), and on its lower sides.
+- Fade: in as `rockSize` grows from 1.5 to 5 pixels; under 1.5 nothing
+  runs. Rim antialiased over the pixel's footprint.
+- Knobs: `real.rocks` (0 to 1, default 0), `real.rockSize` (m, default
+  0.12). Frame uniform `rocks` (share, size, cell, clumping lattice).
+- Reviewed by a second model (`/mnt/project-files/visual-backlog/rocks/`).
+  Round 1: "ship as opt-in"; too pale and even (25% toward the limestone),
+  sizes alike, jittered-grid even, clean domes, a dark ring, an abrupt
+  fade. Round 2 after: albedo 8% toward limestone x0.6 to 1.15, the u^3
+  sizes, clumping, bases sunk 25%, a weaker contact ring, the wider fade.
+  Round 2: colour, sizes and clumping right, "ship as opt-in"; but at 8 cm
+  lost in the gravel from a standing camera, and 25% sunk at 0.55 high
+  read as blisters with a crater rim. So: 12 cm, 0.65 high, 12% sunk, the
+  ring on the shadow side only. Still open before it could be on by
+  default: faceted rocks (one facet plane each or angular outline
+  octaves) and a slight hue jitter per rock.
+- Rejected: instanced rock meshes in the main and shadow passes (a new
+  pipeline, vertex and shadow-raster cost on every frame, and the floor
+  already has the ground's material); parallax-mapped height in the
+  ground texture (a march per floor pixel, no cast shadows past the
+  texel); rocks as tiny physics bodies (bodies are the budget).
+- Cost: per floor pixel with rocks on and in range: 9 placements (a hash
+  each, 4 more for the clumping), 9 ray-ellipsoid tests, up to 8 shadow
+  tests. Bench variant `real-rocks` (rocks 0.6, 12 cm) against `real`; M5 to
+  be measured.
+- Tests: render-real-rocks.test.ts, straight down at 12 m: rocks 0 at any
+  size draws the same frame; every rock the twin places is a dome lit from
+  the sun's side (rim contrast over the ground's grain 33 to 102, needs
+  15); at share 0.4 the drawn rocks are the twin's; at 15 degrees of sun
+  the ground past the rim away from the sun is darker than toward it (45
+  to 79 against 82 to 107), toward it as without rocks bar the contact
+  darkening; the mean brightness within 3%.
 
 ## Floor and ambient (fixes after the stone step's screenshots)
 

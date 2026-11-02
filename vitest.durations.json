@@ -165,6 +165,7 @@
   "packages/render/test/render-real-dust.test.ts": 191.0,
   "packages/render/test/render-real-ground.test.ts": 258.7,
   "packages/render/test/render-real-hall.test.ts": 18.4,
+  "packages/render/test/render-real-rocks.test.ts": 40,
   "packages/render/test/render-real-stones.test.ts": 124,
   "packages/render/test/render-real-wood.test.ts": 23.3,
   "packages/render/test/render.test.ts": 166.7,
