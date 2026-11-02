@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { combineFriction, TAG_BALL } from '@tb/engine-api';
-import { AMMO_RATIO, AMMO_RATIO_MAX, compileLevel, decodeTag, encodeTag, isDud, KEYSTONE_GRENADE, type LevelDef, LEVELS, ENGINE_MAX_BODIES, MATERIALS, MAX_RACK, type RackItem, ROLES, validateLevel } from '@tb/keystone';
+import { combineFriction, DEFAULT_BLAST_MAX_SPEED, TAG_BALL } from '@tb/engine-api';
+import type { WeaponSpec } from '@tb/weapons';
+import { AMMO_RATIO, AMMO_RATIO_MAX, compileLevel, decodeTag, encodeTag, isDud, KEYSTONE_GRENADE, type LevelDef, LEVELS, ENGINE_MAX_BODIES, type LevelEngine, MATERIALS, MAX_RACK, type RackItem, ROLES, SWEEP_REACH, validateLevel } from '@tb/keystone';
 
 const tiny = (parts: LevelDef['parts'], extra: Partial<LevelDef> = {}): LevelDef => ({
   id: 'T', name: 't', version: 1, world: 0, parts, lot: { min: [-6, -6], max: [6, 6] }, crownLine: 1,
@@ -80,10 +81,21 @@ describe('validateLevel', () => {
     expect(codes(lever(true))).not.toContain('unsupported');
     expect(codes(lever(false))).toContain('unsupported');
   });
-  it('rejects ammo that can step through the thinnest body', () => {
-    const thin = (half: number) => tiny([{ kind: 'block', at: [0, 0, 0], size: [1, 1, 1], material: 'plaster' }, { kind: 'slab', at: [0.5, 1, 0.5], half: [0.5, half, 0.5], material: 'plaster' }]);
-    expect(codes(thin(0.02))).toContain('tunnelling');
-    expect(codes(thin(0.125))).not.toContain('tunnelling');
+  it('tunnelling: on Rapier a box may not step through the thinnest body; a sphere (continuous collision) and the GPU only keep under the sweep', () => {
+    // Weapons in the viewer's cube units, scaled to h = 0.5: a quarter-metre brick at up to 22 sqrt(h) = 15.6 m/s (0.259 m a step),
+    // a marble-sized ball at up to 80 sqrt(h) = 56.6 m/s (0.943 m a step, past SWEEP_REACH).
+    const brick: WeaponSpec = { version: 1, name: 'brick', shell: { shape: { kind: 'box', half: [0.25, 0.25, 0.25] }, density: 1, speed: [5, 22] }, rules: [] };
+    const fast: WeaponSpec = { version: 1, name: 'fast', shell: { shape: { kind: 'sphere', radius: 0.2 }, density: 1, speed: [10, 80] }, rules: [] };
+    const thin = (half: number, rack: RackItem[]) => tiny([{ kind: 'block', at: [0, 0, 0], size: [1, 1, 1], material: 'plaster' }, { kind: 'slab', at: [0.5, 1, 0.5], half: [0.5, half, 0.5], material: 'plaster' }], { rack, weapons: { brick, fast } });
+    const on = (d: LevelDef, engine: LevelEngine) => validateLevel(compileLevel(d), { engine }).map((i) => i.code);
+    // 0.8 x (0.25 + 0.02) = 0.216 m < 0.259 m: through a 2 cm slab on Rapier; 0.8 x (0.25 + 0.125) = 0.3 m: not through a quarter-h one.
+    expect(on(thin(0.02, ['w-brick']), 'rapier')).toContain('tunnelling');
+    expect(on(thin(0.125, ['w-brick']), 'rapier')).not.toContain('tunnelling');
+    expect(on(thin(0.02, ['w-brick']), 'gpu')).not.toContain('tunnelling');
+    // The marble (0.25 m a step) would step through the 2 cm slab by size, but spheres have continuous collision on Rapier and the sweep on AVBD.
+    expect(on(thin(0.02, ['marble']), 'rapier')).not.toContain('tunnelling');
+    for (const engine of ['rapier', 'gpu'] as const) expect(on(thin(0.125, ['w-fast']), engine)).toContain('tunnelling');
+    expect(SWEEP_REACH * 60).toBe(DEFAULT_BLAST_MAX_SPEED);
   });
   it('rejects crowns that start below the crown line, a bad rack, and an empty level', () => {
     expect(codes(tiny([{ kind: 'block', at: [0, 0, 0], size: [1, 1, 1], material: 'plaster', role: 'crown' }], { crownLine: 2 }))).toContain('crown-start');
@@ -135,18 +147,22 @@ describe('validateLevel: rack items (spectacle-mode.md section 7)', () => {
     expect(at('w-grenade')).toEqual([]);
     expect(at('drop')).toEqual([]);
   });
-  it('tunnelling: the real cannonball (45 m/s, 14 cm) steps 0.75 m, past 0.8 x (0.14 + 0.5) m; the wrecking ball does not', () => {
-    expect(codes(block('stone', ['p-cannonball']))).toContain('tunnelling');
+  it('tunnelling: the real cannonball (45 m/s, 14 cm) steps 0.75 m, under the sweep (0.8 m) on every engine (physics-gpu engine-tunnel.test.ts: it does not get through)', () => {
+    for (const engine of ['rapier', 'gpu'] as const) expect(validateLevel(compileLevel(block('stone', ['p-cannonball'])), { engine }).map((i) => i.code)).not.toContain('tunnelling');
     expect(codes(block('stone', ['p-wreckingball']))).not.toContain('tunnelling');
   });
   it("tunnelling: a weapon's blast may not kick a body faster than the thinnest one allows", () => {
-    // A quarter-h slab (0.125 m): 0.8 x 2 x 0.125 m a step is 12 m/s; KEYSTONE_GRENADE caps at 20.
+    // On Rapier, a quarter-h slab (0.125 m): 0.8 x 2 x 0.125 m a step is 12 m/s; KEYSTONE_GRENADE caps at 20. Every engine: the sweep's 48 m/s.
     const slab = (maxSpeed: number) => tiny([
       { kind: 'block', at: [-1, 0, -1], size: [2, 2, 2], material: 'stone' },
       { kind: 'slab', at: [0, 2, 0], half: [1, 0.125, 1], material: 'stone' },
     ], { rack: ['w-grenade'], weapons: { grenade: { ...KEYSTONE_GRENADE, blast: { ...KEYSTONE_GRENADE.blast, maxSpeed } } } });
     expect(codes(slab(20))).toContain('tunnelling');
     expect(codes(slab(11.9))).not.toContain('tunnelling');
+    const gpu = (d: LevelDef) => validateLevel(compileLevel(d), { engine: 'gpu' }).map((i) => i.code);
+    expect(gpu(slab(20))).not.toContain('tunnelling');
+    expect(gpu(slab(48))).not.toContain('tunnelling');
+    expect(gpu(slab(48.1))).toContain('tunnelling');
   });
   it('weapon: a w- item needs its weapon, and every weapon must be a valid grenade under a valid key', () => {
     expect(codes(block('stone', ['w-big']))).toContain('weapon');

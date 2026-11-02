@@ -27,7 +27,7 @@ The core moment has to work with one ball and one 400-cube structure. Scale is t
   - Any two structure bodies within 0.1 h of touching: mass ratio ≤ 10:1.
   - Static load on any cube: ≤ 12 cube masses above it in its support chain (a heuristic from the X-ray load map).
   - Ammo against the lightest structure body: ≤ 20:1 (transient contact only).
-- **Tunnelling rule** (the contract has no CCD): for each ammo type, v_max · dt ≤ 0.8 · (2r + t_min), where t_min is the thinnest structure body in the level. The validator checks this.
+- **Tunnelling rule** (the contract has no CCD): for each ammo type, v_max · dt ≤ 0.8 · (2r + t_min), where t_min is the thinnest structure body in the level. The validator checks this. (Superseded 2026-11-02, spectacle-mode.md section 7: AVBD's sweep finds every contact under 1 m a step, so the size rule now applies only to boxes on Rapier, and every engine keeps v_max · dt ≤ 0.8 m.)
 - **No static bodies yet.** There is no raised plinth. The lot is a rectangle painted on the ground plane, and the "crown line" is a glowing height ring. This keeps the prototype free of contract changes.
 
 ## 3. Verbs

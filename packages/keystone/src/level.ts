@@ -504,7 +504,7 @@ export function validateLevel(c: CompiledLevel, opts: ValidateOptions = {}): Iss
     if (pe0 - floor < least) issues.push({ code: 'flat', message: `the structure holds ${((pe0 - floor) / 1000).toFixed(1)} J over lying flat, under one ${block.toFixed(1)} kg block falling 1 h (${(least / 1000).toFixed(1)} J): nothing to bring down` });
   }
 
-  issues.push(...rackIssues(c));
+  issues.push(...rackIssues(c, engine));
   if (scoringOf(def) === 'outcome') issues.push(...launcherIssues(c));
 
   for (const i of m.crowns) {
@@ -540,12 +540,25 @@ function commonMass(m: BodyMeta): number {
 }
 
 /**
- * The rack's per-item checks: every name is an item and every weapon resolves; no item
- * steps through the thinnest body in one step (no continuous collision on the GPU path),
- * nor does a body a weapon kicks; items are at most limits.ammoRatio times the lightest
- * structure body; a dud (one head-on hit cannot tip even the easiest body) is a warning.
+ * Most a body may travel in one step, m, on every engine: 0.8 of AVBD's sweep (maxSweep,
+ * 1 m a step at its defaults, which Keystone plays at). AVBD grows each body's contact
+ * margin by min(maxSweep, |v| dt), so a contact a step's travel can reach is found before
+ * the step and solved as a speculative contact: under the sweep nothing tunnels, however
+ * thin the body (physics-gpu engine-tunnel.test.ts, GPU and reference: a 14 cm iron ball and
+ * a kicked half-metre block through a 2 cm slab, none at 45 or 57 m/s, some at 90). 0.8 m a
+ * step at 60 Hz is 48 m/s, engine-api's DEFAULT_BLAST_MAX_SPEED.
  */
-function rackIssues(c: CompiledLevel): Issue[] {
+export const SWEEP_REACH = 0.8;
+
+/**
+ * The rack's per-item checks: every name is an item and every weapon resolves; no item,
+ * nor a body a weapon kicks, outruns the engine's contact search in one step (tunnelling:
+ * SWEEP_REACH on every engine; on Rapier, whose boxes have no continuous collision, a box
+ * also may not step through the thinnest body, nor a kicked body through twice it); items
+ * are at most limits.ammoRatio times the lightest structure body; a dud (one head-on hit
+ * cannot tip even the easiest body) is a warning.
+ */
+function rackIssues(c: CompiledLevel, engine: LevelEngine): Issue[] {
   const { def, meta: m } = c, h = c.frame.unit, dt = c.scene.dt, issues: Issue[] = [];
   let thin = Infinity, lightest = Infinity;
   for (let i = 0; i < m.n; i++) {
@@ -558,11 +571,13 @@ function rackIssues(c: CompiledLevel): Issue[] {
     if (!WEAPON_KEY.test(key)) issues.push({ code: 'weapon', message: `weapons.${key}: a key is 1 to 24 lower case letters and digits, starting with a letter` });
     else try { levelArm(c, key); } catch (e) { issues.push({ code: 'weapon', message: `weapons.${key}: ${(e as Error).message}` }); }
   }
-  const tunnel = (what: string, size: number, v: number) => {
-    const reach = v * dt;
-    if (reach > 0.8 * (size + thin)) issues.push({ code: 'tunnelling', message: `${what} moves ${reach.toFixed(3)} m per step, more than 0.8 x (${size.toFixed(3)} + thinnest body ${thin.toFixed(3)}) m` });
-  };
   const sizeOf = (s: BodyDesc['shape']) => (s.kind === 'sphere' ? 2 * s.radius : s.kind === 'box' ? 2 * Math.min(...s.half) : 0);
+  // Rapier turns continuous collision on for spheres only (adapter-rapier bodies.ts): its boxes can step through.
+  const tunnel = (what: string, shape: BodyDesc['shape'], v: number) => {
+    const reach = v * dt, size = sizeOf(shape);
+    if (reach > SWEEP_REACH) issues.push({ code: 'tunnelling', message: `${what} moves ${reach.toFixed(3)} m per step, more than the engines' contact search reaches (${SWEEP_REACH} m)` });
+    else if (engine === 'rapier' && shape.kind === 'box' && reach > 0.8 * (size + thin)) issues.push({ code: 'tunnelling', message: `${what} moves ${reach.toFixed(3)} m per step, more than 0.8 x (${size.toFixed(3)} + thinnest body ${thin.toFixed(3)}) m: a box on Rapier, which has no continuous collision for boxes` });
+  };
   const heavy = (what: string, mass: number) => {
     const ratio = mass / lightest;
     if (m.n > 0 && ratio > ratioMax) issues.push({ code: 'ammo-ratio', message: `${what} (${mass.toFixed(1)} kg) is ${ratio.toFixed(1)} x the lightest structure body (${lightest.toFixed(1)} kg), over ${ratioMax}` });
@@ -577,12 +592,17 @@ function rackIssues(c: CompiledLevel): Issue[] {
     }
     const b = ammoBody(item as RackItem, c.frame, [0, 0, 0], [0, 0, 0]), mass = massOf(b);
     const v = item === 'drop' ? Math.sqrt(2 * GRAVITY * def.launcher.dropY * h) : speedOf(item as RackItem, 100, c.frame);
-    tunnel(item, sizeOf(b.shape), v);
+    tunnel(item, b.shape, v);
     heavy(item, mass);
     if (arm) {
       // A weapon's children (each at its speed bound: the shell's top speed plus the spreads that threw it) and its blasts' kicks.
-      for (const x of arm.munitions.slice(1)) { tunnel(`${item}'s ${x.path}`, sizeOf(x.shape), x.speed); heavy(`${item}'s ${x.path}`, x.mass); }
-      for (const { path, blast } of arm.blasts) if (blast.maxSpeed * dt > 0.8 * 2 * thin) issues.push({ code: 'tunnelling', message: `${item}'s blast${arm.blasts.length > 1 ? ` (${path})` : ''} can kick a body to ${blast.maxSpeed} m/s, ${(blast.maxSpeed * dt).toFixed(3)} m per step, more than 0.8 x twice the thinnest body ${thin.toFixed(3)} m` });
+      for (const x of arm.munitions.slice(1)) { tunnel(`${item}'s ${x.path}`, x.shape, x.speed); heavy(`${item}'s ${x.path}`, x.mass); }
+      // A kick moves structure bodies (boxes) and munitions alike.
+      for (const { path, blast } of arm.blasts) {
+        const what = `${item}'s blast${arm.blasts.length > 1 ? ` (${path})` : ''} can kick a body to ${blast.maxSpeed} m/s, ${(blast.maxSpeed * dt).toFixed(3)} m per step`;
+        if (blast.maxSpeed * dt > SWEEP_REACH) issues.push({ code: 'tunnelling', message: `${what}, more than the engines' contact search reaches (${SWEEP_REACH} m)` });
+        else if (engine === 'rapier' && blast.maxSpeed * dt > 0.8 * 2 * thin) issues.push({ code: 'tunnelling', message: `${what}, more than 0.8 x twice the thinnest body ${thin.toFixed(3)} m: a box on Rapier, which has no continuous collision for boxes` });
+      }
     }
     if (m.n === 0) continue;
     if (!arm && item !== 'drop' && isDud(c, mass, 0.5 * mass * v * v)) issues.push({ code: 'dud', warning: true, message: `${item}: one head-on hit at full power (${(0.5 * mass * v * v).toFixed(0)} J) cannot tip any structure body` });

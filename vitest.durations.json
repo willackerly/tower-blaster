@@ -107,6 +107,7 @@
   "packages/physics-gpu/test/engine-restitution-variants.test.ts": 10.8,
   "packages/physics-gpu/test/engine-restitution.test.ts": 114.1,
   "packages/physics-gpu/test/engine-scale.test.ts": 7.5,
+  "packages/physics-gpu/test/engine-tunnel.test.ts": 9.8,
   "packages/physics-gpu/test/engine-settle.test.ts": 20.0,
   "packages/physics-gpu/test/engine-sleep-diff-s14.test.ts": 205.0,
   "packages/physics-gpu/test/engine-sleep-diff-s5.test.ts": 170.0,

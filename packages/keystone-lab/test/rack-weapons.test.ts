@@ -76,10 +76,15 @@ describe('WeaponSpec items: scaled to the level', () => {
   });
 
   it('the validator checks each child and each blast, and reports a bad spec', () => {
-    // The built-in firework's stars leave at up to 45 sqrt(h) + 10 sqrt(h) = 38.9 m/s: through a half-metre cube in a step.
-    expect(validateLevel(c).filter((i) => !i.warning)).toEqual([{ code: 'tunnelling', message: expect.stringMatching(/^w-firework's star moves 0\.648 m per step/) }]);
-    const slow: WeaponSpec = { ...FIREWORK, shell: { ...FIREWORK.shell, speed: [10, 20] } };
-    expect(validateLevel(compileLevel({ ...L1, rack: ['w-slow'], weapons: { slow } })).filter((i) => !i.warning)).toEqual([]);
+    // The built-in firework's stars leave at up to 45 sqrt(h) + 10 sqrt(h) = 38.9 m/s (0.648 m a step): under the sweep
+    // (SWEEP_REACH 0.8 m), and spheres, so not through a half-metre cube on any engine.
+    expect(validateLevel(c).filter((i) => !i.warning)).toEqual([]);
+    // Thrown harder (80 sqrt(h) + 10 sqrt(h) = 63.6 m/s) they would outrun the sweep.
+    const fast: WeaponSpec = { ...FIREWORK, shell: { ...FIREWORK.shell, speed: [10, 80] } };
+    expect(validateLevel(compileLevel({ ...L1, rack: ['w-fast'], weapons: { fast } })).filter((i) => !i.warning)).toEqual([
+      { code: 'tunnelling', message: expect.stringMatching(/^w-fast moves 0\.943 m per step/) },
+      { code: 'tunnelling', message: expect.stringMatching(/^w-fast's star moves 1\.061 m per step/) },
+    ]);
     const bad = { ...CLUSTER, children: { bomblet: { ...CLUSTER.children!.bomblet!, rules: [{ when: { after: -1 }, do: [{ remove: true }] }] } } } as WeaponSpec;
     const issues = validateLevel(compileLevel({ ...L1, rack: ['w-bad'], weapons: { bad } }));
     expect(issues).toContainEqual({ code: 'weapon', message: expect.stringMatching(/^weapons\.bad: /) });
