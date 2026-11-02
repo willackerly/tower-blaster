@@ -59,7 +59,7 @@ describe('viewer under Keystone rules', () => {
     await page.close();
   });
 
-  it('the panel switches a level to Keystone rules, the URL saying so', async (ctx) => {
+  it('the panel switches a level to Keystone rules and the camera motions on, the URL saying so', async (ctx) => {
     if (!browser) return ctx.skip();
     // Tall enough that the panel's rules fields are clear of the presets column.
     const o = await openRules('/?level=L1&engine=rapier&scale=0.5&offscreen=1', { width: 1280, height: 1000 });
@@ -70,12 +70,16 @@ describe('viewer under Keystone rules', () => {
     await page.locator('#scene-form select[name=rules]').selectOption('keystone');
     expect(await page.locator('#scene-form .world').isHidden()).toBe(true);
     await page.locator('#scene-form input[name=slowmo]').check();
+    // The camera moves only when the player moves it unless asked: follow and shake start unticked.
+    for (const k of ['follow', 'shake']) expect(await page.locator(`#scene-form input[name=${k}]`).isChecked(), k).toBe(false);
+    await page.locator('#scene-form input[name=follow]').check();
+    await page.locator('#scene-form input[name=shake]').check();
     expect(await page.locator('#scene-form .out').innerText()).toMatch(/by Keystone's rules on Rapier/);
     await page.locator('#scene-form button[type=submit]').click();
     await page.waitForURL(/rules=keystone/, { timeout: MINUTES });
     await page.waitForFunction(() => window.__viewer?.game?.status === 'running', undefined, { timeout: MINUTES });
-    expect(new URL(page.url()).search).toBe('?level=L1&engine=rapier&offscreen=1&rules=keystone&keystone.slowmo=1');
-    expect(await page.evaluate(() => window.__viewer.game!.feel)).toEqual({ ...DEFAULT_FEEL, slowMo: true });
+    expect(new URL(page.url()).search).toBe('?level=L1&engine=rapier&offscreen=1&rules=keystone&keystone.slowmo=1&keystone.follow=1&keystone.shake=1');
+    expect(await page.evaluate(() => window.__viewer.game!.feel)).toEqual({ ...DEFAULT_FEEL, slowMo: true, follow: true, shake: true });
     expect(errors).toEqual([]);
     await page.close();
   });

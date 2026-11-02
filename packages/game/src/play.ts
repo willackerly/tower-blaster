@@ -49,8 +49,12 @@ export interface GameHandle {
    * time), whether the tail skip is on, and the median step cost the valve reads (ms).
    */
   pace: { timeScale: number; speed: number; tag: string; tailSkip: boolean; costMs: number };
-  /** The camera's orbit target and distance (m) now, and whether the follow camera is moving it (follow.ts; `?keystone.follow=0` off). */
-  view: { target: [number, number, number]; distance: number; following: boolean };
+  /**
+   * The camera's orbit target and distance (m) now, whether the follow camera is moving it (follow.ts; off unless
+   * `?keystone.follow=1`), and the jolt the last drawn frame added to the player's view: its largest shake (rad) or
+   * field-of-view punch (share of the field of view), 0 unless `?keystone.shake=1` (juice.ts).
+   */
+  view: { target: [number, number, number]; distance: number; following: boolean; jolt: number };
   result: LevelScore | null;
   /** Feedback events seen this attempt, by type. */
   counts: Record<string, number>;
@@ -121,7 +125,7 @@ function safetyLimiter(ctx: AudioContext): AudioNode {
 export function newGameHandle(): GameHandle {
   const none = (): SessionState => ({ step: 0, phase: 'loading', strokes: 0, heritageBroken: 0, hash: '' });
   return {
-    status: 'loading', engine: '', level: '', phase: 'loading', ready: false, frames: 0, stepIndex: 0, strokes: 0, bodies: 0, collapse: 0, fast: false, pace: { timeScale: 1, speed: 1, tag: '', tailSkip: false, costMs: NaN }, view: { target: [0, 0, 0], distance: 0, following: false }, result: null, counts: {}, feel: { ...DEFAULT_FEEL }, resultShownAt: null, timing: { loadMs: 0, stepMs: [], moving: [], frameMs: [], costMs: [] }, draws: { drawn: 0, skipped: 0, decimating: false },
+    status: 'loading', engine: '', level: '', phase: 'loading', ready: false, frames: 0, stepIndex: 0, strokes: 0, bodies: 0, collapse: 0, fast: false, pace: { timeScale: 1, speed: 1, tag: '', tailSkip: false, costMs: NaN }, view: { target: [0, 0, 0], distance: 0, following: false, jolt: 0 }, result: null, counts: {}, feel: { ...DEFAULT_FEEL }, resultShownAt: null, timing: { loadMs: 0, stepMs: [], moving: [], frameMs: [], costMs: [] }, draws: { drawn: 0, skipped: 0, decimating: false },
     fire: () => false, bank: () => false, fireOpener: () => false, setMuted: () => {}, maxDpr: 2, aim: () => null, select: () => false, load: async () => {}, retry: async () => {}, capture: async () => null,
     state: none, replay: async () => none(), health: async () => null, pairsPerBody: 0, limitsHit: [],
     sound: () => ({ mode: 'collapse', status: 'off', error: '', posted: 0, stats: null }),
@@ -259,6 +263,8 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
   let lock: Promise<unknown> = Promise.resolve();
   const exclusive = <T>(fn: () => Promise<T>): Promise<T> => { const r = lock.then(fn); lock = r.catch(() => {}); return r; };
   const pacer = new Pacer(), juice = new CameraJuice(), speed = new SpeedMeter(), tail = new TailSkip(), follow = new FollowCam();
+  /** What the last drawn frame added to the view (handle.view.jolt). */
+  let jolt = 0;
   let arrivals = newArrivals();
   let synth: Synth | null = null;
   let muted = env.muted ?? false;
@@ -495,7 +501,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     const s = driver.session;
     const running = s.phase === 'running', v = running ? speed.speed(performance.now()) : 1, costs = handle.timing.costMs;
     handle.pace = { timeScale: running ? pacer.timeScale : 1, speed: v, tag: running && !fastHeld && !handle.fast && !ending && !tail.on ? slowTag(v) : '', tailSkip: tail.on, costMs: median(costs.slice(-60)) };
-    handle.view = { target: [...orbit.target], distance: orbit.distance, following: follow.active };
+    handle.view = { target: [...orbit.target], distance: orbit.distance, following: follow.active, jolt };
   }
 
   /** The physics loop's idle wait: the next frame, or a fire, whichever comes first (physics-loop.ts wakeable). */
@@ -716,8 +722,10 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     if (aimDirty) updateAim();
     sync();
 
-    const shake = juice.update(dt);
+    // The juice runs either way, so switching shake on mid-shot picks up where it stands; the view takes it only when asked.
+    const juiced = juice.update(dt), shake = feel.shake ? juiced : { yaw: 0, pitch: 0, fovScale: 1 };
     const view: Orbit = { ...orbit, yaw: orbit.yaw + shake.yaw, pitch: orbit.pitch + shake.pitch, fovY: orbit.fovY * shake.fovScale };
+    handle.view.jolt = jolt = Math.max(Math.abs(shake.yaw), Math.abs(shake.pitch), 1 - shake.fovScale);
     const o = beads ? beadOverlay(beads, aimed?.reachable ?? true) : null;
     renderer.setOverlay(o?.xyzr ?? new Float32Array(0), o?.colours);
     pendingCapture = null;
