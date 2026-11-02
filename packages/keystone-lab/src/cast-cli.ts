@@ -2,6 +2,7 @@
 //   [--seed N] [--metric collapse|crowns|skyline|score] [--recipe short|full|C,L,M,K,N]
 //   [--out cast.json] [--md cast.md] [--compare other.json] [--max-steps N] [--explore N]
 //   [--cloud-of cast.json [--n 16]] [--budget-min 60] [--pool a.json,b.json]
+//   [--stars-into packages/keystone/src/stars.json]
 // <level>: a built-in level id, or --level-file path.json (a LevelDef), or
 // --scenario S3 --param W=50 ... (the automatic scenario level), or --draft B1a
 // (keystone-lab drafts.ts). --explore N plays N competent lines only and
@@ -19,12 +20,14 @@
 // pools casts of the level (a cast and its recasts) into one set of stars
 // (poolCasts) and prints them as the LevelDef's stars. --budget-min raises the budget gate's
 // 60 min for a level whose cast cannot fit it (10k levels: about 3 h), and the
-// gate's note records the raise. Exits 2 when a gate fails, 4 when a
+// gate's note records the raise. --stars-into stars.json sets the level's stars
+// in the game's stars file (one line per level, the rest kept) once every gate
+// passed, or from --pool: the drop-in that makes new stars show in the game. Exits 2 when a gate fails, 4 when a
 // play hit an engine limit (as bench:browser does).
-import { readFileSync, writeFileSync } from 'node:fs';
-import { compileLevel, type LevelDef, levelById, scenarioLevel, STAR_METRICS, type StarMetric } from '@tb/keystone';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { compileLevel, type LevelDef, levelById, scenarioLevel, STAR_METRICS, type StarMetric, type StarsDef } from '@tb/keystone';
 import { exitNow } from '@tb/testkit';
-import { CAST_BUDGET_MS, castLevel, castMarkdown, cloudCheck, exploreLevel, explorationMarkdown, type CastPlayer, type CastRecipe, type CastResult, compareCasts, FULL_RECIPE, nodeCastPlayer, playsOf, poolCasts, SHORT_RECIPE, withWallTime } from './cast.ts';
+import { CAST_BUDGET_MS, castLevel, castMarkdown, cloudCheck, exploreLevel, explorationMarkdown, type CastPlayer, type CastRecipe, type CastResult, compareCasts, FULL_RECIPE, mergeStarsFile, nodeCastPlayer, playsOf, poolCasts, SHORT_RECIPE, withWallTime } from './cast.ts';
 import { openBrowserCastPlayer } from './cast-browser.ts';
 import { draftByName } from './drafts.ts';
 
@@ -80,7 +83,15 @@ if (flags.has('pool')) {
   console.log(`stars: ${JSON.stringify(p.stars)}`);
   if (flags.has('out')) writeFileSync(flags.get('out')!, JSON.stringify(p, null, 1));
   if (flags.has('md')) writeFileSync(flags.get('md')!, md);
+  intoStarsFile(def.id, p.stars);
   process.exit();
+}
+/** --stars-into path.json: set this level's stars in a stars file (@tb/keystone stars.json), keeping the rest. */
+function intoStarsFile(id: string, stars: StarsDef): void {
+  const file = flags.get('stars-into');
+  if (!file) return;
+  writeFileSync(file, mergeStarsFile(existsSync(file) ? readFileSync(file, 'utf8') : null, id, stars));
+  console.log(`stars for ${id} written to ${file}`);
 }
 const maxSteps = flags.has('max-steps') ? Number(flags.get('max-steps')) : undefined;
 let player: CastPlayer, close = async (): Promise<string[]> => [];
@@ -159,6 +170,9 @@ try {
   if (flags.has('out')) writeFileSync(flags.get('out')!, JSON.stringify(reopens.length ? { ...r, reopens } : r, null, 1));
   if (flags.has('md')) writeFileSync(flags.get('md')!, castMarkdown(r) + reopenNote());
   failed ||= Object.values(r.gates).some((g) => g && !g.pass);
+  // Only a cast that passed every gate lands in the stars file the game reads.
+  if (!failed) intoStarsFile(def.id, r.stars);
+  else if (flags.has('stars-into')) console.log(`--stars-into: not written, a gate failed`);
   limited = !r.gates.limits.pass;
 } finally {
   stuck = await close();
