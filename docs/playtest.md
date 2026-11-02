@@ -20,7 +20,7 @@ A browser without WebGPU gets a card saying to use Chrome or Edge on a desktop, 
 | `pnpm playtest:local` | Serves that build behind the gate in Cloudflare's own runtime (`wrangler pages dev`, local KV) at http://localhost:8788. The password is `PLAYTEST_PASSWORD`, else `local`. |
 | `PLAYTEST_PASSWORD=... pnpm playtest:deploy` | Builds and deploys (see below). |
 | `pnpm playtest:testers` | Prints who entered, as CSV: email, first entry, last entry, number of entries. |
-| `PLAYTEST_PASSWORD=... pnpm playtest:smoke [commit]` | Checks the live site from outside: the form answers 401, the password gets a 303 and a pass, and the pass opens `build.json`, which must name the commit (default `HEAD`). Needs no Cloudflare login. |
+| `PLAYTEST_PASSWORD=... pnpm playtest:smoke [commit]` | Checks the live site from outside. Over HTTP: the form answers 401, the password gets a 303 and a pass, the pass opens `build.json`, which must name the commit (default `HEAD`), and the game page arrives with its isolation headers. Then, in headless Chromium: the front door, Play, the level loading, and the pre-aimed first shot, with no page errors. It runs on Rapier, offscreen and with `progress=off`, so it takes about the same time on any machine. The GPU path is covered by the ci suite. `PLAYTEST_SMOKE_BROWSER=0` skips the browser half, and `PLAYTEST_SMOKE_SHOT=file.png` saves a screenshot. Needs no Cloudflare login. |
 
 Wrangler runs through `npx` at a pinned version (`WRANGLER` in `src/deploy.ts`, 4.151.0), so it is not a repo dependency.
 

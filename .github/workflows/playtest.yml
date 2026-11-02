@@ -19,7 +19,7 @@ jobs:
     name: deploy and smoke
     if: ${{ github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push') }}
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
     env:
       # A custom token with Account: Cloudflare Pages Edit, Workers KV Storage Edit;
       # User: User Details Read, Memberships Read (docs/playtest.md, "Deploying").
@@ -58,5 +58,17 @@ jobs:
         run: pnpm install --frozen-lockfile
       - if: ${{ !steps.tip.outputs.stale }}
         run: pnpm playtest:deploy
+      # The smoke check's browser half opens the game in headless Chromium (Playwright's, as ci uses).
+      - if: ${{ !steps.tip.outputs.stale }}
+        run: pnpm exec playwright install chromium
       - if: ${{ !steps.tip.outputs.stale }}
         run: pnpm playtest:smoke
+        env:
+          PLAYTEST_SMOKE_SHOT: smoke.png
+      - name: Smoke screenshot
+        if: ${{ !cancelled() && !steps.tip.outputs.stale }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: playtest-smoke
+          path: smoke.png
+          if-no-files-found: ignore
