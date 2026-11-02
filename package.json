@@ -27,7 +27,11 @@
     "keystone:bot": "tsx packages/keystone-lab/src/bot-cli.ts",
     "keystone:par": "tsx packages/keystone-lab/src/par-cli.ts",
     "keystone:cast": "tsx packages/keystone-lab/src/cast-cli.ts",
-    "game": "vite packages/game"
+    "game": "vite packages/game",
+    "playtest:build": "tsx packages/playtest/src/build.ts",
+    "playtest:local": "tsx packages/playtest/src/local.ts",
+    "playtest:deploy": "tsx packages/playtest/src/deploy.ts",
+    "playtest:testers": "tsx packages/playtest/src/testers.ts"
   },
   "devDependencies": {
     "@tb/adapter-rapier": "workspace:*",
@@ -43,6 +47,7 @@
     "@tb/metrics": "workspace:*",
     "@tb/physics-gpu": "workspace:*",
     "@tb/physics-ref": "workspace:*",
+    "@tb/playtest": "workspace:*",
     "@tb/render": "workspace:*",
     "@tb/runner": "workspace:*",
     "@tb/scenarios": "workspace:*",

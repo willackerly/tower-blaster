@@ -8,14 +8,16 @@
 // reads too under rules=keystone, so the same link opens in either page.
 // The front door (door.ts, docs/game/front-door.md) opens over a bare URL
 // (?door=auto|1|0); ?keystone.preaim, ?progress, ?sound, ?sharp are its keys.
-import { seriesOf } from '@tb/keystone';
+import { seriesOf, type Shot } from '@tb/keystone';
 import { createDevice } from '@tb/gpu';
 import { lookByName, parseRealOptions, Renderer, SnapshotSource } from '@tb/render';
 import { installDoor, type DoorPage } from './door-page.ts';
 import { doorMode, doorOnLoad, openerFor, preaimMode } from './door.ts';
 import { lookName, onEngine, parseGameParams, withRules } from './params.ts';
 import { browserKeyValue, memoryKeyValue, type ProgressStore, progressStore } from './progress.ts';
+import { bankAfterLine, type SessionFacts, sessionFile, sessionFileName } from './session-file.ts';
 import { type Settings, SettingsStore } from './settings.ts';
+import { NO_WEBGPU_HTML, webgpuMissing } from './support.ts';
 import { type GameHandle, newGameHandle, playKeystone, playLine } from './play.ts';
 import { GAME_HELP, installGameStyles } from './ui.ts';
 
@@ -33,7 +35,9 @@ function fail(e: unknown) {
   handle.status = 'error';
   handle.error = msg;
   errorEl.style.display = 'block';
-  errorEl.textContent = `Error: ${msg}`;
+  // A browser without WebGPU gets an explanation and what to use instead, not a raw error.
+  if (webgpuMissing(msg)) errorEl.innerHTML = NO_WEBGPU_HTML;
+  else errorEl.textContent = `Error: ${msg}`;
   console.error(e);
 }
 
@@ -46,7 +50,7 @@ async function main() {
   window.__progress = progress;
   const settings = new SettingsStore(q.get('progress') === 'off' ? memoryKeyValue() : browserKeyValue() ?? memoryKeyValue(), q);
   const look = lookName(settings.current.look);
-  const door = doorMode(q), preaim = preaimMode(q);
+  const door = doorMode(q), preaim = preaimMode(q), bank = bankAfterLine(q);
   // ?keystone.rack replaces the opening level's rack (its def, so retry keeps it); other levels keep their own.
   // The rule overrides (keystone.scoring, keystone.autobank, physics) apply to every level; stars cast on
   // another engine do not apply (onEngine).
@@ -57,7 +61,11 @@ async function main() {
   handle.engine = engine;
   handle.maxDpr = settings.current.sharp;
 
-  const { device } = await createDevice({ timestamps: false });
+  const { device, adapter } = await createDevice({ timestamps: false });
+  const adapterName = [adapter.info?.vendor, adapter.info?.architecture].filter(Boolean).join(' ');
+  // The playtest build names its commit in build.json (packages/playtest); a dev server has none.
+  let build = '';
+  void fetch('build.json').then((r) => (r.ok ? r.json() : null)).then((b: { commit?: string } | null) => { build = b?.commit ?? ''; }).catch(() => {});
   const renderer = new Renderer(device, offscreen ? { size: [640, 400] } : { canvas });
   const source = new SnapshotSource(device);
   renderer.setSource(source);
@@ -82,6 +90,8 @@ async function main() {
   device.addEventListener('uncapturederror', (e) => fail((e as GPUUncapturedErrorEvent).error.message));
 
   let shown = level.id;
+  // This attempt's shots and how its round ended, for Save session.
+  let attempt: Shot[] = [], ended: SessionFacts | null = null, banked = false;
   await playKeystone({
     canvas, offscreen, device, renderer, source, hud: $('hud'), banner: $('banner'), result: $('result'),
     levels, start, engine, feel, fail, sound, impactsDb, muted: !settings.current.sound,
@@ -90,17 +100,36 @@ async function main() {
     hooks: {
       // The URL follows the level, keeping the other keys; a line and a rack are the level's they were made for.
       loaded: (c) => {
+        attempt = [];
+        ended = null;
+        banked = false;
         if (c.def.id === shown) return;
         shown = c.def.id;
         const u = new URLSearchParams(location.search);
         u.set('level', c.def.id);
         u.delete('keystone.shots');
+        u.delete('keystone.bank');
         // The override stays the opening level's: shown with it, gone from the others.
         if (rack && c.def.id === level.id) u.set('keystone.rack', rack.join(','));
         else u.delete('keystone.rack');
         history.replaceState(null, '', `?${u}`);
       },
-      ended: (c, score) => { if (!c.def.custom) progress.record(c.def.id, c.hash, score); },
+      fired: (shot) => { attempt.push(shot); },
+      banked: () => { banked = true; },
+      ended: (c, score) => {
+        if (!c.def.custom) progress.record(c.def.id, c.hash, score);
+        ended = { level: c.def.id, hash: c.hash, custom: Boolean(c.def.custom), engine, adapter: adapterName, shots: [...attempt], banked, score };
+      },
+    },
+    // The result card's Save session: the round as a file (session-file.ts) with its replay link.
+    onSave: () => {
+      if (!ended || !ended.shots.length) return;
+      const file = sessionFile({ ...ended, build }, location.href);
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(new Blob([`${JSON.stringify(file, null, 1)}\n`], { type: 'application/json' }));
+      a.download = sessionFileName(file);
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(a.href), 10_000);
     },
   }, handle);
   // A level picked at the door while the first was still loading.
@@ -110,6 +139,8 @@ async function main() {
   if (shots) {
     const r = await playLine(handle, shots, true);
     if (!r.ok) console.warn(`keystone.shots: ${r.message}`);
+    // A saved session that banked: bank once the line has settled, if the round is still open.
+    else if (bank && handle.result === null && !handle.bank()) console.warn('keystone.bank: the level could not bank after the line');
   }
 }
 

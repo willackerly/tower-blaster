@@ -47,6 +47,9 @@ importers:
       '@tb/physics-ref':
         specifier: workspace:*
         version: link:packages/physics-ref
+      '@tb/playtest':
+        specifier: workspace:*
+        version: link:packages/playtest
       '@tb/render':
         specifier: workspace:*
         version: link:packages/render
@@ -188,6 +191,8 @@ importers:
   packages/physics-gpu: {}
 
   packages/physics-ref: {}
+
+  packages/playtest: {}
 
   packages/render: {}
 
