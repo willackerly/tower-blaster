@@ -194,7 +194,7 @@ rules the code follows; the doc has the reasoning.
   the texture's mean (its 1x1 level) under the same macro variation, so the
   cut does not show (render.test.ts measures it).
 - Hills on the horizon (`hillsAt`, in `fsSky`): a ridge `hills` degrees high
-  at most (default 1.5), `hillDistance` km away (default 6), its profile a
+  at most (default 1.5, 2.2 since 2026-11-02, see "Hills that read"), `hillDistance` km away (default 6), its profile a
   sum of sines in azimuth so it closes on itself. Slopes face the eye and
   turn sideways with the profile's slope, so a low sun picks out folds; lit
   by the sun and the ambient light in the floor's albedo, and are seen
@@ -202,7 +202,7 @@ rules the code follows; the doc has the reasoning.
   reaches past the hills' distance, the hills hide it.
 - Knobs: `groundMaterial`, `groundDetail` (0: the flat floor, nothing
   sampled), `groundScale`, `groundVariation`, `hills` (0: none),
-  `hillDistance`. Bench variant `real-flat-ground` compiles the ground
+  `hillDistance` (and since 2026-11-02 `hillCover`, `hillRidges`). Bench variant `real-flat-ground` compiles the ground
   material and the hills out (`REAL_GROUND`).
 - Cost on the M5 Max (`real` minus `real-flat-ground`, GPU p50): +0.139 ms
   near 10k, +0.106 ms near 100k, +0.032 ms far 100k. `real` itself: 1.69,
@@ -435,6 +435,59 @@ coloured blotches.
 - World scale helps too (Opus review): at 25 cm cubes the ground tile and
   the haze shrink with the world, which puts gravel at pixel scale from
   the high camera; that conversion lands with the `scale` knob.
+
+## Hills that read (V1 backlog, 2026-11-02)
+
+"Hills faint at default haze." Measured on SwiftShader at a low camera
+(S4, `cam=0,4,0,0.6,0.03,45`): the hills came out at sRGB (139, 134, 128),
+the plain below them at (139, 129, 117) and the sky above at (127, 137,
+149). They were lit with the floor's albedo, bare tan gravel, and at 6 km
+under 40 km visibility a sunlit bare slope is about as bright as the
+horizon sky and the same colour as the plain, so they read as nothing.
+That is physically right for bare ground; real hills read because they are
+covered (scrub, woods: albedo 0.05 to 0.15) and come in layers.
+
+- Cover: the hills' albedo goes from the floor's (`hillCover` 0) to dry
+  scrub's (`HILL_COVER`, linear 0.075, 0.07, 0.045, about a third of the
+  gravel's and still warm) at 1. Default 0.75. Over the lowest quarter of
+  each ridge the cover thins back to bare ground, so the hills rise out of
+  the plain instead of sitting on it with a hard seam.
+- Ridges: `hillRidges` 2 (the default) adds a second ridge in front, at
+  half the distance and 0.55 of the height (`HILL_NEAR`), with a gentler
+  profile of its own (sines at 2, 5, 11, 23 per turn against the far
+  ridge's 3, 7, 13, 29). Through half the air it is darker and warmer; the
+  far ridge behind it is a paler, bluer grey. The two ridges composite
+  front to back (`hillsAt`), each left out where the floor reaches the
+  eye's line first.
+- Height: the default goes from 1.5 to 2.2 degrees. At 1.5 the band is
+  about 12 pixels at 1280x800 and the far ridge barely shows over the near
+  one.
+- At low camera after: near ridge (121, 116, 105), far ridge (110, 111,
+  112), plain (138, 131, 121), sky (127, 137, 149). `hillCover` 0 and
+  `hillRidges` 1 draw the old hills bit for bit (the far ridge's profile
+  and slope constants are the old literals; checked on frames of main and
+  this change: no differing pixel in the sky or the hills).
+- Reviewed by a second model on before/after renders in two rounds
+  (`/mnt/project-files/visual-backlog/hills/`). Round 1 found the first cut
+  (olive woods 0.05, 0.065, 0.04 at 0.8, patches of woods and clearings,
+  1.5 degrees) pasted on: a hard seam, the wrong colour for a gravel
+  plain, diagonal stripes in the patches. Round 2 found the patches
+  invisible once they were made horizontal and gentle, so they were cut
+  (no work for nothing).
+- Rejected: raising the haze's contrast or darkening the hills by a fudge
+  factor (the atmosphere model is right; the albedo was the wrong input);
+  more height alone (a taller bright band is still a band of the plain's
+  colour); noise-textured hills (sub-pixel at 6 km from most cameras).
+- Cost: one more ridge evaluation (an atan2, an asin, eight sines and
+  cosines, a fog lookup) on sky pixels below the ridge line only; bench
+  variant `real-bare-hills` (the old hills) against `real` measures it.
+  The near world sees the horizon at the top of the frame; the far world
+  does not (cost 0 by construction). M5 to be measured.
+- Tests: render-real-ground "scrub cover and a nearer ridge": the default
+  hills twice as far from the sky as bare ones (1.9x measured), darker
+  than the sky in every channel by 30+, red over blue; the second ridge
+  darkens 8 degree hills by 15+ per channel; the sky above every ridge as
+  without hills.
 
 ## Floor and ambient (fixes after the stone step's screenshots)
 

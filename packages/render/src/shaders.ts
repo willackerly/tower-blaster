@@ -55,7 +55,7 @@ export const Frame = defineStruct('Frame', [
   ['aoFloorSky', 'vec4f', 'real look: floor sky map placement, uv = (rel.xz - xy) * zw (AoVolume.floorSkyFrame)'],
   ['ground', 'vec4f', 'real look: ground layer (materials.ts), texture scale, texture strength (0: none, nothing sampled), macro variation'],
   ['groundShape', 'vec4f', 'real look: ground relief (m, the coarse macro scale\'s; half that at the next), patch threshold (macro value; above 1: no patches), shadow fill (x the ground radiance added to the sky light), unused'],
-  ['hills', 'vec4f', 'real look: horizon hills\' greatest height (radians, 0: none) and distance (m)'],
+  ['hills', 'vec4f', 'real look: horizon hills\' greatest height (radians, 0: none), distance (m), cover (0 bare to 1 dry scrub) and ridges (1 or 2)'],
   ['debris', 'vec4f', 'real look: dust puff size (m, fully grown), puff opacity, chip size (m), unused'],
   ['shadowSoft', 'vec4f', 'real look: tan of the penumbra half angle (0: 3x3 taps), blocker search radius (texels), light depth range (m), steepest receiver plane (depth per uv)'],
   ['hallLook', 'vec4f', 'real look, hall: 1 while the eye is inside it, 2 outside it with its exterior on (else it is not drawn), metres per world unit, glass milkiness, iron grey'],
@@ -436,25 +436,49 @@ fn groundFar(p: vec2f, pxM: f32) -> GroundHit {
 // high, hills.y metres away, its profile a sum of sines in azimuth (so it
 // closes on itself). Their slopes face the eye, tilted 27 degrees, and turn
 // sideways with the profile's own slope, so a low sun picks out the folds;
-// lit by the sun and the ambient light in the floor's albedo, seen through
-// hills.y metres of air. rgb, and coverage (the ridge antialiased over a
-// pixel). Most sky pixels are above every ridge and return at once.
-fn hillsAt(dir: vec3f, pxA: f32) -> vec4f {
-  if (dir.y > sin(fr.hills.x) + pxA) { return vec4f(0.0); }
+// lit by the sun and the ambient light, seen through hills.y metres of air.
+// Their albedo goes from the floor's (hills.z 0, bare ground) to HILL_COVER's
+// (1: dry scrub); hills.w ridges (1 or 2), the second HILL_NEAR as far and
+// as high, in front, with a gentler profile of its own. rgb, and coverage
+// (the ridges antialiased over a pixel). Most sky pixels are above every
+// ridge and return at once.
+const HILL_COVER = vec3f(0.075, 0.07, 0.045); // linear albedo of dry scrub seen from a few km: darker than bare ground, still warm
+const HILL_NEAR = vec2f(0.5, 0.55); // the near ridge's distance and height, as shares of the far one's
+// A ridge's profile: amplitudes (shares of H) of sines in azimuth at frequencies f (whole numbers, so it closes), and
+// amp * f (the slope's coefficients, given so the far ridge is the one before 2026-11-02 to the bit), phases ph.
+struct Ridge { f: vec4f, amp: vec4f, slope: vec4f, ph: vec4f }
+fn ridgeAt(dir: vec3f, pxA: f32, H: f32, D: f32, r: Ridge) -> vec4f {
   let az = atan2(dir.x, -dir.z);
-  let H = fr.hills.x;
-  let ridge = H * (0.55 + 0.2 * sin(3.0 * az + 1.3) + 0.15 * sin(7.0 * az + 0.4) + 0.07 * sin(13.0 * az + 2.1) + 0.03 * sin(29.0 * az + 0.7));
-  let cover = 1.0 - smoothstep(ridge - pxA, ridge + pxA, asin(clamp(dir.y, -1.0, 1.0)));
+  let ridge = H * (0.55 + r.amp.x * sin(r.f.x * az + r.ph.x) + r.amp.y * sin(r.f.y * az + r.ph.y) + r.amp.z * sin(r.f.z * az + r.ph.z) + r.amp.w * sin(r.f.w * az + r.ph.w));
+  let el = asin(clamp(dir.y, -1.0, 1.0));
+  let cover = 1.0 - smoothstep(ridge - pxA, ridge + pxA, el);
   if (cover <= 0.0) { return vec4f(0.0); }
   // d ridge / d azimuth: the hillside's slope across the line of sight (height and width both scale with the distance).
-  let lateral = H * (0.6 * cos(3.0 * az + 1.3) + 1.05 * cos(7.0 * az + 0.4) + 0.91 * cos(13.0 * az + 2.1) + 0.87 * cos(29.0 * az + 0.7));
+  let lateral = H * (r.slope.x * cos(r.f.x * az + r.ph.x) + r.slope.y * cos(r.f.y * az + r.ph.y) + r.slope.z * cos(r.f.z * az + r.ph.z) + r.slope.w * cos(r.f.w * az + r.ph.w));
   let back = -dir.xz / max(length(dir.xz), 1e-6);
   let down = vec2f(-back.y, back.x); // toward decreasing azimuth: downhill where lateral > 0
   // The profile's slope is the silhouette's, gentler than the slopes in front of it: 8x.
   let tilt = 0.5 * back + 8.0 * lateral * down;
   let n = normalize(vec3f(tilt.x, 1.0, tilt.y));
-  let lit = fr.floor * (mix(atmoAmbient[1].rgb, atmoAmbient[0].rgb, n.y * 0.5 + 0.5) + fr.sunColor * max(dot(n, fr.sun), 0.0));
-  return vec4f(fog(lit, dir * fr.hills.y), cover);
+  // The cover thins to bare ground (the floor's) over the lowest quarter of the ridge, so the hills rise out of the plain without a seam.
+  let foot = smoothstep(0.0, 0.25, el / max(ridge, 1e-6));
+  let albedo = mix(fr.floor, HILL_COVER, fr.hills.z * foot);
+  let lit = albedo * (mix(atmoAmbient[1].rgb, atmoAmbient[0].rgb, n.y * 0.5 + 0.5) + fr.sunColor * max(dot(n, fr.sun), 0.0));
+  return vec4f(fog(lit, dir * D), cover);
+}
+// Both ridges over what lies behind them, as mix(behind, rgb, a). A ridge is
+// left out where the floor reaches the eye's line before it (a high eye).
+fn hillsAt(dir: vec3f, pxA: f32, hEye: f32, below: bool) -> vec4f {
+  if (dir.y > sin(fr.hills.x) + pxA) { return vec4f(0.0); }
+  var far = vec4f(0.0);
+  if (!(below && hEye < -dir.y * fr.hills.y)) { far = ridgeAt(dir, pxA, fr.hills.x, fr.hills.y, Ridge(vec4f(3.0, 7.0, 13.0, 29.0), vec4f(0.2, 0.15, 0.07, 0.03), vec4f(0.6, 1.05, 0.91, 0.87), vec4f(1.3, 0.4, 2.1, 0.7))); }
+  if (fr.hills.w < 1.5) { return far; }
+  let D = fr.hills.y * HILL_NEAR.x;
+  var near = vec4f(0.0);
+  if (!(below && hEye < -dir.y * D)) { near = ridgeAt(dir, pxA, fr.hills.x * HILL_NEAR.y, D, Ridge(vec4f(2.0, 5.0, 11.0, 23.0), vec4f(0.25, 0.15, 0.08, 0.02), vec4f(0.5, 0.75, 0.88, 0.46), vec4f(4.4, 2.9, 5.3, 1.9))); }
+  let a = 1.0 - (1.0 - near.a) * (1.0 - far.a);
+  if (a <= 0.0) { return vec4f(0.0); }
+  return vec4f((near.a * near.rgb + (1.0 - near.a) * far.a * far.rgb) / a, a);
 }
 
 // Aerial perspective: the surface through d metres of air. The LUT holds
@@ -1267,8 +1291,8 @@ struct SOut { @builtin(position) clip: vec4f, @location(0) ndc: vec2f }
   let below = dir.y < 0.0 && hEye > 0.0;
   // Hills on the horizon, where the floor does not reach them first.
   var hill = vec4f(0.0);
-  if (REAL_GROUND && fr.hills.x > 0.0 && !(below && hEye < -dir.y * fr.hills.y)) {
-    hill = hillsAt(dir, pxA);
+  if (REAL_GROUND && fr.hills.x > 0.0) {
+    hill = hillsAt(dir, pxA, hEye, below);
     if (hill.a >= 1.0) { return vec4f(hill.rgb, 1.0); }
   }
   // Below the horizon, the floor goes on past the floor polygon's reach: the same shading, through more air.
