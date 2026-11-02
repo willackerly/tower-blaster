@@ -165,6 +165,8 @@ export interface KeystoneHooks {
   fired?(shot: Shot, feedback: Feedback[], d: Driver): void;
   /** One driver step ran; d.snapshot is of engine step d.snapshotStep. */
   stepped?(feedback: Feedback[], d: Driver): void;
+  /** The round is over and scored (the result card's tally): a page records progress here. */
+  ended?(c: CompiledLevel, score: LevelScore, d: Driver): void;
 }
 
 export interface KeystoneEnv {
@@ -439,6 +441,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
           handle.result = f.score;
           ending = false;
           showResult(f.score);
+          hooks.ended?.(c, f.score, driver);
           // The round is over: check its limits once this step is done (checkRound).
           void exclusive(checkRound).catch(fail);
           break;

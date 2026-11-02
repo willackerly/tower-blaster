@@ -10,3 +10,4 @@ export * from './engines.ts';
 export * from './ui.ts';
 export * from './params.ts';
 export * from './sound-map.ts';
+export * from './progress.ts';

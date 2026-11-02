@@ -11,7 +11,7 @@
 // the best line. T2 = median of the competent ends, T3 = lower quartile of the
 // nudge cloud, both rounded toward easier to two significant figures.
 import type { Vec3 } from '@tb/engine-api';
-import { aimAt, castPlay, type CastPlay, type CastSample, type CompiledLevel, compileLevel, isLaunchItem, type LevelDef, type RackItem, readShots, sampleValue, type Shot, type StarMetric, type StarsDef, writeShots } from '@tb/keystone';
+import { aimAt, castPlay, checkStars, type CastPlay, type CastSample, type CompiledLevel, compileLevel, isLaunchItem, type LevelDef, type RackItem, readShots, sampleValue, type Shot, type StarMetric, type StarsDef, writeShots } from '@tb/keystone';
 import { type EngineSpec, engineSubsteps, makeEngine } from './engines.ts';
 import { quantile } from './probe.ts';
 
@@ -653,4 +653,18 @@ export function explorationMarkdown(e: Exploration, extra = ''): string {
     `Steps per play P50 ${e.steps.p50}, max ${e.steps.max}; plays with a limit hit ${e.limited}, out of steps ${e.incomplete}.`,
     '',
   ].join('\n');
+}
+
+/**
+ * The text of a stars file (@tb/keystone stars.json: level id -> StarsDef) with level `id`'s stars set to
+ * `stars`, one level per line in id order, so a cast's drop-in is a one-line diff. The file's other entries
+ * are kept as they are (each must still be valid stars); `text` empty or absent starts a new file.
+ */
+export function mergeStarsFile(text: string | null, id: string, stars: StarsDef): string {
+  const all = text?.trim() ? JSON.parse(text) as Record<string, unknown> : {};
+  if (typeof all !== 'object' || all === null || Array.isArray(all)) throw new Error('stars file: not an object of level id -> stars');
+  all[id] = checkStars(stars, `stars for ${id}`);
+  const ids = Object.keys(all).sort((a, b) => a.localeCompare(b, 'en', { numeric: true }));
+  const line = (o: StarsDef) => `{ ${Object.entries(o).map(([k, v]) => `${JSON.stringify(k)}: ${JSON.stringify(v)}`).join(', ')} }`;
+  return `{\n${ids.map((k) => ` ${JSON.stringify(k)}: ${line(checkStars(all[k], `stars file ${k}`))}`).join(',\n')}\n}\n`;
 }

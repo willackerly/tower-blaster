@@ -6,14 +6,25 @@
 // The building blocks here (outcomeLevel, thirdBondWall, BOMB, RAM) are shared
 // with the drafts so a draft that wins becomes a level unchanged.
 import { DEFAULT_GRENADE, grenadeAsSpec, type WeaponSpec } from '@tb/weapons';
-import type { LevelDef, Part } from './level.ts';
+import { checkStars, type LevelDef, type Part, type StarsDef } from './level.ts';
 import { readShots } from './shots.ts';
 import { buildScenario } from '@tb/scenarios';
 import type { ScenarioPart } from './scenario-part.ts';
 import type { MaterialName } from './materials.ts';
 import type { RackItem } from './rack.ts';
+import CAST_STARS from './stars.json' with { type: 'json' };
 
 type V2 = [number, number];
+
+/**
+ * Every big level's cast stars by id (stars.json): the file a cast writes (pnpm keystone:cast <id>
+ * --stars-into packages/keystone/src/stars.json), so new stars drop in without a code change. A
+ * level absent from it plays uncast (only the objective's star).
+ */
+export const STARS_FILE: Readonly<Record<string, StarsDef>> = Object.fromEntries(Object.entries(CAST_STARS as Record<string, unknown>).map(([id, s]) => [id, checkStars(s, `stars.json ${id}`)]));
+
+/** The `stars` field for level `id` from stars.json, or nothing when it has none yet. */
+export const castOf = (id: string): { stars?: StarsDef } => (STARS_FILE[id] ? { stars: STARS_FILE[id] } : {});
 
 /**
  * An outcome level whose lot reaches 3 cells inside the launcher ring (every shot is live from
@@ -65,7 +76,7 @@ export const B1: LevelDef = outcomeLevel('B1', 'Long Wall', thirdBondWall(40, 25
   // every gate passed on both, recast |T3 1 - T3 2| 0.0015 < 0.0044. docs/game/levels/B1.md.
   // The showcase (solutions.ace) is seed 1's best line: its 50 nudges ended at collapse 0.895 to 0.955.
   solutions: { ace: readShots('w-bomb.521.8.54.372.66_w-bomb.607.8.-192.247.95_w-bomb.195.8.-230.127.91') },
-  stars: { metric: 'collapse', t2: 0.7, t3: 0.94, best: 0.9583025426945702, castOn: 'apple metal-3', engine: 'gpu', hash: '18cf21360845bb8b', n: 372, seed: 1 },
+  ...castOf('B1'),
 });
 
 /**
@@ -88,6 +99,8 @@ export function cityLevel(id: string, name: string, material: MaterialName, F: n
 export const B3: LevelDef = cityLevel('B3', 'Ten Thousand', 'stone', 5, 3, ['w-bomb', 'w-bomb', 'w-bomb'], {
   objective: { kind: 'collapse', min: 0.4 },
   weapons: { bomb: BOMB },
+  // Uncast: its cast (pnpm keystone:cast B3 --budget-min 200 --stars-into packages/keystone/src/stars.json) adds it to stars.json.
+  ...castOf('B3'),
 });
 
 /** B2's town: S14, 25 towers 4 x 4 cubes and up to 16 high (heights varied 40%), streets 4, seed 3: 5,184 plaster cubes. */
@@ -141,7 +154,7 @@ export const B2: LevelDef = cathedralLevel('B2', ['w-bomb', 'w-ram', 'w-ram'], {
   // Seed 2 is queued as the recast; its stars will be pooled with these. docs/game/levels/B2.md.
   // The showcase (solutions.ace) is seed 1's best line: its 50 nudges ended at score 1,791 to 3,711.
   solutions: { ace: readShots('w-bomb.500.8.155.173.79_w-ram.711.8.273.259.95_w-ram.528.8.216.481.80') },
-  stars: { metric: 'score', t2: 770, t3: 3200, best: 3805, castOn: 'apple metal-3', engine: 'gpu', hash: 'c75fbd9832e6814b', n: 186, seed: 1 },
+  ...castOf('B2'),
 });
 
 /** The slice's levels in play order (the game's series when one of them is opened). */
