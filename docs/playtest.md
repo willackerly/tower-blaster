@@ -20,6 +20,7 @@ A browser without WebGPU gets a card saying to use Chrome or Edge on a desktop, 
 | `pnpm playtest:local` | Serves that build behind the gate in Cloudflare's own runtime (`wrangler pages dev`, local KV) at http://localhost:8788. The password is `PLAYTEST_PASSWORD`, else `local`. |
 | `PLAYTEST_PASSWORD=... pnpm playtest:deploy` | Builds and deploys (see below). |
 | `pnpm playtest:testers` | Prints who entered, as CSV: email, first entry, last entry, number of entries. |
+| `PLAYTEST_PASSWORD=... pnpm playtest:smoke [commit]` | Checks the live site from outside: the form answers 401, the password gets a 303 and a pass, and the pass opens `build.json`, which must name the commit (default `HEAD`). Needs no Cloudflare login. |
 
 Wrangler runs through `npx` at a pinned version (`WRANGLER` in `src/deploy.ts`, 4.151.0), so it is not a repo dependency.
 
@@ -44,6 +45,20 @@ What `deploy.ts` does, in order. Each step is skipped when an earlier run alread
 The password is never in the repo or the bundle. It lives only in the Pages secret. Later deploys are the same command.
 
 **Rollback:** in the Cloudflare dashboard, open Workers & Pages, then the project, then Deployments, and pick "Rollback" on an earlier deployment. Alternatively, check out an earlier commit and deploy again.
+
+## Automated deploys
+
+`.github/workflows/playtest.yml` deploys main after every push whose `ci` run goes green, then runs `pnpm playtest:smoke` against the live site, so a deploy that does not serve the new commit behind the gate fails the run. It checks out the commit `ci` tested. When main has already moved past that commit (runs can finish out of order), it skips the deploy and leaves it to the newer commit's run. One deploy runs at a time. "Run workflow" on the Actions tab redeploys main by hand.
+
+It needs these in the repo's settings (Settings, Secrets and variables, Actions). Until they are set, the run fails at its first step and names what is missing.
+
+| Name | Kind | Value |
+|---|---|---|
+| `CLOUDFLARE_API_TOKEN` | secret | A custom token with the permissions in step 2 above. Create it in the Cloudflare dashboard under My Profile, API Tokens. |
+| `CLOUDFLARE_ACCOUNT_ID` | variable | The account ID that `wrangler whoami` prints. |
+| `PLAYTEST_PASSWORD` | secret | The playtest password. Every deploy sets `GATE_PASSWORD` from it, so changing this secret changes the password at the next deploy. |
+
+The smoke check signs in as `ci-smoke@tower-blaster.invalid`. That key shows up in the KV namespace, but `pnpm playtest:testers` leaves it out.
 
 ## The gate
 

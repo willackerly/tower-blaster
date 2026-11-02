@@ -8,6 +8,7 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { buildPlaytest, headersFile } from '../src/build.ts';
 import { hasProject, loggedIn, namespaceId, testersTitle, wranglerToml } from '../src/deploy.ts';
+import { SMOKE_EMAIL } from '../src/smoke.ts';
 import { testersCsv } from '../src/testers.ts';
 
 describe('playtest build', () => {
@@ -76,5 +77,8 @@ describe('testers list', () => {
   });
   it('quotes a cell that needs it', () => {
     expect(testersCsv(JSON.stringify([{ name: 'tester:"a,b"@c.d', metadata: {} }]))).toContain('"""a,b""@c.d",,,');
+  });
+  it('leaves out the smoke check\'s sign-ins', () => {
+    expect(testersCsv(JSON.stringify([{ name: `tester:${SMOKE_EMAIL}`, metadata: {} }]))).toBe('email,first,last,entries\n');
   });
 });

@@ -31,7 +31,8 @@
     "playtest:build": "tsx packages/playtest/src/build.ts",
     "playtest:local": "tsx packages/playtest/src/local.ts",
     "playtest:deploy": "tsx packages/playtest/src/deploy.ts",
-    "playtest:testers": "tsx packages/playtest/src/testers.ts"
+    "playtest:testers": "tsx packages/playtest/src/testers.ts",
+    "playtest:smoke": "tsx packages/playtest/src/smoke.ts"
   },
   "devDependencies": {
     "@tb/adapter-rapier": "workspace:*",

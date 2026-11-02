@@ -4,12 +4,13 @@
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { DEFAULT_PROJECT, jsonArray, namespaceId, testersTitle, WRANGLER } from './deploy.ts';
+import { SMOKE_EMAIL } from './smoke.ts';
 
 interface KeyRow { name: string; metadata?: { first?: string; last?: string; entries?: number } }
 
-/** CSV of the testers in `wrangler kv key list` output (a JSON array), first entry first. */
+/** CSV of the testers in `wrangler kv key list` output (a JSON array), first entry first, without the smoke check's sign-ins. */
 export function testersCsv(listJson: string): string {
-  const rows = jsonArray<KeyRow>(listJson).filter((k) => k.name.startsWith('tester:'));
+  const rows = jsonArray<KeyRow>(listJson).filter((k) => k.name.startsWith('tester:') && k.name !== `tester:${SMOKE_EMAIL}`);
   rows.sort((a, b) => (a.metadata?.first ?? '').localeCompare(b.metadata?.first ?? ''));
   const cell = (s: string) => (/[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s);
   return ['email,first,last,entries', ...rows.map((k) => [k.name.slice('tester:'.length), k.metadata?.first ?? '', k.metadata?.last ?? '', String(k.metadata?.entries ?? '')].map(cell).join(','))].join('\n') + '\n';
