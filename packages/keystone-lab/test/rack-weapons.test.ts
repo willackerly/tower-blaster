@@ -50,7 +50,7 @@ describe('WeaponSpec items: scaled to the level', () => {
   });
 
   it('counts its whole budget: bodies (capacity, the GPU\'s room), every blast with how often it goes off, and the yield of them all', () => {
-    for (const [key, spec] of Object.entries(BUILTIN_WEAPONS) as [string, WeaponSpec][]) {
+    for (const [key, spec] of Object.entries({ firework: FIREWORK, cluster: CLUSTER }) as [string, WeaponSpec][]) {
       const arm = c.arms[`w-${key}`]!;
       expect(arm.bodies, key).toBe(weaponBudget(spec).bodies);
       expect(arm.blasts.map((x) => x.count), key).toEqual(weaponBudget(spec).blasts.map((x) => x.count));

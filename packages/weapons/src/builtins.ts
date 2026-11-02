@@ -38,5 +38,23 @@ export const CLUSTER: WeaponSpec = {
 /** The built-in grenade as a spec (Grenades' DEFAULT_GRENADE, in a 0.2-radius iron ball). */
 export const GRENADE_WEAPON: WeaponSpec = grenadeAsSpec(DEFAULT_GRENADE, { shape: { kind: 'sphere', radius: 0.2 }, density: 8, speed: [5, 40] });
 
-/** By name: the viewer's proj.weapon values besides grenade (which keeps its own grenade.* knobs). */
-export const BUILTIN_WEAPONS: Readonly<Record<string, WeaponSpec>> = { firework: FIREWORK, cluster: CLUSTER };
+/**
+ * The viewer's grenade in sizes, each 4x the energy of the last: S 1/4, M 1, L 4, XL 16 grenades. A
+ * bigger one reaches further, not harder: the blast's radius grows as the cube root of the energy
+ * (yield goes as radius cubed when the falloff is the same shape) and the kick at a given fraction of
+ * the radius stays DEFAULT_GRENADE's, so every size keeps its maxDv and maxSpeed (under the sweep).
+ * Radii are written out (5 x 4^(k/3), rounded) since Math.cbrt is not the same on every machine; the
+ * shells grow alike. Rack names w-grenades, w-grenadem, w-grenadel, w-grenadexl.
+ */
+export const GRENADE_SIZES = { grenades: 0.25, grenadem: 1, grenadel: 4, grenadexl: 16 } as const;
+const sized = (name: keyof typeof GRENADE_SIZES, radius: number, shell: number): WeaponSpec =>
+  grenadeAsSpec({ ...DEFAULT_GRENADE, blast: { ...DEFAULT_GRENADE.blast, radius } }, { shape: { kind: 'sphere', radius: shell }, density: 8, speed: [5, 40] }, name);
+export const GRENADE_S = sized('grenades', 3.15, 0.13);
+export const GRENADE_M = sized('grenadem', 5, 0.2);
+export const GRENADE_L = sized('grenadel', 7.94, 0.32);
+export const GRENADE_XL = sized('grenadexl', 12.6, 0.5);
+
+/** By name: the viewer's proj.weapon values besides grenade (which keeps its own grenade.* knobs), and the rack's w-<name> defaults. */
+export const BUILTIN_WEAPONS: Readonly<Record<string, WeaponSpec>> = {
+  firework: FIREWORK, cluster: CLUSTER, grenades: GRENADE_S, grenadem: GRENADE_M, grenadel: GRENADE_L, grenadexl: GRENADE_XL,
+};

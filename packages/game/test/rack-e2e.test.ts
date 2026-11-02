@@ -13,11 +13,14 @@ import { gamePage } from './page.ts';
 
 const game = gamePage();
 
-/** Two loads that between them fire every item once (L1 has no weapons of its own: w-grenade is KEYSTONE_GRENADE, the others @tb/weapons' built-ins). */
+/** Three loads that between them fire every item once (L1 has no weapons of its own: w-grenade is KEYSTONE_GRENADE, the others @tb/weapons' built-ins). */
 const RACKS: RackItem[][] = [
   ['marble', 'cannonball', 'drop', 'w-grenade', 'p-beachball', 'p-bowlingball', 'p-wreckingball', 'p-boulder'],
-  ['cue', 'p-basketball', 'p-cannonball', 'w-firework', 'w-cluster'],
+  ['cue', 'p-basketball', 'p-cannonball', 'w-firework', 'w-cluster', 'w-grenades', 'w-grenadem', 'w-grenadel'],
+  ['w-grenadexl'],
 ];
+/** Blasts each load sets off: the grenade's one; 12 stars, 6 bomblets and three sized grenades; the XL grenade. */
+const BLASTS = [1, 12 + 6 + 3, 1];
 
 /** A miss: launched sideways from azimuth 0 (clear of the ground, however big), or a drop or cue push 20 cells off the lot. */
 function miss(c: ReturnType<typeof compileLevel>, ammo: RackItem): Shot {
@@ -33,7 +36,7 @@ describe('every rack item on the game page', () => {
     for (const r of RACKS) expect(r.length).toBeLessThanOrEqual(MAX_RACK);
   });
 
-  for (const rack of RACKS) {
+  for (const [k, rack] of RACKS.entries()) {
     it(`fires ${rack.join(', ')}: each settles, the level fails with the rack empty, and the page replays it (Rapier)`, async (ctx) => {
       if (!game.browser()) return ctx.skip();
       const c = compileLevel({ ...L1, rack });
@@ -52,7 +55,7 @@ describe('every rack item on the game page', () => {
       const counts = await page.evaluate(() => window.__game.counts);
       // Every blast a weapon can set off goes off (each built-in's munitions all blast before they go).
       const blasts = rack.reduce((a, x) => a + (c.arms[x]?.blasts.reduce((b, y) => b + y.count, 0) ?? 0), 0);
-      expect(blasts).toBe(rack.includes('w-grenade') ? 1 : 12 + 6);
+      expect(blasts).toBe(BLASTS[k]);
       expect({ fired: counts.fired, blast: counts.blast ?? 0 }).toEqual({ fired: line.length, blast: blasts });
       expect(await page.evaluate((s) => window.__game.replay(s), line)).toEqual(live);
       expect(errors).toEqual([]);

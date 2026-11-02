@@ -2,7 +2,7 @@
 // lattice of cubes, and its scaling laws (spectacle-mode.md section 11, G3.3).
 import { describe, expect, it } from 'vitest';
 import { blastArea, blastVelocity, checkBlast } from '@tb/engine-api';
-import { BUILTIN_WEAPONS, CLUSTER, CUBE_FILL, DEFAULT_GRENADE, FIREWORK, GRENADE_WEAPON, GRENADE_YIELD, grenadeEnergies, type GrenadeBlast, nominalYield, weaponYield, YIELD_SHELLS } from '@tb/weapons';
+import { BUILTIN_WEAPONS, CLUSTER, CUBE_FILL, DEFAULT_GRENADE, FIREWORK, GRENADE_L, GRENADE_M, GRENADE_S, GRENADE_SIZES, GRENADE_WEAPON, GRENADE_XL, GRENADE_YIELD, grenadeEnergies, type GrenadeBlast, nominalYield, weaponYield, YIELD_SHELLS } from '@tb/weapons';
 
 /** Kinetic energy blastVelocity gives a cubic lattice of resting cubes (edge h, pitch p, density rho) around `centre`. */
 function latticeEnergy(blast: GrenadeBlast, h: number, p: number, rho: number, centre: [number, number, number]): number {
@@ -79,13 +79,30 @@ describe('one energy unit for every weapon: grenades', () => {
     expect(weaponYield(FIREWORK, CUBE_FILL)).toBe(12 * nominalYield({ radius: b.radius, impulse: b.impulse, falloff: b.falloff, core: b.core, maxDv: b.maxDv, maxSpeed: b.maxSpeed }, CUBE_FILL));
     expect(weaponYield({ ...FIREWORK, children: {}, rules: [] }, CUBE_FILL)).toBe(0);
   });
-  it('every built-in carries one grenade, within 1% (firework 1.004, cluster 0.994; they were 0.39 and 0.80)', () => {
-    for (const [name, spec] of Object.entries(BUILTIN_WEAPONS)) {
+  it('the firework and the cluster carry one grenade each, within 1% (1.004 and 0.994; they were 0.39 and 0.80)', () => {
+    for (const [name, spec] of Object.entries({ firework: FIREWORK, cluster: CLUSTER })) {
       const g = grenadeEnergies(spec);
       console.log(`${name}: ${g.toFixed(4)} grenades`);
       expect(Math.abs(g - 1), name).toBeLessThan(0.01);
     }
     expect(grenadeEnergies(FIREWORK)).toBeCloseTo(1.004, 3);
     expect(grenadeEnergies(CLUSTER)).toBeCloseTo(0.994, 3);
+  });
+});
+
+describe('grenade sizes', () => {
+  it('S, M, L, XL carry 1/4, 1, 4 and 16 grenades (within 1%), reaching further with the same kick', () => {
+    const sizes = { grenades: GRENADE_S, grenadem: GRENADE_M, grenadel: GRENADE_L, grenadexl: GRENADE_XL };
+    for (const [name, spec] of Object.entries(sizes) as [keyof typeof GRENADE_SIZES, typeof GRENADE_S][]) {
+      expect(spec.name).toBe(name);
+      expect(BUILTIN_WEAPONS[name]).toBe(spec);
+      expect(Math.abs(grenadeEnergies(spec) / GRENADE_SIZES[name] - 1), name).toBeLessThan(0.01);
+      const b = spec.rules[0]!.do[0]!;
+      if (!('blast' in b)) throw new Error('not a blast');
+      expect({ ...b.blast, radius: 0 }, name).toEqual({ ...DEFAULT_GRENADE.blast, radius: 0 });
+    }
+    expect(grenadeEnergies(GRENADE_M)).toBe(1);
+    // M is the viewer grenade itself (the B levels' bomb's blast) in GRENADE_WEAPON's shell.
+    expect(GRENADE_M.rules).toEqual(GRENADE_WEAPON.rules);
   });
 });

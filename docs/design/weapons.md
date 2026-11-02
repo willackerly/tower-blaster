@@ -71,6 +71,7 @@ A    = a quarter of the body's surface (its mean silhouette): 2 (hx hy + hy hz +
 | viewer grenade (`DEFAULT_GRENADE`), `GRENADE_WEAPON`, B1 to B3's `bomb` | 1 | the unit |
 | `firework` (12 stars, radius 3, impulse 18.5) | 1.004 | 0.389 before 2026-11-02 (radius 2.5, impulse 15) |
 | `cluster` (6 bomblets, radius 3, impulse 30) | 0.994 | 0.800 before (impulse 25) |
+| `grenades`, `grenadem`, `grenadel`, `grenadexl` (`GRENADE_SIZES`: the viewer grenade with its radius 3.15, 5, 7.94, 12.6; same kick, so it reaches further rather than harder) | 0.25, 1, 4, 16 | rack `w-grenades` .. `w-grenadexl`, viewer `proj.weapon=grenadel` |
 | `KEYSTONE_GRENADE` (w-grenade's default; SI, not scaled with the block) | 0.013 on 0.5 m plaster, 0.002 on 0.5 m stone | the "firework costs 30 grenades" figure was against this one |
 
 On a level's page in the viewer's sandbox (`?level=B1&proj.weapon=grenade`, or `firework`, `cluster`, a `weapon.def`), cube units stand for the level's commonest block too (`inLevelGrenade`, `inLevelWeapon` with `cubeScale`), so the page's grenade is the level's bomb, blast for blast, and a 31 kg plaster block in its core gets 17.7 m/s (25 sqrt(0.5)) rather than the 0.48 m/s an unscaled one gave it.
