@@ -17,7 +17,7 @@ import { boundingRadius } from '@tb/geom';
 import { DEFAULT_BLAST_MAX_DV, DEFAULT_BLAST_MAX_SPEED } from '@tb/engine-api';
 import {
   BUILTIN_WEAPONS, checkGrenade, checkWeapon, DEFAULT_GRENADE, FUSES, type Fuse, type GrenadeBlast, type GrenadeSpec, isPreset, parseWeapon, PRESET_NAMES, type PresetName,
-  PROJECTILE_PRESETS, scaleWeapon, STONE_DENSITY, type WeaponSpec, writeWeapon,
+  PROJECTILE_PRESETS, scaleWeapon, STONE_DENSITY, type WeaponScale, type WeaponSpec, writeWeapon,
 } from '@tb/weapons';
 import type { V3 } from './math.ts';
 
@@ -178,14 +178,32 @@ export function worldGrenade(g: GrenadeSpec, froude: number, substeps: number): 
 }
 
 /**
+ * The viewer's grenade on a level's page: cube units stand for the level's commonest block
+ * (`s` = @tb/keystone cubeScale, as the rack's w- items), so it does to a 31 kg plaster block
+ * what it does to a 1 kg cube (Froude-scaled): lengths (prox, radius) x h, impulse so the block
+ * gets the cube's kick, maxDv and maxSpeed x sqrt(h). Unscaled, DEFAULT_GRENADE gave such a block
+ * 0.48 m/s. Times and the fuse stay. worldGrenade applies on top for a scaled world.
+ */
+export function inLevelGrenade(g: GrenadeSpec, s: WeaponScale): GrenadeSpec {
+  const L = s.length ?? 1;
+  return { ...g, prox: g.prox * L, blast: { ...g.blast, radius: g.blast.radius * L, impulse: g.blast.impulse * (s.impulse ?? 1), maxDv: g.blast.maxDv * (s.maxDv ?? 1), maxSpeed: g.blast.maxSpeed * (s.maxSpeed ?? 1) } };
+}
+
+/** A WeaponSpec on a level's page, as inLevelGrenade (the engine's blast defaults filled in first, then scaleWeapon). */
+export const inLevelWeapon = (spec: WeaponSpec, s: WeaponScale): WeaponSpec => scaleWeapon(withBlastDefaults(spec), s);
+
+/** spec with every blast's unset maxDv and maxSpeed at the engine's defaults, so scaling them scales what the engine would apply. */
+const withBlastDefaults = (spec: WeaponSpec): WeaponSpec =>
+  JSON.parse(JSON.stringify(spec), (k, v) => (k === 'blast' ? { maxDv: DEFAULT_BLAST_MAX_DV, maxSpeed: DEFAULT_BLAST_MAX_SPEED, ...v } : v)) as WeaponSpec;
+
+/**
  * A WeaponSpec for a world at this scale and substeps, as worldGrenade: speeds (spreads), blast
  * impulse and maxDv froudeSpeed times, the speed cap substeps times (unset ones from the
  * engine's defaults first), lengths and times as set.
  */
 export function worldWeapon(spec: WeaponSpec, froude: number, substeps: number): WeaponSpec {
   if (froude === 1 && substeps === 1) return spec;
-  const filled = JSON.parse(JSON.stringify(spec), (k, v) => (k === 'blast' ? { maxDv: DEFAULT_BLAST_MAX_DV, maxSpeed: DEFAULT_BLAST_MAX_SPEED, ...v } : v)) as WeaponSpec;
-  return scaleWeapon(filled, { speed: froude, impulse: froude, maxDv: froude, maxSpeed: substeps });
+  return scaleWeapon(withBlastDefaults(spec), { speed: froude, impulse: froude, maxDv: froude, maxSpeed: substeps });
 }
 
 /** The URL key weapon.def: the spec's canonical JSON, compact, as base64url (UTF-8). */

@@ -73,6 +73,8 @@ A    = a quarter of the body's surface (its mean silhouette): 2 (hx hy + hy hz +
 | `cluster` (6 bomblets, radius 3, impulse 30) | 0.994 | 0.800 before (impulse 25) |
 | `KEYSTONE_GRENADE` (w-grenade's default; SI, not scaled with the block) | 0.013 on 0.5 m plaster, 0.002 on 0.5 m stone | the "firework costs 30 grenades" figure was against this one |
 
+On a level's page in the viewer's sandbox (`?level=B1&proj.weapon=grenade`, or `firework`, `cluster`, a `weapon.def`), cube units stand for the level's commonest block too (`inLevelGrenade`, `inLevelWeapon` with `cubeScale`), so the page's grenade is the level's bomb, blast for blast, and a 31 kg plaster block in its core gets 17.7 m/s (25 sqrt(0.5)) rather than the 0.48 m/s an unscaled one gave it.
+
 So a rack of built-ins is a choice of how the same energy is spread (one big blast, 12 small ones over a cone, 6 medium ones where they land), not of how much there is. Retuning a built-in is safe for cast levels: a w- item the level does not define plays the built-in, which is part of the level hash, so stars cast against the old one drop.
 
 ## Known limits of the v1 blast
