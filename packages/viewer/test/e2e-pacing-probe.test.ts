@@ -27,7 +27,7 @@ import { appendFileSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { limitsHit } from '@tb/engine-api';
-import { aimAt, compileLevel, launcherPos, type LaunchItem, type LevelDef, scenarioLevel, settleAllowance, type Shot } from '@tb/keystone';
+import { aimAt, compileLevel, launcherPos, type LaunchItem, levelById, type LevelDef, scenarioLevel, settleAllowance, type Shot } from '@tb/keystone';
 import { browser, useViewer } from './e2e-harness.ts';
 import { openRules, ready } from './keystone-page.ts';
 
@@ -39,11 +39,14 @@ const OUT = process.env.TB_PROBE_OUT;
 const SMALL = process.env.TB_PROBE_SMALL === '1';
 const RUN = !!process.env.TB_CHANNEL || SMALL;
 
-type Scene = { scenario: string; params: Record<string, number>; search: string };
+/** A scenario (as an automatic level), or a named level (`level`: B3's 10k stone city). */
+type Scene = { scenario: string; params: Record<string, number>; search: string; level?: string };
 const CITY: Scene = SMALL ? { scenario: 'S4', params: { N: 120 }, search: 'scenario=S4&param.N=120' } : { scenario: 'S4', params: { N: 10_000 }, search: 'scenario=S4&param.N=10000' };
 const BLOCKS: Scene = SMALL
   ? { scenario: 'S14', params: { towers: 4, W: 2, D: 2, H: 6 }, search: 'scenario=S14&param.towers=4&param.W=2&param.D=2&param.H=6' }
   : { scenario: 'S14', params: { towers: 25, W: 4, D: 4, H: 25 }, search: 'scenario=S14&param.towers=25&param.W=4&param.D=4&param.H=25' };
+/** B3 Ten Thousand (small: the small city). */
+const B3_CITY: Scene = SMALL ? CITY : { scenario: 'S4', params: {}, search: 'level=B3', level: 'B3' };
 
 /** A shot of `ammo` at full power from azimuth 0 at the nearest structure body between yLo and yHi h up (any height when none is). */
 function shotAt(def: LevelDef, ammo: LaunchItem, yLo: number, yHi: number): Shot {
@@ -62,8 +65,8 @@ function shotAt(def: LevelDef, ammo: LaunchItem, yLo: number, yHi: number): Shot
 
 const q = (xs: number[], p: number) => { const s = [...xs].sort((a, b) => a - b); return s.length ? s[Math.min(s.length - 1, Math.floor(p * s.length))]! : NaN; };
 
-/** budgetMs: keystone.budget (absent: the default); the cluster cases' rack is just the cluster. */
-interface Case { name: string; scene: Scene; ammo: 'cannonball' | 'w-grenade' | 'w-cluster'; iterations: 40 | 20; rendered: boolean; budgetMs?: number; frames?: 'half' | 'auto'; screenshots?: boolean }
+/** budgetMs: keystone.budget (absent: the default); a w- case other than w-grenade has a rack of just its weapon. */
+interface Case { name: string; scene: Scene; ammo: 'cannonball' | 'w-grenade' | 'w-cluster' | 'w-grenadem' | 'w-grenadexl'; iterations: 40 | 20; rendered: boolean; budgetMs?: number; frames?: 'half' | 'auto'; screenshots?: boolean }
 const ALL: Case[] = [
   { name: 'city-cannonball-40', scene: CITY, ammo: 'cannonball', iterations: 40, rendered: false },
   { name: 'blocks-grenade-40', scene: BLOCKS, ammo: 'w-grenade', iterations: 40, rendered: false },
@@ -81,6 +84,11 @@ const ALL: Case[] = [
   { name: 'city-cluster-40-rendered-auto', scene: CITY, ammo: 'w-cluster', iterations: 40, rendered: true, frames: 'auto' },
   // For reviewing the follow camera (G4.3): a screenshot every 2 s into TB_PROBE_OUT. Its timings are not used (screenshots stall frames).
   { name: 'city-cluster-40-screenshots', scene: CITY, ammo: 'w-cluster', iterations: 40, rendered: true, screenshots: true },
+  // Grenade sizes (2026-11-02): the XL (16 grenades, radius 12.6 cubes) wakes far more of a 10k city than anything before it;
+  // M (one grenade, B3's own bomb) is its baseline. Step p95 offscreen, frame p99 rendered.
+  { name: 'b3-grenadexl-40', scene: B3_CITY, ammo: 'w-grenadexl', iterations: 40, rendered: false },
+  { name: 'b3-grenadexl-40-rendered', scene: B3_CITY, ammo: 'w-grenadexl', iterations: 40, rendered: true },
+  { name: 'b3-grenadem-40-rendered', scene: B3_CITY, ammo: 'w-grenadem', iterations: 40, rendered: true },
 ];
 // Rendered frames take up to a second on SwiftShader: the rendered case is a real GPU's only.
 const ONLY = process.env.TB_PROBE_CASES ? new RegExp(process.env.TB_PROBE_CASES) : null;
@@ -91,10 +99,11 @@ describe.runIf(RUN)('G4 probe: a 10k level\'s shot on a real GPU', () => {
     it(k.name, async (ctx) => {
       if (!browser) return ctx.skip();
       // The page's level, with the URL's rack (the compiled frame carries the cluster's shell for aiming).
-      const base = scenarioLevel(k.scene.scenario, k.scene.params, 1);
-      const def: LevelDef = k.ammo === 'w-cluster' ? { ...base, rack: ['w-cluster'] } : base;
+      const base = k.scene.level ? levelById(k.scene.level)! : scenarioLevel(k.scene.scenario, k.scene.params, 1);
+      const own = k.ammo.startsWith('w-') && k.ammo !== 'w-grenade';
+      const def: LevelDef = own ? { ...base, rack: [k.ammo] } : base;
       const shot = shotAt(def, k.ammo, 3, 6);
-      const search = `/?${k.scene.search}&rules=keystone${k.iterations !== 40 ? `&keystone.iterations=${k.iterations}` : ''}${k.ammo === 'w-cluster' ? '&keystone.rack=w-cluster' : ''}${k.budgetMs !== undefined ? `&keystone.budget=${k.budgetMs}` : ''}${k.frames ? `&keystone.frames=${k.frames}` : ''}${SMALL ? '&keystone.presettle=30' : ''}${k.rendered ? '' : '&offscreen=1'}`;
+      const search = `/?${k.scene.search}&rules=keystone${k.iterations !== 40 ? `&keystone.iterations=${k.iterations}` : ''}${own ? `&keystone.rack=${k.ammo}` : ''}${k.budgetMs !== undefined ? `&keystone.budget=${k.budgetMs}` : ''}${k.frames ? `&keystone.frames=${k.frames}` : ''}${SMALL ? '&keystone.presettle=30' : ''}${k.rendered ? '' : '&offscreen=1'}`;
       const o = await openRules(search, k.rendered && !SMALL ? { width: 1440, height: 900 } : undefined, 10 * MINUTES);
       if (!o) return ctx.skip();
       const { page, errors } = o;
