@@ -1065,19 +1065,20 @@ export async function sparkDetect() {
  * or not, each given one speed change; first in debris mode, then the same
  * step in sparks mode (unweighted, normal = dir).
  */
-export async function debrisDetect(cases: Array<{ dv: V3; rot?: [number, number, number, number]; sphere?: boolean }>, dvScale = 1) {
+export async function debrisDetect(cases: Array<{ dv: V3; rot?: [number, number, number, number]; sphere?: boolean; y?: number }>, dvScale = 1, ground: { groundY: number; skirt: number } = { groundY: -100, skirt: 0 }) {
   const { device } = await sharedDevice({ timestamps: false });
   device.pushErrorScope('validation');
   const cap = cases.length;
-  const base: RawBody[] = cases.map((c, i) => ({ pos: [i * 3, 2, 0] as V3, vel: [0, 0, 0] as V3, shape: c.sphere ? 2 : 0, ...(c.rot ? { rot: c.rot } : {}) }));
+  const base: RawBody[] = cases.map((c, i) => ({ pos: [i * 3, c.y ?? 2, 0] as V3, vel: [0, 0, 0] as V3, shape: c.sphere ? 2 : 0, ...(c.rot ? { rot: c.rot } : {}) }));
   const next: RawBody[] = base.map((b, i) => ({ ...b, vel: cases[i]!.dv }));
   const looks = new Uint32Array(cap);
   const run = async (mode: 'sparks' | 'debris') => {
     const src = rawSource(device, bodyWords(base, cap), bodyWords(base, cap), sparkShapes(), looks, cap, cap) as BodySource & { count: number };
     const sp = new Sparks(device);
-    await sparkFrame(device, sp, src, 0, -100, mode, dvScale); // first sight
+    sp.debris = { ...sp.debris, dustSkirt: ground.skirt };
+    await sparkFrame(device, sp, src, 0, ground.groundY, mode, dvScale); // first sight
     device.queue.writeBuffer(src.bodies, 0, bodyWords(next, cap));
-    const r = await sparkFrame(device, sp, src, 0, -100, mode, dvScale);
+    const r = await sparkFrame(device, sp, src, 0, ground.groundY, mode, dvScale);
     sp.destroy();
     return r.events.sort((a, b) => (a.packed & 0xffffff) - (b.packed & 0xffffff)).map((e) => ({ slot: e.packed & 0xffffff, strength: e.strength, raw: e.raw!, normal: e.normal!, dir: e.dir }));
   };
@@ -1156,7 +1157,8 @@ export async function debrisSim(frames: number) {
   device.pushErrorScope('validation');
   const src = rawSource(device, new ArrayBuffer(4 * Body.size), new ArrayBuffer(4 * Body.size), sparkShapes(), new Uint32Array(4), 0, 4);
   const sp = new Sparks(device);
-  sp.debris = { ...sp.debris, dustBudget: 96, chipBudget: 192 }; // room for several of each per burst: the copies' seeds and launch spread are compared too
+  // Room for several of each per burst: the copies' seeds and launch spread are compared too. A skirt, so the ground puffs' slower rise is compared too.
+  sp.debris = { ...sp.debris, dustBudget: 96, chipBudget: 192, dustSkirt: 0.5 };
   const [dustPool, chipPool] = sp.rings;
   const r = rng(5);
   const unit3 = (v: number[]) => { const l = Math.hypot(...v); return v.map((x) => x / l) as V3; };
@@ -1168,6 +1170,8 @@ export async function debrisSim(frames: number) {
     const normal = i % 3 === 0 ? unit3([dir[0], 0, dir[2]]) : i % 3 === 1 ? unit3([r() - 0.5, r(), r() - 0.5]) : undefined;
     return { pos, dir, normal, strength: 3 + 25 * r() };
   });
+  // Four flat landings on the ground (12 cm: above the puffs' 10 cm floor, within the 15 cm of the ground bit): their puffs carry it.
+  for (let i = 0; i < 4; i++) bursts.push({ pos: [i * 2 - 3, 0.12, 3] as V3, dir: [0, 1, 0] as V3, normal: [0, 1, 0] as V3, strength: 8 });
   for (const b of bursts) sp.inject(b.pos, b.dir, b.strength, b.normal);
   const f32v = (v: number[]) => v.map((x) => Math.fround(x)) as V3;
   const events: Impact[] = bursts.map((b) => ({ pos: f32v(b.pos), dir: f32v(unit3(b.dir)), strength: Math.fround(b.strength), packed: 0xffffff | (1 << 24), ...(b.normal ? { normal: f32v(b.normal) } : {}) }));
@@ -1176,13 +1180,14 @@ export async function debrisSim(frames: number) {
   const slots = unpackSparks(await readBuffer(device, sp.sparks));
   const want = debrisSpawnReference(events, frame0, sp.debris);
   const wantDust = new Map(want.dust.map((s) => [s.packed, s])), wantChip = new Map(want.chips.map((s) => [s.packed, s]));
-  let spawnErr = 0, unmatched = 0, outside = 0, bornDust = 0, bornChips = 0;
+  let spawnErr = 0, unmatched = 0, outside = 0, bornDust = 0, bornChips = 0, groundPuffs = 0;
   const born = new Map<number, { init: SparkState; dust: boolean }>();
   slots.forEach((s, i) => {
     if (s.age < 0) return;
     const dust = i < dustPool;
     if (i >= dustPool + chipPool) { outside++; return; }
     if (dust) bornDust++; else bornChips++;
+    if (dust && (s.packed >>> 12) & 1) groundPuffs++;
     const w = (dust ? wantDust : wantChip).get(s.packed);
     if (!w) { unmatched++; return; }
     born.set(i, { init: s, dust });
@@ -1221,7 +1226,7 @@ export async function debrisSim(frames: number) {
   const err = await device.popErrorScope();
   sp.destroy();
   return {
-    dustPool, chipPool, wantDust: want.dust.length, wantChips: want.chips.length, bornDust, bornChips, spawned: s0.ctl[CTL.spawned], outside, unmatched, spawnErr,
+    dustPool, chipPool, wantDust: want.dust.length, wantChips: want.chips.length, bornDust, bornChips, groundPuffs, spawned: s0.ctl[CTL.spawned], outside, unmatched, spawnErr,
     alive, aliveCtl: last.ctl[CTL.alive], simErr, bounced, floored, rose, dustMinY, chipMinY, argsFlying, aliveDead: dead.ctl[CTL.alive], argsDead, aliveAfterSwitch: sw.ctl[CTL.alive],
     error: err?.message ?? null,
   };
@@ -1354,6 +1359,60 @@ export async function debrisDraw(frames: number) {
   }
   const err = await device.popErrorScope();
   return { near, nearDust, nearChips, stray, behindWall, maxWall, zeroDiff, wallPixels: ids.reduce((s, v) => s + (v === 1 ? 1 : 0), 0), error: err?.message ?? null };
+}
+
+/**
+ * The shape of the dust (dustErode, dustThin, dustSkirt): one burst in the air
+ * and one flat landing on the ground, drawn after `frames` frames of 1/60 s,
+ * against the same frame without debris. Per burst, over the pixels the dust
+ * changes by more than 2 (of 255): their count, how many of them border an
+ * unchanged pixel (the outline), their bounding box's height over its width,
+ * and the summed change.
+ */
+export async function dustShape(looks: Array<Partial<RealOptions>>, frames: number, keep = false) {
+  const { device } = await sharedDevice({ timestamps: false });
+  device.pushErrorScope('validation');
+  const w = 320, h = 200;
+  const descs = [box([0, 0.5, -30], [0.5, 0.5, 0.5], [0, 0, 0, 1])];
+  const src = new SnapshotSource(device);
+  src.reset(descs);
+  src.update(snapshotOf(descs), descs);
+  const f: FrameParams = { ...camera([0, 1.1, 4.5], [0, 0.9, 0], w / h), groundY: 0, time: 1, dt: 1 / 60 };
+  const air: V3 = [-1.6, 1.6, 0], ground: V3 = [1.6, 0.05, 0];
+  const draw = async (o: Partial<RealOptions>, sparks: boolean) => {
+    const rend = new Renderer(device, { size: [w, h] }, { format: 'rgba8unorm' });
+    rend.look = { ...realLook({ stoneDetail: 0, groundDetail: 0, hills: 0, chips: 0, ...o }), bloomMix: 0, vignette: 0 };
+    rend.toggles.sparks = sparks;
+    rend.setSource(src);
+    rend.setShadowBounds([0, 1, 0], 10);
+    rend.burst(air, [0.3, 1, 0.2], 14);
+    rend.burst(ground, [0, 1, 0], 14);
+    for (let i = 0; i < frames; i++) await rend.render(f);
+    const px = (await rend.render(f, true, true))!.pixels!;
+    rend.destroy();
+    return px;
+  };
+  const off = await draw({}, false);
+  const out = [];
+  for (const o of looks) {
+    const on = await draw(o, true);
+    const changed = (x: number, y: number) => { const i = y * on.bytesPerRow + 4 * x; return Math.max(...[0, 1, 2].map((k) => Math.abs(on.data[i + k]! - off.data[i + k]!))); };
+    const region = (x0: number, x1: number) => {
+      let area = 0, outline = 0, sum = 0, minX = w, maxX = -1, minY = h, maxY = -1;
+      for (let y = 0; y < h; y++) for (let x = x0; x < x1; x++) {
+        const d = changed(x, y);
+        sum += d;
+        if (d <= 2) continue;
+        area++;
+        minX = Math.min(minX, x); maxX = Math.max(maxX, x); minY = Math.min(minY, y); maxY = Math.max(maxY, y);
+        if ([[1, 0], [-1, 0], [0, 1], [0, -1]].some(([dx, dy]) => { const X = x + dx!, Y = y + dy!; return X < x0 || X >= x1 || Y < 0 || Y >= h || changed(X, Y) <= 2; })) outline++;
+      }
+      return { area, outline, sum, aspect: area ? (maxY - minY + 1) / (maxX - minX + 1) : 0 };
+    };
+    out.push({ air: region(0, w / 2), ground: region(w / 2, w), ...(keep ? { px: on } : {}) });
+  }
+  const err = await device.popErrorScope();
+  return { looks: out, error: err?.message ?? null };
 }
 
 // ---------------------------------------------------------------- lights

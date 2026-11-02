@@ -56,7 +56,8 @@ export const Frame = defineStruct('Frame', [
   ['ground', 'vec4f', 'real look: ground layer (materials.ts), texture scale, texture strength (0: none, nothing sampled), macro variation'],
   ['groundShape', 'vec4f', 'real look: ground relief (m, the coarse macro scale\'s; half that at the next), patch threshold (macro value; above 1: no patches), shadow fill (x the ground radiance added to the sky light), unused'],
   ['hills', 'vec4f', 'real look: horizon hills\' greatest height (radians, 0: none), distance (m), cover (0 bare to 1 dry scrub) and ridges (1 or 2)'],
-  ['debris', 'vec4f', 'real look: dust puff size (m, fully grown), puff opacity, chip size (m), unused'],
+  ['debris', 'vec4f', 'real look: dust puff size (m, fully grown), puff opacity, chip size (m), skirt (0 to 1: ground puffs flatten)'],
+  ['dustShape', 'vec4f', 'real look: dust edge erosion (0 to 1), thinning as it spreads (0 to 1), unused, unused'],
   ['shadowSoft', 'vec4f', 'real look: tan of the penumbra half angle (0: 3x3 taps), blocker search radius (texels), light depth range (m), steepest receiver plane (depth per uv)'],
   ['hallLook', 'vec4f', 'real look, hall: 1 while the eye is inside it, 2 outside it with its exterior on (else it is not drawn), metres per world unit, glass milkiness, iron grey'],
   ['hallShade', 'vec4f', 'real look, hall: glazed share of the vault, web lattice bar width (web panels), balustrade height (m), unused'],
@@ -514,7 +515,7 @@ struct DustOut {
   @location(0) uv: vec2f,
   @location(1) rel: vec3f,
   @location(2) @interpolate(flat) colour: vec4f, // lit rgb, opacity
-  @location(3) @interpolate(flat) size: vec2f,   // radius m, noise offset
+  @location(3) @interpolate(flat) size: vec4f,   // radius m, noise offset, age (share of life), height of the ground fade (m)
 }
 
 fn hg4pi(c: f32, g: f32) -> f32 {
@@ -538,13 +539,17 @@ const QUAD = array<vec2f, 6>(vec2f(-1.0, -1.0), vec2f(1.0, -1.0), vec2f(1.0, 1.0
   o.uv = vec2f(0.0);
   o.rel = vec3f(0.0);
   o.colour = vec4f(0.0);
-  o.size = vec2f(1.0, 0.0);
+  o.size = vec4f(1.0, 0.0, 0.0, 1.0);
   let s = sparks[ii];
   if (s.age < 0.0) { return o; }
   let t = s.age / dustLife(s.packed);
   let seed = unit(s.packed);
   // Grows (ease-out) to dustSize, 0.5x for the softest hits to 2x for the hardest (size class in bits 8-11).
-  let r = fr.debris.x * mix(0.13, 1.0, 1.0 - pow(1.0 - t, 3.0)) * (0.7 + 0.6 * seed) * mix(0.5, 2.0, f32((s.packed >> 8u) & 0xfu) / 15.0);
+  let grow = mix(0.13, 1.0, 1.0 - pow(1.0 - t, 3.0));
+  // Soil raised from the ground (bit 12) spreads low: up to 0.4 as tall and 1.4 as wide (skirt).
+  let ground = ((s.packed >> 12u) & 1u) == 1u;
+  let skirt = select(0.0, fr.debris.w, ground);
+  let r = fr.debris.x * grow * (0.7 + 0.6 * seed) * mix(0.5, 2.0, f32((s.packed >> 8u) & 0xfu) / 15.0) * mix(1.0, 1.4, skirt);
   let rel = s.pos - fr.eye;
   let lc = fr.lightViewProj * vec4f(rel, 1.0);
   let suv = lc.xy * vec2f(0.5, -0.5) + 0.5;
@@ -554,14 +559,20 @@ const QUAD = array<vec2f, 6>(vec2f(-1.0, -1.0), vec2f(1.0, -1.0), vec2f(1.0, 1.0
   // a thick cloud scatters many times, so half its phase is isotropic.
   let albedo = select(mix(fr.blockAlbedo.rgb, fr.floor, 0.3) * 1.1, mix(fr.blockAlbedo.rgb, fr.floor, 0.7) * 1.2, ((s.packed >> 12u) & 1u) == 1u);
   let lit = albedo * (fr.sunColor * vis * 0.5 * (0.5 + 0.5 * hg4pi(dot(fr.sun, normalize(rel)), 0.4)) + 0.5 * (atmoAmbient[0].rgb + atmoAmbient[1].rgb));
-  let alpha = fr.debris.y * mix(0.5, 1.0, fract(seed * 13.7)) * pow(1.0 - t, 1.5) * smoothstep(0.0, 0.06, t);
+  // Thinning: the dust in a puff spreads over its grown area, so dustThin 1 takes its opacity as 1 / grow^2,
+  // normalised at half grown: a young puff denser, a grown one fainter than before, about as much dust in all.
+  // Soil raised from the ground is up to 1.5x as opaque (skirt): a low skirt is seen through less depth.
+  let alpha = min(fr.debris.y * mix(0.5, 1.0, fract(seed * 13.7)) * pow(1.0 - t, 1.5) * smoothstep(0.0, 0.06, t) * pow(2.0 * grow, -2.0 * fr.dustShape.y) * mix(1.0, 1.5, skirt), 1.0);
   let corner = QUAD[vi];
-  let p = rel + facing(rel, corner, r, 6.2831853 * fract(seed * 7.13) + s.age * (seed - 0.5));
+  var off = facing(rel, corner, r, 6.2831853 * fract(seed * 7.13) + s.age * (seed - 0.5));
+  let squash = mix(1.0, 0.4, skirt);
+  off.y *= squash;
+  let p = rel + off;
   o.clip = fr.viewProj * vec4f(p, 1.0);
   o.uv = corner;
   o.rel = p;
   o.colour = vec4f(aerial(lit, rel), alpha);
-  o.size = vec2f(r, fract(seed * 31.7));
+  o.size = vec4f(r, fract(seed * 31.7), t, 0.5 * r * squash);
   return o;
 }
 
@@ -570,9 +581,22 @@ const QUAD = array<vec2f, 6>(vec2f(-1.0, -1.0), vec2f(1.0, -1.0), vec2f(1.0, 1.0
   if (d2 >= 1.0) { discard; }
   // Billowing: the macro layer's smooth fields as density, a different patch per puff.
   let n = textureSampleLevel(stoneDetail, stoneSamp, o.uv * 0.06 + vec2f(o.size.y, fract(o.size.y * 7.0)), ${MACRO_LAYER}, 0.0);
-  let density = (1.0 - d2) * (1.0 - d2) * (0.45 + 1.1 * n.b);
+  var density = (1.0 - d2) * (1.0 - d2) * (0.45 + 1.1 * n.b);
+  // Erosion (dustErode): a lumpy field (the disc's fall-off plus the macro layer's fbm at about four lumps
+  // across the puff and three and five times finer, which drift with age so the lumps boil and come in
+  // several sizes) is cut at a level that rises with age: a puff's rim is ragged from birth, eats inward,
+  // and the puff ends as a few wisps.
+  // Two more fetches, only when on; mix(1, ..) keeps dustErode 0 the old puff exactly.
+  let e = fr.dustShape.x;
+  if (e > 0.0) {
+    let n1 = textureSampleLevel(stoneDetail, stoneSamp, o.uv * 0.35 + vec2f(fract(o.size.y * 3.0), o.size.y), ${MACRO_LAYER}, 0.0);
+    let n2 = textureSampleLevel(stoneDetail, stoneSamp, o.uv * 1.1 + vec2f(o.size.y, fract(o.size.y * 5.0)) + o.size.z * 0.08, ${MACRO_LAYER}, 0.0);
+    let lump = (1.0 - d2) + 1.4 * (n1.b - 0.5) + 1.2 * (n2.r - 0.5) + 0.5 * (n2.b - 0.5);
+    let cut = e * (0.2 + 0.6 * o.size.z);
+    density *= mix(1.0, smoothstep(cut, cut + 0.12, lump), e);
+  }
   let h = o.rel.y + fr.eye.y - fr.groundY;
-  let a = clamp(o.colour.a * density * smoothstep(0.0, 0.5 * o.size.x, h), 0.0, 1.0);
+  let a = clamp(o.colour.a * density * smoothstep(0.0, o.size.w, h), 0.0, 1.0);
   return vec4f(o.colour.rgb * a, a);
 }
 

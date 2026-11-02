@@ -166,7 +166,8 @@ export function lookUniforms(l: LookParams, metres = 1): Record<string, number |
     ground: l.ground ? [GROUND_LAYER + GROUNDS.indexOf(l.ground.kind), l.ground.scale / metres, l.ground.detail, l.ground.variation] : [GROUND_LAYER, 1, 0, 0],
     groundShape: [(l.ground?.relief ?? 0) / metres, patchThreshold(l.ground?.patches ?? 0), l.shadow?.fill ?? 0, 0],
     hills: l.hills ? [(l.hills.height * Math.PI) / 180, (l.hills.distance * 1000) / metres, l.hills.cover ?? 0, l.hills.ridges ?? 1] : [0, 1000, 0, 1],
-    debris: [l.debris?.size ?? REAL_DEFAULTS.dustSize, l.debris?.opacity ?? REAL_DEFAULTS.dustOpacity, CHIP_SIZE, 0],
+    debris: [l.debris?.size ?? REAL_DEFAULTS.dustSize, l.debris?.opacity ?? REAL_DEFAULTS.dustOpacity, CHIP_SIZE, l.debris?.skirt ?? 0],
+    dustShape: [l.debris?.erode ?? 0, l.debris?.thin ?? 0, 0, 0],
     blockAlbedo: [...[0, 1, 2].map((k) => l.ramp.reduce((acc, c) => acc + srgbToLinear(c[k]!), 0) / l.ramp.length), 0],
     ...Object.fromEntries(l.ramp.map((c, i) => [`ramp${i}`, [...linearToOklab(lin(c) as V3), 0]])),
   };
@@ -692,7 +693,7 @@ export class Renderer {
       this.lights.off();
       if (debris) {
         const d = this.look.debris;
-        this.sparks.debris = { ...this.sparks.debris, dustPerDv: DEFAULT_DEBRIS.dustPerDv * (d?.dust ?? 1), chipPerDv: DEFAULT_DEBRIS.chipPerDv * (d?.chips ?? 1), dustDv: d?.threshold ?? DEFAULT_DEBRIS.dustDv, dustFace: d?.face ?? DEFAULT_DEBRIS.dustFace };
+        this.sparks.debris = { ...this.sparks.debris, dustPerDv: DEFAULT_DEBRIS.dustPerDv * (d?.dust ?? 1), chipPerDv: DEFAULT_DEBRIS.chipPerDv * (d?.chips ?? 1), dustDv: d?.threshold ?? DEFAULT_DEBRIS.dustDv, dustFace: d?.face ?? DEFAULT_DEBRIS.dustFace, dustSkirt: d?.skirt ?? DEFAULT_DEBRIS.dustSkirt };
         this.sparks.encode(cp, this.source, { dt: dt * froude, groundY: f.groundY, mode: 'debris', dvScale: Math.sqrt(metres) });
       }
     }

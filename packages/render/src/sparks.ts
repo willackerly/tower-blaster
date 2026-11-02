@@ -97,6 +97,14 @@ export interface DebrisParams {
   dustFace: number;
   /** How hard a scrape throws its puffs along the slide (x the friction's share of the push). */
   dustSlide: number;
+  /**
+   * Skirt: a box landing flat on the ground (contact normal up, within 15 cm
+   * of it) counts at least dustSkirt of its speed change (0: the face weight
+   * alone, as before), and puffs raised from the ground rise (dustRise) only
+   * 1 - dustSkirt as fast, so a flat landing pushes a low ring of soil out
+   * along the ground.
+   */
+  dustSkirt: number;
   /** Expected puffs per m/s above dustDv (at most DUST_PER_EVENT); chips per m/s above chipDv (at most CHIPS_PER_EVENT). Fractions round up by chance. */
   dustPerDv: number;
   chipDv: number;
@@ -111,7 +119,7 @@ export interface DebrisParams {
   chipFriction: number;
 }
 
-export const DEFAULT_DEBRIS: DebrisParams = { dustBudget: 384, chipBudget: 768, dustRate: 600, chipRate: 1500, dustDv: 2, dustFace: 0.15, dustSlide: 1.5, dustPerDv: 1.5, chipDv: 3, chipPerDv: 1, dustDrag: 1.6, dustRise: 0.3, dustSpeed: 2.5, chipSpeed: 6, chipBounce: 0.25, chipFriction: 0.55 };
+export const DEFAULT_DEBRIS: DebrisParams = { dustBudget: 384, chipBudget: 768, dustRate: 600, chipRate: 1500, dustDv: 2, dustFace: 0.15, dustSlide: 1.5, dustSkirt: 0, dustPerDv: 1.5, chipDv: 3, chipPerDv: 1, dustDrag: 1.6, dustRise: 0.3, dustSpeed: 2.5, chipSpeed: 6, chipBounce: 0.25, chipFriction: 0.55 };
 
 /**
  * Control words: event count, pool head, events dropped, sparks spawned, hot
@@ -124,7 +132,7 @@ const CTL_WORDS = 12;
 /** Debris tokens are fixed point: a particle costs TOKEN_ONE, so a frame's refill keeps its fraction. */
 export const TOKEN_ONE = 256;
 
-const PARAM_WORDS = 44;
+const PARAM_WORDS = 48;
 
 /** Debris mode's rings for a pool size: [dust slots, chip slots], dust first. */
 export function debrisRings(pool: number): [number, number] {
@@ -214,6 +222,7 @@ struct SparkParams {
   dustDrag: f32, dustRise: f32, chipBounce: f32, chipFriction: f32,
   dustSpeed: f32, chipSpeed: f32, dustRate: f32, chipRate: f32,
   dustDv: f32, dustFace: f32, dustSlide: f32, dvScale: f32,
+  dustSkirt: f32, pad3: f32, pad4: f32, pad5: f32,
 }
 
 @group(0) @binding(0) var<uniform> p: SparkParams;
@@ -254,21 +263,25 @@ fn detect(@builtin(global_invocation_id) id: vec3u) {
     // Debris: a box's face normal nearest the push, and how far the push
     // leans off it (0 face on, 0.71 an edge, 0.82 a corner, or the share of
     // a scrape's friction). Flat face-on knocks raise dustFace of the dust;
-    // edges, corners and scrapes all of it. Spheres take it all.
+    // edges, corners and scrapes all of it. Spheres take it all. A flat
+    // landing on the ground (normal up, the support point within 15 cm of
+    // it, as newDebris's ground bit) at least dustSkirt: air pushed out
+    // from under the face.
     var n = d;
     var w = 1.0;
+    // Support distance along -d: where the push came from.
+    let r = select(dot(abs(dl), sh.half), sh.half.x, sh.kind == 1u);
     if (p.mode == 1u && sh.kind != 1u) {
       let ax = abs(dl);
       let m = max(ax.x, max(ax.y, ax.z));
       let nl = select(select(vec3f(0.0, 0.0, sign(dl.z)), vec3f(0.0, sign(dl.y), 0.0), ax.y >= ax.z), vec3f(sign(dl.x), 0.0, 0.0), ax.x >= ax.y && ax.x >= ax.z);
       n = qrot(b.rot, nl);
       w = mix(p.dustFace, 1.0, smoothstep(0.15, 0.6, sqrt(max(1.0 - m * m, 0.0))));
+      if (n.y > 0.7 && b.pos.y - d.y * r < p.groundY + 0.15) { w = max(w, p.dustSkirt); }
     }
     if (s * w > select(p.dvMin, p.dustDv, p.mode == 1u)) {
       let k = atomicAdd(&ctl[${CTL.events}], 1u);
       if (k < ${MAX_EVENTS}u) {
-        // Support distance along -d: where the push came from.
-        let r = select(dot(abs(dl), sh.half), sh.half.x, sh.kind == 1u);
         events[k] = ImpactEvent(b.pos - d * r, s * w, d, i | (((looks[i] >> 12u) & 0xfu) << 28u), n, s);
       } else {
         atomicAdd(&ctl[${CTL.dropped}], 1u);
@@ -401,13 +414,14 @@ fn simulate(@builtin(global_invocation_id) id: vec3u, @builtin(local_invocation_
   }
 }
 
-// A puff: older, slower (linear drag), drifting up; it never sinks
-// within 10 cm of the ground.
+// A puff: older, slower (linear drag), drifting up (a puff raised from the
+// ground, bit 12, 1 - dustSkirt as fast); it never sinks within 10 cm of
+// the ground.
 fn stepDust(s0: Spark) -> Spark {
   var s = s0;
   s.age += p.dt;
   if (s.age >= dustLife(s.packed)) { s.age = -1.0; return s; }
-  s.vel.y += p.dustRise * p.dt;
+  s.vel.y += select(p.dustRise, p.dustRise * (1.0 - p.dustSkirt), ((s.packed >> 12u) & 1u) == 1u) * p.dt;
   s.vel /= 1.0 + p.dustDrag * p.dt;
   s.pos += s.vel * p.dt;
   if (s.pos.y < p.groundY + 0.1) {
@@ -528,8 +542,11 @@ const qrot3 = (q: readonly number[], v: V3): V3 => {
  * (x, y, z, w): the contact normal (a box's face normal nearest dv, a
  * sphere's dv) and the face weight (dustFace for dv square on a face, 1 for
  * an edge, corner or scrape; spheres 1). The GPU works in f32: within 1e-5.
+ * ground: the body's centre height and half extents and the ground's
+ * height, for the skirt (dustSkirt at least for a flat landing on the
+ * ground, its support point within 15 cm of it); left out, no skirt.
  */
-export function debrisWeight(dv: V3, rot: readonly number[], sphere: boolean, dustFace: number): { normal: V3; weight: number } {
+export function debrisWeight(dv: V3, rot: readonly number[], sphere: boolean, dustFace: number, ground?: { y: number; half: V3; groundY: number; skirt: number }): { normal: V3; weight: number } {
   const l = Math.hypot(...dv), d = dv.map((x) => x / l) as V3;
   if (sphere) return { normal: d, weight: 1 };
   const dl = qrot3([-rot[0]!, -rot[1]!, -rot[2]!, rot[3]!], d), ax = dl.map(Math.abs);
@@ -537,7 +554,13 @@ export function debrisWeight(dv: V3, rot: readonly number[], sphere: boolean, du
   const nl: V3 = [0, 0, 0];
   nl[k] = Math.sign(dl[k]!);
   const x = Math.min(Math.max((Math.sqrt(Math.max(1 - m * m, 0)) - 0.15) / 0.45, 0), 1);
-  return { normal: qrot3(rot, nl), weight: dustFace + (1 - dustFace) * x * x * (3 - 2 * x) };
+  const normal = qrot3(rot, nl);
+  let weight = dustFace + (1 - dustFace) * x * x * (3 - 2 * x);
+  if (ground) {
+    const r = ax[0]! * ground.half[0] + ax[1]! * ground.half[1] + ax[2]! * ground.half[2];
+    if (normal[1] > 0.7 && ground.y - d[1] * r < ground.groundY + 0.15) weight = Math.max(weight, ground.skirt);
+  }
+  return { normal, weight };
 }
 
 /** CPU twin of newDebris (kind 1: puff, 2: chip; groundY: the frame's ground height, for a puff's ground bit). */
@@ -584,7 +607,8 @@ export function dustStepReference(s: SparkState, dt: number, groundY: number, d:
   const age = fr(s.age + dt);
   if (age >= dustLife(s.packed)) return { ...s, age: -1 };
   const vel = [...s.vel] as V3;
-  vel[1] = fr(vel[1] + fr(d.dustRise * dt));
+  const rise = (s.packed >>> 12) & 1 ? fr(d.dustRise * fr(1 - d.dustSkirt)) : d.dustRise;
+  vel[1] = fr(vel[1] + fr(rise * dt));
   const k = fr(1 + fr(d.dustDrag * dt));
   for (let i = 0; i < 3; i++) vel[i] = fr(vel[i]! / k);
   const pos = s.pos.map((x, i) => fr(x + fr(vel[i]! * dt))) as V3;
@@ -724,7 +748,7 @@ export class Sparks {
     for (let k = 0; k < 4; k++) u[16 + k] = balls[k] ?? 0xffffffff;
     fl.set([pr.heatDv, pr.heatRange, pr.heatTau, pr.contact], 20);
     u.set([mode === 'debris' ? 1 : 0, db.dustBudget, db.chipBudget, this.rings[0], this.rings[1]], 24);
-    fl.set([db.dustPerDv, db.chipDv, db.chipPerDv, db.dustDrag, db.dustRise, db.chipBounce, db.chipFriction, db.dustSpeed, db.chipSpeed, db.dustRate, db.chipRate, db.dustDv, db.dustFace, db.dustSlide, f.dvScale ?? 1], 29);
+    fl.set([db.dustPerDv, db.chipDv, db.chipPerDv, db.dustDrag, db.dustRise, db.chipBounce, db.chipFriction, db.dustSpeed, db.chipSpeed, db.dustRate, db.chipRate, db.dustDv, db.dustFace, db.dustSlide, f.dvScale ?? 1, db.dustSkirt], 29);
     q.writeBuffer(this.params, 0, buf);
     // Injected events first; the detector appends after them.
     const inj = this.injected.splice(0);

@@ -44,17 +44,17 @@ export interface RenderBenchOptions {
   profiledFrames: number;
   /** Spark pool per renderer (the smoke test shrinks it for software adapters). */
   sparkPool?: number;
-  /** Extra warmup frames for real-dust, so its particle counts and ages are steady (default 240: 4 s of particle time). */
+  /** Extra warmup frames for real-dust and real-plain-dust, so their particle counts and ages are steady (default 240: 4 s of particle time). */
   dustWarmup?: number;
 }
 
 export const DEFAULT_RENDER_BENCH: RenderBenchOptions = {
-  width: 2560, height: 1440, counts: [10_000, 100_000], worlds: ['near', 'far'], variants: ['full', 'no-shadow', 'no-post', 'no-sparks', 'no-heat', 'no-ao', 'no-seam', 'fan', 'cube', 'flat-fan', 'flat-cube', 'real', 'real-no-stone', 'real-stone-off', 'real-step1', 'real-no-lod', 'real-no-floor-sky', 'real-flat-ground', 'real-no-pcss', 'real-4096', 'real-dust', 'real-hall', 'real-hall-out', 'real-bare-hills'],
+  width: 2560, height: 1440, counts: [10_000, 100_000], worlds: ['near', 'far'], variants: ['full', 'no-shadow', 'no-post', 'no-sparks', 'no-heat', 'no-ao', 'no-seam', 'fan', 'cube', 'flat-fan', 'flat-cube', 'real', 'real-no-stone', 'real-stone-off', 'real-step1', 'real-no-lod', 'real-no-floor-sky', 'real-flat-ground', 'real-no-pcss', 'real-4096', 'real-dust', 'real-hall', 'real-hall-out', 'real-bare-hills', 'real-plain-dust'],
   warmup: 30, batches: 10, batchFrames: 30, profiledFrames: 100,
 };
 
 export const QUICK_RENDER_BENCH: RenderBenchOptions = {
-  width: 320, height: 180, counts: [2000], worlds: ['near', 'far'], variants: ['full', 'no-shadow', 'no-post', 'no-sparks', 'no-heat', 'no-ao', 'no-seam', 'fan', 'cube', 'flat-fan', 'flat-cube', 'real', 'real-no-stone', 'real-stone-off', 'real-step1', 'real-no-lod', 'real-no-floor-sky', 'real-flat-ground', 'real-no-pcss', 'real-4096', 'real-dust', 'real-hall', 'real-hall-out', 'real-bare-hills'],
+  width: 320, height: 180, counts: [2000], worlds: ['near', 'far'], variants: ['full', 'no-shadow', 'no-post', 'no-sparks', 'no-heat', 'no-ao', 'no-seam', 'fan', 'cube', 'flat-fan', 'flat-cube', 'real', 'real-no-stone', 'real-stone-off', 'real-step1', 'real-no-lod', 'real-no-floor-sky', 'real-flat-ground', 'real-no-pcss', 'real-4096', 'real-dust', 'real-hall', 'real-hall-out', 'real-bare-hills', 'real-plain-dust'],
   warmup: 1, batches: 2, batchFrames: 2, profiledFrames: 2,
 };
 
@@ -96,9 +96,12 @@ export type WorldName = 'near' | 'far';
  * default), scaled down until the eye is just outside it (hallSizeOutside).
  * real-bare-hills: the horizon hills as before 2026-11-02 (one ridge 1.5
  * degrees high, the floor's albedo), so real against it is what the scrub
- * cover, the second ridge and the taller default cost.
+ * cover, the second ridge and the taller default cost. real-plain-dust:
+ * real-dust with the dust shape knobs off (dustErode, dustThin, dustSkirt 0,
+ * as before 2026-11-02), so real-dust against it is what the eroded edges,
+ * the thinning and the skirt cost in the same steady shower.
  */
-export type VariantName = 'full' | 'no-shadow' | 'no-post' | 'no-sparks' | 'no-heat' | 'no-ao' | 'no-seam' | 'fan' | 'cube' | 'flat-fan' | 'flat-cube' | 'real' | 'real-no-stone' | 'real-stone-off' | 'real-step1' | 'real-no-lod' | 'real-no-floor-sky' | 'real-flat-ground' | 'real-no-pcss' | 'real-4096' | 'real-dust' | 'real-hall' | 'real-hall-out' | 'real-bare-hills';
+export type VariantName = 'full' | 'no-shadow' | 'no-post' | 'no-sparks' | 'no-heat' | 'no-ao' | 'no-seam' | 'fan' | 'cube' | 'flat-fan' | 'flat-cube' | 'real' | 'real-no-stone' | 'real-stone-off' | 'real-step1' | 'real-no-lod' | 'real-no-floor-sky' | 'real-flat-ground' | 'real-no-pcss' | 'real-4096' | 'real-dust' | 'real-hall' | 'real-hall-out' | 'real-bare-hills' | 'real-plain-dust';
 
 function variantOptions(v: VariantName): RendererOptions {
   if (v === 'fan' || v === 'flat-fan') return { boxPath: 'fan', flatBoxes: v === 'flat-fan' };
@@ -224,6 +227,7 @@ export async function runRenderBench(opts: Partial<RenderBenchOptions> = {}): Pr
     if (variant === 'real' || variant === 'real-no-lod' || variant === 'real-no-floor-sky' || variant === 'real-flat-ground' || variant === 'real-no-pcss' || variant === 'real-4096' || variant === 'real-dust') rend.look = LOOKS.real!;
     if (variant === 'real-no-stone' || variant === 'real-stone-off' || variant === 'real-step1') rend.look = realLook({ stoneDetail: 0 });
     if (variant === 'real-bare-hills') rend.look = realLook({ hills: 1.5, hillCover: 0, hillRidges: 1 });
+    if (variant === 'real-plain-dust') rend.look = realLook({ dustErode: 0, dustThin: 0, dustSkirt: 0 });
     rend.toggles = { shadow: variant !== 'no-shadow', post: variant !== 'no-post', sparks: variant !== 'no-sparks', trail: true, heat: variant !== 'no-heat', ao: variant !== 'no-ao' };
     return rend;
   });
@@ -247,13 +251,14 @@ export async function runRenderBench(opts: Partial<RenderBenchOptions> = {}): Pr
       rend.setShadowBounds(w.center, w.radius);
     }
     const shower = rng(7), fDust: FrameParams = { ...f, dt: 1 / 60 };
+    const shows = (k: number) => o.variants[k] === 'real-dust' || o.variants[k] === 'real-plain-dust';
     const render = (k: number) => {
-      if (o.variants[k] !== 'real-dust') return rends[k]!.render(f);
+      if (!shows(k)) return rends[k]!.render(f);
       for (let i = 0; i < MAX_INJECT; i++) rends[k]!.burst([w.target[0] + 6 * (shower() - 0.5), 0.2 + 3 * shower(), w.target[2] + 6 * (shower() - 0.5)], [shower() - 0.5, 1, shower() - 0.5], 12);
       return rends[k]!.render(fDust);
     };
-    // real-dust warms up longer (4 s of particle time), so its puffs and chips reach their steady count and ages.
-    for (const k of rends.keys()) for (let i = 0; i < o.warmup + (o.variants[k] === 'real-dust' ? o.dustWarmup ?? 240 : 0); i++) await render(k);
+    // The showers warm up longer (4 s of particle time), so their puffs and chips reach their steady count and ages.
+    for (const k of rends.keys()) for (let i = 0; i < o.warmup + (shows(k) ? o.dustWarmup ?? 240 : 0); i++) await render(k);
     await device.queue.onSubmittedWorkDone();
     const batches: number[][] = rends.map(() => []);
     for (let b = 0; b < o.batches; b++) {
@@ -312,7 +317,7 @@ export function renderBenchMarkdown(r: RenderBenchResult, header: string): strin
     ...r.cases.map((c) => `| ${c.world} | ${c.bodies.toLocaleString('en-US')} | ${c.variant} | ${ms(c.frameMs)} | ${ms(c.frameCI[0])}-${ms(c.frameCI[1])} | ${ms(c.gpuP50)} | ${ms(c.gpuP95)} | ${ms(c.gpuSumP50)} | ${passNames.map((p) => ms(c.passes[p])).join(' | ')} | ${c.drawn.boxes.toLocaleString('en-US')} | ${c.drawn.farBoxes.toLocaleString('en-US')} | ${c.drawn.shadowBoxes.toLocaleString('en-US')} | ${c.particles.toLocaleString('en-US')} |`),
     '',
     'Marginal cost: change in frame time when the thing is switched off (paired over interleaved batches; median and 95% CI; "n.s." when the interval includes 0):', '',
-    '| World | Bodies | Without shadow | Without post (bloom + AgX) | Without sparks | Without heat glow | Without AO | Without seam cavity | Fan in both passes | Cube in both passes | Flat shading: cube vs fan | Real look instead of candy | Stone textures (real vs real without) | Unused stone code (texture 0 vs compiled out) | Step 3 shading without stone (vs step 1 blocks) | Stone level of detail (real vs every box with stone code) | Floor sky view cones | Ground material and hills | Soft shadows (real vs 3x3 taps) | 4096 shadow map (vs 2048) | Impact dust and chips, steady shower (vs none alive) | Hall (real inside it vs real) | Hall from outside (vs real) | Hills: scrub, two ridges, 2.2 deg (real vs bare 1.5 deg) |', '|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|',
+    '| World | Bodies | Without shadow | Without post (bloom + AgX) | Without sparks | Without heat glow | Without AO | Without seam cavity | Fan in both passes | Cube in both passes | Flat shading: cube vs fan | Real look instead of candy | Stone textures (real vs real without) | Unused stone code (texture 0 vs compiled out) | Step 3 shading without stone (vs step 1 blocks) | Stone level of detail (real vs every box with stone code) | Floor sky view cones | Ground material and hills | Soft shadows (real vs 3x3 taps) | 4096 shadow map (vs 2048) | Impact dust and chips, steady shower (vs none alive) | Hall (real inside it vs real) | Hall from outside (vs real) | Hills: scrub, two ridges, 2.2 deg (real vs bare 1.5 deg) | Dust shape: erode, thin, skirt (real-dust vs knobs off) |', '|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|',
   ];
   const groups = new Map<string, RenderCase[]>();
   for (const c of r.cases) groups.set(`${c.world}:${c.bodies}`, [...(groups.get(`${c.world}:${c.bodies}`) ?? []), c]);
@@ -325,7 +330,7 @@ export function renderBenchMarkdown(r: RenderBenchResult, header: string): strin
       const pct = (x: number) => `${x >= 0 ? '+' : ''}${(100 * x).toFixed(1)}%`;
       return `${pct(d.estimate)} [${pct(d.lo)}, ${pct(d.hi)}]${verdict(d) === 'no-difference' ? ' n.s.' : ''}`;
     };
-    lines.push(`| ${cs[0]!.world} | ${cs[0]!.bodies.toLocaleString('en-US')} | ${diff(by('no-shadow'), by('full'))} | ${diff(by('no-post'), by('full'))} | ${diff(by('no-sparks'), by('full'))} | ${diff(by('no-heat'), by('full'))} | ${diff(by('no-ao'), by('full'))} | ${diff(by('no-seam'), by('full'))} | ${diff(by('fan'), by('full'))} | ${diff(by('cube'), by('full'))} | ${diff(by('flat-cube'), by('flat-fan'))} | ${diff(by('real'), by('full'))} | ${diff(by('real'), by('real-no-stone'))} | ${diff(by('real-no-stone'), by('real-stone-off'))} | ${diff(by('real-stone-off'), by('real-step1'))} | ${diff(by('real'), by('real-no-lod'))} | ${diff(by('real'), by('real-no-floor-sky'))} | ${diff(by('real'), by('real-flat-ground'))} | ${diff(by('real'), by('real-no-pcss'))} | ${diff(by('real-4096'), by('real'))} | ${diff(by('real-dust'), by('real'))} | ${diff(by('real-hall'), by('real'))} | ${diff(by('real-hall-out'), by('real'))} | ${diff(by('real'), by('real-bare-hills'))} |`);
+    lines.push(`| ${cs[0]!.world} | ${cs[0]!.bodies.toLocaleString('en-US')} | ${diff(by('no-shadow'), by('full'))} | ${diff(by('no-post'), by('full'))} | ${diff(by('no-sparks'), by('full'))} | ${diff(by('no-heat'), by('full'))} | ${diff(by('no-ao'), by('full'))} | ${diff(by('no-seam'), by('full'))} | ${diff(by('fan'), by('full'))} | ${diff(by('cube'), by('full'))} | ${diff(by('flat-cube'), by('flat-fan'))} | ${diff(by('real'), by('full'))} | ${diff(by('real'), by('real-no-stone'))} | ${diff(by('real-no-stone'), by('real-stone-off'))} | ${diff(by('real-stone-off'), by('real-step1'))} | ${diff(by('real'), by('real-no-lod'))} | ${diff(by('real'), by('real-no-floor-sky'))} | ${diff(by('real'), by('real-flat-ground'))} | ${diff(by('real'), by('real-no-pcss'))} | ${diff(by('real-4096'), by('real'))} | ${diff(by('real-dust'), by('real'))} | ${diff(by('real-hall'), by('real'))} | ${diff(by('real-hall-out'), by('real'))} | ${diff(by('real'), by('real-bare-hills'))} | ${diff(by('real-dust'), by('real-plain-dust'))} |`);
   }
   return lines.join('\n');
 }
