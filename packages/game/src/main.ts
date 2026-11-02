@@ -10,10 +10,11 @@ import { seriesOf } from '@tb/keystone';
 import { createDevice } from '@tb/gpu';
 import { lookByName, parseRealOptions, Renderer, SnapshotSource } from '@tb/render';
 import { onEngine, parseGameParams, withRules } from './params.ts';
+import { type ProgressStore, progressStore } from './progress.ts';
 import { type GameHandle, newGameHandle, playKeystone, playLine } from './play.ts';
 import { GAME_HELP, installGameStyles } from './ui.ts';
 
-declare global { interface Window { __game: GameHandle } }
+declare global { interface Window { __game: GameHandle; __progress: ProgressStore } }
 
 const $ = (id: string) => document.getElementById(id)!;
 const canvas = $('c') as HTMLCanvasElement, errorEl = $('error');
@@ -34,6 +35,9 @@ function fail(e: unknown) {
 async function main() {
   const q = new URLSearchParams(location.search);
   const { level, rack, rules, engine, feel, look, shots, offscreen, sound, impactsDb } = parseGameParams(q);
+  // Best plays kept in the browser (?progress=off: this visit only); custom runs are not recorded.
+  const progress = progressStore(q);
+  window.__progress = progress;
   // ?keystone.rack replaces the opening level's rack (its def, so retry keeps it); other levels keep their own.
   // The rule overrides (keystone.scoring, keystone.autobank, physics) apply to every level; stars cast on
   // another engine do not apply (onEngine).
@@ -70,6 +74,7 @@ async function main() {
         else u.delete('keystone.rack');
         history.replaceState(null, '', `?${u}`);
       },
+      ended: (c, score) => { if (!c.def.custom) progress.record(c.def.id, c.hash, score); },
     },
   }, handle);
   // A link with a line plays it once, on the attempt the page opened with.

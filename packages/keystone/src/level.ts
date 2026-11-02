@@ -57,6 +57,25 @@ export type StarMetric = (typeof STAR_METRICS)[number];
  */
 export interface StarsDef { metric: StarMetric; t2: number; t3: number; best?: number; castOn?: string; engine?: string; hash?: string; n?: number; seed?: number }
 
+/**
+ * x as a StarsDef, or throws naming `where` and the field at fault: the check a stars file (big-levels.ts
+ * STARS_FILE) passes at import, so a malformed drop-in fails loudly instead of showing wrong stars.
+ * Higher is better for every metric but skyline, so T3 must be at least as hard as T2 in that direction.
+ */
+export function checkStars(x: unknown, where = 'stars'): StarsDef {
+  if (typeof x !== 'object' || x === null || Array.isArray(x)) throw new Error(`${where} must be an object`);
+  const o = x as Record<string, unknown>;
+  if (!(STAR_METRICS as readonly unknown[]).includes(o.metric)) throw new Error(`${where}.metric must be one of ${STAR_METRICS.join(', ')}: ${String(o.metric)}`);
+  for (const k of ['t2', 't3']) if (typeof o[k] !== 'number' || !Number.isFinite(o[k])) throw new Error(`${where}.${k} must be a finite number: ${String(o[k])}`);
+  for (const k of ['best', 'n', 'seed']) if (o[k] !== undefined && (typeof o[k] !== 'number' || !Number.isFinite(o[k]))) throw new Error(`${where}.${k} must be a finite number when given: ${String(o[k])}`);
+  for (const k of ['castOn', 'engine', 'hash']) if (o[k] !== undefined && typeof o[k] !== 'string') throw new Error(`${where}.${k} must be a string when given: ${String(o[k])}`);
+  const known = new Set(['metric', 't2', 't3', 'best', 'castOn', 'engine', 'hash', 'n', 'seed']);
+  for (const k of Object.keys(o)) if (!known.has(k)) throw new Error(`${where}: unknown field ${k}`);
+  const lower = o.metric === 'skyline', t2 = o.t2 as number, t3 = o.t3 as number;
+  if (lower ? t3 > t2 : t3 < t2) throw new Error(`${where}: t3 (${t3}) is easier than t2 (${t2}) for ${String(o.metric)}`);
+  return o as unknown as StarsDef;
+}
+
 export interface LevelDef {
   id: string;
   name: string;
