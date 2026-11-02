@@ -13,8 +13,8 @@
 // TB_PROBE_OUT=<dir> each case writes <dir>/<case>.json and appends its
 // summary line to <dir>/summary.txt; the line is also written to stdout.
 // The Keystone grenade barely moves a 10k scene (collapse 0 at 74b57c2), so
-// the heavy cases fire @tb/weapons' cluster (6 bomblets, about 60 grenades of
-// energy) from a rack of just that; the rendered cluster cases compare the
+// the heavy cases fire @tb/weapons' cluster (6 bomblets, one grenade of energy
+// since 2026-11-02, 0.8 before) from a rack of just that; the rendered cluster cases compare the
 // valve's budget at 16.7 ms (the default), 14 ms and off (G4.4); one more
 // rendered case saves a screenshot every 2 s, for reviewing the camera.
 // The frames cases are the pipelining audit's A/B (docs/pipelining.md): the

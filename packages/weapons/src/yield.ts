@@ -12,8 +12,16 @@
 // (blastWeight: integer powers by repeated multiply). Evaluated by a fixed
 // midpoint rule over YIELD_SHELLS shells of equal thickness, with only + - * /,
 // so it is the same number on every machine.
-import { blastWeight, checkBlast } from '@tb/engine-api';
-import type { GrenadeBlast } from './grenade.ts';
+//
+// One unit for every weapon (grenadeEnergies): the yield of the viewer's grenade,
+// DEFAULT_GRENADE, against the viewer's own world (CUBE_FILL: packed 1 kg cubes of
+// edge 1). A weapon in those cube units scales to a level (keystone arsenal.ts
+// cubeScale: lengths x h, speeds x sqrt h, densities x the block's) with every blast's
+// yield scaled by the same factor, so a weapon's yield over the grenade's is the same
+// number on every level: a property of the weapon, not of where it is fired.
+import { blastArea, blastWeight, checkBlast } from '@tb/engine-api';
+import { DEFAULT_GRENADE, type GrenadeBlast } from './grenade.ts';
+import { type MunitionSpec, weaponBudget } from './spec.ts';
 
 export const YIELD_SHELLS = 1024;
 
@@ -39,3 +47,25 @@ export function nominalYield(blast: GrenadeBlast, fill: YieldFill): number {
   // 1/2 rho v^2 over a shell of area 4 pi d^2 and thickness dr.
   return 2 * Math.PI * fill.density * sum * dr;
 }
+
+/** The viewer's world: packed scene cubes, 1 kg each, edge 1, pitch 1. */
+export const CUBE_FILL: YieldFill = { density: 1, areaPerMass: blastArea({ kind: 'box', half: [0.5, 0.5, 0.5] }) };
+
+/**
+ * A weapon's nominal yield against `fill`, J: every blast it can set off (weaponBudget, each
+ * as often as it can go off) with the engine's defaults filled in. The rack's charge for it.
+ */
+export function weaponYield(spec: MunitionSpec, fill: YieldFill): number {
+  let y = 0;
+  for (const { blast, count } of weaponBudget(spec).blasts) {
+    const b = checkBlast({ centre: [0, 0, 0], ...blast });
+    y += count * nominalYield({ radius: b.radius, impulse: b.impulse, falloff: b.falloff, core: b.core, maxDv: b.maxDv, maxSpeed: b.maxSpeed }, fill);
+  }
+  return y;
+}
+
+/** One grenade: DEFAULT_GRENADE's nominal yield in the viewer's world (CUBE_FILL), J. */
+export const GRENADE_YIELD = nominalYield(DEFAULT_GRENADE.blast, CUBE_FILL);
+
+/** A weapon in the viewer's cube units, in grenades: its yield over GRENADE_YIELD (the same on every level it scales to). */
+export const grenadeEnergies = (spec: MunitionSpec): number => weaponYield(spec, CUBE_FILL) / GRENADE_YIELD;

@@ -64,6 +64,17 @@ A    = a quarter of the body's surface (its mean silhouette): 2 (hx hy + hy hz +
 - Candy is a skin, not physics: the renderer's per-body fx gains a `paint` bit (`FX_PAINT`), so the thing is drawn its own colour (its candy skin in the candy and hazy looks, its natural colour in the real look) rather than the look's ball colour.
 - Checked on the reference engine (`packages/viewer/test/projectiles.test.ts`): a beach ball, 1/9,650 of a stone cube, comes off a 2 x 2 x 3 tower without moving a block or a NaN; a wrecking ball moves more than a third of it and the boulder all of it.
 
+**Energy: one unit, grenades** (`packages/weapons/src/yield.ts`). A blast's nominal yield (`nominalYield`: the kinetic energy it would give a packed fill of one kind of block at rest, the same number on every machine, within 3% of a real lattice of cubes) is what the rack charges. One **grenade** is `GRENADE_YIELD`, `DEFAULT_GRENADE`'s yield in the viewer's world (`CUBE_FILL`: packed 1 kg cubes of edge 1). `weaponYield(spec, fill)` sums every blast a spec can set off (`weaponBudget` counts) and `grenadeEnergies(spec)` divides by the unit. A weapon written in the viewer's cube units scales to a level (`cubeScale`) with all its yields scaled by one factor, so its grenades are the same on every level, plaster or stone (`keystone-lab/test/rack-weapons.test.ts` checks B1 to B3 to 1e-9).
+
+| Weapon | Grenades | Note |
+|---|---|---|
+| viewer grenade (`DEFAULT_GRENADE`), `GRENADE_WEAPON`, B1 to B3's `bomb` | 1 | the unit |
+| `firework` (12 stars, radius 3, impulse 18.5) | 1.004 | 0.389 before 2026-11-02 (radius 2.5, impulse 15) |
+| `cluster` (6 bomblets, radius 3, impulse 30) | 0.994 | 0.800 before (impulse 25) |
+| `KEYSTONE_GRENADE` (w-grenade's default; SI, not scaled with the block) | 0.013 on 0.5 m plaster, 0.002 on 0.5 m stone | the "firework costs 30 grenades" figure was against this one |
+
+So a rack of built-ins is a choice of how the same energy is spread (one big blast, 12 small ones over a cone, 6 medium ones where they land), not of how much there is. Retuning a built-in is safe for cast levels: a w- item the level does not define plays the built-in, which is part of the level hash, so stars cast against the old one drop.
+
 ## Known limits of the v1 blast
 
 | Limit | Consequence | Fix (planned step) |

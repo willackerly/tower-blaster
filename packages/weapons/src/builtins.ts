@@ -1,10 +1,15 @@
 // Built-in WeaponSpecs, in the units of a scene of 1 m cubes (1 kg each) at
 // 60 Hz: the viewer's proj.weapon=<name> (scaled with the world, as the
 // grenade is), and examples to copy. Every number is a starting point to tune.
+//
+// Energy: each built-in carries one grenade (grenadeEnergies, yield.ts: the
+// viewer's grenade, which is also B1-B3's bomb), within 1%, so a rack of them is
+// a choice of how the energy is spread, not of how much there is. Until
+// 2026-11-02 the firework carried 0.39 grenades and the cluster 0.80.
 import { DEFAULT_GRENADE } from './grenade.ts';
 import { grenadeAsSpec, type WeaponSpec } from './spec.ts';
 
-/** Up and over: at the top of its arc (or after 4 s) 12 stars burst out on a cone round its heading; each blows on touching anything. */
+/** Up and over: at the top of its arc (or after 4 s) 12 stars burst out on a cone round its heading; each blows on touching anything. 12 stars of 1/12 grenade: 1.004 grenades. */
 export const FIREWORK: WeaponSpec = {
   version: 1, name: 'firework',
   shell: { shape: { kind: 'sphere', radius: 0.5 }, density: 4, speed: [25, 45] },
@@ -12,12 +17,12 @@ export const FIREWORK: WeaponSpec = {
   children: {
     star: {
       shell: { shape: { kind: 'sphere', radius: 0.25 }, density: 6 },
-      rules: [{ when: { any: [{ near: 0.1, arm: 0.25 }, { after: 5 }] }, do: [{ blast: { radius: 2.5, impulse: 15, core: 0.2 } }, { remove: true }] }],
+      rules: [{ when: { any: [{ near: 0.1, arm: 0.25 }, { after: 5 }] }, do: [{ blast: { radius: 3, impulse: 18.5, core: 0.2 } }, { remove: true }] }],
     },
   },
 };
 
-/** Breaks up near its target into 6 bomblets that scatter and go off where they land (or after 3 s). */
+/** Breaks up near its target into 6 bomblets that scatter and go off where they land (or after 3 s). 6 bomblets of 1/6 grenade: 0.994 grenades. */
 export const CLUSTER: WeaponSpec = {
   version: 1, name: 'cluster',
   shell: { shape: { kind: 'sphere', radius: 0.5 }, density: 6, speed: [20, 45] },
@@ -25,7 +30,7 @@ export const CLUSTER: WeaponSpec = {
   children: {
     bomblet: {
       shell: { shape: { kind: 'sphere', radius: 0.25 }, density: 8 },
-      rules: [{ when: { any: [{ near: 0.15, arm: 0.1 }, { after: 3 }] }, do: [{ blast: { radius: 3, impulse: 25, core: 0.2 } }, { remove: true }] }],
+      rules: [{ when: { any: [{ near: 0.15, arm: 0.1 }, { after: 3 }] }, do: [{ blast: { radius: 3, impulse: 30, core: 0.2 } }, { remove: true }] }],
     },
   },
 };
