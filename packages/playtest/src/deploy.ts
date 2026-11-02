@@ -58,6 +58,13 @@ export function hasProject(listJson: string, project: string): boolean {
   return list.some((p) => p['Project Name'] === project || p.name === project);
 }
 
+/** Whether `wrangler whoami` output shows a login (it exits 0 either way, printing "You are not authenticated"). */
+export const loggedIn = (whoamiText: string) => !/not authenticated|not logged in/i.test(whoamiText) && /logged in|associated with|Account (Name|ID)/i.test(whoamiText);
+
+function whoami(): string {
+  try { return wrangler(['whoami']); } catch (e) { return String((e as { stdout?: unknown }).stdout ?? ''); }
+}
+
 function wrangler(args: string[], opts: ExecFileSyncOptions & { input?: string } = {}): string {
   return String(execFileSync('npx', ['--yes', WRANGLER, ...args], { cwd: HERE, encoding: 'utf8', stdio: opts.input !== undefined ? ['pipe', 'pipe', 'inherit'] : ['inherit', 'pipe', 'inherit'], ...opts }));
 }
@@ -70,9 +77,12 @@ async function main() {
   const info = await buildPlaytest(DIST);
   console.log(`built ${info.commit.slice(0, 7)}${info.dirty ? ' (with local changes)' : ''} into ${DIST}`);
 
-  try { wrangler(['whoami']); } catch {
-    console.log('not logged in to Cloudflare: opening wrangler login');
+  // `wrangler whoami` exits 0 when logged out, so read what it prints. Without a login every later call
+  // (its output piped, so not interactive) would stop and ask for CLOUDFLARE_API_TOKEN instead.
+  if (!process.env.CLOUDFLARE_API_TOKEN && !loggedIn(whoami())) {
+    console.log('not logged in to Cloudflare: opening wrangler login in the browser');
     execFileSync('npx', ['--yes', WRANGLER, 'login'], { stdio: 'inherit' });
+    if (!loggedIn(whoami())) throw new Error('still not logged in to Cloudflare after wrangler login');
   }
 
   // The testers' KV namespace, made once (from an empty directory, so its title is exactly ours).
