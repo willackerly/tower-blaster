@@ -59,7 +59,9 @@ describe('drawing', () => {
 
   it('real look horizon hills: cover the sky just above the horizon, not above the ridge, and fade into the haze with distance', async (ctx) => {
     if (!gpu) return ctx.skip();
-    const r = await call('hillChecks', [{ hills: 0 }, { hills: 8 }, { hills: 8, hillDistance: 2 }, { hills: 8, hillDistance: 40 }, { hills: 8, realDiag: 'ground-off' }, { hills: 0, groundDetail: 0 }]);
+    // Bare single-ridge hills (the hills before cover and ridges, 2026-11-02): the values below were measured on them.
+    const bare = { hillCover: 0, hillRidges: 1 };
+    const r = await call('hillChecks', [{ hills: 0 }, { hills: 8, ...bare }, { hills: 8, hillDistance: 2, ...bare }, { hills: 8, hillDistance: 40, ...bare }, { hills: 8, realDiag: 'ground-off' }, { hills: 0, groundDetail: 0 }]);
     for (const f of r.frames) expect(f.rows).toEqual([1, 3]);
     expect(r.error).toBeNull();
     const [none, hills, near, far, off, flat] = r.frames;
@@ -76,6 +78,27 @@ describe('drawing', () => {
     // Compiled out with the ground, the hills are gone, and the frame is the flat floor's under a bare horizon.
     expect(off!.hash).toBe(flat!.hash);
   }, 180_000); // six renderers, each baking its materials
+
+  it('real look horizon hills: scrub cover and a nearer ridge make the default hills stand out from the sky, warm, with the sky above untouched', async (ctx) => {
+    if (!gpu) return ctx.skip();
+    const bare = { hillCover: 0, hillRidges: 1 };
+    const r = await call('hillChecks', [{ hills: 0 }, bare, {}, { hills: 8, hillRidges: 1 }, { hills: 8 }]);
+    expect(r.error).toBeNull();
+    const [sky, bareHills, hills, one, two] = r.frames;
+    const d = (a: number[], b: number[]) => Math.hypot(a[0]! - b[0]!, a[1]! - b[1]!, a[2]! - b[2]!);
+    // Measured on SwiftShader (sRGB of the band 0.3 to 0.7 degrees up): sky 159.6, 158.4, 158.1; at the default
+    // height the bare hills 141.1, 136.6, 131.5 (beside a plain of about the same colour, they vanished: Will's
+    // "hills faint at default haze"), the default ones 121.0, 117.0, 111.2: twice as far from the sky (1.9x).
+    expect(d(hills!.low, sky!.low)).toBeGreaterThan(1.5 * d(bareHills!.low, sky!.low));
+    // Darker than the sky and warm (red over blue), not a blue band.
+    for (let c = 0; c < 3; c++) expect(hills!.low[c]!).toBeLessThan(sky!.low[c]! - 30);
+    expect(hills!.low[0]! - hills!.low[2]!).toBeGreaterThan(5);
+    // 8 degree hills, whose cover is mostly thinned at this band near their foot: the second ridge, nearer and
+    // through less haze, darkens it (one ridge 137.6, 132.6, 126.2; two 111.4, 107.3, 101.1).
+    for (let c = 0; c < 3; c++) expect(two!.low[c]!).toBeLessThan(one!.low[c]! - 15);
+    // Above every ridge, the sky is as without hills.
+    for (const f of [bareHills, hills, one, two]) expect(d(f!.high, sky!.high)).toBeLessThan(1);
+  }, 180_000); // five renderers, each baking its materials
 
   it('real look floor: open shadow lit by the whole sky; a street sees sunlit walls where the sky is hidden; shadow fill lifts the shadows, not the sun', async (ctx) => {
     if (!gpu) return ctx.skip();
