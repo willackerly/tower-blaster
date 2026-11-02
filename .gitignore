@@ -4,3 +4,6 @@ results/
 *.log
 .DS_Store
 .vitest-report.json
+packages/playtest/wrangler.toml
+packages/playtest/.dev.vars
+.wrangler/

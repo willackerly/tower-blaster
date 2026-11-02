@@ -151,6 +151,8 @@
   "packages/physics-ref/test/remove.test.ts": 0.2,
   "packages/physics-ref/test/restitution.test.ts": 16.8,
   "packages/physics-ref/test/variants.test.ts": 13.1,
+  "packages/playtest/test/gate.test.ts": 0.1,
+  "packages/playtest/test/playtest.test.ts": 5,
   "packages/render/test/ao.test.ts": 0.1,
   "packages/render/test/floor.test.ts": 0.3,
   "packages/render/test/hall-gpu.test.ts": 1,
