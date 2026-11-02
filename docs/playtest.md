@@ -35,7 +35,7 @@ PLAYTEST_PASSWORD=<the password> pnpm playtest:deploy
 What `deploy.ts` does, in order. Each step is skipped when an earlier run already did it:
 
 1. Build.
-2. Check the Cloudflare login with `wrangler whoami`. If there is no login, run `wrangler login`, which opens the browser once.
+2. Check the Cloudflare login. If there is none, run `wrangler login`, which opens the browser once. `wrangler whoami` exits 0 even when logged out, so the script reads what it prints. Without this check, every later call would stop and ask for `CLOUDFLARE_API_TOKEN`; that happened on the first try, 2026-11-02. A token works instead of the login: set `CLOUDFLARE_API_TOKEN` to a custom token with Account permissions Cloudflare Pages Edit and Workers KV Storage Edit, and User permissions User Details Read and Memberships Read.
 3. Create the KV namespace `<project>-testers`, then write `packages/playtest/wrangler.toml` binding it as `TESTERS`. The file is git-ignored.
 4. Create the Pages project, with production branch `main`.
 5. Set the secrets. `GATE_PASSWORD` is set on every run, so changing the password is just a new run with the new value. `GATE_SECRET` is the cookie signing key: 32 random bytes, set only once, because a new key would sign every tester out.

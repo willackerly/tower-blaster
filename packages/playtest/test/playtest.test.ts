@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { buildPlaytest, headersFile } from '../src/build.ts';
-import { hasProject, namespaceId, testersTitle, wranglerToml } from '../src/deploy.ts';
+import { hasProject, loggedIn, namespaceId, testersTitle, wranglerToml } from '../src/deploy.ts';
 import { testersCsv } from '../src/testers.ts';
 
 describe('playtest build', () => {
@@ -43,6 +43,13 @@ describe('deploy helpers', () => {
     const list = JSON.stringify([{ 'Project Name': 'tower-blaster-playtest', 'Project Domains': 'tower-blaster-playtest.pages.dev' }]);
     expect(hasProject(list, 'tower-blaster-playtest')).toBe(true);
     expect(hasProject(list, 'other')).toBe(false);
+  });
+  it('reads the login from wrangler whoami (which exits 0 when logged out)', () => {
+    // Captured from wrangler 4.151.0 with no login.
+    const out = '▲ [WARNING] Proxy environment variables detected.\n\n ⛅️ wrangler 4.151.0\n────────────────────\nGetting User settings...\nYou are not authenticated. Please run `wrangler login`.\nTo deploy without logging in, run a command like `wrangler deploy --temporary` to use a temporary preview account.\n';
+    expect(loggedIn(out)).toBe(false);
+    expect(loggedIn('')).toBe(false);
+    expect(loggedIn('Getting User settings...\n👋 You are logged in with an OAuth Token, associated with the email will@example.com.\n┌──────────────┬──────────┐\n│ Account Name │ Account ID │')).toBe(true);
   });
   it('writes the Pages config with the TESTERS binding', () => {
     const toml = wranglerToml('p', 'kv123');
