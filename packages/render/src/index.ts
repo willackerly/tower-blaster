@@ -17,3 +17,4 @@ export * from './atmosphere.ts';
 export * from './noise.ts';
 export * from './materials.ts';
 export * from './hall.ts';
+export * from './rocks.ts';

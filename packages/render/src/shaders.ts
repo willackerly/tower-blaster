@@ -11,6 +11,7 @@ import { AO_FOOT_WGSL, AO_SAMPLE_WGSL, AO_SEAM_WGSL } from './ao.ts';
 import { ATMO_COMMON_WGSL } from './atmosphere.ts';
 import { GROUND_LAYER, GROUND_TILE, GROUNDS, MACRO_LAYER, MACRO_TILE, MATERIAL_MIPS, MATERIAL_SIZE, MATERIAL_TILE, WOOD, WOOD_RING_M, WOOD_STRETCH, WOOD_WGSL } from './materials.ts';
 import { PCG_WGSL } from './noise.ts';
+import { ROCKS_WGSL } from './rocks.ts';
 import { BALUSTRADE, HALL_MAT, HALL_PATTERN } from './hall.ts';
 
 export const SHADOW_SIZE = 2048;
@@ -58,6 +59,7 @@ export const Frame = defineStruct('Frame', [
   ['hills', 'vec4f', 'real look: horizon hills\' greatest height (radians, 0: none), distance (m), cover (0 bare to 1 dry scrub) and ridges (1 or 2)'],
   ['debris', 'vec4f', 'real look: dust puff size (m, fully grown), puff opacity, chip size (m), skirt (0 to 1: ground puffs flatten)'],
   ['dustShape', 'vec4f', 'real look: dust edge erosion (0 to 1), thinning as it spreads (0 to 1), unused, unused'],
+  ['rocks', 'vec4f', 'real look: small rocks (rocks.ts): share of ground cells holding one (0: none, nothing runs), rockSize, cell width, clumping lattice (world units)'],
   ['shadowSoft', 'vec4f', 'real look: tan of the penumbra half angle (0: 3x3 taps), blocker search radius (texels), light depth range (m), steepest receiver plane (depth per uv)'],
   ['hallLook', 'vec4f', 'real look, hall: 1 while the eye is inside it, 2 outside it with its exterior on (else it is not drawn), metres per world unit, glass milkiness, iron grey'],
   ['hallShade', 'vec4f', 'real look, hall: glazed share of the vault, web lattice bar width (web panels), balustrade height (m), unused'],
@@ -99,6 +101,8 @@ override SHADOW_VIEW: bool = false;
 @group(1) @binding(6) var shadowPoint: sampler; // non-filtering: textureGather on the shadow map
 // The fragment's pixel (set by each real fragment entry point), for the shadow taps' per-pixel turn.
 var<private> fragPx: vec2f;
+// What the rocks on the ground let through of the sun (fsGround sets it; 1 everywhere else).
+var<private> sunVis: f32 = 1.0;
 
 // Soft sun shadows (realism step 5): percentage-closer soft shadows with the
 // sun's angular size. Taps on Vogel discs (radius sqrt((i + 0.5) / N), golden
@@ -179,7 +183,7 @@ fn shadowSoft(rel: vec3f, n: vec3f) -> f32 {
 // Back faces skip the lookup (their N.L is 0 anyway).
 fn sunShadow(rel: vec3f, n: vec3f, NoL: f32) -> f32 {
   if (NoL <= 0.0) { return 0.0; }
-  return shadowSoft(rel, n) * NoL;
+  return shadowSoft(rel, n) * NoL * sunVis;
 }
 
 // In-scattered radiance (rgb) and green transmittance (a) along the view ray in direction dir (unit).
@@ -432,6 +436,7 @@ fn groundFar(p: vec2f, pxM: f32) -> GroundHit {
   let a = sqrt(min(rough * rough * rough * rough + 2.0 * (1.0 - len) / len, 1.0));
   return GroundHit(mix(vec3f(1.0), d.rgb * 2.0, k) * mac.tone, a, vec3f(0.0, 1.0, 0.0), mix(1.0, n.a, k));
 }
+${ROCKS_WGSL}
 
 // Hills on the horizon (realism step 4): a ridge at most hills.x radians
 // high, hills.y metres away, its profile a sum of sines in azimuth (so it
@@ -1279,6 +1284,17 @@ struct GOut { @builtin(position) clip: vec4f, @location(0) rel: vec3f }
   if (SHADOW_VIEW) { return vec4f(vec3f(shadowSoft(g.rel, vec3f(0.0, 1.0, 0.0))), 1.0); }
   // The ground's material (groundAt); the sky it sees is the baked floor sky view.
   let gh = groundAt(p, w);
+  if (fr.rocks.x > 0.0) { // uniform: no rocks, none of this
+    // Small rocks (rocks.ts): the point of a rock the eye's ray meets first, lit on its own normal there (so
+    // block shadows fall on it through the shadow map), shadowed by its neighbours, darker at their feet;
+    // the ground's grain on them too.
+    let rk = rocksAt(p, normalize(g.rel), max(w.x, w.y));
+    let rock = mix(fr.floor, fr.blockAlbedo.rgb, 0.08) * (0.6 + 0.55 * rk.tone) * gh.albedo;
+    let n = normalize(mix(gh.n, rk.n + (gh.n - vec3f(0.0, 1.0, 0.0)) * 0.5, rk.cover));
+    let rel = g.rel + vec3f(rk.o.x, rk.z, rk.o.y);
+    sunVis = rk.sun;
+    return vec4f(fog(shade(mix(fr.floor * gh.albedo, rock, rk.cover), rel, n, gh.a, gh.a, 0.0, vec2f(gh.cavity * rk.ao, floorSky(g.rel))), g.rel), 1.0);
+  }
   return vec4f(fog(shade(fr.floor * gh.albedo, g.rel, gh.n, gh.a, gh.a, 0.0, vec2f(gh.cavity, floorSky(g.rel))), g.rel), 1.0);` : /* wgsl */ `// 1 m grid with screen-space antialiased lines, fading out where a line is under a pixel.
   let line = abs(fract(p - 0.5) - 0.5) / max(w, vec2f(1e-4));
   let grid = (1.0 - min(min(line.x, line.y), 1.0)) * (1.0 - smoothstep(0.05, 0.4, max(w.x, w.y)));

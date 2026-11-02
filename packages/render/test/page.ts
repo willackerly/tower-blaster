@@ -9,7 +9,7 @@ import { Body, RenderRecord, Shape, TIER, readStruct } from '@tb/schema';
 import {
   agx, AGX_WGSL, LOOKS, lookByName, realLook, type RealOptions, type LookParams, fromHalf, Atmosphere, CLEAR_DAY, transmittance, transmittanceHMu, multiScattering, skyViewDir, skyRadiance, skyViewUv, sampleTransmittance, ambientOf, distanceToGround, meteredIlluminance, Materials, heightNormal, STONES, GROUNDS, MATERIAL_LAYERS, WOOD_WGSL, WOOD_RING_M, woodRings, PCG_WGSL, pcg3d, MACRO_LAYER, layerTile, materialSample, macroSample, adaptedExposure, LUMA, R_TOP, R_GROUND, FX_WORDS, packFx, toHalf, bevelNormal, BEVEL_WGSL, oklabToLinear, OKLAB_WGSL, Post,
   Culler, cullReference, FLOOR_REACH, GpuBodySource, invert, listMatches, lookAt, makeGpuBodies, multiply, packBodies, perspective, Renderer, SEG, SEGMENTS, SnapshotSource, transform,
-  translation, normalize, hallTraceCpu, HALL_MAT, OLYMPIA, BOX_VERTS, SPHERE_VERTS, SUN, Sparks, CTL, MAX_EVENTS, flashSlot, FLASHES, MAX_BALLS, TRAIL, Lights, LIGHTS, LIGHT_META, LIGHT_PACKED, MATERIAL, AoVolume, aoGrid, aoFrame, splatReference, composeReference, AO_FOOT_WGSL, AO_SAMPLE_WGSL, AO_SEAM_WGSL, AO_ONE, type SplatBody, unpackImpacts, unpackSparks, spawnReference, stepReference, debrisSpawnReference, dustStepReference, chipStepReference, type SparkState, type Impact, type BodySource, type CullFrame, type FrameParams, type RendererOptions, type V3,
+  translation, normalize, rockIn, ROCK_CELL, ROCK_CLUMP, ROCK_SINK, sunOf, hallTraceCpu, HALL_MAT, OLYMPIA, BOX_VERTS, SPHERE_VERTS, SUN, Sparks, CTL, MAX_EVENTS, flashSlot, FLASHES, MAX_BALLS, TRAIL, Lights, LIGHTS, LIGHT_META, LIGHT_PACKED, MATERIAL, AoVolume, aoGrid, aoFrame, splatReference, composeReference, AO_FOOT_WGSL, AO_SAMPLE_WGSL, AO_SEAM_WGSL, AO_ONE, type SplatBody, unpackImpacts, unpackSparks, spawnReference, stepReference, debrisSpawnReference, dustStepReference, chipStepReference, type SparkState, type Impact, type BodySource, type CullFrame, type FrameParams, type RendererOptions, type V3,
 } from '../src/index.ts';
 
 function rng(seed: number) {
@@ -1413,6 +1413,70 @@ export async function dustShape(looks: Array<Partial<RealOptions>>, frames: numb
   }
   const err = await device.popErrorScope();
   return { looks: out, error: err?.message ?? null };
+}
+
+/**
+ * Small rocks (rocks.ts) seen from straight above (12 m up, sun 35 degrees
+ * high): per look, the frame's hash and mean luma; and per rock the CPU twin
+ * (rockIn) places wholly in view at the probe's share and size, read from
+ * that look's frame: its centre pixel's luma, the luma 0.7 (rimSun,
+ * rimAway: on the rock, inside its lumps) and 1.22 (toSun, away: past its
+ * rim and lumps) of its radius along that direction out from its centre
+ * toward the sun and away from it, and how far its shadow reaches (tip, in
+ * the same radius).
+ */
+export async function rockChecks(looks: Array<Partial<RealOptions>>, probe: { rocks: number; rockSize: number }, size: [number, number] = [320, 200], keep = false) {
+  const { device } = await sharedDevice({ timestamps: false });
+  device.pushErrorScope('validation');
+  const descs = [box([0, 0.5, -300], [0.5, 0.5, 0.5], [0, 0, 0, 1])];
+  const src = new SnapshotSource(device);
+  src.reset(descs);
+  src.update(snapshotOf(descs), descs);
+  // 12 m up through a narrow lens: within 9 degrees of straight down, so a rock's top shows over its foot.
+  const eye: V3 = [0.37, 12, 0.21];
+  const viewProj = multiply(perspective(0.3, size[0] / size[1], 1, 400), lookAt(eye, [eye[0], 0, eye[2]], [0, 0, -1]));
+  const f: FrameParams = { viewProj, eye, groundY: 0, time: 1, dt: 0, alpha: 1 };
+  const pixel = (x: number, z: number) => {
+    const c = transform(viewProj, [x, 0, z]);
+    return [Math.floor((c[0] / c[3] * 0.5 + 0.5) * size[0]), Math.floor((0.5 - c[1] / c[3] * 0.5) * size[1])] as const;
+  };
+  const out = [];
+  for (const o of looks) {
+    const look = { ...realLook({ sunElevation: 35, sunAzimuth: 90, hills: 0, ...o }), bloomMix: 0, vignette: 0 };
+    const rend = new Renderer(device, { size }, { format: 'rgba8unorm' });
+    rend.look = look;
+    rend.setSource(src);
+    rend.setShadowBounds([0, 0, 0], 4);
+    await rend.render(f);
+    const { data, bytesPerRow } = (await rend.render(f, true, true))!.pixels!;
+    rend.destroy();
+    const luma = (x: number, y: number) => { const q = y * bytesPerRow + 4 * x; return 0.2126 * data[q]! + 0.7152 * data[q + 1]! + 0.0722 * data[q + 2]!; };
+    let mean = 0;
+    for (let y = 0; y < size[1]; y++) for (let x = 0; x < size[0]; x++) mean += luma(x, y) / (size[0] * size[1]);
+    const sun = sunOf(look);
+    const sd = [sun[0], sun[2]].map((v) => v / Math.hypot(sun[0], sun[2])) as [number, number];
+    const share = probe.rocks, sz = probe.rockSize, cell = ROCK_CELL * sz;
+    const rocks = [];
+    for (let cy = -8; cy <= 8; cy++) for (let cx = -8; cx <= 8; cx++) {
+      const k = rockIn(cx, cy, share, sz, cell, ROCK_CLUMP);
+      if (!k) continue;
+      // The rock's radius along the sun's direction (the ellipse, without its lumps).
+      const u = [k.cs[0] * sd[0] + k.cs[1] * sd[1], -k.cs[1] * sd[0] + k.cs[0] * sd[1]];
+      const rd = 1 / Math.hypot(u[0]! / k.r[0], u[1]! / k.r[1]);
+      // How far its shadow reaches on the ground, in its radius along the sun: the ellipsoid scaled to a unit
+      // ball whose centre is ROCK_SINK under the ground, the ray from (-t, ROCK_SINK) toward the sun misses it past t.
+      const sxz = Math.hypot(sun[0], sun[2]), dz = sun[1] / k.h, dxy = sxz / rd;
+      const tip = (Math.hypot(dxy, dz) - ROCK_SINK * dxy) / dz;
+      const at = (t: number) => pixel(k.c[0] + t * sd[0], k.c[1] + t * sd[1]);
+      const pts: Array<readonly [number, number]> = [pixel(k.c[0], k.c[1]), at(1.22 * rd), at(-1.22 * rd), at(0.7 * rd), at(-0.7 * rd)];
+      const [c0, c1, c2, c3, c4] = pts as Array<readonly [number, number]> as [readonly [number, number], readonly [number, number], readonly [number, number], readonly [number, number], readonly [number, number]];
+      if (pts.some(([x, y]) => x < 1 || y < 1 || x >= size[0] - 1 || y >= size[1] - 1)) continue;
+      rocks.push({ cx, cy, tip, rPx: Math.abs(pixel(k.c[0] + k.r[1], k.c[1])[0] - c0[0]), centre: luma(c0[0], c0[1]), toSun: luma(c1[0], c1[1]), away: luma(c2[0], c2[1]), rimSun: luma(c3[0], c3[1]), rimAway: luma(c4[0], c4[1]), px: pts.map((p) => [...p]) });
+    }
+    out.push({ hash: fnv(data), mean, rocks, ...(keep ? { px: { data: [...data], bytesPerRow } } : {}) });
+  }
+  const err = await device.popErrorScope();
+  return { frames: out, error: err?.message ?? null };
 }
 
 // ---------------------------------------------------------------- lights
