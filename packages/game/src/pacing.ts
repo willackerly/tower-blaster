@@ -14,8 +14,10 @@ export const FAST_SCALE = 4;
  * changes it on a collision is off unless asked for: `?keystone.hitstop=1` freezes a few frames on
  * the ammo's first contact, and `?keystone.slowmo=1` slows time while a crown falls fast. Load
  * changes it through the valve, on unless `?keystone.budget=0`, and the tail skip, on unless
- * `?keystone.tailskip=0`; the camera that follows the collapse (follow.ts), `?keystone.follow=0`; which display frames are drawn
- * (frame-rate.ts), `?keystone.frames=all|half|auto`. None of them changes which steps run, so none is part of a level.
+ * `?keystone.tailskip=0`; which display frames are drawn (frame-rate.ts), `?keystone.frames=all|half|auto`. The camera
+ * moves only when the player moves it unless asked (playtest feedback, 2026-11-02): `?keystone.follow=1` lets it follow
+ * the collapse (follow.ts), and `?keystone.shake=1` shakes it and punches its field of view on hits (juice.ts). None of
+ * them changes which steps run, so none is part of a level.
  */
 export interface PaceFeel {
   hitStop: boolean;
@@ -24,13 +26,15 @@ export interface PaceFeel {
   budgetMs: number;
   /** Fast-forward the tail of a shot (TailSkip). */
   tailSkip: boolean;
-  /** The camera follows the moving structure during a shot and eases back after (follow.ts). */
+  /** The camera follows the moving structure during a shot and eases back after (follow.ts). Off by default. */
   follow: boolean;
+  /** The camera shakes and its field of view punches in on hits and blasts (juice.ts CameraJuice). Off by default. */
+  shake: boolean;
   /** Which display frames are drawn (frame-rate.ts FrameGovernor): every one, half on a fast display, or half only while physics is behind. */
   frames: FrameMode;
 }
 
-/** The URL's keystone.hitstop, keystone.slowmo, keystone.tailskip, keystone.follow (0 or 1 each), keystone.budget (ms, 0 to 1000) and keystone.frames (all, half, auto); any other value is refused. */
+/** The URL's keystone.hitstop, keystone.slowmo, keystone.tailskip, keystone.follow, keystone.shake (0 or 1 each), keystone.budget (ms, 0 to 1000) and keystone.frames (all, half, auto); any other value is refused. */
 export function paceFeel(q: URLSearchParams): PaceFeel {
   const flag = (k: string, dflt: boolean) => {
     const v = q.get(k);
@@ -39,7 +43,7 @@ export function paceFeel(q: URLSearchParams): PaceFeel {
   };
   const b = q.get('keystone.budget'), budgetMs = b === null ? DEFAULT_BUDGET_MS : b.trim() === '' ? NaN : Number(b);
   if (!(budgetMs >= 0 && budgetMs <= 1000)) throw new Error(`keystone.budget must be from 0 to 1000 ms (0: no valve): ${b}`);
-  return { hitStop: flag('keystone.hitstop', false), slowMo: flag('keystone.slowmo', false), budgetMs, tailSkip: flag('keystone.tailskip', true), follow: flag('keystone.follow', true), frames: frameMode(q.get('keystone.frames')) };
+  return { hitStop: flag('keystone.hitstop', false), slowMo: flag('keystone.slowmo', false), budgetMs, tailSkip: flag('keystone.tailskip', true), follow: flag('keystone.follow', false), shake: flag('keystone.shake', false), frames: frameMode(q.get('keystone.frames')) };
 }
 
 /** Throws unless f's budget is a number of ms from 0 to 1000 (the Scene panel's field can hold anything). */
@@ -55,7 +59,8 @@ export function writePaceFeel(f: PaceFeel, q: URLSearchParams): void {
   if (f.slowMo) q.set('keystone.slowmo', '1');
   if (f.budgetMs !== DEFAULT_FEEL.budgetMs) q.set('keystone.budget', String(f.budgetMs));
   if (!f.tailSkip) q.set('keystone.tailskip', '0');
-  if (!f.follow) q.set('keystone.follow', '0');
+  if (f.follow) q.set('keystone.follow', '1');
+  if (f.shake) q.set('keystone.shake', '1');
   if (f.frames !== DEFAULT_FEEL.frames) q.set('keystone.frames', f.frames);
 }
 
@@ -71,8 +76,8 @@ export const VALVE_MIN = 0.25;
  * 0.70x real time against 0.82x, so no budget is held back for the frames (spectacle-mode.md, G4.4).
  */
 export const DEFAULT_BUDGET_MS = 16.7;
-/** No juice, the valve at its default budget, the tail skip on, every frame drawn. */
-export const DEFAULT_FEEL: Readonly<PaceFeel> = { hitStop: false, slowMo: false, budgetMs: DEFAULT_BUDGET_MS, tailSkip: true, follow: true, frames: 'all' };
+/** No juice, the valve at its default budget, the tail skip on, a camera only the player moves, every frame drawn. */
+export const DEFAULT_FEEL: Readonly<PaceFeel> = { hitStop: false, slowMo: false, budgetMs: DEFAULT_BUDGET_MS, tailSkip: true, follow: false, shake: false, frames: 'all' };
 /**
  * Owed time the clock keeps, ms; beyond it the rest is dropped (slow motion, not a burst of catch-up
  * steps after a stall). As the viewer's free loop (loop.ts FREE_MAX_LAG_MS).

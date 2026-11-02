@@ -267,7 +267,7 @@ export function mountControls(root: HTMLElement, hooks: ControlsHooks): { refres
       <div class="params"></div>
       <div class="rules">
         <label class="f"><span>rules</span><select name="rules"><option value="sandbox">sandbox</option><option value="keystone">Keystone (the game)</option></select></label>
-        <div class="feel">${field('hitstop', 'hit-stop on contact', false)}${field('slowmo', 'slow motion as crowns fall', false)}${field('budget', 'physics budget, ms per 1/60 s (0: no valve)', DEFAULT_BUDGET_MS, 'step="any" min="0" max="1000"')}${field('tailskip', 'fast-forward the tail of a shot', true)}${field('follow', 'camera follows the collapse', true)}<label class="f"><span>frames drawn</span><select name="frames"><option value="all">every frame</option><option value="half">half on a fast display</option><option value="auto">half while physics is behind</option></select></label></div>
+        <div class="feel">${field('hitstop', 'hit-stop on contact', false)}${field('slowmo', 'slow motion as crowns fall', false)}${field('budget', 'physics budget, ms per 1/60 s (0: no valve)', DEFAULT_BUDGET_MS, 'step="any" min="0" max="1000"')}${field('tailskip', 'fast-forward the tail of a shot', true)}${field('follow', 'camera follows the collapse', false)}${field('shake', 'camera shakes on hits', false)}<label class="f"><span>frames drawn</span><select name="frames"><option value="all">every frame</option><option value="half">half on a fast display</option><option value="auto">half while physics is behind</option></select></label></div>
       </div>
       <div class="seed">${field('seed', 'seed', 1, 'step="1"')}</div>
       <div class="world">
@@ -397,7 +397,7 @@ export function mountControls(root: HTMLElement, hooks: ControlsHooks): { refres
     const rules: RulesChoice = { rules: input(sceneForm, 'rules').value as Rules, feel: {
       hitStop: (input(sceneForm, 'hitstop') as HTMLInputElement).checked, slowMo: (input(sceneForm, 'slowmo') as HTMLInputElement).checked,
       budgetMs: input(sceneForm, 'budget').value === '' ? NaN : Number(input(sceneForm, 'budget').value), tailSkip: (input(sceneForm, 'tailskip') as HTMLInputElement).checked,
-      follow: (input(sceneForm, 'follow') as HTMLInputElement).checked, frames: input(sceneForm, 'frames').value as FrameMode,
+      follow: (input(sceneForm, 'follow') as HTMLInputElement).checked, shake: (input(sceneForm, 'shake') as HTMLInputElement).checked, frames: input(sceneForm, 'frames').value as FrameMode,
     } };
     return proposeScene(hooks.config(), scenario, params, Number(input(sceneForm, 'seed').value), Number(input(sceneForm, 'scale').value), Number(input(sceneForm, 'substeps').value), bounce, presettle, rules);
   }
@@ -630,6 +630,7 @@ export function mountControls(root: HTMLElement, hooks: ControlsHooks): { refres
     input(sceneForm, 'budget').value = String(c.feel.budgetMs);
     (input(sceneForm, 'tailskip') as HTMLInputElement).checked = c.feel.tailSkip;
     (input(sceneForm, 'follow') as HTMLInputElement).checked = c.feel.follow;
+    (input(sceneForm, 'shake') as HTMLInputElement).checked = c.feel.shake;
     input(sceneForm, 'frames').value = c.feel.frames;
     input(sceneForm, 'seed').value = String(c.seed);
     input(sceneForm, 'presettle').value = String(c.presettle);
