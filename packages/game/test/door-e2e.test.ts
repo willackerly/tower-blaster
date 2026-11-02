@@ -79,7 +79,7 @@ describe('front door', () => {
 
   it('settings are stored, applied and replace their URL key; progress shows on the card after a reload', async (ctx) => {
     if (!game.browser()) return ctx.skip();
-    const o = await game.open(`/?level=L1&engine=rapier&offscreen=1&look=candy&keystone.shots=${writeShots(L1.solutions!.par as Shot[])}`);
+    const o = await game.open(`/?level=L1&engine=rapier&offscreen=1&look=candy&keystone.shake=0&keystone.shots=${writeShots(L1.solutions!.par as Shot[])}`);
     if (!o) return ctx.skip();
     const { page, errors } = o;
     await page.evaluate(() => { window.__game.fast = true; });
@@ -89,7 +89,13 @@ describe('front door', () => {
     await page.locator('.kg-door [data-act="look"][data-arg="real"]').click();
     await page.locator('.kg-door [data-act="sound"]').click();
     await page.locator('.kg-door [data-act="sharp"][data-arg="1"]').click();
-    expect(await page.evaluate(() => JSON.parse(localStorage.getItem('tb.settings.v1')!))).toEqual({ sound: false, look: 'real', sharp: 1 });
+    // Camera: still by default; Dynamic turns the follow and the shake on at once, over the URL's keystone.shake=0, which goes.
+    expect(await page.locator('.kg-door [data-act="camera"].on').innerText()).toBe('Still');
+    expect(await page.evaluate(() => window.__game.feel)).toMatchObject({ follow: false, shake: false });
+    await page.locator('.kg-door [data-act="camera"][data-arg="dynamic"]').click();
+    expect(await page.evaluate(() => window.__game.feel)).toMatchObject({ follow: true, shake: true });
+    expect(new URLSearchParams(await page.evaluate(() => location.search)).has('keystone.shake')).toBe(false);
+    expect(await page.evaluate(() => JSON.parse(localStorage.getItem('tb.settings.v1')!))).toEqual({ sound: false, look: 'real', sharp: 1, camera: 'dynamic' });
     expect(await page.evaluate(() => window.__game.maxDpr)).toBe(1);
     expect(new URLSearchParams(await page.evaluate(() => location.search)).has('look')).toBe(false);
 
@@ -97,6 +103,8 @@ describe('front door', () => {
     await page.waitForFunction(() => window.__game?.status === 'running', undefined, { timeout: MINUTES });
     expect(await page.locator('.kg-door [data-act="look"].on').innerText()).toBe('Photoreal');
     expect(await page.locator('.kg-door [data-act="sound"]').innerText()).toBe('Off');
+    expect(await page.locator('.kg-door [data-act="camera"].on').innerText()).toBe('Dynamic');
+    expect(await page.evaluate(() => window.__game.feel)).toMatchObject({ follow: true, shake: true });
     const card = await page.locator('.kg-door .card').first().innerText();
     expect(card).toContain('1 play');
     expect(await page.locator('.kg-door .card').first().locator('li.got').count()).toBe(stars);

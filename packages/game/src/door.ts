@@ -131,7 +131,7 @@ export interface DoorModel {
   howTo: boolean;
 }
 
-/** The door's markup. Every button carries data-act (play, level, how, sound, look, sharp, reset, close) and data-arg where it needs one. */
+/** The door's markup. Every button carries data-act (play, level, how, sound, look, sharp, camera, reset, close) and data-arg where it needs one. */
 export function doorHtml(m: DoorModel): string {
   const next = nextLevel(m.levels);
   const cards = m.levels.map((l, i) => {
@@ -166,6 +166,7 @@ export function doorHtml(m: DoorModel): string {
       <div class="foot">
         <span class="group"><span class="lbl">Sound</span><span class="seg"><button data-act="sound" class="${s.sound ? 'on' : ''}">${s.sound ? 'On' : 'Off'}</button></span></span>
         <span class="group"><span class="lbl">Look</span><span class="seg">${looks}</span></span>
+        <span class="group"><span class="lbl">Camera</span><span class="seg"><button data-act="camera" data-arg="still" class="${s.camera === 'still' ? 'on' : ''}" title="Moves only when you move it">Still</button><button data-act="camera" data-arg="dynamic" class="${s.camera === 'dynamic' ? 'on' : ''}" title="Follows the collapse and shakes on hits">Dynamic</button></span></span>
         <span class="group"><span class="lbl">Sharpness</span><span class="seg"><button data-act="sharp" data-arg="2" class="${s.sharp === 2 ? 'on' : ''}">Full</button><button data-act="sharp" data-arg="1" class="${s.sharp === 1 ? 'on' : ''}">Fast</button></span></span>
       </div>
       <div class="reset"><button data-act="reset">Forget my progress</button></div>
