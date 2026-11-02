@@ -1,0 +1,105 @@
+// The front door on the game page (DOM side; door.ts formats it). Shown over
+// the level that loads behind it, so the first level is ready by the time the
+// player picks it. Esc and the Menu button bring it back; while it shows, the
+// game's keys are held back (a capture listener on window runs before the
+// game's own).
+import { type CompiledLevel, compileLevel, type LevelDef } from '@tb/keystone';
+import { DOOR_CSS, doorHtml, doorLevels, type DoorLevel } from './door.ts';
+import type { GameHandle } from './play.ts';
+import type { ProgressStore } from './progress.ts';
+import type { Settings, SettingsStore } from './settings.ts';
+
+export interface DoorPage {
+  show(): void;
+  hide(): void;
+  readonly open: boolean;
+  /** The door's level view as drawn last (tests read it through window.__door). */
+  readonly levels: DoorLevel[];
+  /** A level the player picked before the game had finished loading: the page loads it once it can. */
+  takePending(): string | null;
+}
+
+export interface DoorOptions {
+  root: HTMLElement;
+  menu: HTMLElement;
+  levels: readonly LevelDef[];
+  /** The level the page opens on (loading behind the door until handle.level says it). */
+  start: string;
+  handle: GameHandle;
+  progress: ProgressStore;
+  settings: SettingsStore;
+  /** A setting changed: the page applies it (look, sound, sharpness) and drops its URL key. */
+  applied(s: Settings, changed: keyof Settings): void;
+}
+
+export function installDoor(o: DoorOptions, doc: Document = document): DoorPage {
+  if (!doc.getElementById('kg-door-style')) {
+    const style = doc.createElement('style');
+    style.id = 'kg-door-style';
+    style.textContent = DOOR_CSS;
+    doc.head.append(style);
+  }
+  let open = false, howTo = false, armedReset = false, pending: string | null = null, levels: DoorLevel[] = [];
+  // Compiled once each (B2 and B3 take some 75 ms): the door redraws on every settings click.
+  const compiled = new Map<LevelDef, CompiledLevel>();
+  const compile = (d: LevelDef) => compiled.get(d) ?? compiled.set(d, compileLevel(d)).get(d)!;
+  const loaded = () => o.handle.level || o.start;
+  const current = () => o.levels.findIndex((l) => l.id === (pending ?? loaded()));
+  const draw = () => {
+    levels = doorLevels(o.levels, (id, h) => o.progress.best(id, h), compile);
+    o.root.innerHTML = doorHtml({ levels, current: current(), settings: o.settings.current, howTo });
+    if (armedReset) o.root.querySelector('[data-act="reset"]')!.textContent = 'Click again to forget every best play';
+  };
+  const page: DoorPage = {
+    show() { armedReset = false; draw(); o.root.classList.add('show'); doc.body.classList.add('door-open'); o.menu.style.display = 'none'; open = true; },
+    hide() { o.root.classList.remove('show'); doc.body.classList.remove('door-open'); o.menu.style.display = ''; open = false; },
+    get open() { return open; },
+    get levels() { return levels; },
+    takePending() { const p = pending; pending = null; return p; },
+  };
+  const pick = (i: number) => {
+    const id = o.levels[i]!.id;
+    page.hide();
+    if (o.handle.status === 'running') { if (id !== o.handle.level) void o.handle.load(id); return; }
+    pending = id === o.start ? null : id;
+  };
+  const set = (change: Partial<Settings>) => {
+    const s = o.settings.set(change);
+    o.applied(s, Object.keys(change)[0] as keyof Settings);
+    draw();
+  };
+  o.root.addEventListener('click', (e) => {
+    const b = (e.target as HTMLElement).closest('button');
+    if (!b) return;
+    const act = b.dataset.act, arg = b.dataset.arg ?? '';
+    if (act !== 'reset') armedReset = false;
+    switch (act) {
+      case 'level': pick(Number(arg)); break;
+      case 'close': page.hide(); break;
+      case 'how':
+        howTo = !howTo;
+        draw();
+        if (howTo) o.root.querySelector('.how')?.scrollIntoView({ block: 'nearest' });
+        break;
+      case 'sound': set({ sound: !o.settings.current.sound }); break;
+      case 'look': set({ look: arg }); break;
+      case 'sharp': set({ sharp: arg === '1' ? 1 : 2 }); break;
+      case 'reset':
+        if (armedReset) { o.progress.reset(); armedReset = false; } else armedReset = true;
+        draw();
+        break;
+    }
+  });
+  o.menu.addEventListener('click', () => page.show());
+  addEventListener('keydown', (e) => {
+    if (open) {
+      // The door has the keyboard: the game's keys (fire, retry, levels) wait until it closes.
+      e.stopPropagation();
+      if (e.key === 'Escape' && current() >= 0) page.hide();
+    } else if (e.key === 'Escape') {
+      e.stopPropagation();
+      page.show();
+    }
+  }, true);
+  return page;
+}

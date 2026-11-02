@@ -53,7 +53,12 @@ export interface HudState {
   canBank?: boolean;
   /** The slow-motion tag while physics runs slower than real time ('×0.8'; pacing.ts slowTag), '' or absent at real time. */
   pace?: string;
+  /** The level's pre-aimed opening shot can be fired now (the Fire button, key F). */
+  opener?: boolean;
 }
+
+/** The pre-aimed opener's button (key F), shown before the first shot of a level that has one. */
+export const OPENER_BUTTON = '<button data-act="opener" class="opener"><kbd>F</kbd> Fire the first shot</button>';
 
 export const pct = (x: number) => `${Math.floor(100 * x)}%`;
 
@@ -92,6 +97,7 @@ export function hudHtml(s: HudState): string {
     ${heritage}
     <div class="row"><span>Leverage</span><span>${fmtLeverage(s.liveLeverage)}</span></div>
     <div class="chips">${chips}</div>
+    ${s.opener ? `<div class="row">${OPENER_BUTTON}<span class="small">or aim and click</span></div>` : ''}
     ${power}${reach}${outcome && s.canBank ? `<div class="row">${BANK_BUTTON}<span class="small">end here, keep the rack</span></div>` : ''}`;
 }
 

@@ -11,3 +11,5 @@ export * from './ui.ts';
 export * from './params.ts';
 export * from './sound-map.ts';
 export * from './progress.ts';
+export * from './door.ts';
+export * from './settings.ts';

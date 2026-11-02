@@ -6,15 +6,20 @@
 // ?keystone.impacts=-6 sets the collision sound's level (dB), ?keystone.shots= plays a line once loaded, ?offscreen=1
 // (tests) draws only for captures. The keys are params.ts's, which the viewer
 // reads too under rules=keystone, so the same link opens in either page.
+// The front door (door.ts, docs/game/front-door.md) opens over a bare URL
+// (?door=auto|1|0); ?keystone.preaim, ?progress, ?sound, ?sharp are its keys.
 import { seriesOf } from '@tb/keystone';
 import { createDevice } from '@tb/gpu';
 import { lookByName, parseRealOptions, Renderer, SnapshotSource } from '@tb/render';
-import { onEngine, parseGameParams, withRules } from './params.ts';
-import { type ProgressStore, progressStore } from './progress.ts';
+import { installDoor, type DoorPage } from './door-page.ts';
+import { doorMode, doorOnLoad, openerFor, preaimMode } from './door.ts';
+import { lookName, onEngine, parseGameParams, withRules } from './params.ts';
+import { browserKeyValue, memoryKeyValue, type ProgressStore, progressStore } from './progress.ts';
+import { type Settings, SettingsStore } from './settings.ts';
 import { type GameHandle, newGameHandle, playKeystone, playLine } from './play.ts';
 import { GAME_HELP, installGameStyles } from './ui.ts';
 
-declare global { interface Window { __game: GameHandle; __progress: ProgressStore } }
+declare global { interface Window { __game: GameHandle; __progress: ProgressStore; __door: DoorPage } }
 
 const $ = (id: string) => document.getElementById(id)!;
 const canvas = $('c') as HTMLCanvasElement, errorEl = $('error');
@@ -34,10 +39,14 @@ function fail(e: unknown) {
 
 async function main() {
   const q = new URLSearchParams(location.search);
-  const { level, rack, rules, engine, feel, look, shots, offscreen, sound, impactsDb } = parseGameParams(q);
-  // Best plays kept in the browser (?progress=off: this visit only); custom runs are not recorded.
+  const { level, rack, rules, engine, feel, shots, offscreen, sound, impactsDb } = parseGameParams(q);
+  // Best plays and settings kept in the browser (?progress=off: this visit only); custom runs are not recorded.
+  // A setting's URL key (look, sound, sharp) wins over the stored one for the visit (settings.ts).
   const progress = progressStore(q);
   window.__progress = progress;
+  const settings = new SettingsStore(q.get('progress') === 'off' ? memoryKeyValue() : browserKeyValue() ?? memoryKeyValue(), q);
+  const look = lookName(settings.current.look);
+  const door = doorMode(q), preaim = preaimMode(q);
   // ?keystone.rack replaces the opening level's rack (its def, so retry keeps it); other levels keep their own.
   // The rule overrides (keystone.scoring, keystone.autobank, physics) apply to every level; stars cast on
   // another engine do not apply (onEngine).
@@ -46,6 +55,7 @@ async function main() {
   const levels = series.map((l, i) => onEngine(i === start ? level : withRules(l, rules), engine));
   handle.feel = feel;
   handle.engine = engine;
+  handle.maxDpr = settings.current.sharp;
 
   const { device } = await createDevice({ timestamps: false });
   const renderer = new Renderer(device, offscreen ? { size: [640, 400] } : { canvas });
@@ -54,13 +64,29 @@ async function main() {
   // The maquette look by default: tints read true on its pale albedo (?look=candy for the rainbow;
   // ?look=real with real.* knobs, parseRealOptions in @tb/render).
   renderer.look = lookByName(look, parseRealOptions(q));
+  // The front door (?door=auto|1|0): over the level loading behind it, so its first shot is a click away.
+  const front = installDoor({
+    root: $('door'), menu: $('menu'), levels, start: level.id, handle, progress, settings,
+    applied: (st: Settings, changed) => {
+      if (changed === 'look') renderer.look = lookByName(lookName(st.look), parseRealOptions(q));
+      if (changed === 'sound') handle.setMuted(!st.sound);
+      if (changed === 'sharp') handle.maxDpr = st.sharp;
+      // The setting now says it: the URL key that set it for this visit goes.
+      const u = new URLSearchParams(location.search);
+      if (u.has(changed)) { u.delete(changed); history.replaceState(null, '', `?${u}`); }
+    },
+  });
+  window.__door = front;
+  if (doorOnLoad(door, q)) front.show();
   device.lost.then((info) => fail(`GPU device lost: ${info.message}`));
   device.addEventListener('uncapturederror', (e) => fail((e as GPUUncapturedErrorEvent).error.message));
 
   let shown = level.id;
   await playKeystone({
     canvas, offscreen, device, renderer, source, hud: $('hud'), banner: $('banner'), result: $('result'),
-    levels, start, engine, feel, fail, sound, impactsDb,
+    levels, start, engine, feel, fail, sound, impactsDb, muted: !settings.current.sound,
+    // The pre-aimed opener (?keystone.preaim): by default the series' first level, until it has a record here.
+    opener: (c) => openerFor(c.def, levels.findIndex((l) => l.id === c.def.id), preaim, progress.best(c.def.id, c.hash) !== null),
     hooks: {
       // The URL follows the level, keeping the other keys; a line and a rack are the level's they were made for.
       loaded: (c) => {
@@ -77,6 +103,9 @@ async function main() {
       ended: (c, score) => { if (!c.def.custom) progress.record(c.def.id, c.hash, score); },
     },
   }, handle);
+  // A level picked at the door while the first was still loading.
+  const picked = front.takePending();
+  if (picked) await handle.load(picked);
   // A link with a line plays it once, on the attempt the page opened with.
   if (shots) {
     const r = await playLine(handle, shots, true);
