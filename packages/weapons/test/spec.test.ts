@@ -48,7 +48,7 @@ describe('WeaponSpec format', () => {
       expect(spec.name).toBe(name);
     }
     expect(validateWeapon(GRENADE_WEAPON).issues).toEqual([]);
-    expect(Object.fromEntries(Object.entries(BUILTIN_WEAPONS).map(([k, s]) => [k, weaponBudget(s).bodies]))).toEqual({ firework: 13, cluster: 7 });
+    expect(Object.fromEntries(Object.entries(BUILTIN_WEAPONS).map(([k, s]) => [k, weaponBudget(s).bodies]))).toEqual({ firework: 13, cluster: 7, grenades: 1, grenadem: 1, grenadel: 1, grenadexl: 1 });
   });
 
   it('a weapons record tells a WeaponSpec (version) from a GrenadeSpec', () => {

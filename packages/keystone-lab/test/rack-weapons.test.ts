@@ -10,11 +10,11 @@ import { describe, expect, it } from 'vitest';
 import { RapierEngine } from '@tb/adapter-rapier';
 import { blastArea, checkBlast, type InputEvent, TIER_FREE } from '@tb/engine-api';
 import {
-  AVBD_GAP_SLOP, AVBD_ITERATIONS, compileLevel, cubeScale, itemSpec, itemYield, KEYSTONE_GRENADE, L1, type LevelDef, levelArm, levelBlock, levelFill, levelWeapon, rackBodies, runSession,
+  AVBD_GAP_SLOP, AVBD_ITERATIONS, B1, B2, B3, compileLevel, cubeScale, itemSpec, itemYield, KEYSTONE_GRENADE, L1, type LevelDef, levelArm, levelBlock, levelFill, levelWeapon, rackBodies, runSession,
   type SessionResult, type Shot, shotToSpawn, snapshotHash, speedOf, validateLevel,
 } from '@tb/keystone';
 import { AvbdReferenceEngine } from '@tb/physics-ref';
-import { BUILTIN_WEAPONS, CLUSTER, FIREWORK, grenadeAsSpec, isWeaponSpec, nominalYield, type WeaponSpec, weaponBudget } from '@tb/weapons';
+import { BUILTIN_WEAPONS, CLUSTER, FIREWORK, grenadeAsSpec, grenadeEnergies, isWeaponSpec, nominalYield, type WeaponSpec, weaponBudget } from '@tb/weapons';
 
 const def: LevelDef = { ...L1, rack: ['w-firework', 'w-cluster', 'w-grenade'] };
 const c = compileLevel(def);
@@ -50,7 +50,7 @@ describe('WeaponSpec items: scaled to the level', () => {
   });
 
   it('counts its whole budget: bodies (capacity, the GPU\'s room), every blast with how often it goes off, and the yield of them all', () => {
-    for (const [key, spec] of Object.entries(BUILTIN_WEAPONS) as [string, WeaponSpec][]) {
+    for (const [key, spec] of Object.entries({ firework: FIREWORK, cluster: CLUSTER }) as [string, WeaponSpec][]) {
       const arm = c.arms[`w-${key}`]!;
       expect(arm.bodies, key).toBe(weaponBudget(spec).bodies);
       expect(arm.blasts.map((x) => x.count), key).toEqual(weaponBudget(spec).blasts.map((x) => x.count));
@@ -63,8 +63,17 @@ describe('WeaponSpec items: scaled to the level', () => {
     expect(c.arms['w-firework']!.bodies).toBe(13);
     expect(c.arms['w-cluster']!.bodies).toBe(7);
     expect(rackBodies(def.rack, c.arms)).toBe(13 + 7 + 1);
-    // Twelve stars of a firework cost ~30 grenades, six bomblets ~60: built-ins written for 1 kg cubes are big at Keystone's scale.
-    expect(itemYield(c, 'w-firework') / itemYield(c, 'w-grenade')).toBeGreaterThan(20);
+    // Each built-in is one grenade (grenadeEnergies): the viewer's grenade, B1-B3's bomb. Keystone's own w-grenade
+    // (KEYSTONE_GRENADE, SI, not scaled with the block) is much smaller: about 1/77 of one on plaster.
+    for (const k of ['w-firework', 'w-cluster'] as const) expect(itemYield(c, k) / itemYield(c, 'w-grenade'), k).toBeGreaterThan(70);
+  });
+
+  it('a cube-unit weapon\'s yield over the bomb\'s is its grenadeEnergies on every level: plaster or stone, 1k or 10k', () => {
+    for (const base of [B1, B2, B3]) {
+      const lc = compileLevel({ ...base, rack: ['w-bomb', 'w-firework', 'w-cluster'] });
+      for (const [key, spec] of Object.entries(BUILTIN_WEAPONS)) expect(itemYield(lc, `w-${key}` as const) / itemYield(lc, 'w-bomb'), `${base.id} ${key}`).toBeCloseTo(grenadeEnergies(spec), 9);
+      expect(grenadeEnergies(base.weapons!.bomb as WeaponSpec)).toBe(1);
+    }
   });
 
   it('a GrenadeSpec stays what it was: levelWeapon in the grenade shell, its one blast', () => {
@@ -100,7 +109,15 @@ describe('WeaponSpec items: fired', () => {
     const serial = await play(() => new RapierEngine(), c, [FIRE], false), piped = await play(() => new RapierEngine(), c, [FIRE], true);
     expect(count(serial.pushed)).toEqual({ spawn: 12, blast: 12, remove: 13 });
     expect(piped.pushed).toEqual(serial.pushed);
-    expect(snapshotHash(piped.r.snapshot)).toBe(snapshotHash(serial.r.snapshot));
+    // The same events at the same steps. A pipelined driver ends a shot one step later (driver.ts), and since the
+    // one-grenade firework (2026-11-02) L1's rubble is still rolling at the settle cap, so the pipelined world is the
+    // serial one stepped once more: replayed from the recorded inputs to its step count, bit for bit.
+    expect(piped.r.steps).toBeGreaterThanOrEqual(serial.r.steps);
+    const ahead = new RapierEngine();
+    await ahead.init({ ...c.scene, inputs: inputsOf(c, serial.r, serial.pushed) });
+    while (ahead.stepIndex < piped.r.steps) ahead.step();
+    expect(snapshotHash(piped.r.snapshot)).toBe(snapshotHash(ahead.snapshot()));
+    ahead.dispose();
     expect(serial.r.session.phase).toBe('cleared');
     const o = serial.r.session.outcomes[0]!;
     expect(o.yield).toBe(itemYield(c, 'w-firework'));

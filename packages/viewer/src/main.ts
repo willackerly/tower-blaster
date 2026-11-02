@@ -11,15 +11,15 @@ import { type BodyDesc, type EngineHealth, type EngineInfo, type InputEvent, lim
 import { boundingRadius } from '@tb/geom';
 import { DEFAULT_AVBD } from '@tb/physics-ref';
 import { GAME_HELP, gameOverlays, playLine, type GameHandle, installGameStyles, newGameHandle, playKeystone, structureTints, withRules } from '@tb/game';
-import { AVBD_GAP_SLOP, AVBD_ITERATIONS, compileLevel, type Driver, seriesOf, type Shot } from '@tb/keystone';
+import { AVBD_GAP_SLOP, AVBD_ITERATIONS, compileLevel, cubeScale, type Driver, seriesOf, type Shot } from '@tb/keystone';
 import { clampPitch, EYE_ABOVE_GROUND, frame, rayThrough, viewProj, eyeOf, orbitAt, poseOf, type CameraPose, type Orbit } from './camera.ts';
 import { alphaAt, newArrivals, newClock, newPacer, pauseLatch, runFree, stepsDue, taskYield, trackSimSpeed, Window } from './loop.ts';
 import type { V3 } from './math.ts';
 import { HEALTH_MS, limitFix, limitFixLabel, limitsHtml } from './health.ts';
 import { escapeHtml } from './html.ts';
 import { bounceOn, engineSpec, firedBody, froudeSpeed, keystoneEngine, levelOf, parseViewerConfig, presetSearch, scenarioEngineSpec, sceneTitle, toSearch, type ViewerConfig, viewerScene, withOption, worldEngineSpec } from './params.ts';
-import { projectileRadius, pushRadiusLimit, worldGrenade, worldWeapon } from './projectile.ts';
-import { WeaponRuntime } from '@tb/weapons';
+import { inLevelGrenade, inLevelWeapon, projectileRadius, pushRadiusLimit, worldGrenade, worldWeapon } from './projectile.ts';
+import { type WeaponScale, WeaponRuntime } from '@tb/weapons';
 import { mountControls } from './controls.ts';
 import { startSearch } from './default-scene.ts';
 import { type DevAction, mountDev } from './dev-panel.ts';
@@ -233,6 +233,7 @@ async function main() {
   let inputHook: InputHook | null = null;
   // This load's fired weapons, waiting on their triggers (proj.weapon: the grenade or a WeaponSpec).
   let grenades: WeaponRuntime | null = null;
+  let levelScale: WeaponScale | null = null;
   // This load's fired catalogue objects, painted their colours (the candy skin outside the real look).
   let painted: { id: number; colour: { natural: number; candy: number } }[] = [];
   const paint = (id: number, colour: { natural: number; candy: number }) => {
@@ -296,7 +297,9 @@ async function main() {
     sound.configure(config);
     // A level draws as the game draws it: crowns gold, heritage celadon, materials tinted (@tb/game structureTints).
     if (fxSlots) renderer.clearFx(0, fxSlots);
-    const def = levelOf(want), tints = def ? structureTints(compileLevel(def)) : null;
+    const def = levelOf(want), compiled = def ? compileLevel(def) : null, tints = compiled ? structureTints(compiled) : null;
+    // On a level's page a weapon's cube units stand for the level's block (inLevelGrenade); a level of no blocks keeps them.
+    levelScale = compiled && compiled.meta.n > 0 ? cubeScale(compiled) : null;
     if (tints) renderer.setFx(0, tints);
     fxSlots = handle.tinted = tints?.length ?? 0;
     const b = bounds(scene.bodies);
@@ -502,10 +505,10 @@ async function main() {
       paint(id, colour);
     }
     if (p.weapon === 'grenade' && p.grenade && grenades) {
-      const [g, spec] = [grenades, worldGrenade(p.grenade, froudeSpeed(config.scale), config.substeps)];
+      const [g, spec] = [grenades, worldGrenade(levelScale ? inLevelGrenade(p.grenade, levelScale) : p.grenade, froudeSpeed(config.scale), config.substeps)];
       pushGrenade(() => g.launch(id, ev.step, spec, ev.body.shape));
     } else if (p.weapon && p.spec && grenades) {
-      const [g, spec] = [grenades, worldWeapon(p.spec, froudeSpeed(config.scale), config.substeps)];
+      const [g, spec] = [grenades, worldWeapon(levelScale ? inLevelWeapon(p.spec, levelScale) : p.spec, froudeSpeed(config.scale), config.substeps)];
       pushGrenade(() => g.launch(id, ev.step, spec, ev.body.shape));
     }
   };

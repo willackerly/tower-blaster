@@ -85,7 +85,7 @@ describe('WeaponSpec projectiles', () => {
     expect(worldWeapon(FIREWORK, 1, 1)).toBe(FIREWORK);
     const w = worldWeapon(FIREWORK, 2, 3);
     expect(w.rules[0]!.do[0]).toEqual({ split: { into: 12, child: 'star', pattern: 'cone', angle: 50, spread: 20, at: 1.5 } });
-    expect(w.children!.star!.rules[0]!.do[0]).toEqual({ blast: { radius: 2.5, impulse: 30, core: 0.2, maxDv: 2 * DEFAULT_BLAST_MAX_DV, maxSpeed: 3 * DEFAULT_BLAST_MAX_SPEED } });
+    expect(w.children!.star!.rules[0]!.do[0]).toEqual({ blast: { radius: 3, impulse: 37, core: 0.2, maxDv: 2 * DEFAULT_BLAST_MAX_DV, maxSpeed: 3 * DEFAULT_BLAST_MAX_SPEED } });
     expect(w.shell).toEqual({ ...FIREWORK.shell, speed: [50, 90] });
     expect(w.children!.star!.rules[0]!.when).toEqual(FIREWORK.children!.star!.rules[0]!.when);
   });

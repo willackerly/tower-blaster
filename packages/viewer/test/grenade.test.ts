@@ -26,7 +26,7 @@ describe('grenade projectile', () => {
   it('refuses grenade keys it can not use, saying why', () => {
     const q = (s: string) => () => parseViewerConfig(`?${s}`);
     expect(q('grenade.prox=1')).toThrow(/grenade.prox applies to proj.weapon=grenade/);
-    expect(q('proj.weapon=sticky')).toThrow(/proj.weapon must be one of grenade, firework, cluster/);
+    expect(q('proj.weapon=sticky')).toThrow(/proj.weapon must be one of grenade, firework, cluster, grenades, grenadem, grenadel, grenadexl/);
     expect(q('proj.weapon=grenade&grenade.fuse=boom')).toThrow(/grenade.fuse must be one of timer, prox, proxTimer/);
     expect(q('proj.weapon=grenade&grenade.bogus=1')).toThrow(/unknown key grenade.bogus/);
     expect(q('proj.weapon=grenade&grenade.prox=-1')).toThrow(/grenade.prox must be a number from 0/);

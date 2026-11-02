@@ -44,3 +44,20 @@ describe('a WeaponSpec in the viewer', () => {
     if (!(await fireworks(SCENE.replace('&engine=rapier', ''), 120_000))) ctx.skip();
   });
 });
+
+describe('weapons on a level page', () => {
+  it('the grenade on L1\'s page blasts in the level\'s units: radius 5 h, the kick a cube got, x sqrt(h) (Rapier)', async (ctx) => {
+    if (!browser) return ctx.skip();
+    const { page, errors } = await open('/?level=L1&engine=rapier&offscreen=1&proj.weapon=grenade');
+    if (await page.evaluate(() => window.__viewer.status) !== 'running') return ctx.skip();
+    await page.evaluate(() => window.__viewer.fire(0, 0.3));
+    await page.waitForFunction(() => window.__viewer.inputs.some((e) => e.kind === 'blast'), undefined, { timeout: 60_000 });
+    const blast = (await page.evaluate(() => window.__viewer.inputs) as InputEvent[]).find((e) => e.kind === 'blast')!;
+    if (blast.kind !== 'blast') throw new Error('no blast');
+    // L1 is plaster at h = 0.5 m: DEFAULT_GRENADE's radius 5 and maxDv 25 become 2.5 m and 25 sqrt(0.5) m/s.
+    expect(blast.blast.radius).toBeCloseTo(2.5, 12);
+    expect(blast.blast.maxDv).toBeCloseTo(25 * Math.SQRT1_2, 12);
+    expect(errors).toEqual([]);
+    await page.close();
+  });
+});
