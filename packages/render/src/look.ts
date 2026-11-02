@@ -81,7 +81,7 @@ export interface LookParams {
   /** fill: light from the sunlit ground around that reaches what the sky lights (real look; 0: the sky alone). */
   shadow?: { softness: number; fill?: number };
   /** With an atmosphere and effects off: impact dust and chips, as multiples of the default amounts (0: none), and a puff's full size (m). */
-  debris?: { dust: number; chips: number; size: number; opacity: number; threshold?: number; face?: number };
+  debris?: { dust: number; chips: number; size: number; opacity: number; threshold?: number; face?: number; skirt?: number; erode?: number; thin?: number };
   /** false: none of the stylized effects (sparks, ball trail, heat glow, ball and impact lights). Default true. */
   effects?: boolean;
   /**
@@ -211,6 +211,21 @@ export interface RealOptions {
    */
   dustThreshold: number;
   dustFace: number;
+  /**
+   * The shape of a puff (2026-11-02, after the Opus review's "puffs are still
+   * smooth discs"): dustErode (0 to 1) breaks its edge into lumps that eat in
+   * as it ages, so it ends as wisps; dustThin (0 to 1) thins it as it spreads
+   * (opacity times twice the grown share of its radius to the power -2 dustThin:
+   * 1 keeps the dust in it, so a young puff is denser and a grown one fainter,
+   * equal at half grown; 0 keeps the opacity, as before); dustSkirt (0 to 1): a
+   * box landing flat on the ground counts at least that share of its speed
+   * change (the face weight leaves it dustFace) and its soil spreads low and
+   * flat (puffs raised from the ground rise 1 - dustSkirt as fast and are drawn
+   * up to 0.4 as tall, 1.4 as wide and 1.5 as opaque). 0 is the dust before each.
+   */
+  dustErode: number;
+  dustThin: number;
+  dustSkirt: number;
   /** In the open or inside the hall (Olympia's Grand Hall times hallSize), its glazing's milkiness and its ironwork's grey (0 to 1). */
   env: Env;
   hallSize: number;
@@ -225,7 +240,7 @@ export const REAL_DEFAULTS: RealOptions = {
   stone: 'limestone', stoneDetail: 1, stoneScale: 1, stoneFade: 8, wear: 0.5, dirt: 0.4,
   groundMaterial: 'gravel', groundDetail: 1, groundScale: 1, groundVariation: 0.5, groundRelief: 1, groundPatches: 0.05, hills: 2.2, hillDistance: 6, hillCover: 0.75, hillRidges: 2,
   sunSize: 0.53, shadowSoftness: 1, shadowFill: 0.5,
-  dust: 1, chips: 1, dustSize: 0.9, dustOpacity: 0.4, dustThreshold: 2, dustFace: 0.15,
+  dust: 1, chips: 1, dustSize: 0.9, dustOpacity: 0.4, dustThreshold: 2, dustFace: 0.15, dustErode: 0.7, dustThin: 0.3, dustSkirt: 0.9,
   env: 'outdoor', hallSize: 1, hallGlass: 0.5, hallIron: 0.55, hallExterior: 1,
 };
 
@@ -259,7 +274,7 @@ export function realLook(o: Partial<RealOptions> = {}): LookParams {
     ground: { kind: r.groundMaterial, scale: r.groundScale, detail: r.groundDetail, variation: r.groundVariation, relief: r.groundRelief, patches: r.groundPatches },
     hills: { height: r.hills, distance: r.hillDistance, cover: r.hillCover, ridges: r.hillRidges },
     shadow: { softness: r.shadowSoftness, fill: r.shadowFill },
-    debris: { dust: r.dust, chips: r.chips, size: r.dustSize, opacity: r.dustOpacity, threshold: r.dustThreshold, face: r.dustFace },
+    debris: { dust: r.dust, chips: r.chips, size: r.dustSize, opacity: r.dustOpacity, threshold: r.dustThreshold, face: r.dustFace, skirt: r.dustSkirt, erode: r.dustErode, thin: r.dustThin },
     ...(r.env === 'hall' ? { hall: { params: hallScaled(OLYMPIA, r.hallSize), glass: r.hallGlass, iron: r.hallIron, exterior: r.hallExterior >= 0.5 } } : {}),
     hueStep: 4,
     ball: hex('#8A8D90'),
@@ -304,6 +319,9 @@ export const REAL_KNOBS = {
   dustOpacity: { label: 'dust puff opacity', min: 0, max: 1, step: 0.05 },
   dustThreshold: { label: 'dust from knocks over (m/s)', min: 0.2, max: 20, step: 0.1 },
   dustFace: { label: 'dust from flat face-on knocks 0-1', min: 0, max: 1, step: 0.05 },
+  dustErode: { label: 'dust lumpy edges, eroding 0-1', min: 0, max: 1, step: 0.05 },
+  dustThin: { label: 'dust thins as it spreads 0-1', min: 0, max: 1, step: 0.05 },
+  dustSkirt: { label: 'dust skirt from flat ground landings 0-1', min: 0, max: 1, step: 0.05 },
   hallSize: { label: 'hall size x (1: Olympia)', min: 0.05, max: 20, step: 0.05 },
   hallGlass: { label: 'hall glass milkiness 0-1', min: 0, max: 1, step: 0.05 },
   hallIron: { label: 'hall ironwork grey 0-1', min: 0, max: 1, step: 0.05 },

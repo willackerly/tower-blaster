@@ -503,6 +503,19 @@ describe('debris (real look impacts)', () => {
     expect(debrisWeight([0, 5, 0], I, false, 1).weight).toBe(1); // dustFace 1: no weighting
   });
 
+  it('skirt: a flat landing on the ground counts at least dustSkirt; in the air, on an edge or from the side the face weight stands', () => {
+    const F = 0.15, I: [number, number, number, number] = [0, 0, 0, 1], half: V3 = [0.5, 0.5, 0.5];
+    const at = (y: number, skirt: number) => ({ y, half, groundY: 0, skirt });
+    expect(debrisWeight([0, 5, 0], I, false, F, at(0.55, 0.6)).weight).toBe(0.6); // its bottom 5 cm over the ground
+    expect(debrisWeight([0, 5, 0], I, false, F, at(0.64, 0.6)).weight).toBe(0.6); // 14 cm: still the ground
+    expect(debrisWeight([0, 5, 0], I, false, F, at(0.7, 0.6)).weight).toBe(F); // 20 cm up: landing on another block
+    expect(debrisWeight([0, 5, 0], I, false, F, at(0.55, 0)).weight).toBe(F); // skirt 0: as before
+    expect(debrisWeight([4, 0, 0], I, false, F, at(0.55, 0.6)).weight).toBe(F); // a side knock at the ground: no skirt
+    const edge = (d: number): [number, number, number, number] => { const h = (d * Math.PI) / 360; return [0, 0, Math.sin(h), Math.cos(h)]; };
+    expect(debrisWeight([0, 5, 0], edge(40), false, F, at(0.75, 0.6)).weight).toBe(1); // an edge landing keeps its full weight
+    expect(debrisWeight([0, 5, 0], I, false, F, at(0.55, 0.6)).normal).toEqual([0, 1, 0]);
+  });
+
   it('a puff leaves along the contact plane, thrown on along a scrape; one raised from the ground takes its colour bit', () => {
     const D = DEFAULT_DEBRIS;
     const puffs = (dir: V3, normal: V3, y = 0.05) => Array.from({ length: 400 }, (_, j) => newDebrisReference({ pos: [0.3, y, 0.7], strength: 6, dir, normal, packed: 0 }, j % 8, j >> 3, 1, D, 0));
@@ -560,6 +573,30 @@ describe('debris (real look impacts)', () => {
     r.sparks.forEach((e) => { expect(e.strength).toBe(e.raw); expect(e.normal).toEqual(e.dir); });
   }, 120_000);
 
+  it('skirt: on the GPU too, a flat landing on the ground counts at least dustSkirt, as its twin', async (ctx) => {
+    if (!gpu) return ctx.skip();
+    const D = DEFAULT_DEBRIS, skirt = 0.6, groundY = 1;
+    const turn = (deg: number): [number, number, number, number] => { const h = (deg * Math.PI) / 360; return [0, 0, Math.sin(h), Math.cos(h)]; };
+    // Unit cubes (half 0.5) whose bottoms sit 5 cm, 10 cm and 30 cm over the ground at y 1, and knocks from the side and on an edge.
+    const cases: Array<{ dv: V3; y: number; rot?: [number, number, number, number] }> = [
+      { dv: [0, 5, 0], y: 1.55 }, // flat landing on the ground: 3 m/s weighted by the skirt, over the threshold
+      { dv: [0, 5, 0], y: 1.6 },
+      { dv: [0, 5, 0], y: 1.8 }, // on another block: 0.75, under
+      { dv: [5, 0, 0], y: 1.55 }, // from the side at the ground: 0.75, under
+      { dv: [0, 5, 0], y: 1.75, rot: turn(40) }, // an edge at the ground: 5
+      { dv: [0, 3, 0], y: 1.55 }, // 1.8: under
+    ];
+    const r = await call('debrisDetect', cases, 1, { groundY, skirt });
+    expect(r.error).toBeNull();
+    const want = cases.map((c, i) => ({ i, ...debrisWeight(c.dv, c.rot ?? [0, 0, 0, 1], false, D.dustFace, { y: c.y, half: [0.5, 0.5, 0.5], groundY, skirt }), raw: Math.hypot(...c.dv) })).filter((w) => w.raw * w.weight > D.dustDv);
+    expect(want.map((w) => w.i)).toEqual([0, 1, 4]);
+    expect(r.debris.map((e) => e.slot)).toEqual([0, 1, 4]);
+    r.debris.forEach((e, k) => expect(Math.abs(e.strength - want[k]!.raw * want[k]!.weight)).toBeLessThan(1e-4 * want[k]!.raw));
+    // Skirt 0: only the edge passes, as before.
+    const off = await call('debrisDetect', cases, 1, { groundY, skirt: 0 });
+    expect(off.debris.map((e) => e.slot)).toEqual([4]);
+  }, 120_000);
+
   it('dvScale: the detector reads speed changes times it, thresholds and all (a world played faster, FrameParams.metres)', async (ctx) => {
     if (!gpu) return ctx.skip();
     // Spheres (weight 1) knocked at 3, 6, 10 and 1 m/s in cube units, read at half: 1.5 (under both thresholds), 3, 5 and 0.5.
@@ -606,6 +643,15 @@ describe('debris (real look impacts)', () => {
     expect(chipStepReference({ ...c, age: 4 }, 1 / 60, 0, DEFAULT_SPARKS, DEFAULT_DEBRIS).age).toBe(-1); // past its life (at most 3.5 s)
   });
 
+  it('skirt: a puff raised from the ground rises 1 - dustSkirt as fast; others as before', () => {
+    const D = { ...DEFAULT_DEBRIS, dustSkirt: 0.75 };
+    const fly = (packed: number, d = D) => { let s = { pos: [0, 0.5, 0] as V3, vel: [1, 0, 0] as V3, age: 0, packed }; for (let i = 0; i < 60; i++) s = dustStepReference(s, 1 / 60, 0, d); return s.pos[1] - 0.5; };
+    const air = fly(0), ground = fly(1 << 12);
+    expect(air).toBeGreaterThan(0.05);
+    expect(ground / air).toBeCloseTo(0.25, 2); // velocity is linear in the rise, so is the height gained
+    expect(fly(1 << 12, DEFAULT_DEBRIS)).toBe(fly(0, DEFAULT_DEBRIS)); // dustSkirt 0: no difference
+  });
+
   it('spawn and flight match the CPU twins, each kind in its own ring, nothing below the floor', async (ctx) => {
     if (!gpu) return ctx.skip();
     const r = await call('debrisSim', 80);
@@ -615,6 +661,7 @@ describe('debris (real look impacts)', () => {
     expect(r.bornChips).toBe(r.wantChips);
     expect(r.wantDust).toBeGreaterThan(30); // 24 bursts, up to 4 puffs and 8 chips each at these budgets
     expect(r.wantChips).toBeGreaterThan(30);
+    expect(r.groundPuffs).toBeGreaterThan(4); // the four flat landings' puffs, which rise half as fast (dustSkirt 0.5)
     expect(r.spawned).toBe(r.wantDust + r.wantChips);
     expect(r.outside).toBe(0);
     expect(r.unmatched).toBe(0); // every puff in the dust ring, every chip in the chip ring

@@ -489,6 +489,71 @@ covered (scrub, woods: albedo 0.05 to 0.15) and come in layers.
   darkens 8 degree hills by 15+ per channel; the sky above every ridge as
   without hills.
 
+## Dust shape: lumpy edges, thinning, a skirt (V1 backlog, 2026-11-02)
+
+The Opus review of the dust and scale renders
+(`/mnt/project-files/dust-scale/`) found the puffs still read as smooth
+soft discs, about as dense grown as young, and that a flat landing on
+dirt throws no low ring of dust (the face weight of 2026-10-27 leaves a
+square landing only `dustFace`, 0.15, of its speed change). Three knobs;
+each at 0 is the dust before it (with all three at 0 the debris draw
+test's summed pixels equal main's exactly):
+
+- `dustErode` (0 to 1, default 0.7). A lumpy field, the disc's fall-off
+  plus the macro layer's fbm at about four lumps across the puff and at
+  three and five times that (the finest at half weight; drifting with age, so the lumps boil and
+  come in several sizes), is cut at a level that starts at 0.2 and rises
+  0.6 over the puff's life: its rim is ragged from birth, the cut eats
+  inward, and an old puff ends as a few wisps instead of a fading disc.
+  At 1, on SwiftShader (air burst; outline pixels over the root of the
+  area, a disc about 3.5): roughness 3.39 to 4.89 at 0.2 s and 4.71 to
+  6.02 at 0.75 s, area down 13% and 17%. Two more texture fetches per
+  dust fragment, only while on (a uniform branch).
+- `dustThin` (0 to 1, default 0.3). The dust in a puff spreads over its
+  grown area, so opacity goes as (2 grow)^(-2 dustThin), clamped at 1:
+  normalised at half grown, a young puff is denser and a grown one
+  fainter, about as much dust in all; 0 keeps the opacity as before. At 1
+  the air burst's summed change is 1.65x at 0.2 s and 0.38x at 1.7 s.
+- `dustSkirt` (0 to 1, default 0.9). A box landing flat on the ground
+  (contact normal up, its lowest point within 15 cm of the ground) counts
+  at least `dustSkirt` of its speed change instead of `dustFace`, so a
+  flat landing on dirt raises dust again. Its soil puffs (packed bit 12)
+  rise 1 - dustSkirt as fast and are drawn up to 0.4 as tall, 1.4 as
+  wide and 1.5 as opaque, the ground fade scaled to match: a low skirt
+  round the landing instead of a ball. Puffs from knocks in the air are
+  untouched (equal pixels in the test). At 1, the ground burst's bounding
+  box goes from 0.58 to 0.29 of its width high at 0.75 s.
+- Knobs `real.dustErode`, `real.dustThin`, `real.dustSkirt`, in the Look
+  panel and scene files. The frame uniform gains `dustShape` (erode,
+  thin); `debris.w` (unused before) carries the skirt; the spark params
+  gain `dustSkirt` (44 to 48 words).
+- Reviewed by a second model on before/after renders
+  (`/mnt/project-files/visual-backlog/dust/`). Round 1 (base cut 0.05,
+  two noise layers, thin 0.5 normalised at full size, skirt 0.6):
+  "ship with tweaks": young puffs still smooth discs, clumps all one size,
+  thinning read as more dust (young puffs denser, grown ones unchanged),
+  the skirt right in shape but barely visible. All four fixed as above.
+  Round 2: "better, ship"; the finest layer at weight 0.8 punched
+  pinholes through old eroded puffs, so it went to 0.5. Whether the
+  boiling lumps shimmer in motion is for a look on the M5.
+- Rejected: a 3D noise volume per puff (a 3D texture or a ray march: more
+  fetches per fragment where the dust overdraws most); more, smaller
+  puffs per impact for lumpiness (more particles, vertex and overdraw
+  cost, and the budgets are the steady cap); a separate ring emitter for
+  landings (a second spawn path when the launch already throws a
+  landing's dust along the contact plane, a ring; it only lacked the
+  weight).
+- Cost: bench variant `real-plain-dust` (the three knobs at 0) against
+  `real-dust` in the same steady shower, column "Dust shape". SwiftShader
+  timings are not results; M5 to be measured.
+- Tests: render.test.ts, the detector's twin and the GPU detector give a
+  flat landing near the ground at least `dustSkirt` (an edge, a side
+  knock or a landing 20 cm up their old weight), the step's twin raises
+  ground puffs 1 - dustSkirt as fast and the GPU spawn and flight match
+  it; render-real-dust.test.ts draws an air burst and a ground burst with
+  each knob alone and checks roughness, area, summed density and the
+  ground puff's aspect against the knob off.
+
 ## Floor and ambient (fixes after the stone step's screenshots)
 
 - Contact darkening (within 1.5 m of the floor) is for what stands on the
