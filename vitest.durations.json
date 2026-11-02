@@ -22,6 +22,8 @@
   "packages/game/test/aim.test.ts": 0.1,
   "packages/game/test/audio.test.ts": 0,
   "packages/game/test/camera.test.ts": 0,
+  "packages/game/test/door-e2e.test.ts": 30,
+  "packages/game/test/door.test.ts": 0.1,
   "packages/game/test/e2e-line.test.ts": 8,
   "packages/game/test/e2e-sound.test.ts": 8.4,
   "packages/game/test/e2e.test.ts": 10,

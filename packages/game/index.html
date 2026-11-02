@@ -11,7 +11,7 @@
   #hud { top: 12px; left: 12px; min-width: 250px; }
   #help { bottom: 12px; left: 12px; font-size: 12px; color: #9aa3b8; }
   #error { top: 40%; left: 50%; transform: translate(-50%, -50%); max-width: 520px; display: none; }
-  @media (max-width: 640px) { #help { display: none; } }
+  @media (max-width: 640px) { #help { display: none; } #hud { min-width: 0; max-width: calc(100vw - 112px); box-sizing: border-box; } }
 </style>
 </head>
 <body>
@@ -21,6 +21,8 @@
 <div id="help" class="kg-panel kg-help"></div>
 <div id="result" class="kg-panel kg-result"></div>
 <div id="error" class="kg-panel"></div>
+<button id="menu" class="kg-menu" title="Levels and settings">Menu <kbd>Esc</kbd></button>
+<div id="door" class="kg-door"></div>
 <script type="module" src="./src/main.ts"></script>
 </body>
 </html>

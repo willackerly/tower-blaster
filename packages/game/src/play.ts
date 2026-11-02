@@ -71,6 +71,12 @@ export interface GameHandle {
   fire(shot: Shot): boolean;
   /** Outcome levels: end the level now, keeping the rack left (key B, the HUD's Bank button); false when it cannot. */
   bank(): boolean;
+  /** Fire the level's pre-aimed opening shot (KeystoneEnv.opener; key F, the HUD's Fire button): false when there is none now. */
+  fireOpener(): boolean;
+  /** Mute or unmute every sound (as key M toggles). */
+  setMuted(muted: boolean): void;
+  /** The most device pixels per CSS pixel the canvas draws (2 by default; 1 is the front door's Fast sharpness). */
+  maxDpr: number;
   /** Aim at normalized device coords with the selected ammo, as hovering there would. */
   aim(ndcX: number, ndcY: number): Aimed | null;
   select(ammo: RackItem): boolean;
@@ -116,7 +122,7 @@ export function newGameHandle(): GameHandle {
   const none = (): SessionState => ({ step: 0, phase: 'loading', strokes: 0, heritageBroken: 0, hash: '' });
   return {
     status: 'loading', engine: '', level: '', phase: 'loading', ready: false, frames: 0, stepIndex: 0, strokes: 0, bodies: 0, collapse: 0, fast: false, pace: { timeScale: 1, speed: 1, tag: '', tailSkip: false, costMs: NaN }, view: { target: [0, 0, 0], distance: 0, following: false }, result: null, counts: {}, feel: { ...DEFAULT_FEEL }, resultShownAt: null, timing: { loadMs: 0, stepMs: [], moving: [], frameMs: [], costMs: [] }, draws: { drawn: 0, skipped: 0, decimating: false },
-    fire: () => false, bank: () => false, aim: () => null, select: () => false, load: async () => {}, retry: async () => {}, capture: async () => null,
+    fire: () => false, bank: () => false, fireOpener: () => false, setMuted: () => {}, maxDpr: 2, aim: () => null, select: () => false, load: async () => {}, retry: async () => {}, capture: async () => null,
     state: none, replay: async () => none(), health: async () => null, pairsPerBody: 0, limitsHit: [],
     sound: () => ({ mode: 'collapse', status: 'off', error: '', posted: 0, stats: null }),
   };
@@ -199,6 +205,14 @@ export interface KeystoneEnv {
   sound?: GameSoundMode;
   /** The collapse sound's level, dB over the game's (GAME_SOUND_DB). */
   impactsDb?: number;
+  /**
+   * The level's pre-aimed opening shot, or null (asked at each load and retry): until the first shot
+   * the HUD offers it as a Fire button (key F), so a first-time player's first collapse is one click
+   * away (spectacle-mode.md section 11: the first-minute promise).
+   */
+  opener?(c: CompiledLevel): Shot | null;
+  /** Start muted (the front door's Sound setting; key M toggles). */
+  muted?: boolean;
 }
 
 /** An orbiting drag of (dx, dy) pixels: turns, and tilts from looking down to looking up (past level the floor brings the eye in). */
@@ -243,7 +257,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
   const pacer = new Pacer(), juice = new CameraJuice(), speed = new SpeedMeter(), tail = new TailSkip(), follow = new FollowCam();
   let arrivals = newArrivals();
   let synth: Synth | null = null;
-  let muted = false;
+  let muted = env.muted ?? false;
   const soundMode = env.sound ?? 'collapse';
   const collapse = soundMode === 'collapse' ? new CollapseSound(env.impactsDb ?? 0) : null;
   handle.sound = () => ({ mode: soundMode, status: collapse?.status ?? 'off', error: collapse?.error ?? '', posted: collapse?.posted ?? 0, stats: collapse?.stats ?? null });
@@ -266,6 +280,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
   let stepping = false;
   let regrowBuf = new Float32Array(0);
   let selected: RackItem | null = null;
+  let opener: Shot | null = null;
   let power = 100;
   let aimed: Aimed | null = null, beads: Float64Array | null = null, aimDirty = false;
   let pointer: [number, number] | null = null;
@@ -355,6 +370,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     env.result.classList.remove('show');
     document.body.classList.remove('ended');
     selected = nextSelection(c.def.rack, driver.session.rackLeft, retry ? selected : null);
+    opener = env.opener?.(c) ?? null;
     if (!retry) {
       orbit = viewOf(c);
       power = 100;
@@ -499,6 +515,20 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     return true;
   }
 
+  /** The opener while it can be fired: before the first shot, its ammo in the rack. */
+  const openerNow = (): Shot | null => (opener && driver.session.strokes === 0 && driver.session.canFire(opener.ammo) ? opener : null);
+
+  function fireOpener(): boolean {
+    const o = openerNow();
+    return o !== null && fire(o);
+  }
+
+  function setMuted(m: boolean) {
+    muted = m;
+    if (synth) synth.muted = muted;
+    collapse?.setMuted(muted);
+  }
+
   function bank(): boolean {
     if (stepping || regrowT !== null || !driver.session.canBank()) return false;
     onFeedback(driver.bank());
@@ -517,6 +547,8 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
 
   handle.fire = fire;
   handle.bank = bank;
+  handle.fireOpener = fireOpener;
+  handle.setMuted = setMuted;
   handle.select = select;
   handle.aim = (x, y) => { pointer = [x, y]; updateAim(); return aimed; };
   handle.load = (id) => load(levelIndex(id)).catch(fail);
@@ -591,7 +623,10 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     aimDirty = true;
   }, { passive: false });
   env.hud.addEventListener('click', (e) => {
-    if ((e.target as HTMLElement).closest('button')?.dataset.act === 'bank') bank();
+    const act = (e.target as HTMLElement).closest('button')?.dataset.act;
+    if (act) wakeAudio();
+    if (act === 'bank') bank();
+    if (act === 'opener') fireOpener();
   });
   env.result.addEventListener('click', (e) => {
     const act = (e.target as HTMLElement).closest('button')?.dataset.act;
@@ -607,15 +642,16 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     if (chip) select(chip.ammo);
     if (k === 'q' || k === 'e') { power = Math.max(0, Math.min(100, power + (k === 'e' ? 10 : -10))); aimDirty = true; }
     if (k === 'b') bank();
+    if (k === 'f') fireOpener();
     if (k === 'r') void handle.retry();
     if (k === 'n' && levelIdx + 1 < levels.length) void load(levelIdx + 1).catch(fail);
     if (k === 'p' && levelIdx > 0) void load(levelIdx - 1).catch(fail);
-    if (k === 'm') { muted = !muted; if (synth) synth.muted = muted; collapse?.setMuted(muted); }
+    if (k === 'm') setMuted(!muted);
   });
   addEventListener('keyup', (e) => { if (e.key === ' ') fastHeld = false; });
 
   function resize() {
-    const dpr = Math.min(devicePixelRatio || 1, 2);
+    const dpr = Math.min(devicePixelRatio || 1, handle.maxDpr);
     const w = Math.max(1, Math.floor(canvas.clientWidth * dpr)), h = Math.max(1, Math.floor(canvas.clientHeight * dpr));
     if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }
   }
@@ -629,6 +665,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
       chips: rackChips(c.def.rack, s.rackLeft, selected), power, liveLeverage: s.liveLeverage, phase: s.phase,
       reachable: s.phase === 'aiming' && aimed ? aimed.reachable : null,
       collapse: s.liveCollapse, met: s.objectiveDone, canBank: !stepping && regrowT === null && s.canBank(), pace: handle.pace.tag,
+      opener: !stepping && regrowT === null && s.phase === 'aiming' && openerNow() !== null,
     });
     if (crownsDown > crownsShown) html = html.replace('class="crowns"', 'class="crowns pop"');
     crownsShown = crownsDown;
