@@ -194,6 +194,8 @@ describe('viewer', () => {
       return page.evaluate(() => Math.hypot(...(window.__viewer.inputs.at(-1) as SpawnEvent).body.linVel));
     };
     const unit = await firedSpeed(55);
+    const quarter = page.locator('#presets button', { hasText: '25 cm cubes' });
+    expect(await quarter.getAttribute('class')).not.toBe('on');
     await page.locator('#controls summary').click();
     const scene = page.locator('#scene-form');
     // Bounce is the AVBD engines' restitution switch: off and disabled on Rapier.
@@ -212,6 +214,12 @@ describe('viewer', () => {
     const url = new URL(page.url());
     expect(url.searchParams.get('scale')).toBe('0.25');
     expect(url.searchParams.get('substeps')).toBeNull(); // 2 is 0.25's own
+    // The presets bar's 25 cm toggle is lit at 0.25, and takes the scene back to its own scale.
+    expect(await quarter.getAttribute('class')).toBe('on');
+    await quarter.click();
+    await page.waitForURL((u) => !u.searchParams.has('scale'));
+    await page.waitForFunction(() => window.__viewer?.status === 'running' && window.__viewer.stepIndex > 5, undefined, { timeout: 60_000 });
+    expect(await page.locator('#presets button', { hasText: '25 cm cubes' }).getAttribute('class')).not.toBe('on');
     expect(errors).toEqual([]);
     await page.close();
   });

@@ -17,7 +17,7 @@ import { alphaAt, newArrivals, newClock, newPacer, pauseLatch, runFree, stepsDue
 import type { V3 } from './math.ts';
 import { HEALTH_MS, limitFix, limitFixLabel, limitsHtml } from './health.ts';
 import { escapeHtml } from './html.ts';
-import { bounceOn, engineSpec, firedBody, froudeSpeed, keystoneEngine, levelOf, parseViewerConfig, presetSearch, scenarioEngineSpec, sceneTitle, toSearch, type ViewerConfig, viewerScene, withOption, worldEngineSpec } from './params.ts';
+import { bounceOn, engineSpec, firedBody, froudeSpeed, keystoneEngine, levelOf, parseViewerConfig, presetSearch, quarterMetre, scenarioEngineSpec, sceneTitle, toSearch, type ViewerConfig, viewerScene, withOption, worldEngineSpec } from './params.ts';
 import { inLevelGrenade, inLevelWeapon, projectileRadius, pushRadiusLimit, worldGrenade, worldWeapon } from './projectile.ts';
 import { type WeaponScale, WeaponRuntime } from '@tb/weapons';
 import { mountControls } from './controls.ts';
@@ -179,6 +179,16 @@ function presets(current: string) {
     b.textContent = p.label;
     if (presetSearch(p.search, config) === toSearch(config)) b.className = 'on';
     b.onclick = () => { location.search = presetSearch(p.search, parseViewerConfig(location.search)); };
+    box.appendChild(b);
+  }
+  // 25 cm cubes (opt-in): the same scene a quarter the size, so it moves twice as fast (docs/world-scale.md).
+  const quarter = quarterMetre(config);
+  if (quarter) {
+    const b = document.createElement('button');
+    b.textContent = '25 cm cubes';
+    b.title = 'Cubes of 25 cm instead of the scene\'s own size: 4 g in cube units, so everything moves twice as fast; 2 physics substeps, twice the physics cost';
+    if (quarter.on) b.className = 'on';
+    b.onclick = () => { location.search = quarterMetre(parseViewerConfig(location.search))!.search; };
     box.appendChild(b);
   }
 }

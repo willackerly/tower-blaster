@@ -8,7 +8,7 @@ import {
   newArrivals, newClock, newPacer, PACE_SLACK, parseProjectile, pauseLatch, parseViewerConfig, presetSearch, projectileBody, projectileMass, proposeScene,
   pushRadiusLimit, rayThrough, runFree, SIM_SPEED_TAU, stepDue, stepped, stepsDue, taskYield, toSearch, trackSimSpeed, transform, viewProj, Window,
   withOption, type FreeHooks, type Orbit, orbitAt, parseCamera, parseSceneFile, poseOf, SCENE_FILE_FORMAT, sceneFile, sceneFileName, type ViewerConfig,
-  autoSubsteps, froudeSpeed, MAX_SUBSTEPS, SCALE_LIMITS, sceneSummary, worldEngineSpec, worldScene,
+  autoSubsteps, froudeSpeed, MAX_SUBSTEPS, QUARTER_METRE, quarterMetre, SCALE_LIMITS, sceneSummary, worldEngineSpec, worldScene,
   DEFAULT_FRAMING, FRAMING_LIMITS, framingFrom, parseFraming, frameFromGround, defaultFraming, clampPitch, eyeDistance, MAX_PITCH, HORIZON_PITCH, MIN_EYE_DISTANCE, normalize,
   bounceOn, bounceScene, DEFAULT_BOUNCE, viewerScene, scenarioEngineSpec,
 } from '../src/index.ts';
@@ -794,6 +794,29 @@ describe('world scale (scale, substeps)', () => {
     expect(parseViewerConfig(presetSearch('?scenario=S4', cur))).toMatchObject({ scenario: 'S4', scale: 0.25, substeps: 3 });
     expect(parseViewerConfig(presetSearch('?scenario=S4', parseViewerConfig('?scenario=S14&scale=0.25')))).toMatchObject({ scale: 0.25, substeps: 2 });
     expect(parseViewerConfig(presetSearch('?scenario=S4', parseViewerConfig('?scenario=S14')))).toMatchObject({ scale: 1, substeps: 1 });
+  });
+  it('the 25 cm toggle: on at 0.25, switches to it and back with substeps following unless set by hand; not offered for levels, keystone or a scene with its own scale', () => {
+    const c = parseViewerConfig('?scenario=S14&look=real&cam=0,2.5,0,0.7,0.12,16');
+    const q = quarterMetre(c)!;
+    expect(q.on).toBe(false);
+    const quarter = parseViewerConfig(q.search);
+    expect(quarter).toEqual({ ...c, scale: QUARTER_METRE, substeps: 2 }); // camera and look kept
+    const back = quarterMetre(quarter)!;
+    expect(back.on).toBe(true);
+    expect(back.search).toBe(toSearch(c)); // the scene's own scale again: nothing about scale in the URL
+    // Substeps set by hand stay, both ways.
+    const hand = parseViewerConfig('?scenario=S14&substeps=3');
+    expect(parseViewerConfig(quarterMetre(hand)!.search)).toMatchObject({ scale: QUARTER_METRE, substeps: 3 });
+    expect(parseViewerConfig(quarterMetre(parseViewerConfig('?scenario=S14&scale=0.25&substeps=3'))!.search)).toMatchObject({ scale: 1, substeps: 3 });
+    // Another chosen scale: off, and the button picks 25 cm.
+    const half = quarterMetre(parseViewerConfig('?scenario=S14&scale=0.5'))!;
+    expect(half.on).toBe(false);
+    expect(parseViewerConfig(half.search)).toMatchObject({ scale: QUARTER_METRE, substeps: 2 });
+    // Not offered: a scene with a real scale of its own (Kapla), a level, keystone rules.
+    const own = Object.entries(SCENARIOS).find(([, d]) => (d.scale ?? 1) !== 1)![0];
+    expect(quarterMetre(parseViewerConfig(`?scenario=${own}`))).toBeNull();
+    expect(quarterMetre(parseViewerConfig('?level=L1'))).toBeNull();
+    expect(quarterMetre(parseViewerConfig('?level=L1&rules=keystone'))).toBeNull();
   });
   it('autoSubsteps keeps each step no coarser than the unit world\'s 1/60 s', () => {
     expect([1, 2, 10, 0.5, 0.25, 0.2, 0.0625, 0.01].map(autoSubsteps)).toEqual([1, 1, 1, 2, 2, 3, 4, 8]);
