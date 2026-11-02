@@ -92,6 +92,13 @@ so a knock raises the dust it would in the unit world.
   when the size changes), under the seed; the line under them says what
   they do ("4 g in cube units, 2x as fast, 2x physics cost"). The saved JSON keeps
   them in `scene.scale` and `loop.substeps`.
+- Presets bar: "25 cm cubes" (V1 backlog, 2026-11-02), the opt-in for
+  the smaller world Will asked about on 2026-10-27. Lit while the scale is
+  0.25; a click switches between 0.25 and the scene's own scale, keeping
+  the camera, the look and the rest, substeps following unless set by hand
+  (`quarterMetre` in params.ts). Not offered for levels and keystone rules
+  (their physics is pinned at 1 m cubes) or for a scene with a real scale of
+  its own (S15). The default stays 1 m: 0.25 doubles the physics cost.
 - `ScenarioDef.scale`: a scenario's default. S15 (Kapla) sets `KAPLA_SCALE`
   (0.0234 m per unit, so a plank is 117 mm and 7 substeps); `scale=1` by hand
   gives the earlier giant world (5 m planks), which is the same collapse

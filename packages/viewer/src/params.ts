@@ -393,6 +393,27 @@ export function presetSearch(preset: string, cur: Pick<ViewerConfig, 'engine' | 
   return toSearch({ ...next, engine, loop, pipeline, maxSteps, projectile, look, real, substeps, scale, view, bounce, sound });
 }
 
+/** The quarter-metre cube edge the presets bar offers (V1 backlog, 2026-11-02; docs/world-scale.md). */
+export const QUARTER_METRE = 0.25;
+
+/**
+ * The presets bar's "25 cm cubes" toggle: on while the world runs at
+ * QUARTER_METRE, and its search switches between that and the scene's own
+ * scale (camera, look and the rest kept). Substeps follow the scale
+ * (autoSubsteps: 2 at 25 cm, twice the physics cost) unless set by hand.
+ * null where it is not offered: a level or keystone rules (their physics is
+ * pinned at 1 m cubes), or a scenario with a real scale of its own (Kapla).
+ */
+export function quarterMetre(c: ViewerConfig): { on: boolean; search: string } | null {
+  if (c.level || c.rules === 'keystone') return null;
+  const own = defaultScale(c.scenario);
+  if (own !== 1) return null;
+  const on = c.scale === QUARTER_METRE;
+  const scale = on ? own : QUARTER_METRE;
+  const substeps = c.substeps === autoSubsteps(c.scale) ? autoSubsteps(scale) : c.substeps;
+  return { on, search: toSearch({ ...c, scale, substeps }) };
+}
+
 /** Bodies fired balls may add on the engines whose id tables are sized at init (GPU AVBD, the tiers). */
 export const GPU_SPARE = 256;
 
