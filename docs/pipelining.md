@@ -28,12 +28,14 @@ cheap. This audits the code paths that run while a shot plays (game page,
   10k) takes GPU time from physics. The evidence that they contend comes from
   the F2 baseline (fffd5a0, same build both ways). S14 10k at rest steps in
   4.82 ms on the bench, which draws nothing, and in 7.0-10.6 ms in the viewer,
-  which draws 120 frames a second. How much of that a collapse would win back
-  by drawing 60 frames a second is not measured; the estimate is 5-20% sim
-  speed. Interpolation makes 60 drawn frames a second look smooth. So the cheapest
-  new parallelism is to **draw fewer frames while physics is behind**. That is
-  P1 below: it ships off by default, behind `keystone.frames`, for an A/B on
-  the M5.
+  which draws 120 frames a second. Interpolation makes 60 drawn frames a
+  second look smooth. So the cheapest new parallelism is to **draw fewer
+  frames while physics is behind**. That is P1 below, behind
+  `keystone.frames`. Round 1 on the M5 (2026-11-05) measured +16-19% sim
+  speed and 13-15% shorter shots from it, but a governor bug drew 30 frames a
+  second instead of 60; the fixed governor is in round 2, still off by
+  default. The same run moved the valve's default budget to 14 ms, which
+  halved drawn-frame p99 at 120 Hz.
 - **CPU work on the main thread is small at 10k and large at 100k.** It runs
   once per step: decoding the readback, the rules' observation, the sound tap
   and repacking for the renderer. On this container's 2.1 GHz Xeon that is
@@ -149,12 +151,14 @@ Each item says its gain, cost, risk to feel or latency, and how it is
 measured. "M5" means the bench thread on Will's Mac (idle-gated), relayed
 through the coordinator.
 
-### P1. Draw fewer frames while physics is behind (`keystone.frames`), in this PR, default off
+### P1. Draw fewer frames while physics is behind (`keystone.frames`), default off until round 2
 
 - **What.** `FrameGovernor` (`game/src/frame-rate.ts`) decides per display
   frame whether to draw. `all` draws every frame (the default, unchanged).
-  `half` decimates by the largest whole factor that keeps at least 55 drawn
-  frames a second: 120 Hz → 60, 144 → 72, 240 → 60, and 60-100 Hz never.
+  `half` draws a display frame once 1/60 s has passed since the last drawn
+  one, less half a display interval, which picks the whole fraction of the
+  display's rate nearest 60: 120 Hz → 60, 144 → 72, 165 → 55, 240 → 60, and
+  60-100 Hz never. (The first version counted frames instead: see round 1.)
   `auto` decimates only while the sim runs under 0.95x real time without
   being asked to (not slow-motion juice, not fast-forward). It returns to
   every frame at once when the shot ends (aiming wants every frame), or after
@@ -193,6 +197,52 @@ through the coordinator.
     scenes and drawn-frame p99 stays under 20 ms.
   - **Drop it** if the sim speed gain is under 3%: the GPU then overlaps
     render and compute well enough already.
+- **Round 1 (M5 Max, 120 Hz headed, a406519, 2026-11-05).** Files
+  `e7-a406519-headed-*` in project files. 10k, 40 iterations, one cluster.
+
+  | Case | Wall (s) | Sim speed, median | Drawn frames, p95 / p99 (ms) |
+  |---|---|---|---|
+  | blocks, all, budget 16.7 (the default then) | 27.6 | 0.68 | 17.6 / 21.9 |
+  | blocks, all, budget 14 | 29.4 | 0.64 | 9.8 / 11.6 |
+  | blocks, all, no valve | as 16.7 | as 16.7 | as 16.7 |
+  | blocks, half | 23.5 | 0.81 | about 50 (30 fps) |
+  | blocks, auto | 24.0 | 0.79 | about 30 fps |
+  | city, all, 16.7 | 44.8 | 0.67 | |
+  | city, half | 38.7 | 0.78 | |
+  | city, auto | 38.7 | 0.78 | |
+
+  - **Frames do steal GPU from physics.** Drawing fewer raised the sim by
+    16-19% and cut wall time by 13-15% on both scenes, well past both gates.
+  - **But half and auto drew 30 frames a second, not 60, so they were not
+    adopted.** The governor estimated the display's rate with a moving average
+    that dropped intervals over 1.5x the estimate but kept short ones. Under
+    load, Chrome's rAF on a 120 Hz display comes unevenly (pairs like 1 ms then
+    15.7 ms), the estimate fell to a few ms, and it picked a factor of 4. Now
+    it decides by elapsed time since the last drawn frame, with the display
+    interval the median of 31 intervals, and it decimates only once 8
+    intervals are known. `frame-rate.test.ts` replays the uneven ticks (the
+    old code draws 29.8 a second there, the new 60) and a fast burst after
+    load (the old code skipped a frame on a 60 Hz display; the game e2e
+    caught it).
+  - **The valve's default goes from 16.7 to 14 ms** (`DEFAULT_BUDGET_MS`).
+    At a whole step's budget physics fills the GPU queue whenever it is
+    behind, and drawn frames wait behind steps: p99 21.9 ms, under the 20 ms
+    gate's fail line. At 14 ms p99 is 11.6 ms. The cost is 6% sim speed (0.64x
+    against 0.68x), declared by the HUD's slow-motion tag. G4.4 chose 16.7 on
+    a headless (60 Hz) run, where the frames looked the same at both; at
+    120 Hz they do not. Frame pacing is what the player sees on every shot,
+    so it wins over 6% of sim speed.
+- **Round 2 (queued).** The fixed governor, same command. The cases that
+  decide: `auto` at 14 (the new default budget) and at 16.7, against `all`
+  at 14, on blocks and city (`*-cluster-40-rendered`, `*-auto`,
+  `*-b16.7`, `*-auto-b16.7`).
+  - **Adopt `auto` as the default** if, against `all` at 14, wall time drops
+    at least 5% on both scenes, `draws` shows about 60 drawn a second while
+    decimating, and drawn-frame p99 stays at or under 20 ms.
+  - If `auto` at 16.7 passes and `auto` at 14 does not, the default becomes
+    `auto` with 16.7: with half the frames, the queue has room for a whole
+    step.
+  - **Drop it** if the sim speed gain is under 3% once frames really are 60.
 
 ### P2. Decode the readback in one pass, in this PR
 
