@@ -51,6 +51,8 @@ export interface GpuEngineOptions {
    */
   colorTail?: number;
   indirectColors?: boolean;
+  /** Colours below colorTail by indirect dispatch sized to each colour (SolverDispatch.sizedColors); default on with sleep, off without. The same result either way. */
+  sizedColors?: boolean;
   tailThreads?: number;
   /**
    * How the primal holds and solves each body's 6x6 system (SolverDispatch.hessian):
@@ -266,7 +268,7 @@ export class GpuAvbdEngine implements PhysicsEngine {
     check('settleSteps', (v) => Number.isInteger(v) && v >= 0, 'a non-negative integer');
     check('settleIterations', (v) => Number.isInteger(v) && v >= 1, 'a positive integer');
     if ((opts.settleSteps === undefined) !== (opts.settleIterations === undefined)) throw new Error('GpuAvbdEngine: GpuEngineOptions.settleSteps and settleIterations go together');
-    for (const k of ['indirectColors', 'boxBroadphase', 'sleep', 'sleepSkip'] as const) if (opts[k] !== undefined && typeof opts[k] !== 'boolean') throw new Error(`GpuAvbdEngine: GpuEngineOptions.${k} must be a boolean, got ${opts[k]}`);
+    for (const k of ['indirectColors', 'sizedColors', 'boxBroadphase', 'sleep', 'sleepSkip'] as const) if (opts[k] !== undefined && typeof opts[k] !== 'boolean') throw new Error(`GpuAvbdEngine: GpuEngineOptions.${k} must be a boolean, got ${opts[k]}`);
     try { checkSleepRule(sleepRuleOf(opts)); } catch (e) { throw new Error(`GpuAvbdEngine: GpuEngineOptions.${(e as Error).message}`); }
     if (opts.sleep && this.params.restitution) throw new Error('GpuAvbdEngine: GpuEngineOptions.sleep is not implemented with AvbdParams.restitution yet');
     if (opts.hessian !== undefined && !HESSIAN_FORMS.includes(opts.hessian)) throw new Error(`GpuAvbdEngine: GpuEngineOptions.hessian must be one of ${HESSIAN_FORMS.join(', ')}, got ${opts.hessian}`);
@@ -290,7 +292,7 @@ export class GpuAvbdEngine implements PhysicsEngine {
     this.colorMode = gpuColorMode(this.params);
     if (this.params.colorMode !== undefined) variant.colorMode = this.params.colorMode;
     // Options that size the buffers or shape the dispatch change the work per step (e.g. the broadphase's key bits), so they are part of the variant.
-    for (const k of ['capacity', 'spare', 'pairsPerBody', 'maxRadius', 'colorTail', 'indirectColors', 'tailThreads', 'colorRounds', 'hessian', 'boxBroadphase', 'sleep', 'sleepSpeed', 'sleepSteps', 'sleepDrift', 'wakeSpeed', 'wakeDepth', 'settleSteps', 'settleIterations', 'sleepSkip'] as const) if (opts[k] !== undefined) variant[k] = opts[k];
+    for (const k of ['capacity', 'spare', 'pairsPerBody', 'maxRadius', 'colorTail', 'indirectColors', 'tailThreads', 'colorRounds', 'hessian', 'boxBroadphase', 'sleep', 'sleepSpeed', 'sleepSteps', 'sleepDrift', 'wakeSpeed', 'wakeDepth', 'settleSteps', 'settleIterations', 'sleepSkip', 'sizedColors'] as const) if (opts[k] !== undefined) variant[k] = opts[k];
     this.info = { name: 'avbd-gpu', variant, backend: 'webgpu', integrator: { substeps: 1 } };
   }
 
@@ -315,6 +317,8 @@ export class GpuAvbdEngine implements PhysicsEngine {
     // Unknown adapters count as hardware: the width only sets the speed, never the result.
     this.dispatch = {
       colorTail: this.opts.colorTail ?? DEFAULT_DISPATCH.colorTail, indirectColors: this.opts.indirectColors ?? DEFAULT_DISPATCH.indirectColors,
+      // Sized colour dispatches by default with sleep (its sleepers have no colour); as before without.
+      sizedColors: this.opts.sizedColors ?? (!!this.opts.sleep || DEFAULT_DISPATCH.sizedColors),
       tailThreads: this.opts.tailThreads ?? defaultTailThreads(adapter ? isSoftwareAdapter(adapter) : false),
       hessian: this.opts.hessian ?? DEFAULT_DISPATCH.hessian,
     };
