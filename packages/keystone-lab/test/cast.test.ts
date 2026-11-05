@@ -28,7 +28,7 @@ describe('statistics', () => {
     expect(['collapse', 'crowns', 'score', 'skyline'].map((m) => higherBetter(m as never))).toEqual([true, true, true, false]);
   });
   it('an exploration row counts a play that ran out of steps only at the settles it reached; one that banked, at its last', () => {
-    const sample = (shots: number, collapse: number): CastSample => ({ shots, step: 100 * shots, met: collapse >= 0.2, collapse, crowns: 0, skyline: 1 - collapse, score: 0, heritage: 0 });
+    const sample = (shots: number, collapse: number): CastSample => ({ shots, step: 100 * shots, met: collapse >= 0.2, collapse, crowns: 0, skyline: 1 - collapse, score: 0, heritage: 0, pulled: 0 });
     const play = (complete: boolean, ...c: number[]): CastPlay => ({ samples: c.map((x, k) => sample(k + 1, x)), complete, steps: 1, hash: '', limits: [] });
     // Out of steps after shot 1 (the SwiftShader smoke on B1a), banked after shot 2, and one full play.
     const plays = [play(false, 0.07), play(true, 0.1, 0.3), play(true, 0.2, 0.4, 0.6)];
@@ -134,7 +134,7 @@ function synthetic(lines: Shot[][] = []): CastPlayer {
           const l = s as LaunchShot, gain = (l.power / 100) * (1 - Math.abs(l.pitch) / 900) * (0.4 + 0.1 * Math.cos(l.yaw / 10));
           left *= 1 - gain;
           const collapse = 1 - left;
-          return { shots: k + 1, step: 100 * (k + 1), met: collapse >= 0.3, collapse, crowns: 0, skyline: left, score: Math.floor(3000 * collapse), heritage: 0 };
+          return { shots: k + 1, step: 100 * (k + 1), met: collapse >= 0.3, collapse, crowns: 0, skyline: left, score: Math.floor(3000 * collapse), heritage: 0, pulled: 0 };
         });
         return { samples, complete: true, steps: 100 * shots.length, hash: 'x', limits: [] };
       });
@@ -253,7 +253,7 @@ describe('castLevel on a synthetic player', () => {
     expect(endValue({ samples: [], complete: false, steps: 0, hash: '', limits: [] }, 'collapse')).toBe(0);
     expect(endValue({ samples: [], complete: false, steps: 0, hash: '', limits: [] }, 'skyline')).toBe(1);
     // Banked: the best met settle once the objective is met (score falls with every shot after it), else the last.
-    const at = (met: boolean, score: number, collapse: number): CastSample => ({ shots: 1, step: 1, met, collapse, crowns: 0, skyline: 1 - collapse, score, heritage: 0 });
+    const at = (met: boolean, score: number, collapse: number): CastSample => ({ shots: 1, step: 1, met, collapse, crowns: 0, skyline: 1 - collapse, score, heritage: 0, pulled: 0 });
     const play = (...s: CastSample[]): CastPlay => ({ samples: s, complete: true, steps: 1, hash: '', limits: [] });
     expect(endValue(play(at(true, 3870, 0.1), at(true, 3482, 0.2), at(true, 2680, 0.29)), 'score')).toBe(3870);
     expect(endValue(play(at(false, 900, 0.1), at(true, 2000, 0.2), at(true, 2500, 0.3)), 'score')).toBe(2500);

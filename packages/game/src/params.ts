@@ -4,7 +4,7 @@
 // (docs/design/viewer-superset.md, step F). A key's bad value is refused with
 // a message naming it; keys a page doesn't know are left to it (the look's
 // real.* knobs, the viewer's own).
-import { BIG_LEVELS, checkPhysics, checkSettle, isRackItem, itemRef, levelById, type LevelDef, MAX_RACK, type PhysicsBlock, RACK_ITEM_NAMES, type RackItem, readShots, SCORINGS, type Scoring, type SettleRule, type Shot, weaponOf } from '@tb/keystone';
+import { BIG_LEVELS, checkPhysics, checkSettle, isRackItem, itemRef, levelById, type LevelDef, MAX_PULLS, MAX_RACK, type PhysicsBlock, RACK_ITEM_NAMES, type RackItem, rackSizeProblem, readShots, SCORINGS, type Scoring, type SettleRule, type Shot, weaponOf } from '@tb/keystone';
 import { LOOKS } from '@tb/render';
 import { type EngineKind, engineKind } from './engines.ts';
 import { paceFeel, type PaceFeel } from './pacing.ts';
@@ -136,14 +136,15 @@ export function lineOf(def: LevelDef, text: string | null): Shot[] | null {
 
 /**
  * ?keystone.rack for level def: a comma list of rack item names (@tb/keystone rack.ts) the level
- * plays with instead of its own, or null when absent. Refused: an empty list, more than MAX_RACK,
+ * plays with instead of its own, or null when absent. Refused: an empty list, more than MAX_RACK
+ * fired items or MAX_PULLS pulls,
  * a name that is no item, a weapon the level does not have. The level's hash changes with its
  * rack, so a run with an override is never the authored level's (spectacle-mode.md: custom).
  */
 export function rackOf(def: LevelDef, text: string | null): RackItem[] | null {
   if (text === null) return null;
   const items = text.split(',');
-  if (text === '' || items.length > MAX_RACK) throw new Error(`keystone.rack must list 1 to ${MAX_RACK} items: ${text}`);
+  if (text === '' || rackSizeProblem(items) !== null) throw new Error(`keystone.rack must list 1 to ${MAX_RACK} items (and up to ${MAX_PULLS} pulls): ${text}`);
   return items.map((name) => {
     if (!isRackItem(name)) throw new Error(`keystone.rack: ${name || 'an empty name'} is not one of ${RACK_ITEM_NAMES}`);
     const ref = itemRef(name)!;

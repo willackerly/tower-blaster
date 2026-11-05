@@ -6,6 +6,7 @@
 // them. lGold is the lower quartile of the leverage the par line's clean
 // neighbours on the nudge grid reach (pnpm keystone:par).
 import { BIG_LEVELS } from './big-levels.ts';
+import { UNDERCUT_LEVELS } from './undercut-levels.ts';
 import type { LevelDef } from './level.ts';
 
 type V3 = [number, number, number];
@@ -92,8 +93,8 @@ export const L5: LevelDef = {
 /** The chamber levels, scored on par (the game's default series). */
 export const LEVELS: readonly LevelDef[] = [L1, L2, L3, L4, L5];
 
-/** Every built-in level's series: the chamber levels (L1 to L5) and the big levels (B1 on). A level plays on into the rest of its own series. */
-export const SERIES: readonly (readonly LevelDef[])[] = [LEVELS, BIG_LEVELS];
+/** Every built-in level's series: the chamber levels (L1 to L5), the big levels (B1 on) and Undercut's (U1 on). A level plays on into the rest of its own series. */
+export const SERIES: readonly (readonly LevelDef[])[] = [LEVELS, BIG_LEVELS, UNDERCUT_LEVELS];
 
 /** The series holding the built-in level with this id (any case), or undefined. */
 export function seriesOf(id: string): readonly LevelDef[] | undefined {

@@ -6,7 +6,7 @@ import { checkSound, SOUND_KNOBS, SOUND_MATERIAL_NAMES, type SoundKnob, type Sou
 import { parseSpec } from '@tb/bench';
 import { type Env, ENVS, type Ground, GROUNDS, linearToSrgb, LOOKS, REAL_DEFAULTS, REAL_KNOBS, type RealKnob, type RealOptions, srgbToLinear, type Stone, STONES, type V3 } from '@tb/render';
 import { checkPaceFeel, DEFAULT_BUDGET_MS, DEFAULT_FEEL, type FrameMode, objectiveText, type PaceFeel } from '@tb/game';
-import { AUTO_LEVEL, AVBD_ITERATIONS, BIG_LEVELS, compileLevel, LEVELS, PRESETTLE_STEPS, scenarioLevel } from '@tb/keystone';
+import { AUTO_LEVEL, AVBD_ITERATIONS, BIG_LEVELS, compileLevel, LEVELS, PRESETTLE_STEPS, scenarioLevel, UNDERCUT_LEVELS } from '@tb/keystone';
 import { buildScenario, SCENARIOS } from '@tb/scenarios';
 import { type CameraPose, type Framing, FRAMING_LIMITS } from './camera.ts';
 import { escapeHtml } from './html.ts';
@@ -263,7 +263,7 @@ export function mountControls(root: HTMLElement, hooks: ControlsHooks): { refres
     <summary>Scene and projectile</summary>
     <form id="scene-form">
       <div class="h">Scene</div>
-      <label class="f"><span>scenario</span><select name="scenario"><optgroup label="Scenarios">${Object.values(SCENARIOS).map((s) => `<option value="${s.id}">${s.id} ${escapeHtml(s.title)}</option>`).join('')}</optgroup><optgroup label="Keystone levels">${LEVELS.map((l) => `<option value="${levelChoice(l.id)}">${l.id} ${escapeHtml(l.name)}</option>`).join('')}</optgroup><optgroup label="Big levels">${BIG_LEVELS.map((l) => `<option value="${levelChoice(l.id)}">${l.id} ${escapeHtml(l.name)}</option>`).join('')}</optgroup><optgroup label="Your level" class="custom"><option value="${CUSTOM_LEVEL}"></option></optgroup></select></label>
+      <label class="f"><span>scenario</span><select name="scenario"><optgroup label="Scenarios">${Object.values(SCENARIOS).map((s) => `<option value="${s.id}">${s.id} ${escapeHtml(s.title)}</option>`).join('')}</optgroup><optgroup label="Keystone levels">${LEVELS.map((l) => `<option value="${levelChoice(l.id)}">${l.id} ${escapeHtml(l.name)}</option>`).join('')}</optgroup><optgroup label="Big levels">${BIG_LEVELS.map((l) => `<option value="${levelChoice(l.id)}">${l.id} ${escapeHtml(l.name)}</option>`).join('')}</optgroup><optgroup label="Undercut levels">${UNDERCUT_LEVELS.map((l) => `<option value="${levelChoice(l.id)}">${l.id} ${escapeHtml(l.name)}</option>`).join('')}</optgroup><optgroup label="Your level" class="custom"><option value="${CUSTOM_LEVEL}"></option></optgroup></select></label>
       <div class="params"></div>
       <div class="rules">
         <label class="f"><span>rules</span><select name="rules"><option value="sandbox">sandbox</option><option value="keystone">Keystone (the game)</option></select></label>
