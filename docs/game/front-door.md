@@ -7,10 +7,10 @@ Status 2026-11-02. The game page's title and level select, progress kept in the 
 A bare URL (`pnpm game`, or the playtest link) opens the door over B1, which loads behind it. The door has three parts:
 
 - The title, then **Play · <next level>** (the first level without a star) and, when another level is open, **Esc Back to <it>**.
-- **How to play**: four lines on aiming, freezing, stars and banking.
+- **How to play**: four lines on aiming, firing again (rapid fire) and freezing, stars and banking.
 - One **card per level** of the series. Each card shows the id, the name, the block count and the rack, then the three star targets (the objective; T2 and T3 from the cast in the metric's own words, such as "70% down" or "3,200 points, heritage intact"), and the best play. On a phone the targets shrink to one line ("★ 40% · ★★ 70% · ★★★ 94%").
 
-Below the cards, an **Advanced settings** link (closed on every visit; Will 2026-11-05: keep the settings, bury them) opens four settings: **Sound** (On or Off), **Look** (Maquette, Photoreal or Candy), **Camera** (Still, the default: it moves only when the player moves it; or Dynamic: it follows the collapse and shakes on hits, i.e. `keystone.follow=1` and `keystone.shake=1`) and **Sharpness** (Full, or Fast, which caps the canvas at 1 device pixel per CSS pixel). The URL's `keystone.follow` and `keystone.shake` each win over Camera for the visit, and a Camera click drops them from the URL. A Camera change applies to the shake at once and to the follow from the next shot. A two-click **Forget my progress** link sits under them, inside the same panel.
+Below the cards, an **Advanced settings** link (closed on every visit; Will 2026-11-05: keep the settings, bury them) opens five settings: **Sound** (On or Off), **Look** (Maquette, Photoreal or Candy), **Camera** (Still, the default: it moves only when the player moves it; or Dynamic: it follows the collapse and shakes on hits, i.e. `keystone.follow=1` and `keystone.shake=1`), **Rapid fire** (On, the default: fire again before the last shot settles; Off waits for each settle, i.e. `keystone.rapid=0`; Will 2026-11-05, see spectacle-mode.md section 5; a change applies to the next click) and **Sharpness** (Full, or Fast, which caps the canvas at 1 device pixel per CSS pixel). The URL's `keystone.follow` and `keystone.shake` each win over Camera for the visit, and a Camera click drops them from the URL. A Camera change applies to the shake at once and to the follow from the next shot. A two-click **Forget my progress** link sits under them, inside the same panel.
 
 In play, **Menu** (top right) or **Esc** brings the door back. While the door is open it holds the keyboard, so the game's keys (N, R, F and so on) wait.
 
@@ -27,6 +27,7 @@ On a first visit, B1's HUD offers **F Fire the first shot**: the first shot of B
 | `look` | `hazy`, `real`, `candy` | stored, else `hazy` |
 | `sharp` | `2`, `1` | stored, else `2` |
 | `keystone.follow`, `keystone.shake` | `1`, `0` (each) | the stored Camera setting (`still`: both off), else off |
+| `keystone.rapid` | `1`, `0` | the stored Rapid fire setting, else `1` |
 
 When the player changes a setting on the door, it is stored and its URL key is dropped, so a reload keeps the choice.
 

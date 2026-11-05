@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { B1, B2, B3, BIG_LEVELS, compileLevel, L1, LEVELS } from '@tb/keystone';
 import { bestText, doorHtml, doorLevels, doorMode, doorOnLoad, nextLevel, openerFor, preaimMode, rackText, starTargets, thresholdText } from '../src/door.ts';
 import type { LevelRecord } from '../src/progress.ts';
-import { cameraFeel, DEFAULT_SETTINGS, parseSettings, SETTINGS_KEY, SettingsStore, urlSettings } from '../src/settings.ts';
+import { cameraFeel, DEFAULT_SETTINGS, parseSettings, rapidFeel, SETTINGS_KEY, SettingsStore, urlSettings } from '../src/settings.ts';
 import { paceFeel } from '../src/pacing.ts';
 import { memoryKeyValue } from '../src/progress.ts';
 
@@ -91,7 +91,7 @@ describe('door levels', () => {
     expect(html).toContain(`Back to ${LEVELS[0]!.name}`);
     expect(html.match(/<li class="got/g)).toHaveLength(2);
     expect(html).toContain('<span class="earned">★★</span><span class="unearned">☆</span>');
-    for (const act of ['how', 'advanced', 'sound', 'look', 'sharp', 'camera', 'reset', 'close']) expect(html).toContain(`data-act="${act}"`);
+    for (const act of ['how', 'advanced', 'sound', 'look', 'sharp', 'camera', 'rapid', 'reset', 'close']) expect(html).toContain(`data-act="${act}"`);
     expect(html).toContain('class="how"');
     expect(html).toContain('data-act="advanced" class="howlink advlink on" aria-expanded="true"');
     expect(doorHtml({ levels, current: -1, settings: DEFAULT_SETTINGS, howTo: false, advanced: false })).not.toContain('data-act="close"');
@@ -101,7 +101,7 @@ describe('door levels', () => {
   it('the settings sit behind Advanced settings, closed by default', () => {
     const closed = doorHtml({ levels: doorLevels(LEVELS, () => null), current: 0, settings: DEFAULT_SETTINGS, howTo: false, advanced: false });
     expect(closed).toContain('data-act="advanced" class="howlink advlink" aria-expanded="false">Advanced settings</button>');
-    for (const act of ['sound', 'look', 'sharp', 'camera', 'reset']) expect(closed).not.toContain(`data-act="${act}"`);
+    for (const act of ['sound', 'look', 'sharp', 'camera', 'rapid', 'reset']) expect(closed).not.toContain(`data-act="${act}"`);
     expect(closed).not.toContain('class="advanced"');
     // The rest of the door is the same either way.
     expect(closed).toContain('data-act="how"');
@@ -123,7 +123,7 @@ describe('settings', () => {
     expect(parseSettings(null)).toEqual(DEFAULT_SETTINGS);
     expect(parseSettings('nope')).toEqual(DEFAULT_SETTINGS);
     expect(parseSettings('{"sound":false,"look":"nope","sharp":3}')).toEqual({ ...DEFAULT_SETTINGS, sound: false });
-    expect(parseSettings('{"look":"real","sharp":1}')).toEqual({ sound: true, look: 'real', sharp: 1, camera: 'still' });
+    expect(parseSettings('{"look":"real","sharp":1}')).toEqual({ sound: true, look: 'real', sharp: 1, camera: 'still', rapid: true });
     // Settings stored before the Camera setting open still, as does anything but its two values.
     expect(DEFAULT_SETTINGS.camera).toBe('still');
     expect(parseSettings('{"camera":"dynamic"}')).toEqual({ ...DEFAULT_SETTINGS, camera: 'dynamic' });
@@ -140,6 +140,21 @@ describe('settings', () => {
     expect(html('still')).toContain('data-act="camera" data-arg="still" class="on"');
     expect(html('dynamic')).toContain('data-act="camera" data-arg="dynamic" class="on"');
   });
+  it('rapid fire: on by default; the URL\'s keystone.rapid where it says, else the setting', () => {
+    expect(DEFAULT_SETTINGS.rapid).toBe(true);
+    // Settings stored before the setting existed open with it on; only a boolean is taken.
+    expect(parseSettings('{"look":"real"}').rapid).toBe(true);
+    expect(parseSettings('{"rapid":false}')).toEqual({ ...DEFAULT_SETTINGS, rapid: false });
+    expect(parseSettings('{"rapid":"off"}')).toEqual(DEFAULT_SETTINGS);
+    const at = (search: string, rapid: boolean) => { const u = q(search); return rapidFeel(paceFeel(u), u, rapid); };
+    expect(at('', true)).toEqual({ rapid: true });
+    expect(at('', false)).toEqual({ rapid: false });
+    expect(at('keystone.rapid=0', true)).toEqual({ rapid: false });
+    expect(at('keystone.rapid=1', false)).toEqual({ rapid: true });
+    const html = (rapid: boolean) => doorHtml({ levels: [], current: -1, settings: { ...DEFAULT_SETTINGS, rapid }, howTo: false, advanced: true });
+    expect(html(true)).toContain('data-act="rapid" data-arg="on" class="on"');
+    expect(html(false)).toContain('data-act="rapid" data-arg="off" class="on"');
+  });
   it('URL keys: sound=on|off, sharp=1|2, look (checked by the page); bad values refused', () => {
     expect(urlSettings(q('sound=off&sharp=1&look=candy'))).toEqual({ sound: false, sharp: 1, look: 'candy' });
     expect(() => urlSettings(q('sound=0'))).toThrow(/sound must be on or off: 0/);
@@ -148,10 +163,10 @@ describe('settings', () => {
   it('the URL wins for the visit; a change is stored and replaces the URL\'s say on that field', () => {
     const kv = memoryKeyValue({ [SETTINGS_KEY]: '{"look":"real"}' });
     const s = new SettingsStore(kv, q('look=candy&sound=off'));
-    expect(s.current).toEqual({ sound: false, look: 'candy', sharp: 2, camera: 'still' });
-    expect(s.set({ look: 'hazy' })).toEqual({ sound: false, look: 'hazy', sharp: 2, camera: 'still' });
-    expect(JSON.parse(kv.getItem(SETTINGS_KEY)!)).toEqual({ sound: true, look: 'hazy', sharp: 2, camera: 'still' });
-    expect(new SettingsStore(kv).current).toEqual({ sound: true, look: 'hazy', sharp: 2, camera: 'still' });
+    expect(s.current).toEqual({ sound: false, look: 'candy', sharp: 2, camera: 'still', rapid: true });
+    expect(s.set({ look: 'hazy' })).toEqual({ sound: false, look: 'hazy', sharp: 2, camera: 'still', rapid: true });
+    expect(JSON.parse(kv.getItem(SETTINGS_KEY)!)).toEqual({ sound: true, look: 'hazy', sharp: 2, camera: 'still', rapid: true });
+    expect(new SettingsStore(kv).current).toEqual({ sound: true, look: 'hazy', sharp: 2, camera: 'still', rapid: true });
   });
   it('storage that throws keeps settings in memory', () => {
     const bad = { getItem: () => { throw new Error('x'); }, setItem: () => { throw new Error('x'); }, removeItem: () => {} };
