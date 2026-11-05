@@ -78,7 +78,7 @@ async function cpuRun(innerMs: number, fraction: number, budgetMs: number, frame
 }
 
 const expected = (costMs: number, budgetMs: number) => Math.min(valve(budgetMs, costMs), DT_MS / costMs);
-/** A budget under a whole step (the default, DEFAULT_BUDGET_MS, is a whole step), so the valve itself sets the speed. */
+/** A budget under a whole step (as the default, DEFAULT_BUDGET_MS), so the valve itself sets the speed. */
 const BUDGET_MS = 14;
 
 describe('the physics loop: time scale tracks the step budget', () => {
