@@ -77,7 +77,7 @@ export async function gpuRun(scene: SceneDesc, steps: number, params: Partial<Av
   expect(r.diagnostics.colorOverflow).toBe(0);
   expect(r.diagnostics.pairsRequired).toBeLessThanOrEqual(r.diagnostics.pairsWritten);
   expect(r.diagnostics.pairsOverflowSteps).toBe(0); // on any step of the run
-  return { snaps: r.snaps.map(toSnap), stats: r.stats.map((x) => (x ? { ...x, momentum: [NaN, NaN, NaN] } : null)), live: r.live };
+  return { snaps: r.snaps.map(toSnap), stats: r.stats.map((x) => (x ? { ...x, momentum: [NaN, NaN, NaN], anchorImpulse: [NaN, NaN, NaN] } : null)), live: r.live };
 }
 
 /** The energy a run gains: the largest rise of the shadow energy over its start, relative to |E0| (or to `scale`), and the end over the start. */
