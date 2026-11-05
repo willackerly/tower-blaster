@@ -33,6 +33,7 @@ describe('voices for feedback', () => {
   it('every event makes valid voices; heritage is the only dissonance', () => {
     const events: Feedback[] = [
       { t: 'fired', step: 0, ammo: 'marble', body: 0, ke: 1 },
+      { t: 'fired', step: 0, ammo: 'pull', body: 3, ke: 408 },
       { t: 'contact', step: 0, body: 0, dv: 3, impulse: 3000 },
       { t: 'heritageCrack', step: 0, body: 0 },
       { t: 'tier', step: 0, leverage: 20, tier: 2 },

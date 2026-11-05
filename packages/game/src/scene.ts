@@ -18,6 +18,8 @@ export const TINT = {
   none: [1, 1, 1] as [number, number, number],
 };
 export const CROWN_GLOW = 0.1;
+/** The block a selected pull would take (play.ts setHover): warm white, glowing, so it reads on any material. */
+export const PULL_HOVER = tintWordOf([1, 0.93, 0.8], 0.55);
 const MATERIAL_TINT: Record<string, [number, number, number]> = {
   plaster: TINT.none, stone: [0.62, 0.62, 0.66], iron: [0.3, 0.3, 0.34], ice: [0.62, 0.85, 1], rubber: [0.9, 0.45, 0.55], steel: [0.4, 0.42, 0.46],
 };

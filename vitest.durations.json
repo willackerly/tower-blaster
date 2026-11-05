@@ -41,6 +41,7 @@
   "packages/game/test/play-line.test.ts": 0.1,
   "packages/game/test/progress-e2e.test.ts": 14,
   "packages/game/test/progress.test.ts": 0,
+  "packages/game/test/pull-e2e.test.ts": 75,
   "packages/game/test/rack-e2e.test.ts": 9,
   "packages/game/test/rack-grenade-gpu.test.ts": 94.5,
   "packages/game/test/rack-presets-gpu.test.ts": 102.7,
