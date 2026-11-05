@@ -35,14 +35,23 @@ export interface CastRecipe {
   climbNudges: number;
   /** Nudged plays of the best line (50). */
   cloud: number;
+  /**
+   * Confirmation before the cloud (3 lines, 8 nudges each; 0 skips it): the climb's best few distinct lines get
+   * more nudges, pooled with those that judged them, and the best by that larger sample becomes the best line.
+   * Without it the best line is whichever candidate was luckiest on 4 nudges (B2 seed 2: a line that meets the
+   * objective about 55% of the time won on a 4-of-4 sample and its cloud then met it 54% of the time).
+   */
+  confirmLines?: number;
+  confirmNudges?: number;
 }
 
-/** The spec's short recipe: 64 + 2 x (1 + 8) x 4 + 50 = 186 plays. */
-export const SHORT_RECIPE: CastRecipe = { competent: 64, climbLines: 2, climbMoves: 8, climbNudges: 4, cloud: 50 };
-/** The spec's full recipe (64 + 3 x 17 x 8 + 50 = 522 plays): over the 60 min budget at 10k until the GPU can fork. */
-export const FULL_RECIPE: CastRecipe = { competent: 64, climbLines: 3, climbMoves: 16, climbNudges: 8, cloud: 50 };
+/** The spec's short recipe: 64 + 2 x (1 + 8) x 4 + 3 x 8 + 50 = 210 plays. */
+export const SHORT_RECIPE: CastRecipe = { competent: 64, climbLines: 2, climbMoves: 8, climbNudges: 4, confirmLines: 3, confirmNudges: 8, cloud: 50 };
+/** The spec's full recipe (64 + 3 x 17 x 8 + 3 x 8 + 50 = 546 plays): over the 60 min budget at 10k until the GPU can fork. */
+export const FULL_RECIPE: CastRecipe = { competent: 64, climbLines: 3, climbMoves: 16, climbNudges: 8, confirmLines: 3, confirmNudges: 8, cloud: 50 };
 
-export const playsOf = (r: CastRecipe): number => r.competent + r.climbLines * (1 + r.climbMoves) * r.climbNudges + r.cloud;
+export const playsOf = (r: CastRecipe): number =>
+  r.competent + r.climbLines * (1 + r.climbMoves) * r.climbNudges + (r.confirmLines ?? 0) * (r.confirmNudges ?? 0) + r.cloud;
 
 // ---- Seeded randomness (the cast must be repeatable from its seed) ----
 
@@ -414,23 +423,43 @@ export async function castLevel(level: LevelDef, player: CastPlayer, opts: CastO
   const comp = await play('competent', intents.map(toShots));
   const compEnd = comp.map((p) => endValue(p, metric));
 
-  // 2. Hill-climb from the best competent lines; a line's score is its mini-cloud's player-worse quartile.
+  // 2. Hill-climb from the best competent lines; a line's score is the player-worse quartile of every nudged play
+  // of it so far (a line judged twice pools both samples rather than keeping the luckier one).
   const order = compEnd.map((v, i) => i).sort((a, b) => good(metric, compEnd[b]!) - good(metric, compEnd[a]!) || a - b);
-  const judge = async (its: readonly Intent[], tag: string): Promise<number> => {
-    const r = rng(streamSeed(seed, 'mini', tag)), base = toShots(its);
-    const ps = await play('climb', Array.from({ length: recipe.climbNudges }, () => nudgeLine(base, r)));
-    return good(metric, lowerQ(metric, ps.map((p) => endValue(p, metric)), 0.25));
+  const key = (its: readonly Intent[]) => writeShots(toShots(its));
+  const judged = new Map<string, { its: Intent[]; ends: number[]; from: number }>();
+  const scoreOf = (k: string) => good(metric, lowerQ(metric, judged.get(k)!.ends, 0.25));
+  const judge = async (its: Intent[], from: number, n: number, tag: string): Promise<number> => {
+    const r = rng(streamSeed(seed, 'mini', tag)), base = toShots(its), k = key(its);
+    const ps = await play('climb', Array.from({ length: n }, () => nudgeLine(base, r)));
+    const e = judged.get(k) ?? { its, ends: [], from };
+    e.ends.push(...ps.map((p) => endValue(p, metric)));
+    judged.set(k, e);
+    return scoreOf(k);
   };
-  let best: { its: Intent[]; score: number; from: number } | null = null;
   for (const start of order.slice(0, recipe.climbLines)) {
-    let cur = intents[start]!, score = await judge(cur, `${start}/0`);
+    let cur = intents[start]!, score = await judge(cur, start, recipe.climbNudges, `${start}/0`);
     const r = rng(streamSeed(seed, 'moves', start));
     for (let k = 1; k <= recipe.climbMoves; k++) {
-      const cand = moveIntents(cur, r), s = await judge(cand, `${start}/${k}`);
-      if (s > score) { cur = cand; score = s; }
+      // A move can land on the line it started from (a clamped power or aim, or a step lost to rounding):
+      // draw again a few times; one that still lands there judges the current line again, pooling the samples.
+      let cand = moveIntents(cur, r);
+      for (let t = 0; t < 8 && key(cand) === key(cur); t++) cand = moveIntents(cur, r);
+      const s = await judge(cand, start, recipe.climbNudges, `${start}/${k}`);
+      if (key(cand) === key(cur)) score = s;
+      else if (s > score) { cur = cand; score = s; }
     }
-    if (!best || score > best.score) best = { its: cur, score, from: start };
   }
+  // Confirmation: the best few distinct lines judged so far get more nudges; the best by its pooled sample wins.
+  const ranked = () => [...judged.keys()].sort((a, b) => scoreOf(b) - scoreOf(a) || (a < b ? -1 : 1));
+  // (Fewer distinct lines than confirmLines, in a tiny recipe: the top ones are confirmed again, so a cast always plays playsOf.)
+  const top = ranked(), nConfirm = (recipe.confirmNudges ?? 0) > 0 && top.length ? recipe.confirmLines ?? 0 : 0;
+  for (let i = 0; i < nConfirm; i++) {
+    const e = judged.get(top[i % top.length]!)!;
+    await judge(e.its, e.from, recipe.confirmNudges!, `confirm/${i}`);
+  }
+  const bestKey = ranked()[0];
+  const best = bestKey === undefined ? null : { ...judged.get(bestKey)!, score: scoreOf(bestKey) };
   const bestShots = best ? toShots(best.its) : toShots(intents[order[0]!]!);
 
   // 3. The nudge cloud.
@@ -509,16 +538,41 @@ export const phaseEnds = (r: CastResult, phase: CastLine['phase']): number[] => 
  * moves with the seed (B1 on the M5: 0.659 and 0.735, 90% intervals about 0.1 wide) while T3 does not (0.944,
  * 0.946); pooling halves T2's variance at no extra plays. Refuses casts of another level hash, metric or device.
  */
-export function poolCasts(casts: readonly CastResult[]): { raw: CastResult['raw']; stars: StarsDef; competent: CastResult['competent']; cloud: CastResult['cloud']; seeds: number[] } {
+/**
+ * Gates a cast must have passed to be pooled. A failed fair or skill gate means its best line was not one a
+ * skilled player can rely on (B2 seed 2: its cloud met the objective 54% of the time and its T3 was -4,468), so
+ * its cloud would drag the pooled T3 toward a line nobody should aim for; failed limits or complete mean its
+ * plays are not the game's physics. Stable is judged again on the pool (pooling is how a cast that missed it by
+ * a little gets there), and budget is about the machine's wall time, not the stars.
+ */
+export const POOL_GATES = ['fair', 'skill', 'limits', 'complete'] as const;
+
+/** The gates of a pool: fair, skill and stable on the pooled plays (limits and complete passed in every cast). */
+export interface PoolGates { fair: Gate; skill: Gate; stable: Gate }
+
+export function poolCasts(casts: readonly CastResult[]): { raw: CastResult['raw']; stars: StarsDef; competent: CastResult['competent']; cloud: CastResult['cloud']; seeds: number[]; gates: PoolGates } {
   const a = casts[0];
   if (!a) throw new Error('pool: no casts');
   for (const b of casts) {
     if (b.hash !== a.hash || b.metric !== a.metric || b.adapter !== a.adapter || b.engine !== a.engine) throw new Error(`pool: cast seed ${b.seed} (${b.hash}, ${b.metric}, ${b.adapter} ${b.engine}) is not of ${a.level} ${a.hash} by ${a.metric} on ${a.adapter} ${a.engine}`);
+    const failed = POOL_GATES.filter((g) => b.gates[g] && !b.gates[g].pass);
+    if (failed.length) throw new Error(`pool: cast seed ${b.seed} failed ${failed.map((g) => `${g} (${b.gates[g].value.toFixed(3)}, need ${b.gates[g].need.toFixed(3)})`).join(', ')}: it cannot be pooled; recast that seed`);
   }
   const comp = casts.flatMap((r) => phaseEnds(r, 'competent')), cloud = casts.flatMap((r) => phaseEnds(r, 'cloud'));
   const all = casts.flatMap((r) => r.lines.flatMap((l) => l.samples.map((s) => sampleValue(s, a.metric))));
   const { raw, t2, t3 } = thresholds(a.metric, comp, cloud, all), n = casts.reduce((k, r) => k + r.n, 0);
-  return { raw, stars: { metric: a.metric, t2, t3, best: raw.best, castOn: a.adapter, engine: a.engine, hash: a.hash, n, seed: a.seed }, competent: summary(comp), cloud: summary(cloud), seeds: casts.map((r) => r.seed) };
+  // The metric's range as castLevel judged it (metricRange): fixed for collapse, skyline and crowns (each cast's
+  // skill need is a tenth of it), the observed spread of every play for score.
+  const range = a.metric === 'score' ? Math.max(1, Math.max(...all) - Math.min(...all)) : a.gates.skill.need / 0.1;
+  const clouds = casts.flatMap((r) => r.lines.filter((l) => l.phase === 'cloud'));
+  const metRate = clouds.filter((l) => l.samples.at(-1)?.met).length / Math.max(1, clouds.length);
+  const gap = good(a.metric, raw.t3) - good(a.metric, raw.t2), boot = bootstrapT3(a.metric, cloud, a.seed);
+  const gates: PoolGates = {
+    fair: { pass: metRate >= 0.8, value: metRate, need: 0.8, note: 'share of the pooled nudge clouds meeting the objective' },
+    skill: { pass: gap >= 0.1 * range, value: gap, need: 0.1 * range, note: 'pooled T3 - T2 (raw), at least 10% of the metric range' },
+    stable: { pass: boot.halfWidth < 0.05 * range, value: boot.halfWidth, need: 0.05 * range, note: "half-width of the pooled T3's bootstrap 90% interval, under 5% of the range" },
+  };
+  return { raw, stars: { metric: a.metric, t2, t3, best: raw.best, castOn: a.adapter, engine: a.engine, hash: a.hash, n, seed: a.seed }, competent: summary(comp), cloud: summary(cloud), seeds: casts.map((r) => r.seed), gates };
 }
 
 /** A nudge cloud of another device's best line, played here: the cross-device gate at a smaller N than a whole cast. */
@@ -567,6 +621,16 @@ export async function cloudCheck(level: LevelDef, player: CastPlayer, cast: Cast
 
 const f3 = (x: number) => (Number.isFinite(x) ? x.toFixed(3) : String(x));
 
+/**
+ * Wall time per engine step over the whole cast, as text for the markdown: a cast whose ms per step is well over
+ * the machine's usual (B2 seed 2 on the M5: 30 ms against 15 for seed 1, at the same level) shared the GPU with
+ * something else, and its budget gate says more about the machine than the level.
+ */
+function msPerStep(r: CastResult): string {
+  const steps = r.lines.reduce((a, l) => a + l.steps, 0);
+  return r.wallMs > 0 && steps > 0 ? ` (${(r.wallMs / steps).toFixed(1)} ms per engine step over ${steps} steps)` : '';
+}
+
 /** The cast as markdown for docs/game/levels/<id>.md: settings, thresholds, the two clouds, the gates. */
 export function castMarkdown(r: CastResult): string {
   const row = (name: string, s: CastResult['cloud']) => `| ${name} | ${s.n} | ${[s.min, s.p10, s.p25, s.p50, s.p75, s.p90, s.max].map(f3).join(' | ')} |`;
@@ -574,7 +638,7 @@ export function castMarkdown(r: CastResult): string {
   return [
     `### Cast ${r.level} on ${r.adapter} (${r.engine}), seed ${r.seed}`,
     '',
-    `Level hash \`${r.hash}\`; metric ${r.metric}; recipe ${r.recipe.competent} competent + ${r.recipe.climbLines} x (1 + ${r.recipe.climbMoves}) x ${r.recipe.climbNudges} climb + ${r.recipe.cloud} cloud = ${r.n} plays; ${(r.wallMs / 60_000).toFixed(1)} min.`,
+    `Level hash \`${r.hash}\`; metric ${r.metric}; recipe ${r.recipe.competent} competent + ${r.recipe.climbLines} x (1 + ${r.recipe.climbMoves}) x ${r.recipe.climbNudges} climb + ${r.recipe.confirmLines ?? 0} x ${r.recipe.confirmNudges ?? 0} confirm + ${r.recipe.cloud} cloud = ${r.n} plays; ${(r.wallMs / 60_000).toFixed(1)} min${msPerStep(r)}.`,
     '',
     `Thresholds: T2 ${f3(r.stars.t2)} (median of competent ends, raw ${f3(r.raw.t2)}), T3 ${f3(r.stars.t3)} (lower quartile of the nudge cloud, raw ${f3(r.raw.t3)}), beat the bot above ${f3(r.raw.best)}.`,
     '',
