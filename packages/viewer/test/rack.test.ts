@@ -5,8 +5,8 @@
 // (a grenade, then a firework that splits into 12 stars), and a replay lands where the live
 // session did. Rapier, so the page test is quick.
 import { describe, expect, it } from 'vitest';
-import { scenarioLevel, type Shot, writeShots } from '@tb/keystone';
-import { levelChoice, levelOf, parseSceneFile, parseViewerConfig, proposeScene, sceneFile, toSearch } from '../src/index.ts';
+import { BIG_LEVELS, scenarioLevel, type Shot, writeShots } from '@tb/keystone';
+import { levelChoice, levelOf, pageLevels, parseSceneFile, parseViewerConfig, proposeScene, sceneFile, toSearch } from '../src/index.ts';
 import { browser, useViewer } from './e2e-harness.ts';
 import { aimAtNearest, openRules, ready } from './keystone-page.ts';
 
@@ -16,6 +16,23 @@ const MINUTES = 60_000;
 const S3 = '?scenario=S3&param.W=10&param.H=5&rules=keystone&engine=rapier';
 
 describe('keystone.rack in the viewer', () => {
+  it('on a built-in level\'s page, the opening level plays the link\'s rack and the rest of its series their own (as the game page)', () => {
+    // Until 2026-11-05 the page rebuilt the series from the built-in defs, so ?level=B3&keystone.rack=w-grenadexl played
+    // B3's own rack and refused the XL shot (the M5 pacing probe's B3 cases).
+    const c = parseViewerConfig('?level=B3&rules=keystone&keystone.rack=w-grenadexl&keystone.iterations=20');
+    const p = pageLevels(c)!;
+    expect(p.levels.map((l) => l.id)).toEqual(BIG_LEVELS.map((l) => l.id));
+    expect(p.levels[p.start]!.id).toBe('B3');
+    expect(p.levels[p.start]).toEqual(levelOf(c));
+    expect(p.levels[p.start]!.rack).toEqual(['w-grenadexl']);
+    for (const [i, l] of p.levels.entries()) if (i !== p.start) expect(l.rack, l.id).toEqual(BIG_LEVELS[i]!.rack);
+    // The rule overrides reach every level of the series.
+    expect(p.levels.map((l) => l.physics?.iterations)).toEqual(BIG_LEVELS.map(() => 20));
+    expect(pageLevels({ ...c, rack: null })!.levels[p.start]!.rack).toEqual(BIG_LEVELS[p.start]!.rack);
+    // A scenario as a level is the only one.
+    const s = parseViewerConfig(`${S3}&keystone.rack=w-grenade`);
+    expect(pageLevels(s)).toEqual({ levels: [levelOf(s)], start: 0 });
+  });
   it('replaces the level\'s rack under the rules, round-trips through the URL and a file, and drops on another scene', () => {
     const c = parseViewerConfig(`${S3}&keystone.rack=w-firework,w-grenade,p-bowlingball`);
     expect(c.rack).toEqual(['w-firework', 'w-grenade', 'p-bowlingball']);
