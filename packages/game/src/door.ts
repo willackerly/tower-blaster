@@ -129,9 +129,11 @@ export interface DoorModel {
   settings: Settings;
   /** The how-to-play panel is open. */
   howTo: boolean;
+  /** The Advanced settings panel (sound, look, camera, sharpness, forget my progress) is open; closed by default. */
+  advanced: boolean;
 }
 
-/** The door's markup. Every button carries data-act (play, level, how, sound, look, sharp, camera, reset, close) and data-arg where it needs one. */
+/** The door's markup. Every button carries data-act (play, level, how, advanced, sound, look, sharp, camera, reset, close) and data-arg where it needs one. */
 export function doorHtml(m: DoorModel): string {
   const next = nextLevel(m.levels);
   const cards = m.levels.map((l, i) => {
@@ -163,6 +165,8 @@ export function doorHtml(m: DoorModel): string {
       <button data-act="how" class="howlink${m.howTo ? ' on' : ''}">How to play</button>
       ${m.howTo ? `<ul class="how">${HOW_TO_PLAY.map((t) => `<li>${t}</li>`).join('')}</ul>` : ''}
       <div class="cards">${cards}</div>
+      <button data-act="advanced" class="howlink advlink${m.advanced ? ' on' : ''}" aria-expanded="${m.advanced}">Advanced settings</button>
+      ${m.advanced ? `<div class="advanced">
       <div class="foot">
         <span class="group"><span class="lbl">Sound</span><span class="seg"><button data-act="sound" class="${s.sound ? 'on' : ''}">${s.sound ? 'On' : 'Off'}</button></span></span>
         <span class="group"><span class="lbl">Look</span><span class="seg">${looks}</span></span>
@@ -170,6 +174,7 @@ export function doorHtml(m: DoorModel): string {
         <span class="group"><span class="lbl">Sharpness</span><span class="seg"><button data-act="sharp" data-arg="2" class="${s.sharp === 2 ? 'on' : ''}">Full</button><button data-act="sharp" data-arg="1" class="${s.sharp === 1 ? 'on' : ''}">Fast</button></span></span>
       </div>
       <div class="reset"><button data-act="reset">Forget my progress</button></div>
+      </div>` : ''}
     </div>`;
 }
 
@@ -188,6 +193,8 @@ export const DOOR_CSS = `
   .kg-door .close { padding: 10px 16px; border-radius: 10px; background: rgba(17, 20, 28, 0.7); box-shadow: inset 0 0 0 1px #4d5a75; }
   .kg-door .howlink { margin-top: 12px; padding: 2px 6px; background: none; color: #9fc3ff; text-decoration: underline; text-underline-offset: 3px; }
   .kg-door .howlink.on { color: #e8ebf2; }
+  .kg-door .advlink { display: block; margin: 0 auto 10px; font-size: 13px; color: #8a93a8; }
+  .kg-door .advanced { margin-top: 4px; }
   .kg-door .cards { align-self: stretch; display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; margin: 22px 0 18px; text-align: left; }
   .kg-door .card { display: flex; flex-direction: column; justify-content: flex-start; padding: 14px 16px; border-radius: 12px; background: rgba(17, 20, 28, 0.78); backdrop-filter: blur(6px); border: 2px solid transparent; text-align: left; transition: transform 0.12s, border-color 0.12s; }
   .kg-door .card:hover, .kg-door .card:focus-visible { transform: translateY(-2px); border-color: rgba(159, 195, 255, 0.4); }

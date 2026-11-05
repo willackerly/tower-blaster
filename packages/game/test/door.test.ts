@@ -83,7 +83,7 @@ describe('door levels', () => {
   });
   it('markup: a card per level marking earned stars, the next and the loaded one, every action wired', () => {
     const levels = doorLevels(LEVELS, (id) => (id === 'L1' ? rec(2) : null));
-    const html = doorHtml({ levels, current: 0, settings: DEFAULT_SETTINGS, howTo: true });
+    const html = doorHtml({ levels, current: 0, settings: DEFAULT_SETTINGS, howTo: true, advanced: true });
     expect(html.match(/class="card[ "]/g)).toHaveLength(5);
     expect(html).toContain('class="card current" data-act="level" data-arg="0"');
     expect(html).toContain('class="card next" data-act="level" data-arg="1"');
@@ -91,20 +91,30 @@ describe('door levels', () => {
     expect(html).toContain(`Back to ${LEVELS[0]!.name}`);
     expect(html.match(/<li class="got/g)).toHaveLength(2);
     expect(html).toContain('<span class="earned">★★</span><span class="unearned">☆</span>');
-    for (const act of ['how', 'sound', 'look', 'sharp', 'camera', 'reset', 'close']) expect(html).toContain(`data-act="${act}"`);
+    for (const act of ['how', 'advanced', 'sound', 'look', 'sharp', 'camera', 'reset', 'close']) expect(html).toContain(`data-act="${act}"`);
     expect(html).toContain('class="how"');
-    expect(doorHtml({ levels, current: -1, settings: DEFAULT_SETTINGS, howTo: false })).not.toContain('data-act="close"');
+    expect(html).toContain('data-act="advanced" class="howlink advlink on" aria-expanded="true"');
+    expect(doorHtml({ levels, current: -1, settings: DEFAULT_SETTINGS, howTo: false, advanced: false })).not.toContain('data-act="close"');
     // Back to the level is the Play button already when the next level is the loaded one.
-    expect(doorHtml({ levels, current: 1, settings: DEFAULT_SETTINGS, howTo: false })).not.toContain('data-act="close"');
+    expect(doorHtml({ levels, current: 1, settings: DEFAULT_SETTINGS, howTo: false, advanced: false })).not.toContain('data-act="close"');
+  });
+  it('the settings sit behind Advanced settings, closed by default', () => {
+    const closed = doorHtml({ levels: doorLevels(LEVELS, () => null), current: 0, settings: DEFAULT_SETTINGS, howTo: false, advanced: false });
+    expect(closed).toContain('data-act="advanced" class="howlink advlink" aria-expanded="false">Advanced settings</button>');
+    for (const act of ['sound', 'look', 'sharp', 'camera', 'reset']) expect(closed).not.toContain(`data-act="${act}"`);
+    expect(closed).not.toContain('class="advanced"');
+    // The rest of the door is the same either way.
+    expect(closed).toContain('data-act="how"');
+    expect(closed.match(/class="card[ "]/g)).toHaveLength(5);
   });
   it('an uncast level shows one row for two and three stars', () => {
-    const html = doorHtml({ levels: doorLevels([B3], () => null), current: 0, settings: DEFAULT_SETTINGS, howTo: false });
+    const html = doorHtml({ levels: doorLevels([B3], () => null), current: 0, settings: DEFAULT_SETTINGS, howTo: false, advanced: false });
     expect(html.match(/<li /g)).toHaveLength(2);
     expect(html.match(/targets coming soon/g)).toHaveLength(1);
   });
   it('escapes level text', () => {
     const [l] = doorLevels([{ ...L1, name: '<b>x</b>' }], () => null);
-    expect(doorHtml({ levels: [l!], current: 0, settings: DEFAULT_SETTINGS, howTo: false })).toContain('&#60;b&#62;x&#60;/b&#62;');
+    expect(doorHtml({ levels: [l!], current: 0, settings: DEFAULT_SETTINGS, howTo: false, advanced: false })).toContain('&#60;b&#62;x&#60;/b&#62;');
   });
 });
 
@@ -126,7 +136,7 @@ describe('settings', () => {
     expect(at('keystone.follow=1', 'still')).toEqual({ follow: true, shake: false });
     expect(at('keystone.shake=0', 'dynamic')).toEqual({ follow: true, shake: false });
     expect(at('keystone.follow=0&keystone.shake=1', 'dynamic')).toEqual({ follow: false, shake: true });
-    const html = (camera: 'still' | 'dynamic') => doorHtml({ levels: [], current: -1, settings: { ...DEFAULT_SETTINGS, camera }, howTo: false });
+    const html = (camera: 'still' | 'dynamic') => doorHtml({ levels: [], current: -1, settings: { ...DEFAULT_SETTINGS, camera }, howTo: false, advanced: true });
     expect(html('still')).toContain('data-act="camera" data-arg="still" class="on"');
     expect(html('dynamic')).toContain('data-act="camera" data-arg="dynamic" class="on"');
   });
