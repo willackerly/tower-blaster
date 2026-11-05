@@ -7,7 +7,7 @@
 // its own elements; the viewer calls it for rules=keystone, with hooks for its
 // dev panels (docs/design/viewer-superset.md, step C).
 import { type BodyDesc, type EngineHealth, limitsHit, type PhysicsEngine, type Vec3 } from '@tb/engine-api';
-import { type RackItem, type CompiledLevel, compileLevel, Driver, type Feedback, type LevelDef, type LevelScore, type PerStep, runSession, type Shot, snapshotHash, TIER_NAMES } from '@tb/keystone';
+import { type RackItem, type CompiledLevel, compileLevel, Driver, type Feedback, type LevelDef, type LevelScore, type PerStep, rapidDue, runSession, type Shot, snapshotHash, TIER_NAMES } from '@tb/keystone';
 import { clampPitch, eyeOf, type Orbit, rayThrough, viewProj } from '@tb/render/camera';
 import type { PixelStats, Renderer, SnapshotSource } from '@tb/render';
 import type { HostStats } from '@tb/audio';
@@ -33,7 +33,7 @@ export interface GameHandle {
   engine: EngineKind | '';
   level: string;
   phase: string;
-  /** Aiming, and the Regrow animation has finished: a shot can be fired. */
+  /** Aiming, and the Regrow animation has finished: a shot can be fired. (With rapid fire one can also go in while a shot runs.) */
   ready: boolean;
   frames: number;
   stepIndex: number;
@@ -46,7 +46,8 @@ export interface GameHandle {
   /**
    * Pacing now: the valve's time scale (budget / step cost, in [0.25, 1]; up to 4 at fast-forward),
    * the sim speed reached (sim time per real time, measured), the HUD's slow-motion tag ('' at real
-   * time), whether the tail skip is on, and the median step cost the valve reads (ms).
+   * time), whether the tail skip is on, and the median step cost the valve read when it set that time scale
+   * (ms; a cost that lands after it waits for the next step's read, so the two always agree).
    */
   pace: { timeScale: number; speed: number; tag: string; tailSkip: boolean; costMs: number };
   /**
@@ -72,6 +73,12 @@ export interface GameHandle {
   timing: { loadMs: number; stepMs: number[]; moving: number[]; frameMs: number[]; costMs: number[] };
   /** Display frames drawn and skipped (keystone.frames, frame-rate.ts), and whether decimation is on now (wanted, and a display of 110 Hz or more). */
   draws: { drawn: number; skipped: number; decimating: boolean };
+  /**
+   * Fire as a click does: while aiming, or with rapid fire (PaceFeel.rapid) while a shot runs, cutting
+   * it; a click during a physics step goes in right after that step. A shot with `after` (a line's
+   * rapid-fire shot, Shot.after) goes in that many steps after the shot before, or once it settles if
+   * sooner, whatever PaceFeel.rapid says, so a line replays as it was played. False when it cannot.
+   */
   fire(shot: Shot): boolean;
   /** Outcome levels: end the level now, keeping the rack left (key B, the HUD's Bank button); false when it cannot. */
   bank(): boolean;
@@ -89,6 +96,8 @@ export interface GameHandle {
   capture(keepPixels?: boolean): Promise<PixelStats | null>;
   /** Physics state now: step, phase and a hash of every pose. */
   state(): SessionState;
+  /** This attempt's shots as the session recorded them, a rapid-fire one with `after` (Shot.after): what replay() and a session file replay. */
+  line(): Shot[];
   /** The same shots from the same level on a fresh engine, built as the live one, on this device. */
   replay(shots: Shot[]): Promise<SessionState>;
   /**
@@ -129,7 +138,7 @@ export function newGameHandle(): GameHandle {
   return {
     status: 'loading', engine: '', level: '', phase: 'loading', ready: false, frames: 0, stepIndex: 0, strokes: 0, bodies: 0, collapse: 0, fast: false, pace: { timeScale: 1, speed: 1, tag: '', tailSkip: false, costMs: NaN }, view: { target: [0, 0, 0], distance: 0, following: false, jolt: 0 }, result: null, counts: {}, feel: { ...DEFAULT_FEEL }, resultShownAt: null, timing: { loadMs: 0, stepMs: [], moving: [], frameMs: [], costMs: [] }, draws: { drawn: 0, skipped: 0, decimating: false },
     fire: () => false, bank: () => false, fireOpener: () => false, setMuted: () => {}, maxDpr: 2, aim: () => null, select: () => false, load: async () => {}, retry: async () => {}, capture: async () => null,
-    state: none, replay: async () => none(), health: async () => null, pairsPerBody: 0, limitsHit: [],
+    state: none, line: () => [], replay: async () => none(), health: async () => null, pairsPerBody: 0, limitsHit: [],
     sound: () => ({ mode: 'collapse', status: 'off', error: '', posted: 0, stats: null }),
   };
 }
@@ -151,12 +160,15 @@ export async function playLine(handle: GameHandle, shots: readonly Shot[], fresh
   const stop = (n: number, message: string): LineResult => ({ ok: false, fired: n, message });
   if (!fresh) await handle.retry();
   for (let i = 0; i < shots.length; i++) {
-    await until(() => handle.ready || handle.result !== null || handle.level !== id || handle.status === 'error');
+    // A rapid-fire shot (after) is handed over as soon as the one before is in: the game fires it at its step.
+    const timed = shots[i]!.after !== undefined && i > 0;
+    await until(() => (timed && handle.strokes >= i) || handle.ready || handle.result !== null || handle.level !== id || handle.status === 'error');
     if (handle.level !== id || handle.status === 'error') return stop(i, `stopped after ${i} of ${shotsText(shots.length)}: the level changed`);
     if (handle.result) return stop(i, `the level ended after ${i} of ${shotsText(shots.length)}`);
     // Retry (R) mid-line starts a fresh attempt: the rest of the line was not made for it.
     if (handle.strokes !== i) return stop(i, `stopped after ${i} of ${shotsText(shots.length)}: the attempt was restarted`);
     if (!handle.fire(shots[i]!)) return stop(i, `shot ${i + 1} (${shots[i]!.ammo}) could not be fired`);
+    if (timed) await until(() => handle.strokes > i || handle.result !== null || handle.level !== id || handle.status === 'error');
     fired?.(i + 1);
   }
   await until(() => handle.result !== null || handle.level !== id || handle.status === 'error' || (handle.ready && handle.strokes === shots.length));
@@ -173,7 +185,7 @@ export async function playLine(handle: GameHandle, shots: readonly Shot[], fresh
 export interface KeystoneHooks {
   /** A level was built, pre-settled and shown (also on retry). */
   loaded?(c: CompiledLevel, d: Driver): void;
-  /** A shot was fired: the spawn applies at the next step. */
+  /** A shot was fired: the spawn applies at the next step. `shot` as the session recorded it (with `after` when it cut a running shot). */
   fired?(shot: Shot, feedback: Feedback[], d: Driver): void;
   /** One driver step ran; d.snapshot is of engine step d.snapshotStep. */
   stepped?(feedback: Feedback[], d: Driver): void;
@@ -290,6 +302,8 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
   let followClip = new Float64Array(6);
   /** A physics step is in flight (physics-loop.ts): the session may already read aiming, but the step is not done. */
   let stepping = false;
+  /** Shots waiting to go in between steps (fire): clicks during a step, and a line's rapid-fire shots (Shot.after) until their step. */
+  let waiting: Shot[] = [];
   let regrowBuf = new Float32Array(0);
   let selected: RackItem | null = null;
   let opener: Shot | null = null;
@@ -394,6 +408,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
       renderer.setShadowBounds([(c.lot.min[0] + c.lot.max[0]) / 2, c.height / 2, (c.lot.min[1] + c.lot.max[1]) / 2], Math.hypot(...half), half);
     }
     regrowT = 0;
+    waiting = [];
     aimed = null;
     beads = null;
     hover = null; // the new level's tints are fresh
@@ -424,7 +439,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     aimed = null;
     beads = null;
     let lit: number | null = null;
-    if (pointer && selected && driver.session.phase === 'aiming' && regrowT === null) {
+    if (pointer && selected && aimable() && regrowT === null) {
       const hit = pick(rayThrough(orbit, aspect(), pointer[0], pointer[1]), driver.snapshot, c);
       if (selected === 'pull') {
         // A pull takes the block under the cursor: lit when it can be taken, no arc.
@@ -537,16 +552,52 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     syncState();
     const s = driver.session;
     const running = s.phase === 'running', v = running ? speed.speed(performance.now()) : 1, costs = handle.timing.costMs;
-    handle.pace = { timeScale: running ? pacer.timeScale : 1, speed: v, tag: running && !fastHeld && !handle.fast && !ending && !tail.on ? slowTag(v) : '', tailSkip: tail.on, costMs: median(costs.slice(-60)) };
+    handle.pace = { timeScale: running ? pacer.timeScale : 1, speed: v, tag: running && !fastHeld && !handle.fast && !ending && !tail.on ? slowTag(v) : '', tailSkip: tail.on, costMs: running && !Number.isNaN(pacer.costMs) ? pacer.costMs : median(costs.slice(-60)) };
     handle.view = { target: [...orbit.target], distance: orbit.distance, following: follow.active, jolt };
   }
 
   /** The physics loop's idle wait: the next frame, or a fire, whichever comes first (physics-loop.ts wakeable). */
   const physicsIdle = wakeable(() => new Promise<void>((res) => requestAnimationFrame(() => res())));
 
+  /** Whether the player can aim (and fire) now: while aiming, or with rapid fire while a shot runs, until the round is known to be over. */
+  function aimable(): boolean {
+    const p = driver.session.phase;
+    return p === 'aiming' || (p === 'running' && feel.rapid && !ending);
+  }
+
+  /** Whether `shot` may go in when its turn comes: the rack holds one more of it than the shots already waiting. */
+  const inRack = (shot: Shot, queued: readonly Shot[]) =>
+    driver.session.rackLeft.filter((a) => a === shot.ammo).length > queued.filter((q) => q.ammo === shot.ammo).length;
+
   function fire(shot: Shot): boolean {
-    if (stepping || regrowT !== null || !driver.session.canFire(shot.ammo)) return false;
+    if (loading || regrowT !== null || ending || handle.result !== null || !driver.session.canFire(shot.ammo) || !inRack(shot, waiting)) return false;
+    const timed = shot.after !== undefined && driver.session.strokes > 0;
+    if (!timed && !aimable()) return false;
     if (shot.ammo === 'pull' && driver.session.pullRefusal(shot.body) !== null) return false;
+    // Without rapid fire a click mid-step is refused, as before; with it, or for a line's timed shot, it waits for the step.
+    if (stepping || timed || waiting.length) {
+      if (stepping && !timed && !feel.rapid) return false;
+      waiting.push(shot);
+      if (!stepping) fireDue();
+      return true;
+    }
+    fireNow(shot);
+    return true;
+  }
+
+  /** Between steps: the waiting shots whose time has come, in order (a timed one at its step, or at once once the shot before has settled). */
+  function fireDue() {
+    while (waiting.length) {
+      const s = driver.session, next = waiting[0]!;
+      if (s.phase !== 'aiming' && s.phase !== 'running') { waiting = []; return; }
+      if (next.after !== undefined && s.phase === 'running' && !rapidDue(driver, next)) return;
+      waiting.shift();
+      if (!s.canFire(next.ammo) || (next.ammo === 'pull' && s.pullRefusal(next.body) !== null)) continue;
+      fireNow(next);
+    }
+  }
+
+  function fireNow(shot: Shot) {
     setHover(null);
     const fb = driver.fire(shot);
     // The shot's first step goes in now, not at the next frame.
@@ -554,14 +605,16 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     // A shot's pace starts fresh: no tail yet, and at real time until its steps say otherwise.
     tail.reset();
     speed.reset();
-    if (feel.follow) follow.start(orbit);
+    // A rapid shot keeps the follow camera's way home: where the player had it when the first went in.
+    if (feel.follow && !follow.active) follow.start(orbit);
     onFeedback(fb);
     spawned();
+    selected = nextSelection(c.def.rack, driver.session.rackLeft, selected);
     aimed = null;
     beads = null;
+    aimDirty = true;
     sync();
-    hooks.fired?.(shot, fb, driver);
-    return true;
+    hooks.fired?.(driver.session.inputs[driver.session.inputs.length - 1]!.shot, fb, driver);
   }
 
   /** The opener while it can be fired: before the first shot, its ammo in the rack. */
@@ -603,6 +656,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
   handle.aim = (x, y) => { pointer = [x, y]; updateAim(); return aimed; };
   handle.load = (id) => load(levelIndex(id)).catch(fail);
   handle.retry = () => load(levelIdx, true).catch(fail);
+  handle.line = () => driver.session.inputs.map((i) => ({ ...i.shot }));
   handle.state = () => ({ step: driver.engine.stepIndex, phase: driver.session.phase, strokes: driver.session.strokes, heritageBroken: sum(driver.session.heritageBroken), hash: snapshotHash(driver.snapshot) });
   // Between steps and loads, so neither a step nor a load's dispose runs under the read.
   handle.health = () => exclusive(async () => (await driver.engine.health?.()) ?? null);
@@ -714,8 +768,8 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
       level: c.def, strokes: s.strokes, crownsDown, crownsTotal: c.meta.crowns.length,
       heritageBroken: s.heritageBroken.reduce((a, x) => a + x, 0), heritageTotal: c.meta.heritage.length,
       chips: rackChips(c.def.rack, s.rackLeft, selected), power, liveLeverage: s.liveLeverage, phase: s.phase,
-      reachable: s.phase === 'aiming' && aimed ? aimed.reachable : null,
-      pullRefused: s.phase === 'aiming' && aimed?.shot.ammo === 'pull' && !aimed.reachable,
+      reachable: aimed ? aimed.reachable : null,
+      pullRefused: aimed?.shot.ammo === 'pull' && !aimed.reachable,
       collapse: s.liveCollapse, pulled: s.pulledShare(), met: s.objectiveDone, canBank: !stepping && regrowT === null && s.canBank(), pace: handle.pace.tag,
       opener: !stepping && regrowT === null && s.phase === 'aiming' && openerNow() !== null,
     });
@@ -754,6 +808,8 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
       lastDrawn = now;
     }
     if (!running) collapse?.pause(); // between shots: the next step's audio frame starts afresh
+    // Aiming while a shot runs (rapid fire): the world moves under the pointer, so aim again each frame.
+    if (running && pointer && aimable()) aimDirty = true;
     if (follow.active) {
       const red = loading ? undefined : driver.observed?.red;
       follow.update(orbit, dt, running, red?.movingBox ?? null, red?.nMoving ?? 0, c.frame.unit, followClip);
@@ -815,6 +871,8 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
       hooks.stepped?.(fb, d);
       const input = perStep?.(d);
       if (input?.length) d.push(input);
+      // Shots clicked during the step, and a line's timed shots now due, go in before the next (as playShots fires them).
+      fireDue();
       spawned();
       if (red && feel.tailSkip && d.session.phase === 'running') tail.update(red.nMoving, c.meta.n, d.session.liveCollapse);
       source.update(d.snapshot, descs);

@@ -1,7 +1,7 @@
 // The state machine driven by synthetic body states: no engine involved.
 import { describe, expect, it } from 'vitest';
 import { emptySnapshot, type Snapshot } from '@tb/engine-api';
-import { compileLevel, CpuObserver, type Feedback, GRAVITY, homeSkyline, type LevelDef, type OutcomeScore, peOf_mJ, SETTLE_CAP, SETTLE_CAP_V2, SETTLE_MIN, SETTLE_QUIET, Session, settleOf, type Shot } from '@tb/keystone';
+import { compileLevel, CpuObserver, type Feedback, GRAVITY, homeSkyline, type LevelDef, type OutcomeScore, peOf_mJ, potential_mJ, SETTLE_CAP, SETTLE_CAP_V2, SETTLE_MIN, SETTLE_QUIET, Session, settleOf, type Shot } from '@tb/keystone';
 
 const def: LevelDef = {
   id: 'S', name: 's', version: 1, world: 0, lot: { min: [-4, -4], max: [4, 4] }, crownLine: 2, objective: { kind: 'crowns' }, par: 1,
@@ -35,7 +35,7 @@ function play(session: Session, obs: CpuObserver, s: Snapshot, frames: Array<(s:
 const still = (count: number) => Array.from({ length: count }, () => (s: Snapshot) => { s.awake.fill(0); s.linVel.fill(0); });
 
 describe('Session', () => {
-  it('fires only while aiming, only with ammo left in the rack', () => {
+  it('fires only with ammo left in the rack; a running shot can only be cut on an observed state', () => {
     const se = new Session(c);
     expect(se.canFire('cue')).toBe(false);
     expect(() => se.fire({ ammo: 'drop', x: 0, z: 0 }, 0)).toThrow(/cannot fire drop/);
@@ -44,8 +44,64 @@ describe('Session', () => {
     expect(feedback).toEqual([expect.objectContaining({ t: 'fired', body: n, ammo: 'marble' })]);
     expect(se.phase).toBe('running');
     expect(se.rackLeft).toEqual(['cannonball']);
-    expect(() => se.fire({ ...marble, ammo: 'cannonball' }, 11)).toThrow(/phase running/);
+    // Rapid fire: the rules allow a shot while one runs, but only with the state to cut the running one on.
+    expect(se.canFire('cannonball')).toBe(true);
+    expect(() => se.fire({ ...marble, ammo: 'cannonball' }, 11)).toThrow(/cutting it needs the observed state/);
+    expect(se.rackLeft).toEqual(['cannonball']);
     expect(Array.from(se.watchIdx)).toEqual([crown, heritage, n]);
+  });
+
+  it('rapid fire cuts the running shot on the state fired from; dPE still sums to the whole drop', () => {
+    const se = new Session(c), s = world(2), obs = new CpuObserver(c, s), pe0 = potential_mJ(s, c);
+    se.fire(marble, 0);
+    // The crown drops below the line while the marble's shot runs.
+    let fb = play(se, obs, s, [(w) => { w.awake[crown] = 1; w.linVel.set([0, -3, 0], 3 * crown); w.pos[3 * crown + 1] = 0.25; }, (w) => { w.linVel.set([0, -1, 0], 3 * crown); }], 0);
+    expect(fb.filter((f) => f.t === 'settled')).toHaveLength(0);
+    const mid = potential_mJ(s, c);
+    // Fired at step 3 from the state of step 2 (pipelined: the engine is a step ahead of what the rules saw).
+    const now = obs.peek(s, 2, se.watchIdx);
+    const cannon: Shot = { ...marble, ammo: 'cannonball', after: 99 };
+    const r = se.fire(cannon, 3, n + 1, now);
+    expect(r.feedback.map((f) => f.t)).toEqual(['cut', 'fired']);
+    const cut = r.feedback[0] as Extract<Feedback, { t: 'cut' }>;
+    expect(cut).toMatchObject({ step: 2, shot: 0, outcome: { cut: true, crownsDown: 1, crownsTotal: 1, spawnStep: 0, settleStep: 2 } });
+    expect(cut.outcome.dPE_mJ).toBeCloseTo(pe0 - mid, 9);
+    expect(se.phase).toBe('running');
+    expect(se.strokes).toBe(2);
+    // Recorded with the steps since the shot before, whatever `after` the caller passed.
+    expect(se.inputs.map((i) => [i.step, i.shot.after])).toEqual([[0, undefined], [3, 3]]);
+    expect(Array.from(se.watchIdx)).toEqual([crown, heritage, n + 1]);
+    // The new shot starts from where the cut one was taken; the crown is already counted, so it is no combo of the second's.
+    obs.setBaseline(s, 3);
+    fb = play(se, obs, s, [(w) => { w.pos[3 * crown + 1] = 0.1; }, ...still(SETTLE_MIN + SETTLE_QUIET)], 3);
+    const settled = fb.find((f) => f.t === 'settled') as Extract<Feedback, { t: 'settled' }>;
+    expect(settled).toMatchObject({ shot: 1, outcome: { crownsDown: 0, crownsTotal: 1 } });
+    expect(settled.outcome.cut).toBeUndefined();
+    expect(se.outcomes[0]!.dPE_mJ + se.outcomes[1]!.dPE_mJ).toBeCloseTo(pe0 - potential_mJ(s, c), 9);
+    // Par: the clear ends the level at the last shot's settle, with both strokes counted.
+    expect(se.phase).toBe('cleared');
+    expect(se.score!.lines.find((l) => l.label === 'Strokes')!.value).toBe(1000 * (def.par + 3 - 2));
+  });
+
+  it('a cut never ends the level: a hold level with its crown already down runs on until a settle', () => {
+    const hc = compileLevel({ ...def, id: 'SH', scoring: 'outcome', objective: { kind: 'hold' }, rack: ['marble', 'marble'] });
+    const se = new Session(hc), s = world(2), obs = new CpuObserver(hc, s);
+    se.fire(marble, 0);
+    play(se, obs, s, [(w) => { w.awake[crown] = 1; w.linVel.set([0, -3, 0], 3 * crown); w.pos[3 * crown + 1] = 0.25; }], 0);
+    const r = se.fire(marble, 2, n + 1, obs.peek(s, 1, se.watchIdx));
+    expect(r.feedback.map((f) => f.t)).toEqual(['cut', 'fired']);
+    expect(se.outcomes[0]).toMatchObject({ cut: true, crownsTotal: 1 });
+    expect(se.phase).toBe('running');
+    // The settle after it is what ends the round: the crown is down, so the hold is lost.
+    const fb = play(se, obs, s, still(SETTLE_MIN + SETTLE_QUIET), 2);
+    expect(fb.map((f) => f.t).filter((t) => t === 'settled' || t === 'levelEnd')).toEqual(['settled', 'levelEnd']);
+    expect(se.phase).toBe('failed');
+  });
+
+  it('a shot fired while aiming is recorded without `after`, whatever the caller passed', () => {
+    const se = new Session(c);
+    se.fire({ ...marble, after: 5 }, 7);
+    expect(se.inputs).toEqual([{ step: 7, shot: marble }]);
   });
 
   it('a quiet miss settles back to aiming with a zero-leverage outcome', () => {

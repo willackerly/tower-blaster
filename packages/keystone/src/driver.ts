@@ -123,13 +123,17 @@ export class Driver {
     return this.level.meta.n + i;
   }
 
-  /** Fire now: the spawn applies at the next step. */
+  /**
+   * Fire now: the spawn applies at the next step. While a shot runs (rapid fire) it is cut on the
+   * state observed last (`snapshot`), which is also the new shot's baseline.
+   */
   fire(shot: Shot): Feedback[] {
     const step = this.engine.stepIndex;
     // Engines number spawns by (step, push order); every spawn pushed before is due by now or later
     // than this one (push's stamping rule), so the ammo comes after exactly those due by now.
     const body = this.level.meta.n + this.spawnSteps.filter((s) => s <= step).length;
-    const { spawn, event, feedback } = this.session.fire(shot, step, body);
+    const now = this.session.phase === 'running' ? this.observer.peek(this.snapshot, this.snapshotStep, this.session.watchIdx) : undefined;
+    const { spawn, event, feedback } = this.session.fire(shot, step, body, now);
     this.observer.setBaseline(this.snapshot, step);
     if (!spawn) {
       // A pull: one removal, nothing spawned, so later ammo is numbered as if it were not there.
@@ -233,8 +237,9 @@ function blasts(events: readonly InputEvent[]): Extract<Feedback, { t: 'blast' }
 export interface SessionResult { session: Session; feedback: Feedback[]; steps: number; snapshot: Snapshot }
 
 /**
- * Plays `shots` in order, each fired as soon as the session is aiming, until
- * the level ends, the shots run out, or `maxSteps`.
+ * Plays `shots` in order, each fired as soon as the session is aiming (or, for a rapid-fire shot
+ * with `after`, that many steps after the shot before it went in, if that comes first), until the
+ * level ends, the shots run out, or `maxSteps`.
  */
 export async function runSession(engine: PhysicsEngine, level: CompiledLevel, shots: Shot[], opts: PlayOptions & DriverOptions = {}): Promise<SessionResult> {
   const d = new Driver(engine, level, { pipelined: opts.pipelined });
@@ -282,6 +287,8 @@ export async function playShots(d: Driver, shots: Shot[], next: number, opts: Pl
       if (next > announced) opts.onAiming?.(d, (announced = next));
       feedback.push(...d.fire(shots[next++]!));
     }
+    // Rapid-fire shots due now go in before the next step, as the game page fires them between steps.
+    while (next < shots.length && d.session.phase === 'running' && rapidDue(d, shots[next]!)) feedback.push(...d.fire(shots[next++]!));
     if (d.session.phase === 'cleared' || d.session.phase === 'failed') break;
     feedback.push(...(await d.step()));
     const input = opts.perStep?.(d);
@@ -289,6 +296,12 @@ export async function playShots(d: Driver, shots: Shot[], next: number, opts: Pl
   }
   await d.drain();
   return { session: d.session, feedback, steps: engine.stepIndex, snapshot: d.snapshot };
+}
+
+/** Whether rapid-fire shot `shot` (with `after`) is due on `d` now: that many steps after the last shot went in. */
+export function rapidDue(d: Driver, shot: Shot): boolean {
+  const last = d.session.inputs[d.session.inputs.length - 1];
+  return shot.after !== undefined && last !== undefined && d.engine.stepIndex >= last.step + shot.after;
 }
 
 /** FNV-1a over the raw bytes of positions and rotations: equal states hash equal. */

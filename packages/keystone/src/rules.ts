@@ -198,6 +198,14 @@ export class CpuObserver {
     this.base = baselineOf(initial, c, 0);
   }
   setBaseline(s: Snapshot, step: number) { this.base = baselineOf(s, this.c, step); }
+  /**
+   * observe() without moving its velocity history: the rules' view of `s` for a decision made on it
+   * (a rapid-fire cut, Driver.fire), leaving the next observe() exactly as if this one had not run.
+   * Its impacts count against the last observed state's velocities.
+   */
+  peek(s: Snapshot, step: number, watchIdx: Int32Array): Observation {
+    return { step, red: reduceCpu(s, this.prevVel, this.c, this.base, step), watched: watch(s, watchIdx), basePe_mJ: this.base.pe_mJ };
+  }
   get baseline() { return this.base; }
   observe(s: Snapshot, step: number, watchIdx: Int32Array): Observation {
     const red = reduceCpu(s, this.prevVel, this.c, this.base, step);
@@ -292,7 +300,13 @@ export interface ShotOutcome {
   /** The structure's potential energy at the settle (the level's end, after its last shot). */
   pe_mJ: number;
   spawnStep: number;
+  /** The step of the state the outcome was taken on: its settle, or for a cut shot the state the next shot was fired from. */
   settleStep: number;
+  /**
+   * Present (true) when the shot did not settle: a shot fired while it ran closed it (rapid fire,
+   * Session.fire). Its dPE and crowns are counted to there; the shot after it starts from that state.
+   */
+  cut?: true;
 }
 
 export interface ScoreLine { label: string; value: number }
