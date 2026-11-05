@@ -28,6 +28,8 @@ export interface LevelRecord {
   beatBot?: boolean;
   /** ISO time of the best play. */
   at: string;
+  /** Lot sheet goals (goals.ts ids) met on any play of this hash, in the order first met. Absent: none yet. */
+  goals?: string[];
 }
 
 export interface Progress { version: 1; levels: Record<string, LevelRecord> }
@@ -37,7 +39,8 @@ export const emptyProgress = (): Progress => ({ version: 1, levels: {} });
 const isRecord = (r: unknown): r is LevelRecord => {
   if (typeof r !== 'object' || r === null) return false;
   const o = r as Record<string, unknown>;
-  return typeof o.hash === 'string' && Number.isInteger(o.plays) && (o.plays as number) >= 1 && [0, 1, 2, 3].includes(o.stars as number) && typeof o.total === 'number' && typeof o.at === 'string';
+  return typeof o.hash === 'string' && Number.isInteger(o.plays) && (o.plays as number) >= 1 && [0, 1, 2, 3].includes(o.stars as number) && typeof o.total === 'number' && typeof o.at === 'string'
+    && (o.goals === undefined || (Array.isArray(o.goals) && o.goals.every((g) => typeof g === 'string')));
 };
 
 /** Progress from stored text: anything unreadable (absent, not JSON, another version) is empty, and bad records are dropped. */
@@ -65,11 +68,17 @@ export function playOf(score: LevelScore): Omit<LevelRecord, 'plays' | 'at' | 'h
   return { stars: score.stars, total: score.total, ...(o ? { metric: o.metric, value: o.value, collapse: o.collapse, beatBot: o.beatBot } : {}) };
 }
 
-/** p with one finished play of level `id` (hash `hash`) recorded; p itself is unchanged. A play on another hash starts the record over. */
-export function recordPlay(p: Progress, id: string, hash: string, score: LevelScore, now: Date = new Date()): Progress {
+/**
+ * p with one finished play of level `id` (hash `hash`) recorded; p itself is unchanged. A play on another hash starts the record over.
+ * `goals`: the lot sheet goals this play met, added to those met before on the same hash (goals are kept whichever play was best).
+ */
+export function recordPlay(p: Progress, id: string, hash: string, score: LevelScore, now: Date = new Date(), goals: readonly string[] = []): Progress {
   const old = p.levels[id], play = playOf(score);
   const same = old && old.hash === hash ? old : null;
   const next: LevelRecord = same && !betterPlay(play, same) ? { ...same, plays: same.plays + 1 } : { hash, plays: (same?.plays ?? 0) + 1, ...play, at: now.toISOString() };
+  const met = [...(same?.goals ?? [])];
+  for (const g of goals) if (!met.includes(g)) met.push(g);
+  if (met.length) next.goals = met; else delete next.goals;
   return { version: 1, levels: { ...p.levels, [id]: next } };
 }
 
@@ -115,8 +124,8 @@ export class ProgressStore {
   }
   get progress(): Progress { return this.p; }
   best(id: string, hash: string): LevelRecord | null { return bestFor(this.p, id, hash); }
-  record(id: string, hash: string, score: LevelScore, now?: Date): LevelRecord {
-    this.p = recordPlay(this.p, id, hash, score, now);
+  record(id: string, hash: string, score: LevelScore, now?: Date, goals?: readonly string[]): LevelRecord {
+    this.p = recordPlay(this.p, id, hash, score, now, goals);
     this.save();
     return this.p.levels[id]!;
   }

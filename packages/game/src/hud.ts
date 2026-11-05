@@ -55,6 +55,8 @@ export interface HudState {
   pace?: string;
   /** The level's pre-aimed opening shot can be fired now (the Fire button, key F). */
   opener?: boolean;
+  /** A duel's block (duel-hud.ts duelHudHtml): it replaces the objective, crowns, heritage and leverage rows. */
+  duel?: string;
 }
 
 /** The pre-aimed opener's button (key F), shown before the first shot of a level that has one. */
@@ -89,6 +91,13 @@ export function hudHtml(s: HudState): string {
     <div class="row"><span>Objective</span><span class="${s.met ? 'ok' : ''}">${esc(objectiveText(d.objective))}${s.met ? ' ✓' : ''}</span></div>`
     : `<div class="row"><span>Par ${d.par}</span><span>Stroke ${s.strokes}</span></div>`;
   const crowns = !outcome || s.crownsTotal ? `<div class="row"><span>Crowns</span><span class="crowns">${s.crownsDown} / ${s.crownsTotal}</span></div>` : '';
+  if (s.duel !== undefined) {
+    return `
+    <div class="title">${esc(d.name)}${s.pace ? ` <span class="pace" title="physics is running slower than real time">${esc(s.pace)}</span>` : ''}</div>
+    ${s.duel}
+    <div class="chips">${chips}</div>
+    ${power}${reach}`;
+  }
   return `
     <div class="title">W${d.world}-${esc(d.id.replace(/^L/, ''))} · ${esc(d.name)}${s.pace ? ` <span class="pace" title="physics is running slower than real time">${esc(s.pace)}</span>` : ''}</div>
     ${d.custom ? `<div class="small custom">${CUSTOM_NOTE}</div>` : ''}
@@ -107,7 +116,7 @@ export function hudHtml(s: HudState): string {
  * crown is down) and the rest of the settle is still running: the card shows
  * at once and tallies, and is drawn again with the score when it settles.
  */
-export function resultHtml(level: LevelDef, score: LevelScore | null, strokes: number, hasNext: boolean, canSave = false): string {
+export function resultHtml(level: LevelDef, score: LevelScore | null, strokes: number, hasNext: boolean, canSave = false, extra = ''): string {
   const outcome = scoringOf(level) === 'outcome';
   const shotsText = `${strokes} ${outcome ? 'shot' : 'stroke'}${strokes === 1 ? '' : 's'}${outcome ? '' : ` · par ${level.par}`}`;
   const save = canSave && score ? '<button data-act="save" title="Download this round as a file to send back">Save session</button>' : '';
@@ -129,5 +138,6 @@ export function resultHtml(level: LevelDef, score: LevelScore | null, strokes: n
     <div class="line total" style="animation-delay:${after}s"><span>Total</span><span>${fmtPoints(score.total)}</span></div>
     <div class="stamp s-${score.stamp.replace(/[^A-Z]/g, '').toLowerCase()}" style="animation-delay:${after + 0.3}s">${esc(score.stamp)}</div>
     <div class="stars" style="animation-delay:${after + 0.55}s">${starsText(score.stars)}</div>
+    ${extra}
     ${actions}`;
 }

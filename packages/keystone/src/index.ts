@@ -16,3 +16,4 @@ export * from './groups.ts';
 export * from './goals.ts';
 export * from './duel.ts';
 export * from './duels.ts';
+export * from './lot-sheets.ts';
