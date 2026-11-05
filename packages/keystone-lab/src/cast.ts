@@ -270,11 +270,12 @@ export function moveIntents(line: readonly Intent[], r: () => number): Intent[] 
   return line.map((x, i) => (i === k ? it : x));
 }
 
-/** Hand noise (spectacle-mode.md section 6, the design's): each launch shot's yaw within 0.6 deg and power within 3%; a drop within a quarter cell. */
+/** Hand noise (spectacle-mode.md section 6, the design's): each launch shot's yaw within 0.6 deg and power within 3%; a drop within a quarter cell; a pull exact. */
 export function nudgeLine(shots: readonly Shot[], r: () => number): Shot[] {
   return shots.map((s) => {
     if (s.ammo === 'drop') return { ...s, x: s.x + randInt(r, -1, 1), z: s.z + randInt(r, -1, 1) };
     if (s.ammo === 'cue') return { ...s, power: Math.max(0, Math.min(100, s.power + randInt(r, -3, 3))) };
+    if (s.ammo === 'pull') return s; // a pull names a block: there is no hand noise in which one
     return { ...s, yaw: s.yaw + randInt(r, -6, 6), power: Math.max(0, Math.min(100, s.power + randInt(r, -3, 3))) };
   });
 }
