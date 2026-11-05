@@ -136,13 +136,15 @@ export class Pacer {
   /** Seconds since slow motion began, and since its release (null while holding). */
   private slow: { t: number; releasedAt: number | null } | null = null;
   timeScale = 1;
+  /** The step cost (ms) the last due() read for the valve: what timeScale was set from (NaN before one). */
+  costMs = NaN;
 
   /** Freeze the sim for `frames` 60 Hz frames from the next due() (one per contact, the larger wins). */
   hitStop(frames: number) { this.stopMs = Math.max(this.stopMs, frames * FRAME_MS); }
   slowMo() { if (!this.slow) this.slow = { t: 0, releasedAt: null }; }
   release() { if (this.slow && this.slow.releasedAt === null) this.slow.releasedAt = this.slow.t; }
   get slowing() { return this.slow !== null; }
-  reset() { this.next = NaN; this.last = NaN; this.stopMs = 0; this.slow = null; this.timeScale = 1; }
+  reset() { this.next = NaN; this.last = NaN; this.stopMs = 0; this.slow = null; this.timeScale = 1; this.costMs = NaN; }
   /** Restart the clock (a shot starts, the loop was idle): the next due() is at once, with nothing owed. */
   restart() { this.next = NaN; this.last = NaN; }
 
@@ -166,6 +168,7 @@ export class Pacer {
     const max = o.fastForward ? FAST_SCALE : 1;
     if (o.fastForward) scale = FAST_SCALE;
     // Performance valve: when steps cost more than the budget, slow time down (to at most a quarter) instead of stuttering.
+    this.costMs = o.stepMs ?? NaN;
     this.timeScale = Math.min(scale, valve(o.budgetMs ?? 0, o.stepMs ?? 0, max));
     if (Number.isNaN(this.next)) this.next = now;
     if (this.stopMs > 0) { this.next = Math.max(this.next, now) + this.stopMs; this.stopMs = 0; }

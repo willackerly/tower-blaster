@@ -46,7 +46,8 @@ export interface GameHandle {
   /**
    * Pacing now: the valve's time scale (budget / step cost, in [0.25, 1]; up to 4 at fast-forward),
    * the sim speed reached (sim time per real time, measured), the HUD's slow-motion tag ('' at real
-   * time), whether the tail skip is on, and the median step cost the valve reads (ms).
+   * time), whether the tail skip is on, and the median step cost the valve read when it set that time scale
+   * (ms; a cost that lands after it waits for the next step's read, so the two always agree).
    */
   pace: { timeScale: number; speed: number; tag: string; tailSkip: boolean; costMs: number };
   /**
@@ -543,7 +544,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     syncState();
     const s = driver.session;
     const running = s.phase === 'running', v = running ? speed.speed(performance.now()) : 1, costs = handle.timing.costMs;
-    handle.pace = { timeScale: running ? pacer.timeScale : 1, speed: v, tag: running && !fastHeld && !handle.fast && !ending && !tail.on ? slowTag(v) : '', tailSkip: tail.on, costMs: median(costs.slice(-60)) };
+    handle.pace = { timeScale: running ? pacer.timeScale : 1, speed: v, tag: running && !fastHeld && !handle.fast && !ending && !tail.on ? slowTag(v) : '', tailSkip: tail.on, costMs: running && !Number.isNaN(pacer.costMs) ? pacer.costMs : median(costs.slice(-60)) };
     handle.view = { target: [...orbit.target], distance: orbit.distance, following: follow.active, jolt };
   }
 

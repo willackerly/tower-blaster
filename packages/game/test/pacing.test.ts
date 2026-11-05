@@ -83,6 +83,17 @@ describe('stepCost', () => {
 });
 
 describe('Pacer', () => {
+  it('keeps the step cost each due() read, so the time scale it set can be checked against the cost it came from', () => {
+    const p = new Pacer();
+    expect(p.costMs).toBeNaN();
+    p.due(0, DT_MS, { budgetMs: DEFAULT_BUDGET_MS, stepMs: 40 });
+    expect(p.costMs).toBe(40);
+    expect(p.timeScale).toBe(valve(DEFAULT_BUDGET_MS, 40));
+    p.due(10, DT_MS, { budgetMs: DEFAULT_BUDGET_MS, stepMs: 80 });
+    expect([p.costMs, p.timeScale]).toEqual([80, valve(DEFAULT_BUDGET_MS, 80)]);
+    p.reset();
+    expect(p.costMs).toBeNaN();
+  });
   it('runs one step per 60 Hz frame, and one every other frame at 120 Hz', () => {
     expect(steps(new Pacer(), 10)).toEqual(Array(10).fill(1));
     const hi = steps(new Pacer(), 120, DT_MS / 2);
