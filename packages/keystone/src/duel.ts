@@ -71,8 +71,11 @@ export function duelLevel(def: DuelDef, first: Player = 0): LevelDef {
   const a = def.sides[first].rack, b = def.sides[1 - first as Player].rack, rack: RackItem[] = [];
   for (let k = 0; k < Math.max(a.length, b.length); k++) { if (k < a.length) rack.push(a[k]!); if (k < b.length) rack.push(b[k]!); }
   const { stars: _s, solutions: _x, ...table } = def.level;
-  return { ...table, id: def.id, name: def.name, scoring: 'outcome', autobank: false, rack, par: rack.length, objective: { kind: 'collapse', min: 0 }, custom: true };
+  return { ...table, id: duelLevelId(def, first), name: def.name, scoring: 'outcome', autobank: false, rack, par: rack.length, objective: { kind: 'collapse', min: 0 }, custom: true };
 }
+
+/** The id of a duel's level: the table's id with the first player first, `<id>-2` with the second (a rematch). */
+export const duelLevelId = (def: DuelDef, first: Player): string => (first === 0 ? def.id : `${def.id}-2`);
 
 /** Throws unless the duel is well formed against its compiled level (duelLevel), naming the fault. */
 export function checkDuel(def: DuelDef, c: CompiledLevel): void {

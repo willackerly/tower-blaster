@@ -4,7 +4,7 @@
 // game's keys are held back (a capture listener on window runs before the
 // game's own).
 import { type CompiledLevel, compileLevel, type LevelDef } from '@tb/keystone';
-import { DOOR_CSS, doorHtml, doorLevels, type DoorLevel } from './door.ts';
+import { type DoorDuel, DOOR_CSS, doorHtml, doorLevels, type DoorLevel } from './door.ts';
 import type { GameHandle } from './play.ts';
 import type { ProgressStore } from './progress.ts';
 import type { Settings, SettingsStore } from './settings.ts';
@@ -30,6 +30,11 @@ export interface DoorOptions {
   settings: SettingsStore;
   /** A setting changed: the page applies it (look, sound, sharpness) and drops its URL key. */
   applied(s: Settings, changed: keyof Settings): void;
+  /** The Two players section's tables (none: no section), and what picking one does (the page opens ?duel=<id>). */
+  duels?: DoorDuel[];
+  openDuel?(id: string): void;
+  /** Set while the page plays something else than `levels` (a duel): picking a level opens it the same way (?level=<id>). */
+  openLevel?(id: string): void;
 }
 
 export function installDoor(o: DoorOptions, doc: Document = document): DoorPage {
@@ -47,7 +52,7 @@ export function installDoor(o: DoorOptions, doc: Document = document): DoorPage 
   const current = () => o.levels.findIndex((l) => l.id === (pending ?? loaded()));
   const draw = () => {
     levels = doorLevels(o.levels, (id, h) => o.progress.best(id, h), compile);
-    o.root.innerHTML = doorHtml({ levels, current: current(), settings: o.settings.current, howTo, advanced });
+    o.root.innerHTML = doorHtml({ levels, current: o.openLevel ? -1 : current(), settings: o.settings.current, howTo, advanced, duels: o.duels ?? [] });
     const reset = o.root.querySelector('[data-act="reset"]');
     if (armedReset && reset) reset.textContent = 'Click again to forget every best play';
   };
@@ -60,6 +65,7 @@ export function installDoor(o: DoorOptions, doc: Document = document): DoorPage 
   };
   const pick = (i: number) => {
     const id = o.levels[i]!.id;
+    if (o.openLevel) { o.openLevel(id); return; }
     page.hide();
     if (o.handle.status === 'running') { if (id !== o.handle.level) void o.handle.load(id); return; }
     pending = id === o.start ? null : id;
@@ -76,6 +82,9 @@ export function installDoor(o: DoorOptions, doc: Document = document): DoorPage 
     if (act !== 'reset') armedReset = false;
     switch (act) {
       case 'level': pick(Number(arg)); break;
+      case 'duel':
+        if (o.duels?.some((d) => d.id === arg && d.current)) page.hide(); else o.openDuel?.(arg);
+        break;
       case 'close': page.hide(); break;
       case 'how':
         howTo = !howTo;
@@ -103,7 +112,7 @@ export function installDoor(o: DoorOptions, doc: Document = document): DoorPage 
     if (open) {
       // The door has the keyboard: the game's keys (fire, retry, levels) wait until it closes.
       e.stopPropagation();
-      if (e.key === 'Escape' && current() >= 0) page.hide();
+      if (e.key === 'Escape' && (current() >= 0 || o.openLevel)) page.hide();
     } else if (e.key === 'Escape') {
       e.stopPropagation();
       page.show();

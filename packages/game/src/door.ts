@@ -7,7 +7,7 @@
 // a level whose cast has not landed yet (B3 while its cast runs) shows only the
 // objective's star and "more stars once cast", and picks the rest up from the
 // file with no change here.
-import { castStars, type CompiledLevel, compileLevel, type LevelDef, type Objective, scoringOf, type Shot, type StarMetric, type StarsDef } from '@tb/keystone';
+import { castStars, type CompiledLevel, compileLevel, DUEL_NAMES, type DuelDef, type LevelDef, type Objective, scoringOf, type Shot, type StarMetric, type StarsDef } from '@tb/keystone';
 import { CUSTOM_NOTE, esc, fmtPoints, itemLabel, objectiveText, pct } from './hud.ts';
 import type { LevelRecord } from './progress.ts';
 import { LOOK_CHOICES, type Settings } from './settings.ts';
@@ -22,7 +22,7 @@ export function doorMode(q: URLSearchParams): DoorMode {
 }
 
 /** Whether the door shows when the page opens. */
-export const doorOnLoad = (mode: DoorMode, q: URLSearchParams): boolean => (mode === 'auto' ? !q.has('level') : mode === '1');
+export const doorOnLoad = (mode: DoorMode, q: URLSearchParams): boolean => (mode === 'auto' ? !q.has('level') && !q.has('duel') : mode === '1');
 
 /** One level as the door shows it. */
 export interface DoorLevel {
@@ -124,7 +124,30 @@ export const HOW_TO_PLAY: readonly string[] = [
   'After any shot you may <kbd>B</kbd> bank: end the level and keep the unused rack as points.',
 ];
 
+/** A duel table as the door's Two players section shows it. */
+export interface DoorDuel { id: string; name: string; ruleset: string; blurb: string; current: boolean }
+
+/** One line on what each ruleset asks, for its card. */
+export const RULESET_BLURB: Record<DuelDef['ruleset'], string> = {
+  keeps: 'Take turns firing from behind your keep. Topple the other king to win; topple your own and you lose.',
+  heraldry: 'One tower in both colours. Each shot scores the rival blocks it brings down, less your own.',
+};
+
+/** The door's view of the duel tables; `current` is the one being played (or null). */
+export function doorDuels(duels: readonly DuelDef[], current: string | null): DoorDuel[] {
+  return duels.map((d) => ({ id: d.id, name: d.name, ruleset: DUEL_NAMES.rulesets[d.ruleset], blurb: RULESET_BLURB[d.ruleset], current: d.id === current }));
+}
+
+/** ?duels=1 (default: the door shows the Two players section) or 0 (hidden: the playtest build's switch). */
+export function duelsOnDoor(q: URLSearchParams): boolean {
+  const v = q.get('duels') ?? '1';
+  if (v !== '0' && v !== '1') throw new Error(`duels must be 0 or 1: ${v}`);
+  return v === '1';
+}
+
 export interface DoorModel {
+  /** The Two players section's tables (empty: no section). */
+  duels?: DoorDuel[];
   levels: DoorLevel[];
   /** The level loaded behind the door (its card is marked), or -1. */
   current: number;
@@ -167,6 +190,7 @@ export function doorHtml(m: DoorModel): string {
       <button data-act="how" class="howlink${m.howTo ? ' on' : ''}">How to play</button>
       ${m.howTo ? `<ul class="how">${HOW_TO_PLAY.map((t) => `<li>${t}</li>`).join('')}</ul>` : ''}
       <div class="cards">${cards}</div>
+      ${duelsHtml(m.duels ?? [])}
       <button data-act="advanced" class="howlink advlink${m.advanced ? ' on' : ''}" aria-expanded="${m.advanced}">Advanced settings</button>
       ${m.advanced ? `<div class="advanced">
       <div class="foot">
@@ -179,6 +203,18 @@ export function doorHtml(m: DoorModel): string {
       <div class="reset"><button data-act="reset">Forget my progress</button></div>
       </div>` : ''}
     </div>`;
+}
+
+/** The Two players section: one card per duel table (data-act="duel", data-arg its id). */
+function duelsHtml(duels: readonly DoorDuel[]): string {
+  if (!duels.length) return '';
+  const cards = duels.map((d) => `<button class="card duel${d.current ? ' current' : ''}" data-act="duel" data-arg="${esc(d.id)}" aria-label="${esc(`${d.id} ${d.name}`)}">
+      <div class="id">${esc(d.id)}</div>
+      <div class="lname">${esc(d.name)}</div>
+      <div class="meta">${esc(d.ruleset)} · 2 players, one device</div>
+      <div class="blurb">${esc(d.blurb)}</div>
+    </button>`).join('');
+  return `<h2 class="duels-head">${esc(DUEL_NAMES.mode)} · two players</h2><div class="cards duels">${cards}</div>`;
 }
 
 /** The door's styles, scoped to .kg-door (the palette is the HUD's, ui.ts). */
@@ -217,6 +253,10 @@ export const DOOR_CSS = `
   .kg-door .best .earned { color: #f7b955; font-size: 15px; letter-spacing: 0.04em; }
   .kg-door .best .unearned { color: #6b7385; font-size: 15px; letter-spacing: 0.04em; margin-right: 4px; }
   .kg-door .custom { margin-top: 4px; font-size: 11px; color: #f0806a; }
+  .kg-door .duels-head { margin: 4px 0 0; font-size: 15px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: #9fc3ff; }
+  .kg-door .cards.duels { margin-top: 10px; }
+  .kg-door .card.duel .blurb { margin-top: 8px; font-size: 13px; color: #c7cdda; }
+  .kg-door .card.current { border-color: #9fc3ff; }
   .kg-door .foot { display: flex; flex-wrap: wrap; justify-content: center; align-items: center; gap: 10px 20px; }
   .kg-door .foot .group { display: inline-flex; align-items: center; gap: 6px; }
   .kg-door .foot .lbl { color: #a6aec0; font-size: 13px; }

@@ -26,6 +26,7 @@ describe('duel tables', () => {
       expect(lv).toMatchObject({ scoring: 'outcome', autobank: false, custom: true, par: lv.rack.length });
       expect(lv.rack).toHaveLength(def.sides[0].rack.length + def.sides[1].rack.length);
       expect(lv.rack[0]).toBe(def.sides[first].rack[0]);
+      expect(lv.id).toBe(first === 0 ? def.id : `${def.id}-2`);
       const errors = validateLevel(c).filter((x) => !x.warning);
       expect(errors, JSON.stringify(errors)).toEqual([]);
       expect(() => checkDuel(def, c)).not.toThrow();
