@@ -70,7 +70,7 @@ export interface GameHandle {
    * GPU, physics-loop.ts), in order of landing.
    */
   timing: { loadMs: number; stepMs: number[]; moving: number[]; frameMs: number[]; costMs: number[] };
-  /** Display frames drawn and skipped (keystone.frames, frame-rate.ts), and whether decimation is on now (a display under 110 Hz skips nothing even then). */
+  /** Display frames drawn and skipped (keystone.frames, frame-rate.ts), and whether decimation is on now (wanted, and a display of 110 Hz or more). */
   draws: { drawn: number; skipped: number; decimating: boolean };
   fire(shot: Shot): boolean;
   /** Outcome levels: end the level now, keeping the rack left (key B, the HUD's Bank button); false when it cannot. */
