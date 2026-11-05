@@ -215,7 +215,7 @@ describe('engine registry and SlowedEngine', () => {
       ['sleep', '1', 'a boolean'], ['sleepSpeed', '-1', 'a finite number >= 0'], ['sleepSteps', '0', 'an integer >= 1'], ['sleepSteps', '2.5', 'an integer >= 1'],
       ['sleepDrift', '-0.1', 'a finite number >= 0'], ['wakeSpeed', '-1', 'a finite number >= 0'], ['wakeDepth', '-0.01', 'a finite number >= 0'],
       ['settleSteps', '-1', 'a non-negative integer'], ['settleIterations', '0', 'a positive integer'],
-      ['sleepSkip', '0', 'a boolean'], ['sizedColors', '1', 'a boolean'],
+      ['sleepSkip', '0', 'a boolean'], ['sizedColors', '1', 'a boolean'], ['awakeLists', '1', 'a boolean'],
     ] as const) {
       expect(() => makeEngine(`avbd-gpu:${k}=${bad}`)).toThrow(`GpuEngineOptions.${k} must be ${what}`);
     }
@@ -240,6 +240,7 @@ describe('engine registry and SlowedEngine', () => {
     expect(makeEngine('avbd-gpu:sleep=true,sleepSkip=false').info.variant).toMatchObject({ sleep: true, sleepSkip: false });
     expect(gpuEngineArgs(parseSpec('avbd-gpu:sleep=true,sleepSkip=false').options)).toEqual({ params: {}, opts: { sleep: true, sleepSkip: false } });
     expect(makeEngine('avbd-gpu:sizedColors=true').info.variant).toMatchObject({ sizedColors: true });
+    expect(makeEngine('avbd-gpu:sleep=true,awakeLists=false').info.variant).toMatchObject({ sleep: true, awakeLists: false });
     // Restitution does not know sleepers yet.
     expect(() => makeEngine('avbd-gpu:sleep=true,restitution=true')).toThrow('GpuEngineOptions.sleep is not implemented with AvbdParams.restitution yet');
     // gpuEngineArgs splits a spec into AvbdParams and GpuEngineOptions.
