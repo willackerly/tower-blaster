@@ -46,11 +46,17 @@ The password is never in the repo or the bundle. It lives only in the Pages secr
 
 **Rollback:** in the Cloudflare dashboard, open Workers & Pages, then the project, then Deployments, and pick "Rollback" on an earlier deployment. Alternatively, check out an earlier commit and deploy again.
 
-## Automated deploys
+## How deploys run (decided 2026-11-05)
 
-`.github/workflows/playtest.yml` deploys main after every push whose `ci` run goes green, then runs `pnpm playtest:smoke` against the live site, so a deploy that does not serve the new commit behind the gate fails the run. It checks out the commit `ci` tested. When main has already moved past that commit (runs can finish out of order), it skips the deploy and leaves it to the newer commit's run. One deploy runs at a time. "Run workflow" on the Actions tab redeploys main by hand.
+Deploys run from Will's Mac, with his wrangler login, and there is no Cloudflare token in the repo. The Mac has `~/dev/tb-playtest-deploy.sh`, a local script that is not in the repo because it holds the password. It pulls main in `~/dev/tb-playtest` (a clone kept only for deploys), installs, runs `pnpm playtest:deploy`, then `pnpm playtest:smoke` against the live site. A user-level Claude Code allow rule on the Mac lets a Remote Control session run that one script without a prompt, so Claude can redeploy after a merge. Will chose this over creating an API token.
 
-It needs these in the repo's settings (Settings, Secrets and variables, Actions). Until they are set, the run fails at its first step and names what is missing.
+Alternatives considered: a GitHub Actions deploy after every green ci run (below), which needs a token stored as a repo secret, and Cloudflare Pages' Git integration, which needs a new project and URL and has no smoke step.
+
+## Deploying from GitHub Actions (off)
+
+`.github/workflows/playtest.yml` deploys main and then runs `pnpm playtest:smoke` against the live site, so a deploy that does not serve the new commit behind the gate fails the run. Today it runs only by hand: Actions tab, then Run workflow. To deploy after every green ci run on main instead, restore the `workflow_run` trigger named in the file's header. With that trigger, it checks out the commit ci tested, and it skips a commit that main has already moved past. One deploy runs at a time.
+
+It needs these in the repo's settings (Settings, Secrets and variables, Actions). None are set today. Without them, a run fails at its first step and names what is missing.
 
 | Name | Kind | Value |
 |---|---|---|
