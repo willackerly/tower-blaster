@@ -12,3 +12,7 @@ export * from './record.ts';
 export * from './big-levels.ts';
 export * from './levels.ts';
 export * from './cast-play.ts';
+export * from './groups.ts';
+export * from './goals.ts';
+export * from './duel.ts';
+export * from './duels.ts';
