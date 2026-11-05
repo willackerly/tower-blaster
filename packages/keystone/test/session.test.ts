@@ -83,6 +83,21 @@ describe('Session', () => {
     expect(se.score!.lines.find((l) => l.label === 'Strokes')!.value).toBe(1000 * (def.par + 3 - 2));
   });
 
+  it('a cut never ends the level: a hold level with its crown already down runs on until a settle', () => {
+    const hc = compileLevel({ ...def, id: 'SH', scoring: 'outcome', objective: { kind: 'hold' }, rack: ['marble', 'marble'] });
+    const se = new Session(hc), s = world(2), obs = new CpuObserver(hc, s);
+    se.fire(marble, 0);
+    play(se, obs, s, [(w) => { w.awake[crown] = 1; w.linVel.set([0, -3, 0], 3 * crown); w.pos[3 * crown + 1] = 0.25; }], 0);
+    const r = se.fire(marble, 2, n + 1, obs.peek(s, 1, se.watchIdx));
+    expect(r.feedback.map((f) => f.t)).toEqual(['cut', 'fired']);
+    expect(se.outcomes[0]).toMatchObject({ cut: true, crownsTotal: 1 });
+    expect(se.phase).toBe('running');
+    // The settle after it is what ends the round: the crown is down, so the hold is lost.
+    const fb = play(se, obs, s, still(SETTLE_MIN + SETTLE_QUIET), 2);
+    expect(fb.map((f) => f.t).filter((t) => t === 'settled' || t === 'levelEnd')).toEqual(['settled', 'levelEnd']);
+    expect(se.phase).toBe('failed');
+  });
+
   it('a shot fired while aiming is recorded without `after`, whatever the caller passed', () => {
     const se = new Session(c);
     se.fire({ ...marble, after: 5 }, 7);
