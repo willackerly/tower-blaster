@@ -68,7 +68,13 @@ Why nominal yield and not the energy a blast actually injects (which the rules c
 - The level ends at a bank or when the last shot settles. The objective is judged at the end, and shown live as a check mark for feedback.
 - Nothing new is recorded: a session is still `(level, shots)`. The end is after the last shot; the unused rack is `rack - shots`. Replays need no bank record.
 - `keystone.autobank=1` ends the level at the first settle where the objective is met (Keystone's behaviour), for levels or players that want it.
-- Quickdraw (firing while a shot is still running) stays off: per-shot attribution and the settle baseline need settled shots. It is an option (`keystone.quickdraw=1`) for a later playtest, unofficial until its rules are specified.
+- **Rapid fire (on by default since 2026-11-05).** Will, after a playtest: "if you want to fire two in rapid succession that should be totally allowed by default. Sometimes waiting for things to settle just feels way too slow." This replaces the planned `keystone.quickdraw` option (off, unofficial until its rules were specified). The rules now are:
+  - **Cut.** A shot fired while one runs closes the running one on the state the new one is fired from: crowns judged where they lie, its `ShotOutcome` taken there and marked `cut: true`, a `cut` feedback (no `settled`, no level end). The new shot's baseline is that same state, so the shots' `dPE` still sums exactly to the structure's whole drop, and per-round leverage (energy fired vs PE released) is unchanged in meaning. Only the split between shots moves: a crown still falling at the cut counts for the shot that sees it land. Strokes count every shot fired.
+  - **The level still ends only at a settle**, of the last shot fired. Banking still needs a settled shot (it is refused while one runs). Outcome levels are scored on the last settle as before.
+  - **Replays.** A session is `(level, shots)` where a rapid shot carries `after`: the engine steps since the shot before went in (`Shot.after`, written `@after` at the end of the shot in a line: `w-grenade.120.4.0.35.80@12`). `playShots` fires it there, or at once if the shot before has settled by then (nothing steps while aiming). A line without `@` plays exactly as before, so every cast, par line and level hash is unchanged. On the page, a click during a physics step goes in right after it, as `playShots` fires between steps, so a live round replays exactly headless (`game/test/rapid-e2e.test.ts`).
+  - **Stars (Will, 2026-11-05: decided).** Rapid fire is assumed *not* to be an advantage play: stars and scores stay cast by the bot that waits for each settle, and real-world results from testers confirm or refute that later. If they show it makes stars cheap, cast a rapid bot then.
+  - **Where to switch it.** The front door's Advanced settings, Rapid fire On (default) or Off (front-door.md).
+  - **Off.** `keystone.rapid=0` (Scene panel "rapid fire", scene file `rules.rapid: false`) waits for each settle, as before. Duel tables keep one shot at a time whatever this says (their referee refuses a shot while one is in the air).
 
 ## 6. Score tally and stars
 
@@ -194,7 +200,7 @@ Every rule above is switchable. The viewer under `rules=keystone` reads them thr
 | `keystone.scoring` | level's own, `par`, `outcome` | scorer; overriding marks the run custom |
 | `keystone.stars` | level's own, `collapse`, `crowns`, `skyline`, `score` | star metric |
 | `keystone.autobank` | `0`, `1` | end at first clear |
-| `keystone.quickdraw` | `0`, `1` | fire while running (custom) |
+| `keystone.rapid` | `1`, `0` | fire while a shot runs, cutting it (section 5); 0 waits for the settle |
 | `keystone.tailskip` | `1`, `0` | fast-forward the tail |
 | `keystone.settle` | level's own, `v1`, `v2` | settle rule (custom) |
 | `keystone.rack` | level's own, comma list of item names | rack override (custom) |

@@ -24,6 +24,8 @@ describe('game page, Siege Table', () => {
     // Gold may not fire from Blue's side, nor a marble it does not have.
     expect(await page.evaluate((s) => window.__game.fire(s), miss(EAST))).toBe(false);
     expect(await page.evaluate((s) => window.__game.fire(s), { ...miss(WEST), ammo: 'marble' } as Shot)).toBe(false);
+    // One shot per turn: rapid fire is off in a duel, and a second click while a shot runs is refused.
+    expect(await page.evaluate(() => window.__game.feel.rapid)).toBe(false);
     await page.evaluate(() => { window.__game.fast = true; });
     const order: number[] = [];
     for (let k = 0; k < 8; k++) {
@@ -31,7 +33,8 @@ describe('game page, Siege Table', () => {
       const turn = await page.evaluate(() => window.__game.duel!.turn);
       order.push(turn);
       const ammo = k >= 6 ? 'w-grenade' : 'cannonball';
-      expect(await page.evaluate((s) => window.__game.fire(s), miss(turn === 0 ? WEST : EAST, ammo))).toBe(true);
+      const shot = miss(turn === 0 ? WEST : EAST, ammo);
+      expect(await page.evaluate((s) => [window.__game.fire(s), window.__game.fire(s)], shot)).toEqual([true, false]);
     }
     await page.waitForFunction(() => window.__game.result !== null, undefined, { timeout: 120_000, polling: 250 });
     expect(order).toEqual([0, 1, 0, 1, 0, 1, 0, 1]);

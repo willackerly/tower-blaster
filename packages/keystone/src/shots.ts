@@ -20,10 +20,22 @@ export interface DropShot { ammo: 'drop'; x: number; z: number }
  * bodies already pulled.
  */
 export interface PullShot { ammo: 'pull'; body: number }
-export type Shot = LaunchShot | CueShot | DropShot | PullShot;
 
 /** Most structure bodies a pull can name (ids 0 to MAX_PULL_BODY): past any level the engines hold. */
 export const MAX_PULL_BODY = 1_000_000;
+
+/**
+ * When a shot goes in. Absent: once the session is aiming (the shot before has settled), as every
+ * shot did before rapid fire. `after`: that many engine steps after the shot before was fired, while
+ * it is still running (rapid fire; Session.fire); a replay fires it there, or at once if the shot
+ * before has settled by then (nothing steps while aiming, so no time passes); on a line's first
+ * shot it changes nothing. Written `@after` at the end of the shot in text (writeShots).
+ */
+export interface ShotTiming { after?: number }
+export type Shot = (LaunchShot | CueShot | DropShot | PullShot) & ShotTiming;
+
+/** The most steps a shot's `after` may name: about 4.6 hours at 60 Hz, past any shot's settle cap. */
+export const MAX_AFTER = 1_000_000;
 
 /** Where a level's shots come from; lengths in h, horizontal ones in cells. */
 export interface LauncherDef { radius: number; y: number; dropY: number }
@@ -43,6 +55,7 @@ function assertInt(name: string, v: number, lo: number, hi: number) {
 
 export function checkShot(s: Shot): void {
   if (!isRackItem(s.ammo)) throw new Error(`shot.ammo = ${JSON.stringify(s.ammo)}, want one of ${RACK_ITEM_NAMES}`);
+  if (s.after !== undefined) assertInt('after', s.after, 0, MAX_AFTER);
   if (s.ammo === 'drop') { assertInt('x', s.x, -4000, 4000); assertInt('z', s.z, -4000, 4000); return; }
   if (s.ammo === PULL) { assertInt('body', s.body, 0, MAX_PULL_BODY); return; }
   assertInt('power', s.power, 0, 100);
@@ -61,17 +74,21 @@ export const shotFields = (ammo: RackItem): readonly string[] => (ammo === 'drop
  * Shots as URL-safe text, for sharing a line: `ammo.f1.f2...` per shot (fields in SHOT_FIELDS
  * order, integers as the shot holds them), shots joined by `_`; e.g. `cannonball.60.8.0.20.95_drop.4.-8`, `pull.17` or
  * `p-wreckingball.60.8.0.20.95_w-grenade.120.4.0.35.80`. Item names never hold `.` or `_` (rack.ts).
+ * A rapid-fire shot ends `@after` (ShotTiming): `w-grenade.120.4.0.35.80@12` went in 12 steps after
+ * the shot before it, while that one was still running. Text without `@` reads as it always has.
  */
 export function writeShots(shots: readonly Shot[]): string {
-  return shots.map((s) => [s.ammo, ...shotFields(s.ammo).map((k) => (s as unknown as Record<string, number>)[k])].join('.')).join('_');
+  return shots.map((s) => [s.ammo, ...shotFields(s.ammo).map((k) => (s as unknown as Record<string, number>)[k])].join('.') + (s.after === undefined ? '' : `@${s.after}`)).join('_');
 }
 
 /** The shots writeShots wrote, each checked (checkShot); throws naming the shot at fault. Empty text is no shots. */
 export function readShots(text: string): Shot[] {
   if (text === '') return [];
   return text.split('_').map((part, i) => {
-    const [ammo, ...vals] = part.split('.');
     const where = `shot ${i + 1} (${part})`;
+    const at = part.split('@');
+    if (at.length > 2) throw new Error(`${where}: at most one @after`);
+    const [ammo, ...vals] = at[0]!.split('.');
     if (!isRackItem(ammo!)) throw new Error(`${where}: ammo must be one of ${RACK_ITEM_NAMES}`);
     const fields = shotFields(ammo);
     if (vals.length !== fields.length) throw new Error(`${where}: ${ammo} takes ${fields.length} fields (${fields.join('.')}), got ${vals.length}`);
@@ -80,6 +97,10 @@ export function readShots(text: string): Shot[] {
       if (!/^-?\d+$/.test(vals[j]!)) throw new Error(`${where}: ${k} must be an integer, not ${vals[j] || 'empty'}`);
       shot[k] = Number(vals[j]);
     });
+    if (at.length === 2) {
+      if (!/^\d+$/.test(at[1]!)) throw new Error(`${where}: after must be a whole number of steps, not ${at[1] || 'empty'}`);
+      shot.after = Number(at[1]);
+    }
     try { checkShot(shot as unknown as Shot); } catch (e) { throw new Error(`${where}: ${(e as Error).message}`); }
     return shot as unknown as Shot;
   });

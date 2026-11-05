@@ -49,6 +49,7 @@
   "packages/game/test/rack-presets-gpu.test.ts": 102.7,
   "packages/game/test/rack-presets.test.ts": 5.1,
   "packages/game/test/rack-weapons-gpu.test.ts": 93.5,
+  "packages/game/test/rapid-e2e.test.ts": 13,
   "packages/game/test/scene.test.ts": 0,
   "packages/game/test/session-e2e.test.ts": 30,
   "packages/game/test/session-file.test.ts": 0,
@@ -71,6 +72,7 @@
   "packages/keystone-lab/test/pull.test.ts": 5.5,
   "packages/keystone-lab/test/rack-grenade.test.ts": 46.7,
   "packages/keystone-lab/test/rack-weapons.test.ts": 119.2,
+  "packages/keystone-lab/test/rapid.test.ts": 0.7,
   "packages/keystone-lab/test/sim-lean.test.ts": 69.7,
   "packages/keystone-lab/test/sim.test.ts": 108.2,
   "packages/keystone-lab/test/stars-into.test.ts": 0,
@@ -101,6 +103,7 @@
   "packages/metrics/test/metrics.test.ts": 1.2,
   "packages/mode-probes/test/x1-dominoes.test.ts": 120,
   "packages/mode-probes/test/x2-demolition.test.ts": 115,
+  "packages/mode-probes/test/x3-towers.test.ts": 150,
   "packages/physics-gpu/test/box-broadphase.test.ts": 129.3,
   "packages/physics-gpu/test/engine-blast.test.ts": 30,
   "packages/physics-gpu/test/engine-dispatch.test.ts": 51.5,
@@ -227,5 +230,6 @@
   "packages/weapons/test/runtime.test.ts": 2,
   "packages/weapons/test/spec.test.ts": 0.3,
   "packages/weapons/test/yield.test.ts": 0,
-  "packages/physics-gpu/test/engine-sleep-skip.test.ts": 25.0
+  "packages/physics-gpu/test/engine-sleep-skip.test.ts": 25.0,
+  "packages/physics-gpu/test/engine-sleep-lists.test.ts": 25.0
 }

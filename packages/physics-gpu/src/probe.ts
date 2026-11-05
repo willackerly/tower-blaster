@@ -89,6 +89,11 @@ export interface ProbeOptions {
   /** P5 (probe-sleep.ts): steps to settle the scenario before timing, then steps timed stage by stage. P6 runs on the last one's contact graph. */
   p5Settle: number;
   p5Steps: number;
+  /**
+   * P5: a blast at the first timed step (impulse P5_BLAST_IMPULSE) of this radius, m, centred at the scene's first
+   * body: with sleep, the steps after it time a scene partly woken (roadmap E2 step 3b). 0, the default, is none.
+   */
+  p5Blast: number;
 }
 
 export const DEFAULT_PROBE: ProbeOptions = {
@@ -126,6 +131,7 @@ export const DEFAULT_PROBE: ProbeOptions = {
   tilePoints: 16,
   p5Settle: 300,
   p5Steps: 30,
+  p5Blast: 0,
 };
 
 /** --quick: every section, smaller (a couple of minutes on a real GPU). */
@@ -1000,7 +1006,8 @@ export function probeMarkdown(r: ProbeResult, header: string): string {
   }
   if (r.p5) {
     const p = r.p5;
-    L.push('', `## P5 Stages of a step: ${p.scenario} ${JSON.stringify(p.params)} N=${p.N}, ${p.iterations} iterations, after ${p.settle} steps; ${p.pairs} pair slots, ${p.colors} colours (${p.uncolored} uncoloured)`, '');
+    const blast = p.blast ? `, a blast of radius ${p.blast} m at the first timed step` : '';
+    L.push('', `## P5 Stages of a step: ${p.scenario} ${JSON.stringify(p.params)} N=${p.N}, ${p.iterations} iterations, after ${p.settle} steps${blast}; ${p.pairs} pair slots, ${p.colors} colours (${p.uncolored} uncoloured), ${p.awake} bodies awake at the end`, '');
     if (Object.keys(p.variant).length) L.push(`Engine variant: ${JSON.stringify(p.variant)}`, '');
     if (p.timestamps) {
       L.push('| Stage | ms | Share of step |', '|---|---|---|');

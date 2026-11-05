@@ -8,6 +8,7 @@ import { loadBundle, openWebGPU, type WebGPUSession } from '@tb/testkit';
 import { STEP_STAGES } from '../src/engine.ts';
 import { DEFAULT_PROBE, probeMarkdown, type ProbeOptions, QUICK_PROBE } from '../src/probe.ts';
 import { componentsCpu } from '../src/probe-sleep.ts';
+import { probeEngine } from '../src/probe-engine.ts';
 import type * as Drivers from './probe-sleep-page.ts';
 
 let gpu: WebGPUSession | null = null;
@@ -44,6 +45,7 @@ describe('probe defaults', () => {
   it('P5 settles 300 steps and times 30 by default (60 and 10 with --quick)', () => {
     expect([DEFAULT_PROBE.p5Settle, DEFAULT_PROBE.p5Steps]).toEqual([300, 30]);
     expect([QUICK_PROBE.p5Settle, QUICK_PROBE.p5Steps]).toEqual([60, 10]);
+    expect(DEFAULT_PROBE.p5Blast).toBe(0);
     expect(DEFAULT_PROBE.sections).toEqual(expect.arrayContaining(['p5', 'p6']));
   });
 });
@@ -133,5 +135,28 @@ describe('P5 and P6 sections', () => {
       expect(md).toContain('## P5 Stages of a step');
       expect(md).toContain('Labels match a CPU union-find: yes');
     }
+  });
+});
+
+describe('P5 blast (roadmap E2 step 3b)', () => {
+  it('with sleep, times a city partly woken by a blast at its first timed step; without the blast, asleep', { timeout: 300_000 }, async (ctx) => {
+    if (!gpu) return ctx.skip();
+    const params: Params = { towers: 2, W: 2, D: 2, H: 3, street: 3 };
+    const n = buildScenario('S14', params, 1).bodies.length;
+    const sleep = probeEngine('avbd-gpu:sleep=true');
+    const base = { ...TINY, scenario: 'S14', params, sections: ['p5'], p5Settle: 70, p5Steps: 4, engine: sleep } as Partial<ProbeOptions>;
+    const quiet = await call('runProbe', base);
+    const woken = await call('runProbe', { ...base, p5Blast: 1.2 });
+    expect([quiet.errors, woken.errors]).toEqual([[], []]);
+    expect([quiet.p5!.blast, quiet.p5!.awake]).toEqual([0, 0]);
+    expect(woken.p5!.blast).toBe(1.2);
+    expect(woken.p5!.awake).toBeGreaterThan(0);
+    expect(woken.p5!.awake).toBeLessThan(n);
+    expect(probeMarkdown(woken, '## test')).toContain('a blast of radius 1.2 m at the first timed step');
+    // Without sleep every body counts as awake; a negative radius is refused.
+    const off = await call('runProbe', { ...base, engine: probeEngine('avbd-gpu'), p5Blast: 1.2 });
+    expect(off.p5!.awake).toBe(n);
+    const bad = await call('runProbe', { ...base, p5Blast: -1 });
+    expect(bad.errors).toEqual([{ section: 'p5', message: 'P5: p5Blast must be a finite number >= 0, got -1' }]);
   });
 });

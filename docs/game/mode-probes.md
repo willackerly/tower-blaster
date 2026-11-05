@@ -18,7 +18,7 @@ Each run writes `results/mode-probes/<id>-<size>-<time>.{json,md}`. `--size ci` 
 |---|---|---|---|---|
 | X1 | Domino propagation and sleep | M6, M16, C22 | CI size passes; full subset below | not run yet |
 | X2 | Order matters in demolition | M5 | CI size: order matters on slab buildings | not run |
-| X3 | Towers as dominoes | M6 Steer | not built | not run |
+| X3 | Towers as dominoes | M6 Steer | CI size: cube and Kapla towers topple on, a bonded pier stops the front | not run |
 | X4 | Cantilevers and hollows hold | M1 Hollow, M8 | not built | not run |
 | X5 | Pinned anchors solid | C8 | not built | not run |
 | X6 | Resonance under a gravity schedule; far-blast shove | M7 | not built | not run |
@@ -58,3 +58,31 @@ Full size: pending (SwiftShader subset and the Metal run).
 CI size on SwiftShader (4 x 4 x 6, one nudge, all at once vs the 0.3 s felling; 2026-11-05): the slab building felled west spills 0.39 of its mass outside the grown footprint and leans 1.87 cells west, against 0 and 0 when every charge fires at once. The cube block spills 0 under both orders (it drops in place). Both come down; no engine limit is hit. So at this size order matters for slab buildings and not for cube lattices, which says M5's levels need bonded or slabbed buildings for timing to be a decision.
 
 Full size: pending (the Metal run: 2 designs x 5 orders x 32 nudges).
+
+## X3 Towers as dominoes
+
+**Question.** Does a falling tower knock the next one over, down a chain of slender towers? M6 Wavefront's Steer verb treats a skyline as a domino layout.
+
+**Rule (roadmap).** At least one design propagates 12 towers in at least 80% of nudges, from chains of 6, 12 and 24. The probe runs chains of 24 and reads reach of at least 6, at least 12 and all 24 off each chain: until the twelfth tower falls, the first 12 of a chain of 24 move exactly as a chain of 12.
+
+**Setup.** Towers about 4 m tall and 1 m square, 0.55 tower heights apart, in three designs:
+- `cubes`: 2 x 2 columns of 0.5 m cubes on the game lattice, 8 courses. These are the game's own towers: four loose columns.
+- `bricks`: a bonded pier of 1 x 0.5 x 0.5 m bricks, two a course, each course turned 90 deg.
+- `kapla`: a crib of 1 x 0.3 x 0.1 m planks on edge, 14 layers, friction 0.45 as S15's planks.
+
+After a 300-step pre-settle, a 0.4 m ball (2,000 kg/m^3) at 3 m/s hits the first tower at three quarters of its height. Each of 32 nudges jitters the push and every body's placement.
+
+**Meters.** A tower has fallen once its centre of mass has moved 0.15 tower heights along the chain or dropped that far. 0.15 h is a pier tipped about 17 deg onto its neighbour, as a domino past X1's 15 deg. Reach is the unbroken run of fallen towers from the first. A run ends 4 s after the last new fall.
+
+**Findings from building it.** A push of 1.5 m/s only rocks the bonded pier: on the f64 reference it tips 0.23 m at the top and recovers. Hence 3 m/s. A pier that tips onto its neighbour and leans there moves its centre only about 0.85 m, so a threshold of 0.25 h missed real falls.
+
+### Results
+
+CI size on SwiftShader (chains of 3, one nudge; 2026-11-05):
+- Cube towers: reach 3 of 3, about 0.75 s per tower. They crumble into the next one rather than tip as a unit.
+- Kapla cribs: reach 3 of 3, about 1.9 s per tower.
+- Bonded brick piers: reach 1. The first pier tips onto the second and leans on it, and the second holds it up.
+
+So at this size the game's own loose towers and the Kapla cribs carry a wavefront and bonded piers stop it, which makes a bonded pier a Steer level's firebreak.
+
+Full size: pending (the Metal run: 3 designs, chains of 24, 32 nudges).
