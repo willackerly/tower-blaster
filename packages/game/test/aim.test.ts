@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import { RapierEngine } from '@tb/adapter-rapier';
-import { emptySnapshot, type Snapshot, type Vec3 } from '@tb/engine-api';
+import { emptySnapshot, type Snapshot, TIER_FREE, type Vec3 } from '@tb/engine-api';
 import { quatFromAxisAngle } from '@tb/geom';
-import { closestApproach, compileLevel, GRAVITY, L1, L4, launcherPos, predictArc, shotToSpawn } from '@tb/keystone';
+import { closestApproach, compileLevel, GRAVITY, L1, L4, launcherPos, predictArc, Session, shotToSpawn } from '@tb/keystone';
 import { eyeOf, frame } from '@tb/render/camera';
-import { azFromYaw, launchY, pick, previewBeads, rayBox, raySphere, REACH, shotFor, SUBSTEPS } from '../src/aim.ts';
+import { azFromYaw, launchY, pick, previewBeads, pullFor, rayBox, raySphere, REACH, shotFor, SUBSTEPS } from '../src/aim.ts';
 
 const c = compileLevel(L1);
 const h = c.frame.unit, p = c.frame.pitch * h;
@@ -80,6 +80,31 @@ describe('ray casts', () => {
     expect(ground.body).toBe(-1);
     expect(ground.point[1]).toBe(0);
     expect(pick({ origin: [10, 5, 10], dir: [0, 1, 0] }, s, c)).toBeNull();
+  });
+  it('looks through a pulled (removed) body to the one behind it', () => {
+    const s = atHome(), ray = { origin: [-20, 5.5 * h, 0.2] as Vec3, dir: [1, 0, 0] as Vec3 };
+    const first = pick(ray, s, c)!;
+    s.tier = new Uint8Array(s.count);
+    s.tier[first.body] = TIER_FREE;
+    const behind = pick(ray, s, c)!;
+    expect(behind.body).not.toBe(first.body);
+    expect(behind.point[0]).toBeGreaterThan(first.point[0] + 0.9 * h);
+  });
+});
+
+describe('pull aim', () => {
+  const se = new Session(c);
+  const s = atHome();
+  it('aims a pull at the block under the cursor; a crown is aimed but refused; the ground or nothing aims none', () => {
+    const side = pick({ origin: [-20, 5.5 * h, 0.2], dir: [1, 0, 0] }, s, c)!;
+    expect(pullFor(se, side)).toEqual({ shot: { ammo: 'pull', body: side.body }, error: 0, reachable: true, refusal: null });
+    const top = pick({ origin: [0.1, 50, 0.1], dir: [0, -1, 0] }, s, c)!;
+    const crown = pullFor(se, top)!;
+    expect(crown.reachable).toBe(false);
+    expect(crown.refusal).toMatch(/is a crown/);
+    expect(pullFor(se, pick({ origin: [10, 5, 10], dir: dir([0, -1, 1]) }, s, c))).toBeNull();
+    expect(pullFor(se, null)).toBeNull();
+    expect(shotFor(c, 'pull', 0, 50, [0, 1, 0])).toBeNull();
   });
 });
 

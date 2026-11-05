@@ -1,9 +1,9 @@
 // Aiming: pick the point under the cursor, turn it into a quantised shot,
 // and preview the shot's arc. The launcher follows the camera around the
 // ring, so the player always shoots away from the eye.
-import type { Quat, Snapshot, Vec3 } from '@tb/engine-api';
+import { type Quat, type Snapshot, TIER_FREE, type Vec3 } from '@tb/engine-api';
 import { rotate } from '@tb/geom';
-import { aimAt, ammoBody, type CompiledLevel, type LaunchItem, type RackItem, GRAVITY, predictArc, type Shot, shotToSpawn } from '@tb/keystone';
+import { aimAt, ammoBody, type CompiledLevel, type LaunchItem, type PullShot, type RackItem, GRAVITY, predictArc, type Session, type Shot, shotToSpawn } from '@tb/keystone';
 
 /**
  * Substeps per step for the arc, when the engine doesn't report them
@@ -61,13 +61,15 @@ export function raySphere(r: Ray, c: Vec3, radius: number): number | null {
 }
 
 /**
- * Nearest structure body under the ray (ammo is never a target), or the
+ * Nearest structure body under the ray (ammo is never a target, nor a pulled
+ * or removed body: a tombstone keeps its pose but is not drawn), or the
  * ground plane (body -1) if the ray hits no body.
  */
 export function pick(r: Ray, s: Snapshot, c: CompiledLevel, groundY = 0): Hit | null {
   let best: Hit | null = null;
   const n = Math.min(c.meta.n, s.count);
   for (let i = 0; i < n; i++) {
+    if (s.tier?.[i] === TIER_FREE) continue;
     const half = (c.scene.bodies[i]!.shape as { half: Vec3 }).half;
     const pos: Vec3 = [s.pos[3 * i]!, s.pos[3 * i + 1]!, s.pos[3 * i + 2]!];
     // Cheap reject on the bounding sphere first.
@@ -82,6 +84,19 @@ export function pick(r: Ray, s: Snapshot, c: CompiledLevel, groundY = 0): Hit | 
 }
 
 export interface Aimed { shot: Shot; error: number; reachable: boolean }
+
+/** A pull aimed at a block: the shot, and why it cannot be pulled (a crown, heritage), or null. */
+export interface AimedPull extends Aimed { shot: PullShot; refusal: string | null }
+
+/**
+ * The pull of the structure body under the cursor (pick's hit), or null over the ground or nothing.
+ * A block the session refuses (a crown, heritage) is aimed but not reachable, so a click does nothing.
+ */
+export function pullFor(session: Pick<Session, 'pullRefusal'>, hit: Hit | null): AimedPull | null {
+  if (!hit || hit.body < 0) return null;
+  const refusal = session.pullRefusal(hit.body);
+  return { shot: { ammo: 'pull', body: hit.body }, error: 0, reachable: refusal === null, refusal };
+}
 
 /**
  * Launch height for a launch item, in 1/4 h: the level's launcher height, or high enough that
@@ -103,7 +118,7 @@ export function shotFor(c: CompiledLevel, ammo: RackItem, az: number, power: num
     return { shot, error: err, reachable: true };
   }
   if (ammo === 'cue') return null; // no starter level racks a cue yet
-  if (ammo === 'pull') return null; // a pull picks a block, not a point (pullFor)
+  if (ammo === 'pull') return null; // a pull picks a block, not a point: pullFor
   const a = aimAt(f, ammo, { az, y: launchY(c, ammo), power }, target, { substeps });
   return { shot: a.shot, error: a.error, reachable: a.error <= REACH };
 }

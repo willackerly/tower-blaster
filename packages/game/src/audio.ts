@@ -43,6 +43,8 @@ export function voicesFor(fb: Feedback, opts: { impacts?: boolean } = {}): Voice
   if (opts.impacts === false && (fb.t === 'impacts' || fb.t === 'contact')) return [];
   switch (fb.t) {
     case 'fired':
+      // A pull: a short dry scrape, the block sliding out.
+      if (fb.ammo === 'pull') return [{ kind: 'noise', freq: 600, gain: 0.22, decay: 0.16, delay: 0 }];
       // A soft whump, heavier for heavier shots.
       return [{ kind: 'tone', wave: 'sine', freq: fb.ammo === 'cannonball' ? 70 : fb.ammo === 'drop' ? 55 : 110, gain: 0.35, decay: 0.22, delay: 0, glide: 0.5 }];
     case 'contact': {

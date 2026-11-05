@@ -36,6 +36,16 @@ describe('formatting', () => {
     expect(hudHtml({ ...base, chips: [{ ammo: 'drop', key: '1', left: 1, total: 1, selected: true }] })).not.toMatch(/Power/);
     expect(hudHtml({ ...base, chips: [], reachable: false })).toMatch(/Out of reach/);
   });
+  it('a pull chip is labelled Pull, has no power bar, and a refused pull says why instead of out of reach', () => {
+    const base = { level: L2, strokes: 0, crownsDown: 0, crownsTotal: 6, heritageBroken: 0, heritageTotal: 36, power: 60, liveLeverage: 0, phase: 'aiming', reachable: null };
+    const chips = rackChips(['pull', 'pull', 'marble'], ['pull', 'marble'], 'pull');
+    const html = hudHtml({ ...base, chips });
+    expect(html).toMatch(/Pull <b>1<\/b>\/2/);
+    expect(html).not.toMatch(/Power/);
+    const refused = hudHtml({ ...base, chips, reachable: false, pullRefused: true });
+    expect(refused).toMatch(/Crowns and heritage stay/);
+    expect(refused).not.toMatch(/Out of reach/);
+  });
   it('the result card lists every score line in order, then the total, stamp and stars', () => {
     const shot = { ke: 1000, yield: 0, dPE_mJ: 2_000_000, leverage: 2, crownsDown: 4, crownsTotal: 4, heritageNew: 0, displaced: 30, outOfLot: 0, pe_mJ: 0, spawnStep: 0, settleStep: 100 };
     const score = levelScore(L1, [shot], true, 40);
