@@ -10,14 +10,14 @@ import { makeEngine, parseSpec } from '@tb/bench';
 import { type BodyDesc, type EngineHealth, type EngineInfo, type InputEvent, limitsHit, type PhysicsEngine, type Snapshot, spawnedBodies } from '@tb/engine-api';
 import { boundingRadius } from '@tb/geom';
 import { DEFAULT_AVBD } from '@tb/physics-ref';
-import { GAME_HELP, gameOverlays, playLine, type GameHandle, installGameStyles, newGameHandle, playKeystone, structureTints, withRules } from '@tb/game';
-import { AVBD_GAP_SLOP, AVBD_ITERATIONS, compileLevel, cubeScale, type Driver, seriesOf, type Shot } from '@tb/keystone';
+import { GAME_HELP, gameOverlays, playLine, type GameHandle, installGameStyles, newGameHandle, playKeystone, structureTints } from '@tb/game';
+import { AVBD_GAP_SLOP, AVBD_ITERATIONS, compileLevel, cubeScale, type Driver, type Shot } from '@tb/keystone';
 import { clampPitch, EYE_ABOVE_GROUND, frame, rayThrough, viewProj, eyeOf, orbitAt, poseOf, type CameraPose, type Orbit } from './camera.ts';
 import { alphaAt, newArrivals, newClock, newPacer, pauseLatch, runFree, stepsDue, taskYield, trackSimSpeed, Window } from './loop.ts';
 import type { V3 } from './math.ts';
 import { HEALTH_MS, limitFix, limitFixLabel, limitsHtml } from './health.ts';
 import { escapeHtml } from './html.ts';
-import { bounceOn, engineSpec, firedBody, froudeSpeed, keystoneEngine, levelOf, parseViewerConfig, presetSearch, quarterMetre, scenarioEngineSpec, sceneTitle, toSearch, type ViewerConfig, viewerScene, withOption, worldEngineSpec } from './params.ts';
+import { bounceOn, engineSpec, firedBody, froudeSpeed, keystoneEngine, levelOf, pageLevels, parseViewerConfig, presetSearch, quarterMetre, scenarioEngineSpec, sceneTitle, toSearch, type ViewerConfig, viewerScene, withOption, worldEngineSpec } from './params.ts';
 import { inLevelGrenade, inLevelWeapon, projectileRadius, pushRadiusLimit, worldGrenade, worldWeapon } from './projectile.ts';
 import { type WeaponScale, WeaponRuntime } from '@tb/weapons';
 import { mountControls } from './controls.ts';
@@ -820,13 +820,12 @@ async function keystoneMode(config: ViewerConfig, device: GPUDevice, renderer: R
       showDev();
     }
   }
-  // A built-in level walks its series of the game's levels (N, P, Next), under the link's rule overrides; a level of
+  // A built-in level walks its series (N, P, Next), the opening one with the link's rack (pageLevels); a level of
   // your own, or a scenario as a level (scenarioLevel), is the only one.
-  const def = levelOf(cfg)!;
-  const levels = cfg.customLevel || !cfg.level ? [def] : seriesOf(cfg.level)!.map((d) => withRules(d, cfg.keystone));
+  const { levels, start } = pageLevels(cfg)!;
   await playKeystone({
     canvas, offscreen: cfg.offscreen, device, renderer, source, hud, ...gameOverlays(),
-    levels, start: levels.findIndex((l) => l.id === def.id), engine: keystoneEngine(cfg.engine), feel: cfg.feel, fail: failGame,
+    levels, start, engine: keystoneEngine(cfg.engine), feel: cfg.feel, fail: failGame,
     // The page's input hook, every step (read when a level loads or a replay starts).
     perStep() {
       const hook = handle.inputHook?.();
@@ -839,8 +838,8 @@ async function keystoneMode(config: ViewerConfig, device: GPUDevice, renderer: R
         handle.health = null;
         readHealth(d);
         if (cfg.level && c.def.id !== cfg.level) {
-          // A line is the level's it was made on.
-          show({ ...cfg, level: c.def.id, shots: null });
+          // A line is the level's it was made on, and so is a rack: the next level plays its own.
+          show({ ...cfg, level: c.def.id, shots: null, rack: null });
           controls.refresh();
           status = ''; warn = false;
         }

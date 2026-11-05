@@ -106,11 +106,11 @@ describe('siege table on the page', () => {
     expect(() => duelsOnDoor(q('duels=yes'))).toThrow(/duels must be 0 or 1/);
     const duels = doorDuels(DUELS, 'D2');
     expect(duels.map((x) => [x.id, x.ruleset, x.current])).toEqual([['D1', 'Two Keeps', false], ['D2', 'Heraldry', true]]);
-    const html = doorHtml({ levels: [], current: -1, settings: DEFAULT_SETTINGS, howTo: false, duels });
+    const html = doorHtml({ levels: [], current: -1, settings: DEFAULT_SETTINGS, howTo: false, advanced: false, duels });
     expect(html).toMatch(/Siege Table · two players/);
     expect(html).toMatch(/data-act="duel" data-arg="D1"/);
     expect(html).toMatch(/card duel current[^]*D2/);
-    expect(doorHtml({ levels: [], current: -1, settings: DEFAULT_SETTINGS, howTo: false })).not.toMatch(/two players/);
+    expect(doorHtml({ levels: [], current: -1, settings: DEFAULT_SETTINGS, howTo: false, advanced: false })).not.toMatch(/two players/);
     expect(doorOnLoad('auto', q('duel=D1'))).toBe(false);
     expect(doorOnLoad('auto', q(''))).toBe(true);
   });

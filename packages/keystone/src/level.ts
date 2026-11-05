@@ -595,6 +595,7 @@ function rackIssues(c: CompiledLevel, engine: LevelEngine): Issue[] {
   for (const item of new Set<string>(def.rack)) {
     const ref = itemRef(item);
     if (!ref) { issues.push({ code: 'rack', message: `rack item ${JSON.stringify(item)} is not one of ${RACK_ITEM_NAMES}` }); continue; }
+    if (ref.kind === 'pull') continue; // fires nothing: no body to tunnel, weigh or prove a dud
     let arm: Arm | null = null;
     if (ref.kind === 'weapon') {
       if (def.weapons && Object.hasOwn(def.weapons, ref.key)) { arm = c.arms[item] ?? null; if (!arm) continue; } // reported above

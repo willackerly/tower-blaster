@@ -1,9 +1,9 @@
 // Shots. Every player action is a quantised integer record, so a session is
 // replayed exactly from (level, shots) and a shot fits in a few bytes. A shot
 // becomes one engine spawn event; nothing else about the engine is touched.
-import { type BodyDesc, massOf, type SpawnEvent, TAG_BALL, type Vec3 } from '@tb/engine-api';
+import { type BodyDesc, massOf, type RemoveEvent, type SpawnEvent, TAG_BALL, type Vec3 } from '@tb/engine-api';
 import { GRAVITY } from './materials.ts';
-import { AMMO, isRackItem, type ItemFrame, type ItemSpec, itemSpec, type LaunchItem, RACK_ITEM_NAMES, type RackItem, speedOf } from './rack.ts';
+import { AMMO, isRackItem, type ItemFrame, type ItemSpec, itemSpec, type LaunchItem, PULL, RACK_ITEM_NAMES, type RackItem, speedOf } from './rack.ts';
 
 /**
  * Fired from the launcher ring: az in 0.5 deg, y in 1/4 h, yaw and pitch in 0.1 deg, power in %.
@@ -14,7 +14,16 @@ export interface LaunchShot { ammo: LaunchItem; az: number; y: number; yaw: numb
 export interface CueShot { ammo: 'cue'; x: number; y: number; z: number; dir: 0 | 1 | 2 | 3; power: number }
 /** An anvil released above (x, z) in 1/4 cells. */
 export interface DropShot { ammo: 'drop'; x: number; z: number }
-export type Shot = LaunchShot | CueShot | DropShot;
+/**
+ * Take structure body `body` (its engine id) out of the world: an engine remove event, nothing
+ * fired (Undercut, docs/game/undercut-bullet-time.md). Session.fire refuses crowns, heritage and
+ * bodies already pulled.
+ */
+export interface PullShot { ammo: 'pull'; body: number }
+export type Shot = LaunchShot | CueShot | DropShot | PullShot;
+
+/** Most structure bodies a pull can name (ids 0 to MAX_PULL_BODY): past any level the engines hold. */
+export const MAX_PULL_BODY = 1_000_000;
 
 /** Where a level's shots come from; lengths in h, horizontal ones in cells. */
 export interface LauncherDef { radius: number; y: number; dropY: number }
@@ -35,6 +44,7 @@ function assertInt(name: string, v: number, lo: number, hi: number) {
 export function checkShot(s: Shot): void {
   if (!isRackItem(s.ammo)) throw new Error(`shot.ammo = ${JSON.stringify(s.ammo)}, want one of ${RACK_ITEM_NAMES}`);
   if (s.ammo === 'drop') { assertInt('x', s.x, -4000, 4000); assertInt('z', s.z, -4000, 4000); return; }
+  if (s.ammo === PULL) { assertInt('body', s.body, 0, MAX_PULL_BODY); return; }
   assertInt('power', s.power, 0, 100);
   if (s.ammo === 'cue') {
     assertInt('x', s.x, -4000, 4000); assertInt('y', s.y, 0, 4000); assertInt('z', s.z, -4000, 4000); assertInt('dir', s.dir, 0, 3);
@@ -45,11 +55,11 @@ export function checkShot(s: Shot): void {
 
 const LAUNCH_FIELDS = ['az', 'y', 'yaw', 'pitch', 'power'] as const;
 /** An item's fields after its name in shot text (writeShots), in this order: every launch item's are LaunchShot's. */
-export const shotFields = (ammo: RackItem): readonly string[] => (ammo === 'drop' ? ['x', 'z'] : ammo === 'cue' ? ['x', 'y', 'z', 'dir', 'power'] : LAUNCH_FIELDS);
+export const shotFields = (ammo: RackItem): readonly string[] => (ammo === 'drop' ? ['x', 'z'] : ammo === 'cue' ? ['x', 'y', 'z', 'dir', 'power'] : ammo === PULL ? ['body'] : LAUNCH_FIELDS);
 
 /**
  * Shots as URL-safe text, for sharing a line: `ammo.f1.f2...` per shot (fields in SHOT_FIELDS
- * order, integers as the shot holds them), shots joined by `_`; e.g. `cannonball.60.8.0.20.95_drop.4.-8` or
+ * order, integers as the shot holds them), shots joined by `_`; e.g. `cannonball.60.8.0.20.95_drop.4.-8`, `pull.17` or
  * `p-wreckingball.60.8.0.20.95_w-grenade.120.4.0.35.80`. Item names never hold `.` or `_` (rack.ts).
  */
 export function writeShots(shots: readonly Shot[]): string {
@@ -98,9 +108,16 @@ export function ammoBody(kind: RackItem, at: ItemFrame, pos: Vec3, vel: Vec3, al
   return { shape, pos, rot: [0, 0, 0, 1], linVel: vel, angVel: [0, 0, 0], density: spec.density, friction: spec.friction, restitution: spec.restitution, tag: TAG_BALL };
 }
 
-/** The spawn event for a shot fired at engine step `step`. */
+/** The engine event for a shot fired at engine step `step`: a spawn, or for a pull the removal of its body. */
+export function shotEvent(f: ShotFrame, shot: Shot, step: number): SpawnEvent | RemoveEvent {
+  if (shot.ammo === PULL) { checkShot(shot); return { step, kind: 'remove', id: shot.body }; }
+  return shotToSpawn(f, shot, step);
+}
+
+/** The spawn event for a shot fired at engine step `step`; throws for a pull, which spawns nothing (shotEvent). */
 export function shotToSpawn(f: ShotFrame, shot: Shot, step: number): SpawnEvent {
   checkShot(shot);
+  if (shot.ammo === PULL) throw new Error(`a ${PULL} spawns nothing: it removes body ${shot.body} (shotEvent)`);
   const h = f.unit, ph = f.pitch * h;
   let body: BodyDesc;
   if (shot.ammo === 'drop') {
@@ -115,6 +132,17 @@ export function shotToSpawn(f: ShotFrame, shot: Shot, step: number): SpawnEvent 
     body = ammoBody(shot.ammo, f, p, [d[0] * v, d[1] * v, d[2] * v]);
   }
   return { step, kind: 'spawn', body };
+}
+
+/**
+ * The energy a pull is charged (J), so leverage stays defined on a level of pulls: the launch energy
+ * of the gentlest shot there is, a marble at power 0 at the level's unit (409 J at h = 0.5 m), the
+ * poke a pull stands in for. Alternatives (the block's weight lifted one h, the friction work under
+ * its load) are weighed in docs/game/undercut-bullet-time.md.
+ */
+export function pullEnergy(f: { unit: number }): number {
+  const v = itemSpec('marble', f.unit).vMin;
+  return 0.5 * massOf(ammoBody('marble', f.unit, [0, 0, 0], [v, 0, 0])) * v * v;
 }
 
 /** Energy the player spent on a shot: kinetic at launch, or potential above the ground for a drop. */

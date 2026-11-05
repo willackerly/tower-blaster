@@ -17,7 +17,7 @@ import { parseSpec } from '@tb/bench';
 import { type BodyDesc, DEFAULT_BLAST_MAX_SPEED, type SceneDesc, type Vec3 } from '@tb/engine-api';
 import { checkLine, type EngineKind, GAME_LOOK, gameLevel, LEVEL_RULE_KEYS, type LevelRules, levelRules, lineOf, lookName, DEFAULT_FEEL, paceFeel, type PaceFeel, rackOf, withRules, writeLevelRules, writePaceFeel } from '@tb/game';
 import { boundingRadius } from '@tb/geom';
-import { AVBD_ITERATIONS, compileLevel, findLevel, type LevelDef, PRESETTLE_STEPS, type RackItem, scenarioLevel, type Shot, writeShots } from '@tb/keystone';
+import { AVBD_ITERATIONS, compileLevel, findLevel, type LevelDef, PRESETTLE_STEPS, type RackItem, scenarioLevel, seriesOf, type Shot, writeShots } from '@tb/keystone';
 import { type AvbdParams, froudeParams } from '@tb/physics-ref';
 import { parseRealOptions, type RealOptions, writeRealOptions } from '@tb/render';
 import { bounceBody, bounceScene, buildScenario, SCENARIOS } from '@tb/scenarios';
@@ -532,6 +532,21 @@ export function levelOf(c: Pick<ViewerConfig, 'level' | 'customLevel'> & Partial
   const authored = c.customLevel ?? (c.level ? levelDef(c.level) ?? null : c.rules === 'keystone' && c.scenario ? scenarioLevel(c.scenario, c.params ?? {}, c.seed ?? 1) : null);
   const def = authored && c.rules === 'keystone' && c.rack ? { ...authored, rack: c.rack } : authored;
   return def && c.rules === 'keystone' && c.keystone ? withRules(def, c.keystone) : def;
+}
+
+/**
+ * The levels the page plays under rules=keystone, and which one it opens on. A built-in level walks its series
+ * (N, P, Next) under the link's rule overrides; the opening one is levelOf's, so keystone.rack replaces its rack
+ * (and retry keeps it), as on the game page (@tb/game main.ts), while the others keep their own. A level of your
+ * own, or a scenario as a level (scenarioLevel), is the only one. Null without a level.
+ */
+export function pageLevels(c: Pick<ViewerConfig, 'level' | 'customLevel'> & Partial<Pick<ViewerConfig, 'rules' | 'scenario' | 'params' | 'seed' | 'keystone' | 'rack'>>): { levels: LevelDef[]; start: number } | null {
+  const def = levelOf(c);
+  if (!def) return null;
+  const series = c.customLevel || !c.level ? null : seriesOf(c.level);
+  if (!series) return { levels: [def], start: 0 };
+  const start = series.findIndex((l) => l.id === def.id);
+  return { levels: series.map((l, i) => (i === start ? def : withRules(l, c.keystone ?? {}))), start };
 }
 
 /** What the HUD calls the scene: the level's id and name (a level of your own says so), or the scenario's title. */

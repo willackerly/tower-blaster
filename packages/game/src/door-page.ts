@@ -44,7 +44,7 @@ export function installDoor(o: DoorOptions, doc: Document = document): DoorPage 
     style.textContent = DOOR_CSS;
     doc.head.append(style);
   }
-  let open = false, howTo = false, armedReset = false, pending: string | null = null, levels: DoorLevel[] = [];
+  let open = false, howTo = false, advanced = false, armedReset = false, pending: string | null = null, levels: DoorLevel[] = [];
   // Compiled once each (B2 and B3 take some 75 ms): the door redraws on every settings click.
   const compiled = new Map<LevelDef, CompiledLevel>();
   const compile = (d: LevelDef) => compiled.get(d) ?? compiled.set(d, compileLevel(d)).get(d)!;
@@ -52,8 +52,9 @@ export function installDoor(o: DoorOptions, doc: Document = document): DoorPage 
   const current = () => o.levels.findIndex((l) => l.id === (pending ?? loaded()));
   const draw = () => {
     levels = doorLevels(o.levels, (id, h) => o.progress.best(id, h), compile);
-    o.root.innerHTML = doorHtml({ levels, current: o.openLevel ? -1 : current(), settings: o.settings.current, howTo, duels: o.duels ?? [] });
-    if (armedReset) o.root.querySelector('[data-act="reset"]')!.textContent = 'Click again to forget every best play';
+    o.root.innerHTML = doorHtml({ levels, current: o.openLevel ? -1 : current(), settings: o.settings.current, howTo, advanced, duels: o.duels ?? [] });
+    const reset = o.root.querySelector('[data-act="reset"]');
+    if (armedReset && reset) reset.textContent = 'Click again to forget every best play';
   };
   const page: DoorPage = {
     show() { armedReset = false; draw(); o.root.classList.add('show'); doc.body.classList.add('door-open'); o.menu.style.display = 'none'; open = true; },
@@ -89,6 +90,11 @@ export function installDoor(o: DoorOptions, doc: Document = document): DoorPage 
         howTo = !howTo;
         draw();
         if (howTo) o.root.querySelector('.how')?.scrollIntoView({ block: 'nearest' });
+        break;
+      case 'advanced':
+        advanced = !advanced;
+        draw();
+        if (advanced) o.root.querySelector('.advanced')?.scrollIntoView({ block: 'nearest' });
         break;
       case 'sound': set({ sound: !o.settings.current.sound }); break;
       case 'look': set({ look: arg }); break;
