@@ -59,6 +59,9 @@ describe('every rack item on the game page', () => {
       expect({ fired: counts.fired, blast: counts.blast ?? 0 }).toEqual({ fired: line.length, blast: blasts });
       // Each blast is drawn (fireball, shell, light: @tb/render blasts.ts) where it went off.
       expect(counts.blastDrawn ?? 0).toBe(blasts);
+      // Every body a weapon spawns (its shell, and any split children) is drawn as a bomb; no other ammo is.
+      const bombs = rack.reduce((a, x) => a + (c.arms[x]?.bodies ?? 0), 0);
+      expect(counts.bomb ?? 0).toBe(bombs);
       expect(await page.evaluate((s) => window.__game.replay(s), line)).toEqual(live);
       expect(errors).toEqual([]);
       await page.close();

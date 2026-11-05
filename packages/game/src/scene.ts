@@ -20,6 +20,11 @@ export const TINT = {
 export const CROWN_GLOW = 0.1;
 /** The block a selected pull would take (play.ts setHover): warm white, glowing, so it reads on any material. */
 export const PULL_HOVER = tintWordOf([1, 0.93, 0.8], 0.55);
+/**
+ * A weapon's shell: painted near-black satin iron (the look's warm ball glow would make it read as one
+ * more ball), with a lit fuse the renderer draws on top (Renderer.fuse). Linear rgb.
+ */
+export const BOMB_FX = { tint: [0.012, 0.012, 0.015] as [number, number, number], paint: true, matte: true };
 const MATERIAL_TINT: Record<string, [number, number, number]> = {
   plaster: TINT.none, stone: [0.62, 0.62, 0.66], iron: [0.3, 0.3, 0.34], ice: [0.62, 0.85, 1], rubber: [0.9, 0.45, 0.55], steel: [0.4, 0.42, 0.46],
 };
@@ -65,7 +70,6 @@ export const TARGET_SCALE = 1.8;
 export const rgbe = (r: number, g: number, b: number, e: number) => (r | (g << 8) | (b << 16) | (Math.round(e * 255) << 24)) >>> 0;
 export const BEAD_COLOUR = rgbe(255, 122, 90, 0.38); // coral, glowing
 export const BEAD_OUT_COLOUR = rgbe(154, 163, 184, 0.06); // grey: out of reach
-
 /**
  * Overlay spheres for an arc preview: beads shrink along the arc so its
  * direction reads at a glance, and the last one marks the aim point.
