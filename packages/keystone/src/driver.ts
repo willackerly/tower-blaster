@@ -129,10 +129,15 @@ export class Driver {
     // Engines number spawns by (step, push order); every spawn pushed before is due by now or later
     // than this one (push's stamping rule), so the ammo comes after exactly those due by now.
     const body = this.level.meta.n + this.spawnSteps.filter((s) => s <= step).length;
-    const { spawn, feedback } = this.session.fire(shot, step, body);
+    const { spawn, event, feedback } = this.session.fire(shot, step, body);
+    this.observer.setBaseline(this.snapshot, step);
+    if (!spawn) {
+      // A pull: one removal, nothing spawned, so later ammo is numbered as if it were not there.
+      this.engine.push([event]);
+      return feedback;
+    }
     this.spawnSteps.push(step);
     this.noteSpawns([spawn]);
-    this.observer.setBaseline(this.snapshot, step);
     // A weapon's fuse starts with its spawn: what it knows at launch (a timer's blast) goes in with it.
     const armed = this.arsenal.launch(shot.ammo, body, step, spawn.body.shape);
     this.pushed.push(...armed);

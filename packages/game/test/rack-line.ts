@@ -12,12 +12,13 @@ export const PRESET_LINE: Shot[] = [
 ];
 
 /**
- * A grenade on L1 (rack-grenade-gpu.test.ts; the reference and Rapier cases are keystone-lab
- * rack-grenade.test.ts): aimed at the tower's middle from L1's par launcher, its proximity
- * fuse sets it off on the tower's face and the blast brings the crowns down.
+ * A grenade on L1 (rack-grenade-gpu.test.ts; the reference case is the last of keystone-lab
+ * rack-grenade.test.ts): the default w-grenade (w-grenadem since 2026-11-05) aimed with aimAt at the
+ * tower's middle from L1's par launcher at full power; its proximity fuse sets it off on the tower's
+ * face (step 314 on the reference) and the blast brings the crowns down.
  */
 export const GRENADE_RACK: RackItem[] = ['w-grenade', 'w-grenade', 'marble'];
-export const GRENADE_LINE: Shot[] = [{ ammo: 'w-grenade', az: 360, y: 8, yaw: 0, pitch: 176, power: 100 }];
+export const GRENADE_LINE: Shot[] = [{ ammo: 'w-grenade', az: 360, y: 8, yaw: 0, pitch: 106, power: 100 }];
 
 /**
  * A firework on L1 (rack-weapons-gpu.test.ts; the reference and Rapier cases are keystone-lab

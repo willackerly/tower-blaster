@@ -103,6 +103,7 @@ export function shotFor(c: CompiledLevel, ammo: RackItem, az: number, power: num
     return { shot, error: err, reachable: true };
   }
   if (ammo === 'cue') return null; // no starter level racks a cue yet
+  if (ammo === 'pull') return null; // a pull picks a block, not a point (pullFor)
   const a = aimAt(f, ammo, { az, y: launchY(c, ammo), power }, target, { substeps });
   return { shot: a.shot, error: a.error, reachable: a.error <= REACH };
 }

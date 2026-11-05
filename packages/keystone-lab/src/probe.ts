@@ -24,7 +24,7 @@ export const POWER_NUDGES = [-3, -2, 0, 2, 3];
 
 /**
  * A nudged copy of a shot. Launch shots move in yaw (0.1 deg) and power;
- * cues move sideways and in power; drops move in x and z.
+ * cues move sideways and in power; drops move in x and z; a pull stays on its block.
  */
 export function nudge(s: Shot, a: number, power: number): Shot {
   const clampP = (p: number) => Math.max(0, Math.min(100, p + power));
@@ -33,6 +33,7 @@ export function nudge(s: Shot, a: number, power: number): Shot {
   const q = Math.abs(a) >= 4 ? Math.sign(a) : 0, qp = Math.abs(power) >= 3 ? Math.sign(power) : 0;
   if (s.ammo === 'drop') return { ...s, x: s.x + q, z: s.z + qp };
   if (s.ammo === 'cue') return s.dir < 2 ? { ...s, z: s.z + q, power: clampP(s.power) } : { ...s, x: s.x + q, power: clampP(s.power) };
+  if (s.ammo === 'pull') return s;
   return { ...s, yaw: s.yaw + a, power: clampP(s.power) };
 }
 

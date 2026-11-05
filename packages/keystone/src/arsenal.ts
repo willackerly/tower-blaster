@@ -26,7 +26,7 @@ import {
   type WeaponScale, type WeaponSpec, WeaponRuntime, weaponBudget, type YieldFill,
 } from '@tb/weapons';
 import type { CompiledLevel } from './level.ts';
-import { type ItemSpec, itemRef, itemSpec, levelWeapon, type RackItem, weaponOf } from './rack.ts';
+import { grenadeShell, type ItemSpec, itemRef, levelWeapon, type RackItem, weaponOf } from './rack.ts';
 
 /** The commonest structure block (by material and size; the first such body on a tie), or null for an empty level. */
 export function levelBlock(c: CompiledLevel): { index: number; mass: number; half: [number, number, number] } | null {
@@ -122,7 +122,7 @@ export function levelArm(c: CompiledLevel, key: string): Arm {
   if (!raw) throw new Error(`${c.def.id} has no weapons.${key}`);
   const fill = levelFill(c);
   if (!('version' in raw)) {
-    const g = levelWeapon(c.def, key)!, shell = itemSpec('w-grenade', c.frame.unit), shape = shapeOf(shell);
+    const g = levelWeapon(c.def, key)!, shell = grenadeShell(c.frame.unit), shape = shapeOf(shell);
     return {
       spec: g, shell, bodies: 1, munitions: [{ path: '', shape, mass: shell.density * volumeOf(shape), speed: shell.vMax, count: 1 }],
       blasts: [{ path: 'blast', blast: g.blast, count: 1 }], yield: nominalYield(g.blast, fill), maxRadius: boundingRadius(shape),

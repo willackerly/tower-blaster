@@ -40,7 +40,7 @@ describe('Session', () => {
     expect(se.canFire('cue')).toBe(false);
     expect(() => se.fire({ ammo: 'drop', x: 0, z: 0 }, 0)).toThrow(/cannot fire drop/);
     const { spawn, feedback } = se.fire(marble, 10);
-    expect(spawn.step).toBe(10);
+    expect(spawn!.step).toBe(10);
     expect(feedback).toEqual([expect.objectContaining({ t: 'fired', body: n, ammo: 'marble' })]);
     expect(se.phase).toBe('running');
     expect(se.rackLeft).toEqual(['cannonball']);
