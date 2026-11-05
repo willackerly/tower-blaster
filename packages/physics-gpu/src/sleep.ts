@@ -37,7 +37,11 @@
 //               which keeps a one-body band of awake bodies next to anything still moving.
 //   decide      per awake body: it falls asleep (awake bit 0, velocities 0) when quiet >= steps << min(wakes, 4)
 //               (the backoff: each wake doubles the wait, up to 16x, so a body cannot flicker) and nothing vetoed it.
-//               A sleeper stays asleep until the wake pass wakes it.
+//               A sleeper stays asleep until the wake pass wakes it. Every body still awake adds 1 to the awake
+//               count (the scratch buffer's last word), which the engine reads back: a step that starts with no
+//               body awake and no input due changes nothing, so the engine skips it (GpuEngineOptions.sleepSkip).
+// A sleeper's own state does not change from step to step (quiet skips it: its counter stays where it fell asleep,
+// at least T, which is all the neighbour veto asks of it), so a skipped step and a run step leave the same state.
 //
 // r is BodyProps.radius, the bounding radius. Removed bodies (tier free) are neither: their flags stay as remove()
 // wrote them, and the colouring treats them as before. Thresholds are in scene units (cube units, plank widths for
@@ -85,7 +89,7 @@ ${wgslStruct(SleepParams)}
 @group(0) @binding(1) var<storage, read_write> bodies: array<Body>;
 @group(0) @binding(2) var<storage, read> props: array<BodyProps>;
 @group(0) @binding(3) var<storage, read_write> state: array<SleepBody>;
-// Per-body words, n each: the veto, the union-find parent, the group's wake mark.
+// Per-body words, n each: the veto, the union-find parent, the group's wake mark; the last word is the awake count.
 @group(0) @binding(4) var<storage, read_write> scratch: array<atomic<u32>>;
 @group(0) @binding(5) var<storage, read> manifolds: array<Manifold>;
 @group(0) @binding(6) var<storage, read> total: array<u32>;
@@ -100,6 +104,7 @@ const BOUND = 1048576u;
 fn veto(i: u32) -> u32 { return i; }
 fn parent(i: u32) -> u32 { return p.n + i; }
 fn mark(i: u32) -> u32 { return 2u * p.n + i; }
+fn awakeCount() -> u32 { return arrayLength(&scratch) - 1u; }
 
 fn removed(i: u32) -> bool { return ((bodies[i].flags >> 8u) & 0xffu) == ${TIER.free}u; }
 fn asleep(i: u32) -> bool { return (bodies[i].flags & 1u) == 0u && !removed(i); }
@@ -219,7 +224,7 @@ fn quiet(@builtin(global_invocation_id) id: vec3u) {
   let i = id.x;
   if (i >= p.n) { return; }
   atomicStore(&scratch[veto(i)], 0u);
-  if (removed(i)) { return; }
+  if (removed(i) || asleep(i)) { return; }
   let b = bodies[i];
   let r = props[i].radius;
   var s = state[i];
@@ -261,7 +266,9 @@ fn decide(@builtin(global_invocation_id) id: vec3u) {
     bodies[i].linVel = vec3f(0.0);
     bodies[i].angVel = vec3f(0.0);
     state[i].slept = 1u;
+    return;
   }
+  atomicAdd(&scratch[awakeCount()], 1u);
 }
 `;
 
@@ -283,7 +290,9 @@ export class SleepPass {
   readonly state: GPUBuffer;
   /** u32 per body: the colouring's seed (Coloring.encode), written by the wake pass. */
   readonly seed: GPUBuffer;
-  private readonly scratch: GPUBuffer;
+  /** The veto, union-find and wake-mark words (3 per body slot), then the awake count after the last sleep pass (u32 at countOffset). */
+  readonly scratch: GPUBuffer;
+  readonly countOffset: number;
   private readonly uniform: GPUBuffer;
   private readonly pipes: Record<'wakeInit' | 'wakeHook' | 'wakeCompress' | 'wakeRules' | 'wakeBlasted' | 'wakeApply' | 'quiet' | 'neighbours' | 'decide', GPUComputePipeline>;
   private readonly bind: GPUBindGroup;
@@ -297,7 +306,9 @@ export class SleepPass {
     const buf = (bytes: number, label: string) => (assertStorageFits(device, bytes, label), device.createBuffer({ size: Math.max(16, bytes), usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC, label }));
     this.state = buf(capacity * SleepBody.size, 'sleep state');
     this.seed = buf(capacity * 4, 'sleep colour seed');
-    this.scratch = buf(3 * capacity * 4, 'sleep scratch');
+    // Exactly 3 words a slot and the count (no rounding up: the count is the last word, arrayLength - 1).
+    this.countOffset = 3 * capacity * 4;
+    this.scratch = buf(this.countOffset + 4, 'sleep scratch');
     this.uniform = device.createBuffer({ size: SleepParams.size, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST, label: 'sleep params' });
     const types: GPUBufferBindingType[] = ['uniform', 'storage', 'read-only-storage', 'storage', 'storage', 'read-only-storage', 'read-only-storage', 'storage'];
     const layout = device.createBindGroupLayout({ entries: types.map((type, binding) => ({ binding, visibility: GPUShaderStage.COMPUTE, buffer: { type } })) });
@@ -341,8 +352,9 @@ export class SleepPass {
     pass.end();
   }
 
-  /** The sleep pass, after the step's solve (it reads the final velocities and poses). */
+  /** The sleep pass, after the step's solve (it reads the final velocities and poses); it leaves the awake count at countOffset. */
   encodeSleep(enc: GPUCommandEncoder, n: number): void {
+    enc.clearBuffer(this.scratch, this.countOffset, 4);
     if (n === 0) return;
     const groups = Math.ceil(n / WG);
     const pass = enc.beginComputePass({ label: 'sleep: sleep' });
