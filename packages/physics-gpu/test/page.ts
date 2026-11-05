@@ -5,7 +5,7 @@ import { Body, BodyProps, field, Manifold, readField, readStruct, Shape, SolverB
 import type { BodyDesc, InputEvent, Quat, Vec3 } from '@tb/engine-api';
 import { buildScenario } from '@tb/scenarios';
 import { bodiesAt } from '@tb/engine-api';
-import { AvbdSolver, Broadphase, Coloring, DEFAULT_DISPATCH, GpuAvbdEngine, type GpuEngineOptions, type GpuRestitutionStats, type HessianForm, MAX_COLORS, Narrowphase, restitutionStatsOf } from '../src/index.ts';
+import { ACTIVE_HEAD, AvbdSolver, Broadphase, Coloring, DEFAULT_DISPATCH, GpuAvbdEngine, type GpuEngineOptions, type GpuRestitutionStats, type HessianForm, MAX_COLORS, Narrowphase, restitutionStatsOf } from '../src/index.ts';
 import { type AvbdParams, DEFAULT_AVBD } from '@tb/physics-ref';
 import type { SceneDesc } from '@tb/engine-api';
 import { colorGraph } from '@tb/physics-ref';
@@ -956,6 +956,30 @@ export async function dispatchCounts(scene: SceneDesc, params: Partial<AvbdParam
   const error = await device.popErrorScope();
   e.dispose();
   return { error: error?.message ?? null, ...counts, colors: d.colors };
+}
+
+/**
+ * Sleep's awake lists (SolverDispatch.awakeLists) as the last of `steps` steps built them (sleepSkip off, so that step
+ * ran): the pair slots listed, of how many, and the bodies listed, sorted; null where the solver has no lists.
+ */
+export async function awakeLists(scene: SceneDesc, steps: number, params: Partial<AvbdParams>, opts: Omit<GpuEngineOptions, 'device'>) {
+  const { device } = await sharedDevice();
+  device.pushErrorScope('validation');
+  const e = new GpuAvbdEngine(params, { ...opts, sleepSkip: false, device });
+  await e.init(scene);
+  for (let i = 0; i < steps; i++) e.step();
+  await e.finish();
+  const solver = (e as unknown as { parts: { solver: AvbdSolver } }).parts.solver;
+  let out: { pairs: number[]; slots: number; bodies: number[]; args: number[] } | null = null;
+  if (solver.active) {
+    const w = new Uint32Array(await readBuffer(device, solver.active));
+    const meta = new Uint32Array(await readBuffer(device, solver.meta));
+    const head = ACTIVE_HEAD, maxPairs = solver.maxPairs, sorted = (a: Uint32Array) => Array.from(a).sort((x, y) => x - y);
+    out = { pairs: sorted(w.slice(head, head + w[6]!)), slots: meta[3]!, bodies: sorted(w.slice(head + maxPairs, head + maxPairs + w[7]!)), args: Array.from(w.slice(0, 6)) };
+  }
+  const error = await device.popErrorScope();
+  e.dispose();
+  return { error: error?.message ?? null, lists: out };
 }
 
 /** The dispatch init() chose, and whether the adapter is software (which sets the tail width's default). */

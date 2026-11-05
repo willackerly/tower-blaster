@@ -58,7 +58,7 @@ export interface SceneFile {
    * absent for none; scoring, autobank, settle and physics: the game's rule overrides, ViewerConfig.keystone,
    * absent when not overridden); absent: the sandbox.
    */
-  rules?: { mode: 'keystone'; hitstop: boolean; slowmo: boolean; budget?: number; tailskip?: boolean; follow?: boolean; shake?: boolean; frames?: FrameMode; shots?: Shot[]; rack?: RackItem[] } & LevelRules;
+  rules?: { mode: 'keystone'; hitstop: boolean; slowmo: boolean; budget?: number; tailskip?: boolean; follow?: boolean; shake?: boolean; frames?: FrameMode; rapid?: boolean; shots?: Shot[]; rack?: RackItem[] } & LevelRules;
   /** How the scene is framed without a camera, and the field of view (ViewerConfig.view; absent, as in files saved before it: today's DEFAULT_FRAMING, so their saved camera shows at 45 rather than 50 degrees). */
   view: Framing;
   /** Collision sound: on, material and every knob (absent in older files: off, the defaults). */
@@ -81,7 +81,7 @@ export function sceneFile(c: ViewerConfig, name: string, camera: CameraPose | nu
     look: { preset: c.look, real: { ...REAL_DEFAULTS, ...c.real } },
     camera,
     view: { ...c.view },
-    ...(c.rules === 'keystone' ? { rules: { mode: c.rules, hitstop: c.feel.hitStop, slowmo: c.feel.slowMo, ...(c.feel.budgetMs !== DEFAULT_FEEL.budgetMs ? { budget: c.feel.budgetMs } : {}), ...(c.feel.tailSkip ? {} : { tailskip: false }), ...(c.feel.follow ? { follow: true } : {}), ...(c.feel.shake ? { shake: true } : {}), ...(c.feel.frames !== DEFAULT_FEEL.frames ? { frames: c.feel.frames } : {}), ...(c.shots?.length ? { shots: c.shots.map((x) => ({ ...x })) } : {}), ...(c.rack ? { rack: [...c.rack] } : {}), ...structuredClone(c.keystone) } } : {}),
+    ...(c.rules === 'keystone' ? { rules: { mode: c.rules, hitstop: c.feel.hitStop, slowmo: c.feel.slowMo, ...(c.feel.budgetMs !== DEFAULT_FEEL.budgetMs ? { budget: c.feel.budgetMs } : {}), ...(c.feel.tailSkip ? {} : { tailskip: false }), ...(c.feel.follow ? { follow: true } : {}), ...(c.feel.shake ? { shake: true } : {}), ...(c.feel.frames !== DEFAULT_FEEL.frames ? { frames: c.feel.frames } : {}), ...(c.feel.rapid ? {} : { rapid: false }), ...(c.shots?.length ? { shots: c.shots.map((x) => ({ ...x })) } : {}), ...(c.rack ? { rack: [...c.rack] } : {}), ...structuredClone(c.keystone) } } : {}),
     sound: { ...c.sound },
   };
 }
@@ -236,7 +236,7 @@ export function parseSceneFile(text: string): { config: ViewerConfig; name: stri
   }
   if (root.rules !== undefined) {
     const r = object(root.rules, 'rules');
-    only(r, ['mode', 'hitstop', 'slowmo', 'budget', 'tailskip', 'follow', 'shake', 'frames', 'shots', 'rack', 'scoring', 'autobank', 'settle', 'physics'], 'rules');
+    only(r, ['mode', 'hitstop', 'slowmo', 'budget', 'tailskip', 'follow', 'shake', 'frames', 'rapid', 'shots', 'rack', 'scoring', 'autobank', 'settle', 'physics'], 'rules');
     q.set('rules', str(r.mode, 'rules.mode'));
     if (r.hitstop !== undefined) q.set('keystone.hitstop', bool(r.hitstop, 'rules.hitstop') ? '1' : '0');
     if (r.slowmo !== undefined) q.set('keystone.slowmo', bool(r.slowmo, 'rules.slowmo') ? '1' : '0');
@@ -245,6 +245,7 @@ export function parseSceneFile(text: string): { config: ViewerConfig; name: stri
     if (r.follow !== undefined) q.set('keystone.follow', bool(r.follow, 'rules.follow') ? '1' : '0');
     if (r.shake !== undefined) q.set('keystone.shake', bool(r.shake, 'rules.shake') ? '1' : '0');
     if (r.frames !== undefined) q.set('keystone.frames', str(r.frames, 'rules.frames'));
+    if (r.rapid !== undefined) q.set('keystone.rapid', bool(r.rapid, 'rules.rapid') ? '1' : '0');
     if (r.shots !== undefined) q.set('keystone.shots', shotsText(r.shots));
     // The rack as its URL key (rackOf checks the names against the level).
     if (r.rack !== undefined) {

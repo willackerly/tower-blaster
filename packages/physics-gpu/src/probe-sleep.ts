@@ -20,6 +20,7 @@
 // As in probe.ts, times from a software adapter or without timestamps are not
 // performance results.
 import { readBuffer } from '@tb/gpu';
+import type { InputEvent } from '@tb/engine-api';
 import { buildScenario } from '@tb/scenarios';
 import { GpuAvbdEngine, type GpuEngineOptions, STEP_STAGES, type StepStage } from './engine.ts';
 import type { ProbeOptions, Stat } from './probe.ts';
@@ -41,7 +42,13 @@ export interface P5Result {
   uncolored: number;
   /** Whether stage times are GPU timestamps; without them only the step's wall time (submit to done) is measured. */
   timestamps: boolean;
+  /** ProbeOptions.p5Blast (0: none), and the bodies awake after the last timed step (all of them without sleep). */
+  blast: number;
+  awake: number;
 }
+
+/** The impulse of P5's blast (ProbeOptions.p5Blast), as the sleep tests' blast on a city (engine-sleep-skip.test.ts). */
+export const P5_BLAST_IMPULSE = 2;
 
 export interface P6Result {
   N: number;
@@ -77,7 +84,10 @@ const MARKER_WGSL = /* wgsl */ `
 /** P5: the step's stages on o.scenario after o.p5Settle steps (the engine variant as P2 builds it). */
 export async function runP5(device: GPUDevice, timestamps: boolean, o: ProbeOptions, engineOpts: Omit<GpuEngineOptions, 'device'>): Promise<{ result: P5Result; engine: GpuAvbdEngine }> {
   const built = buildScenario(o.scenario, o.scenario === 'S4' ? { N: o.N, ...o.params } : o.params, o.seed);
-  const scene = { ...built, gravity: built.gravity.map((g) => g * o.gravityScale) as typeof built.gravity };
+  if (!(Number.isFinite(o.p5Blast) && o.p5Blast >= 0)) throw new Error(`P5: p5Blast must be a finite number >= 0, got ${o.p5Blast}`);
+  const p0 = built.bodies[0]?.pos ?? [0, 0, 0];
+  const blast: InputEvent[] = o.p5Blast > 0 ? [{ step: o.p5Settle, kind: 'blast', blast: { centre: [p0[0], p0[1], p0[2]], radius: o.p5Blast, impulse: P5_BLAST_IMPULSE } }] : [];
+  const scene = { ...built, gravity: built.gravity.map((g) => g * o.gravityScale) as typeof built.gravity, inputs: [...(built.inputs ?? []), ...blast] };
   const e = new GpuAvbdEngine(o.engine?.params ?? {}, { ...engineOpts, device });
   await e.init(scene);
   for (let s = 0; s < o.p5Settle; s++) {
@@ -121,13 +131,14 @@ export async function runP5(device: GPUDevice, timestamps: boolean, o: ProbeOpti
   }
   qs?.destroy(); resolve?.destroy(); sink.destroy();
   const d = await e.diagnostics();
+  const awake = (await e.snapshot()).awake.reduce((a, x) => a + (x ? 1 : 0), 0);
   const empty: Stat = { median: NaN, p10: NaN, p90: NaN, samples: 0 };
   return {
     engine: e,
     result: {
       scenario: o.scenario, params: scene.params as Record<string, number | boolean>, N: e.probeParts().n, iterations: pp.iterations, variant: e.info.variant, settle: o.p5Settle,
       stages: Object.fromEntries(STEP_STAGES.map((s) => [s, per[s].length ? stat(per[s]) : empty])) as Record<StepStage, Stat>,
-      step: stat(steps), pairs: d.pairsWritten, colors: d.colors, uncolored: d.uncolored, timestamps: !!resolve,
+      step: stat(steps), pairs: d.pairsWritten, colors: d.colors, uncolored: d.uncolored, timestamps: !!resolve, blast: o.p5Blast, awake,
     },
   };
 }

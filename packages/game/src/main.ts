@@ -16,7 +16,7 @@ import { doorMode, doorOnLoad, openerFor, preaimMode } from './door.ts';
 import { lookName, onEngine, parseGameParams, withRules } from './params.ts';
 import { browserKeyValue, memoryKeyValue, type ProgressStore, progressStore } from './progress.ts';
 import { bankAfterLine, type SessionFacts, sessionFile, sessionFileName } from './session-file.ts';
-import { CAMERA_KEYS, cameraFeel, type Settings, SettingsStore } from './settings.ts';
+import { CAMERA_KEYS, cameraFeel, RAPID_KEYS, rapidFeel, type Settings, SettingsStore } from './settings.ts';
 import { NO_WEBGPU_HTML, webgpuMissing } from './support.ts';
 import { type GameHandle, newGameHandle, playKeystone, playLine } from './play.ts';
 import { GAME_HELP, installGameStyles } from './ui.ts';
@@ -53,6 +53,8 @@ async function main() {
   // The camera motions: the URL's keystone.follow / keystone.shake where it says, else the Camera setting.
   // One object, read live by the game: a change applies to the shake at once and to the follow from the next shot.
   Object.assign(feel, cameraFeel(feel, q, settings.current.camera));
+  // Rapid fire: the URL's keystone.rapid where it says, else the setting (on by default). Read live: a change applies to the next click.
+  Object.assign(feel, rapidFeel(feel, q, settings.current.rapid));
   const door = doorMode(q), preaim = preaimMode(q), bank = bankAfterLine(q);
   // ?keystone.rack replaces the opening level's rack (its def, so retry keeps it); other levels keep their own.
   // The rule overrides (keystone.scoring, keystone.autobank, physics) apply to every level; stars cast on
@@ -87,8 +89,9 @@ async function main() {
       if (changed === 'sound') handle.setMuted(!st.sound);
       if (changed === 'sharp') handle.maxDpr = st.sharp;
       if (changed === 'camera') Object.assign(feel, cameraFeel(feel, new URLSearchParams(), st.camera));
+      if (changed === 'rapid') Object.assign(feel, rapidFeel(feel, new URLSearchParams(), st.rapid));
       // The setting now says it: the URL keys that set it for this visit go.
-      const u = new URLSearchParams(location.search), keys = changed === 'camera' ? CAMERA_KEYS : [changed];
+      const u = new URLSearchParams(location.search), keys = changed === 'camera' ? CAMERA_KEYS : changed === 'rapid' ? RAPID_KEYS : [changed];
       if (keys.some((k) => u.has(k))) { for (const k of keys) u.delete(k); history.replaceState(null, '', `?${u}`); }
     },
   });

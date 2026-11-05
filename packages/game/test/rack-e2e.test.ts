@@ -67,4 +67,22 @@ describe('every rack item on the game page', () => {
       await page.close();
     }, 300_000);
   }
+
+  it('rapid fire: a marble fired two steps after a cluster is not a bomb, and the bomblets that split later still are (Rapier)', async (ctx) => {
+    if (!game.browser()) return ctx.skip();
+    const rack: RackItem[] = ['w-cluster', 'marble'];
+    const c = compileLevel({ ...L1, rack });
+    const line: Shot[] = [miss(c, 'w-cluster'), { ...miss(c, 'marble'), after: 2 }];
+    const o = await game.open(`/?level=L1&engine=rapier&offscreen=1&keystone.rack=${rack.join(',')}&keystone.shots=${writeShots(line)}`);
+    if (!o) return ctx.skip();
+    const { page, errors } = o;
+    await page.evaluate(() => { window.__game.fast = true; });
+    await page.waitForFunction(() => window.__game.result !== null, undefined, { timeout: 240_000, polling: 100 });
+    const counts = await page.evaluate(() => window.__game.counts);
+    expect(counts.fired).toBe(2);
+    expect(c.arms['w-cluster']!.bodies).toBeGreaterThan(1);
+    expect(counts.bomb ?? 0).toBe(c.arms['w-cluster']!.bodies);
+    expect(errors).toEqual([]);
+    await page.close();
+  }, 300_000);
 });

@@ -18,7 +18,7 @@ export interface SessionFile {
   engine: string;
   /** The GPU adapter (vendor, architecture), or '' for a CPU engine. */
   adapter: string;
-  /** The shots in order, as a keystone.shots line. */
+  /** The shots in order, as a keystone.shots line; a rapid-fire shot ends `@after` (steps after the shot before: @tb/keystone Shot.after). */
   shots: string;
   /** The round ended at a bank (the replay banks once the line has settled: keystone.bank=1). */
   banked: boolean;
