@@ -483,7 +483,13 @@ covered (scrub, woods: albedo 0.05 to 0.15) and come in layers.
   cosines, a fog lookup) on sky pixels below the ridge line only; bench
   variant `real-bare-hills` (the old hills) against `real` measures it.
   The near world sees the horizon at the top of the frame; the far world
-  does not (cost 0 by construction). M5 to be measured.
+  does not (cost 0 by construction). Measured on the M5 Max at f827881
+  (2560x1440, render-f827881-render-2026-11-02T18-44-32-331Z.md, paired
+  marginal of `real` against `real-bare-hills`): the default hills are
+  *cheaper*, -1.8% near 10k, -1.0% near 100k, -6.8% far 10k, -1.7% far
+  100k (GPU p50 1.215 vs 1.308 ms at far 10k). Why the far world gains
+  is not established (it was expected to be 0); the price is at worst
+  nothing.
 - Tests: render-real-ground "scrub cover and a nearer ridge": the default
   hills twice as far from the sky as bare ones (1.9x measured), darker
   than the sky in every channel by 30+, red over blue; the second ridge
@@ -545,8 +551,23 @@ test's summed pixels equal main's exactly):
   landing's dust along the contact plane, a ring; it only lacked the
   weight).
 - Cost: bench variant `real-plain-dust` (the three knobs at 0) against
-  `real-dust` in the same steady shower, column "Dust shape". SwiftShader
-  timings are not results; M5 to be measured.
+  `real-dust` in the same steady shower (about 5,250 puffs alive), column
+  "Dust shape". M5 Max at f827881 (2560x1440,
+  render-f827881-render-2026-11-02T18-44-32-331Z.md, paired marginals):
+  near 10k +0.0% n.s., near 100k +0.2% n.s., far 10k +19.4% [+17.2%,
+  +20.8%] (GPU p50 1.469 vs 1.291 ms, +0.18 ms; wall +0.25 ms), far 100k
+  -0.8%. Read far 10k as the price: the bench's shower sits at the
+  world's target, which in the near world is inside the rubble heap
+  (the puffs fail the depth test before the fragment code runs) and in
+  the far 100k world overlaps a frame the boxes keep busy (the whole
+  shower, shape or not, is n.s. there); only far 10k shows the puffs in
+  the open on a light frame (an inference from the setup; the dust pipeline
+  depth-tests without writing depth). So about 0.2 ms of GPU for a heavy steady
+  shower in plain view, against the 10k cap of 3 ms (1.47 ms used); the
+  100k cap is untouched. Not acted on. If it ever matters: skip the
+  noise where the radial falloff is already 0 (the quad's corners, 21%
+  of its pixels), or narrow the skirt (ground puffs are 1.4x wide, so
+  1.96x the pixels).
 - Tests: render.test.ts, the detector's twin and the GPU detector give a
   flat landing near the ground at least `dustSkirt` (an edge, a side
   knock or a landing 20 cm up their old weight), the step's twin raises
@@ -609,8 +630,13 @@ before: checked on the ground and real-look test frames).
   texel); rocks as tiny physics bodies (bodies are the budget).
 - Cost: per floor pixel with rocks on and in range: 9 placements (a hash
   each, 4 more for the clumping), 9 ray-ellipsoid tests, up to 8 shadow
-  tests. Bench variant `real-rocks` (rocks 0.6, 12 cm) against `real`; M5 to
-  be measured.
+  tests. Bench variant `real-rocks` (rocks 0.6, 12 cm) against `real`. M5
+  Max at f827881 (2560x1440,
+  render-f827881-render-2026-11-02T18-44-32-331Z.md, paired marginals):
+  near 10k +7.7% (GPU p50 2.576 vs 2.389 ms, +0.19 ms), near 100k +2.0%
+  (3.833 vs 3.758, +0.08 ms), far 10k +1.9%, far 100k +1.1%. Near 100k
+  stays under the 4 ms cap at p50 but leaves about 0.17 ms, so rocks stay
+  opt-in.
 - Tests: render-real-rocks.test.ts, straight down at 12 m: rocks 0 at any
   size draws the same frame; every rock the twin places is a dome lit from
   the sun's side (rim contrast over the ground's grain 33 to 102, needs
