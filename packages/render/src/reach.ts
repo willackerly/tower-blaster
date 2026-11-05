@@ -5,7 +5,8 @@
 //
 // What is drawn, all from one sphere imposter of the blast radius:
 //   - a level disc through the landing point: a faint red fill, a solid red
-//     edge exactly at the radius, a crosshair at the centre and a ripple that
+//     edge exactly at the radius with a thin dark stroke outside it (so it
+//     holds on light ground), a target reticle at the centre and a ripple that
 //     runs out to the edge once a second (the blast travelling there);
 //   - the upper half of the sphere's limb, faint, so the zone reads as a dome
 //     (a volume) rather than a flat decal.
@@ -44,7 +45,7 @@ struct ReachFrame { viewProj: mat4x4f, invViewProj: mat4x4f, viewport: vec2f, ti
 
 @vertex fn vsReach(@builtin(vertex_index) vi: u32) -> @builtin(position) vec4f {
   let C = rf.centre;
-  let R = rf.radius;
+  let R = rf.radius * 1.06; // room for the disc's dark outer stroke
   let corner = vec2f(array<f32, 6>(-1.0, 1.0, 1.0, -1.0, 1.0, -1.0)[vi], array<f32, 6>(-1.0, -1.0, 1.0, -1.0, 1.0, 1.0)[vi]);
   let d = length(C);
   if (d < R * 1.05) { return vec4f(corner, 0.5, 1.0); } // the eye is (nearly) inside: the whole screen
@@ -83,13 +84,17 @@ fn depthAt(p: vec3f) -> f32 {
   // Edge band: 4% of the radius, at least two pixels, outside edge at exactly the radius.
   let bw = max(0.04, 2.0 * aa);
   let edge = smoothstep(1.0 - bw - aa, 1.0 - bw, r) * (1.0 - smoothstep(1.0 - aa, 1.0, r));
-  // Crosshair at the landing point: two bars a tenth of the radius long.
+  // A target reticle at the landing point: four ticks on the axes with a gap in the middle (a plain cross read as a first-aid sign).
   let cw = max(0.012, 1.5 * qa);
-  let bar = (1.0 - smoothstep(cw - qa, cw, min(abs(q.x), abs(q.y)))) * (1.0 - smoothstep(0.1, 0.1 + qa, max(abs(q.x), abs(q.y))));
+  let m = max(abs(q.x), abs(q.y));
+  let bar = (1.0 - smoothstep(cw - qa, cw, min(abs(q.x), abs(q.y)))) * smoothstep(0.035, 0.035 + qa, m) * (1.0 - smoothstep(0.12, 0.12 + qa, m));
+  // A thin dark stroke just outside the edge, so the zone holds on light ground (sand, concrete, a pale wall).
+  let sw = max(0.012, 1.2 * aa);
+  let stroke = smoothstep(1.0, 1.0 + aa, r) * (1.0 - smoothstep(1.0 + sw, 1.0 + sw + aa, r));
   // A ripple running from the centre to the edge once a second.
   let ph = fract(rf.time);
   let ripple = exp(-pow((r - ph) / max(0.03, 2.0 * aa), 2.0)) * (1.0 - ph);
-  let onDisc = tp > 0.0 && r < 1.0;
+  let onDisc = tp > 0.0 && r < 1.0 + sw + aa;
 
   // The sphere: front surface, and the chord through a thin layer at the limb (brightest at the silhouette).
   let b = dot(dir, C);
@@ -104,9 +109,11 @@ fn depthAt(p: vec3f) -> f32 {
   let onDome = disc > 0.0 && b + sq > 0.0 && front.y > py;
 
   if (onDisc) {
-    let a = clamp(0.14 + 0.75 * edge + 0.8 * bar + 0.25 * ripple, 0.0, 1.0) * XRAY;
+    let inside = 1.0 - smoothstep(1.0, 1.0 + aa, r);
+    let a = clamp((0.14 + 0.75 * edge + 0.8 * bar + 0.25 * ripple) * inside, 0.0, 1.0) * XRAY;
     let glow = 1.0 + 0.8 * max(edge, bar);
-    out.c = vec4f(RED * rf.gain * glow * XRAY * a, a);
+    let sa = 0.55 * stroke * XRAY;
+    out.c = vec4f(RED * rf.gain * glow * XRAY * a * (1.0 - sa), a + sa - a * sa);
     out.depth = depthAt(dir * tp);
     return out;
   }
