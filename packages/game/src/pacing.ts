@@ -32,9 +32,15 @@ export interface PaceFeel {
   shake: boolean;
   /** Which display frames are drawn (frame-rate.ts FrameGovernor): every one, half on a fast display, or half only while physics is behind. */
   frames: FrameMode;
+  /**
+   * Rapid fire: a shot may go in while the last is still running (it cuts that one: @tb/keystone
+   * Session.fire). On by default (Will, 2026-11-05: waiting for things to settle felt too slow);
+   * keystone.rapid=0 waits for each shot to settle, as before. A line's timed shots (Shot.after) play either way.
+   */
+  rapid: boolean;
 }
 
-/** The URL's keystone.hitstop, keystone.slowmo, keystone.tailskip, keystone.follow, keystone.shake (0 or 1 each), keystone.budget (ms, 0 to 1000) and keystone.frames (all, half, auto); any other value is refused. */
+/** The URL's keystone.hitstop, keystone.slowmo, keystone.tailskip, keystone.follow, keystone.shake, keystone.rapid (0 or 1 each), keystone.budget (ms, 0 to 1000) and keystone.frames (all, half, auto); any other value is refused. */
 export function paceFeel(q: URLSearchParams): PaceFeel {
   const flag = (k: string, dflt: boolean) => {
     const v = q.get(k);
@@ -43,7 +49,7 @@ export function paceFeel(q: URLSearchParams): PaceFeel {
   };
   const b = q.get('keystone.budget'), budgetMs = b === null ? DEFAULT_BUDGET_MS : b.trim() === '' ? NaN : Number(b);
   if (!(budgetMs >= 0 && budgetMs <= 1000)) throw new Error(`keystone.budget must be from 0 to 1000 ms (0: no valve): ${b}`);
-  return { hitStop: flag('keystone.hitstop', false), slowMo: flag('keystone.slowmo', false), budgetMs, tailSkip: flag('keystone.tailskip', true), follow: flag('keystone.follow', false), shake: flag('keystone.shake', false), frames: frameMode(q.get('keystone.frames')) };
+  return { hitStop: flag('keystone.hitstop', false), slowMo: flag('keystone.slowmo', false), budgetMs, tailSkip: flag('keystone.tailskip', true), follow: flag('keystone.follow', false), shake: flag('keystone.shake', false), frames: frameMode(q.get('keystone.frames')), rapid: flag('keystone.rapid', true) };
 }
 
 /** Throws unless f's budget is a number of ms from 0 to 1000 (the Scene panel's field can hold anything). */
@@ -62,6 +68,7 @@ export function writePaceFeel(f: PaceFeel, q: URLSearchParams): void {
   if (f.follow) q.set('keystone.follow', '1');
   if (f.shake) q.set('keystone.shake', '1');
   if (f.frames !== DEFAULT_FEEL.frames) q.set('keystone.frames', f.frames);
+  if (!f.rapid) q.set('keystone.rapid', '0');
 }
 
 /** Hit-stop is counted in frames of 60 Hz, whatever the display's rate. */
@@ -78,8 +85,8 @@ export const VALVE_MIN = 0.25;
  * frames looked the same at both.
  */
 export const DEFAULT_BUDGET_MS = 14;
-/** No juice, the valve at its default budget, the tail skip on, a camera only the player moves, every frame drawn. */
-export const DEFAULT_FEEL: Readonly<PaceFeel> = { hitStop: false, slowMo: false, budgetMs: DEFAULT_BUDGET_MS, tailSkip: true, follow: false, shake: false, frames: 'all' };
+/** No juice, the valve at its default budget, the tail skip on, a camera only the player moves, every frame drawn, rapid fire. */
+export const DEFAULT_FEEL: Readonly<PaceFeel> = { hitStop: false, slowMo: false, budgetMs: DEFAULT_BUDGET_MS, tailSkip: true, follow: false, shake: false, frames: 'all', rapid: true };
 /**
  * Owed time the clock keeps, ms; beyond it the rest is dropped (slow motion, not a burst of catch-up
  * steps after a stall). As the viewer's free loop (loop.ts FREE_MAX_LAG_MS).
