@@ -26,7 +26,7 @@ export const GAME_CSS = `
   .kg-banner { position: fixed; top: 22%; left: 0; right: 0; text-align: center; pointer-events: none; font: 800 44px/1.45 system-ui, sans-serif; letter-spacing: 0.04em; color: #fff; text-shadow: 0 3px 18px rgba(0, 0, 0, 0.45); opacity: 0; }
   .kg-banner.show { animation: kg-banner 1.4s ease-out; }
   .kg-banner.crack { color: #f0806a; }
-  .kg-result { top: 50%; left: 50%; transform: translate(-50%, -50%); min-width: 300px; display: none; padding: 20px 24px; font: 14px/1.45 system-ui, sans-serif; }
+  .kg-result { top: 50%; left: 50%; transform: translate(-50%, -50%); min-width: 300px; max-height: calc(100vh - 24px); overflow-y: auto; box-sizing: border-box; display: none; padding: 20px 24px; font: 14px/1.45 system-ui, sans-serif; }
   .kg-result.show { display: block; animation: kg-rise 0.3s ease-out; }
   .kg-result .name { font-size: 22px; font-weight: 700; }
   .kg-result .sub { color: #9aa3b8; margin-bottom: 10px; }
