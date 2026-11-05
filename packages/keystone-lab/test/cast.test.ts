@@ -158,7 +158,7 @@ function basins(frac: number, lines: Shot[][] = []): CastPlayer {
       lines.push(...batch);
       return batch.map((shots): CastPlay => {
         const t = writeShots(shots), met = h32(t) < basinP(shots, frac), v = h32(`v${t}`), collapse = met ? 0.6 + 0.1 * v : 0.1 * v;
-        return { samples: [{ shots: shots.length, step: 100, met, collapse, crowns: 0, skyline: 1 - collapse, score: Math.round(3000 * collapse), heritage: 0 }], complete: true, steps: 100, hash: 'x', limits: [] };
+        return { samples: [{ shots: shots.length, step: 100, met, collapse, crowns: 0, skyline: 1 - collapse, score: Math.round(3000 * collapse), heritage: 0, pulled: 0 }], complete: true, steps: 100, hash: 'x', limits: [] };
       });
     },
   };
