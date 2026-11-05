@@ -23,9 +23,17 @@ Mouse and pen keep the desktop controls unchanged; the gestures are chosen per e
 
 `?touch=auto|1|0` (default auto). Auto shows the touch face when the primary pointer is coarse (`(pointer: coarse)`: a phone or tablet), then follows the pointer last put down (or hovering, for a mouse or pen). The face is `body.kg-touch` (`GameHandle.input.touch`), and only CSS reads it (`GAME_CSS`): key hints (`kbd`) hide, the chips and result buttons grow, the power buttons show (`.kg-tch`), the help line becomes `TOUCH_HELP`, the door's first how-to line and the opener's hint read for touch (`.kg-desk` / `.kg-tch` pairs). The help line stays visible on a narrow touch screen (it is hidden on a narrow desktop window), since a phone has no other place to learn the gestures in play.
 
+Every touch button is at least 44 px (Apple's 44 pt guideline), lighter than the panel with an outline so it reads as a button. On a phone (narrower than 640 px, or under 500 px tall) the HUD's type and padding compact. Upright, the HUD still spans about a third of the screen's height (`PORTRAIT_HUD_SHARE`, 0.32), so the opening camera frames the structure below it (next paragraph): before that, L1's crowns opened hidden behind the HUD.
+
+**Opening camera on a portrait screen.** `frame()` (`@tb/render/camera`) fitted the structure with the vertical field of view in both directions, which is right for any screen at least as wide as tall. On a phone held upright the view is narrower than tall, so B1's Long Wall opened as a slice of wall. `frame()` and `viewOf()` take the screen's aspect: under 1 the width counts 1/aspect times, and `viewOf` frames a box `1 / (1 - PORTRAIT_HUD_SHARE)` times the structure's height so its top lands below the HUD; at 1 or more nothing changes, bit for bit. Tested over every level: every block corner on screen and below the HUD band, and the width test fails without the fix on L2, L4, B1, B2 and B3. The aspect is read once at load from the canvas's CSS box; turning the phone later does not move the camera (the camera rule).
+
 Other page fixes for phones: the canvas is `100dvh` tall (`100vh` on iOS Safari runs under the address bar), with no text selection or long-press callout. Audio starts on a touch's lift, not its press: for touch, `pointerdown` is not a user activation in the HTML spec, `pointerup` is, so the AudioContext could not resume on the press alone.
 
 The no-WebGPU card stays for phones without WebGPU; its copy now names what works on a phone (recent Chrome on Android, Safari on iOS and iPadOS 26 and later) instead of saying phones mostly cannot.
+
+## Review
+
+Screenshots (composited from offscreen renders: this container's SwiftShader cannot present a WebGPU canvas) in the project files under `touch/`. An independent Opus look found nothing broken and the desktop unchanged, and raised two blockers, both fixed: the HUD hid L1's crowns on an upright phone, and touch targets were under 44 pt. Its follow-up (help line contrast and the cancel wording, "add a finger mid-aim: cancel") is done too. Real-device checks (a phone with WebGPU) are for the playtest round.
 
 ## Alternatives weighed
 
@@ -33,7 +41,8 @@ The no-WebGPU card stays for phones without WebGPU; its copy now names what work
 2. **Aim, then confirm: tap sets the aim, a Fire button fires.** The most precise and the hardest to misfire, but every shot costs two taps in two places, and rapid fire (on by default) wants one motion per shot. Kept in reserve as an option if playtesters misfire; the second-finger cancel covers most of the same need.
 3. **Aim point lifted above the finger** (the finger hides what it touches). The arc comes from the launcher behind the camera, so most of it shows below and beside the finger, and the HUD says when the target is out of reach. Not built: a lifted point makes a tap fire somewhere other than where it landed, which is worse for first-time players. A candidate option (`touch.lift` in px) if the playtest says the finger hides too much.
 4. **Two-finger pan in place of orbit, or three-finger pan.** Not built; desktop pan (right drag, shift drag) has no touch equivalent yet. Orbit and zoom were the brief, and the follow-up is cheap if wanted.
-5. **Touch events (`touchstart` and friends) instead of pointer events.** Pointer events give one code path for mouse, pen and touch with pointer capture, and Chromium, Safari and Firefox all deliver them for touch. Touch events would need a second path for no gain.
+5. **A portrait HUD that collapses to a strip** (tap to expand) instead of framing the structure below it. More screen for the scene, but one more control to learn and the objective out of sight; framing below the HUD needs nothing from the player.
+6. **Touch events (`touchstart` and friends) instead of pointer events.** Pointer events give one code path for mouse, pen and touch with pointer capture, and Chromium, Safari and Firefox all deliver them for touch. Touch events would need a second path for no gain.
 
 ## Not done here
 

@@ -119,7 +119,7 @@ export function hudHtml(s: HudState): string {
     ${heritage}
     <div class="row"><span>Leverage</span><span>${fmtLeverage(s.liveLeverage)}</span></div>
     <div class="chips">${chips}</div>
-    ${s.opener ? `<div class="row">${OPENER_BUTTON}<span class="small"><span class="kg-desk">or aim and click</span><span class="kg-tch">or drag to aim, lift to fire</span></span></div>` : ''}
+    ${s.opener ? `<div class="row">${OPENER_BUTTON}<span class="small"><span class="kg-desk">or aim and click</span><span class="kg-tch">or drag and lift</span></span></div>` : ''}
     ${power}${reach}${outcome && s.canBank ? `<div class="row">${BANK_BUTTON}<span class="small">end here, keep the rack</span></div>` : ''}`;
 }
 

@@ -1,9 +1,10 @@
 // The game's camera (play.ts viewOf, orbitDrag): framed over each level with the viewer's floor, so dragging up past
 // level looks up (the eye slides in along its line and stays EYE_ABOVE_GROUND over the ground, y 0).
 import { describe, expect, it } from 'vitest';
-import { compileLevel, LEVELS } from '@tb/keystone';
-import { EYE_ABOVE_GROUND, eyeOf, MAX_PITCH, type Orbit } from '@tb/render/camera';
+import { BIG_LEVELS, compileLevel, LEVELS } from '@tb/keystone';
+import { EYE_ABOVE_GROUND, eyeOf, MAX_PITCH, type Orbit, viewProj } from '@tb/render/camera';
 import { orbitDrag, viewOf } from '../src/play.ts';
+import { PORTRAIT_HUD_SHARE } from '../src/view.ts';
 
 describe('game camera', () => {
   it.each(LEVELS.map((l) => [l.id, l] as const))('%s: opens looking down with the floor set; dragging up looks up from above the ground, and back', (_, def) => {
@@ -28,6 +29,26 @@ describe('game camera', () => {
     expect(o.pitch).toBeCloseTo(start.pitch, 12);
     expect(o.distance).toBe(start.distance);
     eyeOf(o).forEach((x, k) => expect(x).toBeCloseTo(eyeOf(start)[k]!, 9));
+  });
+
+  it.each([...LEVELS, ...BIG_LEVELS].map((l) => [l.id, l] as const))('%s: a phone held upright frames the whole structure below the HUD; a wide screen frames as before, bit for bit', async (_, def) => {
+    const { transform } = await import('@tb/render/math');
+    const c = compileLevel(def), base = viewOf(c);
+    for (const a of [1, 640 / 400, 16 / 9]) expect(viewOf(c, a)).toEqual(base);
+    const a = 390 / 844, o = viewOf(c, a), m = viewProj(o, a);
+    expect(o.distance).toBeGreaterThanOrEqual(base.distance);
+    expect({ yaw: o.yaw, pitch: o.pitch }).toEqual({ yaw: base.yaw, pitch: base.pitch });
+    // Every block's box corners are on screen and below the HUD's band at the top (PORTRAIT_HUD_SHARE of the height).
+    let worst = 0, highest = -Infinity;
+    for (let i = 0; i < c.meta.n; i++) for (const sx of [-1, 1]) for (const sy of [-1, 1]) for (const sz of [-1, 1]) {
+      const p = [0, 1, 2].map((k) => c.meta.home[3 * i + k]! + [sx, sy, sz][k]! * c.meta.half[3 * i + k]!) as [number, number, number];
+      const [px, py, , pw] = transform(m, p);
+      expect(pw).toBeGreaterThan(0);
+      worst = Math.max(worst, Math.abs(px / pw), Math.abs(py / pw));
+      highest = Math.max(highest, py / pw);
+    }
+    expect(worst).toBeLessThanOrEqual(1);
+    expect(highest).toBeLessThanOrEqual(1 - 2 * PORTRAIT_HUD_SHARE);
   });
 
   it('a sideways drag turns about the target', () => {

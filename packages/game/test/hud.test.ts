@@ -48,7 +48,7 @@ describe('formatting', () => {
     expect(html).toMatch(/Power <kbd>Q<\/kbd><kbd>E<\/kbd>/);
     expect(hudHtml({ ...base, chips: rackChips(['drop'], ['drop'], 'drop') })).not.toContain('data-act="power"');
     const opener = hudHtml({ ...base, chips: [], opener: true });
-    expect(opener).toMatch(/<span class="kg-desk">or aim and click<\/span><span class="kg-tch">or drag to aim, lift to fire<\/span>/);
+    expect(opener).toMatch(/<span class="kg-desk">or aim and click<\/span><span class="kg-tch">or drag and lift<\/span>/);
   });
   it('a hold level (Undercut Hollow) shows the share pulled and asks to keep the crown up', () => {
     const base = { level: U3, strokes: 2, crownsDown: 0, crownsTotal: 1, heritageBroken: 0, heritageTotal: 0, power: 60, liveLeverage: 0, phase: 'aiming', reachable: null, chips: rackChips(U3.rack, U3.rack.slice(2), 'pull') };

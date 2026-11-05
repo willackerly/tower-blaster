@@ -466,7 +466,8 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     selected = nextSelection(c.def.rack, driver.session.rackLeft, retry ? selected : null);
     opener = env.opener?.(c) ?? null;
     if (!retry) {
-      orbit = viewOf(c);
+      // A phone held upright frames the width too (the CSS box: the canvas may not be sized for it yet).
+      orbit = viewOf(c, offscreen ? aspect() : canvas.clientWidth / Math.max(1, canvas.clientHeight));
       setPower(100);
       // The play area: the lot (where debris counts), grown a little, up to the structure's top.
       const half: Vec3 = [(c.lot.max[0] - c.lot.min[0]) / 2 + 2, c.height / 2 + 2, (c.lot.max[1] - c.lot.min[1]) / 2 + 2];
