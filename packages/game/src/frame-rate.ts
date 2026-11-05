@@ -1,13 +1,22 @@
 // Which display frames to draw. Physics and frames share one GPU queue: on
 // the M5 at 10k cubes a render frame costs about 2-3 ms of GPU, so 120 frames
 // a second take a quarter or more of the GPU while a collapse needs all of it
-// for physics (G4 probe: steps of about 19 ms, sim at 0.64-0.82x). Frames are
-// interpolated between physics states (arrivals.ts), so 60 drawn frames a
-// second still move smoothly. FrameGovernor decimates the display rate by a
-// whole factor that keeps at least MIN_DRAWN_HZ drawn frames a second
-// (120 Hz -> 60, 144 -> 72, 240 -> 60; 60 to 100 Hz are never decimated):
-// - 'all': every frame (the default until the M5 A/B, docs/pipelining.md).
-// - 'half': decimated always (the A/B's other arm).
+// for physics. Frames are interpolated between physics states (arrivals.ts),
+// so 60 drawn frames a second still move smoothly. On the M5 at 120 Hz (E7
+// A/B, a406519, docs/pipelining.md) drawing fewer frames through a 10k
+// cluster collapse raised the sim from 0.68x to 0.78-0.81x real time and cut
+// the shot's wall time by 13-15%.
+//
+// While decimating, FrameGovernor draws a display frame once TARGET_MS
+// (1/60 s) has passed since the last drawn one, less half a display interval
+// of slack, which picks the whole fraction of the display rate nearest 60:
+// 120 Hz -> 60, 144 -> 72, 165 -> 55, 240 -> 60. A display under DECIMATE_HZ
+// (60-100 Hz) is never decimated. It decides by elapsed time, not by counting
+// frames: the first version counted frames against an estimate of the
+// display's rate, the estimate collapsed when rAF ticks came unevenly, and
+// it drew 30 frames a second instead of 60 (the same A/B).
+// - 'all': every frame (the default).
+// - 'half': decimated always.
 // - 'auto': decimated only while physics is behind real time, and back to
 //   every frame as soon as physics stops (a shot ends: aiming wants every
 //   frame) or after it has had headroom for HOLD_MS.
@@ -16,8 +25,14 @@
 export type FrameMode = 'all' | 'half' | 'auto';
 export const FRAME_MODES: readonly FrameMode[] = ['all', 'half', 'auto'];
 
-/** Drawn frames a second the governor never goes below: a display under twice this (110 Hz) is never decimated. */
-export const MIN_DRAWN_HZ = 55;
+/** While decimating, a frame is drawn once this long (1/60 s) has passed since the last one drawn, less half a display interval. */
+export const TARGET_MS = 1000 / 60;
+/** Only a display at least this fast is decimated: at 60-100 Hz every frame is drawn. */
+export const DECIMATE_HZ = 110;
+/** rAF intervals the display's rate is the median of. */
+export const INTERVAL_WINDOW = 31;
+/** Intervals needed before the median is trusted: until then every frame is drawn (the first rAF ticks after load come unevenly). */
+export const MIN_INTERVALS = 8;
 /** Headroom must last this long before 'auto' draws every frame again, so it does not flip at each step. */
 export const HOLD_MS = 1000;
 /**
@@ -26,10 +41,6 @@ export const HOLD_MS = 1000;
  * two steps' worth of frames, still fits.
  */
 export const CLEAR_SHARE = 0.6;
-/** An rAF interval over this many times the estimate is a missed frame, not the display's rate. */
-export const MISSED = 1.5;
-/** Decimation never skips more than this many frames in a row, whatever the display's rate. */
-export const MAX_FACTOR = 4;
 
 /** What 'auto' reads each frame. */
 export interface PhysicsLoad {
@@ -41,23 +52,25 @@ export interface PhysicsLoad {
   clear: boolean;
 }
 
-/** The whole decimation factor for a display frame interval (ms): the most that keeps MIN_DRAWN_HZ, at least 1. */
-export function factorFor(intervalMs: number): number {
-  if (!(intervalMs > 0)) return 1;
-  const k = Math.floor(1000 / MIN_DRAWN_HZ / intervalMs);
-  return Math.min(MAX_FACTOR, Math.max(1, k));
+/** The median of xs (NaN when empty). */
+function median(xs: readonly number[]): number {
+  if (!xs.length) return NaN;
+  const s = [...xs].sort((a, b) => a - b);
+  return s[s.length >> 1]!;
 }
 
 export class FrameGovernor {
-  /** Display frame interval (ms): an EMA over rAF intervals, leaving out missed frames (over MISSED x the estimate). */
+  /** The display's frame interval (ms): the median of the last INTERVAL_WINDOW rAF intervals (NaN before the second frame). */
   interval = NaN;
-  /** Whether frames are being decimated now. */
+  /** Whether decimation is on now: the mode wants it and the display is at least DECIMATE_HZ. */
   decimating = false;
   /** Frames drawn, and display frames skipped, since construction. */
   drawn = 0;
   skipped = 0;
   private last = NaN;
-  private sinceDraw = 0;
+  private lastDrawn = NaN;
+  private intervals: number[] = [];
+  private wanted = false;
   private clearSince = NaN;
 
   constructor(public mode: FrameMode = 'all') {}
@@ -69,15 +82,19 @@ export class FrameGovernor {
   frame(now: number, load: PhysicsLoad, force = false): boolean {
     if (!Number.isNaN(this.last)) {
       const dt = now - this.last;
-      // A long gap (a hidden tab, a stall) or a missed frame says nothing about the display's rate.
-      if (dt > 0 && dt < 100 && !(dt > MISSED * this.interval)) this.interval = Number.isNaN(this.interval) ? dt : 0.9 * this.interval + 0.1 * dt;
+      // A long gap (a hidden tab, a stall) says nothing about the display's rate.
+      if (dt > 0 && dt < 100) {
+        this.intervals.push(dt);
+        if (this.intervals.length > INTERVAL_WINDOW) this.intervals.shift();
+        this.interval = median(this.intervals);
+      }
     }
     this.last = now;
-    this.decimating = this.wants(now, load);
-    const k = this.decimating ? factorFor(this.interval) : 1;
-    this.sinceDraw++;
-    if (force || this.sinceDraw >= k) {
-      this.sinceDraw = 0;
+    this.wanted = this.wants(now, load);
+    this.decimating = this.wanted && this.intervals.length >= MIN_INTERVALS && this.interval < 1000 / DECIMATE_HZ;
+    const due = !this.decimating || Number.isNaN(this.lastDrawn) || now - this.lastDrawn >= TARGET_MS - this.interval / 2;
+    if (force || due) {
+      this.lastDrawn = now;
       this.drawn++;
       return true;
     }
@@ -90,7 +107,7 @@ export class FrameGovernor {
     if (this.mode === 'half') return true;
     if (load.idle) { this.clearSince = NaN; return false; }
     if (load.behind) { this.clearSince = NaN; return true; }
-    if (!this.decimating) return false;
+    if (!this.wanted) return false;
     if (!load.clear) { this.clearSince = NaN; return true; }
     if (Number.isNaN(this.clearSince)) this.clearSince = now;
     return now - this.clearSince < HOLD_MS;

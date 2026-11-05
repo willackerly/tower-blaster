@@ -54,8 +54,8 @@ function recipe(): CastRecipe {
   if (r === 'short') return SHORT_RECIPE;
   if (r === 'full') return FULL_RECIPE;
   const n = r.split(',').map(Number);
-  if (n.length !== 5 || !n.every((x) => Number.isInteger(x) && x >= 0) || n[0]! < 1 || n[4]! < 1) throw new Error(`--recipe is short, full, or competent,climbLines,climbMoves,climbNudges,cloud (whole numbers): ${r}`);
-  return { competent: n[0]!, climbLines: n[1]!, climbMoves: n[2]!, climbNudges: n[3]!, cloud: n[4]! };
+  if ((n.length !== 5 && n.length !== 7) || !n.every((x) => Number.isInteger(x) && x >= 0) || n[0]! < 1 || n[4]! < 1) throw new Error(`--recipe is short, full, or competent,climbLines,climbMoves,climbNudges,cloud[,confirmLines,confirmNudges] (whole numbers): ${r}`);
+  return { competent: n[0]!, climbLines: n[1]!, climbMoves: n[2]!, climbNudges: n[3]!, cloud: n[4]!, confirmLines: n[5] ?? 0, confirmNudges: n[6] ?? 0 };
 }
 
 const def = level(), rec = recipe(), engine = flags.get('engine') ?? 'gpu';
@@ -78,13 +78,19 @@ if (flags.has('pool')) {
     '|---|---|---|---|---|---|---|---|---|',
     row('competent ends', p.competent),
     row('nudge cloud ends', p.cloud),
+    '',
+    '| Gate | Result | Value | Need | What |',
+    '|---|---|---|---|---|',
+    ...Object.entries(p.gates).map(([k, g]) => `| ${k} | ${g.pass ? 'pass' : '**fail**'} | ${f3(g.value)} | ${f3(g.need)} | ${g.note} |`),
   ].join('\n');
   console.log(md);
   console.log(`stars: ${JSON.stringify(p.stars)}`);
   if (flags.has('out')) writeFileSync(flags.get('out')!, JSON.stringify(p, null, 1));
   if (flags.has('md')) writeFileSync(flags.get('md')!, md);
-  intoStarsFile(def.id, p.stars);
-  process.exit();
+  const passed = Object.values(p.gates).every((g) => g.pass);
+  if (passed) intoStarsFile(def.id, p.stars);
+  else if (flags.has('stars-into')) console.log('--stars-into: not written, a pooled gate failed');
+  process.exit(passed ? 0 : 2);
 }
 /** --stars-into path.json: set this level's stars in a stars file (@tb/keystone stars.json), keeping the rest. */
 function intoStarsFile(id: string, stars: StarsDef): void {

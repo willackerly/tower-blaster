@@ -47,6 +47,8 @@ export interface HudState {
   liveLeverage: number;
   phase: string;
   reachable: boolean | null;
+  /** The pull under the cursor is refused (a crown or heritage block): said instead of out of reach. */
+  pullRefused?: boolean;
   /** Outcome levels: collapse fraction D now, the objective met at the last settle, and whether a bank is possible. */
   collapse?: number;
   met?: boolean;
@@ -83,8 +85,9 @@ export function hudHtml(s: HudState): string {
   const d = s.level;
   const chips = s.chips.map((c) => `<span class="chip${c.selected ? ' on' : ''}${c.left ? '' : ' spent'}"><kbd>${c.key}</kbd> ${esc(itemLabel(c.ammo))} <b>${c.left}</b>/${c.total}</span>`).join('');
   const heritage = s.heritageTotal ? `<div class="row"><span>Heritage</span><span class="${s.heritageBroken ? 'bad' : 'ok'}">${s.heritageBroken ? `${s.heritageBroken} cracked` : 'intact'}</span></div>` : '';
-  const power = s.chips.find((c) => c.selected)?.ammo === 'drop' ? '' : `<div class="row"><span>Power <kbd>Q</kbd><kbd>E</kbd></span><span class="bar"><i style="width:${s.power}%"></i></span></div>`;
-  const reach = s.reachable === false ? '<div class="bad small">Out of reach at this power</div>' : '';
+  const sel = s.chips.find((c) => c.selected)?.ammo;
+  const power = sel === 'drop' || sel === 'pull' ? '' : `<div class="row"><span>Power <kbd>Q</kbd><kbd>E</kbd></span><span class="bar"><i style="width:${s.power}%"></i></span></div>`;
+  const reach = s.pullRefused ? '<div class="bad small">Crowns and heritage stay: pull a plain block</div>' : s.reachable === false ? '<div class="bad small">Out of reach at this power</div>' : '';
   const outcome = scoringOf(d) === 'outcome';
   const head = outcome
     ? `<div class="row"><span>Shot ${s.strokes}</span><span>Down <b class="down">${pct(s.collapse ?? 0)}</b></span></div>

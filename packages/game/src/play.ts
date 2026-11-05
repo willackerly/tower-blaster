@@ -11,7 +11,7 @@ import { type RackItem, type CompiledLevel, compileLevel, Driver, Duel, type Due
 import { clampPitch, eyeOf, type Orbit, rayThrough, viewProj } from '@tb/render/camera';
 import type { PixelStats, Renderer, SnapshotSource } from '@tb/render';
 import type { HostStats } from '@tb/audio';
-import { type Aimed, azFromYaw, pick, previewBeads, shotFor, SUBSTEPS } from './aim.ts';
+import { type Aimed, azFromYaw, pick, previewBeads, pullFor, shotFor, SUBSTEPS } from './aim.ts';
 import { Synth, type Voice, voicesFor } from './audio.ts';
 import { CollapseSound, type CollapseStatus } from './collapse-sound.ts';
 import type { GameSoundMode } from './sound-map.ts';
@@ -26,7 +26,7 @@ import { CameraJuice, contactJuice } from './juice.ts';
 import { alphaAt, arrived, DEFAULT_FEEL, newArrivals, Pacer, type PaceFeel, SLOW_TAG_BELOW, slowTag, SpeedMeter, TailSkip } from './pacing.ts';
 import { COST_WINDOW, runPhysics, wakeable } from './physics-loop.ts';
 import { CLEAR_SHARE, FrameGovernor } from './frame-rate.ts';
-import { beadOverlay, CROWN_GLOW, regrowDuration, regrowScales, structureTints, TINT, tintWordOf } from './scene.ts';
+import { beadOverlay, CROWN_GLOW, PULL_HOVER, regrowDuration, regrowScales, structureTints, TINT, tintOf, tintWordOf } from './scene.ts';
 
 /** What a page (and its tests) can see and do while Keystone plays: window.__game on the game page. */
 export interface GameHandle {
@@ -72,7 +72,7 @@ export interface GameHandle {
    * GPU, physics-loop.ts), in order of landing.
    */
   timing: { loadMs: number; stepMs: number[]; moving: number[]; frameMs: number[]; costMs: number[] };
-  /** Display frames drawn and skipped (keystone.frames, frame-rate.ts), and whether decimation is on now (a display under 110 Hz skips nothing even then). */
+  /** Display frames drawn and skipped (keystone.frames, frame-rate.ts), and whether decimation is on now (wanted, and a display of 110 Hz or more). */
   draws: { drawn: number; skipped: number; decimating: boolean };
   fire(shot: Shot): boolean;
   /** Outcome levels: end the level now, keeping the rack left (key B, the HUD's Bank button); false when it cannot. */
@@ -125,6 +125,8 @@ const sum = (a: Uint8Array) => a.reduce((x, y) => x + y, 0);
 function goalMetSafe(g: Goal, f: Parameters<typeof goalMet>[1]): boolean {
   try { return goalMet(g.when, f); } catch (e) { console.warn(`goal ${g.id}: ${(e as Error).message}`); return false; }
 }
+/** A pull's dust puff (Renderer.burst strength, m/s): a soft one, about a slow contact's. */
+export const PULL_PUFF = 2;
 const median = (xs: number[]) => { if (!xs.length) return NaN; const s = [...xs].sort((a, b) => a - b); return s[Math.floor(s.length / 2)]!; };
 
 /** The page's last stage: a fast compressor at -1 dBFS, so the cues and the collision sound (each limited) never clip together. */
@@ -318,6 +320,8 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
   let opener: Shot | null = null;
   let power = 100;
   let aimed: Aimed | null = null, beads: Float64Array | null = null, aimDirty = false;
+  /** The block a selected pull would take, lit (PULL_HOVER) until the cursor leaves it or it is pulled. */
+  let hover: number | null = null;
   let pointer: [number, number] | null = null;
   let regrowT: number | null = null;
   let fastHeld = false;
@@ -424,6 +428,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     regrowT = 0;
     aimed = null;
     beads = null;
+    hover = null; // the new level's tints are fresh
     aimDirty = true;
     crownsShown = 0;
     const ls = env.lotSheet?.(c) ?? null;
@@ -443,15 +448,32 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     env.banner.classList.add('show');
   }
 
+  /** Light the block a pull would take (null: none), putting the last one back to its own tint. */
+  function setHover(b: number | null) {
+    if (b === hover) return;
+    if (hover !== null) renderer.setFx(hover, Uint32Array.of(tintOf(c, hover)));
+    hover = b;
+    if (b !== null) renderer.setFx(b, Uint32Array.of(PULL_HOVER));
+  }
+
   function updateAim() {
     aimDirty = false;
     aimed = null;
     beads = null;
-    if (!pointer || !selected || driver.session.phase !== 'aiming' || regrowT !== null) return;
-    const hit = pick(rayThrough(orbit, aspect(), pointer[0], pointer[1]), driver.snapshot, c);
-    if (!hit) return;
-    aimed = shotFor(c, selected, azFromYaw(orbit.yaw), power, hit.point, substeps);
-    if (aimed) beads = previewBeads(c, aimed.shot, hit.point, substeps);
+    let lit: number | null = null;
+    if (pointer && selected && driver.session.phase === 'aiming' && regrowT === null) {
+      const hit = pick(rayThrough(orbit, aspect(), pointer[0], pointer[1]), driver.snapshot, c);
+      if (selected === 'pull') {
+        // A pull takes the block under the cursor: lit when it can be taken, no arc.
+        const p = pullFor(driver.session, hit);
+        aimed = p;
+        if (p?.reachable) lit = p.shot.body;
+      } else if (hit) {
+        aimed = shotFor(c, selected, azFromYaw(orbit.yaw), power, hit.point, substeps);
+        if (aimed) beads = previewBeads(c, aimed.shot, hit.point, substeps);
+      }
+    }
+    setHover(lit);
   }
 
   /** Mirror the duel onto the handle. */
@@ -483,7 +505,14 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
       handle.counts[f.t] = (handle.counts[f.t] ?? 0) + 1;
       voices.push(...voicesFor(f, { impacts: !collapse }));
       switch (f.t) {
-        case 'fired': juice.kick(f.ammo === 'cannonball' ? 0.05 : 0.03); break;
+        case 'fired':
+          juice.kick(f.ammo === 'cannonball' ? 0.05 : 0.03);
+          if (f.ammo === 'pull') {
+            // The block is gone (the renderer skips the tombstone): a puff of dust where it was.
+            const s = driver.snapshot, b = f.body;
+            if (b < s.count) renderer.burst([s.pos[3 * b]!, s.pos[3 * b + 1]!, s.pos[3 * b + 2]!], [0, 1, 0], PULL_PUFF);
+          }
+          break;
         case 'contact': {
           const j = contactJuice(f.impulse), s = driver.snapshot, b = f.body;
           if (b < s.count) {
@@ -594,6 +623,8 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     if (stepping || regrowT !== null || !driver.session.canFire(shot.ammo)) return false;
     const refused = duel?.refuse(shot);
     if (refused) { banner(refused.message, 'crack'); return false; }
+    if (shot.ammo === 'pull' && driver.session.pullRefusal(shot.body) !== null) return false;
+    setHover(null);
     const fb = driver.fire(shot);
     if (duel) { duel.fired(shot); turnStart = performance.now(); syncDuel(); }
     // The shot's first step goes in now, not at the next frame.
@@ -766,6 +797,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
       heritageBroken: s.heritageBroken.reduce((a, x) => a + x, 0), heritageTotal: c.meta.heritage.length,
       chips: chipsNow(), power, liveLeverage: s.liveLeverage, phase: s.phase,
       reachable: s.phase === 'aiming' && aimed ? aimed.reachable : null,
+      pullRefused: s.phase === 'aiming' && aimed?.shot.ammo === 'pull' && !aimed.reachable,
       collapse: s.liveCollapse, met: s.objectiveDone, canBank: !stepping && regrowT === null && s.canBank(), pace: handle.pace.tag,
       opener: !stepping && regrowT === null && s.phase === 'aiming' && openerNow() !== null,
       ...(duel ? { duel: duelHudHtml(duel, s.phase === 'aiming' && aimed ? duel.refuse(aimed.shot) : null) } : {}),

@@ -15,7 +15,7 @@
 // The Keystone grenade barely moves a 10k scene (collapse 0 at 74b57c2), so
 // the heavy cases fire @tb/weapons' cluster (6 bomblets, one grenade of energy
 // since 2026-11-02, 0.8 before) from a rack of just that; the rendered cluster cases compare the
-// valve's budget at 16.7 ms (the default), 14 ms and off (G4.4); one more
+// valve's budget at 14 ms (the default since E7), 16.7 ms and off; one more
 // rendered case saves a screenshot every 2 s, for reviewing the camera.
 // The frames cases are the pipelining audit's A/B (docs/pipelining.md): the
 // same rendered cluster shots with keystone.frames=half and auto, against the
@@ -75,13 +75,17 @@ const ALL: Case[] = [
   { name: 'blocks-grenade-40-rendered', scene: BLOCKS, ammo: 'w-grenade', iterations: 40, rendered: true },
   { name: 'blocks-cluster-40', scene: BLOCKS, ammo: 'w-cluster', iterations: 40, rendered: false },
   { name: 'blocks-cluster-40-rendered', scene: BLOCKS, ammo: 'w-cluster', iterations: 40, rendered: true },
-  { name: 'blocks-cluster-40-rendered-b14', scene: BLOCKS, ammo: 'w-cluster', iterations: 40, rendered: true, budgetMs: 14 },
+  { name: 'blocks-cluster-40-rendered-b16.7', scene: BLOCKS, ammo: 'w-cluster', iterations: 40, rendered: true, budgetMs: 16.7 },
   { name: 'blocks-cluster-40-rendered-b0', scene: BLOCKS, ammo: 'w-cluster', iterations: 40, rendered: true, budgetMs: 0 },
   { name: 'city-cluster-40-rendered', scene: CITY, ammo: 'w-cluster', iterations: 40, rendered: true },
   { name: 'blocks-cluster-40-rendered-half', scene: BLOCKS, ammo: 'w-cluster', iterations: 40, rendered: true, frames: 'half' },
   { name: 'blocks-cluster-40-rendered-auto', scene: BLOCKS, ammo: 'w-cluster', iterations: 40, rendered: true, frames: 'auto' },
   { name: 'city-cluster-40-rendered-half', scene: CITY, ammo: 'w-cluster', iterations: 40, rendered: true, frames: 'half' },
   { name: 'city-cluster-40-rendered-auto', scene: CITY, ammo: 'w-cluster', iterations: 40, rendered: true, frames: 'auto' },
+  // E7 round 2: drawing fewer frames at the old whole-step budget, where it frees the most GPU for physics.
+  { name: 'blocks-cluster-40-rendered-auto-b16.7', scene: BLOCKS, ammo: 'w-cluster', iterations: 40, rendered: true, frames: 'auto', budgetMs: 16.7 },
+  { name: 'city-cluster-40-rendered-b16.7', scene: CITY, ammo: 'w-cluster', iterations: 40, rendered: true, budgetMs: 16.7 },
+  { name: 'city-cluster-40-rendered-auto-b16.7', scene: CITY, ammo: 'w-cluster', iterations: 40, rendered: true, frames: 'auto', budgetMs: 16.7 },
   // For reviewing the follow camera (G4.3): a screenshot every 2 s into TB_PROBE_OUT. Its timings are not used (screenshots stall frames).
   { name: 'city-cluster-40-screenshots', scene: CITY, ammo: 'w-cluster', iterations: 40, rendered: true, screenshots: true },
   // Grenade sizes (2026-11-02): the XL (16 grenades, radius 12.6 cubes) wakes far more of a 10k city than anything before it;

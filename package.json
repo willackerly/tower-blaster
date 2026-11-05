@@ -33,7 +33,8 @@
     "playtest:local": "tsx packages/playtest/src/local.ts",
     "playtest:deploy": "tsx packages/playtest/src/deploy.ts",
     "playtest:testers": "tsx packages/playtest/src/testers.ts",
-    "playtest:smoke": "tsx packages/playtest/src/smoke.ts"
+    "playtest:smoke": "tsx packages/playtest/src/smoke.ts",
+    "probe:modes": "tsx packages/mode-probes/src/cli.ts"
   },
   "devDependencies": {
     "@tb/adapter-rapier": "workspace:*",
@@ -47,6 +48,7 @@
     "@tb/keystone-lab": "workspace:*",
     "@tb/lattice": "workspace:*",
     "@tb/metrics": "workspace:*",
+    "@tb/mode-probes": "workspace:*",
     "@tb/physics-gpu": "workspace:*",
     "@tb/physics-ref": "workspace:*",
     "@tb/playtest": "workspace:*",

@@ -41,6 +41,13 @@ describe('game URL keys', () => {
     expect(() => parse(`?level=L1&keystone.rack=marble&keystone.shots=${writeShots(par)}`)).toThrow(/fires 1 cannonball but L1's rack holds 0 \(rack: marble\)/);
   });
 
+  it('keystone.rack can rack pulls, and a line of pulls plays from the link', () => {
+    const p = parse('?level=L1&keystone.rack=pull,pull,marble&keystone.shots=pull.0_pull.12');
+    expect(p.rack).toEqual(['pull', 'pull', 'marble']);
+    expect(p.shots).toEqual([{ ammo: 'pull', body: 0 }, { ammo: 'pull', body: 12 }]);
+    expect(() => parse('?level=L1&keystone.rack=pull&keystone.shots=pull.0_pull.1')).toThrow(/fires 2 pull but L1's rack holds 1/);
+  });
+
   it('refuses a bad keystone.rack, naming the key', () => {
     expect(() => parse('?keystone.rack=')).toThrow(/keystone.rack must list 1 to 8 items/);
     expect(() => parse(`?keystone.rack=${Array(9).fill('marble').join(',')}`)).toThrow(/keystone.rack must list 1 to 8 items/);

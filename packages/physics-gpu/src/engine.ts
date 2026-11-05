@@ -93,6 +93,15 @@ export interface GpuEngineOptions {
    */
   settleSteps?: number;
   settleIterations?: number;
+  /**
+   * With sleep: skip a step that starts with no body awake and no input due (default true). Such a step changes
+   * nothing (every body is an anchor, every contact frozen; sleep.ts), so skipping it is exact; step() then only
+   * counts it (GpuDiagnostics.sleepSkippedSteps). The engine learns that nothing is awake from a 4-byte read of the
+   * sleep pass's awake count, which lands a step or two late, so a scene that falls asleep is skipped from a step or
+   * two after. false runs every step, to time or compare against. Writing body buffers behind the engine's back (a
+   * test's kick) is not an input: a skipped step does not see it.
+   */
+  sleepSkip?: boolean;
 }
 
 /** The sleep rule these options set (DEFAULT_SLEEP where they leave a threshold out). */
@@ -148,6 +157,8 @@ export interface GpuDiagnostics {
   colors: number;
   uncolored: number;
   colorOverflow: number;
+  /** Steps step() skipped because nothing was awake and no input was due (GpuEngineOptions.sleepSkip); 0 without sleep. */
+  sleepSkippedSteps: number;
 }
 
 /**
@@ -200,6 +211,13 @@ export type StepStage = (typeof STEP_STAGES)[number];
 export class GpuAvbdEngine implements PhysicsEngine {
   readonly info: EngineInfo;
   stepIndex = 0;
+  // GpuEngineOptions.sleepSkip: the last step that ended with no body awake (-1: none known), the step after the last
+  // one that applied an input (a skip needs quietStep >= eventStep), whether an awake count is being read, and how
+  // many steps step() skipped.
+  private quietStep = -1;
+  private eventStep = 0;
+  private counting = false;
+  private skipped = 0;
   private readonly params: AvbdParams;
   private device: GPUDevice | null = null;
   private ownsDevice = false;
@@ -248,7 +266,7 @@ export class GpuAvbdEngine implements PhysicsEngine {
     check('settleSteps', (v) => Number.isInteger(v) && v >= 0, 'a non-negative integer');
     check('settleIterations', (v) => Number.isInteger(v) && v >= 1, 'a positive integer');
     if ((opts.settleSteps === undefined) !== (opts.settleIterations === undefined)) throw new Error('GpuAvbdEngine: GpuEngineOptions.settleSteps and settleIterations go together');
-    for (const k of ['indirectColors', 'boxBroadphase', 'sleep'] as const) if (opts[k] !== undefined && typeof opts[k] !== 'boolean') throw new Error(`GpuAvbdEngine: GpuEngineOptions.${k} must be a boolean, got ${opts[k]}`);
+    for (const k of ['indirectColors', 'boxBroadphase', 'sleep', 'sleepSkip'] as const) if (opts[k] !== undefined && typeof opts[k] !== 'boolean') throw new Error(`GpuAvbdEngine: GpuEngineOptions.${k} must be a boolean, got ${opts[k]}`);
     try { checkSleepRule(sleepRuleOf(opts)); } catch (e) { throw new Error(`GpuAvbdEngine: GpuEngineOptions.${(e as Error).message}`); }
     if (opts.sleep && this.params.restitution) throw new Error('GpuAvbdEngine: GpuEngineOptions.sleep is not implemented with AvbdParams.restitution yet');
     if (opts.hessian !== undefined && !HESSIAN_FORMS.includes(opts.hessian)) throw new Error(`GpuAvbdEngine: GpuEngineOptions.hessian must be one of ${HESSIAN_FORMS.join(', ')}, got ${opts.hessian}`);
@@ -272,7 +290,7 @@ export class GpuAvbdEngine implements PhysicsEngine {
     this.colorMode = gpuColorMode(this.params);
     if (this.params.colorMode !== undefined) variant.colorMode = this.params.colorMode;
     // Options that size the buffers or shape the dispatch change the work per step (e.g. the broadphase's key bits), so they are part of the variant.
-    for (const k of ['capacity', 'spare', 'pairsPerBody', 'maxRadius', 'colorTail', 'indirectColors', 'tailThreads', 'colorRounds', 'hessian', 'boxBroadphase', 'sleep', 'sleepSpeed', 'sleepSteps', 'sleepDrift', 'wakeSpeed', 'wakeDepth', 'settleSteps', 'settleIterations'] as const) if (opts[k] !== undefined) variant[k] = opts[k];
+    for (const k of ['capacity', 'spare', 'pairsPerBody', 'maxRadius', 'colorTail', 'indirectColors', 'tailThreads', 'colorRounds', 'hessian', 'boxBroadphase', 'sleep', 'sleepSpeed', 'sleepSteps', 'sleepDrift', 'wakeSpeed', 'wakeDepth', 'settleSteps', 'settleIterations', 'sleepSkip'] as const) if (opts[k] !== undefined) variant[k] = opts[k];
     this.info = { name: 'avbd-gpu', variant, backend: 'webgpu', integrator: { substeps: 1 } };
   }
 
@@ -380,6 +398,10 @@ export class GpuAvbdEngine implements PhysicsEngine {
     for (const b of scene.bodies) this.add(b);
     this.pending = [...scene.inputs].sort((a, b) => a.step - b.step);
     this.stepIndex = 0;
+    this.quietStep = -1;
+    this.eventStep = 0;
+    this.counting = false;
+    this.skipped = 0;
   }
 
   /** Write body i (= n) into every per-body buffer; one shape per body. */
@@ -431,7 +453,27 @@ export class GpuAvbdEngine implements PhysicsEngine {
   }
 
   step(): void {
+    const { parts } = this;
+    // Nothing awake at the end of step quietStep, nothing has happened since, and nothing is due now: this step would
+    // change nothing (GpuEngineOptions.sleepSkip).
+    if (parts?.sleep && this.opts.sleepSkip !== false && !this.failure && this.quietStep >= this.eventStep && !(this.pending.length && this.pending[0]!.step <= this.stepIndex)) {
+      this.stepIndex++;
+      this.skipped++;
+      return;
+    }
     this.encodeStep();
+    if (parts?.sleep && this.opts.sleepSkip !== false && !this.counting) this.countAwake(this.stepIndex - 1);
+  }
+
+  /** Reads the awake count the sleep pass left after step k (one read at a time; the next step() asks again). */
+  private countAwake(k: number): void {
+    const parts = this.parts!, generation = this.generation;
+    this.counting = true;
+    parts.readback.read(parts.sleep!.scratch, 4, parts.sleep!.countOffset).then((buf) => {
+      if (this.generation !== generation || this.parts !== parts) return;
+      this.counting = false;
+      if (new Uint32Array(buf)[0] === 0) this.quietStep = Math.max(this.quietStep, k);
+    }, () => { if (this.generation === generation) this.counting = false; });
   }
 
   /**
@@ -478,6 +520,7 @@ export class GpuAvbdEngine implements PhysicsEngine {
     const blasts: DueBlast[] = [];
     while (this.pending.length && this.pending[0]!.step <= this.stepIndex) {
       const ev = this.pending.shift()!;
+      this.eventStep = this.stepIndex + 1;
       if (ev.kind === 'spawn') this.add(ev.body);
       else if (ev.kind === 'remove') {
         this.remove(ev.id);
@@ -544,7 +587,7 @@ export class GpuAvbdEngine implements PhysicsEngine {
     const total = new Uint32Array(t), info = new Uint32Array(c);
     return {
       pairsRequired: total[5]!, pairsWritten: total[3]!, maxPairs: parts.bp.maxPairs, pairsRequiredPeak: total[6]!, pairsOverflowSteps: total[7]!, steps,
-      colors: info[0]!, uncolored: info[1]!, colorOverflow: info[2]!,
+      colors: info[0]!, uncolored: info[1]!, colorOverflow: info[2]!, sleepSkippedSteps: this.skipped,
     };
   }
 
