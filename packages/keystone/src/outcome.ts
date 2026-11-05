@@ -59,6 +59,7 @@ export function objectiveMet(c: CompiledLevel, f: ObjectiveFacts, scoring: Scori
     case 'skyline': return skyline(f.red.heightHist, c.height) <= obj.maxH * c.frame.unit + 1e-9
       && (scoring === 'outcome' || obj.footprintMax === undefined || f.red.outOfLot <= obj.footprintMax * c.meta.n);
     case 'collapse': return f.collapse >= obj.min;
+    case 'hold': return c.meta.crowns.length > 0 && f.crownsTotal === 0;
   }
 }
 
@@ -73,6 +74,8 @@ export const OUTCOME_WEIGHTS = {
   /** Crowns down in one shot count up to this many. */
   comboCap: 12,
   rackLeft: 400,
+  /** Hold levels: per share of the structure's mass pulled (all of it: 3000, as collapse). */
+  pulled: 3000,
   heritage: -500,
   footprint: -3000,
 } as const;
@@ -96,6 +99,10 @@ export interface OutcomeFacts {
   /** Crowns down at the end, and the skyline at the end over the skyline at the start. */
   crownsDown: number;
   skylineRatio: number;
+  /** Share of the structure's mass pulled (Undercut), 0 to 1. */
+  pulled: number;
+  /** The objective is hold (Undercut's Hollow): scored on what was pulled, not on what came down. */
+  hold?: boolean;
 }
 
 const tri = (n: number) => (n * (n + 1)) / 2;
@@ -104,6 +111,13 @@ const tri = (n: number) => (n * (n + 1)) / 2;
 export function outcomeTally(f: OutcomeFacts, w = OUTCOME_WEIGHTS): ScoreLine[] {
   const lines: ScoreLine[] = [];
   if (f.met) lines.push({ label: 'Objective', value: w.objective });
+  if (f.hold) {
+    // Hollow: what you dared take while the crown stayed up. Nothing for coming down or for pulls not made.
+    if (f.met) lines.push({ label: 'Pulled', value: Math.floor(w.pulled * f.pulled) });
+    if (f.heritageBroken) lines.push({ label: 'Heritage', value: w.heritage * f.heritageBroken });
+    if (f.footprintMax !== undefined && f.outOfLot > f.footprintMax) lines.push({ label: 'Footprint', value: Math.floor(w.footprint * (f.outOfLot - f.footprintMax)) });
+    return lines;
+  }
   lines.push({ label: 'Collapse', value: Math.floor(w.collapse * f.collapse) });
   lines.push({ label: 'Leverage', value: Math.floor(w.leverage * Math.log2(1 + f.leverage)) });
   if (f.hasCrowns) lines.push({ label: 'Combo', value: w.combo * tri(Math.min(Math.max(0, f.comboMax), w.comboCap)) });
@@ -122,6 +136,7 @@ export function metricValue(metric: StarMetric, f: OutcomeFacts, total: number):
     case 'crowns': return f.crownsDown;
     case 'skyline': return f.skylineRatio;
     case 'score': return total;
+    case 'pulled': return f.pulled;
   }
 }
 
@@ -155,15 +170,16 @@ export interface OutcomeScore extends LevelScore {
 }
 
 /**
- * Scores an outcome level's end. The stamp: INCOMPLETE when the objective is not met, BEAT THE BOT
- * past the best cast play, else how much came down ("72% DOWN").
+ * Scores an outcome level's end. The stamp: INCOMPLETE when the objective is not met (TOPPLED on a
+ * hold level), BEAT THE BOT past the best cast play, else how much came down ("72% DOWN"), or on a
+ * hold level how much was pulled ("35% PULLED").
  */
-export function outcomeScore(f: OutcomeFacts, cast: StarsDef | undefined, metric: StarMetric = cast?.metric ?? 'collapse'): OutcomeScore {
+export function outcomeScore(f: OutcomeFacts, cast: StarsDef | undefined, metric: StarMetric = cast?.metric ?? (f.hold ? 'pulled' : 'collapse')): OutcomeScore {
   const lines = outcomeTally(f);
   const total = lines.reduce((a, l) => a + l.value, 0);
   const value = metricValue(metric, f, total);
   const s = outcomeStars(cast, metric, value, f.met, f.heritageBroken);
-  const stamp = !f.met ? 'INCOMPLETE' : s.beatBot ? 'BEAT THE BOT' : `${Math.floor(100 * f.collapse)}% DOWN`;
+  const stamp = !f.met ? (f.hold ? 'TOPPLED' : 'INCOMPLETE') : s.beatBot ? 'BEAT THE BOT' : f.hold ? `${Math.floor(100 * f.pulled)}% PULLED` : `${Math.floor(100 * f.collapse)}% DOWN`;
   return { lines, total, stars: s.stars, stamp, leverage: f.leverage, outcome: { collapse: f.collapse, metric, value, ...s } };
 }
 

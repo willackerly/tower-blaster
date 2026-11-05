@@ -51,6 +51,8 @@ export interface HudState {
   pullRefused?: boolean;
   /** Outcome levels: collapse fraction D now, the objective met at the last settle, and whether a bank is possible. */
   collapse?: number;
+  /** Hold levels (Undercut's Hollow): the share of the structure's mass pulled, shown in place of D. */
+  pulled?: number;
   met?: boolean;
   canBank?: boolean;
   /** The slow-motion tag while physics runs slower than real time ('×0.8'; pacing.ts slowTag), '' or absent at real time. */
@@ -72,6 +74,7 @@ export function objectiveText(o: Objective): string {
     case 'crowns': return 'fell every crown';
     case 'skyline': return `skyline under ${o.maxH} h`;
     case 'collapse': return `bring ${pct(o.min)} down`;
+    case 'hold': return 'keep the crown up';
   }
 }
 
@@ -90,7 +93,7 @@ export function hudHtml(s: HudState): string {
   const reach = s.pullRefused ? '<div class="bad small">Crowns and heritage stay: pull a plain block</div>' : s.reachable === false ? '<div class="bad small">Out of reach at this power</div>' : '';
   const outcome = scoringOf(d) === 'outcome';
   const head = outcome
-    ? `<div class="row"><span>Shot ${s.strokes}</span><span>Down <b class="down">${pct(s.collapse ?? 0)}</b></span></div>
+    ? `<div class="row"><span>Shot ${s.strokes}</span>${d.objective.kind === 'hold' ? `<span>Pulled <b class="down">${pct(s.pulled ?? 0)}</b></span>` : `<span>Down <b class="down">${pct(s.collapse ?? 0)}</b></span>`}</div>
     <div class="row"><span>Objective</span><span class="${s.met ? 'ok' : ''}">${esc(objectiveText(d.objective))}${s.met ? ' ✓' : ''}</span></div>`
     : `<div class="row"><span>Par ${d.par}</span><span>Stroke ${s.strokes}</span></div>`;
   const crowns = !outcome || s.crownsTotal ? `<div class="row"><span>Crowns</span><span class="crowns">${s.crownsDown} / ${s.crownsTotal}</span></div>` : '';

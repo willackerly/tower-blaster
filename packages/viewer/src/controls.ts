@@ -6,7 +6,7 @@ import { checkSound, SOUND_KNOBS, SOUND_MATERIAL_NAMES, type SoundKnob, type Sou
 import { parseSpec } from '@tb/bench';
 import { type Env, ENVS, type Ground, GROUNDS, linearToSrgb, LOOKS, REAL_DEFAULTS, REAL_KNOBS, type RealKnob, type RealOptions, srgbToLinear, type Stone, STONES, type V3 } from '@tb/render';
 import { checkPaceFeel, DEFAULT_BUDGET_MS, DEFAULT_FEEL, type FrameMode, objectiveText, type PaceFeel } from '@tb/game';
-import { AUTO_LEVEL, AVBD_ITERATIONS, BIG_LEVELS, compileLevel, LEVELS, PRESETTLE_STEPS, scenarioLevel } from '@tb/keystone';
+import { AUTO_LEVEL, AVBD_ITERATIONS, BIG_LEVELS, compileLevel, LEVELS, PRESETTLE_STEPS, scenarioLevel, UNDERCUT_LEVELS } from '@tb/keystone';
 import { buildScenario, SCENARIOS } from '@tb/scenarios';
 import { type CameraPose, type Framing, FRAMING_LIMITS } from './camera.ts';
 import { escapeHtml } from './html.ts';
@@ -35,6 +35,8 @@ export interface ControlsHooks {
   setProjectile(p: Projectile): void;
   /** Draw with this look from now on (real: the real look's knobs that differ from REAL_DEFAULTS). */
   setLook(look: string, real: Partial<RealOptions>): void;
+  /** Draw blasts (fireball, shell out to the blast radius, light) or not, from now on. */
+  setBlast(on: boolean): void;
   /** Play collision sound this way from now on. */
   setSound(o: SoundOptions): void;
   /** Frame the scene this way from now on (and re-frame it now). */
@@ -263,7 +265,7 @@ export function mountControls(root: HTMLElement, hooks: ControlsHooks): { refres
     <summary>Scene and projectile</summary>
     <form id="scene-form">
       <div class="h">Scene</div>
-      <label class="f"><span>scenario</span><select name="scenario"><optgroup label="Scenarios">${Object.values(SCENARIOS).map((s) => `<option value="${s.id}">${s.id} ${escapeHtml(s.title)}</option>`).join('')}</optgroup><optgroup label="Keystone levels">${LEVELS.map((l) => `<option value="${levelChoice(l.id)}">${l.id} ${escapeHtml(l.name)}</option>`).join('')}</optgroup><optgroup label="Big levels">${BIG_LEVELS.map((l) => `<option value="${levelChoice(l.id)}">${l.id} ${escapeHtml(l.name)}</option>`).join('')}</optgroup><optgroup label="Your level" class="custom"><option value="${CUSTOM_LEVEL}"></option></optgroup></select></label>
+      <label class="f"><span>scenario</span><select name="scenario"><optgroup label="Scenarios">${Object.values(SCENARIOS).map((s) => `<option value="${s.id}">${s.id} ${escapeHtml(s.title)}</option>`).join('')}</optgroup><optgroup label="Keystone levels">${LEVELS.map((l) => `<option value="${levelChoice(l.id)}">${l.id} ${escapeHtml(l.name)}</option>`).join('')}</optgroup><optgroup label="Big levels">${BIG_LEVELS.map((l) => `<option value="${levelChoice(l.id)}">${l.id} ${escapeHtml(l.name)}</option>`).join('')}</optgroup><optgroup label="Undercut levels">${UNDERCUT_LEVELS.map((l) => `<option value="${levelChoice(l.id)}">${l.id} ${escapeHtml(l.name)}</option>`).join('')}</optgroup><optgroup label="Your level" class="custom"><option value="${CUSTOM_LEVEL}"></option></optgroup></select></label>
       <div class="params"></div>
       <div class="rules">
         <label class="f"><span>rules</span><select name="rules"><option value="sandbox">sandbox</option><option value="keystone">Keystone (the game)</option></select></label>
@@ -304,6 +306,7 @@ export function mountControls(root: HTMLElement, hooks: ControlsHooks): { refres
     <form id="look-form">
       <div class="h">Look</div>
       <label class="f"><span>look</span><select name="look">${Object.keys(LOOKS).map((l) => `<option value="${l}">${l}</option>`).join('')}</select></label>
+      ${field('blast', 'blasts: fireball, ring at the reach, light', true)}
       <div class="real">
         <label class="f"><span>stone</span><select name="stone">${STONES.map((st) => `<option value="${st}">${st}</option>`).join('')}</select></label>
         <label class="f"><span>setting</span><select name="env">${ENVS.map((e) => `<option value="${e}">${e}</option>`).join('')}</select></label>
@@ -553,7 +556,10 @@ export function mountControls(root: HTMLElement, hooks: ControlsHooks): { refres
     }
   }
   lookForm.addEventListener('submit', (e) => e.preventDefault());
-  lookForm.addEventListener('input', applyLook);
+  lookForm.addEventListener('input', (e) => {
+    if ((e.target as HTMLInputElement | null)?.name === 'blast') hooks.setBlast((e.target as HTMLInputElement).checked);
+    else applyLook();
+  });
 
   // Sound: applied live; auto picks the material from the scene and the look.
   const soundForm = root.querySelector<HTMLFormElement>('#sound-form')!;
@@ -664,6 +670,7 @@ export function mountControls(root: HTMLElement, hooks: ControlsHooks): { refres
     }
     showMass(p);
     input(lookForm, 'look').value = c.look;
+    (input(lookForm, 'blast') as HTMLInputElement).checked = c.blast.on;
     realBox.hidden = c.look !== 'real';
     const real = { ...REAL_DEFAULTS, ...c.real };
     for (const key of Object.keys(REAL_KNOBS) as RealKnob[]) input(lookForm, key).value = String(real[key]);

@@ -49,8 +49,8 @@ describe('game URL keys', () => {
   });
 
   it('refuses a bad keystone.rack, naming the key', () => {
-    expect(() => parse('?keystone.rack=')).toThrow(/keystone.rack must list 1 to 8 items/);
-    expect(() => parse(`?keystone.rack=${Array(9).fill('marble').join(',')}`)).toThrow(/keystone.rack must list 1 to 8 items/);
+    expect(() => parse('?keystone.rack=')).toThrow(/keystone.rack must list 1 to 8 items \(and up to 24 pulls\)/);
+    expect(() => parse(`?keystone.rack=${Array(9).fill('marble').join(',')}`)).toThrow(/keystone.rack must list 1 to 8 items \(and up to 24 pulls\)/);
     expect(() => parse('?keystone.rack=marble,nuke')).toThrow(/keystone.rack: nuke is not one of marble, cannonball/);
     expect(() => parse('?keystone.rack=marble,')).toThrow(/keystone.rack: an empty name is not one of/);
     expect(() => parse('?level=L1&keystone.rack=w-big')).toThrow(/keystone.rack: L1 has no weapons.big for w-big/);

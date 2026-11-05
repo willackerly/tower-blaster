@@ -39,7 +39,7 @@ describe('lot sheet on the page', () => {
     expect(goalsResultHtml([], null, false)).toBe('');
   });
   it('progress keeps every goal met on a hash, across plays and whichever play was best, and drops them with the hash', () => {
-    const score = (stars: 0 | 1 | 2 | 3) => outcomeScore({ met: stars > 0, collapse: 0.5, leverage: 1, comboMax: 0, hasCrowns: false, rackLeft: 0, heritageBroken: 0, outOfLot: 0, crownsDown: 0, skylineRatio: 1 }, { metric: 'collapse', t2: 0.4, t3: 0.9 });
+    const score = (stars: 0 | 1 | 2 | 3) => outcomeScore({ met: stars > 0, collapse: 0.5, leverage: 1, comboMax: 0, hasCrowns: false, rackLeft: 0, heritageBroken: 0, outOfLot: 0, crownsDown: 0, skylineRatio: 1, pulled: 0 }, { metric: 'collapse', t2: 0.4, t3: 0.9 });
     let p = recordPlay(emptyProgress(), 'L1', 'h', score(2), new Date(0), ['ace']);
     p = recordPlay(p, 'L1', 'h', score(1), new Date(1), ['tidy', 'ace']);
     expect(p.levels.L1).toMatchObject({ plays: 2, goals: ['ace', 'tidy'] });

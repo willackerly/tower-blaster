@@ -5,8 +5,8 @@
 import { describe, expect, it } from 'vitest';
 import { emptySnapshot, type Snapshot } from '@tb/engine-api';
 import {
-  baselineOf, collapseFraction, compileLevel, floorPotential_mJ, homePotential_mJ, homeSkyline, type LevelDef, metricValue, objectiveMet, OUTCOME_WEIGHTS, type OutcomeFacts,
-  outcomeScore, outcomeStars, outcomeTally, type Part, peOf_mJ, potential_mJ, QUIET_SPEED, QUIET_SPIN, reduceCpu, Session, skyline, type StarsDef,
+  baselineOf, collapseFraction, compileLevel, floorPotential_mJ, L1, homePotential_mJ, homeSkyline, type LevelDef, metricValue, objectiveMet, OUTCOME_WEIGHTS, type OutcomeFacts,
+  outcomeScore, outcomeStars, outcomeTally, type Part, peOf_mJ, potential_mJ, QUIET_SPEED, QUIET_SPIN, rackSizeProblem, reduceCpu, Session, skyline, type StarsDef, validateLevel,
 } from '@tb/keystone';
 
 /** mulberry32, seeded: the same draws everywhere. */
@@ -145,13 +145,13 @@ describe('objectives', () => {
 });
 
 const facts = (o: Partial<OutcomeFacts> = {}): OutcomeFacts => ({
-  met: true, collapse: 0.5, leverage: 3, comboMax: 3, hasCrowns: true, rackLeft: 2, heritageBroken: 1, outOfLot: 0.25, footprintMax: 0.125, crownsDown: 4, skylineRatio: 0.4, ...o,
+  met: true, collapse: 0.5, leverage: 3, comboMax: 3, hasCrowns: true, rackLeft: 2, heritageBroken: 1, outOfLot: 0.25, footprintMax: 0.125, crownsDown: 4, skylineRatio: 0.4, pulled: 0, ...o,
 });
 const lines = (f: OutcomeFacts) => Object.fromEntries(outcomeTally(f).map((l) => [l.label, l.value]));
 
 describe('tally', () => {
   it('scores each line by its weight', () => {
-    expect(OUTCOME_WEIGHTS).toEqual({ objective: 1000, collapse: 3000, leverage: 300, combo: 50, comboCap: 12, rackLeft: 400, heritage: -500, footprint: -3000 });
+    expect(OUTCOME_WEIGHTS).toEqual({ objective: 1000, collapse: 3000, leverage: 300, combo: 50, comboCap: 12, rackLeft: 400, pulled: 3000, heritage: -500, footprint: -3000 });
     expect(outcomeTally(facts())).toEqual([
       { label: 'Objective', value: 1000 },
       { label: 'Collapse', value: 1500 },
@@ -219,5 +219,41 @@ describe('level fields', () => {
     expect(compileLevel({ ...par, scoring: 'par' }).hash).toBe(compileLevel(par).hash);
     expect(compileLevel(par).hash).not.toBe(c.hash);
     expect(compileLevel({ ...def, objective: { kind: 'collapse', min: 0.6 } }).hash).not.toBe(c.hash);
+  });
+});
+
+describe('hold objective (Undercut, docs/game/undercut-bullet-time.md)', () => {
+  const holdDef: LevelDef = { ...L1, id: 'H', scoring: 'outcome', objective: { kind: 'hold' }, rack: ['pull', 'pull'] };
+  const hc = compileLevel(holdDef);
+  const red0 = reduceCpu((() => { const s = emptySnapshot(hc.meta.n); s.pos.set(hc.meta.home); for (let i = 0; i < s.count; i++) s.rot[4 * i + 3] = 1; return s; })(), null, hc, baselineOf((() => { const s = emptySnapshot(hc.meta.n); s.pos.set(hc.meta.home); return s; })(), hc, 0), 0);
+  it('is met while every crown is up, not once one is down', () => {
+    expect(objectiveMet(hc, { red: red0, crownsTotal: 0, collapse: 0 }, 'outcome')).toBe(true);
+    expect(objectiveMet(hc, { red: red0, crownsTotal: 1, collapse: 0 }, 'outcome')).toBe(false);
+  });
+  it('tallies the objective and what was pulled only, and stamps PULLED or TOPPLED', () => {
+    const held = outcomeScore(facts({ hold: true, pulled: 0.35, heritageBroken: 0, outOfLot: 0 }), undefined);
+    expect(held.lines).toEqual([{ label: 'Objective', value: 1000 }, { label: 'Pulled', value: 1050 }]);
+    expect(held.stamp).toBe('35% PULLED');
+    expect(held.outcome.metric).toBe('pulled');
+    expect(held.outcome.value).toBe(0.35);
+    const fell = outcomeScore(facts({ hold: true, met: false, pulled: 0.4, heritageBroken: 0, outOfLot: 0 }), undefined);
+    expect(fell.lines).toEqual([]);
+    expect(fell.stamp).toBe('TOPPLED');
+    expect(fell.stars).toBe(0);
+    // Cast thresholds on the pulled share give stars as for any metric.
+    expect(outcomeScore(facts({ hold: true, pulled: 0.5, heritageBroken: 0 }), { metric: 'pulled', t2: 0.2, t3: 0.4 }).stars).toBe(3);
+  });
+  it('validates only on outcome levels with a crown', () => {
+    expect(validateLevel(hc).filter((i) => i.code === 'objective')).toEqual([]);
+    expect(validateLevel(compileLevel({ ...holdDef, scoring: 'par' })).map((i) => i.message)).toContain('a hold objective needs outcome scoring (a par level ends at its clear)');
+    const crownless = compileLevel({ ...holdDef, parts: [{ kind: 'block', at: [-1, 0, -1], size: [2, 4, 2], material: 'plaster' }] });
+    expect(validateLevel(crownless).map((i) => i.message)).toContain('a hold objective needs a crown to keep up');
+  });
+  it('counts pulls apart from fired items in the rack size', () => {
+    expect(rackSizeProblem(Array(24).fill('pull'))).toBeNull();
+    expect(rackSizeProblem([...Array(24).fill('pull'), ...Array(8).fill('marble')])).toBeNull();
+    expect(rackSizeProblem(Array(25).fill('pull'))).toMatch(/25 pulls, over 24/);
+    expect(rackSizeProblem(Array(9).fill('marble'))).toMatch(/9 fired items, over 8/);
+    expect(rackSizeProblem([])).toMatch(/empty/);
   });
 });
