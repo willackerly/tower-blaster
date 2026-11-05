@@ -20,7 +20,7 @@ Each run writes `results/mode-probes/<id>-<size>-<time>.{json,md}`. `--size ci` 
 | X2 | Order matters in demolition | M5 | CI size: order matters on slab buildings | not run |
 | X3 | Towers as dominoes | M6 Steer | CI size: cube and Kapla towers topple on, a bonded pier stops the front | not run |
 | X4 | Cantilevers and hollows hold | M1 Hollow, M8 | CI size: stacks, span and brick arch behave | not run |
-| X5 | Pinned anchors solid | C8 | not built | not run |
+| X5 | Pinned anchors solid | C8 | CI size: pins exactly still, bodies on them match the ground | not run |
 | X6 | Resonance under a gravity schedule; far-blast shove | M7 | not built | not run |
 | X7 | (optional) 1.5x domino amplifier | showcase | not planned | not run |
 | X8 | Islands behave like solo worlds | C10 | not built | not run |
@@ -120,3 +120,37 @@ Full size: pending (the Metal run: 3 designs, chains of 24, 32 nudges).
 CI size on SwiftShader (40 iterations, one seed each; an 8 x 8 brick arch of R 1.6 m; 2026-11-05): the 95% stack holds (worst move 0.9 mm in 6 s); the 105% stack falls (its top drops 2.75 m); the span carries the ball across and moves 0.6 mm; the brick arch drops one brick, over the hole, and the rest creeps 0.2 mm. No engine limit is hit.
 
 Full size: pending (the Metal run, at 20 and 40 iterations).
+
+## X5 Pinned anchors solid
+
+**Question.** Is a never-wake sleeper, C8's pinned body, as solid as the ground under impacts and a flood? M8 Mason's Trial and M10 Rube Lab both build on fixed anchors.
+
+**Rule (roadmap).** No pinned body moves, and the bodies on it match a reference within tolerance.
+
+**C8, emulated.** C8 is not built. Its mechanism is that a sleeper is an anchor (its pose fixed, its velocity 0, solved against as an infinite mass), and a pinned body is a sleeper that never wakes. The probe runs today's engine with sleep on, a rule under which nothing falls asleep (30 steps becomes 10^8) and no contact wakes anything (wake speed and depth 10^30), and writes the pinned bodies asleep right after init. No blast or removal runs, the only other wake.
+
+**The reference.** Every case runs twice, as the same physics in two frames. In the pinned frame, the surface is the top face of a pinned box (normal Q y, through S) under gravity g. In the reference frame, the engine's ground plane y = 0 is the surface, under gravity Q^-1 g, with every other body moved to Q^-1 (p - S). The ground plane is the engine's one truly static body, so a pinned anchor is solid when bodies on it move as they move on the ground.
+
+**Cases.**
+- Slab: 50 x 1 x 10 m, its top 5 m up, struck at 45 m/s and 30 deg by the weapons' cannonball, which then slides along it.
+- Wall: 6 x 1 x 6 m stood on edge, struck level at 45 m/s. Gravity runs along the face.
+- Ramp: 20 x 1 x 6 m tilted 15 deg, under a flood of glass marbles (0.05 m, 2,500 kg/m^3): 1,000 at full size, 64 at CI size.
+
+Four nudges each at full size.
+
+**Pass tolerances.**
+- A cannonball ends within 1 cm + 1% of its path of the reference.
+- The flood is chaotic, so the two runs are two draws of it. Their end positions along and across the slope must be the same distribution (two-sample KS, p > 0.05), and the share still on the ramp must agree within 5%.
+- Nothing sinks more than 1 mm deeper than on the ground (2 mm for the flood).
+- A pinned body's pose, as the engine holds it, does not change at all.
+
+### Results
+
+CI size on SwiftShader (one nudge; 2026-11-05):
+- Every pinned body moved and turned exactly 0 in f32, and nothing tunnelled.
+- The cannonball on the slab slid 11.8 m and ended at the same place as on the ground to the last digit recorded (10 um).
+- On the wall, the ball ended 1.7 cm from the reference, inside the 31 cm allowance. It bounced clear of the face by 4 to 6 cm in both frames.
+- The 64-marble flood agreed: KS along the slope D 0.125, p 0.67; across, p 1.00; all marbles still on the ramp.
+- The deepest sink was 0.1 mm in both frames.
+
+Full size: pending (the Metal run).

@@ -105,6 +105,7 @@
   "packages/mode-probes/test/x2-demolition.test.ts": 115,
   "packages/mode-probes/test/x3-towers.test.ts": 65,
   "packages/mode-probes/test/x4-hold.test.ts": 110,
+  "packages/mode-probes/test/x5-pinned.test.ts": 45,
   "packages/physics-gpu/test/box-broadphase.test.ts": 129.3,
   "packages/physics-gpu/test/engine-blast.test.ts": 30,
   "packages/physics-gpu/test/engine-dispatch.test.ts": 51.5,
