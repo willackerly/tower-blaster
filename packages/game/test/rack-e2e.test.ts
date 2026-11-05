@@ -1,7 +1,7 @@
 // Every rack item fires on the game page under Keystone rules (roadmap G3, spectacle-mode.md
 // section 7): one load per rack of up to MAX_RACK items, each shot aimed away from the tower so
 // none brings a crown down; each is fired, flies, settles and leaves the rack, the grenade's
-// blast goes off once, the level fails when the rack is empty, and the page ends where
+// blast goes off once and is drawn, the level fails when the rack is empty, and the page ends where
 // runSession ends the same line headless and where its own replay ends it. Rapier.
 import { describe, expect, it } from 'vitest';
 import { RapierEngine } from '@tb/adapter-rapier';
@@ -57,6 +57,8 @@ describe('every rack item on the game page', () => {
       const blasts = rack.reduce((a, x) => a + (c.arms[x]?.blasts.reduce((b, y) => b + y.count, 0) ?? 0), 0);
       expect(blasts).toBe(BLASTS[k]);
       expect({ fired: counts.fired, blast: counts.blast ?? 0 }).toEqual({ fired: line.length, blast: blasts });
+      // Each blast is drawn (fireball, shell, light: @tb/render blasts.ts) where it went off.
+      expect(counts.blastDrawn ?? 0).toBe(blasts);
       expect(await page.evaluate((s) => window.__game.replay(s), line)).toEqual(live);
       expect(errors).toEqual([]);
       await page.close();

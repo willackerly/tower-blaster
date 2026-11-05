@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import fc from 'fast-check';
 import { buildScenario, KAPLA_SCALE, PLANK_L } from '@tb/scenarios';
 import { massOf, TAG_BALL } from '@tb/engine-api';
-import { REAL_DEFAULTS, REAL_KNOBS } from '@tb/render';
+import { DEFAULT_BLASTS, REAL_DEFAULTS, REAL_KNOBS } from '@tb/render';
 import {
   albedoHex, alphaAt, arrived, hexAlbedo, realOverrides, DEFAULT_PROJECTILE, engineSpec, escapeHtml, eyeOf, frame, FREE_MAX_LAG_MS, GPU_SPARE, invert, MAX_STEPS_LIMIT, multiply,
   newArrivals, newClock, newPacer, PACE_SLACK, parseProjectile, pauseLatch, parseViewerConfig, presetSearch, projectileBody, projectileMass, proposeScene,
@@ -982,6 +982,15 @@ describe('look', () => {
     expect(parseViewerConfig(toSearch(c))).toEqual(c);
     expect(toSearch(parseViewerConfig(''))).not.toMatch(/look|real/);
     expect(parseViewerConfig(presetSearch('?scenario=S1', c))).toMatchObject({ scenario: 'S1', look: 'real', real: c.real });
+  });
+  it('blasts: on by default and absent from the URL; blast=0 and blast.<knob> round-trip; bad ones are refused', () => {
+    expect(parseViewerConfig('').blast).toEqual({ on: true, params: DEFAULT_BLASTS });
+    const c = parseViewerConfig('?blast=0&blast.glow=4');
+    expect(c.blast).toEqual({ on: false, params: { ...DEFAULT_BLASTS, glow: 4 } });
+    expect(parseViewerConfig(toSearch(c))).toEqual(c);
+    expect(toSearch(parseViewerConfig(''))).not.toMatch(/blast/);
+    expect(() => parseViewerConfig('?blast=no')).toThrow(/blast must be 0 or 1/);
+    expect(() => parseViewerConfig('?blast.glow=-2')).toThrow(/blast.glow/);
   });
   it('rejects an unknown look and out-of-range knobs', () => {
     expect(() => parseViewerConfig('?look=photo')).toThrow(/unknown look/);

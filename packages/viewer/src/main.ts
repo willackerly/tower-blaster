@@ -93,6 +93,8 @@ interface ViewerHandle {
   fire(ndcX?: number, ndcY?: number): void;
   capture(keepPixels?: boolean): Promise<PixelStats | null>;
   inputs: InputEvent[];
+  /** The sandbox's weapon blasts handed to the renderer to draw: centre x, y, z and radius (world units). */
+  blastsDrawn: number[][];
   /** Under rules=keystone, the game's handle (as window.__game on the game page); null in the sandbox. */
   game: GameHandle | null;
   /**
@@ -114,7 +116,7 @@ const GRENADE_LOOKAHEAD = 4;
 const canvas = document.getElementById('c') as HTMLCanvasElement;
 const hud = document.getElementById('hud')!;
 const errorBox = document.getElementById('error')!;
-const handle: ViewerHandle = { status: 'loading', frames: 0, bodies: 0, awake: 0, stepIndex: 0, msPerStep: NaN, snapMs: NaN, resets: 0, overlapped: 0, tinted: 0, painted: [], variant: {}, health: null, camera: () => ({ target: [0, 0, 0], yaw: 0, pitch: 0, distance: 1 }), fire: () => {}, capture: async () => null, inputs: [], game: null, inputHook: null, sound: () => ({ status: 'off', error: '', posted: 0, stats: null }) };
+const handle: ViewerHandle = { status: 'loading', frames: 0, bodies: 0, awake: 0, stepIndex: 0, msPerStep: NaN, snapMs: NaN, resets: 0, overlapped: 0, tinted: 0, painted: [], variant: {}, health: null, camera: () => ({ target: [0, 0, 0], yaw: 0, pitch: 0, distance: 1 }), fire: () => {}, capture: async () => null, inputs: [], blastsDrawn: [], game: null, inputHook: null, sound: () => ({ status: 'off', error: '', posted: 0, stats: null }) };
 window.__viewer = handle;
 
 function fail(e: unknown) {
@@ -204,6 +206,8 @@ async function main() {
   const source = new SnapshotSource(device);
   renderer.setSource(source);
   renderer.look = lookByName(config.look, config.real);
+  renderer.toggles.blasts = config.blast.on;
+  renderer.blasts.config = { ...config.blast.params };
   const sound = new ViewerSound();
   handle.sound = () => ({ status: sound.status, error: sound.error, posted: sound.posted, stats: sound.stats });
   renderer.device.lost.then((info) => fail(`GPU device lost: ${info.message}`));
@@ -243,6 +247,8 @@ async function main() {
   let inputHook: InputHook | null = null;
   // This load's fired weapons, waiting on their triggers (proj.weapon: the grenade or a WeaponSpec).
   let grenades: WeaponRuntime | null = null;
+  /** Weapon blasts pushed but not yet seen: drawn (renderer.blast) from the first state at or past their step. */
+  let blastsDue: InputEvent[] = [];
   let levelScale: WeaponScale | null = null;
   // This load's fired catalogue objects, painted their colours (the candy skin outside the real look).
   let painted: { id: number; colour: { natural: number; candy: number } }[] = [];
@@ -303,6 +309,8 @@ async function main() {
     events = [...scene.inputs];
     shapes = [...scene.bodies];
     source.reset(scene.bodies);
+    renderer.blasts.clear();
+    blastsDue = [];
     sound.scene();
     sound.configure(config);
     // A level draws as the game draws it: crowns gold, heritage celadon, materials tinted (@tb/game structureTints).
@@ -361,6 +369,13 @@ async function main() {
       renderer.look = lookByName(look, real);
       for (const f of painted) paint(f.id, f.colour);
       sound.configure(config); // snd.mat=auto follows the look
+      history.replaceState(null, '', toSearch(config));
+      presets(location.search);
+    },
+    setBlast(on) {
+      config = { ...config, blast: { ...config.blast, on } };
+      if (nextConfig) nextConfig = { ...nextConfig, blast: config.blast };
+      renderer.toggles.blasts = on;
       history.replaceState(null, '', toSearch(config));
       presets(location.search);
     },
@@ -438,11 +453,31 @@ async function main() {
     // A split child's id: its spawn's place in the queue, which is in the engines' order (pushInput).
     const blasts = grenades?.observe(s, step, shapesFor(s.count), (ev) => scene.bodies.length + events.filter((e) => e.kind === 'spawn').indexOf(ev));
     if (blasts?.length) pushGrenade(() => blasts);
+    showBlasts(s, step);
+  }
+  /**
+   * Draw the blasts the state at `step` shows: due at or before it (a removed shell stays where it
+   * was removed, so a body-centred blast is where its body is now).
+   */
+  function showBlasts(s: Snapshot, step: number) {
+    if (!blastsDue.length) return;
+    const now = blastsDue.filter((e) => e.step <= step);
+    blastsDue = blastsDue.filter((e) => e.step > step);
+    for (const e of now) {
+      if (e.kind !== 'blast') continue;
+      const c = e.blast.centre;
+      const at: V3 | null = Array.isArray(c) ? [c[0]!, c[1]!, c[2]!] : 'body' in c && c.body < s.count ? [s.pos[3 * c.body]!, s.pos[3 * c.body + 1]!, s.pos[3 * c.body + 2]!] : null;
+      if (!at) continue;
+      renderer.blast(at, e.blast.radius);
+      handle.blastsDrawn.push([...at, e.blast.radius]);
+    }
   }
   /** A weapon's events: an engine that refuses them (tiered) leaves a notice, not a stopped page. */
   function pushGrenade(blasts: () => InputEvent[]) {
     try {
-      pushInput(blasts());
+      const events = blasts();
+      pushInput(events);
+      blastsDue.push(...events.filter((e) => e.kind === 'blast'));
     } catch (e) {
       notice = `weapon: ${e instanceof Error ? e.message : String(e)}`;
       drawHud();
@@ -756,6 +791,10 @@ async function keystoneMode(config: ViewerConfig, device: GPUDevice, renderer: R
     setLook(look, real) {
       renderer.look = lookByName(look, real);
       show({ ...cfg, look, real });
+    },
+    setBlast(on) {
+      renderer.toggles.blasts = on;
+      show({ ...cfg, blast: { ...cfg.blast, on } });
     },
     setProjectile: (projectile) => show({ ...cfg, projectile }),
     setView: (view) => show({ ...cfg, view }),

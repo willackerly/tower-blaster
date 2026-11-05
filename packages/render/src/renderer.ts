@@ -1,14 +1,16 @@
 // WebGPU renderer for boxes and spheres, drawn from a BodySource with GPU
 // culling and indirect draws (cull.ts). Frame: cull (compute), sun shadow
 // map, the scene into a 4x MSAA HDR target resolved to one sample (bodies,
-// floor, sky; shaders.ts), then bloom and the AgX composite (post.ts).
+// floor, sky; shaders.ts; then blasts, blasts.ts), then bloom and the AgX
+// composite (post.ts).
 // Geometry is built from vertex_index (no vertex buffers); positions are
 // camera-relative. Colours and lights come from a LookParams preset.
 import { writeStruct } from '@tb/schema';
 import type { GpuProfiler } from '@tb/gpu';
 import { Culler, NO_LOD, SEG, type CullFrame } from './cull.ts';
 import { DEFAULT_DEBRIS, Sparks } from './sparks.ts';
-import { Lights, MAX_BALLS, TRAIL } from './lights.ts';
+import { BLAST_LIGHTS, Lights, MAX_BALLS, TRAIL } from './lights.ts';
+import { Blasts } from './blasts.ts';
 import { aoFrame, aoGrid, AoVolume } from './ao.ts';
 import { FLOOR_VERTS, floorFan, floorPolygon } from './floor.ts';
 import { fitShadow, frustumCorners, pcssParams, type Arena, type ShadowFit, type ShadowFitState } from './shadowfit.ts';
@@ -245,6 +247,11 @@ export class Renderer {
   readonly sparks: Sparks;
   /** Ball and flash lights and the ball trail (lights.ts). */
   readonly lights: Lights;
+  /** Fireballs, shock shells and blast lights (blasts.ts); Renderer.blast adds one. */
+  readonly blasts: Blasts;
+  /** The last frame's camera-relative inverse view-projection and the look's sun luminance (blasts). */
+  private lastInv: Mat4 = new Float32Array(16);
+  private sunLuma = 1;
   /** Occupancy volume for AO (ao.ts), fitted to the arena (setShadowBounds). */
   readonly ao: AoVolume;
   private readonly aoSampler: GPUSampler;
@@ -253,7 +260,7 @@ export class Renderer {
   /** Per-pass GPU timing of render() (cull, shadow, scene, bloom, composite) when set; read with profiler.collect(). */
   profiler: GpuProfiler | null = null;
   /** Passes to skip, for measuring their marginal cost (bench:render). sparks off also freezes heat (its detector writes it). */
-  toggles = { shadow: true, post: true, sparks: true, trail: true, heat: true, ao: true };
+  toggles = { shadow: true, post: true, sparks: true, trail: true, heat: true, ao: true, blasts: true };
   private readonly stoneLod: boolean;
   private readonly realDiag: RendererOptions['realDiag'];
   private readonly shadowSize: number;
@@ -282,6 +289,7 @@ export class Renderer {
     this.post = new Post(device, this.format);
     this.sparks = new Sparks(device, opts.sparkPool);
     this.lights = new Lights(device);
+    this.blasts = new Blasts(device);
     this.ao = new AoVolume(device, aoGrid(this.arena));
     this.aoSampler = device.createSampler({ magFilter: 'linear', minFilter: 'linear' });
     const VF = GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT;
@@ -622,15 +630,18 @@ export class Renderer {
     const focus = f.focus ?? [f.eye[0], f.eye[1], f.eye[2] - 1];
     this.lastTime = f.time ?? 0;
     const inv = invert(viewProj);
+    this.lastInv = inv;
     this.floorCount = floorFan(floorPolygon(inv, f.groundY - f.eye[1]), this.floorData).count;
     const hall = hallUniforms(this.look, f.metres ?? 1, f.eye, f.groundY);
+    const looks = lookUniforms(this.look, f.metres ?? 1), sc = looks.sunColor as number[];
+    this.sunLuma = 0.2126 * sc[0]! + 0.7152 * sc[1]! + 0.0722 * sc[2]!;
     this.hallOn = hall.hallLook![0]! > 0;
     if (this.floorCount) this.device.queue.writeBuffer(this.floorBuf, 0, this.floorData, 0, this.floorCount * 3);
     writeStruct(this.frameData, Frame, 0, {
       viewProj, lightViewProj, invViewProj: inv,
       eye: f.eye, time: f.time ?? 0, sun, groundY: f.groundY,
       focus: [focus[0] - f.eye[0], focus[1] - f.eye[1], focus[2] - f.eye[2]], capacity: this.culler?.capacity ?? 0,
-      ...lookUniforms(this.look, f.metres ?? 1),
+      ...looks,
       // Bias, all on the receiver: normal offset of 2 texels, depth bias of 1 texel + 1 cm.
       shadowParams: [2 * fit.texel, (fit.texel + 0.01) / fit.depthRange, fit.texel, 1 / this.shadowSize],
       ...this.aoUniforms(f.eye),
@@ -688,11 +699,20 @@ export class Renderer {
     const metres = f.metres ?? 1, froude = 1 / Math.sqrt(metres);
     // The real look's impacts throw dust and chips instead (sparks.ts debris mode).
     const debris = !ids && !effects && real !== null && this.toggles.sparks && (this.look.debris?.dust ?? 1) + (this.look.debris?.chips ?? 1) > 0;
+    // Blasts (every look): their lights go in the light buffer's blast slots, their spheres are drawn last.
+    const blasts = !ids && this.toggles.blasts ? this.blasts.states(f.time ?? 0) : [];
+    const blastLit = !ids && this.lights.setBlastLights(
+      blasts.filter((b) => b.light > 0).sort((a, b) => b.light - a.light).slice(0, BLAST_LIGHTS)
+        .map((b) => ({ pos: b.centre, radius: b.lightR, colour: b.lightColour, intensity: b.light * this.sunLuma * (this.look.blastLight ?? 1) })),
+      f.eye,
+    );
+    const drawBlasts = blasts.length > 0 && this.blasts.prepare(blasts, { eye: f.eye, viewProj: cf.viewProj, invViewProj: this.lastInv, viewport: this.viewport(), time: f.time ?? 0, gain: this.sunLuma });
     if (!ids && effects) {
       if (this.toggles.sparks) this.sparks.encode(cp, this.source, { dt: dt * froude, groundY: f.groundY, dvScale: Math.sqrt(metres) });
       this.lights.encode(cp, this.source, culler.records, this.sparks, { eye: f.eye, time: f.time ?? 0, ball: this.look.ball.map(srgbToLinear) as V3 });
     } else if (!ids) {
-      this.lights.off();
+      if (blastLit) this.lights.packOnly(cp, this.sparks);
+      else this.lights.off();
       if (debris) {
         const d = this.look.debris;
         this.sparks.debris = { ...this.sparks.debris, dustPerDv: DEFAULT_DEBRIS.dustPerDv * (d?.dust ?? 1), chipPerDv: DEFAULT_DEBRIS.chipPerDv * (d?.chips ?? 1), dustDv: d?.threshold ?? DEFAULT_DEBRIS.dustDv, dustFace: d?.face ?? DEFAULT_DEBRIS.dustFace, dustSkirt: d?.skirt ?? DEFAULT_DEBRIS.dustSkirt };
@@ -769,6 +789,8 @@ export class Renderer {
         p.setPipeline(this.pipes.trail);
         p.draw(6 * (TRAIL - 1), MAX_BALLS);
       }
+      // Last: blasts bind their own group 0.
+      if (drawBlasts) this.blasts.draw(p);
     }
     p.end();
   }
@@ -869,9 +891,19 @@ export class Renderer {
     this.overlayColours.destroy();
     this.sparks.destroy();
     this.lights.destroy();
+    this.blasts.destroy();
     this.ao.destroy();
     this.real?.atmosphere.destroy();
     this.real?.materials.destroy();
+  }
+
+  /**
+   * A blast went off at centre (world units) reaching radius: a fireball,
+   * a shock shell out to radius and a light (blasts.ts), from renderer time
+   * `time` (FrameParams.time; default the last frame's).
+   */
+  blast(centre: V3, radius: number, time = this.lastTime): void {
+    this.blasts.add(centre, radius, time);
   }
 
   /** Sparks from a game event at pos, flying out around dir; strength is a speed change in m/s. */

@@ -56,7 +56,7 @@ export interface GameHandle {
    */
   view: { target: [number, number, number]; distance: number; following: boolean; jolt: number };
   result: LevelScore | null;
-  /** Feedback events seen this attempt, by type. */
+  /** Feedback events seen this attempt, by type; blastDrawn counts the blasts handed to the renderer to draw. */
   counts: Record<string, number>;
   /** Pace juice in effect (`?keystone.hitstop=1`, `?keystone.slowmo=1`; both off by default). */
   feel: PaceFeel;
@@ -374,6 +374,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     arrivals = newArrivals();
     juice.reset();
     follow.reset();
+    renderer.blasts.clear();
     const m = 4 * c.frame.unit;
     followClip = Float64Array.of(c.lot.min[0] - m, 0, c.lot.min[1] - m, c.lot.max[0] + m, 1.5 * c.height + m, c.lot.max[1] + m);
     handle.result = null;
@@ -473,11 +474,18 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
             showResult(null);
           }
           break;
-        case 'blast':
-          // A weapon went off: a hard shake, scaled by the blast's reach in cube edges.
+        case 'blast': {
+          // A weapon went off: its fireball, shell (out to the blast's reach) and light (@tb/render blasts.ts),
+          // where its spent shell was removed (a removed body stays put); a hard shake when shake is on.
+          const s = driver.snapshot, b = f.body;
+          if (b >= 0 && b < s.count) {
+            renderer.blast([s.pos[3 * b]!, s.pos[3 * b + 1]!, s.pos[3 * b + 2]!], f.radius);
+            handle.counts.blastDrawn = (handle.counts.blastDrawn ?? 0) + 1;
+          }
           juice.shake(Math.min(1, 0.15 * (f.radius / c.frame.unit)));
           juice.kick(0.08);
           break;
+        }
         case 'slowMo': if (feel.slowMo && !fastHeld && !handle.fast) pacer.slowMo(); break;
         case 'heritageCrack':
           juice.shake(0.3);

@@ -49,12 +49,12 @@ export interface RenderBenchOptions {
 }
 
 export const DEFAULT_RENDER_BENCH: RenderBenchOptions = {
-  width: 2560, height: 1440, counts: [10_000, 100_000], worlds: ['near', 'far'], variants: ['full', 'no-shadow', 'no-post', 'no-sparks', 'no-heat', 'no-ao', 'no-seam', 'fan', 'cube', 'flat-fan', 'flat-cube', 'real', 'real-no-stone', 'real-stone-off', 'real-step1', 'real-no-lod', 'real-no-floor-sky', 'real-flat-ground', 'real-no-pcss', 'real-4096', 'real-dust', 'real-hall', 'real-hall-out', 'real-bare-hills', 'real-plain-dust', 'real-rocks'],
+  width: 2560, height: 1440, counts: [10_000, 100_000], worlds: ['near', 'far'], variants: ['full', 'no-shadow', 'no-post', 'no-sparks', 'no-heat', 'no-ao', 'no-seam', 'fan', 'cube', 'flat-fan', 'flat-cube', 'real', 'real-no-stone', 'real-stone-off', 'real-step1', 'real-no-lod', 'real-no-floor-sky', 'real-flat-ground', 'real-no-pcss', 'real-4096', 'real-dust', 'real-hall', 'real-hall-out', 'real-bare-hills', 'real-plain-dust', 'real-rocks', 'blasts', 'real-blasts'],
   warmup: 30, batches: 10, batchFrames: 30, profiledFrames: 100,
 };
 
 export const QUICK_RENDER_BENCH: RenderBenchOptions = {
-  width: 320, height: 180, counts: [2000], worlds: ['near', 'far'], variants: ['full', 'no-shadow', 'no-post', 'no-sparks', 'no-heat', 'no-ao', 'no-seam', 'fan', 'cube', 'flat-fan', 'flat-cube', 'real', 'real-no-stone', 'real-stone-off', 'real-step1', 'real-no-lod', 'real-no-floor-sky', 'real-flat-ground', 'real-no-pcss', 'real-4096', 'real-dust', 'real-hall', 'real-hall-out', 'real-bare-hills', 'real-plain-dust', 'real-rocks'],
+  width: 320, height: 180, counts: [2000], worlds: ['near', 'far'], variants: ['full', 'no-shadow', 'no-post', 'no-sparks', 'no-heat', 'no-ao', 'no-seam', 'fan', 'cube', 'flat-fan', 'flat-cube', 'real', 'real-no-stone', 'real-stone-off', 'real-step1', 'real-no-lod', 'real-no-floor-sky', 'real-flat-ground', 'real-no-pcss', 'real-4096', 'real-dust', 'real-hall', 'real-hall-out', 'real-bare-hills', 'real-plain-dust', 'real-rocks', 'blasts', 'real-blasts'],
   warmup: 1, batches: 2, batchFrames: 2, profiledFrames: 2,
 };
 
@@ -102,8 +102,11 @@ export type WorldName = 'near' | 'far';
  * the thinning and the skirt cost in the same steady shower. real-rocks:
  * real with small rocks on the ground (rocks 0.6, the default 12 cm), so
  * real-rocks against real is what they cost (off by default: none run).
+ * blasts / real-blasts: full / real with four blasts held at their hottest
+ * (blasts.ts, 0.15 s old, radius 8 around the focus: fireballs, shells and
+ * their lights), so blasts against full is a bomb's worst steady cost.
  */
-export type VariantName = 'full' | 'no-shadow' | 'no-post' | 'no-sparks' | 'no-heat' | 'no-ao' | 'no-seam' | 'fan' | 'cube' | 'flat-fan' | 'flat-cube' | 'real' | 'real-no-stone' | 'real-stone-off' | 'real-step1' | 'real-no-lod' | 'real-no-floor-sky' | 'real-flat-ground' | 'real-no-pcss' | 'real-4096' | 'real-dust' | 'real-hall' | 'real-hall-out' | 'real-bare-hills' | 'real-plain-dust' | 'real-rocks';
+export type VariantName = 'full' | 'no-shadow' | 'no-post' | 'no-sparks' | 'no-heat' | 'no-ao' | 'no-seam' | 'fan' | 'cube' | 'flat-fan' | 'flat-cube' | 'real' | 'real-no-stone' | 'real-stone-off' | 'real-step1' | 'real-no-lod' | 'real-no-floor-sky' | 'real-flat-ground' | 'real-no-pcss' | 'real-4096' | 'real-dust' | 'real-hall' | 'real-hall-out' | 'real-bare-hills' | 'real-plain-dust' | 'real-rocks' | 'blasts' | 'real-blasts';
 
 function variantOptions(v: VariantName): RendererOptions {
   if (v === 'fan' || v === 'flat-fan') return { boxPath: 'fan', flatBoxes: v === 'flat-fan' };
@@ -226,12 +229,12 @@ export async function runRenderBench(opts: Partial<RenderBenchOptions> = {}): Pr
   // the run. Each world still gets its own warmup.
   const rends = o.variants.map((variant) => {
     const rend = new Renderer(device, { size: [o.width, o.height] }, { ...variantOptions(variant), sparkPool: o.sparkPool });
-    if (variant === 'real' || variant === 'real-no-lod' || variant === 'real-no-floor-sky' || variant === 'real-flat-ground' || variant === 'real-no-pcss' || variant === 'real-4096' || variant === 'real-dust') rend.look = LOOKS.real!;
+    if (variant === 'real' || variant === 'real-no-lod' || variant === 'real-no-floor-sky' || variant === 'real-flat-ground' || variant === 'real-no-pcss' || variant === 'real-4096' || variant === 'real-dust' || variant === 'real-blasts') rend.look = LOOKS.real!;
     if (variant === 'real-no-stone' || variant === 'real-stone-off' || variant === 'real-step1') rend.look = realLook({ stoneDetail: 0 });
     if (variant === 'real-bare-hills') rend.look = realLook({ hills: 1.5, hillCover: 0, hillRidges: 1 });
     if (variant === 'real-plain-dust') rend.look = realLook({ dustErode: 0, dustThin: 0, dustSkirt: 0 });
     if (variant === 'real-rocks') rend.look = realLook({ rocks: 0.6 });
-    rend.toggles = { shadow: variant !== 'no-shadow', post: variant !== 'no-post', sparks: variant !== 'no-sparks', trail: true, heat: variant !== 'no-heat', ao: variant !== 'no-ao' };
+    rend.toggles = { shadow: variant !== 'no-shadow', post: variant !== 'no-post', sparks: variant !== 'no-sparks', trail: true, heat: variant !== 'no-heat', ao: variant !== 'no-ao', blasts: true };
     return rend;
   });
   for (const worldName of o.worlds) for (const n of o.counts) {
@@ -249,9 +252,12 @@ export async function runRenderBench(opts: Partial<RenderBenchOptions> = {}): Pr
       viewProj: multiply(perspective(0.9, o.width / o.height, 0.5, 2000), lookAt(w.eye, w.target)),
       eye: w.eye, focus: w.target, groundY: 0, time: 1, alpha: 1,
     };
-    for (const rend of rends) {
+    for (const [k, rend] of rends.entries()) {
       rend.setSource(src);
       rend.setShadowBounds(w.center, w.radius);
+      rend.blasts.clear();
+      // Held at 0.15 s old: the frame time never moves.
+      if (o.variants[k] === 'blasts' || o.variants[k] === 'real-blasts') for (const [dx, dz] of [[0, 0], [5, 2], [-4, 3], [2, -5]]) rend.blast([w.target[0] + dx!, 2, w.target[2] + dz!], 8, f.time! - 0.15);
     }
     const shower = rng(7), fDust: FrameParams = { ...f, dt: 1 / 60 };
     const shows = (k: number) => o.variants[k] === 'real-dust' || o.variants[k] === 'real-plain-dust';
