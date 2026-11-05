@@ -10,8 +10,10 @@
 //   GrenadeSpec (lengths in h, the rest SI: levelWeapon) in a GRENADE_SHELL, or a
 //   @tb/weapons WeaponSpec in its own shell, written in the viewer's cube units and
 //   scaled to the level (arsenal.ts levelArm). A level without weapons[key] gets
-//   w-grenade as KEYSTONE_GRENADE and w-firework, w-cluster as @tb/weapons' built-ins
-//   (weaponOf). An item's shell, speed and body count then come from the compiled
+//   @tb/weapons' built-in of that name (weaponOf): w-firework, w-cluster, the grenade
+//   sizes w-grenades, w-grenadem, w-grenadel, w-grenadexl, and w-grenade, which is
+//   w-grenadem (one grenade of energy). A weapon behaves the same on every level, scaled
+//   to its blocks; a smaller one has a smaller name (Will, 2026-11-05). An item's shell, speed and body count then come from the compiled
 //   level (CompiledLevel.arms, ShotFrame.shells).
 import type { Vec3 } from '@tb/engine-api';
 import { BUILTIN_WEAPONS, checkGrenade, type GrenadeSpec, isPreset, type WeaponSpec, PRESET_NAMES, type PresetName, PROJECTILE_PRESETS, STONE_DENSITY } from '@tb/weapons';
@@ -84,7 +86,10 @@ export const MODEL_DENSITY = MATERIALS[materialId('stone')]!.density / STONE_DEN
 export const GRENADE_SHELL: AmmoSpec = { size: { radius: 0.2 }, material: 'iron', vMin: 5, vMax: 15 };
 
 /**
- * The grenade a level gets for `w-grenade` when its weapons have none. Lengths (blast
+ * A small Keystone grenade, as a GrenadeSpec: what `w-grenade` defaulted to until
+ * 2026-11-05 (it is now w-grenadem, weaponOf), about 1/77 of a grenade of energy on
+ * plaster and 1/479 on stone. It stays for a level that writes it into its weapons, and
+ * as the GrenadeSpec the tests fire. Lengths (blast
  * radius, prox) are in h, the rest SI, as LevelDef.weapons are (levelWeapon converts).
  * DEFAULT_GRENADE is tuned for the viewer's 1 kg, 1 m scene cubes; at Keystone's scale
  * its core gives a plaster cube (31 kg, A/m 0.012 m^2/kg) only 0.48 m/s. Here a plain
@@ -111,14 +116,20 @@ export interface ItemSpec {
 
 /**
  * Where an item is fired: the level's metres per h and the shells of its w- items
- * (ShotFrame.shells, from compileLevel). A bare unit stands for a level whose only weapon
- * is the default grenade.
+ * (ShotFrame.shells, from compileLevel). A bare unit fires only Keystone's ammo and p- presets.
  */
 export type ItemFrame = number | { unit: number; shells?: Readonly<Record<string, ItemSpec>> };
 
+/** GRENADE_SHELL at `unit` metres per h: the shell every GrenadeSpec weapon is fired in (arsenal.ts levelArm). */
+export function grenadeShell(unit: number): ItemSpec {
+  const m = MATERIALS[materialId(GRENADE_SHELL.material)]!, r = (GRENADE_SHELL.size as { radius: number }).radius;
+  return { size: { radius: r * unit }, density: m.density, friction: m.friction, restitution: m.restitution, vMin: GRENADE_SHELL.vMin, vMax: GRENADE_SHELL.vMax };
+}
+
 /**
- * What item `name` fires at `at`. A w- item takes its shell from the frame's shells; without
- * one only w-grenade resolves (GRENADE_SHELL). Throws on a name that is not a rack item.
+ * What item `name` fires at `at`. A w- item takes its shell from the frame's shells (a
+ * compiled level's ShotFrame), since only the level knows its weapon. Throws on a name that
+ * is not a rack item, and on a w- item the frame has no shell for.
  */
 export function itemSpec(name: RackItem, at: ItemFrame): ItemSpec {
   const r = itemRef(name);
@@ -127,13 +138,13 @@ export function itemSpec(name: RackItem, at: ItemFrame): ItemSpec {
   if (r.kind === 'weapon') {
     const own = typeof at === 'number' ? undefined : at.shells?.[name];
     if (own) return own;
-    if (r.key !== 'grenade') throw new Error(`${name}: its shell comes from the level's weapons (fire it through the compiled level's frame)`);
+    throw new Error(`${name}: its shell comes from the level's weapons (fire it through the compiled level's frame)`);
   }
   if (r.kind === 'preset') {
     const p = PROJECTILE_PRESETS[r.preset];
     return { size: { radius: p.diameter / 2 }, density: p.density * MODEL_DENSITY, friction: p.friction, restitution: p.restitution, vMin: p.speed / 2, vMax: p.speed };
   }
-  const a = r.kind === 'ammo' ? AMMO[r.ammo] : GRENADE_SHELL, m = MATERIALS[materialId(a.material)]!;
+  const a = AMMO[r.ammo], m = MATERIALS[materialId(a.material)]!;
   const size = 'radius' in a.size ? { radius: a.size.radius * unit } : { half: a.size.half.map((x) => x * unit) as Vec3 };
   return { size, density: m.density, friction: m.friction, restitution: m.restitution, vMin: a.vMin, vMax: a.vMax };
 }
@@ -148,20 +159,20 @@ export function speedOf(name: RackItem, power: number, at: ItemFrame = DEFAULT_U
 export type LevelWeapon = GrenadeSpec | WeaponSpec;
 
 /**
- * Weapon `key` of a level as written: its own weapons[key], or the default (w-grenade:
- * KEYSTONE_GRENADE; w-firework, w-cluster: @tb/weapons BUILTIN_WEAPONS). Null if none.
+ * Weapon `key` of a level as written: its own weapons[key], or @tb/weapons' built-in of
+ * that name (BUILTIN_WEAPONS; grenade is grenadem, the one-grenade size). Null if none.
  * Unchecked: levelWeapon and arsenal.ts levelArm check and scale it.
  */
 export function weaponOf(def: { weapons?: Record<string, LevelWeapon> }, key: string): LevelWeapon | null {
   if (def.weapons && Object.hasOwn(def.weapons, key)) return def.weapons[key]!;
-  if (key === 'grenade') return KEYSTONE_GRENADE;
-  return Object.hasOwn(BUILTIN_WEAPONS, key) ? BUILTIN_WEAPONS[key]! : null;
+  const name = key === 'grenade' ? 'grenadem' : key;
+  return Object.hasOwn(BUILTIN_WEAPONS, name) ? BUILTIN_WEAPONS[name]! : null;
 }
 
 /**
  * Grenade `key` of a level in world units (lengths times the level's unit), checked
- * (checkGrenade); w-grenade without one is KEYSTONE_GRENADE. Null if the level has no
- * such weapon or it is a WeaponSpec (arsenal.ts levelArm scales those).
+ * (checkGrenade). Null if the level has no such weapon or it is a WeaponSpec (the
+ * built-ins, so w-grenade without the level's own: arsenal.ts levelArm scales those).
  */
 export function levelWeapon(def: { unit?: number; weapons?: Record<string, LevelWeapon> }, key: string): GrenadeSpec | null {
   const g = weaponOf(def, key);

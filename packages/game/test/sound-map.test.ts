@@ -3,7 +3,7 @@
 import { describe, expect, it } from 'vitest';
 import { RapierEngine } from '@tb/adapter-rapier';
 import { CEILING, parseSoundMaterial } from '@tb/audio';
-import { AMMO_KINDS, ammoBody, compileLevel, L1, MATERIALS } from '@tb/keystone';
+import { AMMO_KINDS, ammoBody, compileLevel, grenadeShell, KEYSTONE_GRENADE, L1, MATERIALS } from '@tb/keystone';
 import { PRESET_NAMES } from '@tb/weapons';
 import { capture, render } from '../src/sound-cli.ts';
 import { AMMO_SLOT, ammoKindOf, GAME_SOUND_DB, KEYSTONE_SOUNDS, slotSounds, SOUND_SLOTS, soundSlotOf } from '../src/sound-map.ts';
@@ -25,7 +25,14 @@ describe('game sound slots', () => {
 
   it('knows each ammo kind from its body, at any cube size and either cue direction; real-world projectiles are silent for now', () => {
     for (const h of [0.5, 1, 0.25]) for (const k of AMMO_KINDS) for (const alongZ of [false, true]) expect(ammoKindOf(ammoBody(k, h, [0, 0, 0], [0, 0, 0], alongZ), h)).toBe(k);
-    expect(ammoKindOf(ammoBody('w-grenade', 0.5, [0, 0, 0], [0, 0, 0]), 0.5)).toBe('marble'); // an iron shell, marble-sized
+    // A GrenadeSpec flies in the iron grenade shell, marble-sized, and sounds as a marble.
+    const g = compileLevel({ ...L1, rack: ['w-g'], weapons: { g: KEYSTONE_GRENADE } });
+    expect(g.frame.shells!['w-g']).toEqual(grenadeShell(0.5));
+    expect(ammoKindOf(ammoBody('w-g', g.frame, [0, 0, 0], [0, 0, 0]), 0.5)).toBe('marble');
+    // The default w-grenade (w-grenadem) has a WeaponSpec shell, scaled to the blocks as B1-B3's bomb and the
+    // firework are: silent like theirs.
+    const m = compileLevel({ ...L1, rack: ['w-grenade'] });
+    expect(soundSlotOf(m, ammoBody('w-grenade', m.frame, [0, 0, 0], [0, 0, 0]), m.meta.n)).toBe(-1);
     const c = compileLevel(L1);
     for (const p of PRESET_NAMES) expect(soundSlotOf(c, ammoBody(`p-${p}`, c.frame.unit, [0, 0, 0], [0, 0, 0]), c.meta.n)).toBe(-1);
   });

@@ -10,7 +10,7 @@ import { describe, expect, it } from 'vitest';
 import { RapierEngine } from '@tb/adapter-rapier';
 import { blastArea, checkBlast, type InputEvent, TIER_FREE } from '@tb/engine-api';
 import {
-  AVBD_GAP_SLOP, AVBD_ITERATIONS, B1, B2, B3, compileLevel, cubeScale, itemSpec, itemYield, KEYSTONE_GRENADE, L1, type LevelDef, levelArm, levelBlock, levelFill, levelWeapon, rackBodies, runSession,
+  AVBD_GAP_SLOP, AVBD_ITERATIONS, B1, B2, B3, compileLevel, cubeScale, grenadeShell, itemSpec, itemYield, KEYSTONE_GRENADE, L1, type LevelDef, levelArm, levelBlock, levelFill, levelWeapon, rackBodies, runSession,
   type SessionResult, type Shot, shotToSpawn, snapshotHash, speedOf, validateLevel,
 } from '@tb/keystone';
 import { AvbdReferenceEngine } from '@tb/physics-ref';
@@ -63,9 +63,11 @@ describe('WeaponSpec items: scaled to the level', () => {
     expect(c.arms['w-firework']!.bodies).toBe(13);
     expect(c.arms['w-cluster']!.bodies).toBe(7);
     expect(rackBodies(def.rack, c.arms)).toBe(13 + 7 + 1);
-    // Each built-in is one grenade (grenadeEnergies): the viewer's grenade, B1-B3's bomb. Keystone's own w-grenade
-    // (KEYSTONE_GRENADE, SI, not scaled with the block) is much smaller: about 1/77 of one on plaster.
-    for (const k of ['w-firework', 'w-cluster'] as const) expect(itemYield(c, k) / itemYield(c, 'w-grenade'), k).toBeGreaterThan(70);
+    // Each built-in is one grenade (grenadeEnergies): the viewer's grenade, B1-B3's bomb, and since 2026-11-05 the
+    // default w-grenade (w-grenadem). KEYSTONE_GRENADE (SI, not scaled with the block) is about 1/77 of one on plaster.
+    for (const k of ['w-firework', 'w-cluster'] as const) expect(itemYield(c, k) / itemYield(c, 'w-grenade'), k).toBeCloseTo(grenadeEnergies(BUILTIN_WEAPONS[k.slice(2)]!), 9);
+    const small = compileLevel({ ...def, weapons: { grenade: KEYSTONE_GRENADE } });
+    expect(itemYield(c, 'w-grenade') / itemYield(small, 'w-grenade')).toBeGreaterThan(70);
   });
 
   it('a cube-unit weapon\'s yield over the bomb\'s is its grenadeEnergies on every level: plaster or stone, 1k or 10k', () => {
@@ -77,11 +79,11 @@ describe('WeaponSpec items: scaled to the level', () => {
   });
 
   it('a GrenadeSpec stays what it was: levelWeapon in the grenade shell, its one blast', () => {
-    const g = levelArm(c, 'grenade');
-    expect(g.spec).toEqual(levelWeapon(def, 'grenade'));
-    expect(g.shell).toEqual(itemSpec('w-grenade', 0.5));
+    const own: LevelDef = { ...def, weapons: { grenade: KEYSTONE_GRENADE } }, oc = compileLevel(own), g = levelArm(oc, 'grenade');
+    expect(g.spec).toEqual(levelWeapon(own, 'grenade'));
+    expect(g.shell).toEqual(grenadeShell(0.5));
     expect(g.bodies).toBe(1);
-    expect(g.yield).toBe(nominalYield(levelWeapon(def, 'grenade')!.blast, levelFill(c)));
+    expect(g.yield).toBe(nominalYield(levelWeapon(own, 'grenade')!.blast, levelFill(oc)));
   });
 
   it('the validator checks each child and each blast, and reports a bad spec', () => {
@@ -140,7 +142,7 @@ describe('WeaponSpec items: fired', () => {
 
   it('a grenade as a WeaponSpec (grenadeAsSpec) replays the w-grenade line bit for bit on the f64 reference', async () => {
     // The spec's proof for G3.4: the same fuse and blast written in the language push the same events at the same steps.
-    const g = compileLevel({ ...L1, rack: ['w-grenade'] }), arm = g.arms['w-grenade']!, grenade = levelWeapon(g.def, 'grenade')!;
+    const g = compileLevel({ ...L1, rack: ['w-grenade'], weapons: { grenade: KEYSTONE_GRENADE } }), arm = g.arms['w-grenade']!, grenade = levelWeapon(g.def, 'grenade')!;
     const shell = { shape: { kind: 'sphere' as const, radius: (arm.shell.size as { radius: number }).radius }, density: arm.shell.density, speed: [arm.shell.vMin, arm.shell.vMax] as [number, number] };
     const spec = grenadeAsSpec(grenade, shell);
     expect(isWeaponSpec(spec)).toBe(true);

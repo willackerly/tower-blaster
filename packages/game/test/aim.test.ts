@@ -19,7 +19,9 @@ const dir = (v: Vec3): Vec3 => { const l = Math.hypot(...v); return [v[0] / l, v
 describe('launch height', () => {
   it("is the launcher's for Keystone ammo and every preset that fits, and lifts the boulder clear of the ground", () => {
     const base = Math.round(L1.launcher.y * 4);
-    for (const a of ['marble', 'cannonball', 'w-grenade', 'p-beachball', 'p-wreckingball'] as const) expect(launchY(c, a), a).toBe(base);
+    for (const a of ['marble', 'cannonball', 'p-beachball', 'p-wreckingball'] as const) expect(launchY(c, a), a).toBe(base);
+    // w-grenade's shell is the level's (w-grenadem's, 0.2 cube = 0.1 m here): small enough to leave from the launcher too.
+    expect(launchY(compileLevel({ ...L1, rack: [...L1.rack, 'w-grenade'] }), 'w-grenade')).toBe(base);
     // 6.7 m across at h = 0.5 m: radius 6.7 h, so 27 quarter-h, its bottom 0.025 m above the ground.
     expect(launchY(c, 'p-boulder')).toBe(27);
     const a = shotFor(compileLevel({ ...L1, rack: ['p-boulder'] }), 'p-boulder', 360, 100, [0, 2, 0])!;
