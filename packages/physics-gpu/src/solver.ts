@@ -1370,6 +1370,77 @@ export function recordWgsl(records: RecordMode, hessian: HessianForm = 'register
 /** The other kernels' shaders (without records: recordWgsl()); the primal's is solveWgsl(). */
 export const SOLVER_WGSL = { PREP, MATCH, SETUP, INIT, DUAL };
 
+// Sleep's awake lists (SolverDispatch.awakeLists; roadmap E2 step 3b-2). Once a step, after initBodies: the pair slots
+// whose contacts are not frozen (not both ends asleep) and the bodies not asleep, each appended through a counter, then
+// the indirect arguments for them. The dual updates of each iteration then run over the lists: a frozen contact's
+// update returns at once (dualPoint, dualRecord), and each update writes only its own slot's contacts, so leaving
+// the frozen ones out, in whatever order the rest are listed, gives the same floats.
+/** The awake lists' buffer: a header of ACTIVE_HEAD words, then a pair slot per maxPairs, then a body per capacity. */
+export const ACTIVE_HEAD = 16;
+/** Header words: the pair list's dispatch (x, y, z) at 0, the body list's at 3, the pair count at 6, the body count at 7. */
+const ACTIVE_WORDS = /* wgsl */ `
+const ACTIVE_HEAD = ${ACTIVE_HEAD}u;
+const PAIR_COUNT = 6u;
+const BODY_COUNT = 7u;
+fn pairEntry(j: u32) -> u32 { return ACTIVE_HEAD + j; }
+fn bodyEntry(j: u32) -> u32 { return ACTIVE_HEAD + p.maxPairs + j; }
+`;
+const ACTIVE = /* wgsl */ `
+${COMMON}
+@group(0) @binding(0) var<storage, read> bodies: array<Body>;
+@group(0) @binding(1) var<storage, read> pairs: array<vec2u>;
+@group(0) @binding(2) var<storage, read> stepInfo: array<u32, 16>;
+@group(0) @binding(3) var<storage, read_write> lists: array<atomic<u32>>;
+@group(0) @binding(4) var<uniform> p: SolverParams;
+${SLEEPING}
+${ACTIVE_WORDS}
+@compute @workgroup_size(${WG})
+fn listPairs(@builtin(global_invocation_id) id: vec3u) {
+  let k = id.x;
+  if (k >= stepInfo[3]) { return; }
+  let pr = pairs[k];
+  if (frozen(pr.x, pr.y)) { return; }
+  atomicStore(&lists[pairEntry(atomicAdd(&lists[PAIR_COUNT], 1u))], k);
+}
+
+@compute @workgroup_size(${WG})
+fn listBodies(@builtin(global_invocation_id) id: vec3u) {
+  let i = id.x;
+  if (i >= p.n || sleeping(bodies[i].flags)) { return; }
+  atomicStore(&lists[bodyEntry(atomicAdd(&lists[BODY_COUNT], 1u))], i);
+}
+
+@compute @workgroup_size(1)
+fn listArgs() {
+  let groups = vec2u(atomicLoad(&lists[PAIR_COUNT]), atomicLoad(&lists[BODY_COUNT])) + vec2u(${WG - 1}u);
+  atomicStore(&lists[0], groups.x / ${WG}u); atomicStore(&lists[1], 1u); atomicStore(&lists[2], 1u);
+  atomicStore(&lists[3], groups.y / ${WG}u); atomicStore(&lists[4], 1u); atomicStore(&lists[5], 1u);
+}
+`;
+
+/** The dual shader's entry points over the awake lists, appended to the dual shader of a record mode (binding 5: the lists). */
+function awakeDualWgsl(records: RecordMode): string {
+  const pair = records === 0 ? 'for (var q = 0u; q < 4u; q++) { dualPoint(pairPoint(p.cur, k, q)); }' : 'dualRecord(pairRecord(p.cur, k));';
+  const ground = records === 0 ? 'for (var q = 0u; q < 4u; q++) { dualPoint(groundPoint(p.cur, i, q)); }' : 'dualRecord(groundRecord(p.cur, i));';
+  return /* wgsl */ `
+@group(0) @binding(5) var<storage, read> lists: array<u32>;
+${ACTIVE_WORDS}
+@compute @workgroup_size(${WG})
+fn dualPairsAwake(@builtin(global_invocation_id) id: vec3u) {
+  if (id.x >= lists[PAIR_COUNT]) { return; }
+  let k = lists[pairEntry(id.x)];
+  ${pair}
+}
+
+@compute @workgroup_size(${WG})
+fn dualGroundAwake(@builtin(global_invocation_id) id: vec3u) {
+  if (id.x >= lists[BODY_COUNT]) { return; }
+  let i = lists[bodyEntry(id.x)];
+  ${ground}
+}
+`;
+}
+
 /** Index = SolverParams.frictionCombine; combineFriction in the setup kernels follows this order. */
 export const COMBINE_RULES: readonly CombineRule[] = ['average', 'min', 'max', 'multiply'];
 
@@ -1417,6 +1488,12 @@ export interface SolverDispatch {
    */
   sizedColors: boolean;
   /**
+   * With sleep (AvbdSolver's sleep), the dual updates of each iteration run over lists of the pair slots not both
+   * asleep and of the bodies not asleep, built once a step (roadmap E2 step 3b-2), instead of over every pair slot and
+   * body: a frozen contact's update changes nothing, so the result is the same. No effect without sleep.
+   */
+  awakeLists: boolean;
+  /**
    * The tail workgroup's size, 1-256. Default 256 (MAX_TAIL) on a hardware GPU:
    * on the M5 Max it was never slower than 64, and late in the 10k city, where
    * the colours from 8 up hold hundreds of bodies, it saved 5.6 ms a step.
@@ -1440,7 +1517,7 @@ export interface SolverDispatch {
   hessian: HessianForm;
 }
 
-export const DEFAULT_DISPATCH: SolverDispatch = { colorTail: 8, indirectColors: false, sizedColors: false, tailThreads: MAX_TAIL, hessian: 'registers' };
+export const DEFAULT_DISPATCH: SolverDispatch = { colorTail: 8, indirectColors: false, sizedColors: false, awakeLists: false, tailThreads: MAX_TAIL, hessian: 'registers' };
 
 /** The default tail width on a software adapter (SwiftShader in tests and CI); see SolverDispatch.tailThreads. */
 export const SOFTWARE_TAIL_THREADS = 64;
@@ -1502,6 +1579,8 @@ export class AvbdSolver {
   /** The restitution pass's buffers (restitution.ts), only while it is on: a RestSlot per contact slot, and its counters and indirect arguments. */
   readonly restSlots: GPUBuffer | null = null;
   readonly restInfo: GPUBuffer | null = null;
+  /** Sleep's awake lists (SolverDispatch.awakeLists), only while they are on: ACTIVE_HEAD header words, then maxPairs pair slots and capacity bodies. */
+  readonly active: GPUBuffer | null = null;
   private readonly pipes: Record<string, GPUComputePipeline> = {};
   private readonly binds: Record<string, GPUBindGroup> = {};
   private cur = 0;
@@ -1602,6 +1681,18 @@ export class AvbdSolver {
     mk('avbd dual', code.dual, [['', 'dualPairs', 'dualGround', 'velocities', 'finalize']], ['rw', 'rw', 'rw', 'r', 'u'],
       [['dual', [B.bodies, this.solver, this.contacts, this.meta, this.uniform]]],
       both(slop('dualPairs', 'dualGround'), asleep('dualPairs', 'dualGround', 'velocities', 'finalize')));
+    if (sleep && dispatch.awakeLists) {
+      const active = device.createBuffer({
+        size: (ACTIVE_HEAD + maxPairs + capacity) * 4, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.INDIRECT | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST, label: 'avbd awake lists',
+      });
+      assertStorageFits(device, active.size, 'avbd awake lists');
+      this.active = active;
+      mk('avbd awake lists', ACTIVE, [['', 'listPairs', 'listBodies', 'listArgs']], ['r', 'r', 'r', 'rw', 'u'],
+        [['lists', [B.bodies, B.pairs, this.meta, active, this.uniform]]], asleep('listPairs', 'listBodies'));
+      mk('avbd dual awake', code.dual + awakeDualWgsl(records), [['', 'dualPairsAwake', 'dualGroundAwake']], ['rw', 'rw', 'rw', 'r', 'u', 'r'],
+        [['dualAwake', [B.bodies, this.solver, this.contacts, this.meta, this.uniform, active]]],
+        both(slop('dualPairsAwake', 'dualGroundAwake'), asleep('dualPairsAwake', 'dualGroundAwake')));
+    }
     if (restitution) {
       const slots = buf((maxPairs + capacity) * RestSlot.size, 'avbd restitution slots');
       const info = device.createBuffer({ size: REST_INFO_BYTES, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.INDIRECT | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST, label: 'avbd restitution info' });
@@ -1665,6 +1756,8 @@ export class AvbdSolver {
     encoder.copyBufferToBuffer(b.total, 0, this.meta, 0, 32);
     encoder.copyBufferToBuffer(b.total, 12, this.meta, 32 + 4 * this.cur, 4);
     const groups = Math.max(1, Math.ceil(n / WG));
+    const { active } = this;
+    if (active && n > 0) encoder.clearBuffer(active, 0, ACTIVE_HEAD * 4);
     const pass = encoder.beginComputePass(timestampWrites ? { timestampWrites } : {});
     if (n > 0) {
       pass.setBindGroup(0, this.binds.setup!);
@@ -1675,6 +1768,15 @@ export class AvbdSolver {
       pass.setBindGroup(0, this.binds.init!);
       pass.setPipeline(this.pipes.initBodies!);
       pass.dispatchWorkgroups(groups);
+      if (active) {
+        pass.setBindGroup(0, this.binds.lists!);
+        pass.setPipeline(this.pipes.listPairs!);
+        pass.dispatchWorkgroupsIndirect(b.total, 0);
+        pass.setPipeline(this.pipes.listBodies!);
+        pass.dispatchWorkgroups(groups);
+        pass.setPipeline(this.pipes.listArgs!);
+        pass.dispatchWorkgroups(1);
+      }
       // Colours below `direct` get a dispatch each; the tail workgroup does the rest.
       const { indirectColors } = this.dispatch;
       const direct = indirectColors ? MAX_COLORS - 1 : this.dispatch.colorTail;
@@ -1690,18 +1792,14 @@ export class AvbdSolver {
         pass.setPipeline(this.pipes.primalTail!);
         pass.setBindGroup(0, this.binds.solve!, colour(direct));
         pass.dispatchWorkgroups(1);
-        pass.setBindGroup(0, this.binds.dual!);
-        if (it < iterations) {
-          pass.setPipeline(this.pipes.dualPairs!);
-          pass.dispatchWorkgroupsIndirect(b.total, 0);
-          pass.setPipeline(this.pipes.dualGround!);
-          pass.dispatchWorkgroups(groups);
-        }
+        if (it < iterations) this.encodeDual(pass, groups);
         if (it === iterations - 1) {
+          pass.setBindGroup(0, this.binds.dual!);
           pass.setPipeline(this.pipes.velocities!);
           pass.dispatchWorkgroups(groups);
         }
       }
+      pass.setBindGroup(0, this.binds.dual!);
       pass.setPipeline(this.pipes.finalize!);
       pass.dispatchWorkgroups(groups);
       if (this.restitution) this.encodeRestitution(pass, groups, this.restitution.rounds);
@@ -1709,6 +1807,24 @@ export class AvbdSolver {
     pass.end();
     this.prevN = n;
     this.cur = 1 - this.cur;
+  }
+
+  /** One dual update of every contact: over every pair slot and body, or with the awake lists over theirs (SolverDispatch.awakeLists). */
+  private encodeDual(pass: GPUComputePassEncoder, groups: number): void {
+    const { active } = this;
+    if (active) {
+      pass.setBindGroup(0, this.binds.dualAwake!);
+      pass.setPipeline(this.pipes.dualPairsAwake!);
+      pass.dispatchWorkgroupsIndirect(active, 0);
+      pass.setPipeline(this.pipes.dualGroundAwake!);
+      pass.dispatchWorkgroupsIndirect(active, 12);
+      return;
+    }
+    pass.setBindGroup(0, this.binds.dual!);
+    pass.setPipeline(this.pipes.dualPairs!);
+    pass.dispatchWorkgroupsIndirect(this.b.total, 0);
+    pass.setPipeline(this.pipes.dualGround!);
+    pass.dispatchWorkgroups(groups);
   }
 
   /** The restitution pass (restitution.ts), after finalize: 6 + 2 rounds dispatches, all but 3 of them indirect and empty when no point bounces. */
@@ -1786,13 +1902,8 @@ export class AvbdSolver {
     const groups = Math.max(1, Math.ceil(n / WG));
     const direct = this.dispatch.indirectColors ? MAX_COLORS - 1 : this.dispatch.colorTail;
     if (piece === 'dual') {
-      pass.setBindGroup(0, this.binds.dual!);
-      for (let r = 0; r < reps; r++) {
-        pass.setPipeline(this.pipes.dualPairs!);
-        pass.dispatchWorkgroupsIndirect(b.total, 0);
-        pass.setPipeline(this.pipes.dualGround!);
-        pass.dispatchWorkgroups(groups);
-      }
+      // With the awake lists, over the lists the last solve() built.
+      for (let r = 0; r < reps; r++) this.encodeDual(pass, groups);
       return;
     }
     const c = piece === 'tail' ? direct : piece.primal;
@@ -1807,6 +1918,6 @@ export class AvbdSolver {
   }
 
   destroy(): void {
-    for (const x of [this.solver, this.contacts, this.meta, this.pairHist, this.offHist, this.uniform, this.colorUniform, this.restSlots, this.restInfo]) x?.destroy();
+    for (const x of [this.solver, this.contacts, this.meta, this.pairHist, this.offHist, this.uniform, this.colorUniform, this.restSlots, this.restInfo, this.active]) x?.destroy();
   }
 }
