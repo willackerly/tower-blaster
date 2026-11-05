@@ -2,8 +2,9 @@
 import type { Probe } from './probe.ts';
 import { X1 } from './x1-dominoes.ts';
 import { X2 } from './x2-demolition.ts';
+import { X3 } from './x3-towers.ts';
 
-export const PROBES: readonly Probe[] = [X1 as Probe, X2 as Probe];
+export const PROBES: readonly Probe[] = [X1 as Probe, X2 as Probe, X3 as Probe];
 
 export function probeById(id: string): Probe {
   const p = PROBES.find((x) => x.id === id.toUpperCase());
