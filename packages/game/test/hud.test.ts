@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { L1, L2, levelScore, outcomeScore, tier } from '@tb/keystone';
+import { L1, L2, levelScore, outcomeScore, tier, U3 } from '@tb/keystone';
 import { BANK_BUTTON, esc, fmtLeverage, fmtPoints, hudHtml, nextSelection, objectiveText, rackChips, resultHtml, starsText } from '../src/hud.ts';
 
 describe('rack', () => {
@@ -35,6 +35,13 @@ describe('formatting', () => {
     expect(marble).toMatch(/width:60%/);
     expect(hudHtml({ ...base, chips: [{ ammo: 'drop', key: '1', left: 1, total: 1, selected: true }] })).not.toMatch(/Power/);
     expect(hudHtml({ ...base, chips: [], reachable: false })).toMatch(/Out of reach/);
+  });
+  it('a hold level (Undercut Hollow) shows the share pulled and asks to keep the crown up', () => {
+    const base = { level: U3, strokes: 2, crownsDown: 0, crownsTotal: 1, heritageBroken: 0, heritageTotal: 0, power: 60, liveLeverage: 0, phase: 'aiming', reachable: null, chips: rackChips(U3.rack, U3.rack.slice(2), 'pull') };
+    const html = hudHtml({ ...base, collapse: 0.01, pulled: 0.0655 });
+    expect(html).toMatch(/Pulled <b class="down">6%<\/b>/);
+    expect(html).not.toMatch(/Down </);
+    expect(html).toMatch(/keep the crown up/);
   });
   it('a pull chip is labelled Pull, has no power bar, and a refused pull says why instead of out of reach', () => {
     const base = { level: L2, strokes: 0, crownsDown: 0, crownsTotal: 6, heritageBroken: 0, heritageTotal: 36, power: 60, liveLeverage: 0, phase: 'aiming', reachable: null };
@@ -85,7 +92,7 @@ describe('formatting', () => {
   });
   it('an outcome result card: shots without par, how much came down, and the outcome stamp', () => {
     const def = { ...L1, scoring: 'outcome' as const };
-    const score = outcomeScore({ met: true, collapse: 0.62, leverage: 1, comboMax: 4, hasCrowns: true, rackLeft: 3, heritageBroken: 0, outOfLot: 0, crownsDown: 4, skylineRatio: 0.3 }, undefined);
+    const score = outcomeScore({ met: true, collapse: 0.62, leverage: 1, comboMax: 4, hasCrowns: true, rackLeft: 3, heritageBroken: 0, outOfLot: 0, crownsDown: 4, skylineRatio: 0.3, pulled: 0 }, undefined);
     const html = resultHtml(def, score, 1, false);
     expect(html).toMatch(/1 shot · 62% down · leverage/);
     expect(html).not.toMatch(/par/);

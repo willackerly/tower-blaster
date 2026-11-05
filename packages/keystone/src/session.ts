@@ -215,7 +215,9 @@ export class Session {
     this.objectiveDone = cleared;
     this.lastSettle = { red: o.red, crownsTotal };
     if (this.scoring === 'outcome') {
-      if (this.rackLeft.length === 0 || (c.def.autobank && cleared)) out.push(this.end(step));
+      // Hollow: a crown down at a settle ends the level there.
+      const toppled = c.def.objective.kind === 'hold' && crownsTotal > 0;
+      if (toppled || this.rackLeft.length === 0 || (c.def.autobank && cleared)) out.push(this.end(step));
       else this.phase = 'aiming';
       return out;
     }
@@ -238,6 +240,15 @@ export class Session {
     return [this.end(step)];
   }
 
+  /** Share of the structure's mass pulled so far, 0 to 1. */
+  pulledShare(): number {
+    const m = this.level.meta;
+    let all = 0, gone = 0;
+    for (let i = 0; i < m.n; i++) all += m.mass[i]!;
+    for (const b of this.pulled) gone += m.mass[b]!;
+    return all > 0 ? gone / all : 0;
+  }
+
   /** What an outcome level is scored on as it stands at the last settle. */
   outcomeFacts(): OutcomeFacts {
     const c = this.level, m = c.meta, last = this.lastSettle;
@@ -256,6 +267,8 @@ export class Session {
       ...(c.def.objective.footprintMax !== undefined ? { footprintMax: c.def.objective.footprintMax } : {}),
       crownsDown: last?.crownsTotal ?? 0,
       skylineRatio: last && start > 0 ? skyline(last.red.heightHist, c.height) / start : 1,
+      pulled: this.pulledShare(),
+      ...(c.def.objective.kind === 'hold' ? { hold: true } : {}),
     };
   }
 

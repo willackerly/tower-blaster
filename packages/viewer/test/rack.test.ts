@@ -63,7 +63,7 @@ describe('keystone.rack in the viewer', () => {
 
   it('refuses a rack outside the rules, an empty or long one, a name that is no item, a weapon the level lacks', () => {
     expect(() => parseViewerConfig('?level=L1&keystone.rack=marble')).toThrow(/keystone.rack applies to rules=keystone/);
-    expect(() => parseViewerConfig(`${S3}&keystone.rack=`)).toThrow(/keystone.rack must list 1 to 8 items/);
+    expect(() => parseViewerConfig(`${S3}&keystone.rack=`)).toThrow(/keystone.rack must list 1 to 8 items \(and up to 24 pulls\)/);
     expect(() => parseViewerConfig(`${S3}&keystone.rack=${Array(9).fill('marble').join(',')}`)).toThrow(/1 to 8 items/);
     expect(() => parseViewerConfig(`${S3}&keystone.rack=bomb`)).toThrow(/keystone.rack: bomb is not one of/);
     expect(() => parseViewerConfig(`${S3}&keystone.rack=w-nuke`)).toThrow(/has no weapons.nuke/);

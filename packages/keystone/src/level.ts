@@ -37,7 +37,12 @@ export type Objective =
   | { kind: 'crowns'; footprintMax?: number }
   | { kind: 'skyline'; maxH: number; footprintMax?: number }
   /** Collapse fraction D (outcome.ts collapseFraction) at least `min`, from 0 to 1. */
-  | { kind: 'collapse'; min: number; footprintMax?: number };
+  | { kind: 'collapse'; min: number; footprintMax?: number }
+  /**
+   * Undercut's Hollow (docs/game/undercut-bullet-time.md): every crown still up at the end. Outcome
+   * levels only; a settle with a crown down ends the level there, failed. Scored on what was pulled.
+   */
+  | { kind: 'hold'; footprintMax?: number };
 
 /** How a level is scored: par (strokes, golf stamps; L1 to L5) or outcome (what came down; the spectacle mode). */
 export const SCORINGS = ['par', 'outcome'] as const;
@@ -45,9 +50,10 @@ export type Scoring = (typeof SCORINGS)[number];
 
 /**
  * The one metric an outcome level's stars are measured on: collapse (D, higher is better), crowns
- * (crowns down), skyline (end skyline over start skyline, lower is better) or score (the tally total).
+ * (crowns down), skyline (end skyline over start skyline, lower is better), score (the tally total)
+ * or pulled (the share of the structure's mass pulled, Undercut; higher is better).
  */
-export const STAR_METRICS = ['collapse', 'crowns', 'skyline', 'score'] as const;
+export const STAR_METRICS = ['collapse', 'crowns', 'skyline', 'score', 'pulled'] as const;
 export type StarMetric = (typeof STAR_METRICS)[number];
 
 /**
@@ -206,7 +212,19 @@ export function checkSettle(v: unknown, where = 'settle'): SettleRule {
 }
 
 export const ROLE_ID: Record<Role, number> = { plain: 0, crown: 1, heritage: 2 };
+/** Most rack items that fire something; pulls count apart (MAX_PULLS), since they add no body. */
 export const MAX_RACK = 8;
+/** Most pulls a rack holds (Undercut's Hollow takes many blocks). */
+export const MAX_PULLS = 24;
+
+/** Why a rack is too big or empty (MAX_RACK fired items, MAX_PULLS pulls), or null when it fits. */
+export function rackSizeProblem(rack: readonly string[]): string | null {
+  const pulls = rack.filter((x) => x === 'pull').length, fired = rack.length - pulls;
+  if (rack.length === 0) return 'an empty rack';
+  if (fired > MAX_RACK) return `${fired} fired items, over ${MAX_RACK}`;
+  if (pulls > MAX_PULLS) return `${pulls} pulls, over ${MAX_PULLS}`;
+  return null;
+}
 /**
  * Rack item mass over the lightest structure body's, default and ceiling. AVBD drives a
  * light body into the ground under a much heavier one (roadmap E4), so a level may raise
@@ -366,7 +384,7 @@ function bodiesDigest(bodies: readonly BodyDesc[]): string {
 }
 
 export interface Issue {
-  code: 'count' | 'capacity' | 'launcher' | 'overlap' | 'unsupported' | 'mass-ratio' | 'ammo-ratio' | 'dud' | 'tunnelling' | 'crown-start' | 'rack' | 'weapon' | 'empty' | 'watched' | 'flat';
+  code: 'count' | 'capacity' | 'launcher' | 'overlap' | 'unsupported' | 'mass-ratio' | 'ammo-ratio' | 'dud' | 'tunnelling' | 'crown-start' | 'rack' | 'weapon' | 'empty' | 'watched' | 'flat' | 'objective';
   message: string;
   bodies?: number[];
   /** Legal but worth knowing (a dud item): the level still plays as authored. */
@@ -449,7 +467,12 @@ export function validateLevel(c: CompiledLevel, opts: ValidateOptions = {}): Iss
   if (m.n === 0) issues.push({ code: 'empty', message: 'level has no bodies' });
   if (m.n > max) issues.push({ code: 'count', message: `${m.n} bodies > ${max} (the ${engine} engine's budget)` });
   else if (engine === 'rapier' && m.n + rackBodies(def.rack.filter(isRackItem), c.arms) > max) issues.push({ code: 'capacity', message: `${m.n} bodies + ${rackBodies(def.rack.filter(isRackItem), c.arms)} the rack can add > ${max} (the ${engine} engine's budget)` });
-  if (def.rack.length === 0 || def.rack.length > MAX_RACK || def.par < 1 || def.par > def.rack.length) issues.push({ code: 'rack', message: `rack of ${def.rack.length} with par ${def.par}: need 1 <= par <= rack <= ${MAX_RACK}` });
+  const size = rackSizeProblem(def.rack);
+  if (size || def.par < 1 || def.par > def.rack.length) issues.push({ code: 'rack', message: `rack of ${def.rack.length} with par ${def.par}: need 1 <= par <= rack, at most ${MAX_RACK} fired items and ${MAX_PULLS} pulls${size ? ` (${size})` : ''}` });
+  if (def.objective.kind === 'hold') {
+    if (scoringOf(def) !== 'outcome') issues.push({ code: 'objective', message: 'a hold objective needs outcome scoring (a par level ends at its clear)' });
+    if (m.crowns.length === 0) issues.push({ code: 'objective', message: 'a hold objective needs a crown to keep up' });
+  }
   const watched = m.crowns.length + m.heritage.length;
   if (watched > MAX_WATCHED) issues.push({ code: 'watched', message: `${m.crowns.length} crowns + ${m.heritage.length} heritage = ${watched} watched bodies > ${MAX_WATCHED}: judge big structures by collapse, skyline or footprint` });
 

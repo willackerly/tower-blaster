@@ -708,7 +708,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
       chips: rackChips(c.def.rack, s.rackLeft, selected), power, liveLeverage: s.liveLeverage, phase: s.phase,
       reachable: s.phase === 'aiming' && aimed ? aimed.reachable : null,
       pullRefused: s.phase === 'aiming' && aimed?.shot.ammo === 'pull' && !aimed.reachable,
-      collapse: s.liveCollapse, met: s.objectiveDone, canBank: !stepping && regrowT === null && s.canBank(), pace: handle.pace.tag,
+      collapse: s.liveCollapse, pulled: s.pulledShare(), met: s.objectiveDone, canBank: !stepping && regrowT === null && s.canBank(), pace: handle.pace.tag,
       opener: !stepping && regrowT === null && s.phase === 'aiming' && openerNow() !== null,
     });
     if (crownsDown > crownsShown) html = html.replace('class="crowns"', 'class="crowns pop"');
