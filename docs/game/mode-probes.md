@@ -21,7 +21,7 @@ Each run writes `results/mode-probes/<id>-<size>-<time>.{json,md}`. `--size ci` 
 | X3 | Towers as dominoes | M6 Steer | CI size: cube and Kapla towers topple on, a bonded pier stops the front | not run |
 | X4 | Cantilevers and hollows hold | M1 Hollow, M8 | CI size: stacks, span and brick arch behave | not run |
 | X5 | Pinned anchors solid | C8 | CI size: pins exactly still, bodies on them match the ground | not run |
-| X6 | Resonance under a gravity schedule; far-blast shove | M7 | not built | not run |
+| X6 | Resonance under a gravity schedule; far-blast shove | M7 | CI size: no sign of resonance (rocking-block behaviour); far kick exact | not run |
 | X7 | (optional) 1.5x domino amplifier | showcase | not planned | not run |
 | X8 | Islands behave like solo worlds | C10 | not built | not run |
 
@@ -154,3 +154,56 @@ CI size on SwiftShader (one nudge; 2026-11-05):
 - The deepest sink was 0.1 mm in both frames.
 
 Full size: pending (the Metal run).
+
+## X6 Resonance under a gravity schedule; far-blast shove
+
+**Question.** Do friction stacks resonate under a shaking gravity, and does a far blast give every body the same kick? M7 Aftershock is quakes. The roadmap's risk is that friction-held stacks slide instead of resonating, and claim 6 is that a far flat-core blast is a uniform world shove available today.
+
+**Rule (roadmap).** The tall tower's failure frequency is lower than the short tower's, a monotone curve over 5, 10 and 20 cubes at 0.5 to 4 Hz. Every body in a far flat-core blast gets the capped dv within 1%.
+
+**C7, emulated.** The gravity schedule is not built. Both engines read `SceneDesc.gravity` every step, and the probe's driver writes it before each step (`RunSpec.gravity`), which is what C7 would do. A horizontal gravity on a still ground is a shaking ground seen from the ground's frame. Sleep stays off under a schedule (the driver refuses it), because a change of gravity does not wake sleepers today.
+
+**Shake setup.** Single columns of 5, 10 and 20 cubes (0.5 m plaster, aspect 1/n) stand 4 m apart. Each height appears 8 times in one scene (islands that cannot touch), and each scene shakes at one frequency:
+
+g_x(t) = A(t) g sin(2 pi f t), with A(t) = 0.02 * 1.05^(f t)
+
+So the envelope grows by 5% a cycle up to 1 g, after a 300-step pre-settle. The frequencies are 0.5, 0.75, 1, 1.5, 2, 3 and 4 Hz.
+
+**Shake meters.**
+- A column has failed once any cube is 0.25 m below where it stood.
+- Its failure amplitude is the envelope when it was last nearly upright (top within 5 cm of over its base cube) before it failed, the start of the fatal excursion. Read at the fall, it would overstate the threshold by the growth during the fall, up to 20% at 4 Hz.
+- A column whose base cube slides 0.1 m first is counted as sliding.
+- The most destructive frequency for a height is the one with the least median failure amplitude.
+
+**Two references.**
+- Statics: a rigid column tips once a steady side load passes g/n (0.2, 0.1 and 0.05 g).
+- The rocking block (Housner 1963): a block of half-diagonal R rocks at p = sqrt(3 g / 4 R), which is 0.38, 0.27 and 0.19 Hz here, below every shaking frequency. Above p, the amplitude that overturns it grows about as (1/n) sqrt(1 + (omega/p)^2). A rocking block is not an oscillator with a natural frequency, so this predicts no resonance: the lowest frequency is the most destructive at every height, and the rule as written fails.
+
+**Shove setup.** Two worlds take a blast centred 1 km off along -x at their mid-height (100 m too at full size). The blast has radius 3 km, core 0.999, no falloff, and an impulse far above the 3 m/s maxDv cap:
+- 1,000 cubes 1 m apart, floating in no gravity;
+- a standing 6 x 6 x 8 cube building on the game lattice.
+
+Expected: every body gets 3 m/s along (p - centre) / |p - centre|. The probe measures each body's velocity change over the blast's step, and 10 steps later the spread of the bodies' velocities along it. The rule's check is the kick itself, on the free cubes. On the standing building the same step also solves contacts. Coulomb's answer for a stack that moves as one is a uniform loss of mu g dt there (3.3% of 3 m/s), and that is reported against.
+
+### Results
+
+CI size on SwiftShader (one column of each height at 1 Hz with 15% growth a cycle; 2026-11-05). Two more runs shook at 2 and 3 Hz, where no column of any height fell below 1 g (the 20-cube column rocked from 0.56 g at 2 Hz, the 5-cube one from 0.29 g).
+
+| | Fails at | Rocking estimate | Static threshold |
+|---|---|---|---|
+| 20 cubes | 0.25 g | 0.26 g | 0.05 g |
+| 10 cubes | 0.61 g (slid first, at 0.57 g) | 0.38 g | 0.10 g |
+| 5 cubes | 0.64 g | 0.56 g | 0.20 g |
+
+- The 20-cube column first rocked off its base at 0.063 g. The rocking estimate is close for the slender columns, and the 10-cube column reached the friction limit (0.6 g) before it could overturn.
+- So at this size the tallest column falls first at 1 Hz, nothing falls below 1 g at 2 or 3 Hz, and nothing suggests a resonance. The Metal run's frequency sweep decides the rule, and the rocking-block reference predicts that it fails.
+- If it does, M7's level grammar should not rely on tuning a quake to a tower. Amplitude and duration are the levers, slender towers fall first, and low frequencies do the damage.
+
+The shove:
+- **The kick is exact.** All 1,000 free cubes got 3 m/s along their own direction to the centre, to 1e-7 of maxDv, with the centre 1 km away in f32.
+- **On the standing building the blast's step does not keep the building together.** The bottom course keeps 0.85 of the kick, the courses above lose up to 12%, and the mean is 0.955, against Coulomb's uniform 0.967.
+- Ten steps later the bodies' velocities along the blast spread by more than maxDv, with a mean of 0.73: the bottom drags on the ground and the upper courses run on.
+
+So a far blast is a uniform shove of every body, as claimed, but a standing cube building does not take it as a rigid unit; its courses part within a sixth of a second. For M7 a shove is a jolt that breaks lattice buildings up, not a way to slide one, and its look wants a play-session check.
+
+Full size: pending (the Metal run: seven frequencies, eight columns of each height; shoves at 100 m and 1 km).
