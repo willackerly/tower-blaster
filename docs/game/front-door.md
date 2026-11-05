@@ -10,7 +10,7 @@ A bare URL (`pnpm game`, or the playtest link) opens the door over B1, which loa
 - **How to play**: four lines on aiming, freezing, stars and banking.
 - One **card per level** of the series. Each card shows the id, the name, the block count and the rack, then the three star targets (the objective; T2 and T3 from the cast in the metric's own words, such as "70% down" or "3,200 points, heritage intact"), and the best play. On a phone the targets shrink to one line ("★ 40% · ★★ 70% · ★★★ 94%").
 
-Below the cards are four settings: **Sound** (On or Off), **Look** (Maquette, Photoreal or Candy), **Camera** (Still, the default: it moves only when the player moves it; or Dynamic: it follows the collapse and shakes on hits, i.e. `keystone.follow=1` and `keystone.shake=1`) and **Sharpness** (Full, or Fast, which caps the canvas at 1 device pixel per CSS pixel). The URL's `keystone.follow` and `keystone.shake` each win over Camera for the visit, and a Camera click drops them from the URL. A Camera change applies to the shake at once and to the follow from the next shot. A two-click **Forget my progress** link sits under them.
+Below the cards, an **Advanced settings** link (closed on every visit; Will 2026-11-05: keep the settings, bury them) opens four settings: **Sound** (On or Off), **Look** (Maquette, Photoreal or Candy), **Camera** (Still, the default: it moves only when the player moves it; or Dynamic: it follows the collapse and shakes on hits, i.e. `keystone.follow=1` and `keystone.shake=1`) and **Sharpness** (Full, or Fast, which caps the canvas at 1 device pixel per CSS pixel). The URL's `keystone.follow` and `keystone.shake` each win over Camera for the visit, and a Camera click drops them from the URL. A Camera change applies to the shake at once and to the follow from the next shot. A two-click **Forget my progress** link sits under them, inside the same panel.
 
 In play, **Menu** (top right) or **Esc** brings the door back. While the door is open it holds the keyboard, so the game's keys (N, R, F and so on) wait.
 
@@ -38,7 +38,7 @@ When the player changes a setting on the door, it is stored and its URL key is d
 ## Verification
 
 - `game/test/door.test.ts` (pure): options, targets per metric, a simulated B3 drop-in, markup, settings precedence.
-- `game/test/door-e2e.test.ts`: a fresh visit opens the door over B1, Play then Fire reaches a first collapse (D ≥ 0.1, about 100 of B1's 1,000 blocks) inside 20 s of sim time. On Rapier in CI this takes 2.3 s of sim. With `TB_CHANNEL=chrome` (the GPU engine on Metal) the test also asserts under 20 s of wall time from navigation. Further cases: Esc and Menu toggle the door, the door holds the game's keys, a settings round trip, and progress on the card after a reload.
+- `game/test/door-e2e.test.ts`: a fresh visit opens the door over B1, Play then Fire reaches a first collapse (D ≥ 0.1, about 100 of B1's 1,000 blocks) inside 20 s of sim time. On Rapier in CI this takes 2.3 s of sim. With `TB_CHANNEL=chrome` (the GPU engine on Metal) the test also asserts under 20 s of wall time from navigation. Further cases: Esc and Menu toggle the door, the door holds the game's keys, a settings round trip (settings hidden until Advanced settings is clicked), and progress on the card after a reload.
 - `game/test/progress-e2e.test.ts`: a round is recorded and survives a reload. Custom runs and `progress=off` are not recorded.
 
 ## Alternatives considered

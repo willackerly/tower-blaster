@@ -86,6 +86,9 @@ describe('front door', () => {
     await page.waitForFunction(() => window.__game.result !== null, undefined, { timeout: 2 * MINUTES, polling: 100 });
     const stars = await page.evaluate(() => window.__game.result!.stars);
     await page.keyboard.press('Escape');
+    // The settings sit behind Advanced settings, closed until it is clicked.
+    expect(await page.locator('.kg-door [data-act="look"]').count()).toBe(0);
+    await page.locator('.kg-door [data-act="advanced"]').click();
     await page.locator('.kg-door [data-act="look"][data-arg="real"]').click();
     await page.locator('.kg-door [data-act="sound"]').click();
     await page.locator('.kg-door [data-act="sharp"][data-arg="1"]').click();
@@ -101,6 +104,7 @@ describe('front door', () => {
 
     await page.goto(game.url('/?level=L1&engine=rapier&offscreen=1&door=1'));
     await page.waitForFunction(() => window.__game?.status === 'running', undefined, { timeout: MINUTES });
+    await page.locator('.kg-door [data-act="advanced"]').click();
     expect(await page.locator('.kg-door [data-act="look"].on').innerText()).toBe('Photoreal');
     expect(await page.locator('.kg-door [data-act="sound"]').innerText()).toBe('Off');
     expect(await page.locator('.kg-door [data-act="camera"].on').innerText()).toBe('Dynamic');
