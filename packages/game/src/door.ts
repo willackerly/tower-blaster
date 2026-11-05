@@ -118,7 +118,7 @@ export function bestText(b: LevelRecord | null): string {
 
 /** How to play, in four lines (the controls line is GAME_HELP's, shown in play). */
 export const HOW_TO_PLAY: readonly string[] = [
-  'Pick a spot on the structure and click to fire. Drag to look around; the launcher follows you.',
+  '<span class="kg-desk">Pick a spot on the structure and click to fire. Drag to look around; the launcher follows you.</span><span class="kg-tch">Touch the structure and drag to aim; lift your finger to fire. Two fingers turn the view and pinch to zoom; the launcher follows you. Put a second finger down to call off a shot.</span>',
   'Fire again whenever you like, even while things are still falling. Once everything settles, physics freezes while you aim. Rubble stays between shots.',
   'Meet the objective for one star. Bring more down for two and three; the targets were set by a bot playing each level hundreds of times.',
   'After any shot you may <kbd>B</kbd> bank: end the level and keep the unused rack as points.',

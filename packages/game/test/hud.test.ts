@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { L1, L2, levelScore, outcomeScore, tier, U3 } from '@tb/keystone';
-import { BANK_BUTTON, esc, fmtLeverage, fmtPoints, hudHtml, nextSelection, objectiveText, rackChips, resultHtml, starsText } from '../src/hud.ts';
+import { BANK_BUTTON, esc, POWER_STEP, fmtLeverage, fmtPoints, hudHtml, nextSelection, objectiveText, rackChips, resultHtml, starsText } from '../src/hud.ts';
 
 describe('rack', () => {
   it('groups by kind in first-seen order with counts and keys', () => {
@@ -35,6 +35,20 @@ describe('formatting', () => {
     expect(marble).toMatch(/width:60%/);
     expect(hudHtml({ ...base, chips: [{ ammo: 'drop', key: '1', left: 1, total: 1, selected: true }] })).not.toMatch(/Power/);
     expect(hudHtml({ ...base, chips: [], reachable: false })).toMatch(/Out of reach/);
+  });
+  it('chips are tap buttons carrying their key, and the power bar has minus and plus buttons for touch', () => {
+    const base = { level: L2, strokes: 0, crownsDown: 0, crownsTotal: 6, heritageBroken: 0, heritageTotal: 36, power: 60, liveLeverage: 0, phase: 'aiming', reachable: null };
+    const html = hudHtml({ ...base, chips: rackChips(L2.rack, L2.rack, 'marble') });
+    const chips = [...html.matchAll(/<button class="chip([^"]*)" data-act="ammo" data-arg="(\d)">/g)].map((m) => [m[2], m[1]]);
+    expect(chips).toEqual([['1', ' on'], ['2', '']]);
+    expect(html).toContain(`data-act="power" data-arg="-${POWER_STEP}"`);
+    expect(html).toContain(`data-act="power" data-arg="${POWER_STEP}"`);
+    // Shown only on a touch screen (GAME_CSS's .kg-tch); the keys stay for a keyboard.
+    expect(html).toMatch(/class="pw kg-tch"/);
+    expect(html).toMatch(/Power <kbd>Q<\/kbd><kbd>E<\/kbd>/);
+    expect(hudHtml({ ...base, chips: rackChips(['drop'], ['drop'], 'drop') })).not.toContain('data-act="power"');
+    const opener = hudHtml({ ...base, chips: [], opener: true });
+    expect(opener).toMatch(/<span class="kg-desk">or aim and click<\/span><span class="kg-tch">or drag to aim, lift to fire<\/span>/);
   });
   it('a hold level (Undercut Hollow) shows the share pulled and asks to keep the crown up', () => {
     const base = { level: U3, strokes: 2, crownsDown: 0, crownsTotal: 1, heritageBroken: 0, heritageTotal: 0, power: 60, liveLeverage: 0, phase: 'aiming', reachable: null, chips: rackChips(U3.rack, U3.rack.slice(2), 'pull') };

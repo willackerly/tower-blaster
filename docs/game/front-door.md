@@ -53,7 +53,7 @@ When the player changes a setting on the door, it is stored and its URL key is d
 
 These come from the second-perspective visual review (2026-11-02):
 
-- Touch controls on phones: power −/+, no key chips, and "Tap the structure to fire".
+- ~~Touch controls on phones: power −/+, no key chips, and "Tap the structure to fire".~~ Done (U4): [touch-controls.md](touch-controls.md). A finger drags to aim and fires on lift rather than a bare tap, so the arc shows before the shot.
 - A shorter in-play hint line in place of the full key list.
 - Hide Leverage until the first shot.
 - A Down bar with tick marks at the star targets.

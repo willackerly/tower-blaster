@@ -18,7 +18,7 @@ import { type GameSoundMode, soundSetOf } from './sound-map.ts';
 import { viewOf } from './view.ts';
 export { viewOf } from './view.ts';
 import { driverOptions, type EngineKind, gpuEngineOptions, makeEngine, roomAfter } from './engines.ts';
-import { hudHtml, nextSelection, rackChips, resultHtml, starsText } from './hud.ts';
+import { hudHtml, nextSelection, POWER_STEP, rackChips, resultHtml, starsText } from './hud.ts';
 import { type GoalLine, goalsHudHtml, goalsResultHtml } from './lot-hud.ts';
 import { duelHudHtml, duelResultHtml } from './duel-hud.ts';
 import { FollowCam } from './follow.ts';
@@ -27,6 +27,7 @@ import { alphaAt, arrived, DEFAULT_FEEL, newArrivals, Pacer, type PaceFeel, SLOW
 import { COST_WINDOW, runPhysics, wakeable } from './physics-loop.ts';
 import { CLEAR_SHARE, FrameGovernor } from './frame-rate.ts';
 import { beadOverlay, BOMB_FX, CROWN_GLOW, PULL_HOVER, regrowDuration, regrowScales, structureTints, TINT, tintOf, tintWordOf } from './scene.ts';
+import { type GestureState, type TouchAction, TouchGestures, touchFace, type TouchMode } from './touch.ts';
 
 /** What a page (and its tests) can see and do while Keystone plays: window.__game on the game page. */
 export interface GameHandle {
@@ -57,7 +58,13 @@ export interface GameHandle {
    * `?keystone.follow=1`), and the jolt the last drawn frame added to the player's view: its largest shake (rad) or
    * field-of-view punch (share of the field of view), 0 unless `?keystone.shake=1` (juice.ts).
    */
-  view: { target: [number, number, number]; distance: number; following: boolean; jolt: number };
+  view: { target: [number, number, number]; distance: number; yaw: number; pitch: number; following: boolean; jolt: number };
+  /**
+   * The player's controls now: whether the page shows its touch face (touch.ts touchFace: the HUD's
+   * tap buttons and the touch help; body class kg-touch), the touch gesture under way and fingers down,
+   * the shot aimed (by hover, a finger or handle.aim) and the power.
+   */
+  input: { touch: boolean; gesture: GestureState; fingers: number; aimed: Shot | null; power: number };
   result: LevelScore | null;
   /** Feedback events seen this attempt, by type; blastDrawn counts the blasts handed to the renderer to draw, bomb the bodies drawn as bombs. */
   counts: Record<string, number>;
@@ -152,7 +159,7 @@ function safetyLimiter(ctx: AudioContext): AudioNode {
 export function newGameHandle(): GameHandle {
   const none = (): SessionState => ({ step: 0, phase: 'loading', strokes: 0, heritageBroken: 0, hash: '' });
   return {
-    status: 'loading', engine: '', level: '', phase: 'loading', ready: false, frames: 0, stepIndex: 0, strokes: 0, bodies: 0, collapse: 0, fast: false, pace: { timeScale: 1, speed: 1, tag: '', tailSkip: false, costMs: NaN }, view: { target: [0, 0, 0], distance: 0, following: false, jolt: 0 }, result: null, counts: {}, feel: { ...DEFAULT_FEEL }, resultShownAt: null, timing: { loadMs: 0, stepMs: [], moving: [], frameMs: [], costMs: [] }, draws: { drawn: 0, skipped: 0, decimating: false },
+    status: 'loading', engine: '', level: '', phase: 'loading', ready: false, frames: 0, stepIndex: 0, strokes: 0, bodies: 0, collapse: 0, fast: false, pace: { timeScale: 1, speed: 1, tag: '', tailSkip: false, costMs: NaN }, view: { target: [0, 0, 0], distance: 0, yaw: 0, pitch: 0, following: false, jolt: 0 }, input: { touch: false, gesture: 'idle', fingers: 0, aimed: null, power: 100 }, result: null, counts: {}, feel: { ...DEFAULT_FEEL }, resultShownAt: null, timing: { loadMs: 0, stepMs: [], moving: [], frameMs: [], costMs: [] }, draws: { drawn: 0, skipped: 0, decimating: false },
     fire: () => false, bank: () => false, fireOpener: () => false, setMuted: () => {}, maxDpr: 2, aim: () => null, reach: null, select: () => false, load: async () => {}, retry: async () => {}, capture: async () => null,
     state: none, line: () => [], replay: async () => none(), health: async () => null, pairsPerBody: 0, limitsHit: [], goals: [], grade: null, duel: null,
     sound: () => ({ mode: 'collapse', status: 'off', error: '', posted: 0, stats: null }),
@@ -262,12 +269,22 @@ export interface KeystoneEnv {
    * result card offers a rematch with the other side first.
    */
   duel?: DuelDef;
+  /** Touch controls' face (?touch=auto|1|0, touch.ts): auto by default. The gestures work whatever it says. */
+  touch?: TouchMode;
 }
 
 /** An orbiting drag of (dx, dy) pixels: turns, and tilts from looking down to looking up (past level the floor brings the eye in). */
 export function orbitDrag(o: Orbit, dx: number, dy: number): void {
   o.yaw -= dx * 0.005;
   o.pitch = clampPitch(o.pitch + dy * 0.005);
+}
+
+/** The camera's nearest and farthest distance (m), for the wheel and a pinch alike. */
+export const ZOOM_RANGE = [3, 200] as const;
+
+/** Zoom by a factor of the distance (the wheel's exp(deltaY / 1000), a pinch's spread ratio), within ZOOM_RANGE. */
+export function zoomBy(o: Orbit, ratio: number): void {
+  o.distance = Math.min(ZOOM_RANGE[1], Math.max(ZOOM_RANGE[0], o.distance * ratio));
 }
 
 /** Typing into a form field (the viewer's panels) is not a game key. */
@@ -450,7 +467,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     opener = env.opener?.(c) ?? null;
     if (!retry) {
       orbit = viewOf(c);
-      power = 100;
+      setPower(100);
       // The play area: the lot (where debris counts), grown a little, up to the structure's top.
       const half: Vec3 = [(c.lot.max[0] - c.lot.min[0]) / 2 + 2, c.height / 2 + 2, (c.lot.max[1] - c.lot.min[1]) / 2 + 2];
       renderer.setShadowBounds([(c.lot.min[0] + c.lot.max[0]) / 2, c.height / 2, (c.lot.min[1] + c.lot.max[1]) / 2], Math.hypot(...half), half);
@@ -509,6 +526,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
       }
     }
     setHover(lit);
+    handle.input.aimed = aimed ? { ...aimed.shot } : null;
   }
 
   /** Mirror the duel onto the handle. */
@@ -655,7 +673,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     const s = driver.session;
     const running = s.phase === 'running', v = running ? speed.speed(performance.now()) : 1, costs = handle.timing.costMs;
     handle.pace = { timeScale: running ? pacer.timeScale : 1, speed: v, tag: running && !fastHeld && !handle.fast && !ending && !tail.on ? slowTag(v) : '', tailSkip: tail.on, costMs: running && !Number.isNaN(pacer.costMs) ? pacer.costMs : median(costs.slice(-60)) };
-    handle.view = { target: [...orbit.target], distance: orbit.distance, following: follow.active, jolt };
+    handle.view = { target: [...orbit.target], distance: orbit.distance, yaw: orbit.yaw, pitch: orbit.pitch, following: follow.active, jolt };
   }
 
   /** The physics loop's idle wait: the next frame, or a fire, whichever comes first (physics-loop.ts wakeable). */
@@ -747,6 +765,13 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     return true;
   }
 
+  function setPower(p: number) {
+    if (!Number.isFinite(p)) return;
+    power = Math.max(0, Math.min(100, p));
+    handle.input.power = power;
+    aimDirty = true;
+  }
+
   function select(a: RackItem): boolean {
     if (!driver.session.rackLeft.includes(a) || (duel && !duel.left[duel.turn].includes(a))) return false;
     selected = a;
@@ -789,19 +814,60 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     collapse?.wake(synth.ctx, synth.master);
   };
 
-  // Pointer: hover aims, a click without drag fires, drag orbits (right or shift: pan).
+  // Mouse and pen: hover aims, a click without drag fires, drag orbits (right or shift: pan), the wheel zooms.
+  // Touch (touch.ts): a finger aims and fires where it lifts, two fingers orbit and pinch to zoom.
   let drag: { x: number; y: number; moved: number; pan: boolean } | null = null;
-  const ndc = (e: PointerEvent): [number, number] => {
+  const ndcAt = (x: number, y: number): [number, number] => {
     const r = canvas.getBoundingClientRect();
-    return [((e.clientX - r.left) / r.width) * 2 - 1, 1 - ((e.clientY - r.top) / r.height) * 2];
+    return [((x - r.left) / r.width) * 2 - 1, 1 - ((y - r.top) / r.height) * 2];
+  };
+  const ndc = (e: PointerEvent) => ndcAt(e.clientX, e.clientY);
+  const gestures = new TouchGestures(), touchModeNow = env.touch ?? 'auto';
+  const coarse = typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches;
+  /** The pointer type last put down (or hovering, for a mouse or pen): what touchFace follows under auto. */
+  let lastPointer: string | null = null;
+  const face = () => {
+    const on = touchFace(touchModeNow, coarse, lastPointer);
+    if (on === handle.input.touch && document.body.classList.contains('kg-touch') === on) return;
+    handle.input.touch = on;
+    document.body.classList.toggle('kg-touch', on);
+    lastHud = ''; // the HUD's opener hint reads differently by touch
+  };
+  face();
+  const pointerSeen = (e: PointerEvent) => { if (e.pointerType !== lastPointer) { lastPointer = e.pointerType; face(); } };
+  const touched = (acts: TouchAction[]) => {
+    for (const a of acts) {
+      switch (a.t) {
+        case 'aim': pointer = ndcAt(a.x, a.y); aimDirty = true; break;
+        case 'fire': {
+          pointer = ndcAt(a.x, a.y);
+          updateAim();
+          const shot = aimed?.shot;
+          // No hover on a touch screen: once the finger is up, nothing is aimed until the next one lands.
+          pointer = null;
+          updateAim();
+          if (shot) fire(shot);
+          break;
+        }
+        case 'cancel': pointer = null; updateAim(); break; // the arc goes at once, not at the next frame
+        case 'orbit': follow.grab(); orbitDrag(orbit, a.dx, a.dy); aimDirty = true; break;
+        case 'zoom': follow.grab(); zoomBy(orbit, a.ratio); aimDirty = true; break;
+      }
+    }
+    handle.input.gesture = gestures.state;
+    handle.input.fingers = gestures.fingers;
   };
   canvas.addEventListener('contextmenu', (e) => e.preventDefault());
   canvas.addEventListener('pointerdown', (e) => {
+    pointerSeen(e);
     wakeAudio();
     canvas.setPointerCapture(e.pointerId);
+    if (e.pointerType === 'touch') { touched(gestures.start(e.pointerId, e.clientX, e.clientY)); return; }
     drag = { x: e.clientX, y: e.clientY, moved: 0, pan: e.button === 2 || e.shiftKey };
   });
   canvas.addEventListener('pointermove', (e) => {
+    if (e.pointerType === 'touch') { touched(gestures.move(e.pointerId, e.clientX, e.clientY)); return; }
+    if (!drag) pointerSeen(e); // a mouse or pen hovering takes the face back from touch
     pointer = ndc(e);
     aimDirty = true;
     if (!drag) return;
@@ -818,6 +884,12 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     }
   });
   canvas.addEventListener('pointerup', (e) => {
+    if (e.pointerType === 'touch') {
+      // A touch only activates the page (so audio may start) on its lift, not its press.
+      wakeAudio();
+      touched(gestures.end(e.pointerId, e.clientX, e.clientY));
+      return;
+    }
     if (drag && drag.moved < 5 && e.button === 0 && !e.shiftKey) {
       pointer = ndc(e);
       updateAim();
@@ -825,11 +897,15 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     }
     drag = null;
   });
-  canvas.addEventListener('pointerleave', () => { pointer = null; aimDirty = true; });
+  canvas.addEventListener('pointercancel', (e) => {
+    if (e.pointerType === 'touch') touched(gestures.cancel(e.pointerId));
+    else drag = null;
+  });
+  canvas.addEventListener('pointerleave', (e) => { if (e.pointerType === 'touch') return; pointer = null; aimDirty = true; });
   canvas.addEventListener('wheel', (e) => {
     e.preventDefault();
     follow.grab();
-    orbit.distance = Math.min(200, Math.max(3, orbit.distance * Math.exp(e.deltaY * 0.001)));
+    zoomBy(orbit, Math.exp(e.deltaY * 0.001));
     aimDirty = true;
   }, { passive: false });
   env.hud.addEventListener('click', (e) => {
@@ -837,6 +913,10 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     if (act) wakeAudio();
     if (act === 'bank') bank();
     if (act === 'opener') fireOpener();
+    // The rack's chips and the power buttons: taps on a touch screen (keys 1-4, Q and E on a keyboard).
+    const arg = (e.target as HTMLElement).closest('button')?.dataset.arg;
+    if (act === 'ammo') { const chip = rackChips(c.def.rack, driver.session.rackLeft, selected).find((x) => x.key === arg); if (chip) select(chip.ammo); }
+    if (act === 'power') setPower(power + Number(arg));
   });
   env.result.addEventListener('click', (e) => {
     const act = (e.target as HTMLElement).closest('button')?.dataset.act;
@@ -854,7 +934,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     if (k === ' ') { e.preventDefault(); fastHeld = true; pacer.release(); }
     const chip = chipsNow().find((x) => x.key === e.key);
     if (chip) select(chip.ammo);
-    if (k === 'q' || k === 'e') { power = Math.max(0, Math.min(100, power + (k === 'e' ? 10 : -10))); aimDirty = true; }
+    if (k === 'q' || k === 'e') setPower(power + (k === 'e' ? POWER_STEP : -POWER_STEP));
     if (k === 'b') bank();
     if (k === 'f') fireOpener();
     // In a duel, R after the result is a rematch (the other side starts), as the card's first button says.

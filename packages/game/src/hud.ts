@@ -66,6 +66,11 @@ export interface HudState {
 /** The pre-aimed opener's button (key F), shown before the first shot of a level that has one. */
 export const OPENER_BUTTON = '<button data-act="opener" class="opener"><kbd>F</kbd> Fire the first shot</button>';
 
+/** Power changes by this (percent) per key press (Q, E) or tap of a power button. */
+export const POWER_STEP = 10;
+/** A power button (touch screens only: GAME_CSS shows .kg-tch under body.kg-touch). */
+const POWER_STEP_BUTTON = (d: number) => `<button class="pw kg-tch" data-act="power" data-arg="${d}" aria-label="${d < 0 ? 'Less' : 'More'} power">${d < 0 ? '−' : '+'}</button>`;
+
 export const pct = (x: number) => `${Math.floor(100 * x)}%`;
 
 /** What the objective asks, in a few words. */
@@ -86,10 +91,12 @@ export const BANK_BUTTON = '<button data-act="bank" class="bank"><kbd>B</kbd> Ba
 
 export function hudHtml(s: HudState): string {
   const d = s.level;
-  const chips = s.chips.map((c) => `<span class="chip${c.selected ? ' on' : ''}${c.left ? '' : ' spent'}"><kbd>${c.key}</kbd> ${esc(itemLabel(c.ammo))} <b>${c.left}</b>/${c.total}</span>`).join('');
+  // Chips are buttons (a tap selects, as the key does); kbd hints hide on a touch screen (GAME_CSS, body.kg-touch).
+  const chips = s.chips.map((c) => `<button class="chip${c.selected ? ' on' : ''}${c.left ? '' : ' spent'}" data-act="ammo" data-arg="${c.key}"><kbd>${c.key}</kbd> ${esc(itemLabel(c.ammo))} <b>${c.left}</b>/${c.total}</button>`).join('');
   const heritage = s.heritageTotal ? `<div class="row"><span>Heritage</span><span class="${s.heritageBroken ? 'bad' : 'ok'}">${s.heritageBroken ? `${s.heritageBroken} cracked` : 'intact'}</span></div>` : '';
   const sel = s.chips.find((c) => c.selected)?.ammo;
-  const power = sel === 'drop' || sel === 'pull' ? '' : `<div class="row"><span>Power <kbd>Q</kbd><kbd>E</kbd></span><span class="bar"><i style="width:${s.power}%"></i></span></div>`;
+  // The power bar, with minus and plus buttons on a touch screen (keys Q and E).
+  const power = sel === 'drop' || sel === 'pull' ? '' : `<div class="row"><span>Power <kbd>Q</kbd><kbd>E</kbd></span><span class="power">${POWER_STEP_BUTTON(-POWER_STEP)}<span class="bar"><i style="width:${s.power}%"></i></span>${POWER_STEP_BUTTON(POWER_STEP)}</span></div>`;
   const reach = s.pullRefused ? '<div class="bad small">Crowns and heritage stay: pull a plain block</div>' : s.reachable === false ? '<div class="bad small">Out of reach at this power</div>' : '';
   const outcome = scoringOf(d) === 'outcome';
   const head = outcome
@@ -112,7 +119,7 @@ export function hudHtml(s: HudState): string {
     ${heritage}
     <div class="row"><span>Leverage</span><span>${fmtLeverage(s.liveLeverage)}</span></div>
     <div class="chips">${chips}</div>
-    ${s.opener ? `<div class="row">${OPENER_BUTTON}<span class="small">or aim and click</span></div>` : ''}
+    ${s.opener ? `<div class="row">${OPENER_BUTTON}<span class="small"><span class="kg-desk">or aim and click</span><span class="kg-tch">or drag to aim, lift to fire</span></span></div>` : ''}
     ${power}${reach}${outcome && s.canBank ? `<div class="row">${BANK_BUTTON}<span class="small">end here, keep the rack</span></div>` : ''}`;
 }
 
