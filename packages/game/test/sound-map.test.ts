@@ -2,11 +2,11 @@
 // collapse rendered through it (on Rapier, which clears L1 too) at the game's level.
 import { describe, expect, it } from 'vitest';
 import { RapierEngine } from '@tb/adapter-rapier';
-import { CEILING, parseSoundMaterial } from '@tb/audio';
+import { CEILING, loudness, parseSoundMaterial } from '@tb/audio';
 import { AMMO_KINDS, ammoBody, compileLevel, grenadeShell, KEYSTONE_GRENADE, L1, MATERIALS } from '@tb/keystone';
 import { PRESET_NAMES } from '@tb/weapons';
 import { capture, render } from '../src/sound-cli.ts';
-import { AMMO_SLOT, ammoKindOf, GAME_SOUND_DB, KEYSTONE_SOUNDS, slotSounds, SOUND_SLOTS, soundSlotOf } from '../src/sound-map.ts';
+import { AMMO_SLOT, ammoKindOf, GAME_SOUND_DB, gameSoundDb, KEYSTONE_SOUNDS, keystoneSounds, slotSounds, SOUND_SLOTS, soundSetOf, soundSlotOf } from '../src/sound-map.ts';
 
 describe('game sound slots', () => {
   it('every Keystone material and ammo kind has a valid sound at its own size', () => {
@@ -37,6 +37,17 @@ describe('game sound slots', () => {
     for (const p of PRESET_NAMES) expect(soundSlotOf(c, ammoBody(`p-${p}`, c.frame.unit, [0, 0, 0], [0, 0, 0]), c.meta.n)).toBe(-1);
   });
 
+  it('keystone.sound=classic plays G6\'s materials, collapse the real set; the cue keeps its bar in both', () => {
+    const c = compileLevel(L1);
+    expect(soundSetOf('classic')).toBe('classic');
+    expect(soundSetOf('collapse')).toBe('real');
+    expect(slotSounds(c, 'classic')[0]!.material).toBe(keystoneSounds('classic').plaster);
+    expect(slotSounds(c, 'classic')[0]!.material.roughDb).toBeUndefined();
+    expect(slotSounds(c)[0]!.material.roughDb).toBeGreaterThan(-Infinity);
+    expect(slotSounds(c, 'classic')[AMMO_SLOT + AMMO_KINDS.indexOf('cue')]!.material.model).toBe('plank');
+    expect(gameSoundDb('classic')).toBe(GAME_SOUND_DB);
+  });
+
   it('structure bodies sound as their material, spawned ones as their ammo', () => {
     const c = compileLevel(L1);
     for (let i = 0; i < c.meta.n; i++) expect(soundSlotOf(c, c.scene.bodies[i]!, i)).toBe(c.meta.material[i]);
@@ -45,18 +56,26 @@ describe('game sound slots', () => {
 });
 
 describe('L1 par line, heard from the game camera', () => {
-  it('sounds its blocks and its shot, under the limiter without limiting at the game level', { timeout: 120_000 }, async () => {
+  it('sounds its blocks and its shot, under the limiter without limiting at the game level, as loud in either set', { timeout: 120_000 }, async () => {
     const { frames, slots } = await capture('L1', new RapierEngine());
     expect(slots[MATERIALS.findIndex((m) => m.name === 'plaster')]).toBeGreaterThan(50);
     expect(slots[AMMO_SLOT + AMMO_KINDS.indexOf('cannonball')]).toBeGreaterThan(0);
-    const { L, R, minGain } = render('L1', frames, GAME_SOUND_DB);
-    let peak = 0, finite = true;
-    for (let i = 0; i < L.length; i++) { finite &&= Number.isFinite(L[i]!) && Number.isFinite(R[i]!); peak = Math.max(peak, Math.abs(L[i]!), Math.abs(R[i]!)); }
-    expect(finite).toBe(true);
-    expect(peak).toBeGreaterThan(0.1); // audible
-    expect(peak).toBeLessThanOrEqual(CEILING + 1e-6);
-    expect(20 * Math.log10(minGain)).toBeGreaterThan(-3); // at most a touch of limiting
-    // 20 dB louder (the viewer's level) is far into the limiter: why the game sits at GAME_SOUND_DB.
-    expect(render('L1', frames, GAME_SOUND_DB + 20).minGain).toBeLessThan(0.5);
+    const lufs: number[] = [];
+    for (const set of ['classic', 'real'] as const) {
+      const { L, R, minGain } = render('L1', frames, gameSoundDb(set), set);
+      let peak = 0, finite = true;
+      for (let i = 0; i < L.length; i++) { finite &&= Number.isFinite(L[i]!) && Number.isFinite(R[i]!); peak = Math.max(peak, Math.abs(L[i]!), Math.abs(R[i]!)); }
+      expect(finite).toBe(true);
+      expect(peak).toBeGreaterThan(0.1); // audible
+      expect(peak).toBeLessThanOrEqual(CEILING + 1e-6);
+      expect(20 * Math.log10(minGain)).toBeGreaterThan(-3); // at most a touch of limiting
+      lufs.push(loudness(L, R));
+      // 20 dB louder (the viewer's level) is far into the limiter: why the game sits at its level.
+      expect(render('L1', frames, gameSoundDb(set) + 20, set).minGain).toBeLessThan(0.5);
+    }
+    // The sets are levelled by loudness (BS.1770) on the AVBD par lines the page plays (within 1.7 LU a
+    // level, sound-cli.ts). On Rapier the classic set rings longer (more repeat contacts: sustained tones
+    // read loud) while the real set is transient and peak-bound, so here the gap is wider: within 5 LU.
+    expect(Math.abs(lufs[0]! - lufs[1]!)).toBeLessThan(5);
   });
 });

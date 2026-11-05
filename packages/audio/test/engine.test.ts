@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { BLOCK, CollapseEngine, contactTime, DV_EDGES, normInv, SOUND_MATERIALS, type SoundMaterial } from '@tb/audio';
+import { BLOCK, CLASSIC_SOUND_MATERIALS, CollapseEngine, contactTime, DV_EDGES, normInv, type SoundMaterial } from '@tb/audio';
+
+// The click and the bank's mechanics, on G6's materials (the click is the same in both sets; the real
+// set's roughness and dense field add their own sound, covered in realism.test.ts).
+const SOUND_MATERIALS = CLASSIC_SOUND_MATERIALS;
 import { buzz, db, engine, FRAME, frame, octaves, pine, run, SR } from './helpers.ts';
 
 describe('CollapseEngine', () => {

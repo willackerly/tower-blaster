@@ -14,7 +14,7 @@ import type { HostStats } from '@tb/audio';
 import { type Aimed, azFromYaw, pick, previewBeads, pullFor, shotFor, SUBSTEPS } from './aim.ts';
 import { Synth, type Voice, voicesFor } from './audio.ts';
 import { CollapseSound, type CollapseStatus } from './collapse-sound.ts';
-import type { GameSoundMode } from './sound-map.ts';
+import { type GameSoundMode, soundSetOf } from './sound-map.ts';
 import { viewOf } from './view.ts';
 export { viewOf } from './view.ts';
 import { driverOptions, type EngineKind, gpuEngineOptions, makeEngine, roomAfter } from './engines.ts';
@@ -271,7 +271,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
   let synth: Synth | null = null;
   let muted = env.muted ?? false;
   const soundMode = env.sound ?? 'collapse';
-  const collapse = soundMode === 'collapse' ? new CollapseSound(env.impactsDb ?? 0) : null;
+  const collapse = soundMode !== 'synth' ? new CollapseSound(env.impactsDb ?? 0, soundSetOf(soundMode)) : null;
   handle.sound = () => ({ mode: soundMode, status: collapse?.status ?? 'off', error: collapse?.error ?? '', posted: collapse?.posted ?? 0, stats: collapse?.stats ?? null });
   const voices: Voice[] = [];
 

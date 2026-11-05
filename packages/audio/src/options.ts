@@ -5,17 +5,20 @@
 //
 //   snd=1               sound on (off by default: nothing runs)
 //   snd.mat=pine        pine | acrylic | stone | auto (the scene's: see the viewer)
+//   snd.set=classic     the material set: real (the default) | classic (G6's: smooth contacts, table modes only)
 //   snd.volume=-6       master, dB
 //   snd.ring=3          the modes (ringing), dB over the material's
 //   snd.click=-3        the contact click, dB over the material's
 //   snd.grit=6          chips off hard hits (stone only), dB over the material's
+//   snd.rough=-6        contact roughness, dB over the material's (materials that have one)
+//   snd.dense=-6        the dense modes above the mode table, dB over the material's (materials that have them)
 //   snd.damping=2       loss factor x: rings die twice as fast
 //   snd.pitch=-5        semitones (stiffness x 2^(st/6), so every mode moves)
 //   snd.spread=2        body-to-body pitch spread x
 //   snd.dv=0.25         slowest speed change that sounds, m/s
 //   snd.voices=8        loudest impacts a frame played as their own voices
 //   snd.lowcut=35       master high-pass, Hz (0: off): below it only headroom is spent
-import { SOUND_MATERIALS, type SoundMaterial } from './material.ts';
+import { SOUND_MATERIALS, SOUND_SETS, type SoundMaterial, type SoundSet } from './material.ts';
 
 export type SoundMaterialName = keyof typeof SOUND_MATERIALS;
 export const SOUND_MATERIAL_NAMES = Object.keys(SOUND_MATERIALS) as SoundMaterialName[];
@@ -25,6 +28,8 @@ export const SOUND_KNOBS = {
   ring: { label: 'ring (dB)', min: -40, max: 20, step: 1, def: 0 },
   click: { label: 'click (dB)', min: -40, max: 20, step: 1, def: 0 },
   grit: { label: 'grit (dB, stone)', min: -40, max: 20, step: 1, def: 0 },
+  rough: { label: 'contact roughness (dB)', min: -40, max: 20, step: 1, def: 0 },
+  dense: { label: 'dense modes (dB)', min: -40, max: 20, step: 1, def: 0 },
   damping: { label: 'damping x', min: 0.1, max: 10, step: 0.1, def: 1 },
   pitch: { label: 'pitch (semitones)', min: -24, max: 24, step: 1, def: 0 },
   spread: { label: 'pitch spread x', min: 0, max: 5, step: 0.1, def: 1 },
@@ -37,15 +42,17 @@ export type SoundKnob = keyof typeof SOUND_KNOBS;
 export interface SoundOptions extends Record<SoundKnob, number> {
   on: boolean;
   material: SoundMaterialName | 'auto';
+  set: SoundSet;
 }
 
 export const DEFAULT_SOUND: SoundOptions = {
-  on: false, material: 'auto',
+  on: false, material: 'auto', set: 'real',
   ...(Object.fromEntries(Object.entries(SOUND_KNOBS).map(([k, v]) => [k, v.def])) as Record<SoundKnob, number>),
 };
 
 /** Throws unless every knob is in range (and voices whole). */
 export function checkSound(o: SoundOptions): SoundOptions {
+  if (!SOUND_SETS.includes(o.set)) throw new Error(`snd.set must be one of ${SOUND_SETS.join(', ')}: ${String(o.set)}`);
   if (o.material !== 'auto' && !SOUND_MATERIAL_NAMES.includes(o.material)) throw new Error(`snd.mat must be auto or one of ${SOUND_MATERIAL_NAMES.join(', ')}: ${String(o.material)}`);
   for (const k of Object.keys(SOUND_KNOBS) as SoundKnob[]) {
     const r = SOUND_KNOBS[k], v = o[k];
@@ -65,6 +72,8 @@ export function parseSoundOptions(q: URLSearchParams): SoundOptions {
   }
   const mat = q.get('snd.mat');
   if (mat !== null) o.material = mat as SoundOptions['material'];
+  const set = q.get('snd.set');
+  if (set !== null) o.set = set as SoundSet;
   for (const k of Object.keys(SOUND_KNOBS) as SoundKnob[]) {
     const v = q.get(`snd.${k}`);
     if (v !== null) o[k] = v.trim() === '' ? NaN : Number(v);
@@ -76,11 +85,12 @@ export function parseSoundOptions(q: URLSearchParams): SoundOptions {
 export function writeSoundOptions(o: SoundOptions, q: URLSearchParams): void {
   if (o.on) q.set('snd', '1');
   if (o.material !== DEFAULT_SOUND.material) q.set('snd.mat', o.material);
+  if (o.set !== DEFAULT_SOUND.set) q.set('snd.set', o.set);
   for (const k of Object.keys(SOUND_KNOBS) as SoundKnob[]) if (o[k] !== DEFAULT_SOUND[k]) q.set(`snd.${k}`, String(o[k]));
 }
 
 /** The material the knobs make of a base material. */
-export function tunedMaterial(base: SoundMaterial, o: Pick<SoundOptions, 'ring' | 'click' | 'grit' | 'damping' | 'pitch' | 'spread'>): SoundMaterial {
+export function tunedMaterial(base: SoundMaterial, o: Pick<SoundOptions, 'ring' | 'click' | 'grit' | 'damping' | 'pitch' | 'spread'> & Partial<Pick<SoundOptions, 'rough' | 'dense'>>): SoundMaterial {
   const stiff = 2 ** (o.pitch / 6);
   return {
     ...base,
@@ -91,5 +101,8 @@ export function tunedMaterial(base: SoundMaterial, o: Pick<SoundOptions, 'ring' 
     ringDb: base.ringDb + o.ring,
     clickDb: base.clickDb + o.click,
     gritDb: base.gritDb + o.grit,
+    // Only where the material has them: a classic material stays bit for bit G6's.
+    ...(base.roughDb !== undefined ? { roughDb: base.roughDb + (o.rough ?? 0) } : {}),
+    ...(base.denseDb !== undefined ? { denseDb: base.denseDb + (o.dense ?? 0) } : {}),
   };
 }

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   BETA_L, beamBending, clickKernel, contactTime, mass, materialFromJson, materialToJson, modes, parseSoundMaterial,
-  pulseSpectrum, SOUND_MATERIALS, type SoundMaterial,
+  pulseSpectrum, CLASSIC_SOUND_MATERIALS, SOUND_MATERIALS, type SoundMaterial,
 } from '@tb/audio';
 import { rng } from '@tb/scenarios';
 
@@ -114,8 +114,8 @@ describe('config', () => {
   });
 });
 
-describe("Keystone's materials (the game)", () => {
-  const s = SOUND_MATERIALS, low = (m: SoundMaterial, edge: number) => { const md = modes(m, edge), i = md.freq.indexOf(Math.min(...md.freq)); return { f: md.freq[i]!, tau: md.tau[i]! }; };
+describe("Keystone's materials (the game; G6's classic set)", () => {
+  const s = CLASSIC_SOUND_MATERIALS, low = (m: SoundMaterial, edge: number) => { const md = modes(m, edge), i = md.freq.indexOf(Math.min(...md.freq)); return { f: md.freq[i]!, tau: md.tau[i]! }; };
   it('every one is a valid material', () => {
     for (const k of ['plaster', 'iron', 'ice', 'rubber', 'steel'] as const) expect(parseSoundMaterial(s[k])).toEqual(s[k]);
   });
