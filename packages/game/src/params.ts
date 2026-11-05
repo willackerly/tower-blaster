@@ -4,11 +4,11 @@
 // (docs/design/viewer-superset.md, step F). A key's bad value is refused with
 // a message naming it; keys a page doesn't know are left to it (the look's
 // real.* knobs, the viewer's own).
-import { BIG_LEVELS, checkPhysics, checkSettle, isRackItem, itemRef, levelById, type LevelDef, MAX_PULLS, MAX_RACK, type PhysicsBlock, RACK_ITEM_NAMES, type RackItem, rackSizeProblem, readShots, SCORINGS, type Scoring, type SettleRule, type Shot, weaponOf } from '@tb/keystone';
+import { BIG_LEVELS, checkPhysics, checkSettle, DUELS, duelLevel, type DuelDef, findDuel, isRackItem, itemRef, levelById, type LevelDef, MAX_PULLS, MAX_RACK, type PhysicsBlock, RACK_ITEM_NAMES, type RackItem, rackSizeProblem, readShots, SCORINGS, type Scoring, type SettleRule, type Shot, weaponOf } from '@tb/keystone';
 import { LOOKS } from '@tb/render';
 import { type EngineKind, engineKind } from './engines.ts';
 import { paceFeel, type PaceFeel } from './pacing.ts';
-import type { GameSoundMode } from './sound-map.ts';
+import { GAME_SOUND_MODES, type GameSoundMode } from './sound-map.ts';
 
 /** The game's look when ?look= is absent: the maquette, whose pale albedo shows the role tints true. */
 export const GAME_LOOK = 'hazy';
@@ -93,19 +93,29 @@ export interface GameParams {
   shots: Shot[] | null;
   /** ?offscreen=1 (tests): draw only for captures. */
   offscreen: boolean;
-  /** ?keystone.sound=synth: impacts as the old pentatonic voices instead of the collision sound (collapse, the default). */
+  /** ?keystone.sound=classic: the collision sound with G6's materials; synth: impacts as the old pentatonic voices (collapse, the default). */
   sound: GameSoundMode;
   /** ?keystone.impacts=-6: the collision sound's level, dB over the game's own (-40 to 20). */
   impactsDb: number;
+  /** ?duel=D1 (or a ruleset name, keeps or heraldry): a Siege Table duel instead of the level (docs/game/siege-table.md); null when absent. */
+  duel: DuelDef | null;
+}
+
+/** ?duel: a duel table by id or ruleset, any case; null when absent; throws naming the known ones. */
+export function duelOf(text: string | null): DuelDef | null {
+  if (text === null) return null;
+  const d = findDuel(text);
+  if (!d) throw new Error(`unknown duel ${text}; known: ${DUELS.map((x) => `${x.id} (${x.ruleset})`).join(', ')}`);
+  return d;
 }
 
 /** ?keystone.sound and ?keystone.impacts. */
 export function gameSound(q: URLSearchParams): Pick<GameParams, 'sound' | 'impactsDb'> {
   const mode = q.get('keystone.sound') ?? 'collapse';
-  if (mode !== 'collapse' && mode !== 'synth') throw new Error(`keystone.sound must be collapse or synth: ${mode}`);
+  if (!(GAME_SOUND_MODES as readonly string[]).includes(mode)) throw new Error(`keystone.sound must be ${GAME_SOUND_MODES.join(', ')}: ${mode}`);
   const t = q.get('keystone.impacts'), db = t === null ? 0 : t.trim() === '' ? NaN : Number(t);
   if (!(db >= -40 && db <= 20)) throw new Error(`keystone.impacts (dB) must be from -40 to 20: ${t}`);
-  return { sound: mode, impactsDb: db };
+  return { sound: mode as GameSoundMode, impactsDb: db };
 }
 
 /**
@@ -163,12 +173,14 @@ export function parseGameParams(q: URLSearchParams): GameParams {
   const rules = levelRules(q);
   const authored = gameLevel(q.get('level') ?? DEFAULT_LEVEL), rack = rackOf(authored, q.get('keystone.rack'));
   const level = withRules(rack ? { ...authored, rack } : authored, rules);
+  const duel = duelOf(q.get('duel'));
   return {
-    level, rack, rules,
+    level, rack, rules, duel,
     engine: engineKind(q.get('engine')),
     feel: paceFeel(q),
     look: lookName(q.get('look') ?? GAME_LOOK),
-    shots: lineOf(level, q.get('keystone.shots')),
+    // A duel's line is checked against the duel's own level (its first player first).
+    shots: lineOf(duel ? duelLevel(duel, 0) : level, q.get('keystone.shots')),
     offscreen: q.get('offscreen') === '1',
     ...gameSound(q),
   };

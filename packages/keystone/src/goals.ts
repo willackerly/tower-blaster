@@ -19,8 +19,12 @@ import { aabbTop, HEIGHT_BINS, leverage, type LevelScore, outsideLot, potential_
 import type { Phase } from './session.ts';
 import { readShots, type Shot } from './shots.ts';
 
-/** Whole-round facts a goal can test. */
-export const ROUND_FACTS = ['cleared', 'shots', 'rackLeft', 'collapse', 'crowns', 'crownsLeft', 'heritage', 'leverage', 'comboMax', 'outOfLot', 'skyline', 'score', 'stars'] as const;
+/**
+ * Whole-round facts a goal can test: cleared (1 or 0), shots fired, rackLeft, collapse D, crowns
+ * down and crownsLeft standing, heritage broken, leverage over the round and bestLeverage of any one
+ * shot, comboMax crowns in one shot, outOfLot (share), skyline (end over start), score and stars.
+ */
+export const ROUND_FACTS = ['cleared', 'shots', 'rackLeft', 'collapse', 'crowns', 'crownsLeft', 'heritage', 'leverage', 'bestLeverage', 'comboMax', 'outOfLot', 'skyline', 'score', 'stars'] as const;
 export type RoundFact = (typeof ROUND_FACTS)[number];
 /** Facts of one fired shot (ShotOutcome fields). */
 export const SHOT_FACTS = ['crownsDown', 'leverage', 'heritageNew', 'displaced'] as const;
@@ -122,6 +126,7 @@ export function roundFacts(c: CompiledLevel, r: RoundState, s: Snapshot, groups:
       crowns, crownsLeft: m.crowns.length - crowns,
       heritage: r.heritageBroken.reduce((a, x) => a + x, 0),
       leverage: leverage(pe0 - pe, fired),
+      bestLeverage: Math.max(0, ...r.outcomes.map((o) => o.leverage)),
       comboMax: Math.max(0, ...r.outcomes.map((o) => o.crownsDown)),
       outOfLot: m.n ? out / m.n : 0,
       skyline: start > 0 ? skyline(hist, c.height) / start : 1,

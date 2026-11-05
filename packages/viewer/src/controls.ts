@@ -2,7 +2,7 @@
 // Bounce, and the rules it plays by: a scenario under Keystone's is a level), rebuilt on demand, and the projectile and the look, applied as soon as a field
 // changes; and the whole setup saved to or loaded from a JSON file (scene-file.ts). The panel
 // only proposes configs; main.ts decides how to apply them (live, or by reset).
-import { checkSound, SOUND_KNOBS, SOUND_MATERIAL_NAMES, type SoundKnob, type SoundOptions } from '@tb/audio';
+import { checkSound, SOUND_KNOBS, SOUND_MATERIAL_NAMES, SOUND_SETS, type SoundKnob, type SoundOptions } from '@tb/audio';
 import { parseSpec } from '@tb/bench';
 import { type Env, ENVS, type Ground, GROUNDS, linearToSrgb, LOOKS, REAL_DEFAULTS, REAL_KNOBS, type RealKnob, type RealOptions, srgbToLinear, type Stone, STONES, type V3 } from '@tb/render';
 import { checkPaceFeel, DEFAULT_BUDGET_MS, DEFAULT_FEEL, type FrameMode, objectiveText, type PaceFeel } from '@tb/game';
@@ -321,6 +321,7 @@ export function mountControls(root: HTMLElement, hooks: ControlsHooks): { refres
       ${field('on', 'collision sound', false)}
       <div class="sound">
         <label class="f"><span>material</span><select name="material"><option value="auto">auto</option>${SOUND_MATERIAL_NAMES.map((m) => `<option value="${m}">${m}</option>`).join('')}</select></label>
+        <label class="f"><span>materials</span><select name="set">${SOUND_SETS.map((m) => `<option value="${m}">${m}</option>`).join('')}</select></label>
         ${(Object.entries(SOUND_KNOBS) as [SoundKnob, (typeof SOUND_KNOBS)[SoundKnob]][]).map(([key, k]) => field(key, k.label, k.def, `step="${k.step}" min="${k.min}" max="${k.max}"`)).join('')}
       </div>
       <div class="out muted"></div>
@@ -576,7 +577,7 @@ export function mountControls(root: HTMLElement, hooks: ControlsHooks): { refres
     const on = (input(soundForm, 'on') as HTMLInputElement).checked;
     soundBox.hidden = !on;
     try {
-      const o = { on, material: input(soundForm, 'material').value, ...Object.fromEntries((Object.keys(SOUND_KNOBS) as SoundKnob[]).map((k) => [k, input(soundForm, k).value === '' ? NaN : Number(input(soundForm, k).value)])) } as SoundOptions;
+      const o = { on, material: input(soundForm, 'material').value, set: input(soundForm, 'set').value, ...Object.fromEntries((Object.keys(SOUND_KNOBS) as SoundKnob[]).map((k) => [k, input(soundForm, k).value === '' ? NaN : Number(input(soundForm, k).value)])) } as SoundOptions;
       hooks.setSound(checkSound(o));
       soundNote();
     } catch (e) {
@@ -687,6 +688,7 @@ export function mountControls(root: HTMLElement, hooks: ControlsHooks): { refres
     (input(soundForm, 'on') as HTMLInputElement).checked = c.sound.on;
     soundBox.hidden = !c.sound.on;
     input(soundForm, 'material').value = c.sound.material;
+    input(soundForm, 'set').value = c.sound.set;
     for (const k of Object.keys(SOUND_KNOBS) as SoundKnob[]) input(soundForm, k).value = String(c.sound[k]);
     soundNote();
   }

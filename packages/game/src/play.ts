@@ -7,24 +7,26 @@
 // its own elements; the viewer calls it for rules=keystone, with hooks for its
 // dev panels (docs/design/viewer-superset.md, step C).
 import { type BodyDesc, type EngineHealth, limitsHit, type PhysicsEngine, type Vec3 } from '@tb/engine-api';
-import { type RackItem, type CompiledLevel, compileLevel, Driver, type Feedback, type LevelDef, type LevelScore, type PerStep, rapidDue, runSession, type Shot, snapshotHash, TIER_NAMES } from '@tb/keystone';
+import { type RackItem, type CompiledLevel, compileLevel, Driver, Duel, type DuelDef, DEFAULT_TURN_SECONDS, type Feedback, type Goal, goalMet, type Player, type Grade, gradeOf, type LevelDef, type LevelScore, type LotSheet, type PerStep, rapidDue, roundFacts, runSession, selectGroups, type Shot, snapshotHash, TIER_NAMES } from '@tb/keystone';
 import { clampPitch, eyeOf, type Orbit, rayThrough, viewProj } from '@tb/render/camera';
 import type { PixelStats, Renderer, SnapshotSource } from '@tb/render';
 import type { HostStats } from '@tb/audio';
 import { type Aimed, azFromYaw, pick, previewBeads, pullFor, shotFor, SUBSTEPS } from './aim.ts';
 import { Synth, type Voice, voicesFor } from './audio.ts';
 import { CollapseSound, type CollapseStatus } from './collapse-sound.ts';
-import type { GameSoundMode } from './sound-map.ts';
+import { type GameSoundMode, soundSetOf } from './sound-map.ts';
 import { viewOf } from './view.ts';
 export { viewOf } from './view.ts';
 import { driverOptions, type EngineKind, gpuEngineOptions, makeEngine, roomAfter } from './engines.ts';
 import { hudHtml, nextSelection, rackChips, resultHtml, starsText } from './hud.ts';
+import { type GoalLine, goalsHudHtml, goalsResultHtml } from './lot-hud.ts';
+import { duelHudHtml, duelResultHtml } from './duel-hud.ts';
 import { FollowCam } from './follow.ts';
 import { CameraJuice, contactJuice } from './juice.ts';
 import { alphaAt, arrived, DEFAULT_FEEL, newArrivals, Pacer, type PaceFeel, SLOW_TAG_BELOW, slowTag, SpeedMeter, TailSkip } from './pacing.ts';
 import { COST_WINDOW, runPhysics, wakeable } from './physics-loop.ts';
 import { CLEAR_SHARE, FrameGovernor } from './frame-rate.ts';
-import { beadOverlay, BOMB_FX, PULL_HOVER, regrowDuration, regrowScales, structureTints, TINT, tintOf } from './scene.ts';
+import { beadOverlay, BOMB_FX, CROWN_GLOW, PULL_HOVER, regrowDuration, regrowScales, structureTints, TINT, tintOf, tintWordOf } from './scene.ts';
 
 /** What a page (and its tests) can see and do while Keystone plays: window.__game on the game page. */
 export interface GameHandle {
@@ -117,11 +119,23 @@ export interface GameHandle {
   limitsHit: string[];
   /** The collision sound (off until the first click or key; 'off' for good under keystone.sound=synth). */
   sound(): SoundState;
+  /** The level's lot sheet as shown (KeystoneEnv.lotSheet): each goal met as of the last settle, final once the round is over. */
+  goals: GoalLine[];
+  /** The grade the round reached on the level's cast cloud as of the last settle, or null (below E, or no grades). */
+  grade: Grade | null;
+  /** A duel's state (KeystoneEnv.duel) as of the last settle, or null outside one. */
+  duel: DuelState | null;
 }
+/** What a page and its tests see of a duel. */
+export interface DuelState { turn: Player; first: Player; sides: { name: string; share: number; points: number; shotsLeft: number; kingDown: boolean }[]; over: boolean; winner: Player | null; why: string; log: Player[] }
 export interface SoundState { mode: GameSoundMode; status: CollapseStatus; error: string; posted: number; stats: HostStats | null }
 export interface SessionState { step: number; phase: string; strokes: number; heritageBroken: number; hash: string }
 
 const sum = (a: Uint8Array) => a.reduce((x, y) => x + y, 0);
+/** A goal judged; one that cannot be read (a sheet out of step with its level) counts as not met, with a warning. */
+function goalMetSafe(g: Goal, f: Parameters<typeof goalMet>[1]): boolean {
+  try { return goalMet(g.when, f); } catch (e) { console.warn(`goal ${g.id}: ${(e as Error).message}`); return false; }
+}
 /** A pull's dust puff (Renderer.burst strength, m/s): a soft one, about a slow contact's. */
 export const PULL_PUFF = 2;
 const median = (xs: number[]) => { if (!xs.length) return NaN; const s = [...xs].sort((a, b) => a - b); return s[Math.floor(s.length / 2)]!; };
@@ -140,7 +154,7 @@ export function newGameHandle(): GameHandle {
   return {
     status: 'loading', engine: '', level: '', phase: 'loading', ready: false, frames: 0, stepIndex: 0, strokes: 0, bodies: 0, collapse: 0, fast: false, pace: { timeScale: 1, speed: 1, tag: '', tailSkip: false, costMs: NaN }, view: { target: [0, 0, 0], distance: 0, following: false, jolt: 0 }, result: null, counts: {}, feel: { ...DEFAULT_FEEL }, resultShownAt: null, timing: { loadMs: 0, stepMs: [], moving: [], frameMs: [], costMs: [] }, draws: { drawn: 0, skipped: 0, decimating: false },
     fire: () => false, bank: () => false, fireOpener: () => false, setMuted: () => {}, maxDpr: 2, aim: () => null, reach: null, select: () => false, load: async () => {}, retry: async () => {}, capture: async () => null,
-    state: none, line: () => [], replay: async () => none(), health: async () => null, pairsPerBody: 0, limitsHit: [],
+    state: none, line: () => [], replay: async () => none(), health: async () => null, pairsPerBody: 0, limitsHit: [], goals: [], grade: null, duel: null,
     sound: () => ({ mode: 'collapse', status: 'off', error: '', posted: 0, stats: null }),
   };
 }
@@ -237,6 +251,17 @@ export interface KeystoneEnv {
   muted?: boolean;
   /** The result card's Save session button (shown when given): the page saves the round just ended. */
   onSave?(): void;
+  /**
+   * The level's lot sheet (docs/game/lot-sheets.md), asked at each load and retry: the sheet, the goals to
+   * show (proven ones unless ?keystone.goals=all) and the ids the player met on earlier plays; null for none.
+   */
+  lotSheet?(c: CompiledLevel): { sheet: LotSheet; goals: readonly Goal[]; before: readonly string[] } | null;
+  /**
+   * A Siege Table duel (docs/game/siege-table.md): `levels` are then duelLevel(duel, 0) and duelLevel(duel, 1)
+   * (who goes first), the duel referees every shot and settle, owned blocks wear their side's ink, and the
+   * result card offers a rematch with the other side first.
+   */
+  duel?: DuelDef;
 }
 
 /** An orbiting drag of (dx, dy) pixels: turns, and tilts from looking down to looking up (past level the floor brings the eye in). */
@@ -285,7 +310,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
   let synth: Synth | null = null;
   let muted = env.muted ?? false;
   const soundMode = env.sound ?? 'collapse';
-  const collapse = soundMode === 'collapse' ? new CollapseSound(env.impactsDb ?? 0) : null;
+  const collapse = soundMode !== 'synth' ? new CollapseSound(env.impactsDb ?? 0, soundSetOf(soundMode)) : null;
   handle.sound = () => ({ mode: soundMode, status: collapse?.status ?? 'off', error: collapse?.error ?? '', posted: collapse?.posted ?? 0, stats: collapse?.stats ?? null });
   const voices: Voice[] = [];
 
@@ -329,6 +354,10 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
   let regrowT: number | null = null;
   let fastHeld = false;
   let lastHud = '', crownsShown = 0;
+  /** The level's lot sheet and its groups (selected once per load), or null. */
+  let lot: { sheet: LotSheet; goals: readonly Goal[]; groups: Record<string, Int32Array> } | null = null;
+  /** The duel being played (env.duel), and when the turn in the air was fired (its pace: DuelDef.turnSeconds). */
+  let duel: Duel | null = null, turnStart = 0;
   /** Every crown is down: the round is known to be over, the card shows, and the rest of the settle runs at fast-forward. */
   let ending = false;
 
@@ -394,7 +423,11 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     // Fresh effects: role tints, and every body at scale 0 for Regrow.
     if (fxSlots) renderer.clearFx(0, fxSlots);
     regrowBuf = regrowScales(c, 0, new Float32Array(c.meta.n));
-    renderer.setFx(0, structureTints(c), regrowBuf, true);
+    duel = env.duel ? new Duel(env.duel, c, i as Player, driver.session.home) : null;
+    const tints = structureTints(c);
+    // Owner ink: each side's blocks in its colour, its king glowing a little as crowns do.
+    if (duel) duel.owned.forEach((idx, k) => { for (const b of idx) tints[b] = tintWordOf(duel!.def.sides[k]!.ink, c.meta.role[b] === 1 ? CROWN_GLOW : 0); });
+    renderer.setFx(0, tints, regrowBuf, true);
     fxSlots = c.meta.n;
     pacer.reset();
     speed.reset();
@@ -429,6 +462,11 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     hover = null; // the new level's tints are fresh
     aimDirty = true;
     crownsShown = 0;
+    const ls = env.lotSheet?.(c) ?? null;
+    lot = ls && { sheet: ls.sheet, goals: ls.goals, groups: selectGroups(c, ls.sheet.groups ?? {}) };
+    handle.goals = (ls?.goals ?? []).map((g) => ({ id: g.id, text: g.text, met: false, before: ls!.before.includes(g.id) }));
+    handle.grade = null;
+    syncDuel();
     sync();
     hooks.loaded?.(c, driver);
   }
@@ -471,6 +509,30 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
       }
     }
     setHover(lit);
+  }
+
+  /** Mirror the duel onto the handle. */
+  function syncDuel() {
+    if (!duel) { handle.duel = null; return; }
+    const r = duel.result;
+    handle.duel = {
+      turn: duel.turn, first: duel.first, over: r.over, winner: r.over ? r.winner : null, why: r.over ? r.why : '', log: duel.log.map((x) => x.player),
+      sides: duel.sides.map((st, k) => ({ name: duel!.def.sides[k]!.name, share: st.share, points: st.points, shotsLeft: st.shotsLeft, kingDown: st.kingDown })),
+    };
+  }
+
+  /** The rack chips as the HUD shows them: in a duel, the player to fire's own rack. */
+  function chipsNow() {
+    if (duel) return rackChips(duel.def.sides[duel.turn].rack, duel.left[duel.turn], selected);
+    return rackChips(c.def.rack, driver.session.rackLeft, selected);
+  }
+
+  /** The lot sheet's goals and grade judged on the round as it stands (after a settle, and at its end). */
+  function judgeGoals() {
+    if (!lot) return;
+    const f = roundFacts(c, driver.session, driver.snapshot, lot.groups);
+    handle.goals = lot.goals.map((g, k) => ({ ...handle.goals[k]!, met: goalMetSafe(g, f) }));
+    handle.grade = gradeOf(lot.sheet.grades, f);
   }
 
   function onFeedback(fb: Feedback[]) {
@@ -528,13 +590,25 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
           break;
         case 'tier': banner(`${TIER_NAMES[f.tier]}!`); break;
         case 'settled':
+          judgeGoals();
           pacer.release();
           // A crown back above the line (rare: a catapult) means the round goes on after all.
           if (ending && driver.session.phase === 'aiming') { ending = false; hideResult(); }
           selected = nextSelection(c.def.rack, driver.session.rackLeft, selected);
+          if (duel && duel.shooter !== null) {
+            const r = duel.settled(driver.snapshot), side = duel.def.sides[duel.turn];
+            syncDuel();
+            // Decided before the racks are spent: end the round here (a bank, once this step's feedback is done).
+            if (r.over) queueMicrotask(() => { if (driver.session.phase === 'aiming') bank(); });
+            else {
+              selected = nextSelection(side.rack, duel.left[duel.turn], null);
+              banner(`${side.name}'s turn`);
+            }
+          }
           aimDirty = true;
           break;
         case 'levelEnd':
+          judgeGoals();
           handle.result = f.score;
           ending = false;
           showResult(f.score);
@@ -547,7 +621,16 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
   }
 
   function showResult(score: LevelScore | null) {
-    env.result.innerHTML = resultHtml(c.def, score, driver.session.strokes, levelIdx + 1 < levels.length, Boolean(env.onSave));
+    if (duel) {
+      if (!score) return;
+      env.result.innerHTML = duelResultHtml(duel);
+      env.result.classList.add('show');
+      document.body.classList.add('ended');
+      handle.resultShownAt ??= driver.engine.stepIndex;
+      return;
+    }
+    const sheet = score && lot ? goalsResultHtml(handle.goals, handle.grade, lot.sheet.grades !== undefined) : '';
+    env.result.innerHTML = resultHtml(c.def, score, driver.session.strokes, levelIdx + 1 < levels.length, Boolean(env.onSave), sheet);
     env.result.classList.add('show');
     document.body.classList.add('ended');
     handle.resultShownAt ??= driver.engine.stepIndex;
@@ -590,6 +673,9 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
 
   function fire(shot: Shot): boolean {
     if (loading || regrowT !== null || ending || handle.result !== null || !driver.session.canFire(shot.ammo) || !inRack(shot, waiting)) return false;
+    // A duel takes one shot per turn from the current player's side and rack (the referee says why not).
+    const refused = duel?.refuse(shot) ?? (duel && waiting.length ? { message: 'Wait for the last shot to settle' } : null);
+    if (refused) { banner(refused.message, 'crack'); return false; }
     const timed = shot.after !== undefined && driver.session.strokes > 0;
     if (!timed && !aimable()) return false;
     if (shot.ammo === 'pull' && driver.session.pullRefusal(shot.body) !== null) return false;
@@ -611,7 +697,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
       if (s.phase !== 'aiming' && s.phase !== 'running') { waiting = []; return; }
       if (next.after !== undefined && s.phase === 'running' && !rapidDue(driver, next)) return;
       waiting.shift();
-      if (!s.canFire(next.ammo) || (next.ammo === 'pull' && s.pullRefusal(next.body) !== null)) continue;
+      if (!s.canFire(next.ammo) || (next.ammo === 'pull' && s.pullRefusal(next.body) !== null) || duel?.refuse(next)) continue;
       fireNow(next);
     }
   }
@@ -619,6 +705,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
   function fireNow(shot: Shot) {
     setHover(null);
     const fb = driver.fire(shot);
+    if (duel) { duel.fired(shot); turnStart = performance.now(); syncDuel(); }
     // The shot's first step goes in now, not at the next frame.
     physicsIdle.kick();
     // A shot's pace starts fresh: no tail yet, and at real time until its steps say otherwise.
@@ -661,7 +748,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
   }
 
   function select(a: RackItem): boolean {
-    if (!driver.session.rackLeft.includes(a)) return false;
+    if (!driver.session.rackLeft.includes(a) || (duel && !duel.left[duel.turn].includes(a))) return false;
     selected = a;
     aimDirty = true;
     return true;
@@ -756,20 +843,24 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     if (act === 'retry') void handle.retry();
     if (act === 'save') env.onSave?.();
     if (act === 'next' && levelIdx + 1 < levels.length) void load(levelIdx + 1).catch(fail);
+    // A duel: Rematch starts the other side first (the other of its two levels); Same start replays this one.
+    if (act === 'rematch' && duel) void load(1 - levelIdx).catch(fail);
+    if (act === 'again' && duel) void handle.retry();
   });
   addEventListener('keydown', (e) => {
     if (typing(e)) return;
     wakeAudio();
     const k = e.key.toLowerCase();
     if (k === ' ') { e.preventDefault(); fastHeld = true; pacer.release(); }
-    const chip = rackChips(c.def.rack, driver.session.rackLeft, selected).find((x) => x.key === e.key);
+    const chip = chipsNow().find((x) => x.key === e.key);
     if (chip) select(chip.ammo);
     if (k === 'q' || k === 'e') { power = Math.max(0, Math.min(100, power + (k === 'e' ? 10 : -10))); aimDirty = true; }
     if (k === 'b') bank();
     if (k === 'f') fireOpener();
-    if (k === 'r') void handle.retry();
-    if (k === 'n' && levelIdx + 1 < levels.length) void load(levelIdx + 1).catch(fail);
-    if (k === 'p' && levelIdx > 0) void load(levelIdx - 1).catch(fail);
+    // In a duel, R after the result is a rematch (the other side starts), as the card's first button says.
+    if (k === 'r') void (duel?.result.over ? load(1 - levelIdx).catch(fail) : handle.retry());
+    if (!duel && k === 'n' && levelIdx + 1 < levels.length) void load(levelIdx + 1).catch(fail);
+    if (!duel && k === 'p' && levelIdx > 0) void load(levelIdx - 1).catch(fail);
     if (k === 'm') setMuted(!muted);
   });
   addEventListener('keyup', (e) => { if (e.key === ' ') fastHeld = false; });
@@ -786,12 +877,14 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     let html = hudHtml({
       level: c.def, strokes: s.strokes, crownsDown, crownsTotal: c.meta.crowns.length,
       heritageBroken: s.heritageBroken.reduce((a, x) => a + x, 0), heritageTotal: c.meta.heritage.length,
-      chips: rackChips(c.def.rack, s.rackLeft, selected), power, liveLeverage: s.liveLeverage, phase: s.phase,
+      chips: chipsNow(), power, liveLeverage: s.liveLeverage, phase: s.phase,
       reachable: aimed ? aimed.reachable : null,
       pullRefused: aimed?.shot.ammo === 'pull' && !aimed.reachable,
       collapse: s.liveCollapse, pulled: s.pulledShare(), met: s.objectiveDone, canBank: !stepping && regrowT === null && s.canBank(), pace: handle.pace.tag,
       opener: !stepping && regrowT === null && s.phase === 'aiming' && openerNow() !== null,
+      ...(duel ? { duel: duelHudHtml(duel, s.phase === 'aiming' && aimed ? duel.refuse(aimed.shot) : null) } : {}),
     });
+    html += goalsHudHtml(handle.goals);
     if (crownsDown > crownsShown) html = html.replace('class="crowns"', 'class="crowns pop"');
     crownsShown = crownsDown;
     if (html !== lastHud) { env.hud.innerHTML = html; lastHud = html; }
@@ -819,7 +912,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     const running = !loading && driver.session.phase === 'running';
     // Physics is behind when the sim runs under the HUD's slow-motion speed without being asked to
     // (slow-motion juice, fast-forward); it has headroom when steps cost under CLEAR_SHARE of a step.
-    const fast = fastHeld || handle.fast || ending || tail.on, costMs = median(handle.timing.costMs.slice(-COST_WINDOW));
+    const fast = fastHeld || handle.fast || ending || tail.on || turnUp(), costMs = median(handle.timing.costMs.slice(-COST_WINDOW));
     const draw = frames.frame(now, { idle: !running, behind: running && !fast && !pacer.slowing && speed.speed(now) < SLOW_TAG_BELOW, clear: costMs < CLEAR_SHARE * 1000 * c.scene.dt }, !!want);
     handle.draws = { drawn: frames.drawn, skipped: frames.skipped, decimating: frames.decimating };
     if (draw) {
@@ -865,7 +958,9 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
   const channel = new MessageChannel(), tasks: Array<() => void> = [];
   channel.port1.onmessage = () => tasks.shift()?.();
   const task = () => new Promise<void>((res) => { tasks.push(res); channel.port2.postMessage(null); });
-  const fastNow = () => fastHeld || handle.fast || ending || tail.on;
+  // A duel turn runs at its own pace for turnSeconds, then fast-forwards the rest of its settle.
+  const turnUp = () => duel !== null && duel.shooter !== null && performance.now() - turnStart > 1000 * (duel.def.turnSeconds ?? DEFAULT_TURN_SECONDS);
+  const fastNow = () => fastHeld || handle.fast || ending || tail.on || turnUp();
   void runPhysics({
     now: () => performance.now(),
     alive: () => handle.status === 'running',

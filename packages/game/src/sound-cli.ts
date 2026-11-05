@@ -3,18 +3,21 @@
 // it through @tb/audio's collapse synth with the game's sound slots (sound-map.ts). Per level: the
 // impacts per slot, the peak at volume 0 (the limiter's ceiling is 0.9), how much it limited, and the
 // energy above 1 kHz. A capture is plain data, so a change to the synth is checked on the same frames.
-// usage: tsx packages/game/src/sound-cli.ts [levels=L1,L2 wav=dir frames=dir (writes captures) from=dir (reads them) db=GAME_SOUND_DB]
+// Also the loudness (ITU-R BS.1770, LUFS): how the game levels one material set against the other (sound-map.ts).
+// usage: tsx packages/game/src/sound-cli.ts [levels=L1,L2 wav=dir frames=dir (writes captures) from=dir (reads them) set=real|classic db=(the set's level)]
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { AvbdReferenceEngine } from '@tb/physics-ref';
-import { type AudioFrame, BLOCK, CollapseEngine, FrameTap, FULL_SCALE } from '@tb/audio';
+import { type AudioFrame, BLOCK, CollapseEngine, FrameTap, FULL_SCALE, loudness, type SoundSet } from '@tb/audio';
 import { AMMO_KINDS, ammoBody, AVBD_GAP_SLOP, AVBD_ITERATIONS, compileLevel, LEVELS, runSession, type Shot } from '@tb/keystone';
 import type { PhysicsEngine } from '@tb/engine-api';
 import { eyeOf } from '@tb/render/camera';
-import { GAME_SOUND_DB, slotSounds, SOUND_SLOTS, soundSlotOf } from './sound-map.ts';
+import { gameSoundDb, slotSounds, SOUND_SLOTS, soundSlotOf } from './sound-map.ts';
 import { viewOf } from './view.ts';
 
 const kv = Object.fromEntries(process.argv.slice(2).map((a) => a.split('=') as [string, string]));
-for (const k of Object.keys(kv)) if (!['levels', 'wav', 'frames', 'from', 'db'].includes(k)) throw new Error(`unknown option ${k}`);
+for (const k of Object.keys(kv)) if (!['levels', 'wav', 'frames', 'from', 'db', 'set'].includes(k)) throw new Error(`unknown option ${k}`);
+const set = (kv.set ?? 'real') as SoundSet;
+if (set !== 'real' && set !== 'classic') throw new Error(`set must be real or classic: ${set}`);
 const ids = (kv.levels ?? LEVELS.map((l) => l.id).join(',')).split(',');
 const SR = 48000;
 
@@ -40,10 +43,11 @@ export async function capture(id: string, engine: PhysicsEngine = new AvbdRefere
   return { frames, slots };
 }
 
-/** Render frames through the level's slot sounds at the game's master gain (dB over @tb/audio's full scale). */
-export function render(id: string, frames: AudioFrame[], db = GAME_SOUND_DB): { L: Float32Array; R: Float32Array; minGain: number } {
+/** Render frames through the level's slot sounds of a material set at the game's master gain (dB over @tb/audio's full scale; default the set's). */
+export function render(id: string, frames: AudioFrame[], db?: number, set: SoundSet = 'real'): { L: Float32Array; R: Float32Array; minGain: number } {
+  db ??= gameSoundDb(set);
   const c = compileLevel(LEVELS.find((l) => l.id === id)!), e = new CollapseEngine({ sampleRate: SR, seed: 1, fullScale: FULL_SCALE / 10 ** (db / 20) });
-  slotSounds(c).forEach((x, i) => e.setMaterial(i, x.material, x.edge));
+  slotSounds(c, set).forEach((x, i) => e.setMaterial(i, x.material, x.edge));
   const n = Math.ceil((frames.reduce((s, f) => s + f.dt, 0) * SR) / BLOCK) + 160, L = new Float32Array(n * BLOCK), R = new Float32Array(n * BLOCK);
   const l = new Float32Array(BLOCK), r = new Float32Array(BLOCK);
   let due = 0, b = 0;
@@ -73,11 +77,11 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   for (const id of ids) {
     const { frames, slots } = kv.from ? load(`${kv.from}/${id}.json`) : await capture(id);
     if (kv.frames) writeFileSync(`${kv.frames}/${id}.json`, JSON.stringify({ slots, frames: frames.map((f) => ({ ...f, counts: [...f.counts], a2: [...f.a2], top: [...f.top] })) }));
-    const v0 = render(id, frames, kv.db === undefined ? GAME_SOUND_DB : Number(kv.db));
+    const v0 = render(id, frames, kv.db === undefined ? undefined : Number(kv.db), set);
     let peak = 0;
     for (let i = 0; i < v0.L.length; i++) peak = Math.max(peak, Math.abs(v0.L[i]!), Math.abs(v0.R[i]!));
     if (kv.wav) wav(`${kv.wav}/${id}.wav`, v0.L, v0.R);
-    rows.push({ level: id, seconds: +(frames.length / 60).toFixed(1), impacts: Object.fromEntries(slots.map((x, i) => [names[i], x]).filter(([, x]) => x)), peak: +peak.toFixed(2), 'limited dB': +(20 * Math.log10(v0.minGain)).toFixed(1) });
+    rows.push({ level: id, seconds: +(frames.length / 60).toFixed(1), impacts: Object.fromEntries(slots.map((x, i) => [names[i], x]).filter(([, x]) => x)), peak: +peak.toFixed(2), 'limited dB': +(20 * Math.log10(v0.minGain)).toFixed(1), LUFS: +loudness(v0.L, v0.R).toFixed(1) });
   }
   for (const r of rows) console.log(JSON.stringify(r));
 }

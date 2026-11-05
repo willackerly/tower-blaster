@@ -3,6 +3,9 @@
 // A page positions the HUD itself (the game page top left, the viewer in its
 // panel column); the banner and the result card place themselves.
 
+import { DUEL_CSS } from './duel-hud.ts';
+import { LOT_CSS } from './lot-hud.ts';
+
 export const GAME_CSS = `
   .kg-panel { position: fixed; background: rgba(17, 20, 28, 0.8); color: #e8ebf2; border-radius: 10px; padding: 12px 14px; backdrop-filter: blur(6px); }
   .kg-hud, .kg-result { font-variant-numeric: tabular-nums; }
@@ -43,7 +46,7 @@ export const GAME_CSS = `
   @keyframes kg-pop { 50% { transform: scale(1.5); } }
   @keyframes kg-banner { 0% { opacity: 0; transform: scale(0.6); } 15% { opacity: 1; transform: scale(1.08); } 70% { opacity: 1; transform: scale(1); } 100% { opacity: 0; transform: scale(1); } }
   @media (max-width: 640px) { .kg-banner { font-size: 30px; } }
-`;
+${LOT_CSS}${DUEL_CSS}`;
 
 /** The help line for the game's controls (the game page's, and the viewer's under Keystone rules). */
 export const GAME_HELP = 'hover: aim · click: fire · drag: orbit (the launcher follows you) · wheel: zoom · <kbd>1</kbd>–<kbd>4</kbd> ammo · <kbd>Q</kbd>/<kbd>E</kbd> power · hold <kbd>Space</kbd>: fast · <kbd>B</kbd> bank (outcome levels) · <kbd>R</kbd> retry · <kbd>N</kbd>/<kbd>P</kbd> level · <kbd>M</kbd> mute';

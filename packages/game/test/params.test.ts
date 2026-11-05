@@ -11,7 +11,7 @@ const par = L1.solutions!.par as Shot[];
 
 describe('game URL keys', () => {
   it('a bare URL opens the slice\'s first level (B1) on the GPU solver in the maquette look, no juice and no line', () => {
-    expect(parse('')).toEqual({ level: B1, rack: null, rules: {}, engine: 'gpu', feel: DEFAULT_FEEL, look: GAME_LOOK, shots: null, offscreen: false, sound: 'collapse', impactsDb: 0 });
+    expect(parse('')).toEqual({ level: B1, rack: null, rules: {}, engine: 'gpu', feel: DEFAULT_FEEL, look: GAME_LOOK, shots: null, duel: null, offscreen: false, sound: 'collapse', impactsDb: 0 });
     expect(DEFAULT_LEVEL).toBe('B1');
     expect(seriesOf(DEFAULT_LEVEL)).toBe(BIG_LEVELS);
     // The chamber levels stay one key away, with par scoring.
@@ -22,9 +22,10 @@ describe('game URL keys', () => {
 
   it('reads every key, a level in any case and the viewer\'s name for the GPU solver, and leaves other keys alone', () => {
     expect(parse(`?level=l3&engine=rapier&keystone.hitstop=1&keystone.slowmo=0&look=real&real.sunElevation=6&offscreen=1&scenario=S4&cam=1,2,3,0,0,9`)).toEqual({
-      level: L3, rack: null, rules: {}, engine: 'rapier', feel: { ...DEFAULT_FEEL, hitStop: true }, look: 'real', shots: null, offscreen: true, sound: 'collapse', impactsDb: 0,
+      level: L3, rack: null, rules: {}, engine: 'rapier', feel: { ...DEFAULT_FEEL, hitStop: true }, look: 'real', shots: null, duel: null, offscreen: true, sound: 'collapse', impactsDb: 0,
     });
     expect(parse('?keystone.sound=synth&keystone.impacts=-6')).toMatchObject({ sound: 'synth', impactsDb: -6 });
+    expect(parse('?keystone.sound=classic')).toMatchObject({ sound: 'classic' });
     expect(parse('?engine=avbd-gpu').engine).toBe('gpu');
     expect(parse('?engine=gpu').engine).toBe('gpu');
     expect(parse(`?level=L1&keystone.shots=${writeShots(par)}`).shots).toEqual(par);
@@ -68,7 +69,7 @@ describe('game URL keys', () => {
     expect(() => parse('?engine=physx')).toThrow(/unknown engine physx: use rapier or gpu/);
     expect(() => parse('?keystone.hitstop=yes')).toThrow(/keystone.hitstop must be 0 or 1: yes/);
     expect(() => parse('?keystone.slowmo=')).toThrow(/keystone.slowmo must be 0 or 1: $/);
-    expect(() => parse('?keystone.sound=loud')).toThrow(/keystone.sound must be collapse or synth: loud/);
+    expect(() => parse('?keystone.sound=loud')).toThrow(/keystone.sound must be collapse, classic, synth: loud/);
     expect(() => parse('?keystone.impacts=30')).toThrow(/keystone.impacts \(dB\) must be from -40 to 20: 30/);
     expect(() => parse('?keystone.impacts=')).toThrow(/keystone.impacts/);
     expect(() => parse('?look=neon')).toThrow(/unknown look neon; known: candy, hazy, real/);

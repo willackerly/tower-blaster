@@ -6,3 +6,4 @@ export * from './runner.ts';
 export * from './fork.ts';
 export * from './cast.ts';
 export * from './drafts.ts';
+export * from './goal-lab.ts';

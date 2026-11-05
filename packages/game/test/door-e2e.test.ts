@@ -24,7 +24,8 @@ describe('front door', () => {
     if (!o) return ctx.skip();
     const { page, errors } = o;
     expect(await page.evaluate(() => window.__door.open)).toBe(true);
-    expect(await page.locator('.kg-door .card').count()).toBe(3);
+    expect(await page.locator('.kg-door .card:not(.duel)').count()).toBe(3);
+    expect(await page.locator('.kg-door .card.duel').count()).toBe(2);
     expect(await page.locator('.kg-door .play').innerText()).toBe('Play · Long Wall');
     // The door holds the game's keys: N would load B2.
     await page.keyboard.press('n');
@@ -59,13 +60,13 @@ describe('front door', () => {
     await page.keyboard.press('Escape');
     expect(await page.evaluate(() => window.__door.open)).toBe(true);
     // The chamber series: L1 to L5, par targets.
-    expect(await page.locator('.kg-door .card .id').allInnerTexts()).toEqual(['L1', 'L2', 'L3', 'L4', 'L5']);
+    expect(await page.locator('.kg-door .card:not(.duel) .id').allInnerTexts()).toEqual(['L1', 'L2', 'L3', 'L4', 'L5']);
     await page.keyboard.press('Escape');
     expect(await page.evaluate(() => window.__door.open)).toBe(false);
     await page.locator('#menu').click();
     expect(await page.evaluate(() => window.__door.open)).toBe(true);
     // Picking a card loads that level.
-    await page.locator('.kg-door .card').nth(1).click();
+    await page.locator('.kg-door .card:not(.duel)').nth(1).click();
     await page.waitForFunction(() => window.__game.level === 'L2', undefined, { timeout: MINUTES });
     expect(errors).toEqual([]);
     await page.close();
@@ -115,14 +116,14 @@ describe('front door', () => {
     expect(await page.locator('.kg-door [data-act="camera"].on').innerText()).toBe('Dynamic');
     expect(await page.evaluate(() => window.__game.feel)).toMatchObject({ follow: true, shake: true, rapid: false });
     expect(await page.locator('.kg-door [data-act="rapid"].on').innerText()).toBe('Off');
-    const card = await page.locator('.kg-door .card').first().innerText();
+    const card = await page.locator('.kg-door .card:not(.duel)').first().innerText();
     expect(card).toContain('1 play');
-    expect(await page.locator('.kg-door .card').first().locator('li.got').count()).toBe(stars);
+    expect(await page.locator('.kg-door .card:not(.duel)').first().locator('li.got').count()).toBe(stars);
     // Forget my progress takes two clicks.
     await page.locator('.kg-door [data-act="reset"]').click();
-    expect(await page.locator('.kg-door .card').first().innerText()).toContain('1 play');
+    expect(await page.locator('.kg-door .card:not(.duel)').first().innerText()).toContain('1 play');
     await page.locator('.kg-door [data-act="reset"]').click();
-    expect(await page.locator('.kg-door .card').first().innerText()).toContain('Not played yet');
+    expect(await page.locator('.kg-door .card:not(.duel)').first().innerText()).toContain('Not played yet');
     expect(errors).toEqual([]);
     await page.close();
   }, 5 * MINUTES);

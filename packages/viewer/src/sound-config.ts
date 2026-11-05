@@ -1,7 +1,7 @@
 // What the viewer's sound plays for a config: the material (snd.mat, or the
 // scene's own for auto) tuned by the knobs, and which body slots sound. Pure,
 // so node tests cover it; sound.ts runs it.
-import { SOUND_MATERIALS, type SoundMaterial, type SoundMaterialName, tunedMaterial } from '@tb/audio';
+import { type SoundMaterial, type SoundMaterialName, soundMaterials, tunedMaterial } from '@tb/audio';
 import { type BodyDesc, TAG_BALL } from '@tb/engine-api';
 import type { ViewerConfig } from './params.ts';
 
@@ -19,9 +19,9 @@ export function autoSoundMaterial(c: Pick<ViewerConfig, 'scenario' | 'level' | '
 export const soundMaterialName = (c: Pick<ViewerConfig, 'scenario' | 'level' | 'look' | 'real' | 'sound'>): SoundMaterialName =>
   c.sound.material === 'auto' ? autoSoundMaterial(c) : c.sound.material;
 
-/** The material the engine gets: the named one with the knobs applied. */
+/** The material the engine gets: the named one of the set (snd.set) with the knobs applied. */
 export const soundMaterial = (c: Pick<ViewerConfig, 'scenario' | 'level' | 'look' | 'real' | 'sound'>): SoundMaterial =>
-  tunedMaterial(SOUND_MATERIALS[soundMaterialName(c)], c.sound);
+  tunedMaterial(soundMaterials(c.sound.set)[soundMaterialName(c)], c.sound);
 
 /** Sound material slot per body: 0 for blocks, -1 (silent) for fired balls, whose own sound is not modelled yet. */
 export const soundSlot = (b: BodyDesc): number => (b.tag === TAG_BALL ? -1 : 0);
