@@ -15,7 +15,8 @@
 // down), with KAPLA_SLEEP=1 in place of KAPLA_HOLD=1: sleepGrid's cases at KAPLA_SIZES (default 10000),
 //   TB_CHANNEL=chrome KAPLA_SLEEP=1 REQUIRE_WEBGPU=1 REST_LOG=sleep.txt pnpm vitest run packages/physics-gpu/test/kapla-hold.test.ts
 // Each line also gives the asleep count, the planks woken in the window, and the creep before the window (with sleep,
-// how far planks moved before they slept).
+// how far planks moved before they slept). KAPLA_TOPPLE=1 runs toppleGrid instead: the settled tower toppled with and
+// without sleep, REST_FRAMES long (default 1800).
 import { describe, expect, it } from 'vitest';
 import { KAPLA_SCALE } from '@tb/scenarios';
 import { autoSubsteps } from '@tb/viewer';
@@ -41,6 +42,20 @@ export function sleepGrid(sizes: number[]): RestCase[] {
   for (const n of sizes) for (const settle of [undefined, { frames: 60, iterations: 120 }]) {
     const base: RestCase = { structure: 'kapla', mode: 'idle', n, iterations: 40, gapSlop: true, frames: 3600, substeps: 7, sleep: {}, trace: true, asleepBy: 120, ...(settle && { settle }) };
     out.push(base, { ...base, mode: 'struck', frames: 600, expect: 'collapse' });
+  }
+  return out;
+}
+
+/**
+ * The topple A/B behind the sleep gate (KAPLA_TOPPLE=1): the tower settled for 60 frames at 120 iterations, toppled by
+ * S15's ball at 2 s and run for `frames` (default 1800, 30 s), with sleep and without (the control: the same settle,
+ * every plank awake). Both must come down; the control says how far and how fast a settled tower falls at 40 it.
+ */
+export function toppleGrid(sizes: number[], frames: number): RestCase[] {
+  const out: RestCase[] = [];
+  for (const n of sizes) {
+    const control: RestCase = { structure: 'kapla', mode: 'struck', n, iterations: 40, gapSlop: true, frames, substeps: 7, trace: true, settle: { frames: 60, iterations: 120 }, expect: 'collapse' };
+    out.push({ ...control, sleep: {}, asleepBy: 120 }, control);
   }
   return out;
 }
@@ -94,6 +109,15 @@ describe('Kapla sleep grid (E2 step 2b)', () => {
     expect([awake.opts.sleep, awake.plan.trace]).toEqual([undefined, true]);
   });
 
+  it('pairs each toppled, settled tower with sleep against the same tower awake', () => {
+    expect(toppleGrid([10000], 1800).map(caseName)).toEqual([
+      'kapla 10000 struck, 40 it x 7 substeps, gapSlop on, settle 60 frames at 120 it, sleep, 1800 frames, must collapse',
+      'kapla 10000 struck, 40 it x 7 substeps, gapSlop on, settle 60 frames at 120 it, 1800 frames, must collapse',
+    ]);
+    const [on, off] = toppleGrid([10000], 1800).map(restSetup);
+    expect([on!.opts.sleep, off!.opts.sleep, off!.opts.settleSteps, on!.plan.watchFrom]).toEqual([true, undefined, 420, 900]);
+  });
+
   it('refuses asleepBy without sleep or off the 60-frame samples, and a window outside the run', () => {
     const c = sleepGrid([1000])[0]!;
     expect(() => restSetup({ ...c, sleep: undefined })).toThrow('asleepBy needs sleep and a multiple of 60 frames within the run');
@@ -105,6 +129,7 @@ describe('Kapla sleep grid (E2 step 2b)', () => {
 });
 
 if (process.env.KAPLA_SLEEP === '1') restSuite(sleepGrid(list(process.env.KAPLA_SIZES, [10000])));
+if (process.env.KAPLA_TOPPLE === '1') restSuite(toppleGrid(list(process.env.KAPLA_SIZES, [10000]), Number(process.env.REST_FRAMES ?? 1800)));
 
 if (process.env.KAPLA_HOLD === '1') {
   restSuite(holdGrid(

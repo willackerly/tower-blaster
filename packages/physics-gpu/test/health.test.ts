@@ -10,7 +10,7 @@ import { AvbdSolver } from '../src/solver.ts';
 const ctx = (o: Partial<GpuHealthContext> = {}): GpuHealthContext =>
   ({ capacity: 2000, records: 1, storageLimit: 2 ** 30, maxComputeWorkgroupsPerDimension: 65535, boxBroadphase: false, ...o });
 const diag = (o: Partial<GpuDiagnostics> = {}): GpuDiagnostics =>
-  ({ pairsRequired: 0, pairsWritten: 0, maxPairs: 32000, pairsRequiredPeak: 0, pairsOverflowSteps: 0, steps: 60, colors: 8, uncolored: 0, colorOverflow: 0, ...o });
+  ({ pairsRequired: 0, pairsWritten: 0, maxPairs: 32000, pairsRequiredPeak: 0, pairsOverflowSteps: 0, steps: 60, colors: 8, uncolored: 0, colorOverflow: 0, sleepSkippedSteps: 0, ...o });
 
 describe('pairFix', () => {
   it('is the least multiple of 8 per body that holds the peak with the headroom, at least 8', () => {
