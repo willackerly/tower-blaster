@@ -1,7 +1,7 @@
 // The game page: Keystone (playKeystone, play.ts) on the GPU solver, or Rapier
 // with ?engine=rapier, in the maquette look. A bare URL opens the slice (B1, then B2
 // and B3); ?level=L2 starts on another level (L1 to L5: the chamber levels, par),
-// ?keystone.rack= gives it another rack, ?look= and real.* change the look, ?keystone.hitstop=1 and ?keystone.slowmo=1
+// ?keystone.rack= gives it another rack, ?look= and real.* change the look, ?blast=0 hides blasts (blast.* tune them), ?keystone.hitstop=1 and ?keystone.slowmo=1
 // turn on pace juice, ?keystone.sound=synth plays impacts as the old pentatonic voices and
 // ?keystone.impacts=-6 sets the collision sound's level (dB), ?keystone.shots= plays a line once loaded, ?offscreen=1
 // (tests) draws only for captures. The keys are params.ts's, which the viewer
@@ -10,7 +10,7 @@
 // (?door=auto|1|0); ?keystone.preaim, ?progress, ?sound, ?sharp are its keys.
 import { seriesOf, type Shot } from '@tb/keystone';
 import { createDevice } from '@tb/gpu';
-import { lookByName, parseRealOptions, Renderer, SnapshotSource } from '@tb/render';
+import { lookByName, parseBlastOptions, parseRealOptions, Renderer, SnapshotSource } from '@tb/render';
 import { installDoor, type DoorPage } from './door-page.ts';
 import { doorMode, doorOnLoad, openerFor, preaimMode } from './door.ts';
 import { lookName, onEngine, parseGameParams, withRules } from './params.ts';
@@ -75,6 +75,10 @@ async function main() {
   // The maquette look by default: tints read true on its pale albedo (?look=candy for the rainbow;
   // ?look=real with real.* knobs, parseRealOptions in @tb/render).
   renderer.look = lookByName(look, parseRealOptions(q));
+  // A blast's fireball, shell and light: on unless ?blast=0; blast.<knob> tunes them (parseBlastOptions in @tb/render).
+  const blastOptions = parseBlastOptions(q);
+  renderer.toggles.blasts = blastOptions.on;
+  renderer.blasts.config = blastOptions.params;
   // The front door (?door=auto|1|0): over the level loading behind it, so its first shot is a click away.
   const front = installDoor({
     root: $('door'), menu: $('menu'), levels, start: level.id, handle, progress, settings,

@@ -31,6 +31,11 @@ describe('the grenade in the viewer', () => {
     expect(blast).toEqual({ step: spawn.step + 30, kind: 'blast', blast: { centre: { body: n }, exclude: [n], ...DEFAULT_GRENADE.blast } });
     expect(remove).toEqual({ step: blast.step, kind: 'remove', id: n });
     await page.waitForFunction((s) => window.__viewer.stepIndex > s + 5, blast.step, { timeout: 60_000 });
+    // Drawn once, from the first state at or past its step, where the spent grenade was removed.
+    const drawn = await page.evaluate(() => window.__viewer.blastsDrawn);
+    expect(drawn.length).toBe(1);
+    expect(drawn[0]![3]).toBe(DEFAULT_GRENADE.blast.radius);
+    expect(drawn[0]!.slice(0, 3).every(Number.isFinite)).toBe(true);
     // Spent: the next spawn still gets the next id (slots are not reused), and the page keeps running.
     expect(await page.evaluate(() => window.__viewer.bodies)).toBe(n + 1);
     expect(errors).toEqual([]);

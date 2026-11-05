@@ -35,6 +35,8 @@ export interface ControlsHooks {
   setProjectile(p: Projectile): void;
   /** Draw with this look from now on (real: the real look's knobs that differ from REAL_DEFAULTS). */
   setLook(look: string, real: Partial<RealOptions>): void;
+  /** Draw blasts (fireball, shell out to the blast radius, light) or not, from now on. */
+  setBlast(on: boolean): void;
   /** Play collision sound this way from now on. */
   setSound(o: SoundOptions): void;
   /** Frame the scene this way from now on (and re-frame it now). */
@@ -304,6 +306,7 @@ export function mountControls(root: HTMLElement, hooks: ControlsHooks): { refres
     <form id="look-form">
       <div class="h">Look</div>
       <label class="f"><span>look</span><select name="look">${Object.keys(LOOKS).map((l) => `<option value="${l}">${l}</option>`).join('')}</select></label>
+      ${field('blast', 'blasts: fireball, ring at the reach, light', true)}
       <div class="real">
         <label class="f"><span>stone</span><select name="stone">${STONES.map((st) => `<option value="${st}">${st}</option>`).join('')}</select></label>
         <label class="f"><span>setting</span><select name="env">${ENVS.map((e) => `<option value="${e}">${e}</option>`).join('')}</select></label>
@@ -553,7 +556,10 @@ export function mountControls(root: HTMLElement, hooks: ControlsHooks): { refres
     }
   }
   lookForm.addEventListener('submit', (e) => e.preventDefault());
-  lookForm.addEventListener('input', applyLook);
+  lookForm.addEventListener('input', (e) => {
+    if ((e.target as HTMLInputElement | null)?.name === 'blast') hooks.setBlast((e.target as HTMLInputElement).checked);
+    else applyLook();
+  });
 
   // Sound: applied live; auto picks the material from the scene and the look.
   const soundForm = root.querySelector<HTMLFormElement>('#sound-form')!;
@@ -664,6 +670,7 @@ export function mountControls(root: HTMLElement, hooks: ControlsHooks): { refres
     }
     showMass(p);
     input(lookForm, 'look').value = c.look;
+    (input(lookForm, 'blast') as HTMLInputElement).checked = c.blast.on;
     realBox.hidden = c.look !== 'real';
     const real = { ...REAL_DEFAULTS, ...c.real };
     for (const key of Object.keys(REAL_KNOBS) as RealKnob[]) input(lookForm, key).value = String(real[key]);
