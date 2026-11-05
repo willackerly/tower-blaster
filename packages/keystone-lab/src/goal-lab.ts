@@ -38,12 +38,22 @@ export interface GoalProof { id: string; proven: boolean; met: boolean; nudged: 
  */
 export async function proveSheet(level: LevelDef, sheet: LotSheet, runner: Runner, nudges = 0, seed = 1): Promise<GoalProof[]> {
   const c = compileLevel(level);
+  // Goals that share a proof line share its play (a play is deterministic on a given engine).
+  const plays = new Map<string, Promise<RoundFacts>>();
+  const facts = (text: string): Promise<RoundFacts> => {
+    let p = plays.get(text);
+    if (!p) plays.set(text, p = runner.play(level, readShots(text)).then((r) => playFacts(c, sheet, r)));
+    return p;
+  };
   const one = async (g: Goal): Promise<GoalProof> => {
     if (g.proof === undefined) return { id: g.id, proven: false, met: false, nudged: 0, nudgedMet: 0 };
     const line = readShots(g.proof), r = rng(streamSeed(seed, 'goal', g.id));
-    const lines: Shot[][] = [line, ...Array.from({ length: nudges }, () => nudgeLine(line, r))];
-    const met = await Promise.all(lines.map(async (l) => goalMet(g.when, playFacts(c, sheet, await runner.play(level, l)))));
-    return { id: g.id, proven: true, met: met[0]!, nudged: nudges, nudgedMet: met.slice(1).filter(Boolean).length };
+    const nudged = Array.from({ length: nudges }, () => nudgeLine(line, r));
+    const [met, ...more] = await Promise.all([
+      facts(g.proof).then((f) => goalMet(g.when, f)),
+      ...nudged.map(async (l) => goalMet(g.when, playFacts(c, sheet, await runner.play(level, l)))),
+    ]);
+    return { id: g.id, proven: true, met: met!, nudged: nudges, nudgedMet: more.filter(Boolean).length };
   };
   return Promise.all(sheet.goals.map(one));
 }

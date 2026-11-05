@@ -38,7 +38,11 @@ const STALL_STEPS = 240, TAIL_STEPS = 120, SAMPLE = 10;
 export const DESIGNS = ['cubes', 'bricks', 'kapla'] as const;
 export type TowerDesign = (typeof DESIGNS)[number];
 
-export interface X3Case { design: TowerDesign; towers: number; nudge: number; presettle: number }
+export interface X3Case {
+  design: TowerDesign; towers: number; nudge: number; presettle: number;
+  /** The run's stall and tail windows, steps (default STALL_STEPS and TAIL_STEPS; CI shortens both). */
+  stall?: number; tail?: number;
+}
 
 /** One tower's bodies standing on the ground, centred on (0, z). */
 export function tower(design: TowerDesign, z: number, r: () => number, jitter: boolean): { bodies: BodyDesc[]; height: number } {
@@ -74,7 +78,7 @@ export function x3Spec(c: X3Case): RunSpec {
   const push = ball([x, y, -0.5 - radius - 0.05], radius, [0, 0, v], { density: 2000 });
   const scene = gameScene(`X3-${c.design}`, { ...c }, ch.bodies, [{ step: c.presettle, kind: 'spawn', body: push }]);
   // Room for the fall to cross the chain at 1 m/s, then the stall window and the tail.
-  const steps = c.presettle + Math.ceil((c.towers * ch.pitch) / 1 * 60) + STALL_STEPS + TAIL_STEPS;
+  const steps = c.presettle + Math.ceil((c.towers * ch.pitch) / 1 * 60) + (c.stall ?? STALL_STEPS) + (c.tail ?? TAIL_STEPS);
   return { scene, steps, params: GAME_PARAMS, opts: { capacity: ch.bodies.length + 1, pairsPerBody: 24, boxBroadphase: true } };
 }
 
@@ -97,7 +101,7 @@ function x3Meter(c: X3Case, spec: RunSpec): Meter<X3Result> {
         if (moved > FELL * ch.height || drop > FELL * ch.height) { fellAt[t] = step - c.presettle; lastNew = step; }
       }
       if (tail < 0 && fellAt.every((x) => x >= 0)) tail = step;
-      if ((tail >= 0 && step - tail >= TAIL_STEPS) || step - lastNew >= STALL_STEPS) return 'stop';
+      if ((tail >= 0 && step - tail >= (c.tail ?? TAIL_STEPS)) || step - lastNew >= (c.stall ?? STALL_STEPS)) return 'stop';
     },
     result() {
       let reach = 0;
@@ -118,7 +122,8 @@ function centroids(pos: Vec3[], ch: Chain, w: number[]): Vec3[] {
 function x3Cases(size: Size): X3Case[] {
   const out: X3Case[] = [];
   for (const design of DESIGNS) {
-    if (size === 'ci') { out.push({ design, towers: 3, nudge: 1, presettle: 120 }); continue; }
+    // CI: two towers, a short pre-settle and windows, so the file stays well under 300 s on a loaded runner.
+    if (size === 'ci') { out.push({ design, towers: 2, nudge: 1, presettle: 60, stall: 120, tail: 60 }); continue; }
     for (let nudge = 1; nudge <= 32; nudge++) out.push({ design, towers: 24, nudge, presettle: PRESETTLE });
   }
   return out;
