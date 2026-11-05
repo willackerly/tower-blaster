@@ -102,6 +102,20 @@ describe('rule overrides', () => {
     expect(parse('?level=L1&keystone.settle=v3').rules).toEqual({ settle: 'v3' });
     expect(() => parse('?keystone.settle=v9')).toThrow(/keystone.settle must be v1 or v2 or v3: v9/);
   });
+  it('keystone.freeze gives the player a freeze budget: a custom level with its own hash; refuses a bad one', () => {
+    const p = parse('?level=L1&keystone.freeze=3');
+    expect(p.rules).toEqual({ freeze: 3 });
+    expect(p.level).toEqual({ ...L1, freeze: 3, custom: true });
+    expect(compileLevel(p.level).hash).not.toBe(compileLevel(L1).hash);
+    expect(parse('?level=L1&keystone.freeze=0').level.freeze).toBe(0);
+    const q = new URLSearchParams();
+    writeLevelRules({ freeze: 2 }, q);
+    expect(q.toString()).toBe('keystone.freeze=2');
+    expect(levelRules(q)).toEqual({ freeze: 2 });
+    expect(() => parse('?keystone.freeze=10')).toThrow(/keystone.freeze must be a whole number from 0 to 9: 10/);
+    expect(() => parse('?keystone.freeze=-1')).toThrow(/keystone.freeze must be a whole number from 0 to 9: -1/);
+    expect(() => parse('?keystone.freeze=')).toThrow(/keystone.freeze must be a whole number from 0 to 9: $/);
+  });
   it('the physics keys set the level\'s physics block; off turns Bounce off', () => {
     const p = parse('?level=L2&keystone.iterations=20&keystone.gapSlop=0&keystone.bounce=0.4');
     expect(p.level.physics).toEqual({ iterations: 20, gapSlop: 0, bounce: 0.4 });
