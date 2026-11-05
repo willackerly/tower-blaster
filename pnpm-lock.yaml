@@ -41,6 +41,9 @@ importers:
       '@tb/metrics':
         specifier: workspace:*
         version: link:packages/metrics
+      '@tb/mode-probes':
+        specifier: workspace:*
+        version: link:packages/mode-probes
       '@tb/physics-gpu':
         specifier: workspace:*
         version: link:packages/physics-gpu
@@ -187,6 +190,36 @@ importers:
   packages/lattice: {}
 
   packages/metrics: {}
+
+  packages/mode-probes:
+    dependencies:
+      '@tb/engine-api':
+        specifier: workspace:*
+        version: link:../engine-api
+      '@tb/geom':
+        specifier: workspace:*
+        version: link:../geom
+      '@tb/gpu':
+        specifier: workspace:*
+        version: link:../gpu
+      '@tb/keystone':
+        specifier: workspace:*
+        version: link:../keystone
+      '@tb/physics-gpu':
+        specifier: workspace:*
+        version: link:../physics-gpu
+      '@tb/physics-ref':
+        specifier: workspace:*
+        version: link:../physics-ref
+      '@tb/schema':
+        specifier: workspace:*
+        version: link:../schema
+      '@tb/testkit':
+        specifier: workspace:*
+        version: link:../testkit
+      tsx:
+        specifier: 4.23.15
+        version: 4.23.15
 
   packages/physics-gpu: {}
 
