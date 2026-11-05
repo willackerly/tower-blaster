@@ -91,7 +91,7 @@ After a 300-step pre-settle, a 0.4 m ball (2,000 kg/m^3) at 3 m/s hits the first
 
 ### Results
 
-CI size on SwiftShader (chains of 3, one nudge; 2026-11-05):
+SwiftShader, chains of 3, one nudge (`bfe47cc`, 2026-11-05; the CI test now runs chains of 2 with a shorter pre-settle, which took 300 s on a loaded CI shard):
 - Cube towers: reach 3 of 3, about 0.75 s per tower. They crumble into the next one rather than tip as a unit.
 - Kapla cribs: reach 3 of 3, about 1.9 s per tower.
 - Bonded brick piers: reach 1. The first pier tips onto the second and leans on it, and the second holds it up.

@@ -101,7 +101,7 @@
   "packages/metrics/test/metrics.test.ts": 1.2,
   "packages/mode-probes/test/x1-dominoes.test.ts": 120,
   "packages/mode-probes/test/x2-demolition.test.ts": 115,
-  "packages/mode-probes/test/x3-towers.test.ts": 150,
+  "packages/mode-probes/test/x3-towers.test.ts": 65,
   "packages/mode-probes/test/x4-hold.test.ts": 110,
   "packages/physics-gpu/test/box-broadphase.test.ts": 129.3,
   "packages/physics-gpu/test/engine-blast.test.ts": 30,
