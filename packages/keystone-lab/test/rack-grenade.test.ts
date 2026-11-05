@@ -4,7 +4,9 @@
 // same steps; it replays bit for bit on the f64 reference, serial and pipelined
 // push alike, and from its recorded inputs on a plain engine; the shot waits for
 // its blast before it settles; and leverage charges the blast's nominal yield.
-// The GPU replay is rack-grenade-gpu.test.ts (game).
+// These cases fire a GrenadeSpec (KEYSTONE_GRENADE, written into the level's weapons):
+// since 2026-11-05 a bare w-grenade is the built-in w-grenadem, a WeaponSpec, and its
+// own case is the last one here. The GPU replay is rack-grenade-gpu.test.ts (game).
 import { describe, expect, it } from 'vitest';
 import { RapierEngine } from '@tb/adapter-rapier';
 import { type InputEvent, TIER_FREE } from '@tb/engine-api';
@@ -12,9 +14,9 @@ import {
   AVBD_GAP_SLOP, AVBD_ITERATIONS, compileLevel, itemYield, KEYSTONE_GRENADE, L1, type LevelDef, leverage, levelFill, levelWeapon, runSession, type SessionResult, type Shot, shotToSpawn, snapshotHash,
 } from '@tb/keystone';
 import { AvbdReferenceEngine } from '@tb/physics-ref';
-import { nominalYield } from '@tb/weapons';
+import { GRENADE_M, grenadeEnergies, nominalYield } from '@tb/weapons';
 
-const def: LevelDef = { ...L1, rack: ['w-grenade', 'w-grenade', 'marble'] };
+const def: LevelDef = { ...L1, rack: ['w-grenade', 'w-grenade', 'marble'], weapons: { grenade: KEYSTONE_GRENADE } };
 const c = compileLevel(def);
 /** Aimed with aimAt at the tower's middle (2 m up) from L1's par launcher: the prox fuse sets it off on the tower's face. */
 const LINE: Shot[] = [{ ammo: 'w-grenade', az: 360, y: 8, yaw: 0, pitch: 176, power: 100 }];
@@ -117,4 +119,21 @@ describe('grenade in the rack', () => {
       }
     }
   });
+
+  it('a bare w-grenade is w-grenadem: one grenade, scaled to L1, 77 x KEYSTONE_GRENADE (76.68); aimed at the tower it clears L1 (f64 reference)', async () => {
+    // Will, 2026-11-05: a weapon behaves the same everywhere (scaled to the level's blocks); a smaller one has a smaller name.
+    const m = compileLevel({ ...L1, rack: ['w-grenade', 'w-grenadem', 'marble'] });
+    expect(m.arms['w-grenade']).toEqual(m.arms['w-grenadem']);
+    expect(grenadeEnergies(GRENADE_M)).toBe(1);
+    expect(itemYield(m, 'w-grenade') / itemYield(c, 'w-grenade')).toBeCloseTo(76.68, 2);
+    // Its shell is w-grenadem's scaled to h = 0.5 m: 0.1 m, 5-40 sqrt(h) m/s. Aimed with aimAt at the tower's middle at full
+    // power (game rack-line.ts GRENADE_LINE fires the same shot on the GPU).
+    expect(m.frame.shells!['w-grenade']).toMatchObject({ size: { radius: 0.1 }, vMax: 40 * Math.sqrt(0.5) });
+    const line: Shot[] = [{ ammo: 'w-grenade', az: 360, y: 8, yaw: 0, pitch: 106, power: 100 }];
+    const { r, pushed } = await play(ref, m, line, false);
+    expect(pushed.map((e) => [e.kind, e.step])).toEqual([['blast', 314], ['remove', 314]]);
+    expect(r.session.phase).toBe('cleared');
+    expect(r.session.outcomes[0]!.crownsDown).toBe(4);
+    expect(r.session.outcomes[0]!.yield).toBe(itemYield(m, 'w-grenade'));
+  }, 120_000);
 });
