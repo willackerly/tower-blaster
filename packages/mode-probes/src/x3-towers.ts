@@ -133,7 +133,7 @@ function x3Verdict(runs: CaseRun<X3Case, X3Result>[], size: Size): Verdict {
     const res = rs.map((r) => r.result), n = rs[0]!.c.towers, frac = (k: number) => res.filter((x) => x.reach >= k).length / res.length;
     const per = res.filter((x) => x.reach >= 3).map((x) => (x.fallStep[x.reach - 1]! - x.fallStep[0]!) / (x.reach - 1) / 60);
     const pct = (f: number) => `${(100 * f).toFixed(0)}%`;
-    table.push(`| ${d} | ${n} | ${rs.length} | ${pct(frac(Math.min(6, n)))} | ${n >= 12 ? pct(frac(12)) : '-'} | ${pct(frac(n))} | ${(res.reduce((a, x) => a + x.reach, 0) / res.length).toFixed(1)} (${Math.min(...res.map((x) => x.reach))}-${Math.max(...res.map((x) => x.reach))}) | ${(res.reduce((a, x) => a + x.fallen, 0) / res.length).toFixed(1)} | ${per.length ? (per.reduce((a, b) => a + b, 0) / per.length).toFixed(2) : '-'} | ${rs.flatMap((r) => r.limits).length} |`);
+    table.push(`| ${d} | ${n} | ${rs.length} | ${n >= 6 ? pct(frac(6)) : '-'} | ${n >= 12 ? pct(frac(12)) : '-'} | ${pct(frac(n))} | ${(res.reduce((a, x) => a + x.reach, 0) / res.length).toFixed(1)} (${Math.min(...res.map((x) => x.reach))}-${Math.max(...res.map((x) => x.reach))}) | ${(res.reduce((a, x) => a + x.fallen, 0) / res.length).toFixed(1)} | ${per.length ? (per.reduce((a, b) => a + b, 0) / per.length).toFixed(2) : '-'} | ${rs.flatMap((r) => r.limits).length} |`);
     if (n >= 12) {
       const ok = frac(12) >= 0.8;
       any12 ||= ok;

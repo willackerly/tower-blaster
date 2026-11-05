@@ -18,7 +18,7 @@ Each run writes `results/mode-probes/<id>-<size>-<time>.{json,md}`. `--size ci` 
 |---|---|---|---|---|
 | X1 | Domino propagation and sleep | M6, M16, C22 | CI size passes; full subset below | not run yet |
 | X2 | Order matters in demolition | M5 | CI size: order matters on slab buildings | not run |
-| X3 | Towers as dominoes | M6 Steer | CI size: cube and Kapla towers topple on, bonded piers stop | not run |
+| X3 | Towers as dominoes | M6 Steer | CI size: cube and Kapla towers topple on, a bonded pier stops the front | not run |
 | X4 | Cantilevers and hollows hold | M1 Hollow, M8 | not built | not run |
 | X5 | Pinned anchors solid | C8 | not built | not run |
 | X6 | Resonance under a gravity schedule; far-blast shove | M7 | not built | not run |
@@ -79,9 +79,9 @@ After a 300-step pre-settle, a 0.4 m ball (2,000 kg/m^3) at 3 m/s hits the first
 ### Results
 
 CI size on SwiftShader (chains of 3, one nudge; 2026-11-05):
-- Cube towers: reach 3 of 3, about 0.6 s per tower. They crumble into the next one rather than tip as a unit.
-- Kapla cribs: reach 3 of 3, about 1.8 s per tower.
-- Bonded brick piers: reach 0. The first pier tips onto the second and leans on it, and the second holds it up.
+- Cube towers: reach 3 of 3, about 0.75 s per tower. They crumble into the next one rather than tip as a unit.
+- Kapla cribs: reach 3 of 3, about 1.9 s per tower.
+- Bonded brick piers: reach 1. The first pier tips onto the second and leans on it, and the second holds it up.
 
 So at this size the game's own loose towers and the Kapla cribs carry a wavefront and bonded piers stop it, which makes a bonded pier a Steer level's firebreak.
 
