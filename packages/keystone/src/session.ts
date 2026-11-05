@@ -2,18 +2,19 @@
 // watched bodies) and step indices: never frames, wall time, the camera or the
 // engine. It emits spawn events for the engine and feedback events for the
 // renderer, audio and pacing, which never flow back into the rules.
-import { massOf, type SpawnEvent, type Vec3 } from '@tb/engine-api';
+import { massOf, type RemoveEvent, type SpawnEvent, type Vec3 } from '@tb/engine-api';
 import { GRAVITY } from './materials.ts';
 import { itemYield } from './arsenal.ts';
 import { castStars, type CompiledLevel, type Scoring, scoringOf, settleOf } from './level.ts';
 import { collapseFraction, floorPotential_mJ, homePotential_mJ, homeSkyline, objectiveMet, type OutcomeFacts, outcomeScore } from './outcome.ts';
 import { crownDown, heritageBroken, leverage, levelScore, type LevelScore, type Observation, type Reductions, type SettleRule, type SettleState, settleCap, settleUpdate, type ShotOutcome, skyline, tier } from './rules.ts';
 import type { RackItem } from './rack.ts';
-import { ammoKE, type Shot, shotToSpawn } from './shots.ts';
+import { ammoKE, pullEnergy, type Shot, shotEvent } from './shots.ts';
 
 export type Phase = 'aiming' | 'running' | 'cleared' | 'failed';
 
 export type Feedback =
+  /** A shot went in: `body` is the ammo's engine id, or for a pull the structure body taken out; ke the energy charged (a pull's is nominal). */
   | { t: 'fired'; step: number; ammo: RackItem; body: number; ke: number }
   /** The ammo's velocity changed by more than gravity explains: it hit something. Drives hit-stop. */
   | { t: 'contact'; step: number; body: number; dv: number; impulse: number }
@@ -59,6 +60,8 @@ export class Session {
   /** Sticky: once broken, heritage stays broken. */
   readonly heritageBroken: Uint8Array;
   score: LevelScore | null = null;
+  /** Structure bodies pulled so far (Undercut), in pull order. */
+  readonly pulled: number[] = [];
   /** Leverage of the shot in flight, for the HUD. */
   liveLeverage = 0;
   private live: Live | null = null;
@@ -105,25 +108,43 @@ export class Session {
   canFire(ammo: RackItem): boolean { return this.phase === 'aiming' && this.rackLeft.includes(ammo); }
 
   /**
-   * Fire at engine step `step` (its current stepIndex). Returns the spawn to push. `body` is the
-   * engine id the ammo will have: by default the structure's bodies then the ammo fired before;
-   * a driver that pushes other spawns (Driver.push) passes its own count.
+   * Why structure body `body` cannot be pulled, or null if it can: only plain structure bodies
+   * still in the world (crowns and heritage are the objective's, never taken).
    */
-  fire(shot: Shot, step: number, body = this.level.meta.n + this.ammoCount): { spawn: SpawnEvent; feedback: Feedback[] } {
+  pullRefusal(body: number): string | null {
+    const m = this.level.meta;
+    if (!Number.isInteger(body) || body < 0 || body >= m.n) return `body ${body} is not a structure body (0 to ${m.n - 1})`;
+    if (m.crowns.includes(body)) return `body ${body} is a crown`;
+    if (m.heritage.includes(body)) return `body ${body} is heritage`;
+    if (this.pulled.includes(body)) return `body ${body} is already pulled`;
+    return null;
+  }
+
+  /**
+   * Fire at engine step `step` (its current stepIndex). Returns the engine event to push: the
+   * ammo's spawn, or a pull's removal (spawn null). `body` is the engine id the ammo will have: by
+   * default the structure's bodies then the ammo fired before; a driver that pushes other spawns
+   * (Driver.push) passes its own count. A pull spawns nothing and takes no id.
+   */
+  fire(shot: Shot, step: number, body = this.level.meta.n + this.ammoCount): { spawn: SpawnEvent | null; event: SpawnEvent | RemoveEvent; feedback: Feedback[] } {
     if (!this.canFire(shot.ammo)) throw new Error(`cannot fire ${shot.ammo}: phase ${this.phase}, rack [${this.rackLeft.join(', ')}]`);
-    const spawn = shotToSpawn(this.level.frame, shot, step);
+    const why = shot.ammo === 'pull' ? this.pullRefusal(shot.body) : null;
+    if (why) throw new Error(`cannot pull: ${why}`);
+    const event = shotEvent(this.level.frame, shot, step), spawn = event.kind === 'spawn' ? event : null;
     this.rackLeft.splice(this.rackLeft.indexOf(shot.ammo), 1);
-    this.ammoCount++;
-    const ke = ammoKE(spawn), yieldJ = itemYield(this.level, shot.ammo);
+    if (spawn) this.ammoCount++;
+    if (event.kind === 'remove') this.pulled.push(event.id);
+    const ke = spawn ? ammoKE(spawn) : pullEnergy(this.level.frame), yieldJ = itemYield(this.level, shot.ammo);
+    const live = spawn ? body : -1;
     this.live = {
-      shot, spawnStep: step, body, ke, yield: yieldJ, mass: massOf(spawn.body), ammo: shot.ammo, settle: { quietSince: null }, contact: false, prevVel: null, tier: 0, slowMo: false,
+      shot, spawnStep: step, body: live, ke, yield: yieldJ, mass: spawn ? massOf(spawn.body) : 0, ammo: shot.ammo, settle: { quietSince: null }, contact: false, prevVel: null, tier: 0, slowMo: false,
       crownsBefore: this.crownDown.reduce((a, x) => a + x, 0), heritageBefore: this.heritageBroken.reduce((a, x) => a + x, 0),
     };
     this.inputs.push({ step, shot });
-    this.watchIdx = Int32Array.from([...this.level.meta.crowns, ...this.level.meta.heritage, body]);
+    this.watchIdx = Int32Array.from(spawn ? [...this.level.meta.crowns, ...this.level.meta.heritage, body] : [...this.level.meta.crowns, ...this.level.meta.heritage]);
     this.phase = 'running';
     this.liveLeverage = 0;
-    return { spawn, feedback: [{ t: 'fired', step, ammo: shot.ammo, body, ke }] };
+    return { spawn, event, feedback: [{ t: 'fired', step, ammo: shot.ammo, body: event.kind === 'remove' ? event.id : body, ke }] };
   }
 
   /**
