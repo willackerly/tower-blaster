@@ -174,6 +174,44 @@ describe('blasts on the GPU', () => {
   });
 });
 
+describe('lit fuses on the GPU (fuses.ts)', () => {
+  it('nothing compiled or changed until a body is marked; a dark cord up from its top to a warm spark; nothing once it is removed or unmarked', async (ctx) => {
+    if (!gpu) return ctx.skip();
+    const r = await gpu.page.evaluate(() => (window as unknown as { __blasts: typeof Drivers }).__blasts.fuseFrames());
+    expect(r.error).toBeNull();
+    expect(r.compiledBefore).toBe(false);
+    expect(r.topGain).toBeGreaterThan(60);
+    // The spark sits at the cord's end, above the ball's top (screen y grows downward), not on it.
+    expect(r.sparkAt[1]!, JSON.stringify(r.sparkAt)).toBeLessThanOrEqual(-4);
+    // The cord darkens the bright sky behind it.
+    expect(r.cordDark).toBeLessThan(-20);
+    const [red, , blue] = r.topRgb as [number, number, number];
+    expect(red).toBeGreaterThan(blue);
+    expect(r.removedDiff).toBe(0);
+    expect(r.unmarkedDiff).toBe(0);
+  });
+});
+
+describe('blast reach zone on the GPU (reach.ts)', () => {
+  it('nothing compiled until shown; a red edge at the radius and a red crosshair at the centre; faint behind a box; nothing outside the sphere; gone when hidden', async (ctx) => {
+    if (!gpu) return ctx.skip();
+    const r = await gpu.page.evaluate(() => (window as unknown as { __blasts: typeof Drivers }).__blasts.reachFrames());
+    expect(r.error).toBeNull();
+    expect(r.compiledBefore).toBe(false);
+    expect(r.shown).toEqual({ centre: [0, 2, -10], radius: 2 });
+    expect(r.visible.n).toBeGreaterThan(20);
+    expect(r.blocked.n).toBeGreaterThan(0);
+    // The edge: clearly redder (red over green, display values).
+    expect(r.visible.r, JSON.stringify(r)).toBeGreaterThan(25);
+    // Behind the box the edge still shows, fainter.
+    expect(r.blocked.r, JSON.stringify(r.blocked)).toBeGreaterThan(3);
+    expect(r.blocked.r).toBeLessThan(r.visible.r);
+    expect(r.centre.r, JSON.stringify(r.centre)).toBeGreaterThan(25);
+    expect(r.outsideChanged).toBe(0);
+    expect(r.hiddenDiff).toBe(0);
+  });
+});
+
 describe('blast options (URL keys)', () => {
   it('default on at DEFAULT_BLASTS; blast=0 turns them off; blast.<knob> sets one; round-trips', async () => {
     const { parseBlastOptions, writeBlastOptions } = await import('../src/blasts.ts');

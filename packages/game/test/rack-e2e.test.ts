@@ -59,9 +59,30 @@ describe('every rack item on the game page', () => {
       expect({ fired: counts.fired, blast: counts.blast ?? 0 }).toEqual({ fired: line.length, blast: blasts });
       // Each blast is drawn (fireball, shell, light: @tb/render blasts.ts) where it went off.
       expect(counts.blastDrawn ?? 0).toBe(blasts);
+      // Every body a weapon spawns (its shell, and any split children) is drawn as a bomb; no other ammo is.
+      const bombs = rack.reduce((a, x) => a + (c.arms[x]?.bodies ?? 0), 0);
+      expect(counts.bomb ?? 0).toBe(bombs);
       expect(await page.evaluate((s) => window.__game.replay(s), line)).toEqual(live);
       expect(errors).toEqual([]);
       await page.close();
     }, 300_000);
   }
+
+  it('rapid fire: a marble fired two steps after a cluster is not a bomb, and the bomblets that split later still are (Rapier)', async (ctx) => {
+    if (!game.browser()) return ctx.skip();
+    const rack: RackItem[] = ['w-cluster', 'marble'];
+    const c = compileLevel({ ...L1, rack });
+    const line: Shot[] = [miss(c, 'w-cluster'), { ...miss(c, 'marble'), after: 2 }];
+    const o = await game.open(`/?level=L1&engine=rapier&offscreen=1&keystone.rack=${rack.join(',')}&keystone.shots=${writeShots(line)}`);
+    if (!o) return ctx.skip();
+    const { page, errors } = o;
+    await page.evaluate(() => { window.__game.fast = true; });
+    await page.waitForFunction(() => window.__game.result !== null, undefined, { timeout: 240_000, polling: 100 });
+    const counts = await page.evaluate(() => window.__game.counts);
+    expect(counts.fired).toBe(2);
+    expect(c.arms['w-cluster']!.bodies).toBeGreaterThan(1);
+    expect(counts.bomb ?? 0).toBe(c.arms['w-cluster']!.bodies);
+    expect(errors).toEqual([]);
+    await page.close();
+  }, 300_000);
 });

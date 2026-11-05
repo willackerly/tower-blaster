@@ -26,7 +26,7 @@ import { CameraJuice, contactJuice } from './juice.ts';
 import { alphaAt, arrived, DEFAULT_FEEL, newArrivals, Pacer, type PaceFeel, SLOW_TAG_BELOW, slowTag, SpeedMeter, TailSkip } from './pacing.ts';
 import { COST_WINDOW, runPhysics, wakeable } from './physics-loop.ts';
 import { CLEAR_SHARE, FrameGovernor } from './frame-rate.ts';
-import { beadOverlay, CROWN_GLOW, PULL_HOVER, regrowDuration, regrowScales, structureTints, TINT, tintOf, tintWordOf } from './scene.ts';
+import { beadOverlay, BOMB_FX, CROWN_GLOW, PULL_HOVER, regrowDuration, regrowScales, structureTints, TINT, tintOf, tintWordOf } from './scene.ts';
 
 /** What a page (and its tests) can see and do while Keystone plays: window.__game on the game page. */
 export interface GameHandle {
@@ -59,7 +59,7 @@ export interface GameHandle {
    */
   view: { target: [number, number, number]; distance: number; following: boolean; jolt: number };
   result: LevelScore | null;
-  /** Feedback events seen this attempt, by type; blastDrawn counts the blasts handed to the renderer to draw. */
+  /** Feedback events seen this attempt, by type; blastDrawn counts the blasts handed to the renderer to draw, bomb the bodies drawn as bombs. */
   counts: Record<string, number>;
   /** Pace juice in effect (`?keystone.hitstop=1`, `?keystone.slowmo=1`; both off by default). */
   feel: PaceFeel;
@@ -92,6 +92,8 @@ export interface GameHandle {
   maxDpr: number;
   /** Aim at normalized device coords with the selected ammo, as hovering there would. */
   aim(ndcX: number, ndcY: number): Aimed | null;
+  /** The aim preview's blast-reach zone (a one-blast weapon aimed: where it would go off and how far it reaches), or null. */
+  reach: { centre: [number, number, number]; radius: number } | null;
   select(ammo: RackItem): boolean;
   load(id: string): Promise<void>;
   retry(): Promise<void>;
@@ -151,7 +153,7 @@ export function newGameHandle(): GameHandle {
   const none = (): SessionState => ({ step: 0, phase: 'loading', strokes: 0, heritageBroken: 0, hash: '' });
   return {
     status: 'loading', engine: '', level: '', phase: 'loading', ready: false, frames: 0, stepIndex: 0, strokes: 0, bodies: 0, collapse: 0, fast: false, pace: { timeScale: 1, speed: 1, tag: '', tailSkip: false, costMs: NaN }, view: { target: [0, 0, 0], distance: 0, following: false, jolt: 0 }, result: null, counts: {}, feel: { ...DEFAULT_FEEL }, resultShownAt: null, timing: { loadMs: 0, stepMs: [], moving: [], frameMs: [], costMs: [] }, draws: { drawn: 0, skipped: 0, decimating: false },
-    fire: () => false, bank: () => false, fireOpener: () => false, setMuted: () => {}, maxDpr: 2, aim: () => null, select: () => false, load: async () => {}, retry: async () => {}, capture: async () => null,
+    fire: () => false, bank: () => false, fireOpener: () => false, setMuted: () => {}, maxDpr: 2, aim: () => null, reach: null, select: () => false, load: async () => {}, retry: async () => {}, capture: async () => null,
     state: none, line: () => [], replay: async () => none(), health: async () => null, pairsPerBody: 0, limitsHit: [], goals: [], grade: null, duel: null,
     sound: () => ({ mode: 'collapse', status: 'off', error: '', posted: 0, stats: null }),
   };
@@ -317,10 +319,20 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
   // Body descriptions in slot order: the driver's (the structure, then every spawn: ammo as fired,
   // a weapon's children, the input hook's, in the order the engine applies them).
   let descs: readonly BodyDesc[] = [];
-  const spawned = () => {
+  /**
+   * Take up new bodies; bomb: they are a weapon's, drawn as bombs (dark iron with a lit fuse,
+   * scene.ts BOMB_FX). fire() passes whether its item is a weapon (a w- item); the step loop
+   * passes true, because after the shots due are fired the only bodies a step adds are a
+   * weapon's split children (the arsenal's spawns; children carry tag 0, not TAG_BALL). Marked
+   * by spawn, not by the last shot, so rapid fire (a marble after a cluster) cannot unmark
+   * bomblets that split later.
+   */
+  const spawned = (bomb: boolean) => {
     if (driver.bodies.length === descs.length) return;
+    const from = descs.length;
     descs = driver.bodies;
     fxSlots = descs.length;
+    if (bomb) for (let i = from; i < descs.length; i++) { renderer.setFx(i, BOMB_FX); renderer.fuse(i); handle.counts.bomb = (handle.counts.bomb ?? 0) + 1; }
   };
   let fxSlots = 0;
   /** What the follow camera frames at most: the lot and a margin, up to half again the structure's height. */
@@ -336,6 +348,8 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
   let aimed: Aimed | null = null, beads: Float64Array | null = null, aimDirty = false;
   /** The block a selected pull would take, lit (PULL_HOVER) until the cursor leaves it or it is pulled. */
   let hover: number | null = null;
+  /** A one-blast weapon's blast radius around the aim point, for the aim preview's danger zone (Renderer.reach); null otherwise. */
+  let ring: { centre: Vec3; radius: number } | null = null;
   let pointer: [number, number] | null = null;
   let regrowT: number | null = null;
   let fastHeld = false;
@@ -422,6 +436,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     juice.reset();
     follow.reset();
     renderer.blasts.clear();
+    renderer.fuses.clear();
     const m = 4 * c.frame.unit;
     followClip = Float64Array.of(c.lot.min[0] - m, 0, c.lot.min[1] - m, c.lot.max[0] + m, 1.5 * c.height + m, c.lot.max[1] + m);
     handle.result = null;
@@ -477,6 +492,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     aimed = null;
     beads = null;
     let lit: number | null = null;
+    ring = handle.reach = null;
     if (pointer && selected && aimable() && regrowT === null) {
       const hit = pick(rayThrough(orbit, aspect(), pointer[0], pointer[1]), driver.snapshot, c);
       if (selected === 'pull') {
@@ -487,6 +503,9 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
       } else if (hit) {
         aimed = shotFor(c, selected, azFromYaw(orbit.yaw), power, hit.point, substeps);
         if (aimed) beads = previewBeads(c, aimed.shot, hit.point, substeps);
+        // A weapon with one blast (the grenades): show how far it reaches, where it would go off.
+        const blasts = aimed ? c.arms[selected]?.blasts : undefined;
+        if (blasts?.length === 1 && blasts[0]!.count === 1) ring = handle.reach = { centre: [hit.point[0], hit.point[1], hit.point[2]], radius: blasts[0]!.blast.radius };
       }
     }
     setHover(lit);
@@ -695,7 +714,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     // A rapid shot keeps the follow camera's way home: where the player had it when the first went in.
     if (feel.follow && !follow.active) follow.start(orbit);
     onFeedback(fb);
-    spawned();
+    spawned(shot.ammo.startsWith('w-'));
     selected = nextSelection(c.def.rack, driver.session.rackLeft, selected);
     aimed = null;
     beads = null;
@@ -916,6 +935,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     const view: Orbit = { ...orbit, yaw: orbit.yaw + shake.yaw, pitch: orbit.pitch + shake.pitch, fovY: orbit.fovY * shake.fovScale };
     handle.view.jolt = jolt = Math.max(Math.abs(shake.yaw), Math.abs(shake.pitch), 1 - shake.fovScale);
     const o = beads ? beadOverlay(beads, aimed?.reachable ?? true) : null;
+    renderer.reach(ring?.centre ?? null, ring?.radius ?? 0);
     renderer.setOverlay(o?.xyzr ?? new Float32Array(0), o?.colours);
     pendingCapture = null;
     const fp = { viewProj: viewProj(view, aspect()), eye: eyeOf(view), focus: orbit.target, time: now / 1000, groundY: 0, alpha: running ? alphaAt(arrivals, now, 1000 * c.scene.dt) : 1 };
@@ -968,7 +988,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
       if (input?.length) d.push(input);
       // Shots clicked during the step, and a line's timed shots now due, go in before the next (as playShots fires them).
       fireDue();
-      spawned();
+      spawned(true);
       if (red && feel.tailSkip && d.session.phase === 'running') tail.update(red.nMoving, c.meta.n, d.session.liveCollapse);
       source.update(d.snapshot, descs);
       collapse?.frame(d.snapshot, descs, eyeOf(orbit), orbit.target);

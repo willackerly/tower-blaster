@@ -12,6 +12,8 @@ export * from './shadowfit.ts';
 export * from './sparks.ts';
 export * from './lights.ts';
 export * from './blasts.ts';
+export * from './fuses.ts';
+export * from './reach.ts';
 export * from './ao.ts';
 export * from './floor.ts';
 export * from './atmosphere.ts';

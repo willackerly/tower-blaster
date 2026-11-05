@@ -129,6 +129,32 @@ describe('game page', () => {
     await page.close();
   });
 
+  it('aiming a grenade shows its blast reach around the aim point; other ammo shows none', async (ctx) => {
+    if (!game.browser()) return ctx.skip();
+    const o = await game.open('/?level=L1&offscreen=1&engine=rapier&keystone.rack=w-grenade,marble');
+    if (!o) return ctx.skip();
+    const { page, errors } = o;
+    await ready(page);
+    const radius = compileLevel({ ...L1, rack: ['w-grenade', 'marble'] }).arms['w-grenade']!.blasts[0]!.blast.radius;
+    expect(await page.evaluate(() => window.__game.select('w-grenade'))).toBe(true);
+    const aimed = await page.evaluate(() => window.__game.aim(0.05, 0));
+    expect(aimed).not.toBeNull();
+    const reach = await page.evaluate(() => window.__game.reach);
+    expect(reach?.radius).toBe(radius);
+    expect(reach?.centre.every(Number.isFinite)).toBe(true);
+    // It draws without error (render-blasts.test.ts checks the pixels).
+    expect(await page.evaluate(() => window.__game.capture())).not.toBeNull();
+    expect(await page.evaluate(() => window.__game.select('marble'))).toBe(true);
+    await page.evaluate(() => window.__game.aim(0.05, 0));
+    expect(await page.evaluate(() => window.__game.reach)).toBeNull();
+    // At the sky: no aim, no zone.
+    expect(await page.evaluate(() => window.__game.select('w-grenade'))).toBe(true);
+    await page.evaluate(() => window.__game.aim(0.05, 0.99));
+    expect(await page.evaluate(() => window.__game.reach)).toBeNull();
+    expect(errors).toEqual([]);
+    await page.close();
+  }, 120_000);
+
   it('?keystone.frames reaches the frame governor, and a capture draws whatever it decides', async (ctx) => {
     if (!game.browser()) return ctx.skip();
     const o = await game.open('/?level=L1&offscreen=1&engine=rapier&keystone.frames=half');
