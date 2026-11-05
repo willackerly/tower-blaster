@@ -16,10 +16,10 @@ Each run writes `results/mode-probes/<id>-<size>-<time>.{json,md}`. `--size ci` 
 
 | Probe | Question | Gates | SwiftShader | Metal (M5 Max) |
 |---|---|---|---|---|
-| X1 | Domino propagation and sleep | M6, M16, C22 | CI size passes; full subset below | not run yet |
+| X1 | Domino propagation and sleep | M6, M16, C22 | CI size passes; full-size subset (line 200, curves, cocked; 4 nudges) passes | not run yet |
 | X2 | Order matters in demolition | M5 | CI size: order matters on slab buildings | not run |
 | X3 | Towers as dominoes | M6 Steer | CI size: cube and Kapla towers topple on, a bonded pier stops the front | not run |
-| X4 | Cantilevers and hollows hold | M1 Hollow, M8 | not built | not run |
+| X4 | Cantilevers and hollows hold | M1 Hollow, M8 | CI size: stacks, span and brick arch behave | not run |
 | X5 | Pinned anchors solid | C8 | not built | not run |
 | X6 | Resonance under a gravity schedule; far-blast shove | M7 | not built | not run |
 | X7 | (optional) 1.5x domino amplifier | showcase | not planned | not run |
@@ -39,7 +39,20 @@ Each run writes `results/mode-probes/<id>-<size>-<time>.{json,md}`. `--size ci` 
 
 CI size on SwiftShader (`7357a4e` plus this probe; 2026-11-05): lines of 10 reach the end with sleep off and on at 0.90 sqrt(g h) (a short line, still accelerating); a 4 x 4 field falls entirely; with sleep, no standing domino ahead of the front is ever awake, every fallen domino sleeps, and waking them all moves none by more than 0.03 deg; the cocked domino falls asleep at 0.5 s and holds to 0.000 deg.
 
-Full size: pending (SwiftShader subset and the Metal run).
+Full size on SwiftShader, a subset: line 200 and the three curves at nudges 0 to 3 with sleep off and on, and both cocked dominoes (36 of the 268 runs, 79 min, `7357a4e`; a subset never decides the probe):
+
+| run | sleep | reached the end | front speed m/s (x sqrt(g h)) | awake max / mean | standing awake ahead of the front | unfreeze, max deg |
+|---|---|---|---|---|---|---|
+| line 200 | off | 4/4 | 2.82 (0.90) | 200 / 200 | 197 | - |
+| curve r 3 h | off | 4/4 | 3.01 (0.96) | 30 / 30 | 27 | - |
+| curve r 5 h | off | 4/4 | 2.96 (0.94) | 41 / 41 | 38 | - |
+| curve r 8 h | off | 4/4 | 2.93 (0.94) | 56 / 56 | 53 | - |
+| line 200 | on | 4/4 | 2.82 (0.90) | 16 / 12.2 | 0 | 0.066 |
+| curve r 3 h | on | 4/4 | 3.01 (0.96) | 14 / 8.9 | 0 | 0.027 |
+| curve r 5 h | on | 4/4 | 2.96 (0.94) | 14 / 9.7 | 0 | 0.027 |
+| curve r 8 h | on | 4/4 | 2.93 (0.94) | 14 / 10.1 | 0 | 0.068 |
+
+Every line and curve reached its end in every nudge, with sleep off and on, at the same front speed (0.90 sqrt(g h) on the line, 0.94 to 0.96 on the curves). Sleep changes nothing about the front and everything about the cost: at most 16 of 200 dominoes are awake at once (about 12 on average, the front and its tail), against all of them without sleep, and no standing domino ahead of the front is ever awake. Waking every sleeper afterwards moves none by more than 0.07 deg. The cocked dominoes at 20 and 40 deg fall asleep at 0.5 s and 0.7 s and hold, asleep, to 70 s with no measurable drift (0.000 deg); with sleep off they hold too, drifting 0.003 and 0.007 deg. Still pending: the remaining 28 nudges, the 100 x 100 field, and the Metal run.
 
 ## X2 Order matters in demolition
 
@@ -86,3 +99,24 @@ CI size on SwiftShader (chains of 3, one nudge; 2026-11-05):
 So at this size the game's own loose towers and the Kapla cribs carry a wavefront and bonded piers stop it, which makes a bonded pier a Steer level's firebreak.
 
 Full size: pending (the Metal run: 3 designs, chains of 24, 32 nudges).
+
+## X4 Cantilevers and hollows hold
+
+**Question.** Do cantilevers, corbelled spans and hollowed walls hold at rest at game settings, and fall when they should? M1 Undercut's Hollow levels and M8 Mason's Trial both ask the player to leave a structure standing on less than it started with.
+
+**Rule (roadmap).** 95% harmonic stacks hold and 105% stacks fall; the corbelled 3 m span holds 60 s and carries a bowling ball in 80% of nudges; the arch holds. Each case runs at 20 and 40 iterations (Keystone plays 40) for 3,600 steps after a 300-step pre-settle.
+
+**Setup.**
+- Overhang: a harmonic stack of 8 blocks (1 x 0.25 x 0.5 m) over the edge of a 2 m pedestal. Block i from the top overhangs the one below by f L / (2 i), with f = 0.95 (every sub-stack's centre of mass inside its support, so it must hold) or 1.05 (every one outside, so it must fall). Four placement seeds each.
+- Span: a corbelled 3 m span, seven courses of two bricks (1 x 0.5 x 0.5 m) a side, each course stepped 0.25 m inward, the top courses meeting 3.5 m up. It must hold 60 s, then carry the weapons' bowling ball rolled across its top at about 2 m/s, 32 nudges.
+- Arch: a wall hollowed to an arch by removing the bodies whose centres lie in a half disc of radius R at its foot, after the pre-settle. Two walls: running-bond bricks with 1 cm joints (20 bricks x 25 courses, R 5 m) and the game's own lattice of 0.5 m cubes (40 x 25 = 1,000). The cube lattice is reported, not required: every column of it stands alone, so nothing over the hole has anything to rest on.
+
+**Meters.** A body has dropped once it is 0.25 m below where it started; held means nothing dropped and no body moved 1 cm from its pose at the end of the pre-settle. Falls: the top block drops 0.2 m. **A hollowed wall holds** when only bricks over the hole come down (within R + 1 m of the centre line) and, from 300 steps after the removal on, no brick that stayed up moves 1 cm (no creep). The roadmap's "holds" had to be made precise this way: a running bond leaves a few bricks over the hole on a knife edge, and those fall in real masonry too.
+
+**A finding from building it.** The first 105% run "held", because the stack fell during the pre-settle and the pose to hold was taken after it. Drops are now measured from the scene's own pose at step 0 and creep from the pre-settled one.
+
+### Results
+
+CI size on SwiftShader (40 iterations, one seed each; an 8 x 8 brick arch of R 1.6 m; 2026-11-05): the 95% stack holds (worst move 0.9 mm in 6 s); the 105% stack falls (its top drops 2.75 m); the span carries the ball across and moves 0.6 mm; the brick arch drops one brick, over the hole, and the rest creeps 0.2 mm. No engine limit is hit.
+
+Full size: pending (the Metal run, at 20 and 40 iterations).

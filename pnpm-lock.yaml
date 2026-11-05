@@ -217,6 +217,9 @@ importers:
       '@tb/testkit':
         specifier: workspace:*
         version: link:../testkit
+      '@tb/weapons':
+        specifier: workspace:*
+        version: link:../weapons
       tsx:
         specifier: 4.23.15
         version: 4.23.15

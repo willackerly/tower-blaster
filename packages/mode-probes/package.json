@@ -12,6 +12,7 @@
     "@tb/physics-ref": "workspace:*",
     "@tb/schema": "workspace:*",
     "@tb/testkit": "workspace:*",
+    "@tb/weapons": "workspace:*",
     "tsx": "4.23.15"
   }
 }
