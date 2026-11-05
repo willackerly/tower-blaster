@@ -59,7 +59,7 @@
   "packages/gpu/test/reference.test.ts": 0,
   "packages/keystone-lab/test/big-levels-gpu.test.ts": 180,
   "packages/keystone-lab/test/cast-gpu.test.ts": 170,
-  "packages/keystone-lab/test/cast.test.ts": 6,
+  "packages/keystone-lab/test/cast.test.ts": 55,
   "packages/keystone-lab/test/drafts.test.ts": 20,
   "packages/keystone-lab/test/driver-step.test.ts": 2,
   "packages/keystone-lab/test/fork.test.ts": 54.1,

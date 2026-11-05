@@ -3,7 +3,7 @@
 // (every number checkable by hand) and on Rapier with a tiny recipe.
 import { describe, expect, it } from 'vitest';
 import { aimAt, type CastPlay, type CastSample, compileLevel, readShots, writeShots, launcherPos, type LaunchShot, type LevelDef, scenarioLevel, type Shot } from '@tb/keystone';
-import { bootstrapT3, castLevel, cloudCheck, crossDeviceGate, exposedFaces, faceSectors, facingAzimuth, FACE_SECTORS, REACH, type CastPlayer, type CastRecipe, competentIntents, compareCasts, endValue, HEIGHT_BANDS, higherBetter, intentShot, moveIntents, nodeCastPlayer, nudgeLine, phaseEnds, playsOf, poolCasts, quantile, rng, roundEasier, SHORT_RECIPE, shotSummary, streamSeed, surfaceTarget, withWallTime } from '../src/index.ts';
+import { bootstrapT3, castLevel, cloudCheck, crossDeviceGate, exposedFaces, faceSectors, facingAzimuth, FACE_SECTORS, REACH, type CastPlayer, type CastRecipe, type CastResult, competentIntents, compareCasts, endValue, HEIGHT_BANDS, higherBetter, intentShot, moveIntents, nodeCastPlayer, nudgeLine, phaseEnds, playsOf, poolCasts, quantile, rng, roundEasier, SHORT_RECIPE, shotSummary, streamSeed, surfaceTarget, withWallTime } from '../src/index.ts';
 
 /** A 10 x 4 wall of plaster cubes along x as an outcome level, rack of two cannonballs. */
 const WALL: LevelDef = { ...scenarioLevel('S3', { W: 10, H: 4 }, 1, { rack: ['cannonball', 'cannonball'] }), id: 'T1' };
@@ -142,6 +142,28 @@ function synthetic(lines: Shot[][] = []): CastPlayer {
   };
 }
 
+/** Marks every gate of a cast passed, for pooling a synthetic cast that misses one. */
+const passed = (r: CastResult): CastResult => ({ ...r, gates: Object.fromEntries(Object.entries(r.gates).map(([k, g]) => [k, { ...g, pass: true }])) as unknown as CastResult['gates'] });
+
+const h32 = (s: string) => { let h = 2166136261; for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); } return (h >>> 0) / 2 ** 32; };
+/** A line's fields that a nudge leaves alone (nudgeLine moves yaw and power only). */
+const baseKey = (shots: readonly Shot[]) => shots.map((s) => { const l = s as LaunchShot; return `${l.ammo}.${l.az}.${l.y}.${l.pitch}`; }).join('_');
+/** The chance a line meets the objective: 0.95 for a `frac` share of lines, 0.5 for the rest. */
+const basinP = (shots: readonly Shot[], frac: number) => (h32(`basin${baseKey(shots)}`) < frac ? 0.95 : 0.5);
+/** A player in that world: each play meets the objective by a hash of its exact shots (collapse 0.6 to 0.7) or not (under 0.1). */
+function basins(frac: number, lines: Shot[][] = []): CastPlayer {
+  return {
+    adapter: 'synthetic', engine: 'test', substeps: 1,
+    async play(_level, batch) {
+      lines.push(...batch);
+      return batch.map((shots): CastPlay => {
+        const t = writeShots(shots), met = h32(t) < basinP(shots, frac), v = h32(`v${t}`), collapse = met ? 0.6 + 0.1 * v : 0.1 * v;
+        return { samples: [{ shots: shots.length, step: 100, met, collapse, crowns: 0, skyline: 1 - collapse, score: Math.round(3000 * collapse), heritage: 0 }], complete: true, steps: 100, hash: 'x', limits: [] };
+      });
+    },
+  };
+}
+
 describe('castLevel on a synthetic player', () => {
   const TINY: CastRecipe = { competent: 16, climbLines: 2, climbMoves: 3, climbNudges: 4, cloud: 12 };
   it('plays the recipe, and its thresholds are the quantiles of what it played', async () => {
@@ -219,7 +241,8 @@ describe('castLevel on a synthetic player', () => {
     expect(small.halfWidth).toBeGreaterThan(1.5 * full.halfWidth);
   });
   it('pools casts of one level on one device: T2 over every competent play, T3 over every nudge cloud', async () => {
-    const a = await castLevel(WALL, synthetic(), { recipe: TINY, seed: 3 }), b = await castLevel(WALL, synthetic(), { recipe: TINY, seed: 4 });
+    // The synthetic wall misses the skill gate (its T3 - T2 is under a tenth of the range); pooling needs it passed.
+    const a = passed(await castLevel(WALL, synthetic(), { recipe: TINY, seed: 3 })), b = passed(await castLevel(WALL, synthetic(), { recipe: TINY, seed: 4 }));
     const p = poolCasts([a, b]);
     const comp = [...phaseEnds(a, 'competent'), ...phaseEnds(b, 'competent')], cloud = [...phaseEnds(a, 'cloud'), ...phaseEnds(b, 'cloud')];
     expect(p.raw.t2).toBe(quantile(comp, 0.5));
@@ -234,6 +257,21 @@ describe('castLevel on a synthetic player', () => {
     expect(() => poolCasts([a, { ...b, hash: 'other' }])).toThrow(/is not of T1/);
     expect(() => poolCasts([a, { ...b, adapter: 'apple metal-3' }])).toThrow(/is not of/);
     expect(() => poolCasts([])).toThrow(/no casts/);
+  });
+  it('pools only casts that passed fair, skill, limits and complete; judges fair, skill and stable again on the pool', async () => {
+    const a = passed(await castLevel(WALL, synthetic(), { recipe: TINY, seed: 3 })), b = passed(await castLevel(WALL, synthetic(), { recipe: TINY, seed: 4 }));
+    const fail = (r: CastResult, g: 'fair' | 'skill' | 'limits' | 'complete' | 'stable' | 'budget'): CastResult => ({ ...r, gates: { ...r.gates, [g]: { ...(r.gates[g] ?? r.gates.fair), pass: false } } });
+    expect(() => poolCasts([a, fail(b, 'fair')])).toThrow(/seed 4 failed fair .*cannot be pooled/);
+    expect(() => poolCasts([fail(a, 'skill'), b])).toThrow(/seed 3 failed skill/);
+    expect(() => poolCasts([a, fail(b, 'limits')])).toThrow(/failed limits/);
+    // A cast that missed stable (or budget) may be pooled: stable is judged again on the pool.
+    const p = poolCasts([fail(a, 'stable'), b]);
+    const clouds = [a, b].flatMap((r) => r.lines.filter((l) => l.phase === 'cloud'));
+    expect(p.gates.fair.value).toBe(clouds.filter((l) => l.samples.at(-1)!.met).length / clouds.length);
+    expect(p.gates.skill.value).toBeCloseTo(p.raw.t3 - p.raw.t2, 12);
+    expect(p.gates.skill.need).toBeCloseTo(0.1, 12);
+    expect(p.gates.stable).toMatchObject({ need: 0.05 });
+    expect(p.gates.stable.value).toBe(bootstrapT3('collapse', [...phaseEnds(a, 'cloud'), ...phaseEnds(b, 'cloud')], 3).halfWidth);
   });
   it('the climb keeps a line only when its mini-cloud beats the current one', async () => {
     const r = await castLevel(WALL, synthetic(), { recipe: TINY, seed: 9 });
@@ -272,8 +310,37 @@ describe('castLevel on a synthetic player', () => {
   it('refuses a par level', async () => {
     await expect(castLevel({ ...WALL, scoring: 'par' }, synthetic(), { recipe: TINY })).rejects.toThrow(/par level/);
   });
-  it('the short recipe is the spec\'s 186 plays', () => {
-    expect(playsOf(SHORT_RECIPE)).toBe(186);
+  it('the short recipe is the spec\'s 186 plays plus 24 confirming the climb\'s best 3 lines', () => {
+    expect(playsOf(SHORT_RECIPE)).toBe(210);
+    expect(playsOf({ ...SHORT_RECIPE, confirmLines: 0 })).toBe(186);
+  });
+  it('confirming the climb\'s best lines picks a robust line more often than the luckiest 4-nudge sample does', async () => {
+    // A world of lines that meet the objective 95% of the time (a fifth of them) or 50% (the rest), by a hash of
+    // the fields a nudge leaves alone; each play's outcome is a hash of its exact shots. B2 seed 2 in miniature.
+    const pick = async (confirmLines: number) => {
+      let robust = 0;
+      for (let seed = 1; seed <= 20; seed++) {
+        const r = await castLevel(WALL, basins(0.2), { recipe: { competent: 16, climbLines: 2, climbMoves: 8, climbNudges: 4, cloud: 1, confirmLines, confirmNudges: 8 }, seed });
+        if (basinP(readShots(r.bestLine.shots), 0.2) > 0.9) robust++;
+      }
+      return robust;
+    };
+    const without = await pick(0), withConfirm = await pick(3);
+    // Measured over 60 seeds: robust picks 45 of 60 without, 56 of 60 with (confirming 5 lines, or 16 nudges, no better).
+    expect(withConfirm).toBeGreaterThan(without);
+    expect(withConfirm).toBeGreaterThanOrEqual(17);
+  }, 300_000);
+  it('a line the climb judges twice pools its samples; a cast plays exactly playsOf with the confirmation', async () => {
+    const played: Shot[][] = [];
+    const recipe: CastRecipe = { competent: 8, climbLines: 1, climbMoves: 6, climbNudges: 4, cloud: 4, confirmLines: 3, confirmNudges: 8 };
+    const r = await castLevel(WALL, basins(0.2, played), { recipe, seed: 5 });
+    expect(r.n).toBe(playsOf(recipe));
+    expect(played.length).toBe(playsOf(recipe));
+    // The best line's score is the player-worse quartile of every climb or confirm play of it (at least 4 + 8).
+    const base = baseKey(readShots(r.bestLine.shots));
+    const mine = r.lines.filter((l) => l.phase === 'climb' && baseKey(readShots(l.shots)) === base).map((l) => endValue(l, 'collapse'));
+    expect(mine.length).toBeGreaterThanOrEqual(12);
+    expect(r.bestLine.score).toBe(quantile(mine, 0.25));
   });
 });
 
