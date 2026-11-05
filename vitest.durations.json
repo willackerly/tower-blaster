@@ -29,6 +29,7 @@
   "packages/game/test/e2e-sound.test.ts": 8.4,
   "packages/game/test/e2e.test.ts": 10,
   "packages/game/test/engines.test.ts": 0,
+  "packages/game/test/freeze-e2e.test.ts": 15,
   "packages/game/test/hud-e2e.test.ts": 110,
   "packages/game/test/hud.test.ts": 0,
   "packages/game/test/juice.test.ts": 0,

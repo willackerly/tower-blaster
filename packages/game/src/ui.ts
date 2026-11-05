@@ -41,6 +41,9 @@ export const GAME_CSS = `
   .kg-result button { font: inherit; padding: 7px 12px; border: 0; border-radius: 6px; background: #2b3242; color: #e8ebf2; cursor: pointer; }
   .kg-result button.primary { background: #d8693f; }
   .kg-hud button.bank { font: inherit; padding: 4px 10px; border: 0; border-radius: 6px; background: #d8693f; color: #fff; cursor: pointer; margin-top: 6px; }
+  .kg-hud button.freeze { font: inherit; padding: 4px 10px; border: 0; border-radius: 6px; background: #3f8fd8; color: #fff; cursor: pointer; margin-top: 6px; }
+  .kg-hud .pace.frozen { background: #3f8fd8; color: #fff; }
+  .kg-hud .spent { opacity: 0.4; }
   .kg-hud .down { color: #f7b955; }
   .kg-hud .down.none { color: #9aa3b8; }
   .kg-hud .lev { margin-top: 4px; }
@@ -97,7 +100,7 @@ export const GAME_HELP = 'click: fire · drag: orbit · wheel: zoom · <kbd>U</k
 /** The most characters the hint line may show (its text, keys included): one line at the game page's width. */
 export const HELP_BUDGET = 80;
 /** Every control, for the game page's ? (and the viewer's help under Keystone rules, which has room). */
-export const GAME_KEYS = 'hover: aim · click: fire · drag: orbit (the launcher follows you) · right-drag: pan · wheel: zoom · <kbd>1</kbd>–<kbd>4</kbd> ammo · <kbd>Q</kbd>/<kbd>E</kbd> power · hold <kbd>Space</kbd>: fast · <kbd>F</kbd> fire the first shot (when offered) · <kbd>B</kbd> bank (outcome levels) · <kbd>U</kbd> or <kbd>Ctrl</kbd>+<kbd>Z</kbd> undo the last shot · <kbd>R</kbd> restart · <kbd>N</kbd>/<kbd>P</kbd> level · <kbd>M</kbd> mute';
+export const GAME_KEYS = 'hover: aim · click: fire · drag: orbit (the launcher follows you) · right-drag: pan · wheel: zoom · <kbd>1</kbd>–<kbd>4</kbd> ammo · <kbd>Q</kbd>/<kbd>E</kbd> power · hold <kbd>Space</kbd>: fast · <kbd>F</kbd> fire the first shot (when offered) · <kbd>B</kbd> bank (outcome levels) · <kbd>T</kbd> freeze and resume (Bullet Time levels) · <kbd>U</kbd> or <kbd>Ctrl</kbd>+<kbd>Z</kbd> undo the last shot · <kbd>R</kbd> restart · <kbd>N</kbd>/<kbd>P</kbd> level · <kbd>M</kbd> mute';
 
 /** The help line on a touch screen (body.kg-touch): the gestures of touch.ts; the HUD's Undo and Restart buttons do what U and R do. */
 export const TOUCH_HELP = 'drag: aim · lift: fire · two fingers: turn · pinch: zoom · add a finger mid-aim: cancel';

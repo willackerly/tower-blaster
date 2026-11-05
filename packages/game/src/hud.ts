@@ -63,7 +63,12 @@ export interface HudState {
   duel?: string;
   /** Outcome levels: the star thresholds on the Down (or Pulled) bar (meterTicks); no bar without any. */
   ticks?: readonly MeterTick[];
+  /** Bullet Time levels (LevelDef.freeze): freezes left of the level's, whether the shot is frozen now, and whether it can be. */
+  freezes?: { left: number; total: number; frozen: boolean; can: boolean };
 }
+
+/** Bullet Time: the Freeze button (key T), shown while a running shot can be frozen, and Resume while it is. */
+export const freezeButton = (frozen: boolean) => `<button data-act="freeze" class="freeze"><kbd>T</kbd> ${frozen ? 'Resume' : 'Freeze'}</button>`;
 
 /** A star threshold on the HUD's Down bar: the share (0..1) at which `stars` stars are in reach. */
 export interface MeterTick { at: number; stars: 1 | 2 | 3 }
@@ -136,6 +141,10 @@ export function hudHtml(s: HudState): string {
     ${s.ticks?.length ? meterHtml(d.objective.kind === 'hold' ? s.pulled ?? 0 : s.collapse ?? 0, s.ticks, d.objective.kind === 'hold' ? 'pulled' : 'down') : ''}
     <div class="row"><span>Objective</span><span class="${s.met ? 'ok' : ''}">${esc(objectiveText(d.objective))}${s.met ? ' ✓' : ''}</span></div>`
     : `<div class="row"><span>Par ${d.par}</span><span>Stroke ${s.strokes}</span></div>`;
+  const fz = s.freezes;
+  const freezes = fz
+    ? `<div class="row"><span>Freezes</span><span class="${fz.left ? '' : 'spent'}">${fz.left} / ${fz.total}</span></div>${fz.frozen || fz.can ? `<div class="row">${freezeButton(fz.frozen)}<span class="small">${fz.frozen ? 'aim and fire, or resume free' : 'stop the world to aim'}</span></div>` : ''}`
+    : '';
   const crowns = !outcome || s.crownsTotal ? `<div class="row"><span>Crowns</span><span class="crowns">${s.crownsDown} / ${s.crownsTotal}</span></div>` : '';
   if (s.duel !== undefined) {
     return `
@@ -145,12 +154,13 @@ export function hudHtml(s: HudState): string {
     ${power}${reach}`;
   }
   return `
-    <div class="title">W${d.world}-${esc(d.id.replace(/^L/, ''))} · ${esc(d.name)}${s.pace ? ` <span class="pace" title="physics is running slower than real time">${esc(s.pace)}</span>` : ''}</div>
+    <div class="title">W${d.world}-${esc(d.id.replace(/^L/, ''))} · ${esc(d.name)}${fz?.frozen ? ' <span class="pace frozen" title="physics is frozen: a shot fired now spends a freeze">FROZEN</span>' : s.pace ? ` <span class="pace" title="physics is running slower than real time">${esc(s.pace)}</span>` : ''}</div>
     ${d.custom ? `<div class="small custom">${CUSTOM_NOTE}</div>` : ''}
     ${head}
     ${crowns}
     ${heritage}
     <div class="chips">${chips}</div>
+    ${freezes}
     ${s.opener ? `<div class="row">${OPENER_BUTTON}<span class="small"><span class="kg-desk">or aim and click</span><span class="kg-tch">or drag and lift</span></span></div>` : ''}
     ${power}${reach}${outcome && s.canBank ? `<div class="row">${BANK_BUTTON}<span class="small">end here, keep the rack</span></div>` : ''}
     ${s.strokes > 0 ? `<div class="row lev"><span>Leverage</span><span>${fmtLeverage(s.liveLeverage)}</span></div>` : ''}

@@ -76,6 +76,23 @@ describe('Keystone rules in the viewer', () => {
     expect(parseViewerConfig(presetSearch('?scenario=S3', p.config)).rules).toBe('sandbox');
   });
 
+  it('the panel\'s freezes box (Bullet Time) sets keystone.freeze, a custom run; empty plays the level\'s own', () => {
+    const c = parseViewerConfig('?level=L1&rules=keystone');
+    const k = (freeze?: number) => proposeScene(c, levelChoice('L1'), {}, 1, 1, 1, undefined, undefined, { rules: 'keystone', feel: c.feel, freeze });
+    const p = k(2);
+    expect(p).toMatchObject({ ok: true, config: { keystone: { freeze: 2 } } });
+    if (!p.ok) return;
+    expect(levelOf(p.config)).toEqual({ ...L1, freeze: 2, custom: true });
+    expect(toSearch(p.config)).toMatch(/keystone\.freeze=2/);
+    expect(parseViewerConfig(toSearch(p.config))).toEqual(p.config);
+    // Emptied, the level's own again; absent (a caller without the box), the config's kept.
+    const back = proposeScene(p.config, levelChoice('L1'), {}, 1, 1, 1, undefined, undefined, { rules: 'keystone', feel: c.feel, freeze: NaN });
+    expect(back).toMatchObject({ ok: true, config: { keystone: {} } });
+    expect(proposeScene(p.config, levelChoice('L2'), {}, 1)).toMatchObject({ ok: true, config: { keystone: { freeze: 2 } } });
+    expect(k(10)).toMatchObject({ ok: false, error: /freeze must be a whole number from 0 to 9: 10/ });
+    expect(k(1.5)).toMatchObject({ ok: false, error: /freeze must be a whole number/ });
+  });
+
   it('a scenario under the rules is an outcome level (scenarioLevel), at the game\'s world, and round-trips', () => {
     const u = '?scenario=S4&param.N=10000&param.F=6&param.H=20&rules=keystone&offscreen=1';
     const c = parseViewerConfig(u);
