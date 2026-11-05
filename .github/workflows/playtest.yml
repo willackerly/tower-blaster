@@ -1,12 +1,11 @@
 name: playtest
-# Deploys the playtest (docs/playtest.md) after ci goes green on a push to main,
-# then checks the live site from outside (pnpm playtest:smoke). Run it by hand
-# from the Actions tab to redeploy main without a new push.
+# Deploys the playtest (docs/playtest.md), then checks the live site from outside
+# (pnpm playtest:smoke). By hand only (Actions tab, Run workflow): since
+# 2026-11-05 the playtest deploys from Will's Mac with his wrangler login, so
+# the repo holds no Cloudflare token. To deploy after every green ci run on main
+# instead, set the settings below and restore this trigger:
+#   workflow_run: { workflows: [ci], types: [completed], branches: [main] }
 on:
-  workflow_run:
-    workflows: [ci]
-    types: [completed]
-    branches: [main]
   workflow_dispatch:
 
 # One deploy at a time: a new one waits for the running one (and replaces any older one waiting).

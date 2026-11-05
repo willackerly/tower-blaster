@@ -4,10 +4,10 @@
 import { describe, expect, it } from 'vitest';
 import fc from 'fast-check';
 import { blastArea, blastKick, checkBlast, massOf } from '@tb/engine-api';
-import { CLUSTER, DEFAULT_GRENADE, FIREWORK, PRESET_NAMES, PROJECTILE_PRESETS, STONE_DENSITY, type WeaponSpec } from '@tb/weapons';
+import { CLUSTER, DEFAULT_GRENADE, FIREWORK, GRENADE_M, PRESET_NAMES, PROJECTILE_PRESETS, STONE_DENSITY, type WeaponSpec } from '@tb/weapons';
 import {
-  AMMO, AMMO_KINDS, ammoBody, BIG_LEVELS, compileLevel, GRENADE_SHELL, hashString, isLaunchItem, isRackItem, itemRef, itemSpec, KEYSTONE_GRENADE, L1, levelWeapon, LEVELS,
-  MATERIALS, MODEL_DENSITY, rackBodies, type RackItem, type Shot, shotToSpawn, speedOf,
+  AMMO, AMMO_KINDS, ammoBody, BIG_LEVELS, compileLevel, GRENADE_SHELL, grenadeShell, hashString, isLaunchItem, isRackItem, itemRef, itemSpec, KEYSTONE_GRENADE, L1, levelWeapon, LEVELS,
+  MATERIALS, MODEL_DENSITY, rackBodies, type RackItem, type Shot, shotToSpawn, speedOf, weaponOf,
 } from '@tb/keystone';
 
 const PRESET_ITEMS = PRESET_NAMES.map((p) => `p-${p}` as RackItem);
@@ -68,21 +68,22 @@ describe('what an item fires', () => {
     const want = { beachball: 0.002, basketball: 0.005, bowlingball: 0.06, cannonball: 0.09, wreckingball: 25, boulder: 3500 };
     for (const [p, w] of Object.entries(want)) expect(Math.abs(ratio(p) / w - 1), p).toBeLessThan(0.07);
   });
-  it('a grenade item flies in the grenade shell whatever its key; p- and w- shots spawn like the marble does', () => {
+  it('a GrenadeSpec item flies in the grenade shell whatever its key; p- and w- shots spawn like the marble does', () => {
     const other = compileLevel({ ...L1, rack: ['w-other'], weapons: { other: { ...KEYSTONE_GRENADE, fuse: 'timer' } } });
-    expect(itemSpec('w-other', other.frame)).toEqual(itemSpec('w-grenade', 0.5));
-    // Any other weapon's shell is the level's: a bare unit only knows the default grenade's.
+    expect(itemSpec('w-other', other.frame)).toEqual(grenadeShell(0.5));
+    expect(grenadeShell(0.5).size).toEqual({ radius: (GRENADE_SHELL.size as { radius: number }).radius * 0.5 });
+    // A weapon's shell is the level's: a bare unit knows none, not even w-grenade's (since 2026-11-05 w-grenadem's).
     expect(() => itemSpec('w-other', 0.5)).toThrow(/its shell comes from the level/);
-    expect(itemSpec('w-grenade', 0.5).size).toEqual({ radius: (GRENADE_SHELL.size as { radius: number }).radius * 0.5 });
-    const f = compileLevel(L1).frame;
+    expect(() => itemSpec('w-grenade', 0.5)).toThrow(/its shell comes from the level/);
+    const f = compileLevel({ ...L1, rack: [...L1.rack, 'w-grenade'] }).frame;
     fc.assert(fc.property(fc.constantFrom<RackItem>(...PRESET_ITEMS, 'w-grenade'), fc.integer({ min: 0, max: 719 }), fc.integer({ min: 0, max: 40 }), fc.integer({ min: -300, max: 300 }), fc.integer({ min: -400, max: 800 }), fc.integer({ min: 0, max: 100 }), (ammo, az, y, yaw, pitch, power) => {
       const shot = { ammo, az, y, yaw, pitch, power } as Shot, ev = shotToSpawn(f, shot, 9);
       const marble = shotToSpawn(f, { ammo: 'marble', az, y, yaw, pitch, power }, 9);
       expect(ev.body.pos).toEqual(marble.body.pos);
       const dir = (v: number[]) => v.map((x) => x / Math.hypot(...v));
       dir(ev.body.linVel).forEach((x, k) => expect(x).toBeCloseTo(dir(marble.body.linVel)[k]!, 12));
-      expect(Math.hypot(...ev.body.linVel)).toBeCloseTo(speedOf(ammo, power), 9);
-      expect(ev.body).toEqual(ammoBody(ammo, f.unit, ev.body.pos, ev.body.linVel));
+      expect(Math.hypot(...ev.body.linVel)).toBeCloseTo(speedOf(ammo, power, f), 9);
+      expect(ev.body).toEqual(ammoBody(ammo, f, ev.body.pos, ev.body.linVel));
     }), { numRuns: 60 });
   });
   it('one engine body per item, so the rack adds its length', () => {
@@ -92,8 +93,10 @@ describe('what an item fires', () => {
 });
 
 describe('weapons by key (levelWeapon)', () => {
-  it('w-grenade defaults to KEYSTONE_GRENADE with lengths in h; a level may bring its own', () => {
-    const g = levelWeapon({}, 'grenade')!;
+  it('a GrenadeSpec comes with lengths in h; w-grenade is no longer one by default (w-grenadem); a level may bring its own', () => {
+    expect(weaponOf({}, 'grenade')).toBe(GRENADE_M);
+    expect(levelWeapon({}, 'grenade')).toBeNull();
+    const g = levelWeapon({ weapons: { grenade: KEYSTONE_GRENADE } }, 'grenade')!;
     expect(g).toEqual({ ...KEYSTONE_GRENADE, prox: KEYSTONE_GRENADE.prox * 0.5, blast: { ...KEYSTONE_GRENADE.blast, radius: KEYSTONE_GRENADE.blast.radius * 0.5 } });
     const own = { ...KEYSTONE_GRENADE, fuse: 'timer' as const, blast: { ...KEYSTONE_GRENADE.blast, radius: 2 } };
     expect(levelWeapon({ unit: 0.25, weapons: { grenade: own } }, 'grenade')!.blast.radius).toBe(0.5);
@@ -108,7 +111,7 @@ describe('weapons by key (levelWeapon)', () => {
       const b = checkBlast({ centre: [0, 0, 0], ...g.blast }), mass = density * (2 * half) ** 3;
       return Math.hypot(...blastKick(b, [0, 0, 0], 0, [0.1, 0, 0], mass, blastArea({ kind: 'box', half: [half, half, half] }))!);
     };
-    const world = levelWeapon({}, 'grenade')!;
+    const world = levelWeapon({ weapons: { grenade: KEYSTONE_GRENADE } }, 'grenade')!;
     expect(c.meta.mass[0]).toBe(31.25);
     expect(kick(world, 250)).toBeCloseTo(7.68, 6);
     expect(kick(world, 625)).toBeCloseTo(3.072, 6);
@@ -122,7 +125,9 @@ describe('a defaulted weapon is part of the level hash', () => {
     expect(fw.hash).toBe(compileLevel({ ...L1, rack: ['w-firework'], weapons: { firework: FIREWORK } }).hash);
     const retuned: WeaponSpec = { ...FIREWORK, shell: { ...FIREWORK.shell, speed: [20, 40] } };
     expect(compileLevel({ ...L1, rack: ['w-firework'], weapons: { firework: retuned } }).hash).not.toBe(fw.hash);
-    expect(compileLevel({ ...L1, rack: ['w-grenade'] }).hash).toBe(compileLevel({ ...L1, rack: ['w-grenade'], weapons: { grenade: KEYSTONE_GRENADE } }).hash);
+    // w-grenade is w-grenadem (Will, 2026-11-05: a weapon behaves the same everywhere; smaller ones have smaller names).
+    expect(compileLevel({ ...L1, rack: ['w-grenade'] }).hash).toBe(compileLevel({ ...L1, rack: ['w-grenade'], weapons: { grenade: GRENADE_M } }).hash);
+    expect(compileLevel({ ...L1, rack: ['w-grenade'] }).hash).not.toBe(compileLevel({ ...L1, rack: ['w-grenade'], weapons: { grenade: KEYSTONE_GRENADE } }).hash);
     expect(compileLevel({ ...L1, rack: ['w-cluster', 'w-firework'] }).hash).toBe(compileLevel({ ...L1, rack: ['w-cluster', 'w-firework'], weapons: { cluster: CLUSTER, firework: FIREWORK } }).hash);
   });
   it('levels whose racks default no weapon hash as before (main 984ae51): the shipped ones, B1 and B2 with their cast stars', () => {

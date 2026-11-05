@@ -13,7 +13,7 @@ import { gamePage } from './page.ts';
 
 const game = gamePage();
 
-/** Three loads that between them fire every item once (L1 has no weapons of its own: w-grenade is KEYSTONE_GRENADE, the others @tb/weapons' built-ins). */
+/** Three loads that between them fire every item once (L1 has no weapons of its own: each w- item is @tb/weapons' built-in, w-grenade the same as w-grenadem). */
 const RACKS: RackItem[][] = [
   ['marble', 'cannonball', 'drop', 'w-grenade', 'p-beachball', 'p-bowlingball', 'p-wreckingball', 'p-boulder'],
   ['cue', 'p-basketball', 'p-cannonball', 'w-firework', 'w-cluster', 'w-grenades', 'w-grenadem', 'w-grenadel'],
