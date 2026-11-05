@@ -11,6 +11,8 @@ import { Culler, NO_LOD, SEG, type CullFrame } from './cull.ts';
 import { DEFAULT_DEBRIS, Sparks } from './sparks.ts';
 import { BLAST_LIGHTS, Lights, MAX_BALLS, TRAIL } from './lights.ts';
 import { Blasts } from './blasts.ts';
+import { Fuses } from './fuses.ts';
+import { BlastReach } from './reach.ts';
 import { aoFrame, aoGrid, AoVolume } from './ao.ts';
 import { FLOOR_VERTS, floorFan, floorPolygon } from './floor.ts';
 import { fitShadow, frustumCorners, pcssParams, type Arena, type ShadowFit, type ShadowFitState } from './shadowfit.ts';
@@ -249,6 +251,10 @@ export class Renderer {
   readonly lights: Lights;
   /** Fireballs, shock shells and blast lights (blasts.ts); Renderer.blast adds one. */
   readonly blasts: Blasts;
+  /** Lit-fuse sparks on marked bodies (fuses.ts); Renderer.fuse marks one. */
+  readonly fuses: Fuses;
+  /** The aim preview's blast-reach zone (reach.ts); Renderer.reach shows it. */
+  readonly reachZone: BlastReach;
   /** The last frame's camera-relative inverse view-projection and the look's sun luminance (blasts). */
   private lastInv: Mat4 = new Float32Array(16);
   private sunLuma = 1;
@@ -290,6 +296,8 @@ export class Renderer {
     this.sparks = new Sparks(device, opts.sparkPool);
     this.lights = new Lights(device);
     this.blasts = new Blasts(device);
+    this.fuses = new Fuses(device);
+    this.reachZone = new BlastReach(device);
     this.ao = new AoVolume(device, aoGrid(this.arena));
     this.aoSampler = device.createSampler({ magFilter: 'linear', minFilter: 'linear' });
     const VF = GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT;
@@ -706,6 +714,8 @@ export class Renderer {
         .map((b) => ({ pos: b.centre, radius: b.lightR, colour: b.lightColour, intensity: b.light * this.sunLuma * (this.look.blastLight ?? 1) })),
       f.eye,
     );
+    const drawFuses = !ids && this.toggles.blasts && this.fuses.prepare({ viewProj: cf.viewProj, viewport: this.viewport(), time: f.time ?? 0, gain: this.sunLuma, records: culler.records, bodies: this.source.bodies, capacity: Math.min(this.source.count, this.source.capacity) });
+    const drawReach = !ids && this.reachZone.prepare({ eye: f.eye, viewProj: cf.viewProj, invViewProj: this.lastInv, viewport: this.viewport(), time: f.time ?? 0, gain: this.sunLuma });
     const drawBlasts = blasts.length > 0 && this.blasts.prepare(blasts, { eye: f.eye, viewProj: cf.viewProj, invViewProj: this.lastInv, viewport: this.viewport(), time: f.time ?? 0, gain: this.sunLuma });
     if (!ids && effects) {
       if (this.toggles.sparks) this.sparks.encode(cp, this.source, { dt: dt * froude, groundY: f.groundY, dvScale: Math.sqrt(metres) });
@@ -789,7 +799,9 @@ export class Renderer {
         p.setPipeline(this.pipes.trail);
         p.draw(6 * (TRAIL - 1), MAX_BALLS);
       }
-      // Last: blasts bind their own group 0.
+      // Last: the reach zone, fuses and blasts bind their own group 0.
+      if (drawReach) this.reachZone.draw(p);
+      if (drawFuses) this.fuses.draw(p);
       if (drawBlasts) this.blasts.draw(p);
     }
     p.end();
@@ -892,6 +904,8 @@ export class Renderer {
     this.sparks.destroy();
     this.lights.destroy();
     this.blasts.destroy();
+    this.fuses.destroy();
+    this.reachZone.destroy();
     this.ao.destroy();
     this.real?.atmosphere.destroy();
     this.real?.materials.destroy();
@@ -904,6 +918,16 @@ export class Renderer {
    */
   blast(centre: V3, radius: number, time = this.lastTime): void {
     this.blasts.add(centre, radius, time);
+  }
+
+  /** Mark (or unmark) a body slot as a lit bomb: a flickering spark rides on top of it until it is removed (fuses.ts). */
+  fuse(slot: number, on = true): void {
+    this.fuses.set(slot, on);
+  }
+
+  /** Show the danger zone of a blast of radius reaching out from centre (the aim preview; reach.ts); null hides it. */
+  reach(centre: readonly number[] | null, radius = 0): void {
+    this.reachZone.set(centre, radius);
   }
 
   /** Sparks from a game event at pos, flying out around dir; strength is a speed change in m/s. */
