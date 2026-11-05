@@ -31,6 +31,12 @@ tsx packages/game/src/sound-sweep-cli.ts from=/tmp/frames out=/tmp/wav name=real
 .venv/bin/python -I tools/sound-judge/judge.py --summary /tmp/j.json
 ```
 
+Each clip also gets **material shares** (wood, glass, metal, mineral) from AudioSet's material
+labels; AudioSet has no stone class, so mineral means Crack, Clatter, Rattle, Crushing, Smash. The
+real share rewards any real impact, so a set can score high and still sound like the wrong material
+(docs/sound.md, Material identity). `packages/audio/src/ladder-cli.ts` renders the listening ladder
+(knock, clatter, tumble) per material for it.
+
 A classifier is not an ear: it is a guard against "sounds like an instrument", not a target to
 maximise. Values were picked on plateaus of the real share, never on peaks, and only where the
 physics says they belong (docs/sound.md). Listening is still the last word.

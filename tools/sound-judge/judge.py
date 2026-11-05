@@ -3,8 +3,9 @@
 # windows. Per clip: grouped class scores (real impact events, electronic, musical instrument), their
 # real share real / (real + electronic + instrument), the top classes, and two signal figures
 # (tonality: the share of 100 Hz-10 kHz energy in narrow spectral peaks; the spectral centroid).
-# Calibration (docs/sound.md, Realism): ESC-50's real recordings score a real share of 0.6-0.99
-# (knocks, glass, fireworks, footsteps), its alarms and bells 0.0-0.03.
+# Calibration (docs/sound.md, Realism): ESC-50's real recordings score a mean real share of 0.68-0.98
+# (door knock ... footsteps), its alarm clocks 0.07 and church bells 0.00. Material shares (wood, glass,
+# metal, mineral) from AudioSet's material labels: docs/sound.md, Material identity.
 # usage: python3 -I judge.py out.json file.wav [file.wav ...]   (-I: never import from the clips' folders)
 #        python3 -I judge.py --summary out.json                  (mean real share per tag: <level>-<tag>.wav)
 import csv, json, os, sys
@@ -20,6 +21,16 @@ GROUPS = {
                  'Electronica', 'Theme music', 'Ringtone', 'Alarm', 'Buzzer', 'Busy signal', 'Dial tone', 'Telephone dialing, DTMF'],
   'instrument': ['Music', 'Musical instrument', 'Marimba, xylophone', 'Wood block', 'Bell', 'Chime', 'Ding', 'Cowbell', 'Tubular bells', 'Percussion',
                  'Glockenspiel', 'Vibraphone', 'Steelpan', 'Drum', 'Bass drum', 'Mallet percussion', 'Wind chime', 'Jingle bell', 'Drum kit', 'Snare drum', 'Timpani', 'Tabla'],
+}
+# What the impacts are made of, as far as AudioSet's labels say (it has no stone or plastic class:
+# hard mineral debris shows as Crack, Clatter, Rattle, Crushing, Smash). A material's share is its
+# group's sum over the four groups' total.
+MATERIALS = {
+  'wood': ['Wood', 'Wood block', 'Door', 'Knock', 'Splinter', 'Chopping (food)', 'Creak', 'Whack, thwack', 'Slam', 'Sliding door',
+           'Walk, footsteps', 'Cupboard open or close', 'Drawer open or close'],
+  'glass': ['Glass', 'Chink, clink', 'Shatter'],
+  'metal': ['Clang', 'Ding', 'Ping', 'Coin (dropping)', 'Keys jangling', 'Jingle, tinkle', 'Dishes, pots, and pans', 'Cutlery, silverware'],
+  'mineral': ['Crack', 'Clatter', 'Rattle', 'Crushing', 'Smash, crash', 'Breaking', 'Rumble'],
 }
 SR, WIN, HOP, NFFT, MELS, FMIN, FMAX, EPS = 16000, 400, 160, 512, 64, 125.0, 7500.0, 1e-4
 LAYERS = [('c', 2, 32), ('s', 1, 64), ('s', 2, 128), ('s', 1, 128), ('s', 2, 256), ('s', 1, 256), ('s', 2, 512),
@@ -119,6 +130,11 @@ def signal_figures(f):
   floor = medfilt(p, 31)
   return {'tonal': float(p[m & (p > 4 * floor)].sum() / max(1e-30, p[m].sum())), 'centroid': float((fr * p).sum() / max(1e-30, p.sum()))}
 
+def materials(s, mix):
+  raw = {g: float(s[ix].sum()) for g, ix in mix.items()}
+  tot = max(1e-9, sum(raw.values()))
+  return {g: round(v / tot, 3) for g, v in raw.items()}
+
 def share(v):
   return v['real'] / max(1e-9, v['real'] + v['electronic'] + v['instrument'])
 
@@ -137,14 +153,17 @@ def main():
   if sys.argv[1] == '--summary': return summary(sys.argv[2])
   out, files = sys.argv[1], sys.argv[2:]
   model = Yamnet()
+  missing = [n for cls in (*GROUPS.values(), *MATERIALS.values()) for n in cls if n not in model.names]
+  if missing: raise SystemExit(f'not YAMNet classes: {missing}')
   idx = {g: [i for i, n in enumerate(model.names) if n in cls] for g, cls in GROUPS.items()}
+  mix = {g: [i for i, n in enumerate(model.names) if n in cls] for g, cls in MATERIALS.items()}
   res = {}
   for f in files:
     s, e, n = score(model, load(f))
     top = np.argsort(-s)[:6]
-    res[f] = {g: float(s[ix].sum()) for g, ix in idx.items()} | {'top': [(model.names[i], round(float(s[i]), 3)) for i in top], 'frames': n} | signal_figures(f)
+    res[f] = {g: float(s[ix].sum()) for g, ix in idx.items()} | {'top': [(model.names[i], round(float(s[i]), 3)) for i in top], 'frames': n, 'materials': materials(s, mix)} | signal_figures(f)
     v = res[f]
-    print(f"{os.path.basename(f):44s} share {share(v):.2f} real {v['real']:.3f} elec {v['electronic']:.3f} instr {v['instrument']:.3f} tonal {v['tonal']:.2f}  {', '.join(f'{a} {b:.2f}' for a, b in v['top'][:4])}", flush=True)
+    print(f"{os.path.basename(f):44s} share {share(v):.2f} real {v['real']:.3f} elec {v['electronic']:.3f} instr {v['instrument']:.3f} tonal {v['tonal']:.2f}  {' '.join(f'{g[:2]} {x:.2f}' for g, x in v['materials'].items())}  {', '.join(f'{a} {b:.2f}' for a, b in v['top'][:4])}", flush=True)
   json.dump(res, open(out, 'w'))
 
 if __name__ == '__main__':

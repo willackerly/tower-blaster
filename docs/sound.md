@@ -349,6 +349,37 @@ idle (an engine test holds an idle material at zero work). Real numbers come fro
 Knobs: `snd.rough` and `snd.dense` (dB over the material's), `snd.set`. Tools: `sound-sweep-cli.ts`
 renders captures with any material change; `sound-cli.ts set=` prints peak, limiting and loudness.
 
+## Material identity (2026-11-05, the listening ladder)
+
+Will's listen of the real set: better than classic by a bit, but every level reads as soft wood
+(crunching firewood, a branch falling, footsteps on wood), and the stone city as "wood blocks
+falling". The realism judge agreed without saying so: its top classes were Door, Knock, Whack. Its
+real share rewards any real impact, and wood knocks are AudioSet's commonest one.
+
+The judge now also reports material shares from AudioSet's material labels: wood (Wood, Knock,
+Door, Whack, ...), glass (Glass, Chink, Shatter), metal (Clang, Ding, Coin, ...) and mineral (Crack,
+Clatter, Rattle, Crushing, Smash; AudioSet has no stone class). On ESC-50, door knocks score wood
+0.84-1.00 (8 of 8), and glass breaking reads glass in 6 of 8 (0.42-0.79). On the game's levels as played (real set) it
+says wood 0.40-0.83 on all five, as Will did.
+
+Will proposed building up instead of tuning whole levels: two blocks knocking, then a clatter, then
+a tower, then a level, each described and listened to, moving on only when the descriptions line up.
+`ladder-cli.ts` renders those steps as scripted impacts (the tap's frame format, no physics engine),
+per material, far under the limiter and peak-normalised, so a step hears only the synth.
+
+Step 1 (knock, 0.5 m blocks): the material label follows damping, as the perception literature
+predicts (Wildes and Richards 1988; Klatzky, Pai and Krotkov 2000: the decay rate per cycle, eta, is
+the strongest material cue, and it does not depend on size). Solid cubes (stone, ice, steel):
+eta <= 0.002 reads metal (Ding), 0.005-0.01 glass (Chink, clink), 0.02-0.04 mineral, >= 0.04-0.08
+wood. The real set raised eta to stop the ringing (stone 0.015 to 0.03, plaster 0.04 to 0.08, ice
+0.005 to 0.04, iron 0.002 to 0.03), which moved every material into the wood band. The hollow shells
+(plaster, iron) read wood at almost every eta: a knocked 0.5 m hollow box is a door. Pine planks
+(Kapla) read glass (Ding, Chink), acrylic a clock tick.
+
+Next: a free-text describer (CLAP, scored against phrases such as "two stone blocks knocking"; its
+weights need huggingface.co, which this environment's network policy blocks), Will's one-word reads
+of step 1, then materials whose damping and model put them in their own band, and only then step 2.
+
 ## Plan (each step lands with its test)
 
 1. S1 `@tb/audio` material config and mode derivation. Done (#93).
