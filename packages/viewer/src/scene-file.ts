@@ -61,7 +61,7 @@ export interface SceneFile {
   rules?: { mode: 'keystone'; hitstop: boolean; slowmo: boolean; budget?: number; tailskip?: boolean; follow?: boolean; shake?: boolean; frames?: FrameMode; rapid?: boolean; shots?: Shot[]; rack?: RackItem[] } & LevelRules;
   /** How the scene is framed without a camera, and the field of view (ViewerConfig.view; absent, as in files saved before it: today's DEFAULT_FRAMING, so their saved camera shows at 45 rather than 50 degrees). */
   view: Framing;
-  /** Collision sound: on, material and every knob (absent in older files: off, the defaults). */
+  /** Collision sound: on, material, set and every knob (absent in older files: off, the defaults; no set: real). */
   sound?: SoundOptions;
 }
 
@@ -279,6 +279,7 @@ export function parseSceneFile(text: string): { config: ViewerConfig; name: stri
     const o = { ...DEFAULT_SOUND } as Record<string, unknown>;
     if (snd.on !== undefined) o.on = bool(snd.on, 'sound.on');
     if (snd.material !== undefined) o.material = str(snd.material, 'sound.material');
+    if (snd.set !== undefined) o.set = str(snd.set, 'sound.set');
     for (const k of Object.keys(SOUND_KNOBS) as SoundKnob[]) if (snd[k] !== undefined) o[k] = num(snd[k], `sound.${k}`);
     writeSoundOptions(o as unknown as SoundOptions, q); // the URL parser checks the ranges
   }

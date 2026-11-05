@@ -25,6 +25,8 @@ export interface SoundMaterial {
   size?: number;
   /** shell: wall thickness, metres. */
   wall?: number;
+  /** shell: the six walls' frequency multipliers (absent: CLASSIC_WALLS, within 3%). */
+  walls?: readonly number[];
   /** Young's modulus (plank: along the grain), Pa. */
   E: number;
   /** plank: shear modulus, Pa (wood's is low, which lowers torsion and the higher bending modes). */
@@ -46,9 +48,37 @@ export interface SoundMaterial {
   clickDb: number;
   /** Chips and grit knocked off hard hits (stone), dB; -Infinity = none. */
   gritDb: number;
+  /**
+   * Contact roughness, dB: how much the contact force fluctuates, as a share of itself (several points
+   * touching within the contact, asperities), as noise up to ~7 kHz (modes.ts forceSpectrum). A smooth
+   * Hertz pulse of T seconds has almost nothing above 1 / T, so a heavy block's long contact sounds only
+   * its lowest mode (a pure "plop"); the fluctuation drives the higher and dense modes too. Absent or
+   * -Infinity: the smooth pulse.
+   */
+  roughDb?: number;
+  /**
+   * The dense modes above the mode table (shell walls and solid cubes have thousands): played as a
+   * statistical field, band noise per (sector, half-octave) decaying at each band's loss factor, with
+   * the energy the same modes would carry (modal density x the table's per-mode law). dB over that;
+   * absent or -Infinity: off (planks: their table already reaches 18 kHz).
+   */
+  denseDb?: number;
+  /**
+   * How loud each table mode is. 'velocity' (absent: G6's): every mode moves at the impact's dv, which
+   * grows without bound with the mode count, so its levels are hand balances. 'energy': each mode gets
+   * its share of the impact's energy and radiates by its efficiency (modes.ts modeGain), the dense
+   * field's law, so the table, the field and the click (the rigid body's own) balance by physics.
+   */
+  law?: 'velocity' | 'energy';
 }
 
-export const SOUND_MATERIALS = {
+/**
+ * The materials as G6 shipped them (2026-11-01): smooth Hertz contacts, the mode tables alone, free-body
+ * loss factors. A heavy block's long contact then rings only its lowest mode, a pure tone, and the
+ * AudioSet judge (docs/sound.md, Realism) hears the game's collapses as "Music, Plop, Synthesizer".
+ * Kept to compare against (viewer snd.set=classic, game keystone.sound=classic).
+ */
+export const CLASSIC_SOUND_MATERIALS = {
   /** Kapla: maritime pine, 117 x 23.4 x 7.8 mm. */
   pine: { model: 'plank', dims: [0.117, 0.0234, 0.0078], E: 10e9, G: 0.7e9, nu: 0.35, rho: 480, eta: 0.01, jitter: 0.03, R: 0.003, Ec: 1e9, mstar: 0.7, ringDb: 0, clickDb: 0, gritDb: -Infinity },
   /** Bright game brick: hollow acrylic (PMMA), as if 8 cm with 2.5 mm walls. */
@@ -69,9 +99,42 @@ export const SOUND_MATERIALS = {
   steel: { model: 'cube', E: 200e9, nu: 0.29, rho: 7800, eta: 0.0005, jitter: 0.005, R: 0.01, mstar: 0.7, ringDb: 0, clickDb: 0, gritDb: -Infinity },
 } as const satisfies Record<string, SoundMaterial>;
 
+/** Cast walls are not equal: thickness within ~10%, so wall frequencies within ~15% (plaster, iron). */
+const CAST_WALLS = [1, 0.9, 1.11, 0.95, 1.17, 0.86] as const;
+
+/**
+ * The sound materials (2026-11-05, "real" set). Over CLASSIC_SOUND_MATERIALS: contact roughness and the
+ * dense modes on every shell and cube, and loss factors for blocks in a pile, where contacts carry energy
+ * into neighbours (contact damping: 2-15x a free body's). Each value was picked on a plateau of the
+ * AudioSet judge's real-event share over the L1-L3 par lines (docs/sound.md, Realism), not a peak.
+ */
+export const SOUND_MATERIALS = {
+  /** Kapla: maritime pine, 117 x 23.4 x 7.8 mm (a plank's table already reaches 18 kHz; unchanged). */
+  pine: CLASSIC_SOUND_MATERIALS.pine,
+  /** Bright game brick: hollow acrylic (PMMA), as if 8 cm with 2.5 mm walls. */
+  acrylic: { ...CLASSIC_SOUND_MATERIALS.acrylic, law: 'energy', roughDb: -6, denseDb: 0 },
+  /** Real look: stone or concrete block at the body's own size. */
+  stone: { ...CLASSIC_SOUND_MATERIALS.stone, law: 'energy', eta: 0.03, roughDb: -6, denseDb: 0 },
+  /** Hollow plaster maquette block, 2 cm walls: a dull knock (~300 Hz at 0.5 m) that crumbles. */
+  plaster: { ...CLASSIC_SOUND_MATERIALS.plaster, law: 'energy', eta: 0.08, walls: CAST_WALLS, roughDb: -6, denseDb: 0 },
+  /** Hollow cast-iron box, 6 mm walls: a clonk with a short ring (~200 Hz at 0.5 m; cast iron is lossy, the pile more so). */
+  iron: { ...CLASSIC_SOUND_MATERIALS.iron, law: 'energy', eta: 0.03, walls: CAST_WALLS, roughDb: -20, denseDb: 0 },
+  /** Solid ice: a hard tick and thud, and it cracks. */
+  ice: { ...CLASSIC_SOUND_MATERIALS.ice, law: 'energy', eta: 0.04, roughDb: -6, denseDb: 0 },
+  /** Solid rubber: a dull, low bomp (its contact lasts tens of ms). */
+  rubber: { ...CLASSIC_SOUND_MATERIALS.rubber, law: 'energy', roughDb: -20, denseDb: 0 },
+  /** Solid steel (Keystone's ammo): a hard clink. */
+  steel: { ...CLASSIC_SOUND_MATERIALS.steel, law: 'energy', eta: 0.002, roughDb: -12, denseDb: 0 },
+} as const satisfies Record<keyof typeof CLASSIC_SOUND_MATERIALS, SoundMaterial>;
+
+/** A named material set: 'real' (SOUND_MATERIALS, the default) or 'classic' (G6's). */
+export type SoundSet = 'real' | 'classic';
+export const SOUND_SETS = ['real', 'classic'] as const satisfies readonly SoundSet[];
+export const soundMaterials = (set: SoundSet = 'real'): Record<keyof typeof SOUND_MATERIALS, SoundMaterial> => (set === 'classic' ? CLASSIC_SOUND_MATERIALS : SOUND_MATERIALS);
+
 const POSITIVE = ['E', 'nu', 'rho', 'eta', 'R', 'mstar'] as const;
 
-const KEYS = new Set(['model', 'dims', 'size', 'wall', 'E', 'G', 'nu', 'rho', 'eta', 'jitter', 'R', 'Ec', 'mstar', 'ringDb', 'clickDb', 'gritDb']);
+const KEYS = new Set(['model', 'dims', 'size', 'wall', 'walls', 'E', 'G', 'nu', 'rho', 'eta', 'jitter', 'R', 'Ec', 'mstar', 'ringDb', 'clickDb', 'gritDb', 'roughDb', 'denseDb', 'law']);
 
 /** A material from JSON-ish input over `base` (a whole material when absent); throws on a value that can't make sound. */
 export function parseSoundMaterial(input: Partial<Record<keyof SoundMaterial, unknown>>, base?: SoundMaterial): SoundMaterial {
@@ -86,9 +149,12 @@ export function parseSoundMaterial(input: Partial<Record<keyof SoundMaterial, un
   if (out.nu >= 0.5) throw new Error('sound material nu must be below 0.5');
   if (!(out.jitter >= 0 && out.jitter < 0.5)) throw new Error('sound material jitter must be in [0, 0.5)');
   for (const k of ['ringDb', 'clickDb', 'gritDb'] as const) if (typeof out[k] !== 'number' || Number.isNaN(out[k])) throw new Error(`sound material ${k} must be a number`);
+  for (const k of ['roughDb', 'denseDb'] as const) if (out[k] !== undefined && (typeof out[k] !== 'number' || Number.isNaN(out[k]))) throw new Error(`sound material ${k} must be a number`);
   if (out.model === 'plank' && !(out.dims?.length === 3 && out.dims.every((x) => x > 0))) throw new Error('a plank needs dims [length, width, thickness] > 0');
   if (out.model === 'plank' && !(out.G! > 0)) throw new Error('a plank needs G > 0');
   if (out.model === 'shell' && !(out.wall! > 0)) throw new Error('a shell needs wall > 0');
+  if (out.law !== undefined && out.law !== 'velocity' && out.law !== 'energy') throw new Error(`sound material law must be velocity or energy: ${String(out.law)}`);
+  if (out.walls !== undefined && !(Array.isArray(out.walls) && out.walls.length === 6 && out.walls.every((x) => typeof x === 'number' && x > 0 && Number.isFinite(x)))) throw new Error('sound material walls must be six positive numbers');
   return out;
 }
 

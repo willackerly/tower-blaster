@@ -52,6 +52,9 @@ it. Keys (`@tb/audio` options.ts):
 | `snd.volume` | 0 | master, dB |
 | `snd.ring`, `snd.click` | 0 | the modes and the contact click, dB over the material's |
 | `snd.grit` | 0 | chips off hard hits (stone only), dB over the material's |
+| `snd.rough` | 0 | contact roughness, dB over the material's (Realism below) |
+| `snd.dense` | 0 | the dense modes above the table, dB over the material's |
+| `snd.set` | real | the material set: real, or classic (G6's) |
 | `snd.damping` | 1 | loss factor x |
 | `snd.pitch` | 0 | semitones (stiffness x 2^(st/6)) |
 | `snd.spread` | 1 | body-to-body pitch spread x |
@@ -248,6 +251,104 @@ hiss, while chips are crackle. A fracture impulse into the block's own modes
 (a short, full-band "crack" instead of the Hertz thump) is the most physical
 next layer; it waits for recordings (S9).
 
+## Realism (2026-11-05)
+
+Will heard the game's collisions as "a bit too synthetic". This section is how that was made
+measurable, what caused it, and what changed. The old sound is kept bit for bit as the `classic`
+material set (viewer `snd.set=classic`, game `keystone.sound=classic`).
+
+### The judge
+
+`tools/sound-judge/` re-implements YAMNet (Google's AudioSet classifier, 521 everyday sound classes)
+in numpy and scores each render: the mean probability of real impact events (Smash/crash, Knock,
+Clatter, Crack, Thump, Glass, Explosion, ...), of electronic sounds (Synthesizer, Sine wave, Beep) and of
+musical instruments (Music, Marimba, Wood block, Bell, Percussion), and the real share
+real / (real + electronic + instrument). It is level-free. Calibrated on ESC-50 recordings: knocks,
+footsteps, glass, fireworks, can openings and mouse clicks score 0.68-0.98 (category means, 16 clips
+each) with the right top classes; alarm clocks 0.07 and church bells 0.00. A classifier is not an ear; it guards against "sounds like an instrument",
+and values below sit on its plateaus, never its peaks, and only where the physics puts them.
+
+G6's game collapse (L1-L5 par lines, AVBD reference, game camera) scores **0.19**, heard as
+"Music, Plop, Synthesizer". Two things were ruled out first:
+
+- **Not the room.** The same renders convolved with a hall, a room, an outdoor tail or a lone
+  ground reflection score *more* musical (instrument 0.34 -> 0.7-2.0: "Percussion, Drum, Wood
+  block"). A dry modal source in a room is a drum kit in a room. Reverb waits for a real source.
+- **Not damping or pitch spread alone.** Damping x3 trades "Music" for "Heartbeat" (a low thump,
+  real share 0.4); pitch spread x5 changes nothing.
+
+### The cause
+
+A Keystone block is a 0.5 m hollow plaster shell of 30 kg; Hertz contact against it lasts 4 ms
+at 1 m/s. A smooth 4 ms force pulse has nothing left above ~250 Hz, so of the shell's 48 table modes
+only the lowest cluster (six walls at ~300 Hz, all within 3%) is struck: 95% of the ringing energy is
+one pitch. Every block in a level is the same size, so the collapse is one instrument played 500 times:
+the "plop". Its ratios (1 : 2.04 : 3.01 for a clamped plate) are near-harmonic, which makes it a note.
+
+### What changed (the `real` set)
+
+1. **Contact roughness** (`roughDb`, modes.ts `forceSpectrum`). Real faces and corners touch at
+   several points within the contact: the force fluctuates by eps of itself as noise of ~1 / ROUGH_T
+   (0.15 ms asperities) bandwidth. Its power adds a floor 0.75 eps^2 ROUGH_T / T under the pulse's
+   spectrum, so a long contact (a heavy block) stays smoother per impulse than a short one.
+2. **The dense modes** (`denseDb`, `denseField`, the engine's dense layer). Shell walls and solid
+   blocks have thousands of modes above the table (2D and 3D Weyl densities). They play as a
+   statistical field: band noise per (material, sector, half-octave) under an amplitude each impulse
+   raises by the band's energy, decaying at the band's loss factor. Its energy is physical, not a
+   balance: 2 J^2 Int |F|^2 Re Y df with the mean point conductance Re Y = n(f) / (4 M) (Cremer and
+   Heckl; the infinite plate's 1 / (8 sqrt(D rho h)) for a wall), radiating its share
+   eta_rad / (eta_rad + eta) by Maidanik's efficiency (walls below coincidence) or the body's size
+   (solids).
+3. **The energy law for the table** (`law: 'energy'`, `modeGain`). G6 played every mode at the
+   impact's dv, a balance that grows with the mode count (pine and iron radiated 22-27% of the
+   impact's energy, rubber would have radiated 6x its energy with the dense field). Now each mode takes
+   J^2 |F|^2 / (2 M) and radiates by its efficiency, the dense field's law, so table, field and click
+   balance by physics. Table and field each take at most `VIB_SHARE` (half) of the impact's energy.
+4. **Contact damping and cast walls.** A block in a pile loses energy through its contacts: loss
+   factors 2-8x a free body's (plaster 0.08, stone 0.03, ice 0.04, iron 0.03, steel 0.002). Cast walls
+   differ by ~10% in thickness (`walls`: frequencies within 15%), which breaks the six-wall unison.
+
+Per material (real share, mean of L1-L3 with the material on every structure body; the city is the
+viewer's 10k knock-down from 75 m):
+
+| Material | Classic | Real | Classic top classes | Real top classes (L1, L2, L3) | Values |
+|---|---|---|---|---|---|
+| plaster (game) | 0.27 | **0.87** | Music, Plop, Synthesizer | Shuffling cards; Knock, Door, Thunk; Door, Tap | eta 0.08, rough -6, cast walls |
+| stone | 0.33 | **0.84** | Heartbeat, Heart murmur | Rattle, Coin dropping; Coin dropping, Keys jangling; Tick, Clock | eta 0.03, rough -6 |
+| ice | 0.39 | **0.86** | Heartbeat | Crack, Crushing, Breaking; Crackle; Glass, Chink | eta 0.04, rough -6 |
+| rubber | 0.20 | **0.82** | Heartbeat | Crackle, Explosion; Rodents (!); Tick | rough -20 |
+| iron | 0.00 | **0.68** | Chant, Mantra, Music | Wind, Door; Fart, Wind noise (!); Door | eta 0.03, rough -20, cast walls |
+| steel ammo | 0.35 | **0.61** | Plop, Ding | Ding, Clang, Glass, Chink; Ding, Clang; Tick, Ping | eta 0.002, rough -12 |
+| acrylic (viewer city) | 0.20 | **0.84** | Music, Clock | Camera, Wood, Mechanisms | rough -6 |
+| stone (viewer city, 1 m) | 0.36 | **0.90** | Heartbeat, Throbbing | Crackle, Fire, Static, Clatter | as above |
+| pine (Kapla) | 0.47 | 0.47 | Jingle bell, Glass, Bell, Chink | (unchanged) | classic |
+| **the game, L1-L5 as played** | **0.19** | **0.81** | Music, Plop, Synthesizer | Door; Knock, Whack; Door, Whack; Knock, Door; Door, Knock | |
+
+(Silence, Sound effect and Inside, small room are left out of the top classes.) The real share is the
+headline, but the top classes keep it honest: rubber and iron leave "instrument" for odd neighbours
+(Rodents, Fart, Wind), a sign their low, noisy rumble is not yet right either. Both are rare in the
+levels; they wait for listening and recordings.
+
+Plateaus: plaster is 0.82-0.87 for rough -20 to 0 at eta 0.08 (0.45-0.54 at its old 0.04); stone
+0.74-0.81 over rough and eta 0.015-0.06; iron needs eta >= 0.03 (0.06-0.12 below). Steel ammo stays
+partly "Ding": steel balls do ring. Kapla pine is a beam whose table already reaches 18 kHz, so it is
+unchanged and reads as clinks (it is not wrong: Kapla planks clink); it is the next material to study.
+
+Energy audit (realism.test.ts): no real material radiates more than 10% of an impact's kinetic
+energy (modes and field; the dense field alone under 5%), from 0.25 to 1 m and 0.5 to 4 m/s. The
+click is left out of that audit: it is G6's compact dipole, which overstates a 1 m box stopping in
+1 ms (ka ~ 9), a known limit for a later step.
+
+Level: the real set is transient where the classic one rings, so at the same headroom it reads
+quieter. `GAME_SOUND_DB_REAL` = -17 limits nothing on the par lines (loudest peak 0.81) and sits
+1.1-3.4 LU under the classic set (BS.1770, `loudness.ts`); `keystone.impacts=3` closes it.
+
+Cost: the dense layer is 15 bands x 4 sectors of table lookups per sounding material, skipped when
+idle (an engine test holds an idle material at zero work). Real numbers come from the M5.
+
+Knobs: `snd.rough` and `snd.dense` (dB over the material's), `snd.set`. Tools: `sound-sweep-cli.ts`
+renders captures with any material change; `sound-cli.ts set=` prints peak, limiting and loudness.
+
 ## Plan (each step lands with its test)
 
 1. S1 `@tb/audio` material config and mode derivation. Done (#93).
@@ -264,6 +365,7 @@ next layer; it waits for recordings (S9).
 6. S6 viewer Sound section and `snd.*` URL params. Done.
 7. S7 ground and hall: floor resonators, reverb tied to `real.env`.
 8. S8 granular non-modal layers: stone grit done (2026-11-01, Grit above); splinters and rubble sliding not yet.
-9. S9 calibration from recordings (example-guided, Ren et al. 2013).
+9. S9 calibration from recordings (example-guided, Ren et al. 2013). The realism judge (2026-11-05,
+   Realism above) is the objective half; recordings of the actual materials would pin the levels.
 10. S10 M5 bench (`pnpm bench:audio`): audio-thread load and the tap's main-thread cost at 10k and 100k.
 11. S11 game adoption, and ball and level materials. Done (2026-11-01, In the game above).
