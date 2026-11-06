@@ -16,3 +16,6 @@ export * from './settings.ts';
 export * from './session-file.ts';
 export * from './support.ts';
 export * from './touch.ts';
+export * from './edit.ts';
+export * from './edit-panel.ts';
+export * from './edit-view.ts';

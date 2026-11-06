@@ -10,6 +10,9 @@ import { isRackItem, itemRef, type LevelWeapon, RACK_ITEM_NAMES, rackBodies, typ
 import { type ScenarioPart, scenarioBodies, scenarioKey } from './scenario-part.ts';
 import { ammoBody, type LauncherDef, launcherPos, type Shot, type ShotFrame } from './shots.ts';
 import { checkIce, type IceBlock, IceBreaker, iceOf } from './ice.ts';
+import type { BuildDef } from './build.ts';
+import { obbAabb, obbOfBody, obbOverlap, yawQuat } from './placement.ts';
+import { headingQuat, runPoses } from './stroke.ts';
 
 /** A course (layer) override inside a block: change material or role, or leave cells out. */
 export interface CourseOverride {
@@ -26,7 +29,20 @@ export interface CourseOverride {
 export interface BlockPart { kind: 'block'; at: Vec3; size: Vec3; material: MaterialName; role?: Role; courses?: CourseOverride[] }
 /** One box body; `at` is (centre x, bottom y, centre z) and `half` its half-extents, in h. */
 export interface BoxPart { kind: 'slab' | 'rod'; at: Vec3; half: Vec3; material: MaterialName; role?: Role }
-export type Part = BlockPart | BoxPart | ScenarioPart;
+/**
+ * One box at a free pose (the build tool's piece, placement.ts): `at` is its centre in h (not cells: the
+ * lattice pitch does not apply, so a piece goes exactly where it was placed), `half` its half-extents in h,
+ * `yaw` its turn about +y in degrees (absent: 0). `placed` marks a piece the player placed under a level's
+ * build budget (build.ts), which the editor may take back; authored pieces have none.
+ */
+export interface PiecePart { kind: 'piece'; at: Vec3; half: Vec3; yaw?: number; material: MaterialName; role?: Role; placed?: true }
+/**
+ * A run of dominoes laid by the stroke brush (stroke.ts): `path` the drawn points (x, z) in h, the
+ * dominoes `pitch` h apart centre to centre (straight line), each of half-extents `half` (x across the
+ * path, y up, z along it), standing on `y` h (default 0). `omit` lists dominoes left out by index.
+ */
+export interface RunPart { kind: 'run'; path: [number, number][]; pitch: number; half: Vec3; y?: number; material: MaterialName; role?: Role; omit?: number[]; placed?: true }
+export type Part = BlockPart | BoxPart | ScenarioPart | PiecePart | RunPart;
 
 /**
  * What the level asks for; meeting it is the first star. footprintMax (a fraction of the structure
@@ -139,6 +155,11 @@ export interface LevelDef {
   freeze?: number;
   /** The physics the level plays at (default Keystone's: PHYSICS_DEFAULTS). Part of the level hash, so stars cast at one setting never show at another. */
   physics?: PhysicsBlock;
+  /**
+   * Build rules (C9, build.ts): the player places pieces and lays domino runs, within a budget, before the
+   * first shot (time stopped; Play compiles the level with them). Absent: nothing may be placed.
+   */
+  build?: BuildDef;
   /**
    * Made from an authored level by overrides (URL keys keystone.*): it plays, but cast stars do not
    * apply ("custom: stars not recorded"). Not part of the hash: the overrides already are.
@@ -325,6 +346,15 @@ export function compileLevel(def: LevelDef): CompiledLevel {
       }
     } else if (part.kind === 'scenario') {
       for (const b of scenarioBodies(part, h, pitchOf(def))) add(body(b.pos, b.half, part.material, b.role, pi, b.rot), b.role, part.material, pi);
+    } else if (part.kind === 'piece') {
+      const role = part.role ?? 'plain';
+      add(body([part.at[0] * h, part.at[1] * h, part.at[2] * h], part.half.map((x) => x * h) as Vec3, part.material, role, pi, yawQuat(part.yaw ?? 0)), role, part.material, pi);
+    } else if (part.kind === 'run') {
+      const role = part.role ?? 'plain', half = part.half.map((x) => x * h) as Vec3, y = ((part.y ?? 0) + part.half[1]) * h;
+      const omit = new Set(part.omit ?? []);
+      runPoses(part.path, part.pitch).forEach((d, i) => {
+        if (!omit.has(i)) add(body([d.x * h, y, d.z * h], half, part.material, role, pi, headingQuat(d.heading)), role, part.material, pi);
+      });
     } else {
       const half = part.half.map((x) => x * h) as Vec3;
       const pos: Vec3 = [part.at[0] * p, part.at[1] * h + half[1], part.at[2] * p];
@@ -374,7 +404,7 @@ export function compileLevel(def: LevelDef): CompiledLevel {
   // Ice rules join the hash written out whenever the level has ice (as a defaulted weapon does), so retuning
   // ICE_DEFAULTS drops stars cast under the old ones; levels without ice hash as before, whatever physics.ice says.
   if (mats.includes(materialId('ice'))) geometry.physics = { ...geometry.physics, ice: iceOf(def.physics?.ice) };
-  geometry.parts = geometry.parts.map((pt) => (pt.kind === 'scenario' ? scenarioKey(pt) : pt));
+  geometry.parts = geometry.parts.map((pt) => (pt.kind === 'scenario' ? scenarioKey(pt) : pt.kind === 'piece' || pt.kind === 'run' ? placedKey(pt) : pt));
   // A w- item the level gives no weapon of its own plays the built-in (rack.ts weaponOf): the built-in joins the
   // hash as if written out, so retuning one drops stars cast with it. Levels whose rack has none hash as before.
   const defaulted: Record<string, LevelWeapon> = {};
@@ -385,14 +415,24 @@ export function compileLevel(def: LevelDef): CompiledLevel {
     if (w) defaulted[ref.key] = w;
   }
   if (Object.keys(defaulted).length) geometry.weapons = { ...geometry.weapons, ...defaulted };
-  // A scenario part names its bodies by (id, params, seed): the bodies themselves join the hash, so a
-  // change to the scenario's builder is a different level too. Levels without one hash as before.
-  const built = def.parts.some((pt) => pt.kind === 'scenario') ? `|${bodiesDigest(bodies)}` : '';
+  // A scenario part names its bodies by (id, params, seed), and a run by its path: the bodies themselves join the hash, so a
+  // change to the scenario's builder or to the brush's spacing (stroke.ts) is a different level too. Levels without either hash as before.
+  const built = def.parts.some((pt) => pt.kind === 'scenario' || pt.kind === 'run') ? `|${bodiesDigest(bodies)}` : '';
   const c: CompiledLevel = { def, scene, meta, frame, arms: {}, lot, height, hash: hashString(JSON.stringify(geometry) + built) };
   const arms = rackArms(c);
   c.arms = arms;
   frame.shells = Object.fromEntries(Object.entries(arms).map(([k, a]) => [k, a.shell]));
   return c;
+}
+
+/**
+ * A piece or run as the hash sees it: its fields in one fixed order and defaults (yaw 0, y 0, no omit) left out, so a
+ * level hashes the same whether the build tool, a file or the URL made it.
+ */
+function placedKey(pt: PiecePart | RunPart): Part {
+  const tail = { material: pt.material, ...(pt.role !== undefined ? { role: pt.role } : {}), ...(pt.placed ? { placed: true as const } : {}) };
+  if (pt.kind === 'piece') return { kind: 'piece', at: pt.at, half: pt.half, ...(pt.yaw ? { yaw: pt.yaw } : {}), ...tail };
+  return { kind: 'run', path: pt.path, pitch: pt.pitch, half: pt.half, ...(pt.y ? { y: pt.y } : {}), ...(pt.omit?.length ? { omit: [...pt.omit].sort((a, b) => a - b) } : {}), ...tail };
 }
 
 /** FNV-1a over the bytes of every body's pose and half-extents (f64). */
@@ -504,12 +544,15 @@ export function validateLevel(c: CompiledLevel, opts: ValidateOptions = {}): Iss
   if (watched > MAX_WATCHED) issues.push({ code: 'watched', message: `${m.crowns.length} crowns + ${m.heritage.length} heritage = ${watched} watched bodies > ${MAX_WATCHED}: judge big structures by collapse, skyline or footprint` });
 
   const eps = 1e-4 * h;
-  const boxes = Array.from({ length: m.n }, (_, i) => aabb(m, i));
+  // A turned body (a domino on a curve, a placed piece at a yaw) is boxed by its world AABB and its overlaps measured as oriented
+  // boxes (placement.ts obbOverlap), so neighbours on a curve whose AABBs cross are not flagged; upright bodies are as before.
+  const bodies = c.scene.bodies, turned = (i: number) => { const q = bodies[i]!.rot; return q[0] !== 0 || q[1] !== 0 || q[2] !== 0; };
+  const boxes = Array.from({ length: m.n }, (_, i) => (turned(i) ? obbAabb(obbOfBody(bodies[i]!)) : aabb(m, i)));
   // One pass at the wider margin; the support relation below needs a subset of these pairs.
   const pairs = nearPairs(boxes, 0.1 * h);
   for (const [i, j] of pairs) {
     const A = boxes[i]!, B = boxes[j]!;
-    const depth = Math.min(...[0, 1, 2].map((k) => Math.min(A.hi[k]!, B.hi[k]!) - Math.max(A.lo[k]!, B.lo[k]!)));
+    const depth = turned(i) || turned(j) ? obbOverlap(obbOfBody(bodies[i]!), obbOfBody(bodies[j]!)) : Math.min(...[0, 1, 2].map((k) => Math.min(A.hi[k]!, B.hi[k]!) - Math.max(A.lo[k]!, B.lo[k]!)));
     if (depth > eps) issues.push({ code: 'overlap', message: `bodies ${i} and ${j} overlap by ${(depth / h).toFixed(3)} h`, bodies: [i, j] });
     const ratio = Math.max(m.mass[i]! / m.mass[j]!, m.mass[j]! / m.mass[i]!);
     if (ratio > 10) issues.push({ code: 'mass-ratio', message: `bodies ${i} and ${j} touch with mass ratio ${ratio.toFixed(1)} > 10`, bodies: [i, j] });
