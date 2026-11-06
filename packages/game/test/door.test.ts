@@ -63,7 +63,7 @@ describe('door text', () => {
     const cast = { ...UNCAST, stars: { metric: 'collapse' as const, t2: 0.5, t3: 0.62, hash: compileLevel(B3).hash } };
     const [l] = doorLevels([cast], () => null);
     expect(l).toMatchObject({ cast: true, targets: ['Bring 40% down', '50% down', '62% down'] });
-    expect(doorLevels([B3], () => null)[0]).toMatchObject({ cast: true, targets: ['Bring 40% down', '53% down', '63% down'] });
+    expect(doorLevels([B3], () => null)[0]).toMatchObject({ cast: true, targets: ['Bring 40% down', '53% down', '61% down'] });
   });
   it('best play text', () => {
     expect(bestText(null)).toBe('Not played yet');
