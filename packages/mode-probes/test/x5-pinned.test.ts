@@ -36,8 +36,10 @@ describe('X5 frames', () => {
   it('every mover starts above the surface, in both frames at the same surface-frame position and velocity; reference gravity is g turned into the surface frame', () => {
     for (const d of DESIGNS) {
       const s = surfaceOf(d), pin = x5Spec(caseOf(d, 'pinned')), ref = x5Spec(caseOf(d, 'reference'));
-      expect(pin.pins).toEqual([0]);
-      expect(ref.pins).toBeUndefined();
+      expect(pin.scene.bodies[0]!.pinned).toBe(true);
+      expect(ref.scene.bodies.some((b) => b.pinned)).toBe(false);
+      // Every other body awake throughout: no sleep (C8 needs none).
+      expect(pin.opts.sleep).toBeUndefined();
       const movers = pin.scene.bodies.slice(1);
       expect(movers).toHaveLength(ref.scene.bodies.length);
       movers.forEach((b, i) => {

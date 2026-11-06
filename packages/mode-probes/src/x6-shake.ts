@@ -2,10 +2,11 @@
 // blast shove the world uniformly? (modes-roadmap.md section 7 and claim 6;
 // gates M7 Aftershock.)
 //
-// Shake. C7, the gravity schedule, is not built; its mechanism is that the
-// engines read SceneDesc.gravity every step, and the probe writes it before
-// each step (RunSpec.gravity), which is what C7 would do. A horizontal
-// gravity on a still ground is a shaking ground seen from the ground's frame.
+// Shake. The gravity schedule is C7's field events (engine-api field.ts): one
+// quantised key per step that changes it, in the scene's inputs. (The probe
+// first ran on an emulation that rewrote SceneDesc.gravity before each step;
+// results of 2026-11-05 in mode-probes.md.) A horizontal gravity on a still
+// ground is a shaking ground seen from the ground's frame.
 // Single columns of 5, 10 and 20 cubes (0.5 m plaster, aspect b/h = 1/n)
 // stand 4 m apart, every height NUDGES times over in one scene (islands that
 // cannot touch); each scene shakes at one frequency f:
@@ -42,7 +43,7 @@
 // blast's step also solves its contacts, and Coulomb's answer for a stack
 // that moves as one is a uniform loss of mu g dt (3.3 % of 3 m/s): that is
 // reported against, as the response a jolted building gives, not the kick.
-import type { BodyDesc, InputEvent, Snapshot, Vec3 } from '@tb/engine-api';
+import { type BodyDesc, type InputEvent, quantiseVec3, scheduleEvents, type Snapshot, type Vec3 } from '@tb/engine-api';
 import { box, DT, GAME_PARAMS, gameScene, GRAVITY, PLASTER, rng, sym, yaw } from './scene.ts';
 import type { CaseRun, Check, Meter, Probe, RunSpec, Size, Verdict } from './probe.ts';
 
@@ -108,14 +109,14 @@ export function shoveWorld(c: Extract<X6Case, { kind: 'shove' }>): { bodies: Bod
 export function x6Spec(c: X6Case): RunSpec {
   if (c.kind === 'shake') {
     const { bodies } = columns(c.nudges, 6000 + Math.round(100 * c.f));
-    const scene = gameScene(`X6-shake-${c.f}`, { ...c }, bodies);
-    const gravity = (i: number): Vec3 => {
-      if (i < c.presettle) return [0, -GRAVITY, 0];
-      const t = (i - c.presettle) * DT;
-      return [envelope(c, t) * GRAVITY * Math.sin(2 * Math.PI * c.f * t), -GRAVITY, 0];
-    };
     // A second at full amplitude after the envelope tops out, for the last columns to finish falling.
-    return { scene, steps: c.presettle + shakeSteps(c) + 60, params: GAME_PARAMS, opts: { capacity: bodies.length, pairsPerBody: 16 }, gravity };
+    const steps = c.presettle + shakeSteps(c) + 60, base = quantiseVec3([0, -GRAVITY, 0]);
+    const shake = scheduleEvents(c.presettle, steps, (i) => {
+      const t = (i - c.presettle) * DT;
+      return [envelope(c, t) * GRAVITY * Math.sin(2 * Math.PI * c.f * t), base[1], 0];
+    }, base);
+    const scene = gameScene(`X6-shake-${c.f}`, { ...c }, bodies, shake, { gravity: base });
+    return { scene, steps, params: GAME_PARAMS, opts: { capacity: bodies.length, pairsPerBody: 16 } };
   }
   const { bodies, centre, at } = shoveWorld(c);
   const blast: InputEvent = { kind: 'blast', step: at, blast: { centre, radius: 3 * c.dist, impulse: 1e9, falloff: 0, core: 0.999, maxDv: SHOVE_DV, maxSpeed: 48 } };
