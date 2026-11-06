@@ -53,8 +53,12 @@ export interface HudState {
   leverage: { round: number; shot: number };
   phase: string;
   reachable: boolean | null;
-  /** The pull under the cursor is refused (a crown or heritage block): said instead of out of reach. */
-  pullRefused?: boolean;
+  /**
+   * The pull under the cursor is refused (a crown or heritage block): said instead of out of reach, as a
+   * neutral hint while it is only hovered, and in red once a click or tap on it was refused ('tapped';
+   * playtest PT17: a red error before any input read as a mistake the player had not made).
+   */
+  pullRefused?: boolean | 'tapped';
   /** Outcome levels: collapse fraction D now, the objective met at the last settle, and whether a bank is possible. */
   collapse?: number;
   /** Hold levels (Undercut's Hollow): the share of the structure's mass pulled, shown in place of D. */
@@ -132,6 +136,21 @@ export function objectiveText(o: Objective): string {
   }
 }
 
+/** Why a pull is refused (Session.pullRefusal: crowns and heritage are the objective's). */
+export const PULL_HINT = 'Crowns and heritage stay: pull a plain block';
+
+/**
+ * A hold level's crown row (Undercut's Hollow): its crowns are to be kept up, so the row says whether they
+ * stand, in the objective's green, instead of a crown counter (0 / 1 in the crown colour read as a target to
+ * topple; playtest PT17). Nothing on a level without crowns.
+ */
+export function keepRow(down: number, total: number): string {
+  if (!total) return '';
+  const label = total === 1 ? 'Crown' : 'Crowns';
+  const state = down === 0 ? (total === 1 ? 'standing ✓' : 'all standing ✓') : total === 1 ? 'fallen' : `${down} of ${total} fallen`;
+  return `<div class="row"><span>${label}</span><span class="keep ${down ? 'bad' : 'ok'}">${state}</span></div>`;
+}
+
 /** Shown on a level made by overrides (LevelDef.custom). */
 export const CUSTOM_NOTE = 'custom: stars not recorded';
 
@@ -147,7 +166,7 @@ export function hudHtml(s: HudState): string {
   // The power bar, with minus and plus buttons on a touch screen (keys Q and E).
   const power = sel === 'drop' || sel === 'pull' ? '' : `<div class="row"><span>Power <kbd>Q</kbd><kbd>E</kbd></span><span class="power">${POWER_STEP_BUTTON(-POWER_STEP)}<span class="bar"><i style="width:${s.power}%"></i></span>${POWER_STEP_BUTTON(POWER_STEP)}</span></div>`;
   const height = sel === 'drop' || sel === 'pull' || s.launch === undefined ? '' : launchRow(s.launch);
-  const reach = s.pullRefused ? '<div class="bad small">Crowns and heritage stay: pull a plain block</div>' : s.reachable === false ? '<div class="bad small">Out of reach at this power</div>' : '';
+  const reach = s.pullRefused ? `<div class="${s.pullRefused === 'tapped' ? 'bad' : 'hint'} small pull-hint">${PULL_HINT}</div>` : s.reachable === false ? '<div class="bad small">Out of reach at this power</div>' : '';
   const outcome = scoringOf(d) === 'outcome';
   const head = outcome
     ? `<div class="row"><span>Shot ${s.strokes}</span>${d.objective.kind === 'hold' ? `<span>Pulled <b class="down${(s.pulled ?? 0) > 0 ? '' : ' none'}">${pct(s.pulled ?? 0)}</b></span>` : `<span>Down <b class="down${(s.collapse ?? 0) > 0 ? '' : ' none'}">${pct(s.collapse ?? 0)}</b></span>`}</div>
@@ -156,9 +175,10 @@ export function hudHtml(s: HudState): string {
     : `<div class="row"><span>Par ${d.par}</span><span>Stroke ${s.strokes}</span></div>`;
   const fz = s.freezes;
   const freezes = fz
-    ? `<div class="row"><span>Freezes</span><span class="${fz.left ? '' : 'spent'}">${fz.left} / ${fz.total}</span></div>${fz.frozen || fz.can ? `<div class="row">${freezeButton(fz.frozen)}<span class="small">${fz.frozen ? 'aim and fire, or resume free' : 'stop the world to aim'}</span></div>` : ''}`
+    ? `<div class="row"><span>Freezes</span><span class="${fz.left ? '' : 'spent'}">${fz.left} / ${fz.total}</span></div>${fz.frozen || fz.can ? `<div class="row">${freezeButton(fz.frozen)}<span class="small">${fz.frozen ? 'aim and fire, or Resume: the freeze is kept' : 'stop the world to aim'}</span></div>` : ''}`
     : '';
-  const crowns = !outcome || s.crownsTotal ? `<div class="row"><span>Crowns</span><span class="crowns">${s.crownsDown} / ${s.crownsTotal}</span></div>` : '';
+  const crowns = d.objective.kind === 'hold' ? keepRow(s.crownsDown, s.crownsTotal)
+    : !outcome || s.crownsTotal ? `<div class="row"><span>Crowns</span><span class="crowns">${s.crownsDown} / ${s.crownsTotal}</span></div>` : '';
   if (s.duel !== undefined) {
     return `
     <div class="title">${esc(d.name)}${s.pace ? ` <span class="pace" title="physics is running slower than real time">${esc(s.pace)}</span>` : ''}</div>

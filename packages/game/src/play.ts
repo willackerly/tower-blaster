@@ -31,6 +31,8 @@ import { CLEAR_SHARE, FrameGovernor } from './frame-rate.ts';
 import { canvasSize, type QualityState } from './quality.ts';
 import { UndoMarks } from './undo-marks.ts';
 import { ballFx, beadOverlay, BOMB_FX, CROWN_GLOW, firedKind, PULL_HOVER, ramFx, regrowDuration, regrowScales, rolePaint, SPENT_FADE, spentFx, structureMarks, structureTints, tintOf, tintWordOf } from './scene.ts';
+import { easeGrade, FROZEN_LABEL, freezeFxOf } from './frozen-look.ts';
+import { ghostOutline, PULL_SLIDE_STEPS, type PullAnim, pullAnimFor, withPulled } from './pull-anim.ts';
 import { type GestureState, type TouchAction, TouchGestures, touchFace, type TouchMode } from './touch.ts';
 
 /** What a page (and its tests) can see and do while Keystone plays: window.__game on the game page. */
@@ -141,6 +143,12 @@ export interface GameHandle {
   /** The undo checkpoints held now: one per shot still kept (null where none was), and their bytes (PaceFeel.undoMB caps them). */
   undoMemory(): { marks: number; bytes: number };
   capture(keepPixels?: boolean): Promise<PixelStats | null>;
+  /** Tests: pixels of the current view (the ID pass, Renderer.renderIds) that show body `body`. */
+  coverage(body: number): Promise<number>;
+  /** Tests: the last pull's slide as last drawn (pull-anim.ts): steps since the pull, the drawn centre and scale; null when none is drawn. */
+  pullDrawn: { body: number; k: number; pos: [number, number, number]; scale: number } | null;
+  /** Bullet Time's frozen look as last drawn (frozen-look.ts): the grade's amount, 0 none to 1 full, eased per frame. */
+  frozenGrade: number;
   /**
    * How each fired body (the slots past the structure's, in spawn order) is drawn now: a bomb (a lit fuse and
    * BOMB_FX's matte iron), a ram (scene.ts ramFx: bronze, banded, no fuse), a painted ball (paint and band,
@@ -240,7 +248,7 @@ export function newGameHandle(): GameHandle {
   const none = (): SessionState => ({ step: 0, phase: 'loading', strokes: 0, heritageBroken: 0, hash: '' });
   return {
     status: 'loading', engine: '', level: '', phase: 'loading', ready: false, frozen: false, frames: 0, stepIndex: 0, strokes: 0, bodies: 0, collapse: 0, fast: false, pace: { timeScale: 1, speed: 1, tag: '', tailSkip: false, costMs: NaN }, view: { target: [0, 0, 0], distance: 0, yaw: 0, pitch: 0, following: false, jolt: 0, turning: false, cue: null, arcBeads: 0 }, input: { touch: false, gesture: 'idle', fingers: 0, aimed: null, power: 100, launch: 0 }, result: null, counts: {}, feel: { ...DEFAULT_FEEL }, resultShownAt: null, timing: { loadMs: 0, load: noPhases(), stepMs: [], moving: [], frameMs: [], costMs: [] }, draws: { drawn: 0, skipped: 0, decimating: false },
-    fire: () => false, bank: () => false, freeze: () => false, fireOpener: () => false, setMuted: () => {}, maxDpr: 2, quality: null, aim: () => null, reach: null, select: () => false, load: async () => {}, retry: async () => {}, undo: async () => false, undone: null, spare: null, undoMemory: () => ({ marks: 0, bytes: 0 }), capture: async () => null, firedLooks: () => [], spentLooks: () => [], effects: async () => ({ particles: 0, hot: 0, spawned: 0, flashes: 0, blasts: 0, fuses: 0 }), marks: () => [], refreshMarks: () => {},
+    fire: () => false, bank: () => false, freeze: () => false, fireOpener: () => false, setMuted: () => {}, maxDpr: 2, quality: null, aim: () => null, reach: null, select: () => false, load: async () => {}, retry: async () => {}, undo: async () => false, undone: null, spare: null, undoMemory: () => ({ marks: 0, bytes: 0 }), capture: async () => null, coverage: async () => 0, pullDrawn: null, frozenGrade: 0, firedLooks: () => [], spentLooks: () => [], effects: async () => ({ particles: 0, hot: 0, spawned: 0, flashes: 0, blasts: 0, fuses: 0 }), marks: () => [], refreshMarks: () => {},
     state: none, line: () => [], replay: async () => none(), health: async () => null, pairsPerBody: 0, limitsHit: [], goals: [], grade: null, duel: null, handoff: false, scoreFloat: '',
     sound: () => ({ mode: 'collapse', status: 'off', error: '', posted: 0, stats: null }),
     ice: () => ({ count: 0, cracks: [] }),
@@ -528,6 +536,16 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
   let waiting: Shot[] = [];
   /** Bullet Time: the running shot's physics is frozen (freeze, key T); the physics loop holds until a shot or T resumes it. */
   let frozen = false;
+  /** Bullet Time's frozen look (frozen-look.ts; PaceFeel.frozenLook): the grade's amount now, eased, and the label. */
+  let frozenGrade = 0;
+  const frozenLabel = document.createElement('div');
+  frozenLabel.className = 'kg-frozen';
+  frozenLabel.innerHTML = FROZEN_LABEL;
+  (env.banner.parentElement ?? document.body).appendChild(frozenLabel);
+  /** The last pull, drawn (pull-anim.ts; PaceFeel.pullAnim): its slide-out and ghost outline. Null on a load or undo. */
+  let pullAnim: PullAnim | null = null;
+  /** The engine step its pull went in at: the slide is drawn by steps since (pullPose). */
+  let pullStep = 0;
   let regrowBuf = new Float32Array(0);
   let selected: RackItem | null = null;
   let opener: Shot | null = null;
@@ -540,6 +558,8 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
   let aimed: Aimed | null = null, beads: Float64Array | null = null, aimDirty = false;
   /** The point aimed at and the structure body under it (-1: the ground), for a duel's own-keep warning and its score float. */
   let aimHit: { body: number; point: Vec3 } | null = null, firedAt: Vec3 | null = null;
+  /** The block a click or tap tried to pull and was refused (a crown, heritage): its hint shows red until the aim leaves it. */
+  let refusedPull: number | null = null;
   /** The block a selected pull would take, lit (PULL_HOVER) until the cursor leaves it or it is pulled. */
   let hover: number | null = null;
   /** A one-blast weapon's blast radius around the aim point, for the aim preview's danger zone (Renderer.reach); null otherwise. */
@@ -733,6 +753,8 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     regrowT = null;
     waiting = [];
     frozen = mark.frozen;
+    pullAnim = null;
+    handle.pullDrawn = null;
     aimed = null;
     beads = null;
     hover = null;
@@ -978,6 +1000,8 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     regrowT = line ? null : 0;
     waiting = [];
     frozen = false;
+    pullAnim = null;
+    handle.pullDrawn = null;
     aimed = null;
     beads = null;
     hover = null; // the new level's tints are fresh
@@ -1004,6 +1028,20 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     if (cls) env.banner.classList.add(cls);
     void env.banner.offsetWidth; // restart the animation
     env.banner.classList.add('show');
+  }
+
+  /**
+   * The step's snapshot to the renderer: as it is, or with the last pull's block drawn where its slide-out has it
+   * (pull-anim.ts withPulled: the snapshot is patched for the upload only), lit and shrinking; once the slide is
+   * over, the slot's own tint and full scale back (it is a tombstone, drawn by no pass, until an undo restores it).
+   */
+  function uploadSnapshot(d: Driver) {
+    const a = pullAnim, k = a ? d.engine.stepIndex - pullStep : 0;
+    if (!a || k > PULL_SLIDE_STEPS + 1) { source.update(d.snapshot, descs); handle.pullDrawn = null; return; }
+    const p = withPulled(d.snapshot, a, k, () => source.update(d.snapshot, descs));
+    handle.pullDrawn = p ? { body: a.body, k, pos: p.pos, scale: p.scale } : null;
+    if (p) renderer.setFx(a.body, Uint32Array.of(PULL_HOVER), Float32Array.of(p.scale));
+    else if (k === PULL_SLIDE_STEPS + 1) renderer.setFx(a.body, Uint32Array.of(tintOf(c, a.body)), Float32Array.of(1));
   }
 
   /** Light the block a pull would take (null: none), putting the last one back to its own tint. */
@@ -1039,6 +1077,8 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
       }
     }
     setHover(lit);
+    // A refused pull's hint stays red only while the cursor stays on the block that was refused.
+    if (aimed?.shot.ammo !== 'pull' || aimed.shot.body !== refusedPull) refusedPull = null;
     handle.input.aimed = aimed ? { ...aimed.shot } : null;
   }
 
@@ -1074,9 +1114,14 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
         case 'fired':
           juice.kick(f.ammo === 'cannonball' ? 0.05 : 0.03);
           if (f.ammo === 'pull') {
-            // The block is gone (the renderer skips the tombstone): a puff of dust where it was.
-            const s = driver.snapshot, b = f.body;
+            // The block is gone (the renderer skips the tombstone): a puff of dust where it was, and
+            // (PaceFeel.pullAnim) the block drawn sliding out toward the camera, with a ghost where it stood.
+            const s = driver.snapshot, b = f.body, shape = descs[b]?.shape;
             if (b < s.count) renderer.burst([s.pos[3 * b]!, s.pos[3 * b + 1]!, s.pos[3 * b + 2]!], [0, 1, 0], PULL_PUFF);
+            if (feel.pullAnim && b < s.count && shape?.kind === 'box') {
+              pullAnim = pullAnimFor(b, [s.pos[3 * b]!, s.pos[3 * b + 1]!, s.pos[3 * b + 2]!], [s.rot[4 * b]!, s.rot[4 * b + 1]!, s.rot[4 * b + 2]!, s.rot[4 * b + 3]!], [...shape.half] as [number, number, number], eyeOf(orbit), performance.now());
+              pullStep = driver.engine.stepIndex;
+            }
           }
           break;
         case 'contact': {
@@ -1264,7 +1309,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     if (over) { banner(over, 'crack'); return false; }
     const timed = shot.after !== undefined && driver.session.strokes > 0;
     if (!timed && !aimable()) return false;
-    if (shot.ammo === 'pull' && driver.session.pullRefusal(shot.body) !== null) return false;
+    if (shot.ammo === 'pull' && driver.session.pullRefusal(shot.body) !== null) { refusedPull = shot.body; return false; }
     if (shot.ammo === 'plunger' && driver.session.plungerRefusal(shot) !== null) return false;
     // Without rapid fire a click mid-step is refused, as before; with it, or for a line's timed shot, it waits for the step.
     if (stepping || timed || waiting.length) {
@@ -1580,7 +1625,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
       heritageBroken: s.heritageBroken.reduce((a, x) => a + x, 0), heritageTotal: c.meta.heritage.length,
       chips: chipsNow(), power, launch: (launchNow() / 4) * c.frame.unit, leverage: { round: s.roundLeverageNow(), shot: s.liveLeverage }, phase: s.phase,
       reachable: aimed ? aimed.reachable : null,
-      pullRefused: aimed?.shot.ammo === 'pull' && !aimed.reachable,
+      pullRefused: aimed?.shot.ammo === 'pull' && !aimed.reachable && (aimed.shot.body === refusedPull ? 'tapped' : true),
       collapse: s.liveCollapse, pulled: s.pulledShare(), met: s.objectiveDone, canBank: !stepping && regrowT === null && s.canBank(), pace: handle.pace.tag,
       opener: !stepping && regrowT === null && s.phase === 'aiming' && openerNow() !== null, ticks,
       // While the turn view swings or the hand-over card shows, the aim is the old side's: no refusal, cue or warning (PT5's red line mid-swing).
@@ -1599,6 +1644,12 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
   const frames = new FrameGovernor(feel.frames);
   let pendingCapture: { resolve: (s: PixelStats | null) => void; keep: boolean } | null = null;
   handle.capture = (keep = false) => new Promise((resolve) => { pendingCapture = { resolve, keep }; });
+  handle.coverage = (body) => exclusive(async () => {
+    const r = await renderer.renderIds({ viewProj: viewProj(orbit, aspect()), eye: eyeOf(orbit), focus: orbit.target, groundY: 0, alpha: 1 });
+    let n = 0;
+    for (const id of r.ids) if (id === body + 1) n++;
+    return n;
+  });
 
   const tick = async () => {
     const now = performance.now(), frameMs = now - last;
@@ -1643,12 +1694,19 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     // The player to fire's arc on the ground, between shots (and the aim's beads over it).
     const arc = duel && feel.arcs && !duel.result.over && duel.shooter === null ? arcs[duel.turn] ?? null : null;
     arcBeadsDrawn = arc?.colours.length ?? 0;
-    const o = joinOverlays(beads ? beadOverlay(beads, aimed?.reachable ?? true) : null, arc);
+    const ghost = pullAnim ? ghostOutline(pullAnim, now - pullAnim.at) : null;
+    const o = joinOverlays(beads ? beadOverlay(beads, aimed?.reachable ?? true) : null, arc, ghost);
     renderer.reach(ring?.centre ?? null, ring?.radius ?? 0);
     fadeSpent(now);
     renderer.setOverlay(o?.xyzr ?? new Float32Array(0), o?.colours);
     pendingCapture = null;
-    const fp = { viewProj: viewProj(view, aspect()), eye: eyeOf(view), focus: orbit.target, time: now / 1000, groundY: 0, alpha: running ? alphaAt(arrivals, now, 1000 * c.scene.dt) : 1 };
+    // Bullet Time's frozen look: the grade eases in and out, the sparks dim and hang (dt 0) while frozen.
+    const frozenLook = frozen && feel.frozenLook;
+    frozenGrade = easeGrade(frozenGrade, frozenLook ? 1 : 0, dt);
+    renderer.freezeFx = freezeFxOf(frozenGrade);
+    handle.frozenGrade = frozenGrade;
+    frozenLabel.classList.toggle('on', frozenLook);
+    const fp = { viewProj: viewProj(view, aspect()), eye: eyeOf(view), focus: orbit.target, time: now / 1000, groundY: 0, alpha: running ? alphaAt(arrivals, now, 1000 * c.scene.dt) : 1, ...(frozenLook ? { dt: 0 } : {}) };
     // Offscreen (tests), nobody sees a frame and nothing throttles requestAnimationFrame
     // to the GPU: on SwiftShader a frame takes up to a second, so frames would queue
     // without bound and every readback (a step's, a replay's) wait behind them.
@@ -1700,7 +1758,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
       fireDue();
       spawned('bomb');
       if (red && feel.tailSkip && d.session.phase === 'running') tail.update(red.nMoving, c.meta.n, d.session.liveCollapse);
-      source.update(d.snapshot, descs);
+      uploadSnapshot(d);
       collapse?.frame(d.snapshot, descs, eyeOf(orbit), orbit.target);
       arrived(arrivals, performance.now(), 1000 * c.scene.dt);
       // Steps run between frames: mirror what this one changed (phase, strokes) now, so the handle

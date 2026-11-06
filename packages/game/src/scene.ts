@@ -4,7 +4,7 @@
 // arc-preview beads as overlay spheres. Everything here is pure data for
 // Renderer.setFx / setOverlay; none of it reaches the physics.
 import { type CompiledLevel, itemRef, type LevelDef, MATERIALS, type RackItem, weaponOf } from '@tb/keystone';
-import { type EffectStyle, type FxOptions, MARK_HIT, MARK_NONE, MARK_SAVE, type MarkId, srgbToLinear } from '@tb/render';
+import { type EffectStyle, type FxOptions, MARK_HIT, MARK_KEEP, MARK_NONE, MARK_SAVE, type MarkId, srgbToLinear } from '@tb/render';
 import { isWeaponSpec, type MunitionSpec, PROJECTILE_PRESETS } from '@tb/weapons';
 
 /** Linear rgb (0..1) and emissive (0..1) to the renderer's bulk tint word: r low byte, emissive high byte. */
@@ -136,13 +136,14 @@ export function tintOf(c: CompiledLevel, i: number): number {
 
 /**
  * The glyph carved on structure body i (Renderer.setMarks; PaceFeel.marks): a crosshair (hit) on a crown, which
- * the level asks the player to bring down, and a shield (save) on heritage, which must stay intact, and on a
- * crown under a hold objective (Undercut's Hollow), which must stay up: there the crown's gold says nothing
- * of which way it goes, and the carving does. Plain blocks carry none.
+ * the level asks the player to bring down, a shield (save) on heritage, which must stay intact, and a crown
+ * (keep) on a crown under a hold objective (Undercut's Hollow), which must stay up: there the crown's gold says
+ * nothing of which way it goes, and the carving does, in a glyph of its own (playtest PT17: the shield it carried
+ * before read as heritage). Plain blocks carry none.
  */
 export function markOf(c: CompiledLevel, i: number): MarkId {
   const role = c.meta.role[i];
-  if (role === 1) return c.def.objective.kind === 'hold' ? MARK_SAVE : MARK_HIT;
+  if (role === 1) return c.def.objective.kind === 'hold' ? MARK_KEEP : MARK_HIT;
   if (role === 2) return MARK_SAVE;
   return MARK_NONE;
 }
