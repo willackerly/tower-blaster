@@ -86,19 +86,36 @@ shot from the level's own launcher (2 h) and from the game's default high launch
 top). Stars are for that one shot; "old" is the rule before 2026-11-06. Full output:
 `/mnt/project-files/stars/one-shot-audit-ref.txt` and `.json`.
 
-Results so far (the rest of the sweep fills in as it lands; L2's ~40 s per reference play makes it
-the long pole):
+| Level | Launch | One-shot clears | Breaking heritage | Clean leverage P25/P50/P75 (lGold) | Old ★★ / ★★★ | New ★★ / ★★★ | Gold badge |
+|---|---|---|---|---|---|---|---|
+| L1 (par 1) | its own, 2 h | 0 of 128 | – | – (0.71) | – | – | – |
+| L1 | high, 12 h | 0 of 128 | – | – | – | – | – |
+| L2 (par 1) | 2 h | 58 of 408 | 32 | 1.84/2.24/2.41 (1.5) | 32 / 26 | 32 / 26 | 26 |
+| L2 | high, 15.25 h | 95 of 408 | 38 | 2.23/2.65/3.86 | 38 / 57 | 38 / 57 | 57 |
+| L3 (par 2: these are aces) | 2 h | 12 of 144 | 12 | – (1.3) | 12 / 0 | 12 / 0 | 0 |
+| L3 | high, 10 h | 10 of 144 | 10 | – | 10 / 0 | 10 / 0 | 0 |
+| L4 (par 1, anvil drops) | drop | 7 of 171 | 0 | 0.17/0.18/0.19 (0.18) | 3 / 4 | 0 / 7 | 4 |
+| L4 | high, 8 h | 0 of 120 (launched balls) | – | – | – | – | – |
+| L5 (par 1) | 2 h | 95 of 240 | 0 | 0.58/1.01/5.83 (5) | 66 / 29 | 0 / 95 | 29 |
+| L5 | high, 11 h | 89 of 240 | 0 | 0.53/1.25/5.98 | 62 / 27 | 0 / 89 | 27 |
 
-| Level | Launch | One-shot clears | Old ★ 1/2/3 | New ★ 1/2/3 | Gold badge |
-|---|---|---|---|---|---|
-| L1 (par 1) | its own, 2 h | 0 of 128 | – | – | – |
-| L1 | high, 12 h | 0 of 128 | – | – | – |
-| L4 (par 1, anvil, `--every 8 --powers 100`) | drop | 7 of 103 | 0/3/4 | 0/0/7 | 4 |
+Across the levels, 274 one-shot clears broke no heritage. The old rule gave 131 of them (48%) ★★. The new rule gives all 274 ★★★, and the 143 the old rule rated ★★★ all carry the gold badge.
+Every ★★ left is a clear that broke heritage, under both rules.
 
-L1's candidates aim at cell centres, and its par line hits the seam between columns, which they
-never try (findings.md); the par line itself, played on its own: one shot, leverage 0.707,
-old ★★, new ★★★. On L4, three of the seven clean one-anvil clears (all at par) fell under the 0.18
-line (their leverage quartiles 0.17/0.18/0.19) and got ★★ under the old rule.
+- **L5 is where the old rule bit hardest**: 128 of 184 clean one-shot clears (70%) got ★★. A marble
+  straight into the crown column clears at leverage 0.5 to 1; lGold 5 comes from the par line's
+  neighbours, which topple more columns (the par line itself scores 12). The level's idea, the
+  domino chain, still earns the badge.
+- **L1:** no candidate clears in one shot from either height. Candidates aim at cell centres, and
+  the par line hits the seam between two columns, which they never try (findings.md). The par line
+  played alone: one shot, leverage 0.707, old ★★, new ★★★.
+- **L2:** every clean one-shot clear was already over lGold; what costs a star there is the
+  pavilion (heritage). The high launcher finds more clears (95 against 58) at higher leverage,
+  plausibly in part from the launch height's potential energy, which leverage does not charge.
+- **L3:** the only aces found break the heritage cubes beside the crowns: ★★ under both rules.
+  No clean ace was found, so par 2 stands.
+- **Pars:** in this candidate grid no level has a clean clear in fewer strokes than its par from either launcher, so
+  none is re-derived.
 
 ## Outcome levels
 
