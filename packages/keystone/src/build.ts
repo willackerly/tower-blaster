@@ -9,7 +9,7 @@ import type { Vec3 } from '@tb/engine-api';
 import { compileLevel, type CompiledLevel, type LevelDef, type Part, type PiecePart, pitchOf, type RunPart, unitOf } from './level.ts';
 import type { MaterialName } from './materials.ts';
 import { axisOf, type Hit, normDeg, type Obb, obbOfBody, obbOverlap, PlacementIndex, type Ray, snapPlace, type SnapOptions, yawQuat } from './placement.ts';
-import { DOMINO_HALF, DOMINO_PITCH, headingQuat, type P2, runPoses } from './stroke.ts';
+import { DOMINO_HALF, DOMINO_PITCH, type P2, runPoses } from './stroke.ts';
 
 /** One box of a stamp: its centre in the stamp's frame and its half-extents, in h. */
 export interface StampBox { at: Vec3; half: Vec3 }
@@ -272,7 +272,7 @@ export class BuildSession {
     const world = this.world(), tol = TOUCH * h, boxes: Obb[] = [], clash: boolean[] = [];
     const hm = half.map((x) => x * h) as Vec3;
     for (const p of poses) {
-      const b: Obb = { c: [p.x * h, hm[1], p.z * h], q: headingQuat(p.heading), half: hm };
+      const b: Obb = { c: [p.x * h, hm[1], p.z * h], q: p.rot, half: hm };
       const c = world.clashes(b, tol, 0);
       // Against the run's own dominoes kept so far: a hook too tight for the pitch drops the ones that would cross.
       let bad = c.bodies.length > 0 || c.ground;

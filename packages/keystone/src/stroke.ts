@@ -13,14 +13,21 @@
 //
 // The brush stores the path, not the dominoes (RunPart in level.ts): a run of
 // 1,000 is a few hundred numbers in a level file, and compiling it is this
-// pure function, so the level hash covers the run exactly.
+// pure function, so the level hash covers the run exactly. It uses only
+// + - * / and sqrt, which IEEE 754 rounds exactly on every JS engine: Math.sin,
+// cos and atan2 do not (V8 in Node and in Chromium differ in the last bit), and
+// a run's bodies join the level hash, so the same level file must give the same
+// bodies in Node, Chrome and Safari.
 import type { Vec3 } from '@tb/engine-api';
 
 /** A point on the ground plane, (x, z). */
 export type P2 = [number, number];
 
-/** A domino's centre on the ground plane and the direction it faces (radians; local +z turns to (sin, cos)). */
-export interface RunPose { x: number; z: number; heading: number }
+/**
+ * A domino's centre on the ground plane, the direction it faces (dir, not unit: the chord between its neighbours;
+ * local +z turns to it) and its rotation (dirQuat of dir).
+ */
+export interface RunPose { x: number; z: number; dir: P2; rot: [number, number, number, number] }
 
 /** Where the segment a -> b first meets the circle of radius r about c, as a fraction of the segment in [from, 1], or null. */
 function segmentCircle(a: P2, b: P2, c: P2, r: number, from: number): number | null {
@@ -68,13 +75,28 @@ export function runPoses(path: readonly P2[], pitch: number): RunPose[] {
   const c = runCentres(path, pitch);
   return c.map((p, i) => {
     const a = c[Math.max(0, i - 1)]!, b = c[Math.min(c.length - 1, i + 1)]!;
-    const dx = b[0] - a[0], dz = b[1] - a[1];
-    return { x: p[0], z: p[1], heading: dx === 0 && dz === 0 ? 0 : Math.atan2(dx, dz) };
+    const dir: P2 = [b[0] - a[0], b[1] - a[1]];
+    return { x: p[0], z: p[1], dir, rot: dirQuat(dir[0], dir[1]) };
   });
 }
 
-/** Rotation about +y by `heading` radians (local +z to (sin, 0, cos)). */
-export const headingQuat = (heading: number): [number, number, number, number] => (heading === 0 ? [0, 0, 0, 1] : [0, Math.sin(heading / 2), 0, Math.cos(heading / 2)]);
+/**
+ * The rotation about +y taking local +z to the direction (dx, 0, dz) (identity for no direction), from the
+ * half-angle identities with sqrt and division only (see the head of this file): with c = cos psi, s = sin psi,
+ * cos(psi / 2) = sqrt((1 + c) / 2) and sin(psi / 2) = s / (2 cos(psi / 2)) while c >= 0, and the other way
+ * round (sin first, signed as s) past a right angle, so neither divides by a small number.
+ */
+export function dirQuat(dx: number, dz: number): [number, number, number, number] {
+  const len = Math.sqrt(dx * dx + dz * dz);
+  if (len === 0 || (dx === 0 && dz > 0)) return [0, 0, 0, 1];
+  const c = dz / len, s = dx / len;
+  if (c >= 0) { const w = Math.sqrt((1 + c) / 2); return [0, s / (2 * w) + 0, 0, w]; }
+  const y = s < 0 ? -Math.sqrt((1 - c) / 2) : Math.sqrt((1 - c) / 2);
+  return [0, y, 0, s / (2 * y) + 0];
+}
+
+/** A run pose's heading, radians (local +z turned to (sin, cos)): for reading and tests; geometry uses rot. */
+export const headingOf = (p: RunPose): number => (p.dir[0] === 0 && p.dir[1] === 0 ? 0 : Math.atan2(p.dir[0], p.dir[1]));
 
 /**
  * A pointer path made a brush path: points closer than `minStep` to the last kept one dropped (the

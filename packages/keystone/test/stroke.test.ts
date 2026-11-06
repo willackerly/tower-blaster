@@ -2,7 +2,7 @@
 // line and a curve, each facing along the path, from a smoothed pointer path,
 // and a run part compiling to those dominoes.
 import { describe, expect, it } from 'vitest';
-import { compileLevel, DOMINO_HALF, DOMINO_PITCH, headingQuat, type LevelDef, type P2, pathLength, runCentres, runPoses, smoothStroke, validateLevel } from '@tb/keystone';
+import { compileLevel, dirQuat, DOMINO_HALF, DOMINO_PITCH, headingOf, type LevelDef, type P2, pathLength, runCentres, runPoses, smoothStroke, validateLevel } from '@tb/keystone';
 
 /** A circular arc of radius r about (0, 0) from angle a0 to a1 (radians, measured from +z toward +x), as a fine polyline. */
 function arc(r: number, a0: number, a1: number, n = 720): P2[] {
@@ -10,13 +10,52 @@ function arc(r: number, a0: number, a1: number, n = 720): P2[] {
 }
 const dist = (a: P2, b: P2) => Math.hypot(a[0] - b[0], a[1] - b[1]);
 
+const base: LevelDef = {
+  id: 'RUN', name: 'run', version: 1, world: 0, lot: { min: [-12, -12], max: [12, 12] }, crownLine: 1, objective: { kind: 'crowns' }, par: 1,
+  rack: ['marble'], launcher: { radius: 14, y: 1, dropY: 8 }, parts: [],
+};
+
+describe('dirQuat: a run\'s rotations without trig', () => {
+  const trig = (dx: number, dz: number) => { const a = Math.atan2(dx, dz) / 2; return [0, Math.sin(a), 0, Math.cos(a)]; };
+  it('is exact on the axes, unit, and the trig rotation to within 2 ulp-ish (1e-15) all round', () => {
+    const r = Math.SQRT1_2;
+    expect(dirQuat(0, 1)).toEqual([0, 0, 0, 1]);
+    expect(dirQuat(0, 0)).toEqual([0, 0, 0, 1]);
+    expect(dirQuat(0, 5)).toEqual([0, 0, 0, 1]);
+    expect(dirQuat(0, -1)).toEqual([0, 1, 0, 0]);
+    expect(dirQuat(1, 0)[1]).toBeCloseTo(r, 15);
+    expect(dirQuat(-1, 0)[1]).toBeCloseTo(-r, 15);
+    for (let k = 0; k < 3600; k++) {
+      const a = (k / 3600) * 2 * Math.PI - Math.PI + 1e-7, dx = 3 * Math.sin(a), dz = 3 * Math.cos(a), q = dirQuat(dx, dz), t = trig(dx, dz);
+      expect(Math.abs(Math.hypot(...q) - 1)).toBeLessThan(1e-15);
+      // q and -q are the same rotation: compare up to sign.
+      const sgn = q[3] * t[3]! + q[1] * t[1]! < 0 ? -1 : 1;
+      for (let j = 0; j < 4; j++) expect(Math.abs(q[j]! - sgn * t[j]!)).toBeLessThan(1e-15);
+    }
+  });
+
+  it('compiling a run calls no Math.sin, cos or atan2 (whose last bit differs between JS engines; the bodies join the level hash)', () => {
+    const path: P2[] = Array.from({ length: 200 }, (_, i) => [Number((6 * Math.cos(i / 60)).toFixed(3)), Number((6 * Math.sin(i / 60)).toFixed(3))]);
+    const def: LevelDef = { ...base, parts: [{ kind: 'run', path, pitch: DOMINO_PITCH, half: [...DOMINO_HALF], material: 'plaster' }] };
+    const saved = { sin: Math.sin, cos: Math.cos, atan2: Math.atan2 };
+    const boom = () => { throw new Error('trig in a run\'s compile'); };
+    Object.assign(Math, { sin: boom, cos: boom, atan2: boom });
+    try {
+      expect(runPoses(path, DOMINO_PITCH).length).toBeGreaterThan(5);
+      expect(compileLevel(def).meta.n).toBeGreaterThan(5);
+    } finally {
+      Object.assign(Math, saved);
+    }
+  });
+});
+
 describe('stroke brush spacing', () => {
   it('a straight path: dominoes every pitch from its start, as many as fit', () => {
     const c = runCentres([[0, 0], [0, 10]], 1.2);
     expect(c.length).toBe(Math.floor(10 / 1.2) + 1);
     c.forEach((p, i) => { expect(p[0]).toBe(0); expect(p[1]).toBeCloseTo(1.2 * i, 12); });
     const poses = runPoses([[0, 0], [0, 10]], 1.2);
-    expect(poses.every((p) => p.heading === 0)).toBe(true);
+    expect(poses.every((p) => headingOf(p) === 0 && p.rot.join() === '0,0,0,1')).toBe(true);
     expect(runCentres([[0, 0]], 1)).toEqual([[0, 0]]);
     expect(runCentres([], 1)).toEqual([]);
     expect(() => runCentres([[0, 0], [1, 0]], 0)).toThrow(/pitch/);
@@ -35,7 +74,7 @@ describe('stroke brush spacing', () => {
         expect(Math.hypot(p.x, p.z)).toBeLessThanOrEqual(r + 1e-12);
         if (i === 0 || i === poses.length - 1) continue; // the ends face their one neighbour
         const a = Math.atan2(p.x, p.z), tangent = a + Math.PI / 2;
-        const err = Math.atan2(Math.sin(p.heading - tangent), Math.cos(p.heading - tangent));
+        const err = Math.atan2(Math.sin(headingOf(p) - tangent), Math.cos(headingOf(p) - tangent));
         expect(Math.abs(err)).toBeLessThan((0.2 * Math.PI) / 180);
       }
     }
@@ -60,10 +99,6 @@ describe('stroke brush spacing', () => {
 });
 
 describe('run part', () => {
-  const base: LevelDef = {
-    id: 'RUN', name: 'run', version: 1, world: 0, lot: { min: [-12, -12], max: [12, 12] }, crownLine: 1, objective: { kind: 'crowns' }, par: 1,
-    rack: ['marble'], launcher: { radius: 14, y: 1, dropY: 8 }, parts: [],
-  };
   const path = arc(10, -Math.PI / 2, Math.PI / 2, 200).map(([x, z]) => [Number(x.toFixed(3)), Number(z.toFixed(3))] as P2);
 
   it('compiles to the brush\'s dominoes, standing on the ground, turned to their headings, omits left out', () => {
@@ -73,7 +108,7 @@ describe('run part', () => {
     const kept = poses.filter((_, i) => i !== 2);
     c.scene.bodies.forEach((b, i) => {
       expect(b.pos).toEqual([kept[i]!.x * h, DOMINO_HALF[1] * h, kept[i]!.z * h]);
-      expect(b.rot).toEqual(headingQuat(kept[i]!.heading));
+      expect(b.rot).toEqual(kept[i]!.rot);
       expect(b.shape).toEqual({ kind: 'box', half: DOMINO_HALF.map((x) => x * h) });
     });
     // The curve's neighbours' AABBs cross, but as turned boxes they are apart: no overlap issue.

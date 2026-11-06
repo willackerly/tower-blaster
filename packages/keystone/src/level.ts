@@ -12,7 +12,7 @@ import { ammoBody, type LauncherDef, launcherPos, type Shot, type ShotFrame } fr
 import { checkIce, type IceBlock, IceBreaker, iceOf } from './ice.ts';
 import type { BuildDef } from './build.ts';
 import { obbAabb, obbOfBody, obbOverlap, yawQuat } from './placement.ts';
-import { headingQuat, runPoses } from './stroke.ts';
+import { runPoses } from './stroke.ts';
 
 /** A course (layer) override inside a block: change material or role, or leave cells out. */
 export interface CourseOverride {
@@ -353,7 +353,7 @@ export function compileLevel(def: LevelDef): CompiledLevel {
       const role = part.role ?? 'plain', half = part.half.map((x) => x * h) as Vec3, y = ((part.y ?? 0) + part.half[1]) * h;
       const omit = new Set(part.omit ?? []);
       runPoses(part.path, part.pitch).forEach((d, i) => {
-        if (!omit.has(i)) add(body([d.x * h, y, d.z * h], half, part.material, role, pi, headingQuat(d.heading)), role, part.material, pi);
+        if (!omit.has(i)) add(body([d.x * h, y, d.z * h], half, part.material, role, pi, d.rot), role, part.material, pi);
       });
     } else {
       const half = part.half.map((x) => x * h) as Vec3;
