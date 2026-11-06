@@ -6,6 +6,7 @@
 // them. lGold is the lower quartile of the leverage the par line's clean
 // neighbours on the nudge grid reach (pnpm keystone:par).
 import { BIG_LEVELS } from './big-levels.ts';
+import { TRIAL_LEVELS } from './trial-levels.ts';
 import { UNDERCUT_LEVELS } from './undercut-levels.ts';
 import type { LevelDef } from './level.ts';
 
@@ -93,22 +94,30 @@ export const L5: LevelDef = {
 /** The chamber levels, scored on par (the game's default series). */
 export const LEVELS: readonly LevelDef[] = [L1, L2, L3, L4, L5];
 
-/** Every built-in level's series: the chamber levels (L1 to L5), the big levels (B1 on) and Undercut's (U1 on). A level plays on into the rest of its own series. */
-export const SERIES: readonly (readonly LevelDef[])[] = [LEVELS, BIG_LEVELS, UNDERCUT_LEVELS];
+/**
+ * Every built-in level's series: the chamber levels (L1 to L5), the big levels (B1 on), Undercut's (U1 on)
+ * and the trials (T-..., unrated: trial-levels.ts). A level plays on into the rest of its own series.
+ */
+export const SERIES: readonly (readonly LevelDef[])[] = [LEVELS, BIG_LEVELS, UNDERCUT_LEVELS, TRIAL_LEVELS];
+
+/** Each series' title, in SERIES order (the game's door heads its sections with them). */
+export const SERIES_TITLES: readonly string[] = ['Chamber', 'Spectacle', 'Undercut', 'Trials · unrated'];
+
+const sameId = (a: string, b: string) => a.toUpperCase() === b.toUpperCase();
 
 /** The series holding the built-in level with this id (any case), or undefined. */
 export function seriesOf(id: string): readonly LevelDef[] | undefined {
-  return SERIES.find((s) => s.some((l) => l.id === id.toUpperCase()));
+  return SERIES.find((s) => s.some((l) => sameId(l.id, id)));
 }
 
-/** A built-in level (chamber or big) by id, any case, or undefined. */
+/** A built-in level (chamber, big, Undercut or trial) by id, any case, or undefined. */
 export function findLevel(id: string): LevelDef | undefined {
-  return seriesOf(id)?.find((l) => l.id === id.toUpperCase());
+  return seriesOf(id)?.find((l) => sameId(l.id, id));
 }
 
-/** A built-in level (chamber or big) by id, any case; throws naming the known ones. */
+/** A built-in level by id, any case; throws naming the known ones (the rated ones, then how many trials). */
 export function levelById(id: string): LevelDef {
   const def = findLevel(id);
-  if (!def) throw new Error(`unknown level ${id.toUpperCase()}; known: ${SERIES.flat().map((l) => l.id).join(', ')}`);
+  if (!def) throw new Error(`unknown level ${id.toUpperCase()}; known: ${SERIES.slice(0, -1).flat().map((l) => l.id).join(', ')} and ${TRIAL_LEVELS.length} trials (${TRIAL_LEVELS[0]!.id} to ${TRIAL_LEVELS.at(-1)!.id})`);
   return def;
 }
