@@ -291,5 +291,6 @@
   "packages/weapons/test/grenade.test.ts": 0.6,
   "packages/weapons/test/runtime.test.ts": 2.7,
   "packages/weapons/test/spec.test.ts": 0.1,
-  "packages/weapons/test/yield.test.ts": 0.1
+  "packages/weapons/test/yield.test.ts": 0.1,
+  "packages/game/test/coats-e2e.test.ts": 60.0
 }

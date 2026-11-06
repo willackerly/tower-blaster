@@ -6,6 +6,7 @@ import { defineStruct, FxState, RenderRecord, Spark, wgslStruct } from '@tb/sche
 import { BAND_HALF, FX_BAND, FX_EMISSIVE_MAX, FX_MATTE, FX_PAINT, FX_WGSL } from './fx.ts';
 import { BEVEL_WGSL, OKLAB_WGSL } from './look.ts';
 import { MARKS_WGSL } from './marks.ts';
+import { COAT_GILT, COAT_WGSL } from './coats.ts';
 import { SPARK_COMMON } from './sparks.ts';
 import { LIGHT_META, LIGHT_PACKED, LIGHT_VEC4, MAX_BALLS, TRAIL } from './lights.ts';
 import { AO_FOOT_WGSL, AO_SAMPLE_WGSL, AO_SEAM_WGSL } from './ao.ts';
@@ -70,6 +71,14 @@ export const Frame = defineStruct('Frame', [
 
 /** Linear specular colour (F0) of steel (iron's, Real-Time Rendering 4th ed. table 9.2). */
 export const STEEL_F0: [number, number, number] = [0.56, 0.57, 0.58];
+/** Gold leaf's specular colour (linear F0, Real-Time Rendering 4th ed., table 9.2): a gilded crown in the real look (R8, coats.ts COAT_GILT). */
+export const GILT_F0: [number, number, number] = [1.0, 0.71, 0.29];
+/** The gold leaf's GGX roughness (perceptual): burnished, not a mirror (0.2 shows the horizon as a line across a face, 0.45 reads as paint). */
+export const GILT_ROUGH = 0.26;
+/** How much of a gilded face the leaf covers away from the edges; worn edges (the stone's wear band) show the stone and its gold mordant. */
+export const GILT_COVER = 0.9;
+/** The share of a crown's steady glow a gilded crown keeps in the real look (the leaf catches the light itself). */
+export const GILT_GLOW = 0.3;
 
 // The real look's sky (atmosphere.ts): bind group 1, read by the scene
 // shader only when it is generated for that look (sceneWgsl(true)).
@@ -687,7 +696,11 @@ const REAL_SKY_AMBIENT = '(atmoAmbient[0].rgb + fr.groundShape.z * atmoAmbient[1
 // a dielectric's.
 const REAL_STEEL = /* wgsl */ `
 fn shadeSteel(rel: vec3f, n: vec3f, a: f32, ao: vec2f) -> vec3f {
-  let f0 = vec3f(${STEEL_F0.join(', ')});
+  return shadeMetal(rel, n, a, ao, vec3f(${STEEL_F0.join(', ')}));
+}
+
+// Bare metal of specular colour f0: the sun's GGX lobe and the environment's split sum (a steel ball, a gilded crown).
+fn shadeMetal(rel: vec3f, n: vec3f, a: f32, ao: vec2f, f0: vec3f) -> vec3f {
   let V = normalize(-rel);
   let NoV = max(dot(n, V), 1e-4);
   let L = fr.sun;
@@ -729,7 +742,10 @@ const REAL_FS_BOX = /* wgsl */ `fragPx = v.clip.xy;
     let wear = fr.stone.z * (1.0 - smoothstep(0.0, 0.01 + 0.03 * (1.0 - st.cavity) + 0.01 * fr.stone.z, edgeM));
     let y = v.rel.y + fr.eye.y - fr.groundY;
     let dirt = fr.stone.w * (1.0 - smoothstep(0.0, 2.5, y));
-    var base = realAlbedo(v.look, v.slot) * st.albedo * mix(1.0, st.cavity, 0.6) * fxTint(w.x) * carve.shade;
+    // A coat (coats.ts) is the block's own colour in place of the palette's.
+    let coat = coatOf(w.y);
+    let own = select(realAlbedo(v.look, v.slot), coatAlbedo(coat), coat != 0u);
+    var base = own * st.albedo * mix(1.0, st.cavity, 0.6) * fxTint(w.x) * carve.shade;
     base = mix(base, base * 1.2, wear) * (1.0 - 0.35 * dirt);
     // Toksvig: bumps averaged away by the mips widen the lobe instead.
     let a = st.rough * st.rough;
@@ -738,8 +754,18 @@ const REAL_FS_BOX = /* wgsl */ `fragPx = v.clip.xy;
     let wPx = SEAM / max(pxM, 1e-6);
     let drawn = max(wPx, 0.75);
     let seam = 1.0 - 0.4 * min(1.0, wPx / 0.75) * (1.0 - smoothstep(drawn - 0.5, drawn + 0.5, edgeM / max(pxM, 1e-6)));
-    var c = shade(base * seam, v.rel, n, aaAlpha(alpha, n, dndx, dndy), aaAlpha(0.0049, n, dndx, dndy), 0.0, aoBox(v, n, lp, faceN, aoPxM));
-    c += base * seam * fxGlow(w, fr.time);
+    let aoB = aoBox(v, n, lp, faceN, aoPxM);
+    var c = shade(base * seam, v.rel, n, aaAlpha(alpha, n, dndx, dndy), aaAlpha(0.0049, n, dndx, dndy), 0.0, aoB);
+    // Gilded (R8): gold leaf over the stone, its relief showing through; the worn edges show the stone and its mordant.
+    if (coat == ${COAT_GILT}u) {
+      let leaf = ${GILT_COVER} * (1.0 - wear) * carve.shade;
+      let gold = shadeMetal(v.rel, n, aaAlpha(${GILT_ROUGH * GILT_ROUGH}, n, dndx, dndy), aoB, vec3f(${GILT_F0.join(', ')}) * fxTint(w.x)) * seam;
+      c = mix(c, gold, leaf);
+    }
+    // A gilded crown's steady glow (the game's CROWN_GLOW) would flatten the leaf to a printed plate: the leaf
+    // keeps GILT_GLOW of it; a flash (a felled crown) glows in full.
+    let steadyGilt = coat == ${COAT_GILT}u && bitcast<f32>(w.w) <= 0.0;
+    c += base * seam * fxGlow(w, fr.time) * select(1.0, ${GILT_GLOW}, steadyGilt);
     return vec4f(fog(c, v.rel), 1.0);
   }
   `;
@@ -925,6 +951,7 @@ ${OKLAB_WGSL}
 ${BEVEL_WGSL}
 ${FX_WGSL}
 ${MARKS_WGSL}
+${COAT_WGSL}
 
 fn qrot(q: vec4f, v: vec3f) -> vec3f {
   let t = 2.0 * cross(q.xyz, v);
@@ -1212,9 +1239,11 @@ fn boxFace(local: vec3f, w: vec3f) -> vec3f {
   let n = qrot(v.rot, select(nb, normalize(nb + carve.dn), any(carve.dn != vec3f(0.0))));
   let dndx = dpdx(n);
   let dndy = dpdy(n);
-  let isCandy = material(v.look) == 0u;
+  // A coat (coats.ts) is the block's own colour in place of the palette's, finished as the look's own blocks.
+  let coat = coatOf(w.y);
+  let isCandy = material(v.look) == 0u || coat != 0u;
   let rough = select(0.7, fr.roughness, isCandy);
-  let base = select(vec3f(0.35), albedo(v.look), isCandy) * fxTint(w.x) * carve.shade;
+  let base = select(select(vec3f(0.35), albedo(v.look), isCandy), coatAlbedo(coat), coat != 0u) * fxTint(w.x) * carve.shade;
   // A thin dark seam (SEAM m wide on each cube) keeps neighbours in a packed
   // tower apart. Antialiased in pixels and faded out once it is narrower
   // than a pixel, where a hard line would alias into dashes.

@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { compileLevel, L1, L2, L3, U3 } from '@tb/keystone';
-import { MARK_HIT, MARK_NONE, MARK_SAVE, tintWord, unpackFx } from '@tb/render';
+import { compileLevel, L1, L2, L3, TRIAL_LEVELS, U3 } from '@tb/keystone';
+import { COAT_GILT, COAT_GLAZE, COAT_NONE, MARK_HIT, MARK_NONE, MARK_SAVE, tintWord, unpackFx } from '@tb/render';
 import { PROJECTILE_PRESETS } from '@tb/weapons';
-import { BALL_PAINT, ballFx, BOMB_FX, markOf, structureMarks } from '../src/scene.ts';
+import { BALL_PAINT, ballFx, BOMB_FX, coatOf, markOf, roleTint, structureCoats, structureMarks } from '../src/scene.ts';
 import { BEAD_COLOUR, BEAD_OUT_COLOUR, BEAD_RADIUS, beadOverlay, rgbe, CROWN_GLOW, easeOut, regrowDuration, regrowScale, regrowScales, structureTints, TARGET_SCALE, TINT, tintOf, tintWordOf } from '../src/scene.ts';
 
 /** What the renderer will see for a bulk tint word. */
@@ -41,9 +41,9 @@ describe('tints', () => {
     expect(fx.emissive).toBeCloseTo(64 / 255, 9);
     expect(fx.scale).toBe(1);
   });
-  it('crowns are gold and glow, heritage celadon, then by material', () => {
+  it('without coats: crowns are gold and glow, heritage celadon, then by material', () => {
     const c = compileLevel(L2);
-    const t = structureTints(c);
+    const t = structureTints(c, false);
     expect(t).toHaveLength(c.meta.n);
     for (const i of c.meta.crowns) {
       const fx = decoded(t[i]!);
@@ -54,6 +54,39 @@ describe('tints', () => {
     const slab = c.scene.bodies.findIndex((b) => b.shape.kind === 'box' && b.shape.half[0] > 1);
     expect(decoded(tintOf(c, slab)).tint[0]).toBeLessThan(0.7); // stone is darker
     expect(decoded(tintOf(c, 0)).tint).toEqual([1, 1, 1]); // plaster: no tint
+  });
+  it('with coats (the default): crowns and heritage untinted, their colour is the coat; crowns still glow; materials unchanged', () => {
+    const c = compileLevel(L2), on = structureTints(c), off = structureTints(c, false);
+    for (const i of c.meta.crowns) { const fx = decoded(on[i]!); expect(fx.tint).toEqual([1, 1, 1]); expect(fx.emissive).toBeCloseTo(CROWN_GLOW, 2); }
+    for (const i of c.meta.heritage) expect(decoded(on[i]!).tint).toEqual([1, 1, 1]);
+    for (let i = 0; i < c.meta.n; i++) if (c.meta.role[i] === 0) expect(on[i], `slot ${i}`).toBe(off[i]);
+  });
+});
+
+describe('coats (coatOf, structureCoats, roleTint)', () => {
+  it('L3: crowns gilt, heritage glaze, the rest none; off: none at all', () => {
+    const c = compileLevel(L3), k = structureCoats(c);
+    expect(k.length).toBe(c.meta.n);
+    for (let i = 0; i < c.meta.n; i++) expect(k[i], `slot ${i}`).toBe(c.meta.role[i] === 1 ? COAT_GILT : c.meta.role[i] === 2 ? COAT_GLAZE : COAT_NONE);
+    expect(Array.from(c.meta.crowns, (i) => coatOf(c, i))).toEqual([COAT_GILT, COAT_GILT]);
+    expect(structureCoats(c, false)).toEqual(new Uint8Array(c.meta.n));
+  });
+  it('the role tint: none on a coated role, the old gold and celadon without coats, none on plain blocks either way', () => {
+    const c = compileLevel(L3), crown = c.meta.crowns[0]!, her = c.meta.heritage[0]!;
+    const plain = Array.from({ length: c.meta.n }, (_, i) => i).find((i) => c.meta.role[i] === 0)!;
+    expect(roleTint(c, crown)).toEqual(TINT.none);
+    expect(roleTint(c, her)).toEqual(TINT.none);
+    expect(roleTint(c, crown, false)).toEqual(TINT.crown);
+    expect(roleTint(c, her, false)).toEqual(TINT.heritage);
+    expect(roleTint(c, plain)).toEqual(TINT.none);
+    expect(roleTint(c, plain, false)).toEqual(TINT.none);
+  });
+  it('ice takes no coat (its own pass draws it): an ice crown keeps the gold tint', () => {
+    const c = compileLevel(TRIAL_LEVELS.find((d) => d.id === 'T-I1')!), crown = c.meta.crowns[0]!;
+    expect(c.meta.crowns.length).toBeGreaterThan(0);
+    expect(coatOf(c, crown)).toBe(COAT_NONE);
+    expect(structureCoats(c).every((k) => k === COAT_NONE)).toBe(true);
+    expect(roleTint(c, crown)).toEqual(TINT.crown);
   });
 });
 

@@ -10,7 +10,7 @@ import { makeEngine, parseSpec } from '@tb/bench';
 import { type BodyDesc, type EngineHealth, type EngineInfo, type InputEvent, limitsHit, type PhysicsEngine, type Snapshot, spawnedBodies } from '@tb/engine-api';
 import { boundingRadius } from '@tb/geom';
 import { DEFAULT_AVBD } from '@tb/physics-ref';
-import { GAME_KEYS, gameOverlays, playLine, type GameHandle, installGameStyles, newGameHandle, playKeystone, structureMarks, structureTints } from '@tb/game';
+import { GAME_KEYS, gameOverlays, playLine, type GameHandle, installGameStyles, newGameHandle, playKeystone, structureCoats, structureMarks, structureTints } from '@tb/game';
 import { AVBD_GAP_SLOP, AVBD_ITERATIONS, compileLevel, cubeScale, type Driver, type Shot } from '@tb/keystone';
 import { clampPitch, EYE_ABOVE_GROUND, frame, rayThrough, viewProj, eyeOf, orbitAt, poseOf, type CameraPose, type Orbit } from './camera.ts';
 import { alphaAt, newArrivals, newClock, newPacer, pauseLatch, runFree, stepsDue, taskYield, trackSimSpeed, Window } from './loop.ts';
@@ -314,13 +314,14 @@ async function main() {
     blastsDue = [];
     sound.scene();
     sound.configure(config);
-    // A level draws as the game draws it: crowns gold, heritage celadon, materials tinted (@tb/game structureTints), stones marked (structureMarks).
+    // A level draws as the game draws it: crowns gilded, heritage glazed (structureCoats), materials tinted (@tb/game structureTints), stones marked (structureMarks).
     if (fxSlots) renderer.clearFx(0, fxSlots);
-    const def = levelOf(want), compiled = def ? compileLevel(def) : null, tints = compiled ? structureTints(compiled) : null;
+    const def = levelOf(want), compiled = def ? compileLevel(def) : null, tints = compiled ? structureTints(compiled, want.feel.coats) : null;
     // On a level's page a weapon's cube units stand for the level's block (inLevelGrenade); a level of no blocks keeps them.
     levelScale = compiled && compiled.meta.n > 0 ? cubeScale(compiled) : null;
     if (tints) renderer.setFx(0, tints);
     if (compiled) renderer.setMarks(0, structureMarks(compiled, want.feel.marks));
+    if (compiled) renderer.setCoats(0, structureCoats(compiled, want.feel.coats));
     fxSlots = handle.tinted = tints?.length ?? 0;
     const b = bounds(scene.bodies);
     box = b;

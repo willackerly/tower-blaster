@@ -30,7 +30,7 @@ import { COST_WINDOW, runPhysics, wakeable } from './physics-loop.ts';
 import { CLEAR_SHARE, FrameGovernor } from './frame-rate.ts';
 import { canvasSize, type QualityState } from './quality.ts';
 import { UndoMarks } from './undo-marks.ts';
-import { ballFx, beadOverlay, BOMB_FX, CROWN_GLOW, PULL_HOVER, regrowDuration, regrowScales, structureMarks, structureTints, TINT, tintOf, tintWordOf } from './scene.ts';
+import { ballFx, beadOverlay, BOMB_FX, CROWN_GLOW, PULL_HOVER, regrowDuration, regrowScales, roleTint, structureCoats, structureMarks, structureTints, tintOf, tintWordOf } from './scene.ts';
 import { type GestureState, type TouchAction, TouchGestures, touchFace, type TouchMode } from './touch.ts';
 
 /** What a page (and its tests) can see and do while Keystone plays: window.__game on the game page. */
@@ -600,7 +600,10 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
   /** Carve the structure's stones as feel.marks says (scene.ts structureMarks): after its tints at every load and restore, and when the setting changes. */
   function applyMarks() {
     renderer.setMarks(0, structureMarks(c, feel.marks));
+    renderer.setCoats(0, structureCoats(c, coatsOn()));
   }
+  /** Coats as feel.coats says, but never in a duel, whose blocks wear their side's ink. */
+  const coatsOn = () => feel.coats && !duel;
 
   function restoreMark(mark: UndoMark) {
     mark.cp.restore();
@@ -611,12 +614,12 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     source.update(driver.snapshot, descs);
     if (fxSlots) renderer.clearFx(0, fxSlots);
     regrowBuf = regrowScales(c, Infinity, new Float32Array(c.meta.n));
-    renderer.setFx(0, structureTints(c), regrowBuf, false);
+    renderer.setFx(0, structureTints(c, coatsOn()), regrowBuf, false);
     applyMarks();
     paintIce();
     const s = driver.session;
-    s.crownLive.forEach((down, k) => { if (down) renderer.setFx(c.meta.crowns[k]!, { tint: TINT.crown, emissive: 0.9 }); });
-    s.heritageBroken.forEach((cracked, k) => { if (cracked) renderer.setFx(c.meta.heritage[k]!, { tint: TINT.heritage, emissive: 1 }); });
+    s.crownLive.forEach((down, k) => { if (down) renderer.setFx(c.meta.crowns[k]!, { tint: roleTint(c, c.meta.crowns[k]!, coatsOn()), emissive: 0.9 }); });
+    s.heritageBroken.forEach((cracked, k) => { if (cracked) renderer.setFx(c.meta.heritage[k]!, { tint: roleTint(c, c.meta.heritage[k]!, coatsOn()), emissive: 1 }); });
     renderer.blasts.clear();
     renderer.fuses.clear();
     firedLooks = [...mark.looks];
@@ -827,7 +830,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     if (fxSlots) renderer.clearFx(0, fxSlots);
     regrowBuf = regrowScales(c, line ? Infinity : 0, new Float32Array(c.meta.n));
     duel = env.duel ? new Duel(env.duel, c, i as Player, driver.session.home) : null;
-    const tints = structureTints(c);
+    const tints = structureTints(c, coatsOn());
     // Owner ink: each side's blocks in its colour, its king glowing a little as crowns do.
     if (duel) duel.owned.forEach((idx, k) => { for (const b of idx) tints[b] = tintWordOf(duel!.def.sides[k]!.ink, c.meta.role[b] === 1 ? CROWN_GLOW : 0); });
     renderer.setFx(0, tints, regrowBuf, !line);
@@ -835,8 +838,8 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     paintIce();
     if (line) {
       const s = driver.session;
-      s.crownLive.forEach((down, k) => { if (down) renderer.setFx(c.meta.crowns[k]!, { tint: TINT.crown, emissive: 0.9 }); });
-      s.heritageBroken.forEach((cracked, k) => { if (cracked) renderer.setFx(c.meta.heritage[k]!, { tint: TINT.heritage, emissive: 1 }); });
+      s.crownLive.forEach((down, k) => { if (down) renderer.setFx(c.meta.crowns[k]!, { tint: roleTint(c, c.meta.crowns[k]!, coatsOn()), emissive: 0.9 }); });
+      s.heritageBroken.forEach((cracked, k) => { if (cracked) renderer.setFx(c.meta.heritage[k]!, { tint: roleTint(c, c.meta.heritage[k]!, coatsOn()), emissive: 1 }); });
     }
     fxSlots = descs.length;
     pacer.reset();
@@ -910,7 +913,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
   /** Light the block a pull would take (null: none), putting the last one back to its own tint. */
   function setHover(b: number | null) {
     if (b === hover) return;
-    if (hover !== null) renderer.setFx(hover, Uint32Array.of(tintOf(c, hover)));
+    if (hover !== null) renderer.setFx(hover, Uint32Array.of(tintOf(c, hover, coatsOn())));
     hover = b;
     if (b !== null) renderer.setFx(b, Uint32Array.of(PULL_HOVER));
   }
@@ -991,7 +994,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
         case 'crownDown':
           juice.shake(0.08);
           // A felled crown flashes once and stops glowing.
-          renderer.setFx(f.body, { tint: TINT.crown, emissive: 0.9, flash: 0.5 });
+          renderer.setFx(f.body, { tint: roleTint(c, f.body, coatsOn()), emissive: 0.9, flash: 0.5 });
           // Only where the clear ends the level: par levels, and outcome levels with autobank.
           if (c.def.objective.kind === 'crowns' && f.ordinal + 1 === c.meta.crowns.length && driver.session.phase === 'running' && (driver.session.scoring === 'par' || c.def.autobank)) {
             ending = true;
@@ -1027,7 +1030,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
         case 'heritageCrack':
           juice.shake(0.3);
           banner('Heritage cracked', 'crack');
-          renderer.setFx(f.body, { tint: TINT.heritage, emissive: 1, flash: 0.8 });
+          renderer.setFx(f.body, { tint: roleTint(c, f.body, coatsOn()), emissive: 1, flash: 0.8 });
           break;
         case 'tier': banner(`${TIER_NAMES[f.tier]}!`); break;
         case 'settled':
