@@ -31,7 +31,7 @@ export const GAME_CSS = `
   .kg-frozen b { font-weight: 900; letter-spacing: 0.14em; color: #9fd4ff; }
   .kg-frozen kbd { font: inherit; font-size: 0.8em; padding: 0 5px; border: 1px solid rgba(228, 242, 255, 0.6); border-radius: 4px; }
   .kg-frozen.on { opacity: 1; }
-  @media (max-width: 640px) { .kg-frozen { top: auto; bottom: 84px; font-size: 16px; } }
+  @media (max-width: 640px) { .kg-frozen { top: 110px; font-size: 16px; } } /* under the phone status strip, clear of the docked tray at the bottom (#244) */
   .kg-banner.crack { color: #f0806a; }
   .kg-result { top: 50%; left: 50%; transform: translate(-50%, -50%); min-width: 300px; max-height: calc(100vh - 24px); overflow-y: auto; box-sizing: border-box; display: none; padding: 20px 24px; font: 14px/1.45 system-ui, sans-serif; }
   .kg-result.show { display: block; animation: kg-rise 0.3s ease-out; }

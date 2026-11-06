@@ -24,7 +24,7 @@ the tone-mapped frame:
 
 The grade eases in over 0.15 s and out over 0.12 s (`frozen-look.ts`). A pill label at the top
 reads **FROZEN · aim and fire**, followed by "T resumes" on desktop or "Resume to go on" on touch.
-The label moves above the touch controls on narrow screens. The option is `keystone.frozenlook=0`
+On phones the label sits just under the status strip, clear of the docked controls at the bottom. The option is `keystone.frozenlook=0`
 in the URL, or the "Bullet Time: frozen look" box in the viewer's Scene panel.
 
 Alternatives considered:
