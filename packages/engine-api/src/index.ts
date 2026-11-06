@@ -2,6 +2,7 @@
 // reference, CPU baselines (Rapier, Box3D, Jolt) and every GPU variant.
 // The game and the benchmark harness both drive engines only through this.
 import type { Blast } from './blast.ts';
+import type { ForceEvent } from './force.ts';
 import type { ObserveOptions, Observer } from './observe.ts';
 import type { SpawnFrom } from './spawn.ts';
 
@@ -36,9 +37,10 @@ export const TAG_DEBRIS = -2;
 
 /**
  * Something that happens at a given step: a body is added (a ball is fired), a blast pushes the bodies
- * around a point (blast.ts), or a body is taken out of the world (remove.ts).
+ * around a point (blast.ts), a body is taken out of the world (remove.ts), or a body takes a force for a
+ * number of steps (force.ts).
  */
-export type InputEvent = SpawnEvent | BlastEvent | RemoveEvent;
+export type InputEvent = SpawnEvent | BlastEvent | RemoveEvent | ForceEvent;
 /**
  * A body is added. With `from` it is placed relative to a parent body's state when it is due (spawn.ts): its
  * pos, rot, linVel and angVel are then in the parent's frame, not the world's. Engines that do not place
@@ -313,6 +315,7 @@ export function inertiaOf(b: BodyDesc): Vec3 {
 }
 
 export * from './blast.ts';
+export * from './force.ts';
 export * from './host.ts';
 export * from './observe.ts';
 export * from './remove.ts';

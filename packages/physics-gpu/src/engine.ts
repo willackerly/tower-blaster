@@ -3,13 +3,14 @@
 // one command buffer per step. Parameters are the reference solver's (physics-ref AvbdParams), so
 // the two engines can be run side by side on the same settings. With AvbdParams.restitution on,
 // the solve ends with the restitution pass (restitution.ts).
-import { type BodyDesc, checkBlast, checkInputQueue, DEFAULT_RESTITUTION_COMBINE, emptySnapshot, type EngineCheckpoint, type EngineHealth, type EngineInfo, inertiaOf, type InputEvent, massOf, type PhysicsEngine, type SceneDesc, type Snapshot, queueInputs, spawnedBodies, TIER_FREE, type Vec3 } from '@tb/engine-api';
+import { type BodyDesc, checkBlast, checkInputQueue, DEFAULT_RESTITUTION_COMBINE, emptySnapshot, type EngineCheckpoint, type EngineHealth, type EngineInfo, ForceTable, inertiaOf, type InputEvent, massOf, type PhysicsEngine, type SceneDesc, type Snapshot, queueInputs, spawnedBodies, TIER_FREE, type Vec3 } from '@tb/engine-api';
 import { boundingRadius } from '@tb/geom';
 import { assertStorageFits, createDevice, isSoftwareAdapter, Readback } from '@tb/gpu';
 import { type AvbdParams, avbdVariant, checkColoring, checkGapSlop, checkRecords, checkRemoved, checkRestitution, DEFAULT_AVBD, RESTITUTION_DEFAULTS } from '@tb/physics-ref';
 import { Body, BodyProps, field, RestSlot, Shape, SolverBody, writeStruct } from '@tb/schema';
 import { BlastPass, type DueBlast } from './blast.ts';
 import { type DueSpawn, RelativeSpawnPass } from './spawn.ts';
+import { ForcePass } from './force.ts';
 import { CheckpointPool, restoreRegions, saveRegions, type StateRegion, whole } from './checkpoint.ts';
 import { assertPairDispatch, Broadphase } from './broadphase.ts';
 import { Coloring } from './coloring.ts';
@@ -258,6 +259,8 @@ export class GpuAvbdEngine implements PhysicsEngine {
   private pending: InputEvent[] = [];
   /** Removed bodies (engine-api remove.ts): their slots are tombstones (tier free), which every stage skips. */
   private gone = new Set<number>();
+  /** The forces force events have set (engine-api force.ts), applied by the force pass (force.ts). */
+  private forces = new ForceTable();
   private n = 0;
   private capacity = 0;
   private rmax = 0;
@@ -268,7 +271,7 @@ export class GpuAvbdEngine implements PhysicsEngine {
   readonly records: RecordMode;
   /** The colouring's lattice preference (gpuColorMode(): AvbdParams.colorMode, unset 3). */
   readonly colorMode: number;
-  private parts: { bodies: GPUBuffer; shapes: GPUBuffer; props: GPUBuffer; spheres: GPUBuffer; sweep: GPUBuffer; prev: GPUBuffer; bp: Broadphase; np: Narrowphase; col: Coloring; solver: AvbdSolver; blast: BlastPass; spawn: RelativeSpawnPass; tomb: GPUBuffer; readback: Readback; sleep: SleepPass | null; pool: CheckpointPool } | null = null;
+  private parts: { bodies: GPUBuffer; shapes: GPUBuffer; props: GPUBuffer; spheres: GPUBuffer; sweep: GPUBuffer; prev: GPUBuffer; bp: Broadphase; np: Narrowphase; col: Coloring; solver: AvbdSolver; blast: BlastPass; spawn: RelativeSpawnPass; force: ForcePass; tomb: GPUBuffer; readback: Readback; sleep: SleepPass | null; pool: CheckpointPool } | null = null;
   /** Counts dispose() calls (init() makes one), so an init() that awaited across another knows it was overtaken. */
   private generation = 0;
   /** Counts restore() calls: an awake count read before one belongs to a future that is gone. */
@@ -416,7 +419,7 @@ export class GpuAvbdEngine implements PhysicsEngine {
       tomb.unmap();
       parts = {
         bodies, shapes, props, spheres, sweep, prev, bp, np, col, solver, blast: new BlastPass(device, bodies, props, shapes, solver.solver),
-        spawn: new RelativeSpawnPass(device, bodies, solver.solver, sleep?.state ?? null), tomb, readback: new Readback(device), sleep, pool: new CheckpointPool(device),
+        spawn: new RelativeSpawnPass(device, bodies, solver.solver, sleep?.state ?? null), force: new ForcePass(device, bodies, props, solver.solver, sleep?.state ?? null), tomb, readback: new Readback(device), sleep, pool: new CheckpointPool(device),
       };
     } catch (e) {
       thrown = e;
@@ -440,6 +443,7 @@ export class GpuAvbdEngine implements PhysicsEngine {
     this.parts = parts;
     this.n = 0;
     this.gone = new Set();
+    this.forces = new ForceTable();
     for (const b of scene.bodies) this.add(b);
     this.pending = [...scene.inputs].sort((a, b) => a.step - b.step);
     this.stepIndex = 0;
@@ -492,15 +496,15 @@ export class GpuAvbdEngine implements PhysicsEngine {
     }
     // Stable insertion keeps push order among events due at the same step.
     const pending = queueInputs(this.pending, events);
-    checkInputQueue(this.n, pending, this.gone, this.stepIndex);
+    checkInputQueue(this.n, pending, this.gone, this.stepIndex, this.forces.ends());
     this.pending = pending;
   }
 
   step(): void {
     const { parts } = this;
-    // Nothing awake at the end of step quietStep, nothing has happened since, and nothing is due now: this step would
-    // change nothing (GpuEngineOptions.sleepSkip).
-    if (parts?.sleep && this.opts.sleepSkip !== false && !this.failure && this.quietStep >= this.eventStep && !(this.pending.length && this.pending[0]!.step <= this.stepIndex)) {
+    // Nothing awake at the end of step quietStep, nothing has happened since, nothing is due now and no force acts:
+    // this step would change nothing (GpuEngineOptions.sleepSkip).
+    if (parts?.sleep && this.opts.sleepSkip !== false && !this.failure && this.quietStep >= this.eventStep && !(this.pending.length && this.pending[0]!.step <= this.stepIndex) && !this.forces.acting(this.stepIndex)) {
       this.stepIndex++;
       this.skipped++;
       return;
@@ -571,13 +575,17 @@ export class GpuAvbdEngine implements PhysicsEngine {
         this.add(ev.body);
       } else if (ev.kind === 'remove') {
         removals.push(ev.id);
+        this.forces.remove(ev.id);
         // With sleep, everything that could touch the removed body wakes (sleep.ts): a blast of no impulse and no speed
         // cap around it, which changes no velocity but sets the awake bit of every body in reach. The reach is two of
         // the largest bounding radii plus both bodies' margins, so it covers every body that can have touched it.
         if (parts.sleep) blasts.push({ blast: checkBlast({ centre: { body: ev.id }, radius: 2 * this.rmax + 2 * this.params.margin, impulse: 0, maxSpeed: Infinity }), count: this.n });
-      }
+      } else if (ev.kind === 'force') this.forces.apply(ev, this.stepIndex);
       else blasts.push({ blast: checkBlast(ev.blast), count: this.n });
     }
+    // Forces act after every other event of the step (force.ts); a forced step is an event for the sleep skip.
+    const forced = this.forces.act(this.stepIndex);
+    if (forced.length) this.eventStep = this.stepIndex + 1;
     const n = this.n, settling = this.stepIndex < (this.opts.settleSteps ?? 0);
     const p = settling ? { ...this.params, iterations: this.opts.settleIterations! } : this.params;
     parts.solver.writeParams(n, scene.dt, scene.gravity, scene.ground, p, scene.frictionCombine);
@@ -593,6 +601,7 @@ export class GpuAvbdEngine implements PhysicsEngine {
     for (const i of removals) this.remove(enc, i);
     pass = enc.beginComputePass();
     parts.blast.encode(pass, blasts);
+    parts.force.encode(pass, forced, this.stepIndex, scene.dt);
     parts.solver.prepare(pass, n);
     pass.end();
     mark?.(enc, 'prepare');
@@ -655,7 +664,7 @@ export class GpuAvbdEngine implements PhysicsEngine {
     if (this.failure) throw new Error(`GpuAvbdEngine: ${this.failure}`);
     const regions = this.carried(), saved = saveRegions(device, parts.pool, regions);
     const cpu = {
-      n: this.n, stepIndex: this.stepIndex, pending: [...this.pending], gone: [...this.gone],
+      n: this.n, stepIndex: this.stepIndex, pending: [...this.pending], gone: [...this.gone], forces: this.forces.clone(),
       quietStep: this.quietStep, eventStep: this.eventStep, skipped: this.skipped, solver: parts.solver.cpuState,
     };
     const generation = this.generation;
@@ -672,6 +681,7 @@ export class GpuAvbdEngine implements PhysicsEngine {
         this.stepIndex = cpu.stepIndex;
         this.pending = [...cpu.pending];
         this.gone = new Set(cpu.gone);
+        this.forces = cpu.forces.clone();
         this.quietStep = cpu.quietStep;
         this.eventStep = cpu.eventStep;
         this.skipped = cpu.skipped;
@@ -736,7 +746,7 @@ export class GpuAvbdEngine implements PhysicsEngine {
   }
 
   private static free(p: NonNullable<GpuAvbdEngine['parts']>): void {
-    p.solver.destroy(); p.blast.destroy(); p.spawn.destroy(); p.tomb.destroy(); p.sleep?.destroy(); p.col.destroy(); p.np.destroy(); p.bp.destroy(); p.readback.destroy(); p.pool.destroy();
+    p.solver.destroy(); p.blast.destroy(); p.spawn.destroy(); p.force.destroy(); p.tomb.destroy(); p.sleep?.destroy(); p.col.destroy(); p.np.destroy(); p.bp.destroy(); p.readback.destroy(); p.pool.destroy();
     for (const b of [p.bodies, p.shapes, p.props, p.spheres, p.sweep, p.prev]) b.destroy();
   }
 

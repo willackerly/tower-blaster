@@ -56,7 +56,7 @@ export function expectedKicks(atBlast: Snapshot): Float64Array {
   const v0 = vel.map((v) => [...v]);
   for (const ev of scene.inputs) {
     if (ev.kind === 'spawn') { bodies.push(ev.body); pos.push(ev.body.pos); vel.push([...ev.body.linVel]); v0.push([...ev.body.linVel]); continue; }
-    if (ev.kind === 'remove') continue; // the blast case has none
+    if (ev.kind !== 'blast') continue; // the blast case has no removals or forces
     const b = checkBlast(ev.blast), centre = blastCentre(b, b.body >= 0 ? pos[b.body]! : null);
     bodies.forEach((d, id) => {
       const v = blastVelocity(b, centre, id, pos[id]!, vel[id]!, massOf(d), blastArea(d.shape));

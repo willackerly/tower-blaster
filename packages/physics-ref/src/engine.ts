@@ -1,5 +1,5 @@
 // The reference AVBD solver behind the engine contract.
-import { blastArea, blastCentre, blastVelocity, type BodyMotion, checkBlast, checkInputQueue, emptySnapshot, queueInputs, relativeBody, TIER_FREE, type EngineInfo, type InputEvent, type PhysicsEngine, type SceneDesc, type Snapshot } from '@tb/engine-api';
+import { blastArea, blastCentre, blastVelocity, type BodyMotion, checkBlast, checkInputQueue, emptySnapshot, ForceTable, forceKicks, queueInputs, relativeBody, TIER_FREE, type EngineInfo, type InputEvent, type PhysicsEngine, type SceneDesc, type Snapshot } from '@tb/engine-api';
 import { type AvbdParams, avbdVariant, AvbdWorld, checkColoring, checkGapSlop, checkRecords, checkRemoved, checkRestitution, DEFAULT_AVBD } from './avbd.ts';
 
 export class AvbdReferenceEngine implements PhysicsEngine {
@@ -7,6 +7,8 @@ export class AvbdReferenceEngine implements PhysicsEngine {
   stepIndex = 0;
   world: AvbdWorld | null = null;
   private pending: InputEvent[] = [];
+  /** The forces force events have set (engine-api force.ts). */
+  private forces = new ForceTable();
   private readonly params: AvbdParams;
 
   constructor(params: Partial<AvbdParams> = {}) {
@@ -30,13 +32,14 @@ export class AvbdReferenceEngine implements PhysicsEngine {
     this.world = new AvbdWorld(scene, this.params);
     for (const b of scene.bodies) this.world.add(b);
     this.pending = pending;
+    this.forces = new ForceTable();
     this.stepIndex = 0;
   }
 
   push(events: InputEvent[]): void {
     // Stable insertion keeps push order among events due at the same step; checked before anything changes.
     const pending = queueInputs(this.pending, events);
-    checkInputQueue(this.world?.bodies.length ?? 0, pending, this.removed(), this.stepIndex);
+    checkInputQueue(this.world?.bodies.length ?? 0, pending, this.removed(), this.stepIndex, this.forces.ends());
     this.pending = pending;
   }
 
@@ -55,7 +58,8 @@ export class AvbdReferenceEngine implements PhysicsEngine {
     for (const ev of due) {
       if (ev.kind === 'spawn') { w.add(ev.from ? relativeBody(parents.get(ev.from.body)!, ev.body, ev.from.axes) : ev.body); continue; }
       // A removal (remove.ts): the body touches nothing from this step on.
-      if (ev.kind === 'remove') { w.remove(ev.id); continue; }
+      if (ev.kind === 'remove') { w.remove(ev.id); this.forces.remove(ev.id); continue; }
+      if (ev.kind === 'force') { this.forces.apply(ev, this.stepIndex); continue; }
       // A blast (blast.ts) pushes the bodies that exist now, before the step starts; never a removed one.
       const b = checkBlast(ev.blast);
       const centre = blastCentre(b, b.body >= 0 ? w.bodies[b.body]!.pos : null);
@@ -68,6 +72,13 @@ export class AvbdReferenceEngine implements PhysicsEngine {
         body.prevLinVel = [p[0] + (v[0] - u[0]), p[1] + (v[1] - u[1]), p[2] + (v[2] - u[2])];
         body.linVel = v;
       });
+    }
+    // Forces (force.ts), after every other event of the step: a kick h F / m, added to prevLinVel too, as a blast's.
+    const motion = (id: number): BodyMotion => { const b = w.bodies[id]!; return { pos: b.pos, rot: b.rot, linVel: b.linVel, angVel: b.angVel }; };
+    for (const { id, dv } of forceKicks(this.forces.act(this.stepIndex), this.stepIndex, w.scene.dt, motion, (id) => w.bodies[id]!.mass)) {
+      const b = w.bodies[id]!, u = b.linVel, p = b.prevLinVel;
+      b.linVel = [u[0] + dv[0], u[1] + dv[1], u[2] + dv[2]];
+      b.prevLinVel = [p[0] + dv[0], p[1] + dv[1], p[2] + dv[2]];
     }
     w.step();
     this.stepIndex++;

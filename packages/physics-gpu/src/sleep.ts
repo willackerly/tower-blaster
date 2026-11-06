@@ -35,7 +35,8 @@
 //               2 r sin(angle / 2)); quiet + 1, or 0 and a new window at its pose. Clears the veto.
 //   neighbours  per pair slot with points: a body whose partner has been quiet for fewer than steps / 2 is vetoed,
 //               which keeps a one-body band of awake bodies next to anything still moving.
-//   decide      per awake body: it falls asleep (awake bit 0, velocities 0) when quiet >= steps << min(wakes, 4)
+//   decide      per awake body: it falls asleep (awake bit 0, velocities 0) when it is not under a force this step
+//               (SleepBody.forced, set by the force pass, force.ts) and quiet >= steps << min(wakes, 4)
 //               (the backoff: each wake doubles the wait, up to 16x, so a body cannot flicker) and nothing vetoed it.
 //               A sleeper stays asleep until the wake pass wakes it. Every body still awake adds 1 to the awake
 //               count (the scratch buffer's last word), which the engine reads back: a step that starts with no
@@ -262,7 +263,9 @@ fn decide(@builtin(global_invocation_id) id: vec3u) {
   if (removed(i) || asleep(i)) { return; }
   let s = state[i];
   let need = p.steps << min(s.wakes, ${MAX_BACKOFF}u);
-  if (s.quiet >= need && atomicLoad(&scratch[veto(i)]) == 0u) {
+  // A body under a force (force.ts set forced this step) stays awake; the flag is for this step only.
+  if (s.forced != 0u) { state[i].forced = 0u; }
+  if (s.forced == 0u && s.quiet >= need && atomicLoad(&scratch[veto(i)]) == 0u) {
     bodies[i].flags = bodies[i].flags & ~1u;
     bodies[i].linVel = vec3f(0.0);
     bodies[i].angVel = vec3f(0.0);
@@ -326,7 +329,7 @@ export class SleepPass {
   /** A new body in slot i: awake, not quiet, never woken, its window starting at its pose. */
   add(i: number, pos: Vec3, rot: Quat): void {
     const v = new DataView(new ArrayBuffer(SleepBody.size));
-    writeStruct(v, SleepBody, 0, { anchorPos: pos, quiet: 0, anchorRot: rot, wakes: 0, slept: 0 });
+    writeStruct(v, SleepBody, 0, { anchorPos: pos, quiet: 0, anchorRot: rot, wakes: 0, slept: 0, forced: 0 });
     this.device.queue.writeBuffer(this.state, i * SleepBody.size, v.buffer);
   }
 
