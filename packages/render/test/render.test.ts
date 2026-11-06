@@ -420,7 +420,7 @@ describe('sparks', () => {
       expect(e.strength).toBeCloseTo(want[i]!.strength, 5);
       expect(e.packed >>> 28).toBe(want[i]!.material);
     });
-    expect(r.spawned).toBe(60 + 108 + 36 + 12); // floor((dv - 2.5) * 24) each
+    expect(r.spawned).toBe(60 + 108 + 36 + DEFAULT_SPARKS.ballSparks); // floor((dv - 2.5) * 24) each, a ball's own (material 1) at most ballSparks
     // Once the detector has seen body 3's new tier, its next impact counts.
     expect(r.again.map((e) => e.packed & 0xffffff)).toEqual([3]);
   });
@@ -446,14 +446,18 @@ describe('sparks', () => {
 
   it('a flood of 100k impacts stays within the event and spark budgets', async (ctx) => {
     if (!gpu) return ctx.skip();
-    const r = await call('sparkFlood', 100_000);
-    expect(r.error).toBeNull();
-    expect(r.ctl[CTL.events]).toBe(100_000); // every body counted...
-    expect(r.events).toBe(MAX_EVENTS); // ...but only the first MAX_EVENTS kept,
-    expect(r.distinct).toBe(MAX_EVENTS); // each a different body,
-    expect(r.ctl[CTL.dropped]).toBe(100_000 - MAX_EVENTS); // the rest dropped
-    expect(r.ctl[CTL.spawned]).toBe(SPAWN_BUDGET);
-    expect(r.live).toBe(SPAWN_BUDGET);
+    for (const classic of [false, true]) {
+      const r = await call('sparkFlood', 100_000, classic);
+      expect(r.error).toBeNull();
+      expect(r.ctl[CTL.events]).toBe(100_000); // every body counted...
+      expect(r.events).toBe(MAX_EVENTS); // ...but only the first MAX_EVENTS kept,
+      expect(r.distinct).toBe(MAX_EVENTS); // each a different body,
+      expect(r.ctl[CTL.dropped]).toBe(100_000 - MAX_EVENTS); // the rest dropped
+      // Classic: SPAWN_BUDGET a frame; the damage rule's bucket holds DEFAULT_SPARKS.budget.
+      const cap = classic ? SPAWN_BUDGET : DEFAULT_SPARKS.budget;
+      expect(r.ctl[CTL.spawned]).toBe(cap);
+      expect(r.live).toBe(cap);
+    }
   });
 
   it('streaks show where a burst projects, nowhere else, and not through a wall', async (ctx) => {
@@ -767,18 +771,29 @@ describe('lights', () => {
 describe('heat', () => {
   it('comes from ball contact and hard hits only, and decays with tau', async (ctx) => {
     if (!gpu) return ctx.skip();
-    const r = await call('heatScript');
-    expect(r.error).toBeNull();
-    const { heatTau: tau, heatDv, heatRange } = r.cfg;
-    expect([tau, heatDv, heatRange]).toEqual([0.25, 6, 6]); // the numbers below assume these
-    const near = (got: number[], want: number[]) => got.forEach((v, i) => expect(Math.abs(v - want[i]!), `slot ${i}`).toBeLessThan(2e-3)); // f16 storage
-    // Slots: ball, touching, near miss, rotated touching, far, dv 9, dv 4, dv 15, static touching, lattice touching.
-    near(r.seen, [0, 1, 0, 1, 0, 0, 0, 0, 0, 0]);
-    near(r.hit, [0, 1, 0, 1, 0, 0.5, 0, 1, 0, 0]);
     const e = Math.exp(-1);
-    near(r.later, [0, 1, 0, 1, 0, 0.5 * e, 0, e, 0, 0]);
-    near(r.gone, [0, e, 0, e, 0, 0.5 * e * e, 0, e * e, 0, 0]);
-    expect(r.hot).toEqual([2, 4]);
+    const near = (got: number[], want: number[]) => got.forEach((v, i) => expect(Math.abs(v - want[i]!), `slot ${i}`).toBeLessThan(2e-3)); // f16 storage
+    // Classic at rest, and the damage rule with the ball moving at 2 m/s (over contactSpeed): the same heat.
+    for (const [speed, classic] of [[0, true], [2, false]] as const) {
+      const r = await call('heatScript', speed, classic);
+      expect(r.error).toBeNull();
+      const { heatTau: tau, heatDv, heatRange } = r.cfg;
+      expect([tau, heatDv, heatRange]).toEqual([0.25, 6, 6]); // the numbers below assume these
+      if (!classic) expect(r.cfg.contactSpeed).toBeLessThan(speed);
+      // Slots: ball, touching, near miss, rotated touching, far, dv 9, dv 4, dv 15, static touching, lattice touching.
+      near(r.seen, [0, 1, 0, 1, 0, 0, 0, 0, 0, 0]);
+      near(r.hit, [0, 1, 0, 1, 0, 0.5, 0, 1, 0, 0]);
+      near(r.later, [0, 1, 0, 1, 0, 0.5 * e, 0, e, 0, 0]);
+      near(r.gone, [0, e, 0, e, 0, 0.5 * e * e, 0, e * e, 0, 0]);
+      expect(r.hot).toEqual([2, 4]);
+    }
+    // The damage rule with the ball at rest: touching it heats nothing (PT2: a ball lying against a block left it white); hits as before.
+    const rest = await call('heatScript', 0, false);
+    expect(rest.error).toBeNull();
+    near(rest.seen, [0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+    near(rest.hit, [0, 0, 0, 0, 0, 0.5, 0, 1, 0, 0]);
+    near(rest.later, [0, 0, 0, 0, 0, 0.5 * e, 0, e, 0, 0]);
+    expect(rest.hot).toEqual([0, 2]);
   });
 
   it('the glow gain is 1 up to HOT_FULL hot bodies and HOT_FULL / hot beyond', async (ctx) => {
@@ -810,6 +825,13 @@ describe('heat', () => {
     const off = await call('heatImage', 0, false, 9, false);
     expect(off.error).toBeNull();
     expect(off.hit[1]).toBe(off.hit[0]);
+    // The rim glow (the damage style, PT2) shares the gain: dimmer in a crowd too.
+    const rimAlone = await call('heatImage', 6000, false, 9, true, 'damage');
+    const rimCrowd = await call('heatImage', 6000, true, 9, true, 'damage');
+    const rimGlow = rimAlone.hit[1]! - rimAlone.hit[0]!, rimDim = rimCrowd.hit[1]! - rimCrowd.hit[0]!;
+    expect(rimGlow).toBeGreaterThan(15); // measured +36 (along the edges only)
+    expect(rimDim).toBeGreaterThan(0);
+    expect(rimDim).toBeLessThan(0.75 * rimGlow);
   });
 });
 
