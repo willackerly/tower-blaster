@@ -95,10 +95,11 @@ function part(v: unknown, where: string): Part {
     if (o.courses !== undefined) p.courses = arr(o.courses, `${where}.courses`).map((c, i) => course(c, `${where}.courses[${i}]`));
     return p;
   }
-  only(o, ['kind', 'at', 'half', 'material', 'role'], where);
+  only(o, ['kind', 'at', 'half', 'material', 'role', 'fixed'], where);
   const half = vec3(o.half, `${where}.half`);
   if (half.some((x) => !(x > 0))) throw new Error(`${where}.half must be three numbers above 0`);
-  return { kind, at: vec3(o.at, `${where}.at`), half, material, ...(role ? { role } : {}) };
+  if (o.fixed !== undefined && o.fixed !== true) throw new Error(`${where}.fixed must be true or left out`);
+  return { kind, at: vec3(o.at, `${where}.at`), half, material, ...(role ? { role } : {}), ...(o.fixed ? { fixed: true as const } : {}) };
 }
 
 /** A scenario as a part (@tb/keystone ScenarioPart); its params are checked by building it, at compile. */
@@ -196,7 +197,7 @@ function launcher(v: unknown, where: string): LevelDef['launcher'] {
 function shot(v: unknown, where: string): Shot {
   const o = object(v, where);
   const ammo = rackItem(o.ammo, `${where}.ammo`);
-  const keys = ammo === 'drop' ? ['x', 'z'] : ammo === 'cue' ? ['x', 'y', 'z', 'dir', 'power'] : ['az', 'y', 'yaw', 'pitch', 'power'];
+  const keys = ammo === 'drop' ? ['x', 'z'] : ammo === 'cue' ? ['x', 'y', 'z', 'dir', 'power'] : ammo === 'pull' ? ['body'] : ['az', 'y', 'yaw', 'pitch', 'power'];
   only(o, ['ammo', ...keys], where);
   const s = { ammo, ...Object.fromEntries(keys.map((k) => [k, int(o[k], `${where}.${k}`)])) } as Shot;
   try {

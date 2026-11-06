@@ -2,12 +2,12 @@
 // the GPU solver (f32; SwiftShader here, Metal on the M5 Max) with no
 // heritage broken, and with no engine limit hit that changed the physics
 // (the pair buffer dropping contacts): the game plays what the bot pinned. One file per level
-// (par-gpu-L*.test.ts) so CI's shards can share them out: SwiftShader takes
-// one to three minutes a level at 40 iterations.
+// (par-gpu-L*.test.ts, and the Undercut par puzzles par-gpu-U*.test.ts) so CI's shards
+// can share them out: SwiftShader takes one to three minutes a level at 40 iterations.
 import { describe, expect, it } from 'vitest';
 import type { Page } from 'playwright';
 import { limitsHit } from '@tb/engine-api';
-import { compileLevel, LEVELS, type Shot } from '@tb/keystone';
+import { compileLevel, LEVELS, type Shot, UNDERCUT_LEVELS } from '@tb/keystone';
 import { summarize } from '@tb/metrics';
 import { gpuOptions } from '../src/engines.ts';
 import { gamePage, playShots } from './page.ts';
@@ -16,7 +16,7 @@ const MINUTES = 60_000;
 
 /** The par-line check for one level, with extra checks on the page before the first shot and after the level cleared. */
 export function parOnGpu(id: string, more: { before?(page: Page): Promise<void>; after?(page: Page, shots: Shot[]): Promise<void> } = {}): void {
-  const def = LEVELS.find((l) => l.id === id)!;
+  const def = [...LEVELS, ...UNDERCUT_LEVELS].find((l) => l.id === id)!;
   const game = gamePage();
   describe(`${id} on the GPU solver`, () => {
     it('the par line clears with no heritage broken', async (ctx) => {

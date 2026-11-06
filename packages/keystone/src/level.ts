@@ -24,8 +24,12 @@ export interface CourseOverride {
 
 /** A box of unit cubes; `at` is the min corner in cells, `size` the count along x, y, z. */
 export interface BlockPart { kind: 'block'; at: Vec3; size: Vec3; material: MaterialName; role?: Role; courses?: CourseOverride[] }
-/** One box body; `at` is (centre x, bottom y, centre z) and `half` its half-extents, in h. */
-export interface BoxPart { kind: 'slab' | 'rod'; at: Vec3; half: Vec3; material: MaterialName; role?: Role }
+/**
+ * One box body; `at` is (centre x, bottom y, centre z) and `half` its half-extents, in h. `fixed`: a pull
+ * cannot take it (Session.pullRefusal), as crowns and heritage; it moves and falls like any body. Undercut's
+ * table tops and beams are fixed, so a level of pulls is solved under them, not by pulling them out.
+ */
+export interface BoxPart { kind: 'slab' | 'rod'; at: Vec3; half: Vec3; material: MaterialName; role?: Role; fixed?: true }
 export type Part = BlockPart | BoxPart | ScenarioPart;
 
 /**
@@ -271,6 +275,8 @@ export interface BodyMeta {
   part: Uint16Array;
   crowns: Int32Array;
   heritage: Int32Array;
+  /** Bodies of fixed parts (BoxPart.fixed): no pull takes them. */
+  fixed: Int32Array;
 }
 
 export interface CompiledLevel {
@@ -312,7 +318,7 @@ export function compileLevel(def: LevelDef): CompiledLevel {
   const h = unitOf(def), p = pitchOf(def) * h;
   const bounce = physicsOf(def).bounce;
   const bodies: BodyDesc[] = [];
-  const roles: number[] = [], mats: number[] = [], parts: number[] = [];
+  const roles: number[] = [], mats: number[] = [], parts: number[] = [], fixed: number[] = [];
   const add = (b: BodyDesc, role: Role, material: MaterialName, part: number) => { bodies.push(b); roles.push(ROLE_ID[role]); mats.push(materialId(material)); parts.push(part); };
 
   def.parts.forEach((part, pi) => {
@@ -334,6 +340,7 @@ export function compileLevel(def: LevelDef): CompiledLevel {
       const half = part.half.map((x) => x * h) as Vec3;
       const pos: Vec3 = [part.at[0] * p, part.at[1] * h + half[1], part.at[2] * p];
       const role = part.role ?? 'plain';
+      if (part.fixed) fixed.push(bodies.length);
       add(body(pos, half, part.material, role, pi), role, part.material, pi);
     }
   });
@@ -344,6 +351,7 @@ export function compileLevel(def: LevelDef): CompiledLevel {
     half: new Float64Array(3 * n), home: new Float64Array(3 * n), band: new Uint8Array(n), part: Uint16Array.from(parts),
     crowns: Int32Array.from(roles.flatMap((r, i) => (r === ROLE_ID.crown ? [i] : []))),
     heritage: Int32Array.from(roles.flatMap((r, i) => (r === ROLE_ID.heritage ? [i] : []))),
+    fixed: Int32Array.from(fixed),
   };
   let height = 0;
   bodies.forEach((b, i) => {

@@ -1,7 +1,7 @@
 // Levels of your own: a LevelDef from JSON, the URL (level.def) or a saved
 // scene (scene.levelDef), checked strictly, and run as the game compiles it.
 import { describe, expect, it } from 'vitest';
-import { compileLevel, L2, L4, LEVELS, type LevelDef, PRESETTLE_STEPS, U3 } from '@tb/keystone';
+import { compileLevel, L2, L4, LEVELS, type LevelDef, PRESETTLE_STEPS, U2, U3, UNDERCUT_LEVELS } from '@tb/keystone';
 import {
   CUSTOM_LEVEL, decodeLevelParam, encodeLevelParam, LEVEL_FILE_FORMAT, levelChoice, levelIssues, levelJson, parseLevelDef, parseSceneFile, parseViewerConfig, proposeScene,
   sceneFile, sceneTitle, toSearch, viewerScene, withCustomLevel,
@@ -12,7 +12,7 @@ const mine: LevelDef = { ...structuredClone(L2), id: 'my-lintel', name: 'Lintel,
 
 describe('level files', () => {
   it('reads back every built-in level from its JSON, field for field', () => {
-    for (const def of LEVELS) {
+    for (const def of [...LEVELS, ...UNDERCUT_LEVELS]) {
       const text = levelJson(def);
       expect(JSON.parse(text).format).toBe(LEVEL_FILE_FORMAT);
       expect(parseLevelDef(JSON.parse(text))).toEqual(def);
@@ -59,6 +59,18 @@ describe('level files', () => {
     expect(() => parseLevelDef({ ...structuredClone(L2), freeze: 10 })).toThrow(/level.freeze must be a whole number from 0 to 9: 10/);
     expect(() => parseLevelDef({ ...structuredClone(L2), freeze: 1.5 })).toThrow(/level.freeze must be a whole number/);
     expect(() => parseLevelDef({ ...structuredClone(L2), objective: { kind: 'hold', min: 1 } })).toThrow(/level.objective: unknown key min/);
+  });
+
+  it('reads back a fixed slab or rod (Undercut\'s beams), and refuses fixed on anything but true', () => {
+    expect(U2.parts.some((p) => p.kind === 'slab' && p.fixed)).toBe(true);
+    expect(parseLevelDef(JSON.parse(levelJson(U2)))).toEqual(U2);
+    expect(compileLevel(parseLevelDef(JSON.parse(levelJson(U2)))).hash).toBe(compileLevel(U2).hash);
+    const bad = structuredClone(U2) as unknown as Record<string, any>;
+    bad.parts[1].fixed = false;
+    expect(() => parseLevelDef(bad)).toThrow(/level.parts\[1\].fixed must be true or left out/);
+    // Fixing a part is a different level: its hash changes.
+    const loose = { ...U2, parts: U2.parts.map((p) => (p.kind === 'slab' ? { ...p, fixed: undefined } : p)) };
+    expect(compileLevel(loose).hash).not.toBe(compileLevel(U2).hash);
   });
 
   it('reads back a scenario part with its role rules, and refuses a bad one, saying where', () => {

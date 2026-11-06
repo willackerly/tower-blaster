@@ -143,7 +143,7 @@ export function hudHtml(s: HudState): string {
   // The power bar, with minus and plus buttons on a touch screen (keys Q and E).
   const power = sel === 'drop' || sel === 'pull' ? '' : `<div class="row"><span>Power <kbd>Q</kbd><kbd>E</kbd></span><span class="power">${POWER_STEP_BUTTON(-POWER_STEP)}<span class="bar"><i style="width:${s.power}%"></i></span>${POWER_STEP_BUTTON(POWER_STEP)}</span></div>`;
   const height = sel === 'drop' || sel === 'pull' || s.launch === undefined ? '' : launchRow(s.launch);
-  const reach = s.pullRefused ? '<div class="bad small">Crowns and heritage stay: pull a plain block</div>' : s.reachable === false ? '<div class="bad small">Out of reach at this power</div>' : '';
+  const reach = s.pullRefused ? '<div class="bad small">Crowns, heritage and fixed beams stay: pull a plain block</div>' : s.reachable === false ? '<div class="bad small">Out of reach at this power</div>' : '';
   const outcome = scoringOf(d) === 'outcome';
   const head = outcome
     ? `<div class="row"><span>Shot ${s.strokes}</span>${d.objective.kind === 'hold' ? `<span>Pulled <b class="down${(s.pulled ?? 0) > 0 ? '' : ' none'}">${pct(s.pulled ?? 0)}</b></span>` : `<span>Down <b class="down${(s.collapse ?? 0) > 0 ? '' : ' none'}">${pct(s.collapse ?? 0)}</b></span>`}</div>

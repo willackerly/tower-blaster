@@ -74,7 +74,7 @@ describe('formatting', () => {
     expect(html).toMatch(/Pull <b>1<\/b>\/2/);
     expect(html).not.toMatch(/Power/);
     const refused = hudHtml({ ...base, chips, reachable: false, pullRefused: true });
-    expect(refused).toMatch(/Crowns and heritage stay/);
+    expect(refused).toMatch(/Crowns, heritage and fixed beams stay/);
     expect(refused).not.toMatch(/Out of reach/);
   });
   it('the result card lists every score line in order, then the total, stamp and stars', () => {
