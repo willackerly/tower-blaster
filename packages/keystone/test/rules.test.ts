@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { emptySnapshot, type Snapshot } from '@tb/engine-api';
 import { quatFromAxisAngle } from '@tb/geom';
 import {
-  aabbTop, baselineOf, compileLevel, crownDown, DEFAULT_GOLD, FROZEN_D, FROZEN_SPEED, FROZEN_STEPS, GRAVITY, HEIGHT_BINS, heritageBroken, type LevelDef, levelScore, leverage, peOf_mJ,
+  aabbTop, baselineOf, compileLevel, crownDown, DEFAULT_GOLD, FROZEN_D, FROZEN_SPEED, FROZEN_STEPS, GRAVITY, HEIGHT_BINS, heritageBroken, type LevelDef, levelScore, leverage, parStars, peOf_mJ,
   potential_mJ, quietUnder, reduceCpu, type Reductions, SETTLE_CAP, SETTLE_CAP_V2, SETTLE_MIN, SETTLE_QUIET, settleAllowance, settleCap, type SettleRule, type SettleState, settleUpdate, type ShotOutcome, skyline, stampOf, tier,
 } from '@tb/keystone';
 
@@ -261,14 +261,42 @@ describe('objectives and score', () => {
     expect(s.stars).toBe(3);
     expect(s.stamp).toBe('PAR');
   });
-  it('stars: one for clearing over par, two at par below the gold line or with heritage broken, none when not cleared', () => {
+  it('stars (parStars): three less one per stroke over par and one for broken heritage, at least one once cleared', () => {
+    // [strokes, par, heritage broken] -> stars: every row of the rule, the floor and the not-cleared case.
+    const rows: Array<[number, number, number, number]> = [
+      [1, 1, 0, 3], [2, 1, 0, 2], [3, 1, 0, 1], [9, 1, 0, 1],
+      [1, 1, 1, 2], [1, 1, 4, 2], [2, 1, 1, 1], [3, 1, 2, 1],
+      [1, 2, 0, 3], [2, 2, 0, 3], [3, 2, 0, 2], [4, 2, 0, 1], [1, 2, 1, 2], [2, 2, 1, 2], [3, 2, 1, 1],
+    ];
+    expect(rows.map(([s, p, h]) => parStars(true, s, p, h))).toEqual(rows.map((r) => r[3]));
+    expect([parStars(false, 1, 1, 0), parStars(false, 5, 2, 3)]).toEqual([0, 0]);
+  });
+  it('stars never fall with fewer strokes or fewer heritage broken, and a clear in par with heritage intact is three', () => {
+    for (let par = 1; par <= 4; par++) for (let s = 1; s <= 8; s++) for (let h = 0; h <= 3; h++) {
+      const st = parStars(true, s, par, h);
+      if (s > 1) expect(parStars(true, s - 1, par, h)).toBeGreaterThanOrEqual(st);
+      if (h > 0) expect(parStars(true, s, par, h - 1)).toBeGreaterThanOrEqual(st);
+      if (s <= par && h === 0) expect(st).toBe(3);
+    }
+  });
+  it('the rule before 2026-11-06 (par, and leverage at lGold for the third star) never gives more stars: no record is demoted', () => {
+    const old = (s: number, par: number, h: number, L: number, gold: number) => (s > par ? 1 : h === 0 && L >= gold ? 3 : 2);
+    for (let par = 1; par <= 3; par++) for (let s = 1; s <= 6; s++) for (let h = 0; h <= 2; h++) for (const L of [0, 0.5, 1, 20]) {
+      expect(parStars(true, s, par, h)).toBeGreaterThanOrEqual(old(s, par, h, L, 1));
+    }
+  });
+  it('leverage earns the gold badge, not a star: one-shot clears either side of the line are both three stars', () => {
     const lowL = [shot({ dPE_mJ: 1_000_000 })];
-    expect(levelScore(def, [...lowL, ...lowL, ...lowL], true, 5).stars).toBe(1);
-    expect(levelScore(def, lowL, true, 5).stars).toBe(2);
-    expect(levelScore(def, [shot({ dPE_mJ: (DEFAULT_GOLD + 1) * 1e6, heritageNew: 1 })], true, 5).stars).toBe(2);
-    expect(levelScore({ ...def, lGold: 3 }, [shot({ dPE_mJ: 3e6 })], true, 5).stars).toBe(3);
+    const p1 = { ...def, par: 1 };
+    const below = levelScore({ ...p1, lGold: 3 }, [shot({ dPE_mJ: 2.99e6 })], true, 5), at = levelScore({ ...p1, lGold: 3 }, [shot({ dPE_mJ: 3e6 })], true, 5);
+    expect([below.stars, below.gold, at.stars, at.gold]).toEqual([3, false, 3, true]);
+    // Over par, or heritage broken, no badge however high the leverage.
+    expect(levelScore({ ...p1, lGold: 3 }, [shot({ dPE_mJ: 3e6 }), shot({ dPE_mJ: 3e6 })], true, 5)).toMatchObject({ stars: 2, gold: false });
+    expect(levelScore(p1, [shot({ dPE_mJ: (DEFAULT_GOLD + 1) * 1e6, heritageNew: 1 })], true, 5)).toMatchObject({ stars: 2, gold: false });
+    // On the par-2 level: an ace and par are three, a bogey two, a double bogey one.
+    expect([1, 2, 3, 4].map((n) => levelScore(def, Array(n).fill(lowL[0]), true, 5).stars)).toEqual([3, 3, 2, 1]);
     const failed = levelScore(def, lowL, false, 5);
-    expect([failed.stars, failed.stamp]).toEqual([0, 'INCOMPLETE']);
+    expect([failed.stars, failed.stamp, failed.gold]).toEqual([0, 'INCOMPLETE', false]);
   });
   it('ace bonus and heritage penalty lines', () => {
     const s = levelScore(def, [shot({ heritageNew: 2 })], true, 5);

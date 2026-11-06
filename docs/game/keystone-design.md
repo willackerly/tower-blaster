@@ -58,10 +58,10 @@ All ammo is a plain `spawn` InputEvent. Shots are quantised integers so they rep
 
 **5 minutes.** A level is one structure, a par of 1–4 strokes and a fixed rack of ≤ 6 ammo.
 - It clears when the objective is met, and fails when the rack is empty. Retry is free.
-- Typical arc: attempt 1 is brute force and clears over par. Attempts 2–4 come from reading the structure and reach the par line (the "aha"). Some players then chase 3-star leverage, or the hidden Ace (a 1-stroke solution, shown as a silhouette badge).
+- Typical arc: attempt 1 is brute force and clears over par. Attempts 2–4 come from reading the structure and reach the par line (the "aha"). Some players then chase the gold-leverage badge, or the hidden Ace (a 1-stroke solution, shown as a silhouette badge).
 - After a clear: the tally slams in line by line, a golf stamp lands ("BIRDIE −1"), stars fill, and a cinematic auto-replay plays.
 
-**Session.** Worlds of 8–10 levels with star gates; each world adds one mechanic. Aces and 3-star leverage give a completionist layer. Shots are replays of under 200 bytes, so ghosts and links can be shared (post-prototype). Later: a bot-verified Keystone of the Day and a level editor gated by the same solvability bot.
+**Session.** Worlds of 8–10 levels with star gates; each world adds one mechanic. Aces and gold-leverage badges give a completionist layer. Shots are replays of under 200 bytes, so ghosts and links can be shared (post-prototype). Later: a bot-verified Keystone of the Day and a level editor gated by the same solvability bot.
 
 ## 5. Objectives and level grammar
 **Objectives:**
@@ -181,11 +181,12 @@ Footprint −20 × max(0, N_out − allowance)        (footprint levels only)
 - Example: L2 cleared in 1 stroke with the marble (p = 1, L = 48, C = 6, no heritage broken) scores 3000 + 1,688 + 1,050 = 5,738.
 - A level that is not cleared shows the partial tally greyed out.
 
-**Stars**
-- ★1 = objective cleared.
-- ★2 = s ≤ p.
-- ★3 = s ≤ p, no heritage broken, and L_total ≥ L_gold.
-- L_gold is set by the bot (Rubble Garden graft): the 25th percentile of L_total over 50 ±1-quantum perturbations of the best-leverage par solution. A good player earns it reliably; it does not need a knife-edge shot.
+**Stars** (revised 2026-11-06; the reasons and the audit are in [stars.md](stars.md))
+- Not cleared: no star. Cleared: 3 − max(0, s − p) − [any heritage broken], never under ★1.
+- So ★3 = s ≤ p with no heritage broken; ★2 = one stroke over par, or heritage broken in par; ★1 = any other clear.
+- Leverage gates no star. L_total ≥ L_gold, in par with heritage intact, earns the **gold-leverage badge** (◆ on the result card and the door).
+- L_gold is set by the bot (Rubble Garden graft): the 25th percentile of L_total over 50 ±1-quantum perturbations of the best-leverage par solution.
+- Until 2026-11-06 ★3 also needed L_total ≥ L_gold, so by construction about one in four of the bot's own par shots, and level 1's designed one-shot line itself, earned ★2.
 
 **Golf stamp:** s − p of −2 EAGLE, −1 BIRDIE, 0 PAR, +1 BOGEY, +2 DOUBLE.
 

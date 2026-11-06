@@ -23,6 +23,14 @@ describe('recordPlay', () => {
     p = recordPlay(p, 'B1', 'h1', outcome(3, 0.95), T1);
     expect(p.levels.B1).toMatchObject({ plays: 3, stars: 3, value: 0.95, at: T1.toISOString() });
   });
+  it('the gold-leverage badge sticks to the record once any play of the hash earned it', () => {
+    let p = recordPlay(emptyProgress(), 'L1', 'h1', { ...par(3, 4000), gold: true }, T0);
+    expect(p.levels.L1).toMatchObject({ stars: 3, gold: true });
+    p = recordPlay(p, 'L1', 'h1', par(3, 5000), T1); // a better total without the badge: the record moves, the badge stays
+    expect(p.levels.L1).toMatchObject({ plays: 2, total: 5000, gold: true });
+    expect(recordPlay(emptyProgress(), 'L1', 'h1', par(3, 4000), T0).levels.L1!.gold).toBeUndefined();
+    expect(recordPlay(p, 'L1', 'h2', par(2, 10), T1).levels.L1!.gold).toBeUndefined(); // another hash starts over
+  });
   it('a level changed since (another hash) starts its record over', () => {
     let p = recordPlay(emptyProgress(), 'B1', 'h1', outcome(3, 0.95), T0);
     p = recordPlay(p, 'B1', 'h2', outcome(1, 0.45), T1);

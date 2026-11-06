@@ -37,6 +37,8 @@ export const GAME_CSS = `
   .kg-result .stamp { display: inline-block; margin: 14px 0 4px; padding: 4px 12px; border: 3px solid #f7b955; border-radius: 6px; color: #f7b955; font-size: 24px; font-weight: 900; letter-spacing: 0.08em; transform: rotate(-6deg); opacity: 0; animation: kg-stamp 0.35s cubic-bezier(.2,1.8,.4,1) forwards; }
   .kg-result .stamp.s-bogey, .kg-result .stamp.s-doublebogey, .kg-result .stamp.s-incomplete { border-color: #9aa3b8; color: #9aa3b8; }
   .kg-result .stars { font-size: 30px; color: #f7b955; opacity: 0; animation: kg-slam 0.3s ease-out forwards; }
+  .kg-result .gold { margin-top: 2px; font-size: 13px; color: #8a93a6; opacity: 0; animation: kg-slam 0.3s ease-out forwards; }
+  .kg-result .gold.got { color: #f7b955; font-weight: 700; }
   .kg-result .actions { display: flex; gap: 8px; margin-top: 14px; }
   .kg-result button { font: inherit; padding: 7px 12px; border: 0; border-radius: 6px; background: #2b3242; color: #e8ebf2; cursor: pointer; }
   .kg-result button.primary { background: #d8693f; }

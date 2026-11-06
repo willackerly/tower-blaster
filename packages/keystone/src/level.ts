@@ -112,7 +112,7 @@ export interface LevelDef {
     ammoRatio?: number;
   };
   launcher: LauncherDef;
-  /** Leverage for the third star, set from bot runs; DEFAULT_GOLD when absent. */
+  /** Leverage for the gold badge (LevelScore.gold; it gates no star since 2026-11-06, docs/game/stars.md), set from bot runs; DEFAULT_GOLD when absent. */
   lGold?: number;
   /** Recorded solutions, replayed by tests. */
   solutions?: { par?: Shot[]; ace?: Shot[] };

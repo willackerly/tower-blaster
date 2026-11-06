@@ -310,10 +310,30 @@ export interface ShotOutcome {
 }
 
 export interface ScoreLine { label: string; value: number }
-export interface LevelScore { lines: ScoreLine[]; total: number; stars: 0 | 1 | 2 | 3; stamp: string; leverage: number }
+export interface LevelScore {
+  lines: ScoreLine[]; total: number; stars: 0 | 1 | 2 | 3; stamp: string; leverage: number;
+  /**
+   * Par levels: cleared in par with the level's gold leverage (lGold) or more, heritage intact: the
+   * badge leverage earns now that it no longer gates a star (parStars). Absent on outcome levels.
+   */
+  gold?: boolean;
+}
 
-/** Leverage needed for the third star when the bot has not set one for the level. */
+/** The gold-leverage badge's line when the bot has not set one for the level (LevelDef.lGold). */
 export const DEFAULT_GOLD = 15;
+
+/**
+ * A par level's stars (docs/game/stars.md): none unless cleared; otherwise three, less one for each
+ * stroke over par and one for any heritage broken, never under one. So a clear in par with heritage
+ * intact is always three stars (a one-shot clear of a par-1 level, an ace), each stroke or heritage
+ * piece is a visible star's worth, fewer strokes never earn fewer stars, and on a level with no
+ * heritage every star is still reachable (par, bogey, worse). Leverage gates no star (the gold badge).
+ */
+export function parStars(cleared: boolean, strokes: number, par: number, heritageBroken: number): 0 | 1 | 2 | 3 {
+  if (!cleared) return 0;
+  const flaws = Math.max(0, strokes - par) + (heritageBroken > 0 ? 1 : 0);
+  return Math.max(1, 3 - flaws) as 1 | 2 | 3;
+}
 
 export function stampOf(strokes: number, par: number): string {
   if (strokes === 1 && par >= 2) return 'ACE';
@@ -339,6 +359,6 @@ export function levelScore(def: LevelDef, shots: ShotOutcome[], cleared: boolean
     if (out > allowance) lines.push({ label: 'Footprint', value: -20 * (out - allowance) });
   }
   const total = lines.reduce((a, l) => a + l.value, 0);
-  const stars = !cleared ? 0 : s > par ? 1 : broken === 0 && L >= (def.lGold ?? DEFAULT_GOLD) ? 3 : 2;
-  return { lines, total, stars, stamp: cleared ? stampOf(s, par) : 'INCOMPLETE', leverage: L };
+  const gold = cleared && s <= par && broken === 0 && L >= (def.lGold ?? DEFAULT_GOLD);
+  return { lines, total, stars: parStars(cleared, s, par, broken), stamp: cleared ? stampOf(s, par) : 'INCOMPLETE', leverage: L, gold };
 }

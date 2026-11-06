@@ -26,6 +26,8 @@ export interface LevelRecord {
   collapse?: number;
   /** Outcome levels: the best play beat the best bot play. */
   beatBot?: boolean;
+  /** Par levels: some play of this hash earned the gold-leverage badge (LevelScore.gold), kept whichever play was best. */
+  gold?: boolean;
   /** ISO time of the best play. */
   at: string;
   /** Lot sheet goals (goals.ts ids) met on any play of this hash, in the order first met. Absent: none yet. */
@@ -65,7 +67,7 @@ export function betterPlay(a: Omit<LevelRecord, 'plays' | 'at' | 'hash'>, b: Omi
 /** What a finished play contributes to a record. */
 export function playOf(score: LevelScore): Omit<LevelRecord, 'plays' | 'at' | 'hash'> {
   const o = (score as Partial<OutcomeScore>).outcome;
-  return { stars: score.stars, total: score.total, ...(o ? { metric: o.metric, value: o.value, collapse: o.collapse, beatBot: o.beatBot } : {}) };
+  return { stars: score.stars, total: score.total, ...(o ? { metric: o.metric, value: o.value, collapse: o.collapse, beatBot: o.beatBot } : {}), ...(score.gold ? { gold: true } : {}) };
 }
 
 /**
@@ -79,6 +81,7 @@ export function recordPlay(p: Progress, id: string, hash: string, score: LevelSc
   const met = [...(same?.goals ?? [])];
   for (const g of goals) if (!met.includes(g)) met.push(g);
   if (met.length) next.goals = met; else delete next.goals;
+  if (same?.gold || play.gold) next.gold = true;
   return { version: 1, levels: { ...p.levels, [id]: next } };
 }
 
