@@ -3,7 +3,7 @@
 import { describe, expect, it } from 'vitest';
 import { B1, BIG_LEVELS, L1, L2, L3, seriesOf, type Shot, writeShots } from '@tb/keystone';
 import { compileLevel } from '@tb/keystone';
-import { DEFAULT_LEVEL, GAME_LOOK, levelRules, loadOptions, onEngine, parseGameParams, withRules, writeLevelRules } from '../src/params.ts';
+import { DEFAULT_LEVEL, GAME_LOOK, levelRules, loadOptions, onEngine, parseGameParams, weaponTierOf, withRules, writeLevelRules } from '../src/params.ts';
 import { DEFAULT_FEEL } from '../src/pacing.ts';
 
 const parse = (search: string) => parseGameParams(new URLSearchParams(search));
@@ -11,7 +11,7 @@ const par = L1.solutions!.par as Shot[];
 
 describe('game URL keys', () => {
   it('a bare URL opens the slice\'s first level (B1) on the GPU solver in the maquette look, no juice and no line', () => {
-    expect(parse('')).toEqual({ level: B1, rack: null, rules: {}, engine: 'gpu', feel: DEFAULT_FEEL, look: GAME_LOOK, shots: null, duel: null, offscreen: false, sound: 'collapse', impactsDb: 0 });
+    expect(parse('')).toEqual({ level: B1, rack: null, rules: {}, engine: 'gpu', feel: DEFAULT_FEEL, look: GAME_LOOK, shots: null, duel: null, offscreen: false, weaponTier: null, sound: 'collapse', impactsDb: 0 });
     expect(DEFAULT_LEVEL).toBe('B1');
     expect(seriesOf(DEFAULT_LEVEL)).toBe(BIG_LEVELS);
     // The chamber levels stay one key away, with par scoring.
@@ -22,7 +22,7 @@ describe('game URL keys', () => {
 
   it('reads every key, a level in any case and the viewer\'s name for the GPU solver, and leaves other keys alone', () => {
     expect(parse(`?level=l3&engine=rapier&keystone.hitstop=1&keystone.slowmo=0&look=real&real.sunElevation=6&offscreen=1&scenario=S4&cam=1,2,3,0,0,9`)).toEqual({
-      level: L3, rack: null, rules: {}, engine: 'rapier', feel: { ...DEFAULT_FEEL, hitStop: true }, look: 'real', shots: null, duel: null, offscreen: true, sound: 'collapse', impactsDb: 0,
+      level: L3, rack: null, rules: {}, engine: 'rapier', feel: { ...DEFAULT_FEEL, hitStop: true }, look: 'real', shots: null, duel: null, offscreen: true, weaponTier: null, sound: 'collapse', impactsDb: 0,
     });
     expect(parse('?keystone.sound=synth&keystone.impacts=-6')).toMatchObject({ sound: 'synth', impactsDb: -6 });
     expect(parse('?keystone.sound=classic')).toMatchObject({ sound: 'classic' });
@@ -55,6 +55,14 @@ describe('game URL keys', () => {
     expect(() => parse('?keystone.rack=marble,nuke')).toThrow(/keystone.rack: nuke is not one of marble, cannonball/);
     expect(() => parse('?keystone.rack=marble,')).toThrow(/keystone.rack: an empty name is not one of/);
     expect(() => parse('?level=L1&keystone.rack=w-big')).toThrow(/keystone.rack: L1 has no weapons.big for w-big/);
+  });
+
+  it('keystone.tier sets the tier the rack\'s weapons must fit; absent, high', () => {
+    expect(parse('?level=L1').weaponTier).toBeNull();
+    expect(weaponTierOf(parse('?level=L1').weaponTier)).toBe('high');
+    expect(parse('?level=L1&keystone.tier=low').weaponTier).toBe('low');
+    expect(weaponTierOf('mid')).toBe('mid');
+    expect(() => parse('?keystone.tier=huge')).toThrow(/keystone.tier must be one of low, mid, high: huge/);
   });
 
   it('opens a big level by id with its outcome scoring; a chamber level keeps par', () => {

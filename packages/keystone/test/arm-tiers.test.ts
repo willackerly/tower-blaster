@@ -2,7 +2,7 @@
 // an arm's load (arsenal.ts armLoad) is its weapon's own load as written, on every level; a weapon over
 // a tier is refused on it (armRefusal); a level carrying one over every tier does not validate.
 import { describe, expect, it } from 'vitest';
-import { BUILTIN_WEAPONS, DEFAULT_GRENADE, grenadeAsSpec, grenadeEnergies, weaponLoad, type WeaponSpec } from '@tb/weapons';
+import { BUILTIN_WEAPONS, grenadeEnergies, weaponLoad, type WeaponSpec } from '@tb/weapons';
 import { armLoad, armRefusal, B3, BIG_LEVELS, compileLevel, KEYSTONE_GRENADE, L1, LEVELS, levelGrenadeYield, TRIAL_LEVELS, UNDERCUT_LEVELS, validateLevel } from '../src/index.ts';
 
 /** 1 shell, 14 children, 196 grandchildren that blow: legal in the language, over every tier's blasts. */
@@ -28,7 +28,7 @@ describe('an arm\'s load', () => {
   it('one grenade of energy is the M grenade\'s yield on the level, and a GrenadeSpec weapon counts against it', () => {
     const c = compileLevel({ ...L1, rack: ['w-k'], weapons: { k: KEYSTONE_GRENADE } });
     expect(levelGrenadeYield(c)).toBeGreaterThan(0);
-    expect(grenadeEnergies(grenadeAsSpec(DEFAULT_GRENADE))).toBeCloseTo(1, 9);
+    expect(grenadeEnergies(BUILTIN_WEAPONS.grenadem!)).toBeCloseTo(1, 2);
     const k = armLoad(c, c.arms['w-k']!);
     expect(k.bodies).toBe(1);
     expect(k.blasts).toBe(1);

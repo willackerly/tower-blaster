@@ -7,10 +7,11 @@
 // its own elements; the viewer calls it for rules=keystone, with hooks for its
 // dev panels (docs/design/viewer-superset.md, step C).
 import { type BodyDesc, type EngineHealth, limitsHit, type PhysicsEngine, type Vec3 } from '@tb/engine-api';
-import { type RackItem, type CompiledLevel, compileLevel, crackSeed, Driver, type DriverCheckpoint, Duel, type DuelDef, DEFAULT_TURN_SECONDS, type Feedback, type Goal, goalMet, type Player, type Grade, gradeOf, type LevelDef, type LevelScore, type LotSheet, type PerStep, playShots, rapidDue, roundFacts, runSession, selectGroups, type Shot, isIcePiece, snapshotHash, TIER_NAMES } from '@tb/keystone';
+import { armRefusal, type RackItem, type CompiledLevel, compileLevel, crackSeed, Driver, type DriverCheckpoint, Duel, type DuelDef, DEFAULT_TURN_SECONDS, type Feedback, type Goal, goalMet, type Player, type Grade, gradeOf, type LevelDef, type LevelScore, type LotSheet, type PerStep, playShots, rapidDue, roundFacts, runSession, selectGroups, type Shot, isIcePiece, snapshotHash, TIER_NAMES } from '@tb/keystone';
 import { clampPitch, eyeOf, type Orbit, rayThrough, viewProj } from '@tb/render/camera';
 import type { FxOptions, PixelStats, Renderer, SnapshotSource } from '@tb/render';
 import type { HostStats } from '@tb/audio';
+import type { WeaponTier } from '@tb/weapons';
 import { type Aimed, azFromYaw, launchHeight, launchStep, pick, previewBeads, pullFor, shotFor, SUBSTEPS } from './aim.ts';
 import { Synth, type Voice, voicesFor } from './audio.ts';
 import { CollapseSound, type CollapseStatus } from './collapse-sound.ts';
@@ -319,6 +320,11 @@ export interface KeystoneEnv {
   series?: readonly number[];
   engine: EngineKind;
   feel: PaceFeel;
+  /**
+   * The device tier the rack's weapons must fit (keystone armRefusal: one over it is refused on fire,
+   * with a banner saying which number and which tier fires it); absent: high. Asked at each fire.
+   */
+  weaponTier?(): WeaponTier;
   /** Shows an error; play stops (handle.status is 'error'). */
   fail(e: unknown): void;
   hooks?: KeystoneHooks;
@@ -1136,6 +1142,9 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
       banner(cue ? turnCueText(duel!.def.sides[duel!.turn].name, cue, handle.input.touch) : refused.message, 'crack');
       return false;
     }
+    // A weapon over the device's tier (a link's or keystone.rack's): refused, saying what fires it.
+    const over = armRefusal(c, shot.ammo, env.weaponTier?.() ?? 'high');
+    if (over) { banner(over, 'crack'); return false; }
     const timed = shot.after !== undefined && driver.session.strokes > 0;
     if (!timed && !aimable()) return false;
     if (shot.ammo === 'pull' && driver.session.pullRefusal(shot.body) !== null) return false;

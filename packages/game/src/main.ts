@@ -13,7 +13,7 @@ import { createDevice } from '@tb/gpu';
 import { lookByName, parseBlastOptions, parseIceOptions, parseRealOptions, Renderer, SnapshotSource } from '@tb/render';
 import { installDoor, type DoorPage } from './door-page.ts';
 import { doorDuels, doorMode, doorOnLoad, duelsOnDoor, openerFor, preaimMode } from './door.ts';
-import { GAME_SERIES, loadOptions, lookName, onEngine, parseGameParams, withRules } from './params.ts';
+import { GAME_SERIES, loadOptions, lookName, onEngine, parseGameParams, weaponTierOf, withRules } from './params.ts';
 import { browserKeyValue, memoryKeyValue, type ProgressStore, progressStore } from './progress.ts';
 import { bankAfterLine, type SessionFacts, sessionFile, sessionFileName } from './session-file.ts';
 import { CAMERA_KEYS, cameraFeel, LAUNCH_KEYS, launchFeel, MARKS_KEYS, marksFeel, RAPID_KEYS, rapidFeel, type Settings, SettingsStore, TURN_VIEW_KEYS, turnViewFeel } from './settings.ts';
@@ -51,7 +51,7 @@ function fail(e: unknown) {
 
 async function main() {
   const q = new URLSearchParams(location.search);
-  const { level, rack, rules, engine, feel, shots, offscreen, sound, impactsDb, duel } = parseGameParams(q);
+  const { level, rack, rules, engine, feel, shots, offscreen, sound, impactsDb, duel, weaponTier } = parseGameParams(q);
   // Best plays and settings kept in the browser (?progress=off: this visit only); custom runs are not recorded.
   // A setting's URL key (look, sound, sharp) wins over the stored one for the visit (settings.ts).
   const progress = progressStore(q);
@@ -143,7 +143,7 @@ async function main() {
   let ended: SessionFacts | null = null, banked = false;
   await playKeystone({
     canvas, offscreen, device, renderer, source, hud: $('hud'), banner: $('banner'), result: $('result'),
-    levels: played, start: duel ? 0 : start, ...(duel ? {} : { series: seriesIdx }), engine, feel, fail, sound, impactsDb, muted: !settings.current.sound, touch: touchMode(q), ...loadOptions(q),
+    levels: played, start: duel ? 0 : start, ...(duel ? {} : { series: seriesIdx }), engine, feel, weaponTier: () => weaponTierOf(weaponTier), fail, sound, impactsDb, muted: !settings.current.sound, touch: touchMode(q), ...loadOptions(q),
     ...(duel ? { duel } : {}),
     // The pre-aimed opener (?keystone.preaim): by default the series' first level, until it has a record here.
     // The level's lot sheet (?keystone.goals=shown|all|off): proven goals by default, with the ones met on earlier plays marked.
