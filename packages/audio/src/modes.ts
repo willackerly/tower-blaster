@@ -187,7 +187,8 @@ export function sparseModes(m: SoundMaterial, bodyEdge: number, fmax: number, f:
   const n0 = f.length, top = f.reduce((a, b) => Math.max(a, b), 0), stop = m.overlap!;
   let a = 0x9e3779b9 >>> 0; // fixed stream: a material always rings the same
   const r = () => { a = (Math.imul(a ^ (a >>> 15), 0x2c1b3c6d) + 0x6d2b79f5) >>> 0; return a / 4294967296; };
-  let N = 0, x = top, next = 1 + 0.6 * (r() - 0.5);
+  // An empty table (a body whose first mode is past fmax, or a tiny one) counts from 20 Hz: from 0 the step x * 0.002 never moves.
+  let N = 0, x = Math.max(top, 20), next = 1 + 0.6 * (r() - 0.5);
   while (x < fmax && modalOverlap(m, x, bodyEdge) < stop && f.length < n0 + 512) {
     const dx = x * 0.002;
     N += modalDensity(m, x, bodyEdge) * dx; x += dx;
@@ -201,10 +202,19 @@ export function sparseModes(m: SoundMaterial, bodyEdge: number, fmax: number, f:
   };
 }
 
-/** Hertz contact time, s, of an impact at relative speed dv (m/s): 2.87 (m*^2 / (R E*^2 v))^(1/5). */
+/**
+ * Contact time, s, of an impact at relative speed dv (m/s). Hertz (a curved contact of radius R):
+ * 2.87 (m*^2 / (R E*^2 v))^(1/5). With `face`, toward a flat face meeting a flat face, whose stiffness
+ * is the block's own, k = E* L (a cube's face over its edge), so T_face = pi sqrt(m* / k), and
+ * T = T_hertz^(1 - face) T_face^face. A 0.5 m stone block dropped 5 cm: 7.5 ms on a 2 mm corner, 0.50 ms
+ * flat; a landing starts on an edge and rolls onto the face (Material identity, step 2c).
+ */
 export function contactTime(m: SoundMaterial, dv: number, bodyEdge = 1): number {
   const Ec = m.Ec ?? m.E, Es = Ec / (2 * (1 - m.nu * m.nu)), ms = m.mstar * mass(m, bodyEdge);
-  return 2.87 * ((ms * ms) / (m.R * Es * Es * Math.max(dv, 1e-3))) ** 0.2;
+  const hertz = 2.87 * ((ms * ms) / (m.R * Es * Es * Math.max(dv, 1e-3))) ** 0.2;
+  if (!(m.face! > 0)) return hertz;
+  const flat = Math.PI * Math.sqrt(ms / (Es * soundSize(m, bodyEdge)));
+  return hertz ** (1 - m.face!) * flat ** m.face!;
 }
 
 /** |F(f)| / J for a raised-cosine force pulse of length T: 1 at f = 0, zeros at f T = 2, 3, ... */

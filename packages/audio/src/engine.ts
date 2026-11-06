@@ -126,8 +126,8 @@ export function gritEnergy(m: SoundMaterial, edge = 1): number {
   return study * 10 ** (m.gritDb / 10) * (soundSize(m, edge) / GRIT.refEdge) ** 3;
 }
 
-/** Expected grains of one impact. */
-export const gritGrains = (dv: number): number => (dv > GRIT.dvMin ? Math.min(GRIT.perDv * dv, GRIT.most) : 0);
+/** Expected grains of one impact (rate: the material's gritRate, grains per m/s; the cap scales with it). */
+export const gritGrains = (dv: number, rate: number = GRIT.perDv): number => (dv > GRIT.dvMin ? Math.min(rate * dv, (GRIT.most * rate) / GRIT.perDv) : 0);
 
 export interface EngineOptions {
   sampleRate: number;
@@ -148,6 +148,7 @@ export interface EngineOptions {
 }
 
 interface MatState {
+  slot: number; // its index in mats
   m: SoundMaterial;
   md: Modes;
   /** Body edge for shell and cube materials without their own size. */
@@ -170,7 +171,9 @@ interface MatState {
   binT: Float64Array; // per bin: contact time
   w: Float64Array; // scratch weights
   /** Grit: amplitude per (A dv) of a unit-energy grain kernel (0: none), and the grains' mean delay in samples. */
-  gritAmp: number; gritDelay: number;
+  gritAmp: number; gritDelay: number; gritRate: number;
+  /** Ringing cracks (gritRing): a grain's dry click gain, sqrt(1 - ring), and the impulse A per unit of grain amplitude that rings the body with ring of its energy (0: none). */
+  gritDry: number; crackA: number;
   /** Contact roughness (amplitude floor re the impulse, 0: smooth). */
   rough: number;
   /** Asperity contact time, s (roughTime). */
@@ -269,6 +272,7 @@ export class CollapseEngine {
   private gv = new Uint8Array(GRING * GBUCKET);
   private ga = new Float32Array(GRING * GBUCKET);
   private gn = new Uint32Array(GRING);
+  private gm = new Uint8Array(GRING * GBUCKET); // the grain's material slot
   /** Grains merged into a full bucket's last (their energy kept). */
   gritOverflow = 0;
   /** Grains scheduled (a probe for tests and stats). */
@@ -307,7 +311,7 @@ export class CollapseEngine {
     const old = this.mats[i];
     const keep = old && old.M === M;
     const st: MatState = {
-      m, md, edge, M, mult: new Float64Array(C),
+      slot: i, m, md, edge, M, mult: new Float64Array(C),
       a1: new Float32Array(n), a2: new Float32Array(n), b: new Float32Array(n),
       y1: keep ? old.y1 : new Float32Array(n), y2: keep ? old.y2 : new Float32Array(n),
       x: keep ? old.x : new Float32Array(n * BLOCK), live: keep ? old.live : new Uint8Array(n), nLive: keep ? old.nLive : 0,
@@ -318,7 +322,8 @@ export class CollapseEngine {
       cf: clickFilter(m, this.sr, edge), cfz: new Float64Array(4 * S), cbus: new Float64Array(S * BLOCK),
       clickPeak: new Float64Array(DV_EDGES.length), binT: new Float64Array(DV_EDGES.length), w: new Float64Array(md.freq.length),
       gritAmp: Math.sqrt(gritEnergy(m, edge)),
-      gritDelay: GRIT.spread * Math.sqrt(soundSize(m, edge) / GRIT.refEdge) * this.sr,
+      gritRate: m.gritRate ?? GRIT.perDv, gritDry: Math.sqrt(1 - (m.gritRing ?? 0)), crackA: 0,
+      gritDelay: (m.gritSpread ?? GRIT.spread) * Math.sqrt(soundSize(m, edge) / GRIT.refEdge) * this.sr,
       rough: roughness(m),
       roughT: roughTime(m),
       dK: null, dDec: new Float64Array(0), dA: new Float64Array(0), dIn: new Float32Array(0), dLive: 0,
@@ -358,6 +363,17 @@ export class CollapseEngine {
       if (old.cD[bin] !== st.cD[bin]) continue;
       st.cring[r] = old.cring[r]!; st.cy1[r] = old.cy1[r]!; st.cy2[r] = old.cy2[r]!; st.cLast[r] = old.cLast[r]!;
     }
+    // Ringing cracks: a crack is a pulse shorter than any contact (flat over the modes, the shortest
+    // contact's dense row), with no rigid-body click (it carries no momentum). Its energy for A = 1:
+    // a mode of amplitude c rings c^2 tau sr / 4 (Pa^2 samples, the resonator's r^n sin), averaged over
+    // the classes' unit-rms weights, plus the dense bands' A^2 E sr. crackA makes that ring of the grain's a^2.
+    const ring = m.gritRing ?? 0;
+    if (ring > 0 && st.gritAmp > 0) {
+      let e = 0;
+      for (let k = 0; k < M; k++) e += st.md.gain[k]! ** 2 * md.tau[k]! * this.sr / 4;
+      if (st.dK) { const B = DENSE_BANDS.length, last = DV_EDGES.length - 1, dense = denseField(m, st.binT, edge, Math.min(18000, 0.45 * this.sr))!; for (let b = 0; b < B; b++) e += dense.energy[last * B + b]! * this.sr; }
+      st.crackA = e > 0 ? Math.sqrt(ring / e) : 0;
+    }
     this.mats[i] = st;
   }
 
@@ -379,7 +395,7 @@ export class CollapseEngine {
       this.voice(mat, dv, dist, pan, f.top[o + 4]!, at);
       const st = this.mats[mat];
       if (st?.dK) this.impulse(at, mat, DENSE_ONLY, s, dv / dist, dv);
-      if (st && st.gritAmp > 0) this.grit(st, at, s, (dv / dist) * dv, gritGrains(dv), 1);
+      if (st && st.gritAmp > 0) this.grit(st, at, s, (dv / dist) * dv, gritGrains(dv, st.gritRate), 1);
     }
     for (let mat = 0; mat < f.materials; mat++) {
       if (!this.mats[mat]) continue;
@@ -396,11 +412,11 @@ export class CollapseEngine {
         // n / k gritGrains(dv) of them, times q to keep the cell under maxGrains; each grain's amplitude is
         // over sqrt(n / k q), so the energy is what the impacts' own grains would carry.
         let q = 0;
-        if (st.gritAmp > 0) { let lam = 0; for (const dv of dvs) lam += gritGrains(dv); lam *= n / k; q = lam > 0 ? Math.min(1, this.maxGrains / lam) * (n / k) : 0; }
+        if (st.gritAmp > 0) { let lam = 0; for (const dv of dvs) lam += gritGrains(dv, st.gritRate); lam *= n / k; q = lam > 0 ? Math.min(1, this.maxGrains / lam) * (n / k) : 0; }
         for (const dv of dvs) {
           const at = start + (this.alignOnsets ? 0 : Math.floor(this.rand() * len));
           this.impulse(at, mat, Math.min(this.classes - 1, Math.floor(this.rand() * this.classes)), s, g * dv, dv);
-          if (q > 0) this.grit(st, at, s, g * dv * dv, gritGrains(dv) * q, 1 / Math.sqrt(q));
+          if (q > 0) this.grit(st, at, s, g * dv * dv, gritGrains(dv, st.gritRate) * q, 1 / Math.sqrt(q));
         }
       }
     }
@@ -431,7 +447,7 @@ export class CollapseEngine {
       const j = this.gn[slot]!;
       if (j >= GBUCKET) { this.gritOverflow++; const q = slot * GBUCKET + GBUCKET - 1; this.ga[q] = Math.hypot(this.ga[q]!, a); continue; }
       const q = slot * GBUCKET + j;
-      this.gt[q] = t - blk * BLOCK; this.gs[q] = sector; this.gv[q] = v; this.ga[q] = a;
+      this.gt[q] = t - blk * BLOCK; this.gs[q] = sector; this.gv[q] = v; this.ga[q] = a; this.gm[q] = st.slot;
       this.gn[slot] = j + 1;
     }
   }
@@ -482,6 +498,24 @@ export class CollapseEngine {
       st.cIn[bin * S + s] = 1;
     }
     this.bn[slot] = 0;
+    // Ringing cracks: this block's grains of a material with gritRing also strike its modes and dense
+    // field (crackA), from grit's own stream, so a material without it plays bit for bit as before.
+    const gslot = Math.floor(this.now / BLOCK) % GRING, gn = this.gn[gslot]!;
+    for (let j = 0; j < gn; j++) {
+      const q = gslot * GBUCKET + j, st = this.mats[this.gm[q]!];
+      if (!st || !(st.crackA > 0)) continue;
+      const A = this.ga[q]! * st.crackA, t = this.gt[q]!, s = this.gs[q]!;
+      if (st.dK) {
+        const B = DENSE_BANDS.length, last = DV_EDGES.length - 1;
+        for (let b = 0; b < B; b++) st.dIn[(s * B + b) * BLOCK + t]! += A * A * st.dK[last * B + b]!;
+        st.dLive = Math.max(st.dLive, 1);
+      }
+      const cls = Math.min(this.classes - 1, Math.floor(this.grand() * this.classes)), w = st.md.weights(this.grand, st.w), base = (cls * S + s) * st.M;
+      for (let k = 0; k < st.M; k++) {
+        st.x[(base + k) * BLOCK + t]! += A * w[k]! * st.md.gain[k]!;
+        if (!st.live[base + k]) { st.live[base + k] = 1; st.nLive++; }
+      }
+    }
     // Bank and clicks, into the sector buses.
     for (const st of this.mats) {
       if (!st) continue;
@@ -553,9 +587,9 @@ export class CollapseEngine {
       st.dLive = live;
     }
     // Grit grains: kernels into the grain bus (a grain may run into the next block), this block into the sectors.
-    const gslot = Math.floor(this.now / BLOCK) % GRING, gn = this.gn[gslot]!, gb = this.gbus, W = this.gw;
+    const gb = this.gbus, W = this.gw;
     for (let j = 0; j < gn; j++) {
-      const q = gslot * GBUCKET + j, k = this.kernels[this.gv[q]!]!, a = this.ga[q]!, o = this.gs[q]! * W + this.gt[q]!;
+      const q = gslot * GBUCKET + j, k = this.kernels[this.gv[q]!]!, a = this.ga[q]! * (this.mats[this.gm[q]!]?.gritDry ?? 1), o = this.gs[q]! * W + this.gt[q]!;
       for (let i = 0; i < k.length; i++) gb[o + i]! += a * k[i]!;
     }
     this.gn[gslot] = 0;
