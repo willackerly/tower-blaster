@@ -2,7 +2,7 @@
 // contract. Used as a reference for quality metrics and as the number every
 // GPU variant has to beat by a wide margin.
 import RAPIER from '@dimforge/rapier3d-simd-compat';
-import { blastArea, blastCentre, blastVelocity, type BodyDesc, checkBlast, checkInputQueue, DEFAULT_RESTITUTION_COMBINE, emptySnapshot, type EngineCheckpoint, type EngineInfo, type InputEvent, massOf, type PhysicsEngine, type SceneDesc, queueInputs, type Snapshot, TIER_FREE } from '@tb/engine-api';
+import { blastArea, blastCentre, blastVelocity, type BodyDesc, checkBlast, checkInputQueue, DEFAULT_RESTITUTION_COMBINE, emptySnapshot, type EngineCheckpoint, type EngineInfo, type FieldEvent, gravityChanges, type InputEvent, kicks, massOf, type PhysicsEngine, type SceneDesc, queueInputs, type Snapshot, TIER_FREE } from '@tb/engine-api';
 import { createBody, createGround, initRapier, RULES } from './bodies.ts';
 
 export interface RapierOptions {
@@ -91,6 +91,7 @@ export class RapierEngine implements PhysicsEngine {
         this.gone.add(ev.id);
         continue;
       }
+      if (ev.kind === 'field') { this.field(ev); continue; }
       // A blast (engine-api blast.ts): mass and volume from the description, as the AVBD engines.
       const b = checkBlast(ev.blast);
       const at = (rb: RAPIER.RigidBody): [number, number, number] => { const p = rb.translation(); return [p.x, p.y, p.z]; };
@@ -105,6 +106,23 @@ export class RapierEngine implements PhysicsEngine {
     }
     w.step();
     this.stepIndex++;
+  }
+
+  /**
+   * A field event (engine-api field.ts): the world's gravity from now on, and a kick to every moving body. A change of
+   * gravity or a kick wakes every body but the pinned and removed ones (Rapier does not wake sleepers when gravity
+   * changes).
+   */
+  private field(ev: FieldEvent): void {
+    const w = this.world!, g = w.gravity;
+    const changed = gravityChanges([g.x, g.y, g.z], ev.gravity), k = ev.kick;
+    if (ev.gravity) w.gravity = { x: ev.gravity[0], y: ev.gravity[1], z: ev.gravity[2] };
+    if (!changed && !kicks(ev)) return;
+    this.bodies.forEach((rb, id) => {
+      if (this.gone.has(id) || this.descs[id]!.pinned) return;
+      if (k && kicks(ev)) { const u = rb.linvel(); rb.setLinvel({ x: u.x + k[0], y: u.y + k[1], z: u.z + k[2] }, true); }
+      rb.wakeUp();
+    });
   }
 
   snapshot(): Snapshot {
@@ -133,6 +151,8 @@ export class RapierEngine implements PhysicsEngine {
     if (!w) throw new Error('init() first');
     const bytes = w.takeSnapshot(), handles = this.bodies.map((b) => b.handle), descs = [...this.descs];
     const gone = [...this.gone], pending = [...this.pending], step = this.stepIndex, generation = this.generation;
+    // The gravity in force (field events change it); restored explicitly, whatever the snapshot keeps of it.
+    const gravity = { ...w.gravity };
     let live = true;
     return {
       step, bytes: bytes.byteLength + 64 * (handles.length + pending.length),
@@ -142,6 +162,7 @@ export class RapierEngine implements PhysicsEngine {
         const world = RAPIER.World.restoreSnapshot(bytes);
         this.world.free();
         this.world = world;
+        world.gravity = { ...gravity };
         this.bodies = handles.map((h) => world.getRigidBody(h));
         this.descs = [...descs];
         this.gone = new Set(gone);

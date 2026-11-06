@@ -1,6 +1,6 @@
 # Pinned bodies and gravity schedules (C8, C7)
 
-Status 2026-11-06: C8 built; C7 designed here and built in the follow-up change. Roadmap nodes C8 (pinned bodies) and C7 (gravity schedule with optional field kick). They unlock M7 Aftershock (quakes), M8 Mason's Trial and M10 Rube Lab (fixed anchors, bins, walls). Both sit in `@tb/engine-api`, the one contract, and every engine implements them: the f64 reference, the GPU engine and Rapier. The probes that gated them are X5 (pinned anchors solid) and X6 (resonance under a gravity schedule) in `docs/game/mode-probes.md`.
+Status 2026-11-06: C8 and C7 built. Roadmap nodes C8 (pinned bodies) and C7 (gravity schedule with optional field kick). They unlock M7 Aftershock (quakes), M8 Mason's Trial and M10 Rube Lab (fixed anchors, bins, walls). Both sit in `@tb/engine-api`, the one contract, and every engine implements them: the f64 reference, the GPU engine and Rapier. The probes that gated them are X5 (pinned anchors solid) and X6 (resonance under a gravity schedule) in `docs/game/mode-probes.md`.
 
 ## C8: pinned bodies
 
@@ -71,9 +71,10 @@ The kick is added to the adaptive warm start's previous velocity too (reference 
 
 X6 found no resonance: a rocking block has no natural frequency, the amplitude that overturns it grows with frequency, and at CI size the slender column fell first at low frequency. So quakes are designed around **amplitude, duration and timing**, not tuned frequencies:
 
-- `tiltEvents(step, degrees, azimuth?)`: one key that turns gravity by an angle (a steady side load: a column of n cubes tips once the side load passes g/n).
-- `quakeEvents({ step, seconds, dt, peak, hz, azimuth, rise, fall })`: one key per step, g_side(t) = peak * envelope(t) * sin(2 pi hz t) along the azimuth, with a linear rise and fall. `peak` is a fraction of g; `hz` defaults to 1 (the low end does the damage). Every key is quantised; the last restores the base gravity.
-- `joltEvents(step, dv)`: a field kick.
+- `tiltEvent(step, degrees, base, azimuth?)`: one key that turns gravity by an angle, keeping its magnitude (a steady side load: a column of n cubes tips once the side load passes g/n).
+- `quakeEvents({ step, seconds, dt, peak, hz, azimuth, rise, fall }, base)`: one key per step that changes gravity, g_side(t) = peak |base| envelope(t) sin(2 pi hz t) along the azimuth, with a linear rise and fall (a quarter of the quake each by default). `peak` is a fraction of g; `hz` defaults to 1 (the low end does the damage). Every key is quantised; the last restores the base gravity, quantised, so a scene that uses field events gives `SceneDesc.gravity` on the grid too.
+- `scheduleEvents(from, to, g, before)`: any g(step) as quantised keys, one where the value changes (X6's growing shake).
+- `joltEvent(step, dv)`: a field kick.
 - `fieldGravity(scene, step)`: the gravity in force at a step, for the game's arc preview.
 
 ### How each engine does it
@@ -86,6 +87,7 @@ X6 found no resonance: a rocking block has no natural frequency, the amplitude t
 - `@tb/engine-api`: queue checks (quantised, finite, bounded, at least one of gravity and kick), the quantiser, the generators (exact keys, quantised, base gravity restored), `fieldGravity`.
 - `@tb/testkit`'s `field.ts`, shared by the three engines:
   - **Free flight:** bodies in flight under a schedule match `freeFlight` piecewise to rounding; a kick changes exactly the velocities it should (removed and pinned bodies untouched, a body spawned after it in the same step untouched).
-  - **Tilt** (the node's verify): a cube on the ground under gravity turned by 20 degrees (tan 20 = 0.36 < mu 0.6) stays put; turned by 40 degrees (tan 40 = 0.84 > 0.6) it slides with acceleration g (sin 40 - 0.6 cos 40) within 5%. Reference, GPU and Rapier agree with the analytic answer and with each other.
+  - **Tilt** (the node's verify): a cube on the ground under gravity turned by 20 degrees (tan 20 = 0.36 < mu 0.6) stays put; turned by 40 degrees (tan 40 = 0.84 > 0.6) it slides with acceleration g (sin 40 - 0.6 cos 40) within 5%. Reference, GPU and Rapier agree with the analytic answer and with each other (the GPU against the reference within 2%). Measured over the second after the tilt: analytic 0.898 m, reference 0.913 m, Rapier 0.910 m; at 20 degrees all three under 0.1 mm. With sleep (GPU, Rapier) the cube is asleep when the tilt comes, and the tilt wakes it.
+  - **Checkpoints:** a checkpoint taken before a tilt and restored after it brings back the gravity in force then (GPU bit for bit; Rapier).
 - **GPU with sleep:** a settled stack falls asleep; a field event that changes gravity wakes every body but the pin; one that repeats the current gravity wakes none; a skipped quiet step resumes at the event.
 - **Probe X6** now drives its shake with field events (sleep may stay off: it measures failures, not sleep).

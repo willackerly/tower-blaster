@@ -662,7 +662,12 @@ export class AvbdWorld {
   /** Each body's last step, [position change, rotation vector] (what the GPU keeps in SolverBody.dp, phi until the next initBodies). */
   lastDx: Float64Array[] = [];
 
-  constructor(readonly scene: Pick<SceneDesc, 'gravity' | 'dt' | 'ground' | 'frictionCombine' | 'restitutionCombine'>, readonly p: AvbdParams = DEFAULT_AVBD) {}
+  /** The gravity in force (engine-api field.ts): SceneDesc.gravity until a field event sets another. */
+  gravity: Vec3;
+
+  constructor(readonly scene: Pick<SceneDesc, 'gravity' | 'dt' | 'ground' | 'frictionCombine' | 'restitutionCombine'>, readonly p: AvbdParams = DEFAULT_AVBD) {
+    this.gravity = [...scene.gravity];
+  }
 
   add(b: BodyDesc): void {
     if (b.pinned && this.p.restitution) throw new Error('AvbdWorld.add: pinned bodies are not implemented with AvbdParams.restitution yet (docs/design/gravity-and-pins.md)');
@@ -849,7 +854,7 @@ export class AvbdWorld {
     // Speculative contacts: each body's margin grows by how far any of its
     // points can move this step, so fast bodies are caught before they
     // overlap (resting ones pay nothing).
-    const n = bodies.length, h = this.scene.dt, gl = Math.hypot(...this.scene.gravity);
+    const n = bodies.length, h = this.scene.dt, gl = Math.hypot(...this.gravity);
     const centers = new Float64Array(3 * n), radii = new Float64Array(n), sweep = new Float64Array(n);
     bodies.forEach((b, i) => {
       centers.set(b.pos, 3 * i);
@@ -1182,7 +1187,7 @@ export class AvbdWorld {
     // body holds it exactly.
     const anchorsOn = p.restitutionAnchors ?? RESTITUTION_DEFAULTS.restitutionAnchors;
     const restSpeed = p.restitutionAnchorSpeed ?? RESTITUTION_DEFAULTS.restitutionAnchorSpeed;
-    const gv = this.scene.gravity, gl = Math.hypot(gv[0], gv[1], gv[2]);
+    const gv = this.gravity, gl = Math.hypot(gv[0], gv[1], gv[2]);
     const up: Vec3 = gl > 0 ? [-gv[0] / gl, -gv[1] / gl, -gv[2] / gl] : [0, 0, 0];
     const seated = new Uint8Array(n);
     if (anchorsOn && gl > 0) {
@@ -1379,7 +1384,7 @@ export class AvbdWorld {
    */
   private capEnergy(ms: Array<{ a: number; b: number; P: Float64Array; target: number[] }>, split: Int32Array, u: Float64Array, applied: Float64Array, v0: Vec3[], w0: Vec3[], q0: Quat[], dx: ArrayLike<ArrayLike<number>>, st: StepStats['restitution']): void {
     const { bodies, contacts } = this, n = bodies.length;
-    const g = this.scene.gravity, hh = this.scene.dt / 2;
+    const g = this.gravity, hh = this.scene.dt / 2;
     // Islands: bodies joined by this step's contacts (union-find, each island's root its least body).
     const parent = Int32Array.from({ length: n }, (_, i) => i);
     const find = (x: number) => { while (parent[x] !== x) { parent[x] = parent[parent[x]!]!; x = parent[x]!; } return x; };
@@ -1441,7 +1446,7 @@ export class AvbdWorld {
 
   step(): void {
     const { p, bodies } = this;
-    const h = this.scene.dt, gv = this.scene.gravity;
+    const h = this.scene.dt, gv = this.gravity;
     const gl = Math.hypot(gv[0], gv[1], gv[2]);
     this.collide();
     const contacts = this.contacts;

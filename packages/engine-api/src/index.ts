@@ -2,6 +2,7 @@
 // reference, CPU baselines (Rapier, Box3D, Jolt) and every GPU variant.
 // The game and the benchmark harness both drive engines only through this.
 import type { Blast } from './blast.ts';
+import type { FieldEvent } from './field.ts';
 import type { ObserveOptions, Observer } from './observe.ts';
 
 export type Vec3 = [number, number, number];
@@ -40,9 +41,11 @@ export const TAG_DEBRIS = -2;
 
 /**
  * Something that happens at a given step: a body is added (a ball is fired), a blast pushes the bodies
- * around a point (blast.ts), or a body is taken out of the world (remove.ts).
+ * around a point (blast.ts), a body is taken out of the world (remove.ts), or the world's gravity changes or
+ * every moving body is kicked (field.ts).
  */
-export type InputEvent = SpawnEvent | BlastEvent | RemoveEvent;
+export type InputEvent = SpawnEvent | BlastEvent | RemoveEvent | FieldEvent;
+export type { FieldEvent } from './field.ts';
 export interface SpawnEvent { step: number; kind: 'spawn'; body: BodyDesc }
 /** Engines that do not apply blasts throw on push() and init() of one. */
 export interface BlastEvent { step: number; kind: 'blast'; blast: Blast }
@@ -57,6 +60,7 @@ export interface SceneDesc {
   id: string;
   params: Record<string, number | string | boolean>;
   seed: number;
+  /** Gravity before the first field event that sets it (field.ts). With field events, give it on their grid (quantiseVec3) so restoring it is exact. */
   gravity: Vec3;
   /** Fixed physics step in seconds. */
   dt: number;
@@ -69,7 +73,7 @@ export interface SceneDesc {
   /** How the restitution of two touching surfaces combines (ground included). Default DEFAULT_RESTITUTION_COMBINE. */
   restitutionCombine?: CombineRule;
   bodies: BodyDesc[];
-  /** Sorted by step. Spawned bodies get indices after `bodies`, in event order. */
+  /** Sorted by step. Spawned bodies get indices after `bodies`, in event order. Field events (field.ts) change gravity from their step on. */
   inputs: InputEvent[];
 }
 
@@ -312,6 +316,7 @@ export function inertiaOf(b: BodyDesc): Vec3 {
 }
 
 export * from './blast.ts';
+export * from './field.ts';
 export * from './host.ts';
 export * from './observe.ts';
 export * from './pinned.ts';

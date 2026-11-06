@@ -14,13 +14,23 @@
 // is the reference's (blastCentre, blastArea, blastWeight, blastVelocity) in
 // f32; the speed cap is applied after each blast, as there. A pinned body
 // (engine-api pinned.ts) is never pushed and never woken.
-import { type CheckedBlast, MAX_BLAST_EXCLUDE } from '@tb/engine-api';
+//
+// The same records carry the field events' work (engine-api field.ts), in
+// event order with the blasts: a kick record adds its dv to every body below
+// its count (not removed, not pinned) and wakes it; a wake record wakes the
+// same bodies without pushing them (a change of gravity under sleep).
+import { type CheckedBlast, MAX_BLAST_EXCLUDE, type Vec3 } from '@tb/engine-api';
 import { Body, BodyProps, Shape, SolverBody, TIER, wgslStruct } from '@tb/schema';
 
 const WG = 64;
 const HEADER = 4;
-/** point or offset (3), radius, impulse, falloff (u32), maxDv, count, nExclude, exclude (MAX_BLAST_EXCLUDE), core, centre body (NO_BODY: a point), maxSpeed. */
-const STRIDE = 20;
+/**
+ * point or offset (3), radius, impulse, falloff (u32), maxDv, count, nExclude, exclude (MAX_BLAST_EXCLUDE), core, centre
+ * body (NO_BODY: a point), maxSpeed, kind (KIND_*). A kick record holds its dv in words 0-2 and its count in 7; a wake
+ * record only its count.
+ */
+const STRIDE = 21;
+const KIND_BLAST = 0, KIND_KICK = 1, KIND_WAKE = 2;
 const NO_BODY = 0xffffffff;
 /** maxSpeed Infinity goes up as the largest f32 (WGSL may assume no infinities). */
 const F32_MAX = 3.4028234663852886e38;
@@ -56,6 +66,11 @@ fn blast(@builtin(global_invocation_id) id: vec3u) {
   for (var k = 0u; k < blasts[0]; k++) {
     let o = ${HEADER}u + k * ${STRIDE}u;
     if (i >= blasts[o + 7u]) { continue; }
+    let kind = blasts[o + 20u];
+    // A field kick: the same dv for every body (engine-api field.ts), no cap.
+    if (kind == ${KIND_KICK}u) { v += vec3f(word(o), word(o + 1u), word(o + 2u)); pushed = true; continue; }
+    // A wake: no push.
+    if (kind == ${KIND_WAKE}u) { pushed = true; continue; }
     var excluded = false;
     for (var e = 0u; e < blasts[o + 8u]; e++) { if (blasts[o + 9u + e] == i) { excluded = true; } }
     if (excluded) { continue; }
@@ -89,8 +104,11 @@ fn blast(@builtin(global_invocation_id) id: vec3u) {
   solverBodies[i].prevVel += v - b.linVel;
 }`;
 
-/** A checked blast (checkBlast) and the bodies it acts on: ids below count. */
-export interface DueBlast { blast: CheckedBlast; count: number }
+/**
+ * What the pass applies at a step, in event order, each to the bodies below its count: a checked blast (checkBlast), a
+ * field kick (engine-api field.ts: dv for every moving body), or a wake of every moving body (a change of gravity).
+ */
+export type DueBlast = { blast: CheckedBlast; count: number } | { kick: Vec3; count: number } | { wake: true; count: number };
 
 export class BlastPass {
   private readonly pipe: GPUComputePipeline;
@@ -108,8 +126,14 @@ export class BlastPass {
     if (due.length > this.room) this.grow(due.length);
     const words = new Uint32Array(HEADER + STRIDE * due.length), f = new Float32Array(words.buffer);
     let n = 0;
-    due.forEach(({ blast: b, count }, k) => {
-      const o = HEADER + k * STRIDE;
+    due.forEach((d, k) => {
+      const o = HEADER + k * STRIDE, count = d.count;
+      n = Math.max(n, count);
+      words[o + 7] = count;
+      if ('kick' in d) { f.set(d.kick, o); words[o + 20] = KIND_KICK; return; }
+      if ('wake' in d) { words[o + 20] = KIND_WAKE; return; }
+      const b = d.blast;
+      words[o + 20] = KIND_BLAST;
       f.set(b.point ?? b.offset, o);
       f[o + 3] = b.radius; f[o + 4] = b.impulse; words[o + 5] = b.falloff; f[o + 6] = b.maxDv;
       words[o + 7] = count; words[o + 8] = b.exclude.length;
@@ -117,7 +141,6 @@ export class BlastPass {
       f[o + 17] = b.core;
       words[o + 18] = b.point ? NO_BODY : b.body;
       f[o + 19] = Math.min(b.maxSpeed, F32_MAX);
-      n = Math.max(n, count);
     });
     words[0] = due.length; words[1] = n;
     if (n === 0) return;

@@ -1,5 +1,5 @@
 // The reference AVBD solver behind the engine contract.
-import { blastArea, blastCentre, blastVelocity, checkBlast, checkInputQueue, emptySnapshot, queueInputs, scenePins, TIER_FREE, type EngineInfo, type InputEvent, type PhysicsEngine, type SceneDesc, type Snapshot } from '@tb/engine-api';
+import { blastArea, blastCentre, blastVelocity, checkBlast, checkInputQueue, emptySnapshot, kicks, queueInputs, scenePins, TIER_FREE, type EngineInfo, type InputEvent, type PhysicsEngine, type SceneDesc, type Snapshot } from '@tb/engine-api';
 import { type AvbdParams, avbdVariant, AvbdWorld, checkColoring, checkGapSlop, checkRecords, checkRemoved, checkRestitution, DEFAULT_AVBD } from './avbd.ts';
 
 export class AvbdReferenceEngine implements PhysicsEngine {
@@ -50,6 +50,18 @@ export class AvbdReferenceEngine implements PhysicsEngine {
       if (ev.kind === 'spawn') { w.add(ev.body); continue; }
       // A removal (remove.ts): the body touches nothing from this step on.
       if (ev.kind === 'remove') { w.remove(ev.id); continue; }
+      // A field event (field.ts): the gravity from this step on, and a kick for every moving body (to its warm
+      // start's previous velocity too, as a blast's). Nothing sleeps here, so there is nothing to wake.
+      if (ev.kind === 'field') {
+        if (ev.gravity) w.gravity = [...ev.gravity];
+        const k = ev.kick;
+        if (k && kicks(ev)) for (const body of w.bodies) {
+          if (body.removed || body.pinned) continue;
+          body.linVel = [body.linVel[0] + k[0], body.linVel[1] + k[1], body.linVel[2] + k[2]];
+          body.prevLinVel = [body.prevLinVel[0] + k[0], body.prevLinVel[1] + k[1], body.prevLinVel[2] + k[2]];
+        }
+        continue;
+      }
       // A blast (blast.ts) pushes the bodies that exist now, before the step starts; never a removed one.
       const b = checkBlast(ev.blast);
       const centre = blastCentre(b, b.body >= 0 ? w.bodies[b.body]!.pos : null);

@@ -20,13 +20,6 @@ export interface RunSpec {
   params: Partial<AvbdParams>;
   /** GPU engine options (sleep and its rule, pair room, box broadphase). */
   opts: Omit<GpuEngineOptions, 'device'>;
-  /**
-   * A gravity schedule (X6, the C7 verb emulated): the world's gravity during step i (0-based, the step from
-   * i to i + 1). drive() writes it into the scene's gravity in place before each step; both engines read
-   * SceneDesc.gravity every step, as C7 would write it. No sleep with a schedule: a change of gravity does
-   * not wake sleepers today.
-   */
-  gravity?: (step: number) => Vec3;
 }
 
 /**
@@ -70,7 +63,6 @@ export interface Probe<C = unknown, R = unknown> {
 /**
  * Runs a spec on an engine: init, then step until the cap or the meter stops it, sampling every
  * meter.every steps (and step 0, and the last). `afterInit` runs once init() resolves.
- * With spec.gravity, the scene's gravity array is rewritten before every step.
  */
 export async function drive<R>(engine: PhysicsEngine, spec: RunSpec, meter: Meter<R>, afterInit?: () => void | Promise<void>): Promise<{ steps: number; wallMs: number }> {
   await engine.init(spec.scene);
@@ -78,11 +70,8 @@ export async function drive<R>(engine: PhysicsEngine, spec: RunSpec, meter: Mete
   const t0 = performance.now();
   let act = meter.sample(0, await engine.snapshot());
   let i = 0;
-  const g = spec.scene.gravity as unknown as number[];
-  if (spec.gravity && spec.opts.sleep) throw new Error(`${spec.scene.id}: a gravity schedule with sleep on (a change of gravity does not wake sleepers)`);
   while (act !== 'stop' && i < spec.steps) {
     if (Array.isArray(act) && act.length) engine.push(act);
-    if (spec.gravity) { const v = spec.gravity(i); g[0] = v[0]; g[1] = v[1]; g[2] = v[2]; }
     await engine.step();
     i++;
     act = i % meter.every === 0 || i === spec.steps ? meter.sample(i, await engine.snapshot()) : undefined;

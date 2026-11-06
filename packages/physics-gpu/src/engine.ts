@@ -3,7 +3,7 @@
 // one command buffer per step. Parameters are the reference solver's (physics-ref AvbdParams), so
 // the two engines can be run side by side on the same settings. With AvbdParams.restitution on,
 // the solve ends with the restitution pass (restitution.ts).
-import { type BodyDesc, checkBlast, checkInputQueue, DEFAULT_RESTITUTION_COMBINE, emptySnapshot, type EngineCheckpoint, type EngineHealth, type EngineInfo, inertiaOf, type InputEvent, isPinned, massOf, type PhysicsEngine, type SceneDesc, scenePins, type Snapshot, queueInputs, spawnedBodies, TIER_FREE, type Vec3 } from '@tb/engine-api';
+import { type BodyDesc, checkBlast, checkInputQueue, DEFAULT_RESTITUTION_COMBINE, emptySnapshot, type EngineCheckpoint, type EngineHealth, type EngineInfo, gravityChanges, inertiaOf, type InputEvent, isPinned, kicks, massOf, type PhysicsEngine, type SceneDesc, scenePins, type Snapshot, queueInputs, spawnedBodies, TIER_FREE, type Vec3 } from '@tb/engine-api';
 import { boundingRadius } from '@tb/geom';
 import { assertStorageFits, createDevice, isSoftwareAdapter, Readback } from '@tb/gpu';
 import { type AvbdParams, avbdVariant, checkColoring, checkGapSlop, checkRecords, checkRemoved, checkRestitution, DEFAULT_AVBD, RESTITUTION_DEFAULTS } from '@tb/physics-ref';
@@ -260,6 +260,8 @@ export class GpuAvbdEngine implements PhysicsEngine {
   private readonly onGpuError = (ev: Event) => { this.failure ??= `GPU error: ${(ev as GPUUncapturedErrorEvent).error.message}`; };
   private scene: SceneDesc | null = null;
   private pending: InputEvent[] = [];
+  /** The gravity in force (engine-api field.ts): SceneDesc.gravity until a field event sets another. */
+  private gravity: Vec3 = [0, 0, 0];
   /** Removed bodies (engine-api remove.ts): their slots are tombstones (tier free), which every stage skips. */
   private gone = new Set<number>();
   private n = 0;
@@ -445,6 +447,7 @@ export class GpuAvbdEngine implements PhysicsEngine {
     this.gone = new Set();
     for (const b of scene.bodies) this.add(b);
     this.pending = [...scene.inputs].sort((a, b) => a.step - b.step);
+    this.gravity = [...scene.gravity];
     this.stepIndex = 0;
     this.quietStep = -1;
     this.eventStep = 0;
@@ -580,11 +583,19 @@ export class GpuAvbdEngine implements PhysicsEngine {
         // the largest bounding radii plus both bodies' margins, so it covers every body that can have touched it.
         if (parts.sleep) blasts.push({ blast: checkBlast({ centre: { body: ev.id }, radius: 2 * this.rmax + 2 * this.params.margin, impulse: 0, maxSpeed: Infinity }), count: this.n });
       }
+      else if (ev.kind === 'field') {
+        // A field event (engine-api field.ts): the gravity from this step on; a kick for every moving body (which wakes
+        // it); with sleep, a change of gravity wakes every moving body (blast.ts's wake record), and so their groups.
+        const changed = gravityChanges(this.gravity, ev.gravity);
+        if (ev.gravity) this.gravity = [...ev.gravity];
+        if (kicks(ev)) blasts.push({ kick: ev.kick!, count: this.n });
+        else if (changed && parts.sleep) blasts.push({ wake: true, count: this.n });
+      }
       else blasts.push({ blast: checkBlast(ev.blast), count: this.n });
     }
     const n = this.n, settling = this.stepIndex < (this.opts.settleSteps ?? 0);
     const p = settling ? { ...this.params, iterations: this.opts.settleIterations! } : this.params;
-    parts.solver.writeParams(n, scene.dt, scene.gravity, scene.ground, p, scene.frictionCombine);
+    parts.solver.writeParams(n, scene.dt, this.gravity, scene.ground, p, scene.frictionCombine);
     parts.sleep?.writeParams(n);
     const enc = device.createCommandEncoder();
     mark?.(enc, 'start');
@@ -653,7 +664,7 @@ export class GpuAvbdEngine implements PhysicsEngine {
     if (this.failure) throw new Error(`GpuAvbdEngine: ${this.failure}`);
     const regions = this.carried(), saved = saveRegions(device, parts.pool, regions);
     const cpu = {
-      n: this.n, stepIndex: this.stepIndex, pending: [...this.pending], gone: [...this.gone],
+      n: this.n, stepIndex: this.stepIndex, pending: [...this.pending], gone: [...this.gone], gravity: [...this.gravity] as Vec3,
       quietStep: this.quietStep, eventStep: this.eventStep, skipped: this.skipped, solver: parts.solver.cpuState,
     };
     const generation = this.generation;
@@ -670,6 +681,7 @@ export class GpuAvbdEngine implements PhysicsEngine {
         this.stepIndex = cpu.stepIndex;
         this.pending = [...cpu.pending];
         this.gone = new Set(cpu.gone);
+        this.gravity = [...cpu.gravity];
         this.quietStep = cpu.quietStep;
         this.eventStep = cpu.eventStep;
         this.skipped = cpu.skipped;

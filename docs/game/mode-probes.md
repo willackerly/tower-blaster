@@ -155,6 +155,8 @@ CI size on SwiftShader (one nudge; 2026-11-05):
 
 Full size: pending (the Metal run).
 
+**C8 built (2026-11-06).** `BodyDesc.pinned` (engine-api `pinned.ts`, `docs/design/gravity-and-pins.md`) is the mechanism emulated above, made real: a never-wake sleeper on the GPU, left out of the solve in the reference, a fixed body in Rapier. The probe now runs it with sleep off, so every other body is awake throughout; the CI-size run passes as before (pins move exactly 0).
+
 ## X6 Resonance under a gravity schedule; far-blast shove
 
 **Question.** Do friction stacks resonate under a shaking gravity, and does a far blast give every body the same kick? M7 Aftershock is quakes. The roadmap's risk is that friction-held stacks slide instead of resonating, and claim 6 is that a far flat-core blast is a uniform world shove available today.
@@ -208,6 +210,8 @@ The shove:
 So a far blast is a uniform shove of every body, as claimed, but a standing cube building does not take it as a rigid unit; its courses part within a sixth of a second. For M7 a shove is a jolt that breaks lattice buildings up, not a way to slide one, and its look wants a play-session check.
 
 Full size: pending (the Metal run: seven frequencies, eight columns of each height; shoves at 100 m and 1 km).
+
+**C7 built (2026-11-06).** Field events (engine-api `field.ts`, `docs/design/gravity-and-pins.md`) replace the emulation above: the shake is one quantised gravity key per step in the scene's inputs (2^-12 m/s^2 grid, so the GPU's f32 uniform holds the reference's value exactly), a change of gravity wakes every sleeper, and a field kick is the exact uniform jolt the far blast approximates. The CI-size shake passes as before. Following this probe, quakes are built around amplitude and duration (`quakeEvents`: peak side load, seconds, rise and fall; 1 Hz by default), not tuned frequencies.
 
 ## X8 Islands behave like solo worlds
 
