@@ -14,7 +14,7 @@ import { assertPairDispatch, Broadphase } from './broadphase.ts';
 import { Coloring } from './coloring.ts';
 import { DEFAULT_PAIRS_PER_BODY, gpuHealth } from './health.ts';
 import { Narrowphase } from './narrowphase.ts';
-import { restitutionWord } from './restitution.ts';
+import { ISLAND_BODY_BYTES, restitutionWord } from './restitution.ts';
 import { decodeBodies } from './snapshot.ts';
 import { checkSleepRule, DEFAULT_SLEEP, SleepPass, type SleepRule } from './sleep.ts';
 import { AvbdSolver, DEFAULT_DISPATCH, defaultTailThreads, HESSIAN_FORMS, type HessianForm, type RecordMode, type SolverDispatch } from './solver.ts';
@@ -181,19 +181,25 @@ export interface GpuRestitutionStats {
   contacts: number;
   impulse: number;
   groundImpulse: Vec3;
+  /** The islands the energy cap scaled down and the least alpha it took (1 when none, and always with the cap off). */
+  capped: number;
+  capAlpha: number;
 }
 
 /**
  * GpuRestitutionStats from a copy of the pass's state (AvbdSolver.restSlots)
  * after a step that wrote `pairsWritten` pair slots for n bodies.
  */
-export function restitutionStatsOf(slots: ArrayBuffer, pairsWritten: number, maxPairs: number, n: number): GpuRestitutionStats {
+export function restitutionStatsOf(slots: ArrayBuffer, pairsWritten: number, maxPairs: number, n: number, islands: ArrayBuffer | null = null): GpuRestitutionStats {
   const f = new Float32Array(slots), u = new Uint32Array(slots), stride = RestSlot.size / 4;
   const at = (name: string) => RestSlot.fields.find((x) => x.name === name)!.offset / 4;
   const P = at('P'), flags = at('flags');
-  const out: GpuRestitutionStats = { contacts: 0, impulse: 0, groundImpulse: [0, 0, 0] };
+  const out: GpuRestitutionStats = { contacts: 0, impulse: 0, groundImpulse: [0, 0, 0], capped: 0, capAlpha: 1 };
+  // Whether a point was marked to bounce this step: else the pass's later kernels (the islands' among them) did not run.
+  let marked = false;
   const add = (k: number, ground: boolean) => {
     const fl = u[k * stride + flags]!;
+    if (fl & 15) marked = true;
     for (let q = 0; q < 4; q++) {
       // Bit q: the point bounces; bit q + 4: it is a support.
       if (!((fl >> q) & 0x11)) continue;
@@ -205,6 +211,15 @@ export function restitutionStatsOf(slots: ArrayBuffer, pairsWritten: number, max
   };
   for (let k = 0; k < pairsWritten; k++) add(k, false);
   for (let i = 0; i < n; i++) add(maxPairs + i, true);
+  if (islands && marked) {
+    // IslandBody (restitution.ts): word 0 the parent (a root's is itself), word 1 the island's alpha.
+    const iu = new Uint32Array(islands), ifl = new Float32Array(islands), words = ISLAND_BODY_BYTES / 4;
+    for (let i = 0; i < n; i++) {
+      if (iu[i * words] !== i || !(ifl[i * words + 1]! < 1)) continue;
+      out.capped++;
+      out.capAlpha = Math.min(out.capAlpha, ifl[i * words + 1]!);
+    }
+  }
   return out;
 }
 
@@ -385,6 +400,7 @@ export class GpuAvbdEngine implements PhysicsEngine {
         threshold: p.restitutionThreshold ?? RESTITUTION_DEFAULTS.restitutionThreshold, rounds: p.restitutionRounds ?? RESTITUTION_DEFAULTS.restitutionRounds,
         groundRestitution: scene.ground?.restitution ?? 0, combine: scene.restitutionCombine ?? DEFAULT_RESTITUTION_COMBINE,
         anchors: p.restitutionAnchors ?? RESTITUTION_DEFAULTS.restitutionAnchors, anchorSpeed: p.restitutionAnchorSpeed ?? RESTITUTION_DEFAULTS.restitutionAnchorSpeed,
+        energyCap: p.restitutionEnergyCap ?? RESTITUTION_DEFAULTS.restitutionEnergyCap,
       } : null, sleeps);
       const sleep = sleeps ? new SleepPass(device, sleepRuleOf(this.opts), this.capacity, bodies, props, np.manifolds, bp.total) : null;
       parts = { bodies, shapes, props, spheres, sweep, prev, bp, np, col, solver, blast: new BlastPass(device, bodies, props, shapes, solver.solver), readback: new Readback(device), sleep, pool: new CheckpointPool(device) };
@@ -691,8 +707,9 @@ export class GpuAvbdEngine implements PhysicsEngine {
     if (!device || !parts) throw new Error('init() first');
     const slots = parts.solver.restSlots;
     if (!slots) return null;
-    const [t, r] = await Promise.all([parts.readback.read(parts.bp.total), parts.readback.read(slots)]);
-    return restitutionStatsOf(r, new Uint32Array(t)[3]!, parts.solver.maxPairs, this.n);
+    const islands = parts.solver.restIslands;
+    const [t, r, il] = await Promise.all([parts.readback.read(parts.bp.total), parts.readback.read(slots), islands ? parts.readback.read(islands) : null]);
+    return restitutionStatsOf(r, new Uint32Array(t)[3]!, parts.solver.maxPairs, this.n, il);
   }
 
   private static free(p: NonNullable<GpuAvbdEngine['parts']>): void {
