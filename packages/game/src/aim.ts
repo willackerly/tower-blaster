@@ -3,7 +3,7 @@
 // ring, so the player always shoots away from the eye.
 import { type Quat, type Snapshot, TIER_FREE, type Vec3 } from '@tb/engine-api';
 import { rotate } from '@tb/geom';
-import { aimAt, ammoBody, type CompiledLevel, type LaunchItem, type PullShot, type RackItem, GRAVITY, predictArc, type Session, type Shot, shotToSpawn } from '@tb/keystone';
+import { aimAt, ammoBody, type CompiledLevel, type LaunchItem, type PullShot, type RackItem, GRAVITY, itemSpec, predictArc, type Session, type Shot, shotToSpawn } from '@tb/keystone';
 
 /**
  * Substeps per step for the arc, when the engine doesn't report them
@@ -174,7 +174,9 @@ export function previewBeads(c: CompiledLevel, shot: Shot, target: Vec3, substep
     for (let k = 0; k < n; k++) out.set([ev.body.pos[0], top - ((top - bottom) * k) / (n - 1), ev.body.pos[2]], 3 * k);
     return out;
   }
-  const steps = 240, arc = predictArc(ev, [0, -GRAVITY, 0], c.scene.dt, steps, substeps);
+  // A weapon's motor (thrust on a timer) bends the line: flown as the engines will (shots.ts predictArc).
+  const motor = shot.ammo === 'cue' ? undefined : itemSpec(shot.ammo, c.frame).motor;
+  const steps = 240, arc = predictArc(ev, [0, -GRAVITY, 0], c.scene.dt, steps, substeps, motor);
   // Last step before the arc starts moving away from the target, or hits the ground.
   let end = steps, best = Infinity;
   for (let k = 0; k <= steps; k++) {

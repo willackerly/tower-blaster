@@ -48,7 +48,7 @@ describe('WeaponSpec format', () => {
       expect(spec.name).toBe(name);
     }
     expect(validateWeapon(GRENADE_WEAPON).issues).toEqual([]);
-    expect(Object.fromEntries(Object.entries(BUILTIN_WEAPONS).map(([k, s]) => [k, weaponBudget(s).bodies]))).toEqual({ firework: 13, cluster: 7, grenades: 1, grenadem: 1, grenadel: 1, grenadexl: 1, scatter: 6 });
+    expect(Object.fromEntries(Object.entries(BUILTIN_WEAPONS).map(([k, s]) => [k, weaponBudget(s).bodies]))).toEqual({ firework: 13, cluster: 7, grenades: 1, grenadem: 1, grenadel: 1, grenadexl: 1, scatter: 6, rocket: 1 });
   });
 
   it('a weapons record tells a WeaponSpec (version) from a GrenadeSpec', () => {
@@ -133,7 +133,7 @@ describe('WeaponSpec budget', () => {
     expect(b.depth).toBe(3);
     expect(b.munitions.map((m) => [m.path, m.count])).toEqual([['', 1], ['star', 8], ['star.spark', 32]]);
     expect(b.blasts.map((x) => [x.path, x.count, x.blast.radius])).toEqual([['star.rules.0.do.0', 8, 1.5], ['star.spark.rules.0.do.0', 32, 0.5]]);
-    expect(weaponBudget(GRENADE_WEAPON)).toEqual({ bodies: 1, depth: 1, munitions: [{ path: '', shell: GRENADE_WEAPON.shell, count: 1 }], blasts: [{ path: 'rules.0.do.0', blast: DEFAULT_GRENADE.blast, count: 1 }] });
+    expect(weaponBudget(GRENADE_WEAPON)).toEqual({ bodies: 1, depth: 1, munitions: [{ path: '', shell: GRENADE_WEAPON.shell, count: 1 }], blasts: [{ path: 'rules.0.do.0', blast: DEFAULT_GRENADE.blast, count: 1 }], forced: 0, forces: [] });
   });
 
   it('two splits of the same child add up (an upper bound), and the cap is MAX_WEAPON_BODIES', () => {

@@ -49,7 +49,7 @@ describe('trial levels', () => {
       const t = TRIAL_LEVELS.find((d) => d.id === id)!, l = LEVELS[k]!;
       expect([t.parts, t.launcher, t.objective]).toEqual([l.parts, l.launcher, l.objective]);
       for (const a of [0, 1] as const) expect([t.lot.min[a] <= l.lot.min[a], t.lot.max[a] >= l.lot.max[a]]).toEqual([true, true]);
-      expect(t.rack).toContain('w-scatter');
+      expect(t.rack).toEqual(['w-scatter', 'w-rocket', 'marble']);
     });
   });
 

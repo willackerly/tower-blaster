@@ -36,9 +36,21 @@
 //                                  engine (a relative spawn); the munition is
 //                                  removed. conserve: the burst adds no momentum
 //                                  (splitPattern)
+//   { thrust: { accel, axes?, for } }
+//                                  a motor: the munition takes the force
+//                                  accel x its mass (engine-api Thrust) for
+//                                  `for` s, accel in units/s^2 in heading
+//                                  axes (default: +y along its velocity),
+//                                  body or world axes
+//   { vibrate: { accel, period, phase?, for } }
+//                                  a shaker: accel sin(2 pi (t / period +
+//                                  phase)) x its mass, world axes (engine-api
+//                                  Vibrate), for `for` s
+// A force action replaces any force the munition had (engine-api force.ts),
+// and ends when it is removed or split.
 // An action after remove or split in the same rule is refused (there is
 // nothing left to act on), as engines refuse a blast centred on a removed body.
-import { cosSin, headingBasis, type ShapeDesc, type SpawnAxes, type Vec3 } from '@tb/engine-api';
+import { cosSin, headingBasis, MAX_FORCED, type ShapeDesc, SPAWN_AXES, type SpawnAxes, type Vec3 } from '@tb/engine-api';
 import { boundingRadius } from '@tb/geom';
 import { type GrenadeSpec, GRENADE_LIMITS } from './grenade.ts';
 
@@ -110,7 +122,33 @@ export interface SplitSpec {
   conserve?: boolean;
 }
 
-export type Action = { blast: BlastSpec } | { remove: true } | { split: SplitSpec };
+/** A motor: the force accel x the munition's mass for `for` s (engine-api Thrust). */
+export interface ThrustSpec {
+  /** Units/s^2, in `axes`. */
+  accel: Vec3;
+  /** heading (default: +y along the munition's velocity, engine-api spawn.ts), body or world. */
+  axes?: SpawnAxes;
+  /** Seconds it burns (at least one step). */
+  for: number;
+}
+
+/** A shaker: accel sin(2 pi (t / period + phase)) x the munition's mass, world axes, for `for` s (engine-api Vibrate). */
+export interface VibrateSpec {
+  /** Amplitude, units/s^2, world axes. */
+  accel: Vec3;
+  /** Seconds. */
+  period: number;
+  /** Fraction of a period at its first step, [0, 1) (default 0). */
+  phase?: number;
+  for: number;
+}
+
+export type Action = { blast: BlastSpec } | { remove: true } | { split: SplitSpec } | { thrust: ThrustSpec } | { vibrate: VibrateSpec };
+
+/** The action kinds, in the order the validator names them. */
+export const ACTIONS = ['blast', 'remove', 'split', 'thrust', 'vibrate'] as const;
+/** Whether an action puts a force on the munition. */
+export const isForceAction = (a: Action): a is { thrust: ThrustSpec } | { vibrate: VibrateSpec } => 'thrust' in a || 'vibrate' in a;
 
 export interface Rule {
   when: Trigger;
@@ -158,6 +196,7 @@ export const WEAPON_LIMITS = {
   into: [1, MAX_SPLIT], angle: [0, 180], spread: [0, 500], at: [0, 20], offset: [-100, 100],
   blastRadius: GRENADE_LIMITS.radius, impulse: GRENADE_LIMITS.impulse, falloff: GRENADE_LIMITS.falloff, core: GRENADE_LIMITS.core,
   maxDv: GRENADE_LIMITS.maxDv, maxSpeed: GRENADE_LIMITS.maxSpeed,
+  accel: [-1000, 1000], for: [0.001, 60], period: [0.005, 10], phase: [0, 1],
 } as const;
 
 export class WeaponSpecError extends Error {
@@ -312,6 +351,34 @@ export function validateWeapon(x: unknown): { spec: WeaponSpec | null; issues: W
     return out;
   };
 
+  const vec = (v: unknown, path: string, range: readonly [number, number]): Vec3 | undefined => {
+    if (!Array.isArray(v) || v.length !== 3) { err('type', path, 'must be [x, y, z]'); return undefined; }
+    const o = v.map((e, i) => num(e, at(path, i), range));
+    return o.every((e) => e !== undefined) ? (o as Vec3) : undefined;
+  };
+
+  const thrust = (v: unknown, path: string): ThrustSpec | undefined => {
+    if (!isObj(v)) { err('action', path, 'must be { accel: [x, y, z], axes?, for }'); return undefined; }
+    keys(v, path, ['accel', 'axes', 'for']);
+    const accel = vec(v.accel, at(path, 'accel'), WEAPON_LIMITS.accel), dur = num(v.for, at(path, 'for'), WEAPON_LIMITS.for);
+    if (v.axes !== undefined && !SPAWN_AXES.includes(v.axes as SpawnAxes)) err('range', at(path, 'axes'), `must be one of ${SPAWN_AXES.join(', ')}, got ${JSON.stringify(v.axes)}`);
+    if (!accel || dur === undefined) return undefined;
+    const out: ThrustSpec = { accel, for: dur };
+    if (SPAWN_AXES.includes(v.axes as SpawnAxes)) out.axes = v.axes as SpawnAxes;
+    return out;
+  };
+
+  const vibrate = (v: unknown, path: string): VibrateSpec | undefined => {
+    if (!isObj(v)) { err('action', path, 'must be { accel: [x, y, z], period, phase?, for }'); return undefined; }
+    keys(v, path, ['accel', 'period', 'phase', 'for']);
+    const accel = vec(v.accel, at(path, 'accel'), WEAPON_LIMITS.accel), dur = num(v.for, at(path, 'for'), WEAPON_LIMITS.for);
+    const period = num(v.period, at(path, 'period'), WEAPON_LIMITS.period), phase = optNum(v, 'phase', path, WEAPON_LIMITS.phase);
+    if (phase === 1) err('range', at(path, 'phase'), 'must be below 1 (a whole period is phase 0)');
+    if (!accel || dur === undefined || period === undefined) return undefined;
+    // Canonical key order: accel, period, phase, for.
+    return phase !== undefined && phase < 1 ? { accel, period, phase, for: dur } : { accel, period, for: dur };
+  };
+
   const munition = (v: unknown, path: string, depth: number): MunitionSpec | undefined => {
     if (!isObj(v)) { err('type', path, 'must be an object { shell, rules, children? }'); return undefined; }
     const root = depth === 1;
@@ -345,8 +412,8 @@ export function validateWeapon(x: unknown): { spec: WeaponSpec | null; issues: W
         let gone = false;
         r.do.forEach((a, ai) => {
           const ap = at(at(rp, 'do'), ai);
-          const kinds = isObj(a) ? ['blast', 'remove', 'split'].filter((k) => k in a) : [];
-          if (!isObj(a) || kinds.length !== 1 || Object.keys(a).length !== 1) { err('action', ap, 'must be one of { blast }, { remove: true }, { split }'); return; }
+          const kinds = isObj(a) ? ACTIONS.filter((k) => k in a) : [];
+          if (!isObj(a) || kinds.length !== 1 || Object.keys(a).length !== 1) { err('action', ap, 'must be one of { blast }, { remove: true }, { split }, { thrust }, { vibrate }'); return; }
           if (gone) err('order', ap, 'comes after the munition was removed or split in this rule');
           if ('remove' in a) {
             if (a.remove !== true) err('action', at(ap, 'remove'), 'must be true');
@@ -355,6 +422,12 @@ export function validateWeapon(x: unknown): { spec: WeaponSpec | null; issues: W
           } else if ('blast' in a) {
             const b = blast(a.blast, at(ap, 'blast'));
             if (b) acts.push({ blast: b });
+          } else if ('thrust' in a) {
+            const t = thrust(a.thrust, at(ap, 'thrust'));
+            if (t) acts.push({ thrust: t });
+          } else if ('vibrate' in a) {
+            const t = vibrate(a.vibrate, at(ap, 'vibrate'));
+            if (t) acts.push({ vibrate: t });
           } else {
             const s = split(a.split, at(ap, 'split'), rawChildren);
             if (s) { acts.push({ split: s }); used.add(s.child); }
@@ -384,6 +457,7 @@ export function validateWeapon(x: unknown): { spec: WeaponSpec | null; issues: W
     checkConservedMass(spec, (path, message) => warn('mass', path, message));
     const b = weaponBudget(spec);
     if (b.bodies > MAX_WEAPON_BODIES) err('budget', '', `can spawn ${b.bodies} bodies in all, over the cap of ${MAX_WEAPON_BODIES}`);
+    if (b.forced > MAX_FORCED) err('budget', '', `can put forces on ${b.forced} munitions, over the engines' cap of ${MAX_FORCED} forced bodies`);
     if (issues.some((i) => i.level === 'error')) spec = null;
   }
   return { spec, issues };
@@ -428,17 +502,25 @@ export interface WeaponBudget {
   munitions: { path: string; shell: ShellSpec; count: number }[];
   /** Each blast action and how many times it can go off: the rack's yield is sum count * Y(blast). */
   blasts: { path: string; blast: BlastSpec; count: number }[];
+  /** Munitions that can carry a force (thrust, vibrate) at once, counting every one that has a force action. */
+  forced: number;
+  /** Each force action and how many munitions can take it. */
+  forces: { path: string; action: ThrustSpec | VibrateSpec; kind: 'thrust' | 'vibrate'; count: number }[];
 }
 
 export function weaponBudget(spec: MunitionSpec): WeaponBudget {
-  const out: WeaponBudget = { bodies: 0, depth: 0, munitions: [], blasts: [] };
+  const out: WeaponBudget = { bodies: 0, depth: 0, munitions: [], blasts: [], forced: 0, forces: [] };
   const walk = (m: MunitionSpec, path: string, depth: number, count: number) => {
     out.bodies += count;
     out.depth = Math.max(out.depth, depth);
     out.munitions.push({ path, shell: m.shell, count });
     m.rules.forEach((r, ri) => r.do.forEach((a, ai) => {
-      if ('blast' in a) out.blasts.push({ path: `${path ? `${path}.` : ''}rules.${ri}.do.${ai}`, blast: a.blast, count });
+      const p = `${path ? `${path}.` : ''}rules.${ri}.do.${ai}`;
+      if ('blast' in a) out.blasts.push({ path: p, blast: a.blast, count });
+      if ('thrust' in a) out.forces.push({ path: p, action: a.thrust, kind: 'thrust', count });
+      if ('vibrate' in a) out.forces.push({ path: p, action: a.vibrate, kind: 'vibrate', count });
     }));
+    if (m.rules.some((r) => r.do.some(isForceAction))) out.forced += count;
     // Children in the order the spec lists them, each counted over every split naming it.
     for (const [name, c] of Object.entries(m.children ?? {})) {
       let n = 0;
@@ -454,7 +536,7 @@ export function weaponBudget(spec: MunitionSpec): WeaponBudget {
 export interface WeaponScale {
   /** Shell sizes, near distances, split at, blast radius and offset. */
   length?: number;
-  /** Shell launch speeds and split spreads. */
+  /** Shell launch speeds and split spreads; thrust and vibrate accelerations go as speed^2 / length (as gravity does). */
   speed?: number;
   density?: number;
   impulse?: number;
@@ -464,7 +546,7 @@ export interface WeaponScale {
 
 /** The spec in other units (not re-validated: the limits are for authored specs). */
 export function scaleWeapon<T extends MunitionSpec>(spec: T, f: WeaponScale): T {
-  const L = f.length ?? 1, V = f.speed ?? 1;
+  const L = f.length ?? 1, V = f.speed ?? 1, A = (V * V) / L;
   const shape = (s: ShapeDesc): ShapeDesc => (s.kind === 'sphere' ? { kind: 'sphere', radius: s.radius * L } : { kind: 'box', half: [s.half[0] * L, s.half[1] * L, s.half[2] * L] });
   const trig = (t: Trigger): Trigger => {
     if ('near' in t) return { ...t, near: t.near * L };
@@ -486,6 +568,8 @@ export function scaleWeapon<T extends MunitionSpec>(spec: T, f: WeaponScale): T 
       if (s.at !== undefined) s.at *= L;
       return { split: s };
     }
+    if ('thrust' in a) return { thrust: { ...a.thrust, accel: [a.thrust.accel[0] * A, a.thrust.accel[1] * A, a.thrust.accel[2] * A] } };
+    if ('vibrate' in a) return { vibrate: { ...a.vibrate, accel: [a.vibrate.accel[0] * A, a.vibrate.accel[1] * A, a.vibrate.accel[2] * A] } };
     return a;
   };
   const mun = (m: MunitionSpec): MunitionSpec => {

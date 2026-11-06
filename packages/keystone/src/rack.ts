@@ -19,7 +19,7 @@
 //   docs/game/undercut-bullet-time.md). Nothing is fired, so it has no body or speed:
 //   itemSpec refuses it, itemBodies counts 0, and its energy is nominal (shots.ts pullEnergy).
 import type { Vec3 } from '@tb/engine-api';
-import { BUILTIN_WEAPONS, checkGrenade, type GrenadeSpec, isPreset, type WeaponSpec, PRESET_NAMES, type PresetName, PROJECTILE_PRESETS, STONE_DENSITY } from '@tb/weapons';
+import { BUILTIN_WEAPONS, checkGrenade, type GrenadeSpec, isPreset, type TimedForce, type WeaponSpec, PRESET_NAMES, type PresetName, PROJECTILE_PRESETS, STONE_DENSITY } from '@tb/weapons';
 import { DEFAULT_UNIT, MATERIALS, materialId, type MaterialName } from './materials.ts';
 
 export type AmmoKind = 'marble' | 'cannonball' | 'cue' | 'drop';
@@ -32,6 +32,8 @@ export interface AmmoSpec {
   /** Launch speed range in m/s, mapped linearly from power 0..100. */
   vMin: number;
   vMax: number;
+  /** A weapon shell's motor: the forces it takes on timers from launch (@tb/weapons timedForces), which shots.ts predictArc flies. */
+  motor?: readonly TimedForce[];
 }
 
 export const AMMO: Record<AmmoKind, AmmoSpec> = {
@@ -119,6 +121,8 @@ export interface ItemSpec {
   /** Launch speed range in m/s, mapped linearly from power 0..100. */
   vMin: number;
   vMax: number;
+  /** A weapon shell's motor: the forces it takes on timers from launch (@tb/weapons timedForces), which shots.ts predictArc flies. */
+  motor?: readonly TimedForce[];
 }
 
 /**

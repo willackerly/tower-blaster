@@ -39,7 +39,7 @@ Code: `packages/keystone/src/trial-levels.ts` (`TRIAL_LEVELS`, `TRIAL_NOTES`), t
 | T-I1 | Ice Tower | ice: L1's 2 x 2 column, all ice, crowned | 40 | |
 | T-I2 | Ice Wall | ice: a third-bond wall 8 x 6 | 48 | |
 | T-I3 | Frozen Keep | ice: a 3 x 3 stone keep, its top four courses ice | 72 | |
-| T-W1 to T-W5 | (L1 to L5's name): New Arms | weapons: L1 to L5's structure and launcher, the lot grown to the ring less 3 cells, rack `w-scatter`, `w-scatter`, `marble` (weapon-trials.md) | as L1 to L5 | |
+| T-W1 to T-W5 | (L1 to L5's name): New Arms | weapons: L1 to L5's structure and launcher, the lot grown to the ring less 3 cells, rack `w-scatter`, `w-rocket`, `marble` (weapon-trials.md) | as L1 to L5 | |
 
 Left out, and why:
 

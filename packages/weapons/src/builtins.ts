@@ -7,7 +7,9 @@
 // is a choice of how the energy is spread, not of how much there is (the sized
 // grenades S to XL are 1/4 to 16). Until 2026-11-02 the firework carried 0.39
 // grenades and the cluster 0.80. Scatter is kinetic (0 grenades): the rack
-// charges it the energy it is launched with, as a marble.
+// charges it the energy it is launched with, as a marble. The rocket carries a
+// quarter grenade (the S grenade's blast) and the rack charges its motor's
+// work beside it (keystone arsenal.ts Arm.motor).
 import { DEFAULT_GRENADE } from './grenade.ts';
 import { grenadeAsSpec, type WeaponSpec } from './spec.ts';
 
@@ -56,6 +58,29 @@ export const SCATTER: WeaponSpec = {
   },
 };
 
+/** The S grenade's blast (GRENADE_S): DEFAULT_GRENADE's at radius 3.15, a quarter of its energy. */
+const GRENADE_S_BLAST = { ...DEFAULT_GRENADE.blast, radius: 3.15 };
+
+/**
+ * Rocket (weapons plan step 6): leaves the launcher slow, and 0.1 s out its motor lights for 1 s, pushing it on
+ * along its heading at 25 units/s^2 (2.5 g): a flatter, faster line than anything thrown, so it reaches the far
+ * side of a lot and arrives harder than it left (a ram of 0.9 cubes at up to 43 units/s). It blows on touching
+ * anything (or after 6 s) with a quarter grenade's blast (GRENADE_S's), and is spent. A heading thrust follows the
+ * velocity, so gravity still bends the line: the aim and its preview fly the motor (keystone shots.ts predictArc).
+ * Energy: 1/4 grenade, plus the motor's work (0.015 grenades on L1-L5), charged as fired energy as a launch is
+ * (keystone arsenal.ts). On L1-L5 it clears in one shot as often as the S grenade or more (L2 76% vs 66%) and
+ * breaks less heritage than the full grenade (pnpm keystone:fun, docs/game/weapon-trials.md). Until 2026-11-06
+ * (first draft) a full grenade's blast, which played as the grenade does.
+ */
+export const ROCKET: WeaponSpec = {
+  version: 1, name: 'rocket',
+  shell: { shape: { kind: 'sphere', radius: 0.3 }, density: 8, speed: [6, 18] },
+  rules: [
+    { when: { after: 0.1 }, do: [{ thrust: { accel: [0, 25, 0], for: 1 } }] },
+    { when: { any: [{ near: 0.1, arm: 0.2 }, { after: 6 }] }, do: [{ blast: { ...GRENADE_S_BLAST } }, { remove: true }] },
+  ],
+};
+
 /** The built-in grenade as a spec (Grenades' DEFAULT_GRENADE, in a 0.2-radius iron ball). */
 export const GRENADE_WEAPON: WeaponSpec = grenadeAsSpec(DEFAULT_GRENADE, { shape: { kind: 'sphere', radius: 0.2 }, density: 8, speed: [5, 40] });
 
@@ -77,5 +102,5 @@ export const GRENADE_XL = sized('grenadexl', 12.6, 0.5);
 
 /** By name: the viewer's proj.weapon values besides grenade (which keeps its own grenade.* knobs), and the rack's w-<name> defaults. */
 export const BUILTIN_WEAPONS: Readonly<Record<string, WeaponSpec>> = {
-  firework: FIREWORK, cluster: CLUSTER, scatter: SCATTER, grenades: GRENADE_S, grenadem: GRENADE_M, grenadel: GRENADE_L, grenadexl: GRENADE_XL,
+  firework: FIREWORK, cluster: CLUSTER, scatter: SCATTER, rocket: ROCKET, grenades: GRENADE_S, grenadem: GRENADE_M, grenadel: GRENADE_L, grenadexl: GRENADE_XL,
 };

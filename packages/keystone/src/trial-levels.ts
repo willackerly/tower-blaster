@@ -203,10 +203,10 @@ const ICE_TRIALS: LevelDef[] = [
 /**
  * The new weapons on the levels whose bare ammo is best known (docs/game/weapon-trials.md): L1 to L5's structures
  * and launchers as rated (the lot grown to the launcher ring less 3 cells, as every outcome level's), scored on their objective alone (no par, no cast stars), with a rack of the weapons
- * the weapons plan's steps 5 and 6 added (Scatter: five marble-weight pellets on a fan) and one marble for the
- * finishing touch.
+ * the weapons plan's steps 5 and 6 added (Scatter: five marble-weight pellets on a fan; Rocket: a motor and a quarter
+ * grenade) and one marble for the finishing touch.
  */
-export const WEAPON_TRIAL_RACK: readonly RackItem[] = ['w-scatter', 'w-scatter', 'marble'];
+export const WEAPON_TRIAL_RACK: readonly RackItem[] = ['w-scatter', 'w-rocket', 'marble'];
 
 function weaponTrial(base: LevelDef, k: number): LevelDef {
   const { lGold: _g, solutions: _s, stars: _t, ...rest } = base;

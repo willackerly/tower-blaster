@@ -56,7 +56,8 @@ describe('WeaponSpec items: scaled to the level', () => {
       expect(arm.blasts.map((x) => x.count), key).toEqual(weaponBudget(spec).blasts.map((x) => x.count));
       const fill = levelFill(c);
       expect(arm.yield, key).toBe(arm.blasts.reduce((a, x) => a + x.count * nominalYield(x.blast, fill), 0));
-      expect(itemYield(c, `w-${key}`), key).toBe(arm.yield);
+      expect(itemYield(c, `w-${key}`), key).toBe(arm.yield + arm.motor);
+      expect(arm.motor > 0, key).toBe(key === 'rocket');
       // Every blast has the engine's defaults filled in and scaled, so its yield is of the blast the engine applies.
       for (const x of arm.blasts) expect(checkBlast({ centre: [0, 0, 0], ...x.blast })).toMatchObject(x.blast);
     }
@@ -73,7 +74,8 @@ describe('WeaponSpec items: scaled to the level', () => {
   it('a cube-unit weapon\'s yield over the bomb\'s is its grenadeEnergies on every level: plaster or stone, 1k or 10k', () => {
     for (const base of [B1, B2, B3]) {
       const lc = compileLevel({ ...base, rack: ['w-bomb', 'w-firework', 'w-cluster'] });
-      for (const [key, spec] of Object.entries(BUILTIN_WEAPONS)) expect(itemYield(lc, `w-${key}` as const) / itemYield(lc, 'w-bomb'), `${base.id} ${key}`).toBeCloseTo(grenadeEnergies(spec), 9);
+      // The blasts' yield; a motor's work (the rocket's) is charged beside it, as a launch is.
+      for (const [key, spec] of Object.entries(BUILTIN_WEAPONS)) expect(levelArm(lc, key).yield / itemYield(lc, 'w-bomb'), `${base.id} ${key}`).toBeCloseTo(grenadeEnergies(spec), 9);
       expect(grenadeEnergies(base.weapons!.bomb as WeaponSpec)).toBe(1);
     }
   });

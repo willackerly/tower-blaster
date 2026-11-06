@@ -93,6 +93,9 @@ describe('weapon editor model', () => {
     d = addAction(d, '', 0, 'blast');
     // A blast goes in before the spending action, so the order stays valid.
     expect(valid(d).rules[0]!.do.map((a) => Object.keys(a)[0])).toEqual(['blast', 'blast', 'remove']);
+    // So do a thrust and a vibration (they do not spend it either).
+    const forced = addAction(addAction(d, '', 0, 'thrust'), '', 0, 'vibrate');
+    expect(valid(forced).rules[0]!.do.map((a) => Object.keys(a)[0])).toEqual(['blast', 'blast', 'thrust', 'vibrate', 'remove']);
     d = setTriggerKind(d, ['rules', 0, 'when'], 'any');
     d = addAnyTrigger(d, ['rules', 0, 'when']);
     expect((getAt(d, ['rules', 0, 'when', 'any']) as unknown[]).length).toBe(3);

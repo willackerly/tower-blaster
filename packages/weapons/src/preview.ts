@@ -13,6 +13,9 @@
 //     knock-on. From its first contact (PreviewTrack.contact) a track is an
 //     approximation, and obstacles never move, so a blast's effect on the
 //     world is not shown (the preview draws its sphere instead).
+// Forces (thrust, vibrate) act as in every engine (engine-api ForceTable and
+// forceKicks, after the step's other events), on munitions in free flight; one
+// held still after contact stays still.
 // A split's children are relative spawns (engine-api spawn.ts): placed from
 // their parent as the step starts, as the engines place them; munitions do
 // not spin here (a shell is fired without spin and nothing turns it before its
@@ -20,7 +23,7 @@
 // The match with a real firing is tested against the f64 reference engine
 // (test/preview.test.ts): before contact, every point, split and blast is the
 // engine's to 1e-9.
-import { blastArea, blastCentre, blastVelocity, type BodyMotion, checkBlast, freeFlight, type InputEvent, massOf, queueInputs, relativeBody, type ShapeDesc, type Snapshot, type SpawnEvent, TIER_FREE, type Vec3 } from '@tb/engine-api';
+import { blastArea, blastCentre, blastVelocity, type BodyMotion, checkBlast, ForceTable, forceKicks, freeFlight, type InputEvent, massOf, queueInputs, relativeBody, type ShapeDesc, type Snapshot, type SpawnEvent, TIER_FREE, type Vec3 } from '@tb/engine-api';
 import { boundingRadius } from '@tb/geom';
 import { type GrenadeWorld, surfaceDistance } from './grenade.ts';
 import { WeaponRuntime } from './runtime.ts';
@@ -108,7 +111,7 @@ export function previewWeapon(spec: WeaponSpec, launch: PreviewLaunch, world: Gr
   // Each spawn's munition path: the shell's is '', a split child's its parent's plus the child's name.
   const byId = (id: number): Mun | undefined => muns[id - nObs];
   const pathOf = new Map<SpawnEvent, string>(), idOfSpawn = new Map<SpawnEvent, number>();
-  const rt = new WeaponRuntime(world, 1);
+  const rt = new WeaponRuntime(world, 1), forces = new ForceTable();
   const fired: SpawnEvent = { step: 0, kind: 'spawn', body: { shape: launch.shape, pos: [...launch.pos], rot: [0, 0, 0, 1], linVel: [...launch.vel], angVel: [0, 0, 0], density: launch.density, friction: 0.5, restitution: 0, tag: 0 } };
   pathOf.set(fired, '');
   let queue: InputEvent[] = [fired];
@@ -163,13 +166,22 @@ export function previewWeapon(spec: WeaponSpec, launch: PreviewLaunch, world: Gr
           const v = blastVelocity(b, centre, nObs + k, m.p, m.v, m.mass, blastArea(m.shape));
           if (v) { m.v = v; m.still = false; }
         });
+      } else if (e.kind === 'force') {
+        forces.apply(e, step);
       } else {
+        forces.remove(e.id);
         const m = byId(e.id);
         if (m && !m.gone) {
           m.gone = true;
           tracks[m.track]!.end = splits.has(e) ? 'split' : 'removed';
         }
       }
+    }
+    // Forces after every other event of the step, from the state the step starts in.
+    const motion = (id: number): BodyMotion => { const m = byId(id)!; return { pos: m.p, rot: [0, 0, 0, 1], linVel: m.v, angVel: [0, 0, 0] }; };
+    for (const { id, dv } of forceKicks(forces.act(step), step, world.dt, motion, (id) => byId(id)!.mass)) {
+      const m = byId(id)!;
+      if (!m.still) m.v = [m.v[0] + dv[0], m.v[1] + dv[1], m.v[2] + dv[2]];
     }
     if (!queue.length && !rt.pending && muns.every((m) => m.gone)) break;
     // The step: free flight, held still from the first contact.

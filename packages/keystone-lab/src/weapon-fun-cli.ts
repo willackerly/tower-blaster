@@ -1,4 +1,4 @@
-// pnpm keystone:fun [L1 ...] [--items marble,cannonball,w-scatter] [--engine ref|rapier] [--jobs N]
+// pnpm keystone:fun [L1 ...] [--items marble,cannonball,w-scatter,w-rocket] [--engine ref|rapier] [--jobs N]
 // The weapon fun check (weapon-fun.ts) on L1 to L5 (or the levels named): each item alone, one shot at every
 // candidate the par bot aims, and the summary table docs/game/weapon-trials.md records.
 import { availableParallelism } from 'node:os';
@@ -8,7 +8,7 @@ import { makeRunner } from './runner.ts';
 import { funTable, weaponFun } from './weapon-fun.ts';
 
 const argv = process.argv.slice(2), at = argv.indexOf('--items');
-const items = (at >= 0 ? argv.splice(at, 2)[1]!.split(',') : ['marble', 'cannonball', 'w-scatter']).map((x) => {
+const items = (at >= 0 ? argv.splice(at, 2)[1]!.split(',') : ['marble', 'cannonball', 'w-scatter', 'w-rocket']).map((x) => {
   if (!isLaunchItem(x)) throw new Error(`--items: ${x} is not a launch item`);
   return x as LaunchItem;
 });
