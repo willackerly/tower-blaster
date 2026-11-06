@@ -47,6 +47,7 @@ const { counts } = await obs.result(step);  // counts[question][island]
 
 **3. Events are released when due (chosen), not written into the scene up front.**
 - An engine gives a spawned body the next id when the spawn is applied, in queue order (by step, then push order). If ids were assigned when events are queued, a later push due earlier than a pending spawn would take that spawn's id, and every removal or body-centred blast aimed at it would hit the wrong body. Releasing at the step it is due makes the id exact: everything before it has been applied.
+- Relative spawns and forces (weapons plan steps 5 and 6, `spawn.ts`, `force.ts`) translate by id only. A spawn with `from` is in its parent's frame, so only the parent's id is mapped and its position is left as written; it does not widen `worldExtent`, because the parent is already in the world. A force maps its body's id, and a pull moves its world point with the island, which `push()` refuses outside the cell. The alternative, resolving a relative spawn to world coordinates at release, would need the parent's live state, which only the engine has at the step it is due.
 - *Per-island id namespaces in the engine.* An engine change on three engines for no gain.
 - Within one step, islands release in order, each in its own queue order, so each world sees its events in exactly the order a solo engine would (a grenade's blast before its removal).
 
