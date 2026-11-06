@@ -44,6 +44,8 @@
   "packages/game/test/launch-e2e.test.ts": 18,
   "packages/game/test/level-start-e2e.test.ts": 45,
   "packages/game/test/level-start-gpu.test.ts": 150,
+  "packages/game/test/light-e2e.test.ts": 60.0,
+  "packages/game/test/light.test.ts": 0.5,
   "packages/game/test/load-cost.test.ts": 0,
   "packages/game/test/lot-e2e.test.ts": 5.2,
   "packages/game/test/marks-e2e.test.ts": 9.7,

@@ -16,6 +16,7 @@ import { Synth, type Voice, voicesFor } from './audio.ts';
 import { CollapseSound, type CollapseStatus } from './collapse-sound.ts';
 import { type GameSoundMode, soundSetOf } from './sound-map.ts';
 import { viewOf } from './view.ts';
+import { ViewSun } from './light.ts';
 export { viewOf } from './view.ts';
 import { driverOptions, type EngineKind, gpuEngineOptions, makeEngine, roomAfter } from './engines.ts';
 import { hudHtml, meterTicks, type MeterTick, nextSelection, POWER_STEP, rackChips, resultHtml, starsText } from './hud.ts';
@@ -428,6 +429,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
   const voices: Voice[] = [];
 
   let c!: CompiledLevel, driver!: Driver, orbit!: Orbit;
+  const viewSun = new ViewSun();
   let perStep: PerStep | null = null;
   // Body descriptions in slot order: the driver's (the structure, then every spawn: ammo as fired,
   // a weapon's children, the input hook's, in the order the engine applies them).
@@ -871,6 +873,8 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     }
     // A duel opens (and Same start reopens) on the first player's side, as each turn after does (duel-view.ts).
     if (duel && feel.turnView) orbit = duelView(c, duel.def.sides[duel.turn], viewAspect());
+    // The real look's sun counts from the opening view (light.ts), set as a level loads and kept by a retry.
+    if (!retry) viewSun.yaw = orbit.yaw;
     arcs = duel ? duel.def.sides.map((side) => arcBeads(c, side)) : [];
     regrowT = line ? null : 0;
     waiting = [];
@@ -1518,6 +1522,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     // to the GPU: on SwiftShader a frame takes up to a second, so frames would queue
     // without bound and every readback (a step's, a replay's) wait behind them.
     // There, draw only for a capture.
+    viewSun.update(renderer, feel.sun);
     if ((!offscreen && draw) || want) {
       const stats = await renderer.render(fp, !!want, want?.keep);
       if (want) want.resolve(stats);

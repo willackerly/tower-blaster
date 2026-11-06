@@ -936,6 +936,7 @@ export class Renderer {
     read.destroy();
     const { ids } = await this.renderIds(f);
     stats.bodyFraction = ids.reduce((a, v) => a + (v ? 1 : 0), 0) / ids.length;
+    if (keepPixels) stats.ids = Array.from(ids);
     return stats;
   }
 
@@ -1049,6 +1050,8 @@ export interface PixelStats {
   bodyFraction?: number;
   /** Raw rows when asked for (test screenshots), RGBA8 whatever the output format. */
   pixels?: { data: number[]; bytesPerRow: number };
+  /** With the raw rows: each pixel's body slot + 1 (0: nothing) from the ID pass of the same frame (renderIds), row-major, width x height. */
+  ids?: number[];
 }
 
 /** Coarse statistics of an RGBA/BGRA frame: enough to tell "drew a scene" from "blank". */
