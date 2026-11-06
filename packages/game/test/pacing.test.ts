@@ -22,7 +22,7 @@ const sum = (xs: number[]) => xs.reduce((a, b) => a + b, 0);
 describe('pace feel', () => {
   it('juice and every camera motion are off unless the URL asks for them; the valve and the tail skip are on; every frame is drawn', () => {
     expect(paceFeel(new URLSearchParams(''))).toEqual(DEFAULT_FEEL);
-    expect(DEFAULT_FEEL).toEqual({ hitStop: false, slowMo: false, budgetMs: DEFAULT_BUDGET_MS, tailSkip: true, follow: false, shake: false, frames: 'all', rapid: true, turnView: true, arcs: true, undoMB: DEFAULT_UNDO_MB, launch: 'high', balls: 'painted' });
+    expect(DEFAULT_FEEL).toEqual({ hitStop: false, slowMo: false, budgetMs: DEFAULT_BUDGET_MS, tailSkip: true, follow: false, shake: false, frames: 'all', rapid: true, turnView: true, arcs: true, undoMB: DEFAULT_UNDO_MB, launch: 'high', balls: 'painted', marks: true });
     // Undo memory: MB of checkpoints (0: undo replays the shots); out of range or not a number is refused.
     expect(paceFeel(new URLSearchParams('?keystone.undo=0'))).toEqual({ ...DEFAULT_FEEL, undoMB: 0 });
     expect(paceFeel(new URLSearchParams('?keystone.undo=256')).undoMB).toBe(256);
@@ -38,6 +38,9 @@ describe('pace feel', () => {
     expect(paceFeel(new URLSearchParams('?keystone.arcs=0&keystone.turnview=1'))).toEqual({ ...DEFAULT_FEEL, arcs: false });
     expect(() => paceFeel(new URLSearchParams('?keystone.turnview=off'))).toThrow(/keystone.turnview must be 0 or 1: off/);
     expect(() => paceFeel(new URLSearchParams('?keystone.arcs=no'))).toThrow(/keystone.arcs must be 0 or 1: no/);
+    // Stone marks are on by default (Will, 2026-11-06), off by keystone.marks=0.
+    expect(paceFeel(new URLSearchParams('?keystone.marks=0'))).toEqual({ ...DEFAULT_FEEL, marks: false });
+    expect(() => paceFeel(new URLSearchParams('?keystone.marks=off'))).toThrow(/keystone.marks must be 0 or 1: off/);
     expect(() => paceFeel(new URLSearchParams('?keystone.rapid=off'))).toThrow(/keystone.rapid must be 0 or 1: off/);
     expect(paceFeel(new URLSearchParams('?keystone.hitstop=1'))).toEqual({ ...DEFAULT_FEEL, hitStop: true });
     expect(paceFeel(new URLSearchParams('?keystone.slowmo=1&keystone.hitstop=1'))).toEqual({ ...DEFAULT_FEEL, hitStop: true, slowMo: true });
@@ -67,7 +70,7 @@ describe('pace feel', () => {
     expect(() => checkPaceFeel({ ...DEFAULT_FEEL, frames: 'most' as 'all' })).toThrow(/keystone.frames must be/);
     expect(() => checkPaceFeel({ ...DEFAULT_FEEL, launch: 'up' as 'high' })).toThrow(/keystone.launch must be/);
     expect(() => checkPaceFeel({ ...DEFAULT_FEEL, balls: 'red' as 'plain' })).toThrow(/keystone.balls must be/);
-    for (const f of [DEFAULT_FEEL, { ...DEFAULT_FEEL, hitStop: true, budgetMs: 0 }, { ...DEFAULT_FEEL, slowMo: true, tailSkip: false, budgetMs: 20 }, { ...DEFAULT_FEEL, follow: true }, { ...DEFAULT_FEEL, shake: true }, { ...DEFAULT_FEEL, follow: true, shake: true }, { ...DEFAULT_FEEL, frames: 'half' as const }, { ...DEFAULT_FEEL, frames: 'auto' as const }, { ...DEFAULT_FEEL, rapid: false }, { ...DEFAULT_FEEL, launch: 'level' as const }, { ...DEFAULT_FEEL, balls: 'plain' as const }, { ...DEFAULT_FEEL, turnView: false }, { ...DEFAULT_FEEL, arcs: false }]) {
+    for (const f of [DEFAULT_FEEL, { ...DEFAULT_FEEL, hitStop: true, budgetMs: 0 }, { ...DEFAULT_FEEL, slowMo: true, tailSkip: false, budgetMs: 20 }, { ...DEFAULT_FEEL, follow: true }, { ...DEFAULT_FEEL, shake: true }, { ...DEFAULT_FEEL, follow: true, shake: true }, { ...DEFAULT_FEEL, frames: 'half' as const }, { ...DEFAULT_FEEL, frames: 'auto' as const }, { ...DEFAULT_FEEL, rapid: false }, { ...DEFAULT_FEEL, launch: 'level' as const }, { ...DEFAULT_FEEL, balls: 'plain' as const }, { ...DEFAULT_FEEL, turnView: false }, { ...DEFAULT_FEEL, arcs: false }, { ...DEFAULT_FEEL, marks: false }]) {
       const q = new URLSearchParams();
       writePaceFeel(f, q);
       expect(paceFeel(q)).toEqual(f);

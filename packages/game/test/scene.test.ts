@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { compileLevel, L1, L2 } from '@tb/keystone';
-import { tintWord, unpackFx } from '@tb/render';
+import { compileLevel, L1, L2, L3, U3 } from '@tb/keystone';
+import { MARK_HIT, MARK_NONE, MARK_SAVE, tintWord, unpackFx } from '@tb/render';
 import { PROJECTILE_PRESETS } from '@tb/weapons';
-import { BALL_PAINT, ballFx, BOMB_FX } from '../src/scene.ts';
+import { BALL_PAINT, ballFx, BOMB_FX, markOf, structureMarks } from '../src/scene.ts';
 import { BEAD_COLOUR, BEAD_OUT_COLOUR, BEAD_RADIUS, beadOverlay, rgbe, CROWN_GLOW, easeOut, regrowDuration, regrowScale, regrowScales, structureTints, TARGET_SCALE, TINT, tintOf, tintWordOf } from '../src/scene.ts';
 
 /** What the renderer will see for a bulk tint word. */
@@ -90,5 +90,30 @@ describe('arc preview overlay', () => {
     expect(o.xyzr[11]).toBeCloseTo(BEAD_RADIUS * TARGET_SCALE, 6);
     expect([...o.colours]).toEqual([BEAD_COLOUR, BEAD_COLOUR, BEAD_COLOUR]);
     expect([...beadOverlay(Float64Array.from([0, 1, 0]), false).colours]).toEqual([BEAD_OUT_COLOUR]);
+  });
+});
+
+describe('stone marks (markOf, structureMarks)', () => {
+  it('crowns to bring down carry a crosshair, heritage a shield, plain blocks none (L3: two crowns between heritage cubes)', () => {
+    const c = compileLevel(L3), m = structureMarks(c);
+    expect(m.length).toBe(c.meta.n);
+    for (let i = 0; i < c.meta.n; i++) expect(m[i], `slot ${i}`).toBe(c.meta.role[i] === 1 ? MARK_HIT : c.meta.role[i] === 2 ? MARK_SAVE : MARK_NONE);
+    expect(Array.from(c.meta.crowns, (i) => markOf(c, i))).toEqual([MARK_HIT, MARK_HIT]);
+    expect(Array.from(c.meta.heritage, (i) => markOf(c, i))).toEqual([MARK_SAVE, MARK_SAVE, MARK_SAVE]);
+    expect(m.filter((x) => x === MARK_NONE).length).toBe(c.meta.n - 5);
+  });
+
+  it('a crown the level asks to keep up (a hold objective: Undercut\'s Hollow) carries the shield, though it is as gold as any', () => {
+    const c = compileLevel(U3);
+    expect(c.def.objective.kind).toBe('hold');
+    expect(c.meta.crowns.length).toBeGreaterThan(0);
+    for (const i of c.meta.crowns) expect(markOf(c, i)).toBe(MARK_SAVE);
+    expect(tintOf(c, c.meta.crowns[0]!)).toBe(tintOf(compileLevel(L3), compileLevel(L3).meta.crowns[0]!));
+  });
+
+  it('off: no slot carries a mark', () => {
+    const c = compileLevel(L2);
+    expect(structureMarks(c).some((x) => x !== MARK_NONE)).toBe(true);
+    expect(structureMarks(c, false)).toEqual(new Uint8Array(c.meta.n));
   });
 });

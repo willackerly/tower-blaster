@@ -12,6 +12,8 @@
 //                               the URL's say is keystone.turnview, see turnViewFeel)
 //   launch: high | level       (where shots leave from, aim.ts LaunchMode; high by default; the URL's say is
 //                               keystone.launch, see launchFeel)
+//   marks: true | false        (stone marks: a crosshair carved on blocks to bring down, a shield on blocks to
+//                               keep, scene.ts markOf; on by default; the URL's say is keystone.marks, see marksFeel)
 import { LOOKS } from '@tb/render';
 import { LAUNCH_MODES, type LaunchMode } from './aim.ts';
 import type { PaceFeel } from './pacing.ts';
@@ -23,10 +25,10 @@ export const SETTINGS_KEY = 'tb.settings.v1';
 /** still: the camera moves only when the player moves it (the default since the 2026-11-02 playtest); dynamic: it follows and shakes too. */
 export type CameraSetting = 'still' | 'dynamic';
 
-export interface Settings { sound: boolean; look: string; sharp: 1 | 2; camera: CameraSetting; rapid: boolean; duelView: boolean; launch: LaunchMode }
+export interface Settings { sound: boolean; look: string; sharp: 1 | 2; camera: CameraSetting; rapid: boolean; duelView: boolean; launch: LaunchMode; marks: boolean }
 
-/** Rapid fire on (Will, 2026-11-05: in Advanced settings, defaulting to on); a duel's turn view on (Will, 2026-11-06); shots from high (Will, 2026-11-06). */
-export const DEFAULT_SETTINGS: Settings = { sound: true, look: GAME_LOOK, sharp: 2, camera: 'still', rapid: true, duelView: true, launch: 'high' };
+/** Rapid fire on (Will, 2026-11-05: in Advanced settings, defaulting to on); a duel's turn view on (Will, 2026-11-06); shots from high (Will, 2026-11-06); stone marks on (Will, 2026-11-06). */
+export const DEFAULT_SETTINGS: Settings = { sound: true, look: GAME_LOOK, sharp: 2, camera: 'still', rapid: true, duelView: true, launch: 'high', marks: true };
 
 /** The looks the front door offers, in its order, with their names there. */
 export const LOOK_CHOICES: ReadonlyArray<{ look: string; label: string }> = [
@@ -47,6 +49,7 @@ export function parseSettings(text: string | null): Settings {
     rapid: typeof o.rapid === 'boolean' ? o.rapid : DEFAULT_SETTINGS.rapid,
     duelView: typeof o.duelView === 'boolean' ? o.duelView : DEFAULT_SETTINGS.duelView,
     launch: (LAUNCH_MODES as readonly unknown[]).includes(o.launch) ? (o.launch as LaunchMode) : DEFAULT_SETTINGS.launch,
+    marks: typeof o.marks === 'boolean' ? o.marks : DEFAULT_SETTINGS.marks,
   };
 }
 
@@ -76,6 +79,14 @@ export const LAUNCH_KEYS = ['keystone.launch'] as const;
 /** Where shots leave from: keystone.launch where the URL says it (feel was read from that URL), else the setting. */
 export function launchFeel(feel: PaceFeel, q: URLSearchParams, launch: LaunchMode): Pick<PaceFeel, 'launch'> {
   return { launch: q.has('keystone.launch') ? feel.launch : launch };
+}
+
+/** The URL key that says what the Stone marks setting says (marksFeel), dropped from the URL when the setting changes. */
+export const MARKS_KEYS = ['keystone.marks'] as const;
+
+/** Stone marks in effect: keystone.marks where the URL says it (feel was read from that URL), else the setting. */
+export function marksFeel(feel: PaceFeel, q: URLSearchParams, marks: boolean): Pick<PaceFeel, 'marks'> {
+  return { marks: q.has('keystone.marks') ? feel.marks : marks };
 }
 
 /** The URL key that says what the Duel turns setting says (turnViewFeel), dropped from the URL when the setting changes. */

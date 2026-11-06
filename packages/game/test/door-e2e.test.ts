@@ -119,7 +119,17 @@ describe('front door', () => {
     expect(await page.evaluate(() => window.__game.feel.launch)).toBe('high');
     await page.locator('.kg-door [data-act="launch"][data-arg="level"]').click();
     expect(await page.evaluate(() => window.__game.feel.launch)).toBe('level');
-    expect(await page.evaluate(() => JSON.parse(localStorage.getItem('tb.settings.v1')!))).toEqual({ sound: false, look: 'real', sharp: 1, camera: 'dynamic', rapid: false, duelView: false, launch: 'level' });
+    // Stone marks: carved by default (L1's four crowns carry the crosshair); Off clears every stone at once, Carved recarves them.
+    expect(await page.locator('.kg-door [data-act="marks"].on').innerText()).toBe('Carved');
+    const hits = () => page.evaluate(() => window.__game.marks().filter((m) => m === 1).length);
+    expect(await hits()).toBe(4);
+    await page.locator('.kg-door [data-act="marks"][data-arg="off"]').click();
+    expect(await page.evaluate(() => window.__game.feel.marks)).toBe(false);
+    expect(await page.evaluate(() => window.__game.marks().some((m) => m !== 0))).toBe(false);
+    await page.locator('.kg-door [data-act="marks"][data-arg="on"]').click();
+    expect(await hits()).toBe(4);
+    await page.locator('.kg-door [data-act="marks"][data-arg="off"]').click();
+    expect(await page.evaluate(() => JSON.parse(localStorage.getItem('tb.settings.v1')!))).toEqual({ sound: false, look: 'real', sharp: 1, camera: 'dynamic', rapid: false, duelView: false, launch: 'level', marks: false });
     expect(await page.evaluate(() => window.__game.maxDpr)).toBe(1);
     expect(new URLSearchParams(await page.evaluate(() => location.search)).has('look')).toBe(false);
 
@@ -132,6 +142,9 @@ describe('front door', () => {
     expect(await page.evaluate(() => window.__game.feel)).toMatchObject({ follow: true, shake: true, rapid: false, turnView: false });
     expect(await page.locator('.kg-door [data-act="duelview"].on').innerText()).toBe('Leave it');
     expect(await page.locator('.kg-door [data-act="rapid"].on').innerText()).toBe('Off');
+    // Stored Off: the level loads with plain stones.
+    expect(await page.locator('.kg-door [data-act="marks"].on').innerText()).toBe('Off');
+    expect(await page.evaluate(() => [window.__game.feel.marks, window.__game.marks().some((m) => m !== 0)])).toEqual([false, false]);
     const l1 = page.locator('.kg-door .card[aria-label^="L1 "]');
     expect(await l1.innerText()).toContain('1 play');
     expect(await l1.locator('li.got').count()).toBe(stars);

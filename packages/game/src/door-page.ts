@@ -114,6 +114,7 @@ export function installDoor(o: DoorOptions, doc: Document = document): DoorPage 
       case 'rapid': set({ rapid: arg === 'on' }); break;
       case 'duelview': set({ duelView: arg === 'on' }); break;
       case 'launch': set({ launch: arg === 'level' ? 'level' : 'high' }); break;
+      case 'marks': set({ marks: arg === 'on' }); break;
       case 'reset':
         if (armedReset) { o.progress.reset(); armedReset = false; } else armedReset = true;
         draw();

@@ -16,6 +16,7 @@ import { BlastReach } from './reach.ts';
 import { aoFrame, aoGrid, AoVolume } from './ao.ts';
 import { FLOOR_VERTS, floorFan, floorPolygon } from './floor.ts';
 import { fitShadow, frustumCorners, pcssParams, type Arena, type ShadowFit, type ShadowFitState } from './shadowfit.ts';
+import { MARK_MASK, MARK_SHIFT } from './marks.ts';
 import { FX_WORDS, packFx, tintWord, toHalf, type Fx, type FxOptions, FX_ANCHOR, unpackFx } from './fx.ts';
 import { CANDY_NIGHT, linearToOklab, REAL_DEFAULTS, srgbToLinear, type LookParams } from './look.ts';
 import { invert, lookAt, multiply, normalize, type Mat4, type V3 } from './math.ts';
@@ -518,12 +519,29 @@ export class Renderer {
       for (let k = 0; k < n; k++) {
         const o = (slot + k) * FX_WORDS;
         if (a && k < a.length) this.fx[o] = tintWord(a[k]!);
-        if (scales && k < scales.length) this.fx[o + 1] = (toHalf(1 - Math.min(1, Math.max(0, scales[k]!))) | (anchor ? FX_ANCHOR : 0)) >>> 0;
+        if (scales && k < scales.length) this.fx[o + 1] = (toHalf(1 - Math.min(1, Math.max(0, scales[k]!))) | (anchor ? FX_ANCHOR : 0) | (this.fx[o + 1]! & MARK_MASK)) >>> 0;
       }
     } else {
-      packFx(a, this.fx, slot * FX_WORDS, this.lastTime);
+      const o = slot * FX_WORDS, mark = this.fx[o + 1]! & MARK_MASK;
+      packFx(a, this.fx, o, this.lastTime);
+      if (a.mark === undefined) this.fx[o + 1] = (this.fx[o + 1]! | mark) >>> 0;
     }
     this.uploadFx(slot, n);
+  }
+
+  /**
+   * Engrave count = marks.length slots from slot0 (marks.ts: MARK_NONE, MARK_HIT, MARK_SAVE per slot). A mark
+   * stays through every setFx that does not name one, until clearFx; only boxes draw it.
+   */
+  setMarks(slot0: number, marks: ArrayLike<number>): void {
+    const n = marks.length;
+    if (!n) return;
+    this.growFx(slot0 + n);
+    for (let k = 0; k < n; k++) {
+      const o = (slot0 + k) * FX_WORDS + 1;
+      this.fx[o] = ((this.fx[o]! & ~MARK_MASK) | ((marks[k]! & 3) << MARK_SHIFT)) >>> 0;
+    }
+    this.uploadFx(slot0, n);
   }
 
   /** Remove the effects of count slots from slot. */
