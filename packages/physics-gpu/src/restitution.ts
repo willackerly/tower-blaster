@@ -11,7 +11,9 @@
 // it exactly: its response is M^-1/2 (1 - Q Q^T) M^-1/2 J, Q an orthonormal
 // basis of its anchor rows in M^1/2 coordinates); restitutionRounds rounds of
 // mass-split Jacobi, each manifold with a centroid step and one Gauss-Seidel
-// sweep; then the conditional lambda reset.
+// sweep; with restitutionEnergyCap (default on) each island's change scaled
+// so that it ends with no more invariant energy than at the start of the step
+// or after the solve; then the conditional lambda reset.
 //
 // Encoding (AvbdSolver.solve(), after finalize, in the same compute pass):
 //   restMark        per pair slot (indirect, as the dual): marks the points
@@ -30,26 +32,58 @@
 //                   inertia at q0, and with anchors the basis of its anchor
 //                   rows: Gram-Schmidt, ground slot first, then pair slots in
 //                   slot order)
+//   restIslandInit  (cap) per body: its own set, alpha 1, zero sums, and a
+//                   copy of the solve's velocities (IslandBody)
+//   restIslandHook  (cap) per pair slot with points: joins its bodies' sets
+//                   (compare-exchange, the larger root under the smaller)
 //   R x restManifold per pair slot: its groups (bouncing points, supports),
 //                   each on a copy of last round's velocities with masses
 //                   and inertias split; writes the round's impulses
 //   R x restBodies  per body: its ground slot's groups (from last round's
 //                   velocities too, so it is Jacobi), then the sum of every
 //                   manifold's impulses, with its own mass
+//   restIslandSum   (cap) per body: its root (stored: the island's least
+//                   body), and its terms of the island's D, G and Q, added
+//                   in fixed point
+//   restIslandCap   (cap) per body in the pass: its island's alpha (capAlpha
+//                   in f32); if under 1, scales its velocity change, and the
+//                   targets and impulses of its ground slot and the pair slots
+//                   where it is body b, by it
 //   restFinish      per body: the lambda reset of its ground slot and of the
 //                   pair slots where it is body b
-// That is 7 + 2R dispatches a step while on (23 at the default 8 rounds; 2
-// direct, 5 + 2R indirect), anchors or not, and none while off. When nothing
-// bounces (a resting scene) only the first three do work: the other 4 + 2R
-// are indirect with 0 workgroups. Without anchors (restitutionAnchors false,
+// That is 11 + 2R dispatches a step while on (27 at the default 8 rounds; 2
+// direct, 9 + 2R indirect), anchors or not, 7 + 2R without the energy cap,
+// and none while off. When nothing bounces (a resting scene) only the first
+// three do work: the others are indirect with 0 workgroups. Without anchors (restitutionAnchors false,
 // a pipeline constant: the anchor code compiles out) the pass gives the
 // floats it gave before anchors existed (on SwiftShader, 2026-11-05: S5
 // knocks on records 1 and points, a 510 kg ball on a cube, a cube onto two;
 // RestBody moved the world inverse inertia's rows out of restManifold and
 // restBodies into restAnchors, the same expression). A body's slots are read through the
 // colouring's rows (rowStart, rowLength, adjSlot: sorted by slot), so every
-// sum is in a fixed order and the pass is bit-reproducible; the only atomic
-// is the count of bouncing points, an integer.
+// sum is in a fixed order and the pass is bit-reproducible; the atomics are
+// integers (the count of bouncing points; the cap's labels and sums), so any
+// order gives the same values.
+//
+// Energy cap (restitutionEnergyCap; the rule, its rationale and its
+// measurements are the reference's restitute(), "Energy cap"). Islands are
+// connected components of the bodies joined by any pair slot with points
+// (the ground joins nothing), labelled by lock-free union-find: the hook joins
+// two roots by a compare-exchange that hangs the larger under the smaller and
+// only succeeds while it is still a root, so every island's root ends as its
+// least body in any order (the pattern of sleep.ts). The sums are fixed point
+// with integer atomics, so their order cannot change a bit: each term x is
+// hi = floor(CAP_FIX_HI x) as i32 and lo, the rest in units of
+// 1 / (CAP_FIX_HI CAP_FIX_LO) J as u32 in [0, CAP_FIX_LO]; D rounded down, G
+// and Q up, so an island gets at most its alpha in exact arithmetic (to
+// within f32's error in the terms themselves). That holds while no sum's
+// parts overflow: |sum| < 2^29 J and under 2^22 bodies (the solver refuses
+// a larger capacity with the cap on); a term beyond +-2^29 J is clamped.
+// Alpha is solved in f32 (islandAlpha, capAlpha's formula). At alpha 1 the
+// pass is untouched: the cap only reads, so a step it does not scale is the
+// floats of the pass without it. f32 against the reference: the two-cube
+// case of engine-restitution-cap.test.ts scales on the same step by an alpha
+// within 3e-5 of the reference's.
 //
 // Contact layouts (AvbdParams.records): the kernels read a slot's points
 // through a view (POINT_VIEW, RECORD_VIEW below) of SolverContact points
@@ -67,7 +101,8 @@
 // Memory while on: one RestSlot (80 B) per contact slot, (maxPairs +
 // capacity) x 80 B (pair slots, then one ground slot per body: 10.4% of the
 // contact buffer with records 1, which holds 768 B per slot, and 7.8% with
-// points, 1024 B), one RestBody (REST_BODY_BYTES, 288 B) per body, and 28 B
+// points, 1024 B), one RestBody (REST_BODY_BYTES, 288 B) per body, with the
+// energy cap one IslandBody (ISLAND_BODY_BYTES, 64 B) per body, and 28 B
 // of counters and arguments. Off: no buffer and no pipeline (the engine builds the pass only
 // while the switch is on), and the other kernels are unchanged but for
 // BodyProps.restitution, which takes the padding word BodyProps had (on
@@ -106,7 +141,9 @@
 //   COMBINE_RULES at init. The reference does not check it (an unknown rule
 //   gives it a NaN e, so nothing bounces).
 //
-// Not measured on hardware: the pass's cost while on. solveGroup indexes
+// Not measured on hardware: the pass's cost while on (the cap's 4 dispatches
+// among it; its atomics all land on an island's root, so a large island
+// contends on one word). solveGroup indexes
 // private arrays (the rows, P, T, dP) in loops, the shape solver.ts's header
 // measured spilling on the M5 Max ('array' against 'registers', #40). If
 // restManifold and restBodies show in a bench of an impact-heavy scene, unroll
@@ -134,6 +171,8 @@ export interface RestitutionConfig {
   anchors: boolean;
   /** AvbdParams.restitutionAnchorSpeed, m/s (a finite number >= 0): the speed under which a body rests for anchors. */
   anchorSpeed: number;
+  /** AvbdParams.restitutionEnergyCap: scale each island's change so it ends the pass with no more energy than at the step's start or after the solve. */
+  energyCap: boolean;
 }
 
 /** Bytes of the counters and indirect arguments: [0] points bouncing this step (atomic), [1..3] per-slot and [4..6] per-body dispatch arguments. */
@@ -146,6 +185,14 @@ export const REST_BODY_BYTES = 288;
 export const ANCHOR_UP = 0.5;
 /** Anchors: a row whose part outside the held directions is under this fraction of its length is held (the reference's). */
 export const ANCHOR_TOL = 1e-4;
+/** Bytes of an IslandBody (one per body while the energy cap is on): union-find parent, the island's alpha and sums, the solve's velocities. */
+export const ISLAND_BODY_BYTES = 64;
+/**
+ * The energy cap's fixed point: an energy x (J) is added to an island's sum as hi = floor(4 x) (an i32) and lo, the
+ * rest in 1/4096 J (a u32 in [0, 1024]), each an atomic add of integers, so the sums are the same whatever the
+ * order. Exact while an island's |sum| stays under 2^29 J and it has under 2^22 bodies.
+ */
+export const CAP_FIX_HI = 4, CAP_FIX_LO = 1024;
 
 /** BodyProps.restitution for a NaN BodyDesc.restitution (restitutionWord): pairE gives it no bounce under every rule. */
 export const NAN_RESTITUTION = -F32_MAX;
@@ -163,7 +210,7 @@ export function restitutionWord(e: number): number {
   return Math.min(F32_MAX / 2, Math.max(-F32_MAX / 2, x));
 }
 
-export type RestBinding = 'contacts' | 'contactsRw' | 'props' | 'solver' | 'bodies' | 'bodiesRw' | 'rest' | 'restRead' | 'info' | 'stepInfo' | 'rowStart' | 'rowLength' | 'adjSlot' | 'params' | 'restBody' | 'restBodyRead';
+export type RestBinding = 'contacts' | 'contactsRw' | 'props' | 'solver' | 'bodies' | 'bodiesRw' | 'rest' | 'restRead' | 'info' | 'stepInfo' | 'rowStart' | 'rowLength' | 'adjSlot' | 'params' | 'restBody' | 'restBodyRead' | 'island';
 /** The pass's pipeline constants. */
 export type RestConstant = 'restThreshold' | 'groundRestitution' | 'restCombine' | 'restAnchorsOn' | 'restAnchorSpeed';
 
@@ -193,6 +240,7 @@ const DECL: Record<RestBinding, (i: number) => string> = {
   params: (i) => `@group(0) @binding(${i}) var<uniform> p: SolverParams;`,
   restBody: (i) => `@group(0) @binding(${i}) var<storage, read_write> restBody: array<RestBody>;`,
   restBodyRead: (i) => `@group(0) @binding(${i}) var<storage, read> restBody: array<RestBody>;`,
+  island: (i) => `@group(0) @binding(${i}) var<storage, read_write> island: array<IslandBody>;`,
 };
 
 // Shared by every kernel: needs no binding but the uniforms p.
@@ -443,6 +491,68 @@ fn mark(s: u32, e: f32, b: u32, a: u32) -> RestSlot {
     }
   }
   return r;
+}
+`;
+
+// The energy cap's kernels (restIsland*; island bound).
+const ISLAND = /* wgsl */ `
+// A body's view in the energy cap: its union-find parent (after restIslandSum, its island's root, the island's least
+// body), and on the root the island's alpha (f32 bits) and its sums in fixed point (CAP_FIX_HI, CAP_FIX_LO): D, the
+// energy the solve took from the island, and G and Q, the pass's added energy alpha G + alpha^2 Q / 2; and the
+// solve's velocities, before the rounds.
+struct IslandBody {
+  parent: atomic<u32>,
+  alpha: atomic<u32>,
+  dHi: atomic<i32>, dLo: atomic<u32>,
+  gHi: atomic<i32>, gLo: atomic<u32>,
+  qHi: atomic<i32>, qLo: atomic<u32>,
+  v: vec3f, pad0: f32,
+  w: vec3f, pad1: f32,
+}
+// Bounded walks: a root is reached in far fewer steps; the bound only keeps a bug from hanging the GPU.
+const FIND_BOUND = 1048576u;
+fn find(x0: u32) -> u32 {
+  var x = x0;
+  for (var i = 0u; i < FIND_BOUND; i++) {
+    let p = atomicLoad(&island[x].parent);
+    if (p == x) { return x; }
+    let gp = atomicLoad(&island[p].parent);
+    // Path halving: x skips to its grandparent (still in its set, so any interleaving is safe).
+    if (gp != p) { _ = atomicCompareExchangeWeak(&island[x].parent, p, gp); }
+    x = gp;
+  }
+  return x;
+}
+// x (J) in fixed point: hi = floor(4 x), clamped to i32, and the rest in 1/4096 J, rounded down, or up if up.
+const FIX_HI = ${CAP_FIX_HI}.0;
+const FIX_LO = ${CAP_FIX_LO}.0;
+struct Fix { hi: i32, lo: u32 }
+fn fixOf(x: f32, up: bool) -> Fix {
+  let y = clamp(x * FIX_HI, -2147483520.0, 2147483520.0);
+  let h = floor(y);
+  let f = (y - h) * FIX_LO;
+  return Fix(i32(h), u32(select(floor(f), ceil(f), up)));
+}
+fn fixValue(hi: i32, lo: u32) -> f32 { return f32(hi) / FIX_HI + f32(lo) / (FIX_HI * FIX_LO); }
+// The island's alpha (the reference's capAlpha): the largest in [0, 1] with alpha G + alpha^2 Q / 2 <= max(0, D).
+fn islandAlpha(r: u32) -> f32 {
+  let D = fixValue(atomicLoad(&island[r].dHi), atomicLoad(&island[r].dLo));
+  let G = fixValue(atomicLoad(&island[r].gHi), atomicLoad(&island[r].gLo));
+  let Q = fixValue(atomicLoad(&island[r].qHi), atomicLoad(&island[r].qLo));
+  let B = max(0.0, D);
+  if (G + 0.5 * Q <= B) { return 1.0; }
+  let s = sqrt(G * G + 2.0 * Q * B);
+  var a = 0.0;
+  if (G > 0.0) { a = 2.0 * B / (G + s); } else { a = (s - G) / Q; }
+  if (!(a > 0.0)) { return 0.0; }
+  return min(a, 1.0);
+}
+// 1/2 w.I(q) w', I(q) the world inertia at pose q of principal moments m.
+fn spinDot(q: vec4f, m: vec3f, w: vec3f, x: vec3f) -> f32 {
+  let a0 = qrot(q, vec3f(1.0, 0.0, 0.0));
+  let a1 = qrot(q, vec3f(0.0, 1.0, 0.0));
+  let a2 = qrot(q, vec3f(0.0, 0.0, 1.0));
+  return 0.5 * (m.x * dot(a0, w) * dot(a0, x) + m.y * dot(a1, w) * dot(a1, x) + m.z * dot(a2, w) * dot(a2, x));
 }
 `;
 
@@ -728,6 +838,103 @@ fn restBodies(@builtin(global_invocation_id) id: vec3u) {
   bodies[i].linVel = b.linVel + o.v;
   bodies[i].angVel = b.angVel + o.w;
 }`,
+  restIslandInit: /* wgsl */ `
+// The energy cap, before the rounds: every body its own island, alpha 1, sums 0, and the solve's velocities kept.
+@compute @workgroup_size(${WG})
+fn restIslandInit(@builtin(global_invocation_id) id: vec3u) {
+  let i = id.x;
+  if (i >= p.n) { return; }
+  atomicStore(&island[i].parent, i);
+  atomicStore(&island[i].alpha, bitcast<u32>(1.0));
+  atomicStore(&island[i].dHi, 0); atomicStore(&island[i].dLo, 0u);
+  atomicStore(&island[i].gHi, 0); atomicStore(&island[i].gLo, 0u);
+  atomicStore(&island[i].qHi, 0); atomicStore(&island[i].qLo, 0u);
+  island[i].v = bodies[i].linVel;
+  island[i].w = bodies[i].angVel;
+}`,
+  restIslandHook: /* wgsl */ `
+// Islands: each pair slot with points joins its bodies' sets, the larger root under the smaller (by a
+// compare-exchange that only succeeds while it is still a root; on failure both roots are found again), so each
+// island's root ends as its least body whatever the order.
+@compute @workgroup_size(${WG})
+fn restIslandHook(@builtin(global_invocation_id) id: vec3u) {
+  let k = id.x;
+  if (k >= stepInfo[3]) { return; }
+  let s = slotOf(k);
+  if (!ptUsed(s, 0u)) { return; }
+  var a = find(slotA(s));
+  var b = find(slotB(s));
+  for (var i = 0u; i < FIND_BOUND; i++) {
+    if (a == b) { return; }
+    let hi = max(a, b);
+    let lo = min(a, b);
+    if (atomicCompareExchangeWeak(&island[hi].parent, hi, lo).exchanged) { return; }
+    a = find(hi);
+    b = find(lo);
+  }
+}`,
+  restIslandSum: /* wgsl */ `
+// After the rounds: each body's root, and its terms of its island's sums (integers: the same in any order). D: semi-
+// implicit Euler's invariant energy, 1/2 m |v + g h/2|^2 + 1/2 w.I w - m g.x, at the start of the step less after
+// the solve (the potential's change is m g.(x - x0)), rounded down; for a body in the pass, G = du.M u' and
+// Q = du.M du (du the pass's change, u' the solve's velocities with v + g h/2, M at the step's end pose), rounded up.
+@compute @workgroup_size(${WG})
+fn restIslandSum(@builtin(global_invocation_id) id: vec3u) {
+  let i = id.x;
+  if (i >= p.n) { return; }
+  let r = find(i);
+  atomicStore(&island[i].parent, r);
+  let sb = solver[i];
+  let b = bodies[i];
+  let m = props[i].mass;
+  let I = props[i].inertia;
+  let hg = 0.5 * p.dt * p.gravity;
+  var v0 = sb.prevVel;
+  if (p.iterations == 0u) { v0 = (sb.tp - p.dt * p.dt * p.gravity) / p.dt; }
+  let w0 = sb.tphi / p.dt;
+  let vp = island[i].v + hg;
+  let wp = island[i].w;
+  let vs = v0 + hg;
+  let d = 0.5 * m * (dot(vs, vs) - dot(vp, vp)) + spinDot(sb.q0, I, w0, w0) - spinDot(b.rot, I, wp, wp) + m * dot(p.gravity, b.pos - sb.x0);
+  let fd = fixOf(d, false);
+  atomicAdd(&island[r].dHi, fd.hi); atomicAdd(&island[r].dLo, fd.lo);
+  if (rest[groundRec(i)].split == 0u) { return; }
+  let dv = b.linVel - island[i].v;
+  let dw = b.angVel - wp;
+  let fg = fixOf(m * dot(dv, vp) + 2.0 * spinDot(b.rot, I, dw, wp), true);
+  let fq = fixOf(m * dot(dv, dv) + 2.0 * spinDot(b.rot, I, dw, dw), true);
+  atomicAdd(&island[r].gHi, fg.hi); atomicAdd(&island[r].gLo, fg.lo);
+  atomicAdd(&island[r].qHi, fq.hi); atomicAdd(&island[r].qLo, fq.lo);
+}`,
+  restIslandCap: /* wgsl */ `
+// A body of the pass whose island's alpha is under 1: its velocity the solve's plus alpha times the pass's change,
+// and its ground slot's and its pair slots' (where it is b, so each once) impulses and targets times alpha (the
+// release and the stats read them). Its island's alpha is kept on the root (every body of the pass in it writes the
+// same bits).
+@compute @workgroup_size(${WG})
+fn restIslandCap(@builtin(global_invocation_id) id: vec3u) {
+  let i = id.x;
+  if (i >= p.n) { return; }
+  let gi = groundRec(i);
+  if (rest[gi].split == 0u) { return; }
+  let r = atomicLoad(&island[i].parent);
+  let a = islandAlpha(r);
+  atomicStore(&island[r].alpha, bitcast<u32>(a));
+  if (!(a < 1.0)) { return; }
+  let v = island[i].v;
+  let w = island[i].w;
+  bodies[i].linVel = v + a * (bodies[i].linVel - v);
+  bodies[i].angVel = w + a * (bodies[i].angVel - w);
+  rest[gi].P = a * rest[gi].P;
+  rest[gi].vnTarget = a * rest[gi].vnTarget;
+  let rs = rowStart[i];
+  for (var e = rs; e < rs + rowLength[i]; e++) {
+    let slot = adjSlot[e];
+    if (rest[slot].b != i) { continue; }
+    rest[slot].P = a * rest[slot].P;
+    rest[slot].vnTarget = a * rest[slot].vnTarget;
+  }
+}`,
   restFinish: /* wgsl */ `
 // A bounced point that will separate (P > 0 and its target times h beyond restDepth) starts the next step with
 // no force.
@@ -752,7 +959,7 @@ fn restFinish(@builtin(global_invocation_id) id: vec3u) {
 }`,
 };
 
-const KERNELS: Array<Omit<RestKernel, 'code'> & { mark?: boolean; solve?: boolean }> = [
+const KERNELS: Array<Omit<RestKernel, 'code'> & { mark?: boolean; solve?: boolean; cap?: boolean }> = [
   { entry: 'restMark', bindings: ['contacts', 'props', 'solver', 'rest', 'info', 'stepInfo', 'params'], constants: ['restThreshold', 'restCombine'], workgroup: WG, mark: true },
   { entry: 'restMarkBodies', bindings: ['contacts', 'props', 'solver', 'rest', 'info', 'rowStart', 'rowLength', 'adjSlot', 'params'], constants: ['restThreshold', 'groundRestitution', 'restCombine', 'restAnchorsOn', 'restAnchorSpeed'], workgroup: WG, mark: true },
   { entry: 'restArgs', bindings: ['info', 'stepInfo', 'params'], constants: [], workgroup: 1 },
@@ -761,6 +968,10 @@ const KERNELS: Array<Omit<RestKernel, 'code'> & { mark?: boolean; solve?: boolea
   { entry: 'restAnchors', bindings: ['contacts', 'props', 'solver', 'restRead', 'rowStart', 'rowLength', 'adjSlot', 'restBody', 'params'], constants: ['restAnchorsOn'], workgroup: WG },
   { entry: 'restManifold', bindings: ['contacts', 'bodies', 'rest', 'restBodyRead', 'stepInfo', 'params'], constants: [], workgroup: WG, solve: true },
   { entry: 'restBodies', bindings: ['bodiesRw', 'contacts', 'rest', 'restBodyRead', 'rowStart', 'rowLength', 'adjSlot', 'params'], constants: [], workgroup: WG, solve: true },
+  { entry: 'restIslandInit', bindings: ['bodies', 'island', 'params'], constants: [], workgroup: WG, cap: true },
+  { entry: 'restIslandHook', bindings: ['contacts', 'island', 'stepInfo', 'params'], constants: [], workgroup: WG, cap: true },
+  { entry: 'restIslandSum', bindings: ['bodies', 'props', 'solver', 'restRead', 'island', 'params'], constants: [], workgroup: WG, cap: true },
+  { entry: 'restIslandCap', bindings: ['bodiesRw', 'rest', 'island', 'rowStart', 'rowLength', 'adjSlot', 'params'], constants: [], workgroup: WG, cap: true },
   { entry: 'restFinish', bindings: ['contactsRw', 'restRead', 'rowStart', 'rowLength', 'adjSlot', 'params'], constants: [], workgroup: WG },
 ];
 
@@ -779,13 +990,13 @@ export type RestLayout = { records: 0 } | { records: 1; head: string };
  * structs, NONE, qrot, pairPoint and groundPoint, which read the uniforms p).
  * A kernel that binds the contacts reads them through the layout's view.
  */
-export function restitutionKernels(common: string, layout: RestLayout = { records: 0 }): RestKernel[] {
+export function restitutionKernels(common: string, layout: RestLayout = { records: 0 }, energyCap = false): RestKernel[] {
   const rec = layout.records === 1;
-  return KERNELS.map(({ mark, solve, ...k }) => {
+  return KERNELS.filter((k) => energyCap || !k.cap).map(({ mark, solve, cap, ...k }) => {
     const reads = k.bindings.includes('contacts'), writes = k.bindings.includes('contactsRw');
     const decls = k.bindings.map((b, i) => (rec && (b === 'contacts' || b === 'contactsRw') ? recordDecl(i, b === 'contactsRw') : DECL[b](i)));
     const view = !(reads || writes) ? '' : (rec ? `${layout.head}\n${RECORD_VIEW}` : POINT_VIEW) + (writes ? (rec ? RECORD_RELEASE : POINT_RELEASE) : '');
-    return { ...k, code: `${common}\n${HEAD}\n${decls.join('\n')}\n${view}\n${mark ? MARK : ''}\n${solve ? SOLVE : ''}\n${ENTRY[k.entry]!}\n` };
+    return { ...k, code: `${common}\n${HEAD}\n${decls.join('\n')}\n${view}\n${mark ? MARK : ''}\n${solve ? SOLVE : ''}\n${cap ? ISLAND : ''}\n${ENTRY[k.entry]!}\n` };
   });
 }
 

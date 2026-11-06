@@ -49,6 +49,41 @@ export function shadowEnergy(scene: SceneDesc, s: Snapshot): number {
   }
   return E;
 }
+
+/**
+ * The energy cap's property on a GPU run with stats (gpuRun with the cap on): over every step whose pass bounced a
+ * point, the worst excess of an island's invariant energy after the step over the larger of its energy at the start
+ * and after the solve (the pass's input, Run.solved, at the step's end pose), relative to the island's kinetic energy
+ * at the start plus after the solve. Islands are the GPU's labels (Run.labels; checked on their own in
+ * engine-restitution-cap.test.ts); the energies are the host's, in f64, from the f32 state.
+ */
+export function islandExcess(scene: SceneDesc, r: Run) {
+  const bodies = allBodies(scene), g = scene.gravity, h = scene.dt;
+  const energy = (i: number, x: ArrayLike<number>, q: ArrayLike<number>, v: ArrayLike<number>, w: ArrayLike<number>, grav: boolean) => {
+    const m = massOf(bodies[i]!), I = inertiaOf(bodies[i]!), gk = (k: number) => (grav ? g[k]! : 0);
+    const u = [0, 1, 2].map((k) => v[3 * i + k]! + gk(k) * h / 2);
+    const wb = rotate([-q[4 * i]!, -q[4 * i + 1]!, -q[4 * i + 2]!, q[4 * i + 3]!], [w[3 * i]!, w[3 * i + 1]!, w[3 * i + 2]!]);
+    return 0.5 * m * (u[0]! ** 2 + u[1]! ** 2 + u[2]! ** 2) + 0.5 * (I[0] * wb[0] ** 2 + I[1] * wb[1] ** 2 + I[2] * wb[2] ** 2)
+      - m * (gk(0) * x[3 * i]! + gk(1) * x[3 * i + 1]! + gk(2) * x[3 * i + 2]!);
+  };
+  let worst = -Infinity, steps = 0;
+  for (let k = 1; k < r.snaps.length; k++) {
+    const st = r.stats[k - 1], a = r.snaps[k - 1]!, b = r.snaps[k]!, labels = r.labels?.[k - 1], ps = r.solved?.[k - 1];
+    if (!st?.contacts || !labels || !ps || a.count !== b.count) continue;
+    steps++;
+    const sum = new Map<number, { e0: number; ep: number; e1: number; k: number }>();
+    for (let i = 0; i < b.count; i++) {
+      const t = sum.get(labels[i]!) ?? { e0: 0, ep: 0, e1: 0, k: 0 };
+      t.e0 += energy(i, a.pos, a.rot, a.linVel, a.angVel, true);
+      t.ep += energy(i, b.pos, b.rot, ps.linVel, ps.angVel, true);
+      t.e1 += energy(i, b.pos, b.rot, b.linVel, b.angVel, true);
+      t.k += energy(i, a.pos, a.rot, a.linVel, a.angVel, false) + energy(i, b.pos, b.rot, ps.linVel, ps.angVel, false);
+      sum.set(labels[i]!, t);
+    }
+    for (const t of sum.values()) worst = Math.max(worst, (t.e1 - Math.max(t.e0, t.ep)) / (t.k + 1e-6));
+  }
+  return { worst, steps };
+}
 export const speed = (s: Snapshot, i: number) => Math.hypot(s.linVel[3 * i]!, s.linVel[3 * i + 1]!, s.linVel[3 * i + 2]!);
 export const spin = (s: Snapshot, i: number) => Math.hypot(s.angVel[3 * i]!, s.angVel[3 * i + 1]!, s.angVel[3 * i + 2]!);
 export const maxSpeed = (s: Snapshot) => { let m = 0; for (let i = 0; i < s.count; i++) m = Math.max(m, speed(s, i)); return m; };
@@ -58,6 +93,10 @@ export interface Run {
   stats: Array<StepStats['restitution'] | null>;
   /** GPU runs with stats: GpuAvbdEngine.restitutionStats() after the last step. */
   live?: GpuRestitutionStats | null;
+  /** GPU runs with stats and the energy cap: each step's island label per body (steppedRun in page.ts). */
+  labels?: number[][];
+  /** The same runs: each step's velocities after the solve, before the pass (IslandBody.v and .w). */
+  solved?: Array<{ linVel: number[]; angVel: number[] }>;
 }
 /** The reference's run, a snapshot after every step (snaps[0] the start) and its pass's stats. */
 export async function refRun(scene: SceneDesc, steps: number, params: Partial<AvbdParams>): Promise<Run> {
@@ -79,7 +118,7 @@ export async function gpuRun(scene: SceneDesc, steps: number, params: Partial<Av
   expect(r.diagnostics.colorOverflow).toBe(0);
   expect(r.diagnostics.pairsRequired).toBeLessThanOrEqual(r.diagnostics.pairsWritten);
   expect(r.diagnostics.pairsOverflowSteps).toBe(0); // on any step of the run
-  return { snaps: r.snaps.map(toSnap), stats: r.stats.map((x) => (x ? { ...x, momentum: [NaN, NaN, NaN], anchorImpulse: [NaN, NaN, NaN] } : null)), live: r.live };
+  return { snaps: r.snaps.map(toSnap), stats: r.stats.map((x) => (x ? { ...x, momentum: [NaN, NaN, NaN], anchorImpulse: [NaN, NaN, NaN], capped: x.capped, capAlpha: x.capAlpha } : null)), live: r.live, labels: r.labels, solved: r.solved };
 }
 
 /** The energy a run gains: the largest rise of the shadow energy over its start, relative to |E0| (or to `scale`), and the end over the start. */

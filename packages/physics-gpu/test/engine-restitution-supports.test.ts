@@ -202,8 +202,8 @@ describe('GPU AVBD engine: restitution stats (GpuAvbdEngine.restitutionStats)', 
     const k = r.gpu.stats.findIndex((s) => s!.contacts > 0);
     expect(k).toBe(r.ref.stats.findIndex((s) => s!.contacts > 0));
     // GpuAvbdEngine.restitutionStats() itself, after the step of the bounce: the same as the history's.
-    const at = await gpuRun(scene, k + 1, params, {}, true), { contacts, impulse, groundImpulse } = r.gpu.stats[k]!;
-    expect(at.live).toEqual({ contacts, impulse, groundImpulse });
+    const at = await gpuRun(scene, k + 1, params, {}, true), { contacts, impulse, groundImpulse, capped, capAlpha } = r.gpu.stats[k]!;
+    expect(at.live).toEqual({ contacts, impulse, groundImpulse, capped, capAlpha });
     expect(at.live!.contacts).toBe(1);
   });
 

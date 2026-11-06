@@ -31,7 +31,9 @@ describe('GPU AVBD engine: restitution off', () => {
     expect(floats(await gpuRun(scene, 60, ON))).not.toEqual(off);
   });
 
-  it('off it encodes no extra dispatch; on, 7 + 2 x restitutionRounds (2 direct), anchors or not', { timeout: 120_000 }, async (ctx) => {
+  // The energy cap (on by default) adds 4: the island labels' init and hook before the rounds, the sums and the
+  // scaling after them.
+  it('off it encodes no extra dispatch; on, 11 + 2 x restitutionRounds (2 direct), anchors or not; 7 + 2R without the energy cap', { timeout: 120_000 }, async (ctx) => {
     if (!gpu) return ctx.skip();
     const scene = withE(knock(15), 0.6);
     const off = await call('dispatchCounts', scene, {}, {});
@@ -39,10 +41,12 @@ describe('GPU AVBD engine: restitution off', () => {
     const on = await call('dispatchCounts', scene, ON, {});
     const three = await call('dispatchCounts', scene, { ...ON, restitutionRounds: 3 }, {});
     const old = await call('dispatchCounts', scene, OLD, {});
-    expect([off.error, no.error, on.error, three.error, old.error]).toEqual([null, null, null, null, null]);
+    const uncapped = await call('dispatchCounts', scene, { ...ON, restitutionEnergyCap: false }, {});
+    expect([off.error, no.error, on.error, three.error, old.error, uncapped.error]).toEqual([null, null, null, null, null, null]);
     expect([no.direct, no.indirect]).toEqual([off.direct, off.indirect]);
-    expect([on.direct - off.direct, on.indirect - off.indirect]).toEqual([2, 5 + 2 * 8]);
-    expect([three.direct - off.direct, three.indirect - off.indirect]).toEqual([2, 5 + 2 * 3]);
+    expect([on.direct - off.direct, on.indirect - off.indirect]).toEqual([2, 9 + 2 * 8]);
+    expect([three.direct - off.direct, three.indirect - off.indirect]).toEqual([2, 9 + 2 * 3]);
+    expect([uncapped.direct - off.direct, uncapped.indirect - off.indirect]).toEqual([2, 5 + 2 * 8]);
     expect([old.direct, old.indirect]).toEqual([on.direct, on.indirect]);
   });
 });
@@ -105,7 +109,11 @@ describe('GPU AVBD engine: restitution on, against the reference', () => {
   // 6): (vB - vA) / v is the pair's e. Measured: within 1.1e-7 of the reference's under every rule and order;
   // clamped at 1 (1.5 / 1.5) and at 0 (0.6 / -0.8 under average: the solve's own 0.0185). A NaN e bounces
   // nothing under any rule, as on the reference (with NaN itself in BodyProps, SwiftShader bounced it under min
-  // and max: eEff 0.88); an infinite one combines as the reference's (average 1, times 0 no bounce).
+  // and max: eEff 0.88); an infinite one combines as the reference's (average 1, times 0 no bounce). The clamp at 1
+  // runs without the energy cap: the GPU's pair meets a step after the reference's (f32 at the step boundary), its
+  // solve's inelastic step leaves 0.9% more momentum than the strike (2.526 and 2.520 m/s), and an elastic bounce
+  // from there would end the pair 0.8% above its start, so the cap trims it (alpha 0.99061, eEff 0.9906; with
+  // the cap the reference, bouncing from the start velocities, keeps 1).
   it('two coefficients combine by SceneDesc.restitutionCombine (default average), in either order, clamped to [0, 1]', { timeout: 300_000 }, async (ctx) => {
     if (!gpu) return ctx.skip();
     const eEff = (r: Run, v: number) => (r.snaps.at(-1)!.linVel[3]! - r.snaps.at(-1)!.linVel[0]!) / v;
@@ -115,7 +123,7 @@ describe('GPU AVBD engine: restitution on, against the reference', () => {
     cases.push(['min', NaN, 0.9], ['max', 0.9, NaN], ['average', NaN, 0.9], ['multiply', 0.9, NaN], ['average', Infinity, 0.2], ['multiply', Infinity, 0]);
     for (const [rule, eA, eB] of cases) {
       const v = 5, scene = zeroG([ball([-0.75, 0, 0], { e: eA, linVel: [v, 0, 0] }), ball([0.75, 0, 0], { e: eB })], rule);
-      const r = await both(scene, 20, ON), id = `${rule} ${eA}/${eB}`;
+      const r = await both(scene, 20, eA >= 1 ? { ...ON, restitutionEnergyCap: false } : ON), id = `${rule} ${eA}/${eB}`;
       const want = Math.min(1, Math.max(0, combineRestitution(rule ?? DEFAULT_RESTITUTION_COMBINE, eA, eB)));
       expect(Math.abs(eEff(r.gpu, v) - eEff(r.ref, v)), id).toBeLessThan(1e-6);
       if (want > 0) expect(eEff(r.gpu, v), id).toBeCloseTo(want, 5);
