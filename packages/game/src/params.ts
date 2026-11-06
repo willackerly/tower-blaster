@@ -124,11 +124,12 @@ export function weaponTierParam(q: URLSearchParams): WeaponTier | null {
 }
 
 /**
- * The tier the rack's weapons are held to: the URL's, else high (every shipped level's weapons fit low,
- * so this only refuses a weapon a link or keystone.rack brings). The device-tier probe (P1) replaces
- * high with the device's tier.
+ * The tier the rack's weapons are held to: the URL's, else the device's quality tier (quality.ts, the
+ * probe on load or the player's Quality setting; the two use the caps' names), else high until that is
+ * decided. Every shipped level's weapons fit low, so this only refuses a weapon a link or keystone.rack
+ * brings.
  */
-export const weaponTierOf = (url: WeaponTier | null): WeaponTier => url ?? 'high';
+export const weaponTierOf = (url: WeaponTier | null, device?: WeaponTier | null): WeaponTier => url ?? device ?? 'high';
 
 /** ?duel: a duel table by id or ruleset, any case; null when absent; throws naming the known ones. */
 export function duelOf(text: string | null): DuelDef | null {

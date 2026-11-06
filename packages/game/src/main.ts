@@ -163,7 +163,7 @@ async function main() {
   let ended: SessionFacts | null = null, banked = false;
   await playKeystone({
     canvas, offscreen, device, renderer, source, hud: $('hud'), banner: $('banner'), result: $('result'),
-    levels: played, start: duel ? 0 : start, ...(duel ? {} : { series: seriesIdx }), engine, feel, weaponTier: () => weaponTierOf(weaponTier), fail, sound, impactsDb, muted: !settings.current.sound, touch: touchMode(q), ...loadOptions(q),
+    levels: played, start: duel ? 0 : start, ...(duel ? {} : { series: seriesIdx }), engine, feel, weaponTier: () => weaponTierOf(weaponTier, handle.quality?.tier), fail, sound, impactsDb, muted: !settings.current.sound, touch: touchMode(q), ...loadOptions(q),
     ...(duel ? { duel } : {}),
     // The pre-aimed opener (?keystone.preaim): by default the series' first level, until it has a record here.
     // The level's lot sheet (?keystone.goals=shown|all|off): proven goals by default, with the ones met on earlier plays marked.

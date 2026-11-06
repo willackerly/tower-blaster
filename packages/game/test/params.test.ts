@@ -57,11 +57,14 @@ describe('game URL keys', () => {
     expect(() => parse('?level=L1&keystone.rack=w-big')).toThrow(/keystone.rack: L1 has no weapons.big for w-big/);
   });
 
-  it('keystone.tier sets the tier the rack\'s weapons must fit; absent, high', () => {
+  it('keystone.tier sets the tier the rack\'s weapons must fit; absent, the device\'s quality tier, else high', () => {
     expect(parse('?level=L1').weaponTier).toBeNull();
     expect(weaponTierOf(parse('?level=L1').weaponTier)).toBe('high');
     expect(parse('?level=L1&keystone.tier=low').weaponTier).toBe('low');
     expect(weaponTierOf('mid')).toBe('mid');
+    // The device's quality tier when the URL says nothing; the URL wins.
+    expect(weaponTierOf(null, 'low')).toBe('low');
+    expect(weaponTierOf('high', 'low')).toBe('high');
     expect(() => parse('?keystone.tier=huge')).toThrow(/keystone.tier must be one of low, mid, high: huge/);
   });
 

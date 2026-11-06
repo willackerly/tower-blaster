@@ -1,7 +1,8 @@
 // The rack's weapons held to the device tier on the game page (roadmap C12 step 4,
 // docs/design/weapon-editor.md): with keystone.tier=mid the XL grenade (16 grenades of energy, over
 // mid's 8) is refused on fire with a banner naming the tier that fires it, and nothing is fired; a
-// marble from the same rack fires. Without keystone.tier (high) the XL fires (rack-e2e.test.ts). Rapier.
+// marble from the same rack fires. Without keystone.tier the device's quality tier holds it (offscreen
+// pages keep high, so rack-e2e.test.ts fires the XL). Rapier.
 import { describe, expect, it } from 'vitest';
 import { compileLevel, L1, type Shot } from '@tb/keystone';
 import { launchY } from '../src/aim.ts';
@@ -24,6 +25,21 @@ describe('a weapon over the device tier', () => {
     expect(await page.evaluate(() => window.__game.strokes)).toBe(0);
     expect(await page.evaluate((s) => window.__game.fire(s), miss('marble'))).toBe(true);
     await page.waitForFunction(() => window.__game.strokes === 1, undefined, { timeout: 30_000 });
+    expect(errors).toEqual([]);
+    await page.close();
+  }, 120_000);
+
+  it('without keystone.tier the device\'s quality tier holds it: ?quality=low refuses the XL', async (ctx) => {
+    if (!game.browser()) return ctx.skip();
+    const o = await game.open(`/?level=L1&offscreen=1&engine=rapier&keystone.rack=${RACK.join(',')}&quality=low`);
+    if (!o) return ctx.skip();
+    const { page, errors } = o;
+    await ready(page);
+    expect(await page.evaluate(() => window.__game.quality?.tier)).toBe('low');
+    const c = compileLevel({ ...L1, rack: [...RACK] });
+    const shot: Shot = { ammo: 'w-grenadexl', az: 0, y: launchY(c, 'w-grenadexl'), yaw: 900, pitch: 300, power: 100 };
+    expect(await page.evaluate((s) => window.__game.fire(s), shot)).toBe(false);
+    expect(await page.textContent('#banner')).toMatch(/^w-grenadexl not fired: 16\.00 grenades a shot is over the low tier's cap of 4 \(it needs high\)$/);
     expect(errors).toEqual([]);
     await page.close();
   }, 120_000);
