@@ -59,6 +59,11 @@ export interface PresettlePace {
   batchMs: number;
   /** The most steps in a batch (default 64). */
   maxBatch?: number;
+  /**
+   * Awaited before each batch: a pre-settle run in the background (the game's prefetch) waits here while
+   * the page needs the GPU for itself. The time held is not counted in a batch's rate.
+   */
+  gate?: () => Promise<void> | void;
 }
 
 /**
@@ -86,6 +91,7 @@ export async function presettlePaced(engine: PhysicsEngine, steps: number, pace:
   let batch = 1;
   if (!engine.finish) {
     for (let done = 0; done < steps;) {
+      await pace.gate?.();
       const t = now(), k = Math.min(batch, steps - done);
       for (let j = 0; j < k; j++) await engine.step();
       done += k;
@@ -96,6 +102,7 @@ export async function presettlePaced(engine: PhysicsEngine, steps: number, pace:
   }
   let inFlight: { k: number; done: Promise<void> } | null = null, last = now();
   for (let done = 0; done < steps;) {
+    if (pace.gate) { const g = now(); await pace.gate(); last += now() - g; }
     const k = Math.min(batch, steps - done);
     for (let j = 0; j < k; j++) await engine.step();
     done += k;

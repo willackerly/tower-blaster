@@ -16,14 +16,14 @@ Each run writes `results/mode-probes/<id>-<size>-<time>.{json,md}`. `--size ci` 
 
 | Probe | Question | Gates | SwiftShader | Metal (M5 Max) |
 |---|---|---|---|---|
-| X1 | Domino propagation and sleep | M6, M16, C22 | CI size passes; full-size subset (line 200, curves, cocked; 4 nudges) passes | not run yet |
-| X2 | Order matters in demolition | M5 | CI size: order matters on slab buildings | not run |
-| X3 | Towers as dominoes | M6 Steer | CI size: cube and Kapla towers topple on, a bonded pier stops the front | not run |
-| X4 | Cantilevers and hollows hold | M1 Hollow, M8 | CI size: stacks, span and brick arch behave | not run |
-| X5 | Pinned anchors solid | C8 | CI size: pins exactly still, bodies on them match the ground | not run |
-| X6 | Resonance under a gravity schedule; far-blast shove | M7 | CI size: no sign of resonance (rocking-block behaviour); far kick exact | not run |
+| X1 | Domino propagation and sleep | M6, M16, C22 | CI size passes; full-size subset (line 200, curves, cocked; 4 nudges) passes | queued |
+| X2 | Order matters in demolition | M5 | CI size: order matters on slab buildings | **PASS**: only felling a slab building with a 0.6 s delay spills (0.73); cube blocks never |
+| X3 | Towers as dominoes | M6 Steer | CI size: cube and Kapla towers topple on, a bonded pier stops the front | **PASS**: cube towers 24/24 always; bonded piers all or nothing (38%); Kapla dies after 2-3 |
+| X4 | Cantilevers and hollows hold | M1 Hollow, M8 | CI size: stacks, span and brick arch behave | **FAIL**, then reread: 95% stack falls at 20 iterations, holds at 40; arch creep is one brick over the hole (wall 4 mm). Re-run queued |
+| X5 | Pinned anchors solid | C8 | CI size: pins exactly still, bodies on them match the ground | **PASS**: pins exactly still, flood KS p >= 0.64 |
+| X6 | Resonance under a gravity schedule; far-blast shove | M7 | CI size: no sign of resonance (rocking-block behaviour); far kick exact | **FAIL, as predicted**: no resonance; 0.5 Hz is worst for every height; kick exact |
 | X7 | (optional) 1.5x domino amplifier | showcase | not planned | not run |
-| X8 | Islands behave like solo worlds | C10 | CI size: outcomes match; a world tracks its f32 coordinates (mm) more than the shared solve (solo at origin cm apart) | not run |
+| X8 | Islands behave like solo worlds | C10 | CI size: outcomes match; a world tracks its f32 coordinates (mm) more than the shared solve (solo at origin cm apart) | cost **passes** (0.93); outcome test inconclusive (shot moved nothing in 61/64); probe fixed, re-run queued |
 
 ## X1 Domino propagation and sleep
 
@@ -70,7 +70,19 @@ Every line and curve reached its end in every nudge, with sleep off and on, at t
 
 CI size on SwiftShader (4 x 4 x 6, one nudge, all at once vs the 0.3 s felling; 2026-11-05): the slab building felled west spills 0.39 of its mass outside the grown footprint and leans 1.87 cells west, against 0 and 0 when every charge fires at once. The cube block spills 0 under both orders (it drops in place). Both come down; no engine limit is hit. So at this size order matters for slab buildings and not for cube lattices, which says M5's levels need bonded or slabbed buildings for timing to be a decision.
 
-Full size: pending (the Metal run: 2 designs x 5 orders x 32 nudges).
+Full size on Metal (M5 Max, Chrome, `23c0df8`, 2026-11-06; Low Power Mode was on, so its seconds are not timings): **PASS**, on one order of one design.
+
+| design, 4 x 4 x 12 | all at once | implosion (core, walls +0.3 s) | felled west, east wall +0.3 s | felled west, east wall +0.6 s | control (east wall first) |
+|---|---|---|---|---|---|
+| cubes: spill | 0.000 | 0.000 | 0.000 | 0.000 | 0.001 |
+| slabs: spill | 0.000 | 0.000 | 0.000 (leans 0.35 cells) | **0.734** (leans 7.5 cells, sd 0.005) | 0.000 |
+
+- Cube blocks drop in place under every order (32 nudges each), as at CI size.
+- The slab building spills only when felled with a 0.6 s delay. At 12 courses a 0.3 s delay leans it a third of a cell and no more. At CI size (6 courses) 0.3 s was enough. The delay has to be a fair share of the building's fall time, so it scales with height.
+- The implosion order changes nothing on either design.
+- Every run settled, and no engine limit was hit.
+
+So order matters, but only as a felling with a long enough delay on a slabbed building. For M5, the delay is the decision, and a level should give the player a delay range wide enough to span the building's fall time.
 
 ## X3 Towers as dominoes
 
@@ -98,7 +110,20 @@ SwiftShader, chains of 3, one nudge (`bfe47cc`, 2026-11-05; the CI test now runs
 
 So at this size the game's own loose towers and the Kapla cribs carry a wavefront and bonded piers stop it, which makes a bonded pier a Steer level's firebreak.
 
-Full size: pending (the Metal run: 3 designs, chains of 24, 32 nudges).
+Full size on Metal (M5 Max, Chrome, `23c0df8`, 2026-11-06; Low Power Mode was on, so its seconds are not timings): **PASS**, on the cube towers.
+
+| design | reach >= 12 in 32 nudges | reach, as counted | time per tower |
+|---|---|---|---|
+| cubes | 100% | 24 in all 32 | 0.65 s |
+| bonded brick piers | 38% | 1 in 20 nudges, 24 in 12 (nothing between) | 0.89 s |
+| Kapla cribs | 0% | 2 in 25, 3 in 7 | 1.42 s |
+
+- The game's own loose towers carry a wavefront every time.
+- **Bonded piers are all or nothing.** Either the second pier holds the first up (20 of 32), or it falls and the chain runs to the end (12 of 32). Once two piers are down, the falling mass carries on. So a bonded pier is a firebreak about 60% of the time, not reliably. A Steer level that needs one has to make it sturdier: wider, or further from its neighbour.
+- **Kapla cribs damp the front.** It dies after 2 or 3 cribs, as the 3-crib CI chain could not show. A crib comes apart into planks instead of tipping as a unit, and the planks carry too little momentum to the next crib.
+- No engine limit was hit.
+
+For M6 Steer this gives three behaviours: cube towers conduct, Kapla cribs stop the front within a few, and bonded piers act as a coin-flip gate.
 
 ## X4 Cantilevers and hollows hold
 
@@ -119,7 +144,21 @@ Full size: pending (the Metal run: 3 designs, chains of 24, 32 nudges).
 
 CI size on SwiftShader (40 iterations, one seed each; an 8 x 8 brick arch of R 1.6 m; 2026-11-05): the 95% stack holds (worst move 0.9 mm in 6 s); the 105% stack falls (its top drops 2.75 m); the span carries the ball across and moves 0.6 mm; the brick arch drops one brick, over the hole, and the rest creeps 0.2 mm. No engine limit is hit.
 
-Full size: pending (the Metal run, at 20 and 40 iterations).
+Full size on Metal (M5 Max, Chrome, `23c0df8`, 2026-11-06; Low Power Mode was on, so its seconds are not timings): **FAIL** as the probe then read it. It passes at Keystone's 40 iterations once the arch check judges the wall rather than the bricks over the hole (see below). A Metal re-run of the arch is queued.
+
+| case | 20 iterations | 40 iterations |
+|---|---|---|
+| 95% harmonic stack | **falls in all 4 seeds**, during the pre-settle | holds, 4/4 (worst move 0.6 mm in 60 s) |
+| 105% harmonic stack | falls, 4/4 | falls, 4/4 |
+| corbelled 3 m span, 60 s | holds (2.5 mm) | holds (0.5 mm) |
+| span carries the bowling ball | | 32/32 |
+| brick arch, R 5 m | 12 bricks drop, all over the hole; creep 2.1 cm | 12 drop, all over the hole; creep 1.4 cm |
+| cube-lattice arch (reported) | 348 drop over the hole; creep 0.9 mm | 348 drop; creep 0.4 mm |
+
+- **At 20 iterations a 95% stack cannot hold.** Every sub-stack's centre of mass is inside its support, yet the stack topples before play starts. At 40 it holds. Overhang and Hollow levels must keep 40 iterations; a quality preset that drops to 20 would break them.
+- **The brick arch's creep is one brick over the hole sliding off slowly, not the wall creeping.** A SwiftShader re-run with the creep broken down (40 iterations, 2026-11-06) reproduced the Metal 1.4 cm as 1.3 cm. Of that, 1.1 cm came in the window's second half, so the slide was speeding up. It is one brick, which started 1.0 m off centre and 1.7 m above the crown, inside the hole's shadow. Every brick outside the shadow moved at most 4.1 mm in the 55 s window.
+- So the probe now judges the arch as it judges drops. The wall outside the hole's shadow must not move 1 cm. Creep over the hole is reported, as the knife-edge drops are. This rereads the rule after seeing data, so the Metal re-run should confirm the 4 mm.
+- For M1 Hollow, a hollowed wall can drop a last brick up to a minute later, slowly. A Hollow level's "it held" should be read some seconds after the cut, and the scoring should forgive bricks inside the hole's shadow.
 
 ## X5 Pinned anchors solid
 
@@ -153,7 +192,14 @@ CI size on SwiftShader (one nudge; 2026-11-05):
 - The 64-marble flood agreed: KS along the slope D 0.125, p 0.67; across, p 1.00; all marbles still on the ramp.
 - The deepest sink was 0.1 mm in both frames.
 
-Full size: pending (the Metal run).
+Full size on Metal (M5 Max, Chrome, `23c0df8`, 2026-11-06; Low Power Mode was on, so its seconds are not timings): **PASS**.
+- Across 24 runs no pinned body moved or turned at all, and nothing tunnelled.
+- The slab ball ended where the ground ball did, to the last digit recorded.
+- The wall ball ended 1.7 to 2.3 cm from the reference, against a 31 cm allowance.
+- The ramp floods agreed in every nudge: KS p 0.64 to 1.00 along and across the slope, and 95% to 100% of marbles still on it in both frames.
+- The deepest sink was at most 1.8 mm, the same order in both frames.
+
+So C8's emulation (a never-wake sleeper) is as solid as the ground, and pinned anchors can be built on it.
 
 ## X6 Resonance under a gravity schedule; far-blast shove
 
@@ -207,7 +253,26 @@ The shove:
 
 So a far blast is a uniform shove of every body, as claimed, but a standing cube building does not take it as a rigid unit; its courses part within a sixth of a second. For M7 a shove is a jolt that breaks lattice buildings up, not a way to slide one, and its look wants a play-session check.
 
-Full size: pending (the Metal run: seven frequencies, eight columns of each height; shoves at 100 m and 1 km).
+Full size on Metal (M5 Max, Chrome, `23c0df8`, 2026-11-06; Low Power Mode was on, so its seconds are not timings): **FAIL, as predicted**. There is no resonance. For every height the most destructive frequency is the lowest tested, 0.5 Hz.
+
+Median failure amplitude over 8 columns (g; "> 1" means half or more of them still stood at 1 g):
+
+| f Hz | 5 cubes | 10 cubes | 20 cubes |
+|---|---|---|---|
+| 0.5 | 0.237 | 0.104 | 0.069 |
+| 0.75 | 0.238 | 0.143 | 0.118 |
+| 1 | 0.282 | 0.448 (1/8 slid) | 0.215 |
+| 1.5 | > 1 | 0.662 (3/8 slid) | 0.348 |
+| 2 | > 1 | > 1 (5/8 slid) | > 1 (5/8 slid) |
+| 3 and 4 | > 1 | > 1 | > 1 |
+| static tipping g/n | 0.200 | 0.100 | 0.050 |
+
+- **The failure amplitude rises with frequency at every height**, from just above the static tipping load (g/n) at 0.5 Hz up past 1 g by 2 Hz. That is a rocking block: a slow shake is a static tilt, and a fast one reverses before the column can rotate over.
+- The single-block rocking estimate (1/n) sqrt(1 + (w/p)^2) has the right shape but overstates the threshold for tall columns at low frequency (0.14 g estimated against 0.069 g measured for 20 cubes at 0.5 Hz). A stack of loose cubes is not one rigid block, and it can fail at mid height.
+- At 0.5 to 1.5 Hz the taller column fails at a lower amplitude, except the 10-cube column at 1 Hz. From 2 Hz up, sliding (friction 0.6) comes before overturning.
+- **The shove is unchanged at 100 m and at 1 km.** The 1,000 free cubes got maxDv exactly. The standing building again kept 0.955 of it on average and 0.84 at the bottom course, and its velocities spread by about 114% after 10 steps.
+
+For M7 this settles it: a quake should be slow (0.5 to 1 Hz) and strong. Amplitude and duration are the levers, and no level should depend on tuning a quake to a tower. Above about 2 Hz a quake slides things rather than felling them.
 
 ## X8 Islands behave like solo worlds
 
@@ -215,8 +280,8 @@ Full size: pending (the Metal run: seven frequencies, eight columns of each heig
 
 **Rule (roadmap).** Outcome distributions match (two-sample KS test, p above 0.05); cost per body within 10% of a solo 9.6k scene.
 
-**Setup.** The level is a 5 x 5 x 6 block of 0.5 m plaster cubes on the game lattice (150 bodies), struck at mid-height by the weapons' cannonball at 45 m/s. Shot k is jittered from its own seed (speed +-10%, aim +-0.4 m across and +-0.3 m up), and so is its block (+-1 mm, +-0.2 deg). The same 64 shots run three ways:
-- `islands`: all 64 worlds in one scene, 40 m apart on an 8 x 8 grid centred on the origin. They share the solve, the colouring and the broadphase, never a contact.
+**Setup.** The level is a 5 x 5 x 6 block of 0.5 m plaster cubes on the game lattice (150 bodies), struck at mid-height by the weapons' wrecking ball at 15 m/s (the cannonball at 45 m/s until the first Metal run, below). Shot k is jittered from its own seed (speed +-10%, aim +-0.4 m across and +-0.3 m up), and so is its block (+-1 mm, +-0.2 deg). The same 64 shots run three ways:
+- `islands`: all 64 worlds in one scene, 60 m apart (40 m until the first Metal run) on an 8 x 8 grid centred on the origin. They share the solve, the colouring and the broadphase, never a contact.
 - `solo`: each world alone at the origin, which is what a cast runs today.
 - `solo-far`: each world alone at its island's position. These are the same f32 coordinates as in the islands run, without the other worlds.
 
@@ -240,4 +305,13 @@ CI size on SwiftShader (3 islands of a 3 x 3 x 4 block, 36 bodies, read 1.5 s af
 
 The KS tests pass, but three worlds cannot decide a distribution. The finding is in the comparison: islands are not bit-identical to solo runs, as the roadmap expected (colouring is global). The coordinates matter about ten times more than sharing the solve: a world run alone at its island's position lands within millimetres of its island, while the same world at the origin ends centimetres away, with a different down or moved count in most worlds. Each world is chaotic, so only distributions should depend on islands, and the full run tests exactly that.
 
-Full size: pending (the Metal run: 64 islands, 64 solo and 64 solo-far runs, the 9.6k block for the cost ratio).
+Full size on Metal (M5 Max, Chrome, `23c0df8`, 2026-11-06; Low Power Mode was on, so its seconds are not timings), with the cannonball: **PASS on paper, but the test could not fail.**
+- The cannonball moved nothing at all in 61 of the 64 worlds: no cube moved 0.1 m. Two distributions that are almost all zeros always agree, so KS p came out 1.000 everywhere.
+- The comparison that did carry information agrees with CI size. Solo-far matched its island's outcome in 63 of 64 worlds, with the largest centroid shift 1.6 mm. Solo at the origin matched in 59 of 64, with up to 14 cm.
+- **The cost half passes.** An island scene costs 0.93 of the 9.6k block per body-step (1.95 against 2.10 us). Both ran in the same session, so Low Power Mode scales them alike.
+
+The probe has since been fixed. It now shoots the wrecking ball, and on SwiftShader, over 16 solo worlds, that moves 0.78 to 0.97 of the block (down 0.49 to 0.69). Its debris lands up to 21 m out, so the islands now sit 60 m apart. The verdict also now requires two things:
+- the shot moves the block in at least 75% of the islands;
+- no body ends outside its own island's cell.
+
+A Metal re-run is queued.
