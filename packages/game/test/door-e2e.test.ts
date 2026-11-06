@@ -183,11 +183,11 @@ describe('trials on the door', () => {
     await page.keyboard.press('p');
     await page.waitForFunction(() => window.__game.level === 'T-X1' && window.__game.ready, undefined, { timeout: MINUTES, polling: 100 });
     // The first trial has no P: it stays put rather than running back into Undercut's levels.
-    await page.evaluate(() => window.__game.load('T-S1'));
-    await page.waitForFunction(() => window.__game.level === 'T-S1' && window.__game.ready, undefined, { timeout: MINUTES, polling: 100 });
+    await page.evaluate(() => window.__game.load('T-S3'));
+    await page.waitForFunction(() => window.__game.level === 'T-S3' && window.__game.ready, undefined, { timeout: MINUTES, polling: 100 });
     await page.keyboard.press('p');
     await page.waitForTimeout(1000);
-    expect(await page.evaluate(() => window.__game.level)).toBe('T-S1');
+    expect(await page.evaluate(() => window.__game.level)).toBe('T-S3');
     // L5, the chamber's last, has no N into Undercut's.
     await page.evaluate(() => window.__game.load('L5'));
     await page.waitForFunction(() => window.__game.level === 'L5' && window.__game.ready, undefined, { timeout: MINUTES, polling: 100 });

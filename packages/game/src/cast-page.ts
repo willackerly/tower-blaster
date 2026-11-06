@@ -22,12 +22,14 @@ export interface CastHandle {
   /**
    * The level at rest on a fresh engine: its pre-settle as the game runs it, then `steps` more with
    * nothing fired. Reports the most any structure body moved over those steps and how far the top
-   * fell, in cells (h), with the engine's limit report; ms is the whole run's wall time.
+   * fell, in cells (h), with the engine's limit report; ms is the whole run's wall time. `settle` is
+   * the pre-settle itself, from the authored poses: the most any body moved, and how many moved over
+   * half a cell (a structure broken at load: an arch's bricks falling in, a heap).
    */
   rest(level: LevelDef, steps: number): Promise<RestReport>;
 }
 
-export interface RestReport { presettle: number; steps: number; maxMove: number; topDrop: number; limits: string[]; ms: number }
+export interface RestReport { presettle: number; steps: number; maxMove: number; topDrop: number; settle: { maxMove: number; fell: number }; limits: string[]; ms: number }
 
 declare global { interface Window { __cast: CastHandle } }
 
@@ -61,8 +63,15 @@ async function main() {
     const e = makeEngine(kind, c, device), t0 = performance.now();
     try {
       await e.init(c.scene);
+      const home = c.meta.home;
       for (let i = 0; i < presettle; i++) await e.step();
       const a = Float32Array.from((await e.snapshot()).pos.subarray(0, 3 * n));
+      let settleMove = 0, fell = 0;
+      for (let i = 0; i < n; i++) {
+        const d = Math.hypot(a[3 * i]! - home[3 * i]!, a[3 * i + 1]! - home[3 * i + 1]!, a[3 * i + 2]! - home[3 * i + 2]!) / h;
+        settleMove = Math.max(settleMove, d);
+        if (d > 0.5) fell++;
+      }
       for (let i = 0; i < steps; i++) await e.step();
       const b = (await e.snapshot()).pos;
       let maxMove = 0, topA = -Infinity, topB = -Infinity;
@@ -72,7 +81,7 @@ async function main() {
         topB = Math.max(topB, b[3 * i + 1]!);
       }
       const limits = limitProblems(e.health ? await e.health() : null, e.info.name);
-      return { presettle, steps, maxMove: maxMove / h, topDrop: (topA - topB) / h, limits, ms: performance.now() - t0 };
+      return { presettle, steps, maxMove: maxMove / h, topDrop: (topA - topB) / h, settle: { maxMove: settleMove, fell }, limits, ms: performance.now() - t0 };
     } finally { e.dispose(); }
   };
   handle.status = 'ready';

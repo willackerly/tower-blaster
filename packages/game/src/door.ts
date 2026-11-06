@@ -4,7 +4,7 @@
 // level already loading behind it, so the first shot is one click away.
 //
 // Every series shows, each under its title (Spectacle, Chamber, Undercut), and
-// the trials (keystone trial-levels.ts: unrated, 25 of them) under a toggle,
+// the trials (keystone trial-levels.ts: unrated, 16 of them since PT11's pruning) under a toggle,
 // closed by default so the door neither scrolls past them nor compiles them
 // (a 10k trial compiles in 20-30 ms) until the player opens it.
 //
@@ -150,7 +150,7 @@ export function nextLevel(levels: readonly DoorLevel[]): number {
 }
 
 /** What the trials toggle says: how many there are, the blurb, open or closed. */
-export const TRIALS_BLURB = 'Every structure built so far that is not a rated level: the engine\'s test scenes, the big levels\' drafts and the mode probes\' builds. No stars are cast: the objective is the one star, and nothing here is balanced.';
+export const TRIALS_BLURB = 'Structures from the engine\'s test scenes, the big levels\' drafts and the mode probes\' builds, playable unrated; the best of them are on their way to rated levels. No stars are cast: the objective is the one star, and nothing here is balanced.';
 
 /** The best play in words: stars, then what it reached. */
 export function bestText(b: LevelRecord | null): string {

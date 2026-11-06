@@ -8,37 +8,37 @@ Code: `packages/keystone/src/trial-levels.ts` (`TRIAL_LEVELS`, `TRIAL_NOTES`), t
 
 ## What a trial is
 
-- An **outcome level with no cast stars**: one star for its objective, the tally (heritage, unused rack) as on any outcome level, and "targets coming soon" for two and three stars. Progress is recorded as on any level (by id and hash).
-- Id `T-<source>` (`T-S4`, `T-B2D`, `T-X3K`): never a rated level's, a scenario's or a draft's id, so `?level=T-S4` and the viewer's `?scenario=S4` stay apart. Lookup is case-blind.
+- An **outcome level with no cast stars**: one star for its objective, the tally (heritage, unused rack) as on any outcome level; the door shows the objective's row alone. Progress is recorded as on any level (by id and hash).
+- Id `T-<source>` (`T-S4`, `T-B2C`, `T-X3B`): never a rated level's, a scenario's or a draft's id, so `?level=T-S4` and the viewer's `?scenario=S4` stay apart. Lookup is case-blind.
 - **Rack**: up to a few thousand blocks, a cannonball, two marbles and two grenades (`TRIAL_RACK_SMALL`); light bodies (S8's rods, dominoes, Kapla planks), three marbles and a grenade (`TRIAL_RACK_LIGHT`: a cannonball is 27 to 68 times one, over the ammo ratio); 5k blocks and up, the big levels' three bombs and two rams (`TRIAL_RACK_BIG`). The drafts keep their own racks.
 - Everything else (launcher ring, lot, physics) is what `scenarioLevel` or `outcomeLevel` gives, so a change there (the launch point, for one) reaches the trials too.
 
-## The 28 trials
+## The 16 trials (pruned 2026-11-06, PT11)
 
-| Id | Name | From | Blocks | Validator notes |
-|---|---|---|---|---|
-| T-S1 | Tall Tower | scenario S1 | 1,920 | |
-| T-S2 | Stepped Pyramid | scenario S2 | 820 | |
-| T-S3 | Stack-Bond Wall | scenario S3 | 1,000 | |
-| T-S3R | Running-Bond Wall | S3 running=true | 1,000 | unsupported: end cubes overhang half and tip in the pre-settle |
-| T-S4 | City of Towers | scenario S4 | 10,000 | |
-| T-S8 | Slab and Rod Tower | scenario S8 | 750 | mass-ratio (slabs 80 x the rods), ammo-ratio (a marble is 26 x a rod) |
-| T-S12 | Wall with a Hole | S12 running=true | 265 | unsupported: end and hole-side cubes |
-| T-S14 | Buildings | scenario S14 | 1,728 | |
-| T-S14T | Town | S14 towers=25 H=16 vary=0.4 | 5,232 | |
-| T-X1 | Domino Run | mode probe X1 (line) | 30 | crown line 0.6 h (a felled domino lies 0.15 h up) |
-| T-X2 | Slab Block | mode probe X2 (slabs) | 245 | mass-ratio (slab 37 x a cell); 16 pulls + 2 cannonballs: implode it |
-| T-X3 | Tower Chain | mode probe X3 (cubes) | 384 | |
-| T-X3B | Brick Pier Chain | mode probe X3 (bricks) | 192 | |
-| T-X3K | Kapla Crib Chain | mode probe X3 (kapla) | 336 | |
-| T-X4 | Arch | mode probe X4 (brick arch, R 5 m) | 433 | unsupported: bricks at the arch's edge (X4: one drops, the rest holds) |
-| T-B1A, T-B1B | Long Wall | drafts B1a, B1b | 1,000 | |
-| T-B2A to T-B2E | Spare the Cathedral | drafts B2a to B2e | 5,184 | |
-| T-B3A, T-B3B, T-B3C, T-B3E | Ten Thousand | drafts B3a, B3b, B3c, B3e | 10,000 | |
-| T-B4A | Domino Boulevard | draft B4a | 1,680 | |
-| T-I1 | Ice Tower | ice: L1's 2 x 2 column, all ice, crowned | 40 | |
-| T-I2 | Ice Wall | ice: a third-bond wall 8 x 6 | 48 | |
-| T-I3 | Frozen Keep | ice: a 3 x 3 stone keep, its top four courses ice | 72 | |
+The agent playtest (round 1, `docs/game/agent-playtest-1.md`, judge 3's promotion table in project files `playtest/agent-1/judges/findings-breadth.md`) played every trial. The list now holds judge 3's keeps, reworks and promotions; its drops are gone, each with its reason in `TRIAL_DROPS` (trial-levels.ts). T-S8 moved from judge 3's drop list to rework: its heap at load is Rapier's (the playtest ran on Rapier), and the GPU solver, the game's engine, leaves it standing (`gpu-check/T-S8-novice-desktop-00-aim-view`).
+
+| Id | Name | From | Blocks | Verdict | Next |
+|---|---|---|---|---|---|
+| T-S3 | Stack-Bond Wall | scenario S3 | 1,000 | rework | a "bond types" lesson; the marble only cuts a slot (7%) |
+| T-S4 | City of Towers | scenario S4 | 10,000 | promote | after PT2 (sparks) |
+| T-S8 | Slab and Rod Tower | scenario S8 | 750 | rework | stands on the GPU solver; heaps at load on Rapier (mass-ratio 80): Rapier players see rubble |
+| T-S14 | Buildings | scenario S14 | 1,728 | promote | best cause and effect in the set |
+| T-S14T | Town | S14 towers=25 H=16 vary=0.4 | 5,232 | promote | a warm-up before B2; after PT2 |
+| T-X1 | Domino Run | mode probe X1 (line) | 30 | rework | an opener or hint at the far end |
+| T-X2 | Slab Block | mode probe X2 (slabs) | 245 | rework | needs a recorded line proving 50% |
+| T-X3B | Brick Pier Chain | mode probe X3 (bricks) | 192 | promote | its crowns made visible (PT1) |
+| T-X4 | Gateway | mode probe X4, rebuilt | 461 | rework done | the half-disc arch broke in the pre-settle on every engine; now a doorway 6 m x 4 m under a lintel (`gateWall`) that stands |
+| T-B1B | Long Wall (B1b) | draft B1b | 1,000 | rework | fold its wrecking-ball rack into B1 (PT13) |
+| T-B2C | Spare the Cathedral (B2c) | draft B2c | 5,184 | rework | a "surgical" variant once heritage shows (PT1) |
+| T-B3B | Ten Thousand (B3b) | draft B3b | 10,000 | rework | keep this one variant; cast stars |
+| T-B4A | Domino Boulevard (B4a) | draft B4a | 1,680 | rework | the chain never propagated (3%) |
+| T-I1 | Ice Tower | ice | 40 | rework | opener out of reach, crowns at the frame's edge (PT14) |
+| T-I2 | Ice Wall | ice | 48 | rework | one cannonball brings 85% down against a 30% objective |
+| T-I3 | Frozen Keep | ice | 72 | promote | the ice intro, par 1 |
+
+Promotions (`TRIAL_PROMOTE`) wait for PT1 (objectives visible) and PT2 (sparks follow the damage), as the playtest asks; each then gets a player-facing name, a cast and a recorded line.
+
+Dropped (`TRIAL_DROPS`): T-S1, T-S2, T-S3R, T-S12, T-X3, T-X3K, T-B1A, T-B2A, T-B2B, T-B2D, T-B2E, T-B3A, T-B3C, T-B3E. Their structures stay where they were built, and the viewer still opens them (`?scenario=S1`, `pnpm keystone:cast --draft B2a`).
 
 Left out, and why:
 
