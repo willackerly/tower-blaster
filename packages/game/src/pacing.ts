@@ -46,9 +46,21 @@ export interface PaceFeel {
   turnView: boolean;
   /** A duel's arc on the ground: the player to fire's half of the launcher ring, dotted in their ink (keystone.arcs=0 hides it). */
   arcs: boolean;
+  /**
+   * Memory for instant undo, MB (keystone.undo): each shot keeps a checkpoint of the world as it went
+   * in (play.ts, @tb/keystone Driver.checkpoint), the oldest dropped past this; an undo with no
+   * checkpoint left replays the kept shots instead (docs/game/undo.md). 0: always replay.
+   * About 85 MB a shot on a 10k level, under 1 MB on the small ones.
+   */
+  undoMB: number;
 }
 
-/** The URL's keystone.hitstop, keystone.slowmo, keystone.tailskip, keystone.follow, keystone.shake, keystone.rapid, keystone.turnview, keystone.arcs (0 or 1 each), keystone.budget (ms, 0 to 1000) and keystone.frames (all, half, auto); any other value is refused. */
+/** The most keystone.undo takes, MB. */
+export const MAX_UNDO_MB = 65536;
+/** keystone.undo when the URL sets none: a dozen shots of a 10k level. */
+export const DEFAULT_UNDO_MB = 1024;
+
+/** The URL's keystone.hitstop, keystone.slowmo, keystone.tailskip, keystone.follow, keystone.shake, keystone.rapid, keystone.turnview, keystone.arcs (0 or 1 each), keystone.budget (ms, 0 to 1000), keystone.undo (MB, 0 to MAX_UNDO_MB) and keystone.frames (all, half, auto); any other value is refused. */
 export function paceFeel(q: URLSearchParams): PaceFeel {
   const flag = (k: string, dflt: boolean) => {
     const v = q.get(k);
@@ -57,12 +69,15 @@ export function paceFeel(q: URLSearchParams): PaceFeel {
   };
   const b = q.get('keystone.budget'), budgetMs = b === null ? DEFAULT_BUDGET_MS : b.trim() === '' ? NaN : Number(b);
   if (!(budgetMs >= 0 && budgetMs <= 1000)) throw new Error(`keystone.budget must be from 0 to 1000 ms (0: no valve): ${b}`);
-  return { hitStop: flag('keystone.hitstop', false), slowMo: flag('keystone.slowmo', false), budgetMs, tailSkip: flag('keystone.tailskip', true), follow: flag('keystone.follow', false), shake: flag('keystone.shake', false), frames: frameMode(q.get('keystone.frames')), rapid: flag('keystone.rapid', true), turnView: flag('keystone.turnview', true), arcs: flag('keystone.arcs', true) };
+  const u = q.get('keystone.undo'), undoMB = u === null ? DEFAULT_UNDO_MB : u.trim() === '' ? NaN : Number(u);
+  if (!(undoMB >= 0 && undoMB <= MAX_UNDO_MB)) throw new Error(`keystone.undo must be from 0 to ${MAX_UNDO_MB} MB (0: undo replays the shots): ${u}`);
+  return { hitStop: flag('keystone.hitstop', false), slowMo: flag('keystone.slowmo', false), budgetMs, tailSkip: flag('keystone.tailskip', true), follow: flag('keystone.follow', false), shake: flag('keystone.shake', false), frames: frameMode(q.get('keystone.frames')), rapid: flag('keystone.rapid', true), turnView: flag('keystone.turnview', true), arcs: flag('keystone.arcs', true), undoMB };
 }
 
 /** Throws unless f's budget is a number of ms from 0 to 1000 (the Scene panel's field can hold anything). */
 export function checkPaceFeel(f: PaceFeel): PaceFeel {
   if (!(f.budgetMs >= 0 && f.budgetMs <= 1000)) throw new Error(`physics budget must be from 0 to 1000 ms (0: no valve): ${f.budgetMs}`);
+  if (!(f.undoMB >= 0 && f.undoMB <= MAX_UNDO_MB)) throw new Error(`undo memory must be from 0 to ${MAX_UNDO_MB} MB (0: undo replays the shots): ${f.undoMB}`);
   frameMode(f.frames);
   return f;
 }
@@ -79,6 +94,7 @@ export function writePaceFeel(f: PaceFeel, q: URLSearchParams): void {
   if (!f.rapid) q.set('keystone.rapid', '0');
   if (!f.turnView) q.set('keystone.turnview', '0');
   if (!f.arcs) q.set('keystone.arcs', '0');
+  if (f.undoMB !== DEFAULT_FEEL.undoMB) q.set('keystone.undo', String(f.undoMB));
 }
 
 /** Hit-stop is counted in frames of 60 Hz, whatever the display's rate. */
@@ -95,8 +111,8 @@ export const VALVE_MIN = 0.25;
  * frames looked the same at both.
  */
 export const DEFAULT_BUDGET_MS = 14;
-/** No juice, the valve at its default budget, the tail skip on, a camera only the player moves, every frame drawn, rapid fire. */
-export const DEFAULT_FEEL: Readonly<PaceFeel> = { hitStop: false, slowMo: false, budgetMs: DEFAULT_BUDGET_MS, tailSkip: true, follow: false, shake: false, frames: 'all', rapid: true, turnView: true, arcs: true };
+/** No juice, the valve at its default budget, the tail skip on, a camera only the player moves, every frame drawn, rapid fire, instant undo in DEFAULT_UNDO_MB. */
+export const DEFAULT_FEEL: Readonly<PaceFeel> = { hitStop: false, slowMo: false, budgetMs: DEFAULT_BUDGET_MS, tailSkip: true, follow: false, shake: false, frames: 'all', rapid: true, turnView: true, arcs: true, undoMB: DEFAULT_UNDO_MB };
 /**
  * Owed time the clock keeps, ms; beyond it the rest is dropped (slow motion, not a burst of catch-up
  * steps after a stall). As the viewer's free loop (loop.ts FREE_MAX_LAG_MS).

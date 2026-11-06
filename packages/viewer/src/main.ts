@@ -865,10 +865,11 @@ async function keystoneMode(config: ViewerConfig, device: GPUDevice, renderer: R
   await playKeystone({
     canvas, offscreen: cfg.offscreen, device, renderer, source, hud, ...gameOverlays(),
     levels, start, engine: keystoneEngine(cfg.engine), feel: cfg.feel, fail: failGame,
-    // The page's input hook, every step (read when a level loads or a replay starts).
+    // The page's input hook, every step (read when a level loads or a replay starts); none without one, so undo
+    // keeps its checkpoints (a hook's own state is a closure no checkpoint can copy, so with one, undo replays).
     perStep() {
       const hook = handle.inputHook?.();
-      return hook ? (d) => hook(d.snapshot, d.snapshotStep) : () => [];
+      return hook ? (d) => hook(d.snapshot, d.snapshotStep) : null;
     },
     hooks: {
       loaded(c, d) {

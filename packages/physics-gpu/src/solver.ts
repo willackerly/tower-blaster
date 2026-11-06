@@ -45,6 +45,7 @@
 //   reads BodyProps.restitution.
 //
 // Each kernel binds at most 8 storage buffers (the WebGPU default limit).
+import { type StateRegion, whole } from './checkpoint.ts';
 import type { CombineRule } from '@tb/engine-api';
 import { assertStorageFits, readBuffer } from '@tb/gpu';
 import { RECORD_MODES } from '@tb/physics-ref';
@@ -1924,6 +1925,27 @@ export class AvbdSolver {
       else pass.dispatchWorkgroups(groups);
     }
   }
+
+  /**
+   * What a step reads as the step before left it (checkpoint.ts): every solver body (prevVel for the
+   * adaptive warm start, dp and phi for rolling contacts), the step info (meta: slots written per
+   * history half), and the history half the last step wrote: its contacts (warm-start lambdas and
+   * penalties), pair list and pair-group offsets, which the next step matches against and reads.
+   * The other half is overwritten by the next step before it is read.
+   */
+  carried(): StateRegion[] {
+    const h = this.lastHalf, contactHalf = this.contacts.size / 2;
+    return [
+      whole(this.solver), whole(this.meta),
+      { buffer: this.contacts, offset: h * contactHalf, size: contactHalf },
+      { buffer: this.pairHist, offset: h * this.maxPairs * 8, size: this.maxPairs * 8 },
+      { buffer: this.offHist, offset: h * this.capacity * 4, size: this.capacity * 4 },
+    ];
+  }
+
+  /** The CPU half of the solver's carried state: the history half to write next and the body count of the last step. */
+  get cpuState(): { cur: number; prevN: number } { return { cur: this.cur, prevN: this.prevN }; }
+  set cpuState(s: { cur: number; prevN: number }) { this.cur = s.cur; this.prevN = s.prevN; }
 
   destroy(): void {
     for (const x of [this.solver, this.contacts, this.meta, this.pairHist, this.offHist, this.uniform, this.colorUniform, this.restSlots, this.restInfo, this.restBodies, this.active]) x?.destroy();
