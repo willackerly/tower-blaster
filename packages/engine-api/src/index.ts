@@ -317,6 +317,7 @@ export function inertiaOf(b: BodyDesc): Vec3 {
 export * from './blast.ts';
 export * from './force.ts';
 export * from './host.ts';
+export * from './grid.ts';
 export * from './observe.ts';
 export * from './remove.ts';
 export * from './snapshot-observer.ts';

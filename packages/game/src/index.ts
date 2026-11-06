@@ -16,3 +16,5 @@ export * from './settings.ts';
 export * from './session-file.ts';
 export * from './support.ts';
 export * from './touch.ts';
+export * from './quality.ts';
+export * from './quality-probe.ts';
