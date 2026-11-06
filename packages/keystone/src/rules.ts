@@ -304,12 +304,52 @@ export function skyline(hist: Uint32Array, height: number): number {
 // ---- Scoring ----
 
 export const TIER_NAMES = ['Brute', 'Clean', 'Elegant', 'Keystone'] as const;
-const TIER_FLOORS = [0, 5, 15, 40];
+/**
+ * The tiers' floors as multiples of a level's gold line (levelGoldLine): Clean at the line, Elegant at 3x,
+ * Keystone at 8x. With TIER_LINE (L5's gold line) they are the absolute floors 5, 15 and 40 the
+ * tiers had before 2026-11-06, when "Brute" stood next to an earned gold badge on every other level.
+ */
+const TIER_STEPS = [0, 1, 3, 8] as const;
+/** The line tier() measures against when given none: the old absolute floors' Clean. */
+export const TIER_LINE = 5;
 
-/** Collapse energy released per joule fired. */
+/**
+ * Leverage: potential energy released (mJ) per joule of energy fired, J per J. The one definition:
+ * a shot's is its own dPE over its own energy (ShotOutcome.leverage), a round's is roundLeverage.
+ */
 export const leverage = (dPE_mJ: number, ke: number) => (ke > 0 ? Math.max(0, dPE_mJ / 1000) / ke : 0);
-export function tier(L: number): 0 | 1 | 2 | 3 {
-  return L >= TIER_FLOORS[3]! ? 3 : L >= TIER_FLOORS[2]! ? 2 : L >= TIER_FLOORS[1]! ? 1 : 0;
+
+/**
+ * A round's leverage (or any set of shots'): the potential energy its shots released, each measured
+ * from the state it went in on to its settle or cut, over the energy they were charged (ke + yield),
+ * clamped at 0. The card (par and outcome), the gold badge, the HUD and the lot sheet's round fact all
+ * read this one function (docs/game/scoring.md). One shot: its own leverage.
+ */
+export function roundLeverage(shots: readonly Pick<ShotOutcome, 'ke' | 'yield' | 'dPE_mJ'>[]): number {
+  let fired = 0, released = 0;
+  for (const o of shots) { fired += o.ke + o.yield; released += o.dPE_mJ; }
+  return leverage(released, fired);
+}
+
+/** The tier of leverage L against gold line `line`: Brute under it, Clean from it, Elegant from 3x, Keystone from 8x. */
+export function tierAt(L: number, line: number): 0 | 1 | 2 | 3 {
+  const f = (k: 1 | 2 | 3) => line * TIER_STEPS[k];
+  return L >= f(3) ? 3 : L >= f(2) ? 2 : L >= f(1) ? 1 : 0;
+}
+/** The tier against TIER_LINE (the old absolute floors 5, 15, 40); a level's own is levelTier. One argument, so `.map(tier)` is safe. */
+export const tier = (L: number): 0 | 1 | 2 | 3 => tierAt(L, TIER_LINE);
+
+/**
+ * A level's gold line, which both names the leverage tiers and gates the gold badge, so the card can
+ * never call a badge-earning round Brute: LevelDef.lGold, else DEFAULT_GOLD on a par level; null on an
+ * outcome level without one (no badge there, so no tier names either).
+ */
+export const levelGoldLine = (def: LevelDef): number | null => def.lGold ?? ((def.scoring ?? 'par') === 'par' ? DEFAULT_GOLD : null);
+
+/** The tier of leverage L on level `def` (tier against levelGoldLine), or null where the level has no line. */
+export function levelTier(L: number, def: LevelDef): 0 | 1 | 2 | 3 | null {
+  const line = levelGoldLine(def);
+  return line === null ? null : tierAt(L, line);
 }
 
 export interface ShotOutcome {
@@ -339,13 +379,46 @@ export interface ShotOutcome {
 
 export interface ScoreLine { label: string; value: number }
 export interface LevelScore {
-  lines: ScoreLine[]; total: number; stars: 0 | 1 | 2 | 3; stamp: string; leverage: number;
+  /**
+   * The breakdown, in display order; total is their sum floored at 0 (floorTotal): heritage and
+   * footprint lines can take a round below zero, but a score never shows negative.
+   */
+  lines: ScoreLine[]; total: number; stars: 0 | 1 | 2 | 3; stamp: string;
+  /** The round's leverage (roundLeverage). */
+  leverage: number;
   /**
    * Par levels: cleared in par with the level's gold leverage (lGold) or more, heritage intact: the
    * badge leverage earns now that it no longer gates a star (parStars). Absent on outcome levels.
    */
   gold?: boolean;
+  /** Stars the broken heritage cost (heritageStarsLost): present, at least 1, only when it cost any. */
+  heritageStarsLost?: number;
+  /** Bullet Time levels (LevelDef.freeze): freezes spent (freezesUsed) of the level's budget. Absent elsewhere. */
+  freezes?: { used: number; total: number };
+  /**
+   * A refereed round (a Siege Table duel: Session's refereed option): no solo tally was made. lines
+   * empty, total and stars 0, the stamp DUEL; the duel's own result (Duel.result) is the outcome.
+   */
+  refereed?: true;
 }
+
+/** A score's total: its lines' sum, floored at 0 (LevelScore.lines). */
+export const floorTotal = (lines: readonly ScoreLine[]) => Math.max(0, lines.reduce((a, l) => a + l.value, 0));
+
+/** The score a refereed round (a duel) ends with: no solo tally, only the round's leverage. */
+export function refereedScore(shots: readonly ShotOutcome[]): LevelScore {
+  return { lines: [], total: 0, stars: 0, stamp: 'DUEL', leverage: roundLeverage(shots), refereed: true };
+}
+
+/**
+ * Bullet Time (LevelDef.freeze): freezes spent in a round, one per cut shot (each shot that went in
+ * while another ran spent one: Session.freezesLeft). 0 on a level without a budget, where rapid-fire
+ * cuts spend nothing and count as strokes.
+ */
+export const freezesUsed = (def: LevelDef, shots: readonly ShotOutcome[]) => (def.freeze === undefined ? 0 : shots.filter((o) => o.cut).length);
+
+/** A par level's par for a round: def.par plus the freezes it used, so a frozen cut-in that clears keeps par (PT8). */
+export const parWithFreezes = (def: LevelDef, shots: readonly ShotOutcome[]) => def.par + freezesUsed(def, shots);
 
 /** The gold-leverage badge's line when the bot has not set one for the level (LevelDef.lGold). */
 export const DEFAULT_GOLD = 15;
@@ -370,13 +443,13 @@ export function stampOf(strokes: number, par: number): string {
 }
 
 export function levelScore(def: LevelDef, shots: ShotOutcome[], cleared: boolean, structureCount: number): LevelScore {
-  const s = shots.length, par = def.par;
-  const ke = shots.reduce((a, o) => a + o.ke + o.yield, 0), dpe = shots.reduce((a, o) => a + o.dPE_mJ, 0);
-  const L = leverage(dpe, ke);
+  const s = shots.length, par = parWithFreezes(def, shots);
+  const L = roundLeverage(shots);
   const cmax = Math.min(12, Math.max(0, ...shots.map((o) => o.crownsDown)));
   const broken = shots.reduce((a, o) => a + o.heritageNew, 0);
   const lines: ScoreLine[] = [
-    { label: 'Strokes', value: 1000 * Math.max(0, par + 3 - s) },
+    // Stroke points reward a clear in few strokes: none for a round that did not clear (PT16).
+    { label: 'Strokes', value: cleared ? 1000 * Math.max(0, par + 3 - s) : 0 },
     { label: 'Leverage', value: Math.floor(300 * Math.log2(1 + L)) },
     { label: 'Combo', value: (50 * cmax * (cmax + 1)) / 2 },
   ];
@@ -386,7 +459,11 @@ export function levelScore(def: LevelDef, shots: ShotOutcome[], cleared: boolean
     const out = shots[s - 1]!.outOfLot, allowance = Math.floor(def.objective.footprintMax * structureCount);
     if (out > allowance) lines.push({ label: 'Footprint', value: -20 * (out - allowance) });
   }
-  const total = lines.reduce((a, l) => a + l.value, 0);
-  const gold = cleared && s <= par && broken === 0 && L >= (def.lGold ?? DEFAULT_GOLD);
-  return { lines, total, stars: parStars(cleared, s, par, broken), stamp: cleared ? stampOf(s, par) : 'INCOMPLETE', leverage: L, gold };
+  const gold = cleared && s <= par && broken === 0 && L >= (levelGoldLine(def) ?? DEFAULT_GOLD); // the line levelTier names tiers from
+  const stars = parStars(cleared, s, par, broken), lost = parStars(cleared, s, par, 0) - stars;
+  return {
+    lines, total: floorTotal(lines), stars, stamp: cleared ? stampOf(s, par) : 'INCOMPLETE', leverage: L, gold,
+    ...(lost > 0 ? { heritageStarsLost: lost } : {}),
+    ...(def.freeze !== undefined ? { freezes: { used: freezesUsed(def, shots), total: def.freeze } } : {}),
+  };
 }

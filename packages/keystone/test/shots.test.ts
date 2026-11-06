@@ -181,7 +181,7 @@ describe('shot text (writeShots, readShots)', () => {
     expect(() => readShots('drop.4.')).toThrow(/z must be an integer, not empty/);
     expect(() => readShots('marble.720.4.0.0.30')).toThrow(/shot 1 .*shot\.az = 720/);
     expect(() => readShots('drop.1.1_')).toThrow(/shot 2 \(\): ammo/);
-    expect(() => readShots('p-nuke.1.2.3.4.5')).toThrow(/shot 1 \(p-nuke.*ammo must be one of marble, cannonball, cue, drop, pull, p-<preset> \(beachball/);
+    expect(() => readShots('p-nuke.1.2.3.4.5')).toThrow(/shot 1 \(p-nuke.*ammo must be one of marble, cannonball, cue, drop, pull, plunger, p-<preset> \(beachball/);
     expect(() => readShots('w-Grenade.1.2.3.4.5')).toThrow(/shot 1 .*ammo must be one of/);
     expect(() => readShots('w-grenade.1.2.3.4')).toThrow(/w-grenade takes 5 fields \(az\.y\.yaw\.pitch\.power\), got 4/);
     expect(() => shotToSpawn(f, { ammo: 'w-' as 'w-x', az: 0, y: 0, yaw: 0, pitch: 0, power: 0 }, 0)).toThrow(/shot\.ammo = "w-"/);

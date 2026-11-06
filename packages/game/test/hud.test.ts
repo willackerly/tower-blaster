@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { B1, B2, compileLevel, L1, L2, levelScore, outcomeScore, tier, U3 } from '@tb/keystone';
+import { B1, B2, compileLevel, levelGoldLine, L1, L2, L3, L4, L5, levelScore, outcomeScore, type ShotOutcome, U3 } from '@tb/keystone';
+import { HOW_TO_PLAY } from '../src/door.ts';
 import { GAME_HELP, GAME_KEYS, HELP_BUDGET, helpHtml, TOUCH_HELP } from '../src/ui.ts';
-import { BANK_BUTTON, SKIP_BUTTON, esc, freezeButton, POWER_STEP, fmtLeverage, fmtPoints, goldHtml, hudHtml, meterHtml, meterTicks, nextSelection, objectiveText, rackChips, resultHtml, starsText, TOUCH_ACTS } from '../src/hud.ts';
+import { BANK_BUTTON, SKIP_BUTTON, esc, freezeButton, POWER_STEP, fmtLeverage, fmtPoints, goldHtml, hudHtml, LEVERAGE_MEANS, leverageRow, meterHtml, meterTicks, nextSelection, objectiveText, rackChips, resultHtml, starsText, TOUCH_ACTS } from '../src/hud.ts';
 
 describe('rack', () => {
   it('groups by kind in first-seen order with counts and keys', () => {
@@ -28,7 +29,7 @@ describe('formatting', () => {
     expect(esc('<a href="x">&</a>')).toBe('&#60;a href=&#34;x&#34;&#62;&#38;&#60;/a&#62;');
   });
   it('the HUD hides the power bar for an anvil and flags an unreachable aim', () => {
-    const base = { level: L2, strokes: 0, crownsDown: 1, crownsTotal: 6, heritageBroken: 0, heritageTotal: 36, power: 60, liveLeverage: 0, phase: 'aiming', reachable: null };
+    const base = { level: L2, strokes: 0, crownsDown: 1, crownsTotal: 6, heritageBroken: 0, heritageTotal: 36, power: 60, leverage: { round: 0, shot: 0 }, phase: 'aiming', reachable: null };
     const marble = hudHtml({ ...base, chips: rackChips(L2.rack, L2.rack, 'marble') });
     expect(marble).toMatch(/W1-2 · Lintel/);
     expect(marble).toMatch(/1 \/ 6/);
@@ -38,7 +39,7 @@ describe('formatting', () => {
     expect(hudHtml({ ...base, chips: [], reachable: false })).toMatch(/Out of reach/);
   });
   it('chips are tap buttons carrying their key, and the power bar has minus and plus buttons for touch', () => {
-    const base = { level: L2, strokes: 0, crownsDown: 0, crownsTotal: 6, heritageBroken: 0, heritageTotal: 36, power: 60, liveLeverage: 0, phase: 'aiming', reachable: null };
+    const base = { level: L2, strokes: 0, crownsDown: 0, crownsTotal: 6, heritageBroken: 0, heritageTotal: 36, power: 60, leverage: { round: 0, shot: 0 }, phase: 'aiming', reachable: null };
     const html = hudHtml({ ...base, chips: rackChips(L2.rack, L2.rack, 'marble') });
     const chips = [...html.matchAll(/<button class="chip([^"]*)" data-act="ammo" data-arg="(\d)">/g)].map((m) => [m[2], m[1]]);
     expect(chips).toEqual([['1', ' on'], ['2', '']]);
@@ -61,14 +62,14 @@ describe('formatting', () => {
     expect(opener).toMatch(/<span class="kg-desk">or aim and click<\/span><span class="kg-tch">or drag and lift<\/span>/);
   });
   it('a hold level (Undercut Hollow) shows the share pulled and asks to keep the crown up', () => {
-    const base = { level: U3, strokes: 2, crownsDown: 0, crownsTotal: 1, heritageBroken: 0, heritageTotal: 0, power: 60, liveLeverage: 0, phase: 'aiming', reachable: null, chips: rackChips(U3.rack, U3.rack.slice(2), 'pull') };
+    const base = { level: U3, strokes: 2, crownsDown: 0, crownsTotal: 1, heritageBroken: 0, heritageTotal: 0, power: 60, leverage: { round: 0, shot: 0 }, phase: 'aiming', reachable: null, chips: rackChips(U3.rack, U3.rack.slice(2), 'pull') };
     const html = hudHtml({ ...base, collapse: 0.01, pulled: 0.0655 });
     expect(html).toMatch(/Pulled <b class="down">6%<\/b>/);
     expect(html).not.toMatch(/Down </);
     expect(html).toMatch(/keep the crown up/);
   });
   it('a pull chip is labelled Pull, has no power bar, and a refused pull says why instead of out of reach', () => {
-    const base = { level: L2, strokes: 0, crownsDown: 0, crownsTotal: 6, heritageBroken: 0, heritageTotal: 36, power: 60, liveLeverage: 0, phase: 'aiming', reachable: null };
+    const base = { level: L2, strokes: 0, crownsDown: 0, crownsTotal: 6, heritageBroken: 0, heritageTotal: 36, power: 60, leverage: { round: 0, shot: 0 }, phase: 'aiming', reachable: null };
     const chips = rackChips(['pull', 'pull', 'marble'], ['pull', 'marble'], 'pull');
     const html = hudHtml({ ...base, chips });
     expect(html).toMatch(/Pull <b>1<\/b>\/2/);
@@ -87,7 +88,8 @@ describe('formatting', () => {
     expect(html).toContain(starsText(score.stars));
     expect(html).toMatch(/data-act="next"/);
     expect(resultHtml(L1, score, 1, false)).not.toMatch(/data-act="next"/);
-    expect(html).toContain(`(${['Brute', 'Clean', 'Elegant', 'Keystone'][tier(score.leverage)]})`);
+    // ×2.00 on L1 (gold line ×0.71): Clean, from the line up to 3x it (levelTier).
+    expect(html).toContain('leverage ×2.00 (Clean)');
   });
   it('a par level\'s card shows the gold-leverage badge earned, or once cleared the line to reach; outcome levels and misses show none', () => {
     const shot = (dPE_mJ: number) => ({ ke: 1000, yield: 0, dPE_mJ, leverage: 0, crownsDown: 4, crownsTotal: 4, heritageNew: 0, displaced: 30, outOfLot: 0, pe_mJ: 0, spawnStep: 0, settleStep: 100 });
@@ -110,7 +112,7 @@ describe('formatting', () => {
   });
   it('an outcome level: shots, how much is down, the objective with a check once met, and Bank while possible', () => {
     const def = { ...L2, scoring: 'outcome' as const, objective: { kind: 'collapse' as const, min: 0.4 } };
-    const base = { level: def, strokes: 1, crownsDown: 0, crownsTotal: 0, heritageBroken: 0, heritageTotal: 0, power: 60, liveLeverage: 0, phase: 'aiming', reachable: null, chips: [] };
+    const base = { level: def, strokes: 1, crownsDown: 0, crownsTotal: 0, heritageBroken: 0, heritageTotal: 0, power: 60, leverage: { round: 0, shot: 0 }, phase: 'aiming', reachable: null, chips: [] };
     const html = hudHtml({ ...base, collapse: 0.374, met: false, canBank: true });
     expect(html).toMatch(/Shot 1/);
     expect(html).toMatch(/37%/);
@@ -125,7 +127,7 @@ describe('formatting', () => {
     expect(objectiveText({ kind: 'skyline', maxH: 3 })).toBe('skyline under 3 h');
   });
   it('Skip (PT6): the button while a shot can be skipped, a note while it skips, nothing otherwise, on any level', () => {
-    const base = { level: L2, strokes: 1, crownsDown: 0, crownsTotal: 2, heritageBroken: 0, heritageTotal: 0, power: 60, liveLeverage: 0, phase: 'running', reachable: null, chips: [] };
+    const base = { level: L2, strokes: 1, crownsDown: 0, crownsTotal: 2, heritageBroken: 0, heritageTotal: 0, power: 60, leverage: { round: 0, shot: 0 }, phase: 'running', reachable: null, chips: [] };
     expect(hudHtml({ ...base, canSkip: true })).toContain(SKIP_BUTTON);
     expect(hudHtml({ ...base, canSkip: false, skipping: true })).toMatch(/skipping to the settle/);
     expect(hudHtml({ ...base, canSkip: false, skipping: true })).not.toContain('data-act="skip"');
@@ -133,7 +135,7 @@ describe('formatting', () => {
   });
   it('Bullet Time: freezes left of the level\'s, Freeze while a shot can be frozen, Resume and FROZEN while it is', () => {
     const def = { ...L1, freeze: 2 };
-    const base = { level: def, strokes: 1, crownsDown: 0, crownsTotal: 4, heritageBroken: 0, heritageTotal: 0, power: 60, liveLeverage: 0, phase: 'running', reachable: null, chips: [], pace: '×0.8' };
+    const base = { level: def, strokes: 1, crownsDown: 0, crownsTotal: 4, heritageBroken: 0, heritageTotal: 0, power: 60, leverage: { round: 0, shot: 0 }, phase: 'running', reachable: null, chips: [], pace: '×0.8' };
     const can = hudHtml({ ...base, freezes: { left: 2, total: 2, frozen: false, can: true } });
     expect(can).toMatch(/Freezes<\/span><span class="">2 \/ 2/);
     expect(can).toContain(freezeButton(false));
@@ -163,7 +165,7 @@ describe('formatting', () => {
 
 describe('playtest polish (U5, U6)', () => {
   const b1 = compileLevel(B1);
-  const base = { level: B1, crownsDown: 0, crownsTotal: 0, heritageBroken: 0, heritageTotal: 0, power: 100, liveLeverage: 2.5, phase: 'aiming', reachable: null, chips: rackChips(B1.rack, B1.rack, 'w-bomb'), collapse: 0.55 };
+  const base = { level: B1, crownsDown: 0, crownsTotal: 0, heritageBroken: 0, heritageTotal: 0, power: 100, leverage: { round: 2.5, shot: 2.5 }, phase: 'aiming', reachable: null, chips: rackChips(B1.rack, B1.rack, 'w-bomb'), collapse: 0.55 };
   it('the Down bar ticks every star threshold in collapse: B1 has the objective and its cast T2 and T3', () => {
     expect(meterTicks(b1)).toEqual([{ at: B1.objective.kind === 'collapse' ? B1.objective.min : NaN, stars: 1 }, { at: B1.stars!.t2, stars: 2 }, { at: B1.stars!.t3, stars: 3 }]);
     // A custom run has no cast stars (castStars), so only the objective's tick; a star by points (B2) or a par level has none.
@@ -209,5 +211,49 @@ describe('playtest polish (U5, U6)', () => {
     expect(text(GAME_KEYS).length).toBeGreaterThan(HELP_BUDGET);
     for (const k of ['Q', 'E', 'W', 'S', 'Space', 'B', 'F', 'U', 'R', 'N', 'P', 'M']) expect(GAME_KEYS).toContain(`<kbd>${k}</kbd>`);
     expect(helpHtml(true)).toContain('data-act="keys"');
+  });
+});
+
+describe('scores and leverage add up (PT9, PT16)', () => {
+  const shot = (o: Partial<ShotOutcome>): ShotOutcome => ({ ke: 1000, yield: 0, dPE_mJ: 0, leverage: 0, crownsDown: 0, crownsTotal: 0, heritageNew: 0, displaced: 0, outOfLot: 0, pe_mJ: 0, spawnStep: 0, settleStep: 0, ...o });
+  it('the HUD row shows the round\'s leverage (the card\'s figure), and this shot\'s beside it from the second shot', () => {
+    expect(leverageRow(1, { round: 6.24, shot: 6.24 })).toMatch(/<span>Leverage<\/span><span>×6\.24<\/span>/);
+    expect(leverageRow(1, { round: 6.24, shot: 6.24 })).not.toMatch(/this shot/);
+    const two = leverageRow(2, { round: 3.12, shot: 6.24 });
+    expect(two).toMatch(/<span>×3\.12 <span class="small shot">this shot ×6\.24<\/span><\/span>/);
+    expect(two).toContain(`title="${esc(LEVERAGE_MEANS)}`);
+  });
+  it('no card names a round Brute beside an earned gold badge (L1 to L5, any leverage and strokes)', () => {
+    for (const d of [L1, L2, L3, L4, L5]) for (const k of [0.3, 0.99, 1, 2, 4, 9]) for (let s = 1; s <= d.par + 1; s++) {
+      const score = levelScore(d, Array.from({ length: s }, () => shot({ dPE_mJ: 1e6 * k * levelGoldLine(d)! })), true, 40);
+      const html = resultHtml(d, score, s, false);
+      if (html.includes('class="gold got"')) expect(html).not.toContain('(Brute)');
+      expect(html).toMatch(/\((Brute|Clean|Elegant|Keystone)\)/);
+    }
+  });
+  it('an outcome level without a gold line names no tier', () => {
+    const score = outcomeScore({ met: true, collapse: 0.5, leverage: 0.13, comboMax: 0, hasCrowns: false, rackLeft: 0, heritageBroken: 0, outOfLot: 0, crownsDown: 0, skylineRatio: 1, pulled: 0 }, undefined);
+    const html = resultHtml(B1, score, 2, false);
+    expect(html).toContain('leverage ×0.13</div>');
+    expect(html).not.toMatch(/Brute|Clean/);
+  });
+  it('heritage is its own red line with the stars it cost, and the total never shows negative', () => {
+    const score = levelScore(L3, [shot({ dPE_mJ: 1e5, heritageNew: 9 }), shot({ dPE_mJ: 1e5 })], true, 40);
+    expect(score.lines.reduce((a, l) => a + l.value, 0)).toBeLessThan(0);
+    const html = resultHtml(L3, score, 2, false);
+    expect(html).toMatch(/<div class="line bad"[^>]*><span>Heritage<\/span><span class="bad">−4,500<\/span>/);
+    expect(html).toMatch(/<span>Total<\/span><span>0<\/span>/);
+    expect(html).toContain('Heritage cracked: 1 star lost');
+    expect(resultHtml(L3, levelScore(L3, [shot({ dPE_mJ: 1e9 })], true, 40), 1, false)).not.toMatch(/star lost|class="line bad"/);
+  });
+  it('a Bullet Time card shows the freezes used', () => {
+    const score = levelScore({ ...L5, freeze: 2 }, [shot({ cut: true }), shot({ dPE_mJ: 1e7 })], true, 40);
+    expect(resultHtml(L5, score, 2, false)).toContain('2 strokes · par 1 · leverage ×5.00 (Clean) · freezes used 1/2');
+    expect(score.stamp).toBe('PAR');
+  });
+  it('How to play says what leverage is and that a score never goes below 0', () => {
+    const text = HOW_TO_PLAY.join(' ');
+    expect(text).toContain(LEVERAGE_MEANS);
+    expect(text).toMatch(/never goes below 0/);
   });
 });

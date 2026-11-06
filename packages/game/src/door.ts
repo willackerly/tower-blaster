@@ -13,7 +13,7 @@
 // objective's star and "more stars once cast", and picks the rest up from the
 // file with no change here.
 import { castStars, type CompiledLevel, compileLevel, DUEL_NAMES, type DuelDef, isTrial, type LevelDef, type Objective, scoringOf, SERIES, SERIES_TITLES, type Shot, type StarMetric, type StarsDef } from '@tb/keystone';
-import { CUSTOM_NOTE, esc, fmtPoints, itemLabel, objectiveText, pct } from './hud.ts';
+import { CUSTOM_NOTE, esc, fmtPoints, itemLabel, LEVERAGE_MEANS, objectiveText, pct } from './hud.ts';
 import type { LevelRecord } from './progress.ts';
 import type { QualitySetting, QualityTier } from './quality.ts';
 import { LOOK_CHOICES, QUALITY_CHOICES, type Settings } from './settings.ts';
@@ -157,12 +157,13 @@ export function bestText(b: LevelRecord | null): string {
   return `Best ${what} · ${b.plays} play${b.plays === 1 ? '' : 's'}${b.beatBot ? ' · beat the bot' : ''}${b.gold ? ' · gold leverage' : ''}`;
 }
 
-/** How to play, in four lines (the controls line is GAME_HELP's, shown in play). */
+/** How to play, in five lines (the controls line is GAME_HELP's, shown in play). */
 export const HOW_TO_PLAY: readonly string[] = [
   '<span class="kg-desk">Pick a spot on the structure and click to fire. Drag to look around; the launcher follows you.</span><span class="kg-tch">Touch the structure and drag to aim; lift your finger to fire. Two fingers turn the view and pinch to zoom; the launcher follows you. Put a second finger down to call off a shot.</span>',
   'Fire again whenever you like, even while things are still falling. Once everything settles, physics freezes while you aim; <kbd>K</kbd> or Skip runs the rest of a shot fast. Rubble stays between shots.',
   'Meet the objective for one star. Chamber levels: clear in par for three, each shot over par or piece of heritage broken costs one, and leverage at the level\'s gold line earns the gold badge. Elsewhere, bring more down for two and three; the targets were set by a bot playing each level hundreds of times.',
   'After any shot you may <kbd>B</kbd> bank: end the level and keep the unused rack as points.',
+  `${LEVERAGE_MEANS} The card shows the whole round's; Brute is under the level's gold line, Clean at it. A score never goes below 0: cracked heritage shows as its own red line and costs stars.`,
 ];
 
 /** A duel table as the door's Two players section shows it. */
