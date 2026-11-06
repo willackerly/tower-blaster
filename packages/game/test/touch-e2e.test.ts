@@ -141,13 +141,18 @@ describe('touch controls', () => {
     expect(await page.locator('.kg-hud button.pw').first().isVisible()).toBe(false);
     expect(await page.locator('.kg-hud kbd').first().isVisible()).toBe(true);
     const v0 = cam(await view(page));
+    // A spot on the canvas clear of the HUD and help panels (they grow with the level's lot sheet).
+    const [X, Y] = await page.evaluate(() => {
+      for (const y of [200, 160, 240, 120, 280]) for (const x of [420, 460, 500, 380]) if (document.elementFromPoint(x, y)?.tagName === 'CANVAS' && document.elementFromPoint(x + 60, y)?.tagName === 'CANVAS') return [x, y];
+      throw new Error('no clear spot on the canvas');
+    });
     // Hover aims, and the camera holds.
-    await page.mouse.move(336, 200);
+    await page.mouse.move(X, Y);
     await page.waitForFunction(() => window.__game.input.aimed !== null, undefined, { timeout: 10_000, polling: 50 });
     expect((await input(page)).gesture).toBe('idle');
     // A drag of 60 px orbits, as before, and fires nothing.
     await page.mouse.down();
-    await page.mouse.move(396, 200, { steps: 6 });
+    await page.mouse.move(X + 60, Y, { steps: 6 });
     await page.mouse.up();
     await settle(page);
     const v1 = cam(await view(page));
@@ -158,7 +163,7 @@ describe('touch controls', () => {
     await settle(page);
     expect((await view(page)).distance).toBeCloseTo(v1.distance * Math.exp(-0.2), 9);
     // A click fires.
-    await page.mouse.click(336, 200);
+    await page.mouse.click(X, Y);
     await page.waitForFunction(() => window.__game.strokes === 1, undefined, { timeout: 10_000, polling: 50 });
     expect(errors).toEqual([]);
     await page.close();

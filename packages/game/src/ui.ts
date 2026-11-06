@@ -67,6 +67,8 @@ export const GAME_CSS = `
     body.kg-touch .kg-hud { font-size: 12.5px; line-height: 1.35; padding: 8px 10px; }
     body.kg-touch .kg-hud .title { font-size: 14px; margin-bottom: 2px; }
     body.kg-touch .kg-hud .chips { gap: 6px; margin: 6px 0; }
+    /* The lot sheet keeps its count line; its goals are on the result card (the HUD would cover the structure). */
+    body.kg-touch .kg-hud .goals ul { display: none; }
   }
 ${LOT_CSS}${DUEL_CSS}`;
 
