@@ -4,7 +4,9 @@
 // clean solutions pnpm keystone:bot found on the f64 AVBD reference at
 // AVBD_ITERATIONS and AVBD_GAP_SLOP (docs/game/findings.md), and tests replay
 // them. lGold is the lower quartile of the leverage the par line's clean
-// neighbours on the nudge grid reach (pnpm keystone:par).
+// neighbours on the nudge grid reach (pnpm keystone:par): the gold-leverage
+// badge's line. Stars are strokes and heritage only (rules.ts parStars,
+// docs/game/stars.md).
 import { BIG_LEVELS } from './big-levels.ts';
 import { TRIAL_LEVELS } from './trial-levels.ts';
 import { UNDERCUT_LEVELS } from './undercut-levels.ts';

@@ -23,6 +23,7 @@ describe(`par lines on the reference (${engineLabel({ kind: 'ref' })})`, () => {
     expect(r.session.phase).toBe('cleared');
     expect(r.session.outcomes).toHaveLength(def.par);
     expect(r.session.heritageBroken.every((x) => !x)).toBe(true);
-    expect(r.session.score!.stars).toBeGreaterThanOrEqual(2);
+    // In par with heritage intact is three stars whatever the leverage (parStars, docs/game/stars.md).
+    expect(r.session.score!.stars).toBe(3);
   }, 600_000);
 });

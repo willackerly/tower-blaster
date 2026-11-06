@@ -67,7 +67,7 @@ The bot aims at every cell of every block face every two courses, plus anvil dro
 
 Under Rapier the lines were 100%, 77%, 97%, 80% and 100% robust.
 
-**The gold-leverage line** (third star) is the lower quartile of the leverage the par line's clean neighbours on the nudge grid reach, rounded down to two significant figures (`goldLine`, `pnpm keystone:par`). About three in four near-par shots earn it.
+**The gold-leverage line** (the gold badge; the third star until 2026-11-06, see [stars.md](stars.md)) is the lower quartile of the leverage the par line's clean neighbours on the nudge grid reach, rounded down to two significant figures (`goldLine`, `pnpm keystone:par`). About three in four near-par shots earn it.
 
 **What the reference changed for level design:**
 - **L3 and L4 now play as designed.** Two clean marble pick-offs beat a cannonball on L3, and on L4 the anvil on the catapult's free end is the robust move (on Rapier it only cleared by landing next to the crowns).

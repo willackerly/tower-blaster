@@ -95,6 +95,8 @@ export function objectiveShort(o: Objective): string {
   }
 }
 
+const shotCount = (n: number) => `${n} shot${n === 1 ? '' : 's'}`;
+
 /** Shown for two and three stars on a level whose cast has not landed (B3 while it runs). */
 export const UNCAST_TARGETS = 'targets coming soon';
 
@@ -103,7 +105,8 @@ export function starTargets(c: CompiledLevel, stars: StarsDef | undefined): { ta
   const d = c.def;
   const heritage = c.meta.heritage.length ? ', heritage intact' : '';
   const one = cap(objectiveText(d.objective)), oneShort = objectiveShort(d.objective);
-  if (scoringOf(d) === 'par') return { targets: [one, `…in par (${d.par})`, `…in par with leverage${heritage}`], short: [oneShort, `par ${d.par}`, 'par + leverage'], cast: true };
+  // Par levels (keystone parStars): three stars less one per stroke over par and one for broken heritage.
+  if (scoringOf(d) === 'par') return { targets: [one, `…in ${shotCount(d.par + 1)}`, `…in par (${shotCount(d.par)})${heritage}`], short: [oneShort, `${d.par + 1} shots`, `par ${d.par}`], cast: true };
   if (!stars) return { targets: [one, UNCAST_TARGETS, UNCAST_TARGETS], short: [oneShort, '?', '?'], cast: false };
   return {
     targets: [one, cap(thresholdText(stars.metric, stars.t2)), `${cap(thresholdText(stars.metric, stars.t3))}${heritage}`],
@@ -142,14 +145,14 @@ export const TRIALS_BLURB = 'Every structure built so far that is not a rated le
 export function bestText(b: LevelRecord | null): string {
   if (!b) return 'Not played yet';
   const what = b.metric === 'score' ? `${fmtPoints(b.total)} points` : b.collapse !== undefined ? `${pct(b.collapse)} down` : `${fmtPoints(b.total)} points`;
-  return `Best ${what} · ${b.plays} play${b.plays === 1 ? '' : 's'}${b.beatBot ? ' · beat the bot' : ''}`;
+  return `Best ${what} · ${b.plays} play${b.plays === 1 ? '' : 's'}${b.beatBot ? ' · beat the bot' : ''}${b.gold ? ' · gold leverage' : ''}`;
 }
 
 /** How to play, in four lines (the controls line is GAME_HELP's, shown in play). */
 export const HOW_TO_PLAY: readonly string[] = [
   '<span class="kg-desk">Pick a spot on the structure and click to fire. Drag to look around; the launcher follows you.</span><span class="kg-tch">Touch the structure and drag to aim; lift your finger to fire. Two fingers turn the view and pinch to zoom; the launcher follows you. Put a second finger down to call off a shot.</span>',
   'Fire again whenever you like, even while things are still falling. Once everything settles, physics freezes while you aim. Rubble stays between shots.',
-  'Meet the objective for one star. Bring more down for two and three; the targets were set by a bot playing each level hundreds of times.',
+  'Meet the objective for one star. Chamber levels: clear in par for three, each shot over par or piece of heritage broken costs one, and leverage at the level\'s gold line earns the gold badge. Elsewhere, bring more down for two and three; the targets were set by a bot playing each level hundreds of times.',
   'After any shot you may <kbd>B</kbd> bank: end the level and keep the unused rack as points.',
 ];
 

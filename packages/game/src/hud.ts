@@ -1,7 +1,7 @@
 // HUD and result card. Formatting is pure and tested; the DOM side only
 // writes strings into fixed elements. Level text is authored in this repo,
 // but everything still goes through esc().
-import { castStars, type CompiledLevel, itemRef, type LevelDef, type LevelScore, type Objective, type RackItem, scoringOf, tier, TIER_NAMES } from '@tb/keystone';
+import { castStars, type CompiledLevel, DEFAULT_GOLD, itemRef, type LevelDef, type LevelScore, type Objective, type RackItem, scoringOf, tier, TIER_NAMES } from '@tb/keystone';
 import { PROJECTILE_PRESETS } from '@tb/weapons';
 
 export const esc = (s: string) => s.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
@@ -176,6 +176,18 @@ export function hudHtml(s: HudState): string {
     ${s.strokes > 0 ? TOUCH_ACTS : ''}`;
 }
 
+/**
+ * A par level's gold-leverage badge under the stars (keystone LevelScore.gold): earned, or once cleared the line
+ * still to reach. Leverage gates no star; this is what it earns. Nothing on outcome levels or before a clear.
+ */
+export function goldHtml(level: LevelDef, score: LevelScore, delay = 0): string {
+  if (scoringOf(level) !== 'par' || score.stars === 0) return '';
+  const line = fmtLeverage(level.lGold ?? DEFAULT_GOLD);
+  return score.gold
+    ? `<div class="gold got" style="animation-delay:${delay}s">◆ Gold leverage (${line} or more)</div>`
+    : `<div class="gold" style="animation-delay:${delay}s">◇ Gold leverage at ${line}, in par, heritage intact</div>`;
+}
+
 /** Result card: score lines slam in one by one, then the stamp and stars. */
 /**
  * The round-over card. With no score yet the round is known to be over (every
@@ -205,6 +217,7 @@ export function resultHtml(level: LevelDef, score: LevelScore | null, strokes: n
     <div class="line total" style="animation-delay:${after}s"><span>Total</span><span>${fmtPoints(score.total)}</span></div>
     <div class="stamp s-${score.stamp.replace(/[^A-Z]/g, '').toLowerCase()}" style="animation-delay:${after + 0.3}s">${esc(score.stamp)}</div>
     <div class="stars" style="animation-delay:${after + 0.55}s">${starsText(score.stars)}</div>
+    ${goldHtml(level, score, after + 0.8)}
     ${extra}
     ${actions}`;
 }

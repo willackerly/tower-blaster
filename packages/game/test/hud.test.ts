@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { B1, B2, compileLevel, L1, L2, levelScore, outcomeScore, tier, U3 } from '@tb/keystone';
 import { GAME_HELP, GAME_KEYS, HELP_BUDGET, helpHtml, TOUCH_HELP } from '../src/ui.ts';
-import { BANK_BUTTON, esc, freezeButton, POWER_STEP, fmtLeverage, fmtPoints, hudHtml, meterHtml, meterTicks, nextSelection, objectiveText, rackChips, resultHtml, starsText, TOUCH_ACTS } from '../src/hud.ts';
+import { BANK_BUTTON, esc, freezeButton, POWER_STEP, fmtLeverage, fmtPoints, goldHtml, hudHtml, meterHtml, meterTicks, nextSelection, objectiveText, rackChips, resultHtml, starsText, TOUCH_ACTS } from '../src/hud.ts';
 
 describe('rack', () => {
   it('groups by kind in first-seen order with counts and keys', () => {
@@ -88,6 +88,16 @@ describe('formatting', () => {
     expect(html).toMatch(/data-act="next"/);
     expect(resultHtml(L1, score, 1, false)).not.toMatch(/data-act="next"/);
     expect(html).toContain(`(${['Brute', 'Clean', 'Elegant', 'Keystone'][tier(score.leverage)]})`);
+  });
+  it('a par level\'s card shows the gold-leverage badge earned, or once cleared the line to reach; outcome levels and misses show none', () => {
+    const shot = (dPE_mJ: number) => ({ ke: 1000, yield: 0, dPE_mJ, leverage: 0, crownsDown: 4, crownsTotal: 4, heritageNew: 0, displaced: 30, outOfLot: 0, pe_mJ: 0, spawnStep: 0, settleStep: 100 });
+    const gold = levelScore(L1, [shot(1e6 * L1.lGold!)], true, 40), short = levelScore(L1, [shot(1e6 * L1.lGold! / 2)], true, 40);
+    expect([gold.stars, gold.gold, short.stars, short.gold]).toEqual([3, true, 3, false]); // one shot is three stars either way
+    expect(goldHtml(L1, gold)).toMatch(/class="gold got".*Gold leverage \(×0\.71 or more\)/);
+    expect(goldHtml(L1, short)).toMatch(/class="gold".*Gold leverage at ×0\.71/);
+    expect(resultHtml(L1, short, 1, true)).toContain('Gold leverage at');
+    expect(goldHtml(L1, levelScore(L1, [shot(0)], false, 40))).toBe('');
+    expect(goldHtml(B1, { lines: [], total: 0, stars: 3, stamp: 'X', leverage: 99 })).toBe('');
   });
   it('before the score, the card tallies: name, strokes and par, and the actions, no score lines or stamp', () => {
     const html = resultHtml(L1, null, 1, true);

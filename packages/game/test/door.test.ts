@@ -1,6 +1,6 @@
 // The front door's formatting (door.ts) and the settings it edits (settings.ts): pure.
 import { describe, expect, it } from 'vitest';
-import { B1, B2, B3, BIG_LEVELS, compileLevel, L1, LEVELS, SERIES, TRIAL_LEVELS, UNDERCUT_LEVELS } from '@tb/keystone';
+import { B1, B2, B3, BIG_LEVELS, compileLevel, L1, L3, LEVELS, SERIES, TRIAL_LEVELS, UNDERCUT_LEVELS } from '@tb/keystone';
 import { bestText, doorHtml, doorLevels, doorMode, doorOnLoad, nextLevel, openerFor, preaimMode, rackText, seriesTitle, starTargets, thresholdText, TRIALS_BLURB } from '../src/door.ts';
 import { GAME_SERIES } from '../src/params.ts';
 import type { LevelRecord } from '../src/progress.ts';
@@ -50,7 +50,9 @@ describe('door text', () => {
     expect(b2.targets).toEqual(['Fell every crown', '770 points', '3,200 points, heritage intact']);
     expect(b2.short).toEqual(['all crowns', '770', '3,200']);
     expect(starTargets(compileLevel(B3), undefined)).toEqual({ targets: ['Bring 40% down', 'targets coming soon', 'targets coming soon'], short: ['40%', '?', '?'], cast: false });
-    expect(starTargets(compileLevel(L1), undefined).targets[1]).toBe(`…in par (${L1.par})`);
+    // Par levels (parStars): two stars one shot over par, three in par; heritage named where the level has some.
+    expect(starTargets(compileLevel(L1), undefined)).toMatchObject({ targets: [expect.any(String), '…in 2 shots', '…in par (1 shot)'], short: [expect.any(String), '2 shots', 'par 1'], cast: true });
+    expect(starTargets(compileLevel(L3), undefined).targets.slice(1)).toEqual(['…in 3 shots', '…in par (2 shots), heritage intact']);
   });
   it('B3\'s stars show from stars.json the moment they land (simulated drop-in)', () => {
     const cast = { ...B3, stars: { metric: 'collapse' as const, t2: 0.5, t3: 0.62, hash: compileLevel(B3).hash } };
@@ -63,6 +65,7 @@ describe('door text', () => {
     expect(bestText(rec(1, { metric: 'score', value: 900, total: 900, collapse: 0.3 }))).toBe('Best 900 points · 1 play');
     expect(bestText(rec(3, { metric: 'collapse', collapse: 0.97, beatBot: true }))).toBe('Best 97% down · 1 play · beat the bot');
     expect(bestText(rec(2, { total: 340 }))).toBe('Best 340 points · 1 play');
+    expect(bestText(rec(3, { total: 5200, gold: true }))).toBe('Best 5,200 points · 1 play · gold leverage');
   });
 });
 
