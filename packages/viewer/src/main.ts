@@ -329,7 +329,9 @@ async function main() {
     events = [...scene.inputs];
     shapes = [...scene.bodies];
     source.reset(scene.bodies);
-    renderer.blasts.clear();
+    // A new scene starts with no sparks, heat, flashes, blasts or fuses of the last (PT2), drawn in the effect style it asks for.
+    renderer.resetEffects();
+    renderer.setEffectStyle(want.feel.fx);
     blastsDue = [];
     sound.scene();
     sound.configure(config);
