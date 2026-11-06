@@ -26,7 +26,7 @@ describe('grenade projectile', () => {
   it('refuses grenade keys it can not use, saying why', () => {
     const q = (s: string) => () => parseViewerConfig(`?${s}`);
     expect(q('grenade.prox=1')).toThrow(/grenade.prox applies to proj.weapon=grenade/);
-    expect(q('proj.weapon=sticky')).toThrow(/proj.weapon must be one of grenade, firework, cluster, grenades, grenadem, grenadel, grenadexl/);
+    expect(q('proj.weapon=sticky')).toThrow(/proj.weapon must be one of grenade, firework, cluster, scatter, rocket, grenades, grenadem, grenadel, grenadexl/);
     expect(q('proj.weapon=grenade&grenade.fuse=boom')).toThrow(/grenade.fuse must be one of timer, prox, proxTimer/);
     expect(q('proj.weapon=grenade&grenade.bogus=1')).toThrow(/unknown key grenade.bogus/);
     expect(q('proj.weapon=grenade&grenade.prox=-1')).toThrow(/grenade.prox must be a number from 0/);
@@ -67,7 +67,7 @@ describe('grenade projectile', () => {
     expect(bad((f) => { f.weapons.grenade.prox = 'near'; })).toThrow(/weapons.grenade.prox must be a number/);
     expect(bad((f) => { f.weapons.grenade.blast.radius = 0; })).toThrow(/grenade.radius must be a number from 0.1/);
     expect(bad((f) => { f.weapons.grenade.ground = 1; })).toThrow(/weapons.grenade.ground must be true or false/);
-    expect(bad((f) => { f.projectile.weapon = 'rocket'; })).toThrow(/proj.weapon must be one of grenade/);
+    expect(bad((f) => { f.projectile.weapon = 'sticky'; })).toThrow(/proj.weapon must be one of grenade/);
     expect(() => parseSceneFile(JSON.stringify({ format: SCENE_FILE_FORMAT, version: 1, scene: { scenario: 'S1' }, engine: { name: 'rapier' }, weapons: [] }))).toThrow(/weapons must be an object/);
   });
 
