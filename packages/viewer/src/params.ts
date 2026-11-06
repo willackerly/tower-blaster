@@ -21,6 +21,7 @@ import { AVBD_ITERATIONS, compileLevel, findLevel, type LevelDef, PRESETTLE_STEP
 import { type AvbdParams, froudeParams } from '@tb/physics-ref';
 import { type BlastOptions, DEFAULT_BLASTS, DEFAULT_ICE, type IceParams, parseBlastOptions, parseIceOptions, parseRealOptions, type RealOptions, writeBlastOptions, writeIceOptions, writeRealOptions } from '@tb/render';
 import { bounceBody, bounceScene, buildScenario, SCENARIOS } from '@tb/scenarios';
+import { grenadeAsSpec, isWeaponTier, tierIssues, tierOf, WEAPON_TIERS, type WeaponTier } from '@tb/weapons';
 import { type CameraPose, DEFAULT_FRAMING, type Framing, FRAMING_LIMITS } from './camera.ts';
 import { decodeLevelParam, encodeLevelParam } from './level-file.ts';
 import { MAX_STEPS_LIMIT } from './loop.ts';
@@ -113,7 +114,7 @@ export interface ViewerConfig {
    * withRules(level, keystone), a custom run. {} otherwise.
    */
   keystone: LevelRules;
-  /** Keystone's pace (URL keys keystone.hitstop, keystone.slowmo, keystone.tailskip, keystone.follow, keystone.shake, keystone.rapid: 0 or 1, keystone.budget: ms, keystone.undo: MB, keystone.frames: all, half or auto, keystone.launch: high or level, keystone.balls: painted or plain, keystone.marks: 0 or 1, keystone.coats: 0 or 1, keystone.sun: view or look; rules=keystone only; @tb/game DEFAULT_FEEL by default, as in the game). */
+  /** Keystone's pace (URL keys keystone.hitstop, keystone.slowmo, keystone.tailskip, keystone.follow, keystone.shake, keystone.rapid: 0 or 1, keystone.budget: ms, keystone.undo: MB, keystone.frames: all, half or auto, keystone.launch: high or level, keystone.balls: painted or plain, keystone.marks: 0 or 1, keystone.coats: 0 or 1, keystone.sun: view or look, keystone.fx: damage or classic, keystone.spent: 0 or 1; rules=keystone only; @tb/game DEFAULT_FEEL by default, as in the game). */
   feel: PaceFeel;
   /**
    * A line of shots to play once the level has loaded (URL key keystone.shots, @tb/keystone
@@ -128,6 +129,14 @@ export interface ViewerConfig {
    * WeaponSpecs), at most MAX_RACK. null: the level's own. Its hash changes with it, as in the game.
    */
   rack: RackItem[] | null;
+  /**
+   * The weapon editor (weapon-editor.ts, docs/design/weapon-editor.md). tier: the device tier whose caps
+   * a fired weapon must fit (@tb/weapons WEAPON_TIER_CAPS; URL key weapon.tier=low|mid|high), null: the
+   * page's guess (weaponTierOf). edit: the editor open (weapon.edit=1). preview: the fired weapon's arc
+   * drawn in the scene from where a click would fire it, while the editor is closed too (weapon.preview=1;
+   * it is always drawn while the editor is open).
+   */
+  weapons: { tier: WeaponTier | null; edit: boolean; preview: boolean };
   /**
    * Bounce's e (URL key bounce.e, 0 to 1, default DEFAULT_BOUNCE): while the engine spec
    * turns restitution on (bounceOn), every body, spawn and fired projectile and the ground
@@ -148,7 +157,7 @@ export const DEFAULT_BOUNCE = 0.5;
 
 export const RULES = ['sandbox', 'keystone'] as const;
 /** Keys that only mean something under rules=keystone (the game page's). */
-export const KEYSTONE_KEYS = ['keystone.hitstop', 'keystone.slowmo', 'keystone.budget', 'keystone.tailskip', 'keystone.follow', 'keystone.shake', 'keystone.frames', 'keystone.rapid', 'keystone.undo', 'keystone.launch', 'keystone.balls', 'keystone.marks', 'keystone.coats', 'keystone.sun', 'keystone.shots', 'keystone.rack', ...LEVEL_RULE_KEYS] as const;
+export const KEYSTONE_KEYS = ['keystone.hitstop', 'keystone.slowmo', 'keystone.budget', 'keystone.tailskip', 'keystone.follow', 'keystone.shake', 'keystone.frames', 'keystone.rapid', 'keystone.undo', 'keystone.launch', 'keystone.balls', 'keystone.marks', 'keystone.coats', 'keystone.sun', 'keystone.fx', 'keystone.spent', 'keystone.shots', 'keystone.rack', ...LEVEL_RULE_KEYS] as const;
 /** The look when ?look= is absent: the sandbox's candy, or the game's own under its rules. */
 export const defaultLook = (rules: Rules) => (rules === 'keystone' ? GAME_LOOK : DEFAULT_CONFIG.look);
 export type Rules = (typeof RULES)[number];
@@ -209,7 +218,42 @@ export const MAX_PRESETTLE = 6000;
 /** How much faster than the unit world a world at this scale moves (speeds, in cube units per second). */
 export const froudeSpeed = (scale: number) => 1 / Math.sqrt(scale);
 
-export const DEFAULT_CONFIG: ViewerConfig = { engine: 'avbd-gpu', level: null, customLevel: null, scenario: 'S4', params: { N: 2000, F: 4, H: 12 }, seed: 1, sleep: null, autofire: 0, presettle: 0, offscreen: false, look: 'candy', real: {}, blast: { on: true, params: DEFAULT_BLASTS }, ice: DEFAULT_ICE, loop: 'free', pipeline: true, maxSteps: 1, projectile: DEFAULT_PROJECTILE, scale: 1, substeps: 1, camera: null, view: DEFAULT_FRAMING, bounce: DEFAULT_BOUNCE, rules: 'sandbox', keystone: {}, feel: { ...DEFAULT_FEEL }, shots: null, rack: null, sound: DEFAULT_SOUND };
+export const DEFAULT_CONFIG: ViewerConfig = { engine: 'avbd-gpu', level: null, customLevel: null, scenario: 'S4', params: { N: 2000, F: 4, H: 12 }, seed: 1, sleep: null, autofire: 0, presettle: 0, offscreen: false, look: 'candy', real: {}, blast: { on: true, params: DEFAULT_BLASTS }, ice: DEFAULT_ICE, loop: 'free', pipeline: true, maxSteps: 1, projectile: DEFAULT_PROJECTILE, scale: 1, substeps: 1, camera: null, view: DEFAULT_FRAMING, bounce: DEFAULT_BOUNCE, rules: 'sandbox', keystone: {}, feel: { ...DEFAULT_FEEL }, shots: null, rack: null, sound: DEFAULT_SOUND, weapons: { tier: null, edit: false, preview: false } };
+
+/** URL keys weapon.tier, weapon.edit and weapon.preview (ViewerConfig.weapons). */
+export function parseWeaponsOptions(q: URLSearchParams): ViewerConfig['weapons'] {
+  const tier = q.get('weapon.tier');
+  if (tier !== null && !isWeaponTier(tier)) throw new Error(`weapon.tier must be one of ${WEAPON_TIERS.join(', ')}: ${tier}`);
+  const flag = (k: string) => {
+    const v = q.get(k);
+    if (v !== null && v !== '0' && v !== '1') throw new Error(`${k} must be 0 or 1: ${v}`);
+    return v === '1';
+  };
+  return { tier, edit: flag('weapon.edit'), preview: flag('weapon.preview') };
+}
+
+/**
+ * The device tier a config's fired weapons must fit: weapon.tier when set, else a guess until the
+ * device-tier probe (roadmap P1, GameHandle.quality.tier) is wired in: a GPU engine is high, CPU physics
+ * (Rapier, the reference) mid, since CPU physics is what a slow device runs out of first.
+ */
+export function weaponTierOf(c: Pick<ViewerConfig, 'engine' | 'weapons'>): WeaponTier {
+  return c.weapons.tier ?? (c.engine.includes('gpu') ? 'high' : 'mid');
+}
+
+/**
+ * Why the config's weapon may not be fired on its tier (tierIssues; the grenade's knobs count as the
+ * grenade spec they run as), or null when it may: a shot over the caps is refused, not shrunk.
+ */
+export function tierRefusal(c: Pick<ViewerConfig, 'engine' | 'weapons' | 'projectile'>): string | null {
+  const p = c.projectile;
+  const spec = p.weapon === 'grenade' && p.grenade ? grenadeAsSpec(p.grenade, { shape: { kind: 'sphere', radius: 0.2 }, density: 8, speed: [0, 0] }) : p.weapon ? p.spec ?? null : null;
+  if (!spec) return null;
+  const tier = weaponTierOf(c), over = tierIssues(spec, tier);
+  if (!over.length) return null;
+  const needs = tierOf(spec);
+  return `${p.weapon} not fired: ${over.map((i) => i.message).join('; ')}${needs ? ` (weapon.tier=${needs} fires it anyway)` : ''}`;
+}
 
 export function parseViewerConfig(search: string): ViewerConfig {
   const q = new URLSearchParams(search);
@@ -293,6 +337,7 @@ export function parseViewerConfig(search: string): ViewerConfig {
     feel,
     shots,
     rack,
+    weapons: parseWeaponsOptions(q),
   };
   if (rules === 'keystone') checkKeystone(c);
   return c;
@@ -381,6 +426,9 @@ export function toSearch(c: ViewerConfig): string {
   if (c.shots?.length) q.set('keystone.shots', writeShots(c.shots));
   if (c.rules === 'keystone' && c.rack) q.set('keystone.rack', c.rack.join(','));
   if (c.rules === 'keystone') writeLevelRules(c.keystone, q);
+  if (c.weapons.tier) q.set('weapon.tier', c.weapons.tier);
+  if (c.weapons.edit) q.set('weapon.edit', '1');
+  if (c.weapons.preview) q.set('weapon.preview', '1');
   return `?${q}`;
 }
 

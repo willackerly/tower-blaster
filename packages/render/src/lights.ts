@@ -23,6 +23,7 @@
 // do not cast shadows. flashSlot is the CPU twin of the slot rule.
 import { Body, ImpactEvent, RenderRecord, TIER, wgslStruct } from '@tb/schema';
 import { CTL, MAX_EVENTS, type Sparks } from './sparks.ts';
+import { MATERIAL } from './looks.ts';
 import type { BodySource } from './source.ts';
 import type { V3 } from './math.ts';
 
@@ -58,9 +59,16 @@ export interface LightParams {
   flashTau: number;
   flashFull: number;
   flashColour: V3;
+  /**
+   * A ball's own impact (the event's material) bids for a flash at this share of its strength (PT2: a ball's
+   * speed change is how hard it hit, not what it moved; the blocks it moves bid in full). 1: in full (classic).
+   */
+  ballFlash: number;
 }
 
-export const DEFAULT_LIGHTS: LightParams = { ballRadius: 12, ballIntensity: 6, flashRadius: 8, flashIntensity: 14, flashTau: 0.12, flashFull: 15, flashColour: [1, 0.62, 0.3] };
+export const DEFAULT_LIGHTS: LightParams = { ballRadius: 12, ballIntensity: 6, flashRadius: 8, flashIntensity: 14, flashTau: 0.12, flashFull: 15, flashColour: [1, 0.62, 0.3], ballFlash: 0.25 };
+/** The flash rule before PT2. */
+export const CLASSIC_LIGHTS: LightParams = { ...DEFAULT_LIGHTS, ballFlash: 1 };
 
 const PARAM_WORDS = 32;
 const NONE = 0xffffffff;
@@ -76,7 +84,7 @@ struct LightParams {
   flashColour: vec3f, flashRadius: f32,
   balls: vec4u,
   count: u32, frame: u32, flashTau: f32, flashGain: f32,
-  flashFull: f32, pad0: f32, pad1: f32, pad2: f32,
+  flashFull: f32, ballFlash: f32, pad1: f32, pad2: f32,
 }
 
 // A flash slot: world position, start time, initial intensity.
@@ -119,7 +127,8 @@ fn flashPick(@builtin(global_invocation_id) id: vec3u) {
   let e = id.x;
   if (e >= min(eventCount[0], ${MAX_EVENTS}u)) { return; }
   let ev = events[e];
-  let q = u32(clamp(ev.strength / p.flashFull, 0.0, 1.0) * 4095.0);
+  let s = select(ev.strength, ev.strength * p.ballFlash, (ev.packed >> 28u) == ${MATERIAL.ball}u);
+  let q = u32(clamp(s / p.flashFull, 0.0, 1.0) * 4095.0);
   if (q == 0u) { return; }
   atomicMax(&keys[flashSlot(ev.pos)], (q << 20u) | e);
 }
@@ -230,7 +239,7 @@ export class Lights {
     for (let k = 0; k < MAX_BALLS; k++) u[12 + k] = balls[k] ?? NONE;
     u[16] = Math.min(source.count, source.capacity);
     u[17] = this.frame++;
-    fl[18] = c.flashTau; fl[19] = c.flashIntensity; fl[20] = c.flashFull;
+    fl[18] = c.flashTau; fl[19] = c.flashIntensity; fl[20] = c.flashFull; fl[21] = c.ballFlash;
     this.device.queue.writeBuffer(this.params, 0, buf);
     pass.setBindGroup(0, this.binds.balls);
     pass.setPipeline(this.pipes.balls);
@@ -244,6 +253,28 @@ export class Lights {
     pass.setBindGroup(0, this.binds.pack);
     pass.setPipeline(this.pipes.pack);
     pass.dispatchWorkgroups(1);
+  }
+
+  /** A fresh start (a level load, retry or undo): every flash out and every trail empty. */
+  reset(): void {
+    const q = this.device.queue;
+    q.writeBuffer(this.flashes, 0, new Uint8Array(FLASHES * 32));
+    q.writeBuffer(this.keys, 0, new Uint8Array(FLASHES * 4));
+    q.writeBuffer(this.trail, 0, new Float32Array(MAX_BALLS * TRAIL * 4).map((_, i) => (i % 4 === 3 ? -1 : 0)));
+  }
+
+  /** Flash slots still lit at time t (the CPU copy is not kept: reads the GPU's), for tests and tools. */
+  async litFlashes(t: number): Promise<number> {
+    const rb = this.device.createBuffer({ size: FLASHES * 32, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
+    const enc = this.device.createCommandEncoder();
+    enc.copyBufferToBuffer(this.flashes, 0, rb, 0, FLASHES * 32);
+    this.device.queue.submit([enc.finish()]);
+    await rb.mapAsync(GPUMapMode.READ);
+    const f = new Float32Array(rb.getMappedRange().slice(0));
+    rb.destroy();
+    let n = 0;
+    for (let k = 0; k < FLASHES; k++) if (f[8 * k + 4]! * Math.exp(-(t - f[8 * k + 3]!) / this.config.flashTau) > 0.01) n++;
+    return n;
   }
 
   /** No lights this frame, in place of encode: zeroes the meta (lit count, heat gain). */

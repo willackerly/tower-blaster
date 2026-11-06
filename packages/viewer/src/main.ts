@@ -17,9 +17,10 @@ import { alphaAt, newArrivals, newClock, newPacer, pauseLatch, runFree, stepsDue
 import type { V3 } from './math.ts';
 import { HEALTH_MS, limitFix, limitFixLabel, limitsHtml } from './health.ts';
 import { escapeHtml } from './html.ts';
-import { bounceOn, engineSpec, firedBody, froudeSpeed, keystoneEngine, levelOf, pageLevels, parseViewerConfig, presetSearch, quarterMetre, scenarioEngineSpec, sceneTitle, toSearch, type ViewerConfig, viewerScene, withOption, worldEngineSpec } from './params.ts';
+import { bounceOn, engineSpec, firedBody, froudeSpeed, keystoneEngine, levelOf, pageLevels, parseViewerConfig, presetSearch, quarterMetre, scenarioEngineSpec, sceneTitle, tierRefusal, toSearch, type ViewerConfig, viewerScene, withOption, worldEngineSpec } from './params.ts';
 import { inLevelGrenade, inLevelWeapon, projectileRadius, pushRadiusLimit, worldGrenade, worldWeapon } from './projectile.ts';
-import { type WeaponScale, WeaponRuntime } from '@tb/weapons';
+import { grenadeAsSpec, type GrenadeWorld, type WeaponScale, WeaponRuntime, type WeaponSpec } from '@tb/weapons';
+import { previewBeads, scenePreview } from './weapon-preview.ts';
 import { mountControls } from './controls.ts';
 import { startSearch } from './default-scene.ts';
 import { type DevAction, mountDev } from './dev-panel.ts';
@@ -95,6 +96,14 @@ interface ViewerHandle {
   inputs: InputEvent[];
   /** The sandbox's weapon blasts handed to the renderer to draw: centre x, y, z and radius (world units). */
   blastsDrawn: number[][];
+  /**
+   * The weapon's flight as last drawn in the scene (weapon-preview.ts; while the editor is open or
+   * weapon.preview=1): splits as steps after the fire, blasts as [step after the fire, x, y, z, radius],
+   * world units; null: none drawn.
+   */
+  preview: { tracks: number; beads: number; splits: number[]; blasts: number[][] } | null;
+  /** Work out and draw the flight for a fire at (ndcX, ndcY) now (tests; the pointer does it while it hovers). */
+  previewAt(ndcX: number, ndcY: number): ViewerHandle['preview'];
   /** Under rules=keystone, the game's handle (as window.__game on the game page); null in the sandbox. */
   game: GameHandle | null;
   /**
@@ -112,11 +121,15 @@ type InputHook = (s: Snapshot, step: number) => InputEvent[];
 declare global { interface Window { __viewer: ViewerHandle } }
 /** Steps of 1/60 s a proximity fuse predicts past each state the page reads (WeaponRuntime lookahead): a few frames. */
 const GRENADE_LOOKAHEAD = 4;
+/** The arc preview is worked out at most this often (ms) while what it depends on moves, and this often while only the world does. */
+const PREVIEW_MS = 100, PREVIEW_WORLD_MS = 500;
+/** The arc preview's bead radius, cube units: small against a block, big enough to see across a 10k scene. */
+const PREVIEW_BEAD = 0.08;
 
 const canvas = document.getElementById('c') as HTMLCanvasElement;
 const hud = document.getElementById('hud')!;
 const errorBox = document.getElementById('error')!;
-const handle: ViewerHandle = { status: 'loading', frames: 0, bodies: 0, awake: 0, stepIndex: 0, msPerStep: NaN, snapMs: NaN, resets: 0, overlapped: 0, tinted: 0, painted: [], variant: {}, health: null, camera: () => ({ target: [0, 0, 0], yaw: 0, pitch: 0, distance: 1 }), fire: () => {}, capture: async () => null, inputs: [], blastsDrawn: [], game: null, inputHook: null, sound: () => ({ status: 'off', error: '', posted: 0, stats: null }) };
+const handle: ViewerHandle = { status: 'loading', frames: 0, bodies: 0, awake: 0, stepIndex: 0, msPerStep: NaN, snapMs: NaN, resets: 0, overlapped: 0, tinted: 0, painted: [], variant: {}, health: null, camera: () => ({ target: [0, 0, 0], yaw: 0, pitch: 0, distance: 1 }), fire: () => {}, capture: async () => null, inputs: [], blastsDrawn: [], preview: null, previewAt: () => null, game: null, inputHook: null, sound: () => ({ status: 'off', error: '', posted: 0, stats: null }) };
 window.__viewer = handle;
 
 function fail(e: unknown) {
@@ -248,6 +261,9 @@ async function main() {
   let inputHook: InputHook | null = null;
   // This load's fired weapons, waiting on their triggers (proj.weapon: the grenade or a WeaponSpec).
   let grenades: WeaponRuntime | null = null;
+  // The arc preview (weapon-preview.ts): the runtime's world, the last state read, the editor's weapon, where the pointer hovers.
+  let weaponWorld: GrenadeWorld | null = null, lastSnap: Snapshot | null = null, editing: WeaponSpec | null = null;
+  let hover: [number, number] = [0, 0], previewAt = -Infinity, previewKey = '';
   /** Weapon blasts pushed but not yet seen: drawn (renderer.blast) from the first state at or past their step. */
   let blastsDue: InputEvent[] = [];
   let levelScale: WeaponScale | null = null;
@@ -310,7 +326,9 @@ async function main() {
     events = [...scene.inputs];
     shapes = [...scene.bodies];
     source.reset(scene.bodies);
-    renderer.blasts.clear();
+    // A new scene starts with no sparks, heat, flashes, blasts or fuses of the last (PT2), drawn in the effect style it asks for.
+    renderer.resetEffects();
+    renderer.setEffectStyle(want.feel.fx);
     blastsDue = [];
     sound.scene();
     sound.configure(config);
@@ -334,7 +352,10 @@ async function main() {
     // The page reads the state about once a frame, so a fuse predicts that far ahead (WeaponRuntime).
     painted = [];
     handle.painted = [];
-    grenades = new WeaponRuntime({ dt: next.dt, substeps: engine.info.integrator?.substeps ?? 1, gravity: next.gravity, groundY: next.ground?.y ?? null }, GRENADE_LOOKAHEAD * want.substeps);
+    weaponWorld = { dt: next.dt, substeps: engine.info.integrator?.substeps ?? 1, gravity: next.gravity, groundY: next.ground?.y ?? null };
+    grenades = new WeaponRuntime(weaponWorld, GRENADE_LOOKAHEAD * want.substeps);
+    lastSnap = null;
+    previewKey = '';
     apply(s, t0, engine.stepIndex);
   }
 
@@ -417,6 +438,16 @@ async function main() {
       presets(location.search);
     },
     camera: () => poseOf(orbit),
+    editing(spec) {
+      editing = spec;
+      previewKey = '';
+    },
+    setWeapons(w) {
+      config = { ...config, weapons: w };
+      if (nextConfig) nextConfig = { ...nextConfig, weapons: w };
+      history.replaceState(null, '', toSearch(config));
+      presets(location.search);
+    },
     load(next, name) {
       const want = { ...next, offscreen: config.offscreen };
       // The loop (free or frame, or Keystone's) is chosen when the page starts, so another one needs a page load.
@@ -442,6 +473,7 @@ async function main() {
   // Snapshot read-back (from t0), then upload; snapMs times both. Pipelined reads overlap, so each keeps its own t0.
   // step: the engine step the snapshot is of, for the input hook.
   function apply(s: Snapshot, t0: number, step: number) {
+    lastSnap = s;
     source.update(s, shapesFor(s.count));
     sound.snapshot(s, shapes, eyeOf(orbit), orbit.target);
     snapMs.push(performance.now() - t0);
@@ -531,8 +563,62 @@ async function main() {
   }
   let awake = 0;
 
+  /** The weapon a preview shows: the editor's while it is open, else the fired one's with weapon.preview=1; in world units. */
+  function previewSpec(): WeaponSpec | null {
+    const p = config.projectile;
+    const cube = editing ?? (config.weapons.preview ? (p.weapon === 'grenade' && p.grenade ? null : p.spec ?? null) : null);
+    if (cube) return worldWeapon(levelScale ? inLevelWeapon(cube, levelScale) : cube, froudeSpeed(config.scale), config.substeps);
+    if (config.weapons.preview && p.weapon === 'grenade' && p.grenade) {
+      const g = worldGrenade(levelScale ? inLevelGrenade(p.grenade, levelScale) : p.grenade, froudeSpeed(config.scale), config.substeps);
+      return grenadeAsSpec(g, { shape: { kind: 'sphere', radius: 0.2 }, density: 1, speed: [0, 0] });
+    }
+    return null;
+  }
+  /** The flight of a fire at (x, y) now, drawn as beads; null (and nothing drawn) without a weapon to preview. */
+  function showPreview(x: number, y: number): ViewerHandle['preview'] {
+    const spec = previewSpec();
+    if (!spec || !weaponWorld || config.rules === 'keystone') {
+      renderer.setOverlay(new Float32Array(0));
+      return (handle.preview = null);
+    }
+    const { origin, dir } = rayThrough(orbit, aspect(), x, y);
+    const { body } = firedBody(config, origin, dir);
+    let p;
+    try {
+      p = scenePreview(spec, { shape: body.shape, pos: body.pos, vel: body.linVel, density: body.density }, weaponWorld, lastSnap, lastSnap ? shapesFor(lastSnap.count) : []);
+    } catch (e) {
+      notice = `preview: ${e instanceof Error ? e.message : String(e)}`;
+      renderer.setOverlay(new Float32Array(0));
+      return (handle.preview = null);
+    }
+    const beads = previewBeads(p, PREVIEW_BEAD);
+    renderer.setOverlay(beads.xyzr, beads.colours);
+    const splits = p.tracks.filter((t) => t.end === 'split').map((t) => t.start + t.points.length - 1);
+    return (handle.preview = { tracks: p.tracks.length, beads: beads.colours.length, splits, blasts: p.blasts.map((b) => [b.step, ...b.centre, b.radius]) });
+  }
+  /** At most every PREVIEW_MS, and only when what it depends on moved (the pointer, the camera, the weapon) or the world may have. */
+  function drawPreview(now: number) {
+    // Not while the view is dragged: the pointer is turning the camera, not aiming.
+    if (now - previewAt < PREVIEW_MS || drag) return;
+    const spec = previewSpec();
+    const key = spec ? `${hover[0].toFixed(3)},${hover[1].toFixed(3)},${orbit.yaw.toFixed(4)},${orbit.pitch.toFixed(4)},${orbit.distance.toFixed(3)},${orbit.target.join(',')}` : 'off';
+    // The world moves under a still pointer: redo it every WORLD_MS too.
+    if (key === previewKey && (!spec || now - previewAt < PREVIEW_WORLD_MS)) return;
+    previewAt = now;
+    previewKey = key;
+    showPreview(hover[0], hover[1]);
+  }
+  handle.previewAt = (x, y) => showPreview(x, y);
+
   handle.fire = (x = 0, y = 0) => {
     if (resetting) return;
+    // A weapon over this device's tier is not fired (@tb/weapons tiers.ts; weapon.tier sets the tier).
+    const over = tierRefusal(config);
+    if (over) {
+      notice = over;
+      drawHud();
+      return;
+    }
     const { origin, dir } = rayThrough(orbit, aspect(), x, y);
     const { body, colour } = firedBody(config, origin, dir);
     const ev: InputEvent = { step: engine.stepIndex, kind: 'spawn', body };
@@ -569,6 +655,8 @@ async function main() {
     drag = { x: e.clientX, y: e.clientY, moved: 0, pan: e.button === 2 || e.shiftKey };
   });
   canvas.addEventListener('pointermove', (e) => {
+    const r = canvas.getBoundingClientRect();
+    hover = [((e.clientX - r.left) / r.width) * 2 - 1, 1 - ((e.clientY - r.top) / r.height) * 2];
     if (!drag) return;
     const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
     drag.moved += Math.abs(dx) + Math.abs(dy);
@@ -653,6 +741,7 @@ async function main() {
     pendingCapture = null;
     // No snapshot follows a step while paused, so the limits are read here: the steps before the pause still show.
     if (paused && !resetting) pollHealth();
+    if (!resetting) drawPreview(now);
     const stats = await renderer.render({ viewProj: viewProj(orbit, aspect()), eye: eyeOf(orbit), focus: orbit.target, time: now / 1000, groundY: scene.ground?.y ?? 0, alpha, metres: config.scale }, !!want, want?.keep);
     if (want) want.resolve(stats);
     handle.frames++;
@@ -802,6 +891,7 @@ async function keystoneMode(config: ViewerConfig, device: GPUDevice, renderer: R
     setProjectile: (projectile) => show({ ...cfg, projectile }),
     setView: (view) => show({ ...cfg, view }),
     setSound: (sound) => show({ ...cfg, sound }),
+    setWeapons: (weapons) => show({ ...cfg, weapons }),
     camera: () => null,
   });
   // The par and dev panel: the attempt as the driver holds it, a line to play, a replay check.
