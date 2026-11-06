@@ -13,6 +13,20 @@ export const CLAMPED_PLATE: readonly (readonly [number, number, number])[] = [
   [35.99, 1, 1], [73.41, 2, 1], [73.41, 1, 2], [108.27, 2, 2], [131.64, 3, 1], [132.24, 1, 3], [165.15, 3, 2], [165.15, 2, 3],
 ];
 
+/**
+ * A clamped plate's modes up to n half-waves each way: Leissa's table where it has them, beyond it
+ * Bolotin's edge-effect asymptote lambda ~ pi^2 ((p + 1/2)^2 + (q + 1/2)^2), scaled by 0.91 so it
+ * meets the table at (3, 2) and (3, 3) (Leissa 165.15 and 220.03). Absent n: the table alone (the
+ * classic 8 modes a wall, which bunch into near-harmonic clusters and read as a bell or a door).
+ */
+export function plateTable(n?: number): readonly (readonly [number, number, number])[] {
+  if (n === undefined) return CLAMPED_PLATE;
+  const out = CLAMPED_PLATE.filter(([, p, q]) => p <= n && q <= n).map((x) => [...x] as [number, number, number]);
+  for (let p = 1; p <= n; p++) for (let q = 1; q <= n; q++)
+    if (!CLAMPED_PLATE.some(([, a, b]) => a === p && b === q)) out.push([0.91 * Math.PI ** 2 * ((p + 0.5) ** 2 + (q + 0.5) ** 2), p, q]);
+  return out;
+}
+
 /** Shell walls' frequency multipliers when a material gives none: within 3%, as machined walls. */
 export const CLASSIC_WALLS = [1.012, 0.987, 1.03, 0.995, 0.972, 1.006] as const;
 
@@ -123,7 +137,7 @@ export function modes(m: SoundMaterial, bodyEdge = 1, fmax = 18000): Modes {
     // Six walls, not quite equal (a fixed spread per material, so it always sounds the same).
     const wallMul = m.walls ?? CLASSIC_WALLS;
     const pq: [number, number, number][] = [];
-    for (let wall = 0; wall < 6; wall++) for (const [l, p, q] of CLAMPED_PLATE) { const fn = l * f1 * wallMul[wall]!; if (fn < fmax) { f.push(fn); pq.push([wall, p, q]); } }
+    for (let wall = 0; wall < 6; wall++) for (const [l, p, q] of plateTable(m.plateModes)) { const fn = l * f1 * wallMul[wall]!; if (fn < fmax) { f.push(fn); pq.push([wall, p, q]); } }
     weights = (rand, out) => {
       const wall = Math.min(5, Math.floor(rand() * 6)), x = rand(), y = rand();
       pq.forEach(([w, p, q], j) => { out[j] = w === wall ? 2 * Math.sqrt(6) * Math.sin(p * Math.PI * x) * Math.sin(q * Math.PI * y) : 0; });
@@ -149,7 +163,7 @@ export function modes(m: SoundMaterial, bodyEdge = 1, fmax = 18000): Modes {
     // the impact's energy (a hollow box's low modes all sit under 1 / T and would each take the rigid body's).
     const T = contactTime(m, 1, bodyEdge), eps = roughness(m), M = mass(m, bodyEdge);
     let vib = 0;
-    for (const x of freq) vib += ((m.mstar * M) ** 2 * forceSpectrum(x, T, eps) ** 2) / (2 * M);
+    for (const x of freq) vib += ((m.mstar * M) ** 2 * forceSpectrum(x, T, eps, roughTime(m)) ** 2) / (2 * M);
     const cap = Math.sqrt(Math.min(1, (VIB_SHARE * 0.5 * m.mstar * M) / vib));
     gain = freq.map((x, k) => modeGain(m, x, tau[k]!, bodyEdge) * cap);
   } else gain = freq.map((x) => radiation(m, x, bodyEdge));
@@ -176,6 +190,9 @@ export const roughness = (m: SoundMaterial): number => (m.roughDb !== undefined 
 /** An asperity's contact time, s: the roughness floor rolls off above ~1 / ROUGH_T (micro-contacts last ~0.1 ms). */
 export const ROUGH_T = 1.5e-4;
 
+/** A material's asperity contact time, s (its roughT, else ROUGH_T). */
+export const roughTime = (m: SoundMaterial): number => m.roughT ?? ROUGH_T;
+
 /**
  * |F(f)| / J with roughness eps (roughness(m)): the force fluctuates by eps of itself (several points
  * touching, asperities) over the contact, as noise of bandwidth ~1 / ROUGH_T. That noise has energy
@@ -183,10 +200,10 @@ export const ROUGH_T = 1.5e-4;
  * 0.75 eps^2 ROUGH_T / T times an asperity's pulse: sqrt(pulse(f T)^2 + floor pulse(f ROUGH_T)^2).
  * A long contact (a heavy block) is smoother per impulse than a short one. Exactly the smooth pulse when eps = 0.
  */
-export function forceSpectrum(f: number, T: number, eps: number): number {
+export function forceSpectrum(f: number, T: number, eps: number, rt = ROUGH_T): number {
   const p = pulseSpectrum(f, T);
   if (!(eps > 0)) return p;
-  const q = eps * Math.sqrt(Math.min(1, (0.75 * ROUGH_T) / T)) * pulseSpectrum(f, ROUGH_T);
+  const q = eps * Math.sqrt(Math.min(1, (0.75 * rt) / T)) * pulseSpectrum(f, rt);
   return Math.sqrt(p * p + q * q);
 }
 
@@ -261,7 +278,7 @@ export function denseField(m: SoundMaterial, binT: ArrayLike<number>, bodyEdge =
   const md = modes(m, bodyEdge, fmax), from = md.freq.reduce((a, b) => Math.max(a, b), 0) * 1.02;
   const B = DENSE_BANDS.length, tau = Float64Array.from(DENSE_BANDS, (f) => 1 / (Math.PI * f * m.eta));
   const energy = new Float64Array(binT.length * B), share = new Float64Array(binT.length);
-  const M = mass(m, bodyEdge), S = surface(m, bodyEdge), r = roughness(m), lvl = 10 ** (m.denseDb / 10), STEPS = 24;
+  const M = mass(m, bodyEdge), S = surface(m, bodyEdge), r = roughness(m), rt = roughTime(m), lvl = 10 ** (m.denseDb / 10), STEPS = 24;
   const J2 = (m.mstar * M) ** 2, KE = 0.5 * m.mstar * M; // per (m/s of dv)^2
   for (let bin = 0; bin < binT.length; bin++) {
     let vib = 0;
@@ -271,7 +288,7 @@ export function denseField(m: SoundMaterial, binT: ArrayLike<number>, bodyEdge =
       if (!(hi > lo)) continue;
       let w = 0;
       for (let k = 0; k < STEPS; k++) {
-        const f = lo * (hi / lo) ** ((k + 0.5) / STEPS), df = (f * Math.log(hi / lo)) / STEPS, F = forceSpectrum(f, binT[bin]!, r);
+        const f = lo * (hi / lo) ** ((k + 0.5) / STEPS), df = (f * Math.log(hi / lo)) / STEPS, F = forceSpectrum(f, binT[bin]!, r, rt);
         const e = 2 * J2 * F * F * (modalDensity(m, f, bodyEdge) / (4 * M)) * df;
         const er = (RHO_AIR * C_AIR * S * denseRadiation(m, f, bodyEdge)) / (2 * Math.PI * f * M);
         vib += e; w += (e * er) / (er + m.eta);

@@ -27,6 +27,8 @@ export interface SoundMaterial {
   wall?: number;
   /** shell: the six walls' frequency multipliers (absent: CLASSIC_WALLS, within 3%). */
   walls?: readonly number[];
+  /** shell: plate modes up to this many half-waves each way, per wall (absent: Leissa's 8; plateTable). */
+  plateModes?: number;
   /** Young's modulus (plank: along the grain), Pa. */
   E: number;
   /** plank: shear modulus, Pa (wood's is low, which lowers torsion and the higher bending modes). */
@@ -56,6 +58,12 @@ export interface SoundMaterial {
    * -Infinity: the smooth pulse.
    */
   roughDb?: number;
+  /**
+   * An asperity's contact time, s (absent: ROUGH_T, 0.15 ms): the roughness floor's bandwidth is ~1 / roughT.
+   * Asperities are Hertz contacts too, so a soft partner lengthens them as (E*)^(-2/5): a steel ball on
+   * plaster has plaster's (sound-map.ts pairs the game's ammo with the struck material this way).
+   */
+  roughT?: number;
   /**
    * The dense modes above the mode table (shell walls and solid cubes have thousands): played as a
    * statistical field, band noise per (sector, half-octave) decaying at each band's loss factor, with
@@ -113,14 +121,20 @@ export const SOUND_MATERIALS = {
   pine: CLASSIC_SOUND_MATERIALS.pine,
   /** Bright game brick: hollow acrylic (PMMA), as if 8 cm with 2.5 mm walls. */
   acrylic: { ...CLASSIC_SOUND_MATERIALS.acrylic, law: 'energy', roughDb: -6, denseDb: 0 },
-  /** Real look: stone or concrete block at the body's own size. */
-  stone: { ...CLASSIC_SOUND_MATERIALS.stone, law: 'energy', eta: 0.03, roughDb: -6, denseDb: 0 },
-  /** Hollow plaster maquette block, 2 cm walls: a dull knock (~300 Hz at 0.5 m) that crumbles. */
-  plaster: { ...CLASSIC_SOUND_MATERIALS.plaster, law: 'energy', eta: 0.08, walls: CAST_WALLS, roughDb: -6, denseDb: 0 },
-  /** Hollow cast-iron box, 6 mm walls: a clonk with a short ring (~200 Hz at 0.5 m; cast iron is lossy, the pile more so). */
-  iron: { ...CLASSIC_SOUND_MATERIALS.iron, law: 'energy', eta: 0.03, walls: CAST_WALLS, roughDb: -20, denseDb: 0 },
-  /** Solid ice: a hard tick and thud, and it cracks. */
-  ice: { ...CLASSIC_SOUND_MATERIALS.ice, law: 'energy', eta: 0.04, roughDb: -6, denseDb: 0 },
+  /** Real look: stone or concrete block at the body's own size (eta 0.02: the judge's mineral band; 0.03 read soft). */
+  stone: { ...CLASSIC_SOUND_MATERIALS.stone, law: 'energy', eta: 0.02, roughDb: -6, denseDb: 0 },
+  /**
+   * Plaster: a porous cast block at the game's own 250 kg/m^3, ringing as a solid (E 2 GPa, a light
+   * gypsum's). As a hollow shell it read as a door at any damping (Material identity, step 1).
+   */
+  plaster: { model: 'cube', E: 2e9, nu: 0.25, rho: 250, eta: 0.035, jitter: 0.03, R: 0.01, mstar: 0.7, ringDb: 0, clickDb: 0, gritDb: 0, law: 'energy', roughDb: 0, denseDb: 0 },
+  /**
+   * Hollow cast-iron box with 22.6 mm walls, the thickness that gives the game's 1950 kg/m^3, and
+   * plate modes up to 8 half-waves a wall: a clang (eta 0.003; at 0.03 it read as wood).
+   */
+  iron: { ...CLASSIC_SOUND_MATERIALS.iron, law: 'energy', wall: 0.0226, plateModes: 8, eta: 0.003, walls: CAST_WALLS, roughDb: -20, denseDb: 0 },
+  /** Solid ice: a glassy clink, and it cracks (eta 0.005, ice's own; at 0.04 it read as rubber). */
+  ice: { ...CLASSIC_SOUND_MATERIALS.ice, law: 'energy', eta: 0.005, roughDb: -6, denseDb: 0 },
   /** Solid rubber: a dull, low bomp (its contact lasts tens of ms). */
   rubber: { ...CLASSIC_SOUND_MATERIALS.rubber, law: 'energy', roughDb: -20, denseDb: 0 },
   /** Solid steel (Keystone's ammo): a hard clink. */
@@ -134,7 +148,7 @@ export const soundMaterials = (set: SoundSet = 'real'): Record<keyof typeof SOUN
 
 const POSITIVE = ['E', 'nu', 'rho', 'eta', 'R', 'mstar'] as const;
 
-const KEYS = new Set(['model', 'dims', 'size', 'wall', 'walls', 'E', 'G', 'nu', 'rho', 'eta', 'jitter', 'R', 'Ec', 'mstar', 'ringDb', 'clickDb', 'gritDb', 'roughDb', 'denseDb', 'law']);
+const KEYS = new Set(['model', 'dims', 'size', 'wall', 'walls', 'plateModes', 'E', 'G', 'nu', 'rho', 'eta', 'jitter', 'R', 'Ec', 'mstar', 'ringDb', 'clickDb', 'gritDb', 'roughDb', 'roughT', 'denseDb', 'law']);
 
 /** A material from JSON-ish input over `base` (a whole material when absent); throws on a value that can't make sound. */
 export function parseSoundMaterial(input: Partial<Record<keyof SoundMaterial, unknown>>, base?: SoundMaterial): SoundMaterial {
@@ -154,6 +168,8 @@ export function parseSoundMaterial(input: Partial<Record<keyof SoundMaterial, un
   if (out.model === 'plank' && !(out.G! > 0)) throw new Error('a plank needs G > 0');
   if (out.model === 'shell' && !(out.wall! > 0)) throw new Error('a shell needs wall > 0');
   if (out.law !== undefined && out.law !== 'velocity' && out.law !== 'energy') throw new Error(`sound material law must be velocity or energy: ${String(out.law)}`);
+  if (out.plateModes !== undefined && !(Number.isInteger(out.plateModes) && out.plateModes >= 1 && out.plateModes <= 16)) throw new Error('sound material plateModes must be an integer 1-16');
+  if (out.roughT !== undefined && !(out.roughT >= 1e-5 && out.roughT <= 0.05)) throw new Error('sound material roughT must be 1e-5 to 0.05 s');
   if (out.walls !== undefined && !(Array.isArray(out.walls) && out.walls.length === 6 && out.walls.every((x) => typeof x === 'number' && x > 0 && Number.isFinite(x)))) throw new Error('sound material walls must be six positive numbers');
   return out;
 }

@@ -376,9 +376,47 @@ wood. The real set raised eta to stop the ringing (stone 0.015 to 0.03, plaster 
 (plaster, iron) read wood at almost every eta: a knocked 0.5 m hollow box is a door. Pine planks
 (Kapla) read glass (Ding, Chink), acrylic a clock tick.
 
-Next: a free-text describer (CLAP, scored against phrases such as "two stone blocks knocking"; its
-weights need huggingface.co, which this environment's network policy blocks), Will's one-word reads
-of step 1, then materials whose damping and model put them in their own band, and only then step 2.
+Will's reads of step 1 (2026-11-06): stone decent but a little soft, plaster a little too wood-like,
+iron way too woody, steel good, rubber quite good, ice too much like rubber. The judge's material
+labels agreed on plaster, iron and ice, and Will judged it reliable enough to iterate on; it does
+so from here, with Will at the gates.
+
+Step 1 fixes (each material moved into its band, by the judge; knock at 0.5 m):
+
+| material | change | judge before | judge after |
+|---|---|---|---|
+| stone | eta 0.03 to 0.02 | mineral, softer | mineral 0.41 |
+| plaster | hollow shell to a solid porous block at the game's 250 kg/m^3 (E 2 GPa, a light gypsum's), eta 0.035 | wood (Door) | mineral 0.44 (Crack, Breaking) |
+| iron | 6 mm shell to 22.6 mm walls (what gives the game's 1950 kg/m^3), plate modes up to 8 half-waves a wall, eta 0.003 | wood | metal 0.72 (Ding, Clang) |
+| ice | eta 0.04 to 0.005 (ice's own) | rubber-like | glass 0.70 (Chink) |
+
+Leissa's table has 8 modes a clamped wall; past it the walls use Bolotin's edge-effect asymptote,
+lambda = 0.91 pi^2 ((p + 1/2)^2 + (q + 1/2)^2), which meets Leissa at (3, 2) within 0.6% and at
+(3, 3) within 0.01% (`plateModes`, modes.ts `plateTable`). With 8 modes a wall the shell rings in
+near-harmonic clusters (a bell, "Music"); with 64 it is a clang. More plate modes alone did not
+save the thin shells (they still read Music or Door), so plaster went solid. Tried and rejected:
+plaster as a 1000 kg/m^3 cube (Quack, Duck in a clatter), at E 0.3 GPa (Plop, Tick), grit (none at
+knock speed).
+
+In the levels the new plaster reads mineral (L1 0.61, Crack and Breaking) on its own, but the steel
+ammo, 28 dB under the blocks, turned the mix to glass (Chink, Glass, Ding): every hit rang the ball.
+A steel ball on plaster has plaster's contact, though: the Hertz pair modulus
+1/E* = (1-nu1^2)/E1 + (1-nu2^2)/E2 is plaster's, the contact lasts ~5x longer, and the asperities,
+Hertz contacts too, last as long (E*^(-2/5)), so the roughness stops near 1.4 kHz instead of 7, under
+the ball's modes. The game's ammo now plays the pair's contact with the level's main material
+(sound-map.ts `ammoOn`; a material's asperity time is `roughT`, default ROUGH_T 0.15 ms). The
+classic set keeps G6's steel on steel. L1-L5 after: wood 0.10-0.32 (was 0.40-0.83 with the #193
+set), L1 and L2 mineral 0.53 and 0.51 (Crack, Crushing), real share 0.80-0.95. L3 and L4 stay mixed
+(their impacts are few, and the clip is mostly silence).
+
+Level: the solid plaster is louder at the peak; at GAME_SOUND_DB_REAL -17 one hit in L1 goes 1.1 dB
+into the limiter and nothing else limits. -18 would avoid it but leave the set 3.4 LU under the
+classic one (2.4 at -17), so the level stays.
+
+Next: step 2 (clatter). Six identical blocks ring one chord: iron reads Music 0.51, steel Music 0.33,
+and the solid plaster turns animal (Fart, Quack: a low mode at a fixed pitch, repeated).
+Then a tower, then a level. The free-text describer (CLAP, scored against phrases such as "two stone
+blocks knocking") still needs huggingface.co, which this environment's network policy blocks.
 
 ## Plan (each step lands with its test)
 
