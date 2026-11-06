@@ -440,7 +440,7 @@ export function engineSpec(spec: string, projectile: Projectile = DEFAULT_PROJEC
  * (and beta) scaled by 1/scale and their spin cap by 1/sqrt(scale)
  * (froudeParams), taken from the spec's own values or the defaults, so the
  * world moves exactly as the unit world played faster; with restitution on,
- * its threshold (a speed) scaled by 1/sqrt(scale) too, which froudeParams
+ * its threshold and anchor speed (speeds) scaled by 1/sqrt(scale) too, which froudeParams
  * does only while the switch is on, so a spec without it gains no key.
  * Other engines get the stronger gravity alone.
  */
@@ -453,7 +453,7 @@ export function worldEngineSpec(spec: string, scale: number): string {
   const scaled = froudeParams(own, 1 / scale);
   return FROUDE_KEYS.reduce((out, k) => (scaled[k] === undefined ? out : withOption(out, k, scaled[k] as number)), spec);
 }
-const FROUDE_KEYS = ['beta', 'penaltyMin', 'penaltyMax', 'maxAngularSpeed', 'restitutionThreshold'] as const;
+const FROUDE_KEYS = ['beta', 'penaltyMin', 'penaltyMax', 'maxAngularSpeed', 'restitutionThreshold', 'restitutionAnchorSpeed'] as const;
 
 /** GpuEngineOptions keys (bench's gpuEngineArgs): a scenario's avbd options with these go to avbd-gpu only. */
 const GPU_OPTIONS: ReadonlySet<string> = new Set(['capacity', 'spare', 'pairsPerBody', 'maxRadius', 'colorTail', 'indirectColors', 'tailThreads', 'colorRounds', 'hessian', 'boxBroadphase']);
