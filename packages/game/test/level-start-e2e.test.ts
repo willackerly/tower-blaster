@@ -1,6 +1,7 @@
 // Level starts on the game page (docs/game/level-start.md), on Rapier, which is fast on a CPU: the
-// next level is built while the result card shows, so Next swaps it in, and the state it swaps in is
-// the one a cold load of that level gives; and the pre-settle is paced, so frames keep drawing while a
+// next level is built ahead (from the result card, the offscreen default, or from the load while the
+// player aims, keystone.prefetch=aim, held while a shot runs), so Next swaps it in, and the state it
+// swaps in is the one a cold load of that level gives; and the pre-settle is paced, so frames keep drawing while a
 // level loads (with keystone.loadpace=0, as before, they stop for the whole pre-settle). The GPU
 // engine's paced pre-settle leaves the state an unpaced one does: every *-gpu test that compares the
 // live state with handle.replay (an unpaced reset) checks that.
@@ -97,6 +98,54 @@ describe('level start', () => {
     }
     expect(runs.checkpoint).toEqual(runs.rebuild);
   }, 5 * MINUTE);
+
+  it('keystone.prefetch=aim builds the next level from the load, beside play that stays exact, and Next takes it', async (ctx) => {
+    if (!game.browser()) return ctx.skip();
+    const o = await game.open('/?level=L1&offscreen=1&engine=rapier&progress=off&keystone.prefetch=aim');
+    if (!o) return ctx.skip();
+    const { page, errors } = o;
+    await ready(page);
+    expect(await page.evaluate(() => ({ built: window.__game.counts.prefetch, level: window.__game.spare?.level }))).toEqual({ built: 1, level: 'L2' });
+    const line = L1.solutions!.par as Shot[];
+    await playShots(page, line, 2 * MINUTE);
+    // Built once: the round's end finds it there.
+    expect(await page.evaluate(() => window.__game.counts.prefetch)).toBe(1);
+    // The level played beside the prefetch is the one a fresh engine plays.
+    const live = await page.evaluate(() => window.__game.state());
+    expect(await page.evaluate((s) => window.__game.replay(s), line)).toEqual(live);
+    await page.click('#result [data-act="next"]');
+    await page.waitForFunction(() => window.__game.level === 'L2', undefined, { timeout: MINUTE, polling: 50 });
+    await ready(page);
+    const next = await page.evaluate(() => ({ state: window.__game.state(), load: window.__game.timing.load, spare: window.__game.spare }));
+    expect(next.load.prefetched).toBe(true);
+    // And on L2 the level after it is under way.
+    expect(next.spare?.level).toBe('L3');
+    expect(await page.evaluate(() => window.__game.replay([]))).toEqual(next.state);
+    expect(errors).toEqual([]);
+    await page.close();
+  }, 5 * MINUTE);
+
+  it('holds the prefetch while a shot runs, and lets it go on between shots', async (ctx) => {
+    if (!game.browser()) return ctx.skip();
+    // B2's 5,184 cubes take Rapier seconds to pre-settle, so the first shot goes in while it is still settling.
+    const o = await game.open(`/?level=${B1.id}&offscreen=1&engine=rapier&progress=off&door=0&keystone.prefetch=aim`, 5 * MINUTE);
+    if (!o) return ctx.skip();
+    const { page, errors } = o;
+    await ready(page, 5 * MINUTE);
+    expect(await page.evaluate(() => window.__game.spare)).toEqual({ level: 'B2', settled: false });
+    const shot = (B1.solutions!.ace as Shot[]).slice(0, 1);
+    await playShots(page, shot, 5 * MINUTE);
+    expect(await page.evaluate(() => window.__game.counts.prefetchHeld ?? 0)).toBeGreaterThan(0);
+    // Between shots it goes on to the end.
+    await page.waitForFunction(() => window.__game.spare?.settled === true, undefined, { timeout: 5 * MINUTE, polling: 100 });
+    // The shot played beside the held prefetch lands where a fresh engine's does (a replay plays the
+    // session on to its end, so only the step and the bodies are compared).
+    const live = await page.evaluate(() => window.__game.state());
+    const again = await page.evaluate((s) => window.__game.replay(s), shot);
+    expect({ step: again.step, hash: again.hash }).toEqual({ step: live.step, hash: live.hash });
+    expect(errors).toEqual([]);
+    await page.close();
+  }, 10 * MINUTE);
 
   it('keystone.prefetch=0 builds nothing ahead', async (ctx) => {
     if (!game.browser()) return ctx.skip();
