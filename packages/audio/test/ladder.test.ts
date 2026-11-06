@@ -24,6 +24,13 @@ describe('listening ladder', () => {
       for (let i = 1; i < a.length; i++) expect(a[i]!.t).toBeGreaterThanOrEqual(a[i - 1]!.t);
     }
     expect(() => script('avalanche', 1)).toThrow(/unknown step/);
+    // The clatter's six first strikes come at random over 1.2 s, not on a cadence: their gaps are not all alike.
+    const firsts = [...new Set(script('clatter', 0.6).filter((h) => h.body < 1000).map((h) => h.body))]
+      .map((b) => Math.min(...script('clatter', 0.6).filter((h) => h.body === b).map((h) => h.t))).sort((a, b) => a - b);
+    expect(firsts).toHaveLength(6);
+    for (const t of firsts) { expect(t).toBeGreaterThanOrEqual(0.2); expect(t).toBeLessThanOrEqual(1.4); }
+    const gaps = firsts.slice(1).map((t, i) => t - firsts[i]!), mean = gaps.reduce((a, b) => a + b) / gaps.length;
+    expect(Math.sqrt(gaps.reduce((s, g) => s + (g - mean) ** 2, 0) / gaps.length) / mean).toBeGreaterThan(0.3);
   });
 
   it('frames hold every hit once, in its own 60 Hz frame, loudest first in top', () => {

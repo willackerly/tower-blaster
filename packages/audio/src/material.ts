@@ -65,6 +65,17 @@ export interface SoundMaterial {
    */
   roughT?: number;
   /**
+   * Shell and cube: discrete modes past the table, up to where the modal overlap (modes per half-power
+   * bandwidth) reaches this, and the dense field only above (modes.ts sparseModes). Absent: the field
+   * starts right after the table, at any overlap (G6 and #193).
+   */
+  overlap?: number;
+  /**
+   * How the rigid-body click radiates: 'dipole' (absent, G6's) the compact dipole at every frequency;
+   * 'sphere' a rigid sphere of the body's volume, which is compact only below ka ~ 1.4 (modes.ts clickFilter).
+   */
+  clickModel?: 'dipole' | 'sphere';
+  /**
    * The dense modes above the mode table (shell walls and solid cubes have thousands): played as a
    * statistical field, band noise per (sector, half-octave) decaying at each band's loss factor, with
    * the energy the same modes would carry (modal density x the table's per-mode law). dB over that;
@@ -148,7 +159,7 @@ export const soundMaterials = (set: SoundSet = 'real'): Record<keyof typeof SOUN
 
 const POSITIVE = ['E', 'nu', 'rho', 'eta', 'R', 'mstar'] as const;
 
-const KEYS = new Set(['model', 'dims', 'size', 'wall', 'walls', 'plateModes', 'E', 'G', 'nu', 'rho', 'eta', 'jitter', 'R', 'Ec', 'mstar', 'ringDb', 'clickDb', 'gritDb', 'roughDb', 'roughT', 'denseDb', 'law']);
+const KEYS = new Set(['model', 'dims', 'size', 'wall', 'walls', 'plateModes', 'E', 'G', 'nu', 'rho', 'eta', 'jitter', 'R', 'Ec', 'mstar', 'ringDb', 'clickDb', 'gritDb', 'roughDb', 'roughT', 'overlap', 'clickModel', 'denseDb', 'law']);
 
 /** A material from JSON-ish input over `base` (a whole material when absent); throws on a value that can't make sound. */
 export function parseSoundMaterial(input: Partial<Record<keyof SoundMaterial, unknown>>, base?: SoundMaterial): SoundMaterial {
@@ -169,6 +180,8 @@ export function parseSoundMaterial(input: Partial<Record<keyof SoundMaterial, un
   if (out.model === 'shell' && !(out.wall! > 0)) throw new Error('a shell needs wall > 0');
   if (out.law !== undefined && out.law !== 'velocity' && out.law !== 'energy') throw new Error(`sound material law must be velocity or energy: ${String(out.law)}`);
   if (out.plateModes !== undefined && !(Number.isInteger(out.plateModes) && out.plateModes >= 1 && out.plateModes <= 16)) throw new Error('sound material plateModes must be an integer 1-16');
+  if (out.clickModel !== undefined && out.clickModel !== 'dipole' && out.clickModel !== 'sphere') throw new Error(`sound material clickModel must be dipole or sphere: ${String(out.clickModel)}`);
+  if (out.overlap !== undefined && !(out.overlap >= 0.1 && out.overlap <= 10)) throw new Error('sound material overlap must be 0.1 to 10');
   if (out.roughT !== undefined && !(out.roughT >= 1e-5 && out.roughT <= 0.05)) throw new Error('sound material roughT must be 1e-5 to 0.05 s');
   if (out.walls !== undefined && !(Array.isArray(out.walls) && out.walls.length === 6 && out.walls.every((x) => typeof x === 'number' && x > 0 && Number.isFinite(x)))) throw new Error('sound material walls must be six positive numbers');
   return out;
