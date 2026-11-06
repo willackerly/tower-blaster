@@ -16,6 +16,7 @@ import { Synth, type Voice, voicesFor } from './audio.ts';
 import { CollapseSound, type CollapseStatus } from './collapse-sound.ts';
 import { type GameSoundMode, soundSetOf } from './sound-map.ts';
 import { viewOf } from './view.ts';
+import { outlineAreas, pixelCounts, type ScreenRect } from './sightlines.ts';
 export { viewOf } from './view.ts';
 import { driverOptions, type EngineKind, gpuEngineOptions, makeEngine, roomAfter } from './engines.ts';
 import { hudHtml, meterTicks, type MeterTick, nextSelection, POWER_STEP, rackChips, resultHtml, starsText } from './hud.ts';
@@ -141,6 +142,12 @@ export interface GameHandle {
   undoMemory(): { marks: number; bytes: number };
   capture(keepPixels?: boolean): Promise<PixelStats | null>;
   /**
+   * Tests (PT1's gate): the renderer's ID pass at the camera's view now (no shake), as pixels per structure body,
+   * leaving out pixels under `covered` (screen shares: the HUD's panels as the page lays them out), with each
+   * body's unoccluded outline area at the same size (sightlines.ts outlineAreas) to measure them against.
+   */
+  sightlines(covered?: ScreenRect[]): Promise<{ width: number; height: number; px: number[]; solo: number[] } | null>;
+  /**
    * How each fired body (the slots past the structure's, in spawn order) is drawn now, read back from the
    * renderer: a bomb (a lit fuse, or BOMB_FX's matte iron once its fuse has given way to newer ones), a painted
    * ball (paint and band, scene.ts ballFx), or plain (the look's).
@@ -230,7 +237,7 @@ export function newGameHandle(): GameHandle {
   const none = (): SessionState => ({ step: 0, phase: 'loading', strokes: 0, heritageBroken: 0, hash: '' });
   return {
     status: 'loading', engine: '', level: '', phase: 'loading', ready: false, frozen: false, frames: 0, stepIndex: 0, strokes: 0, bodies: 0, collapse: 0, fast: false, pace: { timeScale: 1, speed: 1, tag: '', tailSkip: false, costMs: NaN }, view: { target: [0, 0, 0], distance: 0, yaw: 0, pitch: 0, following: false, jolt: 0, turning: false, cue: null, arcBeads: 0 }, input: { touch: false, gesture: 'idle', fingers: 0, aimed: null, power: 100, launch: 0 }, result: null, counts: {}, feel: { ...DEFAULT_FEEL }, resultShownAt: null, timing: { loadMs: 0, load: noPhases(), stepMs: [], moving: [], frameMs: [], costMs: [] }, draws: { drawn: 0, skipped: 0, decimating: false },
-    fire: () => false, bank: () => false, freeze: () => false, fireOpener: () => false, setMuted: () => {}, maxDpr: 2, quality: null, aim: () => null, reach: null, select: () => false, load: async () => {}, retry: async () => {}, undo: async () => false, undone: null, spare: null, undoMemory: () => ({ marks: 0, bytes: 0 }), capture: async () => null, firedLooks: () => [], marks: () => [], refreshMarks: () => {},
+    fire: () => false, bank: () => false, freeze: () => false, fireOpener: () => false, setMuted: () => {}, maxDpr: 2, quality: null, aim: () => null, reach: null, select: () => false, load: async () => {}, retry: async () => {}, undo: async () => false, undone: null, spare: null, undoMemory: () => ({ marks: 0, bytes: 0 }), capture: async () => null, sightlines: async () => null, firedLooks: () => [], marks: () => [], refreshMarks: () => {},
     state: none, line: () => [], replay: async () => none(), health: async () => null, pairsPerBody: 0, limitsHit: [], goals: [], grade: null, duel: null,
     sound: () => ({ mode: 'collapse', status: 'off', error: '', posted: 0, stats: null }),
     ice: () => ({ count: 0, cracks: [] }),
@@ -714,7 +721,8 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     s.built = b.built.catch((e) => { console.warn(`prefetch of ${def.id} failed: ${(e as Error).message}`); return null; });
     spare = s;
     handle.spare = { level: def.id, settled: false };
-    void s.built.then((x) => { if (spare === s && x) handle.spare = { level: def.id, settled: true }; });
+    // The next level's opening view is searched now too (view.ts remembers it), not at the swap (B2's takes ~0.2 s).
+    void s.built.then((x) => { if (spare === s && x) { handle.spare = { level: def.id, settled: true }; if (!duel) viewOf(x.c, viewAspect(), undefined, undefined, feel.view); } });
     handle.counts.prefetch = (handle.counts.prefetch ?? 0) + 1;
   }
   /**
@@ -863,7 +871,8 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     selected = nextSelection(c.def.rack, driver.session.rackLeft, retry ? selected : null);
     opener = env.opener?.(c) ?? null;
     if (!retry) {
-      orbit = viewOf(c, viewAspect());
+      // A duel's sides are what its view is about (duel-view.ts): it opens on the classic view, the turn view (when on) then swings to the side to fire.
+      orbit = viewOf(c, viewAspect(), undefined, undefined, duel ? 'classic' : feel.view);
       setPower(100);
       // The play area: the lot (where debris counts), grown a little, up to the structure's top.
       const half: Vec3 = [(c.lot.max[0] - c.lot.min[0]) / 2 + 2, c.height / 2 + 2, (c.lot.max[1] - c.lot.min[1]) / 2 + 2];
@@ -1465,6 +1474,12 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
   const frames = new FrameGovernor(feel.frames);
   let pendingCapture: { resolve: (s: PixelStats | null) => void; keep: boolean } | null = null;
   handle.capture = (keep = false) => new Promise((resolve) => { pendingCapture = { resolve, keep }; });
+  handle.sightlines = async (covered = []) => {
+    const m = viewProj(orbit, aspect());
+    const { width, height, ids } = await renderer.renderIds({ viewProj: m, eye: eyeOf(orbit), focus: orbit.target, time: performance.now() / 1000, groundY: 0, alpha: 1 });
+    const px = pixelCounts({ width, height, ids, solo: new Float64Array(0) }, c.meta.n, covered);
+    return { width, height, px: Array.from(px), solo: Array.from(outlineAreas(c, m, width, height)) };
+  };
 
   const tick = async () => {
     const now = performance.now(), frameMs = now - last;

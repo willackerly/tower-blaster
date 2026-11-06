@@ -14,11 +14,14 @@
 //                               keystone.launch, see launchFeel)
 //   marks: true | false        (stone marks: a crosshair carved on blocks to bring down, a shield on blocks to
 //                               keep, scene.ts markOf; on by default; the URL's say is keystone.marks, see marksFeel)
+//   view: goals | classic      (the opening view, view.ts: one that shows the crowns and heritage, or the 3/4 view
+//                               from the par line's side as before; goals by default; the URL's say is keystone.view,
+//                               see viewFeel)
 //   quality: auto | high | mid | low (the quality tier, quality.ts: auto takes the probe's on load; the URL's
 //                               ?quality= for a visit; docs/game/quality-tiers.md)
 import { LOOKS } from '@tb/render';
 import { LAUNCH_MODES, type LaunchMode } from './aim.ts';
-import type { PaceFeel } from './pacing.ts';
+import { OPENING_VIEWS, type OpeningView, type PaceFeel } from './pacing.ts';
 import { GAME_LOOK } from './params.ts';
 import type { KeyValue } from './progress.ts';
 import { QUALITY_SETTINGS, qualityParam, type QualitySetting } from './quality.ts';
@@ -28,10 +31,10 @@ export const SETTINGS_KEY = 'tb.settings.v1';
 /** still: the camera moves only when the player moves it (the default since the 2026-11-02 playtest); dynamic: it follows and shakes too. */
 export type CameraSetting = 'still' | 'dynamic';
 
-export interface Settings { sound: boolean; look: string; sharp: 1 | 2; camera: CameraSetting; rapid: boolean; duelView: boolean; launch: LaunchMode; marks: boolean; quality: QualitySetting }
+export interface Settings { sound: boolean; look: string; sharp: 1 | 2; camera: CameraSetting; rapid: boolean; duelView: boolean; launch: LaunchMode; marks: boolean; view: OpeningView; quality: QualitySetting }
 
-/** Rapid fire on (Will, 2026-11-05: in Advanced settings, defaulting to on); a duel's turn view on (Will, 2026-11-06); shots from high (Will, 2026-11-06); stone marks on (Will, 2026-11-06); quality from the probe (P1, 2026-11-06). */
-export const DEFAULT_SETTINGS: Settings = { sound: true, look: GAME_LOOK, sharp: 2, camera: 'still', rapid: true, duelView: true, launch: 'high', marks: true, quality: 'auto' };
+/** Rapid fire on (Will, 2026-11-05: in Advanced settings, defaulting to on); a duel's turn view on (Will, 2026-11-06); shots from high (Will, 2026-11-06); stone marks on (Will, 2026-11-06); the opening view shows the goals (PT1, 2026-11-06); quality from the probe (P1, 2026-11-06). */
+export const DEFAULT_SETTINGS: Settings = { sound: true, look: GAME_LOOK, sharp: 2, camera: 'still', rapid: true, duelView: true, launch: 'high', marks: true, view: 'goals', quality: 'auto' };
 
 /** The quality choices the front door offers, in its order, with their names there. */
 export const QUALITY_CHOICES: ReadonlyArray<{ quality: QualitySetting; label: string }> = [
@@ -61,6 +64,7 @@ export function parseSettings(text: string | null): Settings {
     duelView: typeof o.duelView === 'boolean' ? o.duelView : DEFAULT_SETTINGS.duelView,
     launch: (LAUNCH_MODES as readonly unknown[]).includes(o.launch) ? (o.launch as LaunchMode) : DEFAULT_SETTINGS.launch,
     marks: typeof o.marks === 'boolean' ? o.marks : DEFAULT_SETTINGS.marks,
+    view: (OPENING_VIEWS as readonly unknown[]).includes(o.view) ? (o.view as OpeningView) : DEFAULT_SETTINGS.view,
     quality: (QUALITY_SETTINGS as readonly unknown[]).includes(o.quality) ? (o.quality as QualitySetting) : DEFAULT_SETTINGS.quality,
   };
 }
@@ -99,6 +103,14 @@ export const MARKS_KEYS = ['keystone.marks'] as const;
 /** Stone marks in effect: keystone.marks where the URL says it (feel was read from that URL), else the setting. */
 export function marksFeel(feel: PaceFeel, q: URLSearchParams, marks: boolean): Pick<PaceFeel, 'marks'> {
   return { marks: q.has('keystone.marks') ? feel.marks : marks };
+}
+
+/** The URL key that says what the Opening view setting says (viewFeel), dropped from the URL when the setting changes. */
+export const VIEW_KEYS = ['keystone.view'] as const;
+
+/** The opening view in effect: keystone.view where the URL says it (feel was read from that URL), else the setting. */
+export function viewFeel(feel: PaceFeel, q: URLSearchParams, view: OpeningView): Pick<PaceFeel, 'view'> {
+  return { view: q.has('keystone.view') ? feel.view : view };
 }
 
 /** The URL key that says what the Duel turns setting says (turnViewFeel), dropped from the URL when the setting changes. */

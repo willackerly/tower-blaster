@@ -4,7 +4,7 @@ import { B1, B2, B3, BIG_LEVELS, compileLevel, L1, L3, type LevelDef, LEVELS, SE
 import { bestText, doorHtml, doorLevels, doorMode, doorOnLoad, nextLevel, openerFor, preaimMode, rackText, seriesTitle, starTargets, thresholdText, TRIALS_BLURB } from '../src/door.ts';
 import { GAME_SERIES } from '../src/params.ts';
 import type { LevelRecord } from '../src/progress.ts';
-import { cameraFeel, DEFAULT_SETTINGS, launchFeel, marksFeel, parseSettings, rapidFeel, SETTINGS_KEY, SettingsStore, turnViewFeel, urlSettings } from '../src/settings.ts';
+import { cameraFeel, DEFAULT_SETTINGS, launchFeel, marksFeel, parseSettings, rapidFeel, SETTINGS_KEY, SettingsStore, turnViewFeel, urlSettings, viewFeel } from '../src/settings.ts';
 
 import { paceFeel } from '../src/pacing.ts';
 import { memoryKeyValue } from '../src/progress.ts';
@@ -165,7 +165,7 @@ describe('settings', () => {
     expect(parseSettings(null)).toEqual(DEFAULT_SETTINGS);
     expect(parseSettings('nope')).toEqual(DEFAULT_SETTINGS);
     expect(parseSettings('{"sound":false,"look":"nope","sharp":3}')).toEqual({ ...DEFAULT_SETTINGS, sound: false });
-    expect(parseSettings('{"look":"real","sharp":1}')).toEqual({ sound: true, look: 'real', sharp: 1, camera: 'still', rapid: true, duelView: true, launch: 'high', marks: true, quality: 'auto' });
+    expect(parseSettings('{"look":"real","sharp":1}')).toEqual({ sound: true, look: 'real', sharp: 1, camera: 'still', rapid: true, duelView: true, launch: 'high', marks: true, view: 'goals', quality: 'auto' });
     // Settings stored before the Camera setting open still, as does anything but its two values.
     expect(DEFAULT_SETTINGS.camera).toBe('still');
     expect(parseSettings('{"camera":"dynamic"}')).toEqual({ ...DEFAULT_SETTINGS, camera: 'dynamic' });
@@ -227,6 +227,19 @@ describe('settings', () => {
     expect(html(true)).toContain('data-act="marks" data-arg="on" class="on"');
     expect(html(false)).toContain('data-act="marks" data-arg="off" class="on"');
   });
+  it('the Opening view setting (PT1): goals by default, classic when chosen; the URL\'s keystone.view wins for the visit', () => {
+    expect(DEFAULT_SETTINGS.view).toBe('goals');
+    expect(parseSettings('{"view":"classic"}')).toEqual({ ...DEFAULT_SETTINGS, view: 'classic' });
+    expect(parseSettings('{"view":"top"}')).toEqual(DEFAULT_SETTINGS);
+    const at = (search: string, view: 'goals' | 'classic') => { const u = q(search); return viewFeel(paceFeel(u), u, view); };
+    expect(at('', 'goals')).toEqual({ view: 'goals' });
+    expect(at('', 'classic')).toEqual({ view: 'classic' });
+    expect(at('keystone.view=classic', 'goals')).toEqual({ view: 'classic' });
+    expect(at('keystone.view=goals', 'classic')).toEqual({ view: 'goals' });
+    const html = (view: 'goals' | 'classic') => doorHtml({ levels: [], current: -1, settings: { ...DEFAULT_SETTINGS, view }, howTo: false, advanced: true });
+    expect(html('goals')).toContain('data-act="view" data-arg="goals" class="on"');
+    expect(html('classic')).toContain('data-act="view" data-arg="classic" class="on"');
+  });
   it('duel turns: the turn view on by default; the URL\'s keystone.turnview where it says, else the setting', () => {
     expect(DEFAULT_SETTINGS.duelView).toBe(true);
     // Settings stored before the setting existed open with it on; only a boolean is taken.
@@ -251,10 +264,10 @@ describe('settings', () => {
   it('the URL wins for the visit; a change is stored and replaces the URL\'s say on that field', () => {
     const kv = memoryKeyValue({ [SETTINGS_KEY]: '{"look":"real"}' });
     const s = new SettingsStore(kv, q('look=candy&sound=off'));
-    expect(s.current).toEqual({ sound: false, look: 'candy', sharp: 2, camera: 'still', rapid: true, duelView: true, launch: 'high', marks: true, quality: 'auto' });
-    expect(s.set({ look: 'hazy' })).toEqual({ sound: false, look: 'hazy', sharp: 2, camera: 'still', rapid: true, duelView: true, launch: 'high', marks: true, quality: 'auto' });
-    expect(JSON.parse(kv.getItem(SETTINGS_KEY)!)).toEqual({ sound: true, look: 'hazy', sharp: 2, camera: 'still', rapid: true, duelView: true, launch: 'high', marks: true, quality: 'auto' });
-    expect(new SettingsStore(kv).current).toEqual({ sound: true, look: 'hazy', sharp: 2, camera: 'still', rapid: true, duelView: true, launch: 'high', marks: true, quality: 'auto' });
+    expect(s.current).toEqual({ sound: false, look: 'candy', sharp: 2, camera: 'still', rapid: true, duelView: true, launch: 'high', marks: true, view: 'goals', quality: 'auto' });
+    expect(s.set({ look: 'hazy' })).toEqual({ sound: false, look: 'hazy', sharp: 2, camera: 'still', rapid: true, duelView: true, launch: 'high', marks: true, view: 'goals', quality: 'auto' });
+    expect(JSON.parse(kv.getItem(SETTINGS_KEY)!)).toEqual({ sound: true, look: 'hazy', sharp: 2, camera: 'still', rapid: true, duelView: true, launch: 'high', marks: true, view: 'goals', quality: 'auto' });
+    expect(new SettingsStore(kv).current).toEqual({ sound: true, look: 'hazy', sharp: 2, camera: 'still', rapid: true, duelView: true, launch: 'high', marks: true, view: 'goals', quality: 'auto' });
   });
   it('storage that throws keeps settings in memory', () => {
     const bad = { getItem: () => { throw new Error('x'); }, setItem: () => { throw new Error('x'); }, removeItem: () => {} };
