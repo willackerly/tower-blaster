@@ -7,7 +7,7 @@
 // its own elements; the viewer calls it for rules=keystone, with hooks for its
 // dev panels (docs/design/viewer-superset.md, step C).
 import { type BodyDesc, type EngineHealth, limitsHit, type PhysicsEngine, type Vec3 } from '@tb/engine-api';
-import { type RackItem, type CompiledLevel, compileLevel, Driver, Duel, type DuelDef, DEFAULT_TURN_SECONDS, type Feedback, type Goal, goalMet, type Player, type Grade, gradeOf, type LevelDef, type LevelScore, type LotSheet, type PerStep, playShots, rapidDue, roundFacts, runSession, selectGroups, type Shot, snapshotHash, TIER_NAMES } from '@tb/keystone';
+import { type RackItem, type CompiledLevel, compileLevel, Driver, type DriverCheckpoint, Duel, type DuelDef, DEFAULT_TURN_SECONDS, type Feedback, type Goal, goalMet, type Player, type Grade, gradeOf, type LevelDef, type LevelScore, type LotSheet, type PerStep, playShots, rapidDue, roundFacts, runSession, selectGroups, type Shot, snapshotHash, TIER_NAMES } from '@tb/keystone';
 import { clampPitch, eyeOf, type Orbit, rayThrough, viewProj } from '@tb/render/camera';
 import type { PixelStats, Renderer, SnapshotSource } from '@tb/render';
 import type { HostStats } from '@tb/audio';
@@ -27,6 +27,7 @@ import { CameraJuice, contactJuice } from './juice.ts';
 import { alphaAt, arrived, DEFAULT_FEEL, newArrivals, Pacer, type PaceFeel, SLOW_TAG_BELOW, slowTag, SpeedMeter, TailSkip } from './pacing.ts';
 import { COST_WINDOW, runPhysics, wakeable } from './physics-loop.ts';
 import { CLEAR_SHARE, FrameGovernor } from './frame-rate.ts';
+import { UndoMarks } from './undo-marks.ts';
 import { beadOverlay, BOMB_FX, CROWN_GLOW, PULL_HOVER, regrowDuration, regrowScales, structureTints, TINT, tintOf, tintWordOf } from './scene.ts';
 import { type GestureState, type TouchAction, TouchGestures, touchFace, type TouchMode } from './touch.ts';
 
@@ -118,12 +119,20 @@ export interface GameHandle {
   /** Restart the attempt (key R, the result card's Retry): the level as it loaded, exactly (the same state hash). */
   retry(): Promise<void>;
   /**
-   * Undo the last shot (key U or Ctrl/Cmd+Z, the result card's Undo): the level is rebuilt and the
-   * attempt's shots but the last replayed on it, out of sight, to their settle (docs/game/undo.md), so the
-   * state is exactly a fresh replay of them on this device. Works while a shot runs (a rapid one cut
-   * included: its shot before then plays out) and after the round ended. Resolves false when there is no shot to undo.
+   * Undo the last shot (key U or Ctrl/Cmd+Z, the result card's Undo; docs/game/undo.md): the world goes
+   * back to the moment that shot went in. Instantly, from the checkpoint taken as it went in
+   * (Driver.checkpoint), while undo memory (PaceFeel.undoMB) still holds one; else the level is rebuilt
+   * and the attempt's shots but the last replayed on it, out of sight, to their settle. A shot fired
+   * from aiming went in at the last settle, so both give that state exactly; a rapid-fire shot that cut
+   * the one before went in mid-flight, so its checkpoint puts the world back mid-flight with that one
+   * running on (the replay plays it out to its settle, the same state the restored run settles at).
+   * Works while a shot runs and after the round ended. Resolves false when there is no shot to undo.
    */
   undo(): Promise<boolean>;
+  /** How the last undo went back (a checkpoint restored, or the shots replayed) and its wall time, ms; null before one. */
+  undone: { mode: 'checkpoint' | 'replay'; ms: number } | null;
+  /** The undo checkpoints held now: one per shot still kept (null where none was), and their bytes (PaceFeel.undoMB caps them). */
+  undoMemory(): { marks: number; bytes: number };
   capture(keepPixels?: boolean): Promise<PixelStats | null>;
   /** Physics state now: step, phase and a hash of every pose. */
   state(): SessionState;
@@ -180,7 +189,7 @@ export function newGameHandle(): GameHandle {
   const none = (): SessionState => ({ step: 0, phase: 'loading', strokes: 0, heritageBroken: 0, hash: '' });
   return {
     status: 'loading', engine: '', level: '', phase: 'loading', ready: false, frozen: false, frames: 0, stepIndex: 0, strokes: 0, bodies: 0, collapse: 0, fast: false, pace: { timeScale: 1, speed: 1, tag: '', tailSkip: false, costMs: NaN }, view: { target: [0, 0, 0], distance: 0, yaw: 0, pitch: 0, following: false, jolt: 0, turning: false, cue: null, arcBeads: 0 }, input: { touch: false, gesture: 'idle', fingers: 0, aimed: null, power: 100 }, result: null, counts: {}, feel: { ...DEFAULT_FEEL }, resultShownAt: null, timing: { loadMs: 0, stepMs: [], moving: [], frameMs: [], costMs: [] }, draws: { drawn: 0, skipped: 0, decimating: false },
-    fire: () => false, bank: () => false, freeze: () => false, fireOpener: () => false, setMuted: () => {}, maxDpr: 2, aim: () => null, reach: null, select: () => false, load: async () => {}, retry: async () => {}, undo: async () => false, capture: async () => null,
+    fire: () => false, bank: () => false, freeze: () => false, fireOpener: () => false, setMuted: () => {}, maxDpr: 2, aim: () => null, reach: null, select: () => false, load: async () => {}, retry: async () => {}, undo: async () => false, undone: null, undoMemory: () => ({ marks: 0, bytes: 0 }), capture: async () => null,
     state: none, line: () => [], replay: async () => none(), health: async () => null, pairsPerBody: 0, limitsHit: [], goals: [], grade: null, duel: null,
     sound: () => ({ mode: 'collapse', status: 'off', error: '', posted: 0, stats: null }),
   };
@@ -268,7 +277,7 @@ export interface KeystoneEnv {
    * per replay, called after every step as runSession calls PlayOptions.perStep, so a replay
    * sees the same input.
    */
-  perStep?(c: CompiledLevel): PerStep;
+  perStep?(c: CompiledLevel): PerStep | null;
   /** Impacts: @tb/audio's collapse synth (the default) or the old pentatonic voices ('synth'); the cues play either way. */
   sound?: GameSoundMode;
   /** The collapse sound's level, dB over the game's (GAME_SOUND_DB). */
@@ -376,7 +385,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     const from = descs.length;
     descs = driver.bodies;
     fxSlots = descs.length;
-    if (bomb) for (let i = from; i < descs.length; i++) { renderer.setFx(i, BOMB_FX); renderer.fuse(i); handle.counts.bomb = (handle.counts.bomb ?? 0) + 1; }
+    if (bomb) for (let i = from; i < descs.length; i++) { renderer.setFx(i, BOMB_FX); renderer.fuse(i); bombSlots.push(i); handle.counts.bomb = (handle.counts.bomb ?? 0) + 1; }
   };
   let fxSlots = 0;
   /** What the follow camera frames at most: the lot and a margin, up to half again the structure's height. */
@@ -422,18 +431,58 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
   let loading = 0;
   function load(i: number, retry = false): Promise<void> {
     loading++;
-    return exclusive(() => loadNow(i, retry)).finally(() => { loading--; });
+    return exclusive(() => { dropMarks(0); bombSlots = []; return loadNow(i, retry); }).finally(() => { loading--; });
+  }
+
+  /**
+   * Undo checkpoints, by shot (UndoMarks): the world just before each shot went in (Driver.checkpoint)
+   * and what the page showed of it. Taken as each shot goes in (fireNow), the oldest dropped past
+   * PaceFeel.undoMB; all dropped when a level loads (their engine goes).
+   */
+  interface UndoMark { cp: DriverCheckpoint; bytes: number; frozen: boolean; goals: GoalLine[]; grade: Grade | null; bombs: number[]; dispose(): void }
+  const marks = new UndoMarks<UndoMark>();
+  const dropMarks = (k: number) => marks.drop(k);
+  /** Bodies drawn as bombs, by slot, in spawn order (spawned): an undo to a mark draws its first UndoMark.bombs as bombs again. */
+  let bombSlots: number[] = [];
+
+  /**
+   * The world as shot k = session.inputs.length goes in, kept for undo: not in a duel (its turns are the
+   * players'), nor with a page input hook (PerStep: its own state is a closure, which no copy can take),
+   * nor on an engine without checkpoints, nor past the undo memory (the oldest go first).
+   */
+  function takeMark() {
+    const budget = duel || perStep ? 0 : feel.undoMB * 2 ** 20;
+    marks.take(driver.session.inputs.length, budget, () => {
+      let cp: DriverCheckpoint | null = null;
+      // A checkpoint that fails (a GPU error) only costs this shot its instant undo: undo replays instead.
+      try { cp = driver.checkpoint(); } catch (e) { console.warn(`undo checkpoint: ${(e as Error).message}`); }
+      return cp && { cp, bytes: cp.bytes, frozen, goals: handle.goals.map((g) => ({ ...g })), grade: handle.grade, bombs: [...bombSlots], dispose: () => cp.dispose() };
+    });
   }
 
   /** The star ticks on the HUD's Down bar, for the level loaded (meterTicks). */
   let ticks: MeterTick[] = [];
 
-  /** Undo: rebuild the level and replay this attempt's shots but the last (taken under the lock, so a shot clicked mid-step counts). */
+  /**
+   * Undo: back to the moment the last shot went in, from its checkpoint, or else by rebuilding the level and
+   * replaying this attempt's shots but the last (taken under the lock, so a shot clicked mid-step counts).
+   */
   function undo(): Promise<boolean> {
     loading++;
     return exclusive(async () => {
       // Not in a duel: its turns are the two players'.
       if (!driver || duel || driver.session.inputs.length === 0) return false;
+      const t0 = performance.now(), k = driver.session.inputs.length - 1, mark = marks.pop(k);
+      if (mark) {
+        restoreMark(mark);
+        mark.dispose();
+        handle.counts.undo = (handle.counts.undo ?? 0) + 1;
+        handle.undone = { mode: 'checkpoint', ms: performance.now() - t0 };
+        banner(k ? `Back to shot ${k}` : 'Back to the start');
+        return true;
+      }
+      dropMarks(0);
+      bombSlots = [];
       const keep = driver.session.inputs.slice(0, -1).map((x) => ({ ...x.shot }));
       env.banner.textContent = keep.length ? `Undo: replaying ${shotsText(keep.length)}…` : 'Undo';
       env.banner.classList.remove('show', 'crack');
@@ -444,9 +493,61 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
         env.banner.classList.remove('hold');
       }
       handle.counts.undo = (handle.counts.undo ?? 0) + 1;
+      handle.undone = { mode: 'replay', ms: performance.now() - t0 };
       banner(keep.length ? `Back to shot ${keep.length}` : 'Back to the start');
       return true;
     }).finally(() => { loading--; });
+  }
+
+  /**
+   * Put the world back as `mark` holds it, in place: the engine and the driver (Driver.checkpoint), then
+   * what the page shows, as a load after an undo would set it up (loadNow with a line), but with the page
+   * state of that moment: Bullet Time's freeze, the goals as judged then, and the bombs still drawn as bombs.
+   */
+  function restoreMark(mark: UndoMark) {
+    mark.cp.restore();
+    reportedSteps = 0;
+    descs = driver.bodies;
+    collapse?.load(c);
+    source.reset(c.scene.bodies);
+    source.update(driver.snapshot, descs);
+    if (fxSlots) renderer.clearFx(0, fxSlots);
+    regrowBuf = regrowScales(c, Infinity, new Float32Array(c.meta.n));
+    renderer.setFx(0, structureTints(c), regrowBuf, false);
+    const s = driver.session;
+    s.crownLive.forEach((down, k) => { if (down) renderer.setFx(c.meta.crowns[k]!, { tint: TINT.crown, emissive: 0.9 }); });
+    s.heritageBroken.forEach((cracked, k) => { if (cracked) renderer.setFx(c.meta.heritage[k]!, { tint: TINT.heritage, emissive: 1 }); });
+    renderer.blasts.clear();
+    renderer.fuses.clear();
+    bombSlots = [...mark.bombs];
+    for (const i of bombSlots) { renderer.setFx(i, BOMB_FX); renderer.fuse(i); }
+    fxSlots = descs.length;
+    pacer.reset();
+    speed.reset();
+    tail.reset();
+    arrivals = newArrivals();
+    juice.reset();
+    follow.reset();
+    handle.result = null;
+    ending = false;
+    handle.resultShownAt = null;
+    env.result.classList.remove('show');
+    document.body.classList.remove('ended');
+    selected = nextSelection(c.def.rack, s.rackLeft, selected);
+    regrowT = null;
+    waiting = [];
+    frozen = mark.frozen;
+    aimed = null;
+    beads = null;
+    hover = null;
+    aimDirty = true;
+    crownsShown = s.crownLive.reduce((a, x) => a + x, 0);
+    handle.goals = mark.goals.map((g) => ({ ...g }));
+    handle.grade = mark.grade;
+    // A shot running again (a rapid shot's checkpoint is mid-flight): the physics loop picks it up.
+    physicsIdle.kick();
+    sync();
+    hooks.loaded?.(c, driver);
   }
 
   /**
@@ -829,6 +930,8 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
 
   function fireNow(shot: Shot) {
     setHover(null);
+    // The world as this shot goes in, for undo (before the fire: the shot is not in it yet).
+    takeMark();
     const fb = driver.fire(shot);
     if (duel) { duel.fired(shot); turnStart = performance.now(); syncDuel(); swing.grab(); }
     // A shot fired while frozen (Bullet Time) has cut in at the frozen step: the world runs on with it.
@@ -898,6 +1001,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
   handle.load = (id) => load(levelIndex(id)).catch(fail);
   handle.retry = () => load(levelIdx, true).catch(fail);
   handle.undo = () => undo().catch((e) => { fail(e); return false; });
+  handle.undoMemory = () => marks.held;
   handle.line = () => driver.session.inputs.map((i) => ({ ...i.shot }));
   handle.state = () => ({ step: driver.engine.stepIndex, phase: driver.session.phase, strokes: driver.session.strokes, heritageBroken: sum(driver.session.heritageBroken), hash: snapshotHash(driver.snapshot) });
   // Between steps and loads, so neither a step nor a load's dispose runs under the read.
@@ -905,7 +1009,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
   handle.replay = async (shots) => {
     const e = makeEngine(kind, c, device, livePairs);
     try {
-      const r = await runSession(e, c, shots, { ...driverOptions(kind), perStep: env.perStep?.(c) });
+      const r = await runSession(e, c, shots, { ...driverOptions(kind), perStep: env.perStep?.(c) ?? undefined });
       return { step: r.steps, phase: r.session.phase, strokes: r.session.strokes, heritageBroken: sum(r.session.heritageBroken), hash: snapshotHash(r.snapshot) };
     } finally { e.dispose(); }
   };
