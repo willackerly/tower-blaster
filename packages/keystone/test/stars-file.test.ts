@@ -10,7 +10,7 @@ const FILE = new URL('../src/stars.json', import.meta.url);
 describe('stars.json', () => {
   it('carries B1 and B2 as cast (the values the levels held inline before)', () => {
     expect(B1.stars).toEqual({ metric: 'collapse', t2: 0.7, t3: 0.94, best: 0.9583025426945702, castOn: 'apple metal-3', engine: 'gpu', hash: '18cf21360845bb8b', n: 372, seed: 1 });
-    expect(B2.stars).toEqual({ metric: 'score', t2: 770, t3: 3200, best: 3805, castOn: 'apple metal-3', engine: 'gpu', hash: 'c75fbd9832e6814b', n: 186, seed: 1 });
+    expect(B2.stars).toEqual({ metric: 'score', t2: 770, t3: 3000, best: 3805, castOn: 'apple metal-3', engine: 'gpu', hash: 'c75fbd9832e6814b', n: 236, seed: 1 });
   });
   it('every entry names a big level and matches its hash (a stale cast would silently not show)', () => {
     for (const [id, s] of Object.entries(STARS_FILE)) {
@@ -33,6 +33,7 @@ describe('checkStars', () => {
   it('accepts minimal and full stars', () => {
     expect(checkStars(ok)).toBe(ok);
     expect(() => checkStars(B1.stars)).not.toThrow();
+    expect(() => checkStars({ ...ok, waived: ['skill'] })).not.toThrow();
   });
   it.each([
     [null, /must be an object/],
@@ -43,6 +44,9 @@ describe('checkStars', () => {
     [{ ...ok, best: null }, /best must be a finite number when given/],
     [{ ...ok, hash: 42 }, /hash must be a string when given/],
     [{ ...ok, note: 'x' }, /unknown field note/],
+    [{ ...ok, waived: 'skill' }, /waived must be a non-empty list/],
+    [{ ...ok, waived: [] }, /waived must be a non-empty list/],
+    [{ ...ok, waived: [''] }, /waived must be a non-empty list/],
     [{ ...ok, t3: 0.4 }, /t3 \(0.4\) is easier than t2/],
     [{ metric: 'skyline', t2: 0.5, t3: 0.6 }, /t3 \(0.6\) is easier than t2/],
   ])('refuses %j', (x, msg) => {

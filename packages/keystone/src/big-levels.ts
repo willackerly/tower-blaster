@@ -99,7 +99,10 @@ export function cityLevel(id: string, name: string, material: MaterialName, F: n
 export const B3: LevelDef = cityLevel('B3', 'Ten Thousand', 'stone', 5, 3, ['w-bomb', 'w-bomb', 'w-bomb'], {
   objective: { kind: 'collapse', min: 0.4 },
   weapons: { bomb: BOMB },
-  // Uncast: its cast (pnpm keystone:cast B3 --budget-min 200 --stars-into packages/keystone/src/stars.json) adds it to stars.json.
+  // Cast on the M5 Max (Metal): seeds 1 (a406519) and 2 (23c0df8), pooled with T3 from the best line found
+  // (--t3 best, seed 1's cloud extended to 100 nudges) and the skill gate's shortfall (0.082 of 0.100) waived
+  // (docs/game/levels/B3.md: Will delegated the call, 2026-11-06). The showcase (solutions.ace) is seed 1's best line: its 50 nudges ended at collapse 0.375 to 0.794.
+  solutions: { ace: readShots('w-bomb.471.8.146.696.89_w-bomb.394.8.-89.565.70_w-bomb.381.8.-183.645.78') },
   ...castOf('B3'),
 });
 
@@ -151,8 +154,8 @@ export function cathedralLevel(id: string, rack: RackItem[], extra: Partial<Leve
 export const B2: LevelDef = cathedralLevel('B2', ['w-bomb', 'w-ram', 'w-ram'], {
   weapons: { bomb: BOMB, ram: RAM },
   // Cast on the M5 Max (Metal) at main 29fc193, short recipe, seed 1, metric score: every gate passed (103 min).
-  // Seed 2 is queued as the recast; its stars will be pooled with these. docs/game/levels/B2.md.
-  // The showcase (solutions.ace) is seed 1's best line: its 50 nudges ended at score 1,791 to 3,711.
+  // Its cloud was extended to 100 nudges (--extend, 2026-11-06: T3 3,200 -> 3,000). docs/game/levels/B2.md.
+  // The showcase (solutions.ace) is seed 1's best line: its 100 nudges ended at score -10,010 to 3,711.
   solutions: { ace: readShots('w-bomb.500.8.155.173.79_w-ram.711.8.273.259.95_w-ram.528.8.216.481.80') },
   ...castOf('B2'),
 });

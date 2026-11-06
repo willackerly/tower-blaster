@@ -27,10 +27,13 @@ import { bootstrapCI, pairedPercentDiff, quantile, verdict } from '@tb/metrics';
 import { lookAt, multiply, perspective, type V3 } from './math.ts';
 import { Renderer, type FrameParams, type RendererOptions } from './renderer.ts';
 import { SnapshotSource } from './source.ts';
-import { LOOKS, realLook } from './look.ts';
+import { LOOKS, REAL_POLISH_OFF, realLook } from './look.ts';
 import { hallInside, hallScaled, OLYMPIA } from './hall.ts';
 import { CTL, MAX_INJECT } from './sparks.ts';
 import { SEG } from './cull.ts';
+import { buildWorld, rng, type WorldName } from './bench-world.ts';
+
+export { buildWorld, type World, type WorldName } from './bench-world.ts';
 
 /** ice and real-ice: every body this close to the view's focus is ice (m): a wall of it in the middle of the view. */
 const ICE_RADIUS = 4;
@@ -53,16 +56,15 @@ export interface RenderBenchOptions {
 }
 
 export const DEFAULT_RENDER_BENCH: RenderBenchOptions = {
-  width: 2560, height: 1440, counts: [10_000, 100_000], worlds: ['near', 'far'], variants: ['full', 'no-shadow', 'no-post', 'no-sparks', 'no-heat', 'no-ao', 'no-seam', 'fan', 'cube', 'flat-fan', 'flat-cube', 'real', 'real-no-stone', 'real-stone-off', 'real-step1', 'real-no-lod', 'real-no-floor-sky', 'real-flat-ground', 'real-no-pcss', 'real-4096', 'real-dust', 'real-hall', 'real-hall-out', 'real-bare-hills', 'real-plain-dust', 'real-rocks', 'blasts', 'real-blasts', 'ice-one', 'ice', 'real-ice'],
+  width: 2560, height: 1440, counts: [10_000, 100_000], worlds: ['near', 'far'], variants: ['full', 'no-shadow', 'no-post', 'no-sparks', 'no-heat', 'no-ao', 'no-seam', 'fan', 'cube', 'flat-fan', 'flat-cube', 'real', 'real-no-stone', 'real-stone-off', 'real-step1', 'real-no-lod', 'real-no-floor-sky', 'real-flat-ground', 'real-no-pcss', 'real-4096', 'real-dust', 'real-hall', 'real-hall-out', 'real-bare-hills', 'real-plain-dust', 'real-rocks', 'blasts', 'real-blasts', 'ice-one', 'ice', 'real-ice', 'real-polish-off'],
   warmup: 30, batches: 10, batchFrames: 30, profiledFrames: 100,
 };
 
 export const QUICK_RENDER_BENCH: RenderBenchOptions = {
-  width: 320, height: 180, counts: [2000], worlds: ['near', 'far'], variants: ['full', 'no-shadow', 'no-post', 'no-sparks', 'no-heat', 'no-ao', 'no-seam', 'fan', 'cube', 'flat-fan', 'flat-cube', 'real', 'real-no-stone', 'real-stone-off', 'real-step1', 'real-no-lod', 'real-no-floor-sky', 'real-flat-ground', 'real-no-pcss', 'real-4096', 'real-dust', 'real-hall', 'real-hall-out', 'real-bare-hills', 'real-plain-dust', 'real-rocks', 'blasts', 'real-blasts', 'ice-one', 'ice', 'real-ice'],
+  width: 320, height: 180, counts: [2000], worlds: ['near', 'far'], variants: ['full', 'no-shadow', 'no-post', 'no-sparks', 'no-heat', 'no-ao', 'no-seam', 'fan', 'cube', 'flat-fan', 'flat-cube', 'real', 'real-no-stone', 'real-stone-off', 'real-step1', 'real-no-lod', 'real-no-floor-sky', 'real-flat-ground', 'real-no-pcss', 'real-4096', 'real-dust', 'real-hall', 'real-hall-out', 'real-bare-hills', 'real-plain-dust', 'real-rocks', 'blasts', 'real-blasts', 'ice-one', 'ice', 'real-ice', 'real-polish-off'],
   warmup: 1, batches: 2, batchFrames: 2, profiledFrames: 2,
 };
 
-export type WorldName = 'near' | 'far';
 /**
  * full: the defaults (cube scene, fan shadow). no-shadow, no-post,
  * no-sparks: one pass off (in these still worlds no spark lives, so
@@ -116,7 +118,7 @@ export type WorldName = 'near' | 'far';
  * (a wall of it filling the middle of the view), so ice against ice-one is
  * the ice shading's own cost per pixel of ice.
  */
-export type VariantName = 'full' | 'no-shadow' | 'no-post' | 'no-sparks' | 'no-heat' | 'no-ao' | 'no-seam' | 'fan' | 'cube' | 'flat-fan' | 'flat-cube' | 'real' | 'real-no-stone' | 'real-stone-off' | 'real-step1' | 'real-no-lod' | 'real-no-floor-sky' | 'real-flat-ground' | 'real-no-pcss' | 'real-4096' | 'real-dust' | 'real-hall' | 'real-hall-out' | 'real-bare-hills' | 'real-plain-dust' | 'real-rocks' | 'blasts' | 'real-blasts' | 'ice-one' | 'ice' | 'real-ice';
+export type VariantName = 'full' | 'no-shadow' | 'no-post' | 'no-sparks' | 'no-heat' | 'no-ao' | 'no-seam' | 'fan' | 'cube' | 'flat-fan' | 'flat-cube' | 'real' | 'real-no-stone' | 'real-stone-off' | 'real-step1' | 'real-no-lod' | 'real-no-floor-sky' | 'real-flat-ground' | 'real-no-pcss' | 'real-4096' | 'real-dust' | 'real-hall' | 'real-hall-out' | 'real-bare-hills' | 'real-plain-dust' | 'real-rocks' | 'blasts' | 'real-blasts' | 'ice-one' | 'ice' | 'real-ice' | 'real-polish-off';
 
 function variantOptions(v: VariantName): RendererOptions {
   if (v === 'fan' || v === 'flat-fan') return { boxPath: 'fan', flatBoxes: v === 'flat-fan' };
@@ -132,8 +134,6 @@ function variantOptions(v: VariantName): RendererOptions {
   return {};
 }
 
-interface World { descs: BodyDesc[]; eye: V3; target: V3; center: V3; radius: number }
-
 /** The largest hall size (Olympia times a multiple of 0.25, down to 0.25) with the eye 10% closer in than it still outside. */
 export function hallSizeOutside(eye: V3): number {
   let s = hallSizeFor(eye);
@@ -146,53 +146,6 @@ export function hallSizeFor(eye: V3): number {
   let s = 1;
   while (!hallInside(hallScaled(OLYMPIA, s), [eye[0] * 1.1, eye[1] * 1.1, eye[2] * 1.1])) s += 0.25;
   return s;
-}
-
-function rng(seed: number) {
-  let a = seed >>> 0;
-  return () => {
-    a = (a + 0x6d2b79f5) >>> 0;
-    let t = Math.imul(a ^ (a >>> 15), a | 1);
-    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-}
-
-function cube(pos: V3, rot: [number, number, number, number] = [0, 0, 0, 1], tag = 0): BodyDesc {
-  return { shape: { kind: 'box', half: [0.5, 0.5, 0.5] }, pos, rot, linVel: [0, 0, 0], angVel: [0, 0, 0], density: 1, friction: 0.5, restitution: 0, tag };
-}
-
-/**
- * near: a rubble heap of randomly rotated unit cubes (a hemisphere at about
- * 60% packing) filling the view from close by: big cubes, heavy overdraw.
- * far: a city of 10 x 10 x 10 towers seen from where a cube is about 6 px
- * at 1440p: tiny triangles, the micro-triangle risk.
- */
-export function buildWorld(name: WorldName, n: number, seed = 1): World {
-  const r = rng(seed);
-  const descs: BodyDesc[] = [];
-  if (name === 'near') {
-    const radius = Math.cbrt((3 * (n / 0.6)) / (2 * Math.PI));
-    while (descs.length < n) {
-      const p: V3 = [(r() * 2 - 1) * radius, r() * radius, (r() * 2 - 1) * radius];
-      if (Math.hypot(...p) > radius) continue;
-      const q = [r() - 0.5, r() - 0.5, r() - 0.5, r() - 0.5];
-      const l = Math.hypot(...q);
-      descs.push(cube([p[0], p[1] + 0.5, p[2]], q.map((x) => x / l) as [number, number, number, number], descs.length % 7));
-    }
-    return { descs, eye: [radius * 1.25, radius * 0.9, radius * 1.4], target: [0, radius * 0.2, 0], center: [0, radius * 0.4, 0], radius: radius * 1.2 };
-  }
-  const towers = Math.max(1, Math.round(n / 1000));
-  const side = Math.ceil(Math.sqrt(towers));
-  const pitch = 20;
-  for (let t = 0; t < towers && descs.length < n; t++) {
-    const tx = (t % side - (side - 1) / 2) * pitch, tz = (Math.floor(t / side) - (side - 1) / 2) * pitch;
-    for (let y = 0; y < 10; y++) for (let x = 0; x < 10; x++) for (let z = 0; z < 10; z++) if (descs.length < n) descs.push(cube([tx + x - 4.5, y + 0.5, tz + z - 4.5], undefined, t));
-  }
-  const extent = side * pitch;
-  // A cube is about 6 px at 1440p and fov 0.9 from 250 m.
-  const d = 250;
-  return { descs, eye: [d * 0.62, d * 0.45, d * 0.64], target: [0, 5, 0], center: [0, 5, 0], radius: extent * 0.75 };
 }
 
 export interface RenderCase {
@@ -244,6 +197,7 @@ export async function runRenderBench(opts: Partial<RenderBenchOptions> = {}): Pr
     if (variant === 'real-bare-hills') rend.look = realLook({ hills: 1.5, hillCover: 0, hillRidges: 1 });
     if (variant === 'real-plain-dust') rend.look = realLook({ dustErode: 0, dustThin: 0, dustSkirt: 0 });
     if (variant === 'real-rocks') rend.look = realLook({ rocks: 0.6 });
+    if (variant === 'real-polish-off') rend.look = realLook(REAL_POLISH_OFF);
     rend.toggles = { shadow: variant !== 'no-shadow', post: variant !== 'no-post', sparks: variant !== 'no-sparks', trail: true, heat: variant !== 'no-heat', ao: variant !== 'no-ao', blasts: true };
     return rend;
   });
@@ -341,7 +295,7 @@ export function renderBenchMarkdown(r: RenderBenchResult, header: string): strin
     ...r.cases.map((c) => `| ${c.world} | ${c.bodies.toLocaleString('en-US')} | ${c.variant} | ${ms(c.frameMs)} | ${ms(c.frameCI[0])}-${ms(c.frameCI[1])} | ${ms(c.gpuP50)} | ${ms(c.gpuP95)} | ${ms(c.gpuSumP50)} | ${passNames.map((p) => ms(c.passes[p])).join(' | ')} | ${c.drawn.boxes.toLocaleString('en-US')} | ${c.drawn.farBoxes.toLocaleString('en-US')} | ${c.drawn.iceBoxes.toLocaleString('en-US')} | ${c.drawn.shadowBoxes.toLocaleString('en-US')} | ${c.particles.toLocaleString('en-US')} |`),
     '',
     'Marginal cost: change in frame time when the thing is switched off (paired over interleaved batches; median and 95% CI; "n.s." when the interval includes 0):', '',
-    '| World | Bodies | Without shadow | Without post (bloom + AgX) | Without sparks | Without heat glow | Without AO | Without seam cavity | Fan in both passes | Cube in both passes | Flat shading: cube vs fan | Real look instead of candy | Stone textures (real vs real without) | Unused stone code (texture 0 vs compiled out) | Step 3 shading without stone (vs step 1 blocks) | Stone level of detail (real vs every box with stone code) | Floor sky view cones | Ground material and hills | Soft shadows (real vs 3x3 taps) | 4096 shadow map (vs 2048) | Impact dust and chips, steady shower (vs none alive) | Hall (real inside it vs real) | Hall from outside (vs real) | Hills: scrub, two ridges, 2.2 deg (real vs bare 1.5 deg) | Dust shape: erode, thin, skirt (real-dust vs knobs off) | Small rocks 0.6 (vs none) | Ice pass, one ice block (split pass fixed cost) | Ice shading, a wall of it (vs one block) | Ice in the real look (vs real) |', '|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|',
+    '| World | Bodies | Without shadow | Without post (bloom + AgX) | Without sparks | Without heat glow | Without AO | Without seam cavity | Fan in both passes | Cube in both passes | Flat shading: cube vs fan | Real look instead of candy | Stone textures (real vs real without) | Unused stone code (texture 0 vs compiled out) | Step 3 shading without stone (vs step 1 blocks) | Stone level of detail (real vs every box with stone code) | Floor sky view cones | Ground material and hills | Soft shadows (real vs 3x3 taps) | 4096 shadow map (vs 2048) | Impact dust and chips, steady shower (vs none alive) | Hall (real inside it vs real) | Hall from outside (vs real) | Hills: scrub, two ridges, 2.2 deg (real vs bare 1.5 deg) | Dust shape: erode, thin, skirt (real-dust vs knobs off) | Small rocks 0.6 (vs none) | Ice pass, one ice block (split pass fixed cost) | Ice shading, a wall of it (vs one block) | Ice in the real look (vs real) | Step 7 polish: steel ball, grain, tone map (real vs real-polish-off) |', '|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|',
   ];
   const groups = new Map<string, RenderCase[]>();
   for (const c of r.cases) groups.set(`${c.world}:${c.bodies}`, [...(groups.get(`${c.world}:${c.bodies}`) ?? []), c]);
@@ -354,7 +308,7 @@ export function renderBenchMarkdown(r: RenderBenchResult, header: string): strin
       const pct = (x: number) => `${x >= 0 ? '+' : ''}${(100 * x).toFixed(1)}%`;
       return `${pct(d.estimate)} [${pct(d.lo)}, ${pct(d.hi)}]${verdict(d) === 'no-difference' ? ' n.s.' : ''}`;
     };
-    lines.push(`| ${cs[0]!.world} | ${cs[0]!.bodies.toLocaleString('en-US')} | ${diff(by('no-shadow'), by('full'))} | ${diff(by('no-post'), by('full'))} | ${diff(by('no-sparks'), by('full'))} | ${diff(by('no-heat'), by('full'))} | ${diff(by('no-ao'), by('full'))} | ${diff(by('no-seam'), by('full'))} | ${diff(by('fan'), by('full'))} | ${diff(by('cube'), by('full'))} | ${diff(by('flat-cube'), by('flat-fan'))} | ${diff(by('real'), by('full'))} | ${diff(by('real'), by('real-no-stone'))} | ${diff(by('real-no-stone'), by('real-stone-off'))} | ${diff(by('real-stone-off'), by('real-step1'))} | ${diff(by('real'), by('real-no-lod'))} | ${diff(by('real'), by('real-no-floor-sky'))} | ${diff(by('real'), by('real-flat-ground'))} | ${diff(by('real'), by('real-no-pcss'))} | ${diff(by('real-4096'), by('real'))} | ${diff(by('real-dust'), by('real'))} | ${diff(by('real-hall'), by('real'))} | ${diff(by('real-hall-out'), by('real'))} | ${diff(by('real'), by('real-bare-hills'))} | ${diff(by('real-dust'), by('real-plain-dust'))} | ${diff(by('real-rocks'), by('real'))} | ${diff(by('ice-one'), by('full'))} | ${diff(by('ice'), by('ice-one'))} | ${diff(by('real-ice'), by('real'))} |`);
+    lines.push(`| ${cs[0]!.world} | ${cs[0]!.bodies.toLocaleString('en-US')} | ${diff(by('no-shadow'), by('full'))} | ${diff(by('no-post'), by('full'))} | ${diff(by('no-sparks'), by('full'))} | ${diff(by('no-heat'), by('full'))} | ${diff(by('no-ao'), by('full'))} | ${diff(by('no-seam'), by('full'))} | ${diff(by('fan'), by('full'))} | ${diff(by('cube'), by('full'))} | ${diff(by('flat-cube'), by('flat-fan'))} | ${diff(by('real'), by('full'))} | ${diff(by('real'), by('real-no-stone'))} | ${diff(by('real-no-stone'), by('real-stone-off'))} | ${diff(by('real-stone-off'), by('real-step1'))} | ${diff(by('real'), by('real-no-lod'))} | ${diff(by('real'), by('real-no-floor-sky'))} | ${diff(by('real'), by('real-flat-ground'))} | ${diff(by('real'), by('real-no-pcss'))} | ${diff(by('real-4096'), by('real'))} | ${diff(by('real-dust'), by('real'))} | ${diff(by('real-hall'), by('real'))} | ${diff(by('real-hall-out'), by('real'))} | ${diff(by('real'), by('real-bare-hills'))} | ${diff(by('real-dust'), by('real-plain-dust'))} | ${diff(by('real-rocks'), by('real'))} | ${diff(by('ice-one'), by('full'))} | ${diff(by('ice'), by('ice-one'))} | ${diff(by('real-ice'), by('real'))} | ${diff(by('real'), by('real-polish-off'))} |`);
   }
   return lines.join('\n');
 }

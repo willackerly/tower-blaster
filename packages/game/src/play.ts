@@ -7,7 +7,7 @@
 // its own elements; the viewer calls it for rules=keystone, with hooks for its
 // dev panels (docs/design/viewer-superset.md, step C).
 import { type BodyDesc, type EngineHealth, limitsHit, type PhysicsEngine, type Vec3 } from '@tb/engine-api';
-import { type RackItem, type CompiledLevel, compileLevel, crackSeed, Driver, type DriverCheckpoint, Duel, type DuelDef, DEFAULT_TURN_SECONDS, type Feedback, type Goal, goalMet, type Player, type Grade, gradeOf, type LevelDef, type LevelScore, type LotSheet, type PerStep, playShots, rapidDue, roundFacts, runSession, selectGroups, type Shot, isIcePiece, snapshotHash, TIER_NAMES } from '@tb/keystone';
+import { type RackItem, type CompiledLevel, compileLevel, crackSeed, Driver, type DriverCheckpoint, Duel, type DuelDef, DEFAULT_TURN_SECONDS, type Feedback, type Footprint, type Goal, goalMet, type Player, type Grade, gradeOf, type LevelDef, type LevelScore, type LotSheet, type PerStep, playShots, rapidDue, roundFacts, runSession, selectFootprints, selectGroups, type Shot, isIcePiece, snapshotHash, TIER_NAMES } from '@tb/keystone';
 import { clampPitch, eyeOf, type Orbit, rayThrough, viewProj } from '@tb/render/camera';
 import type { FxOptions, PixelStats, Renderer, SnapshotSource } from '@tb/render';
 import type { HostStats } from '@tb/audio';
@@ -27,6 +27,7 @@ import { CameraJuice, contactJuice } from './juice.ts';
 import { alphaAt, arrived, DEFAULT_FEEL, newArrivals, Pacer, type PaceFeel, SLOW_TAG_BELOW, slowTag, SpeedMeter, TailSkip } from './pacing.ts';
 import { COST_WINDOW, runPhysics, wakeable } from './physics-loop.ts';
 import { CLEAR_SHARE, FrameGovernor } from './frame-rate.ts';
+import { canvasSize, type QualityState } from './quality.ts';
 import { UndoMarks } from './undo-marks.ts';
 import { ballFx, beadOverlay, BOMB_FX, CROWN_GLOW, PULL_HOVER, regrowDuration, regrowScales, structureMarks, structureTints, TINT, tintOf, tintWordOf } from './scene.ts';
 import { type GestureState, type TouchAction, TouchGestures, touchFace, type TouchMode } from './touch.ts';
@@ -109,8 +110,10 @@ export interface GameHandle {
   fireOpener(): boolean;
   /** Mute or unmute every sound (as key M toggles). */
   setMuted(muted: boolean): void;
-  /** The most device pixels per CSS pixel the canvas draws (2 by default; 1 is the front door's Fast sharpness). */
+  /** The most device pixels per CSS pixel the canvas draws (2 by default; 1 is the front door's Fast sharpness; the quality tier caps it too, low at 0.5). */
   maxDpr: number;
+  /** The quality tier in effect, why, and what the probe on load measured (quality.ts; null until the page has decided). */
+  quality: QualityState | null;
   /** Aim at normalized device coords with the selected ammo, as hovering there would. */
   aim(ndcX: number, ndcY: number): Aimed | null;
   /** The aim preview's blast-reach zone (a one-blast weapon aimed: where it would go off and how far it reaches), or null. */
@@ -132,6 +135,8 @@ export interface GameHandle {
   undo(): Promise<boolean>;
   /** How the last undo went back (a checkpoint restored, or the shots replayed) and its wall time, ms; null before one. */
   undone: { mode: 'checkpoint' | 'replay'; ms: number } | null;
+  /** The level being built ahead for Next (keystone.prefetch), and whether its pre-settle is done; null when none is. */
+  spare: { level: string; settled: boolean } | null;
   /** The undo checkpoints held now: one per shot still kept (null where none was), and their bytes (PaceFeel.undoMB caps them). */
   undoMemory(): { marks: number; bytes: number };
   capture(keepPixels?: boolean): Promise<PixelStats | null>;
@@ -196,6 +201,8 @@ const noPhases = (): LoadPhases => ({ check: 0, compile: 0, init: 0, presettle: 
  * queueing behind all its steps. The state it leaves is the same as an unpaced reset's (a replay's).
  */
 export const PRESETTLE_PACE = { batchMs: 8 } as const;
+/** When the level Next opens is built ahead (KeystoneEnv.prefetch). */
+export type PrefetchMode = 'aim' | 'card' | 'off';
 /** What a page and its tests see of a duel. */
 export interface DuelState { turn: Player; first: Player; sides: { name: string; share: number; points: number; shotsLeft: number; kingDown: boolean }[]; over: boolean; winner: Player | null; why: string; log: Player[] }
 export interface SoundState { mode: GameSoundMode; status: CollapseStatus; error: string; posted: number; stats: HostStats | null }
@@ -223,7 +230,7 @@ export function newGameHandle(): GameHandle {
   const none = (): SessionState => ({ step: 0, phase: 'loading', strokes: 0, heritageBroken: 0, hash: '' });
   return {
     status: 'loading', engine: '', level: '', phase: 'loading', ready: false, frozen: false, frames: 0, stepIndex: 0, strokes: 0, bodies: 0, collapse: 0, fast: false, pace: { timeScale: 1, speed: 1, tag: '', tailSkip: false, costMs: NaN }, view: { target: [0, 0, 0], distance: 0, yaw: 0, pitch: 0, following: false, jolt: 0, turning: false, cue: null, arcBeads: 0 }, input: { touch: false, gesture: 'idle', fingers: 0, aimed: null, power: 100, launch: 0 }, result: null, counts: {}, feel: { ...DEFAULT_FEEL }, resultShownAt: null, timing: { loadMs: 0, load: noPhases(), stepMs: [], moving: [], frameMs: [], costMs: [] }, draws: { drawn: 0, skipped: 0, decimating: false },
-    fire: () => false, bank: () => false, freeze: () => false, fireOpener: () => false, setMuted: () => {}, maxDpr: 2, aim: () => null, reach: null, select: () => false, load: async () => {}, retry: async () => {}, undo: async () => false, undone: null, undoMemory: () => ({ marks: 0, bytes: 0 }), capture: async () => null, firedLooks: () => [], marks: () => [], refreshMarks: () => {},
+    fire: () => false, bank: () => false, freeze: () => false, fireOpener: () => false, setMuted: () => {}, maxDpr: 2, quality: null, aim: () => null, reach: null, select: () => false, load: async () => {}, retry: async () => {}, undo: async () => false, undone: null, spare: null, undoMemory: () => ({ marks: 0, bytes: 0 }), capture: async () => null, firedLooks: () => [], marks: () => [], refreshMarks: () => {},
     state: none, line: () => [], replay: async () => none(), health: async () => null, pairsPerBody: 0, limitsHit: [], goals: [], grade: null, duel: null,
     sound: () => ({ mode: 'collapse', status: 'off', error: '', posted: 0, stats: null }),
     ice: () => ({ count: 0, cracks: [] }),
@@ -285,8 +292,9 @@ export interface KeystoneHooks {
 export interface KeystoneEnv {
   /** Takes the pointer (aim, fire, orbit, zoom); sized to its CSS box each frame unless offscreen. */
   canvas: HTMLCanvasElement;
-  /** Tests: the renderer draws 640x400 offscreen, and only for a capture. */
+  /** Tests: the renderer draws offscreen (offscreenSize, 640x400 when absent), and only for a capture. */
   offscreen: boolean;
+  offscreenSize?: [number, number];
   device: GPUDevice;
   renderer: Renderer;
   source: SnapshotSource;
@@ -296,11 +304,13 @@ export interface KeystoneEnv {
   result: HTMLElement;
   /**
    * Level starts (docs/game/level-start.md): the pre-settle's batch time in ms (keystone PresettlePace;
-   * default PRESETTLE_PACE's, 0 runs it in one go as before), and whether the next level is built while
-   * the result card shows (default on). URL keys keystone.loadpace and keystone.prefetch (params.ts loadOptions).
+   * default PRESETTLE_PACE's, 0 runs it in one go as before), and when the level Next opens is built
+   * ahead: from when this one loads, while the player aims ('aim', the default; held while a shot runs),
+   * from when the result card shows ('card'), or not at all ('off'). Unpaced, 'aim' is 'card': an unpaced
+   * pre-settle holds the frames. Offscreen (tests) the default is 'card'. URL keys keystone.loadpace and keystone.prefetch (params.ts loadOptions).
    */
   loadPaceMs?: number;
-  prefetch?: boolean;
+  prefetch?: PrefetchMode;
   /** How Retry restarts the level: from its start checkpoint, in place (default), or by building it again (keystone.retry). */
   retry?: 'checkpoint' | 'rebuild';
   /** Every level the page can load (handle.load), N, P and the result card's Next walking through them, and the one to start on. */
@@ -385,6 +395,9 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
   let levelIdx = env.start;
   const paceMs = env.loadPaceMs ?? PRESETTLE_PACE.batchMs, retryMode = env.retry ?? 'checkpoint';
   const resetOptions = { now: () => performance.now(), ...(paceMs > 0 ? { pace: { batchMs: paceMs } } : {}) };
+  // Offscreen pages (tests, probes) build ahead from the card unless asked: on SwiftShader every page
+  // building a second level as it opens would be minutes of CPU across the suite.
+  const prefetchMode: PrefetchMode = env.prefetch === 'off' ? 'off' : paceMs > 0 ? env.prefetch ?? (offscreen ? 'card' : 'aim') : 'card';
   handle.feel = feel;
   handle.engine = kind;
 
@@ -488,7 +501,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
   let fastHeld = false;
   let lastHud = '', crownsShown = 0;
   /** The level's lot sheet and its groups (selected once per load), or null. */
-  let lot: { sheet: LotSheet; goals: readonly Goal[]; groups: Record<string, Int32Array> } | null = null;
+  let lot: { sheet: LotSheet; goals: readonly Goal[]; groups: Record<string, Int32Array>; footprints: Record<string, Footprint> } | null = null;
   /** The duel being played (env.duel), and when the turn in the air was fired (its pace: DuelDef.turnSeconds). */
   let duel: Duel | null = null, turnStart = 0;
   /** Each side's arc on the ground (duel-view.ts arcBeads), made at load. */
@@ -496,7 +509,8 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
   /** Every crown is down: the round is known to be over, the card shows, and the rest of the settle runs at fast-forward. */
   let ending = false;
 
-  const aspect = () => (offscreen ? 640 / 400 : canvas.width / Math.max(1, canvas.height));
+  const [offW, offH] = env.offscreenSize ?? [640, 400];
+  const aspect = () => (offscreen ? offW / offH : canvas.width / Math.max(1, canvas.height));
   /** The aspect a view is framed for: a phone held upright frames the width too (the CSS box: the canvas may not be sized for it yet). */
   const viewAspect = () => (offscreen ? aspect() : canvas.clientWidth / Math.max(1, canvas.clientHeight));
   /** The player orbited, panned or zoomed: the follow camera lets go for this shot, the turn view's swing for this turn. */
@@ -659,7 +673,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
    * GPU's pre-settle spans many frames, and every frame reads the current level, so a level is built
    * aside and swaps in whole. `cancelled`, checked once the reset is done, drops it (its engine disposed).
    */
-  function build(i: number, cancelled: () => boolean = () => false): { engine: PhysicsEngine; built: Promise<Built | null> } {
+  function build(i: number, cancelled: () => boolean = () => false, gate?: () => Promise<void>): { engine: PhysicsEngine; built: Promise<Built | null> } {
     const t0 = performance.now();
     const def = levels[i]!, pairs = room.get(def);
     const next = compileLevel(def);
@@ -668,7 +682,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     const phases: LoadPhases = { ...noPhases(), compile: performance.now() - t0 };
     const built = (async () => {
       try {
-        await nextDriver.reset(resetOptions);
+        await nextDriver.reset(gate && resetOptions.pace ? { ...resetOptions, pace: { ...resetOptions.pace, gate } } : resetOptions);
       } catch (e) {
         nextEngine.dispose();
         if (cancelled()) return null;
@@ -688,18 +702,36 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
    */
   let spare: { i: number; def: LevelDef; pairs: number | undefined; engine: PhysicsEngine; built: Promise<Built | null>; dropped: boolean } | null = null;
   function prefetch(i: number): void {
-    if (env.prefetch === false) return;
+    if (prefetchMode === 'off') return;
     if (i < 0 || i >= levels.length || i === levelIdx) return;
     const def = levels[i]!, pairs = room.get(def);
     if (spare && spare.i === i && spare.def === def && spare.pairs === pairs) return;
     dropSpare();
     const s = { i, def, pairs, dropped: false } as NonNullable<typeof spare>;
-    const b = build(i, () => s.dropped);
+    const b = build(i, () => s.dropped, () => prefetchGate(s));
     s.engine = b.engine;
     // A failed prefetch is not the player's error: the load that wants the level builds it again and reports.
     s.built = b.built.catch((e) => { console.warn(`prefetch of ${def.id} failed: ${(e as Error).message}`); return null; });
     spare = s;
+    handle.spare = { level: def.id, settled: false };
+    void s.built.then((x) => { if (spare === s && x) handle.spare = { level: def.id, settled: true }; });
     handle.counts.prefetch = (handle.counts.prefetch ?? 0) + 1;
+  }
+  /**
+   * Holds a prefetch's next batch while the live level runs a shot (its steps and the prefetch's would share
+   * the one GPU queue), until the round is ending (the card is up) or a load waits on the spare; a dropped
+   * spare goes on at once, to its end (its engine is disposed).
+   */
+  async function prefetchGate(s: { dropped: boolean }): Promise<void> {
+    const held = () => !s.dropped && loading === 0 && !ending && handle.result === null && driver.session.phase === 'running';
+    if (!held()) return;
+    handle.counts.prefetchHeld = (handle.counts.prefetchHeld ?? 0) + 1;
+    while (held()) await new Promise<void>((r) => requestAnimationFrame(() => r()));
+  }
+  /** Build what Next opens (a duel's Rematch: its other level), if there is one. */
+  function prefetchNext(): void {
+    if (duel) prefetch(1 - levelIdx);
+    else if (step(levelIdx, 1)) prefetch(levelIdx + 1);
   }
   function dropSpare(): void {
     if (!spare) return;
@@ -707,6 +739,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     // Disposed now, so a pre-settle still running stops at its next step (it then resolves null).
     spare.engine.dispose();
     spare = null;
+    handle.spare = null;
   }
   /**
    * The spare for level i if it is the one a load would build now, taken (awaited if still settling); else
@@ -718,6 +751,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     if (s.i !== i) { if (i !== levelIdx) dropSpare(); return null; }
     if (s.def !== levels[i] || s.pairs !== room.get(levels[i]!)) { dropSpare(); return null; }
     spare = null;
+    handle.spare = null;
     return s.built;
   }
 
@@ -847,7 +881,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     aimDirty = true;
     crownsShown = driver.session.crownLive.reduce((a, x) => a + x, 0);
     const ls = env.lotSheet?.(c) ?? null;
-    lot = ls && { sheet: ls.sheet, goals: ls.goals, groups: selectGroups(c, ls.sheet.groups ?? {}) };
+    lot = ls && { sheet: ls.sheet, goals: ls.goals, groups: selectGroups(c, ls.sheet.groups ?? {}), footprints: selectFootprints(c, ls.sheet) };
     handle.goals = (ls?.goals ?? []).map((g) => ({ id: g.id, text: g.text, met: false, before: ls!.before.includes(g.id) }));
     handle.grade = null;
     // After an undo the goals stand as at the kept shots' settle, as play would have judged them there.
@@ -856,6 +890,8 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     sync();
     phases.swap = performance.now() - ts;
     handle.timing.loadMs = performance.now() - t0;
+    // Build what Next opens while the player aims at this one (it waits while a shot runs).
+    if (prefetchMode === 'aim') prefetchNext();
     hooks.loaded?.(c, driver);
   }
 
@@ -919,7 +955,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
   /** The lot sheet's goals and grade judged on the round as it stands (after a settle, and at its end). */
   function judgeGoals() {
     if (!lot) return;
-    const f = roundFacts(c, driver.session, driver.snapshot, lot.groups);
+    const f = roundFacts(c, driver.session, driver.snapshot, lot.groups, lot.footprints);
     handle.goals = lot.goals.map((g, k) => ({ ...handle.goals[k]!, met: goalMetSafe(g, f) }));
     handle.grade = gradeOf(lot.sheet.grades, f);
   }
@@ -958,7 +994,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
             pacer.release();
             showResult(null);
             // The card is up while the settle finishes at fast-forward: start building what Next opens now.
-            if (step(levelIdx, 1)) prefetch(levelIdx + 1);
+            prefetchNext();
           }
           break;
         case 'blast': {
@@ -1018,9 +1054,8 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
           hooks.ended?.(c, f.score, driver);
           // The round is over: check its limits once this step is done (checkRound).
           void exclusive(checkRound).catch(fail);
-          // While the card shows, build what Next (a duel's Rematch) opens, so it swaps in at once.
-          if (duel) prefetch(1 - levelIdx);
-          else if (step(levelIdx, 1)) prefetch(levelIdx + 1);
+          // While the card shows, build what Next (a duel's Rematch) opens, so it swaps in at once (if not already).
+          prefetchNext();
           break;
       }
     }
@@ -1109,6 +1144,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     const timed = shot.after !== undefined && driver.session.strokes > 0;
     if (!timed && !aimable()) return false;
     if (shot.ammo === 'pull' && driver.session.pullRefusal(shot.body) !== null) return false;
+    if (shot.ammo === 'plunger' && driver.session.plungerRefusal(shot) !== null) return false;
     // Without rapid fire a click mid-step is refused, as before; with it, or for a line's timed shot, it waits for the step.
     if (stepping || timed || waiting.length) {
       if (stepping && !timed && !feel.rapid && !frozen) return false;
@@ -1127,7 +1163,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
       if (s.phase !== 'aiming' && s.phase !== 'running') { waiting = []; return; }
       if (next.after !== undefined && s.phase === 'running' && !rapidDue(driver, next)) return;
       waiting.shift();
-      if (!s.canFire(next.ammo) || (next.ammo === 'pull' && s.pullRefusal(next.body) !== null) || duel?.refuse(next)) continue;
+      if (!s.canFire(next.ammo) || (next.ammo === 'pull' && s.pullRefusal(next.body) !== null) || (next.ammo === 'plunger' && s.plungerRefusal(next) !== null) || duel?.refuse(next)) continue;
       fireNow(next);
     }
   }
@@ -1400,8 +1436,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
   addEventListener('keyup', (e) => { if (e.key === ' ') fastHeld = false; });
 
   function resize() {
-    const dpr = Math.min(devicePixelRatio || 1, handle.maxDpr);
-    const w = Math.max(1, Math.floor(canvas.clientWidth * dpr)), h = Math.max(1, Math.floor(canvas.clientHeight * dpr));
+    const [w, h] = canvasSize(canvas.clientWidth, canvas.clientHeight, devicePixelRatio, handle.maxDpr);
     if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }
   }
 
@@ -1448,6 +1483,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     // Physics is behind when the sim runs under the HUD's slow-motion speed without being asked to
     // (slow-motion juice, fast-forward); it has headroom when steps cost under CLEAR_SHARE of a step.
     const fast = fastHeld || handle.fast || ending || tail.on || turnUp(), costMs = median(handle.timing.costMs.slice(-COST_WINDOW));
+    frames.mode = feel.frames; // read live: the quality tier sets it when the URL does not
     const draw = frames.frame(now, { idle: !running, behind: running && !fast && !pacer.slowing && speed.speed(now) < SLOW_TAG_BELOW, clear: costMs < CLEAR_SHARE * 1000 * c.scene.dt }, !!want);
     handle.draws = { drawn: frames.drawn, skipped: frames.skipped, decimating: frames.decimating };
     if (draw) {

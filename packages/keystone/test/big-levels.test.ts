@@ -67,6 +67,16 @@ describe('big levels', () => {
     expect(B3.physics).toBeUndefined();
   });
 
+  it('B3 plays by its cast stars on collapse: their hash is the level\'s, the waivers are recorded, and the showcase line parses', () => {
+    const c = compileLevel(B3);
+    expect(B3.stars).toMatchObject({ metric: 'collapse', hash: c.hash, engine: 'gpu', waived: ['skill'] });
+    expect(castStars(c)).toBe(B3.stars);
+    expect(B3.stars!.t3).toBeGreaterThan(B3.stars!.t2);
+    expect(B3.stars!.t2).toBeGreaterThanOrEqual(B3.objective!.kind === 'collapse' ? B3.objective!.min : 0);
+    expect(B3.stars!.best).toBeGreaterThanOrEqual(B3.stars!.t3);
+    expect(B3.solutions?.ace?.map((s) => s.ammo)).toEqual(B3.rack);
+  });
+
   it('ids are unique across the series; lookups find either series in any case, and refuse unknown ids naming both', () => {
     const ids = SERIES.flat().map((d) => d.id);
     expect(new Set(ids).size).toBe(ids.length);

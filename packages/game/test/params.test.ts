@@ -3,7 +3,7 @@
 import { describe, expect, it } from 'vitest';
 import { B1, BIG_LEVELS, L1, L2, L3, seriesOf, type Shot, writeShots } from '@tb/keystone';
 import { compileLevel } from '@tb/keystone';
-import { DEFAULT_LEVEL, GAME_LOOK, levelRules, loadOptions, onEngine, parseGameParams, withRules, writeLevelRules } from '../src/params.ts';
+import { DEFAULT_LEVEL, GAME_LOOK, levelRules, loadOptions, offscreenOf, onEngine, parseGameParams, withRules, writeLevelRules } from '../src/params.ts';
 import { DEFAULT_FEEL } from '../src/pacing.ts';
 
 const parse = (search: string) => parseGameParams(new URLSearchParams(search));
@@ -11,7 +11,7 @@ const par = L1.solutions!.par as Shot[];
 
 describe('game URL keys', () => {
   it('a bare URL opens the slice\'s first level (B1) on the GPU solver in the maquette look, no juice and no line', () => {
-    expect(parse('')).toEqual({ level: B1, rack: null, rules: {}, engine: 'gpu', feel: DEFAULT_FEEL, look: GAME_LOOK, shots: null, duel: null, offscreen: false, sound: 'collapse', impactsDb: 0 });
+    expect(parse('')).toEqual({ level: B1, rack: null, rules: {}, engine: 'gpu', feel: DEFAULT_FEEL, look: GAME_LOOK, shots: null, duel: null, offscreen: false, offscreenSize: [640, 400], sound: 'collapse', impactsDb: 0 });
     expect(DEFAULT_LEVEL).toBe('B1');
     expect(seriesOf(DEFAULT_LEVEL)).toBe(BIG_LEVELS);
     // The chamber levels stay one key away, with par scoring.
@@ -22,7 +22,7 @@ describe('game URL keys', () => {
 
   it('reads every key, a level in any case and the viewer\'s name for the GPU solver, and leaves other keys alone', () => {
     expect(parse(`?level=l3&engine=rapier&keystone.hitstop=1&keystone.slowmo=0&look=real&real.sunElevation=6&offscreen=1&scenario=S4&cam=1,2,3,0,0,9`)).toEqual({
-      level: L3, rack: null, rules: {}, engine: 'rapier', feel: { ...DEFAULT_FEEL, hitStop: true }, look: 'real', shots: null, duel: null, offscreen: true, sound: 'collapse', impactsDb: 0,
+      level: L3, rack: null, rules: {}, engine: 'rapier', feel: { ...DEFAULT_FEEL, hitStop: true }, look: 'real', shots: null, duel: null, offscreen: true, offscreenSize: [640, 400], sound: 'collapse', impactsDb: 0,
     });
     expect(parse('?keystone.sound=synth&keystone.impacts=-6')).toMatchObject({ sound: 'synth', impactsDb: -6 });
     expect(parse('?keystone.sound=classic')).toMatchObject({ sound: 'classic' });
@@ -76,6 +76,19 @@ describe('game URL keys', () => {
     expect(() => parse('?keystone.shots=')).toThrow(/keystone.shots is empty/);
     expect(() => parse('?level=L1&keystone.shots=drop.0.0')).toThrow(/fires 1 drop but L1's rack holds 0/);
     expect(() => parse('?keystone.shots=marble.0')).toThrow(/shot 1 .*marble takes 5 fields/);
+  });
+});
+
+describe('offscreen key', () => {
+  it('1 draws 640x400 offscreen, WxH that size (an agent playtest\'s phone or desktop); 0 or absent the page canvas', () => {
+    expect(offscreenOf(null)).toEqual({ offscreen: false, offscreenSize: [640, 400] });
+    expect(offscreenOf('0')).toEqual({ offscreen: false, offscreenSize: [640, 400] });
+    expect(offscreenOf('1')).toEqual({ offscreen: true, offscreenSize: [640, 400] });
+    expect(parse('?offscreen=390x844').offscreenSize).toEqual([390, 844]);
+    expect(parse('?offscreen=1280x800')).toMatchObject({ offscreen: true, offscreenSize: [1280, 800] });
+  });
+  it('refuses anything else, naming the key', () => {
+    for (const bad of ['', '2', 'x', '1280', '1280x', '63x400', '640x5000', '640X400', '-1x400']) expect(() => offscreenOf(bad)).toThrow(/^offscreen must be/);
   });
 });
 
@@ -147,17 +160,19 @@ describe('level start keys (loadOptions)', () => {
   it('leaves the defaults to playKeystone when absent', () => {
     expect(lo('')).toEqual({});
   });
-  it('reads keystone.loadpace (ms, 0 unpaced) and keystone.prefetch (0 or 1)', () => {
+  it('reads keystone.loadpace (ms, 0 unpaced) and keystone.prefetch (aim or 1, card, 0)', () => {
     expect(lo('?keystone.loadpace=0')).toEqual({ loadPaceMs: 0 });
-    expect(lo('?keystone.loadpace=12.5&keystone.prefetch=0')).toEqual({ loadPaceMs: 12.5, prefetch: false });
-    expect(lo('?keystone.prefetch=1')).toEqual({ prefetch: true });
+    expect(lo('?keystone.loadpace=12.5&keystone.prefetch=0')).toEqual({ loadPaceMs: 12.5, prefetch: 'off' });
+    expect(lo('?keystone.prefetch=1')).toEqual({ prefetch: 'aim' });
+    expect(lo('?keystone.prefetch=aim')).toEqual({ prefetch: 'aim' });
+    expect(lo('?keystone.prefetch=card')).toEqual({ prefetch: 'card' });
     expect(lo('?keystone.retry=rebuild')).toEqual({ retry: 'rebuild' });
   });
   it('refuses bad values, naming the key', () => {
     expect(() => lo('?keystone.loadpace=')).toThrow(/keystone.loadpace must be from 0 to 1000 ms/);
     expect(() => lo('?keystone.loadpace=-1')).toThrow(/keystone.loadpace/);
     expect(() => lo('?keystone.loadpace=fast')).toThrow(/keystone.loadpace .*: fast/);
-    expect(() => lo('?keystone.prefetch=yes')).toThrow(/keystone.prefetch must be 0 or 1: yes/);
+    expect(() => lo('?keystone.prefetch=yes')).toThrow(/keystone.prefetch must be aim \(or 1\), card or 0: yes/);
     expect(() => lo('?keystone.retry=fast')).toThrow(/keystone.retry must be checkpoint or rebuild: fast/);
   });
 });
