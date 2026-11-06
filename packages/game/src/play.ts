@@ -977,10 +977,9 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
           renderer.setSurface(f.body, { kind: 'ice', crack: f.level, at: f.at, seed: f.seed });
           break;
         case 'shatter': {
-          // The block is gone (its tombstone is not drawn) and its pieces are ice; a puff of ice dust where it broke.
+          // The block is gone (its tombstone is not drawn) and its pieces are ice. No burst: the renderer's
+          // chips are stone-coloured sparks, which read as metal on ice (frost powder is a follow-up).
           for (const p of f.pieces) renderer.setSurface(p, { kind: 'ice', seed: crackSeed(p) });
-          const s = driver.snapshot, b = f.body;
-          if (b < s.count) renderer.burst([s.pos[3 * b]!, s.pos[3 * b + 1]!, s.pos[3 * b + 2]!], [0, 1, 0], f.dv);
           juice.shake(0.12);
           break;
         }

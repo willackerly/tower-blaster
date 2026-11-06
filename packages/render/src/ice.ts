@@ -75,7 +75,7 @@ export interface IceParams {
 export const ICE_SPECTRUM: V3 = [1, 0.3, 0.1];
 
 export const DEFAULT_ICE: IceParams = {
-  ior: 1.31, absorb: 0.5, cloud: 1.2, bubbles: 0.2, glint: 1, glintSize: 0.012, frost: 0.12, depth: 1, bounces: 2, crack: 1, blur: 2, rime: 0.35,
+  ior: 1.31, absorb: 0.5, cloud: 0.8, bubbles: 0.1, glint: 2, glintSize: 0.025, frost: 0.12, depth: 1, bounces: 2, crack: 1, blur: 2, rime: 0.2,
 };
 
 /** URL knobs ice.<key>: each IceParams field with its accepted range. */
@@ -300,7 +300,9 @@ fn iceNoise(p: vec3f, seed: u32) -> f32 {
 // (clear ice freezes from the outside in, pushing air to the middle).
 // Per world unit.
 fn iceCore(p: vec3f, h: vec3f, seed: u32) -> f32 {
-  let r = length(p / h) / 1.7320508;
+  // Each block's core sits off centre by up to a quarter of its size, so a wall is not a grid of tiles.
+  let o = vec3f(iceU(iceHash(vec3u(seed, 7u, 3u)).x), iceU(iceHash(vec3u(seed, 11u, 5u)).x), iceU(iceHash(vec3u(seed, 13u, 9u)).x)) - 0.5;
+  let r = length((p - 0.5 * o * h) / h) / 1.7320508;
   let core = 1.0 - smoothstep(0.15, 0.75, r + 0.2 * (iceNoise(p * (3.0 / max(h.x, max(h.y, h.z))), seed) - 0.5));
   return core * core;
 }
@@ -476,6 +478,9 @@ fn iceBehind(e: vec3f, dw: vec3f, reach: f32, fog0: vec3f, rel: vec3f) -> vec3f 
   let NoV = max(dot(nb, Vb), 1e-4);
   let NoL = max(dot(n, fr.sun), 0.0);
   let vis = select(0.0, ${sunVis}, NoL > 0.0);
+  // Sun reaching the inside of the ice: not gated by the entry face (light enters by the lit faces and
+  // scatters), and only partly blocked by occluders, which are mostly ice that passes light.
+  let visIn = mix(${sunVis}, 1.0, 0.6);
   let fog0 = fog(vec3f(0.0), rel);
 
   // 1. Reflection: environment and sun, through exact Fresnel.
@@ -509,7 +514,7 @@ fn iceBehind(e: vec3f, dw: vec3f, reach: f32, fog0: vec3f, rel: vec3f) -> vec3f 
   let phase = (1.0 - g * g) / pow(1.0 + g * g - 2.0 * g * cosVL, 1.5) * 0.25;
   let tint = fxTint(w.x);
   let absorb = exp(-ice.absorb * path.len);
-  let lightIn = iceAmbient() + fr.sunColor * vis * phase * 4.0;
+  let lightIn = iceAmbient() + fr.sunColor * visIn * phase * 4.0;
   let inscat = scat * lightIn * mix(vec3f(1.0), sqrt(absorb), 0.5) * tint;
 
   // 3. What the exit sees.
@@ -532,14 +537,14 @@ fn iceBehind(e: vec3f, dw: vec3f, reach: f32, fog0: vec3f, rel: vec3f) -> vec3f 
 
   // Light from the ice itself (reflections, scattering, cracks, glints) is fogged here; what is behind
   // the ice already carries the fog in front of the ice (iceBehind), so it is added after.
-  let bubbleLight = bub.y * (1.2 * iceAmbient() + fr.sunColor * vis * 0.6) * tint;
+  let bubbleLight = bub.y * (1.2 * iceAmbient() + fr.sunColor * visIn * 0.6) * tint;
   c += (1.0 - Fin) * (inscat + crackLight * tint + bubbleLight);
   // Frosted lines where cracks meet the face, and the crushed patch: opaque white ice.
-  let frosted = (iceAmbient() * 0.9 + fr.sunColor * vis * max(dot(n, fr.sun), 0.0) * 0.45) * tint;
+  let frosted = (iceAmbient() * 0.9 + fr.sunColor * visIn * (0.3 + 0.7 * max(dot(n, fr.sun), 0.0)) * 0.45) * tint;
   // Rime: the face's edges, where the block has melted and refrozen, scatter white.
   let e3 = v.half - abs(lp);
   let entryEdge = max(min(e3.x, e3.y), min(max(e3.x, e3.y), e3.z));
-  let rime = ice.rime * (1.0 - smoothstep(0.0, 0.07 * length(v.half), entryEdge)) * (0.6 + 0.4 * iceNoise(lp * (20.0 / length(v.half)), seed + 31u));
+  let rime = ice.rime * (1.0 - smoothstep(0.0, 0.07 * length(v.half), entryEdge)) * (0.6 + 0.4 * iceNoise(lp * (20.0 / length(v.half)), seed + 31u)) * smoothstep(0.25, 0.75, iceNoise(lp * (3.0 / length(v.half)), seed + 57u));
   let m = clamp(max(max(0.75 * cr.line, 0.9 * cr.crush), rime), 0.0, 1.0);
   c = mix(c, frosted, m);
   // 5. Glints.

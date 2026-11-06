@@ -49,7 +49,9 @@ describe('ice in the game, GPU solver', () => {
     expect(paint.cracks.slice(0, 40).filter((c) => c > 0).length).toBeGreaterThan(3);
     expect(paint.count).toBe(40 + 8 * shatters);
     await shot('after');
-    expect(await page.evaluate((s) => window.__game.replay(s), [SHOT])).toEqual(live);
+    // The replay banks the round once its shots run out (an outcome level: runSession's bank), where the page waits aiming.
+    const { phase: _, ...rest } = live;
+    expect(await page.evaluate((s) => window.__game.replay(s), [SHOT])).toMatchObject(rest);
     expect(await page.evaluate(() => ({ status: window.__game.status, error: window.__game.error }))).toEqual({ status: 'running', error: undefined });
     expect(errors).toEqual([]);
     await page.close();

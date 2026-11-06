@@ -30,9 +30,9 @@ Each ice pixel is computed analytically in the box's own frame:
 2. **Path through the box.** The refracted ray is traced to its exit face (`iceExit`, one ray-box hit). If it meets that face past the critical angle (49.8°), it reflects (total internal reflection) and goes on, up to `bounces` times (default 2). That is why a cube shows bright internal edges and its other faces.
 3. **What is behind.** The exit ray reads the opaque scene, which was resolved before the ice into the `under` texture. It reads a little way past the exit point, so the stripes behind are bent (screen-space refraction). The read is a 4-tap blur, so the faces look melted and slightly frosted, not like glass. Off screen, it falls back to the environment.
 4. **Colour by thickness (Beer–Lambert).** Absorption runs over the exact path length inside. The spectrum is [1, 0.3, 0.1] × `absorb` per metre: red goes first, so thick ice goes blue-green.
-5. **Cloudy core and bubbles.** A cloudy core comes from radial falloff modulated by 3D value noise, with single scattering lit by the sky and the sun. Air bubbles are exact ray-sphere hits, walked cell by cell along the first leg (Amanatides–Woo, 24 cells). Bubbles are analytic: an earlier volume-noise version speckled like snow and showed hatching from its jitter.
+5. **Cloudy core and bubbles.** A cloudy core comes from radial falloff modulated by 3D value noise, its centre offset per block by up to a quarter of its size, with single scattering lit by the sky and the sun. Air bubbles are exact ray-sphere hits, walked cell by cell along the first leg (Amanatides–Woo, 24 cells). Bubbles are analytic: an earlier volume-noise version speckled like snow and showed hatching from its jitter.
 6. **Glints (the glimmer).** A sparse grid of tiny facets covers each face: 1 cell in 6 holds a facet tilted up to 0.2 rad. A facet flashes when the sun's half vector lines up with it. Each fades once it is smaller than a pixel, so distant ice does not shimmer. It is view- and sun-dependent, which is the glimmer.
-7. **Rime and frost.** White rime runs along face edges, and GGX roughness `frost` blurs the highlights.
+7. **Rime and frost.** White rime runs along face edges in patches (low-frequency noise breaks the frame), and GGX roughness `frost` blurs the highlights.
 8. **Cracks.** Planes through the impact point have jagged extents (`iceCracks`), and there are more of them as the crack level rises (1 to 7). A ring crack appears from level 3. Inside, where the ray crosses a crack plane, the air gap reflects silver-white and passes less light. Where a plane meets the face, a frosted line shows. From level 4, the impact point is crushed white and grainy.
 
 Fog is composed as fog(emitted) + T × (under − fog(0)). The scene behind is already fogged, so it is not fogged twice.
@@ -49,7 +49,15 @@ Fog is composed as fog(emitted) + T × (under − fog(0)). The scene behind is a
 
 ### Cost
 
-Not yet measured on the M5 Max. SwiftShader and CI timings are never performance results. Queued for the Mac's next idle window.
+Not yet measured on the M5 Max. SwiftShader and CI timings are never performance results. Queued for the Mac's next idle window as `pnpm bench:render --channel chrome --variants full,ice-one,ice,real,real-ice --counts 10000`. Its new variants give three marginal costs:
+
+| Variant | Against | Measures |
+|---|---|---|
+| `ice-one` | `full` | the split pass's fixed cost |
+| `ice` | `ice-one` | the shading of a wall of ice |
+| `real-ice` | `real` | ice in the real look |
+
+The bench also gains an `ice` pass-time column and an ice-box count.
 
 - **Fixed cost of the split.** It applies only while ice exists. The MSAA colour (rgba16float, 4 samples) and depth (depth24plus, 4 samples) are stored after pass 1 and loaded in pass 2: about 4 × (8 + 4) B per pixel each way, plus the `under` resolve (8 B per pixel). On Apple's tile-based GPUs that store and load is the expensive part, because MSAA is otherwise memoryless.
   - At 3456 × 2234 that is about 0.8 GB per frame, or roughly 15% of the M5 Max's bandwidth at 120 fps.
@@ -68,15 +76,15 @@ Not yet measured on the M5 Max. SwiftShader and CI timings are never performance
 |---|---|---|---|
 | `ice.ior` | 1.31 | 1 to 2.5 | index of refraction |
 | `ice.absorb` | 0.5 | 0 to 20 | red absorption per metre (green and blue × 0.3, × 0.1) |
-| `ice.cloud` | 1.2 | 0 to 20 | scattering in the cloudy core |
-| `ice.bubbles` | 0.2 | 0 to 1 | air bubbles |
-| `ice.glint`, `ice.glintSize` | 1, 0.012 m | | glint strength, facet size |
+| `ice.cloud` | 0.8 | 0 to 20 | scattering in the cloudy core |
+| `ice.bubbles` | 0.1 | 0 to 1 | air bubbles |
+| `ice.glint`, `ice.glintSize` | 2, 0.025 m | | glint strength, facet size |
 | `ice.frost` | 0.12 | 0 to 1 | surface roughness |
 | `ice.depth` | 1 | | how far past the exit the background is read (half diagonals) |
 | `ice.bounces` | 2 | 0 to 4, whole | internal reflections |
 | `ice.crack` | 1 | 0 to 2 | crack visibility |
 | `ice.blur` | 2 px | | blur of what is seen through |
-| `ice.rime` | 0.35 | 0 to 1 | white rime at the edges |
+| `ice.rime` | 0.2 | 0 to 1 | white rime at the edges |
 
 Absorption and glint size are per metre, converted by the world's metres per unit, so a quarter-metre world looks the same.
 
@@ -187,7 +195,8 @@ At 1.5 and 5, the counts per engine are:
 ## Known limitations and follow-ups
 
 - **Ice behind ice.** Ice seen through ice shows what is behind both. Depth peeling fixes it at two more depth layers, if ice walls need it.
-- **Shadows.** Ice casts an opaque shadow. Coloured or caustic shadows would mean a transmittance shadow map.
-- **Particles.** Debris and chips from ice use the stone colours.
+- **Shadows.** Ice casts an opaque shadow. Coloured or caustic shadows would mean a transmittance shadow map. To keep stacked ice from going navy, light inside the ice (scattering, bubbles, frosted lines) takes the sun at `mix(shadow, 1, 0.6)` and is not gated by the entry face; the highlight and glints keep the hard shadow.
+- **Particles.** Debris and chips from ice use the stone colours, so a shatter emits no burst (the stone-coloured sparks read as metal on ice). Frost powder (white, slow, drifting particles) is the follow-up.
 - **Colour of what is behind.** Through ice, the brown ground reads slightly green in the real look, which is the blue absorption over brown. This is physically right, but may want a hue nudge.
 - **Engine-dependent thresholds.** Rapier shatters about 4× as much as AVBD at the same thresholds.
+- **Stone marks** (`marks.ts`: the crosshair and shield) are carved only in the opaque pass, so an ice crown or ice heritage block shows no mark. Carving into the ice pass is a follow-up if ice crowns ship in a rated level.
