@@ -19,11 +19,11 @@ Each run writes `results/mode-probes/<id>-<size>-<time>.{json,md}`. `--size ci` 
 | X1 | Domino propagation and sleep | M6, M16, C22 | CI size passes; full-size subset (line 200, curves, cocked; 4 nudges) passes | queued |
 | X2 | Order matters in demolition | M5 | CI size: order matters on slab buildings | **PASS**: only felling a slab building with a 0.6 s delay spills (0.73); cube blocks never |
 | X3 | Towers as dominoes | M6 Steer | CI size: cube and Kapla towers topple on, a bonded pier stops the front | **PASS**: cube towers 24/24 always; bonded piers all or nothing (38%); Kapla dies after 2-3 |
-| X4 | Cantilevers and hollows hold | M1 Hollow, M8 | CI size: stacks, span and brick arch behave | **FAIL**, then reread: 95% stack falls at 20 iterations, holds at 40; arch creep is one brick over the hole (wall 4 mm). Re-run queued |
+| X4 | Cantilevers and hollows hold | M1 Hollow, M8 | CI size: stacks, span and brick arch behave | **PASS at 40 iterations, FAIL at 20**: at 20 the 95% stack falls and the arch wall creeps 1.1 cm; at 40 both hold (wall 3.8 mm; the creep over the hole is single bricks falling slowly) |
 | X5 | Pinned anchors solid | C8 | CI size: pins exactly still, bodies on them match the ground | **PASS**: pins exactly still, flood KS p >= 0.64 |
 | X6 | Resonance under a gravity schedule; far-blast shove | M7 | CI size: no sign of resonance (rocking-block behaviour); far kick exact | **FAIL, as predicted**: no resonance; 0.5 Hz is worst for every height; kick exact |
 | X7 | (optional) 1.5x domino amplifier | showcase | not planned | not run |
-| X8 | Islands behave like solo worlds | C10 | CI size: outcomes match; a world tracks its f32 coordinates (mm) more than the shared solve (solo at origin cm apart) | cost **passes** (0.93); outcome test inconclusive (shot moved nothing in 61/64); probe fixed, re-run queued |
+| X8 | Islands behave like solo worlds | C10 | CI size: outcomes match; a world tracks its f32 coordinates (mm) more than the shared solve (solo at origin cm apart) | **PASS** (wrecking ball): KS p 0.39 / 0.52 against solo; islands cost 0.66 of the block per body; no world reproduces exactly, only distributions |
 
 ## X1 Domino propagation and sleep
 
@@ -144,7 +144,7 @@ For M6 Steer this gives three behaviours: cube towers conduct, Kapla cribs stop 
 
 CI size on SwiftShader (40 iterations, one seed each; an 8 x 8 brick arch of R 1.6 m; 2026-11-05): the 95% stack holds (worst move 0.9 mm in 6 s); the 105% stack falls (its top drops 2.75 m); the span carries the ball across and moves 0.6 mm; the brick arch drops one brick, over the hole, and the rest creeps 0.2 mm. No engine limit is hit.
 
-Full size on Metal (M5 Max, Chrome, `23c0df8`, 2026-11-06; Low Power Mode was on, so its seconds are not timings): **FAIL** as the probe then read it. It passes at Keystone's 40 iterations once the arch check judges the wall rather than the bricks over the hole (see below). A Metal re-run of the arch is queued.
+Full size on Metal (M5 Max, Chrome, `23c0df8`, 2026-11-06; Low Power Mode was on, so its seconds are not timings): **FAIL** as the probe then read it. On the re-run below it passes at Keystone's 40 iterations, and fails at 20 on both the 95% stack and the arch wall.
 
 | case | 20 iterations | 40 iterations |
 |---|---|---|
@@ -158,6 +158,8 @@ Full size on Metal (M5 Max, Chrome, `23c0df8`, 2026-11-06; Low Power Mode was on
 - **At 20 iterations a 95% stack cannot hold.** Every sub-stack's centre of mass is inside its support, yet the stack topples before play starts. At 40 it holds. Overhang and Hollow levels must keep 40 iterations; a quality preset that drops to 20 would break them.
 - **The brick arch's creep is one brick over the hole sliding off slowly, not the wall creeping.** A SwiftShader re-run with the creep broken down (40 iterations, 2026-11-06) reproduced the Metal 1.4 cm as 1.3 cm. Of that, 1.1 cm came in the window's second half, so the slide was speeding up. It is one brick, which started 1.0 m off centre and 1.7 m above the crown, inside the hole's shadow. Every brick outside the shadow moved at most 4.1 mm in the 55 s window.
 - So the probe now judges the arch as it judges drops. The wall outside the hole's shadow must not move 1 cm. Creep over the hole is reported, as the knife-edge drops are. This rereads the rule after seeing data, so the Metal re-run should confirm the 4 mm.
+- **The Metal re-run of the brick arch (`001a40f`, 2026-11-06) confirms this.** At 40 iterations, 12 bricks dropped, all over the hole, and the wall outside the shadow crept 3.8 mm: **PASS**. At 20 iterations the wall itself crept 1.1 cm: **FAIL**. Over the hole the creep was 1.4 cm and 2.1 cm, as before, each time from a single brick (at 40, one that started 1.5 m off centre and 4.2 m above the crown).
+- So **X4 passes at 40 iterations and fails at 20**, on both the 95% stack and the arch wall. 20 iterations is not enough for static structures at game settings, and Overhang, Hollow and Mason levels must not run below 40.
 - For M1 Hollow, a hollowed wall can drop a last brick up to a minute later, slowly. A Hollow level's "it held" should be read some seconds after the cut, and the scoring should forgive bricks inside the hole's shadow.
 
 ## X5 Pinned anchors solid
@@ -318,6 +320,16 @@ The probe has since been fixed. It now shoots the wrecking ball, and on SwiftSha
 - the shot moves the block in at least 75% of the islands;
 - no body ends outside its own island's cell.
 
-A Metal re-run is queued.
+Metal re-run with the wrecking ball (`001a40f`, 2026-11-06, Low Power Mode on): **PASS**.
+
+| arm | down mean | moved mean | KS vs islands, down | KS vs islands, moved | same outcome as its island | largest centroid shift |
+|---|---|---|---|---|---|---|
+| islands | 0.587 | 0.862 | | | 64/64 | 0 |
+| solo (the rule) | 0.571 | 0.847 | D 0.156, p 0.39 | D 0.141, p 0.52 | 0/64 | 0.64 m |
+| solo-far (diagnostic) | 0.577 | 0.851 | D 0.188, p 0.19 | D 0.094, p 0.93 | 0/64 | 0.46 m |
+
+- **The test now has teeth, and the distributions agree.** All 64 islands moved, moved took 30 distinct values, and no body left its cell.
+- **Under a violent shot no world reproduces its island, not even solo-far at the same coordinates.** The cannonball's millimetre agreement came from a shot that barely moved anything. A demolition is chaotic, so any perturbation (global colouring, f32 position) changes the outcome of a given world. Only distributions carry over. For casts and M8's judge this means a cast of a shot predicts its odds, not its exact result, which is how they already score.
+- **Batching is much cheaper.** Per body-step the 64 islands cost 0.66 of the 9.6k block (1.02 against 1.55 us), well inside the rule's 10%. The block is denser, with more contacts per body. A solo 150-body world costs 33.8 us per body-step, 33 times an island's, because a small scene cannot fill the GPU. So 64 casts in one island solve run about 30 times faster than 64 solo casts. Low Power Mode inflates all three alike, since they ran in one session.
 
 C10 turns this into the primitive the game uses (`Islands` and `IslandObserver` in `@tb/engine-api`; design, alternatives and results in `docs/design/islands.md`). Its own verify runs the same level and shot through it: `pnpm probe:modes C10`.
