@@ -579,6 +579,17 @@ export const phaseEnds = (r: CastResult, phase: CastLine['phase']): number[] => 
 export const POOL_GATES = ['fair', 'skill', 'limits', 'complete'] as const;
 
 /**
+ * `def` with its Bounce (restitution) set: a number from 0 to 1, or 'off' (null, the engine's pass off). For
+ * probing a level at another e before changing it (roadmap B6, spectacle-mode.md Q2): Bounce enters the level
+ * hash, so stars cast on the variant never apply to the level itself.
+ */
+export function withBounce(def: LevelDef, value: string): LevelDef {
+  const bounce = value === 'off' ? null : value.trim() === '' ? NaN : Number(value);
+  if (bounce !== null && !(bounce >= 0 && bounce <= 1)) throw new Error(`--bounce is off or a number from 0 to 1: ${value}`);
+  return { ...def, physics: { ...def.physics, bounce } };
+}
+
+/**
  * Gates a person may waive (`--waive`): skill and stable are judgements about how far the targets sit apart and
  * how noisy T3 is, so a near miss can be accepted as a documented call (B3: skill 0.099 against 0.100, Will
  * 2026-11-06). Fair, limits and complete are not waivable: they say whether the best line meets the objective
