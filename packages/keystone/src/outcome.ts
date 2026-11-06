@@ -5,7 +5,7 @@
 // order (and a later GPU reduction) gives the same number.
 import type { Vec3 } from '@tb/engine-api';
 import type { CompiledLevel, Objective, Scoring, StarMetric, StarsDef } from './level.ts';
-import { aabbTop, HEIGHT_BINS, type LevelScore, peOf_mJ, type Reductions, type ScoreLine, skyline, spillOf } from './rules.ts';
+import { aabbTop, floorTotal, HEIGHT_BINS, type LevelScore, peOf_mJ, type Reductions, type ScoreLine, skyline, spillOf } from './rules.ts';
 
 const HERITAGE = 2;
 
@@ -97,7 +97,7 @@ export interface OutcomeFacts {
   met: boolean;
   /** Collapse fraction D. */
   collapse: number;
-  /** Max(0, PE(B0) - PE(end)) / energy fired, J per J. */
+  /** The round's leverage (roundLeverage: each shot's release over the energy fired, J per J), as the HUD and a par card read it. */
   leverage: number;
   /** Most crowns down in one shot (levels with crowns). */
   comboMax: number;
@@ -195,10 +195,12 @@ export interface OutcomeScore extends LevelScore {
  */
 export function outcomeScore(f: OutcomeFacts, cast: StarsDef | undefined, metric: StarMetric = cast?.metric ?? (f.hold ? 'pulled' : 'collapse')): OutcomeScore {
   const lines = outcomeTally(f);
-  const total = lines.reduce((a, l) => a + l.value, 0);
+  const total = floorTotal(lines);
   const value = metricValue(metric, f, total);
   const s = outcomeStars(cast, metric, value, f.met, f.heritageBroken);
+  // Heritage costs the third star only, and only where the round had reached it.
+  const lost = f.heritageBroken > 0 ? outcomeStars(cast, metric, value, f.met, 0).stars - s.stars : 0;
   const stamp = !f.met ? (f.hold ? 'TOPPLED' : 'INCOMPLETE') : s.beatBot ? 'BEAT THE BOT' : f.hold ? `${Math.floor(100 * f.pulled)}% PULLED` : `${Math.floor(100 * f.collapse)}% DOWN`;
-  return { lines, total, stars: s.stars, stamp, leverage: f.leverage, outcome: { collapse: f.collapse, metric, value, ...s } };
+  return { lines, total, stars: s.stars, stamp, leverage: f.leverage, ...(lost > 0 ? { heritageStarsLost: lost } : {}), outcome: { collapse: f.collapse, metric, value, ...s } };
 }
 

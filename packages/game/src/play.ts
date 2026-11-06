@@ -684,7 +684,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     const def = levels[i]!, pairs = room.get(def);
     const next = compileLevel(def);
     const nextEngine = makeEngine(kind, next, device, pairs);
-    const nextDriver = new Driver(nextEngine, next, driverOptions(kind));
+    const nextDriver = new Driver(nextEngine, next, { ...driverOptions(kind), refereed: env.duel !== undefined });
     const phases: LoadPhases = { ...noPhases(), compile: performance.now() - t0 };
     const built = (async () => {
       try {
@@ -1283,7 +1283,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
   handle.replay = async (shots) => {
     const e = makeEngine(kind, c, device, livePairs);
     try {
-      const r = await runSession(e, c, shots, { ...driverOptions(kind), perStep: env.perStep?.(c) ?? undefined });
+      const r = await runSession(e, c, shots, { ...driverOptions(kind), refereed: env.duel !== undefined, perStep: env.perStep?.(c) ?? undefined });
       return { step: r.steps, phase: r.session.phase, strokes: r.session.strokes, heritageBroken: sum(r.session.heritageBroken), hash: snapshotHash(r.snapshot) };
     } finally { e.dispose(); }
   };
@@ -1456,7 +1456,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     let html = hudHtml({
       level: c.def, strokes: s.strokes, crownsDown, crownsTotal: c.meta.crowns.length,
       heritageBroken: s.heritageBroken.reduce((a, x) => a + x, 0), heritageTotal: c.meta.heritage.length,
-      chips: chipsNow(), power, launch: (launchNow() / 4) * c.frame.unit, liveLeverage: s.liveLeverage, phase: s.phase,
+      chips: chipsNow(), power, launch: (launchNow() / 4) * c.frame.unit, leverage: { round: s.roundLeverageNow(), shot: s.liveLeverage }, phase: s.phase,
       reachable: aimed ? aimed.reachable : null,
       pullRefused: aimed?.shot.ammo === 'pull' && !aimed.reachable,
       collapse: s.liveCollapse, pulled: s.pulledShare(), met: s.objectiveDone, canBank: !stepping && regrowT === null && s.canBank(), pace: handle.pace.tag,
