@@ -42,7 +42,7 @@
 // limiting does not crackle.
 import { binOf, DV_EDGES, TOP_FIELDS, type AudioFrame } from './frame.ts';
 import type { SoundMaterial } from './material.ts';
-import { clickKernel, contactTime, DENSE_BANDS, denseField, forceSpectrum, gauss, modes, roughness, roughTime, soundSize, type Modes } from './modes.ts';
+import { clickFilter, clickKernel, contactTime, radiatedClick, DENSE_BANDS, denseField, forceSpectrum, gauss, modes, roughness, roughTime, soundSize, type Modes } from './modes.ts';
 
 export const BLOCK = 128;
 const RING = 64; // blocks of scheduling horizon (171 ms at 48 kHz)
@@ -165,6 +165,8 @@ interface MatState {
   cD: Int32Array; cc: Float64Array; cy1: Float64Array; cy2: Float64Array; cx: Float32Array; cring: Float64Array[];
   cLast: Float64Array; // per (bin, sector): absolute sample of its last input (-Infinity: none)
   clickPeak: Float64Array; // per bin: impulse into the click resonator per (m/s of dv per m)
+  /** Radiation filter of the bank's clicks (clickFilter; null: the compact dipole), its per-sector state [x1 x2 y1 y2] and bus. */
+  cf: [number, number, number, number, number] | null; cfz: Float64Array; cbus: Float64Array;
   binT: Float64Array; // per bin: contact time
   w: Float64Array; // scratch weights
   /** Grit: amplitude per (A dv) of a unit-energy grain kernel (0: none), and the grains' mean delay in samples. */
@@ -313,6 +315,7 @@ export class CollapseEngine {
       cD: new Int32Array(DV_EDGES.length), cc: new Float64Array(DV_EDGES.length),
       cy1: new Float64Array(DV_EDGES.length * S), cy2: new Float64Array(DV_EDGES.length * S),
       cx: keep ? old.cx : new Float32Array(DV_EDGES.length * S * BLOCK), cring: [], cLast: new Float64Array(DV_EDGES.length * S).fill(-Infinity),
+      cf: clickFilter(m, this.sr, edge), cfz: new Float64Array(4 * S), cbus: new Float64Array(S * BLOCK),
       clickPeak: new Float64Array(DV_EDGES.length), binT: new Float64Array(DV_EDGES.length), w: new Float64Array(md.freq.length),
       gritAmp: Math.sqrt(gritEnergy(m, edge)),
       gritDelay: GRIT.spread * Math.sqrt(soundSize(m, edge) / GRIT.refEdge) * this.sr,
@@ -448,7 +451,7 @@ export class CollapseEngine {
       tmax = Math.max(tmax, st.md.tau[k]!);
     }
     const [gl, gr] = panGains(pan);
-    Object.assign(v, { on: true, mat, M: st.M, age: 0, life: Math.max(tmax, T) * this.sr, level, gl, gr, start: at, click: clickKernel(st.m, T, this.sr, st.edge), clickAt: 0, clickGain: level });
+    Object.assign(v, { on: true, mat, M: st.M, age: 0, life: Math.max(tmax, T) * this.sr, level, gl, gr, start: at, click: radiatedClick(st.m, T, this.sr, st.edge), clickAt: 0, clickGain: level });
   }
 
   /** Render one block of BLOCK samples (stereo, overwrites). */
@@ -506,11 +509,25 @@ export class CollapseEngine {
         for (let i = 0; i < BLOCK; i++) {
           const x = st.cx[o + i]!, k = (this.now + i) % D, y = c * y1 - y2 + x - ring[k]!;
           if (x !== 0) last = this.now + i;
-          ring[k] = x; st.cx[o + i] = 0; sec[so + i]! += y; y2 = y1; y1 = y;
+          ring[k] = x; st.cx[o + i] = 0; (st.cf ? st.cbus : sec)[so + i]! += y; y2 = y1; y1 = y;
         }
         // A finished cycle leaves rounding (~1e-16 of it); clear it once the ring is empty.
         if (this.now + BLOCK - last > D && Math.abs(y1) < 1e-9 && Math.abs(y2) < 1e-9) { y1 = 0; y2 = 0; }
         st.cy1[r] = y1; st.cy2[r] = y2; st.cLast[r] = last;
+      }
+      if (st.cf) {
+        // The clicks' radiation, per sector: one biquad over the sum (linear and the same for every click).
+        const [b0, b1, b2, a1, a2] = st.cf, z = st.cfz;
+        for (let s = 0; s < S; s++) {
+          let x1 = z[4 * s]!, x2 = z[4 * s + 1]!, y1 = z[4 * s + 2]!, y2 = z[4 * s + 3]!;
+          if (x1 === 0 && x2 === 0 && Math.abs(y1) < 1e-12 && Math.abs(y2) < 1e-12 && !st.cbus.subarray(s * BLOCK, (s + 1) * BLOCK).some((x) => x !== 0)) { z.fill(0, 4 * s, 4 * s + 4); continue; }
+          for (let i = 0; i < BLOCK; i++) {
+            const x = st.cbus[s * BLOCK + i]!, y = b0 * x + b1 * x1 + b2 * x2 - a1 * y1 - a2 * y2;
+            st.cbus[s * BLOCK + i] = 0; x2 = x1; x1 = x; y2 = y1; y1 = y; sec[s * BLOCK + i]! += y;
+          }
+          z[4 * s] = x1; z[4 * s + 1] = x2; z[4 * s + 2] = y1; z[4 * s + 3] = y2;
+          this.work += BLOCK;
+        }
       }
     }
     // Dense field: band noise under per-(sector, band) amplitudes; idle materials are skipped.

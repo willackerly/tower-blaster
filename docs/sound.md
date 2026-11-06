@@ -415,10 +415,46 @@ Level: the solid plaster is louder at the peak; at GAME_SOUND_DB_REAL -17 one hi
 into the limiter and nothing else limits. -18 would avoid it but leave the set 3.4 LU under the
 classic one (2.4 at -17), so the level stays.
 
-Next: step 2 (clatter). Six identical blocks ring one chord: iron reads Music 0.51, steel Music 0.33,
-and the solid plaster turns animal (Fart, Quack: a low mode at a fixed pitch, repeated).
-Then a tower, then a level. The free-text describer (CLAP, scored against phrases such as "two stone
-blocks knocking") still needs huggingface.co, which this environment's network policy blocks.
+Step 2 (clatter, 2026-11-06). Findings:
+
+- The clatter script struck on a 0.2 s cadence, and evenly spaced strikes read as a rhythm. Its six
+  blocks now tip at random over 1.2 s. Iron's Music went from 0.51 to 0.42 (0.18 for another random
+  draw; metal 0.90), and plaster's Fart and Quack (0.32) went down to Silence 0.11.
+- The judge, calibrated on real single hits (DiffImpact's robot recordings, Clarke et al. 2021; 99
+  clips from github.com/samuel-clarke/diffimpact):
+  - A steel fork on a steel bowl reads Music and Ding (metal 0.85), so "Music" on struck metal is what
+    real metal gets too.
+  - Wood on wood reads Tick, Clock, Inside small room (wood only 0.34).
+  - Ceramic reads glass (0.81-0.84).
+  - Sparse hits read Silence and Tick, real or synthetic, so a sparse clip's top labels are weak
+    evidence. Its material shares still hold.
+- With the irregular script: ice clatter reads glass (0.69), iron metal (0.90), steel glass and metal
+  (0.52 and 0.46). Plaster and stone read weakly as wood (0.50 and 0.52) with no strong top label.
+  That is the open question for Will's ear.
+
+Two physics gaps, now options, off by default because the judge is mixed on them:
+
+- `overlap` (modes.ts `sparseModes`): band noise stands in for modes only where they overlap. The
+  modal overlap is n(f) f eta pi / 2. At the top of steel's 24-mode table (5.9 kHz) it is 0.07: modes
+  600 Hz apart and 8 Hz wide, a line spectrum, which band noise turns into a pad (steel tumble without
+  the field: Ding, with it: Music). `overlap: 1` adds discrete modes at the Weyl count up to overlap 1
+  (14.4 kHz for steel, 6.5 kHz for ice, 4.9 kHz for stone; plaster and iron already overlap at their
+  tables' tops). Steel clatter moved from Music to Cowbell and Glass, stone knock from mineral 0.41 to
+  0.56, ice knock from glass 0.70 to metal 0.52 (worse), stone tumble from wood to glass.
+- `clickModel: 'sphere'` (modes.ts `clickFilter`): the click as a rigid sphere of the body's volume
+  radiates it, |p| / |accel| = rho w a^3 / (c sqrt(4 + (ka)^4)) (the oscillating sphere's exact far
+  field). The compact dipole alone holds below ka ~ 1.4, which is 250 Hz for a 0.5 m block, and puts
+  up to 11 dB too much into 300 Hz-1 kHz. The judge barely moved (stone knock mineral 0.41 to 0.31,
+  plaster clatter unchanged).
+
+Tried and set aside:
+
+- The rough contact's acceleration noise as a click component (prototype; ~0.1 of the peak, small).
+- Body jitter 0.05-0.25 on metal and on stone/plaster: no effect on Music or the animal reads.
+- Grit up to +12 dB, the click down to -12 dB, contact radius 2 mm.
+
+Next: Will's one-word reads of the clatter, then a tower. The free-text describer (CLAP) still needs
+huggingface.co.
 
 ## Plan (each step lands with its test)
 

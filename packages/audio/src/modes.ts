@@ -156,6 +156,7 @@ export function modes(m: SoundMaterial, bodyEdge = 1, fmax = 18000): Modes {
       return out;
     };
   }
+  if (m.overlap !== undefined && m.model !== 'plank') weights = sparseModes(m, bodyEdge, fmax, f, weights);
   const freq = Float64Array.from(f), tau = freq.map((x) => tauOf(x, m.eta));
   let gain: Float64Array;
   if (m.law === 'energy') {
@@ -168,6 +169,36 @@ export function modes(m: SoundMaterial, bodyEdge = 1, fmax = 18000): Modes {
     gain = freq.map((x, k) => modeGain(m, x, tau[k]!, bodyEdge) * cap);
   } else gain = freq.map((x) => radiation(m, x, bodyEdge));
   return { freq, tau, gain, weights };
+}
+
+/** The modal overlap at f: modes per half-power bandwidth, n(f) f eta pi / 2 (Cremer & Heckl). */
+export const modalOverlap = (m: SoundMaterial, f: number, bodyEdge = 1): number => (modalDensity(m, f, bodyEdge) * f * m.eta * Math.PI) / 2;
+
+/**
+ * Discrete modes from the top of the table up to where the modal overlap reaches m.overlap (or fmax),
+ * appended to f: the band-noise field (denseField) is only a fair stand-in where modes overlap. Below,
+ * a steel block's "dense" modes are hundreds of Hz apart and a few Hz wide: a line spectrum, which
+ * band noise turns into a synth pad (the judge's "Music"). Frequencies follow the Weyl count N(f)
+ * (modalDensity), one per unit of N with a fixed +-0.3 jitter (modes repel: no near-degenerate pairs),
+ * the same for every body of the material; each impact weights them by an independent unit normal
+ * (rms 1, the table's contact-weight contract). Returns the weights with the new modes appended.
+ */
+export function sparseModes(m: SoundMaterial, bodyEdge: number, fmax: number, f: number[], table: Modes['weights']): Modes['weights'] {
+  const n0 = f.length, top = f.reduce((a, b) => Math.max(a, b), 0), stop = m.overlap!;
+  let a = 0x9e3779b9 >>> 0; // fixed stream: a material always rings the same
+  const r = () => { a = (Math.imul(a ^ (a >>> 15), 0x2c1b3c6d) + 0x6d2b79f5) >>> 0; return a / 4294967296; };
+  let N = 0, x = top, next = 1 + 0.6 * (r() - 0.5);
+  while (x < fmax && modalOverlap(m, x, bodyEdge) < stop && f.length < n0 + 512) {
+    const dx = x * 0.002;
+    N += modalDensity(m, x, bodyEdge) * dx; x += dx;
+    if (N >= next) { f.push(x); next = Math.floor(next + 0.5) + 1 + 0.6 * (r() - 0.5); }
+  }
+  if (f.length === n0) return table;
+  return (rand, out) => {
+    table(rand, out);
+    for (let j = n0; j < f.length; j++) out[j] = gauss(rand);
+    return out;
+  };
 }
 
 /** Hertz contact time, s, of an impact at relative speed dv (m/s): 2.87 (m*^2 / (R E*^2 v))^(1/5). */
@@ -311,6 +342,36 @@ export function clickKernel(m: SoundMaterial, T: number, sr: number, bodyEdge = 
   const n = Math.max(2, Math.ceil(T * sr)), out = new Float32Array(n);
   const k = ((RHO_AIR * 3 * volume(m, bodyEdge)) / (8 * Math.PI * C_AIR)) * 10 ** (m.clickDb / 20);
   for (let i = 0; i < n; i++) out[i] = k * ((2 * Math.PI) / (T * T)) * Math.sin((2 * Math.PI * (i + 0.5)) / (sr * T));
+  return out;
+}
+
+/**
+ * The click as a rigid sphere of the body's volume radiates it (clickModel 'sphere'): the compact dipole
+ * (clickKernel) times G(s) = 2 / ((s / w0)^2 + 2 s / w0 + 2), w0 = c / a. That is the oscillating
+ * sphere's exact far field, |p| / |accel| = rho w a^3 / (c sqrt(4 + (ka)^4)) (Kinsler et al., Morse):
+ * the compact dipole below ka ~ 1.4, the piston's rho c a v above. A 0.5 m block's click is
+ * compact only below ~250 Hz; the compact formula alone puts up to 11 dB too much into 300 Hz-1 kHz,
+ * a "bwomp" the judge heard as Fart and Quack (docs/sound.md, Material identity, step 2).
+ * Returns the biquad [b0, b1, b2, a1, a2] (bilinear, prewarped at w0); null for the compact click.
+ */
+export function clickFilter(m: SoundMaterial, sr: number, bodyEdge = 1): [number, number, number, number, number] | null {
+  if (m.clickModel !== 'sphere') return null;
+  const a = Math.cbrt((3 * volume(m, bodyEdge)) / (4 * Math.PI)), w0 = C_AIR / a, K = w0 / Math.tan(w0 / (2 * sr));
+  const a0 = K * K + 2 * w0 * K + 2 * w0 * w0, g = (2 * w0 * w0) / a0;
+  return [g, 2 * g, g, (4 * w0 * w0 - 2 * K * K) / a0, (K * K - 2 * w0 * K + 2 * w0 * w0) / a0];
+}
+
+/** clickKernel as radiated (clickFilter applied, with its tail), for a foreground voice. */
+export function radiatedClick(m: SoundMaterial, T: number, sr: number, bodyEdge = 1): Float32Array {
+  const k = clickKernel(m, T, sr, bodyEdge), f = clickFilter(m, sr, bodyEdge);
+  if (!f) return k;
+  const a = Math.cbrt((3 * volume(m, bodyEdge)) / (4 * Math.PI)), tail = Math.ceil((10 * a * sr) / C_AIR);
+  const out = new Float32Array(k.length + tail), [b0, b1, b2, a1, a2] = f;
+  let x1 = 0, x2 = 0, y1 = 0, y2 = 0;
+  for (let i = 0; i < out.length; i++) {
+    const x = i < k.length ? k[i]! : 0, y = b0 * x + b1 * x1 + b2 * x2 - a1 * y1 - a2 * y2;
+    x2 = x1; x1 = x; y2 = y1; y1 = y; out[i] = y;
+  }
   return out;
 }
 

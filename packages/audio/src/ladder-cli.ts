@@ -1,7 +1,7 @@
 // The listening ladder (docs/sound.md, Material identity): scripted impacts, simplest first, rendered
 // per material so each step can be described (tools/sound-judge) and listened to before the next.
 //   knock     one block dropped 5 cm onto a resting one, both ring, two small bounces
-//   clatter   six blocks tipping off a ledge over 1.2 s, each strikes twice
+//   clatter   six blocks tipping off a ledge at random over 1.2 s, each strikes twice
 //   tumble    60 impacts over 2.5 s, exponential speeds (mean 1.5 m/s): a small pile coming down
 // The frames are what the tap would post (buildFrame's definition: dv, distance, pan, material, pitch),
 // built directly from the script, so a step isolates the synth from the physics.
@@ -38,7 +38,8 @@ export function script(step: string, dist: number): Hit[] {
   if (step === 'knock') drop(0.2, Math.sqrt(2 * g * 0.05), 1, 0, 2);
   else if (step === 'clatter') {
     const r = rng(2);
-    for (let i = 0; i < 6; i++) drop(0.2 + i * 0.2 + 0.08 * r(), 1.2 + 1.8 * r(), 10 + i, (r() - 0.5), 1);
+    // Onsets uniform over 1.2 s, not a 0.2 s cadence: six evenly spaced strikes read as a rhythm ("Music").
+    for (let i = 0; i < 6; i++) drop(0.2 + 1.2 * r(), 1.2 + 1.8 * r(), 10 + i, (r() - 0.5), 1);
   } else if (step === 'tumble') {
     const r = rng(3);
     for (let i = 0; i < 60; i++) hits.push({ t: 0.2 + 2.5 * r() ** 1.5, dv: -1.5 * Math.log(1 - 0.95 * r()), dist, pan: 1.2 * (r() - 0.5), body: 100 + Math.floor(25 * r()) });
@@ -94,7 +95,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   if (set !== 'real' && set !== 'classic') throw new Error(`set must be real or classic: ${set}`);
   const mats = soundMaterials(set) as Record<string, SoundMaterial>;
   const knobs = Object.fromEntries((Object.keys(SOUND_KNOBS) as SoundKnob[]).map((k) => [k, kv[k] === undefined ? SOUND_KNOBS[k].def : Number(kv[k])])) as Record<SoundKnob, number>;
-  const over = Object.fromEntries(Object.entries(kv).filter(([k]) => k.startsWith('m.')).map(([k, v]) => [k.slice(2), k === 'm.law' || k === 'm.model' ? v : Number(v)]));
+  const over = Object.fromEntries(Object.entries(kv).filter(([k]) => k.startsWith('m.')).map(([k, v]) => [k.slice(2), Number.isNaN(Number(v)) ? v : Number(v)]));
   const edge = Number(kv.edge ?? 0.05), dist = Number(kv.dist ?? 0.6);
   mkdirSync(kv.out, { recursive: true });
   for (const step of (kv.steps ?? 'knock,clatter,tumble').split(',')) {
