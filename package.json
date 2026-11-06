@@ -29,6 +29,7 @@
     "keystone:stars": "tsx packages/keystone-lab/src/stars-audit-cli.ts",
     "keystone:cast": "tsx packages/keystone-lab/src/cast-cli.ts",
     "keystone:goals": "tsx packages/keystone-lab/src/goals-cli.ts",
+    "duel:bot": "tsx packages/game/src/duel-bot-cli.ts",
     "game": "vite packages/game",
     "playtest:build": "tsx packages/playtest/src/build.ts",
     "playtest:local": "tsx packages/playtest/src/local.ts",

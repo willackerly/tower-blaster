@@ -1,14 +1,25 @@
 // The Siege Table on the game page (?duel=D1, docs/game/siege-table.md): the turn controller refuses a
 // shot from the wrong side or out of turn, passes the turn at each settle, runs the duel's level to a
 // result card, and Rematch starts the other side first. Eight sideways misses on Rapier: nothing is hit,
-// so both keeps stand alike and the duel is a draw. The aids (duel-view.ts): each turn opens on the middle of
-// its side, the camera swinging there when the turn passes (keystone.turnview=0 leaves it), the side's arc is
-// dotted on the ground, and off the side the HUD and a refused shot say which way to drag. Headless Chromium.
+// so both keeps stand alike and the duel is a draw. The aids (duel-view.ts): each turn opens over the shoulder
+// of its side, the camera swinging there when the turn passes (keystone.turnview=0 leaves it) under a hand-over
+// card (keystone.handoff=0: a banner), the side's arc is dotted on the ground, and off the side the HUD and a
+// refused shot say which way to drag. Nothing shows empty, and a duel cannot be banked before it is decided
+// (PT5, agent playtest 1). Headless Chromium.
 import { describe, expect, it } from 'vitest';
-import { D1, type Shot } from '@tb/keystone';
+import { D1, EAST_ARC, inArc, type Shot, WEST_ARC } from '@tb/keystone';
+import type { Page } from 'playwright';
 import { azFromYaw } from '../src/aim.ts';
-import { yawOfAz } from '../src/duel-view.ts';
+import { DUEL_YAW_OFFSET } from '../src/duel-view.ts';
 import { gamePage, ready } from './page.ts';
+
+/** Turn view azimuths: DUEL_YAW_OFFSET round from the middle of each side's arc (duel-view.ts duelView). */
+const offMiddle = (az: number, middle: number) => Math.abs(((az - middle + 1080) % 720) - 360) / 2;
+
+/** Overlays that show but say nothing (PT5: an empty dark bar over the Heraldry result): class names, none expected. */
+const emptyShown = (page: Page) => page.evaluate(() => [...document.querySelectorAll('.kg-banner, .kg-result, .duel-handoff, .duel-float')]
+  .filter((e) => { const cs = getComputedStyle(e), r = e.getBoundingClientRect(); return cs.display !== 'none' && cs.visibility !== 'hidden' && Number(cs.opacity) > 0.01 && r.width > 0 && r.height > 0 && !e.textContent!.trim(); })
+  .map((e) => e.className));
 
 const game = gamePage();
 
@@ -27,12 +38,14 @@ describe('game page, Siege Table', () => {
     await ready(page);
     expect(await page.evaluate(() => [window.__game.level, window.__game.duel?.turn, window.__game.duel?.first])).toEqual(['D1', 0, 0]);
     expect(await page.evaluate(() => document.querySelector('.kg-hud')!.textContent)).toMatch(/Gold to fire, from the west/);
-    // The turn view: the duel opens on the middle of Gold's side, its arc dotted on the ground, and no cue.
+    // The turn view: the duel opens over Gold's shoulder (DUEL_YAW_OFFSET off the middle of its side), its arc dotted on the ground, and no cue.
     await page.waitForFunction(() => window.__game.view.arcBeads > 0, undefined, { timeout: 30_000 });
     const opening = await page.evaluate(() => window.__game.view);
-    expect(azFromYaw(opening.yaw)).toBe(WEST);
+    expect(offMiddle(azFromYaw(opening.yaw), WEST)).toBe(DUEL_YAW_OFFSET);
+    expect(inArc(azFromYaw(opening.yaw), WEST_ARC)).toBe(true);
     expect(opening).toMatchObject({ turning: false, cue: null });
-    expect(opening.yaw).toBeCloseTo(yawOfAz(WEST), 12);
+    // No hand-over card before the first shot: the players chose to start.
+    expect(await page.evaluate(() => window.__game.handoff)).toBe(false);
     // Every frame's view, to see the swing between turns.
     await page.evaluate(() => {
       const views: { yaw: number; turning: boolean }[] = window.__views = [];
@@ -50,12 +63,23 @@ describe('game page, Siege Table', () => {
       await ready(page, 120_000);
       const turn = await page.evaluate(() => window.__game.duel!.turn);
       order.push(turn);
-      // Each turn's view comes to rest on the middle of its own side, with no cue.
+      // Each turn's view comes to rest over its own side's shoulder, with no cue.
       await page.waitForFunction(() => !window.__game.view.turning, undefined, { timeout: 60_000, polling: 100 });
       const v = await page.evaluate(() => window.__game.view);
-      expect(azFromYaw(v.yaw)).toBe(turn === 0 ? WEST : EAST);
+      expect(offMiddle(azFromYaw(v.yaw), turn === 0 ? WEST : EAST)).toBe(DUEL_YAW_OFFSET);
+      expect(inArc(azFromYaw(v.yaw), turn === 0 ? WEST_ARC : EAST_ARC)).toBe(true);
       expect(v.cue).toBeNull();
       expect(v.arcBeads).toBeGreaterThan(0);
+      // After the first turn the hand-over card names the next side; nothing shows empty.
+      if (k > 0) {
+        expect(await page.evaluate(() => [window.__game.handoff, document.querySelector('.duel-handoff.show')?.textContent])).toEqual([true, expect.stringMatching(turn === 0 ? /Gold's turn/ : /Blue's turn/)]);
+        expect(await emptyShown(page)).toEqual([]);
+        // The second turn's card is tapped away (a tap never fires); later ones go when the shot is fired.
+        if (k === 1) {
+          await page.click('.duel-handoff');
+          expect(await page.evaluate(() => [window.__game.handoff, window.__game.strokes])).toEqual([false, 1]);
+        }
+      }
       const ammo = k >= 6 ? 'w-grenade' : 'cannonball';
       const shot = miss(turn === 0 ? WEST : EAST, ammo);
       expect(await page.evaluate((s) => [window.__game.fire(s), window.__game.fire(s)], shot)).toEqual([true, false]);
@@ -72,6 +96,8 @@ describe('game page, Siege Table', () => {
     expect(d).toMatchObject({ over: true, winner: null, why: 'both keeps stand alike', log: order });
     expect(d.sides.map((s) => [s.name, s.share, s.shotsLeft])).toEqual([['Gold', 1, 0], ['Blue', 1, 0]]);
     expect(await page.evaluate(() => document.querySelector('.kg-result')!.textContent)).toMatch(/A draw/);
+    expect(await page.evaluate(() => window.__game.handoff)).toBe(false);
+    expect(await emptyShown(page)).toEqual([]);
     // Custom (a duel has no stars): nothing recorded.
     expect(await page.evaluate(() => Object.keys(window.__progress.progress.levels))).toEqual([]);
 
@@ -81,10 +107,39 @@ describe('game page, Siege Table', () => {
     expect(await page.evaluate(() => [window.__game.duel!.turn, window.__game.duel!.first, window.__game.strokes])).toEqual([1, 1, 0]);
     expect(await page.evaluate(() => new URLSearchParams(location.search).get('duel'))).toBe(D1.id);
     // The rematch opens on Blue's side.
-    expect(azFromYaw(await page.evaluate(() => window.__game.view.yaw))).toBe(EAST);
+    expect(offMiddle(azFromYaw(await page.evaluate(() => window.__game.view.yaw)), EAST)).toBe(DUEL_YAW_OFFSET);
     expect(errors).toEqual([]);
     await page.close();
   }, 400_000);
+
+  // PT5: a bank mid-duel (the agent playtest's harness banked after four turns) showed an empty result card. A duel ends by its referee only;
+  // Heraldry floats each shot's points where it landed, and a middle click lands on the tower.
+  it('Heraldry: a middle click hits the tower and floats its points; no bank mid-duel, nothing shown empty', async (ctx) => {
+    if (!game.browser()) return ctx.skip();
+    const o = await game.open('/?duel=D2&engine=rapier&look=candy&offscreen=1&progress=off&keystone.handoff=0');
+    if (!o) return ctx.skip();
+    const { page, errors } = o;
+    await ready(page);
+    expect(await page.evaluate(() => window.__game.feel.handoff)).toBe(false);
+    await page.evaluate(() => { window.__game.fast = true; });
+    const aimed = await page.evaluate(() => window.__game.aim(0, -0.05));
+    expect(aimed?.reachable).toBe(true);
+    expect(await page.evaluate((s) => window.__game.fire(s), aimed!.shot)).toBe(true);
+    await page.waitForFunction(() => window.__game.duel!.turn === 1 && window.__game.ready, undefined, { timeout: 120_000, polling: 250 });
+    const d = await page.evaluate(() => window.__game.duel!);
+    expect(d.over).toBe(false);
+    // The shot brought blocks down, and the float said how many of whose (duel-hud.ts scoreFloatHtml).
+    expect(d.sides[0]!.share + d.sides[1]!.share).toBeLessThan(2);
+    expect(await page.evaluate(() => window.__game.scoreFloat)).toMatch(/^(\+\d+ blue)?\s?(−\d+ gold)?\s?= [+−]?\d+$/);
+    // Without the card, a banner says whose turn.
+    expect(await page.evaluate(() => [window.__game.handoff, document.querySelector('#banner')!.textContent])).toEqual([false, "Blue's turn"]);
+    // No bank mid-duel: B, the HUD and the handle all refuse it, and no card shows.
+    expect(await page.evaluate(() => window.__game.bank())).toBe(false);
+    expect(await page.evaluate(() => [window.__game.result, document.querySelector('.kg-result.show')])).toEqual([null, null]);
+    expect(await emptyShown(page)).toEqual([]);
+    expect(errors).toEqual([]);
+    await page.close();
+  }, 300_000);
 
   it('keystone.turnview=0 leaves the camera to the players; off the side the HUD and a refused shot say which way to drag', async (ctx) => {
     if (!game.browser()) return ctx.skip();
