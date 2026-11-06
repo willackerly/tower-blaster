@@ -540,6 +540,16 @@ function boxExt(half: readonly number[], rot: Float64Array, i: number, a: number
   return Math.floor((Math.abs(r0) * h0 + Math.abs(r1) * h1 + Math.abs(r2) * h2) / ONE_R);
 }
 
+/**
+ * The extent of body i's world AABB on axis a at scale s, exactly as the `aabb` scalar reads it
+ * (sphere: quant(radius); box: ⌊Σ_b |R_ab|·H_b / 2^28⌋ from Q14 quaternion components); NaN for ⊥.
+ * Shared with grid.ts so a grid's boxes are the observer's boxes.
+ */
+export function extentQ(shape: ShapeDesc, rot: Float64Array, i: number, a: number, s: Scale): number {
+  const sc = 2 ** s;
+  return shape.kind === 'sphere' ? halfQ(shape.radius, sc) : boxExt(shape.half, rot, i, a, sc);
+}
+
 /** Column storage for one reduceRef call: vector columns are filled before the scalars that read them. */
 class Columns {
   readonly fills: Fill[] = [];

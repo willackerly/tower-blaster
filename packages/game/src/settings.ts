@@ -14,21 +14,32 @@
 //                               keystone.launch, see launchFeel)
 //   marks: true | false        (stone marks: a crosshair carved on blocks to bring down, a shield on blocks to
 //                               keep, scene.ts markOf; on by default; the URL's say is keystone.marks, see marksFeel)
+//   quality: auto | high | mid | low (the quality tier, quality.ts: auto takes the probe's on load; the URL's
+//                               ?quality= for a visit; docs/game/quality-tiers.md)
 import { LOOKS } from '@tb/render';
 import { LAUNCH_MODES, type LaunchMode } from './aim.ts';
 import type { PaceFeel } from './pacing.ts';
 import { GAME_LOOK } from './params.ts';
 import type { KeyValue } from './progress.ts';
+import { QUALITY_SETTINGS, qualityParam, type QualitySetting } from './quality.ts';
 
 export const SETTINGS_KEY = 'tb.settings.v1';
 
 /** still: the camera moves only when the player moves it (the default since the 2026-11-02 playtest); dynamic: it follows and shakes too. */
 export type CameraSetting = 'still' | 'dynamic';
 
-export interface Settings { sound: boolean; look: string; sharp: 1 | 2; camera: CameraSetting; rapid: boolean; duelView: boolean; launch: LaunchMode; marks: boolean }
+export interface Settings { sound: boolean; look: string; sharp: 1 | 2; camera: CameraSetting; rapid: boolean; duelView: boolean; launch: LaunchMode; marks: boolean; quality: QualitySetting }
 
-/** Rapid fire on (Will, 2026-11-05: in Advanced settings, defaulting to on); a duel's turn view on (Will, 2026-11-06); shots from high (Will, 2026-11-06); stone marks on (Will, 2026-11-06). */
-export const DEFAULT_SETTINGS: Settings = { sound: true, look: GAME_LOOK, sharp: 2, camera: 'still', rapid: true, duelView: true, launch: 'high', marks: true };
+/** Rapid fire on (Will, 2026-11-05: in Advanced settings, defaulting to on); a duel's turn view on (Will, 2026-11-06); shots from high (Will, 2026-11-06); stone marks on (Will, 2026-11-06); quality from the probe (P1, 2026-11-06). */
+export const DEFAULT_SETTINGS: Settings = { sound: true, look: GAME_LOOK, sharp: 2, camera: 'still', rapid: true, duelView: true, launch: 'high', marks: true, quality: 'auto' };
+
+/** The quality choices the front door offers, in its order, with their names there. */
+export const QUALITY_CHOICES: ReadonlyArray<{ quality: QualitySetting; label: string }> = [
+  { quality: 'auto', label: 'Auto' },
+  { quality: 'high', label: 'High' },
+  { quality: 'mid', label: 'Medium' },
+  { quality: 'low', label: 'Low' },
+];
 
 /** The looks the front door offers, in its order, with their names there. */
 export const LOOK_CHOICES: ReadonlyArray<{ look: string; label: string }> = [
@@ -50,6 +61,7 @@ export function parseSettings(text: string | null): Settings {
     duelView: typeof o.duelView === 'boolean' ? o.duelView : DEFAULT_SETTINGS.duelView,
     launch: (LAUNCH_MODES as readonly unknown[]).includes(o.launch) ? (o.launch as LaunchMode) : DEFAULT_SETTINGS.launch,
     marks: typeof o.marks === 'boolean' ? o.marks : DEFAULT_SETTINGS.marks,
+    quality: (QUALITY_SETTINGS as readonly unknown[]).includes(o.quality) ? (o.quality as QualitySetting) : DEFAULT_SETTINGS.quality,
   };
 }
 
@@ -97,7 +109,7 @@ export function turnViewFeel(feel: PaceFeel, q: URLSearchParams, duelView: boole
   return { turnView: q.has('keystone.turnview') ? feel.turnView : duelView };
 }
 
-/** The URL's say over settings: ?look=, ?sound=on|off, ?sharp=1|2 (bad values are refused, as every game key is). */
+/** The URL's say over settings: ?look=, ?sound=on|off, ?sharp=1|2, ?quality=auto|high|mid|low (bad values are refused, as every game key is). */
 export function urlSettings(q: URLSearchParams): Partial<Settings> {
   const out: Partial<Settings> = {};
   const look = q.get('look'), sound = q.get('sound'), sharp = q.get('sharp');
@@ -110,6 +122,8 @@ export function urlSettings(q: URLSearchParams): Partial<Settings> {
     if (sharp !== '1' && sharp !== '2') throw new Error(`sharp must be 1 or 2: ${sharp}`);
     out.sharp = sharp === '1' ? 1 : 2;
   }
+  const quality = qualityParam(q);
+  if (quality !== null) out.quality = quality;
   return out;
 }
 
