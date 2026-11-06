@@ -185,11 +185,11 @@ export interface DoorModel {
   settings: Settings;
   /** The how-to-play panel is open. */
   howTo: boolean;
-  /** The Advanced settings panel (sound, look, camera, rapid fire, sharpness, forget my progress) is open; closed by default. */
+  /** The Advanced settings panel (sound, look, camera, rapid fire, duel turns, sharpness, forget my progress) is open; closed by default. */
   advanced: boolean;
 }
 
-/** The door's markup. Every button carries data-act (play, level, how, advanced, trials, sound, look, sharp, camera, rapid, reset, close) and data-arg where it needs one. */
+/** The door's markup. Every button carries data-act (play, level, how, advanced, trials, sound, look, sharp, camera, rapid, duelview, reset, close) and data-arg where it needs one. */
 export function doorHtml(m: DoorModel): string {
   const next = nextLevel(m.levels);
   const card = (l: DoorLevel, i: number) => {
@@ -239,6 +239,7 @@ export function doorHtml(m: DoorModel): string {
         <span class="group"><span class="lbl">Look</span><span class="seg">${looks}</span></span>
         <span class="group"><span class="lbl">Camera</span><span class="seg"><button data-act="camera" data-arg="still" class="${s.camera === 'still' ? 'on' : ''}" title="Moves only when you move it">Still</button><button data-act="camera" data-arg="dynamic" class="${s.camera === 'dynamic' ? 'on' : ''}" title="Follows the collapse and shakes on hits">Dynamic</button></span></span>
         <span class="group"><span class="lbl">Rapid fire</span><span class="seg"><button data-act="rapid" data-arg="on" class="${s.rapid ? 'on' : ''}" title="Fire again before the last shot settles">On</button><button data-act="rapid" data-arg="off" class="${s.rapid ? '' : 'on'}" title="Each shot waits for the last to settle">Off</button></span></span>
+        <span class="group"><span class="lbl">Duel turns</span><span class="seg"><button data-act="duelview" data-arg="on" class="${s.duelView ? 'on' : ''}" title="The camera turns to the side whose turn it is">Turn the view</button><button data-act="duelview" data-arg="off" class="${s.duelView ? '' : 'on'}" title="The camera stays where the last player left it">Leave it</button></span></span>
         <span class="group"><span class="lbl">Sharpness</span><span class="seg"><button data-act="sharp" data-arg="2" class="${s.sharp === 2 ? 'on' : ''}">Full</button><button data-act="sharp" data-arg="1" class="${s.sharp === 1 ? 'on' : ''}">Fast</button></span></span>
       </div>
       <div class="reset"><button data-act="reset">Forget my progress</button></div>

@@ -6,7 +6,7 @@ import { createHash } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import {
   BLOCK, cellOf, CLASSIC_SOUND_MATERIALS, CollapseEngine, contactTime, DENSE_BANDS, DENSE_LOOP, denseField, denseNoise, DV_EDGES,
-  forceSpectrum, loudness, mass, modes, parseSoundMaterial, pulseSpectrum, ROUGH_T, SOUND_MATERIALS, type SoundMaterial, VIB_SHARE,
+  CLAMPED_PLATE, forceSpectrum, loudness, mass, modes, parseSoundMaterial, plateTable, pulseSpectrum, ROUGH_T, roughTime, SOUND_MATERIALS, type SoundMaterial, VIB_SHARE,
 } from '@tb/audio';
 import { db, frame, octaves, run, SR } from './helpers.ts';
 
@@ -35,7 +35,7 @@ describe('the classic set is G6 bit for bit', () => {
     expect(h.digest('hex').slice(0, 16)).toBe(PINNED[name]);
   });
   it('classic materials carry none of the new fields; real ones are valid materials', () => {
-    for (const m of Object.values(CLASSIC)) for (const k of ['roughDb', 'denseDb', 'law', 'walls'] as const) expect(m[k]).toBeUndefined();
+    for (const m of Object.values(CLASSIC)) for (const k of ['roughDb', 'roughT', 'denseDb', 'law', 'walls', 'plateModes'] as const) expect(m[k]).toBeUndefined();
     for (const m of Object.values(REAL)) expect(parseSoundMaterial(m)).toEqual(m);
     expect(() => parseSoundMaterial({ law: 'loud' } as never, REAL.stone)).toThrow(/law/);
     expect(() => parseSoundMaterial({ walls: [1, 2] }, REAL.plaster)).toThrow(/walls/);
@@ -154,6 +154,59 @@ describe('the energy law (table modes)', () => {
         expect(W / KE, `${name} ${edge} m ${dv} m/s`).toBeGreaterThan(1e-6);
       }
     }
+  });
+});
+
+describe('material identity (the listening ladder, step 1)', () => {
+  it('plate tables: Leissa\'s 8 when absent; past them the edge-effect asymptote, which meets Leissa at (3, 2) and (3, 3)', () => {
+    expect(plateTable()).toBe(CLAMPED_PLATE);
+    const t = plateTable(8), key = (p: number, q: number) => t.find(([, a, b]) => a === p && b === q)![0];
+    expect(t).toHaveLength(64);
+    expect(new Set(t.map(([, p, q]) => `${p},${q}`)).size).toBe(64);
+    for (const row of CLAMPED_PLATE) expect(t).toContainEqual([...row]); // the table's own values where it has them
+    const asym = (p: number, q: number) => 0.91 * Math.PI ** 2 * ((p + 0.5) ** 2 + (q + 0.5) ** 2);
+    expect(Math.abs(asym(3, 2) / 165.15 - 1)).toBeLessThan(0.007); // Leissa (3, 2), 0.6%
+    expect(key(3, 3) / 220.03).toBeCloseTo(1, 3); // Leissa (3, 3), not in the table: the asymptote alone
+    for (let q = 1; q <= 8; q++) for (let p = 2; p <= 8; p++) expect(key(p, q)).toBeGreaterThan(key(p - 1, q));
+    expect(plateTable(2)).toEqual(CLAMPED_PLATE.filter(([, p, q]) => p <= 2 && q <= 2).map((x) => [...x]));
+  });
+
+  it('a shell with more plate modes rings denser, and its dense field starts above the larger table', () => {
+    const few = { ...REAL.iron!, plateModes: undefined }, many = REAL.iron!;
+    expect(many.plateModes).toBe(8);
+    expect(modes(many, 0.5).freq.length).toBeGreaterThan(4 * modes(few, 0.5).freq.length);
+    const top = Math.max(...modes(many, 0.5).freq), field = denseField(many, [1e-3], 0.5)!;
+    expect(field).not.toBeNull();
+    expect(top).toBeLessThan(18000);
+  });
+
+  it('the iron box\'s walls weigh what the game\'s iron does (1950 kg/m^3), as plaster\'s solid block does (250)', () => {
+    expect(mass(REAL.iron!, 0.5) / 0.125 / 1950).toBeCloseTo(1, 1);
+    expect(mass(REAL.plaster!, 0.5) / 0.125).toBeCloseTo(250, 6);
+  });
+
+  it('loss factors sit in their material\'s band (Wildes & Richards; the judge, docs/sound.md): metal < glass < stone < wood', () => {
+    const eta = (k: string) => REAL[k]!.eta;
+    expect(eta('steel')).toBeLessThanOrEqual(0.002);
+    expect(eta('iron')).toBeLessThan(0.005);
+    expect(eta('ice')).toBeGreaterThanOrEqual(0.005); expect(eta('ice')).toBeLessThanOrEqual(0.01);
+    for (const k of ['stone', 'plaster']) { expect(eta(k)).toBeGreaterThanOrEqual(0.02); expect(eta(k)).toBeLessThan(0.04); }
+    expect(eta('rubber')).toBeGreaterThan(0.04);
+  });
+
+  it('an asperity time (roughT) sets the roughness floor\'s bandwidth; absent, ROUGH_T as before', () => {
+    expect(roughTime(REAL.plaster!)).toBe(ROUGH_T);
+    for (const f of [300, 2000, 9000]) expect(forceSpectrum(f, 4e-3, 0.5)).toBe(forceSpectrum(f, 4e-3, 0.5, ROUGH_T));
+    // Five times longer: the floor is gone at f roughT = 2 (1.3 kHz), where ROUGH_T's still holds.
+    const rt = 5 * ROUGH_T, f = 2 / rt;
+    expect(forceSpectrum(f, 4e-3, 1, rt) ** 2 - pulseSpectrum(f, 4e-3) ** 2).toBeLessThan(1e-20);
+    expect(forceSpectrum(f, 4e-3, 1) / pulseSpectrum(f, 4e-3)).toBeGreaterThan(10);
+  });
+
+  it('rejects plate modes and asperity times that cannot be', () => {
+    for (const plateModes of [0, 2.5, 17]) expect(() => parseSoundMaterial({ plateModes }, REAL.iron)).toThrow(/plateModes/);
+    for (const roughT of [0, 1e-6, 0.1, Number.NaN]) expect(() => parseSoundMaterial({ roughT }, REAL.steel)).toThrow(/roughT/);
+    expect(parseSoundMaterial({ plateModes: 12, roughT: 1e-3 }, REAL.iron)).toMatchObject({ plateModes: 12, roughT: 1e-3 });
   });
 });
 

@@ -8,6 +8,8 @@
 //                               keystone.follow and keystone.shake, one each, see cameraFeel)
 //   rapid: true | false        (rapid fire: shoot before the last shot settles; on by default; the URL's say
 //                               is keystone.rapid, see rapidFeel)
+//   duelView: true | false     (a duel's turn view: the camera swings to the next player's side; on by default;
+//                               the URL's say is keystone.turnview, see turnViewFeel)
 import { LOOKS } from '@tb/render';
 import type { PaceFeel } from './pacing.ts';
 import { GAME_LOOK } from './params.ts';
@@ -18,10 +20,10 @@ export const SETTINGS_KEY = 'tb.settings.v1';
 /** still: the camera moves only when the player moves it (the default since the 2026-11-02 playtest); dynamic: it follows and shakes too. */
 export type CameraSetting = 'still' | 'dynamic';
 
-export interface Settings { sound: boolean; look: string; sharp: 1 | 2; camera: CameraSetting; rapid: boolean }
+export interface Settings { sound: boolean; look: string; sharp: 1 | 2; camera: CameraSetting; rapid: boolean; duelView: boolean }
 
-/** Rapid fire on (Will, 2026-11-05: in Advanced settings, defaulting to on). */
-export const DEFAULT_SETTINGS: Settings = { sound: true, look: GAME_LOOK, sharp: 2, camera: 'still', rapid: true };
+/** Rapid fire on (Will, 2026-11-05: in Advanced settings, defaulting to on); a duel's turn view on (Will, 2026-11-06). */
+export const DEFAULT_SETTINGS: Settings = { sound: true, look: GAME_LOOK, sharp: 2, camera: 'still', rapid: true, duelView: true };
 
 /** The looks the front door offers, in its order, with their names there. */
 export const LOOK_CHOICES: ReadonlyArray<{ look: string; label: string }> = [
@@ -40,6 +42,7 @@ export function parseSettings(text: string | null): Settings {
     sharp: o.sharp === 1 || o.sharp === 2 ? o.sharp : DEFAULT_SETTINGS.sharp,
     camera: o.camera === 'still' || o.camera === 'dynamic' ? o.camera : DEFAULT_SETTINGS.camera,
     rapid: typeof o.rapid === 'boolean' ? o.rapid : DEFAULT_SETTINGS.rapid,
+    duelView: typeof o.duelView === 'boolean' ? o.duelView : DEFAULT_SETTINGS.duelView,
   };
 }
 
@@ -61,6 +64,14 @@ export const RAPID_KEYS = ['keystone.rapid'] as const;
 /** Rapid fire in effect: keystone.rapid where the URL says it (feel was read from that URL), else the setting. */
 export function rapidFeel(feel: PaceFeel, q: URLSearchParams, rapid: boolean): Pick<PaceFeel, 'rapid'> {
   return { rapid: q.has('keystone.rapid') ? feel.rapid : rapid };
+}
+
+/** The URL key that says what the Duel turns setting says (turnViewFeel), dropped from the URL when the setting changes. */
+export const TURN_VIEW_KEYS = ['keystone.turnview'] as const;
+
+/** A duel's turn view in effect: keystone.turnview where the URL says it (feel was read from that URL), else the setting. */
+export function turnViewFeel(feel: PaceFeel, q: URLSearchParams, duelView: boolean): Pick<PaceFeel, 'turnView'> {
+  return { turnView: q.has('keystone.turnview') ? feel.turnView : duelView };
 }
 
 /** The URL's say over settings: ?look=, ?sound=on|off, ?sharp=1|2 (bad values are refused, as every game key is). */

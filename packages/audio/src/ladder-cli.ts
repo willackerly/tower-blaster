@@ -94,7 +94,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   if (set !== 'real' && set !== 'classic') throw new Error(`set must be real or classic: ${set}`);
   const mats = soundMaterials(set) as Record<string, SoundMaterial>;
   const knobs = Object.fromEntries((Object.keys(SOUND_KNOBS) as SoundKnob[]).map((k) => [k, kv[k] === undefined ? SOUND_KNOBS[k].def : Number(kv[k])])) as Record<SoundKnob, number>;
-  const over = Object.fromEntries(Object.entries(kv).filter(([k]) => k.startsWith('m.')).map(([k, v]) => [k.slice(2), k === 'm.law' ? v : Number(v)]));
+  const over = Object.fromEntries(Object.entries(kv).filter(([k]) => k.startsWith('m.')).map(([k, v]) => [k.slice(2), k === 'm.law' || k === 'm.model' ? v : Number(v)]));
   const edge = Number(kv.edge ?? 0.05), dist = Number(kv.dist ?? 0.6);
   mkdirSync(kv.out, { recursive: true });
   for (const step of (kv.steps ?? 'knock,clatter,tumble').split(',')) {

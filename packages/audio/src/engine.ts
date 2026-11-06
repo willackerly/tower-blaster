@@ -42,7 +42,7 @@
 // limiting does not crackle.
 import { binOf, DV_EDGES, TOP_FIELDS, type AudioFrame } from './frame.ts';
 import type { SoundMaterial } from './material.ts';
-import { clickKernel, contactTime, DENSE_BANDS, denseField, forceSpectrum, gauss, modes, roughness, soundSize, type Modes } from './modes.ts';
+import { clickKernel, contactTime, DENSE_BANDS, denseField, forceSpectrum, gauss, modes, roughness, roughTime, soundSize, type Modes } from './modes.ts';
 
 export const BLOCK = 128;
 const RING = 64; // blocks of scheduling horizon (171 ms at 48 kHz)
@@ -171,6 +171,8 @@ interface MatState {
   gritAmp: number; gritDelay: number;
   /** Contact roughness (amplitude floor re the impulse, 0: smooth). */
   rough: number;
+  /** Asperity contact time, s (roughTime). */
+  roughT: number;
   /**
    * Dense field (null: off): per (bin, band) the squared amplitude an impulse of A = 1 adds (2 E / tau),
    * per band the amplitude decay a sample, per (sector, band) the amplitude and this block's additions.
@@ -315,6 +317,7 @@ export class CollapseEngine {
       gritAmp: Math.sqrt(gritEnergy(m, edge)),
       gritDelay: GRIT.spread * Math.sqrt(soundSize(m, edge) / GRIT.refEdge) * this.sr,
       rough: roughness(m),
+      roughT: roughTime(m),
       dK: null, dDec: new Float64Array(0), dA: new Float64Array(0), dIn: new Float32Array(0), dLive: 0,
     };
     for (let c = 0; c < C; c++) st.mult[c] = Math.exp(m.jitter * normInv((c + 0.5) / C));
@@ -441,7 +444,7 @@ export class CollapseEngine {
     for (let k = 0; k < st.M; k++) {
       const f = st.md.freq[k]! * mult, [a1, a2] = coeffs(f, st.md.tau[k]!, this.sr);
       v.a1[k] = a1; v.a2[k] = a2; v.y1[k] = 0; v.y2[k] = 0;
-      v.amp[k] = level * w[k]! * forceSpectrum(f, T, st.rough) * st.md.gain[k]! * Math.sin((2 * Math.PI * Math.min(f, 0.45 * this.sr)) / this.sr);
+      v.amp[k] = level * w[k]! * forceSpectrum(f, T, st.rough, st.roughT) * st.md.gain[k]! * Math.sin((2 * Math.PI * Math.min(f, 0.45 * this.sr)) / this.sr);
       tmax = Math.max(tmax, st.md.tau[k]!);
     }
     const [gl, gr] = panGains(pan);
@@ -468,7 +471,7 @@ export class CollapseEngine {
       const T = st.binT[bin]!, w = st.md.weights(this.rand, st.w), mult = st.mult[cls]!;
       const base = (cls * S + s) * st.M;
       for (let k = 0; k < st.M; k++) {
-        const amp = A * w[k]! * forceSpectrum(st.md.freq[k]! * mult, T, st.rough) * st.md.gain[k]!;
+        const amp = A * w[k]! * forceSpectrum(st.md.freq[k]! * mult, T, st.rough, st.roughT) * st.md.gain[k]!;
         st.x[(base + k) * BLOCK + t]! += amp;
         if (!st.live[base + k]) { st.live[base + k] = 1; st.nLive++; }
       }

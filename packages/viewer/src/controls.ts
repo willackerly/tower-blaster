@@ -422,6 +422,8 @@ export function mountControls(root: HTMLElement, hooks: ControlsHooks): { refres
       budgetMs: input(sceneForm, 'budget').value === '' ? NaN : Number(input(sceneForm, 'budget').value), tailSkip: (input(sceneForm, 'tailskip') as HTMLInputElement).checked,
       follow: (input(sceneForm, 'follow') as HTMLInputElement).checked, shake: (input(sceneForm, 'shake') as HTMLInputElement).checked, frames: input(sceneForm, 'frames').value as FrameMode,
       rapid: (input(sceneForm, 'rapid') as HTMLInputElement).checked,
+      // A duel's aids (the game page's Siege Table): the viewer plays no duels, so they ride along as the URL says.
+      turnView: hooks.config().feel.turnView, arcs: hooks.config().feel.arcs,
     }, freeze: input(sceneForm, 'freeze').value === '' ? NaN : Number(input(sceneForm, 'freeze').value) };
     return proposeScene(hooks.config(), scenario, params, Number(input(sceneForm, 'seed').value), Number(input(sceneForm, 'scale').value), Number(input(sceneForm, 'substeps').value), bounce, presettle, rules);
   }

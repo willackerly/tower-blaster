@@ -21,6 +21,7 @@ import { driverOptions, type EngineKind, gpuEngineOptions, makeEngine, roomAfter
 import { hudHtml, meterTicks, type MeterTick, nextSelection, POWER_STEP, rackChips, resultHtml, starsText } from './hud.ts';
 import { type GoalLine, goalsHudHtml, goalsResultHtml } from './lot-hud.ts';
 import { duelHudHtml, duelResultHtml } from './duel-hud.ts';
+import { arcBeads, duelView, joinOverlays, type Overlay, turnCue, turnCueText, TurnSwing } from './duel-view.ts';
 import { FollowCam } from './follow.ts';
 import { CameraJuice, contactJuice } from './juice.ts';
 import { alphaAt, arrived, DEFAULT_FEEL, newArrivals, Pacer, type PaceFeel, SLOW_TAG_BELOW, slowTag, SpeedMeter, TailSkip } from './pacing.ts';
@@ -58,9 +59,11 @@ export interface GameHandle {
   /**
    * The camera's orbit target and distance (m) now, whether the follow camera is moving it (follow.ts; off unless
    * `?keystone.follow=1`), and the jolt the last drawn frame added to the player's view: its largest shake (rad) or
-   * field-of-view punch (share of the field of view), 0 unless `?keystone.shake=1` (juice.ts).
+   * field-of-view punch (share of the field of view), 0 unless `?keystone.shake=1` (juice.ts). In a duel
+   * (duel-view.ts): whether the turn view is swinging the camera to the next side, the HUD's turn cue (which way
+   * to drag to reach the side to fire, null when the view is on it) and how many arc beads the frame drew.
    */
-  view: { target: [number, number, number]; distance: number; yaw: number; pitch: number; following: boolean; jolt: number };
+  view: { target: [number, number, number]; distance: number; yaw: number; pitch: number; following: boolean; jolt: number; turning: boolean; cue: 'left' | 'right' | null; arcBeads: number };
   /**
    * The player's controls now: whether the page shows its touch face (touch.ts touchFace: the HUD's
    * tap buttons and the touch help; body class kg-touch), the touch gesture under way and fingers down,
@@ -176,7 +179,7 @@ function safetyLimiter(ctx: AudioContext): AudioNode {
 export function newGameHandle(): GameHandle {
   const none = (): SessionState => ({ step: 0, phase: 'loading', strokes: 0, heritageBroken: 0, hash: '' });
   return {
-    status: 'loading', engine: '', level: '', phase: 'loading', ready: false, frozen: false, frames: 0, stepIndex: 0, strokes: 0, bodies: 0, collapse: 0, fast: false, pace: { timeScale: 1, speed: 1, tag: '', tailSkip: false, costMs: NaN }, view: { target: [0, 0, 0], distance: 0, yaw: 0, pitch: 0, following: false, jolt: 0 }, input: { touch: false, gesture: 'idle', fingers: 0, aimed: null, power: 100 }, result: null, counts: {}, feel: { ...DEFAULT_FEEL }, resultShownAt: null, timing: { loadMs: 0, stepMs: [], moving: [], frameMs: [], costMs: [] }, draws: { drawn: 0, skipped: 0, decimating: false },
+    status: 'loading', engine: '', level: '', phase: 'loading', ready: false, frozen: false, frames: 0, stepIndex: 0, strokes: 0, bodies: 0, collapse: 0, fast: false, pace: { timeScale: 1, speed: 1, tag: '', tailSkip: false, costMs: NaN }, view: { target: [0, 0, 0], distance: 0, yaw: 0, pitch: 0, following: false, jolt: 0, turning: false, cue: null, arcBeads: 0 }, input: { touch: false, gesture: 'idle', fingers: 0, aimed: null, power: 100 }, result: null, counts: {}, feel: { ...DEFAULT_FEEL }, resultShownAt: null, timing: { loadMs: 0, stepMs: [], moving: [], frameMs: [], costMs: [] }, draws: { drawn: 0, skipped: 0, decimating: false },
     fire: () => false, bank: () => false, freeze: () => false, fireOpener: () => false, setMuted: () => {}, maxDpr: 2, aim: () => null, reach: null, select: () => false, load: async () => {}, retry: async () => {}, undo: async () => false, capture: async () => null,
     state: none, line: () => [], replay: async () => none(), health: async () => null, pairsPerBody: 0, limitsHit: [], goals: [], grade: null, duel: null,
     sound: () => ({ mode: 'collapse', status: 'off', error: '', posted: 0, stats: null }),
@@ -344,7 +347,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
   // a GPU step may still be awaiting its readback.
   let lock: Promise<unknown> = Promise.resolve();
   const exclusive = <T>(fn: () => Promise<T>): Promise<T> => { const r = lock.then(fn); lock = r.catch(() => {}); return r; };
-  const pacer = new Pacer(), juice = new CameraJuice(), speed = new SpeedMeter(), tail = new TailSkip(), follow = new FollowCam();
+  const pacer = new Pacer(), juice = new CameraJuice(), speed = new SpeedMeter(), tail = new TailSkip(), follow = new FollowCam(), swing = new TurnSwing();
   /** What the last drawn frame added to the view (handle.view.jolt). */
   let jolt = 0;
   let arrivals = newArrivals();
@@ -401,10 +404,18 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
   let lot: { sheet: LotSheet; goals: readonly Goal[]; groups: Record<string, Int32Array> } | null = null;
   /** The duel being played (env.duel), and when the turn in the air was fired (its pace: DuelDef.turnSeconds). */
   let duel: Duel | null = null, turnStart = 0;
+  /** Each side's arc on the ground (duel-view.ts arcBeads), made at load. */
+  let arcs: Overlay[] = [], arcBeadsDrawn = 0;
   /** Every crown is down: the round is known to be over, the card shows, and the rest of the settle runs at fast-forward. */
   let ending = false;
 
   const aspect = () => (offscreen ? 640 / 400 : canvas.width / Math.max(1, canvas.height));
+  /** The aspect a view is framed for: a phone held upright frames the width too (the CSS box: the canvas may not be sized for it yet). */
+  const viewAspect = () => (offscreen ? aspect() : canvas.clientWidth / Math.max(1, canvas.clientHeight));
+  /** The player orbited, panned or zoomed: the follow camera lets go for this shot, the turn view's swing for this turn. */
+  const grabCamera = () => { follow.grab(); swing.grab(); };
+  /** The HUD's turn cue now: which way to drag to reach the side to fire, between shots in a duel (none while the turn view swings). */
+  const cueNow = () => (duel && !duel.result.over && duel.shooter === null && !swing.active ? turnCue(duel.def.sides[duel.turn].arc, azFromYaw(orbit.yaw)) : null);
   const courses = () => Math.ceil(c.height / c.frame.unit);
 
   /** Loads queued or in flight: the frame loop stops stepping the outgoing level and keeps drawing it. */
@@ -515,6 +526,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     arrivals = newArrivals();
     juice.reset();
     follow.reset();
+    swing.grab();
     renderer.blasts.clear();
     renderer.fuses.clear();
     const m = 4 * c.frame.unit;
@@ -529,13 +541,15 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     selected = nextSelection(c.def.rack, driver.session.rackLeft, retry ? selected : null);
     opener = env.opener?.(c) ?? null;
     if (!retry) {
-      // A phone held upright frames the width too (the CSS box: the canvas may not be sized for it yet).
-      orbit = viewOf(c, offscreen ? aspect() : canvas.clientWidth / Math.max(1, canvas.clientHeight));
+      orbit = viewOf(c, viewAspect());
       setPower(100);
       // The play area: the lot (where debris counts), grown a little, up to the structure's top.
       const half: Vec3 = [(c.lot.max[0] - c.lot.min[0]) / 2 + 2, c.height / 2 + 2, (c.lot.max[1] - c.lot.min[1]) / 2 + 2];
       renderer.setShadowBounds([(c.lot.min[0] + c.lot.max[0]) / 2, c.height / 2, (c.lot.min[1] + c.lot.max[1]) / 2], Math.hypot(...half), half);
     }
+    // A duel opens (and Same start reopens) on the first player's side, as each turn after does (duel-view.ts).
+    if (duel && feel.turnView) orbit = duelView(c, duel.def.sides[duel.turn], viewAspect());
+    arcs = duel ? duel.def.sides.map((side) => arcBeads(c, side)) : [];
     regrowT = line ? null : 0;
     waiting = [];
     frozen = false;
@@ -688,6 +702,8 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
             else {
               selected = nextSelection(side.rack, duel.left[duel.turn], null);
               banner(`${side.name}'s turn`);
+              // The turn view: swing to the middle of the next player's side (the follow camera, if on, lets go).
+              if (feel.turnView) { follow.grab(); swing.start(orbit, duelView(c, side, viewAspect())); }
             }
           }
           aimDirty = true;
@@ -740,7 +756,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     const s = driver.session;
     const running = s.phase === 'running', v = running ? speed.speed(performance.now()) : 1, costs = handle.timing.costMs;
     handle.pace = { timeScale: running ? pacer.timeScale : 1, speed: v, tag: running && !fastHeld && !handle.fast && !ending && !tail.on ? slowTag(v) : '', tailSkip: tail.on, costMs: running && !Number.isNaN(pacer.costMs) ? pacer.costMs : median(costs.slice(-60)) };
-    handle.view = { target: [...orbit.target], distance: orbit.distance, yaw: orbit.yaw, pitch: orbit.pitch, following: follow.active, jolt };
+    handle.view = { target: [...orbit.target], distance: orbit.distance, yaw: orbit.yaw, pitch: orbit.pitch, following: follow.active, jolt, turning: swing.active, cue: cueNow(), arcBeads: arcBeadsDrawn };
   }
 
   /** The physics loop's idle wait: the next frame, or a fire, whichever comes first (physics-loop.ts wakeable). */
@@ -779,7 +795,12 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     if (loading || regrowT !== null || ending || handle.result !== null || !driver.session.canFire(shot.ammo) || !inRack(shot, waiting)) return false;
     // A duel takes one shot per turn from the current player's side and rack (the referee says why not).
     const refused = duel?.refuse(shot) ?? (duel && waiting.length ? { message: 'Wait for the last shot to settle' } : null);
-    if (refused) { banner(refused.message, 'crack'); return false; }
+    if (refused) {
+      // From the wrong side: say which way to drag to reach the right one.
+      const cue = duel && 'why' in refused && refused.why === 'arc' && 'az' in shot ? turnCue(duel.def.sides[duel.turn].arc, shot.az) : null;
+      banner(cue ? turnCueText(duel!.def.sides[duel!.turn].name, cue, handle.input.touch) : refused.message, 'crack');
+      return false;
+    }
     const timed = shot.after !== undefined && driver.session.strokes > 0;
     if (!timed && !aimable()) return false;
     if (shot.ammo === 'pull' && driver.session.pullRefusal(shot.body) !== null) return false;
@@ -809,7 +830,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
   function fireNow(shot: Shot) {
     setHover(null);
     const fb = driver.fire(shot);
-    if (duel) { duel.fired(shot); turnStart = performance.now(); syncDuel(); }
+    if (duel) { duel.fired(shot); turnStart = performance.now(); syncDuel(); swing.grab(); }
     // A shot fired while frozen (Bullet Time) has cut in at the frozen step: the world runs on with it.
     frozen = false;
     // The shot's first step goes in now, not at the next frame.
@@ -940,8 +961,8 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
           break;
         }
         case 'cancel': pointer = null; updateAim(); break; // the arc goes at once, not at the next frame
-        case 'orbit': follow.grab(); orbitDrag(orbit, a.dx, a.dy); aimDirty = true; break;
-        case 'zoom': follow.grab(); zoomBy(orbit, a.ratio); aimDirty = true; break;
+        case 'orbit': grabCamera(); orbitDrag(orbit, a.dx, a.dy); aimDirty = true; break;
+        case 'zoom': grabCamera(); zoomBy(orbit, a.ratio); aimDirty = true; break;
       }
     }
     handle.input.gesture = gestures.state;
@@ -965,7 +986,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     drag.moved += Math.abs(dx) + Math.abs(dy);
     drag.x = e.clientX;
     drag.y = e.clientY;
-    if (drag.moved >= 5) follow.grab(); // the player has the camera: the follow lets go for this shot
+    if (drag.moved >= 5) grabCamera(); // the player has the camera: the follow lets go for this shot, the turn view for this turn
     if (drag.pan) {
       const s = orbit.distance * 0.0015, cy = Math.cos(orbit.yaw), sy = Math.sin(orbit.yaw);
       orbit.target = [orbit.target[0] - dx * cy * s, orbit.target[1] + dy * s, orbit.target[2] + dx * sy * s];
@@ -994,7 +1015,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
   canvas.addEventListener('pointerleave', (e) => { if (e.pointerType === 'touch') return; pointer = null; aimDirty = true; });
   canvas.addEventListener('wheel', (e) => {
     e.preventDefault();
-    follow.grab();
+    grabCamera();
     zoomBy(orbit, Math.exp(e.deltaY * 0.001));
     aimDirty = true;
   }, { passive: false });
@@ -1060,7 +1081,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
       pullRefused: aimed?.shot.ammo === 'pull' && !aimed.reachable,
       collapse: s.liveCollapse, pulled: s.pulledShare(), met: s.objectiveDone, canBank: !stepping && regrowT === null && s.canBank(), pace: handle.pace.tag,
       opener: !stepping && regrowT === null && s.phase === 'aiming' && openerNow() !== null, ticks,
-      ...(duel ? { duel: duelHudHtml(duel, s.phase === 'aiming' && aimed ? duel.refuse(aimed.shot) : null) } : {}),
+      ...(duel ? { duel: duelHudHtml(duel, s.phase === 'aiming' && aimed ? duel.refuse(aimed.shot) : null, swing.active ? null : azFromYaw(orbit.yaw)) } : {}),
       ...(c.def.freeze !== undefined ? { freezes: { left: s.freezesLeft, total: c.def.freeze, frozen, can: canFreeze() } } : {}),
     });
     html += goalsHudHtml(handle.goals);
@@ -1106,6 +1127,8 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
       follow.update(orbit, dt, running, red?.movingBox ?? null, red?.nMoving ?? 0, c.frame.unit, followClip);
       aimDirty = true;
     }
+    // The turn view's swing (a duel's turn passed): the aim follows the view, as under a drag.
+    if (swing.active) { swing.update(orbit, dt); aimDirty = true; }
     if (aimDirty) updateAim();
     sync();
 
@@ -1113,7 +1136,10 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     const juiced = juice.update(dt), shake = feel.shake ? juiced : { yaw: 0, pitch: 0, fovScale: 1 };
     const view: Orbit = { ...orbit, yaw: orbit.yaw + shake.yaw, pitch: orbit.pitch + shake.pitch, fovY: orbit.fovY * shake.fovScale };
     handle.view.jolt = jolt = Math.max(Math.abs(shake.yaw), Math.abs(shake.pitch), 1 - shake.fovScale);
-    const o = beads ? beadOverlay(beads, aimed?.reachable ?? true) : null;
+    // The player to fire's arc on the ground, between shots (and the aim's beads over it).
+    const arc = duel && feel.arcs && !duel.result.over && duel.shooter === null ? arcs[duel.turn] ?? null : null;
+    arcBeadsDrawn = arc?.colours.length ?? 0;
+    const o = joinOverlays(beads ? beadOverlay(beads, aimed?.reachable ?? true) : null, arc);
     renderer.reach(ring?.centre ?? null, ring?.radius ?? 0);
     renderer.setOverlay(o?.xyzr ?? new Float32Array(0), o?.colours);
     pendingCapture = null;
