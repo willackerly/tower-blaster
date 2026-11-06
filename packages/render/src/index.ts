@@ -22,3 +22,6 @@ export * from './noise.ts';
 export * from './materials.ts';
 export * from './hall.ts';
 export * from './rocks.ts';
+export * from './surface.ts';
+export * from './ice.ts';
+export * from './ice-pass.ts';

@@ -12,6 +12,7 @@ import { AO_FOOT_WGSL, AO_SAMPLE_WGSL, AO_SEAM_WGSL } from './ao.ts';
 import { ATMO_COMMON_WGSL } from './atmosphere.ts';
 import { GROUND_LAYER, GROUND_TILE, GROUNDS, MACRO_LAYER, MACRO_TILE, MATERIAL_MIPS, MATERIAL_SIZE, MATERIAL_TILE, WOOD, WOOD_RING_M, WOOD_STRETCH, WOOD_WGSL } from './materials.ts';
 import { PCG_WGSL } from './noise.ts';
+import { iceWgsl } from './ice.ts';
 import { ROCKS_WGSL } from './rocks.ts';
 import { BALUSTRADE, HALL_MAT, HALL_PATTERN } from './hall.ts';
 
@@ -1456,6 +1457,7 @@ struct TrailOut {
   let soft = 1.0 - smoothstep(0.2, 1.0, abs(o.across));
   return vec4f(fr.ball * fr.ballEmissive * 0.6 * o.fade * soft, 0.0);
 }
+${iceWgsl(real)}
 `;
 }
 

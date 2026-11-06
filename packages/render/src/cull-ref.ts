@@ -4,6 +4,7 @@
 import { Body, Shape, TIER } from '@tb/schema';
 import { frustumPlanes, MAX_STEP_JUMP, NO_LOD, SEG, SEGMENTS, type CullFrame } from './cull.ts';
 import { FX_WORDS, unpackFx } from './fx.ts';
+import { SURFACE_ICE } from './surface.ts';
 
 const EPS = 1e-3;
 const BO = Object.fromEntries(Body.fields.map((f) => [f.name, f.offset / 4])) as Record<string, number>;
@@ -18,6 +19,8 @@ export interface CpuWorld {
   count: number;
   /** Per-slot FX records (FX_WORDS each); none means no effects. */
   fx?: Uint32Array;
+  /** Per-slot surface words (surface.ts); none means every surface the default. */
+  surfaces?: Uint32Array;
 }
 
 export interface RefRecord { pos: number[]; look: number; rot: number[]; half: number[]; slot: number }
@@ -74,6 +77,7 @@ export function cullReference(w: CpuWorld, f: CullFrame): CullRef {
     const rel = pos.map((x, k) => x - f.eye[k]!);
     records.set(i, { pos: rel, look: w.looks[i]!, rot, half, slot: i });
     const seg = Math.min(kind, 1);
+    const ice = ((w.surfaces?.[i] ?? 0) & 0xf) === SURFACE_ICE;
     const r = kind === 1 ? half[0]! : Math.hypot(...half);
     const tests: Test[] = !(fx.scale > 0) ? ['out', 'out'] : f.noCull ? ['in', 'in'] : [classify(cam, rel, r), classify(light, rel, r)];
     // A visible box is far when all of it lies lodDepth or more past the near plane (camera plane 4).
@@ -81,7 +85,8 @@ export function cullReference(w: CpuWorld, f: CullFrame): CullRef {
     const far: Test = x > EPS ? 'in' : x < -EPS ? 'out' : 'maybe';
     tests.forEach((t, j) => {
       const s = seg + 2 * j;
-      const lists = s === SEG.box ? [[SEG.box, far === 'out', far !== 'in'], [SEG.boxFar, far === 'in', far !== 'out']] as const : [[s, true, true]] as const;
+      // An ice box is in boxIce at any distance, never in box or boxFar (its shadow is any box's).
+      const lists = s === SEG.box ? (ice ? [[SEG.boxIce, true, true]] as const : [[SEG.box, far === 'out', far !== 'in'], [SEG.boxFar, far === 'in', far !== 'out']] as const) : [[s, true, true]] as const;
       for (const [l, sure, maybe] of lists) {
         if (t === 'in' && sure) must[l]!.push(i);
         if (t !== 'out' && maybe) may[l]!.push(i);
