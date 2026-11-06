@@ -45,6 +45,8 @@ export interface DriverOptions {
    * exactly only on a driver with the same option.
    */
   pipelined?: boolean;
+  /** A refereed round (a Siege Table duel): its session ends with no solo tally (Session's refereed option). */
+  refereed?: boolean;
 }
 
 /**
@@ -199,7 +201,7 @@ export class Driver {
     this.snapshot = await this.engine.snapshot();
     this.resetMs = { init: t1 - t0, presettle: (now?.() ?? 0) - t1, steps: presettle };
     this.snapshotStep = this.engine.stepIndex;
-    this.session = new Session(this.level, this.snapshot.pos);
+    this.session = new Session(this.level, this.snapshot.pos, { refereed: this.options.refereed ?? false });
     this.observer = new CpuObserver(this.level, this.snapshot);
     this.spawns = [];
     this.descs = [...this.level.scene.bodies];
@@ -435,7 +437,7 @@ export interface SessionResult { session: Session; feedback: Feedback[]; steps: 
  * level ends, the shots run out, or `maxSteps`.
  */
 export async function runSession(engine: PhysicsEngine, level: CompiledLevel, shots: Shot[], opts: PlayOptions & DriverOptions = {}): Promise<SessionResult> {
-  const d = new Driver(engine, level, { pipelined: opts.pipelined });
+  const d = new Driver(engine, level, { pipelined: opts.pipelined, refereed: opts.refereed });
   await d.reset();
   return playShots(d, shots, 0, opts);
 }
