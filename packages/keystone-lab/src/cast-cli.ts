@@ -4,6 +4,7 @@
 //   [--cloud-of cast.json [--n 16]] [--budget-min 60] [--pool a.json,b.json]
 //   [--stars-into packages/keystone/src/stars.json] [--replay cast.json [--phase cloud] [--n 16]]
 //   [--extend cast.json [--n 50]] [--pool a.json,b.json [--t3 pooled|best]] [--waive skill,stable]
+//   [--bounce off|0.3]
 // <level>: a built-in level id, or --level-file path.json (a LevelDef), or
 // --scenario S3 --param W=50 ... (the automatic scenario level), or --draft B1a
 // (keystone-lab drafts.ts). --explore N plays N competent lines only and
@@ -32,10 +33,12 @@
 // instead of every cloud together (poolCasts). --waive skill[,stable] lets --stars-into write
 // although those gates failed (applyWaivers: a documented call, recorded as the stars' `waived`;
 // fair, limits and complete are never waivable). Exit codes still report the failed gates.
+// --bounce off|e plays a variant of the level with Bounce at e (withBounce: roadmap B6's probe);
+// it changes the level hash, so it refuses --stars-into.
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { compileLevel, type LevelDef, levelById, scenarioLevel, STAR_METRICS, type StarMetric, type StarsDef } from '@tb/keystone';
 import { exitNow } from '@tb/testkit';
-import { applyWaivers, CAST_BUDGET_MS, castLevel, castMarkdown, cloudCheck, exploreLevel, extendCloud, type PoolT3, replayCast, explorationMarkdown, type CastPlayer, type CastRecipe, type CastGates, type CastResult, compareCasts, type PoolGates, FULL_RECIPE, mergeStarsFile, nodeCastPlayer, playsOf, poolCasts, SHORT_RECIPE, WAIVABLE, withWallTime } from './cast.ts';
+import { applyWaivers, withBounce, CAST_BUDGET_MS, castLevel, castMarkdown, cloudCheck, exploreLevel, extendCloud, type PoolT3, replayCast, explorationMarkdown, type CastPlayer, type CastRecipe, type CastGates, type CastResult, compareCasts, type PoolGates, FULL_RECIPE, mergeStarsFile, nodeCastPlayer, playsOf, poolCasts, SHORT_RECIPE, WAIVABLE, withWallTime } from './cast.ts';
 import { openBrowserCastPlayer } from './cast-browser.ts';
 import { draftByName } from './drafts.ts';
 
@@ -50,6 +53,12 @@ for (let i = 0; i < argv.length; i++) {
 }
 
 function level(): LevelDef {
+  const d = baseLevel();
+  if (!flags.has('bounce')) return d;
+  if (flags.has('stars-into')) throw new Error('--bounce probes a variant of the level: its stars cannot go into the stars file');
+  return withBounce(d, flags.get('bounce')!);
+}
+function baseLevel(): LevelDef {
   if (flags.has('level-file')) return JSON.parse(readFileSync(flags.get('level-file')!, 'utf8')) as LevelDef;
   if (flags.has('draft')) return draftByName(flags.get('draft')!);
   if (flags.has('scenario')) return scenarioLevel(flags.get('scenario')!, params, Number(flags.get('seed-scene') ?? 1));

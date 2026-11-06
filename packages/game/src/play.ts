@@ -1194,6 +1194,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     const timed = shot.after !== undefined && driver.session.strokes > 0;
     if (!timed && !aimable()) return false;
     if (shot.ammo === 'pull' && driver.session.pullRefusal(shot.body) !== null) return false;
+    if (shot.ammo === 'plunger' && driver.session.plungerRefusal(shot) !== null) return false;
     // Without rapid fire a click mid-step is refused, as before; with it, or for a line's timed shot, it waits for the step.
     if (stepping || timed || waiting.length) {
       if (stepping && !timed && !feel.rapid && !frozen) return false;
@@ -1212,7 +1213,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
       if (s.phase !== 'aiming' && s.phase !== 'running') { waiting = []; return; }
       if (next.after !== undefined && s.phase === 'running' && !rapidDue(driver, next)) return;
       waiting.shift();
-      if (!s.canFire(next.ammo) || (next.ammo === 'pull' && s.pullRefusal(next.body) !== null) || duel?.refuse(next)) continue;
+      if (!s.canFire(next.ammo) || (next.ammo === 'pull' && s.pullRefusal(next.body) !== null) || (next.ammo === 'plunger' && s.plungerRefusal(next) !== null) || duel?.refuse(next)) continue;
       fireNow(next);
     }
   }

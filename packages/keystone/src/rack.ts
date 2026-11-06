@@ -18,8 +18,11 @@
 // - pull: take one structure body out of the world (an engine remove event; Undercut,
 //   docs/game/undercut-bullet-time.md). Nothing is fired, so it has no body or speed:
 //   itemSpec refuses it, itemBodies counts 0, and its energy is nominal (shots.ts pullEnergy).
+// - plunger: set off the level's charges on a timeline (LevelDef.charges; shots.ts PlungerShot;
+//   docs/design/charges.md). Nothing is fired: like a pull it has no body or speed, and its
+//   energy is its charges' (arsenal.ts plungerYield).
 import type { Vec3 } from '@tb/engine-api';
-import { BUILTIN_WEAPONS, checkGrenade, type GrenadeSpec, isPreset, type WeaponSpec, PRESET_NAMES, type PresetName, PROJECTILE_PRESETS, STONE_DENSITY } from '@tb/weapons';
+import { BUILTIN_CHARGES, BUILTIN_WEAPONS, checkGrenade, type GrenadeSpec, isPreset, type WeaponSpec, PRESET_NAMES, type PresetName, PROJECTILE_PRESETS, STONE_DENSITY } from '@tb/weapons';
 import { DEFAULT_UNIT, MATERIALS, materialId, type MaterialName } from './materials.ts';
 
 export type AmmoKind = 'marble' | 'cannonball' | 'cue' | 'drop';
@@ -52,17 +55,21 @@ export type LaunchItem = 'marble' | 'cannonball' | PresetItem | WeaponItem;
 /** The Undercut verb: remove a structure body (shots.ts PullShot). */
 export const PULL = 'pull';
 export type PullItem = typeof PULL;
-export type RackItem = AmmoKind | PullItem | PresetItem | WeaponItem;
+/** The Fuse & Fold verb: arm the level's charges on a timeline (shots.ts PlungerShot). */
+export const PLUNGER = 'plunger';
+export type PlungerItem = typeof PLUNGER;
+export type RackItem = AmmoKind | PullItem | PlungerItem | PresetItem | WeaponItem;
 
 /** A weapon's key in LevelDef.weapons and after `w-`: lower case letters and digits, so shot text's `.` and `_` stay separators. */
 export const WEAPON_KEY = /^[a-z][a-z0-9]{0,23}$/;
 
-export type ItemRef = { kind: 'ammo'; ammo: AmmoKind } | { kind: 'pull' } | { kind: 'preset'; preset: PresetName } | { kind: 'weapon'; key: string };
+export type ItemRef = { kind: 'ammo'; ammo: AmmoKind } | { kind: 'pull' } | { kind: 'plunger' } | { kind: 'preset'; preset: PresetName } | { kind: 'weapon'; key: string };
 
 /** What a rack item name refers to, or null if it names nothing. */
 export function itemRef(name: string): ItemRef | null {
   if ((AMMO_KINDS as readonly string[]).includes(name)) return { kind: 'ammo', ammo: name as AmmoKind };
   if (name === PULL) return { kind: 'pull' };
+  if (name === PLUNGER) return { kind: 'plunger' };
   const rest = name.slice(2);
   if (name.startsWith('p-') && isPreset(rest)) return { kind: 'preset', preset: rest };
   if (name.startsWith('w-') && WEAPON_KEY.test(rest)) return { kind: 'weapon', key: rest };
@@ -72,11 +79,11 @@ export function itemRef(name: string): ItemRef | null {
 export const isRackItem = (name: string): name is RackItem => itemRef(name) !== null;
 export const isLaunchItem = (name: string): name is LaunchItem => {
   const r = itemRef(name);
-  return r !== null && r.kind !== 'pull' && (r.kind !== 'ammo' || r.ammo === 'marble' || r.ammo === 'cannonball');
+  return r !== null && r.kind !== 'pull' && r.kind !== 'plunger' && (r.kind !== 'ammo' || r.ammo === 'marble' || r.ammo === 'cannonball');
 };
 
 /** For error messages: every name a rack item may have. */
-export const RACK_ITEM_NAMES = `${AMMO_KINDS.join(', ')}, ${PULL}, p-<preset> (${PRESET_NAMES.join(', ')}) or w-<weapon>`;
+export const RACK_ITEM_NAMES = `${AMMO_KINDS.join(', ')}, ${PULL}, ${PLUNGER}, p-<preset> (${PRESET_NAMES.join(', ')}) or w-<weapon>`;
 
 /**
  * Model density per real density. Keystone's structure materials are model-scale (a
@@ -142,6 +149,7 @@ export function itemSpec(name: RackItem, at: ItemFrame): ItemSpec {
   const r = itemRef(name);
   if (!r) throw new Error(`rack item ${JSON.stringify(name)} is not one of ${RACK_ITEM_NAMES}`);
   if (r.kind === 'pull') throw new Error(`${PULL} fires no body: it removes one (shots.ts PullShot)`);
+  if (r.kind === 'plunger') throw new Error(`${PLUNGER} fires no body: it sets off the level's charges (shots.ts PlungerShot)`);
   const unit = typeof at === 'number' ? at : at.unit;
   if (r.kind === 'weapon') {
     const own = typeof at === 'number' ? undefined : at.shells?.[name];
@@ -178,6 +186,16 @@ export function weaponOf(def: { weapons?: Record<string, LevelWeapon> }, key: st
 }
 
 /**
+ * The weapon a level's charge names (ChargeDef.weapon): its own weapons[key], or @tb/weapons'
+ * built-in charge of that name (BUILTIN_CHARGES: cutter, kicker, relay). Null if none. Unchecked:
+ * arsenal.ts levelCharges checks and scales it.
+ */
+export function chargeWeaponOf(def: { weapons?: Record<string, LevelWeapon> }, key: string): LevelWeapon | null {
+  if (def.weapons && Object.hasOwn(def.weapons, key)) return def.weapons[key]!;
+  return Object.hasOwn(BUILTIN_CHARGES, key) ? BUILTIN_CHARGES[key]! : null;
+}
+
+/**
  * Grenade `key` of a level in world units (lengths times the level's unit), checked
  * (checkGrenade). Null if the level has no such weapon or it is a WeaponSpec (the
  * built-ins, so w-grenade without the level's own: arsenal.ts levelArm scales those).
@@ -189,8 +207,8 @@ export function levelWeapon(def: { unit?: number; weapons?: Record<string, Level
   return checkGrenade({ ...g, prox: g.prox * h, blast: { ...g.blast, radius: g.blast.radius * h } });
 }
 
-/** Engine bodies an item can add when fired: one for a thrown thing, none for a pull, a weapon's static budget (arms: CompiledLevel.arms). */
-export const itemBodies = (name: RackItem, arms?: Readonly<Record<string, { bodies: number }>>): number => (name === PULL ? 0 : arms?.[name]?.bodies ?? 1);
+/** Engine bodies an item can add when fired: one for a thrown thing, none for a pull or a plunger, a weapon's static budget (arms: CompiledLevel.arms). */
+export const itemBodies = (name: RackItem, arms?: Readonly<Record<string, { bodies: number }>>): number => (name === PULL || name === PLUNGER ? 0 : arms?.[name]?.bodies ?? 1);
 
 /** Engine bodies the whole rack can add: what an engine must hold beyond the structure. */
 export const rackBodies = (rack: readonly RackItem[], arms?: Readonly<Record<string, { bodies: number }>>): number => rack.reduce((a, x) => a + itemBodies(x, arms), 0);
