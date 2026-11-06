@@ -113,7 +113,8 @@ describe('rule overrides', () => {
     writeLevelRules({ settle: 'v1' }, q);
     expect(levelRules(q)).toEqual({ settle: 'v1' });
     expect(parse('?level=L1&keystone.settle=v3').rules).toEqual({ settle: 'v3' });
-    expect(() => parse('?keystone.settle=v9')).toThrow(/keystone.settle must be v1 or v2 or v3: v9/);
+    expect(() => parse('?keystone.settle=v9')).toThrow(/keystone.settle must be v1 or v2 or v3 or v4: v9/);
+    expect(parse('?level=L1&keystone.settle=v4').rules).toEqual({ settle: 'v4' });
   });
   it('keystone.freeze gives the player a freeze budget: a custom level with its own hash; refuses a bad one', () => {
     const p = parse('?level=L1&keystone.freeze=3');
