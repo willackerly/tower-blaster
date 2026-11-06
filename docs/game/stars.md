@@ -94,7 +94,7 @@ top). Stars are for that one shot; "old" is the rule before 2026-11-06. Full out
 | L2 | high, 15.25 h | 95 of 408 | 38 | 2.23/2.65/3.86 | 38 / 57 | 38 / 57 | 57 |
 | L3 (par 2: these are aces) | its own, 8 h | 12 of 144 | 12 | – (1.3) | 12 / 0 | 12 / 0 | 0 |
 | L3 | high, 10 h | 10 of 144 | 10 | – | 10 / 0 | 10 / 0 | 0 |
-| L4 (par 1, anvil drops) | drop | 7 of 171 | 0 | 0.17/0.18/0.19 (0.18) | 3 / 4 | 0 / 7 | 4 |
+| L4 (par 1; the clears are anvil drops) | its own, 2 h, and drops | 7 of 171 | 0 | 0.17/0.18/0.19 (0.18) | 3 / 4 | 0 / 7 | 4 |
 | L4 | high, 8 h | 0 of 120 (launched balls) | – | – | – | – | – |
 | L5 (par 1) | its own, 2 h | 95 of 240 | 0 | 0.58/1.01/5.83 (5) | 66 / 29 | 0 / 95 | 29 |
 | L5 | high, 11 h | 89 of 240 | 0 | 0.53/1.25/5.98 | 62 / 27 | 0 / 89 | 27 |
