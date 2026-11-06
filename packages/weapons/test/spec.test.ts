@@ -3,7 +3,7 @@
 // machine-independent split patterns.
 import { describe, expect, it } from 'vitest';
 import {
-  BUILTIN_WEAPONS, chargeProblems, checkWeapon, cosSin, DEFAULT_GRENADE, GRENADE_WEAPON, grenadeAsSpec, isWeaponSpec, MAX_WEAPON_BODIES, parseWeapon, scaleWeapon,
+  BUILTIN_CHARGES, BUILTIN_WEAPONS, chargeProblems, checkWeapon, cosSin, DEFAULT_GRENADE, GRENADE_WEAPON, grenadeAsSpec, isWeaponSpec, MAX_WEAPON_BODIES, parseWeapon, scaleWeapon,
   splitDirections, splitPattern, thrownProblems, validateWeapon, type WeaponIssueCode, type WeaponSpec, WeaponSpecError, weaponBudget, writeWeapon,
 } from '../src/index.ts';
 
@@ -48,6 +48,13 @@ describe('WeaponSpec format', () => {
       expect(spec.name).toBe(name);
     }
     expect(validateWeapon(GRENADE_WEAPON).issues).toEqual([]);
+    // The built-in charges: clean, chargeable, and refused in the rack (they removeTarget, or are spent at once).
+    for (const [name, spec] of Object.entries(BUILTIN_CHARGES)) {
+      expect(validateWeapon(spec).issues, name).toEqual([]);
+      expect(chargeProblems(spec), name).toEqual([]);
+      expect(spec.name).toBe(name);
+      expect(Object.hasOwn(BUILTIN_WEAPONS, name), name).toBe(false);
+    }
     expect(Object.fromEntries(Object.entries(BUILTIN_WEAPONS).map(([k, s]) => [k, weaponBudget(s).bodies]))).toEqual({ firework: 13, cluster: 7, grenades: 1, grenadem: 1, grenadel: 1, grenadexl: 1, scatter: 6, rocket: 1 });
   });
 

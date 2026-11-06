@@ -79,6 +79,20 @@ Alternatives weighed for "a timeline":
 
 `LevelDef.charges[i].arm: 'start'` arms a charge when play starts (after the presettle), its clock at that step; such a charge is not named by plungers. With a `moved` trigger it is the sympathetic charge. A charge watching with no timer running does not hold a settle (it could wait forever); one whose timer is running does. Its energy is the level's, not the player's: it is part of the puzzle, so no shot is charged for it.
 
+## Built-in charges
+
+`@tb/weapons` `BUILTIN_CHARGES`, in cube units (scaled to a level's commonest block as `w-` items are), named by `LevelDef.charges[i].weapon` unless the level's own `weapons` has that key. Built-ins a level names join its hash written out, as defaulted `w-` items do.
+
+| Charge | Rules | Energy (grenades, blasts only) | Use |
+|---|---|---|---|
+| `cutter` | at arming: blast r 1.5, impulse 2 (3 m/s to a cube in its core), then `removeTarget` | 0.00012 + one pull's energy | the demolition cut: takes a column's base out |
+| `kicker` | at arming: blast r 2, impulse 4 at its point, then spent | 0.0012 | shoves its host away from the face it sits on (a direction for the fold) |
+| `relay` | `moved` 0.05 or speed 0.5: the cutter's blast and `removeTarget` | 0.00012 + one pull | sympathetic: arm at start; goes off when jolted |
+
+The blasts are deliberately small: a cut's work is the removal (gravity does the rest), and a big blast would make the order of cuts matter less (probe X2's risk).
+
+A quirk found on the way, not changed here: a level hash is FNV over the JSON of the level with defaults written in, and JSON keeps insertion order, so writing a built-in into `weapons` by hand can hash differently from naming it when the level also gains a written-out `physics` or `settle` key (an ice level, a v3 outcome level). Both are stable; it only means "written in" and "named" are not interchangeable for cast stars. Same for `w-` items since G3.
+
 ## What C5 does not do (M5's and M10's)
 
 - No UI: the game cannot place charges or edit a timeline, and draws no charge markers. A level with charges plays from shot text (`keystone.shots`) and in the lab; M5 builds the timeline editor, the plunger button and the charge markers.

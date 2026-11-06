@@ -104,3 +104,29 @@ export const GRENADE_XL = sized('grenadexl', 12.6, 0.5);
 export const BUILTIN_WEAPONS: Readonly<Record<string, WeaponSpec>> = {
   firework: FIREWORK, cluster: CLUSTER, scatter: SCATTER, rocket: ROCKET, grenades: GRENADE_S, grenadem: GRENADE_M, grenadel: GRENADE_L, grenadexl: GRENADE_XL,
 };
+
+// Charges (docs/design/charges.md): specs a level attaches to its structure bodies (LevelDef.charges),
+// in the same cube units, scaled to the level's blocks as w- items are. Their shell is only their look
+// (a charge has no body); speed [0, 0]. Not rack items: a thrown weapon cannot removeTarget.
+const CHARGE_SHELL = { shape: { kind: 'box' as const, half: [0.15, 0.1, 0.15] as [number, number, number] }, density: 1, speed: [0, 0] as [number, number] };
+
+/** The demolition cutter: when armed, a small blast at its point (3 m/s to a cube in its core) and its host taken out. */
+export const CUTTER: WeaponSpec = {
+  version: 1, name: 'cutter', shell: CHARGE_SHELL,
+  rules: [{ when: { after: 0 }, do: [{ blast: { radius: 1.5, impulse: 2, core: 0.2 } }, { removeTarget: true }] }],
+};
+
+/** A kicker: when armed, a blast at its point that shoves its host (and its neighbours) away from it; the host stays. */
+export const KICKER: WeaponSpec = {
+  version: 1, name: 'kicker', shell: CHARGE_SHELL,
+  rules: [{ when: { after: 0 }, do: [{ blast: { radius: 2, impulse: 4, core: 0.2 } }, { remove: true }] }],
+};
+
+/** A sympathetic relay (arm it at start): once its host has moved 5 cm or reaches 0.5 m/s, a cutter's blast and its host out. */
+export const RELAY: WeaponSpec = {
+  version: 1, name: 'relay', shell: CHARGE_SHELL,
+  rules: [{ when: { moved: 0.05, speed: 0.5 }, do: [{ blast: { radius: 1.5, impulse: 2, core: 0.2 } }, { removeTarget: true }] }],
+};
+
+/** By name: the charges a level may name without writing them into its weapons. */
+export const BUILTIN_CHARGES: Readonly<Record<string, WeaponSpec>> = { cutter: CUTTER, kicker: KICKER, relay: RELAY };
