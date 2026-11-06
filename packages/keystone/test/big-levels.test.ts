@@ -2,7 +2,7 @@
 // compiles and validates clean on the GPU budget, is reachable by id and plays
 // on in its own series, and the shared building blocks hold their shapes.
 import { describe, expect, it } from 'vitest';
-import { B1, B2, B3, BIG_LEVELS, castStars, cathedralLevel, compileLevel, findLevel, L2, LEVELS, levelById, SERIES, seriesOf, thirdBondWall, UNDERCUT_LEVELS, validateLevel } from '@tb/keystone';
+import { B1, B2, B3, BIG_LEVELS, castStars, cathedralLevel, compileLevel, findLevel, L2, LEVELS, levelById, SERIES, SERIES_TITLES, seriesOf, thirdBondWall, TRIAL_LEVELS, UNDERCUT_LEVELS, validateLevel } from '@tb/keystone';
 
 describe('big levels', () => {
   it.each(BIG_LEVELS.map((d) => d.id))('%s compiles and validates clean on the GPU, scored on outcome', (id) => {
@@ -70,7 +70,8 @@ describe('big levels', () => {
   it('ids are unique across the series; lookups find either series in any case, and refuse unknown ids naming both', () => {
     const ids = SERIES.flat().map((d) => d.id);
     expect(new Set(ids).size).toBe(ids.length);
-    expect(SERIES).toEqual([LEVELS, BIG_LEVELS, UNDERCUT_LEVELS]);
+    expect(SERIES).toEqual([LEVELS, BIG_LEVELS, UNDERCUT_LEVELS, TRIAL_LEVELS]);
+    expect(SERIES_TITLES.length).toBe(SERIES.length);
     expect(seriesOf('u3')).toBe(UNDERCUT_LEVELS);
     expect(levelById('b1')).toBe(B1);
     expect(levelById('l2')).toBe(L2);
@@ -78,7 +79,10 @@ describe('big levels', () => {
     expect(seriesOf('l2')).toBe(LEVELS);
     expect(findLevel('B9')).toBeUndefined();
     expect(seriesOf('S4')).toBeUndefined();
-    expect(() => levelById('B9')).toThrow(/unknown level B9; known: L1, L2, L3, L4, L5, B1, B2, B3, U1, U2, U3/);
+    // Trial ids (T-...) carry a lower-case letter only in their drafts' names: the lookup is case-blind both ways.
+    expect(seriesOf('t-b1a')).toBe(TRIAL_LEVELS);
+    expect(levelById('t-s4').id).toBe('T-S4');
+    expect(() => levelById('B9')).toThrow(/unknown level B9; known: L1, L2, L3, L4, L5, B1, B2, B3, U1, U2, U3 and \d+ trials \(T-S1 to T-B4A\)/);
   });
 
   it('a third-bond wall shifts every other course a third of a cube', () => {
