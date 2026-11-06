@@ -7,6 +7,7 @@ import { type CompiledLevel, compileLevel, isTrial, type LevelDef } from '@tb/ke
 import { type DoorDuel, DOOR_CSS, doorHtml, doorLevels, type DoorLevel } from './door.ts';
 import type { GameHandle } from './play.ts';
 import type { ProgressStore } from './progress.ts';
+import { QUALITY_SETTINGS, type QualitySetting } from './quality.ts';
 import type { Settings, SettingsStore } from './settings.ts';
 
 export interface DoorPage {
@@ -28,7 +29,7 @@ export interface DoorOptions {
   handle: GameHandle;
   progress: ProgressStore;
   settings: SettingsStore;
-  /** A setting changed: the page applies it (look, sound, sharpness) and drops its URL key. */
+  /** A setting changed: the page applies it (look, sound, sharpness, quality) and drops its URL key. */
   applied(s: Settings, changed: keyof Settings): void;
   /** The Two players section's tables (none: no section), and what picking one does (the page opens ?duel=<id>). */
   duels?: DoorDuel[];
@@ -56,7 +57,7 @@ export function installDoor(o: DoorOptions, doc: Document = document): DoorPage 
   const draw = () => {
     levels = doorLevels(o.levels, (id, h) => o.progress.best(id, h), compile, (d) => !trialsOpen && isTrial(d.id));
     o.root.innerHTML = doorHtml({
-      levels, current: o.openLevel ? -1 : current(), settings: o.settings.current, howTo, advanced, duels: o.duels ?? [],
+      levels, current: o.openLevel ? -1 : current(), settings: o.settings.current, howTo, advanced, detected: o.handle.quality?.probed ?? null, duels: o.duels ?? [],
       ...(trialCount ? { trials: { count: trialCount, open: trialsOpen } } : {}),
     });
     const reset = o.root.querySelector('[data-act="reset"]');
@@ -110,6 +111,7 @@ export function installDoor(o: DoorOptions, doc: Document = document): DoorPage 
       case 'sound': set({ sound: !o.settings.current.sound }); break;
       case 'look': set({ look: arg }); break;
       case 'sharp': set({ sharp: arg === '1' ? 1 : 2 }); break;
+      case 'quality': if ((QUALITY_SETTINGS as readonly string[]).includes(arg)) set({ quality: arg as QualitySetting }); break;
       case 'camera': set({ camera: arg === 'dynamic' ? 'dynamic' : 'still' }); break;
       case 'rapid': set({ rapid: arg === 'on' }); break;
       case 'duelview': set({ duelView: arg === 'on' }); break;

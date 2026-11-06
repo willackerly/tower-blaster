@@ -7,7 +7,7 @@
 // its own elements; the viewer calls it for rules=keystone, with hooks for its
 // dev panels (docs/design/viewer-superset.md, step C).
 import { type BodyDesc, type EngineHealth, limitsHit, type PhysicsEngine, type Vec3 } from '@tb/engine-api';
-import { type RackItem, type CompiledLevel, compileLevel, crackSeed, Driver, type DriverCheckpoint, Duel, type DuelDef, DEFAULT_TURN_SECONDS, type Feedback, type Goal, goalMet, type Player, type Grade, gradeOf, type LevelDef, type LevelScore, type LotSheet, type PerStep, playShots, rapidDue, roundFacts, runSession, selectGroups, type Shot, isIcePiece, snapshotHash, TIER_NAMES } from '@tb/keystone';
+import { type RackItem, type CompiledLevel, compileLevel, crackSeed, Driver, type DriverCheckpoint, Duel, type DuelDef, DEFAULT_TURN_SECONDS, type Feedback, type Footprint, type Goal, goalMet, type Player, type Grade, gradeOf, type LevelDef, type LevelScore, type LotSheet, type PerStep, playShots, rapidDue, roundFacts, runSession, selectFootprints, selectGroups, type Shot, isIcePiece, snapshotHash, TIER_NAMES } from '@tb/keystone';
 import { clampPitch, eyeOf, type Orbit, rayThrough, viewProj } from '@tb/render/camera';
 import type { FxOptions, PixelStats, Renderer, SnapshotSource } from '@tb/render';
 import type { HostStats } from '@tb/audio';
@@ -27,6 +27,7 @@ import { CameraJuice, contactJuice } from './juice.ts';
 import { alphaAt, arrived, DEFAULT_FEEL, newArrivals, Pacer, type PaceFeel, SLOW_TAG_BELOW, slowTag, SpeedMeter, TailSkip } from './pacing.ts';
 import { COST_WINDOW, runPhysics, wakeable } from './physics-loop.ts';
 import { CLEAR_SHARE, FrameGovernor } from './frame-rate.ts';
+import { canvasSize, type QualityState } from './quality.ts';
 import { UndoMarks } from './undo-marks.ts';
 import { ballFx, beadOverlay, BOMB_FX, CROWN_GLOW, PULL_HOVER, regrowDuration, regrowScales, structureMarks, structureTints, TINT, tintOf, tintWordOf } from './scene.ts';
 import { type GestureState, type TouchAction, TouchGestures, touchFace, type TouchMode } from './touch.ts';
@@ -136,8 +137,10 @@ export interface GameHandle {
   fireOpener(): boolean;
   /** Mute or unmute every sound (as key M toggles). */
   setMuted(muted: boolean): void;
-  /** The most device pixels per CSS pixel the canvas draws (2 by default; 1 is the front door's Fast sharpness). */
+  /** The most device pixels per CSS pixel the canvas draws (2 by default; 1 is the front door's Fast sharpness; the quality tier caps it too, low at 0.5). */
   maxDpr: number;
+  /** The quality tier in effect, why, and what the probe on load measured (quality.ts; null until the page has decided). */
+  quality: QualityState | null;
   /** Aim at normalized device coords with the selected ammo, as hovering there would. */
   aim(ndcX: number, ndcY: number): Aimed | null;
   /** The aim preview's blast-reach zone (a one-blast weapon aimed: where it would go off and how far it reaches), or null. */
@@ -256,7 +259,7 @@ export function newGameHandle(): GameHandle {
   const none = (): SessionState => ({ step: 0, phase: 'loading', strokes: 0, heritageBroken: 0, hash: '' });
   return {
     status: 'loading', engine: '', level: '', phase: 'loading', ready: false, frozen: false, frames: 0, stepIndex: 0, strokes: 0, bodies: 0, collapse: 0, fast: false, pace: { timeScale: 1, speed: 1, tag: '', tailSkip: false, costMs: NaN }, view: { target: [0, 0, 0], distance: 0, yaw: 0, pitch: 0, following: false, jolt: 0, turning: false, cue: null, arcBeads: 0 }, input: { touch: false, gesture: 'idle', fingers: 0, aimed: null, power: 100, launch: 0 }, result: null, counts: {}, feel: { ...DEFAULT_FEEL }, resultShownAt: null, timing: { loadMs: 0, load: noPhases(), stepMs: [], moving: [], frameMs: [], costMs: [] }, draws: { drawn: 0, skipped: 0, decimating: false },
-    fire: () => false, bank: () => false, freeze: () => false, fireOpener: () => false, setMuted: () => {}, maxDpr: 2, aim: () => null, reach: null, select: () => false, load: async () => {}, retry: async () => {}, undo: async () => false, undone: null, spare: null, undoMemory: () => ({ marks: 0, bytes: 0 }), capture: async () => null, firedLooks: () => [], marks: () => [], refreshMarks: () => {},
+    fire: () => false, bank: () => false, freeze: () => false, fireOpener: () => false, setMuted: () => {}, maxDpr: 2, quality: null, aim: () => null, reach: null, select: () => false, load: async () => {}, retry: async () => {}, undo: async () => false, undone: null, spare: null, undoMemory: () => ({ marks: 0, bytes: 0 }), capture: async () => null, firedLooks: () => [], marks: () => [], refreshMarks: () => {},
     state: none, line: () => [], replay: async () => none(), health: async () => null, pairsPerBody: 0, limitsHit: [], goals: [], grade: null, duel: null,
     sound: () => ({ mode: 'collapse', status: 'off', error: '', posted: 0, stats: null }),
     ice: () => ({ count: 0, cracks: [] }),
@@ -535,7 +538,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
   let fastHeld = false;
   let lastHud = '', crownsShown = 0;
   /** The level's lot sheet and its groups (selected once per load), or null. */
-  let lot: { sheet: LotSheet; goals: readonly Goal[]; groups: Record<string, Int32Array> } | null = null;
+  let lot: { sheet: LotSheet; goals: readonly Goal[]; groups: Record<string, Int32Array>; footprints: Record<string, Footprint> } | null = null;
   /** The duel being played (env.duel), and when the turn in the air was fired (its pace: DuelDef.turnSeconds). */
   let duel: Duel | null = null, turnStart = 0;
   /** Each side's arc on the ground (duel-view.ts arcBeads), made at load. */
@@ -1015,7 +1018,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     aimDirty = true;
     crownsShown = driver.session.crownLive.reduce((a, x) => a + x, 0);
     const ls = env.lotSheet?.(c) ?? null;
-    lot = ls && { sheet: ls.sheet, goals: ls.goals, groups: selectGroups(c, ls.sheet.groups ?? {}) };
+    lot = ls && { sheet: ls.sheet, goals: ls.goals, groups: selectGroups(c, ls.sheet.groups ?? {}), footprints: selectFootprints(c, ls.sheet) };
     handle.goals = (ls?.goals ?? []).map((g) => ({ id: g.id, text: g.text, met: false, before: ls!.before.includes(g.id) }));
     handle.grade = null;
     // After an undo the goals stand as at the kept shots' settle, as play would have judged them there.
@@ -1092,7 +1095,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
   /** The lot sheet's goals and grade judged on the round as it stands (after a settle, and at its end). */
   function judgeGoals() {
     if (!lot) return;
-    const f = roundFacts(c, driver.session, driver.snapshot, lot.groups);
+    const f = roundFacts(c, driver.session, driver.snapshot, lot.groups, lot.footprints);
     handle.goals = lot.goals.map((g, k) => ({ ...handle.goals[k]!, met: goalMetSafe(g, f) }));
     handle.grade = gradeOf(lot.sheet.grades, f);
   }
@@ -1625,8 +1628,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
   addEventListener('keyup', (e) => { if (e.key === ' ') fastHeld = false; });
 
   function resize() {
-    const dpr = Math.min(devicePixelRatio || 1, handle.maxDpr);
-    const w = Math.max(1, Math.floor(canvas.clientWidth * dpr)), h = Math.max(1, Math.floor(canvas.clientHeight * dpr));
+    const [w, h] = canvasSize(canvas.clientWidth, canvas.clientHeight, devicePixelRatio, handle.maxDpr);
     if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }
   }
 
@@ -1674,6 +1676,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     // Physics is behind when the sim runs under the HUD's slow-motion speed without being asked to
     // (slow-motion juice, fast-forward); it has headroom when steps cost under CLEAR_SHARE of a step.
     const fast = fastHeld || handle.fast || ending || tail.on || turnUp(), costMs = median(handle.timing.costMs.slice(-COST_WINDOW));
+    frames.mode = feel.frames; // read live: the quality tier sets it when the URL does not
     const draw = frames.frame(now, { idle: !running, behind: running && !fast && !pacer.slowing && speed.speed(now) < SLOW_TAG_BELOW, clear: costMs < CLEAR_SHARE * 1000 * c.scene.dt }, !!want);
     handle.draws = { drawn: frames.drawn, skipped: frames.skipped, decimating: frames.decimating };
     if (draw) {

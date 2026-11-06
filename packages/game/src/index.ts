@@ -19,3 +19,5 @@ export * from './touch.ts';
 export * from './edit.ts';
 export * from './edit-panel.ts';
 export * from './edit-view.ts';
+export * from './quality.ts';
+export * from './quality-probe.ts';
