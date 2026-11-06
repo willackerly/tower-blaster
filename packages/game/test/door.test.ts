@@ -1,6 +1,9 @@
 // The front door's formatting (door.ts) and the settings it edits (settings.ts): pure.
 import { describe, expect, it } from 'vitest';
-import { B1, B2, B3, BIG_LEVELS, compileLevel, L1, LEVELS } from '@tb/keystone';
+import { B1, B2, B3, BIG_LEVELS, compileLevel, L1, type LevelDef, LEVELS } from '@tb/keystone';
+
+/** B3 as it was before its cast landed: no stars and no recorded line (the door's uncast case). */
+const UNCAST: LevelDef = { ...B3, stars: undefined, solutions: undefined };
 import { bestText, doorHtml, doorLevels, doorMode, doorOnLoad, nextLevel, openerFor, preaimMode, rackText, starTargets, thresholdText } from '../src/door.ts';
 import type { LevelRecord } from '../src/progress.ts';
 import { cameraFeel, DEFAULT_SETTINGS, parseSettings, SETTINGS_KEY, SettingsStore, urlSettings } from '../src/settings.ts';
@@ -25,7 +28,8 @@ describe('door options', () => {
     expect(openerFor(B2, 1, 'auto', false)).toBeNull();
     expect(openerFor(B2, 1, '1', true)).toBe(B2.solutions!.ace![0]);
     expect(openerFor(L1, 0, '1', false)).toBe(L1.solutions!.par![0]);
-    expect(openerFor(B3, 2, '1', false)).toBeNull(); // no recorded line
+    expect(openerFor(UNCAST, 2, '1', false)).toBeNull(); // no recorded line
+    expect(openerFor(B3, 2, '1', false)).toBe(B3.solutions!.ace![0]);
     expect(openerFor(B1, 0, '0', false)).toBeNull();
     expect(preaimMode(q(''))).toBe('auto');
     expect(() => preaimMode(q('keystone.preaim=on'))).toThrow(/keystone.preaim must be auto, 1 or 0/);
@@ -51,10 +55,11 @@ describe('door text', () => {
     expect(starTargets(compileLevel(B3), undefined)).toEqual({ targets: ['Bring 40% down', 'targets coming soon', 'targets coming soon'], short: ['40%', '?', '?'], cast: false });
     expect(starTargets(compileLevel(L1), undefined).targets[1]).toBe(`…in par (${L1.par})`);
   });
-  it('B3\'s stars show from stars.json the moment they land (simulated drop-in)', () => {
-    const cast = { ...B3, stars: { metric: 'collapse' as const, t2: 0.5, t3: 0.62, hash: compileLevel(B3).hash } };
+  it('B3\'s stars show from stars.json the moment they land (simulated drop-in, then the landed stars)', () => {
+    const cast = { ...UNCAST, stars: { metric: 'collapse' as const, t2: 0.5, t3: 0.62, hash: compileLevel(B3).hash } };
     const [l] = doorLevels([cast], () => null);
     expect(l).toMatchObject({ cast: true, targets: ['Bring 40% down', '50% down', '62% down'] });
+    expect(doorLevels([B3], () => null)[0]).toMatchObject({ cast: true, targets: ['Bring 40% down', '53% down', '63% down'] });
   });
   it('best play text', () => {
     expect(bestText(null)).toBe('Not played yet');
@@ -108,7 +113,7 @@ describe('door levels', () => {
     expect(closed.match(/class="card[ "]/g)).toHaveLength(5);
   });
   it('an uncast level shows one row for two and three stars', () => {
-    const html = doorHtml({ levels: doorLevels([B3], () => null), current: 0, settings: DEFAULT_SETTINGS, howTo: false, advanced: false });
+    const html = doorHtml({ levels: doorLevels([UNCAST], () => null), current: 0, settings: DEFAULT_SETTINGS, howTo: false, advanced: false });
     expect(html.match(/<li /g)).toHaveLength(2);
     expect(html.match(/targets coming soon/g)).toHaveLength(1);
   });

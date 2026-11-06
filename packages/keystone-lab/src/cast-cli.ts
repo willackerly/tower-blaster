@@ -3,7 +3,7 @@
 //   [--out cast.json] [--md cast.md] [--compare other.json] [--max-steps N] [--explore N]
 //   [--cloud-of cast.json [--n 16]] [--budget-min 60] [--pool a.json,b.json]
 //   [--stars-into packages/keystone/src/stars.json] [--replay cast.json [--phase cloud] [--n 16]]
-//   [--extend cast.json [--n 50]] [--pool a.json,b.json [--t3 pooled|best]]
+//   [--extend cast.json [--n 50]] [--pool a.json,b.json [--t3 pooled|best]] [--waive skill,stable]
 // <level>: a built-in level id, or --level-file path.json (a LevelDef), or
 // --scenario S3 --param W=50 ... (the automatic scenario level), or --draft B1a
 // (keystone-lab drafts.ts). --explore N plays N competent lines only and
@@ -29,11 +29,13 @@
 // recorded (same adapter: all should; exit 2 when any differs there). --extend cast.json plays
 // --n (50) more nudges of that cast's best line on the same device and judges its stars again
 // (extendCloud: the stable gate's fix). --t3 best pools T3 from the best line of the casts
-// instead of every cloud together (poolCasts).
+// instead of every cloud together (poolCasts). --waive skill[,stable] lets --stars-into write
+// although those gates failed (applyWaivers: a documented call, recorded as the stars' `waived`;
+// fair, limits and complete are never waivable). Exit codes still report the failed gates.
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { compileLevel, type LevelDef, levelById, scenarioLevel, STAR_METRICS, type StarMetric, type StarsDef } from '@tb/keystone';
 import { exitNow } from '@tb/testkit';
-import { CAST_BUDGET_MS, castLevel, castMarkdown, cloudCheck, exploreLevel, extendCloud, type PoolT3, replayCast, explorationMarkdown, type CastPlayer, type CastRecipe, type CastResult, compareCasts, FULL_RECIPE, mergeStarsFile, nodeCastPlayer, playsOf, poolCasts, SHORT_RECIPE, withWallTime } from './cast.ts';
+import { applyWaivers, CAST_BUDGET_MS, castLevel, castMarkdown, cloudCheck, exploreLevel, extendCloud, type PoolT3, replayCast, explorationMarkdown, type CastPlayer, type CastRecipe, type CastGates, type CastResult, compareCasts, type PoolGates, FULL_RECIPE, mergeStarsFile, nodeCastPlayer, playsOf, poolCasts, SHORT_RECIPE, WAIVABLE, withWallTime } from './cast.ts';
 import { openBrowserCastPlayer } from './cast-browser.ts';
 import { draftByName } from './drafts.ts';
 
@@ -70,12 +72,22 @@ if (metric !== undefined && !(STAR_METRICS as readonly string[]).includes(metric
 const budgetMin = Number(flags.get('budget-min') ?? CAST_BUDGET_MS / 60_000);
 if (!(budgetMin > 0)) throw new Error(`--budget-min needs a positive number of minutes: ${flags.get('budget-min')}`);
 const budgetMs = budgetMin * 60_000;
+const waive = (flags.get('waive') ?? '').split(',').filter(Boolean);
+for (const w of waive) if (!(WAIVABLE as readonly string[]).includes(w)) throw new Error(`--waive: ${w} cannot be waived (only ${WAIVABLE.join(', ')})`);
+/** The stars a cast or pool sets, once its gates pass with --waive applied: null when they do not. */
+function landable(stars: StarsDef, gates: CastGates | PoolGates): StarsDef | null {
+  const w = applyWaivers(gates, waive);
+  if (!w.pass) return null;
+  if (w.waived.length) console.log(`--waive: ${w.waived.join(', ')} failed and ${w.waived.length > 1 ? 'are' : 'is'} waived (a documented call; the stars record it)`);
+  return w.waived.length ? { ...stars, waived: w.waived } : stars;
+}
 if (flags.has('pool')) {
   const casts = flags.get('pool')!.split(',').map((f) => JSON.parse(readFileSync(f, 'utf8')) as CastResult);
   const t3From = (flags.get('t3') ?? 'pooled') as PoolT3;
   if (t3From !== 'pooled' && t3From !== 'best') throw new Error(`--t3 is pooled or best: ${t3From}`);
   const p = poolCasts(casts, t3From), hash = compileLevel(def).hash;
   if (p.stars.hash !== hash) throw new Error(`pool: the casts are of ${def.id} hash ${p.stars.hash}, but it hashes ${hash} now: recast`);
+  const waivedHere = applyWaivers(p.gates, waive).waived;
   const f3 = (x: number) => x.toFixed(3), row = (name: string, x: typeof p.cloud) => `| ${name} | ${x.n} | ${[x.min, x.p10, x.p25, x.p50, x.p75, x.p90, x.max].map(f3).join(' | ')} |`;
   const md = [
     `### ${def.id} stars pooled from seeds ${p.seeds.join(', ')} on ${p.stars.castOn} (${p.stars.engine}), ${p.stars.n} plays`,
@@ -89,14 +101,14 @@ if (flags.has('pool')) {
     '',
     '| Gate | Result | Value | Need | What |',
     '|---|---|---|---|---|',
-    ...Object.entries(p.gates).map(([k, g]) => `| ${k} | ${g.pass ? 'pass' : '**fail**'} | ${f3(g.value)} | ${f3(g.need)} | ${g.note} |`),
+    ...Object.entries(p.gates).map(([k, g]) => `| ${k} | ${g.pass ? 'pass' : waivedHere.includes(k) ? '**fail**, waived' : '**fail**'} | ${f3(g.value)} | ${f3(g.need)} | ${g.note} |`),
   ].join('\n');
   console.log(md);
   console.log(`stars: ${JSON.stringify(p.stars)}`);
   if (flags.has('out')) writeFileSync(flags.get('out')!, JSON.stringify(p, null, 1));
   if (flags.has('md')) writeFileSync(flags.get('md')!, md);
-  const passed = Object.values(p.gates).every((g) => g.pass);
-  if (passed) intoStarsFile(def.id, p.stars);
+  const passed = Object.values(p.gates).every((g) => g.pass), stars = landable(p.stars, p.gates);
+  if (stars) intoStarsFile(def.id, stars);
   else if (flags.has('stars-into')) console.log('--stars-into: not written, a pooled gate failed');
   process.exit(passed ? 0 : 2);
 }
@@ -151,8 +163,9 @@ if (flags.has('extend')) {
     console.log(`stars: ${JSON.stringify(r.stars)}`);
     if (flags.has('out')) writeFileSync(flags.get('out')!, JSON.stringify(reopens.length ? { ...r, reopens } : r, null, 1));
     if (flags.has('md')) writeFileSync(flags.get('md')!, md);
-    const failed = Object.values(r.gates).some((g) => g && !g.pass), limited = !r.gates.limits.pass;
-    if (!failed) intoStarsFile(def.id, r.stars);
+    const failed = Object.values(r.gates).some((g) => g && !g.pass), limited = !r.gates.limits.pass, stars = landable(r.stars, r.gates);
+    if (stars) intoStarsFile(def.id, stars);
+    else if (flags.has('stars-into')) console.log('--stars-into: not written, a gate failed');
     process.exitCode = limited ? 4 : failed ? 2 : 0;
   } finally {
     stuck = await close();
@@ -224,9 +237,11 @@ try {
   }
   if (flags.has('out')) writeFileSync(flags.get('out')!, JSON.stringify(reopens.length ? { ...r, reopens } : r, null, 1));
   if (flags.has('md')) writeFileSync(flags.get('md')!, castMarkdown(r) + reopenNote());
+  const recastFailed = failed;
   failed ||= Object.values(r.gates).some((g) => g && !g.pass);
-  // Only a cast that passed every gate lands in the stars file the game reads.
-  if (!failed) intoStarsFile(def.id, r.stars);
+  // Only a cast that passed every gate (or had a near miss waived, --waive) lands in the stars file the game reads.
+  const stars = recastFailed ? null : landable(r.stars, r.gates);
+  if (stars) intoStarsFile(def.id, stars);
   else if (flags.has('stars-into')) console.log(`--stars-into: not written, a gate failed`);
   limited = !r.gates.limits.pass;
 } finally {

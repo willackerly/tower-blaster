@@ -55,7 +55,11 @@ export type StarMetric = (typeof STAR_METRICS)[number];
  * three at t3 (and no heritage broken); `best` is the best bot play (beat the bot). The rest records
  * how they were cast. Not part of the level hash: the cast records the hash it was made against.
  */
-export interface StarsDef { metric: StarMetric; t2: number; t3: number; best?: number; castOn?: string; engine?: string; hash?: string; n?: number; seed?: number }
+/**
+ * A level's star thresholds, as a cast set them. `waived` names cast gates that failed and were accepted as a
+ * documented call (keystone-lab `--waive`; the level's notes say why), so the stars file says which stars rest on one.
+ */
+export interface StarsDef { metric: StarMetric; t2: number; t3: number; best?: number; castOn?: string; engine?: string; hash?: string; n?: number; seed?: number; waived?: string[] }
 
 /**
  * x as a StarsDef, or throws naming `where` and the field at fault: the check a stars file (big-levels.ts
@@ -69,7 +73,8 @@ export function checkStars(x: unknown, where = 'stars'): StarsDef {
   for (const k of ['t2', 't3']) if (typeof o[k] !== 'number' || !Number.isFinite(o[k])) throw new Error(`${where}.${k} must be a finite number: ${String(o[k])}`);
   for (const k of ['best', 'n', 'seed']) if (o[k] !== undefined && (typeof o[k] !== 'number' || !Number.isFinite(o[k]))) throw new Error(`${where}.${k} must be a finite number when given: ${String(o[k])}`);
   for (const k of ['castOn', 'engine', 'hash']) if (o[k] !== undefined && typeof o[k] !== 'string') throw new Error(`${where}.${k} must be a string when given: ${String(o[k])}`);
-  const known = new Set(['metric', 't2', 't3', 'best', 'castOn', 'engine', 'hash', 'n', 'seed']);
+  if (o.waived !== undefined && (!Array.isArray(o.waived) || !o.waived.length || !o.waived.every((g) => typeof g === 'string' && g.length > 0))) throw new Error(`${where}.waived must be a non-empty list of gate names when given: ${JSON.stringify(o.waived)}`);
+  const known = new Set(['metric', 't2', 't3', 'best', 'castOn', 'engine', 'hash', 'n', 'seed', 'waived']);
   for (const k of Object.keys(o)) if (!known.has(k)) throw new Error(`${where}: unknown field ${k}`);
   const lower = o.metric === 'skyline', t2 = o.t2 as number, t3 = o.t3 as number;
   if (lower ? t3 > t2 : t3 < t2) throw new Error(`${where}: t3 (${t3}) is easier than t2 (${t2}) for ${String(o.metric)}`);

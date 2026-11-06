@@ -3,7 +3,7 @@
 // (every number checkable by hand) and on Rapier with a tiny recipe.
 import { describe, expect, it } from 'vitest';
 import { aimAt, type CastPlay, type CastSample, compileLevel, readShots, writeShots, launcherPos, type LaunchShot, type LevelDef, scenarioLevel, type Shot } from '@tb/keystone';
-import { bootstrapT3, castLevel, cloudCheck, crossDeviceGate, exposedFaces, faceSectors, facingAzimuth, FACE_SECTORS, REACH, type CastPlayer, type CastRecipe, type CastResult, competentIntents, compareCasts, compareReplay, extendCloud, judgeCast, replayCast, endValue, HEIGHT_BANDS, higherBetter, intentShot, moveIntents, nodeCastPlayer, nudgeLine, phaseEnds, playsOf, poolCasts, quantile, rng, roundEasier, SHORT_RECIPE, shotSummary, streamSeed, surfaceTarget, withWallTime } from '../src/index.ts';
+import { applyWaivers, bootstrapT3, castLevel, cloudCheck, crossDeviceGate, exposedFaces, faceSectors, facingAzimuth, FACE_SECTORS, REACH, type CastPlayer, type CastRecipe, type CastResult, competentIntents, compareCasts, compareReplay, extendCloud, judgeCast, replayCast, endValue, HEIGHT_BANDS, higherBetter, intentShot, moveIntents, nodeCastPlayer, nudgeLine, phaseEnds, playsOf, poolCasts, quantile, rng, roundEasier, SHORT_RECIPE, shotSummary, streamSeed, surfaceTarget, WAIVABLE, withWallTime } from '../src/index.ts';
 
 /** A 10 x 4 wall of plaster cubes along x as an outcome level, rack of two cannonballs. */
 const WALL: LevelDef = { ...scenarioLevel('S3', { W: 10, H: 4 }, 1, { rack: ['cannonball', 'cannonball'] }), id: 'T1' };
@@ -402,6 +402,25 @@ describe('castLevel on a synthetic player', () => {
     const mine = r.lines.filter((l) => l.phase === 'climb' && baseKey(readShots(l.shots)) === base).map((l) => endValue(l, 'collapse'));
     expect(mine.length).toBeGreaterThanOrEqual(12);
     expect(r.bestLine.score).toBe(quantile(mine, 0.25));
+  });
+});
+
+describe('waivers (--waive)', () => {
+  const g = (pass: boolean, value = 0) => ({ pass, value, need: 0.1, note: '' });
+  it('waives only skill and stable, and only gates that failed; every other gate must pass', () => {
+    expect([...WAIVABLE]).toEqual(['skill', 'stable']);
+    const gates = { fair: g(true), skill: g(false, 0.099), stable: g(true), limits: g(true), complete: g(true), budget: undefined };
+    expect(applyWaivers(gates, [])).toEqual({ pass: false, waived: [] });
+    expect(applyWaivers(gates, ['skill'])).toEqual({ pass: true, waived: ['skill'] });
+    // Waiving a gate that passed records nothing; naming it twice records it once.
+    expect(applyWaivers(gates, ['skill', 'stable', 'skill'])).toEqual({ pass: true, waived: ['skill'] });
+    expect(applyWaivers({ ...gates, stable: g(false) }, ['skill'])).toEqual({ pass: false, waived: ['skill'] });
+    expect(applyWaivers({ ...gates, fair: g(false) }, ['skill', 'stable'])).toEqual({ pass: false, waived: ['skill'] });
+  });
+  it('refuses a gate that is not waivable or not there, so a typo never lands stars', () => {
+    const gates = { fair: g(false), skill: g(true), stable: g(true) };
+    for (const w of ['fair', 'limits', 'complete', 'budget', 'recast', 'skil']) expect(() => applyWaivers(gates, [w])).toThrow(/cannot be waived/);
+    expect(() => applyWaivers({ fair: g(true) }, ['skill'])).toThrow(/no skill gate here/);
   });
 });
 

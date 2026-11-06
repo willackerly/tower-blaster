@@ -578,6 +578,30 @@ export const phaseEnds = (r: CastResult, phase: CastLine['phase']): number[] => 
  */
 export const POOL_GATES = ['fair', 'skill', 'limits', 'complete'] as const;
 
+/**
+ * Gates a person may waive (`--waive`): skill and stable are judgements about how far the targets sit apart and
+ * how noisy T3 is, so a near miss can be accepted as a documented call (B3: skill 0.099 against 0.100, Will
+ * 2026-11-06). Fair, limits and complete are not waivable: they say whether the best line meets the objective
+ * and whether the plays are the game's physics; recast and budget are about the search and the machine, not stars.
+ */
+export const WAIVABLE = ['skill', 'stable'] as const;
+
+/**
+ * Whether `gates` pass once `waive` is applied: every gate passes or is named in `waive`. Throws for a name that
+ * is not a gate here or not waivable, so a typo never passes silently. `waived` lists only the named gates that
+ * failed (waiving a gate that passed records nothing), in `waive`'s order: what a stars file's `waived` says.
+ */
+export function applyWaivers<G extends { [K in keyof G]: Gate | undefined }>(gateSet: G, waive: readonly string[]): { pass: boolean; waived: string[] } {
+  const gates = gateSet as Readonly<Record<string, Gate | undefined>>;
+  for (const w of waive) {
+    if (!(WAIVABLE as readonly string[]).includes(w)) throw new Error(`--waive: ${w} cannot be waived (only ${WAIVABLE.join(', ')})`);
+    if (!gates[w]) throw new Error(`--waive: no ${w} gate here`);
+  }
+  const waived = [...new Set(waive)].filter((w) => !gates[w]!.pass);
+  const pass = Object.entries(gates).every(([k, g]) => !g || g.pass || waived.includes(k));
+  return { pass, waived };
+}
+
 /** The gates of a pool: fair, skill and stable on the pooled plays (limits and complete passed in every cast). */
 export interface PoolGates { fair: Gate; skill: Gate; stable: Gate }
 
