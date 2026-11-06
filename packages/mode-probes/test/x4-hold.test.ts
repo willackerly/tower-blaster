@@ -2,7 +2,7 @@
 // and the walls are what the probe says (CPU: statics by hand, no overlaps),
 // and at CI size on the GPU engine (SwiftShader) the 95% stack holds and the
 // 105% one falls, the span carries a bowling ball, and a hollowed brick wall
-// loses only bricks over its hole and does not creep. The full-size probe
+// loses only bricks over its hole and the wall beside it does not creep. The full-size probe
 // (60 s at 20 and 40 iterations) runs with pnpm probe:modes X4.
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { BodyDesc } from '@tb/engine-api';
@@ -79,5 +79,10 @@ describe('X4 on the GPU engine at game settings (CI size)', () => {
     expect(run.verdict.checks.filter((c) => !c.pass)).toEqual([]);
     const arch = run.runs.find((r) => r.label.startsWith('arch'))!.result as X4Result;
     expect(arch.dropped.length).toBeGreaterThan(0);
+    // The wall's own creep is part of the creep anywhere, and the body that crept most is named with where it stood.
+    expect(arch.creepWall).toBeLessThanOrEqual(arch.creep);
+    // Triangle inequality: a move from the window's midpoint is at most twice the largest move from its start.
+    expect(arch.creepLate).toBeLessThanOrEqual(2 * arch.creep + 1e-9);
+    if (arch.creep > 0) { expect(arch.creepBody).toBeGreaterThanOrEqual(0); expect(arch.creepFromPos).not.toBeNull(); }
   });
 });

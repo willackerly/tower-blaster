@@ -4,7 +4,14 @@
 //
 // The level: a 5 x 5 x 6 block of 0.5 m plaster cubes on the game's lattice
 // (150 bodies, as S14 builds a building), struck at mid-height by the weapons'
-// cannonball at 45 m/s. Shot k is jittered from its own seed (speed +-10 %,
+// wrecking ball at 15 m/s. The first full run used the cannonball at 45 m/s,
+// which moved nothing in 61 of 64 worlds: two near-constant distributions
+// always pass a KS test, so the rule could not fail. A shot must now move the
+// block in most worlds (a checked condition of the verdict); the wrecking
+// ball moves 0.8 to 0.97 of it and throws debris up to 21 m (SwiftShader, 16
+// worlds), so the islands sit ISLAND_GAP = 60 m apart and the verdict checks
+// that nothing ends outside its own island's cell. Shot k is
+// jittered from its own seed (speed +-10 %,
 // aim +-0.4 m across and +-0.3 m up) and so is the block (every cube +-1 mm,
 // +-0.2 deg of yaw). The same K shots run three ways:
 //   islands   all K worlds in one scene, ISLAND_GAP m apart on a square grid
@@ -28,9 +35,13 @@ import type { CaseRun, Check, Meter, Probe, RunSpec, Size, Verdict } from './pro
 
 export const CELL = 0.5;
 export const PITCH = 1.02 * CELL;
-export const ISLAND_GAP = 40;
+export const ISLAND_GAP = 60;
 export const SHOT_STEP = 30;
-const cannon = PROJECTILE_PRESETS.cannonball;
+/** The shot every world takes (see the header). */
+export const SHOT_NAME = 'wreckingball' as const;
+const SHOT = PROJECTILE_PRESETS[SHOT_NAME];
+/** The verdict needs the shot to move the block in at least this share of the islands, or the KS test has nothing to compare. */
+export const MIN_MOVED_WORLDS = 0.75;
 
 export interface Level { W: number; D: number; H: number }
 export type Arm = 'islands' | 'solo' | 'solo-far' | 'block';
@@ -49,9 +60,9 @@ export function world(level: Level, k: number, at: Vec3, presettle: number): { b
   for (let y = 0; y < level.H; y++) for (let i = 0; i < level.W; i++) for (let l = 0; l < level.D; l++) {
     bodies.push(box([at[0] + x0 + i * PITCH + j(1e-3), CELL / 2 + y * CELL, at[2] + z0 + l * PITCH + j(1e-3)], [CELL / 2, CELL / 2, CELL / 2], yaw(j((0.2 * Math.PI) / 180))));
   }
-  // The cannonball 3 m in front of the west face, at mid-height, flying +x.
-  const speed = cannon.speed * (1 + 0.1 * sym(r)), dz = 0.4 * sym(r), dy = 0.3 * sym(r);
-  const shot = ball([at[0] + x0 - CELL / 2 - 3, (level.H * CELL) / 2 + dy, at[2] + dz], cannon.diameter / 2, [speed, 0, 0], { density: cannon.density, friction: cannon.friction });
+  // The shot 3 m in front of the west face, at mid-height, flying +x.
+  const speed = SHOT.speed * (1 + 0.1 * sym(r)), dz = 0.4 * sym(r), dy = 0.3 * sym(r);
+  const shot = ball([at[0] + x0 - CELL / 2 - 3 - SHOT.diameter / 2, (level.H * CELL) / 2 + dy, at[2] + dz], SHOT.diameter / 2, [speed, 0, 0], { density: SHOT.density, friction: SHOT.friction });
   return { bodies, shot: { kind: 'spawn', step: presettle + SHOT_STEP, body: shot } };
 }
 
@@ -82,6 +93,10 @@ export function x8Spec(c: X8Case): RunSpec {
 
 export interface WorldOutcome {
   world: number; down: number; moved: number;
+  /** Bodies of this world (its block and its shot) that ended outside its island's cell (ISLAND_GAP / 2 from its offset): they could have reached another world. */
+  escaped: number;
+  /** How far out its farthest body ended (the larger of |x| and |z| from its offset), m. */
+  reach: number;
   /** The sum of the block's end positions relative to its island's offset (m); over the body count, its centroid. */
   sig: Vec3;
 }
@@ -101,14 +116,18 @@ function x8Meter(c: X8Case, spec: RunSpec): Meter<X8Result> {
       if (c.arm === 'block' || !start) return;
       const p0 = start;
       outcomes = ks.map((k, wi) => {
-        let down = 0, moved = 0;
+        let down = 0, moved = 0, escaped = 0, reach = 0;
         const at: Vec3 = c.arm === 'solo' ? [0, 0, 0] : islandOffset(k, c.K), sig: Vec3 = [0, 0, 0];
+        const out = (i: number) => { const d = Math.max(Math.abs(s.pos[3 * i]! - at[0]), Math.abs(s.pos[3 * i + 2]! - at[2])); reach = Math.max(reach, d); return d > ISLAND_GAP / 2; };
+        // The shots are spawned after every block, in world order.
+        if (w.bodies.length + wi < s.count && out(w.bodies.length + wi)) escaped++;
         for (let i = w.firsts[wi]!; i < w.firsts[wi]! + w.perWorld; i++) {
           for (let a = 0; a < 3; a++) sig[a] = sig[a]! + s.pos[3 * i + a]! - at[a]!;
           if (p0[3 * i + 1]! - s.pos[3 * i + 1]! > CELL) down++;
           if (Math.hypot(s.pos[3 * i]! - p0[3 * i]!, s.pos[3 * i + 1]! - p0[3 * i + 1]!, s.pos[3 * i + 2]! - p0[3 * i + 2]!) > 0.1) moved++;
+          if (out(i)) escaped++;
         }
-        return { world: k, down: down / w.perWorld, moved: moved / w.perWorld, sig };
+        return { world: k, down: down / w.perWorld, moved: moved / w.perWorld, escaped, reach, sig };
       });
     },
     result: () => ({ outcomes, bodies: w.bodies.length, stepMs }),
@@ -143,6 +162,13 @@ function x8Verdict(runs: CaseRun<X8Case, X8Result>[], size: Size): Verdict {
     if (name === 'solo') ok &&= pass;
     checks.push({ name: `${name === 'solo' ? '' : '(diagnostic) '}islands vs ${name}: the ${m} distributions agree (KS p > 0.05)`, pass, detail: `D ${t.D.toFixed(3)}, p ${t.p.toFixed(3)}, ${isl.length} vs ${other.length} worlds` });
   }
+  // Power: two near-constant distributions always agree, so the shot must move most blocks for the KS test to mean anything.
+  const movedShare = isl.filter((o) => o.moved > 0).length / Math.max(1, isl.length);
+  const power = movedShare >= MIN_MOVED_WORLDS;
+  checks.push({ name: `the shot moves the block in at least ${100 * MIN_MOVED_WORLDS}% of the islands (else the KS test cannot fail)`, pass: power, detail: `${isl.filter((o) => o.moved > 0).length}/${isl.length} moved; moved takes ${new Set(isl.map((o) => o.moved)).size} distinct values` });
+  const escaped = [...isl, ...solo, ...far].reduce((a, o) => a + o.escaped, 0);
+  checks.push({ name: 'no body leaves its island\'s cell (no world could reach another)', pass: escaped === 0, detail: `${escaped} bodies outside their cell` });
+  ok &&= power && escaped === 0;
   const isRun = runs.find((r) => r.c.arm === 'islands'), block = runs.find((r) => r.c.arm === 'block');
   const soloMs = mean(runs.filter((r) => r.c.arm === 'solo').map((r) => r.result.stepMs / r.result.bodies));
   table.push('', '| timing (Metal only; SwiftShader times are not results) | bodies | ms per step | us per body-step |', '|---|---|---|---|');
