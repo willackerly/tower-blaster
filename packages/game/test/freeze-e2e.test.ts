@@ -82,13 +82,13 @@ describe('Bullet Time on the game page', () => {
     expect(await page.evaluate((s) => window.__game.fire(s), miss)).toBe(true);
     await page.waitForFunction((n) => window.__game.stepIndex >= n, start + 10, { timeout: 60_000, polling: 20 });
     expect(await page.evaluate(() => window.__game.freeze(true))).toBe(true);
-    // The grade eases in over 0.15 s of frames; the world stands still, so both frames show the same state.
-    await page.waitForTimeout(500);
+    // The grade eases in over 0.15 s of frames (however slow they come); the world stands still, so both frames show the same state.
+    await page.waitForFunction(() => window.__game.frozenGrade === 1, undefined, { timeout: 30_000, polling: 50 });
     const graded = await page.evaluate(() => window.__game.capture(true));
     expect(await label()).toEqual({ on: true, text: expect.stringMatching(/FROZEN · aim and fire/) });
     // The same frozen world with the look switched off (keystone.frozenlook=0, read live): the frame as it runs.
     await page.evaluate(() => { window.__game.feel.frozenLook = false; });
-    await page.waitForTimeout(500);
+    await page.waitForFunction(() => window.__game.frozenGrade === 0, undefined, { timeout: 30_000, polling: 50 });
     const plain = await page.evaluate(() => window.__game.capture(true));
     expect((await label())?.on).toBe(false);
     const msg = JSON.stringify({ graded: sat(graded), plain: sat(plain) });

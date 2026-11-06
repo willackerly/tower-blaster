@@ -5,7 +5,7 @@
 // look like the running one. In display space after the tone map, by
 // `grade` (0 none, 1 full; the game eases it in and out): most of the colour
 // drained toward luma (FROZEN_DESAT), what is left cooled (FROZEN_TINT), and
-// a thin ice-blue rim at the frame's edge (FROZEN_RIM). Alternatives: a CSS
+// a soft ice-blue frost at the frame's rounded edge (FROZEN_RIM). Alternatives: a CSS
 // filter on the canvas (no GPU work, but not in readback captures, so neither
 // tests nor the agent playtests would see it); a grade in the scene pass (it
 // would have to be in every look's shading, and miss the sky and bloom).
@@ -22,8 +22,10 @@ import { AGX_WGSL } from './look.ts';
 export const FROZEN_DESAT = 0.85;
 export const FROZEN_TINT = [0.92, 0.97, 1.08] as const;
 export const FROZEN_RIM = [0.45, 0.72, 1.0] as const;
-export const FROZEN_RIM_WIDTH = 0.035;
-export const FROZEN_RIM_MIX = 0.55;
+export const FROZEN_RIM_WIDTH = 0.045;
+/** The frost's corner radius, as a share of the frame's short side. */
+export const FROZEN_RIM_ROUND = 0.08;
+export const FROZEN_RIM_MIX = 0.42;
 
 export const BLOOM_FORMAT: GPUTextureFormat = 'rgba16float';
 export const HDR_FORMAT: GPUTextureFormat = 'rgba16float';
@@ -90,13 +92,19 @@ struct Post { bloomMix: f32, exposure: f32, vignette: f32, levels: f32, grade: f
 ${AGX_WGSL}
 
 // The frozen grade (FROZEN_* above): drained, cooled, an ice-blue rim. d: uv from the centre.
-fn frozenGrade(c: vec3f, d: vec2f, g: f32) -> vec3f {
+fn frozenGrade(c: vec3f, d: vec2f, g: f32, size: vec2f) -> vec3f {
   let l = dot(c, vec3f(0.2126, 0.7152, 0.0722));
   var x = mix(c, vec3f(l), ${FROZEN_DESAT} * g);
   x *= mix(vec3f(1.0), vec3f(${FROZEN_TINT.join(', ')}), g);
-  let e = max(abs(d.x), abs(d.y));
-  let rim = smoothstep(${0.5 - FROZEN_RIM_WIDTH}, 0.5, e);
-  return mix(x, vec3f(${FROZEN_RIM.join(', ')}), ${FROZEN_RIM_MIX} * g * rim);
+  // A rounded rectangle inset from the frame's edge, in units of the short side so the frost is
+  // as wide on every side and its corners round (an uv-space shape looks lopsided off-square),
+  // faded in quadratically over FROZEN_RIM_WIDTH so it frosts in rather than drawing a hard border.
+  let s = size / min(size.x, size.y);
+  let r = ${FROZEN_RIM_ROUND};
+  let q = abs(d) * s - (0.5 * s - vec2f(r));
+  let sd = length(max(q, vec2f(0.0))) + min(max(q.x, q.y), 0.0) - r;
+  let t = smoothstep(${-FROZEN_RIM_WIDTH}, 0.0, sd);
+  return mix(x, vec3f(${FROZEN_RIM.join(', ')}), ${FROZEN_RIM_MIX} * g * t * t);
 }
 
 // Interleaved gradient noise (Jimenez 2014): cheap, well-spread dither.
@@ -110,7 +118,7 @@ fn ign(p: vec2f) -> f32 {
   let b = textureSampleLevel(bloom, samp, i.uv, 0.0).rgb / max(post.levels, 1.0);
   var c = agx(mix(h, b, post.bloomMix) * post.exposure);
   let d = i.uv - 0.5;
-  if (post.grade > 0.0) { c = frozenGrade(c, d, post.grade); }
+  if (post.grade > 0.0) { c = frozenGrade(c, d, post.grade, vec2f(textureDimensions(hdr))); }
   c *= 1.0 - post.vignette * dot(d, d) * 2.0;
   c += (ign(i.clip.xy) - 0.5) / 255.0;
   return vec4f(c, 1.0);

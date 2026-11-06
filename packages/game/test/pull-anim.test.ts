@@ -2,43 +2,51 @@
 // snapshot as it was, and the ghost outline. CPU only; the game page's capture is pull-e2e.test.ts.
 import { describe, expect, it } from 'vitest';
 import { emptySnapshot } from '@tb/engine-api';
-import { ghostOutline, PULL_GHOST_MS, PULL_SLIDE_STEPS, pullAnimFor, pullPose, rotate, withPulled } from '../src/pull-anim.ts';
+import { ghostOutline, PULL_GHOST_MS, PULL_SIDE, PULL_SLIDE_STEPS, pullAnimFor, pullPose, rotate, withPulled } from '../src/pull-anim.ts';
 
 const HALF: [number, number, number] = [0.25, 0.25, 0.25];
 const a = pullAnimFor(3, [1, 0.25, 0], [0, 0, 0, 1], HALF, [1, 3, 10], 1000);
 
 describe('pull animation', () => {
-  it('slides horizontally toward the camera, a block depth and more, eased out, shrinking over its second half', () => {
-    expect(a.dir).toEqual([0, 0, 1]);
-    expect(a.slide).toBeCloseTo(2.2 * 0.25, 9);
+  it('slides horizontally toward the camera and to its right, a block depth and more, eased out, shrinking over its second half', () => {
+    // The camera is straight down +z from the block: screen right is +x.
+    const n = Math.hypot(PULL_SIDE, 1), dir = [PULL_SIDE / n, 0, 1 / n];
+    a.dir.forEach((v, i) => expect(v).toBeCloseTo(dir[i]!, 12));
+    expect(a.slide).toBeCloseTo(2.2 * 0.25 * (dir[0]! + dir[2]!), 9);
     expect(pullPose(a, 0)).toBeNull();
     expect(pullPose(a, PULL_SLIDE_STEPS + 1)).toBeNull();
     let last = 0, lastScale = 1;
     for (let k = 1; k <= PULL_SLIDE_STEPS; k++) {
       const p = pullPose(a, k)!;
-      expect(p.pos[0]).toBe(1);
       expect(p.pos[1]).toBe(0.25);
+      expect((p.pos[0] - 1) * dir[2]! - p.pos[2] * dir[0]!).toBeCloseTo(0, 12); // along dir
       expect(p.pos[2]).toBeGreaterThan(last);
       expect(p.scale).toBeLessThanOrEqual(lastScale);
       last = p.pos[2];
       lastScale = p.scale;
     }
+    // Five steps in: full size, and already sideways off its own ghost by more than a quarter of the block.
+    expect(pullPose(a, 5)!.scale).toBe(1);
+    expect(pullPose(a, 5)!.pos[0] - 1).toBeGreaterThan(0.125);
     // Ten steps in (the playtest's check): out of its slot by more than half its depth, still drawn.
     const p10 = pullPose(a, 10)!;
-    expect(p10.pos[2]).toBeGreaterThan(0.25);
+    expect(Math.hypot(p10.pos[0] - 1, p10.pos[2])).toBeGreaterThan(0.25);
     expect(p10.scale).toBeGreaterThan(0.3);
     expect(p10.scale).toBeLessThan(1);
-    expect(last).toBeCloseTo(a.slide, 9);
+    expect(Math.hypot(pullPose(a, PULL_SLIDE_STEPS)!.pos[0] - 1, last)).toBeCloseTo(a.slide, 9);
     expect(lastScale).toBeCloseTo(0.15, 9);
   });
 
   it('a turned block slides by its extent along the way out', () => {
     const q: [number, number, number, number] = [0, Math.sin(Math.PI / 8), 0, Math.cos(Math.PI / 8)]; // 45 degrees about y
     const t = pullAnimFor(0, [0, 0, 0], q, [0.5, 0.25, 0.25], [0, 0, 5], 0);
-    expect(t.slide).toBeCloseTo(2.2 * (0.5 + 0.25) * Math.SQRT1_2, 6);
+    // Its x axis is (r, 0, -r) and its z axis (r, 0, r), r = sqrt(1/2): the extent is the sum of |axis . dir| x half.
+    const r = Math.SQRT1_2, [dx, , dz] = t.dir;
+    expect(t.slide).toBeCloseTo(2.2 * (0.5 * Math.abs(r * dx - r * dz) + 0.25 * Math.abs(r * dx + r * dz)), 9);
     expect(rotate(q, [1, 0, 0]).map((x) => +x.toFixed(9))).toEqual([+Math.SQRT1_2.toFixed(9), 0, -Math.SQRT1_2.toFixed(9)]);
     // Straight above: any horizontal way out.
-    expect(pullAnimFor(0, [0, 0, 0], [0, 0, 0, 1], HALF, [0, 9, 0], 0).dir).toEqual([0, 0, 1]);
+    const up = pullAnimFor(0, [0, 0, 0], [0, 0, 0, 1], HALF, [0, 9, 0], 0).dir;
+    expect([up[1], Math.hypot(...up)]).toEqual([0, 1]);
   });
 
   it('withPulled draws the slot at its slide pose, active and awake, and leaves the snapshot exactly as it was', () => {

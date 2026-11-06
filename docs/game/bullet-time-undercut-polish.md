@@ -20,7 +20,7 @@ the tone-mapped frame:
 
 - It desaturates the frame 85% toward luma.
 - It applies a cool tint (0.92, 0.97, 1.08).
-- It adds a thin cold rim, 3.5% of the frame from each edge.
+- It frosts the frame's edge ice-blue: a rounded rectangle, as wide on every side (4.5% of the short side), fading in toward the edge. The first version, a hard 3.5% band, read as a picture frame. The second, a superellipse in uv space, looked lopsided on a wide frame. Both were changed after review.
 
 The grade eases in over 0.15 s and out over 0.12 s (`frozen-look.ts`). A pill label at the top
 reads **FROZEN · aim and fire**, followed by "T resumes" on desktop or "Resume to go on" on touch.
@@ -130,3 +130,21 @@ The hint "Crowns and heritage stay: pull a plain block" uses the neutral `.hint`
 player hovers a crown or heritage block. It turns red (`.bad`) only after the player fires at that
 block and the pull is refused. It goes neutral again once the aim leaves that block.
 `pull-e2e.test.ts` reads the computed colour at each stage.
+
+## Review
+
+An independent review of captured frames, judging the images only, led to three changes before
+merging:
+
+- The frost is narrower and even on every side.
+- The slide now turns about 31° toward the screen's right (`PULL_SIDE`). Straight at a head-on
+  camera, the block only grew in place over its own ghost.
+- The ghost is cyan instead of the warm white of the sliding block.
+
+Two suggestions are left as follow-ups:
+
+- **Keep targets and the ball in colour while the world is graded.** The post pass has no
+  per-body mask. Doing this would need the id buffer every frame, or a mask written by the scene
+  pass, so it costs a pass in every look.
+- **Give hold-level crowns their own tint as well as the glyph.** That belongs to the look
+  palettes, not to this change.

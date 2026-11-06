@@ -3,15 +3,15 @@
 //
 //   slide   for PULL_SLIDE_STEPS physics steps after the pull (0.25 s at
 //           60 Hz) the renderer is fed the pulled block where it would be had
-//           it slid out of the structure toward the camera (eased out, a
-//           block's depth and a little more), shrinking away over the second
-//           half. Step-driven, not wall-time, so a capture N steps after a
+//           it slid out of the structure toward the camera and a little to the
+//           right (eased out, a block's depth and a little more), shrinking
+//           away over the second half. Step-driven, not wall-time, so a capture N steps after a
 //           pull is the same every run, the slide holds while Bullet Time
 //           freezes the world and runs faster under fast-forward, as the
 //           world does.
-//   ghost   for PULL_GHOST_MS of wall time a dotted outline of the block where
-//           it stood (overlay beads along its twelve edges), fading, so the
-//           hole reads as "a block was here".
+//   ghost   for PULL_GHOST_MS of wall time a dotted cyan outline of the block
+//           where it stood (overlay beads along its twelve edges), fading, so
+//           the hole reads as "a block was here".
 //
 // Only what is drawn changes: the engine removed the body at the pull's step
 // (a tombstone, engine-api remove.ts) and nothing the physics, the rules or a
@@ -32,12 +32,14 @@ type Quat = [number, number, number, number];
 
 /** Physics steps the slide-out takes (0.25 s at 60 Hz). */
 export const PULL_SLIDE_STEPS = 15;
+/** How far the slide turns from straight at the camera toward the screen's right: tan of the angle (about 31 degrees). */
+export const PULL_SIDE = 0.6;
 /** How long the ghost outline stays, ms (fading out). */
 export const PULL_GHOST_MS = 1000;
 /** The ghost's beads: at most this far apart along an edge, in units of the block's smallest half-extent. */
 const GHOST_SPACING = 0.5;
-/** The ghost's bead colour: sRGB rgb8 + emissive8 (Renderer.setOverlay), warm white as the hover light (PULL_HOVER). */
-export const GHOST_COLOUR = rgbe(255, 237, 205, 0.45);
+/** The ghost's bead colour: sRGB rgb8 + emissive8 (Renderer.setOverlay), a cool cyan, apart from the warm hover light the sliding block wears. */
+export const GHOST_COLOUR = rgbe(140, 215, 255, 0.5);
 
 export interface PullAnim {
   body: number;
@@ -66,7 +68,10 @@ export function pullAnimFor(body: number, pos: V3, rot: Quat, half: V3, eye: V3,
   let dx = eye[0] - pos[0], dz = eye[2] - pos[2];
   const l = Math.hypot(dx, dz);
   if (l < 1e-6) { dx = 0; dz = 1; } else { dx /= l; dz /= l; }
-  const dir: V3 = [dx, 0, dz];
+  // Toward the camera and PULL_SIDE of that to the screen's right (dz, 0, -dx): straight at the camera
+  // the slide would only grow the block in place over its own ghost (review of the first cut).
+  const sx = dx + PULL_SIDE * dz, sz = dz - PULL_SIDE * dx, sl = Math.hypot(sx, sz);
+  const dir: V3 = [sx / sl, 0, sz / sl];
   // The box's extent along dir: the sum over its axes of |axis . dir| x half.
   const axes = [rotate(rot, [1, 0, 0]), rotate(rot, [0, 1, 0]), rotate(rot, [0, 0, 1])];
   const extent = axes.reduce((s, a, k) => s + Math.abs(a[0] * dir[0] + a[2] * dir[2]) * half[k]!, 0);
@@ -81,7 +86,7 @@ const smoothstep = (a: number, b: number, x: number) => { const t = Math.min(1, 
 export function pullPose(a: PullAnim, k: number): { pos: V3; scale: number } | null {
   if (k < 1 || k > PULL_SLIDE_STEPS) return null;
   const t = k / PULL_SLIDE_STEPS, s = a.slide * easeOut(t);
-  return { pos: [a.pos[0] + a.dir[0] * s, a.pos[1], a.pos[2] + a.dir[2] * s], scale: 1 - 0.85 * smoothstep(0.35, 1, t) };
+  return { pos: [a.pos[0] + a.dir[0] * s, a.pos[1], a.pos[2] + a.dir[2] * s], scale: 1 - 0.85 * smoothstep(0.5, 1, t) };
 }
 
 /**
