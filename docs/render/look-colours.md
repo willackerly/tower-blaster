@@ -161,3 +161,52 @@ says the glyphs are not enough.
 
 **Tests:** the steel ball's tests (the shared `shadeMetal`, unchanged output);
 the real-look crown hue and chroma in `coats-e2e.test.ts`.
+
+## 4. The default look: hazy or real (pending a Metal review)
+
+**Ask:** judge 3 of agent playtest 1 recommends making `real` the default over
+`hazy` ("Hazy has the weakest figure-ground: grey blocks on a grey grid under a
+grey sky"), once real's shadows cover the big levels (§1) and its ice stays
+pale (`docs/render/ice.md`, a lighter shadow). The brief: decide only after an
+Opus look review of a Metal capture; ship the code behind the option and leave
+the default as it is.
+
+**Call for now: the default stays hazy.** Every change in this note is in
+both looks (coats, the sun only in real), and `?look=real` (the front door's
+Look setting) picks real. The reasons to wait for the capture rather than
+decide from SwiftShader frames:
+
+- The real look's cost. It is the expensive look (atmosphere, stone and ground
+  textures, PCSS, AO, grain); the M5 bench of real against real with polish off
+  is queued (`docs/render/polish.md`, Cost), and the quality tiers (P1) pick per
+  machine. A default that misses 120 fps on the target is the wrong default
+  however it looks.
+- What a player sees on a real GPU: SwiftShader has no anisotropic filtering
+  and runs the grain and tone map at a different precision. The judges'
+  frames were SwiftShader's.
+- The big levels' readability in real (PT1: crowns hidden at B2's opening view)
+  is a framing problem in either look.
+
+**Alternatives:** *real now* (the judges' pick, but on frames from a software
+GPU, before the cost is known); *candy* (the most legible figure-ground, but
+night and toy-like, the look Will keeps as an option); *a hazy with candy's
+height ramp as a value ramp* (judge 3's second idea: cheaper, keeps hazy's
+cost; a follow-up if the review keeps hazy).
+
+**The capture job** (Mac, idle, `main` after this PR; two runs of the same
+recorded lines and trials, on the GPU solver, desktop viewport):
+
+```
+pnpm playtest:agent --only '^((L[1-5]|B[1-3])-line|T-I[1-3]-novice)-desktop$' --engine gpu --look hazy --out ~/dev/tb-looks/<sha>/hazy
+pnpm playtest:agent --only '^((L[1-5]|B[1-3])-line|T-I[1-3]-novice)-desktop$' --engine gpu --look real --out ~/dev/tb-looks/<sha>/real
+```
+
+The review: an Opus reader gets the two sets' contact sheets side by side and
+the rubric of agent playtest 1's looks row (figure-ground, crowns and heritage
+found at a glance, shadows grounding the towers, ice, the collapse readable
+mid-shot), plus the M5 frame times of each look from the polish bench. Real
+becomes the default if the reader prefers it on at least 6 of the 11 levels,
+finds no regression in crown finding, and the bench shows real holding the
+High tier's frame budget on the M5; the switch is then one line
+(`lookByName` default) plus the front door's Look setting, with the goldens
+untouched (they pin each look by name).
