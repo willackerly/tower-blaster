@@ -52,8 +52,8 @@ describe('door text', () => {
   it('star targets: objective, then the cast T2 and T3; uncast levels say so; heritage named for three stars', () => {
     expect(starTargets(compileLevel(B1), B1.stars)).toEqual({ targets: ['Bring 40% down', '70% down', '94% down'], short: ['40%', '70%', '94%'], cast: true });
     const b2 = starTargets(compileLevel(B2), B2.stars);
-    expect(b2.targets).toEqual(['Fell every crown', '770 points', '3,200 points, heritage intact']);
-    expect(b2.short).toEqual(['all crowns', '770', '3,200']);
+    expect(b2.targets).toEqual(['Fell every crown', '770 points', '3,000 points, heritage intact']);
+    expect(b2.short).toEqual(['all crowns', '770', '3,000']);
     expect(starTargets(compileLevel(B3), undefined)).toEqual({ targets: ['Bring 40% down', 'targets coming soon', 'targets coming soon'], short: ['40%', '?', '?'], cast: false });
     // Par levels (parStars): two stars one shot over par, three in par; heritage named where the level has some.
     expect(starTargets(compileLevel(L1), undefined)).toMatchObject({ targets: [expect.any(String), '…in 2 shots', '…in par (1 shot)'], short: [expect.any(String), '2 shots', 'par 1'], cast: true });
