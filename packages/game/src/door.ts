@@ -15,7 +15,16 @@
 import { castStars, type CompiledLevel, compileLevel, DUEL_NAMES, type DuelDef, isTrial, type LevelDef, type Objective, scoringOf, SERIES, SERIES_TITLES, type Shot, type StarMetric, type StarsDef } from '@tb/keystone';
 import { CUSTOM_NOTE, esc, fmtPoints, itemLabel, objectiveText, pct } from './hud.ts';
 import type { LevelRecord } from './progress.ts';
-import { LOOK_CHOICES, type Settings } from './settings.ts';
+import type { QualitySetting, QualityTier } from './quality.ts';
+import { LOOK_CHOICES, QUALITY_CHOICES, type Settings } from './settings.ts';
+
+/** The Quality buttons' tooltips (docs/game/quality-tiers.md). */
+export const QUALITY_TITLES: Readonly<Record<QualitySetting, string>> = {
+  auto: 'Picked for this device when the page loads',
+  high: 'Full resolution, every effect',
+  mid: 'One pixel per screen point: a quarter of the pixels on a sharp screen',
+  low: 'Half resolution, no ambient occlusion, no sparks or dust',
+};
 
 /** ?door=auto (default: shown when the URL names no level), 1 (always shown on load) or 0 (never). */
 export type DoorMode = 'auto' | '1' | '0';
@@ -188,11 +197,13 @@ export interface DoorModel {
   settings: Settings;
   /** The how-to-play panel is open. */
   howTo: boolean;
-  /** The Advanced settings panel (sound, look, camera, rapid fire, duel turns, launch height, stone marks, sharpness, forget my progress) is open; closed by default. */
+  /** The Advanced settings panel (sound, look, camera, rapid fire, duel turns, launch height, stone marks, sharpness, quality, forget my progress) is open; closed by default. */
   advanced: boolean;
+  /** The tier the probe picked on load, which Auto takes (quality.ts); null or absent when none ran. */
+  detected?: QualityTier | null;
 }
 
-/** The door's markup. Every button carries data-act (play, level, how, advanced, trials, sound, look, sharp, camera, rapid, duelview, launch, marks, reset, close) and data-arg where it needs one. */
+/** The door's markup. Every button carries data-act (play, level, how, advanced, trials, sound, look, sharp, quality, camera, rapid, duelview, launch, marks, reset, close) and data-arg where it needs one. */
 export function doorHtml(m: DoorModel): string {
   const next = nextLevel(m.levels);
   const card = (l: DoorLevel, i: number) => {
@@ -221,6 +232,8 @@ export function doorHtml(m: DoorModel): string {
       ${m.trials.open ? `<div class="trials-blurb">${esc(TRIALS_BLURB)}</div><div class="cards trials">${trialCards}</div>` : ''}` : '';
   const play = m.levels[next], here = m.levels.find((l) => l.index === m.current);
   const s = m.settings;
+  const tierName = (t: QualityTier) => QUALITY_CHOICES.find((c) => c.quality === t)!.label;
+  const qualities = QUALITY_CHOICES.map((c) => `<button data-act="quality" data-arg="${c.quality}" class="${s.quality === c.quality ? 'on' : ''}" title="${esc(QUALITY_TITLES[c.quality])}">${c.quality === 'auto' && m.detected ? `Auto (${tierName(m.detected)})` : c.label}</button>`).join('');
   const looks = LOOK_CHOICES.map((c) => `<button data-act="look" data-arg="${c.look}" class="${s.look === c.look ? 'on' : ''}">${c.label}</button>`).join('');
   return `
     <div class="door-inner">
@@ -246,6 +259,7 @@ export function doorHtml(m: DoorModel): string {
         <span class="group"><span class="lbl">Launch height</span><span class="seg"><button data-act="launch" data-arg="high" class="${s.launch === 'high' ? 'on' : ''}" title="Shots leave from over the structure's top, clear of the rubble (keys W and S move it)">High</button><button data-act="launch" data-arg="level" class="${s.launch === 'level' ? 'on' : ''}" title="Shots leave from the level's own launcher, near the ground, where its par lines were recorded">Level's</button></span></span>
         <span class="group"><span class="lbl">Stone marks</span><span class="seg"><button data-act="marks" data-arg="on" class="${s.marks ? 'on' : ''}" title="A crosshair carved on the blocks to bring down, a shield on the blocks to keep">Carved</button><button data-act="marks" data-arg="off" class="${s.marks ? '' : 'on'}" title="Plain stones: only their colour says which are which">Off</button></span></span>
         <span class="group"><span class="lbl">Sharpness</span><span class="seg"><button data-act="sharp" data-arg="2" class="${s.sharp === 2 ? 'on' : ''}">Full</button><button data-act="sharp" data-arg="1" class="${s.sharp === 1 ? 'on' : ''}">Fast</button></span></span>
+        <span class="group"><span class="lbl">Quality</span><span class="seg">${qualities}</span></span>
       </div>
       <div class="reset"><button data-act="reset">Forget my progress</button></div>
       </div>` : ''}

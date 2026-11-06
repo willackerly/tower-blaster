@@ -99,7 +99,10 @@ export function cityLevel(id: string, name: string, material: MaterialName, F: n
 export const B3: LevelDef = cityLevel('B3', 'Ten Thousand', 'stone', 5, 3, ['w-bomb', 'w-bomb', 'w-bomb'], {
   objective: { kind: 'collapse', min: 0.4 },
   weapons: { bomb: BOMB },
-  // Uncast: its cast (pnpm keystone:cast B3 --budget-min 200 --stars-into packages/keystone/src/stars.json) adds it to stars.json.
+  // Cast on the M5 Max (Metal): seeds 1 (a406519) and 2 (23c0df8), pooled with T3 from the best line found
+  // (--t3 best) and the skill and stable near misses waived (docs/game/levels/B3.md: Will delegated the call,
+  // 2026-11-06). The showcase (solutions.ace) is seed 1's best line: its 50 nudges ended at collapse 0.375 to 0.794.
+  solutions: { ace: readShots('w-bomb.471.8.146.696.89_w-bomb.394.8.-89.565.70_w-bomb.381.8.-183.645.78') },
   ...castOf('B3'),
 });
 

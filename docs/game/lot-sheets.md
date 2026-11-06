@@ -19,6 +19,7 @@ A goal is a JSON predicate (`goals.ts`, capability C3) over the round's facts:
 | `{ shot, fact, op, value }` | a fact of the k-th shot fired: `crownsDown`, `leverage`, `heritageNew`, `displaced` (a shot not fired fails) |
 | `{ used, op, value }` | how many shots fired this rack item (`any`: all shots) |
 | `{ group, of, count?, op, value }` | a named group of the sheet (`groups.ts`, C6: by part, role, material or box) as a share of its bodies, or a count: `down`, `displaced`, `outOfLot`, `standing` |
+| `{ footprint, of, op, value }` | a named footprint of the sheet (`footprint.ts`, C11: a group's home cells, or the whole structure's, grown by `grow` cells, default 1) judged on the end snapshot: `spill` (mass share whose centre left the mask), `fill` and `iou` (cells covered against the mask), `reach` (cells beyond the mask the furthest rubble lies), `height` and `heightOut` (highest rubble anywhere and outside the mask, in h). See docs/design/grid.md |
 
 `all`, `any` and `not` combine terms. `op` is one of `>= <= > < ==`. `checkLotSheet` refuses a malformed sheet and names the goal and field at fault. A sheet holds at most 8 goals.
 

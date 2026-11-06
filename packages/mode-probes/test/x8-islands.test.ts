@@ -9,7 +9,8 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { requireWebGPU } from '@tb/testkit';
 import { probeById } from '../src/index.ts';
-import { ISLAND_GAP, islandOffset, X8, type X8Case, type X8Result, x8World } from '../src/x8-islands.ts';
+import { PROJECTILE_PRESETS } from '@tb/weapons';
+import { ISLAND_GAP, islandOffset, SHOT_NAME, X8, type X8Case, type X8Result, x8World } from '../src/x8-islands.ts';
 import { openProbePage, type ProbePage, runProbe } from '../src/session.ts';
 
 const level = { W: 5, D: 5, H: 6 };
@@ -38,10 +39,13 @@ describe('X8 worlds', () => {
         expect(b.rot).toEqual(f.rot);
       });
     }
-    // A world spans about 3 m; the cannonball starts 3 m out and the debris of a 150-cube block stays within a few metres.
+    // A world spans about 3 m; the wrecking ball starts 3 m out, and its debris ends within 21 m (SwiftShader, 16 worlds),
+    // inside half the gap (the verdict checks it per world).
     const xs = x8World(at('solo', 0)).bodies.map((b) => b.pos[0]);
     expect(Math.max(...xs) - Math.min(...xs)).toBeLessThan(3);
-    expect(ISLAND_GAP).toBeGreaterThanOrEqual(10 * 3);
+    expect(ISLAND_GAP / 2).toBeGreaterThan(21 + 3);
+    const shot = x8World(at('solo', 0)).inputs[0]!;
+    expect(shot.kind === 'spawn' && (shot.body.shape as { radius: number }).radius).toBe(PROJECTILE_PRESETS[SHOT_NAME].diameter / 2);
     expect(probeById('X8')).toBe(X8);
     expect(X8.cases('full')).toHaveLength(1 + 2 * 64 + 1);
   });

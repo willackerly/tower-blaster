@@ -7,7 +7,7 @@
 // (tests; or =WxH at that size) draws only for captures. The keys are params.ts's, which the viewer
 // reads too under rules=keystone, so the same link opens in either page.
 // The front door (door.ts, docs/game/front-door.md) opens over a bare URL
-// (?door=auto|1|0); ?keystone.preaim, ?progress, ?sound, ?sharp are its keys.
+// (?door=auto|1|0); ?keystone.preaim, ?progress, ?sound, ?sharp, ?quality are its keys.
 import { DUELS, duelLevel, duelLevelId, lotSheetOf, type Player, type Shot, shownGoals } from '@tb/keystone';
 import { createDevice } from '@tb/gpu';
 import { lookByName, parseBlastOptions, parseIceOptions, parseRealOptions, Renderer, SnapshotSource } from '@tb/render';
@@ -17,6 +17,8 @@ import { GAME_SERIES, loadOptions, lookName, onEngine, parseGameParams, withRule
 import { browserKeyValue, memoryKeyValue, type ProgressStore, progressStore } from './progress.ts';
 import { bankAfterLine, type SessionFacts, sessionFile, sessionFileName } from './session-file.ts';
 import { CAMERA_KEYS, cameraFeel, LAUNCH_KEYS, launchFeel, MARKS_KEYS, marksFeel, RAPID_KEYS, rapidFeel, type Settings, SettingsStore, TURN_VIEW_KEYS, turnViewFeel } from './settings.ts';
+import { knobsFor, type QualityState, tierFor } from './quality.ts';
+import { probeQuality } from './quality-probe.ts';
 import { NO_WEBGPU_HTML, webgpuMissing } from './support.ts';
 import { type GameHandle, newGameHandle, playKeystone, playLine } from './play.ts';
 import { helpHtml, installGameStyles } from './ui.ts';
@@ -93,16 +95,34 @@ async function main() {
   };
   handle.feel = feel;
   handle.engine = engine;
-  handle.maxDpr = settings.current.sharp;
 
   const { device, adapter } = await createDevice({ timestamps: false });
   const adapterName = [adapter.info?.vendor, adapter.info?.architecture].filter(Boolean).join(' ');
   // The playtest build names its commit in build.json (packages/playtest); a dev server has none.
   let build = '';
   void fetch('build.json').then((r) => (r.ok ? r.json() : null)).then((b: { commit?: string } | null) => { build = b?.commit ?? ''; }).catch(() => {});
+  // The quality tier (quality.ts, docs/game/quality-tiers.md): the probe measures this device before the
+  // renderer and the first level load (it warms the device's pipeline cache for them). An offscreen page
+  // (tests) runs it only when the URL says quality=auto, and otherwise keeps high, as before tiers.
+  let probe: QualityState['probe'] = null, probeFailed = false;
+  if (!offscreen || q.get('quality') === 'auto') {
+    try { probe = await probeQuality(device, adapter, offscreen ? offscreenSize[0] : canvas.clientWidth, offscreen ? offscreenSize[1] : canvas.clientHeight, offscreen ? 1 : devicePixelRatio); }
+    catch (e) { probeFailed = true; console.warn('quality probe failed:', e); }
+  }
   const renderer = new Renderer(device, offscreen ? { size: offscreenSize } : { canvas });
   const source = new SnapshotSource(device);
   renderer.setSource(source);
+  // The tier's knobs: the canvas's resolution (under Sharpness too), the renderer's toggles, and which frames
+  // are drawn (unless the URL's keystone.frames says). Again whenever Quality or Sharpness changes on the door.
+  const urlFrames = q.has('keystone.frames') ? feel.frames : null;
+  const applyQuality = (st: Settings) => {
+    const { tier, reason } = tierFor(st.quality, probe, probeFailed), knobs = knobsFor(tier, st.sharp, urlFrames);
+    handle.maxDpr = knobs.maxDpr;
+    renderer.toggles = { ...renderer.toggles, shadow: knobs.shadow, ao: knobs.ao, sparks: knobs.sparks };
+    feel.frames = knobs.frames;
+    handle.quality = { setting: st.quality, tier, reason, probed: probe?.tier ?? null, probe, knobs };
+  };
+  applyQuality(settings.current);
   // The maquette look by default: tints read true on its pale albedo (?look=candy for the rainbow;
   // ?look=real with real.* knobs, parseRealOptions in @tb/render).
   renderer.look = lookByName(look, parseRealOptions(q));
@@ -122,7 +142,7 @@ async function main() {
     applied: (st: Settings, changed) => {
       if (changed === 'look') renderer.look = lookByName(lookName(st.look), parseRealOptions(q));
       if (changed === 'sound') handle.setMuted(!st.sound);
-      if (changed === 'sharp') handle.maxDpr = st.sharp;
+      if (changed === 'sharp' || changed === 'quality') applyQuality(st);
       if (changed === 'camera') Object.assign(feel, cameraFeel(feel, new URLSearchParams(), st.camera));
       if (changed === 'rapid') { Object.assign(feel, rapidFeel(feel, new URLSearchParams(), st.rapid)); if (duel) feel.rapid = false; }
       if (changed === 'duelView') Object.assign(feel, turnViewFeel(feel, new URLSearchParams(), st.duelView));
