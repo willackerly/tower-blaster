@@ -1400,6 +1400,87 @@ export async function sparkDraw() {
 }
 
 /**
+ * Bullet Time's frozen sparks (Renderer.freezeFx.sparks, FrameParams.dt 0): one burst, then frames at dt 0
+ * (the sparks hang) at full, dimmed, and at full again. Returns for each the summed brightening over the frame
+ * with sparks off and the pixels it covers (brightened by more than 48 of 765), and whether the two full frames
+ * are bit for bit the same.
+ */
+export async function sparkFreeze(dim: number) {
+  const { device } = await sharedDevice({ timestamps: false });
+  device.pushErrorScope('validation');
+  const descs = [box([2, 1, -5], [2, 2, 0.3], [0, 0, 0, 1])];
+  const src = new SnapshotSource(device);
+  src.update(snapshotOf(descs), descs);
+  const rend = new Renderer(device, { size: [W, H] });
+  rend.look = { ...rend.look, bloomMix: 0 };
+  rend.setSource(src);
+  const f: FrameParams = { ...camera([0, 1.5, 6], [0, 1, 0]), groundY: -1, time: 1, dt: 1 / 60 };
+  // Close to the eye, as a burst the player freezes at: it fills a good part of the frame.
+  rend.burst([0, 1.2, 3.5], [0, 1, 0], 20);
+  await rend.render(f, true);
+  const hung: FrameParams = { ...f, time: 2, dt: 0 };
+  const full = (await rend.render(hung, true, true))!.pixels!;
+  rend.freezeFx = { grade: 0, sparks: dim, heat: 1 };
+  const dimmed = (await rend.render(hung, true, true))!.pixels!;
+  rend.freezeFx = { grade: 0, sparks: 1, heat: 1 };
+  const again = (await rend.render(hung, true, true))!.pixels!;
+  rend.toggles.sparks = false;
+  const none = (await rend.render(hung, true, true))!.pixels!;
+  const lift = (a: typeof none) => {
+    let sum = 0, covered = 0;
+    for (let i = 0; i < a.data.length; i += 4) {
+      const d = Math.max(0, a.data[i]! - none.data[i]!) + Math.max(0, a.data[i + 1]! - none.data[i + 1]!) + Math.max(0, a.data[i + 2]! - none.data[i + 2]!);
+      sum += d;
+      if (d > 48) covered++;
+    }
+    return { sum, covered };
+  };
+  const same = full.data.every((v, i) => v === again.data[i]);
+  const err = await device.popErrorScope();
+  rend.destroy();
+  return { full: lift(full), dimmed: lift(dimmed), same, error: err?.message ?? null };
+}
+
+/** HSV saturation (0..1) of an 8-bit rgb pixel. */
+function saturation(r: number, g: number, b: number): number {
+  const mx = Math.max(r, g, b), mn = Math.min(r, g, b);
+  return mx > 0 ? (mx - mn) / mx : 0;
+}
+
+/**
+ * The frozen grade (post.ts frozenGrade; Renderer.freezeFx.grade): coloured candy cubes against the sky,
+ * drawn at grades 0, 0.5 and 1. Returns each frame's mean HSV saturation, and at grade 1 the mean blue
+ * minus red of the outermost rows and columns (the ice-blue rim) against the same at grade 0.
+ */
+export async function frozenGradeFrames() {
+  const { device } = await sharedDevice({ timestamps: false });
+  device.pushErrorScope('validation');
+  const descs = [-1.5, -0.5, 0.5, 1.5].map((x, i) => box([x, 0.5 + 0.2 * i, -4], [0.4, 0.4, 0.4], [0, 0, 0, 1]));
+  const src = new SnapshotSource(device);
+  src.reset(descs);
+  src.update(snapshotOf(descs), descs);
+  const rend = new Renderer(device, { size: [W, H] });
+  rend.look = { ...lookByName('candy')!, bloomMix: 0, vignette: 0 };
+  rend.setSource(src);
+  descs.forEach((_, i) => rend.setFx(i, { tint: [[1, 0.3, 0.2], [0.2, 0.9, 0.3], [0.2, 0.4, 1], [1, 0.8, 0.1]][i] as V3, emissive: 0.1 }));
+  const f: FrameParams = { ...camera([0, 1, 2], [0, 0.6, -4]), groundY: 0, time: 1 };
+  const frame = async (g: number) => { rend.freezeFx = { grade: g, sparks: 1, heat: 1 }; return (await rend.render(f, true, true))!.pixels!; };
+  const stats = (a: Awaited<ReturnType<typeof frame>>) => {
+    let sat = 0, n = 0, rim = 0, m = 0;
+    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+      const o = y * a.bytesPerRow + 4 * x, r = a.data[o]!, g = a.data[o + 1]!, b = a.data[o + 2]!;
+      sat += saturation(r, g, b); n++;
+      if (x === 0 || y === 0 || x === W - 1 || y === H - 1) { rim += b - r; m++; }
+    }
+    return { sat: sat / n, rim: rim / m };
+  };
+  const g0 = stats(await frame(0)), half = stats(await frame(0.5)), g1 = stats(await frame(1));
+  const err = await device.popErrorScope();
+  rend.destroy();
+  return { g0, half, g1, error: err?.message ?? null };
+}
+
+/**
  * The real look's debris draw: a burst a frame in the open changes pixels only
  * near its projection, one behind a wall changes none of the wall, and dust 0 with
  * chips 0 draws exactly the frame with sparks off.
