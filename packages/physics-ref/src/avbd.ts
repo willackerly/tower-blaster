@@ -174,7 +174,7 @@
 // BodyDesc.restitution, and runs are bit-identical to those before it
 // existed. The GPU engine applies the same pass in f32
 // (physics-gpu/src/restitution.ts, whose header has its cost and its f32
-// departures: 6 + 2 x restitutionRounds dispatches a step while on; off, no
+// departures: 7 + 2 x restitutionRounds dispatches a step while on; off, no
 // buffer, no pipeline and no dispatch). On SwiftShader its drops rebound at
 // the ratio here to 1.5e-6, and off it gives the floats it gave before the
 // port. Its known limits, at 10 iterations, e being the pair's, under the
@@ -246,6 +246,22 @@
 //   Where nothing holds the struck body (no ground under
 //   it, a support that moves or is struck itself, zero g) the rounds still
 //   do, as above.
+// - Energy in chains of simultaneous impacts (anchors or not): the pass's
+//   converged answer can gain energy where several touching bodies are struck
+//   in one step, each bouncing manifold's target -e vn0 taken alone (the
+//   simultaneous Newton law's known flaw). Rounds stop well short of
+//   convergence, which hides it: from a GPU knockdown's state (S5, e 0.9, 15
+//   m/s, step 15) the reference's pass raised the struck bodies' kinetic
+//   energy from 614 J after the solve to 682 J at 8 rounds and 914 J at 128
+//   without anchors (630, 729 and 957 J with them; 566 J at the start of the
+//   step). Anchors converge the held bodies exactly, so they show it more
+//   often: on SwiftShader one of 24 GPU knocks (that one, e 0.9) gained 3.9%
+//   of |E0| with anchors and 1.3e-4 without; none at e 0.3-0.6, and none of
+//   48 knocks on this engine at e 0.5-0.9. A cap per manifold on the energy
+//   of its split copies (their start-of-step energy, which bounds the pass's
+//   total by Jensen's inequality over the mass-split copies) took 729 J to
+//   655 J, not to the start's 566 J: the solve leaves struck bodies above
+//   their own share, so a bound needs the islands' energies (follow-up).
 import { type BodyDesc, combineFriction, combineRestitution, DEFAULT_RESTITUTION_COMBINE, inertiaOf, massOf, type Quat, type SceneDesc, type Vec3 } from '@tb/engine-api';
 import { boundingRadius, cross, dot, groundManifold, NO_AXIS, quatMul, quatNormalize, rotate, shapeManifold, spherePairs } from '@tb/geom';
 import { COLOR_MODES, COLOR_PRIORITIES, colorGraph, colorGraphWith, latticeParity, latticePreferences } from './coloring.ts';
@@ -1030,7 +1046,7 @@ export class AvbdWorld {
    *   64 for the two cubes), so restitutionRounds trades bounce for work: a
    *   body held by its supports, or struck from two sides at once, needs
    *   several rounds. 8 by default (RESTITUTION_DEFAULTS), for the bounce
-   *   off a resting cube above; the GPU pays 2 dispatches a round (6 + 2 x
+   *   off a resting cube above; the GPU pays 2 dispatches a round (7 + 2 x
    *   rounds a step, physics-gpu/src/restitution.ts), and only with the
    *   switch on. More rounds are no cure for a heavy
    *   striker: the 5 kg ball at 10 m/s (e 0.9) gets 0.30 of e at 8 rounds,

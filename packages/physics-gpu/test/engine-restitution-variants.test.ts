@@ -10,7 +10,7 @@ import { AvbdSolver, DEFAULT_DISPATCH, GpuAvbdEngine, type RestitutionConfig, ty
 import { cube, G, gainOf, gpuRun, ON, refRun, type Run, sceneOf } from './bounce.ts';
 import { gpu } from './harness.ts';
 
-const CONFIG: RestitutionConfig = { threshold: 1, rounds: 8, groundRestitution: 0, combine: DEFAULT_RESTITUTION_COMBINE };
+const CONFIG: RestitutionConfig = { threshold: 1, rounds: 8, groundRestitution: 0, combine: DEFAULT_RESTITUTION_COMBINE, anchors: true, anchorSpeed: 0.25 };
 
 describe('GPU AVBD engine: restitution with records and colorMode', () => {
   it('is refused with records 2, in the engine and in the solver; records 0 and 1 build', () => {

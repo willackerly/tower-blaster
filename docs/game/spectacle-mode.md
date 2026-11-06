@@ -403,7 +403,7 @@ Level 1's job is the first-minute promise (G7 measures it): a collapse within 20
 | Cast too slow on the M5 | the budget gate | shorter recipe; the GPU fork ask |
 | 10k at 40 iterations over the 11 ms step budget | F2, G4.4 | 20 iterations where the rest test allows; smaller City levels; declared slow motion |
 | Big levels hit pair or colour limits | `health()` in every cast play | F1 sizing; `pairsPerBody` in the physics block |
-| Bounce at game mass ratios drives blocks into the ground | E4's probes | Bounce stays off until E4; per-item `mass-ratio` probe |
+| Bounce at game mass ratios drives blocks into the ground | E4's probes: fixed by restitution anchors (docs/plan.md, Restitution); a heavy ball bounces off a cube on the ground at 0.83-0.89 of v from 1 to 2000 kg | Bounce opt-in per level at e 0.3-0.5; at e 0.9, simultaneous impacts in a chain can still gain energy (Known limits) |
 | The thresholds feel arbitrary to players | playtest question (j) | show the bot's distribution on the result card ("better than 64% of bot plays") |
 
 Playtest additions to the design's list (G9): **(i)** does anyone bank early, and does the rack-left line change behaviour; **(j)** can players say what the star target was after the level; **(k)** spectacle rating of B3 against B1 ("is 10k better than 1k?").

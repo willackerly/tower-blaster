@@ -169,9 +169,12 @@ export interface GpuDiagnostics {
  * What the last step's restitution pass did, as the reference's
  * StepStats.restitution: the points it bounced (P > 0), the normal impulse it
  * applied in all (N s, supports included), and the impulse it took from the
- * ground (ground normals are +y). Read back from the pass's state, summed in
- * f64. The reference's momentum (the bodies' total linear momentum change)
- * is not kept here: it equals groundImpulse to rounding.
+ * ground (ground normals are +y) as supports. Read back from the pass's
+ * state, summed in f64. The reference's momentum (the bodies' total linear
+ * momentum change) and anchorImpulse (what anchors took, the ground's
+ * included: with restitutionAnchors on, the ground's points are anchors, so
+ * groundImpulse is 0 here as on the reference) are not kept: momentum equals
+ * groundImpulse + anchorImpulse to rounding.
  */
 export interface GpuRestitutionStats {
   contacts: number;
@@ -378,6 +381,7 @@ export class GpuAvbdEngine implements PhysicsEngine {
       }, this.dispatch, this.records, p.gapSlop ?? 0, p.restitution ? {
         threshold: p.restitutionThreshold ?? RESTITUTION_DEFAULTS.restitutionThreshold, rounds: p.restitutionRounds ?? RESTITUTION_DEFAULTS.restitutionRounds,
         groundRestitution: scene.ground?.restitution ?? 0, combine: scene.restitutionCombine ?? DEFAULT_RESTITUTION_COMBINE,
+        anchors: p.restitutionAnchors ?? RESTITUTION_DEFAULTS.restitutionAnchors, anchorSpeed: p.restitutionAnchorSpeed ?? RESTITUTION_DEFAULTS.restitutionAnchorSpeed,
       } : null, sleeps);
       const sleep = sleeps ? new SleepPass(device, sleepRuleOf(this.opts), this.capacity, bodies, props, np.manifolds, bp.total) : null;
       parts = { bodies, shapes, props, spheres, sweep, prev, bp, np, col, solver, blast: new BlastPass(device, bodies, props, shapes, solver.solver), readback: new Readback(device), sleep };

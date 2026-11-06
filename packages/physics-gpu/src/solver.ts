@@ -50,7 +50,7 @@ import { assertStorageFits, readBuffer } from '@tb/gpu';
 import { RECORD_MODES } from '@tb/physics-ref';
 import { Body, BodyProps, CentreRecord, ColorParams, field, Manifold, RestSlot, SolverBody, SolverContact, SolverParams, SolverRecord, TIER, wgslStruct } from '@tb/schema';
 import { MAX_COLORS } from './coloring.ts';
-import { REST_BODY_ARGS, REST_INFO_BYTES, REST_SLOT_ARGS, type RestBinding, type RestitutionConfig, restitutionConstants, restitutionKernels } from './restitution.ts';
+import { REST_BODY_ARGS, REST_BODY_BYTES, REST_INFO_BYTES, REST_SLOT_ARGS, type RestBinding, type RestitutionConfig, restitutionConstants, restitutionKernels } from './restitution.ts';
 
 const WG = 64;
 /** Most threads the tail workgroup can have (SolverDispatch.tailThreads): WebGPU's default limit per workgroup. */
@@ -1579,6 +1579,8 @@ export class AvbdSolver {
   /** The restitution pass's buffers (restitution.ts), only while it is on: a RestSlot per contact slot, and its counters and indirect arguments. */
   readonly restSlots: GPUBuffer | null = null;
   readonly restInfo: GPUBuffer | null = null;
+  /** A RestBody per body (REST_BODY_BYTES), only while the restitution pass is on. */
+  readonly restBodies: GPUBuffer | null = null;
   /** Sleep's awake lists (SolverDispatch.awakeLists), only while they are on: ACTIVE_HEAD header words, then maxPairs pair slots and capacity bodies. */
   readonly active: GPUBuffer | null = null;
   private readonly pipes: Record<string, GPUComputePipeline> = {};
@@ -1606,11 +1608,13 @@ export class AvbdSolver {
   constructor(private readonly device: GPUDevice, readonly capacity: number, readonly maxPairs: number, private readonly b: SolverBuffers, private readonly dispatch: SolverDispatch = DEFAULT_DISPATCH, readonly records: RecordMode = 0, readonly gapSlop = 0, readonly restitution: RestitutionConfig | null = null, readonly sleep = false) {
     if (!(Number.isFinite(gapSlop) && gapSlop >= 0)) throw new Error(`AvbdSolver: gapSlop must be a finite number >= 0, got ${gapSlop}`);
     if (restitution) {
-      const { threshold: t, rounds: r, groundRestitution: g, combine: c } = restitution;
+      const { threshold: t, rounds: r, groundRestitution: g, combine: c, anchors: an, anchorSpeed: as } = restitution;
       if (!(Number.isFinite(t) && t >= 0)) throw new Error(`AvbdSolver: restitution.threshold must be a finite number >= 0, got ${t}`);
       if (!(Number.isInteger(r) && r >= 1)) throw new Error(`AvbdSolver: restitution.rounds must be an integer >= 1, got ${r}`);
       if (!(g >= 0 && g <= 1)) throw new Error(`AvbdSolver: restitution.groundRestitution must be in [0, 1], got ${g}`);
       if (!COMBINE_RULES.includes(c)) throw new Error(`AvbdSolver: restitution.combine must be one of ${COMBINE_RULES.join(', ')}, got ${c}`);
+      if (typeof an !== 'boolean') throw new Error(`AvbdSolver: restitution.anchors must be a boolean, got ${an}`);
+      if (!(Number.isFinite(as) && as >= 0)) throw new Error(`AvbdSolver: restitution.anchorSpeed must be a finite number >= 0, got ${as}`);
       if (records === 2) throw new Error('AvbdSolver: restitution is not implemented with records 2 yet (the pass reads points or exact records)');
       // The pass moves bodies after finalize; it does not know sleepers are anchors yet.
       if (sleep) throw new Error('AvbdSolver: restitution is not implemented with sleep yet');
@@ -1696,13 +1700,16 @@ export class AvbdSolver {
     if (restitution) {
       const slots = buf((maxPairs + capacity) * RestSlot.size, 'avbd restitution slots');
       const info = device.createBuffer({ size: REST_INFO_BYTES, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.INDIRECT | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST, label: 'avbd restitution info' });
+      const restBodies = buf(capacity * REST_BODY_BYTES, 'avbd restitution bodies');
       this.restSlots = slots;
       this.restInfo = info;
+      this.restBodies = restBodies;
       const values = restitutionConstants(restitution, COMBINE_RULES.indexOf(restitution.combine));
       const res: Record<RestBinding, [Kind, GPUBuffer]> = {
         contacts: ['r', this.contacts], contactsRw: ['rw', this.contacts], props: ['r', B.props], solver: ['r', this.solver],
         bodies: ['r', B.bodies], bodiesRw: ['rw', B.bodies], rest: ['rw', slots], restRead: ['r', slots], info: ['rw', info],
         stepInfo: ['r', this.meta], rowStart: ['r', B.rowStart], rowLength: ['r', B.rowLength], adjSlot: ['r', B.adjSlot], params: ['u', this.uniform],
+        restBody: ['rw', restBodies], restBodyRead: ['r', restBodies],
       };
       for (const k of restitutionKernels(COMMON, records === 1 ? { records: 1, head: wgslStruct(SolverRecord) + RECORD_COMMON } : { records: 0 })) {
         const constants = k.constants.length ? { [k.entry]: Object.fromEntries(k.constants.map((c) => [c, values[c]])) } : {};
@@ -1827,7 +1834,7 @@ export class AvbdSolver {
     pass.dispatchWorkgroups(groups);
   }
 
-  /** The restitution pass (restitution.ts), after finalize: 6 + 2 rounds dispatches, all but 3 of them indirect and empty when no point bounces. */
+  /** The restitution pass (restitution.ts), after finalize: 7 + 2 rounds dispatches, all but 3 of them indirect and empty when no point bounces. */
   private encodeRestitution(pass: GPUComputePassEncoder, groups: number, rounds: number): void {
     const info = this.restInfo!;
     const run = (entry: string, args: { direct: number } | { indirect: GPUBuffer; at: number }) => {
@@ -1842,6 +1849,7 @@ export class AvbdSolver {
     run('restArgs', { direct: 1 });
     run('restSupport', slots);
     run('restCount', bodies);
+    run('restAnchors', bodies);
     for (let r = 0; r < rounds; r++) {
       run('restManifold', slots);
       run('restBodies', bodies);
@@ -1918,6 +1926,6 @@ export class AvbdSolver {
   }
 
   destroy(): void {
-    for (const x of [this.solver, this.contacts, this.meta, this.pairHist, this.offHist, this.uniform, this.colorUniform, this.restSlots, this.restInfo, this.active]) x?.destroy();
+    for (const x of [this.solver, this.contacts, this.meta, this.pairHist, this.offHist, this.uniform, this.colorUniform, this.restSlots, this.restInfo, this.restBodies, this.active]) x?.destroy();
   }
 }
