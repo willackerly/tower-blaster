@@ -1225,37 +1225,7 @@ export async function primalKernel(hessian: HessianForm, n: number, seed: number
 }
 
 /**
- * PROBE (branch claude/project-thread-qw97yn, draft PR, not for main): a long run summarised in the page every `every` steps, so a
- * 10k-body scene can run thousands of steps: the largest speed, bodies over 5 m/s, bodies awake, the highest body,
- * shadow-free kinetic energy, the step's broadphase pairs, and (restitution on) the step's restitution stats.
- */
-export async function summaryRun(scene: SceneDesc, steps: number, params: Partial<AvbdParams>, every: number) {
-  const { device } = await sharedDevice();
-  device.pushErrorScope('validation');
-  const e = new GpuAvbdEngine(params, { device });
-  await e.init(scene);
-  const rows: Array<{ step: number; vmax: number; fast: number; awake: number; top: number; v2sum: number; pairs: number; contacts: number; capped: number; capAlpha: number }> = [];
-  const t0 = performance.now();
-  for (let k = 1; k <= steps; k++) {
-    e.step();
-    if (k % every && k !== steps) continue;
-    const s = await e.snapshot(), d = await e.diagnostics(), st = params.restitution ? await e.restitutionStats() : null;
-    let vmax = 0, fast = 0, awake = 0, top = 0, ke = 0;
-    for (let i = 0; i < s.count; i++) {
-      const v2 = s.linVel[3 * i]! ** 2 + s.linVel[3 * i + 1]! ** 2 + s.linVel[3 * i + 2]! ** 2, v = Math.sqrt(v2);
-      vmax = Math.max(vmax, v); if (v > 5) fast++; if (s.awake[i]) awake++; top = Math.max(top, s.pos[3 * i + 1]!); ke += v2;
-    }
-    rows.push({ step: k, vmax, fast, awake, top, v2sum: ke, pairs: d.pairsRequired, contacts: st?.contacts ?? -1, capped: st?.capped ?? -1, capAlpha: st?.capAlpha ?? -1 });
-  }
-  const wallMs = performance.now() - t0;
-  const final = await e.diagnostics();
-  const error = await device.popErrorScope();
-  e.dispose();
-  return { error: error?.message ?? null, rows, final, wallMs };
-}
-
-/**
- * PROBE (branch claude/project-thread-qw97yn, not for main): S5 explosion on Metal (E4b). Every step reads the bodies,
+ * A long run watched for a blow-up (s5-blowup-probe.test.ts, opt-in). Every step reads the bodies,
  * the step's diagnostics and, with the energy cap on, the islands (labels and the solve's velocities, IslandBody.v/.w),
  * and splits the step's change in semi-implicit Euler's invariant energy (host f64 from the f32 state) into the
  * solve's (start to post-solve) and the pass's (post-solve to end), with the worst island excess over max(start,
