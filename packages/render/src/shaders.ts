@@ -5,6 +5,7 @@
 import { defineStruct, FxState, RenderRecord, Spark, wgslStruct } from '@tb/schema';
 import { BAND_HALF, FX_BAND, FX_EMISSIVE_MAX, FX_MATTE, FX_PAINT, FX_WGSL } from './fx.ts';
 import { BEVEL_WGSL, OKLAB_WGSL } from './look.ts';
+import { MARKS_WGSL } from './marks.ts';
 import { SPARK_COMMON } from './sparks.ts';
 import { LIGHT_META, LIGHT_PACKED, LIGHT_VEC4, MAX_BALLS, TRAIL } from './lights.ts';
 import { AO_FOOT_WGSL, AO_SAMPLE_WGSL, AO_SEAM_WGSL } from './ao.ts';
@@ -683,17 +684,19 @@ const REAL_FS_BOX = /* wgsl */ `fragPx = v.clip.xy;
     let faceN = boxFace(v.local, fwidth(v.local));
     let aoPxM = length(fwidth(v.local * v.half));
     let st = stoneAt(v.slot, lp, faceN, v.half, aoPxM);
-    let n = qrot(v.rot, normalize(bevelNormal(lp, faceN, v.half, pxM, fr.bevel) + st.dn));
+    let w = fx[v.slot];
+    // An engraved mark (marks.ts): its groove's darker floor and its walls' tilt.
+    let carve = carveSeen(engrave(markOf(w.y), lp, faceN, v.half, aoPxM), qrot(v.rot, faceN), v.rel);
+    let n = qrot(v.rot, normalize(bevelNormal(lp, faceN, v.half, pxM, fr.bevel) + st.dn + carve.dn));
     let dndx = dpdx(n);
     let dndy = dpdy(n);
-    let w = fx[v.slot];
     let d3 = v.half - abs(lp);
     let edgeM = max(min(d3.x, d3.y), min(max(d3.x, d3.y), d3.z));
     // Wear: within 1-4 cm of an edge, further where the stone is pitted, fresh (lighter, rougher) stone shows.
     let wear = fr.stone.z * (1.0 - smoothstep(0.0, 0.01 + 0.03 * (1.0 - st.cavity) + 0.01 * fr.stone.z, edgeM));
     let y = v.rel.y + fr.eye.y - fr.groundY;
     let dirt = fr.stone.w * (1.0 - smoothstep(0.0, 2.5, y));
-    var base = realAlbedo(v.look, v.slot) * st.albedo * mix(1.0, st.cavity, 0.6) * fxTint(w.x);
+    var base = realAlbedo(v.look, v.slot) * st.albedo * mix(1.0, st.cavity, 0.6) * fxTint(w.x) * carve.shade;
     base = mix(base, base * 1.2, wear) * (1.0 - 0.35 * dirt);
     // Toksvig: bumps averaged away by the mips widen the lobe instead.
     let a = st.rough * st.rough;
@@ -888,6 +891,7 @@ const SEAM = 0.012;
 ${OKLAB_WGSL}
 ${BEVEL_WGSL}
 ${FX_WGSL}
+${MARKS_WGSL}
 
 fn qrot(q: vec4f, v: vec3f) -> vec3f {
   let t = 2.0 * cross(q.xyz, v);
@@ -1164,13 +1168,19 @@ fn boxFace(local: vec3f, w: vec3f) -> vec3f {
   let lp = clamp(v.local, vec3f(-1.0), vec3f(1.0)) * v.half;
   let pxM = length(fwidth(lp));
   let faceN = boxFace(v.local, fwidth(v.local));
-  let n = qrot(v.rot, bevelNormal(lp, faceN, v.half, pxM, fr.bevel));
+  // The seam cavity's level of detail wants the true pixel footprint: pxM
+  // comes from the clamped lp, whose derivatives flatten at edge pixels.
+  let aoPxM = length(fwidth(v.local * v.half));
+  let w = fx[v.slot];
+  // An engraved mark (marks.ts): its groove's darker floor and its walls' tilt.
+  let carve = carveSeen(engrave(markOf(w.y), lp, faceN, v.half, aoPxM), qrot(v.rot, faceN), v.rel);
+  let nb = bevelNormal(lp, faceN, v.half, pxM, fr.bevel);
+  let n = qrot(v.rot, select(nb, normalize(nb + carve.dn), any(carve.dn != vec3f(0.0))));
   let dndx = dpdx(n);
   let dndy = dpdy(n);
   let isCandy = material(v.look) == 0u;
   let rough = select(0.7, fr.roughness, isCandy);
-  let w = fx[v.slot];
-  let base = select(vec3f(0.35), albedo(v.look), isCandy) * fxTint(w.x);
+  let base = select(vec3f(0.35), albedo(v.look), isCandy) * fxTint(w.x) * carve.shade;
   // A thin dark seam (SEAM m wide on each cube) keeps neighbours in a packed
   // tower apart. Antialiased in pixels and faded out once it is narrower
   // than a pixel, where a hard line would alias into dashes.
@@ -1179,9 +1189,6 @@ fn boxFace(local: vec3f, w: vec3f) -> vec3f {
   let wPx = SEAM / max(pxM, 1e-6);
   let drawn = max(wPx, 0.75);
   let seam = 1.0 - 0.4 * min(1.0, wPx / 0.75) * (1.0 - smoothstep(drawn - 0.5, drawn + 0.5, edgeM / max(pxM, 1e-6)));
-  // The seam cavity's level of detail wants the true pixel footprint: pxM
-  // comes from the clamped lp, whose derivatives flatten at edge pixels.
-  let aoPxM = length(fwidth(v.local * v.half));
   var c = shade(base * seam, v.rel, n, aaAlpha(rough * rough, n, dndx, dndy), aaAlpha(0.0049, n, dndx, dndy), select(0.0, fr.clearcoat, isCandy), aoBox(v, n, lp, faceN, aoPxM));
   c += base * seam * fxGlow(w, fr.time);
   c += heatGlow(v.slot, base);

@@ -16,7 +16,7 @@ import { doorDuels, doorMode, doorOnLoad, duelsOnDoor, openerFor, preaimMode } f
 import { GAME_SERIES, loadOptions, lookName, onEngine, parseGameParams, withRules } from './params.ts';
 import { browserKeyValue, memoryKeyValue, type ProgressStore, progressStore } from './progress.ts';
 import { bankAfterLine, type SessionFacts, sessionFile, sessionFileName } from './session-file.ts';
-import { CAMERA_KEYS, cameraFeel, LAUNCH_KEYS, launchFeel, RAPID_KEYS, rapidFeel, type Settings, SettingsStore, TURN_VIEW_KEYS, turnViewFeel } from './settings.ts';
+import { CAMERA_KEYS, cameraFeel, LAUNCH_KEYS, launchFeel, MARKS_KEYS, marksFeel, RAPID_KEYS, rapidFeel, type Settings, SettingsStore, TURN_VIEW_KEYS, turnViewFeel } from './settings.ts';
 import { NO_WEBGPU_HTML, webgpuMissing } from './support.ts';
 import { type GameHandle, newGameHandle, playKeystone, playLine } from './play.ts';
 import { helpHtml, installGameStyles } from './ui.ts';
@@ -69,6 +69,8 @@ async function main() {
   Object.assign(feel, turnViewFeel(feel, q, settings.current.duelView));
   // Launch height: the URL's keystone.launch where it says, else the setting (high by default). Read live: a change moves the launcher at once.
   Object.assign(feel, launchFeel(feel, q, settings.current.launch));
+  // Stone marks: the URL's keystone.marks where it says, else the setting (on by default). Read live: a change recarves the stones at once.
+  Object.assign(feel, marksFeel(feel, q, settings.current.marks));
   const door = doorMode(q), preaim = preaimMode(q), bank = bankAfterLine(q), goals = goalsMode(q);
   // ?keystone.rack replaces the opening level's rack (its def, so retry keeps it); other levels keep their own.
   // The rule overrides (keystone.scoring, keystone.autobank, physics) apply to every level; stars cast on
@@ -123,8 +125,9 @@ async function main() {
       if (changed === 'rapid') { Object.assign(feel, rapidFeel(feel, new URLSearchParams(), st.rapid)); if (duel) feel.rapid = false; }
       if (changed === 'duelView') Object.assign(feel, turnViewFeel(feel, new URLSearchParams(), st.duelView));
       if (changed === 'launch') Object.assign(feel, launchFeel(feel, new URLSearchParams(), st.launch));
+      if (changed === 'marks') { Object.assign(feel, marksFeel(feel, new URLSearchParams(), st.marks)); handle.refreshMarks(); }
       // The setting now says it: the URL keys that set it for this visit go.
-      const u = new URLSearchParams(location.search), keys = changed === 'camera' ? CAMERA_KEYS : changed === 'rapid' ? RAPID_KEYS : changed === 'duelView' ? TURN_VIEW_KEYS : changed === 'launch' ? LAUNCH_KEYS : [changed];
+      const u = new URLSearchParams(location.search), keys = changed === 'camera' ? CAMERA_KEYS : changed === 'rapid' ? RAPID_KEYS : changed === 'duelView' ? TURN_VIEW_KEYS : changed === 'launch' ? LAUNCH_KEYS : changed === 'marks' ? MARKS_KEYS : [changed];
       if (keys.some((k) => u.has(k))) { for (const k of keys) u.delete(k); history.replaceState(null, '', `?${u}`); }
     },
   });

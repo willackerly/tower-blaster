@@ -28,7 +28,7 @@ import { alphaAt, arrived, DEFAULT_FEEL, newArrivals, Pacer, type PaceFeel, SLOW
 import { COST_WINDOW, runPhysics, wakeable } from './physics-loop.ts';
 import { CLEAR_SHARE, FrameGovernor } from './frame-rate.ts';
 import { UndoMarks } from './undo-marks.ts';
-import { ballFx, beadOverlay, BOMB_FX, CROWN_GLOW, PULL_HOVER, regrowDuration, regrowScales, structureTints, TINT, tintOf, tintWordOf } from './scene.ts';
+import { ballFx, beadOverlay, BOMB_FX, CROWN_GLOW, PULL_HOVER, regrowDuration, regrowScales, structureMarks, structureTints, TINT, tintOf, tintWordOf } from './scene.ts';
 import { type GestureState, type TouchAction, TouchGestures, touchFace, type TouchMode } from './touch.ts';
 
 /** What a page (and its tests) can see and do while Keystone plays: window.__game on the game page. */
@@ -141,6 +141,10 @@ export interface GameHandle {
    * ball (paint and band, scene.ts ballFx), or plain (the look's).
    */
   firedLooks(): ('bomb' | 'painted' | 'plain')[];
+  /** The mark carved on each structure body now, read back from the renderer (@tb/render MARK_NONE, MARK_HIT, MARK_SAVE). */
+  marks(): number[];
+  /** Carve or clear the stones again as feel.marks now says (the front door's Stone marks setting changed). */
+  refreshMarks(): void;
   /** Physics state now: step, phase and a hash of every pose. */
   state(): SessionState;
   /** This attempt's shots as the session recorded them, a rapid-fire one with `after` (Shot.after): what replay() and a session file replay. */
@@ -217,7 +221,7 @@ export function newGameHandle(): GameHandle {
   const none = (): SessionState => ({ step: 0, phase: 'loading', strokes: 0, heritageBroken: 0, hash: '' });
   return {
     status: 'loading', engine: '', level: '', phase: 'loading', ready: false, frozen: false, frames: 0, stepIndex: 0, strokes: 0, bodies: 0, collapse: 0, fast: false, pace: { timeScale: 1, speed: 1, tag: '', tailSkip: false, costMs: NaN }, view: { target: [0, 0, 0], distance: 0, yaw: 0, pitch: 0, following: false, jolt: 0, turning: false, cue: null, arcBeads: 0 }, input: { touch: false, gesture: 'idle', fingers: 0, aimed: null, power: 100, launch: 0 }, result: null, counts: {}, feel: { ...DEFAULT_FEEL }, resultShownAt: null, timing: { loadMs: 0, load: noPhases(), stepMs: [], moving: [], frameMs: [], costMs: [] }, draws: { drawn: 0, skipped: 0, decimating: false },
-    fire: () => false, bank: () => false, freeze: () => false, fireOpener: () => false, setMuted: () => {}, maxDpr: 2, aim: () => null, reach: null, select: () => false, load: async () => {}, retry: async () => {}, undo: async () => false, undone: null, undoMemory: () => ({ marks: 0, bytes: 0 }), capture: async () => null, firedLooks: () => [],
+    fire: () => false, bank: () => false, freeze: () => false, fireOpener: () => false, setMuted: () => {}, maxDpr: 2, aim: () => null, reach: null, select: () => false, load: async () => {}, retry: async () => {}, undo: async () => false, undone: null, undoMemory: () => ({ marks: 0, bytes: 0 }), capture: async () => null, firedLooks: () => [], marks: () => [], refreshMarks: () => {},
     state: none, line: () => [], replay: async () => none(), health: async () => null, pairsPerBody: 0, limitsHit: [], goals: [], grade: null, duel: null,
     sound: () => ({ mode: 'collapse', status: 'off', error: '', posted: 0, stats: null }),
   };
@@ -566,6 +570,11 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
    * what the page shows, as a load after an undo would set it up (loadNow with a line), but with the page
    * state of that moment: Bullet Time's freeze, the goals as judged then, and the bombs still drawn as bombs.
    */
+  /** Carve the structure's stones as feel.marks says (scene.ts structureMarks): after its tints at every load and restore, and when the setting changes. */
+  function applyMarks() {
+    renderer.setMarks(0, structureMarks(c, feel.marks));
+  }
+
   function restoreMark(mark: UndoMark) {
     mark.cp.restore();
     reportedSteps = 0;
@@ -576,6 +585,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     if (fxSlots) renderer.clearFx(0, fxSlots);
     regrowBuf = regrowScales(c, Infinity, new Float32Array(c.meta.n));
     renderer.setFx(0, structureTints(c), regrowBuf, false);
+    applyMarks();
     const s = driver.session;
     s.crownLive.forEach((down, k) => { if (down) renderer.setFx(c.meta.crowns[k]!, { tint: TINT.crown, emissive: 0.9 }); });
     s.heritageBroken.forEach((cracked, k) => { if (cracked) renderer.setFx(c.meta.heritage[k]!, { tint: TINT.heritage, emissive: 1 }); });
@@ -773,6 +783,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     // Owner ink: each side's blocks in its colour, its king glowing a little as crowns do.
     if (duel) duel.owned.forEach((idx, k) => { for (const b of idx) tints[b] = tintWordOf(duel!.def.sides[k]!.ink, c.meta.role[b] === 1 ? CROWN_GLOW : 0); });
     renderer.setFx(0, tints, regrowBuf, !line);
+    applyMarks();
     if (line) {
       const s = driver.session;
       s.crownLive.forEach((down, k) => { if (down) renderer.setFx(c.meta.crowns[k]!, { tint: TINT.crown, emissive: 0.9 }); });
@@ -1177,6 +1188,8 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
   }
 
   handle.fire = fire;
+  handle.marks = () => Array.from({ length: c.meta.n }, (_, i) => renderer.fxOf(i).mark);
+  handle.refreshMarks = () => applyMarks();
   handle.firedLooks = () => {
     const fused = new Set(renderer.fuses.slots), out: ('bomb' | 'painted' | 'plain')[] = [];
     for (let i = c.meta.n; i < descs.length; i++) {

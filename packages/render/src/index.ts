@@ -8,6 +8,7 @@ export * from './look.ts';
 export * from './post.ts';
 export * from './shaders.ts';
 export * from './fx.ts';
+export * from './marks.ts';
 export * from './shadowfit.ts';
 export * from './sparks.ts';
 export * from './lights.ts';
