@@ -86,6 +86,15 @@ export class EditController {
     return true;
   }
 
+  /** Whether a brush stroke is under way (a press began it and no release or cancel has ended it). */
+  get stroking(): boolean { return this.stroke !== null; }
+
+  /** Drop the stroke under way, laying nothing (a touch cancelled, a second finger landed). */
+  cancelStroke(): void {
+    this.stroke = null;
+    this.strokeGhost = null;
+  }
+
   /** A click (a press and release that did not drag) or the end of a stroke: place, lay or erase. Returns whether the level changed. */
   up(ray: Ray | null = this.lastRay, mods: Mods = this.lastMods): boolean {
     if (this.tool === 'brush') {
