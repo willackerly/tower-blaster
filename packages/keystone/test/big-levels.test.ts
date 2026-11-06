@@ -69,7 +69,7 @@ describe('big levels', () => {
 
   it('B3 plays by its cast stars on collapse: their hash is the level\'s, the waivers are recorded, and the showcase line parses', () => {
     const c = compileLevel(B3);
-    expect(B3.stars).toMatchObject({ metric: 'collapse', hash: c.hash, engine: 'gpu', waived: ['skill', 'stable'] });
+    expect(B3.stars).toMatchObject({ metric: 'collapse', hash: c.hash, engine: 'gpu', waived: ['skill'] });
     expect(castStars(c)).toBe(B3.stars);
     expect(B3.stars!.t3).toBeGreaterThan(B3.stars!.t2);
     expect(B3.stars!.t2).toBeGreaterThanOrEqual(B3.objective!.kind === 'collapse' ? B3.objective!.min : 0);

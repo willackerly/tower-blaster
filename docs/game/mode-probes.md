@@ -315,3 +315,5 @@ The probe has since been fixed. It now shoots the wrecking ball, and on SwiftSha
 - no body ends outside its own island's cell.
 
 A Metal re-run is queued.
+
+C10 turns this into the primitive the game uses (`Islands` and `IslandObserver` in `@tb/engine-api`; design, alternatives and results in `docs/design/islands.md`). Its own verify runs the same level and shot through it: `pnpm probe:modes C10`.

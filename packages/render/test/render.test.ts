@@ -9,7 +9,7 @@ import { buildScenario } from '@tb/scenarios';
 import { Body, readStruct, Shape, TIER } from '@tb/schema';
 import { RapierHost } from '@tb/adapter-rapier';
 import { TieredEngine } from '@tb/lattice';
-import { ADAPT_MAX, ADAPT_REF, adaptedExposure, hallArch, hallScaled, hallUniforms, HAZY_DAY, OLYMPIA, linearToSrgb, lookByName, lookUniforms, parseRealOptions, REAL_DEFAULTS, REAL_KNOBS, realLook, writeRealOptions, CLEAR_DAY, MIE_H, mieExtinction, multiTable, normalize, OZONE, OZONE_WIDTH, RAYLEIGH, RAYLEIGH_H, skyRadiance, skyViewDir, skyViewUv, sunAtGround, sunDiscRadiance, transmittance, transmittanceHMu, transmittanceTable, transmittanceUv } from '../src/index.ts';
+import { ADAPT_MAX, ADAPT_REF, adaptedExposure, hallArch, hallScaled, hallUniforms, HAZY_DAY, OLYMPIA, linearToSrgb, lookByName, lookUniforms, parseRealOptions, REAL_DEFAULTS, REAL_KNOBS, REAL_POLISH_OFF, realLook, writeRealOptions, CLEAR_DAY, MIE_H, mieExtinction, multiTable, normalize, OZONE, OZONE_WIDTH, RAYLEIGH, RAYLEIGH_H, skyRadiance, skyViewDir, skyViewUv, sunAtGround, sunDiscRadiance, transmittance, transmittanceHMu, transmittanceTable, transmittanceUv } from '../src/index.ts';
 import { agx, aoFootReference, debrisClass, debrisSpawnReference, debrisWeight, newDebrisReference, chipCount, chipStepReference, CHIP_POOL, CHIPS_PER_EVENT, debrisRings, DEFAULT_DEBRIS, DEFAULT_SPARKS, dustCount, dustStepReference, DUST_PER_EVENT, DUST_POOL, bevelNormal, type V3, CANDY_NIGHT, CTL, HOT_FULL, MAX_EVENTS, SPAWN_BUDGET, FX_WORDS, packFx, tintWord, unpackFx, frustumPlanes, linearToOklab, listMatches, oklabToLinear, srgbToLinear, lookAt, lookOf, lookRange, MATERIAL, multiply, SEG, packBodies, changedRanges, drawnTier, packShapes, paletteOf, perspective, unpackLook } from '../src/index.ts';
 import { gpu, call, type D } from './harness.ts';
 
@@ -1275,12 +1275,15 @@ describe('drawing', () => {
   // pinned per platform, since rasterizers differ (Linux and macOS SwiftShader
   // do); an unpinned platform logs its hashes and skips. UPDATE_GOLDEN=1
   // rewrites this platform's entry, for a change meant to alter these looks:
-  // say why in the commit.
-  it('candy and hazy are bit-identical to their pinned golden images', async (ctx) => {
+  // say why in the commit. real-polish-off is the real look with realism
+  // step 7's options off (REAL_POLISH_OFF), pinned before step 7 landed: the
+  // polish adds options and changes nothing else.
+  it('candy, hazy and the real look without its polish are bit-identical to their pinned golden images', async (ctx) => {
     if (!gpu) return ctx.skip();
-    const r = await call('lookHashes', ['candy', 'hazy']);
+    const looks = ['candy', 'hazy', { name: 'real-polish-off', real: REAL_POLISH_OFF }];
+    const r = await call('lookHashes', looks);
     expect(r.error).toBeNull();
-    expect((await call('lookHashes', ['candy', 'hazy'])).hashes).toEqual(r.hashes); // deterministic, or the gate means nothing
+    expect((await call('lookHashes', looks)).hashes).toEqual(r.hashes); // deterministic, or the gate means nothing
     const key = `${process.platform} ${gpu.adapter.vendor} ${gpu.adapter.architecture} ${gpu.adapter.description}`.replace(/\s+/g, ' ').trim();
     const file = fileURLToPath(new URL('./golden/looks.json', import.meta.url));
     const pinned = JSON.parse(readFileSync(file, 'utf8')) as Record<string, Record<string, number>>;
@@ -1351,8 +1354,9 @@ describe('drawing', () => {
     expect(r.diff).toBe(0);
     expect(r.prevEqual).toBe(true); // beforeStep() copied the state into prev
     // Uniforms only (frame, cull, spark and light params, spark control reset): measured 1602 B (the debris params and counters added 24, the
-    // hall's 2 vec4 in the frame 48 with padding). Any per-body upload is 41 x Body.size more.
-    expect(r.bytesPerFrame).toBeLessThanOrEqual(1650);
-    expect(1650).toBeLessThan(41 * Body.size);
+    // hall's 2 vec4 in the frame 48 with padding; realism step 7 48: the frame's ballSteel and the composite's tone map and grain,
+    // measured 1698). Any per-body upload is 41 x Body.size more.
+    expect(r.bytesPerFrame).toBeLessThanOrEqual(1700);
+    expect(1700).toBeLessThan(41 * Body.size);
   });
 });

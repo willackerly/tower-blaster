@@ -2,7 +2,8 @@
 // scene, a blast in front of the camera, and frames with and without it.
 import { emptySnapshot, type BodyDesc, type Snapshot, TAG_BALL } from '@tb/engine-api';
 import { sharedDevice } from '@tb/gpu';
-import { LOOKS, lookAt, multiply, perspective, Renderer, SnapshotSource, type FrameParams, type V3 } from '../src/index.ts';
+import { lookAt, multiply, perspective, Renderer, SnapshotSource, type FrameParams, type V3 } from '../src/index.ts';
+import { LOOKS } from './looks.ts';
 
 const W = 160, H = 100, FOV = 0.9;
 
