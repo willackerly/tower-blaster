@@ -714,3 +714,4 @@ sky lighting does, so they came first).
 5. Soft shadows: PCSS with the sun's 0.53 degree diameter.
 6. Dust and chips instead of sparks and heat glow.
 7. Polish: steel ball, grain, tone-map A/B, tuning from Mac screenshots.
+   Done 2026-11-06 (R4): `docs/render/polish.md`. Steel ball and grain 0.2 on by default, AgX kept after the A/B; `real-polish-off` pins the look without them.
