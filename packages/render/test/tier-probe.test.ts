@@ -1,7 +1,7 @@
 // The measurements behind the quality tiers (tier-probe.ts, docs/game/quality-tiers.md) in headless
 // Chromium: frames of an offscreen renderer drawing the bench's 'near' heap and chains of dependent
-// dispatches run without a validation error and come back as wall times; a frame over stopAboveMs ends
-// the timing. Correctness only: timings from SwiftShader are never performance results.
+// dispatches run without a validation error and come back as wall times at the size asked; a frame over
+// stopAboveMs ends the timing. Correctness only: timings from SwiftShader are never performance results.
 import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { loadBundle, openWebGPU, type WebGPUSession } from '@tb/testkit';
@@ -28,19 +28,21 @@ describe('tier probe', () => {
     expect(medianOf([])).toBeNaN();
   });
 
-  it('frames at two sizes and toggle sets: timed, no validation error, the smaller one cheaper', async (ctx) => {
+  it('frames at two sizes and toggle sets: timed at the size asked, no validation error', async (ctx) => {
     if (!gpu) return ctx.skip();
     const high = await call('frames', 320, 200, {}, Infinity);
     const low = await call('frames', 160, 100, { ao: false, sparks: false }, Infinity);
     console.log(`probe frames (software: not a performance result): 320x200 all on ${high.frameMs.map((x) => x.toFixed(1))} ms, 160x100 low ${low.frameMs.map((x) => x.toFixed(1))} ms`);
+    expect([high.width, high.height, low.width, low.height]).toEqual([320, 200, 160, 100]);
     for (const f of [high, low]) {
       expect(f.error).toBeNull();
       expect(f.frameMs).toHaveLength(2);
       expect(f.warmupMs).toBeGreaterThan(0);
       for (const ms of f.frameMs) expect(ms).toBeGreaterThan(0);
     }
-    // A sixteenth of the pixels and two passes fewer: on any adapter this is less work (a functional check of the toggles, not a timing result).
-    expect(medianOf(low.frameMs)).toBeLessThan(medianOf(high.frameMs));
+    // No wall-time comparison between the two: SwiftShader on a shared CI runner can swap their order
+    // (a CI shard once drew low at 952 ms and high at 630). That the toggles reach the renderer is
+    // checked on pixels in game/test/quality-e2e.test.ts.
   }, 300_000);
 
   it('a frame over stopAboveMs ends the timing after it', async (ctx) => {

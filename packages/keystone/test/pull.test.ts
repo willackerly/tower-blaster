@@ -51,7 +51,7 @@ describe('pull: the item', () => {
   it('becomes one remove event for its body, never a spawn', () => {
     expect(shotEvent(c.frame, { ammo: 'pull', body: 1 }, 412)).toEqual({ step: 412, kind: 'remove', id: 1 });
     expect(() => shotToSpawn(c.frame, { ammo: 'pull', body: 1 }, 0)).toThrow(/spawns nothing/);
-    expect(shotEvent(c.frame, { ammo: 'marble', az: 0, y: 4, yaw: 0, pitch: 0, power: 50 }, 3).kind).toBe('spawn');
+    expect(shotEvent(c.frame, { ammo: 'marble', az: 0, y: 4, yaw: 0, pitch: 0, power: 50 }, 3)!.kind).toBe('spawn');
   });
 
   it('is charged a marble at power 0: 409 J at h = 0.5 m, scaling with the marble\'s mass', () => {
