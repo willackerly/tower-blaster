@@ -2,7 +2,8 @@
 //   [--seed N] [--metric collapse|crowns|skyline|score] [--recipe short|full|C,L,M,K,N]
 //   [--out cast.json] [--md cast.md] [--compare other.json] [--max-steps N] [--explore N]
 //   [--cloud-of cast.json [--n 16]] [--budget-min 60] [--pool a.json,b.json]
-//   [--stars-into packages/keystone/src/stars.json]
+//   [--stars-into packages/keystone/src/stars.json] [--replay cast.json [--phase cloud] [--n 16]]
+//   [--extend cast.json [--n 50]] [--pool a.json,b.json [--t3 pooled|best]]
 // <level>: a built-in level id, or --level-file path.json (a LevelDef), or
 // --scenario S3 --param W=50 ... (the automatic scenario level), or --draft B1a
 // (keystone-lab drafts.ts). --explore N plays N competent lines only and
@@ -23,11 +24,16 @@
 // gate's note records the raise. --stars-into stars.json sets the level's stars
 // in the game's stars file (one line per level, the rest kept) once every gate
 // passed, or from --pool: the drop-in that makes new stars show in the game. Exits 2 when a gate fails, 4 when a
-// play hit an engine limit (as bench:browser does).
+// play hit an engine limit (as bench:browser does). --replay cast.json plays the first --n (16)
+// recorded lines of --phase (cloud) exactly again here and reports which end bit for bit as
+// recorded (same adapter: all should; exit 2 when any differs there). --extend cast.json plays
+// --n (50) more nudges of that cast's best line on the same device and judges its stars again
+// (extendCloud: the stable gate's fix). --t3 best pools T3 from the best line of the casts
+// instead of every cloud together (poolCasts).
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { compileLevel, type LevelDef, levelById, scenarioLevel, STAR_METRICS, type StarMetric, type StarsDef } from '@tb/keystone';
 import { exitNow } from '@tb/testkit';
-import { CAST_BUDGET_MS, castLevel, castMarkdown, cloudCheck, exploreLevel, explorationMarkdown, type CastPlayer, type CastRecipe, type CastResult, compareCasts, FULL_RECIPE, mergeStarsFile, nodeCastPlayer, playsOf, poolCasts, SHORT_RECIPE, withWallTime } from './cast.ts';
+import { CAST_BUDGET_MS, castLevel, castMarkdown, cloudCheck, exploreLevel, extendCloud, type PoolT3, replayCast, explorationMarkdown, type CastPlayer, type CastRecipe, type CastResult, compareCasts, FULL_RECIPE, mergeStarsFile, nodeCastPlayer, playsOf, poolCasts, SHORT_RECIPE, withWallTime } from './cast.ts';
 import { openBrowserCastPlayer } from './cast-browser.ts';
 import { draftByName } from './drafts.ts';
 
@@ -66,13 +72,15 @@ if (!(budgetMin > 0)) throw new Error(`--budget-min needs a positive number of m
 const budgetMs = budgetMin * 60_000;
 if (flags.has('pool')) {
   const casts = flags.get('pool')!.split(',').map((f) => JSON.parse(readFileSync(f, 'utf8')) as CastResult);
-  const p = poolCasts(casts), hash = compileLevel(def).hash;
+  const t3From = (flags.get('t3') ?? 'pooled') as PoolT3;
+  if (t3From !== 'pooled' && t3From !== 'best') throw new Error(`--t3 is pooled or best: ${t3From}`);
+  const p = poolCasts(casts, t3From), hash = compileLevel(def).hash;
   if (p.stars.hash !== hash) throw new Error(`pool: the casts are of ${def.id} hash ${p.stars.hash}, but it hashes ${hash} now: recast`);
   const f3 = (x: number) => x.toFixed(3), row = (name: string, x: typeof p.cloud) => `| ${name} | ${x.n} | ${[x.min, x.p10, x.p25, x.p50, x.p75, x.p90, x.max].map(f3).join(' | ')} |`;
   const md = [
     `### ${def.id} stars pooled from seeds ${p.seeds.join(', ')} on ${p.stars.castOn} (${p.stars.engine}), ${p.stars.n} plays`,
     '',
-    `T2 ${f3(p.stars.t2)} (median of every competent end, raw ${f3(p.raw.t2)}), T3 ${f3(p.stars.t3)} (lower quartile of every nudge cloud, raw ${f3(p.raw.t3)}), beat the bot above ${f3(p.raw.best)}. Per seed: ${casts.map((r) => `seed ${r.seed} T2 ${f3(r.raw.t2)} T3 ${f3(r.raw.t3)}`).join('; ')}.`,
+    `T2 ${f3(p.stars.t2)} (median of every competent end, raw ${f3(p.raw.t2)}), T3 ${f3(p.stars.t3)} (lower quartile of ${p.t3From === 'best' ? `seed ${p.t3Seed}'s nudge cloud, the best line of the casts` : 'every nudge cloud'}, raw ${f3(p.raw.t3)}), beat the bot above ${f3(p.raw.best)}. Per seed: ${casts.map((r) => `seed ${r.seed} T2 ${f3(r.raw.t2)} T3 ${f3(r.raw.t3)}`).join('; ')}.`,
     '',
     '| Cloud | n | min | P10 | P25 | P50 | P75 | P90 | max |',
     '|---|---|---|---|---|---|---|---|---|',
@@ -125,6 +133,47 @@ if (flags.has('explore')) {
     if (flags.has('out')) writeFileSync(flags.get('out')!, JSON.stringify({ ...e, ms, stepMs, def }, null, 1));
     if (flags.has('md')) writeFileSync(flags.get('md')!, md);
     process.exitCode = e.limited ? 4 : 0;
+  } finally {
+    stuck = await close();
+  }
+  if (stuck.length) await exitNow();
+  process.exit();
+}
+if (flags.has('extend')) {
+  const cast = JSON.parse(readFileSync(flags.get('extend')!, 'utf8')) as CastResult, n = Number(flags.get('n') ?? 50);
+  if (!Number.isInteger(n) || n < 1) throw new Error(`--n needs a whole number of plays: ${flags.get('n')}`);
+  console.log(`extend ${def.id} on ${player.adapter} (${player.engine}): ${n} more nudges of seed ${cast.seed}'s best line ${cast.bestLine.shots}`);
+  let stuck: string[] = [];
+  try {
+    const t0 = performance.now(), r = await extendCloud(def, player, cast, n);
+    const md = castMarkdown({ ...r, wallMs: cast.wallMs }) + `\n\nCloud extended by ${n} nudges in ${((performance.now() - t0) / 60_000).toFixed(1)} min (budget gate as the cast had it).\n` + reopenNote();
+    console.log(md);
+    console.log(`stars: ${JSON.stringify(r.stars)}`);
+    if (flags.has('out')) writeFileSync(flags.get('out')!, JSON.stringify(reopens.length ? { ...r, reopens } : r, null, 1));
+    if (flags.has('md')) writeFileSync(flags.get('md')!, md);
+    const failed = Object.values(r.gates).some((g) => g && !g.pass), limited = !r.gates.limits.pass;
+    if (!failed) intoStarsFile(def.id, r.stars);
+    process.exitCode = limited ? 4 : failed ? 2 : 0;
+  } finally {
+    stuck = await close();
+  }
+  if (stuck.length) await exitNow();
+  process.exit();
+}
+if (flags.has('replay')) {
+  const cast = JSON.parse(readFileSync(flags.get('replay')!, 'utf8')) as CastResult, n = Number(flags.get('n') ?? 16);
+  const phase = (flags.get('phase') ?? 'cloud') as 'competent' | 'climb' | 'cloud';
+  if (!Number.isInteger(n) || n < 1) throw new Error(`--n needs a whole number of plays: ${flags.get('n')}`);
+  if (!['competent', 'climb', 'cloud'].includes(phase)) throw new Error(`--phase is competent, climb or cloud: ${phase}`);
+  console.log(`replay ${def.id} on ${player.adapter} (${player.engine}): the first ${n} ${phase} plays of seed ${cast.seed}'s cast on ${cast.adapter} (${cast.engine}), exactly`);
+  let stuck: string[] = [];
+  try {
+    const t0 = performance.now(), k = await replayCast(def, player, cast, phase, n);
+    const sameDevice = k.adapter === cast.adapter && k.engine === cast.engine;
+    for (const r of k.rows) console.log(`  ${r.was.hash === r.now.hash && r.was.steps === r.now.steps ? 'same  ' : 'DIFFER'} ${r.shots}: ${r.was.value} (${r.was.steps} steps) -> ${r.now.value} (${r.now.steps} steps)`);
+    console.log(`${k.same} of ${k.rows.length} plays ended bit for bit as recorded; ${((performance.now() - t0) / 60_000).toFixed(1)} min${sameDevice ? '' : ' (another adapter or engine: differences are expected)'}`);
+    if (flags.has('out')) writeFileSync(flags.get('out')!, JSON.stringify(k, null, 1));
+    process.exitCode = sameDevice && k.same < k.rows.length ? 2 : 0;
   } finally {
     stuck = await close();
   }

@@ -468,12 +468,26 @@ export async function castLevel(level: LevelDef, player: CastPlayer, opts: CastO
   const cloud = await play('cloud', Array.from({ length: recipe.cloud }, () => nudgeLine(bestShots, rc)));
   const cloudEnd = cloud.map((p) => endValue(p, metric));
 
-  // 4. Thresholds.
-  const all = lines.flatMap((l) => l.samples.map((s) => sampleValue(s, metric)));
+  // 4. Thresholds and 5. gates, from the plays.
   const hb = higherBetter(metric);
-  const { raw, t2, t3 } = thresholds(metric, compEnd, cloudEnd, all);
+  const { raw, t2, t3, boot, gates } = judgeCast(c, metric, seed, lines);
+  const stars: StarsDef = { metric, t2, t3, best: raw.best, castOn: player.adapter, engine: player.engine, hash: c.hash, n: lines.length, seed };
+  return {
+    level: level.id, hash: c.hash, metric, recipe, seed, adapter: player.adapter, engine: player.engine, n: lines.length, wallMs: 0,
+    raw, stars, bestLine: { shots: writeShots(bestShots), score: best ? (hb ? best.score : -best.score) : NaN, climbedFrom: lines[best?.from ?? order[0]!]!.shots },
+    competent: summary(compEnd), cloud: summary(cloudEnd), bootstrap: boot, gates, lines,
+  };
+}
 
-  // 5. Gates.
+/**
+ * A cast's thresholds and gates (all but budget) from its plays: T2 from the competent ends, T3 from the
+ * cloud's (every cloud play, so an extended cloud counts whole), the gates as the spec gives them.
+ */
+export function judgeCast(c: CompiledLevel, metric: StarMetric, seed: number, lines: readonly CastLine[]): { raw: CastResult['raw']; t2: number; t3: number; boot: ReturnType<typeof bootstrapT3>; gates: CastGates } {
+  const compEnd = lines.filter((l) => l.phase === 'competent').map((l) => endValue(l, metric));
+  const cloud = lines.filter((l) => l.phase === 'cloud'), cloudEnd = cloud.map((l) => endValue(l, metric));
+  const all = lines.flatMap((l) => l.samples.map((s) => sampleValue(s, metric)));
+  const { raw, t2, t3 } = thresholds(metric, compEnd, cloudEnd, all);
   const boot = bootstrapT3(metric, cloudEnd, seed), range = metricRange(metric, c, all);
   const metRate = cloud.filter((p) => p.samples.at(-1)?.met).length / Math.max(1, cloud.length);
   const limited = lines.filter((l) => l.limits.length).length, incomplete = lines.filter((l) => !l.complete).length;
@@ -485,11 +499,27 @@ export async function castLevel(level: LevelDef, player: CastPlayer, opts: CastO
     limits: { pass: limited === 0, value: limited, need: 0, note: 'plays where the engine hit a limit that changed the physics' },
     complete: { pass: incomplete === 0, value: incomplete, need: 0, note: 'plays that ran out of steps before every shot settled' },
   };
-  const stars: StarsDef = { metric, t2, t3, best: raw.best, castOn: player.adapter, engine: player.engine, hash: c.hash, n: lines.length, seed };
+  return { raw, t2, t3, boot, gates };
+}
+
+/**
+ * More nudges of a cast's best line, added to its cloud (the stable gate's fix: T3's bootstrap interval narrows
+ * as the cloud grows, about as 1/sqrt(n)). The nudges come from their own stream, keyed by the cloud's size so
+ * a second extension draws new ones. Returns the cast with the plays appended and its thresholds and gates
+ * judged again (budget kept as it was: the extension's wall time is the caller's to add).
+ */
+export async function extendCloud(level: LevelDef, player: CastPlayer, cast: CastResult, n: number): Promise<CastResult> {
+  const c = compileLevel(level);
+  if (c.hash !== cast.hash) throw new Error(`extend: ${level.id} hashes ${c.hash} here but the cast was of ${cast.hash}`);
+  if (player.adapter !== cast.adapter || player.engine !== cast.engine) throw new Error(`extend: the cast was on ${cast.adapter} (${cast.engine}), this player is ${player.adapter} (${player.engine}): extend it on the same device`);
+  const had = cast.lines.filter((l) => l.phase === 'cloud').length, best = readShots(cast.bestLine.shots), r = rng(streamSeed(cast.seed, 'extend', had));
+  const batch = Array.from({ length: n }, () => nudgeLine(best, r)), plays = await player.play(level, batch);
+  const lines = [...cast.lines, ...plays.map((p, k): CastLine => ({ phase: 'cloud', shots: writeShots(batch[k]!), samples: p.samples, steps: p.steps, complete: p.complete, hash: p.hash, limits: p.limits }))];
+  const { raw, t2, t3, boot, gates } = judgeCast(c, cast.metric, cast.seed, lines);
+  const cloudEnd = lines.filter((l) => l.phase === 'cloud').map((l) => endValue(l, cast.metric));
   return {
-    level: level.id, hash: c.hash, metric, recipe, seed, adapter: player.adapter, engine: player.engine, n: lines.length, wallMs: 0,
-    raw, stars, bestLine: { shots: writeShots(bestShots), score: best ? (hb ? best.score : -best.score) : NaN, climbedFrom: lines[best?.from ?? order[0]!]!.shots },
-    competent: summary(compEnd), cloud: summary(cloudEnd), bootstrap: boot, gates, lines,
+    ...cast, n: lines.length, raw, stars: { ...cast.stars, t2, t3, best: raw.best, n: lines.length }, cloud: summary(cloudEnd), bootstrap: boot,
+    gates: { ...gates, ...(cast.gates.budget ? { budget: cast.gates.budget } : {}) }, lines,
   };
 }
 
@@ -551,29 +581,50 @@ export const POOL_GATES = ['fair', 'skill', 'limits', 'complete'] as const;
 /** The gates of a pool: fair, skill and stable on the pooled plays (limits and complete passed in every cast). */
 export interface PoolGates { fair: Gate; skill: Gate; stable: Gate }
 
-export function poolCasts(casts: readonly CastResult[]): { raw: CastResult['raw']; stars: StarsDef; competent: CastResult['competent']; cloud: CastResult['cloud']; seeds: number[]; gates: PoolGates } {
+/**
+ * How a pool sets T3. 'pooled': the player-worse quartile of every cast's cloud together (B1's stars), for casts
+ * whose climbs found the same basin. 'best': the cloud of the cast whose best line is best (the highest T3 of
+ * any cast that passed fair), for levels where seeds' climbs find different lines (B2, B3): a target set by the
+ * best line known, as the spec means T3 (small variations of the best line found), and another seed finding a
+ * worse line does not lower it. T2 is every cast's competent plays together either way.
+ */
+export type PoolT3 = 'pooled' | 'best';
+
+export function poolCasts(casts: readonly CastResult[], t3From: PoolT3 = 'pooled'): { raw: CastResult['raw']; stars: StarsDef; competent: CastResult['competent']; cloud: CastResult['cloud']; seeds: number[]; gates: PoolGates; t3From: PoolT3; t3Seed?: number } {
   const a = casts[0];
   if (!a) throw new Error('pool: no casts');
   for (const b of casts) {
     if (b.hash !== a.hash || b.metric !== a.metric || b.adapter !== a.adapter || b.engine !== a.engine) throw new Error(`pool: cast seed ${b.seed} (${b.hash}, ${b.metric}, ${b.adapter} ${b.engine}) is not of ${a.level} ${a.hash} by ${a.metric} on ${a.adapter} ${a.engine}`);
-    const failed = POOL_GATES.filter((g) => b.gates[g] && !b.gates[g].pass);
+    // 'best' takes competent plays from any cast whose plays are the game's physics; its T3 cast must pass fair.
+    const need = t3From === 'pooled' ? POOL_GATES : (['limits', 'complete'] as const);
+    const failed = need.filter((g) => b.gates[g] && !b.gates[g].pass);
     if (failed.length) throw new Error(`pool: cast seed ${b.seed} failed ${failed.map((g) => `${g} (${b.gates[g].value.toFixed(3)}, need ${b.gates[g].need.toFixed(3)})`).join(', ')}: it cannot be pooled; recast that seed`);
   }
-  const comp = casts.flatMap((r) => phaseEnds(r, 'competent')), cloud = casts.flatMap((r) => phaseEnds(r, 'cloud'));
-  const all = casts.flatMap((r) => r.lines.flatMap((l) => l.samples.map((s) => sampleValue(s, a.metric))));
-  const { raw, t2, t3 } = thresholds(a.metric, comp, cloud, all), n = casts.reduce((k, r) => k + r.n, 0);
+  const m = a.metric;
+  let from: readonly CastResult[] = casts, t3Seed: number | undefined;
+  if (t3From === 'best') {
+    const fair = casts.filter((r) => r.gates.fair.pass);
+    if (!fair.length) throw new Error('pool: no cast passed fair, so none has a best line to set T3');
+    const top = fair.reduce((x, y) => (good(m, lowerQ(m, phaseEnds(y, 'cloud'), 0.25)) > good(m, lowerQ(m, phaseEnds(x, 'cloud'), 0.25)) ? y : x));
+    from = [top];
+    t3Seed = top.seed;
+  }
+  const comp = casts.flatMap((r) => phaseEnds(r, 'competent')), cloud = from.flatMap((r) => phaseEnds(r, 'cloud'));
+  const all = casts.flatMap((r) => r.lines.flatMap((l) => l.samples.map((s) => sampleValue(s, m))));
+  const { raw, t2, t3 } = thresholds(m, comp, cloud, all), n = casts.reduce((k, r) => k + r.n, 0);
   // The metric's range as castLevel judged it (metricRange): fixed for collapse, skyline and crowns (each cast's
   // skill need is a tenth of it), the observed spread of every play for score.
-  const range = a.metric === 'score' ? Math.max(1, Math.max(...all) - Math.min(...all)) : a.gates.skill.need / 0.1;
-  const clouds = casts.flatMap((r) => r.lines.filter((l) => l.phase === 'cloud'));
+  const range = m === 'score' ? Math.max(1, Math.max(...all) - Math.min(...all)) : a.gates.skill.need / 0.1;
+  const clouds = from.flatMap((r) => r.lines.filter((l) => l.phase === 'cloud'));
   const metRate = clouds.filter((l) => l.samples.at(-1)?.met).length / Math.max(1, clouds.length);
-  const gap = good(a.metric, raw.t3) - good(a.metric, raw.t2), boot = bootstrapT3(a.metric, cloud, a.seed);
+  const gap = good(m, raw.t3) - good(m, raw.t2), boot = bootstrapT3(m, cloud, (t3Seed ?? a.seed));
+  const which = t3From === 'best' ? `seed ${t3Seed}'s nudge cloud (the best line of the casts)` : 'the pooled nudge clouds';
   const gates: PoolGates = {
-    fair: { pass: metRate >= 0.8, value: metRate, need: 0.8, note: 'share of the pooled nudge clouds meeting the objective' },
-    skill: { pass: gap >= 0.1 * range, value: gap, need: 0.1 * range, note: 'pooled T3 - T2 (raw), at least 10% of the metric range' },
-    stable: { pass: boot.halfWidth < 0.05 * range, value: boot.halfWidth, need: 0.05 * range, note: "half-width of the pooled T3's bootstrap 90% interval, under 5% of the range" },
+    fair: { pass: metRate >= 0.8, value: metRate, need: 0.8, note: `share of ${which} meeting the objective` },
+    skill: { pass: gap >= 0.1 * range, value: gap, need: 0.1 * range, note: 'T3 - pooled T2 (raw), at least 10% of the metric range' },
+    stable: { pass: boot.halfWidth < 0.05 * range, value: boot.halfWidth, need: 0.05 * range, note: `half-width of T3's bootstrap 90% interval over ${which}, under 5% of the range` },
   };
-  return { raw, stars: { metric: a.metric, t2, t3, best: raw.best, castOn: a.adapter, engine: a.engine, hash: a.hash, n, seed: a.seed }, competent: summary(comp), cloud: summary(cloud), seeds: casts.map((r) => r.seed), gates };
+  return { raw, stars: { metric: m, t2, t3, best: raw.best, castOn: a.adapter, engine: a.engine, hash: a.hash, n, seed: t3Seed ?? a.seed }, competent: summary(comp), cloud: summary(cloud), seeds: casts.map((r) => r.seed), gates, t3From, ...(t3Seed !== undefined ? { t3Seed } : {}) };
 }
 
 /** A nudge cloud of another device's best line, played here: the cross-device gate at a smaller N than a whole cast. */
@@ -617,6 +668,56 @@ export async function cloudCheck(level: LevelDef, player: CastPlayer, cast: Cast
     limits: { pass: limited === 0, value: limited, need: 0, note: 'plays where the engine hit a limit that changed the physics' },
     complete: { pass: incomplete === 0, value: incomplete, need: 0, note: 'plays that ran out of steps before every shot settled' },
     lines: plays.map((p, k) => ({ phase: 'cloud', shots: writeShots(batch[k]!), samples: p.samples, steps: p.steps, complete: p.complete, hash: p.hash, limits: p.limits })),
+  };
+}
+
+/** One recorded play replayed: its end state's hash and banked value then and now. */
+export interface ReplayRow { i: number; shots: string; was: { hash: string; value: number; steps: number }; now: { hash: string; value: number; steps: number } }
+
+/** A recorded cast's plays played again here, exactly (no nudge): which end bit for bit as they did. */
+export interface ReplayCheck {
+  level: string;
+  hash: string;
+  adapter: string;
+  engine: string;
+  against: { adapter: string; engine: string; seed: number };
+  phase: CastLine['phase'];
+  /** Plays that ended in the same state (hash and steps) as recorded. */
+  same: number;
+  rows: ReplayRow[];
+  lines: CastLine[];
+}
+
+/**
+ * Compares recorded plays with the same lines played again: a play is the same when its end hash and step
+ * count match. On the recording's adapter and engine build, every play matches unless the physics or the
+ * rules changed (or the engine is not deterministic there); on another adapter, matches are not expected.
+ */
+export function compareReplay(recorded: readonly CastLine[], now: readonly CastPlay[], metric: StarMetric): { same: number; rows: ReplayRow[] } {
+  if (recorded.length !== now.length) throw new Error(`replay: ${now.length} plays for ${recorded.length} recorded`);
+  const rows = recorded.map((l, i): ReplayRow => ({
+    i, shots: l.shots,
+    was: { hash: l.hash, value: endValue(l, metric), steps: l.steps },
+    now: { hash: now[i]!.hash, value: endValue(now[i]!, metric), steps: now[i]!.steps },
+  }));
+  return { same: rows.filter((r) => r.was.hash === r.now.hash && r.was.steps === r.now.steps).length, rows };
+}
+
+/**
+ * Plays the first `n` recorded lines of `phase` from `cast` again here, exactly, and compares their ends
+ * (compareReplay): whether a cast still describes the level as the engine plays it now. The level must hash
+ * as the cast's did.
+ */
+export async function replayCast(level: LevelDef, player: CastPlayer, cast: CastResult, phase: CastLine['phase'] = 'cloud', n = 16): Promise<ReplayCheck> {
+  const c = compileLevel(level);
+  if (c.hash !== cast.hash) throw new Error(`replay: ${level.id} hashes ${c.hash} here but the cast was of ${cast.hash}`);
+  const rec = cast.lines.filter((l) => l.phase === phase).slice(0, n);
+  if (!rec.length) throw new Error(`replay: the cast has no ${phase} plays`);
+  const plays = await player.play(level, rec.map((l) => readShots(l.shots)));
+  const { same, rows } = compareReplay(rec, plays, cast.metric);
+  return {
+    level: level.id, hash: c.hash, adapter: player.adapter, engine: player.engine, against: { adapter: cast.adapter, engine: cast.engine, seed: cast.seed },
+    phase, same, rows, lines: plays.map((p, k) => ({ phase, shots: rec[k]!.shots, samples: p.samples, steps: p.steps, complete: p.complete, hash: p.hash, limits: p.limits })),
   };
 }
 

@@ -3,7 +3,7 @@
 // (every number checkable by hand) and on Rapier with a tiny recipe.
 import { describe, expect, it } from 'vitest';
 import { aimAt, type CastPlay, type CastSample, compileLevel, readShots, writeShots, launcherPos, type LaunchShot, type LevelDef, scenarioLevel, type Shot } from '@tb/keystone';
-import { bootstrapT3, castLevel, cloudCheck, crossDeviceGate, exposedFaces, faceSectors, facingAzimuth, FACE_SECTORS, REACH, type CastPlayer, type CastRecipe, type CastResult, competentIntents, compareCasts, endValue, HEIGHT_BANDS, higherBetter, intentShot, moveIntents, nodeCastPlayer, nudgeLine, phaseEnds, playsOf, poolCasts, quantile, rng, roundEasier, SHORT_RECIPE, shotSummary, streamSeed, surfaceTarget, withWallTime } from '../src/index.ts';
+import { bootstrapT3, castLevel, cloudCheck, crossDeviceGate, exposedFaces, faceSectors, facingAzimuth, FACE_SECTORS, REACH, type CastPlayer, type CastRecipe, type CastResult, competentIntents, compareCasts, compareReplay, extendCloud, judgeCast, replayCast, endValue, HEIGHT_BANDS, higherBetter, intentShot, moveIntents, nodeCastPlayer, nudgeLine, phaseEnds, playsOf, poolCasts, quantile, rng, roundEasier, SHORT_RECIPE, shotSummary, streamSeed, surfaceTarget, withWallTime } from '../src/index.ts';
 
 /** A 10 x 4 wall of plaster cubes along x as an outcome level, rack of two cannonballs. */
 const WALL: LevelDef = { ...scenarioLevel('S3', { W: 10, H: 4 }, 1, { rack: ['cannonball', 'cannonball'] }), id: 'T1' };
@@ -330,6 +330,67 @@ describe('castLevel on a synthetic player', () => {
     expect(withConfirm).toBeGreaterThan(without);
     expect(withConfirm).toBeGreaterThanOrEqual(17);
   }, 300_000);
+  it('replays recorded plays exactly: all the same on the same physics, flagged where the physics changed', async () => {
+    // The synthetic player's end hash is a hash of its shots and a physics version.
+    const versioned = (v: string): CastPlayer => {
+      const base = basins(0.2);
+      return { ...base, async play(level, lines) { return (await base.play(level, lines)).map((p, k) => ({ ...p, hash: `${v}:${h32(writeShots(lines[k]!)).toFixed(9)}`, ...(v === 'v2' && k % 2 ? { steps: p.steps + 1 } : {}) })); } };
+    };
+    const cast = await castLevel(WALL, versioned('v1'), { recipe: { competent: 8, climbLines: 1, climbMoves: 1, climbNudges: 2, cloud: 6 }, seed: 2 });
+    const same = await replayCast(WALL, versioned('v1'), cast, 'cloud', 4);
+    expect(same.same).toBe(4);
+    expect(same.rows.map((r) => r.shots)).toEqual(cast.lines.filter((l) => l.phase === 'cloud').slice(0, 4).map((l) => l.shots));
+    expect(same.rows.every((r) => r.now.value === r.was.value)).toBe(true);
+    const changed = await replayCast(WALL, versioned('v2'), cast, 'competent', 8);
+    expect(changed.same).toBe(0);
+    expect(changed.rows.length).toBe(8);
+    await expect(replayCast({ ...WALL, rack: ['cannonball'] }, versioned('v1'), cast)).rejects.toThrow(/hashes/);
+    expect(() => compareReplay(cast.lines.slice(0, 2), [], 'collapse')).toThrow(/0 plays for 2/);
+  });
+  it('extends a cast\'s cloud with fresh nudges of its best line and judges it again; refuses another device', async () => {
+    const recipe: CastRecipe = { competent: 8, climbLines: 1, climbMoves: 1, climbNudges: 2, cloud: 6 };
+    const played: Shot[][] = [];
+    const cast = await castLevel(WALL, basins(0.2), { recipe, seed: 4 });
+    const r = await extendCloud(WALL, basins(0.2, played), cast, 10);
+    expect(played.length).toBe(10);
+    const best = baseKey(readShots(cast.bestLine.shots));
+    for (const l of played) expect(baseKey(l)).toBe(best);
+    // New nudges, not the cloud replayed; the cast's own plays kept in order, the new ones after.
+    const old = new Set(cast.lines.filter((l) => l.phase === 'cloud').map((l) => l.shots));
+    expect(played.filter((l) => old.has(writeShots(l))).length).toBeLessThan(10);
+    expect(r.lines.slice(0, cast.lines.length)).toEqual(cast.lines);
+    expect(r.n).toBe(cast.n + 10);
+    expect(r.cloud.n).toBe(16);
+    const cloudEnds = r.lines.filter((l) => l.phase === 'cloud').map((l) => endValue(l, 'collapse'));
+    expect(r.raw.t3).toBe(quantile(cloudEnds, 0.25));
+    expect(r.raw.t2).toBe(cast.raw.t2);
+    expect(r.gates).toMatchObject(judgeCast(wall, 'collapse', 4, r.lines).gates);
+    // A second extension draws other nudges.
+    const again: Shot[][] = [];
+    await extendCloud(WALL, basins(0.2, again), r, 10);
+    expect(again.map((l) => writeShots(l))).not.toEqual(played.map((l) => writeShots(l)));
+    await expect(extendCloud(WALL, { ...basins(0.2), adapter: 'other' }, cast, 2)).rejects.toThrow(/same device/);
+  });
+  it('pools T3 from the best line of the casts (t3 best): T2 from every competent play, T3 from the best cloud', async () => {
+    const recipe: CastRecipe = { competent: 8, climbLines: 1, climbMoves: 2, climbNudges: 2, cloud: 8 };
+    const a = await castLevel(WALL, basins(0.3), { recipe, seed: 1 }), b = await castLevel(WALL, basins(0.3), { recipe, seed: 2 });
+    const q = (r: CastResult) => quantile(phaseEnds(r, 'cloud'), 0.25);
+    const top = q(a) >= q(b) ? a : b;
+    const fairA = { ...a, gates: { ...a.gates, fair: { ...a.gates.fair, pass: true } } }, fairB = { ...b, gates: { ...b.gates, fair: { ...b.gates.fair, pass: true } } };
+    const p = poolCasts([fairA, fairB], 'best');
+    expect(p.t3Seed).toBe(top.seed);
+    expect(p.raw.t3).toBe(q(top));
+    expect(p.raw.t2).toBe(quantile([...phaseEnds(a, 'competent'), ...phaseEnds(b, 'competent')], 0.5));
+    expect(p.stars.seed).toBe(top.seed);
+    // A cast that failed skill or stable still gives its competent plays; only limits and complete must pass.
+    const weak = { ...fairB, gates: { ...fairB.gates, skill: { ...fairB.gates.skill, pass: false } } };
+    expect(poolCasts([fairA, weak], 'best').competent.n).toBe(16);
+    expect(() => poolCasts([fairA, { ...fairB, gates: { ...fairB.gates, limits: { ...fairB.gates.limits, pass: false } } }], 'best')).toThrow(/failed limits/);
+    // A cast that failed fair cannot set T3.
+    const unfair = (r: CastResult) => ({ ...r, gates: { ...r.gates, fair: { ...r.gates.fair, pass: false } } });
+    expect(poolCasts([unfair(top), top === a ? fairB : fairA], 'best').t3Seed).toBe(top === a ? b.seed : a.seed);
+    expect(() => poolCasts([unfair(a), unfair(b)], 'best')).toThrow(/no cast passed fair/);
+  });
   it('a line the climb judges twice pools its samples; a cast plays exactly playsOf with the confirmation', async () => {
     const played: Shot[][] = [];
     const recipe: CastRecipe = { competent: 8, climbLines: 1, climbMoves: 6, climbNudges: 4, cloud: 4, confirmLines: 3, confirmNudges: 8 };
