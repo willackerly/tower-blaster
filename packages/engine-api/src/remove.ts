@@ -21,13 +21,14 @@
 // blast centred on a removed body (checkInputQueue).
 import type { InputEvent } from './index.ts';
 import { checkBlast } from './blast.ts';
+import { checkField } from './field.ts';
 
 /** Snapshot.tier of a removed body: @tb/schema TIER.free (an unused slot; every render pass skips it). */
 export const TIER_FREE = 255;
 
 /**
  * Throws unless every event in `queue` (the events an engine will apply, in
- * order) can be applied: each blast passes checkBlast and, centred on a body,
+ * order) can be applied: each field event passes checkField (field.ts); each blast passes checkBlast and, centred on a body,
  * names one that exists and is not removed when it is due; each removal names
  * a body that exists then and is not removed yet. `existing` bodies are there
  * at the start, `removed` of them already removed.
@@ -37,6 +38,7 @@ export function checkInputQueue(existing: number, queue: readonly InputEvent[], 
   const gone = new Set(removed);
   for (const ev of queue) {
     if (ev.kind === 'spawn') { n++; continue; }
+    if (ev.kind === 'field') { checkField(ev); continue; }
     if (ev.kind === 'remove') {
       const id = ev.id;
       if (!Number.isInteger(id) || id < 0) throw new Error(`remove at step ${ev.step}: id must be a body id, got ${JSON.stringify(id)}`);
