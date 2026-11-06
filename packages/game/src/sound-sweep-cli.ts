@@ -5,23 +5,25 @@
 //   as=stone           slot 0 (plaster, the game's structure) or the viewer scene's material, from the set
 //   only=0,6           only these slots sound (the game: 0-5 Keystone materials, 6-10 ammo)
 //   m.<key>=<value>    a material key on every slot (m.roughDb=-12 m.eta=0.08 m.law=velocity)
+//   a.<key>=<value>    a material key on the ammo slots only, after m. (a.roughDb=-60 a.Ec=2e9)
 //   <knob>=<value>     the viewer's knobs over every slot (damping=2 ring=-6 rough=3 dense=-6 ...)
 //   vol=0 edge=1       the viewer scenes: volume (dB over FULL_SCALE) and the block edge (m)
 // usage: tsx packages/game/src/sound-sweep-cli.ts from=dir out=dir name=tag [levels=L1,L2,L3|city|kapla] [options]
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { type AudioFrame, BLOCK, CollapseEngine, FULL_SCALE, SOUND_KNOBS, type SoundKnob, type SoundMaterial, soundMaterials, type SoundSet, tunedMaterial } from '@tb/audio';
 import { compileLevel, LEVELS } from '@tb/keystone';
-import { gameSoundDb, slotSounds } from './sound-map.ts';
+import { AMMO_SLOT, gameSoundDb, slotSounds } from './sound-map.ts';
 
 const kv = Object.fromEntries(process.argv.slice(2).map((a) => a.split('=') as [string, string]));
 const KEYS = new Set(['from', 'out', 'name', 'levels', 'set', 'as', 'only', 'vol', 'edge', ...Object.keys(SOUND_KNOBS)]);
-for (const k of Object.keys(kv)) if (!KEYS.has(k) && !k.startsWith('m.')) throw new Error(`unknown option ${k}`);
+for (const k of Object.keys(kv)) if (!KEYS.has(k) && !k.startsWith('m.') && !k.startsWith('a.')) throw new Error(`unknown option ${k}`);
 if (!kv.from || !kv.out || !kv.name) throw new Error('from=, out= and name= are required');
 const set = (kv.set ?? 'real') as SoundSet;
 if (set !== 'real' && set !== 'classic') throw new Error(`set must be real or classic: ${set}`);
 const knobs = Object.fromEntries((['ring', 'click', 'grit', 'damping', 'pitch', 'spread', 'rough', 'dense'] as SoundKnob[]).map((k) => [k, kv[k] === undefined ? SOUND_KNOBS[k].def : Number(kv[k])])) as Record<SoundKnob, number>;
-const over = Object.fromEntries(Object.entries(kv).filter(([k]) => k.startsWith('m.')).map(([k, v]) => [k.slice(2), k === 'm.law' ? v : Number(v)]));
-const tune = (m: SoundMaterial): SoundMaterial => ({ ...tunedMaterial(m, knobs), ...over });
+const keyed = (p: string) => Object.fromEntries(Object.entries(kv).filter(([k]) => k.startsWith(p)).map(([k, v]) => [k.slice(2), k.endsWith('.law') || k.endsWith('.model') ? v : Number(v)]));
+const over = keyed('m.'), ammoOver = keyed('a.');
+const tune = (m: SoundMaterial, ammo = false): SoundMaterial => ({ ...tunedMaterial(m, knobs), ...over, ...(ammo ? ammoOver : {}) });
 const mats = soundMaterials(set) as Record<string, SoundMaterial>, only = kv.only?.split(',').map(Number), SR = 48000;
 if (kv.as && !mats[kv.as]) throw new Error(`as must be a sound material: ${kv.as}`);
 
@@ -41,7 +43,7 @@ for (const id of (kv.levels ?? 'L1,L2,L3').split(',')) {
   const e = new CollapseEngine({ sampleRate: SR, seed: 1, fullScale: FULL_SCALE / 10 ** ((viewer ? Number(kv.vol ?? 0) : gameSoundDb(set)) / 20) });
   if (viewer) e.setMaterial(0, tune(mats[kv.as ?? (id === 'kapla' ? 'pine' : 'acrylic')]!), Number(kv.edge ?? 1));
   else slotSounds(compileLevel(LEVELS.find((l) => l.id === id)!), set).forEach((x, i) =>
-    e.setMaterial(i, only && !only.includes(i) ? null : tune(i === 0 && kv.as ? mats[kv.as]! : x.material), x.edge));
+    e.setMaterial(i, only && !only.includes(i) ? null : tune(i === 0 && kv.as ? mats[kv.as]! : x.material, i >= AMMO_SLOT), x.edge));
   const n = Math.ceil((frames.reduce((s, f) => s + f.dt, 0) * SR) / BLOCK) + 160, L = new Float32Array(n * BLOCK), R = new Float32Array(n * BLOCK);
   const l = new Float32Array(BLOCK), r = new Float32Array(BLOCK);
   let due = 0, b = 0;

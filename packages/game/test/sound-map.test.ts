@@ -2,11 +2,11 @@
 // collapse rendered through it (on Rapier, which clears L1 too) at the game's level.
 import { describe, expect, it } from 'vitest';
 import { RapierEngine } from '@tb/adapter-rapier';
-import { CEILING, loudness, parseSoundMaterial } from '@tb/audio';
-import { AMMO_KINDS, ammoBody, compileLevel, grenadeShell, KEYSTONE_GRENADE, L1, MATERIALS } from '@tb/keystone';
+import { CEILING, contactTime, loudness, parseSoundMaterial, ROUGH_T } from '@tb/audio';
+import { AMMO_KINDS, ammoBody, compileLevel, grenadeShell, KEYSTONE_GRENADE, L1, LEVELS, MATERIALS } from '@tb/keystone';
 import { PRESET_NAMES } from '@tb/weapons';
 import { capture, render } from '../src/sound-cli.ts';
-import { AMMO_SLOT, ammoKindOf, GAME_SOUND_DB, gameSoundDb, KEYSTONE_SOUNDS, keystoneSounds, slotSounds, SOUND_SLOTS, soundSetOf, soundSlotOf } from '../src/sound-map.ts';
+import { AMMO_SLOT, ammoKindOf, ammoOn, mainMaterial, pairEc, GAME_SOUND_DB, gameSoundDb, KEYSTONE_SOUNDS, keystoneSounds, slotSounds, SOUND_SLOTS, soundSetOf, soundSlotOf } from '../src/sound-map.ts';
 
 describe('game sound slots', () => {
   it('every Keystone material and ammo kind has a valid sound at its own size', () => {
@@ -46,6 +46,28 @@ describe('game sound slots', () => {
     expect(slotSounds(c)[0]!.material.roughDb).toBeGreaterThan(-Infinity);
     expect(slotSounds(c, 'classic')[AMMO_SLOT + AMMO_KINDS.indexOf('cue')]!.material.model).toBe('plank');
     expect(gameSoundDb('classic')).toBe(GAME_SOUND_DB);
+  });
+
+  it('the ammo plays the pair\'s contact with the level\'s main material: Hertz E*, and asperities as long as the pair\'s', () => {
+    const s = keystoneSounds('real'), steel = s.steel, plaster = s.plaster;
+    expect(pairEc(steel, steel)).toBeCloseTo(steel.E, -3); // equals: its own
+    // The pair's contact time is the Hertz one for 1/E* = (1-nu1^2)/E1 + (1-nu2^2)/E2.
+    const star = 1 / ((1 - steel.nu ** 2) / steel.E + (1 - plaster.nu ** 2) / plaster.E), on = ammoOn(steel, plaster);
+    expect(on.Ec! / (2 * (1 - steel.nu ** 2))).toBeCloseTo(star, -3);
+    expect(contactTime(on, 3, 0.5) / contactTime(steel, 3, 0.5)).toBeCloseTo((steel.E / (2 * (1 - steel.nu ** 2)) / star) ** 0.4, 6);
+    // Asperities on plaster last ~5x steel's, so roughness stops near 1.4 kHz, under a steel ball's modes.
+    expect(ammoOn(steel, steel).roughT).toBeCloseTo(ROUGH_T, 12);
+    expect(on.roughT! / ROUGH_T).toBeGreaterThan(4);
+    expect(1 / on.roughT!).toBeLessThan(1500);
+    for (const l of LEVELS.filter((x) => /^L[1-5]$/.test(x.id))) {
+      const c = compileLevel(l), real = slotSounds(c), classic = slotSounds(c, 'classic');
+      expect(mainMaterial(c)).toBe('plaster');
+      for (let k = AMMO_SLOT; k < SOUND_SLOTS; k++) {
+        expect(real[k]!.material.Ec).toBeCloseTo(on.Ec!, -3);
+        expect(classic[k]!.material.Ec).toBeUndefined(); // G6's steel on steel
+        expect(() => parseSoundMaterial(real[k]!.material)).not.toThrow();
+      }
+    }
   });
 
   it('structure bodies sound as their material, spawned ones as their ammo', () => {
