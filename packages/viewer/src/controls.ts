@@ -11,12 +11,13 @@ import { buildScenario, SCENARIOS } from '@tb/scenarios';
 import { type CameraPose, type Framing, FRAMING_LIMITS } from './camera.ts';
 import { escapeHtml } from './html.ts';
 import { levelIssues, levelJson, parseLevelDef } from './level-file.ts';
-import { autoSubsteps, AVBD_ENGINES, blockDensityOf, bounceOn, carriedFraming, checkKeystone, DEFAULT_BOUNCE, DEFAULT_CONFIG, defaultLook, defaultPresettle, firedSpeed, keystoneEngine, levelDef, MAX_PRESETTLE, MAX_SUBSTEPS, type Rules, SCALE_LIMITS, type ViewerConfig, withOption } from './params.ts';
+import { autoSubsteps, AVBD_ENGINES, weaponTierOf, blockDensityOf, bounceOn, carriedFraming, checkKeystone, DEFAULT_BOUNCE, DEFAULT_CONFIG, defaultLook, defaultPresettle, firedSpeed, keystoneEngine, levelDef, MAX_PRESETTLE, MAX_SUBSTEPS, type Rules, SCALE_LIMITS, type ViewerConfig, withOption } from './params.ts';
 import { blastWeight, checkBlast } from '@tb/engine-api';
-import { BUILTIN_WEAPONS, checkWeapon, DEFAULT_GRENADE, FUSES, GRENADE_LIMITS, type GrenadeSpec, isPreset, PRESET_NAMES, PROJECTILE_PRESETS, validateWeapon, weaponBudget, type WeaponSpec, writeWeapon } from '@tb/weapons';
+import { BUILTIN_WEAPONS, checkWeapon, DEFAULT_GRENADE, grenadeAsSpec, newWeapon, FUSES, GRENADE_LIMITS, type GrenadeSpec, isPreset, PRESET_NAMES, PROJECTILE_PRESETS, validateWeapon, weaponBudget, type WeaponSpec, writeWeapon } from '@tb/weapons';
 import { DEFAULT_PROJECTILE, encodeWeaponParam, GRENADE_BLAST_KEYS, GRENADE_NUMBERS, parseProjectile, presetProjectile, type Projectile, projectileMass, WEAPONS, weaponName, worldProjectile } from './projectile.ts';
 import { parseSceneFile, sceneFile, sceneFileName } from './scene-file.ts';
 import { autoSoundMaterial } from './sound-config.ts';
+import { mountWeaponEditor, WEAPON_EDITOR_CSS } from './weapon-editor.ts';
 
 /** Readable names for scenario params; the rest show their key. */
 export const PARAM_LABELS: Record<string, string> = {
@@ -45,6 +46,10 @@ export interface ControlsHooks {
   camera(): CameraPose | null;
   /** Switch to this config, loaded from a file named name. */
   load(next: ViewerConfig, name: string): void;
+  /** The weapon editor's options changed (opened or closed: ViewerConfig.weapons.edit). */
+  setWeapons?(w: ViewerConfig['weapons']): void;
+  /** The weapon in the editor changed (its spec while valid; null: none, or the editor closed): the scene's arc preview. */
+  editing?(spec: WeaponSpec | null): void;
 }
 
 /** The grenade's fields in the panel: label and step, by URL key (grenade.<key>). */
@@ -314,6 +319,7 @@ export function mountControls(root: HTMLElement, hooks: ControlsHooks): { refres
       ${field('blockDensity', 'blocks are (kg/m³)', '', 'step="any" min="1" max="30000" list="block-densities"')}
       <datalist id="block-densities">${BLOCK_MATERIALS.map(([name, d]) => `<option value="${d}" label="${name}"></option>`).join('')}</datalist>
       <label class="f"><span>weapon</span><select name="weapon"><option value="">none</option>${WEAPONS.map((w) => `<option value="${w}">${w}</option>`).join('')}<option value="" data-custom hidden></option></select></label>
+      <div class="buttons"><button type="button" name="weaponEdit">Edit weapon…</button></div>
       <div class="spec buttons"><button type="button" name="weaponDownload">Download weapon</button><button type="button" name="weaponLoad">Load weapon…</button><input type="file" name="weaponFile" accept=".json,application/json" hidden></div>
       <div class="grenade">
         <label class="f"><span>fuse</span><select name="grenade.fuse">${FUSES.map((f) => `<option value="${f}"${f === DEFAULT_GRENADE.fuse ? ' selected' : ''}>${f === 'proxTimer' ? 'proximity, then delay' : f === 'prox' ? 'proximity' : 'timer'}</option>`).join('')}</select></label>
@@ -556,6 +562,51 @@ export function mountControls(root: HTMLElement, hooks: ControlsHooks): { refres
       projOut.classList.add('warn');
     }
   });
+  // The weapon editor (weapon-editor.ts): opens on the picked weapon (a copy of the grenade's knobs as a
+  // spec, or a new weapon when none is picked); its Apply offers the result as your own, as Load does.
+  if (!document.getElementById('weapon-editor-css')) {
+    const st = document.createElement('style');
+    st.id = 'weapon-editor-css';
+    st.textContent = WEAPON_EDITOR_CSS;
+    document.head.append(st);
+  }
+  const editorEl = document.getElementById('weapon-editor') ?? Object.assign(document.createElement('div'), { id: 'weapon-editor', className: 'panel' });
+  if (!editorEl.isConnected) document.body.append(editorEl);
+  const editor = mountWeaponEditor(editorEl, {
+    tier: () => weaponTierOf(hooks.config()),
+    apply(spec) {
+      if (weaponName(spec) === 'grenade') return 'name it something other than grenade (the grenade keeps its own knobs)';
+      offerCustom(spec);
+      input(projForm, 'weapon').value = weaponName(spec);
+      try {
+        const p = projectile();
+        showMass(p);
+        hooks.setProjectile(p);
+      } catch (e) {
+        return e instanceof Error ? e.message : String(e);
+      }
+    },
+    download: (spec) => download(`${writeWeapon(spec)}\n`, `${weaponName(spec)}.weapon.json`),
+    toggled(open) {
+      const c = hooks.config();
+      if (c.weapons.edit !== open) hooks.setWeapons?.({ ...c.weapons, edit: open });
+      if (!open) hooks.editing?.(null);
+    },
+    changed: (spec) => hooks.editing?.(spec),
+  });
+  /** The spec the editor opens on: the picked weapon's, the grenade's knobs as a spec, or a new one. */
+  function editTarget(): WeaponSpec {
+    const w = input(projForm, 'weapon').value, spec = specOf(w);
+    if (spec) return spec;
+    if (w === 'grenade') {
+      try {
+        const g = projectile().grenade;
+        if (g) return grenadeAsSpec(g, { shape: { kind: 'sphere', radius: 0.2 }, density: 8, speed: [5, 40] }, 'mygrenade');
+      } catch { /* a bad knob: start fresh */ }
+    }
+    return newWeapon('custom');
+  }
+  projForm.querySelector<HTMLButtonElement>('button[name=weaponEdit]')!.addEventListener('click', () => editor.open(editTarget()));
   projForm.addEventListener('submit', (e) => e.preventDefault());
   projForm.addEventListener('change', () => {
     try {
@@ -702,6 +753,7 @@ export function mountControls(root: HTMLElement, hooks: ControlsHooks): { refres
       for (const k of GRENADE_BLAST_KEYS) input(projForm, `grenade.${k}`).value = String(g.blast[k]);
     }
     showMass(p);
+    if (c.weapons.edit && !editor.isOpen && c.rules !== 'keystone') editor.open(editTarget());
     input(lookForm, 'look').value = c.look;
     (input(lookForm, 'blast') as HTMLInputElement).checked = c.blast.on;
     realBox.hidden = c.look !== 'real';
