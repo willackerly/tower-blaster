@@ -69,6 +69,22 @@ export const GAME_CSS = `
   body.kg-touch .kg-hud .acts.kg-tch { display: flex; }
   .kg-hud .acts button { font: inherit; padding: 4px 10px; border: 0; border-radius: 6px; background: #3a4459; color: #e8ebf2; cursor: pointer; box-shadow: inset 0 0 0 1px #5a6680; }
   .kg-banner.hold { opacity: 1; animation: none; }
+  .kg-build { top: 52px; right: 12px; max-width: 330px; font: 13px/1.45 system-ui, sans-serif; }
+  .kg-build[hidden] { display: none; }
+  .kg-build summary { cursor: pointer; font-weight: 650; }
+  .kg-build .edit { margin-top: 8px; display: flex; flex-direction: column; gap: 6px; }
+  .kg-build .buttons { display: flex; flex-wrap: wrap; gap: 5px; }
+  .kg-build button { font: inherit; padding: 4px 8px; border: 0; border-radius: 5px; background: #2b3242; color: #e8ebf2; cursor: pointer; }
+  .kg-build button.on, .kg-build button.go { background: #d8693f; color: #fff; }
+  .kg-build button:disabled { color: #6b7387; cursor: default; }
+  .kg-build .key { font-size: 10px; color: #9aa3b8; margin-left: 3px; }
+  .kg-build button.on .key, .kg-build button.go .key { color: #ffe3d6; }
+  .kg-build .snap { font-size: 12px; color: #c9cfdc; }
+  .kg-build .out { font-size: 12px; min-height: 1.45em; }
+  .kg-build .out.warn { color: #f5b169; }
+  body.kg-touch .kg-build .key { display: none; }
+  body.kg-touch .kg-build button { min-height: 40px; padding: 6px 10px; }
+  @media (max-width: 640px) { .kg-build { top: auto; bottom: 12px; left: 12px; right: 12px; max-width: none; } body.kg-building #help { display: none; } }
   .kg-help button { font: inherit; padding: 0 2px; border: 0; background: none; color: #9fc3ff; cursor: pointer; }
   .kg-help button:hover { text-decoration: underline; }
   @keyframes kg-slam { from { opacity: 0; transform: scale(1.6); } to { opacity: 1; transform: scale(1); } }

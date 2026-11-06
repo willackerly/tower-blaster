@@ -270,3 +270,14 @@ export function loadOptions(q: URLSearchParams): LoadOptions {
   }
   return out;
 }
+
+/**
+ * keystone.build (0 or 1): whether a level with a build block opens in its build phase and shows the Build
+ * panel (C9, docs/game/placement.md; default on). Off plays such a level as authored.
+ */
+export function buildOption(q: URLSearchParams): { build?: boolean } {
+  const b = q.get('keystone.build');
+  if (b === null) return {};
+  if (b !== '0' && b !== '1') throw new Error(`keystone.build must be 0 or 1: ${b}`);
+  return { build: b === '1' };
+}

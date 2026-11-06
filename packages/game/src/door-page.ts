@@ -129,7 +129,8 @@ export function installDoor(o: DoorOptions, doc: Document = document): DoorPage 
       // The door has the keyboard: the game's keys (fire, retry, levels) wait until it closes.
       e.stopPropagation();
       if (e.key === 'Escape' && (current() >= 0 || o.openLevel)) page.hide();
-    } else if (e.key === 'Escape') {
+    } else if (e.key === 'Escape' && !document.body.classList.contains('kg-building')) {
+      // (While building, Esc is the build phase's Cancel: play.ts takes it.)
       e.stopPropagation();
       page.show();
     }
