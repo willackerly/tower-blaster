@@ -201,6 +201,8 @@ Full size on Metal (M5 Max, Chrome, `23c0df8`, 2026-11-06; Low Power Mode was on
 
 So C8's emulation (a never-wake sleeper) is as solid as the ground, and pinned anchors can be built on it.
 
+**C8 built (2026-11-06).** `BodyDesc.pinned` (engine-api `pinned.ts`, `docs/design/gravity-and-pins.md`) is the mechanism emulated above, made real: a never-wake sleeper on the GPU, left out of the solve in the reference, a fixed body in Rapier. The probe now runs it with sleep off, so every other body is awake throughout; the CI-size run passes as before (pins move exactly 0).
+
 ## X6 Resonance under a gravity schedule; far-blast shove
 
 **Question.** Do friction stacks resonate under a shaking gravity, and does a far blast give every body the same kick? M7 Aftershock is quakes. The roadmap's risk is that friction-held stacks slide instead of resonating, and claim 6 is that a far flat-core blast is a uniform world shove available today.
@@ -274,6 +276,8 @@ Median failure amplitude over 8 columns (g; "> 1" means half or more of them sti
 
 For M7 this settles it: a quake should be slow (0.5 to 1 Hz) and strong. Amplitude and duration are the levers, and no level should depend on tuning a quake to a tower. Above about 2 Hz a quake slides things rather than felling them.
 
+**C7 built (2026-11-06).** Field events (engine-api `field.ts`, `docs/design/gravity-and-pins.md`) replace the emulation above: the shake is one quantised gravity key per step in the scene's inputs (2^-12 m/s^2 grid, so the GPU's f32 uniform holds the reference's value exactly), a change of gravity wakes every sleeper, and a field kick is the exact uniform jolt the far blast approximates. The CI-size shake passes as before. Following this probe, quakes are built around amplitude and duration (`quakeEvents`: peak side load, seconds, rise and fall; 1 Hz by default), not tuned frequencies.
+
 ## X8 Islands behave like solo worlds
 
 **Question.** Do K copies of a small level, far apart in one solve, give the same outcome distribution as K solo runs of the same jittered shots? C10 (many worlds in one solve) is what M8's robustness judge, M9 Chorus and cheap casts of small levels build on.
@@ -315,3 +319,5 @@ The probe has since been fixed. It now shoots the wrecking ball, and on SwiftSha
 - no body ends outside its own island's cell.
 
 A Metal re-run is queued.
+
+C10 turns this into the primitive the game uses (`Islands` and `IslandObserver` in `@tb/engine-api`; design, alternatives and results in `docs/design/islands.md`). Its own verify runs the same level and shot through it: `pnpm probe:modes C10`.

@@ -18,7 +18,7 @@ struct Body {
   invMass: f32, // @12 0 for static
   rot: vec4f, // @16 unit quaternion (x, y, z, w)
   linVel: vec3f, // @32
-  flags: u32, // @44 bit 0 awake, bits 8-15 tier
+  flags: u32, // @44 bit 0 awake, bit 1 pinned (never wakes), bits 8-15 tier
   angVel: vec3f, // @48
   shape: u32, // @60 index into the shape table
 }

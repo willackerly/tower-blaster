@@ -65,7 +65,7 @@ describe('pull on real engines', () => {
     expect(snapshotHash(q.snapshot)).toBe(snapshotHash(p.snapshot));
     expect(p.session.phase).toBe('cleared');
     // The session's inputs alone (removals at their steps) rebuild the end state on a bare engine.
-    const inputs: InputEvent[] = a.session.inputs.map(({ step, shot }) => shotEvent(c.frame, shot, step));
+    const inputs: InputEvent[] = a.session.inputs.map(({ step, shot }) => shotEvent(c.frame, shot, step)!);
     expect(inputs.map((e) => e.kind)).toEqual(['remove', 'remove']);
     const e = ref();
     await e.init({ ...c.scene, inputs });
