@@ -42,8 +42,8 @@ const { counts } = await obs.result(step);  // counts[question][island]
 
 **2. Layout: island 0 at the origin, square rings around it (chosen), gap from the footprint.**
 - *X8's centred 8 x 8 grid.* No island sits at the origin, so no island shares a solo run's coordinates. With rings, island 0 does: it differs from the solo run only by sharing the solve (the C10 probe reports that shift as a diagnostic).
-- The farthest coordinate is what f32 precision depends on. 64 islands reach ring 4 (4 gaps) against 3.5 for the grid; at a 40 m gap both are in [128, 256) m, the same f32 exponent, so the precision is identical. Ring order is integer arithmetic (distance squared, then z, then x), the same on every machine.
-- *A fixed 40 m gap (X8).* Too wide for small worlds and too narrow for large ones. The default is twice the worlds' largest reach from their origin (bodies, spawns and point blasts, `worldExtent`) plus 16 m of room for debris and a ball that flies on, rounded up to a whole metre (offsets are then exact in f32). X8's level gives 40 m.
+- The farthest coordinate is what f32 precision depends on. 64 islands reach ring 4 (4 gaps) against 3.5 for the grid; at X8's 59 m gap both are in [128, 256) m (236 and 207 m), the same f32 exponent, so the precision is identical; that holds for any gap from 37 to 63 m. Ring order is integer arithmetic (distance squared, then z, then x), the same on every machine.
+- *A fixed gap (X8: 40 m, then 60 m once its wrecking ball threw debris 21 m).* Too wide for small worlds and too narrow for large ones. The default is twice the worlds' largest reach from their origin (bodies, spawns and point blasts, `worldExtent`) plus 24 m of room for debris and a ball that flies on, rounded up to a whole metre (offsets are then exact in f32). X8's full level gives 59 m, a half-cell of 29.5 m around the 21 m X8 measured.
 
 **3. Events are released when due (chosen), not written into the scene up front.**
 - An engine gives a spawned body the next id when the spawn is applied, in queue order (by step, then push order). If ids were assigned when events are queued, a later push due earlier than a pending spawn would take that spawn's id, and every removal or body-centred blast aimed at it would hit the wrong body. Releasing at the step it is due makes the id exact: everything before it has been applied.
@@ -74,6 +74,6 @@ const { counts } = await obs.result(step);  // counts[question][island]
 
 ## Measured
 
-CI size on SwiftShader (8 worlds of a 3 x 3 x 4 block, 1.5 s after the shot; `c10-islands.test.ts`): KS on down and moved p = 1.0; 0 leaks; per-island observer counts equal each world's snapshot counts in 8 of 8 worlds; island 0 ended 7 mm from solo world 0 with the same down and moved.
+CI size on SwiftShader (8 worlds of a 3 x 3 x 4 block struck by X8's wrecking ball, 1.5 s after the shot; `c10-islands.test.ts`): the shot moved every block (moved 0.87 to 0.88 on average, down 0.41); KS p = 1.0 on down and 0.93 on moved; 0 leaks at a 58 m gap; per-island observer counts equal each world's snapshot counts in 8 of 8 worlds; island 0 ended 6 mm from solo world 0 with the same down and moved.
 
 Full size (64 worlds of 150 bodies, 4 s after the shot): see the results section below.

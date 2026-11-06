@@ -7,6 +7,7 @@
 // the cost per body against the 9.6k block on Metal) runs with
 // pnpm probe:modes C10.
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { DEFAULT_ISLAND_REACH } from '@tb/engine-api';
 import { requireWebGPU } from '@tb/testkit';
 import { probeById } from '../src/index.ts';
 import { C10, type C10Case, c10Islands, c10Spec, c10World, type C10Result } from '../src/c10-islands.ts';
@@ -20,9 +21,10 @@ describe('C10 scenes', () => {
     expect({ ...isl.pack(), id: scene.id }).toEqual(scene);
     expect(scene.bodies).toHaveLength(64 * 150);
     expect(scene.inputs).toHaveLength(64);
-    // X8's world reaches 3 m in front of the block plus the ball: the gap is 2 (extent + 16 m reach), whole metres.
-    expect(isl.gap).toBe(Math.ceil(2 * (isl.extent + 16)));
-    expect(isl.gap).toBeGreaterThanOrEqual(36);
+    // X8's world reaches 3 m in front of the block plus the ball: the gap is 2 (extent + reach), whole metres,
+    // and its cell holds the 21 m X8 measured for the wrecking ball's debris.
+    expect(isl.gap).toBe(Math.ceil(2 * (isl.extent + DEFAULT_ISLAND_REACH)));
+    expect(isl.half).toBeGreaterThan(25);
     expect(isl.offsets[0]).toEqual([0, 0, 0]);
     for (const k of [0, 1, 37, 63]) {
       const solo = c10World(c, k), o = isl.offsets[k]!;

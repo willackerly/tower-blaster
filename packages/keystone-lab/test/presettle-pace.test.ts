@@ -3,11 +3,11 @@
 import { describe, expect, it } from 'vitest';
 import { RapierEngine } from '@tb/adapter-rapier';
 import type { PhysicsEngine } from '@tb/engine-api';
-import { compileLevel, Driver, L1, L2, PRESETTLE_STEPS, presettlePaced, snapshotHash } from '@tb/keystone';
+import { compileLevel, Driver, L1, L2, PRESETTLE_STEPS, presettlePaced, type PresettlePace, snapshotHash } from '@tb/keystone';
 
 const now = () => performance.now();
 
-async function settled(level: typeof L1, pace?: { batchMs: number; maxBatch?: number }) {
+async function settled(level: typeof L1, pace?: PresettlePace) {
   const d = new Driver(new RapierEngine(), compileLevel(level));
   await d.reset({ now, ...(pace ? { pace } : {}) });
   const out = { step: d.snapshotStep, hash: snapshotHash(d.snapshot), resetMs: d.resetMs };
@@ -28,7 +28,10 @@ describe('paced pre-settle', () => {
       const plain = await settled(level);
       expect(plain.step).toBe(PRESETTLE_STEPS);
       expect(plain.resetMs.steps).toBe(PRESETTLE_STEPS);
-      for (const pace of [{ batchMs: 8 }, { batchMs: 0.001 }, { batchMs: 1e6, maxBatch: 7 }]) {
+      // A gate that holds every other batch for a task (the game's prefetch while a shot is in flight).
+      let n = 0;
+      const gate = () => (n++ % 2 ? new Promise<void>((r) => setTimeout(r, 0)) : undefined);
+      for (const pace of [{ batchMs: 8 }, { batchMs: 0.001 }, { batchMs: 1e6, maxBatch: 7 }, { batchMs: 0.001, gate }]) {
         const paced = await settled(level, pace);
         expect({ step: paced.step, hash: paced.hash }, JSON.stringify(pace)).toEqual({ step: plain.step, hash: plain.hash });
       }
@@ -60,6 +63,33 @@ describe('paced pre-settle', () => {
     clearInterval(timer);
     expect(c.steps()).toBe(50);
     expect(ticks).toBeGreaterThan(0);
+  });
+
+  it('runs no step while its gate is shut, and then all of them', async () => {
+    for (const finish of [true, false]) {
+      const c = counting(finish);
+      let open = false, release!: () => void;
+      const opened = new Promise<void>((r) => { release = r; });
+      // Shut after the first batch, until released.
+      let calls = 0;
+      const gate = () => (calls++ === 0 || open ? undefined : opened);
+      const run = presettlePaced(c.engine, 40, { batchMs: 1e6, maxBatch: 4, gate }, now);
+      for (let k = 0; k < 20; k++) await new Promise<void>((r) => setTimeout(r, 0));
+      expect(c.steps(), `finish ${finish}`).toBe(1);
+      open = true;
+      release();
+      await run;
+      expect(c.steps(), `finish ${finish}`).toBe(40);
+    }
+  });
+
+  it('does not count the time held at the gate in a batch rate', async () => {
+    // A clock that only the gate moves (by a second a batch): steps take no time, so batches grow as ungated.
+    let t = 0;
+    const c = counting(true);
+    await presettlePaced(c.engine, 60, { batchMs: 8, maxBatch: 16, gate: () => { t += 1000; } }, () => t);
+    const sizes = c.marks.map((m, i) => m - (c.marks[i - 1] ?? 0));
+    expect(sizes.slice(0, 6)).toEqual([1, 1, 2, 4, 8, 16]);
   });
 
   it('needs a clock to pace, and times nothing without one', async () => {

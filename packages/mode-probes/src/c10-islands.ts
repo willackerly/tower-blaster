@@ -2,7 +2,7 @@
 // (engine-api islands.ts and island-observer.ts), not hand-placed as X8 did.
 //
 // The level and its jittered shots are X8's (x8-islands.ts world()): a block of
-// 0.5 m plaster cubes struck at mid-height by the cannonball, shot k and block k
+// 0.5 m plaster cubes struck at mid-height by the wrecking ball, shot k and block k
 // jittered from seed k. Two arms:
 //   islands  the K worlds packed by Islands (island 0 at the origin, square
 //            rings around it, the gap from the worlds' footprint plus the
@@ -23,7 +23,7 @@
 import { type Pred, Islands, reduceIslands, type Snapshot, type Vec3 } from '@tb/engine-api';
 import { GAME_PARAMS, gameScene, ks2 } from './scene.ts';
 import type { CaseRun, Check, Meter, Probe, RunSpec, Size, Verdict } from './probe.ts';
-import { CELL, type Level, SHOT_STEP, world } from './x8-islands.ts';
+import { CELL, type Level, MIN_MOVED_WORLDS, SHOT_STEP, world } from './x8-islands.ts';
 
 export type C10Arm = 'islands' | 'solo' | 'block';
 export interface C10Case { arm: C10Arm; level: Level; K: number; world: number; presettle: number; readAfter: number }
@@ -137,6 +137,10 @@ function c10Verdict(runs: CaseRun<C10Case, C10Result>[], size: Size): Verdict {
     ok &&= pass;
     checks.push({ name: `islands vs solo: the ${m} distributions agree (KS p > 0.05)`, pass, detail: `D ${t.D.toFixed(3)}, p ${t.p.toFixed(3)}, ${isl.length} vs ${solo.length} worlds` });
   }
+  // Power (as X8): two near-constant distributions always agree, so the shot must move most blocks for the KS test to mean anything.
+  const movedWorlds = isl.filter((o) => o.moved > 0).length, power = movedWorlds >= MIN_MOVED_WORLDS * Math.max(1, isl.length);
+  ok &&= power;
+  checks.push({ name: `the shot moves the block in at least ${100 * MIN_MOVED_WORLDS}% of the islands (else the KS test cannot fail)`, pass: power, detail: `${movedWorlds}/${isl.length} moved; moved takes ${new Set(isl.map((o) => o.moved)).size} distinct values` });
   const r = isRun?.result;
   if (r) {
     checks.push({ name: 'no body left its island\'s cell (every sample)', pass: r.leaks === 0, detail: `${r.leaks} body-samples outside; gap ${r.gap} m, farthest island ${r.farthest} m from the origin` });
@@ -164,7 +168,7 @@ export const C10: Probe<C10Case, C10Result> = {
   id: 'C10',
   title: 'Many worlds in one solve (the C10 primitive)',
   question: 'Do K worlds packed by Islands, read per island, give the same outcome distributions as K solo runs, at the cost per body of one big scene?',
-  rule: 'Outcome distributions match (two-sample KS, p > 0.05, on down and moved); per-island observer counts equal per-world snapshot counts; no leaks; cost per body within 10% of a solo 9.6k scene (read off a Metal run only).',
+  rule: 'Outcome distributions match (two-sample KS, p > 0.05, on down and moved) with the shot moving the block in at least 75% of the islands; per-island observer counts equal per-world snapshot counts; no leaks; cost per body within 10% of a solo 9.6k scene (read off a Metal run only).',
   cases: c10Cases,
   label: (c) => (c.arm === 'islands' ? `islands x${c.K}` : c.arm === 'block' ? 'block 9.6k' : `solo world ${c.world}`),
   spec: c10Spec,

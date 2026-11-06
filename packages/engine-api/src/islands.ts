@@ -24,8 +24,12 @@ import { queueInputs } from './blast.ts';
 
 /** Most islands in one solve: the observer's per-island histogram has at most this many bins (OBSERVER_CAPS.maxBins). */
 export const MAX_ISLANDS = 256;
-/** IslandOptions.reach when unset, m: room around a world's footprint for debris and a ball that flies on. */
-export const DEFAULT_ISLAND_REACH = 16;
+/**
+ * IslandOptions.reach when unset, m: room around a world's footprint for debris and a ball that flies on.
+ * X8's wrecking ball (15 m/s into a 150-cube block) throws debris up to 21 m from the block's centre on
+ * SwiftShader, about 17 m past its footprint; 24 m leaves a margin.
+ */
+export const DEFAULT_ISLAND_REACH = 24;
 
 export interface IslandOptions {
   /** Centre-to-centre spacing of the islands, m. Default: 2 (footprint + reach), rounded up to a whole metre. Must leave reach >= 0. */
@@ -40,7 +44,7 @@ export interface IslandOptions {
  * Integer cell coordinates; island k sits at gap times its cell. Ring r holds
  * (2r + 1)^2 - (2r - 1)^2 cells, so K islands reach out to ring
  * ceil((sqrt K - 1) / 2): 64 islands reach ring 4 (an 8 x 8 grid centred on
- * the origin reaches 3.5 cells, the same f32 exponent for any gap from 37 to 73 m).
+ * the origin reaches 3.5 cells, the same f32 exponent for any gap from 37 to 63 m).
  */
 export function islandCells(K: number): Array<[number, number]> {
   if (!Number.isInteger(K) || K < 1 || K > MAX_ISLANDS) throw new RangeError(`islands: K must be an integer from 1 to ${MAX_ISLANDS}, got ${K}`);
