@@ -19,7 +19,7 @@ import { bankAfterLine, type SessionFacts, sessionFile, sessionFileName } from '
 import { CAMERA_KEYS, cameraFeel, RAPID_KEYS, rapidFeel, type Settings, SettingsStore } from './settings.ts';
 import { NO_WEBGPU_HTML, webgpuMissing } from './support.ts';
 import { type GameHandle, newGameHandle, playKeystone, playLine } from './play.ts';
-import { HELP_HTML, installGameStyles } from './ui.ts';
+import { helpHtml, installGameStyles } from './ui.ts';
 import { goalsMode } from './lot-hud.ts';
 import { touchMode } from './touch.ts';
 
@@ -30,7 +30,13 @@ const canvas = $('c') as HTMLCanvasElement, errorEl = $('error');
 const handle = newGameHandle();
 window.__game = handle;
 installGameStyles();
-$('help').innerHTML = HELP_HTML;
+// The hint line; ? (or its button) shows every key, and again goes back.
+const help = $('help');
+let allKeys = false;
+const showHelp = (all: boolean) => { allKeys = all; help.innerHTML = helpHtml(all); };
+showHelp(false);
+help.addEventListener('click', (e) => { if ((e.target as HTMLElement).closest('button')?.dataset.act === 'keys') showHelp(!allKeys); });
+addEventListener('keydown', (e) => { if (e.key === '?' && !(e.target instanceof HTMLInputElement)) showHelp(!allKeys); });
 
 function fail(e: unknown) {
   const msg = e instanceof Error ? e.message : String(e);
@@ -118,8 +124,8 @@ async function main() {
   device.addEventListener('uncapturederror', (e) => fail((e as GPUUncapturedErrorEvent).error.message));
 
   let shown = duel ? duelLevelId(duel, 0) : level.id;
-  // This attempt's shots and how its round ended, for Save session.
-  let attempt: Shot[] = [], ended: SessionFacts | null = null, banked = false;
+  // How this attempt's round ended, for Save session. Its shots are the session's (after an undo, the kept ones and those since).
+  let ended: SessionFacts | null = null, banked = false;
   await playKeystone({
     canvas, offscreen, device, renderer, source, hud: $('hud'), banner: $('banner'), result: $('result'),
     levels: played, start: duel ? 0 : start, engine, feel, fail, sound, impactsDb, muted: !settings.current.sound, touch: touchMode(q),
@@ -136,7 +142,6 @@ async function main() {
     hooks: {
       // The URL follows the level, keeping the other keys; a line and a rack are the level's they were made for.
       loaded: (c) => {
-        attempt = [];
         ended = null;
         banked = false;
         if (c.def.id === shown || duel) return;
@@ -150,11 +155,11 @@ async function main() {
         else u.delete('keystone.rack');
         history.replaceState(null, '', `?${u}`);
       },
-      fired: (shot) => { attempt.push(shot); },
       banked: () => { banked = true; },
-      ended: (c, score) => {
+      ended: (c, score, d) => {
         if (!c.def.custom) progress.record(c.def.id, c.hash, score, undefined, handle.goals.filter((g) => g.met).map((g) => g.id));
-        ended = { level: c.def.id, hash: c.hash, custom: Boolean(c.def.custom), engine, adapter: adapterName, shots: [...attempt], banked, score };
+        const shots: Shot[] = d.session.inputs.map((x) => ({ ...x.shot }));
+        ended = { level: c.def.id, hash: c.hash, custom: Boolean(c.def.custom), engine, adapter: adapterName, shots, banked, score };
       },
     },
     // The result card's Save session: the round as a file (session-file.ts) with its replay link.

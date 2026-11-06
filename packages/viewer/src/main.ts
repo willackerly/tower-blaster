@@ -10,7 +10,7 @@ import { makeEngine, parseSpec } from '@tb/bench';
 import { type BodyDesc, type EngineHealth, type EngineInfo, type InputEvent, limitsHit, type PhysicsEngine, type Snapshot, spawnedBodies } from '@tb/engine-api';
 import { boundingRadius } from '@tb/geom';
 import { DEFAULT_AVBD } from '@tb/physics-ref';
-import { GAME_HELP, gameOverlays, playLine, type GameHandle, installGameStyles, newGameHandle, playKeystone, structureTints } from '@tb/game';
+import { GAME_KEYS, gameOverlays, playLine, type GameHandle, installGameStyles, newGameHandle, playKeystone, structureTints } from '@tb/game';
 import { AVBD_GAP_SLOP, AVBD_ITERATIONS, compileLevel, cubeScale, type Driver, type Shot } from '@tb/keystone';
 import { clampPitch, EYE_ABOVE_GROUND, frame, rayThrough, viewProj, eyeOf, orbitAt, poseOf, type CameraPose, type Orbit } from './camera.ts';
 import { alphaAt, newArrivals, newClock, newPacer, pauseLatch, runFree, stepsDue, taskYield, trackSimSpeed, Window } from './loop.ts';
@@ -770,7 +770,7 @@ async function keystoneMode(config: ViewerConfig, device: GPUDevice, renderer: R
   hud.classList.add('kg-hud');
   const help = document.getElementById('help')!;
   help.classList.add('kg-help');
-  help.innerHTML = GAME_HELP;
+  help.innerHTML = GAME_KEYS;
   const game = handle.game = newGameHandle();
   const failGame = (e: unknown) => {
     game.status = 'error';

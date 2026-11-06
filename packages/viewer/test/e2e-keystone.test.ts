@@ -24,7 +24,7 @@ describe('viewer under Keystone rules', () => {
     await ready(page);
     // The game's HUD in the viewer's panel; the viewer's help shows the game's keys.
     expect(await page.locator('#hud.kg-hud').innerText()).toMatch(new RegExp(L1.name));
-    expect(await page.locator('#help').innerText()).toMatch(/Retry|retry/);
+    expect(await page.locator('#help').innerText()).toMatch(/restart/);
     expect(await page.evaluate(() => ({ engine: window.__viewer.game!.engine, feel: window.__viewer.game!.feel, bodies: window.__viewer.game!.bodies }))).toEqual({ engine: 'rapier', feel: DEFAULT_FEEL, bodies: 40 });
 
     const shots = L1.solutions!.par as Shot[];

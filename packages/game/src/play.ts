@@ -7,7 +7,7 @@
 // its own elements; the viewer calls it for rules=keystone, with hooks for its
 // dev panels (docs/design/viewer-superset.md, step C).
 import { type BodyDesc, type EngineHealth, limitsHit, type PhysicsEngine, type Vec3 } from '@tb/engine-api';
-import { type RackItem, type CompiledLevel, compileLevel, Driver, Duel, type DuelDef, DEFAULT_TURN_SECONDS, type Feedback, type Goal, goalMet, type Player, type Grade, gradeOf, type LevelDef, type LevelScore, type LotSheet, type PerStep, rapidDue, roundFacts, runSession, selectGroups, type Shot, snapshotHash, TIER_NAMES } from '@tb/keystone';
+import { type RackItem, type CompiledLevel, compileLevel, Driver, Duel, type DuelDef, DEFAULT_TURN_SECONDS, type Feedback, type Goal, goalMet, type Player, type Grade, gradeOf, type LevelDef, type LevelScore, type LotSheet, type PerStep, playShots, rapidDue, roundFacts, runSession, selectGroups, type Shot, snapshotHash, TIER_NAMES } from '@tb/keystone';
 import { clampPitch, eyeOf, type Orbit, rayThrough, viewProj } from '@tb/render/camera';
 import type { PixelStats, Renderer, SnapshotSource } from '@tb/render';
 import type { HostStats } from '@tb/audio';
@@ -18,7 +18,7 @@ import { type GameSoundMode, soundSetOf } from './sound-map.ts';
 import { viewOf } from './view.ts';
 export { viewOf } from './view.ts';
 import { driverOptions, type EngineKind, gpuEngineOptions, makeEngine, roomAfter } from './engines.ts';
-import { hudHtml, nextSelection, POWER_STEP, rackChips, resultHtml, starsText } from './hud.ts';
+import { hudHtml, meterTicks, type MeterTick, nextSelection, POWER_STEP, rackChips, resultHtml, starsText } from './hud.ts';
 import { type GoalLine, goalsHudHtml, goalsResultHtml } from './lot-hud.ts';
 import { duelHudHtml, duelResultHtml } from './duel-hud.ts';
 import { FollowCam } from './follow.ts';
@@ -66,7 +66,7 @@ export interface GameHandle {
    */
   input: { touch: boolean; gesture: GestureState; fingers: number; aimed: Shot | null; power: number };
   result: LevelScore | null;
-  /** Feedback events seen this attempt, by type; blastDrawn counts the blasts handed to the renderer to draw, bomb the bodies drawn as bombs. */
+  /** Feedback events seen this attempt, by type; blastDrawn counts the blasts handed to the renderer to draw, bomb the bodies drawn as bombs; undo counts undos (an undo keeps the counts). */
   counts: Record<string, number>;
   /** Pace juice in effect (`?keystone.hitstop=1`, `?keystone.slowmo=1`; both off by default). */
   feel: PaceFeel;
@@ -103,7 +103,15 @@ export interface GameHandle {
   reach: { centre: [number, number, number]; radius: number } | null;
   select(ammo: RackItem): boolean;
   load(id: string): Promise<void>;
+  /** Restart the attempt (key R, the result card's Retry): the level as it loaded, exactly (the same state hash). */
   retry(): Promise<void>;
+  /**
+   * Undo the last shot (key U or Ctrl/Cmd+Z, the result card's Undo): the level is rebuilt and the
+   * attempt's shots but the last replayed on it, out of sight, to their settle (docs/game/undo.md), so the
+   * state is exactly a fresh replay of them on this device. Works while a shot runs (a rapid one cut
+   * included: its shot before then plays out) and after the round ended. Resolves false when there is no shot to undo.
+   */
+  undo(): Promise<boolean>;
   capture(keepPixels?: boolean): Promise<PixelStats | null>;
   /** Physics state now: step, phase and a hash of every pose. */
   state(): SessionState;
@@ -160,7 +168,7 @@ export function newGameHandle(): GameHandle {
   const none = (): SessionState => ({ step: 0, phase: 'loading', strokes: 0, heritageBroken: 0, hash: '' });
   return {
     status: 'loading', engine: '', level: '', phase: 'loading', ready: false, frames: 0, stepIndex: 0, strokes: 0, bodies: 0, collapse: 0, fast: false, pace: { timeScale: 1, speed: 1, tag: '', tailSkip: false, costMs: NaN }, view: { target: [0, 0, 0], distance: 0, yaw: 0, pitch: 0, following: false, jolt: 0 }, input: { touch: false, gesture: 'idle', fingers: 0, aimed: null, power: 100 }, result: null, counts: {}, feel: { ...DEFAULT_FEEL }, resultShownAt: null, timing: { loadMs: 0, stepMs: [], moving: [], frameMs: [], costMs: [] }, draws: { drawn: 0, skipped: 0, decimating: false },
-    fire: () => false, bank: () => false, fireOpener: () => false, setMuted: () => {}, maxDpr: 2, aim: () => null, reach: null, select: () => false, load: async () => {}, retry: async () => {}, capture: async () => null,
+    fire: () => false, bank: () => false, fireOpener: () => false, setMuted: () => {}, maxDpr: 2, aim: () => null, reach: null, select: () => false, load: async () => {}, retry: async () => {}, undo: async () => false, capture: async () => null,
     state: none, line: () => [], replay: async () => none(), health: async () => null, pairsPerBody: 0, limitsHit: [], goals: [], grade: null, duel: null,
     sound: () => ({ mode: 'collapse', status: 'off', error: '', posted: 0, stats: null }),
   };
@@ -206,7 +214,7 @@ export async function playLine(handle: GameHandle, shots: readonly Shot[], fresh
  * replay would not see that).
  */
 export interface KeystoneHooks {
-  /** A level was built, pre-settled and shown (also on retry). */
+  /** A level was built, pre-settled and shown (also on retry, and on undo: then d.session already holds the shots kept). */
   loaded?(c: CompiledLevel, d: Driver): void;
   /** A shot was fired: the spawn applies at the next step. `shot` as the session recorded it (with `after` when it cut a running shot). */
   fired?(shot: Shot, feedback: Feedback[], d: Driver): void;
@@ -388,6 +396,30 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     return exclusive(() => loadNow(i, retry)).finally(() => { loading--; });
   }
 
+  /** The star ticks on the HUD's Down bar, for the level loaded (meterTicks). */
+  let ticks: MeterTick[] = [];
+
+  /** Undo: rebuild the level and replay this attempt's shots but the last (taken under the lock, so a shot clicked mid-step counts). */
+  function undo(): Promise<boolean> {
+    loading++;
+    return exclusive(async () => {
+      // Not in a duel: its turns are the two players'.
+      if (!driver || duel || driver.session.inputs.length === 0) return false;
+      const keep = driver.session.inputs.slice(0, -1).map((x) => ({ ...x.shot }));
+      env.banner.textContent = keep.length ? `Undo: replaying ${shotsText(keep.length)}…` : 'Undo';
+      env.banner.classList.remove('show', 'crack');
+      env.banner.classList.add('hold');
+      try {
+        await loadNow(levelIdx, true, keep);
+      } finally {
+        env.banner.classList.remove('hold');
+      }
+      handle.counts.undo = (handle.counts.undo ?? 0) + 1;
+      banner(keep.length ? `Back to shot ${keep.length}` : 'Back to the start');
+      return true;
+    }).finally(() => { loading--; });
+  }
+
   /**
    * The live round's engine limits (PhysicsEngine.health) once it is over: a limit hit is reported
    * (handle.limitsHit, the console, a banner) and, for the pair buffer, the level's later rounds get
@@ -406,7 +438,8 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     banner(after > before ? 'Physics limit hit: next round gets more room' : 'Physics limit hit', 'crack');
   }
 
-  async function loadNow(i: number, retry: boolean) {
+  /** Load level i; with `line` (undo), replay those shots on it out of sight and play on from their settle. */
+  async function loadNow(i: number, retry: boolean, line?: Shot[]) {
     const t0 = performance.now();
     // The round being left is over: check what it hit before its engine goes.
     if (engine) await checkRound();
@@ -416,8 +449,13 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     const nextPairs = room.get(levels[i]!);
     const nextEngine = makeEngine(kind, next, device, nextPairs);
     const nextDriver = new Driver(nextEngine, next, driverOptions(kind));
+    // The input hook keeps state per session: the replay's goes on with the live play.
+    const nextPerStep = env.perStep?.(next) ?? null;
+    const counts: Record<string, number> = { ...(line ? handle.counts : {}) };
     try {
       await nextDriver.reset();
+      // Undo: the kept shots as a session plays them (runSession's playShots), left aiming at their settle, not banked.
+      if (line?.length) await playShots(nextDriver, line, 0, { bank: false, perStep: nextPerStep ?? undefined });
     } catch (e) {
       nextEngine.dispose();
       throw e;
@@ -433,19 +471,26 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     substeps = engine.info.integrator?.substeps ?? SUBSTEPS;
     handle.timing = { loadMs: performance.now() - t0, stepMs: [], moving: [], frameMs: [], costMs: [] };
     descs = driver.bodies;
-    perStep = env.perStep?.(c) ?? null;
+    perStep = nextPerStep;
+    ticks = meterTicks(c);
     collapse?.load(c);
     source.reset(c.scene.bodies);
     source.update(driver.snapshot, descs);
-    // Fresh effects: role tints, and every body at scale 0 for Regrow.
+    // Fresh effects: role tints, and every body at scale 0 for Regrow (after an undo, at full size: the
+    // world is where the kept shots left it, felled crowns and cracked heritage lit as play lit them).
     if (fxSlots) renderer.clearFx(0, fxSlots);
-    regrowBuf = regrowScales(c, 0, new Float32Array(c.meta.n));
+    regrowBuf = regrowScales(c, line ? Infinity : 0, new Float32Array(c.meta.n));
     duel = env.duel ? new Duel(env.duel, c, i as Player, driver.session.home) : null;
     const tints = structureTints(c);
     // Owner ink: each side's blocks in its colour, its king glowing a little as crowns do.
     if (duel) duel.owned.forEach((idx, k) => { for (const b of idx) tints[b] = tintWordOf(duel!.def.sides[k]!.ink, c.meta.role[b] === 1 ? CROWN_GLOW : 0); });
-    renderer.setFx(0, tints, regrowBuf, true);
-    fxSlots = c.meta.n;
+    renderer.setFx(0, tints, regrowBuf, !line);
+    if (line) {
+      const s = driver.session;
+      s.crownLive.forEach((down, k) => { if (down) renderer.setFx(c.meta.crowns[k]!, { tint: TINT.crown, emissive: 0.9 }); });
+      s.heritageBroken.forEach((cracked, k) => { if (cracked) renderer.setFx(c.meta.heritage[k]!, { tint: TINT.heritage, emissive: 1 }); });
+    }
+    fxSlots = descs.length;
     pacer.reset();
     speed.reset();
     tail.reset();
@@ -457,7 +502,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     const m = 4 * c.frame.unit;
     followClip = Float64Array.of(c.lot.min[0] - m, 0, c.lot.min[1] - m, c.lot.max[0] + m, 1.5 * c.height + m, c.lot.max[1] + m);
     handle.result = null;
-    handle.counts = {};
+    handle.counts = counts;
     handle.level = c.def.id;
     ending = false;
     handle.resultShownAt = null;
@@ -473,17 +518,19 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
       const half: Vec3 = [(c.lot.max[0] - c.lot.min[0]) / 2 + 2, c.height / 2 + 2, (c.lot.max[1] - c.lot.min[1]) / 2 + 2];
       renderer.setShadowBounds([(c.lot.min[0] + c.lot.max[0]) / 2, c.height / 2, (c.lot.min[1] + c.lot.max[1]) / 2], Math.hypot(...half), half);
     }
-    regrowT = 0;
+    regrowT = line ? null : 0;
     waiting = [];
     aimed = null;
     beads = null;
     hover = null; // the new level's tints are fresh
     aimDirty = true;
-    crownsShown = 0;
+    crownsShown = driver.session.crownLive.reduce((a, x) => a + x, 0);
     const ls = env.lotSheet?.(c) ?? null;
     lot = ls && { sheet: ls.sheet, goals: ls.goals, groups: selectGroups(c, ls.sheet.groups ?? {}) };
     handle.goals = (ls?.goals ?? []).map((g) => ({ id: g.id, text: g.text, met: false, before: ls!.before.includes(g.id) }));
     handle.grade = null;
+    // After an undo the goals stand as at the kept shots' settle, as play would have judged them there.
+    if (line?.length) judgeGoals();
     syncDuel();
     sync();
     hooks.loaded?.(c, driver);
@@ -649,7 +696,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
       return;
     }
     const sheet = score && lot ? goalsResultHtml(handle.goals, handle.grade, lot.sheet.grades !== undefined) : '';
-    env.result.innerHTML = resultHtml(c.def, score, driver.session.strokes, levelIdx + 1 < levels.length, Boolean(env.onSave), sheet);
+    env.result.innerHTML = resultHtml(c.def, score, driver.session.strokes, levelIdx + 1 < levels.length, Boolean(env.onSave), sheet, true);
     env.result.classList.add('show');
     document.body.classList.add('ended');
     handle.resultShownAt ??= driver.engine.stepIndex;
@@ -788,6 +835,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
   handle.aim = (x, y) => { pointer = [x, y]; updateAim(); return aimed; };
   handle.load = (id) => load(levelIndex(id)).catch(fail);
   handle.retry = () => load(levelIdx, true).catch(fail);
+  handle.undo = () => undo().catch((e) => { fail(e); return false; });
   handle.line = () => driver.session.inputs.map((i) => ({ ...i.shot }));
   handle.state = () => ({ step: driver.engine.stepIndex, phase: driver.session.phase, strokes: driver.session.strokes, heritageBroken: sum(driver.session.heritageBroken), hash: snapshotHash(driver.snapshot) });
   // Between steps and loads, so neither a step nor a load's dispose runs under the read.
@@ -914,6 +962,9 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     if (act) wakeAudio();
     if (act === 'bank') bank();
     if (act === 'opener') fireOpener();
+    // Touch screens' Undo and Restart (hud.ts TOUCH_ACTS; keys U and R).
+    if (act === 'undo') void handle.undo();
+    if (act === 'restart' && !duel) void handle.retry();
     // The rack's chips and the power buttons: taps on a touch screen (keys 1-4, Q and E on a keyboard).
     const arg = (e.target as HTMLElement).closest('button')?.dataset.arg;
     if (act === 'ammo') { const chip = rackChips(c.def.rack, driver.session.rackLeft, selected).find((x) => x.key === arg); if (chip) select(chip.ammo); }
@@ -922,6 +973,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
   env.result.addEventListener('click', (e) => {
     const act = (e.target as HTMLElement).closest('button')?.dataset.act;
     if (act === 'retry') void handle.retry();
+    if (act === 'undo') void handle.undo();
     if (act === 'save') env.onSave?.();
     if (act === 'next' && levelIdx + 1 < levels.length) void load(levelIdx + 1).catch(fail);
     // A duel: Rematch starts the other side first (the other of its two levels); Same start replays this one.
@@ -939,7 +991,9 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     if (k === 'b') bank();
     if (k === 'f') fireOpener();
     // In a duel, R after the result is a rematch (the other side starts), as the card's first button says.
-    if (k === 'r') void (duel?.result.over ? load(1 - levelIdx).catch(fail) : handle.retry());
+    if (k === 'r' && !e.ctrlKey && !e.metaKey) void (duel?.result.over ? load(1 - levelIdx).catch(fail) : handle.retry());
+    // U, or the platform's undo chord (Ctrl+Z, Cmd+Z on a Mac); not in a duel, whose turns are the players'.
+    if (!duel && ((k === 'u' && !e.ctrlKey && !e.metaKey) || (k === 'z' && (e.ctrlKey || e.metaKey) && !e.shiftKey))) { e.preventDefault(); void handle.undo(); }
     if (!duel && k === 'n' && levelIdx + 1 < levels.length) void load(levelIdx + 1).catch(fail);
     if (!duel && k === 'p' && levelIdx > 0) void load(levelIdx - 1).catch(fail);
     if (k === 'm') setMuted(!muted);
@@ -962,7 +1016,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
       reachable: aimed ? aimed.reachable : null,
       pullRefused: aimed?.shot.ammo === 'pull' && !aimed.reachable,
       collapse: s.liveCollapse, pulled: s.pulledShare(), met: s.objectiveDone, canBank: !stepping && regrowT === null && s.canBank(), pace: handle.pace.tag,
-      opener: !stepping && regrowT === null && s.phase === 'aiming' && openerNow() !== null,
+      opener: !stepping && regrowT === null && s.phase === 'aiming' && openerNow() !== null, ticks,
       ...(duel ? { duel: duelHudHtml(duel, s.phase === 'aiming' && aimed ? duel.refuse(aimed.shot) : null) } : {}),
     });
     html += goalsHudHtml(handle.goals);

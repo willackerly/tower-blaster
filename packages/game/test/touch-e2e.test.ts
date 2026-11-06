@@ -137,7 +137,7 @@ describe('touch controls', () => {
     await ready(page);
     expect((await input(page)).touch).toBe(false);
     expect(await page.evaluate(() => document.body.classList.contains('kg-touch'))).toBe(false);
-    expect(await page.locator('#help').innerText()).toMatch(/hover: aim · click: fire/);
+    expect(await page.locator('#help').innerText()).toMatch(/click: fire · drag: orbit/);
     expect(await page.locator('.kg-hud button.pw').first().isVisible()).toBe(false);
     expect(await page.locator('.kg-hud kbd').first().isVisible()).toBe(true);
     const v0 = cam(await view(page));
