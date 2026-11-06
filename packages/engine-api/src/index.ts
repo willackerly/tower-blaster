@@ -3,6 +3,7 @@
 // The game and the benchmark harness both drive engines only through this.
 import type { Blast } from './blast.ts';
 import type { ObserveOptions, Observer } from './observe.ts';
+import type { SpawnFrom } from './spawn.ts';
 
 export type Vec3 = [number, number, number];
 /** Unit quaternion, (x, y, z, w). */
@@ -38,13 +39,18 @@ export const TAG_DEBRIS = -2;
  * around a point (blast.ts), or a body is taken out of the world (remove.ts).
  */
 export type InputEvent = SpawnEvent | BlastEvent | RemoveEvent;
-export interface SpawnEvent { step: number; kind: 'spawn'; body: BodyDesc }
+/**
+ * A body is added. With `from` it is placed relative to a parent body's state when it is due (spawn.ts): its
+ * pos, rot, linVel and angVel are then in the parent's frame, not the world's. Engines that do not place
+ * relative spawns throw on push() and init() of one.
+ */
+export interface SpawnEvent { step: number; kind: 'spawn'; body: BodyDesc; from?: SpawnFrom }
 /** Engines that do not apply blasts throw on push() and init() of one. */
 export interface BlastEvent { step: number; kind: 'blast'; blast: Blast }
 /** Body `id` leaves the world: its slot becomes a tombstone (remove.ts). Engines that do not remove bodies throw on push() and init() of one. */
 export interface RemoveEvent { step: number; kind: 'remove'; id: number }
 
-/** The bodies a list of events spawns, in order. */
+/** The bodies a list of events spawns, in order (a relative spawn's as written: in its parent's frame, spawn.ts). */
 export const spawnedBodies = (events: readonly InputEvent[]): BodyDesc[] => events.flatMap((e) => (e.kind === 'spawn' ? [e.body] : []));
 
 export interface SceneDesc {
@@ -311,3 +317,4 @@ export * from './host.ts';
 export * from './observe.ts';
 export * from './remove.ts';
 export * from './snapshot-observer.ts';
+export * from './spawn.ts';

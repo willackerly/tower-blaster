@@ -33,11 +33,13 @@ import { TIER } from '@tb/schema';
 /**
  * Blasts (BlastEvent) and removals (RemoveEvent) are refused for now: inside a
  * blast's radius the tiers would have to wake dormant cells (wakeSphere) and
- * kick them, and a removed dormant cell would have to leave the lattice.
+ * kick them, and a removed dormant cell would have to leave the lattice. So are
+ * relative spawns (engine-api spawn.ts), whose parent the tiers may not hold.
  */
 function spawnsOnly(events: readonly InputEvent[]): SpawnEvent[] {
   const other = events.find((e) => e.kind !== 'spawn');
   if (other) throw new Error(`TieredEngine: ${other.kind} inputs are not supported yet`);
+  if (events.some((e) => e.kind === 'spawn' && e.from)) throw new Error('TieredEngine: relative spawns (spawn.from) are not supported yet');
   return events as SpawnEvent[];
 }
 

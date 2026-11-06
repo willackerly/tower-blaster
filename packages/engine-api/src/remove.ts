@@ -21,6 +21,7 @@
 // blast centred on a removed body (checkInputQueue).
 import type { InputEvent } from './index.ts';
 import { checkBlast } from './blast.ts';
+import { checkSpawnFrom } from './spawn.ts';
 
 /** Snapshot.tier of a removed body: @tb/schema TIER.free (an unused slot; every render pass skips it). */
 export const TIER_FREE = 255;
@@ -29,14 +30,29 @@ export const TIER_FREE = 255;
  * Throws unless every event in `queue` (the events an engine will apply, in
  * order) can be applied: each blast passes checkBlast and, centred on a body,
  * names one that exists and is not removed when it is due; each removal names
- * a body that exists then and is not removed yet. `existing` bodies are there
- * at the start, `removed` of them already removed.
+ * a body that exists then and is not removed yet; each relative spawn
+ * (spawn.ts) passes checkSpawnFrom and names a parent that exists at the start
+ * of its step and was not removed at an earlier step. `existing` bodies are
+ * there at the start, `removed` of them already removed. `now`: the engine's
+ * stepIndex, when events due at past steps all apply at the next step (so
+ * they share its start).
  */
-export function checkInputQueue(existing: number, queue: readonly InputEvent[], removed: ReadonlySet<number> = new Set()): void {
-  let n = existing;
+export function checkInputQueue(existing: number, queue: readonly InputEvent[], removed: ReadonlySet<number> = new Set(), now = 0): void {
+  let n = existing, atStart = existing, step = -Infinity;
   const gone = new Set(removed);
+  let goneAtStart = new Set(gone);
   for (const ev of queue) {
-    if (ev.kind === 'spawn') { n++; continue; }
+    const due = Math.max(ev.step, now);
+    if (due !== step) { step = due; atStart = n; goneAtStart = new Set(gone); }
+    if (ev.kind === 'spawn') {
+      if (ev.from !== undefined) {
+        const p = checkSpawnFrom(ev.from).body;
+        if (p >= atStart) throw new Error(`spawn at step ${ev.step} is relative to body ${p}, which does not exist at the start of that step (${atStart} bodies)`);
+        if (goneAtStart.has(p)) throw new Error(`spawn at step ${ev.step} is relative to body ${p}, which is removed before that step`);
+      }
+      n++;
+      continue;
+    }
     if (ev.kind === 'remove') {
       const id = ev.id;
       if (!Number.isInteger(id) || id < 0) throw new Error(`remove at step ${ev.step}: id must be a body id, got ${JSON.stringify(id)}`);

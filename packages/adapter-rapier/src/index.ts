@@ -2,7 +2,7 @@
 // contract. Used as a reference for quality metrics and as the number every
 // GPU variant has to beat by a wide margin.
 import RAPIER from '@dimforge/rapier3d-simd-compat';
-import { blastArea, blastCentre, blastVelocity, type BodyDesc, checkBlast, checkInputQueue, DEFAULT_RESTITUTION_COMBINE, emptySnapshot, type EngineCheckpoint, type EngineInfo, type InputEvent, massOf, type PhysicsEngine, type SceneDesc, queueInputs, type Snapshot, TIER_FREE } from '@tb/engine-api';
+import { blastArea, blastCentre, blastVelocity, type BodyDesc, type BodyMotion, checkBlast, checkInputQueue, DEFAULT_RESTITUTION_COMBINE, emptySnapshot, type EngineCheckpoint, type EngineInfo, type InputEvent, massOf, type PhysicsEngine, type SceneDesc, queueInputs, type Snapshot, relativeBody, TIER_FREE } from '@tb/engine-api';
 import { createBody, createGround, initRapier, RULES } from './bodies.ts';
 
 export interface RapierOptions {
@@ -70,16 +70,24 @@ export class RapierEngine implements PhysicsEngine {
   push(events: InputEvent[]): void {
     // Stable insertion keeps push order among events due at the same step; checked before anything changes.
     const pending = queueInputs(this.pending, events);
-    checkInputQueue(this.bodies.length, pending, this.gone);
+    checkInputQueue(this.bodies.length, pending, this.gone, this.stepIndex);
     this.pending = pending;
   }
 
   step(): void {
     const w = this.world;
     if (!w) throw new Error('init() first');
-    while (this.pending.length && this.pending[0]!.step <= this.stepIndex) {
-      const ev = this.pending.shift()!;
-      if (ev.kind === 'spawn') { this.add(ev.body); continue; }
+    const due: InputEvent[] = [];
+    while (this.pending.length && this.pending[0]!.step <= this.stepIndex) due.push(this.pending.shift()!);
+    // A relative spawn reads its parent as the step starts, before any of the step's events (engine-api spawn.ts).
+    const parents = new Map<number, BodyMotion>();
+    for (const ev of due) {
+      if (ev.kind !== 'spawn' || !ev.from || parents.has(ev.from.body)) continue;
+      const rb = this.bodies[ev.from.body]!, p = rb.translation(), q = rb.rotation(), v = rb.linvel(), a = rb.angvel();
+      parents.set(ev.from.body, { pos: [p.x, p.y, p.z], rot: [q.x, q.y, q.z, q.w], linVel: [v.x, v.y, v.z], angVel: [a.x, a.y, a.z] });
+    }
+    for (const ev of due) {
+      if (ev.kind === 'spawn') { this.add(ev.from ? relativeBody(parents.get(ev.from.body)!, ev.body, ev.from.axes) : ev.body); continue; }
       if (ev.kind === 'remove') {
         // A removal (remove.ts): at rest, then out of the simulation (a disabled body and its colliders take part in nothing).
         const rb = this.bodies[ev.id]!;

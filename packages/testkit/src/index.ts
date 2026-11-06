@@ -95,4 +95,5 @@ export * from './teardown.ts';
 export * from './shard.ts';
 export * from './blast.ts';
 export * from './remove.ts';
+export * from './spawn.ts';
 export * from './png.ts';

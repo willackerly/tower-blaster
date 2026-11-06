@@ -1,5 +1,5 @@
 // The reference AVBD solver behind the engine contract.
-import { blastArea, blastCentre, blastVelocity, checkBlast, checkInputQueue, emptySnapshot, queueInputs, TIER_FREE, type EngineInfo, type InputEvent, type PhysicsEngine, type SceneDesc, type Snapshot } from '@tb/engine-api';
+import { blastArea, blastCentre, blastVelocity, type BodyMotion, checkBlast, checkInputQueue, emptySnapshot, queueInputs, relativeBody, TIER_FREE, type EngineInfo, type InputEvent, type PhysicsEngine, type SceneDesc, type Snapshot } from '@tb/engine-api';
 import { type AvbdParams, avbdVariant, AvbdWorld, checkColoring, checkGapSlop, checkRecords, checkRemoved, checkRestitution, DEFAULT_AVBD } from './avbd.ts';
 
 export class AvbdReferenceEngine implements PhysicsEngine {
@@ -36,16 +36,24 @@ export class AvbdReferenceEngine implements PhysicsEngine {
   push(events: InputEvent[]): void {
     // Stable insertion keeps push order among events due at the same step; checked before anything changes.
     const pending = queueInputs(this.pending, events);
-    checkInputQueue(this.world?.bodies.length ?? 0, pending, this.removed());
+    checkInputQueue(this.world?.bodies.length ?? 0, pending, this.removed(), this.stepIndex);
     this.pending = pending;
   }
 
   step(): void {
     const w = this.world;
     if (!w) throw new Error('init() first');
-    while (this.pending.length && this.pending[0]!.step <= this.stepIndex) {
-      const ev = this.pending.shift()!;
-      if (ev.kind === 'spawn') { w.add(ev.body); continue; }
+    const due: InputEvent[] = [];
+    while (this.pending.length && this.pending[0]!.step <= this.stepIndex) due.push(this.pending.shift()!);
+    // A relative spawn reads its parent as the step starts, before any of the step's events (engine-api spawn.ts).
+    const parents = new Map<number, BodyMotion>();
+    for (const ev of due) {
+      if (ev.kind !== 'spawn' || !ev.from || parents.has(ev.from.body)) continue;
+      const b = w.bodies[ev.from.body]!;
+      parents.set(ev.from.body, { pos: [...b.pos], rot: [...b.rot], linVel: [...b.linVel], angVel: [...b.angVel] });
+    }
+    for (const ev of due) {
+      if (ev.kind === 'spawn') { w.add(ev.from ? relativeBody(parents.get(ev.from.body)!, ev.body, ev.from.axes) : ev.body); continue; }
       // A removal (remove.ts): the body touches nothing from this step on.
       if (ev.kind === 'remove') { w.remove(ev.id); continue; }
       // A blast (blast.ts) pushes the bodies that exist now, before the step starts; never a removed one.

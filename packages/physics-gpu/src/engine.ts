@@ -9,6 +9,7 @@ import { assertStorageFits, createDevice, isSoftwareAdapter, Readback } from '@t
 import { type AvbdParams, avbdVariant, checkColoring, checkGapSlop, checkRecords, checkRemoved, checkRestitution, DEFAULT_AVBD, RESTITUTION_DEFAULTS } from '@tb/physics-ref';
 import { Body, BodyProps, field, RestSlot, Shape, SolverBody, writeStruct } from '@tb/schema';
 import { BlastPass, type DueBlast } from './blast.ts';
+import { type DueSpawn, RelativeSpawnPass } from './spawn.ts';
 import { CheckpointPool, restoreRegions, saveRegions, type StateRegion, whole } from './checkpoint.ts';
 import { assertPairDispatch, Broadphase } from './broadphase.ts';
 import { Coloring } from './coloring.ts';
@@ -234,6 +235,9 @@ export type StepStage = (typeof STEP_STAGES)[number];
 export const PROBE_MARKS = ['start', 'prepare', 'broadphase', 'narrowphase', 'coloring', 'setup', 'sweeps', 'solve'] as const;
 export type ProbeMark = (typeof PROBE_MARKS)[number];
 
+/** Body's linVel, flags and angVel: the bytes a removal overwrites (remove()). */
+const TOMB_BYTES = 28;
+
 export class GpuAvbdEngine implements PhysicsEngine {
   readonly info: EngineInfo;
   stepIndex = 0;
@@ -264,7 +268,7 @@ export class GpuAvbdEngine implements PhysicsEngine {
   readonly records: RecordMode;
   /** The colouring's lattice preference (gpuColorMode(): AvbdParams.colorMode, unset 3). */
   readonly colorMode: number;
-  private parts: { bodies: GPUBuffer; shapes: GPUBuffer; props: GPUBuffer; spheres: GPUBuffer; sweep: GPUBuffer; prev: GPUBuffer; bp: Broadphase; np: Narrowphase; col: Coloring; solver: AvbdSolver; blast: BlastPass; readback: Readback; sleep: SleepPass | null; pool: CheckpointPool } | null = null;
+  private parts: { bodies: GPUBuffer; shapes: GPUBuffer; props: GPUBuffer; spheres: GPUBuffer; sweep: GPUBuffer; prev: GPUBuffer; bp: Broadphase; np: Narrowphase; col: Coloring; solver: AvbdSolver; blast: BlastPass; spawn: RelativeSpawnPass; tomb: GPUBuffer; readback: Readback; sleep: SleepPass | null; pool: CheckpointPool } | null = null;
   /** Counts dispose() calls (init() makes one), so an init() that awaited across another knows it was overtaken. */
   private generation = 0;
   /** Counts restore() calls: an awake count read before one belongs to a future that is gone. */
@@ -406,7 +410,14 @@ export class GpuAvbdEngine implements PhysicsEngine {
         energyCap: p.restitutionEnergyCap ?? RESTITUTION_DEFAULTS.restitutionEnergyCap,
       } : null, sleeps);
       const sleep = sleeps ? new SleepPass(device, sleepRuleOf(this.opts), this.capacity, bodies, props, np.manifolds, bp.total) : null;
-      parts = { bodies, shapes, props, spheres, sweep, prev, bp, np, col, solver, blast: new BlastPass(device, bodies, props, shapes, solver.solver), readback: new Readback(device), sleep, pool: new CheckpointPool(device) };
+      // A removed body's linVel, flags and angVel (Body bytes 32 to 60), copied over its slot in the step's command buffer (remove()).
+      const tomb = device.createBuffer({ size: TOMB_BYTES, usage: GPUBufferUsage.COPY_SRC, mappedAtCreation: true, label: 'tombstone' });
+      new Uint32Array(tomb.getMappedRange()).set([0, 0, 0, TIER_FREE << 8, 0, 0, 0]);
+      tomb.unmap();
+      parts = {
+        bodies, shapes, props, spheres, sweep, prev, bp, np, col, solver, blast: new BlastPass(device, bodies, props, shapes, solver.solver),
+        spawn: new RelativeSpawnPass(device, bodies, solver.solver, sleep?.state ?? null), tomb, readback: new Readback(device), sleep, pool: new CheckpointPool(device),
+      };
     } catch (e) {
       thrown = e;
     }
@@ -457,16 +468,15 @@ export class GpuAvbdEngine implements PhysicsEngine {
   }
 
   /**
-   * Make body i a tombstone (engine-api remove.ts): at rest, tier free and asleep, in Body[] before the step's
-   * work runs. The kernels skip it from then on (prepare, broadphase, ground contacts, solver start, blasts); a
-   * blast due before the removal in the same step pushes it, then this stops it, as the reference does.
+   * Make body i a tombstone (engine-api remove.ts): at rest, tier free and asleep, before the step's blasts and
+   * solve run. The kernels skip it from then on (prepare, broadphase, ground contacts, solver start, blasts); a
+   * blast due before the removal in the same step pushes it, then this stops it, as the reference does. Written
+   * as a copy in the step's command buffer (encodeStep), after the relative spawns have read their parents as
+   * the step starts (spawn.ts), not as a queue write, which would land before them.
    */
-  private remove(i: number): void {
-    const { device, parts } = this;
-    const at = (name: string) => i * Body.size + field(Body, name).offset;
-    device!.queue.writeBuffer(parts!.bodies, at('linVel'), new Float32Array(3));
-    device!.queue.writeBuffer(parts!.bodies, at('angVel'), new Float32Array(3));
-    device!.queue.writeBuffer(parts!.bodies, at('flags'), new Uint32Array([TIER_FREE << 8]));
+  private remove(enc: GPUCommandEncoder, i: number): void {
+    const { parts } = this;
+    enc.copyBufferToBuffer(parts!.tomb, 0, parts!.bodies, i * Body.size + field(Body, 'linVel').offset, TOMB_BYTES);
     this.gone.add(i);
   }
 
@@ -482,7 +492,7 @@ export class GpuAvbdEngine implements PhysicsEngine {
     }
     // Stable insertion keeps push order among events due at the same step.
     const pending = queueInputs(this.pending, events);
-    checkInputQueue(this.n, pending, this.gone);
+    checkInputQueue(this.n, pending, this.gone, this.stepIndex);
     this.pending = pending;
   }
 
@@ -551,13 +561,16 @@ export class GpuAvbdEngine implements PhysicsEngine {
     if (!device || !parts || !scene) throw new Error('init() first');
     if (this.failure) throw new Error(`GpuAvbdEngine: ${this.failure}`);
     // Spawns are written now; a blast acts on the bodies that exist when it is due (ids below its count).
-    const blasts: DueBlast[] = [];
+    const blasts: DueBlast[] = [], spawns: DueSpawn[] = [], removals: number[] = [];
     while (this.pending.length && this.pending[0]!.step <= this.stepIndex) {
       const ev = this.pending.shift()!;
       this.eventStep = this.stepIndex + 1;
-      if (ev.kind === 'spawn') this.add(ev.body);
-      else if (ev.kind === 'remove') {
-        this.remove(ev.id);
+      if (ev.kind === 'spawn') {
+        // A relative spawn's slot is written from its description, then placed by the spawn pass (spawn.ts).
+        if (ev.from) spawns.push({ child: this.n, parent: ev.from.body, axes: ev.from.axes ?? 'world', pos: ev.body.pos, rot: ev.body.rot, linVel: ev.body.linVel, angVel: ev.body.angVel });
+        this.add(ev.body);
+      } else if (ev.kind === 'remove') {
+        removals.push(ev.id);
         // With sleep, everything that could touch the removed body wakes (sleep.ts): a blast of no impulse and no speed
         // cap around it, which changes no velocity but sets the awake bit of every body in reach. The reach is two of
         // the largest bounding radii plus both bodies' margins, so it covers every body that can have touched it.
@@ -571,7 +584,14 @@ export class GpuAvbdEngine implements PhysicsEngine {
     parts.sleep?.writeParams(n);
     const enc = device.createCommandEncoder();
     mark?.(enc, 'start');
-    let pass = enc.beginComputePass();
+    let pass: GPUComputePassEncoder;
+    if (spawns.length) {
+      pass = enc.beginComputePass({ label: 'relative spawns' });
+      parts.spawn.encode(pass, spawns);
+      pass.end();
+    }
+    for (const i of removals) this.remove(enc, i);
+    pass = enc.beginComputePass();
     parts.blast.encode(pass, blasts);
     parts.solver.prepare(pass, n);
     pass.end();
@@ -716,7 +736,7 @@ export class GpuAvbdEngine implements PhysicsEngine {
   }
 
   private static free(p: NonNullable<GpuAvbdEngine['parts']>): void {
-    p.solver.destroy(); p.blast.destroy(); p.sleep?.destroy(); p.col.destroy(); p.np.destroy(); p.bp.destroy(); p.readback.destroy(); p.pool.destroy();
+    p.solver.destroy(); p.blast.destroy(); p.spawn.destroy(); p.tomb.destroy(); p.sleep?.destroy(); p.col.destroy(); p.np.destroy(); p.bp.destroy(); p.readback.destroy(); p.pool.destroy();
     for (const b of [p.bodies, p.shapes, p.props, p.spheres, p.sweep, p.prev]) b.destroy();
   }
 
