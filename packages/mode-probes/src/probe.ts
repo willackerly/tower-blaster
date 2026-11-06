@@ -21,11 +21,6 @@ export interface RunSpec {
   /** GPU engine options (sleep and its rule, pair room, box broadphase). */
   opts: Omit<GpuEngineOptions, 'device'>;
   /**
-   * Bodies held as never-wake anchors (X5, the C8 pinned flag emulated on today's engine): put to sleep
-   * right after init, with a sleep rule under which nothing falls asleep or wakes by contact. GPU only.
-   */
-  pins?: readonly number[];
-  /**
    * A gravity schedule (X6, the C7 verb emulated): the world's gravity during step i (0-based, the step from
    * i to i + 1). drive() writes it into the scene's gravity in place before each step; both engines read
    * SceneDesc.gravity every step, as C7 would write it. No sleep with a schedule: a change of gravity does
@@ -74,7 +69,7 @@ export interface Probe<C = unknown, R = unknown> {
 
 /**
  * Runs a spec on an engine: init, then step until the cap or the meter stops it, sampling every
- * meter.every steps (and step 0, and the last). `afterInit` runs once init() resolves (the GPU page's pins).
+ * meter.every steps (and step 0, and the last). `afterInit` runs once init() resolves.
  * With spec.gravity, the scene's gravity array is rewritten before every step.
  */
 export async function drive<R>(engine: PhysicsEngine, spec: RunSpec, meter: Meter<R>, afterInit?: () => void | Promise<void>): Promise<{ steps: number; wallMs: number }> {

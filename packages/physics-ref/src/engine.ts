@@ -1,5 +1,5 @@
 // The reference AVBD solver behind the engine contract.
-import { blastArea, blastCentre, blastVelocity, checkBlast, checkInputQueue, emptySnapshot, queueInputs, TIER_FREE, type EngineInfo, type InputEvent, type PhysicsEngine, type SceneDesc, type Snapshot } from '@tb/engine-api';
+import { blastArea, blastCentre, blastVelocity, checkBlast, checkInputQueue, emptySnapshot, queueInputs, scenePins, TIER_FREE, type EngineInfo, type InputEvent, type PhysicsEngine, type SceneDesc, type Snapshot } from '@tb/engine-api';
 import { type AvbdParams, avbdVariant, AvbdWorld, checkColoring, checkGapSlop, checkRecords, checkRemoved, checkRestitution, DEFAULT_AVBD } from './avbd.ts';
 
 export class AvbdReferenceEngine implements PhysicsEngine {
@@ -27,6 +27,7 @@ export class AvbdReferenceEngine implements PhysicsEngine {
     if (e !== undefined && !(e >= 0 && e <= 1)) throw new Error(`AvbdReferenceEngine: SceneDesc.ground.restitution must be in [0, 1], got ${e}`);
     const pending = [...scene.inputs].sort((a, b) => a.step - b.step);
     checkInputQueue(scene.bodies.length, pending);
+    if (this.params.restitution && scenePins(scene)) throw new Error('AvbdReferenceEngine: pinned bodies are not implemented with AvbdParams.restitution yet (docs/design/gravity-and-pins.md)');
     this.world = new AvbdWorld(scene, this.params);
     for (const b of scene.bodies) this.world.add(b);
     this.pending = pending;
@@ -37,6 +38,7 @@ export class AvbdReferenceEngine implements PhysicsEngine {
     // Stable insertion keeps push order among events due at the same step; checked before anything changes.
     const pending = queueInputs(this.pending, events);
     checkInputQueue(this.world?.bodies.length ?? 0, pending, this.removed());
+    if (this.params.restitution && scenePins({ bodies: [], inputs: events })) throw new Error('AvbdReferenceEngine: pinned bodies are not implemented with AvbdParams.restitution yet (docs/design/gravity-and-pins.md)');
     this.pending = pending;
   }
 
@@ -52,7 +54,8 @@ export class AvbdReferenceEngine implements PhysicsEngine {
       const b = checkBlast(ev.blast);
       const centre = blastCentre(b, b.body >= 0 ? w.bodies[b.body]!.pos : null);
       w.bodies.forEach((body, id) => {
-        if (body.removed) return;
+        // Never a removed body, nor a pinned one (engine-api pinned.ts).
+        if (body.removed || body.pinned) return;
         const v = blastVelocity(b, centre, id, body.pos, body.linVel, body.mass, blastArea(body.desc.shape));
         if (!v) return;
         // The adaptive warm start compares linVel with prevLinVel: the kick is not an acceleration (blast.ts).
@@ -73,7 +76,7 @@ export class AvbdReferenceEngine implements PhysicsEngine {
       s.rot.set(b.rot, 4 * i);
       s.linVel.set(b.linVel, 3 * i);
       s.angVel.set(b.angVel, 3 * i);
-      s.awake[i] = b.removed ? 0 : 1; // no sleeping yet
+      s.awake[i] = b.removed || b.pinned ? 0 : 1; // no sleeping yet; a pinned body is not solved (engine-api pinned.ts)
     });
     // Tiers only once a body is removed (Snapshot.tier: absent, every body is active).
     if (bodies.some((b) => b.removed)) s.tier = Uint8Array.from(bodies, (b) => (b.removed ? TIER_FREE : 0));

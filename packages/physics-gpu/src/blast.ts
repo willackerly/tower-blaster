@@ -12,7 +12,8 @@
 // body centre is read from Body.pos when the dispatch runs (blasts change
 // velocities only, so every thread reads the same position). The arithmetic
 // is the reference's (blastCentre, blastArea, blastWeight, blastVelocity) in
-// f32; the speed cap is applied after each blast, as there.
+// f32; the speed cap is applied after each blast, as there. A pinned body
+// (engine-api pinned.ts) is never pushed and never woken.
 import { type CheckedBlast, MAX_BLAST_EXCLUDE } from '@tb/engine-api';
 import { Body, BodyProps, Shape, SolverBody, TIER, wgslStruct } from '@tb/schema';
 
@@ -42,8 +43,9 @@ fn blast(@builtin(global_invocation_id) id: vec3u) {
   let i = id.x;
   if (i >= blasts[1]) { return; }
   let b = bodies[i];
-  // A removed body (tier free, engine-api remove.ts) is never pushed.
-  if (((b.flags >> 8u) & 0xffu) == ${TIER.free}u) { return; }
+  // A removed body (tier free, engine-api remove.ts) is never pushed, nor a pinned one (bit 1, pins.ts): it is not
+  // woken either, so it stays an anchor.
+  if (((b.flags >> 8u) & 0xffu) == ${TIER.free}u || (b.flags & 2u) != 0u) { return; }
   let s = shapes[b.shape];
   let h = s.half;
   // blastArea: a quarter of the surface.

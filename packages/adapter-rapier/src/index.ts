@@ -59,7 +59,9 @@ export class RapierEngine implements PhysicsEngine {
   }
 
   private add(b: BodyDesc): void {
-    const { body, collider } = createBody(this.world!, b, this.sleep, RAPIER.RigidBodyDesc.dynamic());
+    // A pinned body (engine-api pinned.ts) is a Rapier fixed body, at rest whatever its description says.
+    const pinned = b.pinned === true;
+    const { body, collider } = createBody(this.world!, pinned ? { ...b, linVel: [0, 0, 0], angVel: [0, 0, 0] } : b, this.sleep, pinned ? RAPIER.RigidBodyDesc.fixed() : RAPIER.RigidBodyDesc.dynamic());
     // Every collider carries the scene's rules (Rapier uses the higher-priority rule of a pair).
     collider.setFrictionCombineRule(this.combine);
     collider.setRestitutionCombineRule(this.restitutionCombine);
@@ -94,8 +96,9 @@ export class RapierEngine implements PhysicsEngine {
       const at = (rb: RAPIER.RigidBody): [number, number, number] => { const p = rb.translation(); return [p.x, p.y, p.z]; };
       const centre = blastCentre(b, b.body >= 0 ? at(this.bodies[b.body]!) : null);
       this.bodies.forEach((rb, id) => {
-        if (this.gone.has(id)) return;
-        const d = this.descs[id]!, u = rb.linvel();
+        const d = this.descs[id]!;
+        if (this.gone.has(id) || d.pinned) return;
+        const u = rb.linvel();
         const v = blastVelocity(b, centre, id, at(rb), [u.x, u.y, u.z], massOf(d), blastArea(d.shape));
         if (v) rb.setLinvel({ x: v[0], y: v[1], z: v[2] }, true);
       });
@@ -112,7 +115,8 @@ export class RapierEngine implements PhysicsEngine {
       s.rot.set([q.x, q.y, q.z, q.w], 4 * i);
       s.linVel.set([v.x, v.y, v.z], 3 * i);
       s.angVel.set([a.x, a.y, a.z], 3 * i);
-      s.awake[i] = rb.isSleeping() || this.gone.has(i) ? 0 : 1;
+      // A pinned (fixed) body is not solved: awake 0, as on the AVBD engines (engine-api pinned.ts).
+      s.awake[i] = rb.isSleeping() || this.gone.has(i) || this.descs[i]!.pinned ? 0 : 1;
     });
     if (this.gone.size) s.tier = Uint8Array.from({ length: this.bodies.length }, (_, i) => (this.gone.has(i) ? TIER_FREE : 0));
     return s;

@@ -28,6 +28,11 @@ export interface BodyDesc {
   restitution: number;
   /** Free-form grouping used by metrics: tower index, or a TAG_* role. */
   tag: number;
+  /**
+   * Bolted to the world (pinned.ts, roadmap C8): it never moves, and every body touching it solves against it as
+   * an infinite mass. Its velocities are ignored. Absent or false: a free body.
+   */
+  pinned?: boolean;
 }
 
 export const TAG_BALL = -1;
@@ -309,5 +314,6 @@ export function inertiaOf(b: BodyDesc): Vec3 {
 export * from './blast.ts';
 export * from './host.ts';
 export * from './observe.ts';
+export * from './pinned.ts';
 export * from './remove.ts';
 export * from './snapshot-observer.ts';
