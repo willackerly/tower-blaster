@@ -11,7 +11,7 @@ import { type RackItem, type CompiledLevel, compileLevel, crackSeed, Driver, typ
 import { clampPitch, eyeOf, type Orbit, rayThrough, viewProj } from '@tb/render/camera';
 import type { FxOptions, PixelStats, Renderer, SnapshotSource } from '@tb/render';
 import type { HostStats } from '@tb/audio';
-import { type Aimed, azFromYaw, launchHeight, launchStep, pick, previewBeads, pullFor, shotFor, SUBSTEPS } from './aim.ts';
+import { type Aimed, arcContact, azFromYaw, type Contact, launchHeight, launchStep, pick, previewBeads, pullFor, shotFor, SUBSTEPS } from './aim.ts';
 import { Synth, type Voice, voicesFor } from './audio.ts';
 import { CollapseSound, type CollapseStatus } from './collapse-sound.ts';
 import { type GameSoundMode, soundSetOf } from './sound-map.ts';
@@ -64,9 +64,10 @@ export interface GameHandle {
    * `?keystone.follow=1`), and the jolt the last drawn frame added to the player's view: its largest shake (rad) or
    * field-of-view punch (share of the field of view), 0 unless `?keystone.shake=1` (juice.ts). In a duel
    * (duel-view.ts): whether the turn view is swinging the camera to the next side, the HUD's turn cue (which way
-   * to drag to reach the side to fire, null when the view is on it) and how many arc beads the frame drew.
+   * to drag to reach the side to fire, null when the view is on it), how many arc beads the frame drew, and whether it drew
+   * the impact marker (PT14).
    */
-  view: { target: [number, number, number]; distance: number; yaw: number; pitch: number; following: boolean; jolt: number; turning: boolean; cue: 'left' | 'right' | null; arcBeads: number };
+  view: { target: [number, number, number]; distance: number; yaw: number; pitch: number; following: boolean; jolt: number; turning: boolean; cue: 'left' | 'right' | null; arcBeads: number; impact: boolean };
   /**
    * The player's controls now: whether the page shows its touch face (touch.ts touchFace: the HUD's
    * tap buttons and the touch help; body class kg-touch), the touch gesture under way and fingers down,
@@ -119,6 +120,12 @@ export interface GameHandle {
   aim(ndcX: number, ndcY: number): Aimed | null;
   /** The aim preview's blast-reach zone (a one-blast weapon aimed: where it would go off and how far it reaches), or null. */
   reach: { centre: [number, number, number]; radius: number } | null;
+  /**
+   * Where the previewed shot first touches (aim.ts arcContact; PT14): the body (-1 the ground), the point and the face's normal,
+   * and whether it is the pre-aimed opener's preview (shown before the player aims). Null with no preview. The marker is drawn
+   * there unless the blast zone shows or keystone.impact is off.
+   */
+  impact: { body: number; point: [number, number, number]; normal: [number, number, number]; opener: boolean } | null;
   select(ammo: RackItem): boolean;
   load(id: string): Promise<void>;
   /** Restart the attempt (key R, the result card's Retry): the level as it loaded, exactly (the same state hash). */
@@ -222,6 +229,8 @@ function goalMetSafe(g: Goal, f: Parameters<typeof goalMet>[1]): boolean {
 }
 /** A pull's dust puff (Renderer.burst strength, m/s): a soft one, about a slow contact's. */
 export const PULL_PUFF = 2;
+/** The impact marker's least radius, h (a marble's marker would be a speck). */
+export const IMPACT_MIN_RADIUS = 0.4;
 const median = (xs: number[]) => { if (!xs.length) return NaN; const s = [...xs].sort((a, b) => a - b); return s[Math.floor(s.length / 2)]!; };
 
 /** The page's last stage: a fast compressor at -1 dBFS, so the cues and the collision sound (each limited) never clip together. */
@@ -236,8 +245,8 @@ function safetyLimiter(ctx: AudioContext): AudioNode {
 export function newGameHandle(): GameHandle {
   const none = (): SessionState => ({ step: 0, phase: 'loading', strokes: 0, heritageBroken: 0, hash: '' });
   return {
-    status: 'loading', engine: '', level: '', phase: 'loading', ready: false, frozen: false, frames: 0, stepIndex: 0, strokes: 0, bodies: 0, collapse: 0, fast: false, pace: { timeScale: 1, speed: 1, tag: '', tailSkip: false, costMs: NaN }, view: { target: [0, 0, 0], distance: 0, yaw: 0, pitch: 0, following: false, jolt: 0, turning: false, cue: null, arcBeads: 0 }, input: { touch: false, gesture: 'idle', fingers: 0, aimed: null, power: 100, launch: 0 }, result: null, counts: {}, feel: { ...DEFAULT_FEEL }, resultShownAt: null, timing: { loadMs: 0, load: noPhases(), stepMs: [], moving: [], frameMs: [], costMs: [] }, draws: { drawn: 0, skipped: 0, decimating: false },
-    fire: () => false, bank: () => false, freeze: () => false, fireOpener: () => false, setMuted: () => {}, maxDpr: 2, quality: null, aim: () => null, reach: null, select: () => false, load: async () => {}, retry: async () => {}, undo: async () => false, undone: null, spare: null, undoMemory: () => ({ marks: 0, bytes: 0 }), capture: async () => null, sightlines: async () => null, firedLooks: () => [], marks: () => [], refreshMarks: () => {},
+    status: 'loading', engine: '', level: '', phase: 'loading', ready: false, frozen: false, frames: 0, stepIndex: 0, strokes: 0, bodies: 0, collapse: 0, fast: false, pace: { timeScale: 1, speed: 1, tag: '', tailSkip: false, costMs: NaN }, view: { target: [0, 0, 0], distance: 0, yaw: 0, pitch: 0, following: false, jolt: 0, turning: false, cue: null, arcBeads: 0, impact: false }, input: { touch: false, gesture: 'idle', fingers: 0, aimed: null, power: 100, launch: 0 }, result: null, counts: {}, feel: { ...DEFAULT_FEEL }, resultShownAt: null, timing: { loadMs: 0, load: noPhases(), stepMs: [], moving: [], frameMs: [], costMs: [] }, draws: { drawn: 0, skipped: 0, decimating: false },
+    fire: () => false, bank: () => false, freeze: () => false, fireOpener: () => false, setMuted: () => {}, maxDpr: 2, quality: null, aim: () => null, reach: null, impact: null, select: () => false, load: async () => {}, retry: async () => {}, undo: async () => false, undone: null, spare: null, undoMemory: () => ({ marks: 0, bytes: 0 }), capture: async () => null, sightlines: async () => null, firedLooks: () => [], marks: () => [], refreshMarks: () => {},
     state: none, line: () => [], replay: async () => none(), health: async () => null, pairsPerBody: 0, limitsHit: [], goals: [], grade: null, duel: null,
     sound: () => ({ mode: 'collapse', status: 'off', error: '', posted: 0, stats: null }),
     ice: () => ({ count: 0, cracks: [] }),
@@ -503,6 +512,8 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
   let hover: number | null = null;
   /** A one-blast weapon's blast radius around the aim point, for the aim preview's danger zone (Renderer.reach); null otherwise. */
   let ring: { centre: Vec3; radius: number } | null = null;
+  /** Where the previewed shot first touches (the impact marker), and whether the preview is the opener's. */
+  let contact: Contact | null = null, previewingOpener = false;
   let pointer: [number, number] | null = null;
   let regrowT: number | null = null;
   let fastHeld = false;
@@ -512,7 +523,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
   /** The duel being played (env.duel), and when the turn in the air was fired (its pace: DuelDef.turnSeconds). */
   let duel: Duel | null = null, turnStart = 0;
   /** Each side's arc on the ground (duel-view.ts arcBeads), made at load. */
-  let arcs: Overlay[] = [], arcBeadsDrawn = 0;
+  let arcs: Overlay[] = [], arcBeadsDrawn = 0, impactDrawn = false;
   /** Every crown is down: the round is known to be over, the card shows, and the rest of the settle runs at fast-forward. */
   let ending = false;
 
@@ -926,6 +937,8 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     beads = null;
     let lit: number | null = null;
     ring = handle.reach = null;
+    contact = null;
+    previewingOpener = false;
     if (pointer && selected && aimable() && regrowT === null) {
       const hit = pick(rayThrough(orbit, aspect(), pointer[0], pointer[1]), driver.snapshot, c);
       if (selected === 'pull') {
@@ -935,12 +948,29 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
         if (p?.reachable) lit = p.shot.body;
       } else if (hit) {
         aimed = shotFor(c, selected, azFromYaw(orbit.yaw), power, hit.point, substeps, launchNow());
-        if (aimed) beads = previewBeads(c, aimed.shot, hit.point, substeps);
+        if (aimed) {
+          contact = arcContact(c, driver.snapshot, aimed.shot, substeps);
+          beads = previewBeads(c, aimed.shot, hit.point, substeps, 40, 2, contact);
+        }
         // A weapon with one blast (the grenades): show how far it reaches, where it would go off.
         const blasts = aimed ? c.arms[selected]?.blasts : undefined;
         if (blasts?.length === 1 && blasts[0]!.count === 1) ring = handle.reach = { centre: [hit.point[0], hit.point[1], hit.point[2]], radius: blasts[0]!.blast.radius };
       }
+    } else if (!pointer && aimable() && regrowT === null) {
+      // Before the player aims (and while the cursor is off the canvas), the pre-aimed opener shows its flight and where
+      // it lands (PT14): what F, or the HUD's Fire button, will do. Its blast zone too, for a bomb. Nothing is aimed.
+      const op = openerNow();
+      if (op && op.ammo !== 'pull' && op.ammo !== 'cue') {
+        contact = arcContact(c, driver.snapshot, op, substeps);
+        if (contact) {
+          previewingOpener = true;
+          beads = previewBeads(c, op, contact.point, substeps, 40, 2, contact);
+          const blasts = c.arms[op.ammo]?.blasts;
+          if (blasts?.length === 1 && blasts[0]!.count === 1) ring = handle.reach = { centre: [contact.point[0], contact.point[1], contact.point[2]], radius: blasts[0]!.blast.radius };
+        }
+      }
     }
+    handle.impact = contact ? { body: contact.body, point: [...contact.point], normal: [...contact.normal], opener: previewingOpener } : null;
     setHover(lit);
     handle.input.aimed = aimed ? { ...aimed.shot } : null;
   }
@@ -1105,7 +1135,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     const s = driver.session;
     const running = s.phase === 'running', v = running ? speed.speed(performance.now()) : 1, costs = handle.timing.costMs;
     handle.pace = { timeScale: running ? pacer.timeScale : 1, speed: v, tag: running && !fastHeld && !handle.fast && !ending && !tail.on ? slowTag(v) : '', tailSkip: tail.on, costMs: running && !Number.isNaN(pacer.costMs) ? pacer.costMs : median(costs.slice(-60)) };
-    handle.view = { target: [...orbit.target], distance: orbit.distance, yaw: orbit.yaw, pitch: orbit.pitch, following: follow.active, jolt, turning: swing.active, cue: cueNow(), arcBeads: arcBeadsDrawn };
+    handle.view = { target: [...orbit.target], distance: orbit.distance, yaw: orbit.yaw, pitch: orbit.pitch, following: follow.active, jolt, turning: swing.active, cue: cueNow(), arcBeads: arcBeadsDrawn, impact: impactDrawn };
   }
 
   /** The physics loop's idle wait: the next frame, or a fire, whichever comes first (physics-loop.ts wakeable). */
@@ -1526,6 +1556,10 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     arcBeadsDrawn = arc?.colours.length ?? 0;
     const o = joinOverlays(beads ? beadOverlay(beads, aimed?.reachable ?? true) : null, arc);
     renderer.reach(ring?.centre ?? null, ring?.radius ?? 0);
+    // The impact marker: where the previewed flight first touches, on that face, a little wider than the shot (none under a blast zone).
+    const mark = feel.impact && beads && contact && !ring ? contact : null;
+    impactDrawn = mark !== null;
+    renderer.impact(mark?.point ?? null, mark?.normal, mark ? Math.max(1.6 * mark.radius, IMPACT_MIN_RADIUS * c.frame.unit) : 0);
     renderer.setOverlay(o?.xyzr ?? new Float32Array(0), o?.colours);
     pendingCapture = null;
     const fp = { viewProj: viewProj(view, aspect()), eye: eyeOf(view), focus: orbit.target, time: now / 1000, groundY: 0, alpha: running ? alphaAt(arrivals, now, 1000 * c.scene.dt) : 1 };

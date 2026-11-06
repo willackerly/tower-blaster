@@ -22,11 +22,15 @@ const sum = (xs: number[]) => xs.reduce((a, b) => a + b, 0);
 describe('pace feel', () => {
   it('juice and every camera motion are off unless the URL asks for them; the valve and the tail skip are on; every frame is drawn', () => {
     expect(paceFeel(new URLSearchParams(''))).toEqual(DEFAULT_FEEL);
-    expect(DEFAULT_FEEL).toEqual({ hitStop: false, slowMo: false, budgetMs: DEFAULT_BUDGET_MS, tailSkip: true, follow: false, shake: false, frames: 'all', rapid: true, turnView: true, arcs: true, undoMB: DEFAULT_UNDO_MB, launch: 'high', balls: 'painted', marks: true, view: 'goals' });
+    expect(DEFAULT_FEEL).toEqual({ hitStop: false, slowMo: false, budgetMs: DEFAULT_BUDGET_MS, tailSkip: true, follow: false, shake: false, frames: 'all', rapid: true, turnView: true, arcs: true, undoMB: DEFAULT_UNDO_MB, launch: 'high', balls: 'painted', marks: true, view: 'goals', impact: true });
     // The opening view (PT1): goals by default, classic by its key, anything else refused; written back only when not the default.
     expect(paceFeel(new URLSearchParams('?keystone.view=classic'))).toEqual({ ...DEFAULT_FEEL, view: 'classic' });
     expect(() => paceFeel(new URLSearchParams('?keystone.view=top'))).toThrow(/keystone.view must be goals or classic: top/);
     { const w = new URLSearchParams(); writePaceFeel({ ...DEFAULT_FEEL, view: 'classic' }, w); expect(w.toString()).toBe('keystone.view=classic'); }
+    // The impact marker (PT14): on by default, keystone.impact=0 off, written back only when off.
+    expect(paceFeel(new URLSearchParams('?keystone.impact=0'))).toEqual({ ...DEFAULT_FEEL, impact: false });
+    expect(() => paceFeel(new URLSearchParams('?keystone.impact=yes'))).toThrow(/keystone.impact/);
+    { const w = new URLSearchParams(); writePaceFeel({ ...DEFAULT_FEEL, impact: false }, w); expect(w.toString()).toBe('keystone.impact=0'); }
     // Undo memory: MB of checkpoints (0: undo replays the shots); out of range or not a number is refused.
     expect(paceFeel(new URLSearchParams('?keystone.undo=0'))).toEqual({ ...DEFAULT_FEEL, undoMB: 0 });
     expect(paceFeel(new URLSearchParams('?keystone.undo=256')).undoMB).toBe(256);

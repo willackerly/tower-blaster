@@ -75,6 +75,11 @@ export interface PaceFeel {
    * 'classic' always opens on the 3/4 view from the par line's side at 12 degrees, as before (keystone.view=classic).
    */
   view: OpeningView;
+  /**
+   * The impact marker (PT14, docs/game/aim-clarity.md): a reticle on the face the aimed shot's flight first touches
+   * (aim.ts arcContact), for every shot, not only a blast weapon's zone. On by default; keystone.impact=0 off.
+   */
+  impact: boolean;
 }
 
 /** How the opening view is chosen (PaceFeel.view). */
@@ -107,7 +112,7 @@ export const MAX_UNDO_MB = 65536;
 /** keystone.undo when the URL sets none: a dozen shots of a 10k level. */
 export const DEFAULT_UNDO_MB = 1024;
 
-/** The URL's keystone.hitstop, keystone.slowmo, keystone.tailskip, keystone.follow, keystone.shake, keystone.rapid, keystone.turnview, keystone.arcs, keystone.marks (0 or 1 each), keystone.budget (ms, 0 to 1000), keystone.undo (MB, 0 to MAX_UNDO_MB), keystone.frames (all, half, auto), keystone.launch (high, level), keystone.balls (painted, plain) and keystone.view (goals, classic); any other value is refused. */
+/** The URL's keystone.hitstop, keystone.slowmo, keystone.tailskip, keystone.follow, keystone.shake, keystone.rapid, keystone.turnview, keystone.arcs, keystone.marks (0 or 1 each), keystone.budget (ms, 0 to 1000), keystone.undo (MB, 0 to MAX_UNDO_MB), keystone.frames (all, half, auto), keystone.launch (high, level), keystone.balls (painted, plain), keystone.view (goals, classic) and keystone.impact (0 or 1); any other value is refused. */
 export function paceFeel(q: URLSearchParams): PaceFeel {
   const flag = (k: string, dflt: boolean) => {
     const v = q.get(k);
@@ -118,7 +123,7 @@ export function paceFeel(q: URLSearchParams): PaceFeel {
   if (!(budgetMs >= 0 && budgetMs <= 1000)) throw new Error(`keystone.budget must be from 0 to 1000 ms (0: no valve): ${b}`);
   const u = q.get('keystone.undo'), undoMB = u === null ? DEFAULT_UNDO_MB : u.trim() === '' ? NaN : Number(u);
   if (!(undoMB >= 0 && undoMB <= MAX_UNDO_MB)) throw new Error(`keystone.undo must be from 0 to ${MAX_UNDO_MB} MB (0: undo replays the shots): ${u}`);
-  return { hitStop: flag('keystone.hitstop', false), slowMo: flag('keystone.slowmo', false), budgetMs, tailSkip: flag('keystone.tailskip', true), follow: flag('keystone.follow', false), shake: flag('keystone.shake', false), frames: frameMode(q.get('keystone.frames')), rapid: flag('keystone.rapid', true), turnView: flag('keystone.turnview', true), arcs: flag('keystone.arcs', true), undoMB, launch: launchMode(q.get('keystone.launch')), balls: ballStyle(q.get('keystone.balls')), marks: flag('keystone.marks', true), view: openingView(q.get('keystone.view')) };
+  return { hitStop: flag('keystone.hitstop', false), slowMo: flag('keystone.slowmo', false), budgetMs, tailSkip: flag('keystone.tailskip', true), follow: flag('keystone.follow', false), shake: flag('keystone.shake', false), frames: frameMode(q.get('keystone.frames')), rapid: flag('keystone.rapid', true), turnView: flag('keystone.turnview', true), arcs: flag('keystone.arcs', true), undoMB, launch: launchMode(q.get('keystone.launch')), balls: ballStyle(q.get('keystone.balls')), marks: flag('keystone.marks', true), view: openingView(q.get('keystone.view')), impact: flag('keystone.impact', true) };
 }
 
 /** Throws unless f's budget is a number of ms from 0 to 1000 (the Scene panel's field can hold anything). */
@@ -149,6 +154,7 @@ export function writePaceFeel(f: PaceFeel, q: URLSearchParams): void {
   if (f.balls !== DEFAULT_FEEL.balls) q.set('keystone.balls', f.balls);
   if (!f.marks) q.set('keystone.marks', '0');
   if (f.view !== DEFAULT_FEEL.view) q.set('keystone.view', f.view);
+  if (!f.impact) q.set('keystone.impact', '0');
 }
 
 /** Hit-stop is counted in frames of 60 Hz, whatever the display's rate. */
@@ -165,8 +171,8 @@ export const VALVE_MIN = 0.25;
  * frames looked the same at both.
  */
 export const DEFAULT_BUDGET_MS = 14;
-/** No juice, the valve at its default budget, the tail skip on, a camera only the player moves, every frame drawn, rapid fire, instant undo in DEFAULT_UNDO_MB, shots from high, painted balls, engraved stones, an opening view that shows the goals. */
-export const DEFAULT_FEEL: Readonly<PaceFeel> = { hitStop: false, slowMo: false, budgetMs: DEFAULT_BUDGET_MS, tailSkip: true, follow: false, shake: false, frames: 'all', rapid: true, turnView: true, arcs: true, undoMB: DEFAULT_UNDO_MB, launch: 'high', balls: 'painted', marks: true, view: 'goals' };
+/** No juice, the valve at its default budget, the tail skip on, a camera only the player moves, every frame drawn, rapid fire, instant undo in DEFAULT_UNDO_MB, shots from high, painted balls, engraved stones, an opening view that shows the goals, the impact marker. */
+export const DEFAULT_FEEL: Readonly<PaceFeel> = { hitStop: false, slowMo: false, budgetMs: DEFAULT_BUDGET_MS, tailSkip: true, follow: false, shake: false, frames: 'all', rapid: true, turnView: true, arcs: true, undoMB: DEFAULT_UNDO_MB, launch: 'high', balls: 'painted', marks: true, view: 'goals', impact: true };
 /**
  * Owed time the clock keeps, ms; beyond it the rest is dropped (slow motion, not a burst of catch-up
  * steps after a stall). As the viewer's free loop (loop.ts FREE_MAX_LAG_MS).

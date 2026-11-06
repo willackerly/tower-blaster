@@ -208,6 +208,59 @@ export async function reachFrames() {
   };
 }
 
+/**
+ * The impact marker (PT14, Renderer.impact): a wall 6 m ahead, its front face at z = -5.75, and a marker of radius
+ * 1.2 on that face at [0.2, 2.1, -5.75], square to its normal (+z). Frames without the marker, with it, and hidden
+ * again; the colour change at the centre, on the ring at the radius (in the face's plane), 0.6 of the way out, and
+ * outside the zone's quad; the zone's own record.
+ */
+export async function impactFrames() {
+  const { device } = await sharedDevice({ timestamps: false });
+  device.pushErrorScope('validation');
+  const point: V3 = [0.2, 2.1, -5.75], R = 1.2, eye: V3 = [0, 2, 0];
+  const descs = [box([0, 2, -6], [2.5, 2, 0.25])];
+  const src = new SnapshotSource(device);
+  src.reset(descs);
+  src.update(snapshotOf(descs), descs);
+  const rend = new Renderer(device, { size: [W, H] });
+  rend.look = { ...LOOKS.hazy!, bloomMix: 0, vignette: 0 };
+  rend.toggles.trail = false;
+  rend.setSource(src);
+  const f: FrameParams = { ...camera(eye, [0, 2, -6]), time: 0.5 };
+  const before = (await rend.render(f, true, true))!.pixels!;
+  const compiledBefore = (rend.impactMark as unknown as { gpu: unknown }).gpu !== null;
+  rend.impact(point, [0, 0, 2], R); // any length: the zone keeps the unit normal
+  const shown = rend.impactMark.shown, blastShown = rend.reachZone.shown;
+  const after = (await rend.render(f, true, true))!.pixels!;
+  const later = (await rend.render({ ...f, time: 1.25 }, true, true))!.pixels!;
+  rend.impact(null);
+  const hidden = (await rend.render(f, true, true))!.pixels!;
+  const err = await device.popErrorScope();
+  rend.destroy();
+  const vp = multiply(perspective(FOV, W / H, 0.1, 400), lookAt(eye, [0, 2, -6]));
+  const px = (p: V3): [number, number] => {
+    const [x, y, z] = p, c = [0, 1, 2, 3].map((r) => vp[r]! * x + vp[4 + r]! * y + vp[8 + r]! * z + vp[12 + r]!);
+    return [Math.round(((c[0]! / c[3]! + 1) / 2) * W - 0.5), Math.round(((1 - c[1]! / c[3]!) / 2) * H - 0.5)];
+  };
+  const gain = ([x, y]: [number, number]) => { const a = rgb(after, x, y), b = rgb(before, x, y); return { r: a[0]! - b[0]!, g: a[1]! - b[1]!, b: a[2]! - b[2]!, warm: a[0]! - a[2]! - (b[0]! - b[2]!) }; };
+  const ring = (k: number) => { const out: ReturnType<typeof gain>[] = []; for (let i = 0; i < 32; i++) { const a = (2 * Math.PI * i) / 32; out.push(gain(px([point[0] + k * R * Math.cos(a), point[1] + k * R * Math.sin(a), point[2]]))); } return out; };
+  const mean = (a: ReturnType<typeof gain>[], key: 'r' | 'g' | 'b' | 'warm') => a.reduce((t, v) => t + v[key], 0) / a.length;
+  const edge = ring(0.98), mid = ring(0.6);
+  // Outside the zone's quad (1.06 R: the dark stroke past the edge, which on a face square to the view reaches a hair past
+  // the sphere's own silhouette) nothing changes; still (no ripple) between times.
+  const [scx, scy] = px(point), sil = discPx(1.06 * R, Math.hypot(...point.map((v, k) => v - eye[k]!))) + 2;
+  let outsideChanged = 0, hiddenDiff = 0, timeDiff = 0;
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+    hiddenDiff = Math.max(hiddenDiff, Math.abs(luma(hidden, x, y) - luma(before, x, y)));
+    timeDiff = Math.max(timeDiff, Math.abs(luma(later, x, y) - luma(after, x, y)));
+    if (Math.hypot(x - scx, y - scy) > sil && Math.abs(luma(after, x, y) - luma(before, x, y)) > 1) outsideChanged++;
+  }
+  return {
+    error: err?.message ?? null, compiledBefore, shown, blastShown, outsideChanged, hiddenDiff, timeDiff,
+    centre: gain(px(point)), edge: { warm: mean(edge, 'warm'), r: mean(edge, 'r') }, mid: { warm: mean(mid, 'warm'), r: mean(mid, 'r') },
+  };
+}
+
 export interface LineupCase {
   look: 'hazy' | 'real' | 'candy';
   /** Turn the painted ball 90 degrees about the view axis (z): its band then runs up and down. */
