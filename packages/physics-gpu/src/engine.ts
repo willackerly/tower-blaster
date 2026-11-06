@@ -230,6 +230,9 @@ export function restitutionStatsOf(slots: ArrayBuffer, pairsWritten: number, max
  */
 export const STEP_STAGES = ['prepare', 'broadphase', 'narrowphase', 'coloring', 'solve'] as const;
 export type StepStage = (typeof STEP_STAGES)[number];
+/** Where probeStages() calls its mark, in order: the start, then after each stage, with the solve's parts (SOLVE_PARTS) before the solve's end. */
+export const PROBE_MARKS = ['start', 'prepare', 'broadphase', 'narrowphase', 'coloring', 'setup', 'sweeps', 'solve'] as const;
+export type ProbeMark = (typeof PROBE_MARKS)[number];
 
 export class GpuAvbdEngine implements PhysicsEngine {
   readonly info: EngineInfo;
@@ -520,7 +523,7 @@ export class GpuAvbdEngine implements PhysicsEngine {
    * at the start and after each of STEP_STAGES, between passes, so the probe can put a timestamped pass
    * there. The work submitted is step()'s, plus whatever `mark` encodes.
    */
-  probeStages(mark: (enc: GPUCommandEncoder, at: 'start' | StepStage) => void): void {
+  probeStages(mark: (enc: GPUCommandEncoder, at: ProbeMark) => void): void {
     this.encodeStep(undefined, mark);
   }
 
@@ -543,7 +546,7 @@ export class GpuAvbdEngine implements PhysicsEngine {
     };
   }
 
-  private encodeStep(solveTimestamps?: GPUComputePassTimestampWrites, mark?: (enc: GPUCommandEncoder, at: 'start' | StepStage) => void): void {
+  private encodeStep(solveTimestamps?: GPUComputePassTimestampWrites, mark?: (enc: GPUCommandEncoder, at: ProbeMark) => void): void {
     const { device, parts, scene } = this;
     if (!device || !parts || !scene) throw new Error('init() first');
     if (this.failure) throw new Error(`GpuAvbdEngine: ${this.failure}`);
@@ -583,7 +586,7 @@ export class GpuAvbdEngine implements PhysicsEngine {
     mark?.(enc, 'narrowphase');
     parts.col.encode(enc, n, scene.ground?.y ?? 0, parts.sleep?.seed);
     mark?.(enc, 'coloring');
-    parts.solver.solve(enc, n, p.iterations, solveTimestamps);
+    parts.solver.solve(enc, n, p.iterations, solveTimestamps, mark && ((at) => mark(enc, at)));
     parts.sleep?.encodeSleep(enc, n);
     mark?.(enc, 'solve');
     device.queue.submit([enc.finish()]);
