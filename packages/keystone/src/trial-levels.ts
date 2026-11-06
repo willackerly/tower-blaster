@@ -10,7 +10,9 @@
 //   T-X<n>   the mode probes' structures (@tb/mode-probes X1 to X4), rebuilt
 //            from level parts in cells (h = 0.5 m, the probes' cell);
 //   T-I<n>   ice (ice.ts): blocks that crack and shatter, alone and mixed
-//            with stone, to see and tune before any rated level uses ice.
+//            with stone, to see and tune before any rated level uses ice;
+//   T-W<n>   L1 to L5 with the new weapons in the rack (weapons plan steps 5
+//            and 6), to play them where the bare-ammo levels are known.
 // Every trial is an outcome level with no cast stars: it plays for its
 // objective's star and the tally, and the door lists it under Trials, unrated.
 // Left out, and why (docs/game/trials.md): S5 (S4 with the scenario's own
@@ -24,6 +26,7 @@
 // and drafts B1c and B3d (B1 and B3 as rated, but for the objective).
 import { BOMB, outcomeLevel, RAM, thirdBondWall } from './big-levels.ts';
 import { DRAFTS } from './drafts.ts';
+import { L1, L2, L3, L4, L5 } from './chamber-levels.ts';
 import type { LevelDef, Part } from './level.ts';
 import type { RackItem } from './rack.ts';
 import { scenarioLevel } from './scenario-part.ts';
@@ -197,8 +200,25 @@ const ICE_TRIALS: LevelDef[] = [
   trial(outcomeLevel('T-I3', 'Frozen Keep', [{ kind: 'block', at: [-1.5, 0, -1.5], size: [3, 8, 3], material: 'stone', courses: [4, 5, 6, 7].map((k) => ({ k, material: 'ice' as const, ...(k === 7 ? { role: 'crown' as const } : {}) })) }], [1.5, 1.5], 8, [...TRIAL_RACK_SMALL], { world: 5, objective: { kind: 'crowns' } }), iceNote('a 3 x 3 stone keep, its top four courses ice')),
 ];
 
-/** The trials in door order: scenarios, the mode probes' structures, the drafts, then ice. */
-export const TRIAL_LEVELS: readonly LevelDef[] = [...SCENARIO_TRIALS, ...PROBE_TRIALS, ...DRAFT_TRIALS, ...ICE_TRIALS];
+/**
+ * The new weapons on the levels whose bare ammo is best known (docs/game/weapon-trials.md): L1 to L5's structures
+ * and launchers as rated (the lot grown to the launcher ring less 3 cells, as every outcome level's), scored on their objective alone (no par, no cast stars), with a rack of the weapons
+ * the weapons plan's steps 5 and 6 added (Scatter: five marble-weight pellets on a fan) and one marble for the
+ * finishing touch.
+ */
+export const WEAPON_TRIAL_RACK: readonly RackItem[] = ['w-scatter', 'w-scatter', 'marble'];
+
+function weaponTrial(base: LevelDef, k: number): LevelDef {
+  const { lGold: _g, solutions: _s, stars: _t, ...rest } = base;
+  // Scored on outcome, a shot must stay live to the launcher ring less 3 cells (validateLevel's launcher issue): the lot grows to it.
+  const r = base.launcher.radius - 3, lot = { min: [Math.min(base.lot.min[0], -r), Math.min(base.lot.min[1], -r)] as [number, number], max: [Math.max(base.lot.max[0], r), Math.max(base.lot.max[1], r)] as [number, number] };
+  return trial({ ...rest, lot, id: `T-W${k}`, name: `${base.name}: New Arms`, version: 1, world: 5, scoring: 'outcome', par: WEAPON_TRIAL_RACK.length, rack: [...WEAPON_TRIAL_RACK] }, { from: `weapons: ${base.id}'s structure with the new weapons` });
+}
+
+const WEAPON_TRIALS: LevelDef[] = [L1, L2, L3, L4, L5].map((l, i) => weaponTrial(l, i + 1));
+
+/** The trials in door order: scenarios, the mode probes' structures, the drafts, ice, then the new weapons. */
+export const TRIAL_LEVELS: readonly LevelDef[] = [...SCENARIO_TRIALS, ...PROBE_TRIALS, ...DRAFT_TRIALS, ...ICE_TRIALS, ...WEAPON_TRIALS];
 
 /** Whether level `id` is a trial (unrated). */
 export const isTrial = (id: string): boolean => id.toUpperCase().startsWith('T-');

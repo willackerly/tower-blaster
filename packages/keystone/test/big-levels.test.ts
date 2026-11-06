@@ -92,7 +92,7 @@ describe('big levels', () => {
     // Trial ids (T-...) carry a lower-case letter only in their drafts' names: the lookup is case-blind both ways.
     expect(seriesOf('t-b1a')).toBe(TRIAL_LEVELS);
     expect(levelById('t-s4').id).toBe('T-S4');
-    expect(() => levelById('B9')).toThrow(/unknown level B9; known: L1, L2, L3, L4, L5, B1, B2, B3, U1, U2, U3 and \d+ trials \(T-S1 to T-I3\)/);
+    expect(() => levelById('B9')).toThrow(/unknown level B9; known: L1, L2, L3, L4, L5, B1, B2, B3, U1, U2, U3 and \d+ trials \(T-S1 to T-W5\)/);
   });
 
   it('a third-bond wall shifts every other course a third of a cube', () => {

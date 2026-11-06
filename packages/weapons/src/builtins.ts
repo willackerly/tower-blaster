@@ -2,10 +2,12 @@
 // 60 Hz: the viewer's proj.weapon=<name> (scaled with the world, as the
 // grenade is), and examples to copy. Every number is a starting point to tune.
 //
-// Energy: each built-in carries one grenade (grenadeEnergies, yield.ts: the
-// viewer's grenade, which is also B1-B3's bomb), within 1%, so a rack of them is
-// a choice of how the energy is spread, not of how much there is. Until
-// 2026-11-02 the firework carried 0.39 grenades and the cluster 0.80.
+// Energy: each explosive built-in carries one grenade (grenadeEnergies, yield.ts:
+// the viewer's grenade, which is also B1-B3's bomb), within 1%, so a rack of them
+// is a choice of how the energy is spread, not of how much there is (the sized
+// grenades S to XL are 1/4 to 16). Until 2026-11-02 the firework carried 0.39
+// grenades and the cluster 0.80. Scatter is kinetic (0 grenades): the rack
+// charges it the energy it is launched with, as a marble.
 import { DEFAULT_GRENADE } from './grenade.ts';
 import { grenadeAsSpec, type WeaponSpec } from './spec.ts';
 
@@ -35,6 +37,25 @@ export const CLUSTER: WeaponSpec = {
   },
 };
 
+/**
+ * Buckshot (weapons plan step 5): a heavy slug that, 0.12 s out of the launcher, breaks into 5 pellets on a level fan
+ * across its heading (+-60 degrees), spread 4 units/s. The split conserves momentum (the pellets weigh what the slug
+ * weighed, within 0.1%, and the fan is centred), so the pellets' centre of mass flies on exactly where the slug would
+ * have, and they hit a band across the target a few cubes wide at a typical range: five marble-weight hits at once
+ * (density 30, a pellet 1.08 cubes; the rack's iron marble is 1.05 plaster cubes), no explosive. Each pellet is spent
+ * 10 s after it splits off. Pure kinetic energy: 0 grenades. Until 2026-11-06 (first draft) density 6: pellets of a
+ * fifth of a cube, which moved 1% of L1 (pnpm keystone:fun).
+ */
+export const SCATTER: WeaponSpec = {
+  version: 1, name: 'scatter',
+  shell: { shape: { kind: 'sphere', radius: 0.35 }, density: 30, speed: [10, 30] },
+  rules: [{ when: { after: 0.12 }, do: [{ split: { into: 5, child: 'pellet', pattern: 'fan', angle: 60, spread: 4, at: 0.9, conserve: true } }] }],
+  children: {
+    // 0.35 / 5^(1/3) = 0.2047: five of them weigh the slug.
+    pellet: { shell: { shape: { kind: 'sphere', radius: 0.2047 }, density: 30 }, rules: [{ when: { after: 10 }, do: [{ remove: true }] }] },
+  },
+};
+
 /** The built-in grenade as a spec (Grenades' DEFAULT_GRENADE, in a 0.2-radius iron ball). */
 export const GRENADE_WEAPON: WeaponSpec = grenadeAsSpec(DEFAULT_GRENADE, { shape: { kind: 'sphere', radius: 0.2 }, density: 8, speed: [5, 40] });
 
@@ -56,5 +77,5 @@ export const GRENADE_XL = sized('grenadexl', 12.6, 0.5);
 
 /** By name: the viewer's proj.weapon values besides grenade (which keeps its own grenade.* knobs), and the rack's w-<name> defaults. */
 export const BUILTIN_WEAPONS: Readonly<Record<string, WeaponSpec>> = {
-  firework: FIREWORK, cluster: CLUSTER, grenades: GRENADE_S, grenadem: GRENADE_M, grenadel: GRENADE_L, grenadexl: GRENADE_XL,
+  firework: FIREWORK, cluster: CLUSTER, scatter: SCATTER, grenades: GRENADE_S, grenadem: GRENADE_M, grenadel: GRENADE_L, grenadexl: GRENADE_XL,
 };

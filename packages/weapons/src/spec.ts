@@ -27,15 +27,18 @@
 //                                  engine-api Blast centred on the munition
 //                                  (plus offset), not pushing it
 //   { remove: true }               the munition is spent (engine-api RemoveEvent)
-//   { split: { into, child, pattern?, angle?, spread?, at? } }
+//   { split: { into, child, pattern?, angle?, spread?, at?, conserve? } }
 //                                  `into` of the named child, placed on a
-//                                  pattern around the munition (ring, sphere or
-//                                  cone; at: distance from its centre, default
-//                                  its bounding radius) with its velocity plus
-//                                  `spread` outward; the munition is removed
+//                                  pattern around the munition (ring, sphere,
+//                                  cone or fan; at: distance from its centre,
+//                                  default its bounding radius) with its velocity
+//                                  plus `spread` outward, from its state in the
+//                                  engine (a relative spawn); the munition is
+//                                  removed. conserve: the burst adds no momentum
+//                                  (splitPattern)
 // An action after remove or split in the same rule is refused (there is
 // nothing left to act on), as engines refuse a blast centred on a removed body.
-import type { ShapeDesc, Vec3 } from '@tb/engine-api';
+import { cosSin, headingBasis, type ShapeDesc, type SpawnAxes, type Vec3 } from '@tb/engine-api';
 import { boundingRadius } from '@tb/geom';
 import { type GrenadeSpec, GRENADE_LIMITS } from './grenade.ts';
 
@@ -81,21 +84,30 @@ export interface BlastSpec {
   offset?: Vec3;
 }
 
-export const SPLIT_PATTERNS = ['ring', 'sphere', 'cone'] as const;
+export const SPLIT_PATTERNS = ['ring', 'sphere', 'cone', 'fan'] as const;
 export type SplitPattern = (typeof SPLIT_PATTERNS)[number];
 
 export interface SplitSpec {
   into: number;
   /** A key of the splitting munition's children. */
   child: string;
-  /** ring: horizontal circle; sphere: evenly over a sphere; cone: around the velocity (up when at rest). Default sphere. */
+  /**
+   * ring: horizontal circle; sphere: evenly over a sphere; cone: around the velocity (up when at rest); fan: a
+   * level arc across the velocity, from -angle to +angle of it. Default sphere.
+   */
   pattern?: SplitPattern;
-  /** cone: half angle, degrees (default 30). */
+  /** cone: half angle; fan: half the arc; degrees (default 30). */
   angle?: number;
   /** Speed added outward along each child's direction, units/s (default 0). */
   spread?: number;
   /** Distance of each child's centre from the munition's, units (default the munition's bounding radius). */
   at?: number;
+  /**
+   * Momentum-conserving: the pattern's directions are centred (their mean taken off) before they place and
+   * push the children, so offsets and spreads sum to zero and the children's centre of mass goes on from the
+   * munition's position with its velocity (a cone becomes a ring across the heading). Default false.
+   */
+  conserve?: boolean;
 }
 
 export type Action = { blast: BlastSpec } | { remove: true } | { split: SplitSpec };
@@ -124,13 +136,13 @@ export function isWeaponSpec(x: unknown): x is WeaponSpec {
 export type WeaponIssueCode =
   | 'json' | 'version' | 'name' | 'key' | 'type' | 'range' | 'shape'
   | 'trigger' | 'action' | 'order' | 'child' | 'depth' | 'budget' | 'crowded'
-  | 'unused-child' | 'never-spent'
+  | 'unused-child' | 'never-spent' | 'mass'
   /** Over a device tier's caps (tiers.ts tierIssues; validateWeapon never gives it). */
   | 'tier';
 
 /**
  * A problem with a spec, at `path` (dotted, e.g. "children.star.rules.0.do.1").
- * Errors refuse the spec; warnings (unused-child, never-spent) do not.
+ * Errors refuse the spec; warnings (unused-child, never-spent, mass) do not.
  */
 export interface WeaponIssue {
   code: WeaponIssueCode;
@@ -283,18 +295,20 @@ export function validateWeapon(x: unknown): { spec: WeaponSpec | null; issues: W
   };
 
   const split = (v: unknown, path: string, children: Obj | undefined): SplitSpec | undefined => {
-    if (!isObj(v)) { err('action', path, 'must be { into, child, pattern?, angle?, spread?, at? }'); return undefined; }
-    keys(v, path, ['into', 'child', 'pattern', 'angle', 'spread', 'at']);
+    if (!isObj(v)) { err('action', path, 'must be { into, child, pattern?, angle?, spread?, at?, conserve? }'); return undefined; }
+    keys(v, path, ['into', 'child', 'pattern', 'angle', 'spread', 'at', 'conserve']);
     const into = num(v.into, at(path, 'into'), WEAPON_LIMITS.into, true);
     if (typeof v.child !== 'string' || !children || !(v.child in children)) { err('child', at(path, 'child'), `names no child of this munition: ${JSON.stringify(v.child)}`); return undefined; }
     if (v.pattern !== undefined && !SPLIT_PATTERNS.includes(v.pattern as SplitPattern)) err('range', at(path, 'pattern'), `must be one of ${SPLIT_PATTERNS.join(', ')}, got ${JSON.stringify(v.pattern)}`);
     const angle = optNum(v, 'angle', path, WEAPON_LIMITS.angle), spread = optNum(v, 'spread', path, WEAPON_LIMITS.spread), dist = optNum(v, 'at', path, WEAPON_LIMITS.at);
+    if (v.conserve !== undefined && typeof v.conserve !== 'boolean') err('type', at(path, 'conserve'), 'must be true or false');
     if (into === undefined) return undefined;
     const out: SplitSpec = { into, child: v.child };
     if (SPLIT_PATTERNS.includes(v.pattern as SplitPattern)) out.pattern = v.pattern as SplitPattern;
     if (angle !== undefined) out.angle = angle;
     if (spread !== undefined) out.spread = spread;
     if (dist !== undefined) out.at = dist;
+    if (typeof v.conserve === 'boolean') out.conserve = v.conserve;
     return out;
   };
 
@@ -367,6 +381,7 @@ export function validateWeapon(x: unknown): { spec: WeaponSpec | null; issues: W
   if (m && !issues.some((i) => i.level === 'error')) {
     spec = { version: WEAPON_SPEC_VERSION, ...(typeof x.name === 'string' ? { name: x.name } : {}), ...m };
     checkCrowding(spec, (path, message) => err('crowded', path, message));
+    checkConservedMass(spec, (path, message) => warn('mass', path, message));
     const b = weaponBudget(spec);
     if (b.bodies > MAX_WEAPON_BODIES) err('budget', '', `can spawn ${b.bodies} bodies in all, over the cap of ${MAX_WEAPON_BODIES}`);
     if (issues.some((i) => i.level === 'error')) spec = null;
@@ -496,30 +511,11 @@ export function grenadeAsSpec(g: GrenadeSpec, shell: ShellSpec, name = 'grenade'
 // every machine places children identically (ECMAScript leaves the accuracy
 // of Math.sin and Math.cos open, as it does Math.pow's).
 
-/** cos and sin of x (|x| <= 2 pi), by range reduction to [-pi/4, pi/4] and fixed Taylor series. */
-export function cosSin(x: number): [number, number] {
-  const PI = 3.141592653589793, H = PI / 2;
-  // x = q (pi/2) + r with |r| <= pi/4.
-  const q = Math.round(x / H), r = x - q * H, r2 = r * r;
-  // Horner forms of the series to r^17, well under an ulp on [-pi/4, pi/4].
-  let c = 1, s = 1;
-  for (let k = 16; k >= 2; k -= 2) c = 1 - (r2 / (k * (k - 1))) * c;
-  for (let k = 17; k >= 3; k -= 2) s = 1 - (r2 / (k * (k - 1))) * s;
-  s *= r;
-  switch (((q % 4) + 4) % 4) {
-    case 0: return [c, s];
-    case 1: return [-s, c];
-    case 2: return [-c, -s];
-    default: return [s, -c];
-  }
-}
+/** cos and sin by fixed series (engine-api force.ts, which vibrations use too); re-exported here, where splits first needed it. */
+export { cosSin };
 
-/**
- * The n unit directions of a split. ring: around +y in the horizontal plane;
- * sphere: a Fibonacci sphere; cone: n directions at `angle` degrees around
- * `axis` (unit; a single child goes along the axis).
- */
-export function splitDirections(n: number, pattern: SplitPattern, angleDeg = 30, axis: Vec3 = [0, 1, 0]): Vec3[] {
+/** Each child's direction in the axes its pattern is laid out in (splitPattern). */
+function localDirections(n: number, pattern: SplitPattern, angleDeg: number): Vec3[] {
   const TAU = 6.283185307179586, GOLDEN = 2.399963229728653;
   const out: Vec3[] = [];
   if (pattern === 'ring') {
@@ -537,20 +533,49 @@ export function splitDirections(n: number, pattern: SplitPattern, angleDeg = 30,
     }
     return out;
   }
-  // Cone: an orthonormal basis (u, w) across the axis.
-  const [ax, ay, az] = axis;
-  const t: Vec3 = Math.abs(ay) < 0.9 ? [0, 1, 0] : [1, 0, 0];
-  let u: Vec3 = [ay * t[2] - az * t[1], az * t[0] - ax * t[2], ax * t[1] - ay * t[0]];
-  const ul = Math.sqrt(u[0] * u[0] + u[1] * u[1] + u[2] * u[2]);
-  u = [u[0] / ul, u[1] / ul, u[2] / ul];
-  const w: Vec3 = [ay * u[2] - az * u[1], az * u[0] - ax * u[2], ax * u[1] - ay * u[0]];
-  if (n === 1) return [[ax, ay, az]];
-  const [ca, sa] = cosSin((angleDeg / 360) * TAU);
+  if (n === 1) return [[0, 1, 0]];
+  const a = (angleDeg / 360) * TAU;
+  if (pattern === 'fan') {
+    // Level, across the heading (heading axes' local x), from -angle to +angle.
+    for (let i = 0; i < n; i++) {
+      const [c, s] = cosSin(-a + (2 * a * i) / (n - 1));
+      out.push([s, c, 0]);
+    }
+    return out;
+  }
+  // Cone: at `angle` round the heading (local +y).
+  const [ca, sa] = cosSin(a);
   for (let i = 0; i < n; i++) {
     const [c, s] = cosSin((TAU * i) / n);
-    out.push([ca * ax + sa * (c * u[0] + s * w[0]), ca * ay + sa * (c * u[1] + s * w[1]), ca * az + sa * (c * u[2] + s * w[2])]);
+    out.push([sa * c, ca, sa * s]);
   }
   return out;
+}
+
+/**
+ * A split's n child directions and the axes they are in (engine-api SpawnAxes): ring (around +y, level) and
+ * sphere (a Fibonacci sphere) in world axes; cone (at `angle` degrees round the heading; one child along it) and
+ * fan (a level arc across the heading, from -angle to +angle; one child along it) in heading axes, so the engine
+ * lays them round the munition's velocity as the split happens. conserve: the directions less their mean, so
+ * they sum to zero (SplitSpec.conserve).
+ */
+export function splitPattern(n: number, pattern: SplitPattern, angleDeg = 30, conserve = false): { dirs: Vec3[]; axes: SpawnAxes } {
+  const dirs = localDirections(n, pattern, angleDeg), axes: SpawnAxes = pattern === 'cone' || pattern === 'fan' ? 'heading' : 'world';
+  if (!conserve) return { dirs, axes };
+  const m: Vec3 = [0, 0, 0];
+  for (const d of dirs) for (let k = 0; k < 3; k++) m[k]! += d[k]! / n;
+  return { dirs: dirs.map((d) => [d[0] - m[0], d[1] - m[1], d[2] - m[2]]), axes };
+}
+
+/**
+ * The n directions of a split in world terms, for a munition heading along unit `axis` (cone and fan; the
+ * engine's 'heading' axes, engine-api headingBasis): splitPattern laid out.
+ */
+export function splitDirections(n: number, pattern: SplitPattern, angleDeg = 30, axis: Vec3 = [0, 1, 0], conserve = false): Vec3[] {
+  const { dirs, axes } = splitPattern(n, pattern, angleDeg, conserve);
+  if (axes === 'world') return dirs;
+  const [x, y, z] = headingBasis(axis);
+  return dirs.map((d) => [x[0] * d[0] + y[0] * d[1] + z[0] * d[2], x[1] * d[0] + y[1] * d[1] + z[1] * d[2], x[2] * d[0] + y[2] * d[1] + z[2] * d[2]]);
 }
 
 /**
@@ -565,13 +590,28 @@ function checkCrowding(spec: WeaponSpec, fail: (path: string, message: string) =
       if (!('split' in a)) return;
       const s = a.split, child = m.children![s.child]!;
       const dist = s.at ?? boundingRadius(m.shell.shape), cr = boundingRadius(child.shell.shape);
-      const dirs = splitDirections(s.into, s.pattern ?? 'sphere', s.angle ?? 30);
+      const dirs = splitDirections(s.into, s.pattern ?? 'sphere', s.angle ?? 30, [0, 1, 0], s.conserve ?? false);
       let gap = Infinity;
       for (let i = 0; i < dirs.length; i++) for (let j = i + 1; j < dirs.length; j++) {
         const d = Math.hypot(dirs[i]![0] - dirs[j]![0], dirs[i]![1] - dirs[j]![1], dirs[i]![2] - dirs[j]![2]) * dist;
         gap = Math.min(gap, d);
       }
       if (gap < 2 * cr) fail(`${path ? `${path}.` : ''}rules.${ri}.do.${ai}.split`, `${s.into} of "${s.child}" (radius ${cr}) at ${dist} from the centre start ${gap.toFixed(4)} apart, closer than ${2 * cr}: raise at, or split into fewer`);
+    }));
+  }
+}
+
+/**
+ * Warns where a conserving split's children do not weigh what the munition weighed: the burst adds no momentum
+ * (their centre of mass carries its velocity on), but the total is the children's mass times that velocity.
+ */
+function checkConservedMass(spec: WeaponSpec, warn: (path: string, message: string) => void): void {
+  const mass = (sh: ShellSpec) => sh.density * (sh.shape.kind === 'sphere' ? (4 / 3) * Math.PI * sh.shape.radius ** 3 : 8 * sh.shape.half[0] * sh.shape.half[1] * sh.shape.half[2]);
+  for (const { path, m } of munitions(spec)) {
+    m.rules.forEach((r, ri) => r.do.forEach((a, ai) => {
+      if (!('split' in a) || !a.split.conserve) return;
+      const ratio = (a.split.into * mass(m.children![a.split.child]!.shell)) / mass(m.shell);
+      if (Math.abs(ratio - 1) > 0.01) warn(`${path ? `${path}.` : ''}rules.${ri}.do.${ai}.split`, `its ${a.split.into} children weigh ${ratio.toFixed(3)} x the munition: momentum is kept per unit mass, not in total`);
     }));
   }
 }

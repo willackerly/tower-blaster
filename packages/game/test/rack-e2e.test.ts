@@ -17,9 +17,9 @@ const game = gamePage();
 const RACKS: RackItem[][] = [
   ['marble', 'cannonball', 'drop', 'w-grenade', 'p-beachball', 'p-bowlingball', 'p-wreckingball', 'p-boulder'],
   ['cue', 'p-basketball', 'p-cannonball', 'w-firework', 'w-cluster', 'w-grenades', 'w-grenadem', 'w-grenadel'],
-  ['w-grenadexl'],
+  ['w-grenadexl', 'w-scatter'],
 ];
-/** Blasts each load sets off: the grenade's one; 12 stars, 6 bomblets and three sized grenades; the XL grenade. */
+/** Blasts each load sets off: the grenade's one; 12 stars, 6 bomblets and three sized grenades; the XL grenade (scatter's pellets set off none). */
 const BLASTS = [1, 12 + 6 + 3, 1];
 
 /** A miss: launched sideways from azimuth 0 (clear of the ground, however big), or a drop or cue push 20 cells off the lot. */

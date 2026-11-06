@@ -19,31 +19,33 @@
 //           before it (an open one cannot fire up to the lookahead).
 // A rule fires once. Its events go out (are released) when no other rule of
 // the munition that removes or splits it could still fire first, so nothing
-// acts on a removed munition, which engines refuse; a split's also wait until
-// its step is within the lookahead (its children start from the munition's
-// state then). A step already passed when it is released (a reader observing
-// less often than it looks ahead) is moved to the next one.
+// acts on a removed munition, which engines refuse. A step already passed when
+// it is released (a reader observing less often than it looks ahead) is moved
+// to the next one.
 //
-// A split places `into` children on its pattern (splitDirections) around the
-// munition's state at the split step: the free-flight prediction from the
-// observed state, right while it flies free, to rounding: the engines'
-// free flight and freeFlight agree to an ulp or so, not bit for bit, so a
-// reader observing less often places children alike, not identically (a
-// later engine primitive spawns relative to the live state: docs/design/
-// weapons.md step 5). Each child
-// starts at pos + at * dir with velocity vel + spread * dir, unrotated and
-// not spinning, then the munition is removed. Children run their own rules
-// from their spawn step.
+// A split spawns `into` children relative to the munition (engine-api spawn.ts:
+// SpawnEvent.from), so the engine places them from the munition's own state as
+// the split step starts, whatever the reader saw of it and when: every reader
+// cadence that fires the split at the same step spawns the same children, bit
+// for bit. Each child starts at `at` along its pattern direction (splitPattern:
+// ring and sphere in world axes, cone and fan in heading axes, around the
+// munition's velocity), moving with the munition plus `spread` along the
+// direction (and with its spin, which the engine adds), then the munition is
+// removed. With `conserve` the directions are centred first (their mean taken
+// off), so the offsets and the spreads sum to zero and the children's centre of
+// mass carries the munition's position and momentum on (per unit mass: equal to
+// the munition's own when the children weigh what it weighed). Children run
+// their own rules from their spawn step.
 //
 // Ids: a child's id is whatever the engine gives its spawn, by the engine's
 // numbering (spawns in the order they apply: by step, then push order). The
 // caller knows that order and passes idOf (the id of a spawn event it pushed,
 // the same object the runtime returned), which the runtime asks once the
 // spawn has applied (its step is before the observed state's).
-import { type BodyDesc, freeFlight, type InputEvent, type ShapeDesc, type Snapshot, type SpawnEvent, type Vec3 } from '@tb/engine-api';
+import { type BodyDesc, type InputEvent, type ShapeDesc, type Snapshot, type SpawnEvent } from '@tb/engine-api';
 import { boundingRadius } from '@tb/geom';
 import { checkGrenade, flightPath, type GrenadeSpec, type GrenadeWorld, type PathPoint, proximityStep, stepsOf } from './grenade.ts';
-import { type Action, checkWeapon, grenadeAsSpec, isWeaponSpec, type MunitionSpec, type Rule, splitDirections, type Trigger, type WeaponSpec } from './spec.ts';
+import { type Action, checkWeapon, grenadeAsSpec, isWeaponSpec, type MunitionSpec, type Rule, splitPattern, type Trigger, type WeaponSpec } from './spec.ts';
 
 /** Friction and restitution of a shell that sets none (BodyDesc needs both). */
 export const SHELL_FRICTION = 0.5;
@@ -62,7 +64,6 @@ interface RuleLive {
   /** The step it fires at, once committed. */
   due: number | null;
   spends: boolean;
-  splits: boolean;
 }
 
 interface Live {
@@ -112,9 +113,9 @@ export class WeaponRuntime {
     const spec = isWeaponSpec(weapon) ? checkWeapon(weapon) : grenadeAsSpec(checkGrenade(weapon), { shape, density: 1, speed: [0, 0] });
     const g: Live = { id, spawn: null, m: spec, radius: boundingRadius(shape), base: step, rules: spec.rules.map((r) => this.ruleLive(r)) };
     this.live.push(g);
-    const out: InputEvent[] = [];
-    this.pass(g, null, out, []);
-    this.live = this.live.filter((x) => x.rules.length);
+    const out: InputEvent[] = [], born: Live[] = [];
+    this.pass(g, null, out, born);
+    this.live = [...this.live.filter((x) => x.rules.length), ...born];
     return out;
   }
 
@@ -150,7 +151,7 @@ export class WeaponRuntime {
       if ('then' in t) return { k: 'then', a: node(t.then[0]), b: node(t.then[1]), aStep: null };
       return { k: 'any', xs: t.any.map(node) };
     };
-    return { rule, node: node(rule.when), due: null, spends: rule.do.some(spends), splits: rule.do.some((a) => 'split' in a) };
+    return { rule, node: node(rule.when), due: null, spends: rule.do.some(spends) };
   }
 
   /** The step `n` commits to, with its clock at `base`; null: not at any step up to the horizon. */
@@ -195,13 +196,12 @@ export class WeaponRuntime {
       const at = Math.max(next.due!, seen ? seen.step + 1 : -Infinity);
       // Another rule that spends g and is still open could fire before it.
       if (g.rules.some((r) => r !== next && r.spends && r.due === null) && at > horizon) return;
-      if (next.splits && (!seen || at > Math.max(horizon, seen.step + 1))) return;
-      this.fire(g, next, at, seen, out, born);
+      this.fire(g, next, at, out, born);
       g.rules = next.spends ? [] : g.rules.filter((r) => r !== next);
     }
   }
 
-  private fire(g: Live, r: RuleLive, step: number, seen: Seen | null, out: InputEvent[], born: Live[]): void {
+  private fire(g: Live, r: RuleLive, step: number, out: InputEvent[], born: Live[]): void {
     const id = g.id!;
     for (const a of r.rule.do) {
       if ('remove' in a) out.push({ step, kind: 'remove', id });
@@ -209,30 +209,23 @@ export class WeaponRuntime {
         const { offset, ...b } = a.blast;
         out.push({ step, kind: 'blast', blast: { centre: offset ? { body: id, offset } : { body: id }, exclude: [id], ...b } });
       } else {
+        // Children in the munition's frame; the engine places them from its state as the step starts (spawn.ts).
         const sp = a.split, child = g.m.children![sp.child]!;
-        // The munition's state at the split step, from the observed state.
-        const last = seen!.path[seen!.path.length - 1]!;
-        let { p, v } = seen!.path.find((q) => q.step === step) ?? last;
-        if (step > last.step) {
-          const f = flightPathFrom(p, v, step - last.step, this.world);
-          p = f.p; v = f.v;
-        }
-        const speed = Math.sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]);
-        const axis: Vec3 = speed > 1e-9 ? [v[0] / speed, v[1] / speed, v[2] / speed] : [0, 1, 0];
         const dist = sp.at ?? g.radius, spread = sp.spread ?? 0;
-        for (const d of splitDirections(sp.into, sp.pattern ?? 'sphere', sp.angle ?? 30, axis)) {
+        const { dirs, axes } = splitPattern(sp.into, sp.pattern ?? 'sphere', sp.angle ?? 30, sp.conserve ?? false);
+        for (const d of dirs) {
           const body: BodyDesc = {
             shape: child.shell.shape,
-            pos: [p[0] + dist * d[0], p[1] + dist * d[1], p[2] + dist * d[2]],
+            pos: [dist * d[0], dist * d[1], dist * d[2]],
             rot: [0, 0, 0, 1],
-            linVel: [v[0] + spread * d[0], v[1] + spread * d[1], v[2] + spread * d[2]],
+            linVel: [spread * d[0], spread * d[1], spread * d[2]],
             angVel: [0, 0, 0],
             density: child.shell.density,
             friction: child.shell.friction ?? SHELL_FRICTION,
             restitution: child.shell.restitution ?? SHELL_RESTITUTION,
             tag: 0,
           };
-          const spawn: SpawnEvent = { step, kind: 'spawn', body };
+          const spawn: SpawnEvent = { step, kind: 'spawn', body, from: { body: id, axes } };
           out.push(spawn);
           born.push({ id: null, spawn, m: child, radius: boundingRadius(child.shell.shape), base: step, rules: child.rules.map((cr) => this.ruleLive(cr)) });
         }
@@ -242,10 +235,3 @@ export class WeaponRuntime {
   }
 }
 
-function flightPathFrom(p: Vec3, v: Vec3, steps: number, world: GrenadeWorld): { p: Vec3; v: Vec3 } {
-  let pos = p, vel = v;
-  for (let k = 0; k < steps; k++) ({ pos, vel } = freeFlightStep(pos, vel, world));
-  return { p: pos, v: vel };
-}
-
-const freeFlightStep = (p: Vec3, v: Vec3, w: GrenadeWorld) => freeFlight(p, v, w.gravity, w.dt, w.substeps, 1);

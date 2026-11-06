@@ -13,10 +13,14 @@
 //     knock-on. From its first contact (PreviewTrack.contact) a track is an
 //     approximation, and obstacles never move, so a blast's effect on the
 //     world is not shown (the preview draws its sphere instead).
+// A split's children are relative spawns (engine-api spawn.ts): placed from
+// their parent as the step starts, as the engines place them; munitions do
+// not spin here (a shell is fired without spin and nothing turns it before its
+// first contact).
 // The match with a real firing is tested against the f64 reference engine
 // (test/preview.test.ts): before contact, every point, split and blast is the
 // engine's to 1e-9.
-import { blastArea, blastCentre, blastVelocity, checkBlast, freeFlight, type InputEvent, massOf, queueInputs, type ShapeDesc, type Snapshot, type SpawnEvent, TIER_FREE, type Vec3 } from '@tb/engine-api';
+import { blastArea, blastCentre, blastVelocity, type BodyMotion, checkBlast, freeFlight, type InputEvent, massOf, queueInputs, relativeBody, type ShapeDesc, type Snapshot, type SpawnEvent, TIER_FREE, type Vec3 } from '@tb/engine-api';
 import { boundingRadius } from '@tb/geom';
 import { type GrenadeWorld, surfaceDistance } from './grenade.ts';
 import { WeaponRuntime } from './runtime.ts';
@@ -134,11 +138,17 @@ export function previewWeapon(spec: WeaponSpec, launch: PreviewLaunch, world: Gr
 
   let step = 0;
   for (; step < maxSteps; step++) {
-    // Inputs due at this step, in the engines' order, before the step runs.
+    // Inputs due at this step, in the engines' order, before the step runs; a relative spawn reads its parent as the step starts.
+    const atStart = new Map<number, BodyMotion>();
+    const parentOf = (id: number): BodyMotion => {
+      if (!atStart.has(id)) { const m = byId(id)!; atStart.set(id, { pos: [...m.p], rot: [0, 0, 0, 1], linVel: [...m.v], angVel: [0, 0, 0] }); }
+      return atStart.get(id)!;
+    };
+    for (const e of queue) { if (e.step > step) break; if (e.kind === 'spawn' && e.from) parentOf(e.from.body); }
     while (queue.length && queue[0]!.step <= step) {
       const e = queue.shift()!;
       if (e.kind === 'spawn') {
-        const b = e.body, id = nObs + muns.length;
+        const b = e.from ? relativeBody(parentOf(e.from.body), e.body, e.from.axes) : e.body, id = nObs + muns.length;
         idOfSpawn.set(e, id);
         tracks.push({ path: pathOf.get(e) ?? '', start: e.step, points: [[...b.pos]], end: 'open', contact: null });
         muns.push({ track: tracks.length - 1, shape: b.shape, radius: boundingRadius(b.shape), mass: massOf(b), p: [...b.pos], v: [...b.linVel], gone: false, still: false });
