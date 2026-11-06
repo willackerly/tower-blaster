@@ -17,7 +17,7 @@ import { alphaAt, newArrivals, newClock, newPacer, pauseLatch, runFree, stepsDue
 import type { V3 } from './math.ts';
 import { HEALTH_MS, limitFix, limitFixLabel, limitsHtml } from './health.ts';
 import { escapeHtml } from './html.ts';
-import { bounceOn, engineSpec, firedBody, froudeSpeed, keystoneEngine, levelOf, pageLevels, parseViewerConfig, presetSearch, quarterMetre, scenarioEngineSpec, sceneTitle, toSearch, type ViewerConfig, viewerScene, withOption, worldEngineSpec } from './params.ts';
+import { bounceOn, engineSpec, firedBody, froudeSpeed, keystoneEngine, levelOf, pageLevels, parseViewerConfig, presetSearch, quarterMetre, scenarioEngineSpec, sceneTitle, tierRefusal, toSearch, type ViewerConfig, viewerScene, withOption, worldEngineSpec } from './params.ts';
 import { inLevelGrenade, inLevelWeapon, projectileRadius, pushRadiusLimit, worldGrenade, worldWeapon } from './projectile.ts';
 import { type WeaponScale, WeaponRuntime } from '@tb/weapons';
 import { mountControls } from './controls.ts';
@@ -416,6 +416,12 @@ async function main() {
       presets(location.search);
     },
     camera: () => poseOf(orbit),
+    setWeapons(w) {
+      config = { ...config, weapons: w };
+      if (nextConfig) nextConfig = { ...nextConfig, weapons: w };
+      history.replaceState(null, '', toSearch(config));
+      presets(location.search);
+    },
     load(next, name) {
       const want = { ...next, offscreen: config.offscreen };
       // The loop (free or frame, or Keystone's) is chosen when the page starts, so another one needs a page load.
@@ -532,6 +538,13 @@ async function main() {
 
   handle.fire = (x = 0, y = 0) => {
     if (resetting) return;
+    // A weapon over this device's tier is not fired (@tb/weapons tiers.ts; weapon.tier sets the tier).
+    const over = tierRefusal(config);
+    if (over) {
+      notice = over;
+      drawHud();
+      return;
+    }
     const { origin, dir } = rayThrough(orbit, aspect(), x, y);
     const { body, colour } = firedBody(config, origin, dir);
     const ev: InputEvent = { step: engine.stepIndex, kind: 'spawn', body };
@@ -801,6 +814,7 @@ async function keystoneMode(config: ViewerConfig, device: GPUDevice, renderer: R
     setProjectile: (projectile) => show({ ...cfg, projectile }),
     setView: (view) => show({ ...cfg, view }),
     setSound: (sound) => show({ ...cfg, sound }),
+    setWeapons: (weapons) => show({ ...cfg, weapons }),
     camera: () => null,
   });
   // The par and dev panel: the attempt as the driver holds it, a line to play, a replay check.

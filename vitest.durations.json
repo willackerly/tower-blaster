@@ -264,6 +264,7 @@
   "packages/viewer/test/e2e-pacing-probe.test.ts": 0,
   "packages/viewer/test/e2e-projectiles.test.ts": 13.9,
   "packages/viewer/test/e2e-sound.test.ts": 20.4,
+  "packages/viewer/test/e2e-weapon-editor.test.ts": 40.0,
   "packages/viewer/test/e2e-weapon-spec.test.ts": 21.8,
   "packages/viewer/test/e2e.test.ts": 195,
   "packages/viewer/test/game-url.test.ts": 0,
@@ -278,9 +279,13 @@
   "packages/viewer/test/shots-line.test.ts": 0,
   "packages/viewer/test/sound.test.ts": 0,
   "packages/viewer/test/viewer.test.ts": 3.7,
+  "packages/viewer/test/weapon-editor.test.ts": 0.5,
   "packages/viewer/test/weapon-spec.test.ts": 0,
+  "packages/weapons/test/edit.test.ts": 0.2,
   "packages/weapons/test/grenade.test.ts": 0.6,
+  "packages/weapons/test/preview.test.ts": 1.5,
   "packages/weapons/test/runtime.test.ts": 2.7,
   "packages/weapons/test/spec.test.ts": 0.1,
+  "packages/weapons/test/tiers.test.ts": 0.2,
   "packages/weapons/test/yield.test.ts": 0.1
 }
