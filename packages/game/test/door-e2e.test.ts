@@ -12,12 +12,18 @@ import { gamePage } from './page.ts';
 
 const game = gamePage();
 const MINUTES = 60_000;
-/** What counts as the first collapse: a tenth of the structure's drop potential released (D: about 100 of B1's 1,000 blocks brought to the ground). */
-const FIRST_COLLAPSE = 0.1;
 /** The promise: within 20 s; at 60 steps a second that is this many steps of sim time. */
 const PROMISE_S = 20;
 const real = Boolean(process.env.TB_CHANNEL);
-const engine = real ? 'gpu' : 'rapier';
+/** The GPU solver on a real GPU, or on SwiftShader with PHYSICS_GPU_SLOW=1 (B1's 20 s take about 8 min there); Rapier otherwise. */
+const engine = real || process.env.PHYSICS_GPU_SLOW === '1' ? 'gpu' : 'rapier';
+/**
+ * What the first shot must bring down. On the players' engine, the objective itself (PT13: the first visit is a
+ * win: B1's objective, 40%). Rapier parts from the GPU solver on B1 (PT12: the opener brought 0.43 down on Metal in
+ * the cast and 0.17 on Rapier in the agent playtest), so on Rapier the check is the wall coming down at all: a
+ * tenth of its drop potential (about 100 of the 1,000 blocks brought to the ground).
+ */
+const FIRST_COLLAPSE = engine === 'gpu' ? 0.4 : 0.1;
 
 describe('front door', () => {
   it('a fresh visit: door over B1, Play, Fire, and the wall comes down within the promise', async (ctx) => {
@@ -47,6 +53,7 @@ describe('front door', () => {
     console.log(`first collapse on ${engine}: D ${at.collapse.toFixed(3)} after ${simS.toFixed(1)} s of sim, ${(at.wall / 1000).toFixed(1)} s of wall time since navigation${real ? '' : ' (software: not a performance result)'}`);
     expect(at.strokes).toBe(1);
     expect(at.collapse).toBeGreaterThanOrEqual(FIRST_COLLAPSE);
+    if (engine === 'gpu') expect(B1.objective).toEqual({ kind: 'collapse', min: FIRST_COLLAPSE });
     expect(simS).toBeLessThan(PROMISE_S);
     if (real) expect(at.wall).toBeLessThan(PROMISE_S * 1000);
     // The opener is offered once: gone after the first shot.

@@ -1,6 +1,6 @@
 // The front door's formatting (door.ts) and the settings it edits (settings.ts): pure.
 import { describe, expect, it } from 'vitest';
-import { B1, B2, B3, BIG_LEVELS, compileLevel, L1, L3, type LevelDef, LEVELS, SERIES, TRIAL_LEVELS, U1, U2, UNDERCUT_LEVELS } from '@tb/keystone';
+import { B1, B2, B3, BIG_LEVELS, compileLevel, L1, L3, type LevelDef, LEVELS, SERIES, type Shot, TRIAL_LEVELS, U1, U2, UNDERCUT_LEVELS } from '@tb/keystone';
 import { bestText, doorHtml, doorLevels, doorMode, doorOnLoad, nextLevel, openerFor, preaimMode, rackText, seriesTitle, starTargets, thresholdText, TRIALS_BLURB } from '../src/door.ts';
 import { GAME_SERIES } from '../src/params.ts';
 import type { LevelRecord } from '../src/progress.ts';
@@ -25,7 +25,10 @@ describe('door options', () => {
   });
   it('keystone.preaim: auto offers the first level\'s opener on a first visit only; 1 every level with a line; 0 none', () => {
     const ace0 = B1.solutions!.ace![0];
-    expect(openerFor(B1, 0, 'auto', false)).toBe(ace0);
+    expect(openerFor(B1, 0, 'auto', false)).toBe(B1.solutions!.opener ?? ace0);
+    // A chosen opener (PT13) wins over the ace's first shot.
+    const chosen = { ...ace0!, power: 50 } as Shot;
+    expect(openerFor({ ...B1, solutions: { ...B1.solutions, opener: chosen } }, 0, 'auto', false)).toBe(chosen);
     expect(openerFor(B1, 0, 'auto', true)).toBeNull();
     expect(openerFor(B2, 1, 'auto', false)).toBeNull();
     expect(openerFor(B2, 1, '1', true)).toBe(B2.solutions!.ace![0]);

@@ -15,7 +15,7 @@ Below the cards, an **Advanced settings** link (closed on every visit; Will 2026
 
 In play, **Menu** (top right) or **Esc** brings the door back. While the door is open it holds the keyboard, so the game's keys (N, R, F and so on) wait.
 
-On a first visit, B1's HUD offers **F Fire the first shot**: the first shot of B1's ace line (`solutions.ace[0]`), pre-aimed. The first collapse is then one click after Play, which is the first-minute promise in spectacle-mode.md section 11.
+On a first visit, B1's HUD offers **F Fire the first shot**: B1's chosen opener (`solutions.opener`) when it has one, else the first shot of its ace line (`solutions.ace[0]`), pre-aimed. The first collapse is then one click after Play, which is the first-minute promise in spectacle-mode.md section 11.
 
 ## Options (URL keys; each one wins over storage for the visit)
 
@@ -45,7 +45,7 @@ When the player changes a setting on the door, it is stored and its URL key is d
 ## Verification
 
 - `game/test/door.test.ts` (pure): options, targets per metric, a simulated B3 drop-in, markup, settings precedence.
-- `game/test/door-e2e.test.ts`: a fresh visit opens the door over B1, Play then Fire reaches a first collapse (D ≥ 0.1, about 100 of B1's 1,000 blocks) inside 20 s of sim time. On Rapier in CI this takes 2.3 s of sim. With `TB_CHANNEL=chrome` (the GPU engine on Metal) the test also asserts under 20 s of wall time from navigation. Further cases: Esc and Menu toggle the door, the door holds the game's keys, a settings round trip (settings hidden until Advanced settings is clicked), and progress on the card after a reload.
+- `game/test/door-e2e.test.ts`: a fresh visit opens the door over B1, Play then Fire reaches a first collapse inside 20 s of sim time: on the GPU solver (a real GPU, or SwiftShader with `PHYSICS_GPU_SLOW=1`) B1's objective, D ≥ 0.4 (PT13, below); on Rapier D ≥ 0.1 (about 100 of B1's 1,000 blocks), because Rapier parts from the GPU solver on B1. On Rapier in CI this takes 2.3 s of sim. With `TB_CHANNEL=chrome` (the GPU engine on Metal) the test also asserts under 20 s of wall time from navigation. Further cases: Esc and Menu toggle the door, the door holds the game's keys, a settings round trip (settings hidden until Advanced settings is clicked), and progress on the card after a reload.
 - `game/test/progress-e2e.test.ts`: a round is recorded and survives a reload. Custom runs and `progress=off` are not recorded.
 
 ## Alternatives considered
@@ -67,6 +67,16 @@ From the second-perspective visual review of 2026-11-02:
 - **Down bar.** Under "Down", an outcome level's HUD draws a bar filled to D with a tick per star threshold in collapse (`meterTicks`): one star where the objective is a collapse share, two and three where the level's cast stars are in collapse (B1: 40%, 70%, 94%). A tick turns white, its stars gold, once D reaches it. A hold level's bar is the share pulled. No ticks, no bar: B2's stars are points and its objective is crowns, and a custom run has no cast stars (`castStars`), so on Rapier B1 shows only the objective's tick. The ticks are a guide; the stars are still scored at the settle.
 
 Tests: `game/test/hud.test.ts` (ticks per level, fill and lit ticks, Leverage, the result card's Undo, the hint's budget) and `game/test/hud-e2e.test.ts` (at 1280x800: the hint is one line within budget and ? toggles every key; no Leverage before the first shot; B1's bar fills as the opener brings the wall down and ends at the HUD's D; on the GPU solver, B1's three ticks at 40%, 70%, 94%). Undo and restart: [undo.md](undo.md).
+
+## The first minute is a win (PT13, agent playtest round 1)
+
+The agent playtest found B1's first visit failing: the opener brought 17% down, then three bombs 33%, against an objective of 40%, while L1's opener is a three-star clear. It played B1 on Rapier. On the players' engine the same opener does better: in B1's Metal cast (seed 1) the ace's first shot alone brought **0.427** down by its first settle, 8.4 s after the fire, so the M5 already meets the objective, with no margin.
+
+**Engines disagree here, and the M5 decides.** The best first shots of B1's two Metal casts (372 lines), replayed alone on Rapier in this container (exact plus 4 nudges each): `w-bomb.537.8.8.71.100` brings 0.725 down on Metal and 0.027 on Rapier; `w-bomb.521.8.62.149.62` 0.668 and 0.027; `w-bomb.583.8.19.124.98` 0.650 and 0.029; `w-bomb.605.8.-90.181.94` 0.684 on Metal, 0.573 exact on Rapier but 0.08 for most nudges. Rapier is the smoke and CPU-fallback engine (PT12 is about the same divergence), so the pick is judged on the GPU solver alone, and the door e2e asks the objective of the opener only there.
+
+**The chooser** (`pnpm keystone:opener B1 --from B1-s1.json,B1-s2.json`, keystone-lab `opener.ts`): the 16 best first shots of the casts' lines, plus the current opener, each played alone exactly and as 8 nudges (the cast's hand noise), on every engine named; ranked on the lower quartile on the worst engine; a winner meets the objective in every play within 20 s of sim with no engine limit. The pick goes into `solutions.opener`, which is not part of the level's hash (the stars stand) and which level files read. No winner: PT13's fallback, a first visit through L1.
+
+Alternatives considered: **retune B1** (thinner wall, lower objective) changes the level and voids its Metal cast; **route a first visit through L1** drops Will's spectacle-first door (G5.5) and is the fallback only; **use the ace's first shot as is** passes on the M5 by 0.027, inside the spread of a nudge and of another GPU; **a dedicated opener** keeps the level and its stars and buys margin, so it is the plan. It gives nothing away: the stars' T2 is 0.65 and T3 0.94, so even a 0.7 opener leaves two bombs to earn three stars.
 
 ## Follow-ups (not in this step)
 

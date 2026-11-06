@@ -40,9 +40,10 @@ export function parseLevelDef(v: unknown, where = 'level'): LevelDef {
   if (o.lGold !== undefined) def.lGold = num(o.lGold, `${where}.lGold`);
   if (o.solutions !== undefined) {
     const s = object(o.solutions, `${where}.solutions`);
-    only(s, ['par', 'ace'], `${where}.solutions`);
+    only(s, ['par', 'ace', 'opener'], `${where}.solutions`);
     def.solutions = {};
     for (const k of ['par', 'ace'] as const) if (s[k] !== undefined) def.solutions[k] = arr(s[k], `${where}.solutions.${k}`).map((x, i) => shot(x, `${where}.solutions.${k}[${i}]`));
+    if (s.opener !== undefined) def.solutions.opener = shot(s.opener, `${where}.solutions.opener`);
   }
   if (o.scoring !== undefined) def.scoring = oneOf(o.scoring, SCORINGS, `${where}.scoring`) as Scoring;
   if (o.stars !== undefined) def.stars = stars(o.stars, `${where}.stars`);

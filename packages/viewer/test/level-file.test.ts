@@ -73,6 +73,13 @@ describe('level files', () => {
     expect(compileLevel(loose).hash).not.toBe(compileLevel(U2).hash);
   });
 
+  it('reads back a chosen opener (PT13: solutions.opener, one shot) and keeps it out of the level hash', () => {
+    const withOpener: LevelDef = { ...structuredClone(L2), solutions: { ...L2.solutions, opener: L2.solutions!.par![0]! } };
+    expect(parseLevelDef(JSON.parse(levelJson(withOpener)))).toEqual(withOpener);
+    expect(compileLevel(withOpener).hash).toBe(compileLevel(L2).hash);
+    expect(() => parseLevelDef({ ...JSON.parse(levelJson(withOpener)), solutions: { opener: [] } })).toThrow(/solutions.opener/);
+  });
+
   it('reads back a scenario part with its role rules, and refuses a bad one, saying where', () => {
     const city: LevelDef = {
       ...structuredClone(L2), id: 'city', scoring: 'outcome', objective: { kind: 'collapse', min: 0.3 },

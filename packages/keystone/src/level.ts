@@ -124,8 +124,12 @@ export interface LevelDef {
   launcher: LauncherDef;
   /** Leverage for the gold badge (LevelScore.gold; it gates no star since 2026-11-06, docs/game/stars.md), set from bot runs; DEFAULT_GOLD when absent. */
   lGold?: number;
-  /** Recorded solutions, replayed by tests. */
-  solutions?: { par?: Shot[]; ace?: Shot[] };
+  /**
+   * Recorded solutions, replayed by tests. `opener` is the pre-aimed first shot a first visit is offered
+   * (the door's Fire button), chosen to win the level alone (PT13: keystone-lab opener.ts); absent, the
+   * opener is the ace's or the par line's first shot.
+   */
+  solutions?: { par?: Shot[]; ace?: Shot[]; opener?: Shot };
   /** Default 'par': every level before the spectacle mode, scored as before. */
   scoring?: Scoring;
   /** Outcome levels: the cast star thresholds; absent, stars are uncast (only the objective's star). */

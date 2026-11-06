@@ -366,12 +366,13 @@ export function preaimMode(q: URLSearchParams): PreaimMode {
 }
 
 /**
- * The pre-aimed opening shot for level def at index `index` of its series: the first shot of its best
- * recorded line (solutions.ace, else solutions.par), or null. Under auto only the series' first level has
+ * The pre-aimed opening shot for level def at index `index` of its series: the level's chosen opener
+ * (solutions.opener: a shot that wins it alone, PT13), else the first shot of its best recorded line
+ * (solutions.ace, else solutions.par), or null. Under auto only the series' first level has
  * one, and only until the player has a record for it: the first-minute promise is for a first visit, and
  * handing every level its best opener would give the stars away.
  */
 export function openerFor(def: LevelDef, index: number, mode: PreaimMode, played: boolean): Shot | null {
   if (mode === '0' || (mode === 'auto' && (index !== 0 || played))) return null;
-  return def.solutions?.ace?.[0] ?? def.solutions?.par?.[0] ?? null;
+  return def.solutions?.opener ?? def.solutions?.ace?.[0] ?? def.solutions?.par?.[0] ?? null;
 }
