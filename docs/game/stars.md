@@ -86,7 +86,19 @@ shot from the level's own launcher (2 h) and from the game's default high launch
 top). Stars are for that one shot; "old" is the rule before 2026-11-06. Full output:
 `/mnt/project-files/stars/one-shot-audit-ref.txt` and `.json`.
 
-AUDIT_TABLE
+Results so far (the rest of the sweep fills in as it lands; L2's ~40 s per reference play makes it
+the long pole):
+
+| Level | Launch | One-shot clears | Old ★ 1/2/3 | New ★ 1/2/3 | Gold badge |
+|---|---|---|---|---|---|
+| L1 (par 1) | its own, 2 h | 0 of 128 | – | – | – |
+| L1 | high, 12 h | 0 of 128 | – | – | – |
+| L4 (par 1, anvil, `--every 8 --powers 100`) | drop | 7 of 103 | 0/3/4 | 0/0/7 | 4 |
+
+L1's candidates aim at cell centres, and its par line hits the seam between columns, which they
+never try (findings.md); the par line itself, played on its own: one shot, leverage 0.707,
+old ★★, new ★★★. On L4, three of the seven clean one-anvil clears (all at par) fell under the 0.18
+line (their leverage quartiles 0.17/0.18/0.19) and got ★★ under the old rule.
 
 ## Outcome levels
 
