@@ -114,7 +114,12 @@ describe('front door', () => {
     expect(await page.evaluate(() => window.__game.feel.turnView)).toBe(true);
     await page.locator('.kg-door [data-act="duelview"][data-arg="off"]').click();
     expect(await page.evaluate(() => window.__game.feel.turnView)).toBe(false);
-    expect(await page.evaluate(() => JSON.parse(localStorage.getItem('tb.settings.v1')!))).toEqual({ sound: false, look: 'real', sharp: 1, camera: 'dynamic', rapid: false, duelView: false });
+    // Launch height: High by default; Level's applies to the game at once (the launcher moves to the level's own).
+    expect(await page.locator('.kg-door [data-act="launch"].on').innerText()).toBe('High');
+    expect(await page.evaluate(() => window.__game.feel.launch)).toBe('high');
+    await page.locator('.kg-door [data-act="launch"][data-arg="level"]').click();
+    expect(await page.evaluate(() => window.__game.feel.launch)).toBe('level');
+    expect(await page.evaluate(() => JSON.parse(localStorage.getItem('tb.settings.v1')!))).toEqual({ sound: false, look: 'real', sharp: 1, camera: 'dynamic', rapid: false, duelView: false, launch: 'level' });
     expect(await page.evaluate(() => window.__game.maxDpr)).toBe(1);
     expect(new URLSearchParams(await page.evaluate(() => location.search)).has('look')).toBe(false);
 

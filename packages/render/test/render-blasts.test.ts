@@ -235,3 +235,38 @@ describe('blast options (URL keys)', () => {
     expect(() => parseBlastOptions(new URLSearchParams('blast.colour=1'))).toThrow(/not a blast knob/);
   });
 });
+
+describe('fired balls beside a bomb on the GPU (fx band)', () => {
+  const lineup = (c: Parameters<typeof Drivers.lineupFrames>[0]) =>
+    gpu!.page.evaluate((cc) => (window as unknown as { __blasts: typeof Drivers }).__blasts.lineupFrames(cc), c);
+  const luma = (c: number[]) => (c[0]! + c[1]! + c[2]!) / 3;
+
+  it.for(['hazy', 'real', 'candy'] as const)('%s: a painted ball is red with a pale band round it, far brighter than the bomb beside it', async (look, ctx) => {
+    if (!gpu) return ctx.skip();
+    const r = await lineup({ look, keep: !!process.env.LINEUP_SHOTS });
+    if (process.env.LINEUP_SHOTS && r.pixels) {
+      const { writeFileSync } = await import('node:fs');
+      const { encodePng } = await import('@tb/testkit');
+      writeFileSync(`${process.env.LINEUP_SHOTS}/lineup-${look}.png`, encodePng(r.size[0]!, r.size[1]!, r.pixels));
+    }
+    expect(r.error).toBeNull();
+    const msg = JSON.stringify(r, (k, v) => (k === 'pixels' ? undefined : v));
+    // The bomb stays the dark one.
+    expect(luma(r.painted), msg).toBeGreaterThan(luma(r.bomb) + 25);
+    // Off the band the ball is red; on the band it is pale: red barely over green there, where off it red is far over
+    // green. (Not brighter: the look's ball glow takes the paint and not the band, so in a glowing look the red is the brighter.)
+    expect(r.across[0]!, msg).toBeGreaterThan(r.across[2]! + 30);
+    expect(r.along[0]! - r.along[1]!, msg).toBeLessThan(40);
+    expect(r.across[0]! - r.across[1]!, msg).toBeGreaterThan(r.along[0]! - r.along[1]! + 60);
+    expect(luma(r.along), msg).toBeGreaterThan(90);
+  });
+
+  it('the band turns with the ball: turned a quarter about the view axis, it runs up and down', async (ctx) => {
+    if (!gpu) return ctx.skip();
+    const r = await lineup({ look: 'hazy', turned: true });
+    expect(r.error).toBeNull();
+    expect(r.along[0]! - r.along[1]!, JSON.stringify(r)).toBeLessThan(40);
+    expect(r.across[0]! - r.across[1]!, JSON.stringify(r)).toBeGreaterThan(r.along[0]! - r.along[1]! + 60);
+    expect(r.across[0]!).toBeGreaterThan(r.across[2]! + 30);
+  });
+});

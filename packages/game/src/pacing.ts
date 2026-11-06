@@ -1,7 +1,9 @@
 // How many physics steps to run this frame. Hit-stop, slow motion and
 // fast-forward all go through here and only change *when* steps run, never
 // what a step does, so juice can't change an outcome or a replay.
+import { LAUNCH_MODES, type LaunchMode } from './aim.ts';
 import { type FrameMode, frameMode } from './frame-rate.ts';
+import { BALL_STYLES, type BallStyle } from './scene.ts';
 
 export const SLOWMO_SCALE = 0.3;
 export const SLOWMO_IN = 0.12; // s to ramp down
@@ -53,6 +55,29 @@ export interface PaceFeel {
    * About 85 MB a shot on a 10k level, under 1 MB on the small ones.
    */
   undoMB: number;
+  /**
+   * Where shots leave from (aim.ts LaunchMode): high over the structure's top (the default since Will's
+   * 2026-11-06 playtest: shots from the level's own launcher ran into the rubble on the ground), or the
+   * level's own launcher height (keystone.launch=level). A shot records its height, so this changes
+   * only the shots aimed, never a replay.
+   */
+  launch: LaunchMode;
+  /** How fired balls are drawn (scene.ts BallStyle): painted with a band (the default) or plain, the look's own (keystone.balls=plain). */
+  balls: BallStyle;
+}
+
+/** keystone.launch: high or level (absent: high). */
+export function launchMode(text: string | null): LaunchMode {
+  if (text === null) return 'high';
+  if (!(LAUNCH_MODES as readonly string[]).includes(text)) throw new Error(`keystone.launch must be ${LAUNCH_MODES.join(' or ')}: ${text}`);
+  return text as LaunchMode;
+}
+
+/** keystone.balls: painted or plain (absent: painted). */
+export function ballStyle(text: string | null): BallStyle {
+  if (text === null) return 'painted';
+  if (!(BALL_STYLES as readonly string[]).includes(text)) throw new Error(`keystone.balls must be ${BALL_STYLES.join(' or ')}: ${text}`);
+  return text as BallStyle;
 }
 
 /** The most keystone.undo takes, MB. */
@@ -60,7 +85,7 @@ export const MAX_UNDO_MB = 65536;
 /** keystone.undo when the URL sets none: a dozen shots of a 10k level. */
 export const DEFAULT_UNDO_MB = 1024;
 
-/** The URL's keystone.hitstop, keystone.slowmo, keystone.tailskip, keystone.follow, keystone.shake, keystone.rapid, keystone.turnview, keystone.arcs (0 or 1 each), keystone.budget (ms, 0 to 1000), keystone.undo (MB, 0 to MAX_UNDO_MB) and keystone.frames (all, half, auto); any other value is refused. */
+/** The URL's keystone.hitstop, keystone.slowmo, keystone.tailskip, keystone.follow, keystone.shake, keystone.rapid, keystone.turnview, keystone.arcs (0 or 1 each), keystone.budget (ms, 0 to 1000), keystone.undo (MB, 0 to MAX_UNDO_MB), keystone.frames (all, half, auto), keystone.launch (high, level) and keystone.balls (painted, plain); any other value is refused. */
 export function paceFeel(q: URLSearchParams): PaceFeel {
   const flag = (k: string, dflt: boolean) => {
     const v = q.get(k);
@@ -71,7 +96,7 @@ export function paceFeel(q: URLSearchParams): PaceFeel {
   if (!(budgetMs >= 0 && budgetMs <= 1000)) throw new Error(`keystone.budget must be from 0 to 1000 ms (0: no valve): ${b}`);
   const u = q.get('keystone.undo'), undoMB = u === null ? DEFAULT_UNDO_MB : u.trim() === '' ? NaN : Number(u);
   if (!(undoMB >= 0 && undoMB <= MAX_UNDO_MB)) throw new Error(`keystone.undo must be from 0 to ${MAX_UNDO_MB} MB (0: undo replays the shots): ${u}`);
-  return { hitStop: flag('keystone.hitstop', false), slowMo: flag('keystone.slowmo', false), budgetMs, tailSkip: flag('keystone.tailskip', true), follow: flag('keystone.follow', false), shake: flag('keystone.shake', false), frames: frameMode(q.get('keystone.frames')), rapid: flag('keystone.rapid', true), turnView: flag('keystone.turnview', true), arcs: flag('keystone.arcs', true), undoMB };
+  return { hitStop: flag('keystone.hitstop', false), slowMo: flag('keystone.slowmo', false), budgetMs, tailSkip: flag('keystone.tailskip', true), follow: flag('keystone.follow', false), shake: flag('keystone.shake', false), frames: frameMode(q.get('keystone.frames')), rapid: flag('keystone.rapid', true), turnView: flag('keystone.turnview', true), arcs: flag('keystone.arcs', true), undoMB, launch: launchMode(q.get('keystone.launch')), balls: ballStyle(q.get('keystone.balls')) };
 }
 
 /** Throws unless f's budget is a number of ms from 0 to 1000 (the Scene panel's field can hold anything). */
@@ -79,6 +104,8 @@ export function checkPaceFeel(f: PaceFeel): PaceFeel {
   if (!(f.budgetMs >= 0 && f.budgetMs <= 1000)) throw new Error(`physics budget must be from 0 to 1000 ms (0: no valve): ${f.budgetMs}`);
   if (!(f.undoMB >= 0 && f.undoMB <= MAX_UNDO_MB)) throw new Error(`undo memory must be from 0 to ${MAX_UNDO_MB} MB (0: undo replays the shots): ${f.undoMB}`);
   frameMode(f.frames);
+  launchMode(f.launch);
+  ballStyle(f.balls);
   return f;
 }
 
@@ -95,6 +122,8 @@ export function writePaceFeel(f: PaceFeel, q: URLSearchParams): void {
   if (!f.turnView) q.set('keystone.turnview', '0');
   if (!f.arcs) q.set('keystone.arcs', '0');
   if (f.undoMB !== DEFAULT_FEEL.undoMB) q.set('keystone.undo', String(f.undoMB));
+  if (f.launch !== DEFAULT_FEEL.launch) q.set('keystone.launch', f.launch);
+  if (f.balls !== DEFAULT_FEEL.balls) q.set('keystone.balls', f.balls);
 }
 
 /** Hit-stop is counted in frames of 60 Hz, whatever the display's rate. */
@@ -111,8 +140,8 @@ export const VALVE_MIN = 0.25;
  * frames looked the same at both.
  */
 export const DEFAULT_BUDGET_MS = 14;
-/** No juice, the valve at its default budget, the tail skip on, a camera only the player moves, every frame drawn, rapid fire, instant undo in DEFAULT_UNDO_MB. */
-export const DEFAULT_FEEL: Readonly<PaceFeel> = { hitStop: false, slowMo: false, budgetMs: DEFAULT_BUDGET_MS, tailSkip: true, follow: false, shake: false, frames: 'all', rapid: true, turnView: true, arcs: true, undoMB: DEFAULT_UNDO_MB };
+/** No juice, the valve at its default budget, the tail skip on, a camera only the player moves, every frame drawn, rapid fire, instant undo in DEFAULT_UNDO_MB, shots from high, painted balls. */
+export const DEFAULT_FEEL: Readonly<PaceFeel> = { hitStop: false, slowMo: false, budgetMs: DEFAULT_BUDGET_MS, tailSkip: true, follow: false, shake: false, frames: 'all', rapid: true, turnView: true, arcs: true, undoMB: DEFAULT_UNDO_MB, launch: 'high', balls: 'painted' };
 /**
  * Owed time the clock keeps, ms; beyond it the rest is dropped (slow motion, not a burst of catch-up
  * steps after a stall). As the viewer's free loop (loop.ts FREE_MAX_LAG_MS).

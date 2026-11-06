@@ -9,9 +9,9 @@
 import { type BodyDesc, type EngineHealth, limitsHit, type PhysicsEngine, type Vec3 } from '@tb/engine-api';
 import { type RackItem, type CompiledLevel, compileLevel, Driver, type DriverCheckpoint, Duel, type DuelDef, DEFAULT_TURN_SECONDS, type Feedback, type Goal, goalMet, type Player, type Grade, gradeOf, type LevelDef, type LevelScore, type LotSheet, type PerStep, playShots, rapidDue, roundFacts, runSession, selectGroups, type Shot, snapshotHash, TIER_NAMES } from '@tb/keystone';
 import { clampPitch, eyeOf, type Orbit, rayThrough, viewProj } from '@tb/render/camera';
-import type { PixelStats, Renderer, SnapshotSource } from '@tb/render';
+import type { FxOptions, PixelStats, Renderer, SnapshotSource } from '@tb/render';
 import type { HostStats } from '@tb/audio';
-import { type Aimed, azFromYaw, pick, previewBeads, pullFor, shotFor, SUBSTEPS } from './aim.ts';
+import { type Aimed, azFromYaw, launchHeight, launchStep, pick, previewBeads, pullFor, shotFor, SUBSTEPS } from './aim.ts';
 import { Synth, type Voice, voicesFor } from './audio.ts';
 import { CollapseSound, type CollapseStatus } from './collapse-sound.ts';
 import { type GameSoundMode, soundSetOf } from './sound-map.ts';
@@ -28,7 +28,7 @@ import { alphaAt, arrived, DEFAULT_FEEL, newArrivals, Pacer, type PaceFeel, SLOW
 import { COST_WINDOW, runPhysics, wakeable } from './physics-loop.ts';
 import { CLEAR_SHARE, FrameGovernor } from './frame-rate.ts';
 import { UndoMarks } from './undo-marks.ts';
-import { beadOverlay, BOMB_FX, CROWN_GLOW, PULL_HOVER, regrowDuration, regrowScales, structureTints, TINT, tintOf, tintWordOf } from './scene.ts';
+import { ballFx, beadOverlay, BOMB_FX, CROWN_GLOW, PULL_HOVER, regrowDuration, regrowScales, structureTints, TINT, tintOf, tintWordOf } from './scene.ts';
 import { type GestureState, type TouchAction, TouchGestures, touchFace, type TouchMode } from './touch.ts';
 
 /** What a page (and its tests) can see and do while Keystone plays: window.__game on the game page. */
@@ -68,9 +68,10 @@ export interface GameHandle {
   /**
    * The player's controls now: whether the page shows its touch face (touch.ts touchFace: the HUD's
    * tap buttons and the touch help; body class kg-touch), the touch gesture under way and fingers down,
-   * the shot aimed (by hover, a finger or handle.aim) and the power.
+   * the shot aimed (by hover, a finger or handle.aim), the power, and the launcher height in 1/4 h (aim.ts
+   * launchHeight for the level and PaceFeel.launch, moved by keys W and S: launchStep).
    */
-  input: { touch: boolean; gesture: GestureState; fingers: number; aimed: Shot | null; power: number };
+  input: { touch: boolean; gesture: GestureState; fingers: number; aimed: Shot | null; power: number; launch: number };
   result: LevelScore | null;
   /** Feedback events seen this attempt, by type; blastDrawn counts the blasts handed to the renderer to draw, bomb the bodies drawn as bombs; undo counts undos (an undo keeps the counts). */
   counts: Record<string, number>;
@@ -134,6 +135,12 @@ export interface GameHandle {
   /** The undo checkpoints held now: one per shot still kept (null where none was), and their bytes (PaceFeel.undoMB caps them). */
   undoMemory(): { marks: number; bytes: number };
   capture(keepPixels?: boolean): Promise<PixelStats | null>;
+  /**
+   * How each fired body (the slots past the structure's, in spawn order) is drawn now, read back from the
+   * renderer: a bomb (a lit fuse, or BOMB_FX's matte iron once its fuse has given way to newer ones), a painted
+   * ball (paint and band, scene.ts ballFx), or plain (the look's).
+   */
+  firedLooks(): ('bomb' | 'painted' | 'plain')[];
   /** Physics state now: step, phase and a hash of every pose. */
   state(): SessionState;
   /** This attempt's shots as the session recorded them, a rapid-fire one with `after` (Shot.after): what replay() and a session file replay. */
@@ -188,8 +195,8 @@ function safetyLimiter(ctx: AudioContext): AudioNode {
 export function newGameHandle(): GameHandle {
   const none = (): SessionState => ({ step: 0, phase: 'loading', strokes: 0, heritageBroken: 0, hash: '' });
   return {
-    status: 'loading', engine: '', level: '', phase: 'loading', ready: false, frozen: false, frames: 0, stepIndex: 0, strokes: 0, bodies: 0, collapse: 0, fast: false, pace: { timeScale: 1, speed: 1, tag: '', tailSkip: false, costMs: NaN }, view: { target: [0, 0, 0], distance: 0, yaw: 0, pitch: 0, following: false, jolt: 0, turning: false, cue: null, arcBeads: 0 }, input: { touch: false, gesture: 'idle', fingers: 0, aimed: null, power: 100 }, result: null, counts: {}, feel: { ...DEFAULT_FEEL }, resultShownAt: null, timing: { loadMs: 0, stepMs: [], moving: [], frameMs: [], costMs: [] }, draws: { drawn: 0, skipped: 0, decimating: false },
-    fire: () => false, bank: () => false, freeze: () => false, fireOpener: () => false, setMuted: () => {}, maxDpr: 2, aim: () => null, reach: null, select: () => false, load: async () => {}, retry: async () => {}, undo: async () => false, undone: null, undoMemory: () => ({ marks: 0, bytes: 0 }), capture: async () => null,
+    status: 'loading', engine: '', level: '', phase: 'loading', ready: false, frozen: false, frames: 0, stepIndex: 0, strokes: 0, bodies: 0, collapse: 0, fast: false, pace: { timeScale: 1, speed: 1, tag: '', tailSkip: false, costMs: NaN }, view: { target: [0, 0, 0], distance: 0, yaw: 0, pitch: 0, following: false, jolt: 0, turning: false, cue: null, arcBeads: 0 }, input: { touch: false, gesture: 'idle', fingers: 0, aimed: null, power: 100, launch: 0 }, result: null, counts: {}, feel: { ...DEFAULT_FEEL }, resultShownAt: null, timing: { loadMs: 0, stepMs: [], moving: [], frameMs: [], costMs: [] }, draws: { drawn: 0, skipped: 0, decimating: false },
+    fire: () => false, bank: () => false, freeze: () => false, fireOpener: () => false, setMuted: () => {}, maxDpr: 2, aim: () => null, reach: null, select: () => false, load: async () => {}, retry: async () => {}, undo: async () => false, undone: null, undoMemory: () => ({ marks: 0, bytes: 0 }), capture: async () => null, firedLooks: () => [],
     state: none, line: () => [], replay: async () => none(), health: async () => null, pairsPerBody: 0, limitsHit: [], goals: [], grade: null, duel: null,
     sound: () => ({ mode: 'collapse', status: 'off', error: '', posted: 0, stats: null }),
   };
@@ -373,19 +380,38 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
   // a weapon's children, the input hook's, in the order the engine applies them).
   let descs: readonly BodyDesc[] = [];
   /**
-   * Take up new bodies; bomb: they are a weapon's, drawn as bombs (dark iron with a lit fuse,
-   * scene.ts BOMB_FX). fire() passes whether its item is a weapon (a w- item); the step loop
-   * passes true, because after the shots due are fired the only bodies a step adds are a
-   * weapon's split children (the arsenal's spawns; children carry tag 0, not TAG_BALL). Marked
-   * by spawn, not by the last shot, so rapid fire (a marble after a cluster) cannot unmark
-   * bomblets that split later.
+   * Fired bodies' looks by slot (the slots past the structure's): a bomb's (BOMB_FX and a fuse) or a painted
+   * ball's (scene.ts ballFx), null for one drawn as the look draws it. Kept so an undo can draw the kept shots'
+   * bodies as they were: a checkpoint's (UndoMark.looks) or, when the undo replays, the slots the replay refills
+   * (the same shots in the same order spawn into the same slots); a fresh attempt clears it.
    */
-  const spawned = (bomb: boolean) => {
+  let firedLooks: ({ fx: FxOptions; fuse: boolean } | null)[] = [];
+  const paintFired = (i: number, look: { fx: FxOptions; fuse: boolean } | null) => {
+    if (!look) return;
+    renderer.setFx(i, look.fx);
+    if (look.fuse) renderer.fuse(i);
+  };
+  /**
+   * Take up new bodies; item: the rack item fired ('bomb' for bodies the step loop adds). A weapon's
+   * are drawn as bombs (dark iron with a lit fuse, scene.ts BOMB_FX); a ball in its paint (ballFx, under
+   * PaceFeel.balls). fire() passes its shot's item; the step loop passes 'bomb', because after the shots
+   * due are fired the only bodies a step adds are a weapon's split children (the arsenal's spawns;
+   * children carry tag 0, not TAG_BALL). Marked by spawn, not by the last shot, so rapid fire (a marble
+   * after a cluster) cannot unmark bomblets that split later.
+   */
+  const spawned = (item: RackItem | 'bomb') => {
     if (driver.bodies.length === descs.length) return;
     const from = descs.length;
     descs = driver.bodies;
     fxSlots = descs.length;
-    if (bomb) for (let i = from; i < descs.length; i++) { renderer.setFx(i, BOMB_FX); renderer.fuse(i); bombSlots.push(i); handle.counts.bomb = (handle.counts.bomb ?? 0) + 1; }
+    const bomb = item === 'bomb' || item.startsWith('w-');
+    const fx = bomb ? BOMB_FX : ballFx(item as RackItem, feel.balls);
+    for (let i = from; i < descs.length; i++) {
+      const look = fx ? { fx, fuse: bomb } : null;
+      firedLooks[i - c.meta.n] = look;
+      paintFired(i, look);
+      if (bomb) handle.counts.bomb = (handle.counts.bomb ?? 0) + 1;
+    }
   };
   let fxSlots = 0;
   /** What the follow camera frames at most: the lot and a margin, up to half again the structure's height. */
@@ -400,6 +426,11 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
   let selected: RackItem | null = null;
   let opener: Shot | null = null;
   let power = 100;
+  /**
+   * The launcher height (1/4 h) and what it was set for: the level's hash and the launch mode. A new level
+   * or mode starts again at launchHeight; a retry or an undo keeps the player's height (keys W and S).
+   */
+  let launchAt = 0, launchFor = '';
   let aimed: Aimed | null = null, beads: Float64Array | null = null, aimDirty = false;
   /** The block a selected pull would take, lit (PULL_HOVER) until the cursor leaves it or it is pulled. */
   let hover: number | null = null;
@@ -431,7 +462,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
   let loading = 0;
   function load(i: number, retry = false): Promise<void> {
     loading++;
-    return exclusive(() => { dropMarks(0); bombSlots = []; return loadNow(i, retry); }).finally(() => { loading--; });
+    return exclusive(() => { dropMarks(0); return loadNow(i, retry); }).finally(() => { loading--; });
   }
 
   /**
@@ -439,11 +470,9 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
    * and what the page showed of it. Taken as each shot goes in (fireNow), the oldest dropped past
    * PaceFeel.undoMB; all dropped when a level loads (their engine goes).
    */
-  interface UndoMark { cp: DriverCheckpoint; bytes: number; frozen: boolean; goals: GoalLine[]; grade: Grade | null; bombs: number[]; dispose(): void }
+  interface UndoMark { cp: DriverCheckpoint; bytes: number; frozen: boolean; goals: GoalLine[]; grade: Grade | null; looks: typeof firedLooks; dispose(): void }
   const marks = new UndoMarks<UndoMark>();
   const dropMarks = (k: number) => marks.drop(k);
-  /** Bodies drawn as bombs, by slot, in spawn order (spawned): an undo to a mark draws its first UndoMark.bombs as bombs again. */
-  let bombSlots: number[] = [];
 
   /**
    * The world as shot k = session.inputs.length goes in, kept for undo: not in a duel (its turns are the
@@ -456,7 +485,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
       let cp: DriverCheckpoint | null = null;
       // A checkpoint that fails (a GPU error) only costs this shot its instant undo: undo replays instead.
       try { cp = driver.checkpoint(); } catch (e) { console.warn(`undo checkpoint: ${(e as Error).message}`); }
-      return cp && { cp, bytes: cp.bytes, frozen, goals: handle.goals.map((g) => ({ ...g })), grade: handle.grade, bombs: [...bombSlots], dispose: () => cp.dispose() };
+      return cp && { cp, bytes: cp.bytes, frozen, goals: handle.goals.map((g) => ({ ...g })), grade: handle.grade, looks: [...firedLooks], dispose: () => cp.dispose() };
     });
   }
 
@@ -482,7 +511,6 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
         return true;
       }
       dropMarks(0);
-      bombSlots = [];
       const keep = driver.session.inputs.slice(0, -1).map((x) => ({ ...x.shot }));
       env.banner.textContent = keep.length ? `Undo: replaying ${shotsText(keep.length)}…` : 'Undo';
       env.banner.classList.remove('show', 'crack');
@@ -519,8 +547,8 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     s.heritageBroken.forEach((cracked, k) => { if (cracked) renderer.setFx(c.meta.heritage[k]!, { tint: TINT.heritage, emissive: 1 }); });
     renderer.blasts.clear();
     renderer.fuses.clear();
-    bombSlots = [...mark.bombs];
-    for (const i of bombSlots) { renderer.setFx(i, BOMB_FX); renderer.fuse(i); }
+    firedLooks = [...mark.looks];
+    for (let i = c.meta.n; i < descs.length; i++) paintFired(i, firedLooks[i - c.meta.n] ?? null);
     fxSlots = descs.length;
     pacer.reset();
     speed.reset();
@@ -630,6 +658,11 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     swing.grab();
     renderer.blasts.clear();
     renderer.fuses.clear();
+    // After an undo the kept shots' bodies are back in their slots: drawn as they were (bombs, painted balls). A fresh attempt starts with none.
+    if (line) {
+      firedLooks.length = Math.min(firedLooks.length, descs.length - c.meta.n);
+      for (let i = c.meta.n; i < descs.length; i++) paintFired(i, firedLooks[i - c.meta.n] ?? null);
+    } else firedLooks = [];
     const m = 4 * c.frame.unit;
     followClip = Float64Array.of(c.lot.min[0] - m, 0, c.lot.min[1] - m, c.lot.max[0] + m, 1.5 * c.height + m, c.lot.max[1] + m);
     handle.result = null;
@@ -700,7 +733,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
         aimed = p;
         if (p?.reachable) lit = p.shot.body;
       } else if (hit) {
-        aimed = shotFor(c, selected, azFromYaw(orbit.yaw), power, hit.point, substeps);
+        aimed = shotFor(c, selected, azFromYaw(orbit.yaw), power, hit.point, substeps, launchNow());
         if (aimed) beads = previewBeads(c, aimed.shot, hit.point, substeps);
         // A weapon with one blast (the grenades): show how far it reaches, where it would go off.
         const blasts = aimed ? c.arms[selected]?.blasts : undefined;
@@ -944,7 +977,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     // A rapid shot keeps the follow camera's way home: where the player had it when the first went in.
     if (feel.follow && !follow.active) follow.start(orbit);
     onFeedback(fb);
-    spawned(shot.ammo.startsWith('w-'));
+    spawned(shot.ammo);
     selected = nextSelection(c.def.rack, driver.session.rackLeft, selected);
     aimed = null;
     beads = null;
@@ -977,6 +1010,21 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     return true;
   }
 
+  /** The launcher height now (1/4 h): the player's, or the level's in this mode when the level or mode changed. */
+  function launchNow(): number {
+    const key = `${c.hash}|${feel.launch}`;
+    if (key !== launchFor) { launchFor = key; launchAt = launchHeight(c, feel.launch); }
+    handle.input.launch = launchAt;
+    return launchAt;
+  }
+
+  /** Keys W (up) and S (down): the launcher `steps` h from where it is, kept to the level's range (launchStep). */
+  function moveLauncher(steps: number) {
+    launchAt = launchStep(c, launchNow(), steps);
+    handle.input.launch = launchAt;
+    aimDirty = true;
+  }
+
   function setPower(p: number) {
     if (!Number.isFinite(p)) return;
     power = Math.max(0, Math.min(100, p));
@@ -992,6 +1040,14 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
   }
 
   handle.fire = fire;
+  handle.firedLooks = () => {
+    const fused = new Set(renderer.fuses.slots), out: ('bomb' | 'painted' | 'plain')[] = [];
+    for (let i = c.meta.n; i < descs.length; i++) {
+      const fx = renderer.fxOf(i);
+      out.push(fused.has(i) || fx.matte ? 'bomb' : fx.paint && fx.band ? 'painted' : 'plain');
+    }
+    return out;
+  };
   handle.bank = bank;
   handle.freeze = freeze;
   handle.fireOpener = fireOpener;
@@ -1136,6 +1192,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     const arg = (e.target as HTMLElement).closest('button')?.dataset.arg;
     if (act === 'ammo') { const chip = rackChips(c.def.rack, driver.session.rackLeft, selected).find((x) => x.key === arg); if (chip) select(chip.ammo); }
     if (act === 'power') setPower(power + Number(arg));
+    if (act === 'launch') moveLauncher(Number(arg));
   });
   env.result.addEventListener('click', (e) => {
     const act = (e.target as HTMLElement).closest('button')?.dataset.act;
@@ -1155,6 +1212,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     const chip = chipsNow().find((x) => x.key === e.key);
     if (chip) select(chip.ammo);
     if (k === 'q' || k === 'e') setPower(power + (k === 'e' ? POWER_STEP : -POWER_STEP));
+    if ((k === 'w' || k === 's') && !e.ctrlKey && !e.metaKey && !e.altKey) moveLauncher(k === 'w' ? 1 : -1);
     if (k === 'b') bank();
     if (k === 't') freeze();
     if (k === 'f') fireOpener();
@@ -1180,7 +1238,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     let html = hudHtml({
       level: c.def, strokes: s.strokes, crownsDown, crownsTotal: c.meta.crowns.length,
       heritageBroken: s.heritageBroken.reduce((a, x) => a + x, 0), heritageTotal: c.meta.heritage.length,
-      chips: chipsNow(), power, liveLeverage: s.liveLeverage, phase: s.phase,
+      chips: chipsNow(), power, launch: (launchNow() / 4) * c.frame.unit, liveLeverage: s.liveLeverage, phase: s.phase,
       reachable: aimed ? aimed.reachable : null,
       pullRefused: aimed?.shot.ammo === 'pull' && !aimed.reachable,
       collapse: s.liveCollapse, pulled: s.pulledShare(), met: s.objectiveDone, canBank: !stepping && regrowT === null && s.canBank(), pace: handle.pace.tag,
@@ -1297,7 +1355,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
       if (input?.length) d.push(input);
       // Shots clicked during the step, and a line's timed shots now due, go in before the next (as playShots fires them).
       fireDue();
-      spawned(true);
+      spawned('bomb');
       if (red && feel.tailSkip && d.session.phase === 'running') tail.update(red.nMoving, c.meta.n, d.session.liveCollapse);
       source.update(d.snapshot, descs);
       collapse?.frame(d.snapshot, descs, eyeOf(orbit), orbit.target);

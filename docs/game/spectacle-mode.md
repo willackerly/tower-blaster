@@ -202,6 +202,8 @@ Every rule above is switchable. The viewer under `rules=keystone` reads them thr
 | `keystone.autobank` | `0`, `1` | end at first clear |
 | `keystone.rapid` | `1`, `0` | fire while a shot runs, cutting it (section 5); 0 waits for the settle |
 | `keystone.tailskip` | `1`, `0` | fast-forward the tail |
+| `keystone.launch` | `high`, `level` | where shots leave from: 2 h over the structure's top (keys W and S move it a whole h, from the level's own launcher up to 16 h over the top), or the level's own launcher; a shot records its height, so neither is part of a level (playtest 2026-11-06) |
+| `keystone.balls` | `painted`, `plain` | fired balls in their own colour with a white band (a cannonball red, a marble blue, a preset its catalogue colour), so none reads as a bomb; plain is the look's ball (playtest 2026-11-06) |
 | `keystone.settle` | level's own, `v1`, `v2` | settle rule (custom) |
 | `keystone.rack` | level's own, comma list of item names | rack override (custom) |
 | `keystone.iterations`, `keystone.gapSlop`, `bounce` | level's own | physics override (custom) |
