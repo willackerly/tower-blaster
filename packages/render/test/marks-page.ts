@@ -3,7 +3,8 @@
 // the WGSL carving against its TypeScript twin (marks.ts).
 import { emptySnapshot, type BodyDesc, type Snapshot } from '@tb/engine-api';
 import { readBuffer, sharedDevice } from '@tb/gpu';
-import { engrave, LOOKS, lookAt, MARK_HIT, MARK_KEEP, MARK_NONE, MARK_SAVE, MARKS_WGSL, markPoint, multiply, perspective, Renderer, SnapshotSource, type FrameParams, type V3 } from '../src/index.ts';
+import { engrave, lookAt, MARK_HIT, MARK_KEEP, MARK_NONE, MARK_SAVE, MARKS_WGSL, markPoint, multiply, perspective, Renderer, SnapshotSource, type FrameParams, type V3 } from '../src/index.ts';
+import { LOOKS } from './looks.ts';
 
 const FOV = 0.9;
 

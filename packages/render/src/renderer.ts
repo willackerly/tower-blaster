@@ -176,6 +176,7 @@ export function lookUniforms(l: LookParams, metres = 1): Record<string, number |
     hills: l.hills ? [(l.hills.height * Math.PI) / 180, (l.hills.distance * 1000) / metres, l.hills.cover ?? 0, l.hills.ridges ?? 1] : [0, 1000, 0, 1],
     debris: [l.debris?.size ?? REAL_DEFAULTS.dustSize, l.debris?.opacity ?? REAL_DEFAULTS.dustOpacity, CHIP_SIZE, l.debris?.skirt ?? 0],
     dustShape: [l.debris?.erode ?? 0, l.debris?.thin ?? 0, 0, 0],
+    ballSteel: [l.atmosphere ? l.ballMetal?.metal ?? 0 : 0, (l.ballMetal?.rough ?? 0.2) ** 2, 0, 0],
     rocks: [l.ground?.rocks ?? 0, (l.ground?.rockSize ?? REAL_DEFAULTS.rockSize) / metres, (ROCK_CELL * (l.ground?.rockSize ?? REAL_DEFAULTS.rockSize)) / metres, ROCK_CLUMP / metres],
     blockAlbedo: [...[0, 1, 2].map((k) => l.ramp.reduce((acc, c) => acc + srgbToLinear(c[k]!), 0) / l.ramp.length), 0],
     ...Object.fromEntries(l.ramp.map((c, i) => [`ramp${i}`, [...linearToOklab(lin(c) as V3), 0]])),
@@ -200,6 +201,8 @@ export function hallUniforms(l: LookParams, metres: number, eye: V3, groundY: nu
 
 export class Renderer {
   readonly format: GPUTextureFormat;
+  /** Frames composited so far: the film grain's seed, so it moves every frame (a fresh renderer starts at 0, which keeps test frames deterministic). */
+  private postFrames = 0;
   look: LookParams = CANDY_NIGHT;
   private readonly frameBuf: GPUBuffer;
   private readonly frameData = new DataView(new ArrayBuffer(Frame.size));
@@ -919,7 +922,7 @@ export class Renderer {
     this.encodeScene(enc, f, 'scene', stamp);
     // With an atmosphere, the exposure adapts to the light (csAmbient, written in encodeScene).
     const adapted = this.look.atmosphere && this.real ? { buffer: this.real.atmosphere.ambient, offset: ADAPTED_EXPOSURE_OFFSET } : undefined;
-    if (this.toggles.post) this.post.encode(enc, this.hdr!, tex.createView(), this.freezeFx.grade > 0 ? { ...this.look, grade: this.freezeFx.grade } : this.look, stamp, adapted);
+    if (this.toggles.post) this.post.encode(enc, this.hdr!, tex.createView(), this.freezeFx.grade > 0 ? { ...this.look, grade: this.freezeFx.grade } : this.look, stamp, adapted, this.postFrames++);
     prof?.resolve(enc);
     let read: GPUBuffer | null = null;
     const bytesPerRow = Math.ceil((tex.width * 4) / 256) * 256;
