@@ -3,7 +3,8 @@
 // alone); the path WGSL against its CPU twin.
 import { emptySnapshot, type BodyDesc, type Snapshot } from '@tb/engine-api';
 import { readBuffer, sharedDevice } from '@tb/gpu';
-import { ICE_PATH_WGSL, icePath, LOOKS, lookAt, multiply, perspective, refractRay, Renderer, SnapshotSource, type FrameParams, type IceParams, type SurfaceOptions, type V3 } from '../src/index.ts';
+import { ICE_PATH_WGSL, icePath, lookAt, multiply, perspective, refractRay, Renderer, SnapshotSource, type FrameParams, type IceParams, type SurfaceOptions, type V3 } from '../src/index.ts';
+import { LOOKS } from './looks.ts';
 
 function rng(seed: number) {
   let a = seed >>> 0;

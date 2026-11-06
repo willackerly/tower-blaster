@@ -978,8 +978,8 @@ describe('bounce (restitution)', () => {
 
 describe('look', () => {
   it('round-trips the look and the real knobs through the URL; a preset keeps them', () => {
-    const c = parseViewerConfig('?look=real&real.sunElevation=4&real.visibility=12&real.ground=0.3,0.25,0.2&real.stone=granite&real.groundMaterial=dirt&real.groundScale=2&real.env=hall&real.hallSize=0.5');
-    expect(c).toMatchObject({ look: 'real', real: { sunElevation: 4, visibility: 12, groundAlbedo: [0.3, 0.25, 0.2], stone: 'granite', groundMaterial: 'dirt', groundScale: 2, env: 'hall', hallSize: 0.5 } });
+    const c = parseViewerConfig('?look=real&real.sunElevation=4&real.visibility=12&real.ground=0.3,0.25,0.2&real.stone=granite&real.groundMaterial=dirt&real.groundScale=2&real.env=hall&real.hallSize=0.5&real.toneMap=neutral&real.grain=0.3&real.ballMetal=1');
+    expect(c).toMatchObject({ look: 'real', real: { sunElevation: 4, visibility: 12, groundAlbedo: [0.3, 0.25, 0.2], stone: 'granite', groundMaterial: 'dirt', groundScale: 2, env: 'hall', hallSize: 0.5, toneMap: 'neutral', grain: 0.3, ballMetal: 1 } });
     expect(parseViewerConfig(toSearch(c))).toEqual(c);
     expect(toSearch(parseViewerConfig(''))).not.toMatch(/look|real/);
     expect(parseViewerConfig(presetSearch('?scenario=S1', c))).toMatchObject({ scenario: 'S1', look: 'real', real: c.real });
@@ -1005,6 +1005,8 @@ describe('look', () => {
     expect(realOverrides(values, hex, { stone: 'granite' })).toEqual({ stone: 'granite' });
     expect(realOverrides(values, hex, { stone: 'granite', groundMaterial: 'dirt' })).toEqual({ stone: 'granite', groundMaterial: 'dirt' });
     expect(realOverrides(values, hex, { stone: 'limestone', env: 'hall' })).toEqual({ env: 'hall' });
+    expect(realOverrides(values, hex, { toneMap: REAL_DEFAULTS.toneMap })).toEqual({});
+    expect(realOverrides(values, hex, { toneMap: 'aces' })).toEqual({ toneMap: 'aces' });
     expect(realOverrides(values, '#808080').groundAlbedo).toEqual(hexAlbedo('#808080'));
     expect(hexAlbedo('#808080')[0]).toBeCloseTo(0.216, 3);
     expect(() => realOverrides({ ...values, autoExposure: 2 }, hex)).toThrow(/auto exposure/);

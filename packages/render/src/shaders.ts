@@ -65,7 +65,11 @@ export const Frame = defineStruct('Frame', [
   ['shadowSoft', 'vec4f', 'real look: tan of the penumbra half angle (0: 3x3 taps), blocker search radius (texels), light depth range (m), steepest receiver plane (depth per uv)'],
   ['hallLook', 'vec4f', 'real look, hall: 1 while the eye is inside it, 2 outside it with its exterior on (else it is not drawn), metres per world unit, glass milkiness, iron grey'],
   ['hallShade', 'vec4f', 'real look, hall: glazed share of the vault, web lattice bar width (web panels), balustrade height (m), unused'],
+  ['ballSteel', 'vec4f', 'real look: the look\'s own ball as steel, 0 (clear-coated, as before) to 1 (bare metal), its GGX alpha, unused, unused'],
 ], 'Per-frame uniforms of the scene pass.');
+
+/** Linear specular colour (F0) of steel (iron's, Real-Time Rendering 4th ed. table 9.2). */
+export const STEEL_F0: [number, number, number] = [0.56, 0.57, 0.58];
 
 // The real look's sky (atmosphere.ts): bind group 1, read by the scene
 // shader only when it is generated for that look (sceneWgsl(true)).
@@ -675,6 +679,34 @@ const REAL_CONTACT = 'mix(0.5 + 0.5 * smoothstep(0.0, 1.5, rel.y + fr.eye.y - fr
 // (RealOptions.shadowFill): bounce from what is around, off screen.
 const REAL_SKY_AMBIENT = '(atmoAmbient[0].rgb + fr.groundShape.z * atmoAmbient[1].rgb) * ao.y + realBounce() * (1.0 - ao.y)';
 
+// The real look's steel ball (realism step 7, docs/render/polish.md): bare
+// metal, so no diffuse; the sun's GGX lobe and the environment's split sum,
+// both coloured by Schlick's Fresnel from STEEL_F0. Where the AO volume hides
+// the sky the ball mirrors the blocks around it (realBounce), as the real
+// look's ambient does; contact and occlusion dim the reflections as they dim
+// a dielectric's.
+const REAL_STEEL = /* wgsl */ `
+fn shadeSteel(rel: vec3f, n: vec3f, a: f32, ao: vec2f) -> vec3f {
+  let f0 = vec3f(${STEEL_F0.join(', ')});
+  let V = normalize(-rel);
+  let NoV = max(dot(n, V), 1e-4);
+  let L = fr.sun;
+  let NoL = max(dot(n, L), 0.0);
+  let sh = sunShadow(rel, n, NoL);
+  let H = normalize(L + V);
+  let m = 1.0 - max(dot(V, H), 0.0);
+  let m2 = m * m;
+  let F = f0 + (1.0 - f0) * m2 * m2 * m;
+  let spec = ggx(max(dot(n, H), 0.0), a) * smithVis(NoV, NoL, a) * PI * F;
+  let r = sqrt(a);
+  let B = envBrdf(0.0, r, NoV);
+  let A = envBrdf(1.0, r, NoV) - B;
+  let R = reflect(-V, n);
+  let occl = ${REAL_CONTACT} * ao.x;
+  return fr.sunColor * spec * sh + mix(realBounce(), env(R, r), ao.y) * (f0 * A + B) * occl;
+}
+`;
+
 // The real look's block (realism step 3): stone texture and relief, a palette
 // colour per block, chipped lighter edges, dirt toward the ground. Injected at
 // the top of fsBox; the stylized body after it runs only when REAL_BLOCK is false.
@@ -1099,6 +1131,7 @@ ${real ? REAL_SPEC : `  let spec = (ggx(NoH, a) * smithVis(NoV, NoL, a) + coat *
   return base * (amb + fr.sunColor * sh) + fr.sunColor * spec * sh + reflections * occl + pointLights(base, rel, n, V, a);
 }
 
+${real ? REAL_STEEL : ''}
 // Ball and flash lights (lights.ts): diffuse plus the base specular lobe,
 // inverse-square falloff windowed to zero at the radius, no shadows.
 fn pointLights(base: vec3f, rel: vec3f, n: vec3f, V: vec3f, a: f32) -> vec3f {
@@ -1229,7 +1262,12 @@ fn heatGlow(slot: u32, base: vec3f) -> vec3f {
   let base = mix(own * fxTint(w.x), vec3f(0.85), band);
   // Matte (FX_MATTE): satin, no clear coat, and none of the look's ball glow (a bomb's iron does not glow).
   let matte = (w.y & ${FX_MATTE}u) != 0u;
-  var c = shade(base, v.rel, n, aaAlpha(select(0.04, 0.3, matte), n, dndx, dndy), aaAlpha(0.0049, n, dndx, dndy), select(0.5, 0.0, matte), aoBody(v, n));
+  ${real ? `// The real look's own ball as steel (fr.ballSteel.x, 0: the clear-coated ball exactly as before).
+  let steel = select(0.0, fr.ballSteel.x, isBall && !paint && !matte);
+  let ao = aoBody(v, n);
+  var c = vec3f(0.0);
+  if (steel < 1.0) { c = shade(base, v.rel, n, aaAlpha(select(0.04, 0.3, matte), n, dndx, dndy), aaAlpha(0.0049, n, dndx, dndy), select(0.5, 0.0, matte), ao); }
+  if (steel > 0.0) { c = mix(c, shadeSteel(v.rel, n, aaAlpha(fr.ballSteel.y, n, dndx, dndy), ao), steel); }` : `var c = shade(base, v.rel, n, aaAlpha(select(0.04, 0.3, matte), n, dndx, dndy), aaAlpha(0.0049, n, dndx, dndy), select(0.5, 0.0, matte), aoBody(v, n));`}
   c += base * fxGlow(w, fr.time);
   let NoV = max(dot(n, normalize(-v.rel)), 0.0);
   // The look's ball glow takes the paint, not the band: a glowing white band would clip flat in a look with a strong glow (candy).
