@@ -1,4 +1,5 @@
 {
  "B1": { "metric": "collapse", "t2": 0.7, "t3": 0.94, "best": 0.9583025426945702, "castOn": "apple metal-3", "engine": "gpu", "hash": "18cf21360845bb8b", "n": 372, "seed": 1 },
- "B2": { "metric": "score", "t2": 770, "t3": 3200, "best": 3805, "castOn": "apple metal-3", "engine": "gpu", "hash": "c75fbd9832e6814b", "n": 186, "seed": 1 }
+ "B2": { "metric": "score", "t2": 770, "t3": 3200, "best": 3805, "castOn": "apple metal-3", "engine": "gpu", "hash": "c75fbd9832e6814b", "n": 186, "seed": 1 },
+ "B3": { "metric": "collapse", "t2": 0.53, "t3": 0.63, "best": 0.8068006323953886, "castOn": "apple metal-3", "engine": "gpu", "hash": "f11e947a868b602f", "n": 396, "seed": 1, "waived": ["skill","stable"] }
 }
