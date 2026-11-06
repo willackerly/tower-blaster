@@ -18,7 +18,8 @@ import { type GameSoundMode, soundSetOf } from './sound-map.ts';
 import { viewOf } from './view.ts';
 export { viewOf } from './view.ts';
 import { driverOptions, type EngineKind, gpuEngineOptions, makeEngine, roomAfter } from './engines.ts';
-import { hudHtml, meterTicks, type MeterTick, nextSelection, POWER_STEP, rackChips, resultHtml, starsText } from './hud.ts';
+import { type CardForward, hudHtml, meterTicks, type MeterTick, nextSelection, POWER_STEP, rackChips, resultHtml, starsText, tallyHtml } from './hud.ts';
+import type { Layout } from './layout.ts';
 import { type GoalLine, goalsHudHtml, goalsResultHtml } from './lot-hud.ts';
 import { duelHudHtml, duelResultHtml } from './duel-hud.ts';
 import { arcBeads, duelView, joinOverlays, type Overlay, turnCue, turnCueText, TurnSwing } from './duel-view.ts';
@@ -78,8 +79,13 @@ export interface GameHandle {
   counts: Record<string, number>;
   /** Pace juice in effect (`?keystone.hitstop=1`, `?keystone.slowmo=1`; both off by default). */
   feel: PaceFeel;
-  /** Engine step at which this attempt's round-over card first showed, or null. */
+  /** Engine step at which this attempt's round-over notice first showed (the card, or the tallying banner that comes first when docked), or null. */
   resultShownAt: number | null;
+  /**
+   * The result card's placement (layout.ts: docked aside or centred) and wall times (performance.now, ms): when the round's
+   * end settled (levelEnd) and when the card itself showed; null until then. Docked, the card waits Layout.cardDelay after the end.
+   */
+  card: { place: 'dock' | 'center'; endedMs: number | null; shownMs: number | null };
   /**
    * Wall time of this level's load (engine build and pre-settle), and of each live step since, in ms;
    * moving: each live step's structure bodies in motion (Reductions.nMoving, what settle v2 counts);
@@ -229,7 +235,7 @@ function safetyLimiter(ctx: AudioContext): AudioNode {
 export function newGameHandle(): GameHandle {
   const none = (): SessionState => ({ step: 0, phase: 'loading', strokes: 0, heritageBroken: 0, hash: '' });
   return {
-    status: 'loading', engine: '', level: '', phase: 'loading', ready: false, frozen: false, frames: 0, stepIndex: 0, strokes: 0, bodies: 0, collapse: 0, fast: false, pace: { timeScale: 1, speed: 1, tag: '', tailSkip: false, costMs: NaN }, view: { target: [0, 0, 0], distance: 0, yaw: 0, pitch: 0, following: false, jolt: 0, turning: false, cue: null, arcBeads: 0 }, input: { touch: false, gesture: 'idle', fingers: 0, aimed: null, power: 100, launch: 0 }, result: null, counts: {}, feel: { ...DEFAULT_FEEL }, resultShownAt: null, timing: { loadMs: 0, load: noPhases(), stepMs: [], moving: [], frameMs: [], costMs: [] }, draws: { drawn: 0, skipped: 0, decimating: false },
+    status: 'loading', engine: '', level: '', phase: 'loading', ready: false, frozen: false, frames: 0, stepIndex: 0, strokes: 0, bodies: 0, collapse: 0, fast: false, pace: { timeScale: 1, speed: 1, tag: '', tailSkip: false, costMs: NaN }, view: { target: [0, 0, 0], distance: 0, yaw: 0, pitch: 0, following: false, jolt: 0, turning: false, cue: null, arcBeads: 0 }, input: { touch: false, gesture: 'idle', fingers: 0, aimed: null, power: 100, launch: 0 }, result: null, counts: {}, feel: { ...DEFAULT_FEEL }, resultShownAt: null, card: { place: 'center', endedMs: null, shownMs: null }, timing: { loadMs: 0, load: noPhases(), stepMs: [], moving: [], frameMs: [], costMs: [] }, draws: { drawn: 0, skipped: 0, decimating: false },
     fire: () => false, bank: () => false, freeze: () => false, fireOpener: () => false, setMuted: () => {}, maxDpr: 2, quality: null, aim: () => null, reach: null, select: () => false, load: async () => {}, retry: async () => {}, undo: async () => false, undone: null, spare: null, undoMemory: () => ({ marks: 0, bytes: 0 }), capture: async () => null, firedLooks: () => [], marks: () => [], refreshMarks: () => {},
     state: none, line: () => [], replay: async () => none(), health: async () => null, pairsPerBody: 0, limitsHit: [], goals: [], grade: null, duel: null,
     sound: () => ({ mode: 'collapse', status: 'off', error: '', posted: 0, stats: null }),
@@ -345,6 +351,18 @@ export interface KeystoneEnv {
   muted?: boolean;
   /** The result card's Save session button (shown when given): the page saves the round just ended. */
   onSave?(): void;
+  /**
+   * Where the HUD and the result card sit (layout.ts; read live, so the Layout setting applies from the next card).
+   * Absent: classic, the card centred at once (the viewer).
+   */
+  layout?: Layout;
+  /**
+   * The result card's forward button at the end of a series (hud.ts CardForward): the next series' first level
+   * (its index in `levels`) with a label, or null; absent or null, Levels (onLevels) when given.
+   */
+  seriesForward?(i: number): { index: number; label: string } | null;
+  /** The result card's Levels button at the last level of a series with nothing after it: the page opens its level list (the front door). */
+  onLevels?(): void;
   /**
    * The level's lot sheet (docs/game/lot-sheets.md), asked at each load and retry: the sheet, the goals to
    * show (proven ones unless ?keystone.goals=all) and the ids the player met on earlier plays; null for none.
@@ -507,6 +525,13 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
   let arcs: Overlay[] = [], arcBeadsDrawn = 0;
   /** Every crown is down: the round is known to be over, the card shows, and the rest of the settle runs at fast-forward. */
   let ending = false;
+  // The docked layout's tallying banner (layout.ts, PT4): a small panel at the top, shown from the round's end
+  // until the card, which waits for it (cardTimer). Beside the result card, in the same parent.
+  const tally = document.createElement('div');
+  tally.className = 'kg-panel kg-tally';
+  tally.setAttribute('role', 'status');
+  (env.result.parentElement ?? document.body).append(tally);
+  let cardTimer: ReturnType<typeof setTimeout> | null = null;
 
   const aspect = () => (offscreen ? 640 / 400 : canvas.width / Math.max(1, canvas.height));
   /** The aspect a view is framed for: a phone held upright frames the width too (the CSS box: the canvas may not be sized for it yet). */
@@ -626,9 +651,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     follow.reset();
     handle.result = null;
     ending = false;
-    handle.resultShownAt = null;
-    env.result.classList.remove('show');
-    document.body.classList.remove('ended');
+    hideResult();
     selected = nextSelection(c.def.rack, s.rackLeft, selected);
     regrowT = null;
     waiting = [];
@@ -855,9 +878,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     handle.counts = counts;
     handle.level = c.def.id;
     ending = false;
-    handle.resultShownAt = null;
-    env.result.classList.remove('show');
-    document.body.classList.remove('ended');
+    hideResult();
     selected = nextSelection(c.def.rack, driver.session.rackLeft, retry ? selected : null);
     opener = env.opener?.(c) ?? null;
     if (!retry) {
@@ -1059,26 +1080,55 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     }
   }
 
+  /**
+   * The round is over (score null: every crown is down and the settle still runs at fast-forward; a score: it
+   * settled and is scored). Classic (no delay), the card shows at once, tallying until the score. Docked
+   * (layout.ts, PT4), a small tallying banner shows instead and the card waits Layout.cardDelay of wall time
+   * after the settle, so the player sees the collapse land; then it docks aside, not over the middle.
+   */
   function showResult(score: LevelScore | null) {
-    if (duel) {
-      if (!score) return;
-      env.result.innerHTML = duelResultHtml(duel);
-      env.result.classList.add('show');
-      document.body.classList.add('ended');
-      handle.resultShownAt ??= driver.engine.stepIndex;
-      return;
+    if (duel && !score) return;
+    const lay = env.layout, delay = lay ? lay.cardDelay : 0;
+    handle.resultShownAt ??= driver.engine.stepIndex;
+    handle.card.place = lay?.card ?? 'center';
+    env.result.classList.toggle('dock', handle.card.place === 'dock');
+    if (duel) env.result.innerHTML = duelResultHtml(duel);
+    else {
+      const sheet = score && lot ? goalsResultHtml(handle.goals, handle.grade, lot.sheet.grades !== undefined) : '';
+      env.result.innerHTML = resultHtml(c.def, score, driver.session.strokes, cardForward(), Boolean(env.onSave), sheet, true);
     }
-    const sheet = score && lot ? goalsResultHtml(handle.goals, handle.grade, lot.sheet.grades !== undefined) : '';
-    env.result.innerHTML = resultHtml(c.def, score, driver.session.strokes, step(levelIdx, 1), Boolean(env.onSave), sheet, true);
+    if (score) handle.card.endedMs = performance.now();
+    if (delay <= 0) { revealCard(); return; }
+    tally.innerHTML = tallyHtml(c.def, score, duel ? 'Round over' : null);
+    tally.classList.add('show');
+    document.body.classList.add('kg-tallying');
+    if (!score) return;
+    if (cardTimer !== null) clearTimeout(cardTimer);
+    cardTimer = setTimeout(() => { cardTimer = null; tally.classList.remove('show'); document.body.classList.remove('kg-tallying'); revealCard(); }, 1000 * delay);
+  }
+
+  function revealCard() {
     env.result.classList.add('show');
     document.body.classList.add('ended');
-    handle.resultShownAt ??= driver.engine.stepIndex;
+    handle.card.shownMs = performance.now();
+  }
+
+  /** The card's forward button: Next inside the series, else the next series, else Levels (the page's level list). */
+  function cardForward(): CardForward {
+    if (step(levelIdx, 1)) return { act: 'next' };
+    const f = env.seriesForward?.(levelIdx);
+    if (f) return { act: 'series', label: f.label };
+    return env.onLevels ? { act: 'levels' } : null;
   }
 
   function hideResult() {
+    if (cardTimer !== null) { clearTimeout(cardTimer); cardTimer = null; }
+    tally.classList.remove('show');
+    document.body.classList.remove('kg-tallying');
     env.result.classList.remove('show');
     document.body.classList.remove('ended');
     handle.resultShownAt = null;
+    handle.card = { place: handle.card.place, endedMs: null, shownMs: null };
   }
 
   /** Mirror the round's state onto the handle: each frame, and after each physics step (which runs between frames). */
@@ -1391,7 +1441,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     if (act === 'bank') bank();
     if (act === 'freeze') freeze();
     if (act === 'opener') fireOpener();
-    // Touch screens' Undo and Restart (hud.ts TOUCH_ACTS; keys U and R).
+    // Touch screens' Undo and Restart (hud.ts touchActs; keys U and R).
     if (act === 'undo') void handle.undo();
     if (act === 'restart' && !duel) void handle.retry();
     // The rack's chips and the power buttons: taps on a touch screen (keys 1-4, Q and E on a keyboard).
@@ -1406,6 +1456,8 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     if (act === 'undo') void handle.undo();
     if (act === 'save') env.onSave?.();
     if (act === 'next' && step(levelIdx, 1)) void load(levelIdx + 1).catch(fail);
+    if (act === 'series') { const f = env.seriesForward?.(levelIdx); if (f) void load(f.index).catch(fail); }
+    if (act === 'levels') env.onLevels?.();
     // A duel: Rematch starts the other side first (the other of its two levels); Same start replays this one.
     if (act === 'rematch' && duel) void load(1 - levelIdx).catch(fail);
     if (act === 'again' && duel) void handle.retry();
@@ -1450,8 +1502,9 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
       opener: !stepping && regrowT === null && s.phase === 'aiming' && openerNow() !== null, ticks,
       ...(duel ? { duel: duelHudHtml(duel, s.phase === 'aiming' && aimed ? duel.refuse(aimed.shot) : null, swing.active ? null : azFromYaw(orbit.yaw)) } : {}),
       ...(c.def.freeze !== undefined ? { freezes: { left: s.freezesLeft, total: c.def.freeze, frozen, can: canFreeze() } } : {}),
-    });
-    html += goalsHudHtml(handle.goals);
+    }, goalsHudHtml(handle.goals));
+    // The touch hint line goes once the first shot is in (body.kg-shot; the game page's CSS hides #help on touch).
+    document.body.classList.toggle('kg-shot', s.strokes > 0);
     if (crownsDown > crownsShown) html = html.replace('class="crowns"', 'class="crowns pop"');
     crownsShown = crownsDown;
     if (html !== lastHud) { env.hud.innerHTML = html; lastHud = html; }

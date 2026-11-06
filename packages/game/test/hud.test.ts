@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { B1, B2, compileLevel, L1, L2, levelScore, outcomeScore, tier, U3 } from '@tb/keystone';
 import { GAME_HELP, GAME_KEYS, HELP_BUDGET, helpHtml, TOUCH_HELP } from '../src/ui.ts';
-import { BANK_BUTTON, esc, freezeButton, POWER_STEP, fmtLeverage, fmtPoints, goldHtml, hudHtml, meterHtml, meterTicks, nextSelection, objectiveText, rackChips, resultHtml, starsText, TOUCH_ACTS } from '../src/hud.ts';
+import { BANK_BUTTON, esc, freezeButton, POWER_STEP, fmtLeverage, fmtPoints, goldHtml, hudHtml, meterHtml, meterTicks, nextSelection, objectiveText, rackChips, resultHtml, starsText, slotAction, tallyHtml, touchActs } from '../src/hud.ts';
 
 describe('rack', () => {
   it('groups by kind in first-seen order with counts and keys', () => {
@@ -174,15 +174,17 @@ describe('playtest polish (U5, U6)', () => {
     expect(hudHtml({ ...base, strokes: 1, ticks: [] })).not.toMatch(/class="meter"/);
     expect(hudHtml({ ...base, strokes: 1 })).toMatch(/Down <b class="down">55%<\/b>/);
   });
-  it('Leverage shows only once a shot is in', () => {
-    expect(hudHtml({ ...base, strokes: 0 })).not.toMatch(/Leverage/);
-    expect(hudHtml({ ...base, strokes: 1 })).toMatch(/Leverage<\/span><span>×2\.50/);
+  it('Leverage shows only once a shot is in; before, its row keeps its place hidden (lev pre)', () => {
+    expect(hudHtml({ ...base, strokes: 0 })).toMatch(/class="row lev pre"><span>Leverage<\/span><span>×0\.00/);
+    expect(hudHtml({ ...base, strokes: 1 })).toMatch(/class="row lev"><span>Leverage<\/span><span>×2\.50/);
   });
-  it('touch screens get Undo and Restart buttons once a shot is in', () => {
-    expect(hudHtml({ ...base, strokes: 0 })).not.toContain(TOUCH_ACTS);
+  it('touch screens get Undo and Restart icons, disabled until a shot is in', () => {
+    expect(hudHtml({ ...base, strokes: 0 })).toContain(touchActs(0));
+    expect(touchActs(0)).toMatch(/disabled.*disabled/);
     const html = hudHtml({ ...base, strokes: 1 });
-    expect(html).toContain(TOUCH_ACTS);
-    expect([...TOUCH_ACTS.matchAll(/<button data-act="(\w+)" class="kg-tch">/g)].map((m) => m[1])).toEqual(['undo', 'restart']);
+    expect(html).toContain(touchActs(1));
+    expect(touchActs(1)).not.toMatch(/disabled/);
+    expect([...touchActs(1).matchAll(/<button data-act="(\w+)" class="ico kg-tch" title="([^"]+)" aria-label="\2"/g)].map((m) => [m[1], m[2]])).toEqual([['undo', 'Undo shot'], ['restart', 'Restart']]);
   });
   it('the result card offers Undo shot (key U) after a shot, before Retry', () => {
     const score = levelScore(L1, [{ ke: 1000, yield: 0, dPE_mJ: 2_000_000, leverage: 2, crownsDown: 4, crownsTotal: 4, heritageNew: 0, displaced: 30, outOfLot: 0, pe_mJ: 0, spawnStep: 0, settleStep: 100 }], true, 40);
