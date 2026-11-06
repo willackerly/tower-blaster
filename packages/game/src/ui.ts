@@ -42,6 +42,23 @@ export const GAME_CSS = `
   .kg-result button.primary { background: #d8693f; }
   .kg-hud button.bank { font: inherit; padding: 4px 10px; border: 0; border-radius: 6px; background: #d8693f; color: #fff; cursor: pointer; margin-top: 6px; }
   .kg-hud .down { color: #f7b955; }
+  .kg-hud .down.none { color: #9aa3b8; }
+  .kg-hud .lev { margin-top: 4px; }
+  .kg-hud .meter { position: relative; height: 8px; margin: 6px 0 18px; border-radius: 4px; background: #434d63; box-shadow: inset 0 0 0 1px #5d6880; }
+  .kg-hud .meter i { display: block; height: 100%; border-radius: 4px; background: #f7b955; transition: width 0.25s ease-out; }
+  .kg-hud .meter .tick { position: absolute; top: -3px; bottom: -3px; width: 2px; margin-left: -1px; background: #b8c0d0; box-shadow: 0 0 0 1px #1a1f2a; }
+  .kg-hud .meter .tick.obj { top: -5px; bottom: -5px; width: 3px; margin-left: -1.5px; background: #e0a84a; }
+  .kg-hud .meter .tick b { position: absolute; top: 15px; left: 50%; transform: translateX(-50%); font-size: 11px; line-height: 1; letter-spacing: -1px; white-space: nowrap; color: #b8c0d0; font-weight: 400; }
+  .kg-hud .meter .tick.obj b { top: 17px; color: #e0a84a; }
+  .kg-hud .meter .tick.got { background: #fff; }
+  .kg-hud .meter .tick.got b { color: #f7b955; }
+  .kg-hud .acts { justify-content: flex-start; gap: 8px; margin-top: 6px; }
+  .kg-hud .acts.kg-tch { display: none; }
+  body.kg-touch .kg-hud .acts.kg-tch { display: flex; }
+  .kg-hud .acts button { font: inherit; padding: 4px 10px; border: 0; border-radius: 6px; background: #3a4459; color: #e8ebf2; cursor: pointer; box-shadow: inset 0 0 0 1px #5a6680; }
+  .kg-banner.hold { opacity: 1; animation: none; }
+  .kg-help button { font: inherit; padding: 0 2px; border: 0; background: none; color: #9fc3ff; cursor: pointer; }
+  .kg-help button:hover { text-decoration: underline; }
   @keyframes kg-slam { from { opacity: 0; transform: scale(1.6); } to { opacity: 1; transform: scale(1); } }
   @keyframes kg-stamp { from { opacity: 0; transform: rotate(-6deg) scale(2.4); } to { opacity: 1; transform: rotate(-6deg) scale(1); } }
   @keyframes kg-rise { from { opacity: 0; transform: translate(-50%, -44%); } to { opacity: 1; transform: translate(-50%, -50%); } }
@@ -58,7 +75,7 @@ export const GAME_CSS = `
   body.kg-touch .kg-hud .chip { min-height: 44px; padding: 0 14px; }
   body.kg-touch .kg-hud .chip:not(.on) { background: #3a4459; box-shadow: inset 0 0 0 1px #5a6680; }
   body.kg-touch .kg-hud button.pw { width: 44px; height: 44px; background: #3a4459; box-shadow: inset 0 0 0 1px #5a6680; font-size: 22px; }
-  body.kg-touch .kg-hud button.opener, body.kg-touch .kg-hud button.bank { min-height: 44px; padding: 0 14px; margin-bottom: 8px; }
+  body.kg-touch .kg-hud button.opener, body.kg-touch .kg-hud button.bank, body.kg-touch .kg-hud .acts button { min-height: 44px; padding: 0 14px; margin-bottom: 8px; }
   body.kg-touch .kg-hud button, body.kg-touch .kg-result button { touch-action: manipulation; }
   body.kg-touch .kg-result button { min-height: 44px; padding: 0 16px; }
   body.kg-touch .kg-menu { min-height: 44px; min-width: 64px; }
@@ -72,14 +89,27 @@ export const GAME_CSS = `
   }
 ${LOT_CSS}${DUEL_CSS}`;
 
-/** The help line for the game's controls (the game page's, and the viewer's under Keystone rules). */
-export const GAME_HELP = 'hover: aim · click: fire · drag: orbit (the launcher follows you) · wheel: zoom · <kbd>1</kbd>–<kbd>4</kbd> ammo · <kbd>Q</kbd>/<kbd>E</kbd> power · hold <kbd>Space</kbd>: fast · <kbd>B</kbd> bank (outcome levels) · <kbd>R</kbd> retry · <kbd>N</kbd>/<kbd>P</kbd> level · <kbd>M</kbd> mute';
+/**
+ * The game page's hint line in play: the few controls a first shot needs, and where the rest are. The HUD
+ * already shows the rack's keys, power (Q, E) and Bank (B), so they are left out. HELP_BUDGET caps it.
+ */
+export const GAME_HELP = 'click: fire · drag: orbit · wheel: zoom · <kbd>U</kbd> undo · <kbd>R</kbd> restart · <kbd>?</kbd> keys';
+/** The most characters the hint line may show (its text, keys included): one line at the game page's width. */
+export const HELP_BUDGET = 80;
+/** Every control, for the game page's ? (and the viewer's help under Keystone rules, which has room). */
+export const GAME_KEYS = 'hover: aim · click: fire · drag: orbit (the launcher follows you) · right-drag: pan · wheel: zoom · <kbd>1</kbd>–<kbd>4</kbd> ammo · <kbd>Q</kbd>/<kbd>E</kbd> power · hold <kbd>Space</kbd>: fast · <kbd>F</kbd> fire the first shot (when offered) · <kbd>B</kbd> bank (outcome levels) · <kbd>U</kbd> or <kbd>Ctrl</kbd>+<kbd>Z</kbd> undo the last shot · <kbd>R</kbd> restart · <kbd>N</kbd>/<kbd>P</kbd> level · <kbd>M</kbd> mute';
 
-/** The help line on a touch screen (body.kg-touch): the gestures of touch.ts. */
+/** The help line on a touch screen (body.kg-touch): the gestures of touch.ts; the HUD's Undo and Restart buttons do what U and R do. */
 export const TOUCH_HELP = 'drag: aim · lift: fire · two fingers: turn · pinch: zoom · add a finger mid-aim: cancel';
 
-/** The help panel's markup: the desktop line, or the touch line on a touch screen (GAME_CSS picks by body.kg-touch). */
-export const HELP_HTML = `<span class="kg-desk">${GAME_HELP}</span><span class="kg-tch">${TOUCH_HELP}</span>`;
+/**
+ * The game page's help panel: the desktop hint line, or every key once `?` (or its button) opens them,
+ * and the touch line on a touch screen (GAME_CSS picks by body.kg-touch).
+ */
+export const helpHtml = (all: boolean) => `<span class="kg-desk">${all ? `${GAME_KEYS} <button data-act="keys">fewer</button>` : GAME_HELP.replace('<kbd>?</kbd> keys', '<button data-act="keys"><kbd>?</kbd> keys</button>')}</span><span class="kg-tch">${TOUCH_HELP}</span>`;
+
+/** The help panel as the page opens: the hint line (helpHtml(false)). */
+export const HELP_HTML = helpHtml(false);
 
 /** Add GAME_CSS to the document once. */
 export function installGameStyles(doc: Document = document): void {

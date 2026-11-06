@@ -49,11 +49,16 @@ When the player changes a setting on the door, it is stored and its URL key is d
 - **The pre-aimed opener on every level.** Rejected: it hands out each level's best opening. It is offered once, on a first visit, as an option (`keystone.preaim=1` for all).
 - **Progress keyed by level id only.** Rejected: levels will be re-tuned between playtest deploys, and an old best would read as earned on the new level.
 
+## In play: the HUD and the hint line (roadmap U5, 2026-11-06)
+
+From the second-perspective visual review of 2026-11-02:
+
+- **Hint line.** One short line, `click: fire · drag: orbit · wheel: zoom · U undo · R restart · ? keys` (`GAME_HELP`, at most `HELP_BUDGET` = 80 characters). The HUD already shows the rack's keys, power (Q, E) and Bank (B), so they are left out. **?** (or the line's "? keys" button) shows every key (`GAME_KEYS`) and goes back. The viewer's help under Keystone rules shows `GAME_KEYS`.
+- **Leverage** shows from the first shot on (it is ×0.00 before one, which reads as a score of nothing).
+- **Down bar.** Under "Down", an outcome level's HUD draws a bar filled to D with a tick per star threshold in collapse (`meterTicks`): one star where the objective is a collapse share, two and three where the level's cast stars are in collapse (B1: 40%, 70%, 94%). A tick turns white, its stars gold, once D reaches it. A hold level's bar is the share pulled. No ticks, no bar: B2's stars are points and its objective is crowns, and a custom run has no cast stars (`castStars`), so on Rapier B1 shows only the objective's tick. The ticks are a guide; the stars are still scored at the settle.
+
+Tests: `game/test/hud.test.ts` (ticks per level, fill and lit ticks, Leverage, the result card's Undo, the hint's budget) and `game/test/hud-e2e.test.ts` (at 1280x800: the hint is one line within budget and ? toggles every key; no Leverage before the first shot; B1's bar fills as the opener brings the wall down and ends at the HUD's D; on the GPU solver, B1's three ticks at 40%, 70%, 94%). Undo and restart: [undo.md](undo.md).
+
 ## Follow-ups (not in this step)
 
-These come from the second-perspective visual review (2026-11-02):
-
-- ~~Touch controls on phones: power −/+, no key chips, and "Tap the structure to fire".~~ Done (U4): [touch-controls.md](touch-controls.md). A finger drags to aim and fires on lift rather than a bare tap, so the arc shows before the shot.
-- A shorter in-play hint line in place of the full key list.
-- Hide Leverage until the first shot.
-- A Down bar with tick marks at the star targets.
+- Touch controls on phones: done (U4), [touch-controls.md](touch-controls.md). A finger drags to aim and fires on lift rather than a bare tap, so the arc shows before the shot. On a touch screen the HUD has Undo and Restart buttons after the first shot ([undo.md](undo.md)).

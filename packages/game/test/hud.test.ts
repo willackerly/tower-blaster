@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { L1, L2, levelScore, outcomeScore, tier, U3 } from '@tb/keystone';
-import { BANK_BUTTON, esc, POWER_STEP, fmtLeverage, fmtPoints, hudHtml, nextSelection, objectiveText, rackChips, resultHtml, starsText } from '../src/hud.ts';
+import { B1, B2, compileLevel, L1, L2, levelScore, outcomeScore, tier, U3 } from '@tb/keystone';
+import { GAME_HELP, GAME_KEYS, HELP_BUDGET, helpHtml, TOUCH_HELP } from '../src/ui.ts';
+import { BANK_BUTTON, esc, POWER_STEP, fmtLeverage, fmtPoints, hudHtml, meterHtml, meterTicks, nextSelection, objectiveText, rackChips, resultHtml, starsText, TOUCH_ACTS } from '../src/hud.ts';
 
 describe('rack', () => {
   it('groups by kind in first-seen order with counts and keys', () => {
@@ -112,5 +113,56 @@ describe('formatting', () => {
     expect(html).not.toMatch(/par/);
     expect(html).toMatch(/>62% DOWN</);
     expect(html).toMatch(/Rack left/);
+  });
+});
+
+describe('playtest polish (U5, U6)', () => {
+  const b1 = compileLevel(B1);
+  const base = { level: B1, crownsDown: 0, crownsTotal: 0, heritageBroken: 0, heritageTotal: 0, power: 100, liveLeverage: 2.5, phase: 'aiming', reachable: null, chips: rackChips(B1.rack, B1.rack, 'w-bomb'), collapse: 0.55 };
+  it('the Down bar ticks every star threshold in collapse: B1 has the objective and its cast T2 and T3', () => {
+    expect(meterTicks(b1)).toEqual([{ at: B1.objective.kind === 'collapse' ? B1.objective.min : NaN, stars: 1 }, { at: B1.stars!.t2, stars: 2 }, { at: B1.stars!.t3, stars: 3 }]);
+    // A custom run has no cast stars (castStars), so only the objective's tick; a star by points (B2) or a par level has none.
+    expect(meterTicks(compileLevel({ ...B1, custom: true })).map((t) => t.stars)).toEqual([1]);
+    expect(meterTicks(compileLevel(B2))).toEqual([]);
+    expect(meterTicks(compileLevel(L1))).toEqual([]);
+  });
+  it('the bar fills to D and lights the ticks it has reached; no ticks, no bar', () => {
+    const html = hudHtml({ ...base, strokes: 1, ticks: meterTicks(b1) });
+    expect(html).toMatch(/class="meter"/);
+    expect(html).toMatch(/<i style="width:55\.0%">/);
+    expect([...html.matchAll(/class="tick( obj)?( got)?"/g)].map((m) => [Boolean(m[1]), Boolean(m[2])])).toEqual([[true, true], [false, false], [false, false]]);
+    expect([...html.matchAll(/<b>(★+)<\/b>/g)].map((m) => m[1])).toEqual(['★', '★★', '★★★']);
+    expect(meterHtml(1.7, meterTicks(b1), 'down')).toMatch(/width:100\.0%/);
+    expect(hudHtml({ ...base, strokes: 1, ticks: [] })).not.toMatch(/class="meter"/);
+    expect(hudHtml({ ...base, strokes: 1 })).toMatch(/Down <b class="down">55%<\/b>/);
+  });
+  it('Leverage shows only once a shot is in', () => {
+    expect(hudHtml({ ...base, strokes: 0 })).not.toMatch(/Leverage/);
+    expect(hudHtml({ ...base, strokes: 1 })).toMatch(/Leverage<\/span><span>×2\.50/);
+  });
+  it('touch screens get Undo and Restart buttons once a shot is in', () => {
+    expect(hudHtml({ ...base, strokes: 0 })).not.toContain(TOUCH_ACTS);
+    const html = hudHtml({ ...base, strokes: 1 });
+    expect(html).toContain(TOUCH_ACTS);
+    expect([...TOUCH_ACTS.matchAll(/<button data-act="(\w+)" class="kg-tch">/g)].map((m) => m[1])).toEqual(['undo', 'restart']);
+  });
+  it('the result card offers Undo shot (key U) after a shot, before Retry', () => {
+    const score = levelScore(L1, [{ ke: 1000, yield: 0, dPE_mJ: 2_000_000, leverage: 2, crownsDown: 4, crownsTotal: 4, heritageNew: 0, displaced: 30, outOfLot: 0, pe_mJ: 0, spawnStep: 0, settleStep: 100 }], true, 40);
+    const html = resultHtml(L1, score, 1, true, false, '', true);
+    expect([...html.matchAll(/data-act="(\w+)"/g)].map((m) => m[1])).toEqual(['undo', 'retry', 'next']);
+    expect(resultHtml(L1, score, 1, true)).not.toMatch(/undo/);
+  });
+  it('the hint line fits its budget and names undo, restart and where the rest are; ? shows every key', () => {
+    const text = (h: string) => h.replace(/<[^>]+>/g, '');
+    expect(text(GAME_HELP).length).toBeLessThanOrEqual(HELP_BUDGET);
+    // Desktop and touch hints are separate spans; CSS shows one of them.
+    const span = (h: string, cls: string) => text(h.match(new RegExp(`<span class="${cls}">(.*?)</span>(?=<span|$)`))?.[1] ?? '');
+    expect(span(helpHtml(false), 'kg-desk')).toBe(text(GAME_HELP));
+    expect(span(helpHtml(false), 'kg-tch')).toBe(TOUCH_HELP);
+    expect(span(helpHtml(true), 'kg-tch')).toBe(TOUCH_HELP);
+    for (const k of ['U', 'R', '?']) expect(GAME_HELP).toContain(`<kbd>${k}</kbd>`);
+    expect(text(GAME_KEYS).length).toBeGreaterThan(HELP_BUDGET);
+    for (const k of ['Q', 'E', 'Space', 'B', 'F', 'U', 'R', 'N', 'P', 'M']) expect(GAME_KEYS).toContain(`<kbd>${k}</kbd>`);
+    expect(helpHtml(true)).toContain('data-act="keys"');
   });
 });

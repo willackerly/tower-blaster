@@ -1,7 +1,7 @@
 // HUD and result card. Formatting is pure and tested; the DOM side only
 // writes strings into fixed elements. Level text is authored in this repo,
 // but everything still goes through esc().
-import { itemRef, type LevelDef, type LevelScore, type Objective, type RackItem, scoringOf, tier, TIER_NAMES } from '@tb/keystone';
+import { castStars, type CompiledLevel, itemRef, type LevelDef, type LevelScore, type Objective, type RackItem, scoringOf, tier, TIER_NAMES } from '@tb/keystone';
 import { PROJECTILE_PRESETS } from '@tb/weapons';
 
 export const esc = (s: string) => s.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
@@ -61,7 +61,39 @@ export interface HudState {
   opener?: boolean;
   /** A duel's block (duel-hud.ts duelHudHtml): it replaces the objective, crowns, heritage and leverage rows. */
   duel?: string;
+  /** Outcome levels: the star thresholds on the Down (or Pulled) bar (meterTicks); no bar without any. */
+  ticks?: readonly MeterTick[];
 }
+
+/** A star threshold on the HUD's Down bar: the share (0..1) at which `stars` stars are in reach. */
+export interface MeterTick { at: number; stars: 1 | 2 | 3 }
+
+/**
+ * The star thresholds an outcome level's HUD bar can show, in the bar's own measure: collapse D, or for a
+ * hold level the share pulled. One star where the objective is a collapse share; two and three where the
+ * level's cast stars (castStars: none on a custom run) are in that measure. A star by points, crowns or
+ * skyline has no place on the bar (B2's stars are points: no bar there). Sorted by share.
+ */
+export function meterTicks(c: CompiledLevel): MeterTick[] {
+  const d = c.def;
+  if (scoringOf(d) !== 'outcome') return [];
+  const measure = d.objective.kind === 'hold' ? 'pulled' : 'collapse';
+  const out: MeterTick[] = [];
+  if (d.objective.kind === 'collapse') out.push({ at: d.objective.min, stars: 1 });
+  const s = castStars(c);
+  if (s && s.metric === measure) out.push({ at: s.t2, stars: 2 }, { at: s.t3, stars: 3 });
+  return out.filter((t) => t.at > 0 && t.at <= 1).sort((a, b) => a.at - b.at);
+}
+
+/** The Down bar: filled to `value` (0..1), a tick per star threshold, lit once the value has reached it. */
+export function meterHtml(value: number, ticks: readonly MeterTick[], label: string): string {
+  const v = Math.max(0, Math.min(1, value));
+  const marks = ticks.map((t) => `<span class="tick${t.stars === 1 ? ' obj' : ''}${v >= t.at ? ' got' : ''}" style="left:${(100 * t.at).toFixed(1)}%" title="${'★'.repeat(t.stars)} at ${pct(t.at)} ${label}"><b>${'★'.repeat(t.stars)}</b></span>`).join('');
+  return `<div class="meter" role="meter" aria-label="${label}" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${Math.floor(100 * v)}"><i style="width:${(100 * v).toFixed(1)}%"></i>${marks}</div>`;
+}
+
+/** Undo and Restart for a touch screen, which has no U or R key (kg-tch: shown only there), after the first shot. */
+export const TOUCH_ACTS = '<div class="row acts kg-tch"><button data-act="undo" class="kg-tch">Undo shot</button><button data-act="restart" class="kg-tch">Restart</button></div>';
 
 /** The pre-aimed opener's button (key F), shown before the first shot of a level that has one. */
 export const OPENER_BUTTON = '<button data-act="opener" class="opener"><kbd>F</kbd> Fire the first shot</button>';
@@ -100,7 +132,8 @@ export function hudHtml(s: HudState): string {
   const reach = s.pullRefused ? '<div class="bad small">Crowns and heritage stay: pull a plain block</div>' : s.reachable === false ? '<div class="bad small">Out of reach at this power</div>' : '';
   const outcome = scoringOf(d) === 'outcome';
   const head = outcome
-    ? `<div class="row"><span>Shot ${s.strokes}</span>${d.objective.kind === 'hold' ? `<span>Pulled <b class="down">${pct(s.pulled ?? 0)}</b></span>` : `<span>Down <b class="down">${pct(s.collapse ?? 0)}</b></span>`}</div>
+    ? `<div class="row"><span>Shot ${s.strokes}</span>${d.objective.kind === 'hold' ? `<span>Pulled <b class="down${(s.pulled ?? 0) > 0 ? '' : ' none'}">${pct(s.pulled ?? 0)}</b></span>` : `<span>Down <b class="down${(s.collapse ?? 0) > 0 ? '' : ' none'}">${pct(s.collapse ?? 0)}</b></span>`}</div>
+    ${s.ticks?.length ? meterHtml(d.objective.kind === 'hold' ? s.pulled ?? 0 : s.collapse ?? 0, s.ticks, d.objective.kind === 'hold' ? 'pulled' : 'down') : ''}
     <div class="row"><span>Objective</span><span class="${s.met ? 'ok' : ''}">${esc(objectiveText(d.objective))}${s.met ? ' ✓' : ''}</span></div>`
     : `<div class="row"><span>Par ${d.par}</span><span>Stroke ${s.strokes}</span></div>`;
   const crowns = !outcome || s.crownsTotal ? `<div class="row"><span>Crowns</span><span class="crowns">${s.crownsDown} / ${s.crownsTotal}</span></div>` : '';
@@ -117,10 +150,11 @@ export function hudHtml(s: HudState): string {
     ${head}
     ${crowns}
     ${heritage}
-    <div class="row"><span>Leverage</span><span>${fmtLeverage(s.liveLeverage)}</span></div>
     <div class="chips">${chips}</div>
     ${s.opener ? `<div class="row">${OPENER_BUTTON}<span class="small"><span class="kg-desk">or aim and click</span><span class="kg-tch">or drag and lift</span></span></div>` : ''}
-    ${power}${reach}${outcome && s.canBank ? `<div class="row">${BANK_BUTTON}<span class="small">end here, keep the rack</span></div>` : ''}`;
+    ${power}${reach}${outcome && s.canBank ? `<div class="row">${BANK_BUTTON}<span class="small">end here, keep the rack</span></div>` : ''}
+    ${s.strokes > 0 ? `<div class="row lev"><span>Leverage</span><span>${fmtLeverage(s.liveLeverage)}</span></div>` : ''}
+    ${s.strokes > 0 ? TOUCH_ACTS : ''}`;
 }
 
 /** Result card: score lines slam in one by one, then the stamp and stars. */
@@ -129,11 +163,12 @@ export function hudHtml(s: HudState): string {
  * crown is down) and the rest of the settle is still running: the card shows
  * at once and tallies, and is drawn again with the score when it settles.
  */
-export function resultHtml(level: LevelDef, score: LevelScore | null, strokes: number, hasNext: boolean, canSave = false, extra = ''): string {
+export function resultHtml(level: LevelDef, score: LevelScore | null, strokes: number, hasNext: boolean, canSave = false, extra = '', canUndo = false): string {
   const outcome = scoringOf(level) === 'outcome';
   const shotsText = `${strokes} ${outcome ? 'shot' : 'stroke'}${strokes === 1 ? '' : 's'}${outcome ? '' : ` · par ${level.par}`}`;
   const save = canSave && score ? '<button data-act="save" title="Download this round as a file to send back">Save session</button>' : '';
-  const actions = `<div class="actions"><button data-act="retry"><kbd>R</kbd> Retry</button>${save}${hasNext ? '<button data-act="next" class="primary"><kbd>N</kbd> Next</button>' : ''}</div>`;
+  const undo = canUndo && strokes > 0 ? '<button data-act="undo" title="Take the last shot back and play on from the shot before"><kbd>U</kbd> Undo shot</button>' : '';
+  const actions = `<div class="actions">${undo}<button data-act="retry"><kbd>R</kbd> Retry</button>${save}${hasNext ? '<button data-act="next" class="primary"><kbd>N</kbd> Next</button>' : ''}</div>`;
   if (!score) {
     return `
     <div class="name">${esc(level.name)}</div>
