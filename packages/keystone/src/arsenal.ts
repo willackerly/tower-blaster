@@ -22,8 +22,8 @@
 import { blastArea, type BodyDesc, checkBlast, type InputEvent, type ShapeDesc, type Snapshot, type SpawnEvent } from '@tb/engine-api';
 import { boundingRadius } from '@tb/geom';
 import {
-  checkWeapon, type GrenadeBlast, type GrenadeSpec, type GrenadeWorld, type MunitionSpec, nominalYield, scaleWeapon, SHELL_FRICTION, SHELL_RESTITUTION, type ShellSpec,
-  type WeaponScale, type WeaponSpec, WeaponRuntime, weaponBudget, type YieldFill,
+  BUILTIN_WEAPONS, checkWeapon, loadIssues, type GrenadeBlast, type GrenadeSpec, type GrenadeWorld, type MunitionSpec, nominalYield, scaleWeapon, SHELL_FRICTION, SHELL_RESTITUTION, type ShellSpec,
+  type WeaponLoad, type WeaponScale, type WeaponSpec, type WeaponTier, WeaponRuntime, weaponBudget, type YieldFill,
 } from '@tb/weapons';
 import type { CompiledLevel } from './level.ts';
 import { grenadeShell, type ItemSpec, itemRef, levelWeapon, type RackItem, weaponOf } from './rack.ts';
@@ -128,6 +128,12 @@ export function levelArm(c: CompiledLevel, key: string): Arm {
       blasts: [{ path: 'blast', blast: g.blast, count: 1 }], yield: nominalYield(g.blast, fill), maxRadius: boundingRadius(shape),
     };
   }
+  return specArm(c, raw);
+}
+
+/** A WeaponSpec in the viewer's cube units as an arm of level `c`: checked, then scaled to its commonest block (cubeScale). */
+function specArm(c: CompiledLevel, raw: WeaponSpec): Arm {
+  const fill = levelFill(c);
   // Blast defaults filled before scaling, so maxDv and maxSpeed scale too (the viewer's worldWeapon does the same).
   const filled = JSON.parse(JSON.stringify(checkWeapon(raw)), (k, v) => (k === 'blast' ? fullBlast(v) : v)) as WeaponSpec;
   const spec = checkWeapon(scaleWeapon(filled, cubeScale(c)));
@@ -149,6 +155,40 @@ export function levelArm(c: CompiledLevel, key: string): Arm {
     yield: blasts.reduce((a, b) => a + b.count * nominalYield(b.blast, fill), 0),
     maxRadius: Math.max(...munitions.map((x) => boundingRadius(x.shape))),
   };
+}
+
+const grenadeYields = new WeakMap<CompiledLevel, number>();
+
+/**
+ * One grenade of energy on level `c`, J: the M grenade (BUILTIN_WEAPONS.grenadem, grenadeEnergies 1)
+ * scaled to the level as any WeaponSpec is. A weapon's yield over it is its grenadeEnergies as
+ * written, on every level (yield.ts), and it measures a GrenadeSpec weapon's energy the same way.
+ */
+export function levelGrenadeYield(c: CompiledLevel): number {
+  let y = grenadeYields.get(c);
+  if (y === undefined) grenadeYields.set(c, (y = specArm(c, BUILTIN_WEAPONS.grenadem!).yield));
+  return y;
+}
+
+/**
+ * What one shot of `arm` costs a device, for the tier caps (@tb/weapons tiers.ts): its bodies, its
+ * blasts (each as often as it can go off) and its yield in grenades on this level (0 on a level with
+ * no structure, where there is nothing to set moving).
+ */
+export function armLoad(c: CompiledLevel, arm: Arm): WeaponLoad {
+  const unit = levelGrenadeYield(c);
+  return { bodies: arm.bodies, blasts: arm.blasts.reduce((n, b) => n + b.count, 0), grenades: unit > 0 ? arm.yield / unit : 0 };
+}
+
+/**
+ * Why rack item `item` of level `c` is not fired on a device of `tier` (its arm's load over the tier's
+ * caps: the number, the cap, the tier that fires it), or null when it fits or is not a weapon.
+ */
+export function armRefusal(c: CompiledLevel, item: string, tier: WeaponTier): string | null {
+  const arm = c.arms[item];
+  if (!arm) return null;
+  const issues = loadIssues(armLoad(c, arm), tier);
+  return issues.length ? `${item} not fired: ${issues.map((i) => i.message).join('; ')}` : null;
 }
 
 /**

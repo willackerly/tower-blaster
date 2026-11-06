@@ -5,7 +5,8 @@
 import { type BodyDesc, massOf, type SceneDesc, type Vec3 } from '@tb/engine-api';
 import { DEFAULT_GAP, DEFAULT_UNIT, encodeTag, GRAVITY, MATERIALS, materialId, type MaterialName, type Role, ROLES } from './materials.ts';
 import { peOf_mJ, SETTLE_RULES, type SettleRule } from './rules.ts';
-import { type Arm, levelArm, rackArms } from './arsenal.ts';
+import { type Arm, armLoad, levelArm, rackArms } from './arsenal.ts';
+import { loadIssues, loadTier } from '@tb/weapons';
 import { isRackItem, itemRef, type LevelWeapon, RACK_ITEM_NAMES, rackBodies, type RackItem, speedOf, WEAPON_KEY, weaponOf } from './rack.ts';
 import { type ScenarioPart, scenarioBodies, scenarioKey } from './scenario-part.ts';
 import { ammoBody, type LauncherDef, launcherPos, type Shot, type ShotFrame } from './shots.ts';
@@ -661,6 +662,9 @@ function rackIssues(c: CompiledLevel, engine: LevelEngine): Issue[] {
     tunnel(item, b.shape, v);
     heavy(item, mass);
     if (arm) {
+      // Over every device tier's caps (@tb/weapons tiers.ts): no device fires it, so no level may carry it.
+      const load = armLoad(c, arm);
+      if (!loadTier(load)) issues.push({ code: 'weapon', message: `${item}: ${loadIssues(load, 'high').map((i) => i.message).join('; ')}` });
       // A weapon's children (each at its speed bound: the shell's top speed plus the spreads that threw it) and its blasts' kicks.
       for (const x of arm.munitions.slice(1)) { tunnel(`${item}'s ${x.path}`, x.shape, x.speed); heavy(`${item}'s ${x.path}`, x.mass); }
       // A kick moves structure bodies (boxes) and munitions alike.
