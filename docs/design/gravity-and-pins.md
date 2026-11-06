@@ -54,6 +54,8 @@ A new input event, `FieldEvent` (`packages/engine-api/src/field.ts`):
 - **Wake-all:** with sleep, a field event that changes gravity (any component differs from the current value) or carries a non-zero kick wakes every sleeper but the pins. A sleeper holds its pose under the loads it fell asleep with; a new gravity changes every load, and a tower a hair from its tipping point must feel a slight tilt. An event that sets gravity to its current value wakes nothing.
 - **Quantised:** every component of `gravity` and `kick` must be a multiple of 2^-12 (m/s^2 or m/s) and at most 2^10 in magnitude (`FIELD_QUANTUM`, `checkInputQueue` refuses others; `quantiseField()` rounds). Such a number has at most 22 significant bits, so it is exact in f32 as in f64: the GPU's uniform holds the very value the reference uses, a level file's JSON round trip is exact, and "changed" is an exact comparison.
 
+Islands (C10, many worlds in one solve) refuse field events: gravity and kicks belong to the whole solve, so one island cannot carry one.
+
 The kick is added to the adaptive warm start's previous velocity too (reference `prevLinVel`, GPU `SolverBody.prevVel`), as a blast's is, so a kicked body at rest is not first guessed to be in free fall.
 
 ### Alternatives considered
