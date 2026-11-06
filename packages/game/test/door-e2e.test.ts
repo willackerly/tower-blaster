@@ -104,7 +104,12 @@ describe('front door', () => {
     expect(await page.evaluate(() => window.__game.feel.rapid)).toBe(true);
     await page.locator('.kg-door [data-act="rapid"][data-arg="off"]').click();
     expect(await page.evaluate(() => window.__game.feel.rapid)).toBe(false);
-    expect(await page.evaluate(() => JSON.parse(localStorage.getItem('tb.settings.v1')!))).toEqual({ sound: false, look: 'real', sharp: 1, camera: 'dynamic', rapid: false });
+    // Duel turns: the turn view on by default; Leave it applies to the game at once.
+    expect(await page.locator('.kg-door [data-act="duelview"].on').innerText()).toBe('Turn the view');
+    expect(await page.evaluate(() => window.__game.feel.turnView)).toBe(true);
+    await page.locator('.kg-door [data-act="duelview"][data-arg="off"]').click();
+    expect(await page.evaluate(() => window.__game.feel.turnView)).toBe(false);
+    expect(await page.evaluate(() => JSON.parse(localStorage.getItem('tb.settings.v1')!))).toEqual({ sound: false, look: 'real', sharp: 1, camera: 'dynamic', rapid: false, duelView: false });
     expect(await page.evaluate(() => window.__game.maxDpr)).toBe(1);
     expect(new URLSearchParams(await page.evaluate(() => location.search)).has('look')).toBe(false);
 
@@ -114,7 +119,8 @@ describe('front door', () => {
     expect(await page.locator('.kg-door [data-act="look"].on').innerText()).toBe('Photoreal');
     expect(await page.locator('.kg-door [data-act="sound"]').innerText()).toBe('Off');
     expect(await page.locator('.kg-door [data-act="camera"].on').innerText()).toBe('Dynamic');
-    expect(await page.evaluate(() => window.__game.feel)).toMatchObject({ follow: true, shake: true, rapid: false });
+    expect(await page.evaluate(() => window.__game.feel)).toMatchObject({ follow: true, shake: true, rapid: false, turnView: false });
+    expect(await page.locator('.kg-door [data-act="duelview"].on').innerText()).toBe('Leave it');
     expect(await page.locator('.kg-door [data-act="rapid"].on').innerText()).toBe('Off');
     const card = await page.locator('.kg-door .card:not(.duel)').first().innerText();
     expect(card).toContain('1 play');
