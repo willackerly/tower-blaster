@@ -405,8 +405,10 @@ A steel ball on plaster has plaster's contact, though: the Hertz pair modulus
 Hertz contacts too, last as long (E*^(-2/5)), so the roughness stops near 1.4 kHz instead of 7, under
 the ball's modes. The game's ammo now plays the pair's contact with the level's main material
 (sound-map.ts `ammoOn`; a material's asperity time is `roughT`, default ROUGH_T 0.15 ms). The
-classic set keeps G6's steel on steel. L1-L5 after: wood 0.10-0.32 (was 0.40-0.83 with the #193
-set), L1 and L2 mineral 0.53 and 0.51 (Crack, Crushing), real share 0.80-0.95. L3 and L4 stay mixed
+classic set keeps G6's steel on steel. On the same L1-L5 captures, main's real set before this
+change read L1 and L2 as glass (0.39 and 0.37, Chink, Glass, Ding), and after it they read mineral
+(0.53 and 0.51; Crack, Crushing); L5 stays mineral (0.43 to 0.44), wood is 0.10-0.32 on all five,
+real share 0.80-0.95. L3 and L4 stay mixed
 (their impacts are few, and the clip is mostly silence).
 
 Level: the solid plaster is louder at the peak; at GAME_SOUND_DB_REAL -17 one hit in L1 goes 1.1 dB
