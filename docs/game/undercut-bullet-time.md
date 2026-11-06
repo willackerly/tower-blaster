@@ -41,7 +41,9 @@ Each was checked on the f64 reference and on Rapier (keystone-lab `undercut-leve
 
 ## M2 Bullet Time
 
-Freeze as an option on any level (`keystone.freeze=3`), plus Stage 1 levels scored on what the volley achieves. Echo (each retry re-fires the earlier volley at its steps) reuses the `@n` replay and follows once freeze is in play. Live chain is later.
+Freeze as an option on any level (`keystone.freeze=3`), plus Stage 1 levels scored on what the volley achieves.
+
+**In the game (PR 5).** On a level with a budget, key T (or the HUD's Freeze button) freezes a running shot while a freeze is left. The physics loop holds (`active` is false, so the pacer owes nothing on resume), the collision sound pauses, the HUD shows FROZEN in place of the slow-motion tag and a Resume button, and aiming works while frozen even with rapid fire off (`keystone.rapid=0`). A shot fired while frozen goes in through the rapid-fire path and the world resumes. T again resumes free. The HUD counts freezes left of the level's. The viewer's Keystone panel has a freezes box (empty: the level's own) that sets `keystone.freeze`. The camera is untouched: freezing never moves it. Echo (each retry re-fires the earlier volley at its steps) reuses the `@n` replay and follows once freeze is in play. Live chain is later.
 
 ## Steps
 

@@ -38,6 +38,8 @@ export interface GameHandle {
   phase: string;
   /** Aiming, and the Regrow animation has finished: a shot can be fired. (With rapid fire one can also go in while a shot runs.) */
   ready: boolean;
+  /** Bullet Time: the physics is frozen mid-shot (key T); the world stands still to be aimed at, and a shot fired cuts in and resumes it. */
+  frozen: boolean;
   frames: number;
   stepIndex: number;
   strokes: number;
@@ -91,6 +93,13 @@ export interface GameHandle {
   fire(shot: Shot): boolean;
   /** Outcome levels: end the level now, keeping the rack left (key B, the HUD's Bank button); false when it cannot. */
   bank(): boolean;
+  /**
+   * Bullet Time (key T): freeze a running shot (on true, or toggle when absent), on a level with a
+   * freeze budget (LevelDef.freeze, keystone.freeze) and a freeze left; or resume it, which costs
+   * nothing. A shot fired while frozen goes in as rapid fire at the frozen step and spends a freeze.
+   * False when nothing changed.
+   */
+  freeze(on?: boolean): boolean;
   /** Fire the level's pre-aimed opening shot (KeystoneEnv.opener; key F, the HUD's Fire button): false when there is none now. */
   fireOpener(): boolean;
   /** Mute or unmute every sound (as key M toggles). */
@@ -167,8 +176,8 @@ function safetyLimiter(ctx: AudioContext): AudioNode {
 export function newGameHandle(): GameHandle {
   const none = (): SessionState => ({ step: 0, phase: 'loading', strokes: 0, heritageBroken: 0, hash: '' });
   return {
-    status: 'loading', engine: '', level: '', phase: 'loading', ready: false, frames: 0, stepIndex: 0, strokes: 0, bodies: 0, collapse: 0, fast: false, pace: { timeScale: 1, speed: 1, tag: '', tailSkip: false, costMs: NaN }, view: { target: [0, 0, 0], distance: 0, yaw: 0, pitch: 0, following: false, jolt: 0 }, input: { touch: false, gesture: 'idle', fingers: 0, aimed: null, power: 100 }, result: null, counts: {}, feel: { ...DEFAULT_FEEL }, resultShownAt: null, timing: { loadMs: 0, stepMs: [], moving: [], frameMs: [], costMs: [] }, draws: { drawn: 0, skipped: 0, decimating: false },
-    fire: () => false, bank: () => false, fireOpener: () => false, setMuted: () => {}, maxDpr: 2, aim: () => null, reach: null, select: () => false, load: async () => {}, retry: async () => {}, undo: async () => false, capture: async () => null,
+    status: 'loading', engine: '', level: '', phase: 'loading', ready: false, frozen: false, frames: 0, stepIndex: 0, strokes: 0, bodies: 0, collapse: 0, fast: false, pace: { timeScale: 1, speed: 1, tag: '', tailSkip: false, costMs: NaN }, view: { target: [0, 0, 0], distance: 0, yaw: 0, pitch: 0, following: false, jolt: 0 }, input: { touch: false, gesture: 'idle', fingers: 0, aimed: null, power: 100 }, result: null, counts: {}, feel: { ...DEFAULT_FEEL }, resultShownAt: null, timing: { loadMs: 0, stepMs: [], moving: [], frameMs: [], costMs: [] }, draws: { drawn: 0, skipped: 0, decimating: false },
+    fire: () => false, bank: () => false, freeze: () => false, fireOpener: () => false, setMuted: () => {}, maxDpr: 2, aim: () => null, reach: null, select: () => false, load: async () => {}, retry: async () => {}, undo: async () => false, capture: async () => null,
     state: none, line: () => [], replay: async () => none(), health: async () => null, pairsPerBody: 0, limitsHit: [], goals: [], grade: null, duel: null,
     sound: () => ({ mode: 'collapse', status: 'off', error: '', posted: 0, stats: null }),
   };
@@ -366,6 +375,8 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
   let stepping = false;
   /** Shots waiting to go in between steps (fire): clicks during a step, and a line's rapid-fire shots (Shot.after) until their step. */
   let waiting: Shot[] = [];
+  /** Bullet Time: the running shot's physics is frozen (freeze, key T); the physics loop holds until a shot or T resumes it. */
+  let frozen = false;
   let regrowBuf = new Float32Array(0);
   let selected: RackItem | null = null;
   let opener: Shot | null = null;
@@ -520,6 +531,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     }
     regrowT = line ? null : 0;
     waiting = [];
+    frozen = false;
     aimed = null;
     beads = null;
     hover = null; // the new level's tints are fresh
@@ -711,7 +723,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
   /** Mirror the round's state onto the handle: each frame, and after each physics step (which runs between frames). */
   function syncState() {
     const s = driver.session;
-    Object.assign(handle, { phase: stepping ? 'running' : s.phase, ready: !stepping && s.phase === 'aiming' && regrowT === null, stepIndex: driver.engine.stepIndex, strokes: s.strokes, bodies: driver.snapshot.count, collapse: s.liveCollapse });
+    Object.assign(handle, { phase: stepping ? 'running' : s.phase, frozen, ready: !stepping && s.phase === 'aiming' && regrowT === null, stepIndex: driver.engine.stepIndex, strokes: s.strokes, bodies: driver.snapshot.count, collapse: s.liveCollapse });
   }
 
   /** Mirror state, pace and view onto the handle; called each frame and right after anything that changes it.
@@ -727,10 +739,29 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
   /** The physics loop's idle wait: the next frame, or a fire, whichever comes first (physics-loop.ts wakeable). */
   const physicsIdle = wakeable(() => new Promise<void>((res) => requestAnimationFrame(() => res())));
 
-  /** Whether the player can aim (and fire) now: while aiming, or with rapid fire while a shot runs, until the round is known to be over. */
+  /** Whether the player can aim (and fire) now: while aiming, or with rapid fire or frozen while a shot runs, until the round is known to be over. */
   function aimable(): boolean {
     const p = driver.session.phase;
-    return p === 'aiming' || (p === 'running' && feel.rapid && !ending);
+    return p === 'aiming' || (p === 'running' && (feel.rapid || frozen) && !ending);
+  }
+
+  /** Whether the running shot can be frozen now: the level gives freezes and one is left (a shot fired while frozen spends it). */
+  function canFreeze(): boolean {
+    const s = driver.session;
+    return !loading && regrowT === null && !ending && handle.result === null && s.phase === 'running' && c.def.freeze !== undefined && s.freezesLeft > 0;
+  }
+
+  function freeze(on = !frozen): boolean {
+    if (on === frozen || (on && !canFreeze())) return false;
+    frozen = on;
+    if (!on) {
+      // Sim time stood still: the pace measures afresh, and the loop (restarted by the pacer) owes nothing for the pause.
+      speed.reset();
+      physicsIdle.kick();
+    }
+    aimDirty = true;
+    sync();
+    return true;
   }
 
   /** Whether `shot` may go in when its turn comes: the rack holds one more of it than the shots already waiting. */
@@ -747,7 +778,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     if (shot.ammo === 'pull' && driver.session.pullRefusal(shot.body) !== null) return false;
     // Without rapid fire a click mid-step is refused, as before; with it, or for a line's timed shot, it waits for the step.
     if (stepping || timed || waiting.length) {
-      if (stepping && !timed && !feel.rapid) return false;
+      if (stepping && !timed && !feel.rapid && !frozen) return false;
       waiting.push(shot);
       if (!stepping) fireDue();
       return true;
@@ -772,6 +803,8 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     setHover(null);
     const fb = driver.fire(shot);
     if (duel) { duel.fired(shot); turnStart = performance.now(); syncDuel(); }
+    // A shot fired while frozen (Bullet Time) has cut in at the frozen step: the world runs on with it.
+    frozen = false;
     // The shot's first step goes in now, not at the next frame.
     physicsIdle.kick();
     // A shot's pace starts fresh: no tail yet, and at real time until its steps say otherwise.
@@ -829,6 +862,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
 
   handle.fire = fire;
   handle.bank = bank;
+  handle.freeze = freeze;
   handle.fireOpener = fireOpener;
   handle.setMuted = setMuted;
   handle.select = select;
@@ -961,6 +995,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     const act = (e.target as HTMLElement).closest('button')?.dataset.act;
     if (act) wakeAudio();
     if (act === 'bank') bank();
+    if (act === 'freeze') freeze();
     if (act === 'opener') fireOpener();
     // Touch screens' Undo and Restart (hud.ts TOUCH_ACTS; keys U and R).
     if (act === 'undo') void handle.undo();
@@ -989,6 +1024,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     if (chip) select(chip.ammo);
     if (k === 'q' || k === 'e') setPower(power + (k === 'e' ? POWER_STEP : -POWER_STEP));
     if (k === 'b') bank();
+    if (k === 't') freeze();
     if (k === 'f') fireOpener();
     // In a duel, R after the result is a rematch (the other side starts), as the card's first button says.
     if (k === 'r' && !e.ctrlKey && !e.metaKey) void (duel?.result.over ? load(1 - levelIdx).catch(fail) : handle.retry());
@@ -1018,6 +1054,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
       collapse: s.liveCollapse, pulled: s.pulledShare(), met: s.objectiveDone, canBank: !stepping && regrowT === null && s.canBank(), pace: handle.pace.tag,
       opener: !stepping && regrowT === null && s.phase === 'aiming' && openerNow() !== null, ticks,
       ...(duel ? { duel: duelHudHtml(duel, s.phase === 'aiming' && aimed ? duel.refuse(aimed.shot) : null) } : {}),
+      ...(c.def.freeze !== undefined ? { freezes: { left: s.freezesLeft, total: c.def.freeze, frozen, can: canFreeze() } } : {}),
     });
     html += goalsHudHtml(handle.goals);
     if (crownsDown > crownsShown) html = html.replace('class="crowns"', 'class="crowns pop"');
@@ -1054,7 +1091,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
       if (running && !Number.isNaN(lastDrawn)) handle.timing.frameMs.push(now - lastDrawn);
       lastDrawn = now;
     }
-    if (!running) collapse?.pause(); // between shots: the next step's audio frame starts afresh
+    if (!running || frozen) collapse?.pause(); // between shots: the next step's audio frame starts afresh
     // Aiming while a shot runs (rapid fire): the world moves under the pointer, so aim again each frame.
     if (running && pointer && aimable()) aimDirty = true;
     if (follow.active) {
@@ -1099,13 +1136,13 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
   void runPhysics({
     now: () => performance.now(),
     alive: () => handle.status === 'running',
-    active: () => !loading && driver.session.phase === 'running',
+    active: () => !loading && driver.session.phase === 'running' && !frozen,
     dtMs: () => 1000 * c.scene.dt,
     options: () => ({ fastForward: fastNow(), budgetMs: feel.budgetMs }),
     idle: physicsIdle.wait,
     task,
     step: () => exclusive(async () => {
-      if (loading || driver.session.phase !== 'running') return null; // a load got in first, or the shot ended
+      if (loading || driver.session.phase !== 'running' || frozen) return null; // a load got in first, the shot ended, or it froze
       const d = driver, started = performance.now();
       // A step that ends the shot leaves the session aiming before it returns (the pipelined driver
       // still awaits the last read): until it has, no frame may show it ready, and no shot or bank may go in.
