@@ -249,19 +249,22 @@
 // - Energy in chains of simultaneous impacts (anchors or not): the pass's
 //   converged answer can gain energy where several touching bodies are struck
 //   in one step, each bouncing manifold's target -e vn0 taken alone (the
-//   simultaneous Newton law's known flaw). Rounds stop well short of
-//   convergence, which hides it: from a GPU knockdown's state (S5, e 0.9, 15
-//   m/s, step 15) the reference's pass raised the struck bodies' kinetic
-//   energy from 614 J after the solve to 682 J at 8 rounds and 914 J at 128
-//   without anchors (630, 729 and 957 J with them; 566 J at the start of the
-//   step). Anchors converge the held bodies exactly, so they show it more
-//   often: on SwiftShader one of 24 GPU knocks (that one, e 0.9) gained 3.9%
-//   of |E0| with anchors and 1.3e-4 without; none at e 0.3-0.6, and none of
-//   48 knocks on this engine at e 0.5-0.9. A cap per manifold on the energy
-//   of its split copies (their start-of-step energy, which bounds the pass's
-//   total by Jensen's inequality over the mass-split copies) took 729 J to
-//   655 J, not to the start's 566 J: the solve leaves struck bodies above
-//   their own share, so a bound needs the islands' energies (follow-up).
+//   simultaneous Newton law's known flaw), and a struck body that anchors
+//   hold almost entirely can take a bounce on its few free directions only:
+//   two cubes seated on the ground and touching along a nearly vertical
+//   normal threw each other sideways at 50 m/s (an S5 knock, e 0.6, 8 m/s:
+//   the pass added 2,822 J in one step, 73% of |E0|). Without the energy cap
+//   (restitutionEnergyCap false) both happen; with it (the default, see
+//   restitute(), "Energy cap") no island ends the pass with more energy than
+//   at the start of the step or after the solve: two cubes striking a box at
+//   e 1 keep 1.000000 of the energy at 16 and 64 rounds (1.0019 and 1.0034
+//   without), that knock gains none, and random struck clusters at e 0.3-0.9
+//   hold it on every island and step (restitution-cap.test.ts; 5 of 60 break
+//   it without the cap). What the cap does not bound is the solve's own
+//   gain: from a GPU knock's state (S5, e 0.9, 15 m/s) the solve alone, with
+//   restitution off, added 40 J in a step of fast multi-body contact at 10
+//   iterations (180 J at 4, and none at 40: it is unconverged), and an
+//   island the solve left above its start gets no bounce that step.
 import { type BodyDesc, combineFriction, combineRestitution, DEFAULT_RESTITUTION_COMBINE, inertiaOf, massOf, type Quat, type SceneDesc, type Vec3 } from '@tb/engine-api';
 import { boundingRadius, cross, dot, groundManifold, NO_AXIS, quatMul, quatNormalize, rotate, shapeManifold, spherePairs } from '@tb/geom';
 import { COLOR_MODES, COLOR_PRIORITIES, colorGraph, colorGraphWith, latticeParity, latticePreferences } from './coloring.ts';
@@ -383,6 +386,15 @@ export interface AvbdParams {
    */
   restitutionAnchorSpeed?: number;
   /**
+   * The energy cap of the restitution pass (see restitute(), "Energy cap"):
+   * the pass gives each island (bodies joined by this step's contacts) back at
+   * most the energy the solve took from it this step, scaling the island's
+   * impulses down where it would give more, so no island ends a step with
+   * more energy than it started with or than the solve left it. Default true
+   * (RESTITUTION_DEFAULTS); false is the pass as it was before the cap.
+   */
+  restitutionEnergyCap?: boolean;
+  /**
    * Loaded-gap slop, m, opt-in (defect B, see the header): off when absent or
    * 0, and EngineInfo.variant lists it only while it is on (avbdVariant). With
    * postStabilize, a contact point that bore load at the end of last step
@@ -441,7 +453,7 @@ export const DEFAULT_AVBD: AvbdParams = {
 };
 
 /** The restitution keys' defaults while AvbdParams.restitution is on (Box2D's threshold is 1 m/s too; rounds: see restitute()). */
-export const RESTITUTION_DEFAULTS = { restitutionThreshold: 1, restitutionRounds: 8, restitutionAnchors: true, restitutionAnchorSpeed: 0.25 } as const;
+export const RESTITUTION_DEFAULTS = { restitutionThreshold: 1, restitutionRounds: 8, restitutionAnchors: true, restitutionAnchorSpeed: 0.25, restitutionEnergyCap: true } as const;
 
 /** Anchors (restitute()): the least cosine between a support's normal into the body it holds and up (60 degrees from vertical). */
 export const ANCHOR_UP = 0.5;
@@ -621,9 +633,12 @@ export interface StepStats {
    * anchors took (see restitute(), "Anchors": the ground's and resting
    * bodies', which the pass leaves still). Every impulse between two bodies
    * in the pass acts on both, equal and opposite, so momentum equals
-   * groundImpulse + anchorImpulse to rounding.
+   * groundImpulse + anchorImpulse to rounding. capped: the islands whose
+   * impulses the energy cap scaled down, and capAlpha the least scale it took
+   * (1 when it scaled none; see restitute(), "Energy cap"); the other fields
+   * are after the scaling.
    */
-  restitution: { contacts: number; impulse: number; momentum: Vec3; groundImpulse: Vec3; anchorImpulse: Vec3 };
+  restitution: { contacts: number; impulse: number; momentum: Vec3; groundImpulse: Vec3; anchorImpulse: Vec3; capped: number; capAlpha: number };
 }
 
 /**
@@ -637,7 +652,7 @@ export class AvbdWorld {
   records: FrictionRecord[] = [];
   /** Last step's SAT axis per touching pair (key `a,b`), preferred by this step's narrowphase. */
   axes = new Map<string, number>();
-  stats: StepStats = { contacts: 0, manifolds: 0, colors: 0, restitution: { contacts: 0, impulse: 0, momentum: [0, 0, 0], groundImpulse: [0, 0, 0], anchorImpulse: [0, 0, 0] } };
+  stats: StepStats = { contacts: 0, manifolds: 0, colors: 0, restitution: { contacts: 0, impulse: 0, momentum: [0, 0, 0], groundImpulse: [0, 0, 0], anchorImpulse: [0, 0, 0], capped: 0, capAlpha: 1 } };
   /** Each body's last step, [position change, rotation vector] (what the GPU keeps in SolverBody.dp, phi until the next initBodies). */
   lastDx: Float64Array[] = [];
 
@@ -1066,18 +1081,42 @@ export class AvbdWorld {
    *   column (e 0.5 on every surface and the ground) left the column moving,
    *   0.088 J and 8.9 mm of side drift 50 s into the run (the GPU's too),
    *   where thresholds of 0.01 and 0.1 m/s rest it to rounding (1e-32 J).
+   * - Energy cap (restitutionEnergyCap, default on): after the rounds, each
+   *   island with a body in the pass (bodies joined by any of this step's
+   *   contacts, as the solve couples them) gets back at most the energy the
+   *   solve took from it this step. The energy is semi-implicit Euler's
+   *   invariant, 1/2 m |v + g h/2|^2 + 1/2 w.I w - m g.x (constant in free
+   *   flight, so a fall is not a gain); D is the island's at the start of the
+   *   step less after the solve. The pass's change du adds alpha G +
+   *   alpha^2 Q / 2 at alpha du (G = du.M u' with u' the solve's velocities
+   *   shifted by g h/2, Q = du.M du, M at the step's end pose), and where all
+   *   of it does not fit in max(0, D), every impulse of the island (and with
+   *   them its targets) is scaled by the largest alpha that does (capAlpha):
+   *   a velocity change linear in the impulses, so each row's normal velocity
+   *   stays between the solve's and its target, and nothing that separated
+   *   approaches. So no island ends a step with more energy than both its
+   *   start and what the solve left it. An island that fits keeps the pass's
+   *   floats exactly (alpha 1 changes nothing). Why islands: the solve moves
+   *   energy along contacts within a step (momentum from a striker into what
+   *   it strikes, a struck stack into what holds it), so a budget per body or
+   *   per manifold is not one (a per-manifold cap on the split copies' energy
+   *   took a knock's 729 J to 655 J against 566 J at the start of the step),
+   *   while across islands nothing passes. The cost: where the solve itself
+   *   left an island above its start (it can, unconverged; see the header),
+   *   that island gets no bounce in that step, and in a large island the
+   *   budget is the whole island's.
    * After post-stabilization, because that pass reads lambda; it moves
    * positions only, so before or after makes no other difference. Rolling
    * contacts need nothing more: a sphere's lever arm is along n, so its
    * impulse goes through the centre.
    */
-  restitute(v0: Vec3[], w0: Vec3[], q0: Quat[]): void {
+  restitute(v0: Vec3[], w0: Vec3[], q0: Quat[], dx: ArrayLike<ArrayLike<number>>): void {
     const { p, bodies, contacts } = this;
     const h = this.scene.dt;
     const threshold = p.restitutionThreshold ?? RESTITUTION_DEFAULTS.restitutionThreshold;
     const rounds = p.restitutionRounds ?? RESTITUTION_DEFAULTS.restitutionRounds;
     const rule = this.scene.restitutionCombine ?? DEFAULT_RESTITUTION_COMBINE, groundE = this.scene.ground?.restitution ?? 0;
-    const st: StepStats['restitution'] = { contacts: 0, impulse: 0, momentum: [0, 0, 0], groundImpulse: [0, 0, 0], anchorImpulse: [0, 0, 0] };
+    const st: StepStats['restitution'] = { contacts: 0, impulse: 0, momentum: [0, 0, 0], groundImpulse: [0, 0, 0], anchorImpulse: [0, 0, 0], capped: 0, capAlpha: 1 };
     this.stats.restitution = st;
     const n = bodies.length;
     // Normal velocity of contact c (row 0 of its Jacobian): at the start of the step, and now.
@@ -1293,6 +1332,7 @@ export class AvbdWorld {
         });
       }
     }
+    if (p.restitutionEnergyCap ?? RESTITUTION_DEFAULTS.restitutionEnergyCap) this.capEnergy(ms, split, u, applied, v0, w0, q0, dx, st);
     for (let i = 0; i < n; i++) {
       if (!split[i]) continue;
       const b = bodies[i]!, m = b.mass;
@@ -1314,6 +1354,76 @@ export class AvbdWorld {
         // A bounced point that will separate starts the next step with no force (see above).
         if (m.target[k]! * h > p.restDepth) c.lambda = [0, 0, 0];
       });
+    }
+  }
+
+  /**
+   * The restitution pass's energy cap (restitute(), "Energy cap"): for each
+   * island with a body in the pass, the scale alpha of its impulses, and if
+   * under 1 the island's bodies' velocities u (6 per body), their applied
+   * impulses and its manifolds' impulses P and targets scaled by it. The bodies' current
+   * velocities and their poses at the end of the step (q0 and dx) are the
+   * solve's; u is the pass's.
+   */
+  private capEnergy(ms: Array<{ a: number; b: number; P: Float64Array; target: number[] }>, split: Int32Array, u: Float64Array, applied: Float64Array, v0: Vec3[], w0: Vec3[], q0: Quat[], dx: ArrayLike<ArrayLike<number>>, st: StepStats['restitution']): void {
+    const { bodies, contacts } = this, n = bodies.length;
+    const g = this.scene.gravity, hh = this.scene.dt / 2;
+    // Islands: bodies joined by this step's contacts (union-find, each island's root its least body).
+    const parent = Int32Array.from({ length: n }, (_, i) => i);
+    const find = (x: number) => { while (parent[x] !== x) { parent[x] = parent[parent[x]!]!; x = parent[x]!; } return x; };
+    for (const c of contacts) {
+      if (c.a === GROUND) continue;
+      const ra = find(c.a), rb = find(c.b);
+      if (ra !== rb) parent[Math.max(ra, rb)] = Math.min(ra, rb);
+    }
+    const inPass = new Uint8Array(n);
+    for (let i = 0; i < n; i++) if (split[i]) inPass[find(i)] = 1;
+    // Per island root: D, the energy the solve took (the bodies' energy at the start of the step less after the
+    // solve), and the energy the pass adds as alpha G + alpha^2 Q / 2.
+    const D = new Float64Array(n), G = new Float64Array(n), Q = new Float64Array(n);
+    // 1/2 w.I(q) w, I(q) the world inertia at pose q.
+    const spinE = (b: BodyState, q: Quat, w: ArrayLike<number>, x: ArrayLike<number>) => {
+      let s = 0;
+      for (let k = 0; k < 3; k++) { const ax = rotate(q, k === 0 ? [1, 0, 0] : k === 1 ? [0, 1, 0] : [0, 0, 1]); s += b.inertia[k]! * (ax[0] * w[0]! + ax[1] * w[1]! + ax[2] * w[2]!) * (ax[0] * x[0]! + ax[1] * x[1]! + ax[2] * x[2]!); }
+      return s / 2;
+    };
+    for (let i = 0; i < n; i++) {
+      const r = find(i);
+      if (!inPass[r]) continue;
+      const b = bodies[i]!, d = dx[i]!, m = b.mass;
+      const q1 = applyRotation(q0[i]!, [d[3]!, d[4]!, d[5]!]);
+      // Semi-implicit Euler's invariant energy, 1/2 m |v + g h/2|^2 + 1/2 w.I w - m g.x: at the start, less after
+      // the solve (the potential's change is m g.dx).
+      const vs = [0, 1, 2].map((k) => v0[i]![k]! + g[k]! * hh), vp = [0, 1, 2].map((k) => b.linVel[k]! + g[k]! * hh);
+      D[r] = D[r]! + 0.5 * m * (vs[0]! ** 2 + vs[1]! ** 2 + vs[2]! ** 2 - vp[0]! ** 2 - vp[1]! ** 2 - vp[2]! ** 2)
+        + spinE(b, q0[i]!, w0[i]!, w0[i]!) - spinE(b, q1, b.angVel, b.angVel) + m * (g[0] * d[0]! + g[1] * d[1]! + g[2] * d[2]!);
+      if (!split[i]) continue;
+      const dv = [0, 1, 2].map((k) => u[6 * i + k]! - b.linVel[k]!), dw = [0, 1, 2].map((k) => u[6 * i + 3 + k]! - b.angVel[k]!);
+      G[r] = G[r]! + m * (dv[0]! * vp[0]! + dv[1]! * vp[1]! + dv[2]! * vp[2]!) + 2 * spinE(b, q1, dw, b.angVel);
+      Q[r] = Q[r]! + m * (dv[0]! ** 2 + dv[1]! ** 2 + dv[2]! ** 2) + 2 * spinE(b, q1, dw, dw);
+    }
+    const alpha = new Float64Array(n).fill(1);
+    for (let r = 0; r < n; r++) {
+      if (!inPass[r]) continue;
+      const a = capAlpha(D[r]!, G[r]!, Q[r]!);
+      if (a < 1) { alpha[r] = a; st.capped++; st.capAlpha = Math.min(st.capAlpha, a); }
+    }
+    if (!st.capped) return;
+    for (let i = 0; i < n; i++) {
+      const a = alpha[find(i)]!;
+      if (!split[i] || a === 1) continue;
+      const b = bodies[i]!;
+      for (let k = 0; k < 3; k++) {
+        u[6 * i + k] = b.linVel[k]! + a * (u[6 * i + k]! - b.linVel[k]!);
+        u[6 * i + 3 + k] = b.angVel[k]! + a * (u[6 * i + 3 + k]! - b.angVel[k]!);
+        applied[3 * i + k] = a * applied[3 * i + k]!;
+      }
+    }
+    // The manifolds' impulses, and their targets (the release reads both: a point whose scaled rebound stays within
+    // restDepth keeps its force).
+    for (const m of ms) {
+      const a = alpha[find(m.b)]!;
+      if (a !== 1) for (let k = 0; k < m.P.length; k++) { m.P[k] = a * m.P[k]!; m.target[k] = a * m.target[k]!; }
     }
   }
 
@@ -1598,7 +1708,7 @@ export class AvbdWorld {
       }
     }
     // Restitution: after post-stabilization, on the final velocities.
-    if (start) this.restitute(start.v, start.w, q0);
+    if (start) this.restitute(start.v, start.w, q0, dx);
     for (let i = 0; i < n; i++) {
       const b = bodies[i]!, d = dx[i]!;
       b.pos = [x0[i]![0] + d[0]!, x0[i]![1] + d[1]!, x0[i]![2] + d[2]!];
@@ -1606,6 +1716,21 @@ export class AvbdWorld {
     }
     this.lastDx = dx;
   }
+}
+
+/**
+ * The energy cap's scale (restitute(), "Energy cap"): the largest alpha in
+ * [0, 1] with alpha G + alpha^2 Q / 2 <= max(0, D), the energy the pass adds
+ * to an island at alpha (G, Q >= 0 its first and second order terms) against
+ * the energy the solve took from it (D). 1 when the whole pass fits.
+ */
+export function capAlpha(D: number, G: number, Q: number): number {
+  const B = Math.max(0, D);
+  if (G + Q / 2 <= B) return 1;
+  const r = Math.sqrt(G * G + 2 * Q * B);
+  // The positive root of Q a^2 / 2 + G a - B, in the form that does not cancel.
+  const a = G > 0 ? (2 * B) / (G + r) : (r - G) / Q;
+  return Math.min(1, Math.max(0, a));
 }
 
 const add3 = (a: Vec3, b: Vec3): Vec3 => [a[0] + b[0], a[1] + b[1], a[2] + b[2]];

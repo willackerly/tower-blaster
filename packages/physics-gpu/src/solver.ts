@@ -51,7 +51,7 @@ import { assertStorageFits, readBuffer } from '@tb/gpu';
 import { RECORD_MODES } from '@tb/physics-ref';
 import { Body, BodyProps, CentreRecord, ColorParams, field, Manifold, RestSlot, SolverBody, SolverContact, SolverParams, SolverRecord, TIER, wgslStruct } from '@tb/schema';
 import { MAX_COLORS } from './coloring.ts';
-import { REST_BODY_ARGS, REST_BODY_BYTES, REST_INFO_BYTES, REST_SLOT_ARGS, type RestBinding, type RestitutionConfig, restitutionConstants, restitutionKernels } from './restitution.ts';
+import { ISLAND_BODY_BYTES, REST_BODY_ARGS, REST_BODY_BYTES, REST_INFO_BYTES, REST_SLOT_ARGS, type RestBinding, type RestitutionConfig, restitutionConstants, restitutionKernels } from './restitution.ts';
 
 const WG = 64;
 /** Most threads the tail workgroup can have (SolverDispatch.tailThreads): WebGPU's default limit per workgroup. */
@@ -1582,6 +1582,8 @@ export class AvbdSolver {
   readonly restInfo: GPUBuffer | null = null;
   /** A RestBody per body (REST_BODY_BYTES), only while the restitution pass is on. */
   readonly restBodies: GPUBuffer | null = null;
+  /** An IslandBody per body (ISLAND_BODY_BYTES), only while the restitution pass's energy cap is on. */
+  readonly restIslands: GPUBuffer | null = null;
   /** Sleep's awake lists (SolverDispatch.awakeLists), only while they are on: ACTIVE_HEAD header words, then maxPairs pair slots and capacity bodies. */
   readonly active: GPUBuffer | null = null;
   private readonly pipes: Record<string, GPUComputePipeline> = {};
@@ -1615,6 +1617,9 @@ export class AvbdSolver {
       if (!(g >= 0 && g <= 1)) throw new Error(`AvbdSolver: restitution.groundRestitution must be in [0, 1], got ${g}`);
       if (!COMBINE_RULES.includes(c)) throw new Error(`AvbdSolver: restitution.combine must be one of ${COMBINE_RULES.join(', ')}, got ${c}`);
       if (typeof an !== 'boolean') throw new Error(`AvbdSolver: restitution.anchors must be a boolean, got ${an}`);
+      if (typeof restitution.energyCap !== 'boolean') throw new Error(`AvbdSolver: restitution.energyCap must be a boolean, got ${restitution.energyCap}`);
+      // The cap's fixed-point sums (restitution.ts, CAP_FIX_LO) hold the low parts of up to 2^22 bodies.
+      if (restitution.energyCap && capacity >= 2 ** 22) throw new Error(`AvbdSolver: the restitution energy cap holds under 2^22 bodies (its fixed-point sums), got capacity ${capacity}`);
       if (!(Number.isFinite(as) && as >= 0)) throw new Error(`AvbdSolver: restitution.anchorSpeed must be a finite number >= 0, got ${as}`);
       if (records === 2) throw new Error('AvbdSolver: restitution is not implemented with records 2 yet (the pass reads points or exact records)');
       // The pass moves bodies after finalize; it does not know sleepers are anchors yet.
@@ -1705,14 +1710,16 @@ export class AvbdSolver {
       this.restSlots = slots;
       this.restInfo = info;
       this.restBodies = restBodies;
+      const islands = restitution.energyCap ? buf(capacity * ISLAND_BODY_BYTES, 'avbd restitution islands') : null;
+      this.restIslands = islands;
       const values = restitutionConstants(restitution, COMBINE_RULES.indexOf(restitution.combine));
       const res: Record<RestBinding, [Kind, GPUBuffer]> = {
         contacts: ['r', this.contacts], contactsRw: ['rw', this.contacts], props: ['r', B.props], solver: ['r', this.solver],
         bodies: ['r', B.bodies], bodiesRw: ['rw', B.bodies], rest: ['rw', slots], restRead: ['r', slots], info: ['rw', info],
         stepInfo: ['r', this.meta], rowStart: ['r', B.rowStart], rowLength: ['r', B.rowLength], adjSlot: ['r', B.adjSlot], params: ['u', this.uniform],
-        restBody: ['rw', restBodies], restBodyRead: ['r', restBodies],
+        restBody: ['rw', restBodies], restBodyRead: ['r', restBodies], island: ['rw', islands ?? restBodies],
       };
-      for (const k of restitutionKernels(COMMON, records === 1 ? { records: 1, head: wgslStruct(SolverRecord) + RECORD_COMMON } : { records: 0 })) {
+      for (const k of restitutionKernels(COMMON, records === 1 ? { records: 1, head: wgslStruct(SolverRecord) + RECORD_COMMON } : { records: 0 }, restitution.energyCap)) {
         const constants = k.constants.length ? { [k.entry]: Object.fromEntries(k.constants.map((c) => [c, values[c]])) } : {};
         mk(`avbd ${k.entry}`, k.code, [['', k.entry]], k.bindings.map((x) => res[x][0]), [[k.entry, k.bindings.map((x) => res[x][1])]], constants);
       }
@@ -1835,7 +1842,7 @@ export class AvbdSolver {
     pass.dispatchWorkgroups(groups);
   }
 
-  /** The restitution pass (restitution.ts), after finalize: 7 + 2 rounds dispatches, all but 3 of them indirect and empty when no point bounces. */
+  /** The restitution pass (restitution.ts), after finalize: 7 + 2 rounds dispatches (11 + 2 rounds with the energy cap), all but 3 of them indirect and empty when no point bounces. */
   private encodeRestitution(pass: GPUComputePassEncoder, groups: number, rounds: number): void {
     const info = this.restInfo!;
     const run = (entry: string, args: { direct: number } | { indirect: GPUBuffer; at: number }) => {
@@ -1851,9 +1858,18 @@ export class AvbdSolver {
     run('restSupport', slots);
     run('restCount', bodies);
     run('restAnchors', bodies);
+    const cap = this.restitution!.energyCap;
+    if (cap) {
+      run('restIslandInit', bodies);
+      run('restIslandHook', slots);
+    }
     for (let r = 0; r < rounds; r++) {
       run('restManifold', slots);
       run('restBodies', bodies);
+    }
+    if (cap) {
+      run('restIslandSum', bodies);
+      run('restIslandCap', bodies);
     }
     run('restFinish', bodies);
   }
@@ -1948,6 +1964,6 @@ export class AvbdSolver {
   set cpuState(s: { cur: number; prevN: number }) { this.cur = s.cur; this.prevN = s.prevN; }
 
   destroy(): void {
-    for (const x of [this.solver, this.contacts, this.meta, this.pairHist, this.offHist, this.uniform, this.colorUniform, this.restSlots, this.restInfo, this.restBodies, this.active]) x?.destroy();
+    for (const x of [this.solver, this.contacts, this.meta, this.pairHist, this.offHist, this.uniform, this.colorUniform, this.restSlots, this.restInfo, this.restBodies, this.restIslands, this.active]) x?.destroy();
   }
 }
