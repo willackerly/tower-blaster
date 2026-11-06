@@ -40,10 +40,23 @@
 // caller knows that order and passes idOf (the id of a spawn event it pushed,
 // the same object the runtime returned), which the runtime asks once the
 // spawn has applied (its step is before the observed state's).
-import { type BodyDesc, freeFlight, type InputEvent, type ShapeDesc, type Snapshot, type SpawnEvent, type Vec3 } from '@tb/engine-api';
+//
+// Charges (attach; docs/design/charges.md): a munition with no body, riding a
+// host body at a point in the host's frame. Its triggers watch the host
+// (moved), its blasts are centred on the host at that point (turned by the
+// host's rotation in the state the event was decided from) and push the host
+// too, removeTarget removes the host and remove spends the charge with no
+// event. Its events are released just in time: only once due at the earliest
+// step an event may still carry (the step after the observed one; at attach,
+// the step given), so the caller can drop a charge whose host has gone
+// before its events reach the engine (drop). A charge whose host shows as
+// removed (Snapshot.tier TIER_FREE) is dropped by observe.
+import { type BodyDesc, freeFlight, type InputEvent, type ShapeDesc, type Snapshot, type SpawnEvent, TIER_FREE, type Vec3 } from '@tb/engine-api';
 import { boundingRadius } from '@tb/geom';
 import { checkGrenade, flightPath, type GrenadeSpec, type GrenadeWorld, type PathPoint, proximityStep, stepsOf } from './grenade.ts';
-import { type Action, checkWeapon, grenadeAsSpec, isWeaponSpec, type MunitionSpec, type Rule, splitDirections, type Trigger, type WeaponSpec } from './spec.ts';
+import {
+  type Action, chargeProblems, checkWeapon, grenadeAsSpec, isWeaponSpec, type MunitionSpec, type Rule, splitDirections, thrownProblems, type Trigger, type WeaponSpec, WeaponSpecError,
+} from './spec.ts';
 
 /** Friction and restitution of a shell that sets none (BodyDesc needs both). */
 export const SHELL_FRICTION = 0.5;
@@ -53,6 +66,8 @@ type Node =
   | { k: 'after'; steps: number }
   | { k: 'near'; prox: number; arm: number; ground: boolean }
   | { k: 'apex' }
+  /** ref: the centre in the first state observed once its clock started (set then). */
+  | { k: 'moved'; d2: number; v2: number | null; ref: Vec3 | null }
   | { k: 'then'; a: Node; b: Node; aStep: number | null }
   | { k: 'any'; xs: Node[] };
 
@@ -75,6 +90,8 @@ interface Live {
   /** Step its spawn is due: the clock of its after triggers. */
   base: number;
   rules: RuleLive[];
+  /** A charge: its point in its host's frame (id is the host); null for a munition with a body. */
+  charge: Vec3 | null;
 }
 
 /** What a pass of the rules sees: the observed state and its path, or nothing (at launch). */
@@ -87,7 +104,9 @@ interface Seen {
   shapes: readonly { shape: ShapeDesc }[];
 }
 
-const spends = (a: Action) => 'remove' in a || 'split' in a;
+const spends = (a: Action) => 'remove' in a || 'removeTarget' in a || 'split' in a;
+/** Whether a trigger has a clock running towards a step it will fire at (a timer), rather than only watching. */
+const ticking = (n: Node): boolean => n.k === 'after' || (n.k === 'then' ? ticking(n.aStep === null ? n.a : n.b) : n.k === 'any' && n.xs.some(ticking));
 
 export class WeaponRuntime {
   private live: Live[] = [];
@@ -98,9 +117,17 @@ export class WeaponRuntime {
     if (!Number.isInteger(lookahead) || lookahead < 0) throw new Error(`WeaponRuntime: lookahead must be an integer >= 0: ${lookahead}`);
   }
 
-  /** Munitions with a rule still to fire. */
+  /** Munitions with a rule still to fire (charges included). */
   get pending(): number {
     return this.live.length;
+  }
+
+  /**
+   * Munitions with a rule committed to a step and not yet fired, or a timer running: what holds a
+   * shot open. A charge only watching (moved, no timer) could wait for ever, and does not count.
+   */
+  get waiting(): number {
+    return this.live.filter((g) => g.rules.some((r) => r.due !== null || ticking(r.node))).length;
   }
 
   /**
@@ -110,12 +137,43 @@ export class WeaponRuntime {
    */
   launch(id: number, step: number, weapon: WeaponSpec | GrenadeSpec, shape: ShapeDesc): InputEvent[] {
     const spec = isWeaponSpec(weapon) ? checkWeapon(weapon) : grenadeAsSpec(checkGrenade(weapon), { shape, density: 1, speed: [0, 0] });
-    const g: Live = { id, spawn: null, m: spec, radius: boundingRadius(shape), base: step, rules: spec.rules.map((r) => this.ruleLive(r)) };
+    const bad = thrownProblems(spec);
+    if (bad.length) throw new WeaponSpecError(bad);
+    const g: Live = { id, spawn: null, m: spec, radius: boundingRadius(shape), base: step, rules: spec.rules.map((r) => this.ruleLive(r)), charge: null };
     this.live.push(g);
     const out: InputEvent[] = [];
     this.pass(g, null, out, []);
     this.live = this.live.filter((x) => x.rules.length);
     return out;
+  }
+
+  /**
+   * A charge (chargeProblems lists what one cannot have) on body `host` at `point` (host frame,
+   * world units), its clock starting at engine step `step`. `now`, if given: the state after
+   * now.step steps, to decide from at once, and `floor` (>= now.step), the earliest step an event
+   * may carry (the engine's stepIndex: a plunger's fire step); the events due by then are returned.
+   * Without it nothing is decided until the next observe.
+   */
+  attach(host: number, step: number, weapon: WeaponSpec, point: Vec3 = [0, 0, 0], now?: { s: Snapshot; step: number; floor: number }): InputEvent[] {
+    const spec = checkWeapon(weapon), bad = chargeProblems(spec);
+    if (bad.length) throw new WeaponSpecError(bad);
+    if (!Number.isInteger(host) || host < 0) throw new Error(`WeaponRuntime.attach: bad host ${host}`);
+    const g: Live = { id: host, spawn: null, m: spec, radius: 0, base: step, rules: spec.rules.map((r) => this.ruleLive(r)), charge: [point[0], point[1], point[2]] };
+    this.live.push(g);
+    const out: InputEvent[] = [];
+    if (now) {
+      if (now.floor < now.step) throw new Error(`WeaponRuntime.attach: floor ${now.floor} is before the observed step ${now.step}`);
+      this.pass(g, { s: now.s, step: now.step, horizon: now.step + this.lookahead, path: [], shapes: [] }, out, [], now.floor);
+    }
+    this.live = this.live.filter((x) => x.rules.length);
+    return out;
+  }
+
+  /** Forgets every charge riding body `host` (it has gone, or is going, before their events went in); how many. */
+  drop(host: number): number {
+    const before = this.live.length;
+    this.live = this.live.filter((g) => !(g.charge && g.id === host));
+    return before - this.live.length;
   }
 
   /**
@@ -134,6 +192,12 @@ export class WeaponRuntime {
         g.id = idOf(g.spawn!);
       }
       if (g.id >= s.count) continue;
+      if (g.charge) {
+        // A charge whose host is out of the world is gone with it.
+        if (s.tier && s.tier[g.id] === TIER_FREE) { g.rules = []; continue; }
+        this.pass(g, { s, step, horizon: step + this.lookahead, path: [], shapes }, out, born, step + 1);
+        continue;
+      }
       const seen: Seen = { s, step, horizon: step + this.lookahead, path: flightPath(s, g.id, step, this.lookahead, this.world), shapes };
       this.pass(g, seen, out, born);
     }
@@ -147,6 +211,7 @@ export class WeaponRuntime {
       if ('after' in t) return { k: 'after', steps: stepsOf(t.after, dt) };
       if ('near' in t) return { k: 'near', prox: t.near, arm: stepsOf(t.arm ?? 0, dt), ground: t.ground ?? true };
       if ('apex' in t) return { k: 'apex' };
+      if ('moved' in t) return { k: 'moved', d2: t.moved * t.moved, v2: t.speed === undefined ? null : t.speed * t.speed, ref: null };
       if ('then' in t) return { k: 'then', a: node(t.then[0]), b: node(t.then[1]), aStep: null };
       return { k: 'any', xs: t.any.map(node) };
     };
@@ -168,6 +233,19 @@ export class WeaponRuntime {
         const q = seen.path.find((p) => p.step >= base && p.v[1] <= 0);
         return q ? Math.max(q.step, seen.step + 1) : null;
       }
+      case 'moved': {
+        // Decided from observed states only: due at the step after the one that shows it.
+        if (!seen || seen.step < base) return null;
+        const i = g.id!, s = seen.s, p: Vec3 = [s.pos[3 * i]!, s.pos[3 * i + 1]!, s.pos[3 * i + 2]!];
+        if (!n.ref) n.ref = p;
+        const dx = p[0] - n.ref[0], dy = p[1] - n.ref[1], dz = p[2] - n.ref[2];
+        if (dx * dx + dy * dy + dz * dz >= n.d2) return seen.step + 1;
+        if (n.v2 !== null) {
+          const vx = s.linVel[3 * i]!, vy = s.linVel[3 * i + 1]!, vz = s.linVel[3 * i + 2]!;
+          if (vx * vx + vy * vy + vz * vz >= n.v2) return seen.step + 1;
+        }
+        return null;
+      }
       case 'then':
         if (n.aStep === null) n.aStep = this.due(n.a, base, g, seen);
         return n.aStep === null ? null : this.due(n.b, n.aStep, g, seen);
@@ -183,8 +261,12 @@ export class WeaponRuntime {
     }
   }
 
-  /** Commits what g's rules can, then releases rules in step order while nothing open could come first. */
-  private pass(g: Live, seen: Seen | null, out: InputEvent[], born: Live[]): void {
+  /**
+   * Commits what g's rules can, then releases rules in step order while nothing open could come
+   * first. floor (charges only): the earliest step an event may carry; a charge's rule is released
+   * only once due by then (just in time).
+   */
+  private pass(g: Live, seen: Seen | null, out: InputEvent[], born: Live[], floor?: number): void {
     for (const r of g.rules) if (r.due === null) r.due = this.due(r.node, g.base, g, seen);
     const horizon = seen ? seen.horizon : -Infinity;
     for (;;) {
@@ -192,7 +274,8 @@ export class WeaponRuntime {
       let next: RuleLive | null = null;
       for (const r of g.rules) if (r.due !== null && (!next || r.due < next.due!)) next = r;
       if (!next) return;
-      const at = Math.max(next.due!, seen ? seen.step + 1 : -Infinity);
+      if (g.charge && next.due! > floor!) return;
+      const at = Math.max(next.due!, g.charge ? floor! : seen ? seen.step + 1 : -Infinity);
       // Another rule that spends g and is still open could fire before it.
       if (g.rules.some((r) => r !== next && r.spends && r.due === null) && at > horizon) return;
       if (next.splits && (!seen || at > Math.max(horizon, seen.step + 1))) return;
@@ -203,12 +286,26 @@ export class WeaponRuntime {
 
   private fire(g: Live, r: RuleLive, step: number, seen: Seen | null, out: InputEvent[], born: Live[]): void {
     const id = g.id!;
+    if (g.charge) {
+      for (const a of r.rule.do) {
+        if ('removeTarget' in a) out.push({ step, kind: 'remove', id });
+        else if ('blast' in a) {
+          // The charge's point, turned into the world frame by the host's observed rotation, plus the blast's own offset.
+          const q = seen!.s.rot, c = g.charge, w = rotate([q[4 * id]!, q[4 * id + 1]!, q[4 * id + 2]!, q[4 * id + 3]!], c);
+          const { offset, ...b } = a.blast, o: Vec3 = offset ? [w[0] + offset[0], w[1] + offset[1], w[2] + offset[2]] : w;
+          const zero = o[0] === 0 && o[1] === 0 && o[2] === 0;
+          out.push({ step, kind: 'blast', blast: { centre: zero ? { body: id } : { body: id, offset: o }, ...b } });
+        }
+        // remove: the charge is spent; no engine event (and no split: chargeProblems).
+      }
+      return;
+    }
     for (const a of r.rule.do) {
       if ('remove' in a) out.push({ step, kind: 'remove', id });
       else if ('blast' in a) {
         const { offset, ...b } = a.blast;
         out.push({ step, kind: 'blast', blast: { centre: offset ? { body: id, offset } : { body: id }, exclude: [id], ...b } });
-      } else {
+      } else if ('split' in a) {
         const sp = a.split, child = g.m.children![sp.child]!;
         // The munition's state at the split step, from the observed state.
         const last = seen!.path[seen!.path.length - 1]!;
@@ -234,12 +331,19 @@ export class WeaponRuntime {
           };
           const spawn: SpawnEvent = { step, kind: 'spawn', body };
           out.push(spawn);
-          born.push({ id: null, spawn, m: child, radius: boundingRadius(child.shell.shape), base: step, rules: child.rules.map((cr) => this.ruleLive(cr)) });
+          born.push({ id: null, spawn, m: child, radius: boundingRadius(child.shell.shape), base: step, rules: child.rules.map((cr) => this.ruleLive(cr)), charge: null });
         }
         out.push({ step, kind: 'remove', id });
       }
     }
   }
+}
+
+/** v turned by unit quaternion q = (x, y, z, w): v + 2 w (u x v) + 2 u x (u x v), u = (x, y, z). */
+function rotate(q: [number, number, number, number], v: Vec3): Vec3 {
+  const [x, y, z, w] = q;
+  const tx = 2 * (y * v[2] - z * v[1]), ty = 2 * (z * v[0] - x * v[2]), tz = 2 * (x * v[1] - y * v[0]);
+  return [v[0] + w * tx + (y * tz - z * ty), v[1] + w * ty + (z * tx - x * tz), v[2] + w * tz + (x * ty - y * tx)];
 }
 
 function flightPathFrom(p: Vec3, v: Vec3, steps: number, world: GrenadeWorld): { p: Vec3; v: Vec3 } {
