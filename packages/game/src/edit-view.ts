@@ -20,7 +20,8 @@ export class EditView {
     const sig = `${e.version}|${ghost.map((g) => (g.shape.kind === 'box' ? g.shape.half.join(',') : '')).join(';')}`;
     if (sig !== this.sig) {
       this.source.reset(world);
-      if (this.slots) this.renderer.clearFx(0, this.slots);
+      // Every slot's effects from scratch (a page's own, such as a level's grow-in scales, too).
+      this.renderer.clearFx(0, Math.max(this.slots, all.length));
       this.sig = sig;
     }
     const s = emptySnapshot(all.length);
