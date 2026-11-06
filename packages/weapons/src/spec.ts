@@ -124,7 +124,9 @@ export function isWeaponSpec(x: unknown): x is WeaponSpec {
 export type WeaponIssueCode =
   | 'json' | 'version' | 'name' | 'key' | 'type' | 'range' | 'shape'
   | 'trigger' | 'action' | 'order' | 'child' | 'depth' | 'budget' | 'crowded'
-  | 'unused-child' | 'never-spent';
+  | 'unused-child' | 'never-spent'
+  /** Over a device tier's caps (tiers.ts tierIssues; validateWeapon never gives it). */
+  | 'tier';
 
 /**
  * A problem with a spec, at `path` (dotted, e.g. "children.star.rules.0.do.1").
