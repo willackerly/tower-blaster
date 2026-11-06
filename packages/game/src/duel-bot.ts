@@ -51,7 +51,7 @@ export interface NoviceDuel { first: Player; turns: NoviceTurn[]; result: DuelRe
  * of `aspect`. Stops when the duel is decided, nothing can be fired, or after `maxSteps` engine steps.
  */
 export async function noviceDuel(engine: PhysicsEngine, def: DuelDef, first: Player, seed: number, aspect = 1.6, maxSteps = 40_000): Promise<NoviceDuel> {
-  const c = compileLevel(duelLevel(def, first)), d = new Driver(engine, c);
+  const c = compileLevel(duelLevel(def, first)), d = new Driver(engine, c, { refereed: true });
   await d.reset();
   const duel = new Duel(def, c, first, d.session.home), rnd = seeded(seed), turns: NoviceTurn[] = [];
   const substeps = engine.info.integrator?.substeps ?? SUBSTEPS, y = launchHeight(c, 'high');
