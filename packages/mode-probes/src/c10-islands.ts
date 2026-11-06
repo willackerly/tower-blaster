@@ -10,17 +10,21 @@
 //   solo     each world alone at the origin, as a cast runs today.
 // Per world, 4 s after the shot (1 s at CI size): down, the share of cubes
 // more than one cell below where they stood just before the shot, and moved,
-// the share whose centre moved more than 0.1 m. Each is read twice from the
-// islands run: from the world's own snapshot (Islands.local, f64, the rule's
-// numbers) and from one per-island histogram per question (reduceIslands, the
-// observer's integer arithmetic at 2^-16 and 2^-15 m), which must agree.
+// the share whose centre moved more than 0.1 m (f64 on the snapshot: the
+// rule's numbers). The islands run is also read through one per-island
+// histogram per question (reduceIslands), which must equal the same questions
+// asked of each world's own bodies in the observer's fixed point (fixedCounts:
+// displacements quantised at 2^-16 and 2^-15 m). The fixed point, not f64, is
+// the yardstick there: a cube that drops exactly one layer rests within
+// micrometres of the 'down' threshold, so f64 and fixed point split it (the
+// full run had such cubes in 60 of 64 worlds); those are reported as 'split'.
 // The rule (nodes.json C10): the islands' down and moved distributions match
 // the solo runs' (two-sample KS, p > 0.05); cost per body within 10 % of a
 // solo 9.6k scene (the 40 x 40 x 6 block), read only off a Metal run. Also
 // checked: no body leaves its island's cell at any sample (Islands.leaks).
 // A diagnostic: island 0 sits at the origin, so it and solo world 0 start from
 // the same f32 coordinates and differ only by sharing the solve.
-import { type Pred, Islands, reduceIslands, type Snapshot, type Vec3 } from '@tb/engine-api';
+import { type Pred, Islands, quant, reduceIslands, type Snapshot, type Vec3 } from '@tb/engine-api';
 import { GAME_PARAMS, gameScene, ks2 } from './scene.ts';
 import type { CaseRun, Check, Meter, Probe, RunSpec, Size, Verdict } from './probe.ts';
 import { CELL, type Level, MIN_MOVED_WORLDS, SHOT_STEP, world } from './x8-islands.ts';
@@ -29,11 +33,41 @@ export type C10Arm = 'islands' | 'solo' | 'block';
 export interface C10Case { arm: C10Arm; level: Level; K: number; world: number; presettle: number; readAfter: number }
 
 const scale = { down: 16, moved: 15 } as const;
+/** The predicates' integer thresholds: one cell at 2^-16 m, and (0.1 m)^2 at 2^-15 m. */
+const K_DOWN = -CELL * 2 ** scale.down, K_MOVED = Math.floor((0.1 * 2 ** scale.moved) ** 2);
 /** The rule's two questions as observer predicates on the displacement from ref slot 0 (the pose just before the shot). */
 export const C10_PREDS: readonly Pred[] = [
-  { cmp: { comp: { disp: 0 }, axis: 1, s: scale.down }, op: '<', k: -CELL * 2 ** scale.down },
-  { cmp: { norm2: { disp: 0 }, s: scale.moved }, op: '>', k: Math.floor((0.1 * 2 ** scale.moved) ** 2) },
+  { cmp: { comp: { disp: 0 }, axis: 1, s: scale.down }, op: '<', k: K_DOWN },
+  { cmp: { norm2: { disp: 0 }, s: scale.moved }, op: '>', k: K_MOVED },
 ];
+
+/** The observer's norm2 clamps each component to 2^25 (observe.ts). */
+const NORM2_CLAMP = 2 ** 25;
+
+/**
+ * C10_PREDS asked of the bodies `ids` in the observer's own arithmetic (quant(pos) − quant(p0) per
+ * component, observe.ts), so the counts equal what a correct per-island histogram gives; and `split`,
+ * the bodies on which this fixed point and the f64 rule (x8 outcome) answer differently.
+ */
+export function fixedCounts(s: Pick<Snapshot, 'pos' | 'count'>, ids: readonly number[], p0: ArrayLike<number>): { down: number; moved: number; split: number } {
+  let down = 0, moved = 0, split = 0;
+  for (const i of ids) {
+    if (i >= s.count || 3 * i + 2 >= p0.length) continue;
+    const d = (a: number, sc: number) => {
+      const x = quant(s.pos[3 * i + a]!, sc), r = quant(p0[3 * i + a]!, sc);
+      return x === null || r === null ? NaN : x - r;
+    };
+    const dy = d(1, scale.down);
+    const n2 = [0, 1, 2].reduce((acc, a) => acc + Math.min(Math.abs(d(a, scale.moved)), NORM2_CLAMP) ** 2, 0);
+    const qDown = dy < K_DOWN, qMoved = n2 > K_MOVED;
+    if (qDown) down++;
+    if (qMoved) moved++;
+    const fDown = p0[3 * i + 1]! - s.pos[3 * i + 1]! > CELL;
+    const fMoved = Math.hypot(s.pos[3 * i]! - p0[3 * i]!, s.pos[3 * i + 1]! - p0[3 * i + 1]!, s.pos[3 * i + 2]! - p0[3 * i + 2]!) > 0.1;
+    if (fDown !== qDown || fMoved !== qMoved) split++;
+  }
+  return { down, moved, split };
+}
 
 /** World k of the case as its own scene, at the origin. */
 export function c10World(c: Pick<C10Case, 'level' | 'presettle'>, k: number) {
@@ -66,15 +100,19 @@ export interface C10Result {
   worlds: C10World[];
   bodies: number;
   stepMs: number;
-  /** Islands arm: the gap, the farthest island offset from the origin (m), bodies seen outside their cell (summed over samples), worlds whose observer counts differ from the snapshot's, and bodies the observer read as ⊥ (the shots: no ref pose). */
-  gap?: number; farthest?: number; leaks?: number; disagree?: number; invalid?: number;
+  /**
+   * Islands arm: the gap, the farthest island offset from the origin (m), bodies seen outside their cell (summed over samples),
+   * worlds whose per-island histogram counts differ from fixedCounts on the world's own bodies, bodies the observer read as ⊥
+   * (the shots: no ref pose), and cubes on a threshold (f64 and fixed point answer differently; a diagnostic).
+   */
+  gap?: number; farthest?: number; leaks?: number; disagree?: number; invalid?: number; split?: number;
 }
 
 function c10Meter(c: C10Case, spec: RunSpec): Meter<C10Result> {
   const perWorld = c.level.W * c.level.D * c.level.H, at = shotAt(c);
   const isl = c.arm === 'islands' ? c10Islands(c) : null;
   if (isl) isl.pack();
-  let start: Float64Array | null = null, t0 = 0, s0 = 0, stepMs = NaN, leaks = 0, disagree = 0, invalid = 0;
+  let start: Float64Array | null = null, t0 = 0, s0 = 0, stepMs = NaN, leaks = 0, disagree = 0, invalid = 0, split = 0;
   let worlds: C10World[] = [];
   const outcome = (k: number, s: Snapshot, p0: Float64Array): C10World => {
     // Island k's cubes are its first perWorld local bodies; solo: the scene's first perWorld bodies.
@@ -102,11 +140,13 @@ function c10Meter(c: C10Case, spec: RunSpec): Meter<C10Result> {
       worlds = Array.from({ length: c.K }, (_, k) => outcome(k, s, p0));
       const r = reduceIslands(isl, s, C10_PREDS, { refs: [p0] });
       invalid = r.invalid[0]!;
-      disagree = worlds.filter((w, k) => r.counts[0]![k] !== Math.round(w.down * perWorld) || r.counts[1]![k] !== Math.round(w.moved * perWorld)).length;
+      const fixed = worlds.map((_, k) => fixedCounts(s, isl.idsOf(k).slice(0, perWorld), p0));
+      disagree = fixed.filter((f, k) => r.counts[0]![k] !== f.down || r.counts[1]![k] !== f.moved).length;
+      split = fixed.reduce((a, f) => a + f.split, 0);
     },
     result: () => ({
       worlds, bodies: spec.scene.bodies.length, stepMs,
-      ...(isl ? { gap: isl.gap, farthest: Math.max(...isl.offsets.map((o) => Math.max(Math.abs(o[0]), Math.abs(o[2])))), leaks, disagree, invalid } : {}),
+      ...(isl ? { gap: isl.gap, farthest: Math.max(...isl.offsets.map((o) => Math.max(Math.abs(o[0]), Math.abs(o[2])))), leaks, disagree, invalid, split } : {}),
     }),
   };
 }
@@ -134,7 +174,7 @@ function c10Verdict(runs: CaseRun<C10Case, C10Result>[], size: Size): Verdict {
   for (const [name, xs] of [['islands', isl], ['solo', solo]] as const) table.push(`| ${name} | ${xs.length} | ${mean(xs.map((o) => o.down)).toFixed(3)} | ${mean(xs.map((o) => o.moved)).toFixed(3)} |`);
   let ok = true;
   for (const m of ['down', 'moved'] as const) {
-    const t = ks2(isl.map((o) => o[m]), solo.map((o) => o[m])), pass = t.p > 0.05;
+    const t = ks2(isl.map((o) => o[m]), solo.map((o) => o[m])), pass = t.p > 0.05 && isl.length > 0 && solo.length > 0; // an arm left out (--only) decides nothing
     ok &&= pass;
     checks.push({ name: `islands vs solo: the ${m} distributions agree (KS p > 0.05)`, pass, detail: `D ${t.D.toFixed(3)}, p ${t.p.toFixed(3)}, ${isl.length} vs ${solo.length} worlds` });
   }
@@ -145,7 +185,8 @@ function c10Verdict(runs: CaseRun<C10Case, C10Result>[], size: Size): Verdict {
   const r = isRun?.result;
   if (r) {
     checks.push({ name: 'no body left its island\'s cell (every sample)', pass: r.leaks === 0, detail: `${r.leaks} body-samples outside; gap ${r.gap} m, farthest island ${r.farthest} m from the origin` });
-    checks.push({ name: 'per-island observer counts equal each world\'s own snapshot counts', pass: r.disagree === 0, detail: `${r.disagree} of ${isl.length} worlds differ; ${r.invalid} bodies read as no-value (the ${K} shots, which have no pose before the shot)` });
+    checks.push({ name: 'per-island observer counts equal each world\'s own counts (same fixed point)', pass: r.disagree === 0, detail: `${r.disagree} of ${isl.length} worlds differ; ${r.invalid} bodies read as no-value (the ${K} shots, which have no pose before the shot)` });
+    checks.push({ name: '(diagnostic) cubes on a threshold: f64 and the observer\'s fixed point answer differently', pass: true, detail: `${r.split ?? 0} of ${isl.length * (isRun!.c.level.W * isRun!.c.level.D * isRun!.c.level.H)} (a cube that drops exactly one layer rests on the 'down' threshold)` });
     ok &&= r.leaks === 0 && r.disagree === 0;
   }
   const w0 = isl.find((o) => o.world === 0), s0 = solo.find((o) => o.world === 0);
@@ -169,7 +210,7 @@ export const C10: Probe<C10Case, C10Result> = {
   id: 'C10',
   title: 'Many worlds in one solve (the C10 primitive)',
   question: 'Do K worlds packed by Islands, read per island, give the same outcome distributions as K solo runs, at the cost per body of one big scene?',
-  rule: 'Outcome distributions match (two-sample KS, p > 0.05, on down and moved) with the shot moving the block in at least 75% of the islands; per-island observer counts equal per-world snapshot counts; no leaks; cost per body within 10% of a solo 9.6k scene (read off a Metal run only).',
+  rule: 'Outcome distributions match (two-sample KS, p > 0.05, on down and moved) with the shot moving the block in at least 75% of the islands; per-island observer counts equal per-world counts in the observer fixed point; no leaks; cost per body within 10% of a solo 9.6k scene (read off a Metal run only).',
   cases: c10Cases,
   label: (c) => (c.arm === 'islands' ? `islands x${c.K}` : c.arm === 'block' ? 'block 9.6k' : `solo world ${c.world}`),
   spec: c10Spec,
