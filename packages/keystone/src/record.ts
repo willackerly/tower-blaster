@@ -2,12 +2,13 @@
 // step each was fired at. Varint-packed and base64url, so a whole attempt is
 // a short link and a replay is exact on the same engine build.
 import { isLaunchItem, type LaunchItem } from './rack.ts';
-import { type Shot } from './shots.ts';
+import { MAX_TIMELINE, type Shot } from './shots.ts';
 
 export interface SessionRecord { v: 1; level: string; levelHash: string; engine: string; inputs: { step: number; shot: Shot }[] }
 
-const AMMO_CODE = { marble: 0, cannonball: 1, cue: 2, drop: 3, pull: 5 } as const;
-const AMMO_NAME = ['marble', 'cannonball', 'cue', 'drop', undefined, 'pull'] as const;
+/** plunger (6): its pair count, then each pair's charge and delay (shots.ts PlungerShot). */
+const AMMO_CODE = { marble: 0, cannonball: 1, cue: 2, drop: 3, pull: 5, plunger: 6 } as const;
+const AMMO_NAME = ['marble', 'cannonball', 'cue', 'drop', undefined, 'pull', 'plunger'] as const;
 /** A launch item by name (p-<preset>, w-<weapon>): the code, then the name, then a launch shot's fields. Records from before decode unchanged. */
 const NAMED = 4;
 
@@ -53,6 +54,7 @@ export function encodeRecord(r: SessionRecord): string {
     if (shot.ammo === 'drop') { w.int(shot.x); w.int(shot.z); }
     else if (shot.ammo === 'cue') { w.int(shot.x); w.int(shot.y); w.int(shot.z); w.uint(shot.dir); w.uint(shot.power); }
     else if (shot.ammo === 'pull') w.uint(shot.body);
+    else if (shot.ammo === 'plunger') { w.uint(shot.fuse.length); for (const [c, d] of shot.fuse) { w.uint(c); w.uint(d); } }
     else { w.uint(shot.az); w.int(shot.y); w.int(shot.yaw); w.int(shot.pitch); w.uint(shot.power); }
   }
   return b64(Uint8Array.from(w.bytes));
@@ -73,6 +75,11 @@ export function decodeRecord(s: string): SessionRecord {
     if (ammo === 'drop') shot = { ammo, x: r.int(), z: r.int() };
     else if (ammo === 'cue') shot = { ammo, x: r.int(), y: r.int(), z: r.int(), dir: r.uint() as 0 | 1 | 2 | 3, power: r.uint() };
     else if (ammo === 'pull') shot = { ammo, body: r.uint() };
+    else if (ammo === 'plunger') {
+      const n = r.uint();
+      if (n > MAX_TIMELINE) throw new Error(`a plunger of ${n} charges (at most ${MAX_TIMELINE})`);
+      shot = { ammo, fuse: Array.from({ length: n }, () => [r.uint(), r.uint()] as [number, number]) };
+    }
     else shot = { ammo: ammo as LaunchItem, az: r.uint(), y: r.int(), yaw: r.int(), pitch: r.int(), power: r.uint() };
     inputs.push({ step, shot });
   }

@@ -12,7 +12,7 @@ export const AMMO_LABEL: Record<'marble' | 'cannonball' | 'cue' | 'drop', string
 export function itemLabel(item: RackItem): string {
   const r = itemRef(item);
   if (!r) return item;
-  const label = r.kind === 'ammo' ? AMMO_LABEL[r.ammo] : r.kind === 'pull' ? 'Pull' : r.kind === 'preset' ? PROJECTILE_PRESETS[r.preset].label : r.key;
+  const label = r.kind === 'ammo' ? AMMO_LABEL[r.ammo] : r.kind === 'pull' ? 'Pull' : r.kind === 'plunger' ? 'Plunger' : r.kind === 'preset' ? PROJECTILE_PRESETS[r.preset].label : r.key;
   return label.charAt(0).toUpperCase() + label.slice(1);
 }
 
