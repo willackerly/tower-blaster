@@ -82,6 +82,10 @@ describe('every rack item on the game page', () => {
     expect(counts.fired).toBe(2);
     expect(c.arms['w-cluster']!.bodies).toBeGreaterThan(1);
     expect(counts.bomb ?? 0).toBe(c.arms['w-cluster']!.bodies);
+    // Drawn so: the marble painted (a ball, scene.ts ballFx), every other fired body a bomb.
+    const looks = await page.evaluate(() => window.__game.firedLooks());
+    expect(looks.filter((x) => x === 'painted')).toEqual(['painted']);
+    expect(looks.filter((x) => x === 'plain')).toEqual([]);
     expect(errors).toEqual([]);
     await page.close();
   }, 300_000);

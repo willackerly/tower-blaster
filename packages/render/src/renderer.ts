@@ -16,7 +16,7 @@ import { BlastReach } from './reach.ts';
 import { aoFrame, aoGrid, AoVolume } from './ao.ts';
 import { FLOOR_VERTS, floorFan, floorPolygon } from './floor.ts';
 import { fitShadow, frustumCorners, pcssParams, type Arena, type ShadowFit, type ShadowFitState } from './shadowfit.ts';
-import { FX_WORDS, packFx, tintWord, toHalf, type FxOptions, FX_ANCHOR } from './fx.ts';
+import { FX_WORDS, packFx, tintWord, toHalf, type Fx, type FxOptions, FX_ANCHOR, unpackFx } from './fx.ts';
 import { CANDY_NIGHT, linearToOklab, REAL_DEFAULTS, srgbToLinear, type LookParams } from './look.ts';
 import { invert, lookAt, multiply, normalize, type Mat4, type V3 } from './math.ts';
 import { HDR_FORMAT, noStamp, Post, type Stamp } from './post.ts';
@@ -923,6 +923,11 @@ export class Renderer {
   /** Mark (or unmark) a body slot as a lit bomb: a flickering spark rides on top of it until it is removed (fuses.ts). */
   fuse(slot: number, on = true): void {
     this.fuses.set(slot, on);
+  }
+
+  /** A slot's effects as last set (setFx; the CPU copy the GPU's is uploaded from), for tests and tools. */
+  fxOf(slot: number): Fx {
+    return unpackFx(slot * FX_WORDS < this.fx.length ? this.fx : new Uint32Array(FX_WORDS), slot * FX_WORDS < this.fx.length ? slot * FX_WORDS : 0);
   }
 
   /** Show the danger zone of a blast of radius reaching out from centre (the aim preview; reach.ts); null hides it. */

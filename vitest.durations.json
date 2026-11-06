@@ -38,6 +38,7 @@
   "packages/game/test/hud-e2e.test.ts": 227,
   "packages/game/test/hud.test.ts": 0.1,
   "packages/game/test/juice.test.ts": 0,
+  "packages/game/test/launch-e2e.test.ts": 17,
   "packages/game/test/level-start-e2e.test.ts": 20,
   "packages/game/test/load-cost.test.ts": 0.3,
   "packages/game/test/lot-e2e.test.ts": 4.8,

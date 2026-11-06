@@ -6,6 +6,8 @@
 //   word 1  bits 0-15   f16(1 - scale); bit 16 anchor the scale at the base;
 //           bit 17 paint: on a sphere, the tint is its colour rather than a multiple of the look's
 //           bit 18 matte: on a sphere, a satin finish with no clear coat and no ball glow (a bomb's iron)
+//           bit 19 band: on a sphere, a white band round its body-space equator (a fired ball, so it reads as
+//           a ball and never as a bomb, and its spin shows)
 //   word 2  f32 flash start (frame time, seconds)
 //   word 3  f32 flash duration (seconds); 0 = emissive is steady
 //
@@ -19,6 +21,9 @@ export const FX_EMISSIVE_MAX = 16;
 export const FX_ANCHOR = 1 << 16;
 export const FX_PAINT = 1 << 17;
 export const FX_MATTE = 1 << 18;
+export const FX_BAND = 1 << 19;
+/** The band's half-height on a unit sphere (|y| below it, in body space): a band of 30% of the diameter. */
+export const BAND_HALF = 0.3;
 
 export interface FxOptions {
   /** Multiplies the albedo, linear 0..1 per channel; [1, 1, 1] is none. */
@@ -33,6 +38,8 @@ export interface FxOptions {
   paint?: boolean;
   /** Spheres: a satin finish without the clear coat or the look's ball glow, so a dark shell stays dark (a bomb's iron). */
   matte?: boolean;
+  /** Spheres: a white band round the body-space equator, which turns with the ball (a fired ball's stripe). */
+  band?: boolean;
   /** Fade the emissive out over this many seconds from `flashAt`. */
   flash?: number;
   /** Flash start, frame time in seconds (default: the last rendered frame). */
@@ -65,12 +72,12 @@ export function fromHalf(h: number): number {
 export function packFx(fx: FxOptions, out: Uint32Array, o = 0, now = 0): void {
   const t = fx.tint ?? [1, 1, 1];
   out[o] = ((255 - byte(t[0])) | ((255 - byte(t[1])) << 8) | ((255 - byte(t[2])) << 16) | (byte(fx.emissive ?? 0) << 24)) >>> 0;
-  out[o + 1] = (toHalf(1 - Math.min(1, Math.max(0, fx.scale ?? 1))) | (fx.anchor ? FX_ANCHOR : 0) | (fx.paint ? FX_PAINT : 0) | (fx.matte ? FX_MATTE : 0)) >>> 0;
+  out[o + 1] = (toHalf(1 - Math.min(1, Math.max(0, fx.scale ?? 1))) | (fx.anchor ? FX_ANCHOR : 0) | (fx.paint ? FX_PAINT : 0) | (fx.matte ? FX_MATTE : 0) | (fx.band ? FX_BAND : 0)) >>> 0;
   out[o + 2] = fx.flash ? bits(fx.flashAt ?? now) : 0;
   out[o + 3] = fx.flash ? bits(fx.flash) : 0;
 }
 
-export interface Fx { tint: V3; emissive: number; scale: number; anchor: boolean; paint: boolean; matte: boolean; flashAt: number; flash: number }
+export interface Fx { tint: V3; emissive: number; scale: number; anchor: boolean; paint: boolean; matte: boolean; band: boolean; flashAt: number; flash: number }
 
 export function unpackFx(w: Uint32Array, o = 0): Fx {
   const w0 = w[o]!, w1 = w[o + 1]!;
@@ -81,6 +88,7 @@ export function unpackFx(w: Uint32Array, o = 0): Fx {
     anchor: (w1 & FX_ANCHOR) !== 0,
     paint: (w1 & FX_PAINT) !== 0,
     matte: (w1 & FX_MATTE) !== 0,
+    band: (w1 & FX_BAND) !== 0,
     flashAt: float(w[o + 2]!),
     flash: float(w[o + 3]!),
   };
