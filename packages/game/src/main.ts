@@ -10,7 +10,7 @@
 // (?door=auto|1|0); ?keystone.preaim, ?progress, ?sound, ?sharp are its keys.
 import { DUELS, duelLevel, duelLevelId, lotSheetOf, type Player, type Shot, shownGoals } from '@tb/keystone';
 import { createDevice } from '@tb/gpu';
-import { lookByName, parseBlastOptions, parseRealOptions, Renderer, SnapshotSource } from '@tb/render';
+import { lookByName, parseBlastOptions, parseIceOptions, parseRealOptions, Renderer, SnapshotSource } from '@tb/render';
 import { installDoor, type DoorPage } from './door-page.ts';
 import { doorDuels, doorMode, doorOnLoad, duelsOnDoor, openerFor, preaimMode } from './door.ts';
 import { GAME_SERIES, loadOptions, lookName, onEngine, parseGameParams, withRules } from './params.ts';
@@ -110,6 +110,8 @@ async function main() {
   const blastOptions = parseBlastOptions(q);
   renderer.toggles.blasts = blastOptions.on;
   renderer.blasts.config = blastOptions.params;
+  // Ice blocks (a level's ice material): ice.<knob> tunes how they are drawn (parseIceOptions in @tb/render).
+  renderer.ice.params = parseIceOptions(q);
   // The front door (?door=auto|1|0): over the level loading behind it, so its first shot is a click away.
   const front = installDoor({
     root: $('door'), menu: $('menu'), levels, start: duel ? duelLevelId(duel, 0) : level.id, handle, progress, settings,

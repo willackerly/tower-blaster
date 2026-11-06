@@ -60,8 +60,10 @@ export function ballFx(item: RackItem, style: BallStyle = 'painted'): FxOptions 
   return null;
 }
 
+// Ice is drawn by the renderer's ice pass (@tb/render ice.ts), which makes its own blue from the light's
+// path through the block (absorption): a tint here would multiply it a second time, so ice is untinted.
 const MATERIAL_TINT: Record<string, [number, number, number]> = {
-  plaster: TINT.none, stone: [0.62, 0.62, 0.66], iron: [0.3, 0.3, 0.34], ice: [0.62, 0.85, 1], rubber: [0.9, 0.45, 0.55], steel: [0.4, 0.42, 0.46],
+  plaster: TINT.none, stone: [0.62, 0.62, 0.66], iron: [0.3, 0.3, 0.34], ice: TINT.none, rubber: [0.9, 0.45, 0.55], steel: [0.4, 0.42, 0.46],
 };
 
 /** Role wins over material: crowns are gold and heritage is celadon whatever they are made of. */
