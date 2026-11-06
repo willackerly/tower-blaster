@@ -5,6 +5,7 @@
 
 import { DUEL_CSS } from './duel-hud.ts';
 import { LOT_CSS } from './lot-hud.ts';
+import { FUSE_CSS } from './fuse-panel.ts';
 
 export const GAME_CSS = `
   .kg-panel { position: fixed; background: rgba(17, 20, 28, 0.8); color: #e8ebf2; border-radius: 10px; padding: 12px 14px; backdrop-filter: blur(6px); }
@@ -92,7 +93,7 @@ export const GAME_CSS = `
     /* The lot sheet keeps its count line; its goals are on the result card (the HUD would cover the structure). */
     body.kg-touch .kg-hud .goals ul { display: none; }
   }
-${LOT_CSS}${DUEL_CSS}`;
+${LOT_CSS}${DUEL_CSS}${FUSE_CSS}`;
 
 /**
  * The game page's hint line in play: the few controls a first shot needs, and where the rest are. The HUD

@@ -17,7 +17,7 @@ Each run writes `results/mode-probes/<id>-<size>-<time>.{json,md}`. `--size ci` 
 | Probe | Question | Gates | SwiftShader | Metal (M5 Max) |
 |---|---|---|---|---|
 | X1 | Domino propagation and sleep | M6, M16, C22 | CI size passes; full-size subset (line 200, curves, cocked; 4 nudges) passes | queued |
-| X2 | Order matters in demolition | M5 | CI size: order matters on slab buildings | **PASS**: only felling a slab building with a 0.6 s delay spills (0.73); cube blocks never |
+| X2 | Order matters in demolition | M5 | CI size: order matters on slab buildings. M5 gate on levels (reference engine, 8 nudges): F1 to F5 **pass** (+0.43 to +0.65); without relays F5's tower never fits its yard | **PASS**: only felling a slab building with a 0.6 s delay spills (0.73); cube blocks never |
 | X3 | Towers as dominoes | M6 Steer | CI size: cube and Kapla towers topple on, a bonded pier stops the front | **PASS**: cube towers 24/24 always; bonded piers all or nothing (38%); Kapla dies after 2-3 |
 | X4 | Cantilevers and hollows hold | M1 Hollow, M8 | CI size: stacks, span and brick arch behave | **FAIL**, then reread: 95% stack falls at 20 iterations, holds at 40; arch creep is one brick over the hole (wall 4 mm). Re-run queued |
 | X5 | Pinned anchors solid | C8 | CI size: pins exactly still, bodies on them match the ground | **PASS**: pins exactly still, flood KS p >= 0.64 |
@@ -83,6 +83,29 @@ Full size on Metal (M5 Max, Chrome, `23c0df8`, 2026-11-06; Low Power Mode was on
 - Every run settled, and no engine limit was hit.
 
 So order matters, but only as a felling with a long enough delay on a slabbed building. For M5, the delay is the decision, and a level should give the player a delay range wide enough to span the building's fall time.
+
+### On levels: the Fuse & Fold gate (M5, 2026-11-06)
+
+M5 took X2 to frame buildings (one rod per column per storey under one slab per storey; [fuse-and-fold.md](fuse-and-fold.md)) and to every candidate level, with the gate of that doc: over 8 nudged builds (1 mm, 0.2 deg per body) on the reference engine, the best line's mean fold (collapse x (1 - spill)) must beat everything at once by at least 0.1 and by more than 3 standard errors, and meet the objective (collapse at least 0.6, spill at most 0.05, no neighbour broken) on at least 80% of the builds. The search (`pnpm keystone:fuse FC-1,... --jobs 4 --nudges 8`, keystone-lab `fuse-search.ts`, run on `b75a721` with the M5 changes on top) screens 81 lines on one build (all at once, and 8 compass sweeps x spacings 0.1 to 1.0 s), then confirms the naive line and the best four on 8. Reference engine (Node, f64), the 4-core cloud runner; seconds are wall times there, not performance results.
+
+| candidate (level) | frame | yard | gate | best line, fold (sd), met | all at once | diff, z | screened lines that meet |
+|---|---|---|---|---|---|---|---|
+| FC-1 Timber (**F1**) | 2 x 2, 6 storeys | W 22 | **PASS** | W 1.0 s, 0.894 (0.001), 100% | 0.247, 0% | +0.648, 648 SE | 5 of 81 (W 0.6 to 1.0 s) |
+| FC-2 Wrong Way (**F2**) | 3 x 3, 6 storeys | N 22 | **PASS** | N 1.0 s, 0.859 (0.002), 100% | 0.248, 0% | +0.611, 611 SE | 5 of 81 (N only) |
+| FC-4 Corner Lot (**F3**) | 3 x 3, 5 storeys | W 12, N 12 | **PASS** | W 1.0 s, 0.818 (0.003), 100% | 0.290, 0% | +0.528, 451 SE | 14 of 81 (W 6, N 5, NW 3) |
+| FC-3 Short Yard (**F4**) | 4 x 3, 5 storeys | W 14 | **PASS** | W 0.6 s, 0.744 (0.021), 100% | 0.290, 0% | +0.455, 61 SE | 5 of 81 (W 0.4 to 0.8 s; 0.3 and 1.0 s spill) |
+| FC-3b (not shipped: FC-3 again, tighter) | 4 x 3, 5 storeys | W 11 | **PASS** | W 0.8 s, 0.726 (0.004), 100% | 0.290, 0% | +0.437, 301 SE | 6 of 81 |
+| FC-5b Sympathy (**F5**) | 3 x 3, 8 storeys, relays on storey 5 | W 14 | **PASS** | W 0.7 s, 0.696 (0.061), 88% | 0.262, 0% | +0.434, 20 SE | 2 of 81 (W 0.7, 0.8 s) |
+| FC-5 (not shipped: F5 with a 10-cell yard) | 3 x 3, 8 storeys, relays on storey 5 | W 10 | **FAIL** (fair) | W 0.7 s, 0.642 (0.032), 38% | 0.262, 0% | +0.380, 34 SE | 1 of 81 |
+| FC-5c (control: F5 without relays) | 3 x 3, 8 storeys | W 14 | **FAIL** (fair) | W 0.8 s, 0.713 (0.001), 0% | 0.192, 0% | +0.521, 521 SE | 0 of 81 |
+
+- **Every all-at-once line drops the frame a storey and misses the objective (0% on every candidate), with no spread at all across builds.** Every passing best line meets it on 8 of 8. The margins are 0.44 to 0.65 of the metric's range, four to six times the gate's 0.1.
+- **A level's answer is narrow but not lucky.** On F1 to F4, 5 to 14 of the 81 screened lines meet each level's objective. That is about one direction and the right half of the spacing range. A sweep's fold varies across builds by 0.001 to 0.03.
+- **Short Yard has a two-sided window**, as the wide-frame finding said: 0.3 s and 1.0 s both spill out of the lot, and 0.4 to 0.8 s folds into it. Its sd (0.02 to 0.03) is the largest of the shipped levels, and its runner-up lines meet on 75% to 88% of builds, so it is the hardest.
+- **Spill decides, not the neighbours.** Of 648 screened lines across the eight candidates, 5 broke a heritage house. A frame felled toward a house mostly fails on spill first. Heritage is judged by displacement, and one-slab-per-course stone houses are heavy against a plaster frame, so "touched a neighbour" is a weaker constraint than its wording. A contact rule is noted as follow-up in fuse-and-fold.md.
+- **Sympathetic relays are what make F5 work.** The control without relays (FC-5c) lands whole and spills about 19% on every build and every line. With relays on the fifth storey the same sweep folds the tower short enough on 7 of 8 builds. Relays fire on a jolt, and a jolt's timing varies with the build. That makes F5 the noisiest level (sd up to 0.06) and the narrowest pass (88%, 20 SE). With a 10-cell yard (FC-5) it fails fairness.
+
+CI keeps this honest at CI size: keystone-lab `test/fuse-search.test.ts` replays F1's naive line and its west 1.0 s sweep on one nudged build on the reference engine, and game `test/fuse-e2e.test.ts` plays both on the GPU (SwiftShader) through the game page's timeline panel and plunger. A Metal cast of every level is queued for the Mac.
 
 ## X3 Towers as dominoes
 

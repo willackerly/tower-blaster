@@ -57,6 +57,9 @@ describe('formatting', () => {
     expect(html).not.toContain('data-act="launch"');
     expect(hudHtml({ ...base, launch: 6, chips: rackChips(['drop'], ['drop'], 'drop') })).not.toContain('data-act="launch"');
     expect(hudHtml({ ...base, launch: 6, chips: rackChips(U3.rack, U3.rack, 'pull') })).not.toContain('data-act="launch"');
+    // A plunger aims at nothing: neither row.
+    const plunger = hudHtml({ ...base, launch: 6, chips: rackChips(['plunger'], ['plunger'], 'plunger') });
+    expect(plunger).not.toMatch(/Power|Height/);
     const opener = hudHtml({ ...base, chips: [], opener: true });
     expect(opener).toMatch(/<span class="kg-desk">or aim and click<\/span><span class="kg-tch">or drag and lift<\/span>/);
   });

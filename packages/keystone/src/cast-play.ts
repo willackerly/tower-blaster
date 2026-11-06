@@ -26,6 +26,8 @@ export interface CastSample {
   heritage: number;
   /** Share of the structure's mass pulled (Undercut). */
   pulled: number;
+  /** Fuse & Fold's metric, collapse x (1 - spill) (outcome.ts foldValue; spill 0 on levels that are not fold levels). Absent in casts recorded before it: read as 0. */
+  fold?: number;
 }
 
 /** One played line: a sample at every settle (the last is the end), the engine steps, the end state's hash and any engine limit hit. */
@@ -40,12 +42,12 @@ export interface CastPlay {
 }
 
 /** Each star metric's value in a sample. */
-export const sampleValue = (s: CastSample, metric: StarMetric): number => (metric === 'collapse' ? s.collapse : metric === 'crowns' ? s.crowns : metric === 'skyline' ? s.skyline : metric === 'pulled' ? s.pulled : s.score);
+export const sampleValue = (s: CastSample, metric: StarMetric): number => (metric === 'collapse' ? s.collapse : metric === 'crowns' ? s.crowns : metric === 'skyline' ? s.skyline : metric === 'pulled' ? s.pulled : metric === 'fold' ? s.fold ?? 0 : s.score);
 
 /** The sample of a session as it stands at its last settle, banked there. */
 export function sampleOf(session: Session, step: number): CastSample {
   const f = session.outcomeFacts(), score = outcomeScore(f, undefined);
-  return { shots: session.outcomes.length, step, met: f.met, collapse: f.collapse, crowns: metricValue('crowns', f, 0), skyline: f.skylineRatio, score: score.total, heritage: f.heritageBroken, pulled: f.pulled };
+  return { shots: session.outcomes.length, step, met: f.met, collapse: f.collapse, crowns: metricValue('crowns', f, 0), skyline: f.skylineRatio, score: score.total, heritage: f.heritageBroken, pulled: f.pulled, fold: metricValue('fold', f, 0) };
 }
 
 export interface CastPlayOptions extends DriverOptions {

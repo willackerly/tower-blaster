@@ -29,6 +29,8 @@ import { COST_WINDOW, runPhysics, wakeable } from './physics-loop.ts';
 import { CLEAR_SHARE, FrameGovernor } from './frame-rate.ts';
 import { canvasSize, type QualityState } from './quality.ts';
 import { UndoMarks } from './undo-marks.ts';
+import { FusePanel } from './fuse-panel.ts';
+import { lotBeads, timelineOverlay } from './fuse-timeline.ts';
 import { ballFx, beadOverlay, BOMB_FX, CROWN_GLOW, PULL_HOVER, regrowDuration, regrowScales, structureMarks, structureTints, TINT, tintOf, tintWordOf } from './scene.ts';
 import { type GestureState, type TouchAction, TouchGestures, touchFace, type TouchMode } from './touch.ts';
 
@@ -504,6 +506,10 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
   let lot: { sheet: LotSheet; goals: readonly Goal[]; groups: Record<string, Int32Array>; footprints: Record<string, Footprint> } | null = null;
   /** The duel being played (env.duel), and when the turn in the air was fired (its pace: DuelDef.turnSeconds). */
   let duel: Duel | null = null, turnStart = 0;
+  // Fuse & Fold's timeline panel (fuse-panel.ts), beside the HUD: shown on levels with plunger charges.
+  const fuse = env.hud.parentElement ? new FusePanel(env.hud.parentElement, { fire: (shot) => handle.fire(shot) }) : null;
+  /** The lot's chalk line on a fold level (fuse-timeline.ts lotBeads), else null. */
+  let foldLot: Overlay | null = null;
   /** Each side's arc on the ground (duel-view.ts arcBeads), made at load. */
   let arcs: Overlay[] = [], arcBeadsDrawn = 0;
   /** Every crown is down: the round is known to be over, the card shows, and the rest of the settle runs at fast-forward. */
@@ -831,6 +837,9 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     renderer.setFx(0, tints, regrowBuf, !line);
     applyMarks();
     paintIce();
+    fuse?.level(c);
+    // A fold level is judged on what stays in its lot: chalk the lot on the ground, the whole round.
+    foldLot = c.def.objective.kind === 'fold' ? lotBeads(c) : null;
     if (line) {
       const s = driver.session;
       s.crownLive.forEach((down, k) => { if (down) renderer.setFx(c.meta.crowns[k]!, { tint: TINT.crown, emissive: 0.9 }); });
@@ -1432,6 +1441,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     if (!duel && k === 'n' && step(levelIdx, 1)) void load(levelIdx + 1).catch(fail);
     if (!duel && k === 'p' && step(levelIdx, -1)) void load(levelIdx - 1).catch(fail);
     if (k === 'm') setMuted(!muted);
+    if (e.key === 'Enter' && fuse?.timeline) { e.preventDefault(); fuse.press(); }
   });
   addEventListener('keyup', (e) => { if (e.key === ' ') fastHeld = false; });
 
@@ -1510,7 +1520,11 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     // The player to fire's arc on the ground, between shots (and the aim's beads over it).
     const arc = duel && feel.arcs && !duel.result.over && duel.shooter === null ? arcs[duel.turn] ?? null : null;
     arcBeadsDrawn = arc?.colours.length ?? 0;
-    const o = joinOverlays(beads ? beadOverlay(beads, aimed?.reachable ?? true) : null, arc);
+    // Fuse & Fold: the charges' markers, coloured by their delays, while the plunger can still go.
+    const plungerReady = !!fuse?.timeline && handle.ready && driver.session.rackLeft.includes('plunger');
+    fuse?.ready(plungerReady);
+    if (fuse?.timeline) fuse.heading(view.yaw, view.pitch);
+    const o = joinOverlays(beads ? beadOverlay(beads, aimed?.reachable ?? true) : null, arc, plungerReady ? timelineOverlay(fuse!.timeline!) : null, foldLot);
     renderer.reach(ring?.centre ?? null, ring?.radius ?? 0);
     renderer.setOverlay(o?.xyzr ?? new Float32Array(0), o?.colours);
     pendingCapture = null;
