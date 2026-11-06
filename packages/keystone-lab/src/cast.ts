@@ -285,6 +285,7 @@ export function nudgeLine(shots: readonly Shot[], r: () => number): Shot[] {
     if (s.ammo === 'drop') return { ...s, x: s.x + randInt(r, -1, 1), z: s.z + randInt(r, -1, 1) };
     if (s.ammo === 'cue') return { ...s, power: Math.max(0, Math.min(100, s.power + randInt(r, -3, 3))) };
     if (s.ammo === 'pull') return s; // a pull names a block: there is no hand noise in which one
+    if (s.ammo === 'plunger') return s; // a timeline is exact steps: no hand noise either
     return { ...s, yaw: s.yaw + randInt(r, -6, 6), power: Math.max(0, Math.min(100, s.power + randInt(r, -3, 3))) };
   });
 }
