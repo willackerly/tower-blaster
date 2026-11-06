@@ -18,7 +18,9 @@ export const GAME_CSS = `
   .kg-hud .pace { font-size: 12px; font-weight: 650; padding: 1px 6px; border-radius: 4px; background: #3a4459; color: #9fc3ff; vertical-align: 2px; }
   .kg-hud .crowns.pop { animation: kg-pop 0.35s ease-out; }
   .kg-hud .chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0 6px; }
-  .kg-hud .chip { padding: 4px 8px; border-radius: 6px; background: #2b3242; }
+  .kg-hud .chip { font: inherit; color: inherit; border: 0; padding: 4px 8px; border-radius: 6px; background: #2b3242; cursor: pointer; }
+  .kg-hud .power { display: flex; align-items: center; gap: 8px; }
+  .kg-hud button.pw { font: 700 18px/1 system-ui, sans-serif; width: 36px; height: 32px; padding: 0; border: 0; border-radius: 6px; background: #2b3242; color: #e8ebf2; cursor: pointer; }
   .kg-hud .chip.on { background: #d8693f; }
   .kg-hud .chip.spent { opacity: 0.4; }
   .kg-hud .bar { width: 110px; height: 8px; border-radius: 4px; background: #2b3242; overflow: hidden; }
@@ -46,10 +48,38 @@ export const GAME_CSS = `
   @keyframes kg-pop { 50% { transform: scale(1.5); } }
   @keyframes kg-banner { 0% { opacity: 0; transform: scale(0.6); } 15% { opacity: 1; transform: scale(1.08); } 70% { opacity: 1; transform: scale(1); } 100% { opacity: 0; transform: scale(1); } }
   @media (max-width: 640px) { .kg-banner { font-size: 30px; } }
+  /* Touch (touch.ts; play.ts sets body.kg-touch): key hints go, tap targets grow, and the help says the gestures. */
+  .kg-tch { display: none; }
+  body.kg-touch .kg-tch { display: inline; }
+  body.kg-touch button.kg-tch { display: inline-block; }
+  body.kg-touch .kg-desk { display: none; }
+  body.kg-touch .kg-hud kbd, body.kg-touch .kg-result kbd, body.kg-touch .kg-door kbd, body.kg-touch .kg-menu kbd { display: none; }
+  /* Tap targets at least 44 px (Apple's 44 pt); the touch buttons are lighter than the panel so they read as buttons. */
+  body.kg-touch .kg-hud .chip { min-height: 44px; padding: 0 14px; }
+  body.kg-touch .kg-hud .chip:not(.on) { background: #3a4459; box-shadow: inset 0 0 0 1px #5a6680; }
+  body.kg-touch .kg-hud button.pw { width: 44px; height: 44px; background: #3a4459; box-shadow: inset 0 0 0 1px #5a6680; font-size: 22px; }
+  body.kg-touch .kg-hud button.opener, body.kg-touch .kg-hud button.bank { min-height: 44px; padding: 0 14px; margin-bottom: 8px; }
+  body.kg-touch .kg-hud button, body.kg-touch .kg-result button { touch-action: manipulation; }
+  body.kg-touch .kg-result button { min-height: 44px; padding: 0 16px; }
+  body.kg-touch .kg-menu { min-height: 44px; min-width: 64px; }
+  /* A phone (upright, or on its side with little height): the HUD compacts; upright, view.ts PORTRAIT_HUD_SHARE frames the structure below it. */
+  @media (max-width: 640px), (max-height: 500px) {
+    body.kg-touch .kg-hud { font-size: 12.5px; line-height: 1.35; padding: 8px 10px; }
+    body.kg-touch .kg-hud .title { font-size: 14px; margin-bottom: 2px; }
+    body.kg-touch .kg-hud .chips { gap: 6px; margin: 6px 0; }
+    /* The lot sheet keeps its count line; its goals are on the result card (the HUD would cover the structure). */
+    body.kg-touch .kg-hud .goals ul { display: none; }
+  }
 ${LOT_CSS}${DUEL_CSS}`;
 
 /** The help line for the game's controls (the game page's, and the viewer's under Keystone rules). */
 export const GAME_HELP = 'hover: aim · click: fire · drag: orbit (the launcher follows you) · wheel: zoom · <kbd>1</kbd>–<kbd>4</kbd> ammo · <kbd>Q</kbd>/<kbd>E</kbd> power · hold <kbd>Space</kbd>: fast · <kbd>B</kbd> bank (outcome levels) · <kbd>R</kbd> retry · <kbd>N</kbd>/<kbd>P</kbd> level · <kbd>M</kbd> mute';
+
+/** The help line on a touch screen (body.kg-touch): the gestures of touch.ts. */
+export const TOUCH_HELP = 'drag: aim · lift: fire · two fingers: turn · pinch: zoom · add a finger mid-aim: cancel';
+
+/** The help panel's markup: the desktop line, or the touch line on a touch screen (GAME_CSS picks by body.kg-touch). */
+export const HELP_HTML = `<span class="kg-desk">${GAME_HELP}</span><span class="kg-tch">${TOUCH_HELP}</span>`;
 
 /** Add GAME_CSS to the document once. */
 export function installGameStyles(doc: Document = document): void {

@@ -19,8 +19,9 @@ import { bankAfterLine, type SessionFacts, sessionFile, sessionFileName } from '
 import { CAMERA_KEYS, cameraFeel, RAPID_KEYS, rapidFeel, type Settings, SettingsStore } from './settings.ts';
 import { NO_WEBGPU_HTML, webgpuMissing } from './support.ts';
 import { type GameHandle, newGameHandle, playKeystone, playLine } from './play.ts';
-import { GAME_HELP, installGameStyles } from './ui.ts';
+import { HELP_HTML, installGameStyles } from './ui.ts';
 import { goalsMode } from './lot-hud.ts';
+import { touchMode } from './touch.ts';
 
 declare global { interface Window { __game: GameHandle; __progress: ProgressStore; __door: DoorPage } }
 
@@ -29,7 +30,7 @@ const canvas = $('c') as HTMLCanvasElement, errorEl = $('error');
 const handle = newGameHandle();
 window.__game = handle;
 installGameStyles();
-$('help').innerHTML = GAME_HELP;
+$('help').innerHTML = HELP_HTML;
 
 function fail(e: unknown) {
   const msg = e instanceof Error ? e.message : String(e);
@@ -121,7 +122,7 @@ async function main() {
   let attempt: Shot[] = [], ended: SessionFacts | null = null, banked = false;
   await playKeystone({
     canvas, offscreen, device, renderer, source, hud: $('hud'), banner: $('banner'), result: $('result'),
-    levels: played, start: duel ? 0 : start, engine, feel, fail, sound, impactsDb, muted: !settings.current.sound,
+    levels: played, start: duel ? 0 : start, engine, feel, fail, sound, impactsDb, muted: !settings.current.sound, touch: touchMode(q),
     ...(duel ? { duel } : {}),
     // The pre-aimed opener (?keystone.preaim): by default the series' first level, until it has a record here.
     // The level's lot sheet (?keystone.goals=shown|all|off): proven goals by default, with the ones met on earlier plays marked.
