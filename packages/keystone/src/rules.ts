@@ -35,9 +35,12 @@ export const SETTLE_CAP_V2 = 1800;
  * FROZEN_STEPS steps, however many bodies still move. A standing wall can ring
  * for the whole cap with a hundred blocks swaying a few centimetres at 0.1 to
  * 0.3 m/s while nothing changes (G5's B1, 2026-11-01); v3 ends that shot, and
- * settles no later than v2 anywhere.
+ * settles no later than v2 anywhere. v4 (agent playtest PT6): as v3, or else the collapse D has stayed
+ * within STEADY_D of where a run began for STEADY_STEPS steps, whatever still moves: a big level's
+ * shot whose Down% reads the same for seconds while debris rolls and blocks rock (B1 at 17% from 3.5 s
+ * to 18.4 s on Rapier) ends 2 s after the last change anyone can see.
  */
-export const SETTLE_RULES = ['v1', 'v2', 'v3'] as const;
+export const SETTLE_RULES = ['v1', 'v2', 'v3', 'v4'] as const;
 export type SettleRule = (typeof SETTLE_RULES)[number];
 /** Structure bodies settle v2 lets still move: a few stragglers per thousand, at least 2. */
 export const settleAllowance = (n: number) => Math.max(2, Math.floor(n / 1000));
@@ -48,6 +51,10 @@ export const FROZEN_SPEED = 0.5;
 export const FROZEN_STEPS = 60;
 /** with the collapse D within this of where the run began (and the displaced count the same). */
 export const FROZEN_D = 1e-4;
+/** Settle v4's steady collapse: D within this (absolute, 0.5% of the structure's drop) of where the run began, */
+export const STEADY_D = 0.005;
+/** for this many steps (2 s at 60 Hz). */
+export const STEADY_STEPS = 120;
 export const QUIET_SPEED = 0.05; // m/s
 export const QUIET_SPIN = 0.2; // rad/s
 /** Displacement (in h) beyond which a body counts as moved by a shot. */
@@ -227,7 +234,7 @@ export class CpuObserver {
 // ---- Settling ----
 
 /** quietSince: the first step of the current quiet run. v3's frozen run: its first step and the D and displaced count there. */
-export interface SettleState { quietSince: number | null; frozenSince?: number | null; frozenD?: number; frozenDisplaced?: number }
+export interface SettleState { quietSince: number | null; frozenSince?: number | null; frozenD?: number; frozenDisplaced?: number; steadySince?: number | null; steadyD?: number }
 
 /** Whether one observed state counts as quiet under `rule`, for a structure of n bodies. */
 export function quietUnder(rule: SettleRule, r: Reductions, n: number): boolean {
@@ -253,17 +260,24 @@ export const frozenCandidate = (r: Reductions): boolean => r.maxSpeed < FROZEN_S
  * the launch with the ball still in the air (agent playtest PT10).
  */
 export function settleUpdate(st: SettleState, r: Reductions, spawnStep: number, rule: SettleRule = 'v1', n = 0, d = 0, inFlight = false): { state: SettleState; settled: boolean } {
-  if (inFlight) return { state: rule === 'v3' ? { quietSince: null, frozenSince: null } : { quietSince: null }, settled: r.step - spawnStep >= settleCap(rule) };
+  if (inFlight) return { state: rule === 'v4' ? { quietSince: null, frozenSince: null, steadySince: null } : rule === 'v3' ? { quietSince: null, frozenSince: null } : { quietSince: null }, settled: r.step - spawnStep >= settleCap(rule) };
   const quiet = quietUnder(rule, r, n);
   const quietSince = quiet ? (st.quietSince ?? r.step) : null;
   const old = r.step - spawnStep;
   let state: SettleState = { quietSince }, frozen = false;
-  if (rule === 'v3') {
+  if (rule === 'v3' || rule === 'v4') {
     // A frozen run continues while nothing is fast, D stays within FROZEN_D of where it began and the displaced count holds; otherwise it starts over here.
     const keep = frozenCandidate(r) && st.frozenSince != null && Math.abs(d - st.frozenD!) <= FROZEN_D && r.displaced === st.frozenDisplaced;
     state = keep ? { quietSince, frozenSince: st.frozenSince, frozenD: st.frozenD, frozenDisplaced: st.frozenDisplaced }
       : frozenCandidate(r) ? { quietSince, frozenSince: r.step, frozenD: d, frozenDisplaced: r.displaced } : { quietSince, frozenSince: null };
     frozen = state.frozenSince != null && r.step - state.frozenSince + 1 >= FROZEN_STEPS;
+  }
+  if (rule === 'v4') {
+    // A steady run continues while D stays within STEADY_D of where it began; otherwise it starts over here.
+    const keep = st.steadySince != null && Math.abs(d - st.steadyD!) < STEADY_D;
+    state.steadySince = keep ? st.steadySince : r.step;
+    state.steadyD = keep ? st.steadyD : d;
+    if (r.step - state.steadySince! + 1 >= STEADY_STEPS) frozen = true;
   }
   const settled = old >= settleCap(rule) || (old >= SETTLE_MIN && (r.nAwake === 0 || frozen || (quietSince !== null && r.step - quietSince + 1 >= SETTLE_QUIET)));
   return { state, settled };
