@@ -18,11 +18,17 @@ parOnGpu('L4', {
     const live = await page.evaluate(() => window.__game.state());
     expect(live.step).toBeGreaterThan(PRESETTLE_STEPS);
     expect(await page.evaluate((s) => window.__game.replay(s), shots)).toEqual(live);
-    // Retry reloads the level. Frames run during the reload (the loop really ran beside the half-loaded level), and the page is still running after it.
+    // Loading the level again builds and pre-settles it. Frames run during the reload (the loop really ran beside the half-loaded level), and the page is still running after it.
     const frames = await page.evaluate(() => window.__game.frames);
-    await page.evaluate(() => window.__game.retry());
+    await page.evaluate(() => window.__game.load('L4'));
     expect(await page.evaluate(() => window.__game.frames)).toBeGreaterThan(frames + 1);
     expect(await page.evaluate(() => ({ status: window.__game.status, error: window.__game.error, phase: window.__game.state().phase }))).toEqual({ status: 'running', error: undefined, phase: 'aiming' });
     await ready(page, 600_000);
+    const loaded = await page.evaluate(() => ({ state: window.__game.state(), restored: window.__game.timing.load.restored }));
+    expect(loaded.restored).toBe(false);
+    // Retry restores the start checkpoint on the GPU engine in place: the state the level loaded with, with no pre-settle.
+    await page.evaluate(() => window.__game.retry());
+    await ready(page, 600_000);
+    expect(await page.evaluate(() => ({ state: window.__game.state(), restored: window.__game.timing.load.restored, presettle: window.__game.timing.load.presettle }))).toEqual({ state: loaded.state, restored: true, presettle: 0 });
   },
 });
