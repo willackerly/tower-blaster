@@ -197,13 +197,13 @@ export interface DoorModel {
   settings: Settings;
   /** The how-to-play panel is open. */
   howTo: boolean;
-  /** The Advanced settings panel (sound, look, camera, rapid fire, duel turns, launch height, stone marks, opening view, impact marker, sharpness, quality, forget my progress) is open; closed by default. */
+  /** The Advanced settings panel (sound, look, camera, rapid fire, duel turns, launch height, stone marks, opening view, impact marker, hidden goals, sharpness, quality, forget my progress) is open; closed by default. */
   advanced: boolean;
   /** The tier the probe picked on load, which Auto takes (quality.ts); null or absent when none ran. */
   detected?: QualityTier | null;
 }
 
-/** The door's markup. Every button carries data-act (play, level, how, advanced, trials, sound, look, sharp, quality, camera, rapid, duelview, launch, marks, view, impact, reset, close) and data-arg where it needs one. */
+/** The door's markup. Every button carries data-act (play, level, how, advanced, trials, sound, look, sharp, quality, camera, rapid, duelview, launch, marks, view, impact, xray, reset, close) and data-arg where it needs one. */
 export function doorHtml(m: DoorModel): string {
   const next = nextLevel(m.levels);
   const card = (l: DoorLevel, i: number) => {
@@ -260,6 +260,7 @@ export function doorHtml(m: DoorModel): string {
         <span class="group"><span class="lbl">Stone marks</span><span class="seg"><button data-act="marks" data-arg="on" class="${s.marks ? 'on' : ''}" title="A crosshair carved on the blocks to bring down, a shield on the blocks to keep">Carved</button><button data-act="marks" data-arg="off" class="${s.marks ? '' : 'on'}" title="Plain stones: only their colour says which are which">Off</button></span></span>
         <span class="group"><span class="lbl">Opening view</span><span class="seg"><button data-act="view" data-arg="goals" class="${s.view === 'goals' ? 'on' : ''}" title="Each level opens on a view that shows its crowns and what to spare">Show the goals</button><button data-act="view" data-arg="classic" class="${s.view === 'classic' ? 'on' : ''}" title="Each level opens on the low three-quarter view from the launcher's side">Classic</button></span></span>
         <span class="group"><span class="lbl">Impact marker</span><span class="seg"><button data-act="impact" data-arg="on" class="${s.impact ? 'on' : ''}" title="A mark on the face your shot's flight will meet first">On</button><button data-act="impact" data-arg="off" class="${s.impact ? '' : 'on'}" title="Only the dotted flight">Off</button></span></span>
+        <span class="group"><span class="lbl">Hidden goals</span><span class="seg"><button data-act="xray" data-arg="auto" class="${s.xray === 'auto' ? 'on' : ''}" title="Crowns and blocks to spare show through what hides them on the city levels">Cities</button><button data-act="xray" data-arg="on" class="${s.xray === 'on' ? 'on' : ''}" title="Crowns and blocks to spare show through what hides them on every level">Always</button><button data-act="xray" data-arg="off" class="${s.xray === 'off' ? 'on' : ''}" title="Only what is in plain sight">Never</button></span></span>
         <span class="group"><span class="lbl">Sharpness</span><span class="seg"><button data-act="sharp" data-arg="2" class="${s.sharp === 2 ? 'on' : ''}">Full</button><button data-act="sharp" data-arg="1" class="${s.sharp === 1 ? 'on' : ''}">Fast</button></span></span>
         <span class="group"><span class="lbl">Quality</span><span class="seg">${qualities}</span></span>
       </div>

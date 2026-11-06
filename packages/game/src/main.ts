@@ -16,7 +16,7 @@ import { doorDuels, doorMode, doorOnLoad, duelsOnDoor, openerFor, preaimMode } f
 import { GAME_SERIES, loadOptions, lookName, onEngine, parseGameParams, withRules } from './params.ts';
 import { browserKeyValue, memoryKeyValue, type ProgressStore, progressStore } from './progress.ts';
 import { bankAfterLine, type SessionFacts, sessionFile, sessionFileName } from './session-file.ts';
-import { CAMERA_KEYS, cameraFeel, LAUNCH_KEYS, launchFeel, MARKS_KEYS, marksFeel, RAPID_KEYS, rapidFeel, type Settings, SettingsStore, TURN_VIEW_KEYS, turnViewFeel, VIEW_KEYS, viewFeel, IMPACT_KEYS, impactFeel } from './settings.ts';
+import { CAMERA_KEYS, cameraFeel, LAUNCH_KEYS, launchFeel, MARKS_KEYS, marksFeel, RAPID_KEYS, rapidFeel, type Settings, SettingsStore, TURN_VIEW_KEYS, turnViewFeel, VIEW_KEYS, viewFeel, IMPACT_KEYS, impactFeel, XRAY_KEYS, xrayFeel } from './settings.ts';
 import { knobsFor, type QualityState, tierFor } from './quality.ts';
 import { probeQuality } from './quality-probe.ts';
 import { NO_WEBGPU_HTML, webgpuMissing } from './support.ts';
@@ -77,6 +77,8 @@ async function main() {
   Object.assign(feel, viewFeel(feel, q, settings.current.view));
   // The impact marker: the URL's keystone.impact where it says, else the setting (on by default). Read live, at each aim.
   Object.assign(feel, impactFeel(feel, q, settings.current.impact));
+  // Hidden goals: the URL's keystone.xray where it says, else the setting (auto: the city levels). Read live, each frame.
+  Object.assign(feel, xrayFeel(feel, q, settings.current.xray));
   const door = doorMode(q), preaim = preaimMode(q), bank = bankAfterLine(q), goals = goalsMode(q);
   // ?keystone.rack replaces the opening level's rack (its def, so retry keeps it); other levels keep their own.
   // The rule overrides (keystone.scoring, keystone.autobank, physics) apply to every level; stars cast on
@@ -153,9 +155,10 @@ async function main() {
       if (changed === 'launch') Object.assign(feel, launchFeel(feel, new URLSearchParams(), st.launch));
       if (changed === 'view') Object.assign(feel, viewFeel(feel, new URLSearchParams(), st.view));
       if (changed === 'impact') Object.assign(feel, impactFeel(feel, new URLSearchParams(), st.impact));
+      if (changed === 'xray') Object.assign(feel, xrayFeel(feel, new URLSearchParams(), st.xray));
       if (changed === 'marks') { Object.assign(feel, marksFeel(feel, new URLSearchParams(), st.marks)); handle.refreshMarks(); }
       // The setting now says it: the URL keys that set it for this visit go.
-      const u = new URLSearchParams(location.search), keys = changed === 'camera' ? CAMERA_KEYS : changed === 'rapid' ? RAPID_KEYS : changed === 'duelView' ? TURN_VIEW_KEYS : changed === 'launch' ? LAUNCH_KEYS : changed === 'marks' ? MARKS_KEYS : changed === 'view' ? VIEW_KEYS : changed === 'impact' ? IMPACT_KEYS : [changed];
+      const u = new URLSearchParams(location.search), keys = changed === 'camera' ? CAMERA_KEYS : changed === 'rapid' ? RAPID_KEYS : changed === 'duelView' ? TURN_VIEW_KEYS : changed === 'launch' ? LAUNCH_KEYS : changed === 'marks' ? MARKS_KEYS : changed === 'view' ? VIEW_KEYS : changed === 'impact' ? IMPACT_KEYS : changed === 'xray' ? XRAY_KEYS : [changed];
       if (keys.some((k) => u.has(k))) { for (const k of keys) u.delete(k); history.replaceState(null, '', `?${u}`); }
     },
   });

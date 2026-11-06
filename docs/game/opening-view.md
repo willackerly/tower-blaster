@@ -106,7 +106,39 @@ The B2 search takes about 0.2 s on this cloud box. The chamber levels take a few
    (B2, L2, L4, T-I3). A weighted cost would trade a small climb for a big turn, but it needs a weight nobody can
    check.
 
+## Hidden goals: crowns and heritage through what hides them (an option, off by default)
+
+On B2's city lot even the best opening view leaves some crowns behind towers. `Renderer.setXray(slot0, kinds)` flags
+the objective bodies (fx word 1, bits 22-23: `XRAY_SHIFT`, `XRAY_MASK`), and `fsXray` (`shaders.ts`) draws their
+boxes once more after the sky, with the depth test reversed (`greater`, no depth write, alpha blend). So only the parts
+behind something show, as a faint fill in the mark's colour (gold for a crown, teal for heritage) with a brighter edge.
+Its gain follows the sun's luma, so it reads the same in every look.
+
+- **Option:** `keystone.xray=auto|on|off`, the door's **Advanced settings > Hidden goals** (Cities, Always, Never) and
+  the viewer's Scene panel. `auto` draws it on levels with at least `CITY_BODIES` (1000) bodies that have marks
+  (`scene.ts xrayOn`): today, B2 and B3 only.
+- **Default: off.** The brief made `auto` the default only if an independent look review agreed. The review (Opus, on
+  B2, B3 and L1 captures, wide and upright) said no to the current look:
+  1. An objective block hidden behind another objective block is drawn too, so visible crown tops read as wire cages.
+  2. Per-cube edges make a crowd of small squares. One merged outline per group with a 15-25% fill would read better.
+  3. The colours should match the materials: celadon, and a slightly brighter crown gold, not an electric cyan.
+  4. It should show fully for about 3 s at the start and while orbiting, then fade to 30%.
+  Those four are the follow-up (roadmap row PT1b). The default is revisited with a new review after them.
+- **Tests:** `render-marks.test.ts` (3 looks): a crown and a heritage block behind a wall show in their colours,
+  brighter at the edge. A hidden plain cube, a crown in plain sight and every pixel outside them are unchanged, and
+  the kinds survive a flash and a scale write. `scene.test.ts` covers `xrayOn` over every level.
+  `door.test.ts`, `pacing.test.ts` and `aim-clarity-e2e.test.ts` check the option and its default.
+
+Alternatives considered:
+
+1. **Outline only, through a stencil.** This draws a clean silhouette, but WebGPU's stencil needs its own pass setup.
+   The `greater` depth test gets the same occlusion from the depth buffer the frame already has.
+2. **A screen-space pass on the ID buffer** (an edge detect on hidden objective IDs). This gives a merged silhouette,
+   which is item 2 above, but the ID pass is only drawn on demand (tests, `sightlines`), and drawing it every frame
+   costs a full extra geometry pass. It is the likely route for PT1b if merged outlines are wanted.
+3. **Pulse the crowns from the HUD** (a line from the HUD counter to each crown). This tells the player where the
+   goals are, but not their shape, and it covers the scene with lines on a lot with 32 heritage blocks.
+
 ## Not done here
 
-The outline-through-occluders option, the crown pulse from the HUD, and the rest of PT14 (out-of-reach warning,
-reachable opener, impact marker) follow in their own steps of the same thread.
+The crown pulse from the HUD, and PT1b, the x-ray look above, are not in this change.

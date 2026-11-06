@@ -17,7 +17,7 @@ import { aoFrame, aoGrid, AoVolume } from './ao.ts';
 import { FLOOR_VERTS, floorFan, floorPolygon } from './floor.ts';
 import { fitShadow, frustumCorners, pcssParams, type Arena, type ShadowFit, type ShadowFitState } from './shadowfit.ts';
 import { MARK_MASK, MARK_SHIFT } from './marks.ts';
-import { FX_WORDS, packFx, tintWord, toHalf, type Fx, type FxOptions, FX_ANCHOR, unpackFx } from './fx.ts';
+import { FX_KEEP, FX_WORDS, packFx, tintWord, toHalf, type Fx, type FxOptions, FX_ANCHOR, unpackFx, XRAY_MASK, XRAY_SHIFT } from './fx.ts';
 import { CANDY_NIGHT, linearToOklab, REAL_DEFAULTS, srgbToLinear, type LookParams } from './look.ts';
 import { invert, lookAt, multiply, normalize, type Mat4, type V3 } from './math.ts';
 import { HDR_FORMAT, noStamp, Post, type Stamp } from './post.ts';
@@ -260,6 +260,16 @@ export class Renderer {
   readonly reachZone: BlastReach;
   /** The aim preview's impact marker (reach.ts IMPACT_STYLE); Renderer.impact shows it. */
   readonly impactMark: BlastReach;
+  /**
+   * Draw the objectives through what hides them (keystone.xray, docs/game/opening-view.md): boxes given an x-ray kind
+   * (setXray: 1 crown, 2 heritage) show, where something stands in front of them, as a faint fill with an outline
+   * in their colour (shaders.ts fsXray). Off by default; nothing is compiled until it is first drawn.
+   */
+  xray = false;
+  /** Whether any slot was given an x-ray kind (so a level without objectives draws nothing). */
+  private xrayAny = false;
+  private xrayPipes: { box: GPURenderPipeline; far: GPURenderPipeline } | null = null;
+  private readonly makeXray: () => { box: GPURenderPipeline; far: GPURenderPipeline };
   /** The last frame's camera-relative inverse view-projection and the look's sun luminance (blasts). */
   private lastInv: Mat4 = new Float32Array(16);
   private sunLuma = 1;
@@ -377,6 +387,19 @@ export class Renderer {
     });
     this.source = new SnapshotSource(device);
     this.facePipe = () => (this.faceCache ??= color('vsBox', 'fsFace', 'back', SEG.box, { format: 'r32uint', samples: 1 }));
+    // The x-ray (fsXray): over the opaque scene, only where the box lies behind it, blended, writing no depth.
+    const xray = (seg: number): GPURenderPipeline => device.createRenderPipeline({
+      layout: main, label: 'xray',
+      vertex: { module, entryPoint: 'vsBox', constants: { SEG: seg, FAN: sceneFan ? 1 : 0 } },
+      fragment: {
+        module, entryPoint: 'fsXray',
+        targets: [{ format: HDR_FORMAT, blend: { color: { srcFactor: 'src-alpha', dstFactor: 'one-minus-src-alpha', operation: 'add' }, alpha: { srcFactor: 'zero', dstFactor: 'one', operation: 'add' } } }],
+      },
+      primitive: { topology: 'triangle-list', cullMode: 'back', frontFace: 'ccw' },
+      depthStencil: { format: 'depth24plus', depthWriteEnabled: false, depthCompare: 'greater' },
+      multisample: { count: SAMPLES },
+    });
+    this.makeXray = () => (this.xrayPipes ??= { box: xray(SEG.box), far: xray(SEG.boxFar) });
     this.pipes = {
       box: color('vsBox', opts.flatBoxes ? 'fsBoxFlat' : 'fsBox', 'back', SEG.box),
       sphere: color('vsSphere', 'fsSphere', 'back', SEG.sphere),
@@ -547,12 +570,12 @@ export class Renderer {
       for (let k = 0; k < n; k++) {
         const o = (slot + k) * FX_WORDS;
         if (a && k < a.length) this.fx[o] = tintWord(a[k]!);
-        if (scales && k < scales.length) this.fx[o + 1] = (toHalf(1 - Math.min(1, Math.max(0, scales[k]!))) | (anchor ? FX_ANCHOR : 0) | (this.fx[o + 1]! & MARK_MASK)) >>> 0;
+        if (scales && k < scales.length) this.fx[o + 1] = (toHalf(1 - Math.min(1, Math.max(0, scales[k]!))) | (anchor ? FX_ANCHOR : 0) | (this.fx[o + 1]! & FX_KEEP)) >>> 0;
       }
     } else {
-      const o = slot * FX_WORDS, mark = this.fx[o + 1]! & MARK_MASK;
+      const o = slot * FX_WORDS, keep = this.fx[o + 1]! & (a.mark === undefined ? FX_KEEP : XRAY_MASK);
       packFx(a, this.fx, o, this.lastTime);
-      if (a.mark === undefined) this.fx[o + 1] = (this.fx[o + 1]! | mark) >>> 0;
+      this.fx[o + 1] = (this.fx[o + 1]! | keep) >>> 0;
     }
     this.uploadFx(slot, n);
   }
@@ -568,6 +591,19 @@ export class Renderer {
     for (let k = 0; k < n; k++) {
       const o = (slot0 + k) * FX_WORDS + 1;
       this.fx[o] = ((this.fx[o]! & ~MARK_MASK) | ((marks[k]! & 3) << MARK_SHIFT)) >>> 0;
+    }
+    this.uploadFx(slot0, n);
+  }
+
+  /** Give slots slot0.. an x-ray kind each (0 none, 1 crown, 2 heritage: fx.ts XRAY bits), kept through setFx until clearFx. Drawn while `xray` is on. */
+  setXray(slot0: number, kinds: ArrayLike<number>): void {
+    const n = kinds.length;
+    if (!n) return;
+    this.growFx(slot0 + n);
+    for (let k = 0; k < n; k++) {
+      const o = (slot0 + k) * FX_WORDS + 1;
+      this.fx[o] = ((this.fx[o]! & ~XRAY_MASK) | ((kinds[k]! & 3) << XRAY_SHIFT)) >>> 0;
+      if (kinds[k]! & 3) this.xrayAny = true;
     }
     this.uploadFx(slot0, n);
   }
@@ -859,6 +895,16 @@ export class Renderer {
       }
       p.setPipeline(pipes.sky);
       p.draw(3);
+      // The objectives through what hides them, over everything opaque (the bodies, the hall, the floor).
+      if (this.xray && this.xrayAny) {
+        const xp = this.makeXray();
+        p.setPipeline(xp.box);
+        p.drawIndirect(culler.args, 16 * SEG.box);
+        if (real) {
+          p.setPipeline(xp.far);
+          p.drawIndirect(culler.args, 16 * SEG.boxFar);
+        }
+      }
       if (split) {
         // The ice pass: the opaque scene is in `under` and in the samples; ice is depth-tested against it and writes depth.
         p.end();

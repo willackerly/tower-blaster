@@ -16,6 +16,8 @@ const game = gamePage();
 const shot = L1.solutions!.par![0] as Shot;
 const BASE = '/?level=L1&offscreen=1&engine=rapier';
 type View = { target: [number, number, number]; distance: number; following: boolean; jolt: number };
+/** The view less what it marks in the scene (the impact marker, the x-ray), which change with the aim, not the camera. */
+const camera = <V extends object>(v: V): Omit<V, 'impact' | 'xray'> => { const { impact: _i, xray: _x, ...rest } = v as V & { impact?: unknown; xray?: unknown }; return rest as Omit<V, 'impact' | 'xray'>; };
 
 /** Fire the par shot and sample the view every frame until the shot is over (L1's par shot clears the level) and the follow let go. */
 async function fireAndWatch(page: Page): Promise<View[]> {
@@ -46,7 +48,7 @@ describe('camera on the page', () => {
     console.log(`L1 default camera: ${views.length} frames`);
     expect(views.length).toBeGreaterThan(10);
     expect(await page.evaluate(() => window.__game.phase)).toBe('cleared');
-    for (const v of views) expect(v).toEqual(home);
+    for (const v of views) expect(camera(v)).toEqual(camera(home));
     expect(errors).toEqual([]);
     await page.close();
   }, 300_000);
@@ -117,7 +119,7 @@ describe('camera on the page', () => {
     console.log(`L1 shake: ${views.length} frames, peak jolt ${peak.toFixed(4)}`);
     expect(peak).toBeGreaterThan(0);
     expect(peak).toBeLessThanOrEqual(Math.max(PUNCH_MAX, SHAKE_YAW));
-    for (const v of views) expect({ ...v, jolt: 0 }).toEqual({ ...home, jolt: 0 }); // the orbit itself stays put
+    for (const v of views) expect(camera({ ...v, jolt: 0 })).toEqual(camera({ ...home, jolt: 0 })); // the orbit itself stays put
     expect(errors).toEqual([]);
     await page.close();
   }, 300_000);

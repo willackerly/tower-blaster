@@ -119,6 +119,7 @@ export function installDoor(o: DoorOptions, doc: Document = document): DoorPage 
       case 'marks': set({ marks: arg === 'on' }); break;
       case 'view': set({ view: arg === 'classic' ? 'classic' : 'goals' }); break;
       case 'impact': set({ impact: arg === 'on' }); break;
+      case 'xray': set({ xray: arg === 'on' ? 'on' : arg === 'off' ? 'off' : 'auto' }); break;
       case 'reset':
         if (armedReset) { o.progress.reset(); armedReset = false; } else armedReset = true;
         draw();

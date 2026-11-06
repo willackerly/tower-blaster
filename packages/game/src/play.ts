@@ -30,7 +30,7 @@ import { COST_WINDOW, runPhysics, wakeable } from './physics-loop.ts';
 import { CLEAR_SHARE, FrameGovernor } from './frame-rate.ts';
 import { canvasSize, type QualityState } from './quality.ts';
 import { UndoMarks } from './undo-marks.ts';
-import { ballFx, beadOverlay, BOMB_FX, CROWN_GLOW, PULL_HOVER, regrowDuration, regrowScales, structureMarks, structureTints, TINT, tintOf, tintWordOf } from './scene.ts';
+import { ballFx, beadOverlay, BOMB_FX, CROWN_GLOW, PULL_HOVER, regrowDuration, regrowScales, structureMarks, structureTints, TINT, tintOf, tintWordOf, xrayOn } from './scene.ts';
 import { type GestureState, type TouchAction, TouchGestures, touchFace, type TouchMode } from './touch.ts';
 
 /** What a page (and its tests) can see and do while Keystone plays: window.__game on the game page. */
@@ -64,10 +64,10 @@ export interface GameHandle {
    * `?keystone.follow=1`), and the jolt the last drawn frame added to the player's view: its largest shake (rad) or
    * field-of-view punch (share of the field of view), 0 unless `?keystone.shake=1` (juice.ts). In a duel
    * (duel-view.ts): whether the turn view is swinging the camera to the next side, the HUD's turn cue (which way
-   * to drag to reach the side to fire, null when the view is on it), how many arc beads the frame drew, and whether it drew
-   * the impact marker (PT14).
+   * to drag to reach the side to fire, null when the view is on it), how many arc beads the frame drew, whether it drew
+   * the impact marker (PT14), and whether the objectives show through what hides them (keystone.xray).
    */
-  view: { target: [number, number, number]; distance: number; yaw: number; pitch: number; following: boolean; jolt: number; turning: boolean; cue: 'left' | 'right' | null; arcBeads: number; impact: boolean };
+  view: { target: [number, number, number]; distance: number; yaw: number; pitch: number; following: boolean; jolt: number; turning: boolean; cue: 'left' | 'right' | null; arcBeads: number; impact: boolean; xray: boolean };
   /**
    * The player's controls now: whether the page shows its touch face (touch.ts touchFace: the HUD's
    * tap buttons and the touch help; body class kg-touch), the touch gesture under way and fingers down,
@@ -245,7 +245,7 @@ function safetyLimiter(ctx: AudioContext): AudioNode {
 export function newGameHandle(): GameHandle {
   const none = (): SessionState => ({ step: 0, phase: 'loading', strokes: 0, heritageBroken: 0, hash: '' });
   return {
-    status: 'loading', engine: '', level: '', phase: 'loading', ready: false, frozen: false, frames: 0, stepIndex: 0, strokes: 0, bodies: 0, collapse: 0, fast: false, pace: { timeScale: 1, speed: 1, tag: '', tailSkip: false, costMs: NaN }, view: { target: [0, 0, 0], distance: 0, yaw: 0, pitch: 0, following: false, jolt: 0, turning: false, cue: null, arcBeads: 0, impact: false }, input: { touch: false, gesture: 'idle', fingers: 0, aimed: null, power: 100, launch: 0 }, result: null, counts: {}, feel: { ...DEFAULT_FEEL }, resultShownAt: null, timing: { loadMs: 0, load: noPhases(), stepMs: [], moving: [], frameMs: [], costMs: [] }, draws: { drawn: 0, skipped: 0, decimating: false },
+    status: 'loading', engine: '', level: '', phase: 'loading', ready: false, frozen: false, frames: 0, stepIndex: 0, strokes: 0, bodies: 0, collapse: 0, fast: false, pace: { timeScale: 1, speed: 1, tag: '', tailSkip: false, costMs: NaN }, view: { target: [0, 0, 0], distance: 0, yaw: 0, pitch: 0, following: false, jolt: 0, turning: false, cue: null, arcBeads: 0, impact: false, xray: false }, input: { touch: false, gesture: 'idle', fingers: 0, aimed: null, power: 100, launch: 0 }, result: null, counts: {}, feel: { ...DEFAULT_FEEL }, resultShownAt: null, timing: { loadMs: 0, load: noPhases(), stepMs: [], moving: [], frameMs: [], costMs: [] }, draws: { drawn: 0, skipped: 0, decimating: false },
     fire: () => false, bank: () => false, freeze: () => false, fireOpener: () => false, setMuted: () => {}, maxDpr: 2, quality: null, aim: () => null, reach: null, impact: null, select: () => false, load: async () => {}, retry: async () => {}, undo: async () => false, undone: null, spare: null, undoMemory: () => ({ marks: 0, bytes: 0 }), capture: async () => null, sightlines: async () => null, firedLooks: () => [], marks: () => [], refreshMarks: () => {},
     state: none, line: () => [], replay: async () => none(), health: async () => null, pairsPerBody: 0, limitsHit: [], goals: [], grade: null, duel: null,
     sound: () => ({ mode: 'collapse', status: 'off', error: '', posted: 0, stats: null }),
@@ -524,6 +524,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
   let duel: Duel | null = null, turnStart = 0;
   /** Each side's arc on the ground (duel-view.ts arcBeads), made at load. */
   let arcs: Overlay[] = [], arcBeadsDrawn = 0, impactDrawn = false;
+  let xrayMemo: { c: CompiledLevel; mode: PaceFeel['xray']; on: boolean } | null = null;
   /** Every crown is down: the round is known to be over, the card shows, and the rest of the settle runs at fast-forward. */
   let ending = false;
 
@@ -616,6 +617,8 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
   /** Carve the structure's stones as feel.marks says (scene.ts structureMarks): after its tints at every load and restore, and when the setting changes. */
   function applyMarks() {
     renderer.setMarks(0, structureMarks(c, feel.marks));
+    // The x-ray's kinds are the marks' (1 a crown, 2 heritage) whether or not the stones are carved; Renderer.xray says whether it draws.
+    renderer.setXray(0, structureMarks(c, true));
   }
 
   function restoreMark(mark: UndoMark) {
@@ -1135,7 +1138,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     const s = driver.session;
     const running = s.phase === 'running', v = running ? speed.speed(performance.now()) : 1, costs = handle.timing.costMs;
     handle.pace = { timeScale: running ? pacer.timeScale : 1, speed: v, tag: running && !fastHeld && !handle.fast && !ending && !tail.on ? slowTag(v) : '', tailSkip: tail.on, costMs: running && !Number.isNaN(pacer.costMs) ? pacer.costMs : median(costs.slice(-60)) };
-    handle.view = { target: [...orbit.target], distance: orbit.distance, yaw: orbit.yaw, pitch: orbit.pitch, following: follow.active, jolt, turning: swing.active, cue: cueNow(), arcBeads: arcBeadsDrawn, impact: impactDrawn };
+    handle.view = { target: [...orbit.target], distance: orbit.distance, yaw: orbit.yaw, pitch: orbit.pitch, following: follow.active, jolt, turning: swing.active, cue: cueNow(), arcBeads: arcBeadsDrawn, impact: impactDrawn, xray: renderer.xray };
   }
 
   /** The physics loop's idle wait: the next frame, or a fire, whichever comes first (physics-loop.ts wakeable). */
@@ -1559,6 +1562,9 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     // The impact marker: where the previewed flight first touches, on that face, a little wider than the shot (none under a blast zone).
     const mark = feel.impact && beads && contact && !ring ? contact : null;
     impactDrawn = mark !== null;
+    // The objectives through what hides them (feel.xray, read live: the setting can change mid-level; worked out once per level and mode).
+    if (xrayMemo?.c !== c || xrayMemo.mode !== feel.xray) xrayMemo = { c, mode: feel.xray, on: xrayOn(c, feel.xray) };
+    renderer.xray = xrayMemo.on;
     renderer.impact(mark?.point ?? null, mark?.normal, mark ? Math.max(1.6 * mark.radius, IMPACT_MIN_RADIUS * c.frame.unit) : 0);
     renderer.setOverlay(o?.xyzr ?? new Float32Array(0), o?.colours);
     pendingCapture = null;

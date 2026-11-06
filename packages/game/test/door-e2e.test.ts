@@ -129,7 +129,7 @@ describe('front door', () => {
     await page.locator('.kg-door [data-act="marks"][data-arg="on"]').click();
     expect(await hits()).toBe(4);
     await page.locator('.kg-door [data-act="marks"][data-arg="off"]').click();
-    expect(await page.evaluate(() => JSON.parse(localStorage.getItem('tb.settings.v1')!))).toEqual({ sound: false, look: 'real', sharp: 1, camera: 'dynamic', rapid: false, duelView: false, launch: 'level', marks: false, quality: 'auto' });
+    expect(await page.evaluate(() => JSON.parse(localStorage.getItem('tb.settings.v1')!))).toEqual({ sound: false, look: 'real', sharp: 1, camera: 'dynamic', rapid: false, duelView: false, launch: 'level', marks: false, view: 'goals', impact: true, xray: 'off', quality: 'auto' });
     expect(await page.evaluate(() => window.__game.maxDpr)).toBe(1);
     expect(new URLSearchParams(await page.evaluate(() => location.search)).has('look')).toBe(false);
 

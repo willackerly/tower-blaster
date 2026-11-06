@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { compileLevel, L1, L2, L3, U3 } from '@tb/keystone';
+import { B2, compileLevel, L1, L2, L3, LEVELS, SERIES, U3 } from '@tb/keystone';
 import { MARK_HIT, MARK_NONE, MARK_SAVE, tintWord, unpackFx } from '@tb/render';
 import { PROJECTILE_PRESETS } from '@tb/weapons';
-import { BALL_PAINT, ballFx, BOMB_FX, markOf, structureMarks } from '../src/scene.ts';
+import { BALL_PAINT, ballFx, BOMB_FX, CITY_BODIES, markOf, structureMarks, xrayOn } from '../src/scene.ts';
 import { BEAD_COLOUR, BEAD_OUT_COLOUR, BEAD_RADIUS, beadOverlay, rgbe, CROWN_GLOW, easeOut, regrowDuration, regrowScale, regrowScales, structureTints, TARGET_SCALE, TINT, tintOf, tintWordOf } from '../src/scene.ts';
 
 /** What the renderer will see for a bulk tint word. */
@@ -117,3 +117,21 @@ describe('stone marks (markOf, structureMarks)', () => {
     expect(structureMarks(c, false)).toEqual(new Uint8Array(c.meta.n));
   });
 });
+
+describe('hidden goals (xrayOn)', () => {
+  it('auto: the city levels with crowns or heritage; on: every level with them; off: none', () => {
+    const b2 = compileLevel(B2), l1 = compileLevel(L1);
+    expect(b2.meta.n).toBeGreaterThanOrEqual(CITY_BODIES);
+    expect(xrayOn(b2, 'auto')).toBe(true);
+    expect(xrayOn(l1, 'auto')).toBe(false);
+    expect(xrayOn(l1, 'on')).toBe(true);
+    expect(xrayOn(b2, 'off')).toBe(false);
+    // No chamber level is city-scale; a level with nothing to bring down or spare never shows it.
+    for (const d of LEVELS) expect(xrayOn(compileLevel(d), 'auto'), d.id).toBe(false);
+    for (const d of SERIES.flat()) {
+      const c = compileLevel(d), any = structureMarks(c).some((m) => m !== 0);
+      expect(xrayOn(c, 'on'), d.id).toBe(any);
+    }
+  });
+});
+

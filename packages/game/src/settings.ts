@@ -19,11 +19,13 @@
 //                               see viewFeel)
 //   impact: true | false       (the impact marker on the face an aimed shot first touches, aim.ts arcContact; on by
 //                               default; the URL's say is keystone.impact, see impactFeel)
+//   xray: auto | on | off      (the crowns and heritage through what hides them, Renderer.xray: on city levels, everywhere
+//                               or never; off by default; the URL's say is keystone.xray, see xrayFeel)
 //   quality: auto | high | mid | low (the quality tier, quality.ts: auto takes the probe's on load; the URL's
 //                               ?quality= for a visit; docs/game/quality-tiers.md)
 import { LOOKS } from '@tb/render';
 import { LAUNCH_MODES, type LaunchMode } from './aim.ts';
-import { OPENING_VIEWS, type OpeningView, type PaceFeel } from './pacing.ts';
+import { OPENING_VIEWS, type OpeningView, type PaceFeel, XRAY_MODES, type XrayMode } from './pacing.ts';
 import { GAME_LOOK } from './params.ts';
 import type { KeyValue } from './progress.ts';
 import { QUALITY_SETTINGS, qualityParam, type QualitySetting } from './quality.ts';
@@ -33,10 +35,10 @@ export const SETTINGS_KEY = 'tb.settings.v1';
 /** still: the camera moves only when the player moves it (the default since the 2026-11-02 playtest); dynamic: it follows and shakes too. */
 export type CameraSetting = 'still' | 'dynamic';
 
-export interface Settings { sound: boolean; look: string; sharp: 1 | 2; camera: CameraSetting; rapid: boolean; duelView: boolean; launch: LaunchMode; marks: boolean; view: OpeningView; impact: boolean; quality: QualitySetting }
+export interface Settings { sound: boolean; look: string; sharp: 1 | 2; camera: CameraSetting; rapid: boolean; duelView: boolean; launch: LaunchMode; marks: boolean; view: OpeningView; impact: boolean; xray: XrayMode; quality: QualitySetting }
 
 /** Rapid fire on (Will, 2026-11-05: in Advanced settings, defaulting to on); a duel's turn view on (Will, 2026-11-06); shots from high (Will, 2026-11-06); stone marks on (Will, 2026-11-06); the opening view shows the goals and the impact marker is on (PT1, PT14, 2026-11-06); quality from the probe (P1, 2026-11-06). */
-export const DEFAULT_SETTINGS: Settings = { sound: true, look: GAME_LOOK, sharp: 2, camera: 'still', rapid: true, duelView: true, launch: 'high', marks: true, view: 'goals', impact: true, quality: 'auto' };
+export const DEFAULT_SETTINGS: Settings = { sound: true, look: GAME_LOOK, sharp: 2, camera: 'still', rapid: true, duelView: true, launch: 'high', marks: true, view: 'goals', impact: true, xray: 'off', quality: 'auto' };
 
 /** The quality choices the front door offers, in its order, with their names there. */
 export const QUALITY_CHOICES: ReadonlyArray<{ quality: QualitySetting; label: string }> = [
@@ -68,6 +70,7 @@ export function parseSettings(text: string | null): Settings {
     marks: typeof o.marks === 'boolean' ? o.marks : DEFAULT_SETTINGS.marks,
     view: (OPENING_VIEWS as readonly unknown[]).includes(o.view) ? (o.view as OpeningView) : DEFAULT_SETTINGS.view,
     impact: typeof o.impact === 'boolean' ? o.impact : DEFAULT_SETTINGS.impact,
+    xray: (XRAY_MODES as readonly unknown[]).includes(o.xray) ? (o.xray as XrayMode) : DEFAULT_SETTINGS.xray,
     quality: (QUALITY_SETTINGS as readonly unknown[]).includes(o.quality) ? (o.quality as QualitySetting) : DEFAULT_SETTINGS.quality,
   };
 }
@@ -122,6 +125,14 @@ export const IMPACT_KEYS = ['keystone.impact'] as const;
 /** The impact marker in effect: keystone.impact where the URL says it (feel was read from that URL), else the setting. */
 export function impactFeel(feel: PaceFeel, q: URLSearchParams, impact: boolean): Pick<PaceFeel, 'impact'> {
   return { impact: q.has('keystone.impact') ? feel.impact : impact };
+}
+
+/** The URL key that says what the Hidden goals setting says (xrayFeel), dropped from the URL when the setting changes. */
+export const XRAY_KEYS = ['keystone.xray'] as const;
+
+/** The x-ray in effect: keystone.xray where the URL says it (feel was read from that URL), else the setting. */
+export function xrayFeel(feel: PaceFeel, q: URLSearchParams, xray: XrayMode): Pick<PaceFeel, 'xray'> {
+  return { xray: q.has('keystone.xray') ? feel.xray : xray };
 }
 
 /** The URL key that says what the Duel turns setting says (turnViewFeel), dropped from the URL when the setting changes. */

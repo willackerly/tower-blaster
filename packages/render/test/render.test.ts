@@ -361,7 +361,7 @@ describe('atmosphere (CPU twin)', () => {
 
 describe('fx records', () => {
   it('all-zero words mean no effect', () => {
-    expect(unpackFx(new Uint32Array(FX_WORDS))).toEqual({ tint: [1, 1, 1], emissive: 0, scale: 1, anchor: false, paint: false, matte: false, band: false, mark: 0, flashAt: 0, flash: 0 });
+    expect(unpackFx(new Uint32Array(FX_WORDS))).toEqual({ tint: [1, 1, 1], emissive: 0, scale: 1, anchor: false, paint: false, matte: false, band: false, mark: 0, xray: 0, flashAt: 0, flash: 0 });
     const w = new Uint32Array(FX_WORDS);
     packFx({}, w);
     expect(Array.from(w)).toEqual([0, 0, 0, 0]);

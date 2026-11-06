@@ -1,6 +1,7 @@
 // The aim's clarity on the game page (PT14, docs/game/aim-clarity.md): before the player moves, a level with a
 // pre-aimed opener shows that opener's flight and where it lands (on the structure), with no "Out of reach";
-// aiming at the structure from the opening view marks the face the shot meets; keystone.impact=0 draws no marker.
+// aiming at the structure from the opening view marks the face the shot meets; keystone.impact=0 draws no marker;
+// the hidden-goals x-ray is off by default and follows keystone.xray.
 // Headless Chromium, desktop and an upright phone.
 import { devices } from 'playwright';
 import { describe, expect, it } from 'vitest';
@@ -52,5 +53,20 @@ describe('game page, the aim at shot 0', () => {
     expect(await page.evaluate(() => window.__game.view.impact)).toBe(false);
     expect(errors).toEqual([]);
     await page.close();
+  }, 180_000);
+
+  it('hidden goals: off by default, off on a chamber level under auto, on by keystone.xray=on', async (ctx) => {
+    if (!game.browser()) return ctx.skip();
+    for (const [search, mode, on] of [['', 'off', false], ['&keystone.xray=auto', 'auto', false], ['&keystone.xray=on', 'on', true]] as const) {
+      const o = await game.open(`/?level=L1&engine=rapier&offscreen=1&progress=off&door=0${search}`);
+      if (!o) return ctx.skip();
+      const { page, errors } = o;
+      await ready(page);
+      const f0 = await page.evaluate(() => window.__game.frames);
+      await page.waitForFunction((n) => window.__game.frames > n + 2, f0, { timeout: 30_000, polling: 100 });
+      expect(await page.evaluate(() => [window.__game.feel.xray, window.__game.view.xray])).toEqual([mode, on]);
+      expect(errors).toEqual([]);
+      await page.close();
+    }
   }, 180_000);
 });

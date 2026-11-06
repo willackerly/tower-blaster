@@ -9,6 +9,8 @@
 //           bit 19 band: on a sphere, a white band round its body-space equator (a fired ball, so it reads as
 //           a ball and never as a bomb, and its spin shows)
 //           bits 20-21 mark: on a box, an engraved glyph (marks.ts: 1 hit, 2 save); kept by setFx until clearFx
+//           bits 22-23 xray: on a box, an objective drawn through what hides it while Renderer.xray is on (1 crown,
+//           2 heritage); kept by setFx until clearFx
 //   word 2  f32 flash start (frame time, seconds)
 //   word 3  f32 flash duration (seconds); 0 = emissive is steady
 //
@@ -24,6 +26,17 @@ export const FX_ANCHOR = 1 << 16;
 export const FX_PAINT = 1 << 17;
 export const FX_MATTE = 1 << 18;
 export const FX_BAND = 1 << 19;
+/** The x-ray kind's bits in fx word 1 (Renderer.setXray, shaders.ts fsXray): 1 crown, 2 heritage. */
+export const XRAY_SHIFT = 22;
+export const XRAY_MASK = 3 << XRAY_SHIFT;
+/** Bits of fx word 1 that setFx keeps (the engraved mark and the x-ray kind): set by their own calls, cleared by clearFx. */
+export const FX_KEEP = MARK_MASK | XRAY_MASK;
+/** The x-ray's colours, linear, times the look's sun luminance: crown gold and heritage teal, the same in every look (PT15). */
+export const XRAY_HIT: readonly number[] = [1.0, 0.6, 0.06];
+export const XRAY_SAVE: readonly number[] = [0.04, 0.7, 0.66];
+/** The x-ray's opacity: a faint fill, and this much more along a face's edges. */
+export const XRAY_FILL = 0.14;
+export const XRAY_EDGE = 0.66;
 /** The band's half-height on a unit sphere (|y| below it, in body space): a band of 30% of the diameter. */
 export const BAND_HALF = 0.3;
 
@@ -84,7 +97,7 @@ export function packFx(fx: FxOptions, out: Uint32Array, o = 0, now = 0): void {
   out[o + 3] = fx.flash ? bits(fx.flash) : 0;
 }
 
-export interface Fx { tint: V3; emissive: number; scale: number; anchor: boolean; paint: boolean; matte: boolean; band: boolean; mark: MarkId; flashAt: number; flash: number }
+export interface Fx { tint: V3; emissive: number; scale: number; anchor: boolean; paint: boolean; matte: boolean; band: boolean; mark: MarkId; xray: number; flashAt: number; flash: number }
 
 export function unpackFx(w: Uint32Array, o = 0): Fx {
   const w0 = w[o]!, w1 = w[o + 1]!;
@@ -97,6 +110,7 @@ export function unpackFx(w: Uint32Array, o = 0): Fx {
     matte: (w1 & FX_MATTE) !== 0,
     band: (w1 & FX_BAND) !== 0,
     mark: ((w1 & MARK_MASK) >>> MARK_SHIFT) as MarkId,
+    xray: (w1 & XRAY_MASK) >>> XRAY_SHIFT,
     flashAt: float(w[o + 2]!),
     flash: float(w[o + 3]!),
   };
