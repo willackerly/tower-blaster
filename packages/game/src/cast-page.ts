@@ -5,7 +5,7 @@
 // --engine gpu drives it (keystone-lab cast-browser.ts): SwiftShader in CI,
 // Metal with --channel chrome on a Mac. No rendering: physics only.
 // ?engine=rapier plays on Rapier instead, for comparison.
-import { type CastPlay, castPlay, compileLevel, type LevelDef, physicsOf, readShots } from '@tb/keystone';
+import { type CastPlay, castPlay, type CompiledLevel, compileLevel, type LevelDef, nudgedLevel, physicsOf, readShots } from '@tb/keystone';
 import { limitProblems } from '@tb/engine-api';
 import { createDevice, isSoftwareAdapter } from '@tb/gpu';
 import { driverOptions, engineKind, makeEngine } from './engines.ts';
@@ -17,8 +17,11 @@ export interface CastHandle {
   adapter: string;
   software: boolean;
   engine: string;
-  /** Each line (writeShots text) from the level's start on a fresh engine, in order; ms is each play's wall time. */
-  play(level: LevelDef, lines: string[], maxSteps?: number): Promise<Array<CastPlay & { ms: number }>>;
+  /**
+   * Each line (writeShots text) from the level's start on a fresh engine, in order; ms is each play's wall time.
+   * `nudges` (index-aligned, optional): each play's build nudge (keystone nudgedLevel; 0 the exact build).
+   */
+  play(level: LevelDef, lines: string[], maxSteps?: number, nudges?: readonly number[]): Promise<Array<CastPlay & { ms: number }>>;
   /**
    * The level at rest on a fresh engine: its pre-settle as the game runs it, then `steps` more with
    * nothing fired. Reports the most any structure body moved over those steps and how far the top
@@ -45,9 +48,11 @@ async function main() {
   handle.software = isSoftwareAdapter(info);
   handle.engine = kind;
   let plays = 0;
-  handle.play = async (level, lines, maxSteps) => {
-    const c = compileLevel(level), out: Array<CastPlay & { ms: number }> = [];
-    for (const text of lines) {
+  handle.play = async (level, lines, maxSteps, nudges) => {
+    const exact = compileLevel(level), out: Array<CastPlay & { ms: number }> = [], built = new Map<number, CompiledLevel>();
+    const buildOf = (n: number) => { if (!built.has(n)) built.set(n, nudgedLevel(exact, n)); return built.get(n)!; };
+    for (const [k, text] of lines.entries()) {
+      const c = buildOf(nudges?.[k] ?? 0);
       const e = makeEngine(kind, c, device), t0 = performance.now();
       try {
         out.push({ ...(await castPlay(e, c, readShots(text), { ...driverOptions(kind), maxSteps })), ms: performance.now() - t0 });
