@@ -6,20 +6,30 @@
 // above 0 (the ground's e is SceneDesc.ground.restitution) and whose normal
 // velocity at the start of the step is -restitutionThreshold or less is
 // raised to -e times it; the other loaded points of the bodies involved are
-// one-sided supports (depth 1); restitutionRounds rounds of mass-split
-// Jacobi, each manifold with a centroid step and one Gauss-Seidel sweep;
-// then the conditional lambda reset.
+// one-sided supports (depth 1), or with restitutionAnchors (default on)
+// anchors where the body sits on the ground or on a resting body (they hold
+// it exactly: its response is M^-1/2 (1 - Q Q^T) M^-1/2 J, Q an orthonormal
+// basis of its anchor rows in M^1/2 coordinates); restitutionRounds rounds of
+// mass-split Jacobi, each manifold with a centroid step and one Gauss-Seidel
+// sweep; then the conditional lambda reset.
 //
 // Encoding (AvbdSolver.solve(), after finalize, in the same compute pass):
 //   restMark        per pair slot (indirect, as the dual): marks the points
 //                   that bounce and their targets, counts them (an atomic)
 //   restMarkBodies  per body: the same for its ground slot; whether the body
-//                   is in a bouncing manifold (its pair slots' marks)
+//                   is in a bouncing manifold (its pair slots' marks); with
+//                   anchors, whether it rests (RESTS: in none, slow at the
+//                   start of the step, sitting on something)
 //   restArgs        one thread: the indirect arguments of everything below,
 //                   0 workgroups if no point bounced this step
-//   restSupport     per pair slot: the supports, target the solve's vn
-//   restCount       per body: its ground slot's supports, and its mass split
-//                   (the pass's manifolds it is in)
+//   restSupport     per pair slot: the supports, target the solve's vn, or
+//                   the anchors (the partner rests and the body sits on it)
+//   restCount       per body: its ground slot's supports (with anchors, its
+//                   anchors), and its mass split (the pass's manifolds it is in)
+//   restAnchors     per body in the pass: its RestBody (mass, world inverse
+//                   inertia at q0, and with anchors the basis of its anchor
+//                   rows: Gram-Schmidt, ground slot first, then pair slots in
+//                   slot order)
 //   R x restManifold per pair slot: its groups (bouncing points, supports),
 //                   each on a copy of last round's velocities with masses
 //                   and inertias split; writes the round's impulses
@@ -28,10 +38,15 @@
 //                   manifold's impulses, with its own mass
 //   restFinish      per body: the lambda reset of its ground slot and of the
 //                   pair slots where it is body b
-// That is 6 + 2R dispatches a step while on (22 at the default 8 rounds; 2
-// direct, 4 + 2R indirect), and none while off. When nothing bounces (a
-// resting scene) only the first three do work: the other 3 + 2R are
-// indirect with 0 workgroups. A body's slots are read through the
+// That is 7 + 2R dispatches a step while on (23 at the default 8 rounds; 2
+// direct, 5 + 2R indirect), anchors or not, and none while off. When nothing
+// bounces (a resting scene) only the first three do work: the other 4 + 2R
+// are indirect with 0 workgroups. Without anchors (restitutionAnchors false,
+// a pipeline constant: the anchor code compiles out) the pass gives the
+// floats it gave before anchors existed (on SwiftShader, 2026-11-05: S5
+// knocks on records 1 and points, a 510 kg ball on a cube, a cube onto two;
+// RestBody moved the world inverse inertia's rows out of restManifold and
+// restBodies into restAnchors, the same expression). A body's slots are read through the
 // colouring's rows (rowStart, rowLength, adjSlot: sorted by slot), so every
 // sum is in a fixed order and the pass is bit-reproducible; the only atomic
 // is the count of bouncing points, an integer.
@@ -52,7 +67,8 @@
 // Memory while on: one RestSlot (80 B) per contact slot, (maxPairs +
 // capacity) x 80 B (pair slots, then one ground slot per body: 10.4% of the
 // contact buffer with records 1, which holds 768 B per slot, and 7.8% with
-// points, 1024 B), and 28 B of counters and arguments. Off: no buffer and no pipeline (the engine builds the pass only
+// points, 1024 B), one RestBody (REST_BODY_BYTES, 288 B) per body, and 28 B
+// of counters and arguments. Off: no buffer and no pipeline (the engine builds the pass only
 // while the switch is on), and the other kernels are unchanged but for
 // BodyProps.restitution, which takes the padding word BodyProps had (on
 // SwiftShader the floats off are those before the port).
@@ -80,6 +96,12 @@
 //   for a product with a subnormal e, which f32 may flush to 0; the product
 //   of two overflows f32, to an infinity on IEEE hardware, which clamps to
 //   1 as the reference's).
+// - Anchors: the basis's rows are taken ground slot first, then pair slots in
+//   slot order (the reference's in its contact order), so which of a body's
+//   nearly dependent rows ANCHOR_TOL drops may differ; the held span is the
+//   same. A round's velocity update projects the sum of its impulses (no
+//   cut), where the reference projects each row's with the cut; a row the
+//   cut zeroes takes no impulse in the rounds, so they differ by rounding.
 // - The combine rule is checked: while on, AvbdSolver rejects one outside
 //   COMBINE_RULES at init. The reference does not check it (an unknown rule
 //   gives it a NaN e, so nothing bounces).
@@ -108,12 +130,22 @@ export interface RestitutionConfig {
   groundRestitution: number;
   /** SceneDesc.restitutionCombine. */
   combine: CombineRule;
+  /** AvbdParams.restitutionAnchors: hold a struck body exactly by the ground and by resting bodies it sits on. */
+  anchors: boolean;
+  /** AvbdParams.restitutionAnchorSpeed, m/s (a finite number >= 0): the speed under which a body rests for anchors. */
+  anchorSpeed: number;
 }
 
 /** Bytes of the counters and indirect arguments: [0] points bouncing this step (atomic), [1..3] per-slot and [4..6] per-body dispatch arguments. */
 export const REST_INFO_BYTES = 28;
 /** Byte offsets of the two indirect arguments in the info buffer. */
 export const REST_SLOT_ARGS = 4, REST_BODY_ARGS = 16;
+/** Bytes of a RestBody (one per body while on): the pass's view of a body in it, its held directions if anchored. */
+export const REST_BODY_BYTES = 288;
+/** Anchors: the least cosine between a support's normal into the body it holds and up (the reference's ANCHOR_UP). */
+export const ANCHOR_UP = 0.5;
+/** Anchors: a row whose part outside the held directions is under this fraction of its length is held (the reference's). */
+export const ANCHOR_TOL = 1e-4;
 
 /** BodyProps.restitution for a NaN BodyDesc.restitution (restitutionWord): pairE gives it no bounce under every rule. */
 export const NAN_RESTITUTION = -F32_MAX;
@@ -131,14 +163,16 @@ export function restitutionWord(e: number): number {
   return Math.min(F32_MAX / 2, Math.max(-F32_MAX / 2, x));
 }
 
-export type RestBinding = 'contacts' | 'contactsRw' | 'props' | 'solver' | 'bodies' | 'bodiesRw' | 'rest' | 'restRead' | 'info' | 'stepInfo' | 'rowStart' | 'rowLength' | 'adjSlot' | 'params';
+export type RestBinding = 'contacts' | 'contactsRw' | 'props' | 'solver' | 'bodies' | 'bodiesRw' | 'rest' | 'restRead' | 'info' | 'stepInfo' | 'rowStart' | 'rowLength' | 'adjSlot' | 'params' | 'restBody' | 'restBodyRead';
+/** The pass's pipeline constants. */
+export type RestConstant = 'restThreshold' | 'groundRestitution' | 'restCombine' | 'restAnchorsOn' | 'restAnchorSpeed';
 
 export interface RestKernel {
   entry: string;
   code: string;
   bindings: RestBinding[];
   /** The pipeline constants it reads. */
-  constants: Array<'restThreshold' | 'groundRestitution' | 'restCombine'>;
+  constants: RestConstant[];
   workgroup: number;
 }
 
@@ -157,6 +191,8 @@ const DECL: Record<RestBinding, (i: number) => string> = {
   rowLength: (i) => `@group(0) @binding(${i}) var<storage, read> rowLength: array<u32>;`,
   adjSlot: (i) => `@group(0) @binding(${i}) var<storage, read> adjSlot: array<u32>;`,
   params: (i) => `@group(0) @binding(${i}) var<uniform> p: SolverParams;`,
+  restBody: (i) => `@group(0) @binding(${i}) var<storage, read_write> restBody: array<RestBody>;`,
+  restBodyRead: (i) => `@group(0) @binding(${i}) var<storage, read> restBody: array<RestBody>;`,
 };
 
 // Shared by every kernel: needs no binding but the uniforms p.
@@ -166,13 +202,44 @@ ${wgslStruct(RestSlot)}
 override restThreshold: f32 = 1.0;
 override groundRestitution: f32 = 0.0;
 override restCombine: u32 = 0u;
+// AvbdParams.restitutionAnchors and restitutionAnchorSpeed (m/s).
+override restAnchorsOn: bool = true;
+override restAnchorSpeed: f32 = 0.25;
 const BIG = ${F32_MAX};
+const ANCHOR_UP = ${ANCHOR_UP};
+const ANCHOR_TOL = ${ANCHOR_TOL};
 // BodyProps.restitution for a NaN e (NAN_RESTITUTION, restitutionWord on the host).
 const NAN_E = ${-F32_MAX};
-// RestSlot.flags: bits 0-3 bounce, 4-7 support, 8 (ground slots) the body is in a bouncing manifold.
+// RestSlot.flags: bits 0-3 bounce, 4-7 support, 8 (ground slots) the body is in a bouncing manifold, 9 (ground
+// slots) it rests for anchors, 12-15 anchor (a loaded point that holds a body exactly), 16 (pair slots) the anchors
+// hold body a (else b).
 const BOUNCE = 15u;
 const SUPPORT = 240u;
 const IN_PASS = 256u;
+const RESTS = 512u;
+const ANCHOR = 61440u;
+const ANCHOR_A = 65536u;
+
+// Up (minus gravity's direction), or 0 in zero g: no normal is then within 60 degrees of it, so nothing anchors on a body.
+fn upDir() -> vec3f {
+  let gl = length(p.gravity);
+  if (gl > 0.0) { return -p.gravity / gl; }
+  return vec3f(0.0);
+}
+
+// A body of the pass (restAnchors writes it each step it runs): its mass and world inverse inertia at q0 (rows),
+// and if anchors hold it (count > 0), its world inverse square-root inertia (rows) and an orthonormal basis of its
+// anchor rows in M^1/2 coordinates, M^-1/2 J (linear, angular parts).
+struct RestBody {
+  i0: vec3f, m: f32,
+  i1: vec3f, count: u32,
+  i2: vec3f, rm: f32,
+  s0: vec3f, pad0: f32,
+  s1: vec3f, pad1: f32,
+  s2: vec3f, pad2: f32,
+  qv: array<vec3f, 6>,
+  qw: array<vec3f, 6>,
+}
 
 // Body i's ground slot's record (pair slot k's is k).
 fn groundRec(i: u32) -> u32 { return p.maxPairs + i; }
@@ -200,26 +267,54 @@ fn vnOf(r: NRow, vb: vec3f, wb: vec3f, va: vec3f, wa: vec3f, hasA: bool) -> f32 
   return s;
 }
 
+// The number of the pass's manifolds a slot's record holds: its bouncing points and its supports are two.
+fn groups(f: u32) -> u32 { return select(0u, 1u, (f & BOUNCE) != 0u) + select(0u, 1u, (f & SUPPORT) != 0u); }
+`;
+
+// The rounds' solve (restManifold, restBodies; restBody bound).
+const SOLVE = /* wgsl */ `
 // A body in one manifold of the pass: its velocities, its mass, its world inverse inertia at the start of the
-// step (q0, the Jacobians' pose), as rows, and its split s: the velocity change per unit impulse is s M^-1 J.
-struct Side { v: vec3f, w: vec3f, s: f32, m: f32, i0: vec3f, i1: vec3f, i2: vec3f }
-fn sideOf(v: vec3f, w: vec3f, s: f32, m: f32, q0: vec4f, inertia: vec3f) -> Side {
-  let ax0 = qrot(q0, vec3f(1.0, 0.0, 0.0));
-  let ax1 = qrot(q0, vec3f(0.0, 1.0, 0.0));
-  let ax2 = qrot(q0, vec3f(0.0, 0.0, 1.0));
-  // Row r of sum_k ax_k ax_k^T / I_k, each entry (ax_k[r] ax_k[c]) / I_k summed over k, as the reference's.
-  return Side(v, w, s, m,
-    ax0.x * ax0 / inertia.x + ax1.x * ax1 / inertia.y + ax2.x * ax2 / inertia.z,
-    ax0.y * ax0 / inertia.x + ax1.y * ax1 / inertia.y + ax2.y * ax2 / inertia.z,
-    ax0.z * ax0 / inertia.x + ax1.z * ax1 / inertia.y + ax2.z * ax2 / inertia.z);
+// step (q0, the Jacobians' pose), as rows, its split s, and k: the body if anchors hold it (its RestBody has their
+// basis), else NONE. The velocity change per unit impulse along a row J is s M^-1 J, or with anchors
+// s M^-1/2 (1 - Q Q^T) M^-1/2 J (resp).
+struct Side { v: vec3f, w: vec3f, s: f32, m: f32, i0: vec3f, i1: vec3f, i2: vec3f, k: u32 }
+fn sideAt(i: u32, v: vec3f, w: vec3f, s: f32) -> Side {
+  let held = select(NONE, i, restBody[i].count > 0u);
+  return Side(v, w, s, restBody[i].m, restBody[i].i0, restBody[i].i1, restBody[i].i2, held);
 }
-fn respV(sd: Side, j: vec3f) -> vec3f { return j * (sd.s / sd.m); }
-fn respW(sd: Side, j: vec3f) -> vec3f { return sd.s * vec3f(dot(sd.i0, j), dot(sd.i1, j), dot(sd.i2, j)); }
+// A velocity change (linear, angular).
+struct Resp { v: vec3f, w: vec3f }
+// The side's velocity change per unit impulse along the row (jv, jw). With anchors, as the reference's resp(): the
+// row in M^1/2 coordinates less its part along the held directions, 0 if that leaves under ANCHOR_TOL of it (cut;
+// the velocity update of a round's summed impulses projects without the cut).
+fn resp(sd: Side, jv: vec3f, jw: vec3f, cut: bool) -> Resp {
+  if (sd.k == NONE) { return Resp(jv * (sd.s / sd.m), sd.s * vec3f(dot(sd.i0, jw), dot(sd.i1, jw), dot(sd.i2, jw))); }
+  let k = sd.k;
+  let rm = restBody[k].rm;
+  let s0 = restBody[k].s0; let s1 = restBody[k].s1; let s2 = restBody[k].s2;
+  var xv = jv * rm;
+  var xw = vec3f(dot(s0, jw), dot(s1, jw), dot(s2, jw));
+  let n0 = sqrt(dot(xv, xv) + dot(xw, xw));
+  for (var c = 0u; c < restBody[k].count; c++) {
+    let qv = restBody[k].qv[c]; let qw = restBody[k].qw[c];
+    let d = dot(qv, xv) + dot(qw, xw);
+    xv -= d * qv; xw -= d * qw;
+  }
+  if (cut && !(sqrt(dot(xv, xv) + dot(xw, xw)) > ANCHOR_TOL * n0)) { return Resp(vec3f(0.0), vec3f(0.0)); }
+  return Resp(xv * (rm * sd.s), sd.s * vec3f(dot(s0, xw), dot(s1, xw), dot(s2, xw)));
+}
 // The row's inverse effective mass under the split.
 fn invOf(r: NRow, A: Side, B: Side, hasA: bool) -> f32 {
-  var w = dot(r.n, respV(B, r.n)) + dot(r.wb, respW(B, r.wb));
-  if (hasA) { w += dot(-r.n, respV(A, -r.n)) + dot(r.wa, respW(A, r.wa)); }
+  let ob = resp(B, r.n, r.wb, true);
+  var w = dot(r.n, ob.v) + dot(r.wb, ob.w);
+  if (hasA) { let oa = resp(A, -r.n, r.wa, true); w += dot(-r.n, oa.v) + dot(r.wa, oa.w); }
   return w;
+}
+// An impulse d along the row on the copies of the velocities.
+fn kick(r: NRow, A: Side, B: Side, hasA: bool, d: f32, vb: ptr<function, vec3f>, wb: ptr<function, vec3f>, va: ptr<function, vec3f>, wa: ptr<function, vec3f>) {
+  let ob = resp(B, r.n, r.wb, true);
+  *vb += ob.v * d; *wb += ob.w * d;
+  if (hasA) { let oa = resp(A, -r.n, r.wa, true); *va += oa.v * d; *wa += oa.w * d; }
 }
 
 // What one group of a manifold's points did in a round: their impulses so far, and the round's impulse on b
@@ -247,10 +342,12 @@ fn solveGroup(mask: u32, rows: array<NRow, 4>, T: vec4f, P0: vec4f, A: Side, B: 
     }
     let kf = f32(K);
     let r = NRow(n / kf, jwb / kf, jwa / kf);
-    var d = (Tm / kf - vnOf(r, vb, wb, va, wa, hasA)) / invOf(r, A, B, hasA);
+    // A row the anchors hold entirely (inverse mass 0) takes no impulse, as on the reference.
+    let w = invOf(r, A, B, hasA);
+    var d = 0.0;
+    if (w > 0.0) { d = (Tm / kf - vnOf(r, vb, wb, va, wa, hasA)) / w; }
     if (d < 0.0) { d = max(d, -kf * minP); }
-    vb += respV(B, r.n) * d; wb += respW(B, r.wb) * d;
-    if (hasA) { va += respV(A, -r.n) * d; wa += respW(A, r.wa) * d; }
+    kick(r, A, B, hasA, d, &vb, &wb, &va, &wa);
     for (var q = 0u; q < 4u; q++) {
       if (((mask >> q) & 1u) == 0u) { continue; }
       P[q] = P[q] + d / kf;
@@ -260,12 +357,13 @@ fn solveGroup(mask: u32, rows: array<NRow, 4>, T: vec4f, P0: vec4f, A: Side, B: 
   for (var q = 0u; q < 4u; q++) {
     if (((mask >> q) & 1u) == 0u) { continue; }
     let r = rs[q];
-    let Pq = max(0.0, P[q] + (T[q] - vnOf(r, vb, wb, va, wa, hasA)) / invOf(r, A, B, hasA));
+    let w = invOf(r, A, B, hasA);
+    if (!(w > 0.0)) { continue; }
+    let Pq = max(0.0, P[q] + (T[q] - vnOf(r, vb, wb, va, wa, hasA)) / w);
     let d = Pq - P[q];
     P[q] = Pq;
     dP[q] = dP[q] + d;
-    vb += respV(B, r.n) * d; wb += respW(B, r.wb) * d;
-    if (hasA) { va += respV(A, -r.n) * d; wa += respW(A, r.wa) * d; }
+    kick(r, A, B, hasA, d, &vb, &wb, &va, &wa);
   }
   var g = Group(P, vec3f(0.0), vec3f(0.0), vec3f(0.0));
   for (var q = 0u; q < 4u; q++) {
@@ -277,8 +375,6 @@ fn solveGroup(mask: u32, rows: array<NRow, 4>, T: vec4f, P0: vec4f, A: Side, B: 
   return g;
 }
 
-// The number of the pass's manifolds a slot's record holds: its bouncing points and its supports are two.
-fn groups(f: u32) -> u32 { return select(0u, 1u, (f & BOUNCE) != 0u) + select(0u, 1u, (f & SUPPORT) != 0u); }
 `;
 
 // The pass's view of a slot's points in the bound contact buffer, one per contact layout: slotOf(k) and groundOf(i)
@@ -368,6 +464,32 @@ fn restMark(@builtin(global_invocation_id) id: vec3u) {
   if (m > 0u) { atomicAdd(&info[0], m); }
 }`,
   restMarkBodies: /* wgsl */ `
+// Anchors: whether body i rests (restSupport anchors a body in the pass on it): it is in no bouncing manifold, its
+// start-of-step speed plus spin times bounding radius is restAnchorSpeed or less, and it sits on something (a loaded
+// point pushes it within 60 degrees of up, ANCHOR_UP).
+fn rests(i: u32, inPass: bool) -> bool {
+  if (!restAnchorsOn || inPass) { return false; }
+  let sb = solver[i];
+  if (!(length(startVel(sb)) + length(sb.tphi / p.dt) * props[i].radius <= restAnchorSpeed)) { return false; }
+  let up = upDir();
+  let gs = groundOf(i);
+  for (var q = 0u; q < 4u; q++) {
+    if (!ptUsed(gs, q)) { break; }
+    if (ptLoaded(gs, q) && dot(ptRow(gs, q).n, up) >= ANCHOR_UP) { return true; }
+  }
+  let rs = rowStart[i];
+  for (var e = rs; e < rs + rowLength[i]; e++) {
+    let s = slotOf(adjSlot[e]);
+    // n pushes b; a the other way.
+    let sign = select(-1.0, 1.0, slotB(s) == i);
+    for (var q = 0u; q < 4u; q++) {
+      if (!ptUsed(s, q)) { break; }
+      if (ptLoaded(s, q) && sign * dot(ptRow(s, q).n, up) >= ANCHOR_UP) { return true; }
+    }
+  }
+  return false;
+}
+
 @compute @workgroup_size(${WG})
 fn restMarkBodies(@builtin(global_invocation_id) id: vec3u) {
   let i = id.x;
@@ -380,6 +502,7 @@ fn restMarkBodies(@builtin(global_invocation_id) id: vec3u) {
   let re = rs + rowLength[i];
   for (var e = rs; e < re && !inPass; e++) { inPass = (rest[adjSlot[e]].flags & BOUNCE) != 0u; }
   if (inPass) { r.flags |= IN_PASS; }
+  if (rests(i, inPass)) { r.flags |= RESTS; }
   rest[groundRec(i)] = r;
   if (m > 0u) { atomicAdd(&info[0], m); }
 }`,
@@ -400,7 +523,9 @@ fn restArgs() {
 }`,
   restSupport: /* wgsl */ `
 // The supports of a pair slot one of whose bodies is in the pass: its loaded points that do not bounce, as
-// one-sided constraints that keep the normal velocity the solve left (target J u, P >= 0).
+// one-sided constraints that keep the normal velocity the solve left (target J u, P >= 0). Or, with anchors, if
+// only one body is in the pass and it sits on the other (the normal into it within 60 degrees of up), which rests
+// (RESTS): anchors, which hold it exactly (restAnchors; the reference's holdsB and holdsA).
 @compute @workgroup_size(${WG})
 fn restSupport(@builtin(global_invocation_id) id: vec3u) {
   let k = id.x;
@@ -409,7 +534,18 @@ fn restSupport(@builtin(global_invocation_id) id: vec3u) {
   if (!ptUsed(s, 0u)) { return; }
   let a = slotA(s);
   let b = slotB(s);
-  if (((rest[groundRec(a)].flags | rest[groundRec(b)].flags) & IN_PASS) == 0u) { return; }
+  let fa = rest[groundRec(a)].flags;
+  let fb = rest[groundRec(b)].flags;
+  if (((fa | fb) & IN_PASS) == 0u) { return; }
+  // 1: the points hold b, 2: they hold a, 0: they are supports.
+  var holds = 0u;
+  if (restAnchorsOn) {
+    let aIn = (fa & IN_PASS) != 0u;
+    let bIn = (fb & IN_PASS) != 0u;
+    let nu = dot(ptRow(s, 0u).n, upDir());
+    if (bIn && !aIn && nu >= ANCHOR_UP && (fa & RESTS) != 0u) { holds = 1u; }
+    else if (aIn && !bIn && -nu >= ANCHOR_UP && (fb & RESTS) != 0u) { holds = 2u; }
+  }
   var r = rest[k];
   let A = bodies[a];
   let B = bodies[b];
@@ -418,15 +554,17 @@ fn restSupport(@builtin(global_invocation_id) id: vec3u) {
     if (!ptUsed(s, q)) { break; }
     if (((r.flags >> q) & 1u) != 0u || !ptLoaded(s, q)) { continue; }
     sm |= 1u << q;
-    r.vnTarget[q] = vnOf(ptRow(s, q), B.linVel, B.angVel, A.linVel, A.angVel, true);
+    if (holds == 0u) { r.vnTarget[q] = vnOf(ptRow(s, q), B.linVel, B.angVel, A.linVel, A.angVel, true); }
   }
   if (sm != 0u) {
-    rest[k].flags = r.flags | (sm << 4u);
+    if (holds == 0u) { rest[k].flags = r.flags | (sm << 4u); }
+    else { rest[k].flags = r.flags | (sm << 12u) | select(0u, ANCHOR_A, holds == 2u); }
     rest[k].vnTarget = r.vnTarget;
   }
 }`,
   restCount: /* wgsl */ `
-// A body's ground supports (if it is in the pass), and its mass split: the pass's manifolds it is in.
+// A body's ground supports (if it is in the pass; with anchors, its ground anchors), and its mass split: the pass's
+// manifolds it is in.
 @compute @workgroup_size(${WG})
 fn restCount(@builtin(global_invocation_id) id: vec3u) {
   let i = id.x;
@@ -441,9 +579,9 @@ fn restCount(@builtin(global_invocation_id) id: vec3u) {
       if (!ptUsed(gs, q)) { break; }
       if (((r.flags >> q) & 1u) != 0u || !ptLoaded(gs, q)) { continue; }
       sm |= 1u << q;
-      r.vnTarget[q] = vnOf(ptRow(gs, q), B.linVel, B.angVel, vec3f(0.0), vec3f(0.0), false);
+      if (!restAnchorsOn) { r.vnTarget[q] = vnOf(ptRow(gs, q), B.linVel, B.angVel, vec3f(0.0), vec3f(0.0), false); }
     }
-    r.flags |= sm << 4u;
+    r.flags |= select(sm << 4u, sm << 12u, restAnchorsOn);
   }
   var s = groups(r.flags);
   let rs = rowStart[i];
@@ -452,13 +590,78 @@ fn restCount(@builtin(global_invocation_id) id: vec3u) {
   rest[gi].vnTarget = r.vnTarget;
   rest[gi].split = s;
 }`,
-  restManifold: /* wgsl */ `
-fn sideAt(i: u32, s: u32) -> Side {
-  let b = bodies[i];
-  let pr = props[i];
-  return sideOf(b.linVel, b.angVel, f32(s), pr.mass, solver[i].q0, pr.inertia);
+  restAnchors: /* wgsl */ `
+// Row J of an anchor (linear, angular parts) into body b's basis (modified Gram-Schmidt in M^1/2 coordinates, as the
+// reference's): none if it is within ANCHOR_TOL of the span already, or the basis is full.
+fn addRow(b: ptr<function, RestBody>, jv: vec3f, jw: vec3f) {
+  if ((*b).count == 6u) { return; }
+  var xv = jv * (*b).rm;
+  var xw = vec3f(dot((*b).s0, jw), dot((*b).s1, jw), dot((*b).s2, jw));
+  let n0 = sqrt(dot(xv, xv) + dot(xw, xw));
+  for (var c = 0u; c < (*b).count; c++) {
+    let qv = (*b).qv[c]; let qw = (*b).qw[c];
+    let d = dot(qv, xv) + dot(qw, xw);
+    xv -= d * qv; xw -= d * qw;
+  }
+  let nv = sqrt(dot(xv, xv) + dot(xw, xw));
+  if (!(nv > ANCHOR_TOL * n0)) { return; }
+  let c = (*b).count;
+  (*b).qv[c] = xv / nv;
+  (*b).qw[c] = xw / nv;
+  (*b).count = c + 1u;
 }
 
+// A body of the pass (split > 0): its RestBody, from its mass and inertia at q0, and with anchors the basis of the
+// rows that hold it: its ground slot's anchors, then its pair slots' (in slot order) that hold it.
+@compute @workgroup_size(${WG})
+fn restAnchors(@builtin(global_invocation_id) id: vec3u) {
+  let i = id.x;
+  if (i >= p.n) { return; }
+  let g = rest[groundRec(i)];
+  if (g.split == 0u) { return; }
+  let pr = props[i];
+  let inertia = pr.inertia;
+  let q0 = solver[i].q0;
+  let ax0 = qrot(q0, vec3f(1.0, 0.0, 0.0));
+  let ax1 = qrot(q0, vec3f(0.0, 1.0, 0.0));
+  let ax2 = qrot(q0, vec3f(0.0, 0.0, 1.0));
+  var b: RestBody;
+  b.m = pr.mass;
+  // Row r of sum_k ax_k ax_k^T / I_k, each entry (ax_k[r] ax_k[c]) / I_k summed over k, as the reference's.
+  b.i0 = ax0.x * ax0 / inertia.x + ax1.x * ax1 / inertia.y + ax2.x * ax2 / inertia.z;
+  b.i1 = ax0.y * ax0 / inertia.x + ax1.y * ax1 / inertia.y + ax2.y * ax2 / inertia.z;
+  b.i2 = ax0.z * ax0 / inertia.x + ax1.z * ax1 / inertia.y + ax2.z * ax2 / inertia.z;
+  if (restAnchorsOn) {
+    let si = sqrt(inertia);
+    b.rm = 1.0 / sqrt(pr.mass);
+    b.s0 = ax0.x * ax0 / si.x + ax1.x * ax1 / si.y + ax2.x * ax2 / si.z;
+    b.s1 = ax0.y * ax0 / si.x + ax1.y * ax1 / si.y + ax2.y * ax2 / si.z;
+    b.s2 = ax0.z * ax0 / si.x + ax1.z * ax1 / si.y + ax2.z * ax2 / si.z;
+    let gs = groundOf(i);
+    let gm = (g.flags & ANCHOR) >> 12u;
+    for (var q = 0u; q < 4u; q++) {
+      if (((gm >> q) & 1u) != 0u) { let r = ptRow(gs, q); addRow(&b, r.n, r.wb); }
+    }
+    let rs = rowStart[i];
+    for (var e = rs; e < rs + rowLength[i]; e++) {
+      let slot = adjSlot[e];
+      let f = rest[slot].flags;
+      let am = (f & ANCHOR) >> 12u;
+      if (am == 0u) { continue; }
+      // The anchors hold a (ANCHOR_A) or b: only that body takes them.
+      let onA = (f & ANCHOR_A) != 0u;
+      if (onA == (rest[slot].b == i)) { continue; }
+      let s = slotOf(slot);
+      for (var q = 0u; q < 4u; q++) {
+        if (((am >> q) & 1u) == 0u) { continue; }
+        let r = ptRow(s, q);
+        if (onA) { addRow(&b, -r.n, r.wa); } else { addRow(&b, r.n, r.wb); }
+      }
+    }
+  }
+  restBody[i] = b;
+}`,
+  restManifold: /* wgsl */ `
 // One round of a pair slot's groups, each from last round's velocities (Jacobi across manifolds).
 @compute @workgroup_size(${WG})
 fn restManifold(@builtin(global_invocation_id) id: vec3u) {
@@ -475,8 +678,8 @@ fn restManifold(@builtin(global_invocation_id) id: vec3u) {
     rows[q] = ptRow(s, q);
   }
   let a = slotA(s);
-  let A = sideAt(a, rest[groundRec(a)].split);
-  let B = sideAt(r.b, rest[groundRec(r.b)].split);
+  let A = sideAt(a, bodies[a].linVel, bodies[a].angVel, f32(rest[groundRec(a)].split));
+  let B = sideAt(r.b, bodies[r.b].linVel, bodies[r.b].angVel, f32(rest[groundRec(r.b)].split));
   var P = r.P;
   var lin = vec3f(0.0); var angB = vec3f(0.0); var angA = vec3f(0.0);
   if (bm != 0u) { let g = solveGroup(bm, rows, r.vnTarget, P, A, B, true); P = g.P; lin += g.lin; angB += g.angB; angA += g.angA; }
@@ -498,8 +701,6 @@ fn restBodies(@builtin(global_invocation_id) id: vec3u) {
   let s = g.split;
   if (s == 0u) { return; }
   let b = bodies[i];
-  let pr = props[i];
-  let q0 = solver[i].q0;
   var lin = vec3f(0.0); var ang = vec3f(0.0);
   let bm = g.flags & BOUNCE;
   let sm = (g.flags & SUPPORT) >> 4u;
@@ -510,7 +711,7 @@ fn restBodies(@builtin(global_invocation_id) id: vec3u) {
       if (!ptUsed(gs, q)) { break; }
       rows[q] = ptRow(gs, q);
     }
-    let B = sideOf(b.linVel, b.angVel, f32(s), pr.mass, q0, pr.inertia);
+    let B = sideAt(i, b.linVel, b.angVel, f32(s));
     var P = g.P;
     if (bm != 0u) { let o = solveGroup(bm, rows, g.vnTarget, P, B, B, false); P = o.P; lin += o.lin; ang += o.angB; }
     if (sm != 0u) { let o = solveGroup(sm, rows, g.vnTarget, P, B, B, false); P = o.P; lin += o.lin; ang += o.angB; }
@@ -522,9 +723,10 @@ fn restBodies(@builtin(global_invocation_id) id: vec3u) {
     if ((r.flags & (BOUNCE | SUPPORT)) == 0u) { continue; }
     if (r.b == i) { lin += r.lin; ang += r.angB; } else { lin -= r.lin; ang += r.angA; }
   }
-  let full = sideOf(b.linVel, b.angVel, 1.0, pr.mass, q0, pr.inertia);
-  bodies[i].linVel = b.linVel + respV(full, lin);
-  bodies[i].angVel = b.angVel + respW(full, ang);
+  // With its own mass (and with anchors, projected: the cut is per row, in the rounds).
+  let o = resp(sideAt(i, b.linVel, b.angVel, 1.0), lin, ang, false);
+  bodies[i].linVel = b.linVel + o.v;
+  bodies[i].angVel = b.angVel + o.w;
 }`,
   restFinish: /* wgsl */ `
 // A bounced point that will separate (P > 0 and its target times h beyond restDepth) starts the next step with
@@ -550,14 +752,15 @@ fn restFinish(@builtin(global_invocation_id) id: vec3u) {
 }`,
 };
 
-const KERNELS: Array<Omit<RestKernel, 'code'> & { mark?: boolean }> = [
+const KERNELS: Array<Omit<RestKernel, 'code'> & { mark?: boolean; solve?: boolean }> = [
   { entry: 'restMark', bindings: ['contacts', 'props', 'solver', 'rest', 'info', 'stepInfo', 'params'], constants: ['restThreshold', 'restCombine'], workgroup: WG, mark: true },
-  { entry: 'restMarkBodies', bindings: ['contacts', 'props', 'solver', 'rest', 'info', 'rowStart', 'rowLength', 'adjSlot', 'params'], constants: ['restThreshold', 'groundRestitution', 'restCombine'], workgroup: WG, mark: true },
+  { entry: 'restMarkBodies', bindings: ['contacts', 'props', 'solver', 'rest', 'info', 'rowStart', 'rowLength', 'adjSlot', 'params'], constants: ['restThreshold', 'groundRestitution', 'restCombine', 'restAnchorsOn', 'restAnchorSpeed'], workgroup: WG, mark: true },
   { entry: 'restArgs', bindings: ['info', 'stepInfo', 'params'], constants: [], workgroup: 1 },
-  { entry: 'restSupport', bindings: ['contacts', 'bodies', 'rest', 'stepInfo', 'params'], constants: [], workgroup: WG },
-  { entry: 'restCount', bindings: ['contacts', 'bodies', 'rest', 'rowStart', 'rowLength', 'adjSlot', 'params'], constants: [], workgroup: WG },
-  { entry: 'restManifold', bindings: ['contacts', 'bodies', 'props', 'solver', 'rest', 'stepInfo', 'params'], constants: [], workgroup: WG },
-  { entry: 'restBodies', bindings: ['bodiesRw', 'props', 'solver', 'contacts', 'rest', 'rowStart', 'rowLength', 'adjSlot', 'params'], constants: [], workgroup: WG },
+  { entry: 'restSupport', bindings: ['contacts', 'bodies', 'rest', 'stepInfo', 'params'], constants: ['restAnchorsOn'], workgroup: WG },
+  { entry: 'restCount', bindings: ['contacts', 'bodies', 'rest', 'rowStart', 'rowLength', 'adjSlot', 'params'], constants: ['restAnchorsOn'], workgroup: WG },
+  { entry: 'restAnchors', bindings: ['contacts', 'props', 'solver', 'restRead', 'rowStart', 'rowLength', 'adjSlot', 'restBody', 'params'], constants: ['restAnchorsOn'], workgroup: WG },
+  { entry: 'restManifold', bindings: ['contacts', 'bodies', 'rest', 'restBodyRead', 'stepInfo', 'params'], constants: [], workgroup: WG, solve: true },
+  { entry: 'restBodies', bindings: ['bodiesRw', 'contacts', 'rest', 'restBodyRead', 'rowStart', 'rowLength', 'adjSlot', 'params'], constants: [], workgroup: WG, solve: true },
   { entry: 'restFinish', bindings: ['contactsRw', 'restRead', 'rowStart', 'rowLength', 'adjSlot', 'params'], constants: [], workgroup: WG },
 ];
 
@@ -578,17 +781,20 @@ export type RestLayout = { records: 0 } | { records: 1; head: string };
  */
 export function restitutionKernels(common: string, layout: RestLayout = { records: 0 }): RestKernel[] {
   const rec = layout.records === 1;
-  return KERNELS.map(({ mark, ...k }) => {
+  return KERNELS.map(({ mark, solve, ...k }) => {
     const reads = k.bindings.includes('contacts'), writes = k.bindings.includes('contactsRw');
     const decls = k.bindings.map((b, i) => (rec && (b === 'contacts' || b === 'contactsRw') ? recordDecl(i, b === 'contactsRw') : DECL[b](i)));
     const view = !(reads || writes) ? '' : (rec ? `${layout.head}\n${RECORD_VIEW}` : POINT_VIEW) + (writes ? (rec ? RECORD_RELEASE : POINT_RELEASE) : '');
-    return { ...k, code: `${common}\n${HEAD}\n${decls.join('\n')}\n${view}\n${mark ? MARK : ''}\n${ENTRY[k.entry]!}\n` };
+    return { ...k, code: `${common}\n${HEAD}\n${decls.join('\n')}\n${view}\n${mark ? MARK : ''}\n${solve ? SOLVE : ''}\n${ENTRY[k.entry]!}\n` };
   });
 }
 
 const recordDecl = (i: number, rw: boolean) => `@group(0) @binding(${i}) var<storage, ${rw ? 'read_write' : 'read'}> records: array<SolverRecord>;`;
 
 /** The pipeline constants' values: threshold past f32's range is f32's largest (no approach is that fast). */
-export function restitutionConstants(c: RestitutionConfig, combineIndex: number): Record<'restThreshold' | 'groundRestitution' | 'restCombine', number> {
-  return { restThreshold: Math.min(c.threshold, F32_MAX), groundRestitution: c.groundRestitution, restCombine: combineIndex };
+export function restitutionConstants(c: RestitutionConfig, combineIndex: number): Record<RestConstant, number> {
+  return {
+    restThreshold: Math.min(c.threshold, F32_MAX), groundRestitution: c.groundRestitution, restCombine: combineIndex,
+    restAnchorsOn: c.anchors ? 1 : 0, restAnchorSpeed: Math.min(c.anchorSpeed, F32_MAX),
+  };
 }

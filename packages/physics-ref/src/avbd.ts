@@ -174,7 +174,7 @@
 // BodyDesc.restitution, and runs are bit-identical to those before it
 // existed. The GPU engine applies the same pass in f32
 // (physics-gpu/src/restitution.ts, whose header has its cost and its f32
-// departures: 6 + 2 x restitutionRounds dispatches a step while on; off, no
+// departures: 7 + 2 x restitutionRounds dispatches a step while on; off, no
 // buffer, no pipeline and no dispatch). On SwiftShader its drops rebound at
 // the ratio here to 1.5e-6, and off it gives the floats it gave before the
 // port. Its known limits, at 10 iterations, e being the pair's, under the
@@ -206,7 +206,8 @@
 //   degrees, at mu 0.6 keeps 0.36-0.83 of the rigid impact's vertical rebound
 //   and spins at 1.66-3.06 x its spin (frictionless: 0.83-0.98 of the rebound,
 //   0.97-1.00 of the spin; rule max).
-// - Heavy on light: a body struck while it rests on others is held by them
+// - Heavy on light, without anchors (restitutionAnchors false, the pass as it
+//   was before them): a body struck while it rests on others is held by them
 //   only as far as the rounds converge, and they converge more slowly the
 //   heavier the striker (see restitute()). A ball (radius 0.25) dropped
 //   at 10 m/s onto a 1 kg cube on the ground, e 0.6-0.9 everywhere, rebounds
@@ -220,6 +221,47 @@
 //   holds up to 5000 kg at 10 m/s. A 144 kg rubber ball (e 0.6) at 20 m/s on a
 //   10-cube plaster column (e 0.05) sinks 0.19 m into it, against 0.08 m off
 //   (0.11 under max).
+// - Heavy on light with anchors (the default; see restitute(), "Anchors"):
+//   the ground, and the resting bodies a struck body sits on, hold it exactly,
+//   so the striker's mass no longer matters. The ball above at 10 m/s, e 0.9
+//   everywhere, first leaves at 0.89, 0.88, 0.84, 0.83 and 0.83 of v at 1, 5,
+//   50, 510 and 2000 kg (e 0.6: 0.53-0.59); the cube moves down at most 0.07,
+//   0.26, 0.58, 0.99 and 0.92 m/s (switch off: 0.06, 0.10, 0.46, 1.08 and
+//   2.01; the solve's, as the pass leaves the held directions as the solve
+//   left them); the ball sinks at most 0.032 m into the cube at 510 kg and
+//   0.046 at 2000 (off 0.110 and 0.218), and the cube 0.016 and 0.019 m into
+//   the ground. The 144 kg rubber ball on the column leaves at 0.52 of 20 m/s
+//   under max (0.24 under average) and sinks 0.034 m into it (0.038; off
+//   0.105), at 10 iterations, the rebound being the ball's first upward
+//   velocity (restitution.test.ts, "restitution on: anchors", pins them). At
+//   40 iterations: 0.83-0.89 of v off the cube, the cube down at most 1.34
+//   m/s (off 0.54) and 0.022 m into the ground at 2000 kg; the column 0.53 of
+//   v, 0.014 m. There the column, compressed 6.9 cm by the solve's impact
+//   step, springs back once the ball has left: 2.5 J above the start (8.5e-5
+//   of the strike), its top 6 cm over its rest height; that is the solve's
+//   stored compression (with the switch off, taking the ball away after the
+//   same step releases 11 J). Over 248 strikes and 18 S5 knocks no other
+//   energy rose above the start at 10 or 40 iterations for e <= 0.9 (e 1:
+//   8.7% at 10, as without anchors; none at 40, where without anchors 61%).
+//   Where nothing holds the struck body (no ground under
+//   it, a support that moves or is struck itself, zero g) the rounds still
+//   do, as above.
+// - Energy in chains of simultaneous impacts (anchors or not): the pass's
+//   converged answer can gain energy where several touching bodies are struck
+//   in one step, each bouncing manifold's target -e vn0 taken alone (the
+//   simultaneous Newton law's known flaw). Rounds stop well short of
+//   convergence, which hides it: from a GPU knockdown's state (S5, e 0.9, 15
+//   m/s, step 15) the reference's pass raised the struck bodies' kinetic
+//   energy from 614 J after the solve to 682 J at 8 rounds and 914 J at 128
+//   without anchors (630, 729 and 957 J with them; 566 J at the start of the
+//   step). Anchors converge the held bodies exactly, so they show it more
+//   often: on SwiftShader one of 24 GPU knocks (that one, e 0.9) gained 3.9%
+//   of |E0| with anchors and 1.3e-4 without; none at e 0.3-0.6, and none of
+//   48 knocks on this engine at e 0.5-0.9. A cap per manifold on the energy
+//   of its split copies (their start-of-step energy, which bounds the pass's
+//   total by Jensen's inequality over the mass-split copies) took 729 J to
+//   655 J, not to the start's 566 J: the solve leaves struck bodies above
+//   their own share, so a bound needs the islands' energies (follow-up).
 import { type BodyDesc, combineFriction, combineRestitution, DEFAULT_RESTITUTION_COMBINE, inertiaOf, massOf, type Quat, type SceneDesc, type Vec3 } from '@tb/engine-api';
 import { boundingRadius, cross, dot, groundManifold, NO_AXIS, quatMul, quatNormalize, rotate, shapeManifold, spherePairs } from '@tb/geom';
 import { COLOR_MODES, COLOR_PRIORITIES, colorGraph, colorGraphWith, latticeParity, latticePreferences } from './coloring.ts';
@@ -325,6 +367,22 @@ export interface AvbdParams {
    */
   restitutionRounds?: number;
   /**
+   * Anchors in the restitution pass (see restitute(), "Anchors"): a body in a
+   * bouncing manifold is held exactly by its loaded points on the ground and
+   * on resting bodies it sits on, instead of by supports solved in rounds, so
+   * a heavy striker bounces off a resting body as off what holds it up.
+   * Default true (RESTITUTION_DEFAULTS); false is the pass as it was before
+   * anchors (every such point a support).
+   */
+  restitutionAnchors?: boolean;
+  /**
+   * The speed, m/s, under which a body counts as resting for anchors: its
+   * start-of-step speed plus its spin times its bounding radius. Default 0.25
+   * (RESTITUTION_DEFAULTS); a finite number >= 0 (0 leaves the ground the
+   * only anchor but for bodies exactly at rest).
+   */
+  restitutionAnchorSpeed?: number;
+  /**
    * Loaded-gap slop, m, opt-in (defect B, see the header): off when absent or
    * 0, and EngineInfo.variant lists it only while it is on (avbdVariant). With
    * postStabilize, a contact point that bore load at the end of last step
@@ -383,7 +441,12 @@ export const DEFAULT_AVBD: AvbdParams = {
 };
 
 /** The restitution keys' defaults while AvbdParams.restitution is on (Box2D's threshold is 1 m/s too; rounds: see restitute()). */
-export const RESTITUTION_DEFAULTS = { restitutionThreshold: 1, restitutionRounds: 8 } as const;
+export const RESTITUTION_DEFAULTS = { restitutionThreshold: 1, restitutionRounds: 8, restitutionAnchors: true, restitutionAnchorSpeed: 0.25 } as const;
+
+/** Anchors (restitute()): the least cosine between a support's normal into the body it holds and up (60 degrees from vertical). */
+export const ANCHOR_UP = 0.5;
+/** Anchors: a row whose part outside the held directions is under this fraction of its length is held. */
+const ANCHOR_TOL = 1e-4;
 
 /** AvbdParams.records: 0 points, 1 the exact record (here the same as 0), 2 the centre-friction record. */
 export const RECORD_MODES = [0, 1, 2] as const;
@@ -418,6 +481,8 @@ export function checkRestitution(p: Partial<AvbdParams>): void {
   const t = p.restitutionThreshold, r = p.restitutionRounds;
   if (t !== undefined && !(Number.isFinite(t) && t >= 0)) throw new Error(`AvbdParams.restitutionThreshold must be a finite number >= 0, got ${t}`);
   if (r !== undefined && !(Number.isInteger(r) && r >= 1)) throw new Error(`AvbdParams.restitutionRounds must be an integer >= 1, got ${r}`);
+  const sp = p.restitutionAnchorSpeed;
+  if (sp !== undefined && !(Number.isFinite(sp) && sp >= 0)) throw new Error(`AvbdParams.restitutionAnchorSpeed must be a finite number >= 0, got ${sp}`);
 }
 
 /**
@@ -552,10 +617,13 @@ export interface StepStats {
    * What this step's restitution pass did (all 0 with the switch off): the
    * points it bounced, the normal impulse it applied in all (N s, supports
    * included), the change of the bodies' total linear momentum, and the impulse
-   * it took from the ground. Every impulse between two bodies acts on both,
-   * equal and opposite, so momentum equals groundImpulse to rounding.
+   * it took from the ground through its manifolds there, and the impulse its
+   * anchors took (see restitute(), "Anchors": the ground's and resting
+   * bodies', which the pass leaves still). Every impulse between two bodies
+   * in the pass acts on both, equal and opposite, so momentum equals
+   * groundImpulse + anchorImpulse to rounding.
    */
-  restitution: { contacts: number; impulse: number; momentum: Vec3; groundImpulse: Vec3 };
+  restitution: { contacts: number; impulse: number; momentum: Vec3; groundImpulse: Vec3; anchorImpulse: Vec3 };
 }
 
 /**
@@ -569,7 +637,7 @@ export class AvbdWorld {
   records: FrictionRecord[] = [];
   /** Last step's SAT axis per touching pair (key `a,b`), preferred by this step's narrowphase. */
   axes = new Map<string, number>();
-  stats: StepStats = { contacts: 0, manifolds: 0, colors: 0, restitution: { contacts: 0, impulse: 0, momentum: [0, 0, 0], groundImpulse: [0, 0, 0] } };
+  stats: StepStats = { contacts: 0, manifolds: 0, colors: 0, restitution: { contacts: 0, impulse: 0, momentum: [0, 0, 0], groundImpulse: [0, 0, 0], anchorImpulse: [0, 0, 0] } };
   /** Each body's last step, [position change, rotation vector] (what the GPU keeps in SolverBody.dp, phi until the next initBodies). */
   lastDx: Float64Array[] = [];
 
@@ -917,7 +985,44 @@ export class AvbdWorld {
    *   down at 1.75 m/s (0.07 with the switch off). The 510 kg ball above
    *   still drives the cube into the ground at 10.0 m/s after 8 rounds (9.5
    *   after 128), against 0.8 off, and comes back at 0.54 m/s against 1.61;
-   *   from 2000 kg a ball can go through the cube (see the header).
+   *   from 2000 kg a ball can go through the cube (see the header). Anchors
+   *   (next) take the supports that cause this out of the rounds.
+   * - Anchors (restitutionAnchors, default on): the supports of an involved
+   *   body B whose other side cannot move in the pass are not solved in
+   *   rounds but held exactly. That other side is the ground, or a body C
+   *   that B sits on (the point's normal into B within 60 degrees of up,
+   *   ANCHOR_UP, so never in zero g) which is not in a bouncing manifold
+   *   itself and rests: it sits on something (a loaded point pushes it up as
+   *   steeply) and its start-of-step speed plus spin times bounding radius is
+   *   at most restitutionAnchorSpeed (0.25 m/s; a struck stack's lower bodies
+   *   pass, a falling one's do not). The pass's impulses on B then change its
+   *   velocity by M^-1/2 (1 - Q Q^T) M^-1/2 J P instead of M^-1 J P, Q an
+   *   orthonormal basis of its anchor rows' M^-1/2 J_s (Gram-Schmidt, at most
+   *   6): the exact response of B with each anchor row kept at the normal
+   *   velocity the solve left it (the Schur complement of the rows, as if the
+   *   anchors were bilateral), in the rounds' manifold solves (with its split)
+   *   and in its update. That is direct elimination, so it does not depend on
+   *   the mass ratio as the rounds do: a heavy ball bounces off a cube on the
+   *   ground, or off the top of a column, as off the ground itself, and the
+   *   cube keeps the velocity the solve left it along the held rows (see the
+   *   header). Only the loaded points (lambda_n < 0 after the solve) are
+   *   anchors, so the solve's own contact state is the active set: a plank
+   *   struck on its overhang pivots on the edge it still bears on (a 20 kg
+   *   ball at 8 m/s spins a 0.32 kg plank at 27.3 rad/s, the rigid pivot's
+   *   27.0; without anchors 16.9). Held both ways, an anchor could pull its
+   *   body, doing work P vn wherever the solve left the row moving; no probe
+   *   showed it (248 strikes on resting cubes, columns, stacks, seams and a
+   *   sliding cube, e 0.3-0.9, 1-1000 kg, any angle and offset, and S5
+   *   knocks: no energy above the start; e 1 rods tilted onto a stack 8.7% of
+   *   the strike, as without anchors 8.6%). An earlier rule that let go of the
+   *   rows the push would lift on the free body gained 4 x the strike's
+   *   energy (a 1000 kg ball 0.05 m inside a cube's edge, e 0.9: it let the
+   *   far edge's rows go, which the held body then drove into the ground).
+   *   C is left as it is, as a stack passes the impulse on to the ground:
+   *   the anchors' reaction, the ground's included, is
+   *   StepStats.restitution.anchorImpulse (so momentum = groundImpulse +
+   *   anchorImpulse). With nothing to anchor to, a body is solved in rounds
+   *   as before.
    * - The points of one manifold are solved together: each round first takes
    *   the impulse at their centroid that brings the centroid's normal
    *   velocity to the mean target (exact line search along equal per-point
@@ -941,7 +1046,7 @@ export class AvbdWorld {
    *   64 for the two cubes), so restitutionRounds trades bounce for work: a
    *   body held by its supports, or struck from two sides at once, needs
    *   several rounds. 8 by default (RESTITUTION_DEFAULTS), for the bounce
-   *   off a resting cube above; the GPU pays 2 dispatches a round (6 + 2 x
+   *   off a resting cube above; the GPU pays 2 dispatches a round (7 + 2 x
    *   rounds a step, physics-gpu/src/restitution.ts), and only with the
    *   switch on. More rounds are no cure for a heavy
    *   striker: the 5 kg ball at 10 m/s (e 0.9) gets 0.30 of e at 8 rounds,
@@ -972,7 +1077,7 @@ export class AvbdWorld {
     const threshold = p.restitutionThreshold ?? RESTITUTION_DEFAULTS.restitutionThreshold;
     const rounds = p.restitutionRounds ?? RESTITUTION_DEFAULTS.restitutionRounds;
     const rule = this.scene.restitutionCombine ?? DEFAULT_RESTITUTION_COMBINE, groundE = this.scene.ground?.restitution ?? 0;
-    const st: StepStats['restitution'] = { contacts: 0, impulse: 0, momentum: [0, 0, 0], groundImpulse: [0, 0, 0] };
+    const st: StepStats['restitution'] = { contacts: 0, impulse: 0, momentum: [0, 0, 0], groundImpulse: [0, 0, 0], anchorImpulse: [0, 0, 0] };
     this.stats.restitution = st;
     const n = bodies.length;
     // Normal velocity of contact c (row 0 of its Jacobian): at the start of the step, and now.
@@ -1022,42 +1127,110 @@ export class AvbdWorld {
     if (!ms.length) return;
     const taken = new Set<Contact>(), involved = new Set<number>();
     for (const m of ms) { for (const c of m.pts) taken.add(c); involved.add(m.b); if (m.a !== GROUND) involved.add(m.a); }
+    // Anchors (see above): which bodies rest and sit on something, and whether a manifold's partner of an involved
+    // body holds it exactly.
+    const anchorsOn = p.restitutionAnchors ?? RESTITUTION_DEFAULTS.restitutionAnchors;
+    const restSpeed = p.restitutionAnchorSpeed ?? RESTITUTION_DEFAULTS.restitutionAnchorSpeed;
+    const gv = this.scene.gravity, gl = Math.hypot(gv[0], gv[1], gv[2]);
+    const up: Vec3 = gl > 0 ? [-gv[0] / gl, -gv[1] / gl, -gv[2] / gl] : [0, 0, 0];
+    const seated = new Uint8Array(n);
+    if (anchorsOn && gl > 0) {
+      for (const c of contacts) {
+        if (!(c.lambda[0] < 0)) continue;
+        const nu = dot(c.n, up);
+        if (nu >= ANCHOR_UP) seated[c.b] = 1;
+        else if (c.a !== GROUND && -nu >= ANCHOR_UP) seated[c.a] = 1;
+      }
+    }
+    const rests = (i: number) => seated[i] === 1 && !involved.has(i) && Math.hypot(...v0[i]!) + Math.hypot(...w0[i]!) * boundingRadius(bodies[i]!.desc.shape) <= restSpeed;
+    // anchorRows[i]: body i's anchor points, each with the sign of i's part of its row (1: i is b, -1: i is a).
+    const anchorRows = new Map<number, Array<{ c: Contact; side: 1 | -1 }>>();
+    const anchorOf = (i: number, c: Contact, side: 1 | -1) => { let l = anchorRows.get(i); if (!l) anchorRows.set(i, l = []); l.push({ c, side }); };
     for (const [i, j] of manifolds) {
       const c = contacts[i]!;
-      if (!involved.has(c.b) && !(c.a !== GROUND && involved.has(c.a))) continue;
+      const bIn = involved.has(c.b), aIn = c.a !== GROUND && involved.has(c.a);
+      if (!bIn && !aIn) continue;
+      // The partner holds the involved body exactly: the ground, or a resting body the involved one sits on.
+      const holdsB = anchorsOn && bIn && !aIn && (c.a === GROUND || (gl > 0 && dot(c.n, up) >= ANCHOR_UP && rests(c.a)));
+      const holdsA = anchorsOn && aIn && !bIn && gl > 0 && -dot(c.n, up) >= ANCHOR_UP && rests(c.b);
       const pts: Contact[] = [], target: number[] = [];
       for (let k = i; k < j; k++) {
         const ck = contacts[k]!;
-        if (!taken.has(ck) && ck.lambda[0] < 0) { pts.push(ck); target.push(vnNow(ck)); }
+        if (taken.has(ck) || !(ck.lambda[0] < 0)) continue;
+        if (holdsB) anchorOf(c.b, ck, 1);
+        else if (holdsA) anchorOf(c.a, ck, -1);
+        else { pts.push(ck); target.push(vnNow(ck)); }
       }
       if (pts.length) ms.push(rows(c.a, c.b, pts, target, false));
     }
     // The pass's manifolds per body (mass splitting), world inverse inertia at the start of the step (the Jacobians' pose).
     const split = new Int32Array(n);
     for (const m of ms) { split[m.b]!++; if (m.a !== GROUND) split[m.a]!++; }
-    const invI: Float64Array[] = [];
+    const invI: Float64Array[] = [], invS: Float64Array[] = [];
     for (let i = 0; i < n; i++) {
       if (!split[i]) continue;
-      const b = bodies[i]!, I = new Float64Array(9), q = q0[i]!;
+      const b = bodies[i]!, I = new Float64Array(9), S = new Float64Array(9), q = q0[i]!;
       const ax = [rotate(q, [1, 0, 0]), rotate(q, [0, 1, 0]), rotate(q, [0, 0, 1])];
-      for (let r = 0; r < 3; r++) for (let c = 0; c < 3; c++) I[3 * r + c] = ax[0]![r]! * ax[0]![c]! / b.inertia[0] + ax[1]![r]! * ax[1]![c]! / b.inertia[1] + ax[2]![r]! * ax[2]![c]! / b.inertia[2];
+      for (let r = 0; r < 3; r++) for (let c = 0; c < 3; c++) {
+        I[3 * r + c] = ax[0]![r]! * ax[0]![c]! / b.inertia[0] + ax[1]![r]! * ax[1]![c]! / b.inertia[1] + ax[2]![r]! * ax[2]![c]! / b.inertia[2];
+        S[3 * r + c] = ax[0]![r]! * ax[0]![c]! / Math.sqrt(b.inertia[0]) + ax[1]![r]! * ax[1]![c]! / Math.sqrt(b.inertia[1]) + ax[2]![r]! * ax[2]![c]! / Math.sqrt(b.inertia[2]);
+      }
       invI[i] = I;
+      invS[i] = S;
     }
-    // Velocities u = (v, w) per body.
-    const u = new Float64Array(6 * n);
-    for (let i = 0; i < n; i++) if (split[i]) { u.set(bodies[i]!.linVel, 6 * i); u.set(bodies[i]!.angVel, 6 * i + 3); }
-    // Body i's velocity change per unit impulse along row J (6), with its mass and inertia divided by s: s M^-1 J.
-    const resp = (i: number, J: ArrayLike<number>, s: number, out: Float64Array) => {
-      const im = s / bodies[i]!.mass, I = invI[i]!;
-      for (let k = 0; k < 3; k++) out[k] = J[k]! * im;
-      for (let r = 0; r < 3; r++) out[3 + r] = s * (I[3 * r]! * J[3]! + I[3 * r + 1]! * J[4]! + I[3 * r + 2]! * J[5]!);
+    // M^-1/2 x (6) for body i, into out.
+    const halfInv = (i: number, x: ArrayLike<number>, out: Float64Array) => {
+      const sm = 1 / Math.sqrt(bodies[i]!.mass), S = invS[i]!;
+      for (let k = 0; k < 3; k++) out[k] = x[k]! * sm;
+      for (let r = 0; r < 3; r++) out[3 + r] = S[3 * r]! * x[3]! + S[3 * r + 1]! * x[4]! + S[3 * r + 2]! * x[5]!;
     };
     const dot6 = (x: ArrayLike<number>, y: ArrayLike<number>) => {
       let s = 0;
       for (let k = 0; k < 6; k++) s += x[k]! * y[k]!;
       return s;
     };
+    // An anchored body's held directions: an orthonormal basis, in M^1/2 coordinates, of its anchor rows (Gram-Schmidt,
+    // a row within ANCHOR_TOL of the others' span adding none).
+    const basis = new Map<number, Float64Array[]>();
+    const x6 = new Float64Array(6);
+    for (const [i, list] of anchorRows) {
+      if (!split[i]) continue;
+      const qs: Float64Array[] = [];
+      for (const { c, side } of list) {
+        halfInv(i, side === 1 ? c.jb : c.ja, x6);
+        const n0 = Math.hypot(...x6);
+        for (const q of qs) { const d = dot6(q, x6); for (let r = 0; r < 6; r++) x6[r] = x6[r]! - d * q[r]!; }
+        const nv = Math.hypot(...x6);
+        if (!(nv > ANCHOR_TOL * n0)) continue;
+        qs.push(x6.map((x) => x / nv));
+        if (qs.length === 6) break;
+      }
+      if (qs.length) basis.set(i, qs);
+    }
+    // Velocities u = (v, w) per body.
+    const u = new Float64Array(6 * n);
+    for (let i = 0; i < n; i++) if (split[i]) { u.set(bodies[i]!.linVel, 6 * i); u.set(bodies[i]!.angVel, 6 * i + 3); }
+    // Body i's velocity change per unit impulse along row J (6), with its mass and inertia divided by s: s M^-1 J,
+    // or for an anchored body s M^-1/2 (1 - Q Q^T) M^-1/2 J (its anchors hold it: see above).
+    const px = new Float64Array(6);
+    const resp = (i: number, J: ArrayLike<number>, s: number, out: Float64Array) => {
+      const qs = basis.get(i);
+      if (!qs) {
+        const im = s / bodies[i]!.mass, I = invI[i]!;
+        for (let k = 0; k < 3; k++) out[k] = J[k]! * im;
+        for (let r = 0; r < 3; r++) out[3 + r] = s * (I[3 * r]! * J[3]! + I[3 * r + 1]! * J[4]! + I[3 * r + 2]! * J[5]!);
+        return;
+      }
+      halfInv(i, J, px);
+      const n0 = Math.hypot(...px);
+      for (const q of qs) { let d = 0; for (let r = 0; r < 6; r++) d += q[r]! * px[r]!; for (let r = 0; r < 6; r++) px[r] = px[r]! - d * q[r]!; }
+      if (!(Math.hypot(...px) > ANCHOR_TOL * n0)) { out.fill(0); return; }
+      halfInv(i, px, out);
+      for (let r = 0; r < 6; r++) out[r] = out[r]! * s;
+    };
     const ra = new Float64Array(6), rb = new Float64Array(6), ja = new Float64Array(6), jb = new Float64Array(6);
+    // The linear impulse the pass's rows put on each body (for the anchors' share of the momentum).
+    const applied = new Float64Array(3 * n);
     for (let round = 0; round < rounds; round++) {
       for (const m of ms) {
         const A = m.a !== GROUND, K = m.pts.length;
@@ -1089,14 +1262,17 @@ export class AvbdWorld {
           });
           for (let r = 0; r < 6; r++) { ja[r] = ja[r]! / K; jb[r] = jb[r]! / K; }
           T /= K;
-          let d = (T - vn(ja, jb)) / inv(ja, jb);
+          const w = inv(ja, jb);
+          let d = w > 0 ? (T - vn(ja, jb)) / w : 0;
           if (d < 0) d = Math.max(d, -K * minP);
           kick(ja, jb, d);
           for (let k = 0; k < K; k++) { m.P[k] = m.P[k]! + d / K; m.dP[k] = m.dP[k]! + d / K; }
         }
         // One Gauss-Seidel sweep over the points, each point's total impulse kept >= 0.
         m.pts.forEach((c, k) => {
-          const P = Math.max(0, m.P[k]! + (m.target[k]! - vn(c.ja, c.jb)) / inv(c.ja, c.jb)), d = P - m.P[k]!;
+          const w = inv(c.ja, c.jb);
+          if (!(w > 0)) return;
+          const P = Math.max(0, m.P[k]! + (m.target[k]! - vn(c.ja, c.jb)) / w), d = P - m.P[k]!;
           m.P[k] = P;
           m.dP[k] = m.dP[k]! + d;
           kick(c.ja, c.jb, d);
@@ -1108,14 +1284,23 @@ export class AvbdWorld {
           const d = m.dP[k]!;
           resp(m.b, c.jb, 1, rb);
           for (let r = 0; r < 6; r++) u[6 * m.b + r] = u[6 * m.b + r]! + rb[r]! * d;
-          if (m.a !== GROUND) { resp(m.a, c.ja, 1, ra); for (let r = 0; r < 6; r++) u[6 * m.a + r] = u[6 * m.a + r]! + ra[r]! * d; }
+          for (let r = 0; r < 3; r++) applied[3 * m.b + r] = applied[3 * m.b + r]! + c.jb[r]! * d;
+          if (m.a !== GROUND) {
+            resp(m.a, c.ja, 1, ra);
+            for (let r = 0; r < 6; r++) u[6 * m.a + r] = u[6 * m.a + r]! + ra[r]! * d;
+            for (let r = 0; r < 3; r++) applied[3 * m.a + r] = applied[3 * m.a + r]! + c.ja[r]! * d;
+          }
         });
       }
     }
     for (let i = 0; i < n; i++) {
       if (!split[i]) continue;
       const b = bodies[i]!, m = b.mass;
-      for (let k = 0; k < 3; k++) st.momentum[k] = st.momentum[k]! + m * (u[6 * i + k]! - b.linVel[k]!);
+      for (let k = 0; k < 3; k++) {
+        const dp = m * (u[6 * i + k]! - b.linVel[k]!);
+        st.momentum[k] = st.momentum[k]! + dp;
+        if (basis.has(i)) st.anchorImpulse[k] = st.anchorImpulse[k]! + dp - applied[3 * i + k]!;
+      }
       b.linVel = [u[6 * i]!, u[6 * i + 1]!, u[6 * i + 2]!];
       b.angVel = [u[6 * i + 3]!, u[6 * i + 4]!, u[6 * i + 5]!];
     }
@@ -1442,6 +1627,9 @@ export function froudeParams(p: Partial<AvbdParams>, k: number): Partial<AvbdPar
   if (!(k > 0)) throw new Error(`froudeParams: k must be > 0: ${k}`);
   const q = { ...DEFAULT_AVBD, ...p };
   const out: Partial<AvbdParams> = { ...p, beta: q.beta * k, penaltyMin: q.penaltyMin * k, penaltyMax: q.penaltyMax * k, maxAngularSpeed: q.maxAngularSpeed * Math.sqrt(k) };
-  if (q.restitution) out.restitutionThreshold = (q.restitutionThreshold ?? RESTITUTION_DEFAULTS.restitutionThreshold) * Math.sqrt(k);
+  if (q.restitution) {
+    out.restitutionThreshold = (q.restitutionThreshold ?? RESTITUTION_DEFAULTS.restitutionThreshold) * Math.sqrt(k);
+    out.restitutionAnchorSpeed = (q.restitutionAnchorSpeed ?? RESTITUTION_DEFAULTS.restitutionAnchorSpeed) * Math.sqrt(k);
+  }
   return out;
 }

@@ -919,15 +919,16 @@ describe('bounce (restitution)', () => {
     expect(bounceScene({ ...plain, ground: null }, 0.6).ground).toBeNull();
   });
 
-  it('worldEngineSpec scales the threshold by 1/sqrt(scale) as froudeParams does, only while restitution is on', () => {
+  it('worldEngineSpec scales the threshold and anchor speed by 1/sqrt(scale) as froudeParams does, only while restitution is on', () => {
     // Off: the same spec as before Bounce existed (no restitution key appears).
     expect(parseSpec(worldEngineSpec('avbd-gpu', 0.25)).options).toEqual({ beta: DEFAULT_AVBD.beta * 4, penaltyMin: DEFAULT_AVBD.penaltyMin * 4, penaltyMax: DEFAULT_AVBD.penaltyMax * 4, maxAngularSpeed: DEFAULT_AVBD.maxAngularSpeed * 2 });
     expect(parseSpec(worldEngineSpec('avbd-gpu:restitution=false,restitutionThreshold=0.5', 0.25)).options).toMatchObject({ restitution: false, restitutionThreshold: 0.5 });
     // On: the default threshold or the spec's own, times sqrt(4).
     const on = parseSpec(worldEngineSpec('avbd-gpu:restitution=true', 0.25)).options;
-    expect(on).toMatchObject({ restitution: true, restitutionThreshold: RESTITUTION_DEFAULTS.restitutionThreshold * 2 });
+    expect(on).toMatchObject({ restitution: true, restitutionThreshold: RESTITUTION_DEFAULTS.restitutionThreshold * 2, restitutionAnchorSpeed: RESTITUTION_DEFAULTS.restitutionAnchorSpeed * 2 });
     expect(on).toEqual({ restitution: true, ...froudeParams({ restitution: true }, 4) });
     expect(parseSpec(worldEngineSpec('avbd-ref:restitution=true,restitutionThreshold=0.5', 0.25)).options).toMatchObject({ restitution: true, restitutionThreshold: 1 });
+    expect(parseSpec(worldEngineSpec('avbd-gpu:restitution=true,restitutionAnchorSpeed=0.1,restitutionAnchors=false', 0.25)).options).toMatchObject({ restitutionAnchorSpeed: 0.2, restitutionAnchors: false });
     expect(parseSpec(worldEngineSpec('avbd-gpu:restitution=true', 0.01)).options.restitutionThreshold).toBeCloseTo(10, 12);
     expect(worldEngineSpec('avbd-gpu:restitution=true', 1)).toBe('avbd-gpu:restitution=true');
   });

@@ -12,6 +12,8 @@ import { call, toSnap } from './harness.ts';
 
 export const G = 9.81, H = 1 / 60;
 export const ON: Partial<AvbdParams> = { restitution: true };
+/** The pass without anchors (AvbdParams.restitutionAnchors false): as before them, to the float. */
+export const OLD: Partial<AvbdParams> = { restitution: true, restitutionAnchors: false };
 export const rotZ = (a: number): [number, number, number, number] => [0, 0, -Math.sin(a / 2), Math.cos(a / 2)];
 export const cube = (pos: Vec3, o: { e?: number; linVel?: Vec3; rot?: [number, number, number, number]; density?: number; friction?: number } = {}): BodyDesc => ({
   shape: { kind: 'box', half: [0.5, 0.5, 0.5] }, pos, rot: o.rot ?? [0, 0, 0, 1], linVel: o.linVel ?? [0, 0, 0], angVel: [0, 0, 0], density: o.density ?? 1, friction: o.friction ?? 0.6, restitution: o.e ?? 0, tag: 0,
@@ -77,7 +79,7 @@ export async function gpuRun(scene: SceneDesc, steps: number, params: Partial<Av
   expect(r.diagnostics.colorOverflow).toBe(0);
   expect(r.diagnostics.pairsRequired).toBeLessThanOrEqual(r.diagnostics.pairsWritten);
   expect(r.diagnostics.pairsOverflowSteps).toBe(0); // on any step of the run
-  return { snaps: r.snaps.map(toSnap), stats: r.stats.map((x) => (x ? { ...x, momentum: [NaN, NaN, NaN] } : null)), live: r.live };
+  return { snaps: r.snaps.map(toSnap), stats: r.stats.map((x) => (x ? { ...x, momentum: [NaN, NaN, NaN], anchorImpulse: [NaN, NaN, NaN] } : null)), live: r.live };
 }
 
 /** The energy a run gains: the largest rise of the shadow energy over its start, relative to |E0| (or to `scale`), and the end over the start. */
