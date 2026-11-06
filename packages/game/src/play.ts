@@ -247,9 +247,14 @@ export interface KeystoneEnv {
   hud: HTMLElement;
   banner: HTMLElement;
   result: HTMLElement;
-  /** The levels N, P and the result card's Next walk through, and the one to start on. */
+  /** Every level the page can load (handle.load), N, P and the result card's Next walking through them, and the one to start on. */
   levels: readonly LevelDef[];
   start: number;
+  /**
+   * Each level's series (index-aligned with `levels`): N, P and Next stay inside the loaded level's series,
+   * so the last chamber level does not run on into the trials. Absent: one series.
+   */
+  series?: readonly number[];
   engine: EngineKind;
   feel: PaceFeel;
   /** Shows an error; play stops (handle.status is 'error'). */
@@ -313,6 +318,8 @@ const typing = (e: KeyboardEvent) => e.target instanceof HTMLElement && (e.targe
  */
 export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGameHandle()): Promise<GameHandle> {
   const { canvas, offscreen, device, renderer, source, levels, engine: kind, feel, fail } = env;
+  /** Whether level i + d exists and is in level i's series (N, P and Next walk only inside it). */
+  const step = (i: number, d: 1 | -1) => i + d >= 0 && i + d < levels.length && (env.series?.[i + d] ?? 0) === (env.series?.[i] ?? 0);
   const hooks = env.hooks ?? {};
   const levelIndex = (id: string) => {
     const i = levels.findIndex((l) => l.id.toUpperCase() === id.toUpperCase());
@@ -708,7 +715,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
       return;
     }
     const sheet = score && lot ? goalsResultHtml(handle.goals, handle.grade, lot.sheet.grades !== undefined) : '';
-    env.result.innerHTML = resultHtml(c.def, score, driver.session.strokes, levelIdx + 1 < levels.length, Boolean(env.onSave), sheet, true);
+    env.result.innerHTML = resultHtml(c.def, score, driver.session.strokes, step(levelIdx, 1), Boolean(env.onSave), sheet, true);
     env.result.classList.add('show');
     document.body.classList.add('ended');
     handle.resultShownAt ??= driver.engine.stepIndex;
@@ -1010,7 +1017,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     if (act === 'retry') void handle.retry();
     if (act === 'undo') void handle.undo();
     if (act === 'save') env.onSave?.();
-    if (act === 'next' && levelIdx + 1 < levels.length) void load(levelIdx + 1).catch(fail);
+    if (act === 'next' && step(levelIdx, 1)) void load(levelIdx + 1).catch(fail);
     // A duel: Rematch starts the other side first (the other of its two levels); Same start replays this one.
     if (act === 'rematch' && duel) void load(1 - levelIdx).catch(fail);
     if (act === 'again' && duel) void handle.retry();
@@ -1030,8 +1037,8 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     if (k === 'r' && !e.ctrlKey && !e.metaKey) void (duel?.result.over ? load(1 - levelIdx).catch(fail) : handle.retry());
     // U, or the platform's undo chord (Ctrl+Z, Cmd+Z on a Mac); not in a duel, whose turns are the players'.
     if (!duel && ((k === 'u' && !e.ctrlKey && !e.metaKey) || (k === 'z' && (e.ctrlKey || e.metaKey) && !e.shiftKey))) { e.preventDefault(); void handle.undo(); }
-    if (!duel && k === 'n' && levelIdx + 1 < levels.length) void load(levelIdx + 1).catch(fail);
-    if (!duel && k === 'p' && levelIdx > 0) void load(levelIdx - 1).catch(fail);
+    if (!duel && k === 'n' && step(levelIdx, 1)) void load(levelIdx + 1).catch(fail);
+    if (!duel && k === 'p' && step(levelIdx, -1)) void load(levelIdx - 1).catch(fail);
     if (k === 'm') setMuted(!muted);
   });
   addEventListener('keyup', (e) => { if (e.key === ' ') fastHeld = false; });
