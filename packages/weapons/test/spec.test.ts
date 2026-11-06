@@ -3,8 +3,8 @@
 // machine-independent split patterns.
 import { describe, expect, it } from 'vitest';
 import {
-  BUILTIN_WEAPONS, checkWeapon, cosSin, DEFAULT_GRENADE, GRENADE_WEAPON, grenadeAsSpec, isWeaponSpec, MAX_WEAPON_BODIES, parseWeapon, scaleWeapon,
-  splitDirections, validateWeapon, type WeaponIssueCode, type WeaponSpec, WeaponSpecError, weaponBudget, writeWeapon,
+  BUILTIN_WEAPONS, chargeProblems, checkWeapon, cosSin, DEFAULT_GRENADE, GRENADE_WEAPON, grenadeAsSpec, isWeaponSpec, MAX_WEAPON_BODIES, parseWeapon, scaleWeapon,
+  splitDirections, thrownProblems, validateWeapon, type WeaponIssueCode, type WeaponSpec, WeaponSpecError, weaponBudget, writeWeapon,
 } from '../src/index.ts';
 
 const BALL = (r: number) => ({ kind: 'sphere' as const, radius: r });
@@ -82,6 +82,11 @@ describe('WeaponSpec format', () => {
     { code: 'trigger', path: 'rules.0.when.then', bad: (s) => ({ ...s, rules: [{ ...s.rules[0]!, when: { then: [{ after: 1 }] } }] }) },
     { code: 'trigger', path: 'rules.0.when.any.0.any.0.any.0.any.0', bad: (s) => ({ ...s, rules: [{ ...s.rules[0]!, when: { any: [{ any: [{ any: [{ any: [{ after: 1 }] }] }] }] } }] }) },
     { code: 'action', path: 'rules.0.do.0', bad: (s) => ({ ...s, rules: [{ ...s.rules[0]!, do: [{ explode: true }] }] }) },
+    { code: 'range', path: 'rules.0.when.any.1.moved', bad: (s) => ({ ...s, rules: [{ ...s.rules[0]!, when: { any: [{ apex: true }, { moved: 0 }] } }] }) },
+    { code: 'key', path: 'rules.0.when.any.1.arm', bad: (s) => ({ ...s, rules: [{ ...s.rules[0]!, when: { any: [{ apex: true }, { moved: 1, arm: 1 }] } }] }) },
+    { code: 'range', path: 'rules.0.when.any.1.speed', bad: (s) => ({ ...s, rules: [{ ...s.rules[0]!, when: { any: [{ apex: true }, { moved: 1, speed: -1 }] } }] }) },
+    { code: 'action', path: 'children.star.rules.1.do.0.removeTarget', bad: (s) => { const t = clone(s); t.children!.star!.rules[1]!.do = [{ removeTarget: 1 } as never]; return t; } },
+    { code: 'order', path: 'children.star.rules.1.do.1', bad: (s) => { const t = clone(s); t.children!.star!.rules[1]!.do = [{ removeTarget: true }, { blast: { radius: 1, impulse: 1 } }]; return t; } },
     { code: 'order', path: 'children.star.children.spark.rules.0.do.1', bad: (s) => { const t = clone(s); t.children!.star!.children!.spark!.rules[0]!.do.reverse(); return t; } },
     { code: 'child', path: 'rules.0.do.0.split.child', bad: (s) => ({ ...s, rules: [{ ...s.rules[0]!, do: [{ split: { into: 2, child: 'comet' } }] }] }) },
     { code: 'depth', path: 'children.star.children.spark.children', bad: (s) => { const t = clone(s); t.children!.star!.children!.spark!.children = { dust: { shell: { shape: BALL(0.01), density: 1 }, rules: [] } }; return t; } },
@@ -133,7 +138,7 @@ describe('WeaponSpec budget', () => {
     expect(b.depth).toBe(3);
     expect(b.munitions.map((m) => [m.path, m.count])).toEqual([['', 1], ['star', 8], ['star.spark', 32]]);
     expect(b.blasts.map((x) => [x.path, x.count, x.blast.radius])).toEqual([['star.rules.0.do.0', 8, 1.5], ['star.spark.rules.0.do.0', 32, 0.5]]);
-    expect(weaponBudget(GRENADE_WEAPON)).toEqual({ bodies: 1, depth: 1, munitions: [{ path: '', shell: GRENADE_WEAPON.shell, count: 1 }], blasts: [{ path: 'rules.0.do.0', blast: DEFAULT_GRENADE.blast, count: 1 }] });
+    expect(weaponBudget(GRENADE_WEAPON)).toEqual({ bodies: 1, depth: 1, munitions: [{ path: '', shell: GRENADE_WEAPON.shell, count: 1 }], blasts: [{ path: 'rules.0.do.0', blast: DEFAULT_GRENADE.blast, count: 1 }], targets: 0 });
   });
 
   it('two splits of the same child add up (an upper bound), and the cap is MAX_WEAPON_BODIES', () => {
@@ -156,6 +161,41 @@ describe('WeaponSpec units', () => {
     expect([g.blast.radius, g.blast.maxDv, g.blast.maxSpeed]).toEqual([10, 75, 240]);
     // Powers of two scale exactly, so scaling back is the identity.
     expect(scaleWeapon(scaleWeapon(FIREWORK, { length: 4, speed: 0.5 }), { length: 0.25, speed: 2 })).toEqual(FIREWORK);
+  });
+});
+
+describe('charges: moved and removeTarget (docs/design/charges.md)', () => {
+  /** A demolition charge: armed, it waits 0.5 s or until its host moves 2 cm or 0.3 m/s, then blasts and takes the host out. */
+  const CHARGE: WeaponSpec = {
+    version: 1, name: 'cutter',
+    shell: { shape: { kind: 'box', half: [0.1, 0.05, 0.1] }, density: 2, speed: [0, 0] },
+    rules: [{ when: { any: [{ after: 0.5 }, { moved: 0.02, speed: 0.3 }] }, do: [{ blast: { radius: 2, impulse: 4 } }, { removeTarget: true }] }],
+  };
+
+  it('round trips canonically; removeTarget spends the munition (no never-spent warning)', () => {
+    expect(validateWeapon(CHARGE).issues).toEqual([]);
+    expect(parseWeapon(writeWeapon(CHARGE))).toEqual(CHARGE);
+    expect(writeWeapon(JSON.parse(JSON.stringify({ ...CHARGE, rules: [{ do: CHARGE.rules[0]!.do, when: { any: [{ after: 0.5 }, { speed: 0.3, moved: 0.02 }] } }] })) as WeaponSpec)).toBe(writeWeapon(CHARGE));
+  });
+
+  it('scaleWeapon scales moved as a length and its speed as a speed', () => {
+    const s = scaleWeapon(CHARGE, { length: 2, speed: 4 });
+    expect(s.rules[0]!.when).toEqual({ any: [{ after: 0.5 }, { moved: 0.04, speed: 1.2 }] });
+    expect(scaleWeapon({ ...CHARGE, rules: [{ when: { moved: 0.5 }, do: [{ remove: true }] }] }, { length: 2 }).rules[0]!.when).toEqual({ moved: 1 });
+  });
+
+  it('the budget counts removeTarget actions; thrown weapons cannot have one, charges cannot near, apex or split', () => {
+    expect(weaponBudget(CHARGE).targets).toBe(1);
+    expect(weaponBudget(FIREWORK).targets).toBe(0);
+    expect(chargeProblems(CHARGE)).toEqual([]);
+    expect(thrownProblems(CHARGE).map((i) => [i.code, i.path])).toEqual([['target', 'rules.0.do.1']]);
+    // A star with a removeTarget, deep in a thrown weapon: refused there too.
+    const t = clone(FIREWORK);
+    t.children!.star!.rules[1]!.do = [{ removeTarget: true }];
+    expect(thrownProblems(t).map((i) => i.path)).toEqual(['star.rules.1.do.0']);
+    expect(chargeProblems(FIREWORK).map((i) => [i.code, i.path])).toEqual([['charge', 'children'], ['charge', 'rules.0.when'], ['charge', 'rules.0.do.0']]);
+    expect(chargeProblems(GRENADE_WEAPON).map((i) => i.path)).toEqual(['rules.0.when']);
+    for (const w of Object.values(BUILTIN_WEAPONS)) expect(thrownProblems(w)).toEqual([]);
   });
 });
 
