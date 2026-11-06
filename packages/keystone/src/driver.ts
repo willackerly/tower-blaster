@@ -1,7 +1,7 @@
 // Runs a Session against any PhysicsEngine: step, observe, feed the rules,
 // push the spawns they produce. The interactive game and the headless tools
 // share this loop, so a recorded session replays through the same code.
-import { type BodyDesc, type EngineCheckpoint, type InputEvent, type PhysicsEngine, type Snapshot, type SpawnEvent, spawnedBodies } from '@tb/engine-api';
+import { type BodyDesc, type EngineCheckpoint, type InputEvent, type PhysicsEngine, type RemoveEvent, type Snapshot, type SpawnEvent, spawnedBodies } from '@tb/engine-api';
 import { Arsenal } from './arsenal.ts';
 import { forkDeep } from './fork.ts';
 import { type IceCrack, IceBreaker } from './ice.ts';
@@ -136,7 +136,7 @@ export interface DriverCheckpoint {
 interface DriverState {
   session: Session; snapshot: Snapshot; snapshotStep: number; observed: Observation | null; pushed: InputEvent[];
   observer: CpuObserver; spawnSteps: number[]; spawns: InputEvent[]; descs: BodyDesc[]; arsenal: Arsenal;
-  blastsDue: Extract<Feedback, { t: 'blast' }>[]; ice: IceBreaker;
+  blastsDue: Extract<Feedback, { t: 'blast' }>[]; ice: IceBreaker; removals: Map<number, number>;
 }
 
 export class Driver {
@@ -170,6 +170,18 @@ export class Driver {
   private blastsDue: Extract<Feedback, { t: 'blast' }>[] = [];
   /** The level's ice: damage, cracks and shatters (ice.ts). */
   private ice!: IceBreaker;
+  /** Every removal pushed (pulls, shatters, weapons, charges): body id to the step it is due. A charge riding one is dropped. */
+  private removals = new Map<number, number>();
+  /** Whether body id is removed by engine step `step` (a removal of it pushed, due by then): arsenal.ts Gone. */
+  private isGone(id: number, step: number): boolean {
+    const at = this.removals.get(id);
+    return at !== undefined && at <= step;
+  }
+
+  /** isGone bound for the arsenal (made per call: a driver holds no functions, so forkDeep can copy it). */
+  private get gone(): (id: number, step: number) => boolean {
+    return (id, step) => this.isGone(id, step);
+  }
 
   /**
    * Wall time of the last reset(), ms, by the clock it was given (ResetOptions.now; 0 without): the
@@ -206,7 +218,10 @@ export class Driver {
     this.arsenal = new Arsenal(this.level, this.engine.info.integrator?.substeps ?? 1);
     this.blastsDue = [];
     this.ice = new IceBreaker(this.level);
+    this.removals = new Map();
     this.observed = null;
+    // Charges armed at start (relays): their clocks start here; anything due at once goes in before the first step.
+    this.pushCharges(this.arsenal.armStart(this.snapshot, this.snapshotStep, this.gone));
   }
 
   /**
@@ -223,7 +238,7 @@ export class Driver {
     const own = (): DriverState => ({
       session: this.session, snapshot: this.snapshot, snapshotStep: this.snapshotStep, observed: this.observed, pushed: this.pushed,
       observer: this.observer, spawnSteps: this.spawnSteps, spawns: this.spawns, descs: this.descs, arsenal: this.arsenal, blastsDue: this.blastsDue,
-      ice: this.ice,
+      ice: this.ice, removals: this.removals,
     });
     // The compiled level and its bodies are immutable inputs: shared, not copied.
     const shared = [this.level, ...this.level.scene.bodies];
@@ -257,6 +272,7 @@ export class Driver {
         this.arsenal = c.arsenal;
         this.blastsDue = c.blastsDue;
         this.ice = c.ice;
+        this.removals = c.removals;
         this.ahead = ahead ? this.read() : null;
       },
       dispose: () => { saved = null; engine.dispose(); },
@@ -301,9 +317,15 @@ export class Driver {
     const now = this.session.phase === 'running' ? this.observer.peek(ruled, this.snapshotStep, this.session.watchIdx) : undefined;
     const { spawn, event, feedback } = this.session.fire(shot, step, body, now);
     this.observer.setBaseline(ruled, step);
+    if (shot.ammo === 'plunger') {
+      // Nothing spawned: the charges it names are armed, and what is due at once goes in now.
+      this.pushCharges(this.arsenal.plunger(shot, step, this.snapshot, this.snapshotStep, this.gone));
+      return feedback;
+    }
     if (!spawn) {
       // A pull: one removal, nothing spawned, so later ammo is numbered as if it were not there.
-      this.engine.push([event]);
+      this.removals.set((event as RemoveEvent).id, step);
+      this.engine.push([event!]);
       return feedback;
     }
     this.spawnSteps.push(step);
@@ -324,7 +346,23 @@ export class Driver {
    */
   push(events: InputEvent[]): void {
     for (const e of events) if (e.step <= this.snapshotStep) throw new Error(`Driver.push: an event for step ${e.step} is not after the observed step ${this.snapshotStep}; stamp it snapshotStep + 1 or later`);
-    for (const e of events) if (e.kind === 'spawn') this.spawnSteps.push(e.step);
+    this.pushNow(events);
+  }
+
+  /** Pushes the arsenal's events (pushNow), telling the session of each structure body a charge takes out (a thrown weapon removes only its own munitions, ids past the structure's). */
+  private pushCharges(events: InputEvent[]): void {
+    for (const e of events) if (e.kind === 'remove' && e.id < this.level.meta.n) this.session.chargeCut(e.id);
+    this.pushNow(events);
+    this.blastsDue.push(...blasts(events));
+  }
+
+  /** Pushes events stamped the engine's stepIndex or later (a shot's own, a plunger's charges due at once), noting spawns and removals. */
+  private pushNow(events: InputEvent[]): void {
+    if (!events.length) return;
+    for (const e of events) {
+      if (e.kind === 'spawn') this.spawnSteps.push(e.step);
+      if (e.kind === 'remove') this.removals.set(e.id, e.step);
+    }
     this.noteSpawns(events);
     this.pushed.push(...events);
     this.engine.push(events);
@@ -332,11 +370,9 @@ export class Driver {
 
   /** Pushes the fired weapons' input from the state just observed (due after it); whether one is still to go off. */
   private arm(feedback: Feedback[]): boolean {
-    const input = this.arsenal.observe(this.snapshot, this.snapshotStep, this.descs, (sp) => this.idOf(sp));
-    if (input.length) {
-      this.push(input);
-      this.blastsDue.push(...blasts(input));
-    }
+    const input = this.arsenal.observe(this.snapshot, this.snapshotStep, this.descs, (sp) => this.idOf(sp), this.gone);
+    for (const e of input) if (e.step <= this.snapshotStep) throw new Error(`Driver: the arsenal stamped an event ${e.step}, not after the observed step ${this.snapshotStep}`);
+    this.pushCharges(input);
     // A blast shows in the first state after the step it is due at (the engine applies it stepping from there).
     const shown = this.blastsDue.filter((b) => b.step < this.snapshotStep);
     if (shown.length) {

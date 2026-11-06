@@ -19,7 +19,7 @@
 //  7. refresh the static proxy shell around dynamic bodies (with hysteresis);
 //  8. apply the batch atomically and step the host.
 import {
-  bodiesAt, type BodyDesc, type CellChange, type EngineInfo, emptySnapshot, type HostState, type InputEvent, type SpawnEvent, massOf, MODE_DYNAMIC, MODE_OFF,
+  bodiesAt, type BodyDesc, type CellChange, type EngineInfo, emptySnapshot, type HostState, type InputEvent, isPinned, type SpawnEvent, massOf, MODE_DYNAMIC, MODE_OFF,
   MODE_STATIC, type ModeChange, type PhysicsEngine, type PhysicsHost, type Quat, type SceneDesc, type Snapshot, type StepReport, type Vec3,
 } from '@tb/engine-api';
 import { boundingRadius, shapeDepth, signedDepth, signedGroundDepth } from '@tb/geom';
@@ -38,7 +38,13 @@ import { TIER } from '@tb/schema';
 function spawnsOnly(events: readonly InputEvent[]): SpawnEvent[] {
   const other = events.find((e) => e.kind !== 'spawn');
   if (other) throw new Error(`TieredEngine: ${other.kind} inputs are not supported yet`);
+  noPins(events.map((e) => (e as SpawnEvent).body));
   return events as SpawnEvent[];
+}
+
+/** Pinned bodies (engine-api pinned.ts) are refused for now: the tiers would have to keep them out of the lattice and host them as static bodies. */
+function noPins(bodies: readonly BodyDesc[]): void {
+  if (bodies.some(isPinned)) throw new Error('TieredEngine: pinned bodies are not supported yet');
 }
 
 export const TIER_UNSPAWNED = 0;
@@ -275,6 +281,7 @@ export class TieredEngine implements PhysicsEngine {
 
   async init(scene: SceneDesc): Promise<void> {
     spawnsOnly(scene.inputs); // throws before anything changes
+    noPins(scene.bodies);
     this.scene = scene;
     this.table = bodiesAt(scene, Infinity);
     // Placeholders for pushed bodies: never switched on until push() describes them.

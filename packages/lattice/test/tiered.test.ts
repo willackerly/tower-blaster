@@ -34,6 +34,14 @@ describe('TieredEngine on Rapier', () => {
     await expect(new TieredEngine(new RapierHost()).init({ ...scene, inputs: [{ step: 1, kind: 'remove', id: 0 }] })).rejects.toThrow(/remove inputs/);
   });
 
+  it('refuses pinned bodies (engine-api pinned.ts), at push and at init', async () => {
+    const scene = buildScenario('S1', { F: 1, H: 2 }, 1), e = new TieredEngine(new RapierHost());
+    await e.init(scene);
+    expect(() => e.push([{ step: 1, kind: 'spawn', body: { ...scene.bodies[0]!, pinned: true } }])).toThrow(/TieredEngine: pinned bodies are not supported yet/);
+    e.dispose();
+    await expect(new TieredEngine(new RapierHost()).init({ ...scene, bodies: [{ ...scene.bodies[0]!, pinned: true }, ...scene.bodies.slice(1)] })).rejects.toThrow(/pinned bodies/);
+  });
+
   it('an intact tower costs nothing: no host bodies, no proxies, exact poses', async () => {
     const scene = buildScenario('S1', { F: 4, H: 12 }, 1);
     const { e, problems } = await run(scene, 60, 10);

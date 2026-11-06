@@ -153,7 +153,8 @@ export function previewWeapon(spec: WeaponSpec, launch: PreviewLaunch, world: Gr
           const v = blastVelocity(b, centre, nObs + k, m.p, m.v, m.mass, blastArea(m.shape));
           if (v) { m.v = v; m.still = false; }
         });
-      } else {
+      } else if (e.kind === 'remove') {
+        // A weapon's runtime emits spawns, blasts and removals only; it never schedules a field event.
         const m = byId(e.id);
         if (m && !m.gone) {
           m.gone = true;
