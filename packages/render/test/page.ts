@@ -1616,6 +1616,70 @@ export async function ballLight() {
   return { near, far, ground: [groundOn / gn, groundOff / gn], gn, balls: src.balls, error: err?.message ?? null };
 }
 
+/**
+ * The real look's steel ball (realism step 7): a 1 m ball 2.5 m over the
+ * floor seen from 4.5 m, in each case's real options, painted or matte
+ * (FX) or as the look's own ball. Per case: the frame's hash over the ball,
+ * its brightest pixel (the sun's glint) and where the specular geometry puts
+ * it (the point whose normal halves the sun and the eye, by fixed point),
+ * the count of ball pixels at 250 or more in green, and the mean sRGB of the
+ * ball's upper and lower halves.
+ */
+export async function steelBallChecks(cases: Array<{ real: Partial<RealOptions>; paint?: boolean; matte?: boolean }>) {
+  const { device } = await sharedDevice({ timestamps: false });
+  device.pushErrorScope('validation');
+  const C: V3 = [0, 2.5, 0], rad = 1;
+  const descs = [ball(C, rad)];
+  const out = [];
+  for (const c of cases) {
+    const src = new SnapshotSource(device);
+    src.reset(descs);
+    src.update(snapshotOf(descs), descs);
+    const rend = new Renderer(device, { size: [W, H] });
+    rend.look = { ...realLook({ stoneDetail: 0, groundDetail: 0, hills: 0, autoExposure: 0, ...c.real }), bloomMix: 0, vignette: 0 };
+    rend.setSource(src);
+    rend.setShadowBounds([0, 2, 0], 6);
+    if (c.paint || c.matte) rend.setFx(0, { tint: [0.6, 0.05, 0.05], paint: true, ...(c.matte ? { matte: true } : {}) });
+    const f: FrameParams = { ...camera([0, 2.8, 4.5], C), groundY: 0, time: 1, dt: 0, alpha: 1 };
+    const ids = (await rend.renderIds(f)).ids;
+    await rend.render(f);
+    const px = (await rend.render(f, true, true))!.pixels!;
+    rend.destroy();
+    let h = 2166136261, best = -1, bx = 0, by = 0, hot = 0;
+    const top = [0, 0, 0, 0], bottom = [0, 0, 0, 0];
+    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+      if (ids[y * W + x] !== 1) continue;
+      const o = y * px.bytesPerRow + 4 * x;
+      const rgb = [px.data[o]!, px.data[o + 1]!, px.data[o + 2]!];
+      for (const b of rgb) h = Math.imul(h ^ b, 16777619) >>> 0;
+      const l = 0.2126 * rgb[0]! + 0.7152 * rgb[1]! + 0.0722 * rgb[2]!;
+      if (l > best) { best = l; bx = x; by = y; }
+      if (rgb[1]! >= 250) hot++;
+      const { o: e, d } = rayAt(f, x, y);
+      // Where the ray meets the ball: above or below its centre.
+      const oc = e.map((v, k) => v - C[k]!), bq = oc[0]! * d[0] + oc[1]! * d[1] + oc[2]! * d[2], cq = oc[0]! ** 2 + oc[1]! ** 2 + oc[2]! ** 2 - rad * rad;
+      const t = -bq - Math.sqrt(Math.max(bq * bq - cq, 0));
+      const acc = e[1] + d[1] * t > C[1] ? top : bottom;
+      rgb.forEach((v, k) => { acc[k]! += v; });
+      acc[3]! += 1;
+    }
+    // The glint: n = normalize(sun + view(P)), P = C + rad n.
+    const L = sunOf(rend.look);
+    let n = normalize([L[0], L[1], L[2] + 1] as V3);
+    for (let i = 0; i < 30; i++) {
+      const P = C.map((v, k) => v + rad * n[k]!), V = normalize(f.eye.map((v, k) => v - P[k]!) as V3);
+      n = normalize([L[0] + V[0], L[1] + V[1], L[2] + V[2]]);
+    }
+    const P = C.map((v, k) => v + rad * n[k]!) as V3;
+    const q = transform(f.viewProj, P);
+    const want = [((q[0] / q[3] + 1) / 2) * W - 0.5, ((1 - q[1] / q[3]) / 2) * H - 0.5];
+    const mean = (a: number[]) => [a[0]! / a[3]!, a[1]! / a[3]!, a[2]! / a[3]!];
+    out.push({ hash: h, glint: [bx, by], want, peak: best, hot, top: mean(top), bottom: mean(bottom) });
+  }
+  const err = await device.popErrorScope();
+  return { cases: out, error: err?.message ?? null };
+}
+
 /** Flash lights against the CPU slot rule: the strongest bid per slot wins, then decays; a weaker later bid does not replace it. */
 export async function flashLights() {
   const { device } = await sharedDevice({ timestamps: false });

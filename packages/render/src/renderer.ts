@@ -176,6 +176,7 @@ export function lookUniforms(l: LookParams, metres = 1): Record<string, number |
     hills: l.hills ? [(l.hills.height * Math.PI) / 180, (l.hills.distance * 1000) / metres, l.hills.cover ?? 0, l.hills.ridges ?? 1] : [0, 1000, 0, 1],
     debris: [l.debris?.size ?? REAL_DEFAULTS.dustSize, l.debris?.opacity ?? REAL_DEFAULTS.dustOpacity, CHIP_SIZE, l.debris?.skirt ?? 0],
     dustShape: [l.debris?.erode ?? 0, l.debris?.thin ?? 0, 0, 0],
+    ballSteel: [l.atmosphere ? l.ballMetal?.metal ?? 0 : 0, (l.ballMetal?.rough ?? 0.2) ** 2, 0, 0],
     rocks: [l.ground?.rocks ?? 0, (l.ground?.rockSize ?? REAL_DEFAULTS.rockSize) / metres, (ROCK_CELL * (l.ground?.rockSize ?? REAL_DEFAULTS.rockSize)) / metres, ROCK_CLUMP / metres],
     blockAlbedo: [...[0, 1, 2].map((k) => l.ramp.reduce((acc, c) => acc + srgbToLinear(c[k]!), 0) / l.ramp.length), 0],
     ...Object.fromEntries(l.ramp.map((c, i) => [`ramp${i}`, [...linearToOklab(lin(c) as V3), 0]])),
