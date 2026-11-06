@@ -4,6 +4,7 @@
 import { LAUNCH_MODES, type LaunchMode } from './aim.ts';
 import { type FrameMode, frameMode } from './frame-rate.ts';
 import { BALL_STYLES, type BallStyle } from './scene.ts';
+import { EFFECT_STYLES, type EffectStyle } from '@tb/render';
 
 export const SLOWMO_SCALE = 0.3;
 export const SLOWMO_IN = 0.12; // s to ramp down
@@ -69,6 +70,22 @@ export interface PaceFeel {
    * block to keep up (Will, 2026-11-06), so which is which reads without the colours. On by default; keystone.marks=0 off.
    */
   marks: boolean;
+  /**
+   * How impacts are drawn (@tb/render EffectStyle, PT2): 'damage' (the default since the agent playtest of
+   * 2026-11-06) makes sparks, flashes and heat follow what a shot moved, so a shot that moves nothing gets a
+   * puff, and draws felled crowns and cracked heritage in their colours rather than glowing white; 'classic'
+   * (keystone.fx=classic) as before.
+   */
+  fx: EffectStyle;
+  /** Spent ammo (PT19): a fired ball, ram or dud fades to a dull stone grey once its shot settles. On by default; keystone.spent=0 off. */
+  spent: boolean;
+}
+
+/** keystone.fx: damage or classic (absent: damage). */
+export function effectStyle(text: string | null): EffectStyle {
+  if (text === null) return 'damage';
+  if (!(EFFECT_STYLES as readonly string[]).includes(text)) throw new Error(`keystone.fx must be ${EFFECT_STYLES.join(' or ')}: ${text}`);
+  return text as EffectStyle;
 }
 
 /** keystone.launch: high or level (absent: high). */
@@ -90,7 +107,7 @@ export const MAX_UNDO_MB = 65536;
 /** keystone.undo when the URL sets none: a dozen shots of a 10k level. */
 export const DEFAULT_UNDO_MB = 1024;
 
-/** The URL's keystone.hitstop, keystone.slowmo, keystone.tailskip, keystone.follow, keystone.shake, keystone.rapid, keystone.turnview, keystone.arcs, keystone.marks (0 or 1 each), keystone.budget (ms, 0 to 1000), keystone.undo (MB, 0 to MAX_UNDO_MB), keystone.frames (all, half, auto), keystone.launch (high, level) and keystone.balls (painted, plain); any other value is refused. */
+/** The URL's keystone.hitstop, keystone.slowmo, keystone.tailskip, keystone.follow, keystone.shake, keystone.rapid, keystone.turnview, keystone.arcs, keystone.marks (0 or 1 each), keystone.budget (ms, 0 to 1000), keystone.undo (MB, 0 to MAX_UNDO_MB), keystone.frames (all, half, auto), keystone.launch (high, level), keystone.balls (painted, plain), keystone.fx (damage, classic) and keystone.spent (0 or 1); any other value is refused. */
 export function paceFeel(q: URLSearchParams): PaceFeel {
   const flag = (k: string, dflt: boolean) => {
     const v = q.get(k);
@@ -101,7 +118,7 @@ export function paceFeel(q: URLSearchParams): PaceFeel {
   if (!(budgetMs >= 0 && budgetMs <= 1000)) throw new Error(`keystone.budget must be from 0 to 1000 ms (0: no valve): ${b}`);
   const u = q.get('keystone.undo'), undoMB = u === null ? DEFAULT_UNDO_MB : u.trim() === '' ? NaN : Number(u);
   if (!(undoMB >= 0 && undoMB <= MAX_UNDO_MB)) throw new Error(`keystone.undo must be from 0 to ${MAX_UNDO_MB} MB (0: undo replays the shots): ${u}`);
-  return { hitStop: flag('keystone.hitstop', false), slowMo: flag('keystone.slowmo', false), budgetMs, tailSkip: flag('keystone.tailskip', true), follow: flag('keystone.follow', false), shake: flag('keystone.shake', false), frames: frameMode(q.get('keystone.frames')), rapid: flag('keystone.rapid', true), turnView: flag('keystone.turnview', true), arcs: flag('keystone.arcs', true), undoMB, launch: launchMode(q.get('keystone.launch')), balls: ballStyle(q.get('keystone.balls')), marks: flag('keystone.marks', true) };
+  return { hitStop: flag('keystone.hitstop', false), slowMo: flag('keystone.slowmo', false), budgetMs, tailSkip: flag('keystone.tailskip', true), follow: flag('keystone.follow', false), shake: flag('keystone.shake', false), frames: frameMode(q.get('keystone.frames')), rapid: flag('keystone.rapid', true), turnView: flag('keystone.turnview', true), arcs: flag('keystone.arcs', true), undoMB, launch: launchMode(q.get('keystone.launch')), balls: ballStyle(q.get('keystone.balls')), marks: flag('keystone.marks', true), fx: effectStyle(q.get('keystone.fx')), spent: flag('keystone.spent', true) };
 }
 
 /** Throws unless f's budget is a number of ms from 0 to 1000 (the Scene panel's field can hold anything). */
@@ -111,6 +128,7 @@ export function checkPaceFeel(f: PaceFeel): PaceFeel {
   frameMode(f.frames);
   launchMode(f.launch);
   ballStyle(f.balls);
+  effectStyle(f.fx);
   return f;
 }
 
@@ -130,6 +148,8 @@ export function writePaceFeel(f: PaceFeel, q: URLSearchParams): void {
   if (f.launch !== DEFAULT_FEEL.launch) q.set('keystone.launch', f.launch);
   if (f.balls !== DEFAULT_FEEL.balls) q.set('keystone.balls', f.balls);
   if (!f.marks) q.set('keystone.marks', '0');
+  if (f.fx !== DEFAULT_FEEL.fx) q.set('keystone.fx', f.fx);
+  if (!f.spent) q.set('keystone.spent', '0');
 }
 
 /** Hit-stop is counted in frames of 60 Hz, whatever the display's rate. */
@@ -147,7 +167,7 @@ export const VALVE_MIN = 0.25;
  */
 export const DEFAULT_BUDGET_MS = 14;
 /** No juice, the valve at its default budget, the tail skip on, a camera only the player moves, every frame drawn, rapid fire, instant undo in DEFAULT_UNDO_MB, shots from high, painted balls, engraved stones. */
-export const DEFAULT_FEEL: Readonly<PaceFeel> = { hitStop: false, slowMo: false, budgetMs: DEFAULT_BUDGET_MS, tailSkip: true, follow: false, shake: false, frames: 'all', rapid: true, turnView: true, arcs: true, undoMB: DEFAULT_UNDO_MB, launch: 'high', balls: 'painted', marks: true };
+export const DEFAULT_FEEL: Readonly<PaceFeel> = { hitStop: false, slowMo: false, budgetMs: DEFAULT_BUDGET_MS, tailSkip: true, follow: false, shake: false, frames: 'all', rapid: true, turnView: true, arcs: true, undoMB: DEFAULT_UNDO_MB, launch: 'high', balls: 'painted', marks: true, fx: 'damage', spent: true };
 /**
  * Owed time the clock keeps, ms; beyond it the rest is dropped (slow motion, not a burst of catch-up
  * steps after a stall). As the viewer's free loop (loop.ts FREE_MAX_LAG_MS).
@@ -272,10 +292,10 @@ export class SpeedMeter {
   reset() { this.sim = SPEED_TAU; this.real = SPEED_TAU; this.t = NaN; }
 }
 
-/** Shown as slow motion below this sim speed (the "x0.8" HUD tag); above, real time. */
+/** Shown as slow motion below this sim speed (the "80% speed" HUD tag); above, real time. */
 export const SLOW_TAG_BELOW = 0.95;
-/** The HUD's slow-motion tag for a sim speed, or '' at real time or faster. */
-export const slowTag = (speed: number): string => (speed < SLOW_TAG_BELOW ? `\u00d7${speed.toFixed(2).replace(/0$/, '')}` : '');
+/** The HUD's slow-motion tag for a sim speed ("84% speed": never a bare ×0.84, which read as leverage, PT9), or '' at real time or faster. */
+export const slowTag = (speed: number): string => (speed < SLOW_TAG_BELOW ? `${Math.round(100 * speed)}% speed` : '');
 
 /** Tail skip (spectacle-mode.md, section 9): fast-forward once fewer than this fraction of the structure moves... */
 export const TAIL_MOVING = 0.01;

@@ -3,7 +3,6 @@
 import { limitProblems } from '@tb/engine-api';
 import { isSoftwareAdapter, sharedDevice } from '@tb/gpu';
 import { GpuAvbdEngine } from '@tb/physics-gpu';
-import { Body, field } from '@tb/schema';
 import { drive, type Size } from './probe.ts';
 import { probeById } from './probes.ts';
 
@@ -27,17 +26,7 @@ export async function runCase(id: string, size: Size, index: number): Promise<Pa
   device.pushErrorScope('validation');
   const e = new GpuAvbdEngine(spec.params, { ...spec.opts, device });
   try {
-    const pin = () => {
-      if (!spec.pins?.length) return;
-      const bodies = (e as unknown as { parts: { bodies: GPUBuffer } }).parts.bodies;
-      // Asleep (flags bit 0 clear, tier 0) and still: the sleep pass treats it as an anchor from the first step.
-      for (const i of spec.pins) {
-        device.queue.writeBuffer(bodies, i * Body.size + field(Body, 'flags').offset, Uint32Array.of(0));
-        device.queue.writeBuffer(bodies, i * Body.size + field(Body, 'linVel').offset, Float32Array.of(0, 0, 0));
-        device.queue.writeBuffer(bodies, i * Body.size + field(Body, 'angVel').offset, Float32Array.of(0, 0, 0));
-      }
-    };
-    const { steps, wallMs } = await drive(e, spec, meter, pin);
+    const { steps, wallMs } = await drive(e, spec, meter);
     const limits = limitProblems(await e.health(), 'gpu');
     const err = await device.popErrorScope();
     return { result: meter.result(), steps, wallMs, limits, error: err?.message ?? null };

@@ -599,6 +599,12 @@ export interface BodyState {
   prevLinVel: Vec3;
   /** Taken out of the world (engine-api remove.ts): it touches nothing and stays where it is, at rest. */
   removed?: boolean;
+  /**
+   * Bolted to the world (engine-api pinned.ts): never solved, its pose never written and its velocities 0, so every
+   * body touching it solves against its fixed pose (its dx stays 0), as against the ground. Left out of the colouring
+   * graph and of its pinned and ground contacts, which have no moving end.
+   */
+  pinned?: boolean;
 }
 
 /** Tangent basis continuous everywhere except near n = +-E (a direction no lattice normal takes). */
@@ -656,12 +662,21 @@ export class AvbdWorld {
   /** Each body's last step, [position change, rotation vector] (what the GPU keeps in SolverBody.dp, phi until the next initBodies). */
   lastDx: Float64Array[] = [];
 
-  constructor(readonly scene: Pick<SceneDesc, 'gravity' | 'dt' | 'ground' | 'frictionCombine' | 'restitutionCombine'>, readonly p: AvbdParams = DEFAULT_AVBD) {}
+  /** The gravity in force (engine-api field.ts): SceneDesc.gravity until a field event sets another. */
+  gravity: Vec3;
+
+  constructor(readonly scene: Pick<SceneDesc, 'gravity' | 'dt' | 'ground' | 'frictionCombine' | 'restitutionCombine'>, readonly p: AvbdParams = DEFAULT_AVBD) {
+    this.gravity = [...scene.gravity];
+  }
 
   add(b: BodyDesc): void {
+    if (b.pinned && this.p.restitution) throw new Error('AvbdWorld.add: pinned bodies are not implemented with AvbdParams.restitution yet (docs/design/gravity-and-pins.md)');
+    // A pinned body (engine-api pinned.ts) is at rest whatever its description says.
+    const pinned = b.pinned === true, v = (u: Vec3): Vec3 => (pinned ? [0, 0, 0] : [...u]);
     this.bodies.push({
       desc: b, mass: massOf(b), inertia: inertiaOf(b),
-      pos: [...b.pos], rot: [...b.rot], linVel: [...b.linVel], angVel: [...b.angVel], prevLinVel: [...b.linVel],
+      pos: [...b.pos], rot: [...b.rot], linVel: v(b.linVel), angVel: v(b.angVel), prevLinVel: v(b.linVel),
+      ...(pinned ? { pinned } : {}),
     });
   }
 
@@ -839,7 +854,7 @@ export class AvbdWorld {
     // Speculative contacts: each body's margin grows by how far any of its
     // points can move this step, so fast bodies are caught before they
     // overlap (resting ones pay nothing).
-    const n = bodies.length, h = this.scene.dt, gl = Math.hypot(...this.scene.gravity);
+    const n = bodies.length, h = this.scene.dt, gl = Math.hypot(...this.gravity);
     const centers = new Float64Array(3 * n), radii = new Float64Array(n), sweep = new Float64Array(n);
     bodies.forEach((b, i) => {
       centers.set(b.pos, 3 * i);
@@ -856,6 +871,8 @@ export class AvbdWorld {
       : spherePairs(live.flatMap((i) => [centers[3 * i]!, centers[3 * i + 1]!, centers[3 * i + 2]!]), live.map((i) => inflated[i]!), p.margin).map(([a, b]) => [live[a]!, live[b]!] as const);
     for (const [i, j] of candidates) {
       const A = bodies[i]!, B = bodies[j]!;
+      // Two pinned bodies (engine-api pinned.ts): neither end moves, so the contact would do nothing.
+      if (A.pinned && B.pinned) continue;
       const key = `${i},${j}`;
       const m = shapeManifold(A.desc.shape, A.pos, A.rot, B.desc.shape, B.pos, B.rot, p.margin + sweep[i]! + sweep[j]!, true, this.axes.get(key) ?? NO_AXIS);
       if (!m) continue;
@@ -866,7 +883,7 @@ export class AvbdWorld {
     const g = this.scene.ground;
     if (g) {
       bodies.forEach((B, i) => {
-        if (B.removed) return;
+        if (B.removed || B.pinned) return;
         const m = groundManifold(B.desc.shape, B.pos, B.rot, g.y, p.margin + sweep[i]!);
         if (m) emit(GROUND, i, m.normal, m.points, combineFriction(rule, B.desc.friction, g.friction));
       });
@@ -1170,7 +1187,7 @@ export class AvbdWorld {
     // body holds it exactly.
     const anchorsOn = p.restitutionAnchors ?? RESTITUTION_DEFAULTS.restitutionAnchors;
     const restSpeed = p.restitutionAnchorSpeed ?? RESTITUTION_DEFAULTS.restitutionAnchorSpeed;
-    const gv = this.scene.gravity, gl = Math.hypot(gv[0], gv[1], gv[2]);
+    const gv = this.gravity, gl = Math.hypot(gv[0], gv[1], gv[2]);
     const up: Vec3 = gl > 0 ? [-gv[0] / gl, -gv[1] / gl, -gv[2] / gl] : [0, 0, 0];
     const seated = new Uint8Array(n);
     if (anchorsOn && gl > 0) {
@@ -1367,7 +1384,7 @@ export class AvbdWorld {
    */
   private capEnergy(ms: Array<{ a: number; b: number; P: Float64Array; target: number[] }>, split: Int32Array, u: Float64Array, applied: Float64Array, v0: Vec3[], w0: Vec3[], q0: Quat[], dx: ArrayLike<ArrayLike<number>>, st: StepStats['restitution']): void {
     const { bodies, contacts } = this, n = bodies.length;
-    const g = this.scene.gravity, hh = this.scene.dt / 2;
+    const g = this.gravity, hh = this.scene.dt / 2;
     // Islands: bodies joined by this step's contacts (union-find, each island's root its least body).
     const parent = Int32Array.from({ length: n }, (_, i) => i);
     const find = (x: number) => { while (parent[x] !== x) { parent[x] = parent[parent[x]!]!; x = parent[x]!; } return x; };
@@ -1429,7 +1446,7 @@ export class AvbdWorld {
 
   step(): void {
     const { p, bodies } = this;
-    const h = this.scene.dt, gv = this.scene.gravity;
+    const h = this.scene.dt, gv = this.gravity;
     const gl = Math.hypot(gv[0], gv[1], gv[2]);
     this.collide();
     const contacts = this.contacts;
@@ -1442,7 +1459,8 @@ export class AvbdWorld {
       touching[c.b]!.push(ci);
       if (c.a !== GROUND) {
         touching[c.a]!.push(ci);
-        adj[c.a]!.add(c.b); adj[c.b]!.add(c.a);
+        // A pinned end is an anchor, as the ground: the graph joins only bodies that are solved.
+        if (!bodies[c.a]!.pinned && !bodies[c.b]!.pinned) { adj[c.a]!.add(c.b); adj[c.b]!.add(c.a); }
       }
     });
     // records = 2 (see AvbdParams.records): each body's walk visits its records instead (the contacts are their points).
@@ -1459,9 +1477,11 @@ export class AvbdWorld {
     const color = mode === 0 && !degreeFirst ? colorGraph(lists)
       : colorGraphWith(lists, { degreeFirst, ...(mode ? { prefer: latticePreferences(lists, bodies.map((b) => latticeParity(b.pos, b.rot, cubeHalf(b), gy)), mode) } : {}) });
     let colors = 0;
-    for (let i = 0; i < n; i++) colors = Math.max(colors, color[i]! + 1);
+    // Pinned bodies are never solved: no colour group visits them (their colour, from a graph that joins them to
+    // nothing, is 0 and counts for nothing).
+    for (let i = 0; i < n; i++) if (!bodies[i]!.pinned) colors = Math.max(colors, color[i]! + 1);
     const byColor: number[][] = Array.from({ length: colors }, () => []);
-    for (let i = 0; i < n; i++) byColor[color[i]!]!.push(i);
+    for (let i = 0; i < n; i++) if (!bodies[i]!.pinned) byColor[color[i]!]!.push(i);
     this.stats.colors = colors;
     this.stats.colorOf = color;
 
@@ -1473,8 +1493,9 @@ export class AvbdWorld {
     const target = bodies.map(() => new Float64Array(6));
     for (let i = 0; i < n; i++) {
       const b = bodies[i]!;
-      // A removed body's target and guess stay 0: no contacts, so it stays exactly where it is, at rest.
-      if (b.removed) continue;
+      // A removed body's target and guess stay 0: no contacts, so it stays exactly where it is, at rest. A pinned
+      // body's too: never solved, its dx stays 0, which is what the bodies touching it solve against.
+      if (b.removed || b.pinned) continue;
       const w = b.angVel, ws = Math.hypot(w[0], w[1], w[2]);
       if (ws > p.maxAngularSpeed) b.angVel = [w[0] * p.maxAngularSpeed / ws, w[1] * p.maxAngularSpeed / ws, w[2] * p.maxAngularSpeed / ws];
       const v = b.linVel;
@@ -1701,6 +1722,7 @@ export class AvbdWorld {
       if (it === p.iterations - 1) {
         for (let i = 0; i < n; i++) {
           const b = bodies[i]!, d = dx[i]!;
+          if (b.pinned) continue;
           b.prevLinVel = b.linVel;
           b.linVel = [d[0]! / h, d[1]! / h, d[2]! / h];
           b.angVel = [d[3]! / h, d[4]! / h, d[5]! / h];
@@ -1711,6 +1733,8 @@ export class AvbdWorld {
     if (start) this.restitute(start.v, start.w, q0, dx);
     for (let i = 0; i < n; i++) {
       const b = bodies[i]!, d = dx[i]!;
+      // A pinned pose is never rewritten, not even by renormalizing its quaternion: it stays bit for bit as given.
+      if (b.pinned) continue;
       b.pos = [x0[i]![0] + d[0]!, x0[i]![1] + d[1]!, x0[i]![2] + d[2]!];
       b.rot = applyRotation(q0[i]!, [d[3]!, d[4]!, d[5]!]);
     }

@@ -8,8 +8,8 @@
 import { writeStruct } from '@tb/schema';
 import type { GpuProfiler } from '@tb/gpu';
 import { Culler, NO_LOD, SEG, type CullFrame } from './cull.ts';
-import { DEFAULT_DEBRIS, Sparks } from './sparks.ts';
-import { BLAST_LIGHTS, Lights, MAX_BALLS, TRAIL } from './lights.ts';
+import { CLASSIC_SPARKS, CTL, DEFAULT_DEBRIS, DEFAULT_SPARKS, Sparks } from './sparks.ts';
+import { BLAST_LIGHTS, CLASSIC_LIGHTS, DEFAULT_LIGHTS, Lights, MAX_BALLS, TRAIL } from './lights.ts';
 import { Blasts } from './blasts.ts';
 import { Fuses } from './fuses.ts';
 import { BlastReach } from './reach.ts';
@@ -283,6 +283,7 @@ export class Renderer {
   profiler: GpuProfiler | null = null;
   /** Passes to skip, for measuring their marginal cost (bench:render). sparks off also freezes heat (its detector writes it). */
   toggles = { shadow: true, post: true, sparks: true, trail: true, heat: true, ao: true, blasts: true };
+  private effects: EffectStyle = 'damage';
   private readonly stoneLod: boolean;
   private readonly realDiag: RendererOptions['realDiag'];
   private readonly shadowSize: number;
@@ -723,7 +724,7 @@ export class Renderer {
       // Bias, all on the receiver: normal offset of 2 texels, depth bias of 1 texel + 1 cm.
       shadowParams: [2 * fit.texel, (fit.texel + 0.01) / fit.depthRange, fit.texel, 1 / this.shadowSize],
       ...this.aoUniforms(f.eye),
-      heat: this.toggles.heat && this.look.effects !== false ? 1 : 0, viewport: this.viewport(), dt: f.dt ?? 0, trailHead: (this.lights.nextFrame + TRAIL - 1) % TRAIL,
+      heat: this.toggles.heat && this.look.effects !== false ? (this.effects === 'damage' ? 2 : 1) : 0, viewport: this.viewport(), dt: f.dt ?? 0, trailHead: (this.lights.nextFrame + TRAIL - 1) % TRAIL,
       ...this.atmosphereUniforms(f, sun, fit),
       ...hall,
     });
@@ -1029,6 +1030,53 @@ export class Renderer {
     this.reachZone.set(centre, radius);
   }
 
+  /** How impacts are drawn (EffectStyle): 'damage' (the default since PT2) or 'classic'. */
+  get effectStyle(): EffectStyle { return this.effects; }
+
+  /**
+   * Set how impacts are drawn (EffectStyle). Sets the spark rule's damage fields (sparks.config: ballSparks,
+   * lifeDv, budget, rate, contactSpeed), the flash lights' ballFlash, and the heat glow's shape; other spark
+   * and light tunables are left as they are.
+   */
+  setEffectStyle(style: EffectStyle): void {
+    if (!(EFFECT_STYLES as readonly string[]).includes(style)) throw new Error(`effect style must be ${EFFECT_STYLES.join(' or ')}: ${style}`);
+    this.effects = style;
+    const sp = style === 'damage' ? DEFAULT_SPARKS : CLASSIC_SPARKS;
+    this.sparks.config = { ...this.sparks.config, ballSparks: sp.ballSparks, lifeDv: sp.lifeDv, budget: sp.budget, rate: sp.rate, contactSpeed: sp.contactSpeed };
+    this.lights.config = { ...this.lights.config, ballFlash: (style === 'damage' ? DEFAULT_LIGHTS : CLASSIC_LIGHTS).ballFlash };
+  }
+
+  /**
+   * A fresh start for every transient effect (a level load, retry or undo): sparks, dust and chips dead,
+   * every body cold, flash lights out, ball trails empty, blasts and lit fuses gone. Per-slot FX (tints,
+   * marks), ice surfaces and the reach zone are the caller's (clearFx, clearSurfaces, reach(null)).
+   */
+  resetEffects(): void {
+    this.sparks.reset();
+    this.lights.reset();
+    this.blasts.clear();
+    this.fuses.clear();
+  }
+
+  /**
+   * What transient effects are live, read back from the GPU (tests and tools; it waits on the queue):
+   * particles alive and bodies hot as the last frame counted them, particles spawned since the last
+   * resetEffects, flash lights still lit, blasts and lit fuses.
+   */
+  async effectStats(): Promise<EffectStats> {
+    const rb = this.device.createBuffer({ size: this.sparks.ctl.size, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
+    const enc = this.device.createCommandEncoder();
+    enc.copyBufferToBuffer(this.sparks.ctl, 0, rb, 0, this.sparks.ctl.size);
+    this.device.queue.submit([enc.finish()]);
+    await rb.mapAsync(GPUMapMode.READ);
+    const ctl = new Uint32Array(rb.getMappedRange().slice(0));
+    rb.destroy();
+    return {
+      particles: ctl[CTL.alive]!, hot: ctl[CTL.hot]!, spawned: ctl[CTL.total]!,
+      flashes: await this.lights.litFlashes(this.lastTime), blasts: this.blasts.states(this.lastTime).length, fuses: this.fuses.slots.length,
+    };
+  }
+
   /** Sparks from a game event at pos, flying out around dir; strength is a speed change in m/s. */
   burst(pos: V3, dir: V3, strength: number): void {
     this.sparks.inject(pos, dir, strength);
@@ -1039,6 +1087,20 @@ export class Renderer {
     return t ? [t.width, t.height] : [1, 1];
   }
 }
+
+/**
+ * How impacts are drawn (Renderer.setEffectStyle):
+ * - damage (PT2, the default): effects follow the damage. A ball's own impact throws a short, dim puff
+ *   and bids for a flash at a quarter strength (the blocks it moves spark and flash in full); weaker
+ *   impacts throw shorter, dimmer sparks; a bucket caps the live sparks; heat glows along a hit block's
+ *   edges and never turns white; a ball at rest heats nothing. docs/render/damage-effects.md.
+ * - classic: as before PT2.
+ */
+export type EffectStyle = 'damage' | 'classic';
+export const EFFECT_STYLES: readonly EffectStyle[] = ['damage', 'classic'];
+
+/** Renderer.effectStats. */
+export interface EffectStats { particles: number; hot: number; spawned: number; flashes: number; blasts: number; fuses: number }
 
 export interface PixelStats {
   width: number;
