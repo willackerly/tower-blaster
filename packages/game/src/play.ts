@@ -82,6 +82,13 @@ export interface GameHandle {
   /** Run the sim at fast-forward speed (as if Space were held). */
   fast: boolean;
   /**
+   * Test hook (the agent playtest's captures, agent playtest PT12): while true no physics step runs, and
+   * frames still draw, so a capture's picture and its HUD show the same step. Rapier steps on the CPU
+   * while SwiftShader takes many frames to render, so round 1's "+25 steps" frames showed the scene at
+   * step 25 under a HUD read 150 steps later (B1 Down 16% over a standing wall). Pacing only.
+   */
+  hold: boolean;
+  /**
    * Pacing now: the valve's time scale (budget / step cost, in [0.25, 1]; up to 4 at fast-forward),
    * the sim speed reached (sim time per real time, measured), the HUD's slow-motion tag ('' at real
    * time), whether the tail skip is on, and the median step cost the valve read when it set that time scale
@@ -136,6 +143,12 @@ export interface GameHandle {
    * False when nothing changed.
    */
   freeze(on?: boolean): boolean;
+  /**
+   * Skip the rest of the running shot's settle (key K, the HUD's Skip button; agent playtest PT6): its
+   * steps run up to SKIP_SCALE times real time until it settles. Pacing only: the same steps run, so the
+   * outcome and a replay are as if it had been watched. False when no shot is running (or it is frozen).
+   */
+  skip(): boolean;
   /** Fire the level's pre-aimed opening shot (KeystoneEnv.opener; key F, the HUD's Fire button): false when there is none now. */
   fireOpener(): boolean;
   /** Mute or unmute every sound (as key M toggles). */
@@ -272,8 +285,8 @@ function safetyLimiter(ctx: AudioContext): AudioNode {
 export function newGameHandle(): GameHandle {
   const none = (): SessionState => ({ step: 0, phase: 'loading', strokes: 0, heritageBroken: 0, hash: '' });
   return {
-    status: 'loading', engine: '', level: '', phase: 'loading', ready: false, frozen: false, frames: 0, stepIndex: 0, strokes: 0, bodies: 0, collapse: 0, fast: false, pace: { timeScale: 1, speed: 1, tag: '', tailSkip: false, costMs: NaN }, view: { target: [0, 0, 0], distance: 0, yaw: 0, pitch: 0, following: false, jolt: 0, turning: false, cue: null, arcBeads: 0 }, input: { touch: false, gesture: 'idle', fingers: 0, aimed: null, power: 100, launch: 0 }, result: null, counts: {}, feel: { ...DEFAULT_FEEL }, resultShownAt: null, timing: { loadMs: 0, load: noPhases(), stepMs: [], moving: [], frameMs: [], costMs: [] }, draws: { drawn: 0, skipped: 0, decimating: false },
-    fire: () => false, bank: () => false, freeze: () => false, fireOpener: () => false, setMuted: () => {}, maxDpr: 2, quality: null, aim: () => null, reach: null, select: () => false, load: async () => {}, retry: async () => {}, undo: async () => false, undone: null, spare: null, undoMemory: () => ({ marks: 0, bytes: 0 }), capture: async () => null, coverage: async () => 0, pullDrawn: null, frozenGrade: 0, firedLooks: () => [], spentLooks: () => [], effects: async () => ({ particles: 0, hot: 0, spawned: 0, flashes: 0, blasts: 0, fuses: 0 }), marks: () => [], refreshMarks: () => {},
+    status: 'loading', engine: '', level: '', phase: 'loading', ready: false, frozen: false, frames: 0, stepIndex: 0, strokes: 0, bodies: 0, collapse: 0, fast: false, hold: false, pace: { timeScale: 1, speed: 1, tag: '', tailSkip: false, costMs: NaN }, view: { target: [0, 0, 0], distance: 0, yaw: 0, pitch: 0, following: false, jolt: 0, turning: false, cue: null, arcBeads: 0 }, input: { touch: false, gesture: 'idle', fingers: 0, aimed: null, power: 100, launch: 0 }, result: null, counts: {}, feel: { ...DEFAULT_FEEL }, resultShownAt: null, timing: { loadMs: 0, load: noPhases(), stepMs: [], moving: [], frameMs: [], costMs: [] }, draws: { drawn: 0, skipped: 0, decimating: false },
+    fire: () => false, bank: () => false, skip: () => false, freeze: () => false, fireOpener: () => false, setMuted: () => {}, maxDpr: 2, quality: null, aim: () => null, reach: null, select: () => false, load: async () => {}, retry: async () => {}, undo: async () => false, undone: null, spare: null, undoMemory: () => ({ marks: 0, bytes: 0 }), capture: async () => null, coverage: async () => 0, pullDrawn: null, frozenGrade: 0, firedLooks: () => [], spentLooks: () => [], effects: async () => ({ particles: 0, hot: 0, spawned: 0, flashes: 0, blasts: 0, fuses: 0 }), marks: () => [], refreshMarks: () => {},
     state: none, line: () => [], replay: async () => none(), health: async () => null, pairsPerBody: 0, limitsHit: [], goals: [], grade: null, duel: null,
     sound: () => ({ mode: 'collapse', status: 'off', error: '', posted: 0, stats: null }),
     ice: () => ({ count: 0, cracks: [] }),
@@ -599,6 +612,8 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
   let pointer: [number, number] | null = null;
   let regrowT: number | null = null;
   let fastHeld = false;
+  /** Skip (key K, the HUD's Skip button; agent playtest PT6): the running shot's settle runs at SKIP_SCALE until it ends. */
+  let skipping = false;
   let lastHud = '', crownsShown = 0;
   /** The level's lot sheet and its groups (selected once per load), or null. */
   let lot: { sheet: LotSheet; goals: readonly Goal[]; groups: Record<string, Int32Array>; footprints: Record<string, Footprint> } | null = null;
@@ -825,6 +840,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     pacer.reset();
     speed.reset();
     tail.reset();
+    skipping = false;
     arrivals = newArrivals();
     juice.reset();
     follow.reset();
@@ -1044,6 +1060,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     pacer.reset();
     speed.reset();
     tail.reset();
+    skipping = false;
     arrivals = newArrivals();
     juice.reset();
     follow.reset();
@@ -1332,7 +1349,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     syncState();
     const s = driver.session;
     const running = s.phase === 'running', v = running ? speed.speed(performance.now()) : 1, costs = handle.timing.costMs;
-    handle.pace = { timeScale: running ? pacer.timeScale : 1, speed: v, tag: running && !fastHeld && !handle.fast && !ending && !tail.on ? slowTag(v) : '', tailSkip: tail.on, costMs: running && !Number.isNaN(pacer.costMs) ? pacer.costMs : median(costs.slice(-60)) };
+    handle.pace = { timeScale: running ? pacer.timeScale : 1, speed: v, tag: running && !fastHeld && !handle.fast && !ending && !tail.on && !skipping ? slowTag(v) : '', tailSkip: tail.on, costMs: running && !Number.isNaN(pacer.costMs) ? pacer.costMs : median(costs.slice(-60)) };
     handle.view = { target: [...orbit.target], distance: orbit.distance, yaw: orbit.yaw, pitch: orbit.pitch, following: follow.active, jolt, turning: swing.active, cue: cueNow(), arcBeads: arcBeadsDrawn };
   }
 
@@ -1421,6 +1438,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     physicsIdle.kick();
     // A shot's pace starts fresh: no tail yet, and at real time until its steps say otherwise.
     tail.reset();
+    skipping = false;
     speed.reset();
     // A rapid shot keeps the follow camera's way home: where the player had it when the first went in.
     if (feel.follow && !follow.active) follow.start(orbit);
@@ -1446,6 +1464,16 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     muted = m;
     if (synth) synth.muted = muted;
     collapse?.setMuted(muted);
+  }
+
+  /** Whether Skip can go in now: a shot is running, not frozen, and not already skipping. */
+  const canSkip = () => !loading && regrowT === null && driver.session.phase === 'running' && !frozen && !skipping;
+  function skip(): boolean {
+    if (!canSkip()) return false;
+    skipping = true;
+    pacer.release();
+    physicsIdle.kick();
+    return true;
   }
 
   function bank(): boolean {
@@ -1506,6 +1534,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
   handle.spentLooks = () => Array.from({ length: descs.length - c.meta.n }, (_, k) => firedLooks[k]?.spent ?? false);
   handle.effects = () => renderer.effectStats();
   handle.bank = bank;
+  handle.skip = skip;
   handle.freeze = freeze;
   handle.fireOpener = fireOpener;
   handle.setMuted = setMuted;
@@ -1679,6 +1708,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     const act = (e.target as HTMLElement).closest('button')?.dataset.act;
     if (act) wakeAudio();
     if (act === 'bank') bank();
+    if (act === 'skip') skip();
     if (act === 'freeze') freeze();
     if (act === 'opener') fireOpener();
     // Touch screens' Undo and Restart (hud.ts TOUCH_ACTS; keys U and R).
@@ -1723,6 +1753,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     if (k === 'q' || k === 'e') setPower(power + (k === 'e' ? POWER_STEP : -POWER_STEP));
     if ((k === 'w' || k === 's') && !e.ctrlKey && !e.metaKey && !e.altKey) moveLauncher(k === 'w' ? 1 : -1);
     if (k === 'b') bank();
+    if (k === 'k') skip();
     if (k === 't') freeze();
     if (k === 'f') fireOpener();
     // In a duel, R after the result is a rematch (the other side starts), as the card's first button says.
@@ -1749,7 +1780,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
       chips: chipsNow(), power, launch: (launchNow() / 4) * c.frame.unit, leverage: { round: s.roundLeverageNow(), shot: s.liveLeverage }, phase: s.phase,
       reachable: aimed ? aimed.reachable : null,
       pullRefused: aimed?.shot.ammo === 'pull' && !aimed.reachable && (aimed.shot.body === refusedPull ? 'tapped' : true),
-      collapse: s.liveCollapse, pulled: s.pulledShare(), met: s.objectiveDone, canBank: !stepping && regrowT === null && s.canBank(), pace: handle.pace.tag,
+      collapse: s.liveCollapse, pulled: s.pulledShare(), met: s.objectiveDone, canBank: !stepping && regrowT === null && s.canBank(), canSkip: canSkip(), skipping, pace: handle.pace.tag,
       opener: !stepping && regrowT === null && s.phase === 'aiming' && openerNow() !== null, ticks,
       ...(duel ? { duel: duelHudHtml(duel, s.phase === 'aiming' && aimed ? duel.refuse(aimed.shot) : null, swing.active ? null : azFromYaw(orbit.yaw)) } : {}),
       ...(c.def.freeze !== undefined ? { freezes: { left: s.freezesLeft, total: c.def.freeze, frozen, can: canFreeze() } } : {}),
@@ -1851,13 +1882,13 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
   const task = () => new Promise<void>((res) => { tasks.push(res); channel.port2.postMessage(null); });
   // A duel turn runs at its own pace for turnSeconds, then fast-forwards the rest of its settle.
   const turnUp = () => duel !== null && duel.shooter !== null && performance.now() - turnStart > 1000 * (duel.def.turnSeconds ?? DEFAULT_TURN_SECONDS);
-  const fastNow = () => fastHeld || handle.fast || ending || tail.on || turnUp();
+  const fastNow = () => fastHeld || handle.fast || ending || tail.on || skipping || turnUp();
   void runPhysics({
     now: () => performance.now(),
     alive: () => handle.status === 'running',
-    active: () => !loading && driver.session.phase === 'running' && !frozen,
+    active: () => !loading && driver.session.phase === 'running' && !frozen && !handle.hold,
     dtMs: () => 1000 * c.scene.dt,
-    options: () => ({ fastForward: fastNow(), budgetMs: feel.budgetMs }),
+    options: () => ({ fastForward: fastNow(), skip: skipping, budgetMs: feel.budgetMs }),
     idle: physicsIdle.wait,
     task,
     step: () => exclusive(async () => {
