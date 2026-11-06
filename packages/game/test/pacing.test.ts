@@ -193,7 +193,7 @@ describe('SpeedMeter', () => {
     expect(m.speed(2000)).toBeLessThan(0.05);
   });
   it('the HUD tag shows the speed only under 0.95', () => {
-    expect([1, 0.96, 0.95, 0.8, 0.75, 0.25].map(slowTag)).toEqual(['', '', '', '×0.8', '×0.75', '×0.25']);
+    expect([1, 0.96, 0.95, 0.8, 0.75, 0.25, 0.844].map(slowTag)).toEqual(['', '', '', '80% speed', '75% speed', '25% speed', '84% speed']);
   });
 });
 

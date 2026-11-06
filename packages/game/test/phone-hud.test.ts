@@ -31,9 +31,9 @@ describe('layout (keystone.hud, keystone.card, keystone.carddelay)', () => {
 
 describe('the HUD keeps one shape through a round (PT3)', () => {
   const b1 = compileLevel(B1);
-  const base = { level: B1, crownsDown: 0, crownsTotal: 0, heritageBroken: 0, heritageTotal: 0, power: 100, launch: 13.5, liveLeverage: 0.26, phase: 'aiming', reachable: null, chips: rackChips(B1.rack, B1.rack, B1.rack[0]!), collapse: 0, ticks: meterTicks(b1) };
+  const base = { level: B1, crownsDown: 0, crownsTotal: 0, heritageBroken: 0, heritageTotal: 0, power: 100, launch: 13.5, leverage: { round: 0.26, shot: 0.26 }, phase: 'aiming', reachable: null, chips: rackChips(B1.rack, B1.rack, B1.rack[0]!), collapse: 0, ticks: meterTicks(b1) };
   /** The HUD's rows and controls, by class and data-act, with their text taken out: what decides its size. */
-  const shape = (html: string) => [...html.matchAll(/<(div|span|button)( class="([^"]*)")?( data-act="(\w+)")?/g)].map((m) => `${m[1]}.${(m[3] ?? '').replace(/\b(pre|on|spent|got|none|empty|idle|ok|bad)\b/g, '').trim()}${m[5] ? `[${m[5]}]` : ''}`);
+  const shape = (html: string) => [...html.matchAll(/<(div|span|button)( class="([^"]*)")?( data-act="(\w+)")?/g)].map((m) => `${m[1]}.${(m[3] ?? '').replace(/\b(pre|held|on|spent|got|none|empty|idle|ok|bad)\b/g, '').trim()}${m[5] ? `[${m[5]}]` : ''}`);
   it('in two groups, the status (.st) then the aim tray (.tray), the slot and the icons in the tray', () => {
     const html = hudHtml({ ...base, strokes: 0, opener: true });
     expect(html.indexOf('class="st"')).toBeLessThan(html.indexOf('class="tray"'));
@@ -46,6 +46,11 @@ describe('the HUD keeps one shape through a round (PT3)', () => {
     // The hint and the slot's note (hidden when docked: its desktop and touch spans) aside.
     const drop = (xs: string[]) => xs.filter((x) => !x.startsWith('div.tch-hint') && x !== 'span.kg-desk' && x !== 'span.kg-tch').map((x) => x.replace(/\[(opener|bank|freeze)\]$/, '[slot]').replace(/^button\.(opener|bank|freeze)/, 'button.slotbtn'));
     expect(drop(shape(after))).toEqual(drop(shape(before)));
+    // From the second shot this shot's leverage shows beside the round's, in the place held for it from the first frame.
+    const second = hudHtml({ ...base, strokes: 2, collapse: 0.3, canBank: true, leverage: { round: 1.1, shot: 2.2 } });
+    expect(drop(shape(second))).toEqual(drop(shape(after)));
+    expect(after).toMatch(/class="small shot held"/);
+    expect(second).toMatch(/class="small shot">this shot ×2\.20/);
     expect(before).toMatch(/class="tch-hint"/);
     expect(after).not.toMatch(/class="tch-hint"/);
     // Nothing to offer: the slot keeps its place, empty.

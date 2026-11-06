@@ -43,6 +43,9 @@
 // A sleeper's own state does not change from step to step (quiet skips it: its counter stays where it fell asleep,
 // at least T, which is all the neighbour veto asks of it), so a skipped step and a run step leave the same state.
 //
+// A pinned body (Body.flags bit 1, pins.ts) is a sleeper that never wakes: wakeApply leaves it asleep, it is never a
+// member (so sleepers are not joined through it), and the neighbour veto does not read its counter.
+//
 // r is BodyProps.radius, the bounding radius. Removed bodies (tier free) are neither: their flags stay as remove()
 // wrote them, and the colouring treats them as before. Thresholds are in scene units (cube units, plank widths for
 // S15), so they move with the scene's own scale.
@@ -108,9 +111,11 @@ fn mark(i: u32) -> u32 { return 2u * p.n + i; }
 fn awakeCount() -> u32 { return arrayLength(&scratch) - 1u; }
 
 fn removed(i: u32) -> bool { return ((bodies[i].flags >> 8u) & 0xffu) == ${TIER.free}u; }
+// Pinned (pins.ts): asleep for good. It is an anchor to the bodies on it and joins none of them, as the ground.
+fn pinned(i: u32) -> bool { return (bodies[i].flags & 2u) != 0u && !removed(i); }
 fn asleep(i: u32) -> bool { return (bodies[i].flags & 1u) == 0u && !removed(i); }
-// Asleep, or asleep at the end of last step and woken since by a blast.
-fn member(i: u32) -> bool { return !removed(i) && ((bodies[i].flags & 1u) == 0u || state[i].slept != 0u); }
+// Asleep, or asleep at the end of last step and woken since by a blast; never a pinned body.
+fn member(i: u32) -> bool { return !removed(i) && !pinned(i) && ((bodies[i].flags & 1u) == 0u || state[i].slept != 0u); }
 fn speedOf(i: u32) -> f32 { let b = bodies[i]; return length(b.linVel) + length(b.angVel) * props[i].radius; }
 
 fn find(x0: u32) -> u32 {
@@ -201,7 +206,7 @@ fn wakeApply(@builtin(global_invocation_id) id: vec3u) {
   if (i >= p.n) { return; }
   var sleeps = asleep(i);
   let b = bodies[i];
-  if (sleeps && atomicLoad(&scratch[mark(atomicLoad(&scratch[parent(i)]))]) != 0u) {
+  if (sleeps && !pinned(i) && atomicLoad(&scratch[mark(atomicLoad(&scratch[parent(i)]))]) != 0u) {
     bodies[i].flags = b.flags | 1u;
     sleeps = false;
   }
@@ -251,8 +256,10 @@ fn neighbours(@builtin(global_invocation_id) id: vec3u) {
   let m = manifolds[k];
   if (m.count == 0u) { return; }
   let half = p.steps / 2u;
-  if (state[m.b].quiet < half) { atomicStore(&scratch[veto(m.a)], 1u); }
-  if (state[m.a].quiet < half) { atomicStore(&scratch[veto(m.b)], 1u); }
+  // A sleeper's counter is at least T (it fell asleep there), so it never vetoes; a pinned body's was never counted,
+  // so it is not read: a body resting on a pin may sleep.
+  if (!asleep(m.b) && state[m.b].quiet < half) { atomicStore(&scratch[veto(m.a)], 1u); }
+  if (!asleep(m.a) && state[m.a].quiet < half) { atomicStore(&scratch[veto(m.b)], 1u); }
 }
 
 @compute @workgroup_size(${WG})

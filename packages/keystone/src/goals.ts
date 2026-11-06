@@ -16,7 +16,7 @@ import { type GroupReduction, type GroupSel, reduceGroups, selectGroups } from '
 import type { CompiledLevel, StarMetric } from './level.ts';
 import { collapseFraction, floorPotential_mJ, homePotential_mJ, homeSkyline } from './outcome.ts';
 import { isRackItem, type RackItem } from './rack.ts';
-import { aabbTop, HEIGHT_BINS, leverage, type LevelScore, outsideLot, potential_mJ, type ShotOutcome, skyline } from './rules.ts';
+import { aabbTop, HEIGHT_BINS, type LevelScore, outsideLot, potential_mJ, roundLeverage, type ShotOutcome, skyline } from './rules.ts';
 import type { Phase } from './session.ts';
 import { readShots, type Shot } from './shots.ts';
 
@@ -118,7 +118,6 @@ export interface RoundFacts {
 export function roundFacts(c: CompiledLevel, r: RoundState, s: Snapshot, groups: Readonly<Record<string, Int32Array>> = {}, footprints: Readonly<Record<string, Footprint>> = {}): RoundFacts {
   const m = c.meta, home = r.home;
   const pe0 = homePotential_mJ(c, home), pe = potential_mJ(s, c);
-  const fired = r.outcomes.reduce((a, o) => a + o.ke + o.yield, 0);
   const crowns = r.crownDown.reduce((a, x) => a + x, 0);
   let out = 0;
   const hist = new Uint32Array(HEIGHT_BINS), top = Math.max(c.height, 1e-9);
@@ -138,7 +137,7 @@ export function roundFacts(c: CompiledLevel, r: RoundState, s: Snapshot, groups:
       collapse: collapseFraction(pe0, pe, floorPotential_mJ(c)),
       crowns, crownsLeft: m.crowns.length - crowns,
       heritage: r.heritageBroken.reduce((a, x) => a + x, 0),
-      leverage: leverage(pe0 - pe, fired),
+      leverage: roundLeverage(r.outcomes),
       bestLeverage: Math.max(0, ...r.outcomes.map((o) => o.leverage)),
       comboMax: Math.max(0, ...r.outcomes.map((o) => o.crownsDown)),
       outOfLot: m.n ? out / m.n : 0,
