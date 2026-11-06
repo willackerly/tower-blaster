@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { compileLevel, L1, L2, L3, U3 } from '@tb/keystone';
-import { MARK_HIT, MARK_NONE, MARK_SAVE, tintWord, unpackFx } from '@tb/render';
+import { MARK_HIT, MARK_KEEP, MARK_NONE, MARK_SAVE, tintWord, unpackFx } from '@tb/render';
 import { PROJECTILE_PRESETS } from '@tb/weapons';
 import { BALL_PAINT, ballFx, BOMB_FX, markOf, structureMarks } from '../src/scene.ts';
 import { BEAD_COLOUR, BEAD_OUT_COLOUR, BEAD_RADIUS, beadOverlay, rgbe, CROWN_GLOW, easeOut, regrowDuration, regrowScale, regrowScales, structureTints, TARGET_SCALE, TINT, tintOf, tintWordOf } from '../src/scene.ts';
@@ -103,11 +103,11 @@ describe('stone marks (markOf, structureMarks)', () => {
     expect(m.filter((x) => x === MARK_NONE).length).toBe(c.meta.n - 5);
   });
 
-  it('a crown the level asks to keep up (a hold objective: Undercut\'s Hollow) carries the shield, though it is as gold as any', () => {
+  it('a crown the level asks to keep up (a hold objective: Undercut\'s Hollow) carries the keep crown, neither crosshair nor heritage shield, though it is as gold as any', () => {
     const c = compileLevel(U3);
     expect(c.def.objective.kind).toBe('hold');
     expect(c.meta.crowns.length).toBeGreaterThan(0);
-    for (const i of c.meta.crowns) expect(markOf(c, i)).toBe(MARK_SAVE);
+    for (const i of c.meta.crowns) expect(markOf(c, i)).toBe(MARK_KEEP);
     expect(tintOf(c, c.meta.crowns[0]!)).toBe(tintOf(compileLevel(L3), compileLevel(L3).meta.crowns[0]!));
   });
 

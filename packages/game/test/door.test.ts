@@ -1,7 +1,7 @@
 // The front door's formatting (door.ts) and the settings it edits (settings.ts): pure.
 import { describe, expect, it } from 'vitest';
 import { B1, B2, B3, BIG_LEVELS, compileLevel, L1, L3, type LevelDef, LEVELS, SERIES, TRIAL_LEVELS, UNDERCUT_LEVELS } from '@tb/keystone';
-import { bestText, doorHtml, doorLevels, doorMode, doorOnLoad, nextLevel, openerFor, preaimMode, rackText, seriesTitle, starTargets, thresholdText, TRIALS_BLURB } from '../src/door.ts';
+import { bestText, BULLET_TIME_HOW, doorHtml, doorLevels, doorMode, doorOnLoad, nextLevel, openerFor, preaimMode, rackText, seriesTitle, starTargets, thresholdText, TRIALS_BLURB } from '../src/door.ts';
 import { GAME_SERIES } from '../src/params.ts';
 import type { LevelRecord } from '../src/progress.ts';
 import { cameraFeel, DEFAULT_SETTINGS, launchFeel, marksFeel, parseSettings, rapidFeel, SETTINGS_KEY, SettingsStore, turnViewFeel, urlSettings } from '../src/settings.ts';
@@ -135,6 +135,9 @@ describe('door levels', () => {
     expect(html).toContain('<span class="earned">★★</span><span class="unearned">☆</span>');
     for (const act of ['how', 'advanced', 'sound', 'look', 'sharp', 'camera', 'rapid', 'duelview', 'launch', 'marks', 'reset', 'close']) expect(html).toContain(`data-act="${act}"`);
     expect(html).toContain('class="how"');
+    // PT8: How to play names Bullet Time and its key (desktop T, touch the Freeze button), and says resuming keeps the freeze.
+    expect(html).toContain(`<li>${BULLET_TIME_HOW}</li>`);
+    expect(BULLET_TIME_HOW).toMatch(/Bullet Time.*<kbd>T<\/kbd>.*Freeze.*keeps the freeze/);
     expect(html).toContain('data-act="advanced" class="howlink advlink on" aria-expanded="true"');
     expect(doorHtml({ levels, current: -1, settings: DEFAULT_SETTINGS, howTo: false, advanced: false })).not.toContain('data-act="close"');
     // Back to the level is the Play button already when the next level is the loaded one.

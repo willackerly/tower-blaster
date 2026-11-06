@@ -53,8 +53,12 @@ export interface HudState {
   leverage: { round: number; shot: number };
   phase: string;
   reachable: boolean | null;
-  /** The pull under the cursor is refused (a crown or heritage block): said instead of out of reach. */
-  pullRefused?: boolean;
+  /**
+   * The pull under the cursor is refused (a crown or heritage block): said instead of out of reach, as a
+   * neutral hint while it is only hovered, and in red once a click or tap on it was refused ('tapped';
+   * playtest PT17: a red error before any input read as a mistake the player had not made).
+   */
+  pullRefused?: boolean | 'tapped';
   /** Outcome levels: collapse fraction D now, the objective met at the last settle, and whether a bank is possible. */
   collapse?: number;
   /** Hold levels (Undercut's Hollow): the share of the structure's mass pulled, shown in place of D. */
@@ -141,6 +145,21 @@ export function objectiveText(o: Objective): string {
   }
 }
 
+/** Why a pull is refused (Session.pullRefusal: crowns and heritage are the objective's). */
+export const PULL_HINT = 'Crowns and heritage stay: pull a plain block';
+
+/**
+ * A hold level's crown row (Undercut's Hollow): its crowns are to be kept up, so the row says whether they
+ * stand, in the objective's green, instead of a crown counter (0 / 1 in the crown colour read as a target to
+ * topple; playtest PT17). Nothing on a level without crowns.
+ */
+export function keepRow(down: number, total: number): string {
+  if (!total) return '';
+  const label = total === 1 ? 'Crown' : 'Crowns';
+  const state = down === 0 ? (total === 1 ? 'standing ✓' : 'all standing ✓') : total === 1 ? 'fallen' : `${down} of ${total} fallen`;
+  return `<div class="row"><span>${label}</span><span class="keep ${down ? 'bad' : 'ok'}">${state}</span></div>`;
+}
+
 /** Shown on a level made by overrides (LevelDef.custom). */
 export const CUSTOM_NOTE = 'custom: stars not recorded';
 
@@ -166,7 +185,7 @@ export function slotAction(s: Pick<HudState, 'level' | 'opener' | 'canBank' | 'f
 
 /** The slot's note beside its button (the panel HUD shows it; the docked phone HUD has no room and hides it). */
 const SLOT_NOTE: Record<Exclude<SlotAction, null>, string> = {
-  resume: 'aim and fire, or resume free',
+  resume: 'aim and fire, or Resume: the freeze is kept',
   freeze: 'stop the world to aim',
   opener: '<span class="kg-desk">or aim and click</span><span class="kg-tch">or drag and lift</span>',
   bank: 'end here, keep the rack',
@@ -189,7 +208,7 @@ export function hudHtml(s: HudState, sheet = ''): string {
   // The power bar, with minus and plus buttons on a touch screen (keys Q and E).
   const power = sel === 'drop' || sel === 'pull' ? '' : `<div class="row"><span>Power <kbd>Q</kbd><kbd>E</kbd></span><span class="power">${POWER_STEP_BUTTON(-POWER_STEP)}<span class="bar"><i style="width:${s.power}%"></i></span>${POWER_STEP_BUTTON(POWER_STEP)}</span></div>`;
   const height = sel === 'drop' || sel === 'pull' || s.launch === undefined ? '' : launchRow(s.launch);
-  const reach = s.pullRefused ? '<div class="bad small reach">Crowns and heritage stay: pull a plain block</div>' : s.reachable === false ? '<div class="bad small reach">Out of reach at this power</div>' : '';
+  const reach = s.pullRefused ? `<div class="${s.pullRefused === 'tapped' ? 'bad' : 'hint'} small pull-hint">${PULL_HINT}</div>` : s.reachable === false ? '<div class="bad small reach">Out of reach at this power</div>' : '';
   const ctl = `<div class="ctl">${power}${height}</div>`;
   const pace = s.pace ? ` <span class="pace" title="physics is running slower than real time">${esc(s.pace)}</span>` : '';
   if (s.duel !== undefined) {
@@ -209,7 +228,8 @@ export function hudHtml(s: HudState, sheet = ''): string {
     : `<div class="row"><span>Par ${d.par}</span><span>Stroke ${s.strokes}</span></div>`;
   const fz = s.freezes;
   const freezes = fz ? `<div class="row"><span>Freezes</span><span class="${fz.left ? '' : 'spent'}">${fz.left} / ${fz.total}</span></div>` : '';
-  const crowns = !outcome || s.crownsTotal ? `<div class="row"><span>Crowns</span><span class="crowns">${s.crownsDown} / ${s.crownsTotal}</span></div>` : '';
+  const crowns = d.objective.kind === 'hold' ? keepRow(s.crownsDown, s.crownsTotal)
+    : !outcome || s.crownsTotal ? `<div class="row"><span>Crowns</span><span class="crowns">${s.crownsDown} / ${s.crownsTotal}</span></div>` : '';
   const act = slotAction(s);
   const button = act === 'freeze' || act === 'resume' ? freezeButton(act === 'resume') : act === 'opener' ? OPENER_BUTTON : act === 'bank' ? BANK_BUTTON : '';
   const slot = `<div class="row slot-row${act ? '' : ' idle'}"><span class="slot${act ? '' : ' empty'}">${button}</span><span class="small note">${act ? SLOT_NOTE[act] : ''}</span>${touchActs(s.strokes)}</div>`;
