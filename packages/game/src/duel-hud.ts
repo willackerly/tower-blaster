@@ -2,17 +2,22 @@
 // whose turn it is and from which side, each side's keep or points and shots
 // left in its owner ink, and the winner. Pure formatting, like hud.ts.
 import { type Duel, DUEL_NAMES, type Refusal } from '@tb/keystone';
+import { arcMiddle, turnCue } from './duel-view.ts';
 import { esc, pct } from './hud.ts';
 
 const css = (rgb: readonly number[]) => `rgb(${rgb.map((x) => Math.round(255 * Math.min(1, Math.max(0, x)) ** (1 / 2.2))).join(',')})`;
 /** Which half of the ring a side fires from, in a word, from its arc's middle azimuth. */
 export function sideOf(arc: [number, number]): string {
-  const mid = ((arc[0] + (arc[0] <= arc[1] ? arc[1] : arc[1] + 720)) / 2) % 720, deg = mid / 2;
+  const deg = arcMiddle(arc) / 2;
   return deg > 45 && deg < 135 ? 'south' : deg >= 135 && deg <= 225 ? 'west' : deg > 225 && deg < 315 ? 'north' : 'east';
 }
 
-/** The HUD block that replaces the objective rows in a duel. `refusal`: why the shot aimed now would be refused. */
-export function duelHudHtml(d: Duel, refusal: Refusal = null): string {
+/**
+ * The HUD block that replaces the objective rows in a duel. `refusal`: why the shot aimed now would be refused.
+ * `az`: the launcher's azimuth at the view now (aim.ts azFromYaw); outside the player to fire's arc, the block says
+ * which way to drag to reach it (duel-view.ts turnCue), on a mouse or two fingers on a touch screen (body.kg-touch).
+ */
+export function duelHudHtml(d: Duel, refusal: Refusal = null, az: number | null = null): string {
   const def = d.def, keeps = def.ruleset === 'keeps';
   const rows = def.sides.map((side, k) => {
     const st = d.sides[k]!, on = !d.result.over && d.turn === k;
@@ -22,7 +27,11 @@ export function duelHudHtml(d: Duel, refusal: Refusal = null): string {
     return `<div class="row duel-side${on ? ' on' : ''}"><span><i class="ink" style="background:${css(side.ink)}"></i>${esc(side.name)}${on ? ' ◂' : ''}</span><span>${measure} · ${st.shotsLeft} left</span></div>`;
   }).join('');
   const turn = d.result.over ? '' : `<div class="row"><span class="small">${esc(def.sides[d.turn].name)} to fire, from the ${sideOf(def.sides[d.turn].arc)}</span></div>`;
-  const why = refusal && refusal.why === 'arc' ? `<div class="bad small">${esc(refusal.message)}</div>` : '';
+  const side = def.sides[d.turn], cue = az !== null && !d.result.over && d.shooter === null ? turnCue(side.arc, az) : null;
+  const arrow = cue === 'right' ? '▸' : '◂';
+  const why = cue
+    ? `<div class="bad small turn-cue"><span class="kg-desk">Drag ${cue} ${arrow}</span><span class="kg-tch">Two fingers ${cue} ${arrow}</span> to turn to ${esc(side.name)}'s side</div>`
+    : refusal && refusal.why === 'arc' ? `<div class="bad small">${esc(refusal.message)}</div>` : '';
   return `<div class="row"><span class="small">${esc(DUEL_NAMES.mode)} · ${esc(DUEL_NAMES.rulesets[def.ruleset])} · two players</span></div>${rows}${turn}${why}`;
 }
 

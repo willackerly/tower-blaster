@@ -16,7 +16,7 @@ import { doorDuels, doorMode, doorOnLoad, duelsOnDoor, openerFor, preaimMode } f
 import { lookName, onEngine, parseGameParams, withRules } from './params.ts';
 import { browserKeyValue, memoryKeyValue, type ProgressStore, progressStore } from './progress.ts';
 import { bankAfterLine, type SessionFacts, sessionFile, sessionFileName } from './session-file.ts';
-import { CAMERA_KEYS, cameraFeel, RAPID_KEYS, rapidFeel, type Settings, SettingsStore } from './settings.ts';
+import { CAMERA_KEYS, cameraFeel, RAPID_KEYS, rapidFeel, type Settings, SettingsStore, TURN_VIEW_KEYS, turnViewFeel } from './settings.ts';
 import { NO_WEBGPU_HTML, webgpuMissing } from './support.ts';
 import { type GameHandle, newGameHandle, playKeystone, playLine } from './play.ts';
 import { helpHtml, installGameStyles } from './ui.ts';
@@ -65,6 +65,8 @@ async function main() {
   // A duel is one shot per turn, so it never fires mid-shot whatever the setting says.
   Object.assign(feel, rapidFeel(feel, q, settings.current.rapid));
   if (duel) feel.rapid = false;
+  // A duel's turn view: the URL's keystone.turnview where it says, else the Duel turns setting (on by default). Read live: from the next turn.
+  Object.assign(feel, turnViewFeel(feel, q, settings.current.duelView));
   const door = doorMode(q), preaim = preaimMode(q), bank = bankAfterLine(q), goals = goalsMode(q);
   // ?keystone.rack replaces the opening level's rack (its def, so retry keeps it); other levels keep their own.
   // The rule overrides (keystone.scoring, keystone.autobank, physics) apply to every level; stars cast on
@@ -113,8 +115,9 @@ async function main() {
       if (changed === 'sharp') handle.maxDpr = st.sharp;
       if (changed === 'camera') Object.assign(feel, cameraFeel(feel, new URLSearchParams(), st.camera));
       if (changed === 'rapid') { Object.assign(feel, rapidFeel(feel, new URLSearchParams(), st.rapid)); if (duel) feel.rapid = false; }
+      if (changed === 'duelView') Object.assign(feel, turnViewFeel(feel, new URLSearchParams(), st.duelView));
       // The setting now says it: the URL keys that set it for this visit go.
-      const u = new URLSearchParams(location.search), keys = changed === 'camera' ? CAMERA_KEYS : changed === 'rapid' ? RAPID_KEYS : [changed];
+      const u = new URLSearchParams(location.search), keys = changed === 'camera' ? CAMERA_KEYS : changed === 'rapid' ? RAPID_KEYS : changed === 'duelView' ? TURN_VIEW_KEYS : [changed];
       if (keys.some((k) => u.has(k))) { for (const k of keys) u.delete(k); history.replaceState(null, '', `?${u}`); }
     },
   });

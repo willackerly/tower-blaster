@@ -1,7 +1,7 @@
 // The game's opening camera for a level (no WebGPU or WebAudio here, so node CLIs can use it).
 import type { Vec3 } from '@tb/engine-api';
 import type { CompiledLevel } from '@tb/keystone';
-import { EYE_ABOVE_GROUND, frame, type Orbit, viewProj } from '@tb/render/camera';
+import { DEFAULT_FRAMING, EYE_ABOVE_GROUND, frame, type Framing, type Orbit, viewProj } from '@tb/render/camera';
 
 /** The share of an upright phone's screen height the HUD takes at the top (the compact touch HUD with its opener and lot sheet line: about 300 of 844 px, plus a margin). */
 export const PORTRAIT_HUD_SHARE = 0.4;
@@ -9,8 +9,9 @@ export const PORTRAIT_HUD_SHARE = 0.4;
 /**
  * Frame the structure; face the par line's launcher when it has one. The eye stays EYE_ABOVE_GROUND over the ground (y 0), as in the viewer.
  * `aspect` (width / height) matters only under 1, a phone held upright, which frames the structure's width to fit too, below the HUD.
+ * `face` (degrees, as Framing has them) looks from that side and height instead, the fit made from there (a duel's turn view, duel-view.ts duelView).
  */
-export function viewOf(c: CompiledLevel, aspect = 1): Orbit {
+export function viewOf(c: CompiledLevel, aspect = 1, face?: Pick<Framing, 'yaw' | 'pitch'>): Orbit {
   const min: Vec3 = [Infinity, 0, Infinity], max: Vec3 = [-Infinity, c.height, -Infinity];
   for (let i = 0; i < c.meta.n; i++) for (const k of [0, 2] as const) {
     min[k] = Math.min(min[k], c.meta.home[3 * i + k]! - c.meta.half[3 * i + k]! - 1);
@@ -18,8 +19,8 @@ export function viewOf(c: CompiledLevel, aspect = 1): Orbit {
   }
   const first = c.def.solutions?.par?.[0];
   const at = (top: number): Orbit => {
-    const o = frame(min, [max[0], top, max[2]], undefined, 1, min[1], aspect);
-    if (first && 'az' in first) o.yaw = ((90 - first.az / 2) * Math.PI) / 180;
+    const o = frame(min, [max[0], top, max[2]], face && { ...DEFAULT_FRAMING, ...face }, 1, min[1], aspect);
+    if (!face && first && 'az' in first) o.yaw = ((90 - first.az / 2) * Math.PI) / 180;
     return { ...o, floor: EYE_ABOVE_GROUND };
   };
   if (aspect >= 1) return at(c.height);

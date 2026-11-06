@@ -81,6 +81,14 @@ describe('siege table on the page', () => {
     expect(block).toMatch(/duel-side on[^]*Gold ◂/);
     expect(block).toMatch(/4 left/);
     expect(block).toMatch(/Gold fires from its own side: turn the view/);
+    // With the view's azimuth: off Gold's side the block says which way to drag (on a mouse; two fingers on touch), in place of the refusal.
+    const off = duelHudHtml(d, d.refuse(shotAt(0)), 0);
+    expect(off).toMatch(/turn-cue[^]*Drag (left ◂|right ▸)<\/span><span class="kg-tch">Two fingers (left ◂|right ▸)<\/span> to turn to Gold's side/);
+    expect(off).not.toMatch(/turn the view/);
+    expect(duelHudHtml(d, null, 199)).toMatch(/Drag right ▸/);
+    expect(duelHudHtml(d, null, 521)).toMatch(/Drag left ◂/);
+    // On Gold's side, no cue.
+    expect(duelHudHtml(d, null, 360)).not.toMatch(/turn-cue/);
     const hud = hudHtml({ level: d.level.def, strokes: 0, crownsDown: 0, crownsTotal: 2, heritageBroken: 0, heritageTotal: 0, chips: rackChips(D1.sides[0].rack, D1.sides[0].rack, 'cannonball'), power: 100, liveLeverage: 0, phase: 'aiming', reachable: null, duel: block });
     expect(hud).toMatch(/Two Keeps<\/div>/);
     expect(hud).not.toMatch(/Leverage|Objective|Crowns/);
