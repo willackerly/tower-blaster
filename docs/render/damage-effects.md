@@ -91,3 +91,22 @@ one still goes off). Undo checkpoints keep the spent state.
 - `packages/game/test/effects-e2e.test.ts`: on the game page, every effect count is 0 after Retry, Undo
   and a level load; a fired ram is a ram, spent once settled (or kept live with `keystone.spent=0`), and
   an undo restores it as it was.
+
+## Look review (SwiftShader frames, 2026-11-06)
+
+An Opus reviewer was given classic vs damage frames of four shots (the playtest's L2 dud, L1's par
+cannonball and a Retry, a ram and then a bomb on T-X4; sheets in project files `fx-damage/`) and no
+conclusions. Verdict: damage is better on all four; the dud's burst is now about the size of what moved,
+the breach and the topple stay readable, and spent ammo reads as spent; Retry leaves nothing behind in
+either style. Its points for the damage style, and what became of them:
+
+1. An orange ellipse and a dotted line over T-X4's breach in every frame: most likely the aim preview,
+   which rapid fire keeps up while a shot flies. Not an effect; not checked further here.
+2. Embers linger over the rubble after the settle. Sparks age on wall time, and SwiftShader frames are
+   slow, so these frames overstate it; the Metal capture of B1 and B3 decides (if it holds there: fade
+   sparks by time since the settle).
+3. White cores in the first frames of a big hit (bomb step 20, dud step 30). Same Metal check; the next
+   lever is a warmer, capped spark core.
+4. The ram is drawn as a sphere: deliberate (its physics shell is a sphere; see Alternatives).
+5. Spark count by energy dissipated rather than speed change: the solver's contact impulses
+   (render-interfaces' contact ring) are the long-term source, as above.
