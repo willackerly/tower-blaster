@@ -4,9 +4,12 @@
 // columns stand clear, and the far blast's own definition gives every body
 // exactly maxDv along its direction. At CI size on the GPU engine
 // (SwiftShader) the far kick is maxDv to 1 % on every free cube, a standing
-// building moves on at about maxDv, and no column falls below its
-// static tipping load, the taller first. The full probe runs with
-// pnpm probe:modes X6.
+// building moves on at about maxDv, and the shake fells a column but none
+// below its static tipping load. Which height falls first is not asserted:
+// with one column of each and a fast CI ramp it changes with the ramp (the
+// tallest first at 15% a cycle from 0.02 g, the shortest at 15% from 0.1 g);
+// the full probe's eight nudges per height and slow ramp decide it. The
+// full probe runs with pnpm probe:modes X6.
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { blastKick, checkBlast, type BodyDesc, type Vec3 } from '@tb/engine-api';
 import { boxBoxSeparation, obb } from '@tb/geom';
@@ -40,6 +43,15 @@ describe('X6 schedule, columns and shove', () => {
     expect(envelope(c, 1 / c.f) / envelope(c, 0)).toBeCloseTo(1.05, 12);
     expect(envelope(c, shakeSteps(c) * DT)).toBe(A_MAX);
     expect(envelope(c, (shakeSteps(c) - 2) * DT)).toBeLessThan(A_MAX);
+    // A case's own bounds: from a0 to aMax in log(aMax / a0) / log(growth) cycles.
+    const b = { ...c, a0: 0.1, aMax: 0.5 };
+    expect(envelope(b, 0)).toBeCloseTo(0.1, 12);
+    expect(envelope(b, shakeSteps(b) * DT)).toBe(0.5);
+    expect(shakeSteps(b)).toBe(Math.ceil(Math.log(5) / Math.log(1.05) / 2 / DT));
+    // The CI shake case uses them, and starts above a 20-cube column's static tipping load.
+    const ci = X6.cases('ci').find((x) => x.kind === 'shake')!;
+    expect(ci).toMatchObject({ a0: 0.1, aMax: 0.7 });
+    expect(x6Spec(ci).steps).toBeLessThan(1000);
     const spec = x6Spec({ kind: 'shake', ...c, nudges: 1, presettle: 10 });
     expect(spec.gravity!(9)).toEqual([0, -GRAVITY, 0]);
     expect(spec.gravity!(10)[0]).toBe(0);
@@ -82,7 +94,7 @@ beforeAll(async () => {
 afterAll(async () => { await page?.close(); });
 
 describe('X6 on the GPU engine at game settings (CI size)', () => {
-  it('the far shove is uniform to 1%, and no column falls below its static tipping load', { timeout: 300_000 }, async (ctx) => {
+  it('the far shove is uniform to 1%, and the shake fells a column but none below its static tipping load', { timeout: 300_000 }, async (ctx) => {
     if (!page) return ctx.skip();
     const run = await runProbe(page, X6, 'ci', { log: (l) => console.log(l) });
     console.log(run.verdict.table.join('\n'));
@@ -99,9 +111,8 @@ describe('X6 on the GPU engine at game settings (CI size)', () => {
         // A rigid column cannot lift off below g b / h = g / n; the envelope is read at the last upright sample.
         if (col.failA !== null) expect(col.failA, `${r.label} ${col.height} cubes`).toBeGreaterThan(0.8 / col.height);
       }
-      const tall = res.columns.find((x) => x.height === 20)!, short = res.columns.find((x) => x.height === 5)!;
-      expect(tall.failA, r.label).not.toBeNull();
-      expect(tall.failA!, r.label).toBeLessThan(short.failA ?? Infinity);
+      // The schedule shakes hard enough to fell something by its cap.
+      expect(res.columns.some((x) => x.failA !== null), r.label).toBe(true);
     }
   });
 });

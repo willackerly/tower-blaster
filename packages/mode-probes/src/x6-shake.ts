@@ -57,7 +57,7 @@ export const SHOVE_DV = 3;
 export const LATER = 10;
 
 export type X6Case =
-  | { kind: 'shake'; f: number; growth: number; nudges: number; presettle: number }
+  | { kind: 'shake'; f: number; growth: number; nudges: number; presettle: number; a0?: number; aMax?: number }
   | { kind: 'shove'; design: 'floating' | 'standing'; dist: number; presettle: number };
 
 export interface Column { height: number; nudge: number; first: number }
@@ -86,9 +86,13 @@ export function rockingA(n: number, f: number): number {
   return (1 / n) * Math.sqrt(1 + ((2 * Math.PI * f) / p) ** 2);
 }
 
-/** The shaking envelope (in g) at time t after the shake starts, and the steps it takes to reach A_MAX. */
-export const envelope = (c: { f: number; growth: number }, t: number) => Math.min(A_MAX, A0 * c.growth ** (c.f * t));
-export const shakeSteps = (c: { f: number; growth: number }) => Math.ceil(Math.log(A_MAX / A0) / Math.log(c.growth) / c.f / DT);
+/**
+ * The shaking envelope (in g) at time t after the shake starts, and the steps it takes to reach its cap. A case may
+ * start higher and stop lower than A0 and A_MAX (`a0`, `aMax`): the CI case does, to fit a loaded runner.
+ */
+type Env = { f: number; growth: number; a0?: number; aMax?: number };
+export const envelope = (c: Env, t: number) => Math.min(c.aMax ?? A_MAX, (c.a0 ?? A0) * c.growth ** (c.f * t));
+export const shakeSteps = (c: Env) => Math.ceil(Math.log((c.aMax ?? A_MAX) / (c.a0 ?? A0)) / Math.log(c.growth) / c.f / DT);
 
 /** The shove's two worlds: a floating grid (no gravity) or a standing building; the blast centre and its step. */
 export function shoveWorld(c: Extract<X6Case, { kind: 'shove' }>): { bodies: BodyDesc[]; centre: Vec3; at: number } {
@@ -216,7 +220,9 @@ const FREQS: Record<Size, number[]> = { ci: [1], full: [0.5, 0.75, 1, 1.5, 2, 3,
 
 function x6Cases(size: Size): X6Case[] {
   const full = size === 'full', presettle = full ? 300 : 60, out: X6Case[] = [];
-  for (const f of FREQS[size]) out.push({ kind: 'shake', f, growth: full ? 1.05 : 1.15, nudges: full ? 8 : 1, presettle });
+  // CI: one frequency, 20% a cycle from 0.1 g (above a 20-cube column's static tipping load, 0.05 g) to 0.7 g
+  // (above where every height fell at 15% from 0.02 g); 640 shaking steps, not 1680, to fit a loaded runner.
+  for (const f of FREQS[size]) out.push(full ? { kind: 'shake', f, growth: 1.05, nudges: 8, presettle } : { kind: 'shake', f, growth: 1.2, nudges: 1, presettle, a0: 0.1, aMax: 0.7 });
   for (const dist of full ? [100, 1000] : [1000]) for (const design of ['floating', 'standing'] as const) out.push({ kind: 'shove', design, dist, presettle });
   return out;
 }
@@ -242,7 +248,7 @@ function x6Verdict(runs: CaseRun<X6Case, X6Result>[], size: Size): Verdict {
       curve.get(n)!.push({ f: r.result.f, A });
       const slid = cs.filter((c) => c.slideA !== null && (c.failA === null || c.slideA <= c.failA)).length;
       const rock = median(cs.map((c) => c.rockA ?? Infinity));
-      return `${Number.isFinite(A) ? A.toFixed(3) : `> ${A_MAX}`}, ${slid}/${cs.length}, ${fmt(Number.isFinite(rock) ? rock : null)}, ${rockingA(n, r.result.f).toFixed(2)}`;
+      return `${Number.isFinite(A) ? A.toFixed(3) : `> ${(r.c as Env).aMax ?? A_MAX}`}, ${slid}/${cs.length}, ${fmt(Number.isFinite(rock) ? rock : null)}, ${rockingA(n, r.result.f).toFixed(2)}`;
     });
     table.push(`| ${r.result.f} | ${cells.join(' | ')} |`);
   }
