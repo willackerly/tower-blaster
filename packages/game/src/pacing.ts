@@ -4,12 +4,18 @@
 import { LAUNCH_MODES, type LaunchMode } from './aim.ts';
 import { type FrameMode, frameMode } from './frame-rate.ts';
 import { BALL_STYLES, type BallStyle } from './scene.ts';
+import { STEADY_D, STEADY_STEPS } from '@tb/keystone';
 
 export const SLOWMO_SCALE = 0.3;
 export const SLOWMO_IN = 0.12; // s to ramp down
 export const SLOWMO_OUT = 0.3; // s to ramp back up
 export const SLOWMO_MAX = 1.5; // s at most before ramping back on its own
 export const FAST_SCALE = 4;
+/**
+ * The Skip control (K, or the HUD's Skip button) during a settle: sim time runs up to this many times real
+ * time, past the valve (physics may take whole frames; the picture keeps drawing what arrives). Pacing only.
+ */
+export const SKIP_SCALE = 32;
 
 /**
  * How the sim's pace may change, from the URL (both pages) and the viewer's scene file. Juice that
@@ -176,6 +182,8 @@ export const stepCost = (submitted: number, done: number, lastDone: number): num
 export interface PacerOptions {
   /** Hold Space (or the round is over, or the tail skip): run the sim up to FAST_SCALE times faster (no slow motion). */
   fastForward?: boolean;
+  /** Skip (agent playtest PT6): up to SKIP_SCALE, the valve's budget ignored. */
+  skip?: boolean;
   /** Recent cost of a step, ms (a median); with budgetMs, slows time instead of stuttering. */
   stepMs?: number;
   budgetMs?: number;
@@ -230,7 +238,7 @@ export class Pacer {
     if (o.fastForward) scale = FAST_SCALE;
     // Performance valve: when steps cost more than the budget, slow time down (to at most a quarter) instead of stuttering.
     this.costMs = o.stepMs ?? NaN;
-    this.timeScale = Math.min(scale, valve(o.budgetMs ?? 0, o.stepMs ?? 0, max));
+    this.timeScale = o.skip ? SKIP_SCALE : Math.min(scale, valve(o.budgetMs ?? 0, o.stepMs ?? 0, max));
     if (Number.isNaN(this.next)) this.next = now;
     if (this.stopMs > 0) { this.next = Math.max(this.next, now) + this.stopMs; this.stopMs = 0; }
     if (now < this.next - (PACE_SLACK * dtMs) / this.timeScale) return false;
@@ -284,19 +292,28 @@ export const TAIL_GAIN = 0.001;
 export const TAIL_STEPS = 60;
 
 /**
- * Decides, step by step through one shot, when the rest of it is a tail of a few rocking blocks that
- * can run at fast-forward until it settles. Once on it stays on until reset (the next shot). Pacing
- * only: the same steps run, sooner.
+ * Decides, step by step through one shot, when the rest of it is a tail that can run at fast-forward
+ * until it settles: a few rocking blocks (under TAIL_MOVING of the structure, D gaining under TAIL_GAIN
+ * over TAIL_STEPS), or (agent playtest PT6) a collapse that has stopped changing whatever still moves,
+ * D within @tb/keystone's STEADY_D for STEADY_STEPS (2 s), as settle v4 reads it: debris rolling on a
+ * big level held the picture still for 10 s and more. Once on it stays on until reset (the next shot).
+ * Pacing only: the same steps run, sooner.
  */
 export class TailSkip {
   private d: number[] = [];
+  /** Settle v4's steady run, as rules.ts settleUpdate counts it: its first D and its length. */
+  private steadyD = NaN;
+  private steadyRun = 0;
   on = false;
-  reset() { this.d = []; this.on = false; }
+  reset() { this.d = []; this.on = false; this.steadyD = NaN; this.steadyRun = 0; }
   /** One observed step of the shot: structure bodies moving, structure size, collapse fraction now. */
   update(nMoving: number, n: number, collapse: number): boolean {
     this.d.push(collapse);
     if (this.d.length > TAIL_STEPS + 1) this.d.shift();
+    if (Number.isNaN(this.steadyD) || !(Math.abs(collapse - this.steadyD) < STEADY_D)) { this.steadyD = collapse; this.steadyRun = 0; }
+    this.steadyRun++;
     if (!this.on && this.d.length > TAIL_STEPS && nMoving < TAIL_MOVING * n && collapse - this.d[0]! < TAIL_GAIN) this.on = true;
+    if (!this.on && this.steadyRun >= STEADY_STEPS) this.on = true;
     return this.on;
   }
 }

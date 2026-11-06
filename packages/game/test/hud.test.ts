@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { B1, B2, compileLevel, L1, L2, levelScore, outcomeScore, tier, U3 } from '@tb/keystone';
 import { GAME_HELP, GAME_KEYS, HELP_BUDGET, helpHtml, TOUCH_HELP } from '../src/ui.ts';
-import { BANK_BUTTON, esc, freezeButton, POWER_STEP, fmtLeverage, fmtPoints, goldHtml, hudHtml, meterHtml, meterTicks, nextSelection, objectiveText, rackChips, resultHtml, starsText, TOUCH_ACTS } from '../src/hud.ts';
+import { BANK_BUTTON, SKIP_BUTTON, esc, freezeButton, POWER_STEP, fmtLeverage, fmtPoints, goldHtml, hudHtml, meterHtml, meterTicks, nextSelection, objectiveText, rackChips, resultHtml, starsText, TOUCH_ACTS } from '../src/hud.ts';
 
 describe('rack', () => {
   it('groups by kind in first-seen order with counts and keys', () => {
@@ -123,6 +123,13 @@ describe('formatting', () => {
     expect(hudHtml({ ...base, level: L2, canBank: true })).not.toContain('data-act="bank"');
     expect(objectiveText({ kind: 'crowns' })).toBe('fell every crown');
     expect(objectiveText({ kind: 'skyline', maxH: 3 })).toBe('skyline under 3 h');
+  });
+  it('Skip (PT6): the button while a shot can be skipped, a note while it skips, nothing otherwise, on any level', () => {
+    const base = { level: L2, strokes: 1, crownsDown: 0, crownsTotal: 2, heritageBroken: 0, heritageTotal: 0, power: 60, liveLeverage: 0, phase: 'running', reachable: null, chips: [] };
+    expect(hudHtml({ ...base, canSkip: true })).toContain(SKIP_BUTTON);
+    expect(hudHtml({ ...base, canSkip: false, skipping: true })).toMatch(/skipping to the settle/);
+    expect(hudHtml({ ...base, canSkip: false, skipping: true })).not.toContain('data-act="skip"');
+    expect(hudHtml({ ...base, phase: 'aiming' })).not.toMatch(/data-act="skip"|skipping/);
   });
   it('Bullet Time: freezes left of the level\'s, Freeze while a shot can be frozen, Resume and FROZEN while it is', () => {
     const def = { ...L1, freeze: 2 };

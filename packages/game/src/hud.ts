@@ -57,6 +57,9 @@ export interface HudState {
   pulled?: number;
   met?: boolean;
   canBank?: boolean;
+  /** A shot is running and can be skipped to its settle (the Skip button, key K; agent playtest PT6), and whether it is skipping now. */
+  canSkip?: boolean;
+  skipping?: boolean;
   /** The slow-motion tag while physics runs slower than real time ('×0.8'; pacing.ts slowTag), '' or absent at real time. */
   pace?: string;
   /** The level's pre-aimed opening shot can be fired now (the Fire button, key F). */
@@ -134,6 +137,9 @@ export const CUSTOM_NOTE = 'custom: stars not recorded';
 /** Outcome levels: the Bank button (key B), shown while a bank is possible. */
 export const BANK_BUTTON = '<button data-act="bank" class="bank"><kbd>B</kbd> Bank</button>';
 
+/** The Skip button (key K), shown while a running shot can be skipped to its settle. */
+export const SKIP_BUTTON = '<button data-act="skip" class="skip" title="Run the rest of this shot fast, to where it settles: the outcome is the same"><kbd>K</kbd> Skip</button>';
+
 export function hudHtml(s: HudState): string {
   const d = s.level;
   // Chips are buttons (a tap selects, as the key does); kbd hints hide on a touch screen (GAME_CSS, body.kg-touch).
@@ -171,6 +177,7 @@ export function hudHtml(s: HudState): string {
     <div class="chips">${chips}</div>
     ${freezes}
     ${s.opener ? `<div class="row">${OPENER_BUTTON}<span class="small"><span class="kg-desk">or aim and click</span><span class="kg-tch">or drag and lift</span></span></div>` : ''}
+    ${s.canSkip ? `<div class="row">${SKIP_BUTTON}<span class="small">to the settle</span></div>` : s.skipping ? '<div class="row"><span class="small">skipping to the settle…</span></div>' : ''}
     ${power}${height}${reach}${outcome && s.canBank ? `<div class="row">${BANK_BUTTON}<span class="small">end here, keep the rack</span></div>` : ''}
     ${s.strokes > 0 ? `<div class="row lev"><span>Leverage</span><span>${fmtLeverage(s.liveLeverage)}</span></div>` : ''}
     ${s.strokes > 0 ? TOUCH_ACTS : ''}`;

@@ -43,6 +43,7 @@ export const GAME_CSS = `
   .kg-result button { font: inherit; padding: 7px 12px; border: 0; border-radius: 6px; background: #2b3242; color: #e8ebf2; cursor: pointer; }
   .kg-result button.primary { background: #d8693f; }
   .kg-hud button.bank { font: inherit; padding: 4px 10px; border: 0; border-radius: 6px; background: #d8693f; color: #fff; cursor: pointer; margin-top: 6px; }
+  .kg-hud button.skip { font: inherit; padding: 4px 10px; border: 1px solid #ffffff55; border-radius: 6px; background: #ffffff1a; color: #fff; cursor: pointer; margin-top: 6px; }
   .kg-hud button.freeze { font: inherit; padding: 4px 10px; border: 0; border-radius: 6px; background: #3f8fd8; color: #fff; cursor: pointer; margin-top: 6px; }
   .kg-hud .pace.frozen { background: #3f8fd8; color: #fff; }
   .kg-hud .spent { opacity: 0.4; }
@@ -80,7 +81,7 @@ export const GAME_CSS = `
   body.kg-touch .kg-hud .chip { min-height: 44px; padding: 0 14px; }
   body.kg-touch .kg-hud .chip:not(.on) { background: #3a4459; box-shadow: inset 0 0 0 1px #5a6680; }
   body.kg-touch .kg-hud button.pw { width: 44px; height: 44px; background: #3a4459; box-shadow: inset 0 0 0 1px #5a6680; font-size: 22px; }
-  body.kg-touch .kg-hud button.opener, body.kg-touch .kg-hud button.bank, body.kg-touch .kg-hud .acts button { min-height: 44px; padding: 0 14px; margin-bottom: 8px; }
+  body.kg-touch .kg-hud button.opener, body.kg-touch .kg-hud button.bank, body.kg-touch .kg-hud button.skip, body.kg-touch .kg-hud .acts button { min-height: 44px; padding: 0 14px; margin-bottom: 8px; }
   body.kg-touch .kg-hud button, body.kg-touch .kg-result button { touch-action: manipulation; }
   body.kg-touch .kg-result button { min-height: 44px; padding: 0 16px; }
   body.kg-touch .kg-menu { min-height: 44px; min-width: 64px; }
@@ -102,7 +103,7 @@ export const GAME_HELP = 'click: fire · drag: orbit · wheel: zoom · <kbd>U</k
 /** The most characters the hint line may show (its text, keys included): one line at the game page's width. */
 export const HELP_BUDGET = 80;
 /** Every control, for the game page's ? (and the viewer's help under Keystone rules, which has room). */
-export const GAME_KEYS = 'hover: aim · click: fire · drag: orbit (the launcher follows you) · right-drag: pan · wheel: zoom · <kbd>1</kbd>–<kbd>4</kbd> ammo · <kbd>Q</kbd>/<kbd>E</kbd> power · <kbd>W</kbd>/<kbd>S</kbd> launcher up and down · hold <kbd>Space</kbd>: fast · <kbd>F</kbd> fire the first shot (when offered) · <kbd>B</kbd> bank (outcome levels) · <kbd>T</kbd> freeze and resume (Bullet Time levels) · <kbd>U</kbd> or <kbd>Ctrl</kbd>+<kbd>Z</kbd> undo the last shot · <kbd>R</kbd> restart · <kbd>N</kbd>/<kbd>P</kbd> level · <kbd>M</kbd> mute';
+export const GAME_KEYS = 'hover: aim · click: fire · drag: orbit (the launcher follows you) · right-drag: pan · wheel: zoom · <kbd>1</kbd>–<kbd>4</kbd> ammo · <kbd>Q</kbd>/<kbd>E</kbd> power · <kbd>W</kbd>/<kbd>S</kbd> launcher up and down · hold <kbd>Space</kbd>: fast · <kbd>K</kbd> skip to the settle · <kbd>F</kbd> fire the first shot (when offered) · <kbd>B</kbd> bank (outcome levels) · <kbd>T</kbd> freeze and resume (Bullet Time levels) · <kbd>U</kbd> or <kbd>Ctrl</kbd>+<kbd>Z</kbd> undo the last shot · <kbd>R</kbd> restart · <kbd>N</kbd>/<kbd>P</kbd> level · <kbd>M</kbd> mute';
 
 /** The help line on a touch screen (body.kg-touch): the gestures of touch.ts; the HUD's Undo and Restart buttons do what U and R do. */
 export const TOUCH_HELP = 'drag: aim · lift: fire · two fingers: turn · pinch: zoom · add a finger mid-aim: cancel';
