@@ -86,6 +86,8 @@ describe('game page, Siege Table', () => {
     }
     await page.waitForFunction(() => window.__game.result !== null, undefined, { timeout: 120_000, polling: 250 });
     expect(order).toEqual([0, 1, 0, 1, 0, 1, 0, 1]);
+    // Refereed: the round ends with no solo tally (PT16); the duel's own result is the outcome.
+    expect(await page.evaluate(() => window.__game.result)).toMatchObject({ refereed: true, lines: [], total: 0, stars: 0, stamp: 'DUEL' });
     // It swung, not cut: frames between the turns drew the camera on its way, at yaws between the two sides'.
     const views = await page.evaluate(() => window.__views!);
     const between = views.filter((x) => x.turning && Math.abs(Math.cos(x.yaw)) > 0.05);

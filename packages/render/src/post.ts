@@ -1,5 +1,6 @@
 // HDR post: a bloom pyramid and the final composite (bloom mix, exposure,
-// AgX, vignette, dither) into the display target.
+// grain, a tone map (AgX by default; tonemap.ts), vignette, dither) into the
+// display target.
 //
 // Bloom (Jimenez 2014, as in CoD: AW): downsample from half resolution with
 // a 13-tap filter (optionally Karis-weighted on the first level, which tames
@@ -7,7 +8,9 @@
 // tent, adding each level onto the one above. Every filter preserves the
 // mean, so the pyramid's top level divided by the level count has the same
 // mean as the input: mixing it in redistributes light without adding any.
-import { AGX_WGSL } from './look.ts';
+import { AGX_WGSL, TONE_MAPS, type ToneMap } from './look.ts';
+import { PCG_WGSL } from './noise.ts';
+import { GRAIN_WGSL, grainPixels, TONE_GAIN, TONE_WGSL } from './tonemap.ts';
 
 export const BLOOM_FORMAT: GPUTextureFormat = 'rgba16float';
 export const HDR_FORMAT: GPUTextureFormat = 'rgba16float';
@@ -66,12 +69,16 @@ fn boxWeight(c: vec3f) -> f32 {
 
 export const COMPOSITE_WGSL = /* wgsl */ `
 ${FULLSCREEN}
-struct Post { bloomMix: f32, exposure: f32, vignette: f32, levels: f32 }
+// tone: TONE_MAPS index (0: agx), its mid-grey gain; grain: amount (0: none), size (px), frame seed.
+struct Post { bloomMix: f32, exposure: f32, vignette: f32, levels: f32, tone: u32, toneGain: f32, grain: f32, grainSize: f32, seed: u32, pad0: u32, pad1: u32, pad2: u32 }
 @group(0) @binding(0) var hdr: texture_2d<f32>;
 @group(0) @binding(1) var bloom: texture_2d<f32>;
 @group(0) @binding(2) var samp: sampler;
 @group(0) @binding(3) var<uniform> post: Post;
 ${AGX_WGSL}
+${TONE_WGSL}
+${PCG_WGSL}
+${GRAIN_WGSL}
 
 // Interleaved gradient noise (Jimenez 2014): cheap, well-spread dither.
 fn ign(p: vec2f) -> f32 {
@@ -82,7 +89,12 @@ fn ign(p: vec2f) -> f32 {
   let px = vec2i(i.clip.xy);
   let h = textureLoad(hdr, px, 0).rgb;
   let b = textureSampleLevel(bloom, samp, i.uv, 0.0).rgb / max(post.levels, 1.0);
-  var c = agx(mix(h, b, post.bloomMix) * post.exposure);
+  var x = mix(h, b, post.bloomMix) * post.exposure;
+  // Grain (realism step 7): in linear light, before the tone map compresses it.
+  if (post.grain > 0.0) { x = grained(x, post.grain, grainNoise(i.clip.xy, post.seed, post.grainSize)); }
+  // AgX stays the default (and the stylized looks' only); the others are the real look's A/B (tonemap.ts).
+  var c: vec3f;
+  if (post.tone == 0u) { c = agx(x); } else { c = toneMapAlt(post.tone, x * post.toneGain); }
   let d = i.uv - 0.5;
   c *= 1.0 - post.vignette * dot(d, d) * 2.0;
   c += (ign(i.clip.xy) - 0.5) / 255.0;
@@ -90,7 +102,21 @@ fn ign(p: vec2f) -> f32 {
 }
 `;
 
-export interface PostParams { bloomMix: number; exposure: number; vignette: number }
+/** toneMap: default agx; grain: film grain amount (0 or left out: none) and size in pixels (tonemap.ts). */
+export interface PostParams { bloomMix: number; exposure: number; vignette: number; toneMap?: ToneMap; grain?: { amount: number; size: number } }
+
+/** The composite's uniform block (Post in COMPOSITE_WGSL): 48 bytes. seed: the grain's frame seed; height: the frame's, which scales the grain (grainPixels). */
+export function postUniforms(p: PostParams, levels: number, seed: number, height = 1080): ArrayBuffer {
+  const b = new ArrayBuffer(48), f = new Float32Array(b), u = new Uint32Array(b);
+  const op = p.toneMap ?? 'agx';
+  f.set([p.bloomMix, p.exposure, p.vignette, levels]);
+  u[4] = TONE_MAPS.indexOf(op);
+  f[5] = TONE_GAIN[op];
+  f[6] = p.grain?.amount ?? 0;
+  f[7] = grainPixels(p.grain?.size ?? 1, height);
+  u[8] = seed >>> 0;
+  return b;
+}
 
 /** Timestamp writes for a labelled pass (from a GpuProfiler), or none. */
 export type Stamp = (label: string) => { timestampWrites?: GPURenderPassTimestampWrites };
@@ -125,7 +151,7 @@ export class Post {
     this.downKaris = pipe(bloom, 'fsDown', BLOOM_FORMAT, { karis: true });
     this.up = pipe(bloom, 'fsUp', BLOOM_FORMAT, { add: true });
     this.composite = pipe(comp, 'fsComposite', outFormat);
-    this.uniform = device.createBuffer({ size: 16, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST, label: 'post params' });
+    this.uniform = device.createBuffer({ size: 48, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST, label: 'post params' });
   }
 
   private resize(w: number, h: number): void {
@@ -162,11 +188,12 @@ export class Post {
   /**
    * Bloom, then composite into out. exposureFrom: a GPU-computed exposure
    * (an f32 at offset in buffer, which needs COPY_SRC) that replaces
-   * p.exposure, copied in on the GPU timeline.
+   * p.exposure, copied in on the GPU timeline. seed: the grain's frame seed
+   * (a new one each frame, so the grain moves as film's does).
    */
-  encode(enc: GPUCommandEncoder, hdr: GPUTexture, out: GPUTextureView, p: PostParams, stamp: Stamp = noStamp, exposureFrom?: { buffer: GPUBuffer; offset: number }): void {
+  encode(enc: GPUCommandEncoder, hdr: GPUTexture, out: GPUTextureView, p: PostParams, stamp: Stamp = noStamp, exposureFrom?: { buffer: GPUBuffer; offset: number }, seed = 0): void {
     this.encodeBloom(enc, hdr, true, stamp);
-    this.device.queue.writeBuffer(this.uniform, 0, new Float32Array([p.bloomMix, p.exposure, p.vignette, this.levels.length]));
+    this.device.queue.writeBuffer(this.uniform, 0, postUniforms(p, this.levels.length, seed, hdr.height));
     if (exposureFrom) enc.copyBufferToBuffer(exposureFrom.buffer, exposureFrom.offset, this.uniform, 4, 4);
     const pass = enc.beginRenderPass({ ...stamp('composite'), colorAttachments: [{ view: out, loadOp: 'clear', clearValue: { r: 0, g: 0, b: 0, a: 1 }, storeOp: 'store' }] });
     pass.setPipeline(this.composite);

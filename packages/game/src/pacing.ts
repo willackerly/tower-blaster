@@ -279,10 +279,10 @@ export class SpeedMeter {
   reset() { this.sim = SPEED_TAU; this.real = SPEED_TAU; this.t = NaN; }
 }
 
-/** Shown as slow motion below this sim speed (the "x0.8" HUD tag); above, real time. */
+/** Shown as slow motion below this sim speed (the "80% speed" HUD tag); above, real time. */
 export const SLOW_TAG_BELOW = 0.95;
-/** The HUD's slow-motion tag for a sim speed, or '' at real time or faster. */
-export const slowTag = (speed: number): string => (speed < SLOW_TAG_BELOW ? `\u00d7${speed.toFixed(2).replace(/0$/, '')}` : '');
+/** The HUD's slow-motion tag for a sim speed ("84% speed": never a bare ×0.84, which read as leverage, PT9), or '' at real time or faster. */
+export const slowTag = (speed: number): string => (speed < SLOW_TAG_BELOW ? `${Math.round(100 * speed)}% speed` : '');
 
 /** Tail skip (spectacle-mode.md, section 9): fast-forward once fewer than this fraction of the structure moves... */
 export const TAIL_MOVING = 0.01;
