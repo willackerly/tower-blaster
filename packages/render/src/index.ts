@@ -26,3 +26,4 @@ export * from './surface.ts';
 export * from './ice.ts';
 export * from './ice-pass.ts';
 export * from './tonemap.ts';
+export * from './tier-probe.ts';

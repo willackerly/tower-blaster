@@ -20,21 +20,34 @@
 //                                  Grenades' proximity fuse
 //   { apex: true }                 vertical speed <= 0 (the top of the arc;
 //                                  at once for a shell thrown downwards)
+//   { moved: m, speed?: v }        its centre (a charge's: its host's) at least
+//                                  m from where it was in the first state
+//                                  observed once its clock started, or moving
+//                                  at least v (docs/design/charges.md)
 //   { then: [a, b] }               b, with its clock started when a held
 //   { any: [a, b, ...] }           the first of them to hold
 // Actions:
 //   { blast: { radius, impulse, falloff?, core?, maxDv?, maxSpeed?, offset? } }
 //                                  engine-api Blast centred on the munition
 //                                  (plus offset), not pushing it
-//   { remove: true }               the munition is spent (engine-api RemoveEvent)
+//   { remove: true }               the munition is spent (engine-api RemoveEvent;
+//                                  a charge: spent, no event)
+//   { removeTarget: true }         a charge's host leaves the world (engine-api
+//                                  RemoveEvent); a thrown munition has no target
+//                                  (thrownProblems), so it is refused there
 //   { split: { into, child, pattern?, angle?, spread?, at? } }
 //                                  `into` of the named child, placed on a
 //                                  pattern around the munition (ring, sphere or
 //                                  cone; at: distance from its centre, default
 //                                  its bounding radius) with its velocity plus
 //                                  `spread` outward; the munition is removed
-// An action after remove or split in the same rule is refused (there is
-// nothing left to act on), as engines refuse a blast centred on a removed body.
+// An action after remove, removeTarget or split in the same rule is refused
+// (there is nothing left to act on), as engines refuse a blast centred on a
+// removed body.
+//
+// A charge (docs/design/charges.md) is a spec attached to a structure body, its
+// host, with no body of its own (WeaponRuntime.attach): only after, moved, then
+// and any triggers, and blast, remove and removeTarget actions (chargeProblems).
 import type { ShapeDesc, Vec3 } from '@tb/engine-api';
 import { boundingRadius } from '@tb/geom';
 import { type GrenadeSpec, GRENADE_LIMITS } from './grenade.ts';
@@ -67,6 +80,7 @@ export type Trigger =
   | { after: number }
   | { near: number; arm?: number; ground?: boolean }
   | { apex: true }
+  | { moved: number; speed?: number }
   | { then: [Trigger, Trigger] }
   | { any: Trigger[] };
 
@@ -98,7 +112,7 @@ export interface SplitSpec {
   at?: number;
 }
 
-export type Action = { blast: BlastSpec } | { remove: true } | { split: SplitSpec };
+export type Action = { blast: BlastSpec } | { remove: true } | { removeTarget: true } | { split: SplitSpec };
 
 export interface Rule {
   when: Trigger;
@@ -124,7 +138,7 @@ export function isWeaponSpec(x: unknown): x is WeaponSpec {
 export type WeaponIssueCode =
   | 'json' | 'version' | 'name' | 'key' | 'type' | 'range' | 'shape'
   | 'trigger' | 'action' | 'order' | 'child' | 'depth' | 'budget' | 'crowded'
-  | 'unused-child' | 'never-spent'
+  | 'unused-child' | 'never-spent' | 'charge' | 'target'
   /** Over a device tier's caps (tiers.ts tierIssues; validateWeapon never gives it). */
   | 'tier';
 
@@ -142,7 +156,7 @@ export interface WeaponIssue {
 /** Accepted ranges (inclusive). */
 export const WEAPON_LIMITS = {
   radius: [0.005, 20], half: [0.005, 20], density: [0.001, 1e5], friction: [0, 2], restitution: [0, 1], speed: [0, 500],
-  after: [0, 60], near: [0, 20], arm: [0, 60],
+  after: [0, 60], near: [0, 20], arm: [0, 60], moved: [0.0001, 20],
   into: [1, MAX_SPLIT], angle: [0, 180], spread: [0, 500], at: [0, 20], offset: [-100, 100],
   blastRadius: GRENADE_LIMITS.radius, impulse: GRENADE_LIMITS.impulse, falloff: GRENADE_LIMITS.falloff, core: GRENADE_LIMITS.core,
   maxDv: GRENADE_LIMITS.maxDv, maxSpeed: GRENADE_LIMITS.maxSpeed,
@@ -223,8 +237,8 @@ export function validateWeapon(x: unknown): { spec: WeaponSpec | null; issues: W
 
   const trigger = (v: unknown, path: string, depth: number): Trigger | undefined => {
     if (depth > MAX_TRIGGER_DEPTH) { err('trigger', path, `triggers nest at most ${MAX_TRIGGER_DEPTH} deep`); return undefined; }
-    const kinds = isObj(v) ? ['after', 'near', 'apex', 'then', 'any'].filter((k) => k in v) : [];
-    if (!isObj(v) || kinds.length !== 1) { err('trigger', path, 'must be one of { after }, { near, arm?, ground? }, { apex: true }, { then: [a, b] }, { any: [...] }'); return undefined; }
+    const kinds = isObj(v) ? ['after', 'near', 'apex', 'moved', 'then', 'any'].filter((k) => k in v) : [];
+    if (!isObj(v) || kinds.length !== 1) { err('trigger', path, 'must be one of { after }, { near, arm?, ground? }, { apex: true }, { moved, speed? }, { then: [a, b] }, { any: [...] }'); return undefined; }
     const kind = kinds[0]!;
     if (kind === 'after') {
       keys(v, path, ['after']);
@@ -239,6 +253,14 @@ export function validateWeapon(x: unknown): { spec: WeaponSpec | null; issues: W
       const out: Trigger = { near: d };
       if (arm !== undefined) out.arm = arm;
       if (typeof v.ground === 'boolean') out.ground = v.ground;
+      return out;
+    }
+    if (kind === 'moved') {
+      keys(v, path, ['moved', 'speed']);
+      const d = num(v.moved, at(path, 'moved'), WEAPON_LIMITS.moved), sp = optNum(v, 'speed', path, WEAPON_LIMITS.speed);
+      if (d === undefined) return undefined;
+      const out: Trigger = { moved: d };
+      if (sp !== undefined) out.speed = sp;
       return out;
     }
     if (kind === 'apex') {
@@ -331,12 +353,16 @@ export function validateWeapon(x: unknown): { spec: WeaponSpec | null; issues: W
         let gone = false;
         r.do.forEach((a, ai) => {
           const ap = at(at(rp, 'do'), ai);
-          const kinds = isObj(a) ? ['blast', 'remove', 'split'].filter((k) => k in a) : [];
-          if (!isObj(a) || kinds.length !== 1 || Object.keys(a).length !== 1) { err('action', ap, 'must be one of { blast }, { remove: true }, { split }'); return; }
+          const kinds = isObj(a) ? ['blast', 'remove', 'removeTarget', 'split'].filter((k) => k in a) : [];
+          if (!isObj(a) || kinds.length !== 1 || Object.keys(a).length !== 1) { err('action', ap, 'must be one of { blast }, { remove: true }, { removeTarget: true }, { split }'); return; }
           if (gone) err('order', ap, 'comes after the munition was removed or split in this rule');
           if ('remove' in a) {
             if (a.remove !== true) err('action', at(ap, 'remove'), 'must be true');
             else acts.push({ remove: true });
+            gone = true;
+          } else if ('removeTarget' in a) {
+            if (a.removeTarget !== true) err('action', at(ap, 'removeTarget'), 'must be true');
+            else acts.push({ removeTarget: true });
             gone = true;
           } else if ('blast' in a) {
             const b = blast(a.blast, at(ap, 'blast'));
@@ -413,16 +439,19 @@ export interface WeaponBudget {
   munitions: { path: string; shell: ShellSpec; count: number }[];
   /** Each blast action and how many times it can go off: the rack's yield is sum count * Y(blast). */
   blasts: { path: string; blast: BlastSpec; count: number }[];
+  /** How many removeTarget actions can go off in all (a charge's: each takes its host out). */
+  targets: number;
 }
 
 export function weaponBudget(spec: MunitionSpec): WeaponBudget {
-  const out: WeaponBudget = { bodies: 0, depth: 0, munitions: [], blasts: [] };
+  const out: WeaponBudget = { bodies: 0, depth: 0, munitions: [], blasts: [], targets: 0 };
   const walk = (m: MunitionSpec, path: string, depth: number, count: number) => {
     out.bodies += count;
     out.depth = Math.max(out.depth, depth);
     out.munitions.push({ path, shell: m.shell, count });
     m.rules.forEach((r, ri) => r.do.forEach((a, ai) => {
       if ('blast' in a) out.blasts.push({ path: `${path ? `${path}.` : ''}rules.${ri}.do.${ai}`, blast: a.blast, count });
+      if ('removeTarget' in a) out.targets += count;
     }));
     // Children in the order the spec lists them, each counted over every split naming it.
     for (const [name, c] of Object.entries(m.children ?? {})) {
@@ -453,6 +482,7 @@ export function scaleWeapon<T extends MunitionSpec>(spec: T, f: WeaponScale): T 
   const shape = (s: ShapeDesc): ShapeDesc => (s.kind === 'sphere' ? { kind: 'sphere', radius: s.radius * L } : { kind: 'box', half: [s.half[0] * L, s.half[1] * L, s.half[2] * L] });
   const trig = (t: Trigger): Trigger => {
     if ('near' in t) return { ...t, near: t.near * L };
+    if ('moved' in t) return t.speed === undefined ? { moved: t.moved * L } : { moved: t.moved * L, speed: t.speed * V };
     if ('then' in t) return { then: [trig(t.then[0]), trig(t.then[1])] };
     if ('any' in t) return { any: t.any.map(trig) };
     return t;
@@ -481,6 +511,43 @@ export function scaleWeapon<T extends MunitionSpec>(spec: T, f: WeaponScale): T 
     return out;
   };
   return { ...spec, ...mun(spec) };
+}
+
+/** Every trigger of a trigger tree, depth first. */
+function* triggers(t: Trigger): Generator<Trigger> {
+  yield t;
+  if ('then' in t) { yield* triggers(t.then[0]); yield* triggers(t.then[1]); }
+  if ('any' in t) for (const x of t.any) yield* triggers(x);
+}
+
+/**
+ * Why a (valid) spec cannot be a charge (WeaponRuntime.attach; docs/design/charges.md): a charge
+ * has no body of its own, so no near or apex trigger (its host touches its neighbours and rests),
+ * no split and no children (it spawns nothing). Empty when it can.
+ */
+export function chargeProblems(spec: WeaponSpec): WeaponIssue[] {
+  const out: WeaponIssue[] = [];
+  const bad = (path: string, message: string) => out.push({ code: 'charge', level: 'error', path, message });
+  if (spec.children && Object.keys(spec.children).length) bad('children', 'a charge spawns nothing, so it has no children');
+  spec.rules.forEach((r, ri) => {
+    for (const t of triggers(r.when)) {
+      if ('near' in t) bad(`rules.${ri}.when`, 'a charge has no near trigger: its host always touches its neighbours');
+      if ('apex' in t) bad(`rules.${ri}.when`, 'a charge has no apex trigger: its host is not flying');
+    }
+    r.do.forEach((a, ai) => { if ('split' in a) bad(`rules.${ri}.do.${ai}`, 'a charge cannot split: it has no body to break up'); });
+  });
+  return out;
+}
+
+/** Why a (valid) spec cannot be fired from the rack: removeTarget, since a thrown munition has no target. Empty when it can. */
+export function thrownProblems(spec: WeaponSpec): WeaponIssue[] {
+  const out: WeaponIssue[] = [];
+  for (const { path, m } of munitions(spec)) {
+    m.rules.forEach((r, ri) => r.do.forEach((a, ai) => {
+      if ('removeTarget' in a) out.push({ code: 'target', level: 'error', path: `${path ? `${path}.` : ''}rules.${ri}.do.${ai}`, message: 'removeTarget needs a target, and only a charge has one (its host)' });
+    }));
+  }
+  return out;
 }
 
 /** A grenade (GrenadeSpec) as a WeaponSpec with the given shell: the same fuse, blast and removal. */

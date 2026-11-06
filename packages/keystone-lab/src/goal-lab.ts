@@ -1,13 +1,13 @@
 // Side goals in the lab (docs/game/lot-sheets.md): explore a level's competent plays to see which
 // facts a goal could ask for, and prove a lot sheet's goals by replaying each proof line and nudges of it.
-import { type CompiledLevel, compileLevel, type Goal, goalMet, type LevelDef, type LotSheet, type RackItem, readShots, roundFacts, type RoundFacts, selectGroups, type Shot, writeShots } from '@tb/keystone';
+import { type CompiledLevel, compileLevel, type Goal, goalMet, type LevelDef, type LotSheet, type RackItem, readShots, roundFacts, type RoundFacts, selectFootprints, selectGroups, type Shot, writeShots } from '@tb/keystone';
 import { competentIntents, intentShot, nudgeLine, rng, streamSeed } from './cast.ts';
 import { engineSubsteps } from './engines.ts';
 import type { PlayResult, Runner } from './runner.ts';
 
-/** The facts of a lab play (runner.ts PlayResult) for a sheet's groups. */
-export function playFacts(c: CompiledLevel, sheet: Pick<LotSheet, 'groups'>, r: PlayResult): RoundFacts {
-  return roundFacts(c, r.session, r.snapshot, selectGroups(c, sheet.groups ?? {}));
+/** The facts of a lab play (runner.ts PlayResult) for a sheet's groups and footprints. */
+export function playFacts(c: CompiledLevel, sheet: Pick<LotSheet, 'groups' | 'footprints'>, r: PlayResult): RoundFacts {
+  return roundFacts(c, r.session, r.snapshot, selectGroups(c, sheet.groups ?? {}), selectFootprints(c, sheet));
 }
 
 export interface Explored { shots: string; facts: RoundFacts }
@@ -17,7 +17,7 @@ export interface Explored { shots: string; facts: RoundFacts }
  * are written from. `items` fires those rack items in that order instead of the whole rack in rack
  * order (a goal about the marbles needs lines that fire marbles first).
  */
-export async function exploreGoals(level: LevelDef, sheet: Pick<LotSheet, 'groups'>, runner: Runner, n: number, seed = 1, items?: readonly RackItem[]): Promise<Explored[]> {
+export async function exploreGoals(level: LevelDef, sheet: Pick<LotSheet, 'groups' | 'footprints'>, runner: Runner, n: number, seed = 1, items?: readonly RackItem[]): Promise<Explored[]> {
   const c = compileLevel(level), lines = exploreLines(level, n, seed, items, engineSubsteps(runner.spec));
   return Promise.all(lines.map(async (shots) => ({ shots: writeShots(shots), facts: playFacts(c, sheet, await runner.play(level, shots)) })));
 }
