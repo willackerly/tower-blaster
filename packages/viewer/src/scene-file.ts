@@ -7,7 +7,7 @@
 // hand-edited file is an error rather than a silently ignored setting.
 import { DEFAULT_SOUND, SOUND_KNOBS, type SoundKnob, type SoundOptions, writeSoundOptions } from '@tb/audio';
 import { engineNames, parseSpec } from '@tb/bench';
-import { type EffectStyle, ENVS, GROUNDS, REAL_DEFAULTS, REAL_KNOBS, type RealKnob, type RealOptions, STONES } from '@tb/render';
+import { type EffectStyle, ENVS, GROUNDS, TONE_MAPS, REAL_DEFAULTS, REAL_KNOBS, type RealKnob, type RealOptions, STONES } from '@tb/render';
 import { SCENARIOS } from '@tb/scenarios';
 import { type CameraPose, DEFAULT_FRAMING, type Framing } from './camera.ts';
 import { isRackItem, type LevelDef, RACK_ITEM_NAMES, type RackItem, readShots, type Shot, writeShots } from '@tb/keystone';
@@ -222,6 +222,7 @@ export function parseSceneFile(text: string): { config: ViewerConfig; name: stri
     if (real.stone !== undefined && real.stone !== REAL_DEFAULTS.stone) q.set('real.stone', oneOf(real.stone, STONES, 'look.real.stone'));
     if (real.groundMaterial !== undefined && real.groundMaterial !== REAL_DEFAULTS.groundMaterial) q.set('real.groundMaterial', oneOf(real.groundMaterial, GROUNDS, 'look.real.groundMaterial'));
     if (real.env !== undefined && real.env !== REAL_DEFAULTS.env) q.set('real.env', oneOf(real.env, ENVS, 'look.real.env'));
+    if (real.toneMap !== undefined && real.toneMap !== REAL_DEFAULTS.toneMap) q.set('real.toneMap', oneOf(real.toneMap, TONE_MAPS, 'look.real.toneMap'));
     if (real.groundAlbedo !== undefined) {
       const a = vec3(real.groundAlbedo, 'look.real.groundAlbedo');
       if (a.some((x, i) => x !== REAL_DEFAULTS.groundAlbedo[i])) q.set('real.ground', a.join(','));
