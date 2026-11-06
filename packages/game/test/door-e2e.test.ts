@@ -7,7 +7,7 @@
 // every series is listed, and a trial picked from the Trials toggle loads in
 // place (no page load), with N and P walking the trials only.
 import { describe, expect, it } from 'vitest';
-import { B1, L1, type Shot, TRIAL_LEVELS, writeShots } from '@tb/keystone';
+import { B1, FUSE_LEVELS, L1, type Shot, TRIAL_LEVELS, writeShots } from '@tb/keystone';
 import { gamePage } from './page.ts';
 
 const game = gamePage();
@@ -26,8 +26,8 @@ describe('front door', () => {
     if (!o) return ctx.skip();
     const { page, errors } = o;
     expect(await page.evaluate(() => window.__door.open)).toBe(true);
-    // Every rated level (B1-B3, L1-L5, U1-U3); the trials wait behind their toggle.
-    expect(await page.locator('.kg-door .card:not(.duel)').count()).toBe(11);
+    // Every rated level (B1-B3, L1-L5, U1-U3, F1 on); the trials wait behind their toggle.
+    expect(await page.locator('.kg-door .card:not(.duel)').count()).toBe(11 + FUSE_LEVELS.length);
     expect(await page.locator('.kg-door [data-act="trials"]').innerText()).toBe(`TRIALS · UNRATED (${TRIAL_LEVELS.length}) ▸`);
     expect(await page.locator('.kg-door .card.duel').count()).toBe(2);
     expect(await page.locator('.kg-door .play').innerText()).toBe('Play · Long Wall');
@@ -63,8 +63,8 @@ describe('front door', () => {
     expect(await page.evaluate(() => window.__door.open)).toBe(false);
     await page.keyboard.press('Escape');
     expect(await page.evaluate(() => window.__door.open)).toBe(true);
-    // Every series, the slice first: B1 to B3, L1 to L5, U1 to U3; L1 is the loaded one.
-    expect(await page.locator('.kg-door .card:not(.duel) .id').allInnerTexts()).toEqual(['B1', 'B2', 'B3', 'L1', 'L2', 'L3', 'L4', 'L5', 'U1', 'U2', 'U3']);
+    // Every series, the slice first: B1 to B3, L1 to L5, U1 to U3, then Fuse & Fold; L1 is the loaded one.
+    expect(await page.locator('.kg-door .card:not(.duel) .id').allInnerTexts()).toEqual(['B1', 'B2', 'B3', 'L1', 'L2', 'L3', 'L4', 'L5', 'U1', 'U2', 'U3', ...FUSE_LEVELS.map((d) => d.id)]);
     expect(await page.locator('.kg-door .card.current .id').innerText()).toBe('L1');
     await page.keyboard.press('Escape');
     expect(await page.evaluate(() => window.__door.open)).toBe(false);
