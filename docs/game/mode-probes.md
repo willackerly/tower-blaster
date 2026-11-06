@@ -198,6 +198,7 @@ CI size on SwiftShader (one column of each height at 1 Hz with 15% growth a cycl
 - The 20-cube column first rocked off its base at 0.063 g. The rocking estimate is close for the slender columns, and the 10-cube column reached the friction limit (0.6 g) before it could overturn.
 - So at this size the tallest column falls first at 1 Hz, nothing falls below 1 g at 2 or 3 Hz, and nothing suggests a resonance. The Metal run's frequency sweep decides the rule, and the rocking-block reference predicts that it fails.
 - If it does, M7's level grammar should not rely on tuning a quake to a tower. Amplitude and duration are the levers, slender towers fall first, and low frequencies do the damage.
+- Which height falls first depends on the ramp, not only on slenderness. The CI test now ramps faster, to fit a loaded runner: 20% a cycle from 0.1 g to 0.7 g at 1 Hz (2026-11-06). At that ramp the 5-cube column fell first at 0.37 g, then the 10-cube at 0.56 g, and the 20-cube column, rocking from 0.11 g, still stood at 0.7 g. A slender column rides out a fast ramp it would not survive slowly, which is Housner's size effect. So the CI test asserts only that something falls and that nothing falls below its static tipping load. The full run's slow ramp and eight nudges per height decide the order.
 
 The shove:
 - **The kick is exact.** All 1,000 free cubes got 3 m/s along their own direction to the centre, to 1e-7 of maxDv, with the centre 1 km away in f32.
