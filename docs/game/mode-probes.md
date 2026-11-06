@@ -241,3 +241,5 @@ CI size on SwiftShader (3 islands of a 3 x 3 x 4 block, 36 bodies, read 1.5 s af
 The KS tests pass, but three worlds cannot decide a distribution. The finding is in the comparison: islands are not bit-identical to solo runs, as the roadmap expected (colouring is global). The coordinates matter about ten times more than sharing the solve: a world run alone at its island's position lands within millimetres of its island, while the same world at the origin ends centimetres away, with a different down or moved count in most worlds. Each world is chaotic, so only distributions should depend on islands, and the full run tests exactly that.
 
 Full size: pending (the Metal run: 64 islands, 64 solo and 64 solo-far runs, the 9.6k block for the cost ratio).
+
+C10 turns this into the primitive the game uses (`Islands` and `IslandObserver` in `@tb/engine-api`; design, alternatives and results in `docs/design/islands.md`). Its own verify runs the same level through it: `pnpm probe:modes C10`.
