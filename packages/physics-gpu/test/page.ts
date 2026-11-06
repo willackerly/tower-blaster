@@ -1223,3 +1223,54 @@ export async function primalKernel(hessian: HessianForm, n: number, seed: number
   for (const b of Object.values(B)) b.destroy();
   return { error: error?.message ?? null, bits, changed: bits.filter((b, k) => b !== before[k]).length, nonFinite, points, zeroRows };
 }
+
+/**
+ * Runs a scene with `pushes` (step -> events) pushed just before that step, snapshotting every `every` steps and at
+ * the end (as simulateGpu). A push() that throws ends the run: its message is `pushError`, the snapshots are those
+ * taken until then. Init errors land in `initError`.
+ */
+export async function pushedRun(scene: SceneDesc, steps: number, params: Partial<AvbdParams>, opts: Omit<GpuEngineOptions, 'device'>, pushes: Array<[number, InputEvent[]]>, every = 0) {
+  const { device } = await sharedDevice();
+  device.pushErrorScope('validation');
+  const e = new GpuAvbdEngine(params, { ...opts, device });
+  const snaps: PlainSnapshot[] = [];
+  const take = async () => {
+    const s = await e.snapshot();
+    snaps.push({ step: e.stepIndex, pos: [...s.pos], rot: [...s.rot], linVel: [...s.linVel], angVel: [...s.angVel], awake: [...s.awake], ...(s.tier ? { tier: [...s.tier] } : {}) });
+  };
+  let initError: string | null = null, pushError: string | null = null;
+  try {
+    await e.init(scene);
+    await take();
+    for (let i = 0; i < steps; i++) {
+      for (const [at, events] of pushes) if (at === i) e.push(events);
+      e.step();
+      if (every && (i + 1) % every === 0 && i + 1 < steps) await take();
+    }
+    await take();
+  } catch (err) {
+    if (e.stepIndex === 0 && !snaps.length) initError = String((err as Error).message); else pushError = String((err as Error).message);
+  }
+  const error = await device.popErrorScope();
+  e.dispose();
+  return { error: error?.message ?? null, initError, pushError, snaps };
+}
+
+/** Runs `steps` steps, taking a checkpoint before step `at`; then restores it and runs to `steps` again. Both final snapshots. */
+export async function checkpointReplay(scene: SceneDesc, steps: number, at: number, params: Partial<AvbdParams> = {}, opts: Omit<GpuEngineOptions, 'device'> = {}) {
+  const { device } = await sharedDevice();
+  device.pushErrorScope('validation');
+  const e = new GpuAvbdEngine(params, { ...opts, device });
+  await e.init(scene);
+  const plain = async (): Promise<PlainSnapshot> => { const s = await e.snapshot(); return { step: e.stepIndex, pos: [...s.pos], rot: [...s.rot], linVel: [...s.linVel], angVel: [...s.angVel], awake: [...s.awake] }; };
+  let cp: ReturnType<GpuAvbdEngine['checkpoint']> | null = null;
+  for (let i = 0; i < steps; i++) { if (i === at) cp = e.checkpoint(); e.step(); }
+  const first = await plain();
+  cp!.restore();
+  for (let i = at; i < steps; i++) e.step();
+  const second = await plain();
+  cp!.dispose();
+  const error = await device.popErrorScope();
+  e.dispose();
+  return { error: error?.message ?? null, first, second };
+}

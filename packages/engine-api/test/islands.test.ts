@@ -144,6 +144,13 @@ describe('the id map and event release', () => {
     expect(() => isl.push(3, [])).toThrow(/no island 3/);
   });
 
+  it('refuses field events: gravity and kicks belong to the whole solve, not one island', () => {
+    const isl = new Islands([scene('a', [cube([0, 0.25, 0])]), scene('b', [cube([0, 0.25, 0])])], { gap: 10 });
+    expect(() => isl.push(1, [{ step: 2, kind: 'field', gravity: [1, -9.75, 0] }])).toThrow(/field event at step 2.*world-wide/);
+    expect(() => isl.push(0, [{ step: 2, kind: 'field', kick: [0, 1, 0] }])).toThrow(/world-wide/);
+    expect(() => new Islands([scene('c', [cube([0, 0.25, 0])], [{ step: 5, kind: 'field', kick: [0, 1, 0] }])])).toThrow(/world-wide/);
+  });
+
   it('solo(k) is world k alone at its island, with its own events in local ids', () => {
     const [w0, w1] = twoWorlds(), isl = new Islands([w0, w1], { gap: 20 }), o = isl.offsets[1]!;
     for (let s = 0; s <= 4; s++) isl.due(s);

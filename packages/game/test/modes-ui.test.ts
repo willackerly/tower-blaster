@@ -89,7 +89,7 @@ describe('siege table on the page', () => {
     expect(duelHudHtml(d, null, 521)).toMatch(/Drag left ◂/);
     // On Gold's side, no cue.
     expect(duelHudHtml(d, null, 360)).not.toMatch(/turn-cue/);
-    const hud = hudHtml({ level: d.level.def, strokes: 0, crownsDown: 0, crownsTotal: 2, heritageBroken: 0, heritageTotal: 0, chips: rackChips(D1.sides[0].rack, D1.sides[0].rack, 'cannonball'), power: 100, liveLeverage: 0, phase: 'aiming', reachable: null, duel: block });
+    const hud = hudHtml({ level: d.level.def, strokes: 0, crownsDown: 0, crownsTotal: 2, heritageBroken: 0, heritageTotal: 0, chips: rackChips(D1.sides[0].rack, D1.sides[0].rack, 'cannonball'), power: 100, leverage: { round: 0, shot: 0 }, phase: 'aiming', reachable: null, duel: block });
     expect(hud).toMatch(/Two Keeps<\/div>/);
     expect(hud).not.toMatch(/Leverage|Objective|Crowns/);
     expect(hud).toMatch(/Cannonball <b>3<\/b>\/3/);

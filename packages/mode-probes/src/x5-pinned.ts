@@ -1,13 +1,12 @@
 // X5: are never-wake anchors solid? (modes-roadmap.md section 7; gates C8,
 // pinned bodies, which M8 Mason's Trial and M10 Rube Lab build on.)
 //
-// C8 is not built. Its mechanism is: a sleeper is an anchor (sleep.ts: its
-// pose fixed, its velocity 0, solved against as an infinite mass), and a
-// pinned body is a sleeper that never wakes. The probe emulates that on
-// today's engine: sleep on with a rule under which nothing falls asleep
-// (sleepSteps 1e8) and no contact wakes anything (wakeSpeed and wakeDepth
-// 1e30), and the pinned bodies written asleep right after init (RunSpec.pins).
-// No blast or removal runs, the only other wake.
+// C8 is built (engine-api pinned.ts; physics-gpu pins.ts): a pinned body is a
+// sleeper that never wakes, an anchor (its pose fixed, its velocity 0, solved
+// against as an infinite mass). The probe first ran on an emulation of it
+// (sleep on with a rule under which nothing falls asleep or wakes, the pins
+// written asleep after init; results of 2026-11-05 in mode-probes.md); it now
+// runs BodyDesc.pinned with sleep off, so every other body is awake throughout.
 //
 // Every case runs twice, and the two runs are the same physics in two frames:
 //   pinned     a pinned box whose top face (local +y, normal n = Q y) is the
@@ -41,8 +40,6 @@ export type Design = 'slab' | 'wall' | 'ramp';
 export interface X5Case { design: Design; frame: 'pinned' | 'reference'; nudge: number; marbles: number; steps: number }
 
 const cannon = PROJECTILE_PRESETS.cannonball;
-/** The emulated C8 rule: nothing ever falls asleep, no contact wakes anything. */
-export const PIN_SLEEP = { sleep: true, sleepSteps: 1e8, wakeSpeed: 1e30, wakeDepth: 1e30 } as const;
 
 const conj = (q: Quat): Quat => [-q[0], -q[1], -q[2], q[3]];
 const sub = (a: Vec3, b: Vec3): Vec3 => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
@@ -88,10 +85,10 @@ export function x5Spec(c: X5Case): RunSpec {
     const scene: SceneDesc = gameScene(`X5-${c.design}-ref`, { ...c }, local, [], { gravity: g, ground: { y: 0, friction: 0.6 } });
     return { scene, steps: c.steps, params, opts: { capacity: local.length, pairsPerBody: 24 } };
   }
-  const pinned = box(fromSurface(s, [0, -s.half[1], 0]), s.half, s.Q);
+  const pinned: BodyDesc = { ...box(fromSurface(s, [0, -s.half[1], 0]), s.half, s.Q), pinned: true };
   const world = local.map((b) => ({ ...b, pos: fromSurface(s, b.pos), linVel: rotate(s.Q, b.linVel), rot: quatMul(s.Q, b.rot) }));
   const scene = gameScene(`X5-${c.design}`, { ...c }, [pinned, ...world]);
-  return { scene, steps: c.steps, params, opts: { capacity: world.length + 1, pairsPerBody: 24, ...PIN_SLEEP }, pins: [0] };
+  return { scene, steps: c.steps, params, opts: { capacity: world.length + 1, pairsPerBody: 24 } };
 }
 
 export interface X5Result {

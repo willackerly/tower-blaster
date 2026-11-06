@@ -1,7 +1,7 @@
 // HUD and result card. Formatting is pure and tested; the DOM side only
 // writes strings into fixed elements. Level text is authored in this repo,
 // but everything still goes through esc().
-import { castStars, type CompiledLevel, DEFAULT_GOLD, itemRef, type LevelDef, type LevelScore, type Objective, type RackItem, scoringOf, tier, TIER_NAMES } from '@tb/keystone';
+import { castStars, type CompiledLevel, DEFAULT_GOLD, itemRef, type LevelDef, type LevelScore, levelTier, type Objective, type RackItem, scoringOf, TIER_NAMES } from '@tb/keystone';
 import { PROJECTILE_PRESETS } from '@tb/weapons';
 
 export const esc = (s: string) => s.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
@@ -46,7 +46,11 @@ export interface HudState {
   power: number;
   /** The launcher's height over the ground, m (keys W and S; aim.ts launchHeight); absent: no Height row. */
   launch?: number;
-  liveLeverage: number;
+  /**
+   * Leverage (keystone rules.ts, one definition): the round's so far (Session.roundLeverageNow, which
+   * ends equal to the card's LevelScore.leverage) and this shot's (Session.liveLeverage).
+   */
+  leverage: { round: number; shot: number };
   phase: string;
   reachable: boolean | null;
   /**
@@ -61,7 +65,7 @@ export interface HudState {
   pulled?: number;
   met?: boolean;
   canBank?: boolean;
-  /** The slow-motion tag while physics runs slower than real time ('×0.8'; pacing.ts slowTag), '' or absent at real time. */
+  /** The slow-motion tag while physics runs slower than real time ('80% speed'; pacing.ts slowTag), '' or absent at real time. */
   pace?: string;
   /** The level's pre-aimed opening shot can be fired now (the Fire button, key F). */
   opener?: boolean;
@@ -192,8 +196,26 @@ export function hudHtml(s: HudState): string {
     ${freezes}
     ${s.opener ? `<div class="row">${OPENER_BUTTON}<span class="small"><span class="kg-desk">or aim and click</span><span class="kg-tch">or drag and lift</span></span></div>` : ''}
     ${power}${height}${reach}${outcome && s.canBank ? `<div class="row">${BANK_BUTTON}<span class="small">end here, keep the rack</span></div>` : ''}
-    ${s.strokes > 0 ? `<div class="row lev"><span>Leverage</span><span>${fmtLeverage(s.liveLeverage)}</span></div>` : ''}
+    ${s.strokes > 0 ? leverageRow(s.strokes, s.leverage) : ''}
     ${s.strokes > 0 ? TOUCH_ACTS : ''}`;
+}
+
+/** What leverage means, in one line: the HUD row's tooltip and How to play's line. */
+export const LEVERAGE_MEANS = 'Leverage is the energy of what you bring down for each unit of energy you fire.';
+
+/**
+ * The HUD's Leverage row: the round's, the figure the result card will show, and from the second shot
+ * on this shot's beside it, so the two can never be read as one number that disagrees with itself.
+ */
+export function leverageRow(strokes: number, L: { round: number; shot: number }): string {
+  const shot = strokes > 1 ? ` <span class="small shot">this shot ${fmtLeverage(L.shot)}</span>` : '';
+  return `<div class="row lev" title="${esc(LEVERAGE_MEANS)} This round's so far${strokes > 1 ? ', then the last shot\'s' : ''}."><span>Leverage</span><span>${fmtLeverage(L.round)}${shot}</span></div>`;
+}
+
+/** The leverage tier's name for a round on `level` (levelTier: against its gold line), or '' where it has none. */
+export function tierLabel(L: number, level: LevelDef): string {
+  const t = levelTier(L, level);
+  return t === null ? '' : tierName(t);
 }
 
 /**
@@ -227,16 +249,21 @@ export function resultHtml(level: LevelDef, score: LevelScore | null, strokes: n
     <div class="line tally"><span>All crowns down</span><span>tallying…</span></div>
     ${actions}`;
   }
-  const lines = score.lines.map((l, i) => `<div class="line" style="animation-delay:${0.15 + 0.22 * i}s"><span>${esc(l.label)}</span><span class="${l.value < 0 ? 'bad' : ''}">${fmtPoints(l.value)}</span></div>`).join('');
+  // A line that costs points (heritage, footprint) is red end to end: its own red line, never netted into another.
+  const lines = score.lines.map((l, i) => `<div class="line${l.value < 0 ? ' bad' : ''}" style="animation-delay:${0.15 + 0.22 * i}s"><span>${esc(l.label)}</span><span class="${l.value < 0 ? 'bad' : ''}">${fmtPoints(l.value)}</span></div>`).join('');
   const after = 0.15 + 0.22 * score.lines.length;
+  const tierText = tierLabel(score.leverage, level);
+  const fz = score.freezes ? ` · freezes used ${score.freezes.used}/${score.freezes.total}` : '';
+  const lost = score.heritageStarsLost ? `<div class="lost bad" style="animation-delay:${after + 0.7}s">Heritage cracked: ${score.heritageStarsLost} star${score.heritageStarsLost === 1 ? '' : 's'} lost</div>` : '';
   return `
     <div class="name">${esc(level.name)}</div>
     ${level.custom ? `<div class="sub custom">${CUSTOM_NOTE}</div>` : ''}
-    <div class="sub">${shotsText}${'outcome' in score ? ` · ${pct((score as { outcome: { collapse: number } }).outcome.collapse)} down` : ''} · leverage ${fmtLeverage(score.leverage)} (${tierName(tier(score.leverage))})</div>
+    <div class="sub">${shotsText}${'outcome' in score ? ` · ${pct((score as { outcome: { collapse: number } }).outcome.collapse)} down` : ''} · leverage ${fmtLeverage(score.leverage)}${tierText ? ` (${tierText})` : ''}${fz}</div>
     ${lines}
-    <div class="line total" style="animation-delay:${after}s"><span>Total</span><span>${fmtPoints(score.total)}</span></div>
+    <div class="line total" style="animation-delay:${after}s" title="The lines' sum, never below 0"><span>Total</span><span>${fmtPoints(score.total)}</span></div>
     <div class="stamp s-${score.stamp.replace(/[^A-Z]/g, '').toLowerCase()}" style="animation-delay:${after + 0.3}s">${esc(score.stamp)}</div>
     <div class="stars" style="animation-delay:${after + 0.55}s">${starsText(score.stars)}</div>
+    ${lost}
     ${goldHtml(level, score, after + 0.8)}
     ${extra}
     ${actions}`;
