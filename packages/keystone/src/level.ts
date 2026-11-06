@@ -183,20 +183,28 @@ export interface PhysicsBlock {
   presettle?: number;
   /** How the level's ice cracks and shatters (ice.ts; absent fields take ICE_DEFAULTS). Only levels with ice bodies use it. */
   ice?: IceBlock;
+  /**
+   * GPU per-body sleep (physics-gpu GpuEngineOptions.sleep, roadmap E2): a body at rest stops being solved, as an
+   * anchor, until a blast, a spawn, a removal or a moving neighbour wakes it. It changes the GPU's trajectories, so it
+   * is off by default (every par line and cast is pinned without it) and part of the hash when on. Not with bounce
+   * (the restitution pass does not know sleepers yet). Rapier sleeps either way (SceneDesc.sleep).
+   */
+  sleep?: boolean;
 }
 
 /**
  * Keystone's settings, as every par line is pinned at: 40 iterations, 3e-5 m slop, no Bounce, 300
  * pre-settle steps (driver.ts AVBD_ITERATIONS, AVBD_GAP_SLOP, PRESETTLE_STEPS give the reasons).
  */
-export const PHYSICS_DEFAULTS = { iterations: 40, gapSlop: 3e-5, bounce: null, presettle: 300 } as const satisfies PhysicsBlock;
-export type ResolvedPhysics = { iterations: number; gapSlop: number; bounce: number | null; presettle: number; pairsPerBody?: number };
+export const PHYSICS_DEFAULTS = { iterations: 40, gapSlop: 3e-5, bounce: null, presettle: 300, sleep: false } as const satisfies PhysicsBlock;
+export type ResolvedPhysics = { iterations: number; gapSlop: number; bounce: number | null; presettle: number; sleep: boolean; pairsPerBody?: number };
 
 export function physicsOf(d: LevelDef): ResolvedPhysics {
   const p = d.physics ?? {};
   return {
     iterations: p.iterations ?? PHYSICS_DEFAULTS.iterations, gapSlop: p.gapSlop ?? PHYSICS_DEFAULTS.gapSlop,
     bounce: p.bounce === undefined ? PHYSICS_DEFAULTS.bounce : p.bounce, presettle: p.presettle ?? PHYSICS_DEFAULTS.presettle,
+    sleep: p.sleep ?? PHYSICS_DEFAULTS.sleep,
     ...(p.pairsPerBody !== undefined ? { pairsPerBody: p.pairsPerBody } : {}),
   };
 }
@@ -212,6 +220,8 @@ export function checkPhysics(p: PhysicsBlock, where = 'physics'): void {
   if (p.gapSlop !== undefined && !(Number.isFinite(p.gapSlop) && p.gapSlop >= 0 && p.gapSlop <= 0.01)) throw new Error(`${where}.gapSlop must be from 0 to 0.01 m: ${p.gapSlop}`);
   if (p.bounce !== undefined && p.bounce !== null && !(p.bounce >= 0 && p.bounce <= 1)) throw new Error(`${where}.bounce must be from 0 to 1, or null for off: ${p.bounce}`);
   if (p.ice !== undefined) checkIce(p.ice, `${where}.ice`);
+  if (p.sleep !== undefined && typeof p.sleep !== 'boolean') throw new Error(`${where}.sleep must be true or false: ${p.sleep}`);
+  if (p.sleep === true && p.bounce !== undefined && p.bounce !== null) throw new Error(`${where}.sleep does not go with bounce yet (the restitution pass does not know sleepers): bounce ${p.bounce}`);
 }
 
 /** The physics block with fields at their defaults left out (absent when nothing is left): what the hash sees. */
@@ -223,6 +233,7 @@ function physicsKey(p: PhysicsBlock | undefined): PhysicsBlock | undefined {
   if (p.bounce !== undefined && p.bounce !== PHYSICS_DEFAULTS.bounce) out.bounce = p.bounce;
   if (p.presettle !== undefined && p.presettle !== PHYSICS_DEFAULTS.presettle) out.presettle = p.presettle;
   if (p.pairsPerBody !== undefined) out.pairsPerBody = p.pairsPerBody;
+  if (p.sleep !== undefined && p.sleep !== PHYSICS_DEFAULTS.sleep) out.sleep = p.sleep;
   return Object.keys(out).length ? out : undefined;
 }
 

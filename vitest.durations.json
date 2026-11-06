@@ -74,6 +74,7 @@
   "packages/game/test/scene.test.ts": 0.1,
   "packages/game/test/session-e2e.test.ts": 38.3,
   "packages/game/test/session-file.test.ts": 0,
+  "packages/game/test/sleep-gpu.test.ts": 90,
   "packages/game/test/sound-map.test.ts": 4.2,
   "packages/game/test/touch-e2e.test.ts": 15.4,
   "packages/game/test/touch.test.ts": 0,

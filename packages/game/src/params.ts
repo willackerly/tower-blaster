@@ -18,14 +18,15 @@ export const GAME_LOOK = 'hazy';
  * scores any level either way, ?keystone.autobank=1|0 ends an outcome level at its first clear (or not),
  * ?keystone.settle=v1|v2|v3 picks how a shot settles (default: v1 for par levels, v3 for outcome levels),
  * ?keystone.iterations, ?keystone.gapSlop, ?keystone.bounce (e, or off), ?keystone.presettle and
- * ?keystone.pairsPerBody (the GPU pair room per body, in place of every pair) change its physics block,
+ * ?keystone.pairsPerBody (the GPU pair room per body, in place of every pair) and ?keystone.sleep=1|0 (GPU
+ * per-body sleep, PhysicsBlock.sleep) change its physics block,
  * and ?keystone.freeze=N gives the player N freezes (Bullet Time: at most N shots fired while another
  * runs, LevelDef.freeze; 0 none). Each is part of the level it makes (its hash), and the level is marked custom: stars cast for the
  * authored level do not apply to it.
  */
 export interface LevelRules { scoring?: Scoring; autobank?: boolean; settle?: SettleRule; freeze?: number; physics?: PhysicsBlock }
 
-const PHYSICS_KEYS = { 'keystone.iterations': 'iterations', 'keystone.gapSlop': 'gapSlop', 'keystone.bounce': 'bounce', 'keystone.presettle': 'presettle', 'keystone.pairsPerBody': 'pairsPerBody' } as const;
+const PHYSICS_KEYS = { 'keystone.iterations': 'iterations', 'keystone.gapSlop': 'gapSlop', 'keystone.bounce': 'bounce', 'keystone.presettle': 'presettle', 'keystone.pairsPerBody': 'pairsPerBody', 'keystone.sleep': 'sleep' } as const;
 /** Every URL key levelRules reads. */
 export const LEVEL_RULE_KEYS = ['keystone.scoring', 'keystone.autobank', 'keystone.settle', 'keystone.freeze', ...Object.keys(PHYSICS_KEYS)] as readonly string[];
 
@@ -37,7 +38,7 @@ export function writeLevelRules(r: LevelRules, q: URLSearchParams): void {
   if (r.freeze !== undefined) q.set('keystone.freeze', String(r.freeze));
   for (const [key, field] of Object.entries(PHYSICS_KEYS)) {
     const v = r.physics?.[field];
-    if (v !== undefined) q.set(key, v === null ? 'off' : String(v));
+    if (v !== undefined) q.set(key, v === null ? 'off' : typeof v === 'boolean' ? (v ? '1' : '0') : String(v));
   }
 }
 
@@ -63,7 +64,8 @@ export function levelRules(q: URLSearchParams): LevelRules {
   for (const [key, field] of Object.entries(PHYSICS_KEYS)) {
     const v = q.get(key);
     if (v === null) continue;
-    const x = field === 'bounce' && v === 'off' ? null : v.trim() === '' ? NaN : Number(v);
+    // sleep is 1 or 0 (anything else reaches checkPhysics as itself, which refuses it).
+    const x = field === 'sleep' ? (v === '1' ? true : v === '0' ? false : v) : field === 'bounce' && v === 'off' ? null : v.trim() === '' ? NaN : Number(v);
     const one: PhysicsBlock = { [field]: x };
     try { checkPhysics(one, 'keystone'); } catch (e) { throw new Error(`${key}: ${(e as Error).message.replace(/^keystone\.\w+ /, '')}`); }
     r.physics = { ...r.physics, ...one };
