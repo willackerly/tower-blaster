@@ -7,7 +7,7 @@
 import { describe, expect, it } from 'vitest';
 import { RapierEngine } from '@tb/adapter-rapier';
 import type { PhysicsEngine } from '@tb/engine-api';
-import { AVBD_GAP_SLOP, AVBD_ITERATIONS, compileLevel, type LevelDef, type OutcomeScore, runSession, scoringOf, Session, type Shot, U1, U2, U3, U3_COURSES, validateLevel } from '@tb/keystone';
+import { AVBD_GAP_SLOP, AVBD_ITERATIONS, compileLevel, type LevelDef, MAX_PULLS, type OutcomeScore, runSession, scoringOf, Session, type Shot, U1, U2, U3, U3_COURSES, validateLevel } from '@tb/keystone';
 import { AvbdReferenceEngine } from '@tb/physics-ref';
 
 const ENGINES: Array<[string, () => PhysicsEngine]> = [
@@ -86,7 +86,7 @@ describe('Undercut levels', () => {
       const fall = await play(make, U3, pulls(1, 0, 3, 4));
       expect(fall.session.phase).toBe('failed');
       expect(fall.session.outcomes).toHaveLength(2);
-      expect(fall.session.rackLeft).toHaveLength(14);
+      expect(fall.session.rackLeft).toHaveLength(MAX_PULLS - 2);
       expect(fall.session.score!.stamp).toBe('TOPPLED');
       expect(fall.session.score!.stars).toBe(0);
     }, 60_000);

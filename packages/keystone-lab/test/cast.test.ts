@@ -458,4 +458,16 @@ describe('pull intents (Undercut casts)', () => {
     const c = compileLevel(U3), it0 = competentIntents(c, 1, 1)[0]![0]!;
     expect(pullTarget(c, it0, new Set(Array.from({ length: 30 }, (_, i) => i)))).toBe(-1); // only the crown left
   });
+
+  it('U3 (hold) casts on the share pulled; a line whose capstone falls is complete, and meets the objective at its bank point', async () => {
+    const { U3 } = await import('@tb/keystone');
+    const cast = await castLevel(U3, nodeCastPlayer({ kind: 'rapier' }), { recipe: { competent: 8, climbLines: 1, climbMoves: 1, climbNudges: 1, cloud: 2, confirmLines: 0, confirmNudges: 0 } });
+    expect(cast.metric).toBe('pulled');
+    expect(cast.lines.every((l) => l.shots.split('_').every((x) => x.startsWith('pull.')))).toBe(true);
+    expect(cast.gates.complete.pass).toBe(true);
+    // Some competent line topples before its rack runs out, and still counts complete.
+    expect(cast.lines.some((l) => l.shots.split('_').length > l.samples.length)).toBe(true);
+    expect(cast.gates.fair.pass).toBe(true);
+    expect(cast.stars.t3).toBeGreaterThan(cast.stars.t2);
+  }, 120_000);
 });

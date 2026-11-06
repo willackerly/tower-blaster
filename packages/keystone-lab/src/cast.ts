@@ -441,7 +441,8 @@ export function thresholds(metric: StarMetric, compEnd: readonly number[], cloud
 export async function castLevel(level: LevelDef, player: CastPlayer, opts: CastOptions = {}): Promise<CastResult> {
   const c = compileLevel(level);
   if ((level.scoring ?? 'par') !== 'outcome') throw new Error(`cast: ${level.id} is a par level`);
-  const metric = opts.metric ?? level.stars?.metric ?? 'collapse', seed = opts.seed ?? 1, recipe = opts.recipe ?? SHORT_RECIPE;
+  // A hold level (Undercut's Hollow) is played for the share pulled, as outcomeScore scores it by default.
+  const metric = opts.metric ?? level.stars?.metric ?? (level.objective.kind === 'hold' ? 'pulled' : 'collapse'), seed = opts.seed ?? 1, recipe = opts.recipe ?? SHORT_RECIPE;
   const total = playsOf(recipe), lines: CastLine[] = [];
   let done = 0;
   const play = async (phase: CastLine['phase'], batch: Shot[][]): Promise<CastPlay[]> => {
@@ -523,11 +524,13 @@ export function judgeCast(c: CompiledLevel, metric: StarMetric, seed: number, li
   const all = lines.flatMap((l) => l.samples.map((s) => sampleValue(s, metric)));
   const { raw, t2, t3 } = thresholds(metric, compEnd, cloudEnd, all);
   const boot = bootstrapT3(metric, cloudEnd, seed), range = metricRange(metric, c, all);
-  const metRate = cloud.filter((p) => p.samples.at(-1)?.met).length / Math.max(1, cloud.length);
+  // A play meets the objective where the player would bank it (endValue: its best met settle). On a hold level a play
+  // can meet it and lose it later (the capstone falls), so any met settle counts; elsewhere met stays met, as before.
+  const metRate = cloud.filter((p) => p.samples.some((x) => x.met)).length / Math.max(1, cloud.length);
   const limited = lines.filter((l) => l.limits.length).length, incomplete = lines.filter((l) => !l.complete).length;
   const gap = good(metric, raw.t3) - good(metric, raw.t2);
   const gates: CastGates = {
-    fair: { pass: metRate >= 0.8, value: metRate, need: 0.8, note: 'share of the nudge cloud meeting the objective' },
+    fair: { pass: metRate >= 0.8, value: metRate, need: 0.8, note: 'share of the nudge cloud meeting the objective at some settle (its bank point)' },
     skill: { pass: gap >= 0.1 * range, value: gap, need: 0.1 * range, note: 'T3 - T2 (raw), at least 10% of the metric range' },
     stable: { pass: boot.halfWidth < 0.05 * range, value: boot.halfWidth, need: 0.05 * range, note: "half-width of T3's bootstrap 90% interval, under 5% of the range (a recast with another seed is compareCasts)" },
     limits: { pass: limited === 0, value: limited, need: 0, note: 'plays where the engine hit a limit that changed the physics' },

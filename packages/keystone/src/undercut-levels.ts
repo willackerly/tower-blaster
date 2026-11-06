@@ -16,7 +16,7 @@
 // pair, and the heavy one with both near cubes, leave it level); U3 holds through
 // Jenga-safe pulls (both edges of a course) and falls when a course's middle and an edge go.
 import { outcomeLevel } from './big-levels.ts';
-import type { LevelDef, Part } from './level.ts';
+import { type LevelDef, MAX_PULLS, type Part } from './level.ts';
 
 type V3 = [number, number, number];
 const rod = (at: V3, half: V3, role?: 'heritage'): Part => ({ kind: 'rod', at, half, material: 'plaster', ...(role ? { role } : {}) });
@@ -69,14 +69,17 @@ export function plankTower(courses: number): Part[] {
 export const U3_COURSES = 10;
 
 /**
- * U3, hollow: a ten-course plank tower with a capstone crown. Take as many planks as you dare
+ * U3, hollow: a ten-course plank tower with a capstone crown, and the most pulls a rack holds (24,
+ * MAX_PULLS): more than the tower can lose standing (about 21 on Rapier), so the bank is the
+ * decision. With 16 (before 2026-11-06) half of a bot's random lines pulled the whole rack standing
+ * and the cast's skill gate failed (T2 0.49, T3 0.52). Take as many planks as you dare
  * (Jenga's rule holds: both edges of a course may go, a middle and an edge may not) and bank
  * while the capstone is up; a settle with it down ends the round, toppled.
  */
 export const U3: LevelDef = outcomeLevel('U3', 'Hollow', [
   ...plankTower(U3_COURSES),
   { kind: 'block', at: [-0.5, 0.6 * U3_COURSES, -0.5], size: [1, 1, 1], material: 'plaster', role: 'crown' },
-], [2, 2], 0.6 * U3_COURSES + 1, Array(16).fill('pull'), { world: 4, par: 1, crownLine: 0.6 * U3_COURSES - 1, objective: { kind: 'hold' } });
+], [2, 2], 0.6 * U3_COURSES + 1, Array(MAX_PULLS).fill('pull'), { world: 4, par: 1, crownLine: 0.6 * U3_COURSES - 1, objective: { kind: 'hold' } });
 
 /** Undercut's levels, in play order. */
 export const UNDERCUT_LEVELS: readonly LevelDef[] = [U1, U2, U3];
