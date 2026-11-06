@@ -16,6 +16,7 @@ export * from './undercut-levels.ts';
 export * from './drafts.ts';
 export * from './trial-levels.ts';
 export * from './cast-play.ts';
+export * from './footprint.ts';
 export * from './groups.ts';
 export * from './goals.ts';
 export * from './duel.ts';
