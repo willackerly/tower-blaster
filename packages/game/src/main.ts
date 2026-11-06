@@ -4,7 +4,7 @@
 // ?keystone.rack= gives it another rack, ?look= and real.* change the look, ?blast=0 hides blasts (blast.* tune them), ?keystone.hitstop=1 and ?keystone.slowmo=1
 // turn on pace juice, ?keystone.sound=synth plays impacts as the old pentatonic voices and
 // ?keystone.impacts=-6 sets the collision sound's level (dB), ?keystone.shots= plays a line once loaded, ?offscreen=1
-// (tests) draws only for captures. The keys are params.ts's, which the viewer
+// (tests; or =WxH at that size) draws only for captures. The keys are params.ts's, which the viewer
 // reads too under rules=keystone, so the same link opens in either page.
 // The front door (door.ts, docs/game/front-door.md) opens over a bare URL
 // (?door=auto|1|0); ?keystone.preaim, ?progress, ?sound, ?sharp, ?quality are its keys.
@@ -53,7 +53,7 @@ function fail(e: unknown) {
 
 async function main() {
   const q = new URLSearchParams(location.search);
-  const { level, rack, rules, engine, feel, shots, offscreen, sound, impactsDb, duel } = parseGameParams(q);
+  const { level, rack, rules, engine, feel, shots, offscreen, offscreenSize, sound, impactsDb, duel } = parseGameParams(q);
   // Best plays and settings kept in the browser (?progress=off: this visit only); custom runs are not recorded.
   // A setting's URL key (look, sound, sharp) wins over the stored one for the visit (settings.ts).
   const progress = progressStore(q);
@@ -106,10 +106,10 @@ async function main() {
   // (tests) runs it only when the URL says quality=auto, and otherwise keeps high, as before tiers.
   let probe: QualityState['probe'] = null, probeFailed = false;
   if (!offscreen || q.get('quality') === 'auto') {
-    try { probe = await probeQuality(device, adapter, offscreen ? 640 : canvas.clientWidth, offscreen ? 400 : canvas.clientHeight, offscreen ? 1 : devicePixelRatio); }
+    try { probe = await probeQuality(device, adapter, offscreen ? offscreenSize[0] : canvas.clientWidth, offscreen ? offscreenSize[1] : canvas.clientHeight, offscreen ? 1 : devicePixelRatio); }
     catch (e) { probeFailed = true; console.warn('quality probe failed:', e); }
   }
-  const renderer = new Renderer(device, offscreen ? { size: [640, 400] } : { canvas });
+  const renderer = new Renderer(device, offscreen ? { size: offscreenSize } : { canvas });
   const source = new SnapshotSource(device);
   renderer.setSource(source);
   // The tier's knobs: the canvas's resolution (under Sharpness too), the renderer's toggles, and which frames
@@ -162,7 +162,7 @@ async function main() {
   // How this attempt's round ended, for Save session. Its shots are the session's (after an undo, the kept ones and those since).
   let ended: SessionFacts | null = null, banked = false;
   await playKeystone({
-    canvas, offscreen, device, renderer, source, hud: $('hud'), banner: $('banner'), result: $('result'),
+    canvas, offscreen, offscreenSize, device, renderer, source, hud: $('hud'), banner: $('banner'), result: $('result'),
     levels: played, start: duel ? 0 : start, ...(duel ? {} : { series: seriesIdx }), engine, feel, fail, sound, impactsDb, muted: !settings.current.sound, touch: touchMode(q), ...loadOptions(q),
     ...(duel ? { duel } : {}),
     // The pre-aimed opener (?keystone.preaim): by default the series' first level, until it has a record here.
