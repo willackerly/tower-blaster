@@ -7,7 +7,7 @@ import { emptySnapshot, TAG_BALL, type BodyDesc, type Snapshot } from '@tb/engin
 import { readBuffer, sharedDevice } from '@tb/gpu';
 import { Body, RenderRecord, Shape, TIER, readStruct } from '@tb/schema';
 import {
-  packSurface, agx, AGX_WGSL, TONE_MAPS, TONE_WGSL, toneMapped, GRAIN_WGSL, grainNoise, grainPixels, grained, agxBase, pbrNeutral, aces, type ToneMap, type RealOptions, type LookParams, fromHalf, Atmosphere, CLEAR_DAY, transmittance, transmittanceHMu, multiScattering, skyViewDir, skyRadiance, skyViewUv, sampleTransmittance, ambientOf, distanceToGround, meteredIlluminance, Materials, heightNormal, STONES, GROUNDS, MATERIAL_LAYERS, WOOD_WGSL, WOOD_RING_M, woodRings, PCG_WGSL, pcg3d, MACRO_LAYER, layerTile, materialSample, macroSample, adaptedExposure, LUMA, R_TOP, R_GROUND, FX_WORDS, packFx, toHalf, bevelNormal, BEVEL_WGSL, oklabToLinear, OKLAB_WGSL, Post, Culler, cullReference, FLOOR_REACH, GpuBodySource, invert, listMatches, lookAt, makeGpuBodies, multiply, packBodies, perspective, Renderer, SEG, SEGMENTS, SnapshotSource, transform, translation, normalize, rockIn, ROCK_CELL, ROCK_CLUMP, ROCK_SINK, sunOf, hallTraceCpu, HALL_MAT, OLYMPIA, BOX_VERTS, SPHERE_VERTS, SUN, Sparks, CTL, MAX_EVENTS, flashSlot, FLASHES, MAX_BALLS, TRAIL, Lights, LIGHTS, LIGHT_META, LIGHT_PACKED, MATERIAL, AoVolume, aoGrid, aoFrame, splatReference, composeReference, AO_FOOT_WGSL, AO_SAMPLE_WGSL, AO_SEAM_WGSL, AO_ONE, type SplatBody, unpackImpacts, unpackSparks, spawnReference, stepReference, debrisSpawnReference, dustStepReference, chipStepReference, type SparkState, type Impact, type BodySource, type CullFrame, type FrameParams, type RendererOptions, type V3,
+  packSurface, agx, AGX_WGSL, TONE_MAPS, TONE_WGSL, toneMapped, GRAIN_WGSL, grainNoise, grainPixels, grained, agxBase, pbrNeutral, aces, type ToneMap, type RealOptions, type LookParams, fromHalf, Atmosphere, CLEAR_DAY, transmittance, transmittanceHMu, multiScattering, skyViewDir, skyRadiance, skyViewUv, sampleTransmittance, ambientOf, distanceToGround, meteredIlluminance, Materials, heightNormal, STONES, GROUNDS, MATERIAL_LAYERS, WOOD_WGSL, WOOD_RING_M, woodRings, PCG_WGSL, pcg3d, MACRO_LAYER, layerTile, materialSample, macroSample, adaptedExposure, LUMA, R_TOP, R_GROUND, FX_WORDS, packFx, toHalf, bevelNormal, BEVEL_WGSL, oklabToLinear, OKLAB_WGSL, Post, Culler, cullReference, FLOOR_REACH, GpuBodySource, invert, listMatches, lookAt, makeGpuBodies, multiply, packBodies, perspective, Renderer, SEG, SEGMENTS, SnapshotSource, transform, translation, normalize, rockIn, ROCK_CELL, ROCK_CLUMP, ROCK_SINK, sunOf, hallTraceCpu, HALL_MAT, OLYMPIA, BOX_VERTS, SPHERE_VERTS, SUN, Sparks, CTL, CLASSIC_SPARKS, sparkBucketReference, type SparkParams, MAX_EVENTS, flashSlot, FLASHES, MAX_BALLS, TRAIL, Lights, LIGHTS, LIGHT_META, LIGHT_PACKED, MATERIAL, AoVolume, aoGrid, aoFrame, splatReference, composeReference, AO_FOOT_WGSL, AO_SAMPLE_WGSL, AO_SEAM_WGSL, AO_ONE, type SplatBody, unpackImpacts, unpackSparks, spawnReference, stepReference, debrisSpawnReference, dustStepReference, chipStepReference, type SparkState, type Impact, type BodySource, type CullFrame, type FrameParams, type RendererOptions, type V3,
 } from '../src/index.ts';
 import { LOOKS, lookByName, realLook } from './looks.ts';
 
@@ -1344,12 +1344,13 @@ export async function debrisFlood(frames: number, dt: number, rate: number | nul
 }
 
 /** A flood: every one of 100k bodies hit at once. Events and sparks stay within their budgets. */
-export async function sparkFlood(n: number) {
+export async function sparkFlood(n: number, classic = false) {
   const { device } = await sharedDevice({ timestamps: false });
   device.pushErrorScope('validation');
   const bs: RawBody[] = Array.from({ length: n }, (_, i) => ({ pos: [(i % 300) * 1.1, 1 + Math.floor(i / 90000), Math.floor(i / 300) % 300] as V3, vel: [0, 0, 0] as V3, shape: 0 }));
   const src = rawSource(device, bodyWords(bs, n), bodyWords(bs, n), sparkShapes(), new Uint32Array(n), n, n);
   const sp = new Sparks(device);
+  if (classic) { sp.config = { ...CLASSIC_SPARKS }; await sparkFrame(device, sp, src); } // budget 0: no bucket
   await sparkFrame(device, sp, src);
   device.queue.writeBuffer(src.bodies, 0, bodyWords(bs.map((b) => ({ ...b, vel: [10, 0, 0] as V3 })), n));
   const hit = await sparkFrame(device, sp, src);
@@ -1798,12 +1799,12 @@ const heatOf = (state: ArrayBuffer) => Array.from(new Uint32Array(state)).filter
  * hard hits mapped linearly above heatDv, and exponential decay once the
  * source is gone.
  */
-export async function heatScript() {
+export async function heatScript(ballSpeed = 0, classic = false) {
   const { device } = await sharedDevice({ timestamps: false });
   device.pushErrorScope('validation');
   const cap = 10, s = Math.sin(Math.PI / 8), c = Math.cos(Math.PI / 8);
   const base: RawBody[] = [
-    { pos: [0, 1, 0], vel: [0, 0, 0], shape: 2 }, // 0: the ball, r 0.4 (reach 0.4 + contact 0.3)
+    { pos: [0, 1, 0], vel: [0, ballSpeed, 0], shape: 2 }, // 0: the ball, r 0.4 (reach 0.4 + contact 0.3)
     { pos: [1.1, 1, 0], vel: [0, 0, 0], shape: 0 }, // 1: gap 0.6, touching
     { pos: [1.25, 1, 0], vel: [0, 0, 0], shape: 0 }, // 2: gap 0.75, not
     { pos: [0, 1, 1.35], vel: [0, 0, 0], shape: 0, rot: [0, s, 0, c] }, // 3: 45 degrees about y: an edge 0.707 from the centre, gap 0.643 (0.85 unrotated)
@@ -1819,10 +1820,12 @@ export async function heatScript() {
   const src = rawSource(device, bodyWords(base, cap), bodyWords(base, cap), sparkShapes(), looks, cap, cap) as BodySource & { balls?: number[] };
   src.balls = [0];
   const sp = new Sparks(device);
+  if (classic) sp.config = { ...CLASSIC_SPARKS };
   const state = async () => heatOf(await readBuffer(device, sp.stateFor(src)));
   const a = await sparkFrame(device, sp, src); // first sight: contact only
   const seen = await state();
   const next = base.map((b) => ({ ...b, vel: [...b.vel] as V3 }));
+  // The ball keeps its speed (no speed change, no event of its own); bodies 5-7 are hit.
   next[5]!.vel = [9, 0, 0]; next[6]!.vel = [0, 4, 0]; next[7]!.vel = [0, 0, -15];
   device.queue.writeBuffer(src.bodies, 0, bodyWords(next, cap));
   const b = await sparkFrame(device, sp, src);
@@ -1870,7 +1873,7 @@ export async function heatGain(n: number) {
  * the glow dims when a crowd of other bodies (out of view) is hot too.
  * Sparks, flashes, bloom and fog are off so only the glow changes pixels.
  */
-export async function heatImage(crowd: number, crowdHot: boolean, dv = 15, heat = true) {
+export async function heatImage(crowd: number, crowdHot: boolean, dv = 15, heat = true, style: 'damage' | 'classic' = 'classic') {
   const { device } = await sharedDevice({ timestamps: false });
   device.pushErrorScope('validation');
   const descs = [box([-1.5, 1, 0], [0.6, 0.6, 0.6], [0, 0, 0, 1]), box([1.5, 1, 0], [0.6, 0.6, 0.6], [0, 0, 0, 1])];
@@ -1878,6 +1881,7 @@ export async function heatImage(crowd: number, crowdHot: boolean, dv = 15, heat 
   const src = new SnapshotSource(device);
   src.reset(descs);
   const rend = new Renderer(device, { size: [W, H] }, { sparkPool: 1024 });
+  rend.setEffectStyle(style);
   rend.look = { ...rend.look, bloomMix: 0, fogDensity: 0 };
   rend.sparks.config = { ...rend.sparks.config, perDv: 0 };
   rend.lights.config = { ...rend.lights.config, flashIntensity: 0 };
@@ -3251,4 +3255,185 @@ export async function hallScale(metres: number[], eye: V3, target: V3, size: [nu
   });
   const err = await device.popErrorScope();
   return { cmp, error: err?.message ?? null };
+}
+
+// ---------------------------------------------------------------- damage effects (PT2)
+
+/**
+ * The live-spark bucket against its twin (sparkBucketReference): a flood of strong injected impacts every
+ * frame, far more than the bucket holds, for `frames` frames of dt each; then nothing, so it refills.
+ */
+export async function sparkBucket(frames: number, dt: number, config: Partial<SparkParams> = {}) {
+  const { device } = await sharedDevice({ timestamps: false });
+  device.pushErrorScope('validation');
+  const src = rawSource(device, new ArrayBuffer(4 * Body.size), new ArrayBuffer(4 * Body.size), sparkShapes(), new Uint32Array(4), 0, 4);
+  const sp = new Sparks(device, 16384);
+  sp.config = { ...sp.config, ...config };
+  const r = rng(7), plan: { events: Impact[]; dt: number }[] = [];
+  const got: number[] = [], alive: number[] = [];
+  for (let k = 0; k < frames + 20; k++) {
+    const events: Impact[] = [];
+    if (k < frames) for (let i = 0; i < 48; i++) {
+      const pos: V3 = [(r() - 0.5) * 20, 1 + r() * 4, (r() - 0.5) * 20], strength = 4 + r() * 26;
+      sp.inject(pos, [0, 1, 0], strength);
+      events.push({ pos, dir: [0, 1, 0], strength: Math.fround(strength), packed: 0xffffff | (1 << 24) });
+    }
+    plan.push({ events, dt });
+    const { ctl } = await sparkFrame(device, sp, src, dt, 0);
+    got.push(ctl[CTL.spawned]!);
+    alive.push(ctl[CTL.alive]!);
+  }
+  const ctl = Array.from(new Uint32Array(await readBuffer(device, sp.ctl)));
+  const err = await device.popErrorScope();
+  sp.destroy();
+  return { got, alive, total: ctl[CTL.total]!, want: sparkBucketReference(plan, sp.config), config: sp.config, error: err?.message ?? null };
+}
+
+/**
+ * Sparks.reset: after impacts that spawned sparks and heated bodies, a reset leaves every particle dead,
+ * every body cold, and the counts at zero; the next frame (the bodies where the reset found them, moving
+ * as they were) sees no impact, since every body is unseen again.
+ */
+export async function sparkReset() {
+  const { device } = await sharedDevice({ timestamps: false });
+  device.pushErrorScope('validation');
+  const cap = 4;
+  const base: RawBody[] = [0, 1, 2, 3].map((i) => ({ pos: [i * 5, 1, 0] as V3, vel: [0, 0, 0] as V3, shape: 0 }));
+  const src = rawSource(device, bodyWords(base, cap), bodyWords(base, cap), sparkShapes(), new Uint32Array(cap), cap, cap);
+  const sp = new Sparks(device, 4096);
+  await sparkFrame(device, sp, src, 1 / 60, 0); // first sight
+  const hitBodies = base.map((b) => ({ ...b, vel: [12, 0, 0] as V3 }));
+  device.queue.writeBuffer(src.bodies, 0, bodyWords(hitBodies, cap));
+  sp.inject([0, 2, 0], [0, 1, 0], 20);
+  const before = (await sparkFrame(device, sp, src, 1 / 60, 0)).ctl;
+  const heatBefore = heatOf(await readBuffer(device, sp.stateFor(src)));
+  sp.inject([0, 2, 0], [0, 1, 0], 20); // queued, never spawned: the reset drops it
+  sp.reset();
+  const reset = Array.from(new Uint32Array(await readBuffer(device, sp.ctl)));
+  const deadAfterReset = unpackSparks(await readBuffer(device, sp.sparks)).every((x) => x.age < 0);
+  const heatReset = heatOf(await readBuffer(device, sp.stateFor(src)));
+  // Moved again (as if restored somewhere else, at a new speed): unseen, so no impact.
+  device.queue.writeBuffer(src.bodies, 0, bodyWords(base.map((b) => ({ ...b, vel: [-12, 0, 0] as V3 })), cap));
+  const after = (await sparkFrame(device, sp, src, 1 / 60, 0)).ctl;
+  const err = await device.popErrorScope();
+  sp.destroy();
+  return {
+    before: { spawned: before[CTL.spawned], hot: before[CTL.hot], alive: before[CTL.alive], heat: heatBefore },
+    reset: { alive: reset[CTL.alive], hot: reset[CTL.hot], total: reset[CTL.total], tokens: reset[CTL.sparkTokens], dead: deadAfterReset, heat: heatReset },
+    after: { events: after[CTL.events], spawned: after[CTL.spawned], alive: after[CTL.alive], hot: after[CTL.hot], total: after[CTL.total] },
+    budget: sp.config.budget, error: err?.message ?? null,
+  };
+}
+
+/**
+ * Renderer.resetEffects and effectStats on a whole frame: a burst, a hard hit, a blast and a lit fuse
+ * show in the stats; after a reset and one more frame every count is 0.
+ */
+export async function effectsReset() {
+  const { device } = await sharedDevice({ timestamps: false });
+  device.pushErrorScope('validation');
+  const descs = [box([-1.5, 1, 0], [0.5, 0.5, 0.5], [0, 0, 0, 1]), box([1.5, 1, 0], [0.5, 0.5, 0.5], [0, 0, 0, 1])];
+  const src = new SnapshotSource(device);
+  src.reset(descs);
+  const rend = new Renderer(device, { size: [W, H] }, { sparkPool: 4096 });
+  rend.setSource(src);
+  const snap = snapshotOf(descs);
+  src.update(snap, descs);
+  const f = (time: number): FrameParams => ({ ...camera([0, 2.5, 7], [0, 1, 0]), groundY: 0, time, dt: 1 / 60 });
+  await rend.render(f(1));
+  snap.linVel[0] = 14; // body 0 hit hard: an impact, heat
+  src.update(snap, descs);
+  rend.burst([0, 2, 0], [0, 1, 0], 20);
+  rend.blast([0, 1, 0], 3, 1);
+  rend.fuse(1);
+  await rend.render(f(1 + 1 / 60));
+  const live = await rend.effectStats();
+  rend.resetEffects();
+  const reset = await rend.effectStats();
+  await rend.render(f(1 + 2 / 60));
+  const next = await rend.effectStats();
+  const err = await device.popErrorScope();
+  rend.destroy();
+  return { live, reset, next, error: err?.message ?? null };
+}
+
+/**
+ * A ball's own impact bids for a flash at LightParams.ballFlash of its strength, a block's in full: two
+ * bodies in different flash cells change speed by the same 15 m/s, one a ball.
+ */
+export async function ballFlash(classic = false) {
+  const { device } = await sharedDevice({ timestamps: false });
+  device.pushErrorScope('validation');
+  const cap = 4;
+  const at: V3[] = [[2, 1, 2], [-10, 1, -10]];
+  const base: RawBody[] = at.map((pos, i) => ({ pos, vel: [0, 0, 0] as V3, shape: i === 0 ? 2 : 0 }));
+  const looks = Uint32Array.of(MATERIAL.ball << 12, 0, 0, 0);
+  const src = rawSource(device, bodyWords(base, cap), bodyWords(base, cap), sparkShapes(), looks, 2, cap);
+  const records = device.createBuffer({ size: cap * RenderRecord.size, usage: GPUBufferUsage.STORAGE });
+  const sp = new Sparks(device, 1024), lights = new Lights(device);
+  sp.config = { ...sp.config, perDv: 0 };
+  if (classic) lights.config = { ...lights.config, ballFlash: 1 };
+  const frame = async (time: number) => {
+    const enc = device.createCommandEncoder();
+    const pass = enc.beginComputePass();
+    sp.encode(pass, src, { dt: 0, groundY: -100 });
+    lights.encode(pass, src, records, sp, { eye: [0, 0, 0], time, ball: [1, 1, 1] });
+    pass.end();
+    device.queue.submit([enc.finish()]);
+  };
+  await frame(1);
+  device.queue.writeBuffer(src.bodies, 0, bodyWords(base.map((b) => ({ ...b, vel: [15, 0, 0] as V3 })), cap));
+  await frame(1);
+  const fl = new Float32Array(await readBuffer(device, lights.flashes));
+  const i0 = (p: V3) => fl[flashSlot(p) * 8 + 4]!;
+  const out = { slots: at.map((p) => flashSlot(p)), ball: i0(at[0]!), block: i0(at[1]!), full: lights.config.flashIntensity, share: lights.config.ballFlash };
+  const err = await device.popErrorScope();
+  sp.destroy();
+  lights.destroy();
+  records.destroy();
+  return { ...out, error: err?.message ?? null };
+}
+
+/**
+ * The heat glow's shape on a hard-hit cube (heat 1, dv 15), against its cold frame: how many of its
+ * pixels turn near white (every channel over 235), and how much brighter it gets within 2 px of its
+ * outline than deeper than 6 px inside (the rim style glows along the edges).
+ */
+export async function heatRim(style: 'damage' | 'classic', dv = 15) {
+  const { device } = await sharedDevice({ timestamps: false });
+  device.pushErrorScope('validation');
+  const descs = [box([0, 1, 0], [0.9, 0.9, 0.9], [0, 0, 0, 1])];
+  const src = new SnapshotSource(device);
+  src.reset(descs);
+  const rend = new Renderer(device, { size: [W, H] }, { sparkPool: 1024 });
+  rend.setEffectStyle(style);
+  rend.look = { ...rend.look, bloomMix: 0, fogDensity: 0 };
+  rend.sparks.config = { ...rend.sparks.config, perDv: 0 };
+  rend.lights.config = { ...rend.lights.config, flashIntensity: 0 };
+  rend.toggles.trail = false;
+  rend.setSource(src);
+  const f: FrameParams = { ...camera([2.2, 3.2, 4.5], [0, 1, 0]), groundY: 0, time: 1, dt: 0, alpha: 1 };
+  const snap = snapshotOf(descs);
+  src.update(snap, descs);
+  const cold = (await rend.render(f, true, true))!.pixels!;
+  snap.linVel[1] = dv;
+  src.update(snap, descs);
+  const hot = (await rend.render(f, true, true))!.pixels!;
+  const ids = (await rend.renderIds(f)).ids, faces = (await rend.renderIds(f, true)).ids;
+  const err = await device.popErrorScope();
+  rend.destroy();
+  const inside = (x: number, y: number) => x >= 0 && y >= 0 && x < W && y < H && ids[y * W + x] === 1;
+  // Pixels to the nearest other face (or the background) along the axes: how deep inside its face a pixel is.
+  const same = (x: number, y: number, face: number) => inside(x, y) && faces[y * W + x] === face;
+  const depth = (x: number, y: number) => { const fc = faces[y * W + x]!; let d = 0; while (d < 12 && [[1, 0], [-1, 0], [0, 1], [0, -1]].every(([a, b]) => same(x + a! * (d + 1), y + b! * (d + 1), fc))) d++; return d; };
+  const luma = (px: typeof hot, o: number) => 0.2126 * px.data[o]! + 0.7152 * px.data[o + 1]! + 0.0722 * px.data[o + 2]!;
+  let white = 0, n = 0, rim = 0, rimN = 0, mid = 0, midN = 0;
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+    if (!inside(x, y)) continue;
+    const o = y * hot.bytesPerRow + 4 * x, d = depth(x, y), dl = luma(hot, o) - luma(cold, o);
+    n++;
+    if (hot.data[o]! > 235 && hot.data[o + 1]! > 235 && hot.data[o + 2]! > 235) white++;
+    if (d <= 2) { rim += dl; rimN++; } else if (d >= 6) { mid += dl; midN++; }
+  }
+  return { n, white, rim: rim / Math.max(1, rimN), mid: mid / Math.max(1, midN), rimN, midN, error: err?.message ?? null };
 }
