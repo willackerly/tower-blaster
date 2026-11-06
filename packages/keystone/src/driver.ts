@@ -4,6 +4,7 @@
 import { type BodyDesc, type EngineCheckpoint, type InputEvent, type PhysicsEngine, type Snapshot, type SpawnEvent, spawnedBodies } from '@tb/engine-api';
 import { Arsenal } from './arsenal.ts';
 import { forkDeep } from './fork.ts';
+import { type IceCrack, IceBreaker } from './ice.ts';
 import { type CompiledLevel, physicsOf } from './level.ts';
 import { CpuObserver, type Observation } from './rules.ts';
 import { type Feedback, Session } from './session.ts';
@@ -128,7 +129,7 @@ export interface DriverCheckpoint {
 interface DriverState {
   session: Session; snapshot: Snapshot; snapshotStep: number; observed: Observation | null; pushed: InputEvent[];
   observer: CpuObserver; spawnSteps: number[]; spawns: InputEvent[]; descs: BodyDesc[]; arsenal: Arsenal;
-  blastsDue: Extract<Feedback, { t: 'blast' }>[];
+  blastsDue: Extract<Feedback, { t: 'blast' }>[]; ice: IceBreaker;
 }
 
 export class Driver {
@@ -160,6 +161,8 @@ export class Driver {
   private arsenal!: Arsenal;
   /** Blasts pushed whose 'blast' feedback waits for the first state that shows them. */
   private blastsDue: Extract<Feedback, { t: 'blast' }>[] = [];
+  /** The level's ice: damage, cracks and shatters (ice.ts). */
+  private ice!: IceBreaker;
 
   /**
    * Wall time of the last reset(), ms, by the clock it was given (ResetOptions.now; 0 without): the
@@ -195,6 +198,7 @@ export class Driver {
     this.descs = [...this.level.scene.bodies];
     this.arsenal = new Arsenal(this.level, this.engine.info.integrator?.substeps ?? 1);
     this.blastsDue = [];
+    this.ice = new IceBreaker(this.level);
     this.observed = null;
   }
 
@@ -212,6 +216,7 @@ export class Driver {
     const own = (): DriverState => ({
       session: this.session, snapshot: this.snapshot, snapshotStep: this.snapshotStep, observed: this.observed, pushed: this.pushed,
       observer: this.observer, spawnSteps: this.spawnSteps, spawns: this.spawns, descs: this.descs, arsenal: this.arsenal, blastsDue: this.blastsDue,
+      ice: this.ice,
     });
     // The compiled level and its bodies are immutable inputs: shared, not copied.
     const shared = [this.level, ...this.level.scene.bodies];
@@ -244,6 +249,7 @@ export class Driver {
         this.descs = c.descs;
         this.arsenal = c.arsenal;
         this.blastsDue = c.blastsDue;
+        this.ice = c.ice;
         this.ahead = ahead ? this.read() : null;
       },
       dispose: () => { saved = null; engine.dispose(); },
@@ -284,9 +290,10 @@ export class Driver {
     // Engines number spawns by (step, push order); every spawn pushed before is due by now or later
     // than this one (push's stamping rule), so the ammo comes after exactly those due by now.
     const body = this.level.meta.n + this.spawnSteps.filter((s) => s <= step).length;
-    const now = this.session.phase === 'running' ? this.observer.peek(this.snapshot, this.snapshotStep, this.session.watchIdx) : undefined;
+    const ruled = this.ice.view(this.snapshot);
+    const now = this.session.phase === 'running' ? this.observer.peek(ruled, this.snapshotStep, this.session.watchIdx) : undefined;
     const { spawn, event, feedback } = this.session.fire(shot, step, body, now);
-    this.observer.setBaseline(this.snapshot, step);
+    this.observer.setBaseline(ruled, step);
     if (!spawn) {
       // A pull: one removal, nothing spawned, so later ammo is numbered as if it were not there.
       this.engine.push([event]);
@@ -332,6 +339,31 @@ export class Driver {
     return this.arsenal.pending(this.snapshotStep);
   }
 
+  /**
+   * Ice (ice.ts) from the state just observed: its cracks as feedback, and a shatter pushed (the block
+   * removed and its pieces spawned, due after that state) and told to the session and the game.
+   */
+  private breakIce(feedback: Feedback[]): void {
+    if (!this.ice.any) return;
+    const r = this.ice.observe(this.snapshot, this.snapshotStep, this.descs, this.level.scene.dt);
+    for (const c of r.cracks) feedback.push({ t: 'iceCrack', step: this.snapshotStep, ...c });
+    if (!r.shatter) return;
+    this.push(r.events);
+    const placed = this.ice.placed(r.events.filter((e): e is SpawnEvent => e.kind === 'spawn').map((e) => this.idOf(e)));
+    this.session.shatter(r.shatter.body);
+    feedback.push({ t: 'shatter', step: placed.step, body: placed.body, pieces: placed.pieces, dv: r.shatter.dv });
+  }
+
+  /** Every ice body with its crack as it stands (IceBreaker.surfaces): what the game paints as ice on a load or an undo. */
+  get iceSurfaces(): IceCrack[] {
+    return this.ice.surfaces();
+  }
+
+  /** The state the rules score (IceBreaker.view): `snapshot`, with each shattered block where its pieces are. */
+  get ruled(): Snapshot {
+    return this.ice.view(this.snapshot);
+  }
+
   /** End an outcome level now (Session.bank): the world is frozen while aiming, so the step is the observed one. */
   bank(): Feedback[] {
     return this.session.bank(this.snapshotStep);
@@ -343,7 +375,8 @@ export class Driver {
       this.snapshot = await this.engine.snapshot();
       this.snapshotStep = this.engine.stepIndex;
       const out: Feedback[] = [], hold = this.arm(out);
-      this.observed = this.observer.observe(this.snapshot, this.engine.stepIndex, this.session.watchIdx);
+      this.breakIce(out);
+      this.observed = this.observer.observe(this.ice.view(this.snapshot), this.engine.stepIndex, this.session.watchIdx);
       return [...out, ...this.session.observe(this.observed, hold)];
     }
     if (!this.ahead) {
@@ -357,7 +390,8 @@ export class Driver {
     this.snapshotStep = n;
     this.ahead = this.read();
     const out: Feedback[] = [], hold = this.arm(out);
-    this.observed = this.observer.observe(this.snapshot, n, this.session.watchIdx);
+    this.breakIce(out);
+    this.observed = this.observer.observe(this.ice.view(this.snapshot), n, this.session.watchIdx);
     const feedback = [...out, ...this.session.observe(this.observed, hold)];
     if (this.session.phase !== 'running') await this.drain();
     return feedback;

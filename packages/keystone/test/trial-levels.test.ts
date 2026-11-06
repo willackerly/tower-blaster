@@ -4,7 +4,7 @@
 // code it names does turn up, so a note never outlives its issue). That its
 // rack reaches across its launcher ring is keystone-lab's trial-reach.test.ts.
 import { describe, expect, it } from 'vitest';
-import { archWall, compileLevel, DRAFTS, dominoRun, findLevel, isTrial, LEVELS, BIG_LEVELS, scoringOf, slabBuilding, towerChain, TRIAL_LEVELS, TRIAL_NOTES, UNDERCUT_LEVELS, validateLevel } from '@tb/keystone';
+import { archWall, compileLevel, DRAFTS, dominoRun, findLevel, IceBreaker, isTrial, LEVELS, BIG_LEVELS, materialId, scoringOf, slabBuilding, towerChain, TRIAL_LEVELS, TRIAL_NOTES, UNDERCUT_LEVELS, validateLevel } from '@tb/keystone';
 
 const sizes = new Map(TRIAL_LEVELS.map((d) => [d.id, compileLevel(d)]));
 
@@ -13,7 +13,7 @@ describe('trial levels', () => {
     const ids = TRIAL_LEVELS.map((d) => d.id);
     expect(new Set(ids).size).toBe(ids.length);
     for (const id of ids) {
-      expect(id).toMatch(/^T-[SXB]\d+[A-Z]?$/);
+      expect(id).toMatch(/^T-[SXBI]\d+[A-Z]?$/);
       expect(isTrial(id) && isTrial(id.toLowerCase())).toBe(true);
       expect(TRIAL_NOTES[id]?.from, id).toBeTruthy();
       expect(findLevel(id)).toBe(TRIAL_LEVELS.find((d) => d.id === id));
@@ -28,6 +28,18 @@ describe('trial levels', () => {
     const drafts = TRIAL_LEVELS.filter((d) => /^T-B/.test(d.id)).map((d) => d.id.slice(2));
     expect(drafts).toEqual(Object.keys(DRAFTS).filter((k) => k !== 'B1c' && k !== 'B3d').map((k) => k.toUpperCase()));
     expect(TRIAL_LEVELS.filter((d) => /^T-X/.test(d.id)).map((d) => d.id)).toEqual(['T-X1', 'T-X2', 'T-X3', 'T-X3B', 'T-X3K', 'T-X4']);
+  });
+
+  it('the ice trials are ice: all of T-I1 and T-I2, the top four courses of T-I3 (crowned) over stone; each budgets its pieces', () => {
+    const ice = materialId('ice'), stone = materialId('stone');
+    const ids = TRIAL_LEVELS.filter((d) => /^T-I/.test(d.id)).map((d) => d.id);
+    expect(ids).toEqual(['T-I1', 'T-I2', 'T-I3']);
+    for (const id of ['T-I1', 'T-I2']) expect([...sizes.get(id)!.meta.material].every((m) => m === ice), id).toBe(true);
+    const k = sizes.get('T-I3')!.meta;
+    expect([...k.material].filter((m) => m === ice)).toHaveLength(36);
+    expect([...k.material].filter((m) => m === stone)).toHaveLength(36);
+    expect(k.crowns.every((b) => k.material[b] === ice)).toBe(true);
+    for (const id of ids) expect(IceBreaker.budget(sizes.get(id)!), id).toBeGreaterThan(0);
   });
 
   it.each(TRIAL_LEVELS.map((d) => d.id))('%s: an uncast outcome level inside the GPU budget, with exactly the issues its note names', (id) => {

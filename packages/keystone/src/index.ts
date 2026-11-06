@@ -1,6 +1,7 @@
 export * from './materials.ts';
 export * from './rack.ts';
 export * from './arsenal.ts';
+export * from './ice.ts';
 export * from './shots.ts';
 export * from './level.ts';
 export * from './scenario-part.ts';
