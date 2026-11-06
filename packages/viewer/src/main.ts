@@ -17,7 +17,7 @@ import { alphaAt, newArrivals, newClock, newPacer, pauseLatch, runFree, stepsDue
 import type { V3 } from './math.ts';
 import { HEALTH_MS, limitFix, limitFixLabel, limitsHtml } from './health.ts';
 import { escapeHtml } from './html.ts';
-import { bounceOn, engineSpec, firedBody, froudeSpeed, keystoneEngine, levelOf, pageLevels, parseViewerConfig, presetSearch, quarterMetre, scenarioEngineSpec, sceneTitle, toSearch, type ViewerConfig, viewerScene, withOption, worldEngineSpec } from './params.ts';
+import { bounceOn, engineSpec, firedBody, froudeSpeed, keystoneEngine, levelOf, pageLevels, parseViewerConfig, presetSearch, quarterMetre, scenarioEngineSpec, sceneTitle, sleepEngineSpec, toSearch, type ViewerConfig, viewerScene, withOption, worldEngineSpec } from './params.ts';
 import { inLevelGrenade, inLevelWeapon, projectileRadius, pushRadiusLimit, worldGrenade, worldWeapon } from './projectile.ts';
 import { type WeaponScale, WeaponRuntime } from '@tb/weapons';
 import { mountControls } from './controls.ts';
@@ -57,7 +57,7 @@ const GPU_ITERATIONS = [10, 15, 20, 40];
 const KEYSTONE_AVBD = { iterations: AVBD_ITERATIONS, gapSlop: AVBD_GAP_SLOP } as const;
 const keystoneAvbd = (spec: string) => withOption(withOption(spec, 'iterations', KEYSTONE_AVBD.iterations), 'gapSlop', KEYSTONE_AVBD.gapSlop);
 
-const viewerEngine = (c: ViewerConfig): PhysicsEngine => makeEngine(worldEngineSpec(engineSpec(scenarioEngineSpec(c.engine, c.scenario), c.projectile, c.scale), c.scale));
+const viewerEngine = (c: ViewerConfig): PhysicsEngine => makeEngine(worldEngineSpec(engineSpec(sleepEngineSpec(scenarioEngineSpec(c.engine, c.scenario), c.sleep), c.projectile, c.scale), c.scale));
 
 interface ViewerHandle {
   status: 'loading' | 'running' | 'error';
@@ -207,6 +207,8 @@ async function main() {
   renderer.setSource(source);
   renderer.look = lookByName(config.look, config.real);
   renderer.toggles.blasts = config.blast.on;
+  // Debug: sleeping bodies in blue (keystone.sleeptint, the Scene panel); under Keystone's rules the game loop sets it from feel.
+  renderer.toggles.sleepTint = config.feel.sleepTint;
   renderer.blasts.config = { ...config.blast.params };
   renderer.ice.params = { ...config.ice };
   const sound = new ViewerSound();
@@ -303,6 +305,7 @@ async function main() {
     const t0 = performance.now();
     const s = await engine.snapshot();
     config = want;
+    renderer.toggles.sleepTint = want.feel.sleepTint;
     scene = next;
     handle.variant = engine.info.variant;
     handle.health = null;

@@ -6,6 +6,7 @@ import { defineStruct, FxState, RenderRecord, Spark, wgslStruct } from '@tb/sche
 import { BAND_HALF, FX_BAND, FX_EMISSIVE_MAX, FX_MATTE, FX_PAINT, FX_WGSL } from './fx.ts';
 import { BEVEL_WGSL, OKLAB_WGSL } from './look.ts';
 import { MARKS_WGSL } from './marks.ts';
+import { ASLEEP_BLUE, LOOK_ASLEEP } from './looks.ts';
 import { SPARK_COMMON } from './sparks.ts';
 import { LIGHT_META, LIGHT_PACKED, LIGHT_VEC4, MAX_BALLS, TRAIL } from './lights.ts';
 import { AO_FOOT_WGSL, AO_SAMPLE_WGSL, AO_SEAM_WGSL } from './ao.ts';
@@ -740,7 +741,7 @@ const REAL_FS_BOX = /* wgsl */ `fragPx = v.clip.xy;
     let seam = 1.0 - 0.4 * min(1.0, wPx / 0.75) * (1.0 - smoothstep(drawn - 0.5, drawn + 0.5, edgeM / max(pxM, 1e-6)));
     var c = shade(base * seam, v.rel, n, aaAlpha(alpha, n, dndx, dndy), aaAlpha(0.0049, n, dndx, dndy), 0.0, aoBox(v, n, lp, faceN, aoPxM));
     c += base * seam * fxGlow(w, fr.time);
-    return vec4f(fog(c, v.rel), 1.0);
+    return vec4f(fog(asleepCast(v.look, c), v.rel), 1.0);
   }
   `;
 
@@ -1182,7 +1183,16 @@ fn albedo(look: u32) -> vec3f {
   return max(oklabToLinear(lab), vec3f(0.0));
 }
 
-fn material(look: u32) -> u32 { return (look >> 12u) & 0xfu; }
+fn material(look: u32) -> u32 { return (look >> 12u) & 0x7u; }
+// Debug (Renderer.toggles.sleepTint, looks.ts LOOK_ASLEEP): a sleeping body keeps its shading's luminance in a cold
+// blue. The luminance is first squeezed below 1 at the look's exposure (Reinhard), so that a face lit past white
+// still reads blue after the tone map rather than washing out.
+fn asleepCast(look: u32, c: vec3f) -> vec3f {
+  if ((look & ${LOOK_ASLEEP}u) == 0u) { return c; }
+  let x = max(fr.exposure, 1e-4);
+  let e = dot(c, vec3f(0.2126, 0.7152, 0.0722)) * x;
+  return e / (1.0 + e) / x * vec3f(${ASLEEP_BLUE.join(', ')});
+}
 
 // Body-local normal of the box face being drawn, from local and w =
 // fwidth(local): the axis along which local does not change across the
@@ -1226,7 +1236,7 @@ fn boxFace(local: vec3f, w: vec3f) -> vec3f {
   var c = shade(base * seam, v.rel, n, aaAlpha(rough * rough, n, dndx, dndy), aaAlpha(0.0049, n, dndx, dndy), select(0.0, fr.clearcoat, isCandy), aoBox(v, n, lp, faceN, aoPxM));
   c += base * seam * fxGlow(w, fr.time);
   c += heatGlow(v.slot, base);
-  return vec4f(fog(c, v.rel), 1.0);
+  return vec4f(fog(asleepCast(v.look, c), v.rel), 1.0);
 }
 
 // Heat from hard hits and ball contact (sparks.ts), scaled down when many
@@ -1241,7 +1251,7 @@ fn heatGlow(slot: u32, base: vec3f) -> vec3f {
 
 // Bench diagnostics (RendererOptions.flatBoxes): the cheapest box shading.
 @fragment fn fsBoxFlat(v: VOut) -> @location(0) vec4f {
-  return vec4f(albedo(v.look), 1.0);
+  return vec4f(asleepCast(v.look, albedo(v.look)), 1.0);
 }
 
 @fragment fn fsSphere(v: VOut) -> @location(0) vec4f {
@@ -1272,7 +1282,7 @@ fn heatGlow(slot: u32, base: vec3f) -> vec3f {
   let NoV = max(dot(n, normalize(-v.rel)), 0.0);
   // The look's ball glow takes the paint, not the band: a glowing white band would clip flat in a look with a strong glow (candy).
   c += select(vec3f(0.0), select(fr.ball, own * fxTint(w.x), paint) * (1.0 - band) * fr.ballEmissive * (0.35 + 0.65 * NoV), isBall && !matte);
-  return vec4f(fog(c, v.rel), 1.0);
+  return vec4f(fog(asleepCast(v.look, c), v.rel), 1.0);
 }
 
 // Overlay spheres (setOverlay): not bodies, no shadows; slot = overlay index.

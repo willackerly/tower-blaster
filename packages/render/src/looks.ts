@@ -5,6 +5,17 @@
 import { TAG_BALL, type BodyDesc } from '@tb/engine-api';
 
 export const MATERIAL = { candy: 0, ball: 1, debris: 2 } as const;
+/**
+ * Debug (Renderer.toggles.sleepTint): the cull sets this bit, the top of the material nibble, in a drawn
+ * record's look when its body is asleep, and the body shaders give it a cold blue cast. lookOf never sets
+ * it, and the shaders read the material from the nibble's low 3 bits.
+ */
+export const LOOK_ASLEEP = 1 << 15;
+/**
+ * The colour a sleeping body's shaded luminance takes (linear, before fog; shaders.ts asleepCast squeezes that
+ * luminance below white at the look's exposure first): its hue gone to a cold blue, its shading kept.
+ */
+export const ASLEEP_BLUE = [0.25, 0.5, 1.6] as const;
 
 export interface LookRange { minY: number; maxY: number }
 

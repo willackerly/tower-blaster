@@ -198,7 +198,8 @@ export function proposeScene(c: ViewerConfig, scenario: string, params: Record<s
       return { ok: true, config: next, bodies: compileLevel(def).scene.bodies.length };
     }
     // Anything else is the sandbox.
-    c = { ...c, rules: 'sandbox', feel: { ...DEFAULT_FEEL }, shots: null, look: lookFor(c, 'sandbox') };
+    // The sandbox has no pace juice; the sleep tint (a debug view, the panel's under both rules) carries over.
+    c = { ...c, rules: 'sandbox', feel: { ...DEFAULT_FEEL, sleepTint: rules.feel.sleepTint }, shots: null, look: lookFor(c, 'sandbox') };
     const settle = presettle ?? defaultPresettle(level);
     if (!Number.isInteger(settle) || settle < 0 || settle > MAX_PRESETTLE) throw new Error(`settle steps must be a whole number from 0 to ${MAX_PRESETTLE}`);
     if (picked) {
@@ -289,6 +290,7 @@ export function mountControls(root: HTMLElement, hooks: ControlsHooks): { refres
       <div class="rules">
         <label class="f"><span>rules</span><select name="rules"><option value="sandbox">sandbox</option><option value="keystone">Keystone (the game)</option></select></label>
         <div class="feel">${field('hitstop', 'hit-stop on contact', false)}${field('slowmo', 'slow motion as crowns fall', false)}${field('budget', 'physics budget, ms per 1/60 s (0: no valve)', DEFAULT_BUDGET_MS, 'step="any" min="0" max="1000"')}${field('tailskip', 'fast-forward the tail of a shot', true)}${field('follow', 'camera follows the collapse', false)}${field('shake', 'camera shakes on hits', false)}${field('rapid', 'rapid fire: shoot before the last shot settles', true)}${field('undo', 'undo memory, MB (0: undo replays the shots)', DEFAULT_UNDO_MB, `step="1" min="0" max="${MAX_UNDO_MB}"`)}${field('freeze', 'freezes, Bullet Time (empty: the level\'s own)', '', `step="1" min="0" max="${MAX_FREEZE}" placeholder="level's"`)}<label class="f"><span>frames drawn</span><select name="frames"><option value="all">every frame</option><option value="half">half on a fast display</option><option value="auto">half while physics is behind</option></select></label><label class="f"><span>launch height (keys W, S move it)</span><select name="launch"><option value="high">high: over the structure's top</option><option value="level">the level's own launcher</option></select></label><label class="f"><span>fired balls</span><select name="balls"><option value="painted">painted, banded</option><option value="plain">plain: the look's</option></select></label>${field('marks', 'stone marks: crosshair on crowns, shield on what to keep', true)}</div>
+        ${field('sleeptint', 'debug: sleeping blocks in blue (both rules)', false)}
       </div>
       <div class="seed">${field('seed', 'seed', 1, 'step="1"')}</div>
       <div class="world">
@@ -428,6 +430,7 @@ export function mountControls(root: HTMLElement, hooks: ControlsHooks): { refres
       undoMB: input(sceneForm, 'undo').value === '' ? NaN : Number(input(sceneForm, 'undo').value),
       launch: input(sceneForm, 'launch').value as LaunchMode, balls: input(sceneForm, 'balls').value as BallStyle,
       marks: (input(sceneForm, 'marks') as HTMLInputElement).checked,
+      sleepTint: (input(sceneForm, 'sleeptint') as HTMLInputElement).checked,
     }, freeze: input(sceneForm, 'freeze').value === '' ? NaN : Number(input(sceneForm, 'freeze').value) };
     return proposeScene(hooks.config(), scenario, params, Number(input(sceneForm, 'seed').value), Number(input(sceneForm, 'scale').value), Number(input(sceneForm, 'substeps').value), bounce, presettle, rules);
   }
@@ -671,6 +674,7 @@ export function mountControls(root: HTMLElement, hooks: ControlsHooks): { refres
     input(sceneForm, 'launch').value = c.feel.launch;
     input(sceneForm, 'balls').value = c.feel.balls;
     (input(sceneForm, 'marks') as HTMLInputElement).checked = c.feel.marks;
+    (input(sceneForm, 'sleeptint') as HTMLInputElement).checked = c.feel.sleepTint;
     input(sceneForm, 'seed').value = String(c.seed);
     input(sceneForm, 'presettle').value = String(c.presettle);
     input(sceneForm, 'scale').value = String(c.scale);

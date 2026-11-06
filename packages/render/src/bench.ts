@@ -198,7 +198,7 @@ export async function runRenderBench(opts: Partial<RenderBenchOptions> = {}): Pr
     if (variant === 'real-plain-dust') rend.look = realLook({ dustErode: 0, dustThin: 0, dustSkirt: 0 });
     if (variant === 'real-rocks') rend.look = realLook({ rocks: 0.6 });
     if (variant === 'real-polish-off') rend.look = realLook(REAL_POLISH_OFF);
-    rend.toggles = { shadow: variant !== 'no-shadow', post: variant !== 'no-post', sparks: variant !== 'no-sparks', trail: true, heat: variant !== 'no-heat', ao: variant !== 'no-ao', blasts: true };
+    rend.toggles = { shadow: variant !== 'no-shadow', post: variant !== 'no-post', sparks: variant !== 'no-sparks', trail: true, heat: variant !== 'no-heat', ao: variant !== 'no-ao', blasts: true, sleepTint: false };
     return rend;
   });
   for (const worldName of o.worlds) for (const n of o.counts) {

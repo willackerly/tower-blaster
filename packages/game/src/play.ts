@@ -1531,6 +1531,8 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     // without bound and every readback (a step's, a replay's) wait behind them.
     // There, draw only for a capture.
     if ((!offscreen && draw) || want) {
+      // Debug: blocks asleep in blue (keystone.sleeptint, the Scene panel), read live.
+      renderer.toggles.sleepTint = feel.sleepTint;
       const stats = await renderer.render(fp, !!want, want?.keep);
       if (want) want.resolve(stats);
     }

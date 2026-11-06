@@ -500,6 +500,17 @@ export function bounceOn(spec: string): boolean {
   return AVBD_ENGINES.has(name) && !!options.restitution;
 }
 
+/**
+ * The GPU engine's own per-body sleep (GpuEngineOptions.sleep, roadmap E2) follows the viewer's sleep switch: with
+ * `sleep=1` (ViewerConfig.sleep true) an avbd-gpu spec that leaves sleep unsaid gets sleep=true, so the scene's
+ * sleep acts on the GPU as it does on Rapier. Not with Bounce on (the engine refuses sleep with restitution), and
+ * never against the spec's own sleep option; with the switch absent or off the spec is as given (GPU sleep opt-in).
+ */
+export function sleepEngineSpec(spec: string, sleep: boolean | null): string {
+  const { name, options } = parseSpec(spec);
+  return sleep === true && name === 'avbd-gpu' && options.sleep === undefined && !bounceOn(spec) ? withOption(spec, 'sleep', true) : spec;
+}
+
 // bounceBody and bounceScene (the body and the scene at Bounce's e) live in @tb/scenarios, shared with bench runs (--bounce).
 export { bounceBody, bounceScene };
 

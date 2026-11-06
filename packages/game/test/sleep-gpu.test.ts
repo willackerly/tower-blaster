@@ -1,7 +1,7 @@
 // GPU per-body sleep in the game (roadmap E2.5): `?keystone.sleep=1` (or a level's physics.sleep) builds
 // the GPU engine with sleep. The structure falls asleep in the pre-settle, a shot wakes what it touches
 // (the whole tower: one touch wakes the sleeper group), the par line still clears, and an undo puts the
-// world, sleepers and all, back as it was. One file of its own: SwiftShader takes about half a minute.
+// world, sleepers and all, back as it was. The debug tint (keystone.sleeptint) draws the sleepers in blue. One file of its own: SwiftShader takes about half a minute.
 import { describe, expect, it } from 'vitest';
 import { limitsHit } from '@tb/engine-api';
 import { LEVELS, type Shot } from '@tb/keystone';
@@ -23,6 +23,32 @@ describe('sleep on in the game (GPU)', () => {
     // The 300-step pre-settle leaves the tower at rest: (nearly) every block asleep. SwiftShader sleeps all 40.
     expect(start.asleep.of).toBe(40);
     expect(start.asleep.asleep).toBeGreaterThanOrEqual(36);
+    // The debug tint (keystone.sleeptint, read live): the sleeping tower draws in blue, and only it changes.
+    const tinted = await page.evaluate(async () => {
+      const g = window.__game;
+      const shot = async (on: boolean) => { g.feel.sleepTint = on; return (await g.capture(true))!.pixels!; };
+      const off = await shot(false), on = await shot(true);
+      g.feel.sleepTint = false;
+      const keep = { off: off.data, on: on.data, bytesPerRow: off.bytesPerRow };
+      let changed = 0, blueGain = 0;
+      for (let o = 0; o < off.data.length; o += 4) {
+        const d = Math.abs(on.data[o]! - off.data[o]!) + Math.abs(on.data[o + 1]! - off.data[o + 1]!) + Math.abs(on.data[o + 2]! - off.data[o + 2]!);
+        if (d < 30) continue;
+        changed++;
+        blueGain += (on.data[o + 2]! - on.data[o]!) - (off.data[o + 2]! - off.data[o]!);
+      }
+      return { changed, total: off.data.length / 4, blueGain: changed ? blueGain / changed : 0, keep };
+    });
+    // Screenshots (SLEEP_SHOTS=dir): the tower asleep with the tint off and on.
+    if (process.env.SLEEP_SHOTS) {
+      const { writeFileSync } = await import('node:fs');
+      const { encodePng } = await import('@tb/testkit');
+      const w = tinted.keep.bytesPerRow / 4, h = tinted.keep.off.length / tinted.keep.bytesPerRow;
+      for (const k of ['off', 'on'] as const) writeFileSync(`${process.env.SLEEP_SHOTS}/sleep-tint-${k}.png`, encodePng(w, h, { data: tinted.keep[k], bytesPerRow: tinted.keep.bytesPerRow }));
+    }
+    console.log(`sleep tint: ${tinted.changed} of ${tinted.total} pixels changed, blue minus red up ${tinted.blueGain.toFixed(1)} on them`);
+    expect(tinted.changed).toBeGreaterThan(0.01 * tinted.total);
+    expect(tinted.blueGain).toBeGreaterThan(40);
     const shots = def.solutions!.par as Shot[];
     expect(shots.length).toBe(1);
     await page.evaluate(() => { window.__game.fast = true; });
