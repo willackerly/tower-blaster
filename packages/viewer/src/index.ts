@@ -10,3 +10,4 @@ export * from './level-file.ts';
 export * from './dev-panel.ts';
 export * from './default-scene.ts';
 export * from './sound-config.ts';
+export * from './weapon-editor.ts';
