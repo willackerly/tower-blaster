@@ -6,6 +6,13 @@ import { CLEAR_DAY, type AtmosphereParams } from './atmosphere.ts';
 import { type Ground, GROUNDS, type Stone, STONE_PALETTES, STONES } from './materials.ts';
 import { type HallParams, hallScaled, OLYMPIA } from './hall.ts';
 
+/**
+ * The final composite's tone map (tonemap.ts): agx, AgX with the punchy look (the default, and the
+ * stylized looks' only one); agx-base, AgX without it; neutral, Khronos PBR Neutral; aces, Hill's ACES fit.
+ */
+export const TONE_MAPS = ['agx', 'agx-base', 'neutral', 'aces'] as const;
+export type ToneMap = (typeof TONE_MAPS)[number];
+
 /** Where the scene stands: in the open, or inside the exhibition hall (hall.ts). */
 export const ENVS = ['outdoor', 'hall'] as const;
 export type Env = (typeof ENVS)[number];
@@ -47,6 +54,16 @@ export interface LookParams {
   /** Fraction of the bloom pyramid mixed into the image (energy-conserving). */
   bloomMix: number;
   vignette: number;
+  /** The composite's tone map (default agx); the others go through a gain that puts mid grey where AgX does (tonemap.ts). */
+  toneMap?: ToneMap;
+  /** Film grain (tonemap.ts grained): amount (0: none; 1: 10% of mid grey) and size in pixels. Left out: none. */
+  grain?: { amount: number; size: number };
+  /**
+   * With an atmosphere: the look's own ball (not painted, not matte) as steel: metal 0 (the dielectric ball
+   * with a clear coat, as before) to 1 (bare metal: no diffuse, its specular coloured by STEEL_F0), and its
+   * GGX roughness (perceptual, alpha = rough^2).
+   */
+  ballMetal?: { metal: number; rough: number };
   /** Direction toward the sun (default SUN in renderer.ts). */
   sunDir?: V3;
   /**
@@ -243,6 +260,18 @@ export interface RealOptions {
   hallIron: number;
   /** 1: the hall is drawn with the eye outside it too, its shell lit as outdoors; 0: only from inside. */
   hallExterior: number;
+  /**
+   * Polish (realism step 7, docs/render/polish.md). toneMap: the composite's tone map (TONE_MAPS; the
+   * others matched to AgX at mid grey). grain: film grain, its relative strength at mid grey in tenths
+   * (0: none; 1 is 10%), rising as 1 / sqrt(luminance) in the darks (shot noise); grainSize: its size in
+   * pixels. ballMetal: the look's own ball from the old clear-coated grey (0) to bare steel (1);
+   * ballRough: the steel's roughness (0.05 a polished bearing, 0.4 a forged, weathered one).
+   */
+  toneMap: ToneMap;
+  grain: number;
+  grainSize: number;
+  ballMetal: number;
+  ballRough: number;
 }
 
 export const REAL_DEFAULTS: RealOptions = {
@@ -252,7 +281,11 @@ export const REAL_DEFAULTS: RealOptions = {
   sunSize: 0.53, shadowSoftness: 1, shadowFill: 0.5,
   dust: 1, chips: 1, dustSize: 0.9, dustOpacity: 0.4, dustThreshold: 2, dustFace: 0.15, dustErode: 0.7, dustThin: 0.3, dustSkirt: 0.9,
   env: 'outdoor', hallSize: 1, hallGlass: 0.5, hallIron: 0.55, hallExterior: 1,
+  toneMap: 'agx', grain: 0, grainSize: 1.5, ballMetal: 0, ballRough: 0.2,
 };
+
+/** Step 7's options at the values that leave the real look as it was before them (the golden gate pins it). */
+export const REAL_POLISH_OFF: Partial<RealOptions> = { toneMap: 'agx', grain: 0, ballMetal: 0 };
 
 /** Direction toward the sun from elevation and azimuth in degrees. */
 export function sunFrom(elevation: number, azimuth: number): V3 {
@@ -296,6 +329,9 @@ export function realLook(o: Partial<RealOptions> = {}): LookParams {
     blastLight: 3,
     bloomMix: 0.02,
     vignette: 0.08,
+    toneMap: r.toneMap,
+    ...(r.grain > 0 ? { grain: { amount: r.grain, size: r.grainSize } } : {}),
+    ...(r.ballMetal > 0 ? { ballMetal: { metal: r.ballMetal, rough: r.ballRough } } : {}),
   };
 }
 
@@ -339,12 +375,16 @@ export const REAL_KNOBS = {
   hallGlass: { label: 'hall glass milkiness 0-1', min: 0, max: 1, step: 0.05 },
   hallIron: { label: 'hall ironwork grey 0-1', min: 0, max: 1, step: 0.05 },
   hallExterior: { label: 'hall seen from outside (0/1)', min: 0, max: 1, step: 1 },
+  grain: { label: 'film grain 0-1 (1: 10% at mid grey)', min: 0, max: 1, step: 0.05 },
+  grainSize: { label: 'grain size (px)', min: 1, max: 4, step: 0.25 },
+  ballMetal: { label: 'ball steel 0-1 (0: clear-coated grey)', min: 0, max: 1, step: 0.05 },
+  ballRough: { label: 'ball steel roughness', min: 0.02, max: 1, step: 0.01 },
 } as const;
 export type RealKnob = keyof typeof REAL_KNOBS;
 
 /**
  * The real look's options from URL keys real.<knob>, real.stone (a STONES
- * name), real.groundMaterial (a GROUNDS name), real.env (an ENVS name) and real.ground (linear albedo r,g,b, each 0 to 1); absent keys are left out, so realLook fills
+ * name), real.groundMaterial (a GROUNDS name), real.env (an ENVS name), real.toneMap (a TONE_MAPS name) and real.ground (linear albedo r,g,b, each 0 to 1); absent keys are left out, so realLook fills
  * them from REAL_DEFAULTS. Rejects values that are not numbers or are out of range.
  */
 export function parseRealOptions(q: URLSearchParams): Partial<RealOptions> {
@@ -371,6 +411,11 @@ export function parseRealOptions(q: URLSearchParams): Partial<RealOptions> {
     if (!(ENVS as readonly string[]).includes(env)) throw new Error(`real.env must be one of ${ENVS.join(', ')}: ${env}`);
     o.env = env as Env;
   }
+  const tone = q.get('real.toneMap');
+  if (tone !== null && tone !== '') {
+    if (!(TONE_MAPS as readonly string[]).includes(tone)) throw new Error(`real.toneMap must be one of ${TONE_MAPS.join(', ')}: ${tone}`);
+    o.toneMap = tone as ToneMap;
+  }
   const ground = q.get('real.ground');
   if (ground !== null && ground !== '') {
     const v = ground.split(',').map(Number);
@@ -386,6 +431,7 @@ export function writeRealOptions(o: Partial<RealOptions>, q: URLSearchParams): v
   if (o.stone) q.set('real.stone', o.stone);
   if (o.groundMaterial) q.set('real.groundMaterial', o.groundMaterial);
   if (o.env) q.set('real.env', o.env);
+  if (o.toneMap) q.set('real.toneMap', o.toneMap);
   if (o.groundAlbedo) q.set('real.ground', o.groundAlbedo.join(','));
 }
 

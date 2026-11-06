@@ -25,3 +25,4 @@ export * from './rocks.ts';
 export * from './surface.ts';
 export * from './ice.ts';
 export * from './ice-pass.ts';
+export * from './tonemap.ts';

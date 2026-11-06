@@ -200,6 +200,8 @@ export function hallUniforms(l: LookParams, metres: number, eye: V3, groundY: nu
 
 export class Renderer {
   readonly format: GPUTextureFormat;
+  /** Frames composited so far: the film grain's seed, so it moves every frame (a fresh renderer starts at 0, which keeps test frames deterministic). */
+  private postFrames = 0;
   look: LookParams = CANDY_NIGHT;
   private readonly frameBuf: GPUBuffer;
   private readonly frameData = new DataView(new ArrayBuffer(Frame.size));
@@ -911,7 +913,7 @@ export class Renderer {
     this.encodeScene(enc, f, 'scene', stamp);
     // With an atmosphere, the exposure adapts to the light (csAmbient, written in encodeScene).
     const adapted = this.look.atmosphere && this.real ? { buffer: this.real.atmosphere.ambient, offset: ADAPTED_EXPOSURE_OFFSET } : undefined;
-    if (this.toggles.post) this.post.encode(enc, this.hdr!, tex.createView(), this.look, stamp, adapted);
+    if (this.toggles.post) this.post.encode(enc, this.hdr!, tex.createView(), this.look, stamp, adapted, this.postFrames++);
     prof?.resolve(enc);
     let read: GPUBuffer | null = null;
     const bytesPerRow = Math.ceil((tex.width * 4) / 256) * 256;

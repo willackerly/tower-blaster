@@ -7,7 +7,7 @@ import { emptySnapshot, TAG_BALL, type BodyDesc, type Snapshot } from '@tb/engin
 import { readBuffer, sharedDevice } from '@tb/gpu';
 import { Body, RenderRecord, Shape, TIER, readStruct } from '@tb/schema';
 import {
-  packSurface, agx, AGX_WGSL, LOOKS, lookByName, realLook, type RealOptions, type LookParams, fromHalf, Atmosphere, CLEAR_DAY, transmittance, transmittanceHMu, multiScattering, skyViewDir, skyRadiance, skyViewUv, sampleTransmittance, ambientOf, distanceToGround, meteredIlluminance, Materials, heightNormal, STONES, GROUNDS, MATERIAL_LAYERS, WOOD_WGSL, WOOD_RING_M, woodRings, PCG_WGSL, pcg3d, MACRO_LAYER, layerTile, materialSample, macroSample, adaptedExposure, LUMA, R_TOP, R_GROUND, FX_WORDS, packFx, toHalf, bevelNormal, BEVEL_WGSL, oklabToLinear, OKLAB_WGSL, Post,
+  packSurface, agx, AGX_WGSL, TONE_MAPS, TONE_WGSL, toneMapped, GRAIN_WGSL, grainNoise, grained, agxBase, pbrNeutral, aces, type ToneMap, LOOKS, lookByName, realLook, type RealOptions, type LookParams, fromHalf, Atmosphere, CLEAR_DAY, transmittance, transmittanceHMu, multiScattering, skyViewDir, skyRadiance, skyViewUv, sampleTransmittance, ambientOf, distanceToGround, meteredIlluminance, Materials, heightNormal, STONES, GROUNDS, MATERIAL_LAYERS, WOOD_WGSL, WOOD_RING_M, woodRings, PCG_WGSL, pcg3d, MACRO_LAYER, layerTile, materialSample, macroSample, adaptedExposure, LUMA, R_TOP, R_GROUND, FX_WORDS, packFx, toHalf, bevelNormal, BEVEL_WGSL, oklabToLinear, OKLAB_WGSL, Post,
   Culler, cullReference, FLOOR_REACH, GpuBodySource, invert, listMatches, lookAt, makeGpuBodies, multiply, packBodies, perspective, Renderer, SEG, SEGMENTS, SnapshotSource, transform,
   translation, normalize, rockIn, ROCK_CELL, ROCK_CLUMP, ROCK_SINK, sunOf, hallTraceCpu, HALL_MAT, OLYMPIA, BOX_VERTS, SPHERE_VERTS, SUN, Sparks, CTL, MAX_EVENTS, flashSlot, FLASHES, MAX_BALLS, TRAIL, Lights, LIGHTS, LIGHT_META, LIGHT_PACKED, MATERIAL, AoVolume, aoGrid, aoFrame, splatReference, composeReference, AO_FOOT_WGSL, AO_SAMPLE_WGSL, AO_SEAM_WGSL, AO_ONE, type SplatBody, unpackImpacts, unpackSparks, spawnReference, stepReference, debrisSpawnReference, dustStepReference, chipStepReference, type SparkState, type Impact, type BodySource, type CullFrame, type FrameParams, type RendererOptions, type V3,
 } from '../src/index.ts';
@@ -525,6 +525,90 @@ export async function lookTwins(seed: number, n = 4096) {
   });
   const err = await device.popErrorScope();
   return { agxErr, labErr, bevErr, error: err?.message ?? null };
+}
+
+// ---------------------------------------------------------------- tone maps and grain (realism step 7)
+
+/**
+ * The tone maps' and grain's WGSL (tonemap.ts) against their TypeScript
+ * twins on random inputs: each operator over 1e-5..1e3 linear HDR (and
+ * zero); grainNoise at random pixels, seeds and sizes 1 to 4. Returns the
+ * largest absolute difference of each.
+ */
+export async function toneTwins(seed: number, n = 4096) {
+  const { device } = await sharedDevice({ timestamps: false });
+  device.pushErrorScope('validation');
+  const r = rng(seed);
+  const f32 = Math.fround;
+  const hdr = () => (r() < 0.02 ? 0 : 10 ** (r() * 8 - 5));
+  const ins = Array.from({ length: n }, () => [hdr(), hdr(), hdr()].map(f32) as V3);
+  const packed = new Float32Array(ins.flatMap((c) => [...c, 0, 0, 0, 0, 0, 0, 0, 0, 0]));
+  const twins: Record<string, (c: V3) => V3> = { agxBase, pbrNeutral, aces };
+  const toneErr: Record<string, number> = {};
+  for (const [name, cpu] of Object.entries(twins)) {
+    const out = await mapGpu(device, `${PCG_WGSL}${TONE_WGSL}`, `ys[i] = vec4f(${name}(a.xyz), 0.0);`, packed, n);
+    let e = 0;
+    ins.forEach((c, i) => cpu(c).forEach((v, k) => { e = Math.max(e, Math.abs(v - out[4 * i + k]!)); }));
+    toneErr[name] = e;
+  }
+  const gIn = Array.from({ length: n }, () => [Math.floor(r() * 4000) - 200, Math.floor(r() * 3000) - 200, Math.floor(r() * 1e6), 1 + 3 * r()]);
+  const gOut = await mapGpu(device, `${PCG_WGSL}${GRAIN_WGSL}`, 'ys[i] = vec4f(grainNoise(a.xy, u32(a.z), a.w), 0.0, 0.0, 0.0);', new Float32Array(gIn.flatMap((g) => [...g, 0, 0, 0, 0, 0, 0, 0, 0])), n);
+  let grainErr = 0;
+  gIn.forEach(([x, y, sd, sz], i) => { grainErr = Math.max(grainErr, Math.abs(grainNoise(x!, y!, sd!, f32(sz!)) - gOut[4 * i]!)); });
+  const err = await device.popErrorScope();
+  return { toneErr, grainErr, error: err?.message ?? null };
+}
+
+/**
+ * The composite end to end (Post, no bloom, vignette or auto exposure): an
+ * HDR strip of greys and colours from 1e-3 to 64 (exact in f16), through
+ * each tone map without grain and, for grain, a flat field, against the CPU
+ * twins (toneMapped of grained of grainNoise at the frame's seed) plus the
+ * composite's dither. Returns per case the largest difference in 8-bit
+ * steps and, for grain, the frame's mean and standard deviation of green.
+ */
+export async function postChecks(cases: Array<{ toneMap: ToneMap; grain?: { amount: number; size: number }; flat?: number; seed?: number }>) {
+  const { device } = await sharedDevice({ timestamps: false });
+  device.pushErrorScope('validation');
+  const w = 256, h = 64;
+  const out = [];
+  for (const c of cases) {
+    const vals: V3[] = [];
+    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+      if (c.flat !== undefined) { vals.push([c.flat, c.flat, c.flat]); continue; }
+      const v = 10 ** (-3 + (4.806 * x) / (w - 1)); // 1e-3 .. 64
+      const tint: V3 = [[1, 1, 1], [1, 0.3, 0.1], [0.2, 1, 0.3], [0.15, 0.35, 1]][Math.floor((y * 4) / h)] as V3;
+      vals.push(tint.map((t) => fromHalf(toHalf(v * t))) as V3);
+    }
+    const hdr = device.createTexture({ size: [w, h], format: 'rgba16float', usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST | GPUTextureUsage.RENDER_ATTACHMENT });
+    device.queue.writeTexture({ texture: hdr }, new Uint16Array(vals.flatMap((v) => [...v, 1].map(toHalf))), { bytesPerRow: w * 8 }, [w, h]);
+    const target = device.createTexture({ size: [w, h], format: 'rgba8unorm', usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_SRC });
+    const post = new Post(device, 'rgba8unorm');
+    const enc = device.createCommandEncoder();
+    const seed = c.seed ?? 0;
+    post.encode(enc, hdr, target.createView(), { bloomMix: 0, exposure: 1, vignette: 0, toneMap: c.toneMap, ...(c.grain ? { grain: c.grain } : {}) }, undefined, undefined, seed);
+    const bpr = Math.ceil((w * 4) / 256) * 256;
+    const read = device.createBuffer({ size: bpr * h, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST });
+    enc.copyTextureToBuffer({ texture: target }, { buffer: read, bytesPerRow: bpr }, [w, h]);
+    device.queue.submit([enc.finish()]);
+    await read.mapAsync(GPUMapMode.READ);
+    const px = new Uint8Array(read.getMappedRange().slice(0));
+    read.destroy(); post.destroy(); hdr.destroy(); target.destroy();
+    let worst = 0, sum = 0, sum2 = 0;
+    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+      const ign = (((52.9829189 * (((x + 0.5) * 0.06711056 + (y + 0.5) * 0.00583715) % 1)) % 1) + 1) % 1;
+      let v = vals[y * w + x]!;
+      if (c.grain) v = grained(v, c.grain.amount, grainNoise(x, y, seed, Math.fround(c.grain.size)));
+      const want = toneMapped(c.toneMap, v).map((k) => (k + (ign - 0.5) / 255) * 255);
+      for (let k = 0; k < 3; k++) worst = Math.max(worst, Math.abs(px[y * bpr + 4 * x + k]! - want[k]!));
+      const g = px[y * bpr + 4 * x + 1]!;
+      sum += g; sum2 += g * g;
+    }
+    const mean = sum / (w * h);
+    out.push({ worst, mean, sd: Math.sqrt(sum2 / (w * h) - mean * mean) });
+  }
+  const err = await device.popErrorScope();
+  return { cases: out, error: err?.message ?? null };
 }
 
 // ---------------------------------------------------------------- bloom
@@ -2003,15 +2087,16 @@ function goldenRenderer(device: GPUDevice, src: BodySource, look: LookParams, si
  * gate (render.test.ts): towers, tumbled boxes, the ball, an overlay sphere
  * and a tinted, glowing slot, with the arena set, so most of the scene
  * shader's paths draw. Still bodies, so no spark lives and nothing depends on
- * timing.
+ * timing. A look is a LOOKS name or a named set of realLook options.
  */
-export async function lookHashes(looks: string[], size: [number, number] = [320, 180]) {
+export async function lookHashes(looks: Array<string | { name: string; real: Partial<RealOptions> }>, size: [number, number] = [320, 180]) {
   const { device } = await sharedDevice({ timestamps: false });
   device.pushErrorScope('validation');
   const src = goldenScene(device);
   const hashes: Record<string, number> = {};
-  for (const name of looks) {
-    const rend = goldenRenderer(device, src, LOOKS[name]!, size);
+  for (const look of looks) {
+    const name = typeof look === 'string' ? look : look.name;
+    const rend = goldenRenderer(device, src, typeof look === 'string' ? LOOKS[look]! : realLook(look.real), size);
     for (const [view, [eye, target]] of Object.entries(GOLDEN_VIEWS)) {
       const f: FrameParams = { ...camera(eye, target, size[0] / size[1]), groundY: 0, time: 1, dt: 0, alpha: 1 };
       await rend.render(f);
