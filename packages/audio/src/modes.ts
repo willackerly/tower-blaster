@@ -187,7 +187,8 @@ export function sparseModes(m: SoundMaterial, bodyEdge: number, fmax: number, f:
   const n0 = f.length, top = f.reduce((a, b) => Math.max(a, b), 0), stop = m.overlap!;
   let a = 0x9e3779b9 >>> 0; // fixed stream: a material always rings the same
   const r = () => { a = (Math.imul(a ^ (a >>> 15), 0x2c1b3c6d) + 0x6d2b79f5) >>> 0; return a / 4294967296; };
-  let N = 0, x = top, next = 1 + 0.6 * (r() - 0.5);
+  // An empty table (a body whose first mode is past fmax, or a tiny one) counts from 20 Hz: from 0 the step x * 0.002 never moves.
+  let N = 0, x = Math.max(top, 20), next = 1 + 0.6 * (r() - 0.5);
   while (x < fmax && modalOverlap(m, x, bodyEdge) < stop && f.length < n0 + 512) {
     const dx = x * 0.002;
     N += modalDensity(m, x, bodyEdge) * dx; x += dx;

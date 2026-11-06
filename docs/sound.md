@@ -453,8 +453,59 @@ Tried and set aside:
 - Body jitter 0.05-0.25 on metal and on stone/plaster: no effect on Music or the animal reads.
 - Grit up to +12 dB, the click down to -12 dB, contact radius 2 mm.
 
-Next: Will's one-word reads of the clatter, then a tower. The free-text describer (CLAP) still needs
-huggingface.co.
+Will's step-2 reads (2026-11-06): plaster acceptable, iron and steel good if hollow, stone way off,
+ice should be far more crisp and shattery. Of the step 2b takes he picked stone with `overlap: 1`,
+which still sounds "very much in an enclosed room, not very stone like", and the original ice
+("closest, but far"). He suggested measuring real recordings of stone and of ice cracking.
+
+Step 2c (real recordings, 2026-11-06). Freesound and the other sound libraries are blocked from the
+cloud, so the references are recordings shipped in open-source game repositories on GitHub:
+Minetest Game's ice footsteps and ice chipping (CC BY-SA 3.0, from Freesound), and SuperTux's ice
+crash. They are references for measurement only, not shipped. Against ours at the game's 0.5 m:
+
+| | octave levels 125 Hz-16 kHz (dB re max) | spectral flatness 1-8 kHz | transients per event | judge |
+|---|---|---|---|---|
+| real ice footstep / chipping | -25 -20 -1 -1 0 -4 -4 -9 | 0.40-0.48 | 9-36 | mineral 0.6, Crack, Breaking |
+| ice now, knock | -19 -31 -36 -30 -4 0 -6 -19 | 0.18 | one strike | glass 0.70, Chink, Glass |
+
+Real ice cracking is a dense run of small snaps, flat from 500 Hz to 16 kHz. Ours is a ring with a
+hole from 250 Hz to 1.5 kHz. Stone has the same hole: under the 0.5 m block's first mode (2.1 kHz)
+only the rigid-body click radiates, and its smooth Hertz pulse (7.5 ms at a 5 cm drop) sits at
+130 Hz. The rough part of the contact force radiating through the body's rigid motion would fill it,
+but with the sphere's radiation (clickModel 'sphere') it adds only 2 dB at 500 Hz-1 kHz: not the gap.
+
+The grit (chips) was there all along but about 50 dB too quiet to hear at 0.5 m: at gritDb -6 a
+knock's 2 grains are lost under the ring. Three new options, off by default:
+
+- `gritRate` (grains per m/s of dv; absent GRIT.perDv 3, the cap scaling with it) and `gritSpread`
+  (the grains' mean delay, s, at GRIT.refEdge; absent GRIT.spread 20 ms). Brittle ice cracks in a
+  burst of many small events rather than shedding a few chips.
+- `gritRing` (0 to 1, absent 0): the share of grit's energy that rings the body. A crack is a stress
+  pulse inside the block: it strikes the modes (flat, a pulse shorter than any contact, no rigid-body
+  click) and the dense field (the shortest contact's row), scaled so a crack rings with its share of
+  the grain's energy (a mode of amplitude c holds c^2 tau sr / 4). Ringing draws from grit's stream,
+  so a material without it plays bit for bit as before.
+
+Ice clatter at gritRate 30, gritDb 50: dry cracks over 30 ms read Crack first (mineral 0.35, real
+share 0.96), and the octaves fill to -18 -21 -15 -7 -2 0 -1 -9 (flatness 0.50), the real recordings'
+shape. Half of each crack ringing reads Glass and Breaking (glass 0.38, mineral 0.32). All ringing
+reads Music and Ding (metal 0.84): ice's table is a sparse chime from 1.7 to 3.6 kHz. Cracks running
+80 ms with jitter 0.08 read Crack 0.54, Crackle 0.31, Breaking 0.29 (mineral 0.58), the closest to the
+recordings.
+
+Stone: every block rang at one pitch (jitter 0.02), and its clatter read Tick, Clock, Tick-tock,
+Music (real share 0.26). At jitter 0.15 (natural stone's E varies some 30% piece to piece, so its
+pitch about 15%) it reads Tick, Animal, Drip (real share 0.56); the material shares barely move
+(mineral 0.06 to 0.07). Chips at gritDb 44, gritRate 10 bring it to mineral 0.24, real share 0.75.
+(In step 2 jitter alone did nothing; that was without `overlap: 1`.)
+
+Fixed: `sparseModes` hung on a body with no mode table (a 5 cm stone cube, whose first mode is past
+18 kHz): the Weyl count started at 0 Hz, and its step (x * 0.002) never moved. It starts at 20 Hz.
+
+Page for Will: https://claude.ai/artifact/Rx7wFWSp5tVpMhauwwYpQ4 (stone A-D, ice now and B-D, and
+three of the recordings). His picks become the real set's defaults.
+
+Next: Will's picks, then a tower. The free-text describer (CLAP) still needs huggingface.co.
 
 ## Plan (each step lands with its test)
 

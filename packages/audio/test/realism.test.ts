@@ -8,6 +8,7 @@ import {
   BLOCK, cellOf, CLASSIC_SOUND_MATERIALS, CollapseEngine, contactTime, DENSE_BANDS, DENSE_LOOP, denseField, denseNoise, DV_EDGES,
   CLAMPED_PLATE, clickFilter, clickKernel, forceSpectrum, modalDensity, modalOverlap, radiatedClick, volume, loudness, mass, modes, parseSoundMaterial, plateTable, pulseSpectrum, ROUGH_T, roughTime, SOUND_MATERIALS, type SoundMaterial, VIB_SHARE,
 } from '@tb/audio';
+import { GRIT, gritGrains } from '@tb/audio';
 import { db, frame, octaves, run, SR } from './helpers.ts';
 
 const REAL = SOUND_MATERIALS as Record<string, SoundMaterial>, CLASSIC = CLASSIC_SOUND_MATERIALS as Record<string, SoundMaterial>;
@@ -272,6 +273,72 @@ describe('step 2 options (off by default)', () => {
     for (const overlap of [0, 0.05, 11]) expect(() => parseSoundMaterial({ overlap }, REAL.steel)).toThrow(/overlap/);
     expect(() => parseSoundMaterial({ clickModel: 'cone' } as never, REAL.steel)).toThrow(/clickModel/);
     expect(parseSoundMaterial({ overlap: 1, clickModel: 'sphere' }, REAL.steel)).toMatchObject({ overlap: 1, clickModel: 'sphere' });
+  });
+});
+
+describe('step 2c options (off by default): stone and ice from real recordings', () => {
+  it('discrete modes on a body with no table (its first mode past fmax) end: the count starts at 20 Hz, not 0', () => {
+    // A 5 cm stone cube's first mode is past 18 kHz; from 0 the old step (x * 0.002) never moved and hung.
+    const m = { ...REAL.stone!, overlap: 1 }, t0 = Date.now(), md = modes(m, 0.05);
+    expect(Date.now() - t0).toBeLessThan(2000);
+    expect(modes(REAL.stone!, 0.05).freq.length).toBe(0);
+    for (const f of md.freq) { expect(Number.isFinite(f)).toBe(true); expect(f).toBeGreaterThan(20); }
+  });
+
+  /** Grit alone: modes, click and field silenced, at a 25 cm block (the grains' mean delay is gritSpread there). */
+  function gritEngine(over: Partial<SoundMaterial>, ringDb: number) {
+    const m: SoundMaterial = { ...REAL.ice!, ringDb, clickDb: -Infinity, denseDb: -Infinity, roughDb: -Infinity, gritDb: 40, ...over };
+    const e = new CollapseEngine({ sampleRate: SR, seed: 3, fullScale: 1e6 });
+    e.setMaterial(0, m, GRIT.refEdge); e.lowcut = 0; e.limiter.process = () => {};
+    return { e, mono: run(e, 600, (b) => { if (b === 2) e.push(frame([], [[5, 1, 0, 0, 0.3]])); }).mono };
+  }
+  const gritRun = (over: Partial<SoundMaterial>, ringDb = -Infinity) => gritEngine(over, ringDb).mono;
+  /** The energy's mean time, s. */
+  const centroid = (x: Float32Array) => { let a = 0, w = 0; x.forEach((v, i) => { a += i * v * v; w += v * v; }); return a / w / SR; };
+  const energyOf = (x: Float32Array) => x.reduce((s, v) => s + v * v, 0);
+
+  it('gritRate: grains per m/s of dv (absent: GRIT.perDv), the cap scaling with it; the energy follows the count', () => {
+    expect(gritGrains(2)).toBe(GRIT.perDv * 2);
+    expect(gritGrains(2, GRIT.perDv)).toBe(gritGrains(2));
+    expect(gritGrains(2, 30)).toBe(60);
+    expect(gritGrains(100, 30)).toBe((GRIT.most * 30) / GRIT.perDv);
+    expect(gritGrains(GRIT.dvMin * 0.9, 30)).toBe(0);
+    // dv 5: Poisson(15) grains by default, Poisson(150) at rate 30.
+    const n0 = gritEngine({}, -Infinity).e.grains, n30 = gritEngine({ gritRate: 30 }, -Infinity).e.grains;
+    expect(n0).toBeGreaterThan(15 - 4 * Math.sqrt(15)); expect(n0).toBeLessThan(15 + 4 * Math.sqrt(15));
+    expect(n30).toBeGreaterThan(150 - 4 * Math.sqrt(150)); expect(n30).toBeLessThan(150 + 4 * Math.sqrt(150));
+  });
+
+  it('gritSpread: the grains\' mean delay; absent, GRIT.spread', () => {
+    const t = (s?: number) => centroid(gritRun({ gritRate: 30, ...(s === undefined ? {} : { gritSpread: s }) }));
+    const t0 = t(0.002);
+    expect((t(0.08) - t0) / 0.078).toBeGreaterThan(0.75);
+    expect((t(0.08) - t0) / 0.078).toBeLessThan(1.25);
+    expect(t()).toBeCloseTo(t(GRIT.spread), 6);
+  });
+
+  it('gritRing: 0 plays as absent bit for bit; 1 moves the grains\' energy into the body\'s modes (no dry clicks, a ringing tail)', () => {
+    const hash = (x: Float32Array) => createHash('sha256').update(Buffer.from(x.buffer)).digest('hex');
+    expect(hash(gritRun({ gritRate: 30, gritRing: 0 }, 0))).toBe(hash(gritRun({ gritRate: 30 }, 0)));
+    // The impact's own ring is the same in every run (grit and cracks draw from their own stream), so the
+    // difference from a grit-free run is the grit alone (field off: everything left is linear).
+    // A 2 ms burst, so the ring's tail (ice's modes, tau ~18 ms at 25 cm) stands clear of the clicks.
+    const base = gritRun({ gritDb: -Infinity }, 0), part = (r: number) => gritRun({ gritRate: 30, gritSpread: 0.002, gritRing: r }, 0).map((v, i) => v - base[i]!);
+    const dry = part(0), rung = part(1), half = part(0.5);
+    // Energy kept (the modes' tau sr / 4 law, unit-rms weights): within 2 dB.
+    expect(Math.abs(db(energyOf(rung) / energyOf(dry)))).toBeLessThan(2);
+    expect(Math.abs(db(energyOf(half) / energyOf(dry)))).toBeLessThan(2);
+    // Rung, the grains ring on: the energy sits later than the dry clicks' (4-32 samples each).
+    expect(centroid(rung)).toBeGreaterThan(centroid(dry) + 0.005);
+    // Modes silenced (ringDb -Infinity) silence the cracks' ring too: all-ringing grit is then quiet.
+    expect(energyOf(gritRun({ gritRate: 30, gritRing: 1 }))).toBe(0);
+  });
+
+  it('rejects grit rates, spreads and ring shares that cannot be', () => {
+    for (const gritRate of [0, 0.05, 61]) expect(() => parseSoundMaterial({ gritRate }, REAL.ice)).toThrow(/gritRate/);
+    for (const gritSpread of [0, 0.0005, 0.3]) expect(() => parseSoundMaterial({ gritSpread }, REAL.ice)).toThrow(/gritSpread/);
+    for (const gritRing of [-0.1, 1.1]) expect(() => parseSoundMaterial({ gritRing }, REAL.ice)).toThrow(/gritRing/);
+    expect(parseSoundMaterial({ gritRate: 30, gritSpread: 0.08, gritRing: 0.5 }, REAL.ice)).toMatchObject({ gritRate: 30, gritSpread: 0.08, gritRing: 0.5 });
   });
 });
 
