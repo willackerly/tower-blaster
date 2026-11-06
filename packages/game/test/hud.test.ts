@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { B1, B2, compileLevel, levelGoldLine, L1, L2, L3, L4, L5, levelScore, outcomeScore, type ShotOutcome, U3 } from '@tb/keystone';
 import { HOW_TO_PLAY } from '../src/door.ts';
 import { GAME_HELP, GAME_KEYS, HELP_BUDGET, helpHtml, TOUCH_HELP } from '../src/ui.ts';
-import { BANK_BUTTON, SKIP_BUTTON, esc, freezeButton, POWER_STEP, fmtLeverage, fmtPoints, goldHtml, hudHtml, LEVERAGE_MEANS, leverageRow, meterHtml, meterTicks, nextSelection, objectiveText, rackChips, resultHtml, starsText, TOUCH_ACTS } from '../src/hud.ts';
+import { BANK_BUTTON, SKIP_BUTTON, esc, freezeButton, POWER_STEP, fmtLeverage, fmtPoints, goldHtml, hudHtml, keepRow, LEVERAGE_MEANS, leverageRow, meterHtml, meterTicks, nextSelection, objectiveText, rackChips, resultHtml, starsText, TOUCH_ACTS } from '../src/hud.ts';
 
 describe('rack', () => {
   it('groups by kind in first-seen order with counts and keys', () => {
@@ -77,6 +77,24 @@ describe('formatting', () => {
     const refused = hudHtml({ ...base, chips, reachable: false, pullRefused: true });
     expect(refused).toMatch(/Crowns and heritage stay/);
     expect(refused).not.toMatch(/Out of reach/);
+    // Hovered only: a neutral hint. Refused on a click or tap: red.
+    expect(refused).toMatch(/<div class="hint small pull-hint">/);
+    expect(refused).not.toMatch(/class="bad[^"]*pull-hint/);
+    expect(hudHtml({ ...base, chips, reachable: false, pullRefused: 'tapped' })).toMatch(/<div class="bad small pull-hint">/);
+  });
+  it('a hold level (keep the crown up) says whether its crown stands, with no crown counter', () => {
+    const base = { level: U3, strokes: 1, crownsDown: 0, crownsTotal: 1, heritageBroken: 0, heritageTotal: 0, power: 60, leverage: { round: 0, shot: 0 }, phase: 'aiming', reachable: null, chips: rackChips(U3.rack, U3.rack, 'pull') };
+    expect(U3.objective.kind).toBe('hold');
+    const up = hudHtml(base);
+    expect(up).toMatch(/<span>Crown<\/span><span class="keep ok">standing ✓<\/span>/);
+    expect(up).not.toMatch(/\d+ \/ 1/);
+    expect(up).not.toMatch(/class="crowns"/);
+    expect(hudHtml({ ...base, crownsDown: 1 })).toMatch(/class="keep bad">fallen</);
+    expect(keepRow(1, 3)).toMatch(/1 of 3 fallen/);
+    expect(keepRow(0, 2)).toMatch(/all standing/);
+    expect(keepRow(0, 0)).toBe('');
+    // A crowns level keeps its counter.
+    expect(hudHtml({ ...base, level: L2, crownsTotal: 6 })).toMatch(/class="crowns">0 \/ 6</);
   });
   it('the result card lists every score line in order, then the total, stamp and stars', () => {
     const shot = { ke: 1000, yield: 0, dPE_mJ: 2_000_000, leverage: 2, crownsDown: 4, crownsTotal: 4, heritageNew: 0, displaced: 30, outOfLot: 0, pe_mJ: 0, spawnStep: 0, settleStep: 100 };

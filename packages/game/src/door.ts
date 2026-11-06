@@ -157,10 +157,14 @@ export function bestText(b: LevelRecord | null): string {
   return `Best ${what} · ${b.plays} play${b.plays === 1 ? '' : 's'}${b.beatBot ? ' · beat the bot' : ''}${b.gold ? ' · gold leverage' : ''}`;
 }
 
-/** How to play, in five lines (the controls line is GAME_HELP's, shown in play). */
+/** How to play's Bullet Time line (playtest PT8: the T key was named only in the key list). */
+export const BULLET_TIME_HOW = 'Bullet Time levels give you a few freezes. While a shot is still running, <span class="kg-desk"><kbd>T</kbd></span><span class="kg-tch">Freeze</span> stops the world: aim and fire, and the new shot cuts in at that moment and spends one freeze; that shot is free against par. Resuming without firing keeps the freeze.';
+
+/** How to play, in six lines (the controls line is GAME_HELP's, shown in play). */
 export const HOW_TO_PLAY: readonly string[] = [
   '<span class="kg-desk">Pick a spot on the structure and click to fire. Drag to look around; the launcher follows you.</span><span class="kg-tch">Touch the structure and drag to aim; lift your finger to fire. Two fingers turn the view and pinch to zoom; the launcher follows you. Put a second finger down to call off a shot.</span>',
-  'Fire again whenever you like, even while things are still falling. Once everything settles, physics freezes while you aim; <kbd>K</kbd> or Skip runs the rest of a shot fast. Rubble stays between shots.',
+  'Fire again whenever you like, even while things are still falling. Once everything settles, the world waits while you aim; <kbd>K</kbd> or Skip runs the rest of a shot fast. Rubble stays between shots.',
+  BULLET_TIME_HOW,
   'Meet the objective for one star. Chamber levels: clear in par for three, each shot over par or piece of heritage broken costs one, and leverage at the level\'s gold line earns the gold badge. Elsewhere, bring more down for two and three; the targets were set by a bot playing each level hundreds of times.',
   'After any shot you may <kbd>B</kbd> bank: end the level and keep the unused rack as points.',
   `${LEVERAGE_MEANS} The card shows the whole round's; Brute is under the level's gold line, Clean at it. A score never goes below 0: cracked heritage shows as its own red line and costs stars.`,
