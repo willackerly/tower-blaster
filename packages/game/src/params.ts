@@ -202,12 +202,14 @@ export function parseGameParams(q: URLSearchParams): GameParams {
 
 /**
  * How level starts run (docs/game/level-start.md): ?keystone.loadpace=<ms> is the pre-settle's batch
- * time (0 runs it in one go, which holds the frames until it is done; default PRESETTLE_PACE's 8), and
- * ?keystone.prefetch=0 stops building the next level while the result card shows. Neither changes a
- * level's state, so neither is part of a level.
+ * time (0 runs it in one go, which holds the frames until it is done; default PRESETTLE_PACE's 8),
+ * ?keystone.prefetch=0 stops building the next level while the result card shows, and
+ * ?keystone.retry=rebuild makes Retry build the level again instead of restoring it from its start
+ * checkpoint (default checkpoint). None changes a level's state, so none is part of a level.
  */
-export function loadOptions(q: URLSearchParams): { loadPaceMs?: number; prefetch?: boolean } {
-  const out: { loadPaceMs?: number; prefetch?: boolean } = {};
+export interface LoadOptions { loadPaceMs?: number; prefetch?: boolean; retry?: 'checkpoint' | 'rebuild' }
+export function loadOptions(q: URLSearchParams): LoadOptions {
+  const out: LoadOptions = {};
   const p = q.get('keystone.loadpace');
   if (p !== null) {
     const ms = p.trim() === '' ? NaN : Number(p);
@@ -218,6 +220,11 @@ export function loadOptions(q: URLSearchParams): { loadPaceMs?: number; prefetch
   if (f !== null) {
     if (f !== '0' && f !== '1') throw new Error(`keystone.prefetch must be 0 or 1: ${f}`);
     out.prefetch = f === '1';
+  }
+  const r = q.get('keystone.retry');
+  if (r !== null) {
+    if (r !== 'checkpoint' && r !== 'rebuild') throw new Error(`keystone.retry must be checkpoint or rebuild: ${r}`);
+    out.retry = r;
   }
   return out;
 }

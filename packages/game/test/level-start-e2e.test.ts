@@ -67,6 +67,37 @@ describe('level start', () => {
     await page.close();
   }, 5 * MINUTE);
 
+  it('retries from the start checkpoint in place, to the state the level loaded with, and plays the same again', async (ctx) => {
+    if (!game.browser()) return ctx.skip();
+    const runs: Record<string, unknown> = {};
+    for (const mode of ['checkpoint', 'rebuild']) {
+      const o = await game.open(`/?level=L1&offscreen=1&engine=rapier&progress=off&keystone.retry=${mode}`);
+      if (!o) return ctx.skip();
+      const { page, errors } = o;
+      await ready(page);
+      const loaded = await page.evaluate(() => window.__game.state());
+      await playShots(page, L1.solutions!.par as Shot[], 2 * MINUTE);
+      const first = await page.evaluate(() => ({ state: window.__game.state(), score: window.__game.result, looks: window.__game.firedLooks() }));
+      expect(first.looks.length).toBeGreaterThan(0);
+      for (let k = 0; k < 2; k++) {
+        await page.evaluate(() => window.__game.retry());
+        await ready(page);
+        const r = await page.evaluate(() => ({ state: window.__game.state(), load: window.__game.timing.load, looks: window.__game.firedLooks() }));
+        expect(r.load.restored, mode).toBe(mode === 'checkpoint');
+        if (mode === 'checkpoint') expect(r.load.presettle).toBe(0);
+        expect(r.state).toEqual(loaded);
+        // The fired balls' paint goes with them: the restored world has none, and the line paints them again.
+        expect(r.looks).toEqual([]);
+        await playShots(page, L1.solutions!.par as Shot[], 2 * MINUTE);
+        expect(await page.evaluate(() => ({ state: window.__game.state(), score: window.__game.result, looks: window.__game.firedLooks() }))).toEqual(first);
+      }
+      runs[mode] = { loaded, first };
+      expect(errors).toEqual([]);
+      await page.close();
+    }
+    expect(runs.checkpoint).toEqual(runs.rebuild);
+  }, 5 * MINUTE);
+
   it('keystone.prefetch=0 builds nothing ahead', async (ctx) => {
     if (!game.browser()) return ctx.skip();
     const o = await game.open('/?level=L1&offscreen=1&engine=rapier&progress=off&keystone.prefetch=0');
@@ -88,7 +119,7 @@ describe('level start', () => {
     // B1's 1,000 cubes: Rapier's 300 pre-settle steps take long enough on one thread to see.
     const gaps: Record<string, { ms: number; gap: number; frames: number; presettle: number }> = {};
     for (const pace of ['8', '0']) {
-      const o = await game.open(`/?level=${B1.id}&offscreen=1&engine=rapier&progress=off&door=0&keystone.loadpace=${pace}`, 5 * MINUTE);
+      const o = await game.open(`/?level=${B1.id}&offscreen=1&engine=rapier&progress=off&door=0&keystone.retry=rebuild&keystone.loadpace=${pace}`, 5 * MINUTE);
       if (!o) return ctx.skip();
       const { page, errors } = o;
       await ready(page, 5 * MINUTE);

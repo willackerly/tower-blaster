@@ -8,7 +8,8 @@
 // SwiftShader are never performance results; there they only show which phases the work is in.
 // TB_LOAD_LEVELS=L1,B1 picks the levels (default L1, B1, B2, B3); TB_LOAD_PACES=8,0 the paces (default
 // 8 and 0: paced, and unpaced as before); TB_LOAD_CARD_MS=1500 how long the card shows before Next
-// (default 0: Next at once, the worst case); TB_LOAD_OUT=<file> appends the table to a file.
+// (default 0: Next at once, the worst case); TB_LOAD_RETRY=rebuild retries by building
+// again (default checkpoint: keystone.retry); TB_LOAD_OUT=<file> appends the table to a file.
 import { appendFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import type { Page } from 'playwright';
@@ -22,11 +23,12 @@ const levels = (process.env.TB_LOAD_LEVELS ?? 'L1,B1,B2,B3').split(',').filter(B
 const paces = (process.env.TB_LOAD_PACES ?? '8,0').split(',').filter(Boolean);
 const cardMs = Number(process.env.TB_LOAD_CARD_MS ?? 0);
 const draw = process.env.TB_LOAD_DRAW === '1';
+const retryMode = process.env.TB_LOAD_RETRY ?? 'checkpoint';
 const game = gamePage();
 
 const f = (x: number) => x.toFixed(0);
 const row = (what: string, ms: number, gap: number, p: LoadPhases) =>
-  `${what.padEnd(14)} ${f(ms).padStart(6)} ms  frame gap ${f(gap).padStart(5)} ms | check ${f(p.check)} compile ${f(p.compile)} init ${f(p.init)} presettle ${f(p.presettle)} (${p.steps} steps) replay ${f(p.replay)} swap ${f(p.swap)}${p.prefetched ? `  prefetched, waited ${f(p.wait)}` : ''}`;
+  `${what.padEnd(14)} ${f(ms).padStart(6)} ms  frame gap ${f(gap).padStart(5)} ms | check ${f(p.check)} compile ${f(p.compile)} init ${f(p.init)} presettle ${f(p.presettle)} (${p.steps} steps) replay ${f(p.replay)} swap ${f(p.swap)}${p.prefetched ? `  prefetched, waited ${f(p.wait)}` : ''}${p.restored ? '  restored from the start checkpoint' : ''}`;
 
 /** Starts recording the longest gap between animation frames; the returned function stops and reads it. */
 async function gapMeter(page: Page): Promise<() => Promise<number>> {
@@ -44,7 +46,7 @@ describe.runIf(on)('level start cost', () => {
     it(`${id} at loadpace ${pace}: open, retry twice, line, Next`, async () => {
       const def = levelById(id);
       const series = seriesOf(id)!, k = series.findIndex((l) => l.id === def.id), next = series[k + 1]?.id;
-      const o = await game.open(`/?level=${def.id}&engine=gpu${draw ? '' : '&offscreen=1'}&progress=off&door=0&keystone.loadpace=${pace}`, 30 * MINUTES);
+      const o = await game.open(`/?level=${def.id}&engine=gpu${draw ? '' : '&offscreen=1'}&progress=off&door=0&keystone.loadpace=${pace}&keystone.retry=${retryMode}`, 30 * MINUTES);
       expect(o).not.toBeNull();
       const { page, errors } = o!;
       await ready(page, 30 * MINUTES);
@@ -74,7 +76,7 @@ describe.runIf(on)('level start cost', () => {
         if (cardMs > 0) await page.waitForTimeout(cardMs);
         rows.push(await timed(`Next (${next})`, () => page.click('#result [data-act="next"]'), () => page.waitForFunction((x) => window.__game.level === x, next, { timeout: 30 * MINUTES, polling: 20 })));
       }
-      const text = `${def.id} level start cost, loadpace ${pace}, card ${cardMs} ms, ${draw ? 'drawing' : 'offscreen'} (${await page.evaluate(() => window.__game.engine)}):\n  ${rows.join('\n  ')}\n`;
+      const text = `${def.id} level start cost, loadpace ${pace}, retry ${retryMode}, card ${cardMs} ms, ${draw ? 'drawing' : 'offscreen'} (${await page.evaluate(() => window.__game.engine)}):\n  ${rows.join('\n  ')}\n`;
       console.log(text);
       if (process.env.TB_LOAD_OUT) appendFileSync(process.env.TB_LOAD_OUT, text);
       expect(errors).toEqual([]);

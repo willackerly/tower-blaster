@@ -180,8 +180,10 @@ export interface LoadPhases {
   check: number; compile: number; init: number; presettle: number; steps: number; replay: number; swap: number;
   /** The level was built ahead (the result card's prefetch), and `wait` ms were spent waiting for it to finish settling. */
   prefetched: boolean; wait: number;
+  /** A retry restored the level's start checkpoint in place: nothing was built or pre-settled. */
+  restored: boolean;
 }
-const noPhases = (): LoadPhases => ({ check: 0, compile: 0, init: 0, presettle: 0, steps: 0, replay: 0, swap: 0, prefetched: false, wait: 0 });
+const noPhases = (): LoadPhases => ({ check: 0, compile: 0, init: 0, presettle: 0, steps: 0, replay: 0, swap: 0, prefetched: false, wait: 0, restored: false });
 /**
  * A load's pre-settle in batches of about a 120 Hz frame (keystone PresettlePace), so the frames of
  * the level on screen (or the front door over it) keep drawing while the next one settles, instead of
@@ -292,6 +294,8 @@ export interface KeystoneEnv {
    */
   loadPaceMs?: number;
   prefetch?: boolean;
+  /** How Retry restarts the level: from its start checkpoint, in place (default), or by building it again (keystone.retry). */
+  retry?: 'checkpoint' | 'rebuild';
   /** Every level the page can load (handle.load), N, P and the result card's Next walking through them, and the one to start on. */
   levels: readonly LevelDef[];
   start: number;
@@ -372,7 +376,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     return i;
   };
   let levelIdx = env.start;
-  const paceMs = env.loadPaceMs ?? PRESETTLE_PACE.batchMs;
+  const paceMs = env.loadPaceMs ?? PRESETTLE_PACE.batchMs, retryMode = env.retry ?? 'checkpoint';
   const resetOptions = { now: () => performance.now(), ...(paceMs > 0 ? { pace: { batchMs: paceMs } } : {}) };
   handle.feel = feel;
   handle.engine = kind;
@@ -695,16 +699,31 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     return s.built;
   }
 
+  /**
+   * The level as it loaded (Driver.checkpoint right after its pre-settle), for an instant retry: Retry and
+   * R put the same engine back to it in place instead of building and pre-settling the level again. Kept
+   * while the level is loaded (it dies with its engine); taken unless keystone.retry=rebuild or the engine
+   * has no checkpoints. Only for the level and pair room it was taken at: a round that dropped pairs
+   * rebuilds with more room.
+   */
+  let start: { i: number; def: LevelDef; pairs: number | undefined; cp: DriverCheckpoint } | null = null;
+  const dropStart = () => { start?.cp.dispose(); start = null; };
+
   /** Load level i; with `line` (undo), replay those shots on it out of sight and play on from their settle. */
   async function loadNow(i: number, retry: boolean, line?: Shot[]) {
     const t0 = performance.now();
     // The round being left is over: check what it hit before its engine goes.
     if (engine) await checkRound();
     const tc = performance.now();
+    const def = levels[i]!;
+    // A retry of the level as loaded: its start checkpoint, restored in place (the same engine and driver).
+    const back = retry && !line && start && start.i === i && start.def === def && start.pairs === room.get(def) && i === levelIdx ? start : null;
+    if (back) back.cp.restore();
+    else dropStart();
     // An undo replays its line on a fresh build; a load takes the spare when it is this level's.
-    const ahead = line ? null : await takeSpare(i);
-    const b = ahead ?? await build(i).built;
-    if (!b) throw new Error(`level ${levels[i]!.id} was dropped while it loaded`);
+    const ahead = back || line ? null : await takeSpare(i);
+    const b: Built | null = back ? { def, pairs: back.pairs, c, engine: engine!, driver, phases: { ...noPhases(), restored: true } } : ahead ?? await build(i).built;
+    if (!b) throw new Error(`level ${def.id} was dropped while it loaded`);
     const { c: next, engine: nextEngine, driver: nextDriver, pairs: nextPairs } = b;
     // The input hook keeps state per session: the replay's goes on with the live play.
     const nextPerStep = env.perStep?.(next) ?? null;
@@ -718,10 +737,17 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
       if (line?.length) await playShots(nextDriver, line, 0, { bank: false, perStep: nextPerStep ?? undefined });
       phases.replay = performance.now() - tr;
     } catch (e) {
-      nextEngine.dispose();
+      if (nextEngine !== engine) nextEngine.dispose();
       throw e;
     }
-    engine?.dispose();
+    if (engine !== nextEngine) engine?.dispose();
+    // The level as it loads, kept for an instant retry (not after an undo's replay: that is not the start).
+    if (!back && !line && retryMode === 'checkpoint') {
+      try {
+        const cp = nextDriver.checkpoint();
+        if (cp) start = { i, def, pairs: nextPairs, cp };
+      } catch (e) { console.warn(`retry checkpoint: ${(e as Error).message}`); }
+    }
     levelIdx = i;
     c = next;
     engine = nextEngine;

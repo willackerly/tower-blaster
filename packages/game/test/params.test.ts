@@ -151,11 +151,13 @@ describe('level start keys (loadOptions)', () => {
     expect(lo('?keystone.loadpace=0')).toEqual({ loadPaceMs: 0 });
     expect(lo('?keystone.loadpace=12.5&keystone.prefetch=0')).toEqual({ loadPaceMs: 12.5, prefetch: false });
     expect(lo('?keystone.prefetch=1')).toEqual({ prefetch: true });
+    expect(lo('?keystone.retry=rebuild')).toEqual({ retry: 'rebuild' });
   });
   it('refuses bad values, naming the key', () => {
     expect(() => lo('?keystone.loadpace=')).toThrow(/keystone.loadpace must be from 0 to 1000 ms/);
     expect(() => lo('?keystone.loadpace=-1')).toThrow(/keystone.loadpace/);
     expect(() => lo('?keystone.loadpace=fast')).toThrow(/keystone.loadpace .*: fast/);
     expect(() => lo('?keystone.prefetch=yes')).toThrow(/keystone.prefetch must be 0 or 1: yes/);
+    expect(() => lo('?keystone.retry=fast')).toThrow(/keystone.retry must be checkpoint or rebuild: fast/);
   });
 });
