@@ -11,6 +11,7 @@
 // They never feed the level's score or stars, so a lot sheet can be added to
 // any level without touching its hash or its casts.
 import type { Quat, Snapshot, Vec3 } from '@tb/engine-api';
+import { type Footprint, type FootprintDef, FOOTPRINT_FACTS, type FootprintFact, footprintFacts, type FootprintFacts, selectFootprints } from './footprint.ts';
 import { type GroupReduction, type GroupSel, reduceGroups, selectGroups } from './groups.ts';
 import type { CompiledLevel, StarMetric } from './level.ts';
 import { collapseFraction, floorPotential_mJ, homePotential_mJ, homeSkyline } from './outcome.ts';
@@ -39,12 +40,14 @@ export type Op = (typeof OPS)[number];
  * One test. `fact`: a whole-round fact (see RoundFacts). `group`: a named group of the sheet, as a
  * share of its bodies unless `count`. `used`: how many shots fired this rack item ('any': all shots).
  * `shot`: a fact of the k-th shot fired (1 = the first; a shot not fired fails the test).
+ * `footprint`: a fact of a named footprint of the sheet (footprint.ts: spill, fill, iou, reach, height, heightOut).
  */
 export type GoalTerm =
   | { fact: RoundFact; op: Op; value: number }
   | { group: string; of: GroupFact; count?: boolean; op: Op; value: number }
   | { used: RackItem | 'any'; op: Op; value: number }
-  | { shot: number; fact: ShotFact; op: Op; value: number };
+  | { shot: number; fact: ShotFact; op: Op; value: number }
+  | { footprint: string; of: FootprintFact; op: Op; value: number };
 export type GoalPred = GoalTerm | { all: GoalPred[] } | { any: GoalPred[] } | { not: GoalPred };
 
 export interface Goal {
@@ -71,7 +74,15 @@ export const GRADE_NAMES = ['E', 'D', 'C', 'B', 'A'] as const;
 export type Grade = (typeof GRADE_NAMES)[number];
 
 /** A level's side goals. `engine` names what the proofs were played on ('ref': the f64 reference; 'gpu'). */
-export interface LotSheet { level: string; engine: 'ref' | 'gpu'; groups?: Record<string, GroupSel>; goals: Goal[]; grades?: Grades }
+export interface LotSheet {
+  level: string;
+  engine: 'ref' | 'gpu';
+  groups?: Record<string, GroupSel>;
+  /** Named footprints (footprint.ts): a group's home cells grown by k, judged on the end snapshot. */
+  footprints?: Record<string, FootprintDef>;
+  goals: Goal[];
+  grades?: Grades;
+}
 
 /** Most goals a sheet holds (the design's five, with room). */
 export const MAX_GOALS = 8;
@@ -95,14 +106,16 @@ export interface RoundFacts {
   shots: readonly ShotOutcome[];
   used: Readonly<Record<string, number>>;
   groups: Readonly<Record<string, GroupReduction>>;
+  footprints: Readonly<Record<string, FootprintFacts>>;
 }
 
 /**
  * The facts of a round whose structure stands as in `s` (the snapshot at its last settle or end).
  * `groups` from selectGroups. crowns and crownsLeft count crowns down and still up at the last
  * settle; collapse, outOfLot (a share of the structure) and skyline (end over start) are read off s.
+ * `footprints` from selectFootprints.
  */
-export function roundFacts(c: CompiledLevel, r: RoundState, s: Snapshot, groups: Readonly<Record<string, Int32Array>> = {}): RoundFacts {
+export function roundFacts(c: CompiledLevel, r: RoundState, s: Snapshot, groups: Readonly<Record<string, Int32Array>> = {}, footprints: Readonly<Record<string, Footprint>> = {}): RoundFacts {
   const m = c.meta, home = r.home;
   const pe0 = homePotential_mJ(c, home), pe = potential_mJ(s, c);
   const fired = r.outcomes.reduce((a, o) => a + o.ke + o.yield, 0);
@@ -134,6 +147,7 @@ export function roundFacts(c: CompiledLevel, r: RoundState, s: Snapshot, groups:
       stars: r.score?.stars ?? 0,
     },
     shots: r.outcomes, used, groups: reduceGroups(s, c, groups, home),
+    footprints: Object.fromEntries(Object.entries(footprints).map(([k, f]) => [k, footprintFacts(c, f, s)])),
   };
 }
 
@@ -154,6 +168,11 @@ function termValue(t: GoalTerm, f: RoundFacts): number {
     if (!g) throw new Error(`goal reads group ${t.group}, which the sheet does not select`);
     const k = t.of === 'standing' ? g.n - g.down : g[t.of];
     return t.count ? k : g.n ? k / g.n : 0;
+  }
+  if ('footprint' in t) {
+    const p = f.footprints[t.footprint];
+    if (!p) throw new Error(`goal reads footprint ${t.footprint}, which the sheet does not select`);
+    return p[t.of];
   }
   if ('used' in t) return f.used[t.used] ?? 0;
   if ('shot' in t) {
@@ -200,6 +219,11 @@ export function checkLotSheet(c: CompiledLevel, sheet: LotSheet): void {
   if (sheet.engine !== 'ref' && sheet.engine !== 'gpu') throw new Error(`${where}: engine must be ref or gpu: ${String(sheet.engine)}`);
   const groups = selectGroups(c, sheet.groups ?? {});
   for (const [k, idx] of Object.entries(groups)) if (!idx.length) throw new Error(`${where}: groups.${k} holds no bodies`);
+  try {
+    selectFootprints(c, sheet);
+  } catch (e) {
+    throw new Error(`${where}: ${(e as Error).message}`);
+  }
   if (!sheet.goals.length || sheet.goals.length > MAX_GOALS) throw new Error(`${where}: needs 1 to ${MAX_GOALS} goals, has ${sheet.goals.length}`);
   const ids = new Set<string>(), rack = c.def.rack;
   const term = (t: GoalPred, w: string): void => {
@@ -216,6 +240,9 @@ export function checkLotSheet(c: CompiledLevel, sheet: LotSheet): void {
     if ('group' in t) {
       if (!Object.hasOwn(groups, t.group)) throw new Error(`${w}: no group ${t.group} in the sheet`);
       if (!(GROUP_FACTS as readonly unknown[]).includes(t.of)) throw new Error(`${w}: of must be one of ${GROUP_FACTS.join(', ')}: ${String(t.of)}`);
+    } else if ('footprint' in t) {
+      if (!Object.hasOwn(sheet.footprints ?? {}, t.footprint)) throw new Error(`${w}: no footprint ${t.footprint} in the sheet`);
+      if (!(FOOTPRINT_FACTS as readonly unknown[]).includes(t.of)) throw new Error(`${w}: of must be one of ${FOOTPRINT_FACTS.join(', ')}: ${String(t.of)}`);
     } else if ('used' in t) {
       if (t.used !== 'any' && !(isRackItem(t.used) && rack.includes(t.used))) throw new Error(`${w}: used ${t.used} is not in ${c.def.id}'s rack (${rack.join(', ')})`);
     } else if ('shot' in t) {

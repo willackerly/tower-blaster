@@ -29,7 +29,7 @@ const MAX_WEIGHT = 2 ** 31;
 
 export interface GridInput {
   snap: Snapshot;
-  /** Per id, length ≥ snap.count. */
+  /** Per id; only the ids reduced are read. */
   shapes: readonly ShapeDesc[];
   /** The bodies to reduce, each in 0 .. count − 1 (default all). A repeated id counts each time. */
   ids?: ArrayLike<number>;
@@ -107,7 +107,6 @@ export function reduceGrid(spec: GridSpec, inp: GridInput): GridResult {
     total: { n: 0, weight: 0 }, outside: { n: 0, weight: 0 }, invalid: 0, removed: 0,
   };
   const count = snap.count, ids = inp.ids, m = ids ? ids.length : count, wt = inp.weight;
-  if (shapes.length < count) throw new RangeError(`reduceGrid: ${shapes.length} shapes for ${count} bodies`);
   const q = (x: number) => {
     const t = quant(x, s);
     return t === null ? NaN : t;
@@ -115,6 +114,8 @@ export function reduceGrid(spec: GridSpec, inp: GridInput): GridResult {
   for (let k = 0; k < m; k++) {
     const id = ids ? ids[k]! : k;
     if (!(isInt(id) && id >= 0 && id < count)) throw new RangeError(`reduceGrid: id ${id} is not a body (0 .. ${count - 1})`);
+    const shape = shapes[id];
+    if (!shape) throw new RangeError(`reduceGrid: no shape for body ${id}`);
     if (snap.tier?.[id] === TIER_FREE) {
       r.removed++;
       continue;
@@ -122,7 +123,7 @@ export function reduceGrid(spec: GridSpec, inp: GridInput): GridResult {
     const wi = wt ? wt[id]! : 1;
     if (!(isInt(wi) && wi >= 0 && wi < MAX_WEIGHT)) throw new RangeError(`reduceGrid: weight of body ${id} must be an integer in [0, 2^31), got ${wi}`);
     const Pu = q(snap.pos[3 * id + u]!), Pv = q(snap.pos[3 * id + v]!), Pw = q(snap.pos[3 * id + w]!);
-    const Eu = extentQ(shapes[id]!, snap.rot, id, u, s), Ev = extentQ(shapes[id]!, snap.rot, id, v, s), Ew = extentQ(shapes[id]!, snap.rot, id, w, s);
+    const Eu = extentQ(shape, snap.rot, id, u, s), Ev = extentQ(shape, snap.rot, id, v, s), Ew = extentQ(shape, snap.rot, id, w, s);
     // NaN anywhere (⊥) poisons the sum.
     if (Number.isNaN(Pu + Pv + Pw + Eu + Ev + Ew)) {
       r.invalid++;

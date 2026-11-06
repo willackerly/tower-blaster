@@ -184,6 +184,7 @@ describe('reduceGrid', () => {
     expect(() => reduceGrid({ ...ok, s: 30 }, { snap, shapes })).toThrow(/grid.s/);
     expect(() => reduceGrid({ ...ok, origin: [1e9, 0] }, { snap, shapes })).toThrow(/grid.origin/);
     expect(() => reduceGrid(ok, { snap, shapes, ids: [1] })).toThrow(/id 1/);
+    expect(() => reduceGrid(ok, { snap, shapes: [] })).toThrow(/no shape for body 0/);
     expect(() => reduceGrid(ok, { snap, shapes, weight: [0.5] })).toThrow(/weight/);
     expect(() => reduceGrid(ok, { snap, shapes, weight: [2 ** 31] })).toThrow(/weight/);
   });

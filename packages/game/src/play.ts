@@ -7,7 +7,7 @@
 // its own elements; the viewer calls it for rules=keystone, with hooks for its
 // dev panels (docs/design/viewer-superset.md, step C).
 import { type BodyDesc, type EngineHealth, limitsHit, type PhysicsEngine, type Vec3 } from '@tb/engine-api';
-import { type RackItem, type CompiledLevel, compileLevel, crackSeed, Driver, type DriverCheckpoint, Duel, type DuelDef, DEFAULT_TURN_SECONDS, type Feedback, type Goal, goalMet, type Player, type Grade, gradeOf, type LevelDef, type LevelScore, type LotSheet, type PerStep, playShots, rapidDue, roundFacts, runSession, selectGroups, type Shot, isIcePiece, snapshotHash, TIER_NAMES } from '@tb/keystone';
+import { type RackItem, type CompiledLevel, compileLevel, crackSeed, Driver, type DriverCheckpoint, Duel, type DuelDef, DEFAULT_TURN_SECONDS, type Feedback, type Footprint, type Goal, goalMet, type Player, type Grade, gradeOf, type LevelDef, type LevelScore, type LotSheet, type PerStep, playShots, rapidDue, roundFacts, runSession, selectFootprints, selectGroups, type Shot, isIcePiece, snapshotHash, TIER_NAMES } from '@tb/keystone';
 import { clampPitch, eyeOf, type Orbit, rayThrough, viewProj } from '@tb/render/camera';
 import type { FxOptions, PixelStats, Renderer, SnapshotSource } from '@tb/render';
 import type { HostStats } from '@tb/audio';
@@ -488,7 +488,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
   let fastHeld = false;
   let lastHud = '', crownsShown = 0;
   /** The level's lot sheet and its groups (selected once per load), or null. */
-  let lot: { sheet: LotSheet; goals: readonly Goal[]; groups: Record<string, Int32Array> } | null = null;
+  let lot: { sheet: LotSheet; goals: readonly Goal[]; groups: Record<string, Int32Array>; footprints: Record<string, Footprint> } | null = null;
   /** The duel being played (env.duel), and when the turn in the air was fired (its pace: DuelDef.turnSeconds). */
   let duel: Duel | null = null, turnStart = 0;
   /** Each side's arc on the ground (duel-view.ts arcBeads), made at load. */
@@ -847,7 +847,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     aimDirty = true;
     crownsShown = driver.session.crownLive.reduce((a, x) => a + x, 0);
     const ls = env.lotSheet?.(c) ?? null;
-    lot = ls && { sheet: ls.sheet, goals: ls.goals, groups: selectGroups(c, ls.sheet.groups ?? {}) };
+    lot = ls && { sheet: ls.sheet, goals: ls.goals, groups: selectGroups(c, ls.sheet.groups ?? {}), footprints: selectFootprints(c, ls.sheet) };
     handle.goals = (ls?.goals ?? []).map((g) => ({ id: g.id, text: g.text, met: false, before: ls!.before.includes(g.id) }));
     handle.grade = null;
     // After an undo the goals stand as at the kept shots' settle, as play would have judged them there.
@@ -919,7 +919,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
   /** The lot sheet's goals and grade judged on the round as it stands (after a settle, and at its end). */
   function judgeGoals() {
     if (!lot) return;
-    const f = roundFacts(c, driver.session, driver.snapshot, lot.groups);
+    const f = roundFacts(c, driver.session, driver.snapshot, lot.groups, lot.footprints);
     handle.goals = lot.goals.map((g, k) => ({ ...handle.goals[k]!, met: goalMetSafe(g, f) }));
     handle.grade = gradeOf(lot.sheet.grades, f);
   }
