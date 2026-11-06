@@ -33,4 +33,26 @@ describe('Skip on the game page', () => {
     expect(await page.evaluate(() => window.__game.state())).toEqual({ step: r.steps, phase: r.session.phase, strokes: 1, heritageBroken: r.session.heritageBroken.reduce((a, x) => a + x, 0), hash: snapshotHash(r.snapshot) });
     expect(errors).toEqual([]);
   }, 180_000);
+  it('hold (the agent playtest\'s capture hook, PT12): no step runs while frames draw, and the HUD reads the held step', async (ctx) => {
+    if (!game.browser()) return ctx.skip();
+    const o = await game.open('/?level=T-X1&engine=rapier&look=candy&offscreen=1');
+    if (!o) return ctx.skip();
+    const { page, errors } = o;
+    await ready(page);
+    const shot: Shot = { ammo: 'marble', az: 108, y: 16, yaw: 0, pitch: 26, power: 100 };
+    const start = await page.evaluate(() => window.__game.stepIndex);
+    expect(await page.evaluate((s) => window.__game.fire(s), shot)).toBe(true);
+    await page.waitForFunction((at) => window.__game.stepIndex >= at, start + 10, { timeout: 60_000, polling: 10 });
+    const held = await page.evaluate(() => { window.__game.hold = true; return { step: window.__game.stepIndex, frames: window.__game.frames }; });
+    await page.waitForTimeout(400);
+    const after = await page.evaluate(() => ({ step: window.__game.stepIndex, frames: window.__game.frames, phase: window.__game.phase, d: window.__game.collapse }));
+    // A step already submitted when hold went up may still land; none after it.
+    expect(after.step - held.step).toBeLessThanOrEqual(1);
+    expect(after.frames).toBeGreaterThan(held.frames);
+    expect(after.phase).toBe('running');
+    expect(await page.locator('.kg-hud b.down').first().innerText()).toBe(`${Math.floor(100 * after.d)}%`);
+    await page.evaluate(() => { window.__game.hold = false; });
+    await page.waitForFunction((at) => window.__game.stepIndex > at + 5, after.step, { timeout: 30_000, polling: 20 });
+    expect(errors).toEqual([]);
+  }, 180_000);
 });

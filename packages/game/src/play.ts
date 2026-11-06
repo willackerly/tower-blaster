@@ -52,6 +52,13 @@ export interface GameHandle {
   /** Run the sim at fast-forward speed (as if Space were held). */
   fast: boolean;
   /**
+   * Test hook (the agent playtest's captures, agent playtest PT12): while true no physics step runs, and
+   * frames still draw, so a capture's picture and its HUD show the same step. Rapier steps on the CPU
+   * while SwiftShader takes many frames to render, so round 1's "+25 steps" frames showed the scene at
+   * step 25 under a HUD read 150 steps later (B1 Down 16% over a standing wall). Pacing only.
+   */
+  hold: boolean;
+  /**
    * Pacing now: the valve's time scale (budget / step cost, in [0.25, 1]; up to 4 at fast-forward),
    * the sim speed reached (sim time per real time, measured), the HUD's slow-motion tag ('' at real
    * time), whether the tail skip is on, and the median step cost the valve read when it set that time scale
@@ -235,7 +242,7 @@ function safetyLimiter(ctx: AudioContext): AudioNode {
 export function newGameHandle(): GameHandle {
   const none = (): SessionState => ({ step: 0, phase: 'loading', strokes: 0, heritageBroken: 0, hash: '' });
   return {
-    status: 'loading', engine: '', level: '', phase: 'loading', ready: false, frozen: false, frames: 0, stepIndex: 0, strokes: 0, bodies: 0, collapse: 0, fast: false, pace: { timeScale: 1, speed: 1, tag: '', tailSkip: false, costMs: NaN }, view: { target: [0, 0, 0], distance: 0, yaw: 0, pitch: 0, following: false, jolt: 0, turning: false, cue: null, arcBeads: 0 }, input: { touch: false, gesture: 'idle', fingers: 0, aimed: null, power: 100, launch: 0 }, result: null, counts: {}, feel: { ...DEFAULT_FEEL }, resultShownAt: null, timing: { loadMs: 0, load: noPhases(), stepMs: [], moving: [], frameMs: [], costMs: [] }, draws: { drawn: 0, skipped: 0, decimating: false },
+    status: 'loading', engine: '', level: '', phase: 'loading', ready: false, frozen: false, frames: 0, stepIndex: 0, strokes: 0, bodies: 0, collapse: 0, fast: false, hold: false, pace: { timeScale: 1, speed: 1, tag: '', tailSkip: false, costMs: NaN }, view: { target: [0, 0, 0], distance: 0, yaw: 0, pitch: 0, following: false, jolt: 0, turning: false, cue: null, arcBeads: 0 }, input: { touch: false, gesture: 'idle', fingers: 0, aimed: null, power: 100, launch: 0 }, result: null, counts: {}, feel: { ...DEFAULT_FEEL }, resultShownAt: null, timing: { loadMs: 0, load: noPhases(), stepMs: [], moving: [], frameMs: [], costMs: [] }, draws: { drawn: 0, skipped: 0, decimating: false },
     fire: () => false, bank: () => false, skip: () => false, freeze: () => false, fireOpener: () => false, setMuted: () => {}, maxDpr: 2, quality: null, aim: () => null, reach: null, select: () => false, load: async () => {}, retry: async () => {}, undo: async () => false, undone: null, spare: null, undoMemory: () => ({ marks: 0, bytes: 0 }), capture: async () => null, firedLooks: () => [], marks: () => [], refreshMarks: () => {},
     state: none, line: () => [], replay: async () => none(), health: async () => null, pairsPerBody: 0, limitsHit: [], goals: [], grade: null, duel: null,
     sound: () => ({ mode: 'collapse', status: 'off', error: '', posted: 0, stats: null }),
@@ -1563,7 +1570,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
   void runPhysics({
     now: () => performance.now(),
     alive: () => handle.status === 'running',
-    active: () => !loading && driver.session.phase === 'running' && !frozen,
+    active: () => !loading && driver.session.phase === 'running' && !frozen && !handle.hold,
     dtMs: () => 1000 * c.scene.dt,
     options: () => ({ fastForward: fastNow(), skip: skipping, budgetMs: feel.budgetMs }),
     idle: physicsIdle.wait,
