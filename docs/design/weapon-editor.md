@@ -10,13 +10,17 @@ Status 2026-11-06. A visual editor for the WeaponSpec language (`docs/design/wea
 | Device-tier caps | `packages/weapons/src/tiers.ts` | `WEAPON_TIER_CAPS` (low, mid, high): bodies, blasts and grenades of energy one shot may cost; `tierIssues`, `tierOf`, `fitsTier`. |
 | Editing model | `packages/weapons/src/edit.ts` | Pure draft-to-draft edits (`setAt`, `addRule`, `addAction`, `addChild`, `renameChild`, `removeChild`, trigger and action kinds), the form's field table (`SHELL_FIELDS`, `BLAST_FIELDS`, ...) with the validator's ranges, and issues by field. |
 | Viewer panel | `packages/viewer/src/weapon-editor.ts` | The form, the JSON beside it, a side view of the arc, the budget against the tier, Apply. |
-| Scene preview | viewer `main.ts` | The arc drawn in the scene (the renderer's overlay beads) from where a click would fire it, while the editor is open or `weapon.preview=1`. |
+| Scene preview | viewer `weapon-preview.ts`, `main.ts` | The arc drawn in the scene (the renderer's overlay beads) from where a click would fire it, while the editor is open or `weapon.preview=1`. |
 
 ## Arc preview: run the weapon's own runtime
 
 **Chosen.** `previewWeapon` runs `WeaponRuntime`, the code that decides triggers in play, over a stand-in world that only knows free flight: munitions move by `freeFlight` (the engines' integrator), blasts kick the other munitions by `blastVelocity` (as every engine does), and the ground and the bodies already in the world are sensed by `near` triggers exactly as in play. A munition that touches the ground or a body stops there.
 
 So while a munition flies free its track is the engine's path to rounding, and every trigger, split and blast lands on the engine's step. `packages/weapons/test/preview.test.ts` fires each case on the f64 reference engine and checks: one track per spawn on the same step; every free-flight point to 1e-9; every removal and blast on the engine's step; blasts centred to 1e-9 in flight and within a step's travel (0.6 units) where the munition touched something on that step. Cases: a timer grenade, the firework (apex split, 12 stars that blow each other about), the M grenade's proximity fuse, and the cluster against a wall (exact up to the first blast; from there the engine moves the wall and the preview does not).
+
+In a scene the obstacles are the whole last snapshot, held still. Each step the preview gathers only the bodies near a live munition from a uniform grid (cell twice the largest body radius; the reach is the widest `near` plus the munition's radius and one step's travel), so the cost follows the munitions, not the scene: in Node on the cloud runner the firework into a 10k block takes about 22 ms, the cluster about 12 ms, the open sky about 5 ms (a first pass that tested every body every step took 750 ms). The page recomputes at most every 100 ms while the pointer moves and re-reads the world at most every 500 ms, and not at all while a drag is aiming.
+
+Against the page as fired, the split lands on the shown step exactly. A star fuse set off by a neighbour can land a step or two apart, because the page reads the world once a frame (looking a few steps ahead) while the preview observes every step; the runtime is cadence-independent only while nothing near the path moves much. The e2e test holds blasts to within 2 steps.
 
 What it does not show: bounces, rolls and knock-on after a contact, and the world's response to a blast (it draws the blast's sphere instead). Those need the physics; a preview that ran it would be a second simulation per hover.
 
@@ -60,5 +64,7 @@ Alternatives considered:
 
 1. `@tb/weapons`: `previewWeapon`, tier caps, editing model. Tests: preview against the reference engine, tiers, model round trips. (`packages/weapons/test/{preview,tiers,edit}.test.ts`)
 2. Viewer editor panel: form, JSON, side view, budget bars, Apply into `weapon.def`. Tests: the panel's model in Node; headless Chromium edits a field, applies, and the URL's `weapon.def` decodes to the edited spec, which the page then fires.
-3. Scene preview and tier enforcement in the viewer: beads along every track from where a click would fire, refreshed as the pointer moves; firing a weapon over the tier is refused with a notice. Tests: the beads match `previewWeapon`; an over-cap `weapon.def` is refused on `weapon.tier=low` and fires on `high`.
+3. Scene preview and tier enforcement in the viewer: beads along every track from where a click would fire, refreshed as the pointer moves; firing a weapon over the tier is refused with a notice. Tests: the beads are `previewWeapon`'s points and blast spheres within the overlay budget (`weapon-preview.test.ts`); in Chromium the fired firework splits on the shown step and blows within 2 steps of it; an over-cap weapon is refused on its tier and fires with `weapon.tier=high`.
+
+   Beads, not lines: the renderer already draws up to 1024 overlay spheres in one instanced pass; a line pass would be new GPU code for the same read. Blasts are drawn first so a tight budget thins the tracks, never drops a blast.
 4. Game: the rack's custom weapons (`keystone.rack` `w-<key>` on a level a link carries) are held to the same tier caps; the Munitions Bench (M11) puts the editor in the game.

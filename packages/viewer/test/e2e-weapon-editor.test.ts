@@ -89,3 +89,39 @@ describe('the weapon editor', () => {
     await hi.page.close();
   });
 });
+
+describe('the weapon\'s flight in the scene', () => {
+  it('is drawn from where a click fires, and the fired weapon splits and blows on the steps it shows', async (ctx) => {
+    if (!browser) return ctx.skip();
+    const { page, errors } = await open(`${SCENE}&proj.weapon=firework&weapon.preview=1`, WIDE);
+    if (await page.evaluate(() => window.__viewer.status) !== 'running') return ctx.skip();
+    // Up into the open sky: nothing in the way.
+    const pre = await page.evaluate(() => window.__viewer.previewAt(0.2, 0.9));
+    expect(pre).not.toBeNull();
+    expect(pre!.tracks).toBe(13);
+    expect(pre!.blasts).toHaveLength(12);
+    expect(pre!.beads).toBeGreaterThan(100);
+    const at = await page.evaluate(() => { window.__viewer.fire(0.2, 0.9); return window.__viewer.inputs[0]!.step; });
+    await page.waitForFunction(() => window.__viewer.inputs.filter((e) => e.kind === 'blast').length >= 12, undefined, { timeout: 60_000 });
+    const fired = (await page.evaluate(() => window.__viewer.inputs) as InputEvent[]).filter((e) => e.kind === 'blast');
+    // The split (at the apex, read off the shell's own path) on the shown step exactly.
+    const split = (await page.evaluate(() => window.__viewer.inputs) as InputEvent[]).find((e) => e.kind === 'remove');
+    expect([split!.step - at]).toEqual(pre!.splits);
+    // The stars' fuses sense each other, and the page reads the world once a frame (looking a few steps
+    // ahead) while the preview reads every step: a fuse set off by a moving neighbour may land a step or
+    // two apart (runtime.ts: cadence-independent only while nothing near the path moves much).
+    const steps = fired.map((e) => e.step - at).sort((a, b) => a - b), want = pre!.blasts.map((b) => b[0]!).sort((a, b) => a - b);
+    expect(steps).toHaveLength(want.length);
+    steps.forEach((x, i) => expect(Math.abs(x - want[i]!)).toBeLessThanOrEqual(2));
+    expect(errors).toEqual([]);
+    await page.close();
+  });
+
+  it('is not drawn without weapon.preview while the editor is closed', async (ctx) => {
+    if (!browser) return ctx.skip();
+    const { page } = await open(`${SCENE}&proj.weapon=firework`, WIDE);
+    if (await page.evaluate(() => window.__viewer.status) !== 'running') return ctx.skip();
+    expect(await page.evaluate(() => window.__viewer.previewAt(0.2, 0.9))).toBeNull();
+    await page.close();
+  });
+});
