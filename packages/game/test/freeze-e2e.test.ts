@@ -60,4 +60,32 @@ describe('Bullet Time on the game page', () => {
     expect(errors).toEqual([]);
     await page.close();
   }, 300_000);
+  it('undo of a shot fired while frozen goes back to the frozen moment: frozen again, the freeze not spent', async (ctx) => {
+    if (!game.browser()) return ctx.skip();
+    const o = await game.open(URL);
+    if (!o) return ctx.skip();
+    const { page, errors } = o;
+    await ready(page);
+    const start = await page.evaluate(() => window.__game.stepIndex);
+    expect(await page.evaluate((s) => window.__game.fire(s), miss)).toBe(true);
+    await page.waitForFunction((n) => window.__game.stepIndex >= n, start + 10, { timeout: 60_000, polling: 20 });
+    expect(await page.evaluate(() => window.__game.freeze(true))).toBe(true);
+    const frozen = await page.evaluate(() => window.__game.state());
+    expect(await page.evaluate((s) => window.__game.fire(s), par)).toBe(true);
+    expect(await page.evaluate(() => window.__game.freeze(true))).toBe(false); // spent
+    await page.waitForFunction((n) => window.__game.stepIndex >= n, frozen.step + 5, { timeout: 60_000, polling: 20 });
+    // Undo (from the checkpoint taken as the par shot went in): the frozen moment, exactly, still frozen.
+    expect(await page.evaluate(() => window.__game.undo())).toBe(true);
+    expect(await page.evaluate(() => window.__game.undone!.mode)).toBe('checkpoint');
+    expect(await page.evaluate(() => ({ frozen: window.__game.frozen, phase: window.__game.phase }))).toEqual({ frozen: true, phase: 'running' });
+    expect(await page.evaluate(() => window.__game.state())).toEqual(frozen);
+    await page.waitForTimeout(300);
+    expect(await page.evaluate(() => window.__game.stepIndex)).toBe(frozen.step);
+    // The freeze is back: resuming is free, and freezing again works.
+    expect(await page.evaluate(() => window.__game.freeze(false))).toBe(true);
+    await page.waitForFunction((n) => window.__game.stepIndex >= n, frozen.step + 3, { timeout: 60_000, polling: 20 });
+    expect(await page.evaluate(() => window.__game.freeze(true))).toBe(true);
+    expect(errors).toEqual([]);
+    await page.close();
+  }, 300_000);
 });

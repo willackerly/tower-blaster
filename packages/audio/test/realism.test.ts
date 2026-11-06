@@ -6,7 +6,7 @@ import { createHash } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import {
   BLOCK, cellOf, CLASSIC_SOUND_MATERIALS, CollapseEngine, contactTime, DENSE_BANDS, DENSE_LOOP, denseField, denseNoise, DV_EDGES,
-  CLAMPED_PLATE, forceSpectrum, loudness, mass, modes, parseSoundMaterial, plateTable, pulseSpectrum, ROUGH_T, roughTime, SOUND_MATERIALS, type SoundMaterial, VIB_SHARE,
+  CLAMPED_PLATE, clickFilter, clickKernel, forceSpectrum, modalDensity, modalOverlap, radiatedClick, volume, loudness, mass, modes, parseSoundMaterial, plateTable, pulseSpectrum, ROUGH_T, roughTime, SOUND_MATERIALS, type SoundMaterial, VIB_SHARE,
 } from '@tb/audio';
 import { db, frame, octaves, run, SR } from './helpers.ts';
 
@@ -207,6 +207,71 @@ describe('material identity (the listening ladder, step 1)', () => {
     for (const plateModes of [0, 2.5, 17]) expect(() => parseSoundMaterial({ plateModes }, REAL.iron)).toThrow(/plateModes/);
     for (const roughT of [0, 1e-6, 0.1, Number.NaN]) expect(() => parseSoundMaterial({ roughT }, REAL.steel)).toThrow(/roughT/);
     expect(parseSoundMaterial({ plateModes: 12, roughT: 1e-3 }, REAL.iron)).toMatchObject({ plateModes: 12, roughT: 1e-3 });
+  });
+});
+
+describe('step 2 options (off by default)', () => {
+  it('overlap: discrete modes from the table up to modal overlap 1, at the Weyl count; the field above them', () => {
+    const steel = REAL.steel!, md0 = modes(steel, 0.5), md = modes({ ...steel, overlap: 1 }, 0.5);
+    expect(steel.overlap).toBeUndefined();
+    const top = Math.max(...md0.freq), added = [...md.freq].slice(md0.freq.length);
+    expect([...md.freq].slice(0, md0.freq.length)).toEqual([...md0.freq]); // the table untouched
+    expect(added.length).toBeGreaterThan(50);
+    for (const f of added) { expect(f).toBeGreaterThan(top); expect(modalOverlap(steel, f, 0.5)).toBeLessThan(1.01); }
+    // As many as the density integrates to between the table top and the last one (within the +-0.3 jitter's 1).
+    let N = 0;
+    for (let f = top, last = Math.max(...added); f < last; f *= 1.0005) N += modalDensity(steel, f, 0.5) * f * 0.0005;
+    expect(Math.abs(added.length - N)).toBeLessThan(1.5);
+    for (let k = 1; k < added.length; k++) expect(added[k]!).toBeGreaterThan(added[k - 1]!); // no repeats
+    // Each impact weights the new modes by independent unit normals (rms 1), the table's own as before.
+    const rng = (seed: number) => { let a = seed >>> 0; return () => { a = (a + 0x6d2b79f5) >>> 0; let t = Math.imul(a ^ (a >>> 15), 1 | a); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; }; };
+    const rand = rng(5);
+    const w = new Float64Array(md.freq.length), w0 = new Float64Array(md0.freq.length);
+    let ss = 0, n = 0;
+    for (let k = 0; k < 4000; k++) { md.weights(rand, w); for (let j = md0.freq.length; j < w.length; j++) { ss += w[j]! ** 2; n++; } }
+    expect(Math.sqrt(ss / n)).toBeCloseTo(1, 1);
+    md.weights(rng(9), w); md0.weights(rng(9), w0);
+    expect([...w].slice(0, w0.length)).toEqual([...w0]);
+    expect(denseField({ ...steel, overlap: 1 }, [1e-3], 0.5)?.from ?? Infinity).toBeGreaterThan(Math.max(...added));
+    // A material already overlapping at its table's top (plaster) gains nothing.
+    expect(modes({ ...REAL.plaster!, overlap: 1 }, 0.5).freq.length).toBe(modes(REAL.plaster!, 0.5).freq.length);
+  });
+
+  it('clickModel sphere: the oscillating sphere\'s far field, 2 / sqrt(4 + (ka)^4) of the compact dipole', () => {
+    expect(clickFilter(REAL.stone!, SR, 0.5)).toBeNull();
+    const m = { ...REAL.stone!, clickModel: 'sphere' as const }, [b0, b1, b2, a1, a2] = clickFilter(m, SR, 0.5)!;
+    const a = Math.cbrt((3 * volume(m, 0.5)) / (4 * Math.PI));
+    const mag = (f: number) => {
+      const w = (2 * Math.PI * f) / SR, re = (c: number[]) => c[0]! + c[1]! * Math.cos(w) + c[2]! * Math.cos(2 * w), im = (c: number[]) => -(c[1]! * Math.sin(w) + c[2]! * Math.sin(2 * w));
+      return Math.hypot(re([b0, b1, b2]), im([b0, b1, b2])) / Math.hypot(re([1, a1, a2]), im([1, a1, a2]));
+    };
+    for (const f of [20, 100, 250, 500, 1000, 2000, 4000]) {
+      const ka = (2 * Math.PI * f * a) / 343;
+      expect(mag(f) / (2 / Math.sqrt(4 + ka ** 4))).toBeCloseTo(1, 1);
+    }
+    // A voice's radiated click: the compact one at low frequencies, with less energy (the piston limit above ka ~ 1.4).
+    const T = 3e-3, k = clickKernel(m, T, SR, 0.5), rk = radiatedClick(m, T, SR, 0.5), e = (x: Float32Array) => x.reduce((s, v) => s + v * v, 0);
+    expect(rk.length).toBeGreaterThan(k.length);
+    expect(e(rk)).toBeLessThan(e(k));
+    expect(radiatedClick(REAL.stone!, T, SR, 0.5)).toEqual(clickKernel(REAL.stone!, T, SR, 0.5));
+    // In the engine: the bank's clicks pass the same filter; finite, quieter, and silent again after.
+    const energy: number[] = [];
+    for (const cm of ['dipole', 'sphere'] as const) {
+      const e = new CollapseEngine({ sampleRate: SR, seed: 2, fullScale: 1000 });
+      e.setMaterial(0, { ...REAL.stone!, clickModel: cm, denseDb: -Infinity, ringDb: -120, gritDb: -Infinity }, 0.5);
+      const { mono, energy: en } = run(e, 300, (b) => { if (b === 2) e.push(frame([{ bin: 3, count: 40, a2: 40 }, { bin: 5, count: 10, a2: 30 }], [[2, 1, 0.2, 0, 0.5]])); });
+      expect(mono.every(Number.isFinite)).toBe(true);
+      expect(Math.max(...mono.slice(-1024).map(Math.abs))).toBeLessThan(1e-6); // nothing left ringing
+      energy.push(en);
+    }
+    expect(energy[1]!).toBeLessThan(energy[0]!);
+    expect(energy[1]!).toBeGreaterThan(0);
+  });
+
+  it('rejects overlaps and click models that cannot be', () => {
+    for (const overlap of [0, 0.05, 11]) expect(() => parseSoundMaterial({ overlap }, REAL.steel)).toThrow(/overlap/);
+    expect(() => parseSoundMaterial({ clickModel: 'cone' } as never, REAL.steel)).toThrow(/clickModel/);
+    expect(parseSoundMaterial({ overlap: 1, clickModel: 'sphere' }, REAL.steel)).toMatchObject({ overlap: 1, clickModel: 'sphere' });
   });
 });
 

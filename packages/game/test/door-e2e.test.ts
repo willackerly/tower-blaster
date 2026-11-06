@@ -3,9 +3,11 @@
 // Fire button bring the wall down (the first-minute promise, measured in sim
 // time here and in wall time on a real GPU: TB_CHANNEL=chrome with engine gpu);
 // the door holds the game's keys; Esc and Menu bring it back; settings are
-// stored and replace their URL key; progress shows on the cards after a reload.
+// stored and replace their URL key; progress shows on the cards after a reload;
+// every series is listed, and a trial picked from the Trials toggle loads in
+// place (no page load), with N and P walking the trials only.
 import { describe, expect, it } from 'vitest';
-import { B1, L1, type Shot, writeShots } from '@tb/keystone';
+import { B1, L1, type Shot, TRIAL_LEVELS, writeShots } from '@tb/keystone';
 import { gamePage } from './page.ts';
 
 const game = gamePage();
@@ -24,7 +26,9 @@ describe('front door', () => {
     if (!o) return ctx.skip();
     const { page, errors } = o;
     expect(await page.evaluate(() => window.__door.open)).toBe(true);
-    expect(await page.locator('.kg-door .card:not(.duel)').count()).toBe(3);
+    // Every rated level (B1-B3, L1-L5, U1-U3); the trials wait behind their toggle.
+    expect(await page.locator('.kg-door .card:not(.duel)').count()).toBe(11);
+    expect(await page.locator('.kg-door [data-act="trials"]').innerText()).toBe(`TRIALS · UNRATED (${TRIAL_LEVELS.length}) ▸`);
     expect(await page.locator('.kg-door .card.duel').count()).toBe(2);
     expect(await page.locator('.kg-door .play').innerText()).toBe('Play · Long Wall');
     // The door holds the game's keys: N would load B2.
@@ -59,14 +63,15 @@ describe('front door', () => {
     expect(await page.evaluate(() => window.__door.open)).toBe(false);
     await page.keyboard.press('Escape');
     expect(await page.evaluate(() => window.__door.open)).toBe(true);
-    // The chamber series: L1 to L5, par targets.
-    expect(await page.locator('.kg-door .card:not(.duel) .id').allInnerTexts()).toEqual(['L1', 'L2', 'L3', 'L4', 'L5']);
+    // Every series, the slice first: B1 to B3, L1 to L5, U1 to U3; L1 is the loaded one.
+    expect(await page.locator('.kg-door .card:not(.duel) .id').allInnerTexts()).toEqual(['B1', 'B2', 'B3', 'L1', 'L2', 'L3', 'L4', 'L5', 'U1', 'U2', 'U3']);
+    expect(await page.locator('.kg-door .card.current .id').innerText()).toBe('L1');
     await page.keyboard.press('Escape');
     expect(await page.evaluate(() => window.__door.open)).toBe(false);
     await page.locator('#menu').click();
     expect(await page.evaluate(() => window.__door.open)).toBe(true);
     // Picking a card loads that level.
-    await page.locator('.kg-door .card:not(.duel)').nth(1).click();
+    await page.locator('.kg-door .card[aria-label^="L2 "]').click();
     await page.waitForFunction(() => window.__game.level === 'L2', undefined, { timeout: MINUTES });
     expect(errors).toEqual([]);
     await page.close();
@@ -122,17 +127,72 @@ describe('front door', () => {
     expect(await page.evaluate(() => window.__game.feel)).toMatchObject({ follow: true, shake: true, rapid: false, turnView: false });
     expect(await page.locator('.kg-door [data-act="duelview"].on').innerText()).toBe('Leave it');
     expect(await page.locator('.kg-door [data-act="rapid"].on').innerText()).toBe('Off');
-    const card = await page.locator('.kg-door .card:not(.duel)').first().innerText();
-    expect(card).toContain('1 play');
-    expect(await page.locator('.kg-door .card:not(.duel)').first().locator('li.got').count()).toBe(stars);
+    const l1 = page.locator('.kg-door .card[aria-label^="L1 "]');
+    expect(await l1.innerText()).toContain('1 play');
+    expect(await l1.locator('li.got').count()).toBe(stars);
     // Forget my progress takes two clicks.
     await page.locator('.kg-door [data-act="reset"]').click();
-    expect(await page.locator('.kg-door .card:not(.duel)').first().innerText()).toContain('1 play');
+    expect(await l1.innerText()).toContain('1 play');
     await page.locator('.kg-door [data-act="reset"]').click();
-    expect(await page.locator('.kg-door .card:not(.duel)').first().innerText()).toContain('Not played yet');
+    expect(await l1.innerText()).toContain('Not played yet');
     expect(errors).toEqual([]);
     await page.close();
   }, 5 * MINUTES);
+});
+
+describe('trials on the door', () => {
+  it('the Trials toggle lists every trial; a pick loads in place; N and P stay inside the trials and the chamber stops at L5', async (ctx) => {
+    if (!game.browser()) return ctx.skip();
+    const o = await game.open('/?level=L5&engine=rapier&offscreen=1&door=1');
+    if (!o) return ctx.skip();
+    const { page, errors } = o;
+    await page.waitForFunction(() => window.__game?.status === 'running', undefined, { timeout: MINUTES });
+    // A marker on the window: gone if anything reloads the page.
+    await page.evaluate(() => { (window as unknown as { marker: number }).marker = 1; });
+    expect(await page.locator('.kg-door .card.trial').count()).toBe(0);
+    await page.locator('.kg-door [data-act="trials"]').click();
+    expect(await page.locator('.kg-door .card.trial').count()).toBe(TRIAL_LEVELS.length);
+    expect(await page.locator('.kg-door .card.trial .id').allInnerTexts()).toEqual(TRIAL_LEVELS.map((d) => d.id));
+    // Play still offers the first rated level, not a trial.
+    expect(await page.locator('.kg-door .play').innerText()).toBe(`Play · ${B1.name}`);
+    await page.locator('.kg-door .card[aria-label^="T-X1 "]').click();
+    await page.waitForFunction(() => window.__game.level === 'T-X1' && window.__game.ready, undefined, { timeout: MINUTES, polling: 100 });
+    expect(new URLSearchParams(await page.evaluate(() => location.search)).get('level')).toBe('T-X1');
+    // The trial is outcome-scored with its objective (the last domino down) and nothing cast.
+    expect(await page.evaluate(() => window.__game.strokes)).toBe(0);
+    await page.keyboard.press('n');
+    await page.waitForFunction(() => window.__game.level === 'T-X2' && window.__game.ready, undefined, { timeout: MINUTES, polling: 100 });
+    await page.keyboard.press('p');
+    await page.waitForFunction(() => window.__game.level === 'T-X1' && window.__game.ready, undefined, { timeout: MINUTES, polling: 100 });
+    // The first trial has no P: it stays put rather than running back into Undercut's levels.
+    await page.evaluate(() => window.__game.load('T-S1'));
+    await page.waitForFunction(() => window.__game.level === 'T-S1' && window.__game.ready, undefined, { timeout: MINUTES, polling: 100 });
+    await page.keyboard.press('p');
+    await page.waitForTimeout(1000);
+    expect(await page.evaluate(() => window.__game.level)).toBe('T-S1');
+    // L5, the chamber's last, has no N into Undercut's.
+    await page.evaluate(() => window.__game.load('L5'));
+    await page.waitForFunction(() => window.__game.level === 'L5' && window.__game.ready, undefined, { timeout: MINUTES, polling: 100 });
+    await page.keyboard.press('n');
+    await page.waitForTimeout(1000);
+    expect(await page.evaluate(() => window.__game.level)).toBe('L5');
+    expect(await page.evaluate(() => (window as unknown as { marker?: number }).marker)).toBe(1);
+    expect(errors).toEqual([]);
+    await page.close();
+  }, 5 * MINUTES);
+
+  it('a URL naming a trial opens it with the Trials toggle open', async (ctx) => {
+    if (!game.browser()) return ctx.skip();
+    const o = await game.open('/?level=t-x3b&engine=rapier&offscreen=1&door=1');
+    if (!o) return ctx.skip();
+    const { page, errors } = o;
+    await page.waitForFunction(() => window.__game?.status === 'running', undefined, { timeout: MINUTES });
+    expect(await page.evaluate(() => window.__game.level)).toBe('T-X3B');
+    expect(await page.locator('.kg-door .card.trial').count()).toBe(TRIAL_LEVELS.length);
+    expect(await page.locator('.kg-door .card.current .id').innerText()).toBe('T-X3B');
+    expect(errors).toEqual([]);
+    await page.close();
+  }, 3 * MINUTES);
 });
 
 // B1's opener is its ace line's first shot.

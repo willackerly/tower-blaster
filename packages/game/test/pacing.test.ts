@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   alphaAt, arrived, checkPaceFeel, DEFAULT_BUDGET_MS, DEFAULT_FEEL, FAST_SCALE, FRAME_MS, MAX_LAG_MS, newArrivals, Pacer, paceFeel, SLOWMO_IN, SLOWMO_MAX, SLOWMO_OUT, SLOWMO_SCALE, slowTag,
-  SpeedMeter, stepCost, TAIL_GAIN, TAIL_STEPS, TailSkip, valve, VALVE_MIN, writePaceFeel,
+  SpeedMeter, stepCost, TAIL_GAIN, TAIL_STEPS, TailSkip, valve, VALVE_MIN, writePaceFeel, DEFAULT_UNDO_MB, MAX_UNDO_MB,
 } from '../src/pacing.ts';
 
 const DT_MS = 1000 / 60;
@@ -22,7 +22,16 @@ const sum = (xs: number[]) => xs.reduce((a, b) => a + b, 0);
 describe('pace feel', () => {
   it('juice and every camera motion are off unless the URL asks for them; the valve and the tail skip are on; every frame is drawn', () => {
     expect(paceFeel(new URLSearchParams(''))).toEqual(DEFAULT_FEEL);
-    expect(DEFAULT_FEEL).toEqual({ hitStop: false, slowMo: false, budgetMs: DEFAULT_BUDGET_MS, tailSkip: true, follow: false, shake: false, frames: 'all', rapid: true, turnView: true, arcs: true });
+    expect(DEFAULT_FEEL).toEqual({ hitStop: false, slowMo: false, budgetMs: DEFAULT_BUDGET_MS, tailSkip: true, follow: false, shake: false, frames: 'all', rapid: true, turnView: true, arcs: true, undoMB: DEFAULT_UNDO_MB });
+    // Undo memory: MB of checkpoints (0: undo replays the shots); out of range or not a number is refused.
+    expect(paceFeel(new URLSearchParams('?keystone.undo=0'))).toEqual({ ...DEFAULT_FEEL, undoMB: 0 });
+    expect(paceFeel(new URLSearchParams('?keystone.undo=256')).undoMB).toBe(256);
+    for (const bad of ['-1', '', 'lots', String(MAX_UNDO_MB + 1)]) expect(() => paceFeel(new URLSearchParams(`?keystone.undo=${bad}`)), bad).toThrow(/keystone.undo must be from 0 to/);
+    expect(() => checkPaceFeel({ ...DEFAULT_FEEL, undoMB: NaN })).toThrow(/undo memory must be from 0 to/);
+    const q = new URLSearchParams();
+    writePaceFeel({ ...DEFAULT_FEEL, undoMB: 64 }, q);
+    expect(q.toString()).toBe('keystone.undo=64');
+    expect(paceFeel(q).undoMB).toBe(64);
     expect(paceFeel(new URLSearchParams('?keystone.rapid=0'))).toEqual({ ...DEFAULT_FEEL, rapid: false });
     // A duel's aids are on by default (Will, 2026-11-06), each off by its key.
     expect(paceFeel(new URLSearchParams('?keystone.turnview=0'))).toEqual({ ...DEFAULT_FEEL, turnView: false });

@@ -129,10 +129,10 @@ describe('Keystone rules in the viewer', () => {
     expect(sceneFile(c, '', null).rules).toMatchObject({ scoring: 'outcome', autobank: false, settle: 'v1', freeze: 2, physics: { iterations: 20, bounce: 0.4, gapSlop: 0 } });
     expect(sceneFile(parseViewerConfig('?level=L1&rules=keystone'), '', null).rules).toEqual({ mode: 'keystone', hitstop: false, slowmo: false });
     // The pace switches (budget, tail skip) ride along in the URL and the scene file, and only when not the default.
-    const paced = parseViewerConfig('?level=L1&rules=keystone&keystone.budget=0&keystone.tailskip=0&keystone.follow=1&keystone.shake=1&keystone.frames=auto&keystone.rapid=0');
-    expect(paced.feel).toEqual({ ...DEFAULT_FEEL, budgetMs: 0, tailSkip: false, follow: true, shake: true, frames: 'auto', rapid: false });
+    const paced = parseViewerConfig('?level=L1&rules=keystone&keystone.budget=0&keystone.tailskip=0&keystone.follow=1&keystone.shake=1&keystone.frames=auto&keystone.rapid=0&keystone.undo=0');
+    expect(paced.feel).toEqual({ ...DEFAULT_FEEL, budgetMs: 0, tailSkip: false, follow: true, shake: true, frames: 'auto', rapid: false, undoMB: 0 });
     expect(parseViewerConfig(toSearch(paced))).toEqual(paced);
-    expect(sceneFile(paced, '', null).rules).toMatchObject({ budget: 0, tailskip: false, follow: true, shake: true, frames: 'auto', rapid: false });
+    expect(sceneFile(paced, '', null).rules).toMatchObject({ budget: 0, tailskip: false, follow: true, shake: true, frames: 'auto', rapid: false, undo: 0 });
     expect(parseSceneFile(JSON.stringify(sceneFile(paced, '', null))).config).toEqual(paced);
     // The camera moves only when the player moves it unless asked: a file without follow or shake (every file
     // saved before the switch, when an absent follow meant on) opens still, and one saying follow: false too.

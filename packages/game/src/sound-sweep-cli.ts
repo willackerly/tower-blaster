@@ -21,7 +21,7 @@ if (!kv.from || !kv.out || !kv.name) throw new Error('from=, out= and name= are 
 const set = (kv.set ?? 'real') as SoundSet;
 if (set !== 'real' && set !== 'classic') throw new Error(`set must be real or classic: ${set}`);
 const knobs = Object.fromEntries((['ring', 'click', 'grit', 'damping', 'pitch', 'spread', 'rough', 'dense'] as SoundKnob[]).map((k) => [k, kv[k] === undefined ? SOUND_KNOBS[k].def : Number(kv[k])])) as Record<SoundKnob, number>;
-const keyed = (p: string) => Object.fromEntries(Object.entries(kv).filter(([k]) => k.startsWith(p)).map(([k, v]) => [k.slice(2), k.endsWith('.law') || k.endsWith('.model') ? v : Number(v)]));
+const keyed = (p: string) => Object.fromEntries(Object.entries(kv).filter(([k]) => k.startsWith(p)).map(([k, v]) => [k.slice(2), Number.isNaN(Number(v)) ? v : Number(v)]));
 const over = keyed('m.'), ammoOver = keyed('a.');
 const tune = (m: SoundMaterial, ammo = false): SoundMaterial => ({ ...tunedMaterial(m, knobs), ...over, ...(ammo ? ammoOver : {}) });
 const mats = soundMaterials(set) as Record<string, SoundMaterial>, only = kv.only?.split(',').map(Number), SR = 48000;

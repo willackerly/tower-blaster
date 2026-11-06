@@ -8,12 +8,12 @@
 // reads too under rules=keystone, so the same link opens in either page.
 // The front door (door.ts, docs/game/front-door.md) opens over a bare URL
 // (?door=auto|1|0); ?keystone.preaim, ?progress, ?sound, ?sharp are its keys.
-import { DUELS, duelLevel, duelLevelId, lotSheetOf, type Player, seriesOf, type Shot, shownGoals } from '@tb/keystone';
+import { DUELS, duelLevel, duelLevelId, lotSheetOf, type Player, type Shot, shownGoals } from '@tb/keystone';
 import { createDevice } from '@tb/gpu';
 import { lookByName, parseBlastOptions, parseRealOptions, Renderer, SnapshotSource } from '@tb/render';
 import { installDoor, type DoorPage } from './door-page.ts';
 import { doorDuels, doorMode, doorOnLoad, duelsOnDoor, openerFor, preaimMode } from './door.ts';
-import { loadOptions, lookName, onEngine, parseGameParams, withRules } from './params.ts';
+import { GAME_SERIES, loadOptions, lookName, onEngine, parseGameParams, withRules } from './params.ts';
 import { browserKeyValue, memoryKeyValue, type ProgressStore, progressStore } from './progress.ts';
 import { bankAfterLine, type SessionFacts, sessionFile, sessionFileName } from './session-file.ts';
 import { CAMERA_KEYS, cameraFeel, RAPID_KEYS, rapidFeel, type Settings, SettingsStore, TURN_VIEW_KEYS, turnViewFeel } from './settings.ts';
@@ -71,9 +71,13 @@ async function main() {
   // ?keystone.rack replaces the opening level's rack (its def, so retry keeps it); other levels keep their own.
   // The rule overrides (keystone.scoring, keystone.autobank, physics) apply to every level; stars cast on
   // another engine do not apply (onEngine).
-  // The opening level plays on into the rest of its series (the chamber levels, or the big levels).
-  const series = seriesOf(level.id)!, start = series.findIndex((l) => l.id === level.id);
-  const levels = series.map((l, i) => onEngine(i === start ? level : withRules(l, rules), engine));
+  // Every built-in level is loadable (the door lists them all; a pick loads in place, no page reload); N, P and
+  // Next walk the opening level's series (the big levels, the chamber levels, Undercut's or the trials).
+  const all = GAME_SERIES.flat(), seriesIdx = GAME_SERIES.flatMap((s, k) => s.map(() => k));
+  const start = all.findIndex((l) => l.id === level.id);
+  const levels = all.map((l, i) => onEngine(i === start ? level : withRules(l, rules), engine));
+  /** Level def's index in its own series (the pre-aimed opener is the series' first level's). */
+  const inSeries = (id: string) => { const i = all.findIndex((l) => l.id === id); return i - seriesIdx.indexOf(seriesIdx[i]!); };
   // A duel (?duel=D1) plays its two levels instead (first player first, then the rematch's); the door keeps the series.
   const played = duel ? ([0, 1] as Player[]).map((f) => withRules(duelLevel(duel, f), rules)) : levels;
   /** Opens the game page anew on a level or a duel, keeping the visit's other keys (look, engine, settings). */
@@ -131,7 +135,7 @@ async function main() {
   let ended: SessionFacts | null = null, banked = false;
   await playKeystone({
     canvas, offscreen, device, renderer, source, hud: $('hud'), banner: $('banner'), result: $('result'),
-    levels: played, start: duel ? 0 : start, engine, feel, fail, sound, impactsDb, muted: !settings.current.sound, touch: touchMode(q), ...loadOptions(q),
+    levels: played, start: duel ? 0 : start, ...(duel ? {} : { series: seriesIdx }), engine, feel, fail, sound, impactsDb, muted: !settings.current.sound, touch: touchMode(q), ...loadOptions(q),
     ...(duel ? { duel } : {}),
     // The pre-aimed opener (?keystone.preaim): by default the series' first level, until it has a record here.
     // The level's lot sheet (?keystone.goals=shown|all|off): proven goals by default, with the ones met on earlier plays marked.
@@ -141,7 +145,7 @@ async function main() {
       const shown = shownGoals(sheet, goals === 'all');
       return shown.length || sheet.grades ? { sheet, goals: shown, before: progress.best(c.def.id, c.hash)?.goals ?? [] } : null;
     },
-    opener: (c) => duel ? null : openerFor(c.def, levels.findIndex((l) => l.id === c.def.id), preaim, progress.best(c.def.id, c.hash) !== null),
+    opener: (c) => duel ? null : openerFor(c.def, inSeries(c.def.id), preaim, progress.best(c.def.id, c.hash) !== null),
     hooks: {
       // The URL follows the level, keeping the other keys; a line and a rack are the level's they were made for.
       loaded: (c) => {
