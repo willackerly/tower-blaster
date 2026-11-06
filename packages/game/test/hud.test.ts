@@ -48,6 +48,15 @@ describe('formatting', () => {
     expect(html).toMatch(/class="pw kg-tch"/);
     expect(html).toMatch(/Power <kbd>Q<\/kbd><kbd>E<\/kbd>/);
     expect(hudHtml({ ...base, chips: rackChips(['drop'], ['drop'], 'drop') })).not.toContain('data-act="power"');
+    // The Height row (keys W and S, launcher buttons on touch): for a launched item, never for an anvil or a pull.
+    const tall = hudHtml({ ...base, launch: 6, chips: rackChips(L2.rack, L2.rack, 'marble') });
+    expect(tall).toMatch(/Height <kbd>W<\/kbd><kbd>S<\/kbd>/);
+    expect(tall).toContain('<b class="launch">6.0 m</b>');
+    expect(tall).toContain('data-act="launch" data-arg="-1"');
+    expect(tall).toContain('data-act="launch" data-arg="1"');
+    expect(html).not.toContain('data-act="launch"');
+    expect(hudHtml({ ...base, launch: 6, chips: rackChips(['drop'], ['drop'], 'drop') })).not.toContain('data-act="launch"');
+    expect(hudHtml({ ...base, launch: 6, chips: rackChips(U3.rack, U3.rack, 'pull') })).not.toContain('data-act="launch"');
     const opener = hudHtml({ ...base, chips: [], opener: true });
     expect(opener).toMatch(/<span class="kg-desk">or aim and click<\/span><span class="kg-tch">or drag and lift<\/span>/);
   });
@@ -181,7 +190,7 @@ describe('playtest polish (U5, U6)', () => {
     expect(span(helpHtml(true), 'kg-tch')).toBe(TOUCH_HELP);
     for (const k of ['U', 'R', '?']) expect(GAME_HELP).toContain(`<kbd>${k}</kbd>`);
     expect(text(GAME_KEYS).length).toBeGreaterThan(HELP_BUDGET);
-    for (const k of ['Q', 'E', 'Space', 'B', 'F', 'U', 'R', 'N', 'P', 'M']) expect(GAME_KEYS).toContain(`<kbd>${k}</kbd>`);
+    for (const k of ['Q', 'E', 'W', 'S', 'Space', 'B', 'F', 'U', 'R', 'N', 'P', 'M']) expect(GAME_KEYS).toContain(`<kbd>${k}</kbd>`);
     expect(helpHtml(true)).toContain('data-act="keys"');
   });
 });

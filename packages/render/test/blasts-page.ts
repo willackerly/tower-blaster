@@ -1,6 +1,6 @@
 // Page-side drivers for the blast tests (render-blasts.test.ts): a small
 // scene, a blast in front of the camera, and frames with and without it.
-import { emptySnapshot, type BodyDesc, type Snapshot } from '@tb/engine-api';
+import { emptySnapshot, type BodyDesc, type Snapshot, TAG_BALL } from '@tb/engine-api';
 import { sharedDevice } from '@tb/gpu';
 import { LOOKS, lookAt, multiply, perspective, Renderer, SnapshotSource, type FrameParams, type V3 } from '../src/index.ts';
 
@@ -206,4 +206,54 @@ export async function reachFrames() {
     blocked: { n: blocked.length, r: mean(blocked, 'r'), g: mean(blocked, 'g') },
     centre: gain(cx0, cy0),
   };
+}
+
+export interface LineupCase {
+  look: 'hazy' | 'real' | 'candy';
+  /** Turn the painted ball 90 degrees about the view axis (z): its band then runs up and down. */
+  turned?: boolean;
+  /** Keep the frame's pixels (for a screenshot). */
+  keep?: boolean;
+}
+
+/**
+ * Fired balls beside a bomb, 4 m ahead: a painted ball with a band (FX paint + band, as the game's
+ * ballFx paints a cannonball) at x -1.2 (crimson, as the game's cannonball), a bomb (near-black matte with a lit fuse, the game's BOMB_FX)
+ * at x 0, and a plain ball (the look's own) at x 1.2, radius 0.45 each. Returns each ball's mean colour
+ * on its disc, the painted ball's colour along its band and away from it, and the bomb's.
+ */
+export async function lineupFrames(c: LineupCase) {
+  const { device } = await sharedDevice({ timestamps: false });
+  device.pushErrorScope('validation');
+  const R = 0.45, Z = -4, X = [-1.2, 0, 1.2];
+  const turn: [number, number, number, number] = c.turned ? [0, 0, Math.SQRT1_2, Math.SQRT1_2] : [0, 0, 0, 1];
+  const ball = (x: number, rot: [number, number, number, number] = [0, 0, 0, 1]): BodyDesc => ({ shape: { kind: 'sphere', radius: R }, pos: [x, 2, Z], rot, linVel: [0, 0, 0], angVel: [0, 0, 0], density: 1, friction: 0.5, restitution: 0, tag: TAG_BALL });
+  const descs = [ball(X[0]!, turn), ball(X[1]!), ball(X[2]!)];
+  const src = new SnapshotSource(device);
+  src.reset(descs);
+  src.update(snapshotOf(descs), descs);
+  const rend = new Renderer(device, { size: [W, H] });
+  rend.look = { ...LOOKS[c.look]!, bloomMix: 0, vignette: 0 };
+  rend.toggles.trail = false;
+  rend.setSource(src);
+  rend.setShadowBounds([0, 2, Z], 4);
+  rend.setFx(0, { tint: [0.578, 0.0052, 0.027], paint: true, band: true }); // the game's crimson cannonball (scene.ts BALL_PAINT), linear
+  rend.setFx(1, { tint: [0.012, 0.012, 0.015], paint: true, matte: true });
+  rend.fuse(1);
+  const f: FrameParams = { ...camera([0, 2, 0], [0, 2, Z]), time: 3 };
+  const frame = (await rend.render(f, true, true))!.pixels!;
+  const err = await device.popErrorScope();
+  rend.destroy();
+  const vp = multiply(perspective(FOV, W / H, 0.1, 400), lookAt([0, 2, 0], [0, 2, Z]));
+  const px = (p: V3): [number, number] => {
+    const [x, y, z] = p, q = [0, 1, 2, 3].map((r) => vp[r]! * x + vp[4 + r]! * y + vp[8 + r]! * z + vp[12 + r]!);
+    return [((q[0]! / q[3]! + 1) / 2) * W - 0.5, ((1 - q[1]! / q[3]!) / 2) * H - 0.5];
+  };
+  const rPx = discPx(R, Math.hypot(1.2, 4)) * 0.9;
+  const mean = (pts: [number, number][]) => { const s = [0, 0, 0]; for (const [x, y] of pts) rgb(frame, x, y).forEach((v, k) => { s[k]! += v; }); return s.map((v) => v / Math.max(1, pts.length)); };
+  const disc = (i: number) => { const [cx, cy] = px([X[i]!, 2, Z]), pts: [number, number][] = []; for (let y = Math.floor(cy - rPx); y <= cy + rPx; y++) for (let x = Math.floor(cx - rPx); x <= cx + rPx; x++) if (Math.hypot(x - cx, y - cy) < 0.8 * rPx) pts.push([x, y]); return mean(pts); };
+  // Along the band (its middle) and off it (60% of the radius out, across the band), on the painted ball.
+  const [pcx, pcy] = px([X[0]!, 2, Z]), off = Math.round(0.6 * rPx), pts = (dx: number, dy: number): [number, number][] => [-2, -1, 0, 1, 2].map((k) => (c.turned ? [Math.round(pcx + dx), Math.round(pcy + dy + k)] : [Math.round(pcx + dx + k), Math.round(pcy + dy)]) as [number, number]);
+  const along = mean(c.turned ? pts(0, 0) : pts(0, 0)), across = mean(c.turned ? [...pts(-off, 0), ...pts(off, 0)] : [...pts(0, -off), ...pts(0, off)]);
+  return { error: err?.message ?? null, painted: disc(0), bomb: disc(1), plain: disc(2), along, across, pixels: c.keep ? frame : null, size: [W, H] };
 }

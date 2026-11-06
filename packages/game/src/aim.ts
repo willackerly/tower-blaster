@@ -99,18 +99,57 @@ export function pullFor(session: Pick<Session, 'pullRefusal'>, hit: Hit | null):
 }
 
 /**
- * Launch height for a launch item, in 1/4 h: the level's launcher height, or high enough that
- * the item leaves clear of the ground (a 6.7 m boulder from a 1 m launcher would start half
- * underground and be thrown up by the ground contact). Keystone's own ammo never needs lifting.
+ * Where shots leave from (PaceFeel.launch, URL key keystone.launch, the Advanced setting Launch height):
+ * - high: LAUNCH_ABOVE_TOP h over the top of the structure as it loaded (or the level's own launcher
+ *   height where that is higher), so a shot clears the rubble piled on the ground between the launcher
+ *   and the structure and can come down on its top (Will, 2026-11-06). The default.
+ * - level: the level's own launcher height (LevelDef.launcher.y), where its par lines were recorded.
+ * A shot records its height (LaunchShot.y), so either replays exactly; the mode only changes the shots
+ * the player aims from now on. Keys W and S move the launcher up and down from there (launchStep).
  */
-export function launchY(c: CompiledLevel, ammo: LaunchItem): number {
-  const s = ammoBody(ammo, c.frame, [0, 0, 0], [0, 0, 0]).shape;
-  const r = s.kind === 'sphere' ? s.radius : 0;
-  return Math.max(Math.round(c.frame.launcher.y * 4), Math.ceil((4 * r) / c.frame.unit));
+export type LaunchMode = 'high' | 'level';
+export const LAUNCH_MODES: readonly LaunchMode[] = ['high', 'level'];
+/** The high launcher's height over the structure's top, h. */
+export const LAUNCH_ABOVE_TOP = 2;
+/** W and S move the launcher by this, in 1/4 h (one h). */
+export const LAUNCH_STEP = 4;
+/** W raises the launcher at most this far over the structure's top, h. */
+export const LAUNCH_MAX_ABOVE_TOP = 16;
+
+/**
+ * The launcher heights of a level, in 1/4 h: the level's own (low, where S stops), the high mode's,
+ * and the most W reaches (top). low <= high <= top.
+ */
+export function launchRange(c: CompiledLevel): { low: number; high: number; top: number } {
+  const low = Math.round(c.frame.launcher.y * 4), rise = c.height / c.frame.unit;
+  return { low, high: Math.max(low, Math.ceil(4 * (rise + LAUNCH_ABOVE_TOP))), top: Math.max(low, Math.ceil(4 * (rise + LAUNCH_MAX_ABOVE_TOP))) };
 }
 
-/** The quantised shot of `ammo` that best reaches `target` from azimuth `az` at `power`. */
-export function shotFor(c: CompiledLevel, ammo: RackItem, az: number, power: number, target: Vec3, substeps = SUBSTEPS): Aimed | null {
+/** The launcher height (1/4 h) a level opens with in mode `mode`. */
+export function launchHeight(c: CompiledLevel, mode: LaunchMode): number {
+  const r = launchRange(c);
+  return mode === 'high' ? r.high : r.low;
+}
+
+/** The launcher height (1/4 h) after `steps` presses of W (positive) or S (negative) from `at`, kept to launchRange's low..top. */
+export function launchStep(c: CompiledLevel, at: number, steps: number): number {
+  const r = launchRange(c);
+  return Math.max(r.low, Math.min(r.top, at + steps * LAUNCH_STEP));
+}
+
+/**
+ * Launch height for a launch item, in 1/4 h: `at` (the level's launcher height when absent), or high
+ * enough that the item leaves clear of the ground (a 6.7 m boulder from a 1 m launcher would start half
+ * underground and be thrown up by the ground contact). Keystone's own ammo never needs lifting.
+ */
+export function launchY(c: CompiledLevel, ammo: LaunchItem, at = Math.round(c.frame.launcher.y * 4)): number {
+  const s = ammoBody(ammo, c.frame, [0, 0, 0], [0, 0, 0]).shape;
+  const r = s.kind === 'sphere' ? s.radius : 0;
+  return Math.max(at, Math.ceil((4 * r) / c.frame.unit));
+}
+
+/** The quantised shot of `ammo` that best reaches `target` from azimuth `az` at `power`, from launcher height `at` (1/4 h; launchY). */
+export function shotFor(c: CompiledLevel, ammo: RackItem, az: number, power: number, target: Vec3, substeps = SUBSTEPS, at?: number): Aimed | null {
   const f = c.frame, ph = f.pitch * f.unit;
   if (ammo === 'drop') {
     const shot: Shot = { ammo, x: Math.round((4 * target[0]) / ph), z: Math.round((4 * target[2]) / ph) };
@@ -119,7 +158,7 @@ export function shotFor(c: CompiledLevel, ammo: RackItem, az: number, power: num
   }
   if (ammo === 'cue') return null; // no starter level racks a cue yet
   if (ammo === 'pull') return null; // a pull picks a block, not a point: pullFor
-  const a = aimAt(f, ammo, { az, y: launchY(c, ammo), power }, target, { substeps });
+  const a = aimAt(f, ammo, { az, y: launchY(c, ammo, at), power }, target, { substeps });
   return { shot: a.shot, error: a.error, reachable: a.error <= REACH };
 }
 

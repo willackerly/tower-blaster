@@ -3,7 +3,7 @@
 // camera-relative; the shading reads its colours and lights from the Frame
 // uniform (LookParams), so presets are data.
 import { defineStruct, FxState, RenderRecord, Spark, wgslStruct } from '@tb/schema';
-import { FX_EMISSIVE_MAX, FX_MATTE, FX_PAINT, FX_WGSL } from './fx.ts';
+import { BAND_HALF, FX_BAND, FX_EMISSIVE_MAX, FX_MATTE, FX_PAINT, FX_WGSL } from './fx.ts';
 import { BEVEL_WGSL, OKLAB_WGSL } from './look.ts';
 import { SPARK_COMMON } from './sparks.ts';
 import { LIGHT_META, LIGHT_PACKED, LIGHT_VEC4, MAX_BALLS, TRAIL } from './lights.ts';
@@ -1213,13 +1213,19 @@ fn heatGlow(slot: u32, base: vec3f) -> vec3f {
   // Painted (FX_PAINT): the tint is the colour, and a ball's glow takes it too.
   let paint = (w.y & ${FX_PAINT}u) != 0u;
   let own = select(select(albedo(v.look), fr.ball, isBall), vec3f(1.0), paint);
-  let base = own * fxTint(w.x);
+  // Band (FX_BAND): a white stripe round the body-space equator, antialiased over a pixel, turning with the ball.
+  // (The derivative is taken in uniform control flow, before the flag picks it.)
+  let bandY = abs(normalize(v.local).y);
+  let bandEdge = max(fwidth(bandY), 1e-4);
+  let band = select(0.0, 1.0 - smoothstep(${BAND_HALF} - bandEdge, ${BAND_HALF} + bandEdge, bandY), (w.y & ${FX_BAND}u) != 0u);
+  let base = mix(own * fxTint(w.x), vec3f(0.85), band);
   // Matte (FX_MATTE): satin, no clear coat, and none of the look's ball glow (a bomb's iron does not glow).
   let matte = (w.y & ${FX_MATTE}u) != 0u;
   var c = shade(base, v.rel, n, aaAlpha(select(0.04, 0.3, matte), n, dndx, dndy), aaAlpha(0.0049, n, dndx, dndy), select(0.5, 0.0, matte), aoBody(v, n));
   c += base * fxGlow(w, fr.time);
   let NoV = max(dot(n, normalize(-v.rel)), 0.0);
-  c += select(vec3f(0.0), select(fr.ball, base, paint) * fr.ballEmissive * (0.35 + 0.65 * NoV), isBall && !matte);
+  // The look's ball glow takes the paint, not the band: a glowing white band would clip flat in a look with a strong glow (candy).
+  c += select(vec3f(0.0), select(fr.ball, own * fxTint(w.x), paint) * (1.0 - band) * fr.ballEmissive * (0.35 + 0.65 * NoV), isBall && !matte);
   return vec4f(fog(c, v.rel), 1.0);
 }
 
