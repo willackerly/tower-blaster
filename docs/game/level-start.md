@@ -49,5 +49,30 @@ Each change leaves the state a load gives exactly as before: the same steps run 
 
 ## Mac numbers
 
-Pending (queued for the Mac when it is idle):
-`TB_CHANNEL=chrome TB_LOAD_COST=1 TB_LOAD_OUT=$HOME/tb-load-<sha>.txt pnpm vitest run packages/game/test/load-cost.test.ts`
+M5 Max, Chrome (Metal), main at 23c0df8, 2026-11-06. The result card showed for 1.5 s before Next. The page ran offscreen. **Low Power Mode was on**, so absolute times may be up to about 2x high; the ratios hold. Each load ran at loadpace 8 and at 0, and retry ran both as `checkpoint` (the default) and as `rebuild`. Raw files: `tb-load-23c0df8.txt` and `tb-load-23c0df8-rebuild.txt` in the project files.
+
+Wall time of each load, until the level can be fired at. The regrow column is the growing-in animation, during which firing waits (0.3 s + 35 ms a course). It is in every wall time except open's.
+
+| level | bodies | open | pre-settle | retry, checkpoint | retry, rebuild | regrow | Next into it, from the level before |
+|---|---|---|---|---|---|---|---|
+| L1 | 40 | 0.97 s | 0.87 s | 0.76 s | 1.63 to 1.66 s | 0.62 s | |
+| L2 | 139 | not run | 1.30 to 1.54 s (prefetched) | not run | not run | 0.76 s | 0.80 to 1.07 s, no wait |
+| B1 | 1,000 | 1.52 s | 1.41 s | 1.27 s | 2.68 to 2.72 s | 1.14 s | |
+| B2 | 5,184 | 3.60 s | 3.48 s | 1.02 s | 4.51 to 4.54 s | 0.83 s | 2.96 to 3.01 s, waited 1.9 s |
+| B3 | 10,000 | 5.47 to 5.79 s | 5.3 to 5.7 s | 1.28 s | 6.64 to 7.11 s | 1.14 s | 5.0 to 5.9 s, waited 3.7 to 4.5 s |
+
+What it says:
+
+- **Retry is now its regrow animation and nothing else.** A restored retry's own phases sum to under 15 ms. The rest of its wall time is the regrow (0.6 to 1.1 s), plus about 150 ms of polling in the probe. Rebuild adds the whole pre-settle again: about 2.1x on L1 and 4.4x on B2.
+- **Open is the pre-settle.** init is 90 to 107 ms on a page's first engine, and 4 to 29 ms after that; compile is at most 13 ms.
+- **Next is instant when the pre-settle fits inside the card's time, and otherwise waits for the rest.** Into L2 it never waited. Into B2 and B3 the pre-settle (3.5 and 5.2 to 6.1 s) outlasts a 1.5 s card, so Next waited 1.9 s and 3.7 to 4.5 s. At loadpace 0 the same wait shows up in the `check` phase instead (1.9 and 4.1 to 4.2 s). There the outgoing level's last read-back sits in the one GPU queue behind the whole unpaced pre-settle.
+- **Pacing costs no throughput on Metal.** Paced and unpaced pre-settles take the same time to within the run-to-run spread (L1 874 against 894 ms, B3 5,614 against 5,663 ms).
+- **This run cannot show the frame gap pacing fixes.** Offscreen, the page queues no draws on the GPU, so a frame never waits behind the pre-settle, and the longest gap is 17 to 33 ms at both paces. A run with `TB_LOAD_DRAW=1` (frames drawn to the canvas) and Low Power Mode off measures that.
+
+What is left, in order of the wait it removes:
+
+1. **Next into a big level** (up to 4.5 s here). Start the prefetch earlier, while the player aims at the level before. The live world sits asleep between shots, so the GPU is idle then. The paced batches run only while no shot is in flight. This holds two engines at once.
+2. **Open of a big level** (up to 5.8 s, first visit only). Nothing cheap removes it without changing the settled pose (see the alternatives above). Settling behind the regrow hides about 1.1 s of it.
+3. **The regrow on retry** (0.6 to 1.1 s of firing held back). This is a look choice, not a load: a retry could skip the regrow or shorten it.
+
+Command: `TB_CHANNEL=chrome TB_LOAD_COST=1 TB_LOAD_CARD_MS=1500 TB_LOAD_OUT=$HOME/tb-load-<sha>.txt pnpm vitest run packages/game/test/load-cost.test.ts --no-file-parallelism` (add `TB_LOAD_RETRY=rebuild` for the old retry, and `TB_LOAD_DRAW=1` to draw).
