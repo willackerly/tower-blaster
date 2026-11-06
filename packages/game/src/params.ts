@@ -101,6 +101,8 @@ export interface GameParams {
   shots: Shot[] | null;
   /** ?offscreen=1 (tests): draw only for captures. */
   offscreen: boolean;
+  /** The offscreen frame's size in pixels: 640x400 for ?offscreen=1, or ?offscreen=WxH (agent playtests: a phone's or a desktop's shape). */
+  offscreenSize: [number, number];
   /** ?keystone.sound=classic: the collision sound with G6's materials; synth: impacts as the old pentatonic voices (collapse, the default). */
   sound: GameSoundMode;
   /** ?keystone.impacts=-6: the collision sound's level, dB over the game's own (-40 to 20). */
@@ -177,6 +179,22 @@ export function rackOf(def: LevelDef, text: string | null): RackItem[] | null {
   });
 }
 
+/** The offscreen size when ?offscreen=1 names none. */
+export const OFFSCREEN_SIZE: [number, number] = [640, 400];
+
+/**
+ * ?offscreen: absent or 0 draws to the page's canvas; 1 draws OFFSCREEN_SIZE offscreen, only for captures (tests);
+ * WxH (each 64 to 4096) does the same at that size, so a capture has a phone's or a desktop's shape (the agent
+ * playtest, docs/game/agent-playtest-1.md). Anything else is refused.
+ */
+export function offscreenOf(text: string | null): Pick<GameParams, 'offscreen' | 'offscreenSize'> {
+  if (text === null || text === '0') return { offscreen: false, offscreenSize: OFFSCREEN_SIZE };
+  if (text === '1') return { offscreen: true, offscreenSize: OFFSCREEN_SIZE };
+  const m = /^(\d+)x(\d+)$/.exec(text), w = Number(m?.[1]), h = Number(m?.[2]);
+  if (!m || !(w >= 64 && w <= 4096 && h >= 64 && h <= 4096)) throw new Error(`offscreen must be 0, 1 or WxH (each 64 to 4096): ${text}`);
+  return { offscreen: true, offscreenSize: [w, h] };
+}
+
 /** A look name; throws naming the known ones. */
 export function lookName(name: string): string {
   if (!LOOKS[name]) throw new Error(`unknown look ${name}; known: ${Object.keys(LOOKS).join(', ')}`);
@@ -195,7 +213,7 @@ export function parseGameParams(q: URLSearchParams): GameParams {
     look: lookName(q.get('look') ?? GAME_LOOK),
     // A duel's line is checked against the duel's own level (its first player first).
     shots: lineOf(duel ? duelLevel(duel, 0) : level, q.get('keystone.shots')),
-    offscreen: q.get('offscreen') === '1',
+    ...offscreenOf(q.get('offscreen')),
     ...gameSound(q),
   };
 }
