@@ -23,7 +23,7 @@ Each run writes `results/mode-probes/<id>-<size>-<time>.{json,md}`. `--size ci` 
 | X5 | Pinned anchors solid | C8 | CI size: pins exactly still, bodies on them match the ground | not run |
 | X6 | Resonance under a gravity schedule; far-blast shove | M7 | CI size: no sign of resonance (rocking-block behaviour); far kick exact | not run |
 | X7 | (optional) 1.5x domino amplifier | showcase | not planned | not run |
-| X8 | Islands behave like solo worlds | C10 | not built | not run |
+| X8 | Islands behave like solo worlds | C10 | CI size: outcomes match; a world tracks its f32 coordinates (mm) more than the shared solve (solo at origin cm apart) | not run |
 
 ## X1 Domino propagation and sleep
 
@@ -207,3 +207,36 @@ The shove:
 So a far blast is a uniform shove of every body, as claimed, but a standing cube building does not take it as a rigid unit; its courses part within a sixth of a second. For M7 a shove is a jolt that breaks lattice buildings up, not a way to slide one, and its look wants a play-session check.
 
 Full size: pending (the Metal run: seven frequencies, eight columns of each height; shoves at 100 m and 1 km).
+
+## X8 Islands behave like solo worlds
+
+**Question.** Do K copies of a small level, far apart in one solve, give the same outcome distribution as K solo runs of the same jittered shots? C10 (many worlds in one solve) is what M8's robustness judge, M9 Chorus and cheap casts of small levels build on.
+
+**Rule (roadmap).** Outcome distributions match (two-sample KS test, p above 0.05); cost per body within 10% of a solo 9.6k scene.
+
+**Setup.** The level is a 5 x 5 x 6 block of 0.5 m plaster cubes on the game lattice (150 bodies), struck at mid-height by the weapons' cannonball at 45 m/s. Shot k is jittered from its own seed (speed +-10%, aim +-0.4 m across and +-0.3 m up), and so is its block (+-1 mm, +-0.2 deg). The same 64 shots run three ways:
+- `islands`: all 64 worlds in one scene, 40 m apart on an 8 x 8 grid centred on the origin. They share the solve, the colouring and the broadphase, never a contact.
+- `solo`: each world alone at the origin, which is what a cast runs today.
+- `solo-far`: each world alone at its island's position. These are the same f32 coordinates as in the islands run, without the other worlds.
+
+`solo-far` separates "sharing the solve" from "far from the origin in f32". The timing half of the rule is read only off a Metal run. The full size adds a 9.6k-cube block (40 x 40 x 6) to time against.
+
+**Meters.** Read 4 s after the shot (1.5 s at CI size):
+- down: the share of cubes more than one cell below where they stood;
+- moved: the share whose centre moved more than 0.1 m;
+- the block's centroid, to compare each world with its island directly.
+
+KS compares the islands' down and moved with the solo runs' (the rule) and with solo-far (a diagnostic).
+
+### Results
+
+CI size on SwiftShader (3 islands of a 3 x 3 x 4 block, 36 bodies, read 1.5 s after the shot; 2026-11-05; a 4-island run gave the same picture):
+
+| Arm | Outcome as its island (down and moved) | Largest centroid shift from its island |
+|---|---|---|
+| solo-far | 3/3 | 8 mm |
+| solo at the origin | 0/3 | 9 cm |
+
+The KS tests pass, but three worlds cannot decide a distribution. The finding is in the comparison: islands are not bit-identical to solo runs, as the roadmap expected (colouring is global). The coordinates matter about ten times more than sharing the solve: a world run alone at its island's position lands within millimetres of its island, while the same world at the origin ends centimetres away, with a different down or moved count in most worlds. Each world is chaotic, so only distributions should depend on islands, and the full run tests exactly that.
+
+Full size: pending (the Metal run: 64 islands, 64 solo and 64 solo-far runs, the 9.6k block for the cost ratio).

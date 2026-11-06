@@ -111,6 +111,7 @@
   "packages/mode-probes/test/x4-hold.test.ts": 110,
   "packages/mode-probes/test/x5-pinned.test.ts": 45,
   "packages/mode-probes/test/x6-shake.test.ts": 140,
+  "packages/mode-probes/test/x8-islands.test.ts": 105,
   "packages/physics-gpu/test/box-broadphase.test.ts": 129.3,
   "packages/physics-gpu/test/engine-blast.test.ts": 30,
   "packages/physics-gpu/test/engine-dispatch.test.ts": 51.5,
