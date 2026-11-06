@@ -280,6 +280,13 @@ export class Renderer {
   profiler: GpuProfiler | null = null;
   /** Passes to skip, for measuring their marginal cost (bench:render). sparks off also freezes heat (its detector writes it). */
   toggles = { shadow: true, post: true, sparks: true, trail: true, heat: true, ao: true, blasts: true };
+  /**
+   * Bullet Time's frozen look (the game's PaceFeel.frozenLook): grade, the post grade's amount (0 none to 1;
+   * post.ts frozenGrade); sparks, the share of sparks drawn (1 all, 0 none; shaders.ts vsSpark); heat, the heat
+   * glow's brightness (1 as drawn). The game eases them while a shot is frozen, and passes FrameParams.dt 0 so
+   * the sparks hang, undrawn, and come back where they were when it resumes.
+   */
+  freezeFx = { grade: 0, sparks: 1, heat: 1 };
   private readonly stoneLod: boolean;
   private readonly realDiag: RendererOptions['realDiag'];
   private readonly shadowSize: number;
@@ -555,7 +562,7 @@ export class Renderer {
   }
 
   /**
-   * Engrave count = marks.length slots from slot0 (marks.ts: MARK_NONE, MARK_HIT, MARK_SAVE per slot). A mark
+   * Engrave count = marks.length slots from slot0 (marks.ts: MARK_NONE, MARK_HIT, MARK_SAVE, MARK_KEEP per slot). A mark
    * stays through every setFx that does not name one, until clearFx; only boxes draw it.
    */
   setMarks(slot0: number, marks: ArrayLike<number>): void {
@@ -723,6 +730,7 @@ export class Renderer {
       heat: this.toggles.heat && this.look.effects !== false ? 1 : 0, viewport: this.viewport(), dt: f.dt ?? 0, trailHead: (this.lights.nextFrame + TRAIL - 1) % TRAIL,
       ...this.atmosphereUniforms(f, sun, fit),
       ...hall,
+      fxGain: [this.freezeFx.sparks, this.freezeFx.heat, 0, 0],
     });
     this.device.queue.writeBuffer(this.frameBuf, 0, this.frameData);
     return { viewProj, lightViewProj, eye: f.eye, alpha: f.alpha ?? 1, noCull: f.noCull ?? false };
@@ -911,7 +919,7 @@ export class Renderer {
     this.encodeScene(enc, f, 'scene', stamp);
     // With an atmosphere, the exposure adapts to the light (csAmbient, written in encodeScene).
     const adapted = this.look.atmosphere && this.real ? { buffer: this.real.atmosphere.ambient, offset: ADAPTED_EXPOSURE_OFFSET } : undefined;
-    if (this.toggles.post) this.post.encode(enc, this.hdr!, tex.createView(), this.look, stamp, adapted);
+    if (this.toggles.post) this.post.encode(enc, this.hdr!, tex.createView(), this.freezeFx.grade > 0 ? { ...this.look, grade: this.freezeFx.grade } : this.look, stamp, adapted);
     prof?.resolve(enc);
     let read: GPUBuffer | null = null;
     const bytesPerRow = Math.ceil((tex.width * 4) / 256) * 256;

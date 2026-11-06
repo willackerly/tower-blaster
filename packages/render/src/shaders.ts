@@ -65,6 +65,7 @@ export const Frame = defineStruct('Frame', [
   ['shadowSoft', 'vec4f', 'real look: tan of the penumbra half angle (0: 3x3 taps), blocker search radius (texels), light depth range (m), steepest receiver plane (depth per uv)'],
   ['hallLook', 'vec4f', 'real look, hall: 1 while the eye is inside it, 2 outside it with its exterior on (else it is not drawn), metres per world unit, glass milkiness, iron grey'],
   ['hallShade', 'vec4f', 'real look, hall: glazed share of the vault, web lattice bar width (web panels), balustrade height (m), unused'],
+  ['fxGain', 'vec4f', 'x: share of sparks drawn (fainter below 1; 0 none), y: heat glow brightness (1: as drawn; Bullet Time eases both down while frozen, Renderer.freezeFx), zw unused'],
 ], 'Per-frame uniforms of the scene pass.');
 
 // The real look's sky (atmosphere.ts): bind group 1, read by the scene
@@ -1203,7 +1204,7 @@ fn heatGlow(slot: u32, base: vec3f) -> vec3f {
   if (fr.heat == 0.0 || slot >= fr.capacity) { return vec3f(0.0); }
   let h = unpack2x16float(fxState[slot].bits).x;
   if (h <= 0.0) { return vec3f(0.0); }
-  return h * lights[${LIGHT_META}u].x * mix(base * 3.0, vec3f(6.0), smoothstep(0.8, 1.0, h));
+  return fr.fxGain.y * h * lights[${LIGHT_META}u].x * mix(base * 3.0, vec3f(6.0), smoothstep(0.8, 1.0, h));
 }
 
 // Bench diagnostics (RendererOptions.flatBoxes): the cheapest box shading.
@@ -1386,6 +1387,13 @@ const SPARK_HALF_WIDTH = 1.25;
   o.colour = vec3f(0.0);
   let s = sparks[ii];
   if (s.age < 0.0) { return o; }
+  // Thinned (fr.fxGain.x under 1: Bullet Time's frozen world eases it to 0): only that share of the sparks
+  // is drawn (an even spread over the pool, by the golden ratio), fainter as it goes, so what is behind the
+  // burst shows. Scaling the brightness alone does not: the streaks are so far over white that a hundredth of
+  // it still saturates the tone map where they overlap, and even a twentieth of them at a twentieth of their
+  // brightness covers half of a near burst (render.test.ts). At 0 none is drawn; they hang where they were.
+  let gain = fr.fxGain.x;
+  if (gain < 1.0 && fract(f32(ii) * 0.6180339887) >= gain) { return o; }
   let head = fr.viewProj * vec4f(s.pos - fr.eye, 1.0);
   let tail = fr.viewProj * vec4f(s.pos - s.vel * (1.0 / 45.0) - fr.eye, 1.0);
   if (head.w < 0.05 || tail.w < 0.05) { return o; }
@@ -1405,7 +1413,7 @@ const SPARK_HALF_WIDTH = 1.25;
   // is dimmed by its coverage.
   let t = s.age / sparkLife(s.packed);
   let hot = mix(vec3f(1.0, 0.92, 0.8) * 20.0, vec3f(1.0, 0.42, 0.1) * 8.0, smoothstep(0.0, 0.6, t));
-  o.colour = hot * (1.0 - smoothstep(0.7, 1.0, t)) * clamp(len + 0.4, 0.4, 1.0);
+  o.colour = mix(0.05, 1.0, gain) * hot * (1.0 - smoothstep(0.7, 1.0, t)) * clamp(len + 0.4, 0.4, 1.0);
   return o;
 }
 

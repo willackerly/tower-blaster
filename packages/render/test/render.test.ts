@@ -456,6 +456,33 @@ describe('sparks', () => {
     expect(r.live).toBe(SPAWN_BUDGET);
   });
 
+  it('Bullet Time: frozen sparks hang (dt 0), thin out with freezeFx.sparks to none, and come back exactly as they were', async (ctx) => {
+    if (!gpu) return ctx.skip();
+    const half = await call('sparkFreeze', 0.5), none = await call('sparkFreeze', 0);
+    const msg = JSON.stringify({ half, none });
+    expect(half.error).toBeNull();
+    expect(half.full.sum, msg).toBeGreaterThan(2000);
+    expect(half.full.covered, msg).toBeGreaterThan(100);
+    // Half of them, fainter: less light and less of the frame covered; none at 0, so the breach shows.
+    expect(half.dimmed.sum / half.full.sum, msg).toBeLessThan(0.95);
+    expect(half.dimmed.covered, msg).toBeLessThan(half.full.covered);
+    expect(none.dimmed, msg).toEqual({ sum: 0, covered: 0 });
+    // Hung, not lost: back at full, the frame is bit for bit the one before.
+    expect(half.same && none.same, msg).toBe(true);
+  });
+
+  it('the frozen grade drains the colour (mean saturation down by more than 30%), cools the frame and rings it in ice blue', async (ctx) => {
+    if (!gpu) return ctx.skip();
+    const r = await call('frozenGradeFrames');
+    expect(r.error).toBeNull();
+    const msg = JSON.stringify(r);
+    expect(r.g0.sat, msg).toBeGreaterThan(0.2);
+    expect(r.g1.sat, msg).toBeLessThan(0.7 * r.g0.sat);
+    expect(r.half.sat, msg).toBeLessThan(r.g0.sat);
+    expect(r.half.sat, msg).toBeGreaterThan(r.g1.sat);
+    expect(r.g1.rim - r.g0.rim, msg).toBeGreaterThan(20);
+  });
+
   it('streaks show where a burst projects, nowhere else, and not through a wall', async (ctx) => {
     if (!gpu) return ctx.skip();
     const r = await call('sparkDraw');
@@ -1351,8 +1378,9 @@ describe('drawing', () => {
     expect(r.diff).toBe(0);
     expect(r.prevEqual).toBe(true); // beforeStep() copied the state into prev
     // Uniforms only (frame, cull, spark and light params, spark control reset): measured 1602 B (the debris params and counters added 24, the
-    // hall's 2 vec4 in the frame 48 with padding). Any per-body upload is 41 x Body.size more.
-    expect(r.bytesPerFrame).toBeLessThanOrEqual(1650);
-    expect(1650).toBeLessThan(41 * Body.size);
+    // hall's 2 vec4 in the frame 48 with padding), 1682 B with Bullet Time's fxGain in the frame and its grade in the post block (32 more).
+    // Any per-body upload is 41 x Body.size more.
+    expect(r.bytesPerFrame).toBeLessThanOrEqual(1700);
+    expect(1700).toBeLessThan(41 * Body.size);
   });
 });

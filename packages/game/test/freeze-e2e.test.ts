@@ -60,6 +60,48 @@ describe('Bullet Time on the game page', () => {
     expect(errors).toEqual([]);
     await page.close();
   }, 300_000);
+  it('the frozen look (PT8): the frozen frame\'s mean saturation is at least 30% under the same frozen world drawn plain, and the label says what to do', async (ctx) => {
+    if (!game.browser()) return ctx.skip();
+    const sat = (p: { width: number; height: number; pixels?: { data: number[]; bytesPerRow: number } } | null) => {
+      const px = p!.pixels!;
+      let s = 0;
+      for (let y = 0; y < p!.height; y++) for (let x = 0; x < p!.width; x++) {
+        const o = y * px.bytesPerRow + 4 * x, r = px.data[o]!, g = px.data[o + 1]!, b = px.data[o + 2]!, mx = Math.max(r, g, b);
+        s += mx > 0 ? (mx - Math.min(r, g, b)) / mx : 0;
+      }
+      return s / (p!.width * p!.height);
+    };
+    const o = await game.open(URL);
+    if (!o) return ctx.skip();
+    const { page, errors } = o;
+    await ready(page);
+    expect(await page.evaluate(() => window.__game.feel.frozenLook)).toBe(true);
+    const label = () => page.evaluate(() => { const el = document.querySelector('.kg-frozen'); return el ? { on: el.classList.contains('on'), text: el.textContent } : null; });
+    expect((await label())?.on).toBe(false);
+    const start = await page.evaluate(() => window.__game.stepIndex);
+    expect(await page.evaluate((s) => window.__game.fire(s), miss)).toBe(true);
+    await page.waitForFunction((n) => window.__game.stepIndex >= n, start + 10, { timeout: 60_000, polling: 20 });
+    expect(await page.evaluate(() => window.__game.freeze(true))).toBe(true);
+    // The grade eases in over 0.15 s of frames; the world stands still, so both frames show the same state.
+    await page.waitForTimeout(500);
+    const graded = await page.evaluate(() => window.__game.capture(true));
+    expect(await label()).toEqual({ on: true, text: expect.stringMatching(/FROZEN · aim and fire/) });
+    // The same frozen world with the look switched off (keystone.frozenlook=0, read live): the frame as it runs.
+    await page.evaluate(() => { window.__game.feel.frozenLook = false; });
+    await page.waitForTimeout(500);
+    const plain = await page.evaluate(() => window.__game.capture(true));
+    expect((await label())?.on).toBe(false);
+    const msg = JSON.stringify({ graded: sat(graded), plain: sat(plain) });
+    expect(sat(plain), msg).toBeGreaterThan(0.1);
+    expect(sat(graded), msg).toBeLessThan(0.7 * sat(plain));
+    // Back on, then resumed: the label goes with the freeze.
+    await page.evaluate(() => { window.__game.feel.frozenLook = true; });
+    await page.waitForFunction(() => document.querySelector('.kg-frozen')?.classList.contains('on'), undefined, { timeout: 10_000, polling: 50 });
+    expect(await page.evaluate(() => window.__game.freeze(false))).toBe(true);
+    await page.waitForFunction(() => !document.querySelector('.kg-frozen')?.classList.contains('on'), undefined, { timeout: 10_000, polling: 50 });
+    expect(errors).toEqual([]);
+    await page.close();
+  }, 300_000);
   it('undo of a shot fired while frozen goes back to the frozen moment: frozen again, the freeze not spent', async (ctx) => {
     if (!game.browser()) return ctx.skip();
     const o = await game.open(URL);

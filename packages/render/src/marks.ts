@@ -1,11 +1,14 @@
 // Engraved marks: a glyph carved into every face of a box body, so a block's
 // part in the level reads at a glance whatever its colour (Will, 2026-11-06:
 // "engravings on different color stones that make it clear which ones to save
-// vs hit"). Two glyphs, in different silhouettes so they read apart even where
+// vs hit"). Three glyphs, in different silhouettes so they read apart even where
 // the colours do not (colour-blind players, a gold crown that must be held):
 //
 //   hit   a crosshair: a ring, a centre dot and four ticks across the ring.
 //   save  a shield: an outline with a solid shield inside it.
+//   keep  a crown: a solid band, three points with a jewel on each. A crown
+//         the objective asks to keep standing (Undercut's hold levels): gold
+//         like every crown, but neither "hit" nor "heritage" (playtest PT17).
 //
 // The mark is two bits of a slot's fx record (fx.ts word 1, bits 20-21), set
 // with Renderer.setMarks and kept through every other setFx until clearFx.
@@ -28,8 +31,9 @@ import type { V3 } from './math.ts';
 export const MARK_NONE = 0;
 export const MARK_HIT = 1;
 export const MARK_SAVE = 2;
-export type MarkId = typeof MARK_NONE | typeof MARK_HIT | typeof MARK_SAVE;
-export const MARK_NAMES: Record<MarkId, string> = { 0: 'none', 1: 'hit', 2: 'save' };
+export const MARK_KEEP = 3;
+export type MarkId = typeof MARK_NONE | typeof MARK_HIT | typeof MARK_SAVE | typeof MARK_KEEP;
+export const MARK_NAMES: Record<MarkId, string> = { 0: 'none', 1: 'hit', 2: 'save', 3: 'keep' };
 
 /** The mark's bits in fx word 1 (fx.ts). */
 export const MARK_SHIFT = 20;
@@ -73,8 +77,28 @@ function segSd(px: number, py: number, ax: number, ay: number, bx: number, by: n
  */
 const SHIELD_STROKE = 0.1;
 const SHIELD_INNER = 0.55;
+/** The crown's stroke (half-width): the shield outline's weight, less a little, since its band is solid. */
+const CROWN_STROKE = 0.09;
 
-/** Signed distance (glyph units) from (x, y) to the carved part of glyph `mark` (hit or save). */
+/** Signed distance from (x, y) to the box of half-size (w, h) at the origin. */
+function boxSd(x: number, y: number, w: number, h: number): number {
+  const dx = Math.abs(x) - w, dy = Math.abs(y) - h;
+  return Math.hypot(Math.max(dx, 0), Math.max(dy, 0)) + Math.min(Math.max(dx, dy), 0);
+}
+
+/**
+ * The keep glyph, a crown (mirror-symmetric, so in |x|): a solid band at the bottom, its sides rising to
+ * two outer points, a zigzag down and up to the taller middle point, and a round jewel on each point.
+ */
+function crownSd(x: number, y: number): number {
+  const q = Math.abs(x);
+  const band = boxSd(x, y + 0.44, 0.52, 0.11);
+  const line = Math.min(segSd(q, y, 0.5, -0.33, 0.56, 0.28), segSd(q, y, 0.56, 0.28, 0.27, -0.06), segSd(q, y, 0.27, -0.06, 0, 0.36)) - CROWN_STROKE;
+  const jewel = Math.min(Math.hypot(q - 0.58, y - 0.42), Math.hypot(q, y - 0.52)) - 0.11;
+  return Math.min(band, line, jewel);
+}
+
+/** Signed distance (glyph units) from (x, y) to the carved part of glyph `mark` (hit, save or keep). */
 export function markSd(mark: number, x: number, y: number): number {
   if (mark === MARK_HIT) {
     const r = Math.hypot(x, y), qx = Math.abs(x), qy = Math.abs(y);
@@ -83,6 +107,7 @@ export function markSd(mark: number, x: number, y: number): number {
     const tick = Math.min(segSd(qx, qy, 0, 0.3, 0, 0.74), segSd(qx, qy, 0.3, 0, 0.74, 0)) - MARK_STROKE;
     return Math.min(ring, dot, tick);
   }
+  if (mark === MARK_KEEP) return crownSd(x, y);
   const sy = y - 0.05;
   const outline = Math.abs(shieldSd(x, sy, 0.46, 0.52, 0.62)) - SHIELD_STROKE;
   const inner = SHIELD_INNER * shieldSd(x / SHIELD_INNER, sy / SHIELD_INNER, 0.46, 0.52, 0.62);
@@ -95,7 +120,7 @@ export function markCover(mark: number, n = 256): number {
   for (let i = 0; i < n; i++) for (let j = 0; j < n; j++) if (markSd(mark, -1 + (2 * i + 1) / n, -1 + (2 * j + 1) / n) < 0) k++;
   return k / (n * n);
 }
-export const MARK_COVER: Record<number, number> = { [MARK_HIT]: markCover(MARK_HIT), [MARK_SAVE]: markCover(MARK_SAVE) };
+export const MARK_COVER: Record<number, number> = { [MARK_HIT]: markCover(MARK_HIT), [MARK_SAVE]: markCover(MARK_SAVE), [MARK_KEEP]: markCover(MARK_KEEP) };
 
 /** The face's in-plane coordinates of lp, its half-extents and its two axes (body-local), for the box face faceN. */
 function faceFrame(lp: V3, faceN: V3, half: V3): { uv: [number, number]; ext: [number, number]; u: number; v: number } {
@@ -120,7 +145,7 @@ export function markPoint(lp: V3, faceN: V3, half: V3): { p: [number, number]; c
  * pxM metres per pixel: the albedo multiple and the body-local normal tilt to add before normalizing.
  */
 export function engrave(mark: number, lp: V3, faceN: V3, half: V3, pxM: number): { shade: number; dn: V3 } {
-  if (mark !== MARK_HIT && mark !== MARK_SAVE) return { shade: 1, dn: [0, 0, 0] };
+  if (mark !== MARK_HIT && mark !== MARK_SAVE && mark !== MARK_KEEP) return { shade: 1, dn: [0, 0, 0] };
   const { u, v } = faceFrame(lp, faceN, half), { p, c } = markPoint(lp, faceN, half);
   const f32 = Math.fround;
   const d = markSd(mark, p[0], p[1]);
@@ -169,6 +194,11 @@ fn segSd(p: vec2f, a: vec2f, b: vec2f) -> f32 {
   return length(pa - ba * h);
 }
 
+fn boxSd(p: vec2f, h: vec2f) -> f32 {
+  let d = abs(p) - h;
+  return length(max(d, vec2f(0.0))) + min(max(d.x, d.y), 0.0);
+}
+
 fn markSd(mark: u32, p: vec2f) -> f32 {
   if (mark == ${MARK_HIT}u) {
     let r = length(p);
@@ -177,6 +207,13 @@ fn markSd(mark: u32, p: vec2f) -> f32 {
     let dotSd = r - 0.17;
     let tick = min(segSd(q, vec2f(0.0, 0.3), vec2f(0.0, 0.74)), segSd(q, vec2f(0.3, 0.0), vec2f(0.74, 0.0))) - ${f(MARK_STROKE)};
     return min(min(ring, dotSd), tick);
+  }
+  if (mark == ${MARK_KEEP}u) {
+    let q = vec2f(abs(p.x), p.y);
+    let band = boxSd(vec2f(p.x, p.y + 0.44), vec2f(0.52, 0.11));
+    let line = min(min(segSd(q, vec2f(0.5, -0.33), vec2f(0.56, 0.28)), segSd(q, vec2f(0.56, 0.28), vec2f(0.27, -0.06))), segSd(q, vec2f(0.27, -0.06), vec2f(0.0, 0.36))) - ${f(CROWN_STROKE)};
+    let jewel = min(length(q - vec2f(0.58, 0.42)), length(q - vec2f(0.0, 0.52))) - 0.11;
+    return min(min(band, line), jewel);
   }
   let s = vec2f(p.x, p.y - 0.05);
   let outline = abs(shieldSd(s, 0.46, 0.52, 0.62)) - ${f(SHIELD_STROKE)};
@@ -192,7 +229,7 @@ fn carveSeen(k: Carve, faceW: vec3f, rel: vec3f) -> Carve {
 }
 
 fn engrave(mark: u32, lp: vec3f, faceN: vec3f, half: vec3f, pxM: f32) -> Carve {
-  if (mark != ${MARK_HIT}u && mark != ${MARK_SAVE}u) { return Carve(1.0, vec3f(0.0)); }
+  if (mark != ${MARK_HIT}u && mark != ${MARK_SAVE}u && mark != ${MARK_KEEP}u) { return Carve(1.0, vec3f(0.0)); }
   var uv = lp.xy;
   var ext = half.xy;
   var U = vec3f(1.0, 0.0, 0.0);
@@ -209,7 +246,7 @@ fn engrave(mark: u32, lp: vec3f, faceN: vec3f, half: vec3f, pxM: f32) -> Carve {
   let lod = smoothstep(0.5, 1.0, ${f(2 * MARK_STROKE)} * c / px);
   let wallLod = smoothstep(0.75, 2.0, ${f(MARK_WALL)} * c / px);
   let sharp = clamp(0.5 - d * c / px, 0.0, 1.0);
-  let mean = select(${f(MARK_COVER[MARK_SAVE]!)}, ${f(MARK_COVER[MARK_HIT]!)}, mark == ${MARK_HIT}u);
+  let mean = select(select(${f(MARK_COVER[MARK_SAVE]!)}, ${f(MARK_COVER[MARK_KEEP]!)}, mark == ${MARK_KEEP}u), ${f(MARK_COVER[MARK_HIT]!)}, mark == ${MARK_HIT}u);
   let cover = lod * sharp + (1.0 - lod) * mean;
   let e = 0.01;
   let g = vec2f(markSd(mark, p + vec2f(e, 0.0)) - markSd(mark, p - vec2f(e, 0.0)), markSd(mark, p + vec2f(0.0, e)) - markSd(mark, p - vec2f(0.0, e)));

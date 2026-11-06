@@ -1,5 +1,14 @@
 // HDR post: a bloom pyramid and the final composite (bloom mix, exposure,
-// AgX, vignette, dither) into the display target.
+// AgX, the frozen grade, vignette, dither) into the display target.
+//
+// Frozen grade (Bullet Time, playtest PT8): the game's frozen world must not
+// look like the running one. In display space after the tone map, by
+// `grade` (0 none, 1 full; the game eases it in and out): most of the colour
+// drained toward luma (FROZEN_DESAT), what is left cooled (FROZEN_TINT), and
+// a thin ice-blue rim at the frame's edge (FROZEN_RIM). Alternatives: a CSS
+// filter on the canvas (no GPU work, but not in readback captures, so neither
+// tests nor the agent playtests would see it); a grade in the scene pass (it
+// would have to be in every look's shading, and miss the sky and bloom).
 //
 // Bloom (Jimenez 2014, as in CoD: AW): downsample from half resolution with
 // a 13-tap filter (optionally Karis-weighted on the first level, which tames
@@ -8,6 +17,13 @@
 // mean, so the pyramid's top level divided by the level count has the same
 // mean as the input: mixing it in redistributes light without adding any.
 import { AGX_WGSL } from './look.ts';
+
+/** The frozen grade: the share of colour drained, the tint left on it, and the rim's colour, width (uv) and strength. */
+export const FROZEN_DESAT = 0.85;
+export const FROZEN_TINT = [0.92, 0.97, 1.08] as const;
+export const FROZEN_RIM = [0.45, 0.72, 1.0] as const;
+export const FROZEN_RIM_WIDTH = 0.035;
+export const FROZEN_RIM_MIX = 0.55;
 
 export const BLOOM_FORMAT: GPUTextureFormat = 'rgba16float';
 export const HDR_FORMAT: GPUTextureFormat = 'rgba16float';
@@ -66,12 +82,22 @@ fn boxWeight(c: vec3f) -> f32 {
 
 export const COMPOSITE_WGSL = /* wgsl */ `
 ${FULLSCREEN}
-struct Post { bloomMix: f32, exposure: f32, vignette: f32, levels: f32 }
+struct Post { bloomMix: f32, exposure: f32, vignette: f32, levels: f32, grade: f32, pad0: f32, pad1: f32, pad2: f32 }
 @group(0) @binding(0) var hdr: texture_2d<f32>;
 @group(0) @binding(1) var bloom: texture_2d<f32>;
 @group(0) @binding(2) var samp: sampler;
 @group(0) @binding(3) var<uniform> post: Post;
 ${AGX_WGSL}
+
+// The frozen grade (FROZEN_* above): drained, cooled, an ice-blue rim. d: uv from the centre.
+fn frozenGrade(c: vec3f, d: vec2f, g: f32) -> vec3f {
+  let l = dot(c, vec3f(0.2126, 0.7152, 0.0722));
+  var x = mix(c, vec3f(l), ${FROZEN_DESAT} * g);
+  x *= mix(vec3f(1.0), vec3f(${FROZEN_TINT.join(', ')}), g);
+  let e = max(abs(d.x), abs(d.y));
+  let rim = smoothstep(${0.5 - FROZEN_RIM_WIDTH}, 0.5, e);
+  return mix(x, vec3f(${FROZEN_RIM.join(', ')}), ${FROZEN_RIM_MIX} * g * rim);
+}
 
 // Interleaved gradient noise (Jimenez 2014): cheap, well-spread dither.
 fn ign(p: vec2f) -> f32 {
@@ -84,13 +110,15 @@ fn ign(p: vec2f) -> f32 {
   let b = textureSampleLevel(bloom, samp, i.uv, 0.0).rgb / max(post.levels, 1.0);
   var c = agx(mix(h, b, post.bloomMix) * post.exposure);
   let d = i.uv - 0.5;
+  if (post.grade > 0.0) { c = frozenGrade(c, d, post.grade); }
   c *= 1.0 - post.vignette * dot(d, d) * 2.0;
   c += (ign(i.clip.xy) - 0.5) / 255.0;
   return vec4f(c, 1.0);
 }
 `;
 
-export interface PostParams { bloomMix: number; exposure: number; vignette: number }
+/** grade: the frozen grade's amount, 0 (none, the default) to 1. */
+export interface PostParams { bloomMix: number; exposure: number; vignette: number; grade?: number }
 
 /** Timestamp writes for a labelled pass (from a GpuProfiler), or none. */
 export type Stamp = (label: string) => { timestampWrites?: GPURenderPassTimestampWrites };
@@ -125,7 +153,7 @@ export class Post {
     this.downKaris = pipe(bloom, 'fsDown', BLOOM_FORMAT, { karis: true });
     this.up = pipe(bloom, 'fsUp', BLOOM_FORMAT, { add: true });
     this.composite = pipe(comp, 'fsComposite', outFormat);
-    this.uniform = device.createBuffer({ size: 16, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST, label: 'post params' });
+    this.uniform = device.createBuffer({ size: 32, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST, label: 'post params' });
   }
 
   private resize(w: number, h: number): void {
@@ -166,7 +194,7 @@ export class Post {
    */
   encode(enc: GPUCommandEncoder, hdr: GPUTexture, out: GPUTextureView, p: PostParams, stamp: Stamp = noStamp, exposureFrom?: { buffer: GPUBuffer; offset: number }): void {
     this.encodeBloom(enc, hdr, true, stamp);
-    this.device.queue.writeBuffer(this.uniform, 0, new Float32Array([p.bloomMix, p.exposure, p.vignette, this.levels.length]));
+    this.device.queue.writeBuffer(this.uniform, 0, new Float32Array([p.bloomMix, p.exposure, p.vignette, this.levels.length, Math.min(1, Math.max(0, p.grade ?? 0)), 0, 0, 0]));
     if (exposureFrom) enc.copyBufferToBuffer(exposureFrom.buffer, exposureFrom.offset, this.uniform, 4, 4);
     const pass = enc.beginRenderPass({ ...stamp('composite'), colorAttachments: [{ view: out, loadOp: 'clear', clearValue: { r: 0, g: 0, b: 0, a: 1 }, storeOp: 'store' }] });
     pass.setPipeline(this.composite);
