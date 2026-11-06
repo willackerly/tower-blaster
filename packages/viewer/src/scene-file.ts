@@ -55,7 +55,7 @@ export interface SceneFile {
   camera: CameraPose | null;
   /**
    * Present only under Keystone's rules (ViewerConfig.rules, feel and shots: the line to play on load, rack: the rack played instead of the level's (ViewerConfig.rack),
-   * absent for none; scoring, autobank, settle and physics: the game's rule overrides, ViewerConfig.keystone,
+   * absent for none; scoring, autobank, settle, freeze and physics: the game's rule overrides, ViewerConfig.keystone,
    * absent when not overridden); absent: the sandbox.
    */
   rules?: { mode: 'keystone'; hitstop: boolean; slowmo: boolean; budget?: number; tailskip?: boolean; follow?: boolean; shake?: boolean; frames?: FrameMode; rapid?: boolean; shots?: Shot[]; rack?: RackItem[] } & LevelRules;
@@ -236,7 +236,7 @@ export function parseSceneFile(text: string): { config: ViewerConfig; name: stri
   }
   if (root.rules !== undefined) {
     const r = object(root.rules, 'rules');
-    only(r, ['mode', 'hitstop', 'slowmo', 'budget', 'tailskip', 'follow', 'shake', 'frames', 'rapid', 'shots', 'rack', 'scoring', 'autobank', 'settle', 'physics'], 'rules');
+    only(r, ['mode', 'hitstop', 'slowmo', 'budget', 'tailskip', 'follow', 'shake', 'frames', 'rapid', 'shots', 'rack', 'scoring', 'autobank', 'settle', 'freeze', 'physics'], 'rules');
     q.set('rules', str(r.mode, 'rules.mode'));
     if (r.hitstop !== undefined) q.set('keystone.hitstop', bool(r.hitstop, 'rules.hitstop') ? '1' : '0');
     if (r.slowmo !== undefined) q.set('keystone.slowmo', bool(r.slowmo, 'rules.slowmo') ? '1' : '0');
@@ -257,6 +257,7 @@ export function parseSceneFile(text: string): { config: ViewerConfig; name: stri
     if (r.scoring !== undefined) lr.scoring = str(r.scoring, 'rules.scoring') as LevelRules['scoring'];
     if (r.autobank !== undefined) lr.autobank = bool(r.autobank, 'rules.autobank');
     if (r.settle !== undefined) lr.settle = str(r.settle, 'rules.settle') as LevelRules['settle'];
+    if (r.freeze !== undefined) lr.freeze = num(r.freeze, 'rules.freeze');
     if (r.physics !== undefined) {
       const ph = object(r.physics, 'rules.physics');
       only(ph, ['iterations', 'gapSlop', 'bounce', 'presettle'], 'rules.physics');

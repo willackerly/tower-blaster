@@ -298,10 +298,14 @@ export async function playShots(d: Driver, shots: Shot[], next: number, opts: Pl
   return { session: d.session, feedback, steps: engine.stepIndex, snapshot: d.snapshot };
 }
 
-/** Whether rapid-fire shot `shot` (with `after`) is due on `d` now: that many steps after the last shot went in. */
+/**
+ * Whether rapid-fire shot `shot` (with `after`) is due on `d` now: that many steps after the last shot
+ * went in, with a freeze left to spend (Session.freezesLeft). Without one it waits for the settle
+ * and goes in from aiming, as a shot without `after` does.
+ */
 export function rapidDue(d: Driver, shot: Shot): boolean {
   const last = d.session.inputs[d.session.inputs.length - 1];
-  return shot.after !== undefined && last !== undefined && d.engine.stepIndex >= last.step + shot.after;
+  return shot.after !== undefined && last !== undefined && d.engine.stepIndex >= last.step + shot.after && d.session.freezesLeft > 0;
 }
 
 /** FNV-1a over the raw bytes of positions and rotations: equal states hash equal. */

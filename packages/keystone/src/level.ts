@@ -129,6 +129,13 @@ export interface LevelDef {
    * (the rules those levels were hashed under before v3), so a v3 level hashes apart from its v2 self.
    */
   settle?: SettleRule;
+  /**
+   * Bullet Time (C2, docs/game/undercut-bullet-time.md): the most shots that may go in while another
+   * runs, each cutting it (rapid fire, Session.fire); 0 allows none. Absent: no limit. The game lets
+   * the player freeze the world to aim them; a freeze costs nothing until a shot goes in. Part of the
+   * hash (URL key keystone.freeze), so stars cast without a budget never show with one.
+   */
+  freeze?: number;
   /** The physics the level plays at (default Keystone's: PHYSICS_DEFAULTS). Part of the level hash, so stars cast at one setting never show at another. */
   physics?: PhysicsBlock;
   /**
@@ -216,6 +223,14 @@ export const ROLE_ID: Record<Role, number> = { plain: 0, crown: 1, heritage: 2 }
 export const MAX_RACK = 8;
 /** Most pulls a rack holds (Undercut's Hollow takes many blocks). */
 export const MAX_PULLS = 24;
+
+/** The largest freeze budget a level may give (LevelDef.freeze). */
+export const MAX_FREEZE = 9;
+
+/** Why `n` is not a freeze budget (a whole number, 0 to MAX_FREEZE), or null when it is. */
+export function freezeProblem(n: number): string | null {
+  return Number.isInteger(n) && n >= 0 && n <= MAX_FREEZE ? null : `freeze must be a whole number from 0 to ${MAX_FREEZE}: ${n}`;
+}
 
 /** Why a rack is too big or empty (MAX_RACK fired items, MAX_PULLS pulls), or null when it fits. */
 export function rackSizeProblem(rack: readonly string[]): string | null {
@@ -384,7 +399,7 @@ function bodiesDigest(bodies: readonly BodyDesc[]): string {
 }
 
 export interface Issue {
-  code: 'count' | 'capacity' | 'launcher' | 'overlap' | 'unsupported' | 'mass-ratio' | 'ammo-ratio' | 'dud' | 'tunnelling' | 'crown-start' | 'rack' | 'weapon' | 'empty' | 'watched' | 'flat' | 'objective';
+  code: 'count' | 'capacity' | 'launcher' | 'overlap' | 'unsupported' | 'mass-ratio' | 'ammo-ratio' | 'dud' | 'tunnelling' | 'crown-start' | 'rack' | 'weapon' | 'empty' | 'watched' | 'flat' | 'objective' | 'freeze';
   message: string;
   bodies?: number[];
   /** Legal but worth knowing (a dud item): the level still plays as authored. */
@@ -469,6 +484,8 @@ export function validateLevel(c: CompiledLevel, opts: ValidateOptions = {}): Iss
   else if (engine === 'rapier' && m.n + rackBodies(def.rack.filter(isRackItem), c.arms) > max) issues.push({ code: 'capacity', message: `${m.n} bodies + ${rackBodies(def.rack.filter(isRackItem), c.arms)} the rack can add > ${max} (the ${engine} engine's budget)` });
   const size = rackSizeProblem(def.rack);
   if (size || def.par < 1 || def.par > def.rack.length) issues.push({ code: 'rack', message: `rack of ${def.rack.length} with par ${def.par}: need 1 <= par <= rack, at most ${MAX_RACK} fired items and ${MAX_PULLS} pulls${size ? ` (${size})` : ''}` });
+  const fz = def.freeze === undefined ? null : freezeProblem(def.freeze);
+  if (fz) issues.push({ code: 'freeze', message: fz });
   if (def.objective.kind === 'hold') {
     if (scoringOf(def) !== 'outcome') issues.push({ code: 'objective', message: 'a hold objective needs outcome scoring (a par level ends at its clear)' });
     if (m.crowns.length === 0) issues.push({ code: 'objective', message: 'a hold objective needs a crown to keep up' });

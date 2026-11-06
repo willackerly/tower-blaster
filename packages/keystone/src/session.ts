@@ -113,9 +113,22 @@ export class Session {
   /**
    * Whether `ammo` can go in now: the round is open (aiming, or a shot running: rapid fire, which
    * cuts the shot in flight) and the rack still holds one. Whether a player may fire mid-shot is the
-   * game's choice (@tb/game PaceFeel.rapid); the rules allow it.
+   * game's choice (@tb/game PaceFeel.rapid); the rules allow it, up to the level's freeze budget
+   * (freezesLeft).
    */
-  canFire(ammo: RackItem): boolean { return (this.phase === 'aiming' || this.phase === 'running') && this.rackLeft.includes(ammo); }
+  canFire(ammo: RackItem): boolean {
+    return (this.phase === 'aiming' || (this.phase === 'running' && this.freezesLeft > 0)) && this.rackLeft.includes(ammo);
+  }
+
+  /**
+   * How many more shots may go in while another runs (LevelDef.freeze, Bullet Time): the level's
+   * budget less the shots that have cut one; Infinity when the level sets none. A shot fired while
+   * aiming spends nothing, and neither does freezing the world without firing (the game's pause).
+   */
+  get freezesLeft(): number {
+    const budget = this.level.def.freeze;
+    return budget === undefined ? Infinity : budget - this.inputs.filter((i) => i.shot.after !== undefined).length;
+  }
 
   /**
    * Why structure body `body` cannot be pulled, or null if it can: only plain structure bodies
@@ -143,7 +156,7 @@ export class Session {
    * (steps since the shot before was fired) only then; a shot fired while aiming is recorded without one.
    */
   fire(shot: Shot, step: number, body = this.level.meta.n + this.ammoCount, now?: Observation): { spawn: SpawnEvent | null; event: SpawnEvent | RemoveEvent; feedback: Feedback[] } {
-    if (!this.canFire(shot.ammo)) throw new Error(`cannot fire ${shot.ammo}: phase ${this.phase}, rack [${this.rackLeft.join(', ')}]`);
+    if (!this.canFire(shot.ammo)) throw new Error(`cannot fire ${shot.ammo}: phase ${this.phase}, rack [${this.rackLeft.join(', ')}]${this.phase === 'running' && this.freezesLeft <= 0 ? `, no freezes left (the level gives ${this.level.def.freeze})` : ''}`);
     const why = shot.ammo === 'pull' ? this.pullRefusal(shot.body) : null;
     if (why) throw new Error(`cannot pull: ${why}`);
     if (this.live && !now) throw new Error(`Session.fire: a shot is running; cutting it needs the observed state the new one is fired from`);

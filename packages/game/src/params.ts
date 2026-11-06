@@ -4,7 +4,7 @@
 // (docs/design/viewer-superset.md, step F). A key's bad value is refused with
 // a message naming it; keys a page doesn't know are left to it (the look's
 // real.* knobs, the viewer's own).
-import { BIG_LEVELS, checkPhysics, checkSettle, DUELS, duelLevel, type DuelDef, findDuel, isRackItem, itemRef, levelById, type LevelDef, MAX_PULLS, MAX_RACK, type PhysicsBlock, RACK_ITEM_NAMES, type RackItem, rackSizeProblem, readShots, SCORINGS, type Scoring, type SettleRule, type Shot, weaponOf } from '@tb/keystone';
+import { BIG_LEVELS, checkPhysics, checkSettle, DUELS, duelLevel, type DuelDef, findDuel, freezeProblem, isRackItem, itemRef, levelById, type LevelDef, MAX_PULLS, MAX_RACK, type PhysicsBlock, RACK_ITEM_NAMES, type RackItem, rackSizeProblem, readShots, SCORINGS, type Scoring, type SettleRule, type Shot, weaponOf } from '@tb/keystone';
 import { LOOKS } from '@tb/render';
 import { type EngineKind, engineKind } from './engines.ts';
 import { paceFeel, type PaceFeel } from './pacing.ts';
@@ -18,21 +18,23 @@ export const GAME_LOOK = 'hazy';
  * scores any level either way, ?keystone.autobank=1|0 ends an outcome level at its first clear (or not),
  * ?keystone.settle=v1|v2|v3 picks how a shot settles (default: v1 for par levels, v3 for outcome levels),
  * ?keystone.iterations, ?keystone.gapSlop, ?keystone.bounce (e, or off), ?keystone.presettle and
- * ?keystone.pairsPerBody (the GPU pair room per body, in place of every pair) change its physics block.
- * Each is part of the level it makes (its hash), and the level is marked custom: stars cast for the
+ * ?keystone.pairsPerBody (the GPU pair room per body, in place of every pair) change its physics block,
+ * and ?keystone.freeze=N gives the player N freezes (Bullet Time: at most N shots fired while another
+ * runs, LevelDef.freeze; 0 none). Each is part of the level it makes (its hash), and the level is marked custom: stars cast for the
  * authored level do not apply to it.
  */
-export interface LevelRules { scoring?: Scoring; autobank?: boolean; settle?: SettleRule; physics?: PhysicsBlock }
+export interface LevelRules { scoring?: Scoring; autobank?: boolean; settle?: SettleRule; freeze?: number; physics?: PhysicsBlock }
 
 const PHYSICS_KEYS = { 'keystone.iterations': 'iterations', 'keystone.gapSlop': 'gapSlop', 'keystone.bounce': 'bounce', 'keystone.presettle': 'presettle', 'keystone.pairsPerBody': 'pairsPerBody' } as const;
 /** Every URL key levelRules reads. */
-export const LEVEL_RULE_KEYS = ['keystone.scoring', 'keystone.autobank', 'keystone.settle', ...Object.keys(PHYSICS_KEYS)] as readonly string[];
+export const LEVEL_RULE_KEYS = ['keystone.scoring', 'keystone.autobank', 'keystone.settle', 'keystone.freeze', ...Object.keys(PHYSICS_KEYS)] as readonly string[];
 
 /** The URL keys for r, as levelRules reads them back. */
 export function writeLevelRules(r: LevelRules, q: URLSearchParams): void {
   if (r.scoring !== undefined) q.set('keystone.scoring', r.scoring);
   if (r.autobank !== undefined) q.set('keystone.autobank', r.autobank ? '1' : '0');
   if (r.settle !== undefined) q.set('keystone.settle', r.settle);
+  if (r.freeze !== undefined) q.set('keystone.freeze', String(r.freeze));
   for (const [key, field] of Object.entries(PHYSICS_KEYS)) {
     const v = r.physics?.[field];
     if (v !== undefined) q.set(key, v === null ? 'off' : String(v));
@@ -52,6 +54,12 @@ export function levelRules(q: URLSearchParams): LevelRules {
   }
   const st = q.get('keystone.settle');
   if (st !== null) r.settle = checkSettle(st, 'keystone.settle');
+  const fz = q.get('keystone.freeze');
+  if (fz !== null) {
+    const n = /^\d+$/.test(fz) ? Number(fz) : NaN, why = freezeProblem(n);
+    if (why) throw new Error(`keystone.${why.replace(/: NaN$/, `: ${fz}`)}`);
+    r.freeze = n;
+  }
   for (const [key, field] of Object.entries(PHYSICS_KEYS)) {
     const v = q.get(key);
     if (v === null) continue;
@@ -65,11 +73,11 @@ export function levelRules(q: URLSearchParams): LevelRules {
 
 /** def with the URL's rule overrides (none: def itself). */
 export function withRules(def: LevelDef, r: LevelRules): LevelDef {
-  if (r.scoring === undefined && r.autobank === undefined && r.settle === undefined && r.physics === undefined) return def;
+  if (r.scoring === undefined && r.autobank === undefined && r.settle === undefined && r.freeze === undefined && r.physics === undefined) return def;
   return {
     ...def, custom: true,
     ...(r.scoring !== undefined ? { scoring: r.scoring } : {}), ...(r.autobank !== undefined ? { autobank: r.autobank } : {}),
-    ...(r.settle !== undefined ? { settle: r.settle } : {}),
+    ...(r.settle !== undefined ? { settle: r.settle } : {}), ...(r.freeze !== undefined ? { freeze: r.freeze } : {}),
     ...(r.physics !== undefined ? { physics: { ...def.physics, ...r.physics } } : {}),
   };
 }
