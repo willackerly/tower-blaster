@@ -7,3 +7,4 @@ results/
 packages/playtest/wrangler.toml
 packages/playtest/.dev.vars
 .wrangler/
+agent-playtest-out/

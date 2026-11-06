@@ -319,6 +319,7 @@ export function nudgeLine(shots: readonly Shot[], r: () => number): Shot[] {
     if (s.ammo === 'drop') return { ...s, x: s.x + randInt(r, -1, 1), z: s.z + randInt(r, -1, 1) };
     if (s.ammo === 'cue') return { ...s, power: Math.max(0, Math.min(100, s.power + randInt(r, -3, 3))) };
     if (s.ammo === 'pull') return s; // a pull names a block: there is no hand noise in which one
+    if (s.ammo === 'plunger') return s; // a timeline is exact steps: no hand noise either
     return { ...s, yaw: s.yaw + randInt(r, -6, 6), power: Math.max(0, Math.min(100, s.power + randInt(r, -3, 3))) };
   });
 }
@@ -614,6 +615,17 @@ export const phaseEnds = (r: CastResult, phase: CastLine['phase']): number[] => 
  * a little gets there), and budget is about the machine's wall time, not the stars.
  */
 export const POOL_GATES = ['fair', 'skill', 'limits', 'complete'] as const;
+
+/**
+ * `def` with its Bounce (restitution) set: a number from 0 to 1, or 'off' (null, the engine's pass off). For
+ * probing a level at another e before changing it (roadmap B6, spectacle-mode.md Q2): Bounce enters the level
+ * hash, so stars cast on the variant never apply to the level itself.
+ */
+export function withBounce(def: LevelDef, value: string): LevelDef {
+  const bounce = value === 'off' ? null : value.trim() === '' ? NaN : Number(value);
+  if (bounce !== null && !(bounce >= 0 && bounce <= 1)) throw new Error(`--bounce is off or a number from 0 to 1: ${value}`);
+  return { ...def, physics: { ...def.physics, bounce } };
+}
 
 /**
  * Gates a person may waive (`--waive`): skill and stable are judgements about how far the targets sit apart and

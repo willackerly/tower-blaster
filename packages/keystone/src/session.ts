@@ -4,17 +4,17 @@
 // renderer, audio and pacing, which never flow back into the rules.
 import { massOf, type RemoveEvent, type SpawnEvent, type Vec3 } from '@tb/engine-api';
 import { GRAVITY } from './materials.ts';
-import { itemYield } from './arsenal.ts';
+import { itemYield, levelCharges, plungerYield } from './arsenal.ts';
 import { castStars, type CompiledLevel, type Scoring, scoringOf, settleOf } from './level.ts';
 import { collapseFraction, floorPotential_mJ, homePotential_mJ, homeSkyline, objectiveMet, type OutcomeFacts, outcomeScore } from './outcome.ts';
 import { crownDown, heritageBroken, leverage, levelScore, type LevelScore, type Observation, type Reductions, type SettleRule, type SettleState, settleCap, settleUpdate, type ShotOutcome, skyline, tier } from './rules.ts';
 import type { RackItem } from './rack.ts';
-import { ammoKE, pullEnergy, type Shot, shotEvent } from './shots.ts';
+import { ammoKE, type PlungerShot, pullEnergy, type Shot, shotEvent } from './shots.ts';
 
 export type Phase = 'aiming' | 'running' | 'cleared' | 'failed';
 
 export type Feedback =
-  /** A shot went in: `body` is the ammo's engine id, or for a pull the structure body taken out; ke the energy charged (a pull's is nominal). */
+  /** A shot went in: `body` is the ammo's engine id, for a pull the structure body taken out, for a plunger -1; ke the energy charged (a pull's is nominal, a plunger's 0: its charges' is yield). */
   | { t: 'fired'; step: number; ammo: RackItem; body: number; ke: number }
   /** The ammo's velocity changed by more than gravity explains: it hit something. Drives hit-stop. */
   | { t: 'contact'; step: number; body: number; dv: number; impulse: number }
@@ -73,6 +73,10 @@ export class Session {
   readonly pulled: number[] = [];
   /** Ice blocks shattered so far (ice.ts), in shatter order: a crown among them is down, heritage broken. */
   readonly shattered: number[] = [];
+  /** Charges armed by plungers so far (LevelDef.charges indices), in arming order. */
+  readonly armed: number[] = [];
+  /** Structure bodies taken out by charges (removeTarget), in order (Driver tells the session as it pushes them). */
+  readonly cut: number[] = [];
   /** Leverage of the shot in flight, for the HUD. */
   liveLeverage = 0;
   private live: Live | null = null;
@@ -147,7 +151,31 @@ export class Session {
     if (m.heritage.includes(body)) return `body ${body} is heritage`;
     if (m.fixed.includes(body)) return `body ${body} is fixed`;
     if (this.pulled.includes(body)) return `body ${body} is already pulled`;
+    if (this.cut.includes(body)) return `body ${body} was taken out by a charge`;
     return null;
+  }
+
+  /**
+   * Why plunger shot `shot` cannot go in, or null if it can: every charge it names is one of the
+   * level's that a plunger arms, not armed before nor named twice, and every delay ends before the
+   * settle rule's cap (a shot never holds open past it).
+   */
+  plungerRefusal(shot: PlungerShot): string | null {
+    const charges = this.level.def.charges ?? [], cap = settleCap(this.settleRule), seen = new Set<number>();
+    for (const [i, delay] of shot.fuse) {
+      if (!Number.isInteger(i) || i < 0 || i >= charges.length) return `charge ${i} is not one of the level's ${charges.length}`;
+      if ((charges[i]!.arm ?? 'plunger') !== 'plunger') return `charge ${i} is armed at start, not by a plunger`;
+      if (seen.has(i)) return `charge ${i} is named twice`;
+      if (this.armed.includes(i)) return `charge ${i} is already armed`;
+      if (!Number.isInteger(delay) || delay < 0 || delay >= cap) return `charge ${i}'s delay ${delay} is not 0 to ${cap - 1} steps (the settle cap)`;
+      seen.add(i);
+    }
+    return null;
+  }
+
+  /** A charge took structure body `body` out (Driver): it can no longer be pulled. */
+  chargeCut(body: number): void {
+    if (!this.cut.includes(body)) this.cut.push(body);
   }
 
   /**
@@ -162,10 +190,12 @@ export class Session {
    * the shots' dPE still sums to the structure's whole drop. The input is recorded with `after`
    * (steps since the shot before was fired) only then; a shot fired while aiming is recorded without one.
    */
-  fire(shot: Shot, step: number, body = this.level.meta.n + this.ammoCount, now?: Observation): { spawn: SpawnEvent | null; event: SpawnEvent | RemoveEvent; feedback: Feedback[] } {
+  fire(shot: Shot, step: number, body = this.level.meta.n + this.ammoCount, now?: Observation): { spawn: SpawnEvent | null; event: SpawnEvent | RemoveEvent | null; feedback: Feedback[] } {
     if (!this.canFire(shot.ammo)) throw new Error(`cannot fire ${shot.ammo}: phase ${this.phase}, rack [${this.rackLeft.join(', ')}]${this.phase === 'running' && this.freezesLeft <= 0 ? `, no freezes left (the level gives ${this.level.def.freeze})` : ''}`);
     const why = shot.ammo === 'pull' ? this.pullRefusal(shot.body) : null;
     if (why) throw new Error(`cannot pull: ${why}`);
+    const no = shot.ammo === 'plunger' ? this.plungerRefusal(shot) : null;
+    if (no) throw new Error(`cannot fire the plunger: ${no}`);
     if (this.live && !now) throw new Error(`Session.fire: a shot is running; cutting it needs the observed state the new one is fired from`);
     const out: Feedback[] = [];
     const { after: _, ...bare } = shot;
@@ -176,11 +206,14 @@ export class Session {
       out.push(this.close(now!, true));
       recorded = { ...bare, after: step - prev } as Shot;
     }
-    const event = shotEvent(this.level.frame, shot, step), spawn = event.kind === 'spawn' ? event : null;
+    const event = shotEvent(this.level.frame, shot, step), spawn = event?.kind === 'spawn' ? event : null;
     this.rackLeft.splice(this.rackLeft.indexOf(shot.ammo), 1);
     if (spawn) this.ammoCount++;
-    if (event.kind === 'remove') this.pulled.push(event.id);
-    const ke = spawn ? ammoKE(spawn) : pullEnergy(this.level.frame), yieldJ = itemYield(this.level, shot.ammo);
+    if (event?.kind === 'remove') this.pulled.push(event.id);
+    if (shot.ammo === 'plunger') { levelCharges(this.level); this.armed.push(...shot.fuse.map(([i]) => i)); }
+    // A pull is charged a nominal poke; a plunger's press is free and its charges are its yield.
+    const ke = spawn ? ammoKE(spawn) : shot.ammo === 'plunger' ? 0 : pullEnergy(this.level.frame);
+    const yieldJ = shot.ammo === 'plunger' ? plungerYield(this.level, shot) : itemYield(this.level, shot.ammo);
     const live = spawn ? body : -1;
     this.live = {
       shot, spawnStep: step, body: live, ke, yield: yieldJ, mass: spawn ? massOf(spawn.body) : 0, ammo: shot.ammo, settle: { quietSince: null }, contact: false, prevVel: null, tier: 0, slowMo: false,
@@ -190,7 +223,7 @@ export class Session {
     this.watchIdx = Int32Array.from(spawn ? [...this.level.meta.crowns, ...this.level.meta.heritage, body] : [...this.level.meta.crowns, ...this.level.meta.heritage]);
     this.phase = 'running';
     this.liveLeverage = 0;
-    out.push({ t: 'fired', step, ammo: shot.ammo, body: event.kind === 'remove' ? event.id : body, ke });
+    out.push({ t: 'fired', step, ammo: shot.ammo, body: event?.kind === 'remove' ? event.id : spawn ? body : -1, ke });
     return { spawn, event, feedback: out };
   }
 

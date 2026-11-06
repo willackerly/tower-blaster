@@ -5,8 +5,8 @@
 import { type BodyDesc, massOf, type SceneDesc, type Vec3 } from '@tb/engine-api';
 import { DEFAULT_GAP, DEFAULT_UNIT, encodeTag, GRAVITY, MATERIALS, materialId, type MaterialName, type Role, ROLES } from './materials.ts';
 import { peOf_mJ, SETTLE_RULES, type SettleRule } from './rules.ts';
-import { type Arm, levelArm, rackArms } from './arsenal.ts';
-import { isRackItem, itemRef, type LevelWeapon, RACK_ITEM_NAMES, rackBodies, type RackItem, speedOf, WEAPON_KEY, weaponOf } from './rack.ts';
+import { type Arm, chargeIssues, levelArm, rackArms } from './arsenal.ts';
+import { chargeWeaponOf, isRackItem, itemRef, type LevelWeapon, PLUNGER, RACK_ITEM_NAMES, rackBodies, type RackItem, speedOf, WEAPON_KEY, weaponOf } from './rack.ts';
 import { type ScenarioPart, scenarioBodies, scenarioKey } from './scenario-part.ts';
 import { ammoBody, type LauncherDef, launcherPos, type Shot, type ShotFrame } from './shots.ts';
 import { checkIce, type IceBlock, IceBreaker, iceOf } from './ice.ts';
@@ -116,6 +116,12 @@ export interface LevelDef {
    * cube units, scaled to the level's commonest block (arsenal.ts cubeScale).
    */
   weapons?: Record<string, LevelWeapon>;
+  /**
+   * Charges on the structure (docs/design/charges.md): WeaponSpecs riding structure bodies, with no
+   * body of their own until they go off. A `plunger` rack item arms them on a timeline (shots.ts
+   * PlungerShot names them by index here); `arm: 'start'` ones are armed when play starts.
+   */
+  charges?: ChargeDef[];
   /** Validator limits a level may relax. */
   limits?: {
     /** Most a rack item's mass may be over the lightest structure body's (default AMMO_RATIO, at most AMMO_RATIO_MAX). */
@@ -157,6 +163,18 @@ export interface LevelDef {
    * apply ("custom: stars not recorded"). Not part of the hash: the overrides already are.
    */
   custom?: boolean;
+}
+
+/** A charge on the structure (LevelDef.charges; arsenal.ts levelCharges resolves it). */
+export interface ChargeDef {
+  /** The structure body it rides (its index in the compiled level: engine id): not a crown, heritage or ice. */
+  host: number;
+  /** Its point in the host's frame, in h (default the host's centre): a blast is centred there. */
+  at?: Vec3;
+  /** A key of the level's weapons (a WeaponSpec in cube units) or a built-in charge: cutter, kicker, relay. */
+  weapon: string;
+  /** 'plunger' (default): armed by a plunger shot naming it; 'start': armed when play starts (a relay, with a moved trigger). */
+  arm?: 'plunger' | 'start';
 }
 
 /** A level's physics settings (spectacle-mode.md, section 8). Absent fields take PHYSICS_DEFAULTS. */
@@ -251,6 +269,7 @@ export function freezeProblem(n: number): string | null {
 
 /** Why a rack is too big or empty (MAX_RACK fired items, MAX_PULLS pulls), or null when it fits. */
 export function rackSizeProblem(rack: readonly string[]): string | null {
+  // A plunger fires nothing but is a stroke: it counts with the fired items.
   const pulls = rack.filter((x) => x === 'pull').length, fired = rack.length - pulls;
   if (rack.length === 0) return 'an empty rack';
   if (fired > MAX_RACK) return `${fired} fired items, over ${MAX_RACK}`;
@@ -401,6 +420,12 @@ export function compileLevel(def: LevelDef): CompiledLevel {
     const w = weaponOf(def, ref.key);
     if (w) defaulted[ref.key] = w;
   }
+  // Built-in charges a level names join the hash the same way.
+  for (const ch of def.charges ?? []) {
+    if (typeof ch.weapon !== 'string' || (def.weapons && Object.hasOwn(def.weapons, ch.weapon))) continue;
+    const w = chargeWeaponOf(def, ch.weapon);
+    if (w) defaulted[ch.weapon] = w;
+  }
   if (Object.keys(defaulted).length) geometry.weapons = { ...geometry.weapons, ...defaulted };
   // A scenario part names its bodies by (id, params, seed): the bodies themselves join the hash, so a
   // change to the scenario's builder is a different level too. Levels without one hash as before.
@@ -423,7 +448,7 @@ function bodiesDigest(bodies: readonly BodyDesc[]): string {
 }
 
 export interface Issue {
-  code: 'count' | 'capacity' | 'launcher' | 'overlap' | 'unsupported' | 'mass-ratio' | 'ammo-ratio' | 'dud' | 'tunnelling' | 'crown-start' | 'rack' | 'weapon' | 'empty' | 'watched' | 'flat' | 'objective' | 'freeze';
+  code: 'count' | 'capacity' | 'launcher' | 'overlap' | 'unsupported' | 'mass-ratio' | 'ammo-ratio' | 'dud' | 'tunnelling' | 'crown-start' | 'rack' | 'weapon' | 'empty' | 'watched' | 'flat' | 'objective' | 'freeze' | 'charge';
   message: string;
   bodies?: number[];
   /** Legal but worth knowing (a dud item): the level still plays as authored. */
@@ -513,6 +538,8 @@ export function validateLevel(c: CompiledLevel, opts: ValidateOptions = {}): Iss
   if (size || def.par < 1 || def.par > def.rack.length) issues.push({ code: 'rack', message: `rack of ${def.rack.length} with par ${def.par}: need 1 <= par <= rack, at most ${MAX_RACK} fired items and ${MAX_PULLS} pulls${size ? ` (${size})` : ''}` });
   const fz = def.freeze === undefined ? null : freezeProblem(def.freeze);
   if (fz) issues.push({ code: 'freeze', message: fz });
+  for (const message of chargeIssues(c)) issues.push({ code: 'charge', message });
+  if (def.rack.includes(PLUNGER) && !(def.charges ?? []).some((ch) => (ch.arm ?? 'plunger') === 'plunger')) issues.push({ code: 'charge', message: 'the rack has a plunger, and the level no charge a plunger arms' });
   if (def.objective.kind === 'hold') {
     if (scoringOf(def) !== 'outcome') issues.push({ code: 'objective', message: 'a hold objective needs outcome scoring (a par level ends at its clear)' });
     if (m.crowns.length === 0) issues.push({ code: 'objective', message: 'a hold objective needs a crown to keep up' });
@@ -644,8 +671,12 @@ function rackIssues(c: CompiledLevel, engine: LevelEngine): Issue[] {
   }
   const ratioMax = def.limits?.ammoRatio ?? AMMO_RATIO;
   if (!(ratioMax > 0 && ratioMax <= AMMO_RATIO_MAX)) issues.push({ code: 'ammo-ratio', message: `limits.ammoRatio ${ratioMax} must be above 0 and at most ${AMMO_RATIO_MAX}` });
+  // A weapon only charges name is checked as a charge (chargeIssues), not as a thrown one.
+  const rackKeys = new Set(def.rack.map((x) => itemRef(x)).flatMap((r) => (r?.kind === 'weapon' ? [r.key] : [])));
+  const chargeOnly = (key: string) => !rackKeys.has(key) && (def.charges ?? []).some((ch) => ch.weapon === key);
   for (const key of Object.keys(def.weapons ?? {})) {
     if (!WEAPON_KEY.test(key)) issues.push({ code: 'weapon', message: `weapons.${key}: a key is 1 to 24 lower case letters and digits, starting with a letter` });
+    else if (chargeOnly(key)) continue;
     else try { levelArm(c, key); } catch (e) { issues.push({ code: 'weapon', message: `weapons.${key}: ${(e as Error).message}` }); }
   }
   const sizeOf = (s: BodyDesc['shape']) => (s.kind === 'sphere' ? 2 * s.radius : s.kind === 'box' ? 2 * Math.min(...s.half) : 0);
@@ -662,7 +693,7 @@ function rackIssues(c: CompiledLevel, engine: LevelEngine): Issue[] {
   for (const item of new Set<string>(def.rack)) {
     const ref = itemRef(item);
     if (!ref) { issues.push({ code: 'rack', message: `rack item ${JSON.stringify(item)} is not one of ${RACK_ITEM_NAMES}` }); continue; }
-    if (ref.kind === 'pull') continue; // fires nothing: no body to tunnel, weigh or prove a dud
+    if (ref.kind === 'pull' || ref.kind === 'plunger') continue; // fires nothing: no body to tunnel, weigh or prove a dud
     let arm: Arm | null = null;
     if (ref.kind === 'weapon') {
       if (def.weapons && Object.hasOwn(def.weapons, ref.key)) { arm = c.arms[item] ?? null; if (!arm) continue; } // reported above

@@ -3,7 +3,7 @@
 // becomes one engine spawn event; nothing else about the engine is touched.
 import { type BodyDesc, massOf, type RemoveEvent, type SpawnEvent, TAG_BALL, type Vec3 } from '@tb/engine-api';
 import { GRAVITY } from './materials.ts';
-import { AMMO, isRackItem, type ItemFrame, type ItemSpec, itemSpec, type LaunchItem, PULL, RACK_ITEM_NAMES, type RackItem, speedOf } from './rack.ts';
+import { AMMO, isRackItem, type ItemFrame, type ItemSpec, itemSpec, type LaunchItem, PLUNGER, PULL, RACK_ITEM_NAMES, type RackItem, speedOf } from './rack.ts';
 
 /**
  * Fired from the launcher ring: az in 0.5 deg, y in 1/4 h, yaw and pitch in 0.1 deg, power in %.
@@ -20,6 +20,21 @@ export interface DropShot { ammo: 'drop'; x: number; z: number }
  * bodies already pulled.
  */
 export interface PullShot { ammo: 'pull'; body: number }
+/**
+ * Press the plunger (docs/design/charges.md): a timeline of the level's charges, each [charge, delay]:
+ * charge LevelDef.charges[charge] is armed `delay` engine steps after the shot goes in (its clock
+ * starts there; a cutter goes off at once). Pairs go in in this order, which decides the order of
+ * two charges' events at the same step. Session.fire refuses charges armed before, armed at start,
+ * named twice, or past the level's charges, and delays at or past the settle cap.
+ */
+export interface PlungerShot { ammo: 'plunger'; fuse: [number, number][] }
+
+/** Most charges one plunger sets off. */
+export const MAX_TIMELINE = 16;
+/** Longest delay a plunger may give a charge, steps (60 s at 60 Hz; the settle cap binds first: Session.plungerRefusal). */
+export const MAX_FUSE_DELAY = 3600;
+/** Most charges a level may hold (LevelDef.charges). */
+export const MAX_CHARGES = 32;
 
 /** Most structure bodies a pull can name (ids 0 to MAX_PULL_BODY): past any level the engines hold. */
 export const MAX_PULL_BODY = 1_000_000;
@@ -32,7 +47,7 @@ export const MAX_PULL_BODY = 1_000_000;
  * shot it changes nothing. Written `@after` at the end of the shot in text (writeShots).
  */
 export interface ShotTiming { after?: number }
-export type Shot = (LaunchShot | CueShot | DropShot | PullShot) & ShotTiming;
+export type Shot = (LaunchShot | CueShot | DropShot | PullShot | PlungerShot) & ShotTiming;
 
 /** The most steps a shot's `after` may name: about 4.6 hours at 60 Hz, past any shot's settle cap. */
 export const MAX_AFTER = 1_000_000;
@@ -58,6 +73,14 @@ export function checkShot(s: Shot): void {
   if (s.after !== undefined) assertInt('after', s.after, 0, MAX_AFTER);
   if (s.ammo === 'drop') { assertInt('x', s.x, -4000, 4000); assertInt('z', s.z, -4000, 4000); return; }
   if (s.ammo === PULL) { assertInt('body', s.body, 0, MAX_PULL_BODY); return; }
+  if (s.ammo === PLUNGER) {
+    if (!Array.isArray(s.fuse) || s.fuse.length < 1 || s.fuse.length > MAX_TIMELINE) throw new Error(`shot.fuse must list 1 to ${MAX_TIMELINE} [charge, delay] pairs`);
+    s.fuse.forEach((p, i) => {
+      if (!Array.isArray(p) || p.length !== 2) throw new Error(`shot.fuse.${i} must be [charge, delay]`);
+      assertInt(`fuse.${i}.charge`, p[0], 0, MAX_CHARGES - 1); assertInt(`fuse.${i}.delay`, p[1], 0, MAX_FUSE_DELAY);
+    });
+    return;
+  }
   assertInt('power', s.power, 0, 100);
   if (s.ammo === 'cue') {
     assertInt('x', s.x, -4000, 4000); assertInt('y', s.y, 0, 4000); assertInt('z', s.z, -4000, 4000); assertInt('dir', s.dir, 0, 3);
@@ -67,8 +90,14 @@ export function checkShot(s: Shot): void {
 }
 
 const LAUNCH_FIELDS = ['az', 'y', 'yaw', 'pitch', 'power'] as const;
-/** An item's fields after its name in shot text (writeShots), in this order: every launch item's are LaunchShot's. */
-export const shotFields = (ammo: RackItem): readonly string[] => (ammo === 'drop' ? ['x', 'z'] : ammo === 'cue' ? ['x', 'y', 'z', 'dir', 'power'] : ammo === PULL ? ['body'] : LAUNCH_FIELDS);
+/**
+ * An item's fields after its name in shot text (writeShots), in this order: every launch item's are
+ * LaunchShot's. A plunger's are its fuse pairs, charge then delay, as many as it has (none listed here).
+ */
+export const shotFields = (ammo: RackItem): readonly string[] => (ammo === 'drop' ? ['x', 'z'] : ammo === 'cue' ? ['x', 'y', 'z', 'dir', 'power'] : ammo === PULL ? ['body'] : ammo === PLUNGER ? [] : LAUNCH_FIELDS);
+
+/** The integers after a shot's name in text: its fields, or a plunger's fuse pairs flattened. */
+const shotValues = (s: Shot): number[] => (s.ammo === PLUNGER ? s.fuse.flat() : shotFields(s.ammo).map((k) => (s as unknown as Record<string, number>)[k]!));
 
 /**
  * Shots as URL-safe text, for sharing a line: `ammo.f1.f2...` per shot (fields in SHOT_FIELDS
@@ -76,9 +105,10 @@ export const shotFields = (ammo: RackItem): readonly string[] => (ammo === 'drop
  * `p-wreckingball.60.8.0.20.95_w-grenade.120.4.0.35.80`. Item names never hold `.` or `_` (rack.ts).
  * A rapid-fire shot ends `@after` (ShotTiming): `w-grenade.120.4.0.35.80@12` went in 12 steps after
  * the shot before it, while that one was still running. Text without `@` reads as it always has.
+ * A plunger lists its fuse pairs: `plunger.0.0.2.20.1.45` arms charge 0 at once, 2 at 20 steps, 1 at 45.
  */
 export function writeShots(shots: readonly Shot[]): string {
-  return shots.map((s) => [s.ammo, ...shotFields(s.ammo).map((k) => (s as unknown as Record<string, number>)[k])].join('.') + (s.after === undefined ? '' : `@${s.after}`)).join('_');
+  return shots.map((s) => [s.ammo, ...shotValues(s)].join('.') + (s.after === undefined ? '' : `@${s.after}`)).join('_');
 }
 
 /** The shots writeShots wrote, each checked (checkShot); throws naming the shot at fault. Empty text is no shots. */
@@ -91,12 +121,18 @@ export function readShots(text: string): Shot[] {
     const [ammo, ...vals] = at[0]!.split('.');
     if (!isRackItem(ammo!)) throw new Error(`${where}: ammo must be one of ${RACK_ITEM_NAMES}`);
     const fields = shotFields(ammo);
-    if (vals.length !== fields.length) throw new Error(`${where}: ${ammo} takes ${fields.length} fields (${fields.join('.')}), got ${vals.length}`);
     const shot: Record<string, unknown> = { ammo };
-    fields.forEach((k, j) => {
-      if (!/^-?\d+$/.test(vals[j]!)) throw new Error(`${where}: ${k} must be an integer, not ${vals[j] || 'empty'}`);
-      shot[k] = Number(vals[j]);
-    });
+    if (ammo === PLUNGER) {
+      if (vals.length < 2 || vals.length % 2) throw new Error(`${where}: ${ammo} takes charge.delay pairs, got ${vals.length} fields`);
+      vals.forEach((v) => { if (!/^\d+$/.test(v)) throw new Error(`${where}: charges and delays are whole numbers, not ${v || 'empty'}`); });
+      shot.fuse = Array.from({ length: vals.length / 2 }, (_, j) => [Number(vals[2 * j]), Number(vals[2 * j + 1])]);
+    } else {
+      if (vals.length !== fields.length) throw new Error(`${where}: ${ammo} takes ${fields.length} fields (${fields.join('.')}), got ${vals.length}`);
+      fields.forEach((k, j) => {
+        if (!/^-?\d+$/.test(vals[j]!)) throw new Error(`${where}: ${k} must be an integer, not ${vals[j] || 'empty'}`);
+        shot[k] = Number(vals[j]);
+      });
+    }
     if (at.length === 2) {
       if (!/^\d+$/.test(at[1]!)) throw new Error(`${where}: after must be a whole number of steps, not ${at[1] || 'empty'}`);
       shot.after = Number(at[1]);
@@ -129,9 +165,13 @@ export function ammoBody(kind: RackItem, at: ItemFrame, pos: Vec3, vel: Vec3, al
   return { shape, pos, rot: [0, 0, 0, 1], linVel: vel, angVel: [0, 0, 0], density: spec.density, friction: spec.friction, restitution: spec.restitution, tag: TAG_BALL };
 }
 
-/** The engine event for a shot fired at engine step `step`: a spawn, or for a pull the removal of its body. */
-export function shotEvent(f: ShotFrame, shot: Shot, step: number): SpawnEvent | RemoveEvent {
+/**
+ * The engine event for a shot fired at engine step `step`: a spawn, or for a pull the removal of its
+ * body; a plunger has none of its own (its charges' events come from the Driver's arsenal).
+ */
+export function shotEvent(f: ShotFrame, shot: Shot, step: number): SpawnEvent | RemoveEvent | null {
   if (shot.ammo === PULL) { checkShot(shot); return { step, kind: 'remove', id: shot.body }; }
+  if (shot.ammo === PLUNGER) { checkShot(shot); return null; }
   return shotToSpawn(f, shot, step);
 }
 
@@ -139,6 +179,7 @@ export function shotEvent(f: ShotFrame, shot: Shot, step: number): SpawnEvent | 
 export function shotToSpawn(f: ShotFrame, shot: Shot, step: number): SpawnEvent {
   checkShot(shot);
   if (shot.ammo === PULL) throw new Error(`a ${PULL} spawns nothing: it removes body ${shot.body} (shotEvent)`);
+  if (shot.ammo === PLUNGER) throw new Error(`a ${PLUNGER} spawns nothing: it sets off charges (shotEvent)`);
   const h = f.unit, ph = f.pitch * h;
   let body: BodyDesc;
   if (shot.ammo === 'drop') {

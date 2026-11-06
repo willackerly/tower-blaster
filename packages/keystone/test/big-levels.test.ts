@@ -69,7 +69,7 @@ describe('big levels', () => {
 
   it('B3 plays by its cast stars on collapse: their hash is the level\'s, the waivers are recorded, and the showcase line parses', () => {
     const c = compileLevel(B3);
-    expect(B3.stars).toMatchObject({ metric: 'collapse', hash: c.hash, engine: 'gpu', waived: ['skill', 'stable'] });
+    expect(B3.stars).toMatchObject({ metric: 'collapse', hash: c.hash, engine: 'gpu', waived: ['skill'] });
     expect(castStars(c)).toBe(B3.stars);
     expect(B3.stars!.t3).toBeGreaterThan(B3.stars!.t2);
     expect(B3.stars!.t2).toBeGreaterThanOrEqual(B3.objective!.kind === 'collapse' ? B3.objective!.min : 0);
@@ -90,7 +90,7 @@ describe('big levels', () => {
     expect(findLevel('B9')).toBeUndefined();
     expect(seriesOf('S4')).toBeUndefined();
     // Trial ids (T-...) carry a lower-case letter only in their drafts' names: the lookup is case-blind both ways.
-    expect(seriesOf('t-b1a')).toBe(TRIAL_LEVELS);
+    expect(seriesOf('t-b1b')).toBe(TRIAL_LEVELS);
     expect(levelById('t-s4').id).toBe('T-S4');
     expect(() => levelById('B9')).toThrow(/unknown level B9; known: L1, L2, L3, L4, L5, B1, B2, B3, U1, U2, U3 and \d+ trials \(T-S3 to T-I3\)/);
   });

@@ -3,7 +3,7 @@
 // (every number checkable by hand) and on Rapier with a tiny recipe.
 import { describe, expect, it } from 'vitest';
 import { aimAt, type CastPlay, type CastSample, compileLevel, readShots, writeShots, launcherPos, type LaunchShot, type LevelDef, scenarioLevel, type Shot } from '@tb/keystone';
-import { lineShots, pullTarget, applyWaivers, bootstrapT3, castLevel, cloudCheck, crossDeviceGate, exposedFaces, faceSectors, facingAzimuth, FACE_SECTORS, REACH, type CastPlayer, type CastRecipe, type CastResult, competentIntents, compareCasts, compareReplay, extendCloud, judgeCast, replayCast, endValue, HEIGHT_BANDS, higherBetter, intentShot, moveIntents, nodeCastPlayer, nudgeLine, phaseEnds, playsOf, poolCasts, quantile, rng, roundEasier, SHORT_RECIPE, shotSummary, streamSeed, surfaceTarget, WAIVABLE, withWallTime } from '../src/index.ts';
+import { lineShots, pullTarget, applyWaivers, bootstrapT3, castLevel, cloudCheck, crossDeviceGate, exposedFaces, faceSectors, facingAzimuth, FACE_SECTORS, REACH, type CastPlayer, type CastRecipe, type CastResult, competentIntents, compareCasts, compareReplay, extendCloud, judgeCast, replayCast, endValue, HEIGHT_BANDS, higherBetter, intentShot, moveIntents, nodeCastPlayer, nudgeLine, phaseEnds, playsOf, poolCasts, quantile, rng, roundEasier, SHORT_RECIPE, shotSummary, streamSeed, surfaceTarget, WAIVABLE, withBounce, withWallTime } from '../src/index.ts';
 
 /** A 10 x 4 wall of plaster cubes along x as an outcome level, rack of two cannonballs. */
 const WALL: LevelDef = { ...scenarioLevel('S3', { W: 10, H: 4 }, 1, { rack: ['cannonball', 'cannonball'] }), id: 'T1' };
@@ -402,6 +402,20 @@ describe('castLevel on a synthetic player', () => {
     const mine = r.lines.filter((l) => l.phase === 'climb' && baseKey(readShots(l.shots)) === base).map((l) => endValue(l, 'collapse'));
     expect(mine.length).toBeGreaterThanOrEqual(12);
     expect(r.bestLine.score).toBe(quantile(mine, 0.25));
+  });
+});
+
+describe('withBounce (--bounce, roadmap B6)', () => {
+  it('sets the level\'s Bounce, changes its hash (so its stars never apply), and refuses e outside 0 to 1', async () => {
+    const { B1, castStars, physicsOf } = await import('@tb/keystone');
+    const b = withBounce(B1, '0.4'), c = compileLevel(b);
+    expect(physicsOf(b).bounce).toBe(0.4);
+    expect(c.hash).not.toBe(compileLevel(B1).hash);
+    expect(castStars(c)).toBeUndefined();
+    expect(c.scene.ground?.restitution).toBe(0.4);
+    expect(physicsOf(withBounce(b, 'off')).bounce).toBeNull();
+    expect(compileLevel(withBounce(b, 'off')).hash).toBe(compileLevel(B1).hash);
+    for (const v of ['-0.1', '1.5', 'x', '']) expect(() => withBounce(B1, v)).toThrow(/--bounce is off or a number/);
   });
 });
 
