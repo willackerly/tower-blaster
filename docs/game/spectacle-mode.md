@@ -202,6 +202,8 @@ Every rule above is switchable. The viewer under `rules=keystone` reads them thr
 | `keystone.autobank` | `0`, `1` | end at first clear |
 | `keystone.rapid` | `1`, `0` | fire while a shot runs, cutting it (section 5); 0 waits for the settle |
 | `keystone.tailskip` | `1`, `0` | fast-forward the tail |
+| `keystone.launch` | `high`, `level` | where shots leave from: 2 h over the structure's top (keys W and S move it a whole h, from the level's own launcher up to 16 h over the top), or the level's own launcher; a shot records its height, so neither is part of a level (playtest 2026-11-06) |
+| `keystone.balls` | `painted`, `plain` | fired balls in their own colour with a white band (a cannonball red, a marble blue, a preset its catalogue colour), so none reads as a bomb; plain is the look's ball (playtest 2026-11-06) |
 | `keystone.settle` | level's own, `v1`, `v2` | settle rule (custom) |
 | `keystone.rack` | level's own, comma list of item names | rack override (custom) |
 | `keystone.iterations`, `keystone.gapSlop`, `bounce` | level's own | physics override (custom) |
@@ -403,7 +405,7 @@ Level 1's job is the first-minute promise (G7 measures it): a collapse within 20
 | Cast too slow on the M5 | the budget gate | shorter recipe; the GPU fork ask |
 | 10k at 40 iterations over the 11 ms step budget | F2, G4.4 | 20 iterations where the rest test allows; smaller City levels; declared slow motion |
 | Big levels hit pair or colour limits | `health()` in every cast play | F1 sizing; `pairsPerBody` in the physics block |
-| Bounce at game mass ratios drives blocks into the ground | E4's probes: fixed by restitution anchors (docs/plan.md, Restitution); a heavy ball bounces off a cube on the ground at 0.83-0.89 of v from 1 to 2000 kg | Bounce opt-in per level at e 0.3-0.5; at e 0.9, simultaneous impacts in a chain can still gain energy (Known limits) |
+| Bounce at game mass ratios drives blocks into the ground | E4's probes: fixed by restitution anchors (docs/plan.md, Restitution); a heavy ball bounces off a cube on the ground at 0.83-0.89 of v from 1 to 2000 kg | Bounce opt-in per level at e 0.3-0.5; since E4b's energy cap no island gains energy in the bounce pass at any e, so e above 0.6 is allowed (docs/plan.md, Restitution, Known limits) |
 | The thresholds feel arbitrary to players | playtest question (j) | show the bot's distribution on the result card ("better than 64% of bot plays") |
 
 Playtest additions to the design's list (G9): **(i)** does anyone bank early, and does the rack-left line change behaviour; **(j)** can players say what the star target was after the level; **(k)** spectacle rating of B3 against B1 ("is 10k better than 1k?").

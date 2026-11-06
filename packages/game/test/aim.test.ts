@@ -2,9 +2,9 @@ import { describe, expect, it } from 'vitest';
 import { RapierEngine } from '@tb/adapter-rapier';
 import { emptySnapshot, type Snapshot, TIER_FREE, type Vec3 } from '@tb/engine-api';
 import { quatFromAxisAngle } from '@tb/geom';
-import { closestApproach, compileLevel, GRAVITY, L1, L4, launcherPos, predictArc, Session, shotToSpawn } from '@tb/keystone';
+import { BIG_LEVELS, closestApproach, compileLevel, GRAVITY, L1, L4, launcherPos, LEVELS, outsideLot, predictArc, Session, shotToSpawn } from '@tb/keystone';
 import { eyeOf, frame } from '@tb/render/camera';
-import { azFromYaw, launchY, pick, previewBeads, pullFor, rayBox, raySphere, REACH, shotFor, SUBSTEPS } from '../src/aim.ts';
+import { azFromYaw, LAUNCH_ABOVE_TOP, LAUNCH_MAX_ABOVE_TOP, LAUNCH_STEP, launchHeight, launchRange, launchStep, launchY, pick, previewBeads, pullFor, rayBox, raySphere, REACH, shotFor, SUBSTEPS } from '../src/aim.ts';
 
 const c = compileLevel(L1);
 const h = c.frame.unit, p = c.frame.pitch * h;
@@ -28,6 +28,68 @@ describe('launch height', () => {
     expect(a.shot).toMatchObject({ y: 27 });
     const ev = shotToSpawn(c.frame, a.shot, 0);
     expect(ev.body.pos[1] - (ev.body.shape as { radius: number }).radius).toBeGreaterThanOrEqual(0);
+  });
+});
+
+describe('high launcher (keystone.launch=high, the default)', () => {
+  it('opens LAUNCH_ABOVE_TOP h over the structure (never under the level\'s own); level mode is the level\'s; W and S step one h within low..top', () => {
+    for (const def of [...LEVELS, ...BIG_LEVELS]) {
+      const cc = compileLevel(def), r = launchRange(cc), top = cc.height / cc.frame.unit;
+      expect(r.low, def.id).toBe(Math.round(def.launcher.y * 4));
+      expect(r.high / 4, def.id).toBeGreaterThanOrEqual(top + LAUNCH_ABOVE_TOP);
+      expect(r.high / 4, def.id).toBeLessThan(top + LAUNCH_ABOVE_TOP + 0.25);
+      expect(r.high, def.id).toBeGreaterThan(r.low);
+      expect(r.top / 4, def.id).toBeGreaterThanOrEqual(top + LAUNCH_MAX_ABOVE_TOP);
+      expect(launchHeight(cc, 'high')).toBe(r.high);
+      expect(launchHeight(cc, 'level')).toBe(r.low);
+      expect(launchStep(cc, r.high, 1)).toBe(r.high + LAUNCH_STEP);
+      expect(launchStep(cc, r.high, -1)).toBe(Math.max(r.low, r.high - LAUNCH_STEP));
+      expect(launchStep(cc, r.high, -1000)).toBe(r.low);
+      expect(launchStep(cc, r.high, 1000)).toBe(r.top);
+    }
+    // L1's tower is 10 h: shots now leave from 12 h (6 m) instead of 2 h (1 m).
+    expect(launchRange(c)).toMatchObject({ low: 8, high: 48 });
+    // A shot from the high launcher records its height, and the boulder still leaves clear of the ground.
+    expect(shotFor(c, 'cannonball', 360, 100, [0, 2, 0], SUBSTEPS, 48)!.shot).toMatchObject({ y: 48 });
+    expect(launchY(c, 'p-boulder', 8)).toBe(27);
+    expect(launchY(c, 'p-boulder', 48)).toBe(48);
+  });
+
+  it('a shot at the top of the structure clears a 2 h rubble pile anywhere between the launcher and the lot, where one from the level\'s launcher does not', () => {
+    // A pile in front of the structure: anything 2 h high on the ground outside the lot. The arc from the
+    // launcher to where it passes the target, while it is outside the lot, must stay over it.
+    const lowest = (cc: ReturnType<typeof compileLevel>, at: number, az: number, ammo: 'cannonball' | 'marble') => {
+      const hh = cc.frame.unit, target: Vec3 = [cc.frame.centre[0], cc.height - 0.25 * hh, cc.frame.centre[1]];
+      const a = shotFor(cc, ammo, az, 100, target, SUBSTEPS, at)!;
+      const arc = predictArc(shotToSpawn(cc.frame, a.shot, 0), [0, -GRAVITY, 0], cc.scene.dt, 240, SUBSTEPS);
+      let low = Infinity;
+      for (let k = 0; 3 * k < arc.length; k++) {
+        if (!outsideLot(cc, arc[3 * k]!, arc[3 * k + 2]!)) break;
+        low = Math.min(low, arc[3 * k + 1]! / hh);
+      }
+      return { low, reachable: a.reachable };
+    };
+    for (const def of [...LEVELS, ...BIG_LEVELS]) {
+      const cc = compileLevel(def);
+      for (const az of [0, 180, 360, 540]) for (const ammo of ['cannonball', 'marble'] as const) {
+        if (!cc.def.rack.includes(ammo) && def.id.startsWith('L')) continue;
+        const hi = lowest(cc, launchHeight(cc, 'high'), az, ammo);
+        expect(hi.reachable, `${def.id} ${ammo} az ${az}`).toBe(true);
+        expect(hi.low, `${def.id} ${ammo} az ${az}`).toBeGreaterThan(2);
+      }
+    }
+    // On L1 the level's launcher (2 h, 1 m) starts no higher than such a pile: the shot runs into it.
+    expect(lowest(c, launchHeight(c, 'level'), 360, 'cannonball').low).toBeLessThanOrEqual(2);
+  });
+
+  it('from high, the structure\'s base is still in reach at full power (the launcher does not shoot over everything)', () => {
+    for (const def of [...LEVELS, ...BIG_LEVELS]) {
+      const cc = compileLevel(def), hh = cc.frame.unit;
+      for (const az of [0, 360]) {
+        const a = shotFor(cc, 'cannonball', az, 100, [cc.frame.centre[0], 0.5 * hh, cc.frame.centre[1]], SUBSTEPS, launchHeight(cc, 'high'))!;
+        expect(a.reachable, `${def.id} az ${az}: misses by ${a.error.toFixed(2)} m`).toBe(true);
+      }
+    }
   });
 });
 

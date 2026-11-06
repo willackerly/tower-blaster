@@ -3,7 +3,9 @@
 // crown glow, the Regrow animation on retry as per-slot visual scales, and
 // arc-preview beads as overlay spheres. Everything here is pure data for
 // Renderer.setFx / setOverlay; none of it reaches the physics.
-import { type CompiledLevel, MATERIALS } from '@tb/keystone';
+import { type CompiledLevel, itemRef, MATERIALS, type RackItem } from '@tb/keystone';
+import { type FxOptions, srgbToLinear } from '@tb/render';
+import { PROJECTILE_PRESETS } from '@tb/weapons';
 
 /** Linear rgb (0..1) and emissive (0..1) to the renderer's bulk tint word: r low byte, emissive high byte. */
 export function tintWordOf(rgb: [number, number, number], emissive = 0): number {
@@ -25,6 +27,39 @@ export const PULL_HOVER = tintWordOf([1, 0.93, 0.8], 0.55);
  * more ball), with a lit fuse the renderer draws on top (Renderer.fuse). Linear rgb.
  */
 export const BOMB_FX = { tint: [0.012, 0.012, 0.015] as [number, number, number], paint: true, matte: true };
+
+/**
+ * How fired balls are drawn (PaceFeel.balls, URL key keystone.balls):
+ * - painted: each in its own colour with a white band round it (ballFx), so a ball never reads as a
+ *   bomb (near-black with a lit fuse) and its spin shows. The default since Will's 2026-11-06 playtest,
+ *   where the big balls (the look's grey iron in the real look) looked like the bombs.
+ * - plain: the look's own ball colour and glow, as before.
+ */
+export type BallStyle = 'painted' | 'plain';
+export const BALL_STYLES: readonly BallStyle[] = ['painted', 'plain'];
+
+/**
+ * Keystone's own balls' paint, sRGB: a crimson cannonball and a blue marble, nothing near black or the crowns' gold.
+ * Crimson rather than a warmer red, which read close to the coral aim beads and washed to pink in candy (review, 2026-11-06).
+ */
+export const BALL_PAINT = { cannonball: 0xc8102e, marble: 0x2e6fd6 } as const;
+
+const linearOf = (hex: number): [number, number, number] => [(hex >> 16) & 255, (hex >> 8) & 255, hex & 255].map((x) => srgbToLinear(x / 255)) as [number, number, number];
+
+/**
+ * The paint of a fired ball of rack item `item` in style `style`: its colour (Keystone's ammo from
+ * BALL_PAINT, a preset its catalogue colour, PROJECTILE_PRESETS) with a white band. Null for what is
+ * not a painted ball: a weapon's shell (a bomb, BOMB_FX), the anvil and the cue (boxes), a pull, and
+ * every item in the plain style.
+ */
+export function ballFx(item: RackItem, style: BallStyle = 'painted'): FxOptions | null {
+  if (style === 'plain') return null;
+  const r = itemRef(item);
+  if (r?.kind === 'preset') return { tint: linearOf(PROJECTILE_PRESETS[r.preset].colour), paint: true, band: true };
+  if (r?.kind === 'ammo' && (r.ammo === 'cannonball' || r.ammo === 'marble')) return { tint: linearOf(BALL_PAINT[r.ammo]), paint: true, band: true };
+  return null;
+}
+
 const MATERIAL_TINT: Record<string, [number, number, number]> = {
   plaster: TINT.none, stone: [0.62, 0.62, 0.66], iron: [0.3, 0.3, 0.34], ice: [0.62, 0.85, 1], rubber: [0.9, 0.45, 0.55], steel: [0.4, 0.42, 0.46],
 };

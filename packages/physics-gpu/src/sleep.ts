@@ -46,6 +46,7 @@
 // r is BodyProps.radius, the bounding radius. Removed bodies (tier free) are neither: their flags stay as remove()
 // wrote them, and the colouring treats them as before. Thresholds are in scene units (cube units, plank widths for
 // S15), so they move with the scene's own scale.
+import { type StateRegion, whole } from './checkpoint.ts';
 import { Body, BodyProps, Manifold, SleepBody, SleepParams, TIER, wgslStruct, writeStruct } from '@tb/schema';
 import { assertStorageFits } from '@tb/gpu';
 import type { Quat, Vec3 } from '@tb/engine-api';
@@ -363,6 +364,11 @@ export class SleepPass {
     pass.setPipeline(this.pipes.neighbours); pass.dispatchWorkgroupsIndirect(this.total, 0);
     pass.setPipeline(this.pipes.decide); pass.dispatchWorkgroups(groups);
     pass.end();
+  }
+
+  /** What a step reads as the step before left it (checkpoint.ts): each body's sleep state (quiet counter, anchor pose, wakes). */
+  carried(): StateRegion[] {
+    return [whole(this.state)];
   }
 
   destroy(): void {

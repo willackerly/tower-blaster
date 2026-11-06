@@ -111,7 +111,7 @@ export interface ViewerConfig {
    * withRules(level, keystone), a custom run. {} otherwise.
    */
   keystone: LevelRules;
-  /** Keystone's pace (URL keys keystone.hitstop, keystone.slowmo, keystone.tailskip, keystone.follow, keystone.shake, keystone.rapid: 0 or 1, keystone.budget: ms, keystone.frames: all, half or auto; rules=keystone only; @tb/game DEFAULT_FEEL by default, as in the game). */
+  /** Keystone's pace (URL keys keystone.hitstop, keystone.slowmo, keystone.tailskip, keystone.follow, keystone.shake, keystone.rapid: 0 or 1, keystone.budget: ms, keystone.undo: MB, keystone.frames: all, half or auto, keystone.launch: high or level, keystone.balls: painted or plain; rules=keystone only; @tb/game DEFAULT_FEEL by default, as in the game). */
   feel: PaceFeel;
   /**
    * A line of shots to play once the level has loaded (URL key keystone.shots, @tb/keystone
@@ -146,7 +146,7 @@ export const DEFAULT_BOUNCE = 0.5;
 
 export const RULES = ['sandbox', 'keystone'] as const;
 /** Keys that only mean something under rules=keystone (the game page's). */
-export const KEYSTONE_KEYS = ['keystone.hitstop', 'keystone.slowmo', 'keystone.budget', 'keystone.tailskip', 'keystone.follow', 'keystone.shake', 'keystone.frames', 'keystone.rapid', 'keystone.shots', 'keystone.rack', ...LEVEL_RULE_KEYS] as const;
+export const KEYSTONE_KEYS = ['keystone.hitstop', 'keystone.slowmo', 'keystone.budget', 'keystone.tailskip', 'keystone.follow', 'keystone.shake', 'keystone.frames', 'keystone.rapid', 'keystone.undo', 'keystone.launch', 'keystone.balls', 'keystone.shots', 'keystone.rack', ...LEVEL_RULE_KEYS] as const;
 /** The look when ?look= is absent: the sandbox's candy, or the game's own under its rules. */
 export const defaultLook = (rules: Rules) => (rules === 'keystone' ? GAME_LOOK : DEFAULT_CONFIG.look);
 export type Rules = (typeof RULES)[number];

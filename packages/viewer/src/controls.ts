@@ -5,7 +5,7 @@
 import { checkSound, SOUND_KNOBS, SOUND_MATERIAL_NAMES, SOUND_SETS, type SoundKnob, type SoundOptions } from '@tb/audio';
 import { parseSpec } from '@tb/bench';
 import { type Env, ENVS, type Ground, GROUNDS, linearToSrgb, LOOKS, REAL_DEFAULTS, REAL_KNOBS, type RealKnob, type RealOptions, srgbToLinear, type Stone, STONES, type V3 } from '@tb/render';
-import { checkPaceFeel, DEFAULT_BUDGET_MS, DEFAULT_FEEL, type FrameMode, objectiveText, type PaceFeel } from '@tb/game';
+import { type BallStyle, checkPaceFeel, DEFAULT_BUDGET_MS, DEFAULT_FEEL, DEFAULT_UNDO_MB, MAX_UNDO_MB, type FrameMode, type LaunchMode, objectiveText, type PaceFeel } from '@tb/game';
 import { AUTO_LEVEL, AVBD_ITERATIONS, BIG_LEVELS, compileLevel, freezeProblem, LEVELS, MAX_FREEZE, PRESETTLE_STEPS, scenarioLevel, TRIAL_LEVELS, UNDERCUT_LEVELS } from '@tb/keystone';
 import { buildScenario, SCENARIOS } from '@tb/scenarios';
 import { type CameraPose, type Framing, FRAMING_LIMITS } from './camera.ts';
@@ -288,7 +288,7 @@ export function mountControls(root: HTMLElement, hooks: ControlsHooks): { refres
       <div class="params"></div>
       <div class="rules">
         <label class="f"><span>rules</span><select name="rules"><option value="sandbox">sandbox</option><option value="keystone">Keystone (the game)</option></select></label>
-        <div class="feel">${field('hitstop', 'hit-stop on contact', false)}${field('slowmo', 'slow motion as crowns fall', false)}${field('budget', 'physics budget, ms per 1/60 s (0: no valve)', DEFAULT_BUDGET_MS, 'step="any" min="0" max="1000"')}${field('tailskip', 'fast-forward the tail of a shot', true)}${field('follow', 'camera follows the collapse', false)}${field('shake', 'camera shakes on hits', false)}${field('rapid', 'rapid fire: shoot before the last shot settles', true)}${field('freeze', 'freezes, Bullet Time (empty: the level\'s own)', '', `step="1" min="0" max="${MAX_FREEZE}" placeholder="level's"`)}<label class="f"><span>frames drawn</span><select name="frames"><option value="all">every frame</option><option value="half">half on a fast display</option><option value="auto">half while physics is behind</option></select></label></div>
+        <div class="feel">${field('hitstop', 'hit-stop on contact', false)}${field('slowmo', 'slow motion as crowns fall', false)}${field('budget', 'physics budget, ms per 1/60 s (0: no valve)', DEFAULT_BUDGET_MS, 'step="any" min="0" max="1000"')}${field('tailskip', 'fast-forward the tail of a shot', true)}${field('follow', 'camera follows the collapse', false)}${field('shake', 'camera shakes on hits', false)}${field('rapid', 'rapid fire: shoot before the last shot settles', true)}${field('undo', 'undo memory, MB (0: undo replays the shots)', DEFAULT_UNDO_MB, `step="1" min="0" max="${MAX_UNDO_MB}"`)}${field('freeze', 'freezes, Bullet Time (empty: the level\'s own)', '', `step="1" min="0" max="${MAX_FREEZE}" placeholder="level's"`)}<label class="f"><span>frames drawn</span><select name="frames"><option value="all">every frame</option><option value="half">half on a fast display</option><option value="auto">half while physics is behind</option></select></label><label class="f"><span>launch height (keys W, S move it)</span><select name="launch"><option value="high">high: over the structure's top</option><option value="level">the level's own launcher</option></select></label><label class="f"><span>fired balls</span><select name="balls"><option value="painted">painted, banded</option><option value="plain">plain: the look's</option></select></label></div>
       </div>
       <div class="seed">${field('seed', 'seed', 1, 'step="1"')}</div>
       <div class="world">
@@ -424,6 +424,8 @@ export function mountControls(root: HTMLElement, hooks: ControlsHooks): { refres
       rapid: (input(sceneForm, 'rapid') as HTMLInputElement).checked,
       // A duel's aids (the game page's Siege Table): the viewer plays no duels, so they ride along as the URL says.
       turnView: hooks.config().feel.turnView, arcs: hooks.config().feel.arcs,
+      undoMB: input(sceneForm, 'undo').value === '' ? NaN : Number(input(sceneForm, 'undo').value),
+      launch: input(sceneForm, 'launch').value as LaunchMode, balls: input(sceneForm, 'balls').value as BallStyle,
     }, freeze: input(sceneForm, 'freeze').value === '' ? NaN : Number(input(sceneForm, 'freeze').value) };
     return proposeScene(hooks.config(), scenario, params, Number(input(sceneForm, 'seed').value), Number(input(sceneForm, 'scale').value), Number(input(sceneForm, 'substeps').value), bounce, presettle, rules);
   }
@@ -661,8 +663,11 @@ export function mountControls(root: HTMLElement, hooks: ControlsHooks): { refres
     (input(sceneForm, 'follow') as HTMLInputElement).checked = c.feel.follow;
     (input(sceneForm, 'shake') as HTMLInputElement).checked = c.feel.shake;
     (input(sceneForm, 'rapid') as HTMLInputElement).checked = c.feel.rapid;
+    input(sceneForm, 'undo').value = String(c.feel.undoMB);
     input(sceneForm, 'freeze').value = c.keystone.freeze === undefined ? '' : String(c.keystone.freeze);
     input(sceneForm, 'frames').value = c.feel.frames;
+    input(sceneForm, 'launch').value = c.feel.launch;
+    input(sceneForm, 'balls').value = c.feel.balls;
     input(sceneForm, 'seed').value = String(c.seed);
     input(sceneForm, 'presettle').value = String(c.presettle);
     input(sceneForm, 'scale').value = String(c.scale);

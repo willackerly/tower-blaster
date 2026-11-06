@@ -14,7 +14,7 @@ import { isRackItem, type LevelDef, RACK_ITEM_NAMES, type RackItem, readShots, t
 import { encodeLevelParam, parseLevelDef } from './level-file.ts';
 import { defaultFraming, parseViewerConfig, type ViewerConfig, writeCamera, writeFraming } from './params.ts';
 import { checkWeapon, DEFAULT_GRENADE, type GrenadeSpec, isWeaponSpec, WEAPON_NAME, WEAPON_SPEC_VERSION, type WeaponSpec } from '@tb/weapons';
-import { DEFAULT_FEEL, type FrameMode, type LevelRules, writeLevelRules } from '@tb/game';
+import { type BallStyle, DEFAULT_FEEL, type FrameMode, type LaunchMode, type LevelRules, writeLevelRules } from '@tb/game';
 import { DEFAULT_PROJECTILE, parseGrenade, type Projectile, writeGrenade, writeProjectile } from './projectile.ts';
 
 export const SCENE_FILE_FORMAT = 'tower-blaster/viewer-scene';
@@ -58,7 +58,7 @@ export interface SceneFile {
    * absent for none; scoring, autobank, settle, freeze and physics: the game's rule overrides, ViewerConfig.keystone,
    * absent when not overridden); absent: the sandbox.
    */
-  rules?: { mode: 'keystone'; hitstop: boolean; slowmo: boolean; budget?: number; tailskip?: boolean; follow?: boolean; shake?: boolean; frames?: FrameMode; rapid?: boolean; shots?: Shot[]; rack?: RackItem[] } & LevelRules;
+  rules?: { mode: 'keystone'; hitstop: boolean; slowmo: boolean; budget?: number; tailskip?: boolean; follow?: boolean; shake?: boolean; frames?: FrameMode; rapid?: boolean; undo?: number; launch?: LaunchMode; balls?: BallStyle; shots?: Shot[]; rack?: RackItem[] } & LevelRules;
   /** How the scene is framed without a camera, and the field of view (ViewerConfig.view; absent, as in files saved before it: today's DEFAULT_FRAMING, so their saved camera shows at 45 rather than 50 degrees). */
   view: Framing;
   /** Collision sound: on, material, set and every knob (absent in older files: off, the defaults; no set: real). */
@@ -81,7 +81,7 @@ export function sceneFile(c: ViewerConfig, name: string, camera: CameraPose | nu
     look: { preset: c.look, real: { ...REAL_DEFAULTS, ...c.real } },
     camera,
     view: { ...c.view },
-    ...(c.rules === 'keystone' ? { rules: { mode: c.rules, hitstop: c.feel.hitStop, slowmo: c.feel.slowMo, ...(c.feel.budgetMs !== DEFAULT_FEEL.budgetMs ? { budget: c.feel.budgetMs } : {}), ...(c.feel.tailSkip ? {} : { tailskip: false }), ...(c.feel.follow ? { follow: true } : {}), ...(c.feel.shake ? { shake: true } : {}), ...(c.feel.frames !== DEFAULT_FEEL.frames ? { frames: c.feel.frames } : {}), ...(c.feel.rapid ? {} : { rapid: false }), ...(c.shots?.length ? { shots: c.shots.map((x) => ({ ...x })) } : {}), ...(c.rack ? { rack: [...c.rack] } : {}), ...structuredClone(c.keystone) } } : {}),
+    ...(c.rules === 'keystone' ? { rules: { mode: c.rules, hitstop: c.feel.hitStop, slowmo: c.feel.slowMo, ...(c.feel.budgetMs !== DEFAULT_FEEL.budgetMs ? { budget: c.feel.budgetMs } : {}), ...(c.feel.tailSkip ? {} : { tailskip: false }), ...(c.feel.follow ? { follow: true } : {}), ...(c.feel.shake ? { shake: true } : {}), ...(c.feel.frames !== DEFAULT_FEEL.frames ? { frames: c.feel.frames } : {}), ...(c.feel.rapid ? {} : { rapid: false }), ...(c.feel.undoMB !== DEFAULT_FEEL.undoMB ? { undo: c.feel.undoMB } : {}), ...(c.feel.launch !== DEFAULT_FEEL.launch ? { launch: c.feel.launch } : {}), ...(c.feel.balls !== DEFAULT_FEEL.balls ? { balls: c.feel.balls } : {}), ...(c.shots?.length ? { shots: c.shots.map((x) => ({ ...x })) } : {}), ...(c.rack ? { rack: [...c.rack] } : {}), ...structuredClone(c.keystone) } } : {}),
     sound: { ...c.sound },
   };
 }
@@ -236,7 +236,7 @@ export function parseSceneFile(text: string): { config: ViewerConfig; name: stri
   }
   if (root.rules !== undefined) {
     const r = object(root.rules, 'rules');
-    only(r, ['mode', 'hitstop', 'slowmo', 'budget', 'tailskip', 'follow', 'shake', 'frames', 'rapid', 'shots', 'rack', 'scoring', 'autobank', 'settle', 'freeze', 'physics'], 'rules');
+    only(r, ['mode', 'hitstop', 'slowmo', 'budget', 'tailskip', 'follow', 'shake', 'frames', 'rapid', 'undo', 'launch', 'balls', 'shots', 'rack', 'scoring', 'autobank', 'settle', 'freeze', 'physics'], 'rules');
     q.set('rules', str(r.mode, 'rules.mode'));
     if (r.hitstop !== undefined) q.set('keystone.hitstop', bool(r.hitstop, 'rules.hitstop') ? '1' : '0');
     if (r.slowmo !== undefined) q.set('keystone.slowmo', bool(r.slowmo, 'rules.slowmo') ? '1' : '0');
@@ -246,6 +246,9 @@ export function parseSceneFile(text: string): { config: ViewerConfig; name: stri
     if (r.shake !== undefined) q.set('keystone.shake', bool(r.shake, 'rules.shake') ? '1' : '0');
     if (r.frames !== undefined) q.set('keystone.frames', str(r.frames, 'rules.frames'));
     if (r.rapid !== undefined) q.set('keystone.rapid', bool(r.rapid, 'rules.rapid') ? '1' : '0');
+    if (r.undo !== undefined) q.set('keystone.undo', String(num(r.undo, 'rules.undo')));
+    if (r.launch !== undefined) q.set('keystone.launch', str(r.launch, 'rules.launch'));
+    if (r.balls !== undefined) q.set('keystone.balls', str(r.balls, 'rules.balls'));
     if (r.shots !== undefined) q.set('keystone.shots', shotsText(r.shots));
     // The rack as its URL key (rackOf checks the names against the level).
     if (r.rack !== undefined) {

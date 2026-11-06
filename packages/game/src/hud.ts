@@ -44,6 +44,8 @@ export interface HudState {
   heritageTotal: number;
   chips: Chip[];
   power: number;
+  /** The launcher's height over the ground, m (keys W and S; aim.ts launchHeight); absent: no Height row. */
+  launch?: number;
   liveLeverage: number;
   phase: string;
   reachable: boolean | null;
@@ -108,6 +110,12 @@ export const POWER_STEP = 10;
 /** A power button (touch screens only: GAME_CSS shows .kg-tch under body.kg-touch). */
 const POWER_STEP_BUTTON = (d: number) => `<button class="pw kg-tch" data-act="power" data-arg="${d}" aria-label="${d < 0 ? 'Less' : 'More'} power">${d < 0 ? '−' : '+'}</button>`;
 
+/** A launcher height button (touch screens only, as the power buttons): one h down (-1) or up (1), keys S and W. */
+const LAUNCH_STEP_BUTTON = (d: number) => `<button class="pw kg-tch" data-act="launch" data-arg="${d}" aria-label="${d < 0 ? 'Lower' : 'Raise'} the launcher">${d < 0 ? '−' : '+'}</button>`;
+
+/** The Height row: the launcher's height in metres, with lower and raise buttons on a touch screen (keys S and W). */
+export const launchRow = (m: number) => `<div class="row"><span>Height <kbd>W</kbd><kbd>S</kbd></span><span class="power">${LAUNCH_STEP_BUTTON(-1)}<b class="launch">${m.toFixed(1)} m</b>${LAUNCH_STEP_BUTTON(1)}</span></div>`;
+
 export const pct = (x: number) => `${Math.floor(100 * x)}%`;
 
 /** What the objective asks, in a few words. */
@@ -134,6 +142,7 @@ export function hudHtml(s: HudState): string {
   const sel = s.chips.find((c) => c.selected)?.ammo;
   // The power bar, with minus and plus buttons on a touch screen (keys Q and E).
   const power = sel === 'drop' || sel === 'pull' ? '' : `<div class="row"><span>Power <kbd>Q</kbd><kbd>E</kbd></span><span class="power">${POWER_STEP_BUTTON(-POWER_STEP)}<span class="bar"><i style="width:${s.power}%"></i></span>${POWER_STEP_BUTTON(POWER_STEP)}</span></div>`;
+  const height = sel === 'drop' || sel === 'pull' || s.launch === undefined ? '' : launchRow(s.launch);
   const reach = s.pullRefused ? '<div class="bad small">Crowns and heritage stay: pull a plain block</div>' : s.reachable === false ? '<div class="bad small">Out of reach at this power</div>' : '';
   const outcome = scoringOf(d) === 'outcome';
   const head = outcome
@@ -151,7 +160,7 @@ export function hudHtml(s: HudState): string {
     <div class="title">${esc(d.name)}${s.pace ? ` <span class="pace" title="physics is running slower than real time">${esc(s.pace)}</span>` : ''}</div>
     ${s.duel}
     <div class="chips">${chips}</div>
-    ${power}${reach}`;
+    ${power}${height}${reach}`;
   }
   return `
     <div class="title">W${d.world}-${esc(d.id.replace(/^L/, ''))} · ${esc(d.name)}${fz?.frozen ? ' <span class="pace frozen" title="physics is frozen: a shot fired now spends a freeze">FROZEN</span>' : s.pace ? ` <span class="pace" title="physics is running slower than real time">${esc(s.pace)}</span>` : ''}</div>
@@ -162,7 +171,7 @@ export function hudHtml(s: HudState): string {
     <div class="chips">${chips}</div>
     ${freezes}
     ${s.opener ? `<div class="row">${OPENER_BUTTON}<span class="small"><span class="kg-desk">or aim and click</span><span class="kg-tch">or drag and lift</span></span></div>` : ''}
-    ${power}${reach}${outcome && s.canBank ? `<div class="row">${BANK_BUTTON}<span class="small">end here, keep the rack</span></div>` : ''}
+    ${power}${height}${reach}${outcome && s.canBank ? `<div class="row">${BANK_BUTTON}<span class="small">end here, keep the rack</span></div>` : ''}
     ${s.strokes > 0 ? `<div class="row lev"><span>Leverage</span><span>${fmtLeverage(s.liveLeverage)}</span></div>` : ''}
     ${s.strokes > 0 ? TOUCH_ACTS : ''}`;
 }

@@ -2,7 +2,7 @@
 // contract. Used as a reference for quality metrics and as the number every
 // GPU variant has to beat by a wide margin.
 import RAPIER from '@dimforge/rapier3d-simd-compat';
-import { blastArea, blastCentre, blastVelocity, type BodyDesc, checkBlast, checkInputQueue, DEFAULT_RESTITUTION_COMBINE, emptySnapshot, type EngineInfo, type InputEvent, massOf, type PhysicsEngine, type SceneDesc, queueInputs, type Snapshot, TIER_FREE } from '@tb/engine-api';
+import { blastArea, blastCentre, blastVelocity, type BodyDesc, checkBlast, checkInputQueue, DEFAULT_RESTITUTION_COMBINE, emptySnapshot, type EngineCheckpoint, type EngineInfo, type InputEvent, massOf, type PhysicsEngine, type SceneDesc, queueInputs, type Snapshot, TIER_FREE } from '@tb/engine-api';
 import { createBody, createGround, initRapier, RULES } from './bodies.ts';
 
 export interface RapierOptions {
@@ -23,6 +23,8 @@ export class RapierEngine implements PhysicsEngine {
   private sleep = true;
   private combine = RAPIER.CoefficientCombineRule.Average;
   private restitutionCombine = RAPIER.CoefficientCombineRule.Average;
+  /** Counts init() and dispose() calls, so a checkpoint knows when its world is gone. */
+  private generation = 0;
 
   constructor(private readonly opts: RapierOptions = {}) {
     // Rapier takes one substep per solver iteration.
@@ -35,6 +37,7 @@ export class RapierEngine implements PhysicsEngine {
     await initRapier();
     this.info.variant.version = RAPIER.version();
     this.dispose();
+    this.generation++;
     const world = new RAPIER.World({ x: scene.gravity[0], y: scene.gravity[1], z: scene.gravity[2] });
     world.timestep = scene.dt;
     if (this.opts.iterations) world.numSolverIterations = this.opts.iterations;
@@ -115,7 +118,38 @@ export class RapierEngine implements PhysicsEngine {
     return s;
   }
 
+  /**
+   * The world as Rapier serialises it (World.takeSnapshot: bodies, colliders, islands, broad and
+   * narrow phase with the contacts' warm-start impulses, integration parameters), and this
+   * adapter's own state: body handles and descriptions, removed bodies, queued inputs, step index.
+   * restore() builds a world from the bytes (World.restoreSnapshot) in place of the current one.
+   */
+  checkpoint(): EngineCheckpoint {
+    const w = this.world;
+    if (!w) throw new Error('init() first');
+    const bytes = w.takeSnapshot(), handles = this.bodies.map((b) => b.handle), descs = [...this.descs];
+    const gone = [...this.gone], pending = [...this.pending], step = this.stepIndex, generation = this.generation;
+    let live = true;
+    return {
+      step, bytes: bytes.byteLength + 64 * (handles.length + pending.length),
+      restore: () => {
+        if (!live) throw new Error('RapierEngine: restore() of a disposed checkpoint');
+        if (this.generation !== generation || !this.world) throw new Error('RapierEngine: restore() of a checkpoint from before the engine was init()ed again or disposed');
+        const world = RAPIER.World.restoreSnapshot(bytes);
+        this.world.free();
+        this.world = world;
+        this.bodies = handles.map((h) => world.getRigidBody(h));
+        this.descs = [...descs];
+        this.gone = new Set(gone);
+        this.pending = [...pending];
+        this.stepIndex = step;
+      },
+      dispose: () => { live = false; },
+    };
+  }
+
   dispose(): void {
+    this.generation++;
     this.world?.free();
     this.world = null;
     this.bodies = [];

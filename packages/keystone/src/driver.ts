@@ -1,8 +1,9 @@
 // Runs a Session against any PhysicsEngine: step, observe, feed the rules,
 // push the spawns they produce. The interactive game and the headless tools
 // share this loop, so a recorded session replays through the same code.
-import { type BodyDesc, type InputEvent, type PhysicsEngine, type Snapshot, type SpawnEvent, spawnedBodies } from '@tb/engine-api';
+import { type BodyDesc, type EngineCheckpoint, type InputEvent, type PhysicsEngine, type Snapshot, type SpawnEvent, spawnedBodies } from '@tb/engine-api';
 import { Arsenal } from './arsenal.ts';
+import { forkDeep } from './fork.ts';
 import { type CompiledLevel, physicsOf } from './level.ts';
 import { CpuObserver, type Observation } from './rules.ts';
 import { type Feedback, Session } from './session.ts';
@@ -45,6 +46,91 @@ export interface DriverOptions {
   pipelined?: boolean;
 }
 
+/**
+ * How a pre-settle shares the device with the page's frames (Driver.reset). A GPU engine's step()
+ * only submits, so 300 steps queued at once hold every frame submitted after them until they are
+ * all done (a frozen screen for the whole load), and a CPU engine's steps hold the page's thread.
+ * Paced, the steps go in batches sized to take about `batchMs`, with frames let in between. Only
+ * when the steps run changes, never which: the state after reset is the same.
+ */
+export interface PresettlePace {
+  /** Wall time a batch of steps aims at, ms (a frame or so: 8 at 120 Hz). */
+  batchMs: number;
+  /** The most steps in a batch (default 64). */
+  maxBatch?: number;
+}
+
+/**
+ * Driver.reset's options. The rules never read a clock (boundary.test.ts), so the page hands one in:
+ * with `now`, reset times its init and pre-settle (Driver.resetMs); with `pace` too, the pre-settle is
+ * paced (PresettlePace).
+ */
+export interface ResetOptions {
+  now?: () => number;
+  pace?: PresettlePace;
+}
+
+/**
+ * Steps `steps` times in batches paced as `pace` says (PresettlePace). An engine with finish() (a GPU
+ * engine: step() submits) keeps two batches in flight: batch k+1 is submitted before batch k is waited
+ * for, so the GPU never idles on the round trip, and a frame submitted meanwhile waits for at most two
+ * batches; a batch is sized from the time between its done and the one before (its GPU time). An engine
+ * without (a CPU engine: step() runs it) yields a task after each batch, sized from its steps' own time.
+ * Batches start at one step and at most double, as the first ones also pay warm-up.
+ */
+export async function presettlePaced(engine: PhysicsEngine, steps: number, pace: PresettlePace, now: () => number): Promise<void> {
+  const max = Math.max(1, pace.maxBatch ?? 64);
+  /** The next batch: as many steps as fit batchMs at the rate k steps took ms, at most twice `cur`. */
+  const size = (k: number, ms: number, cur: number) => Math.max(1, Math.min(max, 2 * cur, Math.floor((k * pace.batchMs) / Math.max(ms, 0.05))));
+  let batch = 1;
+  if (!engine.finish) {
+    for (let done = 0; done < steps;) {
+      const t = now(), k = Math.min(batch, steps - done);
+      for (let j = 0; j < k; j++) await engine.step();
+      done += k;
+      batch = size(k, now() - t, k);
+      await new Promise<void>((r) => setTimeout(r, 0));
+    }
+    return;
+  }
+  let inFlight: { k: number; done: Promise<void> } | null = null, last = now();
+  for (let done = 0; done < steps;) {
+    const k = Math.min(batch, steps - done);
+    for (let j = 0; j < k; j++) await engine.step();
+    done += k;
+    const fence = { k, done: engine.finish() };
+    if (inFlight) {
+      await inFlight.done;
+      const t = now();
+      batch = size(inFlight.k, t - last, batch);
+      last = t;
+    }
+    inFlight = fence;
+  }
+  if (inFlight) await inFlight.done;
+}
+
+/**
+ * A driver's whole state at one moment (Driver.checkpoint): the engine's checkpoint and a copy of
+ * everything the driver keeps. restore() puts both back; it may be called again, and throws once
+ * the engine has been init()ed again or disposed, or after dispose().
+ */
+export interface DriverCheckpoint {
+  /** The engine's stepIndex when it was taken. */
+  readonly step: number;
+  /** Memory held, bytes: the engine checkpoint's and an estimate of the copied driver state. */
+  readonly bytes: number;
+  restore(): void;
+  dispose(): void;
+}
+
+/** What a driver keeps besides its engine and level (Driver.checkpoint copies it as one graph, so shared events stay shared). */
+interface DriverState {
+  session: Session; snapshot: Snapshot; snapshotStep: number; observed: Observation | null; pushed: InputEvent[];
+  observer: CpuObserver; spawnSteps: number[]; spawns: InputEvent[]; descs: BodyDesc[]; arsenal: Arsenal;
+  blastsDue: Extract<Feedback, { t: 'blast' }>[];
+}
+
 export class Driver {
   session!: Session;
   /** The newest observed state; while aiming, the world as it stands. */
@@ -75,19 +161,33 @@ export class Driver {
   /** Blasts pushed whose 'blast' feedback waits for the first state that shows them. */
   private blastsDue: Extract<Feedback, { t: 'blast' }>[] = [];
 
+  /**
+   * Wall time of the last reset(), ms, by the clock it was given (ResetOptions.now; 0 without): the
+   * engine's init (a GPU engine builds its pipelines and buffers there) and the pre-settle (its steps
+   * and the snapshot that waits for them), with the steps it ran.
+   */
+  resetMs = { init: 0, presettle: 0, steps: 0 };
+
   constructor(readonly engine: PhysicsEngine, readonly level: CompiledLevel, readonly options: DriverOptions = {}) {}
 
   /**
    * Init the engine and let the structure settle before play: real engines
    * compress loaded stacks a little (Rapier: 2 to 4 mm per contact), so the
    * settled pose, not the authored one, is the home and the first baseline.
+   * `opts.pace` spreads the pre-settle over frames (PresettlePace); the state it leaves is the same.
    */
-  async reset(): Promise<void> {
+  async reset(opts: ResetOptions = {}): Promise<void> {
+    const { now, pace } = opts;
+    if (pace && !now) throw new Error('Driver.reset: a paced pre-settle needs a clock (ResetOptions.now)');
+    const t0 = now?.() ?? 0;
     await this.engine.init(this.level.scene);
+    const t1 = now?.() ?? 0;
     // PRESETTLE_STEPS unless the level's physics block sets its own.
     const presettle = physicsOf(this.level.def).presettle;
-    for (let i = 0; i < presettle; i++) await this.engine.step();
+    if (pace) await presettlePaced(this.engine, presettle, pace, now!);
+    else for (let i = 0; i < presettle; i++) await this.engine.step();
     this.snapshot = await this.engine.snapshot();
+    this.resetMs = { init: t1 - t0, presettle: (now?.() ?? 0) - t1, steps: presettle };
     this.snapshotStep = this.engine.stepIndex;
     this.session = new Session(this.level, this.snapshot.pos);
     this.observer = new CpuObserver(this.level, this.snapshot);
@@ -96,6 +196,58 @@ export class Driver {
     this.arsenal = new Arsenal(this.level, this.engine.info.integrator?.substeps ?? 1);
     this.blastsDue = [];
     this.observed = null;
+  }
+
+  /**
+   * The session as it stands, to come back to (the game's undo takes one as each shot goes in), or
+   * null when the engine has no checkpoint() (PhysicsEngine.checkpoint). Taken between steps, after
+   * reset(). It holds the engine's checkpoint and a deep copy (forkDeep) of the rules' session, the
+   * observer, the weapons' fuses, the spawns and the observed snapshot. A pipelined driver's read
+   * of the step past the observed one is not copied: restore() asks the restored engine for it again,
+   * and gets the same state, since the engine is back at that step.
+   */
+  checkpoint(): DriverCheckpoint | null {
+    const engine = this.engine.checkpoint?.();
+    if (!engine) return null;
+    const own = (): DriverState => ({
+      session: this.session, snapshot: this.snapshot, snapshotStep: this.snapshotStep, observed: this.observed, pushed: this.pushed,
+      observer: this.observer, spawnSteps: this.spawnSteps, spawns: this.spawns, descs: this.descs, arsenal: this.arsenal, blastsDue: this.blastsDue,
+    });
+    // The compiled level and its bodies are immutable inputs: shared, not copied.
+    const shared = [this.level, ...this.level.scene.bodies];
+    let saved: DriverState | null;
+    try {
+      saved = forkDeep(own(), shared);
+    } catch (e) {
+      engine.dispose();
+      throw e;
+    }
+    const ahead = this.ahead !== null;
+    const s = this.snapshot;
+    // The snapshot is copied about three times over (it, the observer's baseline and last state); the rest is small.
+    const bytes = engine.bytes + 3 * (s.pos.byteLength + s.rot.byteLength + s.linVel.byteLength + s.angVel.byteLength + s.awake.byteLength) + 64 * (this.spawns.length + this.pushed.length) + 4096;
+    return {
+      step: engine.step, bytes,
+      restore: () => {
+        if (!saved) throw new Error('Driver: restore() of a disposed checkpoint');
+        engine.restore();
+        const c = forkDeep(saved, shared);
+        this.session = c.session;
+        this.snapshot = c.snapshot;
+        this.snapshotStep = c.snapshotStep;
+        this.observed = c.observed;
+        this.pushed.length = 0;
+        this.pushed.push(...c.pushed);
+        this.observer = c.observer;
+        this.spawnSteps = c.spawnSteps;
+        this.spawns = c.spawns;
+        this.descs = c.descs;
+        this.arsenal = c.arsenal;
+        this.blastsDue = c.blastsDue;
+        this.ahead = ahead ? this.read() : null;
+      },
+      dispose: () => { saved = null; engine.dispose(); },
+    };
   }
 
   /** Notes spawns in the engine's numbering order: by step, after those due at the same step. */

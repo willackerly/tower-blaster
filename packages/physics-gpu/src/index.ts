@@ -7,3 +7,4 @@ export * from './engine.ts';
 export * from './sleep.ts';
 export * from './health.ts';
 export * from './snapshot.ts';
+export * from './checkpoint.ts';

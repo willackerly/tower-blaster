@@ -5,7 +5,7 @@ import { Body, BodyProps, field, Manifold, readField, readStruct, Shape, SolverB
 import type { BodyDesc, InputEvent, Quat, Vec3 } from '@tb/engine-api';
 import { buildScenario } from '@tb/scenarios';
 import { bodiesAt } from '@tb/engine-api';
-import { ACTIVE_HEAD, AvbdSolver, Broadphase, Coloring, DEFAULT_DISPATCH, GpuAvbdEngine, type GpuEngineOptions, type GpuRestitutionStats, type HessianForm, MAX_COLORS, Narrowphase, restitutionStatsOf } from '../src/index.ts';
+import { ACTIVE_HEAD, AvbdSolver, Broadphase, Coloring, DEFAULT_DISPATCH, GpuAvbdEngine, type GpuEngineOptions, type GpuRestitutionStats, type HessianForm, ISLAND_BODY_BYTES, MAX_COLORS, Narrowphase, restitutionStatsOf } from '../src/index.ts';
 import { type AvbdParams, DEFAULT_AVBD } from '@tb/physics-ref';
 import type { SceneDesc } from '@tb/engine-api';
 import { colorGraph } from '@tb/physics-ref';
@@ -467,7 +467,10 @@ export async function simulateGpu(scene: SceneDesc, steps: number, params: Parti
  * A run with a snapshot after every step (snaps[0] is the start) and, if
  * `stats`, the restitution pass's stats after every step (as
  * GpuAvbdEngine.restitutionStats; null while it is off), and `live`, what
- * GpuAvbdEngine.restitutionStats() itself reads after the last step. Each step's bodies
+ * GpuAvbdEngine.restitutionStats() itself reads after the last step, and, with
+ * the energy cap on, `labels`: each step's island label per body (IslandBody.parent
+ * after the pass, its island's least body) and `solved`, the solve's velocities the pass started from (both
+ * stale on a step the pass did not run). Each step's bodies
  * (and the pass's state) are copied on the GPU into a history read once at
  * the end, so the steps are not held up by a read each.
  */
@@ -481,8 +484,12 @@ export async function steppedRun(scene: SceneDesc, steps: number, params: Partia
   const bodyBytes = inner.capacity * Body.size;
   const slots = stats ? solver.restSlots : null;
   const slotBytes = slots ? slots.size : 0;
+  // The energy cap's islands (their alphas: GpuRestitutionStats.capped), while it is on.
+  const islands = stats ? solver.restIslands : null;
+  const islandBytes = islands ? islands.size : 0;
   const mk = (size: number) => device.createBuffer({ size: Math.max(16, size), usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC });
   const hist = mk((steps + 1) * bodyBytes), shist = slots ? mk(steps * slotBytes) : null, thist = slots ? mk(steps * 32) : null;
+  const ihist = islands ? mk(steps * islandBytes) : null;
   const ns = [inner.n];
   const copy = (k: number) => {
     const enc = device.createCommandEncoder();
@@ -490,6 +497,7 @@ export async function steppedRun(scene: SceneDesc, steps: number, params: Partia
     if (slots && k > 0) {
       enc.copyBufferToBuffer(slots, 0, shist!, (k - 1) * slotBytes, slotBytes);
       enc.copyBufferToBuffer(bp.total, 0, thist!, (k - 1) * 32, 32);
+      if (islands) enc.copyBufferToBuffer(islands, 0, ihist!, (k - 1) * islandBytes, islandBytes);
     }
     device.queue.submit([enc.finish()]);
   };
@@ -505,20 +513,28 @@ export async function steppedRun(scene: SceneDesc, steps: number, params: Partia
     const get = (name: string, c: number) => Array.from(readField(buf, Body, name, n, new Float64Array(c * n)));
     return { step: k, pos: get('pos', 3), rot: get('rot', 4), linVel: get('linVel', 3), angVel: get('angVel', 3) };
   });
-  const st: Array<GpuRestitutionStats | null> = [];
+  const st: Array<GpuRestitutionStats | null> = [], labels: number[][] = [], solved: Array<{ linVel: number[]; angVel: number[] }> = [];
   if (stats) {
     if (shist) {
-      const [sh, th] = [await readBuffer(device, shist), new Uint32Array(await readBuffer(device, thist!))];
-      for (let k = 0; k < steps; k++) st.push(restitutionStatsOf(sh.slice(k * slotBytes, (k + 1) * slotBytes), th[8 * k + 3]!, solver.maxPairs, ns[k + 1]!));
+      const [sh, th, ih] = [await readBuffer(device, shist), new Uint32Array(await readBuffer(device, thist!)), ihist ? await readBuffer(device, ihist) : null];
+      for (let k = 0; k < steps; k++) {
+        const il = ih ? ih.slice(k * islandBytes, (k + 1) * islandBytes) : null;
+        st.push(restitutionStatsOf(sh.slice(k * slotBytes, (k + 1) * slotBytes), th[8 * k + 3]!, solver.maxPairs, ns[k + 1]!, il));
+        if (!il) continue;
+        const iu = new Uint32Array(il), fl = new Float32Array(il), w = ISLAND_BODY_BYTES / 4, n = ns[k + 1]!;
+        labels.push(Array.from({ length: n }, (_, i) => iu[i * w]!));
+        // IslandBody.v and .w (words 8-10 and 12-14): the solve's velocities, before the pass.
+        solved.push({ linVel: Array.from({ length: 3 * n }, (_, j) => fl[Math.floor(j / 3) * w + 8 + (j % 3)]!), angVel: Array.from({ length: 3 * n }, (_, j) => fl[Math.floor(j / 3) * w + 12 + (j % 3)]!) });
+      }
     } else for (let k = 0; k < steps; k++) st.push(null);
   }
   // The engine's own readback of the last step's pass, to hold against the history's.
   const live = stats ? await e.restitutionStats() : null;
   const diagnostics = await e.diagnostics();
   const error = await device.popErrorScope();
-  for (const b of [hist, shist, thist]) b?.destroy();
+  for (const b of [hist, shist, thist, ihist]) b?.destroy();
   e.dispose();
-  return { error: error?.message ?? null, snaps, stats: st, live, diagnostics };
+  return { error: error?.message ?? null, snaps, stats: st, labels, solved, live, diagnostics };
 }
 
 /**

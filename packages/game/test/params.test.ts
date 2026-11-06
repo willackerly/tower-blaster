@@ -3,7 +3,7 @@
 import { describe, expect, it } from 'vitest';
 import { B1, BIG_LEVELS, L1, L2, L3, seriesOf, type Shot, writeShots } from '@tb/keystone';
 import { compileLevel } from '@tb/keystone';
-import { DEFAULT_LEVEL, GAME_LOOK, levelRules, onEngine, parseGameParams, withRules, writeLevelRules } from '../src/params.ts';
+import { DEFAULT_LEVEL, GAME_LOOK, levelRules, loadOptions, onEngine, parseGameParams, withRules, writeLevelRules } from '../src/params.ts';
 import { DEFAULT_FEEL } from '../src/pacing.ts';
 
 const parse = (search: string) => parseGameParams(new URLSearchParams(search));
@@ -139,5 +139,25 @@ describe('rule overrides', () => {
   it('refuses bad values, naming the key', () => {
     expect(() => parse('?keystone.scoring=golf')).toThrow(/keystone.scoring must be par or outcome: golf/);
     expect(() => parse('?keystone.autobank=yes')).toThrow(/keystone.autobank must be 0 or 1: yes/);
+  });
+});
+
+describe('level start keys (loadOptions)', () => {
+  const lo = (search: string) => loadOptions(new URLSearchParams(search));
+  it('leaves the defaults to playKeystone when absent', () => {
+    expect(lo('')).toEqual({});
+  });
+  it('reads keystone.loadpace (ms, 0 unpaced) and keystone.prefetch (0 or 1)', () => {
+    expect(lo('?keystone.loadpace=0')).toEqual({ loadPaceMs: 0 });
+    expect(lo('?keystone.loadpace=12.5&keystone.prefetch=0')).toEqual({ loadPaceMs: 12.5, prefetch: false });
+    expect(lo('?keystone.prefetch=1')).toEqual({ prefetch: true });
+    expect(lo('?keystone.retry=rebuild')).toEqual({ retry: 'rebuild' });
+  });
+  it('refuses bad values, naming the key', () => {
+    expect(() => lo('?keystone.loadpace=')).toThrow(/keystone.loadpace must be from 0 to 1000 ms/);
+    expect(() => lo('?keystone.loadpace=-1')).toThrow(/keystone.loadpace/);
+    expect(() => lo('?keystone.loadpace=fast')).toThrow(/keystone.loadpace .*: fast/);
+    expect(() => lo('?keystone.prefetch=yes')).toThrow(/keystone.prefetch must be 0 or 1: yes/);
+    expect(() => lo('?keystone.retry=fast')).toThrow(/keystone.retry must be checkpoint or rebuild: fast/);
   });
 });

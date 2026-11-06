@@ -361,7 +361,7 @@ describe('atmosphere (CPU twin)', () => {
 
 describe('fx records', () => {
   it('all-zero words mean no effect', () => {
-    expect(unpackFx(new Uint32Array(FX_WORDS))).toEqual({ tint: [1, 1, 1], emissive: 0, scale: 1, anchor: false, paint: false, matte: false, flashAt: 0, flash: 0 });
+    expect(unpackFx(new Uint32Array(FX_WORDS))).toEqual({ tint: [1, 1, 1], emissive: 0, scale: 1, anchor: false, paint: false, matte: false, band: false, flashAt: 0, flash: 0 });
     const w = new Uint32Array(FX_WORDS);
     packFx({}, w);
     expect(Array.from(w)).toEqual([0, 0, 0, 0]);
@@ -381,7 +381,11 @@ describe('fx records', () => {
     expect(unpackFx(w)).toMatchObject({ paint: true, anchor: false, matte: false });
     expect(Math.abs(unpackFx(w).scale - 0.5)).toBeLessThan(5e-4);
     packFx({ paint: true, matte: true }, w);
-    expect(unpackFx(w)).toMatchObject({ paint: true, matte: true, anchor: false, scale: 1 });
+    expect(unpackFx(w)).toMatchObject({ paint: true, matte: true, band: false, anchor: false, scale: 1 });
+    // The band bit sits above the scale's half, so it never changes the scale the cull pass reads.
+    packFx({ paint: true, band: true, scale: 0.5 }, w);
+    expect(unpackFx(w)).toMatchObject({ paint: true, band: true, matte: false, anchor: false });
+    expect(Math.abs(unpackFx(w).scale - 0.5)).toBeLessThan(5e-4);
     // Hidden must be exactly 0, not a tiny positive scale.
     packFx({ scale: 0 }, w);
     expect(unpackFx(w).scale).toBe(0);
