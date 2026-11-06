@@ -8,7 +8,9 @@
 //   T-B<n><x> the G5 drafts (drafts.ts): the rack and structure variants
 //            explored before B1 to B4 were authored;
 //   T-X<n>   the mode probes' structures (@tb/mode-probes X1 to X4), rebuilt
-//            from level parts in cells (h = 0.5 m, the probes' cell).
+//            from level parts in cells (h = 0.5 m, the probes' cell);
+//   T-I<n>   ice (ice.ts): blocks that crack and shatter, alone and mixed
+//            with stone, to see and tune before any rated level uses ice.
 // Every trial is an outcome level with no cast stars: it plays for its
 // objective's star and the tally, and the door lists it under Trials, unrated.
 // Left out, and why (docs/game/trials.md): S5 (S4 with the scenario's own
@@ -20,7 +22,7 @@
 // 2,000-plank tower 150 m tall; at Kapla's real scale it needs the viewer's
 // substeps: ?scenario=S15. The Kapla trial is X3's crib chain at game scale),
 // and drafts B1c and B3d (B1 and B3 as rated, but for the objective).
-import { BOMB, outcomeLevel, RAM } from './big-levels.ts';
+import { BOMB, outcomeLevel, RAM, thirdBondWall } from './big-levels.ts';
 import { DRAFTS } from './drafts.ts';
 import type { LevelDef, Part } from './level.ts';
 import type { RackItem } from './rack.ts';
@@ -180,8 +182,23 @@ const PROBE_TRIALS: LevelDef[] = [
   }),
 ];
 
-/** The trials in door order: scenarios, the mode probes' structures, then the drafts. */
-export const TRIAL_LEVELS: readonly LevelDef[] = [...SCENARIO_TRIALS, ...PROBE_TRIALS, ...DRAFT_TRIALS];
+const iceNote = (what: string): TrialNote => ({ from: `ice (ice.ts): ${what}` });
+
+/**
+ * Ice (Will, 2026-11-06: "would be so cool to look like we're shattering ice"). A block cracks from a
+ * 1.5 m/s hit and shatters from 5 (ICE_DEFAULTS); ice is slippery (friction 0.05), so ice on ice slides.
+ */
+const ICE_TRIALS: LevelDef[] = [
+  // L1's tower, all ice: a cannonball low on it shatters what it hits and cracks most of the rest as it falls.
+  trial(outcomeLevel('T-I1', 'Ice Tower', [{ kind: 'block', at: [-1, 0, -1], size: [2, 10, 2], material: 'ice', courses: [{ k: 9, role: 'crown' }] }], [1, 1], 10, [...TRIAL_RACK_SMALL], { world: 5, objective: { kind: 'crowns' } }), iceNote('a 2 x 2 column 10 courses high, crowned')),
+  // A wall of ice in third bond, 8 long and 6 high: breaking a hole shows the bend of what is behind.
+  trial(outcomeLevel('T-I2', 'Ice Wall', thirdBondWall(8, 6, 'ice'), [4.5, 1], 6, [...TRIAL_RACK_SMALL], { world: 5, objective: { kind: 'collapse', min: 0.3 } }), iceNote('a third-bond wall 8 x 6')),
+  // A stone keep with an ice crown: four courses of stone under four of ice, the top one crowns.
+  trial(outcomeLevel('T-I3', 'Frozen Keep', [{ kind: 'block', at: [-1.5, 0, -1.5], size: [3, 8, 3], material: 'stone', courses: [4, 5, 6, 7].map((k) => ({ k, material: 'ice' as const, ...(k === 7 ? { role: 'crown' as const } : {}) })) }], [1.5, 1.5], 8, [...TRIAL_RACK_SMALL], { world: 5, objective: { kind: 'crowns' } }), iceNote('a 3 x 3 stone keep, its top four courses ice')),
+];
+
+/** The trials in door order: scenarios, the mode probes' structures, the drafts, then ice. */
+export const TRIAL_LEVELS: readonly LevelDef[] = [...SCENARIO_TRIALS, ...PROBE_TRIALS, ...DRAFT_TRIALS, ...ICE_TRIALS];
 
 /** Whether level `id` is a trial (unrated). */
 export const isTrial = (id: string): boolean => id.toUpperCase().startsWith('T-');

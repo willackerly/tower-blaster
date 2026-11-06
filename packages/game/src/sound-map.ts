@@ -3,7 +3,7 @@
 // ammo kind (all steel, each at its own size: a 20 cm marble knocks, a 50 cm
 // cannonball thuds, the cue is a steel rod that rings as a bar). Pure, so
 // node tests cover it; collapse-sound.ts runs it.
-import { AMMO, AMMO_KINDS, type AmmoKind, type CompiledLevel, MATERIALS, materialId } from '@tb/keystone';
+import { AMMO, AMMO_KINDS, type AmmoKind, type CompiledLevel, isIcePiece, MATERIALS, materialId } from '@tb/keystone';
 import { roughTime, soundMaterials, type SoundMaterial, type SoundSet } from '@tb/audio';
 import type { BodyDesc } from '@tb/engine-api';
 
@@ -123,6 +123,8 @@ export function ammoKindOf(b: BodyDesc, h: number): AmmoKind | null {
 /** Sound slot of body i: its Keystone material for the structure (the first c.meta.n), else its ammo kind's (-1: silent). */
 export function soundSlotOf(c: CompiledLevel, b: BodyDesc, i: number): number {
   if (i < c.meta.n) return c.meta.material[i]!;
+  // A shattered ice block's pieces sound as ice (keystone ice.ts).
+  if (isIcePiece(b)) return materialId('ice');
   const k = ammoKindOf(b, c.frame.unit);
   return k ? AMMO_SLOT + AMMO_KINDS.indexOf(k) : -1;
 }

@@ -25,6 +25,10 @@ export type Feedback =
   | { t: 'impacts'; step: number; hist: Uint32Array; total: number }
   /** A fired weapon's blast, due at `step`, shows in the state just observed (Driver, arsenal.ts): centred on `body`, `radius` m. */
   | { t: 'blast'; step: number; body: number; radius: number }
+  /** An ice block cracked further (ice.ts): crack level 1 to 7, where it started (body frame, -1..1 per axis) and a seed for its pattern. */
+  | { t: 'iceCrack'; step: number; body: number; level: number; at: Vec3; seed: number }
+  /** An ice block shattered: removed at `step`, its pieces (engine ids) spawned in its place; dv the hit that did it, m/s. */
+  | { t: 'shatter'; step: number; body: number; pieces: number[]; dv: number }
   | { t: 'settled'; step: number; shot: number; outcome: ShotOutcome }
   /**
    * A shot fired while shot `shot` was still running (rapid fire) closed it: its outcome is taken on
@@ -67,6 +71,8 @@ export class Session {
   score: LevelScore | null = null;
   /** Structure bodies pulled so far (Undercut), in pull order. */
   readonly pulled: number[] = [];
+  /** Ice blocks shattered so far (ice.ts), in shatter order: a crown among them is down, heritage broken. */
+  readonly shattered: number[] = [];
   /** Leverage of the shot in flight, for the HUD. */
   liveLeverage = 0;
   private live: Live | null = null;
@@ -193,7 +199,7 @@ export class Session {
    */
   private close(o: Observation, cut: boolean): Extract<Feedback, { t: 'settled' | 'cut' }> {
     const L = this.live!, c = this.level, m = c.meta, w = o.watched, nc = m.crowns.length;
-    for (let k = 0; k < nc; k++) this.crownDown[k] = crownDown(c, [w.pos[3 * k]!, w.pos[3 * k + 1]!, w.pos[3 * k + 2]!]) ? 1 : 0;
+    for (let k = 0; k < nc; k++) this.crownDown[k] = this.shattered.includes(m.crowns[k]!) || crownDown(c, [w.pos[3 * k]!, w.pos[3 * k + 1]!, w.pos[3 * k + 2]!]) ? 1 : 0;
     const crownsTotal = this.crownDown.reduce((a, x) => a + x, 0);
     const dPE_mJ = o.basePe_mJ - o.red.pe_mJ;
     const outcome: ShotOutcome = {
@@ -238,11 +244,11 @@ export class Session {
     for (let k = 0; k < nc; k++) {
       const p = pos(k);
       if (!L.slowMo && w.linVel[3 * k + 1]! < SLOWMO_VY) { L.slowMo = true; out.push({ t: 'slowMo', step, body: m.crowns[k]! }); }
-      if (!this.crownLive[k] && crownDown(c, p)) { this.crownLive[k] = 1; out.push({ t: 'crownDown', step, body: m.crowns[k]!, ordinal: this.ordinal++ }); }
+      if (!this.crownLive[k] && (crownDown(c, p) || this.shattered.includes(m.crowns[k]!))) { this.crownLive[k] = 1; out.push({ t: 'crownDown', step, body: m.crowns[k]!, ordinal: this.ordinal++ }); }
     }
     for (let k = 0; k < nh; k++) {
       const b = m.heritage[k]!, q = w.rot.subarray(4 * (nc + k), 4 * (nc + k) + 4);
-      if (!this.heritageBroken[k] && heritageBroken(c, pos(nc + k), [q[0]!, q[1]!, q[2]!, q[3]!], [this.home[3 * b]!, this.home[3 * b + 1]!, this.home[3 * b + 2]!])) {
+      if (!this.heritageBroken[k] && (this.shattered.includes(b) || heritageBroken(c, pos(nc + k), [q[0]!, q[1]!, q[2]!, q[3]!], [this.home[3 * b]!, this.home[3 * b + 1]!, this.home[3 * b + 2]!]))) {
         this.heritageBroken[k] = 1;
         out.push({ t: 'heritageCrack', step, body: b });
       }
@@ -282,6 +288,11 @@ export class Session {
       this.phase = 'aiming';
     }
     return out;
+  }
+
+  /** Structure body `body` (ice) shattered (Driver, from IceBreaker): from the next observed state it counts as down (a crown) or broken (heritage). */
+  shatter(body: number): void {
+    if (!this.shattered.includes(body)) this.shattered.push(body);
   }
 
   /** An outcome level can be banked (ended, keeping the unused rack) while aiming after a settled shot. */

@@ -199,7 +199,7 @@ describe('the render bench\'s hall (bench.ts real-hall)', () => {
     const { renderBenchMarkdown } = await import('../src/bench.ts');
     const c = (variant: 'full' | 'real' | 'real-hall', ms: number) => ({
       world: 'near' as const, bodies: 10_000, variant, frameMs: ms, frameCI: [ms, ms] as [number, number], gpuP50: ms, gpuP95: ms, gpuSumP50: ms,
-      passes: {}, drawn: { boxes: 1, farBoxes: 0, shadowBoxes: 1 }, particles: 0, batches: [ms, ms * 1.01, ms * 0.99, ms],
+      passes: {}, drawn: { boxes: 1, farBoxes: 0, shadowBoxes: 1, iceBoxes: 0 }, particles: 0, batches: [ms, ms * 1.01, ms * 0.99, ms],
     });
     const md = renderBenchMarkdown({ adapter: 'x', software: false, timestamps: true, width: 1, height: 1, cases: [c('full', 1), c('real', 2), c('real-hall', 2.5)] }, 'h');
     const row = md.split('\n').at(-1)!.split('|').map((x) => x.trim());

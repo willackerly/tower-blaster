@@ -21,6 +21,8 @@ import { FX_WORDS, packFx, tintWord, toHalf, type Fx, type FxOptions, FX_ANCHOR,
 import { CANDY_NIGHT, linearToOklab, REAL_DEFAULTS, srgbToLinear, type LookParams } from './look.ts';
 import { invert, lookAt, multiply, normalize, type Mat4, type V3 } from './math.ts';
 import { HDR_FORMAT, noStamp, Post, type Stamp } from './post.ts';
+import { IcePass } from './ice-pass.ts';
+import { packSurface, type Surface, type SurfaceOptions } from './surface.ts';
 import { BOX_CUBE_VERTS, BOX_FAN_VERTS, Frame, SCENE_WGSL, sceneWgsl, SHADOW_SIZE, SPHERE_VERTS } from './shaders.ts';
 import { GROUND_LAYER, GROUNDS, Materials, patchThreshold, STONES, WOOD } from './materials.ts';
 import { ADAPTED_EXPOSURE_OFFSET, Atmosphere, medium, sunAtGround, sunDiscRadiance } from './atmosphere.ts';
@@ -205,7 +207,7 @@ export class Renderer {
   private readonly shadowLayout: GPUBindGroupLayout;
   private readonly pipes: Record<PipeName, GPURenderPipeline>;
   /** Pipelines and sky of looks with an atmosphere, made on first use. */
-  private real: { pipes: Record<RealPipe, GPURenderPipeline>; woodBox: () => GPURenderPipeline; hall: () => { opaque: GPURenderPipeline; glass: GPURenderPipeline }; atmosphere: Atmosphere; materials: Materials; layout: GPUBindGroupLayout; bind: GPUBindGroup } | null = null;
+  private real: { pipes: Record<RealPipe, GPURenderPipeline>; woodBox: () => GPURenderPipeline; hall: () => { opaque: GPURenderPipeline; glass: GPURenderPipeline }; atmosphere: Atmosphere; materials: Materials; layout: GPUBindGroupLayout; bind: GPUBindGroup; module: GPUShaderModule } | null = null;
   private readonly makeReal: () => NonNullable<Renderer['real']>;
   private lastSun: V3 = SUN;
   private readonly facePipe: () => GPURenderPipeline;
@@ -263,6 +265,16 @@ export class Renderer {
   readonly ao: AoVolume;
   private readonly aoSampler: GPUSampler;
 
+  /** Ice (ice.ts, ice-pass.ts): the per-slot surfaces, and how ice is drawn (ice.params). */
+  readonly ice: IcePass;
+  /** The ice pass's pipelines (scene look, real look) and its ID pipeline, made the first time a frame has ice. */
+  private readonly icePipe: (real: boolean) => GPURenderPipeline;
+  private readonly iceIdPipe: () => GPURenderPipeline;
+  /** An empty group 1 for the stylized looks' ice pipeline (group 2 is the ice's). */
+  private readonly emptyBind: GPUBindGroup;
+  /** The surface buffer the culler was built with (a new one rebuilds it). */
+  private cullSurfaces: GPUBuffer | null = null;
+
   private readonly boxVerts: { scene: number; shadow: number };
   /** Per-pass GPU timing of render() (cull, shadow, scene, bloom, composite) when set; read with profiler.collect(). */
   profiler: GpuProfiler | null = null;
@@ -299,6 +311,7 @@ export class Renderer {
     this.blasts = new Blasts(device);
     this.fuses = new Fuses(device);
     this.reachZone = new BlastReach(device);
+    this.ice = new IcePass(device);
     this.ao = new AoVolume(device, aoGrid(this.arena));
     this.aoSampler = device.createSampler({ magFilter: 'linear', minFilter: 'linear' });
     const VF = GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT;
@@ -475,8 +488,20 @@ export class Renderer {
           { binding: 5, resource: materials.sampler }, { binding: 6, resource: device.createSampler({ label: 'shadow gather' }) },
         ],
       });
-      return { pipes, woodBox, hall, atmosphere, materials, layout, bind };
+      return { pipes, woodBox, hall, atmosphere, materials, layout, bind, module: m.module };
     };
+    const emptyLayout = device.createBindGroupLayout({ entries: [], label: 'empty' });
+    this.emptyBind = device.createBindGroup({ layout: emptyLayout, entries: [] });
+    const icePipes: [GPURenderPipeline | null, GPURenderPipeline | null] = [null, null];
+    let iceId: GPURenderPipeline | null = null;
+    this.icePipe = (real) => {
+      const k = real ? 1 : 0;
+      if (icePipes[k]) return icePipes[k]!;
+      const r = real ? (this.real ??= this.makeReal()) : null;
+      const layout = device.createPipelineLayout({ bindGroupLayouts: [this.layout, r ? r.layout : emptyLayout, this.ice.layout] });
+      return (icePipes[k] = color('vsBox', 'fsIce', 'back', SEG.boxIce, { module: r ? r.module : module, layout, constants: real ? { REAL_PCSS: opts.realDiag === 'pcss-off' ? 0 : 1 } : {} }));
+    };
+    this.iceIdPipe = () => (iceId ??= color('vsBox', 'fsId', 'back', SEG.boxIce, { format: 'r32uint', samples: 1 }));
   }
 
   /** Draw bodies from this source from now on. */
@@ -552,6 +577,28 @@ export class Renderer {
   }
 
   /**
+   * What body slots are made of, for drawing (surface.ts): one slot with options, or a contiguous
+   * range of packed words (packSurface) from slot. Unlike setFx, a surface stays until it is set
+   * again (clearSurfaces resets every slot). Ice boxes are drawn in the ice pass (ice.ts); while
+   * any slot is ice the scene pass is split (ice-pass.ts). Applied from the next frame.
+   */
+  setSurface(slot: number, s: SurfaceOptions): void;
+  setSurface(slot0: number, words: Uint32Array): void;
+  setSurface(slot: number, s: SurfaceOptions | Uint32Array): void {
+    this.ice.set(slot, s instanceof Uint32Array ? s : [packSurface(s)]);
+  }
+
+  /** Every slot back to the default surface (a new level, a new scene). */
+  clearSurfaces(): void {
+    this.ice.clear();
+  }
+
+  /** A slot's surface as last set (tests and tools). */
+  surfaceOf(slot: number): Surface {
+    return this.ice.get(slot);
+  }
+
+  /**
    * Spheres drawn after the bodies (aim previews, markers): x, y, z, radius
    * per sphere in world space, and optionally sRGB rgb8 + emissive8 per
    * sphere (r in the low byte). At most MAX_OVERLAY; replaces the last set.
@@ -588,7 +635,8 @@ export class Renderer {
   private sync(): Culler {
     const s = this.source;
     const key = `${s.version}:${s.capacity}`;
-    if (key !== this.cullKey || !this.culler || this.culler.source !== s) {
+    const surfaces = this.ice.buffer(s.capacity);
+    if (key !== this.cullKey || !this.culler || this.culler.source !== s || surfaces !== this.cullSurfaces) {
       this.culler?.destroy();
       this.growFx(s.capacity);
       if (!this.fxBuf || this.fxBuf.size < s.capacity * FX_WORDS * 4) {
@@ -596,7 +644,8 @@ export class Renderer {
         this.fxBuf = this.device.createBuffer({ size: Math.max(16, this.fx.byteLength), usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST, label: 'fx' });
         this.device.queue.writeBuffer(this.fxBuf, 0, this.fx);
       }
-      this.culler = new Culler(this.device, s, { box: this.boxVerts.scene, boxShadow: this.boxVerts.shadow, sphere: SPHERE_VERTS }, this.fxBuf);
+      this.culler = new Culler(this.device, s, { box: this.boxVerts.scene, boxShadow: this.boxVerts.shadow, sphere: SPHERE_VERTS }, this.fxBuf, surfaces);
+      this.cullSurfaces = surfaces;
       const buffers = [this.frameBuf, this.culler.records, this.culler.lists];
       const common = buffers.map((buffer, binding) => ({ binding, resource: { buffer } }));
       this.bind = this.device.createBindGroup({
@@ -757,15 +806,19 @@ export class Renderer {
       sp.drawIndirect(culler.args, 16 * SEG.sphereShadow);
       sp.end();
     }
+    // Ice (ice-pass.ts): while any slot is ice, the opaque scene resolves into `under` and keeps
+    // its samples and depth, and the ice and everything drawn after it go in a second pass.
+    const split = !ids && this.ice.count > 0;
+    const under = split ? this.ice.under(this.msaa!.width, this.msaa!.height) : null;
     const color: GPURenderPassColorAttachment = ids
       ? { view: this.idTex!.createView(), clearValue: { r: 0, g: 0, b: 0, a: 0 }, loadOp: 'clear', storeOp: 'store' }
-      // Tile memory only: the MSAA samples are resolved and never stored.
-      : { view: this.msaa!.createView(), resolveTarget: this.hdr!.createView(), clearValue: { r: 0, g: 0, b: 0, a: 1 }, loadOp: 'clear', storeOp: 'discard' };
-    const p = enc.beginRenderPass({
+      // Tile memory only: the MSAA samples are resolved and never stored (unless the ice pass needs them).
+      : { view: this.msaa!.createView(), resolveTarget: (under ?? this.hdr!).createView(), clearValue: { r: 0, g: 0, b: 0, a: 1 }, loadOp: 'clear', storeOp: split ? 'store' : 'discard' };
+    let p = enc.beginRenderPass({
       label: mode,
       ...(ids ? {} : stamp('scene')),
       colorAttachments: [color],
-      depthStencilAttachment: { view: (ids ? this.idDepth! : this.depth!).createView(), depthClearValue: 1, depthLoadOp: 'clear', depthStoreOp: 'discard' },
+      depthStencilAttachment: { view: (ids ? this.idDepth! : this.depth!).createView(), depthClearValue: 1, depthLoadOp: 'clear', depthStoreOp: split ? 'store' : 'discard' },
     });
     p.setBindGroup(0, this.bind!);
     if (real) p.setBindGroup(1, real.bind);
@@ -779,6 +832,10 @@ export class Renderer {
     if (mode === 'faces') { p.end(); return; }
     p.setPipeline(ids ? pipes.sphereId : pipes.sphere);
     p.drawIndirect(culler.args, 16 * SEG.sphere);
+    if (ids && this.ice.count > 0) {
+      p.setPipeline(this.iceIdPipe());
+      p.drawIndirect(culler.args, 16 * SEG.boxIce);
+    }
     if (!ids) {
       if (this.overlayCount) {
         p.setPipeline(pipes.overlay);
@@ -798,6 +855,21 @@ export class Renderer {
       }
       p.setPipeline(pipes.sky);
       p.draw(3);
+      if (split) {
+        // The ice pass: the opaque scene is in `under` and in the samples; ice is depth-tested against it and writes depth.
+        p.end();
+        p = enc.beginRenderPass({
+          label: 'ice',
+          ...stamp('ice'),
+          colorAttachments: [{ view: this.msaa!.createView(), resolveTarget: this.hdr!.createView(), loadOp: 'load', storeOp: 'discard' }],
+          depthStencilAttachment: { view: this.depth!.createView(), depthLoadOp: 'load', depthStoreOp: 'discard' },
+        });
+        p.setBindGroup(0, this.bind!);
+        p.setBindGroup(1, real ? real.bind : this.emptyBind);
+        p.setBindGroup(2, this.ice.bind(f.metres ?? 1));
+        p.setPipeline(this.icePipe(real !== null));
+        p.drawIndirect(culler.args, 16 * SEG.boxIce);
+      }
       if (hall) {
         p.setPipeline(hall.pipes.glass);
         p.setVertexBuffer(0, hall.mesh.glass);
@@ -911,6 +983,7 @@ export class Renderer {
   destroy(): void {
     this.culler?.destroy();
     this.post.destroy();
+    this.ice.destroy();
     for (const t of [this.msaa, this.hdr, this.depth, this.idTex, this.idDepth, this.shadowTex, this.offscreen]) t?.destroy();
     this.frameBuf.destroy();
     this.fxBuf?.destroy();

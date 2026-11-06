@@ -7,7 +7,9 @@
 //   prepare   one thread per slot: RenderRecord (with the slot's FX scale
 //             applied) + a 0/1 flag per segment; a visible box is in boxFar
 //             instead of box when all of it lies lodDepth or more past the
-//             near plane (material level of detail: see Renderer)
+//             near plane (material level of detail: see Renderer), and in
+//             boxIce instead when its surface is ice (surface.ts; drawn in
+//             the ice pass after the opaque scene, at every distance)
 //   scan      exclusive scan over all segment flags (one Scanner, fixed n)
 //   scatter   flagged slot -> lists[seg * capacity + local index]
 //   args      one thread: drawIndirect arguments per segment
@@ -20,11 +22,12 @@
 import { Scanner } from '@tb/gpu';
 import { Body, RenderRecord, Shape, TIER, wgslStruct } from '@tb/schema';
 import { FX_WGSL } from './fx.ts';
+import { SURFACE_ICE } from './surface.ts';
 import type { BodySource } from './source.ts';
 
-export const SEGMENTS = ['box', 'sphere', 'boxShadow', 'sphereShadow', 'boxFar'] as const;
+export const SEGMENTS = ['box', 'sphere', 'boxShadow', 'sphereShadow', 'boxFar', 'boxIce'] as const;
 export type Segment = (typeof SEGMENTS)[number];
-export const SEG = { box: 0, sphere: 1, boxShadow: 2, sphereShadow: 3, boxFar: 4 } as const;
+export const SEG = { box: 0, sphere: 1, boxShadow: 2, sphereShadow: 3, boxFar: 4, boxIce: 5 } as const;
 const NSEG = SEGMENTS.length;
 
 /** CullFrame.lodDepth when no box is far: every visible box is listed in box. */
@@ -65,6 +68,7 @@ struct CullParams {
 @group(0) @binding(7) var<storage, read_write> lists: array<u32>;  // NSEG * capacity
 @group(0) @binding(8) var<storage, read_write> args: array<u32>;   // NSEG x drawIndirect
 @group(0) @binding(9) var<storage, read> fx: array<vec4u>;         // per slot, see fx.ts
+@group(0) @binding(10) var<storage, read> surfaces: array<u32>;    // per slot, see surface.ts
 
 fn inside(planes: array<vec4f, 6>, c: vec3f, r: f32) -> bool {
   var ok = true;
@@ -81,6 +85,7 @@ fn prepare(@builtin(global_invocation_id) id: vec3u) {
   var vis = false;
   var shadow = false;
   var far = false;
+  var ice = false;
   if (i < p.count) {
     let b = bodies[i];
     let tier = (b.flags >> 8u) & 0xffu;
@@ -110,13 +115,15 @@ fn prepare(@builtin(global_invocation_id) id: vec3u) {
       vis = shown && (p.noCull != 0u || inside(p.planes, rel, r));
       shadow = shown && (p.noCull != 0u || inside(p.lightPlanes, rel, r));
       far = dot(p.planes[4].xyz, rel) + p.planes[4].w - r >= p.lodDepth;
+      ice = (surfaces[i] & 0xfu) == ${SURFACE_ICE}u;
     }
   }
-  scan[i] = select(0u, 1u, vis && seg == 0u && !far);
+  scan[i] = select(0u, 1u, vis && seg == 0u && !far && !ice);
   scan[cap + i] = select(0u, 1u, vis && seg == 1u);
   scan[2u * cap + i] = select(0u, 1u, shadow && seg == 0u);
   scan[3u * cap + i] = select(0u, 1u, shadow && seg == 1u);
-  scan[4u * cap + i] = select(0u, 1u, vis && seg == 0u && far);
+  scan[4u * cap + i] = select(0u, 1u, vis && seg == 0u && far && !ice);
+  scan[5u * cap + i] = select(0u, 1u, vis && seg == 0u && ice);
   if (i == 0u) { scan[${NSEG}u * cap] = 0u; }
 }
 
@@ -185,14 +192,18 @@ export class Culler {
   /** NSEG x drawIndirect (vertexCount, instanceCount, firstVertex, firstInstance), in SEGMENTS order. */
   readonly args: GPUBuffer;
   private readonly scanBuf: GPUBuffer;
+  private readonly ownSurfaces: GPUBuffer | null;
   private readonly params: GPUBuffer;
   private readonly scanner: Scanner;
   private readonly binds: { prepare: GPUBindGroup; scatter: GPUBindGroup; args: GPUBindGroup };
   private readonly pipes: { prepare: GPUComputePipeline; scatter: GPUComputePipeline; args: GPUComputePipeline };
   readonly capacity: number;
 
-  /** fx: the renderer's per-slot FX records (FX_WORDS u32 each, at least capacity of them). */
-  constructor(private readonly device: GPUDevice, readonly source: BodySource, private readonly verts: { box: number; boxShadow?: number; sphere: number }, fx: GPUBuffer) {
+  /**
+   * fx: the renderer's per-slot FX records (FX_WORDS u32 each, at least capacity of them); surfaces:
+   * its per-slot surface words (surface.ts, at least capacity of them; none: every surface the default).
+   */
+  constructor(private readonly device: GPUDevice, readonly source: BodySource, private readonly verts: { box: number; boxShadow?: number; sphere: number }, fx: GPUBuffer, surfaces?: GPUBuffer) {
     const cap = (this.capacity = source.capacity);
     const usage = GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC;
     this.records = device.createBuffer({ size: Math.max(16, cap * RenderRecord.size), usage, label: 'render records' });
@@ -203,15 +214,17 @@ export class Culler {
     this.scanner = new Scanner(device, this.scanBuf, NSEG * cap + 1);
     const module = device.createShaderModule({ code: CULL_WGSL, label: 'cull' });
     // One layout per kernel ('auto', holding only what it uses): together
-    // they bind 9 storage buffers, over WebGPU's default limit of 8.
+    // they bind 10 storage buffers, over WebGPU's default limit of 8
+    // (prepare alone binds 8: the limit).
     const pipe = (entryPoint: string) => device.createComputePipeline({ layout: 'auto', compute: { module, entryPoint } });
     this.pipes = { prepare: pipe('prepare'), scatter: pipe('scatter'), args: pipe('writeArgs') };
-    const all = [this.params, source.bodies, source.prev, source.shapes, source.looks, this.records, this.scanBuf, this.lists, this.args, fx];
+    this.ownSurfaces = surfaces ? null : device.createBuffer({ size: Math.max(16, cap * 4), usage: GPUBufferUsage.STORAGE, label: 'no surfaces' });
+    const all = [this.params, source.bodies, source.prev, source.shapes, source.looks, this.records, this.scanBuf, this.lists, this.args, fx, surfaces ?? this.ownSurfaces!];
     const bind = (p: GPUComputePipeline, bindings: number[]) => device.createBindGroup({
       layout: p.getBindGroupLayout(0),
       entries: bindings.map((binding) => ({ binding, resource: { buffer: all[binding]! } })),
     });
-    this.binds = { prepare: bind(this.pipes.prepare, [0, 1, 2, 3, 4, 5, 6, 9]), scatter: bind(this.pipes.scatter, [0, 6, 7]), args: bind(this.pipes.args, [0, 6, 8]) };
+    this.binds = { prepare: bind(this.pipes.prepare, [0, 1, 2, 3, 4, 5, 6, 9, 10]), scatter: bind(this.pipes.scatter, [0, 6, 7]), args: bind(this.pipes.args, [0, 6, 8]) };
   }
 
   /** Record the cull into an open compute pass. */
@@ -245,6 +258,6 @@ export class Culler {
 
   destroy(): void {
     this.scanner.destroy();
-    for (const b of [this.records, this.lists, this.scanBuf, this.args, this.params]) b.destroy();
+    for (const b of [this.records, this.lists, this.scanBuf, this.args, this.params, this.ownSurfaces]) b?.destroy();
   }
 }

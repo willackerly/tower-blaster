@@ -19,7 +19,7 @@ import { checkLine, type EngineKind, GAME_LOOK, gameLevel, LEVEL_RULE_KEYS, type
 import { boundingRadius } from '@tb/geom';
 import { AVBD_ITERATIONS, compileLevel, findLevel, type LevelDef, PRESETTLE_STEPS, type RackItem, scenarioLevel, seriesOf, type Shot, writeShots } from '@tb/keystone';
 import { type AvbdParams, froudeParams } from '@tb/physics-ref';
-import { type BlastOptions, DEFAULT_BLASTS, parseBlastOptions, parseRealOptions, type RealOptions, writeBlastOptions, writeRealOptions } from '@tb/render';
+import { type BlastOptions, DEFAULT_BLASTS, DEFAULT_ICE, type IceParams, parseBlastOptions, parseIceOptions, parseRealOptions, type RealOptions, writeBlastOptions, writeIceOptions, writeRealOptions } from '@tb/render';
 import { bounceBody, bounceScene, buildScenario, SCENARIOS } from '@tb/scenarios';
 import { type CameraPose, DEFAULT_FRAMING, type Framing, FRAMING_LIMITS } from './camera.ts';
 import { decodeLevelParam, encodeLevelParam } from './level-file.ts';
@@ -60,6 +60,8 @@ export interface ViewerConfig {
   real: Partial<RealOptions>;
   /** A blast's fireball, shell and light (@tb/render blasts.ts; URL keys blast, blast.*; on by default): applied live, like the look. */
   blast: BlastOptions;
+  /** How ice is drawn (@tb/render ice.ts; URL keys ice.*): applied live, like the look. */
+  ice: IceParams;
   /** Collision sound (URL keys snd, snd.*; off by default): applied live, like the look. */
   sound: SoundOptions;
   /**
@@ -207,7 +209,7 @@ export const MAX_PRESETTLE = 6000;
 /** How much faster than the unit world a world at this scale moves (speeds, in cube units per second). */
 export const froudeSpeed = (scale: number) => 1 / Math.sqrt(scale);
 
-export const DEFAULT_CONFIG: ViewerConfig = { engine: 'avbd-gpu', level: null, customLevel: null, scenario: 'S4', params: { N: 2000, F: 4, H: 12 }, seed: 1, sleep: null, autofire: 0, presettle: 0, offscreen: false, look: 'candy', real: {}, blast: { on: true, params: DEFAULT_BLASTS }, loop: 'free', pipeline: true, maxSteps: 1, projectile: DEFAULT_PROJECTILE, scale: 1, substeps: 1, camera: null, view: DEFAULT_FRAMING, bounce: DEFAULT_BOUNCE, rules: 'sandbox', keystone: {}, feel: { ...DEFAULT_FEEL }, shots: null, rack: null, sound: DEFAULT_SOUND };
+export const DEFAULT_CONFIG: ViewerConfig = { engine: 'avbd-gpu', level: null, customLevel: null, scenario: 'S4', params: { N: 2000, F: 4, H: 12 }, seed: 1, sleep: null, autofire: 0, presettle: 0, offscreen: false, look: 'candy', real: {}, blast: { on: true, params: DEFAULT_BLASTS }, ice: DEFAULT_ICE, loop: 'free', pipeline: true, maxSteps: 1, projectile: DEFAULT_PROJECTILE, scale: 1, substeps: 1, camera: null, view: DEFAULT_FRAMING, bounce: DEFAULT_BOUNCE, rules: 'sandbox', keystone: {}, feel: { ...DEFAULT_FEEL }, shots: null, rack: null, sound: DEFAULT_SOUND };
 
 export function parseViewerConfig(search: string): ViewerConfig {
   const q = new URLSearchParams(search);
@@ -275,6 +277,7 @@ export function parseViewerConfig(search: string): ViewerConfig {
     look,
     real: parseRealOptions(q),
     blast: parseBlastOptions(q),
+    ice: parseIceOptions(q),
     sound: parseSoundOptions(q),
     loop,
     pipeline: pipeline === '1',
@@ -362,6 +365,7 @@ export function toSearch(c: ViewerConfig): string {
   if (c.look !== defaultLook(c.rules)) q.set('look', c.look);
   writeRealOptions(c.real, q);
   writeBlastOptions(c.blast, q);
+  writeIceOptions(c.ice, q);
   writeSoundOptions(c.sound, q);
   if (c.loop !== DEFAULT_CONFIG.loop) q.set('loop', c.loop);
   if (c.pipeline !== DEFAULT_CONFIG.pipeline) q.set('pipeline', c.pipeline ? '1' : '0');

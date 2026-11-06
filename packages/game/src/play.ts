@@ -7,7 +7,7 @@
 // its own elements; the viewer calls it for rules=keystone, with hooks for its
 // dev panels (docs/design/viewer-superset.md, step C).
 import { type BodyDesc, type EngineHealth, limitsHit, type PhysicsEngine, type Vec3 } from '@tb/engine-api';
-import { type RackItem, type CompiledLevel, compileLevel, Driver, type DriverCheckpoint, Duel, type DuelDef, DEFAULT_TURN_SECONDS, type Feedback, type Goal, goalMet, type Player, type Grade, gradeOf, type LevelDef, type LevelScore, type LotSheet, type PerStep, playShots, rapidDue, roundFacts, runSession, selectGroups, type Shot, snapshotHash, TIER_NAMES } from '@tb/keystone';
+import { type RackItem, type CompiledLevel, compileLevel, crackSeed, Driver, type DriverCheckpoint, Duel, type DuelDef, DEFAULT_TURN_SECONDS, type Feedback, type Goal, goalMet, type Player, type Grade, gradeOf, type LevelDef, type LevelScore, type LotSheet, type PerStep, playShots, rapidDue, roundFacts, runSession, selectGroups, type Shot, isIcePiece, snapshotHash, TIER_NAMES } from '@tb/keystone';
 import { clampPitch, eyeOf, type Orbit, rayThrough, viewProj } from '@tb/render/camera';
 import type { FxOptions, PixelStats, Renderer, SnapshotSource } from '@tb/render';
 import type { HostStats } from '@tb/audio';
@@ -166,6 +166,8 @@ export interface GameHandle {
   limitsHit: string[];
   /** The collision sound (off until the first click or key; 'off' for good under keystone.sound=synth). */
   sound(): SoundState;
+  /** The renderer's ice slots (@tb/render IcePass.count) and the crack level drawn on each slot asked for: what the page paints as ice. */
+  ice(slots?: number[]): { count: number; cracks: number[] };
   /** The level's lot sheet as shown (KeystoneEnv.lotSheet): each goal met as of the last settle, final once the round is over. */
   goals: GoalLine[];
   /** The grade the round reached on the level's cast cloud as of the last settle, or null (below E, or no grades). */
@@ -224,6 +226,7 @@ export function newGameHandle(): GameHandle {
     fire: () => false, bank: () => false, freeze: () => false, fireOpener: () => false, setMuted: () => {}, maxDpr: 2, aim: () => null, reach: null, select: () => false, load: async () => {}, retry: async () => {}, undo: async () => false, undone: null, undoMemory: () => ({ marks: 0, bytes: 0 }), capture: async () => null, firedLooks: () => [], marks: () => [], refreshMarks: () => {},
     state: none, line: () => [], replay: async () => none(), health: async () => null, pairsPerBody: 0, limitsHit: [], goals: [], grade: null, duel: null,
     sound: () => ({ mode: 'collapse', status: 'off', error: '', posted: 0, stats: null }),
+    ice: () => ({ count: 0, cracks: [] }),
   };
 }
 
@@ -407,6 +410,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
   let muted = env.muted ?? false;
   const soundMode = env.sound ?? 'collapse';
   const collapse = soundMode !== 'synth' ? new CollapseSound(env.impactsDb ?? 0, soundSetOf(soundMode)) : null;
+  handle.ice = (slots = []) => ({ count: renderer.ice.count, cracks: slots.map((i) => (renderer.surfaceOf(i).kind === 'ice' ? renderer.surfaceOf(i).crack : -1)) });
   handle.sound = () => ({ mode: soundMode, status: collapse?.status ?? 'off', error: collapse?.error ?? '', posted: collapse?.posted ?? 0, stats: collapse?.stats ?? null });
   const voices: Voice[] = [];
 
@@ -443,6 +447,8 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     const bomb = item === 'bomb' || item.startsWith('w-');
     const fx = bomb ? BOMB_FX : ballFx(item as RackItem, feel.balls);
     for (let i = from; i < descs.length; i++) {
+      // A shattered ice block's pieces are drawn as ice (the 'shatter' feedback paints them), never as bombs.
+      if (isIcePiece(descs[i]!)) { firedLooks[i - c.meta.n] = null; continue; }
       const look = fx ? { fx, fuse: bomb } : null;
       firedLooks[i - c.meta.n] = look;
       paintFired(i, look);
@@ -450,6 +456,11 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     }
   };
   let fxSlots = 0;
+  /** Every ice body drawn as ice with its crack as the driver has it (a load, an undo); from then on the feedback keeps it. */
+  const paintIce = () => {
+    renderer.clearSurfaces();
+    for (const s of driver.iceSurfaces) renderer.setSurface(s.body, { kind: 'ice', crack: s.level, at: s.at, seed: s.seed });
+  };
   /** What the follow camera frames at most: the lot and a margin, up to half again the structure's height. */
   let followClip = new Float64Array(6);
   /** A physics step is in flight (physics-loop.ts): the session may already read aiming, but the step is not done. */
@@ -586,6 +597,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     regrowBuf = regrowScales(c, Infinity, new Float32Array(c.meta.n));
     renderer.setFx(0, structureTints(c), regrowBuf, false);
     applyMarks();
+    paintIce();
     const s = driver.session;
     s.crownLive.forEach((down, k) => { if (down) renderer.setFx(c.meta.crowns[k]!, { tint: TINT.crown, emissive: 0.9 }); });
     s.heritageBroken.forEach((cracked, k) => { if (cracked) renderer.setFx(c.meta.heritage[k]!, { tint: TINT.heritage, emissive: 1 }); });
@@ -784,6 +796,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     if (duel) duel.owned.forEach((idx, k) => { for (const b of idx) tints[b] = tintWordOf(duel!.def.sides[k]!.ink, c.meta.role[b] === 1 ? CROWN_GLOW : 0); });
     renderer.setFx(0, tints, regrowBuf, !line);
     applyMarks();
+    paintIce();
     if (line) {
       const s = driver.session;
       s.crownLive.forEach((down, k) => { if (down) renderer.setFx(c.meta.crowns[k]!, { tint: TINT.crown, emissive: 0.9 }); });
@@ -958,6 +971,16 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
           }
           juice.shake(Math.min(1, 0.15 * (f.radius / c.frame.unit)));
           juice.kick(0.08);
+          break;
+        }
+        case 'iceCrack':
+          renderer.setSurface(f.body, { kind: 'ice', crack: f.level, at: f.at, seed: f.seed });
+          break;
+        case 'shatter': {
+          // The block is gone (its tombstone is not drawn) and its pieces are ice. No burst: the renderer's
+          // chips are stone-coloured sparks, which read as metal on ice (frost powder is a follow-up).
+          for (const p of f.pieces) renderer.setSurface(p, { kind: 'ice', seed: crackSeed(p) });
+          juice.shake(0.12);
           break;
         }
         case 'slowMo': if (feel.slowMo && !fastHeld && !handle.fast) pacer.slowMo(); break;

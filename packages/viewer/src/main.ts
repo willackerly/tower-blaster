@@ -208,6 +208,7 @@ async function main() {
   renderer.look = lookByName(config.look, config.real);
   renderer.toggles.blasts = config.blast.on;
   renderer.blasts.config = { ...config.blast.params };
+  renderer.ice.params = { ...config.ice };
   const sound = new ViewerSound();
   handle.sound = () => ({ status: sound.status, error: sound.error, posted: sound.posted, stats: sound.stats });
   renderer.device.lost.then((info) => fail(`GPU device lost: ${info.message}`));

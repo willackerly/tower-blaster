@@ -9,6 +9,7 @@ import { type Arm, levelArm, rackArms } from './arsenal.ts';
 import { isRackItem, itemRef, type LevelWeapon, RACK_ITEM_NAMES, rackBodies, type RackItem, speedOf, WEAPON_KEY, weaponOf } from './rack.ts';
 import { type ScenarioPart, scenarioBodies, scenarioKey } from './scenario-part.ts';
 import { ammoBody, type LauncherDef, launcherPos, type Shot, type ShotFrame } from './shots.ts';
+import { checkIce, type IceBlock, IceBreaker, iceOf } from './ice.ts';
 
 /** A course (layer) override inside a block: change material or role, or leave cells out. */
 export interface CourseOverride {
@@ -157,6 +158,8 @@ export interface PhysicsBlock {
   pairsPerBody?: number;
   /** Steps run after init before play starts. */
   presettle?: number;
+  /** How the level's ice cracks and shatters (ice.ts; absent fields take ICE_DEFAULTS). Only levels with ice bodies use it. */
+  ice?: IceBlock;
 }
 
 /**
@@ -185,6 +188,7 @@ export function checkPhysics(p: PhysicsBlock, where = 'physics'): void {
   int(p.presettle, 'presettle', 0, 6000);
   if (p.gapSlop !== undefined && !(Number.isFinite(p.gapSlop) && p.gapSlop >= 0 && p.gapSlop <= 0.01)) throw new Error(`${where}.gapSlop must be from 0 to 0.01 m: ${p.gapSlop}`);
   if (p.bounce !== undefined && p.bounce !== null && !(p.bounce >= 0 && p.bounce <= 1)) throw new Error(`${where}.bounce must be from 0 to 1, or null for off: ${p.bounce}`);
+  if (p.ice !== undefined) checkIce(p.ice, `${where}.ice`);
 }
 
 /** The physics block with fields at their defaults left out (absent when nothing is left): what the hash sees. */
@@ -367,6 +371,9 @@ export function compileLevel(def: LevelDef): CompiledLevel {
   if (settleRule === (scoringOf(def) === 'outcome' ? 'v2' : 'v1')) delete geometry.settle; else geometry.settle = settleRule;
   const physics = physicsKey(geometry.physics);
   if (physics) geometry.physics = physics; else delete geometry.physics;
+  // Ice rules join the hash written out whenever the level has ice (as a defaulted weapon does), so retuning
+  // ICE_DEFAULTS drops stars cast under the old ones; levels without ice hash as before, whatever physics.ice says.
+  if (mats.includes(materialId('ice'))) geometry.physics = { ...geometry.physics, ice: iceOf(def.physics?.ice) };
   geometry.parts = geometry.parts.map((pt) => (pt.kind === 'scenario' ? scenarioKey(pt) : pt));
   // A w- item the level gives no weapon of its own plays the built-in (rack.ts weaponOf): the built-in joins the
   // hash as if written out, so retuning one drops stars cast with it. Levels whose rack has none hash as before.
@@ -481,7 +488,10 @@ export function validateLevel(c: CompiledLevel, opts: ValidateOptions = {}): Iss
   const engine = opts.engine ?? defaultEngineOf(def), max = ENGINE_MAX_BODIES[engine];
   if (m.n === 0) issues.push({ code: 'empty', message: 'level has no bodies' });
   if (m.n > max) issues.push({ code: 'count', message: `${m.n} bodies > ${max} (the ${engine} engine's budget)` });
-  else if (engine === 'rapier' && m.n + rackBodies(def.rack.filter(isRackItem), c.arms) > max) issues.push({ code: 'capacity', message: `${m.n} bodies + ${rackBodies(def.rack.filter(isRackItem), c.arms)} the rack can add > ${max} (the ${engine} engine's budget)` });
+  else if (engine === 'rapier' && m.n + rackBodies(def.rack.filter(isRackItem), c.arms) + IceBreaker.budget(c) > max) {
+    const ice = IceBreaker.budget(c);
+    issues.push({ code: 'capacity', message: `${m.n} bodies + ${rackBodies(def.rack.filter(isRackItem), c.arms)} the rack can add${ice ? ` + ${ice} ice pieces` : ''} > ${max} (the ${engine} engine's budget)` });
+  }
   const size = rackSizeProblem(def.rack);
   if (size || def.par < 1 || def.par > def.rack.length) issues.push({ code: 'rack', message: `rack of ${def.rack.length} with par ${def.par}: need 1 <= par <= rack, at most ${MAX_RACK} fired items and ${MAX_PULLS} pulls${size ? ` (${size})` : ''}` });
   const fz = def.freeze === undefined ? null : freezeProblem(def.freeze);
