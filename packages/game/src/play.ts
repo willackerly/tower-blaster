@@ -7,7 +7,7 @@
 // its own elements; the viewer calls it for rules=keystone, with hooks for its
 // dev panels (docs/design/viewer-superset.md, step C).
 import { type BodyDesc, type EngineHealth, limitsHit, type PhysicsEngine, type Vec3 } from '@tb/engine-api';
-import { type RackItem, type CompiledLevel, compileLevel, crackSeed, Driver, type DriverCheckpoint, Duel, type DuelDef, DEFAULT_TURN_SECONDS, type Feedback, type Footprint, type Goal, goalMet, type Player, type Grade, gradeOf, type LevelDef, type LevelScore, type LotSheet, type PerStep, playShots, rapidDue, roundFacts, runSession, selectFootprints, selectGroups, type Shot, isIcePiece, snapshotHash, TIER_NAMES } from '@tb/keystone';
+import { type RackItem, type CompiledLevel, compileLevel, Driver, type DriverCheckpoint, Duel, type DuelDef, DEFAULT_TURN_SECONDS, type Feedback, type Footprint, type Goal, goalMet, type Player, type Grade, gradeOf, type LevelDef, type LevelScore, type LotSheet, type PerStep, playShots, rapidDue, roundFacts, runSession, selectFootprints, selectGroups, type Shot, isIcePiece, snapshotHash, TIER_NAMES } from '@tb/keystone';
 import { clampPitch, eyeOf, type Orbit, rayThrough, viewProj } from '@tb/render/camera';
 import type { FxOptions, PixelStats, Renderer, SnapshotSource } from '@tb/render';
 import type { HostStats } from '@tb/audio';
@@ -1022,7 +1022,8 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
         case 'shatter': {
           // The block is gone (its tombstone is not drawn) and its pieces are ice. No burst: the renderer's
           // chips are stone-coloured sparks, which read as metal on ice (frost powder is a follow-up).
-          for (const p of f.pieces) renderer.setSurface(p, { kind: 'ice', seed: crackSeed(p) });
+          // Fragments (ice.ts) start crushed at the corner that faced the block's centre.
+          for (const k of f.cracks) renderer.setSurface(k.body, { kind: 'ice', crack: k.level, at: k.at, seed: k.seed });
           juice.shake(0.12);
           break;
         }

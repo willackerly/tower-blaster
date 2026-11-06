@@ -10,7 +10,7 @@ import { Body, readStruct, Shape, TIER } from '@tb/schema';
 import { RapierHost } from '@tb/adapter-rapier';
 import { TieredEngine } from '@tb/lattice';
 import { ADAPT_MAX, ADAPT_REF, adaptedExposure, hallArch, hallScaled, hallUniforms, HAZY_DAY, OLYMPIA, linearToSrgb, lookByName, lookUniforms, parseRealOptions, REAL_DEFAULTS, REAL_KNOBS, REAL_POLISH_OFF, realLook, writeRealOptions, CLEAR_DAY, MIE_H, mieExtinction, multiTable, normalize, OZONE, OZONE_WIDTH, RAYLEIGH, RAYLEIGH_H, skyRadiance, skyViewDir, skyViewUv, sunAtGround, sunDiscRadiance, transmittance, transmittanceHMu, transmittanceTable, transmittanceUv } from '../src/index.ts';
-import { agx, aoFootReference, debrisClass, debrisSpawnReference, debrisWeight, newDebrisReference, chipCount, chipStepReference, CHIP_POOL, CHIPS_PER_EVENT, debrisRings, DEFAULT_DEBRIS, DEFAULT_SPARKS, dustCount, dustStepReference, DUST_PER_EVENT, DUST_POOL, bevelNormal, type V3, CANDY_NIGHT, CTL, HOT_FULL, MAX_EVENTS, SPAWN_BUDGET, FX_WORDS, packFx, tintWord, unpackFx, frustumPlanes, linearToOklab, listMatches, oklabToLinear, srgbToLinear, lookAt, lookOf, lookRange, MATERIAL, multiply, SEG, packBodies, changedRanges, drawnTier, packShapes, paletteOf, perspective, unpackLook } from '../src/index.ts';
+import { agx, aoFootReference, debrisClass, debrisSpawnReference, debrisWeight, newDebrisReference, chipCount, chipStepReference, CHIP_POOL, CHIPS_PER_EVENT, debrisRings, DEFAULT_DEBRIS, DEFAULT_SPARKS, dustCount, dustStepReference, DUST_PER_EVENT, DUST_POOL, bevelNormal, type V3, CANDY_NIGHT, CTL, HOT_FULL, MAX_EVENTS, SPAWN_BUDGET, FX_WORDS, packFx, tintWord, unpackFx, frustumPlanes, linearToOklab, listMatches, oklabToLinear, srgbToLinear, lookAt, lookOf, lookRange, MATERIAL, multiply, SEG, SEGMENTS, packBodies, changedRanges, drawnTier, packShapes, paletteOf, perspective, unpackLook } from '../src/index.ts';
 import { gpu, call, type D } from './harness.ts';
 
 describe('looks', () => {
@@ -1058,7 +1058,7 @@ describe('GPU cull and compaction', () => {
     const out = await call('cull', cases);
     for (const r of out) {
       expect(r.error, `seed ${r.seed}`).toBeNull();
-      expect(r.lists, `seed ${r.seed}`).toEqual([null, null, null, null, null, null]);
+      expect(r.lists, `seed ${r.seed}`).toEqual(SEGMENTS.map(() => null));
       expect(r.argsOk).toBe(true);
       expect(r.recordErr, `seed ${r.seed}`).toBeLessThan(2e-5);
     }
@@ -1072,8 +1072,12 @@ describe('GPU cull and compaction', () => {
     expect(out[7]!.counts[SEG.boxFar]).toBeGreaterThan(50);
     expect(out[8]!.counts[SEG.box]).toBe(0);
     expect(out[8]!.counts[SEG.boxFar]).toBeGreaterThan(10);
-    // boxIce: empty without ice; with it, ice boxes leave box and boxFar for boxIce, their shadows stay.
+    // boxIce: empty without ice; with it, ice boxes leave box and boxFar for boxIce, and their shadows leave
+    // boxShadow for boxIceShadow (the screen-door caster).
     for (const r of out.slice(0, 9)) expect(r.counts[SEG.boxIce], `seed ${r.seed}`).toBe(0);
+    for (const r of out.slice(0, 9)) expect(r.counts[SEG.boxIceShadow], `seed ${r.seed}`).toBe(0);
+    expect(out[9]!.counts[SEG.boxIceShadow], JSON.stringify(out[9]!.counts)).toBeGreaterThan(20);
+    expect(out[9]!.counts[SEG.boxShadow], JSON.stringify(out[9]!.counts)).toBeGreaterThan(20);
     expect(out[9]!.counts[SEG.boxIce], JSON.stringify(out[9]!.counts)).toBeGreaterThan(20);
     expect(out[9]!.counts[SEG.box], JSON.stringify(out[9]!.counts)).toBeGreaterThan(20);
     expect(out[9]!.counts[SEG.boxFar], JSON.stringify(out[9]!.counts)).toBeGreaterThan(20);
@@ -1355,8 +1359,8 @@ describe('drawing', () => {
     expect(r.prevEqual).toBe(true); // beforeStep() copied the state into prev
     // Uniforms only (frame, cull, spark and light params, spark control reset): measured 1602 B (the debris params and counters added 24, the
     // hall's 2 vec4 in the frame 48 with padding; realism step 7 48: the frame's ballSteel and the composite's tone map and grain,
-    // measured 1698). Any per-body upload is 41 x Body.size more.
-    expect(r.bytesPerFrame).toBeLessThanOrEqual(1700);
-    expect(1700).toBeLessThan(41 * Body.size);
+    // measured 1698; the frame's iceShadow 16, measured 1714). Any per-body upload is 41 x Body.size more.
+    expect(r.bytesPerFrame).toBeLessThanOrEqual(1716);
+    expect(1716).toBeLessThan(41 * Body.size);
   });
 });

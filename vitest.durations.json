@@ -98,7 +98,7 @@
   "packages/keystone-lab/test/fork.test.ts": 64.6,
   "packages/keystone-lab/test/freeze.test.ts": 1.1,
   "packages/keystone-lab/test/goal-lab.test.ts": 13.5,
-  "packages/keystone-lab/test/ice.test.ts": 4.5,
+  "packages/keystone-lab/test/ice.test.ts": 9.0,
   "packages/keystone-lab/test/lot-sheets-L2.test.ts": 188.8,
   "packages/keystone-lab/test/lot-sheets.test.ts": 112,
   "packages/keystone-lab/test/page-retry.test.ts": 0,
@@ -292,5 +292,6 @@
   "packages/weapons/test/runtime.test.ts": 2.7,
   "packages/weapons/test/spec.test.ts": 0.1,
   "packages/weapons/test/yield.test.ts": 0.1,
-  "packages/game/test/coats-e2e.test.ts": 60.0
+  "packages/game/test/coats-e2e.test.ts": 60.0,
+  "packages/game/test/ice-pale-e2e.test.ts": 75.0
 }

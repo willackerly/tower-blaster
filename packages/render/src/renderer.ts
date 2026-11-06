@@ -130,7 +130,7 @@ export interface RendererOptions {
   format?: GPUTextureFormat;
 }
 
-type PipeName = 'box' | 'sphere' | 'ground' | 'sky' | 'overlay' | 'spark' | 'trail' | 'boxShadow' | 'sphereShadow' | 'boxId' | 'sphereId';
+type PipeName = 'box' | 'sphere' | 'ground' | 'sky' | 'overlay' | 'spark' | 'trail' | 'boxShadow' | 'sphereShadow' | 'boxIceShadow' | 'boxId' | 'sphereId';
 /** The pipelines whose shading differs for a look with an atmosphere (sceneWgsl(true)). */
 type RealPipe = 'box' | 'boxFar' | 'sphere' | 'ground' | 'sky' | 'overlay' | 'chip' | 'dust';
 
@@ -363,9 +363,10 @@ export class Renderer {
         : { format: 'depth24plus', depthWriteEnabled: true, depthCompare: 'less' },
       multisample: { count: opts.samples ?? SAMPLES },
     });
-    const depthOnly = (vs: string, seg: number): GPURenderPipeline => device.createRenderPipeline({
+    const depthOnly = (vs: string, seg: number, fs?: string): GPURenderPipeline => device.createRenderPipeline({
       layout: shadowPl,
       vertex: { module, entryPoint: vs, constants: { SEG: seg, ...(vs === 'vsBoxShadow' ? { FAN: shadowFan ? 1 : 0 } : {}) } },
+      ...(fs ? { fragment: { module, entryPoint: fs, targets: [] } } : {}),
       // Casters are the light-facing faces: the fan around the corner
       // nearest the light, or the cube with faces turned away culled. Both
       // write the same nearest depth.
@@ -408,6 +409,7 @@ export class Renderer {
       }),
       boxShadow: depthOnly('vsBoxShadow', SEG.boxShadow),
       sphereShadow: depthOnly('vsSphereShadow', SEG.sphereShadow),
+      boxIceShadow: depthOnly('vsBoxShadow', SEG.boxIceShadow, 'fsIceShadow'),
       boxId: color('vsBox', 'fsId', 'back', SEG.box, { format: 'r32uint', samples: 1 }),
       sphereId: color('vsSphere', 'fsId', 'back', SEG.sphere, { format: 'r32uint', samples: 1 }),
     };
@@ -743,6 +745,7 @@ export class Renderer {
       heat: this.toggles.heat && this.look.effects !== false ? 1 : 0, viewport: this.viewport(), dt: f.dt ?? 0, trailHead: (this.lights.nextFrame + TRAIL - 1) % TRAIL,
       ...this.atmosphereUniforms(f, sun, fit),
       ...hall,
+      iceShadow: [this.ice.params.shadow, 0, 0, 0],
     });
     this.device.queue.writeBuffer(this.frameBuf, 0, this.frameData);
     return { viewProj, lightViewProj, eye: f.eye, alpha: f.alpha ?? 1, noCull: f.noCull ?? false };
@@ -824,6 +827,11 @@ export class Renderer {
       sp.drawIndirect(culler.args, 16 * SEG.boxShadow);
       sp.setPipeline(this.pipes.sphereShadow);
       sp.drawIndirect(culler.args, 16 * SEG.sphereShadow);
+      // Ice casts a lighter shadow (a screen-door caster, fsIceShadow); none drawn while there is no ice.
+      if (this.ice.count > 0) {
+        sp.setPipeline(this.pipes.boxIceShadow);
+        sp.drawIndirect(culler.args, 16 * SEG.boxIceShadow);
+      }
       sp.end();
     }
     // Ice (ice-pass.ts): while any slot is ice, the opaque scene resolves into `under` and keeps

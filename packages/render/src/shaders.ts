@@ -67,6 +67,7 @@ export const Frame = defineStruct('Frame', [
   ['hallLook', 'vec4f', 'real look, hall: 1 while the eye is inside it, 2 outside it with its exterior on (else it is not drawn), metres per world unit, glass milkiness, iron grey'],
   ['hallShade', 'vec4f', 'real look, hall: glazed share of the vault, web lattice bar width (web panels), balustrade height (m), unused'],
   ['ballSteel', 'vec4f', 'real look: the look\'s own ball as steel, 0 (clear-coated, as before) to 1 (bare metal), its GGX alpha, unused, unused'],
+  ['iceShadow', 'vec4f', 'x: the share of the sun an ice caster lets through its shadow (ice.ts IceParams.shadow), unused, unused, unused'],
 ], 'Per-frame uniforms of the scene pass.');
 
 /** Linear specular colour (F0) of steel (iron's, Real-Time Rendering 4th ed. table 9.2). */
@@ -1047,6 +1048,18 @@ fn place(r: RenderRecord, corner: vec3f) -> VOut {
 @vertex fn vsBoxShadow(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> @builtin(position) vec4f {
   let r = record(ii);
   return fr.lightViewProj * vec4f(r.pos + qrot(r.rot, boxCorner(vi, r, fr.sun) * r.half), 1.0);
+}
+
+// An ice box's shadow caster (cull.ts SEG.boxIceShadow): a screen door. An ordered 3 x 3 pattern in shadow-map
+// texels leaves fr.iceShadow.x of them open (in ninths), and the receivers' filter averages the holes into a
+// lighter shadow. Period 3, not 4: every 3 x 3 window of the receivers' taps (bilinear ones too) holds each of
+// the nine cells exactly once, so the shadow is even; a 4 x 4 pattern under 3 x 3 taps showed moire rings.
+// One depth layer, no colour: the opaque casters keep their depth-only pipeline.
+@fragment fn fsIceShadow(@builtin(position) p: vec4f) {
+  let x = u32(p.x) % 3u;
+  let y = u32(p.y) % 3u;
+  let order = array<u32, 9>(0u, 7u, 3u, 6u, 5u, 2u, 4u, 1u, 8u);
+  if ((f32(order[y * 3u + x]) + 0.5) / 9.0 < fr.iceShadow.x) { discard; }
 }
 
 @vertex fn vsSphereShadow(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> @builtin(position) vec4f {
