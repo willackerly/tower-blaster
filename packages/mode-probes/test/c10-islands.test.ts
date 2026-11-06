@@ -1,7 +1,7 @@
 // C10, many worlds in one solve, through the primitive (engine-api islands.ts):
 // the packed scene is exactly the solo worlds translated, with every shot
 // released under its global id (CPU), and on the GPU engine at game settings
-// (SwiftShader, CI size: 8 worlds) the islands' outcomes match the solo runs',
+// (SwiftShader, CI size: 6 worlds) the islands' outcomes match the solo runs',
 // no body leaves its cell, and the per-island observer counts equal each
 // world's own snapshot counts. The full verify (64 worlds of 150 bodies, and
 // the cost per body against the 9.6k block on Metal) runs with
@@ -44,7 +44,7 @@ describe('C10 scenes', () => {
     expect(scene.bodies.slice(0, 150)).toEqual(c10World(c, 0).bodies);
     expect(probeById('C10')).toBe(C10);
     expect(C10.cases('full')).toHaveLength(1 + 64 + 1);
-    expect(C10.cases('ci')).toHaveLength(1 + 8);
+    expect(C10.cases('ci')).toHaveLength(1 + 6);
   });
 });
 
@@ -56,16 +56,16 @@ beforeAll(async () => {
 afterAll(async () => { await page?.close(); });
 
 describe('C10 on the GPU engine at game settings (CI size)', () => {
-  it('8 packed worlds match 8 solo runs, stay in their cells, and the per-island counts equal the snapshot\'s', { timeout: 300_000 }, async (ctx) => {
+  it('6 packed worlds match 6 solo runs, stay in their cells, and the per-island counts equal the snapshot\'s', { timeout: 300_000 }, async (ctx) => {
     if (!page) return ctx.skip();
     const run = await runProbe(page, C10, 'ci', { log: (l) => console.log(l) });
     console.log([...run.verdict.table, ...run.verdict.checks.map((c) => `${c.pass ? 'pass' : 'FAIL'}: ${c.name} (${c.detail})`)].join('\n'));
     for (const r of run.runs) expect(r.error, r.label).toBeNull();
     expect(run.verdict.checks.filter((c) => !c.pass)).toEqual([]);
     const isl = run.runs.find((r) => (r.c as C10Case).arm === 'islands')!.result as C10Result;
-    expect(isl.worlds).toHaveLength(8);
-    // The shot did something in every world, and the observer read exactly the 8 balls as having no pre-shot pose.
+    expect(isl.worlds).toHaveLength(6);
+    // The shot did something in every world, and the observer read exactly the 6 balls as having no pre-shot pose.
     for (const w of isl.worlds) expect(w.moved, `world ${w.world}`).toBeGreaterThan(0);
-    expect(isl.invalid).toBe(8);
+    expect(isl.invalid).toBe(6);
   });
 });

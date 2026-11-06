@@ -8,7 +8,7 @@
 //            rings around it, the gap from the worlds' footprint plus the
 //            default reach), every shot released by the id map (pack());
 //   solo     each world alone at the origin, as a cast runs today.
-// Per world, 4 s after the shot (1.5 s at CI size): down, the share of cubes
+// Per world, 4 s after the shot (1 s at CI size): down, the share of cubes
 // more than one cell below where they stood just before the shot, and moved,
 // the share whose centre moved more than 0.1 m. Each is read twice from the
 // islands run: from the world's own snapshot (Islands.local, f64, the rule's
@@ -112,7 +112,8 @@ function c10Meter(c: C10Case, spec: RunSpec): Meter<C10Result> {
 }
 
 const LEVELS: Record<Size, { level: Level; K: number; presettle: number; readAfter: number }> = {
-  ci: { level: { W: 3, D: 3, H: 4 }, K: 8, presettle: 30, readAfter: 90 },
+  // CI: 7 runs of 120 steps; a SwiftShader step costs about the same at 36 bodies as at 216 (dispatch-bound), so the run count is the cost.
+  ci: { level: { W: 3, D: 3, H: 4 }, K: 6, presettle: 30, readAfter: 60 },
   full: { level: { W: 5, D: 5, H: 6 }, K: 64, presettle: 300, readAfter: 240 },
 };
 

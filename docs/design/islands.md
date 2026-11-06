@@ -74,6 +74,6 @@ const { counts } = await obs.result(step);  // counts[question][island]
 
 ## Measured
 
-CI size on SwiftShader (8 worlds of a 3 x 3 x 4 block struck by X8's wrecking ball, 1.5 s after the shot; `c10-islands.test.ts`): the shot moved every block (moved 0.87 to 0.88 on average, down 0.41); KS p = 1.0 on down and 0.93 on moved; 0 leaks at a 58 m gap; per-island observer counts equal each world's snapshot counts in 8 of 8 worlds; island 0 ended 6 mm from solo world 0 with the same down and moved.
+CI size on SwiftShader (6 worlds of a 3 x 3 x 4 block struck by X8's wrecking ball, 1 s after the shot; `c10-islands.test.ts`; 6 rather than 8 to keep the file well under 300 s on a loaded CI runner): the shot moved every block (moved 0.88 on average, down 0.29 to 0.30); KS p = 1.0 on down and moved; 0 leaks at a 58 m gap; per-island observer counts equal each world's snapshot counts in 6 of 6 worlds; island 0 ended 3 cm from solo world 0 (down 0.31 vs 0.33, moved equal). An earlier 8-world run 1.5 s after the shot gave KS p 1.0 and 0.93.
 
 Full size (64 worlds of 150 bodies, 4 s after the shot): see the results section below.
