@@ -49,7 +49,7 @@ describe('level files', () => {
     expect(bad({ iterations: 0 })).toThrow(/level.physics.iterations must be a whole number from 1 to 200/);
     expect(bad({ bounce: 'yes' })).toThrow(/level.physics.bounce must be a number/);
     expect(bad({ substeps: 2 })).toThrow(/level.physics: unknown key substeps/);
-    expect(() => parseLevelDef({ ...structuredClone(L2), settle: 'v9' })).toThrow(/level.settle must be v1 or v2 or v3: v9/);
+    expect(() => parseLevelDef({ ...structuredClone(L2), settle: 'v9' })).toThrow(/level.settle must be v1 or v2 or v3 or v4: v9/);
   });
 
   it('reads back a freeze budget and a hold objective (Undercut, Bullet Time), and refuses a budget out of range', () => {
