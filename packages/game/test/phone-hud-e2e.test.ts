@@ -24,7 +24,7 @@ type Box = { x: number; y: number; w: number; h: number };
 /** The docked HUD's two boxes, the hint's, and the viewport. */
 const hudBoxes = (page: Page) => page.evaluate(() => {
   const box = (sel: string) => { const e = document.querySelector(sel); if (!e || !e.getClientRects().length) return null; const r = e.getBoundingClientRect(); return { x: r.left, y: r.top, w: r.width, h: r.height }; };
-  return { st: box('.kg-hud .st'), tray: box('.kg-hud .tray'), hint: box('.kg-hud .hint'), help: box('#help'), vw: innerWidth, vh: innerHeight, dock: document.querySelector('.kg-hud')!.classList.contains('kg-dock') };
+  return { st: box('.kg-hud .st'), tray: box('.kg-hud .tray'), hint: box('.kg-hud .tch-hint'), help: box('#help'), vw: innerWidth, vh: innerHeight, dock: document.querySelector('.kg-hud')!.classList.contains('kg-dock') };
 });
 
 /** The share of the screen the docked HUD covers: upright, its boxes' heights over the screen's; sideways, the rail's width over the screen's. */

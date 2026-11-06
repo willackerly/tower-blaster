@@ -44,10 +44,10 @@ describe('the HUD keeps one shape through a round (PT3)', () => {
     const before = hudHtml({ ...base, strokes: 0, opener: true });
     const after = hudHtml({ ...base, strokes: 1, collapse: 0.17, canBank: true });
     // The hint and the slot's note (hidden when docked: its desktop and touch spans) aside.
-    const drop = (xs: string[]) => xs.filter((x) => !x.startsWith('div.hint') && x !== 'span.kg-desk' && x !== 'span.kg-tch').map((x) => x.replace(/\[(opener|bank|freeze)\]$/, '[slot]').replace(/^button\.(opener|bank|freeze)/, 'button.slotbtn'));
+    const drop = (xs: string[]) => xs.filter((x) => !x.startsWith('div.tch-hint') && x !== 'span.kg-desk' && x !== 'span.kg-tch').map((x) => x.replace(/\[(opener|bank|freeze)\]$/, '[slot]').replace(/^button\.(opener|bank|freeze)/, 'button.slotbtn'));
     expect(drop(shape(after))).toEqual(drop(shape(before)));
-    expect(before).toMatch(/class="hint"/);
-    expect(after).not.toMatch(/class="hint"/);
+    expect(before).toMatch(/class="tch-hint"/);
+    expect(after).not.toMatch(/class="tch-hint"/);
     // Nothing to offer: the slot keeps its place, empty.
     const idle = hudHtml({ ...base, strokes: 1, collapse: 0.17 });
     expect(idle).toMatch(/class="row slot-row idle"><span class="slot empty"><\/span>/);

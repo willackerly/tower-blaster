@@ -222,7 +222,7 @@ export function hudHtml(s: HudState, sheet = ''): string {
     ${sheet}
     </div><div class="tray">
     <div class="chips">${chips}</div>
-    ${ctl}<div class="above">${reach}${s.strokes > 0 ? '' : `<div class="hint">${TOUCH_HELP}</div>`}</div>
+    ${ctl}<div class="above">${reach}${s.strokes > 0 ? '' : `<div class="tch-hint">${TOUCH_HELP}</div>`}</div>
     ${slot}
     </div>`;
 }

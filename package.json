@@ -35,6 +35,7 @@
     "playtest:deploy": "tsx packages/playtest/src/deploy.ts",
     "playtest:testers": "tsx packages/playtest/src/testers.ts",
     "playtest:smoke": "tsx packages/playtest/src/smoke.ts",
+    "playtest:agent": "tsx packages/playtest/src/agent/run.ts",
     "probe:modes": "tsx packages/mode-probes/src/cli.ts"
   },
   "devDependencies": {

@@ -46,7 +46,7 @@ export const DOCK_CSS = `
     body.kg-touch .kg-dock .acts button { margin: 0; }
     body.kg-touch .kg-dock .above { position: absolute; left: 0; right: 0; bottom: 100%; margin-bottom: 6px; display: flex; flex-direction: column; align-items: flex-start; gap: 4px; pointer-events: none; }
     body.kg-touch .kg-dock .above > * { background: rgba(17, 20, 28, 0.8); border-radius: 6px; padding: 4px 8px; }
-    body.kg-touch .kg-dock .hint { display: block; color: #c3cad8; font-size: 12px; }
+    body.kg-touch .kg-dock .tch-hint { display: block; color: #c3cad8; font-size: 12px; }
     body.kg-touch .kg-dock ~ .kg-help { display: none; }
   }
   @media ${DOCK_PORTRAIT} {
@@ -142,7 +142,7 @@ export const GAME_CSS = `
   /* The action slot (hud.ts slotAction): one button where Fire the first shot, Freeze, Resume and Bank take turns. */
   .kg-hud .slot-row { justify-content: flex-start; gap: 10px; }
   .kg-hud .slot-row .note { flex: 1; text-align: right; }
-  .kg-hud .slot-row.idle, .kg-hud .slot.empty, .kg-hud .lev.pre, .kg-hud .hint { display: none; }
+  .kg-hud .slot-row.idle, .kg-hud .slot.empty, .kg-hud .lev.pre, .kg-hud .tch-hint { display: none; }
   body.kg-touch .kg-hud .slot-row.idle { display: flex; }
   .kg-hud .acts { gap: 8px; }
   .kg-hud .acts.kg-tch { display: none; }
