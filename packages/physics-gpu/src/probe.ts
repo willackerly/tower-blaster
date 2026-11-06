@@ -1012,7 +1012,8 @@ export function probeMarkdown(r: ProbeResult, header: string): string {
     if (p.timestamps) {
       L.push('| Stage | ms | Share of step |', '|---|---|---|');
       for (const s of STEP_STAGES) L.push(`| ${s} | ${ms(p.stages[s])} | ${f((100 * p.stages[s].median) / p.step.median, 1)}% |`);
-      L.push(`| step (first marker to last) | ${ms(p.step)} | |`, '', 'ms, median (p10–p90) over the timed steps. Each stage is the gap between beginning-of-pass timestamps of 1-thread marker passes that read what the stage wrote; the step includes the six markers.');
+      if (p.solveParts) for (const [k, v] of Object.entries(p.solveParts)) L.push(`| solve: ${k} | ${ms(v)} | ${f((100 * v.median) / p.step.median, 1)}% |`);
+      L.push(`| step (first marker to last) | ${ms(p.step)} | |`, '', 'ms, median (p10–p90) over the timed steps. Each stage is the gap between beginning-of-pass timestamps of 1-thread marker passes that read what the stage wrote; the step includes the eight markers.');
     } else L.push(`No GPU timestamps: step wall time (submit to done) ${ms(p.step)} ms; no stage split.`);
   }
   if (r.p6) {
