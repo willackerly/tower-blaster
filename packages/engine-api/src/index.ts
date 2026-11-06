@@ -218,6 +218,34 @@ export interface PhysicsEngine {
    * words back from the GPU. Engines with no such limit leave it out.
    */
   health?(): Promise<EngineHealth>;
+  /**
+   * The engine's whole state now, kept aside to come back to (EngineCheckpoint): the game's undo
+   * takes one as each shot goes in. Called between steps; an engine with finish() copies on its
+   * queue, so the checkpoint holds the state after exactly the steps submitted before the call
+   * (as snapshot()). Engines that can not copy their state exactly leave it out.
+   */
+  checkpoint?(): EngineCheckpoint;
+  dispose(): void;
+}
+
+/**
+ * An engine's state at one moment (PhysicsEngine.checkpoint). restore() puts that engine back
+ * exactly: stepIndex, every body, the warm-start and contact history, the inputs queued then and
+ * the limit counters (health()), so from there the engine steps bit for bit as it did, or would
+ * have, from the moment of the checkpoint, given the same pushes. Whatever happened since (steps,
+ * pushed inputs) is gone. A snapshot() asked for before restore() resolves with the state before it.
+ */
+export interface EngineCheckpoint {
+  /** The engine's stepIndex when it was taken. */
+  readonly step: number;
+  /** Memory it holds, in bytes (GPU and CPU), for an undo budget. */
+  readonly bytes: number;
+  /**
+   * Put the engine back as it was. May be called any number of times; throws once the engine
+   * has been init()ed again or disposed, or after this checkpoint's dispose().
+   */
+  restore(): void;
+  /** Free what it holds (idempotent); restore() throws afterwards. */
   dispose(): void;
 }
 

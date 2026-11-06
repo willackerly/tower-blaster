@@ -40,6 +40,7 @@
 // was made (GpuAvbdEngine.init makes a new one): total[6], the most pairs an
 // encode has required, and total[7], the encodes that required more than
 // maxPairs. Nothing else reads them, so they change no float.
+import { type StateRegion, whole } from './checkpoint.ts';
 import { assertStorageFits, RadixSorter, Scanner } from '@tb/gpu';
 import { Body, Shape, wgslStruct } from '@tb/schema';
 
@@ -369,6 +370,11 @@ export class Broadphase {
       pass.dispatchWorkgroups(groups);
     }
     pass.end();
+  }
+
+  /** What a step reads as the step before left it (checkpoint.ts): total, for its two sticky counters (words 6 and 7: the peak and the steps that overflowed). */
+  carried(): StateRegion[] {
+    return [whole(this.total)];
   }
 
   destroy(): void {
