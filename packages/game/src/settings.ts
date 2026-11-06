@@ -6,7 +6,16 @@
 //   sharp: 2 | 1               (the most device pixels per CSS pixel the canvas draws; 1 halves the work on a 2x screen)
 //   camera: still | dynamic    (dynamic: the camera follows the collapse and shakes on hits; the URL's say is
 //                               keystone.follow and keystone.shake, one each, see cameraFeel)
+//   rapid: true | false        (rapid fire: shoot before the last shot settles; on by default; the URL's say
+//                               is keystone.rapid, see rapidFeel)
+//   duelView: true | false     (a duel's turn view: the camera swings to the next player's side; on by default;
+//                               the URL's say is keystone.turnview, see turnViewFeel)
+//   launch: high | level       (where shots leave from, aim.ts LaunchMode; high by default; the URL's say is
+//                               keystone.launch, see launchFeel)
+//   marks: true | false        (stone marks: a crosshair carved on blocks to bring down, a shield on blocks to
+//                               keep, scene.ts markOf; on by default; the URL's say is keystone.marks, see marksFeel)
 import { LOOKS } from '@tb/render';
+import { LAUNCH_MODES, type LaunchMode } from './aim.ts';
 import type { PaceFeel } from './pacing.ts';
 import { GAME_LOOK } from './params.ts';
 import type { KeyValue } from './progress.ts';
@@ -16,9 +25,10 @@ export const SETTINGS_KEY = 'tb.settings.v1';
 /** still: the camera moves only when the player moves it (the default since the 2026-11-02 playtest); dynamic: it follows and shakes too. */
 export type CameraSetting = 'still' | 'dynamic';
 
-export interface Settings { sound: boolean; look: string; sharp: 1 | 2; camera: CameraSetting }
+export interface Settings { sound: boolean; look: string; sharp: 1 | 2; camera: CameraSetting; rapid: boolean; duelView: boolean; launch: LaunchMode; marks: boolean }
 
-export const DEFAULT_SETTINGS: Settings = { sound: true, look: GAME_LOOK, sharp: 2, camera: 'still' };
+/** Rapid fire on (Will, 2026-11-05: in Advanced settings, defaulting to on); a duel's turn view on (Will, 2026-11-06); shots from high (Will, 2026-11-06); stone marks on (Will, 2026-11-06). */
+export const DEFAULT_SETTINGS: Settings = { sound: true, look: GAME_LOOK, sharp: 2, camera: 'still', rapid: true, duelView: true, launch: 'high', marks: true };
 
 /** The looks the front door offers, in its order, with their names there. */
 export const LOOK_CHOICES: ReadonlyArray<{ look: string; label: string }> = [
@@ -36,6 +46,10 @@ export function parseSettings(text: string | null): Settings {
     look: typeof o.look === 'string' && LOOKS[o.look] ? o.look : DEFAULT_SETTINGS.look,
     sharp: o.sharp === 1 || o.sharp === 2 ? o.sharp : DEFAULT_SETTINGS.sharp,
     camera: o.camera === 'still' || o.camera === 'dynamic' ? o.camera : DEFAULT_SETTINGS.camera,
+    rapid: typeof o.rapid === 'boolean' ? o.rapid : DEFAULT_SETTINGS.rapid,
+    duelView: typeof o.duelView === 'boolean' ? o.duelView : DEFAULT_SETTINGS.duelView,
+    launch: (LAUNCH_MODES as readonly unknown[]).includes(o.launch) ? (o.launch as LaunchMode) : DEFAULT_SETTINGS.launch,
+    marks: typeof o.marks === 'boolean' ? o.marks : DEFAULT_SETTINGS.marks,
   };
 }
 
@@ -49,6 +63,38 @@ export const CAMERA_KEYS = ['keystone.follow', 'keystone.shake'] as const;
 export function cameraFeel(feel: PaceFeel, q: URLSearchParams, camera: CameraSetting): Pick<PaceFeel, 'follow' | 'shake'> {
   const on = camera === 'dynamic';
   return { follow: q.has('keystone.follow') ? feel.follow : on, shake: q.has('keystone.shake') ? feel.shake : on };
+}
+
+/** The URL key that says what the Rapid fire setting says (rapidFeel), dropped from the URL when the setting changes. */
+export const RAPID_KEYS = ['keystone.rapid'] as const;
+
+/** Rapid fire in effect: keystone.rapid where the URL says it (feel was read from that URL), else the setting. */
+export function rapidFeel(feel: PaceFeel, q: URLSearchParams, rapid: boolean): Pick<PaceFeel, 'rapid'> {
+  return { rapid: q.has('keystone.rapid') ? feel.rapid : rapid };
+}
+
+/** The URL key that says what the Launch height setting says (launchFeel), dropped from the URL when the setting changes. */
+export const LAUNCH_KEYS = ['keystone.launch'] as const;
+
+/** Where shots leave from: keystone.launch where the URL says it (feel was read from that URL), else the setting. */
+export function launchFeel(feel: PaceFeel, q: URLSearchParams, launch: LaunchMode): Pick<PaceFeel, 'launch'> {
+  return { launch: q.has('keystone.launch') ? feel.launch : launch };
+}
+
+/** The URL key that says what the Stone marks setting says (marksFeel), dropped from the URL when the setting changes. */
+export const MARKS_KEYS = ['keystone.marks'] as const;
+
+/** Stone marks in effect: keystone.marks where the URL says it (feel was read from that URL), else the setting. */
+export function marksFeel(feel: PaceFeel, q: URLSearchParams, marks: boolean): Pick<PaceFeel, 'marks'> {
+  return { marks: q.has('keystone.marks') ? feel.marks : marks };
+}
+
+/** The URL key that says what the Duel turns setting says (turnViewFeel), dropped from the URL when the setting changes. */
+export const TURN_VIEW_KEYS = ['keystone.turnview'] as const;
+
+/** A duel's turn view in effect: keystone.turnview where the URL says it (feel was read from that URL), else the setting. */
+export function turnViewFeel(feel: PaceFeel, q: URLSearchParams, duelView: boolean): Pick<PaceFeel, 'turnView'> {
+  return { turnView: q.has('keystone.turnview') ? feel.turnView : duelView };
 }
 
 /** The URL's say over settings: ?look=, ?sound=on|off, ?sharp=1|2 (bad values are refused, as every game key is). */

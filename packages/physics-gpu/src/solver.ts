@@ -45,12 +45,13 @@
 //   reads BodyProps.restitution.
 //
 // Each kernel binds at most 8 storage buffers (the WebGPU default limit).
+import { type StateRegion, whole } from './checkpoint.ts';
 import type { CombineRule } from '@tb/engine-api';
 import { assertStorageFits, readBuffer } from '@tb/gpu';
 import { RECORD_MODES } from '@tb/physics-ref';
 import { Body, BodyProps, CentreRecord, ColorParams, field, Manifold, RestSlot, SolverBody, SolverContact, SolverParams, SolverRecord, TIER, wgslStruct } from '@tb/schema';
 import { MAX_COLORS } from './coloring.ts';
-import { REST_BODY_ARGS, REST_INFO_BYTES, REST_SLOT_ARGS, type RestBinding, type RestitutionConfig, restitutionConstants, restitutionKernels } from './restitution.ts';
+import { ISLAND_BODY_BYTES, REST_BODY_ARGS, REST_BODY_BYTES, REST_INFO_BYTES, REST_SLOT_ARGS, type RestBinding, type RestitutionConfig, restitutionConstants, restitutionKernels } from './restitution.ts';
 
 const WG = 64;
 /** Most threads the tail workgroup can have (SolverDispatch.tailThreads): WebGPU's default limit per workgroup. */
@@ -1370,6 +1371,77 @@ export function recordWgsl(records: RecordMode, hessian: HessianForm = 'register
 /** The other kernels' shaders (without records: recordWgsl()); the primal's is solveWgsl(). */
 export const SOLVER_WGSL = { PREP, MATCH, SETUP, INIT, DUAL };
 
+// Sleep's awake lists (SolverDispatch.awakeLists; roadmap E2 step 3b-2). Once a step, after initBodies: the pair slots
+// whose contacts are not frozen (not both ends asleep) and the bodies not asleep, each appended through a counter, then
+// the indirect arguments for them. The dual updates of each iteration then run over the lists: a frozen contact's
+// update returns at once (dualPoint, dualRecord), and each update writes only its own slot's contacts, so leaving
+// the frozen ones out, in whatever order the rest are listed, gives the same floats.
+/** The awake lists' buffer: a header of ACTIVE_HEAD words, then a pair slot per maxPairs, then a body per capacity. */
+export const ACTIVE_HEAD = 16;
+/** Header words: the pair list's dispatch (x, y, z) at 0, the body list's at 3, the pair count at 6, the body count at 7. */
+const ACTIVE_WORDS = /* wgsl */ `
+const ACTIVE_HEAD = ${ACTIVE_HEAD}u;
+const PAIR_COUNT = 6u;
+const BODY_COUNT = 7u;
+fn pairEntry(j: u32) -> u32 { return ACTIVE_HEAD + j; }
+fn bodyEntry(j: u32) -> u32 { return ACTIVE_HEAD + p.maxPairs + j; }
+`;
+const ACTIVE = /* wgsl */ `
+${COMMON}
+@group(0) @binding(0) var<storage, read> bodies: array<Body>;
+@group(0) @binding(1) var<storage, read> pairs: array<vec2u>;
+@group(0) @binding(2) var<storage, read> stepInfo: array<u32, 16>;
+@group(0) @binding(3) var<storage, read_write> lists: array<atomic<u32>>;
+@group(0) @binding(4) var<uniform> p: SolverParams;
+${SLEEPING}
+${ACTIVE_WORDS}
+@compute @workgroup_size(${WG})
+fn listPairs(@builtin(global_invocation_id) id: vec3u) {
+  let k = id.x;
+  if (k >= stepInfo[3]) { return; }
+  let pr = pairs[k];
+  if (frozen(pr.x, pr.y)) { return; }
+  atomicStore(&lists[pairEntry(atomicAdd(&lists[PAIR_COUNT], 1u))], k);
+}
+
+@compute @workgroup_size(${WG})
+fn listBodies(@builtin(global_invocation_id) id: vec3u) {
+  let i = id.x;
+  if (i >= p.n || sleeping(bodies[i].flags)) { return; }
+  atomicStore(&lists[bodyEntry(atomicAdd(&lists[BODY_COUNT], 1u))], i);
+}
+
+@compute @workgroup_size(1)
+fn listArgs() {
+  let groups = vec2u(atomicLoad(&lists[PAIR_COUNT]), atomicLoad(&lists[BODY_COUNT])) + vec2u(${WG - 1}u);
+  atomicStore(&lists[0], groups.x / ${WG}u); atomicStore(&lists[1], 1u); atomicStore(&lists[2], 1u);
+  atomicStore(&lists[3], groups.y / ${WG}u); atomicStore(&lists[4], 1u); atomicStore(&lists[5], 1u);
+}
+`;
+
+/** The dual shader's entry points over the awake lists, appended to the dual shader of a record mode (binding 5: the lists). */
+function awakeDualWgsl(records: RecordMode): string {
+  const pair = records === 0 ? 'for (var q = 0u; q < 4u; q++) { dualPoint(pairPoint(p.cur, k, q)); }' : 'dualRecord(pairRecord(p.cur, k));';
+  const ground = records === 0 ? 'for (var q = 0u; q < 4u; q++) { dualPoint(groundPoint(p.cur, i, q)); }' : 'dualRecord(groundRecord(p.cur, i));';
+  return /* wgsl */ `
+@group(0) @binding(5) var<storage, read> lists: array<u32>;
+${ACTIVE_WORDS}
+@compute @workgroup_size(${WG})
+fn dualPairsAwake(@builtin(global_invocation_id) id: vec3u) {
+  if (id.x >= lists[PAIR_COUNT]) { return; }
+  let k = lists[pairEntry(id.x)];
+  ${pair}
+}
+
+@compute @workgroup_size(${WG})
+fn dualGroundAwake(@builtin(global_invocation_id) id: vec3u) {
+  if (id.x >= lists[BODY_COUNT]) { return; }
+  let i = lists[bodyEntry(id.x)];
+  ${ground}
+}
+`;
+}
+
 /** Index = SolverParams.frictionCombine; combineFriction in the setup kernels follows this order. */
 export const COMBINE_RULES: readonly CombineRule[] = ['average', 'min', 'max', 'multiply'];
 
@@ -1410,6 +1482,19 @@ export interface SolverDispatch {
   /** The previous dispatch, for timing it against: colours 0-62 by indirect dispatch, sized by the colouring. Colour 63 still goes to the tail. */
   indirectColors: boolean;
   /**
+   * Colours below colorTail by indirect dispatch, each sized by the colouring to its own bodies, instead of one sized
+   * for all n (the same threads do the work, so the result is the same). With sleep on (roadmap E2 step 3b), where
+   * the sleepers have no colour, a dispatch for all n is mostly threads that exit: on the M5, a resting 100k city with
+   * every body asleep still spent 5.9 ms a step in the solve.
+   */
+  sizedColors: boolean;
+  /**
+   * With sleep (AvbdSolver's sleep), the dual updates of each iteration run over lists of the pair slots not both
+   * asleep and of the bodies not asleep, built once a step (roadmap E2 step 3b-2), instead of over every pair slot and
+   * body: a frozen contact's update changes nothing, so the result is the same. No effect without sleep.
+   */
+  awakeLists: boolean;
+  /**
    * The tail workgroup's size, 1-256. Default 256 (MAX_TAIL) on a hardware GPU:
    * on the M5 Max it was never slower than 64, and late in the 10k city, where
    * the colours from 8 up hold hundreds of bodies, it saved 5.6 ms a step.
@@ -1433,7 +1518,11 @@ export interface SolverDispatch {
   hessian: HessianForm;
 }
 
-export const DEFAULT_DISPATCH: SolverDispatch = { colorTail: 8, indirectColors: false, tailThreads: MAX_TAIL, hessian: 'registers' };
+/** The solve's parts the sleep probe times (AvbdSolver.solve's mark): the setup, then the sweeps; finalize is the rest. */
+export const SOLVE_PARTS = ['setup', 'sweeps'] as const;
+export type SolvePart = (typeof SOLVE_PARTS)[number];
+
+export const DEFAULT_DISPATCH: SolverDispatch = { colorTail: 8, indirectColors: false, sizedColors: false, awakeLists: false, tailThreads: MAX_TAIL, hessian: 'registers' };
 
 /** The default tail width on a software adapter (SwiftShader in tests and CI); see SolverDispatch.tailThreads. */
 export const SOFTWARE_TAIL_THREADS = 64;
@@ -1495,6 +1584,12 @@ export class AvbdSolver {
   /** The restitution pass's buffers (restitution.ts), only while it is on: a RestSlot per contact slot, and its counters and indirect arguments. */
   readonly restSlots: GPUBuffer | null = null;
   readonly restInfo: GPUBuffer | null = null;
+  /** A RestBody per body (REST_BODY_BYTES), only while the restitution pass is on. */
+  readonly restBodies: GPUBuffer | null = null;
+  /** An IslandBody per body (ISLAND_BODY_BYTES), only while the restitution pass's energy cap is on. */
+  readonly restIslands: GPUBuffer | null = null;
+  /** Sleep's awake lists (SolverDispatch.awakeLists), only while they are on: ACTIVE_HEAD header words, then maxPairs pair slots and capacity bodies. */
+  readonly active: GPUBuffer | null = null;
   private readonly pipes: Record<string, GPUComputePipeline> = {};
   private readonly binds: Record<string, GPUBindGroup> = {};
   private cur = 0;
@@ -1520,11 +1615,16 @@ export class AvbdSolver {
   constructor(private readonly device: GPUDevice, readonly capacity: number, readonly maxPairs: number, private readonly b: SolverBuffers, private readonly dispatch: SolverDispatch = DEFAULT_DISPATCH, readonly records: RecordMode = 0, readonly gapSlop = 0, readonly restitution: RestitutionConfig | null = null, readonly sleep = false) {
     if (!(Number.isFinite(gapSlop) && gapSlop >= 0)) throw new Error(`AvbdSolver: gapSlop must be a finite number >= 0, got ${gapSlop}`);
     if (restitution) {
-      const { threshold: t, rounds: r, groundRestitution: g, combine: c } = restitution;
+      const { threshold: t, rounds: r, groundRestitution: g, combine: c, anchors: an, anchorSpeed: as } = restitution;
       if (!(Number.isFinite(t) && t >= 0)) throw new Error(`AvbdSolver: restitution.threshold must be a finite number >= 0, got ${t}`);
       if (!(Number.isInteger(r) && r >= 1)) throw new Error(`AvbdSolver: restitution.rounds must be an integer >= 1, got ${r}`);
       if (!(g >= 0 && g <= 1)) throw new Error(`AvbdSolver: restitution.groundRestitution must be in [0, 1], got ${g}`);
       if (!COMBINE_RULES.includes(c)) throw new Error(`AvbdSolver: restitution.combine must be one of ${COMBINE_RULES.join(', ')}, got ${c}`);
+      if (typeof an !== 'boolean') throw new Error(`AvbdSolver: restitution.anchors must be a boolean, got ${an}`);
+      if (typeof restitution.energyCap !== 'boolean') throw new Error(`AvbdSolver: restitution.energyCap must be a boolean, got ${restitution.energyCap}`);
+      // The cap's fixed-point sums (restitution.ts, CAP_FIX_LO) hold the low parts of up to 2^22 bodies.
+      if (restitution.energyCap && capacity >= 2 ** 22) throw new Error(`AvbdSolver: the restitution energy cap holds under 2^22 bodies (its fixed-point sums), got capacity ${capacity}`);
+      if (!(Number.isFinite(as) && as >= 0)) throw new Error(`AvbdSolver: restitution.anchorSpeed must be a finite number >= 0, got ${as}`);
       if (records === 2) throw new Error('AvbdSolver: restitution is not implemented with records 2 yet (the pass reads points or exact records)');
       // The pass moves bodies after finalize; it does not know sleepers are anchors yet.
       if (sleep) throw new Error('AvbdSolver: restitution is not implemented with sleep yet');
@@ -1595,18 +1695,35 @@ export class AvbdSolver {
     mk('avbd dual', code.dual, [['', 'dualPairs', 'dualGround', 'velocities', 'finalize']], ['rw', 'rw', 'rw', 'r', 'u'],
       [['dual', [B.bodies, this.solver, this.contacts, this.meta, this.uniform]]],
       both(slop('dualPairs', 'dualGround'), asleep('dualPairs', 'dualGround', 'velocities', 'finalize')));
+    if (sleep && dispatch.awakeLists) {
+      const active = device.createBuffer({
+        size: (ACTIVE_HEAD + maxPairs + capacity) * 4, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.INDIRECT | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST, label: 'avbd awake lists',
+      });
+      assertStorageFits(device, active.size, 'avbd awake lists');
+      this.active = active;
+      mk('avbd awake lists', ACTIVE, [['', 'listPairs', 'listBodies', 'listArgs']], ['r', 'r', 'r', 'rw', 'u'],
+        [['lists', [B.bodies, B.pairs, this.meta, active, this.uniform]]], asleep('listPairs', 'listBodies'));
+      mk('avbd dual awake', code.dual + awakeDualWgsl(records), [['', 'dualPairsAwake', 'dualGroundAwake']], ['rw', 'rw', 'rw', 'r', 'u', 'r'],
+        [['dualAwake', [B.bodies, this.solver, this.contacts, this.meta, this.uniform, active]]],
+        both(slop('dualPairsAwake', 'dualGroundAwake'), asleep('dualPairsAwake', 'dualGroundAwake')));
+    }
     if (restitution) {
       const slots = buf((maxPairs + capacity) * RestSlot.size, 'avbd restitution slots');
       const info = device.createBuffer({ size: REST_INFO_BYTES, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.INDIRECT | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST, label: 'avbd restitution info' });
+      const restBodies = buf(capacity * REST_BODY_BYTES, 'avbd restitution bodies');
       this.restSlots = slots;
       this.restInfo = info;
+      this.restBodies = restBodies;
+      const islands = restitution.energyCap ? buf(capacity * ISLAND_BODY_BYTES, 'avbd restitution islands') : null;
+      this.restIslands = islands;
       const values = restitutionConstants(restitution, COMBINE_RULES.indexOf(restitution.combine));
       const res: Record<RestBinding, [Kind, GPUBuffer]> = {
         contacts: ['r', this.contacts], contactsRw: ['rw', this.contacts], props: ['r', B.props], solver: ['r', this.solver],
         bodies: ['r', B.bodies], bodiesRw: ['rw', B.bodies], rest: ['rw', slots], restRead: ['r', slots], info: ['rw', info],
         stepInfo: ['r', this.meta], rowStart: ['r', B.rowStart], rowLength: ['r', B.rowLength], adjSlot: ['r', B.adjSlot], params: ['u', this.uniform],
+        restBody: ['rw', restBodies], restBodyRead: ['r', restBodies], island: ['rw', islands ?? restBodies],
       };
-      for (const k of restitutionKernels(COMMON, records === 1 ? { records: 1, head: wgslStruct(SolverRecord) + RECORD_COMMON } : { records: 0 })) {
+      for (const k of restitutionKernels(COMMON, records === 1 ? { records: 1, head: wgslStruct(SolverRecord) + RECORD_COMMON } : { records: 0 }, restitution.energyCap)) {
         const constants = k.constants.length ? { [k.entry]: Object.fromEntries(k.constants.map((c) => [c, values[c]])) } : {};
         mk(`avbd ${k.entry}`, k.code, [['', k.entry]], k.bindings.map((x) => res[x][0]), [[k.entry, k.bindings.map((x) => res[x][1])]], constants);
       }
@@ -1650,7 +1767,12 @@ export class AvbdSolver {
   }
 
   /** After broadphase, narrowphase and colouring: one full AVBD step. */
-  solve(encoder: GPUCommandEncoder, n: number, iterations: number, timestampWrites?: GPUComputePassTimestampWrites): void {
+  /**
+   * mark (the sleep probe, GpuAvbdEngine.probeStages): called between passes after the setup (contact setup, initBodies,
+   * the awake lists) and after the sweeps (every primal sweep, dual update and the velocities), before finalize; each
+   * call ends the pass and the rest of the solve runs in a new one, which changes no result.
+   */
+  solve(encoder: GPUCommandEncoder, n: number, iterations: number, timestampWrites?: GPUComputePassTimestampWrites, mark?: (at: SolvePart) => void): void {
     const { b } = this;
     // This step's history half: pairs, group offsets, slot count.
     encoder.copyBufferToBuffer(b.pairs, 0, this.pairHist, this.cur * this.maxPairs * 8, this.maxPairs * 8);
@@ -1658,7 +1780,11 @@ export class AvbdSolver {
     encoder.copyBufferToBuffer(b.total, 0, this.meta, 0, 32);
     encoder.copyBufferToBuffer(b.total, 12, this.meta, 32 + 4 * this.cur, 4);
     const groups = Math.max(1, Math.ceil(n / WG));
-    const pass = encoder.beginComputePass(timestampWrites ? { timestampWrites } : {});
+    const { active } = this;
+    if (active && n > 0) encoder.clearBuffer(active, 0, ACTIVE_HEAD * 4);
+    if (timestampWrites && mark) throw new Error('AvbdSolver.solve: timestampWrites time one pass, so they do not go with mark');
+    let pass = encoder.beginComputePass(timestampWrites ? { timestampWrites } : {});
+    const split = (at: SolvePart) => { if (!mark) return; pass.end(); mark(at); pass = encoder.beginComputePass(); };
     if (n > 0) {
       pass.setBindGroup(0, this.binds.setup!);
       pass.setPipeline(this.pipes.pairSetup!);
@@ -1668,6 +1794,16 @@ export class AvbdSolver {
       pass.setBindGroup(0, this.binds.init!);
       pass.setPipeline(this.pipes.initBodies!);
       pass.dispatchWorkgroups(groups);
+      if (active) {
+        pass.setBindGroup(0, this.binds.lists!);
+        pass.setPipeline(this.pipes.listPairs!);
+        pass.dispatchWorkgroupsIndirect(b.total, 0);
+        pass.setPipeline(this.pipes.listBodies!);
+        pass.dispatchWorkgroups(groups);
+        pass.setPipeline(this.pipes.listArgs!);
+        pass.dispatchWorkgroups(1);
+      }
+      split('setup');
       // Colours below `direct` get a dispatch each; the tail workgroup does the rest.
       const { indirectColors } = this.dispatch;
       const direct = indirectColors ? MAX_COLORS - 1 : this.dispatch.colorTail;
@@ -1677,34 +1813,53 @@ export class AvbdSolver {
         pass.setPipeline(this.pipes.primal!);
         for (let c = 0; c < direct; c++) {
           pass.setBindGroup(0, this.binds.solve!, colour(c));
-          if (indirectColors) pass.dispatchWorkgroupsIndirect(b.dispatch, 12 * c);
+          if (indirectColors || this.dispatch.sizedColors) pass.dispatchWorkgroupsIndirect(b.dispatch, 12 * c);
           else pass.dispatchWorkgroups(groups);
         }
         pass.setPipeline(this.pipes.primalTail!);
         pass.setBindGroup(0, this.binds.solve!, colour(direct));
         pass.dispatchWorkgroups(1);
-        pass.setBindGroup(0, this.binds.dual!);
-        if (it < iterations) {
-          pass.setPipeline(this.pipes.dualPairs!);
-          pass.dispatchWorkgroupsIndirect(b.total, 0);
-          pass.setPipeline(this.pipes.dualGround!);
-          pass.dispatchWorkgroups(groups);
-        }
+        if (it < iterations) this.encodeDual(pass, groups);
         if (it === iterations - 1) {
+          pass.setBindGroup(0, this.binds.dual!);
           pass.setPipeline(this.pipes.velocities!);
           pass.dispatchWorkgroups(groups);
         }
       }
+      split('sweeps');
+      pass.setBindGroup(0, this.binds.dual!);
       pass.setPipeline(this.pipes.finalize!);
       pass.dispatchWorkgroups(groups);
       if (this.restitution) this.encodeRestitution(pass, groups, this.restitution.rounds);
+    } else {
+      // No bodies, no work: the marks still come, in order.
+      split('setup');
+      split('sweeps');
     }
     pass.end();
     this.prevN = n;
     this.cur = 1 - this.cur;
   }
 
-  /** The restitution pass (restitution.ts), after finalize: 6 + 2 rounds dispatches, all but 3 of them indirect and empty when no point bounces. */
+  /** One dual update of every contact: over every pair slot and body, or with the awake lists over theirs (SolverDispatch.awakeLists). */
+  private encodeDual(pass: GPUComputePassEncoder, groups: number): void {
+    const { active } = this;
+    if (active) {
+      pass.setBindGroup(0, this.binds.dualAwake!);
+      pass.setPipeline(this.pipes.dualPairsAwake!);
+      pass.dispatchWorkgroupsIndirect(active, 0);
+      pass.setPipeline(this.pipes.dualGroundAwake!);
+      pass.dispatchWorkgroupsIndirect(active, 12);
+      return;
+    }
+    pass.setBindGroup(0, this.binds.dual!);
+    pass.setPipeline(this.pipes.dualPairs!);
+    pass.dispatchWorkgroupsIndirect(this.b.total, 0);
+    pass.setPipeline(this.pipes.dualGround!);
+    pass.dispatchWorkgroups(groups);
+  }
+
+  /** The restitution pass (restitution.ts), after finalize: 7 + 2 rounds dispatches (11 + 2 rounds with the energy cap), all but 3 of them indirect and empty when no point bounces. */
   private encodeRestitution(pass: GPUComputePassEncoder, groups: number, rounds: number): void {
     const info = this.restInfo!;
     const run = (entry: string, args: { direct: number } | { indirect: GPUBuffer; at: number }) => {
@@ -1719,9 +1874,19 @@ export class AvbdSolver {
     run('restArgs', { direct: 1 });
     run('restSupport', slots);
     run('restCount', bodies);
+    run('restAnchors', bodies);
+    const cap = this.restitution!.energyCap;
+    if (cap) {
+      run('restIslandInit', bodies);
+      run('restIslandHook', slots);
+    }
     for (let r = 0; r < rounds; r++) {
       run('restManifold', slots);
       run('restBodies', bodies);
+    }
+    if (cap) {
+      run('restIslandSum', bodies);
+      run('restIslandCap', bodies);
     }
     run('restFinish', bodies);
   }
@@ -1779,13 +1944,8 @@ export class AvbdSolver {
     const groups = Math.max(1, Math.ceil(n / WG));
     const direct = this.dispatch.indirectColors ? MAX_COLORS - 1 : this.dispatch.colorTail;
     if (piece === 'dual') {
-      pass.setBindGroup(0, this.binds.dual!);
-      for (let r = 0; r < reps; r++) {
-        pass.setPipeline(this.pipes.dualPairs!);
-        pass.dispatchWorkgroupsIndirect(b.total, 0);
-        pass.setPipeline(this.pipes.dualGround!);
-        pass.dispatchWorkgroups(groups);
-      }
+      // With the awake lists, over the lists the last solve() built.
+      for (let r = 0; r < reps; r++) this.encodeDual(pass, groups);
       return;
     }
     const c = piece === 'tail' ? direct : piece.primal;
@@ -1794,12 +1954,33 @@ export class AvbdSolver {
     pass.setBindGroup(0, this.binds.solve!, [(PASS.main * MAX_COLORS + c) * DYN]);
     for (let r = 0; r < reps; r++) {
       if (piece === 'tail') pass.dispatchWorkgroups(1);
-      else if (this.dispatch.indirectColors) pass.dispatchWorkgroupsIndirect(b.dispatch, 12 * c);
+      else if (this.dispatch.indirectColors || this.dispatch.sizedColors) pass.dispatchWorkgroupsIndirect(b.dispatch, 12 * c);
       else pass.dispatchWorkgroups(groups);
     }
   }
 
+  /**
+   * What a step reads as the step before left it (checkpoint.ts): every solver body (prevVel for the
+   * adaptive warm start, dp and phi for rolling contacts), the step info (meta: slots written per
+   * history half), and the history half the last step wrote: its contacts (warm-start lambdas and
+   * penalties), pair list and pair-group offsets, which the next step matches against and reads.
+   * The other half is overwritten by the next step before it is read.
+   */
+  carried(): StateRegion[] {
+    const h = this.lastHalf, contactHalf = this.contacts.size / 2;
+    return [
+      whole(this.solver), whole(this.meta),
+      { buffer: this.contacts, offset: h * contactHalf, size: contactHalf },
+      { buffer: this.pairHist, offset: h * this.maxPairs * 8, size: this.maxPairs * 8 },
+      { buffer: this.offHist, offset: h * this.capacity * 4, size: this.capacity * 4 },
+    ];
+  }
+
+  /** The CPU half of the solver's carried state: the history half to write next and the body count of the last step. */
+  get cpuState(): { cur: number; prevN: number } { return { cur: this.cur, prevN: this.prevN }; }
+  set cpuState(s: { cur: number; prevN: number }) { this.cur = s.cur; this.prevN = s.prevN; }
+
   destroy(): void {
-    for (const x of [this.solver, this.contacts, this.meta, this.pairHist, this.offHist, this.uniform, this.colorUniform, this.restSlots, this.restInfo]) x?.destroy();
+    for (const x of [this.solver, this.contacts, this.meta, this.pairHist, this.offHist, this.uniform, this.colorUniform, this.restSlots, this.restInfo, this.restBodies, this.restIslands, this.active]) x?.destroy();
   }
 }

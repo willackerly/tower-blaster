@@ -1,7 +1,7 @@
 // Every rack item fires on the game page under Keystone rules (roadmap G3, spectacle-mode.md
 // section 7): one load per rack of up to MAX_RACK items, each shot aimed away from the tower so
 // none brings a crown down; each is fired, flies, settles and leaves the rack, the grenade's
-// blast goes off once, the level fails when the rack is empty, and the page ends where
+// blast goes off once and is drawn, the level fails when the rack is empty, and the page ends where
 // runSession ends the same line headless and where its own replay ends it. Rapier.
 import { describe, expect, it } from 'vitest';
 import { RapierEngine } from '@tb/adapter-rapier';
@@ -57,9 +57,36 @@ describe('every rack item on the game page', () => {
       const blasts = rack.reduce((a, x) => a + (c.arms[x]?.blasts.reduce((b, y) => b + y.count, 0) ?? 0), 0);
       expect(blasts).toBe(BLASTS[k]);
       expect({ fired: counts.fired, blast: counts.blast ?? 0 }).toEqual({ fired: line.length, blast: blasts });
+      // Each blast is drawn (fireball, shell, light: @tb/render blasts.ts) where it went off.
+      expect(counts.blastDrawn ?? 0).toBe(blasts);
+      // Every body a weapon spawns (its shell, and any split children) is drawn as a bomb; no other ammo is.
+      const bombs = rack.reduce((a, x) => a + (c.arms[x]?.bodies ?? 0), 0);
+      expect(counts.bomb ?? 0).toBe(bombs);
       expect(await page.evaluate((s) => window.__game.replay(s), line)).toEqual(live);
       expect(errors).toEqual([]);
       await page.close();
     }, 300_000);
   }
+
+  it('rapid fire: a marble fired two steps after a cluster is not a bomb, and the bomblets that split later still are (Rapier)', async (ctx) => {
+    if (!game.browser()) return ctx.skip();
+    const rack: RackItem[] = ['w-cluster', 'marble'];
+    const c = compileLevel({ ...L1, rack });
+    const line: Shot[] = [miss(c, 'w-cluster'), { ...miss(c, 'marble'), after: 2 }];
+    const o = await game.open(`/?level=L1&engine=rapier&offscreen=1&keystone.rack=${rack.join(',')}&keystone.shots=${writeShots(line)}`);
+    if (!o) return ctx.skip();
+    const { page, errors } = o;
+    await page.evaluate(() => { window.__game.fast = true; });
+    await page.waitForFunction(() => window.__game.result !== null, undefined, { timeout: 240_000, polling: 100 });
+    const counts = await page.evaluate(() => window.__game.counts);
+    expect(counts.fired).toBe(2);
+    expect(c.arms['w-cluster']!.bodies).toBeGreaterThan(1);
+    expect(counts.bomb ?? 0).toBe(c.arms['w-cluster']!.bodies);
+    // Drawn so: the marble painted (a ball, scene.ts ballFx), every other fired body a bomb.
+    const looks = await page.evaluate(() => window.__game.firedLooks());
+    expect(looks.filter((x) => x === 'painted')).toEqual(['painted']);
+    expect(looks.filter((x) => x === 'plain')).toEqual([]);
+    expect(errors).toEqual([]);
+    await page.close();
+  }, 300_000);
 });

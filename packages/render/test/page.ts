@@ -7,7 +7,7 @@ import { emptySnapshot, TAG_BALL, type BodyDesc, type Snapshot } from '@tb/engin
 import { readBuffer, sharedDevice } from '@tb/gpu';
 import { Body, RenderRecord, Shape, TIER, readStruct } from '@tb/schema';
 import {
-  agx, AGX_WGSL, LOOKS, lookByName, realLook, type RealOptions, type LookParams, fromHalf, Atmosphere, CLEAR_DAY, transmittance, transmittanceHMu, multiScattering, skyViewDir, skyRadiance, skyViewUv, sampleTransmittance, ambientOf, distanceToGround, meteredIlluminance, Materials, heightNormal, STONES, GROUNDS, MATERIAL_LAYERS, WOOD_WGSL, WOOD_RING_M, woodRings, PCG_WGSL, pcg3d, MACRO_LAYER, layerTile, materialSample, macroSample, adaptedExposure, LUMA, R_TOP, R_GROUND, FX_WORDS, packFx, toHalf, bevelNormal, BEVEL_WGSL, oklabToLinear, OKLAB_WGSL, Post,
+  packSurface, agx, AGX_WGSL, LOOKS, lookByName, realLook, type RealOptions, type LookParams, fromHalf, Atmosphere, CLEAR_DAY, transmittance, transmittanceHMu, multiScattering, skyViewDir, skyRadiance, skyViewUv, sampleTransmittance, ambientOf, distanceToGround, meteredIlluminance, Materials, heightNormal, STONES, GROUNDS, MATERIAL_LAYERS, WOOD_WGSL, WOOD_RING_M, woodRings, PCG_WGSL, pcg3d, MACRO_LAYER, layerTile, materialSample, macroSample, adaptedExposure, LUMA, R_TOP, R_GROUND, FX_WORDS, packFx, toHalf, bevelNormal, BEVEL_WGSL, oklabToLinear, OKLAB_WGSL, Post,
   Culler, cullReference, FLOOR_REACH, GpuBodySource, invert, listMatches, lookAt, makeGpuBodies, multiply, packBodies, perspective, Renderer, SEG, SEGMENTS, SnapshotSource, transform,
   translation, normalize, rockIn, ROCK_CELL, ROCK_CLUMP, ROCK_SINK, sunOf, hallTraceCpu, HALL_MAT, OLYMPIA, BOX_VERTS, SPHERE_VERTS, SUN, Sparks, CTL, MAX_EVENTS, flashSlot, FLASHES, MAX_BALLS, TRAIL, Lights, LIGHTS, LIGHT_META, LIGHT_PACKED, MATERIAL, AoVolume, aoGrid, aoFrame, splatReference, composeReference, AO_FOOT_WGSL, AO_SAMPLE_WGSL, AO_SEAM_WGSL, AO_ONE, type SplatBody, unpackImpacts, unpackSparks, spawnReference, stepReference, debrisSpawnReference, dustStepReference, chipStepReference, type SparkState, type Impact, type BodySource, type CullFrame, type FrameParams, type RendererOptions, type V3,
 } from '../src/index.ts';
@@ -51,7 +51,7 @@ function rawSource(device: GPUDevice, bodies: ArrayBuffer, prev: ArrayBuffer, sh
   };
 }
 
-export interface CullCase { seed: number; count: number; capacity: number; alpha: number; noCull: boolean; fx?: boolean; lodDepth?: number }
+export interface CullCase { seed: number; count: number; capacity: number; alpha: number; noCull: boolean; fx?: boolean; lodDepth?: number; ice?: boolean }
 
 /**
  * Random world: boxes, slabs and spheres scattered around the camera (so
@@ -70,6 +70,7 @@ export async function cull(cases: CullCase[]) {
     const sf = new Float32Array(shapes), su = new Uint32Array(shapes);
     const looks = new Uint32Array(c.capacity);
     const fx = new Uint32Array(c.capacity * FX_WORDS);
+    const surfaces = new Uint32Array(c.capacity);
     const BW = Body.size / 4, SW = Shape.size / 4;
     for (let i = 0; i < c.count; i++) {
       const sphere = r() < 0.1;
@@ -92,11 +93,15 @@ export async function cull(cases: CullCase[]) {
       pu[i * BW + 11] = 1 | ((k > 0.85 && k <= 0.9 ? TIER.rubble + 1 : tier) << 8);
       pu[i * BW + 15] = i;
       if (c.fx && r() < 0.33) packFx({ scale: r() < 0.15 ? 0 : 0.2 + 0.8 * r(), anchor: r() < 0.5, emissive: r() }, fx, i * FX_WORDS);
+      // Ice on boxes and spheres alike: only boxes go to boxIce; a cracked one is still ice.
+      if (c.ice && r() < 0.25) surfaces[i] = packSurface({ kind: 'ice', crack: Math.floor(r() * 8), at: [r() * 2 - 1, r() * 2 - 1, r() * 2 - 1], seed: Math.floor(r() * 65536) });
     }
     const src = rawSource(device, bodies, prev, shapes, looks, c.count, c.capacity);
     const fxBuf = device.createBuffer({ size: Math.max(16, fx.byteLength), usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });
     device.queue.writeBuffer(fxBuf, 0, fx);
-    const culler = new Culler(device, src, { box: BOX_VERTS, sphere: SPHERE_VERTS }, fxBuf);
+    const surfBuf = c.ice ? device.createBuffer({ size: Math.max(16, surfaces.byteLength), usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST }) : undefined;
+    if (surfBuf) device.queue.writeBuffer(surfBuf, 0, surfaces);
+    const culler = new Culler(device, src, { box: BOX_VERTS, sphere: SPHERE_VERTS }, fxBuf, surfBuf);
     const eye: V3 = [r() * 4, r() * 4, r() * 4];
     const cam = multiply(multiply(perspective(1.0, 1.5, 0.5, 70), lookAt(eye, [eye[0] + 1, eye[1] - 0.2, eye[2] + 0.5])), translation(eye));
     const light = multiply(multiply(perspective(0.6, 1, 1, 200), lookAt([eye[0], eye[1] + 80, eye[2]], [eye[0] + 5, eye[1], eye[2]], [0, 0, 1])), translation(eye));
@@ -107,7 +112,7 @@ export async function cull(cases: CullCase[]) {
     pass.end();
     device.queue.submit([enc.finish()]);
     const [lists, args, recs] = await Promise.all([readBuffer(device, culler.lists), readBuffer(device, culler.args), readBuffer(device, culler.records)]);
-    const ref = cullReference({ bodies, prev, shapes, looks, count: c.count, fx }, f);
+    const ref = cullReference({ bodies, prev, shapes, looks, count: c.count, fx, ...(c.ice ? { surfaces } : {}) }, f);
     const L = new Uint32Array(lists), A = new Uint32Array(args);
     const counts = SEGMENTS.map((_, s) => A[4 * s + 1]!);
     const segLists = SEGMENTS.map((_, s) => Array.from(L.subarray(s * c.capacity, s * c.capacity + counts[s]!)));
@@ -124,7 +129,7 @@ export async function cull(cases: CullCase[]) {
       lists: segLists.map((l, s) => listMatches(l, ref.must[s]!, ref.may[s]!)),
     });
     culler.destroy();
-    for (const b of [src.bodies, src.prev, src.shapes, src.looks, fxBuf]) b.destroy();
+    for (const b of [src.bodies, src.prev, src.shapes, src.looks, fxBuf, surfBuf]) b?.destroy();
   }
   const err = await device.popErrorScope();
   if (err) out.forEach((o) => { o.error = err.message; });

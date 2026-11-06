@@ -3,7 +3,9 @@
 // crown glow, the Regrow animation on retry as per-slot visual scales, and
 // arc-preview beads as overlay spheres. Everything here is pure data for
 // Renderer.setFx / setOverlay; none of it reaches the physics.
-import { type CompiledLevel, MATERIALS } from '@tb/keystone';
+import { type CompiledLevel, itemRef, MATERIALS, type RackItem } from '@tb/keystone';
+import { type FxOptions, MARK_HIT, MARK_NONE, MARK_SAVE, type MarkId, srgbToLinear } from '@tb/render';
+import { PROJECTILE_PRESETS } from '@tb/weapons';
 
 /** Linear rgb (0..1) and emissive (0..1) to the renderer's bulk tint word: r low byte, emissive high byte. */
 export function tintWordOf(rgb: [number, number, number], emissive = 0): number {
@@ -20,8 +22,48 @@ export const TINT = {
 export const CROWN_GLOW = 0.1;
 /** The block a selected pull would take (play.ts setHover): warm white, glowing, so it reads on any material. */
 export const PULL_HOVER = tintWordOf([1, 0.93, 0.8], 0.55);
+/**
+ * A weapon's shell: painted near-black satin iron (the look's warm ball glow would make it read as one
+ * more ball), with a lit fuse the renderer draws on top (Renderer.fuse). Linear rgb.
+ */
+export const BOMB_FX = { tint: [0.012, 0.012, 0.015] as [number, number, number], paint: true, matte: true };
+
+/**
+ * How fired balls are drawn (PaceFeel.balls, URL key keystone.balls):
+ * - painted: each in its own colour with a white band round it (ballFx), so a ball never reads as a
+ *   bomb (near-black with a lit fuse) and its spin shows. The default since Will's 2026-11-06 playtest,
+ *   where the big balls (the look's grey iron in the real look) looked like the bombs.
+ * - plain: the look's own ball colour and glow, as before.
+ */
+export type BallStyle = 'painted' | 'plain';
+export const BALL_STYLES: readonly BallStyle[] = ['painted', 'plain'];
+
+/**
+ * Keystone's own balls' paint, sRGB: a crimson cannonball and a blue marble, nothing near black or the crowns' gold.
+ * Crimson rather than a warmer red, which read close to the coral aim beads and washed to pink in candy (review, 2026-11-06).
+ */
+export const BALL_PAINT = { cannonball: 0xc8102e, marble: 0x2e6fd6 } as const;
+
+const linearOf = (hex: number): [number, number, number] => [(hex >> 16) & 255, (hex >> 8) & 255, hex & 255].map((x) => srgbToLinear(x / 255)) as [number, number, number];
+
+/**
+ * The paint of a fired ball of rack item `item` in style `style`: its colour (Keystone's ammo from
+ * BALL_PAINT, a preset its catalogue colour, PROJECTILE_PRESETS) with a white band. Null for what is
+ * not a painted ball: a weapon's shell (a bomb, BOMB_FX), the anvil and the cue (boxes), a pull, and
+ * every item in the plain style.
+ */
+export function ballFx(item: RackItem, style: BallStyle = 'painted'): FxOptions | null {
+  if (style === 'plain') return null;
+  const r = itemRef(item);
+  if (r?.kind === 'preset') return { tint: linearOf(PROJECTILE_PRESETS[r.preset].colour), paint: true, band: true };
+  if (r?.kind === 'ammo' && (r.ammo === 'cannonball' || r.ammo === 'marble')) return { tint: linearOf(BALL_PAINT[r.ammo]), paint: true, band: true };
+  return null;
+}
+
+// Ice is drawn by the renderer's ice pass (@tb/render ice.ts), which makes its own blue from the light's
+// path through the block (absorption): a tint here would multiply it a second time, so ice is untinted.
 const MATERIAL_TINT: Record<string, [number, number, number]> = {
-  plaster: TINT.none, stone: [0.62, 0.62, 0.66], iron: [0.3, 0.3, 0.34], ice: [0.62, 0.85, 1], rubber: [0.9, 0.45, 0.55], steel: [0.4, 0.42, 0.46],
+  plaster: TINT.none, stone: [0.62, 0.62, 0.66], iron: [0.3, 0.3, 0.34], ice: TINT.none, rubber: [0.9, 0.45, 0.55], steel: [0.4, 0.42, 0.46],
 };
 
 /** Role wins over material: crowns are gold and heritage is celadon whatever they are made of. */
@@ -30,6 +72,24 @@ export function tintOf(c: CompiledLevel, i: number): number {
   if (role === 1) return tintWordOf(TINT.crown, CROWN_GLOW);
   if (role === 2) return tintWordOf(TINT.heritage);
   return tintWordOf(MATERIAL_TINT[MATERIALS[c.meta.material[i]!]!.name] ?? TINT.none);
+}
+
+/**
+ * The glyph carved on structure body i (Renderer.setMarks; PaceFeel.marks): a crosshair (hit) on a crown, which
+ * the level asks the player to bring down, and a shield (save) on heritage, which must stay intact, and on a
+ * crown under a hold objective (Undercut's Hollow), which must stay up: there the crown's gold says nothing
+ * of which way it goes, and the carving does. Plain blocks carry none.
+ */
+export function markOf(c: CompiledLevel, i: number): MarkId {
+  const role = c.meta.role[i];
+  if (role === 1) return c.def.objective.kind === 'hold' ? MARK_SAVE : MARK_HIT;
+  if (role === 2) return MARK_SAVE;
+  return MARK_NONE;
+}
+
+/** One mark per structure slot (markOf), or none at all when `on` is false, for one Renderer.setMarks at level load. */
+export function structureMarks(c: CompiledLevel, on = true): Uint8Array {
+  return on ? Uint8Array.from({ length: c.meta.n }, (_, i) => markOf(c, i)) : new Uint8Array(c.meta.n);
 }
 
 /** One tint word per structure slot, for one bulk setFx at level load. */
@@ -65,7 +125,6 @@ export const TARGET_SCALE = 1.8;
 export const rgbe = (r: number, g: number, b: number, e: number) => (r | (g << 8) | (b << 16) | (Math.round(e * 255) << 24)) >>> 0;
 export const BEAD_COLOUR = rgbe(255, 122, 90, 0.38); // coral, glowing
 export const BEAD_OUT_COLOUR = rgbe(154, 163, 184, 0.06); // grey: out of reach
-
 /**
  * Overlay spheres for an arc preview: beads shrink along the arc so its
  * direction reads at a glance, and the last one marks the aim point.

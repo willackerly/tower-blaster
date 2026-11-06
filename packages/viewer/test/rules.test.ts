@@ -76,6 +76,23 @@ describe('Keystone rules in the viewer', () => {
     expect(parseViewerConfig(presetSearch('?scenario=S3', p.config)).rules).toBe('sandbox');
   });
 
+  it('the panel\'s freezes box (Bullet Time) sets keystone.freeze, a custom run; empty plays the level\'s own', () => {
+    const c = parseViewerConfig('?level=L1&rules=keystone');
+    const k = (freeze?: number) => proposeScene(c, levelChoice('L1'), {}, 1, 1, 1, undefined, undefined, { rules: 'keystone', feel: c.feel, freeze });
+    const p = k(2);
+    expect(p).toMatchObject({ ok: true, config: { keystone: { freeze: 2 } } });
+    if (!p.ok) return;
+    expect(levelOf(p.config)).toEqual({ ...L1, freeze: 2, custom: true });
+    expect(toSearch(p.config)).toMatch(/keystone\.freeze=2/);
+    expect(parseViewerConfig(toSearch(p.config))).toEqual(p.config);
+    // Emptied, the level's own again; absent (a caller without the box), the config's kept.
+    const back = proposeScene(p.config, levelChoice('L1'), {}, 1, 1, 1, undefined, undefined, { rules: 'keystone', feel: c.feel, freeze: NaN });
+    expect(back).toMatchObject({ ok: true, config: { keystone: {} } });
+    expect(proposeScene(p.config, levelChoice('L2'), {}, 1)).toMatchObject({ ok: true, config: { keystone: { freeze: 2 } } });
+    expect(k(10)).toMatchObject({ ok: false, error: /freeze must be a whole number from 0 to 9: 10/ });
+    expect(k(1.5)).toMatchObject({ ok: false, error: /freeze must be a whole number/ });
+  });
+
   it('a scenario under the rules is an outcome level (scenarioLevel), at the game\'s world, and round-trips', () => {
     const u = '?scenario=S4&param.N=10000&param.F=6&param.H=20&rules=keystone&offscreen=1';
     const c = parseViewerConfig(u);
@@ -91,10 +108,10 @@ describe('Keystone rules in the viewer', () => {
   });
 
   it('the game\'s rule overrides (keystone.*) make a custom run, round-trip, and need the rules', () => {
-    const u = '?level=L1&rules=keystone&keystone.scoring=outcome&keystone.autobank=0&keystone.settle=v1&keystone.iterations=20&keystone.bounce=0.4&keystone.gapSlop=0';
+    const u = '?level=L1&rules=keystone&keystone.scoring=outcome&keystone.autobank=0&keystone.settle=v1&keystone.freeze=2&keystone.iterations=20&keystone.bounce=0.4&keystone.gapSlop=0';
     const c = parseViewerConfig(u);
-    expect(c.keystone).toEqual({ scoring: 'outcome', autobank: false, settle: 'v1', physics: { iterations: 20, bounce: 0.4, gapSlop: 0 } });
-    expect(levelOf(c)).toEqual({ ...L1, custom: true, scoring: 'outcome', autobank: false, settle: 'v1', physics: { iterations: 20, bounce: 0.4, gapSlop: 0 } });
+    expect(c.keystone).toEqual({ scoring: 'outcome', autobank: false, settle: 'v1', freeze: 2, physics: { iterations: 20, bounce: 0.4, gapSlop: 0 } });
+    expect(levelOf(c)).toEqual({ ...L1, custom: true, scoring: 'outcome', autobank: false, settle: 'v1', freeze: 2, physics: { iterations: 20, bounce: 0.4, gapSlop: 0 } });
     expect(sceneTitle(c)).toMatch(/\(custom\)$/);
     expect(parseViewerConfig(toSearch(c))).toEqual(c);
     expect(parseViewerConfig(toSearch(parseViewerConfig('?level=L1&rules=keystone&keystone.bounce=off'))).keystone).toEqual({ physics: { bounce: null } });
@@ -109,13 +126,13 @@ describe('Keystone rules in the viewer', () => {
     const back = parseSceneFile(JSON.stringify(sceneFile(sc, '', null))).config;
     expect({ ...back, params: sc.params }).toEqual(sc);
     expect(compileLevel(levelOf(back)!).hash).toBe(compileLevel(levelOf(sc)!).hash);
-    expect(sceneFile(c, '', null).rules).toMatchObject({ scoring: 'outcome', autobank: false, settle: 'v1', physics: { iterations: 20, bounce: 0.4, gapSlop: 0 } });
+    expect(sceneFile(c, '', null).rules).toMatchObject({ scoring: 'outcome', autobank: false, settle: 'v1', freeze: 2, physics: { iterations: 20, bounce: 0.4, gapSlop: 0 } });
     expect(sceneFile(parseViewerConfig('?level=L1&rules=keystone'), '', null).rules).toEqual({ mode: 'keystone', hitstop: false, slowmo: false });
     // The pace switches (budget, tail skip) ride along in the URL and the scene file, and only when not the default.
-    const paced = parseViewerConfig('?level=L1&rules=keystone&keystone.budget=0&keystone.tailskip=0&keystone.follow=1&keystone.shake=1&keystone.frames=auto');
-    expect(paced.feel).toEqual({ ...DEFAULT_FEEL, budgetMs: 0, tailSkip: false, follow: true, shake: true, frames: 'auto' });
+    const paced = parseViewerConfig('?level=L1&rules=keystone&keystone.budget=0&keystone.tailskip=0&keystone.follow=1&keystone.shake=1&keystone.frames=auto&keystone.rapid=0&keystone.undo=0');
+    expect(paced.feel).toEqual({ ...DEFAULT_FEEL, budgetMs: 0, tailSkip: false, follow: true, shake: true, frames: 'auto', rapid: false, undoMB: 0 });
     expect(parseViewerConfig(toSearch(paced))).toEqual(paced);
-    expect(sceneFile(paced, '', null).rules).toMatchObject({ budget: 0, tailskip: false, follow: true, shake: true, frames: 'auto' });
+    expect(sceneFile(paced, '', null).rules).toMatchObject({ budget: 0, tailskip: false, follow: true, shake: true, frames: 'auto', rapid: false, undo: 0 });
     expect(parseSceneFile(JSON.stringify(sceneFile(paced, '', null))).config).toEqual(paced);
     // The camera moves only when the player moves it unless asked: a file without follow or shake (every file
     // saved before the switch, when an absent follow meant on) opens still, and one saying follow: false too.

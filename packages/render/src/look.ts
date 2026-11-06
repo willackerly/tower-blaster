@@ -84,6 +84,8 @@ export interface LookParams {
   debris?: { dust: number; chips: number; size: number; opacity: number; threshold?: number; face?: number; skirt?: number; erode?: number; thin?: number };
   /** false: none of the stylized effects (sparks, ball trail, heat glow, ball and impact lights). Default true. */
   effects?: boolean;
+  /** Blast lights (blasts.ts) as a multiple of their default strength. Default 1; the real look's sunlit stone needs more to show it. */
+  blastLight?: number;
   /**
    * With an atmosphere: the exhibition hall around the scene (hall.ts, metres, its floor centre at
    * the world's origin on the floor), drawn while the eye is inside it; glass: how milky its
@@ -291,6 +293,7 @@ export function realLook(o: Partial<RealOptions> = {}): LookParams {
     autoExposure: r.autoExposure,
     // Sparks and glows are not real; impacts throw dust and chips instead (debris).
     effects: false,
+    blastLight: 3,
     bloomMix: 0.02,
     vignette: 0.08,
   };

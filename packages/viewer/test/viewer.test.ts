@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import fc from 'fast-check';
 import { buildScenario, KAPLA_SCALE, PLANK_L } from '@tb/scenarios';
 import { massOf, TAG_BALL } from '@tb/engine-api';
-import { REAL_DEFAULTS, REAL_KNOBS } from '@tb/render';
+import { DEFAULT_BLASTS, REAL_DEFAULTS, REAL_KNOBS } from '@tb/render';
 import {
   albedoHex, alphaAt, arrived, hexAlbedo, realOverrides, DEFAULT_PROJECTILE, engineSpec, escapeHtml, eyeOf, frame, FREE_MAX_LAG_MS, GPU_SPARE, invert, MAX_STEPS_LIMIT, multiply,
   newArrivals, newClock, newPacer, PACE_SLACK, parseProjectile, pauseLatch, parseViewerConfig, presetSearch, projectileBody, projectileMass, proposeScene,
@@ -919,15 +919,16 @@ describe('bounce (restitution)', () => {
     expect(bounceScene({ ...plain, ground: null }, 0.6).ground).toBeNull();
   });
 
-  it('worldEngineSpec scales the threshold by 1/sqrt(scale) as froudeParams does, only while restitution is on', () => {
+  it('worldEngineSpec scales the threshold and anchor speed by 1/sqrt(scale) as froudeParams does, only while restitution is on', () => {
     // Off: the same spec as before Bounce existed (no restitution key appears).
     expect(parseSpec(worldEngineSpec('avbd-gpu', 0.25)).options).toEqual({ beta: DEFAULT_AVBD.beta * 4, penaltyMin: DEFAULT_AVBD.penaltyMin * 4, penaltyMax: DEFAULT_AVBD.penaltyMax * 4, maxAngularSpeed: DEFAULT_AVBD.maxAngularSpeed * 2 });
     expect(parseSpec(worldEngineSpec('avbd-gpu:restitution=false,restitutionThreshold=0.5', 0.25)).options).toMatchObject({ restitution: false, restitutionThreshold: 0.5 });
     // On: the default threshold or the spec's own, times sqrt(4).
     const on = parseSpec(worldEngineSpec('avbd-gpu:restitution=true', 0.25)).options;
-    expect(on).toMatchObject({ restitution: true, restitutionThreshold: RESTITUTION_DEFAULTS.restitutionThreshold * 2 });
+    expect(on).toMatchObject({ restitution: true, restitutionThreshold: RESTITUTION_DEFAULTS.restitutionThreshold * 2, restitutionAnchorSpeed: RESTITUTION_DEFAULTS.restitutionAnchorSpeed * 2 });
     expect(on).toEqual({ restitution: true, ...froudeParams({ restitution: true }, 4) });
     expect(parseSpec(worldEngineSpec('avbd-ref:restitution=true,restitutionThreshold=0.5', 0.25)).options).toMatchObject({ restitution: true, restitutionThreshold: 1 });
+    expect(parseSpec(worldEngineSpec('avbd-gpu:restitution=true,restitutionAnchorSpeed=0.1,restitutionAnchors=false', 0.25)).options).toMatchObject({ restitutionAnchorSpeed: 0.2, restitutionAnchors: false });
     expect(parseSpec(worldEngineSpec('avbd-gpu:restitution=true', 0.01)).options.restitutionThreshold).toBeCloseTo(10, 12);
     expect(worldEngineSpec('avbd-gpu:restitution=true', 1)).toBe('avbd-gpu:restitution=true');
   });
@@ -982,6 +983,15 @@ describe('look', () => {
     expect(parseViewerConfig(toSearch(c))).toEqual(c);
     expect(toSearch(parseViewerConfig(''))).not.toMatch(/look|real/);
     expect(parseViewerConfig(presetSearch('?scenario=S1', c))).toMatchObject({ scenario: 'S1', look: 'real', real: c.real });
+  });
+  it('blasts: on by default and absent from the URL; blast=0 and blast.<knob> round-trip; bad ones are refused', () => {
+    expect(parseViewerConfig('').blast).toEqual({ on: true, params: DEFAULT_BLASTS });
+    const c = parseViewerConfig('?blast=0&blast.glow=4');
+    expect(c.blast).toEqual({ on: false, params: { ...DEFAULT_BLASTS, glow: 4 } });
+    expect(parseViewerConfig(toSearch(c))).toEqual(c);
+    expect(toSearch(parseViewerConfig(''))).not.toMatch(/blast/);
+    expect(() => parseViewerConfig('?blast=no')).toThrow(/blast must be 0 or 1/);
+    expect(() => parseViewerConfig('?blast.glow=-2')).toThrow(/blast.glow/);
   });
   it('rejects an unknown look and out-of-range knobs', () => {
     expect(() => parseViewerConfig('?look=photo')).toThrow(/unknown look/);

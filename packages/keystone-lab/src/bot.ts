@@ -13,10 +13,11 @@ export interface Candidate { label: string; shot: Shot }
 /**
  * Launch shots at every cell of the four side faces of each block, every
  * `every` courses, plus anvil drops over every top cell of blocks and slabs.
- * Launch shots are aimed for an engine with `substeps` substeps per step.
+ * Launch shots are aimed for an engine with `substeps` substeps per step, from launcher height `y`
+ * (1/4 h; default 8, the 2 h every chamber level's par line was recorded from).
  */
-export function candidates(level: LevelDef, opts: { every?: number; powers?: number[]; substeps?: number } = {}): Candidate[] {
-  const every = opts.every ?? 2, powers = opts.powers ?? [60, 100], substeps = opts.substeps ?? RAPIER_SUBSTEPS;
+export function candidates(level: LevelDef, opts: { every?: number; powers?: number[]; substeps?: number; y?: number } = {}): Candidate[] {
+  const every = opts.every ?? 2, powers = opts.powers ?? [60, 100], substeps = opts.substeps ?? RAPIER_SUBSTEPS, y = opts.y ?? 8;
   const out: Candidate[] = [];
   const launch = [...new Set(level.rack.filter((a): a is 'marble' | 'cannonball' => a === 'marble' || a === 'cannonball'))];
   level.parts.forEach((p, pi) => {
@@ -40,7 +41,7 @@ export function candidates(level: LevelDef, opts: { every?: number; powers?: num
     const courses = [...new Set([...Array.from({ length: Math.ceil(ny / every) }, (_, k) => k * every), ny - 1])];
     for (const k of courses) for (const [fname, points] of faces) points.forEach(([fx, fz], cell) => {
       for (const ammo of launch) for (const power of powers) {
-        out.push({ label: `part${pi} ${fname}[${cell}] course ${y0 + k} ${ammo} ${power}%`, shot: aimCells(level, ammo, az(fname), [fx, y0 + k + 0.5, fz], power, 8, substeps) });
+        out.push({ label: `part${pi} ${fname}[${cell}] course ${y0 + k} ${ammo} ${power}%`, shot: aimCells(level, ammo, az(fname), [fx, y0 + k + 0.5, fz], power, y, substeps) });
       }
     });
     function az(f: string) { return faces.find((x) => x[0] === f)![2]; }
@@ -111,7 +112,7 @@ export function audit(level: LevelDef, shots: Shot[], runner: Runner): Promise<P
 }
 
 /**
- * The gold-leverage line (third star) from a par line's audit: the lower
+ * The gold-leverage line (the gold badge; the third star until 2026-11-06) from a par line's audit: the lower
  * quartile of the leverage its clean neighbours reach, rounded down to two
  * significant figures, so about three in four near-par shots earn it.
  * Null when nothing in the grid cleared.

@@ -193,9 +193,9 @@ describe('manifold records on the reference (AvbdParams.records)', () => {
       const pending = [...scene.inputs];
       const restitute = w.restitute.bind(w);
       let whole = 0, part = 0;
-      w.restitute = (v0, w0, q0) => {
+      w.restitute = (v0, w0, q0, dx) => {
         const loaded = new Set(w.contacts.filter((c) => c.lambda[0] < 0));
-        restitute(v0, w0, q0);
+        restitute(v0, w0, q0, dx);
         for (const q of w.records) {
           const zeroed = q.points.filter((c) => loaded.has(c) && c.lambda.every((l) => l === 0)).length;
           if (!zeroed) continue;

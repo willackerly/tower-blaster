@@ -1,7 +1,7 @@
 // Levels of your own: a LevelDef from JSON, the URL (level.def) or a saved
 // scene (scene.levelDef), checked strictly, and run as the game compiles it.
 import { describe, expect, it } from 'vitest';
-import { compileLevel, L2, L4, LEVELS, type LevelDef, PRESETTLE_STEPS } from '@tb/keystone';
+import { compileLevel, L2, L4, LEVELS, type LevelDef, PRESETTLE_STEPS, U3 } from '@tb/keystone';
 import {
   CUSTOM_LEVEL, decodeLevelParam, encodeLevelParam, LEVEL_FILE_FORMAT, levelChoice, levelIssues, levelJson, parseLevelDef, parseSceneFile, parseViewerConfig, proposeScene,
   sceneFile, sceneTitle, toSearch, viewerScene, withCustomLevel,
@@ -50,6 +50,15 @@ describe('level files', () => {
     expect(bad({ bounce: 'yes' })).toThrow(/level.physics.bounce must be a number/);
     expect(bad({ substeps: 2 })).toThrow(/level.physics: unknown key substeps/);
     expect(() => parseLevelDef({ ...structuredClone(L2), settle: 'v9' })).toThrow(/level.settle must be v1 or v2 or v3: v9/);
+  });
+
+  it('reads back a freeze budget and a hold objective (Undercut, Bullet Time), and refuses a budget out of range', () => {
+    const def: LevelDef = { ...structuredClone(U3), freeze: 3 };
+    expect(def.objective).toEqual({ kind: 'hold' });
+    expect(parseLevelDef(JSON.parse(levelJson(def)))).toEqual(def);
+    expect(() => parseLevelDef({ ...structuredClone(L2), freeze: 10 })).toThrow(/level.freeze must be a whole number from 0 to 9: 10/);
+    expect(() => parseLevelDef({ ...structuredClone(L2), freeze: 1.5 })).toThrow(/level.freeze must be a whole number/);
+    expect(() => parseLevelDef({ ...structuredClone(L2), objective: { kind: 'hold', min: 1 } })).toThrow(/level.objective: unknown key min/);
   });
 
   it('reads back a scenario part with its role rules, and refuses a bad one, saying where', () => {

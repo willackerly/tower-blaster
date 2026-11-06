@@ -39,6 +39,9 @@ describe('voices for feedback', () => {
       { t: 'tier', step: 0, leverage: 20, tier: 2 },
       { t: 'levelEnd', step: 0, cleared: true, score },
       { t: 'levelEnd', step: 0, cleared: false, score },
+      { t: 'iceCrack', step: 0, body: 0, level: 1, at: [1, 0, 0], seed: 0 },
+      { t: 'iceCrack', step: 0, body: 0, level: 7, at: [1, 0, 0], seed: 0 },
+      { t: 'shatter', step: 0, body: 0, pieces: [1, 2], dv: 6 },
     ];
     for (const e of events) {
       const vs = voicesFor(e);
@@ -48,6 +51,9 @@ describe('voices for feedback', () => {
     const crack = voicesFor({ t: 'heritageCrack', step: 0, body: 0 }).filter((v) => v.kind === 'tone');
     expect(crack[1]!.freq / crack[0]!.freq).toBeCloseTo(Math.SQRT2, 3);
     expect(voicesFor({ t: 'slowMo', step: 0, body: 0 })).toEqual([]);
+    // Ice: a bigger crack ticks louder; a shatter's chimes are on the scale (degree k for whole k).
+    expect(voicesFor({ t: 'iceCrack', step: 0, body: 0, level: 7, at: [1, 0, 0], seed: 0 })[0]!.gain).toBeGreaterThan(voicesFor({ t: 'iceCrack', step: 0, body: 0, level: 1, at: [1, 0, 0], seed: 0 })[0]!.gain);
+    for (const v of voicesFor({ t: 'shatter', step: 0, body: 0, pieces: [], dv: 6 }).filter((x) => x.kind === 'tone')) expect([14, 16, 17, 19].map((k) => degree(k))).toContain(v.freq);
   });
   it('with the collision sound on, impacts and contacts make no voices; every cue still does', () => {
     const hist = new Uint32Array(6 * BANDS); hist[3] = 5;

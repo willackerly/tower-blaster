@@ -4,12 +4,13 @@
 //
 // P5  stages of the real step (GpuAvbdEngine.probeStages): after p5Settle steps,
 //     p5Steps steps each with a marker pass at the start and after every stage
-//     (STEP_STAGES). A marker is one 1-thread dispatch with a beginning-of-pass
-//     timestamp; it reads the buffers the stages end by writing (bodies, spheres,
-//     pair count, pairs, manifolds, colour order, solver bodies), so it cannot run
-//     before the stage it closes. A stage's time is the gap between its markers;
-//     the step's is the first marker to the last, which includes the markers
-//     (6 near-empty dispatches, about 6 µs on the M5).
+//     (STEP_STAGES), and inside the solve after its setup and its sweeps
+//     (SOLVE_PARTS; PROBE_MARKS is the order). A marker is one 1-thread dispatch
+//     with a beginning-of-pass timestamp; it reads the buffers the stages end by
+//     writing (bodies, spheres, pair count, pairs, manifolds, colour order, solver
+//     bodies), so it cannot run before the stage it closes. A stage's time is the
+//     gap between its markers; the step's is the first marker to the last, which
+//     includes the markers (8 near-empty dispatches, about 8 µs on the M5).
 // P6  island labelling on the contact graph of that step (bodies joined by a
 //     pair slot with contact points; the ground joins nothing): union-find over
 //     the edges with lock-free hooking (larger root under smaller, by compare-
@@ -20,8 +21,10 @@
 // As in probe.ts, times from a software adapter or without timestamps are not
 // performance results.
 import { readBuffer } from '@tb/gpu';
+import type { InputEvent } from '@tb/engine-api';
 import { buildScenario } from '@tb/scenarios';
-import { GpuAvbdEngine, type GpuEngineOptions, STEP_STAGES, type StepStage } from './engine.ts';
+import { GpuAvbdEngine, type GpuEngineOptions, PROBE_MARKS, type ProbeMark, STEP_STAGES, type StepStage } from './engine.ts';
+import { SOLVE_PARTS, type SolvePart } from './solver.ts';
 import type { ProbeOptions, Stat } from './probe.ts';
 
 export interface P5Result {
@@ -34,6 +37,8 @@ export interface P5Result {
   settle: number;
   /** ms per stage over the timed steps (median, p10, p90), and the step from the first marker to the last. */
   stages: Record<StepStage, Stat>;
+  /** The solve's parts (SOLVE_PARTS, then finalize as 'finish'): together the solve stage. */
+  solveParts: Record<SolvePart | 'finish', Stat>;
   step: Stat;
   /** The engine's diagnostics after the last timed step. */
   pairs: number;
@@ -41,7 +46,13 @@ export interface P5Result {
   uncolored: number;
   /** Whether stage times are GPU timestamps; without them only the step's wall time (submit to done) is measured. */
   timestamps: boolean;
+  /** ProbeOptions.p5Blast (0: none), and the bodies awake after the last timed step (all of them without sleep). */
+  blast: number;
+  awake: number;
 }
+
+/** The impulse of P5's blast (ProbeOptions.p5Blast), as the sleep tests' blast on a city (engine-sleep-skip.test.ts). */
+export const P5_BLAST_IMPULSE = 2;
 
 export interface P6Result {
   N: number;
@@ -77,7 +88,10 @@ const MARKER_WGSL = /* wgsl */ `
 /** P5: the step's stages on o.scenario after o.p5Settle steps (the engine variant as P2 builds it). */
 export async function runP5(device: GPUDevice, timestamps: boolean, o: ProbeOptions, engineOpts: Omit<GpuEngineOptions, 'device'>): Promise<{ result: P5Result; engine: GpuAvbdEngine }> {
   const built = buildScenario(o.scenario, o.scenario === 'S4' ? { N: o.N, ...o.params } : o.params, o.seed);
-  const scene = { ...built, gravity: built.gravity.map((g) => g * o.gravityScale) as typeof built.gravity };
+  if (!(Number.isFinite(o.p5Blast) && o.p5Blast >= 0)) throw new Error(`P5: p5Blast must be a finite number >= 0, got ${o.p5Blast}`);
+  const p0 = built.bodies[0]?.pos ?? [0, 0, 0];
+  const blast: InputEvent[] = o.p5Blast > 0 ? [{ step: o.p5Settle, kind: 'blast', blast: { centre: [p0[0], p0[1], p0[2]], radius: o.p5Blast, impulse: P5_BLAST_IMPULSE } }] : [];
+  const scene = { ...built, gravity: built.gravity.map((g) => g * o.gravityScale) as typeof built.gravity, inputs: [...(built.inputs ?? []), ...blast] };
   const e = new GpuAvbdEngine(o.engine?.params ?? {}, { ...engineOpts, device });
   await e.init(scene);
   for (let s = 0; s < o.p5Settle; s++) {
@@ -92,15 +106,18 @@ export async function runP5(device: GPUDevice, timestamps: boolean, o: ProbeOpti
     layout: pipe.getBindGroupLayout(0),
     entries: [pp.bodies, pp.spheres, pp.total, pp.pairs, pp.manifolds, pp.col.order, pp.solver.solver, sink].map((buffer, binding) => ({ binding, resource: { buffer } })),
   });
-  const marks = 1 + STEP_STAGES.length;
+  const marks = PROBE_MARKS.length;
   const qs = timestamps ? device.createQuerySet({ type: 'timestamp', count: marks }) : null;
   const resolve = timestamps ? device.createBuffer({ size: marks * 8, usage: GPUBufferUsage.QUERY_RESOLVE | GPUBufferUsage.COPY_SRC }) : null;
   const per: Record<StepStage, number[]> = Object.fromEntries(STEP_STAGES.map((s) => [s, []])) as unknown as Record<StepStage, number[]>;
+  const parts: Record<SolvePart | 'finish', number[]> = Object.fromEntries([...SOLVE_PARTS, 'finish'].map((s) => [s, []])) as unknown as Record<SolvePart | 'finish', number[]>;
   const steps: number[] = [];
   for (let s = 0; s < o.p5Steps; s++) {
     let k = 0;
+    const seen: ProbeMark[] = [];
     const t0 = performance.now();
     e.probeStages((enc, at) => {
+      seen.push(at);
       if (at === 'solve' && resolve && qs) {
         // The last marker, then the resolve, in the step's own command buffer.
         const pass = enc.beginComputePass({ timestampWrites: { querySet: qs, beginningOfPassWriteIndex: k++ } });
@@ -112,22 +129,31 @@ export async function runP5(device: GPUDevice, timestamps: boolean, o: ProbeOpti
       pass.setPipeline(pipe); pass.setBindGroup(0, bind); pass.dispatchWorkgroups(1); pass.end();
     });
     await e.finish();
+    if (seen.join() !== PROBE_MARKS.join()) throw new Error(`P5: marks came as ${seen.join(', ')}, not ${PROBE_MARKS.join(', ')}`);
     const wall = performance.now() - t0;
     if (!resolve) { steps.push(wall); continue; }
     const t = new BigUint64Array(await readBuffer(device, resolve, marks * 8));
-    const ms = (i: number) => (t[i]! > t[i - 1]! ? Number(t[i]! - t[i - 1]!) / 1e6 : 0);
-    STEP_STAGES.forEach((stage, i) => per[stage].push(ms(i + 1)));
-    steps.push(t[marks - 1]! > t[0]! ? Number(t[marks - 1]! - t[0]!) / 1e6 : 0);
+    const at = (m: ProbeMark) => t[PROBE_MARKS.indexOf(m)]!;
+    const gap = (a: ProbeMark, b: ProbeMark) => (at(b) > at(a) ? Number(at(b) - at(a)) / 1e6 : 0);
+    // Stage by stage from the mark before it (the solve's from the colouring's: its parts' marks are inside it).
+    let prev: ProbeMark = 'start';
+    for (const stage of STEP_STAGES) { per[stage].push(gap(prev, stage)); prev = stage; }
+    parts.setup.push(gap('coloring', 'setup'));
+    parts.sweeps.push(gap('setup', 'sweeps'));
+    parts.finish.push(gap('sweeps', 'solve'));
+    steps.push(gap('start', 'solve'));
   }
   qs?.destroy(); resolve?.destroy(); sink.destroy();
   const d = await e.diagnostics();
+  const awake = (await e.snapshot()).awake.reduce((a, x) => a + (x ? 1 : 0), 0);
   const empty: Stat = { median: NaN, p10: NaN, p90: NaN, samples: 0 };
   return {
     engine: e,
     result: {
       scenario: o.scenario, params: scene.params as Record<string, number | boolean>, N: e.probeParts().n, iterations: pp.iterations, variant: e.info.variant, settle: o.p5Settle,
       stages: Object.fromEntries(STEP_STAGES.map((s) => [s, per[s].length ? stat(per[s]) : empty])) as Record<StepStage, Stat>,
-      step: stat(steps), pairs: d.pairsWritten, colors: d.colors, uncolored: d.uncolored, timestamps: !!resolve,
+      solveParts: Object.fromEntries(Object.entries(parts).map(([k, v]) => [k, v.length ? stat(v) : empty])) as Record<SolvePart | 'finish', Stat>,
+      step: stat(steps), pairs: d.pairsWritten, colors: d.colors, uncolored: d.uncolored, timestamps: !!resolve, blast: o.p5Blast, awake,
     },
   };
 }

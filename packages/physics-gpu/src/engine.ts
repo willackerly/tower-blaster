@@ -3,17 +3,18 @@
 // one command buffer per step. Parameters are the reference solver's (physics-ref AvbdParams), so
 // the two engines can be run side by side on the same settings. With AvbdParams.restitution on,
 // the solve ends with the restitution pass (restitution.ts).
-import { type BodyDesc, checkBlast, checkInputQueue, DEFAULT_RESTITUTION_COMBINE, emptySnapshot, type EngineHealth, type EngineInfo, inertiaOf, type InputEvent, massOf, type PhysicsEngine, type SceneDesc, type Snapshot, queueInputs, spawnedBodies, TIER_FREE, type Vec3 } from '@tb/engine-api';
+import { type BodyDesc, checkBlast, checkInputQueue, DEFAULT_RESTITUTION_COMBINE, emptySnapshot, type EngineCheckpoint, type EngineHealth, type EngineInfo, inertiaOf, type InputEvent, massOf, type PhysicsEngine, type SceneDesc, type Snapshot, queueInputs, spawnedBodies, TIER_FREE, type Vec3 } from '@tb/engine-api';
 import { boundingRadius } from '@tb/geom';
 import { assertStorageFits, createDevice, isSoftwareAdapter, Readback } from '@tb/gpu';
 import { type AvbdParams, avbdVariant, checkColoring, checkGapSlop, checkRecords, checkRemoved, checkRestitution, DEFAULT_AVBD, RESTITUTION_DEFAULTS } from '@tb/physics-ref';
 import { Body, BodyProps, field, RestSlot, Shape, SolverBody, writeStruct } from '@tb/schema';
 import { BlastPass, type DueBlast } from './blast.ts';
+import { CheckpointPool, restoreRegions, saveRegions, type StateRegion, whole } from './checkpoint.ts';
 import { assertPairDispatch, Broadphase } from './broadphase.ts';
 import { Coloring } from './coloring.ts';
 import { DEFAULT_PAIRS_PER_BODY, gpuHealth } from './health.ts';
 import { Narrowphase } from './narrowphase.ts';
-import { restitutionWord } from './restitution.ts';
+import { ISLAND_BODY_BYTES, restitutionWord } from './restitution.ts';
 import { decodeBodies } from './snapshot.ts';
 import { checkSleepRule, DEFAULT_SLEEP, SleepPass, type SleepRule } from './sleep.ts';
 import { AvbdSolver, DEFAULT_DISPATCH, defaultTailThreads, HESSIAN_FORMS, type HessianForm, type RecordMode, type SolverDispatch } from './solver.ts';
@@ -51,6 +52,10 @@ export interface GpuEngineOptions {
    */
   colorTail?: number;
   indirectColors?: boolean;
+  /** Colours below colorTail by indirect dispatch sized to each colour (SolverDispatch.sizedColors); default on with sleep, off without. The same result either way. */
+  sizedColors?: boolean;
+  /** With sleep, the dual updates run over lists of the awake bodies and of the pairs not both asleep (SolverDispatch.awakeLists); default on with sleep. The same result either way. */
+  awakeLists?: boolean;
   tailThreads?: number;
   /**
    * How the primal holds and solves each body's 6x6 system (SolverDispatch.hessian):
@@ -165,27 +170,36 @@ export interface GpuDiagnostics {
  * What the last step's restitution pass did, as the reference's
  * StepStats.restitution: the points it bounced (P > 0), the normal impulse it
  * applied in all (N s, supports included), and the impulse it took from the
- * ground (ground normals are +y). Read back from the pass's state, summed in
- * f64. The reference's momentum (the bodies' total linear momentum change)
- * is not kept here: it equals groundImpulse to rounding.
+ * ground (ground normals are +y) as supports. Read back from the pass's
+ * state, summed in f64. The reference's momentum (the bodies' total linear
+ * momentum change) and anchorImpulse (what anchors took, the ground's
+ * included: with restitutionAnchors on, the ground's points are anchors, so
+ * groundImpulse is 0 here as on the reference) are not kept: momentum equals
+ * groundImpulse + anchorImpulse to rounding.
  */
 export interface GpuRestitutionStats {
   contacts: number;
   impulse: number;
   groundImpulse: Vec3;
+  /** The islands the energy cap scaled down and the least alpha it took (1 when none, and always with the cap off). */
+  capped: number;
+  capAlpha: number;
 }
 
 /**
  * GpuRestitutionStats from a copy of the pass's state (AvbdSolver.restSlots)
  * after a step that wrote `pairsWritten` pair slots for n bodies.
  */
-export function restitutionStatsOf(slots: ArrayBuffer, pairsWritten: number, maxPairs: number, n: number): GpuRestitutionStats {
+export function restitutionStatsOf(slots: ArrayBuffer, pairsWritten: number, maxPairs: number, n: number, islands: ArrayBuffer | null = null): GpuRestitutionStats {
   const f = new Float32Array(slots), u = new Uint32Array(slots), stride = RestSlot.size / 4;
   const at = (name: string) => RestSlot.fields.find((x) => x.name === name)!.offset / 4;
   const P = at('P'), flags = at('flags');
-  const out: GpuRestitutionStats = { contacts: 0, impulse: 0, groundImpulse: [0, 0, 0] };
+  const out: GpuRestitutionStats = { contacts: 0, impulse: 0, groundImpulse: [0, 0, 0], capped: 0, capAlpha: 1 };
+  // Whether a point was marked to bounce this step: else the pass's later kernels (the islands' among them) did not run.
+  let marked = false;
   const add = (k: number, ground: boolean) => {
     const fl = u[k * stride + flags]!;
+    if (fl & 15) marked = true;
     for (let q = 0; q < 4; q++) {
       // Bit q: the point bounces; bit q + 4: it is a support.
       if (!((fl >> q) & 0x11)) continue;
@@ -197,6 +211,15 @@ export function restitutionStatsOf(slots: ArrayBuffer, pairsWritten: number, max
   };
   for (let k = 0; k < pairsWritten; k++) add(k, false);
   for (let i = 0; i < n; i++) add(maxPairs + i, true);
+  if (islands && marked) {
+    // IslandBody (restitution.ts): word 0 the parent (a root's is itself), word 1 the island's alpha.
+    const iu = new Uint32Array(islands), ifl = new Float32Array(islands), words = ISLAND_BODY_BYTES / 4;
+    for (let i = 0; i < n; i++) {
+      if (iu[i * words] !== i || !(ifl[i * words + 1]! < 1)) continue;
+      out.capped++;
+      out.capAlpha = Math.min(out.capAlpha, ifl[i * words + 1]!);
+    }
+  }
   return out;
 }
 
@@ -207,6 +230,9 @@ export function restitutionStatsOf(slots: ArrayBuffer, pairsWritten: number, max
  */
 export const STEP_STAGES = ['prepare', 'broadphase', 'narrowphase', 'coloring', 'solve'] as const;
 export type StepStage = (typeof STEP_STAGES)[number];
+/** Where probeStages() calls its mark, in order: the start, then after each stage, with the solve's parts (SOLVE_PARTS) before the solve's end. */
+export const PROBE_MARKS = ['start', 'prepare', 'broadphase', 'narrowphase', 'coloring', 'setup', 'sweeps', 'solve'] as const;
+export type ProbeMark = (typeof PROBE_MARKS)[number];
 
 export class GpuAvbdEngine implements PhysicsEngine {
   readonly info: EngineInfo;
@@ -238,9 +264,11 @@ export class GpuAvbdEngine implements PhysicsEngine {
   readonly records: RecordMode;
   /** The colouring's lattice preference (gpuColorMode(): AvbdParams.colorMode, unset 3). */
   readonly colorMode: number;
-  private parts: { bodies: GPUBuffer; shapes: GPUBuffer; props: GPUBuffer; spheres: GPUBuffer; sweep: GPUBuffer; prev: GPUBuffer; bp: Broadphase; np: Narrowphase; col: Coloring; solver: AvbdSolver; blast: BlastPass; readback: Readback; sleep: SleepPass | null } | null = null;
+  private parts: { bodies: GPUBuffer; shapes: GPUBuffer; props: GPUBuffer; spheres: GPUBuffer; sweep: GPUBuffer; prev: GPUBuffer; bp: Broadphase; np: Narrowphase; col: Coloring; solver: AvbdSolver; blast: BlastPass; readback: Readback; sleep: SleepPass | null; pool: CheckpointPool } | null = null;
   /** Counts dispose() calls (init() makes one), so an init() that awaited across another knows it was overtaken. */
   private generation = 0;
+  /** Counts restore() calls: an awake count read before one belongs to a future that is gone. */
+  private timeline = 0;
 
   constructor(params: Partial<AvbdParams> = {}, private readonly opts: GpuEngineOptions = {}) {
     this.params = { ...DEFAULT_AVBD, ...params };
@@ -266,7 +294,7 @@ export class GpuAvbdEngine implements PhysicsEngine {
     check('settleSteps', (v) => Number.isInteger(v) && v >= 0, 'a non-negative integer');
     check('settleIterations', (v) => Number.isInteger(v) && v >= 1, 'a positive integer');
     if ((opts.settleSteps === undefined) !== (opts.settleIterations === undefined)) throw new Error('GpuAvbdEngine: GpuEngineOptions.settleSteps and settleIterations go together');
-    for (const k of ['indirectColors', 'boxBroadphase', 'sleep', 'sleepSkip'] as const) if (opts[k] !== undefined && typeof opts[k] !== 'boolean') throw new Error(`GpuAvbdEngine: GpuEngineOptions.${k} must be a boolean, got ${opts[k]}`);
+    for (const k of ['indirectColors', 'sizedColors', 'awakeLists', 'boxBroadphase', 'sleep', 'sleepSkip'] as const) if (opts[k] !== undefined && typeof opts[k] !== 'boolean') throw new Error(`GpuAvbdEngine: GpuEngineOptions.${k} must be a boolean, got ${opts[k]}`);
     try { checkSleepRule(sleepRuleOf(opts)); } catch (e) { throw new Error(`GpuAvbdEngine: GpuEngineOptions.${(e as Error).message}`); }
     if (opts.sleep && this.params.restitution) throw new Error('GpuAvbdEngine: GpuEngineOptions.sleep is not implemented with AvbdParams.restitution yet');
     if (opts.hessian !== undefined && !HESSIAN_FORMS.includes(opts.hessian)) throw new Error(`GpuAvbdEngine: GpuEngineOptions.hessian must be one of ${HESSIAN_FORMS.join(', ')}, got ${opts.hessian}`);
@@ -290,7 +318,7 @@ export class GpuAvbdEngine implements PhysicsEngine {
     this.colorMode = gpuColorMode(this.params);
     if (this.params.colorMode !== undefined) variant.colorMode = this.params.colorMode;
     // Options that size the buffers or shape the dispatch change the work per step (e.g. the broadphase's key bits), so they are part of the variant.
-    for (const k of ['capacity', 'spare', 'pairsPerBody', 'maxRadius', 'colorTail', 'indirectColors', 'tailThreads', 'colorRounds', 'hessian', 'boxBroadphase', 'sleep', 'sleepSpeed', 'sleepSteps', 'sleepDrift', 'wakeSpeed', 'wakeDepth', 'settleSteps', 'settleIterations', 'sleepSkip'] as const) if (opts[k] !== undefined) variant[k] = opts[k];
+    for (const k of ['capacity', 'spare', 'pairsPerBody', 'maxRadius', 'colorTail', 'indirectColors', 'tailThreads', 'colorRounds', 'hessian', 'boxBroadphase', 'sleep', 'sleepSpeed', 'sleepSteps', 'sleepDrift', 'wakeSpeed', 'wakeDepth', 'settleSteps', 'settleIterations', 'sleepSkip', 'sizedColors', 'awakeLists'] as const) if (opts[k] !== undefined) variant[k] = opts[k];
     this.info = { name: 'avbd-gpu', variant, backend: 'webgpu', integrator: { substeps: 1 } };
   }
 
@@ -315,6 +343,10 @@ export class GpuAvbdEngine implements PhysicsEngine {
     // Unknown adapters count as hardware: the width only sets the speed, never the result.
     this.dispatch = {
       colorTail: this.opts.colorTail ?? DEFAULT_DISPATCH.colorTail, indirectColors: this.opts.indirectColors ?? DEFAULT_DISPATCH.indirectColors,
+      // Sized colour dispatches by default with sleep (its sleepers have no colour); as before without.
+      sizedColors: this.opts.sizedColors ?? (!!this.opts.sleep || DEFAULT_DISPATCH.sizedColors),
+      // Awake lists by default with sleep; the solver builds them only where the scene sleeps too.
+      awakeLists: this.opts.awakeLists ?? (!!this.opts.sleep || DEFAULT_DISPATCH.awakeLists),
       tailThreads: this.opts.tailThreads ?? defaultTailThreads(adapter ? isSoftwareAdapter(adapter) : false),
       hessian: this.opts.hessian ?? DEFAULT_DISPATCH.hessian,
     };
@@ -370,9 +402,11 @@ export class GpuAvbdEngine implements PhysicsEngine {
       }, this.dispatch, this.records, p.gapSlop ?? 0, p.restitution ? {
         threshold: p.restitutionThreshold ?? RESTITUTION_DEFAULTS.restitutionThreshold, rounds: p.restitutionRounds ?? RESTITUTION_DEFAULTS.restitutionRounds,
         groundRestitution: scene.ground?.restitution ?? 0, combine: scene.restitutionCombine ?? DEFAULT_RESTITUTION_COMBINE,
+        anchors: p.restitutionAnchors ?? RESTITUTION_DEFAULTS.restitutionAnchors, anchorSpeed: p.restitutionAnchorSpeed ?? RESTITUTION_DEFAULTS.restitutionAnchorSpeed,
+        energyCap: p.restitutionEnergyCap ?? RESTITUTION_DEFAULTS.restitutionEnergyCap,
       } : null, sleeps);
       const sleep = sleeps ? new SleepPass(device, sleepRuleOf(this.opts), this.capacity, bodies, props, np.manifolds, bp.total) : null;
-      parts = { bodies, shapes, props, spheres, sweep, prev, bp, np, col, solver, blast: new BlastPass(device, bodies, props, shapes, solver.solver), readback: new Readback(device), sleep };
+      parts = { bodies, shapes, props, spheres, sweep, prev, bp, np, col, solver, blast: new BlastPass(device, bodies, props, shapes, solver.solver), readback: new Readback(device), sleep, pool: new CheckpointPool(device) };
     } catch (e) {
       thrown = e;
     }
@@ -467,13 +501,13 @@ export class GpuAvbdEngine implements PhysicsEngine {
 
   /** Reads the awake count the sleep pass left after step k (one read at a time; the next step() asks again). */
   private countAwake(k: number): void {
-    const parts = this.parts!, generation = this.generation;
+    const parts = this.parts!, generation = this.generation, timeline = this.timeline;
     this.counting = true;
     parts.readback.read(parts.sleep!.scratch, 4, parts.sleep!.countOffset).then((buf) => {
-      if (this.generation !== generation || this.parts !== parts) return;
+      if (this.generation !== generation || this.parts !== parts || this.timeline !== timeline) return;
       this.counting = false;
       if (new Uint32Array(buf)[0] === 0) this.quietStep = Math.max(this.quietStep, k);
-    }, () => { if (this.generation === generation) this.counting = false; });
+    }, () => { if (this.generation === generation && this.timeline === timeline) this.counting = false; });
   }
 
   /**
@@ -489,7 +523,7 @@ export class GpuAvbdEngine implements PhysicsEngine {
    * at the start and after each of STEP_STAGES, between passes, so the probe can put a timestamped pass
    * there. The work submitted is step()'s, plus whatever `mark` encodes.
    */
-  probeStages(mark: (enc: GPUCommandEncoder, at: 'start' | StepStage) => void): void {
+  probeStages(mark: (enc: GPUCommandEncoder, at: ProbeMark) => void): void {
     this.encodeStep(undefined, mark);
   }
 
@@ -512,7 +546,7 @@ export class GpuAvbdEngine implements PhysicsEngine {
     };
   }
 
-  private encodeStep(solveTimestamps?: GPUComputePassTimestampWrites, mark?: (enc: GPUCommandEncoder, at: 'start' | StepStage) => void): void {
+  private encodeStep(solveTimestamps?: GPUComputePassTimestampWrites, mark?: (enc: GPUCommandEncoder, at: ProbeMark) => void): void {
     const { device, parts, scene } = this;
     if (!device || !parts || !scene) throw new Error('init() first');
     if (this.failure) throw new Error(`GpuAvbdEngine: ${this.failure}`);
@@ -552,7 +586,7 @@ export class GpuAvbdEngine implements PhysicsEngine {
     mark?.(enc, 'narrowphase');
     parts.col.encode(enc, n, scene.ground?.y ?? 0, parts.sleep?.seed);
     mark?.(enc, 'coloring');
-    parts.solver.solve(enc, n, p.iterations, solveTimestamps);
+    parts.solver.solve(enc, n, p.iterations, solveTimestamps, mark && ((at) => mark(enc, at)));
     parts.sleep?.encodeSleep(enc, n);
     mark?.(enc, 'solve');
     device.queue.submit([enc.finish()]);
@@ -576,6 +610,68 @@ export class GpuAvbdEngine implements PhysicsEngine {
     const buf = await this.parts.readback.read(this.parts.bodies, n * Body.size);
     // Awake is flags bit 0 (bits 8-15 are the tier's). Tiers only once a body is removed (Snapshot.tier: absent, every body is active).
     return decodeBodies(buf, n, this.gone.size > 0);
+  }
+
+  /**
+   * The GPU buffer ranges a step reads as the step before left it (checkpoint.ts), from every stage:
+   * the bodies with their shapes and props (a spawn after a checkpoint writes slots past n, which
+   * restore() puts back too), and each stage's carried(). Everything else is rewritten each step.
+   */
+  private carried(): StateRegion[] {
+    const p = this.parts!;
+    return [whole(p.bodies), whole(p.shapes), whole(p.props), ...p.solver.carried(), ...p.np.carried(), ...p.bp.carried(), ...(p.sleep?.carried() ?? [])];
+  }
+
+  /**
+   * The engine's whole state after the steps submitted so far (engine-api EngineCheckpoint): the
+   * carried GPU ranges copied on the queue into pooled buffers (no read-back, nothing waits), and
+   * the CPU side (step index, queued inputs, removed bodies, the sleep skip's bookkeeping, the
+   * solver's history half). Holds about half the contact buffer plus the per-body buffers: 85 MB
+   * for a 10k level at 16 pairs per body.
+   */
+  checkpoint(): EngineCheckpoint & { regions: readonly StateRegion[] } {
+    const { device, parts } = this;
+    if (!device || !parts) throw new Error('init() first');
+    if (this.failure) throw new Error(`GpuAvbdEngine: ${this.failure}`);
+    const regions = this.carried(), saved = saveRegions(device, parts.pool, regions);
+    const cpu = {
+      n: this.n, stepIndex: this.stepIndex, pending: [...this.pending], gone: [...this.gone],
+      quietStep: this.quietStep, eventStep: this.eventStep, skipped: this.skipped, solver: parts.solver.cpuState,
+    };
+    const generation = this.generation;
+    let live = true;
+    const bytes = regions.reduce((a, r) => a + r.size, 0) + 64 * cpu.pending.length;
+    return {
+      step: cpu.stepIndex, bytes, regions,
+      restore: () => {
+        if (!live) throw new Error('GpuAvbdEngine: restore() of a disposed checkpoint');
+        if (this.generation !== generation || this.parts !== parts || !this.device) throw new Error('GpuAvbdEngine: restore() of a checkpoint from before the engine was init()ed again or disposed');
+        if (this.failure) throw new Error(`GpuAvbdEngine: ${this.failure}`);
+        restoreRegions(this.device, regions, saved);
+        this.n = cpu.n;
+        this.stepIndex = cpu.stepIndex;
+        this.pending = [...cpu.pending];
+        this.gone = new Set(cpu.gone);
+        this.quietStep = cpu.quietStep;
+        this.eventStep = cpu.eventStep;
+        this.skipped = cpu.skipped;
+        parts.solver.cpuState = cpu.solver;
+        // An awake count still being read is of a step that is gone: drop it and ask again.
+        this.timeline++;
+        this.counting = false;
+      },
+      dispose: () => {
+        if (!live) return;
+        live = false;
+        for (const b of saved) parts.pool.give(b);
+      },
+    };
+  }
+
+  /** Copy buffers the engine's checkpoints made, and the bytes waiting for reuse (tests). */
+  checkpointPool(): { created: number; spareBytes: number } {
+    const pool = this.parts?.pool;
+    return { created: pool?.created ?? 0, spareBytes: pool?.spareBytes ?? 0 };
   }
 
   /** Pipeline health: the pair buffer and colouring limits after the last step, and the pair buffer over every step since init(). */
@@ -614,12 +710,13 @@ export class GpuAvbdEngine implements PhysicsEngine {
     if (!device || !parts) throw new Error('init() first');
     const slots = parts.solver.restSlots;
     if (!slots) return null;
-    const [t, r] = await Promise.all([parts.readback.read(parts.bp.total), parts.readback.read(slots)]);
-    return restitutionStatsOf(r, new Uint32Array(t)[3]!, parts.solver.maxPairs, this.n);
+    const islands = parts.solver.restIslands;
+    const [t, r, il] = await Promise.all([parts.readback.read(parts.bp.total), parts.readback.read(slots), islands ? parts.readback.read(islands) : null]);
+    return restitutionStatsOf(r, new Uint32Array(t)[3]!, parts.solver.maxPairs, this.n, il);
   }
 
   private static free(p: NonNullable<GpuAvbdEngine['parts']>): void {
-    p.solver.destroy(); p.blast.destroy(); p.sleep?.destroy(); p.col.destroy(); p.np.destroy(); p.bp.destroy(); p.readback.destroy();
+    p.solver.destroy(); p.blast.destroy(); p.sleep?.destroy(); p.col.destroy(); p.np.destroy(); p.bp.destroy(); p.readback.destroy(); p.pool.destroy();
     for (const b of [p.bodies, p.shapes, p.props, p.spheres, p.sweep, p.prev]) b.destroy();
   }
 

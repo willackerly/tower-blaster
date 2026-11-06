@@ -3,22 +3,26 @@
 // ammo kind (all steel, each at its own size: a 20 cm marble knocks, a 50 cm
 // cannonball thuds, the cue is a steel rod that rings as a bar). Pure, so
 // node tests cover it; collapse-sound.ts runs it.
-import { AMMO, AMMO_KINDS, type AmmoKind, type CompiledLevel, MATERIALS, materialId } from '@tb/keystone';
-import { SOUND_MATERIALS, type SoundMaterial } from '@tb/audio';
+import { AMMO, AMMO_KINDS, type AmmoKind, type CompiledLevel, isIcePiece, MATERIALS, materialId } from '@tb/keystone';
+import { roughTime, soundMaterials, type SoundMaterial, type SoundSet } from '@tb/audio';
 import type { BodyDesc } from '@tb/engine-api';
 
-/** Impacts by @tb/audio's collision sound, or the old pentatonic voices (audio.ts). */
-export type GameSoundMode = 'collapse' | 'synth';
+/**
+ * Impacts by @tb/audio's collision sound with its current materials ('collapse', the default), with
+ * G6's materials ('classic': smooth contacts, table modes only), or as the old pentatonic voices (audio.ts).
+ */
+export type GameSoundMode = 'collapse' | 'classic' | 'synth';
+export const GAME_SOUND_MODES = ['collapse', 'classic', 'synth'] as const satisfies readonly GameSoundMode[];
 
-/** Keystone material name -> its sound (same names in @tb/audio). */
-export const KEYSTONE_SOUNDS: Record<(typeof MATERIALS)[number]['name'], SoundMaterial> = {
-  plaster: SOUND_MATERIALS.plaster,
-  stone: SOUND_MATERIALS.stone,
-  iron: SOUND_MATERIALS.iron,
-  ice: SOUND_MATERIALS.ice,
-  rubber: SOUND_MATERIALS.rubber,
-  steel: SOUND_MATERIALS.steel,
-};
+/** The material set a collision-sound mode plays. */
+export const soundSetOf = (mode: GameSoundMode): SoundSet => (mode === 'classic' ? 'classic' : 'real');
+
+/** Keystone material name -> its sound in a set (same names in @tb/audio). */
+export function keystoneSounds(set: SoundSet = 'real'): Record<(typeof MATERIALS)[number]['name'], SoundMaterial> {
+  const s = soundMaterials(set);
+  return { plaster: s.plaster, stone: s.stone, iron: s.iron, ice: s.ice, rubber: s.rubber, steel: s.steel };
+}
+export const KEYSTONE_SOUNDS = keystoneSounds();
 
 /**
  * The game's master gain over @tb/audio's full scale, dB. The game's camera is ~10 m from 0.5 m
@@ -27,6 +31,20 @@ export const KEYSTONE_SOUNDS: Record<(typeof MATERIALS)[number]['name'], SoundMa
  * ceiling is 0.9), which leaves room for the cues on top.
  */
 export const GAME_SOUND_DB = -22;
+
+/**
+ * The 'real' set's level, from the L1-L5 par lines on the AVBD reference (sound-cli.ts set=real prints
+ * the peak and the loudness, ITU-R BS.1770). The real set is transient where the classic one rings, so
+ * at the same headroom it reads quieter. Since its plaster turned solid (docs/sound.md, Material
+ * identity) L1's loudest hit goes 1.1 dB into the limiter at -17 (nothing else limits; loudest other
+ * peak 0.73), and the set is 1.2-4.0 LU (mean 2.4) under the classic set at GAME_SOUND_DB. Kept at -17:
+ * at -18 that hit only touches it (0.1 dB) but the set is 3.4 LU under, and catching a rare peak is
+ * what the limiter is for. keystone.impacts=3 makes up the rest.
+ */
+export const GAME_SOUND_DB_REAL = -17;
+
+/** The game's master gain over @tb/audio's full scale for a material set, dB. */
+export const gameSoundDb = (set: SoundSet = 'real'): number => (set === 'classic' ? GAME_SOUND_DB : GAME_SOUND_DB_REAL);
 
 /** First ammo slot; slot AMMO_SLOT + k is AMMO_KINDS[k]. */
 export const AMMO_SLOT = MATERIALS.length;
@@ -38,12 +56,50 @@ export interface SlotSound { material: SoundMaterial; edge: number }
 const STEEL_G = 79e9;
 const STEEL_DENSITY = MATERIALS[materialId('steel')]!.density, IRON_DENSITY = MATERIALS[materialId('iron')]!.density;
 
-/** The sound of each slot for a level: structure slots at the level's cube edge, ammo at its own size (metres). */
-export function slotSounds(c: CompiledLevel): SlotSound[] {
-  const h = c.frame.unit;
-  const structure = MATERIALS.map((m) => ({ material: KEYSTONE_SOUNDS[m.name], edge: h }));
+/**
+ * The contact modulus a steel ammo slot plays against a structure material: the Hertz pair modulus
+ * 1/E* = (1-nu1^2)/E1 + (1-nu2^2)/E2, as the Ec that gives it (modes.ts contactTime takes
+ * Ec / (2 (1-nu^2)) for a pair of equals). A steel ball on plaster has plaster's long, soft contact,
+ * which barely reaches the ball's own modes; with steel's Ec it rang like a bell on every hit and the
+ * judge heard L1-L2 as glass and Ding (docs/sound.md, Material identity).
+ */
+export function pairEc(ammo: SoundMaterial, struck: SoundMaterial): number {
+  const e = (m: SoundMaterial) => (m.Ec ?? m.E) / (1 - m.nu * m.nu) / 2; // each body's own half of an equal pair
+  const star = 1 / (1 / (2 * e(ammo)) + 1 / (2 * e(struck)));
+  return 2 * (1 - ammo.nu * ammo.nu) * star;
+}
+
+/**
+ * The ammo against a struck material, in the real set: the pair's contact modulus (pairEc), and the
+ * pair's asperity time, an asperity being a Hertz contact too, so it lengthens as (E*)^(-2/5). A steel
+ * ball's roughness on steel reaches ~7 kHz and rings it; on plaster ~1.4 kHz, under its modes, so
+ * only the plaster crunches (with steel's own the ammo, 28 dB under the blocks, still turned the
+ * judge's L1 from Crack to Glass).
+ */
+export function ammoOn(ammo: SoundMaterial, struck: SoundMaterial): SoundMaterial {
+  const Ec = pairEc(ammo, struck);
+  return { ...ammo, Ec, roughT: roughTime(ammo) * ((ammo.Ec ?? ammo.E) / Ec) ** 0.4 };
+}
+
+/** The level's most common structure material (its first on a tie). */
+export function mainMaterial(c: CompiledLevel): (typeof MATERIALS)[number]['name'] {
+  const n = new Array<number>(MATERIALS.length).fill(0);
+  for (let i = 0; i < c.meta.n; i++) n[c.meta.material[i]!]!++;
+  return MATERIALS[n.indexOf(Math.max(...n))]!.name;
+}
+
+/**
+ * The sound of each slot for a level: structure slots at the level's cube edge, ammo at its own size
+ * (metres). In the real set the ammo's contact is the pair's with the level's main material (ammoOn);
+ * the classic set keeps G6's steel-on-steel contact.
+ */
+export function slotSounds(c: CompiledLevel, set: SoundSet = 'real'): SlotSound[] {
+  const h = c.frame.unit, sounds = keystoneSounds(set);
+  const structure = MATERIALS.map((m) => ({ material: sounds[m.name], edge: h }));
+  const struck = sounds[mainMaterial(c)];
   const ammo = AMMO_KINDS.map((k): SlotSound => {
-    const s = AMMO[k].size, steel = KEYSTONE_SOUNDS[AMMO[k].material];
+    const s = AMMO[k].size, own = sounds[AMMO[k].material];
+    const steel = set === 'real' ? ammoOn(own, struck) : own;
     if ('radius' in s) return { material: steel, edge: 2 * s.radius * h };
     const [a, b, d] = [...s.half].sort((x, y) => y - x) as [number, number, number];
     if (a > 3 * b) return { material: { ...steel, model: 'plank', dims: [2 * a * h, 2 * b * h, 2 * d * h], G: STEEL_G }, edge: 2 * a * h };
@@ -67,6 +123,8 @@ export function ammoKindOf(b: BodyDesc, h: number): AmmoKind | null {
 /** Sound slot of body i: its Keystone material for the structure (the first c.meta.n), else its ammo kind's (-1: silent). */
 export function soundSlotOf(c: CompiledLevel, b: BodyDesc, i: number): number {
   if (i < c.meta.n) return c.meta.material[i]!;
+  // A shattered ice block's pieces sound as ice (keystone ice.ts).
+  if (isIcePiece(b)) return materialId('ice');
   const k = ammoKindOf(b, c.frame.unit);
   return k ? AMMO_SLOT + AMMO_KINDS.indexOf(k) : -1;
 }

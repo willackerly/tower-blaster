@@ -77,7 +77,7 @@ const rad = (deg: number) => (deg * Math.PI) / 180;
  * metres: metres per world unit, for the eye's height over ground, the
  * floor's height: the box's bottom unless given).
  */
-export function frame(min: V3, max: V3, f: Framing = DEFAULT_FRAMING, metres = 1, ground = min[1]): Orbit {
+export function frame(min: V3, max: V3, f: Framing = DEFAULT_FRAMING, metres = 1, ground = min[1], aspect = 1): Orbit {
   if (f.eye > 0) return frameFromGround(min, max, f, f.eye / metres, ground);
   const fovY = rad(f.fov), yaw = rad(f.yaw), pitch = clampPitch(rad(f.pitch));
   const target: V3 = [(min[0] + max[0]) / 2, (max[1] - min[1]) * 0.45 + min[1], (min[2] + max[2]) / 2];
@@ -88,11 +88,14 @@ export function frame(min: V3, max: V3, f: Framing = DEFAULT_FRAMING, metres = 1
   const up: V3 = [right[1] * fw[2] - right[2] * fw[1], right[2] * fw[0] - right[0] * fw[2], right[0] * fw[1] - right[1] * fw[0]];
   // A corner c (from the target) is inside when |c.up| and |c.right| are within tan(fov/2) of its depth c.fw + d.
   const t = Math.tan(fovY / 2);
+  // Sideways the view is aspect times as wide as it is tall: a portrait screen (aspect under 1, a phone held
+  // upright) has less room, so the width counts 1/aspect times. A wider screen is framed as a square one was.
+  const wide = aspect < 1 ? 1 / aspect : 1;
   let d = 0;
   for (const x of [min[0], max[0]]) for (const y of [min[1], max[1]]) for (const z of [min[2], max[2]]) {
     const c = [x - target[0], y - target[1], z - target[2]];
     const dot = (v: V3) => c[0]! * v[0] + c[1]! * v[1] + c[2]! * v[2];
-    d = Math.max(d, Math.max(Math.abs(dot(up)), Math.abs(dot(right))) / t - dot(fw));
+    d = Math.max(d, Math.max(Math.abs(dot(up)), Math.abs(dot(right)) * wide) / t - dot(fw));
   }
   return { target, yaw, pitch, distance: Math.max(8, d * f.fit), fovY };
 }

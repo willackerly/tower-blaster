@@ -4,6 +4,7 @@
 // It follows the reference's order of operations (corner order, clipping
 // sequence, first-index tie-breaks, face-axis tolerance and the previous
 // axis as the first candidate) so the two agree, not merely look alike.
+import { type StateRegion, whole } from './checkpoint.ts';
 import { EDGE_ABS, EDGE_REL, FACE_ABS, FACE_INSET, FACE_REL } from '@tb/geom';
 import { assertStorageFits } from '@tb/gpu';
 import { Body, Manifold, Shape, TIER, wgslStruct } from '@tb/schema';
@@ -372,7 +373,8 @@ export class Narrowphase {
    * @param prev optional vec2u per pair slot, (last step's slot, last step's axis) from AvbdSolver.match; no history when omitted
    */
   constructor(private readonly device: GPUDevice, bodies: GPUBuffer, shapes: GPUBuffer, pairs: GPUBuffer, private readonly total: GPUBuffer, readonly capacity: number, readonly maxPairs: number, sweep?: GPUBuffer, prev?: GPUBuffer) {
-    const buf = (bytes: number, label: string) => (assertStorageFits(device, bytes, label), device.createBuffer({ size: Math.max(Manifold.size, bytes), usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC, label }));
+    // COPY_DST so a checkpoint can put them back (carried()).
+    const buf = (bytes: number, label: string) => (assertStorageFits(device, bytes, label), device.createBuffer({ size: Math.max(Manifold.size, bytes), usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST, label }));
     this.manifolds = buf(maxPairs * Manifold.size, 'np manifolds');
     this.groundManifolds = buf(capacity * Manifold.size, 'np ground manifolds');
     this.uniform = device.createBuffer({ size: 16, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
@@ -412,6 +414,11 @@ export class Narrowphase {
       pass.setPipeline(this.groundPipe);
       pass.dispatchWorkgroups(Math.ceil(n / WG));
     }
+  }
+
+  /** What a step reads as the step before left it (checkpoint.ts): the manifolds, whose SAT axes the next step's match() hands back as each pair's preferred axis. */
+  carried(): StateRegion[] {
+    return [whole(this.manifolds), whole(this.groundManifolds)];
   }
 
   destroy(): void {

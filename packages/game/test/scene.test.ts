@@ -1,10 +1,38 @@
 import { describe, expect, it } from 'vitest';
-import { compileLevel, L1, L2 } from '@tb/keystone';
-import { tintWord, unpackFx } from '@tb/render';
+import { compileLevel, L1, L2, L3, U3 } from '@tb/keystone';
+import { MARK_HIT, MARK_NONE, MARK_SAVE, tintWord, unpackFx } from '@tb/render';
+import { PROJECTILE_PRESETS } from '@tb/weapons';
+import { BALL_PAINT, ballFx, BOMB_FX, markOf, structureMarks } from '../src/scene.ts';
 import { BEAD_COLOUR, BEAD_OUT_COLOUR, BEAD_RADIUS, beadOverlay, rgbe, CROWN_GLOW, easeOut, regrowDuration, regrowScale, regrowScales, structureTints, TARGET_SCALE, TINT, tintOf, tintWordOf } from '../src/scene.ts';
 
 /** What the renderer will see for a bulk tint word. */
 const decoded = (w: number) => unpackFx(Uint32Array.of(tintWord(w), 0, 0, 0));
+
+describe('fired balls (ballFx)', () => {
+  const lum = (t: readonly number[]) => 0.2126 * t[0]! + 0.7152 * t[1]! + 0.0722 * t[2]!;
+  it('painted (the default): each ball in its own colour with a band, far from a bomb\'s near-black and from the crowns\' gold', () => {
+    for (const item of ['cannonball', 'marble', 'p-beachball', 'p-bowlingball', 'p-wreckingball', 'p-boulder'] as const) {
+      const fx = ballFx(item)!;
+      expect(fx, item).toMatchObject({ paint: true, band: true });
+      expect(fx.matte, item).toBeUndefined();
+      // Linear luminance: a bomb's shell is about 0.012; every painted ball is at least 3x brighter than that before its white band.
+      expect(lum(fx.tint!), item).toBeGreaterThan(3 * lum(BOMB_FX.tint));
+    }
+    // Keystone's own: red and blue, so neither reads as a crown (gold, TINT.crown) and they differ from each other.
+    const red = ballFx('cannonball')!.tint!, blue = ballFx('marble')!.tint!;
+    expect(red[0]).toBeGreaterThan(4 * red[2]!);
+    expect(blue[2]).toBeGreaterThan(4 * blue[0]!);
+    expect(lum(red)).toBeGreaterThan(0.1);
+    // A preset takes its catalogue colour (sRGB to linear).
+    const c = PROJECTILE_PRESETS.beachball.colour, t = ballFx('p-beachball')!.tint!;
+    expect(Math.round(255 * Math.pow(t[0]!, 1 / 2.2))).toBeCloseTo((c >> 16) & 255, -1);
+    expect(BALL_PAINT.cannonball).toBe(0xc8102e);
+  });
+  it('a weapon\'s shell, the anvil, the cue and a pull are not painted balls; plain leaves every ball to the look', () => {
+    for (const item of ['w-grenade', 'w-cluster', 'drop', 'cue', 'pull'] as const) expect(ballFx(item), item).toBeNull();
+    for (const item of ['cannonball', 'marble', 'p-beachball'] as const) expect(ballFx(item, 'plain'), item).toBeNull();
+  });
+});
 
 describe('tints', () => {
   it('round-trips through the renderer encoding', () => {
@@ -62,5 +90,30 @@ describe('arc preview overlay', () => {
     expect(o.xyzr[11]).toBeCloseTo(BEAD_RADIUS * TARGET_SCALE, 6);
     expect([...o.colours]).toEqual([BEAD_COLOUR, BEAD_COLOUR, BEAD_COLOUR]);
     expect([...beadOverlay(Float64Array.from([0, 1, 0]), false).colours]).toEqual([BEAD_OUT_COLOUR]);
+  });
+});
+
+describe('stone marks (markOf, structureMarks)', () => {
+  it('crowns to bring down carry a crosshair, heritage a shield, plain blocks none (L3: two crowns between heritage cubes)', () => {
+    const c = compileLevel(L3), m = structureMarks(c);
+    expect(m.length).toBe(c.meta.n);
+    for (let i = 0; i < c.meta.n; i++) expect(m[i], `slot ${i}`).toBe(c.meta.role[i] === 1 ? MARK_HIT : c.meta.role[i] === 2 ? MARK_SAVE : MARK_NONE);
+    expect(Array.from(c.meta.crowns, (i) => markOf(c, i))).toEqual([MARK_HIT, MARK_HIT]);
+    expect(Array.from(c.meta.heritage, (i) => markOf(c, i))).toEqual([MARK_SAVE, MARK_SAVE, MARK_SAVE]);
+    expect(m.filter((x) => x === MARK_NONE).length).toBe(c.meta.n - 5);
+  });
+
+  it('a crown the level asks to keep up (a hold objective: Undercut\'s Hollow) carries the shield, though it is as gold as any', () => {
+    const c = compileLevel(U3);
+    expect(c.def.objective.kind).toBe('hold');
+    expect(c.meta.crowns.length).toBeGreaterThan(0);
+    for (const i of c.meta.crowns) expect(markOf(c, i)).toBe(MARK_SAVE);
+    expect(tintOf(c, c.meta.crowns[0]!)).toBe(tintOf(compileLevel(L3), compileLevel(L3).meta.crowns[0]!));
+  });
+
+  it('off: no slot carries a mark', () => {
+    const c = compileLevel(L2);
+    expect(structureMarks(c).some((x) => x !== MARK_NONE)).toBe(true);
+    expect(structureMarks(c, false)).toEqual(new Uint8Array(c.meta.n));
   });
 });

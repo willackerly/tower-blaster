@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import fc from 'fast-check';
 import { freeFlight, massOf } from '@tb/engine-api';
 import { PRESET_NAMES } from '@tb/weapons';
-import { aimAt, ammoKE, closestApproach, compileLevel, decodeRecord, encodeRecord, GRAVITY, L1, launchDir, predictArc, readShots, type SessionRecord, type Shot, shotToSpawn, speedOf, writeShots } from '@tb/keystone';
+import { aimAt, ammoKE, closestApproach, compileLevel, decodeRecord, encodeRecord, GRAVITY, L1, launchDir, MAX_AFTER, predictArc, readShots, type SessionRecord, type Shot, shotToSpawn, speedOf, writeShots } from '@tb/keystone';
 
 const c = compileLevel(L1);
 const f = c.frame;
@@ -159,6 +159,20 @@ describe('shot text (writeShots, readShots)', () => {
       fc.record({ ammo: fc.constant('drop' as const), x: int(-4000, 4000), z: int(-4000, 4000) }),
     );
     fc.assert(fc.property(fc.array(shot, { maxLength: 6 }), (shots) => { expect(readShots(writeShots(shots))).toEqual(shots); }));
+    // Rapid-fire timing rides along on any item.
+    const timed = fc.tuple(shot, fc.option(int(0, MAX_AFTER), { nil: undefined })).map(([s, after]) => (after === undefined ? s : { ...s, after }));
+    fc.assert(fc.property(fc.array(timed, { maxLength: 6 }), (shots) => { expect(readShots(writeShots(shots))).toEqual(shots); }));
+  });
+  it('a rapid-fire shot ends @after; text without one reads as before', () => {
+    const rapid: Shot[] = [{ ammo: 'w-grenade', az: 120, y: 4, yaw: 0, pitch: 35, power: 80 }, { ammo: 'w-grenade', az: 120, y: 4, yaw: 0, pitch: 35, power: 80, after: 12 }, { ammo: 'drop', x: 4, z: -8, after: 0 }];
+    expect(writeShots(rapid)).toBe('w-grenade.120.4.0.35.80_w-grenade.120.4.0.35.80@12_drop.4.-8@0');
+    expect(encodeURIComponent(writeShots(rapid))).toBe(writeShots(rapid).replace(/@/g, '%40'));
+    expect(readShots('w-grenade.120.4.0.35.80_w-grenade.120.4.0.35.80@12_drop.4.-8@0')).toEqual(rapid);
+    expect(() => readShots('drop.4.-8@')).toThrow(/shot 1 .*after must be a whole number of steps, not empty/);
+    expect(() => readShots('drop.4.-8@-1')).toThrow(/after must be a whole number of steps, not -1/);
+    expect(() => readShots('drop.4.-8@1@2')).toThrow(/at most one @after/);
+    expect(() => readShots(`drop.4.-8@${MAX_AFTER + 1}`)).toThrow(/shot\.after = /);
+    expect(() => shotToSpawn(f, { ammo: 'drop', x: 0, z: 0, after: 0.5 }, 0)).toThrow(/shot\.after = 0\.5/);
   });
   it('refuses text that is not a valid line, naming the shot', () => {
     expect(() => readShots('bomb.1.2')).toThrow(/shot 1 \(bomb\.1\.2\): ammo must be one of/);

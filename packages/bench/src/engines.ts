@@ -29,8 +29,8 @@ const REGISTRY: Record<string, (o: Options) => PhysicsEngine> = {
 
 /** An avbd-gpu spec's options split into the engine's AvbdParams and GpuEngineOptions (also used by pnpm bench:probe). */
 export function gpuEngineArgs(o: Options): { params: Partial<AvbdParams>; opts: GpuEngineOptions } {
-  const { capacity, spare, pairsPerBody, maxRadius, colorTail, indirectColors, tailThreads, colorRounds, hessian, boxBroadphase, sleep, sleepSpeed, sleepSteps, sleepDrift, wakeSpeed, wakeDepth, settleSteps, settleIterations, sleepSkip, ...params } = o;
-  const opts = Object.fromEntries(Object.entries({ capacity, spare, pairsPerBody, maxRadius, colorTail, indirectColors, tailThreads, colorRounds, hessian, boxBroadphase, sleep, sleepSpeed, sleepSteps, sleepDrift, wakeSpeed, wakeDepth, settleSteps, settleIterations, sleepSkip }).filter(([, v]) => v !== undefined)) as GpuEngineOptions;
+  const { capacity, spare, pairsPerBody, maxRadius, colorTail, indirectColors, tailThreads, colorRounds, hessian, boxBroadphase, sleep, sleepSpeed, sleepSteps, sleepDrift, wakeSpeed, wakeDepth, settleSteps, settleIterations, sleepSkip, sizedColors, awakeLists, ...params } = o;
+  const opts = Object.fromEntries(Object.entries({ capacity, spare, pairsPerBody, maxRadius, colorTail, indirectColors, tailThreads, colorRounds, hessian, boxBroadphase, sleep, sleepSpeed, sleepSteps, sleepDrift, wakeSpeed, wakeDepth, settleSteps, settleIterations, sleepSkip, sizedColors, awakeLists }).filter(([, v]) => v !== undefined)) as GpuEngineOptions;
   return { params: params as Partial<AvbdParams>, opts };
 }
 

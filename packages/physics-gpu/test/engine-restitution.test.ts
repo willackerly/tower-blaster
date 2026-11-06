@@ -14,7 +14,7 @@ import { describe, expect, it } from 'vitest';
 import type { BodyDesc, CombineRule, SceneDesc } from '@tb/engine-api';
 import { combineRestitution, DEFAULT_RESTITUTION_COMBINE } from '@tb/engine-api';
 import { NAN_RESTITUTION, restitutionWord } from '../src/index.ts';
-import { ball, both, cube, drop, floats, G, gainOf, gpuRun, H, knock, maxSpeed, ON, type Run, sceneOf, withE, zeroG } from './bounce.ts';
+import { ball, both, cube, drop, floats, G, gainOf, gpuRun, H, knock, maxSpeed, OLD, ON, type Run, sceneOf, withE, zeroG } from './bounce.ts';
 import { call, gpu } from './harness.ts';
 
 describe('GPU AVBD engine: restitution off', () => {
@@ -31,17 +31,23 @@ describe('GPU AVBD engine: restitution off', () => {
     expect(floats(await gpuRun(scene, 60, ON))).not.toEqual(off);
   });
 
-  it('off it encodes no extra dispatch; on, 6 + 2 x restitutionRounds (2 direct)', { timeout: 120_000 }, async (ctx) => {
+  // The energy cap (on by default) adds 4: the island labels' init and hook before the rounds, the sums and the
+  // scaling after them.
+  it('off it encodes no extra dispatch; on, 11 + 2 x restitutionRounds (2 direct), anchors or not; 7 + 2R without the energy cap', { timeout: 120_000 }, async (ctx) => {
     if (!gpu) return ctx.skip();
     const scene = withE(knock(15), 0.6);
     const off = await call('dispatchCounts', scene, {}, {});
     const no = await call('dispatchCounts', scene, { restitution: false }, {});
     const on = await call('dispatchCounts', scene, ON, {});
     const three = await call('dispatchCounts', scene, { ...ON, restitutionRounds: 3 }, {});
-    expect([off.error, no.error, on.error, three.error]).toEqual([null, null, null, null]);
+    const old = await call('dispatchCounts', scene, OLD, {});
+    const uncapped = await call('dispatchCounts', scene, { ...ON, restitutionEnergyCap: false }, {});
+    expect([off.error, no.error, on.error, three.error, old.error, uncapped.error]).toEqual([null, null, null, null, null, null]);
     expect([no.direct, no.indirect]).toEqual([off.direct, off.indirect]);
-    expect([on.direct - off.direct, on.indirect - off.indirect]).toEqual([2, 4 + 2 * 8]);
-    expect([three.direct - off.direct, three.indirect - off.indirect]).toEqual([2, 4 + 2 * 3]);
+    expect([on.direct - off.direct, on.indirect - off.indirect]).toEqual([2, 9 + 2 * 8]);
+    expect([three.direct - off.direct, three.indirect - off.indirect]).toEqual([2, 9 + 2 * 3]);
+    expect([uncapped.direct - off.direct, uncapped.indirect - off.indirect]).toEqual([2, 5 + 2 * 8]);
+    expect([old.direct, old.indirect]).toEqual([on.direct, on.indirect]);
   });
 });
 
@@ -103,7 +109,11 @@ describe('GPU AVBD engine: restitution on, against the reference', () => {
   // 6): (vB - vA) / v is the pair's e. Measured: within 1.1e-7 of the reference's under every rule and order;
   // clamped at 1 (1.5 / 1.5) and at 0 (0.6 / -0.8 under average: the solve's own 0.0185). A NaN e bounces
   // nothing under any rule, as on the reference (with NaN itself in BodyProps, SwiftShader bounced it under min
-  // and max: eEff 0.88); an infinite one combines as the reference's (average 1, times 0 no bounce).
+  // and max: eEff 0.88); an infinite one combines as the reference's (average 1, times 0 no bounce). The clamp at 1
+  // runs without the energy cap: the GPU's pair meets a step after the reference's (f32 at the step boundary), its
+  // solve's inelastic step leaves 0.9% more momentum than the strike (2.526 and 2.520 m/s), and an elastic bounce
+  // from there would end the pair 0.8% above its start, so the cap trims it (alpha 0.99061, eEff 0.9906; with
+  // the cap the reference, bouncing from the start velocities, keeps 1).
   it('two coefficients combine by SceneDesc.restitutionCombine (default average), in either order, clamped to [0, 1]', { timeout: 300_000 }, async (ctx) => {
     if (!gpu) return ctx.skip();
     const eEff = (r: Run, v: number) => (r.snaps.at(-1)!.linVel[3]! - r.snaps.at(-1)!.linVel[0]!) / v;
@@ -113,7 +123,7 @@ describe('GPU AVBD engine: restitution on, against the reference', () => {
     cases.push(['min', NaN, 0.9], ['max', 0.9, NaN], ['average', NaN, 0.9], ['multiply', 0.9, NaN], ['average', Infinity, 0.2], ['multiply', Infinity, 0]);
     for (const [rule, eA, eB] of cases) {
       const v = 5, scene = zeroG([ball([-0.75, 0, 0], { e: eA, linVel: [v, 0, 0] }), ball([0.75, 0, 0], { e: eB })], rule);
-      const r = await both(scene, 20, ON), id = `${rule} ${eA}/${eB}`;
+      const r = await both(scene, 20, eA >= 1 ? { ...ON, restitutionEnergyCap: false } : ON), id = `${rule} ${eA}/${eB}`;
       const want = Math.min(1, Math.max(0, combineRestitution(rule ?? DEFAULT_RESTITUTION_COMBINE, eA, eB)));
       expect(Math.abs(eEff(r.gpu, v) - eEff(r.ref, v)), id).toBeLessThan(1e-6);
       if (want > 0) expect(eEff(r.gpu, v), id).toBeCloseTo(want, 5);
@@ -211,19 +221,39 @@ describe('GPU AVBD engine: restitution on, against the reference', () => {
     }
   });
 
-  // Two bouncing manifolds at once (the reference test's pin). Measured: the first rebound 3.843064 m/s (the
-  // reference's 3.843063), the top cube's velocity at step 100 within 1.3e-5 of the reference's, energy at most
-  // 1.2e-7 above its start (f32), and at rest over steps 421-480 (8.7e-7 m/s; still 6.9e-6 over 361-420, where
-  // the reference's, its bounces drifted apart from the GPU's by then, is at 0.5 m/s, and 6e-15 a window later).
-  it('a cube dropped flat onto two cubes gains no energy, comes to rest, and moves as on the reference', { timeout: 120_000 }, async (ctx) => {
+  // Two bouncing manifolds at once (the reference test's pin), without anchors. Measured: the first rebound
+  // 3.843064 m/s (the reference's 3.843063), the top cube's velocity at step 100 within 1.3e-5 of the reference's,
+  // energy at most 1.2e-7 above its start (f32), and at rest over steps 421-480 (8.7e-7 m/s; still 6.9e-6 over
+  // 361-420, where the reference's, its bounces drifted apart from the GPU's by then, is at 0.5 m/s, and 6e-15 a
+  // window later).
+  it('without anchors, a cube dropped flat onto two cubes gains no energy, comes to rest, and moves as on the reference', { timeout: 120_000 }, async (ctx) => {
     if (!gpu) return ctx.skip();
     const e = 0.9, scene = sceneOf([cube([-0.55, 0.5, 0], { e }), cube([0.55, 0.5, 0], { e }), cube([0, 1.5 + 25 / (2 * G), 0], { e })], { groundE: e });
-    const r = await both(scene, 480, ON);
+    const r = await both(scene, 480, OLD);
     const up = (x: Run) => Math.max(...x.snaps.map((s) => s.linVel[7]!));
     expect(up(r.gpu)).toBeGreaterThan(3.8);
     expect(Math.abs(up(r.gpu) - up(r.ref))).toBeLessThan(1e-4);
     for (const k of [6, 7, 8]) expect(Math.abs(r.gpu.snaps[100]!.linVel[k]! - r.ref.snaps[100]!.linVel[k]!)).toBeLessThan(1e-4);
     expect(gainOf(scene, r.gpu).gain).toBeLessThan(1e-6);
     expect(Math.max(...r.gpu.snaps.slice(421).map(maxSpeed))).toBeLessThan(1e-5);
+  });
+
+  // With anchors (the default) the ground holds the two lower cubes exactly. Measured: the first rebound 4.521653
+  // m/s (the reference's 4.521653; 3.843 without anchors), the top cube's velocity at step 100 within 2.7e-5 of the
+  // reference's, energy at most 1.2e-7 above its start (f32; the reference's 0). The top cube comes to rest on the
+  // left cube, 0.24 m over its edge, where the solve rocks it: nothing bounces after step 240, and the bodies keep
+  // moving at up to 0.016 m/s (the reference's at up to 0.019 m/s in some windows), as from that pose at rest with
+  // restitution off (0.0161 m/s over 300 steps, the same with it on, with or without anchors).
+  it('a cube dropped flat onto two cubes rebounds off the anchored pair as on the reference, gains no energy, and bounces nothing once down', { timeout: 120_000 }, async (ctx) => {
+    if (!gpu) return ctx.skip();
+    const e = 0.9, scene = sceneOf([cube([-0.55, 0.5, 0], { e }), cube([0.55, 0.5, 0], { e }), cube([0, 1.5 + 25 / (2 * G), 0], { e })], { groundE: e });
+    const r = await both(scene, 480, ON, true);
+    const up = (x: Run) => Math.max(...x.snaps.map((s) => s.linVel[7]!));
+    expect(up(r.gpu)).toBeGreaterThan(4.4);
+    expect(Math.abs(up(r.gpu) - up(r.ref))).toBeLessThan(1e-4);
+    for (const k of [6, 7, 8]) expect(Math.abs(r.gpu.snaps[100]!.linVel[k]! - r.ref.snaps[100]!.linVel[k]!)).toBeLessThan(1e-4);
+    expect(gainOf(scene, r.gpu).gain).toBeLessThan(1e-6);
+    expect(r.gpu.stats.slice(240).reduce((a, s) => a + s!.contacts, 0)).toBe(0);
+    expect(Math.max(...r.gpu.snaps.slice(241).map(maxSpeed))).toBeLessThan(0.05);
   });
 });

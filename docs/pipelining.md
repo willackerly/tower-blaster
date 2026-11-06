@@ -33,8 +33,9 @@ cheap. This audits the code paths that run while a shot plays (game page,
   frames while physics is behind**. That is P1 below, behind
   `keystone.frames`. Round 1 on the M5 (2026-11-05) measured +16-19% sim
   speed and 13-15% shorter shots from it, but a governor bug drew 30 frames a
-  second instead of 60; the fixed governor is in round 2, still off by
-  default. The same run moved the valve's default budget to 14 ms, which
+  second instead of 60. Round 2 confirmed the fix (60 a second) and the gain,
+  but ran in Low Power Mode, so its frame times could not decide; round 3
+  repeats it at full power, still off by default. The same run moved the valve's default budget to 14 ms, which
   halved drawn-frame p99 at 120 Hz.
 - **CPU work on the main thread is small at 10k and large at 100k.** It runs
   once per step: decoding the readback, the rules' observation, the sound tap
@@ -232,17 +233,54 @@ through the coordinator.
     a headless (60 Hz) run, where the frames looked the same at both; at
     120 Hz they do not. Frame pacing is what the player sees on every shot,
     so it wins over 6% of sim speed.
-- **Round 2 (queued).** The fixed governor, same command. The cases that
-  decide: `auto` at 14 (the new default budget) and at 16.7, against `all`
-  at 14, on blocks and city (`*-cluster-40-rendered`, `*-auto`,
-  `*-b16.7`, `*-auto-b16.7`).
-  - **Adopt `auto` as the default** if, against `all` at 14, wall time drops
-    at least 5% on both scenes, `draws` shows about 60 drawn a second while
-    decimating, and drawn-frame p99 stays at or under 20 ms.
-  - If `auto` at 16.7 passes and `auto` at 14 does not, the default becomes
-    `auto` with 16.7: with half the frames, the queue has room for a whole
-    step.
-  - **Drop it** if the sim speed gain is under 3% once frames really are 60.
+- **Round 2 (M5 Max, 120 Hz headed, 23c0df8, 2026-11-06): not valid for the
+  frame gate, Low Power Mode was on.** Files `e7-23c0df8-headed-*`. Every step
+  cost about 1.8x round 1's (39 ms against 22-24 ms for `all`), so every case,
+  the default included, ran at 0.36-0.50x real time with the GPU saturated.
+  Step cost is `costMs` in the JSON (the valve's reading); the summary's
+  `stepMs` is the loop's wall time per step, about 1 ms whenever the valve
+  holds steps back, so it is not comparable across budgets.
+
+  | Case (10k cluster, budget) | Wall (s) | Sim speed | Step cost p50 (ms) | Drawn p50 / p95 / p99 (ms) | Drawn over 25 ms |
+  |---|---|---|---|---|---|
+  | blocks, all, 14 (default) | 52.0 | 0.36 | 39.2 | 8.3 / 24.8 / 30.2 | 4.6% |
+  | blocks, all, 16.7 | 43.0 | 0.44 | 36.2 | 8.4 / 30.0 / 36.7 | 16.2% |
+  | blocks, all, no valve | 42.4 | 0.45 | 36.0 | 8.4 / 30.3 / 35.6 | 17.4% |
+  | blocks, half | 44.0 | 0.43 | 32.2 | 16.7 / 26.4 / 42.7 | 6.1% |
+  | blocks, auto, 14 | 43.2 | 0.43 | 32.4 | 16.7 / 23.6 / 35.6 | 3.8% |
+  | blocks, auto, 16.7 | 38.8 | 0.50 | 32.7 | 19.8 / 36.6 / 45.2 | 34.2% |
+  | city, all, 14 (default) | 83.0 | 0.36 | 39.3 | 8.3 / 22.4 / 29.8 | 3.5% |
+  | city, all, 16.7 | 69.4 | 0.43 | 37.6 | 8.4 / 31.3 / 34.8 | 21.3% |
+  | city, half | 72.5 | 0.42 | 33.5 | 16.7 / 24.9 / 43.8 | 4.9% |
+  | city, auto, 14 | 71.2 | 0.42 | 33.5 | 16.7 / 22.1 / 35.0 | 2.8% |
+  | city, auto, 16.7 | 64.3 | 0.47 | 34.4 | 20.8 / 36.8 / 41.4 | 35.6% |
+
+  - **The governor fix works on the M5.** Decimating, it draws a frame every
+    16.7 ms at the median (60 a second), where round 1 drew every 33 ms.
+  - **Drawing fewer frames frees GPU for physics.** At 14 ms, `auto` cut the
+    step's cost from 39 to 32-33 ms, raised the sim 18-21% and shortened the
+    shot 17% (blocks) and 14% (city). That passes the wall gate.
+  - **The frame gate cannot be judged here.** Every case's p99 is over 20 ms,
+    the default's too (30 ms against 11.6 in round 1). Against the default,
+    `auto` at 14 has fewer drawn frames over 25 ms (3.8% against 4.6%, 2.8%
+    against 3.5%) but a longer tail (p99 35 against 30 ms).
+  - **`auto` at 16.7 is rejected.** Its median drawn frame is 20-21 ms, and a
+    third of its frames take over 25 ms. With a whole step's budget, physics
+    takes the GPU the skipped frames free, and the drawn ones wait behind
+    steps again. That is round 1's valve finding, now with decimation.
+  - **The valve at 14 is kept.** Over 16.7 and no valve, it cut drawn frames
+    over 25 ms from 16-21% to 4-5%, at the price of the sim speed it holds
+    back, which grows with the step cost (14/39 against 16.7/39 here).
+  - **The probe now refuses Low Power Mode** (`viewer/test/power.ts`, reading
+    `pmset`; `TB_PROBE_ALLOW_LOW_POWER=1` overrides), records the power state
+    in each summary line, and puts `costMs` in the summary.
+- **Round 3 (queued): `all` against `auto`, both at 14, Low Power Mode off.**
+  `TB_CHANNEL=chrome TB_HEADED=1 TB_PROBE_CASES='^(blocks|city)-cluster-40-rendered(-auto)?$' TB_PROBE_OUT=$HOME/tb-e7-frames-<sha> pnpm vitest run packages/viewer/test/e2e-pacing-probe.test.ts --no-file-parallelism`.
+  Same gates as round 2, set before round 1 and not moved: adopt `auto` as the
+  default if wall time drops at least 5% on both scenes, drawn frames run
+  about 60 a second while decimating, and drawn-frame p99 is at or under
+  20 ms. At 60 drawn a second, one frame late by a vsync is 25 ms, so p99 at
+  or under 20 ms means under 1% of drawn frames late.
 
 ### P2. Decode the readback in one pass, in this PR
 

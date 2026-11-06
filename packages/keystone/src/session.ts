@@ -25,7 +25,16 @@ export type Feedback =
   | { t: 'impacts'; step: number; hist: Uint32Array; total: number }
   /** A fired weapon's blast, due at `step`, shows in the state just observed (Driver, arsenal.ts): centred on `body`, `radius` m. */
   | { t: 'blast'; step: number; body: number; radius: number }
+  /** An ice block cracked further (ice.ts): crack level 1 to 7, where it started (body frame, -1..1 per axis) and a seed for its pattern. */
+  | { t: 'iceCrack'; step: number; body: number; level: number; at: Vec3; seed: number }
+  /** An ice block shattered: removed at `step`, its pieces (engine ids) spawned in its place; dv the hit that did it, m/s. */
+  | { t: 'shatter'; step: number; body: number; pieces: number[]; dv: number }
   | { t: 'settled'; step: number; shot: number; outcome: ShotOutcome }
+  /**
+   * A shot fired while shot `shot` was still running (rapid fire) closed it: its outcome is taken on
+   * the state the new shot was fired from (ShotOutcome.cut). No settle, no level end: the new shot runs on.
+   */
+  | { t: 'cut'; step: number; shot: number; outcome: ShotOutcome }
   | { t: 'levelEnd'; step: number; cleared: boolean; score: LevelScore };
 
 /** Vertical speed of a crown (m/s, downward) that starts slow motion. */
@@ -62,6 +71,8 @@ export class Session {
   score: LevelScore | null = null;
   /** Structure bodies pulled so far (Undercut), in pull order. */
   readonly pulled: number[] = [];
+  /** Ice blocks shattered so far (ice.ts), in shatter order: a crown among them is down, heritage broken. */
+  readonly shattered: number[] = [];
   /** Leverage of the shot in flight, for the HUD. */
   liveLeverage = 0;
   private live: Live | null = null;
@@ -105,7 +116,25 @@ export class Session {
   collapse(pe_mJ: number): number { return collapseFraction(this.startPe_mJ, pe_mJ, this.floorPe_mJ); }
 
   get strokes() { return this.outcomes.length + (this.live ? 1 : 0); }
-  canFire(ammo: RackItem): boolean { return this.phase === 'aiming' && this.rackLeft.includes(ammo); }
+  /**
+   * Whether `ammo` can go in now: the round is open (aiming, or a shot running: rapid fire, which
+   * cuts the shot in flight) and the rack still holds one. Whether a player may fire mid-shot is the
+   * game's choice (@tb/game PaceFeel.rapid); the rules allow it, up to the level's freeze budget
+   * (freezesLeft).
+   */
+  canFire(ammo: RackItem): boolean {
+    return (this.phase === 'aiming' || (this.phase === 'running' && this.freezesLeft > 0)) && this.rackLeft.includes(ammo);
+  }
+
+  /**
+   * How many more shots may go in while another runs (LevelDef.freeze, Bullet Time): the level's
+   * budget less the shots that have cut one; Infinity when the level sets none. A shot fired while
+   * aiming spends nothing, and neither does freezing the world without firing (the game's pause).
+   */
+  get freezesLeft(): number {
+    const budget = this.level.def.freeze;
+    return budget === undefined ? Infinity : budget - this.inputs.filter((i) => i.shot.after !== undefined).length;
+  }
 
   /**
    * Why structure body `body` cannot be pulled, or null if it can: only plain structure bodies
@@ -125,11 +154,27 @@ export class Session {
    * ammo's spawn, or a pull's removal (spawn null). `body` is the engine id the ammo will have: by
    * default the structure's bodies then the ammo fired before; a driver that pushes other spawns
    * (Driver.push) passes its own count. A pull spawns nothing and takes no id.
+   *
+   * While a shot runs (rapid fire), `now` must be the rules' view of the state the new shot is
+   * fired from, against the running shot's baseline (Driver.fire: CpuObserver.peek). The running
+   * shot is cut there (a 'cut' feedback, its outcome marked cut) and the new one starts from it, so
+   * the shots' dPE still sums to the structure's whole drop. The input is recorded with `after`
+   * (steps since the shot before was fired) only then; a shot fired while aiming is recorded without one.
    */
-  fire(shot: Shot, step: number, body = this.level.meta.n + this.ammoCount): { spawn: SpawnEvent | null; event: SpawnEvent | RemoveEvent; feedback: Feedback[] } {
-    if (!this.canFire(shot.ammo)) throw new Error(`cannot fire ${shot.ammo}: phase ${this.phase}, rack [${this.rackLeft.join(', ')}]`);
+  fire(shot: Shot, step: number, body = this.level.meta.n + this.ammoCount, now?: Observation): { spawn: SpawnEvent | null; event: SpawnEvent | RemoveEvent; feedback: Feedback[] } {
+    if (!this.canFire(shot.ammo)) throw new Error(`cannot fire ${shot.ammo}: phase ${this.phase}, rack [${this.rackLeft.join(', ')}]${this.phase === 'running' && this.freezesLeft <= 0 ? `, no freezes left (the level gives ${this.level.def.freeze})` : ''}`);
     const why = shot.ammo === 'pull' ? this.pullRefusal(shot.body) : null;
     if (why) throw new Error(`cannot pull: ${why}`);
+    if (this.live && !now) throw new Error(`Session.fire: a shot is running; cutting it needs the observed state the new one is fired from`);
+    const out: Feedback[] = [];
+    const { after: _, ...bare } = shot;
+    let recorded = bare as Shot;
+    if (this.live) {
+      const prev = this.inputs[this.inputs.length - 1]!.step;
+      if (step < prev) throw new Error(`Session.fire: step ${step} is before the running shot's ${prev}`);
+      out.push(this.close(now!, true));
+      recorded = { ...bare, after: step - prev } as Shot;
+    }
     const event = shotEvent(this.level.frame, shot, step), spawn = event.kind === 'spawn' ? event : null;
     this.rackLeft.splice(this.rackLeft.indexOf(shot.ammo), 1);
     if (spawn) this.ammoCount++;
@@ -140,11 +185,34 @@ export class Session {
       shot, spawnStep: step, body: live, ke, yield: yieldJ, mass: spawn ? massOf(spawn.body) : 0, ammo: shot.ammo, settle: { quietSince: null }, contact: false, prevVel: null, tier: 0, slowMo: false,
       crownsBefore: this.crownDown.reduce((a, x) => a + x, 0), heritageBefore: this.heritageBroken.reduce((a, x) => a + x, 0),
     };
-    this.inputs.push({ step, shot });
+    this.inputs.push({ step, shot: recorded });
     this.watchIdx = Int32Array.from(spawn ? [...this.level.meta.crowns, ...this.level.meta.heritage, body] : [...this.level.meta.crowns, ...this.level.meta.heritage]);
     this.phase = 'running';
     this.liveLeverage = 0;
-    return { spawn, event, feedback: [{ t: 'fired', step, ammo: shot.ammo, body: event.kind === 'remove' ? event.id : body, ke }] };
+    out.push({ t: 'fired', step, ammo: shot.ammo, body: event.kind === 'remove' ? event.id : body, ke });
+    return { spawn, event, feedback: out };
+  }
+
+  /**
+   * Close the running shot on observed state `o`: crowns judged where they lie, the outcome
+   * recorded. A settle (cut false) or a cut by a shot fired while it ran (ShotOutcome.cut).
+   */
+  private close(o: Observation, cut: boolean): Extract<Feedback, { t: 'settled' | 'cut' }> {
+    const L = this.live!, c = this.level, m = c.meta, w = o.watched, nc = m.crowns.length;
+    for (let k = 0; k < nc; k++) this.crownDown[k] = this.shattered.includes(m.crowns[k]!) || crownDown(c, [w.pos[3 * k]!, w.pos[3 * k + 1]!, w.pos[3 * k + 2]!]) ? 1 : 0;
+    const crownsTotal = this.crownDown.reduce((a, x) => a + x, 0);
+    const dPE_mJ = o.basePe_mJ - o.red.pe_mJ;
+    const outcome: ShotOutcome = {
+      ke: L.ke, yield: L.yield, dPE_mJ, leverage: leverage(dPE_mJ, L.ke + L.yield),
+      crownsDown: Math.max(0, crownsTotal - L.crownsBefore), crownsTotal,
+      heritageNew: this.heritageBroken.reduce((a, x) => a + x, 0) - L.heritageBefore,
+      displaced: o.red.displaced, outOfLot: o.red.outOfLot, pe_mJ: o.red.pe_mJ, spawnStep: L.spawnStep, settleStep: o.step,
+      ...(cut ? { cut: true as const } : {}),
+    };
+    this.outcomes.push(outcome);
+    this.live = null;
+    this.watchIdx = Int32Array.from([...m.crowns, ...m.heritage]);
+    return { t: cut ? 'cut' : 'settled', step: o.step, shot: this.outcomes.length - 1, outcome };
   }
 
   /**
@@ -176,11 +244,11 @@ export class Session {
     for (let k = 0; k < nc; k++) {
       const p = pos(k);
       if (!L.slowMo && w.linVel[3 * k + 1]! < SLOWMO_VY) { L.slowMo = true; out.push({ t: 'slowMo', step, body: m.crowns[k]! }); }
-      if (!this.crownLive[k] && crownDown(c, p)) { this.crownLive[k] = 1; out.push({ t: 'crownDown', step, body: m.crowns[k]!, ordinal: this.ordinal++ }); }
+      if (!this.crownLive[k] && (crownDown(c, p) || this.shattered.includes(m.crowns[k]!))) { this.crownLive[k] = 1; out.push({ t: 'crownDown', step, body: m.crowns[k]!, ordinal: this.ordinal++ }); }
     }
     for (let k = 0; k < nh; k++) {
       const b = m.heritage[k]!, q = w.rot.subarray(4 * (nc + k), 4 * (nc + k) + 4);
-      if (!this.heritageBroken[k] && heritageBroken(c, pos(nc + k), [q[0]!, q[1]!, q[2]!, q[3]!], [this.home[3 * b]!, this.home[3 * b + 1]!, this.home[3 * b + 2]!])) {
+      if (!this.heritageBroken[k] && (this.shattered.includes(b) || heritageBroken(c, pos(nc + k), [q[0]!, q[1]!, q[2]!, q[3]!], [this.home[3 * b]!, this.home[3 * b + 1]!, this.home[3 * b + 2]!]))) {
         this.heritageBroken[k] = 1;
         out.push({ t: 'heritageCrack', step, body: b });
       }
@@ -198,24 +266,17 @@ export class Session {
     if (!s.settled || (hold && o.step - L.spawnStep < settleCap(this.settleRule))) return out;
 
     // Settle: crowns are judged on where they lie now.
-    for (let k = 0; k < nc; k++) this.crownDown[k] = crownDown(c, pos(k)) ? 1 : 0;
-    const crownsTotal = this.crownDown.reduce((a, x) => a + x, 0);
-    const outcome: ShotOutcome = {
-      ke: L.ke, yield: L.yield, dPE_mJ: o.basePe_mJ - o.red.pe_mJ, leverage: this.liveLeverage,
-      crownsDown: Math.max(0, crownsTotal - L.crownsBefore), crownsTotal,
-      heritageNew: this.heritageBroken.reduce((a, x) => a + x, 0) - L.heritageBefore,
-      displaced: o.red.displaced, outOfLot: o.red.outOfLot, pe_mJ: o.red.pe_mJ, spawnStep: L.spawnStep, settleStep: step,
-    };
-    this.outcomes.push(outcome);
-    this.live = null;
-    this.watchIdx = Int32Array.from([...m.crowns, ...m.heritage]);
-    out.push({ t: 'settled', step, shot: this.outcomes.length - 1, outcome });
+    const settled = this.close(o, false);
+    out.push(settled);
+    const crownsTotal = settled.outcome.crownsTotal;
 
     const cleared = objectiveMet(c, { red: o.red, crownsTotal, collapse: this.collapse(o.red.pe_mJ) }, this.scoring);
     this.objectiveDone = cleared;
     this.lastSettle = { red: o.red, crownsTotal };
     if (this.scoring === 'outcome') {
-      if (this.rackLeft.length === 0 || (c.def.autobank && cleared)) out.push(this.end(step));
+      // Hollow: a crown down at a settle ends the level there.
+      const toppled = c.def.objective.kind === 'hold' && crownsTotal > 0;
+      if (toppled || this.rackLeft.length === 0 || (c.def.autobank && cleared)) out.push(this.end(step));
       else this.phase = 'aiming';
       return out;
     }
@@ -229,6 +290,11 @@ export class Session {
     return out;
   }
 
+  /** Structure body `body` (ice) shattered (Driver, from IceBreaker): from the next observed state it counts as down (a crown) or broken (heritage). */
+  shatter(body: number): void {
+    if (!this.shattered.includes(body)) this.shattered.push(body);
+  }
+
   /** An outcome level can be banked (ended, keeping the unused rack) while aiming after a settled shot. */
   canBank(): boolean { return this.scoring === 'outcome' && this.phase === 'aiming' && this.lastSettle !== null; }
 
@@ -236,6 +302,15 @@ export class Session {
   bank(step: number): Feedback[] {
     if (!this.canBank()) throw new Error(`cannot bank: ${this.scoring === 'par' ? 'a par level ends at its clear' : this.phase !== 'aiming' ? `phase ${this.phase}` : 'no shot has settled yet'}`);
     return [this.end(step)];
+  }
+
+  /** Share of the structure's mass pulled so far, 0 to 1. */
+  pulledShare(): number {
+    const m = this.level.meta;
+    let all = 0, gone = 0;
+    for (let i = 0; i < m.n; i++) all += m.mass[i]!;
+    for (const b of this.pulled) gone += m.mass[b]!;
+    return all > 0 ? gone / all : 0;
   }
 
   /** What an outcome level is scored on as it stands at the last settle. */
@@ -256,6 +331,8 @@ export class Session {
       ...(c.def.objective.footprintMax !== undefined ? { footprintMax: c.def.objective.footprintMax } : {}),
       crownsDown: last?.crownsTotal ?? 0,
       skylineRatio: last && start > 0 ? skyline(last.red.heightHist, c.height) / start : 1,
+      pulled: this.pulledShare(),
+      ...(c.def.objective.kind === 'hold' ? { hold: true } : {}),
     };
   }
 

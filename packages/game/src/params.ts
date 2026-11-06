@@ -4,11 +4,11 @@
 // (docs/design/viewer-superset.md, step F). A key's bad value is refused with
 // a message naming it; keys a page doesn't know are left to it (the look's
 // real.* knobs, the viewer's own).
-import { BIG_LEVELS, checkPhysics, checkSettle, isRackItem, itemRef, levelById, type LevelDef, MAX_RACK, type PhysicsBlock, RACK_ITEM_NAMES, type RackItem, readShots, SCORINGS, type Scoring, type SettleRule, type Shot, weaponOf } from '@tb/keystone';
+import { BIG_LEVELS, checkPhysics, LEVELS, TRIAL_LEVELS, UNDERCUT_LEVELS, checkSettle, DUELS, duelLevel, type DuelDef, findDuel, freezeProblem, isRackItem, itemRef, levelById, type LevelDef, MAX_PULLS, MAX_RACK, type PhysicsBlock, RACK_ITEM_NAMES, type RackItem, rackSizeProblem, readShots, SCORINGS, type Scoring, type SettleRule, type Shot, weaponOf } from '@tb/keystone';
 import { LOOKS } from '@tb/render';
 import { type EngineKind, engineKind } from './engines.ts';
 import { paceFeel, type PaceFeel } from './pacing.ts';
-import type { GameSoundMode } from './sound-map.ts';
+import { GAME_SOUND_MODES, type GameSoundMode } from './sound-map.ts';
 
 /** The game's look when ?look= is absent: the maquette, whose pale albedo shows the role tints true. */
 export const GAME_LOOK = 'hazy';
@@ -18,21 +18,23 @@ export const GAME_LOOK = 'hazy';
  * scores any level either way, ?keystone.autobank=1|0 ends an outcome level at its first clear (or not),
  * ?keystone.settle=v1|v2|v3 picks how a shot settles (default: v1 for par levels, v3 for outcome levels),
  * ?keystone.iterations, ?keystone.gapSlop, ?keystone.bounce (e, or off), ?keystone.presettle and
- * ?keystone.pairsPerBody (the GPU pair room per body, in place of every pair) change its physics block.
- * Each is part of the level it makes (its hash), and the level is marked custom: stars cast for the
+ * ?keystone.pairsPerBody (the GPU pair room per body, in place of every pair) change its physics block,
+ * and ?keystone.freeze=N gives the player N freezes (Bullet Time: at most N shots fired while another
+ * runs, LevelDef.freeze; 0 none). Each is part of the level it makes (its hash), and the level is marked custom: stars cast for the
  * authored level do not apply to it.
  */
-export interface LevelRules { scoring?: Scoring; autobank?: boolean; settle?: SettleRule; physics?: PhysicsBlock }
+export interface LevelRules { scoring?: Scoring; autobank?: boolean; settle?: SettleRule; freeze?: number; physics?: PhysicsBlock }
 
 const PHYSICS_KEYS = { 'keystone.iterations': 'iterations', 'keystone.gapSlop': 'gapSlop', 'keystone.bounce': 'bounce', 'keystone.presettle': 'presettle', 'keystone.pairsPerBody': 'pairsPerBody' } as const;
 /** Every URL key levelRules reads. */
-export const LEVEL_RULE_KEYS = ['keystone.scoring', 'keystone.autobank', 'keystone.settle', ...Object.keys(PHYSICS_KEYS)] as readonly string[];
+export const LEVEL_RULE_KEYS = ['keystone.scoring', 'keystone.autobank', 'keystone.settle', 'keystone.freeze', ...Object.keys(PHYSICS_KEYS)] as readonly string[];
 
 /** The URL keys for r, as levelRules reads them back. */
 export function writeLevelRules(r: LevelRules, q: URLSearchParams): void {
   if (r.scoring !== undefined) q.set('keystone.scoring', r.scoring);
   if (r.autobank !== undefined) q.set('keystone.autobank', r.autobank ? '1' : '0');
   if (r.settle !== undefined) q.set('keystone.settle', r.settle);
+  if (r.freeze !== undefined) q.set('keystone.freeze', String(r.freeze));
   for (const [key, field] of Object.entries(PHYSICS_KEYS)) {
     const v = r.physics?.[field];
     if (v !== undefined) q.set(key, v === null ? 'off' : String(v));
@@ -52,6 +54,12 @@ export function levelRules(q: URLSearchParams): LevelRules {
   }
   const st = q.get('keystone.settle');
   if (st !== null) r.settle = checkSettle(st, 'keystone.settle');
+  const fz = q.get('keystone.freeze');
+  if (fz !== null) {
+    const n = /^\d+$/.test(fz) ? Number(fz) : NaN, why = freezeProblem(n);
+    if (why) throw new Error(`keystone.${why.replace(/: NaN$/, `: ${fz}`)}`);
+    r.freeze = n;
+  }
   for (const [key, field] of Object.entries(PHYSICS_KEYS)) {
     const v = q.get(key);
     if (v === null) continue;
@@ -65,11 +73,11 @@ export function levelRules(q: URLSearchParams): LevelRules {
 
 /** def with the URL's rule overrides (none: def itself). */
 export function withRules(def: LevelDef, r: LevelRules): LevelDef {
-  if (r.scoring === undefined && r.autobank === undefined && r.settle === undefined && r.physics === undefined) return def;
+  if (r.scoring === undefined && r.autobank === undefined && r.settle === undefined && r.freeze === undefined && r.physics === undefined) return def;
   return {
     ...def, custom: true,
     ...(r.scoring !== undefined ? { scoring: r.scoring } : {}), ...(r.autobank !== undefined ? { autobank: r.autobank } : {}),
-    ...(r.settle !== undefined ? { settle: r.settle } : {}),
+    ...(r.settle !== undefined ? { settle: r.settle } : {}), ...(r.freeze !== undefined ? { freeze: r.freeze } : {}),
     ...(r.physics !== undefined ? { physics: { ...def.physics, ...r.physics } } : {}),
   };
 }
@@ -80,7 +88,7 @@ export function onEngine(def: LevelDef, kind: string): LevelDef {
 }
 
 export interface GameParams {
-  /** ?level=B1 to B3 or L1 to L5 (any case; DEFAULT_LEVEL, B1, when absent), with its rack replaced when ?keystone.rack is given and the rule overrides applied. */
+  /** ?level=B1 to B3, L1 to L5, U1 to U3 or a trial T-... (any case; DEFAULT_LEVEL, B1, when absent), with its rack replaced when ?keystone.rack is given and the rule overrides applied. */
   level: LevelDef;
   /** ?keystone.rack: the rack the level opened with instead of its own (rackOf), or null. */
   rack: RackItem[] | null;
@@ -93,19 +101,29 @@ export interface GameParams {
   shots: Shot[] | null;
   /** ?offscreen=1 (tests): draw only for captures. */
   offscreen: boolean;
-  /** ?keystone.sound=synth: impacts as the old pentatonic voices instead of the collision sound (collapse, the default). */
+  /** ?keystone.sound=classic: the collision sound with G6's materials; synth: impacts as the old pentatonic voices (collapse, the default). */
   sound: GameSoundMode;
   /** ?keystone.impacts=-6: the collision sound's level, dB over the game's own (-40 to 20). */
   impactsDb: number;
+  /** ?duel=D1 (or a ruleset name, keeps or heraldry): a Siege Table duel instead of the level (docs/game/siege-table.md); null when absent. */
+  duel: DuelDef | null;
+}
+
+/** ?duel: a duel table by id or ruleset, any case; null when absent; throws naming the known ones. */
+export function duelOf(text: string | null): DuelDef | null {
+  if (text === null) return null;
+  const d = findDuel(text);
+  if (!d) throw new Error(`unknown duel ${text}; known: ${DUELS.map((x) => `${x.id} (${x.ruleset})`).join(', ')}`);
+  return d;
 }
 
 /** ?keystone.sound and ?keystone.impacts. */
 export function gameSound(q: URLSearchParams): Pick<GameParams, 'sound' | 'impactsDb'> {
   const mode = q.get('keystone.sound') ?? 'collapse';
-  if (mode !== 'collapse' && mode !== 'synth') throw new Error(`keystone.sound must be collapse or synth: ${mode}`);
+  if (!(GAME_SOUND_MODES as readonly string[]).includes(mode)) throw new Error(`keystone.sound must be ${GAME_SOUND_MODES.join(', ')}: ${mode}`);
   const t = q.get('keystone.impacts'), db = t === null ? 0 : t.trim() === '' ? NaN : Number(t);
   if (!(db >= -40 && db <= 20)) throw new Error(`keystone.impacts (dB) must be from -40 to 20: ${t}`);
-  return { sound: mode, impactsDb: db };
+  return { sound: mode as GameSoundMode, impactsDb: db };
 }
 
 /**
@@ -114,7 +132,13 @@ export function gameSound(q: URLSearchParams): Pick<GameParams, 'sound' | 'impac
  */
 export const DEFAULT_LEVEL = BIG_LEVELS[0]!.id;
 
-/** A built-in level (chamber L1 to L5 or big B1 on) by id, any case; throws naming the known ones. */
+/**
+ * The built-in series in the game's order (the door's sections, top to bottom): the spectacle slice the bare URL
+ * opens, the chamber levels, Undercut's, then the unrated trials. Every level of @tb/keystone's SERIES, once.
+ */
+export const GAME_SERIES: readonly (readonly LevelDef[])[] = [BIG_LEVELS, LEVELS, UNDERCUT_LEVELS, TRIAL_LEVELS];
+
+/** A built-in level (chamber L1 to L5, big B1 on, Undercut U1 on or a trial T-...) by id, any case; throws naming the known ones. */
 export const gameLevel = (id: string): LevelDef => levelById(id);
 
 /** Throws unless def's rack holds every shot of the line. */
@@ -136,14 +160,15 @@ export function lineOf(def: LevelDef, text: string | null): Shot[] | null {
 
 /**
  * ?keystone.rack for level def: a comma list of rack item names (@tb/keystone rack.ts) the level
- * plays with instead of its own, or null when absent. Refused: an empty list, more than MAX_RACK,
+ * plays with instead of its own, or null when absent. Refused: an empty list, more than MAX_RACK
+ * fired items or MAX_PULLS pulls,
  * a name that is no item, a weapon the level does not have. The level's hash changes with its
  * rack, so a run with an override is never the authored level's (spectacle-mode.md: custom).
  */
 export function rackOf(def: LevelDef, text: string | null): RackItem[] | null {
   if (text === null) return null;
   const items = text.split(',');
-  if (text === '' || items.length > MAX_RACK) throw new Error(`keystone.rack must list 1 to ${MAX_RACK} items: ${text}`);
+  if (text === '' || rackSizeProblem(items) !== null) throw new Error(`keystone.rack must list 1 to ${MAX_RACK} items (and up to ${MAX_PULLS} pulls): ${text}`);
   return items.map((name) => {
     if (!isRackItem(name)) throw new Error(`keystone.rack: ${name || 'an empty name'} is not one of ${RACK_ITEM_NAMES}`);
     const ref = itemRef(name)!;
@@ -162,13 +187,44 @@ export function parseGameParams(q: URLSearchParams): GameParams {
   const rules = levelRules(q);
   const authored = gameLevel(q.get('level') ?? DEFAULT_LEVEL), rack = rackOf(authored, q.get('keystone.rack'));
   const level = withRules(rack ? { ...authored, rack } : authored, rules);
+  const duel = duelOf(q.get('duel'));
   return {
-    level, rack, rules,
+    level, rack, rules, duel,
     engine: engineKind(q.get('engine')),
     feel: paceFeel(q),
     look: lookName(q.get('look') ?? GAME_LOOK),
-    shots: lineOf(level, q.get('keystone.shots')),
+    // A duel's line is checked against the duel's own level (its first player first).
+    shots: lineOf(duel ? duelLevel(duel, 0) : level, q.get('keystone.shots')),
     offscreen: q.get('offscreen') === '1',
     ...gameSound(q),
   };
+}
+
+/**
+ * How level starts run (docs/game/level-start.md): ?keystone.loadpace=<ms> is the pre-settle's batch
+ * time (0 runs it in one go, which holds the frames until it is done; default PRESETTLE_PACE's 8),
+ * ?keystone.prefetch=0 stops building the next level while the result card shows, and
+ * ?keystone.retry=rebuild makes Retry build the level again instead of restoring it from its start
+ * checkpoint (default checkpoint). None changes a level's state, so none is part of a level.
+ */
+export interface LoadOptions { loadPaceMs?: number; prefetch?: boolean; retry?: 'checkpoint' | 'rebuild' }
+export function loadOptions(q: URLSearchParams): LoadOptions {
+  const out: LoadOptions = {};
+  const p = q.get('keystone.loadpace');
+  if (p !== null) {
+    const ms = p.trim() === '' ? NaN : Number(p);
+    if (!(ms >= 0 && ms <= 1000)) throw new Error(`keystone.loadpace must be from 0 to 1000 ms (0: unpaced): ${p}`);
+    out.loadPaceMs = ms;
+  }
+  const f = q.get('keystone.prefetch');
+  if (f !== null) {
+    if (f !== '0' && f !== '1') throw new Error(`keystone.prefetch must be 0 or 1: ${f}`);
+    out.prefetch = f === '1';
+  }
+  const r = q.get('keystone.retry');
+  if (r !== null) {
+    if (r !== 'checkpoint' && r !== 'rebuild') throw new Error(`keystone.retry must be checkpoint or rebuild: ${r}`);
+    out.retry = r;
+  }
+  return out;
 }

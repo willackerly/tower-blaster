@@ -52,6 +52,9 @@ it. Keys (`@tb/audio` options.ts):
 | `snd.volume` | 0 | master, dB |
 | `snd.ring`, `snd.click` | 0 | the modes and the contact click, dB over the material's |
 | `snd.grit` | 0 | chips off hard hits (stone only), dB over the material's |
+| `snd.rough` | 0 | contact roughness, dB over the material's (Realism below) |
+| `snd.dense` | 0 | the dense modes above the table, dB over the material's |
+| `snd.set` | real | the material set: real, or classic (G6's) |
 | `snd.damping` | 1 | loss factor x |
 | `snd.pitch` | 0 | semitones (stiffness x 2^(st/6)) |
 | `snd.spread` | 1 | body-to-body pitch spread x |
@@ -248,6 +251,283 @@ hiss, while chips are crackle. A fracture impulse into the block's own modes
 (a short, full-band "crack" instead of the Hertz thump) is the most physical
 next layer; it waits for recordings (S9).
 
+## Realism (2026-11-05)
+
+Will heard the game's collisions as "a bit too synthetic". This section is how that was made
+measurable, what caused it, and what changed. The old sound is kept bit for bit as the `classic`
+material set (viewer `snd.set=classic`, game `keystone.sound=classic`).
+
+### The judge
+
+`tools/sound-judge/` re-implements YAMNet (Google's AudioSet classifier, 521 everyday sound classes)
+in numpy and scores each render: the mean probability of real impact events (Smash/crash, Knock,
+Clatter, Crack, Thump, Glass, Explosion, ...), of electronic sounds (Synthesizer, Sine wave, Beep) and of
+musical instruments (Music, Marimba, Wood block, Bell, Percussion), and the real share
+real / (real + electronic + instrument). It is level-free. Calibrated on ESC-50 recordings: knocks,
+footsteps, glass, fireworks, can openings and mouse clicks score 0.68-0.98 (category means, 16 clips
+each) with the right top classes; alarm clocks 0.07 and church bells 0.00. A classifier is not an ear; it guards against "sounds like an instrument",
+and values below sit on its plateaus, never its peaks, and only where the physics puts them.
+
+G6's game collapse (L1-L5 par lines, AVBD reference, game camera) scores **0.19**, heard as
+"Music, Plop, Synthesizer". Two things were ruled out first:
+
+- **Not the room.** The same renders convolved with a hall, a room, an outdoor tail or a lone
+  ground reflection score *more* musical (instrument 0.34 -> 0.7-2.0: "Percussion, Drum, Wood
+  block"). A dry modal source in a room is a drum kit in a room. Reverb waits for a real source.
+- **Not damping or pitch spread alone.** Damping x3 trades "Music" for "Heartbeat" (a low thump,
+  real share 0.4); pitch spread x5 changes nothing.
+
+### The cause
+
+A Keystone block is a 0.5 m hollow plaster shell of 30 kg; Hertz contact against it lasts 4 ms
+at 1 m/s. A smooth 4 ms force pulse has nothing left above ~250 Hz, so of the shell's 48 table modes
+only the lowest cluster (six walls at ~300 Hz, all within 3%) is struck: 95% of the ringing energy is
+one pitch. Every block in a level is the same size, so the collapse is one instrument played 500 times:
+the "plop". Its ratios (1 : 2.04 : 3.01 for a clamped plate) are near-harmonic, which makes it a note.
+
+### What changed (the `real` set)
+
+1. **Contact roughness** (`roughDb`, modes.ts `forceSpectrum`). Real faces and corners touch at
+   several points within the contact: the force fluctuates by eps of itself as noise of ~1 / ROUGH_T
+   (0.15 ms asperities) bandwidth. Its power adds a floor 0.75 eps^2 ROUGH_T / T under the pulse's
+   spectrum, so a long contact (a heavy block) stays smoother per impulse than a short one.
+2. **The dense modes** (`denseDb`, `denseField`, the engine's dense layer). Shell walls and solid
+   blocks have thousands of modes above the table (2D and 3D Weyl densities). They play as a
+   statistical field: band noise per (material, sector, half-octave) under an amplitude each impulse
+   raises by the band's energy, decaying at the band's loss factor. Its energy is physical, not a
+   balance: 2 J^2 Int |F|^2 Re Y df with the mean point conductance Re Y = n(f) / (4 M) (Cremer and
+   Heckl; the infinite plate's 1 / (8 sqrt(D rho h)) for a wall), radiating its share
+   eta_rad / (eta_rad + eta) by Maidanik's efficiency (walls below coincidence) or the body's size
+   (solids).
+3. **The energy law for the table** (`law: 'energy'`, `modeGain`). G6 played every mode at the
+   impact's dv, a balance that grows with the mode count (pine and iron radiated 22-27% of the
+   impact's energy, rubber would have radiated 6x its energy with the dense field). Now each mode takes
+   J^2 |F|^2 / (2 M) and radiates by its efficiency, the dense field's law, so table, field and click
+   balance by physics. Table and field each take at most `VIB_SHARE` (half) of the impact's energy.
+4. **Contact damping and cast walls.** A block in a pile loses energy through its contacts: loss
+   factors 2-8x a free body's (plaster 0.08, stone 0.03, ice 0.04, iron 0.03, steel 0.002). Cast walls
+   differ by ~10% in thickness (`walls`: frequencies within 15%), which breaks the six-wall unison.
+
+Per material (real share, mean of L1-L3 with the material on every structure body; the city is the
+viewer's 10k knock-down from 75 m):
+
+| Material | Classic | Real | Classic top classes | Real top classes (L1, L2, L3) | Values |
+|---|---|---|---|---|---|
+| plaster (game) | 0.27 | **0.87** | Music, Plop, Synthesizer | Shuffling cards; Knock, Door, Thunk; Door, Tap | eta 0.08, rough -6, cast walls |
+| stone | 0.33 | **0.84** | Heartbeat, Heart murmur | Rattle, Coin dropping; Coin dropping, Keys jangling; Tick, Clock | eta 0.03, rough -6 |
+| ice | 0.39 | **0.86** | Heartbeat | Crack, Crushing, Breaking; Crackle; Glass, Chink | eta 0.04, rough -6 |
+| rubber | 0.20 | **0.82** | Heartbeat | Crackle, Explosion; Rodents (!); Tick | rough -20 |
+| iron | 0.00 | **0.68** | Chant, Mantra, Music | Wind, Door; Fart, Wind noise (!); Door | eta 0.03, rough -20, cast walls |
+| steel ammo | 0.35 | **0.61** | Plop, Ding | Ding, Clang, Glass, Chink; Ding, Clang; Tick, Ping | eta 0.002, rough -12 |
+| acrylic (viewer city) | 0.20 | **0.84** | Music, Clock | Camera, Wood, Mechanisms | rough -6 |
+| stone (viewer city, 1 m) | 0.36 | **0.90** | Heartbeat, Throbbing | Crackle, Fire, Static, Clatter | as above |
+| pine (Kapla) | 0.47 | 0.47 | Jingle bell, Glass, Bell, Chink | (unchanged) | classic |
+| **the game, L1-L5 as played** | **0.19** | **0.81** | Music, Plop, Synthesizer | Door; Knock, Whack; Door, Whack; Knock, Door; Door, Knock | |
+
+(Silence, Sound effect and Inside, small room are left out of the top classes.) The real share is the
+headline, but the top classes keep it honest: rubber and iron leave "instrument" for odd neighbours
+(Rodents, Fart, Wind), a sign their low, noisy rumble is not yet right either. Both are rare in the
+levels; they wait for listening and recordings.
+
+Plateaus: plaster is 0.82-0.87 for rough -20 to 0 at eta 0.08 (0.45-0.54 at its old 0.04); stone
+0.74-0.81 over rough and eta 0.015-0.06; iron needs eta >= 0.03 (0.06-0.12 below). Steel ammo stays
+partly "Ding": steel balls do ring. Kapla pine is a beam whose table already reaches 18 kHz, so it is
+unchanged and reads as clinks (it is not wrong: Kapla planks clink); it is the next material to study.
+
+Energy audit (realism.test.ts): no real material radiates more than 10% of an impact's kinetic
+energy (modes and field; the dense field alone under 5%), from 0.25 to 1 m and 0.5 to 4 m/s. The
+click is left out of that audit: it is G6's compact dipole, which overstates a 1 m box stopping in
+1 ms (ka ~ 9), a known limit for a later step.
+
+Level: the real set is transient where the classic one rings, so at the same headroom it reads
+quieter. `GAME_SOUND_DB_REAL` = -17 limits nothing on the par lines (loudest peak 0.81) and sits
+1.1-3.4 LU under the classic set (BS.1770, `loudness.ts`); `keystone.impacts=3` closes it.
+
+Cost: the dense layer is 15 bands x 4 sectors of table lookups per sounding material, skipped when
+idle (an engine test holds an idle material at zero work). Real numbers come from the M5.
+
+Knobs: `snd.rough` and `snd.dense` (dB over the material's), `snd.set`. Tools: `sound-sweep-cli.ts`
+renders captures with any material change; `sound-cli.ts set=` prints peak, limiting and loudness.
+
+## Material identity (2026-11-05, the listening ladder)
+
+Will's listen of the real set: better than classic by a bit, but every level reads as soft wood
+(crunching firewood, a branch falling, footsteps on wood), and the stone city as "wood blocks
+falling". The realism judge agreed without saying so: its top classes were Door, Knock, Whack. Its
+real share rewards any real impact, and wood knocks are AudioSet's commonest one.
+
+The judge now also reports material shares from AudioSet's material labels: wood (Wood, Knock,
+Door, Whack, ...), glass (Glass, Chink, Shatter), metal (Clang, Ding, Coin, ...) and mineral (Crack,
+Clatter, Rattle, Crushing, Smash; AudioSet has no stone class). On ESC-50, door knocks score wood
+0.84-1.00 (8 of 8), and glass breaking reads glass in 6 of 8 (0.42-0.79). On the game's levels as played (real set) it
+says wood 0.40-0.83 on all five, as Will did.
+
+Will proposed building up instead of tuning whole levels: two blocks knocking, then a clatter, then
+a tower, then a level, each described and listened to, moving on only when the descriptions line up.
+`ladder-cli.ts` renders those steps as scripted impacts (the tap's frame format, no physics engine),
+per material, far under the limiter and peak-normalised, so a step hears only the synth.
+
+Step 1 (knock, 0.5 m blocks): the material label follows damping, as the perception literature
+predicts (Wildes and Richards 1988; Klatzky, Pai and Krotkov 2000: the decay rate per cycle, eta, is
+the strongest material cue, and it does not depend on size). Solid cubes (stone, ice, steel):
+eta <= 0.002 reads metal (Ding), 0.005-0.01 glass (Chink, clink), 0.02-0.04 mineral, >= 0.04-0.08
+wood. The real set raised eta to stop the ringing (stone 0.015 to 0.03, plaster 0.04 to 0.08, ice
+0.005 to 0.04, iron 0.002 to 0.03), which moved every material into the wood band. The hollow shells
+(plaster, iron) read wood at almost every eta: a knocked 0.5 m hollow box is a door. Pine planks
+(Kapla) read glass (Ding, Chink), acrylic a clock tick.
+
+Will's reads of step 1 (2026-11-06): stone decent but a little soft, plaster a little too wood-like,
+iron way too woody, steel good, rubber quite good, ice too much like rubber. The judge's material
+labels agreed on plaster, iron and ice, and Will judged it reliable enough to iterate on; it does
+so from here, with Will at the gates.
+
+Step 1 fixes (each material moved into its band, by the judge; knock at 0.5 m):
+
+| material | change | judge before | judge after |
+|---|---|---|---|
+| stone | eta 0.03 to 0.02 | mineral, softer | mineral 0.41 |
+| plaster | hollow shell to a solid porous block at the game's 250 kg/m^3 (E 2 GPa, a light gypsum's), eta 0.035 | wood (Door) | mineral 0.44 (Crack, Breaking) |
+| iron | 6 mm shell to 22.6 mm walls (what gives the game's 1950 kg/m^3), plate modes up to 8 half-waves a wall, eta 0.003 | wood | metal 0.72 (Ding, Clang) |
+| ice | eta 0.04 to 0.005 (ice's own) | rubber-like | glass 0.70 (Chink) |
+
+Leissa's table has 8 modes a clamped wall; past it the walls use Bolotin's edge-effect asymptote,
+lambda = 0.91 pi^2 ((p + 1/2)^2 + (q + 1/2)^2), which meets Leissa at (3, 2) within 0.6% and at
+(3, 3) within 0.01% (`plateModes`, modes.ts `plateTable`). With 8 modes a wall the shell rings in
+near-harmonic clusters (a bell, "Music"); with 64 it is a clang. More plate modes alone did not
+save the thin shells (they still read Music or Door), so plaster went solid. Tried and rejected:
+plaster as a 1000 kg/m^3 cube (Quack, Duck in a clatter), at E 0.3 GPa (Plop, Tick), grit (none at
+knock speed).
+
+In the levels the new plaster reads mineral (L1 0.61, Crack and Breaking) on its own, but the steel
+ammo, 28 dB under the blocks, turned the mix to glass (Chink, Glass, Ding): every hit rang the ball.
+A steel ball on plaster has plaster's contact, though: the Hertz pair modulus
+1/E* = (1-nu1^2)/E1 + (1-nu2^2)/E2 is plaster's, the contact lasts ~5x longer, and the asperities,
+Hertz contacts too, last as long (E*^(-2/5)), so the roughness stops near 1.4 kHz instead of 7, under
+the ball's modes. The game's ammo now plays the pair's contact with the level's main material
+(sound-map.ts `ammoOn`; a material's asperity time is `roughT`, default ROUGH_T 0.15 ms). The
+classic set keeps G6's steel on steel. On the same L1-L5 captures, main's real set before this
+change read L1 and L2 as glass (0.39 and 0.37, Chink, Glass, Ding), and after it they read mineral
+(0.53 and 0.51; Crack, Crushing); L5 stays mineral (0.43 to 0.44), wood is 0.10-0.32 on all five,
+real share 0.80-0.95. L3 and L4 stay mixed
+(their impacts are few, and the clip is mostly silence).
+
+Level: the solid plaster is louder at the peak; at GAME_SOUND_DB_REAL -17 one hit in L1 goes 1.1 dB
+into the limiter and nothing else limits. -18 would avoid it but leave the set 3.4 LU under the
+classic one (2.4 at -17), so the level stays.
+
+Step 2 (clatter, 2026-11-06). Findings:
+
+- The clatter script struck on a 0.2 s cadence, and evenly spaced strikes read as a rhythm. Its six
+  blocks now tip at random over 1.2 s. Iron's Music went from 0.51 to 0.42 (0.18 for another random
+  draw; metal 0.90), and plaster's Fart and Quack (0.32) went down to Silence 0.11.
+- The judge, calibrated on real single hits (DiffImpact's robot recordings, Clarke et al. 2021; 99
+  clips from github.com/samuel-clarke/diffimpact):
+  - A steel fork on a steel bowl reads Music and Ding (metal 0.85), so "Music" on struck metal is what
+    real metal gets too.
+  - Wood on wood reads Tick, Clock, Inside small room (wood only 0.34).
+  - Ceramic reads glass (0.81-0.84).
+  - Sparse hits read Silence and Tick, real or synthetic, so a sparse clip's top labels are weak
+    evidence. Its material shares still hold.
+- With the irregular script: ice clatter reads glass (0.69), iron metal (0.90), steel glass and metal
+  (0.52 and 0.46). Plaster and stone read weakly as wood (0.50 and 0.52) with no strong top label.
+  That is the open question for Will's ear.
+
+Two physics gaps, now options, off by default because the judge is mixed on them:
+
+- `overlap` (modes.ts `sparseModes`): band noise stands in for modes only where they overlap. The
+  modal overlap is n(f) f eta pi / 2. At the top of steel's 24-mode table (5.9 kHz) it is 0.07: modes
+  600 Hz apart and 8 Hz wide, a line spectrum, which band noise turns into a pad (steel tumble without
+  the field: Ding, with it: Music). `overlap: 1` adds discrete modes at the Weyl count up to overlap 1
+  (14.4 kHz for steel, 6.5 kHz for ice, 4.9 kHz for stone; plaster and iron already overlap at their
+  tables' tops). Steel clatter moved from Music to Cowbell and Glass, stone knock from mineral 0.41 to
+  0.56, ice knock from glass 0.70 to metal 0.52 (worse), stone tumble from wood to glass.
+- `clickModel: 'sphere'` (modes.ts `clickFilter`): the click as a rigid sphere of the body's volume
+  radiates it, |p| / |accel| = rho w a^3 / (c sqrt(4 + (ka)^4)) (the oscillating sphere's exact far
+  field). The compact dipole alone holds below ka ~ 1.4, which is 250 Hz for a 0.5 m block, and puts
+  up to 11 dB too much into 300 Hz-1 kHz. The judge barely moved (stone knock mineral 0.41 to 0.31,
+  plaster clatter unchanged).
+
+Tried and set aside:
+
+- The rough contact's acceleration noise as a click component (prototype; ~0.1 of the peak, small).
+- Body jitter 0.05-0.25 on metal and on stone/plaster: no effect on Music or the animal reads.
+- Grit up to +12 dB, the click down to -12 dB, contact radius 2 mm.
+
+Will's step-2 reads (2026-11-06): plaster acceptable, iron and steel good if hollow, stone way off,
+ice should be far more crisp and shattery. Of the step 2b takes he picked stone with `overlap: 1`,
+which still sounds "very much in an enclosed room, not very stone like", and the original ice
+("closest, but far"). He suggested measuring real recordings of stone and of ice cracking.
+
+Step 2c (real recordings, 2026-11-06). Freesound and the other sound libraries are blocked from the
+cloud, so the references are recordings shipped in open-source game repositories on GitHub:
+Minetest Game's ice footsteps and ice chipping (CC BY-SA 3.0, from Freesound), and SuperTux's ice
+crash. They are references for measurement only, not shipped. Against ours at the game's 0.5 m:
+
+| | octave levels 125 Hz-16 kHz (dB re max) | spectral flatness 1-8 kHz | transients per event | judge |
+|---|---|---|---|---|
+| real ice footstep / chipping | -25 -20 -1 -1 0 -4 -4 -9 | 0.40-0.48 | 9-36 | mineral 0.6, Crack, Breaking |
+| ice now, knock | -19 -31 -36 -30 -4 0 -6 -19 | 0.18 | one strike | glass 0.70, Chink, Glass |
+
+Real ice cracking is a dense run of small snaps, flat from 500 Hz to 16 kHz. Ours is a ring with a
+hole from 250 Hz to 1.5 kHz. Stone has the same hole: under the 0.5 m block's first mode (2.1 kHz)
+only the rigid-body click radiates, and its smooth Hertz pulse (7.5 ms at a 5 cm drop) sits at
+130 Hz. The rough part of the contact force radiating through the body's rigid motion would fill it,
+but with the sphere's radiation (clickModel 'sphere') it adds only 2 dB at 500 Hz-1 kHz: not the gap.
+
+The grit (chips) was there all along but about 50 dB too quiet to hear at 0.5 m: at gritDb -6 a
+knock's 2 grains are lost under the ring. Three new options, off by default:
+
+- `gritRate` (grains per m/s of dv; absent GRIT.perDv 3, the cap scaling with it) and `gritSpread`
+  (the grains' mean delay, s, at GRIT.refEdge; absent GRIT.spread 20 ms). Brittle ice cracks in a
+  burst of many small events rather than shedding a few chips.
+- `gritRing` (0 to 1, absent 0): the share of grit's energy that rings the body. A crack is a stress
+  pulse inside the block: it strikes the modes (flat, a pulse shorter than any contact, no rigid-body
+  click) and the dense field (the shortest contact's row), scaled so a crack rings with its share of
+  the grain's energy (a mode of amplitude c holds c^2 tau sr / 4). Ringing draws from grit's stream,
+  so a material without it plays bit for bit as before.
+
+Ice clatter at gritRate 30, gritDb 50: dry cracks over 30 ms read Crack first (mineral 0.35, real
+share 0.96), and the octaves fill to -18 -21 -15 -7 -2 0 -1 -9 (flatness 0.50), the real recordings'
+shape. Half of each crack ringing reads Glass and Breaking (glass 0.38, mineral 0.32). All ringing
+reads Music and Ding (metal 0.84): ice's table is a sparse chime from 1.7 to 3.6 kHz. Cracks running
+80 ms with jitter 0.08 read Crack 0.54, Crackle 0.31, Breaking 0.29 (mineral 0.58), the closest to the
+recordings.
+
+Stone: every block rang at one pitch (jitter 0.02), and its clatter read Tick, Clock, Tick-tock,
+Music (real share 0.26). At jitter 0.15 (natural stone's E varies some 30% piece to piece, so its
+pitch about 15%) it reads Tick, Animal, Drip (real share 0.56); the material shares barely move
+(mineral 0.06 to 0.07). Chips at gritDb 44, gritRate 10 bring it to mineral 0.24, real share 0.75.
+(In step 2 jitter alone did nothing; that was without `overlap: 1`.)
+
+Stone, against 105 Freesound previews the Mac fetched (stone knock, impact, block, rock hit, brick;
+ice crack, pond, footsteps, sheet; 53 CC0, 33 Attribution, 13 NonCommercial: references only, see
+/mnt/project-files/sound-refs-index.csv). The judge reads real stone much as ours: stone knocks
+wood 0.53 (Whack, Door), stone drops "Inside, small room" in 5 of 8, mineral 0.11-0.35 throughout. So
+for stone the target is the spectrum, not the labels. Octave levels re their mean, 125 Hz-8 kHz:
+
+| | 125 | 250 | 500 | 1k | 2k | 4k | 8k | rms distance |
+|---|---|---|---|---|---|---|---|---|
+| real stone knock and impact (median of 16) | -6.5 | -2.4 | 1.3 | 5.4 | 5.9 | 1.4 | -6.5 | 6.8 (each recording to the median) |
+| stone A, clatter | 2.8 | -2.3 | -13.5 | -10.6 | 5.7 | 11.8 | 6.0 | 10.9 |
+| A + jitter 0.15, chips (gritDb 50, gritRate 10), face 0.6 | -9.1 | -2.4 | 5.1 | 4.7 | 0.7 | 2.6 | -1.6 | 3.2 |
+
+Real stone peaks at 500 Hz-2 kHz. Ours had a hole there because the click sat at 130 Hz: a 7.5 ms
+Hertz contact, which holds for a 2 mm corner but not for a face. Flat on flat, the stiffness is the
+block's own, k = E* L, so T_face = pi sqrt(m* / k), 0.50 ms for the 0.5 m block. A landing starts on an
+edge and rolls flat, so it falls between the two. New option `face` (0 to 1, absent 0):
+T = T_hertz^(1 - face) T_face^face (modes.ts contactTime). At face 0.6 (1.6 ms) the clatter reads
+mineral 0.45 (Crack, Plop), real share 0.93, and the knock reads Door and Tap (wood 0.57), as the real
+stone knocks do. Ice with face 0.5, cracks over 80 ms and jitter 0.08 reads Crack 0.74, Breaking 0.58,
+Glass 0.32 (mineral 0.49), 2.5 dB from the median of 39 real ice recordings (their own spread is 5.2).
+
+Fixed: `sparseModes` hung on a body with no mode table (a 5 cm stone cube, whose first mode is past
+18 kHz): the Weyl count started at 0 Hz, and its step (x * 0.002) never moved. It starts at 20 Hz.
+
+Page for Will: https://claude.ai/artifact/Rx7wFWSp5tVpMhauwwYpQ4 (stone A-E, ice now and B-E, and
+real recordings of each). His picks become the real set's defaults.
+
+Next: Will's picks, then a tower. The free-text describer (CLAP) still needs huggingface.co.
+
 ## Plan (each step lands with its test)
 
 1. S1 `@tb/audio` material config and mode derivation. Done (#93).
@@ -264,6 +544,7 @@ next layer; it waits for recordings (S9).
 6. S6 viewer Sound section and `snd.*` URL params. Done.
 7. S7 ground and hall: floor resonators, reverb tied to `real.env`.
 8. S8 granular non-modal layers: stone grit done (2026-11-01, Grit above); splinters and rubble sliding not yet.
-9. S9 calibration from recordings (example-guided, Ren et al. 2013).
+9. S9 calibration from recordings (example-guided, Ren et al. 2013). The realism judge (2026-11-05,
+   Realism above) is the objective half; recordings of the actual materials would pin the levels.
 10. S10 M5 bench (`pnpm bench:audio`): audio-thread load and the tap's main-thread cost at 10k and 100k.
 11. S11 game adoption, and ball and level materials. Done (2026-11-01, In the game above).

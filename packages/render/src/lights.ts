@@ -13,6 +13,10 @@
 //   flashTake per slot: the winner replaces the slot's light if it is
 //             brighter than what is left of the old one; lights decay with
 //             time constant tau.
+//   blasts    BLAST_LIGHTS slots the CPU writes each frame (blasts.ts: the
+//             brightest live blasts), on in every look: with the stylized
+//             effects off (the real look) only pack runs (packOnly), over
+//             zeroed ball and flash slots.
 //
 // The scene shader loops over the packed light list (2 vec4 per light:
 // camera-relative position and radius; colour times intensity). Lights
@@ -24,7 +28,11 @@ import type { V3 } from './math.ts';
 
 export const MAX_BALLS = 4;
 export const FLASHES = 8;
-export const LIGHTS = MAX_BALLS + FLASHES;
+/** Blast light slots (blasts.ts), after the ball and flash slots. */
+export const BLAST_LIGHTS = 4;
+export const LIGHTS = MAX_BALLS + FLASHES + BLAST_LIGHTS;
+/** First blast light slot. */
+export const BLAST_LIGHT0 = MAX_BALLS + FLASHES;
 export const TRAIL = 32;
 /**
  * The light buffer, in vec4: the LIGHTS raw slots (2 vec4 each: position
@@ -179,6 +187,9 @@ export class Lights {
   private binds: { balls: GPUBindGroup; flashPick: GPUBindGroup; flashTake: GPUBindGroup; pack: GPUBindGroup } | null = null;
   private bound: unknown[] = [];
   private frame = 0;
+  private packBind: { bind: GPUBindGroup; ctl: GPUBuffer } | null = null;
+  /** Blast lights were written last frame (so a frame without any zeroes them once). */
+  private blastsLit = false;
   /** Tunables, read every frame. */
   config: LightParams = { ...DEFAULT_LIGHTS };
 
@@ -238,6 +249,37 @@ export class Lights {
   /** No lights this frame, in place of encode: zeroes the meta (lit count, heat gain). */
   off(): void {
     this.device.queue.writeBuffer(this.lights, LIGHT_META * 16, new Float32Array(4));
+  }
+
+  /**
+   * The blast light slots for this frame (before encode or packOnly):
+   * each light is camera-relative position, radius, linear colour and
+   * intensity. At most BLAST_LIGHTS; the rest are zeroed. Returns whether
+   * any is lit.
+   */
+  setBlastLights(lights: ReadonlyArray<{ pos: V3; radius: number; colour: V3; intensity: number }>, eye: V3): boolean {
+    const lit = lights.filter((l) => l.intensity > 0 && l.radius > 0).slice(0, BLAST_LIGHTS);
+    if (!lit.length && !this.blastsLit) return false;
+    const data = new Float32Array(BLAST_LIGHTS * 8);
+    lit.forEach((l, k) => data.set([l.pos[0] - eye[0], l.pos[1] - eye[1], l.pos[2] - eye[2], l.radius, ...l.colour, l.intensity], 8 * k));
+    this.device.queue.writeBuffer(this.lights, BLAST_LIGHT0 * 2 * 16, data);
+    this.blastsLit = lit.length > 0;
+    return this.blastsLit;
+  }
+
+  /**
+   * In place of encode when the look has no stylized effects: zero the ball
+   * and flash slots and pack what is left (the blast lights). sparks: for
+   * the control words pack reads (the heat gain, unused without effects).
+   */
+  packOnly(pass: GPUComputePassEncoder, sparks: Sparks): void {
+    this.device.queue.writeBuffer(this.lights, 0, new Float32Array(BLAST_LIGHT0 * 8));
+    if (this.packBind?.ctl !== sparks.ctl) {
+      this.packBind = { ctl: sparks.ctl, bind: this.device.createBindGroup({ layout: this.pipes.pack.getBindGroupLayout(0), entries: [{ binding: 4, resource: { buffer: sparks.ctl } }, { binding: 7, resource: { buffer: this.lights } }] }) };
+    }
+    pass.setBindGroup(0, this.packBind.bind);
+    pass.setPipeline(this.pipes.pack);
+    pass.dispatchWorkgroups(1);
   }
 
   /** Frame counter the next encode uses (the trail head is frame % TRAIL). */

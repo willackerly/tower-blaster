@@ -1,6 +1,9 @@
 // The GPU AVBD engine with restitution (AvbdParams.restitution), continued
-// from engine-restitution.test.ts: the supports against the reference, a
-// resting column and a knockdown, and the stats (GpuAvbdEngine.restitutionStats).
+// from engine-restitution.test.ts: the supports against the reference (without
+// anchors, AvbdParams.restitutionAnchors false, where they were measured, and
+// with them), a resting column and a knockdown, and the stats
+// (GpuAvbdEngine.restitutionStats). Anchors' own cases are in
+// engine-restitution-anchors.test.ts.
 // Split from it so that each file stays under CI's ~300 s per file.
 //
 // Measured on SwiftShader (2026-10-27) unless a comment says otherwise.
@@ -8,20 +11,38 @@ import { describe, expect, it } from 'vitest';
 import type { SceneDesc } from '@tb/engine-api';
 import { nonFinite } from '@tb/metrics';
 import { buildScenario } from '@tb/scenarios';
-import { ball, both, cube, drop, floats, G, gainOf, gpuRun, H, knock, maxSpeed, ON, refRun, type Run, sceneOf, shadowEnergy, withE, zeroG } from './bounce.ts';
+import { ball, both, cube, drop, floats, G, gainOf, gpuRun, H, knock, maxSpeed, OLD, ON, refRun, type Run, sceneOf, shadowEnergy, withE, zeroG } from './bounce.ts';
 import { gpu } from './harness.ts';
 
 describe('GPU AVBD engine: restitution on, supports (against the reference)', () => {
-  // Measured: no gain (0, as the reference), both at rest from step 61 on (1.3e-9 m/s), the cube driven into the
-  // ground at 10.0378 m/s and the ball back at 1.4148 (the reference's to 1e-4; off 0.797 and 1.606).
-  it('a 510 kg ball (e 0.9, 10 m/s) bouncing off a 1 kg cube on the ground gains no energy, and both come to rest', { timeout: 120_000 }, async (ctx) => {
+  const heavy = (mb: number, v: number, e: number) => {
+    const rr = 0.25;
+    return sceneOf([cube([0, 0.5, 0], { e }), ball([0, 1 + rr + 0.3, 0], { e, radius: rr, mass: mb, linVel: [0, -v, 0] })], { groundE: e });
+  };
+  const down = (x: Run) => Math.max(...x.snaps.map((s) => -s.linVel[1]!)), back = (x: Run) => Math.max(...x.snaps.map((s) => s.linVel[4]!));
+  // Without anchors (the weakness they fix). Measured: no gain (0, as the reference), both at rest from step 61 on
+  // (1.3e-9 m/s), the cube driven into the ground at 10.0378 m/s and the ball back at 1.4148 (the reference's to
+  // 1e-4; off 0.797 and 1.606).
+  it('without anchors, a 510 kg ball (e 0.9, 10 m/s) bouncing off a 1 kg cube on the ground gains no energy, and both come to rest', { timeout: 120_000 }, async (ctx) => {
     if (!gpu) return ctx.skip();
-    const rr = 0.25, mb = 510, v = 10, e = 0.9;
-    const scene = sceneOf([cube([0, 0.5, 0], { e }), ball([0, 1 + rr + 0.3, 0], { e, radius: rr, mass: mb, linVel: [0, -v, 0] })], { groundE: e });
-    const r = await both(scene, 180, ON);
+    const mb = 510, v = 10, scene = heavy(mb, v, 0.9);
+    const r = await both(scene, 180, OLD);
     expect(gainOf(scene, r.gpu, mb * (0.5 * v * v + G * 0.3)).gain).toBeLessThan(1e-6);
     expect(Math.max(...r.gpu.snaps.slice(121).map(maxSpeed))).toBeLessThan(1e-6);
-    const down = (x: Run) => Math.max(...x.snaps.map((s) => -s.linVel[1]!)), back = (x: Run) => Math.max(...x.snaps.map((s) => s.linVel[4]!));
+    expect(Math.abs(down(r.gpu) - down(r.ref))).toBeLessThan(1e-3);
+    expect(Math.abs(back(r.gpu) - back(r.ref))).toBeLessThan(1e-3);
+  });
+
+  // With anchors (the default): the ground holds the cube exactly. Measured: the ball back at 8.3482 m/s (the
+  // reference's 8.3487, 0.83 of the impact), the cube down at 0.798 m/s (as off), no gain over 180 steps (three
+  // bounces) on either engine.
+  it('a 510 kg ball (e 0.9, 10 m/s) bounces off a 1 kg cube on the ground as off the ground, as on the reference, and gains no energy', { timeout: 120_000 }, async (ctx) => {
+    if (!gpu) return ctx.skip();
+    const mb = 510, v = 10, scene = heavy(mb, v, 0.9);
+    const r = await both(scene, 180, ON);
+    expect(gainOf(scene, r.gpu, mb * (0.5 * v * v + G * 0.3)).gain).toBeLessThan(1e-6);
+    expect(back(r.gpu)).toBeGreaterThan(0.8 * v);
+    expect(down(r.gpu)).toBeLessThan(1.2);
     expect(Math.abs(down(r.gpu) - down(r.ref))).toBeLessThan(1e-3);
     expect(Math.abs(back(r.gpu) - back(r.ref))).toBeLessThan(1e-3);
   });
@@ -32,11 +53,11 @@ describe('GPU AVBD engine: restitution on, supports (against the reference)', ()
   // (impact in step 61): the ball back up at 2.860385 m/s against the reference's 2.860408 (off 0.031), the cubes'
   // fastest speeds down, bottom to top, 0.35028, 1.41147 and 1.45908 against 0.35022, 1.41145 and 1.45906 (the
   // largest gap 5.6e-5).
-  it('a ball bouncing on a 3-cube column takes supports to depth 1 only, as on the reference', { timeout: 120_000 }, async (ctx) => {
+  it('without anchors, a ball bouncing on a 3-cube column takes supports to depth 1 only, as on the reference', { timeout: 120_000 }, async (ctx) => {
     if (!gpu) return ctx.skip();
     const e = 0.9, v = 5, spawn = 30;
     const scene: SceneDesc = { ...sceneOf([0, 1, 2].map((k) => cube([0, 0.5 + k, 0], { e })), { groundE: e }), inputs: [{ step: spawn, kind: 'spawn', body: ball([0, 3.5 + v * v / (2 * G), 0], { e }) }] };
-    const r = await both(scene, spawn + 1 + Math.ceil(v / (G * H)) + 15, ON);
+    const r = await both(scene, spawn + 1 + Math.ceil(v / (G * H)) + 15, OLD);
     const up = (x: Run) => Math.max(...x.snaps.slice(spawn + 1).map((s) => s.linVel[10]!));
     const down = (x: Run, i: number) => Math.max(...x.snaps.map((s) => -s.linVel[3 * i + 1]!));
     expect(up(r.gpu)).toBeGreaterThan(1);
@@ -44,22 +65,25 @@ describe('GPU AVBD engine: restitution on, supports (against the reference)', ()
     for (const i of [0, 1, 2]) expect(Math.abs(down(r.gpu, i) - down(r.ref, i)), `cube ${i}`).toBeLessThan(1e-3);
   });
 
-  // Measured: no gain (0, as the reference), at rest from step 181 on (3.2e-9 m/s over 241-300).
-  it('a 1 kg ball (e 0.9, 20 m/s) onto a 0.4 kg cube lying on the ground gains no energy', { timeout: 120_000 }, async (ctx) => {
+  // Measured without anchors: no gain (0, as the reference), at rest from step 181 on (3.2e-9 m/s over 241-300).
+  // With them the ball keeps bouncing (e 0.9 off a held cube): no gain.
+  it.for([['without anchors', OLD], ['with anchors', ON]] as const)('a 1 kg ball (e 0.9, 20 m/s) onto a 0.4 kg cube lying on the ground gains no energy (%s)', { timeout: 120_000 }, async ([name, params], ctx) => {
     if (!gpu) return ctx.skip();
     const v = 20, e = 0.9;
     const scene = sceneOf([cube([0, 0.5, 0], { e, density: 0.4 }), ball([0, 1.8, 0], { e, linVel: [0, -v, 0] })], { groundE: e });
-    const r = await gpuRun(scene, 300, ON);
+    const r = await gpuRun(scene, 300, params);
     expect(gainOf(scene, r, 0.5 * v * v + G * 0.3).gain).toBeLessThan(1e-6);
-    expect(Math.max(...r.snaps.slice(241).map(maxSpeed))).toBeLessThan(1e-6);
+    if (name === 'without anchors') expect(Math.max(...r.snaps.slice(241).map(maxSpeed))).toBeLessThan(1e-6);
   });
 
-  // The cost of supports (the reference test's offRestingCube, the ball spawned after 30 steps instead of 120): a
+  // The cost of supports without anchors (the reference test's offRestingCube, the ball spawned after 30 steps instead of 120): a
   // ball of e 0.9 at 3 m/s onto a cube resting on the ground. Measured (spawn 30, as here), rebound over approach
   // and the cube's fastest speed down: 0.15378 / 0.98132 at 4 rounds, 0.49003 / 0.47922 at 8, 0.72946 / 0.12031
   // at 16, and 0.18739 / 1.75186 for a 5 kg ball at 8, each the reference's to the digits shown (eV within
   // 3.2e-6 of it, the speed within 4.1e-6; the same digits at spawn 120).
-  it('a ball bounces off a cube resting on the ground as on the reference, at 4, 8 and 16 rounds, and 5 kg', { timeout: 300_000 }, async (ctx) => {
+  // With anchors the rounds no longer matter: measured eV 0.80199 at 4, 8 and 16 rounds and 0.78 for 5 kg, the
+  // reference's to 1e-4.
+  it.for([['without anchors', OLD], ['with anchors', ON]] as const)('a ball bounces off a cube resting on the ground as on the reference, at 4, 8 and 16 rounds, and 5 kg (%s)', { timeout: 300_000 }, async ([name, params], ctx) => {
     if (!gpu) return ctx.skip();
     const v = 3, e = 0.9, yc = 1.5, spawn = 30;
     const measure = (x: Run) => {
@@ -77,15 +101,20 @@ describe('GPU AVBD engine: restitution on, supports (against the reference)', ()
     const eVs: number[] = [];
     for (const [rounds, mass] of [[4, 1], [8, 1], [16, 1], [8, 5]] as const) {
       const scene: SceneDesc = { ...sceneOf([cube([0, 0.5, 0], { e })], { groundE: e }), inputs: [{ step: spawn, kind: 'spawn', body: ball([0, yc + v * v / (2 * G), 0], { e, mass }) }] };
-      const r = await both(scene, spawn + 1 + Math.ceil(v / (G * H)) + 30, { ...ON, restitutionRounds: rounds });
+      const r = await both(scene, spawn + 1 + Math.ceil(v / (G * H)) + 30, { ...params, restitutionRounds: rounds });
       const g = measure(r.gpu), f = measure(r.ref), id = `${rounds} rounds, ${mass} kg`;
       expect(Math.abs(g.eV - f.eV), id).toBeLessThan(1e-4);
       expect(Math.abs(g.down - f.down), id).toBeLessThan(1e-3);
       eVs.push(g.eV);
     }
-    expect(eVs[0]).toBeLessThan(eVs[1]!);
-    expect(eVs[1]).toBeLessThan(eVs[2]!);
-    expect(eVs[3]).toBeLessThan(0.5 * eVs[1]!);
+    if (name === 'without anchors') {
+      expect(eVs[0]).toBeLessThan(eVs[1]!);
+      expect(eVs[1]).toBeLessThan(eVs[2]!);
+      expect(eVs[3]).toBeLessThan(0.5 * eVs[1]!);
+    } else {
+      expect(Math.max(...eVs.slice(0, 3)) - Math.min(...eVs.slice(0, 3))).toBeLessThan(1e-4);
+      expect(eVs[3]).toBeGreaterThan(0.74);
+    }
   });
 });
 
@@ -156,23 +185,25 @@ describe('GPU AVBD engine: restitution stats (GpuAvbdEngine.restitutionStats)', 
     return { contacts, impulse, ground };
   };
   // A ball (e 0.9) at 5 m/s onto a cube resting on the ground: its one point bounces (step 151), and the cube's
-  // four ground points hold the cube. Measured: 7.41461 N s in all and 3.48261 from the ground (the reference
-  // 7.41463 and 3.48262).
-  it('count the bounced points, not the supports, and the impulse they and the ground took, as the reference', { timeout: 120_000 }, async (ctx) => {
+  // four ground points hold the cube. Measured without anchors: 7.41461 N s in all and 3.48261 from the ground (the
+  // reference 7.41463 and 3.48262). With anchors the ground points are anchors, which take no impulse in rounds
+  // (the reference's anchorImpulse, not kept on the GPU): the ground's is 0 on both, 10.30 N s in all.
+  it.for([['without anchors', OLD], ['with anchors', ON]] as const)('count the bounced points, not the supports, and the impulse they and the ground took, as the reference (%s)', { timeout: 120_000 }, async ([name, params], ctx) => {
     if (!gpu) return ctx.skip();
     const scene: SceneDesc = { ...sceneOf([cube([0, 0.5, 0], { e: 0.9 })], { groundE: 0.9 }), inputs: [{ step: 120, kind: 'spawn', body: ball([0, 1.5 + 25 / (2 * G), 0], { e: 0.9 }) }] };
-    const r = await both(scene, 160, ON, true);
+    const r = await both(scene, 160, params, true);
     const g = sum(r.gpu), f = sum(r.ref);
     expect(g.contacts).toBe(1);
     expect(f.contacts).toBe(1);
     expect(Math.abs(g.impulse - f.impulse)).toBeLessThan(1e-3);
     expect(Math.abs(g.ground - f.ground)).toBeLessThan(1e-3);
-    expect(g.impulse).toBeGreaterThan(g.ground + 1);
+    if (name === 'without anchors') expect(g.impulse).toBeGreaterThan(g.ground + 1);
+    else expect([g.ground, g.impulse > 1]).toEqual([0, true]);
     const k = r.gpu.stats.findIndex((s) => s!.contacts > 0);
     expect(k).toBe(r.ref.stats.findIndex((s) => s!.contacts > 0));
     // GpuAvbdEngine.restitutionStats() itself, after the step of the bounce: the same as the history's.
-    const at = await gpuRun(scene, k + 1, ON, {}, true), { contacts, impulse, groundImpulse } = r.gpu.stats[k]!;
-    expect(at.live).toEqual({ contacts, impulse, groundImpulse });
+    const at = await gpuRun(scene, k + 1, params, {}, true), { contacts, impulse, groundImpulse, capped, capAlpha } = r.gpu.stats[k]!;
+    expect(at.live).toEqual({ contacts, impulse, groundImpulse, capped, capAlpha });
     expect(at.live!.contacts).toBe(1);
   });
 

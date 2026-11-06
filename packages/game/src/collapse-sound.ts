@@ -3,11 +3,11 @@
 // snapshot the game already has on the CPU (FrameTap). It replaces the
 // synth's impact and contact voices (audio.ts); the crown, heritage, tier,
 // level-end and launch cues stay there. Created on the first user gesture.
-import { FrameTap, type HostStats, PROCESSOR, type SoundMessage } from '@tb/audio';
+import { FrameTap, type HostStats, PROCESSOR, type SoundMessage, type SoundSet } from '@tb/audio';
 import workletUrl from '@tb/audio/worklet?worker&url';
 import type { BodyDesc, Snapshot, Vec3 } from '@tb/engine-api';
 import type { CompiledLevel } from '@tb/keystone';
-import { GAME_SOUND_DB, slotSounds, SOUND_SLOTS, soundSlotOf } from './sound-map.ts';
+import { gameSoundDb, slotSounds, SOUND_SLOTS, soundSlotOf } from './sound-map.ts';
 
 export type CollapseStatus = 'off' | 'starting' | 'waiting' | 'on' | 'error';
 
@@ -29,10 +29,10 @@ export class CollapseSound {
   private last = 0;
   private dest: AudioNode | null = null;
 
-  /** extraDb: the level over the game's own (GAME_SOUND_DB). */
-  constructor(private readonly extraDb = 0) {}
+  /** extraDb: the level over the game's own (gameSoundDb of the set); set: the materials ('classic': G6's). */
+  constructor(private readonly extraDb = 0, private readonly set: SoundSet = 'real') {}
 
-  private get gain(): number { return 10 ** ((GAME_SOUND_DB + this.extraDb) / 20); }
+  private get gain(): number { return 10 ** ((gameSoundDb(this.set) + this.extraDb) / 20); }
 
   /** Start on a user gesture (autoplay policy), on the page's context (the synth's too): loads the worklet, then resumes. */
   wake(ctx: AudioContext, dest: AudioNode = ctx.destination): void {
@@ -75,7 +75,7 @@ export class CollapseSound {
 
   private sendLevel(): void {
     if (!this.level) return;
-    slotSounds(this.level).forEach((x, slot) => this.post({ type: 'material', slot, material: x.material, edge: x.edge }));
+    slotSounds(this.level, this.set).forEach((x, slot) => this.post({ type: 'material', slot, material: x.material, edge: x.edge }));
   }
 
   private post(m: SoundMessage): void {

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { L1, L2, levelScore, outcomeScore, tier } from '@tb/keystone';
-import { BANK_BUTTON, esc, fmtLeverage, fmtPoints, hudHtml, nextSelection, objectiveText, rackChips, resultHtml, starsText } from '../src/hud.ts';
+import { B1, B2, compileLevel, L1, L2, levelScore, outcomeScore, tier, U3 } from '@tb/keystone';
+import { GAME_HELP, GAME_KEYS, HELP_BUDGET, helpHtml, TOUCH_HELP } from '../src/ui.ts';
+import { BANK_BUTTON, esc, freezeButton, POWER_STEP, fmtLeverage, fmtPoints, goldHtml, hudHtml, meterHtml, meterTicks, nextSelection, objectiveText, rackChips, resultHtml, starsText, TOUCH_ACTS } from '../src/hud.ts';
 
 describe('rack', () => {
   it('groups by kind in first-seen order with counts and keys', () => {
@@ -36,6 +37,36 @@ describe('formatting', () => {
     expect(hudHtml({ ...base, chips: [{ ammo: 'drop', key: '1', left: 1, total: 1, selected: true }] })).not.toMatch(/Power/);
     expect(hudHtml({ ...base, chips: [], reachable: false })).toMatch(/Out of reach/);
   });
+  it('chips are tap buttons carrying their key, and the power bar has minus and plus buttons for touch', () => {
+    const base = { level: L2, strokes: 0, crownsDown: 0, crownsTotal: 6, heritageBroken: 0, heritageTotal: 36, power: 60, liveLeverage: 0, phase: 'aiming', reachable: null };
+    const html = hudHtml({ ...base, chips: rackChips(L2.rack, L2.rack, 'marble') });
+    const chips = [...html.matchAll(/<button class="chip([^"]*)" data-act="ammo" data-arg="(\d)">/g)].map((m) => [m[2], m[1]]);
+    expect(chips).toEqual([['1', ' on'], ['2', '']]);
+    expect(html).toContain(`data-act="power" data-arg="-${POWER_STEP}"`);
+    expect(html).toContain(`data-act="power" data-arg="${POWER_STEP}"`);
+    // Shown only on a touch screen (GAME_CSS's .kg-tch); the keys stay for a keyboard.
+    expect(html).toMatch(/class="pw kg-tch"/);
+    expect(html).toMatch(/Power <kbd>Q<\/kbd><kbd>E<\/kbd>/);
+    expect(hudHtml({ ...base, chips: rackChips(['drop'], ['drop'], 'drop') })).not.toContain('data-act="power"');
+    // The Height row (keys W and S, launcher buttons on touch): for a launched item, never for an anvil or a pull.
+    const tall = hudHtml({ ...base, launch: 6, chips: rackChips(L2.rack, L2.rack, 'marble') });
+    expect(tall).toMatch(/Height <kbd>W<\/kbd><kbd>S<\/kbd>/);
+    expect(tall).toContain('<b class="launch">6.0 m</b>');
+    expect(tall).toContain('data-act="launch" data-arg="-1"');
+    expect(tall).toContain('data-act="launch" data-arg="1"');
+    expect(html).not.toContain('data-act="launch"');
+    expect(hudHtml({ ...base, launch: 6, chips: rackChips(['drop'], ['drop'], 'drop') })).not.toContain('data-act="launch"');
+    expect(hudHtml({ ...base, launch: 6, chips: rackChips(U3.rack, U3.rack, 'pull') })).not.toContain('data-act="launch"');
+    const opener = hudHtml({ ...base, chips: [], opener: true });
+    expect(opener).toMatch(/<span class="kg-desk">or aim and click<\/span><span class="kg-tch">or drag and lift<\/span>/);
+  });
+  it('a hold level (Undercut Hollow) shows the share pulled and asks to keep the crown up', () => {
+    const base = { level: U3, strokes: 2, crownsDown: 0, crownsTotal: 1, heritageBroken: 0, heritageTotal: 0, power: 60, liveLeverage: 0, phase: 'aiming', reachable: null, chips: rackChips(U3.rack, U3.rack.slice(2), 'pull') };
+    const html = hudHtml({ ...base, collapse: 0.01, pulled: 0.0655 });
+    expect(html).toMatch(/Pulled <b class="down">6%<\/b>/);
+    expect(html).not.toMatch(/Down </);
+    expect(html).toMatch(/keep the crown up/);
+  });
   it('a pull chip is labelled Pull, has no power bar, and a refused pull says why instead of out of reach', () => {
     const base = { level: L2, strokes: 0, crownsDown: 0, crownsTotal: 6, heritageBroken: 0, heritageTotal: 36, power: 60, liveLeverage: 0, phase: 'aiming', reachable: null };
     const chips = rackChips(['pull', 'pull', 'marble'], ['pull', 'marble'], 'pull');
@@ -57,6 +88,16 @@ describe('formatting', () => {
     expect(html).toMatch(/data-act="next"/);
     expect(resultHtml(L1, score, 1, false)).not.toMatch(/data-act="next"/);
     expect(html).toContain(`(${['Brute', 'Clean', 'Elegant', 'Keystone'][tier(score.leverage)]})`);
+  });
+  it('a par level\'s card shows the gold-leverage badge earned, or once cleared the line to reach; outcome levels and misses show none', () => {
+    const shot = (dPE_mJ: number) => ({ ke: 1000, yield: 0, dPE_mJ, leverage: 0, crownsDown: 4, crownsTotal: 4, heritageNew: 0, displaced: 30, outOfLot: 0, pe_mJ: 0, spawnStep: 0, settleStep: 100 });
+    const gold = levelScore(L1, [shot(1e6 * L1.lGold!)], true, 40), short = levelScore(L1, [shot(1e6 * L1.lGold! / 2)], true, 40);
+    expect([gold.stars, gold.gold, short.stars, short.gold]).toEqual([3, true, 3, false]); // one shot is three stars either way
+    expect(goldHtml(L1, gold)).toMatch(/class="gold got".*Gold leverage \(×0\.71 or more\)/);
+    expect(goldHtml(L1, short)).toMatch(/class="gold".*Gold leverage at ×0\.71/);
+    expect(resultHtml(L1, short, 1, true)).toContain('Gold leverage at');
+    expect(goldHtml(L1, levelScore(L1, [shot(0)], false, 40))).toBe('');
+    expect(goldHtml(B1, { lines: [], total: 0, stars: 3, stamp: 'X', leverage: 99 })).toBe('');
   });
   it('before the score, the card tallies: name, strokes and par, and the actions, no score lines or stamp', () => {
     const html = resultHtml(L1, null, 1, true);
@@ -83,13 +124,83 @@ describe('formatting', () => {
     expect(objectiveText({ kind: 'crowns' })).toBe('fell every crown');
     expect(objectiveText({ kind: 'skyline', maxH: 3 })).toBe('skyline under 3 h');
   });
+  it('Bullet Time: freezes left of the level\'s, Freeze while a shot can be frozen, Resume and FROZEN while it is', () => {
+    const def = { ...L1, freeze: 2 };
+    const base = { level: def, strokes: 1, crownsDown: 0, crownsTotal: 4, heritageBroken: 0, heritageTotal: 0, power: 60, liveLeverage: 0, phase: 'running', reachable: null, chips: [], pace: '×0.8' };
+    const can = hudHtml({ ...base, freezes: { left: 2, total: 2, frozen: false, can: true } });
+    expect(can).toMatch(/Freezes<\/span><span class="">2 \/ 2/);
+    expect(can).toContain(freezeButton(false));
+    expect(can).toMatch(/<kbd>T<\/kbd> Freeze/);
+    expect(can).toMatch(/×0\.8/);
+    const frozen = hudHtml({ ...base, freezes: { left: 2, total: 2, frozen: true, can: false } });
+    expect(frozen).toContain(freezeButton(true));
+    expect(frozen).toMatch(/<kbd>T<\/kbd> Resume/);
+    expect(frozen).toMatch(/>FROZEN</);
+    expect(frozen).not.toMatch(/×0\.8/); // the world stands still: no slow-motion tag
+    const spent = hudHtml({ ...base, freezes: { left: 0, total: 2, frozen: false, can: false } });
+    expect(spent).toMatch(/class="spent">0 \/ 2/);
+    expect(spent).not.toContain('data-act="freeze"');
+    // A level without a budget shows no freezes at all.
+    expect(hudHtml({ ...base, level: L1 })).not.toMatch(/Freezes|data-act="freeze"/);
+  });
   it('an outcome result card: shots without par, how much came down, and the outcome stamp', () => {
     const def = { ...L1, scoring: 'outcome' as const };
-    const score = outcomeScore({ met: true, collapse: 0.62, leverage: 1, comboMax: 4, hasCrowns: true, rackLeft: 3, heritageBroken: 0, outOfLot: 0, crownsDown: 4, skylineRatio: 0.3 }, undefined);
+    const score = outcomeScore({ met: true, collapse: 0.62, leverage: 1, comboMax: 4, hasCrowns: true, rackLeft: 3, heritageBroken: 0, outOfLot: 0, crownsDown: 4, skylineRatio: 0.3, pulled: 0 }, undefined);
     const html = resultHtml(def, score, 1, false);
     expect(html).toMatch(/1 shot · 62% down · leverage/);
     expect(html).not.toMatch(/par/);
     expect(html).toMatch(/>62% DOWN</);
     expect(html).toMatch(/Rack left/);
+  });
+});
+
+describe('playtest polish (U5, U6)', () => {
+  const b1 = compileLevel(B1);
+  const base = { level: B1, crownsDown: 0, crownsTotal: 0, heritageBroken: 0, heritageTotal: 0, power: 100, liveLeverage: 2.5, phase: 'aiming', reachable: null, chips: rackChips(B1.rack, B1.rack, 'w-bomb'), collapse: 0.55 };
+  it('the Down bar ticks every star threshold in collapse: B1 has the objective and its cast T2 and T3', () => {
+    expect(meterTicks(b1)).toEqual([{ at: B1.objective.kind === 'collapse' ? B1.objective.min : NaN, stars: 1 }, { at: B1.stars!.t2, stars: 2 }, { at: B1.stars!.t3, stars: 3 }]);
+    // A custom run has no cast stars (castStars), so only the objective's tick; a star by points (B2) or a par level has none.
+    expect(meterTicks(compileLevel({ ...B1, custom: true })).map((t) => t.stars)).toEqual([1]);
+    expect(meterTicks(compileLevel(B2))).toEqual([]);
+    expect(meterTicks(compileLevel(L1))).toEqual([]);
+  });
+  it('the bar fills to D and lights the ticks it has reached; no ticks, no bar', () => {
+    const html = hudHtml({ ...base, strokes: 1, ticks: meterTicks(b1) });
+    expect(html).toMatch(/class="meter"/);
+    expect(html).toMatch(/<i style="width:55\.0%">/);
+    expect([...html.matchAll(/class="tick( obj)?( got)?"/g)].map((m) => [Boolean(m[1]), Boolean(m[2])])).toEqual([[true, true], [false, false], [false, false]]);
+    expect([...html.matchAll(/<b>(★+)<\/b>/g)].map((m) => m[1])).toEqual(['★', '★★', '★★★']);
+    expect(meterHtml(1.7, meterTicks(b1), 'down')).toMatch(/width:100\.0%/);
+    expect(hudHtml({ ...base, strokes: 1, ticks: [] })).not.toMatch(/class="meter"/);
+    expect(hudHtml({ ...base, strokes: 1 })).toMatch(/Down <b class="down">55%<\/b>/);
+  });
+  it('Leverage shows only once a shot is in', () => {
+    expect(hudHtml({ ...base, strokes: 0 })).not.toMatch(/Leverage/);
+    expect(hudHtml({ ...base, strokes: 1 })).toMatch(/Leverage<\/span><span>×2\.50/);
+  });
+  it('touch screens get Undo and Restart buttons once a shot is in', () => {
+    expect(hudHtml({ ...base, strokes: 0 })).not.toContain(TOUCH_ACTS);
+    const html = hudHtml({ ...base, strokes: 1 });
+    expect(html).toContain(TOUCH_ACTS);
+    expect([...TOUCH_ACTS.matchAll(/<button data-act="(\w+)" class="kg-tch">/g)].map((m) => m[1])).toEqual(['undo', 'restart']);
+  });
+  it('the result card offers Undo shot (key U) after a shot, before Retry', () => {
+    const score = levelScore(L1, [{ ke: 1000, yield: 0, dPE_mJ: 2_000_000, leverage: 2, crownsDown: 4, crownsTotal: 4, heritageNew: 0, displaced: 30, outOfLot: 0, pe_mJ: 0, spawnStep: 0, settleStep: 100 }], true, 40);
+    const html = resultHtml(L1, score, 1, true, false, '', true);
+    expect([...html.matchAll(/data-act="(\w+)"/g)].map((m) => m[1])).toEqual(['undo', 'retry', 'next']);
+    expect(resultHtml(L1, score, 1, true)).not.toMatch(/undo/);
+  });
+  it('the hint line fits its budget and names undo, restart and where the rest are; ? shows every key', () => {
+    const text = (h: string) => h.replace(/<[^>]+>/g, '');
+    expect(text(GAME_HELP).length).toBeLessThanOrEqual(HELP_BUDGET);
+    // Desktop and touch hints are separate spans; CSS shows one of them.
+    const span = (h: string, cls: string) => text(h.match(new RegExp(`<span class="${cls}">(.*?)</span>(?=<span|$)`))?.[1] ?? '');
+    expect(span(helpHtml(false), 'kg-desk')).toBe(text(GAME_HELP));
+    expect(span(helpHtml(false), 'kg-tch')).toBe(TOUCH_HELP);
+    expect(span(helpHtml(true), 'kg-tch')).toBe(TOUCH_HELP);
+    for (const k of ['U', 'R', '?']) expect(GAME_HELP).toContain(`<kbd>${k}</kbd>`);
+    expect(text(GAME_KEYS).length).toBeGreaterThan(HELP_BUDGET);
+    for (const k of ['Q', 'E', 'W', 'S', 'Space', 'B', 'F', 'U', 'R', 'N', 'P', 'M']) expect(GAME_KEYS).toContain(`<kbd>${k}</kbd>`);
+    expect(helpHtml(true)).toContain('data-act="keys"');
   });
 });

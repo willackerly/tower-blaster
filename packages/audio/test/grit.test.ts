@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { BLOCK, CEILING, CollapseEngine, DV_EDGES, GRIT, gritEnergy, gritGrains, SOUND_MATERIALS, type SoundMaterial } from '@tb/audio';
+import { BLOCK, CEILING, CLASSIC_SOUND_MATERIALS, CollapseEngine, DV_EDGES, GRIT, gritEnergy, gritGrains, SOUND_MATERIALS, type SoundMaterial } from '@tb/audio';
 import { db, frame, octaves, run, SR } from './helpers.ts';
 
-const stone: SoundMaterial = SOUND_MATERIALS.stone;
+// The grit law on G6's stone (smooth contacts, no dense field): grit is the same in both sets, and this
+// keeps the modes and clicks under the limiter at FULL. realism.test.ts covers the real set.
+const stone: SoundMaterial = CLASSIC_SOUND_MATERIALS.stone;
 /** Stone with its modes and click silenced: what is left is the grit. */
 const gritOnly: SoundMaterial = { ...stone, ringDb: -Infinity, clickDb: -Infinity };
 const FULL = 1000;

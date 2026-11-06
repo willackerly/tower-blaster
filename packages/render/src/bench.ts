@@ -30,6 +30,10 @@ import { SnapshotSource } from './source.ts';
 import { LOOKS, realLook } from './look.ts';
 import { hallInside, hallScaled, OLYMPIA } from './hall.ts';
 import { CTL, MAX_INJECT } from './sparks.ts';
+import { SEG } from './cull.ts';
+
+/** ice and real-ice: every body this close to the view's focus is ice (m): a wall of it in the middle of the view. */
+const ICE_RADIUS = 4;
 
 export interface RenderBenchOptions {
   width: number;
@@ -49,12 +53,12 @@ export interface RenderBenchOptions {
 }
 
 export const DEFAULT_RENDER_BENCH: RenderBenchOptions = {
-  width: 2560, height: 1440, counts: [10_000, 100_000], worlds: ['near', 'far'], variants: ['full', 'no-shadow', 'no-post', 'no-sparks', 'no-heat', 'no-ao', 'no-seam', 'fan', 'cube', 'flat-fan', 'flat-cube', 'real', 'real-no-stone', 'real-stone-off', 'real-step1', 'real-no-lod', 'real-no-floor-sky', 'real-flat-ground', 'real-no-pcss', 'real-4096', 'real-dust', 'real-hall', 'real-hall-out', 'real-bare-hills', 'real-plain-dust', 'real-rocks'],
+  width: 2560, height: 1440, counts: [10_000, 100_000], worlds: ['near', 'far'], variants: ['full', 'no-shadow', 'no-post', 'no-sparks', 'no-heat', 'no-ao', 'no-seam', 'fan', 'cube', 'flat-fan', 'flat-cube', 'real', 'real-no-stone', 'real-stone-off', 'real-step1', 'real-no-lod', 'real-no-floor-sky', 'real-flat-ground', 'real-no-pcss', 'real-4096', 'real-dust', 'real-hall', 'real-hall-out', 'real-bare-hills', 'real-plain-dust', 'real-rocks', 'blasts', 'real-blasts', 'ice-one', 'ice', 'real-ice'],
   warmup: 30, batches: 10, batchFrames: 30, profiledFrames: 100,
 };
 
 export const QUICK_RENDER_BENCH: RenderBenchOptions = {
-  width: 320, height: 180, counts: [2000], worlds: ['near', 'far'], variants: ['full', 'no-shadow', 'no-post', 'no-sparks', 'no-heat', 'no-ao', 'no-seam', 'fan', 'cube', 'flat-fan', 'flat-cube', 'real', 'real-no-stone', 'real-stone-off', 'real-step1', 'real-no-lod', 'real-no-floor-sky', 'real-flat-ground', 'real-no-pcss', 'real-4096', 'real-dust', 'real-hall', 'real-hall-out', 'real-bare-hills', 'real-plain-dust', 'real-rocks'],
+  width: 320, height: 180, counts: [2000], worlds: ['near', 'far'], variants: ['full', 'no-shadow', 'no-post', 'no-sparks', 'no-heat', 'no-ao', 'no-seam', 'fan', 'cube', 'flat-fan', 'flat-cube', 'real', 'real-no-stone', 'real-stone-off', 'real-step1', 'real-no-lod', 'real-no-floor-sky', 'real-flat-ground', 'real-no-pcss', 'real-4096', 'real-dust', 'real-hall', 'real-hall-out', 'real-bare-hills', 'real-plain-dust', 'real-rocks', 'blasts', 'real-blasts', 'ice-one', 'ice', 'real-ice'],
   warmup: 1, batches: 2, batchFrames: 2, profiledFrames: 2,
 };
 
@@ -102,8 +106,17 @@ export type WorldName = 'near' | 'far';
  * the thinning and the skirt cost in the same steady shower. real-rocks:
  * real with small rocks on the ground (rocks 0.6, the default 12 cm), so
  * real-rocks against real is what they cost (off by default: none run).
+ * blasts / real-blasts: full / real with four blasts held at their hottest
+ * (blasts.ts, 0.15 s old, radius 8 around the focus: fireballs, shells and
+ * their lights), so blasts against full is a bomb's worst steady cost.
+ * ice-one: full with one body (the one nearest the focus) ice, so ice-one
+ * against full is the fixed cost of the split scene pass (ice-pass.ts: the
+ * MSAA samples and depth stored and loaded again, `under` resolved). ice and
+ * real-ice: full and real with every body within ICE_RADIUS of the focus ice
+ * (a wall of it filling the middle of the view), so ice against ice-one is
+ * the ice shading's own cost per pixel of ice.
  */
-export type VariantName = 'full' | 'no-shadow' | 'no-post' | 'no-sparks' | 'no-heat' | 'no-ao' | 'no-seam' | 'fan' | 'cube' | 'flat-fan' | 'flat-cube' | 'real' | 'real-no-stone' | 'real-stone-off' | 'real-step1' | 'real-no-lod' | 'real-no-floor-sky' | 'real-flat-ground' | 'real-no-pcss' | 'real-4096' | 'real-dust' | 'real-hall' | 'real-hall-out' | 'real-bare-hills' | 'real-plain-dust' | 'real-rocks';
+export type VariantName = 'full' | 'no-shadow' | 'no-post' | 'no-sparks' | 'no-heat' | 'no-ao' | 'no-seam' | 'fan' | 'cube' | 'flat-fan' | 'flat-cube' | 'real' | 'real-no-stone' | 'real-stone-off' | 'real-step1' | 'real-no-lod' | 'real-no-floor-sky' | 'real-flat-ground' | 'real-no-pcss' | 'real-4096' | 'real-dust' | 'real-hall' | 'real-hall-out' | 'real-bare-hills' | 'real-plain-dust' | 'real-rocks' | 'blasts' | 'real-blasts' | 'ice-one' | 'ice' | 'real-ice';
 
 function variantOptions(v: VariantName): RendererOptions {
   if (v === 'fan' || v === 'flat-fan') return { boxPath: 'fan', flatBoxes: v === 'flat-fan' };
@@ -198,7 +211,7 @@ export interface RenderCase {
   passes: Record<string, number>;
   /** Boxes in the main and shadow draws after culling. */
   /** boxes: drawn with the stone code (or all, outside the real look); farBoxes: without it (boxFar). */
-  drawn: { boxes: number; farBoxes: number; shadowBoxes: number };
+  drawn: { boxes: number; farBoxes: number; shadowBoxes: number; iceBoxes: number };
   /** Particles alive after the last frame (sparks, or real-look dust and chips). */
   particles: number;
   /** Wall ms per frame of each batch, in run order (interleaved with the other variants). */
@@ -226,12 +239,12 @@ export async function runRenderBench(opts: Partial<RenderBenchOptions> = {}): Pr
   // the run. Each world still gets its own warmup.
   const rends = o.variants.map((variant) => {
     const rend = new Renderer(device, { size: [o.width, o.height] }, { ...variantOptions(variant), sparkPool: o.sparkPool });
-    if (variant === 'real' || variant === 'real-no-lod' || variant === 'real-no-floor-sky' || variant === 'real-flat-ground' || variant === 'real-no-pcss' || variant === 'real-4096' || variant === 'real-dust') rend.look = LOOKS.real!;
+    if (variant === 'real' || variant === 'real-no-lod' || variant === 'real-no-floor-sky' || variant === 'real-flat-ground' || variant === 'real-no-pcss' || variant === 'real-4096' || variant === 'real-dust' || variant === 'real-blasts' || variant === 'real-ice') rend.look = LOOKS.real!;
     if (variant === 'real-no-stone' || variant === 'real-stone-off' || variant === 'real-step1') rend.look = realLook({ stoneDetail: 0 });
     if (variant === 'real-bare-hills') rend.look = realLook({ hills: 1.5, hillCover: 0, hillRidges: 1 });
     if (variant === 'real-plain-dust') rend.look = realLook({ dustErode: 0, dustThin: 0, dustSkirt: 0 });
     if (variant === 'real-rocks') rend.look = realLook({ rocks: 0.6 });
-    rend.toggles = { shadow: variant !== 'no-shadow', post: variant !== 'no-post', sparks: variant !== 'no-sparks', trail: true, heat: variant !== 'no-heat', ao: variant !== 'no-ao' };
+    rend.toggles = { shadow: variant !== 'no-shadow', post: variant !== 'no-post', sparks: variant !== 'no-sparks', trail: true, heat: variant !== 'no-heat', ao: variant !== 'no-ao', blasts: true };
     return rend;
   });
   for (const worldName of o.worlds) for (const n of o.counts) {
@@ -249,9 +262,17 @@ export async function runRenderBench(opts: Partial<RenderBenchOptions> = {}): Pr
       viewProj: multiply(perspective(0.9, o.width / o.height, 0.5, 2000), lookAt(w.eye, w.target)),
       eye: w.eye, focus: w.target, groundY: 0, time: 1, alpha: 1,
     };
-    for (const rend of rends) {
+    // Ice (ice-one, ice, real-ice): the body nearest the focus, or every one within ICE_RADIUS of it.
+    const near = w.descs.map((b, i) => [Math.hypot(b.pos[0] - w.target[0], b.pos[1] - w.target[1], b.pos[2] - w.target[2]), i] as const).sort((a, b) => a[0] - b[0]);
+    const iced = (v: VariantName) => (v === 'ice-one' ? near.slice(0, 1) : v === 'ice' || v === 'real-ice' ? near.filter(([d]) => d <= ICE_RADIUS) : []).map(([, i]) => i);
+    for (const [k, rend] of rends.entries()) {
       rend.setSource(src);
       rend.setShadowBounds(w.center, w.radius);
+      rend.clearSurfaces();
+      for (const i of iced(o.variants[k]!)) rend.setSurface(i, { kind: 'ice', seed: i });
+      rend.blasts.clear();
+      // Held at 0.15 s old: the frame time never moves.
+      if (o.variants[k] === 'blasts' || o.variants[k] === 'real-blasts') for (const [dx, dz] of [[0, 0], [5, 2], [-4, 3], [2, -5]]) rend.blast([w.target[0] + dx!, 2, w.target[2] + dz!], 8, f.time! - 0.15);
     }
     const shower = rng(7), fDust: FrameParams = { ...f, dt: 1 / 60 };
     const shows = (k: number) => o.variants[k] === 'real-dust' || o.variants[k] === 'real-plain-dust';
@@ -297,7 +318,7 @@ export async function runRenderBench(opts: Partial<RenderBenchOptions> = {}): Pr
         gpuP50: totals.length ? quantile(totals, 0.5) : null, gpuP95: totals.length ? quantile(totals, 0.95) : null,
         gpuSumP50: sums.length ? quantile(sums, 0.5) : null,
         passes: Object.fromEntries(Object.entries(perPass).map(([name, v]) => [name, quantile(v, 0.5)])),
-        drawn: { boxes: args[1]!, farBoxes: args[17]!, shadowBoxes: args[9]! }, particles,
+        drawn: { boxes: args[1]!, farBoxes: args[17]!, shadowBoxes: args[9]!, iceBoxes: args[4 * SEG.boxIce + 1]! }, particles,
         batches: xs,
       });
     }
@@ -310,17 +331,17 @@ export async function runRenderBench(opts: Partial<RenderBenchOptions> = {}): Pr
 const ms = (x: number | null | undefined) => (x === null || x === undefined || !Number.isFinite(x) ? '' : x.toFixed(3));
 
 export function renderBenchMarkdown(r: RenderBenchResult, header: string): string {
-  const passNames = ['cull', 'shadow', 'scene', 'bloom', 'composite'];
+  const passNames = ['cull', 'shadow', 'scene', 'ice', 'bloom', 'composite'];
   const lines = [
     header, '',
     `Adapter: ${r.adapter}${r.software ? ' (SOFTWARE: not a performance result)' : ''} · ${r.width}x${r.height} · timing: ${r.timestamps ? 'GPU timestamps + wall' : 'wall only'}`, '',
     'GPU frame: first pass begin to last pass end. Pass columns and their sum are for direction only: on tile-based GPUs passes overlap and the sum over-counts.', '',
-    `| World | Bodies | Variant | Frame ms (wall, median) | 95% CI | GPU frame p50 | GPU frame p95 | Pass sum p50 | ${passNames.join(' | ')} | Boxes drawn | Far boxes (no stone code) | Shadow boxes | Particles alive |`,
-    `|---|---|---|---|---|---|---|---|${passNames.map(() => '---').join('|')}|---|---|---|---|`,
-    ...r.cases.map((c) => `| ${c.world} | ${c.bodies.toLocaleString('en-US')} | ${c.variant} | ${ms(c.frameMs)} | ${ms(c.frameCI[0])}-${ms(c.frameCI[1])} | ${ms(c.gpuP50)} | ${ms(c.gpuP95)} | ${ms(c.gpuSumP50)} | ${passNames.map((p) => ms(c.passes[p])).join(' | ')} | ${c.drawn.boxes.toLocaleString('en-US')} | ${c.drawn.farBoxes.toLocaleString('en-US')} | ${c.drawn.shadowBoxes.toLocaleString('en-US')} | ${c.particles.toLocaleString('en-US')} |`),
+    `| World | Bodies | Variant | Frame ms (wall, median) | 95% CI | GPU frame p50 | GPU frame p95 | Pass sum p50 | ${passNames.join(' | ')} | Boxes drawn | Far boxes (no stone code) | Ice boxes | Shadow boxes | Particles alive |`,
+    `|---|---|---|---|---|---|---|---|${passNames.map(() => '---').join('|')}|---|---|---|---|---|`,
+    ...r.cases.map((c) => `| ${c.world} | ${c.bodies.toLocaleString('en-US')} | ${c.variant} | ${ms(c.frameMs)} | ${ms(c.frameCI[0])}-${ms(c.frameCI[1])} | ${ms(c.gpuP50)} | ${ms(c.gpuP95)} | ${ms(c.gpuSumP50)} | ${passNames.map((p) => ms(c.passes[p])).join(' | ')} | ${c.drawn.boxes.toLocaleString('en-US')} | ${c.drawn.farBoxes.toLocaleString('en-US')} | ${c.drawn.iceBoxes.toLocaleString('en-US')} | ${c.drawn.shadowBoxes.toLocaleString('en-US')} | ${c.particles.toLocaleString('en-US')} |`),
     '',
     'Marginal cost: change in frame time when the thing is switched off (paired over interleaved batches; median and 95% CI; "n.s." when the interval includes 0):', '',
-    '| World | Bodies | Without shadow | Without post (bloom + AgX) | Without sparks | Without heat glow | Without AO | Without seam cavity | Fan in both passes | Cube in both passes | Flat shading: cube vs fan | Real look instead of candy | Stone textures (real vs real without) | Unused stone code (texture 0 vs compiled out) | Step 3 shading without stone (vs step 1 blocks) | Stone level of detail (real vs every box with stone code) | Floor sky view cones | Ground material and hills | Soft shadows (real vs 3x3 taps) | 4096 shadow map (vs 2048) | Impact dust and chips, steady shower (vs none alive) | Hall (real inside it vs real) | Hall from outside (vs real) | Hills: scrub, two ridges, 2.2 deg (real vs bare 1.5 deg) | Dust shape: erode, thin, skirt (real-dust vs knobs off) | Small rocks 0.6 (vs none) |', '|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|',
+    '| World | Bodies | Without shadow | Without post (bloom + AgX) | Without sparks | Without heat glow | Without AO | Without seam cavity | Fan in both passes | Cube in both passes | Flat shading: cube vs fan | Real look instead of candy | Stone textures (real vs real without) | Unused stone code (texture 0 vs compiled out) | Step 3 shading without stone (vs step 1 blocks) | Stone level of detail (real vs every box with stone code) | Floor sky view cones | Ground material and hills | Soft shadows (real vs 3x3 taps) | 4096 shadow map (vs 2048) | Impact dust and chips, steady shower (vs none alive) | Hall (real inside it vs real) | Hall from outside (vs real) | Hills: scrub, two ridges, 2.2 deg (real vs bare 1.5 deg) | Dust shape: erode, thin, skirt (real-dust vs knobs off) | Small rocks 0.6 (vs none) | Ice pass, one ice block (split pass fixed cost) | Ice shading, a wall of it (vs one block) | Ice in the real look (vs real) |', '|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|',
   ];
   const groups = new Map<string, RenderCase[]>();
   for (const c of r.cases) groups.set(`${c.world}:${c.bodies}`, [...(groups.get(`${c.world}:${c.bodies}`) ?? []), c]);
@@ -333,7 +354,7 @@ export function renderBenchMarkdown(r: RenderBenchResult, header: string): strin
       const pct = (x: number) => `${x >= 0 ? '+' : ''}${(100 * x).toFixed(1)}%`;
       return `${pct(d.estimate)} [${pct(d.lo)}, ${pct(d.hi)}]${verdict(d) === 'no-difference' ? ' n.s.' : ''}`;
     };
-    lines.push(`| ${cs[0]!.world} | ${cs[0]!.bodies.toLocaleString('en-US')} | ${diff(by('no-shadow'), by('full'))} | ${diff(by('no-post'), by('full'))} | ${diff(by('no-sparks'), by('full'))} | ${diff(by('no-heat'), by('full'))} | ${diff(by('no-ao'), by('full'))} | ${diff(by('no-seam'), by('full'))} | ${diff(by('fan'), by('full'))} | ${diff(by('cube'), by('full'))} | ${diff(by('flat-cube'), by('flat-fan'))} | ${diff(by('real'), by('full'))} | ${diff(by('real'), by('real-no-stone'))} | ${diff(by('real-no-stone'), by('real-stone-off'))} | ${diff(by('real-stone-off'), by('real-step1'))} | ${diff(by('real'), by('real-no-lod'))} | ${diff(by('real'), by('real-no-floor-sky'))} | ${diff(by('real'), by('real-flat-ground'))} | ${diff(by('real'), by('real-no-pcss'))} | ${diff(by('real-4096'), by('real'))} | ${diff(by('real-dust'), by('real'))} | ${diff(by('real-hall'), by('real'))} | ${diff(by('real-hall-out'), by('real'))} | ${diff(by('real'), by('real-bare-hills'))} | ${diff(by('real-dust'), by('real-plain-dust'))} | ${diff(by('real-rocks'), by('real'))} |`);
+    lines.push(`| ${cs[0]!.world} | ${cs[0]!.bodies.toLocaleString('en-US')} | ${diff(by('no-shadow'), by('full'))} | ${diff(by('no-post'), by('full'))} | ${diff(by('no-sparks'), by('full'))} | ${diff(by('no-heat'), by('full'))} | ${diff(by('no-ao'), by('full'))} | ${diff(by('no-seam'), by('full'))} | ${diff(by('fan'), by('full'))} | ${diff(by('cube'), by('full'))} | ${diff(by('flat-cube'), by('flat-fan'))} | ${diff(by('real'), by('full'))} | ${diff(by('real'), by('real-no-stone'))} | ${diff(by('real-no-stone'), by('real-stone-off'))} | ${diff(by('real-stone-off'), by('real-step1'))} | ${diff(by('real'), by('real-no-lod'))} | ${diff(by('real'), by('real-no-floor-sky'))} | ${diff(by('real'), by('real-flat-ground'))} | ${diff(by('real'), by('real-no-pcss'))} | ${diff(by('real-4096'), by('real'))} | ${diff(by('real-dust'), by('real'))} | ${diff(by('real-hall'), by('real'))} | ${diff(by('real-hall-out'), by('real'))} | ${diff(by('real'), by('real-bare-hills'))} | ${diff(by('real-dust'), by('real-plain-dust'))} | ${diff(by('real-rocks'), by('real'))} | ${diff(by('ice-one'), by('full'))} | ${diff(by('ice'), by('ice-one'))} | ${diff(by('real-ice'), by('real'))} |`);
   }
   return lines.join('\n');
 }

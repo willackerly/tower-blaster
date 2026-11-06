@@ -2,11 +2,11 @@
 // Bounce, and the rules it plays by: a scenario under Keystone's is a level), rebuilt on demand, and the projectile and the look, applied as soon as a field
 // changes; and the whole setup saved to or loaded from a JSON file (scene-file.ts). The panel
 // only proposes configs; main.ts decides how to apply them (live, or by reset).
-import { checkSound, SOUND_KNOBS, SOUND_MATERIAL_NAMES, type SoundKnob, type SoundOptions } from '@tb/audio';
+import { checkSound, SOUND_KNOBS, SOUND_MATERIAL_NAMES, SOUND_SETS, type SoundKnob, type SoundOptions } from '@tb/audio';
 import { parseSpec } from '@tb/bench';
 import { type Env, ENVS, type Ground, GROUNDS, linearToSrgb, LOOKS, REAL_DEFAULTS, REAL_KNOBS, type RealKnob, type RealOptions, srgbToLinear, type Stone, STONES, type V3 } from '@tb/render';
-import { checkPaceFeel, DEFAULT_BUDGET_MS, DEFAULT_FEEL, type FrameMode, objectiveText, type PaceFeel } from '@tb/game';
-import { AUTO_LEVEL, AVBD_ITERATIONS, BIG_LEVELS, compileLevel, LEVELS, PRESETTLE_STEPS, scenarioLevel } from '@tb/keystone';
+import { type BallStyle, checkPaceFeel, DEFAULT_BUDGET_MS, DEFAULT_FEEL, DEFAULT_UNDO_MB, MAX_UNDO_MB, type FrameMode, type LaunchMode, objectiveText, type PaceFeel } from '@tb/game';
+import { AUTO_LEVEL, AVBD_ITERATIONS, BIG_LEVELS, compileLevel, freezeProblem, LEVELS, MAX_FREEZE, PRESETTLE_STEPS, scenarioLevel, TRIAL_LEVELS, UNDERCUT_LEVELS } from '@tb/keystone';
 import { buildScenario, SCENARIOS } from '@tb/scenarios';
 import { type CameraPose, type Framing, FRAMING_LIMITS } from './camera.ts';
 import { escapeHtml } from './html.ts';
@@ -35,6 +35,8 @@ export interface ControlsHooks {
   setProjectile(p: Projectile): void;
   /** Draw with this look from now on (real: the real look's knobs that differ from REAL_DEFAULTS). */
   setLook(look: string, real: Partial<RealOptions>): void;
+  /** Draw blasts (fireball, shell out to the blast radius, light) or not, from now on. */
+  setBlast(on: boolean): void;
   /** Play collision sound this way from now on. */
   setSound(o: SoundOptions): void;
   /** Frame the scene this way from now on (and re-frame it now). */
@@ -107,7 +109,26 @@ export function realOverrides(values: Record<RealKnob, number>, groundHex: strin
 export interface BounceChoice { on: boolean; e: number }
 
 /** The panel's rules for a level, and Keystone's pace juice (ViewerConfig.rules, feel). */
-export interface RulesChoice { rules: Rules; feel: PaceFeel }
+export interface RulesChoice {
+  rules: Rules;
+  feel: PaceFeel;
+  /**
+   * Bullet Time's freeze budget under Keystone's rules (the panel's freezes box, URL key
+   * keystone.freeze, LevelDef.freeze): a number makes a custom run with that many; NaN (the box
+   * left empty) plays the level's own. Absent: the config's, unchanged.
+   */
+  freeze?: number;
+}
+
+/** The game's rule overrides with the panel's freeze budget (RulesChoice.freeze); throws on a bad one. */
+function withFreeze(k: ViewerConfig['keystone'], freeze: number | undefined): ViewerConfig['keystone'] {
+  if (freeze === undefined) return k;
+  const { freeze: _, ...rest } = k;
+  if (Number.isNaN(freeze)) return rest;
+  const why = freezeProblem(freeze);
+  if (why) throw new Error(why);
+  return { ...rest, freeze };
+}
 
 /**
  * A config under Keystone's rules: the level's own physics and stepping (scale, substeps,
@@ -165,7 +186,7 @@ export function proposeScene(c: ViewerConfig, scenario: string, params: Record<s
     if (picked && rules.rules === 'keystone') {
       // A line of shots and a rack are the level's they were given for: another level drops them.
       const same = level === c.level && (picked.custom ? picked.def === c.customLevel : !c.customLevel);
-      const next = underKeystone({ ...c, level, customLevel: picked.custom ? picked.def : null, shots: same ? c.shots : null, rack: same ? c.rack : null, look: lookFor(c, 'keystone') }, rules.feel);
+      const next = underKeystone({ ...c, level, customLevel: picked.custom ? picked.def : null, shots: same ? c.shots : null, rack: same ? c.rack : null, look: lookFor(c, 'keystone'), keystone: withFreeze(c.keystone, rules.freeze) }, rules.feel);
       return { ok: true, config: next, bodies: compileLevel(picked.def).scene.bodies.length };
     }
     // A scenario under Keystone's rules is a level (scenarioLevel): its params and seed build it, the rest is the game's.
@@ -173,7 +194,7 @@ export function proposeScene(c: ViewerConfig, scenario: string, params: Record<s
       if (!Number.isInteger(seed)) throw new Error('seed must be an integer');
       const def = scenarioLevel(scenario, params, seed);
       const same = !c.level && c.scenario === scenario && c.seed === seed && JSON.stringify(c.params) === JSON.stringify(params);
-      const next = underKeystone({ ...c, level: null, customLevel: null, scenario, params, seed, shots: same ? c.shots : null, rack: same ? c.rack : null, look: lookFor(c, 'keystone') }, rules.feel);
+      const next = underKeystone({ ...c, level: null, customLevel: null, scenario, params, seed, shots: same ? c.shots : null, rack: same ? c.rack : null, look: lookFor(c, 'keystone'), keystone: withFreeze(c.keystone, rules.freeze) }, rules.feel);
       return { ok: true, config: next, bodies: compileLevel(def).scene.bodies.length };
     }
     // Anything else is the sandbox.
@@ -263,11 +284,11 @@ export function mountControls(root: HTMLElement, hooks: ControlsHooks): { refres
     <summary>Scene and projectile</summary>
     <form id="scene-form">
       <div class="h">Scene</div>
-      <label class="f"><span>scenario</span><select name="scenario"><optgroup label="Scenarios">${Object.values(SCENARIOS).map((s) => `<option value="${s.id}">${s.id} ${escapeHtml(s.title)}</option>`).join('')}</optgroup><optgroup label="Keystone levels">${LEVELS.map((l) => `<option value="${levelChoice(l.id)}">${l.id} ${escapeHtml(l.name)}</option>`).join('')}</optgroup><optgroup label="Big levels">${BIG_LEVELS.map((l) => `<option value="${levelChoice(l.id)}">${l.id} ${escapeHtml(l.name)}</option>`).join('')}</optgroup><optgroup label="Your level" class="custom"><option value="${CUSTOM_LEVEL}"></option></optgroup></select></label>
+      <label class="f"><span>scenario</span><select name="scenario"><optgroup label="Scenarios">${Object.values(SCENARIOS).map((s) => `<option value="${s.id}">${s.id} ${escapeHtml(s.title)}</option>`).join('')}</optgroup><optgroup label="Keystone levels">${LEVELS.map((l) => `<option value="${levelChoice(l.id)}">${l.id} ${escapeHtml(l.name)}</option>`).join('')}</optgroup><optgroup label="Big levels">${BIG_LEVELS.map((l) => `<option value="${levelChoice(l.id)}">${l.id} ${escapeHtml(l.name)}</option>`).join('')}</optgroup><optgroup label="Undercut levels">${UNDERCUT_LEVELS.map((l) => `<option value="${levelChoice(l.id)}">${l.id} ${escapeHtml(l.name)}</option>`).join('')}</optgroup><optgroup label="Trials (unrated)">${TRIAL_LEVELS.map((l) => `<option value="${levelChoice(l.id)}">${l.id} ${escapeHtml(l.name)}</option>`).join('')}</optgroup><optgroup label="Your level" class="custom"><option value="${CUSTOM_LEVEL}"></option></optgroup></select></label>
       <div class="params"></div>
       <div class="rules">
         <label class="f"><span>rules</span><select name="rules"><option value="sandbox">sandbox</option><option value="keystone">Keystone (the game)</option></select></label>
-        <div class="feel">${field('hitstop', 'hit-stop on contact', false)}${field('slowmo', 'slow motion as crowns fall', false)}${field('budget', 'physics budget, ms per 1/60 s (0: no valve)', DEFAULT_BUDGET_MS, 'step="any" min="0" max="1000"')}${field('tailskip', 'fast-forward the tail of a shot', true)}${field('follow', 'camera follows the collapse', false)}${field('shake', 'camera shakes on hits', false)}<label class="f"><span>frames drawn</span><select name="frames"><option value="all">every frame</option><option value="half">half on a fast display</option><option value="auto">half while physics is behind</option></select></label></div>
+        <div class="feel">${field('hitstop', 'hit-stop on contact', false)}${field('slowmo', 'slow motion as crowns fall', false)}${field('budget', 'physics budget, ms per 1/60 s (0: no valve)', DEFAULT_BUDGET_MS, 'step="any" min="0" max="1000"')}${field('tailskip', 'fast-forward the tail of a shot', true)}${field('follow', 'camera follows the collapse', false)}${field('shake', 'camera shakes on hits', false)}${field('rapid', 'rapid fire: shoot before the last shot settles', true)}${field('undo', 'undo memory, MB (0: undo replays the shots)', DEFAULT_UNDO_MB, `step="1" min="0" max="${MAX_UNDO_MB}"`)}${field('freeze', 'freezes, Bullet Time (empty: the level\'s own)', '', `step="1" min="0" max="${MAX_FREEZE}" placeholder="level's"`)}<label class="f"><span>frames drawn</span><select name="frames"><option value="all">every frame</option><option value="half">half on a fast display</option><option value="auto">half while physics is behind</option></select></label><label class="f"><span>launch height (keys W, S move it)</span><select name="launch"><option value="high">high: over the structure's top</option><option value="level">the level's own launcher</option></select></label><label class="f"><span>fired balls</span><select name="balls"><option value="painted">painted, banded</option><option value="plain">plain: the look's</option></select></label>${field('marks', 'stone marks: crosshair on crowns, shield on what to keep', true)}</div>
       </div>
       <div class="seed">${field('seed', 'seed', 1, 'step="1"')}</div>
       <div class="world">
@@ -304,6 +325,7 @@ export function mountControls(root: HTMLElement, hooks: ControlsHooks): { refres
     <form id="look-form">
       <div class="h">Look</div>
       <label class="f"><span>look</span><select name="look">${Object.keys(LOOKS).map((l) => `<option value="${l}">${l}</option>`).join('')}</select></label>
+      ${field('blast', 'blasts: fireball, ring at the reach, light', true)}
       <div class="real">
         <label class="f"><span>stone</span><select name="stone">${STONES.map((st) => `<option value="${st}">${st}</option>`).join('')}</select></label>
         <label class="f"><span>setting</span><select name="env">${ENVS.map((e) => `<option value="${e}">${e}</option>`).join('')}</select></label>
@@ -318,6 +340,7 @@ export function mountControls(root: HTMLElement, hooks: ControlsHooks): { refres
       ${field('on', 'collision sound', false)}
       <div class="sound">
         <label class="f"><span>material</span><select name="material"><option value="auto">auto</option>${SOUND_MATERIAL_NAMES.map((m) => `<option value="${m}">${m}</option>`).join('')}</select></label>
+        <label class="f"><span>materials</span><select name="set">${SOUND_SETS.map((m) => `<option value="${m}">${m}</option>`).join('')}</select></label>
         ${(Object.entries(SOUND_KNOBS) as [SoundKnob, (typeof SOUND_KNOBS)[SoundKnob]][]).map(([key, k]) => field(key, k.label, k.def, `step="${k.step}" min="${k.min}" max="${k.max}"`)).join('')}
       </div>
       <div class="out muted"></div>
@@ -398,7 +421,13 @@ export function mountControls(root: HTMLElement, hooks: ControlsHooks): { refres
       hitStop: (input(sceneForm, 'hitstop') as HTMLInputElement).checked, slowMo: (input(sceneForm, 'slowmo') as HTMLInputElement).checked,
       budgetMs: input(sceneForm, 'budget').value === '' ? NaN : Number(input(sceneForm, 'budget').value), tailSkip: (input(sceneForm, 'tailskip') as HTMLInputElement).checked,
       follow: (input(sceneForm, 'follow') as HTMLInputElement).checked, shake: (input(sceneForm, 'shake') as HTMLInputElement).checked, frames: input(sceneForm, 'frames').value as FrameMode,
-    } };
+      rapid: (input(sceneForm, 'rapid') as HTMLInputElement).checked,
+      // A duel's aids (the game page's Siege Table): the viewer plays no duels, so they ride along as the URL says.
+      turnView: hooks.config().feel.turnView, arcs: hooks.config().feel.arcs,
+      undoMB: input(sceneForm, 'undo').value === '' ? NaN : Number(input(sceneForm, 'undo').value),
+      launch: input(sceneForm, 'launch').value as LaunchMode, balls: input(sceneForm, 'balls').value as BallStyle,
+      marks: (input(sceneForm, 'marks') as HTMLInputElement).checked,
+    }, freeze: input(sceneForm, 'freeze').value === '' ? NaN : Number(input(sceneForm, 'freeze').value) };
     return proposeScene(hooks.config(), scenario, params, Number(input(sceneForm, 'seed').value), Number(input(sceneForm, 'scale').value), Number(input(sceneForm, 'substeps').value), bounce, presettle, rules);
   }
 
@@ -553,7 +582,10 @@ export function mountControls(root: HTMLElement, hooks: ControlsHooks): { refres
     }
   }
   lookForm.addEventListener('submit', (e) => e.preventDefault());
-  lookForm.addEventListener('input', applyLook);
+  lookForm.addEventListener('input', (e) => {
+    if ((e.target as HTMLInputElement | null)?.name === 'blast') hooks.setBlast((e.target as HTMLInputElement).checked);
+    else applyLook();
+  });
 
   // Sound: applied live; auto picks the material from the scene and the look.
   const soundForm = root.querySelector<HTMLFormElement>('#sound-form')!;
@@ -569,7 +601,7 @@ export function mountControls(root: HTMLElement, hooks: ControlsHooks): { refres
     const on = (input(soundForm, 'on') as HTMLInputElement).checked;
     soundBox.hidden = !on;
     try {
-      const o = { on, material: input(soundForm, 'material').value, ...Object.fromEntries((Object.keys(SOUND_KNOBS) as SoundKnob[]).map((k) => [k, input(soundForm, k).value === '' ? NaN : Number(input(soundForm, k).value)])) } as SoundOptions;
+      const o = { on, material: input(soundForm, 'material').value, set: input(soundForm, 'set').value, ...Object.fromEntries((Object.keys(SOUND_KNOBS) as SoundKnob[]).map((k) => [k, input(soundForm, k).value === '' ? NaN : Number(input(soundForm, k).value)])) } as SoundOptions;
       hooks.setSound(checkSound(o));
       soundNote();
     } catch (e) {
@@ -631,7 +663,13 @@ export function mountControls(root: HTMLElement, hooks: ControlsHooks): { refres
     (input(sceneForm, 'tailskip') as HTMLInputElement).checked = c.feel.tailSkip;
     (input(sceneForm, 'follow') as HTMLInputElement).checked = c.feel.follow;
     (input(sceneForm, 'shake') as HTMLInputElement).checked = c.feel.shake;
+    (input(sceneForm, 'rapid') as HTMLInputElement).checked = c.feel.rapid;
+    input(sceneForm, 'undo').value = String(c.feel.undoMB);
+    input(sceneForm, 'freeze').value = c.keystone.freeze === undefined ? '' : String(c.keystone.freeze);
     input(sceneForm, 'frames').value = c.feel.frames;
+    input(sceneForm, 'launch').value = c.feel.launch;
+    input(sceneForm, 'balls').value = c.feel.balls;
+    (input(sceneForm, 'marks') as HTMLInputElement).checked = c.feel.marks;
     input(sceneForm, 'seed').value = String(c.seed);
     input(sceneForm, 'presettle').value = String(c.presettle);
     input(sceneForm, 'scale').value = String(c.scale);
@@ -664,6 +702,7 @@ export function mountControls(root: HTMLElement, hooks: ControlsHooks): { refres
     }
     showMass(p);
     input(lookForm, 'look').value = c.look;
+    (input(lookForm, 'blast') as HTMLInputElement).checked = c.blast.on;
     realBox.hidden = c.look !== 'real';
     const real = { ...REAL_DEFAULTS, ...c.real };
     for (const key of Object.keys(REAL_KNOBS) as RealKnob[]) input(lookForm, key).value = String(real[key]);
@@ -678,6 +717,7 @@ export function mountControls(root: HTMLElement, hooks: ControlsHooks): { refres
     (input(soundForm, 'on') as HTMLInputElement).checked = c.sound.on;
     soundBox.hidden = !c.sound.on;
     input(soundForm, 'material').value = c.sound.material;
+    input(soundForm, 'set').value = c.sound.set;
     for (const k of Object.keys(SOUND_KNOBS) as SoundKnob[]) input(soundForm, k).value = String(c.sound[k]);
     soundNote();
   }

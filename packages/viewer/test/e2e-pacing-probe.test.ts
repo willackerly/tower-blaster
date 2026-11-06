@@ -22,14 +22,20 @@
 // default (every frame), on a 120 Hz display (TB_HEADED=1: headless Chrome
 // runs rAF at 60 Hz, which is never decimated). TB_PROBE_CASES=<regex> runs
 // only the cases whose name matches (e.g. 'cluster-40-rendered').
+// On macOS it refuses to start in Low Power Mode (power.ts; E7 round 2 lost a
+// run to it), unless TB_PROBE_ALLOW_LOW_POWER=1, and each summary line records
+// the power state. A summary's costMs is the step's own GPU time (what the
+// valve reads); stepMs is the loop's wall time per step, about 1 ms whenever
+// the valve holds steps back, so compare costMs across cases.
 // Not a performance result unless run on the physical GPU (CLAUDE.md).
 import { appendFileSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it } from 'vitest';
 import { limitsHit } from '@tb/engine-api';
 import { aimAt, compileLevel, launcherPos, type LaunchItem, levelById, type LevelDef, scenarioLevel, settleAllowance, type Shot } from '@tb/keystone';
 import { browser, useViewer } from './e2e-harness.ts';
 import { openRules, ready } from './keystone-page.ts';
+import { powerState } from './power.ts';
 
 useViewer();
 
@@ -99,6 +105,12 @@ const ONLY = process.env.TB_PROBE_CASES ? new RegExp(process.env.TB_PROBE_CASES)
 const CASES = (SMALL ? ALL.filter((k) => k.iterations === 40 && !k.rendered) : ALL).filter((k) => !ONLY || ONLY.test(k.name));
 
 describe.runIf(RUN)('G4 probe: a 10k level\'s shot on a real GPU', () => {
+  const power = powerState();
+  beforeAll(() => {
+    if (power?.lowPower && process.env.TB_PROBE_ALLOW_LOW_POWER !== '1') {
+      throw new Error(`Low Power Mode is on (pmset ${JSON.stringify(power.raw)}): step costs are not the machine's. Turn it off, or set TB_PROBE_ALLOW_LOW_POWER=1 to measure it anyway.`);
+    }
+  });
   for (const k of CASES) {
     it(k.name, async (ctx) => {
       if (!browser) return ctx.skip();
@@ -136,6 +148,8 @@ describe.runIf(RUN)('G4 probe: a 10k level\'s shot on a real GPU', () => {
       const summary = {
         case: k.name, search, steps: t.stepMs.length, wallMs, loadMs: Math.round(t.loadMs), collapse: t.collapse, allowance, draws: t.draws,
         stepMs: { median: q(t.stepMs, 0.5), p95: q(t.stepMs, 0.95), max: Math.max(...t.stepMs) },
+        costMs: { median: q(t.costMs.filter(Number.isFinite), 0.5), p95: q(t.costMs.filter(Number.isFinite), 0.95) },
+        power,
         frameMs: k.rendered ? { n: t.frameMs.length, median: q(t.frameMs, 0.5), p95: q(t.frameMs, 0.95), p99: q(t.frameMs, 0.99), max: Math.max(...t.frameMs) } : null,
         pace: { speedMin: Math.min(...pace.map((p) => p.speed)), speedMedian: q(pace.map((p) => p.speed), 0.5), tagged: pace.filter((p) => p.tag).length, samples: pace.length, tailSkipAt: pace.find((p) => p.tailSkip)?.t ?? null },
         moving: { peak: Math.max(...t.moving), last: t.moving.at(-1), every60, quietFromAllowance: quietFrom(allowance), quietFrom1pct: quietFrom(n / 100), quietFrom0: quietFrom(0) },

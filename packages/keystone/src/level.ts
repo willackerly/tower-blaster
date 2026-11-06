@@ -9,6 +9,7 @@ import { type Arm, levelArm, rackArms } from './arsenal.ts';
 import { isRackItem, itemRef, type LevelWeapon, RACK_ITEM_NAMES, rackBodies, type RackItem, speedOf, WEAPON_KEY, weaponOf } from './rack.ts';
 import { type ScenarioPart, scenarioBodies, scenarioKey } from './scenario-part.ts';
 import { ammoBody, type LauncherDef, launcherPos, type Shot, type ShotFrame } from './shots.ts';
+import { checkIce, type IceBlock, IceBreaker, iceOf } from './ice.ts';
 
 /** A course (layer) override inside a block: change material or role, or leave cells out. */
 export interface CourseOverride {
@@ -37,7 +38,12 @@ export type Objective =
   | { kind: 'crowns'; footprintMax?: number }
   | { kind: 'skyline'; maxH: number; footprintMax?: number }
   /** Collapse fraction D (outcome.ts collapseFraction) at least `min`, from 0 to 1. */
-  | { kind: 'collapse'; min: number; footprintMax?: number };
+  | { kind: 'collapse'; min: number; footprintMax?: number }
+  /**
+   * Undercut's Hollow (docs/game/undercut-bullet-time.md): every crown still up at the end. Outcome
+   * levels only; a settle with a crown down ends the level there, failed. Scored on what was pulled.
+   */
+  | { kind: 'hold'; footprintMax?: number };
 
 /** How a level is scored: par (strokes, golf stamps; L1 to L5) or outcome (what came down; the spectacle mode). */
 export const SCORINGS = ['par', 'outcome'] as const;
@@ -45,9 +51,10 @@ export type Scoring = (typeof SCORINGS)[number];
 
 /**
  * The one metric an outcome level's stars are measured on: collapse (D, higher is better), crowns
- * (crowns down), skyline (end skyline over start skyline, lower is better) or score (the tally total).
+ * (crowns down), skyline (end skyline over start skyline, lower is better), score (the tally total)
+ * or pulled (the share of the structure's mass pulled, Undercut; higher is better).
  */
-export const STAR_METRICS = ['collapse', 'crowns', 'skyline', 'score'] as const;
+export const STAR_METRICS = ['collapse', 'crowns', 'skyline', 'score', 'pulled'] as const;
 export type StarMetric = (typeof STAR_METRICS)[number];
 
 /**
@@ -111,7 +118,7 @@ export interface LevelDef {
     ammoRatio?: number;
   };
   launcher: LauncherDef;
-  /** Leverage for the third star, set from bot runs; DEFAULT_GOLD when absent. */
+  /** Leverage for the gold badge (LevelScore.gold; it gates no star since 2026-11-06, docs/game/stars.md), set from bot runs; DEFAULT_GOLD when absent. */
   lGold?: number;
   /** Recorded solutions, replayed by tests. */
   solutions?: { par?: Shot[]; ace?: Shot[] };
@@ -128,6 +135,13 @@ export interface LevelDef {
    * (the rules those levels were hashed under before v3), so a v3 level hashes apart from its v2 self.
    */
   settle?: SettleRule;
+  /**
+   * Bullet Time (C2, docs/game/undercut-bullet-time.md): the most shots that may go in while another
+   * runs, each cutting it (rapid fire, Session.fire); 0 allows none. Absent: no limit. The game lets
+   * the player freeze the world to aim them; a freeze costs nothing until a shot goes in. Part of the
+   * hash (URL key keystone.freeze), so stars cast without a budget never show with one.
+   */
+  freeze?: number;
   /** The physics the level plays at (default Keystone's: PHYSICS_DEFAULTS). Part of the level hash, so stars cast at one setting never show at another. */
   physics?: PhysicsBlock;
   /**
@@ -149,6 +163,8 @@ export interface PhysicsBlock {
   pairsPerBody?: number;
   /** Steps run after init before play starts. */
   presettle?: number;
+  /** How the level's ice cracks and shatters (ice.ts; absent fields take ICE_DEFAULTS). Only levels with ice bodies use it. */
+  ice?: IceBlock;
 }
 
 /**
@@ -177,6 +193,7 @@ export function checkPhysics(p: PhysicsBlock, where = 'physics'): void {
   int(p.presettle, 'presettle', 0, 6000);
   if (p.gapSlop !== undefined && !(Number.isFinite(p.gapSlop) && p.gapSlop >= 0 && p.gapSlop <= 0.01)) throw new Error(`${where}.gapSlop must be from 0 to 0.01 m: ${p.gapSlop}`);
   if (p.bounce !== undefined && p.bounce !== null && !(p.bounce >= 0 && p.bounce <= 1)) throw new Error(`${where}.bounce must be from 0 to 1, or null for off: ${p.bounce}`);
+  if (p.ice !== undefined) checkIce(p.ice, `${where}.ice`);
 }
 
 /** The physics block with fields at their defaults left out (absent when nothing is left): what the hash sees. */
@@ -211,7 +228,27 @@ export function checkSettle(v: unknown, where = 'settle'): SettleRule {
 }
 
 export const ROLE_ID: Record<Role, number> = { plain: 0, crown: 1, heritage: 2 };
+/** Most rack items that fire something; pulls count apart (MAX_PULLS), since they add no body. */
 export const MAX_RACK = 8;
+/** Most pulls a rack holds (Undercut's Hollow takes many blocks). */
+export const MAX_PULLS = 24;
+
+/** The largest freeze budget a level may give (LevelDef.freeze). */
+export const MAX_FREEZE = 9;
+
+/** Why `n` is not a freeze budget (a whole number, 0 to MAX_FREEZE), or null when it is. */
+export function freezeProblem(n: number): string | null {
+  return Number.isInteger(n) && n >= 0 && n <= MAX_FREEZE ? null : `freeze must be a whole number from 0 to ${MAX_FREEZE}: ${n}`;
+}
+
+/** Why a rack is too big or empty (MAX_RACK fired items, MAX_PULLS pulls), or null when it fits. */
+export function rackSizeProblem(rack: readonly string[]): string | null {
+  const pulls = rack.filter((x) => x === 'pull').length, fired = rack.length - pulls;
+  if (rack.length === 0) return 'an empty rack';
+  if (fired > MAX_RACK) return `${fired} fired items, over ${MAX_RACK}`;
+  if (pulls > MAX_PULLS) return `${pulls} pulls, over ${MAX_PULLS}`;
+  return null;
+}
 /**
  * Rack item mass over the lightest structure body's, default and ceiling. AVBD drives a
  * light body into the ground under a much heavier one (roadmap E4), so a level may raise
@@ -339,6 +376,9 @@ export function compileLevel(def: LevelDef): CompiledLevel {
   if (settleRule === (scoringOf(def) === 'outcome' ? 'v2' : 'v1')) delete geometry.settle; else geometry.settle = settleRule;
   const physics = physicsKey(geometry.physics);
   if (physics) geometry.physics = physics; else delete geometry.physics;
+  // Ice rules join the hash written out whenever the level has ice (as a defaulted weapon does), so retuning
+  // ICE_DEFAULTS drops stars cast under the old ones; levels without ice hash as before, whatever physics.ice says.
+  if (mats.includes(materialId('ice'))) geometry.physics = { ...geometry.physics, ice: iceOf(def.physics?.ice) };
   geometry.parts = geometry.parts.map((pt) => (pt.kind === 'scenario' ? scenarioKey(pt) : pt));
   // A w- item the level gives no weapon of its own plays the built-in (rack.ts weaponOf): the built-in joins the
   // hash as if written out, so retuning one drops stars cast with it. Levels whose rack has none hash as before.
@@ -371,7 +411,7 @@ function bodiesDigest(bodies: readonly BodyDesc[]): string {
 }
 
 export interface Issue {
-  code: 'count' | 'capacity' | 'launcher' | 'overlap' | 'unsupported' | 'mass-ratio' | 'ammo-ratio' | 'dud' | 'tunnelling' | 'crown-start' | 'rack' | 'weapon' | 'empty' | 'watched' | 'flat';
+  code: 'count' | 'capacity' | 'launcher' | 'overlap' | 'unsupported' | 'mass-ratio' | 'ammo-ratio' | 'dud' | 'tunnelling' | 'crown-start' | 'rack' | 'weapon' | 'empty' | 'watched' | 'flat' | 'objective' | 'freeze';
   message: string;
   bodies?: number[];
   /** Legal but worth knowing (a dud item): the level still plays as authored. */
@@ -453,8 +493,18 @@ export function validateLevel(c: CompiledLevel, opts: ValidateOptions = {}): Iss
   const engine = opts.engine ?? defaultEngineOf(def), max = ENGINE_MAX_BODIES[engine];
   if (m.n === 0) issues.push({ code: 'empty', message: 'level has no bodies' });
   if (m.n > max) issues.push({ code: 'count', message: `${m.n} bodies > ${max} (the ${engine} engine's budget)` });
-  else if (engine === 'rapier' && m.n + rackBodies(def.rack.filter(isRackItem), c.arms) > max) issues.push({ code: 'capacity', message: `${m.n} bodies + ${rackBodies(def.rack.filter(isRackItem), c.arms)} the rack can add > ${max} (the ${engine} engine's budget)` });
-  if (def.rack.length === 0 || def.rack.length > MAX_RACK || def.par < 1 || def.par > def.rack.length) issues.push({ code: 'rack', message: `rack of ${def.rack.length} with par ${def.par}: need 1 <= par <= rack <= ${MAX_RACK}` });
+  else if (engine === 'rapier' && m.n + rackBodies(def.rack.filter(isRackItem), c.arms) + IceBreaker.budget(c) > max) {
+    const ice = IceBreaker.budget(c);
+    issues.push({ code: 'capacity', message: `${m.n} bodies + ${rackBodies(def.rack.filter(isRackItem), c.arms)} the rack can add${ice ? ` + ${ice} ice pieces` : ''} > ${max} (the ${engine} engine's budget)` });
+  }
+  const size = rackSizeProblem(def.rack);
+  if (size || def.par < 1 || def.par > def.rack.length) issues.push({ code: 'rack', message: `rack of ${def.rack.length} with par ${def.par}: need 1 <= par <= rack, at most ${MAX_RACK} fired items and ${MAX_PULLS} pulls${size ? ` (${size})` : ''}` });
+  const fz = def.freeze === undefined ? null : freezeProblem(def.freeze);
+  if (fz) issues.push({ code: 'freeze', message: fz });
+  if (def.objective.kind === 'hold') {
+    if (scoringOf(def) !== 'outcome') issues.push({ code: 'objective', message: 'a hold objective needs outcome scoring (a par level ends at its clear)' });
+    if (m.crowns.length === 0) issues.push({ code: 'objective', message: 'a hold objective needs a crown to keep up' });
+  }
   const watched = m.crowns.length + m.heritage.length;
   if (watched > MAX_WATCHED) issues.push({ code: 'watched', message: `${m.crowns.length} crowns + ${m.heritage.length} heritage = ${watched} watched bodies > ${MAX_WATCHED}: judge big structures by collapse, skyline or footprint` });
 

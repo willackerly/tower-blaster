@@ -29,7 +29,7 @@ describe('GPU AVBD engine: primal dispatch (direct colours and the one-workgroup
     expect(base.maxColors).toBeGreaterThan(2); // so colorTail = 2 puts colours with bodies in the tail
     // Then every colour in the tail, at its largest size, and the serial
     // sweep: every colour in the tail, one thread.
-    for (const opts of [{ indirectColors: true }, { colorTail: 0 }, { colorTail: 2 }, { colorTail: 63 }, { colorTail: 0, tailThreads: 256 }, { colorTail: 0, tailThreads: 1 }]) {
+    for (const opts of [{ indirectColors: true }, { sizedColors: true }, { colorTail: 0 }, { colorTail: 2 }, { colorTail: 63 }, { colorTail: 0, tailThreads: 256 }, { colorTail: 0, tailThreads: 1 }]) {
       const r = await run(scene, 16, opts);
       expect(r.error).toBeNull();
       expect(state({ ...base, s1: toSnap(r.snaps.at(-1)!) }), JSON.stringify(opts)).toEqual(state(base));
@@ -85,7 +85,8 @@ describe('GPU AVBD engine: primal dispatch (direct colours and the one-workgroup
       const old = await call('dispatchCounts', scene, { iterations }, { indirectColors: true });
       const tail0 = await call('dispatchCounts', scene, { iterations }, { colorTail: 0 });
       const tail3 = await call('dispatchCounts', scene, { iterations }, { colorTail: 3 });
-      expect([def.error, old.error, tail0.error, tail3.error]).toEqual([null, null, null, null]);
+      const sized = await call('dispatchCounts', scene, { iterations }, { sizedColors: true });
+      expect([def.error, old.error, tail0.error, tail3.error, sized.error]).toEqual([null, null, null, null, null]);
       const sweeps = iterations + 1;
       // Indirect, outside the primal: match, narrowphase pairs, degree, fill, pair setup, and the dual per iteration.
       for (const r of [def, tail0, tail3]) expect(r.indirect).toBe(iterations + 5);
@@ -95,6 +96,14 @@ describe('GPU AVBD engine: primal dispatch (direct colours and the one-workgroup
       expect(tail3.direct - tail0.direct).toBe(3 * sweeps);
       expect(def.direct - tail0.direct).toBe(8 * sweeps);
       expect(def.direct + def.indirect).toBe(old.direct + old.indirect - 55 * sweeps);
+      // sizedColors: the same colorTail dispatches per sweep, each indirect, sized to its colour.
+      expect([sized.direct, sized.indirect]).toEqual([tail0.direct, def.indirect + 8 * sweeps]);
+      // The awake lists (sleep): three dispatches a step build them (pair slots indirect, bodies, arguments), and each
+      // iteration's ground dual turns indirect.
+      const lists = await call('dispatchCounts', scene, { iterations }, { sleep: true, sleepSkip: false });
+      const full = await call('dispatchCounts', scene, { iterations }, { sleep: true, sleepSkip: false, awakeLists: false });
+      expect([lists.error, full.error]).toEqual([null, null]);
+      expect([lists.direct, lists.indirect]).toEqual([full.direct - iterations + 2, full.indirect + iterations + 1]);
     }
   });
   it('(e) the tail is 256 threads on a hardware GPU and 64 on a software adapter, unless set', async () => {
@@ -103,11 +112,17 @@ describe('GPU AVBD engine: primal dispatch (direct colours and the one-workgroup
     const def = await call('dispatchPlan', scene, {});
     expect(def.before).toBeNull();
     expect(def.software).not.toBeNull();
-    expect(def.dispatch).toEqual({ colorTail: 8, indirectColors: false, tailThreads: def.software ? 64 : 256, hessian: 'registers' });
+    expect(def.dispatch).toEqual({ colorTail: 8, indirectColors: false, sizedColors: false, awakeLists: false, tailThreads: def.software ? 64 : 256, hessian: 'registers' });
     // The tests run on SwiftShader unless a real GPU is present; it must count as software.
     if (/swiftshader/i.test(def.adapter ?? '')) expect(def.software).toBe(true);
     const set = await call('dispatchPlan', scene, { tailThreads: 32, colorTail: 3, indirectColors: true, hessian: 'array' });
-    expect(set.dispatch).toEqual({ colorTail: 3, indirectColors: true, tailThreads: 32, hessian: 'array' });
+    expect(set.dispatch).toEqual({ colorTail: 3, indirectColors: true, sizedColors: false, awakeLists: false, tailThreads: 32, hessian: 'array' });
+    // With sleep, sized colour dispatches by default (its sleepers have no colour); sizedColors false keeps them direct.
+    expect((await call('dispatchPlan', scene, { sleep: true })).dispatch!.sizedColors).toBe(true);
+    expect((await call('dispatchPlan', scene, { sleep: true, sizedColors: false })).dispatch!.sizedColors).toBe(false);
+    // Likewise the awake lists.
+    expect((await call('dispatchPlan', scene, { sleep: true })).dispatch!.awakeLists).toBe(true);
+    expect((await call('dispatchPlan', scene, { sleep: true, awakeLists: false })).dispatch!.awakeLists).toBe(false);
   });
 });
 

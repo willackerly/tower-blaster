@@ -1,21 +1,28 @@
 // WebGPU renderer for boxes and spheres, drawn from a BodySource with GPU
 // culling and indirect draws (cull.ts). Frame: cull (compute), sun shadow
 // map, the scene into a 4x MSAA HDR target resolved to one sample (bodies,
-// floor, sky; shaders.ts), then bloom and the AgX composite (post.ts).
+// floor, sky; shaders.ts; then blasts, blasts.ts), then bloom and the AgX
+// composite (post.ts).
 // Geometry is built from vertex_index (no vertex buffers); positions are
 // camera-relative. Colours and lights come from a LookParams preset.
 import { writeStruct } from '@tb/schema';
 import type { GpuProfiler } from '@tb/gpu';
 import { Culler, NO_LOD, SEG, type CullFrame } from './cull.ts';
 import { DEFAULT_DEBRIS, Sparks } from './sparks.ts';
-import { Lights, MAX_BALLS, TRAIL } from './lights.ts';
+import { BLAST_LIGHTS, Lights, MAX_BALLS, TRAIL } from './lights.ts';
+import { Blasts } from './blasts.ts';
+import { Fuses } from './fuses.ts';
+import { BlastReach } from './reach.ts';
 import { aoFrame, aoGrid, AoVolume } from './ao.ts';
 import { FLOOR_VERTS, floorFan, floorPolygon } from './floor.ts';
 import { fitShadow, frustumCorners, pcssParams, type Arena, type ShadowFit, type ShadowFitState } from './shadowfit.ts';
-import { FX_WORDS, packFx, tintWord, toHalf, type FxOptions, FX_ANCHOR } from './fx.ts';
+import { MARK_MASK, MARK_SHIFT } from './marks.ts';
+import { FX_WORDS, packFx, tintWord, toHalf, type Fx, type FxOptions, FX_ANCHOR, unpackFx } from './fx.ts';
 import { CANDY_NIGHT, linearToOklab, REAL_DEFAULTS, srgbToLinear, type LookParams } from './look.ts';
 import { invert, lookAt, multiply, normalize, type Mat4, type V3 } from './math.ts';
 import { HDR_FORMAT, noStamp, Post, type Stamp } from './post.ts';
+import { IcePass } from './ice-pass.ts';
+import { packSurface, type Surface, type SurfaceOptions } from './surface.ts';
 import { BOX_CUBE_VERTS, BOX_FAN_VERTS, Frame, SCENE_WGSL, sceneWgsl, SHADOW_SIZE, SPHERE_VERTS } from './shaders.ts';
 import { GROUND_LAYER, GROUNDS, Materials, patchThreshold, STONES, WOOD } from './materials.ts';
 import { ADAPTED_EXPOSURE_OFFSET, Atmosphere, medium, sunAtGround, sunDiscRadiance } from './atmosphere.ts';
@@ -200,7 +207,7 @@ export class Renderer {
   private readonly shadowLayout: GPUBindGroupLayout;
   private readonly pipes: Record<PipeName, GPURenderPipeline>;
   /** Pipelines and sky of looks with an atmosphere, made on first use. */
-  private real: { pipes: Record<RealPipe, GPURenderPipeline>; woodBox: () => GPURenderPipeline; hall: () => { opaque: GPURenderPipeline; glass: GPURenderPipeline }; atmosphere: Atmosphere; materials: Materials; layout: GPUBindGroupLayout; bind: GPUBindGroup } | null = null;
+  private real: { pipes: Record<RealPipe, GPURenderPipeline>; woodBox: () => GPURenderPipeline; hall: () => { opaque: GPURenderPipeline; glass: GPURenderPipeline }; atmosphere: Atmosphere; materials: Materials; layout: GPUBindGroupLayout; bind: GPUBindGroup; module: GPUShaderModule } | null = null;
   private readonly makeReal: () => NonNullable<Renderer['real']>;
   private lastSun: V3 = SUN;
   private readonly facePipe: () => GPURenderPipeline;
@@ -245,15 +252,34 @@ export class Renderer {
   readonly sparks: Sparks;
   /** Ball and flash lights and the ball trail (lights.ts). */
   readonly lights: Lights;
+  /** Fireballs, shock shells and blast lights (blasts.ts); Renderer.blast adds one. */
+  readonly blasts: Blasts;
+  /** Lit-fuse sparks on marked bodies (fuses.ts); Renderer.fuse marks one. */
+  readonly fuses: Fuses;
+  /** The aim preview's blast-reach zone (reach.ts); Renderer.reach shows it. */
+  readonly reachZone: BlastReach;
+  /** The last frame's camera-relative inverse view-projection and the look's sun luminance (blasts). */
+  private lastInv: Mat4 = new Float32Array(16);
+  private sunLuma = 1;
   /** Occupancy volume for AO (ao.ts), fitted to the arena (setShadowBounds). */
   readonly ao: AoVolume;
   private readonly aoSampler: GPUSampler;
+
+  /** Ice (ice.ts, ice-pass.ts): the per-slot surfaces, and how ice is drawn (ice.params). */
+  readonly ice: IcePass;
+  /** The ice pass's pipelines (scene look, real look) and its ID pipeline, made the first time a frame has ice. */
+  private readonly icePipe: (real: boolean) => GPURenderPipeline;
+  private readonly iceIdPipe: () => GPURenderPipeline;
+  /** An empty group 1 for the stylized looks' ice pipeline (group 2 is the ice's). */
+  private readonly emptyBind: GPUBindGroup;
+  /** The surface buffer the culler was built with (a new one rebuilds it). */
+  private cullSurfaces: GPUBuffer | null = null;
 
   private readonly boxVerts: { scene: number; shadow: number };
   /** Per-pass GPU timing of render() (cull, shadow, scene, bloom, composite) when set; read with profiler.collect(). */
   profiler: GpuProfiler | null = null;
   /** Passes to skip, for measuring their marginal cost (bench:render). sparks off also freezes heat (its detector writes it). */
-  toggles = { shadow: true, post: true, sparks: true, trail: true, heat: true, ao: true };
+  toggles = { shadow: true, post: true, sparks: true, trail: true, heat: true, ao: true, blasts: true };
   private readonly stoneLod: boolean;
   private readonly realDiag: RendererOptions['realDiag'];
   private readonly shadowSize: number;
@@ -282,6 +308,10 @@ export class Renderer {
     this.post = new Post(device, this.format);
     this.sparks = new Sparks(device, opts.sparkPool);
     this.lights = new Lights(device);
+    this.blasts = new Blasts(device);
+    this.fuses = new Fuses(device);
+    this.reachZone = new BlastReach(device);
+    this.ice = new IcePass(device);
     this.ao = new AoVolume(device, aoGrid(this.arena));
     this.aoSampler = device.createSampler({ magFilter: 'linear', minFilter: 'linear' });
     const VF = GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT;
@@ -458,8 +488,20 @@ export class Renderer {
           { binding: 5, resource: materials.sampler }, { binding: 6, resource: device.createSampler({ label: 'shadow gather' }) },
         ],
       });
-      return { pipes, woodBox, hall, atmosphere, materials, layout, bind };
+      return { pipes, woodBox, hall, atmosphere, materials, layout, bind, module: m.module };
     };
+    const emptyLayout = device.createBindGroupLayout({ entries: [], label: 'empty' });
+    this.emptyBind = device.createBindGroup({ layout: emptyLayout, entries: [] });
+    const icePipes: [GPURenderPipeline | null, GPURenderPipeline | null] = [null, null];
+    let iceId: GPURenderPipeline | null = null;
+    this.icePipe = (real) => {
+      const k = real ? 1 : 0;
+      if (icePipes[k]) return icePipes[k]!;
+      const r = real ? (this.real ??= this.makeReal()) : null;
+      const layout = device.createPipelineLayout({ bindGroupLayouts: [this.layout, r ? r.layout : emptyLayout, this.ice.layout] });
+      return (icePipes[k] = color('vsBox', 'fsIce', 'back', SEG.boxIce, { module: r ? r.module : module, layout, constants: real ? { REAL_PCSS: opts.realDiag === 'pcss-off' ? 0 : 1 } : {} }));
+    };
+    this.iceIdPipe = () => (iceId ??= color('vsBox', 'fsId', 'back', SEG.boxIce, { format: 'r32uint', samples: 1 }));
   }
 
   /** Draw bodies from this source from now on. */
@@ -502,12 +544,29 @@ export class Renderer {
       for (let k = 0; k < n; k++) {
         const o = (slot + k) * FX_WORDS;
         if (a && k < a.length) this.fx[o] = tintWord(a[k]!);
-        if (scales && k < scales.length) this.fx[o + 1] = (toHalf(1 - Math.min(1, Math.max(0, scales[k]!))) | (anchor ? FX_ANCHOR : 0)) >>> 0;
+        if (scales && k < scales.length) this.fx[o + 1] = (toHalf(1 - Math.min(1, Math.max(0, scales[k]!))) | (anchor ? FX_ANCHOR : 0) | (this.fx[o + 1]! & MARK_MASK)) >>> 0;
       }
     } else {
-      packFx(a, this.fx, slot * FX_WORDS, this.lastTime);
+      const o = slot * FX_WORDS, mark = this.fx[o + 1]! & MARK_MASK;
+      packFx(a, this.fx, o, this.lastTime);
+      if (a.mark === undefined) this.fx[o + 1] = (this.fx[o + 1]! | mark) >>> 0;
     }
     this.uploadFx(slot, n);
+  }
+
+  /**
+   * Engrave count = marks.length slots from slot0 (marks.ts: MARK_NONE, MARK_HIT, MARK_SAVE per slot). A mark
+   * stays through every setFx that does not name one, until clearFx; only boxes draw it.
+   */
+  setMarks(slot0: number, marks: ArrayLike<number>): void {
+    const n = marks.length;
+    if (!n) return;
+    this.growFx(slot0 + n);
+    for (let k = 0; k < n; k++) {
+      const o = (slot0 + k) * FX_WORDS + 1;
+      this.fx[o] = ((this.fx[o]! & ~MARK_MASK) | ((marks[k]! & 3) << MARK_SHIFT)) >>> 0;
+    }
+    this.uploadFx(slot0, n);
   }
 
   /** Remove the effects of count slots from slot. */
@@ -515,6 +574,28 @@ export class Renderer {
     this.growFx(slot + count);
     this.fx.fill(0, slot * FX_WORDS, (slot + count) * FX_WORDS);
     this.uploadFx(slot, count);
+  }
+
+  /**
+   * What body slots are made of, for drawing (surface.ts): one slot with options, or a contiguous
+   * range of packed words (packSurface) from slot. Unlike setFx, a surface stays until it is set
+   * again (clearSurfaces resets every slot). Ice boxes are drawn in the ice pass (ice.ts); while
+   * any slot is ice the scene pass is split (ice-pass.ts). Applied from the next frame.
+   */
+  setSurface(slot: number, s: SurfaceOptions): void;
+  setSurface(slot0: number, words: Uint32Array): void;
+  setSurface(slot: number, s: SurfaceOptions | Uint32Array): void {
+    this.ice.set(slot, s instanceof Uint32Array ? s : [packSurface(s)]);
+  }
+
+  /** Every slot back to the default surface (a new level, a new scene). */
+  clearSurfaces(): void {
+    this.ice.clear();
+  }
+
+  /** A slot's surface as last set (tests and tools). */
+  surfaceOf(slot: number): Surface {
+    return this.ice.get(slot);
   }
 
   /**
@@ -554,7 +635,8 @@ export class Renderer {
   private sync(): Culler {
     const s = this.source;
     const key = `${s.version}:${s.capacity}`;
-    if (key !== this.cullKey || !this.culler || this.culler.source !== s) {
+    const surfaces = this.ice.buffer(s.capacity);
+    if (key !== this.cullKey || !this.culler || this.culler.source !== s || surfaces !== this.cullSurfaces) {
       this.culler?.destroy();
       this.growFx(s.capacity);
       if (!this.fxBuf || this.fxBuf.size < s.capacity * FX_WORDS * 4) {
@@ -562,7 +644,8 @@ export class Renderer {
         this.fxBuf = this.device.createBuffer({ size: Math.max(16, this.fx.byteLength), usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST, label: 'fx' });
         this.device.queue.writeBuffer(this.fxBuf, 0, this.fx);
       }
-      this.culler = new Culler(this.device, s, { box: this.boxVerts.scene, boxShadow: this.boxVerts.shadow, sphere: SPHERE_VERTS }, this.fxBuf);
+      this.culler = new Culler(this.device, s, { box: this.boxVerts.scene, boxShadow: this.boxVerts.shadow, sphere: SPHERE_VERTS }, this.fxBuf, surfaces);
+      this.cullSurfaces = surfaces;
       const buffers = [this.frameBuf, this.culler.records, this.culler.lists];
       const common = buffers.map((buffer, binding) => ({ binding, resource: { buffer } }));
       this.bind = this.device.createBindGroup({
@@ -622,15 +705,18 @@ export class Renderer {
     const focus = f.focus ?? [f.eye[0], f.eye[1], f.eye[2] - 1];
     this.lastTime = f.time ?? 0;
     const inv = invert(viewProj);
+    this.lastInv = inv;
     this.floorCount = floorFan(floorPolygon(inv, f.groundY - f.eye[1]), this.floorData).count;
     const hall = hallUniforms(this.look, f.metres ?? 1, f.eye, f.groundY);
+    const looks = lookUniforms(this.look, f.metres ?? 1), sc = looks.sunColor as number[];
+    this.sunLuma = 0.2126 * sc[0]! + 0.7152 * sc[1]! + 0.0722 * sc[2]!;
     this.hallOn = hall.hallLook![0]! > 0;
     if (this.floorCount) this.device.queue.writeBuffer(this.floorBuf, 0, this.floorData, 0, this.floorCount * 3);
     writeStruct(this.frameData, Frame, 0, {
       viewProj, lightViewProj, invViewProj: inv,
       eye: f.eye, time: f.time ?? 0, sun, groundY: f.groundY,
       focus: [focus[0] - f.eye[0], focus[1] - f.eye[1], focus[2] - f.eye[2]], capacity: this.culler?.capacity ?? 0,
-      ...lookUniforms(this.look, f.metres ?? 1),
+      ...looks,
       // Bias, all on the receiver: normal offset of 2 texels, depth bias of 1 texel + 1 cm.
       shadowParams: [2 * fit.texel, (fit.texel + 0.01) / fit.depthRange, fit.texel, 1 / this.shadowSize],
       ...this.aoUniforms(f.eye),
@@ -688,11 +774,22 @@ export class Renderer {
     const metres = f.metres ?? 1, froude = 1 / Math.sqrt(metres);
     // The real look's impacts throw dust and chips instead (sparks.ts debris mode).
     const debris = !ids && !effects && real !== null && this.toggles.sparks && (this.look.debris?.dust ?? 1) + (this.look.debris?.chips ?? 1) > 0;
+    // Blasts (every look): their lights go in the light buffer's blast slots, their spheres are drawn last.
+    const blasts = !ids && this.toggles.blasts ? this.blasts.states(f.time ?? 0) : [];
+    const blastLit = !ids && this.lights.setBlastLights(
+      blasts.filter((b) => b.light > 0).sort((a, b) => b.light - a.light).slice(0, BLAST_LIGHTS)
+        .map((b) => ({ pos: b.centre, radius: b.lightR, colour: b.lightColour, intensity: b.light * this.sunLuma * (this.look.blastLight ?? 1) })),
+      f.eye,
+    );
+    const drawFuses = !ids && this.toggles.blasts && this.fuses.prepare({ viewProj: cf.viewProj, viewport: this.viewport(), time: f.time ?? 0, gain: this.sunLuma, records: culler.records, bodies: this.source.bodies, capacity: Math.min(this.source.count, this.source.capacity) });
+    const drawReach = !ids && this.reachZone.prepare({ eye: f.eye, viewProj: cf.viewProj, invViewProj: this.lastInv, viewport: this.viewport(), time: f.time ?? 0, gain: this.sunLuma });
+    const drawBlasts = blasts.length > 0 && this.blasts.prepare(blasts, { eye: f.eye, viewProj: cf.viewProj, invViewProj: this.lastInv, viewport: this.viewport(), time: f.time ?? 0, gain: this.sunLuma });
     if (!ids && effects) {
       if (this.toggles.sparks) this.sparks.encode(cp, this.source, { dt: dt * froude, groundY: f.groundY, dvScale: Math.sqrt(metres) });
       this.lights.encode(cp, this.source, culler.records, this.sparks, { eye: f.eye, time: f.time ?? 0, ball: this.look.ball.map(srgbToLinear) as V3 });
     } else if (!ids) {
-      this.lights.off();
+      if (blastLit) this.lights.packOnly(cp, this.sparks);
+      else this.lights.off();
       if (debris) {
         const d = this.look.debris;
         this.sparks.debris = { ...this.sparks.debris, dustPerDv: DEFAULT_DEBRIS.dustPerDv * (d?.dust ?? 1), chipPerDv: DEFAULT_DEBRIS.chipPerDv * (d?.chips ?? 1), dustDv: d?.threshold ?? DEFAULT_DEBRIS.dustDv, dustFace: d?.face ?? DEFAULT_DEBRIS.dustFace, dustSkirt: d?.skirt ?? DEFAULT_DEBRIS.dustSkirt };
@@ -709,15 +806,19 @@ export class Renderer {
       sp.drawIndirect(culler.args, 16 * SEG.sphereShadow);
       sp.end();
     }
+    // Ice (ice-pass.ts): while any slot is ice, the opaque scene resolves into `under` and keeps
+    // its samples and depth, and the ice and everything drawn after it go in a second pass.
+    const split = !ids && this.ice.count > 0;
+    const under = split ? this.ice.under(this.msaa!.width, this.msaa!.height) : null;
     const color: GPURenderPassColorAttachment = ids
       ? { view: this.idTex!.createView(), clearValue: { r: 0, g: 0, b: 0, a: 0 }, loadOp: 'clear', storeOp: 'store' }
-      // Tile memory only: the MSAA samples are resolved and never stored.
-      : { view: this.msaa!.createView(), resolveTarget: this.hdr!.createView(), clearValue: { r: 0, g: 0, b: 0, a: 1 }, loadOp: 'clear', storeOp: 'discard' };
-    const p = enc.beginRenderPass({
+      // Tile memory only: the MSAA samples are resolved and never stored (unless the ice pass needs them).
+      : { view: this.msaa!.createView(), resolveTarget: (under ?? this.hdr!).createView(), clearValue: { r: 0, g: 0, b: 0, a: 1 }, loadOp: 'clear', storeOp: split ? 'store' : 'discard' };
+    let p = enc.beginRenderPass({
       label: mode,
       ...(ids ? {} : stamp('scene')),
       colorAttachments: [color],
-      depthStencilAttachment: { view: (ids ? this.idDepth! : this.depth!).createView(), depthClearValue: 1, depthLoadOp: 'clear', depthStoreOp: 'discard' },
+      depthStencilAttachment: { view: (ids ? this.idDepth! : this.depth!).createView(), depthClearValue: 1, depthLoadOp: 'clear', depthStoreOp: split ? 'store' : 'discard' },
     });
     p.setBindGroup(0, this.bind!);
     if (real) p.setBindGroup(1, real.bind);
@@ -731,6 +832,10 @@ export class Renderer {
     if (mode === 'faces') { p.end(); return; }
     p.setPipeline(ids ? pipes.sphereId : pipes.sphere);
     p.drawIndirect(culler.args, 16 * SEG.sphere);
+    if (ids && this.ice.count > 0) {
+      p.setPipeline(this.iceIdPipe());
+      p.drawIndirect(culler.args, 16 * SEG.boxIce);
+    }
     if (!ids) {
       if (this.overlayCount) {
         p.setPipeline(pipes.overlay);
@@ -750,6 +855,21 @@ export class Renderer {
       }
       p.setPipeline(pipes.sky);
       p.draw(3);
+      if (split) {
+        // The ice pass: the opaque scene is in `under` and in the samples; ice is depth-tested against it and writes depth.
+        p.end();
+        p = enc.beginRenderPass({
+          label: 'ice',
+          ...stamp('ice'),
+          colorAttachments: [{ view: this.msaa!.createView(), resolveTarget: this.hdr!.createView(), loadOp: 'load', storeOp: 'discard' }],
+          depthStencilAttachment: { view: this.depth!.createView(), depthLoadOp: 'load', depthStoreOp: 'discard' },
+        });
+        p.setBindGroup(0, this.bind!);
+        p.setBindGroup(1, real ? real.bind : this.emptyBind);
+        p.setBindGroup(2, this.ice.bind(f.metres ?? 1));
+        p.setPipeline(this.icePipe(real !== null));
+        p.drawIndirect(culler.args, 16 * SEG.boxIce);
+      }
       if (hall) {
         p.setPipeline(hall.pipes.glass);
         p.setVertexBuffer(0, hall.mesh.glass);
@@ -769,6 +889,10 @@ export class Renderer {
         p.setPipeline(this.pipes.trail);
         p.draw(6 * (TRAIL - 1), MAX_BALLS);
       }
+      // Last: the reach zone, fuses and blasts bind their own group 0.
+      if (drawReach) this.reachZone.draw(p);
+      if (drawFuses) this.fuses.draw(p);
+      if (drawBlasts) this.blasts.draw(p);
     }
     p.end();
   }
@@ -859,6 +983,7 @@ export class Renderer {
   destroy(): void {
     this.culler?.destroy();
     this.post.destroy();
+    this.ice.destroy();
     for (const t of [this.msaa, this.hdr, this.depth, this.idTex, this.idDepth, this.shadowTex, this.offscreen]) t?.destroy();
     this.frameBuf.destroy();
     this.fxBuf?.destroy();
@@ -869,9 +994,36 @@ export class Renderer {
     this.overlayColours.destroy();
     this.sparks.destroy();
     this.lights.destroy();
+    this.blasts.destroy();
+    this.fuses.destroy();
+    this.reachZone.destroy();
     this.ao.destroy();
     this.real?.atmosphere.destroy();
     this.real?.materials.destroy();
+  }
+
+  /**
+   * A blast went off at centre (world units) reaching radius: a fireball,
+   * a shock shell out to radius and a light (blasts.ts), from renderer time
+   * `time` (FrameParams.time; default the last frame's).
+   */
+  blast(centre: V3, radius: number, time = this.lastTime): void {
+    this.blasts.add(centre, radius, time);
+  }
+
+  /** Mark (or unmark) a body slot as a lit bomb: a flickering spark rides on top of it until it is removed (fuses.ts). */
+  fuse(slot: number, on = true): void {
+    this.fuses.set(slot, on);
+  }
+
+  /** A slot's effects as last set (setFx; the CPU copy the GPU's is uploaded from), for tests and tools. */
+  fxOf(slot: number): Fx {
+    return unpackFx(slot * FX_WORDS < this.fx.length ? this.fx : new Uint32Array(FX_WORDS), slot * FX_WORDS < this.fx.length ? slot * FX_WORDS : 0);
+  }
+
+  /** Show the danger zone of a blast of radius reaching out from centre (the aim preview; reach.ts); null hides it. */
+  reach(centre: readonly number[] | null, radius = 0): void {
+    this.reachZone.set(centre, radius);
   }
 
   /** Sparks from a game event at pos, flying out around dir; strength is a speed change in m/s. */

@@ -4,7 +4,7 @@
 import { fileURLToPath } from 'node:url';
 import { platform } from 'node:os';
 import { afterAll, beforeAll, expect } from 'vitest';
-import { chromium, type Browser, type Page } from 'playwright';
+import { chromium, type Browser, type BrowserContextOptions, type Page } from 'playwright';
 import { createServer, type ViteDevServer } from 'vite';
 import { requireWebGPU, WEBGPU_ARGS } from '@tb/testkit';
 import type { Shot } from '@tb/keystone';
@@ -13,8 +13,11 @@ export interface GamePage {
   /** Null when no browser could start here (the tests skip unless WebGPU is required). */
   browser(): Browser | null;
   url(search: string): string;
-  /** Open the page and wait for its level; null means no WebGPU adapter here (skip unless required). */
-  open(search: string, timeout?: number): Promise<{ page: Page; errors: string[] } | null>;
+  /**
+   * Open the page and wait for its level; null means no WebGPU adapter here (skip unless required).
+   * `context` replaces the 640x400 desktop page's options (an emulated phone: hasTouch, isMobile, its viewport).
+   */
+  open(search: string, timeout?: number, context?: BrowserContextOptions): Promise<{ page: Page; errors: string[] } | null>;
 }
 
 /**
@@ -42,8 +45,8 @@ export function gamePage(): GamePage {
   return {
     browser: () => browser,
     url,
-    async open(search, timeout = 60_000) {
-      const page = await browser!.newPage({ viewport: { width: 640, height: 400 } });
+    async open(search, timeout = 60_000, context) {
+      const page = await browser!.newPage(context ?? { viewport: { width: 640, height: 400 } });
       const errors: string[] = [];
       page.on('pageerror', (e) => errors.push(e.message));
       await page.goto(url(search));

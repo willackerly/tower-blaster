@@ -75,6 +75,15 @@ export function voicesFor(fb: Feedback, opts: { impacts?: boolean } = {}): Voice
         { kind: 'tone', wave: 'sawtooth', freq: 440, gain: 0.18, decay: 0.45, delay: 0, glide: 0.94 },
         { kind: 'noise', freq: 2500, gain: 0.25, decay: 0.12, delay: 0 },
       ];
+    case 'iceCrack':
+      // Ice cracking: a dry high tick, brighter and louder as the crack grows (level 1 to 7).
+      return [{ kind: 'noise', freq: 3500 + 500 * fb.level, gain: 0.06 + 0.025 * fb.level, decay: 0.05, delay: 0 }];
+    case 'shatter':
+      // A block of ice shattering: a burst of hiss and a quick run of high chimes down the scale (the pieces).
+      return [
+        { kind: 'noise', freq: 6000, gain: 0.35, decay: 0.25, delay: 0 },
+        ...[19, 17, 16, 14].map((k, i) => ({ kind: 'tone' as const, wave: 'sine' as const, freq: degree(k), gain: 0.1, decay: 0.35 - 0.05 * i, delay: 0.015 * i })),
+      ];
     case 'tier':
       // A singing bowl: inharmonic partials with a long tail, higher for each tier.
       return [1, 2.76, 5.4].map((r, k) => ({ kind: 'tone' as const, wave: 'sine' as const, freq: degree(5 * (fb.tier - 1)) * r, gain: 0.22 / (k + 1), decay: 2.6 / (k + 1), delay: 0 }));

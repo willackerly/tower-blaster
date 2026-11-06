@@ -15,3 +15,4 @@ export * from './door.ts';
 export * from './settings.ts';
 export * from './session-file.ts';
 export * from './support.ts';
+export * from './touch.ts';

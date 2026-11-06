@@ -3,7 +3,7 @@
 import { describe, expect, it } from 'vitest';
 import { B1, BIG_LEVELS, L1, L2, L3, seriesOf, type Shot, writeShots } from '@tb/keystone';
 import { compileLevel } from '@tb/keystone';
-import { DEFAULT_LEVEL, GAME_LOOK, levelRules, onEngine, parseGameParams, withRules, writeLevelRules } from '../src/params.ts';
+import { DEFAULT_LEVEL, GAME_LOOK, levelRules, loadOptions, onEngine, parseGameParams, withRules, writeLevelRules } from '../src/params.ts';
 import { DEFAULT_FEEL } from '../src/pacing.ts';
 
 const parse = (search: string) => parseGameParams(new URLSearchParams(search));
@@ -11,7 +11,7 @@ const par = L1.solutions!.par as Shot[];
 
 describe('game URL keys', () => {
   it('a bare URL opens the slice\'s first level (B1) on the GPU solver in the maquette look, no juice and no line', () => {
-    expect(parse('')).toEqual({ level: B1, rack: null, rules: {}, engine: 'gpu', feel: DEFAULT_FEEL, look: GAME_LOOK, shots: null, offscreen: false, sound: 'collapse', impactsDb: 0 });
+    expect(parse('')).toEqual({ level: B1, rack: null, rules: {}, engine: 'gpu', feel: DEFAULT_FEEL, look: GAME_LOOK, shots: null, duel: null, offscreen: false, sound: 'collapse', impactsDb: 0 });
     expect(DEFAULT_LEVEL).toBe('B1');
     expect(seriesOf(DEFAULT_LEVEL)).toBe(BIG_LEVELS);
     // The chamber levels stay one key away, with par scoring.
@@ -22,9 +22,10 @@ describe('game URL keys', () => {
 
   it('reads every key, a level in any case and the viewer\'s name for the GPU solver, and leaves other keys alone', () => {
     expect(parse(`?level=l3&engine=rapier&keystone.hitstop=1&keystone.slowmo=0&look=real&real.sunElevation=6&offscreen=1&scenario=S4&cam=1,2,3,0,0,9`)).toEqual({
-      level: L3, rack: null, rules: {}, engine: 'rapier', feel: { ...DEFAULT_FEEL, hitStop: true }, look: 'real', shots: null, offscreen: true, sound: 'collapse', impactsDb: 0,
+      level: L3, rack: null, rules: {}, engine: 'rapier', feel: { ...DEFAULT_FEEL, hitStop: true }, look: 'real', shots: null, duel: null, offscreen: true, sound: 'collapse', impactsDb: 0,
     });
     expect(parse('?keystone.sound=synth&keystone.impacts=-6')).toMatchObject({ sound: 'synth', impactsDb: -6 });
+    expect(parse('?keystone.sound=classic')).toMatchObject({ sound: 'classic' });
     expect(parse('?engine=avbd-gpu').engine).toBe('gpu');
     expect(parse('?engine=gpu').engine).toBe('gpu');
     expect(parse(`?level=L1&keystone.shots=${writeShots(par)}`).shots).toEqual(par);
@@ -49,8 +50,8 @@ describe('game URL keys', () => {
   });
 
   it('refuses a bad keystone.rack, naming the key', () => {
-    expect(() => parse('?keystone.rack=')).toThrow(/keystone.rack must list 1 to 8 items/);
-    expect(() => parse(`?keystone.rack=${Array(9).fill('marble').join(',')}`)).toThrow(/keystone.rack must list 1 to 8 items/);
+    expect(() => parse('?keystone.rack=')).toThrow(/keystone.rack must list 1 to 8 items \(and up to 24 pulls\)/);
+    expect(() => parse(`?keystone.rack=${Array(9).fill('marble').join(',')}`)).toThrow(/keystone.rack must list 1 to 8 items \(and up to 24 pulls\)/);
     expect(() => parse('?keystone.rack=marble,nuke')).toThrow(/keystone.rack: nuke is not one of marble, cannonball/);
     expect(() => parse('?keystone.rack=marble,')).toThrow(/keystone.rack: an empty name is not one of/);
     expect(() => parse('?level=L1&keystone.rack=w-big')).toThrow(/keystone.rack: L1 has no weapons.big for w-big/);
@@ -68,7 +69,7 @@ describe('game URL keys', () => {
     expect(() => parse('?engine=physx')).toThrow(/unknown engine physx: use rapier or gpu/);
     expect(() => parse('?keystone.hitstop=yes')).toThrow(/keystone.hitstop must be 0 or 1: yes/);
     expect(() => parse('?keystone.slowmo=')).toThrow(/keystone.slowmo must be 0 or 1: $/);
-    expect(() => parse('?keystone.sound=loud')).toThrow(/keystone.sound must be collapse or synth: loud/);
+    expect(() => parse('?keystone.sound=loud')).toThrow(/keystone.sound must be collapse, classic, synth: loud/);
     expect(() => parse('?keystone.impacts=30')).toThrow(/keystone.impacts \(dB\) must be from -40 to 20: 30/);
     expect(() => parse('?keystone.impacts=')).toThrow(/keystone.impacts/);
     expect(() => parse('?look=neon')).toThrow(/unknown look neon; known: candy, hazy, real/);
@@ -101,6 +102,20 @@ describe('rule overrides', () => {
     expect(parse('?level=L1&keystone.settle=v3').rules).toEqual({ settle: 'v3' });
     expect(() => parse('?keystone.settle=v9')).toThrow(/keystone.settle must be v1 or v2 or v3: v9/);
   });
+  it('keystone.freeze gives the player a freeze budget: a custom level with its own hash; refuses a bad one', () => {
+    const p = parse('?level=L1&keystone.freeze=3');
+    expect(p.rules).toEqual({ freeze: 3 });
+    expect(p.level).toEqual({ ...L1, freeze: 3, custom: true });
+    expect(compileLevel(p.level).hash).not.toBe(compileLevel(L1).hash);
+    expect(parse('?level=L1&keystone.freeze=0').level.freeze).toBe(0);
+    const q = new URLSearchParams();
+    writeLevelRules({ freeze: 2 }, q);
+    expect(q.toString()).toBe('keystone.freeze=2');
+    expect(levelRules(q)).toEqual({ freeze: 2 });
+    expect(() => parse('?keystone.freeze=10')).toThrow(/keystone.freeze must be a whole number from 0 to 9: 10/);
+    expect(() => parse('?keystone.freeze=-1')).toThrow(/keystone.freeze must be a whole number from 0 to 9: -1/);
+    expect(() => parse('?keystone.freeze=')).toThrow(/keystone.freeze must be a whole number from 0 to 9: $/);
+  });
   it('the physics keys set the level\'s physics block; off turns Bounce off', () => {
     const p = parse('?level=L2&keystone.iterations=20&keystone.gapSlop=0&keystone.bounce=0.4');
     expect(p.level.physics).toEqual({ iterations: 20, gapSlop: 0, bounce: 0.4 });
@@ -124,5 +139,25 @@ describe('rule overrides', () => {
   it('refuses bad values, naming the key', () => {
     expect(() => parse('?keystone.scoring=golf')).toThrow(/keystone.scoring must be par or outcome: golf/);
     expect(() => parse('?keystone.autobank=yes')).toThrow(/keystone.autobank must be 0 or 1: yes/);
+  });
+});
+
+describe('level start keys (loadOptions)', () => {
+  const lo = (search: string) => loadOptions(new URLSearchParams(search));
+  it('leaves the defaults to playKeystone when absent', () => {
+    expect(lo('')).toEqual({});
+  });
+  it('reads keystone.loadpace (ms, 0 unpaced) and keystone.prefetch (0 or 1)', () => {
+    expect(lo('?keystone.loadpace=0')).toEqual({ loadPaceMs: 0 });
+    expect(lo('?keystone.loadpace=12.5&keystone.prefetch=0')).toEqual({ loadPaceMs: 12.5, prefetch: false });
+    expect(lo('?keystone.prefetch=1')).toEqual({ prefetch: true });
+    expect(lo('?keystone.retry=rebuild')).toEqual({ retry: 'rebuild' });
+  });
+  it('refuses bad values, naming the key', () => {
+    expect(() => lo('?keystone.loadpace=')).toThrow(/keystone.loadpace must be from 0 to 1000 ms/);
+    expect(() => lo('?keystone.loadpace=-1')).toThrow(/keystone.loadpace/);
+    expect(() => lo('?keystone.loadpace=fast')).toThrow(/keystone.loadpace .*: fast/);
+    expect(() => lo('?keystone.prefetch=yes')).toThrow(/keystone.prefetch must be 0 or 1: yes/);
+    expect(() => lo('?keystone.retry=fast')).toThrow(/keystone.retry must be checkpoint or rebuild: fast/);
   });
 });

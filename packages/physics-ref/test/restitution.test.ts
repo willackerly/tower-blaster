@@ -21,6 +21,8 @@ import { AvbdReferenceEngine, type AvbdParams, AvbdWorld, DEFAULT_AVBD, RESTITUT
 
 const G = 9.81, H = 1 / 60;
 const ON: Partial<AvbdParams> = { restitution: true };
+/** The pass as it was before anchors. */
+const OLD: Partial<AvbdParams> = { restitution: true, restitutionAnchors: false };
 const rotZ = (a: number): [number, number, number, number] => [0, 0, -Math.sin(a / 2), Math.cos(a / 2)];
 const cube = (pos: Vec3, o: { e?: number; linVel?: Vec3; rot?: [number, number, number, number]; density?: number; friction?: number } = {}): BodyDesc => ({
   shape: { kind: 'box', half: [0.5, 0.5, 0.5] }, pos, rot: o.rot ?? [0, 0, 0, 1], linVel: o.linVel ?? [0, 0, 0], angVel: [0, 0, 0], density: o.density ?? 1, friction: o.friction ?? 0.6, restitution: o.e ?? 0, tag: 0,
@@ -279,9 +281,12 @@ describe('restitution on', () => {
     expect(four.end).toBeGreaterThan(0.95);
   });
 
-  it('a cube dropped flat onto two cubes (two bouncing manifolds) gains no energy, comes to rest, and pins the pass\'s details', async () => {
+  // The pass's details have no measure of their own, so these runs pin them by the top cube's velocity at step 100,
+  // after its second landing. A 1e-12 m change of its start moves that by at most 4e-11 m/s; each of the mutants
+  // named moves it by 1e-4 m/s or more. A solver change that moves it needs them re-measured.
+  const flatOntoTwo = async (params: Partial<AvbdParams>) => {
     const e = 0.9, scene = sceneOf([cube([-0.55, 0.5, 0], { e }), cube([0.55, 0.5, 0], { e }), cube([0, 1.5 + 25 / (2 * G), 0], { e })], { groundE: e });
-    const eng = new AvbdReferenceEngine(ON);
+    const eng = new AvbdReferenceEngine(params);
     await eng.init(scene);
     const E0 = shadowEnergy(eng, scene.gravity);
     let eMax = E0, up = 0, second: Vec3 = [0, 0, 0];
@@ -291,20 +296,36 @@ describe('restitution on', () => {
       up = Math.max(up, eng.world!.bodies[2]!.linVel[1]);
       if (k === 100) second = [...eng.world!.bodies[2]!.linVel];
     }
-    // Measured: gain 0, end speed 1.0e-16 m/s.
-    expect((eMax - E0) / Math.abs(E0)).toBeLessThan(1e-9);
-    expect(maxSpeed(eng)).toBeLessThan(1e-9);
-    // The first rebound off the two resting cubes: measured 3.843 m/s (supports held at 0 instead of at the solve's
-    // normal velocity: 3.772).
-    expect(up).toBeGreaterThan(3.8);
-    // The pass's details have no measure of their own, so this run pins them by the top cube's velocity at step
-    // 100, after its second landing. A 1e-12 m change of its start moves that by at most 4e-11 m/s; each of these
-    // moves it by 1e-4 m/s or more: zeroing a bounced point's force where its impulse was 0 (the reset needs
-    // P > 0), supports at unloaded points too, supports held at 0 (above), a centroid step that may pull. A
-    // solver change that moves it needs these re-measured.
-    expect(second[0]).toBeCloseTo(0.03865229182299252, 6);
-    expect(second[1]).toBeCloseTo(0.023948944869160167, 6);
-    expect(second[2]).toBeCloseTo(0.041232210571120045, 6);
+    return { gain: (eMax - E0) / Math.abs(E0), end: maxSpeed(eng), up, second };
+  };
+
+  it('a cube dropped flat onto two cubes (two bouncing manifolds) gains no energy, comes to rest, and pins the pass\'s details', async () => {
+    const r = await flatOntoTwo(ON);
+    // Measured: gain 0, end speed 1.9e-9 m/s. The top cube comes to rest on the left cube, 0.2 m over its edge, where
+    // the solve creeps (2.3e-10 m/s at step 700, 6e-7 at 3000: the solve's, as nothing bounces after step 173).
+    expect(r.gain).toBeLessThan(1e-9);
+    expect(r.end).toBeLessThan(1e-7);
+    // The first rebound off the two resting cubes, which the ground anchors: measured 4.522 m/s at a landing of
+    // 5 m/s (without anchors 3.843: below).
+    expect(r.up).toBeGreaterThan(4.4);
+    // Mutants: ANCHOR_MUTANTS.
+    expect(r.second[0]).toBeCloseTo(-0.9372779876561279, 6);
+    expect(r.second[1]).toBeCloseTo(1.1363908744799265, 6);
+    expect(r.second[2]).toBeCloseTo(0.034325408213933935, 6);
+  });
+
+  it('without anchors (restitutionAnchors false) the pass is the one before them, to the float', async () => {
+    const r = await flatOntoTwo({ ...ON, restitutionAnchors: false });
+    // Measured: gain 0, end speed 1.0e-16 m/s (the top cube falls to the ground), first rebound 3.843 m/s (supports
+    // held at 0 instead of at the solve's normal velocity: 3.772).
+    expect(r.gain).toBeLessThan(1e-9);
+    expect(r.end).toBeLessThan(1e-9);
+    expect(r.up).toBeGreaterThan(3.8);
+    // Pinned before anchors existed. Mutants: zeroing a bounced point's force where its impulse was 0 (the reset
+    // needs P > 0), supports at unloaded points too, supports held at 0 (above), a centroid step that may pull.
+    expect(r.second[0]).toBeCloseTo(0.03865229182299252, 6);
+    expect(r.second[1]).toBeCloseTo(0.023948944869160167, 6);
+    expect(r.second[2]).toBeCloseTo(0.041232210571120045, 6);
   });
 
   it.for([10, 20])('resting stacks with e = 0.5 on every body still rest (%i iterations)', async (iterations) => {
@@ -395,22 +416,24 @@ describe('restitution on', () => {
 });
 
 describe('restitution on: supports', () => {
-  // Every other loaded contact of a body in a bouncing manifold holds it during the pass (depth 1).
-  it('a 510 kg ball (e 0.9, 10 m/s) bouncing off a 1 kg cube on the ground gains no energy, and both come to rest', async () => {
+  // Every other loaded contact of a body in a bouncing manifold holds it during the pass (depth 1): as an anchor
+  // where its other side cannot move in the pass, else in rounds (without anchors, always in rounds).
+  it.for([['anchors', ON], ['no anchors', OLD]] as const)('a 510 kg ball (e 0.9, 10 m/s) bouncing off a 1 kg cube on the ground gains no energy, and both come to rest (%s)', async ([, params]) => {
     const r = 0.25, mb = 510, v = 10, e = 0.9;
     const scene = sceneOf([cube([0, 0.5, 0], { e }), ball([0, 1 + r + 0.3, 0], { e, radius: r, mass: mb, linVel: [0, -v, 0] })], { groundE: e });
-    const { gain, late } = await gainOf(scene, ON, 600, mb * (0.5 * v * v + G * 0.3));
-    // Measured 0 and 1.2e-17 m/s. Without supports the pass drove the cube into the ground at 19 m/s, the two
-    // then threw each other about: a gain of 8.17 x the impact's energy, and bodies at 81.8 m/s after 10 s.
+    const { gain, late } = await gainOf(scene, params, 600, mb * (0.5 * v * v + G * 0.3));
+    // Measured 0 and 1.2e-17 m/s without anchors. Without supports either the pass drove the cube into the ground
+    // at 19 m/s, the two then threw each other about: a gain of 8.17 x the impact's energy, and bodies at 81.8 m/s
+    // after 10 s.
     expect(gain).toBeLessThan(1e-9);
     expect(late).toBeLessThan(1e-9);
   });
 
-  it('a 1 kg ball (e 0.9, 20 m/s) onto a 0.4 kg cube lying on the ground gains no energy', async () => {
+  it.for([['anchors', ON], ['no anchors', OLD]] as const)('a 1 kg ball (e 0.9, 20 m/s) onto a 0.4 kg cube lying on the ground gains no energy (%s)', async ([, params]) => {
     const v = 20, e = 0.9;
     const scene = sceneOf([cube([0, 0.5, 0], { e, density: 0.4 }), ball([0, 1.8, 0], { e, linVel: [0, -v, 0] })], { groundE: e });
-    // Measured 0 (without supports 2.45 x the impact's energy).
-    expect((await gainOf(scene, ON, 600, 0.5 * v * v + G * 0.3)).gain).toBeLessThan(1e-7);
+    // Measured 0 (without supports or anchors 2.45 x the impact's energy).
+    expect((await gainOf(scene, params, 600, 0.5 * v * v + G * 0.3)).gain).toBeLessThan(1e-7);
   });
 
   /**
@@ -436,8 +459,10 @@ describe('restitution on: supports', () => {
     return { eV: 0, down };
   };
 
-  it('the cost: a ball bounces softer off a body that rests on others, and more rounds give back more (default 8)', async () => {
-    const at = async (rounds?: number) => (await offRestingCube(3, 0.9, rounds ? { ...ON, restitutionRounds: rounds } : ON)).eV;
+  // Without anchors the supports converge at a rate set by the mass ratio (Jacobi). These two pin that pass's known
+  // limit (see restitute()), which anchors lift: below.
+  it('without anchors, the cost: a ball bounces softer off a body that rests on others, and more rounds give back more (default 8)', async () => {
+    const at = async (rounds?: number) => (await offRestingCube(3, 0.9, rounds ? { ...OLD, restitutionRounds: rounds } : OLD)).eV;
     const four = await at(4), eight = await at(), sixteen = await at(16);
     // e 0.9 at 3 m/s: measured 0.154, 0.490 and 0.729 of the approach (Rapier: 0.45-0.49).
     expect(four).toBeLessThan(eight);
@@ -446,16 +471,142 @@ describe('restitution on: supports', () => {
     expect(sixteen).toBeLessThan(0.9);
   });
 
-  // The supports converge at a rate set by the mass ratio (Jacobi), so the cost grows with the striker's mass.
-  // This pins a known limit (see restitute()): a change that lifts it fails here, and the docs should follow.
-  it('the cost grows with the striker\'s mass: a 5 kg ball bounces off the resting cube far softer than 1 kg, and drives it into the ground', async () => {
-    const one = await offRestingCube(3, 0.9, ON), five = await offRestingCube(3, 0.9, ON, 5), off = await offRestingCube(3, 0.9, {}, 5);
+  it('without anchors, the cost grows with the striker\'s mass: a 5 kg ball bounces off the resting cube far softer than 1 kg, and drives it into the ground', async () => {
+    const one = await offRestingCube(3, 0.9, OLD), five = await offRestingCube(3, 0.9, OLD, 5), off = await offRestingCube(3, 0.9, {}, 5);
     // e 0.9 at 3 m/s, 8 rounds: measured 0.490 of the approach at 1 kg and 0.187 at 5 kg; the cube is driven
     // down at 1.75 m/s, against 0.066 with the switch off.
     expect(five.eV).toBeLessThan(0.5 * one.eV);
     expect(five.eV).toBeGreaterThan(0.1);
     expect(five.down).toBeGreaterThan(1);
     expect(off.down).toBeLessThan(0.2);
+  });
+
+  it('with anchors the rounds do not matter for a body on the ground: 1 round gives the bounce of 8, near e, at 1 and 5 kg', async () => {
+    const one = await offRestingCube(3, 0.9, { ...ON, restitutionRounds: 1 }), eight = await offRestingCube(3, 0.9, ON), five = await offRestingCube(3, 0.9, ON, 5);
+    // e 0.9 at 3 m/s: measured 0.802 of the approach at 1 kg (1 and 8 rounds the same floats) and 0.780 at 5 kg,
+    // the cube moving down at 0.066 m/s, the switch off's to the float (without anchors 0.490 and 0.187, at
+    // 1.75 m/s; Rapier 0.45-0.49 at 1 kg). The step loses about (1 + e) g h / 2 of 3 m/s: see the file's head.
+    expect(one.eV).toBe(eight.eV);
+    expect(eight.eV).toBeGreaterThan(0.78);
+    expect(five.eV).toBeGreaterThan(0.75);
+    expect(five.down).toBeLessThan(0.07);
+  });
+
+  it.for([1, 5, 50, 510, 2000])('with anchors a %i kg ball (e 0.9, 10 m/s) bounces off a resting cube near e, and the pass never drives the cube faster than the solve', async (mass) => {
+    const on = await offRestingCube(10, 0.9, ON, mass), off = await offRestingCube(10, 0.9, {}, mass);
+    // Measured: rebounds 0.876, 0.870, 0.806, 0.762 and 0.757 of the approach at 1, 5, 50, 510 and 2000 kg, the
+    // cube down at 0.020, 0.043, 0.648, 1.059 and 1.109 m/s against the switch off's 0.073, 0.121, then equal to
+    // the float (without anchors: 0.27-0.32 at 5 kg, 0.02-0.04 at 50, and the cube at 4.7-10 m/s).
+    expect(on.eV).toBeGreaterThan(0.74);
+    expect(on.down).toBeLessThanOrEqual(off.down);
+  });
+});
+
+describe('restitution on: anchors', () => {
+  // A body in a bouncing manifold is held exactly by its loaded points on the ground and on resting bodies it sits on
+  // (AvbdParams.restitutionAnchors, see restitute()).
+  /** A ball dropped at v onto the top of an n-cube column: its first upward speed over v, how deep it sank into the top cube, and the energy. */
+  const ontoColumn = async (params: Partial<AvbdParams>, o: { n: number; mass: number; v: number; e: number; eCube: number; rule?: CombineRule; radius?: number; offset?: number }) => {
+    const r = o.radius ?? 0.5, spawn = 120;
+    const bodies = Array.from({ length: o.n }, (_, k) => cube([0, 0.5 + k, 0], { e: o.eCube }));
+    const eng = new AvbdReferenceEngine(params);
+    const v0 = Math.sqrt(o.v * o.v - 2 * G * 0.3);
+    const scene = { ...sceneOf(bodies, { groundE: o.eCube, rule: o.rule }), inputs: [{ step: spawn, kind: 'spawn' as const, body: ball([o.offset ?? 0, o.n + r + 0.3, 0], { e: o.e, mass: o.mass, radius: r, linVel: [0, -v0, 0] }) }] };
+    await eng.init(scene);
+    for (let k = 0; k <= spawn; k++) eng.step();
+    const E0 = shadowEnergy(eng, scene.gravity);
+    let up = 0, sink = 0, eMax = -Infinity, anchor = 0;
+    for (let k = 0; k < 300; k++) {
+      eng.step();
+      const w = eng.world!, b = w.bodies[o.n]!, top = w.bodies[o.n - 1]!;
+      eMax = Math.max(eMax, shadowEnergy(eng, scene.gravity));
+      anchor = Math.max(anchor, Math.hypot(...w.stats.restitution.anchorImpulse));
+      sink = Math.max(sink, top.pos[1] + 0.5 - (b.pos[1] - r));
+      if (!up && b.linVel[1] > 0) up = b.linVel[1] / o.v;
+    }
+    return { up, sink, anchor, gain: (eMax - E0) / (0.5 * o.mass * o.v * o.v) };
+  };
+
+  it('a 144 kg rubber ball (e 0.6, 20 m/s) bounces off the top of a 10-cube plaster column and sinks into it less than with the switch off', async () => {
+    const o = { n: 10, mass: 144, v: 20, e: 0.6, eCube: 0.05, rule: 'max' as const };
+    const on = await ontoColumn(ON, o), old = await ontoColumn(OLD, o), off = await ontoColumn({}, o);
+    // Measured: first up at 0.509 of v (e 0.6 under max), 0.034 m into the top cube, no energy above the start;
+    // without anchors 0.165 and 0.129 m; off 0.134 and 0.105 m.
+    expect(on.up).toBeGreaterThan(0.4);
+    expect(on.sink).toBeLessThan(0.05);
+    expect(on.sink).toBeLessThan(off.sink);
+    expect(old.sink).toBeGreaterThan(off.sink);
+    expect(on.gain).toBeLessThan(1e-9);
+  });
+
+  it('a body whose support moves, or hangs in the air, is not anchored to it (restitutionAnchorSpeed, sitting on something)', async () => {
+    // A 50 kg ball onto a cube that sits on a cube sliding along the ground at 2 m/s: the lower cube does not rest.
+    const e = 0.9, spawn = 60;
+    const slide = async (speed: number) => {
+      const eng = new AvbdReferenceEngine(ON);
+      await eng.init({ ...sceneOf([cube([0, 0.5, 0], { e, linVel: [speed, 0, 0], friction: 0 }), cube([0, 1.5, 0], { e, linVel: [speed, 0, 0] })], { groundE: e, friction: 0 }),
+        inputs: [{ step: spawn, kind: 'spawn', body: ball([speed * spawn * H, 2.85, 0], { e, mass: 50, radius: 0.25, linVel: [speed, -8, 0] }) }] });
+      let anchor = 0;
+      for (let k = 0; k < spawn + 30; k++) { eng.step(); anchor = Math.max(anchor, Math.abs(eng.world!.stats.restitution.anchorImpulse[1])); }
+      return anchor;
+    };
+    // Measured: anchors 596 N s with the stack at rest, 0 while it slides at 2 m/s.
+    expect(await slide(0)).toBeGreaterThan(1);
+    expect(await slide(2)).toBe(0);
+    // A ball strikes the top cube of a two-cube stack in the air, all at rest at the start: the lower cube sits on
+    // nothing, so it holds nothing, and the pass keeps momentum.
+    const eng = new AvbdReferenceEngine({ ...ON, restitutionThreshold: 0.5 });
+    await eng.init(sceneOf([cube([0, 3.5, 0], { e }), cube([0, 4.5, 0], { e }), ball([0, 5.26, 0], { e, mass: 50, radius: 0.25, linVel: [0, -8, 0] })], { groundE: e }));
+    let anchor = 0, bounced = 0;
+    for (let k = 0; k < 10; k++) { eng.step(); anchor = Math.max(anchor, Math.hypot(...eng.world!.stats.restitution.anchorImpulse)); bounced += eng.world!.stats.restitution.contacts; }
+    expect(bounced).toBeGreaterThan(0);
+    expect(anchor).toBe(0);
+  });
+});
+
+describe('restitution on: anchors, where they let go', () => {
+  it('a 1000 kg ball (e 0.9, 10 m/s) 0.05 m inside a resting cube\'s edge gains no energy (a rule that let go of rows the push would lift gained 4 x)', async () => {
+    const e = 0.9, scene = { ...sceneOf([cube([0, 0.5, 0], { e })], { groundE: e }), inputs: [{ step: 120, kind: 'spawn' as const, body: ball([0.45, 1.56, 0.1], { e, mass: 1000, radius: 0.25, linVel: [0, -10, 0] }) }] };
+    const eng = new AvbdReferenceEngine(ON);
+    await eng.init(scene);
+    for (let k = 0; k <= 120; k++) eng.step();
+    const E0 = shadowEnergy(eng, scene.gravity);
+    let eMax = E0;
+    for (let k = 0; k < 400; k++) { eng.step(); eMax = Math.max(eMax, shadowEnergy(eng, scene.gravity)); }
+    // Measured 0 over the strike's 50 kJ.
+    expect((eMax - E0) / (0.5 * 1000 * 100)).toBeLessThan(1e-9);
+  });
+
+  /** A plank (2 x 0.2 x 0.8) on a cube, its right end 0.7 m over the edge; a ball of `mass` at 8 m/s, e 0.9, onto its tip (up: from below). */
+  const plank = async (params: Partial<AvbdParams>, mass: number, fromBelow = false, load = false) => {
+    const e = 0.9, r = 0.15, spawn = 120;
+    const box = (pos: Vec3, half: Vec3): BodyDesc => ({ ...cube(pos, { e }), shape: { kind: 'box', half } });
+    const bodies = [cube([0, 0.5, 0], { e }), box([0.2, 1.1, 0], [1, 0.1, 0.4]), ...(load ? [box([1.05, 1.3, 0], [0.1, 0.1, 0.1])] : [])];
+    const eng = new AvbdReferenceEngine(params);
+    await eng.init({ ...sceneOf(bodies, { groundE: e }), inputs: [{ step: spawn, kind: 'spawn', body: ball([1.05, fromBelow ? 1.0 - r - 0.05 : 1.2 + r + (load ? 0.2 : 0) + 0.05, 0], { e, mass, radius: r, friction: 0, linVel: [0, fromBelow ? 8 : -8, 0] }) }] });
+    for (let k = 0; k <= spawn; k++) eng.step();
+    let wz = 0;
+    for (let k = 0; k < 4; k++) { eng.step(); const w = eng.world!.bodies[1]!.angVel[2]; if (Math.abs(w) > Math.abs(wz)) wz = w; }
+    return wz;
+  };
+
+  it('a plank struck on its overhang pivots on the edge it bears on, as a rigid pivot would', async () => {
+    // A 20 kg ball at 8 m/s, e 0.9, onto the tip of a 0.32 kg plank pivoting on the cube's edge 0.55 m away: the
+    // rigid pivot gives (1 + e) m v / (m + I / L^2) / L = 27.0 rad/s (I = 0.1365 kg m^2 about the edge).
+    const I = 0.32 * (4 + 0.04) / 12 + 0.32 * 0.3 ** 2, L = 0.55, m = 20, rigid = 1.9 * m * 8 / (m + I / L ** 2) / L;
+    const on = await plank(ON, m), old = await plank(OLD, m);
+    // Measured -27.33 rad/s (without anchors -16.94, the plank pushed down as well as turned).
+    expect(Math.abs(Math.abs(on) / rigid - 1)).toBeLessThan(0.03);
+    expect(Math.abs(old)).toBeLessThan(0.7 * rigid);
+  });
+
+  it('a body is held only by what it sits on: a plank struck from below lifts the cube that sits on it', async () => {
+    // The cube on the plank's tip is a support (in rounds), not an anchor: anchored, it would hold the plank down
+    // like a ceiling.
+    const on = await plank(ON, 5, true, true), old = await plank(OLD, 5, true, true);
+    // Measured 9.38 rad/s (without anchors 8.98). Anchoring the plank to the cube above it as well (no seat rule)
+    // fails here, and gains energy in the S5 knock above.
+    expect(on).toBeGreaterThan(0.5 * old);
   });
 });
 
@@ -487,7 +638,7 @@ describe('restitution stats (AvbdWorld.stats.restitution)', () => {
   const run = async (scene: SceneDesc, params: Partial<AvbdParams>, steps: number) => {
     const eng = new AvbdReferenceEngine(params);
     await eng.init(scene);
-    let contacts = 0, impulse = 0, momentum = 0, ground = 0, offGround = 0;
+    let contacts = 0, impulse = 0, momentum = 0, ground = 0, anchor = 0, offGround = 0;
     for (let k = 0; k < steps; k++) {
       eng.step();
       const r = eng.world!.stats.restitution;
@@ -495,12 +646,13 @@ describe('restitution stats (AvbdWorld.stats.restitution)', () => {
       impulse += r.impulse;
       momentum = Math.max(momentum, Math.hypot(...r.momentum));
       ground = Math.max(ground, Math.hypot(...r.groundImpulse));
-      offGround = Math.max(offGround, Math.hypot(r.momentum[0] - r.groundImpulse[0], r.momentum[1] - r.groundImpulse[1], r.momentum[2] - r.groundImpulse[2]));
+      anchor = Math.max(anchor, Math.hypot(...r.anchorImpulse));
+      offGround = Math.max(offGround, Math.hypot(...[0, 1, 2].map((k) => r.momentum[k]! - r.groundImpulse[k]! - r.anchorImpulse[k]!)));
     }
-    return { contacts, impulse, momentum, ground, offGround };
+    return { contacts, impulse, momentum, ground, anchor, offGround };
   };
 
-  it('count the bounced points and their impulse; between bodies the momentum change is 0, on the ground it is the ground\'s impulse', async () => {
+  it('count the bounced points and their impulse; between bodies the momentum change is 0, else the ground\'s and the anchors\' impulse', async () => {
     const pairs = await run(zeroG([ball([-0.75, 0, 0], { e: 0.6, linVel: [5, 0, 0] }), ball([0.75, 0, 0], { e: 0.6, mass: 5 })]), ON, 60);
     expect(pairs.contacts).toBe(1);
     // 1 kg at 5 m/s onto 5 kg, e 0.6: at most the whole impact's (1 + e) x the reduced mass x 5 m/s. Measured
@@ -510,28 +662,43 @@ describe('restitution stats (AvbdWorld.stats.restitution)', () => {
     // Measured 8.9e-16 N s (rounding).
     expect(pairs.momentum).toBeLessThan(1e-12);
     expect(pairs.ground).toBe(0);
-    const s = withE(knock(15), 0.6), knocked = await run({ ...s, ground: { ...s.ground!, restitution: 0.6 } }, ON, 120);
-    // Measured: 382 points bounced.
+    expect(pairs.anchor).toBe(0);
+    const s = withE(knock(15), 0.6), scene = { ...s, ground: { ...s.ground!, restitution: 0.6 } };
+    const knocked = await run(scene, ON, 120), old = await run(scene, OLD, 120);
+    // Measured: 290 points bounced (without anchors 382).
     expect(knocked.contacts).toBeGreaterThan(0);
     expect(knocked.ground).toBeGreaterThan(0);
-    // Measured 7.2e-15 N s against a ground impulse of up to 22.8 N s in a step.
+    expect(knocked.anchor).toBeGreaterThan(0);
+    // Measured 7.0e-15 N s against a ground impulse of up to 24.4 N s in a step and the anchors' 5.28 (without
+    // anchors 7.2e-15 against 22.8, the anchors' 0).
     expect(knocked.offGround).toBeLessThan(1e-12);
+    expect(old.anchor).toBe(0);
+    expect(old.offGround).toBeLessThan(1e-12);
   });
 
   it('count only the points that bounced, not the supports that held their bodies (whose impulse counts)', async () => {
     // A ball (e 0.9) at 5 m/s onto a cube resting on the ground, run to just after its first bounce: its one
     // point bounces, and the cube's four ground points hold the cube.
     const scene: SceneDesc = { ...sceneOf([cube([0, 0.5, 0], { e: 0.9 })], { groundE: 0.9 }), inputs: [{ step: 120, kind: 'spawn', body: ball([0, 1.5 + 25 / (2 * G), 0], { e: 0.9 }) }] };
-    const r = await run(scene, ON, 160);
+    const r = await run(scene, OLD, 160);
     expect(r.contacts).toBe(1);
-    // The supports passed the bounce on to the ground: measured 3.48 N s in a step. Counted with them, contacts was 5.
+    // Without anchors the supports passed the bounce on to the ground: measured 3.48 N s in a step. Counted with
+    // them, contacts was 5.
     expect(r.ground).toBeGreaterThan(1);
     // Measured 7.41 N s in all: 3.93 at the ball's point and 3.48 at the cube's ground points (without them 3.93).
     expect(r.impulse).toBeGreaterThan(r.ground + 1);
+    // With anchors the ground holds the cube: no support in the pass, and the ground's share is the anchors'.
+    const a = await run(scene, ON, 160);
+    expect(a.contacts).toBe(1);
+    expect(a.ground).toBe(0);
+    // Measured 4.83 N s at the ball's point, all of it the anchors' (the ground took it through the cube).
+    expect(a.anchor).toBeGreaterThan(1);
+    expect(a.impulse).toBeGreaterThan(1);
+    expect(a.offGround).toBeLessThan(1e-12);
   });
 
   it('stay 0 with restitution off', async () => {
     const s = withE(knock(15), 0.6), off = await run({ ...s, ground: { ...s.ground!, restitution: 0.6 } }, {}, 60);
-    expect(off).toEqual({ contacts: 0, impulse: 0, momentum: 0, ground: 0, offGround: 0 });
+    expect(off).toEqual({ contacts: 0, impulse: 0, momentum: 0, ground: 0, anchor: 0, offGround: 0 });
   });
 });

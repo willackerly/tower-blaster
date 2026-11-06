@@ -19,7 +19,7 @@ import { checkLine, type EngineKind, GAME_LOOK, gameLevel, LEVEL_RULE_KEYS, type
 import { boundingRadius } from '@tb/geom';
 import { AVBD_ITERATIONS, compileLevel, findLevel, type LevelDef, PRESETTLE_STEPS, type RackItem, scenarioLevel, seriesOf, type Shot, writeShots } from '@tb/keystone';
 import { type AvbdParams, froudeParams } from '@tb/physics-ref';
-import { parseRealOptions, type RealOptions, writeRealOptions } from '@tb/render';
+import { type BlastOptions, DEFAULT_BLASTS, DEFAULT_ICE, type IceParams, parseBlastOptions, parseIceOptions, parseRealOptions, type RealOptions, writeBlastOptions, writeIceOptions, writeRealOptions } from '@tb/render';
 import { bounceBody, bounceScene, buildScenario, SCENARIOS } from '@tb/scenarios';
 import { type CameraPose, DEFAULT_FRAMING, type Framing, FRAMING_LIMITS } from './camera.ts';
 import { decodeLevelParam, encodeLevelParam } from './level-file.ts';
@@ -58,6 +58,10 @@ export interface ViewerConfig {
   look: string;
   /** The real look's knobs that differ from REAL_DEFAULTS (URL keys real.*); kept whatever the look. */
   real: Partial<RealOptions>;
+  /** A blast's fireball, shell and light (@tb/render blasts.ts; URL keys blast, blast.*; on by default): applied live, like the look. */
+  blast: BlastOptions;
+  /** How ice is drawn (@tb/render ice.ts; URL keys ice.*): applied live, like the look. */
+  ice: IceParams;
   /** Collision sound (URL keys snd, snd.*; off by default): applied live, like the look. */
   sound: SoundOptions;
   /**
@@ -109,7 +113,7 @@ export interface ViewerConfig {
    * withRules(level, keystone), a custom run. {} otherwise.
    */
   keystone: LevelRules;
-  /** Keystone's pace (URL keys keystone.hitstop, keystone.slowmo, keystone.tailskip, keystone.follow, keystone.shake: 0 or 1, keystone.budget: ms, keystone.frames: all, half or auto; rules=keystone only; @tb/game DEFAULT_FEEL by default, as in the game). */
+  /** Keystone's pace (URL keys keystone.hitstop, keystone.slowmo, keystone.tailskip, keystone.follow, keystone.shake, keystone.rapid: 0 or 1, keystone.budget: ms, keystone.undo: MB, keystone.frames: all, half or auto, keystone.launch: high or level, keystone.balls: painted or plain, keystone.marks: 0 or 1; rules=keystone only; @tb/game DEFAULT_FEEL by default, as in the game). */
   feel: PaceFeel;
   /**
    * A line of shots to play once the level has loaded (URL key keystone.shots, @tb/keystone
@@ -144,7 +148,7 @@ export const DEFAULT_BOUNCE = 0.5;
 
 export const RULES = ['sandbox', 'keystone'] as const;
 /** Keys that only mean something under rules=keystone (the game page's). */
-export const KEYSTONE_KEYS = ['keystone.hitstop', 'keystone.slowmo', 'keystone.budget', 'keystone.tailskip', 'keystone.follow', 'keystone.shake', 'keystone.frames', 'keystone.shots', 'keystone.rack', ...LEVEL_RULE_KEYS] as const;
+export const KEYSTONE_KEYS = ['keystone.hitstop', 'keystone.slowmo', 'keystone.budget', 'keystone.tailskip', 'keystone.follow', 'keystone.shake', 'keystone.frames', 'keystone.rapid', 'keystone.undo', 'keystone.launch', 'keystone.balls', 'keystone.marks', 'keystone.shots', 'keystone.rack', ...LEVEL_RULE_KEYS] as const;
 /** The look when ?look= is absent: the sandbox's candy, or the game's own under its rules. */
 export const defaultLook = (rules: Rules) => (rules === 'keystone' ? GAME_LOOK : DEFAULT_CONFIG.look);
 export type Rules = (typeof RULES)[number];
@@ -205,7 +209,7 @@ export const MAX_PRESETTLE = 6000;
 /** How much faster than the unit world a world at this scale moves (speeds, in cube units per second). */
 export const froudeSpeed = (scale: number) => 1 / Math.sqrt(scale);
 
-export const DEFAULT_CONFIG: ViewerConfig = { engine: 'avbd-gpu', level: null, customLevel: null, scenario: 'S4', params: { N: 2000, F: 4, H: 12 }, seed: 1, sleep: null, autofire: 0, presettle: 0, offscreen: false, look: 'candy', real: {}, loop: 'free', pipeline: true, maxSteps: 1, projectile: DEFAULT_PROJECTILE, scale: 1, substeps: 1, camera: null, view: DEFAULT_FRAMING, bounce: DEFAULT_BOUNCE, rules: 'sandbox', keystone: {}, feel: { ...DEFAULT_FEEL }, shots: null, rack: null, sound: DEFAULT_SOUND };
+export const DEFAULT_CONFIG: ViewerConfig = { engine: 'avbd-gpu', level: null, customLevel: null, scenario: 'S4', params: { N: 2000, F: 4, H: 12 }, seed: 1, sleep: null, autofire: 0, presettle: 0, offscreen: false, look: 'candy', real: {}, blast: { on: true, params: DEFAULT_BLASTS }, ice: DEFAULT_ICE, loop: 'free', pipeline: true, maxSteps: 1, projectile: DEFAULT_PROJECTILE, scale: 1, substeps: 1, camera: null, view: DEFAULT_FRAMING, bounce: DEFAULT_BOUNCE, rules: 'sandbox', keystone: {}, feel: { ...DEFAULT_FEEL }, shots: null, rack: null, sound: DEFAULT_SOUND };
 
 export function parseViewerConfig(search: string): ViewerConfig {
   const q = new URLSearchParams(search);
@@ -272,6 +276,8 @@ export function parseViewerConfig(search: string): ViewerConfig {
     offscreen: q.get('offscreen') === '1',
     look,
     real: parseRealOptions(q),
+    blast: parseBlastOptions(q),
+    ice: parseIceOptions(q),
     sound: parseSoundOptions(q),
     loop,
     pipeline: pipeline === '1',
@@ -358,6 +364,8 @@ export function toSearch(c: ViewerConfig): string {
   if (c.offscreen) q.set('offscreen', '1');
   if (c.look !== defaultLook(c.rules)) q.set('look', c.look);
   writeRealOptions(c.real, q);
+  writeBlastOptions(c.blast, q);
+  writeIceOptions(c.ice, q);
   writeSoundOptions(c.sound, q);
   if (c.loop !== DEFAULT_CONFIG.loop) q.set('loop', c.loop);
   if (c.pipeline !== DEFAULT_CONFIG.pipeline) q.set('pipeline', c.pipeline ? '1' : '0');
@@ -436,7 +444,7 @@ export function engineSpec(spec: string, projectile: Projectile = DEFAULT_PROJEC
  * (and beta) scaled by 1/scale and their spin cap by 1/sqrt(scale)
  * (froudeParams), taken from the spec's own values or the defaults, so the
  * world moves exactly as the unit world played faster; with restitution on,
- * its threshold (a speed) scaled by 1/sqrt(scale) too, which froudeParams
+ * its threshold and anchor speed (speeds) scaled by 1/sqrt(scale) too, which froudeParams
  * does only while the switch is on, so a spec without it gains no key.
  * Other engines get the stronger gravity alone.
  */
@@ -449,7 +457,7 @@ export function worldEngineSpec(spec: string, scale: number): string {
   const scaled = froudeParams(own, 1 / scale);
   return FROUDE_KEYS.reduce((out, k) => (scaled[k] === undefined ? out : withOption(out, k, scaled[k] as number)), spec);
 }
-const FROUDE_KEYS = ['beta', 'penaltyMin', 'penaltyMax', 'maxAngularSpeed', 'restitutionThreshold'] as const;
+const FROUDE_KEYS = ['beta', 'penaltyMin', 'penaltyMax', 'maxAngularSpeed', 'restitutionThreshold', 'restitutionAnchorSpeed'] as const;
 
 /** GpuEngineOptions keys (bench's gpuEngineArgs): a scenario's avbd options with these go to avbd-gpu only. */
 const GPU_OPTIONS: ReadonlySet<string> = new Set(['capacity', 'spare', 'pairsPerBody', 'maxRadius', 'colorTail', 'indirectColors', 'tailThreads', 'colorRounds', 'hessian', 'boxBroadphase']);

@@ -1,14 +1,16 @@
 // The front door's formatting (door.ts) and the settings it edits (settings.ts): pure.
 import { describe, expect, it } from 'vitest';
-import { B1, B2, B3, BIG_LEVELS, compileLevel, L1, type LevelDef, LEVELS } from '@tb/keystone';
+import { B1, B2, B3, BIG_LEVELS, compileLevel, L1, L3, type LevelDef, LEVELS, SERIES, TRIAL_LEVELS, UNDERCUT_LEVELS } from '@tb/keystone';
+import { bestText, doorHtml, doorLevels, doorMode, doorOnLoad, nextLevel, openerFor, preaimMode, rackText, seriesTitle, starTargets, thresholdText, TRIALS_BLURB } from '../src/door.ts';
+import { GAME_SERIES } from '../src/params.ts';
+import type { LevelRecord } from '../src/progress.ts';
+import { cameraFeel, DEFAULT_SETTINGS, launchFeel, marksFeel, parseSettings, rapidFeel, SETTINGS_KEY, SettingsStore, turnViewFeel, urlSettings } from '../src/settings.ts';
+
+import { paceFeel } from '../src/pacing.ts';
+import { memoryKeyValue } from '../src/progress.ts';
 
 /** B3 as it was before its cast landed: no stars and no recorded line (the door's uncast case). */
 const UNCAST: LevelDef = { ...B3, stars: undefined, solutions: undefined };
-import { bestText, doorHtml, doorLevels, doorMode, doorOnLoad, nextLevel, openerFor, preaimMode, rackText, starTargets, thresholdText } from '../src/door.ts';
-import type { LevelRecord } from '../src/progress.ts';
-import { cameraFeel, DEFAULT_SETTINGS, parseSettings, SETTINGS_KEY, SettingsStore, urlSettings } from '../src/settings.ts';
-import { paceFeel } from '../src/pacing.ts';
-import { memoryKeyValue } from '../src/progress.ts';
 
 const q = (s: string) => new URLSearchParams(s);
 const rec = (stars: 0 | 1 | 2 | 3, extra: Partial<LevelRecord> = {}): LevelRecord => ({ hash: 'h', plays: 1, stars, total: 1200, at: '2026-11-02T00:00:00Z', ...extra });
@@ -53,7 +55,9 @@ describe('door text', () => {
     expect(b2.targets).toEqual(['Fell every crown', '770 points', '3,200 points, heritage intact']);
     expect(b2.short).toEqual(['all crowns', '770', '3,200']);
     expect(starTargets(compileLevel(B3), undefined)).toEqual({ targets: ['Bring 40% down', 'targets coming soon', 'targets coming soon'], short: ['40%', '?', '?'], cast: false });
-    expect(starTargets(compileLevel(L1), undefined).targets[1]).toBe(`…in par (${L1.par})`);
+    // Par levels (parStars): two stars one shot over par, three in par; heritage named where the level has some.
+    expect(starTargets(compileLevel(L1), undefined)).toMatchObject({ targets: [expect.any(String), '…in 2 shots', '…in par (1 shot)'], short: [expect.any(String), '2 shots', 'par 1'], cast: true });
+    expect(starTargets(compileLevel(L3), undefined).targets.slice(1)).toEqual(['…in 3 shots', '…in par (2 shots), heritage intact']);
   });
   it('B3\'s stars show from stars.json the moment they land (simulated drop-in, then the landed stars)', () => {
     const cast = { ...UNCAST, stars: { metric: 'collapse' as const, t2: 0.5, t3: 0.62, hash: compileLevel(B3).hash } };
@@ -67,6 +71,7 @@ describe('door text', () => {
     expect(bestText(rec(1, { metric: 'score', value: 900, total: 900, collapse: 0.3 }))).toBe('Best 900 points · 1 play');
     expect(bestText(rec(3, { metric: 'collapse', collapse: 0.97, beatBot: true }))).toBe('Best 97% down · 1 play · beat the bot');
     expect(bestText(rec(2, { total: 340 }))).toBe('Best 340 points · 1 play');
+    expect(bestText(rec(3, { total: 5200, gold: true }))).toBe('Best 5,200 points · 1 play · gold leverage');
   });
 });
 
@@ -81,10 +86,42 @@ describe('door levels', () => {
     expect(l).toMatchObject({ custom: true, best: null, cast: false });
   });
   it('Play opens the first level without a star, else the first', () => {
-    const mk = (s: Array<0 | 1 | null>) => s.map((x, i) => ({ id: `B${i}`, name: '', blocks: 0, rack: '', targets: ['', '', ''] as [string, string, string], short: ['', '', ''] as [string, string, string], cast: true, custom: false, best: x === null ? null : rec(x) }));
+    const mk = (s: Array<0 | 1 | null>, trials = 0) => s.map((x, i) => ({ id: `B${i}`, name: '', blocks: 0, rack: '', targets: ['', '', ''] as [string, string, string], short: ['', '', ''] as [string, string, string], cast: true, custom: false, best: x === null ? null : rec(x), index: i, series: '', trial: i < trials }));
     expect(nextLevel(mk([1, null, null]))).toBe(1);
     expect(nextLevel(mk([1, 0, null]))).toBe(1);
     expect(nextLevel(mk([1, 1, 1]))).toBe(0);
+    // Never a trial: the first rated level uncleared, else the first rated one.
+    expect(nextLevel(mk([null, null, 1], 2))).toBe(2);
+    expect(nextLevel(mk([null, 1, 1], 1))).toBe(1);
+    expect(nextLevel(mk([null, null], 2))).toBe(0);
+  });
+  it('every series shows under its title, in the game\'s order; the trials behind a toggle, closed and uncompiled until opened', () => {
+    expect(GAME_SERIES.flat().map((d) => d.id).sort()).toEqual(SERIES.flat().map((d) => d.id).sort());
+    expect([seriesTitle('b2'), seriesTitle('L1'), seriesTitle('U3'), seriesTitle('t-s4'), seriesTitle('S4')]).toEqual(['Spectacle', 'Chamber', 'Undercut', 'Trials · unrated', '']);
+    const all = GAME_SERIES.flat(), compiled: string[] = [];
+    const compile = (d: (typeof all)[number]) => { compiled.push(d.id); return compileLevel(d); };
+    const closed = doorLevels(all, () => null, compile, (d) => d.id.startsWith('T-'));
+    expect(compiled).toEqual([...BIG_LEVELS, ...LEVELS, ...UNDERCUT_LEVELS].map((d) => d.id));
+    // A card's data-arg is its index in the page's whole list, skipped trials or not.
+    expect(closed.map((l) => l.index)).toEqual(compiled.map((_, i) => i));
+    const shut = doorHtml({ levels: closed, current: 3, settings: DEFAULT_SETTINGS, howTo: false, advanced: false, trials: { count: TRIAL_LEVELS.length, open: false } });
+    expect([...shut.matchAll(/<h2 class="series-head">([^<]*)</g)].map((x) => x[1])).toEqual(['Spectacle', 'Chamber', 'Undercut']);
+    expect(shut.match(/class="card[ "]/g)).toHaveLength(11);
+    expect(shut).toContain(`data-act="trials" class="series-head trials-head" aria-expanded="false">Trials · unrated (${TRIAL_LEVELS.length}) ▸</button>`);
+    expect(shut).not.toContain(TRIALS_BLURB.slice(0, 20));
+    expect(shut).toContain('class="card current" data-act="level" data-arg="3"');
+    const open = doorLevels(all, () => null);
+    expect(open.length).toBe(all.length);
+    const t = all.findIndex((d) => d.id === 'T-X1');
+    const html = doorHtml({ levels: open, current: t, settings: DEFAULT_SETTINGS, howTo: false, advanced: false, trials: { count: TRIAL_LEVELS.length, open: true } });
+    expect(html).toContain('aria-expanded="true">Trials · unrated');
+    expect(html.match(/class="card[^"]* trial"/g)).toHaveLength(TRIAL_LEVELS.length);
+    expect(html).toContain(`class="card current trial" data-act="level" data-arg="${t}" aria-label="T-X1 Domino Run"`);
+    // Play still opens the first rated level (B1), though a trial is loaded; Back names the trial.
+    expect(html).toContain(`Play · ${B1.name}`);
+    expect(html).toContain('Back to Domino Run');
+    // A trial is uncast: one row for two and three stars.
+    expect(open.find((l) => l.id === 'T-S4')).toMatchObject({ trial: true, cast: false, series: 'Trials · unrated', blocks: 10000 });
   });
   it('markup: a card per level marking earned stars, the next and the loaded one, every action wired', () => {
     const levels = doorLevels(LEVELS, (id) => (id === 'L1' ? rec(2) : null));
@@ -96,7 +133,7 @@ describe('door levels', () => {
     expect(html).toContain(`Back to ${LEVELS[0]!.name}`);
     expect(html.match(/<li class="got/g)).toHaveLength(2);
     expect(html).toContain('<span class="earned">★★</span><span class="unearned">☆</span>');
-    for (const act of ['how', 'advanced', 'sound', 'look', 'sharp', 'camera', 'reset', 'close']) expect(html).toContain(`data-act="${act}"`);
+    for (const act of ['how', 'advanced', 'sound', 'look', 'sharp', 'camera', 'rapid', 'duelview', 'launch', 'marks', 'reset', 'close']) expect(html).toContain(`data-act="${act}"`);
     expect(html).toContain('class="how"');
     expect(html).toContain('data-act="advanced" class="howlink advlink on" aria-expanded="true"');
     expect(doorHtml({ levels, current: -1, settings: DEFAULT_SETTINGS, howTo: false, advanced: false })).not.toContain('data-act="close"');
@@ -106,7 +143,7 @@ describe('door levels', () => {
   it('the settings sit behind Advanced settings, closed by default', () => {
     const closed = doorHtml({ levels: doorLevels(LEVELS, () => null), current: 0, settings: DEFAULT_SETTINGS, howTo: false, advanced: false });
     expect(closed).toContain('data-act="advanced" class="howlink advlink" aria-expanded="false">Advanced settings</button>');
-    for (const act of ['sound', 'look', 'sharp', 'camera', 'reset']) expect(closed).not.toContain(`data-act="${act}"`);
+    for (const act of ['sound', 'look', 'sharp', 'camera', 'rapid', 'duelview', 'launch', 'marks', 'reset']) expect(closed).not.toContain(`data-act="${act}"`);
     expect(closed).not.toContain('class="advanced"');
     // The rest of the door is the same either way.
     expect(closed).toContain('data-act="how"');
@@ -128,7 +165,7 @@ describe('settings', () => {
     expect(parseSettings(null)).toEqual(DEFAULT_SETTINGS);
     expect(parseSettings('nope')).toEqual(DEFAULT_SETTINGS);
     expect(parseSettings('{"sound":false,"look":"nope","sharp":3}')).toEqual({ ...DEFAULT_SETTINGS, sound: false });
-    expect(parseSettings('{"look":"real","sharp":1}')).toEqual({ sound: true, look: 'real', sharp: 1, camera: 'still' });
+    expect(parseSettings('{"look":"real","sharp":1}')).toEqual({ sound: true, look: 'real', sharp: 1, camera: 'still', rapid: true, duelView: true, launch: 'high', marks: true });
     // Settings stored before the Camera setting open still, as does anything but its two values.
     expect(DEFAULT_SETTINGS.camera).toBe('still');
     expect(parseSettings('{"camera":"dynamic"}')).toEqual({ ...DEFAULT_SETTINGS, camera: 'dynamic' });
@@ -145,6 +182,67 @@ describe('settings', () => {
     expect(html('still')).toContain('data-act="camera" data-arg="still" class="on"');
     expect(html('dynamic')).toContain('data-act="camera" data-arg="dynamic" class="on"');
   });
+  it('rapid fire: on by default; the URL\'s keystone.rapid where it says, else the setting', () => {
+    expect(DEFAULT_SETTINGS.rapid).toBe(true);
+    // Settings stored before the setting existed open with it on; only a boolean is taken.
+    expect(parseSettings('{"look":"real"}').rapid).toBe(true);
+    expect(parseSettings('{"rapid":false}')).toEqual({ ...DEFAULT_SETTINGS, rapid: false });
+    expect(parseSettings('{"rapid":"off"}')).toEqual(DEFAULT_SETTINGS);
+    const at = (search: string, rapid: boolean) => { const u = q(search); return rapidFeel(paceFeel(u), u, rapid); };
+    expect(at('', true)).toEqual({ rapid: true });
+    expect(at('', false)).toEqual({ rapid: false });
+    expect(at('keystone.rapid=0', true)).toEqual({ rapid: false });
+    expect(at('keystone.rapid=1', false)).toEqual({ rapid: true });
+    const html = (rapid: boolean) => doorHtml({ levels: [], current: -1, settings: { ...DEFAULT_SETTINGS, rapid }, howTo: false, advanced: true });
+    expect(html(true)).toContain('data-act="rapid" data-arg="on" class="on"');
+    expect(html(false)).toContain('data-act="rapid" data-arg="off" class="on"');
+  });
+  it('launch height: high by default; the URL\'s keystone.launch where it says, else the setting', () => {
+    expect(DEFAULT_SETTINGS.launch).toBe('high');
+    // Settings stored before the setting existed open with it high; only a known mode is taken.
+    expect(parseSettings('{"look":"real"}').launch).toBe('high');
+    expect(parseSettings('{"launch":"level"}')).toEqual({ ...DEFAULT_SETTINGS, launch: 'level' });
+    expect(parseSettings('{"launch":"low"}')).toEqual(DEFAULT_SETTINGS);
+    const at = (search: string, launch: 'high' | 'level') => { const u = q(search); return launchFeel(paceFeel(u), u, launch); };
+    expect(at('', 'high')).toEqual({ launch: 'high' });
+    expect(at('', 'level')).toEqual({ launch: 'level' });
+    expect(at('keystone.launch=level', 'high')).toEqual({ launch: 'level' });
+    expect(at('keystone.launch=high', 'level')).toEqual({ launch: 'high' });
+    const html = (launch: 'high' | 'level') => doorHtml({ levels: [], current: -1, settings: { ...DEFAULT_SETTINGS, launch }, howTo: false, advanced: true });
+    expect(html('high')).toContain('data-act="launch" data-arg="high" class="on"');
+    expect(html('level')).toContain('data-act="launch" data-arg="level" class="on"');
+  });
+  it('stone marks: carved by default; the URL\'s keystone.marks where it says, else the setting', () => {
+    expect(DEFAULT_SETTINGS.marks).toBe(true);
+    // Settings stored before the setting existed open with marks carved; only a boolean is taken.
+    expect(parseSettings('{"look":"real"}').marks).toBe(true);
+    expect(parseSettings('{"marks":false}')).toEqual({ ...DEFAULT_SETTINGS, marks: false });
+    expect(parseSettings('{"marks":"off"}')).toEqual(DEFAULT_SETTINGS);
+    const at = (search: string, on: boolean) => { const u = q(search); return marksFeel(paceFeel(u), u, on); };
+    expect(at('', true)).toEqual({ marks: true });
+    expect(at('', false)).toEqual({ marks: false });
+    expect(at('keystone.marks=0', true)).toEqual({ marks: false });
+    expect(at('keystone.marks=1', false)).toEqual({ marks: true });
+    const html = (marks: boolean) => doorHtml({ levels: [], current: -1, settings: { ...DEFAULT_SETTINGS, marks }, howTo: false, advanced: true });
+    expect(html(true)).toContain('data-act="marks" data-arg="on" class="on"');
+    expect(html(false)).toContain('data-act="marks" data-arg="off" class="on"');
+  });
+  it('duel turns: the turn view on by default; the URL\'s keystone.turnview where it says, else the setting', () => {
+    expect(DEFAULT_SETTINGS.duelView).toBe(true);
+    // Settings stored before the setting existed open with it on; only a boolean is taken.
+    expect(parseSettings('{"rapid":false}').duelView).toBe(true);
+    expect(parseSettings('{"duelView":false}')).toEqual({ ...DEFAULT_SETTINGS, duelView: false });
+    expect(parseSettings('{"duelView":0}')).toEqual(DEFAULT_SETTINGS);
+    const at = (search: string, on: boolean) => { const u = q(search); return turnViewFeel(paceFeel(u), u, on); };
+    expect(at('', true)).toEqual({ turnView: true });
+    expect(at('', false)).toEqual({ turnView: false });
+    expect(at('keystone.turnview=0', true)).toEqual({ turnView: false });
+    expect(at('keystone.turnview=1', false)).toEqual({ turnView: true });
+    const html = (duelView: boolean) => doorHtml({ levels: [], current: -1, settings: { ...DEFAULT_SETTINGS, duelView }, howTo: false, advanced: true });
+    expect(html(true)).toContain('data-act="duelview" data-arg="on" class="on"');
+    expect(html(false)).toContain('data-act="duelview" data-arg="off" class="on"');
+    expect(html(true)).toMatch(/Duel turns/);
+  });
   it('URL keys: sound=on|off, sharp=1|2, look (checked by the page); bad values refused', () => {
     expect(urlSettings(q('sound=off&sharp=1&look=candy'))).toEqual({ sound: false, sharp: 1, look: 'candy' });
     expect(() => urlSettings(q('sound=0'))).toThrow(/sound must be on or off: 0/);
@@ -153,10 +251,10 @@ describe('settings', () => {
   it('the URL wins for the visit; a change is stored and replaces the URL\'s say on that field', () => {
     const kv = memoryKeyValue({ [SETTINGS_KEY]: '{"look":"real"}' });
     const s = new SettingsStore(kv, q('look=candy&sound=off'));
-    expect(s.current).toEqual({ sound: false, look: 'candy', sharp: 2, camera: 'still' });
-    expect(s.set({ look: 'hazy' })).toEqual({ sound: false, look: 'hazy', sharp: 2, camera: 'still' });
-    expect(JSON.parse(kv.getItem(SETTINGS_KEY)!)).toEqual({ sound: true, look: 'hazy', sharp: 2, camera: 'still' });
-    expect(new SettingsStore(kv).current).toEqual({ sound: true, look: 'hazy', sharp: 2, camera: 'still' });
+    expect(s.current).toEqual({ sound: false, look: 'candy', sharp: 2, camera: 'still', rapid: true, duelView: true, launch: 'high', marks: true });
+    expect(s.set({ look: 'hazy' })).toEqual({ sound: false, look: 'hazy', sharp: 2, camera: 'still', rapid: true, duelView: true, launch: 'high', marks: true });
+    expect(JSON.parse(kv.getItem(SETTINGS_KEY)!)).toEqual({ sound: true, look: 'hazy', sharp: 2, camera: 'still', rapid: true, duelView: true, launch: 'high', marks: true });
+    expect(new SettingsStore(kv).current).toEqual({ sound: true, look: 'hazy', sharp: 2, camera: 'still', rapid: true, duelView: true, launch: 'high', marks: true });
   });
   it('storage that throws keeps settings in memory', () => {
     const bad = { getItem: () => { throw new Error('x'); }, setItem: () => { throw new Error('x'); }, removeItem: () => {} };
