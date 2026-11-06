@@ -84,7 +84,7 @@ export interface GameHandle {
    * every display frame); costMs: each step's cost as the valve reads it (a GPU step's own time on the
    * GPU, physics-loop.ts), in order of landing.
    */
-  timing: { loadMs: number; stepMs: number[]; moving: number[]; frameMs: number[]; costMs: number[] };
+  timing: { loadMs: number; load: LoadPhases; stepMs: number[]; moving: number[]; frameMs: number[]; costMs: number[] };
   /** Display frames drawn and skipped (keystone.frames, frame-rate.ts), and whether decimation is on now (wanted, and a display of 110 Hz or more). */
   draws: { drawn: number; skipped: number; decimating: boolean };
   /**
@@ -153,6 +153,25 @@ export interface GameHandle {
   /** A duel's state (KeystoneEnv.duel) as of the last settle, or null outside one. */
   duel: DuelState | null;
 }
+/**
+ * Where a level load's wall time went, ms (GameHandle.timing.load): checking the round being left
+ * (check), compiling the level and building its engine and driver (compile), the engine's init (init:
+ * a GPU engine's pipelines and buffers), the pre-settle's `steps` and the snapshot that waits for them
+ * (presettle), an undo's replay of the kept shots (replay), and swapping the new level in (swap).
+ * A prefetched level's compile, init and presettle are when it was built ahead, not part of the load.
+ */
+export interface LoadPhases {
+  check: number; compile: number; init: number; presettle: number; steps: number; replay: number; swap: number;
+  /** The level was built ahead (the result card's prefetch), and `wait` ms were spent waiting for it to finish settling. */
+  prefetched: boolean; wait: number;
+}
+const noPhases = (): LoadPhases => ({ check: 0, compile: 0, init: 0, presettle: 0, steps: 0, replay: 0, swap: 0, prefetched: false, wait: 0 });
+/**
+ * A load's pre-settle in batches of about a 120 Hz frame (keystone PresettlePace), so the frames of
+ * the level on screen (or the front door over it) keep drawing while the next one settles, instead of
+ * queueing behind all its steps. The state it leaves is the same as an unpaced reset's (a replay's).
+ */
+export const PRESETTLE_PACE = { batchMs: 8 } as const;
 /** What a page and its tests see of a duel. */
 export interface DuelState { turn: Player; first: Player; sides: { name: string; share: number; points: number; shotsLeft: number; kingDown: boolean }[]; over: boolean; winner: Player | null; why: string; log: Player[] }
 export interface SoundState { mode: GameSoundMode; status: CollapseStatus; error: string; posted: number; stats: HostStats | null }
@@ -179,7 +198,7 @@ function safetyLimiter(ctx: AudioContext): AudioNode {
 export function newGameHandle(): GameHandle {
   const none = (): SessionState => ({ step: 0, phase: 'loading', strokes: 0, heritageBroken: 0, hash: '' });
   return {
-    status: 'loading', engine: '', level: '', phase: 'loading', ready: false, frozen: false, frames: 0, stepIndex: 0, strokes: 0, bodies: 0, collapse: 0, fast: false, pace: { timeScale: 1, speed: 1, tag: '', tailSkip: false, costMs: NaN }, view: { target: [0, 0, 0], distance: 0, yaw: 0, pitch: 0, following: false, jolt: 0, turning: false, cue: null, arcBeads: 0 }, input: { touch: false, gesture: 'idle', fingers: 0, aimed: null, power: 100 }, result: null, counts: {}, feel: { ...DEFAULT_FEEL }, resultShownAt: null, timing: { loadMs: 0, stepMs: [], moving: [], frameMs: [], costMs: [] }, draws: { drawn: 0, skipped: 0, decimating: false },
+    status: 'loading', engine: '', level: '', phase: 'loading', ready: false, frozen: false, frames: 0, stepIndex: 0, strokes: 0, bodies: 0, collapse: 0, fast: false, pace: { timeScale: 1, speed: 1, tag: '', tailSkip: false, costMs: NaN }, view: { target: [0, 0, 0], distance: 0, yaw: 0, pitch: 0, following: false, jolt: 0, turning: false, cue: null, arcBeads: 0 }, input: { touch: false, gesture: 'idle', fingers: 0, aimed: null, power: 100 }, result: null, counts: {}, feel: { ...DEFAULT_FEEL }, resultShownAt: null, timing: { loadMs: 0, load: noPhases(), stepMs: [], moving: [], frameMs: [], costMs: [] }, draws: { drawn: 0, skipped: 0, decimating: false },
     fire: () => false, bank: () => false, freeze: () => false, fireOpener: () => false, setMuted: () => {}, maxDpr: 2, aim: () => null, reach: null, select: () => false, load: async () => {}, retry: async () => {}, undo: async () => false, capture: async () => null,
     state: none, line: () => [], replay: async () => none(), health: async () => null, pairsPerBody: 0, limitsHit: [], goals: [], grade: null, duel: null,
     sound: () => ({ mode: 'collapse', status: 'off', error: '', posted: 0, stats: null }),
@@ -250,6 +269,13 @@ export interface KeystoneEnv {
   hud: HTMLElement;
   banner: HTMLElement;
   result: HTMLElement;
+  /**
+   * Level starts (docs/game/level-start.md): the pre-settle's batch time in ms (keystone PresettlePace;
+   * default PRESETTLE_PACE's, 0 runs it in one go as before), and whether the next level is built while
+   * the result card shows (default on). URL keys keystone.loadpace and keystone.prefetch (params.ts loadOptions).
+   */
+  loadPaceMs?: number;
+  prefetch?: boolean;
   /** The levels N, P and the result card's Next walk through, and the one to start on. */
   levels: readonly LevelDef[];
   start: number;
@@ -323,6 +349,8 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     return i;
   };
   let levelIdx = env.start;
+  const paceMs = env.loadPaceMs ?? PRESETTLE_PACE.batchMs;
+  const resetOptions = { now: () => performance.now(), ...(paceMs > 0 ? { pace: { batchMs: paceMs } } : {}) };
   handle.feel = feel;
   handle.engine = kind;
 
@@ -415,6 +443,8 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
   let loading = 0;
   function load(i: number, retry = false): Promise<void> {
     loading++;
+    // Not ready from now on (a load can take many frames), so nothing fires into the level being left.
+    if (driver) syncState();
     return exclusive(() => loadNow(i, retry)).finally(() => { loading--; });
   }
 
@@ -460,24 +490,97 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     banner(after > before ? 'Physics limit hit: next round gets more room' : 'Physics limit hit', 'crack');
   }
 
+  /** A level built aside and pre-settled (build): its engine and driver, ready to swap in. */
+  interface Built { def: LevelDef; pairs: number | undefined; c: CompiledLevel; engine: PhysicsEngine; driver: Driver; phases: LoadPhases }
+  /**
+   * Compile level i, build its engine and driver, and pre-settle it (paced, so frames keep drawing): the
+   * GPU's pre-settle spans many frames, and every frame reads the current level, so a level is built
+   * aside and swaps in whole. `cancelled`, checked once the reset is done, drops it (its engine disposed).
+   */
+  function build(i: number, cancelled: () => boolean = () => false): { engine: PhysicsEngine; built: Promise<Built | null> } {
+    const t0 = performance.now();
+    const def = levels[i]!, pairs = room.get(def);
+    const next = compileLevel(def);
+    const nextEngine = makeEngine(kind, next, device, pairs);
+    const nextDriver = new Driver(nextEngine, next, driverOptions(kind));
+    const phases: LoadPhases = { ...noPhases(), compile: performance.now() - t0 };
+    const built = (async () => {
+      try {
+        await nextDriver.reset(resetOptions);
+      } catch (e) {
+        nextEngine.dispose();
+        if (cancelled()) return null;
+        throw e;
+      }
+      if (cancelled()) { nextEngine.dispose(); return null; }
+      Object.assign(phases, nextDriver.resetMs);
+      return { def, pairs, c: next, engine: nextEngine, driver: nextDriver, phases };
+    })();
+    return { engine: nextEngine, built };
+  }
+
+  /**
+   * The next level built ahead (prefetch), while the result card shows: Next then swaps it in at once
+   * instead of building and pre-settling it then. It is the level a load would build (the same def and
+   * pair room, checked when it is taken), so the state is the same; a load of anything else drops it.
+   */
+  let spare: { i: number; def: LevelDef; pairs: number | undefined; engine: PhysicsEngine; built: Promise<Built | null>; dropped: boolean } | null = null;
+  function prefetch(i: number): void {
+    if (env.prefetch === false) return;
+    if (i < 0 || i >= levels.length || i === levelIdx) return;
+    const def = levels[i]!, pairs = room.get(def);
+    if (spare && spare.i === i && spare.def === def && spare.pairs === pairs) return;
+    dropSpare();
+    const s = { i, def, pairs, dropped: false } as NonNullable<typeof spare>;
+    const b = build(i, () => s.dropped);
+    s.engine = b.engine;
+    // A failed prefetch is not the player's error: the load that wants the level builds it again and reports.
+    s.built = b.built.catch((e) => { console.warn(`prefetch of ${def.id} failed: ${(e as Error).message}`); return null; });
+    spare = s;
+    handle.counts.prefetch = (handle.counts.prefetch ?? 0) + 1;
+  }
+  function dropSpare(): void {
+    if (!spare) return;
+    spare.dropped = true;
+    // Disposed now, so a pre-settle still running stops at its next step (it then resolves null).
+    spare.engine.dispose();
+    spare = null;
+  }
+  /**
+   * The spare for level i if it is the one a load would build now, taken (awaited if still settling); else
+   * null. A retry keeps a spare of another level for a later Next; a load of any other level drops it.
+   */
+  async function takeSpare(i: number): Promise<Built | null> {
+    const s = spare;
+    if (!s) return null;
+    if (s.i !== i) { if (i !== levelIdx) dropSpare(); return null; }
+    if (s.def !== levels[i] || s.pairs !== room.get(levels[i]!)) { dropSpare(); return null; }
+    spare = null;
+    return s.built;
+  }
+
   /** Load level i; with `line` (undo), replay those shots on it out of sight and play on from their settle. */
   async function loadNow(i: number, retry: boolean, line?: Shot[]) {
     const t0 = performance.now();
     // The round being left is over: check what it hit before its engine goes.
     if (engine) await checkRound();
-    // Build and pre-settle the new level aside: the GPU's pre-settle spans many
-    // frames, and every frame reads the current level, so it swaps in whole.
-    const next = compileLevel(levels[i]!);
-    const nextPairs = room.get(levels[i]!);
-    const nextEngine = makeEngine(kind, next, device, nextPairs);
-    const nextDriver = new Driver(nextEngine, next, driverOptions(kind));
+    const tc = performance.now();
+    // An undo replays its line on a fresh build; a load takes the spare when it is this level's.
+    const ahead = line ? null : await takeSpare(i);
+    const b = ahead ?? await build(i).built;
+    if (!b) throw new Error(`level ${levels[i]!.id} was dropped while it loaded`);
+    const { c: next, engine: nextEngine, driver: nextDriver, pairs: nextPairs } = b;
     // The input hook keeps state per session: the replay's goes on with the live play.
     const nextPerStep = env.perStep?.(next) ?? null;
     const counts: Record<string, number> = { ...(line ? handle.counts : {}) };
+    const phases: LoadPhases = { ...b.phases, check: tc - t0, prefetched: ahead !== null };
+    // Waited on a spare: the time it was still settling (its own phases are when it was built).
+    if (ahead) phases.wait = performance.now() - tc;
     try {
-      await nextDriver.reset();
+      const tr = performance.now();
       // Undo: the kept shots as a session plays them (runSession's playShots), left aiming at their settle, not banked.
       if (line?.length) await playShots(nextDriver, line, 0, { bank: false, perStep: nextPerStep ?? undefined });
+      phases.replay = performance.now() - tr;
     } catch (e) {
       nextEngine.dispose();
       throw e;
@@ -491,7 +594,8 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     reportedSteps = 0;
     handle.pairsPerBody = kind === 'gpu' ? gpuEngineOptions(c, livePairs).pairsPerBody! : 0;
     substeps = engine.info.integrator?.substeps ?? SUBSTEPS;
-    handle.timing = { loadMs: performance.now() - t0, stepMs: [], moving: [], frameMs: [], costMs: [] };
+    const ts = performance.now();
+    handle.timing = { loadMs: 0, load: phases, stepMs: [], moving: [], frameMs: [], costMs: [] };
     descs = driver.bodies;
     perStep = nextPerStep;
     ticks = meterTicks(c);
@@ -559,6 +663,8 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     if (line?.length) judgeGoals();
     syncDuel();
     sync();
+    phases.swap = performance.now() - ts;
+    handle.timing.loadMs = performance.now() - t0;
     hooks.loaded?.(c, driver);
   }
 
@@ -660,6 +766,8 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
             ending = true;
             pacer.release();
             showResult(null);
+            // The card is up while the settle finishes at fast-forward: start building what Next opens now.
+            prefetch(levelIdx + 1);
           }
           break;
         case 'blast': {
@@ -709,6 +817,8 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
           hooks.ended?.(c, f.score, driver);
           // The round is over: check its limits once this step is done (checkRound).
           void exclusive(checkRound).catch(fail);
+          // While the card shows, build what Next (a duel's Rematch) opens, so it swaps in at once.
+          prefetch(duel ? 1 - levelIdx : levelIdx + 1);
           break;
       }
     }
@@ -739,7 +849,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
   /** Mirror the round's state onto the handle: each frame, and after each physics step (which runs between frames). */
   function syncState() {
     const s = driver.session;
-    Object.assign(handle, { phase: stepping ? 'running' : s.phase, frozen, ready: !stepping && s.phase === 'aiming' && regrowT === null, stepIndex: driver.engine.stepIndex, strokes: s.strokes, bodies: driver.snapshot.count, collapse: s.liveCollapse });
+    Object.assign(handle, { phase: stepping ? 'running' : s.phase, frozen, ready: !loading && !stepping && s.phase === 'aiming' && regrowT === null, stepIndex: driver.engine.stepIndex, strokes: s.strokes, bodies: driver.snapshot.count, collapse: s.liveCollapse });
   }
 
   /** Mirror state, pace and view onto the handle; called each frame and right after anything that changes it.

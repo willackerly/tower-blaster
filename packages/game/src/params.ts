@@ -193,3 +193,25 @@ export function parseGameParams(q: URLSearchParams): GameParams {
     ...gameSound(q),
   };
 }
+
+/**
+ * How level starts run (docs/game/level-start.md): ?keystone.loadpace=<ms> is the pre-settle's batch
+ * time (0 runs it in one go, which holds the frames until it is done; default PRESETTLE_PACE's 8), and
+ * ?keystone.prefetch=0 stops building the next level while the result card shows. Neither changes a
+ * level's state, so neither is part of a level.
+ */
+export function loadOptions(q: URLSearchParams): { loadPaceMs?: number; prefetch?: boolean } {
+  const out: { loadPaceMs?: number; prefetch?: boolean } = {};
+  const p = q.get('keystone.loadpace');
+  if (p !== null) {
+    const ms = p.trim() === '' ? NaN : Number(p);
+    if (!(ms >= 0 && ms <= 1000)) throw new Error(`keystone.loadpace must be from 0 to 1000 ms (0: unpaced): ${p}`);
+    out.loadPaceMs = ms;
+  }
+  const f = q.get('keystone.prefetch');
+  if (f !== null) {
+    if (f !== '0' && f !== '1') throw new Error(`keystone.prefetch must be 0 or 1: ${f}`);
+    out.prefetch = f === '1';
+  }
+  return out;
+}
