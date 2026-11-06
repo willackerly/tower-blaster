@@ -19,7 +19,7 @@ import { fitShadow, frustumCorners, pcssParams, type Arena, type ShadowFit, type
 import { MARK_MASK, MARK_SHIFT } from './marks.ts';
 import { COAT_MASK, COAT_SHIFT } from './coats.ts';
 import { FX_WORDS, packFx, tintWord, toHalf, type Fx, type FxOptions, FX_ANCHOR, unpackFx } from './fx.ts';
-import { CANDY_NIGHT, linearToOklab, REAL_DEFAULTS, srgbToLinear, type LookParams } from './look.ts';
+import { BLOCK_JITTER, CANDY_NIGHT, linearToOklab, REAL_DEFAULTS, srgbToLinear, type LookParams } from './look.ts';
 import { invert, lookAt, multiply, normalize, type Mat4, type V3 } from './math.ts';
 import { HDR_FORMAT, noStamp, Post, type Stamp } from './post.ts';
 import { IcePass } from './ice-pass.ts';
@@ -171,7 +171,7 @@ export function lookUniforms(l: LookParams, metres = 1): Record<string, number |
     ball: lin(l.ball), ballEmissive: l.ballEmissive, fogDensity: l.fogDensity, fogHeight: l.fogHeight, exposure: l.exposure,
     // Metric sizes in world units (FrameParams.metres): a texture tile, the fade footprint, the relief, the hills' distance.
     stone: l.stone ? [STONES.indexOf(l.stone.kind), l.stone.scale / metres, l.stone.wear, l.stone.dirt] : [0, 1, 0, 0],
-    stoneDetail: [l.stone?.detail ?? 0, (l.stone?.fade ?? 1) / metres, 0, 0],
+    stoneDetail: [l.stone?.detail ?? 0, (l.stone?.fade ?? 1) / metres, l.stone?.jitter ?? BLOCK_JITTER, l.stone?.warmth ?? 0],
     ground: l.ground ? [GROUND_LAYER + GROUNDS.indexOf(l.ground.kind), l.ground.scale / metres, l.ground.detail, l.ground.variation] : [GROUND_LAYER, 1, 0, 0],
     groundShape: [(l.ground?.relief ?? 0) / metres, patchThreshold(l.ground?.patches ?? 0), l.shadow?.fill ?? 0, 0],
     hills: l.hills ? [(l.hills.height * Math.PI) / 180, (l.hills.distance * 1000) / metres, l.hills.cover ?? 0, l.hills.ridges ?? 1] : [0, 1000, 0, 1],

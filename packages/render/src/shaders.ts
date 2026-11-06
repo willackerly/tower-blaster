@@ -4,7 +4,7 @@
 // uniform (LookParams), so presets are data.
 import { defineStruct, FxState, RenderRecord, Spark, wgslStruct } from '@tb/schema';
 import { BAND_HALF, FX_BAND, FX_EMISSIVE_MAX, FX_MATTE, FX_PAINT, FX_WGSL } from './fx.ts';
-import { BEVEL_WGSL, OKLAB_WGSL } from './look.ts';
+import { BEVEL_WGSL, OKLAB_WGSL, WARM_AXIS } from './look.ts';
 import { MARKS_WGSL } from './marks.ts';
 import { COAT_GILT, COAT_WGSL } from './coats.ts';
 import { SPARK_COMMON } from './sparks.ts';
@@ -54,7 +54,7 @@ export const Frame = defineStruct('Frame', [
   ['atmoSigma', 'vec3f', 'real look: air extinction at the ground, per metre'], ['atmoEyeKm', 'f32', 'real look: eye height above the ground, km'],
   ['sunDisc', 'vec3f', 'real look: sun disc radiance'], ['sunCos', 'f32', 'real look: cos of the sun disc angular radius'],
   ['stone', 'vec4f', 'real look: stone layer (materials.ts STONES), texture scale, edge wear, dirt'],
-  ['stoneDetail', 'vec4f', 'real look: x: stone texture strength (0: none, nothing sampled), y: fade-out pixel footprint (m)'],
+  ['stoneDetail', 'vec4f', 'real look: x: stone texture strength (0: none, nothing sampled), y: fade-out pixel footprint (m), z: the span of each block\'s lightness jitter (look.ts BLOCK_JITTER x mosaic), w: of its warm/cool drift along WARM_AXIS in OKLab (look.ts RealOptions.warmth)'],
   ['blockAlbedo', 'vec4f', 'real look: the blocks\' mean linear albedo (the ramp\'s)'],
   ['aoFloorSky', 'vec4f', 'real look: floor sky map placement, uv = (rel.xz - xy) * zw (AoVolume.floorSkyFrame)'],
   ['ground', 'vec4f', 'real look: ground layer (materials.ts), texture scale, texture strength (0: none, nothing sampled), macro variation'],
@@ -289,7 +289,8 @@ fn realAlbedo(look: u32, slot: u32) -> vec3f {
   let hue = (f32((look >> 8u) & 0xfu) - 2.5) * fr.hueStep;
   let c = cos(hue);
   let s = sin(hue);
-  lab = vec3f(lab.x * (1.0 + (f32(h.y >> 16u) / 65535.0 - 0.5) * 0.08), c * lab.y - s * lab.z, s * lab.y + c * lab.z);
+  let warm = (f32(h.z >> 16u) / 65535.0 - 0.5) * fr.stoneDetail.w * WARM_AXIS; // ochre <-> blue-grey, never violet or olive (look.ts)
+  lab = vec3f(lab.x * (1.0 + (f32(h.y >> 16u) / 65535.0 - 0.5) * fr.stoneDetail.z), c * lab.y - s * lab.z + warm.x, s * lab.y + c * lab.z + warm.y);
   return max(oklabToLinear(lab), vec3f(0.0));
 }
 
@@ -325,6 +326,7 @@ fn floorSky(rel: vec3f) -> f32 {
 // mips (and the blend) average bumps away.
 struct GroundHit { albedo: vec3f, a: f32, n: vec3f, cavity: f32 }
 const GROUND_ROT = mat2x2f(0.8253356, 0.5646425, -0.5646425, 0.8253356);
+const WARM_AXIS = vec2f(${WARM_AXIS[0].toFixed(7)}, ${WARM_AXIS[1].toFixed(7)}); // look.ts WARM_AXIS
 const MACRO_MIN_LOD = 2.0; // the macro layer's finest level: 0.5 m texels at scale 1
 
 // The macro layer at three scales (MACRO_TILE, 1/4.7 and 1/22 of it, each

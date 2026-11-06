@@ -210,3 +210,56 @@ finds no regression in crown finding, and the bench shows real holding the
 High tier's frame budget on the M5; the switch is then one line
 (`lookByName` default) plus the front door's Look setting, with the goldens
 untouched (they pin each look by name).
+
+## 5. Masonry, not a mosaic (R7: `real.mosaic`, `real.warmth`)
+
+The R4 polish review said the real look's blocks read as "a mosaic rather
+than masonry": each block takes one of the stone's five palette keys, plus
+an 8% lightness jitter and the tower's 4° hue turn, so neighbours can differ
+a lot (limestone's blocks spread 14.3% in luminance, std over mean; sandstone
+20.8%). The brief asked for about 4%.
+
+**What changed** (`packages/render/src/look.ts`, `shaders.ts` realAlbedo):
+
+- `real.mosaic` (0–1, default **0.8**) scales the palette's spread toward its
+  OKLab mean (`mosaicRamp`), together with the lightness jitter and the hue
+  turn. Keys lighter than the mean move by `m^1.5` and darker ones by `m`,
+  so the lightest block comes in about 26% and the darkest about 22%.
+- `real.warmth` (0–0.1, default **0.025**) adds a per-block drift in OKLab
+  along `WARM_AXIS` (a : b = 0.3 : 1), so a block leans a little toward ochre
+  or toward blue-grey. It rides in `stoneDetail.w` of the frame uniform and
+  costs one hash and two multiply-adds per pixel.
+- `real.mosaic=1&real.warmth=0` is the look before R7, exactly (a test pins
+  the palette, jitter and hue turn).
+
+Limestone now spreads 11.0% (from 14.3%) and sandstone 16.1% (from 20.8%).
+That is a 23% cut, not the brief's 4%, and the blind reviews below are why.
+
+**Four blind Opus reviews** (L1, L3, L5 in the real look; images shuffled per
+level, each review by a fresh reader except where noted):
+
+| Round | Compared | Reader's verdict |
+|---|---|---|
+| 1 | old vs mosaic 0.25 (about 3%) | old, ~70%: 0.25 "reads like concrete masonry units", "noticeably more CG". Asked to trim the brightest blocks and move variation into warm/cool. |
+| 2 | old vs 0.5 (6.4%) vs 0.25 | old first on both levels, ~60%; 0.5 and 0.25 near "CG concrete". Asked for buff/blue-grey drift and a 10–15% trim of the brightest outliers; "the spread is otherwise about right". |
+| 3 | old vs 0.8 + warmth 0.03 along OKLab b | new won the pillars and lost the wall: lavender and olive blocks read as a colour cast. Fixed by `WARM_AXIS` and 0.025. |
+| 4 | old vs 0.8 + warmth 0.025 along `WARM_AXIS` | new won the wall (old: "c3r4 near-white next to a dark c4r4"), pillars near a tie (slight edge to old); no violet, lavender, olive or green anywhere. |
+
+All four readers could count every block in every image. The R4 complaint
+was about near-white blocks beside dark ones (now trimmed); the readers
+consistently rejected the flat end as worse than the mosaic it replaced.
+
+**Alternatives considered:** *the brief's 4%* (rounds 1 and 2: reads as a CG
+tile grid); *more in-block mottling at a low spread* (round 1's other idea;
+`real.stoneDetail` is already 1, and amplifying the texture past it also
+strengthens its normal map and roughness, a wider change than R7);
+*drift along OKLab b alone* (round 3: violet/olive casts on this pinkish
+limestone).
+
+**Gates:** candy and hazy golden hashes are unchanged; `real-polish-off:*`
+is re-pinned for this change (the golden real look takes the default mosaic
+and warmth). Tests: `render.test.ts` "masonry (R7)" (CPU twin of the
+shader's block colours: ratio 0.7–0.85 per stone, light keys trimmed more
+than dark ones, the warmth std, the exact old look at 1/0) and the real-look
+GPU suites (stones, wood, steel, hall). Not checked on Metal yet; it goes
+into the look capture job in §4, which uses the defaults.
