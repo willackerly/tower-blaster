@@ -3,9 +3,9 @@
 // (keystone.undo=0); each undo's wall time, how it went back, and the checkpoint memory held after
 // the line are printed. A measurement for a real GPU only, so it runs only with TB_UNDO_COST=1 (with
 // TB_CHANNEL=chrome on the Mac: Metal). Timings from SwiftShader are never performance results.
-// A level with no ace line plays its par line, or else borrows B1's ace line (B3 is uncast: it has no
-// line, and its rack is B1's, three bombs; any line serves, since this measures the undos, not the
-// score). TB_UNDO_LEVELS=B1,B3 picks the levels (default all three); TB_UNDO_OUT=<file> appends the
+// A level with no ace line plays its par line, or else borrows B1's ace line when its rack can fire it
+// (B3 did before its cast landed: its rack is B1's, three bombs; any line serves, since this measures
+// the undos, not the score). TB_UNDO_LEVELS=B1,B3 picks the levels (default all three); TB_UNDO_OUT=<file> appends the
 // results to a file, so they survive a reporter that hides console output.
 import { appendFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
@@ -61,7 +61,8 @@ describe.runIf(on)('undo cost on a big level', () => {
 describe('the undo-cost line', () => {
   it("is the level's ace, else its par, else B1's ace when the rack can fire it", () => {
     expect(undoLine(B1)).toEqual({ line: B1.solutions!.ace, from: 'ace' });
-    expect(undoLine(B3)).toEqual({ line: B1.solutions!.ace, from: "B1's ace" });
+    expect(undoLine(B3)).toEqual({ line: B3.solutions!.ace, from: 'ace' });
+    expect(undoLine({ ...B3, solutions: undefined })).toEqual({ line: B1.solutions!.ace, from: "B1's ace" });
     expect(undoLine({ ...B3, solutions: { par: B2.solutions!.ace! } })).toEqual({ line: B2.solutions!.ace, from: 'par' });
     expect(() => undoLine({ ...B3, solutions: undefined, rack: ['w-ram'] })).toThrow(/cannot fire B1's ace line/);
   });
