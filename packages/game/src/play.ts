@@ -293,8 +293,9 @@ export interface KeystoneHooks {
 export interface KeystoneEnv {
   /** Takes the pointer (aim, fire, orbit, zoom); sized to its CSS box each frame unless offscreen. */
   canvas: HTMLCanvasElement;
-  /** Tests: the renderer draws 640x400 offscreen, and only for a capture. */
+  /** Tests: the renderer draws offscreen (offscreenSize, 640x400 when absent), and only for a capture. */
   offscreen: boolean;
+  offscreenSize?: [number, number];
   device: GPUDevice;
   renderer: Renderer;
   source: SnapshotSource;
@@ -514,7 +515,8 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
   /** Every crown is down: the round is known to be over, the card shows, and the rest of the settle runs at fast-forward. */
   let ending = false;
 
-  const aspect = () => (offscreen ? 640 / 400 : canvas.width / Math.max(1, canvas.height));
+  const [offW, offH] = env.offscreenSize ?? [640, 400];
+  const aspect = () => (offscreen ? offW / offH : canvas.width / Math.max(1, canvas.height));
   /** The aspect a view is framed for: a phone held upright frames the width too (the CSS box: the canvas may not be sized for it yet). */
   const viewAspect = () => (offscreen ? aspect() : canvas.clientWidth / Math.max(1, canvas.clientHeight));
   /** The player orbited, panned or zoomed: the follow camera lets go for this shot, the turn view's swing for this turn. */
