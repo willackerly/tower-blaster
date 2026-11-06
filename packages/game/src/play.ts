@@ -7,10 +7,11 @@
 // its own elements; the viewer calls it for rules=keystone, with hooks for its
 // dev panels (docs/design/viewer-superset.md, step C).
 import { type BodyDesc, type EngineHealth, limitsHit, type PhysicsEngine, type Vec3 } from '@tb/engine-api';
-import { type RackItem, type CompiledLevel, compileLevel, crackSeed, Driver, type DriverCheckpoint, Duel, type DuelDef, DEFAULT_TURN_SECONDS, type Feedback, type Footprint, type Goal, goalMet, type Player, type Grade, gradeOf, type LevelDef, type LevelScore, type LotSheet, type PerStep, playShots, rapidDue, roundFacts, runSession, selectFootprints, selectGroups, type Shot, isIcePiece, snapshotHash, TIER_NAMES } from '@tb/keystone';
+import { armRefusal, type RackItem, type CompiledLevel, compileLevel, crackSeed, Driver, type DriverCheckpoint, Duel, type DuelDef, DEFAULT_TURN_SECONDS, type Feedback, type Footprint, type Goal, goalMet, type Player, type Grade, gradeOf, type LevelDef, type LevelScore, type LotSheet, type PerStep, playShots, rapidDue, roundFacts, runSession, selectFootprints, selectGroups, type Shot, isIcePiece, snapshotHash, TIER_NAMES } from '@tb/keystone';
 import { clampPitch, eyeOf, type Orbit, rayThrough, viewProj } from '@tb/render/camera';
-import type { FxOptions, PixelStats, Renderer, SnapshotSource } from '@tb/render';
+import type { EffectStats, FxOptions, PixelStats, Renderer, SnapshotSource } from '@tb/render';
 import type { HostStats } from '@tb/audio';
+import type { WeaponTier } from '@tb/weapons';
 import { type Aimed, azFromYaw, launchHeight, launchStep, pick, previewBeads, pullFor, shotFor, SUBSTEPS } from './aim.ts';
 import { Synth, type Voice, voicesFor } from './audio.ts';
 import { CollapseSound, type CollapseStatus } from './collapse-sound.ts';
@@ -29,7 +30,7 @@ import { COST_WINDOW, runPhysics, wakeable } from './physics-loop.ts';
 import { CLEAR_SHARE, FrameGovernor } from './frame-rate.ts';
 import { canvasSize, type QualityState } from './quality.ts';
 import { UndoMarks } from './undo-marks.ts';
-import { ballFx, beadOverlay, BOMB_FX, CROWN_GLOW, PULL_HOVER, regrowDuration, regrowScales, structureMarks, structureTints, TINT, tintOf, tintWordOf } from './scene.ts';
+import { ballFx, beadOverlay, BOMB_FX, CROWN_GLOW, firedKind, PULL_HOVER, ramFx, regrowDuration, regrowScales, rolePaint, SPENT_FADE, spentFx, structureMarks, structureTints, tintOf, tintWordOf } from './scene.ts';
 import { easeGrade, FROZEN_LABEL, freezeFxOf } from './frozen-look.ts';
 import { ghostOutline, PULL_SLIDE_STEPS, type PullAnim, pullAnimFor, withPulled } from './pull-anim.ts';
 import { type GestureState, type TouchAction, TouchGestures, touchFace, type TouchMode } from './touch.ts';
@@ -149,11 +150,16 @@ export interface GameHandle {
   /** Bullet Time's frozen look as last drawn (frozen-look.ts): the grade's amount, 0 none to 1 full, eased per frame. */
   frozenGrade: number;
   /**
-   * How each fired body (the slots past the structure's, in spawn order) is drawn now, read back from the
-   * renderer: a bomb (a lit fuse, or BOMB_FX's matte iron once its fuse has given way to newer ones), a painted
-   * ball (paint and band, scene.ts ballFx), or plain (the look's).
+   * How each fired body (the slots past the structure's, in spawn order) is drawn now: a bomb (a lit fuse and
+   * BOMB_FX's matte iron), a ram (scene.ts ramFx: bronze, banded, no fuse), a painted ball (paint and band,
+   * scene.ts ballFx), or plain (the look's). Checked against the renderer: a bomb's slot must hold BOMB_FX or a
+   * fuse, a ram's or painted ball's its paint and band.
    */
-  firedLooks(): ('bomb' | 'painted' | 'plain')[];
+  firedLooks(): ('bomb' | 'ram' | 'painted' | 'plain')[];
+  /** Per fired body (as firedLooks), whether it is drawn spent (PaceFeel.spent: faded once its shot settled). */
+  spentLooks(): boolean[];
+  /** The renderer's transient effects now (@tb/render Renderer.effectStats: live particles, hot bodies, lit flashes, blasts, fuses). */
+  effects(): Promise<EffectStats>;
   /** The mark carved on each structure body now, read back from the renderer (@tb/render MARK_NONE, MARK_HIT, MARK_SAVE). */
   marks(): number[];
   /** Carve or clear the stones again as feel.marks now says (the front door's Stone marks setting changed). */
@@ -238,7 +244,7 @@ export function newGameHandle(): GameHandle {
   const none = (): SessionState => ({ step: 0, phase: 'loading', strokes: 0, heritageBroken: 0, hash: '' });
   return {
     status: 'loading', engine: '', level: '', phase: 'loading', ready: false, frozen: false, frames: 0, stepIndex: 0, strokes: 0, bodies: 0, collapse: 0, fast: false, pace: { timeScale: 1, speed: 1, tag: '', tailSkip: false, costMs: NaN }, view: { target: [0, 0, 0], distance: 0, yaw: 0, pitch: 0, following: false, jolt: 0, turning: false, cue: null, arcBeads: 0 }, input: { touch: false, gesture: 'idle', fingers: 0, aimed: null, power: 100, launch: 0 }, result: null, counts: {}, feel: { ...DEFAULT_FEEL }, resultShownAt: null, timing: { loadMs: 0, load: noPhases(), stepMs: [], moving: [], frameMs: [], costMs: [] }, draws: { drawn: 0, skipped: 0, decimating: false },
-    fire: () => false, bank: () => false, freeze: () => false, fireOpener: () => false, setMuted: () => {}, maxDpr: 2, quality: null, aim: () => null, reach: null, select: () => false, load: async () => {}, retry: async () => {}, undo: async () => false, undone: null, spare: null, undoMemory: () => ({ marks: 0, bytes: 0 }), capture: async () => null, coverage: async () => 0, pullDrawn: null, frozenGrade: 0, firedLooks: () => [], marks: () => [], refreshMarks: () => {},
+    fire: () => false, bank: () => false, freeze: () => false, fireOpener: () => false, setMuted: () => {}, maxDpr: 2, quality: null, aim: () => null, reach: null, select: () => false, load: async () => {}, retry: async () => {}, undo: async () => false, undone: null, spare: null, undoMemory: () => ({ marks: 0, bytes: 0 }), capture: async () => null, coverage: async () => 0, pullDrawn: null, frozenGrade: 0, firedLooks: () => [], spentLooks: () => [], effects: async () => ({ particles: 0, hot: 0, spawned: 0, flashes: 0, blasts: 0, fuses: 0 }), marks: () => [], refreshMarks: () => {},
     state: none, line: () => [], replay: async () => none(), health: async () => null, pairsPerBody: 0, limitsHit: [], goals: [], grade: null, duel: null,
     sound: () => ({ mode: 'collapse', status: 'off', error: '', posted: 0, stats: null }),
     ice: () => ({ count: 0, cracks: [] }),
@@ -331,6 +337,11 @@ export interface KeystoneEnv {
   series?: readonly number[];
   engine: EngineKind;
   feel: PaceFeel;
+  /**
+   * The device tier the rack's weapons must fit (keystone armRefusal: one over it is refused on fire,
+   * with a banner saying which number and which tier fires it); absent: high. Asked at each fire.
+   */
+  weaponTier?(): WeaponTier;
   /** Shows an error; play stops (handle.status is 'error'). */
   fail(e: unknown): void;
   hooks?: KeystoneHooks;
@@ -441,16 +452,44 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
   // a weapon's children, the input hook's, in the order the engine applies them).
   let descs: readonly BodyDesc[] = [];
   /**
-   * Fired bodies' looks by slot (the slots past the structure's): a bomb's (BOMB_FX and a fuse) or a painted
-   * ball's (scene.ts ballFx), null for one drawn as the look draws it. Kept so an undo can draw the kept shots'
-   * bodies as they were: a checkpoint's (UndoMark.looks) or, when the undo replays, the slots the replay refills
-   * (the same shots in the same order spawn into the same slots); a fresh attempt clears it.
+   * Fired bodies' looks by slot (the slots past the structure's): a bomb's (BOMB_FX and a fuse), a ram's
+   * (scene.ts ramFx), a painted ball's (ballFx) or a plain one's (fx null: as the look draws it), and whether it
+   * is spent (faded once its shot settled, PaceFeel.spent); null for an ice piece (the ice pass draws it). Kept
+   * so an undo can draw the kept shots' bodies as they were: a checkpoint's (UndoMark.looks) or, when the undo
+   * replays, the slots the replay refills (the same shots in the same order spawn into the same slots); a fresh
+   * attempt clears it. Entries are replaced, never changed in place (a checkpoint holds the array's old entries).
    */
-  let firedLooks: ({ fx: FxOptions; fuse: boolean } | null)[] = [];
-  const paintFired = (i: number, look: { fx: FxOptions; fuse: boolean } | null) => {
+  interface FiredLook { fx: FxOptions | null; fuse: boolean; kind: 'bomb' | 'ram' | 'painted' | 'plain'; spent: boolean }
+  let firedLooks: (FiredLook | null)[] = [];
+  /** Spent ammo fading now: slot, its live look, and when the fade began (ms). */
+  let fading: { slot: number; look: FiredLook; t0: number }[] = [];
+  const paintFired = (i: number, look: FiredLook | null) => {
     if (!look) return;
-    renderer.setFx(i, look.fx);
-    if (look.fuse) renderer.fuse(i);
+    if (look.spent) renderer.setFx(i, spentFx(look.fx, 1));
+    else if (look.fx) renderer.setFx(i, look.fx);
+    if (look.fuse && !look.spent) renderer.fuse(i);
+  };
+  /**
+   * Fade every painted ball and ram not yet spent (a shot settled; PaceFeel.spent). Bombs are left as they are
+   * (a live one still goes off), and so are plain balls (the plain style draws the look's own ball, whose colour
+   * the game does not hold, so it has nothing to fade from).
+   */
+  const spendFired = () => {
+    if (!feel.spent) return;
+    const t0 = performance.now();
+    for (let i = c.meta.n; i < descs.length; i++) {
+      const L = firedLooks[i - c.meta.n];
+      if (!L || L.spent || !L.fx || L.kind === 'bomb') continue;
+      firedLooks[i - c.meta.n] = { ...L, spent: true };
+      renderer.setFx(i, spentFx(L.fx, 0));
+      fading.push({ slot: i, look: L, t0 });
+    }
+  };
+  /** One frame of the spent fades (frame time now, ms). */
+  const fadeSpent = (now: number) => {
+    if (!fading.length) return;
+    for (const f of fading) renderer.setFx(f.slot, spentFx(f.look.fx, (now - f.t0) / 1000 / SPENT_FADE));
+    fading = fading.filter((f) => now - f.t0 < 1000 * SPENT_FADE);
   };
   /**
    * Take up new bodies; item: the rack item fired ('bomb' for bodies the step loop adds). A weapon's
@@ -465,12 +504,15 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     const from = descs.length;
     descs = driver.bodies;
     fxSlots = descs.length;
-    const bomb = item === 'bomb' || item.startsWith('w-');
-    const fx = bomb ? BOMB_FX : ballFx(item as RackItem, feel.balls);
+    // A weapon that goes off is a bomb; one that never does is a ram (scene.ts firedKind; drawn as a bomb in the plain style, as before PT19).
+    let kind = item === 'bomb' ? 'bomb' : firedKind(c.def, item);
+    if (kind === 'ram' && feel.balls === 'plain') kind = 'bomb';
+    const bomb = kind === 'bomb';
+    const fx = bomb ? BOMB_FX : kind === 'ram' ? ramFx(feel.balls) : ballFx(item as RackItem, feel.balls);
     for (let i = from; i < descs.length; i++) {
       // A shattered ice block's pieces are drawn as ice (the 'shatter' feedback paints them), never as bombs.
       if (isIcePiece(descs[i]!)) { firedLooks[i - c.meta.n] = null; continue; }
-      const look = fx ? { fx, fuse: bomb } : null;
+      const look: FiredLook = { fx, fuse: bomb, kind: bomb ? 'bomb' : kind === 'ram' ? 'ram' : fx ? 'painted' : 'plain', spent: false };
       firedLooks[i - c.meta.n] = look;
       paintFired(i, look);
       if (bomb) handle.counts.bomb = (handle.counts.bomb ?? 0) + 1;
@@ -632,11 +674,12 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     renderer.setFx(0, structureTints(c), regrowBuf, false);
     applyMarks();
     paintIce();
-    const s = driver.session;
-    s.crownLive.forEach((down, k) => { if (down) renderer.setFx(c.meta.crowns[k]!, { tint: TINT.crown, emissive: 0.9 }); });
-    s.heritageBroken.forEach((cracked, k) => { if (cracked) renderer.setFx(c.meta.heritage[k]!, { tint: TINT.heritage, emissive: 1 }); });
-    renderer.blasts.clear();
-    renderer.fuses.clear();
+    const s = driver.session, roles = rolePaint(feel.fx);
+    s.crownLive.forEach((down, k) => { if (down) renderer.setFx(c.meta.crowns[k]!, roles.crownKept); });
+    s.heritageBroken.forEach((cracked, k) => { if (cracked) renderer.setFx(c.meta.heritage[k]!, roles.heritageKept); });
+    // No spark, heat, flash, blast or lit fuse of the undone shot carries over (PT2); the kept shots' fuses are lit again below.
+    renderer.resetEffects();
+    fading = [];
     firedLooks = [...mark.looks];
     for (let i = c.meta.n; i < descs.length; i++) paintFired(i, firedLooks[i - c.meta.n] ?? null);
     fxSlots = descs.length;
@@ -854,9 +897,9 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     applyMarks();
     paintIce();
     if (line) {
-      const s = driver.session;
-      s.crownLive.forEach((down, k) => { if (down) renderer.setFx(c.meta.crowns[k]!, { tint: TINT.crown, emissive: 0.9 }); });
-      s.heritageBroken.forEach((cracked, k) => { if (cracked) renderer.setFx(c.meta.heritage[k]!, { tint: TINT.heritage, emissive: 1 }); });
+      const s = driver.session, roles = rolePaint(feel.fx);
+      s.crownLive.forEach((down, k) => { if (down) renderer.setFx(c.meta.crowns[k]!, roles.crownKept); });
+      s.heritageBroken.forEach((cracked, k) => { if (cracked) renderer.setFx(c.meta.heritage[k]!, roles.heritageKept); });
     }
     fxSlots = descs.length;
     pacer.reset();
@@ -866,8 +909,11 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     juice.reset();
     follow.reset();
     swing.grab();
-    renderer.blasts.clear();
-    renderer.fuses.clear();
+    // A load, retry or replayed undo starts with no spark, heat, flash, blast or lit fuse of the last attempt (PT2),
+    // drawn in the effect style the feel asks for; the kept shots' fuses are lit again below.
+    renderer.setEffectStyle(feel.fx);
+    renderer.resetEffects();
+    fading = [];
     // After an undo the kept shots' bodies are back in their slots: drawn as they were (bombs, painted balls). A fresh attempt starts with none.
     if (line) {
       firedLooks.length = Math.min(firedLooks.length, descs.length - c.meta.n);
@@ -1019,8 +1065,10 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
           }
           break;
         case 'contact': {
+          // Classic: a burst at the ball as hard as its own speed change. With effects that follow the damage (PT2) the
+          // renderer's detector sparks the blocks the ball moves, and the ball's own hit only as a puff (SparkParams.ballSparks).
           const j = contactJuice(f.impulse), s = driver.snapshot, b = f.body;
-          if (b < s.count) {
+          if (feel.fx === 'classic' && b < s.count) {
             const v: Vec3 = [s.linVel[3 * b]!, s.linVel[3 * b + 1]!, s.linVel[3 * b + 2]!], l = Math.hypot(...v) || 1;
             renderer.burst([s.pos[3 * b]!, s.pos[3 * b + 1]!, s.pos[3 * b + 2]!], [v[0] / l, v[1] / l, v[2] / l], f.dv);
           }
@@ -1032,7 +1080,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
         case 'crownDown':
           juice.shake(0.08);
           // A felled crown flashes once and stops glowing.
-          renderer.setFx(f.body, { tint: TINT.crown, emissive: 0.9, flash: 0.5 });
+          renderer.setFx(f.body, rolePaint(feel.fx).crownFlash);
           // Only where the clear ends the level: par levels, and outcome levels with autobank.
           if (c.def.objective.kind === 'crowns' && f.ordinal + 1 === c.meta.crowns.length && driver.session.phase === 'running' && (driver.session.scoring === 'par' || c.def.autobank)) {
             ending = true;
@@ -1068,12 +1116,14 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
         case 'heritageCrack':
           juice.shake(0.3);
           banner('Heritage cracked', 'crack');
-          renderer.setFx(f.body, { tint: TINT.heritage, emissive: 1, flash: 0.8 });
+          // Damage style: a teal flash that stays teal (classic: to white).
+          renderer.setFx(f.body, rolePaint(feel.fx).heritageFlash);
           break;
         case 'tier': banner(`${TIER_NAMES[f.tier]}!`); break;
         case 'settled':
           judgeGoals();
           pacer.release();
+          spendFired();
           // A crown back above the line (rare: a catapult) means the round goes on after all.
           if (ending && driver.session.phase === 'aiming') { ending = false; hideResult(); }
           selected = nextSelection(c.def.rack, driver.session.rackLeft, selected);
@@ -1186,6 +1236,9 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
       banner(cue ? turnCueText(duel!.def.sides[duel!.turn].name, cue, handle.input.touch) : refused.message, 'crack');
       return false;
     }
+    // A weapon over the device's tier (a link's or keystone.rack's): refused, saying what fires it.
+    const over = armRefusal(c, shot.ammo, env.weaponTier?.() ?? 'high');
+    if (over) { banner(over, 'crack'); return false; }
     const timed = shot.after !== undefined && driver.session.strokes > 0;
     if (!timed && !aimable()) return false;
     if (shot.ammo === 'pull' && driver.session.pullRefusal(shot.body) !== null) { refusedPull = shot.body; return false; }
@@ -1295,13 +1348,20 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
   handle.marks = () => Array.from({ length: c.meta.n }, (_, i) => renderer.fxOf(i).mark);
   handle.refreshMarks = () => applyMarks();
   handle.firedLooks = () => {
-    const fused = new Set(renderer.fuses.slots), out: ('bomb' | 'painted' | 'plain')[] = [];
+    const fused = new Set(renderer.fuses.slots), out: ('bomb' | 'ram' | 'painted' | 'plain')[] = [];
     for (let i = c.meta.n; i < descs.length; i++) {
-      const fx = renderer.fxOf(i);
-      out.push(fused.has(i) || fx.matte ? 'bomb' : fx.paint && fx.band ? 'painted' : 'plain');
+      const L = firedLooks[i - c.meta.n] ?? null, fx = renderer.fxOf(i);
+      // What the renderer holds must be what the record says: a bomb is lit or matte iron, a ram or a painted ball
+      // painted and banded, a spent body matte; a plain live one carries no paint.
+      const drawn = !L ? !fx.paint : L.kind === 'bomb' ? fused.has(i) || fx.matte : L.kind === 'plain' ? !fx.paint : fx.paint && fx.band;
+      if (!drawn) throw new Error(`fired body ${i}: recorded ${L?.kind ?? 'ice'}${L?.spent ? ' (spent)' : ''}, drawn ${JSON.stringify(fx)}`);
+      out.push(L?.kind ?? 'plain');
     }
     return out;
   };
+  // Spent and drawn so: matte once the fade has begun (its first frame), all the way grey once it is over.
+  handle.spentLooks = () => Array.from({ length: descs.length - c.meta.n }, (_, k) => firedLooks[k]?.spent ?? false);
+  handle.effects = () => renderer.effectStats();
   handle.bank = bank;
   handle.freeze = freeze;
   handle.fireOpener = fireOpener;
@@ -1564,6 +1624,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     const ghost = pullAnim ? ghostOutline(pullAnim, now - pullAnim.at) : null;
     const o = joinOverlays(beads ? beadOverlay(beads, aimed?.reachable ?? true) : null, arc, ghost);
     renderer.reach(ring?.centre ?? null, ring?.radius ?? 0);
+    fadeSpent(now);
     renderer.setOverlay(o?.xyzr ?? new Float32Array(0), o?.colours);
     pendingCapture = null;
     // Bullet Time's frozen look: the grade eases in and out, the sparks dim and hang (dt 0) while frozen.

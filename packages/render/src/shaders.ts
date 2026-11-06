@@ -43,7 +43,7 @@ export const Frame = defineStruct('Frame', [
   ['keyDir', 'vec3f'], ['rimSize', 'f32'],
   ['rimColor', 'vec3f'], ['hueStep', 'f32', 'radians'],
   ['rimDir', 'vec3f'], ['ballEmissive', 'f32'],
-  ['ball', 'vec3f'], ['heat', 'f32', '1: heat glow on (bench toggle)'],
+  ['ball', 'vec3f'], ['heat', 'f32', '0: no heat glow (bench toggle, or no effects); 1: classic glow; 2: rim glow (PT2)'],
   ['shadowParams', 'vec4f', 'normal offset m, depth bias (light depth units), texel m, texel uv (1 / map size)'],
   ['viewport', 'vec2f', 'pixels'], ['dt', 'f32', 'seconds since the last scene frame'], ['trailHead', 'u32', 'newest ball trail sample'],
   ['aoOrigin', 'vec3f', 'AO grid low corner, camera-relative'], ['aoInvVoxel', 'f32', 'per metre, level 0'],
@@ -1226,17 +1226,22 @@ fn boxFace(local: vec3f, w: vec3f) -> vec3f {
   let seam = 1.0 - 0.4 * min(1.0, wPx / 0.75) * (1.0 - smoothstep(drawn - 0.5, drawn + 0.5, edgeM / max(pxM, 1e-6)));
   var c = shade(base * seam, v.rel, n, aaAlpha(rough * rough, n, dndx, dndy), aaAlpha(0.0049, n, dndx, dndy), select(0.0, fr.clearcoat, isCandy), aoBox(v, n, lp, faceN, aoPxM));
   c += base * seam * fxGlow(w, fr.time);
-  c += heatGlow(v.slot, base);
+  c += heatGlow(v.slot, base, edgeM / max(min(v.half.x, min(v.half.y, v.half.z)), 1e-6));
   return vec4f(fog(c, v.rel), 1.0);
 }
 
 // Heat from hard hits and ball contact (sparks.ts), scaled down when many
-// bodies are hot at once (lights.ts). The palette colour glows; only the
-// hottest turn white.
-fn heatGlow(slot: u32, base: vec3f) -> vec3f {
+// bodies are hot at once (lights.ts). fr.heat 1 (classic): the palette
+// colour glows over the whole face and the hottest turn white. fr.heat 2
+// (rim, PT2): the palette colour glows along the face's edges (edge: the
+// distance to the nearest edge over the box's smallest half extent),
+// fading to a faint fill in the middle, and never turns white, so a hit
+// block reads as struck, not as a white slab.
+fn heatGlow(slot: u32, base: vec3f, edge: f32) -> vec3f {
   if (fr.heat == 0.0 || slot >= fr.capacity) { return vec3f(0.0); }
   let h = unpack2x16float(fxState[slot].bits).x;
   if (h <= 0.0) { return vec3f(0.0); }
+  if (fr.heat > 1.5) { return fr.fxGain.y * h * lights[${LIGHT_META}u].x * base * 3.0 * mix(0.1, 1.0, 1.0 - smoothstep(0.0, 0.3, edge)); }
   return fr.fxGain.y * h * lights[${LIGHT_META}u].x * mix(base * 3.0, vec3f(6.0), smoothstep(0.8, 1.0, h));
 }
 
@@ -1451,7 +1456,7 @@ const SPARK_HALF_WIDTH = 1.25;
   // is dimmed by its coverage.
   let t = s.age / sparkLife(s.packed);
   let hot = mix(vec3f(1.0, 0.92, 0.8) * 20.0, vec3f(1.0, 0.42, 0.1) * 8.0, smoothstep(0.0, 0.6, t));
-  o.colour = mix(0.05, 1.0, gain) * hot * (1.0 - smoothstep(0.7, 1.0, t)) * clamp(len + 0.4, 0.4, 1.0);
+  o.colour = mix(0.05, 1.0, gain) * hot * (1.0 - smoothstep(0.7, 1.0, t)) * clamp(len + 0.4, 0.4, 1.0) * sparkGlow(s.packed);
   return o;
 }
 

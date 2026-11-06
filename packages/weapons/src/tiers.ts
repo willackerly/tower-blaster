@@ -62,21 +62,26 @@ export function weaponLoad(spec: MunitionSpec): WeaponLoad {
 const over = (a: number, cap: number) => a > cap * 1.01;
 
 /** Where `spec` goes over `tier`'s caps: one error (code tier) per number over, none when it fits. */
-export function tierIssues(spec: MunitionSpec, tier: WeaponTier): WeaponIssue[] {
-  const load = weaponLoad(spec), cap = WEAPON_TIER_CAPS[tier], out: WeaponIssue[] = [];
+export const tierIssues = (spec: MunitionSpec, tier: WeaponTier): WeaponIssue[] => loadIssues(weaponLoad(spec), tier);
+
+/**
+ * Where a load goes over `tier`'s caps (tierIssues on a load already counted: the game's arms, whose
+ * energy it measures on the level, keystone arsenal.ts armLoad).
+ */
+export function loadIssues(load: WeaponLoad, tier: WeaponTier): WeaponIssue[] {
+  const cap = WEAPON_TIER_CAPS[tier], out: WeaponIssue[] = [], need = loadTier(load);
   const fmt = (x: number) => (Number.isInteger(x) ? String(x) : x.toFixed(2));
   for (const k of ['bodies', 'blasts', 'grenades'] as const) {
-    if (over(load[k], cap[k])) out.push({ code: 'tier', level: 'error', path: '', message: `${fmt(load[k])} ${k} a shot is over the ${tier} tier's cap of ${cap[k]}${needs(load) ? ` (it needs ${needs(load)})` : ' (over every tier)'}` });
+    if (over(load[k], cap[k])) out.push({ code: 'tier', level: 'error', path: '', message: `${fmt(load[k])} ${k} a shot is over the ${tier} tier's cap of ${cap[k]}${need ? ` (it needs ${need})` : ' (over every tier)'}` });
   }
   return out;
 }
 
 /** The lowest tier `spec` fits, or null when it is over every tier. */
-export function tierOf(spec: MunitionSpec): WeaponTier | null {
-  return needs(weaponLoad(spec));
-}
+export const tierOf = (spec: MunitionSpec): WeaponTier | null => loadTier(weaponLoad(spec));
 
-function needs(load: WeaponLoad): WeaponTier | null {
+/** The lowest tier a load fits, or null when it is over every tier. */
+export function loadTier(load: WeaponLoad): WeaponTier | null {
   return WEAPON_TIERS.find((t) => !(['bodies', 'blasts', 'grenades'] as const).some((k) => over(load[k], WEAPON_TIER_CAPS[t][k]))) ?? null;
 }
 
