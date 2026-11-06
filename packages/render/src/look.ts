@@ -56,7 +56,7 @@ export interface LookParams {
   vignette: number;
   /** The composite's tone map (default agx); the others go through a gain that puts mid grey where AgX does (tonemap.ts). */
   toneMap?: ToneMap;
-  /** Film grain (tonemap.ts grained): amount (0: none; 1: 10% of mid grey) and size in pixels. Left out: none. */
+  /** Film grain (tonemap.ts grained): amount (0: none; 1: 10% of mid grey) and size in pixels of a 1080-line frame (grainPixels). Left out: none. */
   grain?: { amount: number; size: number };
   /**
    * With an atmosphere: the look's own ball (not painted, not matte) as steel: metal 0 (the dielectric ball
@@ -264,7 +264,7 @@ export interface RealOptions {
    * Polish (realism step 7, docs/render/polish.md). toneMap: the composite's tone map (TONE_MAPS; the
    * others matched to AgX at mid grey). grain: film grain, its relative strength at mid grey in tenths
    * (0: none; 1 is 10%), rising as 1 / sqrt(luminance) in the darks (shot noise); grainSize: its size in
-   * pixels. ballMetal: the look's own ball from the old clear-coated grey (0) to bare steel (1);
+   * pixels of a 1080-line frame (scaled with the frame's height, so it reads the same on a high-DPI screen). ballMetal: the look's own ball from the old clear-coated grey (0) to bare steel (1);
    * ballRough: the steel's roughness (0.05 a polished bearing, 0.4 a forged, weathered one).
    */
   toneMap: ToneMap;
@@ -281,7 +281,7 @@ export const REAL_DEFAULTS: RealOptions = {
   sunSize: 0.53, shadowSoftness: 1, shadowFill: 0.5,
   dust: 1, chips: 1, dustSize: 0.9, dustOpacity: 0.4, dustThreshold: 2, dustFace: 0.15, dustErode: 0.7, dustThin: 0.3, dustSkirt: 0.9,
   env: 'outdoor', hallSize: 1, hallGlass: 0.5, hallIron: 0.55, hallExterior: 1,
-  toneMap: 'agx', grain: 0, grainSize: 1.5, ballMetal: 0, ballRough: 0.2,
+  toneMap: 'agx', grain: 0.2, grainSize: 1.5, ballMetal: 1, ballRough: 0.2,
 };
 
 /** Step 7's options at the values that leave the real look as it was before them (the golden gate pins it). */
@@ -376,7 +376,7 @@ export const REAL_KNOBS = {
   hallIron: { label: 'hall ironwork grey 0-1', min: 0, max: 1, step: 0.05 },
   hallExterior: { label: 'hall seen from outside (0/1)', min: 0, max: 1, step: 1 },
   grain: { label: 'film grain 0-1 (1: 10% at mid grey)', min: 0, max: 1, step: 0.05 },
-  grainSize: { label: 'grain size (px)', min: 1, max: 4, step: 0.25 },
+  grainSize: { label: 'grain size (px at 1080 lines)', min: 1, max: 4, step: 0.25 },
   ballMetal: { label: 'ball steel 0-1 (0: clear-coated grey)', min: 0, max: 1, step: 0.05 },
   ballRough: { label: 'ball steel roughness', min: 0.02, max: 1, step: 0.01 },
 } as const;

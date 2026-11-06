@@ -10,7 +10,7 @@
 // mean as the input: mixing it in redistributes light without adding any.
 import { AGX_WGSL, TONE_MAPS, type ToneMap } from './look.ts';
 import { PCG_WGSL } from './noise.ts';
-import { GRAIN_WGSL, TONE_GAIN, TONE_WGSL } from './tonemap.ts';
+import { GRAIN_WGSL, grainPixels, TONE_GAIN, TONE_WGSL } from './tonemap.ts';
 
 export const BLOOM_FORMAT: GPUTextureFormat = 'rgba16float';
 export const HDR_FORMAT: GPUTextureFormat = 'rgba16float';
@@ -105,15 +105,15 @@ fn ign(p: vec2f) -> f32 {
 /** toneMap: default agx; grain: film grain amount (0 or left out: none) and size in pixels (tonemap.ts). */
 export interface PostParams { bloomMix: number; exposure: number; vignette: number; toneMap?: ToneMap; grain?: { amount: number; size: number } }
 
-/** The composite's uniform block (Post in COMPOSITE_WGSL): 48 bytes. seed: the grain's frame seed. */
-export function postUniforms(p: PostParams, levels: number, seed: number): ArrayBuffer {
+/** The composite's uniform block (Post in COMPOSITE_WGSL): 48 bytes. seed: the grain's frame seed; height: the frame's, which scales the grain (grainPixels). */
+export function postUniforms(p: PostParams, levels: number, seed: number, height = 1080): ArrayBuffer {
   const b = new ArrayBuffer(48), f = new Float32Array(b), u = new Uint32Array(b);
   const op = p.toneMap ?? 'agx';
   f.set([p.bloomMix, p.exposure, p.vignette, levels]);
   u[4] = TONE_MAPS.indexOf(op);
   f[5] = TONE_GAIN[op];
   f[6] = p.grain?.amount ?? 0;
-  f[7] = p.grain?.size ?? 1;
+  f[7] = grainPixels(p.grain?.size ?? 1, height);
   u[8] = seed >>> 0;
   return b;
 }
@@ -193,7 +193,7 @@ export class Post {
    */
   encode(enc: GPUCommandEncoder, hdr: GPUTexture, out: GPUTextureView, p: PostParams, stamp: Stamp = noStamp, exposureFrom?: { buffer: GPUBuffer; offset: number }, seed = 0): void {
     this.encodeBloom(enc, hdr, true, stamp);
-    this.device.queue.writeBuffer(this.uniform, 0, postUniforms(p, this.levels.length, seed));
+    this.device.queue.writeBuffer(this.uniform, 0, postUniforms(p, this.levels.length, seed, hdr.height));
     if (exposureFrom) enc.copyBufferToBuffer(exposureFrom.buffer, exposureFrom.offset, this.uniform, 4, 4);
     const pass = enc.beginRenderPass({ ...stamp('composite'), colorAttachments: [{ view: out, loadOp: 'clear', clearValue: { r: 0, g: 0, b: 0, a: 1 }, storeOp: 'store' }] });
     pass.setPipeline(this.composite);

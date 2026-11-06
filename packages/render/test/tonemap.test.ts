@@ -2,7 +2,7 @@
 // the CPU twins' properties here, and the WGSL and the composite against them
 // in headless Chromium (SwiftShader without a GPU). Correctness only.
 import { describe, expect, it } from 'vitest';
-import { agx, GRAIN_FLOOR, GRAIN_MID, grained, grainNoise, MID_GREY, parseRealOptions, realLook, REAL_DEFAULTS, REAL_POLISH_OFF, srgbToLinear, TONE_GAIN, TONE_MAPS, toneMapped, writeRealOptions, type V3 } from '../src/index.ts';
+import { agx, GRAIN_FLOOR, GRAIN_MID, grained, grainNoise, grainPixels, MID_GREY, parseRealOptions, realLook, REAL_DEFAULTS, REAL_POLISH_OFF, srgbToLinear, TONE_GAIN, TONE_MAPS, toneMapped, writeRealOptions, type V3 } from '../src/index.ts';
 import { gpu, call } from './harness.ts';
 
 const luma = (c: V3) => 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
@@ -100,6 +100,12 @@ describe('film grain (CPU twin)', () => {
     expect(grained([0.2, 0.2, 0.2], 1, -100).every((x) => x === 0)).toBe(true); // never negative
     expect(grained([0.2, 0.3, 0.4], 0, 3)).toEqual([0.2, 0.3, 0.4]);
   });
+
+  it('its size is pixels of a 1080-line frame, scaled with the frame (so a 1440p or high-DPI screen sees the same grain), never under 1 px', () => {
+    expect(grainPixels(1.5, 1080)).toBe(1.5);
+    expect(grainPixels(1.5, 2160)).toBe(3);
+    expect(grainPixels(1.5, 400)).toBe(1);
+  });
 });
 
 describe('tone maps and grain on the GPU', () => {
@@ -115,13 +121,14 @@ describe('tone maps and grain on the GPU', () => {
     if (!gpu) return ctx.skip();
     const cases = [
       ...TONE_MAPS.map((toneMap) => ({ toneMap })),
-      { toneMap: 'agx' as const, grain: { amount: 1, size: 1.5 }, flat: MID_GREY, seed: 3 },
-      { toneMap: 'neutral' as const, grain: { amount: 0.5, size: 2 }, flat: MID_GREY / 8, seed: 4 },
+      { toneMap: 'agx' as const, grain: { amount: 1, size: 30 }, flat: MID_GREY, seed: 3 },
+      { toneMap: 'neutral' as const, grain: { amount: 0.5, size: 40 }, flat: MID_GREY / 8, seed: 4 },
       { toneMap: 'agx' as const, flat: MID_GREY, seed: 3 },
     ];
     const r = await call('postChecks', cases);
     expect(r.error).toBeNull();
     r.cases.forEach((c: { worst: number }, i: number) => expect(c.worst, JSON.stringify(cases[i])).toBeLessThanOrEqual(1.01));
+    // (Sizes 30 and 40 at 1080 lines are 1.8 and 2.4 px in this 64-line strip.)
     // Grain shows: at mid grey, amount 1 gives a green spread of several 8-bit steps; none without it (the dither's 1 step).
     const [grainy, , flat] = r.cases.slice(TONE_MAPS.length) as Array<{ mean: number; sd: number }>;
     expect(grainy!.sd).toBeGreaterThan(4);

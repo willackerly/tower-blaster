@@ -7,10 +7,9 @@ import { emptySnapshot, TAG_BALL, type BodyDesc, type Snapshot } from '@tb/engin
 import { readBuffer, sharedDevice } from '@tb/gpu';
 import { Body, RenderRecord, Shape, TIER, readStruct } from '@tb/schema';
 import {
-  packSurface, agx, AGX_WGSL, TONE_MAPS, TONE_WGSL, toneMapped, GRAIN_WGSL, grainNoise, grained, agxBase, pbrNeutral, aces, type ToneMap, LOOKS, lookByName, realLook, type RealOptions, type LookParams, fromHalf, Atmosphere, CLEAR_DAY, transmittance, transmittanceHMu, multiScattering, skyViewDir, skyRadiance, skyViewUv, sampleTransmittance, ambientOf, distanceToGround, meteredIlluminance, Materials, heightNormal, STONES, GROUNDS, MATERIAL_LAYERS, WOOD_WGSL, WOOD_RING_M, woodRings, PCG_WGSL, pcg3d, MACRO_LAYER, layerTile, materialSample, macroSample, adaptedExposure, LUMA, R_TOP, R_GROUND, FX_WORDS, packFx, toHalf, bevelNormal, BEVEL_WGSL, oklabToLinear, OKLAB_WGSL, Post,
-  Culler, cullReference, FLOOR_REACH, GpuBodySource, invert, listMatches, lookAt, makeGpuBodies, multiply, packBodies, perspective, Renderer, SEG, SEGMENTS, SnapshotSource, transform,
-  translation, normalize, rockIn, ROCK_CELL, ROCK_CLUMP, ROCK_SINK, sunOf, hallTraceCpu, HALL_MAT, OLYMPIA, BOX_VERTS, SPHERE_VERTS, SUN, Sparks, CTL, MAX_EVENTS, flashSlot, FLASHES, MAX_BALLS, TRAIL, Lights, LIGHTS, LIGHT_META, LIGHT_PACKED, MATERIAL, AoVolume, aoGrid, aoFrame, splatReference, composeReference, AO_FOOT_WGSL, AO_SAMPLE_WGSL, AO_SEAM_WGSL, AO_ONE, type SplatBody, unpackImpacts, unpackSparks, spawnReference, stepReference, debrisSpawnReference, dustStepReference, chipStepReference, type SparkState, type Impact, type BodySource, type CullFrame, type FrameParams, type RendererOptions, type V3,
+  packSurface, agx, AGX_WGSL, TONE_MAPS, TONE_WGSL, toneMapped, GRAIN_WGSL, grainNoise, grainPixels, grained, agxBase, pbrNeutral, aces, type ToneMap, type RealOptions, type LookParams, fromHalf, Atmosphere, CLEAR_DAY, transmittance, transmittanceHMu, multiScattering, skyViewDir, skyRadiance, skyViewUv, sampleTransmittance, ambientOf, distanceToGround, meteredIlluminance, Materials, heightNormal, STONES, GROUNDS, MATERIAL_LAYERS, WOOD_WGSL, WOOD_RING_M, woodRings, PCG_WGSL, pcg3d, MACRO_LAYER, layerTile, materialSample, macroSample, adaptedExposure, LUMA, R_TOP, R_GROUND, FX_WORDS, packFx, toHalf, bevelNormal, BEVEL_WGSL, oklabToLinear, OKLAB_WGSL, Post, Culler, cullReference, FLOOR_REACH, GpuBodySource, invert, listMatches, lookAt, makeGpuBodies, multiply, packBodies, perspective, Renderer, SEG, SEGMENTS, SnapshotSource, transform, translation, normalize, rockIn, ROCK_CELL, ROCK_CLUMP, ROCK_SINK, sunOf, hallTraceCpu, HALL_MAT, OLYMPIA, BOX_VERTS, SPHERE_VERTS, SUN, Sparks, CTL, MAX_EVENTS, flashSlot, FLASHES, MAX_BALLS, TRAIL, Lights, LIGHTS, LIGHT_META, LIGHT_PACKED, MATERIAL, AoVolume, aoGrid, aoFrame, splatReference, composeReference, AO_FOOT_WGSL, AO_SAMPLE_WGSL, AO_SEAM_WGSL, AO_ONE, type SplatBody, unpackImpacts, unpackSparks, spawnReference, stepReference, debrisSpawnReference, dustStepReference, chipStepReference, type SparkState, type Impact, type BodySource, type CullFrame, type FrameParams, type RendererOptions, type V3,
 } from '../src/index.ts';
+import { LOOKS, lookByName, realLook } from './looks.ts';
 
 function rng(seed: number) {
   let a = seed >>> 0;
@@ -598,7 +597,7 @@ export async function postChecks(cases: Array<{ toneMap: ToneMap; grain?: { amou
     for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
       const ign = (((52.9829189 * (((x + 0.5) * 0.06711056 + (y + 0.5) * 0.00583715) % 1)) % 1) + 1) % 1;
       let v = vals[y * w + x]!;
-      if (c.grain) v = grained(v, c.grain.amount, grainNoise(x, y, seed, Math.fround(c.grain.size)));
+      if (c.grain) v = grained(v, c.grain.amount, grainNoise(x, y, seed, Math.fround(grainPixels(c.grain.size, h))));
       const want = toneMapped(c.toneMap, v).map((k) => (k + (ign - 0.5) / 255) * 255);
       for (let k = 0; k < 3; k++) worst = Math.max(worst, Math.abs(px[y * bpr + 4 * x + k]! - want[k]!));
       const g = px[y * bpr + 4 * x + 1]!;

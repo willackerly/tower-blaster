@@ -148,6 +148,11 @@ fn toneMapAlt(op: u32, c: vec3f) -> vec3f {
 
 // ---------------------------------------------------------------- grain
 
+/** The grain's lattice spacing in pixels for size (pixels at 1080 lines) in a frame `height` pixels tall (at least 1). */
+export function grainPixels(size: number, height: number): number {
+  return Math.max(1, (size * height) / 1080);
+}
+
 /** Relative grain (standard deviation over the signal) at mid grey for grain amount 1. */
 export const GRAIN_MID = 0.1;
 /** Below this luminance the relative grain stops growing (4x mid grey's), so blacks do not boil. */

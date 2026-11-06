@@ -1354,8 +1354,9 @@ describe('drawing', () => {
     expect(r.diff).toBe(0);
     expect(r.prevEqual).toBe(true); // beforeStep() copied the state into prev
     // Uniforms only (frame, cull, spark and light params, spark control reset): measured 1602 B (the debris params and counters added 24, the
-    // hall's 2 vec4 in the frame 48 with padding). Any per-body upload is 41 x Body.size more.
-    expect(r.bytesPerFrame).toBeLessThanOrEqual(1650);
-    expect(1650).toBeLessThan(41 * Body.size);
+    // hall's 2 vec4 in the frame 48 with padding; realism step 7 48: the frame's ballSteel and the composite's tone map and grain,
+    // measured 1698). Any per-body upload is 41 x Body.size more.
+    expect(r.bytesPerFrame).toBeLessThanOrEqual(1700);
+    expect(1700).toBeLessThan(41 * Body.size);
   });
 });
