@@ -1518,6 +1518,10 @@ export interface SolverDispatch {
   hessian: HessianForm;
 }
 
+/** The solve's parts the sleep probe times (AvbdSolver.solve's mark): the setup, then the sweeps; finalize is the rest. */
+export const SOLVE_PARTS = ['setup', 'sweeps'] as const;
+export type SolvePart = (typeof SOLVE_PARTS)[number];
+
 export const DEFAULT_DISPATCH: SolverDispatch = { colorTail: 8, indirectColors: false, sizedColors: false, awakeLists: false, tailThreads: MAX_TAIL, hessian: 'registers' };
 
 /** The default tail width on a software adapter (SwiftShader in tests and CI); see SolverDispatch.tailThreads. */
@@ -1763,7 +1767,12 @@ export class AvbdSolver {
   }
 
   /** After broadphase, narrowphase and colouring: one full AVBD step. */
-  solve(encoder: GPUCommandEncoder, n: number, iterations: number, timestampWrites?: GPUComputePassTimestampWrites): void {
+  /**
+   * mark (the sleep probe, GpuAvbdEngine.probeStages): called between passes after the setup (contact setup, initBodies,
+   * the awake lists) and after the sweeps (every primal sweep, dual update and the velocities), before finalize; each
+   * call ends the pass and the rest of the solve runs in a new one, which changes no result.
+   */
+  solve(encoder: GPUCommandEncoder, n: number, iterations: number, timestampWrites?: GPUComputePassTimestampWrites, mark?: (at: SolvePart) => void): void {
     const { b } = this;
     // This step's history half: pairs, group offsets, slot count.
     encoder.copyBufferToBuffer(b.pairs, 0, this.pairHist, this.cur * this.maxPairs * 8, this.maxPairs * 8);
@@ -1773,7 +1782,9 @@ export class AvbdSolver {
     const groups = Math.max(1, Math.ceil(n / WG));
     const { active } = this;
     if (active && n > 0) encoder.clearBuffer(active, 0, ACTIVE_HEAD * 4);
-    const pass = encoder.beginComputePass(timestampWrites ? { timestampWrites } : {});
+    if (timestampWrites && mark) throw new Error('AvbdSolver.solve: timestampWrites time one pass, so they do not go with mark');
+    let pass = encoder.beginComputePass(timestampWrites ? { timestampWrites } : {});
+    const split = (at: SolvePart) => { if (!mark) return; pass.end(); mark(at); pass = encoder.beginComputePass(); };
     if (n > 0) {
       pass.setBindGroup(0, this.binds.setup!);
       pass.setPipeline(this.pipes.pairSetup!);
@@ -1792,6 +1803,7 @@ export class AvbdSolver {
         pass.setPipeline(this.pipes.listArgs!);
         pass.dispatchWorkgroups(1);
       }
+      split('setup');
       // Colours below `direct` get a dispatch each; the tail workgroup does the rest.
       const { indirectColors } = this.dispatch;
       const direct = indirectColors ? MAX_COLORS - 1 : this.dispatch.colorTail;
@@ -1814,10 +1826,15 @@ export class AvbdSolver {
           pass.dispatchWorkgroups(groups);
         }
       }
+      split('sweeps');
       pass.setBindGroup(0, this.binds.dual!);
       pass.setPipeline(this.pipes.finalize!);
       pass.dispatchWorkgroups(groups);
       if (this.restitution) this.encodeRestitution(pass, groups, this.restitution.rounds);
+    } else {
+      // No bodies, no work: the marks still come, in order.
+      split('setup');
+      split('sweeps');
     }
     pass.end();
     this.prevN = n;

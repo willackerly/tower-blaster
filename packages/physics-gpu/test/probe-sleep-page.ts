@@ -1,7 +1,7 @@
 // Page-side drivers for the sleep probe tests (bundled by loadBundle).
 import { sharedDevice } from '@tb/gpu';
 import type { SceneDesc } from '@tb/engine-api';
-import { GpuAvbdEngine, STEP_STAGES } from '../src/index.ts';
+import { GpuAvbdEngine, type GpuEngineOptions, PROBE_MARKS, STEP_STAGES } from '../src/index.ts';
 import { contactEdges, runP6 } from '../src/probe-sleep.ts';
 import type { Stat } from '../src/probe.ts';
 
@@ -12,10 +12,10 @@ export { runProbe } from '../src/probe.ts';
  * writes a buffer of its own at every mark. Returns both final states, the marks in the order they came,
  * and whether every mark got an encoder (the same one within a step).
  */
-export async function stagesHook(scene: SceneDesc, steps: number) {
+export async function stagesHook(scene: SceneDesc, steps: number, opts: Omit<GpuEngineOptions, 'device'> = {}) {
   const { device } = await sharedDevice();
   device.pushErrorScope('validation');
-  const a = new GpuAvbdEngine({ iterations: 4 }, { device }), b = new GpuAvbdEngine({ iterations: 4 }, { device });
+  const a = new GpuAvbdEngine({ iterations: 4 }, { ...opts, device }), b = new GpuAvbdEngine({ iterations: 4 }, { ...opts, device });
   await a.init(scene);
   await b.init(scene);
   const sink = device.createBuffer({ size: 64, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST });
@@ -38,7 +38,7 @@ export async function stagesHook(scene: SceneDesc, steps: number) {
   const error = await device.popErrorScope();
   a.dispose(); b.dispose(); sink.destroy();
   const plain = (s: typeof sa) => [...s.pos, ...s.rot, ...s.linVel, ...s.angVel];
-  return { error: error?.message ?? null, a: plain(sa), b: plain(sb), marks, sameEncoder, stages: [...STEP_STAGES] };
+  return { error: error?.message ?? null, a: plain(sa), b: plain(sb), marks, sameEncoder, stages: [...STEP_STAGES], order: [...PROBE_MARKS] };
 }
 
 const wall = (device: GPUDevice) => async (record: (pass: GPUComputePassEncoder) => void): Promise<Stat> => {
