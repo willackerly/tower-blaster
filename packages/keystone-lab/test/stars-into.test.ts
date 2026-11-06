@@ -13,10 +13,11 @@ describe('mergeStarsFile', () => {
     expect(mergeStarsFile(FILE, 'B1', B1.stars!)).toBe(FILE);
   });
   it('adds a new level as one line, in id order, and keeps the others', () => {
-    const out = mergeStarsFile(FILE, 'B3', B3), parsed = JSON.parse(out);
-    expect(parsed.B3).toEqual(B3);
-    expect(Object.keys(parsed)).toEqual(['B1', 'B2', 'B3']);
-    expect(out.split('\n').filter((l) => l.includes('"B3"'))).toHaveLength(1);
+    // B99: an id the committed file does not have (it grows as levels are cast), sorted after them all.
+    const out = mergeStarsFile(FILE, 'B99', B3), parsed = JSON.parse(out);
+    expect(parsed.B99).toEqual(B3);
+    expect(Object.keys(parsed)).toEqual([...Object.keys(JSON.parse(FILE)), 'B99']);
+    expect(out.split('\n').filter((l) => l.includes('"B99"'))).toHaveLength(1);
     expect(out.split('\n').length).toBe(FILE.split('\n').length + 1);
   });
   it('replaces a level\'s stars (a recast pooled)', () => {
@@ -30,6 +31,11 @@ describe('mergeStarsFile', () => {
   it('orders ids numerically (B10 after B9)', () => {
     const out = mergeStarsFile(mergeStarsFile(null, 'B10', B3), 'B9', B3);
     expect(Object.keys(JSON.parse(out))).toEqual(['B9', 'B10']);
+  });
+  it('keeps a waiver on its line: the stars say which gate they were landed past', () => {
+    const out = mergeStarsFile(FILE, 'B3', { ...B3, waived: ['skill'] });
+    expect(JSON.parse(out).B3.waived).toEqual(['skill']);
+    expect(out.split('\n').find((l) => l.includes('"B3"'))).toContain('"waived": ["skill"]');
   });
   it('refuses bad stars, and a file that is not an object of stars', () => {
     expect(() => mergeStarsFile(FILE, 'B3', { ...B3, t3: 0.1 })).toThrow(/stars for B3: t3/);
