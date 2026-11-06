@@ -65,6 +65,13 @@ export interface SoundMaterial {
    */
   gritRing?: number;
   /**
+   * How far a landing is from a point (Hertz) contact toward flat face on flat face, 0 to 1 (absent: 0,
+   * Hertz). Contact time T = T_hertz^(1 - face) T_face^face, T_face = pi sqrt(m* / (E* L)) (modes.ts
+   * contactTime). Real stone peaks at 500 Hz-2 kHz; a 7.5 ms Hertz contact on a 0.5 m block put its
+   * click at 130 Hz.
+   */
+  face?: number;
+  /**
    * Contact roughness, dB: how much the contact force fluctuates, as a share of itself (several points
    * touching within the contact, asperities), as noise up to ~7 kHz (modes.ts forceSpectrum). A smooth
    * Hertz pulse of T seconds has almost nothing above 1 / T, so a heavy block's long contact sounds only
@@ -173,7 +180,7 @@ export const soundMaterials = (set: SoundSet = 'real'): Record<keyof typeof SOUN
 
 const POSITIVE = ['E', 'nu', 'rho', 'eta', 'R', 'mstar'] as const;
 
-const KEYS = new Set(['model', 'dims', 'size', 'wall', 'walls', 'plateModes', 'E', 'G', 'nu', 'rho', 'eta', 'jitter', 'R', 'Ec', 'mstar', 'ringDb', 'clickDb', 'gritDb', 'gritRate', 'gritSpread', 'gritRing', 'roughDb', 'roughT', 'overlap', 'clickModel', 'denseDb', 'law']);
+const KEYS = new Set(['model', 'dims', 'size', 'wall', 'walls', 'plateModes', 'E', 'G', 'nu', 'rho', 'eta', 'jitter', 'R', 'Ec', 'mstar', 'ringDb', 'clickDb', 'gritDb', 'gritRate', 'gritSpread', 'gritRing', 'face', 'roughDb', 'roughT', 'overlap', 'clickModel', 'denseDb', 'law']);
 
 /** A material from JSON-ish input over `base` (a whole material when absent); throws on a value that can't make sound. */
 export function parseSoundMaterial(input: Partial<Record<keyof SoundMaterial, unknown>>, base?: SoundMaterial): SoundMaterial {
@@ -197,6 +204,7 @@ export function parseSoundMaterial(input: Partial<Record<keyof SoundMaterial, un
   if (out.clickModel !== undefined && out.clickModel !== 'dipole' && out.clickModel !== 'sphere') throw new Error(`sound material clickModel must be dipole or sphere: ${String(out.clickModel)}`);
   if (out.overlap !== undefined && !(out.overlap >= 0.1 && out.overlap <= 10)) throw new Error('sound material overlap must be 0.1 to 10');
   if (out.gritRate !== undefined && !(out.gritRate >= 0.1 && out.gritRate <= 60)) throw new Error('sound material gritRate must be 0.1 to 60 grains per m/s');
+  if (out.face !== undefined && !(out.face >= 0 && out.face <= 1)) throw new Error('sound material face must be 0 to 1');
   if (out.gritRing !== undefined && !(out.gritRing >= 0 && out.gritRing <= 1)) throw new Error('sound material gritRing must be 0 to 1');
   if (out.gritSpread !== undefined && !(out.gritSpread >= 0.001 && out.gritSpread <= 0.25)) throw new Error('sound material gritSpread must be 0.001 to 0.25 s');
   if (out.roughT !== undefined && !(out.roughT >= 1e-5 && out.roughT <= 0.05)) throw new Error('sound material roughT must be 1e-5 to 0.05 s');

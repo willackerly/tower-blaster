@@ -499,11 +499,32 @@ pitch about 15%) it reads Tick, Animal, Drip (real share 0.56); the material sha
 (mineral 0.06 to 0.07). Chips at gritDb 44, gritRate 10 bring it to mineral 0.24, real share 0.75.
 (In step 2 jitter alone did nothing; that was without `overlap: 1`.)
 
+Stone, against 105 Freesound previews the Mac fetched (stone knock, impact, block, rock hit, brick;
+ice crack, pond, footsteps, sheet; 53 CC0, 33 Attribution, 13 NonCommercial: references only, see
+/mnt/project-files/sound-refs-index.csv). The judge reads real stone much as ours: stone knocks
+wood 0.53 (Whack, Door), stone drops "Inside, small room" in 5 of 8, mineral 0.11-0.35 throughout. So
+for stone the target is the spectrum, not the labels. Octave levels re their mean, 125 Hz-8 kHz:
+
+| | 125 | 250 | 500 | 1k | 2k | 4k | 8k | rms distance |
+|---|---|---|---|---|---|---|---|---|
+| real stone knock and impact (median of 16) | -6.5 | -2.4 | 1.3 | 5.4 | 5.9 | 1.4 | -6.5 | 6.8 (each recording to the median) |
+| stone A, clatter | 2.8 | -2.3 | -13.5 | -10.6 | 5.7 | 11.8 | 6.0 | 10.9 |
+| A + jitter 0.15, chips (gritDb 50, gritRate 10), face 0.6 | -9.1 | -2.4 | 5.1 | 4.7 | 0.7 | 2.6 | -1.6 | 3.2 |
+
+Real stone peaks at 500 Hz-2 kHz. Ours had a hole there because the click sat at 130 Hz: a 7.5 ms
+Hertz contact, which holds for a 2 mm corner but not for a face. Flat on flat, the stiffness is the
+block's own, k = E* L, so T_face = pi sqrt(m* / k), 0.50 ms for the 0.5 m block. A landing starts on an
+edge and rolls flat, so it falls between the two. New option `face` (0 to 1, absent 0):
+T = T_hertz^(1 - face) T_face^face (modes.ts contactTime). At face 0.6 (1.6 ms) the clatter reads
+mineral 0.45 (Crack, Plop), real share 0.93, and the knock reads Door and Tap (wood 0.57), as the real
+stone knocks do. Ice with face 0.5, cracks over 80 ms and jitter 0.08 reads Crack 0.74, Breaking 0.58,
+Glass 0.32 (mineral 0.49), 2.5 dB from the median of 39 real ice recordings (their own spread is 5.2).
+
 Fixed: `sparseModes` hung on a body with no mode table (a 5 cm stone cube, whose first mode is past
 18 kHz): the Weyl count started at 0 Hz, and its step (x * 0.002) never moved. It starts at 20 Hz.
 
-Page for Will: https://claude.ai/artifact/Rx7wFWSp5tVpMhauwwYpQ4 (stone A-D, ice now and B-D, and
-three of the recordings). His picks become the real set's defaults.
+Page for Will: https://claude.ai/artifact/Rx7wFWSp5tVpMhauwwYpQ4 (stone A-E, ice now and B-E, and
+real recordings of each). His picks become the real set's defaults.
 
 Next: Will's picks, then a tower. The free-text describer (CLAP) still needs huggingface.co.
 

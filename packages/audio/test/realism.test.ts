@@ -334,6 +334,20 @@ describe('step 2c options (off by default): stone and ice from real recordings',
     expect(energyOf(gritRun({ gritRate: 30, gritRing: 1 }))).toBe(0);
   });
 
+  it('face: contact time from Hertz (absent, 0) toward a flat face, T_hertz^(1 - face) T_face^face', () => {
+    const stone = REAL.stone!, dv = (Math.sqrt(2 * 9.81 * 0.05) * 1.35) / 2; // the knock: a 5 cm drop
+    const hertz = contactTime(stone, dv, 0.5);
+    expect(hertz).toBeCloseTo(7.53e-3, 4);
+    expect(contactTime({ ...stone, face: 0 }, dv, 0.5)).toBe(hertz);
+    const Es = stone.E / (2 * (1 - stone.nu ** 2)), flat = Math.PI * Math.sqrt((stone.mstar * mass(stone, 0.5)) / (Es * 0.5));
+    expect(flat).toBeCloseTo(5.04e-4, 6);
+    expect(contactTime({ ...stone, face: 1 }, dv, 0.5)).toBeCloseTo(flat, 12);
+    expect(contactTime({ ...stone, face: 0.6 }, dv, 0.5)).toBeCloseTo(hertz ** 0.4 * flat ** 0.6, 12);
+    // Still faster for harder hits, by (1 - face) of Hertz's dv^(-1/5).
+    expect(contactTime({ ...stone, face: 0.6 }, 4 * dv, 0.5) / contactTime({ ...stone, face: 0.6 }, dv, 0.5)).toBeCloseTo(4 ** (-0.2 * 0.4), 9);
+    for (const face of [-0.1, 1.1]) expect(() => parseSoundMaterial({ face }, REAL.stone)).toThrow(/face/);
+  });
+
   it('rejects grit rates, spreads and ring shares that cannot be', () => {
     for (const gritRate of [0, 0.05, 61]) expect(() => parseSoundMaterial({ gritRate }, REAL.ice)).toThrow(/gritRate/);
     for (const gritSpread of [0, 0.0005, 0.3]) expect(() => parseSoundMaterial({ gritSpread }, REAL.ice)).toThrow(/gritSpread/);
