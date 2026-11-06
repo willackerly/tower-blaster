@@ -83,8 +83,9 @@ describe('game page', () => {
     await page.evaluate(() => document.getElementById('field')!.remove());
 
     // Retry regrows the level and resets the rack.
+    // (A load spans frames: its pre-settle is paced, docs/game/level-start.md, so wait for the swap.)
     await page.keyboard.press('r');
-    await ready(page);
+    await page.waitForFunction(() => window.__game.result === null && window.__game.ready, undefined, { timeout: 60_000, polling: 100 });
     expect(await page.evaluate(() => ({ phase: window.__game.phase, strokes: window.__game.strokes, result: window.__game.result }))).toEqual({ phase: 'aiming', strokes: 0, result: null });
     expect(await page.locator('#result').isVisible()).toBe(false);
     expect(errors).toEqual([]);
