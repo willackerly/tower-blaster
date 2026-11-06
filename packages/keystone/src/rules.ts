@@ -131,6 +131,16 @@ export function ammoLive(c: CompiledLevel, s: Snapshot, i: number): boolean {
   return !outsideLot(c, s.pos[3 * i]!, s.pos[3 * i + 2]!, 4 * h) && s.pos[3 * i + 1]! >= 0.6 * h;
 }
 
+/**
+ * Whether a shot's ammo is still in flight: it has made no contact yet (Session: its velocity has not
+ * left free flight), it is moving (QUIET_SPEED or faster) and its centre is above `rest`, the highest
+ * it can sit on the ground (a sphere's radius, a box's half diagonal), by more than 0.05 h. The last two
+ * end a flight whose landing was too soft to read as a contact (a slow roll-off, a grazing touchdown).
+ */
+export function ammoInFlight(c: CompiledLevel, contact: boolean, y: number, speed: number, rest: number): boolean {
+  return !contact && speed >= QUIET_SPEED && y > rest + 0.05 * c.frame.unit;
+}
+
 export function reduceCpu(s: Snapshot, prevLinVel: Float64Array | null, c: CompiledLevel, base: Baseline, step: number): Reductions {
   const { meta: m } = c, h = c.frame.unit, dt = c.scene.dt;
   const r: Reductions = {
@@ -237,9 +247,13 @@ export const frozenCandidate = (r: Reductions): boolean => r.maxSpeed < FROZEN_S
  * One step of the settle rule (v1 unless given; v2 and v3 need the structure's body count n, v3 the
  * collapse D now, Session.liveCollapse). Settled SETTLE_QUIET consecutive quiet steps in, or (v3)
  * FROZEN_STEPS frozen ones, but never before SETTLE_MIN steps after the spawn, at once when nothing
- * is awake (from SETTLE_MIN), and always at the rule's cap.
+ * is awake (from SETTLE_MIN), and always at the rule's cap. `inFlight`: the shot's ammo has not yet
+ * touched anything (Session: ammoInFlight), so no run counts and only the cap settles: a structure
+ * at rest before the ammo arrives (asleep on Rapier, nothing awake) settled a far shot 20 steps after
+ * the launch with the ball still in the air (agent playtest PT10).
  */
-export function settleUpdate(st: SettleState, r: Reductions, spawnStep: number, rule: SettleRule = 'v1', n = 0, d = 0): { state: SettleState; settled: boolean } {
+export function settleUpdate(st: SettleState, r: Reductions, spawnStep: number, rule: SettleRule = 'v1', n = 0, d = 0, inFlight = false): { state: SettleState; settled: boolean } {
+  if (inFlight) return { state: rule === 'v3' ? { quietSince: null, frozenSince: null } : { quietSince: null }, settled: r.step - spawnStep >= settleCap(rule) };
   const quiet = quietUnder(rule, r, n);
   const quietSince = quiet ? (st.quietSince ?? r.step) : null;
   const old = r.step - spawnStep;

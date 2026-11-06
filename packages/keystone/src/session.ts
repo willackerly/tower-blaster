@@ -7,7 +7,7 @@ import { GRAVITY } from './materials.ts';
 import { itemYield } from './arsenal.ts';
 import { castStars, type CompiledLevel, type Scoring, scoringOf, settleOf } from './level.ts';
 import { collapseFraction, floorPotential_mJ, homePotential_mJ, homeSkyline, objectiveMet, type OutcomeFacts, outcomeScore } from './outcome.ts';
-import { crownDown, heritageBroken, leverage, levelScore, type LevelScore, type Observation, type Reductions, type SettleRule, type SettleState, settleCap, settleUpdate, type ShotOutcome, skyline, tier } from './rules.ts';
+import { ammoInFlight, crownDown, heritageBroken, leverage, levelScore, type LevelScore, type Observation, type Reductions, type SettleRule, type SettleState, settleCap, settleUpdate, type ShotOutcome, skyline, tier } from './rules.ts';
 import type { RackItem } from './rack.ts';
 import { ammoKE, pullEnergy, type Shot, shotEvent } from './shots.ts';
 
@@ -37,6 +37,12 @@ export type Feedback =
   | { t: 'cut'; step: number; shot: number; outcome: ShotOutcome }
   | { t: 'levelEnd'; step: number; cleared: boolean; score: LevelScore };
 
+/** The highest a spawned body's centre can sit on the ground: a sphere's radius, a box's half diagonal (any face or edge down). */
+export function restHeight(spawn: SpawnEvent): number {
+  const sh = spawn.body.shape;
+  return sh.kind === 'sphere' ? sh.radius : Math.hypot(...sh.half);
+}
+
 /** Vertical speed of a crown (m/s, downward) that starts slow motion. */
 export const SLOWMO_VY = -1.5;
 
@@ -51,6 +57,10 @@ interface Live {
   ammo: RackItem;
   settle: SettleState;
   contact: boolean;
+  /** The highest the ammo's centre can sit on the ground, m (rules.ts ammoInFlight); 0 for a pull. */
+  rest: number;
+  /** Whether the ammo was in flight at the last observed step (ammoInFlight). */
+  inFlight: boolean;
   prevVel: Vec3 | null;
   tier: number;
   slowMo: boolean;
@@ -182,7 +192,7 @@ export class Session {
     const ke = spawn ? ammoKE(spawn) : pullEnergy(this.level.frame), yieldJ = itemYield(this.level, shot.ammo);
     const live = spawn ? body : -1;
     this.live = {
-      shot, spawnStep: step, body: live, ke, yield: yieldJ, mass: spawn ? massOf(spawn.body) : 0, ammo: shot.ammo, settle: { quietSince: null }, contact: false, prevVel: null, tier: 0, slowMo: false,
+      shot, spawnStep: step, body: live, ke, yield: yieldJ, mass: spawn ? massOf(spawn.body) : 0, ammo: shot.ammo, settle: { quietSince: null }, contact: false, rest: spawn ? restHeight(spawn) : 0, inFlight: spawn !== null, prevVel: null, tier: 0, slowMo: false,
       crownsBefore: this.crownDown.reduce((a, x) => a + x, 0), heritageBefore: this.heritageBroken.reduce((a, x) => a + x, 0),
     };
     this.inputs.push({ step, shot: recorded });
@@ -239,7 +249,8 @@ export class Session {
         }
       }
       L.prevVel = v;
-    }
+      L.inFlight = ammoInFlight(c, L.contact, w.pos[3 * ak + 1]!, Math.hypot(...v), L.rest);
+    } else if (ak < 0) L.inFlight = false;
 
     for (let k = 0; k < nc; k++) {
       const p = pos(k);
@@ -261,7 +272,7 @@ export class Session {
     const total = o.red.impacts.reduce((a, x) => a + x, 0);
     if (total) out.push({ t: 'impacts', step, hist: o.red.impacts, total });
 
-    const s = settleUpdate(L.settle, o.red, L.spawnStep, this.settleRule, m.n, this.liveCollapse);
+    const s = settleUpdate(L.settle, o.red, L.spawnStep, this.settleRule, m.n, this.liveCollapse, L.inFlight);
     L.settle = s.state;
     if (!s.settled || (hold && o.step - L.spawnStep < settleCap(this.settleRule))) return out;
 
