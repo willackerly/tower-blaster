@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { B1, B2, compileLevel, levelGoldLine, L1, L2, L3, L4, L5, levelScore, outcomeScore, type ShotOutcome, U3 } from '@tb/keystone';
+import { B1, B2, compileLevel, levelGoldLine, L1, L2, L3, L4, L5, levelScore, outcomeScore, RL1, type ShotOutcome, U3 } from '@tb/keystone';
 import { HOW_TO_PLAY } from '../src/door.ts';
 import { GAME_HELP, GAME_KEYS, HELP_BUDGET, helpHtml, TOUCH_HELP } from '../src/ui.ts';
-import { BANK_BUTTON, SKIP_BUTTON, esc, freezeButton, POWER_STEP, fmtLeverage, fmtPoints, goldHtml, hudHtml, keepRow, LEVERAGE_MEANS, leverageRow, meterHtml, meterTicks, nextSelection, objectiveText, rackChips, resultHtml, starsText, slotAction, tallyHtml, touchActs } from '../src/hud.ts';
+import { BANK_BUTTON, BANK_QUIET, SKIP_BUTTON, esc, freezeButton, POWER_STEP, fmtLeverage, fmtPoints, goldHtml, hudHtml, keepRow, LEVERAGE_MEANS, leverageRow, meterHtml, meterTicks, nextSelection, objectiveText, rackChips, resultHtml, starsText, slotAction, tallyHtml, touchActs } from '../src/hud.ts';
 
 describe('rack', () => {
   it('groups by kind in first-seen order with counts and keys', () => {
@@ -31,7 +31,7 @@ describe('formatting', () => {
   it('the HUD hides the power bar for an anvil and flags an unreachable aim', () => {
     const base = { level: L2, strokes: 0, crownsDown: 1, crownsTotal: 6, heritageBroken: 0, heritageTotal: 36, power: 60, leverage: { round: 0, shot: 0 }, phase: 'aiming', reachable: null };
     const marble = hudHtml({ ...base, chips: rackChips(L2.rack, L2.rack, 'marble') });
-    expect(marble).toMatch(/W1-2 · Lintel/);
+    expect(marble).toMatch(/L2 · Lintel/);
     expect(marble).toMatch(/1 \/ 6/);
     expect(marble).toMatch(/intact/);
     expect(marble).toMatch(/width:60%/);
@@ -58,6 +58,9 @@ describe('formatting', () => {
     expect(html).not.toContain('data-act="launch"');
     expect(hudHtml({ ...base, launch: 6, chips: rackChips(['drop'], ['drop'], 'drop') })).not.toContain('data-act="launch"');
     expect(hudHtml({ ...base, launch: 6, chips: rackChips(U3.rack, U3.rack, 'pull') })).not.toContain('data-act="launch"');
+    // A plunger aims at nothing: neither row.
+    const plunger = hudHtml({ ...base, launch: 6, chips: rackChips(['plunger'], ['plunger'], 'plunger') });
+    expect(plunger).not.toMatch(/Power|Height/);
     const opener = hudHtml({ ...base, chips: [], opener: true });
     expect(opener).toMatch(/<span class="kg-desk">or aim and click<\/span><span class="kg-tch">or drag and lift<\/span>/);
   });
@@ -135,7 +138,11 @@ describe('formatting', () => {
     expect(html).toMatch(/Shot 1/);
     expect(html).toMatch(/37%/);
     expect(html).toMatch(/bring 40% down</);
-    expect(html).toContain(BANK_BUTTON);
+    // Before the objective is met, Bank is the quiet outline (PT18: banking then ends the level with no star); once met, the primary.
+    expect(html).toContain(BANK_QUIET);
+    expect(html).not.toContain(BANK_BUTTON);
+    expect(hudHtml({ ...base, collapse: 0.5, met: true, canBank: true })).toContain(BANK_BUTTON);
+    expect(BANK_QUIET).toMatch(/class="bank quiet"/);
     expect(html).not.toMatch(/Par|Crowns/);
     expect(hudHtml({ ...base, collapse: 0.5, met: true, canBank: false })).toMatch(/bring 40% down ✓/);
     expect(hudHtml({ ...base, collapse: 0.5, met: true, canBank: false })).not.toContain('data-act="bank"');
@@ -266,6 +273,19 @@ describe('scores and leverage add up (PT9, PT16)', () => {
     expect(html).toMatch(/<span>Total<\/span><span>0<\/span>/);
     expect(html).toContain('Heritage cracked: 1 star lost');
     expect(resultHtml(L3, levelScore(L3, [shot({ dPE_mJ: 1e9 })], true, 40), 1, false)).not.toMatch(/star lost|class="line bad"/);
+  });
+  it('a Rube Lab card shows the parts used against the parts par, stamped on parts, with no gold', () => {
+    const at = (spent: number, heritage = 0) => levelScore(RL1, [shot({ dPE_mJ: 1e9, heritageNew: heritage })], true, 40, spent);
+    const par = at(2), over = at(3);
+    expect([par.stars, par.stamp, par.gold, par.parts]).toEqual([3, 'PARTS PAR', undefined, { used: 2, par: 2 }]);
+    expect([over.stars, over.stamp, at(4).stars]).toEqual([2, '+1 PARTS', 1]);
+    expect([at(9).stars, at(2, 1).stars, at(2, 1).heritageStarsLost, at(9, 1).stars]).toEqual([1, 2, 1, 1]);
+    expect(levelScore(RL1, [shot({})], false, 40, 2)).toMatchObject({ stars: 0, stamp: 'INCOMPLETE' });
+    const html = resultHtml(RL1, par, 1, false);
+    expect(html).toContain('<div class="sub">parts 2 / par 2 · leverage');
+    expect(html).not.toContain('stroke');
+    // Other par levels keep their strokes line and gold.
+    expect(levelScore(L5, [shot({ dPE_mJ: 1e9 })], true, 40, 7).parts).toBeUndefined();
   });
   it('a Bullet Time card shows the freezes used', () => {
     const score = levelScore({ ...L5, freeze: 2 }, [shot({ cut: true }), shot({ dPE_mJ: 1e7 })], true, 40);

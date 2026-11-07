@@ -3,9 +3,11 @@
 // GPU reduce() will take at 100k bodies) or a read of a few watched bodies
 // (crowns, heritage, live ammo). Integer fields are exact so a GPU version can
 // be checked bit for bit against this one.
-import type { Quat, Snapshot, Vec3 } from '@tb/engine-api';
+import { type Quat, type Snapshot, TIER_FREE, type Vec3 } from '@tb/engine-api';
 import { quatAngle } from '@tb/geom';
-import { GRAVITY, MATERIALS } from './materials.ts';
+import { GRAVITY, MATERIALS, ROLES } from './materials.ts';
+
+const ROLE_HERITAGE = ROLES.indexOf('heritage');
 import type { CompiledLevel, LevelDef } from './level.ts';
 
 export const HEIGHT_BINS = 64;
@@ -29,13 +31,14 @@ export const SETTLE_CAP_V2 = 1800;
  * SETTLE_CAP; par levels pin their lines on it. v2: at most
  * settleAllowance(n) structure bodies moving (Reductions.nMoving) and every
  * live spawned body under QUIET_SPEED, for SETTLE_QUIET steps, or
- * SETTLE_CAP_V2. v3, outcome levels' default: as v2, or else the structure is
+ * SETTLE_CAP_V2. v3 (outcome levels' default until PT6b): as v2, or else the structure is
  * frozen: nothing live (ammo included) faster than FROZEN_SPEED,
  * and the collapse D and the displaced count unchanged (D within FROZEN_D) for
  * FROZEN_STEPS steps, however many bodies still move. A standing wall can ring
  * for the whole cap with a hundred blocks swaying a few centimetres at 0.1 to
  * 0.3 m/s while nothing changes (G5's B1, 2026-11-01); v3 ends that shot, and
- * settles no later than v2 anywhere. v4 (agent playtest PT6): as v3, or else the collapse D has stayed
+ * settles no later than v2 anywhere. v4 (agent playtest PT6; outcome levels' default since PT6b,
+ * docs/game/settle-v4.md): as v3, or else the collapse D has stayed
  * within STEADY_D of where a run began for STEADY_STEPS steps, whatever still moves: a big level's
  * shot whose Down% reads the same for seconds while debris rolls and blocks rock (B1 at 17% from 3.5 s
  * to 18.4 s on Rapier) ends 2 s after the last change anyone can see.
@@ -79,10 +82,19 @@ export interface Reductions {
   maxAngSpeed: number;
   /** Potential energy of the structure, sum of round(m g y * 1000) in index order. */
   pe_mJ: number;
+  /** The part of pe_mJ that is heritage's (a fold level's collapse is the building's: outcome.ts buildingOnly). */
+  peHeritage_mJ: number;
   /** Structure bodies more than DISPLACED h from the shot baseline. */
   displaced: number;
   /** Structure bodies whose centre is outside the lot grown by 0.5 h. */
   outOfLot: number;
+  /**
+   * Fuse & Fold's spill, in integer grams (docs/game/fuse-and-fold.md): the building's mass (structure bodies
+   * that are not heritage and not removed) and the part of it whose centre is outside the lot grown by 0.5 h.
+   * spillOf divides them: C11's spill (footprint.ts) with the lot as the target mask.
+   */
+  mass_g: number;
+  spill_g: number;
   /** Structure bodies by the top of their world AABB, over [0, level height]. */
   heightHist: Uint32Array;
   /** Impacts this step by material (6) x home height band (8). */
@@ -128,6 +140,9 @@ export function aabbTop(y: number, q: Quat, half: Vec3): number {
   return y + Math.abs(r10) * half[0] + Math.abs(r11) * half[1] + Math.abs(r12) * half[2];
 }
 
+/** The building's spill at a reduction: the share of its mass (grams) outside the lot grown by 0.5 h; 0 with no building left. */
+export const spillOf = (r: Pick<Reductions, 'mass_g' | 'spill_g'>): number => (r.mass_g > 0 ? r.spill_g / r.mass_g : 0);
+
 export function outsideLot(c: CompiledLevel, x: number, z: number, grow = 0): boolean {
   return x < c.lot.min[0] - grow || x > c.lot.max[0] + grow || z < c.lot.min[1] - grow || z > c.lot.max[1] + grow;
 }
@@ -151,7 +166,7 @@ export function ammoInFlight(c: CompiledLevel, contact: boolean, y: number, spee
 export function reduceCpu(s: Snapshot, prevLinVel: Float64Array | null, c: CompiledLevel, base: Baseline, step: number): Reductions {
   const { meta: m } = c, h = c.frame.unit, dt = c.scene.dt;
   const r: Reductions = {
-    step, nAwake: 0, maxSpeed: 0, maxAngSpeed: 0, pe_mJ: 0, displaced: 0, outOfLot: 0, heightHist: new Uint32Array(HEIGHT_BINS), impacts: new Uint32Array(MATERIALS.length * BANDS),
+    step, nAwake: 0, maxSpeed: 0, maxAngSpeed: 0, pe_mJ: 0, peHeritage_mJ: 0, displaced: 0, outOfLot: 0, mass_g: 0, spill_g: 0, heightHist: new Uint32Array(HEIGHT_BINS), impacts: new Uint32Array(MATERIALS.length * BANDS),
     nMoving: 0, movingBox: Float64Array.of(Infinity, Infinity, Infinity, -Infinity, -Infinity, -Infinity), ammoSpeed: 0,
   };
   const top = Math.max(c.height, 1e-9);
@@ -178,10 +193,18 @@ export function reduceCpu(s: Snapshot, prevLinVel: Float64Array | null, c: Compi
     }
     if (!structure) continue;
     const x = s.pos[3 * i]!, y = s.pos[3 * i + 1]!, z = s.pos[3 * i + 2]!;
-    r.pe_mJ += peOf_mJ(m.mass[i]!, y);
+    const pe = peOf_mJ(m.mass[i]!, y);
+    r.pe_mJ += pe;
+    if (m.role[i] === ROLE_HERITAGE) r.peHeritage_mJ += pe;
     const dx = x - base.pos[3 * i]!, dy = y - base.pos[3 * i + 1]!, dz = z - base.pos[3 * i + 2]!;
     if (dx * dx + dy * dy + dz * dz > (DISPLACED * h) ** 2) r.displaced++;
-    if (outsideLot(c, x, z, 0.5 * h)) r.outOfLot++;
+    const out = outsideLot(c, x, z, 0.5 * h);
+    if (out) r.outOfLot++;
+    if (m.role[i] !== ROLE_HERITAGE && s.tier?.[i] !== TIER_FREE) {
+      const g = Math.round(m.mass[i]! * 1000);
+      r.mass_g += g;
+      if (out) r.spill_g += g;
+    }
     const t = aabbTop(y, get4(s.rot, i), get3(m.half, i));
     r.heightHist[Math.max(0, Math.min(HEIGHT_BINS - 1, Math.floor((HEIGHT_BINS * t) / top)))]!++;
     if (prevLinVel && 3 * i + 2 < prevLinVel.length) {
@@ -289,10 +312,34 @@ export function crownDown(c: CompiledLevel, p: Vec3): boolean {
   return p[1] < c.def.crownLine * c.frame.unit || outsideLot(c, p[0], p[2]);
 }
 
+/** Rube Lab's default for a bell objective without a region: a bell has rung once it moved a quarter h from home. */
+export const BELL_MOVED = 0.25;
+
+/**
+ * Whether a bell (a crown of a bell level, docs/game/rube-lab.md) at `p` has rung: inside the objective's region,
+ * or with none, at least `moved` h (BELL_MOVED) from `home`. Squared distances, so it is the same on every machine.
+ */
+export function bellRung(c: CompiledLevel, p: Vec3, home: Vec3): boolean {
+  const o = c.def.objective, h = c.frame.unit;
+  if (o.kind !== 'bell') return false;
+  if (o.region) return [0, 1, 2].every((k) => p[k]! >= o.region!.min[k]! * h && p[k]! <= o.region!.max[k]! * h);
+  const d = (o.moved ?? BELL_MOVED) * h;
+  return (p[0] - home[0]) ** 2 + (p[1] - home[1]) ** 2 + (p[2] - home[2]) ** 2 >= d * d;
+}
+
 /** Heritage starts axis-aligned at `home`; it breaks if it moves or tilts past tolerance. */
 export function heritageBroken(c: CompiledLevel, p: Vec3, q: Quat, home: Vec3): boolean {
   const h = c.frame.unit;
   return Math.hypot(p[0] - home[0], p[1] - home[1], p[2] - home[2]) > HERITAGE_MOVE * h || quatAngle(q) > HERITAGE_TILT;
+}
+
+/**
+ * The 'standing' heritage rule (LevelDef.heritage, Aftershock's protected towers), judged at a settle: fallen if it
+ * has dropped more than the heritage tolerance below home or tilts past it. Sideways travel does not count: a tower
+ * that slid on the ground and stands, stands.
+ */
+export function heritageFallen(c: CompiledLevel, p: Vec3, q: Quat, home: Vec3): boolean {
+  return home[1] - p[1] > HERITAGE_MOVE * c.frame.unit || quatAngle(q) > HERITAGE_TILT;
 }
 
 /** Settled height: the top of the highest histogram bin holding at least 3 bodies (strays don't count). */
@@ -326,9 +373,16 @@ export const leverage = (dPE_mJ: number, ke: number) => (ke > 0 ? Math.max(0, dP
  * read this one function (docs/game/scoring.md). One shot: its own leverage.
  */
 export function roundLeverage(shots: readonly Pick<ShotOutcome, 'ke' | 'yield' | 'dPE_mJ'>[]): number {
-  let fired = 0, released = 0;
-  for (const o of shots) { fired += o.ke + o.yield; released += o.dPE_mJ; }
-  return leverage(released, fired);
+  let released = 0;
+  for (const o of shots) released += o.dPE_mJ;
+  return leverage(released, energyFired(shots));
+}
+
+/** The energy fired over `shots`, J (each one's ke + yield): what roundLeverage divides by, and the energy star metric. */
+export function energyFired(shots: readonly Pick<ShotOutcome, 'ke' | 'yield'>[]): number {
+  let fired = 0;
+  for (const o of shots) fired += o.ke + o.yield;
+  return fired;
 }
 
 /** The tier of leverage L against gold line `line`: Brute under it, Clean from it, Elegant from 3x, Keystone from 8x. */
@@ -393,8 +447,17 @@ export interface LevelScore {
   gold?: boolean;
   /** Stars the broken heritage cost (heritageStarsLost): present, at least 1, only when it cost any. */
   heritageStarsLost?: number;
+  /** Levels with a parts par (BuildDef.par: Rube Lab, Lay levels): the build's cost and the par. Absent elsewhere. */
+  parts?: { used: number; par: number };
   /** Bullet Time levels (LevelDef.freeze): freezes spent (freezesUsed) of the level's budget. Absent elsewhere. */
   freezes?: { used: number; total: number };
+  /**
+   * Levels judged in many jittered worlds (Mason's Trial; Chorus): `cleared` of `of` worlds passed, and the worlds
+   * one, two and three stars need (`thresholds`, counts), so the card shows "c of K" once. Absent elsewhere.
+   */
+  worlds?: { cleared: number; of: number; thresholds: readonly [number, number, number] };
+  /** Mason's Trial (LevelDef.mason): the build budget left and the budget, for the card's budget line. Absent elsewhere. */
+  mason?: { left: number; budget: number };
   /**
    * A refereed round (a Siege Table duel: Session's refereed option): no solo tally was made. lines
    * empty, total and stars 0, the stamp DUEL; the duel's own result (Duel.result) is the outcome.
@@ -442,7 +505,75 @@ export function stampOf(strokes: number, par: number): string {
   return d <= -3 ? 'ALBATROSS' : d === -2 ? 'EAGLE' : d === -1 ? 'BIRDIE' : d === 0 ? 'PAR' : d === 1 ? 'BOGEY' : d === 2 ? 'DOUBLE BOGEY' : `+${d}`;
 }
 
-export function levelScore(def: LevelDef, shots: ShotOutcome[], cleared: boolean, structureCount: number): LevelScore {
+/**
+ * Stars for a level scored on its parts (BuildDef.par; Rube Lab, docs/game/rube-lab.md, and any build level
+ * that names a par): 3 at or under the parts par (what the bot's cheapest robust clear cost), 2 within half
+ * again, 1 for any clear; 0 uncleared. Binary clear, no cast.
+ */
+export function partsStars(cleared: boolean, spent: number, partsPar: number): 0 | 1 | 2 | 3 {
+  if (!cleared) return 0;
+  if (spent <= partsPar) return 3;
+  if (spent <= Math.ceil(1.5 * partsPar)) return 2;
+  return 1;
+}
+
+/** Mason's Trial (docs/game/masons-trial.md): a build is cleared when at least this share of its worlds pass. */
+export const MASON_CLEAR = 0.5;
+
+/**
+ * Mason's Trial's two score lines (agreed with the scoring owner, docs/game/scoring.md): Robust, 500 x the share of
+ * worlds passed, and Budget left, 500 x that share x the share of the budget left. Their sum is
+ * round(1000 x (passes / K) x (1 + left / budget) / 2), give or take 1 from rounding: a fully robust build that
+ * spends the whole budget scores 500, a robust free one would score 1000.
+ */
+export function masonLines(passes: number, K: number, left: number, budget: number): ScoreLine[] {
+  const p = passes / K, l = budget > 0 ? Math.max(0, left) / budget : 0;
+  return [{ label: `Robust ${passes}/${K}`, value: Math.round(500 * p) }, { label: `Budget left ${Math.max(0, left)}/${budget}`, value: Math.round(500 * p * l) }];
+}
+
+/** Stars for a Mason build: 0 uncleared (fewer than MASON_CLEAR of its worlds passed), 1 cleared, 2 at t2 points, 3 at t3. */
+export function masonStars(cleared: boolean, points: number, stars: readonly [number, number]): 0 | 1 | 2 | 3 {
+  if (!cleared) return 0;
+  return points >= stars[1] ? 3 : points >= stars[0] ? 2 : 1;
+}
+
+/**
+ * The fewest worlds of K that give one, two and three stars to a build with `left` of `budget` unspent: ceil(K
+ * MASON_CLEAR), and the least passes whose lines reach t2 and t3 (K + 1: out of reach at this budget).
+ */
+export function masonThresholds(K: number, left: number, budget: number, stars: readonly [number, number]): [number, number, number] {
+  const least = (t: number) => {
+    for (let c = 0; c <= K; c++) if (floorTotal(masonLines(c, K, left, budget)) >= t) return c;
+    return K + 1;
+  };
+  const one = Math.ceil(K * MASON_CLEAR);
+  return [one, Math.max(one, least(stars[0])), Math.max(one, least(stars[1]))];
+}
+
+/**
+ * A Mason level's score from its judge (passes of K worlds) and the build's cost (build.ts placedCost): the two
+ * lines, stars on their total (masonStars), the stamp ROBUST or WOBBLY, the shared worlds field and the budget.
+ * No leverage, no gold and no heritage star loss: the heritage is the pass rule's.
+ */
+export function masonScore(def: LevelDef, passes: number, K: number, spent: number): LevelScore {
+  const m = def.mason!, budget = def.build?.budget ?? 0, left = Math.max(0, budget - spent);
+  const lines = masonLines(passes, K, left, budget), total = floorTotal(lines), cleared = passes >= Math.ceil(K * MASON_CLEAR);
+  return {
+    lines, total, stars: masonStars(cleared, total, m.stars), stamp: cleared ? (passes === K ? 'ROBUST' : 'STANDS') : 'WOBBLY', leverage: 0,
+    worlds: { cleared: passes, of: K, thresholds: masonThresholds(K, left, budget, m.stars) }, mason: { left, budget },
+  };
+}
+
+/** A parts-par level's stamp: PARTS PAR at or under the parts par, else +N PARTS. */
+export const partsStamp = (spent: number, partsPar: number) => (spent <= partsPar ? 'PARTS PAR' : `+${spent - partsPar} PARTS`);
+
+/**
+ * A level's score at its end. `spent`: the build's cost (build.ts placedCost), read on a Rube Lab level
+ * on a level with a parts par (def.build.par): there the stars are partsStars on it, less one for any
+ * heritage broken (never under one), the stamp is partsStamp, the score carries `parts`, and there is no
+ * gold (a contraption's one plunger is not a stroke to beat).
+ */
+export function levelScore(def: LevelDef, shots: ShotOutcome[], cleared: boolean, structureCount: number, spent = 0): LevelScore {
   const s = shots.length, par = parWithFreezes(def, shots);
   const L = roundLeverage(shots);
   const cmax = Math.min(12, Math.max(0, ...shots.map((o) => o.crownsDown)));
@@ -458,6 +589,14 @@ export function levelScore(def: LevelDef, shots: ShotOutcome[], cleared: boolean
   if (def.objective.kind === 'skyline' && def.objective.footprintMax !== undefined && s) {
     const out = shots[s - 1]!.outOfLot, allowance = Math.floor(def.objective.footprintMax * structureCount);
     if (out > allowance) lines.push({ label: 'Footprint', value: -20 * (out - allowance) });
+  }
+  const pp = def.build?.par;
+  if (pp !== undefined) {
+    const base = partsStars(cleared, spent, pp), stars = (base > 1 && broken ? base - 1 : base) as 0 | 1 | 2 | 3;
+    return {
+      lines, total: floorTotal(lines), stars, stamp: cleared ? partsStamp(spent, pp) : 'INCOMPLETE', leverage: L,
+      parts: { used: spent, par: pp }, ...(base - stars > 0 ? { heritageStarsLost: base - stars } : {}),
+    };
   }
   const gold = cleared && s <= par && broken === 0 && L >= (levelGoldLine(def) ?? DEFAULT_GOLD); // the line levelTier names tiers from
   const stars = parStars(cleared, s, par, broken), lost = parStars(cleared, s, par, 0) - stars;

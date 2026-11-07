@@ -6,9 +6,9 @@
 // def(), so the run that starts is exactly the level a saved file would load
 // (the level hash says so).
 import type { Vec3 } from '@tb/engine-api';
-import { compileLevel, type CompiledLevel, type LevelDef, type Part, type PiecePart, pitchOf, type RunPart, unitOf } from './level.ts';
+import { type BallPart, compileLevel, type CompiledLevel, type LevelDef, type Part, type PiecePart, pitchOf, type RunPart, unitOf } from './level.ts';
 import type { MaterialName } from './materials.ts';
-import { axisOf, type Hit, normDeg, type Obb, obbOfBody, obbOverlap, PlacementIndex, type Ray, snapPlace, type SnapOptions, yawQuat } from './placement.ts';
+import { axisOf, type Hit, normDeg, type Obb, obbOfBody, obbOverlap, pieceQuat, PlacementIndex, QUAT_ID, type Ray, snapPlace, type SnapOptions, yawQuat } from './placement.ts';
 import { DOMINO_HALF, DOMINO_PITCH, type P2, runPoses } from './stroke.ts';
 
 /** One box of a stamp: its centre in the stamp's frame and its half-extents, in h. */
@@ -23,6 +23,17 @@ export interface CatalogItem {
   boxes: StampBox[];
   /** What it costs against a build budget. */
   cost: number;
+  /**
+   * Rube Lab parts (docs/game/rube-lab.md), single-box items only. `pinned`: bolted to the world (C8); it may
+   * dip into the ground and into other pinned bodies, never into a free one. `tilt`: degrees about the item's
+   * own +z (PiecePart.tilt), placed with the low end of its top face on the face it goes on (a ramp's foot
+   * flush with the ground or a shelf). `ball`: a sphere of this radius (h), placed as its bounding cube.
+   */
+  pinned?: true;
+  tilt?: number;
+  ball?: number;
+  /** What it is made of when not the level's build material (a stone ball). */
+  material?: MaterialName;
 }
 
 /** A course stamp: `nx` by `ny` by `nz` cubes on the lattice (horizontal pitch p, courses 1 h), centred. */
@@ -52,20 +63,41 @@ export function catalog(pitch: number): CatalogItem[] {
     stamp('course4', 'Course of 4', [4, 1, 1]),
     stamp('wall4x2', 'Wall 4 x 2', [4, 2, 1]),
     stamp('pier3', 'Pier of 3', [1, 3, 1]),
+    // Rube Lab parts (offered only when a level names them, RUBE_PARTS).
+    { name: 'ball', label: 'Ball', boxes: [{ at: [0, 0, 0], half: [BALL_RADIUS, BALL_RADIUS, BALL_RADIUS] }], cost: 1, ball: BALL_RADIUS, material: 'stone' },
+    { name: 'ramp', label: 'Ramp (fixed)', boxes: [{ at: [0, 0, 0], half: [...RAMP_HALF] }], cost: 3, pinned: true, tilt: RAMP_TILT },
+    { name: 'bumper', label: 'Bumper (fixed)', boxes: [{ at: [0, 0, 0], half: [...BUMPER_HALF] }], cost: 3, pinned: true },
   ];
 }
-export const CATALOG_NAMES = ['cube', 'domino', 'plank', 'slab', 'beam', 'course4', 'wall4x2', 'pier3'] as const;
+/** Rube Lab's runner and bin ball: radius 0.4 h (a 0.2 m stone ball at the game's h, about a cube's mass). */
+export const BALL_RADIUS = 0.4;
+/** The bin's ramp: a plank 6 h long, 1 h wide and 1/3 h thick, rising 15 degrees along its length (about 1.6 h). */
+export const RAMP_HALF = [3, 1 / 6, 0.5] as const;
+export const RAMP_TILT = 15;
+/** The bin's bumper: a fixed wall 4 h long, 1 h high and 0.3 h thick, to turn a ball. */
+export const BUMPER_HALF = [2, 0.5, 0.15] as const;
+export const CATALOG_NAMES = ['cube', 'domino', 'plank', 'slab', 'beam', 'course4', 'wall4x2', 'pier3', 'ball', 'ramp', 'bumper'] as const;
 export type CatalogName = (typeof CATALOG_NAMES)[number];
+/** The items offered when a level's build block names none (C9's bin): Rube Lab's parts must be named. */
+export const DEFAULT_PIECES: readonly CatalogName[] = ['cube', 'domino', 'plank', 'slab', 'beam', 'course4', 'wall4x2', 'pier3'];
+/** Rube Lab's own parts. */
+export const RUBE_PARTS: readonly CatalogName[] = ['ball', 'ramp', 'bumper'];
 
 /** A level's build rules: how much may be placed and what (LevelDef.build). */
 export interface BuildDef {
   /** Most cost the player may place (catalogue costs; a domino of a run costs 1). Absent: no limit. */
   budget?: number;
-  /** Catalogue items offered (absent: all), and whether the domino brush is (default true). */
+  /** Catalogue items offered (absent: DEFAULT_PIECES, C9's bin without Rube Lab's parts), and whether the domino brush is (default true). */
   pieces?: CatalogName[];
   brush?: boolean;
   /** What placed pieces are made of (default plaster). */
   material?: MaterialName;
+  /**
+   * The parts par: the least build cost a bot found that clears (Rube Lab, Lay levels). Present, the level
+   * scores on its parts (rules.ts partsStars) instead of strokes. Hashed, unlike stars: progress keeps the
+   * best stars per level hash, so a retuned par is a new record rather than keeping stars earned under the old.
+   */
+  par?: number;
 }
 
 /** How the player turns what they hold: a yaw, and which of the item's axes stands up (tip: 0 as built, 1 x up, 2 z up). */
@@ -90,7 +122,9 @@ export function stampHalf(boxes: readonly StampBox[]): Vec3 {
 export interface Ghost {
   boxes: Obb[];
   /** The pieces the place would add (h), in order. */
-  parts: PiecePart[];
+  parts: (PiecePart | BallPart)[];
+  /** The shape of each box: a ball's box is its bounding cube (drawn as a ball). Absent: all boxes. */
+  spheres?: boolean[];
   cost: number;
   ok: boolean;
   /** Empty when ok: overlap (with body indices), ground, budget or item (not offered). */
@@ -129,7 +163,7 @@ export class BuildSession {
     this.parts = [...base.parts];
     this.h = unitOf(base);
     this.pitch = pitchOf(base);
-    const offered = new Set<string>(base.build?.pieces ?? CATALOG_NAMES);
+    const offered = new Set<string>(base.build?.pieces ?? DEFAULT_PIECES);
     this.items = catalog(this.pitch).filter((i) => opts.author || offered.has(i.name));
   }
 
@@ -167,23 +201,9 @@ export class BuildSession {
   }
 
   /** What the placed pieces and runs cost so far. */
-  spent(): number {
-    let s = 0;
-    for (const p of this.parts) {
-      if (!('placed' in p) || !p.placed) continue;
-      if (p.kind === 'run') s += runPoses(p.path, p.pitch).length - (p.omit?.length ?? 0);
-      else s += this.costOfPiece(p);
-    }
-    return s;
-  }
+  spent(): number { return placedCost(this.def()); }
   left(): number | null { return this.budget === null ? null : this.budget - this.spent(); }
 
-  /** A placed piece's cost: its catalogue item's cost over its boxes (each stamp box is a cube, costing 1). */
-  private costOfPiece(p: PiecePart): number {
-    const v = 8 * p.half[0] * p.half[1] * p.half[2];
-    const match = this.items.find((i) => i.boxes.length === 1 && Math.abs(8 * i.boxes[0]!.half[0] * i.boxes[0]!.half[1] * i.boxes[0]!.half[2] - v) < 1e-9);
-    return match?.cost ?? Math.max(1, Math.round(v));
-  }
 
   /** The face under a ray: a body of the stopped world or the ground (levels stand on y = 0). */
   pick(r: Ray): Hit | null { return this.world().pick(r, 0); }
@@ -192,31 +212,44 @@ export class BuildSession {
   ghost(hit: Hit, hold: Hold, snap: SnapOptions = {}): Ghost {
     const item = this.items.find((i) => i.name === hold.item);
     if (!item) return { boxes: [], parts: [], cost: 0, ok: false, why: `${hold.item} is not offered here`, clash: [] };
-    const boxes = tipped(item, hold.tip), h = this.h, half = stampHalf(boxes).map((x) => x * h) as Vec3;
+    const boxes = tipped(item, hold.tip), h = this.h, tilt = item.tilt ?? 0;
+    // A tilted item snaps as the box that bounds it in its own yawed frame, then sinks by t cos(tilt) so the low end
+    // of its top face sits on the face hit (a ramp's foot flush with the ground or a shelf, no step to climb).
+    const tq = pieceQuat(0, tilt), lone = boxes[0]!;
+    const half = (tilt ? [0, 1, 2].map((k) => [0, 1, 2].reduce((a, j) => a + Math.abs(axisOf(tq, j as 0 | 1 | 2)[k]!) * lone.half[j]!, 0)) : stampHalf(boxes)).map((x) => x * h) as Vec3;
     const world = this.world();
     const { box, yaw } = snapPlace(hit, half, hold.yaw, { h, pitch: this.pitch }, world.boxes, snap);
+    if (tilt) box.c[1] -= 2 * lone.half[1] * Math.cos((tilt * Math.PI) / 180) * h;
     const q = yawQuat(yaw), X = axisOf(q, 0), Z = axisOf(q, 2);
-    const out: Obb[] = [], parts: PiecePart[] = [];
+    const out: Obb[] = [], parts: (PiecePart | BallPart)[] = [];
+    const placed = this.opts.author ? {} : { placed: true as const }, material = item.material ?? this.material;
     for (const b of boxes) {
       const o = b.at.map((x) => x * h) as Vec3;
       const c: Vec3 = [box.c[0] + X[0] * o[0] + Z[0] * o[2], box.c[1] + o[1], box.c[2] + X[2] * o[0] + Z[2] * o[2]];
       const at = c.map((x) => q6(x / h)) as Vec3;
-      const part: PiecePart = { kind: 'piece', at, half: [...b.half], ...(yaw !== 0 ? { yaw: q6(yaw) } : {}), material: this.material, ...(this.opts.author ? {} : { placed: true as const }) };
+      if (item.ball !== undefined) {
+        parts.push({ kind: 'ball', at, radius: item.ball, material, ...placed });
+        out.push({ c: at.map((x) => x * h) as Vec3, q: QUAT_ID, half: b.half.map((x) => x * h) as Vec3 });
+        continue;
+      }
+      const part: PiecePart = { kind: 'piece', at, half: [...b.half], ...(yaw !== 0 ? { yaw: q6(yaw) } : {}), ...(tilt ? { tilt } : {}), ...(item.pinned ? { pinned: true as const } : {}), material, ...placed };
       parts.push(part);
       // The box as compile will make it (rounded position), so what is checked is what plays.
-      out.push({ c: at.map((x) => x * h) as Vec3, q: yawQuat(part.yaw ?? 0), half: b.half.map((x) => x * h) as Vec3 });
+      out.push({ c: at.map((x) => x * h) as Vec3, q: pieceQuat(part.yaw ?? 0, tilt), half: b.half.map((x) => x * h) as Vec3 });
     }
-    return this.verdict(out, parts, item.cost);
+    const g = this.verdict(out, parts, item.cost, item.pinned === true);
+    return item.ball !== undefined ? { ...g, spheres: out.map(() => true) } : g;
   }
 
-  private verdict(boxes: Obb[], parts: PiecePart[], cost: number): Ghost {
-    const world = this.world(), tol = TOUCH * this.h, clash = new Set<number>();
+  private verdict(boxes: Obb[], parts: (PiecePart | BallPart)[], cost: number, pinned = false): Ghost {
+    const world = this.world(), tol = TOUCH * this.h, clash = new Set<number>(), bodies = this.compiled().scene.bodies;
     let ground = false;
-    // A stamp's own boxes are lattice-spaced, so only the world is checked.
+    // A stamp's own boxes are lattice-spaced, so only the world is checked. A pinned part may dip into the ground and
+    // into other pinned bodies (scenery: contacts between pins do nothing), never into a free body.
     for (const b of boxes) {
       const c = world.clashes(b, tol, 0);
-      c.bodies.forEach((x) => clash.add(x));
-      ground ||= c.ground;
+      c.bodies.forEach((x) => { if (!(pinned && bodies[x]?.pinned)) clash.add(x); });
+      ground ||= c.ground && !pinned;
     }
     const left = this.left();
     const why = clash.size ? `overlaps ${clash.size} bod${clash.size === 1 ? 'y' : 'ies'}` : ground ? 'goes into the ground' : left !== null && cost > left ? `costs ${cost}, ${left} left` : '';
@@ -318,6 +351,36 @@ export class BuildSession {
     this.invalidate();
   }
   private invalidate(): void { this.compiledCache = null; this.indexCache = null; }
+}
+
+/**
+ * What a level's placed parts (PiecePart/RunPart/BallPart.placed) cost against its build budget: a run's dominoes 1
+ * each, a ball or piece its catalogue item's cost (a stamp's cubes 1 each; a pinned part its own item's). Pure, so
+ * the rules can score a build (Rube Lab's parts par) from the level alone.
+ */
+export function placedCost(def: LevelDef): number {
+  const items = catalog(pitchOf(def));
+  let s = 0;
+  for (const p of def.parts) {
+    if (!('placed' in p) || !p.placed) continue;
+    if (p.kind === 'run') s += runPoses(p.path, p.pitch).length - (p.omit?.length ?? 0);
+    else if (p.kind === 'ball') s += items.find((i) => i.ball === p.radius)?.cost ?? 1;
+    else if (p.kind === 'piece') s += pieceCost(items, p);
+  }
+  return s;
+}
+
+/** A placed piece's cost: its catalogue item's cost over its boxes (each stamp box is a cube, costing 1). */
+function pieceCost(items: readonly CatalogItem[], p: PiecePart): number {
+  // A pinned part is its catalogue item's (the same half-extents, in any order: tipped), at its own price.
+  if (p.pinned) {
+    const key = (h: readonly number[]) => [...h].sort((a, b) => a - b).join(',');
+    const item = items.find((i) => i.pinned && i.boxes.length === 1 && key(i.boxes[0]!.half) === key(p.half));
+    if (item) return item.cost;
+  }
+  const v = 8 * p.half[0] * p.half[1] * p.half[2];
+  const match = items.find((i) => !i.pinned && i.ball === undefined && i.boxes.length === 1 && Math.abs(8 * i.boxes[0]!.half[0] * i.boxes[0]!.half[1] * i.boxes[0]!.half[2] - v) < 1e-9);
+  return match?.cost ?? Math.max(1, Math.round(v));
 }
 
 /** Turns a hold by `deg` (normalised to (-180, 180]). */

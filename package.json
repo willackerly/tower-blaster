@@ -30,8 +30,11 @@
     "keystone:cast": "tsx packages/keystone-lab/src/cast-cli.ts",
     "keystone:opener": "tsx packages/keystone-lab/src/opener-cli.ts",
     "keystone:goals": "tsx packages/keystone-lab/src/goals-cli.ts",
+    "keystone:quake": "tsx packages/keystone-lab/src/quake-search-cli.ts",
+    "keystone:fuse": "tsx packages/keystone-lab/src/fuse-search-cli.ts",
     "duel:bot": "tsx packages/game/src/duel-bot-cli.ts",
     "keystone:settle-study": "tsx packages/keystone-lab/src/settle-study-cli.ts",
+    "rube:gate": "tsx packages/keystone-lab/src/rube-gate-cli.ts",
     "game": "vite packages/game",
     "playtest:build": "tsx packages/playtest/src/build.ts",
     "playtest:local": "tsx packages/playtest/src/local.ts",
@@ -39,7 +42,8 @@
     "playtest:testers": "tsx packages/playtest/src/testers.ts",
     "playtest:smoke": "tsx packages/playtest/src/smoke.ts",
     "playtest:agent": "tsx packages/playtest/src/agent/run.ts",
-    "probe:modes": "tsx packages/mode-probes/src/cli.ts"
+    "probe:modes": "tsx packages/mode-probes/src/cli.ts",
+    "mason:judge": "tsx packages/keystone-lab/src/mason-cli.ts"
   },
   "devDependencies": {
     "@tb/adapter-rapier": "workspace:*",

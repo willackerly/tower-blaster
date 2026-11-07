@@ -25,7 +25,7 @@ export interface EditOptions {
 /** Modifier keys that change what the pointer does. */
 export interface Mods { alt?: boolean; shift?: boolean }
 
-const box = (b: Obb): BodyDesc => ({ shape: { kind: 'box', half: [...b.half] as Vec3 }, pos: [...b.c] as Vec3, rot: [...b.q] as BodyDesc['rot'], linVel: [0, 0, 0], angVel: [0, 0, 0], density: 250, friction: 0.6, restitution: 0, tag: 0 });
+const box = (b: Obb, sphere = false): BodyDesc => ({ shape: sphere ? { kind: 'sphere', radius: b.half[0] } : { kind: 'box', half: [...b.half] as Vec3 }, pos: [...b.c] as Vec3, rot: [...b.q] as BodyDesc['rot'], linVel: [0, 0, 0], angVel: [0, 0, 0], density: 250, friction: 0.6, restitution: 0, tag: 0 });
 
 export class EditController {
   readonly session: BuildSession;
@@ -161,7 +161,8 @@ export class EditController {
   bodies(): { world: BodyDesc[]; ghost: BodyDesc[] } {
     const world = this.session.compiled().scene.bodies;
     const boxes = this.strokeGhost?.boxes ?? this.ghost?.boxes ?? [];
-    return { world, ghost: boxes.map(box) };
+    const spheres = this.strokeGhost ? undefined : this.ghost?.spheres;
+    return { world, ghost: boxes.map((b, i) => box(b, spheres?.[i] ?? false)) };
   }
 
   /** Effects for the ghost's slots (after the world's n) and the erase target. */
@@ -176,7 +177,7 @@ export class EditController {
   /** One line for the panel: what is held, how it is turned, what is left, and why the ghost does not fit. */
   status(): string {
     const s = this.session, left = s.left();
-    const what = this.tool === 'brush' ? 'domino brush' : this.tool === 'erase' ? 'erase' : `${s.items.find((i) => i.name === this.hold.item)?.label ?? this.hold.item}, ${this.hold.yaw} deg${this.hold.tip ? `, tipped ${this.hold.tip === 1 ? 'on x' : 'on z'}` : ''}`;
+    const what = this.tool === 'brush' ? 'domino brush' : this.tool === 'erase' ? 'erase' : `${s.items.find((i) => i.name === this.hold.item)?.label ?? this.hold.item}, ${this.hold.yaw}°${this.hold.tip ? `, tipped ${this.hold.tip === 1 ? 'on x' : 'on z'}` : ''}`;
     const budget = left === null ? `${s.spent()} placed` : `${left} of ${s.budget} left`;
     const why = this.strokeGhost ? (this.strokeGhost.why || `${this.strokeGhost.cost} dominoes${this.strokeGhost.clash.some(Boolean) ? `, ${this.strokeGhost.clash.filter(Boolean).length} left out` : ''}`) : this.ghost && !this.ghost.ok ? this.ghost.why : this.message;
     return [what, budget, why].filter(Boolean).join(' · ');

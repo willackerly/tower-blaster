@@ -6,6 +6,7 @@
 import { type CompiledLevel, itemRef, type LevelDef, MATERIALS, type RackItem, weaponOf } from '@tb/keystone';
 import { COAT_GILT, COAT_GLAZE, COAT_NONE, COAT_PAINT, type CoatId, type EffectStyle, type FxOptions, MARK_HIT, MARK_KEEP, MARK_NONE, MARK_SAVE, type MarkId, srgbToLinear } from '@tb/render';
 import { isWeaponSpec, type MunitionSpec, PROJECTILE_PRESETS } from '@tb/weapons';
+import type { XrayMode } from './options/xray.ts';
 
 /** Linear rgb (0..1) and emissive (0..1) to the renderer's bulk tint word: r low byte, emissive high byte. */
 export function tintWordOf(rgb: [number, number, number], emissive = 0): number {
@@ -180,6 +181,17 @@ export function markOf(c: CompiledLevel, i: number): MarkId {
 /** One mark per structure slot (markOf), or none at all when `on` is false, for one Renderer.setMarks at level load. */
 export function structureMarks(c: CompiledLevel, on = true): Uint8Array {
   return on ? Uint8Array.from({ length: c.meta.n }, (_, i) => markOf(c, i)) : new Uint8Array(c.meta.n);
+}
+
+/** A level is city-scale from this many structure bodies (B1 to B3 and their trials): where 'auto' shows the x-ray. */
+export const CITY_BODIES = 1000;
+
+/** Whether the objectives show through what hides them on level c under mode (PaceFeel.xray): auto on city-scale levels with crowns or heritage. */
+export function xrayOn(c: CompiledLevel, mode: XrayMode): boolean {
+  if (mode === 'off') return false;
+  let objectives = false;
+  for (let i = 0; i < c.meta.n && !objectives; i++) objectives = markOf(c, i) !== 0;
+  return objectives && (mode === 'on' || c.meta.n >= CITY_BODIES);
 }
 
 /** One tint word per structure slot, for one bulk setFx at level load (coats as PaceFeel.coats says). */

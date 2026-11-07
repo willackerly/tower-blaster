@@ -24,7 +24,7 @@ describe('trial levels', () => {
 
   it('the list is the agent playtest\'s (PT11): judge 3\'s keeps, reworks and promotions, its drops gone with a reason each; the workshop (C9) after it', () => {
     const ids = TRIAL_LEVELS.map((d) => d.id);
-    expect(ids).toEqual(['T-S3', 'T-S4', 'T-S8', 'T-S14', 'T-S14T', 'T-X1', 'T-X2', 'T-X3B', 'T-X4', 'T-B1B', 'T-B2C', 'T-B3B', 'T-B4A', 'T-I1', 'T-I2', 'T-I3', 'T-W1']);
+    expect(ids).toEqual(['T-S3', 'T-S4', 'T-S8', 'T-S14', 'T-S14T', 'T-X1', 'T-X2', 'T-X3B', 'T-X4', 'T-B1B', 'T-B2C', 'T-B3B', 'T-B4A', 'T-B5A', 'T-B5B', 'T-B5C', 'T-I1', 'T-I2', 'T-I3', 'T-W1']);
     expect(Object.keys(TRIAL_DROPS).sort()).toEqual(['T-B1A', 'T-B2A', 'T-B2B', 'T-B2D', 'T-B2E', 'T-B3A', 'T-B3C', 'T-B3E', 'T-S1', 'T-S12', 'T-S2', 'T-S3R', 'T-X3', 'T-X3K']);
     for (const id of Object.keys(TRIAL_DROPS)) { expect(ids, id).not.toContain(id); expect(TRIAL_DROPS[id]!.length, id).toBeGreaterThan(10); }
     for (const id of TRIAL_PROMOTE) expect(ids, id).toContain(id);

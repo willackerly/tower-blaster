@@ -198,7 +198,7 @@ describe('blast reach zone on the GPU (reach.ts)', () => {
     const r = await gpu.page.evaluate(() => (window as unknown as { __blasts: typeof Drivers }).__blasts.reachFrames());
     expect(r.error).toBeNull();
     expect(r.compiledBefore).toBe(false);
-    expect(r.shown).toEqual({ centre: [0, 2, -10], radius: 2 });
+    expect(r.shown).toEqual({ centre: [0, 2, -10], radius: 2, normal: [0, 1, 0] });
     expect(r.visible.n).toBeGreaterThan(20);
     expect(r.blocked.n).toBeGreaterThan(0);
     // The edge: clearly redder (red over green, display values).
@@ -207,6 +207,26 @@ describe('blast reach zone on the GPU (reach.ts)', () => {
     expect(r.blocked.r, JSON.stringify(r.blocked)).toBeGreaterThan(3);
     expect(r.blocked.r).toBeLessThan(r.visible.r);
     expect(r.centre.r, JSON.stringify(r.centre)).toBeGreaterThan(25);
+    expect(r.outsideChanged).toBe(0);
+    expect(r.hiddenDiff).toBe(0);
+  });
+});
+
+describe('impact marker on the GPU (reach.ts IMPACT_STYLE, PT14)', () => {
+  it('a warm reticle on the face it is given, square to its normal: an edge at the radius, still, nothing outside its quad, no blast zone, gone when hidden', async (ctx) => {
+    if (!gpu) return ctx.skip();
+    const r = await gpu.page.evaluate(() => (window as unknown as { __blasts: typeof Drivers }).__blasts.impactFrames());
+    expect(r.error).toBeNull();
+    expect(r.compiledBefore).toBe(false);
+    expect(r.shown).toEqual({ centre: [0.2, 2.1, -5.75], radius: 1.2, normal: [0, 0, 1] });
+    expect(r.blastShown).toBeNull();
+    // The edge on the wall's face (a disc in that plane, not a level one): clearly warmer than the stone.
+    expect(r.edge.warm, JSON.stringify(r)).toBeGreaterThan(20);
+    // The centre's reticle shows; the fill between is fainter than the edge.
+    expect(r.centre.warm, JSON.stringify(r.centre)).toBeGreaterThan(10);
+    expect(r.mid.warm).toBeLessThan(r.edge.warm);
+    // No ripple: two times draw the same; nothing outside the quad; gone when hidden.
+    expect(r.timeDiff).toBe(0);
     expect(r.outsideChanged).toBe(0);
     expect(r.hiddenDiff).toBe(0);
   });

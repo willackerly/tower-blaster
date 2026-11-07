@@ -3,7 +3,7 @@
 // becomes one engine spawn event; nothing else about the engine is touched.
 import { type BodyDesc, massOf, type RemoveEvent, type SpawnEvent, TAG_BALL, type Vec3 } from '@tb/engine-api';
 import { GRAVITY } from './materials.ts';
-import { AMMO, isRackItem, type ItemFrame, type ItemSpec, itemSpec, type LaunchItem, PLUNGER, PULL, RACK_ITEM_NAMES, type RackItem, speedOf } from './rack.ts';
+import { AMMO, isRackItem, type ItemFrame, type ItemSpec, itemSpec, type LaunchItem, PLUNGER, PULL, QUAKE, RACK_ITEM_NAMES, type RackItem, speedOf } from './rack.ts';
 
 /**
  * Fired from the launcher ring: az in 0.5 deg, y in 1/4 h, yaw and pitch in 0.1 deg, power in %.
@@ -28,6 +28,17 @@ export interface PullShot { ammo: 'pull'; body: number }
  * named twice, or past the level's charges, and delays at or past the settle cap.
  */
 export interface PlungerShot { ammo: 'plunger'; fuse: [number, number][] }
+/**
+ * Shake the ground (Aftershock, docs/game/aftershock.md; quake.ts): a quake of peak side load `peak` in
+ * hundredths of g, at `hz` tenths of a hertz, lasting `sec` tenths of a second, shaking along `axis` degrees
+ * from +x toward +z (a line: 0 to 179). The envelope rises over the first quarter and falls over the last.
+ * It becomes one quantised field event per step (engine-api quakeEvents), from exact arithmetic, so a quake
+ * is the same input on every engine. Session.quakeRefusal holds it to the level's limits and energy budget.
+ */
+export interface QuakeShot { ammo: 'quake'; peak: number; hz: number; sec: number; axis: number }
+
+/** A quake's field ranges (QuakeShot units): peak 1..100 (% g), hz 2..40 (0.2 to 4 Hz), sec 5..200 (0.5 to 20 s), axis 0..179 degrees. */
+export const QUAKE_RANGE = { peak: [1, 100], hz: [2, 40], sec: [5, 200], axis: [0, 179] } as const;
 
 /** Most charges one plunger sets off. */
 export const MAX_TIMELINE = 16;
@@ -47,7 +58,7 @@ export const MAX_PULL_BODY = 1_000_000;
  * shot it changes nothing. Written `@after` at the end of the shot in text (writeShots).
  */
 export interface ShotTiming { after?: number }
-export type Shot = (LaunchShot | CueShot | DropShot | PullShot | PlungerShot) & ShotTiming;
+export type Shot = (LaunchShot | CueShot | DropShot | PullShot | PlungerShot | QuakeShot) & ShotTiming;
 
 /** The most steps a shot's `after` may name: about 4.6 hours at 60 Hz, past any shot's settle cap. */
 export const MAX_AFTER = 1_000_000;
@@ -73,6 +84,10 @@ export function checkShot(s: Shot): void {
   if (s.after !== undefined) assertInt('after', s.after, 0, MAX_AFTER);
   if (s.ammo === 'drop') { assertInt('x', s.x, -4000, 4000); assertInt('z', s.z, -4000, 4000); return; }
   if (s.ammo === PULL) { assertInt('body', s.body, 0, MAX_PULL_BODY); return; }
+  if (s.ammo === QUAKE) {
+    for (const k of ['peak', 'hz', 'sec', 'axis'] as const) assertInt(k, s[k], QUAKE_RANGE[k][0], QUAKE_RANGE[k][1]);
+    return;
+  }
   if (s.ammo === PLUNGER) {
     if (!Array.isArray(s.fuse) || s.fuse.length < 1 || s.fuse.length > MAX_TIMELINE) throw new Error(`shot.fuse must list 1 to ${MAX_TIMELINE} [charge, delay] pairs`);
     s.fuse.forEach((p, i) => {
@@ -94,7 +109,9 @@ const LAUNCH_FIELDS = ['az', 'y', 'yaw', 'pitch', 'power'] as const;
  * An item's fields after its name in shot text (writeShots), in this order: every launch item's are
  * LaunchShot's. A plunger's are its fuse pairs, charge then delay, as many as it has (none listed here).
  */
-export const shotFields = (ammo: RackItem): readonly string[] => (ammo === 'drop' ? ['x', 'z'] : ammo === 'cue' ? ['x', 'y', 'z', 'dir', 'power'] : ammo === PULL ? ['body'] : ammo === PLUNGER ? [] : LAUNCH_FIELDS);
+export const shotFields = (ammo: RackItem): readonly string[] => (ammo === 'drop' ? ['x', 'z'] : ammo === 'cue' ? ['x', 'y', 'z', 'dir', 'power'] : ammo === PULL ? ['body'] : ammo === PLUNGER ? [] : ammo === QUAKE ? QUAKE_FIELDS : LAUNCH_FIELDS);
+/** A quake's fields in shot text: `quake.30.10.40.0` is 0.30 g at 1.0 Hz for 4.0 s along +x. */
+const QUAKE_FIELDS = ['peak', 'hz', 'sec', 'axis'] as const;
 
 /** The integers after a shot's name in text: its fields, or a plunger's fuse pairs flattened. */
 const shotValues = (s: Shot): number[] => (s.ammo === PLUNGER ? s.fuse.flat() : shotFields(s.ammo).map((k) => (s as unknown as Record<string, number>)[k]!));
@@ -106,6 +123,7 @@ const shotValues = (s: Shot): number[] => (s.ammo === PLUNGER ? s.fuse.flat() : 
  * A rapid-fire shot ends `@after` (ShotTiming): `w-grenade.120.4.0.35.80@12` went in 12 steps after
  * the shot before it, while that one was still running. Text without `@` reads as it always has.
  * A plunger lists its fuse pairs: `plunger.0.0.2.20.1.45` arms charge 0 at once, 2 at 20 steps, 1 at 45.
+ * A quake: `quake.30.10.40.0` (peak % g, hz in 0.1 Hz, sec in 0.1 s, axis degrees; QuakeShot).
  */
 export function writeShots(shots: readonly Shot[]): string {
   return shots.map((s) => [s.ammo, ...shotValues(s)].join('.') + (s.after === undefined ? '' : `@${s.after}`)).join('_');
@@ -167,11 +185,12 @@ export function ammoBody(kind: RackItem, at: ItemFrame, pos: Vec3, vel: Vec3, al
 
 /**
  * The engine event for a shot fired at engine step `step`: a spawn, or for a pull the removal of its
- * body; a plunger has none of its own (its charges' events come from the Driver's arsenal).
+ * body; a plunger has none of its own (its charges' events come from the Driver's arsenal), nor a quake
+ * (its field events come from quake.ts quakeInputs, pushed by the Driver).
  */
 export function shotEvent(f: ShotFrame, shot: Shot, step: number): SpawnEvent | RemoveEvent | null {
   if (shot.ammo === PULL) { checkShot(shot); return { step, kind: 'remove', id: shot.body }; }
-  if (shot.ammo === PLUNGER) { checkShot(shot); return null; }
+  if (shot.ammo === PLUNGER || shot.ammo === QUAKE) { checkShot(shot); return null; }
   return shotToSpawn(f, shot, step);
 }
 
@@ -180,6 +199,7 @@ export function shotToSpawn(f: ShotFrame, shot: Shot, step: number): SpawnEvent 
   checkShot(shot);
   if (shot.ammo === PULL) throw new Error(`a ${PULL} spawns nothing: it removes body ${shot.body} (shotEvent)`);
   if (shot.ammo === PLUNGER) throw new Error(`a ${PLUNGER} spawns nothing: it sets off charges (shotEvent)`);
+  if (shot.ammo === QUAKE) throw new Error(`a ${QUAKE} spawns nothing: it shakes the ground (shotEvent)`);
   const h = f.unit, ph = f.pitch * h;
   let body: BodyDesc;
   if (shot.ammo === 'drop') {
@@ -249,10 +269,12 @@ export interface Aim { shot: LaunchShot; error: number }
 /**
  * Inverse ballistics: the quantised launch shot (at the given azimuth, height
  * and power) whose arc passes closest to `target`. Yaw is exact up to
- * quantisation; pitch is searched coarse-to-fine over [-45, 80] degrees,
- * preferring the flatter arc on ties. Unreachable targets return the closest miss.
+ * quantisation; pitch is searched coarse-to-fine over [opts.minPitch (default -45), 80] degrees,
+ * preferring the flatter arc on ties. Unreachable targets return the closest miss. The game aims with a
+ * steeper floor (aim.ts AIM_MIN_PITCH): from a launcher over the structure, a target low on its near face
+ * needs more than 45 degrees down at full power. Bots and casts keep -45, so their lines replay as recorded.
  */
-export function aimAt(f: ShotFrame, ammo: LaunchItem, at: { az: number; y: number; power: number }, target: Vec3, opts: { dt?: number; maxSteps?: number; substeps?: number } = {}): Aim {
+export function aimAt(f: ShotFrame, ammo: LaunchItem, at: { az: number; y: number; power: number }, target: Vec3, opts: { dt?: number; maxSteps?: number; substeps?: number; minPitch?: number } = {}): Aim {
   const dt = opts.dt ?? 1 / 60, maxSteps = opts.maxSteps ?? 240, substeps = opts.substeps ?? 1;
   const p = launcherPos(f, at.az, at.y);
   const th = Math.atan2(target[2] - p[2], target[0] - p[0]);
@@ -271,7 +293,8 @@ export function aimAt(f: ShotFrame, ammo: LaunchItem, at: { az: number; y: numbe
   };
   // Coarse pass every degree, then every quantum around each local minimum:
   // about 300 arcs instead of 1,251, with the same answer for smooth error curves.
-  const lo = -450, hi = 800, coarse: number[] = [];
+  const lo = Math.round(10 * (opts.minPitch ?? -45)), hi = 800, coarse: number[] = [];
+  if (!(lo >= -890 && lo < hi)) throw new Error(`aimAt: minPitch must be from -89 to under 80 degrees: ${opts.minPitch}`);
   for (let p = lo; p <= hi; p += 10) coarse.push(p);
   coarse.forEach((p, i) => {
     const e = err(p);

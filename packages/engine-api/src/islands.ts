@@ -18,9 +18,14 @@
 // - reads per island: a world's own snapshot (local()), the bodies that have
 //   left their cell (leaks()), island tags for the observer (tags()), and
 //   world k alone at its island's position (solo()), the solo run nearest to
-//   its island (X8's solo-far: within millimetres, not bit for bit).
-import type { BodyDesc, InputEvent, SceneDesc, ShapeDesc, Snapshot, Vec3 } from './index.ts';
+//   its island (X8's solo-far: within millimetres, not bit for bit);
+// - the field schedule (C7: gravity steps, quakes, kicks), world-wide: the
+//   islands share one solve, so they share its gravity and every kick, and a
+//   field event is pushed once for all of them (pushField), never per island
+//   (docs/design/gravity-and-pins.md).
+import type { BodyDesc, FieldEvent, InputEvent, SceneDesc, ShapeDesc, Snapshot, Vec3 } from './index.ts';
 import { queueInputs } from './blast.ts';
+import { checkField } from './field.ts';
 
 /** Most islands in one solve: the observer's per-island histogram has at most this many bins (OBSERVER_CAPS.maxBins). */
 export const MAX_ISLANDS = 256;
@@ -108,6 +113,9 @@ export class Islands {
   private readonly queues: InputEvent[][];
   /** Per island: the local events released so far, each with the step it was released at. */
   private readonly sent: InputEvent[][];
+  /** World-wide field events still to release (pushField), and those released, each with the step it was released at. */
+  private fieldQueue: FieldEvent[] = [];
+  private readonly fieldSent: FieldEvent[] = [];
   /** Every global event released so far, in release order (record()). */
   private readonly released: InputEvent[] = [];
   /** due() has run for steps below this. */
@@ -171,7 +179,7 @@ export class Islands {
     this.check(k);
     for (const ev of events) {
       // A field event (field.ts) sets the one solve's gravity or kicks every body in it: it cannot belong to one island.
-      if (ev.kind === 'field') throw new Error(`islands: island ${k} has a field event at step ${ev.step}; gravity and kicks are world-wide, so islands cannot carry one`);
+      if (ev.kind === 'field') throw new Error(`islands: island ${k} has a field event at step ${ev.step}; gravity and kicks are world-wide: push it once for every island with pushField()`);
       if (ev.kind === 'blast') {
         const c = ev.blast.centre, r = ev.blast.radius;
         if (Array.isArray(c) ? Math.max(Math.abs(c[0]), Math.abs(c[2])) + r > this.half : r > this.reach) {
@@ -180,6 +188,21 @@ export class Islands {
       }
     }
     this.queues[k] = queueInputs(this.queues[k]!, events);
+  }
+
+  /**
+   * Queue world-wide field events (C7: a gravity step, a quake's keys, a kick), as a solo engine's push() would:
+   * every island shakes alike. A kick goes to every body that moves and gravity is uniform, so both are the same
+   * in every island's frame and are released unchanged. Within a step they are released before every island's
+   * own events, so a body spawned at that step is never kicked, in every island alike (in island order, island
+   * 0's same-step spawn would be released before the kick and island 5's after it, or the reverse).
+   */
+  pushField(events: readonly FieldEvent[]): void {
+    for (const ev of events) {
+      if ((ev as InputEvent).kind !== 'field') throw new Error(`islands: pushField takes field events only, got ${(ev as InputEvent).kind} at step ${ev.step}`);
+      checkField(ev);
+    }
+    this.fieldQueue = queueInputs(this.fieldQueue, events) as FieldEvent[];
   }
 
   /**
@@ -192,11 +215,17 @@ export class Islands {
   due(step: number): InputEvent[] {
     if (Number.isInteger(step) && step <= this.sealed) {
       // pack() put every event up to `sealed` in the scene's inputs; one pushed since and due by now would be late.
-      if (this.queues.some((q) => q.length && q[0]!.step <= step)) throw new Error(`islands: an event due by step ${step} was pushed after pack() sealed the scene to step ${this.sealed}; push only events due after step ${this.sealed}`);
+      if (this.queues.some((q) => q.length && q[0]!.step <= step) || (this.fieldQueue.length && this.fieldQueue[0]!.step <= step)) throw new Error(`islands: an event due by step ${step} was pushed after pack() sealed the scene to step ${this.sealed}; push only events due after step ${this.sealed}`);
       return [];
     }
     if (!Number.isInteger(step) || step < this.next) throw new RangeError(`islands: due(${step}) after due(${this.next - 1}); call it once per step, in order`);
     const out: InputEvent[] = [];
+    // World-wide field events first (pushField): every island's same-step events come after them.
+    while (this.fieldQueue.length && this.fieldQueue[0]!.step <= step) {
+      const ev = { ...this.fieldQueue.shift()!, step };
+      this.fieldSent.push(ev);
+      out.push(ev);
+    }
     for (let k = 0; k < this.K; k++) {
       const q = this.queues[k]!;
       while (q.length && q[0]!.step <= step) {
@@ -218,7 +247,8 @@ export class Islands {
    */
   pack(): SceneDesc {
     // Each round releases everything due by the earliest queued step (or the next step, for an event pushed late).
-    while (this.queues.some((q) => q.length)) this.due(Math.max(this.next, Math.min(...this.queues.flatMap((q) => (q.length ? [q[0]!.step] : [])))));
+    const firsts = () => [...this.queues, this.fieldQueue].flatMap((q) => (q.length ? [q[0]!.step] : []));
+    while (firsts().length) this.due(Math.max(this.next, Math.min(...firsts())));
     this.sealed = Math.max(this.sealed, this.next - 1);
     return this.record();
   }
@@ -228,7 +258,10 @@ export class Islands {
     return { ...this.scene, inputs: [...this.released] };
   }
 
-  /** World k alone at its island's offset, with its own events (released and still queued) in local ids: the solo run nearest to its island. */
+  /**
+   * World k alone at its island's offset, with its own events (released and still queued) in local ids and the
+   * world-wide field events, each step's field events first as due() releases them: the solo run nearest to its island.
+   */
   solo(k: number): SceneDesc {
     const w = this.worlds[this.check(k)]!, o = this.offsets[k]!;
     const shift = (ev: InputEvent): InputEvent => {
@@ -236,7 +269,9 @@ export class Islands {
       if (ev.kind === 'blast' && Array.isArray(ev.blast.centre)) { const c = ev.blast.centre; return { ...ev, blast: { ...ev.blast, centre: [c[0] + o[0], c[1] + o[1], c[2] + o[2]] } }; }
       return ev;
     };
-    return { ...w, id: `${w.id}@${k}`, bodies: w.bodies.map((b) => this.place(k, b)), inputs: [...this.sent[k]!, ...this.queues[k]!].map(shift) };
+    const own = [...this.sent[k]!, ...this.queues[k]!].map(shift), field = [...this.fieldSent, ...this.fieldQueue];
+    // Field events go in ahead of every event of the same step (queueInputs keeps push order within a step).
+    return { ...w, id: `${w.id}@${k}`, bodies: w.bodies.map((b) => this.place(k, b)), inputs: queueInputs(field, own) };
   }
 
   /** Island k's own snapshot: its bodies in local order, positions relative to its offset (f64). */

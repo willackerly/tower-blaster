@@ -90,9 +90,10 @@ const SCENARIO_TRIALS: LevelDef[] = [
 
 /**
  * The drafts kept as trials (TRIAL_DRAFTS), named for what they vary. B1c and B3d were never in: B1 and B3 as
- * rated, but for the objective. The rest were dropped on 2026-11-06 (TRIAL_DROPS).
+ * rated, but for the objective. The rest were dropped on 2026-11-06 (TRIAL_DROPS). B5a to B5c (Kapla Spire, G5)
+ * came after the pruning and join as drafted, to be judged in the next agent round.
  */
-export const TRIAL_DRAFTS: readonly string[] = ['B1b', 'B2c', 'B3b', 'B4a'];
+export const TRIAL_DRAFTS: readonly string[] = ['B1b', 'B2c', 'B3b', 'B4a', 'B5a', 'B5b', 'B5c'];
 const DRAFT_TRIALS: LevelDef[] = Object.entries(DRAFTS).filter(([k]) => TRIAL_DRAFTS.includes(k)).map(([k, d]) =>
   trial({ ...d, id: `T-${k.toUpperCase()}`, name: `${d.name} (${k})`, world: 5 }, { from: `draft ${k} (drafts.ts)` }));
 
