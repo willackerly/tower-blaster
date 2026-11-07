@@ -6,6 +6,7 @@
 import { DUEL_CSS } from './duel-hud.ts';
 import { TOUCH_HELP } from './hud.ts';
 import { LOT_CSS } from './lot-hud.ts';
+import { FUSE_CSS } from './fuse-panel.ts';
 
 /** A phone held upright: at most this wide. Sideways: at most this tall. The docked HUD's media queries (DOCK_CSS). */
 export const DOCK_PORTRAIT = '(orientation: portrait) and (max-width: 640px)';
@@ -235,7 +236,7 @@ export const GAME_CSS = `
     /* The lot sheet keeps its count line; its goals are on the result card (the HUD would cover the structure). */
     body.kg-touch .kg-hud .goals ul { display: none; }
   }
-${DOCK_CSS}${LOT_CSS}${DUEL_CSS}`;
+${DOCK_CSS}${LOT_CSS}${DUEL_CSS}${FUSE_CSS}`;
 
 /**
  * The game page's hint line in play: the few controls a first shot needs, and where the rest are. The HUD
