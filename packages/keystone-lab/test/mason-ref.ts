@@ -1,6 +1,7 @@
 // Mason's Trial on the f64 reference (M8, docs/game/masons-trial.md), one level per
 // test file (mason-ref-MT*.test.ts, so each stays well under CI's per-file budget):
-// - the recorded builds go through the real build tool, and the level's stars are
+// - the recorded builds go through the real build tool, each step a click a player
+//   can make (masonUnreachable), and the level's stars are
 //   MASON_STAR_SHARE of its tier authors' recorded points (masonStarsFrom);
 // - in the judge's first 8 worlds the authors pass and the wrong builds fail;
 // - the judge's verify: the knife-edge build (it passes in only some worlds) in 16
@@ -13,7 +14,7 @@ import { describe, expect, it } from 'vitest';
 import { compileLevel, judgeMason, type LevelDef, MASON_CLEAR, MASON_WORLDS, soloMason } from '@tb/keystone';
 import { AvbdReferenceEngine } from '@tb/physics-ref';
 import { AVBD_GAP_SLOP, AVBD_ITERATIONS } from '@tb/keystone';
-import { MASON_KNIFE, MASON_SOLUTIONS, MASON_WRONG, type MasonBuild, masonBuild, masonStarsFrom } from '../src/mason-solutions.ts';
+import { MASON_KNIFE, MASON_SOLUTIONS, MASON_WRONG, type MasonBuild, masonBuild, masonStarsFrom, masonUnreachable } from '../src/mason-solutions.ts';
 import { fisherExact } from '../src/mason-stats.ts';
 
 const MINUTES = 60_000, SLOW = process.env.PHYSICS_GPU_SLOW === '1';
@@ -38,8 +39,13 @@ async function verify(def: LevelDef, b: MasonBuild, K: number) {
   return { islands: v.passes, solo, agree, leaks: v.leaks, p: fisherExact(v.passes, K - v.passes, solo, K - solo) };
 }
 
-/** Registers the reference tests of one Mason level. */
-export function masonRefSuite(def: LevelDef): void {
+/**
+ * Registers the reference tests of one Mason level. CI (O5) runs the heavy ones (the 8-world judge, the verify)
+ * for one representative level only (`representative`, MT4: mason-ref-MT4.test.ts); the rest run them with
+ * PHYSICS_GPU_SLOW=1 (nightly). The recorded builds' check (build, reach, stars) is cheap and runs for every level.
+ */
+export function masonRefSuite(def: LevelDef, representative = false): void {
+  const HEAVY = representative || SLOW;
   const sols = MASON_SOLUTIONS[def.id]!, knife = MASON_KNIFE[def.id]!, wrong = MASON_WRONG[def.id]!;
 
   describe(`${def.id} ${def.name} on the reference`, () => {
@@ -49,7 +55,11 @@ export function masonRefSuite(def: LevelDef): void {
         const { spent } = built(def, b);
         if (b.measured) expect(spent, b.label).toBe(b.measured.spent);
         expect(spent, b.label).toBeLessThanOrEqual(def.build!.budget!);
+        // Every step is one a player can make: a click where the pointer lands (with a slide off it, as Hold.slide allows).
+        expect(masonUnreachable(def, b.steps), b.label).toEqual([]);
       }
+      // ... and the check has teeth: a face hit far past the lot is no click.
+      expect(masonUnreachable(def, [(s) => ({ place: 'cube', hit: { body: 0, point: [99 * s.h, 50 * s.h, 0], normal: [0, 1, 0], t: 0 } })])).toHaveLength(1);
       expect(def.mason!.stars).toEqual(masonStarsFrom(def, sols));
       // The 3-star author build is the cheaper one, and both are robust (they pass in most worlds).
       const [t2, t3] = [sols.find((s) => s.tier === 2)!, sols.find((s) => s.tier === 3)!];
@@ -57,7 +67,7 @@ export function masonRefSuite(def: LevelDef): void {
       for (const s of sols) expect(s.measured!.passes, s.label).toBeGreaterThanOrEqual(0.9 * MASON_WORLDS);
     });
 
-    it('in the first 8 worlds the authors pass and the wrong builds fail; no island leaks', async () => {
+    it.runIf(HEAVY)('in the first 8 worlds the authors pass and the wrong builds fail; no island leaks', async () => {
       const K = 8;
       for (const b of sols) {
         const v = await judgeMason(ref(), built(def, b).c, range(K));
@@ -72,7 +82,7 @@ export function masonRefSuite(def: LevelDef): void {
       }
     }, 6 * MINUTES);
 
-    it("the judge's verify: the knife-edge build in 16 islands agrees with its 16 solo runs (Fisher p > 0.05)", async () => {
+    it.runIf(HEAVY)("the judge's verify: the knife-edge build in 16 islands agrees with its 16 solo runs (Fisher p > 0.05)", async () => {
       const r = await verify(def, knife, 16);
       console.log(`${def.id} knife ${knife.label}: islands ${r.islands}/16, solo ${r.solo}/16, same verdict in ${r.agree}, Fisher p ${r.p.toFixed(3)}`);
       expect(r.leaks).toBe(0);

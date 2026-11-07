@@ -16,7 +16,7 @@ import { BuildSession, floorTotal, type Hit, type Hold, type LevelDef, masonLine
 import { ground, top } from './rube.ts';
 
 /** One step of a build: an item at a face hit (computed from the session so far). */
-export type MasonStep = (s: BuildSession) => { place: CatalogName; hit: Hit; yaw?: number; tip?: 0 | 1 | 2 };
+export type MasonStep = (s: BuildSession) => { place: CatalogName; hit: Hit; yaw?: number; tip?: 0 | 1 | 2; slide?: number };
 
 export interface MasonBuild {
   label: string;
@@ -33,17 +33,37 @@ export interface MasonBuild {
 export function masonBuild(def: LevelDef, steps: readonly MasonStep[]): { def: LevelDef; spent: number } | { refused: string } {
   const s = new BuildSession(def);
   for (const f of steps) {
-    const st = f(s), hold: Hold = { item: st.place, yaw: st.yaw ?? 0, tip: st.tip ?? 0 }, g = s.ghost(st.hit, hold);
+    const st = f(s), hold: Hold = { item: st.place, yaw: st.yaw ?? 0, tip: st.tip ?? 0, ...(st.slide ? { slide: st.slide } : {}) }, g = s.ghost(st.hit, hold);
     if (!s.place(g)) return { refused: `${st.place}: ${g.why}` };
   }
   return { def: s.def(), spent: s.spent() };
 }
 
-const on = (b: number, x: number, z = 0, item: CatalogName = 'cube'): MasonStep => (s) => ({ place: item, hit: top(s, b, x, z) });
+/**
+ * `item` on the top face of body `b` where a ray straight down onto (x, z) h lands, slid `slide` half-cells out along its
+ * length (Hold.slide): what a player can do. The test checks each step's hit is the face such a ray picks.
+ */
+/**
+ * The steps a player could not make: those whose placement differs from what a ray straight down onto the step's
+ * point picks (the face the pointer would be on), slid as held. A program's hit may name any point of a face, even one
+ * past its edge, which no pointer reaches; an empty list means every step is a click on the level as built so far.
+ */
+export function masonUnreachable(def: LevelDef, steps: readonly MasonStep[]): string[] {
+  const s = new BuildSession(def), out: string[] = [];
+  steps.forEach((f, i) => {
+    const st = f(s), p = st.hit.point, hold: Hold = { item: st.place, yaw: st.yaw ?? 0, tip: st.tip ?? 0, ...(st.slide ? { slide: st.slide } : {}) };
+    const g = s.ghost(st.hit, hold), picked = s.pick({ origin: [p[0], p[1] + 20 * s.h, p[2]], dir: [0, -1, 0] });
+    if (!picked || JSON.stringify(s.ghost(picked, hold).parts) !== JSON.stringify(g.parts)) out.push(`step ${i} (${st.place}): the pointer picks ${picked ? `body ${picked.body}` : 'nothing'} there`);
+    s.place(g);
+  });
+  return out;
+}
+
+const on = (b: number, x: number, z = 0, item: CatalogName = 'cube', slide = 0): MasonStep => (s) => ({ place: item, hit: top(s, b, x, z), ...(slide ? { slide } : {}) });
 const at = (x: number, z: number, item: CatalogName = 'cube', yaw = 0): MasonStep => (s) => ({ place: item, hit: ground(s, x, z), yaw });
 
 /** MT1: slab L is body 5 (on the left ledge), slab R body 6; cubes stack on the slabs' back ends, off the ball's lane. */
-const MT1_SLABS = [on(1, 0.5, 0, 'slab'), on(2, 4, 0, 'slab')];
+const MT1_SLABS = [on(1, -0.6, 0, 'slab', 2), on(2, 4, 0, 'slab')];
 /** Counterweights: n cubes on slab `b` at x, alternating z = 1 and -1, the third and fourth stacked on the first two. */
 function weights(b: number, x: number, n: number, first: number): MasonStep[] {
   const out: MasonStep[] = [];
@@ -65,8 +85,8 @@ export const MASON_SOLUTIONS: Record<string, MasonBuild[]> = {
     { label: 'a wall of four by two in front of each hut', family: 'berm', tier: 2, measured: { passes: 64, spent: 16 }, steps: [at(0, -2.5, 'wall4x2', 90), at(0, 1.6, 'wall4x2', 90)] },
   ],
   MT4: [
-    { label: 'a plank out over the edge, three cubes on its back end', family: 'counterweight', tier: 3, measured: { passes: 64, spent: 5 }, steps: [on(0, 0.5, 0, 'plank'), on(1, -1.5), on(1, -0.5), on(2, -1.5)] },
-    { label: 'a plank out over the edge, four cubes on its back end', family: 'counterweight', tier: 2, measured: { passes: 64, spent: 6 }, steps: [on(0, 0.5, 0, 'plank'), on(1, -1.5), on(1, -0.5), on(2, -1.5), on(3, -0.5)] },
+    { label: 'a plank out over the edge, three cubes on its back end', family: 'counterweight', tier: 3, measured: { passes: 64, spent: 5 }, steps: [on(0, -0.5, 0, 'plank', 2), on(1, -1.5), on(1, -0.5), on(2, -1.5)] },
+    { label: 'a plank out over the edge, four cubes on its back end', family: 'counterweight', tier: 2, measured: { passes: 64, spent: 6 }, steps: [on(0, -0.5, 0, 'plank', 2), on(1, -1.5), on(1, -0.5), on(2, -1.5), on(3, -0.5)] },
   ],
 };
 
@@ -95,8 +115,8 @@ export const MASON_WRONG: Record<string, MasonBuild[]> = {
   ],
   MT4: [
     { label: 'nothing (the weight falls to the floor)', family: 'none', steps: [] },
-    { label: 'a bare plank out over the edge (it tips under the weight)', family: 'counterweight', steps: [on(0, 0.5, 0, 'plank')] },
-    { label: 'a plank with one cube on its back end', family: 'counterweight', steps: [on(0, 0.5, 0, 'plank'), on(1, -1.5)] },
+    { label: 'a bare plank out over the edge (it tips under the weight)', family: 'counterweight', steps: [on(0, -0.5, 0, 'plank', 2)] },
+    { label: 'a plank with one cube on its back end', family: 'counterweight', steps: [on(0, -0.5, 0, 'plank', 2), on(1, -1.5)] },
   ],
 };
 
