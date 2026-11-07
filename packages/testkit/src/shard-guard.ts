@@ -6,8 +6,12 @@
 import { globSync, readFileSync } from 'node:fs';
 import { checkShards, type Durations, planShards, shardLoad, shardWall } from './shard.ts';
 
-/** The limits O5 sets (docs/plan.md): shards stay under 10 min on a runner, so an estimate over 12 is an error. */
-export const LIMITS = { shard: 12 * 60, file: 300 };
+/**
+ * The limits O5 sets (docs/plan.md): shards stay under 10 min on a runner. On 48 shards of three main runs
+ * (2bbff1c, c749b6c, 9252c58) a shard took 0.68-1.31x its estimate from per-file medians (runner speed and
+ * which files share its workers), so an estimate over 7.5 min (x1.31 = 9.8) is an error: add shards in ci.yml.
+ */
+export const LIMITS = { shard: 7.5 * 60, file: 300 };
 
 const root = new URL('../../../', import.meta.url).pathname;
 const durations: Durations = JSON.parse(readFileSync(`${root}vitest.durations.json`, 'utf8'));
