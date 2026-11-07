@@ -423,7 +423,7 @@ export function compileLevel(def: LevelDef): CompiledLevel {
   if (geometry.scoring === 'par') delete geometry.scoring;
   if (geometry.autobank === false) delete geometry.autobank;
   // The settle rule a level plays by hashes as absent when it is the one its scoring used before v3 (par v1, outcome v2), so those
-  // levels hash as they did; any other, outcome levels' default v3 included, is written out, so stars cast under v2 never show under v3.
+  // levels hash as they did; any other, outcome levels' default v4 included, is written out, so stars cast under one rule never show under another.
   const settleRule = settleOf(def);
   if (settleRule === (scoringOf(def) === 'outcome' ? 'v2' : 'v1')) delete geometry.settle; else geometry.settle = settleRule;
   const physics = physicsKey(geometry.physics);

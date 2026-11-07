@@ -164,7 +164,7 @@ physics?: {
   bounce?: number | null     // restitution e for structure bodies with the engine's restitution on; null = off (default)
   pairsPerBody?: number      // GPU pair buffer; default from F1's sizing rule
   presettle?: number         // default 300 steps
-  settle?: 'v1' | 'v2' | 'v3'  // default v1 for par levels, v3 for outcome levels (v2 before settle v3)
+  settle?: 'v1' | 'v2' | 'v3' | 'v4'  // default v1 for par levels, v4 for outcome levels (v2 before settle v3, v3 before PT6b)
 }
 ```
 

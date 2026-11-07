@@ -29,13 +29,14 @@ export const SETTLE_CAP_V2 = 1800;
  * SETTLE_CAP; par levels pin their lines on it. v2: at most
  * settleAllowance(n) structure bodies moving (Reductions.nMoving) and every
  * live spawned body under QUIET_SPEED, for SETTLE_QUIET steps, or
- * SETTLE_CAP_V2. v3, outcome levels' default: as v2, or else the structure is
+ * SETTLE_CAP_V2. v3 (outcome levels' default until PT6b): as v2, or else the structure is
  * frozen: nothing live (ammo included) faster than FROZEN_SPEED,
  * and the collapse D and the displaced count unchanged (D within FROZEN_D) for
  * FROZEN_STEPS steps, however many bodies still move. A standing wall can ring
  * for the whole cap with a hundred blocks swaying a few centimetres at 0.1 to
  * 0.3 m/s while nothing changes (G5's B1, 2026-11-01); v3 ends that shot, and
- * settles no later than v2 anywhere. v4 (agent playtest PT6): as v3, or else the collapse D has stayed
+ * settles no later than v2 anywhere. v4 (agent playtest PT6; outcome levels' default since PT6b,
+ * docs/game/settle-v4.md): as v3, or else the collapse D has stayed
  * within STEADY_D of where a run began for STEADY_STEPS steps, whatever still moves: a big level's
  * shot whose Down% reads the same for seconds while debris rolls and blocks rock (B1 at 17% from 3.5 s
  * to 18.4 s on Rapier) ends 2 s after the last change anyone can see.
