@@ -141,7 +141,8 @@ export function ecForContact(m: SoundMaterial, edge: number, T: number, dv: numb
  * on one of @tb/audio's body models, the contact radius its own (a sphere's Hertz contact is its radius).
  * - beach ball and basketball: hollow (the shell model), vinyl (1300 kg/m^3) and rubber (1100) walls as
  *   thick as their real masses make them (0.25 kg and 0.62 kg over pi d^2), with the contact of an
- *   inflated ball (INFLATED_CONTACT). Their walls ring far under hearing: what is heard is the soft
+ *   inflated ball (INFLATED_CONTACT). Their wall modes are off (ringDb -Infinity): a pressurised membrane
+ *   is not a clamped plate, and as plates they sit under or just over 20 Hz. What is heard is the soft
  *   contact's thump (a ball's air is not modelled).
  * - bowling ball: solid polyester resin (E 3.5 GPa, 1340 kg/m^3, loss 0.02), its 7.3 kg as a cube of its diameter.
  * - cannonball (24-pounder iron shot) and wrecking ball: solid cast iron and steel, like the steel ammo.
