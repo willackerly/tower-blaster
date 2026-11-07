@@ -254,7 +254,44 @@ Every gate passed: the best build beats all at once by 0.61, 0.61 and 0.45 (64 S
 | The board's bodies | props: out of collapse, spill, mass and the weapon scale (`rules.ts foldProp`, `asideOf`) | count them as building | the frame's numbers must not move when the player lays 60 dominoes, and dominoes outnumbering rods would flip `levelBlock` |
 | Where the lanes run | a board beside the lot, sockets 7 h or more from the frame | sockets at the columns | a fuse at the columns would be in the fall's path, and the frame's wind-up would knock it |
 | Delay readout | estimate from the laid path (`fuseSteps`) | count dominoes only | counts alone are wrong by up to a quarter on a bend; the estimate is within 10% |
-| Stars | uncast for now (one star for a clear) | T2/T3 from the gate's 8 builds | the cast tool models shots, not builds, and PT20's rule wants the best build's cloud on the GPU too; a follow-up (seams) |
+| Stars | cast on builds (M5c, below) | T2/T3 from the gate's 8 builds | the gate tries a dozen sweeps; the cast's competent players, climb and 50-build cloud are the same recipe as F1 to F5's, so the stars mean the same thing across the series |
+
+## Stars on the domino fuses (M5c)
+
+The cast (`keystone-lab cast.ts`) now has a line model for builds (`buildModel`), beside the launch and timeline models:
+
+- **A line is a build**: the dominoes beyond straight on each lane, keyed `fuse.<e0>.<e1>...` (`fuse-gate.ts buildKey`). The shot is always Light the fuses. `extrasBuild` lays each lane's count as bumps (`laneFuse`), turned away from the board's middle, so neighbouring bumps never face each other and FD-1's two lanes, 3 h apart, can both bump. A middle lane (an odd board) follows the lane with the most extras. A build is refused when a lane can't take its count, when it goes over the budget, or when two fuses come within 1.5 h of each other (`extrasProblem`).
+- **Competent builds are sweeps**, as competent timelines are. Each picks one of 8 directions, and each lane one rank further along it gets 1 to 6 more dominoes (`FUSE_MAX_STEP`), give or take one. The shortest fuse is laid straight. A sweep that doesn't fit shortens its step until it does, down to all straight.
+- **Moves and noise.** A move lengthens or shortens one lane by one domino. The noise is the build's nudge, because fuses, like a timeline, are exact.
+- **Plumbing.** `playNoisy` plays each run of lines on the level its build lays (`buildLevel`). The `CastPlayer` is unchanged, so the Node player and the GPU cast page play builds as they are. Casts, replays, `--extend` and `--cloud-of` record each play's build and resend it.
+- **Stars are on the level as authored.** A built level's `baseHash` is the authored hash (`castStars`), so the stars apply to whatever the player lays.
+
+Results on the reference engine (Node, f64; seed 1; short recipe, 210 plays each; `--jobs 4`, the worker-pool player, see below). Every star gate passed: fair, skill, stable, limits and complete.
+
+| level | T2 | T3 | best | best build | competent P50 / P75 | cloud P10 / P25 / P50 | GPU (SwiftShader, 8 builds) |
+|---|---|---|---|---|---|---|---|
+| F6 | 0.24 | 0.89 | 0.892 | `fuse.0.5` (east +5, the gate's) | 0.247 / 0.548 | 0.890 / 0.891 / 0.891 | T3 0.891, inside [0.890, 0.891]; 8/8 met |
+| F7 | 0.34 | 0.85 | 0.871 | `fuse.0.5.9` (north first, +5 then +4) | 0.348 / 0.393 | 0.854 / 0.857 / 0.858 | T3 0.858, inside [0.854, 0.859]; 8/8 met |
+| F8 | 0.39 | 0.74 | 0.792 | `fuse.0.2.5.7` (west first, +2, +3, +2) | 0.396 / 0.725 | 0.738 / 0.747 / 0.761 | T3 0.740, inside [0.735, 0.762]; 7/8 met (min 0.691) |
+
+Each best build was then played on the GPU solver (SwiftShader, f32, through the game's cast page) on 8 nudged builds of its own seed (`--cloud-of`). Every T3 there lands inside the reference's interval for a cloud of 8, so each stars.json entry lists `"agrees": ["gpu"]` (PT20's rule) and the game records these stars on its default engine. On F6 and F7 the GPU lands on the reference's T3 to the third decimal.
+
+- **T2 is above all at once on F7 and F8**, as on F5. On these boards a sweep in a near direction, or of the wrong size, still pulls part of the frame over (F7's competent median is 0.35 against an all-at-once 0.25; F8's is 0.40 against 0.29). Two stars still need a clear.
+- **T3 asks for the bot's best build**, give or take a quartile of build noise. On F6 any east fuse 4 or 5 longer gets it. F7's best is a little uneven (+5 then +4), and the climb found it from +4, +5. F8's best cloud sits where the gate's +3 sat (0.747 against 0.743).
+- **The budget gate failed on this container** (69 to 73 min against 60), as F5's did. The gate is judged on the M5 Max. Here the reference took 19 to 26 ms a step. The stars went into the file as cast, as F5's did.
+
+**F6's budget was too small** (found while casting). F6 shipped in #301 with 26 dominoes, and its two straight fuses take 24. Its tower folds only with the east fuse 4 or more longer (28), so no build within the budget cleared it. #305 made it 32, and `fuse-budget.test.ts` holds every level's best gate build to its budget. The cast refuses over-budget builds, so its stars are reachable by construction.
+
+**The worker-pool player** (`poolCastPlayer`, `pnpm keystone:cast --engine ref --jobs N`). A fuse level's reference play takes about a minute here, so a 210-play cast in one thread overran its 2 h run (F7 and F8 were stopped at 120 and 96 plays). Each play now runs on a fresh engine in one of N worker threads (`cast-worker.ts`), so it ends exactly as the one-thread player's does. `cast-build.test.ts` checks this, hash and steps. On such a player `playNoisy` plays a batch's builds at once. At 4 threads a cast took 67 to 69 min.
+
+Alternatives weighed:
+
+| Decision | Chosen | Alternatives | Why |
+|---|---|---|---|
+| What the stars measure | fold (the F series' metric), cast like F1 to F5 | `BuildDef.par`: stars on the fewest dominoes that clear (Rube Lab, Lay) | on a fuse level the dominoes are the delay, not a cost to save. The cheapest build is the straight one, which fails, and the cheapest that clears sits on the knife-edge of the first delay that folds. Fold quality is the skill, as on F1 to F5. Mason's Trial's points don't apply: there is no test phase |
+| How a build reaches the player | `playNoisy` groups lines by build and plays each group on the built level | a level per line in `CastPlayer.play`; builds encoded in the shot text | grouping needs no change to either player (Node or the GPU cast page), and the shot text stays a shot |
+| Which way the bumps turn | away from the board's middle, a middle lane with the longest | the gate's rule: every lane to one side (`sweepBuilds`) | the gate's rule sends one of FD-1's lanes across the other (3 h apart) when both bump. The outward rule lays F6's and F7's gated best builds exactly; on F8 the second lane turns the other way, so its cast best is its own |
+| Speed | a worker pool, the same plays N at a time | a smaller recipe; the GPU cast page on SwiftShader | a smaller recipe changes what the stars mean, and SwiftShader is slower than f64 Node here |
 
 
 ## Alternatives considered for the mode
@@ -270,7 +307,7 @@ Every gate passed: the best build beats all at once by 0.61, 0.61 and 0.45 (64 S
 
 ## Seams left for later
 
-- **Domino fuses**: built (M5b, above). Left: casting their stars (they need a build model in `cast.ts`, and the GPU cloud of the best build, PT20's rule), F8's upper edge on a longer board, and fuses that branch (one lane to two sockets).
+- **Domino fuses**: built (M5b), stars cast (M5c, above). Left: F8's upper edge on a longer board, fuses that branch (one lane to two sockets), and a Metal recast of F6 to F8 (with F1 to F5's).
 - **More sympathetic designs**: F5 is one. The variables are relays on more than one storey, and a threshold that waits for a larger jolt (C5's `moved` trigger takes both). A threshold that tightens F5's spread would make a fairer level.
 - **Neighbour contact**: heritage is judged by displacement, and a stone house of one slab per course barely moves when a plaster frame lands on it. A rule that fails a level when building mass touches a neighbour would match the objective's wording better. Today spill catches those lines first (5 of 648 screened lines broke a house).
 - **Player-placed charges**: with C9's placement tool, a budget of cutters the player places on columns of their choice.

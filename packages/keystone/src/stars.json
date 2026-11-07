@@ -6,5 +6,8 @@
  "F2": { "metric": "fold", "t2": 0.24, "t3": 0.85, "best": 0.8745380828513101, "castOn": "node", "engine": "ref", "agrees": ["gpu"], "hash": "939cf50122196108", "n": 210, "seed": 1 },
  "F3": { "metric": "fold", "t2": 0.29, "t3": 0.81, "best": 0.8377199196652577, "castOn": "node", "engine": "ref", "agrees": ["gpu"], "hash": "e7a4c87d7041c476", "n": 210, "seed": 1 },
  "F4": { "metric": "fold", "t2": 0.28, "t3": 0.69, "best": 0.8051613415835969, "castOn": "node; T3 from google swiftshader", "engine": "ref", "agrees": ["gpu"], "hash": "fcf549b7ba40606c", "n": 210, "seed": 1 },
- "F5": { "metric": "fold", "t2": 0.33, "t3": 0.74, "best": 0.793947532806166, "castOn": "node", "engine": "ref", "agrees": ["gpu"], "hash": "5c56a05c82b267f9", "n": 210, "seed": 1 }
+ "F5": { "metric": "fold", "t2": 0.33, "t3": 0.74, "best": 0.793947532806166, "castOn": "node", "engine": "ref", "agrees": ["gpu"], "hash": "5c56a05c82b267f9", "n": 210, "seed": 1 },
+ "F6": { "metric": "fold", "t2": 0.24, "t3": 0.89, "best": 0.8922151792569253, "castOn": "node", "engine": "ref", "agrees": ["gpu"], "hash": "ea6c8fecae071d9f", "n": 210, "seed": 1 },
+ "F7": { "metric": "fold", "t2": 0.34, "t3": 0.85, "best": 0.8709485816440968, "castOn": "node", "engine": "ref", "agrees": ["gpu"], "hash": "5220faad444d961c", "n": 210, "seed": 1 },
+ "F8": { "metric": "fold", "t2": 0.39, "t3": 0.74, "best": 0.7919870709669936, "castOn": "node", "engine": "ref", "agrees": ["gpu"], "hash": "4e828f821af6aaf3", "n": 210, "seed": 1 }
 }

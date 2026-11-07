@@ -1,4 +1,4 @@
-// pnpm keystone:cast <level> [--engine gpu|ref|rapier] [--channel chrome] [--headed]
+// pnpm keystone:cast <level> [--engine gpu|ref|rapier] [--jobs N] [--channel chrome] [--headed]
 //   [--seed N] [--metric collapse|crowns|skyline|score] [--recipe short|full|C,L,M,K,N]
 //   [--out cast.json] [--md cast.md] [--compare other.json] [--max-steps N] [--explore N]
 //   [--cloud-of cast.json [--n 16]] [--budget-min 60] [--pool a.json,b.json]
@@ -39,7 +39,7 @@
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { compileLevel, type LevelDef, levelById, scenarioLevel, STAR_METRICS, type StarMetric, type StarsDef } from '@tb/keystone';
 import { exitNow } from '@tb/testkit';
-import { applyWaivers, withBounce, CAST_BUDGET_MS, castLevel, castMarkdown, cloudCheck, exploreLevel, extendCloud, type PoolT3, replayCast, explorationMarkdown, type CastPlayer, type CastRecipe, type CastGates, type CastResult, compareCasts, type PoolGates, FULL_RECIPE, mergeStarsFile, nodeCastPlayer, playsOf, poolCasts, SHORT_RECIPE, WAIVABLE, withWallTime } from './cast.ts';
+import { applyWaivers, withBounce, CAST_BUDGET_MS, castLevel, castMarkdown, cloudCheck, exploreLevel, extendCloud, type PoolT3, replayCast, explorationMarkdown, type CastPlayer, type CastRecipe, type CastGates, type CastResult, compareCasts, type PoolGates, FULL_RECIPE, mergeStarsFile, nodeCastPlayer, playsOf, poolCastPlayer, poolCasts, SHORT_RECIPE, WAIVABLE, withWallTime } from './cast.ts';
 import { openBrowserCastPlayer } from './cast-browser.ts';
 import { draftByName } from './drafts.ts';
 
@@ -138,7 +138,13 @@ if (engine === 'gpu' || engine === 'gpu-rapier') {
   const p = await openBrowserCastPlayer({ engine: engine === 'gpu' ? 'gpu' : 'rapier', ...(flags.has('channel') ? { channel: flags.get('channel')! } : {}), headed: flags.has('headed'), ...(maxSteps !== undefined ? { maxSteps } : {}), ...(flags.has('batch-timeout-min') ? { batchTimeoutMs: Number(flags.get('batch-timeout-min')) * 60_000 } : {}) });
   player = p; close = p.close; reopens = p.reopens;
   if (p.software) console.log(`note: ${p.adapter} is a software adapter: the cast is valid, its timings are not performance results`);
-} else if (engine === 'ref' || engine === 'rapier') player = nodeCastPlayer({ kind: engine });
+} else if (engine === 'ref' || engine === 'rapier') {
+  // --jobs N: N worker threads (poolCastPlayer), the same plays N at a time.
+  const jobs = Number(flags.get('jobs') ?? 1);
+  if (!Number.isInteger(jobs) || jobs < 1) throw new Error(`--jobs needs a whole number of threads: ${flags.get('jobs')}`);
+  if (jobs > 1) { const p = poolCastPlayer({ kind: engine }, jobs); player = p; close = async () => { await p.close(); return []; }; }
+  else player = nodeCastPlayer({ kind: engine });
+}
 else throw new Error(`--engine is gpu, gpu-rapier (Rapier in the page), ref or rapier: ${engine}`);
 
 if (flags.has('explore')) {

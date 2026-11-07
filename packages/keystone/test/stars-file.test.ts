@@ -3,7 +3,7 @@
 // code change. The file is checked at import (checkStars).
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import { B1, B2, B3, BIG_LEVELS, castOf, castStars, checkStars, compileLevel, FUSE_LEVELS, STARS_FILE } from '../src/index.ts';
+import { B1, B2, B3, BIG_LEVELS, castOf, castStars, checkStars, compileLevel, FOLD_SERIES, STARS_FILE } from '../src/index.ts';
 
 const FILE = new URL('../src/stars.json', import.meta.url);
 
@@ -14,7 +14,7 @@ describe('stars.json', () => {
   });
   it('every entry names a big or Fuse & Fold level and matches its hash (a stale cast would silently not show)', () => {
     for (const [id, s] of Object.entries(STARS_FILE)) {
-      const def = [...BIG_LEVELS, ...FUSE_LEVELS].find((d) => d.id === id);
+      const def = [...BIG_LEVELS, ...FOLD_SERIES].find((d) => d.id === id);
       expect(def, `stars.json ${id} is no big or Fuse & Fold level`).toBeDefined();
       expect(castStars(compileLevel(def!))).toBe(s);
     }
