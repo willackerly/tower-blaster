@@ -441,6 +441,7 @@ export class CollapseEngine {
   /** Schedule one frame's impacts. */
   push(f: AudioFrame): void {
     if (!(f.dt > 0)) return;
+    if (!(f.sectors >= 1 && f.materials >= 0)) throw new Error(`frame needs materials and sectors: ${f.materials}, ${f.sectors}`);
     const len = Math.round(f.dt * this.sr), earliest = this.now + Math.round(this.latency * this.sr);
     if (this.nextFrame < 0 || Math.abs(this.nextFrame - earliest) > this.resync * this.sr) this.nextFrame = earliest;
     const start = Math.max(this.nextFrame, this.now + BLOCK);

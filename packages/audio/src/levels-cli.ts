@@ -4,14 +4,14 @@
 // usage: tsx packages/audio/src/levels-cli.ts frames.json [mat=stone set=real|real1|classic edge=1 lowcut=35 wav=dir]
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { BLOCK, CollapseEngine } from './engine.ts';
-import type { AudioFrame } from './frame.ts';
+import { framesFrom, type FrameRecord } from './frame.ts';
 import { SOUND_SETS, type SoundMaterial, soundMaterials, type SoundSet } from './material.ts';
 import { FULL_SCALE } from './host.ts';
 
 const [file, ...kv] = process.argv.slice(2);
 const o: Record<string, string> = { mat: 'stone', set: 'real', edge: '1', lowcut: '35', wav: '' };
 for (const a of kv) { const [k, v] = a.split('='); if (!(k! in o)) throw new Error(`unknown option ${k}`); o[k!] = v!; }
-const SR = 48000, frames = (JSON.parse(readFileSync(file!, 'utf8')) as { frames: { dt: number; counts: number[]; a2: number[]; top: number[] }[] }).frames;
+const SR = 48000, frames = framesFrom((JSON.parse(readFileSync(file!, 'utf8')) as { frames: FrameRecord[] }).frames);
 if (!(SOUND_SETS as readonly string[]).includes(o.set!)) throw new Error(`set must be one of ${SOUND_SETS.join(', ')}: ${o.set}`);
 const material = (soundMaterials(o.set as SoundSet) as Record<string, SoundMaterial>)[o.mat!]!;
 if (material === undefined) throw new Error(`unknown material ${o.mat}`);
@@ -25,7 +25,7 @@ function render(fullScale: number) {
   const out = () => { e.render(l, r); L.push(...l); R.push(...r); };
   let due = 0;
   for (const f of frames) {
-    e.push({ dt: f.dt, materials: 1, sectors: 4, counts: Float32Array.from(f.counts), a2: Float32Array.from(f.a2), top: Float32Array.from(f.top) } satisfies AudioFrame);
+    e.push(f);
     for (due += f.dt * SR; due >= BLOCK; due -= BLOCK) out();
   }
   for (let b = 0; b < 60; b++) out();

@@ -9,7 +9,7 @@
   "packages/adapter-rapier/test/remove.test.ts": 0.2,
   "packages/adapter-rapier/test/voxel-panic.test.ts": 0.4,
   "packages/audio/test/engine.test.ts": 3.1,
-  "packages/audio/test/frame.test.ts": 0,
+  "packages/audio/test/frame.test.ts": 0.1,
   "packages/audio/test/grit.test.ts": 16,
   "packages/audio/test/ladder.test.ts": 0.8,
   "packages/audio/test/limiter.test.ts": 0.5,

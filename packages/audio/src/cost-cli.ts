@@ -5,19 +5,18 @@
 // usage: tsx packages/audio/src/cost-cli.ts frames.json [mat=stone edge=1 reps=5 set=real|classic room=off|outdoor|hall space=0|1]
 import { readFileSync } from 'node:fs';
 import { BLOCK, CollapseEngine } from './engine.ts';
-import type { AudioFrame } from './frame.ts';
+import { framesFrom, type FrameRecord } from './frame.ts';
 import { SOUND_SETS, type SoundMaterial, soundMaterials, type SoundSet } from './material.ts';
 import type { Room } from './room.ts';
 
 const [file, ...kv] = process.argv.slice(2);
 const o: Record<string, string> = { mat: 'stone', edge: '1', reps: '5', set: 'real', room: 'off', space: '0' };
 for (const a of kv) { const [k, v] = a.split('='); if (!(k! in o)) throw new Error(`unknown option ${k}`); o[k!] = v!; }
-type Raw = { dt: number; materials?: number; sectors?: number; counts: number[]; a2: number[]; top: number[]; space?: number[] };
-const json = JSON.parse(readFileSync(file!, 'utf8')) as { frames: Raw[] };
+const json = JSON.parse(readFileSync(file!, 'utf8')) as { frames: FrameRecord[] };
 if (!(SOUND_SETS as readonly string[]).includes(o.set ?? '')) throw new Error(`set must be one of ${SOUND_SETS.join(', ')}: ${o.set}`);
 const SR = 48000, base = (soundMaterials(o.set as SoundSet) as Record<string, SoundMaterial>)[o.mat!];
 if (!base) throw new Error(`unknown material ${o.mat}`);
-const frames: AudioFrame[] = json.frames.map((f) => ({ dt: f.dt, materials: f.materials ?? 1, sectors: f.sectors ?? 4, counts: Float32Array.from(f.counts), a2: Float32Array.from(f.a2), top: Float32Array.from(f.top), space: f.space ? Float32Array.from(f.space) : undefined }));
+const frames = framesFrom(json.frames);
 const seconds = frames.reduce((s, f) => s + f.dt, 0), slots = frames[0]?.materials ?? 1;
 let impacts = 0;
 for (const f of frames) for (const c of f.counts) impacts += c;

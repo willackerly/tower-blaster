@@ -13,6 +13,7 @@ import { writeFileSync } from 'node:fs';
 import { RapierEngine } from '@tb/adapter-rapier';
 import { buildScenario, KAPLA_SCALE } from '@tb/scenarios';
 import { DEFAULT_UNIT } from '@tb/keystone';
+import type { FrameRecord } from './frame.ts';
 import { FrameTap } from './tap.ts';
 
 const [out = 'frames.json', ...kv] = process.argv.slice(2);
@@ -43,7 +44,7 @@ const right: [number, number, number] = [-fz / rl, 0, fx / rl];
 const eng = new RapierEngine();
 await eng.init(scene);
 const tap = new FrameTap({ materials: 1, sectors: 4 });
-const frames: { dt: number; counts: number[]; a2: number[]; top: number[]; space: number[] }[] = [];
+const frames: FrameRecord[] = [];
 let slots = 0;
 for (let s = 0; s < o.steps!; s++) {
   await eng.step();
@@ -53,8 +54,8 @@ for (let s = 0; s < o.steps!; s++) {
   // Real speeds (units/s x k; the tap's metres turn units into metres) over real time.
   const linVel = k === 1 ? snap.linVel : snap.linVel.map((v) => v * k);
   const f = tap.frame({ count: snap.count, pos: snap.pos, linVel }, { metres, camera: { pos: eye, right }, dvMin: 0.25, dt: every * scene.dt / k, top: 8 });
-  frames.push({ dt: f.dt, counts: [...f.counts], a2: [...f.a2], top: [...f.top], space: [...f.space!] });
+  frames.push({ dt: f.dt, materials: f.materials, sectors: f.sectors, counts: [...f.counts], a2: [...f.a2], top: [...f.top], space: [...f.space!] });
 }
 writeFileSync(out, JSON.stringify({ bodies: n0, metres, eye, frames }));
-console.error(`${n0} bodies, ${frames.reduce((s, f) => s + f.counts.reduce((a, b) => a + b, 0), 0)} impacts in ${frames.length} frames -> ${out}`);
+console.error(`${n0} bodies, ${frames.reduce((s, f) => s + Array.from(f.counts).reduce((a, b) => a + b, 0), 0)} impacts in ${frames.length} frames -> ${out}`);
 eng.dispose();

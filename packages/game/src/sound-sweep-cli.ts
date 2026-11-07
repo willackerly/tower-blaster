@@ -12,7 +12,7 @@
 //   space=1 dref=10    space (A8a, engine.setSpace): sectors at their impacts' pan, the room by distance / dref (frames need the space sums)
 // usage: tsx packages/game/src/sound-sweep-cli.ts from=dir out=dir name=tag [levels=L1,L2,L3|city|kapla] [options]
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { type AudioFrame, BLOCK, CollapseEngine, type Room, type RoomParams, FULL_SCALE, SOUND_KNOBS, type SoundKnob, type SoundMaterial, soundMaterials, SOUND_SETS, type SoundSet, tunedMaterial } from '@tb/audio';
+import { BLOCK, CollapseEngine, framesFrom, type FrameRecord, type Room, type RoomParams, FULL_SCALE, SOUND_KNOBS, type SoundKnob, type SoundMaterial, soundMaterials, SOUND_SETS, type SoundSet, tunedMaterial } from '@tb/audio';
 import { compileLevel, LEVELS } from '@tb/keystone';
 import { AMMO_SLOT, gameSoundDb, PIECE_SLOT, slotSounds } from './sound-map.ts';
 
@@ -39,8 +39,8 @@ function wav(path: string, L: Float32Array, R: Float32Array) {
 
 mkdirSync(kv.out, { recursive: true });
 for (const id of (kv.levels ?? 'L1,L2,L3').split(',')) {
-  const j = JSON.parse(readFileSync(`${kv.from}/${id}.json`, 'utf8')) as { frames: (Omit<AudioFrame, 'counts' | 'a2' | 'top' | 'space'> & { counts: number[]; a2: number[]; top: number[]; space?: number[] })[] };
-  const frames: AudioFrame[] = j.frames.map((f) => ({ ...f, counts: Float32Array.from(f.counts), a2: Float32Array.from(f.a2), top: Float32Array.from(f.top), space: f.space ? Float32Array.from(f.space) : undefined }));
+  const j = JSON.parse(readFileSync(`${kv.from}/${id}.json`, 'utf8')) as { frames: FrameRecord[] };
+  const frames = framesFrom(j.frames);
   const viewer = id === 'city' || id === 'kapla';
   const e = new CollapseEngine({ sampleRate: SR, seed: 1, fullScale: FULL_SCALE / 10 ** ((viewer ? Number(kv.vol ?? 0) : gameSoundDb(set)) / 20) });
   e.setSpace(kv.space === '1', Number(kv.dref ?? 10));

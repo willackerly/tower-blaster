@@ -34,6 +34,21 @@ export interface AudioFrame {
   space?: Float32Array;
 }
 
+/** An AudioFrame as JSON (capture-cli.ts, @tb/game sound-cli.ts frames=dir): plain arrays; materials and
+ *  sectors may be absent (capture-cli wrote neither before 2026-11-07: its tap is 1 material, 4 sectors). */
+export interface FrameRecord { dt: number; materials?: number; sectors?: number; counts: ArrayLike<number>; a2: ArrayLike<number>; top: ArrayLike<number>; space?: ArrayLike<number> }
+
+/** Frames from their JSON records, absent materials and sectors as capture-cli's (1, 4); throws on a record
+ *  whose arrays do not fit them (a frame without them played only its voices: the engine skips the bank). */
+export function framesFrom(records: readonly FrameRecord[]): AudioFrame[] {
+  return records.map((r, i) => {
+    const materials = r.materials ?? 1, sectors = r.sectors ?? 4, cells = materials * DV_EDGES.length * sectors;
+    if (r.counts.length !== cells || r.a2.length !== cells || r.top.length % TOP_FIELDS !== 0 || (r.space && r.space.length !== SPACE_FIELDS * sectors))
+      throw new Error(`frame ${i} does not fit ${materials} materials x ${sectors} sectors: counts ${r.counts.length}, a2 ${r.a2.length}, top ${r.top.length}, space ${r.space?.length ?? '-'}`);
+    return { dt: r.dt, materials, sectors, counts: Float32Array.from(r.counts), a2: Float32Array.from(r.a2), top: Float32Array.from(r.top), space: r.space ? Float32Array.from(r.space) : undefined };
+  });
+}
+
 export const binOf = (dv: number): number => {
   let b = 0;
   while (b + 1 < DV_EDGES.length && dv >= DV_EDGES[b + 1]!) b++;
