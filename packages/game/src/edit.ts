@@ -176,7 +176,7 @@ export class EditController {
   /** One line for the panel: what is held, how it is turned, what is left, and why the ghost does not fit. */
   status(): string {
     const s = this.session, left = s.left();
-    const what = this.tool === 'brush' ? 'domino brush' : this.tool === 'erase' ? 'erase' : `${s.items.find((i) => i.name === this.hold.item)?.label ?? this.hold.item}, ${this.hold.yaw} deg${this.hold.tip ? `, tipped ${this.hold.tip === 1 ? 'on x' : 'on z'}` : ''}`;
+    const what = this.tool === 'brush' ? 'domino brush' : this.tool === 'erase' ? 'erase' : `${s.items.find((i) => i.name === this.hold.item)?.label ?? this.hold.item}, ${this.hold.yaw}°${this.hold.tip ? `, tipped ${this.hold.tip === 1 ? 'on x' : 'on z'}` : ''}`;
     const budget = left === null ? `${s.spent()} placed` : `${left} of ${s.budget} left`;
     const why = this.strokeGhost ? (this.strokeGhost.why || `${this.strokeGhost.cost} dominoes${this.strokeGhost.clash.some(Boolean) ? `, ${this.strokeGhost.clash.filter(Boolean).length} left out` : ''}`) : this.ghost && !this.ghost.ok ? this.ghost.why : this.message;
     return [what, budget, why].filter(Boolean).join(' · ');

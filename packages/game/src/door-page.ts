@@ -108,7 +108,7 @@ export function installDoor(o: DoorOptions, doc: Document = document): DoorPage 
         draw();
         if (advanced) o.root.querySelector('.advanced')?.scrollIntoView({ block: 'nearest' });
         break;
-      case 'sound': set({ sound: !o.settings.current.sound }); break;
+      case 'sound': set({ sound: arg ? arg === 'on' : !o.settings.current.sound }); break;
       case 'look': set({ look: arg }); break;
       case 'sharp': set({ sharp: arg === '1' ? 1 : 2 }); break;
       case 'quality': if ((QUALITY_SETTINGS as readonly string[]).includes(arg)) set({ quality: arg as QualitySetting }); break;

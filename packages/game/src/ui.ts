@@ -49,6 +49,23 @@ export const DOCK_CSS = `
     body.kg-touch .kg-dock .above > * { background: rgba(17, 20, 28, 0.8); border-radius: 6px; padding: 4px 8px; }
     body.kg-touch .kg-dock .tch-hint { display: block; color: #c3cad8; font-size: 12px; }
     body.kg-touch .kg-dock ~ .kg-help { display: none; }
+    /*
+     * The Build panel (C9, play.ts; PT18) docked: before and after building, its Build button sits under the Menu
+     * button in the column the strip leaves free (upright) or at the top right (sideways). While building, the aim
+     * tray goes (nothing fires until Play) and the panel takes the bottom (upright) or the right side (sideways),
+     * scrolling if its rows need more; the status strip or rail stays.
+     */
+    body.kg-touch .kg-dock ~ .kg-build { top: 64px; right: 8px; bottom: auto; left: auto; width: auto; max-width: 68px; padding: 6px; border-radius: 10px; font-size: 12.5px; }
+    body.kg-touch .kg-dock ~ .kg-build[open] > summary { display: none; }
+    body.kg-touch .kg-dock ~ .kg-build[open] .edit { margin-top: 0; }
+    body.kg-touch .kg-dock ~ .kg-build button { min-height: 44px; }
+    body.kg-touch:not(.kg-building) .kg-dock ~ .kg-build[open] { padding: 0; background: none; backdrop-filter: none; -webkit-backdrop-filter: none; }
+    body.kg-touch:not(.kg-building) .kg-dock ~ .kg-build[open] button { background: rgba(17, 20, 28, 0.85); box-shadow: inset 0 0 0 1px #5a6680; font-weight: 650; }
+    body.kg-building.kg-touch .kg-dock > .tray { visibility: hidden; }
+    body.kg-building.kg-touch .kg-dock ~ .kg-build { max-width: none; overflow-y: auto; overscroll-behavior: contain; padding: 8px 10px; }
+    body.kg-building.kg-touch .kg-dock ~ .kg-build .edit { gap: 5px; }
+    body.kg-building.kg-touch .kg-dock ~ .kg-build .buttons { gap: 5px; }
+    body.kg-building.kg-touch .kg-dock ~ .kg-build button { padding: 4px 9px; }
   }
   @media ${DOCK_PORTRAIT} {
     body.kg-touch .kg-dock > .st { margin-right: 76px; display: flex; flex-wrap: wrap; column-gap: 12px; flex: none; }
@@ -60,11 +77,13 @@ export const DOCK_CSS = `
     body.kg-touch .kg-dock .st .row > span:first-child { color: #9aa3b8; }
     /* The objective says itself ("bring 40% down"): its label goes, so leverage and freezes share its line. */
     body.kg-touch .kg-dock .st .obj > span:first-child { display: none; }
+    body.kg-building.kg-touch .kg-dock ~ .kg-build { top: auto; left: 8px; right: 8px; bottom: 8px; max-height: 46%; }
   }
   @media ${DOCK_SIDEWAYS} {
     body.kg-touch .kg-hud.kg-dock { right: auto; width: clamp(200px, 28vw, 250px); }
     body.kg-touch .kg-dock > .st { flex: 0 1 auto; min-height: 0; overflow-y: auto; }
     body.kg-touch .kg-dock .above { left: 100%; right: auto; bottom: 0; margin: 0 0 0 8px; width: max-content; max-width: 50vw; }
+    body.kg-building.kg-touch .kg-dock ~ .kg-build { max-height: calc(100% - 72px); width: min(340px, 42vw); box-sizing: border-box; }
   }
 `;
 
@@ -134,6 +153,7 @@ export const GAME_CSS = `
   .kg-result button { font: inherit; padding: 7px 12px; border: 0; border-radius: 6px; background: #2b3242; color: #e8ebf2; cursor: pointer; }
   .kg-result button.primary { background: #d8693f; }
   .kg-hud button.bank { font: inherit; padding: 4px 10px; border: 0; border-radius: 6px; background: #d8693f; color: #fff; cursor: pointer; margin-top: 6px; }
+  .kg-hud button.bank.quiet { background: transparent; color: #f2a07e; box-shadow: inset 0 0 0 1.5px #b9623f; }
   .kg-hud button.skip { font: inherit; padding: 4px 10px; border: 1px solid #ffffff55; border-radius: 6px; background: #ffffff1a; color: #fff; cursor: pointer; margin-top: 6px; }
   .kg-hud button.freeze { font: inherit; padding: 4px 10px; border: 0; border-radius: 6px; background: #3f8fd8; color: #fff; cursor: pointer; margin-top: 6px; }
   .kg-hud .pace.frozen { background: #3f8fd8; color: #fff; }
@@ -169,10 +189,13 @@ export const GAME_CSS = `
   .kg-build .edit { margin-top: 8px; display: flex; flex-direction: column; gap: 6px; }
   .kg-build .buttons { display: flex; flex-wrap: wrap; gap: 5px; }
   .kg-build button { font: inherit; padding: 4px 8px; border: 0; border-radius: 5px; background: #2b3242; color: #e8ebf2; cursor: pointer; }
-  .kg-build button.on, .kg-build button.go { background: #d8693f; color: #fff; }
+  /* Play (go) is the one orange button; the tool and item held (on) are filled in the accent, as the door's segmented controls (PT18). */
+  .kg-build button.go { background: #d8693f; color: #fff; }
+  .kg-build button.on { background: #9fc3ff; color: #11141c; }
   .kg-build button:disabled { color: #6b7387; cursor: default; }
   .kg-build .key { font-size: 10px; color: #9aa3b8; margin-left: 3px; }
-  .kg-build button.on .key, .kg-build button.go .key { color: #ffe3d6; }
+  .kg-build button.go .key { color: #ffe3d6; }
+  .kg-build button.on .key { color: #3a4459; }
   .kg-build .snap { font-size: 12px; color: #c9cfdc; }
   .kg-build .out { font-size: 12px; min-height: 1.45em; }
   .kg-build .out.warn { color: #f5b169; }

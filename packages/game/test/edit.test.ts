@@ -28,7 +28,7 @@ describe('edit controller', () => {
     const c = compileLevel(e.play());
     expect(c.meta.n).toBe(3);
     expect(c.scene.bodies[2]!.pos).toEqual(shown);
-    expect(e.status()).toMatch(/^Cube, 0 deg · 29 of 30 left/);
+    expect(e.status()).toMatch(/^Cube, 0° · 29 of 30 left/);
   });
 
   it('keys turn, tip and pick items; a ghost into the world is red and a click there changes nothing', () => {

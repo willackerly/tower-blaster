@@ -7,6 +7,7 @@ Mode M3 of [modes-roadmap.md](modes-roadmap.md). Each level can carry a short li
 - The HUD lists the level's proven goals under **Lot sheet**. A goal is ticked while the round meets it so far. A goal met on an earlier play of the same level version is marked.
 - The result card counts the goals met and marks first-time ones **new**. When the sheet has grade cuts, it also shows the grade (E to A).
 - `?keystone.goals=shown` (default) shows proven goals, `all` also shows unproven ones (for authoring), and `off` hides the sheet.
+- In the HUD the sheet is its count line ("Lot sheet ▸ 0/5 so far") until the player has cleared the level once, here or on an earlier play, and opens by itself at the round's first clear; the count line opens and closes it at any time (agent playtest PT18: on a first visit the open sheet doubled the desktop panel and competed with the objective). `?keystone.sheet=open` lists it from the start, as before; `auto` is the default. The phone's docked HUD keeps only the count line either way, and the result card always lists the goals.
 - Progress keeps the ids of every goal met on a level, unioned over plays of the same level hash. A new hash starts the list again.
 
 ## How a goal is written
