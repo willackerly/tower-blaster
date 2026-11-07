@@ -154,6 +154,16 @@ describe('rule overrides', () => {
     expect(() => parse('?keystone.presettle=7000')).toThrow(/keystone.presettle: must be a whole number from 0 to 6000: 7000/);
     expect(parse('?keystone.pairsPerBody=2').level).toMatchObject({ custom: true, physics: { pairsPerBody: 2 } });
     for (const bad of ['0', '257', '2.5', '']) expect(() => parse(`?keystone.pairsPerBody=${bad}`), bad).toThrow(/keystone.pairsPerBody: must be a whole number from 1 to 256/);
+    // GPU sleep: 1 or 0, written back the same way; with Bounce the level refuses it.
+    expect(parse('?keystone.sleep=1').level).toMatchObject({ custom: true, physics: { sleep: true } });
+    expect(parse('?keystone.sleep=0').level.physics).toEqual({ sleep: false });
+    for (const bad of ['true', '2', '']) expect(() => parse(`?keystone.sleep=${bad}`), bad).toThrow(/keystone.sleep: must be true or false/);
+    const q = new URLSearchParams();
+    writeLevelRules({ physics: { sleep: true } }, q);
+    expect(q.toString()).toBe('keystone.sleep=1');
+    expect(levelRules(q)).toEqual({ physics: { sleep: true } });
+    // The level the two make is refused where it is compiled (the game's load shows the message).
+    expect(() => compileLevel(parse('?keystone.sleep=1&keystone.bounce=0.4').level)).toThrow(/physics.sleep does not go with bounce/);
   });
   it('a level cast on another engine plays as custom there', () => {
     const cast = { ...L1, stars: { metric: 'collapse' as const, t2: 0.2, t3: 0.4, engine: 'gpu' } };

@@ -13,6 +13,7 @@ import { BIG_LEVELS } from './big-levels.ts';
 import { LEVELS } from './chamber-levels.ts';
 import { TRIAL_LEVELS } from './trial-levels.ts';
 import { UNDERCUT_LEVELS } from './undercut-levels.ts';
+import { RUBE_LEVELS } from './rube-levels.ts';
 import type { LevelDef } from './level.ts';
 
 export { L1, L2, L3, L4, L5, LEVELS } from './chamber-levels.ts';
@@ -21,10 +22,10 @@ export { L1, L2, L3, L4, L5, LEVELS } from './chamber-levels.ts';
  * Every built-in level's series: the chamber levels (L1 to L5), the big levels (B1 on), Undercut's (U1 on)
  * and the trials (T-..., unrated: trial-levels.ts). A level plays on into the rest of its own series.
  */
-export const SERIES: readonly (readonly LevelDef[])[] = [LEVELS, BIG_LEVELS, UNDERCUT_LEVELS, TRIAL_LEVELS];
+export const SERIES: readonly (readonly LevelDef[])[] = [LEVELS, BIG_LEVELS, UNDERCUT_LEVELS, RUBE_LEVELS, TRIAL_LEVELS];
 
 /** Each series' title, in SERIES order (the game's door heads its sections with them). */
-export const SERIES_TITLES: readonly string[] = ['Chamber', 'Spectacle', 'Undercut', 'Trials · unrated'];
+export const SERIES_TITLES: readonly string[] = ['Chamber', 'Spectacle', 'Undercut', 'Rube Lab', 'Trials · unrated'];
 
 const sameId = (a: string, b: string) => a.toUpperCase() === b.toUpperCase();
 

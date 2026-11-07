@@ -22,7 +22,7 @@ export function candidates(level: LevelDef, opts: { every?: number; powers?: num
   const out: Candidate[] = [];
   const launch: LaunchItem[] = opts.ammo ? [...opts.ammo] : [...new Set(level.rack.filter((a): a is 'marble' | 'cannonball' => a === 'marble' || a === 'cannonball'))];
   level.parts.forEach((p, pi) => {
-    if (p.kind === 'scenario' || p.kind === 'run' || p.kind === 'piece') return; // the par bot is for authored chamber levels (lattice blocks and slabs)
+    if (p.kind === 'scenario' || p.kind === 'run' || p.kind === 'piece' || p.kind === 'ball') return; // the par bot is for authored chamber levels (lattice blocks and slabs)
     if (level.rack.includes('drop')) {
       const [x0, z0, nx, nz] = p.kind === 'block' ? [p.at[0], p.at[2], p.size[0], p.size[2]] : [p.at[0] - p.half[0], p.at[2] - p.half[2], 2 * p.half[0], 2 * p.half[2]];
       for (let i = 0; i < Math.round(nx); i++) for (let j = 0; j < Math.round(nz); j++) {

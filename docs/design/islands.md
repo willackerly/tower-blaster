@@ -77,4 +77,20 @@ const { counts } = await obs.result(step);  // counts[question][island]
 
 CI size on SwiftShader (6 worlds of a 3 x 3 x 4 block struck by X8's wrecking ball, 1 s after the shot; `c10-islands.test.ts`; 6 rather than 8 to keep the file well under 300 s on a loaded CI runner): the shot moved every block (moved 0.88 on average, down 0.29 to 0.30); KS p = 1.0 on down and moved; 0 leaks at a 58 m gap; per-island observer counts equal each world's snapshot counts in 6 of 6 worlds; island 0 ended 3 cm from solo world 0 (down 0.31 vs 0.33, moved equal). An earlier 8-world run 1.5 s after the shot gave KS p 1.0 and 0.93.
 
-Full size (64 worlds of 150 bodies, 4 s after the shot): see the results section below.
+Full size on SwiftShader (64 worlds of a 5 x 5 x 6 block, 150 cubes each, 300 pre-settle steps, read 4 s after the shot; 9,600 bodies plus 64 balls; commit f9957f1, 4,435 s for 65 runs):
+
+| check | result |
+|---|---|
+| KS, islands vs solo, down | D 0.125, p 0.670 (64 vs 64): **pass** |
+| KS, islands vs solo, moved | D 0.141, p 0.520 (64 vs 64): **pass** |
+| power: the shot moves the block | 64 of 64 islands, moved takes 32 distinct values: **pass** |
+| leaks | 0 body-samples outside their cell, at a 59 m gap with the farthest island 236 m out: **pass** |
+| per-island histogram vs each world's own counts | 0 of 64 worlds differ (re-run of the islands arm, below): **pass** |
+| means | islands down 0.566, moved 0.857; solo 0.560, 0.855 |
+| island 0 vs solo world 0 (diagnostic) | centroid 0.19 m apart; down equal (0.547), moved 0.767 vs 0.780 |
+
+The cost half of the verify (per body within 10% of the 9.6k block) is read only on Metal. X8 measured the same packing on Metal at 0.93 and then 0.66 of the block's cost per body (`docs/game/mode-probes.md`); C10's own Metal run is queued behind Low Power Mode and confirms rather than gates.
+
+**The cross-check bug the full run found.** The first full run failed the observer cross-check in 60 of 64 worlds. The probe compared the histogram, which counts in the observer's fixed point (displacements quantised at 2^-16 m for down, 2^-15 m for moved), with the f64 rule's counts. The two differ only for a cube within a quantum of a threshold, and the down threshold is exactly where a cube rests after it drops one layer (one cell, 0.5 m): such a cube ends 0.5 m ± a few micrometres below its start, and f64 and fixed point split it. The CPU reference reproduced it (64 islands of the CI level: 1 world differs, by one cube at dy = -0.5000002 m, quantised to exactly -32768). The probe now compares the histogram with `fixedCounts`, the same predicates asked of each world's own bodies in the observer's arithmetic, and reports the split cubes as a diagnostic. The islands arm re-run at full size (commit f9957f1 plus the fix, 1,047 s) gave 0 of 64 worlds differing, 211 of 9,600 cubes split, and the same means as the first run.
+
+- *Alternative: move the down threshold off the resting height* (for example 0.75 cell), which makes the f64 and fixed-point rules agree almost everywhere and makes down less sensitive to micrometres. Not taken here: it changes the outcome X8 and C10 report, and the KS comparison is fair either way, since both arms count the same way. A consumer that scores "down" (Chorus) should pick a threshold off a resting height.
