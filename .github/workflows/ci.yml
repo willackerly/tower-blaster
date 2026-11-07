@@ -25,23 +25,26 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm typecheck
+      # Fails on a stale vitest.durations.json or a shard estimated over 12 min (O5).
+      - name: Shard plan guard
+        run: pnpm ci:guard
       - name: Benchmark harness self-check (A/A and injected slowdown)
         run: pnpm bench selfcheck
 
   # The suite is CPU-bound on SwiftShader (a 4-core runner stays saturated), so it
   # runs as shards on separate runners. planShards (vitest.config.ts) balances them
-  # on vitest.durations.json; refresh it with `pnpm test:durations` when files are
-  # added or get slower.
+  # on vitest.durations.json, in CI-runner seconds; merge a shard's logged times
+  # with `pnpm durations --from-log` when files are added or get slower.
   test:
-    name: test ${{ matrix.shard }}/8
+    name: test ${{ matrix.shard }}/16
     runs-on: ubuntu-latest
-    # Stopgap (O5): shards now take 12-20 min of tests on main (queueing doesn't
-    # count), so 20 cancelled green shards. Back to ~15 once O5 rebalances them.
+    # ~8 min estimated per shard (pnpm ci:guard); runners vary up to ~2x. 30 is the
+    # O5 stopgap, kept until three main runs show every shard under 10 min.
     timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4, 5, 6, 7, 8]
+        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
     env:
       # GPU-correctness tests must run (on SwiftShader) rather than skip.
       REQUIRE_WEBGPU: '1'
@@ -59,11 +62,12 @@ jobs:
       # system libvulkan removed), and the runner image already has Chromium's
       # libraries, so a slow apt mirror can't stall the run.
       - run: pnpm exec playwright install chromium
-      - run: pnpm test --shard=${{ matrix.shard }}/8 --reporter=default --reporter=json --outputFile.json=.vitest-report.json
-      # This runner's per-file times, one line, for refreshing vitest.durations.json.
+      - run: pnpm test --shard=${{ matrix.shard }}/16 --reporter=default --reporter=json --outputFile.json=.vitest-report.json
+      # This runner's per-file times, one line, for refreshing vitest.durations.json,
+      # and a warning on each file that took far longer than recorded.
       - name: Shard file times
         if: ${{ !cancelled() }}
-        run: pnpm exec tsx packages/testkit/src/durations-cli.ts --print .vitest-report.json
+        run: pnpm durations --print --drift .vitest-report.json
 
   # The one status to require: green only when every job above is. Skipped, not
   # failed, when a newer push cancels the run.
