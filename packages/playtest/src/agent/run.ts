@@ -190,7 +190,8 @@ async function runOne(browser: Browser, origin: string, sc: Scenario, vp: Viewpo
       }
       rec.build = { built: line?.label ?? 'nothing', status: await page.evaluate(() => window.__game.edit.status()) };
       if (!play) return;
-      await page.evaluate(() => window.__game.edit.play());
+      // Play the build and stop before Go (Rube Lab's Run releases the ball at once): the harness fires the level's own verb next, as a player's first shot.
+      await page.evaluate(() => window.__game.edit.play(false));
       await page.waitForFunction(() => !window.__game.edit.on && (window.__game.ready || window.__game.status !== 'running'), undefined, { timeout: 5 * MIN, polling: 250 });
       await shoot('after Play', 300);
     };
