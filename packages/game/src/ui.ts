@@ -40,13 +40,15 @@ export const DOCK_CSS = `
     /* PT37 (J2 #16): Power and Height named on the phone, two −/+ pairs that looked alike (their keys hidden on touch). A caption
        over the middle of each row (above the bar, above the height figure), out of the flow: the tray keeps its size (PT3's 30%). */
     body.kg-touch .kg-dock .tray .ctl > .row { position: relative; }
-    body.kg-touch .kg-dock .tray .ctl > .row > span:first-child { display: block; position: absolute; left: 50%; top: 1px; transform: translateX(-50%); pointer-events: none; font-size: 9px; line-height: 10px; font-weight: 650; letter-spacing: 0.06em; text-transform: uppercase; color: #9aa3b8; white-space: nowrap; }
+    /* The two pairs apart by more than the gaps inside each (second opinion: Power's + and Height's − read as one group). */
+    body.kg-touch .kg-dock .tray .ctl { column-gap: 22px; }
+    body.kg-touch .kg-dock .tray .ctl > .row > span:first-child { display: block; position: absolute; left: 50%; top: 1px; transform: translateX(-50%); pointer-events: none; font-size: 9px; line-height: 10px; font-weight: 650; letter-spacing: 0.06em; text-transform: uppercase; color: #c2c8d6; white-space: nowrap; }
     body.kg-touch .kg-dock .tray .ctl > .row > span:first-child kbd { display: none; }
     body.kg-touch .kg-dock .tray .ctl .launch { padding-top: 8px; }
     /* PT37 (J3 #21): a rack wider than the tray fades at its edge, with an arrow, while there is more to scroll to (play.ts sets .more). */
     body.kg-touch .kg-dock .tray { position: relative; }
-    body.kg-touch .kg-dock .tray .chips.more { -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 40px), transparent); mask-image: linear-gradient(to right, #000 calc(100% - 40px), transparent); }
-    body.kg-touch .kg-dock .tray:has(> .chips.more)::after { content: "›"; position: absolute; right: 6px; top: 8px; width: 22px; height: 22px; border-radius: 11px; background: #3a4459; color: #e8ebf2; font: 700 15px/22px system-ui, sans-serif; text-align: center; pointer-events: none; }
+    body.kg-touch .kg-dock .tray .chips.more { -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 64px), transparent); mask-image: linear-gradient(to right, #000 calc(100% - 64px), transparent); }
+    body.kg-touch .kg-dock .tray:has(> .chips.more)::after { content: "›"; position: absolute; right: 6px; top: 16px; width: 22px; height: 22px; border-radius: 11px; background: #3a4459; color: #e8ebf2; font: 700 15px/22px system-ui, sans-serif; text-align: center; pointer-events: none; }
     body.kg-touch .kg-dock .tray .ctl .power { flex: 1; gap: 4px; }
     body.kg-touch .kg-dock .tray .ctl .bar { flex: 1; width: auto; min-width: 48px; }
     body.kg-touch .kg-dock .tray .ctl .launch { flex: 1; text-align: center; white-space: nowrap; }

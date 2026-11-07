@@ -424,7 +424,7 @@ export const DOOR_CSS = `
   .kg-door .card.current { border-color: #9fc3ff; }
   .kg-door .foot { display: flex; flex-wrap: wrap; justify-content: center; align-items: center; gap: 10px 20px; }
   .kg-door .foot .group { display: inline-flex; align-items: center; gap: 6px; }
-  .kg-door .foot .lbl { color: #a6aec0; font-size: 13px; }
+  .kg-door .foot .lbl { color: #c2c8d6; font-size: 13px; }
   .kg-door .seg { display: inline-flex; border-radius: 7px; box-shadow: inset 0 0 0 1px #3a4459; overflow: hidden; }
   /* A segmented control: the selected side filled in the accent, the rest outlined on the panel (PT18: it was the other way round to the eye). */
   .kg-door .seg { background: rgba(17, 20, 28, 0.6); box-shadow: inset 0 0 0 1px #4d5a75; }
@@ -439,11 +439,11 @@ export const DOOR_CSS = `
   .kg-door .how-tabs button.on { background: #9fc3ff; color: #11141c; font-weight: 650; box-shadow: none; }
   .kg-door .how ul { margin: 0; padding-left: 20px; }
   .kg-door .how li { margin: 4px 0; }
-  .kg-door .devlink { display: block; margin: 14px auto 0; font-size: 12px; color: #8a93a8; }
-  .kg-door .developer { margin-top: 8px; }
+  .kg-door .devlink { display: block; margin: 14px auto 0; font-size: 12px; color: #a9b1c4; }
+  .kg-door .developer { margin-top: 8px; padding: 10px 0 12px; border-top: 1px solid rgba(77, 90, 117, 0.6); }
   .kg-door .reset { margin-top: 18px; font-size: 12px; color: #a6aec0; }
   .kg-door .reset button { background: none; color: #6f7890; font-size: 12px; text-decoration: underline; }
-  .kg-door .reset button.yes { padding: 4px 10px; border-radius: 6px; background: #b9623f; color: #fff; text-decoration: none; }
+  .kg-door .reset button.yes { padding: 4px 10px; border-radius: 6px; background: #a8482b; color: #fff; font-weight: 650; text-decoration: none; }
   .kg-door .reset button.no { padding: 4px 10px; border-radius: 6px; background: #3a4459; color: #e8ebf2; text-decoration: none; }
   .kg-door .best .met { color: #f7b955; }
   .kg-menu kbd { font: 600 10px/1 ui-monospace, monospace; padding: 2px 4px; border-radius: 3px; background: #3a4459; margin-left: 4px; }
