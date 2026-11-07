@@ -528,15 +528,60 @@ real recordings of each). His picks become the real set's defaults.
 
 Defaults (2026-11-07). Will, away for a while, delegated the picks, so the recommended takes are the
 real set: stone E (`overlap: 1, jitter: 0.15, gritDb: 50, gritRate: 10, face: 0.6`) and ice E
-(`jitter: 0.08, gritDb: 50, gritRate: 30, gritSpread: 0.08, face: 0.5`). The real set before this is
+(`jitter: 0.08, gritDb: 50, gritRate: 30, gritSpread: 0.08, face: 0.5`), with step 3's level trims and
+grit caps (below: stone `gritShare: 0.0015, levelDb: -10`, ice `gritShare: 0.01, levelDb: -7`). The real set before this is
 the set `real1` (viewer `snd.set=real1`, game `keystone.sound=real1`); `classic` stays G6's.
 
 A loud crack burst grows as rate dv^3 against the impact's dv^2: ice at 4 m/s would radiate 16% of the
 impact's kinetic energy as grit. Grit is now capped at GRIT_SHARE (5%) of it (fewer grains of the same
-size past that); soft hits and G6's grit are far under the cap, so they play as before. L1-L5 keep
-their level: L1 still limits 1.1 dB, L2 (13 stone hits) peaks at 0.67 where it was 0.43.
+size past that); soft hits and G6's grit are far under the cap, so they play as before. With step 3's
+trims L1-L5 keep their level: L1 limits 0.9 dB (real1: 1.1), L2 (13 stone hits) peaks at 0.39 (real1: 0.43;
+untrimmed 0.67).
 
-Next: a tower, then a level. The free-text describer (CLAP) still needs huggingface.co.
+### Step 3: a tower (2026-11-07)
+
+The ladder's scripts stop at a hand-made pile (`tumble`); a tower is the first step the physics writes.
+`capture-cli.ts scene=tower` stands one building of the game's blocks (S5, F x F x H cubes of
+DEFAULT_UNIT, 0.5 m) on Rapier, knocks it down with the viewer's ball and taps it from the viewer's camera
+angle `dist` m away. Four towers: F3 H12 ball 15 units/s at 8 m (1148 impacts), F2 H10 10/s (645), F4 H8
+20/s (1581), F3 H16 12/s at 12 m (917). Each take is rendered level-free (peak 0.5) and judged
+(tools/sound-judge), and matched on octave spectra (dist.py) to the real rock-break, brick and stone drops
+(stone) or ice break and crack (ice). Means over the four:
+
+| take | real share | mineral | fireworks-like | crack-like | tonal | octave rms (dB) |
+|---|---|---|---|---|---|---|
+| stone real1 (step 2b) | 0.60 | 0.35 | 0.00 | 0.05 | 0.02 | 8.1 |
+| stone E, grit at GRIT_SHARE 5% | 0.98 | 0.49 | **0.69** | 0.27 | 0.00 | 6.6 |
+| stone E, gritShare 0.0015 (default) | 0.95 | 0.50 | 0.08 | **0.39** | 0.00 | **4.9** |
+| stone E, no grit | 0.91 | 0.42 | 0.04 | 0.09 | 0.00 | 5.0 |
+| ice real1 | 0.47 | 0.05 | 0.00 | 0.00 | 0.88 | 10.9 |
+| ice E, grit at 5% | 0.97 | 0.44 | **0.69** | 0.20 | 0.00 | 2.0 |
+| ice E, gritShare 0.01 (default) | 0.92 | 0.50 | 0.19 | 0.33 | 0.01 | 2.7 |
+| ice E, no grit | 0.42 | 0.10 | 0.00 | 0.00 | 0.50 | 3.4 |
+
+(fireworks-like: Explosion, Fireworks, Firecracker, Cap gun, Gunshot, Burst in the judge's top six;
+crack-like: Crack, Breaking, Crackle, Crumpling, Scrape, Shatter, Smash, Rumble, Thud, Clatter, Rattle.
+The real rock-break and ice-break clips read Crack, Breaking, Crackle, Crumpling; none reads fireworks.)
+
+What the tower found, and what changed:
+
+- **Grit at a tower's speeds read as fireworks.** Knocks and clatters (0.5-3 m/s) shed little grit; a ball
+  at 10 m/s and the blocks it throws shed it at the 5% cap, a dense string of loud dry pops. New key
+  `gritShare` (0 to 1, absent GRIT_SHARE): the material's own cap. Stone takes 0.0015 and ice 0.01
+  (ice needs its crackle: with no grit it reads glass and tonal again). Below the cap nothing changes,
+  so the knock and clatter takes are as judged (their loudness moves 0.0 dB for stone, 0.3 dB for ice).
+- **The takes were 5-17 dB louder than the sounds they replaced.** Step 2c judged them peak-normalised,
+  so their level was never heard: the face contact alone adds ~10 dB for stone and ~6 dB for ice (a
+  shorter contact puts more force into the radiating modes), and grit at the 5% cap added up to 7 dB
+  more on a tower. In the game a stone tower would have limited by 13 dB. New key `levelDb` (-60 to 20,
+  absent 0): one gain on everything the material sounds (top voices, background, dense field, grit;
+  it scales A = dv / distance, which all of them are linear in), so timbre is untouched. Stone takes
+  -10 dB and ice -7 dB, the medians of real-minus-real1 loudness over knock, clatter, tumble and the four
+  towers (spread +-1.4 dB). A level trim, not physics: the game was mixed on real1, and the tower now
+  plays stone within 1.0 dB and ice within 0.3 dB of it (test: knock, clatter and tumble within 3 dB).
+
+`levels-cli.ts` takes `set=`. Next: a level (stone and ice levels: T-I1, T-I3, B3). The free-text
+describer (CLAP) still needs huggingface.co.
 
 ## Plan (each step lands with its test)
 

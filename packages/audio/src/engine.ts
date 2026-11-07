@@ -160,6 +160,8 @@ export interface EngineOptions {
 
 interface MatState {
   slot: number; // its index in mats
+  /** The material's levelDb as a gain on every impact's A = dv / distance (all of its sound is linear in A). */
+  level: number;
   m: SoundMaterial;
   md: Modes;
   /** Body edge for shell and cube materials without their own size. */
@@ -324,7 +326,7 @@ export class CollapseEngine {
     const old = this.mats[i];
     const keep = old && old.M === M;
     const st: MatState = {
-      slot: i, m, md, edge, M, mult: new Float64Array(C),
+      slot: i, m, md, edge, M, mult: new Float64Array(C), level: 10 ** ((m.levelDb ?? 0) / 20),
       a1: new Float32Array(n), a2: new Float32Array(n), b: new Float32Array(n),
       y1: keep ? old.y1 : new Float32Array(n), y2: keep ? old.y2 : new Float32Array(n),
       x: keep ? old.x : new Float32Array(n * BLOCK), live: keep ? old.live : new Uint8Array(n), nLive: keep ? old.nLive : 0,
@@ -381,7 +383,7 @@ export class CollapseEngine {
     // a mode of amplitude c rings c^2 tau sr / 4 (Pa^2 samples, the resonator's r^n sin), averaged over
     // the classes' unit-rms weights, plus the dense bands' A^2 E sr. crackA makes that ring of the grain's a^2.
     // Grit's energy cap: n grains of an impact at 1 m radiate W = 4 pi / (rho c) n gritAmp^2 dv^4 / 48000 (J).
-    if (st.gritAmp > 0) st.gritCap = (GRIT_SHARE * 0.5 * m.mstar * mass(m, edge) * RHO_AIR * C_AIR * 48000) / (4 * Math.PI * st.gritAmp ** 2);
+    if (st.gritAmp > 0) st.gritCap = ((m.gritShare ?? GRIT_SHARE) * 0.5 * m.mstar * mass(m, edge) * RHO_AIR * C_AIR * 48000) / (4 * Math.PI * st.gritAmp ** 2);
     const ring = m.gritRing ?? 0;
     if (ring > 0 && st.gritAmp > 0) {
       let e = 0;
@@ -407,10 +409,10 @@ export class CollapseEngine {
       const s = Math.min(S - 1, Math.max(0, Math.floor(((pan + 1) / 2) * S))), c = (mat * DV_EDGES.length + binOf(dv)) * S + s;
       counts[c] = Math.max(0, counts[c]! - 1); a2[c] = Math.max(0, a2[c]! - (dv / dist) ** 2);
       const at = start + (this.alignOnsets ? 0 : Math.floor(this.rand() * len));
-      this.voice(mat, dv, dist, pan, f.top[o + 4]!, at);
-      const st = this.mats[mat];
-      if (st?.dK) this.impulse(at, mat, DENSE_ONLY, s, dv / dist, dv);
-      if (st && st.gritAmp > 0) this.grit(st, at, s, (dv / dist) * dv, grainsOf(st, dv), 1);
+      const st = this.mats[mat], A = (st?.level ?? 1) * dv / dist;
+      this.voice(mat, dv, dv / A, pan, f.top[o + 4]!, at);
+      if (st?.dK) this.impulse(at, mat, DENSE_ONLY, s, A, dv);
+      if (st && st.gritAmp > 0) this.grit(st, at, s, A * dv, grainsOf(st, dv), 1);
     }
     for (let mat = 0; mat < f.materials; mat++) {
       if (!this.mats[mat]) continue;
@@ -422,7 +424,7 @@ export class CollapseEngine {
         let sum = 0;
         const dvs: number[] = [];
         for (let e = 0; e < k; e++) { const dv = lo * (hi / lo) ** this.rand(); dvs.push(dv); sum += dv * dv; }
-        const g = Math.sqrt(a2[c]! / sum), st = this.mats[mat]!;
+        const st = this.mats[mat]!, g = st.level * Math.sqrt(a2[c]! / sum);
         // Grit: impulse e stands for n / k impacts (its A^2 is theirs summed), so it sheds their grains,
         // n / k gritGrains(dv) of them, times q to keep the cell under maxGrains; each grain's amplitude is
         // over sqrt(n / k q), so the energy is what the impacts' own grains would carry.

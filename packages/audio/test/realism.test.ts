@@ -10,6 +10,7 @@ import {
 } from '@tb/audio';
 import { GRIT, GRIT_SHARE, gritGrains, REAL1_SOUND_MATERIALS, soundMaterials, SOUND_SETS } from '@tb/audio';
 import { db, frame, octaves, run, SR } from './helpers.ts';
+import { framesOf, renderLadder, script } from '../src/ladder-cli.ts';
 
 const REAL = SOUND_MATERIALS as Record<string, SoundMaterial>, CLASSIC = CLASSIC_SOUND_MATERIALS as Record<string, SoundMaterial>;
 /** Edges the game and the viewer use: Keystone's 0.5 m blocks, the viewer's 1 m city, 25 cm city blocks. */
@@ -103,7 +104,7 @@ describe('the dense field', () => {
   });
   it('plays the energy it is given: a dense-only material\'s output matches the field\'s law', () => {
     // Modes and click silenced (ringDb trims the table, clickDb the click), grit off: what sounds is the field.
-    const m: SoundMaterial = { ...REAL.stone!, ringDb: -Infinity, clickDb: -Infinity, gritDb: -Infinity }, edge = 0.5;
+    const m: SoundMaterial = { ...REAL.stone!, ringDb: -Infinity, clickDb: -Infinity, gritDb: -Infinity, levelDb: 0 }, edge = 0.5; // levelDb: the law's own level
     const e = new CollapseEngine({ sampleRate: SR, seed: 1, fullScale: 1 });
     e.setMaterial(0, m, edge); e.lowcut = 0; e.limiter.process = () => {};
     const bin = 2, n = 40, a2 = 3; // 40 impacts in bin 2 a frame, sum A^2 = 3, for 30 frames
@@ -364,25 +365,73 @@ describe('step 2c defaults (Will away 2026-11-06: the recommended picks, stone E
     expect(soundMaterials()).toBe(SOUND_MATERIALS);
     const R1 = REAL1_SOUND_MATERIALS as Record<string, SoundMaterial>;
     for (const k of Object.keys(REAL)) if (k !== 'stone' && k !== 'ice') expect(REAL[k], k).toBe(R1[k]);
-    expect(REAL.stone).toEqual({ ...R1.stone, overlap: 1, jitter: 0.15, gritDb: 50, gritRate: 10, face: 0.6 });
-    expect(REAL.ice).toEqual({ ...R1.ice, jitter: 0.08, gritDb: 50, gritRate: 30, gritSpread: 0.08, face: 0.5 });
+    expect(REAL.stone).toEqual({ ...R1.stone, overlap: 1, jitter: 0.15, gritDb: 50, gritRate: 10, face: 0.6, gritShare: 0.0015, levelDb: -10 });
+    expect(REAL.ice).toEqual({ ...R1.ice, jitter: 0.08, gritDb: 50, gritRate: 30, gritSpread: 0.08, face: 0.5, gritShare: 0.01, levelDb: -7 });
     for (const m of [REAL.stone!, REAL.ice!]) expect(parseSoundMaterial({}, m)).toEqual(m);
   });
 
-  it(`grit never radiates more than GRIT_SHARE (${GRIT_SHARE}) of an impact's kinetic energy; G6's grit is far under it`, () => {
-    const W = (m: SoundMaterial, edge: number, dv: number) => {
-      const e = new CollapseEngine({ sampleRate: SR, seed: 4, fullScale: 1 }); // Pa out
+  it(`grit never radiates more than gritShare (absent: GRIT_SHARE, ${GRIT_SHARE}) of an impact's kinetic energy; G6's grit is far under it`, () => {
+    const W = (m: SoundMaterial, edge: number, dv: number, seed = 4) => {
+      const e = new CollapseEngine({ sampleRate: SR, seed, fullScale: 1 }); // Pa out
       e.setMaterial(0, { ...m, ringDb: -Infinity, clickDb: -Infinity, denseDb: -Infinity, roughDb: -Infinity }, edge); e.lowcut = 0; e.limiter.process = () => {};
       const { mono } = run(e, 600, (b) => { if (b === 2) e.push(frame([], [[dv, 1, 0, 0, 0]])); });
       let E = 0; for (const v of mono) E += v * v / 2; // mono is L + R of a centred source: L^2 + R^2 = mono^2 / 2
       return ((4 * Math.PI) / (1.2 * 343)) * (E / SR) / (0.5 * m.mstar * mass(m, edge) * dv * dv);
     };
-    // Ice at 4 m/s would shed ~16% without the cap; with it, the share is GRIT_SHARE (Poisson and lognormal scatter).
-    const ice = W(REAL.ice!, 0.5, 4);
+    // Ice at 4 m/s would shed ~16% without the cap; with it, the share is the cap's (Poisson and lognormal scatter).
+    const { gritShare: _, levelDb: __, ...ice5 } = REAL.ice!; // GRIT_SHARE's cap, at the material's own level
+    const ice = W(ice5, 0.5, 4);
     expect(ice).toBeLessThan(GRIT_SHARE * 1.5); expect(ice).toBeGreaterThan(GRIT_SHARE * 0.5);
+    // Its own, lower cap: fewer grains, so more Poisson scatter; the mean of eight bursts.
+    const own = [1, 2, 3, 4, 5, 6, 7, 8].reduce((s, k) => s + W({ ...REAL.ice!, levelDb: 0 }, 0.5, 4, k), 0) / 8, share = REAL.ice!.gritShare!;
+    expect(own).toBeLessThan(share * 1.5); expect(own).toBeGreaterThan(share * 0.5);
     // Soft hits are under the cap, so the burst is the rate's: about the same share at 0.7 m/s with and without it.
-    expect(W(REAL.ice!, 0.5, 0.7)).toBeLessThan(GRIT_SHARE);
+    expect(W(ice5, 0.5, 0.7)).toBeLessThan(GRIT_SHARE);
+    // A level trim only lowers it: the default ice is levelDb (-7 dB) under its own cap.
+    expect(W(REAL.ice!, 0.5, 4) / W({ ...REAL.ice!, levelDb: 0 }, 0.5, 4)).toBeCloseTo(10 ** (REAL.ice!.levelDb! / 10), 6);
     expect(W(CLASSIC.stone!, 0.5, 4)).toBeLessThan(GRIT_SHARE / 100);
+  });
+});
+
+describe('step 3 (a tower): the level trim and the grit cap', () => {
+  it('levelDb is one gain on everything a material sounds (top voices, background, dense field, grit): timbre untouched', () => {
+    const feed = (e: CollapseEngine) => (b: number) => { if (b % 4 === 0 && b < 40) e.push(frame([{ bin: 5, count: 30, a2: 30 * (2 / 3) ** 2 }, { bin: 8, count: 6, a2: 6 * (8 / 3) ** 2 }], [[4, 3, 0, 0, 0.3], [1.2, 2, -0.5, 0, -1]])); };
+    const render = (levelDb: number) => {
+      const e = new CollapseEngine({ sampleRate: SR, seed: 9, fullScale: 1 });
+      e.setMaterial(0, { ...REAL.stone!, levelDb }, 0.5); e.limiter.process = () => {};
+      return run(e, 200, feed(e)).mono;
+    };
+    const a = render(0), b = render(-12), g = 10 ** (-12 / 20);
+    let worst = 0, peak = 0;
+    for (let i = 0; i < a.length; i++) { worst = Math.max(worst, Math.abs(b[i]! - g * a[i]!)); peak = Math.max(peak, Math.abs(a[i]!)); }
+    expect(peak).toBeGreaterThan(0);
+    expect(worst / peak).toBeLessThan(1e-5);
+  });
+
+  it('gritShare caps grit lower; validation', () => {
+    const grains = (gritShare?: number) => {
+      const e = new CollapseEngine({ sampleRate: SR, seed: 2, fullScale: 1 });
+      e.setMaterial(0, { ...REAL.stone!, gritShare }, 0.5);
+      run(e, 40, (b) => { if (b === 1) e.push(frame([], [[6, 2, 0, 0, 0]])); });
+      return e.grains;
+    };
+    expect(grains(0.05)).toBeGreaterThan(3 * grains(0.0015));
+    expect(grains(0)).toBe(0);
+    expect(() => parseSoundMaterial({ levelDb: -61 }, REAL.stone)).toThrow(/levelDb/);
+    expect(() => parseSoundMaterial({ levelDb: Number.NaN }, REAL.stone)).toThrow(/levelDb/);
+    expect(() => parseSoundMaterial({ gritShare: 1.5 }, REAL.stone)).toThrow(/gritShare/);
+    expect(parseSoundMaterial({ levelDb: -3, gritShare: 0.2 }, REAL.stone)).toMatchObject({ levelDb: -3, gritShare: 0.2 });
+  });
+
+  it('the real set plays stone and ice within 3 dB of real1 (the takes were picked level-free; the game was mixed on real1)', () => {
+    const R1 = REAL1_SOUND_MATERIALS as Record<string, SoundMaterial>;
+    for (const step of ['knock', 'clatter', 'tumble']) {
+      const hits = script(step, 0.6), frames = framesOf(hits, hits[hits.length - 1]!.t + 0.1);
+      for (const k of ['stone', 'ice']) {
+        const a = renderLadder(frames, R1[k]!, 0.5), b = renderLadder(frames, REAL[k]!, 0.5);
+        expect(Math.abs(loudness(b.L, b.R) - loudness(a.L, a.R)), `${step} ${k}`).toBeLessThan(3);
+      }
+    }
   });
 });
 

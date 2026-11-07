@@ -72,6 +72,15 @@ export interface SoundMaterial {
    */
   face?: number;
   /**
+   * The material's level, dB (absent: 0): one gain on everything it sounds (modes, click, dense field,
+   * grit), so its timbre is untouched. A level trim, not physics: the step 2c takes were picked
+   * level-free (peak-normalised), and their shorter face contacts and grit came out 6-17 dB louder in
+   * the game than the sounds they replaced (Material identity, step 3).
+   */
+  levelDb?: number;
+  /** Grit's most energy, as a share of the impact's kinetic energy (0 to 1; absent: GRIT_SHARE, 5%). */
+  gritShare?: number;
+  /**
    * Contact roughness, dB: how much the contact force fluctuates, as a share of itself (several points
    * touching within the contact, asperities), as noise up to ~7 kHz (modes.ts forceSpectrum). A smooth
    * Hertz pulse of T seconds has almost nothing above 1 / T, so a heavy block's long contact sounds only
@@ -183,8 +192,10 @@ export const REAL1_SOUND_MATERIALS = {
  */
 export const SOUND_MATERIALS = {
   ...REAL1_SOUND_MATERIALS,
-  stone: { ...REAL1_SOUND_MATERIALS.stone, overlap: 1, jitter: 0.15, gritDb: 50, gritRate: 10, face: 0.6 },
-  ice: { ...REAL1_SOUND_MATERIALS.ice, jitter: 0.08, gritDb: 50, gritRate: 30, gritSpread: 0.08, face: 0.5 },
+  // Step 3 (a tower): at a tower's speeds grit at GRIT_SHARE read as fireworks, so stone and ice cap it
+  // lower; levelDb brings each back to real1's loudness (the takes were picked level-free).
+  stone: { ...REAL1_SOUND_MATERIALS.stone, overlap: 1, jitter: 0.15, gritDb: 50, gritRate: 10, face: 0.6, gritShare: 0.0015, levelDb: -10 },
+  ice: { ...REAL1_SOUND_MATERIALS.ice, jitter: 0.08, gritDb: 50, gritRate: 30, gritSpread: 0.08, face: 0.5, gritShare: 0.01, levelDb: -7 },
 } as const satisfies Record<keyof typeof CLASSIC_SOUND_MATERIALS, SoundMaterial>;
 
 /** A named material set: 'real' (SOUND_MATERIALS, the default), 'real1' (the real set before step 2c's stone and ice) or 'classic' (G6's). */
@@ -195,7 +206,7 @@ export const soundMaterials = (set: SoundSet = 'real'): Record<keyof typeof SOUN
 
 const POSITIVE = ['E', 'nu', 'rho', 'eta', 'R', 'mstar'] as const;
 
-const KEYS = new Set(['model', 'dims', 'size', 'wall', 'walls', 'plateModes', 'E', 'G', 'nu', 'rho', 'eta', 'jitter', 'R', 'Ec', 'mstar', 'ringDb', 'clickDb', 'gritDb', 'gritRate', 'gritSpread', 'gritRing', 'face', 'roughDb', 'roughT', 'overlap', 'clickModel', 'denseDb', 'law']);
+const KEYS = new Set(['model', 'dims', 'size', 'wall', 'walls', 'plateModes', 'E', 'G', 'nu', 'rho', 'eta', 'jitter', 'R', 'Ec', 'mstar', 'ringDb', 'clickDb', 'gritDb', 'gritRate', 'gritSpread', 'gritRing', 'face', 'levelDb', 'gritShare', 'roughDb', 'roughT', 'overlap', 'clickModel', 'denseDb', 'law']);
 
 /** A material from JSON-ish input over `base` (a whole material when absent); throws on a value that can't make sound. */
 export function parseSoundMaterial(input: Partial<Record<keyof SoundMaterial, unknown>>, base?: SoundMaterial): SoundMaterial {
@@ -221,6 +232,8 @@ export function parseSoundMaterial(input: Partial<Record<keyof SoundMaterial, un
   if (out.gritRate !== undefined && !(out.gritRate >= 0.1 && out.gritRate <= 60)) throw new Error('sound material gritRate must be 0.1 to 60 grains per m/s');
   if (out.face !== undefined && !(out.face >= 0 && out.face <= 1)) throw new Error('sound material face must be 0 to 1');
   if (out.gritRing !== undefined && !(out.gritRing >= 0 && out.gritRing <= 1)) throw new Error('sound material gritRing must be 0 to 1');
+  if (out.levelDb !== undefined && !(out.levelDb >= -60 && out.levelDb <= 20)) throw new Error('sound material levelDb must be -60 to 20 dB');
+  if (out.gritShare !== undefined && !(out.gritShare >= 0 && out.gritShare <= 1)) throw new Error('sound material gritShare must be 0 to 1');
   if (out.gritSpread !== undefined && !(out.gritSpread >= 0.001 && out.gritSpread <= 0.25)) throw new Error('sound material gritSpread must be 0.001 to 0.25 s');
   if (out.roughT !== undefined && !(out.roughT >= 1e-5 && out.roughT <= 0.05)) throw new Error('sound material roughT must be 1e-5 to 0.05 s');
   if (out.walls !== undefined && !(Array.isArray(out.walls) && out.walls.length === 6 && out.walls.every((x) => typeof x === 'number' && x > 0 && Number.isFinite(x)))) throw new Error('sound material walls must be six positive numbers');
