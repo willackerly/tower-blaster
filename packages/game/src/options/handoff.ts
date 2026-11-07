@@ -17,6 +17,6 @@ export const handoff = {
     default: true,
     stored: storedBoolean,
     drives: { fields: ['handoff'], feel: (v) => ({ handoff: v }) },
-    door: onOffRow('handoff', 'Hand-over', { text: 'Card', title: 'Between duel turns a card says whose turn it is: tap it to start' }, { text: 'Skip', title: 'The next turn starts at once, with a banner' }),
+    door: { ...onOffRow('handoff', 'Hand-over', { text: 'Card', title: 'Between duel turns a card says whose turn it is: tap it to start' }, { text: 'Skip', title: 'The next turn starts at once, with a banner' }), player: true },
   }),
 } satisfies GameOption;

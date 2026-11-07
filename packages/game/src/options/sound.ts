@@ -1,5 +1,5 @@
 // The Sound setting (O4: one module per option; docs/design/options.md). The M key toggles it in play.
-import { type GameOption, settingOption, storedBoolean } from './option.ts';
+import { type GameOption, onOffRow, settingOption, storedBoolean } from './option.ts';
 
 /** Sound on or off; ?sound=on|off says it for a visit. */
 export const sound = {
@@ -13,11 +13,7 @@ export const sound = {
       if (v !== 'on' && v !== 'off') throw new Error(`sound must be on or off: ${v}`);
       return v === 'on';
     },
-    door: {
-      act: 'sound',
-      label: 'Sound',
-      buttons: (v) => `<button data-act="sound" class="${v ? 'on' : ''}">${v ? 'On' : 'Off'}</button>`,
-      click: (_arg, v) => !v,
-    },
+    // On and Off as a pair (PT37, J1 #19: a lone button read as a label, "Sound: On", with no way to see the other side).
+    door: { ...onOffRow('sound', 'Sound', { text: 'On', title: 'Impacts and collapses make a sound' }, { text: 'Off', title: 'Silent (the M key also toggles it in play)' }), player: true },
   }),
 } satisfies GameOption;

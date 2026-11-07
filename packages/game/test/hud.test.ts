@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { B1, B2, compileLevel, levelGoldLine, L1, L2, L3, L4, L5, levelScore, masonScore, MT4, outcomeScore, RL1, type ShotOutcome, U3, W3, W5, type ChorusJudgement, chorusScore } from '@tb/keystone';
 import { HOW_TO_PLAY } from '../src/door.ts';
 import { BUILD_HELP, GAME_HELP, GAME_KEYS, HELP_BUDGET, helpHtml, MASON_HELP, TOUCH_HELP } from '../src/ui.ts';
-import { CUT_HINT, PULL_HINT, PUSH_HINT, BANK_BUTTON, BANK_QUIET, SKIP_BUTTON, esc, freezeButton, POWER_STEP, fmtLeverage, fmtPoints, goldHtml, hudHtml, keepRow, LEVERAGE_MEANS, leverageRow, meterHtml, meterTicks, nextSelection, objectiveText, rackChips, resultHtml, starsText, slotAction, tallyHtml, touchActs, masonStarsHtml, masonSub, TEST_BUTTON, trialText, chorusObjectiveText } from '../src/hud.ts';
+import { CUT_HINT, PULL_HINT, PUSH_HINT, BANK_BUTTON, BANK_QUIET, SKIP_BUTTON, esc, freezeButton, POWER_STEP, fmtLeverage, fmtPoints, goldHtml, hudHtml, keepRow, LEVERAGE_MEANS, leverageRow, leverageWords, meterHtml, meterTicks, nextSelection, objectiveText, rackChips, resultHtml, starsText, slotAction, tallyHtml, touchActs, masonStarsHtml, masonSub, TEST_BUTTON, trialText, chorusObjectiveText } from '../src/hud.ts';
 
 describe('rack', () => {
   it('groups by kind in first-seen order with counts and keys', () => {
@@ -189,7 +189,7 @@ describe('formatting', () => {
     const def = { ...L1, scoring: 'outcome' as const };
     const score = outcomeScore({ met: true, collapse: 0.62, leverage: 1, comboMax: 4, hasCrowns: true, rackLeft: 3, heritageBroken: 0, outOfLot: 0, crownsDown: 4, skylineRatio: 0.3, pulled: 0 }, undefined);
     const html = resultHtml(def, score, 1, false);
-    expect(html).toMatch(/1 shot · 62% down · leverage/);
+    expect(html).toMatch(/<div class="sub" title="[^"]*">1 shot · 62% down · leverage/);
     expect(html).not.toMatch(/par/);
     expect(html).toMatch(/>62% DOWN</);
     expect(html).toMatch(/Rack left/);
@@ -280,8 +280,10 @@ describe('scores and leverage add up (PT9, PT16)', () => {
     for (const d of [L1, L2, L3, L4, L5]) for (const k of [0.3, 0.99, 1, 2, 4, 9]) for (let s = 1; s <= d.par + 1; s++) {
       const score = levelScore(d, Array.from({ length: s }, () => shot({ dPE_mJ: 1e6 * k * levelGoldLine(d)! })), true, 40);
       const html = resultHtml(d, score, s, false);
-      if (html.includes('class="gold got"')) expect(html).not.toContain('(Brute)');
-      expect(html).toMatch(/\((Brute|Clean|Elegant|Keystone)\)/);
+      // PT31: no card says Brute at all now; under the gold line it says how far the line is.
+      expect(html).not.toContain('(Brute)');
+      expect(html).toMatch(/\((Clean|Elegant|Keystone)\)<\/div>| · gold at ×/);
+      if (html.includes('class="gold got"')) expect(html).not.toContain('gold at');
     }
   });
   it('an outcome level without a gold line names no tier', () => {
@@ -296,7 +298,7 @@ describe('scores and leverage add up (PT9, PT16)', () => {
     const held = resultHtml(U3, outcomeScore(facts, undefined), 4, false);
     expect(held).toContain('13% PULLED');
     expect(held).not.toMatch(/% down/i);
-    expect(held).toMatch(/<div class="sub">4 shots · leverage /);
+    expect(held).toMatch(/<div class="sub"[^>]*>4 shots · leverage /);
     // A collapse level keeps its share down on the sub line.
     expect(resultHtml(B1, outcomeScore({ ...facts, hold: false, collapse: 0.5 }, undefined), 2, false)).toContain('2 shots · 50% down');
   });
@@ -330,20 +332,34 @@ describe('scores and leverage add up (PT9, PT16)', () => {
     expect([at(9).stars, at(2, 1).stars, at(2, 1).heritageStarsLost, at(9, 1).stars]).toEqual([1, 2, 1, 1]);
     expect(levelScore(RL1, [shot({})], false, 40, 2)).toMatchObject({ stars: 0, stamp: 'INCOMPLETE' });
     const html = resultHtml(RL1, par, 1, false);
-    expect(html).toContain('<div class="sub">parts 2 / par 2 · leverage');
+    expect(html).toMatch(/<div class="sub" title="[^"]*">parts 2 \/ par 2 · leverage/);
     expect(html).not.toContain('stroke');
     // Other par levels keep their strokes line and gold.
     expect(levelScore(L5, [shot({ dPE_mJ: 1e9 })], true, 40, 7).parts).toBeUndefined();
   });
   it('a Bullet Time card shows the freezes used', () => {
     const score = levelScore({ ...L5, freeze: 2 }, [shot({ cut: true }), shot({ dPE_mJ: 1e7 })], true, 40);
-    expect(resultHtml(L5, score, 2, false)).toContain('2 strokes · par 1 · leverage ×5.00 (Clean) · freezes used 1/2');
+    // The explanation is the sub line's tooltip (PT31), on any card whose line names leverage.
+    expect(resultHtml(L5, score, 2, false)).toContain(`<div class="sub" title="${esc(LEVERAGE_MEANS)}">2 strokes · par 1 · leverage ×5.00 (Clean) · freezes used 1/2</div>`);
     expect(score.stamp).toBe('PAR');
   });
-  it('How to play says what leverage is and that a score never goes below 0', () => {
-    const text = HOW_TO_PLAY.join(' ');
-    expect(text).toContain(LEVERAGE_MEANS);
-    expect(text).toMatch(/never goes below 0/);
+  it('How to play says what leverage is (Chamber), and the card says a total never goes below 0', () => {
+    expect(HOW_TO_PLAY.find((h) => h.id === 'chamber')!.lines).toContain(LEVERAGE_MEANS);
+    expect(resultHtml(L1, levelScore(L1, [shot({ dPE_mJ: 1e6 })], true, 40), 1, false)).toContain('title="The lines\' sum, never below 0"');
+  });
+  it('PT31: the card never names a tier for a round that brought nothing down, and says the gold line under it', () => {
+    expect(leverageWords(0, L1)).toBe('nothing fell');
+    expect(leverageWords(Number.NaN, L1)).toBe('nothing fell');
+    const line = levelGoldLine(L1)!;
+    expect(leverageWords(0.99 * line, L1)).toBe(`leverage ${fmtLeverage(0.99 * line)} · gold at ${fmtLeverage(line)}`);
+    expect(leverageWords(line, L1)).toBe(`leverage ${fmtLeverage(line)} (Clean)`);
+    expect(leverageWords(8 * line, L1)).toBe(`leverage ${fmtLeverage(8 * line)} (Keystone)`);
+    // A dud round on L2 (nothing moved): no "×0.00 (Brute)".
+    const dud = resultHtml(L2, levelScore(L2, [shot({ dPE_mJ: 0 }), shot({ dPE_mJ: 0 })], false, 139), 2, false);
+    expect(dud).toContain('nothing fell');
+    expect(dud).not.toMatch(/Brute|×0\.00/);
+    // LEVERAGE_MEANS is the agreed one line (scoring thread, 2026-11-07).
+    expect(LEVERAGE_MEANS).toMatch(/^Leverage ×N means the structure's fall gave back N times the energy you fired\./);
   });
 });
 

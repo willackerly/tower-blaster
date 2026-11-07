@@ -191,7 +191,7 @@ export function nextLevel(levels: readonly DoorLevel[]): number {
  * What the opened trials toggle says (PT18: the first blurb spoke of the engine's test scenes and the mode probes'
  * builds; the player wants to know what these are to them, not where they came from).
  */
-export const TRIALS_BLURB = 'More structures to bring down, just for fun. They are unrated: meeting the objective is the only star, and they are not balanced like the levels above. The best of them will become rated levels.';
+export const TRIALS_BLURB = 'More structures to bring down, just for fun. They are unrated: no stars, just a goal to meet, and they are not balanced like the levels above. The best of them will become rated levels.';
 
 /** The best play in words: stars, then what it reached. */
 export function bestText(b: LevelRecord | null): string {
@@ -201,25 +201,74 @@ export function bestText(b: LevelRecord | null): string {
 }
 
 /** How to play's Bullet Time line (playtest PT8: the T key was named only in the key list). */
-export const BULLET_TIME_HOW = 'Bullet Time levels give you a few freezes. While a shot is still running, <span class="kg-desk"><kbd>T</kbd></span><span class="kg-tch">Freeze</span> stops the world: aim and fire, and the new shot cuts in at that moment and spends one freeze; that shot is free against par. Resuming without firing keeps the freeze.';
+export const BULLET_TIME_HOW = 'Bullet Time levels give you a few freezes: while a shot runs, <span class="kg-desk"><kbd>T</kbd></span><span class="kg-tch">Freeze</span> stops the world. Aim and fire into it for a shot that is free against par; resuming without firing keeps the freeze.';
 
 /** How to play's Siege Table line (PT18: the two-player mode was on the door but not in How to play). */
 export const SIEGE_TABLE_HOW = `${DUEL_NAMES.mode}: two players on one device take turns, each from their own side, passing the device between shots. ${DUEL_NAMES.rulesets.keeps}: topple the other king to win, and keep your own standing. ${DUEL_NAMES.rulesets.heraldry}: each shot scores the rival's blocks it brings down, less your own.`;
 
-/** How to play's Mason's Trial line (M8: a mode with no shots needs its own sentence). */
-export const MASON_HOW = "Mason's Trial levels are built, not shot: place pieces (<span class=\"kg-desk\"><kbd>[</kbd> <kbd>]</kbd></span><span class=\"kg-tch\">Slide</span> slides a plank out past an edge), then Play tests the build in 64 slightly different worlds while you watch one. Standing in half of them is a star; more worlds and less of the budget spent earn two and three.";
+/** How to play's Mason's Trial page (M8: a mode with no shots needs its own words; PT37: two short lines). */
+export const MASON_HOW = "Build, don't shoot: place pieces (<span class=\"kg-desk\"><kbd>[</kbd> <kbd>]</kbd></span><span class=\"kg-tch\">Slide</span> slides a plank out past an edge), then Play tests the build in 64 slightly different worlds.";
+const MASON_STARS = 'Standing in half of them is a star; more worlds and less of the budget spent earn two and three.';
 
-/** How to play, in eight lines (the controls line is GAME_HELP's, shown in play). */
-export const HOW_TO_PLAY: readonly string[] = [
-  '<span class="kg-desk">Pick a spot on the structure and click to fire. Drag to look around; the launcher follows you.</span><span class="kg-tch">Touch the structure and drag to aim; lift your finger to fire. Two fingers turn the view and pinch to zoom; the launcher follows you. Put a second finger down to call off a shot.</span>',
-  'Fire again whenever you like, even while things are still falling. Once everything settles, the world waits while you aim; <kbd>K</kbd> or Skip runs the rest of a shot fast. Rubble stays between shots.',
-  BULLET_TIME_HOW,
-  'Meet the objective for one star. Chamber levels: clear in par for three, each shot over par or piece of heritage broken costs one, and leverage at the level\'s gold line earns the gold badge. Elsewhere, bring more down for two and three; the targets were set by a bot playing each level hundreds of times.',
-  'After any shot you may <kbd>B</kbd> bank: end the level and keep the unused rack as points.',
-  `${LEVERAGE_MEANS} The card shows the whole round's; Brute is under the level's gold line, Clean at it. A score never goes below 0: cracked heritage shows as its own red line and costs stars.`,
-  MASON_HOW,
-  SIEGE_TABLE_HOW,
+/** One mode's page of How to play: a tab (its title) and one or two lines (HTML). */
+export interface HowMode { readonly id: string; readonly title: string; readonly lines: readonly string[] }
+
+/**
+ * How to play, one page per mode, one or two lines each (PT37, agent playtest 2: seven bullets of jargon, leverage,
+ * gold line, Brute, bank, before a single shot, with the Siege Table rule below the fold on a phone held sideways).
+ * Basics comes first; the page that opens is the mode of the level behind the door (howModeOf). The words the
+ * game uses on its cards (par, heritage, leverage, Bank) are each explained where they first matter.
+ */
+export const HOW_TO_PLAY: readonly HowMode[] = [
+  { id: 'basics', title: 'Basics', lines: [
+    '<span class="kg-desk">Click a spot on the structure to fire at it; drag to look around.</span><span class="kg-tch">Touch the structure and drag to aim; lift your finger to fire. Two fingers turn and zoom.</span> Fire again whenever you like.',
+    'Blocks with a gold ⌖ are the ones to bring down. Teal ⛨ blocks are heritage: spare them. Each card says what earns its stars.',
+  ] },
+  { id: 'chamber', title: 'Chamber', lines: [
+    'Bring every gold ⌖ block down within par (the card\'s shot count) for three stars; each extra shot or cracked heritage costs one.',
+    LEVERAGE_MEANS,
+  ] },
+  { id: 'spectacle', title: 'Spectacle', lines: [
+    'A few big shots at a big structure: bring as much down as you can. More down, more stars.',
+    '<kbd>B</kbd> Bank ends the level early and turns the shots you have left into points.',
+  ] },
+  { id: 'bullet', title: 'Bullet Time', lines: [BULLET_TIME_HOW] },
+  { id: 'undercut', title: 'Undercut', lines: [
+    'No shots: pull blocks out one at a time (never a gold ⌖ or teal ⛨ one) so the structure falls the way the level asks. Fewer pulls, more stars.',
+    'On a Hollow level, take as much as you dare while the crown stays up, and Bank before it falls.',
+  ] },
+  { id: 'rube', title: 'Rube Lab', lines: [
+    'Build a contraption from the parts bin that carries the ball to the bell, then press Play to open the trapdoor.',
+    'Ring the bell to clear it; the fewer parts you use, the more stars.',
+  ] },
+  { id: 'fuse', title: 'Fuse & Fold', lines: [
+    'Set when each charge goes off, on the timeline or by the length of a domino fuse you lay to it, then press the plunger.',
+    'Fold the building down into its own lot without touching its neighbours.',
+  ] },
+  { id: 'aftershock', title: 'Aftershock', lines: [
+    'Design one earthquake: its strength, frequency, length and direction. Then let it go.',
+    'Bring down the gold ⌖ towers and leave the teal ⛨ towers standing. The less energy your quake uses, the more stars.',
+  ] },
+  { id: 'wavefront', title: 'Wavefront', lines: [
+    'One push starts a wave of falling towers and dominoes. Choose where to push, or pull pieces out while the wave runs to save what is left.',
+  ] },
+  { id: 'mason', title: "Mason's Trial", lines: [MASON_HOW, MASON_STARS] },
+  { id: 'chorus', title: 'Chorus', lines: [
+    'One shot goes into 64 copies of the level at once, each a hair different. A world clears when its gold ⌖ blocks come down.',
+    'Clear half the worlds for a star and nearly all of them for three: a shot that works only when everything goes its way clears few.',
+  ] },
+  { id: 'siege', title: DUEL_NAMES.mode, lines: [SIEGE_TABLE_HOW] },
 ];
+
+/** Each series' How to play page, by its title (SERIES_TITLES); a series not listed opens Basics. */
+const HOW_BY_SERIES: Readonly<Record<string, string>> = { Chamber: 'chamber', Spectacle: 'spectacle', Undercut: 'undercut', 'Rube Lab': 'rube', 'Fuse & Fold': 'fuse', Aftershock: 'aftershock', Wavefront: 'wavefront', "Mason's Trial": 'mason', Chorus: 'chorus' };
+
+/** The How to play page that opens first: Bullet Time on a level with freezes, else its series' page, else Basics. */
+export function howModeOf(def: Pick<LevelDef, 'id' | 'freeze'> | null | undefined): string {
+  if (!def) return 'basics';
+  if (def.freeze !== undefined) return 'bullet';
+  return HOW_BY_SERIES[seriesTitle(def.id)] ?? 'basics';
+}
 
 /** A duel table as the door's Two players section shows it. */
 export interface DoorDuel { id: string; name: string; ruleset: string; blurb: string; current: boolean }
@@ -253,28 +302,42 @@ export interface DoorModel {
   settings: Settings;
   /** The how-to-play panel is open. */
   howTo: boolean;
+  /** Its page (HowMode.id); absent: Basics. */
+  howMode?: string;
   /** The Advanced settings panel (sound, look, camera, rapid fire, duel turns, hand-over, launch height, stone marks, layout, sharpness, quality, forget my progress) is open; closed by default. */
   advanced: boolean;
+  /** Under Advanced settings, the Developer settings disclosure (every other setting, and Forget my progress) is open. */
+  developer?: boolean;
+  /** Forget my progress was clicked and asks to be confirmed. */
+  resetAsk?: boolean;
   /** The tier the probe picked on load, which Auto takes (quality.ts); null or absent when none ran. */
   detected?: QualityTier | null;
 }
 
-/** The door's markup. Every button carries data-act (play, level, how, advanced, trials, sound, look, sharp, quality, camera, rapid, duelview, handoff, launch, marks, layout, reset, close) and data-arg where it needs one. */
+/** The door's markup. Every button carries data-act (play, level, how, howmode, advanced, developer, trials, each setting's own act, reset, reset-yes, reset-no, close) and data-arg where it needs one. */
 export function doorHtml(m: DoorModel): string {
   const next = nextLevel(m.levels);
   const card = (l: DoorLevel, i: number) => {
     const earned = l.best?.stars ?? 0;
     // An uncast level has the objective's star only: its row alone, and one star slot.
     const most = l.cast ? 3 : 1;
-    const rows = l.targets.slice(0, most).map((t, k) => `<li class="${earned > k ? 'got' : ''}"><span class="s">${'★'.repeat(k + 1)}</span>${esc(t)}</li>`).join('');
-    const short = l.short.slice(0, most).map((t, k) => `<span class="${earned > k ? 'got' : ''}"><b>${'★'.repeat(k + 1)}</b> ${esc(t)}</span>`).join(' · ');
+    // An unrated trial has no stars at all (PT37): its goal, and whether it was met.
+    const rows = l.trial
+      ? `<li class="${earned ? 'got' : ''}"><span class="s">Goal</span>${esc(l.targets[0])}</li>`
+      : l.targets.slice(0, most).map((t, k) => `<li class="${earned > k ? 'got' : ''}"><span class="s">${'★'.repeat(k + 1)}</span>${esc(t)}</li>`).join('');
+    const short = l.trial
+      ? `<span class="${earned ? 'got' : ''}"><b>Goal</b> ${esc(l.short[0])}</span>`
+      : l.short.slice(0, most).map((t, k) => `<span class="${earned > k ? 'got' : ''}"><b>${'★'.repeat(k + 1)}</b> ${esc(t)}</span>`).join(' · ');
+    const best = l.trial
+      ? `${earned ? '<span class="met">Goal met</span> · ' : ''}${esc(bestText(l.best))}`
+      : `<span class="earned">${'★'.repeat(earned)}</span><span class="unearned">${'☆'.repeat(Math.max(0, most - earned))}</span> ${esc(bestText(l.best))}`;
     return `<button class="card${l.index === m.current ? ' current' : ''}${i === next ? ' next' : ''}${l.trial ? ' trial' : ''}" data-act="level" data-arg="${l.index}" data-id="${esc(l.id)}" aria-label="${esc(`${l.tag} ${l.name}`)}">
       <div class="id">${esc(l.tag)}</div>
       <div class="lname">${esc(l.name)}</div>
       <div class="meta">${l.blocks.toLocaleString('en-US')} blocks · ${esc(l.rack)}</div>
       <ul class="targets">${rows}</ul>
       <div class="short">${short}</div>
-      <div class="best"><span class="earned">${'★'.repeat(earned)}</span><span class="unearned">${'☆'.repeat(Math.max(0, most - earned))}</span> ${esc(bestText(l.best))}</div>
+      <div class="best">${best}</div>
       ${l.custom ? `<div class="custom">${CUSTOM_NOTE}</div>` : ''}
     </button>`;
   };
@@ -300,18 +363,33 @@ export function doorHtml(m: DoorModel): string {
       </div>
       <button data-act="how" class="howlink${m.howTo ? ' on' : ''}">How to play</button>
       </div>
-      ${m.howTo ? `<ul class="how">${HOW_TO_PLAY.map((t) => `<li>${t}</li>`).join('')}</ul>` : ''}
+      ${m.howTo ? howHtml(m.howMode) : ''}
       ${sections}
       ${duelsHtml(m.duels ?? [])}
       ${trials}
       <button data-act="advanced" class="howlink advlink${m.advanced ? ' on' : ''}" aria-expanded="${m.advanced}">Advanced settings</button>
       ${m.advanced ? `<div class="advanced">
       <div class="foot">
-        ${settingRows(s, { detected: m.detected ?? null, esc }).join('\n        ')}
+        ${settingRows(s, { detected: m.detected ?? null, esc }, 'player').join('\n        ')}
       </div>
-      <div class="reset"><button data-act="reset">Forget my progress</button></div>
+      <button data-act="developer" class="howlink devlink${m.developer ? ' on' : ''}" aria-expanded="${Boolean(m.developer)}">Developer settings ${m.developer ? '▾' : '▸'}</button>
+      ${m.developer ? `<div class="developer">
+      <div class="foot">
+        ${settingRows(s, { detected: m.detected ?? null, esc }, 'developer').join('\n        ')}
+      </div>
+      <div class="reset">${m.resetAsk
+        ? `<span class="ask">Forget every best play and star on this device?</span> <button data-act="reset-yes" class="yes">Forget</button> <button data-act="reset-no" class="no">Keep</button>`
+        : '<button data-act="reset">Forget my progress…</button>'}</div>
+      </div>` : ''}
       </div>` : ''}
     </div>`;
+}
+
+/** The How to play panel: a tab per mode and the open mode's lines (PT37). */
+function howHtml(mode: string | undefined): string {
+  const open = HOW_TO_PLAY.find((h) => h.id === mode) ?? HOW_TO_PLAY[0]!;
+  const tabs = HOW_TO_PLAY.map((h) => `<button data-act="howmode" data-arg="${h.id}" class="${h === open ? 'on' : ''}">${esc(h.title)}</button>`).join('');
+  return `<div class="how"><div class="how-tabs" role="tablist">${tabs}</div><ul data-mode="${open.id}">${open.lines.map((t) => `<li>${t}</li>`).join('')}</ul></div>`;
 }
 
 /** The Two players section: one card per duel table (data-act="duel", data-arg its id). */
@@ -348,7 +426,7 @@ export const DOOR_CSS = `
   .kg-door .card { display: flex; flex-direction: column; justify-content: flex-start; padding: 14px 16px; border-radius: 12px; background: rgba(17, 20, 28, 0.78); backdrop-filter: blur(6px); border: 2px solid transparent; text-align: left; transition: transform 0.12s, border-color 0.12s; }
   .kg-door .card:hover, .kg-door .card:focus-visible { transform: translateY(-2px); border-color: rgba(159, 195, 255, 0.4); }
   .kg-door .card.next { border-color: #d8693f; }
-  .kg-door .card .id { align-self: flex-start; display: inline-block; padding: 1px 7px; border-radius: 5px; background: #3a4459; color: #9fc3ff; font: 700 12px/1.6 ui-monospace, monospace; }
+  .kg-door .card .id { align-self: flex-start; display: inline-block; padding: 1px 7px; border-radius: 5px; background: #3a4459; color: #9fc3ff; font: 700 12px/1.6 system-ui, sans-serif; letter-spacing: 0.02em; }
   .kg-door .card.next .id::after { content: ' · next up'; color: #f2a07e; }
   .kg-door .lname { margin-top: 6px; font-size: 19px; font-weight: 700; }
   .kg-door .meta { color: #a6aec0; font-size: 12px; font-variant-numeric: tabular-nums; }
@@ -375,7 +453,7 @@ export const DOOR_CSS = `
   .kg-door .card.current { border-color: #9fc3ff; }
   .kg-door .foot { display: flex; flex-wrap: wrap; justify-content: center; align-items: center; gap: 10px 20px; }
   .kg-door .foot .group { display: inline-flex; align-items: center; gap: 6px; }
-  .kg-door .foot .lbl { color: #a6aec0; font-size: 13px; }
+  .kg-door .foot .lbl { color: #c2c8d6; font-size: 13px; }
   .kg-door .seg { display: inline-flex; border-radius: 7px; box-shadow: inset 0 0 0 1px #3a4459; overflow: hidden; }
   /* A segmented control: the selected side filled in the accent, the rest outlined on the panel (PT18: it was the other way round to the eye). */
   .kg-door .seg { background: rgba(17, 20, 28, 0.6); box-shadow: inset 0 0 0 1px #4d5a75; }
@@ -384,10 +462,19 @@ export const DOOR_CSS = `
   .kg-door .seg button:not(.on):hover { background: rgba(159, 195, 255, 0.12); }
   .kg-door .seg button.on { background: #9fc3ff; color: #11141c; font-weight: 650; }
   .kg-door kbd { font: 600 11px/1 ui-monospace, monospace; padding: 2px 4px; border-radius: 3px; background: #3a4459; color: #e8ebf2; margin-right: 2px; }
-  .kg-door .how { max-width: 620px; margin: 10px auto 0; padding: 14px 18px 14px 34px; border-radius: 10px; background: rgba(17, 20, 28, 0.78); text-align: left; }
+  .kg-door .how { box-sizing: border-box; width: min(660px, 100%); margin: 10px auto 0; padding: 10px 14px 12px; border-radius: 10px; background: rgba(17, 20, 28, 0.78); text-align: left; }
+  .kg-door .how-tabs { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 6px; }
+  .kg-door .how-tabs button { padding: 3px 9px; border-radius: 6px; background: transparent; color: #c7cdda; font-size: 13px; box-shadow: inset 0 0 0 1px #4d5a75; }
+  .kg-door .how-tabs button.on { background: #9fc3ff; color: #11141c; font-weight: 650; box-shadow: none; }
+  .kg-door .how ul { margin: 0; padding-left: 20px; }
   .kg-door .how li { margin: 4px 0; }
-  .kg-door .reset { margin-top: 18px; }
+  .kg-door .devlink { display: block; margin: 14px auto 0; font-size: 12px; color: #a9b1c4; }
+  .kg-door .developer { margin-top: 8px; padding: 10px 0 12px; border-top: 1px solid rgba(77, 90, 117, 0.6); }
+  .kg-door .reset { margin-top: 18px; font-size: 12px; color: #a6aec0; }
   .kg-door .reset button { background: none; color: #6f7890; font-size: 12px; text-decoration: underline; }
+  .kg-door .reset button.yes { padding: 4px 10px; border-radius: 6px; background: #a8482b; color: #fff; font-weight: 650; text-decoration: none; }
+  .kg-door .reset button.no { padding: 4px 10px; border-radius: 6px; background: #3a4459; color: #e8ebf2; text-decoration: none; }
+  .kg-door .best .met { color: #f7b955; }
   .kg-menu kbd { font: 600 10px/1 ui-monospace, monospace; padding: 2px 4px; border-radius: 3px; background: #3a4459; margin-left: 4px; }
   .kg-menu { position: fixed; top: 12px; right: 12px; padding: 6px 10px; border: 0; border-radius: 8px; background: rgba(17, 20, 28, 0.8); color: #e8ebf2; font: 13px/1.2 system-ui, sans-serif; cursor: pointer; }
   .kg-hud button.opener { font: inherit; padding: 6px 12px; border: 0; border-radius: 6px; background: #d8693f; color: #fff; cursor: pointer; margin-top: 6px; font-weight: 650; animation: kg-pulse 1.6s ease-in-out infinite; }
