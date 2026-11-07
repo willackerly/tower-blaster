@@ -245,7 +245,7 @@ The search's wall times on 4 cores: 330 s, 1,296 s and 1,131 s (results/retrofit
 - `keystone-lab/test/retrofit-gpu-A*.test.ts` (GPU solver through the game's cast page, SwiftShader in CI): the bare
   level and the wrong build lose a protected tower, both bracings keep every one standing.
 - On a PR both run A6 only, the family's representative (CI rule O5); A7 and A8 run with PHYSICS_GPU_SLOW=1
-  (nightly) and, on the GPU, with TB_CHANNEL set. All three passed both gates on this PR's CI before the split.
+  (nightly) and, on the GPU, with TB_CHANNEL set. All three passed both gates when they shipped (reference and SwiftShader runs).
 - `game/test/retrofit-e2e.test.ts` (game page, Rapier): A6 opens building with the budget shown; three planks placed
   through the page equal the build tool's; Play loads the build; the quake panel is fixed (keys do nothing, no dial
   buttons, "6 / 30 braced"); Enter starts the level's quake; the page ends where `runSession` does; the card shows
