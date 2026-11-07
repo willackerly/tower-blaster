@@ -40,7 +40,7 @@ describe('quality tiers', () => {
       try { return await g.probeQuality(device, adapter, 640, 400, 1, { measureSoftware: true }); } finally { device.destroy(); }
     })()`) as import('../src/quality.ts').ProbeResult & import('../src/quality.ts').TierPick;
     console.log(`measured probe: ${JSON.stringify(p)} (software: not a performance result)`);
-    expect(p).toMatchObject({ software: false, tier: 'low', reason: 'physics' });
+    expect(p).toMatchObject({ software: false, calibrated: true, tier: 'low', reason: 'physics' });
     expect(p.dispatchMs).toBeGreaterThan(0);
     expect(p.stepMs).toBeGreaterThan(1000 / 60);
     expect(p.ms).toBeLessThan(1000);
@@ -120,9 +120,9 @@ describe('quality tiers', () => {
     await page.close();
   }, 5 * MINUTES);
 
-  // The M5 check (bench queue; TB_CHANNEL=chrome on the Mac, Metal, out of Low Power Mode): Will's screen
-  // (1728 x 1117 CSS points at 2x) picks high in under a second, and the step proxy is checked against B1's
-  // real steps on the GPU solver. Prints both for docs/game/quality-tiers.md.
+  // The M5 check (TB_CHANNEL=chrome on the Mac, Metal): Will's screen (1728 x 1117 CSS points at 2x) picks
+  // high in under a second, with the step proxy uncalibrated on a GPU (it rules nothing out). Prints the
+  // proxy against B1's real steps on the GPU solver: the data a GPU calibration would start from.
   it('Metal: the M5 picks high at 2x in under a second; the step proxy against B1\'s real steps', async (ctx) => {
     if (!game.browser() || !real) return ctx.skip();
     const o = await game.open('/?level=B1&engine=gpu&door=0&progress=off&quality=auto', 5 * MINUTES, { viewport: { width: 1728, height: 1117 }, deviceScaleFactor: 2 });
@@ -131,14 +131,15 @@ describe('quality tiers', () => {
     const q = (await page.evaluate(() => window.__game.quality))!;
     console.log(`M5 probe: ${JSON.stringify(q.probe)}`);
     expect(q.tier).toBe('high');
+    expect(q.probe!.calibrated).toBe(false);
     expect(q.probe!.ms).toBeLessThan(1000);
     await page.waitForFunction(() => window.__game.ready, undefined, { timeout: 5 * MINUTES, polling: 250 });
     await page.evaluate(() => { window.__game.fireOpener(); });
     await page.waitForTimeout(5000);
     const cost = median(await page.evaluate(() => window.__game.timing.costMs.slice(-240)));
     console.log(`B1 step on the GPU solver: median ${cost.toFixed(2)} ms measured, ${q.probe!.stepMs.toFixed(2)} ms predicted (ratio ${(q.probe!.stepMs / cost).toFixed(2)})`);
-    expect(q.probe!.stepMs / cost).toBeGreaterThan(1 / 3);
-    expect(q.probe!.stepMs / cost).toBeLessThan(3);
+    // The proxy's STEP_DISPATCHES on this GPU would be this many times SwiftShader's (no assertion: data).
+    console.log(`GPU STEP_DISPATCHES from this run: ${Math.round(cost / q.probe!.dispatchMs)}`);
     expect(errors).toEqual([]);
     await page.close();
   }, 10 * MINUTES);

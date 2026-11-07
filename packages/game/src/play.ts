@@ -451,7 +451,7 @@ export interface KeystoneEnv {
    * The level's lot sheet (docs/game/lot-sheets.md), asked at each load and retry: the sheet, the goals to
    * show (proven ones unless ?keystone.goals=all) and the ids the player met on earlier plays; null for none.
    */
-  lotSheet?(c: CompiledLevel): { sheet: LotSheet; goals: readonly Goal[]; before: readonly string[] } | null;
+  lotSheet?(c: CompiledLevel): { sheet: LotSheet; goals: readonly Goal[]; before: readonly string[]; open?: boolean } | null;
   /**
    * A Siege Table duel (docs/game/siege-table.md): `levels` are then duelLevel(duel, 0) and duelLevel(duel, 1)
    * (who goes first), the duel referees every shot and settle, owned blocks wear their side's ink, and the
@@ -679,6 +679,8 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
   tally.setAttribute('role', 'status');
   (env.result.parentElement ?? document.body).append(tally);
   let cardTimer: ReturnType<typeof setTimeout> | null = null;
+  /** The HUD's lot sheet is listed (true) or only its count line; for the level of hash sheetFor; the round's objective was met (it opened then). */
+  let sheetOpen = true, sheetFor = '', sheetCleared = false;
 
   // The build phase (C9, docs/game/placement.md): on a level with a build block, before its first shot, time stops and
   // the player places pieces and lays domino runs on the level as authored (EditController), drawn in place of the
@@ -1227,6 +1229,10 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     const ls = env.lotSheet?.(c) ?? null;
     lot = ls && { sheet: ls.sheet, goals: ls.goals, groups: selectGroups(c, ls.sheet.groups ?? {}), footprints: selectFootprints(c, ls.sheet) };
     handle.goals = (ls?.goals ?? []).map((g) => ({ id: g.id, text: g.text, met: false, before: ls!.before.includes(g.id) }));
+    // The HUD's sheet listed or closed (lot-hud.ts sheetOpenAtLoad, PT18): set when a level comes in, kept through its
+    // retries and undos, so the player's own toggle stands; it opens by itself at the round's first clear (drawHud).
+    if (c.hash !== sheetFor) { sheetFor = c.hash; sheetOpen = ls?.open ?? true; }
+    sheetCleared = false;
     handle.grade = null;
     // After an undo the goals stand as at the kept shots' settle, as play would have judged them there.
     if (line?.length) judgeGoals();
@@ -1890,6 +1896,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     if (act === 'skip') skip();
     if (act === 'freeze') freeze();
     if (act === 'opener') fireOpener();
+    if (act === 'goals') { sheetOpen = !sheetOpen; drawHud(); }
     // Touch screens' Undo and Restart (hud.ts touchActs; keys U and R).
     if (act === 'undo') void handle.undo();
     if (act === 'restart' && !duel) void handle.retry();
@@ -1972,6 +1979,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
 
   function drawHud() {
     const s = driver.session;
+    if (s.objectiveDone && !sheetCleared) { sheetCleared = true; sheetOpen = true; }
     const crownsDown = s.crownLive.reduce((a, x) => a + x, 0);
     let html = hudHtml({
       level: c.def, strokes: s.strokes, crownsDown, crownsTotal: c.meta.crowns.length,
@@ -1985,7 +1993,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
       ...(duel ? { duel: swing.active || handle.handoff ? duelHudHtml(duel) : duelHudHtml(duel, s.phase === 'aiming' && aimed ? duel.refuse(aimed.shot) : null, azFromYaw(orbit.yaw), s.phase === 'aiming' && aimHit !== null && duel.owned[duel.turn].includes(aimHit.body)) } : {}),
       ...(selected === QUAKE && dial ? { quake: quakeHud(dial) } : {}),
       ...(c.def.freeze !== undefined ? { freezes: { left: s.freezesLeft, total: c.def.freeze, frozen, can: canFreeze() } } : {}),
-    }, goalsHudHtml(handle.goals));
+    }, goalsHudHtml(handle.goals, sheetOpen));
     showPanel();
     // The touch hint line goes once the first shot is in (body.kg-shot; the game page's CSS hides #help on touch).
     document.body.classList.toggle('kg-shot', s.strokes > 0);

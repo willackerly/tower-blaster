@@ -26,7 +26,7 @@ export function editHtml(e: EditController | null, keys = true): string {
     + `<div class="buttons items">${items}</div>`
     + `<div class="buttons"><button type="button" data-a="turn" data-deg="-90">Turn left${k('Q')}</button><button type="button" data-a="turn" data-deg="90">Turn right${k('E')}</button><button type="button" data-a="tip">Tip${k('T')}</button>`
     + `<button type="button" data-a="undo"${e.session.canUndo ? '' : ' disabled'}>Undo${k('Z')}</button><button type="button" data-a="clear">Clear</button></div>`
-    + `<label class="snap"><input type="checkbox" name="snap"${e.snap ? ' checked' : ''}> snap to faces and the grid${keys ? ' (Alt: off while held)' : ''}</label>`
+    + `<label class="snap"><input type="checkbox" name="snap"${e.snap ? ' checked' : ''}> snap to faces and the grid${keys ? '<span class="kg-desk"> (Alt: off while held)</span>' : ''}</label>`
     + `<div class="out${e.ghost && !e.ghost.ok ? ' warn' : ''}">${esc(e.status())}</div>`;
 }
 

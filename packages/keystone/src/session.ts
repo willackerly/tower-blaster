@@ -103,7 +103,7 @@ export class Session {
   watchIdx: Int32Array;
   /** Par (end at clear) or outcome (end at a bank or an empty rack; LevelDef.autobank ends at the first clear too). */
   readonly scoring: Scoring;
-  /** How this level's shots settle (settleOf: v1 for par levels, v3 for outcome levels unless the level says). */
+  /** How this level's shots settle (settleOf: v1 for par levels, v4 for outcome levels unless the level says). */
   readonly settleRule: SettleRule;
   /** Collapse fraction D now, for the HUD (while a shot runs), and whether the objective was met at the last settle. */
   liveCollapse = 0;
@@ -391,8 +391,8 @@ export class Session {
     }
     if (cleared || this.rackLeft.length === 0) {
       this.phase = cleared ? 'cleared' : 'failed';
-      // Rube Lab: a binary clear, starred on the build's cost against the parts par (rules.ts rubeStars).
-      this.score = levelScore(c.def, this.outcomes, cleared, m.n, c.def.rube ? placedCost(c.def) : 0);
+      // Rube Lab: a binary clear, starred on the build's cost against the parts par (rules.ts partsStars).
+      this.score = levelScore(c.def, this.outcomes, cleared, m.n, c.def.build?.par !== undefined ? placedCost(c.def) : 0);
       out.push({ t: 'levelEnd', step, cleared, score: this.score });
     } else {
       this.phase = 'aiming';

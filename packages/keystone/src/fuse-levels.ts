@@ -43,10 +43,14 @@ export const FUSE_LEVELS: readonly LevelDef[] = [
   shipped('F5', 'FC-5b'), // relays on storey 5 fold the tower in two as it falls: without them it overshoots (FC-5c)
 ];
 
-/** A candidate shipped under its level id (the site's name kept): same building, lot and charges; its cast stars from stars.json. */
+/**
+ * A candidate shipped under its level id (the site's name kept): same building, lot and charges; its cast stars from stars.json.
+ * Pinned to settle v3, the outcome default they were cast under, so the stars keep their hash after PT6b made the default v4;
+ * drop the pin together with a v4 recast (docs/game/settle-v4.md).
+ */
 function shipped(id: string, site: string): LevelDef {
   const s = FOLD_SITES[site]!;
-  return { ...foldLevel(id, s.name, s.site), ...castOf(id) };
+  return { ...foldLevel(id, s.name, s.site), settle: 'v3', ...castOf(id) };
 }
 
 export const foldCandidate = (id: string): LevelDef => {

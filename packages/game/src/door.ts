@@ -13,7 +13,7 @@
 // objective's star and "more stars once cast", and picks the rest up from the
 // file with no change here.
 import { castStars, type CompiledLevel, compileLevel, DUEL_NAMES, type DuelDef, isTrial, type LevelDef, type Objective, scoringOf, SERIES, SERIES_TITLES, type Shot, type StarMetric, type StarsDef } from '@tb/keystone';
-import { CUSTOM_NOTE, esc, fmtPoints, itemLabel, LEVERAGE_MEANS, objectiveText, pct } from './hud.ts';
+import { CUSTOM_NOTE, esc, fmtPoints, itemLabel, LEVERAGE_MEANS, levelTag, objectiveText, pct, playerName } from './hud.ts';
 import type { LevelRecord } from './progress.ts';
 import type { QualityTier } from './quality.ts';
 import { type Settings, settingRows } from './settings.ts';
@@ -35,6 +35,9 @@ export const doorOnLoad = (mode: DoorMode, q: URLSearchParams): boolean => (mode
 /** One level as the door shows it. */
 export interface DoorLevel {
   id: string;
+  /** The card's tag as the player sees it (hud.ts levelTag): the id for a series level, "Trial 7" for a trial. */
+  tag: string;
+  /** The name as the player sees it (hud.ts playerName). */
   name: string;
   blocks: number;
   /** The rack in words: "3 bombs", "1 bomb, 2 rams". */
@@ -148,7 +151,7 @@ export function doorLevels(levels: readonly LevelDef[], best: (id: string, hash:
     if (skip(d)) return [];
     const c = compiled(d), stars = castStars(c);
     return [{
-      id: d.id, name: d.name, blocks: c.meta.n, rack: rackText(d.rack), ...starTargets(c, stars), custom: Boolean(d.custom), best: d.custom ? null : best(d.id, c.hash),
+      id: d.id, tag: levelTag(d), name: playerName(d), blocks: c.meta.n, rack: rackText(d.rack), ...starTargets(c, stars), custom: Boolean(d.custom), best: d.custom ? null : best(d.id, c.hash),
       index, series: seriesTitle(d.id), trial: isTrial(d.id),
     }];
   });
@@ -162,8 +165,11 @@ export function nextLevel(levels: readonly DoorLevel[]): number {
   return rated < 0 ? 0 : rated;
 }
 
-/** What the trials toggle says: how many there are, the blurb, open or closed. */
-export const TRIALS_BLURB = 'Every structure built so far that is not a rated level: the engine\'s test scenes, the big levels\' drafts and the mode probes\' builds. No stars are cast: the objective is the one star, and nothing here is balanced.';
+/**
+ * What the opened trials toggle says (PT18: the first blurb spoke of the engine's test scenes and the mode probes'
+ * builds; the player wants to know what these are to them, not where they came from).
+ */
+export const TRIALS_BLURB = 'More structures to bring down, just for fun. They are unrated: meeting the objective is the only star, and they are not balanced like the levels above. The best of them will become rated levels.';
 
 /** The best play in words: stars, then what it reached. */
 export function bestText(b: LevelRecord | null): string {
@@ -175,7 +181,10 @@ export function bestText(b: LevelRecord | null): string {
 /** How to play's Bullet Time line (playtest PT8: the T key was named only in the key list). */
 export const BULLET_TIME_HOW = 'Bullet Time levels give you a few freezes. While a shot is still running, <span class="kg-desk"><kbd>T</kbd></span><span class="kg-tch">Freeze</span> stops the world: aim and fire, and the new shot cuts in at that moment and spends one freeze; that shot is free against par. Resuming without firing keeps the freeze.';
 
-/** How to play, in six lines (the controls line is GAME_HELP's, shown in play). */
+/** How to play's Siege Table line (PT18: the two-player mode was on the door but not in How to play). */
+export const SIEGE_TABLE_HOW = `${DUEL_NAMES.mode}: two players on one device take turns, each from their own side, passing the device between shots. ${DUEL_NAMES.rulesets.keeps}: topple the other king to win, and keep your own standing. ${DUEL_NAMES.rulesets.heraldry}: each shot scores the rival's blocks it brings down, less your own.`;
+
+/** How to play, in seven lines (the controls line is GAME_HELP's, shown in play). */
 export const HOW_TO_PLAY: readonly string[] = [
   '<span class="kg-desk">Pick a spot on the structure and click to fire. Drag to look around; the launcher follows you.</span><span class="kg-tch">Touch the structure and drag to aim; lift your finger to fire. Two fingers turn the view and pinch to zoom; the launcher follows you. Put a second finger down to call off a shot.</span>',
   'Fire again whenever you like, even while things are still falling. Once everything settles, the world waits while you aim; <kbd>K</kbd> or Skip runs the rest of a shot fast. Rubble stays between shots.',
@@ -183,6 +192,7 @@ export const HOW_TO_PLAY: readonly string[] = [
   'Meet the objective for one star. Chamber levels: clear in par for three, each shot over par or piece of heritage broken costs one, and leverage at the level\'s gold line earns the gold badge. Elsewhere, bring more down for two and three; the targets were set by a bot playing each level hundreds of times.',
   'After any shot you may <kbd>B</kbd> bank: end the level and keep the unused rack as points.',
   `${LEVERAGE_MEANS} The card shows the whole round's; Brute is under the level's gold line, Clean at it. A score never goes below 0: cracked heritage shows as its own red line and costs stars.`,
+  SIEGE_TABLE_HOW,
 ];
 
 /** A duel table as the door's Two players section shows it. */
@@ -231,8 +241,8 @@ export function doorHtml(m: DoorModel): string {
     // An uncast level's two- and three-star rows say the same thing: one row for both.
     const rows = (l.cast ? l.targets : l.targets.slice(0, 2)).map((t, k) => `<li class="${earned > k ? 'got' : ''}${!l.cast && k > 0 ? ' uncast' : ''}"><span class="s">${'★'.repeat(k + 1)}</span>${esc(t)}</li>`).join('');
     const short = l.short.map((t, k) => `<span class="${earned > k ? 'got' : ''}"><b>${'★'.repeat(k + 1)}</b> ${esc(t)}</span>`).join(' · ');
-    return `<button class="card${l.index === m.current ? ' current' : ''}${i === next ? ' next' : ''}${l.trial ? ' trial' : ''}" data-act="level" data-arg="${l.index}" aria-label="${esc(`${l.id} ${l.name}`)}">
-      <div class="id">${esc(l.id)}</div>
+    return `<button class="card${l.index === m.current ? ' current' : ''}${i === next ? ' next' : ''}${l.trial ? ' trial' : ''}" data-act="level" data-arg="${l.index}" data-id="${esc(l.id)}" aria-label="${esc(`${l.tag} ${l.name}`)}">
+      <div class="id">${esc(l.tag)}</div>
       <div class="lname">${esc(l.name)}</div>
       <div class="meta">${l.blocks.toLocaleString('en-US')} blocks · ${esc(l.rack)}</div>
       <ul class="targets">${rows}</ul>
@@ -254,6 +264,7 @@ export function doorHtml(m: DoorModel): string {
   const s = m.settings;
   return `
     <div class="door-inner">
+      <div class="head">
       <h1>Keystone</h1>
       <div class="tag">Bring it down.</div>
       <div class="ctas">
@@ -261,6 +272,7 @@ export function doorHtml(m: DoorModel): string {
         ${here && here !== play ? `<button data-act="close" class="close"><kbd>Esc</kbd> Back to ${esc(here.name)}</button>` : ''}
       </div>
       <button data-act="how" class="howlink${m.howTo ? ' on' : ''}">How to play</button>
+      </div>
       ${m.howTo ? `<ul class="how">${HOW_TO_PLAY.map((t) => `<li>${t}</li>`).join('')}</ul>` : ''}
       ${sections}
       ${duelsHtml(m.duels ?? [])}
@@ -281,7 +293,7 @@ function duelsHtml(duels: readonly DoorDuel[]): string {
   const cards = duels.map((d) => `<button class="card duel${d.current ? ' current' : ''}" data-act="duel" data-arg="${esc(d.id)}" aria-label="${esc(`${d.id} ${d.name}`)}">
       <div class="id">${esc(d.id)}</div>
       <div class="lname">${esc(d.name)}</div>
-      <div class="meta">${esc(d.ruleset)} · 2 players, one device</div>
+      <div class="meta">${d.ruleset === d.name ? '' : `${esc(d.ruleset)} · `}2 players, one device</div>
       <div class="blurb">${esc(d.blurb)}</div>
     </button>`).join('');
   return `<h2 class="duels-head">${esc(DUEL_NAMES.mode)} · two players</h2><div class="cards duels">${cards}</div>`;
@@ -292,6 +304,7 @@ export const DOOR_CSS = `
   .kg-door { position: fixed; inset: 0; display: none; overflow-y: auto; background: radial-gradient(ellipse at 50% 30%, rgba(17, 20, 28, 0.35), rgba(17, 20, 28, 0.82)); color: #e8ebf2; font: 14px/1.45 system-ui, sans-serif; z-index: 10; }
   .kg-door.show { display: block; animation: kg-fade 0.25s ease-out; }
   body.door-open .kg-hud, body.door-open .kg-help, body.door-open .kg-result, body.door-open .kg-banner { visibility: hidden; }
+  .kg-door .head { display: contents; }
   .kg-door .door-inner { box-sizing: border-box; min-height: 100%; max-width: 960px; margin: 0 auto; padding: 32px 16px; display: flex; flex-direction: column; justify-content: center; align-items: center; text-align: center; }
   .kg-door h1 { margin: 0; font: 900 clamp(40px, 8vw, 76px)/1 system-ui, sans-serif; letter-spacing: 0.12em; text-transform: uppercase; text-shadow: 0 4px 24px rgba(0, 0, 0, 0.5); }
   .kg-door .tag { margin: 6px 0 22px; color: #f7b955; font-size: 18px; font-weight: 600; letter-spacing: 0.04em; }
@@ -338,9 +351,12 @@ export const DOOR_CSS = `
   .kg-door .foot .group { display: inline-flex; align-items: center; gap: 6px; }
   .kg-door .foot .lbl { color: #a6aec0; font-size: 13px; }
   .kg-door .seg { display: inline-flex; border-radius: 7px; box-shadow: inset 0 0 0 1px #3a4459; overflow: hidden; }
-  .kg-door .seg button { padding: 5px 11px; background: rgba(43, 50, 66, 0.85); border-radius: 0; }
-  .kg-door .seg button + button { border-left: 1px solid #3a4459; }
-  .kg-door .seg button.on { background: #3a4459; color: #9fc3ff; }
+  /* A segmented control: the selected side filled in the accent, the rest outlined on the panel (PT18: it was the other way round to the eye). */
+  .kg-door .seg { background: rgba(17, 20, 28, 0.6); box-shadow: inset 0 0 0 1px #4d5a75; }
+  .kg-door .seg button { padding: 5px 11px; background: transparent; color: #c7cdda; border-radius: 0; }
+  .kg-door .seg button + button { border-left: 1px solid #4d5a75; }
+  .kg-door .seg button:not(.on):hover { background: rgba(159, 195, 255, 0.12); }
+  .kg-door .seg button.on { background: #9fc3ff; color: #11141c; font-weight: 650; }
   .kg-door kbd { font: 600 11px/1 ui-monospace, monospace; padding: 2px 4px; border-radius: 3px; background: #3a4459; color: #e8ebf2; margin-right: 2px; }
   .kg-door .how { max-width: 620px; margin: 10px auto 0; padding: 14px 18px 14px 34px; border-radius: 10px; background: rgba(17, 20, 28, 0.78); text-align: left; }
   .kg-door .how li { margin: 4px 0; }
@@ -360,6 +376,27 @@ export const DOOR_CSS = `
     .kg-door .targets { display: none; }
     .kg-door .short { display: block; }
     .kg-menu kbd { display: none; }
+  }
+  /*
+   * A phone on its side (PT18): the title, tagline, Play and How to play share one row and the cards go compact,
+   * so the first screen shows whole cards (the playtest's 844 x 390 showed the title and Play and cut the first
+   * cards at their first line).
+   */
+  @media (orientation: landscape) and (max-height: 500px) {
+    .kg-door .door-inner { justify-content: flex-start; padding: 10px 16px 20px; }
+    .kg-door .head { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 4px 18px; }
+    .kg-door h1 { font-size: 30px; letter-spacing: 0.1em; }
+    .kg-door .tag { margin: 0; font-size: 15px; }
+    .kg-door .play { padding: 8px 18px; font-size: 16px; }
+    .kg-door .head .howlink { margin: 0; }
+    .kg-door .series-head { font-size: 13px; margin-top: 2px; }
+    .kg-door .cards { gap: 8px; margin: 10px 0 12px; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); }
+    .kg-door .series-head + .cards { margin-top: 6px; }
+    .kg-door .card { padding: 8px 12px; }
+    .kg-door .lname { font-size: 16px; margin-top: 3px; }
+    .kg-door .targets { display: none; }
+    .kg-door .short { display: block; margin: 6px 0; }
+    .kg-door .best { padding-top: 6px; }
   }
 `;
 

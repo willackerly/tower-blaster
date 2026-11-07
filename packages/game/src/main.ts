@@ -22,7 +22,7 @@ import { probeQuality } from './quality-probe.ts';
 import { NO_WEBGPU_HTML, webgpuMissing } from './support.ts';
 import { type GameHandle, newGameHandle, playKeystone, playLine } from './play.ts';
 import { helpHtml, installGameStyles } from './ui.ts';
-import { goalsMode } from './lot-hud.ts';
+import { goalsMode, sheetMode, sheetOpenAtLoad } from './lot-hud.ts';
 import { layoutOf } from './layout.ts';
 import { touchMode } from './touch.ts';
 
@@ -72,7 +72,7 @@ async function main() {
   const layout = layoutOf(q, settings.current.layout);
   const applyLayout = () => $('hud').classList.toggle('kg-dock', layout.hud === 'dock');
   applyLayout();
-  const door = doorMode(q), preaim = preaimMode(q), bank = bankAfterLine(q), goals = goalsMode(q);
+  const door = doorMode(q), preaim = preaimMode(q), bank = bankAfterLine(q), goals = goalsMode(q), sheetAt = sheetMode(q);
   // ?keystone.rack replaces the opening level's rack (its def, so retry keeps it); other levels keep their own.
   // The rule overrides (keystone.scoring, keystone.autobank, physics) apply to every level; stars cast on
   // another engine do not apply (onEngine).
@@ -170,7 +170,8 @@ async function main() {
       const sheet = goals === 'off' ? undefined : lotSheetOf(c.def.id);
       if (!sheet) return null;
       const shown = shownGoals(sheet, goals === 'all');
-      return shown.length || sheet.grades ? { sheet, goals: shown, before: progress.best(c.def.id, c.baseHash)?.goals ?? [] } : null;
+      const best = progress.best(c.def.id, c.baseHash);
+      return shown.length || sheet.grades ? { sheet, goals: shown, before: best?.goals ?? [], open: sheetOpenAtLoad(sheetAt, (best?.stars ?? 0) > 0) } : null;
     },
     opener: (c) => duel ? null : openerFor(c.def, inSeries(c.def.id), preaim, progress.best(c.def.id, c.baseHash) !== null),
     hooks: {
