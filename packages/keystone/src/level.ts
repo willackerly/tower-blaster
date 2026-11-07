@@ -33,8 +33,13 @@ export interface CourseOverride {
  * cube of it to the world (C8, engine-api pinned.ts): bedrock, a plinth or a curb that never moves.
  */
 export interface BlockPart { kind: 'block'; at: Vec3; size: Vec3; material: MaterialName; role?: Role; courses?: CourseOverride[]; pinned?: true }
-/** One box body; `at` is (centre x, bottom y, centre z) and `half` its half-extents, in h. `pinned` as BlockPart's. */
-export interface BoxPart { kind: 'slab' | 'rod'; at: Vec3; half: Vec3; material: MaterialName; role?: Role; pinned?: true }
+/**
+ * One box body; `at` is (centre x, bottom y, centre z) and `half` its half-extents, in h. `pinned` as BlockPart's.
+ * `fixed`: a pull cannot take it (Session.pullRefusal), as crowns and heritage; unlike a pinned part it moves and
+ * falls like any body. Undercut's table tops and beams are fixed, so a level of pulls is solved under them, not
+ * by pulling them out.
+ */
+export interface BoxPart { kind: 'slab' | 'rod'; at: Vec3; half: Vec3; material: MaterialName; role?: Role; pinned?: true; fixed?: true }
 /**
  * One box at a free pose (the build tool's piece, placement.ts): `at` is its centre in h (not cells: the
  * lattice pitch does not apply, so a piece goes exactly where it was placed), `half` its half-extents in h,
@@ -190,8 +195,12 @@ export interface LevelDef {
   launcher: LauncherDef;
   /** Leverage for the gold badge (LevelScore.gold; it gates no star since 2026-11-06, docs/game/stars.md), set from bot runs; DEFAULT_GOLD when absent. */
   lGold?: number;
-  /** Recorded solutions, replayed by tests. */
-  solutions?: { par?: Shot[]; ace?: Shot[] };
+  /**
+   * Recorded solutions, replayed by tests. `opener` is the pre-aimed first shot a first visit is offered
+   * (the door's Fire button), chosen to win the level alone (PT13: keystone-lab opener.ts); absent, the
+   * opener is the ace's or the par line's first shot.
+   */
+  solutions?: { par?: Shot[]; ace?: Shot[]; opener?: Shot };
   /** Default 'par': every level before the spectacle mode, scored as before. */
   scoring?: Scoring;
   /** Outcome levels: the cast star thresholds; absent, stars are uncast (only the objective's star). */
@@ -421,6 +430,8 @@ export interface BodyMeta {
   part: Uint16Array;
   crowns: Int32Array;
   heritage: Int32Array;
+  /** Bodies of fixed parts (BoxPart.fixed): no pull takes them. */
+  fixed: Int32Array;
 }
 
 export interface CompiledLevel {
@@ -468,7 +479,7 @@ export function compileLevel(def: LevelDef): CompiledLevel {
   const h = unitOf(def), p = pitchOf(def) * h;
   const bounce = physicsOf(def).bounce;
   const bodies: BodyDesc[] = [];
-  const roles: number[] = [], mats: number[] = [], parts: number[] = [];
+  const roles: number[] = [], mats: number[] = [], parts: number[] = [], fixed: number[] = [];
   const add = (b: BodyDesc, role: Role, material: MaterialName, part: number) => { bodies.push(b); roles.push(ROLE_ID[role]); mats.push(materialId(material)); parts.push(part); };
 
   def.parts.forEach((part, pi) => {
@@ -504,6 +515,7 @@ export function compileLevel(def: LevelDef): CompiledLevel {
       const half = part.half.map((x) => x * h) as Vec3;
       const pos: Vec3 = [part.at[0] * p, part.at[1] * h + half[1], part.at[2] * p];
       const role = part.role ?? 'plain';
+      if (part.fixed) fixed.push(bodies.length);
       add(body(pos, half, part.material, role, pi, undefined, part.pinned === true), role, part.material, pi);
     }
   });
@@ -514,6 +526,7 @@ export function compileLevel(def: LevelDef): CompiledLevel {
     half: new Float64Array(3 * n), home: new Float64Array(3 * n), band: new Uint8Array(n), part: Uint16Array.from(parts),
     crowns: Int32Array.from(roles.flatMap((r, i) => (r === ROLE_ID.crown ? [i] : []))),
     heritage: Int32Array.from(roles.flatMap((r, i) => (r === ROLE_ID.heritage ? [i] : []))),
+    fixed: Int32Array.from(fixed),
   };
   let height = 0;
   bodies.forEach((b, i) => {

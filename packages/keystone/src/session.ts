@@ -8,7 +8,7 @@ import { itemYield, levelCharges, plungerYield } from './arsenal.ts';
 import { castStars, type CompiledLevel, type Scoring, scoringOf, settleOf } from './level.ts';
 import type { IceCrack } from './ice.ts';
 import { buildingOnly, collapseFraction, floorPotential_mJ, homePotential_mJ, homeSkyline, objectiveMet, type OutcomeFacts, outcomeScore } from './outcome.ts';
-import { ammoInFlight, bellRung, crownDown, energyFired, heritageBroken, heritageFallen, leverage, levelScore, type LevelScore, levelTier, refereedScore, roundLeverage, type Observation, type Reductions, runWindowSteps, type SettleRule, type SettleState, settleCap, settleUpdate, type ShotOutcome, skyline, spillOf } from './rules.ts';
+import { ammoInFlight, bellRung, crownDown, energyFired, heritageBroken, heritageFallen, leverage, levelScore, type LevelScore, levelTier, refereedScore, roundLeverage, type Observation, type Reductions, runWindowSteps, type SettleRule, type SettleState, settleCap, settleHeld, settleUpdate, type ShotOutcome, skyline, spillOf } from './rules.ts';
 import { PULL, type RackItem } from './rack.ts';
 import { placedCost } from './build.ts';
 import { ammoKE, type PlungerShot, pullEnergy, type QuakeShot, type Shot, shotEvent } from './shots.ts';
@@ -196,7 +196,7 @@ export class Session {
 
   /**
    * Why structure body `body` cannot be pulled, or null if it can: only plain structure bodies
-   * still in the world (crowns and heritage are the objective's, never taken).
+   * still in the world (crowns and heritage are the objective's, never taken; fixed parts, BoxPart.fixed, stay).
    */
   pullRefusal(body: number): string | null {
     const m = this.level.meta;
@@ -204,6 +204,7 @@ export class Session {
     if (!Number.isInteger(body) || body < 0 || body >= m.n) return `body ${body} is not a structure body (0 to ${m.n - 1})`;
     if (m.crowns.includes(body)) return `body ${body} is a crown`;
     if (m.heritage.includes(body)) return `body ${body} is heritage`;
+    if (m.fixed.includes(body)) return `body ${body} is fixed`;
     if (this.pulled.includes(body)) return `body ${body} is already pulled`;
     if (this.cut.includes(body)) return `body ${body} was taken out by a charge`;
     return null;
@@ -378,7 +379,7 @@ export class Session {
     const total = o.red.impacts.reduce((a, x) => a + x, 0);
     if (total) out.push({ t: 'impacts', step, hist: o.red.impacts, total });
 
-    const s = settleUpdate(L.settle, o.red, L.spawnStep, this.settleRule, m.n, this.liveCollapse, L.inFlight, this.runWindow);
+    const s = settleUpdate(L.settle, o.red, L.spawnStep, this.settleRule, m.n, this.liveCollapse, settleHeld(this.settleRule, L.inFlight, hold), this.runWindow);
     L.settle = s.state;
     if (!s.settled || (hold && o.step - L.spawnStep < settleCap(this.settleRule, this.runWindow))) return out;
 
