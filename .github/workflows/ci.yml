@@ -35,8 +35,9 @@ jobs:
   test:
     name: test ${{ matrix.shard }}/8
     runs-on: ubuntu-latest
-    # A shard takes ~5-9 min (8 shards; the GPU files dominate); runners vary ~2x.
-    timeout-minutes: 20
+    # A shard takes ~10-19 min (8 shards; the GPU files dominate); runners vary ~2x, and at 20 min the slow ones
+    # were cancelled with every test passing (2026-11-07: main's shards ran 17-19 min).
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:

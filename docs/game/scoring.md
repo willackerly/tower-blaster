@@ -115,3 +115,47 @@ against the level's `mason.stars`, which are 0.9 of the recorded tier authors' p
 (`keystone-lab mason-solutions.ts masonStarsFrom`). The stamp is ROBUST, STANDS or WOBBLY. The card
 reads "c of K" from `LevelScore.worlds` (with the counts each star needs at this budget) and the budget
 from `LevelScore.mason`. No leverage, gold or heritage star loss.
+
+## Heritage on outcome levels (PT28)
+
+Agent playtest round 2 (`docs/game/agent-playtest-2.md`, PT28) found B2 "Spare the Cathedral" stamping a gold
+"18% DOWN" and giving a star and a highlighted Next to a round that broke 25 of the cathedral's 32 cubes
+(-12,500, total floored to 0). On an outcome level heritage only ever cost the third star, so a round that met
+the objective kept its first star and its gold stamp however much heritage it broke. The rule now
+(`outcomeStars`, `outcomeScore` in `packages/keystone/src/outcome.ts`):
+
+- **Broken heritage costs one star at every tier, down to none.** The stars are worked out as before (objective
+  met, T2, T3), then one comes off if any heritage broke. A round that met the objective with heritage broken
+  under T2 scores no star, so its card leads with Retry (`failedRound`) and the door still offers the level as
+  not cleared. The card says "Heritage cracked: 1 star lost" (`heritageStarsLost`).
+- **The stamp reads HERITAGE LOST** (red, `.stamp.s-heritagelost`) on any round that met its objective with
+  heritage broken, in place of the gold "N% DOWN", "N% PULLED" or BEAT THE BOT. INCOMPLETE and TOPPLED stay as
+  they are: a missed objective says so first.
+- Par levels keep their rule: heritage is one flaw (`parStars`), the gold badge needs it intact, and the golf
+  stamp stays. Rube Lab, Mason's Trial, Chorus and the fold and quake objectives already make heritage part of
+  the objective or the clear test.
+
+**What it moves, measured on B2's Metal cast** (`g5-cast-B2-s1x.json`, all 236 plays re-scored from their
+recorded ends): three stars 26 before and after; two stars 83 to 75; one star 36 to 8; none 91 to 127. Every
+play that changed broke heritage: the 28 that fell from one star to none broke 8 to 32 cubes (scores -888 to
+-13,286), and the 8 that fell from two to one broke 1 to 4. No play with the cathedral intact changed. The cast's
+gates do not move (`fair` counts the objective met, `skill` and `stable` the T2/T3 thresholds on the score), so
+B2's stars and hash stand; the thresholds still separate the same plays. B2's showcase line spares the
+cathedral on the GPU solver it was cast on (`big-levels-gpu.test.ts` now asserts heritage 0 on a real GPU; round
+2's "the line cracks 3" was the line replayed on Rapier, where that round played the big levels).
+
+**Tests:** `packages/keystone/test/scoring.test.ts` (PT28: B2's novice round, one cracked cube at every tier,
+INCOMPLETE kept), `outcome.test.ts` (the star table), `packages/game/test/hud.test.ts` (the B2 card: red stamp,
+red line, no star, Retry primary).
+
+### Alternatives considered
+
+- **Heritage caps the round at one star** (what `spectacle-mode.md` first specified). It still gives B2's
+  novice a star and a forward button for flattening the cathedral, which is the complaint, and it treats one
+  cracked cube like 32.
+- **Heritage intact as part of the objective** (as the fold and quake objectives do). Any crack would make B2
+  INCOMPLETE. On a 5,184-cube plaster town, 4 of 16 nudges of the best line (`g5-check-b2-line.json`) crack 4 to
+  31 cubes, so one stray cube would cost the whole round; it would also move the cast's `fair` gate (share
+  meeting the objective), which would mean recasting B2 on the Mac.
+- **A second star off past N cracks.** It would grade the damage, but there is no evidence for any particular N,
+  and the tally's -500 a cube already grades it in points (B2 stars by score).
