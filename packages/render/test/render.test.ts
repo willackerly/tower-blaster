@@ -539,6 +539,17 @@ describe('sparks', () => {
     expect(r.g1.rim - r.g0.rim, msg).toBeGreaterThan(20);
   });
 
+  it('the keep (PT33): under the full grade a crown box and a fired ball keep their colour while plain boxes drain; keep off drains all', async (ctx) => {
+    if (!gpu) return ctx.skip();
+    const r = await call('frozenKeepFrames');
+    expect(r.error).toBeNull();
+    const msg = JSON.stringify(r);
+    for (const b of [0, 1, 2, 3]) expect(r.g0[b], msg).toBeGreaterThan(0.3); // every body in view, in colour
+    for (const b of [0, 3]) expect(r.kept[b], msg).toBeGreaterThan(0.85 * r.g0[b]!); // the crown, the fired ball
+    for (const b of [1, 2]) expect(r.kept[b], msg).toBeLessThan(0.6 * r.g0[b]!); // plain boxes
+    for (const b of [0, 1, 2, 3]) expect(r.off[b], msg).toBeLessThan(0.6 * r.g0[b]!);
+  });
+
   it('streaks show where a burst projects, nowhere else, and not through a wall', async (ctx) => {
     if (!gpu) return ctx.skip();
     const r = await call('sparkDraw');

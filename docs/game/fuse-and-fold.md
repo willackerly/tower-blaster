@@ -38,6 +38,32 @@ A fold level ships only if, over 8 nudged builds on the reference engine, the be
 - Markers on the charges' columns, coloured by delay (yellow at 0 s through orange to red at 2 s), so the sweep reads in the scene. The selected row's marker is larger.
 - **Plunger** (button, key Enter) fires every charge at its delay. The camera does not move (Will's rule: only on player input).
 
+### Panel layout (agent playtest round 2, PT21)
+
+In round 2 the panel covered the result card on 9- and 12-charge levels at desktop size, and on every phone run. On F4 at phone size, its 12 rows also pushed the Plunger off the screen. The layout rules now:
+
+- **The card owns the screen at the result.** The panel hides while the card shows (`body.ended`): the plunger has fired by then, so the panel has nothing left to do. Undo or Retry brings it back. The card also gets `z-index: 5`, so it stays above every panel.
+- **Only the rows scroll.** The panel is a flex column, and only `.rows` scrolls. The head (compass), the Sweep buttons, the spacing and the Plunger stay in sight at any panel height.
+- **Phones fold the rows.** On a phone (`max-width: 640px`, or `max-height: 500px` on its side), the per-charge rows hide behind a "Delays ▸ N charges" button, and the eight directions sit in one row. The Sweep sets every delay, so most rounds never open the rows.
+- **Upright, the panel stands on the HUD's tray.** On a docked phone HUD (`FusePanel.dock`, set each frame by `play.ts placeFuse`) it sits on the tray and its hints, which hold the rack, Undo and Retry, instead of covering them. It is capped at `FUSE_PANEL_SHARE` of the height, now 35% (it was 45%). When the HUD is not docked (Layout classic), the upright framing still uses that share as its guess for the panel's band.
+- **Sideways, the panel runs down the right side** under the Menu button, 300 px wide. The docked HUD's rail is on the left.
+- **The opening view frames around the panel.** On a docked phone, the measured band (`dockedHud`, `__game.openingHud`) includes the panel's box. The opening view then frames the lot clear of it, set at load with no camera move.
+
+Alternatives considered:
+
+- **Raise the card above the panel and leave the panel shown.** Rejected: on a phone the panel would still sit under the card's edges and take taps meant for the scene. A panel left showing after the plunger has fired also only invites a press that the game refuses.
+- **A sticky Plunger inside one scrolling panel.** Tried first. It needs an opaque backing so the rows do not show through it, and that backing reads as a dark band against the translucent panel. The flex column does the same job without a backing.
+- **Hide the docked tray on plunger levels.** Rejected: the tray holds Undo, Retry and the rack's chip, and the round needs them.
+- **Make the rows smaller instead of folding them.** Rejected: 12 rows at a usable touch height do not fit in a third of a phone screen. Folding keeps them full size when the player opens them.
+
+`packages/game/test/fuse-layout-e2e.test.ts` checks these rules:
+
+- F4 at 1280 x 800, at 390 x 844 and at 844 x 390. At load, the Plunger is inside the screen and on top at its centre. At the result, the panel is gone, and every card button, Next included, is inside the screen and on top. After Retry, the Plunger is back.
+- F2, F4 and F5 upright. The Plunger is in sight with the rows folded, with them unfolded, and after scrolling to the last row. The panel is under the strip, on the tray, at most 35% of the height, and inside the opening view's band.
+- F4 sideways. The panel is on the right, inside the band.
+
+All seven cases fail on the old layout.
+
 ## Every charge fires
 
 A fold level's plunger must name every plunger charge (`Session.plungerRefusal`). Alternatives weighed:

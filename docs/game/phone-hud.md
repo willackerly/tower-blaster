@@ -71,6 +71,8 @@ A level with a build phase (trial T-W1 Domino Workshop, [placement.md](placement
 
 Measured (browser test, 1x): upright the building panel is 374 x 255 px at the bottom (30% of the height), clear of the strip (top 65 px) and Menu; sideways 340 x 318 px at the right, clear of the 220 px rail. The Build button is 61 x 56 px at (321, 64) upright and (775, 64) sideways, clear of the strip, rail, tray and Menu. `game/test/phone-door-build-e2e.test.ts` checks every box inside the screen and apart, Play and Cancel on top, a tap in the free band still placing a piece, and Play bringing the tray back, at 390 x 844 and 844 x 390. Layout Classic (`keystone.hud=panel`) keeps C9's own placement (top right, or docked at the bottom under 640 px wide).
 
+Mason's Trial (M8, [masons-trial.md](masons-trial.md)) adds two buttons to the panel's turn row only when the held piece slides (Slide back / Slide out, with a plank or slab held) and puts its Test button in the tray's slot; `game/test/mason-e2e.test.ts` checks both on the docked phone, upright and sideways.
+
 Alternatives: the panel above the tray (both visible) left about a third of an upright screen to build on, for a tray that does nothing while building; a collapsible panel (a Build chip that opens a sheet) hid Play and the tools behind a tap on every placement; the panel inside the HUD element (a third group) would put the editor's markup into the HUD's per-frame string, which the viewer and every HUD test read.
 
 ## Not done here

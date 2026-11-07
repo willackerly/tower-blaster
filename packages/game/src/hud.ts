@@ -105,8 +105,10 @@ export interface HudState {
   skipping?: boolean;
   /** The slow-motion tag while physics runs slower than real time ('80% speed'; pacing.ts slowTag), '' or absent at real time. */
   pace?: string;
-  /** The level's pre-aimed opening shot can be fired now (the Fire button, key F). */
+  /** The level's pre-aimed opening shot can be fired now (the Fire button, key F); on a Mason level, its Test can start. */
   opener?: boolean;
+  /** Mason's Trial: how the test stands (trialText), in the objective's place. Absent elsewhere. */
+  trial?: string;
   /** A duel's block (duel-hud.ts duelHudHtml): it replaces the objective, crowns, heritage and leverage rows. */
   duel?: string;
   /** Outcome levels: the star thresholds on the Down (or Pulled) bar (meterTicks); no bar without any. */
@@ -163,6 +165,20 @@ export const touchActs = (strokes: number) => {
 export const OPENER_BUTTON = '<button data-act="opener" class="opener"><kbd>F</kbd> Fire the first shot</button>';
 /** Rube Lab's opener (docs/game/rube-lab.md): the plunger that opens the trapdoor, the only shot such a level has. */
 export const GO_BUTTON = '<button data-act="opener" class="opener go"><kbd>F</kbd> Go: release the ball</button>';
+/** Mason's Trial's opener (docs/game/masons-trial.md): the level's test, run on the build as it stands. */
+export const TEST_BUTTON = '<button data-act="opener" class="opener go"><kbd>F</kbd> Test the build</button>';
+
+/**
+ * Mason's Trial's status row: before the test, what it will do; while world 0 runs; while the judge finishes its
+ * worlds; then world 0's verdict beside the judge's count (they need not agree: islands.md, decision 6).
+ */
+export function trialText(t: { state: 'running' | 'judging' | 'done' | 'error'; hero: boolean | null; passes: number | null; of: number } | null, K: number): string {
+  if (!t) return `build, then test it in ${K} worlds`;
+  if (t.state === 'running') return `testing: you watch world 1 of ${t.of}`;
+  if (t.state === 'judging') return `judging the other ${t.of - 1} worlds…`;
+  if (t.state === 'error') return 'the judge could not run';
+  return `${t.hero ? 'stood' : 'failed'} here · stood in ${t.passes} of ${t.of}`;
+}
 
 /** Power changes by this (percent) per key press (Q, E) or tap of a power button. */
 export const POWER_STEP = 10;
@@ -232,7 +248,7 @@ export const BANK_BUTTON = '<button data-act="bank" class="bank"><kbd>B</kbd> Ba
 export const BANK_QUIET = '<button data-act="bank" class="bank quiet" title="Ends the level now: the objective is not met yet, so no star"><kbd>B</kbd> Bank</button>';
 
 /** What the HUD's action slot offers now: one button, always in the same place (docs/game/phone-hud.md). */
-export type SlotAction = 'freeze' | 'resume' | 'skip' | 'skipping' | 'opener' | 'go' | 'bank' | null;
+export type SlotAction = 'freeze' | 'resume' | 'skip' | 'skipping' | 'opener' | 'go' | 'test' | 'bank' | null;
 
 /**
  * The action slot's button, by priority: Resume while frozen, Freeze while a running shot can be, Skip
@@ -247,7 +263,7 @@ export function slotAction(s: Pick<HudState, 'level' | 'opener' | 'canBank' | 'f
   if (s.freezes?.can) return 'freeze';
   if (s.canSkip) return 'skip';
   if (s.skipping) return 'skipping';
-  if (s.opener) return s.level.rube ? 'go' : 'opener';
+  if (s.opener) return s.level.mason ? 'test' : s.level.rube ? 'go' : 'opener';
   if (s.canBank && scoringOf(s.level) === 'outcome') return 'bank';
   return null;
 }
@@ -260,6 +276,7 @@ const SLOT_NOTE: Record<Exclude<SlotAction, null>, string> = {
   skipping: '',
   opener: '<span class="kg-desk">or aim and click</span><span class="kg-tch">or drag and lift</span>',
   go: 'the contraption runs from here',
+  test: 'every world plays it: the score is how many stand',
   bank: 'end here, keep the rack',
 };
 
@@ -285,6 +302,7 @@ export function slotHtml(act: SlotAction, s: Pick<HudState, 'canSkip' | 'met'>):
     case 'skipping': return SKIPPING;
     case 'opener': return OPENER_BUTTON;
     case 'go': return GO_BUTTON;
+    case 'test': return TEST_BUTTON;
     case 'bank': return s.met ? BANK_BUTTON : BANK_QUIET;
     default: return '';
   }
@@ -300,8 +318,9 @@ export function hudHtml(s: HudState, sheet = ''): string {
   const onlyQuake = s.chips.length === 1 && sel === 'quake' && s.quake ? ' only-quake' : '';
   // The power bar, with minus and plus buttons on a touch screen (keys Q and E).
   // A plunger aims at nothing (the timeline sets it): no power, no launcher height. A quake has its own designer instead.
-  const power = sel === 'drop' || sel === 'pull' || sel === 'plunger' || sel === 'quake' ? (sel === 'quake' ? s.quake ?? '' : '') : `<div class="row"><span>Power <kbd>Q</kbd><kbd>E</kbd></span><span class="power">${POWER_STEP_BUTTON(-POWER_STEP)}<span class="bar"><i style="width:${s.power}%"></i></span>${POWER_STEP_BUTTON(POWER_STEP)}</span></div>`;
-  const height = sel === 'drop' || sel === 'pull' || sel === 'plunger' || sel === 'quake' || s.launch === undefined ? '' : launchRow(s.launch);
+  // A Mason level fires nothing (its test is the shot): no power or height.
+  const power = d.mason ? '' : sel === 'drop' || sel === 'pull' || sel === 'plunger' || sel === 'quake' ? (sel === 'quake' ? s.quake ?? '' : '') : `<div class="row"><span>Power <kbd>Q</kbd><kbd>E</kbd></span><span class="power">${POWER_STEP_BUTTON(-POWER_STEP)}<span class="bar"><i style="width:${s.power}%"></i></span>${POWER_STEP_BUTTON(POWER_STEP)}</span></div>`;
+  const height = d.mason || sel === 'drop' || sel === 'pull' || sel === 'plunger' || sel === 'quake' || s.launch === undefined ? '' : launchRow(s.launch);
   const reach = s.pullRefused ? `<div class="${s.pullRefused === 'tapped' ? 'bad' : 'hint'} small pull-hint">${d.cut && s.phase !== 'running' ? CUT_HINT : PULL_HINT}</div>` : s.reachable === false ? '<div class="bad small reach">Out of reach at this power</div>' : '';
   const ctl = `<div class="ctl">${power}${height}</div>`;
   const pace = s.pace ? ` <span class="pace" title="physics is running slower than real time">${esc(s.pace)}</span>` : '';
@@ -315,14 +334,16 @@ export function hudHtml(s: HudState, sheet = ''): string {
     </div>`;
   }
   const outcome = scoringOf(d) === 'outcome';
-  const head = outcome
+  const head = d.mason
+    ? `<div class="row obj trial"><span>Test</span><span>${esc(s.trial ?? '')}</span></div>`
+    : outcome
     ? `<div class="row"><span>Shot ${s.strokes}</span>${d.objective.kind === 'hold' ? `<span>Pulled <b class="down${(s.pulled ?? 0) > 0 ? '' : ' none'}">${pct(s.pulled ?? 0)}</b></span>` : `<span>Down <b class="down${(s.collapse ?? 0) > 0 ? '' : ' none'}">${pct(s.collapse ?? 0)}</b></span>`}</div>
     ${s.ticks?.length ? meterHtml(d.objective.kind === 'hold' ? s.pulled ?? 0 : s.collapse ?? 0, s.ticks, d.objective.kind === 'hold' ? 'pulled' : 'down') : ''}
     <div class="row obj"><span>Objective</span><span class="${s.met ? 'ok' : ''}">${esc(objectiveText(d.objective))}${s.met ? ' ✓' : ''}</span></div>`
     : `<div class="row"><span>Par ${d.par}</span><span>Stroke ${s.strokes}</span></div>${d.objective.kind === 'collapse' ? parCollapseRow(d.objective.min, s) : ''}${d.push?.length && s.strokes === 0 ? `<div class="hint small push-hint">${PUSH_HINT}</div>` : ''}`;
   const fz = s.freezes;
   const freezes = fz ? `<div class="row"><span>Freezes</span><span class="${fz.left ? '' : 'spent'}">${fz.left} / ${fz.total}</span></div>` : '';
-  const crowns = d.objective.kind === 'hold' ? keepRow(s.crownsDown, s.crownsTotal)
+  const crowns = d.mason ? '' : d.objective.kind === 'hold' ? keepRow(s.crownsDown, s.crownsTotal)
     : s.crownsTotal ? `<div class="row"><span>${d.objective.kind === 'quake' ? 'Condemned down' : 'Crowns'}</span><span class="crowns">${s.crownsDown} / ${s.crownsTotal}</span></div>` : '';
   const act = slotAction(s);
   const button = slotHtml(act, s);
@@ -332,13 +353,13 @@ export function hudHtml(s: HudState, sheet = ''): string {
     ${d.custom ? `<div class="small custom">${CUSTOM_NOTE}</div>` : ''}
     ${head}
     ${crowns}
-    ${heritage}
+    ${d.mason ? '' : heritage}
     ${freezes}
-    ${leverageRow(s.strokes, s.leverage)}
+    ${d.mason ? '' : leverageRow(s.strokes, s.leverage)}
     ${sheet}
     </div><div class="tray">
     <div class="chips${onlyQuake}">${chips}</div>
-    ${ctl}<div class="above">${reach}${s.strokes > 0 ? '' : `<div class="tch-hint">${TOUCH_HELP}</div>`}</div>
+    ${ctl}<div class="above">${reach}${s.strokes > 0 || d.mason ? '' : `<div class="tch-hint">${TOUCH_HELP}</div>`}</div>
     ${slot}
     </div>`;
 }
@@ -367,6 +388,20 @@ export function tierLabel(L: number, level: LevelDef): string {
  * A par level's gold-leverage badge under the stars (keystone LevelScore.gold): earned, or once cleared the line
  * still to reach. Leverage gates no star; this is what it earns. Nothing on outcome levels or before a clear.
  */
+/** A Mason card's sub line (rules.ts masonScore): the worlds the build stood in, and what it cost. */
+export function masonSub(score: LevelScore): string {
+  const w = score.worlds!, m = score.mason!;
+  return `stood in ${w.cleared} of ${w.of} worlds · spent ${m.budget - m.left} of ${m.budget}`;
+}
+
+/** Under a Mason card's stars: how many worlds the next star needs at this build's cost (masonThresholds), or that it is out of reach at this cost. */
+export function masonStarsHtml(score: LevelScore, delay = 0): string {
+  const w = score.worlds!, next = score.stars < 3 ? w.thresholds[score.stars as 0 | 1 | 2] : null;
+  if (next === null) return '';
+  const text = next > w.of ? `★${score.stars + 1} needs a cheaper build` : `★${score.stars + 1} at ${next} of ${w.of} worlds`;
+  return `<div class="gold" style="animation-delay:${delay}s">${text}</div>`;
+}
+
 export function goldHtml(level: LevelDef, score: LevelScore, delay = 0): string {
   if (scoringOf(level) !== 'par' || score.stars === 0) return '';
   const line = fmtLeverage(level.lGold ?? DEFAULT_GOLD);
@@ -426,7 +461,8 @@ export function tallyHtml(level: LevelDef, score: LevelScore | null, over: strin
 export function resultHtml(level: LevelDef, score: LevelScore | null, strokes: number, forward: boolean | CardForward, canSave = false, extra = '', canUndo = false): string {
   const outcome = scoringOf(level) === 'outcome';
   // A Rube Lab level's one plunger is no stroke to count: its line is the parts used against the parts par.
-  const shotsText = score?.parts ? `parts ${score.parts.used} / par ${score.parts.par}` : `${strokes} ${outcome ? 'shot' : 'stroke'}${strokes === 1 ? '' : 's'}${outcome ? '' : ` · par ${level.par}`}`;
+  // A Mason level has no shots at all: its line is the worlds the build passed in and the budget it spent (masonSub).
+  const shotsText = score?.worlds && score.mason ? masonSub(score) : score?.parts ? `parts ${score.parts.used} / par ${score.parts.par}` : `${strokes} ${outcome ? 'shot' : 'stroke'}${strokes === 1 ? '' : 's'}${outcome ? '' : ` · par ${level.par}`}`;
   const actions = cardActions(score, strokes, forward, canSave, canUndo);
   if (!score) {
     return `<div class="c1">
@@ -444,14 +480,14 @@ export function resultHtml(level: LevelDef, score: LevelScore | null, strokes: n
   return `<div class="c1">
     <div class="name">${esc(playerName(level))}</div>
     ${level.custom ? `<div class="sub custom">${CUSTOM_NOTE}</div>` : ''}
-    <div class="sub">${shotsText}${'outcome' in score && level.objective.kind !== 'hold' ? ` · ${pct((score as { outcome: { collapse: number } }).outcome.collapse)} down` : ''} · leverage ${fmtLeverage(score.leverage)}${tierText ? ` (${tierText})` : ''}${fz}</div>
+    <div class="sub">${shotsText}${'outcome' in score && level.objective.kind !== 'hold' ? ` · ${pct((score as { outcome: { collapse: number } }).outcome.collapse)} down` : ''}${score.mason ? '' : ` · leverage ${fmtLeverage(score.leverage)}${tierText ? ` (${tierText})` : ''}`}${fz}</div>
     ${lines}
     <div class="line total" style="animation-delay:${after}s" title="The lines' sum, never below 0"><span>Total</span><span>${fmtPoints(score.total)}</span></div>
     </div><div class="c2">
     <div class="stamp s-${score.stamp.replace(/[^A-Z]/g, '').toLowerCase()}" style="animation-delay:${after + 0.3}s">${esc(score.stamp)}</div>
     <div class="stars" style="animation-delay:${after + 0.55}s">${starsText(score.stars)}</div>
     ${lost}
-    ${goldHtml(level, score, after + 0.8)}
+    ${score.mason ? masonStarsHtml(score, after + 0.8) : goldHtml(level, score, after + 0.8)}
     ${extra}
     ${actions}
     </div>`;

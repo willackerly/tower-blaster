@@ -3,7 +3,7 @@
 // camera-relative; the shading reads its colours and lights from the Frame
 // uniform (LookParams), so presets are data.
 import { defineStruct, FxState, RenderRecord, Spark, wgslStruct } from '@tb/schema';
-import { BAND_HALF, FX_BAND, FX_EMISSIVE_MAX, FX_MATTE, FX_PAINT, FX_WGSL, XRAY_EDGE, XRAY_FILL, XRAY_HIT, XRAY_SAVE, XRAY_SHIFT } from './fx.ts';
+import { BAND_HALF, FX_BAND, FX_EMISSIVE_MAX, FX_MATTE, FX_PAINT, FX_WGSL, KEEP_ALPHA, XRAY_EDGE, XRAY_FILL, XRAY_HIT, XRAY_SAVE, XRAY_SHIFT } from './fx.ts';
 import { BEVEL_WGSL, OKLAB_WGSL, WARM_AXIS } from './look.ts';
 import { MARKS_WGSL } from './marks.ts';
 import { ASLEEP_BLUE, LOOK_ASLEEP } from './looks.ts';
@@ -771,7 +771,7 @@ const REAL_FS_BOX = /* wgsl */ `fragPx = v.clip.xy;
     // keeps GILT_GLOW of it; a flash (a felled crown) glows in full.
     let steadyGilt = coat == ${COAT_GILT}u && bitcast<f32>(w.w) <= 0.0;
     c += base * seam * fxGlow(w, fr.time) * select(1.0, ${GILT_GLOW}, steadyGilt);
-    return vec4f(fog(asleepCast(v.look, c), v.rel), 1.0);
+    return vec4f(fog(asleepCast(v.look, c), v.rel), fxKeep(w.y));
   }
   `;
 
@@ -1281,7 +1281,7 @@ fn boxFace(local: vec3f, w: vec3f) -> vec3f {
   var c = shade(base * seam, v.rel, n, aaAlpha(rough * rough, n, dndx, dndy), aaAlpha(0.0049, n, dndx, dndy), select(0.0, fr.clearcoat, isCandy), aoBox(v, n, lp, faceN, aoPxM));
   c += base * seam * fxGlow(w, fr.time);
   c += heatGlow(v.slot, base, edgeM / max(min(v.half.x, min(v.half.y, v.half.z)), 1e-6));
-  return vec4f(fog(asleepCast(v.look, c), v.rel), 1.0);
+  return vec4f(fog(asleepCast(v.look, c), v.rel), fxKeep(w.y));
 }
 
 // Heat from hard hits and ball contact (sparks.ts), scaled down when many
@@ -1332,7 +1332,7 @@ fn heatGlow(slot: u32, base: vec3f, edge: f32) -> vec3f {
   let NoV = max(dot(n, normalize(-v.rel)), 0.0);
   // The look's ball glow takes the paint, not the band: a glowing white band would clip flat in a look with a strong glow (candy).
   c += select(vec3f(0.0), select(fr.ball, own * fxTint(w.x), paint) * (1.0 - band) * fr.ballEmissive * (0.35 + 0.65 * NoV), isBall && !matte);
-  return vec4f(fog(asleepCast(v.look, c), v.rel), 1.0);
+  return vec4f(fog(asleepCast(v.look, c), v.rel), fxKeep(w.y));
 }
 
 // Overlay spheres (setOverlay): not bodies, no shadows; slot = overlay index.
@@ -1350,7 +1350,7 @@ fn heatGlow(slot: u32, base: vec3f, edge: f32) -> vec3f {
   let base = pow(unpack4x8unorm(col).rgb, vec3f(2.2));
   var c = shade(base, v.rel, n, aaAlpha(0.04, n, dndx, dndy), aaAlpha(0.0049, n, dndx, dndy), 0.5, aoAt(aoView(), v.rel, n, v.rel, vec3f(0.0)));
   c += base * f32(col >> 24u) / 255.0 * ${FX_EMISSIVE_MAX}.0;
-  return vec4f(fog(c, v.rel), 1.0);
+  return vec4f(fog(c, v.rel), ${KEEP_ALPHA}.0); // the aim's beads: kept in colour under the frozen grade (fx.ts KEEP_ALPHA)
 }
 
 // The objectives through what hides them (Renderer.xray, keystone.xray): a crown's or heritage box's faces where

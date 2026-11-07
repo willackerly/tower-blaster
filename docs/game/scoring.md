@@ -72,6 +72,11 @@ no tier banner: there is no badge there to measure against.
   where lower is better (`lowerIsBetter`, shared with skyline by `atLeast`, beat-the-bot and
   `checkStars`). A quake's energy is computed from the shot, so the star lines read the same on every
   engine. Tiers and the gold badge do not apply: quake levels have no `lGold`.
+- **Aftershock's retrofits** (M7b, docs/game/aftershock.md "Retrofit") have no condemned towers, so no
+  Condemned line; when the objective is met a **Budget left** line pays 10 a block unspent
+  (`OUTCOME_WEIGHTS.budgetLeft`). Stars are on `metric: 'built'`, the blocks placed (`placedCost`,
+  `OutcomeFacts.built`), lower is better. A build level's stars and the game's progress are kept
+  against the level as authored (`CompiledLevel.baseHash`), not the level as built.
 
 ## Duels
 

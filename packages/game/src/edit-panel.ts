@@ -1,11 +1,11 @@
 // Edit mode's panel (C9, docs/game/placement.md): enter and leave edit mode,
-// Play, the tools (place, domino brush, erase), what to place, turn, tip, undo,
+// Play, the tools (place, domino brush, erase), what to place, turn, tip, slide, undo,
 // clear and snap, and one status line. Rendering is a pure function of the
 // controller's state (editHtml); the page owns the actions.
 import type { EditController, EditTool } from './edit.ts';
 
 export type EditAction =
-  | { a: 'enter' } | { a: 'play' } | { a: 'cancel' } | { a: 'undo' } | { a: 'clear' } | { a: 'turn'; deg: number } | { a: 'tip' }
+  | { a: 'enter' } | { a: 'play' } | { a: 'cancel' } | { a: 'undo' } | { a: 'clear' } | { a: 'turn'; deg: number } | { a: 'tip' } | { a: 'slide'; d: -1 | 1 }
   | { a: 'tool'; tool: EditTool } | { a: 'item'; item: string } | { a: 'snap'; on: boolean };
 
 const esc = (s: string) => s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]!);
@@ -25,6 +25,7 @@ export function editHtml(e: EditController | null, keys = true): string {
     + `<div class="buttons">${tools}</div>`
     + `<div class="buttons items">${items}</div>`
     + `<div class="buttons"><button type="button" data-a="turn" data-deg="-90">Turn left${k('Q')}</button><button type="button" data-a="turn" data-deg="90">Turn right${k('E')}</button><button type="button" data-a="tip">Tip${k('T')}</button>`
+    + (e.tool === 'place' && e.session.slideMax(e.hold) > 0 ? `<button type="button" data-a="slide" data-d="-1" title="Move the piece back along its length, off the point">Slide back${k('[')}</button><button type="button" data-a="slide" data-d="1" title="Move the piece out along its length, so it can reach past an edge">Slide out${k(']')}</button>` : '')
     + `<button type="button" data-a="undo"${e.session.canUndo ? '' : ' disabled'}>Undo${k('Z')}</button><button type="button" data-a="clear">Clear</button></div>`
     + `<label class="snap"><input type="checkbox" name="snap"${e.snap ? ' checked' : ''}> snap to faces and the grid${keys ? '<span class="kg-desk"> (Alt: off while held)</span>' : ''}</label>`
     + `<div class="out${e.ghost && !e.ghost.ok ? ' warn' : ''}">${esc(e.status())}</div>`;
@@ -41,6 +42,7 @@ export function mountEditPanel(el: HTMLDetailsElement, act: (a: EditAction) => v
     if (a === 'tool') act({ a, tool: b.dataset.tool as EditTool });
     else if (a === 'item') act({ a, item: b.dataset.item! });
     else if (a === 'turn') act({ a, deg: Number(b.dataset.deg) });
+    else if (a === 'slide') act({ a, d: Number(b.dataset.d) < 0 ? -1 : 1 });
     else if (a === 'enter' || a === 'play' || a === 'cancel' || a === 'undo' || a === 'clear' || a === 'tip') act({ a });
   });
   body.addEventListener('change', (ev) => {
@@ -63,6 +65,7 @@ export function applyEditAction(e: EditController, x: EditAction): boolean {
     case 'clear': return e.clear();
     case 'turn': return e.key(x.deg < 0 ? 'q' : 'e');
     case 'tip': return e.key('t');
+    case 'slide': return e.slide(x.d);
     case 'tool': e.setTool(x.tool); return true;
     case 'item': e.select(x.item as Parameters<EditController['select']>[0]); return true;
     case 'snap': e.snap = x.on; return true;
