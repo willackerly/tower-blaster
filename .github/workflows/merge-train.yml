@@ -1,0 +1,92 @@
+name: merge-train
+# Lands PRs labelled `merge-ready` one at a time (O6, docs/ci/merge-train.md): test main with the PR merged in
+# (ci.yml through workflow_call, so the very tree that lands), merge only if neither sha moved, then start the next.
+# One concurrency group serialises the runs. GitHub keeps one pending run per group and drops the others, so a run
+# is only a nudge: every run picks from the labelled PRs afresh, and each ends by dispatching the next while any
+# remain. The schedule restarts the train if a run died without doing that.
+on:
+  pull_request_target:
+    types: [labeled]
+  workflow_dispatch:
+  schedule:
+    - cron: '17,47 * * * *'
+
+concurrency:
+  group: merge-train
+  cancel-in-progress: false
+
+permissions: {}
+
+jobs:
+  pick:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write
+    outputs:
+      pr: ${{ steps.pick.outputs.pr }}
+      base_ref: ${{ steps.pick.outputs.base_ref }}
+      base_sha: ${{ steps.pick.outputs.base_sha }}
+      head_sha: ${{ steps.pick.outputs.head_sha }}
+    steps:
+      # The default branch (every trigger here checks it out): the train's own code, never the PR's; it only
+      # reads PR heads with git merge-tree.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - id: pick
+        run: pnpm exec tsx packages/testkit/src/merge-train-cli.ts pick
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+
+  ci:
+    needs: pick
+    if: ${{ needs.pick.outputs.pr != '' }}
+    permissions:
+      contents: read
+    uses: ./.github/workflows/ci.yml
+    with:
+      base_sha: ${{ needs.pick.outputs.base_sha }}
+      head_sha: ${{ needs.pick.outputs.head_sha }}
+
+  # Runs after CI whatever its result, also when the run is cancelled or CI times out, so the label never stays on
+  # a PR that nothing is testing.
+  land:
+    needs: [pick, ci]
+    if: ${{ always() && needs.pick.outputs.pr != '' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      actions: write
+      contents: write
+      issues: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm exec tsx packages/testkit/src/merge-train-cli.ts land
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          PR: ${{ needs.pick.outputs.pr }}
+          BASE_REF: ${{ needs.pick.outputs.base_ref }}
+          BASE_SHA: ${{ needs.pick.outputs.base_sha }}
+          HEAD_SHA: ${{ needs.pick.outputs.head_sha }}
+          CI_RESULT: ${{ needs.ci.result }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
