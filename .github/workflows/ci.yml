@@ -3,10 +3,21 @@ on:
   push:
     branches: [main]
   pull_request:
+  # The merge train (merge-train.yml, docs/ci/merge-train.md): main at base_sha with the PR's head_sha merged in,
+  # the tree the train then lands.
+  workflow_call:
+    inputs:
+      base_sha:
+        type: string
+        required: true
+      head_sha:
+        type: string
+        required: true
 
-# A new push to a PR cancels that PR's run still in progress; main's runs all finish.
+# A new push to a PR cancels that PR's run still in progress; main's runs all finish. A train run has a group of
+# its own, so it never queues behind (or displaces) main's.
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ci-${{ inputs.head_sha && format('train-{0}', inputs.head_sha) || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
@@ -16,6 +27,16 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.base_sha }}
+          fetch-depth: ${{ inputs.head_sha && '0' || '1' }}
+      - name: Merge the PR into main (merge train)
+        if: ${{ inputs.head_sha }}
+        env:
+          HEAD_SHA: ${{ inputs.head_sha }}
+        run: |
+          git fetch --no-tags --quiet origin "$HEAD_SHA"
+          git -c user.name=merge-train -c user.email=merge-train@users.noreply.github.com merge --no-ff --no-edit "$HEAD_SHA"
       - uses: pnpm/action-setup@v4
         with:
           version: 10
@@ -52,6 +73,16 @@ jobs:
       REQUIRE_WEBGPU: '1'
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.base_sha }}
+          fetch-depth: ${{ inputs.head_sha && '0' || '1' }}
+      - name: Merge the PR into main (merge train)
+        if: ${{ inputs.head_sha }}
+        env:
+          HEAD_SHA: ${{ inputs.head_sha }}
+        run: |
+          git fetch --no-tags --quiet origin "$HEAD_SHA"
+          git -c user.name=merge-train -c user.email=merge-train@users.noreply.github.com merge --no-ff --no-edit "$HEAD_SHA"
       - uses: pnpm/action-setup@v4
         with:
           version: 10
