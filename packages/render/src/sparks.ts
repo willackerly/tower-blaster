@@ -22,6 +22,13 @@
 // (thrown, bouncing, 1.5 to 3.5 s); each kind has a spawn budget per
 // frame, so a collapse costs at most the two rings' draws.
 //
+// Ice (PT38): an impact on a body whose surface is ice (surface.ts; the
+// detector reads the surface words) carries MATERIAL_ICE in its material
+// bits, and every particle it spawns carries ICE_BIT (packed bit 13, taken
+// from the seed): the shaders draw those as cold glittering shards, white
+// and blue chips and frost powder instead of hot sparks, stone and soil.
+// The rings, budgets and token buckets are the same for every material.
+//
 // Drawn as screen-space streaks in the scene pass (shaders.ts). Every
 // pool slot is drawn and dead ones collapse in the vertex shader, so the
 // cost is constant. spawnReference and stepReference are the CPU twins.
@@ -31,10 +38,22 @@
 import { Body, FxState, ImpactEvent, Shape, Spark, TIER, wgslStruct } from '@tb/schema';
 import { MAX_STEP_JUMP } from './cull.ts';
 import { MATERIAL } from './looks.ts';
+import { SURFACE_ICE } from './surface.ts';
 import type { BodySource } from './source.ts';
 import type { V3 } from './math.ts';
 
 export const SPARK_POOL = 65536;
+/**
+ * An impact event's material for a body whose surface is ice (bits 28-31 of ImpactEvent.packed). Only events
+ * carry it: ice is a surface, not a look. It is the material nibble's top bit, which the look buffer never
+ * holds (looks.ts: the low 3 bits are the material, bit 15 is LOOK_ASLEEP, set only in the cull's records), so
+ * no look material can be read as ice.
+ */
+export const MATERIAL_ICE = 8;
+/** A particle spawned by an ice impact (Spark.packed bit 13, which is otherwise a seed bit and cleared). */
+export const ICE_BIT = 1 << 13;
+/** Whether a particle's packed word marks it as ice debris. */
+export const isIceParticle = (packed: number): boolean => (packed & ICE_BIT) !== 0;
 export const MAX_EVENTS = 1024;
 export const SPAWN_BUDGET = 8192;
 export const MAX_PER_EVENT = 512;
@@ -205,13 +224,15 @@ fn newSpark(e: ImpactEvent, j: u32, frame: u32, speedMin: f32, speedMax: f32) ->
 
 // Classic: random bits 8-31 but bit 12 (unscaled). Scaled: the class in bits 8-11 and bit 12 set.
 fn isBallEvent(e: ImpactEvent) -> bool { return (e.packed >> 28u) == ${MATERIAL.ball}u; }
+// Bit 13 (ICE_BIT): spawned by an impact on ice; cleared otherwise.
+fn iceBit(e: ImpactEvent) -> u32 { return select(0u, ${ICE_BIT}u, (e.packed >> 28u) == ${MATERIAL_ICE}u); }
 fn sparkClass(e: ImpactEvent) -> u32 {
   if (isBallEvent(e)) { return 0u; }
   return min(15u, u32(max(e.strength - p.dvMin, 0.0) / p.lifeDv * 15.0));
 }
 fn sparkPacked(e: ImpactEvent, h0: u32, h3: u32) -> u32 {
-  if (p.lifeDv <= 0.0) { return (h3 >> 24u) | (h0 & 0xffffef00u); }
-  return (h3 >> 24u) | (sparkClass(e) << 8u) | (1u << 12u) | (h0 & 0xffffe000u);
+  if (p.lifeDv <= 0.0) { return (h3 >> 24u) | (h0 & 0xffffcf00u) | iceBit(e); }
+  return (h3 >> 24u) | (sparkClass(e) << 8u) | (1u << 12u) | (h0 & 0xffffc000u) | iceBit(e);
 }
 
 // Debris: a puff drifts out around the impact and upward, slowly; a chip
@@ -237,7 +258,7 @@ fn newDebris(e: ImpactEvent, j: u32, frame: u32, kind: u32, speed0: f32) -> Spar
     let psi = 6.2831853 * unit(h1);
     let d = normalize(cos(psi) * e1 + sin(psi) * e2 - p.dustSlide * slide + vec3f(0.0, mix(0.1, 0.4, unit(h0)), 0.0));
     let ground = select(0u, 1u, n.y > 0.7 && e.pos.y < p.groundY + 0.15);
-    return Spark(e.pos, 0.0, d * speed, (h3 >> 24u) | (debrisClass(e.strength) << 8u) | (ground << 12u) | (h0 & 0xffffe000u));
+    return Spark(e.pos, 0.0, d * speed, (h3 >> 24u) | (debrisClass(e.strength) << 8u) | (ground << 12u) | (h0 & 0xffffc000u) | iceBit(e));
   }
   let z = 2.0 * unit(h0) - 1.0;
   let phi = 6.2831853 * unit(h1);
@@ -245,7 +266,7 @@ fn newDebris(e: ImpactEvent, j: u32, frame: u32, kind: u32, speed0: f32) -> Spar
   var u = vec3f(rr * cos(phi), rr * sin(phi), z);
   if (dot(u, e.dir) < 0.0) { u = -u; }
   let d = normalize(u + 0.8 * e.dir + vec3f(0.0, 0.5, 0.0));
-  return Spark(e.pos, 0.0, d * speed, (h3 >> 24u) | (debrisClass(e.strength) << 8u) | (h0 & 0xfffff000u));
+  return Spark(e.pos, 0.0, d * speed, (h3 >> 24u) | (debrisClass(e.strength) << 8u) | (h0 & 0xffffd000u) | iceBit(e));
 }
 `;
 
@@ -279,6 +300,13 @@ struct SparkParams {
 @group(0) @binding(6) var<storage, read_write> events: array<ImpactEvent>;
 @group(0) @binding(7) var<storage, read_write> ctl: array<atomic<u32>, ${CTL_WORDS}>;
 @group(0) @binding(8) var<storage, read_write> sparks: array<Spark>;
+// Per-slot surface words (surface.ts), read by detect only (its eighth storage buffer, the stage's limit):
+// an impact on ice is MATERIAL_ICE. A buffer shorter than the slots reads as no surface.
+@group(0) @binding(10) var<storage, read> surfaces: array<u32>;
+fn materialOf(i: u32) -> u32 {
+  if (i < arrayLength(&surfaces) && (surfaces[i] & 0xfu) == ${SURFACE_ICE}u) { return ${MATERIAL_ICE}u; }
+  return (looks[i] >> 12u) & 0xfu;
+}
 
 fn qrot(q: vec4f, v: vec3f) -> vec3f {
   let t = 2.0 * cross(q.xyz, v);
@@ -327,7 +355,7 @@ fn detect(@builtin(global_invocation_id) id: vec3u) {
     if (s * w > select(p.dvMin, p.dustDv, p.mode == 1u)) {
       let k = atomicAdd(&ctl[${CTL.events}], 1u);
       if (k < ${MAX_EVENTS}u) {
-        events[k] = ImpactEvent(b.pos - d * r, s * w, d, i | (((looks[i] >> 12u) & 0xfu) << 28u), n, s);
+        events[k] = ImpactEvent(b.pos - d * r, s * w, d, i | (materialOf(i) << 28u), n, s);
       } else {
         atomicAdd(&ctl[${CTL.dropped}], 1u);
       }
@@ -575,8 +603,10 @@ export function sparkClass(e: Impact, p: SparkParams): number {
   return Math.min(15, Math.floor(fr(fr(fr(Math.max(fr(e.strength - p.dvMin), 0)) / fr(p.lifeDv)) * 15)));
 }
 
+/** ICE_BIT for a particle of event e: set for an impact on ice (material MATERIAL_ICE). */
+const iceBit = (e: Impact) => (e.packed >>> 28 === MATERIAL_ICE ? ICE_BIT : 0);
 const sparkPacked = (e: Impact, p: SparkParams, h0: number, h3: number) =>
-  p.lifeDv > 0 ? u32((h3 >>> 24) | (sparkClass(e, p) << 8) | (1 << 12) | (h0 & 0xffffe000)) : u32((h3 >>> 24) | (h0 & 0xffffef00));
+  p.lifeDv > 0 ? u32((h3 >>> 24) | (sparkClass(e, p) << 8) | (1 << 12) | (h0 & 0xffffc000) | iceBit(e)) : u32((h3 >>> 24) | (h0 & 0xffffcf00) | iceBit(e));
 
 /** CPU twin of newSpark (f32 rounding at each step; trig may differ from the GPU by an ulp or so). */
 export function newSparkReference(e: Impact, j: number, frame: number, p: SparkParams): SparkState {
@@ -653,14 +683,14 @@ export function newDebrisReference(e: Impact, j: number, frame: number, kind: 1 
     const psi = fr(6.2831853 * unit(h1)), c = fr(Math.cos(psi)), sn = fr(Math.sin(psi)), lift = fr(0.1 + fr(0.3 * unit(h0)));
     const v = norm3([0, 1, 2].map((k) => fr(fr(fr(fr(c * e1[k]!) + fr(sn * e2[k]!)) - fr(d.dustSlide * slide[k]!)) + (k === 1 ? lift : 0))) as V3);
     const ground = n[1] > 0.7 && e.pos[1] < fr(groundY + 0.15) ? 1 : 0;
-    return { pos: [...e.pos] as V3, age: 0, vel: v.map((x) => fr(x * speed)) as V3, packed: u32((h3 >>> 24) | (debrisClass(e.strength) << 8) | (ground << 12) | (h0 & 0xffffe000)) };
+    return { pos: [...e.pos] as V3, age: 0, vel: v.map((x) => fr(x * speed)) as V3, packed: u32((h3 >>> 24) | (debrisClass(e.strength) << 8) | (ground << 12) | (h0 & 0xffffc000) | iceBit(e)) };
   }
   const z = fr(2 * unit(h0) - 1), phi = fr(6.2831853 * unit(h1)), rr = fr(Math.sqrt(Math.max(0, fr(1 - fr(z * z)))));
   let u: V3 = [fr(rr * fr(Math.cos(phi))), fr(rr * fr(Math.sin(phi))), z];
   if (u[0] * e.dir[0] + u[1] * e.dir[1] + u[2] * e.dir[2] < 0) u = [-u[0], -u[1], -u[2]];
   const v = u.map((x, k) => fr(fr(x + fr(0.8 * e.dir[k]!)) + (k === 1 ? 0.5 : 0))) as V3;
   const l = fr(Math.hypot(...v));
-  return { pos: [...e.pos] as V3, age: 0, vel: v.map((x) => fr(fr(x / l) * speed)) as V3, packed: u32((h3 >>> 24) | (debrisClass(e.strength) << 8) | (h0 & 0xfffff000)) };
+  return { pos: [...e.pos] as V3, age: 0, vel: v.map((x) => fr(fr(x / l) * speed)) as V3, packed: u32((h3 >>> 24) | (debrisClass(e.strength) << 8) | (h0 & 0xffffd000) | iceBit(e)) };
 }
 
 /** The puffs and chips one frame's events spawn in debris mode, in thread order (tokens: whole particles in each bucket; default full). */
@@ -775,6 +805,8 @@ export class Sparks {
   private binds: { detect: GPUBindGroup; spawn: GPUBindGroup; simulate: GPUBindGroup; writeArgs: GPUBindGroup } | null = null;
   private source: BodySource | null = null;
   private bound = '';
+  private boundSurfaces: GPUBuffer | null = null;
+  private noSurfaces: GPUBuffer | null = null;
   private injected: Impact[] = [];
   private frame = 0;
   /** Tunables, read every frame. */
@@ -797,11 +829,14 @@ export class Sparks {
     this.pipes = { detect: pipe('detect'), spawn: pipe('spawn'), simulate: pipe('simulate'), writeArgs: pipe('writeArgs') };
   }
 
-  /** CPU-authored impacts (game events, tests), spawned on the next frame; the contact normal (unit) defaults to dir. */
-  inject(pos: V3, dir: V3, strength: number, normal?: V3): void {
+  /**
+   * CPU-authored impacts (game events, tests), spawned on the next frame; the contact normal (unit) defaults to dir.
+   * material: the event's material bits (0, or MATERIAL_ICE for ice debris).
+   */
+  inject(pos: V3, dir: V3, strength: number, normal?: V3, material = 0): void {
     if (this.injected.length >= MAX_INJECT) return;
     const l = Math.hypot(...dir) || 1;
-    this.injected.push({ pos, dir: [dir[0] / l, dir[1] / l, dir[2] / l], strength, packed: 0xffffff | (1 << 24), ...(normal ? { normal } : {}) });
+    this.injected.push({ pos, dir: [dir[0] / l, dir[1] / l, dir[2] / l], strength, packed: u32(0xffffff | (1 << 24) | ((material & 0xf) << 28)), ...(normal ? { normal } : {}) });
   }
 
   /**
@@ -818,17 +853,18 @@ export class Sparks {
     return this.state;
   }
 
-  private bind(source: BodySource): void {
+  private bind(source: BodySource, surfaces: GPUBuffer): void {
     const key = `${source.version}:${source.capacity}`;
-    if (this.source === source && this.bound === key && this.binds) return;
-    const all = [this.params, source.bodies, source.prev, source.shapes, source.looks, this.stateFor(source), this.events, this.ctl, this.sparks, this.args];
+    if (this.source === source && this.bound === key && this.boundSurfaces === surfaces && this.binds) return;
+    const all = [this.params, source.bodies, source.prev, source.shapes, source.looks, this.stateFor(source), this.events, this.ctl, this.sparks, this.args, surfaces];
     const bind = (p: GPUComputePipeline, bindings: number[]) => this.device.createBindGroup({
       layout: p.getBindGroupLayout(0),
       entries: bindings.map((binding) => ({ binding, resource: { buffer: all[binding]! } })),
     });
-    this.binds = { detect: bind(this.pipes.detect, [0, 1, 2, 3, 4, 5, 6, 7]), spawn: bind(this.pipes.spawn, [0, 6, 7, 8]), simulate: bind(this.pipes.simulate, [0, 7, 8]), writeArgs: bind(this.pipes.writeArgs, [0, 7, 9]) };
+    this.binds = { detect: bind(this.pipes.detect, [0, 1, 2, 3, 4, 5, 6, 7, 10]), spawn: bind(this.pipes.spawn, [0, 6, 7, 8]), simulate: bind(this.pipes.simulate, [0, 7, 8]), writeArgs: bind(this.pipes.writeArgs, [0, 7, 9]) };
     this.source = source;
     this.bound = key;
+    this.boundSurfaces = surfaces;
   }
 
   /**
@@ -838,9 +874,11 @@ export class Sparks {
    * dvScale (default 1): the detector reads a body's speed change times this,
    * so a world played faster (Renderer FrameParams.metres) knocks as its unit
    * world would; the caller runs the particles faster by dt to match.
+   * surfaces: the per-slot surface words (surface.ts; Renderer's ice buffer), so impacts on ice throw ice
+   * debris; left out, no body is ice.
    */
-  encode(pass: GPUComputePassEncoder, source: BodySource, f: { dt: number; groundY: number; detect?: boolean; mode?: 'sparks' | 'debris'; dvScale?: number }): void {
-    this.bind(source);
+  encode(pass: GPUComputePassEncoder, source: BodySource, f: { dt: number; groundY: number; detect?: boolean; mode?: 'sparks' | 'debris'; dvScale?: number; surfaces?: GPUBuffer }): void {
+    this.bind(source, f.surfaces ?? (this.noSurfaces ??= this.device.createBuffer({ size: 16, usage: GPUBufferUsage.STORAGE, label: 'no surfaces' })));
     const q = this.device.queue, pr = this.config, db = this.debris, mode = f.mode ?? 'sparks';
     if (mode !== this.mode) { this.clear(); this.mode = mode; }
     const buf = new ArrayBuffer(PARAM_WORDS * 4), fl = new Float32Array(buf), u = new Uint32Array(buf);
@@ -907,7 +945,7 @@ export class Sparks {
   get nextFrame(): number { return this.frame; }
 
   destroy(): void {
-    for (const b of [this.sparks, this.events, this.ctl, this.args, this.params, this.state]) b?.destroy();
+    for (const b of [this.sparks, this.events, this.ctl, this.args, this.params, this.state, this.noSurfaces]) b?.destroy();
   }
 }
 
