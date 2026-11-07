@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { B2, compileLevel, D1, Duel, L1, L2, L3, LEVELS, MATERIALS, SERIES, TRIAL_LEVELS, U3 } from '@tb/keystone';
+import { B2, BuildSession, compileLevel, D1, Duel, L1, L2, L3, LEVELS, MATERIALS, RL2, RL3, RUBE_LEVELS, SERIES, TRIAL_LEVELS, U3 } from '@tb/keystone';
 import { COAT_GILT, COAT_GLAZE, COAT_NONE, COAT_PAINT, linearToOklab, MARK_HIT, MARK_KEEP, MARK_NONE, MARK_SAVE, tintWord, unpackFx } from '@tb/render';
 import { PROJECTILE_PRESETS } from '@tb/weapons';
-import { BALL_PAINT, ballFx, BOMB_FX, CITY_BODIES, coatOf, DUEL_NEUTRAL, duelCoats, duelTint, duelTints, markOf, roleTint, structureCoats, structureMarks, xrayOn } from '../src/scene.ts';
+import { BALL_PAINT, ballFx, BOMB_FX, BUILT_TINT, CITY_BODIES, coatOf, DUEL_NEUTRAL, isBuilt, duelCoats, duelTint, duelTints, markOf, roleTint, structureCoats, structureMarks, xrayOn } from '../src/scene.ts';
 import { BEAD_COLOUR, BEAD_OUT_COLOUR, BEAD_RADIUS, beadOverlay, rgbe, CROWN_GLOW, easeOut, regrowDuration, regrowScale, regrowScales, structureTints, TARGET_SCALE, TINT, tintOf, tintWordOf } from '../src/scene.ts';
 
 /** What the renderer will see for a bulk tint word. */
@@ -87,6 +87,44 @@ describe('coats (coatOf, structureCoats, roleTint)', () => {
     expect(coatOf(c, crown)).toBe(COAT_NONE);
     expect(structureCoats(c).every((k) => k === COAT_NONE)).toBe(true);
     expect(roleTint(c, crown)).toEqual(TINT.crown);
+  });
+});
+
+describe('Rube Lab colours (PT26): the bell gilt, whatever its shape; what the player built in its own blue', () => {
+  it('every Rube Lab bell is gilt (a sphere bell too: spheres take coats), the rest of the level uncoated', () => {
+    for (const def of RUBE_LEVELS) {
+      const c = compileLevel(def), k = structureCoats(c);
+      expect(c.meta.crowns.length, def.id).toBeGreaterThan(0);
+      for (const b of c.meta.crowns) expect(k[b], def.id).toBe(COAT_GILT);
+      expect(Array.from(k).filter((x) => x !== COAT_NONE).length, def.id).toBe(c.meta.crowns.length);
+    }
+    // RL2's bell is a sphere, RL3's a domino: both gilt, neither multiplied by a role tint on top.
+    const rl2 = compileLevel(RL2), bell = rl2.meta.crowns[0]!;
+    expect(rl2.scene.bodies[bell]!.shape.kind).toBe('sphere');
+    expect(roleTint(rl2, bell)).toEqual(TINT.none);
+    expect(compileLevel(RL3).scene.bodies[compileLevel(RL3).meta.crowns[0]!]!.shape.kind).toBe('box');
+  });
+
+  it('parts the player placed are painted BUILT_TINT (in every look), the level\'s own parts not; coats off, the tint multiplies', () => {
+    const s = new BuildSession(RL2), h = s.h, n0 = s.compiled().meta.n;
+    const ground = (x: number) => ({ body: -1, point: [x * h, 0, 0] as [number, number, number], normal: [0, 1, 0] as [number, number, number], t: 1 });
+    expect(s.place(s.ghost(ground(6), { item: 'bumper', yaw: -45, tip: 0 }))).toBe(true);
+    expect(s.place(s.ghost(ground(9), { item: 'cube', yaw: 0, tip: 0 }))).toBe(true);
+    const c = compileLevel(s.def()), k = structureCoats(c);
+    expect(c.meta.n).toBe(n0 + 2);
+    for (let i = 0; i < c.meta.n; i++) {
+      const built = i >= n0;
+      expect(isBuilt(c, i), `body ${i}`).toBe(built);
+      if (built) {
+        expect(k[i]).toBe(COAT_PAINT);
+        expect(decoded(tintOf(c, i)).tint.map((x) => +x.toFixed(2))).toEqual(BUILT_TINT.map((x) => +x.toFixed(2)));
+        expect(roleTint(c, i, false)).toEqual(BUILT_TINT);
+      }
+    }
+    // Blue, far from the gilt and the glaze (OKLCh hue).
+    const lab = linearToOklab(BUILT_TINT), hue = ((Math.atan2(lab[2], lab[1]) * 180) / Math.PI + 360) % 360;
+    expect(hue).toBeGreaterThan(240);
+    expect(hue).toBeLessThan(280);
   });
 });
 

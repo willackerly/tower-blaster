@@ -7,8 +7,8 @@ import { BAND_HALF, FX_BAND, FX_EMISSIVE_MAX, FX_MATTE, FX_PAINT, FX_WGSL, KEEP_
 import { BEVEL_WGSL, OKLAB_WGSL, WARM_AXIS } from './look.ts';
 import { MARKS_WGSL } from './marks.ts';
 import { ASLEEP_BLUE, LOOK_ASLEEP } from './looks.ts';
-import { COAT_GILT, COAT_WGSL } from './coats.ts';
-import { SPARK_COMMON } from './sparks.ts';
+import { COAT_GILT, COAT_PAINT, COAT_WGSL } from './coats.ts';
+import { ICE_BIT, SPARK_COMMON } from './sparks.ts';
 import { LIGHT_META, LIGHT_PACKED, LIGHT_VEC4, MAX_BALLS, TRAIL } from './lights.ts';
 import { AO_FOOT_WGSL, AO_SAMPLE_WGSL, AO_SEAM_WGSL } from './ao.ts';
 import { ATMO_COMMON_WGSL } from './atmosphere.ts';
@@ -582,7 +582,9 @@ const QUAD = array<vec2f, 6>(vec2f(-1.0, -1.0), vec2f(1.0, -1.0), vec2f(1.0, 1.0
   let vis = select(1.0, textureSampleCompareLevel(shadowMap, shadowSampler, suv, lc.z - fr.shadowParams.y), inside);
   // Stone powder, lighter than the blocks, or soil raised by a landing (bit 12), lighter than the ground;
   // a thick cloud scatters many times, so half its phase is isotropic.
-  let albedo = select(mix(fr.blockAlbedo.rgb, fr.floor, 0.3) * 1.1, mix(fr.blockAlbedo.rgb, fr.floor, 0.7) * 1.2, ((s.packed >> 12u) & 1u) == 1u);
+  var albedo = select(mix(fr.blockAlbedo.rgb, fr.floor, 0.3) * 1.1, mix(fr.blockAlbedo.rgb, fr.floor, 0.7) * 1.2, ((s.packed >> 12u) & 1u) == 1u);
+  // Ice (ICE_BIT, sparks.ts): frost powder, white with a cold cast, wherever it was raised.
+  if ((s.packed & ${ICE_BIT}u) != 0u) { albedo = vec3f(0.86, 0.92, 0.98); }
   let lit = albedo * (fr.sunColor * vis * 0.5 * (0.5 + 0.5 * hg4pi(dot(fr.sun, normalize(rel)), 0.4)) + 0.5 * (atmoAmbient[0].rgb + atmoAmbient[1].rgb));
   // Thinning: the dust in a puff spreads over its grown area, so dustThin 1 takes its opacity as 1 / grow^2,
   // normalised at half grown: a young puff denser, a grown one fainter than before, about as much dust in all.
@@ -631,6 +633,7 @@ struct ChipOut {
   @location(1) rel: vec3f,
   @location(2) @interpolate(flat) n: vec3f,
   @location(3) @interpolate(flat) base: vec4f, // albedo, shape seed
+  @location(4) @interpolate(flat) rough: f32,   // GGX alpha: 0.5 stone, glossy for ice
 }
 
 @vertex fn vsChip(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> ChipOut {
@@ -659,6 +662,12 @@ struct ChipOut {
   o.uv = corner;
   o.rel = p;
   o.base = vec4f(fr.blockAlbedo.rgb * (0.45 + 0.4 * unit(pcg(h + 1u))), unit(pcg(h + 2u)));
+  o.rough = 0.5;
+  // Ice (ICE_BIT, sparks.ts): a white-to-pale-blue shard, glossy enough to catch the sun as it tumbles.
+  if ((s.packed & ${ICE_BIT}u) != 0u) {
+    o.base = vec4f(mix(vec3f(0.62, 0.78, 0.94), vec3f(0.9, 0.95, 1.0), unit(pcg(h + 1u))), o.base.w);
+    o.rough = 0.08;
+  }
   return o;
 }
 
@@ -668,7 +677,7 @@ struct ChipOut {
   let k = 0.3 + 0.5 * o.base.w;
   if (mix(max(q.x, q.y), q.x + q.y, k) > 0.85 || (o.uv.x + o.uv.y > 1.1 - 0.6 * o.base.w)) { discard; }
   fragPx = o.clip.xy;
-  let c = shade(o.base.rgb, o.rel, o.n, 0.5, 0.5, 0.0, vec2f(1.0));
+  let c = shade(o.base.rgb, o.rel, o.n, o.rough, 0.5, 0.0, vec2f(1.0));
   return vec4f(fog(c, o.rel), 1.0);
 }
 `;
@@ -1311,9 +1320,11 @@ fn heatGlow(slot: u32, base: vec3f, edge: f32) -> vec3f {
   let dndy = dpdy(n);
   let isBall = material(v.look) == 1u;
   let w = fx[v.slot];
-  // Painted (FX_PAINT): the tint is the colour, and a ball's glow takes it too.
-  let paint = (w.y & ${FX_PAINT}u) != 0u;
-  let own = select(select(albedo(v.look), fr.ball, isBall), vec3f(1.0), paint);
+  // Painted (FX_PAINT): the tint is the colour, and a ball's glow takes it too. A coat (coats.ts) is the sphere's
+  // own colour as on a box (a bell, a crown; a ball the player placed): gilt, glaze, or paint (the tint is the colour).
+  let coat = coatOf(w.y);
+  let paint = (w.y & ${FX_PAINT}u) != 0u || coat == ${COAT_PAINT}u;
+  let own = select(select(select(albedo(v.look), fr.ball, isBall), vec3f(1.0), paint), coatAlbedo(coat), coat != 0u);
   // Band (FX_BAND): a white stripe round the body-space equator, antialiased over a pixel, turning with the ball.
   // (The derivative is taken in uniform control flow, before the flag picks it.)
   let bandY = abs(normalize(v.local).y);
@@ -1327,8 +1338,11 @@ fn heatGlow(slot: u32, base: vec3f, edge: f32) -> vec3f {
   let ao = aoBody(v, n);
   var c = vec3f(0.0);
   if (steel < 1.0) { c = shade(base, v.rel, n, aaAlpha(select(0.04, 0.3, matte), n, dndx, dndy), aaAlpha(0.0049, n, dndx, dndy), select(0.5, 0.0, matte), ao); }
-  if (steel > 0.0) { c = mix(c, shadeSteel(v.rel, n, aaAlpha(fr.ballSteel.y, n, dndx, dndy), ao), steel); }` : `var c = shade(base, v.rel, n, aaAlpha(select(0.04, 0.3, matte), n, dndx, dndy), aaAlpha(0.0049, n, dndx, dndy), select(0.5, 0.0, matte), aoBody(v, n));`}
-  c += base * fxGlow(w, fr.time);
+  if (steel > 0.0) { c = mix(c, shadeSteel(v.rel, n, aaAlpha(fr.ballSteel.y, n, dndx, dndy), ao), steel); }
+  // Gilded (a bell): gold leaf as on a gilded box, without the stone's wear.
+  if (coat == ${COAT_GILT}u) { c = mix(c, shadeMetal(v.rel, n, aaAlpha(${GILT_ROUGH * GILT_ROUGH}, n, dndx, dndy), ao, vec3f(${GILT_F0.join(', ')}) * fxTint(w.x)), ${GILT_COVER}); }` : `var c = shade(base, v.rel, n, aaAlpha(select(0.04, 0.3, matte), n, dndx, dndy), aaAlpha(0.0049, n, dndx, dndy), select(0.5, 0.0, matte), aoBody(v, n));`}
+  // A gilded sphere's steady glow is kept low as on a box (GILT_GLOW); a flash (a bell rung) glows in full.
+  c += base * fxGlow(w, fr.time) * select(1.0, ${GILT_GLOW}, coat == ${COAT_GILT}u && bitcast<f32>(w.w) <= 0.0);
   let NoV = max(dot(n, normalize(-v.rel)), 0.0);
   // The look's ball glow takes the paint, not the band: a glowing white band would clip flat in a look with a strong glow (candy).
   c += select(vec3f(0.0), select(fr.ball, own * fxTint(w.x), paint) * (1.0 - band) * fr.ballEmissive * (0.35 + 0.65 * NoV), isBall && !matte);
@@ -1527,7 +1541,9 @@ const SPARK_HALF_WIDTH = 1.25;
   // White-hot to amber over the life, then out; a streak under a pixel long
   // is dimmed by its coverage.
   let t = s.age / sparkLife(s.packed);
-  let hot = mix(vec3f(1.0, 0.92, 0.8) * 20.0, vec3f(1.0, 0.42, 0.1) * 8.0, smoothstep(0.0, 0.6, t));
+  var hot = mix(vec3f(1.0, 0.92, 0.8) * 20.0, vec3f(1.0, 0.42, 0.1) * 8.0, smoothstep(0.0, 0.6, t));
+  // Ice (ICE_BIT, sparks.ts): cold glittering shards, white to pale blue, never amber.
+  if ((s.packed & ${ICE_BIT}u) != 0u) { hot = mix(vec3f(0.75, 0.9, 1.0) * 5.0, vec3f(0.45, 0.7, 1.0) * 2.0, smoothstep(0.0, 0.6, t)); }
   o.colour = mix(0.05, 1.0, gain) * hot * (1.0 - smoothstep(0.7, 1.0, t)) * clamp(len + 0.4, 0.4, 1.0) * sparkGlow(s.packed);
   return o;
 }

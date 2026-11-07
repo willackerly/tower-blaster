@@ -374,18 +374,21 @@ export function hudHtml(s: HudState, sheet = ''): string {
   const head = d.mason
     ? `<div class="row obj trial"><span>Test</span><span>${esc(s.trial ?? '')}</span></div>`
     : partsPar !== undefined
-    ? `<div class="row"><span>Parts par ${partsPar}</span><span>${s.strokes ? 'Run' : 'Build'}</span></div>
-    <div class="row obj"><span>Objective</span><span>${esc(objectiveText(d.objective))}</span></div>`
+    ? `<div class="row"><span>Parts par ${partsPar}</span><span>${s.strokes ? 'Run' : 'Build'}</span></div>`
     : outcome
     ? `<div class="row"><span>Shot ${s.strokes}</span>${d.objective.kind === 'hold' ? fit(`<span>Pulled <b class="down${(s.pulled ?? 0) > 0 ? '' : ' none'}">${pct(s.pulled ?? 0)}</b></span>`, 'Pulled 100%') : fit(`<span>Down <b class="down${(s.collapse ?? 0) > 0 ? '' : ' none'}">${pct(s.collapse ?? 0)}</b></span>`, 'Down 100%')}</div>
     ${s.ticks?.length ? meterHtml(d.objective.kind === 'hold' ? s.pulled ?? 0 : s.collapse ?? 0, s.ticks, d.objective.kind === 'hold' ? 'pulled' : 'down') : ''}
     <div class="row obj"><span>Objective</span>${chorusObjectiveText(d) !== null ? `<span>${esc(chorusObjectiveText(d)!)}</span>` : fit(`<span class="${s.met ? 'ok' : ''}">${esc(objectiveText(d.objective))}${s.met ? ' ✓' : ''}</span>`, `${objectiveText(d.objective)} ✓`)}</div>`
     : `<div class="row"><span>Par ${d.par}</span><span>Stroke ${s.strokes}</span></div>${d.objective.kind === 'collapse' ? parCollapseRow(d.objective.min, s) : ''}${d.push?.length && s.strokes === 0 ? `<div class="hint small push-hint">${PUSH_HINT}</div>` : ''}`;
+  // A bell level (Rube Lab) says what it wants on its par row's level too (PT26: nothing said "ring the bell").
+  const rung = s.crownsTotal > 0 && s.crownsDown >= s.crownsTotal;
+  // One objective row for both HUDs (the mode profile's and keystone.modeui=0's); its tick is sized in so ringing never widens it (PT30).
+  const bellRow = !outcome && d.objective.kind === 'bell' ? `<div class="row obj"><span>Objective</span>${fit(`<span class="${rung ? 'ok' : ''}">${esc(objectiveText(d.objective))}${rung ? ' ✓' : ''}</span>`, `${objectiveText(d.objective)} ✓`)}</div>` : '';
   const fz = s.freezes;
   const freezes = fz ? `<div class="row"><span>Freezes</span><span class="${fz.left ? '' : 'spent'}">${fz.left} / ${fz.total}</span></div>` : '';
   const crowns = d.mason ? '' : d.objective.kind === 'hold' ? keepRow(s.crownsDown, s.crownsTotal)
     : partsPar !== undefined ? `<div class="row"><span>Bell</span>${fit(`<span class="crowns${s.crownsDown >= s.crownsTotal && s.crownsTotal ? ' ok' : ''}">${s.crownsDown >= s.crownsTotal && s.crownsTotal ? 'rung ✓' : 'not rung'}</span>`, 'not rung')}</div>`
-    : s.crownsTotal ? `<div class="row"><span>${d.objective.kind === 'quake' ? 'Condemned down' : 'Crowns'}</span>${fit(`<span class="crowns">${s.crownsDown} / ${s.crownsTotal}</span>`, `${s.crownsTotal} / ${s.crownsTotal}`)}</div>` : '';
+    : s.crownsTotal ? `<div class="row"><span>${d.objective.kind === 'quake' ? 'Condemned down' : d.objective.kind === 'bell' ? 'Bells rung' : 'Crowns'}</span>${fit(`<span class="crowns">${s.crownsDown} / ${s.crownsTotal}</span>`, `${s.crownsTotal} / ${s.crownsTotal}`)}</div>` : '';
   const act = slotAction(s);
   const button = slotHtml(act, s);
   const slot = `<div class="row slot-row${act ? '' : ' idle'}"><span class="slot${act ? '' : ' empty'}">${button}</span><span class="small note">${act ? SLOT_NOTE[act] : ''}</span>${touchActs(s.strokes)}</div>`;
@@ -393,6 +396,7 @@ export function hudHtml(s: HudState, sheet = ''): string {
     <div class="title">${esc(hudTitle(d))}${fz?.frozen ? ' <span class="pace frozen" title="physics is frozen: a shot fired now spends a freeze">FROZEN</span>' : pace}</div>
     ${d.custom ? `<div class="small custom">${CUSTOM_NOTE}</div>` : ''}
     ${head}
+    ${bellRow}
     ${crowns}
     ${d.mason ? '' : heritage}
     ${freezes}

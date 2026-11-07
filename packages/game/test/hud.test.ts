@@ -30,6 +30,12 @@ describe('formatting', () => {
   });
   it('the HUD hides the power bar for an anvil and flags an unreachable aim', () => {
     const base = { level: L2, strokes: 0, crownsDown: 1, crownsTotal: 6, heritageBroken: 0, heritageTotal: 36, power: 60, leverage: { round: 0, shot: 0 }, phase: 'aiming', reachable: null };
+    // A bell level (Rube Lab, PT26) says what it wants, and ticks it once rung; other par levels show no objective row.
+    const bell = hudHtml({ ...base, level: RL1, crownsDown: 0, crownsTotal: 1, heritageTotal: 0, chips: rackChips(RL1.rack, RL1.rack, 'plunger') });
+    expect(bell).toMatch(/<span>Objective<\/span><span class="fit"><span class="">ring the bell<\/span>/);
+    expect(bell).toMatch(/Bells rung<\/span><span class="fit"><span class="crowns">0 \/ 1/);
+    expect(hudHtml({ ...base, level: RL1, crownsDown: 1, crownsTotal: 1, heritageTotal: 0, chips: [] })).toMatch(/<span class="ok">ring the bell ✓<\/span>/);
+    expect(hudHtml({ ...base, chips: [] })).not.toMatch(/Objective/);
     const marble = hudHtml({ ...base, chips: rackChips(L2.rack, L2.rack, 'marble') });
     expect(marble).toMatch(/L2 · Lintel/);
     expect(marble).toMatch(/1 \/ 6/);

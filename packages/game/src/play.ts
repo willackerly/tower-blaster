@@ -10,7 +10,7 @@ import { type BodyDesc, type EngineHealth, limitsHit, type PhysicsEngine, type V
 import { armRefusal, type RackItem, type CompiledLevel, compileLevel, Driver, type DriverCheckpoint, Duel, type DuelDef, DEFAULT_TURN_SECONDS, type Feedback, type Footprint, type Goal, goalMet, type Player, type Grade, gradeOf, type LevelDef, type LevelScore, type LotSheet, type PerStep, playShots, rapidDue, roundFacts, RUBE_GO, runSession, scoringOf, selectFootprints, selectGroups, type Shot, isIcePiece, QUAKE, MasonTrial, masonWorlds, snapshotHash, TIER_NAMES } from '@tb/keystone';
 import { DIAL_KEYS, type DialField, dialShot, dialStart, dialStep, type QuakeDial, quakePanelHtml, seismogram } from './quake-panel.ts';
 import { clampPitch, eyeOf, type Orbit, rayThrough, viewProj } from '@tb/render/camera';
-import type { EffectStats, FxOptions, PixelStats, Renderer, SnapshotSource } from '@tb/render';
+import type { EffectStats, Fx, FxOptions, PixelStats, Renderer, SnapshotSource } from '@tb/render';
 import type { HostStats } from '@tb/audio';
 import type { WeaponTier } from '@tb/weapons';
 import { type Aimed, arcContact, azFromYaw, type Contact, launchHeight, launchStep, pick, previewBeads, pullFor, shotFor, SUBSTEPS } from './aim.ts';
@@ -38,6 +38,7 @@ import { canvasSize, type QualityState } from './quality.ts';
 import { UndoMarks } from './undo-marks.ts';
 import { FusePanel } from './fuse-panel.ts';
 import { lotBeads, panelTimeline, planBeads, timelineOverlay } from './fuse-timeline.ts';
+import { BELL_FLASH, RING_REACH, startBeads, zoneBeads } from './rube-view.ts';
 import { ballFx, beadOverlay, BOMB_FX, CROWN_GLOW, firedKind, PULL_HOVER, ramFx, regrowDuration, regrowScales, roleTint, rolePaint, SPENT_FADE, spentFx, structureCoats, duelCoats, duelTint, duelTints, structureMarks, structureTints, tintOf, tintWordOf, xrayOn } from './scene.ts';
 import { easeGrade, FROZEN_LABEL, freezeFxOf } from './frozen-look.ts';
 import { ghostOutline, PULL_SLIDE_STEPS, type PullAnim, pullAnimFor, withPulled } from './pull-anim.ts';
@@ -56,7 +57,8 @@ export interface GameEditHandle {
   readonly on: boolean;
   /** Enter the build phase (false when the level offers none, or a shot has gone in); Play; leave without the edits. */
   enter(): boolean;
-  play(): void;
+  /** The build phase's Play (Rube Lab: Run, which releases the ball once the level is in); run=false stops before Go, as a test that looks at the frame before it needs. */
+  play(run?: boolean): void;
   cancel(): void;
   /** A key as the build phase takes it (Q / E turn, T tip, 1 to 9 items, B brush, X erase, Z undo); whether it was one. */
   key(k: string, shift?: boolean): boolean;
@@ -240,6 +242,8 @@ export interface GameHandle {
   effects(): Promise<EffectStats>;
   /** The mark carved on each structure body now, read back from the renderer (@tb/render MARK_NONE, MARK_HIT, MARK_SAVE). */
   marks(): number[];
+  /** Slot i's fx record as the renderer holds it now (@tb/render Fx: tint, emissive, flash, coat, mark): what a body is drawn with. */
+  fx(i: number): Fx | null;
   /** Carve or clear the stones again as feel.marks now says (the front door's Stone marks setting changed). */
   refreshMarks(): void;
   /** Physics state now: step, phase and a hash of every pose. */
@@ -340,7 +344,7 @@ export function newGameHandle(): GameHandle {
   const none = (): SessionState => ({ step: 0, phase: 'loading', strokes: 0, heritageBroken: 0, hash: '' });
   return {
     status: 'loading', engine: '', level: '', phase: 'loading', ready: false, frozen: false, frames: 0, stepIndex: 0, strokes: 0, bodies: 0, collapse: 0, fast: false, hold: false, pace: { timeScale: 1, speed: 1, tag: '', tailSkip: false, costMs: NaN }, view: { target: [0, 0, 0], distance: 0, yaw: 0, pitch: 0, following: false, jolt: 0, turning: false, cue: null, arcBeads: 0, impact: false, xray: false }, input: { touch: false, gesture: 'idle', fingers: 0, aimed: null, power: 100, launch: 0 }, result: null, counts: {}, feel: { ...DEFAULT_FEEL }, resultShownAt: null, card: { place: 'center', endedMs: null, shownMs: null }, openingHud: null, timing: { loadMs: 0, load: noPhases(), stepMs: [], moving: [], frameMs: [], costMs: [] }, draws: { drawn: 0, skipped: 0, decimating: false },
-    fire: () => false, bank: () => false, skip: () => false, freeze: () => false, fireOpener: () => false, setMuted: () => {}, maxDpr: 2, quality: null, aim: () => null, reach: null, impact: null, select: () => false, dial: () => null, dialStep: () => null, startQuake: () => false, load: async () => {}, retry: async () => {}, undo: async () => false, undone: null, spare: null, undoMemory: () => ({ marks: 0, bytes: 0 }), capture: async () => null, sightlines: async () => null, coverage: async () => 0, pixelsOf: async () => ({ width: 0, height: 0, at: [] }), pullDrawn: null, frozenGrade: 0, firedLooks: () => [], spentLooks: () => [], effects: async () => ({ particles: 0, hot: 0, spawned: 0, flashes: 0, blasts: 0, fuses: 0 }), marks: () => [], refreshMarks: () => {},
+    fire: () => false, bank: () => false, skip: () => false, freeze: () => false, fireOpener: () => false, setMuted: () => {}, maxDpr: 2, quality: null, aim: () => null, reach: null, impact: null, select: () => false, dial: () => null, dialStep: () => null, startQuake: () => false, load: async () => {}, retry: async () => {}, undo: async () => false, undone: null, spare: null, undoMemory: () => ({ marks: 0, bytes: 0 }), capture: async () => null, sightlines: async () => null, coverage: async () => 0, pixelsOf: async () => ({ width: 0, height: 0, at: [] }), pullDrawn: null, frozenGrade: 0, firedLooks: () => [], spentLooks: () => [], effects: async () => ({ particles: 0, hot: 0, spawned: 0, flashes: 0, blasts: 0, fuses: 0 }), marks: () => [], fx: () => null, refreshMarks: () => {},
     state: none, asleep: () => ({ asleep: 0, of: 0 }), line: () => [], replay: async () => none(), health: async () => null, pairsPerBody: 0, limitsHit: [], goals: [], grade: null, duel: null, handoff: false, trial: null, scoreFloat: '',
     sound: () => ({ mode: 'collapse', status: 'off', error: '', posted: 0, stats: null }),
     ice: () => ({ count: 0, cracks: [] }),
@@ -707,6 +711,8 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
   const fuse = env.hud.parentElement ? new FusePanel(env.hud.parentElement, { fire: (shot) => handle.fire(shot) }) : null;
   /** The lot's chalk line on a fold level (fuse-timeline.ts lotBeads), else null. */
   let foldLot: Overlay | null = null;
+  /** Rube Lab (rube-view.ts, PT26): a region bell's zone outline, and the ball's start marker (drawn until the release goes). */
+  let bellZone: Overlay | null = null, ballStart: Overlay | null = null;
   /** A fold level's plan on the ground while the plunger can go (fuse-timeline.ts planBeads, PT24): the yard arrow and the compass. */
   let foldPlan: Overlay | null = null;
   /** Each side's arc on the ground (duel-view.ts arcBeads), made at load. */
@@ -745,7 +751,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     buildPanel.show(editing, profile?.mode === 'rube');
   }
   function showEdit() {
-    if (editing) editView.show(editing, feel.marks);
+    if (editing) editView.show(editing, feel.marks, coatsOn());
     showPanel();
     syncState();
   }
@@ -772,7 +778,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     document.body.classList.remove('kg-building');
     showPanel();
   }
-  function playEdit() {
+  function playEdit(run = true) {
     if (!editing) return;
     const def = editing.play();
     handle.edit.played = compileLevel(def).hash;
@@ -782,7 +788,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     trialAfterLoad = !!def.mason;
     void load(levelIdx, true).catch(fail);
     // Rube Lab's one start verb (PT23): the Build panel's Run also releases the ball (the tick fires it when it can).
-    runPending = profile?.mode === 'rube';
+    runPending = run && profile?.mode === 'rube';
   }
   function cancelEdit() {
     if (!editing) return;
@@ -1293,6 +1299,8 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     fuse?.level(c);
     // A fold level is judged on what stays in its lot: chalk the lot on the ground, the whole round.
     foldLot = c.def.objective.kind === 'fold' ? lotBeads(c) : null;
+    bellZone = zoneBeads(c);
+    ballStart = startBeads(c);
     foldPlan = planBeads(c);
     if (line) {
       const s = driver.session, roles = rolePaint(feel.fx);
@@ -1514,10 +1522,23 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     handle.grade = gradeOf(lot.sheet.grades, f);
   }
 
+  /**
+   * A bell rang (Rube Lab, PT26): it flashes in its gilt (BELL_FLASH), two ring waves run out from it (Renderer.ring),
+   * and the banner says so; the chime is audio.ts's (voicesFor, bell). The bell itself was knocked by what hit it.
+   */
+  function ringBell(b: number, step: number) {
+    const s = driver.snapshot;
+    renderer.setFx(b, { ...BELL_FLASH, tint: ownTint(b) });
+    if (b < s.count) renderer.ring([s.pos[3 * b]!, s.pos[3 * b + 1]!, s.pos[3 * b + 2]!], RING_REACH * c.frame.unit);
+    handle.counts.bellRung = (handle.counts.bellRung ?? 0) + 1;
+    handle.counts.bellStep = step;
+    banner('The bell rang!');
+  }
+
   function onFeedback(fb: Feedback[]) {
     for (const f of fb) {
       handle.counts[f.t] = (handle.counts[f.t] ?? 0) + 1;
-      voices.push(...voicesFor(f, { impacts: !collapse }));
+      voices.push(...voicesFor(f, { impacts: !collapse, bell: c.def.objective.kind === 'bell' }));
       switch (f.t) {
         case 'fired':
           juice.kick(f.ammo === 'cannonball' ? 0.05 : 0.03);
@@ -1547,8 +1568,9 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
         }
         case 'crownDown':
           juice.shake(0.08);
+          if (c.def.objective.kind === 'bell') ringBell(f.body, f.step);
           // A felled crown flashes once and stops glowing.
-          renderer.setFx(f.body, { ...rolePaint(feel.fx).crownFlash, tint: ownTint(f.body) });
+          else renderer.setFx(f.body, { ...rolePaint(feel.fx).crownFlash, tint: ownTint(f.body) });
           // Only where the clear ends the level: par levels, and outcome levels with autobank.
           if (c.def.objective.kind === 'crowns' && f.ordinal + 1 === c.meta.crowns.length && driver.session.phase === 'running' && (driver.session.scoring === 'par' || c.def.autobank)) {
             ending = true;
@@ -1574,10 +1596,12 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
           renderer.setSurface(f.body, { kind: 'ice', crack: f.level, at: f.at, seed: f.seed });
           break;
         case 'shatter': {
-          // The block is gone (its tombstone is not drawn) and its pieces are ice. No burst: the renderer's
-          // chips are stone-coloured sparks, which read as metal on ice (frost powder is a follow-up).
+          // The block is gone (its tombstone is not drawn) and its pieces are ice; a burst of ice where it broke
+          // (PT38: cold shards in the stylized looks, white and blue chips and frost powder in the real look).
           // Fragments (ice.ts) start crushed at the corner that faced the block's centre.
           for (const k of f.cracks) renderer.setSurface(k.body, { kind: 'ice', crack: k.level, at: k.at, seed: k.seed });
+          const s = driver.snapshot, b = f.body;
+          if (b < s.count) renderer.burst([s.pos[3 * b]!, s.pos[3 * b + 1]!, s.pos[3 * b + 2]!], [0, 1, 0], f.dv, { ice: true });
           juice.shake(0.12);
           break;
         }
@@ -1899,6 +1923,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
   };
   handle.startQuake = () => dial !== null && fire(dialShot(dial));
   handle.marks = () => Array.from({ length: c.meta.n }, (_, i) => renderer.fxOf(i).mark);
+  handle.fx = (i) => renderer.fxOf(i);
   handle.refreshMarks = () => applyMarks();
   handle.firedLooks = () => {
     const fused = new Set(renderer.fuses.slots), out: ('bomb' | 'ram' | 'painted' | 'plain')[] = [];
@@ -2326,7 +2351,9 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
       fuse.world(plungerReady ? viewProj(view, viewAspect()) : null, canvas.getBoundingClientRect());
     }
     const ghost = pullAnim ? ghostOutline(pullAnim, now - pullAnim.at) : null;
-    const o = joinOverlays(beads ? beadOverlay(beads, aimed?.reachable ?? true) : null, arc, ghost, plungerReady ? timelineOverlay(fuse!.timeline!) : null, plungerReady ? foldPlan : null, foldLot);
+    // Rube Lab's ball start shows until the release goes (the attempt's first input); its zone the whole round.
+    const start = ballStart && driver.session.inputs.length === 0 ? ballStart : null;
+    const o = joinOverlays(beads ? beadOverlay(beads, aimed?.reachable ?? true) : null, arc, ghost, plungerReady ? timelineOverlay(fuse!.timeline!) : null, plungerReady ? foldPlan : null, foldLot, bellZone, start);
     renderer.reach(ring?.centre ?? null, ring?.radius ?? 0);
     // The impact marker: where the previewed flight first touches, on that face, a little wider than the shot (none under a blast zone).
     const mark = feel.impact && beads && contact && !ring ? contact : null;
