@@ -18,7 +18,7 @@ export { GAME_LOOK } from './options/look.ts';
 /**
  * Rule overrides from the URL (docs/game/spectacle-mode.md, section 10): ?keystone.scoring=par|outcome
  * scores any level either way, ?keystone.autobank=1|0 ends an outcome level at its first clear (or not),
- * ?keystone.settle=v1|v2|v3|v4 picks how a shot settles (default: v1 for par levels, v3 for outcome levels),
+ * ?keystone.settle=v1|v2|v3|v4 picks how a shot settles (default: v1 for par levels, v4 for outcome levels; B1-B3 pin v3),
  * ?keystone.iterations, ?keystone.gapSlop, ?keystone.bounce (e, or off), ?keystone.presettle and
  * ?keystone.pairsPerBody (the GPU pair room per body, in place of every pair) and ?keystone.sleep=1|0 (GPU
  * per-body sleep, PhysicsBlock.sleep) change its physics block,

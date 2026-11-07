@@ -257,13 +257,14 @@ describe('Session, settle rules', () => {
     se.fire(marble, 0);
     return (play(se, obs, s, creeping(steps), 0).find((f) => f.t === 'settled') as Extract<Feedback, { t: 'settled' }> | undefined)?.step ?? null;
   };
-  it('par levels settle by v1 and outcome levels by v3, unless the level says', () => {
+  it('par levels settle by v1 and outcome levels by v4 (v3 before PT6b), unless the level says', () => {
     expect(settleOf(def)).toBe('v1');
-    expect(settleOf(out)).toBe('v3');
+    expect(settleOf(out)).toBe('v4');
+    expect(settleOf({ ...out, settle: 'v3' })).toBe('v3');
     expect(settleOf({ ...out, settle: 'v2' })).toBe('v2');
     expect(settleOf({ ...out, settle: 'v1' })).toBe('v1');
     expect(settleOf({ ...def, settle: 'v2' })).toBe('v2');
-    expect(new Session(compileLevel(out)).settleRule).toBe('v3');
+    expect(new Session(compileLevel(out)).settleRule).toBe('v4');
   });
   it('a lone creeping block holds a v1 shot to its cap; v2 lets it go after the quiet run', () => {
     expect(settleStep(out, SETTLE_CAP_V2 + 10)).toBe(SETTLE_QUIET);
@@ -280,19 +281,19 @@ describe('Session, settle rules', () => {
     }
     expect(at).toBe(SETTLE_CAP_V2);
   });
-  it('par\'s v1 and outcome\'s v2 hash as absent (as before v3); outcome\'s default v3 and every other rule is a different level', () => {
+  it('par\'s v1 and outcome\'s v2 hash as absent (as before v3); outcome\'s default v4 and every other rule is a different level', () => {
     const h = (d: LevelDef) => compileLevel(d).hash;
     // The hashes these levels had before v3 (main at 2a4a436, where outcome levels defaulted to v2).
     expect(h(def)).toBe('d10e20fcf6e35479');
     expect(h({ ...out, settle: 'v2' })).toBe('c5fa2b075688c510');
     expect(h({ ...def, settle: 'v1' })).toBe(h(def));
-    expect(h({ ...out, settle: 'v3' })).toBe(h(out));
-    expect(h(out)).not.toBe(h({ ...out, settle: 'v2' })); // stars cast under v2 never show under v3
+    expect(h({ ...out, settle: 'v4' })).toBe(h(out));
+    expect(h(out)).not.toBe(h({ ...out, settle: 'v2' })); // stars cast under v2 never show under v4
     expect(h({ ...out, settle: 'v1' })).not.toBe(h(out));
     expect(h({ ...def, settle: 'v2' })).not.toBe(h(def));
     expect(h({ ...def, settle: 'v3' })).not.toBe(h({ ...def, settle: 'v2' }));
-    // v4 (PT6) is a level of its own: stars cast under v3 never show under it.
-    expect(h({ ...out, settle: 'v4' })).not.toBe(h(out));
+    // The PT6b flip made the outcome default v4: stars cast under v3 never show under it.
+    expect(h({ ...out, settle: 'v3' })).not.toBe(h(out));
     expect(() => compileLevel({ ...def, settle: 'v9' as never })).toThrow(/settle must be v1 or v2 or v3 or v4: v9/);
   });
 });

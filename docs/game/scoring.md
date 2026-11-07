@@ -87,15 +87,29 @@ On a level with a freeze budget (`LevelDef.freeze`), par for a round is `par + f
 cut shot): a frozen cut-in that clears keeps par, and the card says "freezes used 1/2"
 (`LevelScore.freezes`). Levels without a budget are unchanged: a rapid-fire cut is a stroke.
 
-## Rube Lab parts par (M10)
+## Parts par (Rube Lab, M10; any build level)
 
-A Rube Lab level (`LevelDef.rube`, docs/game/rube-lab.md) has one plunger and no strokes to count, so
+A level whose build block names a parts par (`BuildDef.par`: every Rube Lab level, docs/game/rube-lab.md, and
+any build level that scores on what you place, such as Wavefront's Lay levels) has no strokes worth counting, so
 `levelScore` takes the build's cost (`placedCost`, passed by the session) and scores the parts instead:
-stars are `rubeStars(cleared, spent, partsPar)` (3 at or under the parts par, 2 within `ceil(1.5 par)`,
+stars are `partsStars(cleared, spent, par)` (3 at or under the parts par, 2 within `ceil(1.5 par)`,
 1 for any clear) less one for any heritage broken (never under one, `heritageStarsLost` as on par
-levels); the stamp is PARTS PAR or +N PARTS; there is no gold; the card's sub line reads
-"parts N / par P" in place of strokes (`LevelScore.parts`). The parts par is in the level hash, so
+levels); the stamp is PARTS PAR or +N PARTS (`partsStamp`); there is no gold; the card's sub line reads
+"parts N / par P" in place of strokes (`LevelScore.parts`). `LevelDef.rube` is only Rube Lab's marker (its
+plunger is the Go button); the scoring keys on `build.par` alone. The parts par is in the level hash, so
 retuning it starts a new progress record instead of keeping stars earned under the old par.
+
+## Mason's Trial robustness (M8)
+
+A Mason level (`LevelDef.mason`, docs/game/masons-trial.md) is judged in 64 jittered worlds at once, and
+`masonScore(def, passes, K, spent)` scores the count with two lines that sum to the total:
+**Robust c/K** (round(500 c / K)) and **Budget left l/B** (round(500 (c / K) (l / B))), so a fully
+robust build that spends its whole budget scores 500. The build is cleared at half its worlds or more
+(`MASON_CLEAR`); uncleared is 0 stars whatever the points; cleared takes 1, 2 or 3 stars on the total
+against the level's `mason.stars`, which are 0.9 of the recorded tier authors' points
+(`keystone-lab mason-solutions.ts masonStarsFrom`). The stamp is ROBUST, STANDS or WOBBLY. The card
+reads "c of K" from `LevelScore.worlds` (with the counts each star needs at this budget) and the budget
+from `LevelScore.mason`. No leverage, gold or heritage star loss.
 
 ## Chorus worlds cleared (M9)
 

@@ -31,13 +31,14 @@ export const SETTLE_CAP_V2 = 1800;
  * SETTLE_CAP; par levels pin their lines on it. v2: at most
  * settleAllowance(n) structure bodies moving (Reductions.nMoving) and every
  * live spawned body under QUIET_SPEED, for SETTLE_QUIET steps, or
- * SETTLE_CAP_V2. v3, outcome levels' default: as v2, or else the structure is
+ * SETTLE_CAP_V2. v3 (outcome levels' default until PT6b): as v2, or else the structure is
  * frozen: nothing live (ammo included) faster than FROZEN_SPEED,
  * and the collapse D and the displaced count unchanged (D within FROZEN_D) for
  * FROZEN_STEPS steps, however many bodies still move. A standing wall can ring
  * for the whole cap with a hundred blocks swaying a few centimetres at 0.1 to
  * 0.3 m/s while nothing changes (G5's B1, 2026-11-01); v3 ends that shot, and
- * settles no later than v2 anywhere. v4 (agent playtest PT6): as v3, or else the collapse D has stayed
+ * settles no later than v2 anywhere. v4 (agent playtest PT6; outcome levels' default since PT6b,
+ * docs/game/settle-v4.md): as v3, or else the collapse D has stayed
  * within STEADY_D of where a run began for STEADY_STEPS steps, whatever still moves: a big level's
  * shot whose Down% reads the same for seconds while debris rolls and blocks rock (B1 at 17% from 3.5 s
  * to 18.4 s on Rapier) ends 2 s after the last change anyone can see.
@@ -446,21 +447,23 @@ export interface LevelScore {
   gold?: boolean;
   /** Stars the broken heritage cost (heritageStarsLost): present, at least 1, only when it cost any. */
   heritageStarsLost?: number;
-  /** Rube Lab levels (LevelDef.rube): the build's cost and the level's parts par. Absent elsewhere. */
+  /** Levels with a parts par (BuildDef.par: Rube Lab, Lay levels): the build's cost and the par. Absent elsewhere. */
   parts?: { used: number; par: number };
   /** Bullet Time levels (LevelDef.freeze): freezes spent (freezesUsed) of the level's budget. Absent elsewhere. */
   freezes?: { used: number; total: number };
+  /**
+   * Levels judged in many jittered worlds (Mason's Trial; Chorus): `cleared` of `of` worlds passed, and the worlds
+   * one, two and three stars need (`thresholds`, counts), so the card shows "c of K" once, and neither a gold badge
+   * nor a leverage tier (a Chorus round's leverage is world 0's, shown as information). Absent elsewhere.
+   */
+  worlds?: { cleared: number; of: number; thresholds: readonly [number, number, number] };
+  /** Mason's Trial (LevelDef.mason): the build budget left and the budget, for the card's budget line. Absent elsewhere. */
+  mason?: { left: number; budget: number };
   /**
    * A refereed round (a Siege Table duel: Session's refereed option): no solo tally was made. lines
    * empty, total and stars 0, the stamp DUEL; the duel's own result (Duel.result) is the outcome.
    */
   refereed?: true;
-  /**
-   * A round scored on many jittered worlds (Chorus, chorus.ts chorusScore; Mason's Trial's judge): worlds cleared
-   * `of` the worlds, and the counts its one, two and three stars are at. The card shows "c of K" and neither a gold
-   * badge nor a leverage tier (the leverage is world 0's, shown as information). Mode extras live in their own fields.
-   */
-  worlds?: { cleared: number; of: number; thresholds: readonly [number, number, number] };
 }
 
 /** A score's total: its lines' sum, floored at 0 (LevelScore.lines). */
@@ -504,24 +507,72 @@ export function stampOf(strokes: number, par: number): string {
 }
 
 /**
- * Stars for a Rube Lab level (docs/game/rube-lab.md, scoring): 3 at or under the parts par (what the bot's
- * cheapest robust clear cost), 2 within half again, 1 for any clear; 0 uncleared. Binary clear, no cast.
+ * Stars for a level scored on its parts (BuildDef.par; Rube Lab, docs/game/rube-lab.md, and any build level
+ * that names a par): 3 at or under the parts par (what the bot's cheapest robust clear cost), 2 within half
+ * again, 1 for any clear; 0 uncleared. Binary clear, no cast.
  */
-export function rubeStars(cleared: boolean, spent: number, partsPar: number): 0 | 1 | 2 | 3 {
+export function partsStars(cleared: boolean, spent: number, partsPar: number): 0 | 1 | 2 | 3 {
   if (!cleared) return 0;
   if (spent <= partsPar) return 3;
   if (spent <= Math.ceil(1.5 * partsPar)) return 2;
   return 1;
 }
 
-/** A Rube Lab level's stamp: PARTS PAR at or under the parts par, else +N PARTS. */
-export const rubeStamp = (spent: number, partsPar: number) => (spent <= partsPar ? 'PARTS PAR' : `+${spent - partsPar} PARTS`);
+/** Mason's Trial (docs/game/masons-trial.md): a build is cleared when at least this share of its worlds pass. */
+export const MASON_CLEAR = 0.5;
+
+/**
+ * Mason's Trial's two score lines (agreed with the scoring owner, docs/game/scoring.md): Robust, 500 x the share of
+ * worlds passed, and Budget left, 500 x that share x the share of the budget left. Their sum is
+ * round(1000 x (passes / K) x (1 + left / budget) / 2), give or take 1 from rounding: a fully robust build that
+ * spends the whole budget scores 500, a robust free one would score 1000.
+ */
+export function masonLines(passes: number, K: number, left: number, budget: number): ScoreLine[] {
+  const p = passes / K, l = budget > 0 ? Math.max(0, left) / budget : 0;
+  return [{ label: `Robust ${passes}/${K}`, value: Math.round(500 * p) }, { label: `Budget left ${Math.max(0, left)}/${budget}`, value: Math.round(500 * p * l) }];
+}
+
+/** Stars for a Mason build: 0 uncleared (fewer than MASON_CLEAR of its worlds passed), 1 cleared, 2 at t2 points, 3 at t3. */
+export function masonStars(cleared: boolean, points: number, stars: readonly [number, number]): 0 | 1 | 2 | 3 {
+  if (!cleared) return 0;
+  return points >= stars[1] ? 3 : points >= stars[0] ? 2 : 1;
+}
+
+/**
+ * The fewest worlds of K that give one, two and three stars to a build with `left` of `budget` unspent: ceil(K
+ * MASON_CLEAR), and the least passes whose lines reach t2 and t3 (K + 1: out of reach at this budget).
+ */
+export function masonThresholds(K: number, left: number, budget: number, stars: readonly [number, number]): [number, number, number] {
+  const least = (t: number) => {
+    for (let c = 0; c <= K; c++) if (floorTotal(masonLines(c, K, left, budget)) >= t) return c;
+    return K + 1;
+  };
+  const one = Math.ceil(K * MASON_CLEAR);
+  return [one, Math.max(one, least(stars[0])), Math.max(one, least(stars[1]))];
+}
+
+/**
+ * A Mason level's score from its judge (passes of K worlds) and the build's cost (build.ts placedCost): the two
+ * lines, stars on their total (masonStars), the stamp ROBUST or WOBBLY, the shared worlds field and the budget.
+ * No leverage, no gold and no heritage star loss: the heritage is the pass rule's.
+ */
+export function masonScore(def: LevelDef, passes: number, K: number, spent: number): LevelScore {
+  const m = def.mason!, budget = def.build?.budget ?? 0, left = Math.max(0, budget - spent);
+  const lines = masonLines(passes, K, left, budget), total = floorTotal(lines), cleared = passes >= Math.ceil(K * MASON_CLEAR);
+  return {
+    lines, total, stars: masonStars(cleared, total, m.stars), stamp: cleared ? (passes === K ? 'ROBUST' : 'STANDS') : 'WOBBLY', leverage: 0,
+    worlds: { cleared: passes, of: K, thresholds: masonThresholds(K, left, budget, m.stars) }, mason: { left, budget },
+  };
+}
+
+/** A parts-par level's stamp: PARTS PAR at or under the parts par, else +N PARTS. */
+export const partsStamp = (spent: number, partsPar: number) => (spent <= partsPar ? 'PARTS PAR' : `+${spent - partsPar} PARTS`);
 
 /**
  * A level's score at its end. `spent`: the build's cost (build.ts placedCost), read on a Rube Lab level
- * (def.rube): there the stars are rubeStars on it, less one for any heritage broken (never under one),
- * the stamp is rubeStamp, the score carries `parts`, and there is no gold (a contraption's one plunger
- * is not a stroke to beat).
+ * on a level with a parts par (def.build.par): there the stars are partsStars on it, less one for any
+ * heritage broken (never under one), the stamp is partsStamp, the score carries `parts`, and there is no
+ * gold (a contraption's one plunger is not a stroke to beat).
  */
 export function levelScore(def: LevelDef, shots: ShotOutcome[], cleared: boolean, structureCount: number, spent = 0): LevelScore {
   const s = shots.length, par = parWithFreezes(def, shots);
@@ -540,11 +591,12 @@ export function levelScore(def: LevelDef, shots: ShotOutcome[], cleared: boolean
     const out = shots[s - 1]!.outOfLot, allowance = Math.floor(def.objective.footprintMax * structureCount);
     if (out > allowance) lines.push({ label: 'Footprint', value: -20 * (out - allowance) });
   }
-  if (def.rube) {
-    const base = rubeStars(cleared, spent, def.rube.partsPar), stars = (base > 1 && broken ? base - 1 : base) as 0 | 1 | 2 | 3;
+  const pp = def.build?.par;
+  if (pp !== undefined) {
+    const base = partsStars(cleared, spent, pp), stars = (base > 1 && broken ? base - 1 : base) as 0 | 1 | 2 | 3;
     return {
-      lines, total: floorTotal(lines), stars, stamp: cleared ? rubeStamp(spent, def.rube.partsPar) : 'INCOMPLETE', leverage: L,
-      parts: { used: spent, par: def.rube.partsPar }, ...(base - stars > 0 ? { heritageStarsLost: base - stars } : {}),
+      lines, total: floorTotal(lines), stars, stamp: cleared ? partsStamp(spent, pp) : 'INCOMPLETE', leverage: L,
+      parts: { used: spent, par: pp }, ...(base - stars > 0 ? { heritageStarsLost: base - stars } : {}),
     };
   }
   const gold = cleared && s <= par && broken === 0 && L >= (levelGoldLine(def) ?? DEFAULT_GOLD); // the line levelTier names tiers from

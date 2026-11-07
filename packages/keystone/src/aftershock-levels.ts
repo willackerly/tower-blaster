@@ -109,6 +109,9 @@ function shipped(site: string, id: string, name: string, ace: QuakeShot, cast: {
   const s = QUAKE_SITES[site]!;
   return {
     ...aftershockLevel({ ...s, id, name, quake: { ...s.quake, budget: cast.budget } }),
+    // Cast under settle v3, the outcome default until PT6b made it v4: pinned so the stars keep their hash; drop it with
+    // a v4 recast (docs/game/settle-v4.md).
+    settle: 'v3',
     stars: { metric: 'energy', t2: cast.t2, t3: cast.t3, best: cast.best, castOn: 'node ref, aces checked on the GPU', engine: 'gpu', hash: cast.hash, n: cast.n, seed: 1 },
     solutions: { ace: [ace] },
   };

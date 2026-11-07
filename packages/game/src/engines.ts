@@ -4,7 +4,7 @@
 // are sized at init from these options).
 import { RapierEngine } from '@tb/adapter-rapier';
 import { type EngineHealth, limitsHit, type PhysicsEngine, type ShapeDesc } from '@tb/engine-api';
-import { AVBD_GAP_SLOP, AVBD_ITERATIONS, ammoBody, ChorusEngine, type ChorusEngineOptions, chorusOf, type CompiledLevel, type DriverOptions, IceBreaker, physicsOf, rackBodies } from '@tb/keystone';
+import { ammoBody, AVBD_GAP_SLOP, AVBD_ITERATIONS, ChorusEngine, type ChorusEngineOptions, chorusOf, type CompiledLevel, type DriverOptions, IceBreaker, masonCapacity, masonProbes, physicsOf, rackBodies } from '@tb/keystone';
 import { everyPairPerBody, GpuAvbdEngine, type GpuEngineOptions } from '@tb/physics-gpu';
 
 export const ENGINES = ['rapier', 'gpu'] as const;
@@ -125,3 +125,19 @@ function makeInner(kind: EngineKind, c: CompiledLevel, device: GPUDevice | undef
  * 9.6k-body islands ran on SwiftShader and Metal with no dropped pair. roomAfter grows it if a round drops pairs.
  */
 export const CHORUS_PAIRS_PER_BODY = 24;
+
+/**
+ * The engine a Mason level's judge runs on (keystone mason-judge.ts MasonRun, `worlds` islands): the level's
+ * iterations (40 whatever asks otherwise: level.ts MASON_ITERATIONS), room for every world's structure and probes,
+ * a reach for the probes (spawned at the test's start), and the pair room of one world: islands never touch, so a
+ * body pairs only within its own (its every pair, as a level's engine has). Rapier as makeEngine.
+ */
+export function makeMasonEngine(kind: EngineKind, c: CompiledLevel, worlds: number, device?: GPUDevice): PhysicsEngine {
+  if (kind === 'rapier') return new RapierEngine();
+  return new GpuAvbdEngine(gpuParams(c), { device, ...masonGpuOptions(c, worlds) });
+}
+
+export function masonGpuOptions(c: CompiledLevel, worlds: number): Required<Pick<GpuEngineOptions, 'capacity' | 'maxRadius' | 'pairsPerBody'>> {
+  const maxRadius = Math.max(0, ...masonProbes(c, 0).map((e) => radiusOf(e.body.shape)));
+  return { capacity: masonCapacity(c, worlds), maxRadius, pairsPerBody: everyPairPerBody(masonCapacity(c, 1)) };
+}
