@@ -3,6 +3,7 @@
 // small pure functions, so the coverage (every level, every mode, both form
 // factors) is a unit test and not a hope; run.ts drives the browser from it.
 import { AFTERSHOCK_LEVELS, BIG_LEVELS, DUELS, FUSE_LEVELS, LEVELS, type LevelDef, MASON_LEVELS, RUBE_LEVELS, type Shot, TRIAL_LEVELS, UNDERCUT_LEVELS, WAVE_LEVELS } from '@tb/keystone';
+import { RETROFIT_SOLUTIONS } from '../../../keystone-lab/src/retrofit-solutions.ts';
 import { RUBE_SOLUTIONS } from '../../../keystone-lab/src/rube-solutions.ts';
 
 /** The form factors played: a laptop, a phone held upright (touch), and the same phone turned. */
@@ -110,7 +111,9 @@ export function agentPlan(): Scenario[] {
       const at = { engine: 'gpu' as const, mode, search: `?level=${l.id}`, level: l.id };
       out.push({ ...at, id: `${l.id}-novice`, title: `${l.id} ${l.name}, first visit`, viewports: [...BOTH, 'phone-landscape'], script: { kind: 'play', policy: 'novice', shots: mode === 'wave' ? Math.min(l.rack.length, 2) : 1 } });
       if (mode === 'fuse') out.push({ ...at, id: `${l.id}-sweep`, title: `${l.id} ${l.name}, swept toward the yard`, viewports: ['desktop'], script: { kind: 'play', policy: 'sweep', shots: 1 } });
-      if (l.solutions?.ace || RUBE_SOLUTIONS[l.id]) out.push({ ...at, id: `${l.id}-line`, title: `${l.id} ${l.name}, recorded ${mode === 'rube' ? 'build' : 'line'}`, viewports: ['desktop'], script: { kind: 'play', policy: 'line', shots: 1 } });
+      // A retrofit's recorded line is its bracing (the build), then the level's own quake.
+      const built = !!(RUBE_SOLUTIONS[l.id] || RETROFIT_SOLUTIONS[l.id]);
+      if (l.solutions?.ace || built) out.push({ ...at, id: `${l.id}-line`, title: `${l.id} ${l.name}, recorded ${built ? 'build' : 'line'}`, viewports: ['desktop'], script: { kind: 'play', policy: 'line', shots: 1 } });
     }
   }
   return out;

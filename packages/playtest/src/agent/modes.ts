@@ -1,10 +1,11 @@
 // The agent playtest's moves for the build-and-fire modes (round 2, docs/game/agent-playtest-2.md): how the
-// harness plays Fuse & Fold's sweep, and how it builds a Rube Lab level's recorded solution on the game page
+// harness plays Fuse & Fold's sweep, and how it builds a Rube Lab level's or a retrofit's recorded solution on the game page
 // through the same keys and pointer rays a player's mouse gives (GameHandle.edit.key and edit.ray), so a
 // build that clears in the lab is built the way a person would build it. Pure: run.ts replays the actions,
 // test/agent-modes.test.ts replays them through the page's own EditController in node.
 import type { Vec3 } from '@tb/engine-api';
 import { BuildSession, FOLD_SITES, type Hold, type LevelDef, smoothStroke } from '@tb/keystone';
+import { RETROFIT_SOLUTIONS, retrofitSteps } from '../../../keystone-lab/src/retrofit-solutions.ts';
 import { RUBE_SOLUTIONS } from '../../../keystone-lab/src/rube-solutions.ts';
 import type { BuildStep } from '../../../keystone-lab/src/rube.ts';
 
@@ -64,6 +65,15 @@ export function rubeLine(def: LevelDef): { label: string; actions: EditAction[] 
   const b = RUBE_SOLUTIONS[def.id]?.[0];
   return b ? { label: b.label, actions: buildActions(def, b.steps) } : null;
 }
+
+/** An Aftershock retrofit's recorded bracing (its first: the three-star one) as page actions; null when it has none. */
+export function retrofitLine(def: LevelDef): { label: string; actions: EditAction[] } | null {
+  const b = RETROFIT_SOLUTIONS[def.id]?.[0];
+  return b ? { label: b.label, actions: buildActions(def, retrofitSteps(def, b)) } : null;
+}
+
+/** A level's recorded build as page actions (a Rube Lab build, else a retrofit's bracing); null when it has none. */
+export const buildLine = (def: LevelDef) => rubeLine(def) ?? retrofitLine(def);
 
 /** Fuse & Fold's sweep for a level: toward its site's first yard (the side the building may fall into). */
 export function fuseSweep(def: LevelDef): string {

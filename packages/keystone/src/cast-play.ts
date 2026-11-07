@@ -31,6 +31,8 @@ export interface CastSample {
   energy?: number;
   /** Fuse & Fold's metric, collapse x (1 - spill) (outcome.ts foldValue; spill 0 on levels that are not fold levels). Absent in casts recorded before it: read as 0. */
   fold?: number;
+  /** What the player placed (build.ts placedCost; the built metric), on a level with a build block. Absent elsewhere. */
+  built?: number;
 }
 
 /** One played line: a sample at every settle (the last is the end), the engine steps, the end state's hash and any engine limit hit. */
@@ -47,12 +49,12 @@ export interface CastPlay {
 }
 
 /** Each star metric's value in a sample. */
-export const sampleValue = (s: CastSample, metric: StarMetric): number => (metric === 'collapse' ? s.collapse : metric === 'crowns' ? s.crowns : metric === 'skyline' ? s.skyline : metric === 'pulled' ? s.pulled : metric === 'energy' ? s.energy ?? Infinity : metric === 'fold' ? s.fold ?? 0 : s.score);
+export const sampleValue = (s: CastSample, metric: StarMetric): number => (metric === 'collapse' ? s.collapse : metric === 'crowns' ? s.crowns : metric === 'skyline' ? s.skyline : metric === 'pulled' ? s.pulled : metric === 'energy' ? s.energy ?? Infinity : metric === 'fold' ? s.fold ?? 0 : metric === 'built' ? s.built ?? Infinity : s.score);
 
 /** The sample of a session as it stands at its last settle, banked there. */
 export function sampleOf(session: Session, step: number): CastSample {
   const f = session.outcomeFacts(), score = outcomeScore(f, undefined);
-  return { shots: session.outcomes.length, step, met: f.met, collapse: f.collapse, crowns: metricValue('crowns', f, 0), skyline: f.skylineRatio, score: score.total, heritage: f.heritageBroken, pulled: f.pulled, energy: f.energy ?? 0, fold: metricValue('fold', f, 0) };
+  return { shots: session.outcomes.length, step, met: f.met, collapse: f.collapse, crowns: metricValue('crowns', f, 0), skyline: f.skylineRatio, score: score.total, heritage: f.heritageBroken, pulled: f.pulled, energy: f.energy ?? 0, fold: metricValue('fold', f, 0), ...(f.built ? { built: f.built.spent } : {}) };
 }
 
 export interface CastPlayOptions extends DriverOptions {

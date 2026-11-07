@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { B1, B2, compileLevel, levelGoldLine, L1, L2, L3, L4, L5, levelScore, outcomeScore, RL1, type ShotOutcome, U3, W3, W5, type ChorusJudgement, chorusScore } from '@tb/keystone';
+import { B1, B2, compileLevel, levelGoldLine, L1, L2, L3, L4, L5, levelScore, masonScore, MT4, outcomeScore, RL1, type ShotOutcome, U3, W3, W5, type ChorusJudgement, chorusScore } from '@tb/keystone';
 import { HOW_TO_PLAY } from '../src/door.ts';
-import { GAME_HELP, GAME_KEYS, HELP_BUDGET, helpHtml, TOUCH_HELP } from '../src/ui.ts';
-import { CUT_HINT, PULL_HINT, PUSH_HINT, BANK_BUTTON, BANK_QUIET, SKIP_BUTTON, esc, freezeButton, POWER_STEP, fmtLeverage, fmtPoints, goldHtml, hudHtml, keepRow, LEVERAGE_MEANS, leverageRow, meterHtml, meterTicks, nextSelection, objectiveText, rackChips, resultHtml, starsText, slotAction, tallyHtml, touchActs, chorusObjectiveText } from '../src/hud.ts';
+import { BUILD_HELP, GAME_HELP, GAME_KEYS, HELP_BUDGET, helpHtml, MASON_HELP, TOUCH_HELP } from '../src/ui.ts';
+import { CUT_HINT, PULL_HINT, PUSH_HINT, BANK_BUTTON, BANK_QUIET, SKIP_BUTTON, esc, freezeButton, POWER_STEP, fmtLeverage, fmtPoints, goldHtml, hudHtml, keepRow, LEVERAGE_MEANS, leverageRow, meterHtml, meterTicks, nextSelection, objectiveText, rackChips, resultHtml, starsText, slotAction, tallyHtml, touchActs, masonStarsHtml, masonSub, TEST_BUTTON, trialText, chorusObjectiveText } from '../src/hud.ts';
 
 describe('rack', () => {
   it('groups by kind in first-seen order with counts and keys', () => {
@@ -242,7 +242,13 @@ describe('playtest polish (U5, U6)', () => {
     expect(text(GAME_HELP).length).toBeLessThanOrEqual(HELP_BUDGET);
     // Desktop and touch hints are separate spans; CSS shows one of them.
     const span = (h: string, cls: string) => text(h.match(new RegExp(`<span class="${cls}">(.*?)</span>(?=<span|$)`))?.[1] ?? '');
-    expect(span(helpHtml(false), 'kg-desk')).toBe(text(GAME_HELP));
+    expect(span(helpHtml(false), 'kg-desk h-play')).toBe(text(GAME_HELP));
+    // Building and on a Mason level the line says what the pointer and keys do there (CSS picks by body class).
+    expect(span(helpHtml(false), 'kg-desk h-build')).toBe(text(BUILD_HELP));
+    expect(span(helpHtml(false), 'kg-desk h-mason')).toBe(text(MASON_HELP));
+    for (const h of [BUILD_HELP, MASON_HELP]) expect(text(h).length).toBeLessThanOrEqual(HELP_BUDGET);
+    expect(text(MASON_HELP)).not.toMatch(/fire/);
+    expect(GAME_KEYS).toContain('<kbd>[</kbd>/<kbd>]</kbd> slide');
     expect(span(helpHtml(false), 'kg-tch')).toBe(TOUCH_HELP);
     expect(span(helpHtml(true), 'kg-tch')).toBe(TOUCH_HELP);
     for (const k of ['U', 'R', '?']) expect(GAME_HELP).toContain(`<kbd>${k}</kbd>`);
@@ -320,6 +326,46 @@ describe('scores and leverage add up (PT9, PT16)', () => {
     const text = HOW_TO_PLAY.join(' ');
     expect(text).toContain(LEVERAGE_MEANS);
     expect(text).toMatch(/never goes below 0/);
+  });
+});
+
+describe("Mason's Trial on the HUD and the card", () => {
+  it('the status row follows the test: what it will do, world 1 running, the judge, then both verdicts', () => {
+    expect(trialText(null, 64)).toBe('build, then test it in 64 worlds');
+    expect(trialText({ state: 'running', hero: null, passes: null, of: 64 }, 64)).toBe('testing: you watch world 1 of 64');
+    expect(trialText({ state: 'judging', hero: true, passes: null, of: 64 }, 64)).toBe('judging the other 63 worlds…');
+    expect(trialText({ state: 'done', hero: false, passes: 46, of: 64 }, 64)).toBe('failed here · stood in 46 of 64');
+    expect(trialText({ state: 'error', hero: null, passes: null, of: 64 }, 64)).toBe('the judge could not run');
+  });
+
+  it("the slot is Test on a Mason level (never Fire or Go), and only while a test can start", () => {
+    const base = { level: MT4, canBank: false, canSkip: false, skipping: false } as const;
+    expect(slotAction({ ...base, opener: true })).toBe('test');
+    expect(slotAction({ ...base, opener: false })).toBeNull();
+    expect(TEST_BUTTON).toMatch(/data-act="opener"/);
+    expect(TEST_BUTTON).toMatch(/Test the build/);
+  });
+
+  it('the card says how many worlds the build stood in and what it spent, and what the next star needs', () => {
+    // MT4's 3-star author build: every world, 5 of 10 spent: three stars, nothing left to reach for.
+    const best = masonScore(MT4, 64, 64, 5);
+    expect(best.stars).toBe(3);
+    expect(masonSub(best)).toBe('stood in 64 of 64 worlds · spent 5 of 10');
+    expect(masonStarsHtml(best)).toBe('');
+    // The knife-edge build (46 of 64, 4 spent): one star; two need 51 worlds at this cost.
+    const knife = masonScore(MT4, 46, 64, 4);
+    expect([knife.total, knife.stars, knife.stamp]).toEqual([575, 1, 'STANDS']);
+    expect(knife.worlds!.thresholds).toEqual([32, 51, 54]);
+    expect(masonStarsHtml(knife)).toContain('★2 at 51 of 64 worlds');
+    // The whole budget spent: 500 points at most, under the 2-star line whatever the worlds.
+    expect(masonStarsHtml(masonScore(MT4, 64, 64, 10))).toContain('★2 needs a cheaper build');
+    // Under half the worlds: no star, WOBBLY.
+    expect([masonScore(MT4, 31, 64, 5).stars, masonScore(MT4, 31, 64, 5).stamp]).toEqual([0, 'WOBBLY']);
+    // The card: the Mason line in place of strokes and par, no leverage, the next-star hint under the stars.
+    const html = resultHtml(MT4, knife, 0, null);
+    expect(html).toContain('stood in 46 of 64 worlds · spent 4 of 10');
+    expect(html).not.toMatch(/par \d|leverage/i);
+    expect(html).toContain('★2 at 51 of 64 worlds');
   });
 });
 

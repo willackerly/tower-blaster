@@ -23,9 +23,15 @@ const builtDef = (def: LevelDef, steps: Parameters<typeof masonBuild>[1]) => {
   return r.def;
 };
 
-export function masonGpuSuite(def: LevelDef): void {
+/**
+ * Registers the GPU tests of one Mason level. CI (O5) runs them for one representative level only
+ * (`representative`, MT4: mason-gpu-MT4.test.ts); the rest run with PHYSICS_GPU_SLOW=1 (nightly).
+ */
+export function masonGpuSuite(def: LevelDef, representative = false): void {
+  const RUN = representative || SLOW;
   let player: BrowserCastPlayer | null = null;
   beforeAll(async () => {
+    if (!RUN) return;
     try {
       const channel = channelOf();
       player = await openBrowserCastPlayer(channel ? { channel } : {});
@@ -36,7 +42,7 @@ export function masonGpuSuite(def: LevelDef): void {
   afterAll(async () => { await player?.close(); });
 
   describe("Mason's Trial on the GPU solver", () => {
-    it(`${def.id} ${def.name}: the authors pass in ${SLOW ? 64 : 16} islands, the bare level fails`, async (ctx) => {
+    it.runIf(RUN)(`${def.id} ${def.name}: the authors pass in ${SLOW ? 64 : 16} islands, the bare level fails`, async (ctx) => {
       if (!player) return ctx.skip();
       expect(player.engine).toBe('gpu');
       // A channel asks for the real GPU (TB_CHANNEL=chrome on the Mac): a software adapter under it is not that run (#234, S5).
