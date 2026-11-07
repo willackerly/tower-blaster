@@ -381,6 +381,7 @@ export function mountControls(root: HTMLElement, hooks: ControlsHooks): { refres
         <label class="f"><span>materials</span><select name="set">${SOUND_SETS.map((m) => `<option value="${m}">${m}</option>`).join('')}</select></label>
         <label class="f"><span>room</span><select name="room"><option value="auto">auto</option>${ROOMS.map((m) => `<option value="${m}">${m}</option>`).join('')}</select></label>
         ${field('space', 'space: stereo by impact, room by distance', true)}
+        ${field('air', 'air: far impacts lose their top end (with space)', true)}
         ${(Object.entries(SOUND_KNOBS) as [SoundKnob, (typeof SOUND_KNOBS)[SoundKnob]][]).map(([key, k]) => field(key, k.label, k.def, `step="${k.step}" min="${k.min}" max="${k.max}"`)).join('')}
       </div>
       <div class="out muted"></div>
@@ -676,7 +677,7 @@ export function mountControls(root: HTMLElement, hooks: ControlsHooks): { refres
     const on = (input(soundForm, 'on') as HTMLInputElement).checked;
     soundBox.hidden = !on;
     try {
-      const o = { on, material: input(soundForm, 'material').value, set: input(soundForm, 'set').value, room: input(soundForm, 'room').value, space: (input(soundForm, 'space') as HTMLInputElement).checked, ...Object.fromEntries((Object.keys(SOUND_KNOBS) as SoundKnob[]).map((k) => [k, input(soundForm, k).value === '' ? NaN : Number(input(soundForm, k).value)])) } as SoundOptions;
+      const o = { on, material: input(soundForm, 'material').value, set: input(soundForm, 'set').value, room: input(soundForm, 'room').value, space: (input(soundForm, 'space') as HTMLInputElement).checked, air: (input(soundForm, 'air') as HTMLInputElement).checked, ...Object.fromEntries((Object.keys(SOUND_KNOBS) as SoundKnob[]).map((k) => [k, input(soundForm, k).value === '' ? NaN : Number(input(soundForm, k).value)])) } as SoundOptions;
       hooks.setSound(checkSound(o));
       soundNote();
     } catch (e) {
@@ -786,6 +787,7 @@ export function mountControls(root: HTMLElement, hooks: ControlsHooks): { refres
     input(soundForm, 'set').value = c.sound.set;
     input(soundForm, 'room').value = c.sound.room;
     (input(soundForm, 'space') as HTMLInputElement).checked = c.sound.space;
+    (input(soundForm, 'air') as HTMLInputElement).checked = c.sound.air;
     for (const k of Object.keys(SOUND_KNOBS) as SoundKnob[]) input(soundForm, k).value = String(c.sound[k]);
     soundNote();
   }

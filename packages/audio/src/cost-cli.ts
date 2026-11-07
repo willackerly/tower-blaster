@@ -2,7 +2,7 @@
 // sound-cli.ts frames=dir): wall time CollapseEngine takes to push and render it, as a share of
 // one core in real time (best of `reps`), with grit on and off. V8 runs the AudioWorklet the same
 // way, so on a physical machine this is the synth's real cost; on a VM or CI it is a sanity check.
-// usage: tsx packages/audio/src/cost-cli.ts frames.json [mat=stone edge=1 reps=5 set=real|classic room=off|outdoor|hall space=0|1]
+// usage: tsx packages/audio/src/cost-cli.ts frames.json [mat=stone edge=1 reps=5 set=real|classic room=off|outdoor|hall space=0|1 air=0|1]
 import { readFileSync } from 'node:fs';
 import { BLOCK, CollapseEngine } from './engine.ts';
 import { framesFrom, type FrameRecord } from './frame.ts';
@@ -10,7 +10,7 @@ import { SOUND_SETS, type SoundMaterial, soundMaterials, type SoundSet } from '.
 import type { Room } from './room.ts';
 
 const [file, ...kv] = process.argv.slice(2);
-const o: Record<string, string> = { mat: 'stone', edge: '1', reps: '5', set: 'real', room: 'off', space: '0' };
+const o: Record<string, string> = { mat: 'stone', edge: '1', reps: '5', set: 'real', room: 'off', space: '0', air: '0' };
 for (const a of kv) { const [k, v] = a.split('='); if (!(k! in o)) throw new Error(`unknown option ${k}`); o[k!] = v!; }
 const json = JSON.parse(readFileSync(file!, 'utf8')) as { frames: FrameRecord[] };
 if (!(SOUND_SETS as readonly string[]).includes(o.set ?? '')) throw new Error(`set must be one of ${SOUND_SETS.join(', ')}: ${o.set}`);
@@ -25,6 +25,7 @@ function run(m: SoundMaterial): { ms: number; grains: number } {
   const e = new CollapseEngine({ sampleRate: SR, seed: 1 });
   e.setRoom(o.room as Room);
   e.setSpace(o.space === '1');
+  e.setAir(o.air === '1');
   for (let i = 0; i < slots; i++) e.setMaterial(i, m, +o.edge!); // a game capture: every slot the one material
   const l = new Float32Array(BLOCK), r = new Float32Array(BLOCK);
   let due = 0;
@@ -33,7 +34,7 @@ function run(m: SoundMaterial): { ms: number; grains: number } {
   return { ms: performance.now() - t0, grains: e.grains };
 }
 
-console.log(`${file}: ${seconds.toFixed(1)} s, ${impacts} impacts, ${slots} slot(s), ${o.mat} (${o.set}) at ${o.edge} m, room ${o.room}, space ${o.space}`);
+console.log(`${file}: ${seconds.toFixed(1)} s, ${impacts} impacts, ${slots} slot(s), ${o.mat} (${o.set}) at ${o.edge} m, room ${o.room}, space ${o.space}, air ${o.air}`);
 for (const [name, m] of [['grit on', base], ['grit off', { ...base, gritDb: -Infinity }]] as const) {
   let best = Infinity, grains = 0;
   for (let i = 0; i < +o.reps!; i++) { const x = run(m); best = Math.min(best, x.ms); grains = x.grains; }

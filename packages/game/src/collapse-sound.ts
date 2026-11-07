@@ -34,16 +34,19 @@ export class CollapseSound {
   readonly room: Room;
   /** Space (keystone.space, A8a): sectors at their impacts' pan, the room by distance; never in the classic set. */
   readonly space: boolean;
+  /** Air (keystone.air, A8a step 3): far impacts lose their top end; with space only, never in the classic set. */
+  readonly air: boolean;
 
   /**
    * extraDb: the level over the game's own (gameSoundDb of the set); set: the materials ('classic': G6's); kapla: Kapla
    * planks sound as real ones (keystone.kaplasound pine; never in the classic set, which is G6's); room: where it is
-   * heard (keystone.room, @tb/audio room.ts; dry in the classic set); space: keystone.space (A8a; off in the classic set).
+   * heard (keystone.room, @tb/audio room.ts; dry in the classic set); space: keystone.space (A8a; off in the classic set); air: keystone.air (with space).
    */
-  constructor(private readonly extraDb = 0, private readonly set: SoundSet = 'real', kapla = true, room: Room = 'outdoor', space = true) {
+  constructor(private readonly extraDb = 0, private readonly set: SoundSet = 'real', kapla = true, room: Room = 'outdoor', space = true, air = true) {
     this.kapla = kapla && set !== 'classic';
     this.room = set === 'classic' ? 'off' : room;
     this.space = space && set !== 'classic';
+    this.air = air && this.space;
   }
 
   private get gain(): number { return 10 ** ((gameSoundDb(this.set) + this.extraDb) / 20); }
@@ -116,7 +119,7 @@ export class CollapseSound {
       this.sendLevel();
       this.post({ type: 'gain', gain: this.gain, muted: this.muted });
       this.post({ type: 'room', room: this.room });
-      this.post({ type: 'space', on: this.space });
+      this.post({ type: 'space', on: this.space, air: this.air });
       void ctx.resume().then(() => this.running());
     } catch (e) {
       this.fail(e instanceof Error ? e.message : String(e));

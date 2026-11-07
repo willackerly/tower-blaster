@@ -324,7 +324,10 @@ viewer's 10k knock-down from 75 m):
 | pine (Kapla) | 0.47 | 0.47 | Jingle bell, Glass, Bell, Chink | (unchanged) | classic |
 | **the game, L1-L5 as played** | **0.19** | **0.81** | Music, Plop, Synthesizer | Door; Knock, Whack; Door, Whack; Knock, Door; Door, Knock | |
 
-(Silence, Sound effect and Inside, small room are left out of the top classes.) The real share is the
+(Silence, Sound effect and Inside, small room are left out of the top classes.) The two viewer-city rows
+were rendered without the background bank (see "Judge fix: viewer captures"); with it, stone at 1 m is
+classic 0.02, real 0.99 (Explosion, Fireworks, Crackle), and acrylic classic 0.25, real 0.75 (Wood, Tools,
+Mechanisms). The real set still wins by as much or more. The real share is the
 headline, but the top classes keep it honest: rubber and iron leave "instrument" for odd neighbours
 (Rodents, Fart, Wind), a sign their low, noisy rumble is not yet right either. Both are rare in the
 levels; they wait for listening and recordings.
@@ -731,6 +734,14 @@ the ladder (dist 0.6 m) and on two topples (2,000 and 3,000 planks):
 | 0.045, roughDb -6 | 0.82 | 0.69 | 0.65 | 0.89 | 0.87 | Snake, Rattle / Fireworks |
 | 0.08, roughDb -6 | 0.76 | 0.72 | 0.68 | 0.99 | | Fireworks, Explosion, Firecracker |
 
+The topple columns were rendered without the background bank, 8 voices a frame of ~140 impacts (see "Judge
+fix: viewer captures"). With the bank, 2k / 3k: classic 0.30 / 0.56, eta 0.01 0.60 / 0.83, 0.03 0.79 / 0.97,
+0.04 0.90 / 0.98, **0.045 0.94 / 0.99**, 0.05 0.97 / 0.99, 0.06 0.99 / 0.99, 0.045 roughDb -6 0.96 / 0.97,
+plaster at 0.3 m 0.98 / 0.99. The order holds and 0.045 stands (it is chosen on the ladder, where the
+plateau is). But every eta from 0.04 now tops out as Fireworks, Explosion, Scrape: a topple's thousands of
+small clicks through the bank are a dense crackle, as the stone city's are. That is a listening item, not
+a judge failure (fireworks are among the control's real recordings).
+
 Knock and clatter read as wood (wood share 0.43-0.46, the highest of the four materials, with Tick and "Inside,
 small room" on top, which is what real wood on wood gets: DiffImpact, step 2). Above 0.05, or with contact
 roughness, the topple turns to fireworks, as stone grit did on a tower (step 3); planed wood is smooth, so pine has no `roughDb`.
@@ -841,6 +852,9 @@ city of stone at 0.5 m) and on 6 ladder clips (clatter and tumble for stone, pla
 | **outdoor** | **0.89** | **0.94** | **0.93** |
 | hall | 0.60 | 0.84 | 0.76 |
 
+- The game-mix column's Kapla topple and city were rendered without the background bank (see "Judge fix:
+  viewer captures"). With it, off / outdoor / hall: city 0.98 / 0.99 / 0.98, Kapla topple 0.94 / 0.97 /
+  0.97. Outdoor stays the default.
 - **Outdoor leaves real recordings as they were** and lifts the synth on every set. L3, a glass-and-stone
   scatter, goes from 0.75 ("Silence, Sound effect, Tick") to 0.91 (Glass, Chink); clatter of plaster goes from
   0.68 (Animal, Inside small room) to 0.97 (Coin, Crackle, Crack).
@@ -927,12 +941,14 @@ The fix, behind `setSpace` in the engine:
 - **Off, or the classic set:** plays exactly as before A8a.
 
 **Judge** (mean real share; the control is the 24 real recordings put through what space does to a source at
-that distance, `ctl.py` overrides on `wet.ts`):
+that distance, `ctl.py` overrides on `wet.ts`). Re-judged with the city's and the Kapla topple's bank (see
+"Judge fix: viewer captures"; the first table had game 0.932 / 0.934 / 0.805 / 0.798 and city 0.99 / 0.99 /
+0.99 / 0.74):
 
 | | outdoor, space off | outdoor, space on | hall, space off | hall, space on |
 |---|---|---|---|---|
-| game mixes (L1-L5, Kapla) | 0.932 | 0.934 | 0.805 | 0.798 |
-| stone city (98 m) | 0.99 | 0.99 | 0.99 | 0.74 |
+| game mixes (L1-L5, Kapla) | 0.934 | 0.938 | 0.813 | 0.799 |
+| stone city (98 m) | 0.99 | 0.99 | 0.98 | 0.64 |
 
 | control | at dref | 6.4 m | 17 m | 98 m |
 |---|---|---|---|---|
@@ -943,7 +959,7 @@ that distance, `ctl.py` overrides on `wet.ts`):
   where a sound is, and the distance law outdoors is gentle.
 - **The stereo image narrows to the tower.** L/R correlation rises from 0.905 to 0.953 on L3, and from 0.931
   to 0.954 on the Kapla topple.
-- **The hall at 98 m is a listening item.** The city goes 0.99 -> 0.74, while real recordings at 98 m in
+- **The hall at 98 m is a listening item.** The city goes 0.98 -> 0.64, while real recordings at 98 m in
   the hall drop to 0.46. A city 98 m off in a hall is not a scene the game has; the viewer's auto room puts
   the hall only under the real look's hall.
 
@@ -966,6 +982,79 @@ that distance, `ctl.py` overrides on `wet.ts`):
 Clips (before / space) for L3, L5, the Kapla topple and the city, plus the city in the hall:
 /mnt/project-files/sound/space/.
 
+## Air (A8a step 3, 2026-11-07)
+
+Air takes a sound's top end over distance. ISO 9613-1:1993 gives the pure-tone absorption of the atmosphere,
+alpha(f) in dB/m (`air.ts` `airAlpha`, the standard's formula; the test checks it against its Table 1 at
+20 C, 70% RH to 0.05 dB/km). The game's air is 20 C, 50% RH:
+
+| | 1 kHz | 2 kHz | 4 kHz | 8 kHz | 16 kHz |
+|---|---|---|---|---|---|
+| dB/m | 0.005 | 0.010 | 0.028 | 0.105 | 0.364 |
+| 10 m (a level) | 0.05 | 0.1 | 0.3 | 1.1 | 3.6 |
+| 25 m | 0.1 | 0.3 | 0.7 | 2.6 | 9.1 |
+| 98 m (the city) | 0.5 | 1.0 | 2.8 | 10.3 | 35.7 |
+
+So it matters for the city and for long shots, and barely inside a level, which is what it should do: a far
+collapse loses its sparkle, a near one keeps it.
+
+**The filter.** The loss in dB goes about as f^2 d. One pole cannot follow that past ~3 dB: fitted at 8 kHz
+for 100 m it takes 5.5 dB at 4 kHz, where the air takes 3.0. Two first-order sections with real poles and
+zeros and unit gain at DC, multiplied into one biquad, do. They are fitted minimax (`air-cli.ts`, Nelder-Mead
+from nine starts, then warm passes from each neighbour) on 60 log-spaced frequencies from 500 Hz to 20 kHz,
+where the standard's loss is under 20 dB (beyond that the band is gone either way). The fits are a table,
+`air-table.ts`, 123 entries at 5% steps from 1 to 400 m; fitting in the audio thread would take ~10 ms.
+Worst error against the standard: 0.07 dB at 25 m, 0.14 at 50 m, 1.6 at 100 m, 1.9 at 200 m, 2.25 dB
+anywhere. The table is fitted at 48 kHz; at another rate the filter takes the entry for d (rate / 48 kHz)^2
+(the loss is ~f^2 there), within 0.2 dB to 50 m at 44.1 kHz and 2.5 dB at 96 kHz.
+
+**In the engine** (`setAir`, with space on): each voice is filtered for its own distance, each bank sector for
+its impacts' mean distance (from the frame's space sums, smoothed as its pan is), before the pan and the
+room's send, so the reverb hears the far sound as the listener does. Moving to another entry ramps the
+coefficients over the next block: real poles keep (a1, a2) in the stability triangle, which is convex, so
+every filter on the way is stable. Without the ramp, a 3 kHz tone swept from 5 to 200 m clicked at the 47 m
+step (second difference 1.41x the tone's); with it, 1.0x.
+
+Measured on the city (98 m, room off), air on against off, by octave from 1 kHz: -0.5, -2.4, -6.2, -14.3,
+-31.8 dB. The standard at the band centres: -0.6, -1.6, -5.4, -19.5, -51. The top two fall short where the
+fit stops (loss over 20 dB); 2 kHz takes 0.8 dB too much (the 100 m fit's error).
+
+**Judge** (outdoor room, space on; mean real share): the game mixes 0.938 without air, 0.938 with; the city
+0.99 and 0.99, the Kapla topple 0.99 and 0.98. Control: the 24 real recordings through the same air drop
+from 0.884 dry to 0.878 at 25 m and 0.860 at 98 m, so the judge marks real sound down a little for losing
+its top, and the synth holds. Neutral, as it should be: air is a physical fact, and the judge cannot hear
+distance. **Cost** (cost-cli, this VM): within noise, city 11.3-11.7% of a core, Kapla 5.2-5.4%.
+
+**Alternatives weighed:**
+- One pole per distance: 2.5 dB off at 4 kHz by 100 m (above).
+- A filter per distance band in the bank: sectors already carry their distance; bands would multiply rows.
+- Fitting on the fly: ~10 ms a fit, and nothing to gain over a 5% table.
+- Humidity and temperature as options: the standard covers them, but nothing in the game sets the weather;
+  `airAlpha` takes both, the table is one climate.
+
+**Options:** it acts only with space (it needs each impact's distance), and the classic set never uses it.
+- Game: `keystone.air` = 1 (default) | 0, in the panel.
+- Viewer: `snd.air` = 1 (default) | 0, in the panel, the URL and the scene file.
+- The engine has `setAir(on)`; the host's `space` message takes `air`. Renderers: `sound-sweep-cli air=1`,
+  `cost-cli air=1`.
+
+Clips (space, space + air) for L3, L5, the Kapla topple and the city: /mnt/project-files/sound/air/.
+
+## Judge fix: viewer captures (2026-11-07)
+
+`sound-sweep-cli` rendered the viewer's captures (the city and the Kapla topple, from `capture-cli`) with no
+background bank. Their JSON carried no `materials` or `sectors`, the sweep spread the record as it was, and
+the engine's bank loops ran to `undefined`: only the 8 foreground voices a frame played, and the space sums
+were never read. The game levels (sound-cli frames, which carry both) were not affected. It showed up as the
+air filter taking 1.6 dB at 8 kHz off a 98 m city, where a single stream lost 14.
+
+The fix: `framesFrom` (frame.ts) reads frame records for every renderer, taking a record without them as
+capture-cli's tap (1 material, 4 sectors) and refusing one whose arrays do not fit; capture-cli now writes
+both; and `CollapseEngine.push` refuses a frame without them instead of playing its voices alone.
+Re-judged with the bank, no decision changed: the corrected numbers are under Realism (the viewer city),
+Kapla (the topples), Room (the game mixes) and Space. Clips that had the same fault were re-rendered
+(sound/space city and Kapla, sound/kapla topple).
+
 ## Plan (each step lands with its test)
 
 1. S1 `@tb/audio` material config and mode derivation. Done (#93).
@@ -980,7 +1069,7 @@ Clips (before / space) for L3, L5, the Kapla topple and the city, plus the city 
 5. S5 AudioWorklet engine (foreground, bank, sectors, limiter). Done; exact
    bank clicks, lookahead limiter and low cut 2026-10-30.
 6. S6 viewer Sound section and `snd.*` URL params. Done.
-7. S7 ground and hall: reverb tied to `real.env`, done as A5 (Room above; the viewer's snd.room=auto). Floor resonators not yet. Distance in the room and stereo by impact: A8a (Space above); air absorption next.
+7. S7 ground and hall: reverb tied to `real.env`, done as A5 (Room above; the viewer's snd.room=auto). Floor resonators not yet. Distance in the room and stereo by impact: A8a (Space above); air absorption: A8a step 3 (Air above).
 8. S8 granular non-modal layers: stone grit done (2026-11-01, Grit above); splinters and rubble sliding not yet.
 9. S9 calibration from recordings (example-guided, Ren et al. 2013). The realism judge (2026-11-05,
    Realism above) is the objective half; recordings of the actual materials would pin the levels.

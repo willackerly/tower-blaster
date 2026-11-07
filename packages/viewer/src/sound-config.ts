@@ -42,3 +42,5 @@ export function soundRoom(c: Pick<ViewerConfig, 'look' | 'real' | 'sound'>): { r
 
 /** Space (snd.space, A8a: sectors at their impacts' pan, the room by distance); the classic set never uses it, as G6 did not. */
 export const soundSpace = (c: Pick<ViewerConfig, 'sound'>): boolean => c.sound.set !== 'classic' && c.sound.space;
+/** Air (snd.air, A8a step 3: far impacts lose their top end); with space only. */
+export const soundAir = (c: Pick<ViewerConfig, 'sound'>): boolean => soundSpace(c) && c.sound.air;
