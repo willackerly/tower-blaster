@@ -38,7 +38,8 @@ jobs:
   test:
     name: test ${{ matrix.shard }}/16
     runs-on: ubuntu-latest
-    # ~9 min estimated per shard (pnpm ci:guard); runners vary up to ~2x.
+    # ~8 min estimated per shard (pnpm ci:guard); runners vary up to ~2x. 30 is the
+    # O5 stopgap, kept until three main runs show every shard under 10 min.
     timeout-minutes: 30
     strategy:
       fail-fast: false
