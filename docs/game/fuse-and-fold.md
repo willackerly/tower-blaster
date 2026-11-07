@@ -83,8 +83,14 @@ Casts on the reference engine (Node, f64; seed 1; short recipe, 210 plays each).
 | F1 | 0.24 | 0.89 | 0.913 | `plunger.1.0.0.6.3.54.2.72` | 0.895 / 0.895 | 0.894, inside |
 | F2 | 0.24 | 0.85 | 0.875 | `plunger.0.0.6.0.3.6.7.42.4.48.1.54.5.96.2.102.8.102` | 0.858 / 0.859 | 0.858, inside |
 | F3 | 0.29 | 0.81 | 0.838 | `plunger.0.0.3.6.6.6.7.42.1.54.4.54.5.96.8.96.2.102` | 0.815 / 0.821 | 0.814, inside |
+| F4 | 0.28 | **0.69** (reference 0.72) | 0.805 | `plunger.0.6.1.6.2.6.3.54.4.54.5.54.8.114.6.120.7.120.9.120.10.120.11.120` | 0.721 / 0.740 | 0.696 over 32 builds, harder by 0.011 |
 
-On F1 to F3 the GPU lands on the reference's T3 to the third decimal. The cast's best lines are sweeps that the climb nudged a snap here and there: F1's best goes A2, A1, B2 and B1 at 0, 0.1, 0.9 and 1.2 s. A Metal recast of each level is queued for the Mac.
+On F1 to F3 the GPU lands on the reference's T3 to the third decimal.
+
+F4 is the exception. It is the wide frame with a two-sided window, and the noisiest level (cloud sd 0.03). On SwiftShader its best line's lower quartile is 0.696 over 32 builds, against the reference's 0.721; 29 of 32 still meet the objective. The game plays on the GPU, so F4's T3 is set from the GPU cloud (0.69, rounded toward easier, the easier of the two devices). The stars file records this in `castOn`. Alternatives weighed:
+- Keep the reference's 0.72. Rejected: on the GPU about a third of the bot's own best-line plays would miss three stars.
+- Pool both clouds (P25 0.719). Rejected: still the reference's number in practice.
+- Cast F4 on SwiftShader end to end (about 3 h here). Not needed: the GPU cloud of the best line is what T3 measures, and T2 does not move (it is the all-at-once value on every device). The cast's best lines are sweeps that the climb nudged a snap here and there: F1's best goes A2, A1, B2 and B1 at 0, 0.1, 0.9 and 1.2 s. A Metal recast of each level is queued for the Mac.
 
 
 ## Sympathetic charges (step e)
