@@ -198,7 +198,8 @@ export class BlastReach {
       vertex: { module, entryPoint: 'vsReach' },
       fragment: {
         module, entryPoint: 'fsReach', constants: { XRAY: xray },
-        targets: [{ format: HDR_FORMAT, writeMask: GPUColorWrite.RED | GPUColorWrite.GREEN | GPUColorWrite.BLUE, blend: { color: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha', operation: 'add' }, alpha: { srcFactor: 'zero', dstFactor: 'one', operation: 'add' } } }],
+        // Alpha adds the coverage: what it covers is kept in colour under Bullet Time's frozen grade (fx.ts KEEP_ALPHA, PT33).
+        targets: [{ format: HDR_FORMAT, blend: { color: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha', operation: 'add' }, alpha: { srcFactor: 'one', dstFactor: 'one', operation: 'add' } } }],
       },
       primitive: { topology: 'triangle-list', cullMode: 'none' },
       depthStencil: { format: 'depth24plus', depthWriteEnabled: false, depthCompare: compare },
