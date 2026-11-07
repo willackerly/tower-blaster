@@ -23,7 +23,7 @@ The fix makes v4 treat a hold like a flight: every run starts over and only the 
 | Every rule resets during a hold | v3's frozen run and the v2+ quiet run have the same shape | moves F1 to F5 and A1 to A5 (fuses and quakes, cast under v3) and breaks their stars; v3 needs the stricter frozen test, which held F3 |
 | A new v5 | keeps v4 for anyone who cast with it | nothing was cast under v4, so a new rule name would only add a hash |
 
-The case that remains, for every rule: a structure with nothing awake settles at once (from `SETTLE_MIN`). On the first step after a hold, that state already shows the event, because `arsenal.pending` holds until the state after the event's step. A prox bomb that goes off in flight never has a held step with its ammo out of flight, because the blast and its removal share a step. So B1 to B3's v4 casts (#272) play the same with or without this fix. Game TailSkip (pacing only) still reads D's steady run as before.
+The case that remains, for every rule: a structure with nothing awake settles at once (from `SETTLE_MIN`). On the first step after a hold, that state already shows the event, because `arsenal.pending` holds until the state after the event's step. A prox bomb mostly goes off in flight, where the flight already holds every run. On B1's ace line (reference, v4), 1 of its 74 held steps had the ammo out of flight, and the line settles at the same steps (717, 1116, 1421) with the same D (0.947) with or without this fix. So B1 to B3's v4 casts (#272, bombs and rams; a ram has no fuse) are not expected to move. B2 and B3 were not replayed (too slow on the reference here). Game TailSkip (pacing only) still reads D's steady run as before.
 
 ## Why the flip changes hashes, and what that touches
 
