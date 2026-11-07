@@ -82,7 +82,7 @@ describe('drawing', () => {
         expect(Math.min(...b)).toBeGreaterThan(40);
       }
     }
-  });
+  }, 180_000); // three renderers, each baking its materials (over 60 s on a slow runner, PR #295)
 
   it('real look: blue sky paling to the horizon, exposure adapting to a low sun, no stylized lights', async (ctx) => {
     if (!gpu) return ctx.skip();
@@ -102,5 +102,5 @@ describe('drawing', () => {
     expect(hazy!.lit).toBe(1);
     expect(noon!.lit).toBe(0);
     expect(low!.lit).toBe(0);
-  });
+  }, 180_000); // four renderers, each baking its materials
 });
