@@ -3,8 +3,8 @@
 Roadmap node M7 (docs/game/modes-roadmap.md). The player gets one quake and a site of towers. Each tower is
 **condemned** (its top is a crown: bring it down) or **protected** (its top is heritage: it must still stand when
 the dust settles). The player sets the quake's strength, frequency, duration and axis, watches the ground shake,
-and is scored on what fell and what stood. Retrofitting (placing bracing before the quake, roadmap step e) waits for
-the C9 placement tool and is not in this first cut.
+and is scored on what fell and what stood. Retrofitting (placing bracing before the quake, roadmap step e) is its own
+roadmap row, M7b, built on the C9 placement tool, and is not in this first cut.
 
 ## The verb: a quake shot
 
@@ -184,6 +184,5 @@ ground's, seen from the ground, so the view stays put and the towers rock in it.
 ## Follow-ups
 
 - Metal casts (M5 Max) of the shipped levels' aces and the gate's confirm stage, through the coordinator.
-- The axis sites (QC-2, QC-5) once they pass.
-- Retrofit (roadmap step e) after C9: placed bracing from a budget before the quake.
+- Retrofit is roadmap row M7b (after M7 and C9): placed bracing from a budget before the quake.
 - The agent playtest (G9b) cannot yet dial a quake.
