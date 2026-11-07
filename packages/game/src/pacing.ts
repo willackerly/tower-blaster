@@ -4,12 +4,20 @@
 import { LAUNCH_MODES, type LaunchMode } from './aim.ts';
 import { type FrameMode, frameMode } from './frame-rate.ts';
 import { BALL_STYLES, type BallStyle } from './scene.ts';
+import { SUN_MODES, type SunMode } from './light.ts';
+import { STEADY_D, STEADY_STEPS } from '@tb/keystone';
+import { EFFECT_STYLES, type EffectStyle } from '@tb/render';
 
 export const SLOWMO_SCALE = 0.3;
 export const SLOWMO_IN = 0.12; // s to ramp down
 export const SLOWMO_OUT = 0.3; // s to ramp back up
 export const SLOWMO_MAX = 1.5; // s at most before ramping back on its own
 export const FAST_SCALE = 4;
+/**
+ * The Skip control (K, or the HUD's Skip button) during a settle: sim time runs up to this many times real
+ * time, past the valve (physics may take whole frames; the picture keeps drawing what arrives). Pacing only.
+ */
+export const SKIP_SCALE = 32;
 
 /**
  * How the sim's pace may change, from the URL (both pages) and the viewer's scene file. Juice that
@@ -49,6 +57,12 @@ export interface PaceFeel {
   /** A duel's arc on the ground: the player to fire's half of the launcher ring, dotted in their ink (keystone.arcs=0 hides it). */
   arcs: boolean;
   /**
+   * A duel's hand-over card (PT5, agent playtest 1: no "pass the device" moment): when the turn passes, a band in
+   * the next player's ink says whose turn it is, over the turn view's swing, until a tap. On by default;
+   * keystone.handoff=0 (or the door's Hand-over setting) goes straight on with a banner, as before.
+   */
+  handoff: boolean;
+  /**
    * Memory for instant undo, MB (keystone.undo): each shot keeps a checkpoint of the world as it went
    * in (play.ts, @tb/keystone Driver.checkpoint), the oldest dropped past this; an undo with no
    * checkpoint left replays the kept shots instead (docs/game/undo.md). 0: always replay.
@@ -69,6 +83,45 @@ export interface PaceFeel {
    * block to keep up (Will, 2026-11-06), so which is which reads without the colours. On by default; keystone.marks=0 off.
    */
   marks: boolean;
+  /**
+   * Coats (scene.ts structureCoats, @tb/render coats.ts): crowns gilded and heritage glazed, their own colour in
+   * every look (PT15), instead of a tint multiplying the look's palette. On by default; keystone.coats=0 off.
+   */
+  coats: boolean;
+  /**
+   * Where the real look's sun stands (light.ts SunMode): 'view' (the default since PT15) counts the look's sun
+   * azimuth from the level's opening view, so every level is lit from the same side of the player's eye;
+   * 'look' keeps the look's own, fixed in the world (keystone.sun=look).
+   */
+  sun: SunMode;
+  /**
+   * Undercut's pull drawn (pull-anim.ts, playtest PT17): the pulled block slides out toward the camera over a
+   * quarter second and a dotted ghost of it stays a second where it stood. On by default; keystone.pullanim=0 off
+   * (the block vanishes at the pull, with its dust puff).
+   */
+  pullAnim: boolean;
+  /**
+   * Bullet Time's frozen look (frozen-look.ts, playtest PT8): while a shot is frozen the scene is graded cold
+   * and grey with a frosted blue edge, sparks hang and thin out, and a large label says what to do. On by default;
+   * keystone.frozenlook=0 off (only the HUD's FROZEN tag says so).
+   */
+  frozenLook: boolean;
+  /**
+   * How impacts are drawn (@tb/render EffectStyle, PT2): 'damage' (the default since the agent playtest of
+   * 2026-11-06) makes sparks, flashes and heat follow what a shot moved, so a shot that moves nothing gets a
+   * puff, and draws felled crowns and cracked heritage in their colours rather than glowing white; 'classic'
+   * (keystone.fx=classic) as before.
+   */
+  fx: EffectStyle;
+  /** Spent ammo (PT19): a fired ball, ram or dud fades to a dull stone grey once its shot settles. On by default; keystone.spent=0 off. */
+  spent: boolean;
+}
+
+/** keystone.fx: damage or classic (absent: damage). */
+export function effectStyle(text: string | null): EffectStyle {
+  if (text === null) return 'damage';
+  if (!(EFFECT_STYLES as readonly string[]).includes(text)) throw new Error(`keystone.fx must be ${EFFECT_STYLES.join(' or ')}: ${text}`);
+  return text as EffectStyle;
 }
 
 /** keystone.launch: high or level (absent: high). */
@@ -76,6 +129,13 @@ export function launchMode(text: string | null): LaunchMode {
   if (text === null) return 'high';
   if (!(LAUNCH_MODES as readonly string[]).includes(text)) throw new Error(`keystone.launch must be ${LAUNCH_MODES.join(' or ')}: ${text}`);
   return text as LaunchMode;
+}
+
+/** keystone.sun: view or look (absent: view). */
+export function sunMode(text: string | null): SunMode {
+  if (text === null) return 'view';
+  if (!(SUN_MODES as readonly string[]).includes(text)) throw new Error(`keystone.sun must be ${SUN_MODES.join(' or ')}: ${text}`);
+  return text as SunMode;
 }
 
 /** keystone.balls: painted or plain (absent: painted). */
@@ -90,7 +150,7 @@ export const MAX_UNDO_MB = 65536;
 /** keystone.undo when the URL sets none: a dozen shots of a 10k level. */
 export const DEFAULT_UNDO_MB = 1024;
 
-/** The URL's keystone.hitstop, keystone.slowmo, keystone.tailskip, keystone.follow, keystone.shake, keystone.rapid, keystone.turnview, keystone.arcs, keystone.marks (0 or 1 each), keystone.budget (ms, 0 to 1000), keystone.undo (MB, 0 to MAX_UNDO_MB), keystone.frames (all, half, auto), keystone.launch (high, level) and keystone.balls (painted, plain); any other value is refused. */
+/** The URL's keystone.hitstop, keystone.slowmo, keystone.tailskip, keystone.follow, keystone.shake, keystone.rapid, keystone.turnview, keystone.arcs, keystone.handoff, keystone.marks, keystone.coats, keystone.pullanim, keystone.frozenlook (0 or 1 each), keystone.budget (ms, 0 to 1000), keystone.undo (MB, 0 to MAX_UNDO_MB), keystone.frames (all, half, auto), keystone.launch (high, level), keystone.balls (painted, plain), keystone.sun (view, look), keystone.fx (damage, classic) and keystone.spent (0 or 1); any other value is refused. */
 export function paceFeel(q: URLSearchParams): PaceFeel {
   const flag = (k: string, dflt: boolean) => {
     const v = q.get(k);
@@ -101,7 +161,7 @@ export function paceFeel(q: URLSearchParams): PaceFeel {
   if (!(budgetMs >= 0 && budgetMs <= 1000)) throw new Error(`keystone.budget must be from 0 to 1000 ms (0: no valve): ${b}`);
   const u = q.get('keystone.undo'), undoMB = u === null ? DEFAULT_UNDO_MB : u.trim() === '' ? NaN : Number(u);
   if (!(undoMB >= 0 && undoMB <= MAX_UNDO_MB)) throw new Error(`keystone.undo must be from 0 to ${MAX_UNDO_MB} MB (0: undo replays the shots): ${u}`);
-  return { hitStop: flag('keystone.hitstop', false), slowMo: flag('keystone.slowmo', false), budgetMs, tailSkip: flag('keystone.tailskip', true), follow: flag('keystone.follow', false), shake: flag('keystone.shake', false), frames: frameMode(q.get('keystone.frames')), rapid: flag('keystone.rapid', true), turnView: flag('keystone.turnview', true), arcs: flag('keystone.arcs', true), undoMB, launch: launchMode(q.get('keystone.launch')), balls: ballStyle(q.get('keystone.balls')), marks: flag('keystone.marks', true) };
+  return { hitStop: flag('keystone.hitstop', false), slowMo: flag('keystone.slowmo', false), budgetMs, tailSkip: flag('keystone.tailskip', true), follow: flag('keystone.follow', false), shake: flag('keystone.shake', false), frames: frameMode(q.get('keystone.frames')), rapid: flag('keystone.rapid', true), turnView: flag('keystone.turnview', true), arcs: flag('keystone.arcs', true), handoff: flag('keystone.handoff', true), undoMB, launch: launchMode(q.get('keystone.launch')), balls: ballStyle(q.get('keystone.balls')), marks: flag('keystone.marks', true), fx: effectStyle(q.get('keystone.fx')), spent: flag('keystone.spent', true), coats: flag('keystone.coats', true), sun: sunMode(q.get('keystone.sun')), pullAnim: flag('keystone.pullanim', true), frozenLook: flag('keystone.frozenlook', true) };
 }
 
 /** Throws unless f's budget is a number of ms from 0 to 1000 (the Scene panel's field can hold anything). */
@@ -111,6 +171,8 @@ export function checkPaceFeel(f: PaceFeel): PaceFeel {
   frameMode(f.frames);
   launchMode(f.launch);
   ballStyle(f.balls);
+  sunMode(f.sun);
+  effectStyle(f.fx);
   return f;
 }
 
@@ -126,10 +188,17 @@ export function writePaceFeel(f: PaceFeel, q: URLSearchParams): void {
   if (!f.rapid) q.set('keystone.rapid', '0');
   if (!f.turnView) q.set('keystone.turnview', '0');
   if (!f.arcs) q.set('keystone.arcs', '0');
+  if (!f.handoff) q.set('keystone.handoff', '0');
   if (f.undoMB !== DEFAULT_FEEL.undoMB) q.set('keystone.undo', String(f.undoMB));
   if (f.launch !== DEFAULT_FEEL.launch) q.set('keystone.launch', f.launch);
   if (f.balls !== DEFAULT_FEEL.balls) q.set('keystone.balls', f.balls);
   if (!f.marks) q.set('keystone.marks', '0');
+  if (!f.coats) q.set('keystone.coats', '0');
+  if (f.sun !== DEFAULT_FEEL.sun) q.set('keystone.sun', f.sun);
+  if (f.fx !== DEFAULT_FEEL.fx) q.set('keystone.fx', f.fx);
+  if (!f.spent) q.set('keystone.spent', '0');
+  if (!f.pullAnim) q.set('keystone.pullanim', '0');
+  if (!f.frozenLook) q.set('keystone.frozenlook', '0');
 }
 
 /** Hit-stop is counted in frames of 60 Hz, whatever the display's rate. */
@@ -146,8 +215,8 @@ export const VALVE_MIN = 0.25;
  * frames looked the same at both.
  */
 export const DEFAULT_BUDGET_MS = 14;
-/** No juice, the valve at its default budget, the tail skip on, a camera only the player moves, every frame drawn, rapid fire, instant undo in DEFAULT_UNDO_MB, shots from high, painted balls, engraved stones. */
-export const DEFAULT_FEEL: Readonly<PaceFeel> = { hitStop: false, slowMo: false, budgetMs: DEFAULT_BUDGET_MS, tailSkip: true, follow: false, shake: false, frames: 'all', rapid: true, turnView: true, arcs: true, undoMB: DEFAULT_UNDO_MB, launch: 'high', balls: 'painted', marks: true };
+/** No juice, the valve at its default budget, the tail skip on, a camera only the player moves, every frame drawn, rapid fire, the duel's hand-over card, instant undo in DEFAULT_UNDO_MB, shots from high, painted balls, engraved stones, gilded crowns and glazed heritage, the real look's sun turned with the opening view, impacts that follow the damage, spent ammo faded, pulls drawn, Bullet Time's frozen look. */
+export const DEFAULT_FEEL: Readonly<PaceFeel> = { hitStop: false, slowMo: false, budgetMs: DEFAULT_BUDGET_MS, tailSkip: true, follow: false, shake: false, frames: 'all', rapid: true, turnView: true, arcs: true, handoff: true, undoMB: DEFAULT_UNDO_MB, launch: 'high', balls: 'painted', marks: true, fx: 'damage', spent: true, coats: true, sun: 'view', pullAnim: true, frozenLook: true };
 /**
  * Owed time the clock keeps, ms; beyond it the rest is dropped (slow motion, not a burst of catch-up
  * steps after a stall). As the viewer's free loop (loop.ts FREE_MAX_LAG_MS).
@@ -176,6 +245,8 @@ export const stepCost = (submitted: number, done: number, lastDone: number): num
 export interface PacerOptions {
   /** Hold Space (or the round is over, or the tail skip): run the sim up to FAST_SCALE times faster (no slow motion). */
   fastForward?: boolean;
+  /** Skip (agent playtest PT6): up to SKIP_SCALE, the valve's budget ignored. */
+  skip?: boolean;
   /** Recent cost of a step, ms (a median); with budgetMs, slows time instead of stuttering. */
   stepMs?: number;
   budgetMs?: number;
@@ -230,7 +301,7 @@ export class Pacer {
     if (o.fastForward) scale = FAST_SCALE;
     // Performance valve: when steps cost more than the budget, slow time down (to at most a quarter) instead of stuttering.
     this.costMs = o.stepMs ?? NaN;
-    this.timeScale = Math.min(scale, valve(o.budgetMs ?? 0, o.stepMs ?? 0, max));
+    this.timeScale = o.skip ? SKIP_SCALE : Math.min(scale, valve(o.budgetMs ?? 0, o.stepMs ?? 0, max));
     if (Number.isNaN(this.next)) this.next = now;
     if (this.stopMs > 0) { this.next = Math.max(this.next, now) + this.stopMs; this.stopMs = 0; }
     if (now < this.next - (PACE_SLACK * dtMs) / this.timeScale) return false;
@@ -284,19 +355,28 @@ export const TAIL_GAIN = 0.001;
 export const TAIL_STEPS = 60;
 
 /**
- * Decides, step by step through one shot, when the rest of it is a tail of a few rocking blocks that
- * can run at fast-forward until it settles. Once on it stays on until reset (the next shot). Pacing
- * only: the same steps run, sooner.
+ * Decides, step by step through one shot, when the rest of it is a tail that can run at fast-forward
+ * until it settles: a few rocking blocks (under TAIL_MOVING of the structure, D gaining under TAIL_GAIN
+ * over TAIL_STEPS), or (agent playtest PT6) a collapse that has stopped changing whatever still moves,
+ * D within @tb/keystone's STEADY_D for STEADY_STEPS (2 s), as settle v4 reads it: debris rolling on a
+ * big level held the picture still for 10 s and more. Once on it stays on until reset (the next shot).
+ * Pacing only: the same steps run, sooner.
  */
 export class TailSkip {
   private d: number[] = [];
+  /** Settle v4's steady run, as rules.ts settleUpdate counts it: its first D and its length. */
+  private steadyD = NaN;
+  private steadyRun = 0;
   on = false;
-  reset() { this.d = []; this.on = false; }
+  reset() { this.d = []; this.on = false; this.steadyD = NaN; this.steadyRun = 0; }
   /** One observed step of the shot: structure bodies moving, structure size, collapse fraction now. */
   update(nMoving: number, n: number, collapse: number): boolean {
     this.d.push(collapse);
     if (this.d.length > TAIL_STEPS + 1) this.d.shift();
+    if (Number.isNaN(this.steadyD) || !(Math.abs(collapse - this.steadyD) < STEADY_D)) { this.steadyD = collapse; this.steadyRun = 0; }
+    this.steadyRun++;
     if (!this.on && this.d.length > TAIL_STEPS && nMoving < TAIL_MOVING * n && collapse - this.d[0]! < TAIL_GAIN) this.on = true;
+    if (!this.on && this.steadyRun >= STEADY_STEPS) this.on = true;
     return this.on;
   }
 }

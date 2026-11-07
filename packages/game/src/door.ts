@@ -67,6 +67,21 @@ export function seriesTitle(id: string): string {
   return i < 0 ? '' : SERIES_TITLES[i]!;
 }
 
+/**
+ * The result card's way on at the end of a series (PT4): the next rated series' first level in the page's
+ * list (`series` index-aligned with `levels`, as the game page's GAME_SERIES gives them), labelled with its
+ * title; null inside a series, at the list's end, or when the next series is the unrated trials (the card
+ * then offers Levels, the door).
+ */
+export function seriesForward(series: readonly number[], i: number, levels: readonly LevelDef[]): { index: number; label: string } | null {
+  const k = series[i], next = i + 1;
+  if (k === undefined || next >= levels.length || series[next] === k) return null;
+  const l = levels[next]!;
+  if (isTrial(l.id)) return null;
+  const t = seriesTitle(l.id);
+  return { index: next, label: t ? `Next: ${t}` : 'Next series' };
+}
+
 /** A star threshold in the metric's own words. */
 export function thresholdText(metric: StarMetric, t: number): string {
   switch (metric) {
@@ -159,10 +174,14 @@ export function bestText(b: LevelRecord | null): string {
   return `Best ${what} · ${b.plays} play${b.plays === 1 ? '' : 's'}${b.beatBot ? ' · beat the bot' : ''}${b.gold ? ' · gold leverage' : ''}`;
 }
 
-/** How to play, in five lines (the controls line is GAME_HELP's, shown in play). */
+/** How to play's Bullet Time line (playtest PT8: the T key was named only in the key list). */
+export const BULLET_TIME_HOW = 'Bullet Time levels give you a few freezes. While a shot is still running, <span class="kg-desk"><kbd>T</kbd></span><span class="kg-tch">Freeze</span> stops the world: aim and fire, and the new shot cuts in at that moment and spends one freeze; that shot is free against par. Resuming without firing keeps the freeze.';
+
+/** How to play, in six lines (the controls line is GAME_HELP's, shown in play). */
 export const HOW_TO_PLAY: readonly string[] = [
   '<span class="kg-desk">Pick a spot on the structure and click to fire. Drag to look around; the launcher follows you.</span><span class="kg-tch">Touch the structure and drag to aim; lift your finger to fire. Two fingers turn the view and pinch to zoom; the launcher follows you. Put a second finger down to call off a shot.</span>',
-  'Fire again whenever you like, even while things are still falling. Once everything settles, physics freezes while you aim. Rubble stays between shots.',
+  'Fire again whenever you like, even while things are still falling. Once everything settles, the world waits while you aim; <kbd>K</kbd> or Skip runs the rest of a shot fast. Rubble stays between shots.',
+  BULLET_TIME_HOW,
   'Meet the objective for one star. Chamber levels: clear in par for three, each shot over par or piece of heritage broken costs one, and leverage at the level\'s gold line earns the gold badge. Elsewhere, bring more down for two and three; the targets were set by a bot playing each level hundreds of times.',
   'After any shot you may <kbd>B</kbd> bank: end the level and keep the unused rack as points.',
   `${LEVERAGE_MEANS} The card shows the whole round's; Brute is under the level's gold line, Clean at it. A score never goes below 0: cracked heritage shows as its own red line and costs stars.`,
@@ -200,13 +219,13 @@ export interface DoorModel {
   settings: Settings;
   /** The how-to-play panel is open. */
   howTo: boolean;
-  /** The Advanced settings panel (sound, look, camera, rapid fire, duel turns, launch height, stone marks, sharpness, quality, forget my progress) is open; closed by default. */
+  /** The Advanced settings panel (sound, look, camera, rapid fire, duel turns, hand-over, launch height, stone marks, layout, sharpness, quality, forget my progress) is open; closed by default. */
   advanced: boolean;
   /** The tier the probe picked on load, which Auto takes (quality.ts); null or absent when none ran. */
   detected?: QualityTier | null;
 }
 
-/** The door's markup. Every button carries data-act (play, level, how, advanced, trials, sound, look, sharp, quality, camera, rapid, duelview, launch, marks, reset, close) and data-arg where it needs one. */
+/** The door's markup. Every button carries data-act (play, level, how, advanced, trials, sound, look, sharp, quality, camera, rapid, duelview, handoff, launch, marks, layout, reset, close) and data-arg where it needs one. */
 export function doorHtml(m: DoorModel): string {
   const next = nextLevel(m.levels);
   const card = (l: DoorLevel, i: number) => {
@@ -259,8 +278,10 @@ export function doorHtml(m: DoorModel): string {
         <span class="group"><span class="lbl">Camera</span><span class="seg"><button data-act="camera" data-arg="still" class="${s.camera === 'still' ? 'on' : ''}" title="Moves only when you move it">Still</button><button data-act="camera" data-arg="dynamic" class="${s.camera === 'dynamic' ? 'on' : ''}" title="Follows the collapse and shakes on hits">Dynamic</button></span></span>
         <span class="group"><span class="lbl">Rapid fire</span><span class="seg"><button data-act="rapid" data-arg="on" class="${s.rapid ? 'on' : ''}" title="Fire again before the last shot settles">On</button><button data-act="rapid" data-arg="off" class="${s.rapid ? '' : 'on'}" title="Each shot waits for the last to settle">Off</button></span></span>
         <span class="group"><span class="lbl">Duel turns</span><span class="seg"><button data-act="duelview" data-arg="on" class="${s.duelView ? 'on' : ''}" title="The camera turns to the side whose turn it is">Turn the view</button><button data-act="duelview" data-arg="off" class="${s.duelView ? '' : 'on'}" title="The camera stays where the last player left it">Leave it</button></span></span>
+        <span class="group"><span class="lbl">Hand-over</span><span class="seg"><button data-act="handoff" data-arg="on" class="${s.handoff ? 'on' : ''}" title="Between duel turns a card says whose turn it is: tap it to start">Card</button><button data-act="handoff" data-arg="off" class="${s.handoff ? '' : 'on'}" title="The next turn starts at once, with a banner">Skip</button></span></span>
         <span class="group"><span class="lbl">Launch height</span><span class="seg"><button data-act="launch" data-arg="high" class="${s.launch === 'high' ? 'on' : ''}" title="Shots leave from over the structure's top, clear of the rubble (keys W and S move it)">High</button><button data-act="launch" data-arg="level" class="${s.launch === 'level' ? 'on' : ''}" title="Shots leave from the level's own launcher, near the ground, where its par lines were recorded">Level's</button></span></span>
         <span class="group"><span class="lbl">Stone marks</span><span class="seg"><button data-act="marks" data-arg="on" class="${s.marks ? 'on' : ''}" title="A crosshair carved on the blocks to bring down, a shield on the blocks to keep">Carved</button><button data-act="marks" data-arg="off" class="${s.marks ? '' : 'on'}" title="Plain stones: only their colour says which are which">Off</button></span></span>
+        <span class="group"><span class="lbl">Layout</span><span class="seg"><button data-act="layout" data-arg="docked" class="${s.layout === 'docked' ? 'on' : ''}" title="On a phone the HUD docks to the screen's edges; the result card waits a moment after the round, then docks aside so the collapse stays in view">Docked</button><button data-act="layout" data-arg="classic" class="${s.layout === 'classic' ? 'on' : ''}" title="One HUD panel at the top left, and the result card in the middle as soon as the round ends">Classic</button></span></span>
         <span class="group"><span class="lbl">Sharpness</span><span class="seg"><button data-act="sharp" data-arg="2" class="${s.sharp === 2 ? 'on' : ''}">Full</button><button data-act="sharp" data-arg="1" class="${s.sharp === 1 ? 'on' : ''}">Fast</button></span></span>
         <span class="group"><span class="lbl">Quality</span><span class="seg">${qualities}</span></span>
       </div>

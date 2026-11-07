@@ -6,6 +6,7 @@
 // real.* knobs, the viewer's own).
 import { BIG_LEVELS, checkPhysics, FUSE_LEVELS, LEVELS, TRIAL_LEVELS, UNDERCUT_LEVELS, checkSettle, DUELS, duelLevel, type DuelDef, findDuel, freezeProblem, isRackItem, itemRef, levelById, type LevelDef, MAX_PULLS, MAX_RACK, type PhysicsBlock, RACK_ITEM_NAMES, type RackItem, rackSizeProblem, readShots, SCORINGS, type Scoring, type SettleRule, type Shot, weaponOf } from '@tb/keystone';
 import { LOOKS } from '@tb/render';
+import { isWeaponTier, WEAPON_TIERS, type WeaponTier } from '@tb/weapons';
 import { type EngineKind, engineKind } from './engines.ts';
 import { paceFeel, type PaceFeel } from './pacing.ts';
 import { GAME_SOUND_MODES, type GameSoundMode } from './sound-map.ts';
@@ -16,7 +17,7 @@ export const GAME_LOOK = 'hazy';
 /**
  * Rule overrides from the URL (docs/game/spectacle-mode.md, section 10): ?keystone.scoring=par|outcome
  * scores any level either way, ?keystone.autobank=1|0 ends an outcome level at its first clear (or not),
- * ?keystone.settle=v1|v2|v3 picks how a shot settles (default: v1 for par levels, v3 for outcome levels),
+ * ?keystone.settle=v1|v2|v3|v4 picks how a shot settles (default: v1 for par levels, v3 for outcome levels),
  * ?keystone.iterations, ?keystone.gapSlop, ?keystone.bounce (e, or off), ?keystone.presettle and
  * ?keystone.pairsPerBody (the GPU pair room per body, in place of every pair) change its physics block,
  * and ?keystone.freeze=N gives the player N freezes (Bullet Time: at most N shots fired while another
@@ -109,7 +110,28 @@ export interface GameParams {
   impactsDb: number;
   /** ?duel=D1 (or a ruleset name, keeps or heraldry): a Siege Table duel instead of the level (docs/game/siege-table.md); null when absent. */
   duel: DuelDef | null;
+  /**
+   * ?keystone.tier=low | mid | high: the device tier a rack weapon must fit (@tb/weapons WEAPON_TIER_CAPS;
+   * one over it is refused on fire, keystone armRefusal), or null to take the device's (weaponTierOf).
+   */
+  weaponTier: WeaponTier | null;
 }
+
+/** ?keystone.tier, or null when absent; throws on another value. */
+export function weaponTierParam(q: URLSearchParams): WeaponTier | null {
+  const t = q.get('keystone.tier');
+  if (t === null) return null;
+  if (!isWeaponTier(t)) throw new Error(`keystone.tier must be one of ${WEAPON_TIERS.join(', ')}: ${t}`);
+  return t;
+}
+
+/**
+ * The tier the rack's weapons are held to: the URL's, else the device's quality tier (quality.ts, the
+ * probe on load or the player's Quality setting; the two use the caps' names), else high until that is
+ * decided. Every shipped level's weapons fit low, so this only refuses a weapon a link or keystone.rack
+ * brings.
+ */
+export const weaponTierOf = (url: WeaponTier | null, device?: WeaponTier | null): WeaponTier => url ?? device ?? 'high';
 
 /** ?duel: a duel table by id or ruleset, any case; null when absent; throws naming the known ones. */
 export function duelOf(text: string | null): DuelDef | null {
@@ -214,6 +236,7 @@ export function parseGameParams(q: URLSearchParams): GameParams {
     // A duel's line is checked against the duel's own level (its first player first).
     shots: lineOf(duel ? duelLevel(duel, 0) : level, q.get('keystone.shots')),
     ...offscreenOf(q.get('offscreen')),
+    weaponTier: weaponTierParam(q),
     ...gameSound(q),
   };
 }
@@ -246,4 +269,15 @@ export function loadOptions(q: URLSearchParams): LoadOptions {
     out.retry = r;
   }
   return out;
+}
+
+/**
+ * keystone.build (0 or 1): whether a level with a build block opens in its build phase and shows the Build
+ * panel (C9, docs/game/placement.md; default on). Off plays such a level as authored.
+ */
+export function buildOption(q: URLSearchParams): { build?: boolean } {
+  const b = q.get('keystone.build');
+  if (b === null) return {};
+  if (b !== '0' && b !== '1') throw new Error(`keystone.build must be 0 or 1: ${b}`);
+  return { build: b === '1' };
 }

@@ -68,9 +68,35 @@ export interface SparkParams {
   heatTau: number;
   /** A body this close to a ball's surface (m) is fully hot. */
   contact: number;
+  /**
+   * Effects follow the damage (PT2, docs/render/damage-effects.md). The first four are 0 (or Infinity) in
+   * CLASSIC_SPARKS, which is the rule before PT2 bit for bit but for packed bit 12.
+   *
+   * ballSparks: the most sparks a ball's own impact throws (a body drawn as a ball, TAG_BALL: every fired
+   * shell). A ball's speed change says how hard it hit, not what it moved; the blocks it moves spark from
+   * their own speed changes, so a shot that moves nothing gets this puff and no more.
+   */
+  ballSparks: number;
+  /**
+   * Strength above dvMin (m/s) for a spark's full life and brightness: weaker impacts throw shorter, dimmer
+   * sparks (life x 0.35..1, brightness x 0.45..1, in 16 classes kept in the spark's packed bits 8-12). A
+   * ball's own sparks are class 0. 0: every spark lives 0.4 to 1.2 s at full brightness (classic).
+   */
+  lifeDv: number;
+  /**
+   * The live-spark cap, a token bucket as debris mode's: at most `budget` sparks in one frame, refilled at
+   * `rate` a second, so a collapse holds about budget + rate x mean life (0.8 s) sparks at most however many
+   * blocks it throws. 0: no bucket (every frame up to SPAWN_BUDGET, classic).
+   */
+  budget: number;
+  rate: number;
+  /** A ball heats what it touches only while it moves at least this fast (m/s; a ball at rest is not a hit). 0: always (classic). */
+  contactSpeed: number;
 }
 
-export const DEFAULT_SPARKS: SparkParams = { dvMin: 2.5, perDv: 24, speedMin: 6, speedMax: 22, drag: 0.08, bounce: 0.38, friction: 0.7, gravity: 9.81, heatDv: 6, heatRange: 6, heatTau: 0.25, contact: 0.3 };
+export const DEFAULT_SPARKS: SparkParams = { dvMin: 2.5, perDv: 24, speedMin: 6, speedMax: 22, drag: 0.08, bounce: 0.38, friction: 0.7, gravity: 9.81, heatDv: 6, heatRange: 6, heatTau: 0.25, contact: 0.3, ballSparks: 6, lifeDv: 12, budget: 2048, rate: 4000, contactSpeed: 1.5 };
+/** The spark rule before PT2: every impact sparks in full, a ball's included, with no cap but SPAWN_BUDGET a frame. */
+export const CLASSIC_SPARKS: SparkParams = { ...DEFAULT_SPARKS, ballSparks: Infinity, lifeDv: 0, budget: 0, rate: 0, contactSpeed: 0 };
 
 /** Debris mode (gravity and drag are SparkParams'). */
 export interface DebrisParams {
@@ -127,8 +153,9 @@ export const DEFAULT_DEBRIS: DebrisParams = { dustBudget: 384, chipBudget: 768, 
  * chip tokens (x TOKEN_ONE, kept across frames), puffs and chips spawned
  * (this frame).
  */
-export const CTL = { events: 0, head: 1, dropped: 2, spawned: 3, hot: 4, alive: 5, dustHead: 6, chipHead: 7, dustTokens: 8, chipTokens: 9, dustSpawned: 10, chipSpawned: 11 } as const;
-const CTL_WORDS = 12;
+export const CTL = { events: 0, head: 1, dropped: 2, spawned: 3, hot: 4, alive: 5, dustHead: 6, chipHead: 7, dustTokens: 8, chipTokens: 9, dustSpawned: 10, chipSpawned: 11, sparkTokens: 12, total: 13 } as const;
+/** CTL also holds sparkTokens (sparks mode's bucket, x TOKEN_ONE, kept across frames) and total (particles spawned since the last reset, every mode). */
+const CTL_WORDS = 14;
 /** Debris tokens are fixed point: a particle costs TOKEN_ONE, so a frame's refill keeps its fraction. */
 export const TOKEN_ONE = 256;
 
@@ -148,7 +175,14 @@ fn pcg(v: u32) -> u32 {
   return (w >> 22u) ^ w;
 }
 fn unit(h: u32) -> f32 { return f32(h >> 8u) * (1.0 / 16777216.0); }
-fn sparkLife(packed: u32) -> f32 { return 0.4 + 0.8 * f32(packed & 0xffu) / 255.0; }
+// Bit 12: a damage-scaled spark (SparkParams.lifeDv), its strength class in bits 8-11.
+fn sparkScaled(packed: u32) -> bool { return ((packed >> 12u) & 1u) == 1u; }
+fn sparkClassK(packed: u32) -> f32 { return f32((packed >> 8u) & 0xfu) / 15.0; }
+fn sparkLife(packed: u32) -> f32 {
+  let base = 0.4 + 0.8 * f32(packed & 0xffu) / 255.0;
+  return select(base, base * (0.35 + 0.65 * sparkClassK(packed)), sparkScaled(packed));
+}
+fn sparkGlow(packed: u32) -> f32 { return select(1.0, 0.45 + 0.55 * sparkClassK(packed), sparkScaled(packed)); }
 fn dustLife(packed: u32) -> f32 { return 2.0 + 2.0 * f32(packed & 0xffu) / 255.0; }
 fn chipLife(packed: u32) -> f32 { return 1.5 + 2.0 * f32(packed & 0xffu) / 255.0; }
 `;
@@ -166,7 +200,18 @@ fn newSpark(e: ImpactEvent, j: u32, frame: u32, speedMin: f32, speedMax: f32) ->
   if (dot(u, e.dir) < 0.0) { u = -u; }
   let d = normalize(u + 0.8 * e.dir);
   let speed = mix(speedMin, speedMax, unit(h2)) * min(1.0, 0.3 + e.strength / 12.0);
-  return Spark(e.pos, 0.0, d * speed, (h3 >> 24u) | (h0 & 0xffffff00u));
+  return Spark(e.pos, 0.0, d * speed, sparkPacked(e, h0, h3));
+}
+
+// Classic: random bits 8-31 but bit 12 (unscaled). Scaled: the class in bits 8-11 and bit 12 set.
+fn isBallEvent(e: ImpactEvent) -> bool { return (e.packed >> 28u) == ${MATERIAL.ball}u; }
+fn sparkClass(e: ImpactEvent) -> u32 {
+  if (isBallEvent(e)) { return 0u; }
+  return min(15u, u32(max(e.strength - p.dvMin, 0.0) / p.lifeDv * 15.0));
+}
+fn sparkPacked(e: ImpactEvent, h0: u32, h3: u32) -> u32 {
+  if (p.lifeDv <= 0.0) { return (h3 >> 24u) | (h0 & 0xffffef00u); }
+  return (h3 >> 24u) | (sparkClass(e) << 8u) | (1u << 12u) | (h0 & 0xffffe000u);
 }
 
 // Debris: a puff drifts out around the impact and upward, slowly; a chip
@@ -215,14 +260,14 @@ struct SparkParams {
   dt: f32, groundY: f32, dvMin: f32, perDv: f32,
   speedMin: f32, speedMax: f32, drag: f32, bounce: f32,
   friction: f32, gravity: f32, count: u32, frame: u32,
-  capacity: u32, pool: u32, pad1: u32, pad2: u32,
+  capacity: u32, pool: u32, budget: u32, ballSparks: u32,
   balls: vec4u, heatDv: f32, heatRange: f32, heatTau: f32, contact: f32,
   mode: u32, dustBudget: u32, chipBudget: u32, dustPool: u32,
   chipPool: u32, dustPerDv: f32, chipDv: f32, chipPerDv: f32,
   dustDrag: f32, dustRise: f32, chipBounce: f32, chipFriction: f32,
   dustSpeed: f32, chipSpeed: f32, dustRate: f32, chipRate: f32,
   dustDv: f32, dustFace: f32, dustSlide: f32, dvScale: f32,
-  dustSkirt: f32, pad3: f32, pad4: f32, pad5: f32,
+  dustSkirt: f32, rate: f32, lifeDv: f32, contactSpeed: f32,
 }
 
 @group(0) @binding(0) var<uniform> p: SparkParams;
@@ -311,6 +356,7 @@ fn ballContact(i: u32, b: Body) -> f32 {
     let j = p.balls[k];
     if (j >= p.count || j == i) { continue; }
     let ball = bodies[j];
+    if (length(ball.linVel) * p.dvScale < p.contactSpeed) { continue; } // a ball at rest is not a hit
     let r = shapes[ball.shape].half.x;
     let local = qrot(vec4f(-b.rot.xyz, b.rot.w), ball.pos - b.pos);
     let half = select(sh.half, vec3f(sh.half.x), sh.kind == 1u);
@@ -321,7 +367,8 @@ fn ballContact(i: u32, b: Body) -> f32 {
 }
 
 fn sparkCount(e: ImpactEvent) -> u32 {
-  return min(${MAX_PER_EVENT}u, u32(max(e.strength - p.dvMin, 0.0) * p.perDv));
+  let n = min(${MAX_PER_EVENT}u, u32(max(e.strength - p.dvMin, 0.0) * p.perDv));
+  return select(n, min(n, p.ballSparks), isBallEvent(e));
 }
 // An event's share of debris: x expected, the fraction rounded up with that
 // chance (a hash of the event and frame), so weak hits make dust now and then.
@@ -365,6 +412,8 @@ fn spawn(@builtin(global_invocation_id) id: vec3u) {
     }
     return;
   }
+  // The live-spark cap: as many threads spawn as the bucket holds tokens (budget 0: no bucket).
+  if (p.budget > 0u && t >= min(p.budget, atomicLoad(&ctl[${CTL.sparkTokens}]) / ${TOKEN_ONE}u)) { return; }
   let e = events[t % n];
   let j = t / n;
   if (j >= sparkCount(e)) { return; }
@@ -461,7 +510,12 @@ fn writeArgs() {
     atomicStore(&ctl[${CTL.dustTokens}], min(p.dustBudget * ${TOKEN_ONE}u, dust + u32(p.dt * p.dustRate * ${TOKEN_ONE}.0)));
     let chips = atomicLoad(&ctl[${CTL.chipTokens}]) - atomicLoad(&ctl[${CTL.chipSpawned}]) * ${TOKEN_ONE}u;
     atomicStore(&ctl[${CTL.chipTokens}], min(p.chipBudget * ${TOKEN_ONE}u, chips + u32(p.dt * p.chipRate * ${TOKEN_ONE}.0)));
+  } else if (p.budget > 0u) {
+    // Clamped to the budget first: a bucket filled under a larger budget (a config change) spends as this one.
+    let left = min(atomicLoad(&ctl[${CTL.sparkTokens}]), p.budget * ${TOKEN_ONE}u) - atomicLoad(&ctl[${CTL.spawned}]) * ${TOKEN_ONE}u;
+    atomicStore(&ctl[${CTL.sparkTokens}], min(p.budget * ${TOKEN_ONE}u, left + u32(p.dt * p.rate * ${TOKEN_ONE}.0)));
   }
+  atomicAdd(&ctl[${CTL.total}], atomicLoad(&ctl[${CTL.spawned}]));
   drawArgs[0] = 6u;
   drawArgs[1] = select(0u, p.pool, any && !debris);
   drawArgs[2] = 0u;
@@ -495,11 +549,34 @@ export interface SparkState { pos: V3; age: number; vel: V3; packed: number }
 /** normal defaults to dir and raw to strength (an injected impact). */
 export interface Impact { pos: V3; strength: number; dir: V3; packed: number; normal?: V3; raw?: number }
 
-export const sparkLife = (packed: number) => fr(0.4 + fr(fr(0.8 * (packed & 0xff)) / 255));
+const sparkScaled = (packed: number) => ((packed >>> 12) & 1) === 1;
+const sparkClassK = (packed: number) => fr(((packed >>> 8) & 0xf) / 15);
+export const sparkLife = (packed: number) => {
+  const base = fr(0.4 + fr(fr(0.8 * (packed & 0xff)) / 255));
+  return sparkScaled(packed) ? fr(base * fr(0.35 + fr(0.65 * sparkClassK(packed)))) : base;
+};
+/** A spark's brightness multiple (the draw's): 1 classic, 0.45 to 1 by class when damage-scaled. */
+export const sparkGlow = (packed: number) => (sparkScaled(packed) ? fr(0.45 + fr(0.55 * sparkClassK(packed))) : 1);
+
+/** A ball's own impact (the detector's material bits 28-31; an injected event is never one). */
+export const isBallEvent = (e: Impact) => e.packed >>> 28 === MATERIAL.ball;
+
+/** The u32 the GPU gets for SparkParams.ballSparks (Infinity: none). */
+const ballCap = (p: SparkParams) => (p.ballSparks === Infinity ? 0xffffffff : Math.max(0, Math.floor(p.ballSparks)));
 
 export function sparkCount(e: Impact, p: SparkParams): number {
-  return Math.min(MAX_PER_EVENT, Math.floor(fr(Math.max(fr(e.strength - p.dvMin), 0) * p.perDv)));
+  const n = Math.min(MAX_PER_EVENT, Math.floor(fr(Math.max(fr(e.strength - p.dvMin), 0) * p.perDv)));
+  return isBallEvent(e) ? Math.min(n, ballCap(p)) : n;
 }
+
+/** A spark's strength class (bits 8-11 when SparkParams.lifeDv > 0): 0 for a ball's own impact. */
+export function sparkClass(e: Impact, p: SparkParams): number {
+  if (isBallEvent(e)) return 0;
+  return Math.min(15, Math.floor(fr(fr(fr(Math.max(fr(e.strength - p.dvMin), 0)) / fr(p.lifeDv)) * 15)));
+}
+
+const sparkPacked = (e: Impact, p: SparkParams, h0: number, h3: number) =>
+  p.lifeDv > 0 ? u32((h3 >>> 24) | (sparkClass(e, p) << 8) | (1 << 12) | (h0 & 0xffffe000)) : u32((h3 >>> 24) | (h0 & 0xffffef00));
 
 /** CPU twin of newSpark (f32 rounding at each step; trig may differ from the GPU by an ulp or so). */
 export function newSparkReference(e: Impact, j: number, frame: number, p: SparkParams): SparkState {
@@ -511,7 +588,7 @@ export function newSparkReference(e: Impact, j: number, frame: number, p: SparkP
   const v = u.map((x, k) => fr(x + fr(0.8 * e.dir[k]!))) as V3;
   const l = fr(Math.hypot(...v));
   const t = unit(h2), speed = fr(fr(fr(p.speedMin * fr(1 - t)) + fr(p.speedMax * t)) * Math.min(1, fr(0.3 + fr(e.strength / 12))));
-  return { pos: [...e.pos] as V3, age: 0, vel: v.map((x) => fr(fr(x / l) * speed)) as V3, packed: u32((h3 >>> 24) | (h0 & 0xffffff00)) };
+  return { pos: [...e.pos] as V3, age: 0, vel: v.map((x) => fr(fr(x / l) * speed)) as V3, packed: sparkPacked(e, p, h0, h3) };
 }
 
 export const dustLife = (packed: number) => fr(2 + fr(fr(2 * (packed & 0xff)) / 255));
@@ -625,15 +702,43 @@ export function chipStepReference(s: SparkState, dt: number, groundY: number, p:
   return { ...r, age };
 }
 
-/** The sparks one frame's events spawn, in thread order (the GPU's slot order may differ). */
-export function spawnReference(events: Impact[], frame: number, p: SparkParams): SparkState[] {
+/**
+ * The sparks one frame's events spawn, in thread order (the GPU's slot order may differ). tokens: whole
+ * sparks in the bucket (SparkParams.budget; default full), unused without one.
+ */
+export function spawnReference(events: Impact[], frame: number, p: SparkParams, tokens = p.budget): SparkState[] {
   const n = Math.min(events.length, MAX_EVENTS), out: SparkState[] = [];
   if (!n) return out;
-  for (let t = 0; t < SPAWN_BUDGET; t++) {
+  const threads = p.budget > 0 ? Math.min(SPAWN_BUDGET, p.budget, Math.floor(tokens)) : SPAWN_BUDGET;
+  for (let t = 0; t < threads; t++) {
     const e = events[t % n]!, j = Math.floor(t / n);
     if (j < sparkCount(e, p)) out.push(newSparkReference(e, j, frame, p));
   }
   return out;
+}
+
+/**
+ * How many sparks a run of frames spawns, the bucket included (the CPU twin of spawn's count and
+ * writeArgs's refill, in TOKEN_ONE fixed point): frames[k] is frame k's impacts and dt its particle
+ * time. The bucket starts full, as after a reset. Counts only: sparkCount per event, round-robin
+ * threads, no positions.
+ */
+export function sparkBucketReference(frames: readonly { events: readonly Impact[]; dt: number }[], p: SparkParams): { perFrame: number[]; total: number } {
+  let tokens = p.budget * TOKEN_ONE, total = 0;
+  const perFrame: number[] = [];
+  for (const f of frames) {
+    const n = Math.min(f.events.length, MAX_EVENTS);
+    let spawned = 0;
+    if (n) {
+      const counts = f.events.slice(0, n).map((e) => sparkCount(e, p));
+      const threads = p.budget > 0 ? Math.min(SPAWN_BUDGET, p.budget, Math.floor(tokens / TOKEN_ONE)) : SPAWN_BUDGET;
+      for (let t = 0; t < threads; t++) if (Math.floor(t / n) < counts[t % n]!) spawned++;
+    }
+    if (p.budget > 0) tokens = Math.min(p.budget * TOKEN_ONE, tokens - spawned * TOKEN_ONE + Math.floor(fr(fr(f.dt * p.rate) * TOKEN_ONE)));
+    perFrame.push(spawned);
+    total += spawned;
+  }
+  return { perFrame, total };
 }
 
 /** CPU twin of simulate for one spark and one frame (flightOnly: the motion without age or life, for chips). */
@@ -680,9 +785,9 @@ export class Sparks {
   constructor(private readonly device: GPUDevice, readonly pool = SPARK_POOL) {
     const usage = GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST;
     this.sparks = device.createBuffer({ size: pool * Spark.size, usage, label: 'sparks' });
-    this.clear(); // every spark starts dead (age -1)
     this.events = device.createBuffer({ size: MAX_EVENTS * ImpactEvent.size, usage, label: 'impact events' });
     this.ctl = device.createBuffer({ size: CTL_WORDS * 4, usage, label: 'spark control' });
+    this.clear(); // every spark starts dead (age -1), every bucket full
     this.args = device.createBuffer({ size: 48, usage: usage | GPUBufferUsage.INDIRECT, label: 'spark draw args' });
     device.queue.writeBuffer(this.args, 0, new Uint32Array([6, 0, 0, 0, 6, 0, 0, 0, 6, 0, 0, 0]));
     this.rings = debrisRings(pool);
@@ -707,7 +812,7 @@ export class Sparks {
   stateFor(source: BodySource): GPUBuffer {
     if (!this.state || this.state.size < source.capacity * FxState.size) {
       this.state?.destroy();
-      this.state = this.device.createBuffer({ size: Math.max(16, source.capacity * FxState.size), usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC, label: 'fx state' });
+      this.state = this.device.createBuffer({ size: Math.max(16, source.capacity * FxState.size), usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST, label: 'fx state' });
       this.binds = null;
     }
     return this.state;
@@ -744,11 +849,13 @@ export class Sparks {
     u[11] = this.frame++;
     u[12] = source.capacity;
     u[13] = this.pool;
+    u[14] = Math.min(SPAWN_BUDGET, Math.max(0, Math.floor(pr.budget)));
+    u[15] = ballCap(pr);
     const balls = source.balls ?? [];
     for (let k = 0; k < 4; k++) u[16 + k] = balls[k] ?? 0xffffffff;
     fl.set([pr.heatDv, pr.heatRange, pr.heatTau, pr.contact], 20);
     u.set([mode === 'debris' ? 1 : 0, db.dustBudget, db.chipBudget, this.rings[0], this.rings[1]], 24);
-    fl.set([db.dustPerDv, db.chipDv, db.chipPerDv, db.dustDrag, db.dustRise, db.chipBounce, db.chipFriction, db.dustSpeed, db.chipSpeed, db.dustRate, db.chipRate, db.dustDv, db.dustFace, db.dustSlide, f.dvScale ?? 1, db.dustSkirt], 29);
+    fl.set([db.dustPerDv, db.chipDv, db.chipPerDv, db.dustDrag, db.dustRise, db.chipBounce, db.chipFriction, db.dustSpeed, db.chipSpeed, db.dustRate, db.chipRate, db.dustDv, db.dustFace, db.dustSlide, f.dvScale ?? 1, db.dustSkirt, pr.rate, pr.lifeDv, pr.contactSpeed], 29);
     q.writeBuffer(this.params, 0, buf);
     // Injected events first; the detector appends after them.
     const inj = this.injected.splice(0);
@@ -772,12 +879,28 @@ export class Sparks {
     pass.dispatchWorkgroups(1);
   }
 
-  /** Every particle dead, and both debris buckets full. */
+  /** Every particle dead, and every bucket full. */
   private clear(): void {
     const init = new Float32Array(this.pool * (Spark.size / 4));
     for (let i = 0; i < this.pool; i++) init[i * 8 + 3] = -1;
     this.device.queue.writeBuffer(this.sparks, 0, init);
-    if (this.ctl) this.device.queue.writeBuffer(this.ctl, 4 * CTL.dustTokens, new Uint32Array([this.debris.dustBudget * TOKEN_ONE, this.debris.chipBudget * TOKEN_ONE]));
+    this.device.queue.writeBuffer(this.ctl, 4 * CTL.dustTokens, new Uint32Array([this.debris.dustBudget * TOKEN_ONE, this.debris.chipBudget * TOKEN_ONE]));
+    this.device.queue.writeBuffer(this.ctl, 4 * CTL.sparkTokens, new Uint32Array([Math.min(SPAWN_BUDGET, Math.max(0, Math.floor(this.config.budget))) * TOKEN_ONE]));
+  }
+
+  /**
+   * A fresh start (a level load, retry or undo): every particle dead, every bucket full, impacts not yet
+   * spawned dropped, every body cold and unseen (so the detector takes the restored poses as first sight,
+   * not as a hit), and the control words' counts (live, hot, total) at 0 until the next frame counts them.
+   */
+  reset(): void {
+    this.injected = [];
+    this.clear();
+    const q = this.device.queue;
+    q.writeBuffer(this.ctl, 0, new Uint32Array(CTL.dustTokens)); // events, ring heads, and this frame's counts
+    q.writeBuffer(this.ctl, 4 * CTL.dustSpawned, new Uint32Array([0, 0]));
+    q.writeBuffer(this.ctl, 4 * CTL.total, new Uint32Array([0]));
+    if (this.state) q.writeBuffer(this.state, 0, new Uint8Array(this.state.size));
   }
 
   /** Frame counter the next encode will use (spark seeds depend on it). */

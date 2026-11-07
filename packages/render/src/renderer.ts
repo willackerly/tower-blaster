@@ -8,8 +8,8 @@
 import { writeStruct } from '@tb/schema';
 import type { GpuProfiler } from '@tb/gpu';
 import { Culler, NO_LOD, SEG, type CullFrame } from './cull.ts';
-import { DEFAULT_DEBRIS, Sparks } from './sparks.ts';
-import { BLAST_LIGHTS, Lights, MAX_BALLS, TRAIL } from './lights.ts';
+import { CLASSIC_SPARKS, CTL, DEFAULT_DEBRIS, DEFAULT_SPARKS, Sparks } from './sparks.ts';
+import { BLAST_LIGHTS, CLASSIC_LIGHTS, DEFAULT_LIGHTS, Lights, MAX_BALLS, TRAIL } from './lights.ts';
 import { Blasts } from './blasts.ts';
 import { Fuses } from './fuses.ts';
 import { BlastReach } from './reach.ts';
@@ -17,8 +17,9 @@ import { aoFrame, aoGrid, AoVolume } from './ao.ts';
 import { FLOOR_VERTS, floorFan, floorPolygon } from './floor.ts';
 import { fitShadow, frustumCorners, pcssParams, type Arena, type ShadowFit, type ShadowFitState } from './shadowfit.ts';
 import { MARK_MASK, MARK_SHIFT } from './marks.ts';
+import { COAT_MASK, COAT_SHIFT } from './coats.ts';
 import { FX_WORDS, packFx, tintWord, toHalf, type Fx, type FxOptions, FX_ANCHOR, unpackFx } from './fx.ts';
-import { CANDY_NIGHT, linearToOklab, REAL_DEFAULTS, srgbToLinear, type LookParams } from './look.ts';
+import { BLOCK_JITTER, CANDY_NIGHT, linearToOklab, REAL_DEFAULTS, srgbToLinear, type LookParams } from './look.ts';
 import { invert, lookAt, multiply, normalize, type Mat4, type V3 } from './math.ts';
 import { HDR_FORMAT, noStamp, Post, type Stamp } from './post.ts';
 import { IcePass } from './ice-pass.ts';
@@ -129,7 +130,7 @@ export interface RendererOptions {
   format?: GPUTextureFormat;
 }
 
-type PipeName = 'box' | 'sphere' | 'ground' | 'sky' | 'overlay' | 'spark' | 'trail' | 'boxShadow' | 'sphereShadow' | 'boxId' | 'sphereId';
+type PipeName = 'box' | 'sphere' | 'ground' | 'sky' | 'overlay' | 'spark' | 'trail' | 'boxShadow' | 'sphereShadow' | 'boxIceShadow' | 'boxId' | 'sphereId';
 /** The pipelines whose shading differs for a look with an atmosphere (sceneWgsl(true)). */
 type RealPipe = 'box' | 'boxFar' | 'sphere' | 'ground' | 'sky' | 'overlay' | 'chip' | 'dust';
 
@@ -170,7 +171,7 @@ export function lookUniforms(l: LookParams, metres = 1): Record<string, number |
     ball: lin(l.ball), ballEmissive: l.ballEmissive, fogDensity: l.fogDensity, fogHeight: l.fogHeight, exposure: l.exposure,
     // Metric sizes in world units (FrameParams.metres): a texture tile, the fade footprint, the relief, the hills' distance.
     stone: l.stone ? [STONES.indexOf(l.stone.kind), l.stone.scale / metres, l.stone.wear, l.stone.dirt] : [0, 1, 0, 0],
-    stoneDetail: [l.stone?.detail ?? 0, (l.stone?.fade ?? 1) / metres, 0, 0],
+    stoneDetail: [l.stone?.detail ?? 0, (l.stone?.fade ?? 1) / metres, l.stone?.jitter ?? BLOCK_JITTER, l.stone?.warmth ?? 0],
     ground: l.ground ? [GROUND_LAYER + GROUNDS.indexOf(l.ground.kind), l.ground.scale / metres, l.ground.detail, l.ground.variation] : [GROUND_LAYER, 1, 0, 0],
     groundShape: [(l.ground?.relief ?? 0) / metres, patchThreshold(l.ground?.patches ?? 0), l.shadow?.fill ?? 0, 0],
     hills: l.hills ? [(l.hills.height * Math.PI) / 180, (l.hills.distance * 1000) / metres, l.hills.cover ?? 0, l.hills.ridges ?? 1] : [0, 1000, 0, 1],
@@ -283,6 +284,14 @@ export class Renderer {
   profiler: GpuProfiler | null = null;
   /** Passes to skip, for measuring their marginal cost (bench:render). sparks off also freezes heat (its detector writes it). */
   toggles = { shadow: true, post: true, sparks: true, trail: true, heat: true, ao: true, blasts: true };
+  /**
+   * Bullet Time's frozen look (the game's PaceFeel.frozenLook): grade, the post grade's amount (0 none to 1;
+   * post.ts frozenGrade); sparks, the share of sparks drawn (1 all, 0 none; shaders.ts vsSpark); heat, the heat
+   * glow's brightness (1 as drawn). The game eases them while a shot is frozen, and passes FrameParams.dt 0 so
+   * the sparks hang, undrawn, and come back where they were when it resumes.
+   */
+  freezeFx = { grade: 0, sparks: 1, heat: 1 };
+  private effects: EffectStyle = 'damage';
   private readonly stoneLod: boolean;
   private readonly realDiag: RendererOptions['realDiag'];
   private readonly shadowSize: number;
@@ -362,9 +371,10 @@ export class Renderer {
         : { format: 'depth24plus', depthWriteEnabled: true, depthCompare: 'less' },
       multisample: { count: opts.samples ?? SAMPLES },
     });
-    const depthOnly = (vs: string, seg: number): GPURenderPipeline => device.createRenderPipeline({
+    const depthOnly = (vs: string, seg: number, fs?: string): GPURenderPipeline => device.createRenderPipeline({
       layout: shadowPl,
       vertex: { module, entryPoint: vs, constants: { SEG: seg, ...(vs === 'vsBoxShadow' ? { FAN: shadowFan ? 1 : 0 } : {}) } },
+      ...(fs ? { fragment: { module, entryPoint: fs, targets: [] } } : {}),
       // Casters are the light-facing faces: the fan around the corner
       // nearest the light, or the cube with faces turned away culled. Both
       // write the same nearest depth.
@@ -407,6 +417,7 @@ export class Renderer {
       }),
       boxShadow: depthOnly('vsBoxShadow', SEG.boxShadow),
       sphereShadow: depthOnly('vsSphereShadow', SEG.sphereShadow),
+      boxIceShadow: depthOnly('vsBoxShadow', SEG.boxIceShadow, 'fsIceShadow'),
       boxId: color('vsBox', 'fsId', 'back', SEG.box, { format: 'r32uint', samples: 1 }),
       sphereId: color('vsSphere', 'fsId', 'back', SEG.sphere, { format: 'r32uint', samples: 1 }),
     };
@@ -547,18 +558,19 @@ export class Renderer {
       for (let k = 0; k < n; k++) {
         const o = (slot + k) * FX_WORDS;
         if (a && k < a.length) this.fx[o] = tintWord(a[k]!);
-        if (scales && k < scales.length) this.fx[o + 1] = (toHalf(1 - Math.min(1, Math.max(0, scales[k]!))) | (anchor ? FX_ANCHOR : 0) | (this.fx[o + 1]! & MARK_MASK)) >>> 0;
+        if (scales && k < scales.length) this.fx[o + 1] = (toHalf(1 - Math.min(1, Math.max(0, scales[k]!))) | (anchor ? FX_ANCHOR : 0) | (this.fx[o + 1]! & (MARK_MASK | COAT_MASK))) >>> 0;
       }
     } else {
-      const o = slot * FX_WORDS, mark = this.fx[o + 1]! & MARK_MASK;
+      const o = slot * FX_WORDS, mark = this.fx[o + 1]! & MARK_MASK, coat = this.fx[o + 1]! & COAT_MASK;
       packFx(a, this.fx, o, this.lastTime);
       if (a.mark === undefined) this.fx[o + 1] = (this.fx[o + 1]! | mark) >>> 0;
+      if (a.coat === undefined) this.fx[o + 1] = (this.fx[o + 1]! | coat) >>> 0;
     }
     this.uploadFx(slot, n);
   }
 
   /**
-   * Engrave count = marks.length slots from slot0 (marks.ts: MARK_NONE, MARK_HIT, MARK_SAVE per slot). A mark
+   * Engrave count = marks.length slots from slot0 (marks.ts: MARK_NONE, MARK_HIT, MARK_SAVE, MARK_KEEP per slot). A mark
    * stays through every setFx that does not name one, until clearFx; only boxes draw it.
    */
   setMarks(slot0: number, marks: ArrayLike<number>): void {
@@ -568,6 +580,21 @@ export class Renderer {
     for (let k = 0; k < n; k++) {
       const o = (slot0 + k) * FX_WORDS + 1;
       this.fx[o] = ((this.fx[o]! & ~MARK_MASK) | ((marks[k]! & 3) << MARK_SHIFT)) >>> 0;
+    }
+    this.uploadFx(slot0, n);
+  }
+
+  /**
+   * Coat count = coats.length slots from slot0 (coats.ts: COAT_NONE, COAT_GILT, COAT_GLAZE per slot): the block's
+   * own colour in every look. A coat stays through every setFx that does not name one, until clearFx; only boxes draw it.
+   */
+  setCoats(slot0: number, coats: ArrayLike<number>): void {
+    const n = coats.length;
+    if (!n) return;
+    this.growFx(slot0 + n);
+    for (let k = 0; k < n; k++) {
+      const o = (slot0 + k) * FX_WORDS + 1;
+      this.fx[o] = ((this.fx[o]! & ~COAT_MASK) | ((coats[k]! & 3) << COAT_SHIFT)) >>> 0;
     }
     this.uploadFx(slot0, n);
   }
@@ -723,9 +750,11 @@ export class Renderer {
       // Bias, all on the receiver: normal offset of 2 texels, depth bias of 1 texel + 1 cm.
       shadowParams: [2 * fit.texel, (fit.texel + 0.01) / fit.depthRange, fit.texel, 1 / this.shadowSize],
       ...this.aoUniforms(f.eye),
-      heat: this.toggles.heat && this.look.effects !== false ? 1 : 0, viewport: this.viewport(), dt: f.dt ?? 0, trailHead: (this.lights.nextFrame + TRAIL - 1) % TRAIL,
+      heat: this.toggles.heat && this.look.effects !== false ? (this.effects === 'damage' ? 2 : 1) : 0, viewport: this.viewport(), dt: f.dt ?? 0, trailHead: (this.lights.nextFrame + TRAIL - 1) % TRAIL,
       ...this.atmosphereUniforms(f, sun, fit),
       ...hall,
+      iceShadow: [this.ice.params.shadow, 0, 0, 0],
+      fxGain: [this.freezeFx.sparks, this.freezeFx.heat, 0, 0],
     });
     this.device.queue.writeBuffer(this.frameBuf, 0, this.frameData);
     return { viewProj, lightViewProj, eye: f.eye, alpha: f.alpha ?? 1, noCull: f.noCull ?? false };
@@ -807,6 +836,11 @@ export class Renderer {
       sp.drawIndirect(culler.args, 16 * SEG.boxShadow);
       sp.setPipeline(this.pipes.sphereShadow);
       sp.drawIndirect(culler.args, 16 * SEG.sphereShadow);
+      // Ice casts a lighter shadow (a screen-door caster, fsIceShadow); none drawn while there is no ice.
+      if (this.ice.count > 0) {
+        sp.setPipeline(this.pipes.boxIceShadow);
+        sp.drawIndirect(culler.args, 16 * SEG.boxIceShadow);
+      }
       sp.end();
     }
     // Ice (ice-pass.ts): while any slot is ice, the opaque scene resolves into `under` and keeps
@@ -914,7 +948,7 @@ export class Renderer {
     this.encodeScene(enc, f, 'scene', stamp);
     // With an atmosphere, the exposure adapts to the light (csAmbient, written in encodeScene).
     const adapted = this.look.atmosphere && this.real ? { buffer: this.real.atmosphere.ambient, offset: ADAPTED_EXPOSURE_OFFSET } : undefined;
-    if (this.toggles.post) this.post.encode(enc, this.hdr!, tex.createView(), this.look, stamp, adapted, this.postFrames++);
+    if (this.toggles.post) this.post.encode(enc, this.hdr!, tex.createView(), this.freezeFx.grade > 0 ? { ...this.look, grade: this.freezeFx.grade } : this.look, stamp, adapted, this.postFrames++);
     prof?.resolve(enc);
     let read: GPUBuffer | null = null;
     const bytesPerRow = Math.ceil((tex.width * 4) / 256) * 256;
@@ -936,6 +970,7 @@ export class Renderer {
     read.destroy();
     const { ids } = await this.renderIds(f);
     stats.bodyFraction = ids.reduce((a, v) => a + (v ? 1 : 0), 0) / ids.length;
+    if (keepPixels) stats.ids = Array.from(ids);
     return stats;
   }
 
@@ -1029,6 +1064,53 @@ export class Renderer {
     this.reachZone.set(centre, radius);
   }
 
+  /** How impacts are drawn (EffectStyle): 'damage' (the default since PT2) or 'classic'. */
+  get effectStyle(): EffectStyle { return this.effects; }
+
+  /**
+   * Set how impacts are drawn (EffectStyle). Sets the spark rule's damage fields (sparks.config: ballSparks,
+   * lifeDv, budget, rate, contactSpeed), the flash lights' ballFlash, and the heat glow's shape; other spark
+   * and light tunables are left as they are.
+   */
+  setEffectStyle(style: EffectStyle): void {
+    if (!(EFFECT_STYLES as readonly string[]).includes(style)) throw new Error(`effect style must be ${EFFECT_STYLES.join(' or ')}: ${style}`);
+    this.effects = style;
+    const sp = style === 'damage' ? DEFAULT_SPARKS : CLASSIC_SPARKS;
+    this.sparks.config = { ...this.sparks.config, ballSparks: sp.ballSparks, lifeDv: sp.lifeDv, budget: sp.budget, rate: sp.rate, contactSpeed: sp.contactSpeed };
+    this.lights.config = { ...this.lights.config, ballFlash: (style === 'damage' ? DEFAULT_LIGHTS : CLASSIC_LIGHTS).ballFlash };
+  }
+
+  /**
+   * A fresh start for every transient effect (a level load, retry or undo): sparks, dust and chips dead,
+   * every body cold, flash lights out, ball trails empty, blasts and lit fuses gone. Per-slot FX (tints,
+   * marks), ice surfaces and the reach zone are the caller's (clearFx, clearSurfaces, reach(null)).
+   */
+  resetEffects(): void {
+    this.sparks.reset();
+    this.lights.reset();
+    this.blasts.clear();
+    this.fuses.clear();
+  }
+
+  /**
+   * What transient effects are live, read back from the GPU (tests and tools; it waits on the queue):
+   * particles alive and bodies hot as the last frame counted them, particles spawned since the last
+   * resetEffects, flash lights still lit, blasts and lit fuses.
+   */
+  async effectStats(): Promise<EffectStats> {
+    const rb = this.device.createBuffer({ size: this.sparks.ctl.size, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
+    const enc = this.device.createCommandEncoder();
+    enc.copyBufferToBuffer(this.sparks.ctl, 0, rb, 0, this.sparks.ctl.size);
+    this.device.queue.submit([enc.finish()]);
+    await rb.mapAsync(GPUMapMode.READ);
+    const ctl = new Uint32Array(rb.getMappedRange().slice(0));
+    rb.destroy();
+    return {
+      particles: ctl[CTL.alive]!, hot: ctl[CTL.hot]!, spawned: ctl[CTL.total]!,
+      flashes: await this.lights.litFlashes(this.lastTime), blasts: this.blasts.states(this.lastTime).length, fuses: this.fuses.slots.length,
+    };
+  }
+
   /** Sparks from a game event at pos, flying out around dir; strength is a speed change in m/s. */
   burst(pos: V3, dir: V3, strength: number): void {
     this.sparks.inject(pos, dir, strength);
@@ -1040,6 +1122,20 @@ export class Renderer {
   }
 }
 
+/**
+ * How impacts are drawn (Renderer.setEffectStyle):
+ * - damage (PT2, the default): effects follow the damage. A ball's own impact throws a short, dim puff
+ *   and bids for a flash at a quarter strength (the blocks it moves spark and flash in full); weaker
+ *   impacts throw shorter, dimmer sparks; a bucket caps the live sparks; heat glows along a hit block's
+ *   edges and never turns white; a ball at rest heats nothing. docs/render/damage-effects.md.
+ * - classic: as before PT2.
+ */
+export type EffectStyle = 'damage' | 'classic';
+export const EFFECT_STYLES: readonly EffectStyle[] = ['damage', 'classic'];
+
+/** Renderer.effectStats. */
+export interface EffectStats { particles: number; hot: number; spawned: number; flashes: number; blasts: number; fuses: number }
+
 export interface PixelStats {
   width: number;
   height: number;
@@ -1049,6 +1145,8 @@ export interface PixelStats {
   bodyFraction?: number;
   /** Raw rows when asked for (test screenshots), RGBA8 whatever the output format. */
   pixels?: { data: number[]; bytesPerRow: number };
+  /** With the raw rows: each pixel's body slot + 1 (0: nothing) from the ID pass of the same frame (renderIds), row-major, width x height. */
+  ids?: number[];
 }
 
 /** Coarse statistics of an RGBA/BGRA frame: enough to tell "drew a scene" from "blank". */

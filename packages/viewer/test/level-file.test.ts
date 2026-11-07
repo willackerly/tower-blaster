@@ -21,6 +21,33 @@ describe('level files', () => {
     }
   });
 
+  it('reads back placed pieces, domino runs and a build block (C9), and refuses malformed ones', () => {
+    const d: LevelDef = {
+      ...structuredClone(L2), build: { budget: 12, pieces: ['cube', 'domino'], brush: true, material: 'stone' },
+      parts: [
+        ...structuredClone(L2.parts),
+        { kind: 'piece', at: [6.12, 0.5, -1.5], half: [0.5, 0.5, 0.5], material: 'plaster', placed: true },
+        { kind: 'piece', at: [7, 1, 2], half: [0.5, 1, 0.15], yaw: 33.5, material: 'stone', role: 'crown' },
+        { kind: 'run', path: [[-6, -4], [-6, 4], [-4.5, 6]], pitch: 1.2, half: [0.5, 1, 0.15], material: 'plaster', omit: [1, 3], y: 0, placed: true },
+      ],
+    };
+    expect(parseLevelDef(JSON.parse(levelJson(d)))).toEqual(d);
+    expect(decodeLevelParam(encodeLevelParam(d))).toEqual(d);
+    expect(compileLevel(parseLevelDef(JSON.parse(levelJson(d)))).hash).toBe(compileLevel(d).hash);
+    const bad = (edit: (x: Record<string, any>) => void) => { const x = structuredClone(d) as Record<string, any>; edit(x); return () => parseLevelDef(x); };
+    const n = L2.parts.length;
+    expect(bad((x) => { x.parts[n].half = [0.5, 0, 0.5]; })).toThrow(`level.parts[${n}].half must be three numbers above 0`);
+    expect(bad((x) => { x.parts[n].placed = false; })).toThrow(`level.parts[${n}].placed must be true when given`);
+    expect(bad((x) => { x.parts[n].size = [1, 1, 1]; })).toThrow(/unknown key size/);
+    expect(bad((x) => { x.parts[n + 2].path = []; })).toThrow(`level.parts[${n + 2}].path must have at least one point`);
+    expect(bad((x) => { x.parts[n + 2].path[1] = [1, 2, 3]; })).toThrow(`level.parts[${n + 2}].path[1] must be two numbers (x, z)`);
+    expect(bad((x) => { x.parts[n + 2].pitch = 0; })).toThrow(/pitch must be above 0/);
+    expect(bad((x) => { x.parts[n + 2].omit = [0.5]; })).toThrow(/omit\[0\] must be a whole number/);
+    expect(bad((x) => { x.build.budget = -1; })).toThrow('level.build.budget must be 0 or more');
+    expect(bad((x) => { x.build.pieces = ['tank']; })).toThrow(/level.build.pieces\[0\] must be one of cube, domino/);
+    expect(bad((x) => { x.build.colour = 'red'; })).toThrow(/level.build: unknown key colour/);
+  });
+
   it('reads racks and solutions holding presets and weapons (p-, w-)', () => {
     const d: LevelDef = { ...structuredClone(L2), rack: ['p-wreckingball', 'w-grenade', 'cannonball'], solutions: { par: [{ ammo: 'w-grenade', az: 540, y: 8, yaw: 0, pitch: 300, power: 80 }] } };
     expect(parseLevelDef(JSON.parse(levelJson(d)))).toEqual(d);
@@ -49,7 +76,7 @@ describe('level files', () => {
     expect(bad({ iterations: 0 })).toThrow(/level.physics.iterations must be a whole number from 1 to 200/);
     expect(bad({ bounce: 'yes' })).toThrow(/level.physics.bounce must be a number/);
     expect(bad({ substeps: 2 })).toThrow(/level.physics: unknown key substeps/);
-    expect(() => parseLevelDef({ ...structuredClone(L2), settle: 'v9' })).toThrow(/level.settle must be v1 or v2 or v3: v9/);
+    expect(() => parseLevelDef({ ...structuredClone(L2), settle: 'v9' })).toThrow(/level.settle must be v1 or v2 or v3 or v4: v9/);
   });
 
   it('reads back a freeze budget and a hold objective (Undercut, Bullet Time), and refuses a budget out of range', () => {

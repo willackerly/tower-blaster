@@ -2,8 +2,8 @@ import { describe, expect, it } from 'vitest';
 import { emptySnapshot, type Snapshot } from '@tb/engine-api';
 import { quatFromAxisAngle } from '@tb/geom';
 import {
-  aabbTop, baselineOf, compileLevel, crownDown, DEFAULT_GOLD, FROZEN_D, FROZEN_SPEED, FROZEN_STEPS, GRAVITY, HEIGHT_BINS, heritageBroken, type LevelDef, levelScore, leverage, parStars, peOf_mJ,
-  potential_mJ, quietUnder, reduceCpu, type Reductions, SETTLE_CAP, SETTLE_CAP_V2, SETTLE_MIN, SETTLE_QUIET, settleAllowance, settleCap, type SettleRule, type SettleState, settleUpdate, type ShotOutcome, skyline, stampOf, tier,
+  aabbTop, ammoInFlight, baselineOf, compileLevel, crownDown, DEFAULT_GOLD, FROZEN_D, FROZEN_SPEED, FROZEN_STEPS, GRAVITY, HEIGHT_BINS, heritageBroken, type LevelDef, levelScore, leverage, parStars, peOf_mJ,
+  potential_mJ, QUIET_SPEED, quietUnder, reduceCpu, type Reductions, SETTLE_CAP, SETTLE_CAP_V2, SETTLE_MIN, SETTLE_QUIET, SETTLE_RULES, settleAllowance, STEADY_D, STEADY_STEPS, settleCap, type SettleRule, type SettleState, settleUpdate, type ShotOutcome, skyline, stampOf, tier,
 } from '@tb/keystone';
 
 const def: LevelDef = {
@@ -210,6 +210,91 @@ describe('settle v3: v2, or a frozen structure', () => {
   it('is v2 where v2 settles: stragglers within the allowance settle after the quiet run, not the frozen one', () => {
     expect(run((i) => red(1 + i, { moving: A, maxSpeed: 1 }), (i) => 0.07 + 0.01 * i, 200)).toBe(SETTLE_QUIET);
     expect(settleCap('v3')).toBe(SETTLE_CAP_V2);
+  });
+});
+
+describe('settle v4: v3, or a steady collapse (agent playtest PT6)', () => {
+  const N = 1000;
+  /** Debris rolling (300 bodies at 1.5 m/s: v2 and v3 never settle on it) with displaced as given. */
+  const red = (step: number, displaced = 40): Reductions => ({
+    step, nAwake: N, maxSpeed: 1.5, maxAngSpeed: 0, pe_mJ: 0, peHeritage_mJ: 0, displaced, outOfLot: 0, mass_g: 0, spill_g: 0, heightHist: new Uint32Array(64), impacts: new Uint32Array(48),
+    nMoving: 300, movingBox: new Float64Array(6), ammoSpeed: 0,
+  });
+  function run(d: (i: number) => number, steps: number, rule: SettleRule = 'v4', r: (i: number) => Reductions = (i) => red(1 + i)) {
+    let st: SettleState = { quietSince: null };
+    for (let i = 0; i < steps; i++) {
+      const u = settleUpdate(st, r(i), 0, rule, N, d(i));
+      st = u.state;
+      if (u.settled) return 1 + i;
+    }
+    return null;
+  }
+  it(`D within ${STEADY_D} for ${STEADY_STEPS} steps settles whatever still rolls; v3 holds it to the cap`, () => {
+    expect(run(() => 0.17, SETTLE_CAP_V2 + 5)).toBe(STEADY_STEPS);
+    expect(run(() => 0.17, SETTLE_CAP_V2 + 5, 'v3')).toBe(SETTLE_CAP_V2);
+    // Displaced blocks creeping on do not hold it (v3's frozen run would restart on each).
+    expect(run(() => 0.17, SETTLE_CAP_V2 + 5, 'v4', (i) => red(1 + i, 40 + Math.floor(i / 10)))).toBe(STEADY_STEPS);
+  });
+  it('a collapse still going (D gaining a step faster than the band allows over the run) restarts the run', () => {
+    // A fall: D climbs 0.3 over 1 s, then holds.
+    expect(run((i) => 0.1 + 0.3 * Math.min(1, i / 60), 600)).toBe(61 + STEADY_STEPS - 1);
+    // A slow slump at 0.5% a second never settles on the steady run: each run breaks after 60 steps.
+    expect(run((i) => 0.1 + (0.005 / 60) * i, SETTLE_CAP_V2 + 5)).toBe(SETTLE_CAP_V2);
+    // Just inside the band over the run: settles.
+    expect(run((i) => 0.1 + (0.0049 / STEADY_STEPS) * i, 400)).toBe(STEADY_STEPS);
+  });
+  it('is v3 where v3 settles first, and never before SETTLE_MIN', () => {
+    const still = (i: number) => ({ ...red(1 + i), maxSpeed: 0.1, nMoving: 1 });
+    expect(run(() => 0.2, 400, 'v4', still)).toBe(SETTLE_QUIET);
+    expect(run(() => 0.2, 400, 'v4', (i) => ({ ...still(i), nMoving: 300 }))).toBe(FROZEN_STEPS);
+    expect(settleCap('v4')).toBe(SETTLE_CAP_V2);
+    let st: SettleState = { quietSince: null };
+    for (let i = 1; i < SETTLE_MIN; i++) {
+      const u = settleUpdate(st, { ...red(i), nAwake: 0 }, 0, 'v4', N, 0.2);
+      expect(u.settled).toBe(false);
+      st = u.state;
+    }
+  });
+});
+
+describe('ammo in flight holds the settle (agent playtest PT10)', () => {
+  const asleep = (step: number): Reductions => ({ step, nAwake: 0, maxSpeed: 0, maxAngSpeed: 0, pe_mJ: 0, peHeritage_mJ: 0, displaced: 0, outOfLot: 0, mass_g: 0, spill_g: 0, heightHist: new Uint32Array(64), impacts: new Uint32Array(48), nMoving: 0, movingBox: new Float64Array(6), ammoSpeed: 0 });
+  /** The step a shot settles at over a structure asleep throughout, the ammo flying until `lands` (null: never). */
+  function run(rule: SettleRule, lands: number | null, steps: number) {
+    let st: SettleState = { quietSince: null };
+    for (let i = 1; i <= steps; i++) {
+      const u = settleUpdate(st, asleep(i), 0, rule, 1000, 0, lands === null || i < lands);
+      st = u.state;
+      if (u.settled) return i;
+    }
+    return null;
+  }
+  for (const rule of SETTLE_RULES) {
+    it(`${rule}: a sleeping structure and approaching ammo settle when it lands, not at ${SETTLE_MIN}; a flight that never ends stops at the cap`, () => {
+      // Before PT10 a sleeping structure (nAwake 0) settled the shot at SETTLE_MIN with the ball in the air.
+      expect(run(rule, null, SETTLE_MIN)).toBe(null);
+      expect(run(rule, 200, 400)).toBe(200);
+      expect(run(rule, 5, 400)).toBe(SETTLE_MIN);
+      expect(run(rule, null, settleCap(rule) + 5)).toBe(settleCap(rule));
+    });
+  }
+  it('a flight resets the quiet and frozen runs, so a run cannot finish the step the ammo lands', () => {
+    const quiet = (step: number): Reductions => ({ ...asleep(step), nAwake: 1, maxSpeed: 0.3 });
+    let st: SettleState = { quietSince: null };
+    for (let i = 1; i < 100; i++) st = settleUpdate(st, quiet(i), 0, 'v3', 1000, 0.07, true).state;
+    expect(st).toEqual({ quietSince: null, frozenSince: null });
+    const u = settleUpdate(st, quiet(100), 0, 'v3', 1000, 0.07, false);
+    expect(u.settled).toBe(false);
+    expect(u.state.quietSince).toBe(100);
+  });
+  it('ammoInFlight: before its first contact, moving, and above where it could rest on the ground', () => {
+    const r = 0.25 * h; // a cannonball's radius
+    expect(ammoInFlight(c, false, 3 * h, 12, r)).toBe(true);
+    // L3's marble skims in at 0.6 h, where ammoLive already calls it grounded: still flying.
+    expect(ammoInFlight(c, false, 0.6 * h, 15, 0.05 * h)).toBe(true);
+    expect(ammoInFlight(c, true, 3 * h, 12, r)).toBe(false); // it touched something
+    expect(ammoInFlight(c, false, r + 0.04 * h, 12, r)).toBe(false); // a grazing touchdown: rolling
+    expect(ammoInFlight(c, false, 3 * h, 0.9 * QUIET_SPEED, r)).toBe(false); // a soft landing on a ledge
   });
 });
 

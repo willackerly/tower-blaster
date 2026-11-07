@@ -25,3 +25,6 @@ export * from './lot-sheets.ts';
 export * from './fork.ts';
 export * from './fuse-buildings.ts';
 export * from './fuse-levels.ts';
+export * from './placement.ts';
+export * from './stroke.ts';
+export * from './build.ts';
