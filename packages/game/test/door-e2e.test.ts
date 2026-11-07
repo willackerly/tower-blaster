@@ -7,18 +7,24 @@
 // every series is listed, and a trial picked from the Trials toggle loads in
 // place (no page load), with N and P walking the trials only.
 import { describe, expect, it } from 'vitest';
-import { AFTERSHOCK_LEVELS, B1, FUSE_LEVELS, L1, type Shot, TRIAL_LEVELS, writeShots } from '@tb/keystone';
+import { AFTERSHOCK_LEVELS, B1, FUSE_LEVELS, L1, type Shot, TRIAL_LEVELS, WAVE_LEVELS, writeShots } from '@tb/keystone';
 import { DEFAULT_SETTINGS, doorChange, type Settings } from '../src/settings.ts';
 import { gamePage } from './page.ts';
 
 const game = gamePage();
 const MINUTES = 60_000;
-/** What counts as the first collapse: a tenth of the structure's drop potential released (D: about 100 of B1's 1,000 blocks brought to the ground). */
-const FIRST_COLLAPSE = 0.1;
 /** The promise: within 20 s; at 60 steps a second that is this many steps of sim time. */
 const PROMISE_S = 20;
 const real = Boolean(process.env.TB_CHANNEL);
-const engine = real ? 'gpu' : 'rapier';
+/** The GPU solver on a real GPU, or on SwiftShader with PHYSICS_GPU_SLOW=1 (B1's 20 s take about 8 min there); Rapier otherwise. */
+const engine = real || process.env.PHYSICS_GPU_SLOW === '1' ? 'gpu' : 'rapier';
+/**
+ * What the first shot must bring down. On the players' engine, the objective itself (PT13: the first visit is a
+ * win: B1's objective, 40%). Rapier parts from the GPU solver on B1 (PT12: the opener brought 0.43 down on Metal in
+ * the cast and 0.17 on Rapier in the agent playtest), so on Rapier the check is the wall coming down at all: a
+ * tenth of its drop potential (about 100 of the 1,000 blocks brought to the ground).
+ */
+const FIRST_COLLAPSE = engine === 'gpu' ? 0.4 : 0.1;
 
 describe('front door', () => {
   it('a fresh visit: door over B1, Play, Fire, and the wall comes down within the promise', async (ctx) => {
@@ -27,8 +33,8 @@ describe('front door', () => {
     if (!o) return ctx.skip();
     const { page, errors } = o;
     expect(await page.evaluate(() => window.__door.open)).toBe(true);
-    // Every rated level (B1-B3, L1-L5, U1-U3, RL1-RL5, F1 on, A1 on); the trials wait behind their toggle.
-    expect(await page.locator('.kg-door .card:not(.duel)').count()).toBe(16 + FUSE_LEVELS.length + AFTERSHOCK_LEVELS.length);
+    // Every rated level (B1-B3, L1-L5, U1-U3, RL1-RL5, F1 on, A1 on, W3 on); the trials wait behind their toggle.
+    expect(await page.locator('.kg-door .card:not(.duel)').count()).toBe(16 + FUSE_LEVELS.length + AFTERSHOCK_LEVELS.length + WAVE_LEVELS.length);
     expect(await page.locator('.kg-door [data-act="trials"]').innerText()).toBe(`TRIALS · UNRATED (${TRIAL_LEVELS.length}) ▸`);
     expect(await page.locator('.kg-door .card.duel').count()).toBe(2);
     expect(await page.locator('.kg-door .play').innerText()).toBe('Play · Long Wall');
@@ -48,6 +54,7 @@ describe('front door', () => {
     console.log(`first collapse on ${engine}: D ${at.collapse.toFixed(3)} after ${simS.toFixed(1)} s of sim, ${(at.wall / 1000).toFixed(1)} s of wall time since navigation${real ? '' : ' (software: not a performance result)'}`);
     expect(at.strokes).toBe(1);
     expect(at.collapse).toBeGreaterThanOrEqual(FIRST_COLLAPSE);
+    if (engine === 'gpu') expect(B1.objective).toEqual({ kind: 'collapse', min: FIRST_COLLAPSE });
     expect(simS).toBeLessThan(PROMISE_S);
     if (real) expect(at.wall).toBeLessThan(PROMISE_S * 1000);
     // The opener is offered once: gone after the first shot.
@@ -64,8 +71,8 @@ describe('front door', () => {
     expect(await page.evaluate(() => window.__door.open)).toBe(false);
     await page.keyboard.press('Escape');
     expect(await page.evaluate(() => window.__door.open)).toBe(true);
-    // Every series, the slice first: B1 to B3, L1 to L5, U1 to U3, RL1 to RL5, then Fuse & Fold and Aftershock; L1 is the loaded one.
-    expect(await page.locator('.kg-door .card:not(.duel) .id').allInnerTexts()).toEqual(['B1', 'B2', 'B3', 'L1', 'L2', 'L3', 'L4', 'L5', 'U1', 'U2', 'U3', 'RL1', 'RL2', 'RL3', 'RL4', 'RL5', ...FUSE_LEVELS.map((d) => d.id), ...AFTERSHOCK_LEVELS.map((l) => l.id)]);
+    // Every series, the slice first: B1 to B3, L1 to L5, U1 to U3, RL1 to RL5, then Fuse & Fold, Aftershock and Wavefront; L1 is the loaded one.
+    expect(await page.locator('.kg-door .card:not(.duel) .id').allInnerTexts()).toEqual(['B1', 'B2', 'B3', 'L1', 'L2', 'L3', 'L4', 'L5', 'U1', 'U2', 'U3', 'RL1', 'RL2', 'RL3', 'RL4', 'RL5', ...FUSE_LEVELS.map((d) => d.id), ...AFTERSHOCK_LEVELS.map((l) => l.id), ...WAVE_LEVELS.map((l) => l.id)]);
     expect(await page.locator('.kg-door .card.current .id').innerText()).toBe('L1');
     await page.keyboard.press('Escape');
     expect(await page.evaluate(() => window.__door.open)).toBe(false);
@@ -200,11 +207,11 @@ describe('trials on the door', () => {
     await page.keyboard.press('p');
     await page.waitForFunction(() => window.__game.level === 'T-X1' && window.__game.ready, undefined, { timeout: MINUTES, polling: 100 });
     // The first trial has no P: it stays put rather than running back into Undercut's levels.
-    await page.evaluate(() => window.__game.load('T-S1'));
-    await page.waitForFunction(() => window.__game.level === 'T-S1' && window.__game.ready, undefined, { timeout: MINUTES, polling: 100 });
+    await page.evaluate(() => window.__game.load('T-S3'));
+    await page.waitForFunction(() => window.__game.level === 'T-S3' && window.__game.ready, undefined, { timeout: MINUTES, polling: 100 });
     await page.keyboard.press('p');
     await page.waitForTimeout(1000);
-    expect(await page.evaluate(() => window.__game.level)).toBe('T-S1');
+    expect(await page.evaluate(() => window.__game.level)).toBe('T-S3');
     // L5, the chamber's last, has no N into Undercut's.
     await page.evaluate(() => window.__game.load('L5'));
     await page.waitForFunction(() => window.__game.level === 'L5' && window.__game.ready, undefined, { timeout: MINUTES, polling: 100 });

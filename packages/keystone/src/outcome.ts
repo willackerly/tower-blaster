@@ -72,6 +72,8 @@ export function objectiveMet(c: CompiledLevel, f: ObjectiveFacts, scoring: Scori
     case 'quake': return (c.meta.crowns.length > 0 || c.def.build !== undefined) && c.meta.heritage.length > 0 && f.crownsTotal === c.meta.crowns.length && (f.heritage ?? 0) === 0;
     case 'fold': return f.collapse >= obj.min && spillOf(f.red) <= obj.spillMax + 1e-12 && (f.heritage ?? 0) === 0;
     case 'bell': return c.meta.crowns.length > 0 && f.crownsTotal === c.meta.crowns.length;
+    // Mason's Trial: the judge decides (mason-judge.ts), from its worlds, never a settle.
+    case 'trial': return false;
   }
 }
 

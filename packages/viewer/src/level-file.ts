@@ -6,7 +6,7 @@
 // Whether the level is any good (overlaps, unsupported bodies, tunnelling ammo)
 // is validateLevel's question; the panel shows its issues without refusing.
 import {
-  type BuildDef, CATALOG_NAMES, checkPhysics, checkQuakeRules, type QuakeRules, checkSettle, freezeProblem, checkShot, compileLevel, type CourseOverride, type Issue, type LevelDef, MATERIALS, type MaterialName, type Part, type PhysicsBlock, isRackItem, RACK_ITEM_NAMES, type RackItem, type Role, type RoleRule, ROLES, type ScenarioPart, SCORINGS, type Scoring, type Shot,
+  type BuildDef, CATALOG_NAMES, checkPhysics, checkQuakeRules, type QuakeRules, checkRunWindow, checkSettle, freezeProblem, checkShot, compileLevel, type CourseOverride, type Issue, type LevelDef, MATERIALS, type MaterialName, type Part, type PhysicsBlock, isRackItem, RACK_ITEM_NAMES, type RackItem, type Role, type RoleRule, ROLES, type ScenarioPart, SCORINGS, type Scoring, type Shot,
   STAR_METRICS, type StarMetric, type StarsDef, validateLevel,
 } from '@tb/keystone';
 import { SCENARIOS } from '@tb/scenarios';
@@ -21,7 +21,7 @@ const MATERIAL_NAMES = MATERIALS.map((m) => m.name) as readonly string[];
 /** The LevelDef a JSON value describes, or an error saying where it is wrong. */
 export function parseLevelDef(v: unknown, where = 'level'): LevelDef {
   const o = object(v, where);
-  only(o, ['format', 'id', 'name', 'version', 'world', 'unit', 'gap', 'parts', 'lot', 'crownLine', 'objective', 'par', 'rack', 'launcher', 'lGold', 'solutions', 'scoring', 'stars', 'autobank', 'settle', 'freeze', 'physics', 'custom', 'build', 'charges', 'rube', 'quake', 'heritage'], where);
+  only(o, ['format', 'id', 'name', 'version', 'world', 'unit', 'gap', 'parts', 'lot', 'crownLine', 'objective', 'par', 'rack', 'launcher', 'lGold', 'solutions', 'scoring', 'stars', 'autobank', 'settle', 'runWindow', 'freeze', 'physics', 'custom', 'build', 'charges', 'rube', 'cut', 'quake', 'heritage'], where);
   if (o.format !== undefined && o.format !== LEVEL_FILE_FORMAT) throw new Error(`${where}.format should be "${LEVEL_FILE_FORMAT}"`);
   const id = str(o.id, `${where}.id`);
   if (!/^[\w-]{1,32}$/.test(id)) throw new Error(`${where}.id must be 1 to 32 letters, digits, - or _`);
@@ -40,14 +40,16 @@ export function parseLevelDef(v: unknown, where = 'level'): LevelDef {
   if (o.lGold !== undefined) def.lGold = num(o.lGold, `${where}.lGold`);
   if (o.solutions !== undefined) {
     const s = object(o.solutions, `${where}.solutions`);
-    only(s, ['par', 'ace'], `${where}.solutions`);
+    only(s, ['par', 'ace', 'opener'], `${where}.solutions`);
     def.solutions = {};
     for (const k of ['par', 'ace'] as const) if (s[k] !== undefined) def.solutions[k] = arr(s[k], `${where}.solutions.${k}`).map((x, i) => shot(x, `${where}.solutions.${k}[${i}]`));
+    if (s.opener !== undefined) def.solutions.opener = shot(s.opener, `${where}.solutions.opener`);
   }
   if (o.scoring !== undefined) def.scoring = oneOf(o.scoring, SCORINGS, `${where}.scoring`) as Scoring;
   if (o.stars !== undefined) def.stars = stars(o.stars, `${where}.stars`);
   if (o.autobank !== undefined) def.autobank = bool(o.autobank, `${where}.autobank`);
   if (o.settle !== undefined) def.settle = checkSettle(o.settle, `${where}.settle`);
+  if (o.runWindow !== undefined) def.runWindow = checkRunWindow(o.runWindow, `${where}.runWindow`);
   if (o.freeze !== undefined) {
     const n = int(o.freeze, `${where}.freeze`), why = freezeProblem(n);
     if (why) throw new Error(`${where}.${why}`);
@@ -62,6 +64,10 @@ export function parseLevelDef(v: unknown, where = 'level'): LevelDef {
   if (o.rube !== undefined) {
     if (o.rube !== true) throw new Error(`${where}.rube must be true`);
     def.rube = true;
+  }
+  if (o.cut !== undefined) {
+    if (o.cut !== true) throw new Error(`${where}.cut must be true`);
+    def.cut = true;
   }
   return def;
 }
@@ -113,12 +119,13 @@ function stars(v: unknown, where: string): StarsDef {
 /** A level's physics block (@tb/keystone PhysicsBlock), ranges as checkPhysics. */
 function physics(v: unknown, where: string): PhysicsBlock {
   const o = object(v, where);
-  only(o, ['iterations', 'gapSlop', 'bounce', 'pairsPerBody', 'presettle', 'sleep'], where);
+  only(o, ['iterations', 'gapSlop', 'bounce', 'pairsPerBody', 'presettle', 'sleep', 'asleep'], where);
   const p: PhysicsBlock = {};
   for (const k of ['iterations', 'pairsPerBody', 'presettle'] as const) if (o[k] !== undefined) p[k] = int(o[k], `${where}.${k}`);
   if (o.gapSlop !== undefined) p.gapSlop = num(o.gapSlop, `${where}.gapSlop`);
   if (o.bounce !== undefined) p.bounce = o.bounce === null ? null : num(o.bounce, `${where}.bounce`);
   if (o.sleep !== undefined) p.sleep = bool(o.sleep, `${where}.sleep`);
+  if (o.asleep !== undefined) p.asleep = bool(o.asleep, `${where}.asleep`);
   checkPhysics(p, where);
   return p;
 }
@@ -187,10 +194,11 @@ function part(v: unknown, where: string): Part {
     if (o.courses !== undefined) p.courses = arr(o.courses, `${where}.courses`).map((c, i) => course(c, `${where}.courses[${i}]`));
     return p;
   }
-  only(o, ['kind', 'at', 'half', 'material', 'role', 'pinned'], where);
+  only(o, ['kind', 'at', 'half', 'material', 'role', 'fixed', 'pinned'], where);
   const half = vec3(o.half, `${where}.half`);
   if (half.some((x) => !(x > 0))) throw new Error(`${where}.half must be three numbers above 0`);
-  return { kind, at: vec3(o.at, `${where}.at`), half, material, ...(role ? { role } : {}), ...pinned };
+  if (o.fixed !== undefined && o.fixed !== true) throw new Error(`${where}.fixed must be true or left out`);
+  return { kind, at: vec3(o.at, `${where}.at`), half, material, ...(role ? { role } : {}), ...(o.fixed ? { fixed: true as const } : {}), ...pinned };
 }
 
 /** A scenario as a part (@tb/keystone ScenarioPart); its params are checked by building it, at compile. */
@@ -299,7 +307,7 @@ function launcher(v: unknown, where: string): LevelDef['launcher'] {
 function shot(v: unknown, where: string): Shot {
   const o = object(v, where);
   const ammo = rackItem(o.ammo, `${where}.ammo`);
-  const keys = ammo === 'drop' ? ['x', 'z'] : ammo === 'cue' ? ['x', 'y', 'z', 'dir', 'power'] : ammo === 'quake' ? ['peak', 'hz', 'sec', 'axis'] : ['az', 'y', 'yaw', 'pitch', 'power'];
+  const keys = ammo === 'drop' ? ['x', 'z'] : ammo === 'cue' ? ['x', 'y', 'z', 'dir', 'power'] : ammo === 'pull' ? ['body'] : ammo === 'quake' ? ['peak', 'hz', 'sec', 'axis'] : ['az', 'y', 'yaw', 'pitch', 'power'];
   only(o, ['ammo', ...keys], where);
   const s = { ammo, ...Object.fromEntries(keys.map((k) => [k, int(o[k], `${where}.${k}`)])) } as Shot;
   try {

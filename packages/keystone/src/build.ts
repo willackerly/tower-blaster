@@ -67,6 +67,11 @@ export function catalog(pitch: number): CatalogItem[] {
     { name: 'ball', label: 'Ball', boxes: [{ at: [0, 0, 0], half: [BALL_RADIUS, BALL_RADIUS, BALL_RADIUS] }], cost: 1, ball: BALL_RADIUS, material: 'stone' },
     { name: 'ramp', label: 'Ramp (fixed)', boxes: [{ at: [0, 0, 0], half: [...RAMP_HALF] }], cost: 3, pinned: true, tilt: RAMP_TILT },
     { name: 'bumper', label: 'Bumper (fixed)', boxes: [{ at: [0, 0, 0], half: [...BUMPER_HALF] }], cost: 3, pinned: true },
+    // Wavefront's relay (offered only when a level names it): one upright slab as wide and tall as a city tower
+    // and 1 h thick, which carries a running wave across a 10-cell avenue from the middle third of it, both
+    // ways. A relay of loose cubes splits as a tower does and is a coin flip; a thinner slab's window is half
+    // as wide (docs/game/wavefront.md).
+    one('relay', 'Relay slab', [pitch / 2 + 0.5, 4, 0.5], 16),
   ];
 }
 /** Rube Lab's runner and bin ball: radius 0.4 h (a 0.2 m stone ball at the game's h, about a cube's mass). */
@@ -76,7 +81,7 @@ export const RAMP_HALF = [3, 1 / 6, 0.5] as const;
 export const RAMP_TILT = 15;
 /** The bin's bumper: a fixed wall 4 h long, 1 h high and 0.3 h thick, to turn a ball. */
 export const BUMPER_HALF = [2, 0.5, 0.15] as const;
-export const CATALOG_NAMES = ['cube', 'domino', 'plank', 'slab', 'beam', 'course4', 'wall4x2', 'pier3', 'ball', 'ramp', 'bumper'] as const;
+export const CATALOG_NAMES = ['cube', 'domino', 'plank', 'slab', 'beam', 'course4', 'wall4x2', 'pier3', 'ball', 'ramp', 'bumper', 'relay'] as const;
 export type CatalogName = (typeof CATALOG_NAMES)[number];
 /** The items offered when a level's build block names none (C9's bin): Rube Lab's parts must be named. */
 export const DEFAULT_PIECES: readonly CatalogName[] = ['cube', 'domino', 'plank', 'slab', 'beam', 'course4', 'wall4x2', 'pier3'];

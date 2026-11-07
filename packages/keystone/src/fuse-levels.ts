@@ -45,8 +45,8 @@ export const FUSE_LEVELS: readonly LevelDef[] = [
 
 /**
  * A candidate shipped under its level id (the site's name kept): same building, lot and charges; its cast stars from stars.json.
- * Pinned to settle v3, the outcome default they were cast under, so the stars keep their hash after PT6b made the default v4;
- * drop the pin together with a v4 recast (docs/game/settle-v4.md).
+ * Settles by v3, not the outcome default v4: a frame can drop a storey, stand past v4's 2 s steady-collapse window
+ * and then topple, and v4 would score it standing (docs/game/fuse-and-fold.md, "Settle rule"; fuse-levels.test).
  */
 function shipped(id: string, site: string): LevelDef {
   const s = FOLD_SITES[site]!;

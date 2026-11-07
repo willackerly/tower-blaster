@@ -31,12 +31,26 @@ export function islandCounts(step: number, out: readonly OutResult[]): IslandCou
   return { step, counts: out.map((o) => o.bins ?? new Uint32Array(0)), invalid: out.map((o) => o.invalid) };
 }
 
-/** islandSpec evaluated on a snapshot by the reference reducer, with the islands' tags (no prev: dv reads ⊥). */
-export function reduceIslands(islands: Islands, s: Snapshot, preds: readonly Pred[], opts: { refs?: readonly (Float64Array | null)[]; prevLinVel?: Float64Array; prevCount?: number; step?: number } = {}): IslandCounts {
-  const spec = islandSpec(islands.K, preds), g = islands.scene.gravity;
+/**
+ * islandSpec evaluated on a snapshot by the reference reducer, with the islands' tags (no prev: dv reads ⊥). With
+ * `tagWords` above 1 the island index is word 0 and `fill` sets the other words of each body (as IslandObserver's).
+ */
+export function reduceIslands(islands: Islands, s: Snapshot, preds: readonly Pred[], opts: { refs?: readonly (Float64Array | null)[]; prevLinVel?: Float64Array; prevCount?: number; step?: number; tagWords?: number; fill?: (id: number, words: Uint32Array) => void } = {}): IslandCounts {
+  const spec = islandSpec(islands.K, preds), g = islands.scene.gravity, W = opts.tagWords ?? 1;
+  let tags = islands.tags(0, s.count);
+  if (W > 1) {
+    const wide = new Uint32Array(W * s.count), row = new Uint32Array(W);
+    for (let id = 0; id < s.count; id++) {
+      row.fill(0);
+      opts.fill?.(id, row);
+      row[0] = tags[id]!;
+      wide.set(row, W * id);
+    }
+    tags = wide;
+  }
   const out = reduceRef(spec, {
     snap: s, prevLinVel: opts.prevLinVel ?? new Float64Array(0), prevCount: opts.prevCount ?? 0, shapes: islands.shapes(),
-    tagWords: 1, tags: islands.tags(0, s.count), refs: opts.refs ?? [], gravity: g, dt: islands.scene.dt,
+    tagWords: W, tags, refs: opts.refs ?? [], gravity: g, dt: islands.scene.dt,
   });
   return islandCounts(opts.step ?? -1, out);
 }

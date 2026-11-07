@@ -187,11 +187,12 @@ export function objectiveText(o: Objective): string {
     case 'quake': return 'fell the condemned, spare the heritage';
     case 'fold': return `fold ${pct(o.min)} into its lot, neighbours untouched`;
     case 'bell': return 'ring the bell';
+    case 'trial': return 'build it to pass the test';
   }
 }
 
 /** Why a pull is refused (Session.pullRefusal: crowns and heritage are the objective's). */
-export const PULL_HINT = 'Crowns and heritage stay: pull a plain block';
+export const PULL_HINT = 'Crowns, heritage and fixed beams stay: pull a plain block';
 
 /**
  * A hold level's crown row (Undercut's Hollow): its crowns are to be kept up, so the row says whether they

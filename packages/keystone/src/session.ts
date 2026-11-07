@@ -8,8 +8,8 @@ import { itemYield, levelCharges, plungerYield } from './arsenal.ts';
 import { castStars, type CompiledLevel, type Scoring, scoringOf, settleOf } from './level.ts';
 import type { IceCrack } from './ice.ts';
 import { buildingOnly, collapseFraction, floorPotential_mJ, homePotential_mJ, homeSkyline, objectiveMet, type OutcomeFacts, outcomeScore } from './outcome.ts';
-import { ammoInFlight, bellRung, crownDown, energyFired, heritageBroken, heritageFallen, leverage, levelScore, type LevelScore, levelTier, refereedScore, roundLeverage, type Observation, type Reductions, type SettleRule, type SettleState, settleCap, settleUpdate, type ShotOutcome, skyline, spillOf } from './rules.ts';
-import type { RackItem } from './rack.ts';
+import { ammoInFlight, bellRung, crownDown, energyFired, heritageBroken, heritageFallen, leverage, levelScore, type LevelScore, levelTier, refereedScore, roundLeverage, type Observation, type Reductions, runWindowSteps, type SettleRule, type SettleState, settleCap, settleHeld, settleUpdate, type ShotOutcome, skyline, spillOf } from './rules.ts';
+import { PULL, type RackItem } from './rack.ts';
 import { placedCost } from './build.ts';
 import { ammoKE, type PlungerShot, pullEnergy, type QuakeShot, type Shot, shotEvent } from './shots.ts';
 import { quakeEnergy, quakeRefusal } from './quake.ts';
@@ -105,6 +105,8 @@ export class Session {
   readonly scoring: Scoring;
   /** How this level's shots settle (settleOf: v1 for par levels, v4 for outcome levels unless the level says). */
   readonly settleRule: SettleRule;
+  /** A wave level's run window in steps (LevelDef.runWindow, rules.ts runWindowSteps); undefined: the rule's cap. */
+  readonly runWindow: number | undefined;
   /** Collapse fraction D now, for the HUD (while a shot runs), and whether the objective was met at the last settle. */
   liveCollapse = 0;
   objectiveDone = false;
@@ -137,6 +139,7 @@ export class Session {
     this.floorPe_mJ = floorPotential_mJ(level, this.building);
     this.scoring = scoringOf(level.def);
     this.settleRule = settleOf(level.def);
+    this.runWindow = level.def.runWindow === undefined ? undefined : runWindowSteps(level.def.runWindow, level.scene.dt);
     this.rackLeft = [...level.def.rack];
     this.crownDown = new Uint8Array(level.meta.crowns.length);
     this.crownLive = new Uint8Array(level.meta.crowns.length);
@@ -174,8 +177,12 @@ export class Session {
    * (freezesLeft).
    */
   canFire(ammo: RackItem): boolean {
+    if (ammo === PULL && this.liveOnly) return false;
     return (this.phase === 'aiming' || (this.phase === 'running' && this.freezesLeft > 0)) && this.rackLeft.includes(ammo);
   }
+
+  /** A Cut level (LevelDef.cut) while no shot runs: its pulls wait for one. */
+  private get liveOnly(): boolean { return this.level.def.cut === true && this.phase !== 'running'; }
 
   /**
    * How many more shots may go in while another runs (LevelDef.freeze, Bullet Time): the level's
@@ -189,13 +196,15 @@ export class Session {
 
   /**
    * Why structure body `body` cannot be pulled, or null if it can: only plain structure bodies
-   * still in the world (crowns and heritage are the objective's, never taken).
+   * still in the world (crowns and heritage are the objective's, never taken; fixed parts, BoxPart.fixed, stay).
    */
   pullRefusal(body: number): string | null {
     const m = this.level.meta;
+    if (this.liveOnly) return 'a Cut level\'s pulls go in while a wave runs: start it first';
     if (!Number.isInteger(body) || body < 0 || body >= m.n) return `body ${body} is not a structure body (0 to ${m.n - 1})`;
     if (m.crowns.includes(body)) return `body ${body} is a crown`;
     if (m.heritage.includes(body)) return `body ${body} is heritage`;
+    if (m.fixed.includes(body)) return `body ${body} is fixed`;
     if (this.pulled.includes(body)) return `body ${body} is already pulled`;
     if (this.cut.includes(body)) return `body ${body} was taken out by a charge`;
     return null;
@@ -207,7 +216,7 @@ export class Session {
    * settle rule's cap (a shot never holds open past it).
    */
   plungerRefusal(shot: PlungerShot): string | null {
-    const charges = this.level.def.charges ?? [], cap = settleCap(this.settleRule), seen = new Set<number>();
+    const charges = this.level.def.charges ?? [], cap = settleCap(this.settleRule, this.runWindow), seen = new Set<number>();
     for (const [i, delay] of shot.fuse) {
       if (!Number.isInteger(i) || i < 0 || i >= charges.length) return `charge ${i} is not one of the level's ${charges.length}`;
       if ((charges[i]!.arm ?? 'plunger') !== 'plunger') return `charge ${i} is armed at start, not by a plunger`;
@@ -370,9 +379,9 @@ export class Session {
     const total = o.red.impacts.reduce((a, x) => a + x, 0);
     if (total) out.push({ t: 'impacts', step, hist: o.red.impacts, total });
 
-    const s = settleUpdate(L.settle, o.red, L.spawnStep, this.settleRule, m.n, this.liveCollapse, L.inFlight);
+    const s = settleUpdate(L.settle, o.red, L.spawnStep, this.settleRule, m.n, this.liveCollapse, settleHeld(this.settleRule, L.inFlight, hold), this.runWindow);
     L.settle = s.state;
-    if (!s.settled || (hold && o.step - L.spawnStep < settleCap(this.settleRule))) return out;
+    if (!s.settled || (hold && o.step - L.spawnStep < settleCap(this.settleRule, this.runWindow))) return out;
 
     // Settle: crowns are judged on where they lie now.
     const settled = this.close(o, false);

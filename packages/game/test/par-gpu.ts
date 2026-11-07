@@ -2,12 +2,12 @@
 // the GPU solver (f32; SwiftShader here, Metal on the M5 Max) with no
 // heritage broken, and with no engine limit hit that changed the physics
 // (the pair buffer dropping contacts): the game plays what the bot pinned. One file per level
-// (par-gpu-L*.test.ts) so CI's shards can share them out: SwiftShader takes
-// one to three minutes a level at 40 iterations.
+// (par-gpu-L*.test.ts, and the Undercut par puzzles par-gpu-U*.test.ts) so CI's shards
+// can share them out: SwiftShader takes one to three minutes a level at 40 iterations.
 import { describe, expect, it } from 'vitest';
 import type { Page } from 'playwright';
 import { limitsHit } from '@tb/engine-api';
-import { compileLevel, LEVELS, physicsOf, type Shot } from '@tb/keystone';
+import { compileLevel, LEVELS, physicsOf, type Shot, UNDERCUT_LEVELS } from '@tb/keystone';
 import { summarize } from '@tb/metrics';
 import { gpuOptions } from '../src/engines.ts';
 import { gamePage, playShots } from './page.ts';
@@ -16,7 +16,7 @@ const MINUTES = 60_000;
 
 /** The par-line check for one level, with extra checks on the page before the first shot and after the level cleared. */
 export function parOnGpu(id: string, more: { before?(page: Page): Promise<void>; after?(page: Page, shots: Shot[]): Promise<void> } = {}): void {
-  const def = LEVELS.find((l) => l.id === id)!;
+  const def = [...LEVELS, ...UNDERCUT_LEVELS].find((l) => l.id === id)!;
   const game = gamePage();
   describe(`${id} on the GPU solver`, () => {
     it('the par line clears with no heritage broken', async (ctx) => {
@@ -44,9 +44,11 @@ export function parOnGpu(id: string, more: { before?(page: Page): Promise<void>;
       console.log(`${id} on the GPU (${adapter}): ${live.phase}, ${live.step} steps; load ${(loadMs / 1000).toFixed(1)} s for ${settled} steps; live step ms median ${f(t.median)} p95 ${f(t.p95)} max ${f(t.max)} over ${t.n}; pair slots ${pairs.peak} of ${pairs.room} at most`);
       expect({ phase: live.phase, strokes: live.strokes, heritageBroken: live.heritageBroken }).toEqual({ phase: 'cleared', strokes: def.par, heritageBroken: 0 });
       expect(health.steps).toBe(live.step);
-      // The level does not turn sleep on (physics.sleep): the GPU engine runs without it, so no body reads asleep.
+      // The level does not turn sleep on (physics.sleep): the GPU engine runs without it, so no body reads asleep
+      // but the pulled ones (Undercut): a removed body's slot is a tombstone, never awake (engine-api remove.ts).
       expect(physicsOf(def).sleep).toBe(false);
-      expect(await page.evaluate(() => window.__game.asleep())).toEqual({ asleep: 0, of: compileLevel(def).meta.n });
+      const pulled = def.solutions!.par!.filter((s) => s.ammo === 'pull').length;
+      expect(await page.evaluate(() => window.__game.asleep())).toEqual({ asleep: pulled, of: compileLevel(def).meta.n });
       expect(limitsHit(health).map((l) => l.message)).toEqual([]);
       // The page's engine took the game's room for every pair of the level's bodies and rack (gpuOptions).
       const { capacity } = gpuOptions(compileLevel(def));

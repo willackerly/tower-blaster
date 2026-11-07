@@ -103,3 +103,15 @@ levels); the stamp is PARTS PAR or +N PARTS (`partsStamp`); there is no gold; th
 "parts N / par P" in place of strokes (`LevelScore.parts`). `LevelDef.rube` is only Rube Lab's marker (its
 plunger is the Go button); the scoring keys on `build.par` alone. The parts par is in the level hash, so
 retuning it starts a new progress record instead of keeping stars earned under the old par.
+
+## Mason's Trial robustness (M8)
+
+A Mason level (`LevelDef.mason`, docs/game/masons-trial.md) is judged in 64 jittered worlds at once, and
+`masonScore(def, passes, K, spent)` scores the count with two lines that sum to the total:
+**Robust c/K** (round(500 c / K)) and **Budget left l/B** (round(500 (c / K) (l / B))), so a fully
+robust build that spends its whole budget scores 500. The build is cleared at half its worlds or more
+(`MASON_CLEAR`); uncleared is 0 stars whatever the points; cleared takes 1, 2 or 3 stars on the total
+against the level's `mason.stars`, which are 0.9 of the recorded tier authors' points
+(`keystone-lab mason-solutions.ts masonStarsFrom`). The stamp is ROBUST, STANDS or WOBBLY. The card
+reads "c of K" from `LevelScore.worlds` (with the counts each star needs at this budget) and the budget
+from `LevelScore.mason`. No leverage, gold or heritage star loss.

@@ -6,7 +6,7 @@
 import { describe, expect, it } from 'vitest';
 import { RapierEngine } from '@tb/adapter-rapier';
 import { D1, D2, type Player } from '@tb/keystone';
-import { clickPoints, noviceDuel, seeded } from '../src/duel-bot.ts';
+import { clickPoints, type DuelOutcome, noviceDuel, seeded, tallyDuels, tallyLine } from '../src/duel-bot.ts';
 
 const SEEDS = Array.from({ length: 20 }, (_, k) => 9100 + k);
 
@@ -33,4 +33,13 @@ describe('novice duels (Rapier)', () => {
     // Two Keeps: no novice click lands on its own keep (the turn view puts the rival in the middle).
     if (def.ruleset === 'keeps') expect(own).toBe(0);
   }, 240_000);
+
+  it('a balance row counts sides, seats and draws, and rates over the decided duels only', () => {
+    const o = (first: Player, winner: Player | null, turns = 4, own = 0): DuelOutcome => ({ first, winner, over: true, why: '', turns, own, steps: 0 });
+    const t = tallyDuels([o(0, 0), o(1, 0, 6), o(0, 1, 2, 1), o(1, null), { ...o(0, null), over: false, why: 'undecided' }]);
+    expect({ gold: t.gold, blue: t.blue, draw: t.draw, first: t.first, second: t.second, fewest: t.fewest, own: t.own }).toEqual({ gold: 2, blue: 1, draw: 2, first: 1, second: 2, fewest: 2, own: 1 });
+    expect([t.goldRate, t.firstRate, t.turnsPerDuel]).toEqual([2 / 3, 1 / 3, 20 / 5]);
+    expect(tallyLine('D1', 'gpu', 1.6, t)).toBe('D1 gpu aspect 1.6, 5 duels: Gold 2, Blue 1, draws 2; first 1, second 2 (Gold 67%, first 33% of decided); 4.0 turns a duel (fewest 2); clicks on own blocks 1');
+    expect(tallyDuels([]).goldRate).toBeNaN();
+  });
 });

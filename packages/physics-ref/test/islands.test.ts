@@ -35,10 +35,10 @@ const PREDS: Pred[] = [
   { cmp: { norm2: 'linVel', s: 10 }, op: '>', k: Math.round((0.5 * 1024) ** 2) },
 ];
 
-async function soloRun(scene: SceneDesc): Promise<Snapshot> {
+async function soloRun(scene: SceneDesc, steps = STEPS): Promise<Snapshot> {
   const e = new AvbdReferenceEngine();
   await e.init(scene);
-  for (let i = 0; i < STEPS; i++) e.step();
+  for (let i = 0; i < steps; i++) e.step();
   return e.snapshot();
 }
 
@@ -78,4 +78,26 @@ describe('AVBD reference: islands', () => {
     }
     expect(counts.invalid).toEqual([0, 0]);
   }, 120_000);
+
+  it('world-wide field events (pushField): a tilt and a kick shake identical worlds alike, a same-step spawn is kicked in none, solo(k) matches', async () => {
+    // Two identical worlds: cubes on the ground, a tilt from step 5, a kick at step 20 and a ball spawned at step 20 in each.
+    const w = (): SceneDesc => ({ ...world(0), id: 'field', bodies: [cube([-1.5, 0.25, 0]), cube([1.5, 0.25, 0])], inputs: [{ step: 20, kind: 'spawn', body: ball([0, 1, 0]) }] });
+    const isl = new Islands([w(), w()], { gap: 24 });
+    isl.pushField([{ step: 5, kind: 'field', gravity: [2, -9.5, 0] }, { step: 20, kind: 'field', kick: [0, 1, 0.5] }]);
+    const e = new AvbdReferenceEngine();
+    await e.init(isl.scene);
+    for (let i = 0; i < 40; i++) { e.push(isl.due(e.stepIndex)); e.step(); }
+    const s = e.snapshot(), a = isl.local(s, 0), b = isl.local(s, 1);
+    // The same up to the rounding of island 1's 24 m offset (AVBD reads velocities off positions, so both carry it;
+    // f64 ulps at 24 m are 4e-15 m): every island shook alike. Bit for bit is solo(k)'s check, at the same coordinates.
+    a.pos.forEach((x, i) => expect(Math.abs(b.pos[i]! - x), `pos ${i}`).toBeLessThan(1e-9));
+    a.linVel.forEach((x, i) => expect(Math.abs(b.linVel[i]! - x), `linVel ${i}`).toBeLessThan(1e-7));
+    // The tilt pushed the cubes along +x; the ball spawned at the kick's step was not kicked (it fell straight, z velocity 0, as did nothing on z).
+    expect(a.pos[0]!).toBeGreaterThan(-1.5 + 0.01);
+    expect(a.linVel[3 * 2 + 2]).toBe(0);
+    for (const k of [0, 1]) {
+      const far = await soloRun({ ...isl.solo(k) }, 40), ids = isl.idsOf(k);
+      for (const [f, g] of ids.entries()) expect(Array.from(s.pos.slice(3 * g, 3 * g + 3)), `island ${k} body ${f}`).toEqual(Array.from(far.pos.slice(3 * f, 3 * f + 3)));
+    }
+  }, 60_000);
 });

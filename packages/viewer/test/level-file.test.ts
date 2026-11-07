@@ -1,7 +1,7 @@
 // Levels of your own: a LevelDef from JSON, the URL (level.def) or a saved
 // scene (scene.levelDef), checked strictly, and run as the game compiles it.
 import { describe, expect, it } from 'vitest';
-import { A1, AFTERSHOCK_LEVELS, BuildSession, compileLevel, L2, L4, LEVELS, type LevelDef, PRESETTLE_STEPS, retrofitCandidate, RL1, RUBE_LEVELS, U3 } from '@tb/keystone';
+import { A1, AFTERSHOCK_LEVELS, BuildSession, compileLevel, L2, L4, LEVELS, type LevelDef, PRESETTLE_STEPS, retrofitCandidate, RL1, RUBE_LEVELS, U2, U3, UNDERCUT_LEVELS } from '@tb/keystone';
 import {
   CUSTOM_LEVEL, decodeLevelParam, encodeLevelParam, LEVEL_FILE_FORMAT, levelChoice, levelIssues, levelJson, parseLevelDef, parseSceneFile, parseViewerConfig, proposeScene,
   sceneFile, sceneTitle, toSearch, viewerScene, withCustomLevel,
@@ -12,7 +12,7 @@ const mine: LevelDef = { ...structuredClone(L2), id: 'my-lintel', name: 'Lintel,
 
 describe('level files', () => {
   it('reads back every built-in level from its JSON, field for field', () => {
-    for (const def of LEVELS) {
+    for (const def of [...LEVELS, ...UNDERCUT_LEVELS]) {
       const text = levelJson(def);
       expect(JSON.parse(text).format).toBe(LEVEL_FILE_FORMAT);
       expect(parseLevelDef(JSON.parse(text))).toEqual(def);
@@ -128,6 +128,12 @@ describe('level files', () => {
     expect(bad({ substeps: 2 })).toThrow(/level.physics: unknown key substeps/);
     expect(bad({ sleep: 1 })).toThrow(/level.physics.sleep must be/);
     expect(bad({ sleep: true, bounce: 0.4 })).toThrow(/level.physics.sleep does not go with bounce/);
+    // C22: bodies that start asleep (with sleep), and a wave level's run window.
+    expect(parseLevelDef(JSON.parse(levelJson({ ...def, physics: { sleep: true, asleep: true } }))).physics).toEqual({ sleep: true, asleep: true });
+    expect(bad({ asleep: true })).toThrow(/level.physics.asleep needs level.physics.sleep: true/);
+    expect(bad({ sleep: true, asleep: 'yes' })).toThrow(/level.physics.asleep must be/);
+    expect(parseLevelDef(JSON.parse(levelJson({ ...def, runWindow: 75 }))).runWindow).toBe(75);
+    expect(() => parseLevelDef({ ...structuredClone(L2), runWindow: 12 })).toThrow(/level.runWindow must be seconds over 30/);
     expect(() => parseLevelDef({ ...structuredClone(L2), settle: 'v9' })).toThrow(/level.settle must be v1 or v2 or v3 or v4: v9/);
   });
 
@@ -138,6 +144,25 @@ describe('level files', () => {
     expect(() => parseLevelDef({ ...structuredClone(L2), freeze: 10 })).toThrow(/level.freeze must be a whole number from 0 to 9: 10/);
     expect(() => parseLevelDef({ ...structuredClone(L2), freeze: 1.5 })).toThrow(/level.freeze must be a whole number/);
     expect(() => parseLevelDef({ ...structuredClone(L2), objective: { kind: 'hold', min: 1 } })).toThrow(/level.objective: unknown key min/);
+  });
+
+  it('reads back a fixed slab or rod (Undercut\'s beams), and refuses fixed on anything but true', () => {
+    expect(U2.parts.some((p) => p.kind === 'slab' && p.fixed)).toBe(true);
+    expect(parseLevelDef(JSON.parse(levelJson(U2)))).toEqual(U2);
+    expect(compileLevel(parseLevelDef(JSON.parse(levelJson(U2)))).hash).toBe(compileLevel(U2).hash);
+    const bad = structuredClone(U2) as unknown as Record<string, any>;
+    bad.parts[1].fixed = false;
+    expect(() => parseLevelDef(bad)).toThrow(/level.parts\[1\].fixed must be true or left out/);
+    // Fixing a part is a different level: its hash changes.
+    const loose = { ...U2, parts: U2.parts.map((p) => (p.kind === 'slab' ? { ...p, fixed: undefined } : p)) };
+    expect(compileLevel(loose).hash).not.toBe(compileLevel(U2).hash);
+  });
+
+  it('reads back a chosen opener (PT13: solutions.opener, one shot) and keeps it out of the level hash', () => {
+    const withOpener: LevelDef = { ...structuredClone(L2), solutions: { ...L2.solutions, opener: L2.solutions!.par![0]! } };
+    expect(parseLevelDef(JSON.parse(levelJson(withOpener)))).toEqual(withOpener);
+    expect(compileLevel(withOpener).hash).toBe(compileLevel(L2).hash);
+    expect(() => parseLevelDef({ ...JSON.parse(levelJson(withOpener)), solutions: { opener: [] } })).toThrow(/solutions.opener/);
   });
 
   it('reads back a scenario part with its role rules, and refuses a bad one, saying where', () => {

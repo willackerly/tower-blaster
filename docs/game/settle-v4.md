@@ -2,7 +2,7 @@
 
 **Status.** Outcome levels settle by v4 since PT6b. Par levels keep v1. The levels with cast stars pin v3 until a v4 recast:
 - B1 to B3 (`settle: 'v3'` in `big-levels.ts`), cast on Metal;
-- F1 to F5 (`fuse-levels.ts shipped`), cast on the reference;
+- F1 to F5 (`fuse-levels.ts shipped`) stay on v3 for good: a frame can drop a storey, stand past v4's 2 s window and then topple (fuse-and-fold.md, "Settle rule", from a v4 recast of all five);
 - A1 to A5 (`aftershock-levels.ts shipped`), energy stars cast on the reference.
 
 ## The rule
@@ -13,6 +13,18 @@ v3 ends a shot only when nothing live moves faster than 0.5 m/s and D and the di
 
 Like every rule, v4 also holds while the ammo is still in flight (PT10, `ammoInFlight`), so a steady D before the first impact never ends a shot.
 
+**v4 also counts no run while a weapon is still to go off** (`rules.ts settleHeld`). Session.observe's `hold` covers a live fuse, a charge or blast due later, and a quake still shaking. Every rule refuses to settle during a hold, short of the cap. But under v4 the steady-D run kept counting through the hold. A frame standing still before its charges had a full 120-step run by the time the last charge fired, so the shot settled on that step, before the charge did anything. This showed up in Fuse & Fold's v4 recast (#275): 5 to 8 plays a level on F2 to F5. One case is F3's line `plunger.2.0.1.54.5.60.0.114.4.114.8.114.3.120.6.120.7.120` (nudge 1): v4 ended at step 421 with D 0.002, v3 at 492 with 0.289.
+
+The fix makes v4 treat a hold like a flight: every run starts over and only the cap settles, so the runs start when the hold ends. With it, that line ends at step 492 with 0.289, the same as v3 (`keystone-lab/test/settle-hold.test.ts`; `session.test` checks the mechanism on any hold).
+
+| Option | Effect | Verdict |
+| --- | --- | --- |
+| v4 resets its runs during a hold (chosen) | v1 to v3 stay byte-identical, so every cast stands. No v4 level has cast stars, and the hash is unchanged (the rule's name is) | the bug is v4's: its steady run is the one that fills during a still pre-charge wait |
+| Every rule resets during a hold | v3's frozen run and the v2+ quiet run have the same shape | moves F1 to F5 and A1 to A5 (fuses and quakes, cast under v3) and breaks their stars; v3 needs the stricter frozen test, which held F3 |
+| A new v5 | keeps v4 for anyone who cast with it | nothing was cast under v4, so a new rule name would only add a hash |
+
+The case that remains, for every rule: a structure with nothing awake settles at once (from `SETTLE_MIN`). On the first step after a hold, that state already shows the event, because `arsenal.pending` holds until the state after the event's step. A prox bomb mostly goes off in flight, where the flight already holds every run. On B1's ace line (reference, v4), 1 of its 74 held steps had the ammo out of flight, and the line settles at the same steps (717, 1116, 1421) with the same D (0.947) with or without this fix. So B1 to B3's v4 casts (#272, bombs and rams; a ram has no fuse) are not expected to move. B2 and B3 were not replayed (too slow on the reference here). Game TailSkip (pacing only) still reads D's steady run as before.
+
 ## Why the flip changes hashes, and what that touches
 
 The settle rule is part of the level hash, because it decides the step at which the next shot fires. So changing the default moves the hash of every outcome level that does not name its rule:
@@ -20,7 +32,7 @@ The settle rule is part of the level hash, because it decides the step at which 
 - **Moved:** every `T-*` trial and U1 to U3 (34 levels). None of them has cast stars or a hash-pinned record, so nothing visible is lost.
 - **Kept:** the par levels (L1 to L5, the Rube Lab), B1 to B3, F1 to F5 and A1 to A5. The B, F and A levels now name `settle: 'v3'`, so their casts (stars.json), showcase lines and the B1 opener all stand unchanged.
 
-F1 to F5 and A1 to A5 were cast on the f64 reference, so their v4 recasts can run in the cloud. Moving B1 to B3 to v4 means dropping their pin and recasting them on Metal under v4, with the same procedure as their level docs (about 55 min for B1, about 3.5 h for B2, and two seeds plus the extension for B3). That is a Mac job, roadmap row PT6b.
+A1 to A5 were cast on the f64 reference, so their v4 recast can run in the cloud. F1 to F5 were recast under v4 and stay on v3 (above). Moving B1 to B3 to v4 means dropping their pin and recasting them on Metal under v4, with the same procedure as their level docs (about 55 min for B1, about 3.5 h for B2, and two seeds plus the extension for B3). That is a Mac job, roadmap row PT6b.
 
 **A level cast before this flip and merged after it** fails its stars-hash test (`stars-file.test`, or its family's own) the moment it meets main. Pin it to `settle: 'v3'` the same way, or recast it under v4.
 

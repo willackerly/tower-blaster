@@ -28,6 +28,7 @@
     "keystone:par": "tsx packages/keystone-lab/src/par-cli.ts",
     "keystone:stars": "tsx packages/keystone-lab/src/stars-audit-cli.ts",
     "keystone:cast": "tsx packages/keystone-lab/src/cast-cli.ts",
+    "keystone:opener": "tsx packages/keystone-lab/src/opener-cli.ts",
     "keystone:goals": "tsx packages/keystone-lab/src/goals-cli.ts",
     "keystone:quake": "tsx packages/keystone-lab/src/quake-search-cli.ts",
     "keystone:retrofit": "tsx packages/keystone-lab/src/retrofit-cli.ts",
@@ -42,7 +43,8 @@
     "playtest:testers": "tsx packages/playtest/src/testers.ts",
     "playtest:smoke": "tsx packages/playtest/src/smoke.ts",
     "playtest:agent": "tsx packages/playtest/src/agent/run.ts",
-    "probe:modes": "tsx packages/mode-probes/src/cli.ts"
+    "probe:modes": "tsx packages/mode-probes/src/cli.ts",
+    "mason:judge": "tsx packages/keystone-lab/src/mason-cli.ts"
   },
   "devDependencies": {
     "@tb/adapter-rapier": "workspace:*",

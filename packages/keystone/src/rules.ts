@@ -47,7 +47,25 @@ export const SETTLE_RULES = ['v1', 'v2', 'v3', 'v4'] as const;
 export type SettleRule = (typeof SETTLE_RULES)[number];
 /** Structure bodies settle v2 lets still move: a few stragglers per thousand, at least 2. */
 export const settleAllowance = (n: number) => Math.max(2, Math.floor(n / 1000));
-export const settleCap = (rule: SettleRule) => (rule === 'v1' ? SETTLE_CAP : SETTLE_CAP_V2);
+/** The cap a shot settles by at the latest, steps: a wave level's run window (LevelDef.runWindow, runWindowSteps) when it has one, else the rule's. */
+export const settleCap = (rule: SettleRule, window?: number) => window ?? (rule === 'v1' ? SETTLE_CAP : SETTLE_CAP_V2);
+/**
+ * A wave level's run window (LevelDef.runWindow, roadmap C22, docs/game/wavefront.md), seconds: more than the 30 s
+ * cap (SETTLE_CAP_V2 at 60 Hz) and at most RUN_WINDOW_MAX. A domino wave runs at about 5 dominoes a second (probe X1:
+ * 0.90 to 0.96 sqrt(g h)), so a 200-domino run takes 40 s, and a city's towers longer. It changes two things and
+ * no rule: the cap is the window, and the settle waits for the front to die. Under it no structure body may still
+ * move for a run to count as quiet (settleAllowance's stragglers are a wave's front: at 10k bodies v2 lets 10 move,
+ * and X1's front is 12 to 16 awake), and v4's steady collapse counts only while nothing is fast (frozenCandidate),
+ * since a wave's D creeps up a domino at a time. v3's frozen run already needs nothing fast, so it stands as is.
+ */
+export const RUN_WINDOW_MAX = 600;
+/** Throws unless s is a run window in seconds (over 30, at most RUN_WINDOW_MAX), naming `where`. */
+export function checkRunWindow(s: unknown, where = 'runWindow'): number {
+  if (typeof s !== 'number' || !Number.isFinite(s) || s <= SETTLE_CAP_V2 / 60 || s > RUN_WINDOW_MAX) throw new Error(`${where} must be seconds over ${SETTLE_CAP_V2 / 60} and at most ${RUN_WINDOW_MAX}: ${String(s)}`);
+  return s;
+}
+/** A run window of `seconds` in steps of dt. */
+export const runWindowSteps = (seconds: number, dt: number) => Math.round(seconds / dt);
 /** Settle v3's frozen structure: no live body faster than this (m/s; any fall passes it within 0.05 s), */
 export const FROZEN_SPEED = 0.5;
 /** for this many steps, */
@@ -259,11 +277,11 @@ export class CpuObserver {
 /** quietSince: the first step of the current quiet run. v3's frozen run: its first step and the D and displaced count there. */
 export interface SettleState { quietSince: number | null; frozenSince?: number | null; frozenD?: number; frozenDisplaced?: number; steadySince?: number | null; steadyD?: number }
 
-/** Whether one observed state counts as quiet under `rule`, for a structure of n bodies. */
-export function quietUnder(rule: SettleRule, r: Reductions, n: number): boolean {
+/** Whether one observed state counts as quiet under `rule`, for a structure of n bodies (`wave`: under a run window, no stragglers). */
+export function quietUnder(rule: SettleRule, r: Reductions, n: number, wave = false): boolean {
   if (r.nAwake === 0) return true;
   if (rule === 'v1') return r.maxSpeed < QUIET_SPEED && r.maxAngSpeed < QUIET_SPIN;
-  return r.nMoving <= settleAllowance(n) && r.ammoSpeed < QUIET_SPEED;
+  return r.nMoving <= (wave ? 0 : settleAllowance(n)) && r.ammoSpeed < QUIET_SPEED;
 }
 
 /**
@@ -274,17 +292,29 @@ export function quietUnder(rule: SettleRule, r: Reductions, n: number): boolean 
 export const frozenCandidate = (r: Reductions): boolean => r.maxSpeed < FROZEN_SPEED;
 
 /**
+ * Whether no settle run counts this step (settleUpdate's `inFlight`): the shot's ammo is still in free flight, or,
+ * under v4, a fired weapon is still to go off (`hold`: a live fuse, a charge or blast due later, a quake still
+ * shaking; Driver). Under v4 a steady D run kept counting through a hold, so a shot settled on the very step its
+ * last charge fired, before the charge did anything (F3's plunger line: v4 ended at step 421 with D 0.002, v3 at
+ * 492 with 0.289). v1 to v3 keep counting through a hold, as their casts were made: Session.observe still refuses
+ * their settle until the hold ends.
+ */
+export const settleHeld = (rule: SettleRule, inFlight: boolean, hold: boolean): boolean => inFlight || (hold && rule === 'v4');
+
+/**
  * One step of the settle rule (v1 unless given; v2 and v3 need the structure's body count n, v3 the
  * collapse D now, Session.liveCollapse). Settled SETTLE_QUIET consecutive quiet steps in, or (v3)
  * FROZEN_STEPS frozen ones, but never before SETTLE_MIN steps after the spawn, at once when nothing
  * is awake (from SETTLE_MIN), and always at the rule's cap. `inFlight`: the shot's ammo has not yet
  * touched anything (Session: ammoInFlight), so no run counts and only the cap settles: a structure
  * at rest before the ammo arrives (asleep on Rapier, nothing awake) settled a far shot 20 steps after
- * the launch with the ball still in the air (agent playtest PT10).
+ * the launch with the ball still in the air (agent playtest PT10). `window`: a wave level's run window in steps
+ * (runWindowSteps), the cap instead of the rule's, with the settle waiting for the front to die (RUN_WINDOW_MAX's note).
  */
-export function settleUpdate(st: SettleState, r: Reductions, spawnStep: number, rule: SettleRule = 'v1', n = 0, d = 0, inFlight = false): { state: SettleState; settled: boolean } {
-  if (inFlight) return { state: rule === 'v4' ? { quietSince: null, frozenSince: null, steadySince: null } : rule === 'v3' ? { quietSince: null, frozenSince: null } : { quietSince: null }, settled: r.step - spawnStep >= settleCap(rule) };
-  const quiet = quietUnder(rule, r, n);
+export function settleUpdate(st: SettleState, r: Reductions, spawnStep: number, rule: SettleRule = 'v1', n = 0, d = 0, inFlight = false, window?: number): { state: SettleState; settled: boolean } {
+  const cap = settleCap(rule, window), wave = window !== undefined;
+  if (inFlight) return { state: rule === 'v4' ? { quietSince: null, frozenSince: null, steadySince: null } : rule === 'v3' ? { quietSince: null, frozenSince: null } : { quietSince: null }, settled: r.step - spawnStep >= cap };
+  const quiet = quietUnder(rule, r, n, wave);
   const quietSince = quiet ? (st.quietSince ?? r.step) : null;
   const old = r.step - spawnStep;
   let state: SettleState = { quietSince }, frozen = false;
@@ -296,13 +326,15 @@ export function settleUpdate(st: SettleState, r: Reductions, spawnStep: number, 
     frozen = state.frozenSince != null && r.step - state.frozenSince + 1 >= FROZEN_STEPS;
   }
   if (rule === 'v4') {
-    // A steady run continues while D stays within STEADY_D of where it began; otherwise it starts over here.
-    const keep = st.steadySince != null && Math.abs(d - st.steadyD!) < STEADY_D;
-    state.steadySince = keep ? st.steadySince : r.step;
+    // A steady run continues while D stays within STEADY_D of where it began (and, under a run window, while nothing is
+    // fast: a wave's D creeps); otherwise it starts over here.
+    const fast = wave && !frozenCandidate(r);
+    const keep = !fast && st.steadySince != null && Math.abs(d - st.steadyD!) < STEADY_D;
+    state.steadySince = keep ? st.steadySince : fast ? null : r.step;
     state.steadyD = keep ? st.steadyD : d;
-    if (r.step - state.steadySince! + 1 >= STEADY_STEPS) frozen = true;
+    if (state.steadySince != null && r.step - state.steadySince + 1 >= STEADY_STEPS) frozen = true;
   }
-  const settled = old >= settleCap(rule) || (old >= SETTLE_MIN && (r.nAwake === 0 || frozen || (quietSince !== null && r.step - quietSince + 1 >= SETTLE_QUIET)));
+  const settled = old >= cap || (old >= SETTLE_MIN && (r.nAwake === 0 || frozen || (quietSince !== null && r.step - quietSince + 1 >= SETTLE_QUIET)));
   return { state, settled };
 }
 
@@ -452,6 +484,13 @@ export interface LevelScore {
   /** Bullet Time levels (LevelDef.freeze): freezes spent (freezesUsed) of the level's budget. Absent elsewhere. */
   freezes?: { used: number; total: number };
   /**
+   * Levels judged in many jittered worlds (Mason's Trial; Chorus): `cleared` of `of` worlds passed, and the worlds
+   * one, two and three stars need (`thresholds`, counts), so the card shows "c of K" once. Absent elsewhere.
+   */
+  worlds?: { cleared: number; of: number; thresholds: readonly [number, number, number] };
+  /** Mason's Trial (LevelDef.mason): the build budget left and the budget, for the card's budget line. Absent elsewhere. */
+  mason?: { left: number; budget: number };
+  /**
    * A refereed round (a Siege Table duel: Session's refereed option): no solo tally was made. lines
    * empty, total and stars 0, the stamp DUEL; the duel's own result (Duel.result) is the outcome.
    */
@@ -508,6 +547,53 @@ export function partsStars(cleared: boolean, spent: number, partsPar: number): 0
   if (spent <= partsPar) return 3;
   if (spent <= Math.ceil(1.5 * partsPar)) return 2;
   return 1;
+}
+
+/** Mason's Trial (docs/game/masons-trial.md): a build is cleared when at least this share of its worlds pass. */
+export const MASON_CLEAR = 0.5;
+
+/**
+ * Mason's Trial's two score lines (agreed with the scoring owner, docs/game/scoring.md): Robust, 500 x the share of
+ * worlds passed, and Budget left, 500 x that share x the share of the budget left. Their sum is
+ * round(1000 x (passes / K) x (1 + left / budget) / 2), give or take 1 from rounding: a fully robust build that
+ * spends the whole budget scores 500, a robust free one would score 1000.
+ */
+export function masonLines(passes: number, K: number, left: number, budget: number): ScoreLine[] {
+  const p = passes / K, l = budget > 0 ? Math.max(0, left) / budget : 0;
+  return [{ label: `Robust ${passes}/${K}`, value: Math.round(500 * p) }, { label: `Budget left ${Math.max(0, left)}/${budget}`, value: Math.round(500 * p * l) }];
+}
+
+/** Stars for a Mason build: 0 uncleared (fewer than MASON_CLEAR of its worlds passed), 1 cleared, 2 at t2 points, 3 at t3. */
+export function masonStars(cleared: boolean, points: number, stars: readonly [number, number]): 0 | 1 | 2 | 3 {
+  if (!cleared) return 0;
+  return points >= stars[1] ? 3 : points >= stars[0] ? 2 : 1;
+}
+
+/**
+ * The fewest worlds of K that give one, two and three stars to a build with `left` of `budget` unspent: ceil(K
+ * MASON_CLEAR), and the least passes whose lines reach t2 and t3 (K + 1: out of reach at this budget).
+ */
+export function masonThresholds(K: number, left: number, budget: number, stars: readonly [number, number]): [number, number, number] {
+  const least = (t: number) => {
+    for (let c = 0; c <= K; c++) if (floorTotal(masonLines(c, K, left, budget)) >= t) return c;
+    return K + 1;
+  };
+  const one = Math.ceil(K * MASON_CLEAR);
+  return [one, Math.max(one, least(stars[0])), Math.max(one, least(stars[1]))];
+}
+
+/**
+ * A Mason level's score from its judge (passes of K worlds) and the build's cost (build.ts placedCost): the two
+ * lines, stars on their total (masonStars), the stamp ROBUST or WOBBLY, the shared worlds field and the budget.
+ * No leverage, no gold and no heritage star loss: the heritage is the pass rule's.
+ */
+export function masonScore(def: LevelDef, passes: number, K: number, spent: number): LevelScore {
+  const m = def.mason!, budget = def.build?.budget ?? 0, left = Math.max(0, budget - spent);
+  const lines = masonLines(passes, K, left, budget), total = floorTotal(lines), cleared = passes >= Math.ceil(K * MASON_CLEAR);
+  return {
+    lines, total, stars: masonStars(cleared, total, m.stars), stamp: cleared ? (passes === K ? 'ROBUST' : 'STANDS') : 'WOBBLY', leverage: 0,
+    worlds: { cleared: passes, of: K, thresholds: masonThresholds(K, left, budget, m.stars) }, mason: { left, budget },
+  };
 }
 
 /** A parts-par level's stamp: PARTS PAR at or under the parts par, else +N PARTS. */
