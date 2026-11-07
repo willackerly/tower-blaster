@@ -4,7 +4,7 @@
 // showing the axis as seen from the camera; and the quake's energy against the level's budget. Start (Enter) fires
 // it. Pure: the dial and its HTML are functions of the level and the camera's yaw, so they are tested without a
 // page. The camera never moves for a quake (Will, 2026-11-02): the ground shakes the towers, the view stays put.
-import { type CompiledLevel, naiveQuake, quakeEnergy, quakeInputs, quakeRefusal, quakeRulesOf, type QuakeShot } from '@tb/keystone';
+import { type CompiledLevel, naiveQuake, placedCost, quakeEnergy, quakeInputs, quakeRefusal, quakeRulesOf, type QuakeShot } from '@tb/keystone';
 import { esc } from './hud.ts';
 
 /** The four dials, in QuakeShot's units: peak % g, hz 0.1 Hz, sec 0.1 s, axis degrees 0..179. */
@@ -33,12 +33,15 @@ const nearest = (xs: readonly number[], v: number) => xs.reduce((a, x) => (Math.
  */
 export function dialStart(c: CompiledLevel): QuakeDial {
   const r = quakeRulesOf(c.def);
+  if (r.fixed) return { ...r.fixed };
   return { peak: Math.min(r.peakMax, 30), hz: nearest(dialStops(c, 'hz'), 10), sec: nearest(dialStops(c, 'sec'), 30), axis: 0 };
 }
 
 /** The dial with `field` moved one step in direction `dir` (-1 or +1), kept to the level's range. The axis wraps. */
 export function dialStep(c: CompiledLevel, d: QuakeDial, field: DialField, dir: -1 | 1): QuakeDial {
   const r = quakeRulesOf(c.def);
+  // A retrofit's quake is the level's (QuakeRules.fixed): the dial does not move.
+  if (r.fixed) return d;
   switch (field) {
     case 'peak': {
       // To the next multiple of the step that way (a peak off the grid, from a line or a capped level, snaps on).
@@ -109,6 +112,7 @@ const LABEL: Record<DialField, string> = { peak: 'Strength', hz: 'Frequency', se
  */
 export function quakePanelHtml(c: CompiledLevel, d: QuakeDial, yaw: number, trace: readonly number[], canStart: boolean): string {
   const shot = dialShot(d), r = quakeRulesOf(c.def), text = dialText(d), refused = quakeRefusal(c, shot);
+  if (r.fixed) return fixedPanelHtml(c, d, yaw, trace, canStart && !refused);
   const row = (f: DialField, extra = '') => `<div class="row"><span>${LABEL[f]} <kbd>${DIAL_KEYS[f][0].toUpperCase()}</kbd><kbd>${DIAL_KEYS[f][1].toUpperCase()}</kbd></span><span class="power">${STEP_BUTTON(f, -1)}<b class="qv" data-q="${f}">${text[f]}</b>${extra}${STEP_BUTTON(f, 1)}</span></div>`;
   const e = quakeEnergy(c, shot), cap = r.budget ?? quakeEnergy(c, naiveQuake(c)), share = Math.min(1, e / cap), over = r.budget !== undefined && e > r.budget * (1 + 1e-9);
   const meter = `<span class="qe" title="${r.budget !== undefined ? `budget ${fmtJ(r.budget)}` : `the strongest, slowest, longest quake: ${fmtJ(cap)}`}"><span class="bar${over ? ' over' : ''}"><i style="width:${(100 * share).toFixed(1)}%"></i></span><b class="${over ? 'bad' : ''}">${fmtJ(e)}</b></span>`;
@@ -117,6 +121,19 @@ export function quakePanelHtml(c: CompiledLevel, d: QuakeDial, yaw: number, trac
   // The foot: the seismograph, the energy meter and Start; on the docked phone HUD one line (ui.ts).
   return `<div class="quake-panel"><div class="qdials">${row('peak')}${row('hz')}${row('sec')}${row('axis', compassSvg(axisOnScreen(d.axis, yaw)))}</div>
     <div class="qfoot">${stripSvg(trace, r.peakMax / 100)}${meter}${start}</div>${note}</div>`;
+}
+
+/**
+ * A retrofit's panel (QuakeRules.fixed, M7b): the level's quake read out (no dial buttons or keys: it is coming
+ * whatever the player does), its seismograph, the bracing spent against the build budget, and Start.
+ */
+function fixedPanelHtml(c: CompiledLevel, d: QuakeDial, yaw: number, trace: readonly number[], canStart: boolean): string {
+  const text = dialText(d), spent = placedCost(c.def), budget = c.def.build?.budget;
+  const row = (f: DialField, extra = '') => `<div class="row"><span>${LABEL[f]}</span><span class="power"><b class="qv" data-q="${f}">${text[f]}</b>${extra}</span></div>`;
+  const braced = `<span class="qe qbrace" title="what you placed, against the build budget"><b>${spent}${budget !== undefined ? ` / ${budget}` : ''}</b> braced</span>`;
+  const start = `<button data-act="quake" class="quake-go"${canStart ? '' : ' disabled'}><kbd>Enter</kbd> Start<span class="qlong"> the quake</span></button>`;
+  return `<div class="quake-panel fixed"><div class="qdials">${row('peak')}${row('hz')}${row('sec')}${row('axis', compassSvg(axisOnScreen(d.axis, yaw)))}</div>
+    <div class="qfoot">${stripSvg(trace, d.peak / 100)}${braced}${start}</div><div class="small qnote hint">the level's quake: it is coming, brace for it</div></div>`;
 }
 
 /** Joules for the meter: "209 J", "14.3 kJ". */

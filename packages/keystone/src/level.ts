@@ -93,7 +93,8 @@ export type Objective =
   | { kind: 'trial'; footprintMax?: number }
   /**
    * Aftershock (docs/game/aftershock.md): every crown down (the condemned towers' tops) and no heritage broken (the
-   * protected towers' tops, judged standing at the settle: LevelDef.heritage 'standing'). Outcome levels only.
+   * protected towers' tops, judged standing at the settle: LevelDef.heritage 'standing'). Outcome levels only. A
+   * retrofit (a level with a build block, M7b) may have no crowns: brace the heritage, then the quake comes.
    */
   | { kind: 'quake'; footprintMax?: number }
   /**
@@ -119,12 +120,13 @@ export type Scoring = (typeof SCORINGS)[number];
  * (crowns down), skyline (end skyline over start skyline, lower is better), score (the tally total)
  * pulled (the share of the structure's mass pulled, Undercut; higher is better), fold (Fuse & Fold:
  * collapse x (1 - spill), what came down discounted by the share of the building that left its lot; higher is better)
- * or energy (the joules fired, Aftershock's quake: lower is better, and an input, so it reads the same on every engine).
+ * energy (the joules fired, Aftershock's quake: lower is better, and an input, so it reads the same on every engine)
+ * or built (what the player placed, catalogue cost: build.ts placedCost; an Aftershock retrofit's bracing, lower is better).
  */
-export const STAR_METRICS = ['collapse', 'crowns', 'skyline', 'score', 'pulled', 'fold', 'energy'] as const;
+export const STAR_METRICS = ['collapse', 'crowns', 'skyline', 'score', 'pulled', 'fold', 'energy', 'built'] as const;
 export type StarMetric = (typeof STAR_METRICS)[number];
-/** Lower is better on this metric (skyline and energy); higher for the rest. */
-export const lowerIsBetter = (metric: StarMetric): boolean => metric === 'skyline' || metric === 'energy';
+/** Lower is better on this metric (skyline, energy and built); higher for the rest. */
+export const lowerIsBetter = (metric: StarMetric): boolean => metric === 'skyline' || metric === 'energy' || metric === 'built';
 
 /**
  * Thresholds cast by the bot for an outcome level (spectacle-mode.md, section 6): two stars at t2,
@@ -380,11 +382,12 @@ function physicsKey(p: PhysicsBlock | undefined): PhysicsBlock | undefined {
 
 /**
  * The level's cast stars if they apply to this compiled level: none on a custom run, and none when the
- * cast recorded another level hash (the level, its physics or its rules changed since).
+ * cast recorded another level hash (the level, its physics or its rules changed since). A build level's stars are
+ * cast against the level as authored (baseHash): what the player built is the play they score.
  */
 export function castStars(c: CompiledLevel): StarsDef | undefined {
   const s = c.def.stars;
-  if (!s || c.def.custom || (s.hash !== undefined && s.hash !== c.hash)) return undefined;
+  if (!s || c.def.custom || (s.hash !== undefined && s.hash !== c.baseHash)) return undefined;
   return s;
 }
 
@@ -458,6 +461,12 @@ export interface CompiledLevel {
   /** Structure height in metres (top of the highest body). */
   height: number;
   hash: string;
+  /**
+   * The level as authored, without what the player placed (parts marked placed), on a level with a build block: the
+   * hash its stars are cast against and its progress is kept under, so a build is a play of the level and not a new
+   * level (the build itself is in `hash`). Equal to `hash` on every other level.
+   */
+  baseHash: string;
 }
 
 export const unitOf = (d: LevelDef) => d.unit ?? DEFAULT_UNIT;
@@ -579,6 +588,11 @@ export function compileLevel(def: LevelDef): CompiledLevel {
   // Ice rules join the hash written out whenever the level has ice (as a defaulted weapon does), so retuning
   // ICE_DEFAULTS drops stars cast under the old ones; levels without ice hash as before, whatever physics.ice says.
   if (mats.includes(materialId('ice'))) geometry.physics = { ...geometry.physics, ice: iceOf(def.physics?.ice) };
+  // Aftershock's keys go last in one fixed order, whatever order a file, a URL or a builder wrote them in (the hash is
+  // the geometry's JSON, so key order counts), and the quake rules' fields in theirs.
+  delete geometry.quake; delete geometry.heritage;
+  if (def.quake !== undefined) geometry.quake = quakeKey(def.quake);
+  if (def.heritage !== undefined) geometry.heritage = def.heritage;
   geometry.parts = geometry.parts.map((pt) => (pt.kind === 'scenario' ? scenarioKey(pt) : pt.kind === 'piece' || pt.kind === 'run' || pt.kind === 'ball' ? placedKey(pt) : pt));
   // A w- item the level gives no weapon of its own plays the built-in (rack.ts weaponOf): the built-in joins the
   // hash as if written out, so retuning one drops stars cast with it. Levels whose rack has none hash as before.
@@ -599,11 +613,23 @@ export function compileLevel(def: LevelDef): CompiledLevel {
   // A scenario part names its bodies by (id, params, seed), and a run by its path: the bodies themselves join the hash, so a
   // change to the scenario's builder or to the brush's spacing (stroke.ts) is a different level too. Levels without either hash as before.
   const built = def.parts.some((pt) => pt.kind === 'scenario' || pt.kind === 'run') ? `|${bodiesDigest(bodies)}` : '';
-  const c: CompiledLevel = { def, scene, meta, frame, arms: {}, lot, height, hash: hashString(JSON.stringify(geometry) + built) };
+  const hash = hashString(JSON.stringify(geometry) + built);
+  // A build level's own hash: the same level with only the authored parts. (A placed part outside a build level, a
+  // file's, is authored geometry like any other.)
+  const isPlaced = (pt: Part) => 'placed' in pt && pt.placed === true;
+  const baseHash = def.build && def.parts.some(isPlaced) ? compileLevel({ ...def, parts: def.parts.filter((pt) => !isPlaced(pt)) }).hash : hash;
+  const c: CompiledLevel = { def, scene, meta, frame, arms: {}, lot, height, hash, baseHash };
   const arms = rackArms(c);
   c.arms = arms;
   frame.shells = Object.fromEntries(Object.entries(arms).map(([k, a]) => [k, a.shell]));
   return c;
+}
+
+/** Quake rules as the hash sees them: QuakeRules' fields in one order, the fixed quake's too. */
+function quakeKey(q: QuakeRules): QuakeRules {
+  const pick = <K extends keyof QuakeRules>(k: K) => (q[k] !== undefined ? { [k]: q[k] } : {});
+  const f = q.fixed;
+  return { ...pick('peakMax'), ...pick('hz'), ...pick('sec'), ...pick('budget'), ...pick('axisStep'), ...(f ? { fixed: { peak: f.peak, hz: f.hz, sec: f.sec, axis: f.axis } } : {}) };
 }
 
 /**
@@ -727,7 +753,8 @@ export function validateLevel(c: CompiledLevel, opts: ValidateOptions = {}): Iss
   if (fz) issues.push({ code: 'freeze', message: fz });
   for (const message of chargeIssues(c)) issues.push({ code: 'charge', message });
   if (def.rack.includes(PLUNGER) && !(def.charges ?? []).some((ch) => (ch.arm ?? 'plunger') === 'plunger')) issues.push({ code: 'charge', message: 'the rack has a plunger, and the level no charge a plunger arms' });
-  if (def.objective.kind === 'quake' && (m.crowns.length === 0 || m.heritage.length === 0)) issues.push({ code: 'objective', message: 'a quake objective needs a crown to bring down and a heritage body to keep standing' });
+  // A retrofit (a quake level with a build block, M7b) may have nothing to bring down: its towers are all to save.
+  if (def.objective.kind === 'quake' && (m.heritage.length === 0 || (m.crowns.length === 0 && !def.build))) issues.push({ code: 'objective', message: def.build ? 'a quake objective needs a heritage body to keep standing' : 'a quake objective needs a crown to bring down and a heritage body to keep standing (a retrofit, with a build block, needs only the heritage)' });
   if (def.rack.includes(QUAKE)) {
     if (scoringOf(def) !== 'outcome') issues.push({ code: 'objective', message: 'a quake level needs outcome scoring' });
     if (physicsOf(def).bounce !== null) issues.push({ code: 'objective', message: 'a quake level plays without Bounce: the AVBD restitution pass refuses pinned bodies, and Aftershock levels stand on pins' });

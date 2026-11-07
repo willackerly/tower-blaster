@@ -179,13 +179,14 @@ export function quakeGrid(g: { peaks: readonly number[]; hz: readonly number[]; 
   return out;
 }
 
-export interface QuakeTask { quakes: readonly QuakeShot[]; nudge: number }
+/** Quakes on one nudged build; `level`: a build of its own (a retrofit's bracing), else the pool's level. */
+export interface QuakeTask { quakes: readonly QuakeShot[]; nudge: number; level?: LevelDef }
 
 /** Plays tasks on a pool of `jobs` worker threads (1: in this thread); results in task order. */
 export async function playQuakeTasks(level: LevelDef, tasks: readonly QuakeTask[], jobs: number, spec: EngineSpec = { kind: 'ref' }, log?: (line: string) => void): Promise<QuakeEnd[][]> {
   const out: QuakeEnd[][] = new Array(tasks.length);
   if (jobs <= 1) {
-    for (let k = 0; k < tasks.length; k++) { out[k] = await playQuakes(level, tasks[k]!.quakes, tasks[k]!.nudge, spec); log?.(`  ${k + 1}/${tasks.length}`); }
+    for (let k = 0; k < tasks.length; k++) { out[k] = await playQuakes(tasks[k]!.level ?? level, tasks[k]!.quakes, tasks[k]!.nudge, spec); log?.(`  ${k + 1}/${tasks.length}`); }
     return out;
   }
   const { Worker } = await import('node:worker_threads');
@@ -200,7 +201,7 @@ export async function playQuakeTasks(level: LevelDef, tasks: readonly QuakeTask[
           const onErr = (e: unknown) => { w.off('message', onMsg); reject(e); };
           w.once('message', onMsg);
           w.once('error', onErr);
-          w.postMessage({ id, level, quakes: t.quakes, nudge: t.nudge });
+          w.postMessage({ id, level: t.level ?? level, quakes: t.quakes, nudge: t.nudge });
         });
         log?.(`  ${++done}/${tasks.length}`);
       }

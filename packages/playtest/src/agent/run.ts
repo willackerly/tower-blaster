@@ -26,7 +26,7 @@ import { chromium, type Browser, type Page } from 'playwright';
 import { createServer } from 'vite';
 import { levelById, RUBE_GO, type Shot } from '@tb/keystone';
 import { WEBGPU_ARGS } from '@tb/testkit';
-import { type EditAction, fuseSweep, rubeLine } from './modes.ts';
+import { buildLine, type EditAction, fuseSweep } from './modes.ts';
 import { agentPlan, frameName, lineOf, noviceAim, type Scenario, sheetGrid, spiral, VIEWPORTS, type ViewportName, withLook } from './plan.ts';
 
 const MIN = 60_000;
@@ -173,10 +173,10 @@ async function runOne(browser: Browser, origin: string, sc: Scenario, vp: Viewpo
       return (await page.evaluate((x) => window.__game.fire(x), RUBE_GO)) ? { shot: RUBE_GO, how: `${how}plunger (no panel showed)` } : null;
     };
 
-    /** A build phase open on load (Rube Lab, Mason's Trial): build the recorded build (`line`) or nothing, capture it, then Play. */
+    /** A build phase open on load (Rube Lab, a retrofit, Mason's Trial): build the recorded build (`line`) or nothing, capture it, then Play. */
     const buildPhase = async (def: NonNullable<ReturnType<typeof levelById>>, policy: string, play: boolean) => {
       if (!(await page.evaluate(() => window.__game.edit.on))) return;
-      const line = policy === 'line' ? rubeLine(def) : null;
+      const line = policy === 'line' ? buildLine(def) : null;
       if (line) {
         for (const a of line.actions as EditAction[]) {
           await page.evaluate((x) => { const e = window.__game.edit; if ('key' in x) e.key(x.key, x.shift); else e.ray(x.ray, x.at.origin, x.at.dir); }, a);
@@ -236,7 +236,8 @@ async function runOne(browser: Browser, origin: string, sc: Scenario, vp: Viewpo
       if (sc.level) await buildPhase(levelById(sc.level)!, 'novice', false);
     } else if (s.kind === 'play') {
       const def = levelById(sc.level!)!;
-      const line = s.policy === 'line' && !def.rube ? lineOf(def) : null;
+      // A level whose recorded line is a build (Rube Lab, a retrofit) builds it, then plays its own verb.
+      const line = s.policy === 'line' && !buildLine(def) ? lineOf(def) : null;
       if (!line) await page.evaluate(() => window.__game.aim(0, -0.05));
       await shoot('aim view');
       rec.hud = await textOf(page, '#hud');
