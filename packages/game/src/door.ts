@@ -416,13 +416,14 @@ export function preaimMode(q: URLSearchParams): PreaimMode {
  * (solutions.opener: a shot that wins it alone, PT13), else the first shot of its best recorded line
  * (solutions.ace, else solutions.par), or null. Under auto only the series' first level has
  * one, and only until the player has a record for it: the first-minute promise is for a first visit, and
- * handing every level its best opener would give the stars away. A pull is never pre-aimed (PT35): one pull
- * brings nothing down alone, so it keeps no first-minute promise, and on an Undercut par puzzle (U1) it
- * plays half the puzzle's answer for the player (agent playtest 2: the opener pulled a leg and any
- * adjacent leg then cleared it).
+ * handing every level its best opener would give the stars away. A teaching opener (solutions.teach: Wavefront's
+ * starter push, which starts the wave without winning the level, PT39) is offered on a first visit of any level.
+ * A pull is never pre-aimed (PT35): one pull brings nothing down alone, so it keeps no first-minute promise, and
+ * on an Undercut par puzzle (U1) it plays half the puzzle's answer for the player (agent playtest 2: the opener
+ * pulled a leg and any adjacent leg then cleared it).
  */
 export function openerFor(def: LevelDef, index: number, mode: PreaimMode, played: boolean): Shot | null {
-  if (mode === '0' || (mode === 'auto' && (index !== 0 || played))) return null;
+  if (mode === '0' || (mode === 'auto' && (played || (index !== 0 && !def.solutions?.teach)))) return null;
   const shot = def.solutions?.opener ?? def.solutions?.ace?.[0] ?? def.solutions?.par?.[0] ?? null;
   return shot?.ammo === 'pull' ? null : shot;
 }
