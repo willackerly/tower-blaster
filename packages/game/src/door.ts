@@ -165,7 +165,7 @@ export function nextLevel(levels: readonly DoorLevel[]): number {
 }
 
 /** What the trials toggle says: how many there are, the blurb, open or closed. */
-export const TRIALS_BLURB = 'Structures from the engine\'s test scenes, the big levels\' drafts and the mode probes\' builds, playable unrated; the best of them are on their way to rated levels. No stars are cast: the objective is the one star, and nothing here is balanced.';
+export const TRIALS_BLURB = 'More structures to bring down, just for fun. They are unrated: meeting the objective is the only star, and they are not balanced like the levels above. The best of them will become rated levels.';
 
 /** The best play in words: stars, then what it reached. */
 export function bestText(b: LevelRecord | null): string {
