@@ -3,7 +3,7 @@
 // at both ends, and about A g / (2 pi f)^2 at its peak for a quake long enough to reach full strength.
 import { describe, expect, it } from 'vitest';
 import { A1, compileLevel, quakeCandidate, type QuakeShot } from '@tb/keystone';
-import { groundAt, groundMotion, groundPeak } from '../src/quake-ground.ts';
+import { dustBeats, groundAt, groundMotion, groundPeak } from '../src/quake-ground.ts';
 import { seismogram } from '../src/quake-panel.ts';
 
 const q = (peak: number, hz: number, sec: number, axis = 0): QuakeShot => ({ ammo: 'quake', peak, hz, sec, axis });
@@ -46,5 +46,18 @@ describe('the ground\'s motion under a quake', () => {
   it('is the level\'s own quake on a shipped level (A1\'s ace moves the ground)', () => {
     const a = compileLevel(A1), ace = A1.solutions!.ace![0] as QuakeShot;
     expect(groundPeak(groundMotion(a, ace))).toBeGreaterThan(0.02);
+  });
+
+  it('raises dust on each swing\'s strongest push: twice a cycle, none outside the quake or under a whisper', () => {
+    const m = groundMotion(c, q(30, 10, 30)), all = dustBeats(m, -10, m.steps + 10);
+    // 1 Hz for 3 s: two pushes a cycle, less the ramp's first and last weak ones.
+    expect(all.length).toBeGreaterThanOrEqual(4);
+    expect(all.length).toBeLessThanOrEqual(6);
+    for (const s of all) expect(m.load[s]!).toBeGreaterThanOrEqual(0.05);
+    expect(Math.max(...all.map((s) => m.load[s]!))).toBeCloseTo(0.3, 1);
+    // Split at any frame, the beats are the same: none lost or doubled.
+    const mid = all[1]! + 0.4;
+    expect([...dustBeats(m, -10, mid), ...dustBeats(m, mid, m.steps + 10)]).toEqual(all);
+    expect(dustBeats(groundMotion(c, q(3, 10, 30)), -10, 1e9)).toEqual([]);
   });
 });

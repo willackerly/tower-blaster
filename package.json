@@ -31,6 +31,7 @@
     "keystone:opener": "tsx packages/keystone-lab/src/opener-cli.ts",
     "keystone:goals": "tsx packages/keystone-lab/src/goals-cli.ts",
     "keystone:quake": "tsx packages/keystone-lab/src/quake-search-cli.ts",
+    "keystone:quake-seed": "tsx packages/keystone-lab/src/quake-seed-cli.ts",
     "keystone:retrofit": "tsx packages/keystone-lab/src/retrofit-cli.ts",
     "keystone:fuse": "tsx packages/keystone-lab/src/fuse-search-cli.ts",
     "duel:bot": "tsx packages/game/src/duel-bot-cli.ts",

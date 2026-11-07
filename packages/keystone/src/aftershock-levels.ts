@@ -173,10 +173,12 @@ export function quakeCandidate(id: string): LevelDef {
  */
 const q = (peak: number, hz: number, sec: number, axis = 0): QuakeShot => ({ ammo: QUAKE, peak, hz, sec, axis });
 
-function shipped(site: string, id: string, name: string, ace: QuakeShot, cast: { t2: number; t3: number; best: number; budget: number; n: number; hash: string }): LevelDef {
+function shipped(site: string, id: string, name: string, ace: QuakeShot, cast: { t2: number; t3: number; best: number; budget: number; n: number; hash: string }, seed?: QuakeShot): LevelDef {
   const s = QUAKE_SITES[site]!;
+  // The dial's seed (PT25, keystone-lab quake-seed.ts): not part of the hash, so the stars stand.
+  const start = seed ? { start: { peak: seed.peak, hz: seed.hz, sec: seed.sec, axis: seed.axis } } : {};
   return {
-    ...aftershockLevel({ ...s, id, name, quake: { ...s.quake, budget: cast.budget } }),
+    ...aftershockLevel({ ...s, id, name, quake: { ...s.quake, budget: cast.budget, ...start } }),
     // Cast under settle v3 (aftershockLevel names it; PT6b made v4 the outcome default): drop it with a v4 recast
     // (docs/game/settle-v4.md).
     stars: { metric: 'energy', t2: cast.t2, t3: cast.t3, best: cast.best, castOn: 'node ref, aces checked on the GPU', engine: 'gpu', hash: cast.hash, n: cast.n, seed: 1 },
@@ -194,11 +196,14 @@ function shipped(site: string, id: string, name: string, ace: QuakeShot, cast: {
  * order (and the hash's quake keys in a fixed one), so a saved level reads back to the same hash; the geometry and the
  * casts are unchanged.
  */
-export const A1: LevelDef = shipped('QC-1', 'A1', 'Slow Sway', q(25, 10, 10), { t2: 200, t3: 39, best: 34.91481483474812, budget: 800, n: 325, hash: '871b10a9190a2b98' });
-export const A2: LevelDef = shipped('QC-3', 'A2', 'Big Brother', q(40, 10, 10), { t2: 720, t3: 180, best: 162.51259268537308, budget: 2900, n: 325, hash: 'e235f97e2a1bcbc7' });
+// Each seed (the last argument) is the nearest quake to the old start that does part of the job on 7 or more of 8
+// nudged reference builds and clears the level on at most 1 (`pnpm keystone:quake-seed`, PT25). Cross Grain has none:
+// every quake that does part of its job is turned off the starting axis, and the axis is its lesson.
+export const A1: LevelDef = shipped('QC-1', 'A1', 'Slow Sway', q(25, 10, 10), { t2: 200, t3: 39, best: 34.91481483474812, budget: 800, n: 325, hash: '871b10a9190a2b98' }, q(30, 6, 30));
+export const A2: LevelDef = shipped('QC-3', 'A2', 'Big Brother', q(40, 10, 10), { t2: 720, t3: 180, best: 162.51259268537308, budget: 2900, n: 325, hash: 'e235f97e2a1bcbc7' }, q(35, 8, 20));
 export const A3: LevelDef = shipped('QC-2', 'A3', 'Cross Grain', q(25, 10, 10, 90), { t2: 2000, t3: 130, best: 114.26666673190293, budget: 8000, n: 975, hash: '9cb53a2945cb309e' });
-export const A4: LevelDef = shipped('QC-4', 'A4', 'Short Sharp Shock', q(50, 10, 15), { t2: 280, t3: 240, best: 209.4888890084887, budget: 1200, n: 325, hash: '5aade697bb7e8296' });
-export const A5: LevelDef = shipped('QC-5', 'A5', 'Fault Line', q(40, 10, 10), { t2: 1400, t3: 320, best: 284.39703719940286, budget: 5600, n: 975, hash: 'b9e3256a4c5cb28d' });
+export const A4: LevelDef = shipped('QC-4', 'A4', 'Short Sharp Shock', q(50, 10, 15), { t2: 280, t3: 240, best: 209.4888890084887, budget: 1200, n: 325, hash: '5aade697bb7e8296' }, q(40, 12, 15));
+export const A5: LevelDef = shipped('QC-5', 'A5', 'Fault Line', q(40, 10, 10), { t2: 1400, t3: 320, best: 284.39703719940286, budget: 5600, n: 975, hash: 'b9e3256a4c5cb28d' }, q(25, 8, 30));
 
 /**
  * A shipped retrofit: a candidate site that passed the retrofit gate (keystone-lab retrofit-search.ts), under its own

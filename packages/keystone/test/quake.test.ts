@@ -123,6 +123,21 @@ describe('quake level grammar', () => {
     expect(() => compileLevel(level({ heritage: 'swaying' as 'pose' }))).toThrow(/pose or standing/);
   });
 
+  it('a seeded dial (QuakeRules.start, PT25): checked against the dial, kept out of the hash, not beside a fixed quake', () => {
+    const seed = { peak: 35, hz: 8, sec: 20, axis: 0 };
+    expect(quakeRulesOf(level({ quake: { start: seed } })).start).toEqual(seed);
+    expect(quakeRulesOf(level()).start).toBeUndefined();
+    // Where the dial opens changes no outcome, so a seeded level keeps its hash, and its stars with it.
+    expect(compileLevel(level({ quake: { start: seed } })).hash).toBe(compileLevel(level({ quake: {} })).hash);
+    expect(compileLevel(level({ quake: { peakMax: 60, start: seed } })).hash).toBe(compileLevel(level({ quake: { peakMax: 60 } })).hash);
+    expect(() => compileLevel(level({ quake: { start: { ...seed, peak: 0 } } }))).toThrow(/quake.start.peak must be a whole number/);
+    expect(() => compileLevel(level({ quake: { start: { ...seed, gust: 1 } as never } }))).toThrow(/start.gust is not a quake field/);
+    expect(() => compileLevel(level({ quake: { peakMax: 30, start: seed } }))).toThrow(/start is outside the level's dial/);
+    expect(() => compileLevel(level({ quake: { hz: [10, 30], start: seed } }))).toThrow(/start is outside the level's dial/);
+    expect(() => compileLevel(level({ quake: { axisStep: 45, start: { ...seed, axis: 30 } } }))).toThrow(/start is outside the level's dial/);
+    expect(() => compileLevel(level({ quake: { fixed: seed, start: seed } }))).toThrow(/a fixed quake takes no start/);
+  });
+
   it('the quake objective: every crown down and no heritage broken', () => {
     const c = compileLevel(level()), red = {} as Reductions;
     expect(objectiveMet(c, { red, crownsTotal: 1, collapse: 0, heritage: 0 }, 'outcome')).toBe(true);

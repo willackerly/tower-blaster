@@ -6,6 +6,7 @@
 // page. The camera never moves for a quake (Will, 2026-11-02): the ground shakes the towers, the view stays put.
 import { type CompiledLevel, naiveQuake, placedCost, quakeEnergy, quakeInputs, quakeRefusal, quakeRulesOf, type QuakeShot } from '@tb/keystone';
 import { esc } from './hud.ts';
+import { type TowerTick, towerTicks } from './quake-ticks.ts';
 
 /** The four dials, in QuakeShot's units: peak % g, hz 0.1 Hz, sec 0.1 s, axis degrees 0..179. */
 export type QuakeDial = Pick<QuakeShot, 'peak' | 'hz' | 'sec' | 'axis'>;
@@ -28,12 +29,14 @@ export function dialStops(c: CompiledLevel, field: 'hz' | 'sec'): number[] {
 const nearest = (xs: readonly number[], v: number) => xs.reduce((a, x) => (Math.abs(x - v) < Math.abs(a - v) ? x : a));
 
 /**
- * Where the dial starts on a level: a moderate quake, about 1 Hz for 3 s at 0.3 g along x, snapped to the level's
- * stops. Not a hint: the levels' answers sit elsewhere on the dial (docs/game/aftershock.md, "Levels").
+ * Where the dial starts on a level: the level's seed (QuakeRules.start, PT25: a quake that does part of the job, so
+ * Start teaches something), else a moderate quake, about 1 Hz for 3 s at 0.3 g along x, snapped to the level's stops.
+ * Not the answer: a seed clears no level (docs/game/aftershock.md, "The dial's starting quake").
  */
 export function dialStart(c: CompiledLevel): QuakeDial {
   const r = quakeRulesOf(c.def);
   if (r.fixed) return { ...r.fixed };
+  if (r.start) return { ...r.start };
   return { peak: Math.min(r.peakMax, 30), hz: nearest(dialStops(c, 'hz'), 10), sec: nearest(dialStops(c, 'sec'), 30), axis: 0 };
 }
 
@@ -102,6 +105,24 @@ function compassSvg(angle: number): string {
   return `<svg class="compass" viewBox="0 0 32 32" width="32" height="32" aria-label="quake axis"><circle cx="${c}" cy="${c}" r="15"/><line x1="${f1(c - dx)}" y1="${f1(c - dy)}" x2="${f1(c + dx)}" y2="${f1(c + dy)}"/><circle class="tip" cx="${f1(c + dx)}" cy="${f1(c + dy)}" r="2.5"/><circle class="tip" cx="${f1(c - dx)}" cy="${f1(c - dy)}" r="2.5"/></svg>`;
 }
 
+/**
+ * A dial value's tick strip (PT25): under Strength each tower's uplift, under Frequency its rocking frequency
+ * (quake-ticks.ts), condemned towers gold and protected ones blue, the dial's own value a caret. Strength reads
+ * linearly from 0 to the dial's top; Frequency on a log scale over the level's range, as its stops step.
+ */
+export function tickStrip(field: 'peak' | 'hz', ticks: readonly TowerTick[], value: number, range: readonly [number, number]): string {
+  const w = 60, at = (v: number) => {
+    const t = field === 'peak' ? v / range[1] : Math.log(v / range[0]) / Math.log(range[1] / range[0]);
+    return f1(Math.max(0, Math.min(1, range[1] > range[0] ? t : 0.5)) * w);
+  };
+  const marks = ticks.map((t) => {
+    const v = field === 'peak' ? 100 * t.uplift : 10 * t.rockHz;
+    return `<line class="${t.role === 'condemned' ? 'tc' : 'tp'}" x1="${at(v)}" y1="0" x2="${at(v)}" y2="5"/>`;
+  }).join('');
+  const x = at(value), title = field === 'peak' ? 'where each tower starts to rock (gold condemned, blue protected)' : 'each tower\'s rocking frequency: slower quakes push it over more easily';
+  return `<svg class="qticks" data-ticks="${field}" viewBox="0 0 ${w} 6" preserveAspectRatio="none" role="img" aria-label="${title}">${marks}<path class="tv" d="M${x} 6l-2 -2.5h4z"/></svg>`;
+}
+
 const STEP_BUTTON = (field: DialField, dir: -1 | 1) => `<button class="qd" data-act="qdial" data-arg="${field}:${dir}" aria-label="${dir < 0 ? 'Less' : 'More'} ${field}">${dir < 0 ? '−' : '+'}</button>`;
 const LABEL: Record<DialField, string> = { peak: 'Strength', hz: 'Frequency', sec: 'Duration', axis: 'Axis' };
 
@@ -114,7 +135,8 @@ const LABEL: Record<DialField, string> = { peak: 'Strength', hz: 'Frequency', se
 export function quakePanelHtml(c: CompiledLevel, d: QuakeDial, yaw: number, trace: readonly number[], canStart: boolean): string {
   const shot = dialShot(d), r = quakeRulesOf(c.def), text = dialText(d), refused = quakeRefusal(c, shot);
   if (r.fixed) return fixedPanelHtml(c, d, yaw, trace, canStart && !refused);
-  const row = (f: DialField, extra = '') => `<div class="row"><span>${LABEL[f]} <kbd>${DIAL_KEYS[f][0].toUpperCase()}</kbd><kbd>${DIAL_KEYS[f][1].toUpperCase()}</kbd></span><span class="power">${STEP_BUTTON(f, -1)}<b class="qv" data-q="${f}">${text[f]}</b>${extra}${STEP_BUTTON(f, 1)}</span></div>`;
+  const ticks = towerTicks(c, d.axis), strip = (f: DialField) => (f === 'peak' ? tickStrip('peak', ticks, d.peak, [0, r.peakMax]) : f === 'hz' ? tickStrip('hz', ticks, d.hz, r.hz) : '');
+  const row = (f: DialField, extra = '') => `<div class="row"><span>${LABEL[f]} <kbd>${DIAL_KEYS[f][0].toUpperCase()}</kbd><kbd>${DIAL_KEYS[f][1].toUpperCase()}</kbd></span><span class="power">${STEP_BUTTON(f, -1)}<b class="qv" data-q="${f}" data-label="${LABEL[f]}">${text[f]}${strip(f)}</b>${extra}${STEP_BUTTON(f, 1)}</span></div>`;
   const e = quakeEnergy(c, shot), cap = r.budget ?? quakeEnergy(c, naiveQuake(c)), share = Math.min(1, e / cap), over = r.budget !== undefined && e > r.budget * (1 + 1e-9);
   const meter = `<span class="qe" title="${r.budget !== undefined ? `budget ${fmtJ(r.budget)}` : `the strongest, slowest, longest quake: ${fmtJ(cap)}`}"><span class="bar${over ? ' over' : ''}"><i style="width:${(100 * share).toFixed(1)}%"></i></span><b class="${over ? 'bad' : ''}">${fmtJ(e)}</b></span>`;
   const note = `<div class="small qnote ${over ? 'bad' : 'hint'}">${r.budget !== undefined ? `${over ? 'over the' : 'of a'} ${fmtJ(r.budget)} budget` : `the bar is the strongest, slowest, longest quake: ${fmtJ(cap)}`}${refused && !over ? ` · ${esc(refused)}` : ''}</div>`;
@@ -145,7 +167,7 @@ function fixedPanelHtml(c: CompiledLevel, d: QuakeDial, yaw: number, trace: read
  */
 export function quakeRunHtml(c: CompiledLevel, d: QuakeDial, yaw: number, trace: readonly number[], at: number): string {
   const text = dialText(d), r = quakeRulesOf(c.def), top = r.fixed ? d.peak / 100 : r.peakMax / 100;
-  const row = (f: DialField, extra = '') => `<div class="row"><span>${LABEL[f]}</span><span class="power"><b class="qv" data-q="${f}">${text[f]}</b>${extra}</span></div>`;
+  const row = (f: DialField, extra = '') => `<div class="row"><span>${LABEL[f]}</span><span class="power"><b class="qv" data-q="${f}" data-label="${LABEL[f]}">${text[f]}</b>${extra}</span></div>`;
   const t = Math.max(0, Math.min(1, at)), left = (1 - t) * (d.sec / 10);
   const status = t < 1 ? `<span class="qe qrun"><b>${left.toFixed(1)} s</b> left</span>` : '<span class="qe qrun">settling</span>';
   return `<div class="quake-panel running"><div class="qdials">${row('peak')}${row('hz')}${row('sec')}${row('axis', compassSvg(axisOnScreen(d.axis, yaw)))}</div>
