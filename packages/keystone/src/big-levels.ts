@@ -76,6 +76,9 @@ export const B1: LevelDef = outcomeLevel('B1', 'Long Wall', thirdBondWall(40, 25
   // every gate passed on both, recast |T3 1 - T3 2| 0.0015 < 0.0044. docs/game/levels/B1.md.
   // The showcase (solutions.ace) is seed 1's best line: its 50 nudges ended at collapse 0.895 to 0.955.
   solutions: { ace: readShots('w-bomb.521.8.54.372.66_w-bomb.607.8.-192.247.95_w-bomb.195.8.-230.127.91') },
+  // Cast under settle v3, the outcome default until PT6b made it v4: pinned so the cast stars keep their hash.
+  // Unpin (drop this line) together with a v4 recast on Metal (roadmap PT6b, docs/game/settle-v4.md).
+  settle: 'v3',
   ...castOf('B1'),
 });
 
@@ -103,6 +106,9 @@ export const B3: LevelDef = cityLevel('B3', 'Ten Thousand', 'stone', 5, 3, ['w-b
   // (--t3 best, seed 1's cloud extended to 100 nudges) and the skill gate's shortfall (0.082 of 0.100) waived
   // (docs/game/levels/B3.md: Will delegated the call, 2026-11-06). The showcase (solutions.ace) is seed 1's best line: its 50 nudges ended at collapse 0.375 to 0.794.
   solutions: { ace: readShots('w-bomb.471.8.146.696.89_w-bomb.394.8.-89.565.70_w-bomb.381.8.-183.645.78') },
+  // Cast under settle v3, the outcome default until PT6b made it v4: pinned so the cast stars keep their hash.
+  // Unpin (drop this line) together with a v4 recast on Metal (roadmap PT6b, docs/game/settle-v4.md).
+  settle: 'v3',
   ...castOf('B3'),
 });
 
@@ -157,6 +163,9 @@ export const B2: LevelDef = cathedralLevel('B2', ['w-bomb', 'w-ram', 'w-ram'], {
   // Its cloud was extended to 100 nudges (--extend, 2026-11-06: T3 3,200 -> 3,000). docs/game/levels/B2.md.
   // The showcase (solutions.ace) is seed 1's best line: its 100 nudges ended at score -10,010 to 3,711.
   solutions: { ace: readShots('w-bomb.500.8.155.173.79_w-ram.711.8.273.259.95_w-ram.528.8.216.481.80') },
+  // Cast under settle v3, the outcome default until PT6b made it v4: pinned so the cast stars keep their hash.
+  // Unpin (drop this line) together with a v4 recast on Metal (roadmap PT6b, docs/game/settle-v4.md).
+  settle: 'v3',
   ...castOf('B2'),
 });
 

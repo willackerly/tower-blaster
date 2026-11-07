@@ -103,7 +103,7 @@ export class Session {
   watchIdx: Int32Array;
   /** Par (end at clear) or outcome (end at a bank or an empty rack; LevelDef.autobank ends at the first clear too). */
   readonly scoring: Scoring;
-  /** How this level's shots settle (settleOf: v1 for par levels, v3 for outcome levels unless the level says). */
+  /** How this level's shots settle (settleOf: v1 for par levels, v4 for outcome levels unless the level says). */
   readonly settleRule: SettleRule;
   /** Collapse fraction D now, for the HUD (while a shot runs), and whether the objective was met at the last settle. */
   liveCollapse = 0;
