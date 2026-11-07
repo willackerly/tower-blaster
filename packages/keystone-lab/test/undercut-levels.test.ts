@@ -47,7 +47,20 @@ describe('Undercut levels', () => {
     for (const b of [6, 7, 8, 9]) expect(s2.pullRefusal(b)).toBeNull();
   });
 
+  /** The level with its parts' `fixed` taken off: U1 and U2 as they were on f52dc5f, before PT7. */
+  const unfixed = (d: LevelDef): LevelDef => ({ ...d, parts: d.parts.map((p) => { const { fixed: _, ...rest } = p as typeof p & { fixed?: true }; return rest as typeof p; }) });
+
   for (const [name, make] of ENGINES) {
+    it(`${name}: pulling the support under the crowns does not clear U1 or U2 (PT35); without \`fixed\` it would, in one pull`, async () => {
+      // Agent playtest 2 on f52dc5f: pulling U1's top or U2's beam dropped the crowns upright, felled, in one pull.
+      for (const [d, support] of [[U1, 4], [U2, 1]] as const) {
+        expect(compileLevel(unfixed(d)).meta.fixed, d.id).toHaveLength(0);
+        const before = await play(make, unfixed(d), pulls(support), false);
+        expect({ id: d.id, phase: before.session.phase, stars: before.session.score?.stars }).toEqual({ id: d.id, phase: 'cleared', stars: 3 });
+        await expect(play(make, d, pulls(support), false), d.id).rejects.toThrow(`cannot pull: body ${support} is fixed`);
+      }
+    }, 120_000);
+
     it(`${name}: U1 stands on three legs and on a diagonal pair, any two adjacent pulls tip it in par, and a third pull after a diagonal clears a star less`, async () => {
       expect((await play(make, U1, pulls(0), false)).session.outcomes[0]!.crownsTotal).toBe(0);
       const diagonal = (a: number, b: number) => a + b === 3; // legs 0 and 3, 1 and 2

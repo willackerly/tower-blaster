@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { BANDS, type Feedback, materialId } from '@tb/keystone';
-import { degree, limitVoices, MAX_VOICES, PENTATONIC, ROOT, type Voice, voicesFor } from '../src/audio.ts';
+import { BELL_NOTE, BELL_PARTIALS, degree, limitVoices, MAX_VOICES, PENTATONIC, ROOT, type Voice, voicesFor } from '../src/audio.ts';
 
 /** True if f is ROOT times a pentatonic ratio times a power of two. */
 const onScale = (f: number) => PENTATONIC.some((r) => { const o = Math.log2(f / (ROOT * r)); return Math.abs(o - Math.round(o)) < 1e-9; });
@@ -12,6 +12,17 @@ describe('voices for feedback', () => {
     expect(degree(0)).toBe(ROOT);
     expect(degree(5)).toBe(2 * ROOT);
     expect(degree(-1)).toBeCloseTo((ROOT * 5) / 3 / 2, 9);
+  });
+  it('a bell rings as a bell (PT26): its partials over the strike note, the low ones longest, under the voice cap', () => {
+    const v = voicesFor({ t: 'crownDown', step: 0, body: 0, ordinal: 0 }, { bell: true });
+    expect(v.map((x) => x.freq / BELL_NOTE)).toEqual(BELL_PARTIALS.map((p) => p.ratio));
+    expect(v.every(valid)).toBe(true);
+    expect(v.length).toBeLessThanOrEqual(MAX_VOICES);
+    for (let i = 1; i < v.length; i++) expect(v[i]!.decay).toBeLessThan(v[i - 1]!.decay);
+    // The minor-third tierce (1.2) is what makes it a bell, not a chord on the crowns' scale.
+    expect(v.some((x) => !onScale(x.freq))).toBe(true);
+    // Not a bell level: the crown's arpeggio note as before.
+    expect(voicesFor({ t: 'crownDown', step: 0, body: 0, ordinal: 0 })[0]!.freq).toBe(degree(10));
   });
   it('crowns climb the scale and stay on it', () => {
     const fs = [0, 1, 2, 3, 4, 5, 6].map((ordinal) => voicesFor({ t: 'crownDown', step: 0, body: 0, ordinal })[0]!.freq);

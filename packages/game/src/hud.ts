@@ -353,10 +353,13 @@ export function hudHtml(s: HudState, sheet = ''): string {
     ${s.ticks?.length ? meterHtml(d.objective.kind === 'hold' ? s.pulled ?? 0 : s.collapse ?? 0, s.ticks, d.objective.kind === 'hold' ? 'pulled' : 'down') : ''}
     <div class="row obj"><span>Objective</span>${chorusObjectiveText(d) !== null ? `<span>${esc(chorusObjectiveText(d)!)}</span>` : `<span class="${s.met ? 'ok' : ''}">${esc(objectiveText(d.objective))}${s.met ? ' ✓' : ''}</span>`}</div>`
     : `<div class="row"><span>Par ${d.par}</span><span>Stroke ${s.strokes}</span></div>${d.objective.kind === 'collapse' ? parCollapseRow(d.objective.min, s) : ''}${d.push?.length && s.strokes === 0 ? `<div class="hint small push-hint">${PUSH_HINT}</div>` : ''}`;
+  // A bell level (Rube Lab) says what it wants on its par row's level too (PT26: nothing said "ring the bell").
+  const rung = s.crownsTotal > 0 && s.crownsDown >= s.crownsTotal;
+  const bellRow = !outcome && d.objective.kind === 'bell' ? `<div class="row obj"><span>Objective</span><span class="${rung ? 'ok' : ''}">${esc(objectiveText(d.objective))}${rung ? ' ✓' : ''}</span></div>` : '';
   const fz = s.freezes;
   const freezes = fz ? `<div class="row"><span>Freezes</span><span class="${fz.left ? '' : 'spent'}">${fz.left} / ${fz.total}</span></div>` : '';
   const crowns = d.mason ? '' : d.objective.kind === 'hold' ? keepRow(s.crownsDown, s.crownsTotal)
-    : s.crownsTotal ? `<div class="row"><span>${d.objective.kind === 'quake' ? 'Condemned down' : 'Crowns'}</span><span class="crowns">${s.crownsDown} / ${s.crownsTotal}</span></div>` : '';
+    : s.crownsTotal ? `<div class="row"><span>${d.objective.kind === 'quake' ? 'Condemned down' : d.objective.kind === 'bell' ? 'Bells rung' : 'Crowns'}</span><span class="crowns">${s.crownsDown} / ${s.crownsTotal}</span></div>` : '';
   const act = slotAction(s);
   const button = slotHtml(act, s);
   const slot = `<div class="row slot-row${act ? '' : ' idle'}"><span class="slot${act ? '' : ' empty'}">${button}</span><span class="small note">${act ? SLOT_NOTE[act] : ''}</span>${touchActs(s.strokes)}</div>`;
@@ -364,6 +367,7 @@ export function hudHtml(s: HudState, sheet = ''): string {
     <div class="title">${esc(hudTitle(d))}${fz?.frozen ? ' <span class="pace frozen" title="physics is frozen: a shot fired now spends a freeze">FROZEN</span>' : pace}</div>
     ${d.custom ? `<div class="small custom">${CUSTOM_NOTE}</div>` : ''}
     ${head}
+    ${bellRow}
     ${crowns}
     ${d.mason ? '' : heritage}
     ${freezes}
@@ -466,7 +470,9 @@ export function tallyHtml(level: LevelDef, score: LevelScore | null, over: strin
  * at once and tallies, and is drawn again with the score when it settles.
  * Two groups, `.c1` (name, the score lines and the total) and `.c2` (stamp, stars, badge, lot sheet and
  * the buttons): one column as before, two side by side on a phone held sideways (GAME_CSS, docked).
- * Score lines slam in one by one, then the stamp and stars.
+ * Score lines slam in one by one, then the stamp and stars. An outcome level's sub line gives its share down,
+ * except on a hold level (U3), whose metric is the share pulled: the stamp and the Pulled line carry it, and a
+ * "% down" beside them was a second metric (PT35).
  */
 export function resultHtml(level: LevelDef, score: LevelScore | null, strokes: number, forward: boolean | CardForward, canSave = false, extra = '', canUndo = false): string {
   const outcome = scoringOf(level) === 'outcome';
@@ -492,7 +498,7 @@ export function resultHtml(level: LevelDef, score: LevelScore | null, strokes: n
   return `<div class="c1">
     <div class="name">${esc(playerName(level))}</div>
     ${level.custom ? `<div class="sub custom">${CUSTOM_NOTE}</div>` : ''}
-    <div class="sub">${shotsText}${'outcome' in score ? ` · ${pct((score as { outcome: { collapse: number } }).outcome.collapse)} down` : ''}${worlds}${score.mason ? '' : ` · leverage ${fmtLeverage(score.leverage)}${tierText ? ` (${tierText})` : ''}`}${fz}</div>
+    <div class="sub">${shotsText}${'outcome' in score && level.objective.kind !== 'hold' ? ` · ${pct((score as { outcome: { collapse: number } }).outcome.collapse)} down` : ''}${worlds}${score.mason ? '' : ` · leverage ${fmtLeverage(score.leverage)}${tierText ? ` (${tierText})` : ''}`}${fz}</div>
     ${lines}
     <div class="line total" style="animation-delay:${after}s" title="The lines' sum, never below 0"><span>Total</span><span>${fmtPoints(score.total)}</span></div>
     </div><div class="c2">

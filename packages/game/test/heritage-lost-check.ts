@@ -76,12 +76,12 @@ export async function runLook(game: { open: (url: string, timeout?: number) => P
   expect(await page.evaluate((x) => window.__game.fire(x), CRACK)).toBe(true);
   // The break, the physics held: the block red at once, its record a red flash; then, the flash over, the look it keeps.
   const flash = await colours(page, groups, true);
-  const fx = (await page.evaluate((b) => window.__game.fxOf(b), LOST))!;
+  const fx = (await page.evaluate((b) => window.__game.fx(b), LOST))!;
   expect(fx.coat).toBe(COAT_PAINT);
   fx.tint.forEach((x, k) => expect(x).toBeCloseTo(HERITAGE_LOST_TINT[k]!, 2));
   expect(fx.emissive).toBeCloseTo(HERITAGE_FLASH_GLOW, 2);
   expect(fx.flash).toBeCloseTo(HERITAGE_FLASH_S, 5);
-  for (const k of KEPT) expect((await page.evaluate((b) => window.__game.fxOf(b), k))!.coat).toBe(COAT_GLAZE);
+  for (const k of KEPT) expect((await page.evaluate((b) => window.__game.fx(b), k))!.coat).toBe(COAT_GLAZE);
   await page.waitForTimeout(1500); // HERITAGE_FLASH_S is 0.9 s
   const after = await colours(page, groups);
   await page.evaluate(() => { window.__game.hold = false; });
@@ -100,7 +100,7 @@ export async function runLook(game: { open: (url: string, timeout?: number) => P
     await page.waitForFunction(() => window.__game.ready && window.__game.strokes === 0, undefined, { timeout: 2 * MINUTES });
     const undone = await colours(page, groups);
     expect(isTeal(undone.lost!), JSON.stringify(undone)).toBe(true);
-    expect((await page.evaluate((b) => window.__game.fxOf(b), LOST))!).toMatchObject({ coat: COAT_GLAZE, emissive: 0 });
+    expect((await page.evaluate((b) => window.__game.fx(b), LOST))!).toMatchObject({ coat: COAT_GLAZE, emissive: 0 });
     // ... and so does Retry, after the block was lost again.
     expect(await page.evaluate((x) => window.__game.fire(x), CRACK)).toBe(true);
     expect(isRed((await colours(page, groups, true)).lost!)).toBe(true);
@@ -110,7 +110,7 @@ export async function runLook(game: { open: (url: string, timeout?: number) => P
     await page.waitForFunction(() => window.__game.ready && window.__game.strokes === 0, undefined, { timeout: 2 * MINUTES });
     const retried = await colours(page, groups);
     expect(isTeal(retried.lost!), JSON.stringify(retried)).toBe(true);
-    expect((await page.evaluate((b) => window.__game.fxOf(b), LOST))!).toMatchObject({ coat: COAT_GLAZE, emissive: 0 });
+    expect((await page.evaluate((b) => window.__game.fx(b), LOST))!).toMatchObject({ coat: COAT_GLAZE, emissive: 0 });
     seen.reset = { undone, retried };
   }
   expect(o.errors).toEqual([]);

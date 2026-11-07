@@ -21,6 +21,15 @@ export const TINT = {
   none: [1, 1, 1] as [number, number, number],
 };
 export const CROWN_GLOW = 0.1;
+/**
+ * What the player built (a part placed in a build phase: PiecePart/RunPart/BallPart.placed), sRGB: a clear blue, its
+ * own colour in every look (coats.ts COAT_PAINT), so the contraption reads as yours against the level's own parts
+ * (PT26). Picked in OKLCh away from the other colours a build shows: hue 262 against the gilt bell's 79, heritage's
+ * glaze 176, the ghost's green (about 142), the Go button's orange (about 45) and the aim beads' coral 35.
+ */
+export const BUILT_SRGB = 0x4a86e8;
+/** BUILT_SRGB, linear (a tint: with coats on the colour itself, without a multiple of the look's). */
+export const BUILT_TINT = [(BUILT_SRGB >> 16) & 255, (BUILT_SRGB >> 8) & 255, BUILT_SRGB & 255].map((x) => srgbToLinear(x / 255)) as [number, number, number];
 /** The block a selected pull would take (play.ts setHover): warm white, glowing, so it reads on any material. */
 export const PULL_HOVER = tintWordOf([1, 0.93, 0.8], 0.55);
 /**
@@ -144,6 +153,11 @@ const MATERIAL_TINT: Record<string, [number, number, number]> = {
 };
 
 const isIce = (c: CompiledLevel, i: number) => MATERIALS[c.meta.material[i]!]!.name === 'ice';
+/** Body i belongs to a part the player placed in a build phase (BuildSession: PiecePart/RunPart/BallPart.placed). */
+export const isBuilt = (c: CompiledLevel, i: number): boolean => {
+  const p = c.def.parts[c.meta.part[i]!];
+  return !!p && 'placed' in p && p.placed === true;
+};
 
 /**
  * The coat of structure body i (@tb/render coats.ts; PaceFeel.coats): crowns gilded and heritage glazed, their
@@ -153,7 +167,7 @@ const isIce = (c: CompiledLevel, i: number) => MATERIALS[c.meta.material[i]!]!.n
 export function coatOf(c: CompiledLevel, i: number): CoatId {
   if (isIce(c, i)) return COAT_NONE;
   const role = c.meta.role[i];
-  return role === 1 ? COAT_GILT : role === 2 ? COAT_GLAZE : COAT_NONE;
+  return role === 1 ? COAT_GILT : role === 2 ? COAT_GLAZE : isBuilt(c, i) ? COAT_PAINT : COAT_NONE;
 }
 
 /** One coat per structure slot (coatOf), or none at all when `on` is false, for one Renderer.setCoats at level load. */
@@ -167,7 +181,8 @@ export function structureCoats(c: CompiledLevel, on = true): Uint8Array {
  */
 export function roleTint(c: CompiledLevel, i: number, coats = true): [number, number, number] {
   const role = c.meta.role[i];
-  if (role !== 1 && role !== 2) return TINT.none;
+  // A built part's colour is its tint (painted with coats on; a multiple of the look's without).
+  if (role !== 1 && role !== 2) return isBuilt(c, i) && !isIce(c, i) ? BUILT_TINT : TINT.none;
   if (coats && coatOf(c, i) !== COAT_NONE) return TINT.none;
   return role === 1 ? TINT.crown : TINT.heritage;
 }
@@ -177,6 +192,7 @@ export function tintOf(c: CompiledLevel, i: number, coats = true): number {
   const role = c.meta.role[i];
   if (role === 1) return tintWordOf(roleTint(c, i, coats), CROWN_GLOW);
   if (role === 2) return tintWordOf(roleTint(c, i, coats));
+  if (isBuilt(c, i) && !isIce(c, i)) return tintWordOf(BUILT_TINT);
   return tintWordOf(MATERIAL_TINT[MATERIALS[c.meta.material[i]!]!.name] ?? TINT.none);
 }
 

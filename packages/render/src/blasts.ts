@@ -109,6 +109,17 @@ export const DEFAULT_BLASTS: BlastParams = {
   glow: 2.5, smokeLight: 0.45, swell: 0.4, light: 5, reach: 3.5, lightTau: 0.22, sizeRef: 5,
 };
 
+/**
+ * A bell's ring (Rube Lab, PT26: Renderer.ring): the shell alone, no fireball or smoke, running out slowly to
+ * its radius and on past it as it fades (a ring wave rather than a blast's snap), with a short warm light.
+ */
+export const RING_BLASTS: BlastParams = {
+  ...DEFAULT_BLASTS, fire: 0, smoke: 1.4, shock: 0.45, shockHold: 0.7, overshoot: 1.6, shockWidth: 0.05, light: 1.2, reach: 2.5, lightTau: 0.35, sizeRef: 3,
+};
+
+/** The second ring wave follows the first by this much (s): Renderer.ring. */
+export const RING_ECHO_S = 0.35;
+
 /** What a blast shows at an age (blastState). Lengths in world units, intensities before the look's sun luminance. */
 export interface BlastState {
   alive: boolean;
@@ -168,7 +179,7 @@ export function blastState(centre: V3, radius: number, age: number, p: BlastPara
 }
 
 /** A blast in flight: where, how big, when (renderer time, s), and a seed for its noise. */
-export interface Blast { centre: V3; radius: number; t0: number; seed: number }
+export interface Blast { centre: V3; radius: number; t0: number; seed: number; params?: BlastParams }
 
 /** The baked noise volume: NOISE_SIZE^3 texels, 4 independent smooth channels, tiling. */
 export function bakeBlastNoise(): Uint8Array {
@@ -347,11 +358,11 @@ export class Blasts {
 
   constructor(private readonly device: GPUDevice) {}
 
-  /** A blast went off at `centre` (world) reaching `radius`, at renderer time t0 (s). */
-  add(centre: V3, radius: number, t0: number): void {
+  /** A blast went off at `centre` (world) reaching `radius`, at renderer time t0 (s); `params` in place of config (a ring: RING_BLASTS). */
+  add(centre: V3, radius: number, t0: number, params?: BlastParams): void {
     if (!(radius > 0) || !centre.every(Number.isFinite)) return;
     if (this.live.length >= MAX_BLASTS) this.live.shift();
-    this.live.push({ centre: [...centre], radius, t0, seed: this.seed++ });
+    this.live.push({ centre: [...centre], radius, t0, seed: this.seed++, ...(params ? { params } : {}) });
   }
 
   /** Live blasts (tests, lights). */
@@ -359,8 +370,9 @@ export class Blasts {
 
   /** Retire the blasts that are over at time t; the states of the rest, in order. */
   states(t: number): BlastState[] {
-    this.live = this.live.filter((b) => t - b.t0 < this.config.smoke * durationScale(b.radius, this.config) && t >= b.t0 - 1);
-    return this.live.map((b) => blastState(b.centre, b.radius, t - b.t0, this.config));
+    const p = (b: Blast) => b.params ?? this.config;
+    this.live = this.live.filter((b) => t - b.t0 < p(b).smoke * durationScale(b.radius, p(b)) && t >= b.t0 - 1);
+    return this.live.map((b) => blastState(b.centre, b.radius, t - b.t0, p(b)));
   }
 
   /** Remove every blast (a level reload). */

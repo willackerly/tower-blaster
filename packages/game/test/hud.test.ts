@@ -30,6 +30,12 @@ describe('formatting', () => {
   });
   it('the HUD hides the power bar for an anvil and flags an unreachable aim', () => {
     const base = { level: L2, strokes: 0, crownsDown: 1, crownsTotal: 6, heritageBroken: 0, heritageTotal: 36, power: 60, leverage: { round: 0, shot: 0 }, phase: 'aiming', reachable: null };
+    // A bell level (Rube Lab, PT26) says what it wants, and ticks it once rung; other par levels show no objective row.
+    const bell = hudHtml({ ...base, level: RL1, crownsDown: 0, crownsTotal: 1, heritageTotal: 0, chips: rackChips(RL1.rack, RL1.rack, 'plunger') });
+    expect(bell).toMatch(/<span>Objective<\/span><span class="">ring the bell<\/span>/);
+    expect(bell).toMatch(/Bells rung<\/span><span class="crowns">0 \/ 1/);
+    expect(hudHtml({ ...base, level: RL1, crownsDown: 1, crownsTotal: 1, heritageTotal: 0, chips: [] })).toMatch(/<span class="ok">ring the bell ✓<\/span>/);
+    expect(hudHtml({ ...base, chips: [] })).not.toMatch(/Objective/);
     const marble = hudHtml({ ...base, chips: rackChips(L2.rack, L2.rack, 'marble') });
     expect(marble).toMatch(/L2 · Lintel/);
     expect(marble).toMatch(/1 \/ 6/);
@@ -281,6 +287,16 @@ describe('scores and leverage add up (PT9, PT16)', () => {
     const html = resultHtml(B1, score, 2, false);
     expect(html).toContain('leverage ×0.13</div>');
     expect(html).not.toMatch(/Brute|Clean/);
+  });
+  it('a hold level\'s card shows one metric, the share pulled: no "% down" beside the PULLED stamp (PT35)', () => {
+    // Agent playtest 2, U3: "4 shots · 4% down" sat beside "13% PULLED".
+    const facts = { met: true, collapse: 0.04, leverage: 0.2, comboMax: 0, hasCrowns: true, rackLeft: 20, heritageBroken: 0, outOfLot: 0, crownsDown: 0, skylineRatio: 1, pulled: 0.13, hold: true };
+    const held = resultHtml(U3, outcomeScore(facts, undefined), 4, false);
+    expect(held).toContain('13% PULLED');
+    expect(held).not.toMatch(/% down/i);
+    expect(held).toMatch(/<div class="sub">4 shots · leverage /);
+    // A collapse level keeps its share down on the sub line.
+    expect(resultHtml(B1, outcomeScore({ ...facts, hold: false, collapse: 0.5 }, undefined), 2, false)).toContain('2 shots · 50% down');
   });
   it('a Chorus card shows the worlds cleared, with no tier and no gold badge (M9, chorus.ts chorusScore)', () => {
     const def = { ...L1, rack: ['cannonball' as const], chorus: { worlds: 64 } }; // a par level: the badge would show but for the worlds

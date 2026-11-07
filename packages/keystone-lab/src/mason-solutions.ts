@@ -12,7 +12,7 @@
 // tier authors' points (masonStarsFrom); test/mason-levels.test.ts checks the
 // levels say so, and with PHYSICS_GPU_SLOW=1 re-runs every 64-world judge (the
 // reference is deterministic, so the passes must be equal).
-import { BuildSession, floorTotal, type Hit, type Hold, type LevelDef, masonLines, MASON_WORLDS, MT1, MT2, MT3, MT4, type CatalogName } from '@tb/keystone';
+import { BuildSession, floorTotal, type Hit, type Hold, type LevelDef, masonLines, MASON_WORLDS, MT1, MT2, MT3, MT4, MT5, type CatalogName } from '@tb/keystone';
 import { ground, top } from './rube.ts';
 
 /** One step of a build: an item at a face hit (computed from the session so far). */
@@ -88,6 +88,10 @@ export const MASON_SOLUTIONS: Record<string, MasonBuild[]> = {
     { label: 'a plank out over the edge, three cubes on its back end', family: 'counterweight', tier: 3, measured: { passes: 64, spent: 5 }, steps: [on(0, -0.5, 0, 'plank', 2), on(1, -1.5), on(1, -0.5), on(2, -1.5)] },
     { label: 'a plank out over the edge, four cubes on its back end', family: 'counterweight', tier: 2, measured: { passes: 64, spent: 6 }, steps: [on(0, -0.5, 0, 'plank', 2), on(1, -1.5), on(1, -0.5), on(2, -1.5), on(3, -0.5)] },
   ],
+  MT5: [
+    { label: 'a pier of three against the tower on the side the quake throws it (-x)', family: 'buttress', tier: 3, measured: { passes: 64, spent: 3 }, steps: [at(-1, 0, 'pier3')] },
+    { label: 'a pier of three against the tower on each side along the quake', family: 'buttresses', tier: 2, measured: { passes: 64, spent: 6 }, steps: [at(-1, 0, 'pier3'), at(1, 0, 'pier3')] },
+  ],
 };
 
 /** Builds that pass in only some worlds: the judge's verify (islands against solo runs) needs outcomes to differ. */
@@ -96,6 +100,7 @@ export const MASON_KNIFE: Record<string, MasonBuild> = {
   MT2: { label: 'a lean-to: one pier and a slab over the urn', family: 'lean-to', measured: { passes: 32, spent: 5 }, steps: [at(-1, 0, 'pier3'), on(3, -1, 0, 'slab')] },
   MT3: { label: 'a course of four close in front of each hut (a boulder can shove it into the hut)', family: 'guards', measured: { passes: 38, spent: 8 }, steps: [at(0, -2.5, 'course4', 90), at(0, 1.6, 'course4', 90)] },
   MT4: { label: 'a plank further out, two cubes on its back end', family: 'counterweight', measured: { passes: 46, spent: 4 }, steps: [on(0, 0, 0, 'plank'), on(1, -2), on(1, -1)] },
+  MT5: { label: 'the pier half a cell off the tower (it rocks into the pier, hard)', family: 'buttress', measured: { passes: 14, spent: 3 }, steps: [at(-1.5, 0, 'pier3')] },
 };
 
 /** The obvious wrong builds: every one must fail (fewer than half its worlds pass). */
@@ -118,6 +123,12 @@ export const MASON_WRONG: Record<string, MasonBuild[]> = {
     { label: 'a bare plank out over the edge (it tips under the weight)', family: 'counterweight', steps: [on(0, -0.5, 0, 'plank', 2)] },
     { label: 'a plank with one cube on its back end', family: 'counterweight', steps: [on(0, -0.5, 0, 'plank', 2), on(1, -1.5)] },
   ],
+  MT5: [
+    { label: 'nothing (the quake fells the tower)', family: 'none', steps: [] },
+    { label: 'the pier on the other side (+x: the tower falls away from it)', family: 'buttress', steps: [at(1, 0, 'pier3')] },
+    { label: 'two cubes stacked against it (too low)', family: 'buttress', steps: [at(-1, 0), on(6, -1)] },
+    { label: 'a course of four along its foot (too low)', family: 'skirt', steps: [at(-1, 0, 'course4', 90)] },
+  ],
 };
 
 /** The share of an author build's points its tier's threshold takes: slack for judge noise and for the GPU against the reference. */
@@ -136,4 +147,4 @@ export function masonStarsFrom(def: LevelDef, builds: readonly MasonBuild[]): [n
   return [tier(2), tier(3)];
 }
 
-export const MASON_LEVEL_DEFS: readonly LevelDef[] = [MT1, MT2, MT3, MT4];
+export const MASON_LEVEL_DEFS: readonly LevelDef[] = [MT1, MT2, MT3, MT4, MT5];

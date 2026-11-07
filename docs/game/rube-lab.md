@@ -70,6 +70,20 @@ A pinned part ignores the ground and other pinned bodies in the overlap check, a
 
 **Hash note.** Authored geometry that uses trig (a ramp's centre from its foot, slope and length) is rounded to 1e-4 h once, in `rampTo` (`r4`): V8 in Node and Chromium can differ in the last bit of `sin` and `cos`, and the level hash must not.
 
+## The goal, drawn (PT26)
+
+Agent playtest round 2 (docs/game/agent-playtest-2.md, PT26): nothing said "ring the bell"; the bell was a grey sphere like the ball (RL2, RL4), RL3's domino bell was grey during the build, RL1's target (a region) was invisible, and a ring was a puff of sparks. Two root causes: the sphere shader ignored coats (coats were boxes only), so a crown sphere drew the look's stone; and the build phase's `EditView.show` set tints and marks but never coats.
+
+- **The bell is gilt, in the build as in play.** Spheres now take coats (`fsSphere`: the coat's albedo, the real look's gilt metal, gilt's steady glow), so a bell sphere is the crowns' gold (COAT_GILT #E3A62F); `EditView.show` sets `structureCoats` too, so RL3's domino bell is gold before Go. `keystone.coats=0` turns both off, as for crowns.
+- **The objective, said.** On a bell level the HUD's first row is **Objective: ring the bell** (the level's objective text), ticked once every bell has rung; the crowns row reads **Bells rung N / M**.
+- **The ball's start and the goal zone.** Overlay beads (`rube-view.ts`, joined to the game's others): a ring of ten beads and a short column round the runner in the Go button's orange (#D8693F) until the release has gone (no inputs yet); a region bell's zone (RL1, RL5) as a dotted gilt outline on the region's floor.
+- **The parts you built.** A placed part (`placed: true`) with no role is painted the builder's blue (scene.ts `BUILT_SRGB` #4A86E8, COAT_PAINT, so the same in every look), so the machine you made reads apart from the level's own pieces.
+- **The ring.** On the bell's crownDown: a flash in the bell's gilt (`BELL_FLASH`: full glow fading over 1.6 s), two ring waves from it (`Renderer.ring`: `RING_BLASTS`, the blast shell alone, no fireball or smoke, to 3 h, the echo 0.35 s later to 4.5 h), a chime (audio.ts `BELL_PARTIALS`: five sine partials at a bell's ratios 0.5, 1, 1.2, 1.5, 2 on scale degree 10, decaying 2.6 s to 0.9 s) in place of the crown's thud, and the banner **The bell rang!**. After the flash the bell stops glowing, as a felled crown does: the steady glow means "still to do".
+- **Other bell levels.** Wavefront's Lay levels (W1, W2, W6) are bell levels with a build too, so they get the same objective row, gilt bells, ring and painted built dominoes; the start marker is Rube Lab's only (it marks the runner).
+- **The swing.** The bell moves because what hit it moved it (the physics); it is not hung, so it does not swing on a pivot. A hung bell waits for joints (V6).
+
+Alternatives considered: for the zone, a translucent box (no transparent pass for bodies; it would hide the ball inside it) and a ground decal (a new pass for one level kind); beads are what Fuse & Fold's lot already draws (`lotBeads`) and read in every look. For the ring, a drawn swing (a pose offset in the renderer) was rejected because what is drawn would then differ from the physics the session judges; a particle burst alone is what the playtest found too small. For built parts, an outline or a per-look tint; a coat is one colour language across looks (look-colours.md) and costs nothing new.
+
 ## Tests
 
 | Test | What it proves |
@@ -77,6 +91,9 @@ A pinned part ignores the ground and other pinned bodies in the overlap check, a
 | `packages/keystone/test/rube.test.ts` | `pieceQuat`; tilt and pin compile and hash, order-independent; validation of pins and bells; the gate levels validate clean on gpu and rapier settings; `bellRung`; the session keeps a bell sticky and clears; the bin (ramp foot flush within 2e-6 h, refused into a free body, ball, bumper, cost, JSON hash); `partsStars` |
 | `packages/keystone-lab/test/rube.test.ts` | On the reference: two or more families per puzzle clear, every wrong build is buildable and fails, pinned bodies move exactly 0, the parts par is the cheapest recorded clear |
 | `packages/keystone-lab/test/rube-gpu-RL*.test.ts` (one file per level, rube-gpu.ts) | On the GPU (SwiftShader in CI, Metal with `TB_CHANNEL=chrome`), through the game's cast page: the bare level fails, the recorded solutions clear, pinned bodies end exactly where authored as f32 |
+| `packages/render/test/render-sphere-coats.test.ts` | Spheres take coats: gilt gold, glaze teal, painted blue in every look; a bell's flash lights the gilt sphere at its start, is gone at its end, keeps the gold (fixed renderer times) |
+| `packages/game/test/rube-e2e.test.ts` | RL2 on the game page (Rapier): in the build the bell's pixels are gold and the built bumper blue, the HUD says ring the bell; 10 steps after the ring the bell has moved, carries the flash over its gilt, the ring waves are out, the objective is ticked |
+| `packages/game/test/rube-view.test.ts`, `scene.test.ts`, `hud.test.ts`, `audio.test.ts`, `render-blasts.test.ts` | The zone and start beads; crowns gilt and built parts painted; the objective row; the bell's partials; the ring waves' params and echo |
 | `packages/viewer/test/level-file.test.ts` | Every Rube level and a built RL1 round-trip through the level file with the same hash; malformed pins, radii, regions and charge arms are refused, saying where |
 
 ## Alternatives considered

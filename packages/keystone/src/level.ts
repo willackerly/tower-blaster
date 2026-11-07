@@ -572,9 +572,10 @@ export function compileLevel(def: LevelDef): CompiledLevel {
   });
   for (let i = 0; i < n; i++) meta.band[i] = Math.min(7, Math.floor((8 * meta.home[3 * i + 1]!) / Math.max(height, 1e-9)));
 
-  // A level whose rack holds a quake plays under field events (C7): its gravity goes on the field grid, so a
-  // quake's last key restores it exactly. Every other level keeps the gravity its lines were pinned under.
-  const gravity: Vec3 = def.rack.includes(QUAKE) ? quantiseVec3([0, -GRAVITY, 0]) : [0, -GRAVITY, 0];
+  // A level whose rack holds a quake, or whose Mason test is one, plays under field events (C7): its gravity goes on
+  // the field grid, so a quake's last key restores it exactly. Every other level keeps the gravity its lines were
+  // pinned under.
+  const gravity: Vec3 = def.rack.includes(QUAKE) || def.mason?.quake ? quantiseVec3([0, -GRAVITY, 0]) : [0, -GRAVITY, 0];
   const scene: SceneDesc = {
     id: `keystone:${def.id}`, params: { version: def.version }, seed: 0, gravity, dt: 1 / 60,
     // 'min' lets one slick face make a slip plane: ice on plaster is ice, not
