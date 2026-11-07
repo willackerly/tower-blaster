@@ -639,6 +639,41 @@ rank the whump against the glide but cannot tune a cannonball's. Real launch rec
 cannon, potato cannon) are the next reference (A10b). A drop (released, not launched) and the cue (pushed)
 keep the glide. `keystone.launchsound=glide` brings the old cue back.
 
+## Blasts (A6, 2026-11-07)
+
+A weapon going off (a grenade, a bomb, a plunger's charges) made no sound of its own: only the blocks it
+threw were heard. It now booms (blast-sound.ts), from the blast's reach (the radius it pushes out to) and
+the camera's distance from it:
+
+- **Shock**: a Friedlander pulse, its positive phase 0.4 ms per metre of reach (Hopkinson-Cranz: every
+  time and length of a blast grows as the cube root of its charge, and the reach is such a length).
+  A charge's 1.5 m is a 0.6 ms crack; the grenade's 5 m a 2 ms thump.
+- **Rumble**: the same pulse echoing off the ground and the scene, a velvet-noise train of 2000 echoes a
+  second under e^(-t/tau), tau = 0.4 s x sqrt(reach) (0.49 s for a charge, 0.89 s for the grenade),
+  darkened by two poles at 400 Hz for the echoes' longer paths. The Friedlander pulse is the impulse
+  response of a two-pole filter, so both parts are that filter run over their taps (exact, O(n)).
+- Mixed 0.35 / 0.65 by energy, DC-blocked at 20 Hz, then a tanh-like soft clip at drive 8: the overload
+  of an ear or microphone near a blast. Peak 0.6 for the grenade at 15 m, scaling as reach / distance
+  within 0.05-0.8, and it plays distance / c after the flash (at most 150 ms).
+
+Judged (tools/sound-judge), four takes each at reach 1.5, 2, 3 and 5 m: all 16 top-1 Explosion
+(0.50 / 0.55 / 0.63 / 0.62 by reach; real share 0.92-0.94). One step off at a time, one take each:
+
+| ablation | judge's top label | Explosion |
+|---|---|---|
+| rumble not darkened (no 400 Hz poles) | Ocean, Waves (all 4 reaches) | 0.00 |
+| no overload (drive 0: the 1-sample peak sets the level, the rumble 25 dB under) | Silence (3 of 4) | 0.27-0.38 |
+| rumble half as long | Timpani, Sound effect | 0.00-0.17 |
+
+Tried and dropped: clustered echoes (a slow random swell over the taps, for a rolling rumble) read as
+Wind (Explosion 0.08-0.20). As with the launch, the judge hears nothing under 125 Hz, so the grenade's
+low thump is judged by its upper half; real explosion recordings would be the next reference.
+
+Each wave is built once per reach (to the centimetre) and take (four, so blasts going off together do
+not add up coherently) and cached by the Synth: building one is a few ms on a CI box. The feedback
+carries only the reach, not the blast's impulse, so two weapons of one reach sound alike.
+`keystone.blastsound=none` brings the old silence back.
+
 ## Plan (each step lands with its test)
 
 1. S1 `@tb/audio` material config and mode derivation. Done (#93).
