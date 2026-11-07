@@ -140,13 +140,16 @@ tries, and the *best* found. The brief's test is the obvious shot's spread: neit
 | level | from | obvious shot | GPU (16 worlds, SwiftShader) | Rapier (64) | best line | GPU | Rapier |
 |---|---|---|---|---|---|---|---|
 | CH1 Open Fire ×64 | L1, one cannonball, all 4 crowns | mid-tower, `cannonball.360.8.22.252.100` | 4 / 16 | 6 / 64 | L1's par line, low on the tower | 16 / 16 | 64 / 64 |
-| CH2 Lintel ×64 | L2, one cannonball, all 6 crowns, spare the pavilion | L2's par line `cannonball.540.8.0.616.100` | 13 / 16 | 31 / 64 | from the side, a cannonball high on the near column at 80 % (`cannonball.360.8.-24.391.80`) | GPU_CH2 | 60 / 64 |
+| CH2 Lintel ×64 | L2, one cannonball, all 6 crowns, spare the pavilion | L2's par line `cannonball.540.8.0.616.100` | 13 / 16 | 31 / 64 | from the side, a cannonball high on the near column at 80 % (`cannonball.360.8.-24.391.80`) | 13 / 16 | 60 / 64 |
 | CH3 Dominoes ×64 | L5, one marble, the crown on the last column | first column, mid-height, 60 % | 7 / 16 | 30 / 64 | L5's par line | 16 / 16 | 64 / 64 |
 
 What the levels teach: on CH1 and CH3 the shot that knocks the structure hardest is not the one that
 clears most worlds; the low, deliberate par shots clear every world on both engines. CH2's par line, which
 clears L2 once, fails in a fifth (GPU) to a half (Rapier) of the worlds, where the lintel tips but sheds
-only some of its six crowns: a lesson in how a tip-over depends on where the shot lands.
+only some of its six crowns: a lesson in how a tip-over depends on where the shot lands. CH2's best line
+(found on Rapier) is the one place the engines rank lines differently: on the GPU it ties the par line at
+13 of 16, so on the GPU CH2 is a two-star level for both shots and a third star needs a line searched on
+the GPU itself (queued with the Metal verify, since SwiftShader takes about 10 minutes a line).
 
 **The engines disagree, as expected.** The GPU solver is less chaotic, so where the shot itself is robust
 both clear everything, and where it is marginal they split by different amounts (CH1's obvious shot: 25 %
@@ -172,7 +175,20 @@ jitter and aim nudge). Two-sample KS on the share of blocks moved and on the cro
 test on the clears, all p > 0.05; plus a power check that the shot splits the worlds (neither none nor all
 clear), since two constant samples agree whatever the islands did.
 
-VERIFY_TBD
+| run | test | worlds | clears islands / solo | Fisher p | moved KS D (p) | crowns KS D (p) | same crowns world by world |
+|---|---|---|---|---|---|---|---|
+| Rapier, an L1 fixture (3 of 4 crowns) | `chorus-verify.test.ts` (CI) | 64 | 46 / 46 | 1.000 | 0.031 (1.000) | 0.016 (1.000) | 59 / 64 |
+| GPU, SwiftShader, CH1 | `chorus-gpu.test.ts` (`PHYSICS_GPU_SLOW=1`) | 16 | 4 / 4 | 1.000 | 0.063 (1.000) | 0.000 (1.000) | 16 / 16 |
+| GPU, SwiftShader, CH2 | same | 16 | 13 / 13 | 1.000 | 0.125 (0.999) | 0.000 (1.000) | 16 / 16 |
+| GPU, SwiftShader, CH3 | same | 16 | 7 / 5 | 0.716 | 0.375 (0.162) | 0.125 (0.999) | 12 / 16 |
+
+Every run passes, and every shot splits its worlds. On the GPU most worlds come out the same world by
+world, though the islands share one solve and colour priority (C10: not bit-exact with contacts). CH3's
+domino run is the most sensitive: 4 of 16 worlds differ, and the distributions still agree. Rapier is
+deterministic per body ordering, so the islands and solo runs differ in 5 of 64 worlds through contact
+order alone. The GPU verify at 64 worlds (`TB_CHANNEL`, a real GPU) is queued on the Mac with the
+frame-time check; SwiftShader's 16 worlds took 12 to 33 minutes a level, and those times are not
+performance results.
 
 ## Alternatives considered
 
@@ -204,4 +220,9 @@ VERIFY_TBD
 - (e) Larger levels (1k bodies x 64) as play-back-after-compute, behind an option: compute the islands
   run off screen, then replay world 0 with the count. Not built; the 100-body levels run in real time.
 - Metal cost and spread on the M5 (queued through the coordinator; SwiftShader numbers are never
-  performance results).
+  performance results): the 64-world GPU verify (`TB_CHANNEL=chrome npx vitest run
+  packages/keystone-lab/test/chorus-gpu.test.ts`) and CH1's frame time (`ch1-chorus-rendered` in
+  e2e-pacing-probe).
+- A CH2 line searched on the GPU for its third star (its Rapier best line ties the par line there).
+- A Chorus level with M10's pinned parts: the jitter already skips pinned bodies (tested), but no shipped
+  level has one yet.
