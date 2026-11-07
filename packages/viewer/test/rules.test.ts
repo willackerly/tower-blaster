@@ -123,6 +123,12 @@ describe('Keystone rules in the viewer', () => {
     expect(parseViewerConfig(toSearch(sl))).toEqual(sl);
     expect(parseSceneFile(JSON.stringify(sceneFile(sl, '', null))).config).toEqual(sl);
     expect(sceneFile(sl, '', null).rules).toMatchObject({ sleeptint: true, physics: { sleep: true } });
+    // Leverage points as a share (PT31, LevelDef.levPoints): through the URL, a saved scene, and onto the level.
+    const lp = parseViewerConfig('?level=L1&rules=keystone&keystone.levpoints=share');
+    expect(lp.keystone).toEqual({ levPoints: 'share' });
+    expect(levelOf(lp)).toEqual({ ...L1, custom: true, levPoints: 'share' });
+    expect(parseViewerConfig(toSearch(lp))).toEqual(lp);
+    expect(parseSceneFile(JSON.stringify(sceneFile(lp, '', null))).config).toEqual(lp);
     expect(parseViewerConfig('?level=L1&rules=keystone').keystone).toEqual({});
     expect(levelOf(parseViewerConfig('?level=L1&rules=keystone'))).toBe(L1);
     expect(levelOf(parseViewerConfig('?scenario=S3&rules=keystone&keystone.iterations=20'))).toMatchObject({ id: 'S3', custom: true, physics: { iterations: 20 } });

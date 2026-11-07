@@ -42,6 +42,18 @@ export const DOCK_CSS = `
     body.kg-touch .kg-dock .tray .ctl { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 6px 10px; min-height: 44px; }
     body.kg-touch .kg-dock .tray .ctl .row > span:first-child { display: none; }
     body.kg-touch .kg-dock .tray .ctl .row { flex: 1; }
+    /* PT37 (J2 #16): Power and Height named on the phone, two −/+ pairs that looked alike (their keys hidden on touch). A caption
+       over the middle of each row (above the bar, above the height figure), out of the flow: the tray keeps its size (PT3's 30%). */
+    body.kg-touch .kg-dock .tray .ctl > .row { position: relative; }
+    /* The two pairs apart by more than the gaps inside each (second opinion: Power's + and Height's − read as one group). */
+    body.kg-touch .kg-dock .tray .ctl { column-gap: 22px; }
+    body.kg-touch .kg-dock .tray .ctl > .row > span:first-child { display: block; position: absolute; left: 50%; top: 1px; transform: translateX(-50%); pointer-events: none; font-size: 9px; line-height: 10px; font-weight: 650; letter-spacing: 0.06em; text-transform: uppercase; color: #c2c8d6; white-space: nowrap; }
+    body.kg-touch .kg-dock .tray .ctl > .row > span:first-child kbd { display: none; }
+    body.kg-touch .kg-dock .tray .ctl .launch { padding-top: 8px; }
+    /* PT37 (J3 #21): a rack wider than the tray fades at its edge, with an arrow, while there is more to scroll to (play.ts sets .more). */
+    body.kg-touch .kg-dock .tray { position: relative; }
+    body.kg-touch .kg-dock .tray .chips.more { -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 64px), transparent); mask-image: linear-gradient(to right, #000 calc(100% - 64px), transparent); }
+    body.kg-touch .kg-dock .tray:has(> .chips.more)::after { content: "›"; position: absolute; right: 6px; top: 16px; width: 22px; height: 22px; border-radius: 11px; background: #3a4459; color: #e8ebf2; font: 700 15px/22px system-ui, sans-serif; text-align: center; pointer-events: none; }
     body.kg-touch .kg-dock .tray .ctl .power { flex: 1; gap: 4px; }
     body.kg-touch .kg-dock .tray .ctl .bar { flex: 1; width: auto; min-width: 48px; }
     body.kg-touch .kg-dock .tray .ctl .launch { flex: 1; text-align: center; white-space: nowrap; }
@@ -59,7 +71,6 @@ export const DOCK_CSS = `
     body.kg-touch .kg-dock .tray .ctl .qlong, body.kg-touch .kg-dock .tray .ctl .qnote { display: none; }
     /* A rack of one quake has no choice to show: its chip goes while the panel stands for it. */
     body.kg-touch .kg-dock .tray .chips.only-quake { display: none; }
-    body.kg-touch .kg-dock .tray .ctl .launch::before { content: '↕ '; color: #9aa3b8; }
     body.kg-touch .kg-dock .slot-row, body.kg-touch .kg-dock .slot-row.idle { display: flex; gap: 8px; margin: 0; }
     body.kg-touch .kg-dock .slot, body.kg-touch .kg-dock .slot.empty { display: flex; flex: 1; min-height: 44px; }
     body.kg-touch .kg-dock .slot button { flex: 1; margin: 0; }
@@ -342,6 +353,10 @@ export const GAME_CSS = `
     /* The lot sheet keeps its count line; its goals are on the result card (the HUD would cover the structure). */
     body.kg-touch .kg-hud .goals ul { display: none; }
   }
+  /* The dud note (PT31, play.ts noteShot): one amber line over where a shot that moved nothing was aimed. */
+  .kg-note { position: fixed; z-index: 35; pointer-events: none; transform: translate(-50%, -100%); max-width: min(80vw, 420px); padding: 5px 12px; border-radius: 6px; background: rgba(20, 24, 33, 0.86); border: 1px solid rgba(240, 184, 90, 0.5); font: 600 15px/1.3 system-ui, sans-serif; color: #f4c77a; text-align: center; opacity: 0; }
+  .kg-note.show { animation: kg-note 3.2s ease-out; }
+  @keyframes kg-note { 0% { opacity: 0; margin-top: 0; } 8% { opacity: 1; } 82% { opacity: 1; } 100% { opacity: 0; margin-top: -24px; } }
 ${DOCK_CSS}${LOT_CSS}${DUEL_CSS}${FUSE_CSS}`;
 
 /**

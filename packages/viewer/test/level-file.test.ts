@@ -135,6 +135,8 @@ describe('level files', () => {
     expect(parseLevelDef(JSON.parse(levelJson({ ...def, runWindow: 75 }))).runWindow).toBe(75);
     expect(() => parseLevelDef({ ...structuredClone(L2), runWindow: 12 })).toThrow(/level.runWindow must be seconds over 30/);
     expect(() => parseLevelDef({ ...structuredClone(L2), settle: 'v9' })).toThrow(/level.settle must be v1 or v2 or v3 or v4: v9/);
+    expect(parseLevelDef(JSON.parse(levelJson({ ...def, levPoints: 'share' }))).levPoints).toBe('share');
+    expect(() => parseLevelDef({ ...structuredClone(L2), levPoints: 'sqrt' })).toThrow(/level.levPoints must be log or share: sqrt/);
   });
 
   it('reads back a freeze budget and a hold objective (Undercut, Bullet Time), and refuses a budget out of range', () => {

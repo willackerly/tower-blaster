@@ -8,7 +8,7 @@ import { DEFAULT_SETTINGS, parseSettings, settingFeel, settingUrlKeys } from '..
 
 const q = (s: string) => new URLSearchParams(s);
 const written = (patch: object) => { const w = new URLSearchParams(); writePaceFeel({ ...DEFAULT_FEEL, ...patch }, w); return w.toString(); };
-const door = (patch: object) => doorHtml({ levels: [], current: -1, settings: { ...DEFAULT_SETTINGS, ...patch }, howTo: false, advanced: true });
+const door = (patch: object) => doorHtml({ levels: [], current: -1, settings: { ...DEFAULT_SETTINGS, ...patch }, howTo: false, advanced: true, developer: true });
 
 describe('the opening view, the impact marker and hidden goals as URL keys', () => {
   it('defaults: the goals view, the marker on, the x-ray off', () => {
@@ -57,7 +57,7 @@ describe('the Opening view, Impact marker and Hidden goals settings', () => {
     expect([settingUrlKeys('view'), settingUrlKeys('impact'), settingUrlKeys('xray')]).toEqual([['keystone.view'], ['keystone.impact'], ['keystone.xray']]);
   });
 
-  it('the door shows each with the chosen button lit, after Stone marks', () => {
+  it('the door shows each with the chosen button lit, after Stone marks (under Developer settings since PT37)', () => {
     for (const v of ['goals', 'classic'] as const) expect(door({ view: v })).toContain(`data-act="view" data-arg="${v}" class="on"`);
     expect(door({ impact: true })).toContain('data-act="impact" data-arg="on" class="on"');
     expect(door({ impact: false })).toContain('data-act="impact" data-arg="off" class="on"');

@@ -1,7 +1,7 @@
 // HUD and result card. Formatting is pure and tested; the DOM side only
 // writes strings into fixed elements. Level text is authored in this repo,
 // but everything still goes through esc().
-import { castStars, chorusOf, type CompiledLevel, DEFAULT_GOLD, isFuseLevel, isTrial, itemRef, type LevelDef, type LevelScore, levelTier, type Objective, type RackItem, scoringOf, TIER_NAMES, TRIAL_LEVELS } from '@tb/keystone';
+import { castStars, chorusOf, type CompiledLevel, DEFAULT_GOLD, isFuseLevel, isTrial, itemRef, type LevelDef, type LevelScore, levelGoldLine, levelTier, type Objective, type RackItem, scoringOf, TIER_NAMES, TRIAL_LEVELS } from '@tb/keystone';
 import { PROJECTILE_PRESETS } from '@tb/weapons';
 import { type CardFacts, cardModel, type HudProfile } from './mode-ui.ts';
 
@@ -69,6 +69,12 @@ export function nextSelection(rack: readonly RackItem[], left: readonly RackItem
 export const fmtLeverage = (L: number) => `×${L >= 100 ? L.toFixed(0) : L >= 10 ? L.toFixed(1) : L.toFixed(2)}`;
 export const tierName = (t: number) => TIER_NAMES[Math.max(0, Math.min(3, t))]!;
 export const starsText = (n: number) => '★'.repeat(n) + '☆'.repeat(3 - n);
+/**
+ * The stars a card or banner shows for a round on `level`: an unrated trial has none (PT37, J3 #13: "100% DOWN" over
+ * ★☆☆ read as a poor result), only whether its goal was met.
+ */
+export const roundStarsHtml = (level: Pick<LevelDef, 'id'>, stars: number) =>
+  isTrial(level.id) ? `<span class="unrated">Unrated · ${stars > 0 ? 'goal met' : 'goal not met'}</span>` : starsText(stars);
 export const fmtPoints = (v: number) => (v < 0 ? `−${Math.abs(v).toLocaleString('en-US')}` : v.toLocaleString('en-US'));
 
 export interface HudState {
@@ -415,8 +421,23 @@ export function hudHtml(s: HudState, sheet = ''): string {
     </div>`;
 }
 
-/** What leverage means, in one line: the HUD row's tooltip and How to play's line. */
-export const LEVERAGE_MEANS = 'Leverage is the energy of what you bring down for each unit of energy you fire.';
+/**
+ * What leverage means, in one line: the HUD row's tooltip, How to play's Chamber page and the card's title (PT31,
+ * agent playtest 2: "×0.70 (Brute)" with three stars meant nothing; wording agreed with the scoring thread).
+ */
+export const LEVERAGE_MEANS = "Leverage ×N means the structure's fall gave back N times the energy you fired. Reach the level's gold line for the gold badge.";
+
+/**
+ * The card's leverage words for a round on `level` (PT31): "nothing fell" for a round that released nothing (never a
+ * tier name at ×0.00), else the figure and, against the level's gold line, its tier from the line up or, under the
+ * line, how far it is ("×0.70 · gold at ×0.71", not "Brute" beside three stars). No line (most outcome levels): the figure.
+ */
+export function leverageWords(L: number, level: LevelDef): string {
+  if (!(L > 0)) return 'nothing fell';
+  const t = levelTier(L, level);
+  if (t === null) return `leverage ${fmtLeverage(L)}`;
+  return t === 0 ? `leverage ${fmtLeverage(L)} · gold at ${fmtLeverage(levelGoldLine(level)!)}` : `leverage ${fmtLeverage(L)} (${tierName(t)})`;
+}
 
 /**
  * The HUD's Leverage row: the round's, the figure the result card will show, and from the second shot
@@ -497,7 +518,7 @@ export function tallyHtml(level: LevelDef, score: LevelScore | null, over: strin
   if (over) return `<b>${esc(over)}</b> <span class="small">tallying…</span>`;
   // The stamp the card will show (the mode's, mode-ui.ts).
   const stamp = score ? cardModel(level, score, mode.facts, { sub: '', stamp: score.stamp }, mode.modeUi ?? true).stamp : '';
-  const what = score ? `<b>${esc(stamp)}</b> <span class="stars">${starsText(score.stars)}</span>` : `<b>${scoringOf(level) === 'outcome' ? 'Round over' : 'All crowns down'}</b>`;
+  const what = score ? `<b>${esc(stamp)}</b> <span class="stars">${roundStarsHtml(level, score.stars)}</span>` : `<b>${scoringOf(level) === 'outcome' ? 'Round over' : 'All crowns down'}</b>`;
   return `<span class="name">${esc(playerName(level))}</span> ${what} <span class="small">tallying…</span>`;
 }
 
@@ -534,11 +555,10 @@ export function resultHtml(level: LevelDef, score: LevelScore | null, strokes: n
   const lines = score.lines.map((l, i) => `<div class="line${l.value < 0 ? ' bad' : ''}" style="animation-delay:${0.15 + 0.22 * i}s"><span>${esc(l.label)}</span><span class="${l.value < 0 ? 'bad' : ''}">${fmtPoints(l.value)}</span></div>`).join('');
   const after = 0.15 + 0.22 * score.lines.length;
   // Scored on many worlds (Chorus; Mason's Trial shows its count in masonSub): the count is the result; world 0's leverage is information, with no tier.
-  const tierText = score.worlds ? '' : tierLabel(score.leverage, level);
   const worlds = score.worlds && !score.mason ? ` · ${score.worlds.cleared} of ${score.worlds.of} worlds cleared` : '';
   const fz = score.freezes ? ` · freezes used ${score.freezes.used}/${score.freezes.total}` : '';
   const lost = score.heritageStarsLost ? `<div class="lost bad" style="animation-delay:${after + 0.7}s">Heritage cracked: ${score.heritageStarsLost} star${score.heritageStarsLost === 1 ? '' : 's'} lost</div>` : '';
-  const sub = `${shotsText}${'outcome' in score && level.objective.kind !== 'hold' ? ` · ${pct((score as { outcome: { collapse: number } }).outcome.collapse)} down` : ''}${worlds}${score.mason ? '' : ` · leverage ${fmtLeverage(score.leverage)}${tierText ? ` (${tierText})` : ''}`}${fz}`;
+  const sub = `${shotsText}${'outcome' in score && level.objective.kind !== 'hold' ? ` · ${pct((score as { outcome: { collapse: number } }).outcome.collapse)} down` : ''}${worlds}${score.mason ? '' : ` · ${score.worlds ? `leverage ${fmtLeverage(score.leverage)}` : leverageWords(score.leverage, level)}`}${fz}`;
   // The mode's card (mode-ui.ts, PT27): its rows, stamp and words; a reason on a failed round; HERITAGE LOST in red.
   const card = cardModel(level, score, mode.facts, { sub, stamp: score.stamp }, mode.modeUi ?? true);
   const rows = card.rows.map((r) => `<div class="line fact"><span>${esc(r.label)}</span><span class="${r.tone ?? ''}">${esc(r.value)}</span></div>`).join('');
@@ -549,13 +569,13 @@ export function resultHtml(level: LevelDef, score: LevelScore | null, strokes: n
     ${CARD_MORE}
     <div class="name">${esc(playerName(level))}</div>
     ${level.custom ? `<div class="sub custom">${CUSTOM_NOTE}</div>` : ''}
-    <div class="sub">${esc(card.sub)}</div>
+    <div class="sub"${card.sub.includes('leverage') ? ` title="${esc(LEVERAGE_MEANS)}"` : ''}>${esc(card.sub)}</div>
     ${rows}
     ${points}
     ${reason}
     </div><div class="c2">
     <div class="stamp s-${card.stamp.replace(/[^A-Z]/g, '').toLowerCase()}" style="animation-delay:${after + 0.3}s">${esc(card.stamp)}</div>
-    <div class="stars" style="animation-delay:${after + 0.55}s">${starsText(score.stars)}</div>
+    <div class="stars" style="animation-delay:${after + 0.55}s">${roundStarsHtml(level, score.stars)}</div>
     ${lost}
     ${score.mason ? masonStarsHtml(score, after + 0.8) : card.gold ? goldHtml(level, score, after + 0.8) : ''}
     ${extra}
