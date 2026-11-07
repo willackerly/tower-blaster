@@ -71,12 +71,14 @@ describe('formatting', () => {
     expect(html).not.toMatch(/Down </);
     expect(html).toMatch(/keep the crown up/);
   });
-  it('a pull chip is labelled Pull, has no power bar, and a refused pull says why instead of out of reach', () => {
+  it('a pull chip is labelled Pull, has no live power bar, and a refused pull says why instead of out of reach', () => {
     const base = { level: L2, strokes: 0, crownsDown: 0, crownsTotal: 6, heritageBroken: 0, heritageTotal: 36, power: 60, leverage: { round: 0, shot: 0 }, phase: 'aiming', reachable: null };
     const chips = rackChips(['pull', 'pull', 'marble'], ['pull', 'marble'], 'pull');
     const html = hudHtml({ ...base, chips });
     expect(html).toMatch(/Pull <b>1<\/b>\/2/);
-    expect(html).not.toMatch(/Power/);
+    // No power bar to use while the pull is selected; its place is held (hidden) because the rack's marble aims (PT30).
+    expect(html).toMatch(/<div class="row held"><span>Power/);
+    expect(hudHtml({ ...base, chips: rackChips(['pull'], ['pull'], 'pull') })).not.toMatch(/Power/);
     const refused = hudHtml({ ...base, chips, reachable: false, pullRefused: true });
     expect(refused).toMatch(/Crowns, heritage and fixed beams stay/);
     expect(refused).not.toMatch(/Out of reach/);
@@ -234,7 +236,7 @@ describe('playtest polish (U5, U6)', () => {
   it('the result card offers Undo shot (key U) after a shot, before Retry', () => {
     const score = levelScore(L1, [{ ke: 1000, yield: 0, dPE_mJ: 2_000_000, leverage: 2, crownsDown: 4, crownsTotal: 4, heritageNew: 0, displaced: 30, outOfLot: 0, pe_mJ: 0, spawnStep: 0, settleStep: 100 }], true, 40);
     const html = resultHtml(L1, score, 1, true, false, '', true);
-    expect([...html.matchAll(/data-act="(\w+)"/g)].map((m) => m[1])).toEqual(['undo', 'retry', 'next']);
+    expect([...html.matchAll(/data-act="(\w+)"/g)].map((m) => m[1])).toEqual(['card', 'undo', 'retry', 'next']);
     expect(resultHtml(L1, score, 1, true)).not.toMatch(/undo/);
   });
   it('the hint line fits its budget and names undo, restart and where the rest are; ? shows every key', () => {

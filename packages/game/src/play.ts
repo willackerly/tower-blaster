@@ -130,7 +130,7 @@ export interface GameHandle {
    * The result card's placement (layout.ts: docked aside or centred) and wall times (performance.now, ms): when the round's
    * end settled (levelEnd) and when the card itself showed; null until then. Docked, the card waits Layout.cardDelay after the end.
    */
-  card: { place: 'dock' | 'center'; endedMs: number | null; shownMs: number | null };
+  card: { place: 'strip' | 'dock' | 'center'; endedMs: number | null; shownMs: number | null };
   /** The docked phone HUD's band the level's opening view kept clear of (screen shares, PT3b), or null when the HUD is not docked. */
   openingHud: ScreenInsets | null;
   /**
@@ -1542,7 +1542,11 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     const lay = env.layout, delay = lay ? lay.cardDelay : 0;
     handle.resultShownAt ??= driver.engine.stepIndex;
     handle.card.place = lay?.card ?? 'center';
-    env.result.classList.toggle('dock', handle.card.place === 'dock');
+    env.result.classList.toggle('dock', handle.card.place !== 'center');
+    // A phone's strip (PT30): the card in the band the docked HUD held, Details for the rest. A duel's card has no
+    // rows to fold away, so it docks whole.
+    env.result.classList.toggle('strip', handle.card.place === 'strip' && !duel);
+    env.result.classList.remove('full');
     if (duel) env.result.innerHTML = duelHtml;
     else {
       const sheet = score && lot ? goalsResultHtml(handle.goals, handle.grade, lot.sheet.grades !== undefined) : '';
@@ -1991,6 +1995,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     if (act === 'retry') void handle.retry();
     if (act === 'undo') void handle.undo();
     if (act === 'save') env.onSave?.();
+    if (act === 'card') env.result.classList.toggle('full');
     if (act === 'next' && step(levelIdx, 1)) void load(levelIdx + 1).catch(fail);
     if (act === 'series') { const f = env.seriesForward?.(levelIdx); if (f) void load(f.index).catch(fail); }
     if (act === 'levels') env.onLevels?.();

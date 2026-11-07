@@ -27,12 +27,15 @@ export const DOCK_CSS = `
     body.kg-touch .kg-dock .st .title { font-size: 14px; margin: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     body.kg-touch .kg-dock .st .custom, body.kg-touch .kg-dock .slot-row .note { display: none; }
     body.kg-touch .kg-dock .st .lev.pre { display: flex; visibility: hidden; }
+    body.kg-touch .kg-dock .st .fit { justify-items: start; }
     body.kg-touch .kg-dock .st .lev > span:last-child { display: inline-block; min-width: 3.4em; }
     body.kg-touch .kg-dock .st .meter { margin: 4px 0 14px; }
     body.kg-touch .kg-dock .st .goals { margin: 0; padding: 0; border: 0; }
     body.kg-touch .kg-dock .st .goals ul { display: none; }
     body.kg-touch .kg-dock .tray { display: flex; flex-direction: column; gap: 5px; flex: none; padding: 5px 8px; }
-    body.kg-touch .kg-dock .tray .chips { margin: 0; flex-wrap: nowrap; overflow-x: auto; }
+    /* The chips wrap rather than scroll one out of sight (PT30: the sideways rail's second chip, the trials' racks
+       upright). A rack only loses chips as it is spent, so the tray is never taller than at the first frame (hud-size-e2e). */
+    body.kg-touch .kg-dock .tray .chips { margin: 0; flex-wrap: wrap; }
     body.kg-touch .kg-dock .tray .chip { flex: none; }
     body.kg-touch .kg-dock .tray .ctl { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 6px 10px; min-height: 44px; }
     body.kg-touch .kg-dock .tray .ctl .row > span:first-child { display: none; }
@@ -170,6 +173,47 @@ export const GAME_CSS = `
     .kg-result.dock .stamp { margin-top: 4px; }
     .kg-result.dock .actions { margin: 10px -18px 0 0; padding: 8px 18px 12px 0; }
   }
+  /*
+   * The phone strip (layout.ts card strip, PT30): the camera may not move to show the rubble, so the card keeps to the
+   * band the docked HUD held (so only where it docks: a touch screen), which the opening view kept the structure out of (PT3b): the tray's band upright, the
+   * rail sideways. It shows the name, stamp, stars, the reason and the buttons; Details (.full) opens the whole card,
+   * tall enough that nothing in it scrolls behind its buttons. The HUD under it is hidden, not drawn through.
+   */
+  .kg-result .more { display: none; }
+  @media ${DOCK_PORTRAIT}, ${DOCK_SIDEWAYS} {
+    body.kg-touch .kg-result.strip .more { display: block; flex: none; margin: 0; }
+    body.kg-touch .kg-result.strip .m-less, body.kg-touch .kg-result.strip.full .m-more { display: none; }
+    body.kg-touch .kg-result.strip.full .m-less { display: inline; }
+    body.kg-touch .kg-result.strip.full .more { float: right; margin: 0 0 4px 10px; }
+    body.kg-touch .kg-result.strip.full .c1 > .line { clear: right; }
+    /* The strip: the card's parts as one wrapping row of flex items (c1, c2 and the button row dissolve), Details among the buttons. */
+    body.kg-touch .kg-result.strip.show:not(.full) { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; max-height: none; overflow: visible; padding: 8px 12px 10px; }
+    body.kg-touch .kg-result.strip:not(.full) > .c1, body.kg-touch .kg-result.strip:not(.full) > .c2, body.kg-touch .kg-result.strip:not(.full) .actions { display: contents; }
+    body.kg-touch .kg-result.strip:not(.full) > .c1 > :not(.name):not(.reason):not(.more), body.kg-touch .kg-result.strip:not(.full) > .c2 > :not(.stamp):not(.stars):not(.actions) { display: none; }
+    body.kg-touch .kg-result.strip:not(.full) .name { order: 0; flex: 1 1 auto; min-width: 0; font-size: 17px; line-height: 1.25; }
+    body.kg-touch .kg-result.strip:not(.full) .stamp { order: 2; margin: 0; padding: 1px 8px; border-width: 2px; font-size: 14px; letter-spacing: 0.05em; transform: none; animation: kg-fade 0.25s ease-out 0.1s forwards !important; }
+    body.kg-touch .kg-result.strip:not(.full) .stars { order: 3; font-size: 22px; line-height: 1; animation: kg-fade 0.25s ease-out 0.2s forwards !important; }
+    body.kg-touch .kg-result.strip:not(.full) .reason { order: 4; flex: 1 1 100%; margin: 0; }
+    body.kg-touch .kg-result.strip:not(.full) .actions button, body.kg-touch .kg-result.strip:not(.full) .more { order: 5; flex: 1 1 auto; }
+    body.kg-touch .kg-result.strip:not(.full) .more { order: 6; }
+    body.kg-touch .kg-result.strip:not(.full) .actions [data-act="save"] { order: 7; }
+    body.kg-touch .kg-result.strip.full { max-height: calc(100% - 16px); }
+  }
+  @media ${DOCK_PORTRAIT} {
+    body.kg-touch:has(.kg-result.strip.show) .kg-dock > .tray { visibility: hidden; }
+  }
+  @media ${DOCK_SIDEWAYS} {
+    body.kg-touch:has(.kg-result.strip.show) .kg-dock > * { visibility: hidden; }
+    body.kg-touch .kg-result.dock.strip { top: 8px; bottom: auto; left: 8px; right: auto; }
+    body.kg-touch .kg-result.dock.strip:not(.full) { width: calc(clamp(200px, 28vw, 250px) - 16px); max-height: calc(100% - 16px); overflow-y: auto; }
+    body.kg-touch .kg-result.strip:not(.full) .name { flex-basis: 100%; }
+    /* The whole card sideways: wide, its second column split so the lot sheet sits beside the stamp and stars, all of it above the buttons. */
+    body.kg-touch .kg-result.dock.strip.full { width: calc(100vw - 104px); grid-template-columns: minmax(0, 1fr) minmax(0, 2fr); }
+    body.kg-touch .kg-result.strip.full .c2 { display: grid; grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.2fr); grid-template-areas: "stamp lot" "stars lot" "lost lot" "gold lot" "act act"; grid-template-rows: auto auto auto 1fr auto; column-gap: 18px; align-items: start; justify-items: start; }
+    body.kg-touch .kg-result.strip.full .c2 > .stamp { grid-area: stamp; } body.kg-touch .kg-result.strip.full .c2 > .stars { grid-area: stars; }
+    body.kg-touch .kg-result.strip.full .c2 > .lost { grid-area: lost; } body.kg-touch .kg-result.strip.full .c2 > .gold { grid-area: gold; }
+    body.kg-touch .kg-result.strip.full .c2 > .lot { grid-area: lot; justify-self: stretch; } body.kg-touch .kg-result.strip.full .c2 > .actions { grid-area: act; justify-self: stretch; }
+  }
   .kg-result .name { font-size: 22px; font-weight: 700; }
   .kg-result .sub { color: #9aa3b8; margin-bottom: 10px; }
   .kg-result .line { display: flex; justify-content: space-between; padding: 3px 0; opacity: 0; animation: kg-slam 0.25s cubic-bezier(.2,1.6,.4,1) forwards; }
@@ -211,6 +255,8 @@ export const GAME_CSS = `
   .kg-hud .slot button.skip { margin-top: 0; }
   .kg-hud .slot-row.idle, .kg-hud .slot.empty, .kg-hud .lev.pre, .kg-hud .tch-hint { display: none; }
   .h-look, body.kg-nofire .h-fire { display: none; }
+  .kg-hud .fit { display: inline-grid; justify-items: end; } .kg-hud .fit > * { grid-area: 1 / 1; } .kg-hud .fit > .sz { visibility: hidden; font-style: normal; }
+  .kg-hud .ctl .row.held { visibility: hidden; }
   body.kg-nofire .h-look { display: inline; }
   body.kg-touch .kg-hud .slot-row.idle { display: flex; }
   .kg-hud .acts { gap: 8px; }

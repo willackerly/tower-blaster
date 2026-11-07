@@ -183,9 +183,15 @@ const POWER_STEP_BUTTON = (d: number) => `<button class="pw kg-tch" data-act="po
 const LAUNCH_STEP_BUTTON = (d: number) => `<button class="pw kg-tch" data-act="launch" data-arg="${d}" aria-label="${d < 0 ? 'Lower' : 'Raise'} the launcher">${d < 0 ? '−' : '+'}</button>`;
 
 /** The Height row: the launcher's height in metres, with lower and raise buttons on a touch screen (keys S and W). */
-export const launchRow = (m: number) => `<div class="row"><span>Height <kbd>W</kbd><kbd>S</kbd></span><span class="power">${LAUNCH_STEP_BUTTON(-1)}<b class="launch">${m.toFixed(1)} m</b>${LAUNCH_STEP_BUTTON(1)}</span></div>`;
+export const launchRow = (m: number, cls = '') => `<div class="row${cls}"><span>Height <kbd>W</kbd><kbd>S</kbd></span><span class="power">${LAUNCH_STEP_BUTTON(-1)}<b class="launch">${m.toFixed(1)} m</b>${LAUNCH_STEP_BUTTON(1)}</span></div>`;
 
 export const pct = (x: number) => `${Math.floor(100 * x)}%`;
+
+/**
+ * A HUD value that holds the width of its widest form from the first frame (a hidden copy in the same grid cell), so
+ * the docked strip, whose rows flow and wrap, keeps its lines when the value grows ("intact" to "32 cracked"; PT30).
+ */
+export const fit = (html: string, widest: string) => `<span class="fit">${html}<i class="sz" aria-hidden="true">${esc(widest)}</i></span>`;
 
 /** What the objective asks, in a few words. */
 export function objectiveText(o: Objective): string {
@@ -209,7 +215,7 @@ export const PULL_HINT = 'Crowns, heritage and fixed beams stay: pull a plain bl
  */
 function parCollapseRow(min: number, s: HudState): string {
   const d = s.collapse ?? 0;
-  return `<div class="row obj"><span>Down <b class="down${d > 0 ? '' : ' none'}">${pct(d)}</b></span><span class="${s.met ? 'ok' : ''}">bring ${pct(min)} down${s.met ? ' ✓' : ''}</span></div>`;
+  return `<div class="row obj">${fit(`<span>Down <b class="down${d > 0 ? '' : ' none'}">${pct(d)}</b></span>`, 'Down 100%')}${fit(`<span class="${s.met ? 'ok' : ''}">bring ${pct(min)} down${s.met ? ' ✓' : ''}</span>`, `bring ${pct(min)} down ✓`)}</div>`;
 }
 
 /** What to do first on a level with starter slabs (LevelDef.push: Wavefront, PT39), until the first shot. */
@@ -304,7 +310,8 @@ export function hudHtml(s: HudState, sheet = ''): string {
   const d = s.level, pf = s.profile;
   // Chips are buttons (a tap selects, as the key does); kbd hints hide on a touch screen (GAME_CSS, body.kg-touch).
   const chips = pf && !pf.chips ? '' : s.chips.map((c) => `<button class="chip${c.selected ? ' on' : ''}${c.left ? '' : ' spent'}" data-act="ammo" data-arg="${c.key}"><kbd>${c.key}</kbd> ${esc(itemLabel(c.ammo))} <b>${c.left}</b>/${c.total}</button>`).join('');
-  const heritage = s.heritageTotal ? `<div class="row"><span>Heritage</span><span class="${s.heritageBroken ? 'bad' : 'ok'}">${s.heritageBroken ? `${s.heritageBroken} cracked` : 'intact'}</span></div>` : '';
+  // The value holds the width of its widest ("32 cracked") from the first frame, so the docked strip never grows a line (PT30).
+  const heritage = s.heritageTotal ? `<div class="row"><span>Heritage</span>${fit(`<span class="${s.heritageBroken ? 'bad' : 'ok'}">${s.heritageBroken ? `${s.heritageBroken} cracked` : 'intact'}</span>`, `${s.heritageTotal} cracked`)}</div>` : '';
   const sel = s.chips.find((c) => c.selected)?.ammo;
   // A rack of one quake: the docked phone HUD drops its chip while the quake panel stands for it (ui.ts).
   const onlyQuake = s.chips.length === 1 && sel === 'quake' && s.quake ? ' only-quake' : '';
@@ -312,8 +319,12 @@ export function hudHtml(s: HudState, sheet = ''): string {
   // A plunger aims at nothing (the timeline sets it): no power, no launcher height. A quake has its own designer instead.
   // The mode's HUD shows the aim rows only where it has a projectile, whatever is selected (a spent rack selects nothing).
   const noAim = pf ? !pf.aim : false;
-  const power = noAim ? (sel === 'quake' ? s.quake ?? '' : '') : sel === 'drop' || sel === 'pull' || sel === 'plunger' || sel === 'quake' ? (sel === 'quake' ? s.quake ?? '' : '') : `<div class="row"><span>Power <kbd>Q</kbd><kbd>E</kbd></span><span class="power">${POWER_STEP_BUTTON(-POWER_STEP)}<span class="bar"><i style="width:${s.power}%"></i></span>${POWER_STEP_BUTTON(POWER_STEP)}</span></div>`;
-  const height = noAim || sel === 'drop' || sel === 'pull' || sel === 'plunger' || sel === 'quake' || s.launch === undefined ? '' : launchRow(s.launch);
+  // A rack that holds an aimed item keeps the aim rows' place while a drop or pull is selected (held: hidden), so the
+  // tray does not grow when the selection moves to the projectile (L4, T-X2 sideways; PT30).
+  const aims = (a: RackItem) => a !== 'drop' && a !== 'pull' && a !== 'plunger' && a !== 'quake';
+  const hold = !noAim && sel !== 'quake' && (sel === undefined || !aims(sel)) && s.chips.some((c) => aims(c.ammo)) ? ' held' : '';
+  const power = noAim ? (sel === 'quake' ? s.quake ?? '' : '') : !hold && (sel === 'drop' || sel === 'pull' || sel === 'plunger' || sel === 'quake') ? (sel === 'quake' ? s.quake ?? '' : '') : `<div class="row${hold}"><span>Power <kbd>Q</kbd><kbd>E</kbd></span><span class="power">${POWER_STEP_BUTTON(-POWER_STEP)}<span class="bar"><i style="width:${s.power}%"></i></span>${POWER_STEP_BUTTON(POWER_STEP)}</span></div>`;
+  const height = noAim || (!hold && (sel === 'drop' || sel === 'pull' || sel === 'plunger' || sel === 'quake')) || s.launch === undefined ? '' : launchRow(s.launch, hold);
   const reach = s.pullRefused ? `<div class="${s.pullRefused === 'tapped' ? 'bad' : 'hint'} small pull-hint">${d.cut && s.phase !== 'running' ? CUT_HINT : PULL_HINT}</div>` : s.reachable === false ? '<div class="bad small reach">Out of reach at this power</div>' : '';
   const ctl = `<div class="ctl">${power}${height}</div>`;
   const pace = s.pace ? ` <span class="pace" title="physics is running slower than real time">${esc(s.pace)}</span>` : '';
@@ -333,15 +344,15 @@ export function hudHtml(s: HudState, sheet = ''): string {
     ? `<div class="row"><span>Parts par ${partsPar}</span><span>${s.strokes ? 'Run' : 'Build'}</span></div>
     <div class="row obj"><span>Objective</span><span>${esc(objectiveText(d.objective))}</span></div>`
     : outcome
-    ? `<div class="row"><span>Shot ${s.strokes}</span>${d.objective.kind === 'hold' ? `<span>Pulled <b class="down${(s.pulled ?? 0) > 0 ? '' : ' none'}">${pct(s.pulled ?? 0)}</b></span>` : `<span>Down <b class="down${(s.collapse ?? 0) > 0 ? '' : ' none'}">${pct(s.collapse ?? 0)}</b></span>`}</div>
+    ? `<div class="row"><span>Shot ${s.strokes}</span>${d.objective.kind === 'hold' ? fit(`<span>Pulled <b class="down${(s.pulled ?? 0) > 0 ? '' : ' none'}">${pct(s.pulled ?? 0)}</b></span>`, 'Pulled 100%') : fit(`<span>Down <b class="down${(s.collapse ?? 0) > 0 ? '' : ' none'}">${pct(s.collapse ?? 0)}</b></span>`, 'Down 100%')}</div>
     ${s.ticks?.length ? meterHtml(d.objective.kind === 'hold' ? s.pulled ?? 0 : s.collapse ?? 0, s.ticks, d.objective.kind === 'hold' ? 'pulled' : 'down') : ''}
-    <div class="row obj"><span>Objective</span><span class="${s.met ? 'ok' : ''}">${esc(objectiveText(d.objective))}${s.met ? ' ✓' : ''}</span></div>`
+    <div class="row obj"><span>Objective</span>${fit(`<span class="${s.met ? 'ok' : ''}">${esc(objectiveText(d.objective))}${s.met ? ' ✓' : ''}</span>`, `${objectiveText(d.objective)} ✓`)}</div>`
     : `<div class="row"><span>Par ${d.par}</span><span>Stroke ${s.strokes}</span></div>${d.objective.kind === 'collapse' ? parCollapseRow(d.objective.min, s) : ''}${d.push?.length && s.strokes === 0 ? `<div class="hint small push-hint">${PUSH_HINT}</div>` : ''}`;
   const fz = s.freezes;
   const freezes = fz ? `<div class="row"><span>Freezes</span><span class="${fz.left ? '' : 'spent'}">${fz.left} / ${fz.total}</span></div>` : '';
   const crowns = d.objective.kind === 'hold' ? keepRow(s.crownsDown, s.crownsTotal)
-    : partsPar !== undefined ? `<div class="row"><span>Bell</span><span class="crowns${s.crownsDown >= s.crownsTotal && s.crownsTotal ? ' ok' : ''}">${s.crownsDown >= s.crownsTotal && s.crownsTotal ? 'rung ✓' : 'not rung'}</span></div>`
-    : s.crownsTotal ? `<div class="row"><span>${d.objective.kind === 'quake' ? 'Condemned down' : 'Crowns'}</span><span class="crowns">${s.crownsDown} / ${s.crownsTotal}</span></div>` : '';
+    : partsPar !== undefined ? `<div class="row"><span>Bell</span>${fit(`<span class="crowns${s.crownsDown >= s.crownsTotal && s.crownsTotal ? ' ok' : ''}">${s.crownsDown >= s.crownsTotal && s.crownsTotal ? 'rung ✓' : 'not rung'}</span>`, 'not rung')}</div>`
+    : s.crownsTotal ? `<div class="row"><span>${d.objective.kind === 'quake' ? 'Condemned down' : 'Crowns'}</span>${fit(`<span class="crowns">${s.crownsDown} / ${s.crownsTotal}</span>`, `${s.crownsTotal} / ${s.crownsTotal}`)}</div>` : '';
   const act = slotAction(s);
   const button = slotHtml(act, s);
   const slot = `<div class="row slot-row${act ? '' : ' idle'}"><span class="slot${act ? '' : ' empty'}">${button}</span><span class="small note">${act ? SLOT_NOTE[act] : ''}</span>${touchActs(s.strokes)}</div>`;
@@ -441,6 +452,12 @@ export function tallyHtml(level: LevelDef, score: LevelScore | null, over: strin
  * the buttons): one column as before, two side by side on a phone held sideways (GAME_CSS, docked).
  * Score lines slam in one by one, then the stamp and stars.
  */
+/**
+ * The phone strip's toggle (layout.ts card strip, PT30): the strip shows the name, stamp, stars, reason and buttons in
+ * the band the docked HUD held; Details opens the whole card, Less folds it again. Hidden but on a phone's strip (ui.ts).
+ */
+const CARD_MORE = '<button data-act="card" class="more" title="Show or fold the rest of the card"><span class="m-more">Details</span><span class="m-less">Less</span></button>';
+
 export function resultHtml(level: LevelDef, score: LevelScore | null, strokes: number, forward: boolean | CardForward, canSave = false, extra = '', canUndo = false, mode: { facts?: CardFacts; modeUi?: boolean } = {}): string {
   const outcome = scoringOf(level) === 'outcome';
   // A Rube Lab level's one plunger is no stroke to count: its line is the parts used against the parts par.
@@ -467,6 +484,7 @@ export function resultHtml(level: LevelDef, score: LevelScore | null, strokes: n
   const points = card.points ? `${lines}
     <div class="line total" style="animation-delay:${after}s" title="The lines' sum, never below 0"><span>Total</span><span>${fmtPoints(score.total)}</span></div>` : '';
   return `<div class="c1">
+    ${CARD_MORE}
     <div class="name">${esc(playerName(level))}</div>
     ${level.custom ? `<div class="sub custom">${CUSTOM_NOTE}</div>` : ''}
     <div class="sub">${esc(card.sub)}</div>

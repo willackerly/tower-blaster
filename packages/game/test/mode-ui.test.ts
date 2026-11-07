@@ -78,7 +78,7 @@ describe("each new mode's HUD (PT23)", () => {
     const html = hud(RL1, 0);
     expect(html).toContain(`Parts par ${RL1.build!.par}`);
     expect(html).not.toMatch(/Par 1|Stroke|Leverage/);
-    expect(html).toMatch(/<span>Bell<\/span><span class="crowns">not rung/);
+    expect(html).toMatch(/<span>Bell<\/span><span class="fit"><span class="crowns">not rung/);
     expect(hud(RL1, 1, [], { crownsDown: 1, crownsTotal: 1 })).toMatch(/class="crowns ok">rung ✓/);
   });
   it('the help line hides "click: fire" in a mode with nothing to fire, and the touch line has a wording of its own', () => {
