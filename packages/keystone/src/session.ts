@@ -9,7 +9,7 @@ import { castStars, type CompiledLevel, type Scoring, scoringOf, settleOf } from
 import type { IceCrack } from './ice.ts';
 import { buildingOnly, collapseFraction, floorPotential_mJ, homePotential_mJ, homeSkyline, objectiveMet, type OutcomeFacts, outcomeScore } from './outcome.ts';
 import { ammoInFlight, bellRung, crownDown, energyFired, heritageBroken, heritageFallen, leverage, levelScore, type LevelScore, levelTier, refereedScore, roundLeverage, type Observation, type Reductions, runWindowSteps, type SettleRule, type SettleState, settleCap, settleUpdate, type ShotOutcome, skyline, spillOf } from './rules.ts';
-import type { RackItem } from './rack.ts';
+import { PULL, type RackItem } from './rack.ts';
 import { placedCost } from './build.ts';
 import { ammoKE, type PlungerShot, pullEnergy, type QuakeShot, type Shot, shotEvent } from './shots.ts';
 import { quakeEnergy, quakeRefusal } from './quake.ts';
@@ -177,8 +177,12 @@ export class Session {
    * (freezesLeft).
    */
   canFire(ammo: RackItem): boolean {
+    if (ammo === PULL && this.liveOnly) return false;
     return (this.phase === 'aiming' || (this.phase === 'running' && this.freezesLeft > 0)) && this.rackLeft.includes(ammo);
   }
+
+  /** A Cut level (LevelDef.cut) while no shot runs: its pulls wait for one. */
+  private get liveOnly(): boolean { return this.level.def.cut === true && this.phase !== 'running'; }
 
   /**
    * How many more shots may go in while another runs (LevelDef.freeze, Bullet Time): the level's
@@ -196,6 +200,7 @@ export class Session {
    */
   pullRefusal(body: number): string | null {
     const m = this.level.meta;
+    if (this.liveOnly) return 'a Cut level\'s pulls go in while a wave runs: start it first';
     if (!Number.isInteger(body) || body < 0 || body >= m.n) return `body ${body} is not a structure body (0 to ${m.n - 1})`;
     if (m.crowns.includes(body)) return `body ${body} is a crown`;
     if (m.heritage.includes(body)) return `body ${body} is heritage`;

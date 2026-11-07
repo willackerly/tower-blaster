@@ -21,7 +21,7 @@ const MATERIAL_NAMES = MATERIALS.map((m) => m.name) as readonly string[];
 /** The LevelDef a JSON value describes, or an error saying where it is wrong. */
 export function parseLevelDef(v: unknown, where = 'level'): LevelDef {
   const o = object(v, where);
-  only(o, ['format', 'id', 'name', 'version', 'world', 'unit', 'gap', 'parts', 'lot', 'crownLine', 'objective', 'par', 'rack', 'launcher', 'lGold', 'solutions', 'scoring', 'stars', 'autobank', 'settle', 'runWindow', 'freeze', 'physics', 'custom', 'build', 'charges', 'rube'], where);
+  only(o, ['format', 'id', 'name', 'version', 'world', 'unit', 'gap', 'parts', 'lot', 'crownLine', 'objective', 'par', 'rack', 'launcher', 'lGold', 'solutions', 'scoring', 'stars', 'autobank', 'settle', 'runWindow', 'freeze', 'physics', 'custom', 'build', 'charges', 'rube', 'cut'], where);
   if (o.format !== undefined && o.format !== LEVEL_FILE_FORMAT) throw new Error(`${where}.format should be "${LEVEL_FILE_FORMAT}"`);
   const id = str(o.id, `${where}.id`);
   if (!/^[\w-]{1,32}$/.test(id)) throw new Error(`${where}.id must be 1 to 32 letters, digits, - or _`);
@@ -61,6 +61,10 @@ export function parseLevelDef(v: unknown, where = 'level'): LevelDef {
   if (o.rube !== undefined) {
     if (o.rube !== true) throw new Error(`${where}.rube must be true`);
     def.rube = true;
+  }
+  if (o.cut !== undefined) {
+    if (o.cut !== true) throw new Error(`${where}.cut must be true`);
+    def.cut = true;
   }
   return def;
 }

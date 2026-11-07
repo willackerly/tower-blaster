@@ -14,12 +14,15 @@ const MINUTES = 60_000;
 export interface WaveGpuCase {
   name: string;
   def: LevelDef;
-  shot: (c: ReturnType<typeof compileLevel>) => Shot;
+  /** The line: one shot, or a push and the live cuts after it (Shot.after). */
+  shot: (c: ReturnType<typeof compileLevel>) => Shot | Shot[];
   /** Tower indices (towerGroups order) that fall, in the order they fall. */
   falls: number[];
   cleared: boolean;
   /** Most structure bodies awake at once: the towers that fall plus what their debris reaches. */
   awakeMax: number;
+  /** Heritage bodies broken at the end, when the case judges it. */
+  heritage?: number;
 }
 
 /** Registers the GPU test of one level's cases. */
@@ -40,13 +43,14 @@ export function waveGpuSuite(id: string, cases: WaveGpuCase[]): void {
       expect(player.engine).toBe('gpu');
       for (const k of cases) {
         const c = compileLevel(k.def), groups = towerGroups(c);
-        const r = await player.wave(k.def, [k.shot(c)], { groups, maxSteps: 2400, fell: 1 });
+        const r = await player.wave(k.def, [k.shot(c)].flat(), { groups, maxSteps: 2400, fell: 1 });
         const order = r.fellAt.flatMap((t, i) => (t >= 0 ? [i] : [])).sort((a, b) => r.fellAt[a]! - r.fellAt[b]!);
         console.log(`${id} ${k.name} on ${player.adapter}: ${r.cleared ? 'clear' : 'miss'}, D ${r.collapse.toFixed(3)}, order ${order.join(' ')}, settled ${r.settledSeconds.toFixed(1)} s, awake max ${r.awakeMax} mean ${r.awakeMean.toFixed(0)} of ${c.meta.n}, ${(r.ms / 1000).toFixed(1)} s`);
         expect(r.limits).toEqual([]);
         expect(order, k.name).toEqual(k.falls);
         expect(r.cleared, k.name).toBe(k.cleared);
         expect(r.awakeMax, k.name).toBeLessThanOrEqual(k.awakeMax);
+        if (k.heritage !== undefined) expect(r.heritageBroken, k.name).toBe(k.heritage);
       }
     }, 9 * MINUTES);
   });

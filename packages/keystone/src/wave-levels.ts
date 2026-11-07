@@ -51,9 +51,21 @@ export function starter(x: number, z: number, side: 1 | -1): Part {
   return { kind: 'piece', at: [cx, STARTER.tall / 2, face + side * (STARTER.gap + STARTER.thick)], half: [PITCH / 2 + 0.5, STARTER.tall / 2, STARTER.thick], material: 'plaster' };
 }
 
-/** A north-south street of towers at column x, corners at the cells `zs` (south to north), a starter at each end. */
-export function street(x: number, zs: readonly number[]): Part[] {
-  return [...zs.map((z) => tower(x, z)), starter(x, zs[0]!, -1), starter(x, zs.at(-1)!, 1)];
+/** A north-south street of towers at column x, corners at the cells `zs` (south to north), a starter at each end (or only the south one). */
+export function street(x: number, zs: readonly number[], ends: 'both' | 'south' = 'both'): Part[] {
+  return [...zs.map((z) => tower(x, z)), starter(x, zs[0]!, -1), ...(ends === 'both' ? [starter(x, zs.at(-1)!, 1)] : [])];
+}
+
+/** The relay slab's half-extents, h, on the lattice pitch: build.ts catalog's 'relay' (as wide and tall as a tower, 1 h thick). */
+export const RELAY_HALF: V3 = [PITCH / 2 + 0.5, 4, 0.5];
+
+/**
+ * An authored relay slab across the street at column x, `into` h north of the north face of the tower whose corner
+ * is at cell z (the avenue's south edge). As the catalogue's relay: wave-levels.test.ts pins 3.5 to 6 h into a
+ * 10-cell avenue as carrying both ways.
+ */
+export function relaySlab(x: number, z: number, into: number): Part {
+  return { kind: 'piece', at: [(x + 1) * PITCH, RELAY_HALF[1], (z + 1.5) * PITCH + 0.5 + into + RELAY_HALF[2]], half: [...RELAY_HALF], material: 'plaster' };
 }
 
 /** Physics and window every Wavefront level plays at: GPU sleep, the structure asleep until reached, a 60 s run window. */
@@ -97,4 +109,28 @@ export const W4: LevelDef = {
   ...WAVE_RULES,
 };
 
-export const WAVE_LEVELS: readonly LevelDef[] = [W3, W4];
+/** W5's street: slums (3 towers), an avenue with a relay, slums (3), an avenue with a relay, the village (2, heritage). */
+export const W5_TOWERS: readonly number[] = [0, 4, 8, 20, 24, 28, 40, 44];
+/** W5's village: its towers' indices in W5_TOWERS, whose top courses are heritage. */
+export const W5_VILLAGE: readonly number[] = [6, 7];
+
+/**
+ * W5 Firebreak (Cut): one street with a starter at its south end. Three slum towers, a relay slab across a 10-cell
+ * avenue, three more, a second relay across a second avenue, then the village: two towers with heritage tops,
+ * judged standing at the settle. A pull goes in only while a shot runs (LevelDef.cut), so the wave is cut live:
+ * push the starter, then pull the second relay before the front reaches it. The slums fall, the village stands,
+ * in par. Pull nothing (or too late) and the village falls with them, a heritage star gone; pull the first relay
+ * and the second slums stand, short of the collapse the level asks for.
+ */
+export const W5: LevelDef = {
+  id: 'W5', name: 'Firebreak', version: 1, world: 7, scoring: 'par', par: 2, rack: ['cannonball', 'pull'],
+  parts: [
+    ...W5_TOWERS.map((z, k) => (W5_VILLAGE.includes(k) ? { ...tower(0, z), courses: [{ k: 7, role: 'heritage' as const }] } : tower(0, z))),
+    starter(0, 0, -1), relaySlab(0, 8, 4.75), relaySlab(0, 28, 4.75),
+  ],
+  lot: { min: [-6, -4], max: [8, 49] }, crownLine: 2, objective: { kind: 'collapse', min: 0.33 }, heritage: 'standing', cut: true,
+  launcher: { radius: 32, y: 6, dropY: 12 },
+  ...WAVE_RULES,
+};
+
+export const WAVE_LEVELS: readonly LevelDef[] = [W3, W4, W5];

@@ -5,17 +5,20 @@
 //   fells one tower.
 // - W4 Avenue: bare, the wave dies at the avenue from either end; a relay slab built 3.5 to 6 h into it (of 9.7 h
 //   between the towers) carries it the length of the street, both ways.
-// The GPU plays W3's clean line and a W4 relay in wave-gpu-W*.test.ts.
+// - W5 Firebreak (Cut): pulling the second relay while the wave runs, up to 6 s after the push, saves the village
+//   in par (3 stars); no pull or a pull at 8 s lets it fall (2 stars); pulling the first relay leaves too little
+//   down to clear.
+// The GPU plays W3's clean line, a W4 relay and W5's cut in wave-gpu-W*.test.ts.
 import { describe, expect, it } from 'vitest';
 import { RapierEngine } from '@tb/adapter-rapier';
-import { compileLevel, type LevelDef, type Shot, validateLevel, W3, W3_STREETS, W4, W4_TOWERS, WAVE_LEVELS, type WaveResult, wavePlay } from '@tb/keystone';
+import { compileLevel, type LevelDef, parStars, type Shot, validateLevel, W3, W3_STREETS, W4, W4_TOWERS, W5, W5_TOWERS, WAVE_LEVELS, type WaveResult, wavePlay } from '@tb/keystone';
 import { build, ground } from '../src/rube.ts';
 import { pushShot, starterPart, starterShot, towerFace, towerGroups } from '../src/wave.ts';
 
-async function play(def: LevelDef, shot: (c: ReturnType<typeof compileLevel>) => Shot): Promise<WaveResult & { order: number[] }> {
+async function play(def: LevelDef, shot: (c: ReturnType<typeof compileLevel>) => Shot | Shot[]): Promise<WaveResult & { order: number[] }> {
   const c = compileLevel(def), e = new RapierEngine();
   try {
-    const r = await wavePlay(e, c, [shot(c)], { groups: towerGroups(c), maxSteps: 5000, fell: 1 });
+    const r = await wavePlay(e, c, [shot(c)].flat(), { groups: towerGroups(c), maxSteps: 6000, fell: 1 });
     return { ...r, order: r.fellAt.flatMap((t, k) => (t >= 0 ? [k] : [])).sort((a, b) => r.fellAt[a]! - r.fellAt[b]!) };
   } finally { e.dispose(); }
 }
@@ -25,7 +28,7 @@ const w3Street = (s: number) => W3_STREETS[s]![1].map((_, k) => W3_STREETS.slice
 /** Hits on a starter's outer face: across it (h off its middle, the slab is 2.02 wide) and up it (of its height), over its upper two thirds. */
 const HITS = [{ dx: 0, fy: 2 / 3 }, { dx: 0.9, fy: 0.95 }, { dx: -0.9, fy: 0.5 }];
 
-describe('Wavefront Steer levels on Rapier', () => {
+describe('Wavefront levels on Rapier', () => {
   it('every level compiles clean and plays asleep in its window', () => {
     for (const l of WAVE_LEVELS) {
       const k = compileLevel(l);
@@ -81,5 +84,26 @@ describe('Wavefront Steer levels on Rapier', () => {
       expect(r.order).toEqual(dir > 0 ? W4_TOWERS.map((_, k) => k) : W4_TOWERS.map((_, k) => 6 - k));
       expect(r.cleared).toBe(true);
     }
+  });
+
+  // W5's relays are its last two bodies (the starter, then the relays in the street's order).
+  const W5_LINES = [
+    { name: 'no pull', pull: null, at: 0, falls: 8, cleared: true, heritage: true, stars: 2 },
+    { name: 'the second relay pulled 1 s after the push', pull: 'R2', at: 60, falls: 6, cleared: true, heritage: false, stars: 3 },
+    { name: 'the second relay pulled 5 s after the push', pull: 'R2', at: 300, falls: 6, cleared: true, heritage: false, stars: 3 },
+    { name: 'the second relay pulled 10 s after the push (too late)', pull: 'R2', at: 600, falls: 8, cleared: true, heritage: true, stars: 2 },
+    { name: 'the first relay pulled', pull: 'R1', at: 60, falls: 3, cleared: false, heritage: false, stars: 0 },
+  ];
+  it.for(W5_LINES)('W5 $name: $falls towers fall, $stars stars', { timeout: 120_000 }, async (t) => {
+    const r = await play(W5, (c) => {
+      const push = starterShot(c, starterPart(W5, 0, 1), 1), n = c.meta.n;
+      return t.pull ? [push, { ammo: 'pull', body: t.pull === 'R1' ? n - 2 : n - 1, after: t.at }] : [push];
+    });
+    const strokes = t.pull ? 2 : 1;
+    console.log(`W5 ${t.name}: ${r.phase}, D ${r.collapse.toFixed(3)}, heritage ${r.heritageBroken}, order ${r.order.join(' ')}`);
+    expect(r.order).toEqual(W5_TOWERS.slice(0, t.falls).map((_, k) => k));
+    expect(r.cleared).toBe(t.cleared);
+    expect(r.heritageBroken > 0).toBe(t.heritage);
+    expect(parStars(r.cleared, strokes, W5.par, r.heritageBroken)).toBe(t.stars);
   });
 });

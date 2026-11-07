@@ -10,8 +10,8 @@ There are three verbs:
 
 Status (2026-11-07):
 
-- **Shipped:** the run window and bodies that start asleep (C22), the wave meter (`wavePlay`), Steer's two levels W3 Fall Line and W4 Avenue, and the Wavefront series on the door.
-- **Not yet built:** Lay (W1 and W2, which wait on Rube Lab's parts par, #268), Cut, a 10k Steer city (held until X9 lands on Metal), and the wave-map overlay.
+- **Shipped:** the run window and bodies that start asleep (C22), the wave meter (`wavePlay`), Steer's two levels W3 Fall Line and W4 Avenue, Cut (`LevelDef.cut`) and its level W5 Firebreak, and the Wavefront series on the door.
+- **Not yet built:** Lay (W1 and W2, on Rube Lab's parts par from #268), a 10k Steer city (held until X9 lands on Metal), and the wave-map overlay.
 
 ## C22: the run window, and bodies that start asleep
 
@@ -60,12 +60,25 @@ A tower here is the game's own: 2 × 2 columns of loose 0.5 m plaster cubes, 8 c
 - An upright slab 1 h thick carries the wave both ways from a contiguous window 3.5 to 6 h past the near tower, in an avenue 9.7 h wide.
 - A 0.5 h slab's window is about half as wide, and an 11-cell avenue does not widen the window.
 
+## Cut: pulls only while the wave runs
+
+The game steps physics only while a shot runs, so nothing moves while the player aims. Without a rule, a Cut level is not a Cut level: the player pulls the firebreak out before pushing, at leisure, and the "live" verb becomes a build step.
+
+**What shipped:** `LevelDef.cut: true` (in the level hash, and a key in the viewer's level files). On such a level a pull goes in only while a shot runs. `Session.canFire('pull')` is false in every other phase, and `pullRefusal` says why ("a Cut level's pulls go in while a wave runs: start it first"). Rapid fire is the way the player gets a second action into a running shot; with rapid fire off, Bullet Time (no freeze limit on these levels) gives the same window.
+
+**Alternatives considered:**
+
+- **Allow the pre-cut (rejected).** It turns the verb into "remove the relay, then push", which is a puzzle about reading the layout, not about timing. Steer already covers that.
+- **Charges armed before the shot (rejected for now).** C5's cutter charge, armed in aim and fired by a timeline, would let the player plan the cut. It is a fine later variant, but it hides the live read of the front that Cut is about.
+- **Keep physics running while aiming on Cut levels (rejected).** It changes the game loop for one family and breaks the camera and aim feel the rest of the game relies on.
+
 ## The levels
 
 | id | name | verb | the design | what the tests pin |
 |---|---|---|---|---|
 | W3 | Fall Line | Steer | Three north-south streets 10 cells apart: the west one unbroken (8 towers), the middle and east ones each broken by a 9-cell gap. A starter at each end of each street. Par 1, two cannonballs, collapse at least 0.16. | Rapier: each street from each end fells its towers in order to its first gap (8, 3, 2 or 4), the rest standing, from 3 hit points on the starter. Only the west street clears in one stroke, and a push across an avenue fells one tower. GPU: the west street clears. |
 | W4 | Avenue | Steer, build | One street broken by a 10-cell avenue (3 towers, then 4), with a budget of one relay slab (cost 16). Par 1, two cannonballs, collapse at least 0.4. | Rapier: bare, the wave dies at the avenue from either end. A relay built (through `BuildSession`) 3.5, 4, 4.5, 5, 5.5 or 6 h into the avenue carries it the length of the street, both ways. GPU: with a relay, the street clears. |
+| W5 | Firebreak | Cut | One street of 8 towers in three blocks (3, 3, 2) joined by two built-in relay slabs, a starter at the south end, and a village (heritage on the top course of towers 7 and 8) at the north end. Cut level, par 2 (push, pull), cannonball and pull, collapse at least 0.33, heritage judged standing. | Rapier: with no pull, all 8 fall (village lost, 2 stars). Pulling the second relay 60 or 300 steps after the push fells 6 and saves the village (3 stars); at 600 steps it is too late (8 fall, 2 stars). Pulling the first relay fells 3 and misses the objective. GPU: pull at 120 steps, 6 fall, the village stands. |
 
 Every Wavefront level plays under `WAVE_RULES`: GPU sleep, the structure asleep from the start, and a 60 s run window.
 
@@ -78,6 +91,7 @@ On W4, two strokes clear the bare level too: each half of the street pushed from
 | W4 bare, north | miss, 3 towers | 0.271 | 129 / 64 of 226 | 5.9 s |
 | W4 relay, north | clear, 7 towers | 0.569 | 227 / 124 of 227 | 9.1 s |
 | W3 west street, north | clear, 8 towers | 0.186 | 258 / 149 of 646 | 8.8 s |
+| W5 push, pull relay 2 at 120 steps | clear, 6 towers, village standing | 0.430 | 218 max of 259 (mean not logged) | |
 
 The awake count is probe X1's meter (every 5 steps, from the first shot). With the city asleep from the start, the front stays on the street the wave runs down. Metal casts and timings go through the coordinator's Mac queue (`TB_CHANNEL=chrome` on these files). SwiftShader seconds are never performance numbers.
 
@@ -100,4 +114,5 @@ The awake count is probe X1's meter (every 5 steps, from the first shot). With t
 | `packages/keystone-lab/test/run-window-ref.test.ts` | reference | A 76-domino line runs to its end inside a 60 s window. Without it, v4 and v1 settle early. |
 | `packages/physics-ref/test/asleep.test.ts`, `packages/adapter-rapier/test/asleep.test.ts`, `packages/physics-gpu/test/engine-asleep.test.ts` | each | Bodies that start asleep stay asleep until reached (GPU), or run awake bit-identical to unflagged (reference, Rapier). |
 | `packages/keystone-lab/test/wave-levels.test.ts` | Rapier | W3 and W4 as designed (above). |
-| `packages/keystone-lab/test/wave-gpu-W3.test.ts`, `wave-gpu-W4.test.ts` | GPU | The clean line of each level on the game's engine, the awake count logged and bounded. |
+| `packages/keystone/test/cut.test.ts` | none | A Cut level refuses a pull while aiming, the same level without `cut` accepts it, and `cut` is in the hash. |
+| `packages/keystone-lab/test/wave-gpu-W3.test.ts`, `wave-gpu-W4.test.ts`, `wave-gpu-W5.test.ts` | GPU | The clean line of each level on the game's engine, the awake count logged and bounded. |

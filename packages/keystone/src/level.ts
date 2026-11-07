@@ -213,6 +213,11 @@ export interface LevelDef {
    * hash (URL key keystone.freeze), so stars cast without a budget never show with one.
    */
   freeze?: number;
+  /**
+   * Wavefront's Cut (docs/game/wavefront.md): a pull goes in only while a shot runs, so a wave is cut live,
+   * never before it starts (with rapid fire, or in Bullet Time when the player has rapid fire off). Part of the hash.
+   */
+  cut?: true;
   /** The physics the level plays at (default Keystone's: PHYSICS_DEFAULTS). Part of the level hash, so stars cast at one setting never show at another. */
   physics?: PhysicsBlock;
   /** Aftershock (quake.ts): what the quake dial allows, for a level whose rack holds a quake. Part of the hash. */
