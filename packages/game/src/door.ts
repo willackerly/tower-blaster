@@ -416,10 +416,11 @@ export function preaimMode(q: URLSearchParams): PreaimMode {
  * (solutions.opener: a shot that wins it alone, PT13), else the first shot of its best recorded line
  * (solutions.ace, else solutions.par), or null. Under auto only the series' first level has
  * one, and only until the player has a record for it: the first-minute promise is for a first visit, and
- * handing every level its best opener would give the stars away.
+ * handing every level its best opener would give the stars away. A teaching opener (solutions.teach: Wavefront's
+ * starter push, which starts the wave without winning the level, PT39) is offered on a first visit of any level.
  */
 export function openerFor(def: LevelDef, index: number, mode: PreaimMode, played: boolean): Shot | null {
-  if (mode === '0' || (mode === 'auto' && (index !== 0 || played))) return null;
+  if (mode === '0' || (mode === 'auto' && (played || (index !== 0 && !def.solutions?.teach)))) return null;
   // A one-shot ace's first shot is the whole answer (Aftershock's ace quake: agent playtest round 2, PT23): never hand it over.
   const ace = def.solutions?.ace, aceFirst = ace && ace.length > 1 ? ace[0] : undefined;
   return def.solutions?.opener ?? aceFirst ?? def.solutions?.par?.[0] ?? null;

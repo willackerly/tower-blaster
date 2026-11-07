@@ -6,7 +6,7 @@
 // and which start verb it has (hudProfile), and what its result card says (cardModel). hud.ts draws both.
 // A mode thread changes its mode's content here (PROFILES, MODE_CARDS); the mechanism is the same for all.
 // keystone.modeui=0 draws the projectile HUD and card for every mode, as before.
-import { type LevelDef, type LevelScore, type Objective } from '@tb/keystone';
+import { HERITAGE_LOST, type LevelDef, type LevelScore, type Objective } from '@tb/keystone';
 
 /** How a level is played: aimed shots (every series before the new modes), or one of the modes with a panel of its own. */
 export type PlayMode = 'shot' | 'fuse' | 'quake' | 'rube';
@@ -172,7 +172,7 @@ export function cardModel(def: LevelDef, score: LevelScore, facts: CardFacts | u
   const failed = score.stars === 0;
   if (failed) {
     card.reason = failReason(def, score, facts);
-    if (heritageFails(def.objective) && facts.heritageBroken > 0) { card.stamp = 'HERITAGE LOST'; card.stampTone = 'bad'; }
+    if (heritageFails(def.objective) && facts.heritageBroken > 0) { card.stamp = HERITAGE_LOST; card.stampTone = 'bad'; }
   }
   const mode = MODE_CARDS[playMode(def)];
   if (!mode) return card;
