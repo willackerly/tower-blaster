@@ -24,8 +24,9 @@ const builtDef = (def: LevelDef, steps: Parameters<typeof masonBuild>[1]) => {
 };
 
 /**
- * Registers the GPU tests of one Mason level. CI (O5) runs them for one representative level only
- * (`representative`, MT4: mason-gpu-MT4.test.ts); the rest run with PHYSICS_GPU_SLOW=1 (nightly).
+ * Registers the GPU tests of one Mason level. CI (O5) runs them for one representative level
+ * (`representative`, MT4: mason-gpu-MT4.test.ts) and for MT5, the only level whose test is a quake (field events
+ * through the islands on the GPU); the rest run with PHYSICS_GPU_SLOW=1 (nightly).
  */
 export function masonGpuSuite(def: LevelDef, representative = false): void {
   const RUN = representative || SLOW;

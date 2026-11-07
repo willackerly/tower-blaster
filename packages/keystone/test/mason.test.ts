@@ -5,11 +5,12 @@
 // per island in fixed point, and the score's two lines, stars and thresholds
 // agree. Physics (the judge on the reference and the GPU) is in keystone-lab.
 import { describe, expect, it } from 'vitest';
-import { Islands, reduceIslands, type Snapshot } from '@tb/engine-api';
+import { Islands, onFieldGrid, reduceIslands, type Snapshot } from '@tb/engine-api';
 import {
   BuildSession, compileLevel, type Hit, type LevelDef, MASON_CLASS, MASON_CLEAR, MASON_HOLD, MASON_ITERATIONS, MASON_JITTER, MASON_LEVELS, MASON_WORLDS,
   masonBodies, masonClass, masonIssues, masonLines, masonPasses, masonProbes, masonQuestions, masonScore, masonStars, masonThresholds, masonTimeline,
-  masonWorld, MT1, MT2, MT4, obbOfBody, obbOverlap, physicsOf, TOUCH, unitOf, validateLevel,
+  masonWorld, MT1, MT2, MT4, MT5, obbOfBody, obbOverlap, physicsOf, TOUCH, unitOf, validateLevel,
+  masonField, masonQuakeOf, quakeInputs, RETROFIT_QUAKE,
 } from '@tb/keystone';
 
 const ground = (def: LevelDef, x: number, z: number): Hit => {
@@ -28,7 +29,7 @@ function builtMT2(extra: Partial<LevelDef> = {}): LevelDef {
 
 describe("Mason's Trial levels", () => {
   it('every level validates, has an empty rack and a budget, and plays at 40 iterations', () => {
-    expect(MASON_LEVELS.map((d) => d.id)).toEqual(['MT1', 'MT2', 'MT3', 'MT4']);
+    expect(MASON_LEVELS.map((d) => d.id)).toEqual(['MT1', 'MT2', 'MT3', 'MT4', 'MT5']);
     for (const def of MASON_LEVELS) {
       const c = compileLevel(def);
       expect(validateLevel(c), def.id).toEqual([]);
@@ -87,6 +88,33 @@ describe("Mason's Trial levels", () => {
       expect(t.presettle).toBe(physicsOf(def).presettle);
       expect(t.test).toBe(t.presettle + (def.mason!.hold ?? MASON_HOLD));
       expect(t.end).toBe(t.test + def.mason!.run);
+    }
+  });
+});
+
+describe("the quake (one profile with Aftershock's retrofits)", () => {
+  it('masonQuakeOf converts the dial units, and refuses an axis other than x (0) or z (90)', () => {
+    expect(masonQuakeOf({ ...RETROFIT_QUAKE, axis: 0 })).toEqual({ peak: 0.3, hz: 1, seconds: 1, axis: 'x' });
+    expect(masonQuakeOf({ peak: 45, hz: 15, sec: 25, axis: 90 })).toEqual({ peak: 0.45, hz: 1.5, seconds: 2.5, axis: 'z' });
+    for (const axis of [45, 180, 270, -90]) expect(() => masonQuakeOf({ ...RETROFIT_QUAKE, axis })).toThrow(/x \(0 degrees\) or z \(90\)/);
+  });
+
+  it("a Mason quake's keys are Aftershock's shot path's for the same quake at the test step, along x and along z", () => {
+    for (const axis of [0, 90]) {
+      const def: LevelDef = { ...MT5, mason: { ...MT5.mason!, quake: masonQuakeOf({ ...RETROFIT_QUAKE, axis }) } };
+      const c = compileLevel(def), test = masonTimeline(c).test;
+      // A Mason quake level's gravity is on the field grid, as a quake rack's is, so the last key restores it exactly.
+      expect(c.scene.gravity.every(onFieldGrid), `axis ${axis}`).toBe(true);
+      const mason = masonField(c), shot = quakeInputs(c, { ammo: 'quake', ...RETROFIT_QUAKE, axis }, test);
+      expect(mason, `axis ${axis}`).toEqual(shot);
+      expect(mason.length).toBeGreaterThan(30);
+      // The first key is the first step whose load is off the grid's zero (sin 0 = 0 at the test step itself).
+      expect([test, test + 1]).toContain(mason[0]!.step);
+      expect(mason.at(-1)!.gravity).toEqual(c.scene.gravity);
+      // The side load is along the axis only, and reaches about the profile's 0.3 g.
+      const side = (e: (typeof mason)[number]) => e.gravity![axis ? 2 : 0], across = (e: (typeof mason)[number]) => e.gravity![axis ? 0 : 2];
+      expect(mason.every((e) => across(e) === 0), `axis ${axis}`).toBe(true);
+      expect(Math.max(...mason.map((e) => Math.abs(side(e)))) / 9.81).toBeCloseTo(0.3, 2);
     }
   });
 });
