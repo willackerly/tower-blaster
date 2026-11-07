@@ -115,6 +115,7 @@ export function installDoor(o: DoorOptions, doc: Document = document): DoorPage 
       case 'camera': set({ camera: arg === 'dynamic' ? 'dynamic' : 'still' }); break;
       case 'rapid': set({ rapid: arg === 'on' }); break;
       case 'duelview': set({ duelView: arg === 'on' }); break;
+      case 'handoff': set({ handoff: arg === 'on' }); break;
       case 'launch': set({ launch: arg === 'level' ? 'level' : 'high' }); break;
       case 'marks': set({ marks: arg === 'on' }); break;
       case 'layout': set({ layout: arg === 'classic' ? 'classic' : 'docked' }); break;

@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest';
 import { emptySnapshot } from '@tb/engine-api';
 import { compileLevel, D1, D2, Duel, duelLevel, DUELS, outcomeScore, type Shot } from '@tb/keystone';
 import { doorDuels, doorHtml, doorOnLoad, duelsOnDoor } from '../src/door.ts';
-import { duelHudHtml, duelResultHtml, sideOf } from '../src/duel-hud.ts';
+import { duelHudHtml, duelResultHtml, handoffHtml, handoffText, keepTallyHtml, ptsText, scoreFloatHtml, sideOf } from '../src/duel-hud.ts';
 import { hudHtml, rackChips } from '../src/hud.ts';
 import { goalsHudHtml, goalsMode, goalsResultHtml, sheetMode, sheetOpenAtLoad } from '../src/lot-hud.ts';
 import { duelOf, parseGameParams } from '../src/params.ts';
@@ -91,10 +91,12 @@ describe('siege table on the page', () => {
   it("the HUD names the ruleset, whose turn and from where, each side's keep and shots left; a shot from the wrong side says so", () => {
     const { d } = fresh();
     const block = duelHudHtml(d, d.refuse(shotAt(0)));
-    expect(block).toMatch(/Siege Table · Two Keeps/);
+    // The table is named Two Keeps, as its ruleset: the mode line does not say it twice (PT5 copy).
+    expect(block).toMatch(/Siege Table · two players/);
+    expect(block).not.toMatch(/Two Keeps/);
     expect(block).toMatch(/Gold to fire, from the west/);
     expect(block).toMatch(/duel-side on[^]*Gold ◂/);
-    expect(block).toMatch(/4 left/);
+    expect(block).toMatch(/4 shots left/);
     expect(block).toMatch(/Gold fires from its own side: turn the view/);
     // With the view's azimuth: off Gold's side the block says which way to drag (on a mouse; two fingers on touch), in place of the refusal.
     const off = duelHudHtml(d, d.refuse(shotAt(0)), 0);
@@ -116,11 +118,42 @@ describe('siege table on the page', () => {
     d.fired(shotAt(360));
     for (let i = 0; i < c.meta.n; i++) if (c.meta.part[i] === 3) s.pos[3 * i + 1] = 0.5 * c.frame.unit;
     d.settled(s);
+    // Blue's king is down, but Blue answers before the round (and the duel) ends: still no card.
+    expect(duelResultHtml(d)).toBe('');
+    // The card says what the shot did: Blue's blocks down, its king down.
+    expect(keepTallyHtml(d).replace(/<[^>]+>/g, '')).toMatch(/^\d+ blue blocks? down · Blue's king is down$/);
+    expect(handoffHtml(d, false)).toMatch(/class="tally">Gold's shot: /);
+    expect(handoffText(d, false)).toEqual({ head: "Blue's answer", foot: "Gold brought Blue's king down: bring Gold's down too for a draw. Pass the device to Blue · click to start" });
+    expect(duelHudHtml(d)).toMatch(/Blue answers, from the east/);
+    d.fired(shotAt(0));
+    d.settled(s);
     const html = duelResultHtml(d);
     expect(html).toMatch(/Gold wins/);
-    expect(html).toMatch(/Blue&#39;s keep fell · 1 shot/);
+    expect(html).toMatch(/Blue&#39;s keep fell · 2 shots/);
     expect(html).toMatch(/data-act="rematch"/);
     expect(html).toMatch(/data-act="again"/);
+  });
+
+  it('warns when the aim is on your own keep; the hand-over card names whose turn; Heraldry floats each shot\'s points', () => {
+    const { d } = fresh();
+    expect(duelHudHtml(d, null, 360, true)).toMatch(/own-aim">That's Gold's own keep/);
+    expect(duelHudHtml(d, null, 360, false)).not.toMatch(/own-aim/);
+    expect(handoffText(d, true)).toEqual({ head: "Gold's turn", foot: 'Pass the device to Gold · tap to start' });
+    expect(handoffHtml(d, true)).toMatch(/class="head" style="color:rgb\(/);
+    const c2 = compileLevel(duelLevel(D2)), s2 = emptySnapshot(c2.meta.n), d2 = new Duel(D2, c2);
+    s2.pos.set(c2.meta.home);
+    for (let i = 0; i < c2.meta.n; i++) s2.rot[4 * i + 3] = 1;
+    expect(scoreFloatHtml(d2)).toBe('');
+    d2.fired(shotAt(360));
+    for (let i = 0; i < c2.meta.n; i++) if (c2.meta.part[i] === 22 || (c2.meta.part[i] === 23 && i % 3 === 0)) s2.pos[3 * i + 1] = 0.5 * c2.frame.unit;
+    d2.settled(s2);
+    const t = d2.lastShot!;
+    expect(t).toMatchObject({ player: 0, rival: 6 });
+    expect(scoreFloatHtml(d2).replace(/<[^>]+>/g, '')).toBe(`+6 blue −${t.own} gold = +${6 - t.own}`);
+    expect(duelHudHtml(d2)).toMatch(new RegExp(`<b>${6 - t.own}</b> pts`));
+    expect(ptsText(1)).toBe('1 pt');
+    expect(ptsText(-1)).toBe('-1 pt');
+    expect(ptsText(0)).toBe('0 pts');
   });
 
   it('the door shows a Two players section with every table unless ?duels=0, and a duel URL keeps the door shut on auto', () => {
