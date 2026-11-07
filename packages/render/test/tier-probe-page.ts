@@ -13,7 +13,8 @@ export async function frames(width: number, height: number, toggles: Record<stri
 export async function dispatch() {
   const { device } = await sharedDevice({ timestamps: false });
   device.pushErrorScope('validation');
-  const d = await probeDispatch(device, { rounds: 2 });
+  // A budget no runner reaches, so both rounds are always timed (the default 200 ms is the game's).
+  const d = await probeDispatch(device, { rounds: 2, budgetMs: 10_000 });
   const err = await device.popErrorScope();
   return { ...d, error: err?.message ?? null };
 }

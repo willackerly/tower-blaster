@@ -8,10 +8,11 @@ import { itemYield, levelCharges, plungerYield } from './arsenal.ts';
 import { castStars, type CompiledLevel, type Scoring, scoringOf, settleOf } from './level.ts';
 import type { IceCrack } from './ice.ts';
 import { buildingOnly, collapseFraction, floorPotential_mJ, homePotential_mJ, homeSkyline, objectiveMet, type OutcomeFacts, outcomeScore } from './outcome.ts';
-import { ammoInFlight, bellRung, crownDown, heritageBroken, leverage, levelScore, type LevelScore, levelTier, refereedScore, roundLeverage, type Observation, type Reductions, type SettleRule, type SettleState, settleCap, settleUpdate, type ShotOutcome, skyline, spillOf } from './rules.ts';
+import { ammoInFlight, bellRung, crownDown, energyFired, heritageBroken, heritageFallen, leverage, levelScore, type LevelScore, levelTier, refereedScore, roundLeverage, type Observation, type Reductions, type SettleRule, type SettleState, settleCap, settleUpdate, type ShotOutcome, skyline, spillOf } from './rules.ts';
 import type { RackItem } from './rack.ts';
 import { placedCost } from './build.ts';
-import { ammoKE, type PlungerShot, pullEnergy, type Shot, shotEvent } from './shots.ts';
+import { ammoKE, type PlungerShot, pullEnergy, type QuakeShot, type Shot, shotEvent } from './shots.ts';
+import { quakeEnergy, quakeRefusal } from './quake.ts';
 
 export type Phase = 'aiming' | 'running' | 'cleared' | 'failed';
 
@@ -94,6 +95,8 @@ export class Session {
   /** The shot in flight's release so far, mJ (0 between shots): what roundLeverageNow adds to the closed shots. */
   private liveDPE_mJ = 0;
   private live: Live | null = null;
+  /** 'standing' heritage found fallen at the last close, as feedback the caller of close() passes on. */
+  private cracks: Feedback[] = [];
   private ammoCount = 0;
   private ordinal = 0;
   /** Bodies the observer must report each step: crowns, heritage, then live ammo. */
@@ -222,6 +225,18 @@ export class Session {
     return null;
   }
 
+  /**
+   * Why quake `shot` cannot go in, or null if it can: inside the level's dial and budget (quake.ts quakeRefusal),
+   * and not while another shot runs (two quakes' gravity keys would interleave).
+   */
+  quakeRefusal(shot: QuakeShot): string | null {
+    if (this.live) return 'a quake waits for the shot before it to settle';
+    return quakeRefusal(this.level, shot);
+  }
+
+  /** Whether heritage is judged at settles only (LevelDef.heritage 'standing', Aftershock), not every step. */
+  get heritageAtSettle(): boolean { return this.level.def.heritage === 'standing'; }
+
   /** A charge took structure body `body` out (Driver): it can no longer be pulled. */
   chargeCut(body: number): void {
     if (!this.cut.includes(body)) this.cut.push(body);
@@ -245,6 +260,8 @@ export class Session {
     if (why) throw new Error(`cannot pull: ${why}`);
     const no = shot.ammo === 'plunger' ? this.plungerRefusal(shot) : null;
     if (no) throw new Error(`cannot fire the plunger: ${no}`);
+    const nq = shot.ammo === 'quake' ? this.quakeRefusal(shot) : null;
+    if (nq) throw new Error(`cannot start the quake: ${nq}`);
     if (this.live && !now) throw new Error(`Session.fire: a shot is running; cutting it needs the observed state the new one is fired from`);
     const out: Feedback[] = [];
     const { after: _, ...bare } = shot;
@@ -252,7 +269,7 @@ export class Session {
     if (this.live) {
       const prev = this.inputs[this.inputs.length - 1]!.step;
       if (step < prev) throw new Error(`Session.fire: step ${step} is before the running shot's ${prev}`);
-      out.push(this.close(now!, true));
+      out.push(this.close(now!, true), ...this.cracks.splice(0));
       recorded = { ...bare, after: step - prev } as Shot;
     }
     const event = shotEvent(this.level.frame, shot, step), spawn = event?.kind === 'spawn' ? event : null;
@@ -260,8 +277,8 @@ export class Session {
     if (spawn) this.ammoCount++;
     if (event?.kind === 'remove') this.pulled.push(event.id);
     if (shot.ammo === 'plunger') { levelCharges(this.level); this.armed.push(...shot.fuse.map(([i]) => i)); }
-    // A pull is charged a nominal poke; a plunger's press is free and its charges are its yield.
-    const ke = spawn ? ammoKE(spawn) : shot.ammo === 'plunger' ? 0 : pullEnergy(this.level.frame);
+    // A pull is charged a nominal poke; a plunger's press is free and its charges are its yield; a quake, the energy it shakes in (quakeEnergy).
+    const ke = spawn ? ammoKE(spawn) : shot.ammo === 'plunger' ? 0 : shot.ammo === 'quake' ? quakeEnergy(this.level, shot) : pullEnergy(this.level.frame);
     const yieldJ = shot.ammo === 'plunger' ? plungerYield(this.level, shot) : itemYield(this.level, shot.ammo);
     const live = spawn ? body : -1;
     this.live = {
@@ -285,6 +302,8 @@ export class Session {
     const L = this.live!, c = this.level, m = c.meta, w = o.watched, nc = m.crowns.length;
     // A bell, once rung, stays rung (it was hit, or got there): judged live in observe(). A crown is judged where it lies.
     for (let k = 0; k < nc; k++) this.crownDown[k] = this.bell ? this.crownLive[k]! || (this.rung(k, [w.pos[3 * k]!, w.pos[3 * k + 1]!, w.pos[3 * k + 2]!]) ? 1 : 0) : this.shattered.includes(m.crowns[k]!) || crownDown(c, [w.pos[3 * k]!, w.pos[3 * k + 1]!, w.pos[3 * k + 2]!]) ? 1 : 0;
+    // 'standing' heritage (Aftershock) is judged here, where it lies when the shot settles; sticky as the pose rule is.
+    if (this.heritageAtSettle) this.cracks.push(...this.judgeStanding(o).map((b): Feedback => ({ t: 'heritageCrack', step: o.step, body: b })));
     const crownsTotal = this.crownDown.reduce((a, x) => a + x, 0);
     const dPE_mJ = o.basePe_mJ - o.red.pe_mJ;
     const outcome: ShotOutcome = {
@@ -334,7 +353,7 @@ export class Session {
       if (!L.slowMo && w.linVel[3 * k + 1]! < SLOWMO_VY) { L.slowMo = true; out.push({ t: 'slowMo', step, body: m.crowns[k]! }); }
       if (!this.crownLive[k] && (this.bell ? this.rung(k, p) : crownDown(c, p) || this.shattered.includes(m.crowns[k]!))) { this.crownLive[k] = 1; out.push({ t: 'crownDown', step, body: m.crowns[k]!, ordinal: this.ordinal++ }); }
     }
-    for (let k = 0; k < nh; k++) {
+    for (let k = 0; k < nh && !this.heritageAtSettle; k++) {
       const b = m.heritage[k]!, q = w.rot.subarray(4 * (nc + k), 4 * (nc + k) + 4);
       if (!this.heritageBroken[k] && (this.shattered.includes(b) || heritageBroken(c, pos(nc + k), [q[0]!, q[1]!, q[2]!, q[3]!], [this.home[3 * b]!, this.home[3 * b + 1]!, this.home[3 * b + 2]!]))) {
         this.heritageBroken[k] = 1;
@@ -357,7 +376,7 @@ export class Session {
 
     // Settle: crowns are judged on where they lie now.
     const settled = this.close(o, false);
-    out.push(settled);
+    out.push(...this.cracks.splice(0), settled);
     const crownsTotal = settled.outcome.crownsTotal;
 
     const cleared = objectiveMet(c, { red: o.red, crownsTotal, collapse: this.collapse(this.peOf(o.red)), heritage: this.heritageBroken.reduce((a, x) => a + x, 0) }, this.scoring);
@@ -377,6 +396,17 @@ export class Session {
       out.push({ t: 'levelEnd', step, cleared, score: this.score });
     } else {
       this.phase = 'aiming';
+    }
+    return out;
+  }
+
+  /** The 'standing' heritage rule on observed state `o` (heritageFallen against home): the bodies newly fallen. A broken one stays broken. */
+  private judgeStanding(o: Observation): number[] {
+    const m = this.level.meta, w = o.watched, nc = m.crowns.length, out: number[] = [];
+    for (let k = 0; k < m.heritage.length; k++) {
+      if (this.heritageBroken[k]) continue;
+      const b = m.heritage[k]!, j = nc + k, q = w.rot.subarray(4 * j, 4 * j + 4);
+      if (this.shattered.includes(b) || heritageFallen(this.level, [w.pos[3 * j]!, w.pos[3 * j + 1]!, w.pos[3 * j + 2]!], [q[0]!, q[1]!, q[2]!, q[3]!], [this.home[3 * b]!, this.home[3 * b + 1]!, this.home[3 * b + 2]!])) { this.heritageBroken[k] = 1; out.push(b); }
     }
     return out;
   }
@@ -423,6 +453,8 @@ export class Session {
       skylineRatio: last && start > 0 ? skyline(last.red.heightHist, c.height) / start : 1,
       pulled: this.pulledShare(),
       ...(c.def.objective.kind === 'hold' ? { hold: true } : {}),
+      ...(c.def.objective.kind === 'quake' ? { quake: true } : {}),
+      energy: energyFired(this.outcomes),
       ...(c.def.objective.kind === 'fold' ? { spill: last ? spillOf(last.red) : 0 } : {}),
     };
   }

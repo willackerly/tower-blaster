@@ -4,7 +4,7 @@
 // from the launcher ring (a cannonball cannot across a 12-15 m ring; the wrecking
 // ball, 15 m/s, misses the top of B1's wall from the far azimuths: 83%).
 import { describe, expect, it } from 'vitest';
-import { aimAt, compileLevel, type LaunchShot, validateLevel } from '@tb/keystone';
+import { aimAt, compileLevel, type LaunchShot, physicsOf, validateLevel } from '@tb/keystone';
 import { competentIntents, DRAFTS, exposedFaces, intentShot, REACH, surfaceTarget, targetFaces } from '../src/index.ts';
 
 describe('draft big levels', () => {
@@ -22,6 +22,19 @@ describe('draft big levels', () => {
     expect(n('B2c').crowns.every((i) => n('B2a').crowns.includes(i))).toBe(true);
     for (const k of ['B3a', 'B3b', 'B3c']) expect(n(k).n).toBe(10_000);
     expect([n('B4a').n, n('B4a').crowns.length]).toEqual([30 * 56, 4]);
+  });
+  it('B5 Kapla Spire: about 3,000 planks of 1.5 x 0.3 x 0.1 m at h 0.3 m, GPU sleep on (B5c off), launcher 27 m up', () => {
+    const at = (k: string) => compileLevel(DRAFTS[k]!);
+    expect([at('B5a').meta.n, at('B5b').meta.n, at('B5c').meta.n]).toEqual([2884, 3106, 2884]);
+    for (const k of ['B5a', 'B5b', 'B5c']) {
+      const c = at(k), half = (c.scene.bodies[0]!.shape as { half: number[] }).half.map((x) => +(2 * x).toFixed(4)).sort((a, b) => a - b);
+      expect(half).toEqual([0.1, 0.3, 1.5]);
+      expect(c.frame.unit).toBe(0.3);
+      expect(c.frame.launcher.y * c.frame.unit).toBeCloseTo(27, 6);
+      expect(physicsOf(DRAFTS[k]!).sleep).toBe(k !== 'B5c');
+    }
+    // B5c differs from B5a only by sleep, which is in the hash.
+    expect(at('B5c').hash).not.toBe(at('B5a').hash);
   });
   it.each(Object.keys(DRAFTS))('%s: at least 80% of competent launch shots reach their target', (name) => {
     const c = compileLevel(DRAFTS[name]!);

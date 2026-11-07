@@ -41,6 +41,26 @@ const domino = dominoes(30);
 const ARMS = { weapons: { bomb: BOMB, ram: RAM } };
 
 /**
+ * B5 Kapla Spire drafts (spectacle-mode.md section 11): S15's Kapla tower as a scenario part at h 0.3 m (a plank
+ * 1.5 x 0.3 x 0.1 m, X3's crib cross-section, about 13 times real Kapla: a fall plays about 3.6 times slower than
+ * a toy tower's, the level's declared slow motion), about 3,000 planks, plaster, gap 0 (S15's exact layout), with
+ * GPU sleep (E2b's stabiliser). `shape`: 'spire' is one tower at slenderness 3 (2,884 planks, 38 m, 15 m across),
+ * 'city' the five-tower form at 3 (3,106 planks, 39 m, 21 m across). The launcher stands 90 h (27 m) up, at
+ * about two thirds of the height: from the ground a marble (15 m/s) reaches only the lower third (competent shots
+ * reach their target 28 to 47% of the time from 0.6 m up; 81% on the spire and 88% on the city from 27 m, the best
+ * of 15 to 33 m for this rack); the game's high launch mode starts above the top anyway.
+ */
+export function kaplaSpire(id: string, shape: 'city' | 'spire', rack: RackItem[], extra: Partial<LevelDef> = {}): LevelDef {
+  const params = shape === 'city' ? { planks: 3000, towers: 5, slender: 3, topple: false } : { planks: 3000, towers: 1, slender: 3, topple: false };
+  const half = shape === 'city' ? 36 : 26, top = 131;
+  const d = outcome(id, 'Kapla Spire', [{ kind: 'scenario', id: 'S15', params, material: 'plaster', gap: 0 }], [half, half], top, rack, {
+    unit: 0.3, objective: { kind: 'collapse', min: 0.4 }, ...extra, physics: { sleep: true, ...extra.physics },
+  });
+  return { ...d, launcher: { ...d.launcher, y: 90 } };
+}
+const KAPLA_LIGHT: RackItem[] = ['marble', 'marble', 'marble', 'w-grenade'];
+
+/**
  * Every draft by name. Launch items must reach across a big level's launcher ring (12 to 15 m): the
  * cannonball (12 m/s, 14.7 m at best on flat ground) and the Keystone grenade's shell (15 m/s) miss half
  * the targets from there, so the racks use rams, bombs, wrecking balls (15 m/s) and drops.
@@ -69,6 +89,12 @@ export const DRAFTS: Readonly<Record<string, LevelDef>> = {
   B3e: b3('B3e', 'stone', 5, 3, ['w-bomb', 'w-bomb', 'w-bomb'], { ...ARMS, physics: { iterations: 20 } }),
   // B4 Domino Boulevard: 30 slender columns on a spiral, 1,680 cubes; crowns on the outermost (the chain runs outward from the centre).
   B4a: outcome('B4a', 'Domino Boulevard', domino.parts, [domino.half, domino.half], 14, ['marble', 'marble', 'w-ram'], { ...ARMS, objective: { kind: 'crowns' } }),
+  // B5: the single spire and the five-tower form with marbles and a grenade (TRIAL_RACK_LIGHT: planks are light),
+  // and the spire without sleep (does it stand at all?). The spec's toy-scale balls are out at this scale: the
+  // beach ball is a dud (7 J) and competent bowling and basketball shots reach their target 56% of the time.
+  B5a: kaplaSpire('B5a', 'spire', KAPLA_LIGHT),
+  B5b: kaplaSpire('B5b', 'city', KAPLA_LIGHT),
+  B5c: kaplaSpire('B5c', 'spire', KAPLA_LIGHT, { physics: { sleep: false } }),
 };
 
 export function draftByName(name: string): LevelDef {

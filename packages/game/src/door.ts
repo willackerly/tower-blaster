@@ -84,6 +84,7 @@ export function thresholdText(metric: StarMetric, t: number): string {
     case 'crowns': return `${t} crown${t === 1 ? '' : 's'} down`;
     case 'skyline': return `skyline at ${pct(t)} of its height`;
     case 'pulled': return `${pct(t)} pulled`;
+    case 'energy': return `a quake of ${Math.round(t)} J or less`;
     case 'fold': return `${pct(t)} folded`;
   }
 }
@@ -101,7 +102,7 @@ const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 
 /** A star threshold as a bare number: "70%", "3,200". */
 export function thresholdShort(metric: StarMetric, t: number): string {
-  return metric === 'collapse' || metric === 'skyline' || metric === 'pulled' || metric === 'fold' ? pct(t) : fmtPoints(Math.round(t));
+  return metric === 'collapse' || metric === 'skyline' || metric === 'pulled' || metric === 'fold' ? pct(t) : metric === 'energy' ? `${Math.round(t)} J` : fmtPoints(Math.round(t));
 }
 
 /** What the objective asks, in a word or number. */
@@ -111,6 +112,7 @@ export function objectiveShort(o: Objective): string {
     case 'skyline': return `skyline ${o.maxH} h`;
     case 'collapse': return pct(o.min);
     case 'hold': return 'crown up';
+    case 'quake': return 'condemned down';
     case 'fold': return `${pct(o.min)}, in the lot`;
     case 'bell': return 'ring the bell';
   }

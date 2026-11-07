@@ -4,12 +4,13 @@ import { describe, expect, it } from 'vitest';
 import { LEVELS } from '@tb/keystone';
 import { WEAPON_TIERS } from '@tb/weapons';
 import { doorHtml, doorLevels, QUALITY_TITLES } from '../src/door.ts';
-import { canvasSize, frameBudgetMs, QUALITY_TIERS, knobsFor, MIN_BUDGET_MS, pickTier, predictedStepMs, QUALITY_SETTINGS, qualityParam, STEP_DISPATCHES, TIER_FRAME_MS, TIER_KNOBS, tierFor } from '../src/quality.ts';
+import { budgetFor, canvasSize, frameBudgetMs, QUALITY_TIERS, knobsFor, MIN_BUDGET_MS, pickTier, predictedStepMs, QUALITY_SETTINGS, qualityParam, STEP_DISPATCHES, TIER_FRAME_MS, TIER_KNOBS, tierFor } from '../src/quality.ts';
 import { DEFAULT_SETTINGS, parseSettings, QUALITY_CHOICES, SettingsStore, urlSettings } from '../src/settings.ts';
 import { memoryKeyValue } from '../src/progress.ts';
 
 const q = (s: string) => new URLSearchParams(s);
-const measured = (dispatchMs: number, highFrameMs: number, midFrameMs = NaN) => ({ software: false, dispatchMs, highFrameMs, midFrameMs });
+// A measured device: a GPU by default (the step proxy is not calibrated there), or a software adapter timed anyway.
+const measured = (dispatchMs: number, highFrameMs: number, midFrameMs = NaN, calibrated = false) => ({ software: false, calibrated, dispatchMs, highFrameMs, midFrameMs });
 
 describe('tier knobs', () => {
   it('the tiers are the WeaponSpec caps\' tiers, by name (a weapon capped for a tier fits a device of it)', () => {
@@ -47,32 +48,47 @@ describe('the pick', () => {
     expect(predictedStepMs(0.002)).toBeCloseTo(0.002 * STEP_DISPATCHES, 9);
   });
   it('a software adapter is low without timing anything', () => {
-    expect(pickTier({ software: true, dispatchMs: NaN, highFrameMs: NaN, midFrameMs: NaN })).toMatchObject({ tier: 'low', reason: 'software' });
+    expect(pickTier({ software: true, calibrated: true, dispatchMs: NaN, highFrameMs: NaN, midFrameMs: NaN })).toMatchObject({ tier: 'low', reason: 'software' });
   });
   it('SwiftShader as measured (chain 0.125 ms, so a 1k step of 300 ms): physics leaves no frame budget, low', () => {
-    const p = pickTier(measured(0.125, 716, 716));
+    const p = pickTier(measured(0.125, 716, 716, true));
     expect(p).toMatchObject({ tier: 'low', reason: 'physics' });
     expect(p.stepMs).toBeCloseTo(300, 6);
   });
   it('a fast device whose high frame fits is high', () => {
-    // An M5-like guess: 2 us a dispatch (a 1k step of 4.8 ms), a 3.5 ms frame at 2x.
     expect(pickTier(measured(0.002, 3.5))).toMatchObject({ tier: 'high', reason: 'fits' });
+  });
+  it('on a GPU the step proxy is reported but never rules a tier out: the M5 that read low (2026-11-07) is high', () => {
+    // The live build on the M5 in Chrome: reason physics, so the chain read past ~6 us a dispatch, a predicted
+    // 1k step past a frame (its real 1k step is ~5 ms). 12 us: a predicted 29 ms step, and a 2 ms high frame.
+    const gpu = pickTier(measured(0.012, 2));
+    expect(gpu).toMatchObject({ tier: 'high', reason: 'fits' });
+    expect(gpu.stepMs).toBeCloseTo(0.012 * STEP_DISPATCHES, 9);
+    expect(gpu.budgetMs).toBeCloseTo(frameBudgetMs(0), 9);
+    // The same numbers through the calibrated rule are what the live build did.
+    expect(pickTier(measured(0.012, 2, NaN, true))).toMatchObject({ tier: 'low', reason: 'physics' });
+    // A GPU whose frames are slow still steps down on its frames.
+    expect(pickTier(measured(0.012, 12, 4))).toMatchObject({ tier: 'mid', reason: 'fits' });
+    expect(pickTier(measured(0.012, 30, 20))).toMatchObject({ tier: 'low', reason: 'frame' });
   });
   it('a high frame over budget falls to mid when mid\'s fits, else low', () => {
     expect(pickTier(measured(0.002, 12, 4))).toMatchObject({ tier: 'mid', reason: 'fits' });
     expect(pickTier(measured(0.002, 30, 9))).toMatchObject({ tier: 'low', reason: 'frame' });
   });
-  it('slower physics shrinks the budget: the same frames pick a lower tier', () => {
-    const fast = pickTier(measured(0.001, 5, 2)), slow = pickTier(measured(0.005, 5, 2));
+  it('where calibrated, slower physics shrinks the budget: the same frames pick a lower tier', () => {
+    expect(budgetFor(true, 6.667)).toBeCloseTo(5, 3);
+    expect(budgetFor(false, 6.667)).toBeCloseTo(frameBudgetMs(0), 9);
+    const fast = pickTier(measured(0.001, 5, 2, true)), slow = pickTier(measured(0.005, 5, 2, true));
     expect(fast.tier).toBe('high');
     expect(slow.budgetMs).toBeLessThan(fast.budgetMs);
     expect(slow.tier).toBe('mid');
   });
-  it('a frame that was not measured (NaN) does not fit; physics just under the floor is low', () => {
+  it('a frame that was not measured (NaN) does not fit; where calibrated, physics just under the floor is low', () => {
     expect(pickTier(measured(0.002, NaN, NaN))).toMatchObject({ tier: 'low', reason: 'frame' });
     const floor = (TIER_FRAME_MS - 2 * MIN_BUDGET_MS) / STEP_DISPATCHES;
-    expect(pickTier(measured(floor * 0.999, 0.1)).tier).toBe('high');
-    expect(pickTier(measured(floor * 1.001, 0.1))).toMatchObject({ tier: 'low', reason: 'physics' });
+    expect(pickTier(measured(floor * 0.999, 0.1, NaN, true)).tier).toBe('high');
+    expect(pickTier(measured(floor * 1.001, 0.1, NaN, true))).toMatchObject({ tier: 'low', reason: 'physics' });
+    expect(pickTier(measured(floor * 1.001, 0.1))).toMatchObject({ tier: 'high', reason: 'fits' });
   });
   it('the tier in effect: a fixed setting is itself; auto takes the probe, mid if it failed, high with no probe', () => {
     const probe = pickTier(measured(0.002, 12, 4));
