@@ -1,4 +1,11 @@
 {
   "about": "Test files only the nightly runs (.github/workflows/nightly.yml, PHYSICS_GPU_SLOW=1), not PR or main CI: each with why it can wait a night. Files with PHYSICS_GPU_SLOW cases of their own run in both, their slow cases at night. `PHYSICS_GPU_SLOW=1 pnpm test` runs everything.",
-  "only": {}
+  "only": {
+    "packages/game/test/level-start-gpu.test.ts": "one case, ~380 s on a CI runner; prefetch=aim and Next on Rapier run on every PR (level-start-e2e.test.ts)",
+    "packages/game/test/rack-weapons-gpu.test.ts": "one case, ~340 s on a CI runner; the firework line on the reference and Rapier runs on every PR (keystone-lab rack-weapons.test.ts)",
+    "packages/keystone-lab/test/big-levels-gpu.test.ts": "one case on SwiftShader (B1 at rest, 1,000 bodies), ~350 s on a CI runner; B1 stands at load on Rapier on every PR (level-stability-rapier.test.ts); B2 and B3 and the showcase lines were nightly already (PHYSICS_GPU_SLOW)",
+    "packages/keystone-lab/test/duel-gpu.test.ts": "one seeded D1 duel, ~440 s on a CI runner; the duel on Rapier runs on every PR (game duel-e2e.test.ts, duel-bot.test.ts)",
+    "packages/keystone-lab/test/rube-gpu-RL4.test.ts": "one case, ~320 s on a CI runner; RL4 on the reference (rube.test.ts) and RL1-RL3, RL5 on the GPU run on every PR",
+    "packages/physics-gpu/test/rest-stability-struck.test.ts": "one 1,200-frame case, ~420 s on a CI runner; the idle rest cases (rest-stability.test.ts) and the knock and restitution tests run on every PR"
+  }
 }

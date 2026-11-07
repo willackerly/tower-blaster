@@ -1,3 +1,4 @@
+// Nightly only (vitest.nightly.json, PHYSICS_GPU_SLOW=1): one case over the 300 s a CI file may take.
 // The prefetch from the load (keystone.prefetch=aim, docs/game/level-start.md) on the GPU engine: the
 // next level pre-settles on the same device, in gated batches, beside the level being played. The
 // level played stays exact (a replay on a fresh engine reaches its state), and Next swaps in the
