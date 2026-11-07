@@ -65,7 +65,27 @@ Not shipped:
 - FC-5, Sympathy with a 10-cell yard. It failed fairness (3 of 8).
 - FC-5c, F5 without its relays. This is the control (below).
 
-**Stars.** The levels ship with the objective's star only (`stars` absent, as on any uncast outcome level). Two and three stars come from a cast like every outcome level's. For a plunger level that means competent lines that are sweeps with small per-row jitter, a hill climb of one charge ±0.1 s, and the cloud played on nudged builds. That cast is the follow-up PR. The Metal cast runs on the Mac through the coordinator.
+## Stars: the cast on a plunger level
+
+Stars come from the outcome levels' cast (keystone-lab `cast.ts`, spectacle-mode.md section 6), with a line model for timelines (`plungerModel`):
+
+- **Competent lines** are sweeps: one of 8 directions, a spacing of 0.1 to 1.0 s, and each charge a snap early, on time or late.
+- **The hill climb** moves one charge one snap.
+- **The noise is the build's.** A timeline is exact engine steps, so hand noise does nothing to it. Every competent, climb and cloud play runs on its own nudged build (1 mm, 0.2 deg per body; the play's nudge seed is recorded, so `--replay` plays the same builds).
+- **T2** is the median of the competent ends. **T3** is the lower quartile of the best line's cloud of 50 nudged builds.
+
+Most competent sweeps fail: they go the wrong way, or too fast to fell the building. So T2 sits at the all-at-once value, and **any clear earns two stars**. Three stars ask for the bot's best line, give or take a quartile of build noise. This is the spec's rule applied as written, not a special case. On these levels the hard part is finding a line that folds the building at all.
+
+Casts on the reference engine (Node, f64; seed 1; short recipe, 210 plays each). Every gate passed (fair, skill, stable, limits, complete). Each best line was then checked on the GPU solver (SwiftShader, f32) with 8 nudged builds, using the cross-device gate (`--cloud-of`):
+
+| level | T2 | T3 | best | best line | cloud P25 / P50 | SwiftShader T3 (8 builds) |
+|---|---|---|---|---|---|---|
+| F1 | 0.24 | 0.89 | 0.913 | `plunger.1.0.0.6.3.54.2.72` | 0.895 / 0.895 | 0.894, inside |
+| F2 | 0.24 | 0.85 | 0.875 | `plunger.0.0.6.0.3.6.7.42.4.48.1.54.5.96.2.102.8.102` | 0.858 / 0.859 | 0.858, inside |
+| F3 | 0.29 | 0.81 | 0.838 | `plunger.0.0.3.6.6.6.7.42.1.54.4.54.5.96.8.96.2.102` | 0.815 / 0.821 | 0.814, inside |
+
+On F1 to F3 the GPU lands on the reference's T3 to the third decimal. The cast's best lines are sweeps that the climb nudged a snap here and there: F1's best goes A2, A1, B2 and B1 at 0, 0.1, 0.9 and 1.2 s. A Metal recast of each level is queued for the Mac.
+
 
 ## Sympathetic charges (step e)
 

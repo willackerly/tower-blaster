@@ -2,6 +2,7 @@
 // each a fold level (fuse-buildings.ts foldLevel). FOLD_CANDIDATES are the designs the search judged
 // (pnpm keystone:fuse; keystone-lab fuse-search.ts); FUSE_LEVELS are the ones that passed the
 // order-matters gate and ship (docs/game/mode-probes.md, X2 on levels).
+import { castOf } from './big-levels.ts';
 import { type FoldSite, foldLevel } from './fuse-buildings.ts';
 import type { LevelDef } from './level.ts';
 
@@ -42,10 +43,10 @@ export const FUSE_LEVELS: readonly LevelDef[] = [
   shipped('F5', 'FC-5b'), // relays on storey 5 fold the tower in two as it falls: without them it overshoots (FC-5c)
 ];
 
-/** A candidate shipped under its level id (the site's name kept): same building, lot and charges. */
+/** A candidate shipped under its level id (the site's name kept): same building, lot and charges; its cast stars from stars.json. */
 function shipped(id: string, site: string): LevelDef {
   const s = FOLD_SITES[site]!;
-  return foldLevel(id, s.name, s.site);
+  return { ...foldLevel(id, s.name, s.site), ...castOf(id) };
 }
 
 export const foldCandidate = (id: string): LevelDef => {

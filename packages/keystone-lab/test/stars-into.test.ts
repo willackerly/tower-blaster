@@ -13,11 +13,11 @@ describe('mergeStarsFile', () => {
     expect(mergeStarsFile(FILE, 'B1', B1.stars!)).toBe(FILE);
   });
   it('adds a new level as one line, in id order, and keeps the others', () => {
-    // B99: an id the committed file does not have (it grows as levels are cast), sorted after them all.
-    const out = mergeStarsFile(FILE, 'B99', B3), parsed = JSON.parse(out);
-    expect(parsed.B99).toEqual(B3);
-    expect(Object.keys(parsed)).toEqual([...Object.keys(JSON.parse(FILE)), 'B99']);
-    expect(out.split('\n').filter((l) => l.includes('"B99"'))).toHaveLength(1);
+    // Z99: an id the committed file does not have (it grows as levels are cast), sorted after them all.
+    const out = mergeStarsFile(FILE, 'Z99', B3), parsed = JSON.parse(out);
+    expect(parsed.Z99).toEqual(B3);
+    expect(Object.keys(parsed)).toEqual([...Object.keys(JSON.parse(FILE)), 'Z99']);
+    expect(out.split('\n').filter((l) => l.includes('"Z99"'))).toHaveLength(1);
     expect(out.split('\n').length).toBe(FILE.split('\n').length + 1);
   });
   it('replaces a level\'s stars (a recast pooled)', () => {
