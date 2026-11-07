@@ -93,7 +93,7 @@ function charge(v: unknown, where: string): NonNullable<LevelDef['charges']>[num
 /** Aftershock's quake rules (@tb/keystone QuakeRules), ranges as checkQuakeRules. */
 function quakeRules(v: unknown, where: string): QuakeRules {
   const o = object(v, where);
-  only(o, ['peakMax', 'hz', 'sec', 'budget', 'axisStep', 'fixed'], where);
+  only(o, ['peakMax', 'hz', 'sec', 'budget', 'axisStep', 'fixed', 'start'], where);
   const q: QuakeRules = {};
   if (o.peakMax !== undefined) q.peakMax = int(o.peakMax, `${where}.peakMax`);
   if (o.axisStep !== undefined) q.axisStep = int(o.axisStep, `${where}.axisStep`);
@@ -108,6 +108,11 @@ function quakeRules(v: unknown, where: string): QuakeRules {
     const f = object(o.fixed, `${where}.fixed`);
     only(f, ['peak', 'hz', 'sec', 'axis'], `${where}.fixed`);
     q.fixed = { peak: int(f.peak, `${where}.fixed.peak`), hz: int(f.hz, `${where}.fixed.hz`), sec: int(f.sec, `${where}.fixed.sec`), axis: int(f.axis, `${where}.fixed.axis`) };
+  }
+  if (o.start !== undefined) {
+    const f = object(o.start, `${where}.start`);
+    only(f, ['peak', 'hz', 'sec', 'axis'], `${where}.start`);
+    q.start = { peak: int(f.peak, `${where}.start.peak`), hz: int(f.hz, `${where}.start.hz`), sec: int(f.sec, `${where}.start.sec`), axis: int(f.axis, `${where}.start.axis`) };
   }
   checkQuakeRules(q, where);
   return q;
