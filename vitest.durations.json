@@ -150,6 +150,7 @@
   "packages/keystone-lab/test/big-levels-gpu.test.ts": 346.5,
   "packages/keystone-lab/test/brush-physics.test.ts": 3,
   "packages/keystone-lab/test/bullet-time-par.test.ts": 0.5,
+  "packages/keystone-lab/test/cast-build.test.ts": 85,
   "packages/keystone-lab/test/cast-gpu-small.test.ts": 149.3,
   "packages/keystone-lab/test/cast-gpu-watchdog.test.ts": 27.4,
   "packages/keystone-lab/test/cast-gpu.test.ts": 186.6,
