@@ -35,8 +35,9 @@ jobs:
   test:
     name: test ${{ matrix.shard }}/8
     runs-on: ubuntu-latest
-    # A shard takes ~5-9 min (8 shards; the GPU files dominate); runners vary ~2x.
-    timeout-minutes: 20
+    # Stopgap (O5): shards now take 12-20 min of tests on main (queueing doesn't
+    # count), so 20 cancelled green shards. Back to ~15 once O5 rebalances them.
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:

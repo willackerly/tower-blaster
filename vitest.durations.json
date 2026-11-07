@@ -52,6 +52,7 @@
   "packages/game/test/follow-e2e.test.ts": 25.6,
   "packages/game/test/frame-rate.test.ts": 0.1,
   "packages/game/test/freeze-e2e.test.ts": 10.9,
+  "packages/game/test/frozen-aim-e2e.test.ts": 10,
   "packages/game/test/fuse-e2e.test.ts": 42,
   "packages/game/test/fuse-layout-e2e.test.ts": 55,
   "packages/game/test/fuse-tags.test.ts": 0.5,

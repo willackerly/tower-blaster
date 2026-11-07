@@ -1481,6 +1481,45 @@ export async function frozenGradeFrames() {
 }
 
 /**
+ * The frozen grade's keep (PT33): an objective box (an x-ray kind) and a fired ball (painted, banded) keep their colour
+ * under the full grade while plain boxes drain; with the keep off (freezeFx.keep false) all of them drain. Each body's
+ * mean saturation over its own pixels (the ID pass), at grade 0, at grade 1, and at grade 1 with the keep off.
+ */
+export async function frozenKeepFrames() {
+  const { device } = await sharedDevice({ timestamps: false });
+  device.pushErrorScope('validation');
+  const descs = [box([-1.5, 0.5, -4], [0.4, 0.4, 0.4], [0, 0, 0, 1]), box([-0.5, 0.7, -4], [0.4, 0.4, 0.4], [0, 0, 0, 1]), box([0.5, 0.9, -4], [0.4, 0.4, 0.4], [0, 0, 0, 1]), ball([1.5, 1.1, -4], 0.4)];
+  const src = new SnapshotSource(device);
+  src.reset(descs);
+  src.update(snapshotOf(descs), descs);
+  const rend = new Renderer(device, { size: [W, H] });
+  rend.look = { ...lookByName('candy')!, bloomMix: 0, vignette: 0 };
+  rend.setSource(src);
+  const tints: V3[] = [[1, 0.75, 0.1], [0.2, 0.9, 0.3], [0.2, 0.4, 1], [0.9, 0.04, 0.02]];
+  descs.forEach((_, i) => rend.setFx(i, { tint: tints[i], emissive: 0.05, ...(i === 3 ? { paint: true, band: true } : {}) }));
+  rend.setXray(0, [1, 0, 0, 0]); // box 0 is a crown; the x-ray itself stays off (Renderer.xray), only the kind is kept
+  const f: FrameParams = { ...camera([0, 1, 2], [0, 0.8, -4]), groundY: 0, time: 1 };
+  const { ids } = await rend.renderIds(f);
+  const frame = async (grade: number, keep: boolean) => {
+    rend.freezeFx = { grade, sparks: 1, heat: 1, keep };
+    const a = (await rend.render(f, true, true))!.pixels!;
+    const sum = descs.map(() => 0), n = descs.map(() => 0);
+    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+      const b = ids[y * W + x]! - 1;
+      if (b < 0 || b >= descs.length) continue;
+      const o = y * a.bytesPerRow + 4 * x;
+      sum[b] = sum[b]! + saturation(a.data[o]!, a.data[o + 1]!, a.data[o + 2]!);
+      n[b] = n[b]! + 1;
+    }
+    return sum.map((v, i) => (n[i] ? v / n[i]! : -1));
+  };
+  const g0 = await frame(0, true), kept = await frame(1, true), off = await frame(1, false);
+  const err = await device.popErrorScope();
+  rend.destroy();
+  return { g0, kept, off, error: err?.message ?? null };
+}
+
+/**
  * The real look's debris draw: a burst a frame in the open changes pixels only
  * near its projection, one behind a wall changes none of the wall, and dust 0 with
  * chips 0 draws exactly the frame with sparks off.
