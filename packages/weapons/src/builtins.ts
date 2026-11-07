@@ -82,5 +82,14 @@ export const RELAY: WeaponSpec = {
   rules: [{ when: { moved: 0.05, speed: 0.5 }, do: [{ blast: { radius: 1.5, impulse: 2, core: 0.2 } }, { removeTarget: true }] }],
 };
 
+/**
+ * A release (Rube Lab's start, docs/game/rube-lab.md): when armed, its host is taken out with no blast at all, so a
+ * pinned trapdoor or gate opens and what it held starts moving under gravity alone. Charged as a pull is (pullEnergy).
+ */
+export const RELEASE: WeaponSpec = {
+  version: 1, name: 'release', shell: CHARGE_SHELL,
+  rules: [{ when: { after: 0 }, do: [{ removeTarget: true }] }],
+};
+
 /** By name: the charges a level may name without writing them into its weapons. */
-export const BUILTIN_CHARGES: Readonly<Record<string, WeaponSpec>> = { cutter: CUTTER, kicker: KICKER, relay: RELAY };
+export const BUILTIN_CHARGES: Readonly<Record<string, WeaponSpec>> = { cutter: CUTTER, kicker: KICKER, relay: RELAY, release: RELEASE };

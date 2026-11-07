@@ -115,6 +115,14 @@ describe('Keystone rules in the viewer', () => {
     expect(sceneTitle(c)).toMatch(/\(custom\)$/);
     expect(parseViewerConfig(toSearch(c))).toEqual(c);
     expect(parseViewerConfig(toSearch(parseViewerConfig('?level=L1&rules=keystone&keystone.bounce=off'))).keystone).toEqual({ physics: { bounce: null } });
+    // GPU sleep (E2.5): keystone.sleep=1 round-trips through the URL and a saved scene, and reaches the level.
+    const sl = parseViewerConfig('?level=L1&rules=keystone&keystone.sleep=1&keystone.sleeptint=1');
+    expect(sl.keystone).toEqual({ physics: { sleep: true } });
+    expect(sl.feel.sleepTint).toBe(true);
+    expect(levelOf(sl)).toMatchObject({ custom: true, physics: { sleep: true } });
+    expect(parseViewerConfig(toSearch(sl))).toEqual(sl);
+    expect(parseSceneFile(JSON.stringify(sceneFile(sl, '', null))).config).toEqual(sl);
+    expect(sceneFile(sl, '', null).rules).toMatchObject({ sleeptint: true, physics: { sleep: true } });
     expect(parseViewerConfig('?level=L1&rules=keystone').keystone).toEqual({});
     expect(levelOf(parseViewerConfig('?level=L1&rules=keystone'))).toBe(L1);
     expect(levelOf(parseViewerConfig('?scenario=S3&rules=keystone&keystone.iterations=20'))).toMatchObject({ id: 'S3', custom: true, physics: { iterations: 20 } });

@@ -24,6 +24,7 @@
 import { Scanner } from '@tb/gpu';
 import { Body, RenderRecord, Shape, TIER, wgslStruct } from '@tb/schema';
 import { FX_WGSL } from './fx.ts';
+import { LOOK_ASLEEP } from './looks.ts';
 import { SURFACE_ICE } from './surface.ts';
 import type { BodySource } from './source.ts';
 
@@ -58,6 +59,7 @@ struct CullParams {
   vertsSphere: u32,
   vertsBoxShadow: u32,
   lodDepth: f32,                // metres past the near plane; NO_LOD: none
+  sleepTint: u32,               // 1: a body asleep (Body.flags bit 0 clear) draws with LOOK_ASLEEP set
 }
 
 @group(0) @binding(0) var<uniform> p: CullParams;
@@ -110,7 +112,8 @@ fn prepare(@builtin(global_invocation_id) id: vec3u) {
         pos -= (sh.half.y - half.y) * (vec3f(0.0, 1.0, 0.0) + rot.w * t + cross(rot.xyz, t));
       }
       let rel = pos - p.eye;
-      records[i] = RenderRecord(rel, looks[i], rot, half, i);
+      let asleep = p.sleepTint != 0u && (b.flags & 1u) == 0u;
+      records[i] = RenderRecord(rel, looks[i] | select(0u, ${LOOK_ASLEEP}u, asleep), rot, half, i);
       seg = min(sh.kind, 1u);
       let r = select(length(half), half.x, sh.kind == 1u);
       let shown = fs.scale > 0.0;
@@ -165,6 +168,8 @@ export interface CullFrame {
   noCull?: boolean;
   /** Boxes this far past the near plane (metres, all of the box) go to boxFar; default NO_LOD. */
   lodDepth?: number;
+  /** Debug: draw the bodies asleep (Body.flags bit 0 clear) with LOOK_ASLEEP, in a cold blue (Renderer.toggles.sleepTint). */
+  sleepTint?: boolean;
 }
 
 /**
@@ -246,6 +251,7 @@ export class Culler {
     u[56] = this.verts.sphere;
     u[57] = this.verts.boxShadow ?? this.verts.box;
     fl[58] = f.lodDepth ?? NO_LOD;
+    u[59] = f.sleepTint ? 1 : 0;
     this.device.queue.writeBuffer(this.params, 0, buf);
     pass.setBindGroup(0, this.binds.prepare);
     pass.setPipeline(this.pipes.prepare);
