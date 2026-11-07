@@ -24,5 +24,8 @@ export * from './duel.ts';
 export * from './duels.ts';
 export * from './lot-sheets.ts';
 export * from './fork.ts';
+export * from './placement.ts';
+export * from './stroke.ts';
+export * from './build.ts';
 export * from './aftershock-towers.ts';
 export * from './aftershock-levels.ts';

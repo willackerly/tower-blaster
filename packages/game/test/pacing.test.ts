@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
+import { STEADY_D, STEADY_STEPS } from '@tb/keystone';
 import {
   alphaAt, arrived, checkPaceFeel, DEFAULT_BUDGET_MS, DEFAULT_FEEL, FAST_SCALE, FRAME_MS, MAX_LAG_MS, newArrivals, Pacer, paceFeel, SLOWMO_IN, SLOWMO_MAX, SLOWMO_OUT, SLOWMO_SCALE, slowTag,
-  SpeedMeter, stepCost, TAIL_GAIN, TAIL_STEPS, TailSkip, valve, VALVE_MIN, writePaceFeel, DEFAULT_UNDO_MB, MAX_UNDO_MB,
+  SKIP_SCALE, SpeedMeter, stepCost, TAIL_GAIN, TAIL_STEPS, TailSkip, valve, VALVE_MIN, writePaceFeel, DEFAULT_UNDO_MB, MAX_UNDO_MB,
 } from '../src/pacing.ts';
 
 const DT_MS = 1000 / 60;
@@ -225,12 +226,40 @@ describe('TailSkip', () => {
   });
   it('waits while D still gains or too many move, and needs a full window', () => {
     const t = new TailSkip();
-    for (let i = 0; i < 300; i++) expect(t.update(50, n, i * 2e-5)).toBe(false); // 1.2e-3 over 60
+    for (let i = 0; i < 300; i++) expect(t.update(50, n, i * 5e-5)).toBe(false); // 3e-3 over 60; past the steady band every 100 steps
     const u = new TailSkip();
-    for (let i = 0; i < 300; i++) expect(u.update(100, n, 0.4)).toBe(false); // exactly 1%: not under
+    for (let i = 0; i < STEADY_STEPS - 1; i++) expect(u.update(100, n, 0.4 + 1e-5 * i)).toBe(false); // exactly 1%: not under
     const w = new TailSkip();
     for (let i = 0; i < TAIL_STEPS; i++) expect(w.update(0, n, 0.4)).toBe(false);
     expect(w.update(0, n, 0.4)).toBe(true);
+  });
+});
+
+describe('TailSkip: a steady collapse (agent playtest PT6)', () => {
+  const n = 10_000;
+  it(`turns on once D stays within ${STEADY_D} for ${STEADY_STEPS} steps, however many still move`, () => {
+    const t = new TailSkip();
+    for (let i = 0; i < 60; i++) expect(t.update(3000, n, i * 0.005)).toBe(false); // falling
+    let on = -1;
+    for (let i = 0; i < 400 && on < 0; i++) if (t.update(3000, n, 0.3 + 1e-5 * i)) on = i;
+    expect(on).toBe(STEADY_STEPS - 1);
+  });
+  it('a gain past the band restarts the run, as settle v4 counts it', () => {
+    const t = new TailSkip();
+    for (let i = 0; i < 100; i++) expect(t.update(3000, n, 0.3)).toBe(false);
+    expect(t.update(3000, n, 0.3 + STEADY_D)).toBe(false); // at the band's edge: a new run
+    for (let i = 1; i < STEADY_STEPS - 1; i++) expect(t.update(3000, n, 0.3 + STEADY_D)).toBe(false);
+    expect(t.update(3000, n, 0.3 + STEADY_D)).toBe(true);
+  });
+});
+
+describe('Skip (agent playtest PT6)', () => {
+  it(`runs sim time at ${SKIP_SCALE}x real time past the valve; without it the valve and fast-forward hold`, () => {
+    const p = new Pacer();
+    p.due(0, DT_MS, { skip: true, stepMs: 12, budgetMs: 16.7 });
+    expect(p.timeScale).toBe(SKIP_SCALE);
+    p.due(1, DT_MS, { fastForward: true, stepMs: 12, budgetMs: 16.7 });
+    expect(p.timeScale).toBeCloseTo(16.7 / 12, 9);
   });
 });
 

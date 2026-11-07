@@ -142,7 +142,7 @@ describe.each([['checkpoint', ''], ['replay', '&keystone.undo=0']] as const)('un
 });
 
 describe('undo and restart on a phone', () => {
-  it('on a phone: the HUD has Undo and Restart buttons after the first shot, tapped as a player would', async (ctx) => {
+  it('on a phone: the HUD\'s Undo and Restart icons come alive after the first shot, tapped as a player would', async (ctx) => {
     if (!game.browser()) return ctx.skip();
     const o = await game.open(BASE, MINUTES, PHONE);
     if (!o) return ctx.skip();
@@ -151,18 +151,19 @@ describe('undo and restart on a phone', () => {
     const start = await state(page);
     const undoBtn = page.locator('.kg-hud button[data-act="undo"]');
     const restartBtn = page.locator('.kg-hud button[data-act="restart"]');
-    // None before a shot.
-    expect(await undoBtn.count()).toBe(0);
+    // There all along (the docked HUD keeps one size, docs/game/phone-hud.md), disabled before a shot.
+    expect(await undoBtn.isDisabled()).toBe(true);
+    expect(await restartBtn.isDisabled()).toBe(true);
     await page.evaluate(() => { window.__game.fast = true; });
     for (const [i, s] of [miss, miss].entries()) {
       await ready(page);
       expect(await page.evaluate((x) => window.__game.fire(x), s)).toBe(true);
       await settled(page, i + 1);
     }
-    await expect.poll(() => undoBtn.isVisible()).toBe(true);
-    // Tap targets as tall as the power buttons (44 px), and the HUD still within the top band the portrait camera keeps clear.
+    await expect.poll(() => undoBtn.isEnabled()).toBe(true);
+    // Tap targets as tall as the power buttons (44 px), and the HUD's status strip within the top band the portrait camera keeps clear.
     for (const b of [undoBtn, restartBtn]) expect((await b.boundingBox())!.height).toBeGreaterThanOrEqual(44);
-    const hudBottom = await page.evaluate(() => document.querySelector('.kg-hud')!.getBoundingClientRect().bottom);
+    const hudBottom = await page.evaluate(() => document.querySelector('.kg-hud .st')!.getBoundingClientRect().bottom);
     expect(hudBottom).toBeLessThanOrEqual(844 * PORTRAIT_HUD_SHARE);
     await undoBtn.tap();
     await page.waitForFunction(() => window.__game.strokes === 1 && window.__game.ready, undefined, { timeout: 2 * MINUTES, polling: 100 });
@@ -170,7 +171,7 @@ describe('undo and restart on a phone', () => {
     await restartBtn.tap();
     await page.waitForFunction(() => window.__game.strokes === 0 && window.__game.ready, undefined, { timeout: 2 * MINUTES, polling: 100 });
     expect(await state(page)).toEqual(start);
-    expect(await undoBtn.count()).toBe(0);
+    expect(await undoBtn.isDisabled()).toBe(true);
     expect(errors).toEqual([]);
     await page.close();
   }, 10 * MINUTES);
