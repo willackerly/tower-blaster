@@ -29,8 +29,15 @@ export class CollapseSound {
   private last = 0;
   private dest: AudioNode | null = null;
 
-  /** extraDb: the level over the game's own (gameSoundDb of the set); set: the materials ('classic': G6's). */
-  constructor(private readonly extraDb = 0, private readonly set: SoundSet = 'real') {}
+  private readonly kapla: boolean;
+
+  /**
+   * extraDb: the level over the game's own (gameSoundDb of the set); set: the materials ('classic': G6's); kapla: Kapla
+   * planks sound as real ones (keystone.kaplasound pine; never in the classic set, which is G6's).
+   */
+  constructor(private readonly extraDb = 0, private readonly set: SoundSet = 'real', kapla = true) {
+    this.kapla = kapla && set !== 'classic';
+  }
 
   private get gain(): number { return 10 ** ((gameSoundDb(this.set) + this.extraDb) / 20); }
 
@@ -61,7 +68,7 @@ export class CollapseSound {
     if (!c || !this.node || this.status !== 'on') return;
     const now = performance.now(), dt = this.last ? Math.min(0.1, (now - this.last) / 1000) : 1 / 60;
     this.last = now;
-    for (; this.slots < s.count && this.slots < descs.length; this.slots++) this.tap.setMaterial(this.slots, soundSlotOf(c, descs[this.slots]!, this.slots));
+    for (; this.slots < s.count && this.slots < descs.length; this.slots++) this.tap.setMaterial(this.slots, soundSlotOf(c, descs[this.slots]!, this.slots, this.kapla));
     const f = [target[0] - eye[0], target[2] - eye[2]], l = Math.hypot(f[0]!, f[1]!) || 1;
     const frame = this.tap.frame(s, { metres: 1, camera: { pos: eye, right: [-f[1]! / l, 0, f[0]! / l] }, dvMin: DV_MIN, dt, top: TOP });
     this.node.port.postMessage({ type: 'frame', frame } satisfies SoundMessage, [frame.counts.buffer, frame.a2.buffer, frame.top.buffer]);

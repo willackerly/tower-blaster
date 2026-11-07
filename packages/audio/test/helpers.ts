@@ -1,8 +1,9 @@
 // Shared helpers for the engine's tests: frames from histogram cells, block rendering, octave energies.
-import { type AudioFrame, BLOCK, cellOf, CollapseEngine, DV_EDGES, SOUND_MATERIALS, type SoundMaterial, TOP_FIELDS } from '@tb/audio';
+import { type AudioFrame, BLOCK, cellOf, CLASSIC_SOUND_MATERIALS, CollapseEngine, DV_EDGES, type SoundMaterial, TOP_FIELDS } from '@tb/audio';
 
 export const SR = 48000, FRAME = 800; // 60 Hz
-export const pine: SoundMaterial = SOUND_MATERIALS.pine;
+/** The free Kapla plank (the classic set's pine): the engine's tests pin its physics, which the real set's pile damping (A9) would blur. */
+export const pine: SoundMaterial = CLASSIC_SOUND_MATERIALS.pine;
 
 export interface Cell { bin: number; sector?: number; count: number; a2: number }
 export function frame(cells: Cell[], top: number[][] = [], sectors = 4): AudioFrame {

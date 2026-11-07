@@ -19,6 +19,7 @@ import { fx } from './fx.ts';
 import { handoff } from './handoff.ts';
 import { hitStop } from './hitstop.ts';
 import { impact } from './impact.ts';
+import { kaplaSound } from './kaplasound.ts';
 import { launch } from './launch.ts';
 import { launchSound } from './launchsound.ts';
 import { layout } from './layout.ts';
@@ -82,4 +83,5 @@ export const OPTIONS = [
   frozenAim,
   launchSound,
   blastSound,
+  kaplaSound,
 ] as const;

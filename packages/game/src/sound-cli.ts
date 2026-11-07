@@ -35,7 +35,7 @@ export async function capture(id: string, engine: PhysicsEngine = new AvbdRefere
     perStep: (d) => {
       const s = d.snapshot;
       // Each body by its description, as the page does (driver.bodies: structure, ammo, and spawned debris such as ice's).
-      for (; n < s.count; n++) tap.setMaterial(n, soundSlotOf(c, d.bodies[n] ?? (n < c.meta.n ? c.scene.bodies[n]! : ammoBody(shots[n - c.meta.n]!.ammo, c.frame.unit, [0, 0, 0], [0, 0, 0])), n));
+      for (; n < s.count; n++) tap.setMaterial(n, soundSlotOf(c, d.bodies[n] ?? (n < c.meta.n ? c.scene.bodies[n]! : ammoBody(shots[n - c.meta.n]!.ammo, c.frame.unit, [0, 0, 0], [0, 0, 0])), n, set !== 'classic'));
       const fr = tap.frame(s, { metres: 1, camera: { pos: eye, right: [-f[1]! / l, 0, f[0]! / l] }, dvMin: 0.25, dt: c.scene.dt, top: 8 });
       frames.push(fr);
       for (let i = 0; i < fr.counts.length; i++) slots[Math.floor(i / (fr.counts.length / SOUND_SLOTS))]! += fr.counts[i]!;
@@ -73,7 +73,7 @@ function wav(path: string, L: Float32Array, R: Float32Array) {
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {
-  const names = [...MATERIALS.map((m) => m.name), ...AMMO_KINDS, 'ice pieces', ...PRESET_NAMES];
+  const names = [...MATERIALS.map((m) => m.name), ...AMMO_KINDS, 'ice pieces', ...PRESET_NAMES, 'kapla'];
   for (const dir of [kv.wav, kv.frames]) if (dir) mkdirSync(dir, { recursive: true });
   const rows = [];
   for (const id of ids) {

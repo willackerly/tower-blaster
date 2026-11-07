@@ -58,13 +58,15 @@ export const AMMO_SLOT = MATERIALS.length;
 export const PIECE_SLOT = AMMO_SLOT + AMMO_KINDS.length;
 /** First preset slot; slot PRESET_SLOT + k is PRESET_NAMES[k] (the rack's real-world projectiles, p-<preset>). */
 export const PRESET_SLOT = PIECE_SLOT + 1;
-export const SOUND_SLOTS = PRESET_SLOT + PRESET_NAMES.length;
+/** A Kapla plank (isKaplaPlank) sounds as a real one (kaplaSound): A9, docs/sound.md, Kapla. */
+export const KAPLA_SLOT = PRESET_SLOT + PRESET_NAMES.length;
+export const SOUND_SLOTS = KAPLA_SLOT + 1;
 
 export interface SlotSound { material: SoundMaterial; edge: number }
 
 /** Steel shear modulus, Pa: the cue rings as a free-free bar (plank model). */
 const STEEL_G = 79e9;
-const STEEL_DENSITY = MATERIALS[materialId('steel')]!.density, IRON_DENSITY = MATERIALS[materialId('iron')]!.density;
+const STEEL_DENSITY = MATERIALS[materialId('steel')]!.density, IRON_DENSITY = MATERIALS[materialId('iron')]!.density, PLASTER = materialId('plaster');
 
 /**
  * The contact modulus a steel ammo slot plays against a structure material: the Hertz pair modulus
@@ -119,7 +121,37 @@ export function slotSounds(c: CompiledLevel, set: SoundSet = 'real'): SlotSound[
     const own = presetSound(name, set), hard = name === 'bowlingball' || name === 'cannonball' || name === 'wreckingball';
     return { material: set === 'real' && hard ? ammoOn(own, struck) : own, edge: PROJECTILE_PRESETS[name].diameter };
   });
-  return [...structure, ...ammo, { material: sounds.ice, edge: h / 2 }, ...presets];
+  return [...structure, ...ammo, { material: sounds.ice, edge: h / 2 }, ...presets, kaplaSound(c, set)];
+}
+
+/** A real Kapla plank, m: 117 x 23.4 x 7.8 mm of maritime pine (15:3:1; @tb/audio's pine). */
+export const KAPLA_DIMS = soundMaterials('classic').pine.dims!;
+
+/**
+ * Whether a body is shaped as a Kapla plank: a box in its proportions, 15:3:1 within 2% (soundSlotOf takes plaster ones).
+ * B5's S15 towers are built of them (5 h x h x h/3), and so is the build tool's Plank (build.ts). No other
+ * level has a body in those proportions.
+ */
+export function isKaplaPlank(b: BodyDesc): boolean {
+  if (b.shape.kind !== 'box') return false;
+  const [a, w, t] = [...b.shape.half].sort((x, y) => y - x) as [number, number, number];
+  const near = (x: number, want: number) => Math.abs(x / want - 1) <= 0.02;
+  return near(a / t, KAPLA_DIMS[0] / KAPLA_DIMS[2]) && near(w / t, KAPLA_DIMS[1] / KAPLA_DIMS[2]);
+}
+
+/**
+ * The level of a Kapla plank of `length` m over the real one's, dB: 30 log10(length / 117 mm). The slot plays a real
+ * plank's timbre (at the game's size, 1.5 m in B5, a free pine beam rings from 194 Hz and the judge hears a marimba:
+ * "Music, Drum machine") with the energy of the plank on screen: under the energy law a mode's amplitude goes as the
+ * square root of the body's mass, which goes as length^3 at fixed proportions. B5 (1.5 m): +33 dB, and its towers
+ * then sound within a few dB of the plaster cubes they replace (docs/sound.md, Kapla).
+ */
+export const kaplaLevelDb = (length: number): number => 30 * Math.log10(length / KAPLA_DIMS[0]);
+
+/** The Kapla slot for a level: the set's pine at its real size, as loud as a plank 5 h long (the build tool's and S15's at the level's h). */
+export function kaplaSound(c: CompiledLevel, set: SoundSet = 'real'): SlotSound {
+  const pine = soundMaterials(set).pine;
+  return { material: { ...pine, levelDb: (pine.levelDb ?? 0) + kaplaLevelDb(5 * c.frame.unit) }, edge: KAPLA_DIMS[0] };
 }
 
 /**
@@ -190,15 +222,16 @@ export function ammoKindOf(b: BodyDesc, h: number): AmmoKind | null {
 }
 
 /**
- * Sound slot of body i. The structure (the first c.meta.n) sounds as its Keystone material. Of what is
+ * Sound slot of body i. The structure (the first c.meta.n) sounds as its Keystone material, a Kapla plank as a real
+ * one when `kapla` is on (KAPLA_SLOT; the game's keystone.kaplasound, off in the classic set). Of what is
  * spawned: a shattered ice block's pieces as ice pieces (PIECE_SLOT); a rack preset as itself
  * (PRESET_SLOT + k); Keystone's steel or iron ammo as its kind; a body of a structure material's density
  * (a Mason's Trial probe) as that material; anything else (a weapon's shell or munition, its density
  * scaled to the level's blocks: B1-B3's bomb, the firework, w-grenade) as the steel ammo of its shape,
  * a metal casing. Nothing spawned is silent.
  */
-export function soundSlotOf(c: CompiledLevel, b: BodyDesc, i: number): number {
-  if (i < c.meta.n) return c.meta.material[i]!;
+export function soundSlotOf(c: CompiledLevel, b: BodyDesc, i: number, kapla = true): number {
+  if (i < c.meta.n) return kapla && c.meta.material[i] === PLASTER && isKaplaPlank(b) ? KAPLA_SLOT : c.meta.material[i]!;
   if (isIcePiece(b)) return PIECE_SLOT;
   const p = presetOf(b);
   if (p) return PRESET_SLOT + PRESET_NAMES.indexOf(p);
