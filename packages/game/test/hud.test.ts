@@ -265,6 +265,16 @@ describe('scores and leverage add up (PT9, PT16)', () => {
     expect(html).toContain('leverage ×0.13</div>');
     expect(html).not.toMatch(/Brute|Clean/);
   });
+  it('a hold level\'s card shows one metric, the share pulled: no "% down" beside the PULLED stamp (PT35)', () => {
+    // Agent playtest 2, U3: "4 shots · 4% down" sat beside "13% PULLED".
+    const facts = { met: true, collapse: 0.04, leverage: 0.2, comboMax: 0, hasCrowns: true, rackLeft: 20, heritageBroken: 0, outOfLot: 0, crownsDown: 0, skylineRatio: 1, pulled: 0.13, hold: true };
+    const held = resultHtml(U3, outcomeScore(facts, undefined), 4, false);
+    expect(held).toContain('13% PULLED');
+    expect(held).not.toMatch(/% down/i);
+    expect(held).toMatch(/<div class="sub">4 shots · leverage /);
+    // A collapse level keeps its share down on the sub line.
+    expect(resultHtml(B1, outcomeScore({ ...facts, hold: false, collapse: 0.5 }, undefined), 2, false)).toContain('2 shots · 50% down');
+  });
   it('heritage is its own red line with the stars it cost, and the total never shows negative', () => {
     const score = levelScore(L3, [shot({ dPE_mJ: 1e5, heritageNew: 9 }), shot({ dPE_mJ: 1e5 })], true, 40);
     expect(score.lines.reduce((a, l) => a + l.value, 0)).toBeLessThan(0);

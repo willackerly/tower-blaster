@@ -405,7 +405,9 @@ export function tallyHtml(level: LevelDef, score: LevelScore | null, over: strin
  * at once and tallies, and is drawn again with the score when it settles.
  * Two groups, `.c1` (name, the score lines and the total) and `.c2` (stamp, stars, badge, lot sheet and
  * the buttons): one column as before, two side by side on a phone held sideways (GAME_CSS, docked).
- * Score lines slam in one by one, then the stamp and stars.
+ * Score lines slam in one by one, then the stamp and stars. An outcome level's sub line gives its share down,
+ * except on a hold level (U3), whose metric is the share pulled: the stamp and the Pulled line carry it, and a
+ * "% down" beside them was a second metric (PT35).
  */
 export function resultHtml(level: LevelDef, score: LevelScore | null, strokes: number, forward: boolean | CardForward, canSave = false, extra = '', canUndo = false): string {
   const outcome = scoringOf(level) === 'outcome';
@@ -428,7 +430,7 @@ export function resultHtml(level: LevelDef, score: LevelScore | null, strokes: n
   return `<div class="c1">
     <div class="name">${esc(playerName(level))}</div>
     ${level.custom ? `<div class="sub custom">${CUSTOM_NOTE}</div>` : ''}
-    <div class="sub">${shotsText}${'outcome' in score ? ` · ${pct((score as { outcome: { collapse: number } }).outcome.collapse)} down` : ''} · leverage ${fmtLeverage(score.leverage)}${tierText ? ` (${tierText})` : ''}${fz}</div>
+    <div class="sub">${shotsText}${'outcome' in score && level.objective.kind !== 'hold' ? ` · ${pct((score as { outcome: { collapse: number } }).outcome.collapse)} down` : ''} · leverage ${fmtLeverage(score.leverage)}${tierText ? ` (${tierText})` : ''}${fz}</div>
     ${lines}
     <div class="line total" style="animation-delay:${after}s" title="The lines' sum, never below 0"><span>Total</span><span>${fmtPoints(score.total)}</span></div>
     </div><div class="c2">

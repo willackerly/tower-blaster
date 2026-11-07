@@ -182,7 +182,7 @@
   "packages/keystone-lab/test/stars-audit.test.ts": 0,
   "packages/keystone-lab/test/stars-into.test.ts": 0,
   "packages/keystone-lab/test/trial-reach.test.ts": 25,
-  "packages/keystone-lab/test/undercut-levels.test.ts": 60,
+  "packages/keystone-lab/test/undercut-levels.test.ts": 75,
   "packages/keystone-lab/test/wave-gpu-W3.test.ts": 127.9,
   "packages/keystone-lab/test/wave-gpu-W4.test.ts": 96,
   "packages/keystone-lab/test/wave-gpu-W5.test.ts": 81.3,

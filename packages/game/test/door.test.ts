@@ -38,6 +38,9 @@ describe('door options', () => {
     expect(openerFor(UNCAST, 2, '1', false)).toBeNull(); // no recorded line
     expect(openerFor(B3, 2, '1', false)).toBe(B3.solutions!.ace![0]);
     expect(openerFor(B1, 0, '0', false)).toBeNull();
+    // A pull is never pre-aimed (PT35): U1 opens its series, and its par line's first pull would play half the puzzle.
+    expect(U1.solutions!.par![0]!.ammo).toBe('pull');
+    expect([openerFor(U1, 0, 'auto', false), openerFor(U1, 0, '1', false), openerFor(U2, 1, '1', false)]).toEqual([null, null, null]);
     expect(preaimMode(q(''))).toBe('auto');
     expect(() => preaimMode(q('keystone.preaim=on'))).toThrow(/keystone.preaim must be auto, 1 or 0/);
   });
