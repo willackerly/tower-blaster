@@ -189,17 +189,22 @@ export interface OutcomeStars {
 }
 
 /**
- * Stars: none unless the objective is met; one for meeting it; two at t2; three at t3 with no heritage
- * broken. Thresholds cast for another metric than the one played count as uncast.
+ * Stars: none unless the objective is met; one for meeting it; two at t2; three at t3. Any heritage broken
+ * then costs one star at every tier, down to none (PT28): a round that met the objective but broke heritage
+ * scores one star fewer than the same round with it intact, so B2's novice (crowns down, 25 of the cathedral's
+ * 32 cubes broken) ends on no star and its card leads with Retry. Before PT28 heritage cost only the third
+ * star. Thresholds cast for another metric than the one played count as uncast.
  */
 export function outcomeStars(cast: StarsDef | undefined, metric: StarMetric, value: number, met: boolean, heritageBroken: number): OutcomeStars {
   const uncast = !cast || cast.metric !== metric;
   if (!met) return { stars: 0, beatBot: false, uncast };
-  if (uncast) return { stars: 1, beatBot: false, uncast };
-  const beatBot = cast.best !== undefined && (lowerIsBetter(metric) ? value < cast.best : value > cast.best);
-  const stars = atLeast(metric, value, cast.t3) && heritageBroken === 0 ? 3 : atLeast(metric, value, cast.t2) ? 2 : 1;
-  return { stars, beatBot, uncast };
+  const beatBot = !uncast && cast.best !== undefined && (lowerIsBetter(metric) ? value < cast.best : value > cast.best);
+  const base = uncast ? 1 : atLeast(metric, value, cast.t3) ? 3 : atLeast(metric, value, cast.t2) ? 2 : 1;
+  return { stars: (heritageBroken > 0 ? base - 1 : base) as 0 | 1 | 2 | 3, beatBot, uncast };
 }
+
+/** The stamp an outcome round that met its objective but broke heritage gets, in place of its gold one (PT28). */
+export const HERITAGE_LOST = 'HERITAGE LOST';
 
 /** An outcome level's score: what LevelScore holds for a par level, plus the outcome's own numbers. */
 export interface OutcomeScore extends LevelScore {
@@ -208,17 +213,18 @@ export interface OutcomeScore extends LevelScore {
 
 /**
  * Scores an outcome level's end. The stamp: INCOMPLETE when the objective is not met (TOPPLED on a
- * hold level), BEAT THE BOT past the best cast play, else how much came down ("72% DOWN"), or on a
- * hold level how much was pulled ("35% PULLED").
+ * hold level), HERITAGE LOST when it was met with heritage broken (PT28: never a gold stamp then), BEAT
+ * THE BOT past the best cast play, else how much came down ("72% DOWN"), or on a hold level how much was
+ * pulled ("35% PULLED").
  */
 export function outcomeScore(f: OutcomeFacts, cast: StarsDef | undefined, metric: StarMetric = cast?.metric ?? (f.hold ? 'pulled' : f.quake ? 'energy' : 'collapse')): OutcomeScore {
   const lines = outcomeTally(f);
   const total = floorTotal(lines);
   const value = metricValue(metric, f, total);
   const s = outcomeStars(cast, metric, value, f.met, f.heritageBroken);
-  // Heritage costs the third star only, and only where the round had reached it.
+  // Heritage costs one star at every tier (outcomeStars); the card says how many it took.
   const lost = f.heritageBroken > 0 ? outcomeStars(cast, metric, value, f.met, 0).stars - s.stars : 0;
-  const stamp = !f.met ? (f.hold ? 'TOPPLED' : 'INCOMPLETE') : s.beatBot ? 'BEAT THE BOT' : f.hold ? `${Math.floor(100 * f.pulled)}% PULLED` : `${Math.floor(100 * f.collapse)}% DOWN`;
+  const stamp = !f.met ? (f.hold ? 'TOPPLED' : 'INCOMPLETE') : f.heritageBroken > 0 ? HERITAGE_LOST : s.beatBot ? 'BEAT THE BOT' : f.hold ? `${Math.floor(100 * f.pulled)}% PULLED` : `${Math.floor(100 * f.collapse)}% DOWN`;
   return { lines, total, stars: s.stars, stamp, leverage: f.leverage, ...(lost > 0 ? { heritageStarsLost: lost } : {}), outcome: { collapse: f.collapse, metric, value, ...s } };
 }
 

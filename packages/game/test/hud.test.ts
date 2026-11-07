@@ -186,6 +186,17 @@ describe('formatting', () => {
     expect(html).toMatch(/>62% DOWN</);
     expect(html).toMatch(/Rack left/);
   });
+  it('PT28: B2 met with heritage broken: the HERITAGE LOST stamp (not gold), the red line, no star and Retry first', () => {
+    const score = outcomeScore({ met: true, collapse: 0.18, leverage: 2, comboMax: 4, hasCrowns: true, rackLeft: 0, heritageBroken: 25, outOfLot: 0, crownsDown: 4, skylineRatio: 0.9, pulled: 0 }, B2.stars, 'score');
+    const html = resultHtml(B2, score, 3, true);
+    expect(html).toMatch(/class="stamp s-heritagelost"[^>]*>HERITAGE LOST</);
+    expect(html).not.toMatch(/18% DOWN/);
+    expect(html).toMatch(/class="line bad"[^>]*><span>Heritage</);
+    expect(html).toMatch(/Heritage cracked: 1 star lost/);
+    expect(score.stars).toBe(0);
+    expect(html).toMatch(/data-act="retry" class="primary"/);
+    expect(html).toMatch(/data-act="next">/);
+  });
 });
 
 describe('playtest polish (U5, U6)', () => {
