@@ -14,12 +14,14 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { BIG_LEVELS, castStars, compileLevel, writeShots } from '@tb/keystone';
 import { requireWebGPU } from '@tb/testkit';
 import { type BrowserCastPlayer, openBrowserCastPlayer } from '../src/cast-browser.ts';
+import { SWIFT_SLOW_MAX } from './level-stability-gpu.ts';
 
 const MINUTES = 60_000;
 const channel = process.env.TB_CHANNEL;
-/** Largest level loaded on SwiftShader; every level on a real GPU (TB_CHANNEL) or with PHYSICS_GPU_SLOW=1. */
-const BIG_REST_MAX = channel || process.env.PHYSICS_GPU_SLOW === '1' ? Infinity : 1000;
-/** Showcase lines replay on a real GPU or with PHYSICS_GPU_SLOW=1. */
+/** Largest level loaded: every level on a real GPU (TB_CHANNEL), SWIFT_SLOW_MAX bodies on SwiftShader with
+ * PHYSICS_GPU_SLOW=1 (B2 and B3 do not finish there: level-stability-gpu.ts), 1,000 otherwise. */
+const BIG_REST_MAX = channel ? Infinity : process.env.PHYSICS_GPU_SLOW === '1' ? SWIFT_SLOW_MAX : 1000;
+/** Showcase lines replay on a real GPU or with PHYSICS_GPU_SLOW=1, on the levels loaded. */
 const SHOWCASE = Boolean(channel) || process.env.PHYSICS_GPU_SLOW === '1';
 const REST_STEPS = Number(process.env.REST_STEPS ?? (channel ? 600 : 100));
 /** The rest bound in cells (h): the spec's for the big levels. */
@@ -46,7 +48,7 @@ describe('big levels at rest on the GPU solver', () => {
     expect(r.maxMove).toBeLessThan(BOUND);
     expect(Math.abs(r.topDrop)).toBeLessThan(BOUND);
   }, 30 * MINUTES);
-  for (const { def } of sized.filter((l) => l.def.solutions?.ace && castStars(compileLevel(l.def)))) it.runIf(SHOWCASE)(`${def.id}'s showcase line meets the objective, spares heritage, with no limit hit`, async (ctx) => {
+  for (const { def } of sized.filter((l) => l.n <= BIG_REST_MAX && l.def.solutions?.ace && castStars(compileLevel(l.def)))) it.runIf(SHOWCASE)(`${def.id}'s showcase line meets the objective, spares heritage, with no limit hit`, async (ctx) => {
     if (!player) return ctx.skip();
     const line = def.solutions!.ace!, [p] = await player.play(def, [line]);
     const end = p!.samples.at(-1)!, stars = def.stars!;
@@ -61,7 +63,7 @@ describe('big levels at rest on the GPU solver', () => {
   }, 30 * MINUTES);
   it('every big level is either checked here or named as too big for this adapter', () => {
     const skipped = sized.filter((l) => l.n > BIG_REST_MAX).map((l) => `${l.def.id} (${l.n})`);
-    if (skipped.length) console.log(`at rest on a real GPU only (TB_CHANNEL=chrome or PHYSICS_GPU_SLOW=1): ${skipped.join(', ')}`);
+    if (skipped.length) console.log(`at rest, and their showcase lines, on a real GPU only (TB_CHANNEL=chrome${SHOWCASE ? '' : ' or PHYSICS_GPU_SLOW=1'}): ${skipped.join(', ')}`);
     expect(sized.length).toBe(BIG_LEVELS.length);
   });
 });

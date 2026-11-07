@@ -1,11 +1,11 @@
 // PT1's gate on the game page (headless Chromium; SwiftShader in CI): open a level at a desktop or phone shape,
 // read the renderer's ID pass at the opening view (handle.sightlines), leave out what the page's own HUD panels
 // cover (measured from the DOM, so a HUD re-layout is checked as it ships), and count the objectives in sight.
-import { expect } from 'vitest';
-import { compileLevel, levelById } from '@tb/keystone';
+import { describe, expect, it } from 'vitest';
+import { compileLevel, levelById, SERIES } from '@tb/keystone';
 import { seen } from '../src/sightlines.ts';
 import { CROWNS_SEEN } from '../src/view.ts';
-import { type GamePage, ready } from './page.ts';
+import { type GamePage, gamePage, ready } from './page.ts';
 
 export const SHAPES = {
   desktop: { viewport: { width: 1280, height: 800 }, deviceScaleFactor: 1 },
@@ -45,4 +45,23 @@ export async function sightOf(game: GamePage, id: string, shape: keyof typeof SH
 export function expectObjectivesInSight(s: Sight): void {
   expect(s.crownsSeen).toBeGreaterThanOrEqual(Math.ceil(CROWNS_SEEN * s.crowns - 1e-9));
   if (s.heritage > 0) expect(s.heritageSeen).toBeGreaterThanOrEqual(1);
+}
+
+/** Levels with objectives and under 1,000 bodies (the city levels are sightlines-city-gpu.test.ts's). */
+const chambers = () => SERIES.flat().filter((d) => { const c = compileLevel(d); return c.meta.n < 1000 && c.meta.crowns.length + c.meta.heritage.length > 0; }).map((d) => d.id);
+
+/** The chamber levels' PT1 gate at one shape, on a game page of its own (one shape a file keeps each under CI's 300 s). */
+export function chamberSightSuite(shape: keyof typeof SHAPES): void {
+  const game = gamePage(), CHAMBERS = chambers();
+  describe('PT1: objectives in sight at the opening view (ID pass, chamber levels)', () => {
+    it(`${shape}: ${CHAMBERS.join(', ')}`, async (ctx) => {
+      if (!game.browser()) return ctx.skip();
+      for (const id of CHAMBERS) {
+        const s = await sightOf(game, id, shape);
+        if (!s) return ctx.skip();
+        ctx.annotate(`${id}: crowns ${s.crownsSeen}/${s.crowns}, heritage ${s.heritageSeen}/${s.heritage}`);
+        expectObjectivesInSight(s);
+      }
+    }, 10 * 60_000);
+  });
 }
