@@ -1,0 +1,619 @@
+{
+ "scenes": [
+  {
+   "search": "?level=L1&rules=keystone",
+   "toSearch": "?level=L1&engine=avbd-gpu&rules=keystone",
+   "rules": {
+    "mode": "keystone",
+    "hitstop": false,
+    "slowmo": false
+   },
+   "back": "?level=L1&engine=avbd-gpu&rules=keystone"
+  },
+  {
+   "search": "?level=L1&rules=keystone&keystone.hitstop=1&keystone.slowmo=1&keystone.budget=0&keystone.tailskip=0&keystone.follow=1&keystone.shake=1&keystone.frames=half&keystone.rapid=0&keystone.turnview=0&keystone.arcs=0&keystone.handoff=0&keystone.undo=0&keystone.launch=level&keystone.balls=plain&keystone.marks=0&keystone.fx=classic&keystone.spent=0&keystone.pullanim=0&keystone.frozenlook=0",
+   "toSearch": "?level=L1&engine=avbd-gpu&rules=keystone&keystone.hitstop=1&keystone.slowmo=1&keystone.budget=0&keystone.tailskip=0&keystone.follow=1&keystone.shake=1&keystone.frames=half&keystone.rapid=0&keystone.turnview=0&keystone.arcs=0&keystone.handoff=0&keystone.undo=0&keystone.launch=level&keystone.balls=plain&keystone.marks=0&keystone.fx=classic&keystone.spent=0&keystone.pullanim=0&keystone.frozenlook=0",
+   "rules": {
+    "mode": "keystone",
+    "hitstop": true,
+    "slowmo": true,
+    "budget": 0,
+    "tailskip": false,
+    "follow": true,
+    "shake": true,
+    "frames": "half",
+    "rapid": false,
+    "undo": 0,
+    "launch": "level",
+    "balls": "plain",
+    "marks": false,
+    "fx": "classic",
+    "spent": false,
+    "pullanim": false,
+    "frozenlook": false
+   },
+   "back": "?level=L1&engine=avbd-gpu&rules=keystone&keystone.hitstop=1&keystone.slowmo=1&keystone.budget=0&keystone.tailskip=0&keystone.follow=1&keystone.shake=1&keystone.frames=half&keystone.rapid=0&keystone.undo=0&keystone.launch=level&keystone.balls=plain&keystone.marks=0&keystone.fx=classic&keystone.spent=0&keystone.pullanim=0&keystone.frozenlook=0"
+  },
+  {
+   "search": "?level=L1&rules=keystone&keystone.hitstop=0",
+   "toSearch": "?level=L1&engine=avbd-gpu&rules=keystone",
+   "rules": {
+    "mode": "keystone",
+    "hitstop": false,
+    "slowmo": false
+   },
+   "back": "?level=L1&engine=avbd-gpu&rules=keystone"
+  },
+  {
+   "search": "?level=L1&rules=keystone&keystone.hitstop=1",
+   "toSearch": "?level=L1&engine=avbd-gpu&rules=keystone&keystone.hitstop=1",
+   "rules": {
+    "mode": "keystone",
+    "hitstop": true,
+    "slowmo": false
+   },
+   "back": "?level=L1&engine=avbd-gpu&rules=keystone&keystone.hitstop=1"
+  },
+  {
+   "search": "?level=L1&rules=keystone&keystone.slowmo=0",
+   "toSearch": "?level=L1&engine=avbd-gpu&rules=keystone",
+   "rules": {
+    "mode": "keystone",
+    "hitstop": false,
+    "slowmo": false
+   },
+   "back": "?level=L1&engine=avbd-gpu&rules=keystone"
+  },
+  {
+   "search": "?level=L1&rules=keystone&keystone.slowmo=1",
+   "toSearch": "?level=L1&engine=avbd-gpu&rules=keystone&keystone.slowmo=1",
+   "rules": {
+    "mode": "keystone",
+    "hitstop": false,
+    "slowmo": true
+   },
+   "back": "?level=L1&engine=avbd-gpu&rules=keystone&keystone.slowmo=1"
+  },
+  {
+   "search": "?level=L1&rules=keystone&keystone.tailskip=0",
+   "toSearch": "?level=L1&engine=avbd-gpu&rules=keystone&keystone.tailskip=0",
+   "rules": {
+    "mode": "keystone",
+    "hitstop": false,
+    "slowmo": false,
+    "tailskip": false
+   },
+   "back": "?level=L1&engine=avbd-gpu&rules=keystone&keystone.tailskip=0"
+  },
+  {
+   "search": "?level=L1&rules=keystone&keystone.tailskip=1",
+   "toSearch": "?level=L1&engine=avbd-gpu&rules=keystone",
+   "rules": {
+    "mode": "keystone",
+    "hitstop": false,
+    "slowmo": false
+   },
+   "back": "?level=L1&engine=avbd-gpu&rules=keystone"
+  },
+  {
+   "search": "?level=L1&rules=keystone&keystone.follow=0",
+   "toSearch": "?level=L1&engine=avbd-gpu&rules=keystone",
+   "rules": {
+    "mode": "keystone",
+    "hitstop": false,
+    "slowmo": false
+   },
+   "back": "?level=L1&engine=avbd-gpu&rules=keystone"
+  },
+  {
+   "search": "?level=L1&rules=keystone&keystone.follow=1",
+   "toSearch": "?level=L1&engine=avbd-gpu&rules=keystone&keystone.follow=1",
+   "rules": {
+    "mode": "keystone",
+    "hitstop": false,
+    "slowmo": false,
+    "follow": true
+   },
+   "back": "?level=L1&engine=avbd-gpu&rules=keystone&keystone.follow=1"
+  },
+  {
+   "search": "?level=L1&rules=keystone&keystone.shake=0",
+   "toSearch": "?level=L1&engine=avbd-gpu&rules=keystone",
+   "rules": {
+    "mode": "keystone",
+    "hitstop": false,
+    "slowmo": false
+   },
+   "back": "?level=L1&engine=avbd-gpu&rules=keystone"
+  },
+  {
+   "search": "?level=L1&rules=keystone&keystone.shake=1",
+   "toSearch": "?level=L1&engine=avbd-gpu&rules=keystone&keystone.shake=1",
+   "rules": {
+    "mode": "keystone",
+    "hitstop": false,
+    "slowmo": false,
+    "shake": true
+   },
+   "back": "?level=L1&engine=avbd-gpu&rules=keystone&keystone.shake=1"
+  },
+  {
+   "search": "?level=L1&rules=keystone&keystone.rapid=0",
+   "toSearch": "?level=L1&engine=avbd-gpu&rules=keystone&keystone.rapid=0",
+   "rules": {
+    "mode": "keystone",
+    "hitstop": false,
+    "slowmo": false,
+    "rapid": false
+   },
+   "back": "?level=L1&engine=avbd-gpu&rules=keystone&keystone.rapid=0"
+  },
+  {
+   "search": "?level=L1&rules=keystone&keystone.rapid=1",
+   "toSearch": "?level=L1&engine=avbd-gpu&rules=keystone",
+   "rules": {
+    "mode": "keystone",
+    "hitstop": false,
+    "slowmo": false
+   },
+   "back": "?level=L1&engine=avbd-gpu&rules=keystone"
+  },
+  {
+   "search": "?level=L1&rules=keystone&keystone.turnview=0",
+   "toSearch": "?level=L1&engine=avbd-gpu&rules=keystone&keystone.turnview=0",
+   "rules": {
+    "mode": "keystone",
+    "hitstop": false,
+    "slowmo": false
+   },
+   "back": "?level=L1&engine=avbd-gpu&rules=keystone"
+  },
+  {
+   "search": "?level=L1&rules=keystone&keystone.turnview=1",
+   "toSearch": "?level=L1&engine=avbd-gpu&rules=keystone",
+   "rules": {
+    "mode": "keystone",
+    "hitstop": false,
+    "slowmo": false
+   },
+   "back": "?level=L1&engine=avbd-gpu&rules=keystone"
+  },
+  {
+   "search": "?level=L1&rules=keystone&keystone.arcs=0",
+   "toSearch": "?level=L1&engine=avbd-gpu&rules=keystone&keystone.arcs=0",
+   "rules": {
+    "mode": "keystone",
+    "hitstop": false,
+    "slowmo": false
+   },
+   "back": "?level=L1&engine=avbd-gpu&rules=keystone"
+  },
+  {
+   "search": "?level=L1&rules=keystone&keystone.arcs=1",
+   "toSearch": "?level=L1&engine=avbd-gpu&rules=keystone",
+   "rules": {
+    "mode": "keystone",
+    "hitstop": false,
+    "slowmo": false
+   },
+   "back": "?level=L1&engine=avbd-gpu&rules=keystone"
+  },
+  {
+   "search": "?level=L1&rules=keystone&keystone.handoff=0",
+   "toSearch": "?level=L1&engine=avbd-gpu&rules=keystone&keystone.handoff=0",
+   "rules": {
+    "mode": "keystone",
+    "hitstop": false,
+    "slowmo": false
+   },
+   "back": "?level=L1&engine=avbd-gpu&rules=keystone"
+  },
+  {
+   "search": "?level=L1&rules=keystone&keystone.handoff=1",
+   "toSearch": "?level=L1&engine=avbd-gpu&rules=keystone",
+   "rules": {
+    "mode": "keystone",
+    "hitstop": false,
+    "slowmo": false
+   },
+   "back": "?level=L1&engine=avbd-gpu&rules=keystone"
+  },
+  {
+   "search": "?level=L1&rules=keystone&keystone.marks=0",
+   "toSearch": "?level=L1&engine=avbd-gpu&rules=keystone&keystone.marks=0",
+   "rules": {
+    "mode": "keystone",
+    "hitstop": false,
+    "slowmo": false,
+    "marks": false
+   },
+   "back": "?level=L1&engine=avbd-gpu&rules=keystone&keystone.marks=0"
+  },
+  {
+   "search": "?level=L1&rules=keystone&keystone.marks=1",
+   "toSearch": "?level=L1&engine=avbd-gpu&rules=keystone",
+   "rules": {
+    "mode": "keystone",
+    "hitstop": false,
+    "slowmo": false
+   },
+   "back": "?level=L1&engine=avbd-gpu&rules=keystone"
+  },
+  {
+   "search": "?level=L1&rules=keystone&keystone.spent=0",
+   "toSearch": "?level=L1&engine=avbd-gpu&rules=keystone&keystone.spent=0",
+   "rules": {
+    "mode": "keystone",
+    "hitstop": false,
+    "slowmo": false,
+    "spent": false
+   },
+   "back": "?level=L1&engine=avbd-gpu&rules=keystone&keystone.spent=0"
+  },
+  {
+   "search": "?level=L1&rules=keystone&keystone.spent=1",
+   "toSearch": "?level=L1&engine=avbd-gpu&rules=keystone",
+   "rules": {
+    "mode": "keystone",
+    "hitstop": false,
+    "slowmo": false
+   },
+   "back": "?level=L1&engine=avbd-gpu&rules=keystone"
+  },
+  {
+   "search": "?level=L1&rules=keystone&keystone.pullanim=0",
+   "toSearch": "?level=L1&engine=avbd-gpu&rules=keystone&keystone.pullanim=0",
+   "rules": {
+    "mode": "keystone",
+    "hitstop": false,
+    "slowmo": false,
+    "pullanim": false
+   },
+   "back": "?level=L1&engine=avbd-gpu&rules=keystone&keystone.pullanim=0"
+  },
+  {
+   "search": "?level=L1&rules=keystone&keystone.pullanim=1",
+   "toSearch": "?level=L1&engine=avbd-gpu&rules=keystone",
+   "rules": {
+    "mode": "keystone",
+    "hitstop": false,
+    "slowmo": false
+   },
+   "back": "?level=L1&engine=avbd-gpu&rules=keystone"
+  },
+  {
+   "search": "?level=L1&rules=keystone&keystone.frozenlook=0",
+   "toSearch": "?level=L1&engine=avbd-gpu&rules=keystone&keystone.frozenlook=0",
+   "rules": {
+    "mode": "keystone",
+    "hitstop": false,
+    "slowmo": false,
+    "frozenlook": false
+   },
+   "back": "?level=L1&engine=avbd-gpu&rules=keystone&keystone.frozenlook=0"
+  },
+  {
+   "search": "?level=L1&rules=keystone&keystone.frozenlook=1",
+   "toSearch": "?level=L1&engine=avbd-gpu&rules=keystone",
+   "rules": {
+    "mode": "keystone",
+    "hitstop": false,
+    "slowmo": false
+   },
+   "back": "?level=L1&engine=avbd-gpu&rules=keystone"
+  },
+  {
+   "search": "?level=L1&rules=keystone&keystone.budget=0",
+   "toSearch": "?level=L1&engine=avbd-gpu&rules=keystone&keystone.budget=0",
+   "rules": {
+    "mode": "keystone",
+    "hitstop": false,
+    "slowmo": false,
+    "budget": 0
+   },
+   "back": "?level=L1&engine=avbd-gpu&rules=keystone&keystone.budget=0"
+  },
+  {
+   "search": "?level=L1&rules=keystone&keystone.budget=14",
+   "toSearch": "?level=L1&engine=avbd-gpu&rules=keystone",
+   "rules": {
+    "mode": "keystone",
+    "hitstop": false,
+    "slowmo": false
+   },
+   "back": "?level=L1&engine=avbd-gpu&rules=keystone"
+  },
+  {
+   "search": "?level=L1&rules=keystone&keystone.budget=7.5",
+   "toSearch": "?level=L1&engine=avbd-gpu&rules=keystone&keystone.budget=7.5",
+   "rules": {
+    "mode": "keystone",
+    "hitstop": false,
+    "slowmo": false,
+    "budget": 7.5
+   },
+   "back": "?level=L1&engine=avbd-gpu&rules=keystone&keystone.budget=7.5"
+  },
+  {
+   "search": "?level=L1&rules=keystone&keystone.budget=1000",
+   "toSearch": "?level=L1&engine=avbd-gpu&rules=keystone&keystone.budget=1000",
+   "rules": {
+    "mode": "keystone",
+    "hitstop": false,
+    "slowmo": false,
+    "budget": 1000
+   },
+   "back": "?level=L1&engine=avbd-gpu&rules=keystone&keystone.budget=1000"
+  },
+  {
+   "search": "?level=L1&rules=keystone&keystone.budget=1e2",
+   "toSearch": "?level=L1&engine=avbd-gpu&rules=keystone&keystone.budget=100",
+   "rules": {
+    "mode": "keystone",
+    "hitstop": false,
+    "slowmo": false,
+    "budget": 100
+   },
+   "back": "?level=L1&engine=avbd-gpu&rules=keystone&keystone.budget=100"
+  },
+  {
+   "search": "?level=L1&rules=keystone&keystone.budget=%205%20",
+   "toSearch": "?level=L1&engine=avbd-gpu&rules=keystone&keystone.budget=5",
+   "rules": {
+    "mode": "keystone",
+    "hitstop": false,
+    "slowmo": false,
+    "budget": 5
+   },
+   "back": "?level=L1&engine=avbd-gpu&rules=keystone&keystone.budget=5"
+  },
+  {
+   "search": "?level=L1&rules=keystone&keystone.undo=0",
+   "toSearch": "?level=L1&engine=avbd-gpu&rules=keystone&keystone.undo=0",
+   "rules": {
+    "mode": "keystone",
+    "hitstop": false,
+    "slowmo": false,
+    "undo": 0
+   },
+   "back": "?level=L1&engine=avbd-gpu&rules=keystone&keystone.undo=0"
+  },
+  {
+   "search": "?level=L1&rules=keystone&keystone.undo=1024",
+   "toSearch": "?level=L1&engine=avbd-gpu&rules=keystone",
+   "rules": {
+    "mode": "keystone",
+    "hitstop": false,
+    "slowmo": false
+   },
+   "back": "?level=L1&engine=avbd-gpu&rules=keystone"
+  },
+  {
+   "search": "?level=L1&rules=keystone&keystone.undo=65536",
+   "toSearch": "?level=L1&engine=avbd-gpu&rules=keystone&keystone.undo=65536",
+   "rules": {
+    "mode": "keystone",
+    "hitstop": false,
+    "slowmo": false,
+    "undo": 65536
+   },
+   "back": "?level=L1&engine=avbd-gpu&rules=keystone&keystone.undo=65536"
+  },
+  {
+   "search": "?level=L1&rules=keystone&keystone.undo=12.5",
+   "toSearch": "?level=L1&engine=avbd-gpu&rules=keystone&keystone.undo=12.5",
+   "rules": {
+    "mode": "keystone",
+    "hitstop": false,
+    "slowmo": false,
+    "undo": 12.5
+   },
+   "back": "?level=L1&engine=avbd-gpu&rules=keystone&keystone.undo=12.5"
+  },
+  {
+   "search": "?level=L1&rules=keystone&keystone.frames=all",
+   "toSearch": "?level=L1&engine=avbd-gpu&rules=keystone",
+   "rules": {
+    "mode": "keystone",
+    "hitstop": false,
+    "slowmo": false
+   },
+   "back": "?level=L1&engine=avbd-gpu&rules=keystone"
+  },
+  {
+   "search": "?level=L1&rules=keystone&keystone.frames=half",
+   "toSearch": "?level=L1&engine=avbd-gpu&rules=keystone&keystone.frames=half",
+   "rules": {
+    "mode": "keystone",
+    "hitstop": false,
+    "slowmo": false,
+    "frames": "half"
+   },
+   "back": "?level=L1&engine=avbd-gpu&rules=keystone&keystone.frames=half"
+  },
+  {
+   "search": "?level=L1&rules=keystone&keystone.frames=auto",
+   "toSearch": "?level=L1&engine=avbd-gpu&rules=keystone&keystone.frames=auto",
+   "rules": {
+    "mode": "keystone",
+    "hitstop": false,
+    "slowmo": false,
+    "frames": "auto"
+   },
+   "back": "?level=L1&engine=avbd-gpu&rules=keystone&keystone.frames=auto"
+  },
+  {
+   "search": "?level=L1&rules=keystone&keystone.launch=high",
+   "toSearch": "?level=L1&engine=avbd-gpu&rules=keystone",
+   "rules": {
+    "mode": "keystone",
+    "hitstop": false,
+    "slowmo": false
+   },
+   "back": "?level=L1&engine=avbd-gpu&rules=keystone"
+  },
+  {
+   "search": "?level=L1&rules=keystone&keystone.launch=level",
+   "toSearch": "?level=L1&engine=avbd-gpu&rules=keystone&keystone.launch=level",
+   "rules": {
+    "mode": "keystone",
+    "hitstop": false,
+    "slowmo": false,
+    "launch": "level"
+   },
+   "back": "?level=L1&engine=avbd-gpu&rules=keystone&keystone.launch=level"
+  },
+  {
+   "search": "?level=L1&rules=keystone&keystone.balls=painted",
+   "toSearch": "?level=L1&engine=avbd-gpu&rules=keystone",
+   "rules": {
+    "mode": "keystone",
+    "hitstop": false,
+    "slowmo": false
+   },
+   "back": "?level=L1&engine=avbd-gpu&rules=keystone"
+  },
+  {
+   "search": "?level=L1&rules=keystone&keystone.balls=plain",
+   "toSearch": "?level=L1&engine=avbd-gpu&rules=keystone&keystone.balls=plain",
+   "rules": {
+    "mode": "keystone",
+    "hitstop": false,
+    "slowmo": false,
+    "balls": "plain"
+   },
+   "back": "?level=L1&engine=avbd-gpu&rules=keystone&keystone.balls=plain"
+  },
+  {
+   "search": "?level=L1&rules=keystone&keystone.fx=damage",
+   "toSearch": "?level=L1&engine=avbd-gpu&rules=keystone",
+   "rules": {
+    "mode": "keystone",
+    "hitstop": false,
+    "slowmo": false
+   },
+   "back": "?level=L1&engine=avbd-gpu&rules=keystone"
+  },
+  {
+   "search": "?level=L1&rules=keystone&keystone.fx=classic",
+   "toSearch": "?level=L1&engine=avbd-gpu&rules=keystone&keystone.fx=classic",
+   "rules": {
+    "mode": "keystone",
+    "hitstop": false,
+    "slowmo": false,
+    "fx": "classic"
+   },
+   "back": "?level=L1&engine=avbd-gpu&rules=keystone&keystone.fx=classic"
+  }
+ ],
+ "bad": [
+  {
+   "patch": {
+    "hitstop": "1"
+   },
+   "error": "rules.hitstop must be true or false"
+  },
+  {
+   "patch": {
+    "slowmo": 0
+   },
+   "error": "rules.slowmo must be true or false"
+  },
+  {
+   "patch": {
+    "budget": "14"
+   },
+   "error": "rules.budget must be a number"
+  },
+  {
+   "patch": {
+    "tailskip": "no"
+   },
+   "error": "rules.tailskip must be true or false"
+  },
+  {
+   "patch": {
+    "frames": 3
+   },
+   "error": "rules.frames must be a string"
+  },
+  {
+   "patch": {
+    "undo": true
+   },
+   "error": "rules.undo must be a number"
+  },
+  {
+   "patch": {
+    "launch": 1
+   },
+   "error": "rules.launch must be a string"
+  },
+  {
+   "patch": {
+    "balls": false
+   },
+   "error": "rules.balls must be a string"
+  },
+  {
+   "patch": {
+    "marks": "off"
+   },
+   "error": "rules.marks must be true or false"
+  },
+  {
+   "patch": {
+    "fx": null
+   },
+   "error": "rules.fx must be a string"
+  },
+  {
+   "patch": {
+    "spent": 1
+   },
+   "error": "rules.spent must be true or false"
+  },
+  {
+   "patch": {
+    "pullanim": "x"
+   },
+   "error": "rules.pullanim must be true or false"
+  },
+  {
+   "patch": {
+    "frozenlook": []
+   },
+   "error": "rules.frozenlook must be true or false"
+  },
+  {
+   "patch": {
+    "follow": {}
+   },
+   "error": "rules.follow must be true or false"
+  },
+  {
+   "patch": {
+    "shake": "y"
+   },
+   "error": "rules.shake must be true or false"
+  },
+  {
+   "patch": {
+    "rapid": "n"
+   },
+   "error": "rules.rapid must be true or false"
+  },
+  {
+   "patch": {
+    "frames": "x"
+   },
+   "error": "keystone.frames must be one of all, half, auto: x"
+  },
+  {
+   "patch": {
+    "budget": 2000
+   },
+   "error": "keystone.budget must be from 0 to 1000 ms (0: no valve): 2000"
+  }
+ ]
+}
