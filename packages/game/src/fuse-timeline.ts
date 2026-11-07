@@ -74,6 +74,16 @@ export function relayCharges(c: CompiledLevel): { charge: number; host: number; 
 export const RELAY_COLOUR = rgbe(90, 190, 255, 0.55);
 export const RELAY_CSS = 'rgb(90, 190, 255)';
 
+/**
+ * The timeline the Fuse & Fold panel shows for a level: one when its rack has a plunger and the plunger arms a
+ * charge, none on a Rube Lab contraption (its plunger is the Go button's release, not a timed demolition).
+ */
+export function panelTimeline(c: CompiledLevel): Timeline | null {
+  if (!c.def.rack.includes('plunger') || c.def.rube) return null;
+  const t = new Timeline(c);
+  return t.empty ? null : t;
+}
+
 export class Timeline {
   readonly charges: TimelineCharge[];
   /** Relays (arm 'start'), shown but not set: they go off when jolted. */

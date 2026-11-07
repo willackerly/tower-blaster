@@ -4,7 +4,7 @@
 import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { loadBundle, openWebGPU, type WebGPUSession } from '@tb/testkit';
-import { COAT_GILT, COAT_GLAZE, COAT_MASK, COAT_NONE, COAT_SHIFT, engrave, linearToOklab, MARK_COVER, MARK_HIT, MARK_KEEP, MARK_MASK, MARK_NONE, MARK_SAVE, MARK_SHADE, MARK_SHIFT, markPoint, markSd, packFx, shieldSd, srgbToLinear, unpackFx, FX_ANCHOR, FX_BAND, FX_MATTE, FX_PAINT, FX_WORDS, type V3 } from '../src/index.ts';
+import { COAT_GILT, COAT_GLAZE, COAT_LINEAR, COAT_MASK, COAT_NONE, COAT_PAINT, COAT_WGSL, COAT_SHIFT, engrave, linearToOklab, MARK_COVER, MARK_HIT, MARK_KEEP, MARK_MASK, MARK_NONE, MARK_SAVE, MARK_SHADE, MARK_SHIFT, markPoint, markSd, packFx, shieldSd, srgbToLinear, unpackFx, FX_ANCHOR, FX_BAND, FX_MATTE, FX_PAINT, FX_WORDS, type V3 } from '../src/index.ts';
 import type * as Drivers from './marks-page.ts';
 
 describe('glyphs (CPU)', () => {
@@ -109,11 +109,16 @@ describe('glyphs (CPU)', () => {
     expect(unpackFx(w).mark).toBe(MARK_NONE);
   });
 
+  it('COAT_PAINT is a white base, so the fx tint is the block\'s colour (a duel\'s inks, look-colours.md §6)', () => {
+    expect(COAT_PAINT).toBe(3);
+    expect(COAT_LINEAR[COAT_PAINT]).toEqual([1, 1, 1]);
+    expect(COAT_WGSL).toMatch(/vec3f\(1\.0\), coat == 3u\)/);
+  });
   it('fx word 1 carries the coat in bits 22-23, clear of the mark and the flags; unpack reads it back', () => {
     expect(COAT_MASK).toBe(3 << COAT_SHIFT);
     for (const flag of [FX_ANCHOR, FX_PAINT, FX_MATTE, FX_BAND, MARK_MASK]) expect(flag & COAT_MASK).toBe(0);
     const w = new Uint32Array(FX_WORDS);
-    for (const coat of [COAT_GILT, COAT_GLAZE] as const) for (const mark of [MARK_NONE, MARK_HIT, MARK_SAVE] as const) {
+    for (const coat of [COAT_GILT, COAT_GLAZE, COAT_PAINT] as const) for (const mark of [MARK_NONE, MARK_HIT, MARK_SAVE, MARK_KEEP] as const) {
       packFx({ tint: [1, 0.5, 0.2], band: true, scale: 0.5, mark, coat }, w);
       expect(unpackFx(w)).toMatchObject({ coat, mark, band: true, anchor: false });
       expect(unpackFx(w).scale).toBeCloseTo(0.5, 3);

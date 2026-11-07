@@ -28,3 +28,5 @@ export * from './fuse-levels.ts';
 export * from './placement.ts';
 export * from './stroke.ts';
 export * from './build.ts';
+export * from './rube-levels.ts';
+export * from './rube-play.ts';

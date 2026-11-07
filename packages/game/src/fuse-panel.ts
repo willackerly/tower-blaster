@@ -3,7 +3,7 @@
 // between rows), and the Plunger button (key Enter), which fires every charge at its delay. Shown on levels
 // whose rack holds a plunger and whose charges it arms. It never moves the camera (Will's camera rule).
 import type { CompiledLevel, PlungerShot } from '@tb/keystone';
-import { delayCss, MAX_SNAPS, northOnScreen, RELAY_CSS, SWEEP_DIRS, Timeline } from './fuse-timeline.ts';
+import { delayCss, MAX_SNAPS, northOnScreen, panelTimeline, RELAY_CSS, SWEEP_DIRS, type Timeline } from './fuse-timeline.ts';
 
 export const FUSE_CSS = `
   .kg-fuse { right: 12px; bottom: 12px; width: 300px; max-height: calc(100vh - 140px); overflow-y: auto; font: 13px/1.35 system-ui, sans-serif; display: none; }
@@ -62,10 +62,9 @@ export class FusePanel {
     addEventListener('pointerup', () => { this.drag = null; });
   }
 
-  /** Shows the timeline of `c` (all delays at 0), or hides the panel when it has no plunger charges. */
+  /** Shows the timeline of `c` (all delays at 0), or hides the panel when it has none (panelTimeline). */
   level(c: CompiledLevel): void {
-    const t = c.def.rack.includes('plunger') ? new Timeline(c) : null;
-    this.timeline = t && !t.empty ? t : null;
+    this.timeline = panelTimeline(c);
     this.el.classList.toggle('show', this.timeline !== null);
     this.render();
   }

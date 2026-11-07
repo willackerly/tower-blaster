@@ -1,7 +1,7 @@
 // Levels of your own: a LevelDef from JSON, the URL (level.def) or a saved
 // scene (scene.levelDef), checked strictly, and run as the game compiles it.
 import { describe, expect, it } from 'vitest';
-import { compileLevel, L2, L4, LEVELS, type LevelDef, PRESETTLE_STEPS, U3 } from '@tb/keystone';
+import { BuildSession, compileLevel, L2, L4, LEVELS, type LevelDef, PRESETTLE_STEPS, RL1, RUBE_LEVELS, U3 } from '@tb/keystone';
 import {
   CUSTOM_LEVEL, decodeLevelParam, encodeLevelParam, LEVEL_FILE_FORMAT, levelChoice, levelIssues, levelJson, parseLevelDef, parseSceneFile, parseViewerConfig, proposeScene,
   sceneFile, sceneTitle, toSearch, viewerScene, withCustomLevel,
@@ -48,6 +48,27 @@ describe('level files', () => {
     expect(bad((x) => { x.build.colour = 'red'; })).toThrow(/level.build: unknown key colour/);
   });
 
+  it('Rube Lab (M10): a level and its built parts list round-trip through JSON (pins, tilts, balls, the bell, charges)', () => {
+    for (const def of RUBE_LEVELS) expect(parseLevelDef(JSON.parse(levelJson(def)))).toEqual(def);
+    // Built as a player builds: a pier in the gap and a slab on shelf A, then saved and loaded.
+    const s = new BuildSession(RL1), h = s.h;
+    expect(s.place(s.ghost({ body: -1, point: [0.5 * h, 0, 0], normal: [0, 1, 0], t: 1 }, { item: 'pier3', yaw: 0, tip: 0 }))).toBe(true);
+    expect(s.place(s.ghost({ body: 2, point: [-1 * h, 3 * h, 0], normal: [0, 1, 0], t: 1 }, { item: 'slab', yaw: 0, tip: 0 }))).toBe(true);
+    const built = s.def(), back = parseLevelDef(JSON.parse(levelJson(built)));
+    expect(back).toEqual(built);
+    expect(back.parts.slice(RL1.parts.length).map((p) => p.kind)).toEqual(['piece', 'piece', 'piece', 'piece']);
+    expect(compileLevel(back).hash).toBe(compileLevel(built).hash);
+    const issues = levelIssues(back);
+    if (issues instanceof Error) throw issues;
+    expect(issues.filter((i) => !i.warning)).toEqual([]);
+    // A malformed pin or bell, refused saying where.
+    const bad = (p: unknown) => () => parseLevelDef({ ...JSON.parse(levelJson(RL1)), ...(p as object) });
+    expect(bad({ parts: [{ kind: 'piece', at: [0, 0, 0], half: [1, 1, 1], pinned: 1, material: 'stone' }] })).toThrow(/parts\[0\]\.pinned/);
+    expect(bad({ parts: [{ kind: 'ball', at: [0, 0, 0], radius: -1, material: 'stone' }] })).toThrow(/parts\[0\]\.radius/);
+    expect(bad({ objective: { kind: 'bell', region: { min: [0, 0], max: [1, 1, 1] } } })).toThrow(/objective\.region\.min/);
+    expect(bad({ charges: [{ host: 0, weapon: 'release', arm: 'later' }] })).toThrow(/charges\[0\]\.arm/);
+  });
+
   it('reads racks and solutions holding presets and weapons (p-, w-)', () => {
     const d: LevelDef = { ...structuredClone(L2), rack: ['p-wreckingball', 'w-grenade', 'cannonball'], solutions: { par: [{ ammo: 'w-grenade', az: 540, y: 8, yaw: 0, pitch: 300, power: 80 }] } };
     expect(parseLevelDef(JSON.parse(levelJson(d)))).toEqual(d);
@@ -72,10 +93,14 @@ describe('level files', () => {
     const def: LevelDef = { ...structuredClone(L2), scoring: 'outcome', autobank: true, settle: 'v1', custom: true, physics: { iterations: 20, gapSlop: 0, bounce: null, pairsPerBody: 24, presettle: 120 } };
     expect(parseLevelDef(JSON.parse(levelJson(def)))).toEqual(def);
     expect(parseLevelDef(JSON.parse(levelJson({ ...def, physics: { bounce: 0.4 } }))).physics).toEqual({ bounce: 0.4 });
+    // GPU sleep (E2.5) reads back; not a boolean, or with bounce, is refused.
+    expect(parseLevelDef(JSON.parse(levelJson({ ...def, physics: { sleep: true, iterations: 30 } }))).physics).toEqual({ sleep: true, iterations: 30 });
     const bad = (physics: unknown) => () => parseLevelDef({ ...structuredClone(L2), physics });
     expect(bad({ iterations: 0 })).toThrow(/level.physics.iterations must be a whole number from 1 to 200/);
     expect(bad({ bounce: 'yes' })).toThrow(/level.physics.bounce must be a number/);
     expect(bad({ substeps: 2 })).toThrow(/level.physics: unknown key substeps/);
+    expect(bad({ sleep: 1 })).toThrow(/level.physics.sleep must be/);
+    expect(bad({ sleep: true, bounce: 0.4 })).toThrow(/level.physics.sleep does not go with bounce/);
     expect(() => parseLevelDef({ ...structuredClone(L2), settle: 'v9' })).toThrow(/level.settle must be v1 or v2 or v3 or v4: v9/);
   });
 

@@ -1,13 +1,23 @@
 // Fuse & Fold's timeline (fuse-timeline.ts): charge labels by grid position, sweeps by row along a
 // direction, the plunger shot it makes (every charge, delays on the 0.1 s grid), and the markers.
 import { describe, expect, it } from 'vitest';
-import { compileLevel, foldCandidate, Session } from '@tb/keystone';
+import { B1, compileLevel, foldCandidate, FUSE_LEVELS, RL1, Session } from '@tb/keystone';
 import { type Orbit, viewProj } from '@tb/render/camera';
-import { delayColour, LOT_COLOUR, LOT_SPACING, lotBeads, MAX_SNAPS, northOnScreen, RELAY_COLOUR, relayCharges, SNAP_STEPS, sweepRanks, SWEEP_DIRS, Timeline, timelineCharges, timelineOverlay } from '../src/fuse-timeline.ts';
+import { delayColour, LOT_COLOUR, LOT_SPACING, lotBeads, MAX_SNAPS, northOnScreen, panelTimeline, RELAY_COLOUR, relayCharges, SNAP_STEPS, sweepRanks, SWEEP_DIRS, Timeline, timelineCharges, timelineOverlay } from '../src/fuse-timeline.ts';
 
 const c = compileLevel(foldCandidate('FC-2')); // a 3 x 3 frame: nine cutters on the ground storey
 
 describe('timeline charges', () => {
+  it('the panel shows on a plunger level, not on a Rube Lab contraption (its plunger is the Go release) or a launch level', () => {
+    const f1 = compileLevel(FUSE_LEVELS[0]!);
+    expect(panelTimeline(f1)?.charges.length).toBe(timelineCharges(f1).length);
+    expect(timelineCharges(f1).length).toBeGreaterThan(0);
+    expect(RL1.rack).toContain('plunger');
+    expect(RL1.charges?.length).toBeGreaterThan(0);
+    expect(panelTimeline(compileLevel(RL1))).toBeNull();
+    expect(panelTimeline(compileLevel(B1))).toBeNull();
+  });
+
   it('labels the ground columns A1 to C3: letters west to east, numbers north to south', () => {
     const ch = timelineCharges(c);
     expect(ch.map((t) => t.label).sort()).toEqual(['A1', 'A2', 'A3', 'B1', 'B2', 'B3', 'C1', 'C2', 'C3']);

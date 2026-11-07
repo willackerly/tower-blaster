@@ -4,7 +4,7 @@
 // arc-preview beads as overlay spheres. Everything here is pure data for
 // Renderer.setFx / setOverlay; none of it reaches the physics.
 import { type CompiledLevel, itemRef, type LevelDef, MATERIALS, type RackItem, weaponOf } from '@tb/keystone';
-import { COAT_GILT, COAT_GLAZE, COAT_NONE, type CoatId, type EffectStyle, type FxOptions, MARK_HIT, MARK_KEEP, MARK_NONE, MARK_SAVE, type MarkId, srgbToLinear } from '@tb/render';
+import { COAT_GILT, COAT_GLAZE, COAT_NONE, COAT_PAINT, type CoatId, type EffectStyle, type FxOptions, MARK_HIT, MARK_KEEP, MARK_NONE, MARK_SAVE, type MarkId, srgbToLinear } from '@tb/render';
 import { isWeaponSpec, type MunitionSpec, PROJECTILE_PRESETS } from '@tb/weapons';
 
 /** Linear rgb (0..1) and emissive (0..1) to the renderer's bulk tint word: r low byte, emissive high byte. */
@@ -185,6 +185,39 @@ export function structureMarks(c: CompiledLevel, on = true): Uint8Array {
 /** One tint word per structure slot, for one bulk setFx at level load (coats as PaceFeel.coats says). */
 export function structureTints(c: CompiledLevel, coats = true): Uint32Array {
   return Uint32Array.from({ length: c.meta.n }, (_, i) => tintOf(c, i, coats));
+}
+
+/**
+ * A duel's neutral blocks (owned by neither side: D1's wall), sRGB: a plain mid grey, neither ink in any look. Painted
+ * (COAT_PAINT) it is its own colour; left to the look, hazy's blue-grey plaster read as Blue's and candy's yellow as
+ * Gold's (the Siege Table look review, 2026-11-06; docs/render/look-colours.md §6).
+ */
+export const DUEL_NEUTRAL: [number, number, number] = [0x9e, 0x9a, 0x94].map((x) => srgbToLinear(x / 255)) as [number, number, number];
+
+/** Each structure block's linear tint in a duel: its side's ink, or DUEL_NEUTRAL; with paint off, neutral blocks keep their role/material tint. */
+export function duelTint(c: CompiledLevel, owned: readonly (Int32Array | readonly number[])[], inks: readonly (readonly number[])[], i: number, paint = true): [number, number, number] {
+  const k = owned.findIndex((g) => g.includes(i));
+  if (k >= 0) return [...inks[k]!] as [number, number, number];
+  return paint && !isIce(c, i) ? DUEL_NEUTRAL : roleTint(c, i, false);
+}
+
+/** A duel's structure tints for one Renderer.setFx at load (duelTint; kings glow a little as crowns do). */
+export function duelTints(c: CompiledLevel, owned: readonly (Int32Array | readonly number[])[], inks: readonly (readonly number[])[], paint = true): Uint32Array {
+  const t = structureTints(c, false);
+  for (let i = 0; i < c.meta.n; i++) {
+    const own = owned.some((g) => g.includes(i));
+    if (own || (paint && !isIce(c, i))) t[i] = tintWordOf(duelTint(c, owned, inks, i, paint), c.meta.role[i] === 1 ? CROWN_GLOW : 0);
+  }
+  return t;
+}
+
+/**
+ * A duel's coats: every block but ice painted (COAT_PAINT), so each side's ink and the neutral grey are their own
+ * colours in every look rather than multiples of its palette (candy turned Gold's ink green). None with `paint` off
+ * (PaceFeel.coats false: the inks multiply the look's colours, as before).
+ */
+export function duelCoats(c: CompiledLevel, paint = true): Uint8Array {
+  return Uint8Array.from({ length: c.meta.n }, (_, i) => (paint && !isIce(c, i) ? COAT_PAINT : COAT_NONE));
 }
 
 export const REGROW_STAGGER = 0.035; // s per course
