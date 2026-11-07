@@ -4,8 +4,8 @@
 // progress are kept against the level as authored (CompiledLevel.baseHash), so a build is a play, not a new level.
 import { describe, expect, it } from 'vitest';
 import {
-  BuildSession, castStars, checkStars, compileLevel, type LevelDef, lowerIsBetter, naiveQuake, objectiveMet, type OutcomeFacts, outcomeScore, outcomeTally, placedCost, QUAKE, quakeRefusal,
-  quakeRulesOf, type QuakeShot, RETROFIT_BUILD, RETROFIT_QUAKE, RETROFIT_SITES, retrofitCandidate, type Reductions, Session, validateLevel,
+  AFTERSHOCK_LEVELS, BuildSession, castStars, checkStars, compileLevel, type LevelDef, lowerIsBetter, naiveQuake, objectiveMet, type OutcomeFacts, outcomeScore, outcomeTally, placedCost, QUAKE, quakeRefusal,
+  quakeRulesOf, type QuakeShot, levelById, RETROFIT_BUILD, RETROFIT_LEVELS, RETROFIT_QUAKE, RETROFIT_SITES, retrofitCandidate, type Reductions, Session, validateLevel,
 } from '../src/index.ts';
 
 const FIXED = { peak: 30, hz: 10, sec: 10, axis: 0 };
@@ -125,6 +125,31 @@ describe('the retrofit candidate sites', () => {
       expect(c.meta.heritage.length, id).toBe(RETROFIT_SITES[id]!.towers.filter((t) => t.role === 'protected').length);
       expect(quakeRulesOf(def).fixed, id).toMatchObject(RETROFIT_QUAKE);
       expect(def.build, id).toEqual(RETROFIT_BUILD);
+    }
+  });
+});
+
+describe('the shipped retrofit levels', () => {
+  const SITE: Record<string, string> = { A6: 'RC-1', A7: 'RC-2' };
+
+  it('are the gated sites exactly, in the Aftershock series, with a budget of at most 200 and stars on what was built', () => {
+    expect(RETROFIT_LEVELS.map((l) => l.id)).toEqual(Object.keys(SITE));
+    expect(AFTERSHOCK_LEVELS.slice(-RETROFIT_LEVELS.length)).toEqual(RETROFIT_LEVELS);
+    for (const l of RETROFIT_LEVELS) {
+      const c = compileLevel(l), site = compileLevel(retrofitCandidate(SITE[l.id]!));
+      expect(validateLevel(c).filter((i) => !i.warning), l.id).toEqual([]);
+      // The physics the gate judged: the same bodies and the same quake; the id, name, budget and stars are not physics.
+      expect({ ...c.scene, id: '' }).toEqual({ ...site.scene, id: '' });
+      expect(quakeRulesOf(l).fixed).toEqual(quakeRulesOf(site.def).fixed);
+      expect(l.settle).toBe('v3');
+      const s = l.stars!, budget = l.build!.budget!;
+      expect({ metric: s.metric, engine: s.engine, best: s.best, hash: s.hash }).toEqual({ metric: 'built', engine: 'gpu', best: s.t3, hash: c.baseHash });
+      expect(castStars(c)).toBe(s);
+      expect(s.t3).toBeLessThanOrEqual(s.t2);
+      expect(s.t2).toBeLessThanOrEqual(budget);
+      expect(budget).toBeLessThanOrEqual(200);
+      expect({ ...l.build, budget: 200 }).toEqual(RETROFIT_BUILD);
+      expect(levelById(l.id)).toBe(l);
     }
   });
 });

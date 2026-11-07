@@ -13,7 +13,8 @@
 // A bracing counts only if it is robust: the objective (every protected tower standing at the settle) met on at least
 // ROBUST of NUDGES nudged builds (quake-search.ts nudgeLevel, every moving body, placed ones too). The gate a retrofit
 // ships on: the bare site meets the objective on at most BARE_MAX of the builds, and at least two families have a
-// robust bracing within the build budget. Each family's bracing is then made cheaper, one brace at a time (a lower
+// robust bracing within the build budget; and every protected tower falls on all but BARE_MAX bare builds (so each
+// brace is needed, none is decoration). Each family's bracing is then made cheaper, one brace at a time (a lower
 // pier, a cheaper tie, or none), keeping it robust; the cheapest is the level's three-star line.
 import { BuildSession, compileLevel, type Hit, type Hold, type LevelDef, parseTower, type QuakeShot, quakeRulesOf, type QuakeSite, towerFootprint, towerHeight } from '@tb/keystone';
 import type { EngineSpec } from './engines.ts';
@@ -87,7 +88,18 @@ export function bracedLevel(def: LevelDef, site: QuakeSite, braces: readonly Bra
   return { def: s.def(), spent: s.spent() };
 }
 
-export interface Verdict { met: number; n: number }
+/**
+ * The level braced as `braces` would brace it were the quake turned a quarter (so buttresses stand across the quake's
+ * axis, the obvious wrong build), with the level's own quake; null when the tool refuses a step.
+ */
+export function crossBraced(def: LevelDef, site: QuakeSite, braces: readonly Brace[]): { def: LevelDef; spent: number } | null {
+  const turned: LevelDef = { ...def, quake: { ...def.quake, fixed: { ...def.quake!.fixed!, axis: axisOf(def) === 0 ? 90 : 0 } } };
+  const b = bracedLevel(turned, site, braces);
+  return b ? { def: { ...b.def, quake: def.quake }, spent: b.spent } : null;
+}
+
+/** How many of n nudged builds met the objective, and on how many each protected tower (in heritage order) stood. */
+export interface Verdict { met: number; n: number; stood: number[] }
 export const robust = (v: Verdict) => v.met >= ROBUST;
 
 /** Plays each level on NUDGES nudged builds with its own quake, pooled; how many builds met the objective, per level. */
@@ -95,7 +107,10 @@ export async function verdicts(levels: readonly LevelDef[], jobs: number, spec: 
   const nudges = Array.from({ length: NUDGES }, (_, k) => k + 1);
   const tasks: QuakeTask[] = levels.flatMap((l) => nudges.map((nudge) => ({ level: l, quakes: [fixedQuake(l)], nudge })));
   const ends = await playQuakeTasks(levels[0]!, tasks, jobs, spec);
-  return levels.map((_, i) => ({ met: ends.slice(i * NUDGES, (i + 1) * NUDGES).filter((e) => e[0]!.met).length, n: NUDGES }));
+  return levels.map((_, i) => {
+    const mine = ends.slice(i * NUDGES, (i + 1) * NUDGES).map((e) => e[0]!);
+    return { met: mine.filter((e) => e.met).length, n: NUDGES, stood: mine[0]!.standing.map((_, t) => mine.filter((e) => e.standing[t]).length) };
+  });
 }
 
 /** The braces each family starts from: every protected tower buttressed (k 3), or tied where it has a hall to tie to (planks) and buttressed where not. */
@@ -173,12 +188,13 @@ export async function searchRetrofit(def: LevelDef, site: QuakeSite, o: { jobs: 
     const bb = bracedLevel(def, site, best);
     families.push({ family, start, startVerdict: sv ?? null, best, bestCost: bb?.spent ?? Infinity, bestVerdict, tried });
   }
-  // The wrong build: every protected tower buttressed across the quake (a site copy with the axis turned for the tool's sake).
-  const axis = axisOf(def), crossDef: LevelDef = { ...def, quake: { ...def.quake, fixed: { ...def.quake!.fixed!, axis: axis === 0 ? 90 : 0 } } };
-  const cross = bracedLevel(crossDef, site, starts.buttress), [cv] = await play([cross ? { ...cross.def, quake: def.quake } : null]);
+  // The wrong build: every protected tower buttressed across the quake.
+  const cross = crossBraced(def, site, starts.buttress), [cv] = await play([cross?.def ?? null]);
   const wrong = [{ name: 'buttressed across the quake', verdict: cv ?? null }];
   const ok = families.filter((f) => f.bestVerdict && robust(f.bestVerdict) && f.bestCost <= (budget ?? Infinity));
-  const pass = bare.met <= BARE_MAX && ok.length >= 2;
-  const detail = `bare met ${bare.met}/${bare.n} (at most ${BARE_MAX}); robust families within ${budget ?? 'no'} budget: ${ok.map((f) => `${f.family} ${f.bestCost}`).join(', ') || 'none'} (need 2)`;
+  // Every protected tower must need its brace: none stands on more than BARE_MAX bare builds.
+  const idle = bare.stood.flatMap((n, t) => (n > BARE_MAX ? [`protected tower ${t} stood ${n}/${bare.n} bare`] : []));
+  const pass = bare.met <= BARE_MAX && idle.length === 0 && ok.length >= 2;
+  const detail = `bare met ${bare.met}/${bare.n} (at most ${BARE_MAX}), every protected tower falls bare${idle.length ? ` FAILED: ${idle.join(', ')}` : ` (stood ${bare.stood.join(', ')} of ${bare.n})`}; robust families within ${budget ?? 'no'} budget: ${ok.map((f) => `${f.family} ${f.bestCost}`).join(', ') || 'none'} (need 2)`;
   return { id: def.id, hash: c.hash, bodies: c.meta.n, quake: fixedQuake(def), budget, bare, families, wrong, gate: { pass, detail }, wallS: (performance.now() - t0) / 1000 };
 }

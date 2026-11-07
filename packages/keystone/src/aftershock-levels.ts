@@ -123,8 +123,10 @@ const keep = (tower: string, at: [number, number]): SiteTower => ({ tower, at, r
  * own height one cell away along the quake's axis can be tied to it, and any column can be buttressed.
  */
 export const RETROFIT_SITES: Readonly<Record<string, QuakeSite>> = {
-  // Each column has a hall on one side along x and open ground on the other: tie it to the hall, or buttress it. (A
-  // column between two halls a cell away cannot fall: it leans on one at 10 degrees and stands, so none stands so.)
+  // Each column has a hall on one side along x and open ground on the other: tie it to the hall, or buttress it. Every
+  // hall stands on the + side of its column along the quake: the quake's first swing throws a column toward -, and a
+  // column with a hall a cell away on that side leans on it at under 10 degrees and stands unbraced (the first RC-2
+  // and RC-3 had one each: 8 and 3 of 8 bare builds stood), so the gate also asks that every column falls bare.
   'RC-1': { id: 'RC-1', name: 'Lean on Me', quake: { fixed: { ...RETROFIT_QUAKE, axis: 0 } }, build: RETROFIT_BUILD, towers: [
     keep('col6', [0, 0]), hall([2, -1]), keep('col6', [9, 0]), hall([11, -1]), keep('col6', [18, 0]), hall([20, -1]),
   ] },
@@ -133,14 +135,14 @@ export const RETROFIT_SITES: Readonly<Record<string, QuakeSite>> = {
   'RC-2': { id: 'RC-2', name: 'Cross Ties', quake: { fixed: { ...RETROFIT_QUAKE, axis: 90 } }, build: RETROFIT_BUILD, towers: [
     keep('col6', [0, 0]), hall([-1, 2]), hall([2, -1]),
     keep('col5', [8, 0]), hall([10, -1], 5),
-    keep('col6', [16, 0]), hall([15, -4]), hall([18, -1]),
+    keep('col6', [16, 0]), hall([15, 2]), hall([18, -1]),
     keep('col5', [24, 0]),
   ] },
   // An old town: six columns of five and six, some beside halls along the quake, some alone.
   'RC-3': { id: 'RC-3', name: 'Old Town', quake: { fixed: { ...RETROFIT_QUAKE, axis: 0 } }, build: RETROFIT_BUILD, towers: [
     keep('col6', [4, 0]), hall([6, -1]),
     keep('col5', [12, 0]), keep('col6', [16, 0]), hall([18, -1]),
-    hall([0, 7], 5), keep('col5', [4, 8]), keep('col6', [9, 8]), hall([11, 7]),
+    keep('col5', [0, 8]), hall([2, 7], 5), keep('col6', [9, 8]), hall([11, 7]),
     hall([16, 6], 5), keep('col5', [16, 11]),
   ] },
 };
@@ -196,4 +198,33 @@ export const A3: LevelDef = shipped('QC-2', 'A3', 'Cross Grain', q(25, 10, 10, 9
 export const A4: LevelDef = shipped('QC-4', 'A4', 'Short Sharp Shock', q(50, 10, 15), { t2: 280, t3: 240, best: 209.4888890084887, budget: 1200, n: 325, hash: '5aade697bb7e8296' });
 export const A5: LevelDef = shipped('QC-5', 'A5', 'Fault Line', q(40, 10, 10), { t2: 1400, t3: 320, best: 284.39703719940286, budget: 5600, n: 975, hash: 'b9e3256a4c5cb28d' });
 
-export const AFTERSHOCK_LEVELS: readonly LevelDef[] = [A1, A2, A3, A4, A5];
+/**
+ * A shipped retrofit: a candidate site that passed the retrofit gate (keystone-lab retrofit-search.ts), under its own
+ * id and name, with its own build budget and stars on what was placed (metric 'built', lower is better). The towers
+ * and the quake are the site's exactly. T3 (and the best) is the cheapest robust bracing the search found, T2 the
+ * other family's cheapest, so both bracings earn two stars and the cheaper three; the recorded bracings
+ * (keystone-lab retrofit-solutions.ts) save every protected tower on the GPU solver (retrofit-gpu-*.test.ts), so the
+ * stars are the game engine's. The budget is half as much again as the dearer family's starting bracing, rounded up
+ * to ten: room for either family and for a clumsy build, not for bracing everything twice. The stars record the
+ * level's hash as authored (CompiledLevel.baseHash: a build does not change it).
+ */
+function retrofit(site: string, id: string, name: string, cast: { t2: number; t3: number; budget: number; hash: string }): LevelDef {
+  const s = RETROFIT_SITES[site]!;
+  return {
+    ...aftershockLevel({ ...s, id, name, build: { ...s.build!, budget: cast.budget } }),
+    stars: { metric: 'built', t2: cast.t2, t3: cast.t3, best: cast.t3, castOn: 'node ref (8 nudged builds), bracings checked on the GPU', engine: 'gpu', hash: cast.hash, n: 8, seed: 1 },
+  };
+}
+
+/**
+ * Aftershock's retrofits in teaching order (docs/game/aftershock.md "Retrofit"): one column type and one tie per
+ * column (Lean on Me), then the quake across the halls so some columns must be buttressed (Cross Ties), then a town
+ * of both (Old Town).
+ */
+export const A6: LevelDef = retrofit('RC-1', 'A6', 'Lean on Me', { t2: 14, t3: 6, budget: 30, hash: '58d3978e48fec0e9' });
+export const A7: LevelDef = retrofit('RC-2', 'A7', 'Cross Ties', { t2: 16, t3: 12, budget: 40, hash: 'da9602ec76ecc205' });
+
+/** The retrofit levels (M7b), the end of the Aftershock series. */
+export const RETROFIT_LEVELS: readonly LevelDef[] = [A6, A7];
+
+export const AFTERSHOCK_LEVELS: readonly LevelDef[] = [A1, A2, A3, A4, A5, ...RETROFIT_LEVELS];
