@@ -21,8 +21,9 @@ export interface CastHandle {
   /**
    * Each line (writeShots text) from the level's start on a fresh engine, in order; ms is each play's wall time.
    * `nudges` (index-aligned, optional): each play's build nudge (keystone nudgedLevel; 0 the exact build).
+   * `chorusOnly` (a Chorus level): play only that world, alone (the verify's solo arm).
    */
-  play(level: LevelDef, lines: string[], maxSteps?: number, nudges?: readonly number[]): Promise<Array<CastPlay & { ms: number }>>;
+  play(level: LevelDef, lines: string[], maxSteps?: number, nudges?: readonly number[], chorusOnly?: number): Promise<Array<CastPlay & { ms: number }>>;
   /**
    * The level at rest on a fresh engine: its pre-settle as the game runs it, then `steps` more with
    * nothing fired. Reports the most any structure body moved over those steps and how far the top
@@ -62,12 +63,12 @@ async function main() {
   handle.software = isSoftwareAdapter(info);
   handle.engine = kind;
   let plays = 0;
-  handle.play = async (level, lines, maxSteps, nudges) => {
+  handle.play = async (level, lines, maxSteps, nudges, chorusOnly) => {
     const exact = compileLevel(level), out: Array<CastPlay & { ms: number }> = [], built = new Map<number, CompiledLevel>();
     const buildOf = (n: number) => { if (!built.has(n)) built.set(n, nudgedLevel(exact, n)); return built.get(n)!; };
     for (const [k, text] of lines.entries()) {
       const c = buildOf(nudges?.[k] ?? 0);
-      const e = makeEngine(kind, c, device), t0 = performance.now();
+      const e = makeEngine(kind, c, device, undefined, chorusOnly === undefined ? {} : { only: chorusOnly }), t0 = performance.now();
       try {
         out.push({ ...(await castPlay(e, c, readShots(text), { ...driverOptions(kind), maxSteps })), ms: performance.now() - t0 });
       } finally { e.dispose(); }
