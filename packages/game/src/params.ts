@@ -10,9 +10,10 @@ import { isWeaponTier, WEAPON_TIERS, type WeaponTier } from '@tb/weapons';
 import { type EngineKind, engineKind } from './engines.ts';
 import { paceFeel, type PaceFeel } from './pacing.ts';
 import { GAME_SOUND_MODES, type GameSoundMode } from './sound-map.ts';
+import { GAME_LOOK } from './options/look.ts';
 
-/** The game's look when ?look= is absent: the maquette, whose pale albedo shows the role tints true. */
-export const GAME_LOOK = 'hazy';
+/** The game's look when ?look= is absent (options/look.ts): the maquette, whose pale albedo shows the role tints true. */
+export { GAME_LOOK } from './options/look.ts';
 
 /**
  * Rule overrides from the URL (docs/game/spectacle-mode.md, section 10): ?keystone.scoring=par|outcome

@@ -3,6 +3,8 @@ export * from './audio.ts';
 export * from './hud.ts';
 export * from './juice.ts';
 export * from './pacing.ts';
+export { FEEL_OPTIONS, feelOf, SETTING_OPTIONS } from './options/registry.ts';
+export type { FeelOption, GameOption, SettingOption } from './options/option.ts';
 export * from './frame-rate.ts';
 export * from './scene.ts';
 export * from './light.ts';
