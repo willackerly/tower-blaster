@@ -59,7 +59,9 @@ beforeAll(async () => {
 afterAll(async () => { await page?.close(); });
 
 describe('X8 on the GPU engine at game settings (CI size)', () => {
-  it('the islands\' outcome distributions match the solo runs\', and the shot moves every world', { timeout: 300_000 }, async (ctx) => {
+  // About 265 s on a CI runner (median of three main runs), 300 s and over on a slow one (main 2bbff1c), so the case
+  // gets twice that; the file stays under the 300 s CI budget on its recorded time.
+  it('the islands\' outcome distributions match the solo runs\', and the shot moves every world', { timeout: 600_000 }, async (ctx) => {
     if (!page) return ctx.skip();
     const run = await runProbe(page, X8, 'ci', { log: (l) => console.log(l) });
     console.log(run.verdict.table.join('\n'));
