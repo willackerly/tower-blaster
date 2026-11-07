@@ -370,5 +370,7 @@
   "packages/keystone-lab/test/mason-ref-MT4.test.ts": 33.2,
   "packages/keystone-lab/test/mason-stats.test.ts": 0,
   "packages/keystone/test/mason.test.ts": 0.3,
-  "packages/game/test/mason-engine.test.ts": 0.5
+  "packages/game/test/mason-engine.test.ts": 0.5,
+  "packages/game/test/mason-e2e.test.ts": 17.6,
+  "packages/keystone-lab/test/mason-trial.test.ts": 21
 }

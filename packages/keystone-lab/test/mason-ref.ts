@@ -1,6 +1,7 @@
 // Mason's Trial on the f64 reference (M8, docs/game/masons-trial.md), one level per
 // test file (mason-ref-MT*.test.ts, so each stays well under CI's per-file budget):
-// - the recorded builds go through the real build tool, and the level's stars are
+// - the recorded builds go through the real build tool, each step a click a player
+//   can make (masonUnreachable), and the level's stars are
 //   MASON_STAR_SHARE of its tier authors' recorded points (masonStarsFrom);
 // - in the judge's first 8 worlds the authors pass and the wrong builds fail;
 // - the judge's verify: the knife-edge build (it passes in only some worlds) in 16
@@ -13,7 +14,7 @@ import { describe, expect, it } from 'vitest';
 import { compileLevel, judgeMason, type LevelDef, MASON_CLEAR, MASON_WORLDS, soloMason } from '@tb/keystone';
 import { AvbdReferenceEngine } from '@tb/physics-ref';
 import { AVBD_GAP_SLOP, AVBD_ITERATIONS } from '@tb/keystone';
-import { MASON_KNIFE, MASON_SOLUTIONS, MASON_WRONG, type MasonBuild, masonBuild, masonStarsFrom } from '../src/mason-solutions.ts';
+import { MASON_KNIFE, MASON_SOLUTIONS, MASON_WRONG, type MasonBuild, masonBuild, masonStarsFrom, masonUnreachable } from '../src/mason-solutions.ts';
 import { fisherExact } from '../src/mason-stats.ts';
 
 const MINUTES = 60_000, SLOW = process.env.PHYSICS_GPU_SLOW === '1';
@@ -49,7 +50,11 @@ export function masonRefSuite(def: LevelDef): void {
         const { spent } = built(def, b);
         if (b.measured) expect(spent, b.label).toBe(b.measured.spent);
         expect(spent, b.label).toBeLessThanOrEqual(def.build!.budget!);
+        // Every step is one a player can make: a click where the pointer lands (with a slide off it, as Hold.slide allows).
+        expect(masonUnreachable(def, b.steps), b.label).toEqual([]);
       }
+      // ... and the check has teeth: a face hit far past the lot is no click.
+      expect(masonUnreachable(def, [(s) => ({ place: 'cube', hit: { body: 0, point: [99 * s.h, 50 * s.h, 0], normal: [0, 1, 0], t: 0 } })])).toHaveLength(1);
       expect(def.mason!.stars).toEqual(masonStarsFrom(def, sols));
       // The 3-star author build is the cheaper one, and both are robust (they pass in most worlds).
       const [t2, t3] = [sols.find((s) => s.tier === 2)!, sols.find((s) => s.tier === 3)!];
