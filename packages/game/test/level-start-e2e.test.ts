@@ -181,7 +181,13 @@ describe('level start', () => {
     }
     console.log(`B1 retry on Rapier: paced ${JSON.stringify(gaps['8'])}, unpaced ${JSON.stringify(gaps['0'])}`);
     // Unpaced, the whole pre-settle is one task; paced, a frame gets in about every batch (8 ms) plus a step.
+    // Both bounds are relative to this runner's own timings, never wall-clock caps: a CI runner's frame times are
+    // not performance numbers (real ones: the Mac level-start bench). Seen on CI runners (rAF at 60 Hz): paced
+    // gaps 17-100 ms over a 600-1,020 ms pre-settle; unpaced gaps 430-500 ms, about the whole pre-settle. A
+    // fixed 100 ms cap failed on one slow runner at exactly 100. If pacing broke, the paced gap would be the
+    // whole pre-settle and fail both checks below.
     expect(gaps['0']!.gap).toBeGreaterThan(0.8 * gaps['0']!.presettle);
-    expect(gaps['8']!.gap).toBeLessThan(Math.min(100, 0.25 * gaps['8']!.presettle));
+    expect(gaps['8']!.gap).toBeLessThan(0.25 * gaps['8']!.presettle);
+    expect(gaps['8']!.gap).toBeLessThan(0.5 * gaps['0']!.gap);
   }, 10 * MINUTE);
 });
