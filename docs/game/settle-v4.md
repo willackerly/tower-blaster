@@ -2,7 +2,7 @@
 
 **Status.** Outcome levels settle by v4 since PT6b. Par levels keep v1. The levels with cast stars pin v3 until a v4 recast:
 - B1 to B3 (`settle: 'v3'` in `big-levels.ts`), cast on Metal;
-- F1 to F5 (`fuse-levels.ts shipped`), cast on the reference;
+- F1 to F5 (`fuse-levels.ts shipped`) stay on v3 for good: a frame can drop a storey, stand past v4's 2 s window and then topple (fuse-and-fold.md, "Settle rule", from a v4 recast of all five);
 - A1 to A5 (`aftershock-levels.ts shipped`), energy stars cast on the reference.
 
 ## The rule
@@ -20,7 +20,7 @@ The settle rule is part of the level hash, because it decides the step at which 
 - **Moved:** every `T-*` trial and U1 to U3 (34 levels). None of them has cast stars or a hash-pinned record, so nothing visible is lost.
 - **Kept:** the par levels (L1 to L5, the Rube Lab), B1 to B3, F1 to F5 and A1 to A5. The B, F and A levels now name `settle: 'v3'`, so their casts (stars.json), showcase lines and the B1 opener all stand unchanged.
 
-F1 to F5 and A1 to A5 were cast on the f64 reference, so their v4 recasts can run in the cloud. Moving B1 to B3 to v4 means dropping their pin and recasting them on Metal under v4, with the same procedure as their level docs (about 55 min for B1, about 3.5 h for B2, and two seeds plus the extension for B3). That is a Mac job, roadmap row PT6b.
+A1 to A5 were cast on the f64 reference, so their v4 recast can run in the cloud. F1 to F5 were recast under v4 and stay on v3 (above). Moving B1 to B3 to v4 means dropping their pin and recasting them on Metal under v4, with the same procedure as their level docs (about 55 min for B1, about 3.5 h for B2, and two seeds plus the extension for B3). That is a Mac job, roadmap row PT6b.
 
 **A level cast before this flip and merged after it** fails its stars-hash test (`stars-file.test`, or its family's own) the moment it meets main. Pin it to `settle: 'v3'` the same way, or recast it under v4.
 

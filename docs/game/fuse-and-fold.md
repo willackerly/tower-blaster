@@ -100,7 +100,32 @@ F4 is the exception. It is the wide frame with a two-sided window, and the noisi
 - Cast F4 on SwiftShader end to end (about 3 h here). Not needed: the GPU cloud of the best line is what T3 measures, and T2 does not move (it is the all-at-once value on every device). The cast's best lines are sweeps that the climb nudged a snap here and there: F1's best goes A2, A1, B2 and B1 at 0, 0.1, 0.9 and 1.2 s. A Metal recast of each level is queued for the Mac.
 
 
-## Sympathetic charges (step e)
+## Settle rule: v3, not v4
+
+Outcome levels settle by v4 since PT6b ([settle-v4.md](settle-v4.md)). F1 to F5 stay on v3, by decision, not as a pin waiting for a recast. v4 is v3, or a steady collapse: the shot ends once D has held within 0.005 for 2 s, however much still moves. A frame building can drop a storey, stand for longer than that, and then topple. v4 scores it standing.
+
+The evidence is a full v4 recast of all five on the reference engine (2026-11-07, seed 1, 210 plays each, the v3 casts' recipe):
+
+| level | v4 T2 / T3 (v3's) | plays compared | ends moved by more than 0.01 | of them: stand, then fall | charges cut short |
+|---|---|---|---|---|---|
+| F1 | 0.24 / 0.89 (same) | 210 | 0 | 0 | 0 |
+| F2 | 0.24 / 0.85 (same) | 136 | 8 | 2 | 6 |
+| F3 | 0.28 / 0.81 (0.29 / 0.81) | 210 | 8 | 2 | 6 |
+| F4 | 0.28 / 0.72 (same reference T3; the GPU's 0.69 stands) | 210 | 8 | 0 | 8 |
+| F5 | 0.33 / 0.74 (same) | 210 | 6 | 1 | 5 |
+
+A play is compared when both casts played the same line on the same build; F2's climb took another path after 136 plays.
+
+The order gate under v4 picks the same best lines with the same folds to the third decimal. The stars barely move because the moved plays are competent misses, not best lines. They come in two kinds:
+- **The frame stands, then falls.** F3's competent line 16 drops the frame a storey; v4 ends it 212 steps after its last charge at 0.291, and v3 waits for the fall at 0.717. F3 line 25 (0.290 against 0.678), F2 line 37 (0.222 against 0.388) and F5 line 45 (0.262 against 0.294) are the same. A player who timed a slow sweep would be scored on a building that falls seconds later, in front of them. This is the case that keeps v3 (fuse-levels.test reproduces line 16 on its build).
+- **Charges cut short.** Five to eight plays on each of F2 to F5 end on the step their last charge fires: the early charges drop nothing, so D holds, and v4's window keeps counting while the shot is held for the charges still to come. This is a v4 bug, not a property of the mode, and it can hit any outcome level whose shot is held for a charge or fuse still to go off (`Session.observe`'s `hold`). It is reported to the settle thread, with a fix: restart v4's windows when a hold ends.
+
+Alternatives:
+- Recast under v4 and drop the pin, as planned. Rejected: the stand-then-fall case scores a fall as a stand.
+- Lengthen v4's window on fold levels (`STEADY_STEPS` per level). Rejected: a new knob for one mode, and the stand can last longer than any fixed window that still helps the big levels.
+- Keep v3. **Chosen**: the casts, the gate and the stars all came from v3, so nothing moves, and Skip (K) already shortens a long wait.
+
+
 
 F5 puts relays on the fifth storey of an 8-storey 3 x 3 tower. A relay is C5's `relay`: armed at start, it cuts its host once jolted past 0.05 m or 0.5 m/s. A west sweep tips the tower, the jolt fires the relays, and the tower folds in two, landing shorter than its 20-cell height. The panel lists the relays under the timeline ("9 relays on storey 5: they go off when jolted") and the scene marks them in blue. The player cannot set them: they are part of the building.
 
