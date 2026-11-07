@@ -66,6 +66,25 @@ export function checkRunWindow(s: unknown, where = 'runWindow'): number {
 }
 /** A run window of `seconds` in steps of dt. */
 export const runWindowSteps = (seconds: number, dt: number) => Math.round(seconds / dt);
+/**
+ * A level's own end condition (LevelDef.end, agent playtest PT32): when the mode's job is done, the shot settles
+ * `after` seconds later, whatever the settle rule says of the bodies still moving. One kind so far: 'rung', every
+ * bell of a bell objective rung (Rube Lab). A bell stays rung, so the outcome is decided at the ring; the wait lets the
+ * player see it. It is one more way the settle rule settles (settleUpdate's `done`), never a second settle path, and
+ * it never settles before SETTLE_MIN or during a flight or a hold; the cap still ends a run that never rings.
+ */
+export interface LevelEnd { on: 'rung'; after: number }
+/** The longest end wait, seconds: the 10 s par cap (SETTLE_CAP at 60 Hz). */
+export const END_AFTER_MAX = 10;
+/** Throws unless e is a LevelEnd for a level whose objective is `objective` (a 'rung' end needs a bell objective), naming `where`. */
+export function checkEnd(e: unknown, objective: string, where = 'end'): LevelEnd {
+  const o = e as Partial<LevelEnd> | null;
+  if (!o || typeof o !== 'object' || o.on !== 'rung') throw new Error(`${where}.on must be rung: ${JSON.stringify(e)}`);
+  if (Object.keys(o).some((k) => k !== 'on' && k !== 'after')) throw new Error(`${where} takes only on and after: ${JSON.stringify(e)}`);
+  if (typeof o.after !== 'number' || !Number.isFinite(o.after) || o.after < 0 || o.after > END_AFTER_MAX) throw new Error(`${where}.after must be seconds from 0 to ${END_AFTER_MAX}: ${String(o.after)}`);
+  if (objective !== 'bell') throw new Error(`${where}.on rung needs a bell objective, not ${objective}`);
+  return { on: 'rung', after: o.after };
+}
 /** Settle v3's frozen structure: no live body faster than this (m/s; any fall passes it within 0.05 s), */
 export const FROZEN_SPEED = 0.5;
 /** for this many steps, */
@@ -274,8 +293,8 @@ export class CpuObserver {
 
 // ---- Settling ----
 
-/** quietSince: the first step of the current quiet run. v3's frozen run: its first step and the D and displaced count there. */
-export interface SettleState { quietSince: number | null; frozenSince?: number | null; frozenD?: number; frozenDisplaced?: number; steadySince?: number | null; steadyD?: number }
+/** quietSince: the first step of the current quiet run. v3's frozen run: its first step and the D and displaced count there. doneSince: the first step of the level's end condition's current run (LevelEnd). */
+export interface SettleState { quietSince: number | null; frozenSince?: number | null; frozenD?: number; frozenDisplaced?: number; steadySince?: number | null; steadyD?: number; doneSince?: number | null }
 
 /** Whether one observed state counts as quiet under `rule`, for a structure of n bodies (`wave`: under a run window, no stragglers). */
 export function quietUnder(rule: SettleRule, r: Reductions, n: number, wave = false): boolean {
@@ -310,10 +329,12 @@ export const settleHeld = (rule: SettleRule, inFlight: boolean, hold: boolean): 
  * at rest before the ammo arrives (asleep on Rapier, nothing awake) settled a far shot 20 steps after
  * the launch with the ball still in the air (agent playtest PT10). `window`: a wave level's run window in steps
  * (runWindowSteps), the cap instead of the rule's, with the settle waiting for the front to die (RUN_WINDOW_MAX's note).
+ * `done`: the level's end condition (LevelEnd, Session.observe): whether it holds now, and how many steps after it first
+ * held (in an unbroken run) the shot settles; a flight or a hold restarts the run.
  */
-export function settleUpdate(st: SettleState, r: Reductions, spawnStep: number, rule: SettleRule = 'v1', n = 0, d = 0, inFlight = false, window?: number): { state: SettleState; settled: boolean } {
+export function settleUpdate(st: SettleState, r: Reductions, spawnStep: number, rule: SettleRule = 'v1', n = 0, d = 0, inFlight = false, window?: number, done?: { met: boolean; steps: number }): { state: SettleState; settled: boolean } {
   const cap = settleCap(rule, window), wave = window !== undefined;
-  if (inFlight) return { state: rule === 'v4' ? { quietSince: null, frozenSince: null, steadySince: null } : rule === 'v3' ? { quietSince: null, frozenSince: null } : { quietSince: null }, settled: r.step - spawnStep >= cap };
+  if (inFlight) return { state: { ...(rule === 'v4' ? { quietSince: null, frozenSince: null, steadySince: null } : rule === 'v3' ? { quietSince: null, frozenSince: null } : { quietSince: null }), ...(done ? { doneSince: null } : {}) }, settled: r.step - spawnStep >= cap };
   const quiet = quietUnder(rule, r, n, wave);
   const quietSince = quiet ? (st.quietSince ?? r.step) : null;
   const old = r.step - spawnStep;
@@ -334,7 +355,13 @@ export function settleUpdate(st: SettleState, r: Reductions, spawnStep: number, 
     state.steadyD = keep ? st.steadyD : d;
     if (state.steadySince != null && r.step - state.steadySince + 1 >= STEADY_STEPS) frozen = true;
   }
-  const settled = old >= cap || (old >= SETTLE_MIN && (r.nAwake === 0 || frozen || (quietSince !== null && r.step - quietSince + 1 >= SETTLE_QUIET)));
+  let ended = false;
+  if (done) {
+    // The level's end condition (LevelEnd): a run of steps on which it holds, settling `steps` steps after it began.
+    state.doneSince = done.met ? (st.doneSince ?? r.step) : null;
+    ended = state.doneSince !== null && r.step - state.doneSince >= done.steps;
+  }
+  const settled = old >= cap || (old >= SETTLE_MIN && (r.nAwake === 0 || frozen || ended || (quietSince !== null && r.step - quietSince + 1 >= SETTLE_QUIET)));
   return { state, settled };
 }
 
@@ -485,7 +512,8 @@ export interface LevelScore {
   freezes?: { used: number; total: number };
   /**
    * Levels judged in many jittered worlds (Mason's Trial; Chorus): `cleared` of `of` worlds passed, and the worlds
-   * one, two and three stars need (`thresholds`, counts), so the card shows "c of K" once. Absent elsewhere.
+   * one, two and three stars need (`thresholds`, counts), so the card shows "c of K" once, and neither a gold badge
+   * nor a leverage tier (a Chorus round's leverage is world 0's, shown as information). Absent elsewhere.
    */
   worlds?: { cleared: number; of: number; thresholds: readonly [number, number, number] };
   /** Mason's Trial (LevelDef.mason): the build budget left and the budget, for the card's budget line. Absent elsewhere. */
