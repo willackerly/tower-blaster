@@ -7,7 +7,7 @@
 // its own elements; the viewer calls it for rules=keystone, with hooks for its
 // dev panels (docs/design/viewer-superset.md, step C).
 import { type BodyDesc, type EngineHealth, limitsHit, type PhysicsEngine, type Vec3 } from '@tb/engine-api';
-import { armRefusal, type RackItem, type CompiledLevel, compileLevel, Driver, type DriverCheckpoint, Duel, type DuelDef, DEFAULT_TURN_SECONDS, type Feedback, type Footprint, type Goal, goalMet, type Player, type Grade, gradeOf, type LevelDef, type LevelScore, type LotSheet, type PerStep, playShots, rapidDue, roundFacts, RUBE_GO, runSession, scoringOf, selectFootprints, selectGroups, type Shot, isIcePiece, QUAKE, snapshotHash, TIER_NAMES } from '@tb/keystone';
+import { armRefusal, type RackItem, type CompiledLevel, compileLevel, Driver, type DriverCheckpoint, Duel, type DuelDef, DEFAULT_TURN_SECONDS, type Feedback, type Footprint, type Goal, goalMet, type Player, type Grade, gradeOf, type LevelDef, type LevelScore, type LotSheet, type PerStep, playShots, rapidDue, roundFacts, RUBE_GO, runSession, scoringOf, selectFootprints, selectGroups, type Shot, isIcePiece, QUAKE, MasonTrial, masonWorlds, snapshotHash, TIER_NAMES } from '@tb/keystone';
 import { DIAL_KEYS, type DialField, dialShot, dialStart, dialStep, type QuakeDial, quakePanelHtml, seismogram } from './quake-panel.ts';
 import { clampPitch, eyeOf, type Orbit, rayThrough, viewProj } from '@tb/render/camera';
 import type { EffectStats, FxOptions, PixelStats, Renderer, SnapshotSource } from '@tb/render';
@@ -22,8 +22,8 @@ import { DOCK_PORTRAIT, DOCK_SIDEWAYS } from './ui.ts';
 import { outlineAreas, pixelCounts, type ScreenRect } from './sightlines.ts';
 import { ViewSun } from './light.ts';
 export { viewOf } from './view.ts';
-import { driverOptions, type EngineKind, gpuEngineOptions, makeEngine, roomAfter } from './engines.ts';
-import { type CardForward, hudHtml, meterTicks, type MeterTick, nextSelection, POWER_STEP, rackChips, resultHtml, starsText, tallyHtml } from './hud.ts';
+import { driverOptions, type EngineKind, gpuEngineOptions, makeEngine, makeMasonEngine, roomAfter } from './engines.ts';
+import { type CardForward, hudHtml, meterTicks, trialText, type MeterTick, nextSelection, POWER_STEP, rackChips, resultHtml, starsText, tallyHtml } from './hud.ts';
 import { hudInsets, type Layout, type ScreenInsets } from './layout.ts';
 import { type CardFacts, type HudProfile, hudProfile } from './mode-ui.ts';
 import { type GoalLine, goalsHudHtml, goalsResultHtml } from './lot-hud.ts';
@@ -215,6 +215,8 @@ export interface GameHandle {
   capture(keepPixels?: boolean): Promise<PixelStats | null>;
   /** Tests: pixels of the current view (the ID pass, Renderer.renderIds) that show body `body`. */
   coverage(body: number): Promise<number>;
+  /** Tests: where body `body` shows in the current view (the ID pass): its pixels' indices, row-major, in a frame of this size. */
+  pixelsOf(body: number): Promise<{ width: number; height: number; at: number[] }>;
   /** Tests: the last pull's slide as last drawn (pull-anim.ts): steps since the pull, the drawn centre and scale; null when none is drawn. */
   pullDrawn: { body: number; k: number; pos: [number, number, number]; scale: number } | null;
   /** Bullet Time's frozen look as last drawn (frozen-look.ts): the grade's amount, 0 none to 1 full, eased per frame. */
@@ -278,6 +280,11 @@ export interface GameHandle {
   handoff: boolean;
   /** The text of the last Heraldry score float (duel-hud.ts scoreFloatHtml), or '' before one. */
   scoreFloat: string;
+  /**
+   * Mason's Trial (keystone mason-trial.ts): the test running in world 0 as drawn, the judge's worlds beside it,
+   * or null when no trial has started since the level loaded. `hero` is world 0's verdict once it is judged.
+   */
+  trial: { state: 'running' | 'judging' | 'done' | 'error'; hero: boolean | null; passes: number | null; of: number; error: string } | null;
   /** The build phase (levels with a build block): see GameEditHandle. */
   edit: GameEditHandle;
 }
@@ -333,8 +340,8 @@ export function newGameHandle(): GameHandle {
   const none = (): SessionState => ({ step: 0, phase: 'loading', strokes: 0, heritageBroken: 0, hash: '' });
   return {
     status: 'loading', engine: '', level: '', phase: 'loading', ready: false, frozen: false, frames: 0, stepIndex: 0, strokes: 0, bodies: 0, collapse: 0, fast: false, hold: false, pace: { timeScale: 1, speed: 1, tag: '', tailSkip: false, costMs: NaN }, view: { target: [0, 0, 0], distance: 0, yaw: 0, pitch: 0, following: false, jolt: 0, turning: false, cue: null, arcBeads: 0, impact: false, xray: false }, input: { touch: false, gesture: 'idle', fingers: 0, aimed: null, power: 100, launch: 0 }, result: null, counts: {}, feel: { ...DEFAULT_FEEL }, resultShownAt: null, card: { place: 'center', endedMs: null, shownMs: null }, openingHud: null, timing: { loadMs: 0, load: noPhases(), stepMs: [], moving: [], frameMs: [], costMs: [] }, draws: { drawn: 0, skipped: 0, decimating: false },
-    fire: () => false, bank: () => false, skip: () => false, freeze: () => false, fireOpener: () => false, setMuted: () => {}, maxDpr: 2, quality: null, aim: () => null, reach: null, impact: null, select: () => false, dial: () => null, dialStep: () => null, startQuake: () => false, load: async () => {}, retry: async () => {}, undo: async () => false, undone: null, spare: null, undoMemory: () => ({ marks: 0, bytes: 0 }), capture: async () => null, sightlines: async () => null, coverage: async () => 0, pullDrawn: null, frozenGrade: 0, firedLooks: () => [], spentLooks: () => [], effects: async () => ({ particles: 0, hot: 0, spawned: 0, flashes: 0, blasts: 0, fuses: 0 }), marks: () => [], refreshMarks: () => {},
-    state: none, asleep: () => ({ asleep: 0, of: 0 }), line: () => [], replay: async () => none(), health: async () => null, pairsPerBody: 0, limitsHit: [], goals: [], grade: null, duel: null, handoff: false, scoreFloat: '',
+    fire: () => false, bank: () => false, skip: () => false, freeze: () => false, fireOpener: () => false, setMuted: () => {}, maxDpr: 2, quality: null, aim: () => null, reach: null, impact: null, select: () => false, dial: () => null, dialStep: () => null, startQuake: () => false, load: async () => {}, retry: async () => {}, undo: async () => false, undone: null, spare: null, undoMemory: () => ({ marks: 0, bytes: 0 }), capture: async () => null, sightlines: async () => null, coverage: async () => 0, pixelsOf: async () => ({ width: 0, height: 0, at: [] }), pullDrawn: null, frozenGrade: 0, firedLooks: () => [], spentLooks: () => [], effects: async () => ({ particles: 0, hot: 0, spawned: 0, flashes: 0, blasts: 0, fuses: 0 }), marks: () => [], refreshMarks: () => {},
+    state: none, asleep: () => ({ asleep: 0, of: 0 }), line: () => [], replay: async () => none(), health: async () => null, pairsPerBody: 0, limitsHit: [], goals: [], grade: null, duel: null, handoff: false, trial: null, scoreFloat: '',
     sound: () => ({ mode: 'collapse', status: 'off', error: '', posted: 0, stats: null }),
     ice: () => ({ count: 0, cracks: [] }),
     edit: { on: false, enter: () => false, play: () => {}, cancel: () => {}, key: () => false, ray: () => {}, status: () => '', def: () => null, ghosts: () => 0, played: null },
@@ -682,6 +689,11 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
   /** Where the previewed shot first touches (the impact marker), and whether the preview is the opener's. */
   let contact: Contact | null = null, previewingOpener = false;
   let pointer: [number, number] | null = null;
+  /**
+   * The last spot aimed at on the canvas (NDC), kept when the pointer goes (the cursor off to the HUD, a finger lifted):
+   * while frozen (Bullet Time, PT33) the aim holds there, or on a standing crown, so the frozen frame keeps its preview.
+   */
+  let heldAim: [number, number] | null = null;
   let regrowT: number | null = null;
   let fastHeld = false;
   /** Skip (key K, the HUD's Skip button; agent playtest PT6): the running shot's settle runs at SKIP_SCALE until it ends. */
@@ -724,7 +736,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
   /** The level loaded offers a build phase (and the page allows one). */
   const buildOffered = () => env.build !== false && !!c?.def.build && !env.duel;
   /** The build phase can start now: offered, and aiming before the attempt's first shot. */
-  const canEdit = () => buildOffered() && !loading && !stepping && !ending && handle.result === null && driver.session.phase === 'aiming' && driver.session.inputs.length === 0;
+  const canEdit = () => buildOffered() && !loading && !stepping && !ending && handle.result === null && handle.trial === null && driver.session.phase === 'aiming' && driver.session.inputs.length === 0;
   /** The Build panel: shown while building, or while the build phase can start; redrawn only when its HTML changes. */
   function showPanel() {
     buildEl.hidden = !(editing || canEdit());
@@ -764,6 +776,8 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     handle.edit.played = compileLevel(def).hash;
     if (JSON.stringify(def) !== JSON.stringify(levels[levelIdx])) levels[levelIdx] = def;
     leaveEdit();
+    // Mason's Trial: Play is build, then test.
+    trialAfterLoad = !!def.mason;
     void load(levelIdx, true).catch(fail);
     // Rube Lab's one start verb (PT23): the Build panel's Run also releases the ball (the tick fires it when it can).
     runPending = profile?.mode === 'rube';
@@ -807,6 +821,76 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     played: null,
   };
 
+  // Mason's Trial (keystone mason-trial.ts, docs/game/masons-trial.md): a Mason level has no rack. Its Test (the HUD's
+  // opener slot, key F; right after Play from the build phase) runs the level's test in world 0 on the loaded driver,
+  // stepped and drawn as a shot is, while the judge plays every world as islands on an engine of its own (paced a
+  // frame at a time); the card shows the judge's count. A load (Retry, Next, the build phase's Play or Cancel) stops it.
+  /** trialAfterLoad: the load under way is the build phase's Play; trialPending: it is in, and the test starts once it can (after the level grows back). */
+  let trial: MasonTrial | null = null, trialAfterLoad = false, trialPending = false;
+  /** A Test can start now: a Mason level, loaded, aiming, nothing built or tested on it since it loaded. */
+  const trialReady = () => !!c?.def.mason && !trial && !loading && !editing && !stepping && handle.result === null && driver.session.phase === 'aiming' && regrowT === null;
+  /** World 0's test is still to step. */
+  const trialStepping = () => trial !== null && handle.trial?.state === 'running' && !trial.heroDone;
+  function startTrial(): boolean {
+    if (!trialReady()) return false;
+    const lv = c, K = masonWorlds(lv.def.mason!);
+    let t: MasonTrial;
+    try {
+      t = new MasonTrial(lv, driver, { judge: makeMasonEngine(kind, lv, K, device), pace: () => new Promise<void>((r) => requestAnimationFrame(() => r())) });
+    } catch (e) {
+      banner(`The test cannot start: ${(e as Error).message}`, 'crack');
+      return false;
+    }
+    trial = t;
+    handle.trial = { state: 'running', hero: null, passes: null, of: K, error: '' };
+    // The probes are bodies now: drawn plain (the level's own material), from their spawn on.
+    const from = descs.length;
+    descs = driver.bodies;
+    fxSlots = descs.length;
+    for (let i = from; i < descs.length; i++) firedLooks[i - c.meta.n] = null;
+    void t.judged.then(() => { if (trial === t) finishTrial(); });
+    physicsIdle.kick();
+    sync();
+    return true;
+  }
+  /** After a step of world 0's test: world 0 judged, then the card once the judge is in too. */
+  function stepTrial() {
+    const t = trial;
+    if (!t || !handle.trial) return;
+    t.observe();
+    if (t.heroDone && handle.trial.state === 'running') {
+      handle.trial.state = 'judging';
+      pacer.release();
+      finishTrial();
+    }
+  }
+  function finishTrial() {
+    const t = trial, st = handle.trial;
+    if (!t || !st || st.state === 'done' || st.state === 'error') return;
+    if (t.error) {
+      st.state = 'error';
+      st.error = t.error instanceof Error ? t.error.message : String(t.error);
+      banner(`The judge could not run: ${st.error}`, 'crack');
+      sync();
+      return;
+    }
+    const r = t.result();
+    if (!r) { sync(); return; }
+    st.state = 'done';
+    st.hero = r.hero.pass;
+    st.passes = r.verdict.passes;
+    handle.result = r.score;
+    showResult(r.score);
+    hooks.ended?.(c, r.score, driver);
+    prefetchNext();
+    sync();
+  }
+  function stopTrial() {
+    trial?.stop();
+    trial = null;
+    handle.trial = null;
+  }
+
   const [offW, offH] = env.offscreenSize ?? [640, 400];
   const aspect = () => (offscreen ? offW / offH : canvas.width / Math.max(1, canvas.height));
   /** The aspect a view is framed for: a phone held upright frames the width too (the CSS box: the canvas may not be sized for it yet). */
@@ -821,15 +905,20 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
   let loading = 0;
   function load(i: number, retry = false): Promise<void> {
     loading++;
-    // A load ends the build phase (Play, Cancel, a level picked at the door), and any Run waiting on it.
+    // A load ends the build phase (Play, Cancel, a level picked at the door), any Run waiting on it, and a Mason test.
     if (editing) leaveEdit();
     runPending = false;
+    stopTrial();
+    trialPending = false;
     buildAfterLoad = false;
+    const testAfter = trialAfterLoad;
+    trialAfterLoad = false;
     // Not ready from now on (a load can take many frames), so nothing fires into the level being left.
     if (driver) syncState();
     return exclusive(() => { dropMarks(0); return loadNow(i, retry); }).finally(() => {
       loading--;
       if (buildAfterLoad && !loading) { buildAfterLoad = false; enterEdit(); }
+      if (testAfter && !loading) trialPending = true;
     });
   }
 
@@ -1253,6 +1342,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     frozen = false;
     pullAnim = null;
     handle.pullDrawn = null;
+    heldAim = null;
     aimed = null;
     beads = null;
     hover = null; // the new level's tints are fresh
@@ -1323,8 +1413,32 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     if (b !== null) renderer.setFx(b, Uint32Array.of(PULL_HOVER));
   }
 
+  /**
+   * Where a frozen shot's aim holds with no pointer (PT33, PaceFeel.frozenAim): the last spot aimed at, else the standing
+   * crown nearest the middle of the frame (so a freeze from the HUD or a key still shows what a shot would do), else the
+   * middle of the frame (a level with no crowns: B1's wall), where the view looks.
+   */
+  function heldAimAt(): [number, number] | null {
+    if (!frozen || !feel.frozenAim) return null;
+    if (heldAim) return heldAim;
+    const m = viewProj(orbit, aspect()), s = driver.snapshot, live = driver.session.crownLive;
+    let best: [number, number] | null = null, bestD = Infinity;
+    c.meta.crowns.forEach((b, k) => {
+      if (live[k] || b >= s.count) return;
+      const x0 = s.pos[3 * b]!, y0 = s.pos[3 * b + 1]!, z0 = s.pos[3 * b + 2]!;
+      const w = m[3]! * x0 + m[7]! * y0 + m[11]! * z0 + m[15]!;
+      if (w <= 0) return;
+      const x = (m[0]! * x0 + m[4]! * y0 + m[8]! * z0 + m[12]!) / w, y = (m[1]! * x0 + m[5]! * y0 + m[9]! * z0 + m[13]!) / w;
+      const d = Math.hypot(x, y);
+      if (Math.abs(x) <= 0.95 && Math.abs(y) <= 0.95 && d < bestD) { best = [x, y]; bestD = d; }
+    });
+    return best ?? [0, 0];
+  }
+
   function updateAim() {
     aimDirty = false;
+    if (pointer) heldAim = [pointer[0], pointer[1]];
+    const at = pointer ?? heldAimAt();
     aimed = null;
     aimHit = null;
     beads = null;
@@ -1333,8 +1447,8 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     contact = null;
     previewingOpener = false;
     // No aim (nor its preview) under the hand-over card: the next player has not taken the device yet.
-    if (pointer && selected && aimable() && regrowT === null && !handle.handoff) {
-      const hit = pick(rayThrough(orbit, aspect(), pointer[0], pointer[1]), driver.snapshot, c);
+    if (at && selected && aimable() && regrowT === null && !handle.handoff) {
+      const hit = pick(rayThrough(orbit, aspect(), at[0], at[1]), driver.snapshot, c);
       if (selected === 'pull') {
         // A pull takes the block under the cursor: lit when it can be taken, no arc.
         const p = pullFor(driver.session, hit);
@@ -1351,7 +1465,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
         const blasts = aimed ? c.arms[selected]?.blasts : undefined;
         if (blasts?.length === 1 && blasts[0]!.count === 1) ring = handle.reach = { centre: [hit.point[0], hit.point[1], hit.point[2]], radius: blasts[0]!.blast.radius };
       }
-    } else if (!pointer && aimable() && regrowT === null && !handle.handoff) {
+    } else if (!at && aimable() && regrowT === null && !handle.handoff) {
       // Before the player aims (and while the cursor is off the canvas), the pre-aimed opener shows its flight and where
       // it lands (PT14): what F, or the HUD's Fire button, will do. Its blast zone too, for a bomb. Nothing is aimed.
       // Not under the hand-over card, like the aim.
@@ -1684,6 +1798,8 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     if (duel) { duel.fired(shot); turnStart = performance.now(); syncDuel(); swing.grab(); hideHandoff(); firedAt = aimHit && aimed && aimed.shot === shot ? aimHit.point : null; }
     // A shot fired while frozen (Bullet Time) has cut in at the frozen step: the world runs on with it.
     frozen = false;
+    // A held aim (PT33) was only for the freeze: it goes with it, at the next frame.
+    aimDirty = true;
     // The shot's first step goes in now, not at the next frame.
     physicsIdle.kick();
     // A shot's pace starts fresh: no tail yet, and at real time until its steps say otherwise.
@@ -1706,6 +1822,8 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
   const openerNow = (): Shot | null => (opener && driver.session.strokes === 0 && driver.session.canFire(opener.ammo) ? opener : null);
 
   function fireOpener(): boolean {
+    // A Mason level's slot is its Test.
+    if (c.def.mason) return startTrial();
     // The mode's HUD offers no opener where the mode's panel holds the start (key F included; PT23).
     if (profile && !profile.opener) return false;
     const o = openerNow();
@@ -2107,7 +2225,8 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
       pullRefused: aimed?.shot.ammo === 'pull' && !aimed.reachable && (aimed.shot.body === refusedPull ? 'tapped' : true),
       collapse: s.liveCollapse, pulled: s.pulledShare(), met: s.objectiveDone, canBank: !stepping && regrowT === null && s.canBank(), canSkip: canSkip(), skipping, pace: handle.pace.tag,
       // While building, the mode's HUD leaves the start to the Build panel's Run (one start verb, PT23).
-      opener: !stepping && regrowT === null && s.phase === 'aiming' && openerNow() !== null && !(profile && editing), ticks, profile,
+      opener: !stepping && regrowT === null && s.phase === 'aiming' && (openerNow() !== null || trialReady()) && !(profile && editing), ticks, profile,
+      ...(c.def.mason ? { trial: trialText(handle.trial, masonWorlds(c.def.mason)) } : {}),
       // While the turn view swings or the hand-over card shows, the aim is the old side's: no refusal, cue or warning (PT5's red line mid-swing).
       ...(duel ? { duel: swing.active || handle.handoff ? duelHudHtml(duel) : duelHudHtml(duel, s.phase === 'aiming' && aimed ? duel.refuse(aimed.shot) : null, azFromYaw(orbit.yaw), s.phase === 'aiming' && aimHit !== null && duel.owned[duel.turn].includes(aimHit.body)) } : {}),
       ...(selected === QUAKE && dial ? { quake: quakeHud(dial) } : {}),
@@ -2116,6 +2235,8 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     showPanel();
     // The touch hint line goes once the first shot is in (body.kg-shot; the game page's CSS hides #help on touch).
     document.body.classList.toggle('kg-shot', s.strokes > 0);
+    // A Mason level's hint line (ui.ts MASON_HELP): nothing fires there.
+    document.body.classList.toggle('kg-mason', !!c.def.mason);
     if (crownsDown > crownsShown) html = html.replace('class="crowns"', 'class="crowns pop"');
     crownsShown = crownsDown;
     if (html !== lastHud) { env.hud.innerHTML = html; lastHud = html; }
@@ -2133,6 +2254,12 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     const px = pixelCounts({ width, height, ids, solo: new Float64Array(0) }, c.meta.n, covered);
     return { width, height, px: Array.from(px), solo: Array.from(outlineAreas(c, m, width, height)) };
   };
+  handle.pixelsOf = (body) => exclusive(async () => {
+    const r = await renderer.renderIds({ viewProj: viewProj(orbit, aspect()), eye: eyeOf(orbit), focus: orbit.target, groundY: 0, alpha: 1 });
+    const at: number[] = [];
+    r.ids.forEach((id, i) => { if (id === body + 1) at.push(i); });
+    return { width: r.width, height: r.height, at };
+  });
   handle.coverage = (body) => exclusive(async () => {
     const r = await renderer.renderIds({ viewProj: viewProj(orbit, aspect()), eye: eyeOf(orbit), focus: orbit.target, groundY: 0, alpha: 1 });
     let n = 0;
@@ -2153,6 +2280,8 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
       if (done) { regrowT = null; aimDirty = true; }
     }
     if (runPending && !loading && !editing && regrowT === null) { runPending = false; fireOpener(); }
+    // Mason's Trial: the test after the build phase's Play, once the level is in and has grown back.
+    if (trialPending && trialReady()) { trialPending = false; startTrial(); }
     const running = !loading && driver.session.phase === 'running';
     // Physics is behind when the sim runs under the HUD's slow-motion speed without being asked to
     // (slow-motion juice, fast-forward); it has headroom when steps cost under CLEAR_SHARE of a step.
@@ -2204,7 +2333,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     // Bullet Time's frozen look: the grade eases in and out, the sparks dim and hang (dt 0) while frozen.
     const frozenLook = frozen && feel.frozenLook;
     frozenGrade = easeGrade(frozenGrade, frozenLook ? 1 : 0, dt);
-    renderer.freezeFx = freezeFxOf(frozenGrade);
+    renderer.freezeFx = freezeFxOf(frozenGrade, feel.frozenAim);
     handle.frozenGrade = frozenGrade;
     frozenLabel.classList.toggle('on', frozenLook);
     const fp = { viewProj: viewProj(view, aspect()), eye: eyeOf(view), focus: orbit.target, time: now / 1000, groundY: 0, alpha: running ? alphaAt(arrivals, now, 1000 * c.scene.dt) : 1, ...(frozenLook ? { dt: 0 } : {}) };
@@ -2236,13 +2365,14 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
   void runPhysics({
     now: () => performance.now(),
     alive: () => handle.status === 'running',
-    active: () => !loading && driver.session.phase === 'running' && !frozen && !handle.hold,
+    active: () => !loading && (driver.session.phase === 'running' || trialStepping()) && !frozen && !handle.hold,
     dtMs: () => 1000 * c.scene.dt,
     options: () => ({ fastForward: fastNow(), skip: skipping, budgetMs: feel.budgetMs }),
     idle: physicsIdle.wait,
     task,
     step: () => exclusive(async () => {
-      if (loading || driver.session.phase !== 'running' || frozen) return null; // a load got in first, the shot ended, or it froze
+      // A load got in first, the shot (or world 0's test) ended, or it froze.
+      if (loading || (driver.session.phase !== 'running' && !trialStepping()) || frozen) return null;
       const d = driver, started = performance.now();
       // A step that ends the shot leaves the session aiming before it returns (the pipelined driver
       // still awaits the last read): until it has, no frame may show it ready, and no shot or bank may go in.
@@ -2255,6 +2385,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
       handle.timing.moving.push(red?.nMoving ?? 0);
       speed.step(submitted, c.scene.dt);
       onFeedback(fb);
+      stepTrial();
       hooks.stepped?.(fb, d);
       const input = perStep?.(d);
       if (input?.length) d.push(input);

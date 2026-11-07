@@ -11,6 +11,13 @@ import { towerGroups } from '../src/wave.ts';
 
 const MINUTES = 60_000;
 
+/**
+ * The whole Wavefront GPU set runs on a real GPU (TB_CHANNEL) or with PHYSICS_GPU_SLOW=1 (the nightly). On a PR, CI
+ * runs one representative per family (O5): W5 for Steer and Cut (a push and a live cut, wave-gpu-W5.test.ts) and W1's
+ * north run for Lay (wave-gpu-W1.test.ts); every other file is registered skipped.
+ */
+export const SLOW = !!process.env.TB_CHANNEL || process.env.PHYSICS_GPU_SLOW === '1';
+
 export interface WaveGpuCase {
   name: string;
   def: LevelDef;
@@ -25,19 +32,19 @@ export interface WaveGpuCase {
   heritage?: number;
 }
 
-/** Registers the GPU test of one level's cases. */
-export function waveGpuSuite(id: string, cases: WaveGpuCase[]): void {
-  let player: BrowserCastPlayer | null = null;
-  beforeAll(async () => {
-    try {
-      player = await openBrowserCastPlayer({ ...(process.env.TB_CHANNEL ? { channel: process.env.TB_CHANNEL } : {}) });
-    } catch (e) {
-      if (requireWebGPU()) throw e;
-    }
-  }, 3 * MINUTES);
-  afterAll(async () => { await player?.close(); });
+/** Registers the GPU test of one level's cases; `slow` ones only with SLOW (the browser is not even opened on a PR). */
+export function waveGpuSuite(id: string, cases: WaveGpuCase[], opts: { slow?: boolean } = {}): void {
+  describe.skipIf(opts.slow === true && !SLOW)('Wavefront on the GPU solver', () => {
+    let player: BrowserCastPlayer | null = null;
+    beforeAll(async () => {
+      try {
+        player = await openBrowserCastPlayer({ ...(process.env.TB_CHANNEL ? { channel: process.env.TB_CHANNEL } : {}) });
+      } catch (e) {
+        if (requireWebGPU()) throw e;
+      }
+    }, 3 * MINUTES);
+    afterAll(async () => { await player?.close(); });
 
-  describe('Wavefront on the GPU solver', () => {
     it(`${id}: ${cases.map((k) => k.name).join('; ')}`, async (ctx) => {
       if (!player) return ctx.skip();
       expect(player.engine).toBe('gpu');

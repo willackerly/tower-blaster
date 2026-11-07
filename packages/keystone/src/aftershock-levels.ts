@@ -2,14 +2,19 @@
 // top is a crown: bring it down) or protected (its top is heritage: it must still stand when the dust settles).
 // The player has one quake. aftershockLevel builds the LevelDef; the shipped levels are the sites that passed the
 // design search's choice-matters gate (keystone-lab quake-search.ts; numbers in docs/game/mode-probes.md, X6).
+import type { BuildDef } from './build.ts';
 import type { LevelDef } from './level.ts';
 import { QUAKE } from './rack.ts';
 import type { QuakeRules } from './quake.ts';
 import type { QuakeShot } from './shots.ts';
 import { parseTower, towerFootprint, towerHeight, towerParts } from './aftershock-towers.ts';
 
-/** One tower on a site: its id (aftershock-towers.ts), its footprint's min corner in cells, its class, and whether a wall lies along x. */
-export interface SiteTower { tower: string; at: [number, number]; role: 'condemned' | 'protected'; yawed?: boolean }
+/**
+ * One tower on a site: its id (aftershock-towers.ts), its footprint's min corner in cells, its class, and whether a
+ * wall lies along x. A 'city' tower is neither condemned nor protected: the rest of the town (a retrofit's sturdy
+ * neighbours, which a brace may tie a protected tower back to).
+ */
+export interface SiteTower { tower: string; at: [number, number]; role: 'condemned' | 'protected' | 'city'; yawed?: boolean }
 
 export interface QuakeSite {
   id: string;
@@ -19,6 +24,11 @@ export interface QuakeSite {
   quake?: QuakeRules;
   /** Engine-and-rules version, as LevelDef.version. */
   version?: number;
+  /**
+   * A retrofit (M7b, docs/game/aftershock.md "Retrofit"): what the player may place before the quake (C9's build
+   * phase). A retrofit's quake is the level's own (quake.fixed), and it needs no condemned tower.
+   */
+  build?: BuildDef;
 }
 
 /**
@@ -30,7 +40,9 @@ export interface QuakeSite {
  * inside the lot, as validateLevel asks of outcome levels.
  */
 export function aftershockLevel(site: QuakeSite): LevelDef {
-  if (!site.towers.some((t) => t.role === 'condemned') || !site.towers.some((t) => t.role === 'protected')) throw new Error(`site ${site.id}: needs a condemned and a protected tower`);
+  if (!site.towers.some((t) => t.role === 'protected')) throw new Error(`site ${site.id}: needs a protected tower`);
+  if (!site.build && !site.towers.some((t) => t.role === 'condemned')) throw new Error(`site ${site.id}: needs a condemned tower (a retrofit, with a build block, needs only protected ones)`);
+  if (site.build && !site.quake?.fixed) throw new Error(`site ${site.id}: a retrofit's quake is the level's own (quake.fixed)`);
   const specs = site.towers.map((t) => parseTower(t.tower));
   const tallest = Math.max(...specs.map(towerHeight)), grow = tallest + 2;
   let x0 = Infinity, z0 = Infinity, x1 = -Infinity, z1 = -Infinity;
@@ -39,14 +51,20 @@ export function aftershockLevel(site: QuakeSite): LevelDef {
     x0 = Math.min(x0, t.at[0]); z0 = Math.min(z0, t.at[1]); x1 = Math.max(x1, t.at[0] + fx); z1 = Math.max(z1, t.at[1] + fz);
   });
   const lot = { min: [x0 - grow, z0 - grow] as [number, number], max: [x1 + grow, z1 + grow] as [number, number] };
-  const lowestCrown = Math.min(...site.towers.flatMap((t, i) => (t.role === 'condemned' ? [towerHeight(specs[i]!) - 0.5] : [])));
+  // No condemned tower (a retrofit): the line only has to sit under every protected top, which 'standing' judges anyway.
+  const lowestCrown = Math.min(tallest - 0.5, ...site.towers.flatMap((t, i) => (t.role === 'condemned' ? [towerHeight(specs[i]!) - 0.5] : [])));
   const radius = Math.floor(Math.min(lot.max[0] - lot.min[0], lot.max[1] - lot.min[1]) / 2) - 1;
   return {
     id: site.id, name: site.name, version: site.version ?? 1, world: 7,
-    parts: site.towers.flatMap((t, i) => towerParts(specs[i]!, t.at, t.role === 'condemned' ? 'crown' : 'heritage', t.yawed)),
-    lot, crownLine: lowestCrown / 2, objective: { kind: 'quake' }, par: 1, rack: [QUAKE], scoring: 'outcome', heritage: 'standing',
-    launcher: { radius, y: 1, dropY: tallest + 4 },
+    parts: site.towers.flatMap((t, i) => towerParts(specs[i]!, t.at, t.role === 'condemned' ? 'crown' : t.role === 'protected' ? 'heritage' : 'plain', t.yawed)),
+    // In the level file's key order (viewer level-file.ts), so a level saved and loaded hashes as it was built.
+    lot, crownLine: lowestCrown / 2, objective: { kind: 'quake' }, par: 1, rack: [QUAKE], launcher: { radius, y: 1, dropY: tallest + 4 }, scoring: 'outcome',
+    // Every Aftershock cast and gate ran under settle v3 (the outcome default before PT6b's v4): named, so the stars
+    // keep their hash whichever default is on main, and in the level file's place for it, so a saved level hashes alike.
+    settle: 'v3',
+    ...(site.build ? { build: site.build } : {}),
     ...(site.quake ? { quake: site.quake } : {}),
+    heritage: 'standing',
   };
 }
 
@@ -86,6 +104,56 @@ export const QUAKE_SITES: Readonly<Record<string, QuakeSite>> = {
   ] },
 };
 
+/**
+ * The retrofit's quake (M7b): a short sharp jolt, 0.3 g at 1 Hz for 1 s. The design search (keystone-lab
+ * retrofit-search.ts) found it fells a lone column of 5 or 6 cubes on every nudged build, while a pier half the
+ * column's height either side of it, or a plank tying its top to a sturdy hall, saves it on every build.
+ */
+export const RETROFIT_QUAKE = { peak: 30, hz: 10, sec: 10 } as const;
+
+/** What a retrofit lets the player place: cubes, the course stamps and the ties (no domino brush: nothing to topple). */
+export const RETROFIT_BUILD: BuildDef = { budget: 200, pieces: ['cube', 'pier3', 'course4', 'wall4x2', 'plank', 'beam', 'slab'], brush: false };
+
+const hall = (at: [number, number], n = 6): SiteTower => ({ tower: `slab${n}x3`, at, role: 'city' });
+const keep = (tower: string, at: [number, number]): SiteTower => ({ tower, at, role: 'protected' });
+
+/**
+ * The retrofit search's candidate sites (RC-*), before the gate: `pnpm keystone:retrofit RC-1,...`. Protected
+ * columns among sturdy halls (slab towers 3 cells square, which the quake does not move): a column with a hall of its
+ * own height one cell away along the quake's axis can be tied to it, and any column can be buttressed.
+ */
+export const RETROFIT_SITES: Readonly<Record<string, QuakeSite>> = {
+  // Each column has a hall on one side along x and open ground on the other: tie it to the hall, or buttress it. Every
+  // hall stands on the + side of its column along the quake: the quake's first swing throws a column toward -, and a
+  // column with a hall a cell away on that side leans on it at under 10 degrees and stands unbraced (the first RC-2
+  // and RC-3 had one each: 8 and 3 of 8 bare builds stood), so the gate also asks that every column falls bare.
+  'RC-1': { id: 'RC-1', name: 'Lean on Me', quake: { fixed: { ...RETROFIT_QUAKE, axis: 0 } }, build: RETROFIT_BUILD, towers: [
+    keep('col6', [0, 0]), hall([2, -1]), keep('col6', [9, 0]), hall([11, -1]), keep('col6', [18, 0]), hall([20, -1]),
+  ] },
+  // The quake runs along z. Two columns have a hall along z to tie to; two have halls only along x, which a tie across
+  // the quake does not help: they must be buttressed, along z.
+  'RC-2': { id: 'RC-2', name: 'Cross Ties', quake: { fixed: { ...RETROFIT_QUAKE, axis: 90 } }, build: RETROFIT_BUILD, towers: [
+    keep('col6', [0, 0]), hall([-1, 2]), hall([2, -1]),
+    keep('col5', [8, 0]), hall([10, -1], 5),
+    keep('col6', [16, 0]), hall([15, 2]), hall([18, -1]),
+    keep('col5', [24, 0]),
+  ] },
+  // An old town: six columns of five and six, some beside halls along the quake, some alone.
+  'RC-3': { id: 'RC-3', name: 'Old Town', quake: { fixed: { ...RETROFIT_QUAKE, axis: 0 } }, build: RETROFIT_BUILD, towers: [
+    keep('col6', [4, 0]), hall([6, -1]),
+    keep('col5', [12, 0]), keep('col6', [16, 0]), hall([18, -1]),
+    keep('col5', [0, 8]), hall([2, 7], 5), keep('col6', [9, 8]), hall([11, 7]),
+    hall([16, 6], 5), keep('col5', [16, 11]),
+  ] },
+};
+
+/** A retrofit candidate's level (RETROFIT_SITES), or throws naming the ids there are. */
+export function retrofitCandidate(id: string): LevelDef {
+  const s = RETROFIT_SITES[id];
+  if (!s) throw new Error(`no retrofit site ${id}: one of ${Object.keys(RETROFIT_SITES).join(', ')}`);
+  return aftershockLevel(s);
+}
+
 /** A candidate site's level (QUAKE_SITES), or throws naming the ids there are. */
 export function quakeCandidate(id: string): LevelDef {
   const s = QUAKE_SITES[id];
@@ -109,9 +177,8 @@ function shipped(site: string, id: string, name: string, ace: QuakeShot, cast: {
   const s = QUAKE_SITES[site]!;
   return {
     ...aftershockLevel({ ...s, id, name, quake: { ...s.quake, budget: cast.budget } }),
-    // Cast under settle v3, the outcome default until PT6b made it v4: pinned so the stars keep their hash; drop it with
-    // a v4 recast (docs/game/settle-v4.md).
-    settle: 'v3',
+    // Cast under settle v3 (aftershockLevel names it; PT6b made v4 the outcome default): drop it with a v4 recast
+    // (docs/game/settle-v4.md).
     stars: { metric: 'energy', t2: cast.t2, t3: cast.t3, best: cast.best, castOn: 'node ref, aces checked on the GPU', engine: 'gpu', hash: cast.hash, n: cast.n, seed: 1 },
     solutions: { ace: [ace] },
   };
@@ -123,12 +190,44 @@ function shipped(site: string, id: string, name: string, ace: QuakeShot, cast: {
  * (Cross Grain's walls), then the short sharp shock only a narrow band of the dial clears, and last two levers at
  * once (Fault Line: the axis for the walls and a short 1 Hz jolt for the column against the big tower). Cast on the
  * reference engine over the dial grid (325 quakes along x, 975 over three axes for the wall sites), the confirm
- * stage on 8 nudged builds.
+ * stage on 8 nudged builds. The hashes were re-recorded once (M7b) when the level's keys were put in the level file's
+ * order (and the hash's quake keys in a fixed one), so a saved level reads back to the same hash; the geometry and the
+ * casts are unchanged.
  */
-export const A1: LevelDef = shipped('QC-1', 'A1', 'Slow Sway', q(25, 10, 10), { t2: 200, t3: 39, best: 34.91481483474812, budget: 800, n: 325, hash: '567eb703f042c3a2' });
-export const A2: LevelDef = shipped('QC-3', 'A2', 'Big Brother', q(40, 10, 10), { t2: 720, t3: 180, best: 162.51259268537308, budget: 2900, n: 325, hash: '21116792ca85189b' });
-export const A3: LevelDef = shipped('QC-2', 'A3', 'Cross Grain', q(25, 10, 10, 90), { t2: 2000, t3: 130, best: 114.26666673190293, budget: 8000, n: 975, hash: 'a79c199d0db089ae' });
-export const A4: LevelDef = shipped('QC-4', 'A4', 'Short Sharp Shock', q(50, 10, 15), { t2: 280, t3: 240, best: 209.4888890084887, budget: 1200, n: 325, hash: '45fe7a6f75ff5f0a' });
-export const A5: LevelDef = shipped('QC-5', 'A5', 'Fault Line', q(40, 10, 10), { t2: 1400, t3: 320, best: 284.39703719940286, budget: 5600, n: 975, hash: 'd0da8dd2abf44dbd' });
+export const A1: LevelDef = shipped('QC-1', 'A1', 'Slow Sway', q(25, 10, 10), { t2: 200, t3: 39, best: 34.91481483474812, budget: 800, n: 325, hash: '871b10a9190a2b98' });
+export const A2: LevelDef = shipped('QC-3', 'A2', 'Big Brother', q(40, 10, 10), { t2: 720, t3: 180, best: 162.51259268537308, budget: 2900, n: 325, hash: 'e235f97e2a1bcbc7' });
+export const A3: LevelDef = shipped('QC-2', 'A3', 'Cross Grain', q(25, 10, 10, 90), { t2: 2000, t3: 130, best: 114.26666673190293, budget: 8000, n: 975, hash: '9cb53a2945cb309e' });
+export const A4: LevelDef = shipped('QC-4', 'A4', 'Short Sharp Shock', q(50, 10, 15), { t2: 280, t3: 240, best: 209.4888890084887, budget: 1200, n: 325, hash: '5aade697bb7e8296' });
+export const A5: LevelDef = shipped('QC-5', 'A5', 'Fault Line', q(40, 10, 10), { t2: 1400, t3: 320, best: 284.39703719940286, budget: 5600, n: 975, hash: 'b9e3256a4c5cb28d' });
 
-export const AFTERSHOCK_LEVELS: readonly LevelDef[] = [A1, A2, A3, A4, A5];
+/**
+ * A shipped retrofit: a candidate site that passed the retrofit gate (keystone-lab retrofit-search.ts), under its own
+ * id and name, with its own build budget and stars on what was placed (metric 'built', lower is better). The towers
+ * and the quake are the site's exactly. T3 (and the best) is the cheapest robust bracing the search found, T2 the
+ * other family's cheapest, so both bracings earn two stars and the cheaper three; the recorded bracings
+ * (keystone-lab retrofit-solutions.ts) save every protected tower on the GPU solver (retrofit-gpu-*.test.ts), so the
+ * stars are the game engine's. The budget is half as much again as the dearer family's starting bracing, rounded up
+ * to ten: room for either family and for a clumsy build, not for bracing everything twice. The stars record the
+ * level's hash as authored (CompiledLevel.baseHash: a build does not change it).
+ */
+function retrofit(site: string, id: string, name: string, cast: { t2: number; t3: number; budget: number; hash: string }): LevelDef {
+  const s = RETROFIT_SITES[site]!;
+  return {
+    ...aftershockLevel({ ...s, id, name, build: { ...s.build!, budget: cast.budget } }),
+    stars: { metric: 'built', t2: cast.t2, t3: cast.t3, best: cast.t3, castOn: 'node ref (8 nudged builds), bracings checked on the GPU', engine: 'gpu', hash: cast.hash, n: 8, seed: 1 },
+  };
+}
+
+/**
+ * Aftershock's retrofits in teaching order (docs/game/aftershock.md "Retrofit"): one column type and one tie per
+ * column (Lean on Me), then the quake across the halls so some columns must be buttressed (Cross Ties), then a town
+ * of both (Old Town).
+ */
+export const A6: LevelDef = retrofit('RC-1', 'A6', 'Lean on Me', { t2: 14, t3: 6, budget: 30, hash: '58d3978e48fec0e9' });
+export const A7: LevelDef = retrofit('RC-2', 'A7', 'Cross Ties', { t2: 16, t3: 12, budget: 40, hash: 'da9602ec76ecc205' });
+export const A8: LevelDef = retrofit('RC-3', 'A8', 'Old Town', { t2: 28, t3: 16, budget: 60, hash: '01f68faab877a96b' });
+
+/** The retrofit levels (M7b), the end of the Aftershock series. */
+export const RETROFIT_LEVELS: readonly LevelDef[] = [A6, A7, A8];
+
+export const AFTERSHOCK_LEVELS: readonly LevelDef[] = [A1, A2, A3, A4, A5, ...RETROFIT_LEVELS];

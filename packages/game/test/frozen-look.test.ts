@@ -14,7 +14,8 @@ describe('frozen look', () => {
   });
 
   it('none of it when unfrozen; at full grade no sparks drawn and the heat glow at FROZEN_HEAT', () => {
-    expect(freezeFxOf(0)).toEqual({ grade: 0, sparks: 1, heat: 1 });
+    expect(freezeFxOf(0)).toEqual({ grade: 0, sparks: 1, heat: 1, keep: true });
+    expect(freezeFxOf(1, false).keep).toBe(false); // keystone.frozenaim=0 (PT33): the grade drains what you aim at too
     const full = freezeFxOf(1);
     expect([full.grade, full.sparks]).toEqual([1, 0]);
     expect(full.heat).toBeCloseTo(FROZEN_HEAT, 12);

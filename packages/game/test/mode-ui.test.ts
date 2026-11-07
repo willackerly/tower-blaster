@@ -63,7 +63,8 @@ describe("each new mode's HUD (PT23)", () => {
   it('no level hands over its whole answer as the opener: never the only shot of a one-shot ace', () => {
     const one = (d: LevelDef) => (d.solutions?.ace?.length === 1 ? JSON.stringify(d.solutions.ace[0]) : null);
     const checked = ALL.filter((d) => one(d) !== null);
-    expect(checked.map((d) => d.id)).toEqual(expect.arrayContaining(AFTERSHOCK_LEVELS.map((d) => d.id)));
+    // A1-A5's aces are one quake each (the retrofit levels after them answer with a build, not a shot).
+    expect(checked.map((d) => d.id)).toEqual(expect.arrayContaining(['A1', 'A2', 'A3', 'A4', 'A5']));
     for (const d of ALL) {
       const op = openerFor(d, 0, '1', false);
       if (one(d) !== null) expect(op === null ? null : JSON.stringify(op), d.id).not.toBe(one(d));

@@ -9,6 +9,7 @@ import { camera } from './camera.ts';
 import { coats } from './coats.ts';
 import { follow } from './follow.ts';
 import { frames } from './frames.ts';
+import { frozenAim } from './frozenaim.ts';
 import { frozenLook } from './frozenlook.ts';
 import { fx } from './fx.ts';
 import { handoff } from './handoff.ts';
@@ -68,4 +69,5 @@ export const OPTIONS = [
   pullAnim,
   frozenLook,
   modeUi,
+  frozenAim,
 ] as const;
