@@ -70,17 +70,18 @@ export const FRAMING_LIMITS: { [K in keyof Framing]: readonly [number, number] }
 const rad = (deg: number) => (deg * Math.PI) / 180;
 
 /**
- * Frame an axis-aligned box: look at a point a little below its centre from
+ * Frame an axis-aligned box: look at a point a little below its centre (or at `focus`) from
  * f's yaw (36 degrees: a 3/4 view), at f's pitch and field of view, f.fit
  * times as far as the closest distance at which all eight corners are inside
  * the view. With f.eye above 0, from the ground instead (frameFromGround;
  * metres: metres per world unit, for the eye's height over ground, the
  * floor's height: the box's bottom unless given).
  */
-export function frame(min: V3, max: V3, f: Framing = DEFAULT_FRAMING, metres = 1, ground = min[1], aspect = 1): Orbit {
+export function frame(min: V3, max: V3, f: Framing = DEFAULT_FRAMING, metres = 1, ground = min[1], aspect = 1, focus?: V3): Orbit {
   if (f.eye > 0) return frameFromGround(min, max, f, f.eye / metres, ground);
   const fovY = rad(f.fov), yaw = rad(f.yaw), pitch = clampPitch(rad(f.pitch));
-  const target: V3 = [(min[0] + max[0]) / 2, (max[1] - min[1]) * 0.45 + min[1], (min[2] + max[2]) / 2];
+  // `focus`: look at this point instead (the screen's centre), still far enough back that all of the box shows.
+  const target: V3 = focus ? [...focus] : [(min[0] + max[0]) / 2, (max[1] - min[1]) * 0.45 + min[1], (min[2] + max[2]) / 2];
   // Camera axes (they do not depend on the distance): forward, right, up.
   const cp = Math.cos(pitch), sp = Math.sin(pitch);
   const fw: V3 = [-cp * Math.sin(yaw), -sp, -cp * Math.cos(yaw)];

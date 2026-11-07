@@ -3,7 +3,7 @@
 // (every number checkable by hand) and on Rapier with a tiny recipe.
 import { describe, expect, it } from 'vitest';
 import { aimAt, type CastPlay, type CastSample, compileLevel, readShots, writeShots, launcherPos, type LaunchShot, type LevelDef, scenarioLevel, type Shot } from '@tb/keystone';
-import { lineShots, pullTarget, applyWaivers, bootstrapT3, castLevel, cloudCheck, crossDeviceGate, exposedFaces, faceSectors, facingAzimuth, FACE_SECTORS, REACH, type CastPlayer, type CastRecipe, type CastResult, competentIntents, compareCasts, compareReplay, extendCloud, judgeCast, replayCast, endValue, HEIGHT_BANDS, higherBetter, intentShot, moveIntents, nodeCastPlayer, nudgeLine, phaseEnds, playsOf, poolCasts, quantile, rng, roundEasier, SHORT_RECIPE, shotSummary, streamSeed, surfaceTarget, WAIVABLE, withBounce, withWallTime } from '../src/index.ts';
+import { lineShots, pullTarget, applyWaivers, bootstrapT3, castLevel, cloudCheck, crossDeviceGate, exposedFaces, faceSectors, facingAzimuth, FACE_SECTORS, REACH, type CastPlayer, type CastRecipe, type CastResult, competentIntents, compareCasts, compareReplay, extendCloud, judgeCast, replayCast, endValue, HEIGHT_BANDS, higherBetter, intentShot, moveIntents, nodeCastPlayer, nudgeLine, phaseEnds, playsOf, poolCasts, quantile, rng, roundEasier, SHORT_RECIPE, shotSummary, streamSeed, surfaceTarget, NONFINITE, playLimits, WAIVABLE, withBounce, withWallTime } from '../src/index.ts';
 
 /** A 10 x 4 wall of plaster cubes along x as an outcome level, rack of two cannonballs. */
 const WALL: LevelDef = { ...scenarioLevel('S3', { W: 10, H: 4 }, 1, { rack: ['cannonball', 'cannonball'] }), id: 'T1' };
@@ -402,6 +402,28 @@ describe('castLevel on a synthetic player', () => {
     const mine = r.lines.filter((l) => l.phase === 'climb' && baseKey(readShots(l.shots)) === base).map((l) => endValue(l, 'collapse'));
     expect(mine.length).toBeGreaterThanOrEqual(12);
     expect(r.bestLine.score).toBe(quantile(mine, 0.25));
+  });
+});
+
+describe('playLimits: a play whose metrics are not finite broke the physics', () => {
+  const ok = { shots: 1, step: 10, met: true, collapse: 0.5, crowns: 0, skyline: 1, score: 100, heritage: 0, pulled: 0 };
+  it('adds the nonfinite limit for NaN, Infinity or null (NaN once written as JSON), once, keeping the engine\'s', () => {
+    expect(playLimits({ limits: [], samples: [ok] })).toEqual([]);
+    for (const bad of [NaN, Infinity, null]) expect(playLimits({ limits: [], samples: [ok, { ...ok, collapse: bad as number }] })).toEqual([NONFINITE]);
+    expect(playLimits({ limits: ['pair overflow'], samples: [{ ...ok, score: NaN }] })).toEqual(['pair overflow', NONFINITE]);
+    expect(playLimits({ limits: [NONFINITE], samples: [{ ...ok, score: NaN }] })).toEqual([NONFINITE]);
+  });
+  it('fails the limits gate of a cast where one play blew up', async () => {
+    const recipe: CastRecipe = { competent: 4, climbLines: 1, climbMoves: 1, climbNudges: 1, cloud: 4 };
+    const base = basins(0.5);
+    let k = 0;
+    const blowsUp: CastPlayer = { ...base, async play(level, lines) {
+      const out = await base.play(level, lines);
+      return out.map((p) => (k++ === 2 ? { ...p, samples: p.samples.map((s) => ({ ...s, collapse: NaN })) } : p));
+    } };
+    const r = await castLevel(WALL, blowsUp, { recipe, seed: 1 });
+    expect(r.gates.limits).toMatchObject({ pass: false, value: 1 });
+    expect(r.lines.filter((l) => l.limits.includes(NONFINITE))).toHaveLength(1);
   });
 });
 

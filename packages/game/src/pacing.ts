@@ -56,6 +56,12 @@ export interface PaceFeel {
   /** A duel's arc on the ground: the player to fire's half of the launcher ring, dotted in their ink (keystone.arcs=0 hides it). */
   arcs: boolean;
   /**
+   * A duel's hand-over card (PT5, agent playtest 1: no "pass the device" moment): when the turn passes, a band in
+   * the next player's ink says whose turn it is, over the turn view's swing, until a tap. On by default;
+   * keystone.handoff=0 (or the door's Hand-over setting) goes straight on with a banner, as before.
+   */
+  handoff: boolean;
+  /**
    * Memory for instant undo, MB (keystone.undo): each shot keeps a checkpoint of the world as it went
    * in (play.ts, @tb/keystone Driver.checkpoint), the oldest dropped past this; an undo with no
    * checkpoint left replays the kept shots instead (docs/game/undo.md). 0: always replay.
@@ -125,7 +131,7 @@ export const MAX_UNDO_MB = 65536;
 /** keystone.undo when the URL sets none: a dozen shots of a 10k level. */
 export const DEFAULT_UNDO_MB = 1024;
 
-/** The URL's keystone.hitstop, keystone.slowmo, keystone.tailskip, keystone.follow, keystone.shake, keystone.rapid, keystone.turnview, keystone.arcs, keystone.marks, keystone.pullanim, keystone.frozenlook (0 or 1 each), keystone.budget (ms, 0 to 1000), keystone.undo (MB, 0 to MAX_UNDO_MB), keystone.frames (all, half, auto), keystone.launch (high, level), keystone.balls (painted, plain), keystone.fx (damage, classic) and keystone.spent (0 or 1); any other value is refused. */
+/** The URL's keystone.hitstop, keystone.slowmo, keystone.tailskip, keystone.follow, keystone.shake, keystone.rapid, keystone.turnview, keystone.arcs, keystone.handoff, keystone.marks, keystone.pullanim, keystone.frozenlook (0 or 1 each), keystone.budget (ms, 0 to 1000), keystone.undo (MB, 0 to MAX_UNDO_MB), keystone.frames (all, half, auto), keystone.launch (high, level), keystone.balls (painted, plain), keystone.fx (damage, classic) and keystone.spent (0 or 1); any other value is refused. */
 export function paceFeel(q: URLSearchParams): PaceFeel {
   const flag = (k: string, dflt: boolean) => {
     const v = q.get(k);
@@ -136,7 +142,7 @@ export function paceFeel(q: URLSearchParams): PaceFeel {
   if (!(budgetMs >= 0 && budgetMs <= 1000)) throw new Error(`keystone.budget must be from 0 to 1000 ms (0: no valve): ${b}`);
   const u = q.get('keystone.undo'), undoMB = u === null ? DEFAULT_UNDO_MB : u.trim() === '' ? NaN : Number(u);
   if (!(undoMB >= 0 && undoMB <= MAX_UNDO_MB)) throw new Error(`keystone.undo must be from 0 to ${MAX_UNDO_MB} MB (0: undo replays the shots): ${u}`);
-  return { hitStop: flag('keystone.hitstop', false), slowMo: flag('keystone.slowmo', false), budgetMs, tailSkip: flag('keystone.tailskip', true), follow: flag('keystone.follow', false), shake: flag('keystone.shake', false), frames: frameMode(q.get('keystone.frames')), rapid: flag('keystone.rapid', true), turnView: flag('keystone.turnview', true), arcs: flag('keystone.arcs', true), undoMB, launch: launchMode(q.get('keystone.launch')), balls: ballStyle(q.get('keystone.balls')), marks: flag('keystone.marks', true), fx: effectStyle(q.get('keystone.fx')), spent: flag('keystone.spent', true), pullAnim: flag('keystone.pullanim', true), frozenLook: flag('keystone.frozenlook', true) };
+  return { hitStop: flag('keystone.hitstop', false), slowMo: flag('keystone.slowmo', false), budgetMs, tailSkip: flag('keystone.tailskip', true), follow: flag('keystone.follow', false), shake: flag('keystone.shake', false), frames: frameMode(q.get('keystone.frames')), rapid: flag('keystone.rapid', true), turnView: flag('keystone.turnview', true), arcs: flag('keystone.arcs', true), handoff: flag('keystone.handoff', true), undoMB, launch: launchMode(q.get('keystone.launch')), balls: ballStyle(q.get('keystone.balls')), marks: flag('keystone.marks', true), fx: effectStyle(q.get('keystone.fx')), spent: flag('keystone.spent', true), pullAnim: flag('keystone.pullanim', true), frozenLook: flag('keystone.frozenlook', true) };
 }
 
 /** Throws unless f's budget is a number of ms from 0 to 1000 (the Scene panel's field can hold anything). */
@@ -162,6 +168,7 @@ export function writePaceFeel(f: PaceFeel, q: URLSearchParams): void {
   if (!f.rapid) q.set('keystone.rapid', '0');
   if (!f.turnView) q.set('keystone.turnview', '0');
   if (!f.arcs) q.set('keystone.arcs', '0');
+  if (!f.handoff) q.set('keystone.handoff', '0');
   if (f.undoMB !== DEFAULT_FEEL.undoMB) q.set('keystone.undo', String(f.undoMB));
   if (f.launch !== DEFAULT_FEEL.launch) q.set('keystone.launch', f.launch);
   if (f.balls !== DEFAULT_FEEL.balls) q.set('keystone.balls', f.balls);
@@ -186,8 +193,8 @@ export const VALVE_MIN = 0.25;
  * frames looked the same at both.
  */
 export const DEFAULT_BUDGET_MS = 14;
-/** No juice, the valve at its default budget, the tail skip on, a camera only the player moves, every frame drawn, rapid fire, instant undo in DEFAULT_UNDO_MB, shots from high, painted balls, engraved stones, impacts that follow the damage, spent ammo faded, pulls drawn, Bullet Time's frozen look. */
-export const DEFAULT_FEEL: Readonly<PaceFeel> = { hitStop: false, slowMo: false, budgetMs: DEFAULT_BUDGET_MS, tailSkip: true, follow: false, shake: false, frames: 'all', rapid: true, turnView: true, arcs: true, undoMB: DEFAULT_UNDO_MB, launch: 'high', balls: 'painted', marks: true, fx: 'damage', spent: true, pullAnim: true, frozenLook: true };
+/** No juice, the valve at its default budget, the tail skip on, a camera only the player moves, every frame drawn, rapid fire, the duel's hand-over card, instant undo in DEFAULT_UNDO_MB, shots from high, painted balls, engraved stones, impacts that follow the damage, spent ammo faded, pulls drawn, Bullet Time's frozen look. */
+export const DEFAULT_FEEL: Readonly<PaceFeel> = { hitStop: false, slowMo: false, budgetMs: DEFAULT_BUDGET_MS, tailSkip: true, follow: false, shake: false, frames: 'all', rapid: true, turnView: true, arcs: true, handoff: true, undoMB: DEFAULT_UNDO_MB, launch: 'high', balls: 'painted', marks: true, fx: 'damage', spent: true, pullAnim: true, frozenLook: true };
 /**
  * Owed time the clock keeps, ms; beyond it the rest is dropped (slow motion, not a burst of catch-up
  * steps after a stall). As the viewer's free loop (loop.ts FREE_MAX_LAG_MS).

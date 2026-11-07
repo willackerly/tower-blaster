@@ -377,6 +377,21 @@ export function bootstrapT3(metric: StarMetric, xs: readonly number[], seed: num
 
 // ---- The cast ----
 
+/** The metrics a settle reports as numbers: a NaN among them (null once written as JSON) means the physics broke. */
+const SAMPLE_METRICS = ['collapse', 'crowns', 'skyline', 'score', 'heritage', 'pulled'] as const;
+/** The limit sentence a play gets when a settle's metrics are not finite (playLimits). */
+export const NONFINITE = 'non-finite metrics at a settle: the engine blew up';
+
+/**
+ * A play's engine limits, plus 'nonfinite' when any settle's metrics are not finite numbers: the engine blew up
+ * (B1 at Bounce 0.3 on the M5, 2026-11-06: collapse NaN in 3 of 112 plays, which the limits gate did not count),
+ * so the play is not the game's physics and fails the limits gate like a pair or contact overflow (the CLI exits 4).
+ */
+export function playLimits(p: { limits: readonly string[]; samples: readonly CastSample[] }): string[] {
+  const broke = p.samples.some((s) => SAMPLE_METRICS.some((k) => { const v = (s as unknown as Record<string, unknown>)[k]; return v !== undefined && !(typeof v === 'number' && Number.isFinite(v)); }));
+  return broke && !p.limits.includes(NONFINITE) ? [...p.limits, NONFINITE] : [...p.limits];
+}
+
 export interface CastLine { phase: 'competent' | 'climb' | 'cloud'; shots: string; samples: CastSample[]; steps: number; complete: boolean; hash: string; limits: string[] }
 
 export interface CastResult {
@@ -449,7 +464,7 @@ export async function castLevel(level: LevelDef, player: CastPlayer, opts: CastO
   const play = async (phase: CastLine['phase'], batch: Shot[][]): Promise<CastPlay[]> => {
     const out = await player.play(level, batch);
     if (out.length !== batch.length) throw new Error(`cast: the player returned ${out.length} plays for ${batch.length} lines`);
-    out.forEach((p, k) => lines.push({ phase, shots: writeShots(batch[k]!), samples: p.samples, steps: p.steps, complete: p.complete, hash: p.hash, limits: p.limits }));
+    out.forEach((p, k) => lines.push({ phase, shots: writeShots(batch[k]!), samples: p.samples, steps: p.steps, complete: p.complete, hash: p.hash, limits: playLimits(p) }));
     opts.progress?.((done += batch.length), total, phase);
     return out;
   };
@@ -552,7 +567,7 @@ export async function extendCloud(level: LevelDef, player: CastPlayer, cast: Cas
   if (player.adapter !== cast.adapter || player.engine !== cast.engine) throw new Error(`extend: the cast was on ${cast.adapter} (${cast.engine}), this player is ${player.adapter} (${player.engine}): extend it on the same device`);
   const had = cast.lines.filter((l) => l.phase === 'cloud').length, best = readShots(cast.bestLine.shots), r = rng(streamSeed(cast.seed, 'extend', had));
   const batch = Array.from({ length: n }, () => nudgeLine(best, r)), plays = await player.play(level, batch);
-  const lines = [...cast.lines, ...plays.map((p, k): CastLine => ({ phase: 'cloud', shots: writeShots(batch[k]!), samples: p.samples, steps: p.steps, complete: p.complete, hash: p.hash, limits: p.limits }))];
+  const lines = [...cast.lines, ...plays.map((p, k): CastLine => ({ phase: 'cloud', shots: writeShots(batch[k]!), samples: p.samples, steps: p.steps, complete: p.complete, hash: p.hash, limits: playLimits(p) }))];
   const { raw, t2, t3, boot, gates } = judgeCast(c, cast.metric, cast.seed, lines);
   const cloudEnd = lines.filter((l) => l.phase === 'cloud').map((l) => endValue(l, cast.metric));
   return {
@@ -730,7 +745,7 @@ export async function cloudCheck(level: LevelDef, player: CastPlayer, cast: Cast
   const batch = Array.from({ length: n }, () => nudgeLine(best, r));
   const plays = await player.play(level, batch);
   const ends = plays.map((p) => endValue(p, cast.metric)), t3 = lowerQ(cast.metric, ends, 0.25);
-  const limited = plays.filter((p) => p.limits.length).length, incomplete = plays.filter((p) => !p.complete).length;
+  const limited = plays.filter((p) => playLimits(p).length).length, incomplete = plays.filter((p) => !p.complete).length;
   // The interval a cloud of n plays would land in on the cast's device: the cast's own cloud resampled n at a time
   // (at n below the cast's 50 the quartile spreads wider than the cast's bootstrap interval).
   const { lo, hi, halfWidth } = bootstrapT3(cast.metric, phaseEnds(cast, 'cloud'), seed, 2000, n);
@@ -740,7 +755,7 @@ export async function cloudCheck(level: LevelDef, player: CastPlayer, cast: Cast
     crossDevice: crossDeviceGate(cast.metric, t3, { lo, hi, halfWidth }, player.adapter, cast.adapter, `T3 of ${n} nudges`),
     limits: { pass: limited === 0, value: limited, need: 0, note: 'plays where the engine hit a limit that changed the physics' },
     complete: { pass: incomplete === 0, value: incomplete, need: 0, note: 'plays that ran out of steps before every shot settled' },
-    lines: plays.map((p, k) => ({ phase: 'cloud', shots: writeShots(batch[k]!), samples: p.samples, steps: p.steps, complete: p.complete, hash: p.hash, limits: p.limits })),
+    lines: plays.map((p, k) => ({ phase: 'cloud', shots: writeShots(batch[k]!), samples: p.samples, steps: p.steps, complete: p.complete, hash: p.hash, limits: playLimits(p) })),
   };
 }
 
@@ -790,7 +805,7 @@ export async function replayCast(level: LevelDef, player: CastPlayer, cast: Cast
   const { same, rows } = compareReplay(rec, plays, cast.metric);
   return {
     level: level.id, hash: c.hash, adapter: player.adapter, engine: player.engine, against: { adapter: cast.adapter, engine: cast.engine, seed: cast.seed },
-    phase, same, rows, lines: plays.map((p, k) => ({ phase, shots: rec[k]!.shots, samples: p.samples, steps: p.steps, complete: p.complete, hash: p.hash, limits: p.limits })),
+    phase, same, rows, lines: plays.map((p, k) => ({ phase, shots: rec[k]!.shots, samples: p.samples, steps: p.steps, complete: p.complete, hash: p.hash, limits: playLimits(p) })),
   };
 }
 
@@ -866,9 +881,9 @@ export async function exploreLevel(level: LevelDef, player: CastPlayer, n: numbe
     level: level.id, hash: c.hash, bodies: c.meta.n, adapter: player.adapter, engine: player.engine, n, seed,
     shots: level.rack.map((_, k) => shotSummary(plays, k)),
     steps: summary(plays.map((p) => p.steps)),
-    limited: plays.filter((p) => p.limits.length).length,
+    limited: plays.filter((p) => playLimits(p).length).length,
     incomplete: plays.filter((p) => !p.complete).length,
-    lines: plays.map((p, k) => ({ phase: 'competent', shots: writeShots(lines[k]!), samples: p.samples, steps: p.steps, complete: p.complete, hash: p.hash, limits: p.limits })),
+    lines: plays.map((p, k) => ({ phase: 'competent', shots: writeShots(lines[k]!), samples: p.samples, steps: p.steps, complete: p.complete, hash: p.hash, limits: playLimits(p) })),
   };
 }
 

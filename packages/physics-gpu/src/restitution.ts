@@ -961,18 +961,21 @@ fn restIslandCap(@builtin(global_invocation_id) id: vec3u) {
   let a = islandAlpha(r);
   atomicStore(&island[r].alpha, bitcast<u32>(a));
   if (!(a < 1.0)) { return; }
+  // At alpha 0 the solve's values are assigned, not scaled: an island flagged for a non-finite term (a pass that
+  // made a NaN or an infinity) would otherwise keep it, as 0 * NaN is NaN.
+  let none = a == 0.0;
   let v = island[i].v;
   let w = island[i].w;
-  bodies[i].linVel = v + a * (bodies[i].linVel - v);
-  bodies[i].angVel = w + a * (bodies[i].angVel - w);
-  rest[gi].P = a * rest[gi].P;
-  rest[gi].vnTarget = a * rest[gi].vnTarget;
+  bodies[i].linVel = select(v + a * (bodies[i].linVel - v), v, none);
+  bodies[i].angVel = select(w + a * (bodies[i].angVel - w), w, none);
+  rest[gi].P = select(a * rest[gi].P, vec4f(0.0), none);
+  rest[gi].vnTarget = select(a * rest[gi].vnTarget, vec4f(0.0), none);
   let rs = rowStart[i];
   for (var e = rs; e < rs + rowLength[i]; e++) {
     let slot = adjSlot[e];
     if (rest[slot].b != i) { continue; }
-    rest[slot].P = a * rest[slot].P;
-    rest[slot].vnTarget = a * rest[slot].vnTarget;
+    rest[slot].P = select(a * rest[slot].P, vec4f(0.0), none);
+    rest[slot].vnTarget = select(a * rest[slot].vnTarget, vec4f(0.0), none);
   }
 }`,
   restFinish: /* wgsl */ `
