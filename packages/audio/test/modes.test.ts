@@ -4,6 +4,8 @@ import {
   pulseSpectrum, CLASSIC_SOUND_MATERIALS, REAL1_SOUND_MATERIALS, SOUND_MATERIALS, type SoundMaterial,
 } from '@tb/audio';
 import { rng } from '@tb/scenarios';
+import { MIN_MODE_HZ } from '../src/modes.ts';
+import { framesOf, renderLadder, script } from '../src/ladder-cli.ts';
 
 const pine: SoundMaterial = SOUND_MATERIALS.pine, acrylic: SoundMaterial = SOUND_MATERIALS.acrylic, stone: SoundMaterial = REAL1_SOUND_MATERIALS.stone; // the plain Hertz cube (the default's adds a face contact)
 const sorted = (a: Float64Array) => [...a].sort((x, y) => x - y);
@@ -132,5 +134,31 @@ describe("Keystone's materials (the game; G6's classic set)", () => {
   it('solid ice, rubber and steel thud; only stone, ice and plaster shed grit', () => {
     for (const k of ['ice', 'rubber', 'steel'] as const) expect(contactTime(s[k], 2, 0.5) * low(s[k], 0.5).f).toBeGreaterThan(3);
     expect(Object.entries(s).filter(([, m]) => m.gritDb > -Infinity).map(([k]) => k).sort()).toEqual(['ice', 'plaster', 'stone']);
+  });
+});
+
+describe('modes under hearing', () => {
+  // A beach ball's wall as a shell: 0.24 mm of soft vinyl, 0.5 m across. Its plate modes fall at a few Hz.
+  const ball: SoundMaterial = { ...SOUND_MATERIALS.rubber, model: 'shell', wall: 0.00024, E: 0.02e9, nu: 0.45, rho: 1300, eta: 0.1, R: 0.25, Ec: 8.6e4 };
+
+  it('are dropped: every model keeps only modes at MIN_MODE_HZ and up', () => {
+    // A real table near the floor: a soft 5 m rubber cube's lowest modes would sit under it.
+    expect(modes(SOUND_MATERIALS.rubber, 5).freq.length).toBeGreaterThan(0);
+    for (const [m, edge] of [[ball, 0.5], [acrylic, 0.08], [SOUND_MATERIALS.rubber, 5], [pine, 1], [{ ...ball, E: 3e9, wall: 0.002 }, 0.5]] as const) {
+      const md = modes(m, edge);
+      expect(md.freq.length + (m === ball ? 1 : 0)).toBeGreaterThan(0);
+      for (const f of md.freq) expect(f).toBeGreaterThanOrEqual(MIN_MODE_HZ);
+    }
+    // The thin wall's whole table is under hearing: none left, so its knock is the contact's thump alone.
+    expect(modes(ball, 0.5).freq.length).toBe(0);
+  });
+
+  it('so a knock on a thin soft shell decays instead of drifting to full scale', () => {
+    const { L } = renderLadder(framesOf(script('knock', 2), 1), ball, 0.5);
+    let peak = 0, at = 0, late = 0;
+    for (let i = 0; i < L.length; i++) { const a = Math.abs(L[i]!); if (a > peak) { peak = a; at = i; } if (i > L.length - 24000) late = Math.max(late, a); }
+    expect(Number.isFinite(peak)).toBe(true);
+    expect(at / 48000).toBeLessThan(0.6); // the hit, not the end of the clip
+    expect(late).toBeLessThan(0.01 * peak);
   });
 });

@@ -108,6 +108,13 @@ export function beamShape(n: number, x: number): number {
   return Math.cosh(bx) + Math.cos(bx) - s * (Math.sinh(bx) + Math.sin(bx));
 }
 
+/**
+ * Modes under this are dropped, Hz: inaudible, and a resonator so near DC barely decays (tau = 1 / (pi f eta))
+ * and integrates every hit into a slow drift. A thin soft shell (an inflated ball's wall) put its plate
+ * modes at a few Hz and the drift peaked near full scale (docs/sound.md, Everything spawned sounds).
+ */
+export const MIN_MODE_HZ = 20;
+
 export function modes(m: SoundMaterial, bodyEdge = 1, fmax = 18000): Modes {
   const f: number[] = [];
   let weights: Modes['weights'];
@@ -115,11 +122,11 @@ export function modes(m: SoundMaterial, bodyEdge = 1, fmax = 18000): Modes {
     const [L, w, t] = m.dims!, G = m.G!;
     const kinds: [0 | 1 | 2, number][] = []; // 0 bending across t, 1 bending across w, 2 torsion
     for (const [kind, h] of [[0, t], [1, w]] as const)
-      for (let n = 0; n < BETA_L.length; n++) { const fn = beamBending(L, h, m.E, G, m.rho, n); if (fn < fmax) { f.push(fn); kinds.push([kind, n]); } }
+      for (let n = 0; n < BETA_L.length; n++) { const fn = beamBending(L, h, m.E, G, m.rho, n); if (fn >= MIN_MODE_HZ && fn < fmax) { f.push(fn); kinds.push([kind, n]); } }
     // Saint-Venant torsion of a thin rectangle: c = sqrt(G J / (rho Ip)), f_n = n c / 2L.
     const J = w * t ** 3 * (1 / 3 - 0.21 * (t / w) * (1 - (t / w) ** 4 / 12)), Ip = (w * t * (w * w + t * t)) / 12;
     const ct = Math.sqrt(G / m.rho) * Math.sqrt(J / Ip);
-    for (let n = 1; (n * ct) / (2 * L) < fmax; n++) { f.push((n * ct) / (2 * L)); kinds.push([2, n]); }
+    for (let n = 1; (n * ct) / (2 * L) < fmax; n++) if ((n * ct) / (2 * L) >= MIN_MODE_HZ) { f.push((n * ct) / (2 * L)); kinds.push([2, n]); }
     weights = (rand, out) => {
       // Contact at x along the length, at offset `off` across the width, from a uniformly random direction.
       const x = rand(), off = 2 * rand() - 1;
@@ -137,7 +144,7 @@ export function modes(m: SoundMaterial, bodyEdge = 1, fmax = 18000): Modes {
     // Six walls, not quite equal (a fixed spread per material, so it always sounds the same).
     const wallMul = m.walls ?? CLASSIC_WALLS;
     const pq: [number, number, number][] = [];
-    for (let wall = 0; wall < 6; wall++) for (const [l, p, q] of plateTable(m.plateModes)) { const fn = l * f1 * wallMul[wall]!; if (fn < fmax) { f.push(fn); pq.push([wall, p, q]); } }
+    for (let wall = 0; wall < 6; wall++) for (const [l, p, q] of plateTable(m.plateModes)) { const fn = l * f1 * wallMul[wall]!; if (fn >= MIN_MODE_HZ && fn < fmax) { f.push(fn); pq.push([wall, p, q]); } }
     weights = (rand, out) => {
       const wall = Math.min(5, Math.floor(rand() * 6)), x = rand(), y = rand();
       pq.forEach(([w, p, q], j) => { out[j] = w === wall ? 2 * Math.sqrt(6) * Math.sin(p * Math.PI * x) * Math.sin(q * Math.PI * y) : 0; });
@@ -147,7 +154,7 @@ export function modes(m: SoundMaterial, bodyEdge = 1, fmax = 18000): Modes {
     const L = soundSize(m, bodyEdge), G = m.E / (2 * (1 + m.nu)), ct = Math.sqrt(G / m.rho);
     const k = Math.abs(m.nu - CUBE_NU[0]) <= Math.abs(m.nu - CUBE_NU[1]) ? 0 : 1; // nearest tabulated Poisson ratio
     const keep: number[] = [];
-    for (let j = 0; j < CUBE_MODES; j++) { const fn = (OMEGA[k]![j]! * ct) / L; if (fn < fmax) { f.push(fn); keep.push(j); } }
+    for (let j = 0; j < CUBE_MODES; j++) { const fn = (OMEGA[k]![j]! * ct) / L; if (fn >= MIN_MODE_HZ && fn < fmax) { f.push(fn); keep.push(j); } }
     const face = FACE[k]!;
     const rms = keep.map((j) => Math.sqrt(face[j]!.reduce((s, u) => s + u * u, 0) / face[j]!.length));
     weights = (rand, out) => {
