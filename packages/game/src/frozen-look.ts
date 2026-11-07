@@ -11,6 +11,12 @@
 //           when the world resumes. Heat glow eases to FROZEN_HEAT of itself.
 //   label   a large "FROZEN · aim and fire" at the top of the screen (the
 //           bottom on a narrow one, clear of the HUD), with how to resume.
+//   keep    (PT33, PaceFeel.frozenAim, keystone.frozenaim, default on) what
+//           the player aims at is not graded: crowns, heritage, the fired ball
+//           and the aim's preview write a keep mask in the scene's alpha
+//           (@tb/render fx.ts KEEP_ALPHA), and play.ts holds the aim while
+//           frozen with no pointer (the last spot, else a crown, else the
+//           middle of the frame). docs/game/bullet-time-undercut-polish.md.
 //
 // Alternatives weighed: a CSS filter on the canvas (free, but readback captures,
 // the tests and the agent playtests would not show it). For the sparks, the
@@ -33,8 +39,8 @@ export function easeGrade(g: number, target: number, dt: number): number {
   return target > g ? Math.min(target, g + dt / FROZEN_IN_S) : Math.max(target, g - dt / FROZEN_OUT_S);
 }
 
-/** What the renderer is given for grade `g` (Renderer.freezeFx). */
-export const freezeFxOf = (g: number) => ({ grade: g, sparks: 1 - g, heat: 1 - (1 - FROZEN_HEAT) * g });
+/** What the renderer is given for grade `g` (Renderer.freezeFx); keep: what the player aims at stays in colour (PT33, keystone.frozenaim). */
+export const freezeFxOf = (g: number, keep = true) => ({ grade: g, sparks: 1 - g, heat: 1 - (1 - FROZEN_HEAT) * g, keep });
 
 /** The label's markup: what to do now, and how to resume (T on a keyboard, the Resume button on a touch screen). */
 export const FROZEN_LABEL = '<b>FROZEN</b> · aim and fire<span class="kg-desk"> · <kbd>T</kbd> resumes</span><span class="kg-tch"> · Resume to go on</span>';
