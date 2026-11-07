@@ -1,14 +1,19 @@
-// Where to aim from in a duel (duel-view.ts): the turn view frames the table from the middle of the side to fire,
-// high enough that the far keep shows over the near one; the turn cue names the shorter drag to the side, and a
+// Where to aim from in a duel (duel-view.ts): the turn view looks over the shoulder of the side to fire at the
+// rival, so a click at the middle lands on it and the shot flies clear of your own keep (PT5); your king wears the
+// shield and the rival's the crosshair; the turn cue names the shorter drag to the side, and a
 // drag that way gets there; the swing eases from the old view to the new one the short way round and lets go on a
 // grab; the arc beads dot the side's arc on the ground in its ink. Pure: no GPU.
 import { describe, expect, it } from 'vitest';
+import { emptySnapshot } from '@tb/engine-api';
 import { compileLevel, D1, D2, Duel, duelLevel, DUELS, EAST_ARC, inArc, WEST_ARC } from '@tb/keystone';
-import { eyeOf, type Orbit, viewProj } from '@tb/render/camera';
-import { azFromYaw } from '../src/aim.ts';
-import { arcBeads, arcMiddle, DUEL_PITCH, duelView, joinOverlays, smooth, TURN_SWING_S, turnCue, turnCueText, TurnSwing, yawOfAz } from '../src/duel-view.ts';
+import { MARK_HIT, MARK_SAVE } from '@tb/render';
+import { type Orbit, rayThrough, viewProj } from '@tb/render/camera';
+import { azFromYaw, launchHeight, pick, previewBeads, shotFor, SUBSTEPS } from '../src/aim.ts';
+import { NOVICE_SPREAD, playCentre, seeded } from '../src/duel-bot.ts';
+import { arcBeads, arcMiddle, DUEL_PITCH, DUEL_YAW_OFFSET, duelFocus, duelMarks, duelView, joinOverlays, smooth, TURN_SWING_S, turnCue, turnCueText, TurnSwing, yawOfAz } from '../src/duel-view.ts';
 import { orbitDrag } from '../src/play.ts';
-import { clearOfHud, viewOf } from '../src/view.ts';
+import { structureMarks } from '../src/scene.ts';
+import { PLAY_CENTRE_PORTRAIT, viewOf } from '../src/view.ts';
 
 const DEG = Math.PI / 180;
 const tables = DUELS.map((d) => [d.id, d] as const);
@@ -22,52 +27,105 @@ describe('duel turn view', () => {
     for (let az = 0; az < 720; az++) expect(azFromYaw(yawOfAz(az))).toBe(az);
   });
 
-  it.each(tables)('%s: each side\'s view has its eye over the middle of its arc, from DUEL_PITCH, on a wide screen and an upright phone', (_, def) => {
+  /** The table at rest: every structure body home. */
+  const atHome = (c: ReturnType<typeof compileLevel>) => {
+    const s = emptySnapshot(c.meta.n);
+    s.pos.set(c.meta.home);
+    for (let i = 0; i < c.meta.n; i++) s.rot[4 * i + 3] = 1;
+    return s;
+  };
+  const project = (o: Orbit, aspect: number, p: readonly number[]) => {
+    const m = viewProj(o, aspect), w = m[3]! * p[0]! + m[7]! * p[1]! + m[11]! * p[2]! + m[15]!;
+    return [(m[0]! * p[0]! + m[4]! * p[1]! + m[8]! * p[2]! + m[12]!) / w, (m[1]! * p[0]! + m[5]! * p[1]! + m[9]! * p[2]! + m[13]!) / w] as const;
+  };
+  const ASPECTS = [['wide', 1.6], ['phone upright', 390 / 844], ['phone sideways', 844 / 390]] as const;
+
+  it.each(tables)('%s: each side looks over its shoulder from DUEL_YAW_OFFSET off its arc\'s middle, from DUEL_PITCH, the rival in the middle of what shows', (_, def) => {
     const c = compileLevel(duelLevel(def));
-    for (const side of def.sides) {
-      for (const aspect of [1.6, 390 / 844]) {
-        const o = duelView(c, side, aspect), e = eyeOf(o);
-        const az = (((Math.atan2(e[2] - o.target[2], e[0] - o.target[0]) / DEG) * 2) % 720 + 720) % 720;
-        expect(az).toBeCloseTo(arcMiddle(side.arc), 6);
-        expect(azFromYaw(o.yaw)).toBe(arcMiddle(side.arc));
-        expect(inArc(azFromYaw(o.yaw), side.arc)).toBe(true);
+    for (const p of [0, 1] as const) {
+      const side = def.sides[p];
+      for (const [, aspect] of ASPECTS) {
+        const o = duelView(c, def, p, aspect), az = azFromYaw(o.yaw), off = Math.abs(((az - arcMiddle(side.arc) + 1080) % 720) - 360) / 2;
+        expect(off).toBeCloseTo(DUEL_YAW_OFFSET, 6);
+        expect(inArc(az, side.arc)).toBe(true);
         expect(o.pitch).toBeCloseTo(DUEL_PITCH * DEG, 12);
-        // The level's own framing apart from where it looks from: the same target height rule and floor.
         expect(o.floor).toBe(viewOf(c, aspect).floor);
-        if (aspect < 1) {
-          const min: [number, number, number] = [Infinity, 0, Infinity], max: [number, number, number] = [-Infinity, c.height, -Infinity];
-          for (let i = 0; i < c.meta.n; i++) for (const k of [0, 2] as const) {
-            min[k] = Math.min(min[k], c.meta.home[3 * i + k]! - c.meta.half[3 * i + k]! - 1);
-            max[k] = Math.max(max[k], c.meta.home[3 * i + k]! + c.meta.half[3 * i + k]! + 1);
-          }
-          expect(clearOfHud(o, aspect, min, max)).toBe(true);
+        // The rival's middle shows where a click aims: the middle of the screen, or of what an upright phone shows below its HUD.
+        const [x, y] = project(o, aspect, duelFocus(c, def, p));
+        expect(x).toBeCloseTo(0, 3);
+        expect(y).toBeCloseTo(aspect < 1 ? PLAY_CENTRE_PORTRAIT[1] : 0, 3);
+      }
+    }
+  });
+
+  // PT5's verify: the novice's middle click hit its own king; now it lands on the rival's half (D1) or the tower (D2), from either side, on any screen.
+  it.each(tables)('%s: a click at the middle lands on the rival, and 400 novice clicks about it never on your own blocks', (_, def) => {
+    const c = compileLevel(duelLevel(def)), s = atHome(c), d = new Duel(def, c);
+    for (const p of [0, 1] as const) {
+      const own = new Set(d.owned[p]), rival = new Set(d.owned[1 - p as 0 | 1]), sign = def.sides[p].arc === WEST_ARC ? 1 : -1;
+      for (const [name, aspect] of ASPECTS) {
+        const o = duelView(c, def, p, aspect), [cx, cy] = playCentre(aspect);
+        const mid = pick(rayThrough(o, aspect, cx, cy), s, c)!;
+        // (Heraldry's tower is both sides': its middle is either colour.)
+        expect(def.ruleset === 'keeps' ? rival.has(mid.body) : mid.body >= 0, `${def.id} ${def.sides[p].name} ${name}: middle click on body ${mid.body}`).toBe(true);
+        const rnd = seeded(41 + p), hits = { own: 0, rival: 0, near: 0 };
+        for (let k = 0; k < 400; k++) {
+          const h = pick(rayThrough(o, aspect, cx + (rnd() * 2 - 1) * NOVICE_SPREAD, cy + (rnd() * 2 - 1) * NOVICE_SPREAD), s, c);
+          if (!h) continue;
+          if (own.has(h.body)) hits.own++;
+          if (rival.has(h.body)) hits.rival++;
+          if (sign * h.point[0] < 0) hits.near++;
+        }
+        if (def.ruleset === 'keeps') {
+          // Two Keeps: not one click on your own keep, every one on the rival's half of the table, and a good share on the keep itself.
+          expect(hits, `${def.id} ${def.sides[p].name} ${name}`).toMatchObject({ own: 0, near: 0 });
+          expect(hits.rival).toBeGreaterThan(100);
+        } else {
+          // Heraldry's tower is shared: what matters is that clicks land on it, on both colours.
+          expect(hits.rival).toBeGreaterThan(100);
         }
       }
     }
   });
 
-  it('D1: from either side the whole other keep shows over your own (why DUEL_PITCH is above the framing\'s 12 deg)', () => {
-    const c = compileLevel(duelLevel(D1)), d = new Duel(D1, c);
-    /** The keep's box: every block the side owns. */
+  it('D1: the middle click\'s shot flies clear of your own keep, and your keep hides none of the rival\'s', () => {
+    const c = compileLevel(duelLevel(D1)), s = atHome(c), d = new Duel(D1, c), r = 0.5 * c.frame.unit;
     const boxOf = (idx: Int32Array) => {
       const lo = [Infinity, Infinity, Infinity], hi = [-Infinity, -Infinity, -Infinity];
       for (const i of idx) for (let k = 0; k < 3; k++) { lo[k] = Math.min(lo[k]!, c.meta.home[3 * i + k]! - c.meta.half[3 * i + k]!); hi[k] = Math.max(hi[k]!, c.meta.home[3 * i + k]! + c.meta.half[3 * i + k]!); }
       return [lo, hi] as const;
     };
-    const share = (o: Orbit, aspect: number, near: Int32Array, far: Int32Array) => {
-      const m = viewProj(o, aspect), y = (p: number[]) => (m[1]! * p[0]! + m[5]! * p[1]! + m[9]! * p[2]! + m[13]!) / (m[3]! * p[0]! + m[7]! * p[1]! + m[11]! * p[2]! + m[15]!);
-      const [nl, nh] = boxOf(near), [fl, fh] = boxOf(far);
-      const corners = (lo: readonly number[], hi: readonly number[], h: number) => [lo[0]!, hi[0]!].flatMap((x) => [lo[2]!, hi[2]!].map((z) => y([x, h, z])));
-      const nearTop = Math.max(...corners(nl, nh, nh[1]!)), farTop = Math.max(...corners(fl, fh, fh[1]!)), farBottom = Math.min(...corners(fl, fh, fl[1]!));
-      return Math.max(0, Math.min(1, (farTop - Math.max(nearTop, farBottom)) / (farTop - farBottom)));
-    };
-    for (const k of [0, 1] as const) {
-      const o = duelView(c, D1.sides[k], 1.6);
-      expect(share(o, 1.6, d.owned[k], d.owned[1 - k as 0 | 1])).toBe(1);
-      // The level framing's own pitch from the same spot would hide most of it.
-      const low = viewOf(c, 1.6, { yaw: o.yaw / DEG, pitch: 12 });
-      expect(share(low, 1.6, d.owned[k], d.owned[1 - k as 0 | 1])).toBeLessThan(0.5);
+    for (const p of [0, 1] as const) for (const [, aspect] of ASPECTS) {
+      const o = duelView(c, D1, p, aspect), [cx, cy] = playCentre(aspect), [lo, hi] = boxOf(d.owned[p]);
+      const hit = pick(rayThrough(o, aspect, cx, cy), s, c)!;
+      const a = shotFor(c, 'cannonball', azFromYaw(o.yaw), 100, hit.point, SUBSTEPS, launchHeight(c, 'high'))!;
+      expect(a.reachable).toBe(true);
+      const beads = previewBeads(c, a.shot, hit.point, SUBSTEPS, 1000, 1);
+      for (let k = 0; k < beads.length; k += 3) {
+        const inside = [0, 1, 2].every((j) => beads[k + j]! > lo[j]! - r && beads[k + j]! < hi[j]! + r);
+        expect(inside, `${D1.sides[p].name}: the shot passes through its own keep`).toBe(false);
+      }
+      // A grid of clicks over the rival keep's outline on screen: each one that meets a block meets the rival's.
+      const [rl, rh] = boxOf(d.owned[1 - p as 0 | 1]), corners = [rl[0]!, rh[0]!].flatMap((x) => [rl[1]!, rh[1]!].flatMap((y) => [rl[2]!, rh[2]!].map((z) => project(o, aspect, [x, y, z]))));
+      const xs = corners.map((q) => q[0]), ys = corners.map((q) => q[1]), own = new Set(d.owned[p]);
+      for (let i = 1; i < 8; i++) for (let j = 1; j < 8; j++) {
+        const h = pick(rayThrough(o, aspect, Math.min(...xs) + ((Math.max(...xs) - Math.min(...xs)) * i) / 8, Math.min(...ys) + ((Math.max(...ys) - Math.min(...ys)) * j) / 8), s, c);
+        expect(h && own.has(h.body)).toBeFalsy();
+      }
     }
+  });
+
+  it('carves the shield on the king of the player to fire and the crosshair on the rival\'s, swapping with the turn; nothing with marks off', () => {
+    const c = compileLevel(duelLevel(D1)), d = new Duel(D1, c);
+    const [gold, blue] = d.kings.map((k) => k![0]!);
+    expect(duelMarks(c, d)[gold!]).toBe(MARK_SAVE);
+    expect(duelMarks(c, d)[blue!]).toBe(MARK_HIT);
+    expect(duelMarks(c, { ...d, turn: 1, kings: d.kings })[gold!]).toBe(MARK_HIT);
+    expect(duelMarks(c, { ...d, turn: 1, kings: d.kings })[blue!]).toBe(MARK_SAVE);
+    expect([...duelMarks(c, d, false)].every((m) => m === 0)).toBe(true);
+    // Heraldry has no kings: the level's own marks.
+    const c2 = compileLevel(duelLevel(D2));
+    expect(duelMarks(c2, new Duel(D2, c2))).toEqual(structureMarks(c2));
   });
 });
 
