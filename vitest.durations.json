@@ -52,6 +52,7 @@
   "packages/game/test/follow-e2e.test.ts": 25.6,
   "packages/game/test/frame-rate.test.ts": 0.1,
   "packages/game/test/freeze-e2e.test.ts": 10.9,
+  "packages/game/test/frozen-aim-e2e.test.ts": 10,
   "packages/game/test/fuse-e2e.test.ts": 42,
   "packages/game/test/fuse-layout-e2e.test.ts": 45,
   "packages/game/test/fuse-timeline.test.ts": 0.5,
@@ -214,6 +215,7 @@
   "packages/keystone/test/pull.test.ts": 0,
   "packages/keystone/test/quake.test.ts": 0.2,
   "packages/keystone/test/rack.test.ts": 0.1,
+  "packages/keystone/test/retrofit.test.ts": 0.2,
   "packages/keystone/test/rube.test.ts": 0.1,
   "packages/keystone/test/rules.test.ts": 0.1,
   "packages/keystone/test/run-window.test.ts": 1,
@@ -400,5 +402,12 @@
   "packages/weapons/test/runtime.test.ts": 2.7,
   "packages/weapons/test/spec.test.ts": 0.1,
   "packages/weapons/test/tiers.test.ts": 0.2,
-  "packages/weapons/test/yield.test.ts": 0.1
+  "packages/weapons/test/yield.test.ts": 0.1,
+  "packages/game/test/retrofit-e2e.test.ts": 10,
+  "packages/keystone-lab/test/retrofit-gpu-A6.test.ts": 136.3,
+  "packages/keystone-lab/test/retrofit-gpu-A7.test.ts": 0.5,
+  "packages/keystone-lab/test/retrofit-gpu-A8.test.ts": 0.5,
+  "packages/keystone-lab/test/retrofit-ref-A6.test.ts": 59,
+  "packages/keystone-lab/test/retrofit-ref-A7.test.ts": 0.5,
+  "packages/keystone-lab/test/retrofit-ref-A8.test.ts": 0.5
 }

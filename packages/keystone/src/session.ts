@@ -479,6 +479,7 @@ export class Session {
       ...(c.def.objective.kind === 'quake' ? { quake: true } : {}),
       energy: energyFired(this.outcomes),
       ...(c.def.objective.kind === 'fold' ? { spill: last ? spillOf(last.red) : 0 } : {}),
+      ...(c.def.build ? { built: { spent: placedCost(c.def), ...(c.def.build.budget !== undefined ? { budget: c.def.build.budget } : {}) } } : {}),
     };
   }
 
