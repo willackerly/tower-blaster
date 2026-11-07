@@ -10,7 +10,7 @@ import { MARK_HIT, MARK_SAVE } from '@tb/render';
 import { type Orbit, rayThrough, viewProj } from '@tb/render/camera';
 import { azFromYaw, launchHeight, pick, previewBeads, shotFor, SUBSTEPS } from '../src/aim.ts';
 import { NOVICE_SPREAD, playCentre, seeded } from '../src/duel-bot.ts';
-import { arcBeads, arcMiddle, DUEL_PITCH, DUEL_YAW_OFFSET, duelFocus, duelMarks, duelView, joinOverlays, smooth, TURN_SWING_S, turnCue, turnCueText, TurnSwing, yawOfAz } from '../src/duel-view.ts';
+import { arcBeads, arcMiddle, DUEL_PITCH, DUEL_YAW_OFFSET, duelEndView, duelFocus, duelMarks, duelView, joinOverlays, launcherAz, ownInView, smooth, TURN_SWING_S, turnCue, turnCueText, TurnSwing, yawOfAz } from '../src/duel-view.ts';
 import { orbitDrag } from '../src/play.ts';
 import { structureMarks } from '../src/scene.ts';
 import { PLAY_CENTRE_PORTRAIT, viewOf } from '../src/view.ts';
@@ -232,5 +232,105 @@ describe('duel arc beads', () => {
     expect(j.colours.length).toBe(a.colours.length + b.colours.length);
     expect(Array.from(j.xyzr.subarray(0, a.xyzr.length))).toEqual(Array.from(a.xyzr));
     expect(j.colours[a.colours.length]).toBe(b.colours[0]);
+  });
+
+  // PT34 (agent playtest 2): what the turn view shows.
+  describe('PT34', () => {
+    const DESKTOPS = [['16:10', 1.6], ['16:9', 1280 / 720]] as const;
+    const atRest = (c: ReturnType<typeof compileLevel>) => { const s = emptySnapshot(c.meta.n); s.pos.set(c.meta.home); for (let i = 0; i < c.meta.n; i++) s.rot[4 * i + 3] = 1; return s; };
+    /** The share of the screen's width the aim preview of a click at the middle crosses (beads in view only). */
+    const arcSpan = (def: typeof D1, p: 0 | 1, aspect: number, lead: boolean) => {
+      const c = compileLevel(duelLevel(def)), o = duelView(c, def, p, aspect), [cx, cy] = playCentre(aspect);
+      const hit = pick(rayThrough(o, aspect, cx, cy), atRest(c), c)!;
+      const a = shotFor(c, def.sides[p].rack[0]!, launcherAz(o.yaw, def, lead), 100, hit.point, SUBSTEPS, launchHeight(c, 'high'))!;
+      expect(a.reachable).toBe(true);
+      const b = previewBeads(c, a.shot, hit.point), m = viewProj(o, aspect), xs: number[] = [];
+      for (let k = 0; k < b.length; k += 3) {
+        const w = m[3]! * b[k]! + m[7]! * b[k + 1]! + m[11]! * b[k + 2]! + m[15]!, x = (m[0]! * b[k]! + m[4]! * b[k + 1]! + m[8]! * b[k + 2]! + m[12]!) / w, y = (m[1]! * b[k]! + m[5]! * b[k + 1]! + m[9]! * b[k + 2]! + m[13]!) / w;
+        if (w > 0 && Math.abs(x) <= 1 && Math.abs(y) <= 1) xs.push(x);
+      }
+      return (Math.max(...xs) - Math.min(...xs)) / 2;
+    };
+
+    it.each(tables)("%s: on a desktop each side's own blocks are in view, clear of the hint line", (_, def) => {
+      const c = compileLevel(duelLevel(def)), d = new Duel(def, c);
+      for (const p of [0, 1] as const) for (const [name, aspect] of DESKTOPS) expect(ownInView(duelView(c, def, p, aspect), aspect, c, d.owned[p]), `${def.sides[p].name} ${name}`).toBe(true);
+    });
+
+    it("D2: the launcher stands its lead round from the view, inside the side's arc, and the preview arc crosses at least a quarter of the screen", () => {
+      for (const p of [0, 1] as const) {
+        const c = compileLevel(duelLevel(D2)), o = duelView(c, D2, p, 1.6), az = launcherAz(o.yaw, D2);
+        expect((((azFromYaw(o.yaw) - az) % 720) + 720) % 720).toBe(2 * D2.lead!);
+        expect(inArc(az, D2.sides[p].arc)).toBe(true);
+        expect(launcherAz(o.yaw, D2, false)).toBe(azFromYaw(o.yaw));
+        for (const [, aspect] of [...DESKTOPS, ['phone', 390 / 844]] as const) {
+          expect(arcSpan(D2, p, aspect, true), `${D2.sides[p].name} ${aspect}`).toBeGreaterThanOrEqual(0.25);
+          // Behind the camera (keystone.lead=0), the arc runs straight away from the eye: the playtest's stack of dots.
+          expect(arcSpan(D2, p, aspect, false)).toBeLessThan(0.1);
+        }
+      }
+      // D1 has no lead: its keeps stand off the ring's centre, so its arcs cross the screen already (about 15% of it
+      // once the view backs off to show your own keep; the playtest found D1's arcs easy to read).
+      expect(D1.lead).toBeUndefined();
+      expect(arcSpan(D1, 0, 1.6, true)).toBeGreaterThan(0.12);
+    });
+
+    it.each(tables)('%s: the end view frames both sides', (_, def) => {
+      const c = compileLevel(duelLevel(def)), d = new Duel(def, c);
+      for (const [, aspect] of [...DESKTOPS, ['phone', 390 / 844]] as const) {
+        const o = duelEndView(c, aspect), m = viewProj(o, aspect);
+        for (const i of [...d.owned[0], ...d.owned[1]]) {
+          const h = c.meta.home, w = m[3]! * h[3 * i]! + m[7]! * h[3 * i + 1]! + m[11]! * h[3 * i + 2]! + m[15]!;
+          const x = (m[0]! * h[3 * i]! + m[4]! * h[3 * i + 1]! + m[8]! * h[3 * i + 2]! + m[12]!) / w, y = (m[1]! * h[3 * i]! + m[5]! * h[3 * i + 1]! + m[9]! * h[3 * i + 2]! + m[13]!) / w;
+          expect(Math.abs(x) < 1 && Math.abs(y) < 1, `body ${i} at ${aspect}`).toBe(true);
+        }
+      }
+    });
+  });
+});
+
+// PT30 (agent playtest 2): on a docked phone the turn view framed under the old 40% guess, both keeps in the bottom
+// fifth and your own under the tray (upright) or the rail (sideways). With the measured band (play.ts dockedHud),
+// both kings and the rival stand inside it, and the end view frames the whole table in it.
+describe('PT30: duel views on a docked phone', () => {
+  // The bands phone-hud.md measured: upright 390 x 844 the strip (top 11.5%) and the tray with its hint (bottom 24%);
+  // sideways 844 x 390 the rail (left 27%) and the hints' box at the top.
+  const PHONES = [['upright', 390 / 844, { top: 0.115, bottom: 0.24, left: 0, right: 0 }], ['sideways', 844 / 390, { top: 0.14, bottom: 0, left: 0.27, right: 0 }]] as const;
+  /** Whether every corner of the home boxes of bodies `idx` projects inside the screen less the band (and in front of the eye). */
+  const inBand = (o: Orbit, aspect: number, c: ReturnType<typeof compileLevel>, idx: ArrayLike<number>, b: { top: number; bottom: number; left: number; right: number }) => {
+    const m = viewProj(o, aspect);
+    for (let j = 0; j < idx.length; j++) for (let s = 0; s < 8; s++) {
+      const i = idx[j]!, p = [0, 1, 2].map((k) => c.meta.home[3 * i + k]! + ((s >> k) & 1 ? 1 : -1) * c.meta.half[3 * i + k]!);
+      const w = m[3]! * p[0]! + m[7]! * p[1]! + m[11]! * p[2]! + m[15]!;
+      if (!(w > 0)) return false;
+      const x = (m[0]! * p[0]! + m[4]! * p[1]! + m[8]! * p[2]! + m[12]!) / w, y = (m[1]! * p[0]! + m[5]! * p[1]! + m[9]! * p[2]! + m[13]!) / w;
+      if (x < -1 + 2 * b.left || x > 1 - 2 * b.right || y > 1 - 2 * b.top || y < -1 + 2 * b.bottom) return false;
+    }
+    return true;
+  };
+
+  it.each(tables)("%s: each side's turn view keeps both kings and the rival's blocks inside the band", (_, def) => {
+    const c = compileLevel(duelLevel(def)), d = new Duel(def, c);
+    for (const p of [0, 1] as const) for (const [name, aspect, band] of PHONES) {
+      const o = duelView(c, def, p, aspect, band), why = `${def.sides[p].name} ${name}`;
+      expect(inBand(o, aspect, c, d.owned[(1 - p) as 0 | 1], band), `${why}: the rival`).toBe(true);
+      for (const k of d.kings) if (k) expect(inBand(o, aspect, c, k, band), `${why}: a king`).toBe(true);
+      // The same direction as without the band: the band changes the framing, not where the turn looks from.
+      expect(o.yaw).toBeCloseTo(duelView(c, def, p, aspect).yaw, 9);
+      expect(o.pitch).toBeCloseTo(DUEL_PITCH * DEG, 9);
+    }
+  });
+
+  it("D1 upright: without the band your own king is outside it (the playtest's crop); with it, inside", () => {
+    const c = compileLevel(duelLevel(D1)), d = new Duel(D1, c), [, aspect, band] = PHONES[0];
+    for (const p of [0, 1] as const) {
+      expect(inBand(duelView(c, D1, p, aspect), aspect, c, d.kings[p]!, band)).toBe(false);
+      expect(inBand(duelView(c, D1, p, aspect, band), aspect, c, d.kings[p]!, band)).toBe(true);
+    }
+  });
+
+  it.each(tables)('%s: the end view frames every body inside the band', (_, def) => {
+    const c = compileLevel(duelLevel(def)), all = Int32Array.from({ length: c.meta.n }, (_, i) => i);
+    for (const [name, aspect, band] of PHONES) expect(inBand(duelEndView(c, aspect, band), aspect, c, all, band), name).toBe(true);
   });
 });

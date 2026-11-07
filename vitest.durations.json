@@ -41,6 +41,8 @@
   "packages/game/test/duel-bot.test.ts": 34.0,
   "packages/game/test/duel-colours-e2e.test.ts": 35.0,
   "packages/game/test/duel-e2e.test.ts": 21.0,
+  "packages/game/test/duel-mirror.test.ts": 3.2,
+  "packages/game/test/duel-phone-e2e.test.ts": 13.0,
   "packages/game/test/duel-view.test.ts": 0.1,
   "packages/game/test/e2e-line.test.ts": 6.1,
   "packages/game/test/e2e-sound.test.ts": 9.6,

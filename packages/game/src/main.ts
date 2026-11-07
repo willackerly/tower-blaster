@@ -35,8 +35,8 @@ window.__game = handle;
 installGameStyles();
 // The hint line; ? (or its button) shows every key, and again goes back.
 const help = $('help');
-let allKeys = false;
-const showHelp = (all: boolean) => { allKeys = all; help.innerHTML = helpHtml(all); };
+let allKeys = false, inDuel = false;
+const showHelp = (all: boolean) => { allKeys = all; help.innerHTML = helpHtml(all, inDuel); };
 showHelp(false);
 help.addEventListener('click', (e) => { if ((e.target as HTMLElement).closest('button')?.dataset.act === 'keys') showHelp(!allKeys); });
 addEventListener('keydown', (e) => { if (e.key === '?' && !(e.target instanceof HTMLInputElement)) showHelp(!allKeys); });
@@ -67,6 +67,8 @@ async function main() {
   feelFromSettings(feel, q, settings.current);
   // A duel is one shot per turn, so it never fires mid-shot whatever the Rapid fire setting says.
   if (duel) feel.rapid = false;
+  // A duel's hint line has no undo or restart (PT34).
+  if (duel) { inDuel = true; showHelp(allKeys); }
   // Where the HUD and the result card sit (layout.ts): the URL's keystone.hud / card / carddelay where they say, else the Layout setting.
   // One object, read live by the game; the HUD's kg-dock class docks it on a phone (ui.ts DOCK_CSS).
   const layout = layoutOf(q, settings.current.layout);

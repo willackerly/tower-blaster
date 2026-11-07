@@ -60,9 +60,10 @@ describe('duel colours on the game page', () => {
       // Measured (SwiftShader, 2026-11-07): Gold 88.7-91.5 deg, Blue 256.9-261.5 deg in all three looks.
       expect(hueGap(h.gold.hue, 90), look).toBeLessThan(10);
       expect(hueGap(h.blue.hue, 259), look).toBeLessThan(10);
-      // The wall: grey (chroma 0.003 hazy, 0.009 real; 0.023 candy, whose blue night light tints every grey, 31% of
-      // Gold's 0.074), under a third of either side's.
-      expect(h.wall.chroma, look).toBeLessThan(Math.min(h.gold.chroma, h.blue.chroma) / 3);
+      // The wall: grey (chroma 0.003 hazy, 0.009 real; 0.023-0.025 candy, whose blue night light tints every grey, 31%
+      // of Gold's 0.074 in the first turn view and 34% in PT34's, which backs off to show your own keep), well under
+      // either side's. (The hue check below tells the old wall, at Blue's hue, apart.)
+      expect(h.wall.chroma, look).toBeLessThan(0.4 * Math.min(h.gold.chroma, h.blue.chroma));
     }
     const old = await measure('hazy', '&keystone.coats=0');
     if (!old) return ctx.skip();
