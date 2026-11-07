@@ -77,16 +77,52 @@ describe('Duel, Two Keeps', () => {
     expect(d.log.map((x) => x.player)).toEqual([0, 1]);
   });
 
-  it('the other king down wins at once; your own king down loses; both down: the shooter loses', () => {
-    const run = (parts: number[], shooter: 0 | 1) => {
-      const { c, s } = world(D1), d = new Duel(D1, c, shooter);
-      d.fired(shotAt(shooter === 0 ? WEST : EAST));
-      flatten(c, s, parts);
-      return d.settled(s);
+  // PT5 (agent playtest 1): one shot ended a duel before the other side fired. A round now ends before the duel does.
+  it('decides at the end of a round: the answer comes first, then the other king down wins and your own loses', () => {
+    /** First player's shot downs `first`; the answer (if asked) downs `answer`. */
+    const run = (first: number[], answer: number[] | null, by: 0 | 1 = 0) => {
+      const { c, s } = world(D1), d = new Duel(D1, c, by), az = (p: number) => (p === 0 ? WEST : EAST);
+      d.fired(shotAt(az(by)));
+      flatten(c, s, first);
+      const r = d.settled(s);
+      if (answer === null) return { d, r };
+      expect(r).toEqual({ over: false });
+      expect(d.answering).toBe(1 - by);
+      expect(d.turn).toBe(1 - by);
+      d.fired(shotAt(az(1 - by)));
+      flatten(c, s, answer);
+      return { d, r: d.settled(s) };
     };
-    expect(run([3], 0)).toMatchObject({ over: true, winner: 0, why: "Blue's keep fell" });
-    expect(run([2], 0)).toMatchObject({ over: true, winner: 1, why: 'Gold toppled its own keep' });
-    expect(run([2, 3], 1)).toMatchObject({ over: true, winner: 0, why: 'Blue toppled both keeps' });
+    expect(run([3], []).r).toMatchObject({ over: true, winner: 0, why: "Blue's keep fell" });
+    expect(run([2], []).r).toMatchObject({ over: true, winner: 1, why: 'Gold toppled its own keep' });
+    // The answer brings Gold's king down too: a round both keeps fell in is a draw.
+    expect(run([3], [2]).r).toMatchObject({ over: true, winner: null, why: 'both keeps fell in one round' });
+    // An own goal answered by an own goal: a draw too.
+    expect(run([2], [3]).r).toMatchObject({ over: true, winner: null });
+    // Blue went first and toppled its own keep; Gold's answer misses: Gold wins.
+    expect(run([3], [], 1).r).toMatchObject({ over: true, winner: 0, why: 'Blue toppled its own keep' });
+    // Both down on one shot: nothing is left to answer, and the shooter loses at once.
+    const both = run([2, 3], null, 1);
+    expect(both.r).toMatchObject({ over: true, winner: 0, why: 'Blue toppled both keeps' });
+    expect(both.d.log).toHaveLength(1);
+  });
+
+  it('a keep that falls to the answer ends the duel at once (the round is complete)', () => {
+    const { c, s } = world(D1), d = new Duel(D1, c);
+    d.fired(shotAt(WEST)); expect(d.settled(s)).toEqual({ over: false });
+    d.fired(shotAt(EAST)); flatten(c, s, [2]);
+    expect(d.settled(s)).toMatchObject({ over: true, winner: 1, why: "Gold's keep fell" });
+    expect(d.sides.map((x) => x.fired)).toEqual([1, 1]);
+  });
+
+  it('a side with no shots left owes no answer', () => {
+    const lopsided: DuelDef = { ...D1, sides: [{ ...D1.sides[0], rack: ['cannonball', 'cannonball'] }, { ...D1.sides[1], rack: ['cannonball'] }] };
+    const { c, s } = world(lopsided), d = new Duel(lopsided, c);
+    d.fired(shotAt(WEST)); d.settled(s);
+    d.fired(shotAt(EAST)); d.settled(s);
+    d.fired(shotAt(WEST)); flatten(c, s, [3]);
+    expect(d.answering).toBeNull();
+    expect(d.settled(s)).toMatchObject({ over: true, winner: 0 });
   });
 
   it('with both racks spent, the keep with more standing wins, and alike is a draw', () => {
@@ -119,15 +155,55 @@ describe('Duel, Heraldry', () => {
   it("scores each shot: the rival's blocks it brought down, less your own", () => {
     const { c, s } = world(D2), d = new Duel(D2, c);
     const down = (part: number, keep = 0) => flatten(c, s, [part], keep);
+    // D2's parts are half-courses: 2k + 0 the south half of course k, 2k + 1 the north, six blocks each; the top course is 22 (blue) and 23 (gold).
+    expect(new Duel(D2, c).owned.map((g) => g.length)).toEqual([72, 72]);
     d.fired(shotAt(WEST));
-    down(11); down(10, 4); // the top course (blue, 9 blocks) and 5 of the gold course under it
+    down(22); down(23, 4); // the top course's blue half (6 blocks) and 2 of its gold half
     d.settled(s);
-    expect(d.sides.map((x) => x.points)).toEqual([9 - 5, 0]);
+    expect(d.sides.map((x) => x.points)).toEqual([6 - 2, 0]);
     d.fired(shotAt(EAST));
-    down(9); // 9 blue blocks down on Blue's own shot
+    down(21); // 6 blue blocks down on Blue's own shot
     d.settled(s);
-    expect(d.sides.map((x) => x.points)).toEqual([4, -9]);
+    expect(d.sides.map((x) => x.points)).toEqual([4, -6]);
     for (let k = 2; k < 8; k++) { d.fired(shotAt(d.turn === 0 ? WEST : EAST, k < 4 ? 'cannonball' : 'marble')); d.settled(s); }
     expect(d.result).toMatchObject({ over: true, winner: 0, why: 'Gold scored more' });
+  });
+
+  it('tallies each shot for the score float: rival blocks down, own blocks down, points', () => {
+    const { c, s } = world(D2), d = new Duel(D2, c);
+    d.fired(shotAt(WEST));
+    flatten(c, s, [22]); flatten(c, s, [23], 4);
+    d.settled(s);
+    expect(d.lastShot).toEqual({ player: 0, rival: 6, own: 2, points: 4 });
+    expect(d.sides[0].struck).toBe(6);
+  });
+
+  // PT5: at 95% down the tower had nothing left to hit and the duel ran on for two more turns.
+  it('ends at the end of the round the tower falls to endShare, on points', () => {
+    const { c, s } = world(D2), d = new Duel(D2, c);
+    d.fired(shotAt(WEST));
+    flatten(c, s, Array.from({ length: 24 }, (_, k) => k)); // all on the ground: only the bottom course (12 of 144) has not dropped
+    expect(d.settled(s)).toEqual({ over: false }); // Blue answers first
+    expect(d.standingShare).toBeCloseTo(12 / 144);
+    d.fired(shotAt(EAST));
+    const r = d.settled(s);
+    expect(r).toMatchObject({ over: true, why: /, the tower is down$/ });
+    expect(d.sides[0].shotsLeft + d.sides[1].shotsLeft).toBe(6);
+  });
+
+  it('level on points: the side that brought down more of the other\'s blocks wins', () => {
+    const { c, s } = world(D2), d = new Duel(D2, c);
+    d.fired(shotAt(WEST)); flatten(c, s, [22, 23]); d.settled(s); // 6 blue, 6 gold: Gold 0 pts, struck 6
+    for (let k = 1; k < 8; k++) { d.fired(shotAt(d.turn === 0 ? WEST : EAST, k < 4 ? 'cannonball' : 'marble')); d.settled(s); }
+    expect(d.sides.map((x) => [x.points, x.struck])).toEqual([[0, 6], [0, 0]]);
+    expect(d.result).toMatchObject({ over: true, winner: 0, why: 'level on points, Gold brought down more' });
+  });
+
+  it('keeps going while more than endShare stands', () => {
+    const { c, s } = world(D2), d = new Duel(D2, c);
+    d.fired(shotAt(WEST)); flatten(c, s, [23, 22, 21, 20, 19, 18, 17, 16]); d.settled(s);
+    d.fired(shotAt(EAST));
+    expect(d.settled(s)).toEqual({ over: false });
+    expect(() => checkDuel({ ...D2, endShare: 1 }, c)).toThrow(/endShare/);
   });
 });

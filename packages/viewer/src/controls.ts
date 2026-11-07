@@ -430,7 +430,7 @@ export function mountControls(root: HTMLElement, hooks: ControlsHooks): { refres
       follow: (input(sceneForm, 'follow') as HTMLInputElement).checked, shake: (input(sceneForm, 'shake') as HTMLInputElement).checked, frames: input(sceneForm, 'frames').value as FrameMode,
       rapid: (input(sceneForm, 'rapid') as HTMLInputElement).checked,
       // A duel's aids (the game page's Siege Table): the viewer plays no duels, so they ride along as the URL says.
-      turnView: hooks.config().feel.turnView, arcs: hooks.config().feel.arcs,
+      turnView: hooks.config().feel.turnView, arcs: hooks.config().feel.arcs, handoff: hooks.config().feel.handoff,
       undoMB: input(sceneForm, 'undo').value === '' ? NaN : Number(input(sceneForm, 'undo').value),
       launch: input(sceneForm, 'launch').value as LaunchMode, balls: input(sceneForm, 'balls').value as BallStyle,
       marks: (input(sceneForm, 'marks') as HTMLInputElement).checked, coats: (input(sceneForm, 'coats') as HTMLInputElement).checked, sun: input(sceneForm, 'sun').value as SunMode,

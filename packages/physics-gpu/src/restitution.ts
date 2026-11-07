@@ -78,7 +78,11 @@
 // and Q up, so an island gets at most its alpha in exact arithmetic (to
 // within f32's error in the terms themselves). That holds while no sum's
 // parts overflow: |sum| < 2^29 J and under 2^22 bodies (the solver refuses
-// a larger capacity with the cap on); a term beyond +-2^29 J is clamped.
+// a larger capacity with the cap on). Outside that range the sums are not the island's, so the cap does not trust
+// them: a term beyond +-2^29 J or not finite, or an addition that wraps a sum's hi part (atomicAdd's old value
+// shows it), flags the island (IslandBody.over) and its alpha is 0, the solve's velocities (before 2026-11-06 a
+// term was clamped, which rounds G and Q down: S5 at 10k on SwiftShader, a jammed cube at about 220 km/s, scaled
+// by alpha 0.011 to 2,498 m/s, 3.4 times its island's bound).
 // Alpha is solved in f32 (islandAlpha, capAlpha's formula). At alpha 1 the
 // pass is untouched: the cap only reads, so a step it does not scale is the
 // floats of the pass without it. f32 against the reference: the two-cube
@@ -98,10 +102,10 @@
 // Centre-friction records (2) are not read here: the engine and the solver
 // refuse restitution with them.
 //
-// Memory while on: one RestSlot (80 B) per contact slot, (maxPairs +
-// capacity) x 80 B (pair slots, then one ground slot per body: 10.4% of the
-// contact buffer with records 1, which holds 768 B per slot, and 7.8% with
-// points, 1024 B), one RestBody (REST_BODY_BYTES, 288 B) per body, with the
+// Memory while on: one RestSlot (96 B; 80 B before the jam guard's linA) per
+// contact slot, (maxPairs + capacity) x 96 B (pair slots, then one ground slot
+// per body: 12.5% of the contact buffer with records 1, which holds 768 B per
+// slot, and 9.4% with points, 1024 B), one RestBody (REST_BODY_BYTES, 288 B) per body, with the
 // energy cap one IslandBody (ISLAND_BODY_BYTES, 64 B) per body, and 28 B
 // of counters and arguments. Off: no buffer and no pipeline (the engine builds the pass only
 // while the switch is on), and the other kernels are unchanged but for
@@ -134,9 +138,13 @@
 // - Anchors: the basis's rows are taken ground slot first, then pair slots in
 //   slot order (the reference's in its contact order), so which of a body's
 //   nearly dependent rows ANCHOR_TOL drops may differ; the held span is the
-//   same. A round's velocity update projects the sum of its impulses (no
-//   cut), where the reference projects each row's with the cut; a row the
-//   cut zeroes takes no impulse in the rounds, so they differ by rounding.
+//   same. A round's velocity update projects the sum of its impulses, where
+//   the reference projects each row's; the sums leave out the rows a side's
+//   cut zeroes (Group, RestSlot.linA), as the reference's per-row cut does,
+//   so they differ by rounding. (Before the jam guard the sums kept them,
+//   which at the old cut of 1e-4 differed by rounding too; at 0.2 it threw a
+//   seated cube at 29.8 m/s that the reference held: engine-restitution-
+//   jam.test.ts.)
 // - The combine rule is checked: while on, AvbdSolver rejects one outside
 //   COMBINE_RULES at init. The reference does not check it (an unknown rule
 //   gives it a NaN e, so nothing bounces).
@@ -171,6 +179,8 @@ export interface RestitutionConfig {
   anchors: boolean;
   /** AvbdParams.restitutionAnchorSpeed, m/s (a finite number >= 0): the speed under which a body rests for anchors. */
   anchorSpeed: number;
+  /** AvbdParams.restitutionAnchorCut (in [0, 1]): a row on an anchored body with under this fraction of it outside the held directions takes no bounce. */
+  anchorCut: number;
   /** AvbdParams.restitutionEnergyCap: scale each island's change so it ends the pass with no more energy than at the step's start or after the solve. */
   energyCap: boolean;
 }
@@ -212,7 +222,7 @@ export function restitutionWord(e: number): number {
 
 export type RestBinding = 'contacts' | 'contactsRw' | 'props' | 'solver' | 'bodies' | 'bodiesRw' | 'rest' | 'restRead' | 'info' | 'stepInfo' | 'rowStart' | 'rowLength' | 'adjSlot' | 'params' | 'restBody' | 'restBodyRead' | 'island';
 /** The pass's pipeline constants. */
-export type RestConstant = 'restThreshold' | 'groundRestitution' | 'restCombine' | 'restAnchorsOn' | 'restAnchorSpeed';
+export type RestConstant = 'restThreshold' | 'groundRestitution' | 'restCombine' | 'restAnchorsOn' | 'restAnchorSpeed' | 'restAnchorCut';
 
 export interface RestKernel {
   entry: string;
@@ -253,6 +263,8 @@ override restCombine: u32 = 0u;
 // AvbdParams.restitutionAnchors and restitutionAnchorSpeed (m/s).
 override restAnchorsOn: bool = true;
 override restAnchorSpeed: f32 = 0.25;
+// AvbdParams.restitutionAnchorCut: the jam guard (resp()).
+override restAnchorCut: f32 = 0.2;
 const BIG = ${F32_MAX};
 const ANCHOR_UP = ${ANCHOR_UP};
 const ANCHOR_TOL = ${ANCHOR_TOL};
@@ -333,7 +345,8 @@ fn sideAt(i: u32, v: vec3f, w: vec3f, s: f32) -> Side {
 // A velocity change (linear, angular).
 struct Resp { v: vec3f, w: vec3f }
 // The side's velocity change per unit impulse along the row (jv, jw). With anchors, as the reference's resp(): the
-// row in M^1/2 coordinates less its part along the held directions, 0 if that leaves under ANCHOR_TOL of it (cut;
+// row in M^1/2 coordinates less its part along the held directions, 0 if that leaves under restAnchorCut of it (cut,
+// the jam guard: the rest would move the body 1/f times as fast as a free row to meet its target, f that fraction;
 // the velocity update of a round's summed impulses projects without the cut).
 fn resp(sd: Side, jv: vec3f, jw: vec3f, cut: bool) -> Resp {
   if (sd.k == NONE) { return Resp(jv * (sd.s / sd.m), sd.s * vec3f(dot(sd.i0, jw), dot(sd.i1, jw), dot(sd.i2, jw))); }
@@ -348,7 +361,7 @@ fn resp(sd: Side, jv: vec3f, jw: vec3f, cut: bool) -> Resp {
     let d = dot(qv, xv) + dot(qw, xw);
     xv -= d * qv; xw -= d * qw;
   }
-  if (cut && !(sqrt(dot(xv, xv) + dot(xw, xw)) > ANCHOR_TOL * n0)) { return Resp(vec3f(0.0), vec3f(0.0)); }
+  if (cut && !(sqrt(dot(xv, xv) + dot(xw, xw)) > restAnchorCut * n0)) { return Resp(vec3f(0.0), vec3f(0.0)); }
   return Resp(xv * (rm * sd.s), sd.s * vec3f(dot(s0, xw), dot(s1, xw), dot(s2, xw)));
 }
 // The row's inverse effective mass under the split.
@@ -366,8 +379,15 @@ fn kick(r: NRow, A: Side, B: Side, hasA: bool, d: f32, vb: ptr<function, vec3f>,
 }
 
 // What one group of a manifold's points did in a round: their impulses so far, and the round's impulse on b
-// (lin, angB) and on a (-lin, angA), the sum of dP J.
-struct Group { P: vec4f, lin: vec3f, angB: vec3f, angA: vec3f }
+// (lin, angB) and on a (linA, angA), the sum of dP J over the rows the side's anchors do not cut (cutOf): a cut row
+// moves its side neither in the rounds (resp) nor in the update, as on the reference.
+struct Group { P: vec4f, lin: vec3f, angB: vec3f, linA: vec3f, angA: vec3f }
+// Whether the jam guard cuts the row (jv, jw) on side sd (resp()'s test; never on a side anchors do not hold).
+fn cutOf(sd: Side, jv: vec3f, jw: vec3f) -> bool {
+  if (sd.k == NONE) { return false; }
+  let o = resp(sd, jv, jw, true);
+  return all(o.v == vec3f(0.0)) && all(o.w == vec3f(0.0));
+}
 
 // One round of one group of a manifold's points (mask: its bouncing points, or its supports), on copies of last
 // round's velocities (A unused without hasA): the centroid step (equal impulses on every point, from an exact
@@ -413,12 +433,11 @@ fn solveGroup(mask: u32, rows: array<NRow, 4>, T: vec4f, P0: vec4f, A: Side, B: 
     dP[q] = dP[q] + d;
     kick(r, A, B, hasA, d, &vb, &wb, &va, &wa);
   }
-  var g = Group(P, vec3f(0.0), vec3f(0.0), vec3f(0.0));
+  var g = Group(P, vec3f(0.0), vec3f(0.0), vec3f(0.0), vec3f(0.0));
   for (var q = 0u; q < 4u; q++) {
-    if (((mask >> q) & 1u) == 0u) { continue; }
-    g.lin += dP[q] * rs[q].n;
-    g.angB += dP[q] * rs[q].wb;
-    g.angA += dP[q] * rs[q].wa;
+    if (((mask >> q) & 1u) == 0u || dP[q] == 0.0) { continue; }
+    if (!cutOf(B, rs[q].n, rs[q].wb)) { g.lin += dP[q] * rs[q].n; g.angB += dP[q] * rs[q].wb; }
+    if (hasA && !cutOf(A, -rs[q].n, rs[q].wa)) { g.linA -= dP[q] * rs[q].n; g.angA += dP[q] * rs[q].wa; }
   }
   return g;
 }
@@ -506,7 +525,10 @@ struct IslandBody {
   dHi: atomic<i32>, dLo: atomic<u32>,
   gHi: atomic<i32>, gLo: atomic<u32>,
   qHi: atomic<i32>, qLo: atomic<u32>,
-  v: vec3f, pad0: f32,
+  v: vec3f,
+  // Set when a term left the fixed point's range or an addition to a sum's hi part wrapped: the sums are then not
+  // the island's, so its alpha is 0 (islandAlpha).
+  over: atomic<u32>,
   w: vec3f, pad1: f32,
 }
 // Bounded walks: a root is reached in far fewer steps; the bound only keeps a bug from hanging the GPU.
@@ -523,19 +545,38 @@ fn find(x0: u32) -> u32 {
   }
   return x;
 }
-// x (J) in fixed point: hi = floor(4 x), clamped to i32, and the rest in 1/4096 J, rounded down, or up if up.
+// x (J) in fixed point: hi = floor(4 x), clamped to i32, and the rest in 1/4096 J, rounded down, or up if up; over
+// if x was out of range (|4 x| over FIX_MAX, or not finite), so the clamped value is not x.
 const FIX_HI = ${CAP_FIX_HI}.0;
 const FIX_LO = ${CAP_FIX_LO}.0;
-struct Fix { hi: i32, lo: u32 }
+const FIX_MAX = 2147483520.0;
+struct Fix { hi: i32, lo: u32, over: bool }
 fn fixOf(x: f32, up: bool) -> Fix {
-  let y = clamp(x * FIX_HI, -2147483520.0, 2147483520.0);
+  let over = !(abs(x * FIX_HI) <= FIX_MAX);
+  let y = select(clamp(x * FIX_HI, -FIX_MAX, FIX_MAX), 0.0, over);
   let h = floor(y);
   let f = (y - h) * FIX_LO;
-  return Fix(i32(h), u32(select(floor(f), ceil(f), up)));
+  return Fix(i32(h), u32(select(floor(f), ceil(f), up)), over);
+}
+// Whether old + h wrapped in i32 (atomicAdd's old value and the addend): both of one sign, the sum of the other.
+fn wrapped(old: i32, h: i32) -> bool {
+  let s = bitcast<i32>(bitcast<u32>(old) + bitcast<u32>(h));
+  return (old < 0) == (h < 0) && (s < 0) != (old < 0);
+}
+// Adds a term to island r's D, G or Q (k 0, 1, 2), flagging the island if the term or the sum left the range.
+fn addFix(r: u32, k: u32, t: Fix) {
+  var old = 0;
+  switch (k) {
+    case 0u: { old = atomicAdd(&island[r].dHi, t.hi); atomicAdd(&island[r].dLo, t.lo); }
+    case 1u: { old = atomicAdd(&island[r].gHi, t.hi); atomicAdd(&island[r].gLo, t.lo); }
+    default: { old = atomicAdd(&island[r].qHi, t.hi); atomicAdd(&island[r].qLo, t.lo); }
+  }
+  if (t.over || wrapped(old, t.hi)) { atomicStore(&island[r].over, 1u); }
 }
 fn fixValue(hi: i32, lo: u32) -> f32 { return f32(hi) / FIX_HI + f32(lo) / (FIX_HI * FIX_LO); }
 // The island's alpha (the reference's capAlpha): the largest in [0, 1] with alpha G + alpha^2 Q / 2 <= max(0, D).
 fn islandAlpha(r: u32) -> f32 {
+  if (atomicLoad(&island[r].over) != 0u) { return 0.0; }
   let D = fixValue(atomicLoad(&island[r].dHi), atomicLoad(&island[r].dLo));
   let G = fixValue(atomicLoad(&island[r].gHi), atomicLoad(&island[r].gLo));
   let Q = fixValue(atomicLoad(&island[r].qHi), atomicLoad(&island[r].qLo));
@@ -791,12 +832,13 @@ fn restManifold(@builtin(global_invocation_id) id: vec3u) {
   let A = sideAt(a, bodies[a].linVel, bodies[a].angVel, f32(rest[groundRec(a)].split));
   let B = sideAt(r.b, bodies[r.b].linVel, bodies[r.b].angVel, f32(rest[groundRec(r.b)].split));
   var P = r.P;
-  var lin = vec3f(0.0); var angB = vec3f(0.0); var angA = vec3f(0.0);
-  if (bm != 0u) { let g = solveGroup(bm, rows, r.vnTarget, P, A, B, true); P = g.P; lin += g.lin; angB += g.angB; angA += g.angA; }
-  if (sm != 0u) { let g = solveGroup(sm, rows, r.vnTarget, P, A, B, true); P = g.P; lin += g.lin; angB += g.angB; angA += g.angA; }
+  var lin = vec3f(0.0); var angB = vec3f(0.0); var linA = vec3f(0.0); var angA = vec3f(0.0);
+  if (bm != 0u) { let g = solveGroup(bm, rows, r.vnTarget, P, A, B, true); P = g.P; lin += g.lin; angB += g.angB; linA += g.linA; angA += g.angA; }
+  if (sm != 0u) { let g = solveGroup(sm, rows, r.vnTarget, P, A, B, true); P = g.P; lin += g.lin; angB += g.angB; linA += g.linA; angA += g.angA; }
   rest[k].P = P;
   rest[k].lin = lin;
   rest[k].angB = angB;
+  rest[k].linA = linA;
   rest[k].angA = angA;
 }`,
   restBodies: /* wgsl */ `
@@ -831,9 +873,9 @@ fn restBodies(@builtin(global_invocation_id) id: vec3u) {
   for (var e = rs; e < rs + rowLength[i]; e++) {
     let r = rest[adjSlot[e]];
     if ((r.flags & (BOUNCE | SUPPORT)) == 0u) { continue; }
-    if (r.b == i) { lin += r.lin; ang += r.angB; } else { lin -= r.lin; ang += r.angA; }
+    if (r.b == i) { lin += r.lin; ang += r.angB; } else { lin += r.linA; ang += r.angA; }
   }
-  // With its own mass (and with anchors, projected: the cut is per row, in the rounds).
+  // With its own mass (and with anchors, projected; the rows its anchors cut are not in the sums: Group).
   let o = resp(sideAt(i, b.linVel, b.angVel, 1.0), lin, ang, false);
   bodies[i].linVel = b.linVel + o.v;
   bodies[i].angVel = b.angVel + o.w;
@@ -849,6 +891,7 @@ fn restIslandInit(@builtin(global_invocation_id) id: vec3u) {
   atomicStore(&island[i].dHi, 0); atomicStore(&island[i].dLo, 0u);
   atomicStore(&island[i].gHi, 0); atomicStore(&island[i].gLo, 0u);
   atomicStore(&island[i].qHi, 0); atomicStore(&island[i].qLo, 0u);
+  atomicStore(&island[i].over, 0u);
   island[i].v = bodies[i].linVel;
   island[i].w = bodies[i].angVel;
 }`,
@@ -896,15 +939,12 @@ fn restIslandSum(@builtin(global_invocation_id) id: vec3u) {
   let wp = island[i].w;
   let vs = v0 + hg;
   let d = 0.5 * m * (dot(vs, vs) - dot(vp, vp)) + spinDot(sb.q0, I, w0, w0) - spinDot(b.rot, I, wp, wp) + m * dot(p.gravity, b.pos - sb.x0);
-  let fd = fixOf(d, false);
-  atomicAdd(&island[r].dHi, fd.hi); atomicAdd(&island[r].dLo, fd.lo);
+  addFix(r, 0u, fixOf(d, false));
   if (rest[groundRec(i)].split == 0u) { return; }
   let dv = b.linVel - island[i].v;
   let dw = b.angVel - wp;
-  let fg = fixOf(m * dot(dv, vp) + 2.0 * spinDot(b.rot, I, dw, wp), true);
-  let fq = fixOf(m * dot(dv, dv) + 2.0 * spinDot(b.rot, I, dw, dw), true);
-  atomicAdd(&island[r].gHi, fg.hi); atomicAdd(&island[r].gLo, fg.lo);
-  atomicAdd(&island[r].qHi, fq.hi); atomicAdd(&island[r].qLo, fq.lo);
+  addFix(r, 1u, fixOf(m * dot(dv, vp) + 2.0 * spinDot(b.rot, I, dw, wp), true));
+  addFix(r, 2u, fixOf(m * dot(dv, dv) + 2.0 * spinDot(b.rot, I, dw, dw), true));
 }`,
   restIslandCap: /* wgsl */ `
 // A body of the pass whose island's alpha is under 1: its velocity the solve's plus alpha times the pass's change,
@@ -966,8 +1006,8 @@ const KERNELS: Array<Omit<RestKernel, 'code'> & { mark?: boolean; solve?: boolea
   { entry: 'restSupport', bindings: ['contacts', 'bodies', 'rest', 'stepInfo', 'params'], constants: ['restAnchorsOn'], workgroup: WG },
   { entry: 'restCount', bindings: ['contacts', 'bodies', 'rest', 'rowStart', 'rowLength', 'adjSlot', 'params'], constants: ['restAnchorsOn'], workgroup: WG },
   { entry: 'restAnchors', bindings: ['contacts', 'props', 'solver', 'restRead', 'rowStart', 'rowLength', 'adjSlot', 'restBody', 'params'], constants: ['restAnchorsOn'], workgroup: WG },
-  { entry: 'restManifold', bindings: ['contacts', 'bodies', 'rest', 'restBodyRead', 'stepInfo', 'params'], constants: [], workgroup: WG, solve: true },
-  { entry: 'restBodies', bindings: ['bodiesRw', 'contacts', 'rest', 'restBodyRead', 'rowStart', 'rowLength', 'adjSlot', 'params'], constants: [], workgroup: WG, solve: true },
+  { entry: 'restManifold', bindings: ['contacts', 'bodies', 'rest', 'restBodyRead', 'stepInfo', 'params'], constants: ['restAnchorCut'], workgroup: WG, solve: true },
+  { entry: 'restBodies', bindings: ['bodiesRw', 'contacts', 'rest', 'restBodyRead', 'rowStart', 'rowLength', 'adjSlot', 'params'], constants: ['restAnchorCut'], workgroup: WG, solve: true },
   { entry: 'restIslandInit', bindings: ['bodies', 'island', 'params'], constants: [], workgroup: WG, cap: true },
   { entry: 'restIslandHook', bindings: ['contacts', 'island', 'stepInfo', 'params'], constants: [], workgroup: WG, cap: true },
   { entry: 'restIslandSum', bindings: ['bodies', 'props', 'solver', 'restRead', 'island', 'params'], constants: [], workgroup: WG, cap: true },
@@ -1006,6 +1046,6 @@ const recordDecl = (i: number, rw: boolean) => `@group(0) @binding(${i}) var<sto
 export function restitutionConstants(c: RestitutionConfig, combineIndex: number): Record<RestConstant, number> {
   return {
     restThreshold: Math.min(c.threshold, F32_MAX), groundRestitution: c.groundRestitution, restCombine: combineIndex,
-    restAnchorsOn: c.anchors ? 1 : 0, restAnchorSpeed: Math.min(c.anchorSpeed, F32_MAX),
+    restAnchorsOn: c.anchors ? 1 : 0, restAnchorSpeed: Math.min(c.anchorSpeed, F32_MAX), restAnchorCut: c.anchorCut,
   };
 }

@@ -20,10 +20,11 @@ import { viewOf } from './view.ts';
 import { ViewSun } from './light.ts';
 export { viewOf } from './view.ts';
 import { driverOptions, type EngineKind, gpuEngineOptions, makeEngine, roomAfter } from './engines.ts';
-import { hudHtml, meterTicks, type MeterTick, nextSelection, POWER_STEP, rackChips, resultHtml, starsText } from './hud.ts';
+import { type CardForward, hudHtml, meterTicks, type MeterTick, nextSelection, POWER_STEP, rackChips, resultHtml, starsText, tallyHtml } from './hud.ts';
+import type { Layout } from './layout.ts';
 import { type GoalLine, goalsHudHtml, goalsResultHtml } from './lot-hud.ts';
-import { duelHudHtml, duelResultHtml } from './duel-hud.ts';
-import { arcBeads, duelView, joinOverlays, type Overlay, turnCue, turnCueText, TurnSwing } from './duel-view.ts';
+import { duelHudHtml, duelResultHtml, handoffHtml, scoreFloatHtml } from './duel-hud.ts';
+import { arcBeads, duelMarks, duelView, joinOverlays, type Overlay, turnCue, turnCueText, TurnSwing } from './duel-view.ts';
 import { FollowCam } from './follow.ts';
 import { CameraJuice, contactJuice } from './juice.ts';
 import { alphaAt, arrived, DEFAULT_FEEL, newArrivals, Pacer, type PaceFeel, SLOW_TAG_BELOW, slowTag, SpeedMeter, TailSkip } from './pacing.ts';
@@ -35,8 +36,35 @@ import { ballFx, beadOverlay, BOMB_FX, CROWN_GLOW, firedKind, PULL_HOVER, ramFx,
 import { easeGrade, FROZEN_LABEL, freezeFxOf } from './frozen-look.ts';
 import { ghostOutline, PULL_SLIDE_STEPS, type PullAnim, pullAnimFor, withPulled } from './pull-anim.ts';
 import { type GestureState, type TouchAction, TouchGestures, touchFace, type TouchMode } from './touch.ts';
+import { EditController } from './edit.ts';
+import { applyEditAction, type EditAction, mountEditPanel } from './edit-panel.ts';
+import { EditView } from './edit-view.ts';
 
 /** What a page (and its tests) can see and do while Keystone plays: window.__game on the game page. */
+/**
+ * The build phase (C9, docs/game/placement.md) as a test or the console drives it: what the Build panel and the
+ * pointer do, by world rays. Only on a level with a build block, before its first shot.
+ */
+export interface GameEditHandle {
+  /** Building now: time stopped, the level as built drawn at its authored poses. */
+  readonly on: boolean;
+  /** Enter the build phase (false when the level offers none, or a shot has gone in); Play; leave without the edits. */
+  enter(): boolean;
+  play(): void;
+  cancel(): void;
+  /** A key as the build phase takes it (Q / E turn, T tip, 1 to 9 items, B brush, X erase, Z undo); whether it was one. */
+  key(k: string, shift?: boolean): boolean;
+  /** The pointer as a world ray: hover (or a stroke's drag), press, release. */
+  ray(kind: 'move' | 'down' | 'up', origin: [number, number, number], dir: [number, number, number], alt?: boolean): void;
+  status(): string;
+  /** The level as built (null when not building). */
+  def(): LevelDef | null;
+  /** The ghost's bodies drawn now. */
+  ghosts(): number;
+  /** The hash of the level the last Play started (compileLevel of the built definition); null before. */
+  played: string | null;
+}
+
 export interface GameHandle {
   status: 'loading' | 'running' | 'error';
   error?: string;
@@ -55,6 +83,13 @@ export interface GameHandle {
   collapse: number;
   /** Run the sim at fast-forward speed (as if Space were held). */
   fast: boolean;
+  /**
+   * Test hook (the agent playtest's captures, agent playtest PT12): while true no physics step runs, and
+   * frames still draw, so a capture's picture and its HUD show the same step. Rapier steps on the CPU
+   * while SwiftShader takes many frames to render, so round 1's "+25 steps" frames showed the scene at
+   * step 25 under a HUD read 150 steps later (B1 Down 16% over a standing wall). Pacing only.
+   */
+  hold: boolean;
   /**
    * Pacing now: the valve's time scale (budget / step cost, in [0.25, 1]; up to 4 at fast-forward),
    * the sim speed reached (sim time per real time, measured), the HUD's slow-motion tag ('' at real
@@ -82,8 +117,13 @@ export interface GameHandle {
   counts: Record<string, number>;
   /** Pace juice in effect (`?keystone.hitstop=1`, `?keystone.slowmo=1`; both off by default). */
   feel: PaceFeel;
-  /** Engine step at which this attempt's round-over card first showed, or null. */
+  /** Engine step at which this attempt's round-over notice first showed (the card, or the tallying banner that comes first when docked), or null. */
   resultShownAt: number | null;
+  /**
+   * The result card's placement (layout.ts: docked aside or centred) and wall times (performance.now, ms): when the round's
+   * end settled (levelEnd) and when the card itself showed; null until then. Docked, the card waits Layout.cardDelay after the end.
+   */
+  card: { place: 'dock' | 'center'; endedMs: number | null; shownMs: number | null };
   /**
    * Wall time of this level's load (engine build and pre-settle), and of each live step since, in ms;
    * moving: each live step's structure bodies in motion (Reductions.nMoving, what settle v2 counts);
@@ -110,6 +150,12 @@ export interface GameHandle {
    * False when nothing changed.
    */
   freeze(on?: boolean): boolean;
+  /**
+   * Skip the rest of the running shot's settle (key K, the HUD's Skip button; agent playtest PT6): its
+   * steps run up to SKIP_SCALE times real time until it settles. Pacing only: the same steps run, so the
+   * outcome and a replay are as if it had been watched. False when no shot is running (or it is frozen).
+   */
+  skip(): boolean;
   /** Fire the level's pre-aimed opening shot (KeystoneEnv.opener; key F, the HUD's Fire button): false when there is none now. */
   fireOpener(): boolean;
   /** Mute or unmute every sound (as key M toggles). */
@@ -194,6 +240,12 @@ export interface GameHandle {
   grade: Grade | null;
   /** A duel's state (KeystoneEnv.duel) as of the last settle, or null outside one. */
   duel: DuelState | null;
+  /** A duel's hand-over card is showing (PaceFeel.handoff): the next player has not tapped it yet. */
+  handoff: boolean;
+  /** The text of the last Heraldry score float (duel-hud.ts scoreFloatHtml), or '' before one. */
+  scoreFloat: string;
+  /** The build phase (levels with a build block): see GameEditHandle. */
+  edit: GameEditHandle;
 }
 /**
  * Where a level load's wall time went, ms (GameHandle.timing.load): checking the round being left
@@ -244,11 +296,12 @@ function safetyLimiter(ctx: AudioContext): AudioNode {
 export function newGameHandle(): GameHandle {
   const none = (): SessionState => ({ step: 0, phase: 'loading', strokes: 0, heritageBroken: 0, hash: '' });
   return {
-    status: 'loading', engine: '', level: '', phase: 'loading', ready: false, frozen: false, frames: 0, stepIndex: 0, strokes: 0, bodies: 0, collapse: 0, fast: false, pace: { timeScale: 1, speed: 1, tag: '', tailSkip: false, costMs: NaN }, view: { target: [0, 0, 0], distance: 0, yaw: 0, pitch: 0, following: false, jolt: 0, turning: false, cue: null, arcBeads: 0 }, input: { touch: false, gesture: 'idle', fingers: 0, aimed: null, power: 100, launch: 0 }, result: null, counts: {}, feel: { ...DEFAULT_FEEL }, resultShownAt: null, timing: { loadMs: 0, load: noPhases(), stepMs: [], moving: [], frameMs: [], costMs: [] }, draws: { drawn: 0, skipped: 0, decimating: false },
-    fire: () => false, bank: () => false, freeze: () => false, fireOpener: () => false, setMuted: () => {}, maxDpr: 2, quality: null, aim: () => null, reach: null, select: () => false, load: async () => {}, retry: async () => {}, undo: async () => false, undone: null, spare: null, undoMemory: () => ({ marks: 0, bytes: 0 }), capture: async () => null, coverage: async () => 0, pullDrawn: null, frozenGrade: 0, firedLooks: () => [], spentLooks: () => [], effects: async () => ({ particles: 0, hot: 0, spawned: 0, flashes: 0, blasts: 0, fuses: 0 }), marks: () => [], refreshMarks: () => {},
-    state: none, line: () => [], replay: async () => none(), health: async () => null, pairsPerBody: 0, limitsHit: [], goals: [], grade: null, duel: null,
+    status: 'loading', engine: '', level: '', phase: 'loading', ready: false, frozen: false, frames: 0, stepIndex: 0, strokes: 0, bodies: 0, collapse: 0, fast: false, hold: false, pace: { timeScale: 1, speed: 1, tag: '', tailSkip: false, costMs: NaN }, view: { target: [0, 0, 0], distance: 0, yaw: 0, pitch: 0, following: false, jolt: 0, turning: false, cue: null, arcBeads: 0 }, input: { touch: false, gesture: 'idle', fingers: 0, aimed: null, power: 100, launch: 0 }, result: null, counts: {}, feel: { ...DEFAULT_FEEL }, resultShownAt: null, card: { place: 'center', endedMs: null, shownMs: null }, timing: { loadMs: 0, load: noPhases(), stepMs: [], moving: [], frameMs: [], costMs: [] }, draws: { drawn: 0, skipped: 0, decimating: false },
+    fire: () => false, bank: () => false, skip: () => false, freeze: () => false, fireOpener: () => false, setMuted: () => {}, maxDpr: 2, quality: null, aim: () => null, reach: null, select: () => false, load: async () => {}, retry: async () => {}, undo: async () => false, undone: null, spare: null, undoMemory: () => ({ marks: 0, bytes: 0 }), capture: async () => null, coverage: async () => 0, pullDrawn: null, frozenGrade: 0, firedLooks: () => [], spentLooks: () => [], effects: async () => ({ particles: 0, hot: 0, spawned: 0, flashes: 0, blasts: 0, fuses: 0 }), marks: () => [], refreshMarks: () => {},
+    state: none, line: () => [], replay: async () => none(), health: async () => null, pairsPerBody: 0, limitsHit: [], goals: [], grade: null, duel: null, handoff: false, scoreFloat: '',
     sound: () => ({ mode: 'collapse', status: 'off', error: '', posted: 0, stats: null }),
     ice: () => ({ count: 0, cracks: [] }),
+    edit: { on: false, enter: () => false, play: () => {}, cancel: () => {}, key: () => false, ray: () => {}, status: () => '', def: () => null, ghosts: () => 0, played: null },
   };
 }
 
@@ -367,6 +420,18 @@ export interface KeystoneEnv {
   /** The result card's Save session button (shown when given): the page saves the round just ended. */
   onSave?(): void;
   /**
+   * Where the HUD and the result card sit (layout.ts; read live, so the Layout setting applies from the next card).
+   * Absent: classic, the card centred at once (the viewer).
+   */
+  layout?: Layout;
+  /**
+   * The result card's forward button at the end of a series (hud.ts CardForward): the next series' first level
+   * (its index in `levels`) with a label, or null; absent or null, Levels (onLevels) when given.
+   */
+  seriesForward?(i: number): { index: number; label: string } | null;
+  /** The result card's Levels button at the last level of a series with nothing after it: the page opens its level list (the front door). */
+  onLevels?(): void;
+  /**
    * The level's lot sheet (docs/game/lot-sheets.md), asked at each load and retry: the sheet, the goals to
    * show (proven ones unless ?keystone.goals=all) and the ids the player met on earlier plays; null for none.
    */
@@ -379,6 +444,11 @@ export interface KeystoneEnv {
   duel?: DuelDef;
   /** Touch controls' face (?touch=auto|1|0, touch.ts): auto by default. The gestures work whatever it says. */
   touch?: TouchMode;
+  /**
+   * The build phase on levels with a build block (C9, docs/game/placement.md): on by default; false
+   * (?keystone.build=0) plays them as authored, with no Build panel.
+   */
+  build?: boolean;
 }
 
 /** An orbiting drag of (dx, dy) pixels: turns, and tilts from looking down to looking up (past level the floor brings the eye in). */
@@ -403,7 +473,10 @@ const typing = (e: KeyboardEvent) => e.target instanceof HTMLElement && (e.targe
  * `handle`. Resolves once the first level is running; errors go to env.fail.
  */
 export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGameHandle()): Promise<GameHandle> {
-  const { canvas, offscreen, device, renderer, source, levels, engine: kind, feel, fail } = env;
+  const { canvas, offscreen, device, renderer, source, engine: kind, feel, fail } = env;
+  // The levels as the player has them: a build-phase level is replaced by the level as built when it is played
+  // (Play), so Retry, Undo and coming back to it later start from what was built.
+  const levels: LevelDef[] = [...env.levels];
   /** Whether level i + d exists and is in level i's series (N, P and Next walk only inside it). */
   const step = (i: number, d: 1 | -1) => i + d >= 0 && i + d < levels.length && (env.series?.[i + d] ?? 0) === (env.series?.[i] ?? 0);
   const hooks = env.hooks ?? {};
@@ -554,6 +627,8 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
    */
   let launchAt = 0, launchFor = '';
   let aimed: Aimed | null = null, beads: Float64Array | null = null, aimDirty = false;
+  /** The point aimed at and the structure body under it (-1: the ground), for a duel's own-keep warning and its score float. */
+  let aimHit: { body: number; point: Vec3 } | null = null, firedAt: Vec3 | null = null;
   /** The block a click or tap tried to pull and was refused (a crown, heritage): its hint shows red until the aim leaves it. */
   let refusedPull: number | null = null;
   /** The block a selected pull would take, lit (PULL_HOVER) until the cursor leaves it or it is pulled. */
@@ -563,6 +638,8 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
   let pointer: [number, number] | null = null;
   let regrowT: number | null = null;
   let fastHeld = false;
+  /** Skip (key K, the HUD's Skip button; agent playtest PT6): the running shot's settle runs at SKIP_SCALE until it ends. */
+  let skipping = false;
   let lastHud = '', crownsShown = 0;
   /** The level's lot sheet and its groups (selected once per load), or null. */
   let lot: { sheet: LotSheet; goals: readonly Goal[]; groups: Record<string, Int32Array>; footprints: Record<string, Footprint> } | null = null;
@@ -572,6 +649,108 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
   let arcs: Overlay[] = [], arcBeadsDrawn = 0;
   /** Every crown is down: the round is known to be over, the card shows, and the rest of the settle runs at fast-forward. */
   let ending = false;
+  // The docked layout's tallying banner (layout.ts, PT4): a small panel at the top, shown from the round's end
+  // until the card, which waits for it (cardTimer). Beside the result card, in the same parent.
+  const tally = document.createElement('div');
+  tally.className = 'kg-panel kg-tally';
+  tally.setAttribute('role', 'status');
+  (env.result.parentElement ?? document.body).append(tally);
+  let cardTimer: ReturnType<typeof setTimeout> | null = null;
+
+  // The build phase (C9, docs/game/placement.md): on a level with a build block, before its first shot, time stops and
+  // the player places pieces and lays domino runs on the level as authored (EditController), drawn in place of the
+  // engine's state (EditView). Play compiles the level as built and loads it in this level's place (levels[levelIdx]),
+  // keeping the camera; Cancel restores the level as it loaded. A fresh load of such a level opens in it.
+  let editing: EditController | null = null, buildAfterLoad = false, touchStroke = false;
+  const editView = new EditView(renderer, source);
+  const buildEl = document.createElement('details');
+  buildEl.className = 'kg-panel kg-build';
+  buildEl.hidden = true;
+  (env.hud.parentElement ?? document.body).append(buildEl);
+  const buildPanel = mountEditPanel(buildEl, (x) => editAct(x));
+  /** The level loaded offers a build phase (and the page allows one). */
+  const buildOffered = () => env.build !== false && !!c?.def.build && !env.duel;
+  /** The build phase can start now: offered, and aiming before the attempt's first shot. */
+  const canEdit = () => buildOffered() && !loading && !stepping && !ending && handle.result === null && driver.session.phase === 'aiming' && driver.session.inputs.length === 0;
+  /** The Build panel: shown while building, or while the build phase can start; redrawn only when its HTML changes. */
+  function showPanel() {
+    buildEl.hidden = !(editing || canEdit());
+    buildPanel.show(editing);
+  }
+  function showEdit() {
+    if (editing) editView.show(editing, feel.marks);
+    showPanel();
+    syncState();
+  }
+  function enterEdit(): boolean {
+    if (editing || !canEdit()) return false;
+    editing = new EditController(levels[levelIdx]!, {});
+    // No aim, arc, reach or hover while building; the grow-in stops (the world is drawn at its authored poses).
+    pointer = null;
+    aimed = beads = null;
+    ring = handle.reach = null;
+    setHover(null);
+    regrowT = null;
+    touchStroke = false;
+    buildEl.open = true;
+    document.body.classList.add('kg-building');
+    showEdit();
+    return true;
+  }
+  /** Ends the build phase without loading anything (a load follows, or is under way). */
+  function leaveEdit() {
+    editing = null;
+    touchStroke = false;
+    editView.forget();
+    document.body.classList.remove('kg-building');
+    showPanel();
+  }
+  function playEdit() {
+    if (!editing) return;
+    const def = editing.play();
+    handle.edit.played = compileLevel(def).hash;
+    if (JSON.stringify(def) !== JSON.stringify(levels[levelIdx])) levels[levelIdx] = def;
+    leaveEdit();
+    void load(levelIdx, true).catch(fail);
+  }
+  function cancelEdit() {
+    if (!editing) return;
+    leaveEdit();
+    // The level as it loaded: its start checkpoint, restored in place.
+    void load(levelIdx, true).catch(fail);
+  }
+  function editAct(x: EditAction) {
+    if (x.a === 'enter') { if (!enterEdit()) banner('Build before the first shot: Retry to build again', 'crack'); }
+    else if (x.a === 'play') playEdit();
+    else if (x.a === 'cancel') cancelEdit();
+    else if (editing && applyEditAction(editing, x)) showEdit();
+    else if (editing) showEdit(); // a refusal's reason, on the status line
+  }
+  const editRay = (kind: 'move' | 'down' | 'up', origin: Vec3, dir: Vec3, alt = false) => {
+    if (!editing) return;
+    const r = { origin, dir };
+    if (kind === 'move') editing.move(r, { alt });
+    else if (kind === 'down') editing.down(r);
+    else editing.up(r, { alt });
+    showEdit();
+  };
+  handle.edit = {
+    get on() { return editing !== null; },
+    enter: enterEdit,
+    play: playEdit,
+    cancel: cancelEdit,
+    key(k, shift = false) {
+      if (!editing) return false;
+      const did = editing.key(k, { shift });
+      if (did) showEdit();
+      return did;
+    },
+    ray: editRay,
+    status: () => editing?.status() ?? '',
+    def: () => editing?.play() ?? null,
+    ghosts: () => (editing ? editing.bodies().ghost.length : 0),
+    played: null,
+  };
 
   const [offW, offH] = env.offscreenSize ?? [640, 400];
   const aspect = () => (offscreen ? offW / offH : canvas.width / Math.max(1, canvas.height));
@@ -587,9 +766,15 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
   let loading = 0;
   function load(i: number, retry = false): Promise<void> {
     loading++;
+    // A load ends the build phase (Play, Cancel, a level picked at the door).
+    if (editing) leaveEdit();
+    buildAfterLoad = false;
     // Not ready from now on (a load can take many frames), so nothing fires into the level being left.
     if (driver) syncState();
-    return exclusive(() => { dropMarks(0); return loadNow(i, retry); }).finally(() => { loading--; });
+    return exclusive(() => { dropMarks(0); return loadNow(i, retry); }).finally(() => {
+      loading--;
+      if (buildAfterLoad && !loading) { buildAfterLoad = false; enterEdit(); }
+    });
   }
 
   /**
@@ -661,8 +846,57 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
    */
   /** Carve the structure's stones as feel.marks says (scene.ts structureMarks): after its tints at every load and restore, and when the setting changes. */
   function applyMarks() {
-    renderer.setMarks(0, structureMarks(c, feel.marks));
+    // In a duel the player to fire's own king wears the shield, the rival's the crosshair (duel-view.ts duelMarks).
+    renderer.setMarks(0, duel ? duelMarks(c, duel, feel.marks) : structureMarks(c, feel.marks));
     renderer.setCoats(0, structureCoats(c, coatsOn()));
+  }
+
+  /**
+   * A duel's hand-over card (PaceFeel.handoff; PT5): whose turn it is, over the turn view's swing, until a tap or a key.
+   * A tap on it only dismisses it, so it never fires; a shot fired by other means (handle.fire, a line) dismisses it too.
+   */
+  let handoff: HTMLElement | null = null;
+  function showHandoff() {
+    if (!duel) return;
+    handoff ??= Object.assign(document.createElement('div'), { className: 'duel-handoff' });
+    if (!handoff.isConnected) {
+      document.body.append(handoff);
+      handoff.addEventListener('pointerdown', (e) => { e.stopPropagation(); e.preventDefault(); });
+      handoff.addEventListener('click', (e) => { e.stopPropagation(); hideHandoff(); });
+    }
+    handoff.innerHTML = handoffHtml(duel, handle.input.touch);
+    handoff.classList.add('show');
+    handle.handoff = true;
+    aimDirty = true;
+  }
+  function hideHandoff() {
+    handoff?.classList.remove('show');
+    if (handle.handoff) aimDirty = true;
+    handle.handoff = false;
+  }
+
+  /**
+   * A Heraldry shot's points floated over where it landed (duel-hud.ts scoreFloatHtml; PT5): the aim point, else the
+   * structure's middle. Not while the hand-over card shows them instead (it covers the middle of the screen), nor
+   * once the duel is decided (the result card has the totals).
+   */
+  let float: HTMLElement | null = null;
+  function floatScore() {
+    const html = duel ? scoreFloatHtml(duel) : '';
+    if (html) handle.scoreFloat = html.replace(/<[^>]+>/g, '');
+    if (!html || feel.handoff || duel!.result.over) return;
+    float ??= Object.assign(document.createElement('div'), { className: 'duel-float' });
+    if (!float.isConnected) document.body.append(float);
+    const at = firedAt ?? [0, c.height / 2, 0], m = viewProj(orbit, viewAspect()), r = canvas.getBoundingClientRect();
+    const w = m[3]! * at[0] + m[7]! * at[1] + m[11]! * at[2] + m[15]!;
+    const x = (m[0]! * at[0] + m[4]! * at[1] + m[8]! * at[2] + m[12]!) / w, y = (m[1]! * at[0] + m[5]! * at[1] + m[9]! * at[2] + m[13]!) / w;
+    const inView = w > 0 && Math.abs(x) <= 0.95 && Math.abs(y) <= 0.95;
+    float.style.left = `${r.left + (inView ? (x + 1) / 2 : 0.5) * r.width}px`;
+    float.style.top = `${r.top + (inView ? (1 - y) / 2 : 0.4) * r.height}px`;
+    float.innerHTML = html;
+    float.classList.remove('show');
+    void float.offsetWidth; // restart the animation
+    float.classList.add('show');
   }
   /** Coats as feel.coats says, but never in a duel, whose blocks wear their side's ink. */
   const coatsOn = () => feel.coats && !duel;
@@ -691,14 +925,13 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     pacer.reset();
     speed.reset();
     tail.reset();
+    skipping = false;
     arrivals = newArrivals();
     juice.reset();
     follow.reset();
     handle.result = null;
     ending = false;
-    handle.resultShownAt = null;
-    env.result.classList.remove('show');
-    document.body.classList.remove('ended');
+    hideResult();
     selected = nextSelection(c.def.rack, s.rackLeft, selected);
     regrowT = null;
     waiting = [];
@@ -895,6 +1128,8 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     if (fxSlots) renderer.clearFx(0, fxSlots);
     regrowBuf = regrowScales(c, line ? Infinity : 0, new Float32Array(c.meta.n));
     duel = env.duel ? new Duel(env.duel, c, i as Player, driver.session.home) : null;
+    hideHandoff();
+    firedAt = null;
     const tints = structureTints(c, coatsOn());
     // Owner ink: each side's blocks in its colour, its king glowing a little as crowns do.
     if (duel) duel.owned.forEach((idx, k) => { for (const b of idx) tints[b] = tintWordOf(duel!.def.sides[k]!.ink, c.meta.role[b] === 1 ? CROWN_GLOW : 0); });
@@ -910,6 +1145,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     pacer.reset();
     speed.reset();
     tail.reset();
+    skipping = false;
     arrivals = newArrivals();
     juice.reset();
     follow.reset();
@@ -930,9 +1166,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     handle.counts = counts;
     handle.level = c.def.id;
     ending = false;
-    handle.resultShownAt = null;
-    env.result.classList.remove('show');
-    document.body.classList.remove('ended');
+    hideResult();
     selected = nextSelection(c.def.rack, driver.session.rackLeft, retry ? selected : null);
     opener = env.opener?.(c) ?? null;
     if (!retry) {
@@ -943,7 +1177,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
       renderer.setShadowBounds([(c.lot.min[0] + c.lot.max[0]) / 2, c.height / 2, (c.lot.min[1] + c.lot.max[1]) / 2], Math.hypot(...half), half);
     }
     // A duel opens (and Same start reopens) on the first player's side, as each turn after does (duel-view.ts).
-    if (duel && feel.turnView) orbit = duelView(c, duel.def.sides[duel.turn], viewAspect());
+    if (duel && feel.turnView) orbit = duelView(c, duel.def, duel.turn, viewAspect());
     // The real look's sun counts from the opening view (light.ts), set as a level loads and kept by a retry.
     if (!retry) viewSun.yaw = orbit.yaw;
     arcs = duel ? duel.def.sides.map((side) => arcBeads(c, side)) : [];
@@ -969,6 +1203,9 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     handle.timing.loadMs = performance.now() - t0;
     // Build what Next opens while the player aims at this one (it waits while a shot runs).
     if (prefetchMode === 'aim') prefetchNext();
+    // A level with a build block opens in its build phase on a fresh load (not a retry, Play or Cancel, nor an undo).
+    buildAfterLoad = !retry && !line && buildOffered();
+    showPanel();
     hooks.loaded?.(c, driver);
   }
 
@@ -1005,10 +1242,12 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
   function updateAim() {
     aimDirty = false;
     aimed = null;
+    aimHit = null;
     beads = null;
     let lit: number | null = null;
     ring = handle.reach = null;
-    if (pointer && selected && aimable() && regrowT === null) {
+    // No aim (nor its preview) under the hand-over card: the next player has not taken the device yet.
+    if (pointer && selected && aimable() && regrowT === null && !handle.handoff) {
       const hit = pick(rayThrough(orbit, aspect(), pointer[0], pointer[1]), driver.snapshot, c);
       if (selected === 'pull') {
         // A pull takes the block under the cursor: lit when it can be taken, no arc.
@@ -1016,6 +1255,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
         aimed = p;
         if (p?.reachable) lit = p.shot.body;
       } else if (hit) {
+        aimHit = { body: hit.body, point: hit.point };
         aimed = shotFor(c, selected, azFromYaw(orbit.yaw), power, hit.point, substeps, launchNow());
         if (aimed) beads = previewBeads(c, aimed.shot, hit.point, substeps);
         // A weapon with one blast (the grenades): show how far it reaches, where it would go off.
@@ -1138,13 +1378,18 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
           if (duel && duel.shooter !== null) {
             const r = duel.settled(driver.snapshot), side = duel.def.sides[duel.turn];
             syncDuel();
+            floatScore();
             // Decided before the racks are spent: end the round here (a bank, once this step's feedback is done).
             if (r.over) queueMicrotask(() => { if (driver.session.phase === 'aiming') bank(); });
             else {
               selected = nextSelection(side.rack, duel.left[duel.turn], null);
-              banner(`${side.name}'s turn`);
-              // The turn view: swing to the middle of the next player's side (the follow camera, if on, lets go).
-              if (feel.turnView) { follow.grab(); swing.start(orbit, duelView(c, side, viewAspect())); }
+              // Pass the device: the hand-over card, or (without it) a banner.
+              if (feel.handoff) showHandoff();
+              else banner(`${side.name}'s turn`);
+              // The turn view: swing to the next player's over-the-shoulder view (the follow camera, if on, lets go).
+              if (feel.turnView) { follow.grab(); swing.start(orbit, duelView(c, duel.def, duel.turn, viewAspect())); }
+              // The kings' marks: the shield goes to the king of the player to fire.
+              applyMarks();
             }
           }
           aimDirty = true;
@@ -1164,32 +1409,68 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     }
   }
 
+  /**
+   * The round is over (score null: every crown is down and the settle still runs at fast-forward; a score: it
+   * settled and is scored). Classic (no delay), the card shows at once, tallying until the score. Docked
+   * (layout.ts, PT4), a small tallying banner shows instead and the card waits Layout.cardDelay of wall time
+   * after the settle, so the player sees the collapse land; then it docks aside, not over the middle.
+   */
   function showResult(score: LevelScore | null) {
+    if (duel && !score) return;
+    let duelHtml = '';
     if (duel) {
-      if (!score) return;
-      env.result.innerHTML = duelResultHtml(duel);
-      env.result.classList.add('show');
-      document.body.classList.add('ended');
-      handle.resultShownAt ??= driver.engine.stepIndex;
-      return;
+      hideHandoff();
+      // Only a decided duel has a card: never an empty one (the agent playtest's empty bar, PT5).
+      duelHtml = duelResultHtml(duel);
+      if (!duelHtml) return;
     }
-    const sheet = score && lot ? goalsResultHtml(handle.goals, handle.grade, lot.sheet.grades !== undefined) : '';
-    env.result.innerHTML = resultHtml(c.def, score, driver.session.strokes, step(levelIdx, 1), Boolean(env.onSave), sheet, true);
+    const lay = env.layout, delay = lay ? lay.cardDelay : 0;
+    handle.resultShownAt ??= driver.engine.stepIndex;
+    handle.card.place = lay?.card ?? 'center';
+    env.result.classList.toggle('dock', handle.card.place === 'dock');
+    if (duel) env.result.innerHTML = duelHtml;
+    else {
+      const sheet = score && lot ? goalsResultHtml(handle.goals, handle.grade, lot.sheet.grades !== undefined) : '';
+      env.result.innerHTML = resultHtml(c.def, score, driver.session.strokes, cardForward(), Boolean(env.onSave), sheet, true);
+    }
+    if (score) handle.card.endedMs = performance.now();
+    if (delay <= 0) { revealCard(); return; }
+    tally.innerHTML = tallyHtml(c.def, score, duel ? 'Round over' : null);
+    tally.classList.add('show');
+    document.body.classList.add('kg-tallying');
+    if (!score) return;
+    if (cardTimer !== null) clearTimeout(cardTimer);
+    cardTimer = setTimeout(() => { cardTimer = null; tally.classList.remove('show'); document.body.classList.remove('kg-tallying'); revealCard(); }, 1000 * delay);
+  }
+
+  function revealCard() {
     env.result.classList.add('show');
     document.body.classList.add('ended');
-    handle.resultShownAt ??= driver.engine.stepIndex;
+    handle.card.shownMs = performance.now();
+  }
+
+  /** The card's forward button: Next inside the series, else the next series, else Levels (the page's level list). */
+  function cardForward(): CardForward {
+    if (step(levelIdx, 1)) return { act: 'next' };
+    const f = env.seriesForward?.(levelIdx);
+    if (f) return { act: 'series', label: f.label };
+    return env.onLevels ? { act: 'levels' } : null;
   }
 
   function hideResult() {
+    if (cardTimer !== null) { clearTimeout(cardTimer); cardTimer = null; }
+    tally.classList.remove('show');
+    document.body.classList.remove('kg-tallying');
     env.result.classList.remove('show');
     document.body.classList.remove('ended');
     handle.resultShownAt = null;
+    handle.card = { place: handle.card.place, endedMs: null, shownMs: null };
   }
 
   /** Mirror the round's state onto the handle: each frame, and after each physics step (which runs between frames). */
   function syncState() {
     const s = driver.session;
-    Object.assign(handle, { phase: stepping ? 'running' : s.phase, frozen, ready: !loading && !stepping && s.phase === 'aiming' && regrowT === null, stepIndex: driver.engine.stepIndex, strokes: s.strokes, bodies: driver.snapshot.count, collapse: s.liveCollapse });
+    Object.assign(handle, { phase: stepping ? 'running' : s.phase, frozen, ready: !loading && !stepping && !editing && s.phase === 'aiming' && regrowT === null, stepIndex: driver.engine.stepIndex, strokes: s.strokes, bodies: driver.snapshot.count, collapse: s.liveCollapse });
   }
 
   /** Mirror state, pace and view onto the handle; called each frame and right after anything that changes it.
@@ -1198,7 +1479,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     syncState();
     const s = driver.session;
     const running = s.phase === 'running', v = running ? speed.speed(performance.now()) : 1, costs = handle.timing.costMs;
-    handle.pace = { timeScale: running ? pacer.timeScale : 1, speed: v, tag: running && !fastHeld && !handle.fast && !ending && !tail.on ? slowTag(v) : '', tailSkip: tail.on, costMs: running && !Number.isNaN(pacer.costMs) ? pacer.costMs : median(costs.slice(-60)) };
+    handle.pace = { timeScale: running ? pacer.timeScale : 1, speed: v, tag: running && !fastHeld && !handle.fast && !ending && !tail.on && !skipping ? slowTag(v) : '', tailSkip: tail.on, costMs: running && !Number.isNaN(pacer.costMs) ? pacer.costMs : median(costs.slice(-60)) };
     handle.view = { target: [...orbit.target], distance: orbit.distance, yaw: orbit.yaw, pitch: orbit.pitch, following: follow.active, jolt, turning: swing.active, cue: cueNow(), arcBeads: arcBeadsDrawn };
   }
 
@@ -1207,6 +1488,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
 
   /** Whether the player can aim (and fire) now: while aiming, or with rapid fire or frozen while a shot runs, until the round is known to be over. */
   function aimable(): boolean {
+    if (editing) return false;
     const p = driver.session.phase;
     return p === 'aiming' || (p === 'running' && (feel.rapid || frozen) && !ending);
   }
@@ -1235,7 +1517,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     driver.session.rackLeft.filter((a) => a === shot.ammo).length > queued.filter((q) => q.ammo === shot.ammo).length;
 
   function fire(shot: Shot): boolean {
-    if (loading || regrowT !== null || ending || handle.result !== null || !driver.session.canFire(shot.ammo) || !inRack(shot, waiting)) return false;
+    if (editing || loading || regrowT !== null || ending || handle.result !== null || !driver.session.canFire(shot.ammo) || !inRack(shot, waiting)) return false;
     // A duel takes one shot per turn from the current player's side and rack (the referee says why not).
     const refused = duel?.refuse(shot) ?? (duel && waiting.length ? { message: 'Wait for the last shot to settle' } : null);
     if (refused) {
@@ -1279,13 +1561,14 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     // The world as this shot goes in, for undo (before the fire: the shot is not in it yet).
     takeMark();
     const fb = driver.fire(shot);
-    if (duel) { duel.fired(shot); turnStart = performance.now(); syncDuel(); swing.grab(); }
+    if (duel) { duel.fired(shot); turnStart = performance.now(); syncDuel(); swing.grab(); hideHandoff(); firedAt = aimHit && aimed && aimed.shot === shot ? aimHit.point : null; }
     // A shot fired while frozen (Bullet Time) has cut in at the frozen step: the world runs on with it.
     frozen = false;
     // The shot's first step goes in now, not at the next frame.
     physicsIdle.kick();
     // A shot's pace starts fresh: no tail yet, and at real time until its steps say otherwise.
     tail.reset();
+    skipping = false;
     speed.reset();
     // A rapid shot keeps the follow camera's way home: where the player had it when the first went in.
     if (feel.follow && !follow.active) follow.start(orbit);
@@ -1313,8 +1596,20 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     collapse?.setMuted(muted);
   }
 
+  /** Whether Skip can go in now: a shot is running, not frozen, and not already skipping. */
+  const canSkip = () => !loading && regrowT === null && driver.session.phase === 'running' && !frozen && !skipping;
+  function skip(): boolean {
+    if (!canSkip()) return false;
+    skipping = true;
+    pacer.release();
+    physicsIdle.kick();
+    return true;
+  }
+
   function bank(): boolean {
-    if (stepping || regrowT !== null || !driver.session.canBank()) return false;
+    if (editing || stepping || regrowT !== null || !driver.session.canBank()) return false;
+    // A duel ends by its referee: until it is decided there is nothing to bank (PT5: a bank mid-duel showed an empty card).
+    if (duel && !duel.result.over) return false;
     hooks.banked?.(c, driver);
     onFeedback(driver.bank());
     aimed = null;
@@ -1371,6 +1666,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
   handle.spentLooks = () => Array.from({ length: descs.length - c.meta.n }, (_, k) => firedLooks[k]?.spent ?? false);
   handle.effects = () => renderer.effectStats();
   handle.bank = bank;
+  handle.skip = skip;
   handle.freeze = freeze;
   handle.fireOpener = fireOpener;
   handle.setMuted = setMuted;
@@ -1409,7 +1705,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
 
   // Mouse and pen: hover aims, a click without drag fires, drag orbits (right or shift: pan), the wheel zooms.
   // Touch (touch.ts): a finger aims and fires where it lifts, two fingers orbit and pinch to zoom.
-  let drag: { x: number; y: number; moved: number; pan: boolean } | null = null;
+  let drag: { x: number; y: number; moved: number; pan: boolean; brush: boolean } | null = null;
   const ndcAt = (x: number, y: number): [number, number] => {
     const r = canvas.getBoundingClientRect();
     return [((x - r.left) / r.width) * 2 - 1, 1 - ((y - r.top) / r.height) * 2];
@@ -1428,8 +1724,27 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
   };
   face();
   const pointerSeen = (e: PointerEvent) => { if (e.pointerType !== lastPointer) { lastPointer = e.pointerType; face(); } };
+  /** The world ray through a point on the page (client px). */
+  const rayAtPx = (x: number, y: number) => { const [nx, ny] = ndcAt(x, y), r = rayThrough(orbit, aspect(), nx, ny); return { origin: r.origin as Vec3, dir: r.dir as Vec3 }; };
+  /** A finger in the build phase: where it rests shows the ghost (or draws a brush stroke), where it lifts places or lays. */
+  const touchedEdit = (e: EditController, a: TouchAction) => {
+    if (a.t === 'aim') {
+      const r = rayAtPx(a.x, a.y);
+      if (e.tool === 'brush' && !touchStroke) touchStroke = e.down(r);
+      else e.move(r);
+    } else if (a.t === 'fire') {
+      e.up(rayAtPx(a.x, a.y));
+      touchStroke = false;
+    } else if (a.t === 'cancel') {
+      e.cancelStroke();
+      touchStroke = false;
+    } else return false;
+    showEdit();
+    return true;
+  };
   const touched = (acts: TouchAction[]) => {
     for (const a of acts) {
+      if (editing && touchedEdit(editing, a)) continue;
       switch (a.t) {
         case 'aim': pointer = ndcAt(a.x, a.y); aimDirty = true; break;
         case 'fire': {
@@ -1456,11 +1771,22 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     wakeAudio();
     canvas.setPointerCapture(e.pointerId);
     if (e.pointerType === 'touch') { touched(gestures.start(e.pointerId, e.clientX, e.clientY)); return; }
-    drag = { x: e.clientX, y: e.clientY, moved: 0, pan: e.button === 2 || e.shiftKey };
+    const pan = e.button === 2 || e.shiftKey;
+    // Building: a left press with the domino brush starts a stroke, and its drag draws the run instead of orbiting.
+    const brush = !!editing && e.button === 0 && !pan && editing.down(rayAtPx(e.clientX, e.clientY));
+    if (brush) showEdit();
+    drag = { x: e.clientX, y: e.clientY, moved: 0, pan, brush };
   });
   canvas.addEventListener('pointermove', (e) => {
     if (e.pointerType === 'touch') { touched(gestures.move(e.pointerId, e.clientX, e.clientY)); return; }
     if (!drag) pointerSeen(e); // a mouse or pen hovering takes the face back from touch
+    if (editing && (!drag || drag.brush)) {
+      const r = rayAtPx(e.clientX, e.clientY);
+      editing.move(r, { alt: e.altKey });
+      showEdit();
+      if (drag) Object.assign(drag, { moved: drag.moved + Math.abs(e.clientX - drag.x) + Math.abs(e.clientY - drag.y), x: e.clientX, y: e.clientY });
+      return;
+    }
     pointer = ndc(e);
     aimDirty = true;
     if (!drag) return;
@@ -1483,6 +1809,12 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
       touched(gestures.end(e.pointerId, e.clientX, e.clientY));
       return;
     }
+    if (editing) {
+      // A brush stroke's release lays the run; a click without drag places (or erases).
+      if (drag?.brush || (drag && drag.moved < 5 && e.button === 0 && !e.shiftKey)) { editing.up(rayAtPx(e.clientX, e.clientY), { alt: e.altKey }); showEdit(); }
+      drag = null;
+      return;
+    }
     if (drag && drag.moved < 5 && e.button === 0 && !e.shiftKey) {
       pointer = ndc(e);
       updateAim();
@@ -1492,7 +1824,10 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
   });
   canvas.addEventListener('pointercancel', (e) => {
     if (e.pointerType === 'touch') touched(gestures.cancel(e.pointerId));
-    else drag = null;
+    else {
+      if (drag?.brush && editing) { editing.cancelStroke(); showEdit(); }
+      drag = null;
+    }
   });
   canvas.addEventListener('pointerleave', (e) => { if (e.pointerType === 'touch') return; pointer = null; aimDirty = true; });
   canvas.addEventListener('wheel', (e) => {
@@ -1505,9 +1840,10 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     const act = (e.target as HTMLElement).closest('button')?.dataset.act;
     if (act) wakeAudio();
     if (act === 'bank') bank();
+    if (act === 'skip') skip();
     if (act === 'freeze') freeze();
     if (act === 'opener') fireOpener();
-    // Touch screens' Undo and Restart (hud.ts TOUCH_ACTS; keys U and R).
+    // Touch screens' Undo and Restart (hud.ts touchActs; keys U and R).
     if (act === 'undo') void handle.undo();
     if (act === 'restart' && !duel) void handle.retry();
     // The rack's chips and the power buttons: taps on a touch screen (keys 1-4, Q and E on a keyboard).
@@ -1522,6 +1858,8 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     if (act === 'undo') void handle.undo();
     if (act === 'save') env.onSave?.();
     if (act === 'next' && step(levelIdx, 1)) void load(levelIdx + 1).catch(fail);
+    if (act === 'series') { const f = env.seriesForward?.(levelIdx); if (f) void load(f.index).catch(fail); }
+    if (act === 'levels') env.onLevels?.();
     // A duel: Rematch starts the other side first (the other of its two levels); Same start replays this one.
     if (act === 'rematch' && duel) void load(1 - levelIdx).catch(fail);
     if (act === 'again' && duel) void handle.retry();
@@ -1530,12 +1868,28 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     if (typing(e)) return;
     wakeAudio();
     const k = e.key.toLowerCase();
+    // The hand-over card: Enter or Space starts the turn (and does nothing else).
+    if (handle.handoff && (k === 'enter' || k === ' ')) { e.preventDefault(); hideHandoff(); return; }
+    if (editing) {
+      // Building: Enter plays, Esc leaves without the edits, Ctrl/Cmd+Z undoes, M mutes; the build keys go to the editor
+      // (Q / E turn, T tip, 1 to 9 items, B brush, X erase, Z undo); the game's own keys wait until Play.
+      if (e.key === 'Enter') playEdit();
+      else if (e.key === 'Escape') cancelEdit();
+      else if (k === 'z' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); editing.undo(); showEdit(); }
+      else if (k === 'm') setMuted(!muted);
+      else if (!e.ctrlKey && !e.metaKey && editing.key(e.key, { shift: e.shiftKey })) showEdit();
+      // N and P still walk the series (a load ends the build phase).
+      if (k !== 'n' && k !== 'p') return;
+    }
+    // B: on a level with a build phase, before the first shot, build (else bank, as everywhere).
+    if (k === 'b' && !e.ctrlKey && !e.metaKey && enterEdit()) return;
     if (k === ' ') { e.preventDefault(); fastHeld = true; pacer.release(); }
     const chip = chipsNow().find((x) => x.key === e.key);
     if (chip) select(chip.ammo);
     if (k === 'q' || k === 'e') setPower(power + (k === 'e' ? POWER_STEP : -POWER_STEP));
     if ((k === 'w' || k === 's') && !e.ctrlKey && !e.metaKey && !e.altKey) moveLauncher(k === 'w' ? 1 : -1);
     if (k === 'b') bank();
+    if (k === 'k') skip();
     if (k === 't') freeze();
     if (k === 'f') fireOpener();
     // In a duel, R after the result is a rematch (the other side starts), as the card's first button says.
@@ -1562,12 +1916,15 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
       chips: chipsNow(), power, launch: (launchNow() / 4) * c.frame.unit, leverage: { round: s.roundLeverageNow(), shot: s.liveLeverage }, phase: s.phase,
       reachable: aimed ? aimed.reachable : null,
       pullRefused: aimed?.shot.ammo === 'pull' && !aimed.reachable && (aimed.shot.body === refusedPull ? 'tapped' : true),
-      collapse: s.liveCollapse, pulled: s.pulledShare(), met: s.objectiveDone, canBank: !stepping && regrowT === null && s.canBank(), pace: handle.pace.tag,
+      collapse: s.liveCollapse, pulled: s.pulledShare(), met: s.objectiveDone, canBank: !stepping && regrowT === null && s.canBank(), canSkip: canSkip(), skipping, pace: handle.pace.tag,
       opener: !stepping && regrowT === null && s.phase === 'aiming' && openerNow() !== null, ticks,
-      ...(duel ? { duel: duelHudHtml(duel, s.phase === 'aiming' && aimed ? duel.refuse(aimed.shot) : null, swing.active ? null : azFromYaw(orbit.yaw)) } : {}),
+      // While the turn view swings or the hand-over card shows, the aim is the old side's: no refusal, cue or warning (PT5's red line mid-swing).
+      ...(duel ? { duel: swing.active || handle.handoff ? duelHudHtml(duel) : duelHudHtml(duel, s.phase === 'aiming' && aimed ? duel.refuse(aimed.shot) : null, azFromYaw(orbit.yaw), s.phase === 'aiming' && aimHit !== null && duel.owned[duel.turn].includes(aimHit.body)) } : {}),
       ...(c.def.freeze !== undefined ? { freezes: { left: s.freezesLeft, total: c.def.freeze, frozen, can: canFreeze() } } : {}),
-    });
-    html += goalsHudHtml(handle.goals);
+    }, goalsHudHtml(handle.goals));
+    showPanel();
+    // The touch hint line goes once the first shot is in (body.kg-shot; the game page's CSS hides #help on touch).
+    document.body.classList.toggle('kg-shot', s.strokes > 0);
     if (crownsDown > crownsShown) html = html.replace('class="crowns"', 'class="crowns pop"');
     crownsShown = crownsDown;
     if (html !== lastHud) { env.hud.innerHTML = html; lastHud = html; }
@@ -1664,13 +2021,13 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
   const task = () => new Promise<void>((res) => { tasks.push(res); channel.port2.postMessage(null); });
   // A duel turn runs at its own pace for turnSeconds, then fast-forwards the rest of its settle.
   const turnUp = () => duel !== null && duel.shooter !== null && performance.now() - turnStart > 1000 * (duel.def.turnSeconds ?? DEFAULT_TURN_SECONDS);
-  const fastNow = () => fastHeld || handle.fast || ending || tail.on || turnUp();
+  const fastNow = () => fastHeld || handle.fast || ending || tail.on || skipping || turnUp();
   void runPhysics({
     now: () => performance.now(),
     alive: () => handle.status === 'running',
-    active: () => !loading && driver.session.phase === 'running' && !frozen,
+    active: () => !loading && driver.session.phase === 'running' && !frozen && !handle.hold,
     dtMs: () => 1000 * c.scene.dt,
-    options: () => ({ fastForward: fastNow(), budgetMs: feel.budgetMs }),
+    options: () => ({ fastForward: fastNow(), skip: skipping, budgetMs: feel.budgetMs }),
     idle: physicsIdle.wait,
     task,
     step: () => exclusive(async () => {

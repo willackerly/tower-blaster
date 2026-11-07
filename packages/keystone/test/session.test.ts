@@ -291,6 +291,8 @@ describe('Session, settle rules', () => {
     expect(h({ ...out, settle: 'v1' })).not.toBe(h(out));
     expect(h({ ...def, settle: 'v2' })).not.toBe(h(def));
     expect(h({ ...def, settle: 'v3' })).not.toBe(h({ ...def, settle: 'v2' }));
-    expect(() => compileLevel({ ...def, settle: 'v9' as never })).toThrow(/settle must be v1 or v2 or v3: v9/);
+    // v4 (PT6) is a level of its own: stars cast under v3 never show under it.
+    expect(h({ ...out, settle: 'v4' })).not.toBe(h(out));
+    expect(() => compileLevel({ ...def, settle: 'v9' as never })).toThrow(/settle must be v1 or v2 or v3 or v4: v9/);
   });
 });

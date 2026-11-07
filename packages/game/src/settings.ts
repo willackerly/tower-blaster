@@ -10,14 +10,19 @@
 //                               is keystone.rapid, see rapidFeel)
 //   duelView: true | false     (a duel's turn view: the camera swings to the next player's side; on by default;
 //                               the URL's say is keystone.turnview, see turnViewFeel)
+//   handoff: true | false      (a duel's hand-over card between turns; on by default; the URL's say is
+//                               keystone.handoff, see handoffFeel)
 //   launch: high | level       (where shots leave from, aim.ts LaunchMode; high by default; the URL's say is
 //                               keystone.launch, see launchFeel)
 //   marks: true | false        (stone marks: a crosshair carved on blocks to bring down, a shield on blocks to
 //                               keep, scene.ts markOf; on by default; the URL's say is keystone.marks, see marksFeel)
+//   layout: docked | classic   (where the HUD and result card sit, layout.ts; docked by default; the URL's say
+//                               is keystone.hud, keystone.card and keystone.carddelay, see layoutOf)
 //   quality: auto | high | mid | low (the quality tier, quality.ts: auto takes the probe's on load; the URL's
 //                               ?quality= for a visit; docs/game/quality-tiers.md)
 import { LOOKS } from '@tb/render';
 import { LAUNCH_MODES, type LaunchMode } from './aim.ts';
+import { LAYOUT_SETTINGS, type LayoutSetting } from './layout.ts';
 import type { PaceFeel } from './pacing.ts';
 import { GAME_LOOK } from './params.ts';
 import type { KeyValue } from './progress.ts';
@@ -28,10 +33,10 @@ export const SETTINGS_KEY = 'tb.settings.v1';
 /** still: the camera moves only when the player moves it (the default since the 2026-11-02 playtest); dynamic: it follows and shakes too. */
 export type CameraSetting = 'still' | 'dynamic';
 
-export interface Settings { sound: boolean; look: string; sharp: 1 | 2; camera: CameraSetting; rapid: boolean; duelView: boolean; launch: LaunchMode; marks: boolean; quality: QualitySetting }
+export interface Settings { sound: boolean; look: string; sharp: 1 | 2; camera: CameraSetting; rapid: boolean; duelView: boolean; handoff: boolean; launch: LaunchMode; marks: boolean; layout: LayoutSetting; quality: QualitySetting }
 
-/** Rapid fire on (Will, 2026-11-05: in Advanced settings, defaulting to on); a duel's turn view on (Will, 2026-11-06); shots from high (Will, 2026-11-06); stone marks on (Will, 2026-11-06); quality from the probe (P1, 2026-11-06). */
-export const DEFAULT_SETTINGS: Settings = { sound: true, look: GAME_LOOK, sharp: 2, camera: 'still', rapid: true, duelView: true, launch: 'high', marks: true, quality: 'auto' };
+/** Rapid fire on (Will, 2026-11-05: in Advanced settings, defaulting to on); a duel's turn view on (Will, 2026-11-06); shots from high (Will, 2026-11-06); stone marks on (Will, 2026-11-06); quality from the probe (P1, 2026-11-06); the docked layout (PT3 and PT4, 2026-11-06). */
+export const DEFAULT_SETTINGS: Settings = { sound: true, look: GAME_LOOK, sharp: 2, camera: 'still', rapid: true, duelView: true, handoff: true, launch: 'high', marks: true, layout: 'docked', quality: 'auto' };
 
 /** The quality choices the front door offers, in its order, with their names there. */
 export const QUALITY_CHOICES: ReadonlyArray<{ quality: QualitySetting; label: string }> = [
@@ -59,8 +64,10 @@ export function parseSettings(text: string | null): Settings {
     camera: o.camera === 'still' || o.camera === 'dynamic' ? o.camera : DEFAULT_SETTINGS.camera,
     rapid: typeof o.rapid === 'boolean' ? o.rapid : DEFAULT_SETTINGS.rapid,
     duelView: typeof o.duelView === 'boolean' ? o.duelView : DEFAULT_SETTINGS.duelView,
+    handoff: typeof o.handoff === 'boolean' ? o.handoff : DEFAULT_SETTINGS.handoff,
     launch: (LAUNCH_MODES as readonly unknown[]).includes(o.launch) ? (o.launch as LaunchMode) : DEFAULT_SETTINGS.launch,
     marks: typeof o.marks === 'boolean' ? o.marks : DEFAULT_SETTINGS.marks,
+    layout: (LAYOUT_SETTINGS as readonly unknown[]).includes(o.layout) ? (o.layout as LayoutSetting) : DEFAULT_SETTINGS.layout,
     quality: (QUALITY_SETTINGS as readonly unknown[]).includes(o.quality) ? (o.quality as QualitySetting) : DEFAULT_SETTINGS.quality,
   };
 }
@@ -107,6 +114,14 @@ export const TURN_VIEW_KEYS = ['keystone.turnview'] as const;
 /** A duel's turn view in effect: keystone.turnview where the URL says it (feel was read from that URL), else the setting. */
 export function turnViewFeel(feel: PaceFeel, q: URLSearchParams, duelView: boolean): Pick<PaceFeel, 'turnView'> {
   return { turnView: q.has('keystone.turnview') ? feel.turnView : duelView };
+}
+
+/** The URL key that says what the Hand-over setting says (handoffFeel), dropped from the URL when the setting changes. */
+export const HANDOFF_KEYS = ['keystone.handoff'] as const;
+
+/** A duel's hand-over card in effect: keystone.handoff where the URL says it (feel was read from that URL), else the setting. */
+export function handoffFeel(feel: PaceFeel, q: URLSearchParams, handoff: boolean): Pick<PaceFeel, 'handoff'> {
+  return { handoff: q.has('keystone.handoff') ? feel.handoff : handoff };
 }
 
 /** The URL's say over settings: ?look=, ?sound=on|off, ?sharp=1|2, ?quality=auto|high|mid|low (bad values are refused, as every game key is). */

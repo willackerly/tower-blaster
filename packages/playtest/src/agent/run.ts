@@ -98,12 +98,22 @@ async function runOne(browser: Browser, origin: string, sc: Scenario, vp: Viewpo
   page.on('pageerror', (e) => rec.errors.push(`pageerror: ${e.message}`));
   page.on('console', (m) => { if (m.type() === 'error' || m.type() === 'warning') rec.errors.push(`${m.type()}: ${m.text()}`); });
   let n = 0;
-  const shoot = async (what: string, settleMs = 0) => {
+  /**
+   * Capture a frame. Physics holds (GameHandle.hold) from before the picture until after the screenshot, so the
+   * scene and the HUD show the same step (PT12: on Rapier the sim ran on while SwiftShader rendered). `what` may
+   * be a function of the step held at, for the frame's name.
+   */
+  const shoot = async (what: string | ((step: number) => string), settleMs = 0) => {
     if (settleMs) await page.waitForTimeout(settleMs);
-    await mirror(page);
-    const file = frameName(sc.id, vp, n++, what);
-    await page.screenshot({ path: join(out, file) });
-    rec.frames.push(file);
+    const step = await page.evaluate(() => { window.__game.hold = true; return window.__game.stepIndex; });
+    try {
+      await mirror(page);
+      const file = frameName(sc.id, vp, n++, typeof what === 'string' ? what : what(step));
+      await page.screenshot({ path: join(out, file) });
+      rec.frames.push(file);
+    } finally {
+      await page.evaluate(() => { window.__game.hold = false; });
+    }
   };
   const tap = async (sel: string) => { const l = page.locator(sel).first(); if (v.touch) await l.tap(); else await l.click(); };
   try {
@@ -138,8 +148,7 @@ async function runOne(browser: Browser, origin: string, sc: Scenario, vp: Viewpo
         for (const ds of SEQUENCE_STEPS) {
           await page.waitForFunction((t) => window.__game.stepIndex >= t || window.__game.phase !== 'running', firedAt + ds, { timeout: 10 * MIN, polling: 50 });
           if ((await gameState(page)).phase !== 'running') break;
-          const at = (await gameState(page)).step - firedAt;
-          await shoot(`shot ${k + 1} +${at} steps`);
+          await shoot((step) => `shot ${k + 1} +${step - firedAt} steps`);
         }
       }
       await settled(page, before.strokes + 1, 15 * MIN);
