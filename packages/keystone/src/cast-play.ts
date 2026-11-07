@@ -8,6 +8,7 @@ import { type DriverOptions, type PerStep, runSession, snapshotHash } from './dr
 import type { CompiledLevel, StarMetric } from './level.ts';
 import { metricValue, outcomeScore } from './outcome.ts';
 import type { Session } from './session.ts';
+import { type ChorusJudgement, chorusRound } from './chorus.ts';
 import type { Shot } from './shots.ts';
 
 /** What the level would score banked at one settle: each star metric's value, and whether the objective is met. */
@@ -41,6 +42,8 @@ export interface CastPlay {
   hash: string;
   /** Sentences naming each engine limit that changed the physics (engine-api limitProblems); empty when none or the engine has no health(). */
   limits: string[];
+  /** A Chorus level (chorus.ts): every world's outcome at the end. */
+  chorus?: ChorusJudgement;
 }
 
 /** Each star metric's value in a sample. */
@@ -73,5 +76,6 @@ export async function castPlay(engine: PhysicsEngine, c: CompiledLevel, shots: S
   const settled = r.session.outcomes.length;
   if (settled > samples.length) samples.push(sampleOf(r.session, r.session.outcomes[settled - 1]!.settleStep));
   const health = engine.health ? await engine.health() : null;
-  return { samples, complete: settled === shots.length || r.session.phase === 'failed', steps: r.steps, hash: snapshotHash(r.snapshot), limits: limitProblems(health, engine.info.name) };
+  const round = chorusRound(engine);
+  return { samples, complete: settled === shots.length || r.session.phase === 'failed', steps: r.steps, hash: snapshotHash(r.snapshot), limits: limitProblems(health, engine.info.name), ...(round ? { chorus: round.judge() } : {}) };
 }
