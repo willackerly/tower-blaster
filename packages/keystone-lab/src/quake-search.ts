@@ -246,3 +246,31 @@ export async function searchQuakeLevel(level: LevelDef, grid: readonly QuakeShot
   return { level: level.id, hash: c.hash, bodies: c.meta.n, screen, confirm, gate: quakeGate(confirm), wallS: (performance.now() - t0) / 1000 };
 }
 
+
+/** x rounded up to two significant figures: a star line or a budget a little easier than the measured number. */
+export function roundUp2(x: number): number {
+  if (!(x > 0)) return x;
+  const p = 10 ** (Math.floor(Math.log10(x)) - 1);
+  return Math.ceil(x / p - 1e-9) * p;
+}
+
+/** Room left above the best quake's energy for its third star: the dial is discrete, so a tenth. */
+export const T3_SLACK = 1.1;
+/** A level's budget over its two-star line: room to explore, none for the brute end of the dial. */
+export const BUDGET_OVER_T2 = 4;
+
+/**
+ * A searched level's stars, cast on the energy metric (lower is better), and its budget: three stars at the cheapest
+ * confirmed quake (met on at least QUAKE_GATE.fair of the builds) with T3_SLACK; two at the median energy of the grid
+ * quakes that met the objective on the screen; one for meeting it at all. The budget is BUDGET_OVER_T2 times the
+ * two-star line. All rounded up to two figures. Energy is the shot's (quakeEnergy), so the lines read the same on
+ * every engine; only whether a quake meets the objective comes from the physics. Null when the gate failed.
+ */
+export function quakeStars(r: QuakeSearchResult): { t2: number; t3: number; best: number; budget: number; n: number } | null {
+  if (!r.gate.pass) return null;
+  const best = Math.min(...r.confirm.slice(1).filter((s) => s.met >= QUAKE_GATE.fair).map((s) => s.energy));
+  const met = r.screen.slice(1).filter((s) => s.met > 0).map((s) => s.energy).sort((a, b) => a - b);
+  const mid = met.length % 2 ? met[(met.length - 1) / 2]! : (met[met.length / 2 - 1]! + met[met.length / 2]!) / 2;
+  const t3 = roundUp2(best * T3_SLACK), t2 = Math.max(t3, roundUp2(mid));
+  return { t2, t3, best, budget: roundUp2(BUDGET_OVER_T2 * t2), n: r.screen.length - 1 };
+}

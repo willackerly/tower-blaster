@@ -39,6 +39,18 @@ export const DOCK_CSS = `
     body.kg-touch .kg-dock .tray .ctl .power { flex: 1; gap: 4px; }
     body.kg-touch .kg-dock .tray .ctl .bar { flex: 1; width: auto; min-width: 48px; }
     body.kg-touch .kg-dock .tray .ctl .launch { flex: 1; text-align: center; white-space: nowrap; }
+    body.kg-touch .kg-dock .tray .ctl .quake-panel { flex: 1 1 100%; min-width: 0; margin: 0; gap: 4px; }
+    body.kg-touch .kg-dock .tray .ctl .qdials { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 4px 8px; }
+    body.kg-touch .kg-dock .tray .ctl .qdials .power { justify-content: space-between; }
+    body.kg-touch .kg-dock .tray .ctl .qdials .compass { width: 26px; height: 26px; }
+    body.kg-touch .kg-dock .tray .ctl .qv { min-width: 0; flex: 1; }
+    body.kg-touch .kg-dock .tray .ctl .qfoot { display: flex; gap: 8px; }
+    body.kg-touch .kg-dock .tray .ctl .qfoot .seismo { flex: 1 1 40px; min-width: 0; width: 40px; height: 32px; }
+    body.kg-touch .kg-dock .tray .ctl .qfoot .qe .bar { width: 48px; min-width: 48px; flex: none; }
+    body.kg-touch .kg-dock .tray .ctl .qfoot .quake-go { min-height: 44px; }
+    body.kg-touch .kg-dock .tray .ctl .qlong, body.kg-touch .kg-dock .tray .ctl .qnote { display: none; }
+    /* A rack of one quake has no choice to show: its chip goes while the panel stands for it. */
+    body.kg-touch .kg-dock .tray .chips.only-quake { display: none; }
     body.kg-touch .kg-dock .tray .ctl .launch::before { content: '↕ '; color: #9aa3b8; }
     body.kg-touch .kg-dock .slot-row, body.kg-touch .kg-dock .slot-row.idle { display: flex; gap: 8px; margin: 0; }
     body.kg-touch .kg-dock .slot, body.kg-touch .kg-dock .slot.empty { display: flex; flex: 1; min-height: 44px; }
@@ -60,9 +72,13 @@ export const DOCK_CSS = `
     body.kg-touch .kg-dock .st .row > span:first-child { color: #9aa3b8; }
     /* The objective says itself ("bring 40% down"): its label goes, so leverage and freezes share its line. */
     body.kg-touch .kg-dock .st .obj > span:first-child { display: none; }
+    body.kg-touch .kg-dock .tray button.qd { width: 44px; height: 44px; }
   }
   @media ${DOCK_SIDEWAYS} {
     body.kg-touch .kg-hud.kg-dock { right: auto; width: clamp(200px, 28vw, 250px); }
+    body.kg-touch .kg-dock .tray button.qd { width: 34px; height: 34px; font-size: 15px; }
+    body.kg-touch .kg-dock .tray .ctl .qdials { grid-template-columns: minmax(0, 1fr); }
+    body.kg-touch .kg-dock .tray .qfoot .quake-go { min-height: 36px; }
     body.kg-touch .kg-dock > .st { flex: 0 1 auto; min-height: 0; overflow-y: auto; }
     body.kg-touch .kg-dock .above { left: 100%; right: auto; bottom: 0; margin: 0 0 0 8px; width: max-content; max-width: 50vw; }
   }
@@ -89,6 +105,10 @@ export const GAME_CSS = `
   .kg-hud .bar i { display: block; height: 100%; background: linear-gradient(90deg, #8fd3b6, #f7b955, #f0806a); }
   .kg-hud .bar.over i { background: #f0806a; }
   .kg-hud .quake-panel { display: grid; gap: 3px; margin-top: 4px; }
+  .kg-hud .qdials { display: grid; gap: 3px; }
+  .kg-hud .qfoot { display: grid; grid-template-columns: 1fr auto; gap: 6px 10px; align-items: center; }
+  .kg-hud .qfoot .seismo { grid-column: 1 / -1; width: 100%; }
+  .kg-hud .qe { display: flex; align-items: center; gap: 8px; } .kg-hud .qe b { white-space: nowrap; }
   .kg-hud button.qd { font: 700 16px/1 system-ui, sans-serif; width: 28px; height: 26px; padding: 0; border: 0; border-radius: 6px; background: #2b3242; color: #e8ebf2; cursor: pointer; }
   .kg-hud .qv { min-width: 58px; text-align: center; }
   .kg-hud .seismo polyline { fill: none; stroke: #f7b955; stroke-width: 1.4; } .kg-hud .seismo .axis { stroke: #3a4459; stroke-width: 1; }

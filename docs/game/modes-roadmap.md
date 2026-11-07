@@ -138,6 +138,7 @@ Each mode merges several raw ideas. "Casting" says how stars are set, because ca
 - **Needs:** C7 (gravity schedule and wake-all). Small, because gravity is already written every step (finding 2).
 - **Casting:** distribution-scored (towers down by class); candidates are a small grid of quake parameters, cheap.
 - **Risk:** friction-held stacks may slide rather than resonate; probe X6. A quake wakes everything, so 100k is slow motion only.
+- **Built (2026-11-07):** docs/game/aftershock.md. X6 ruled out resonance, so the levers are amplitude through slenderness, size, duration and the axis against bonded walls; the verify is a threshold curve, not a resonance curve. Levels A1 to A3 passed the choice-matters gate; stars on quake energy.
 
 ### M8 Mason's Trial (build, then test; Stage 3)
 

@@ -111,11 +111,12 @@ export function quakePanelHtml(c: CompiledLevel, d: QuakeDial, yaw: number, trac
   const shot = dialShot(d), r = quakeRulesOf(c.def), text = dialText(d), refused = quakeRefusal(c, shot);
   const row = (f: DialField, extra = '') => `<div class="row"><span>${LABEL[f]} <kbd>${DIAL_KEYS[f][0].toUpperCase()}</kbd><kbd>${DIAL_KEYS[f][1].toUpperCase()}</kbd></span><span class="power">${STEP_BUTTON(f, -1)}<b class="qv" data-q="${f}">${text[f]}</b>${extra}${STEP_BUTTON(f, 1)}</span></div>`;
   const e = quakeEnergy(c, shot), cap = r.budget ?? quakeEnergy(c, naiveQuake(c)), share = Math.min(1, e / cap), over = r.budget !== undefined && e > r.budget * (1 + 1e-9);
-  const energy = `<div class="row"><span>Energy</span><span class="power"><span class="bar${over ? ' over' : ''}"><i style="width:${(100 * share).toFixed(1)}%"></i></span><b class="${over ? 'bad' : ''}">${fmtJ(e)}</b></span></div>
-    <div class="small ${over ? 'bad' : 'hint'}">${r.budget !== undefined ? `${over ? 'over the' : 'of a'} ${fmtJ(r.budget)} budget` : `the bar is the strongest, slowest, longest quake: ${fmtJ(cap)}`}</div>`;
-  const start = `<div class="row"><button data-act="quake" class="quake-go"${canStart && !refused ? '' : ' disabled'}><kbd>Enter</kbd> Start the quake</button>${refused && !over ? `<span class="small bad">${esc(refused)}</span>` : ''}</div>`;
-  return `<div class="quake-panel">${row('peak')}${row('hz')}${row('sec')}${row('axis', compassSvg(axisOnScreen(d.axis, yaw)))}
-    <div class="row seismo-row">${stripSvg(trace, r.peakMax / 100)}</div>${energy}${start}</div>`;
+  const meter = `<span class="qe" title="${r.budget !== undefined ? `budget ${fmtJ(r.budget)}` : `the strongest, slowest, longest quake: ${fmtJ(cap)}`}"><span class="bar${over ? ' over' : ''}"><i style="width:${(100 * share).toFixed(1)}%"></i></span><b class="${over ? 'bad' : ''}">${fmtJ(e)}</b></span>`;
+  const note = `<div class="small qnote ${over ? 'bad' : 'hint'}">${r.budget !== undefined ? `${over ? 'over the' : 'of a'} ${fmtJ(r.budget)} budget` : `the bar is the strongest, slowest, longest quake: ${fmtJ(cap)}`}${refused && !over ? ` · ${esc(refused)}` : ''}</div>`;
+  const start = `<button data-act="quake" class="quake-go"${canStart && !refused ? '' : ' disabled'}><kbd>Enter</kbd> Start<span class="qlong"> the quake</span></button>`;
+  // The foot: the seismograph, the energy meter and Start; on the docked phone HUD one line (ui.ts).
+  return `<div class="quake-panel"><div class="qdials">${row('peak')}${row('hz')}${row('sec')}${row('axis', compassSvg(axisOnScreen(d.axis, yaw)))}</div>
+    <div class="qfoot">${stripSvg(trace, r.peakMax / 100)}${meter}${start}</div>${note}</div>`;
 }
 
 /** Joules for the meter: "209 J", "14.3 kJ". */

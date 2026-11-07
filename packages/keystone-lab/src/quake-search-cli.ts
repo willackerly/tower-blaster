@@ -8,7 +8,7 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { execSync } from 'node:child_process';
 import { availableParallelism } from 'node:os';
 import { compileLevel, quakeCandidate, validateLevel } from '@tb/keystone';
-import { quakeGrid, type QuakeStats, searchQuakeLevel, towerCurve } from './quake-search.ts';
+import { quakeGrid, quakeStars, type QuakeStats, searchQuakeLevel, towerCurve } from './quake-search.ts';
 
 const argv = process.argv.slice(2);
 const [mode, list] = argv;
@@ -51,7 +51,9 @@ if (mode === 'curves') {
     writeFileSync(file, JSON.stringify({ commit, ...r }, null, 1));
     const met = r.screen.filter((s) => s.met > 0);
     const top = [...r.screen.slice(1)].sort((a, b) => b.met - a.met || b.score - a.score || a.energy - b.energy).slice(0, 8);
+    const st = quakeStars(r);
     console.log([`### ${id} ${level.name} (${r.bodies} bodies, hash ${r.hash}, ${r.wallS.toFixed(0)} s, ${commit})`, '', `Gate: **${r.gate.pass ? 'PASS' : 'FAIL'}**: ${r.gate.detail}`, '',
+      ...(st ? [`Stars (energy, lower is better): T2 ${st.t2} J, T3 ${st.t3} J, best ${Math.round(st.best)} J; budget ${st.budget} J.`, ''] : []),
       `Screen: ${met.length} of ${r.screen.length - 1} grid quakes meet the objective.`, '',
       '| quake | builds | towers (sd) | met | energy J |', '|---|---|---|---|---|', ...r.confirm.map(row), '', 'Screen, best 8 and the naive quake:', '',
       '| quake | builds | towers (sd) | met | energy J |', '|---|---|---|---|---|', row(r.screen[0]!), ...top.map(row), '', `wrote ${file}`, ''].join('\n'));

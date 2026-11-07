@@ -65,6 +65,13 @@ no tier banner: there is no badge there to measure against.
   star's threshold), shown on the card as "Heritage cracked: 1 star lost".
 - B2 stars by points (`metric: 'score'`): flooring changes no star, since its thresholds are
   positive.
+- **Aftershock's quake levels** (M7, docs/game/aftershock.md) have their own tally and metric. The
+  tally (`outcomeTally`, `quake` facts) is Objective, Condemned (500 per crown down) and Heritage, with
+  no Collapse or Leverage line, since both would pay for felling the protected towers too. Stars are
+  on `metric: 'energy'`, the joules fired (`energyFired`, the very sum `roundLeverage` divides by),
+  where lower is better (`lowerIsBetter`, shared with skyline by `atLeast`, beat-the-bot and
+  `checkStars`). A quake's energy is computed from the shot, so the star lines read the same on every
+  engine. Tiers and the gold badge do not apply: quake levels have no `lGold`.
 
 ## Duels
 

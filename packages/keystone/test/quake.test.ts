@@ -5,8 +5,8 @@
 import { describe, expect, it } from 'vitest';
 import { FIELD_QUANTUM, onFieldGrid, quakeEvents } from '@tb/engine-api';
 import {
-  checkShot, checkStars, compileLevel, decodeRecord, encodeRecord, energyFired, GRAVITY, HERITAGE_MOVE, heritageFallen, type LevelDef, movingMass, naiveQuake, objectiveMet, type OutcomeFacts, outcomeScore,
-  outcomeTally, QUAKE, QUAKE_DEFAULTS, quakeEnergy, quakeInputs, quakeRefusal, quakeRulesOf, quakeSteps, type QuakeShot, readShots, type Reductions, roundLeverage, Session, type Shot, validateLevel, writeShots,
+  AFTERSHOCK_LEVELS, castStars, checkShot, checkStars, compileLevel, decodeRecord, encodeRecord, energyFired, GRAVITY, HERITAGE_MOVE, heritageFallen, type LevelDef, levelById, movingMass, naiveQuake, objectiveMet, type OutcomeFacts, outcomeScore,
+  outcomeTally, QUAKE, QUAKE_DEFAULTS, quakeEnergy, quakeCandidate, quakeInputs, quakeRefusal, quakeRulesOf, quakeSteps, type QuakeShot, readShots, type Reductions, roundLeverage, Session, type Shot, validateLevel, writeShots,
 } from '../src/index.ts';
 
 const level = (over: Partial<LevelDef> = {}): LevelDef => ({
@@ -170,5 +170,38 @@ describe('quake scoring', () => {
     s.fire(q(30, 10, 40), 0);
     expect(s.outcomeFacts().energy).toBe(0); // nothing closed yet: the fired shot counts once it settles
     expect(s.outcomeFacts().quake).toBe(true);
+  });
+});
+
+describe('the shipped Aftershock levels', () => {
+  const SITE: Record<string, string> = { A1: 'QC-1', A2: 'QC-3', A3: 'QC-4' };
+
+  it('are the gated sites exactly, valid, with energy stars cast against their own hash and a budget the brute end is over', () => {
+    expect(AFTERSHOCK_LEVELS.map((l) => l.id)).toEqual(Object.keys(SITE));
+    for (const l of AFTERSHOCK_LEVELS) {
+      const c = compileLevel(l), site = compileLevel(quakeCandidate(SITE[l.id]!));
+      expect(validateLevel(c).filter((i) => !i.warning)).toEqual([]);
+      // The physics the gate judged: the same bodies, gravity and steps; only the id, name, budget and stars differ.
+      expect({ ...c.scene, id: '' }).toEqual({ ...site.scene, id: '' });
+      expect(castStars(c)).toBe(l.stars);
+      const s = l.stars!;
+      expect(s.metric).toBe('energy');
+      expect(s.t3).toBeLessThanOrEqual(s.t2);
+      expect(s.best!).toBeLessThanOrEqual(s.t3);
+      const budget = l.quake!.budget!;
+      expect(budget).toBeGreaterThanOrEqual(s.t2);
+      expect(quakeRefusal(c, naiveQuake(c))).toMatch(/budget/);
+      expect(levelById(l.id)).toBe(l);
+    }
+  });
+});
+
+describe('the shipped levels\' aces', () => {
+  it('each ace is the cast\'s best quake: its energy is the stars\' best, inside the budget and the third star', () => {
+    for (const l of AFTERSHOCK_LEVELS) {
+      const c = compileLevel(l), ace = l.solutions!.ace![0]! as QuakeShot;
+      expect(quakeEnergy(c, ace)).toBeCloseTo(l.stars!.best!, 6);
+      expect(quakeRefusal(c, ace)).toBeNull();
+    }
   });
 });

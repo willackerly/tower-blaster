@@ -235,6 +235,8 @@ export function hudHtml(s: HudState, sheet = ''): string {
   const chips = s.chips.map((c) => `<button class="chip${c.selected ? ' on' : ''}${c.left ? '' : ' spent'}" data-act="ammo" data-arg="${c.key}"><kbd>${c.key}</kbd> ${esc(itemLabel(c.ammo))} <b>${c.left}</b>/${c.total}</button>`).join('');
   const heritage = s.heritageTotal ? `<div class="row"><span>Heritage</span><span class="${s.heritageBroken ? 'bad' : 'ok'}">${s.heritageBroken ? `${s.heritageBroken} cracked` : 'intact'}</span></div>` : '';
   const sel = s.chips.find((c) => c.selected)?.ammo;
+  // A rack of one quake: the docked phone HUD drops its chip while the quake panel stands for it (ui.ts).
+  const onlyQuake = s.chips.length === 1 && sel === 'quake' && s.quake ? ' only-quake' : '';
   // The power bar, with minus and plus buttons on a touch screen (keys Q and E).
   const power = sel === 'drop' || sel === 'pull' || sel === 'quake' ? (sel === 'quake' ? s.quake ?? '' : '') : `<div class="row"><span>Power <kbd>Q</kbd><kbd>E</kbd></span><span class="power">${POWER_STEP_BUTTON(-POWER_STEP)}<span class="bar"><i style="width:${s.power}%"></i></span>${POWER_STEP_BUTTON(POWER_STEP)}</span></div>`;
   const height = sel === 'drop' || sel === 'pull' || sel === 'quake' || s.launch === undefined ? '' : launchRow(s.launch);
@@ -246,7 +248,7 @@ export function hudHtml(s: HudState, sheet = ''): string {
     <div class="title">${esc(d.name)}${pace}</div>
     ${s.duel}
     </div><div class="tray">
-    <div class="chips">${chips}</div>
+    <div class="chips${onlyQuake}">${chips}</div>
     ${ctl}<div class="above">${reach}</div>
     </div>`;
   }
@@ -273,7 +275,7 @@ export function hudHtml(s: HudState, sheet = ''): string {
     ${leverageRow(s.strokes, s.leverage)}
     ${sheet}
     </div><div class="tray">
-    <div class="chips">${chips}</div>
+    <div class="chips${onlyQuake}">${chips}</div>
     ${ctl}<div class="above">${reach}${s.strokes > 0 ? '' : `<div class="tch-hint">${TOUCH_HELP}</div>`}</div>
     ${slot}
     </div>`;
