@@ -11,6 +11,7 @@ import { AvbdReferenceEngine } from '@tb/physics-ref';
 import { type AudioFrame, BLOCK, CollapseEngine, FrameTap, FULL_SCALE, loudness, SOUND_SETS, type SoundSet } from '@tb/audio';
 import { AMMO_KINDS, ammoBody, MATERIALS, AVBD_GAP_SLOP, AVBD_ITERATIONS, compileLevel, levelById, LEVELS, readShots, runSession, type Shot } from '@tb/keystone';
 import type { PhysicsEngine } from '@tb/engine-api';
+import { PRESET_NAMES } from '@tb/weapons';
 import { eyeOf } from '@tb/render/camera';
 import { gameSoundDb, slotSounds, SOUND_SLOTS, soundSlotOf } from './sound-map.ts';
 import { viewOf } from './view.ts';
@@ -72,7 +73,7 @@ function wav(path: string, L: Float32Array, R: Float32Array) {
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {
-  const names = [...MATERIALS.map((m) => m.name), ...AMMO_KINDS, 'ice pieces'];
+  const names = [...MATERIALS.map((m) => m.name), ...AMMO_KINDS, 'ice pieces', ...PRESET_NAMES];
   for (const dir of [kv.wav, kv.frames]) if (dir) mkdirSync(dir, { recursive: true });
   const rows = [];
   for (const id of ids) {

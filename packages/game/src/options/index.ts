@@ -4,6 +4,7 @@
 // two branches that each add an option merge without a conflict (keep each entry on its own line).
 import { arcs } from './arcs.ts';
 import { balls } from './balls.ts';
+import { blastSound } from './blastsound.ts';
 import { chorusViewOption } from './chorusview.ts';
 import { budgetMs } from './budget.ts';
 import { camera } from './camera.ts';
@@ -76,4 +77,5 @@ export const OPTIONS = [
   chorusViewOption,
   frozenAim,
   launchSound,
+  blastSound,
 ] as const;
