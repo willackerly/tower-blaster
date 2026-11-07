@@ -10,7 +10,8 @@ import { Body, readStruct, Shape, TIER } from '@tb/schema';
 import { RapierHost } from '@tb/adapter-rapier';
 import { TieredEngine } from '@tb/lattice';
 import { BLOCK_JITTER, WARM_AXIS, STONE_PALETTES, ADAPT_MAX, ADAPT_REF, adaptedExposure, hallArch, hallScaled, hallUniforms, HAZY_DAY, OLYMPIA, linearToSrgb, lookByName, lookUniforms, parseRealOptions, REAL_DEFAULTS, REAL_KNOBS, REAL_POLISH_OFF, realLook, writeRealOptions, CLEAR_DAY, MIE_H, mieExtinction, multiTable, normalize, OZONE, OZONE_WIDTH, RAYLEIGH, RAYLEIGH_H, skyRadiance, skyViewDir, skyViewUv, sunAtGround, sunDiscRadiance, transmittance, transmittanceHMu, transmittanceTable, transmittanceUv } from '../src/index.ts';
-import { agx, aoFootReference, debrisClass, debrisSpawnReference, debrisWeight, newDebrisReference, chipCount, chipStepReference, CHIP_POOL, CHIPS_PER_EVENT, debrisRings, DEFAULT_DEBRIS, DEFAULT_SPARKS, dustCount, dustStepReference, DUST_PER_EVENT, DUST_POOL, bevelNormal, type V3, CANDY_NIGHT, CTL, HOT_FULL, MAX_EVENTS, SPAWN_BUDGET, FX_WORDS, packFx, tintWord, unpackFx, frustumPlanes, linearToOklab, listMatches, oklabToLinear, srgbToLinear, lookAt, lookOf, lookRange, MATERIAL, multiply, SEG, SEGMENTS, packBodies, changedRanges, drawnTier, packShapes, paletteOf, perspective, unpackLook } from '../src/index.ts';
+import { ICE_BIT, isIceParticle, MATERIAL_ICE, newSparkReference, CLASSIC_SPARKS, agx, aoFootReference, debrisClass, debrisSpawnReference, debrisWeight, newDebrisReference, chipCount, chipStepReference, CHIP_POOL, CHIPS_PER_EVENT, debrisRings, DEFAULT_DEBRIS, DEFAULT_SPARKS, dustCount, dustStepReference, DUST_PER_EVENT, DUST_POOL, bevelNormal, type V3, CANDY_NIGHT, CTL, HOT_FULL, MAX_EVENTS, SPAWN_BUDGET, FX_WORDS, packFx, tintWord, unpackFx, frustumPlanes, linearToOklab, listMatches, oklabToLinear, srgbToLinear, lookAt, lookOf, lookRange, MATERIAL, multiply, SEG, SEGMENTS, packBodies, changedRanges, drawnTier, packShapes, paletteOf, perspective, unpackLook } from '../src/index.ts';
+import { encodePng } from '@tb/testkit';
 import { gpu, call, type D } from './harness.ts';
 
 describe('looks', () => {
@@ -452,6 +453,29 @@ describe('fx records', () => {
   });
 });
 
+describe('ice debris (PT38), CPU twins', () => {
+  const ev = (material: number) => ({ pos: [0.3, 1.1, -0.4] as V3, strength: 9, dir: [0, 1, 0] as V3, normal: [0, 1, 0] as V3, packed: (5 | (material << 28)) >>> 0 });
+  it('an ice event\'s sparks (both rules), puffs and chips carry ICE_BIT; every other material\'s never do; nothing else in the word moves', () => {
+    for (let j = 0; j < 64; j++) for (const frame of [0, 7, 1000]) {
+      const kinds = (m: number) => [
+        newSparkReference(ev(m), j, frame, DEFAULT_SPARKS), newSparkReference(ev(m), j, frame, CLASSIC_SPARKS),
+        newDebrisReference(ev(m), j, frame, 1, DEFAULT_DEBRIS, 0), newDebrisReference(ev(m), j, frame, 2, DEFAULT_DEBRIS, 0),
+      ];
+      const ice = kinds(MATERIAL_ICE);
+      for (const m of [MATERIAL.candy, MATERIAL.ball, MATERIAL.debris]) {
+        kinds(m).forEach((p, k) => {
+          expect(isIceParticle(p.packed)).toBe(false);
+          expect(isIceParticle(ice[k]!.packed)).toBe(true);
+          // Same flight and life; the word differs by the bit alone (a ball's scaled spark also by its class, bits 8-11).
+          expect(ice[k]!.vel).toEqual(p.vel);
+          expect((ice[k]!.packed ^ p.packed) & ~0xf00).toBe(ICE_BIT);
+          if (m !== MATERIAL.ball || k !== 0) expect(ice[k]!.packed ^ p.packed).toBe(ICE_BIT);
+        });
+      }
+    }
+  });
+});
+
 describe('sparks', () => {
   it('the impact detector reports real speed changes only, at the support point', async (ctx) => {
     if (!gpu) return ctx.skip();
@@ -494,6 +518,39 @@ describe('sparks', () => {
     expect(r.argsFlying).toEqual([6, r.pool, 0, 0, 6, 0, 0, 0, 6, 0, 0, 0]); // sparks mode: the puff and chip draws stay empty
     expect(r.aliveDead).toBe(0);
     expect(r.argsDead).toEqual([6, 0, 0, 0, 6, 0, 0, 0, 6, 0, 0, 0]);
+  });
+
+  it('ice (PT38): an impact on an ice surface is MATERIAL_ICE, and every spark, puff and chip it throws carries ICE_BIT; stone throws none', async (ctx) => {
+    if (!gpu) return ctx.skip();
+    const r = await call('iceDebrisSpawn');
+    expect(r.error).toBeNull();
+    expect(r.iceMaterial).toBe(MATERIAL_ICE);
+    for (const run of [r.sparks, r.debris]) {
+      expect(run.events.map((e) => e.slot)).toEqual([0, 1, 2, 3]);
+      expect(run.events.map((e) => e.material)).toEqual([0, MATERIAL_ICE, 0, MATERIAL_ICE]);
+    }
+    // Every event takes the same knock, so ice and stone throw alike: half the particles each, split by the bit.
+    for (const k of [r.sparks.all, r.debris.dust, r.debris.chips]) {
+      expect(k.ice).toBeGreaterThan(0);
+      expect(k.other).toBeGreaterThan(0);
+      expect(Math.abs(k.ice - k.other)).toBeLessThanOrEqual(0.2 * (k.ice + k.other));
+    }
+  });
+
+  it('ice (PT38) looks cold: a burst of ice throws no warm pixels, in the candy look (sparks, flash) and the real look (dust, chips); stone does', async (ctx) => {
+    if (!gpu) return ctx.skip();
+    const dir = process.env.ICE_SHOTS;
+    for (const look of ['candy', 'real'] as const) {
+      const r = await call('iceDebrisHue', look, 4, 0.1, !!dir);
+      expect(r.error).toBeNull();
+      if (dir && r.shots) for (const k of ['stone', 'ice'] as const) writeFileSync(`${dir}/debris-${look}-${k}.png`, encodePng(r.W, r.H, { data: r.shots[k], bytesPerRow: 4 * r.W }));
+      // Measured on SwiftShader, recorded in the PR.
+      expect(r.stone.changed, `${look} ${JSON.stringify(r)}`).toBeGreaterThan(30);
+      expect(r.ice.changed, `${look} ${JSON.stringify(r)}`).toBeGreaterThan(30);
+      expect(r.stone.warm / r.stone.changed, `${look} stone ${JSON.stringify({ stone: r.stone, ice: r.ice })}`).toBeGreaterThan(0.15);
+      expect(r.ice.warm / r.ice.changed, `${look} ice ${JSON.stringify({ stone: r.stone, ice: r.ice })}`).toBeLessThan(0.02);
+      expect(r.ice.blue / r.ice.changed, `${look} ice`).toBeGreaterThan(0.5);
+    }
   });
 
   it('a flood of 100k impacts stays within the event and spark budgets', async (ctx) => {
