@@ -88,6 +88,13 @@ Casts on the reference engine (Node, f64; seed 1; short recipe, 210 plays each).
 
 On F1 to F3 the GPU lands on the reference's T3 to the third decimal.
 
+**The game records these stars on the GPU (PT20).** The stars were cast on the reference, and the game plays on the GPU solver. So until agent playtest round 2, `onEngine` marked every F level custom ("Custom settings, so no stars are recorded"), and no player could earn a star. Each entry in stars.json now lists `"agrees": ["gpu"]`: the GPU's cloud of the best line passed the cross-device gate above, and the game records stars on an engine the cast was made on or checked on (keystone `starsHoldOn`). Write `agrees` only after a passing `--cloud-of` on that engine, with its numbers in this table. A game test runs over every rated level in the series: none opens custom on the default engine. Alternatives:
+- Hide the star rows until a GPU cast exists (PT7's rule for uncast levels). Rejected: the GPU check already holds the stars to the GPU, and F4's T3 already comes from the GPU's cloud. Hiding them would take away stars that the evidence supports.
+- Recast on SwiftShader in CI. Rejected: about 3 h a level, and CI test files must stay under 300 s.
+- Relabel the casts `engine: gpu`. Rejected: the file would no longer say where the cast ran.
+
+The Metal recast queued for the Mac will replace these entries with GPU casts.
+
 F5 needs two notes.
 - **Its T2 is above all at once** (0.33 against 0.26). Half its competent sweeps end at 0.34 or more, above the all-at-once 0.26: a sweep that misses the yard often still brings part of the tower down. On F1 to F4 the median competent sweep ends at the all-at-once value. Two stars still need a clear: stars require the objective.
 - **Its cast took 88 min here, over the 60 min budget gate.** The gate is judged on the M5 Max. Here the reference engine ran on this container's CPU at 36.7 ms a step over 144k steps. Every star gate passed (fair 0.84, skill 0.40, stable 0.017, no limits, complete), so the stars went into the file as cast. The alternative was recasting with `--budget-min 90`. That gives the same stars, because a cast is deterministic for its seed, and costs another 88 min. The budget is a property of the machine, and the Metal recast will measure it on the M5.

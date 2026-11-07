@@ -1,10 +1,11 @@
 // The game page's URL keys (params.ts), which the viewer reads too under
 // rules=keystone: defaults, accepted spellings, and refused values named.
 import { describe, expect, it } from 'vitest';
-import { B1, BIG_LEVELS, L1, L2, L3, seriesOf, type Shot, writeShots } from '@tb/keystone';
+import { B1, BIG_LEVELS, L1, L2, L3, seriesOf, type Shot, TRIAL_LEVELS, writeShots } from '@tb/keystone';
 import { compileLevel } from '@tb/keystone';
-import { buildOption, DEFAULT_LEVEL, GAME_LOOK, levelRules, loadOptions, offscreenOf, onEngine, parseGameParams, weaponTierOf, withRules, writeLevelRules } from '../src/params.ts';
+import { buildOption, DEFAULT_LEVEL, GAME_LOOK, GAME_SERIES, levelRules, loadOptions, offscreenOf, onEngine, parseGameParams, weaponTierOf, withRules, writeLevelRules } from '../src/params.ts';
 import { DEFAULT_FEEL } from '../src/pacing.ts';
+import { DEFAULT_ENGINE } from '../src/engines.ts';
 
 const parse = (search: string) => parseGameParams(new URLSearchParams(search));
 const par = L1.solutions!.par as Shot[];
@@ -170,6 +171,16 @@ describe('rule overrides', () => {
     expect(onEngine(cast, 'gpu')).toBe(cast);
     expect(onEngine(cast, 'rapier').custom).toBe(true);
     expect(onEngine(L1, 'rapier')).toBe(L1);
+    // Cast on the reference and checked on the GPU by the cross-device gate: they hold on the GPU, not on Rapier.
+    const checked = { ...L1, stars: { metric: 'fold' as const, t2: 0.2, t3: 0.4, engine: 'ref', agrees: ['gpu'] } };
+    expect(onEngine(checked, 'gpu')).toBe(checked);
+    expect(onEngine(checked, 'ref')).toBe(checked);
+    expect(onEngine(checked, 'rapier').custom).toBe(true);
+  });
+  it('every rated level with stars records them on the game\'s default engine (PT20: no rated level opens custom)', () => {
+    const rated = GAME_SERIES.flat().filter((d) => !TRIAL_LEVELS.includes(d) && d.stars);
+    expect(rated.map((d) => d.id)).toEqual(expect.arrayContaining(['B1', 'F1', 'F5']));
+    for (const d of rated) expect(onEngine(d, DEFAULT_ENGINE).custom, `${d.id}: stars on ${d.stars!.engine}, agrees ${JSON.stringify(d.stars!.agrees ?? [])}`).toBeFalsy();
   });
   it('refuses bad values, naming the key', () => {
     expect(() => parse('?keystone.scoring=golf')).toThrow(/keystone.scoring must be par or outcome: golf/);
