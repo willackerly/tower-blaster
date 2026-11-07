@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { B1, B2, compileLevel, levelGoldLine, L1, L2, L3, L4, L5, levelScore, outcomeScore, RL1, type ShotOutcome, U3 } from '@tb/keystone';
+import { B1, B2, compileLevel, levelGoldLine, L1, L2, L3, L4, L5, levelScore, outcomeScore, RL1, type ShotOutcome, U3, W3, W5 } from '@tb/keystone';
 import { HOW_TO_PLAY } from '../src/door.ts';
 import { GAME_HELP, GAME_KEYS, HELP_BUDGET, helpHtml, TOUCH_HELP } from '../src/ui.ts';
-import { BANK_BUTTON, BANK_QUIET, SKIP_BUTTON, esc, freezeButton, POWER_STEP, fmtLeverage, fmtPoints, goldHtml, hudHtml, keepRow, LEVERAGE_MEANS, leverageRow, meterHtml, meterTicks, nextSelection, objectiveText, rackChips, resultHtml, starsText, slotAction, tallyHtml, touchActs } from '../src/hud.ts';
+import { CUT_HINT, PULL_HINT, PUSH_HINT, BANK_BUTTON, BANK_QUIET, SKIP_BUTTON, esc, freezeButton, POWER_STEP, fmtLeverage, fmtPoints, goldHtml, hudHtml, keepRow, LEVERAGE_MEANS, leverageRow, meterHtml, meterTicks, nextSelection, objectiveText, rackChips, resultHtml, starsText, slotAction, tallyHtml, touchActs } from '../src/hud.ts';
 
 describe('rack', () => {
   it('groups by kind in first-seen order with counts and keys', () => {
@@ -307,5 +307,26 @@ describe('scores and leverage add up (PT9, PT16)', () => {
     const text = HOW_TO_PLAY.join(' ');
     expect(text).toContain(LEVERAGE_MEANS);
     expect(text).toMatch(/never goes below 0/);
+  });
+});
+
+// Agent playtest 2 (G9c) on Wavefront's Steer and Cut levels: par levels judged on collapse with no crowns.
+describe('Wavefront HUD', () => {
+  const at = (level: typeof W3, extra: object = {}) => hudHtml({ level, strokes: 0, crownsDown: 0, crownsTotal: 0, heritageBroken: 0, heritageTotal: 0, chips: [], power: 60, leverage: { round: 0, shot: 0 }, phase: 'aiming', reachable: null, ...extra });
+  it('shows Down against the collapse objective, and no crown row on a level without crowns', () => {
+    const html = at(W3, { collapse: 0.12 });
+    expect(html).not.toMatch(/Crowns/);
+    expect(html).toMatch(/Down <b class="down">12%<\/b>/);
+    expect(html).toMatch(/bring 16% down/);
+    expect(at(W3, { collapse: 0.2, met: true })).toMatch(/bring 16% down ✓/);
+  });
+  it('a refused pull on a Cut level says the cut rule while aiming, the crown rule while the wave runs', () => {
+    expect(at(W5, { pullRefused: true })).toContain(CUT_HINT);
+    expect(at(W5, { pullRefused: true, phase: 'running' })).toContain(PULL_HINT);
+    expect(at(W3, { pullRefused: true })).toContain(PULL_HINT);
+  });
+  it('says what to push until the first shot (PT39)', () => {
+    expect(at(W3)).toContain(PUSH_HINT);
+    expect(at(W3, { strokes: 1 })).not.toContain(PUSH_HINT);
   });
 });
