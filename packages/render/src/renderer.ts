@@ -8,7 +8,7 @@
 import { writeStruct } from '@tb/schema';
 import type { GpuProfiler } from '@tb/gpu';
 import { Culler, NO_LOD, SEG, type CullFrame } from './cull.ts';
-import { CLASSIC_SPARKS, CTL, DEFAULT_DEBRIS, DEFAULT_SPARKS, Sparks } from './sparks.ts';
+import { CLASSIC_SPARKS, CTL, DEFAULT_DEBRIS, DEFAULT_SPARKS, MATERIAL_ICE, Sparks } from './sparks.ts';
 import { BLAST_LIGHTS, CLASSIC_LIGHTS, DEFAULT_LIGHTS, Lights, MAX_BALLS, TRAIL } from './lights.ts';
 import { Blasts, RING_BLASTS, RING_ECHO_S } from './blasts.ts';
 import { Fuses } from './fuses.ts';
@@ -865,7 +865,7 @@ export class Renderer {
     const drawImpact = !ids && this.impactMark.prepare({ eye: f.eye, viewProj: cf.viewProj, invViewProj: this.lastInv, viewport: this.viewport(), time: f.time ?? 0, gain: this.sunLuma });
     const drawBlasts = blasts.length > 0 && this.blasts.prepare(blasts, { eye: f.eye, viewProj: cf.viewProj, invViewProj: this.lastInv, viewport: this.viewport(), time: f.time ?? 0, gain: this.sunLuma });
     if (!ids && effects) {
-      if (this.toggles.sparks) this.sparks.encode(cp, this.source, { dt: dt * froude, groundY: f.groundY, dvScale: Math.sqrt(metres) });
+      if (this.toggles.sparks) this.sparks.encode(cp, this.source, { dt: dt * froude, groundY: f.groundY, dvScale: Math.sqrt(metres), surfaces: this.cullSurfaces ?? undefined });
       this.lights.encode(cp, this.source, culler.records, this.sparks, { eye: f.eye, time: f.time ?? 0, ball: this.look.ball.map(srgbToLinear) as V3 });
     } else if (!ids) {
       if (blastLit) this.lights.packOnly(cp, this.sparks);
@@ -873,7 +873,7 @@ export class Renderer {
       if (debris) {
         const d = this.look.debris;
         this.sparks.debris = { ...this.sparks.debris, dustPerDv: DEFAULT_DEBRIS.dustPerDv * (d?.dust ?? 1), chipPerDv: DEFAULT_DEBRIS.chipPerDv * (d?.chips ?? 1), dustDv: d?.threshold ?? DEFAULT_DEBRIS.dustDv, dustFace: d?.face ?? DEFAULT_DEBRIS.dustFace, dustSkirt: d?.skirt ?? DEFAULT_DEBRIS.dustSkirt };
-        this.sparks.encode(cp, this.source, { dt: dt * froude, groundY: f.groundY, mode: 'debris', dvScale: Math.sqrt(metres) });
+        this.sparks.encode(cp, this.source, { dt: dt * froude, groundY: f.groundY, mode: 'debris', dvScale: Math.sqrt(metres), surfaces: this.cullSurfaces ?? undefined });
       }
     }
     cp.end();
@@ -1188,9 +1188,12 @@ export class Renderer {
     this.impactMark.set(point, radius, normal);
   }
 
-  /** Sparks from a game event at pos, flying out around dir; strength is a speed change in m/s. */
-  burst(pos: V3, dir: V3, strength: number): void {
-    this.sparks.inject(pos, dir, strength);
+  /**
+   * Sparks from a game event at pos, flying out around dir; strength is a speed change in m/s. ice: the
+   * burst is ice's (cold shards in the stylized looks, white and blue chips and frost in the real look).
+   */
+  burst(pos: V3, dir: V3, strength: number, opts: { ice?: boolean } = {}): void {
+    this.sparks.inject(pos, dir, strength, undefined, opts.ice ? MATERIAL_ICE : 0);
   }
 
   private viewport(): [number, number] {
