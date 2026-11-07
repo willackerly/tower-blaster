@@ -8,8 +8,9 @@ import { itemYield, levelCharges, plungerYield } from './arsenal.ts';
 import { castStars, type CompiledLevel, type Scoring, scoringOf, settleOf } from './level.ts';
 import type { IceCrack } from './ice.ts';
 import { collapseFraction, floorPotential_mJ, homePotential_mJ, homeSkyline, objectiveMet, type OutcomeFacts, outcomeScore } from './outcome.ts';
-import { ammoInFlight, crownDown, heritageBroken, leverage, levelScore, type LevelScore, levelTier, refereedScore, roundLeverage, type Observation, type Reductions, type SettleRule, type SettleState, settleCap, settleUpdate, type ShotOutcome, skyline } from './rules.ts';
+import { ammoInFlight, bellRung, crownDown, heritageBroken, leverage, levelScore, type LevelScore, levelTier, refereedScore, roundLeverage, type Observation, type Reductions, type SettleRule, type SettleState, settleCap, settleUpdate, type ShotOutcome, skyline } from './rules.ts';
 import type { RackItem } from './rack.ts';
+import { placedCost } from './build.ts';
 import { ammoKE, type PlungerShot, pullEnergy, type Shot, shotEvent } from './shots.ts';
 
 export type Phase = 'aiming' | 'running' | 'cleared' | 'failed';
@@ -134,6 +135,14 @@ export class Session {
     this.crownLive = new Uint8Array(level.meta.crowns.length);
     this.heritageBroken = new Uint8Array(level.meta.heritage.length);
     this.watchIdx = Int32Array.from([...level.meta.crowns, ...level.meta.heritage]);
+  }
+
+  /** A bell level (Rube Lab): its crowns are bells, rung by bellRung. */
+  get bell(): boolean { return this.level.def.objective.kind === 'bell'; }
+  /** Whether crown k (a bell) at p has rung, against its home. */
+  private rung(k: number, p: Vec3): boolean {
+    const b = this.level.meta.crowns[k]!;
+    return bellRung(this.level, p, [this.home[3 * b]!, this.home[3 * b + 1]!, this.home[3 * b + 2]!]);
   }
 
   /** Collapse fraction D with the structure at potential energy pe_mJ. */
@@ -262,7 +271,8 @@ export class Session {
    */
   private close(o: Observation, cut: boolean): Extract<Feedback, { t: 'settled' | 'cut' }> {
     const L = this.live!, c = this.level, m = c.meta, w = o.watched, nc = m.crowns.length;
-    for (let k = 0; k < nc; k++) this.crownDown[k] = this.shattered.includes(m.crowns[k]!) || crownDown(c, [w.pos[3 * k]!, w.pos[3 * k + 1]!, w.pos[3 * k + 2]!]) ? 1 : 0;
+    // A bell, once rung, stays rung (it was hit, or got there): judged live in observe(). A crown is judged where it lies.
+    for (let k = 0; k < nc; k++) this.crownDown[k] = this.bell ? this.crownLive[k]! || (this.rung(k, [w.pos[3 * k]!, w.pos[3 * k + 1]!, w.pos[3 * k + 2]!]) ? 1 : 0) : this.shattered.includes(m.crowns[k]!) || crownDown(c, [w.pos[3 * k]!, w.pos[3 * k + 1]!, w.pos[3 * k + 2]!]) ? 1 : 0;
     const crownsTotal = this.crownDown.reduce((a, x) => a + x, 0);
     const dPE_mJ = o.basePe_mJ - o.red.pe_mJ;
     const outcome: ShotOutcome = {
@@ -310,7 +320,7 @@ export class Session {
     for (let k = 0; k < nc; k++) {
       const p = pos(k);
       if (!L.slowMo && w.linVel[3 * k + 1]! < SLOWMO_VY) { L.slowMo = true; out.push({ t: 'slowMo', step, body: m.crowns[k]! }); }
-      if (!this.crownLive[k] && (crownDown(c, p) || this.shattered.includes(m.crowns[k]!))) { this.crownLive[k] = 1; out.push({ t: 'crownDown', step, body: m.crowns[k]!, ordinal: this.ordinal++ }); }
+      if (!this.crownLive[k] && (this.bell ? this.rung(k, p) : crownDown(c, p) || this.shattered.includes(m.crowns[k]!))) { this.crownLive[k] = 1; out.push({ t: 'crownDown', step, body: m.crowns[k]!, ordinal: this.ordinal++ }); }
     }
     for (let k = 0; k < nh; k++) {
       const b = m.heritage[k]!, q = w.rot.subarray(4 * (nc + k), 4 * (nc + k) + 4);
@@ -350,7 +360,8 @@ export class Session {
     }
     if (cleared || this.rackLeft.length === 0) {
       this.phase = cleared ? 'cleared' : 'failed';
-      this.score = levelScore(c.def, this.outcomes, cleared, m.n);
+      // Rube Lab: a binary clear, starred on the build's cost against the parts par (rules.ts rubeStars).
+      this.score = levelScore(c.def, this.outcomes, cleared, m.n, c.def.rube ? placedCost(c.def) : 0);
       out.push({ t: 'levelEnd', step, cleared, score: this.score });
     } else {
       this.phase = 'aiming';

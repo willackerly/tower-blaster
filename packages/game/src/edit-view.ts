@@ -17,7 +17,7 @@ export class EditView {
 
   show(e: EditController, marks: boolean): void {
     const { world, ghost } = e.bodies(), all = [...world, ...ghost];
-    const sig = `${e.version}|${ghost.map((g) => (g.shape.kind === 'box' ? g.shape.half.join(',') : '')).join(';')}`;
+    const sig = `${e.version}|${ghost.map((g) => (g.shape.kind === 'box' ? g.shape.half.join(',') : `r${g.shape.radius}`)).join(';')}`;
     if (sig !== this.sig) {
       this.source.reset(world);
       // Every slot's effects from scratch (a page's own, such as a level's grow-in scales, too).
