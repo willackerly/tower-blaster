@@ -105,8 +105,14 @@ export interface BuildDef {
   par?: number;
 }
 
-/** How the player turns what they hold: a yaw, and which of the item's axes stands up (tip: 0 as built, 1 x up, 2 z up). */
-export interface Hold { item: CatalogName; yaw: number; tip: 0 | 1 | 2 }
+/**
+ * How the player turns what they hold: a yaw, which of the item's axes stands up (tip: 0 as built, 1 x up, 2 z
+ * up), and `slide`: the piece moved along its own x (after yaw and tip) by that many half-cells (h pitch / 2) off
+ * the point it is placed at, so a plank can reach out past a ledge's edge (Mason's Trial cantilevers): with the
+ * piece centred on the point, nothing could overhang more than half its length. Clamped so the piece still covers
+ * the point (BuildSession.slideMax); absent is 0.
+ */
+export interface Hold { item: CatalogName; yaw: number; tip: 0 | 1 | 2; slide?: number }
 
 /** The item's boxes turned by `tip` (swapping the up axis with x or z), still in h. */
 export function tipped(item: CatalogItem, tip: 0 | 1 | 2): StampBox[] {
@@ -213,7 +219,23 @@ export class BuildSession {
   /** The face under a ray: a body of the stopped world or the ground (levels stand on y = 0). */
   pick(r: Ray): Hit | null { return this.world().pick(r, 0); }
 
-  /** The ghost of `hold` placed at the face `hit` (face snap; placement.ts snapPlace). */
+  /**
+   * How many half-cells `hold`'s piece may slide either way: as many as keep the point it is placed at under
+   * the piece (its half-extent along its own x, tipped as held); 0 for what is not offered, a ball or a cube.
+   */
+  slideMax(hold: Hold): number {
+    const item = this.items.find((i) => i.name === hold.item);
+    if (!item || item.ball !== undefined) return 0;
+    return Math.floor(stampHalf(tipped(item, hold.tip))[0]! / (this.pitch / 2) + 1e-9);
+  }
+
+  /** `hold`'s slide, clamped to slideMax. */
+  slideOf(hold: Hold): number {
+    const s = Math.round(hold.slide ?? 0), m = s === 0 ? 0 : this.slideMax(hold);
+    return Math.max(-m, Math.min(m, s));
+  }
+
+  /** The ghost of `hold` placed at the face `hit` (face snap; placement.ts snapPlace), slid along its x by hold.slide. */
   ghost(hit: Hit, hold: Hold, snap: SnapOptions = {}): Ghost {
     const item = this.items.find((i) => i.name === hold.item);
     if (!item) return { boxes: [], parts: [], cost: 0, ok: false, why: `${hold.item} is not offered here`, clash: [] };
@@ -226,6 +248,9 @@ export class BuildSession {
     const { box, yaw } = snapPlace(hit, half, hold.yaw, { h, pitch: this.pitch }, world.boxes, snap);
     if (tilt) box.c[1] -= 2 * lone.half[1] * Math.cos((tilt * Math.PI) / 180) * h;
     const q = yawQuat(yaw), X = axisOf(q, 0), Z = axisOf(q, 2);
+    // The slide: whole half-cells along the piece's own x, so a snapped piece stays on its face's grid.
+    const slide = this.slideOf(hold), step = (h * this.pitch) / 2;
+    if (slide) for (const k of [0, 1, 2] as const) box.c[k] += X[k]! * slide * step;
     const out: Obb[] = [], parts: (PiecePart | BallPart)[] = [];
     const placed = this.opts.author ? {} : { placed: true as const }, material = item.material ?? this.material;
     for (const b of boxes) {

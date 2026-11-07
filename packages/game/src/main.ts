@@ -172,10 +172,10 @@ async function main() {
       const sheet = goals === 'off' ? undefined : lotSheetOf(c.def.id);
       if (!sheet) return null;
       const shown = shownGoals(sheet, goals === 'all');
-      const best = progress.best(c.def.id, c.hash);
+      const best = progress.best(c.def.id, c.baseHash);
       return shown.length || sheet.grades ? { sheet, goals: shown, before: best?.goals ?? [], open: sheetOpenAtLoad(sheetAt, (best?.stars ?? 0) > 0) } : null;
     },
-    opener: (c) => duel ? null : openerFor(c.def, inSeries(c.def.id), preaim, progress.best(c.def.id, c.hash) !== null),
+    opener: (c) => duel ? null : openerFor(c.def, inSeries(c.def.id), preaim, progress.best(c.def.id, c.baseHash) !== null),
     hooks: {
       // The URL follows the level, keeping the other keys; a line and a rack are the level's they were made for.
       loaded: (c) => {
@@ -194,7 +194,7 @@ async function main() {
       },
       banked: () => { banked = true; },
       ended: (c, score, d) => {
-        if (!c.def.custom) progress.record(c.def.id, c.hash, score, undefined, handle.goals.filter((g) => g.met).map((g) => g.id));
+        if (!c.def.custom) progress.record(c.def.id, c.baseHash, score, undefined, handle.goals.filter((g) => g.met).map((g) => g.id));
         const shots: Shot[] = d.session.inputs.map((x) => ({ ...x.shot }));
         ended = { level: c.def.id, hash: c.hash, custom: Boolean(c.def.custom), engine, adapter: adapterName, shots, banked, score };
       },

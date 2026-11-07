@@ -2,7 +2,7 @@
 // level's range, the seismogram is the field events the engine gets, the compass turns with the camera, and the
 // panel shows the energy against the budget and refuses Start over it.
 import { describe, expect, it } from 'vitest';
-import { compileLevel, type LevelDef, quakeCandidate, quakeEnergy } from '@tb/keystone';
+import { BuildSession, compileLevel, type LevelDef, quakeCandidate, quakeEnergy, retrofitCandidate } from '@tb/keystone';
 import { axisOnScreen, dialShot, dialStart, dialStep, dialStops, dialText, quakePanelHtml, seismogram } from '../src/quake-panel.ts';
 import { hudHtml, type HudState } from '../src/hud.ts';
 
@@ -72,5 +72,27 @@ describe('quake panel', () => {
     expect(hud).toContain('quake-panel');
     expect(hud).not.toMatch(/Power|Height/);
     expect(hud).toContain('Condemned down');
+  });
+});
+
+describe('a retrofit\'s quake panel (quake.fixed, M7b)', () => {
+  const retro = compileLevel(retrofitCandidate('RC-1')), fixed = { peak: 30, hz: 10, sec: 10, axis: 0 };
+
+  it('the dial is the level\'s quake and does not move', () => {
+    expect(dialStart(retro)).toEqual(fixed);
+    for (const f of ['peak', 'hz', 'sec', 'axis'] as const) for (const k of [1, -1] as const) expect(dialStep(retro, fixed, f, k)).toEqual(fixed);
+  });
+
+  it('shows the quake without dial buttons, what was placed against the budget, and Start', () => {
+    const html = quakePanelHtml(retro, fixed, 0, [], true);
+    expect(html).toContain('quake-panel fixed');
+    expect(html).not.toMatch(/class="qd"/);
+    expect(html).toMatch(/<b>0 \/ 200<\/b> braced/);
+    expect(html).toMatch(/quake-go"><kbd>Enter/);
+    expect(html).toMatch(/0\.30 g[\s\S]*1\.0 Hz[\s\S]*1\.0 s[\s\S]*0°/);
+    // A pier of three placed through the build tool, on open ground left of the first column.
+    const s = new BuildSession(retro.def), p = s.pitch * s.h;
+    expect(s.place(s.ghost({ body: -1, point: [-0.5 * p, 0, 0.5 * p], normal: [0, 1, 0], t: 0 }, { item: 'pier3', yaw: 0, tip: 0 }))).toBe(true);
+    expect(quakePanelHtml(compileLevel(s.def()), fixed, 0, [], true)).toMatch(/<b>3 \/ 200<\/b> braced/);
   });
 });
