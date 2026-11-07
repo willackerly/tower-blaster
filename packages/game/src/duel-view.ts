@@ -16,6 +16,7 @@ import type { Vec3 } from '@tb/engine-api';
 import { type CompiledLevel, type DuelDef, type DuelSide, inArc, launcherPos, type Player, selectGroup } from '@tb/keystone';
 import { type Orbit, viewProj } from '@tb/render/camera';
 import { MARK_HIT, MARK_SAVE } from '@tb/render';
+import { azFromYaw } from './aim.ts';
 import { rgbe, structureMarks } from './scene.ts';
 import { viewOf } from './view.ts';
 
@@ -42,6 +43,23 @@ export const DUEL_PITCH = 26;
  * 80 deg either side of its middle. The playtest's best duel frame was the swing passing about here.
  */
 export const DUEL_YAW_OFFSET = 30;
+
+/**
+ * The launcher's azimuth (0.5 deg) for a view at `yaw` in a duel: behind the camera (aim.ts azFromYaw), or with the
+ * table's lead (DuelDef.lead, degrees, to the view's right; PaceFeel.duelLead) that far round the ring from it.
+ */
+export function launcherAz(yaw: number, def: Pick<DuelDef, 'lead'> | null, on = true): number {
+  const lead = on && def ? def.lead ?? 0 : 0;
+  return (((azFromYaw(yaw) - 2 * lead) % 720) + 720) % 720;
+}
+
+/**
+ * Where the player's own blocks must stay on the turn view's screen (normalised device coordinates): inside the sides,
+ * and above the bottom edge's hint line (PT34: your own keep was cut by the desktop's hint bar and the screen's corner).
+ */
+export const OWN_IN_VIEW = { x: 0.96, bottom: -0.86 } as const;
+/** The widest screen the turn view treats as a desktop's (16:9 is 1.78; a phone held sideways is about 2.2). */
+export const DESKTOP_ASPECT = 2;
 
 /** The box (home pose, half extents) around structure bodies `idx`. */
 function boxOf(c: CompiledLevel, idx: ArrayLike<number>): [Vec3, Vec3] {
@@ -73,7 +91,37 @@ export function duelView(c: CompiledLevel, def: Pick<DuelDef, 'sides'>, player: 
   const isMine = new Set(mine), rest = Int32Array.from({ length: c.meta.n }, (_, i) => i).filter((i) => !isMine.has(i));
   const views = [1, -1].map((sign) => viewOf(c, aspect, { yaw: mid + sign * DUEL_YAW_OFFSET, pitch: DUEL_PITCH }, focus, rest));
   const x = (o: Orbit) => { const m = viewProj(o, aspect); return (m[0]! * own[0] + m[4]! * own[1] + m[8]! * own[2] + m[12]!) / (m[3]! * own[0] + m[7]! * own[1] + m[11]! * own[2] + m[15]!); };
-  return x(views[1]!) < x(views[0]!) - 1e-6 ? views[1]! : views[0]!;
+  const o = x(views[1]!) < x(views[0]!) - 1e-6 ? views[1]! : views[0]!;
+  // Then, on a desktop's screen, back off, 5% a try, until your own blocks are in view above the hint line
+  // (OWN_IN_VIEW; PT34): the rival stays in the middle, a little smaller (about a quarter less for D1). Phones keep
+  // their framing (upright below the HUD, faceView; sideways, wider than DESKTOP_ASPECT, the rival would shrink to a
+  // third of the screen's height), whose layout is PT30's.
+  if (aspect >= 1 && aspect <= DESKTOP_ASPECT) for (let k = 0; k < 30 && !ownInView(o, aspect, c, mine); k++) o.distance *= 1.05;
+  return o;
+}
+
+/** Whether every corner of the home boxes of bodies `idx` projects inside OWN_IN_VIEW (and in front of the eye). */
+export function ownInView(o: Orbit, aspect: number, c: CompiledLevel, idx: ArrayLike<number>): boolean {
+  const m = viewProj(o, aspect);
+  for (let j = 0; j < idx.length; j++) {
+    const i = idx[j]!;
+    for (let s = 0; s < 8; s++) {
+      const p = [0, 1, 2].map((k) => c.meta.home[3 * i + k]! + ((s >> k) & 1 ? 1 : -1) * c.meta.half[3 * i + k]!) as Vec3;
+      const w = m[3]! * p[0] + m[7]! * p[1] + m[11]! * p[2] + m[15]!;
+      if (!(w > 0)) return false;
+      const px = (m[0]! * p[0] + m[4]! * p[1] + m[8]! * p[2] + m[12]!) / w, py = (m[1]! * p[0] + m[5]! * p[1] + m[9]! * p[2] + m[13]!) / w;
+      if (Math.abs(px) > OWN_IN_VIEW.x || py < OWN_IN_VIEW.bottom) return false;
+    }
+  }
+  return true;
+}
+
+/**
+ * The view a decided duel ends on (PT34: the ending framed the winner's keep only): the whole table, both sides, as
+ * the level's classic framing has it. The turn view swings there at the end, as it does between turns.
+ */
+export function duelEndView(c: CompiledLevel, aspect = 1): Orbit {
+  return viewOf(c, aspect, undefined, undefined, undefined, { mode: 'classic' });
 }
 
 /**

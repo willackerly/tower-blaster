@@ -22,6 +22,24 @@ export function modeLine(d: Pick<Duel, 'def'>): string {
 }
 
 /**
+ * The duel's goal for the side to fire, in a line (PT34: the match never said it): in Two Keeps the rival's king to
+ * topple and your own to protect, by the marks their stones carry (the crosshair ⌖ and the shield ⛨, duel-view.ts
+ * duelMarks); in Heraldry what a block down scores, in the inks.
+ */
+export function goalHtml(d: Pick<Duel, 'def' | 'turn'>): string {
+  const me = d.def.sides[d.turn], them = d.def.sides[1 - d.turn]!, ink = (side: typeof me, text: string) => `<b style="color:${css(side.ink)}">${esc(text)}</b>`;
+  return d.def.ruleset === 'keeps'
+    ? `Topple ${ink(them, `${them.name}'s ⌖ king`)} · protect your ${ink(me, '⛨ king')}`
+    : `Knock down ${ink(them, them.name.toLowerCase())} +1 · your ${ink(me, me.name.toLowerCase())} −1`;
+}
+
+/** Where the side to fire fires from, in the table's own terms (PT34: west and east mean nothing on a plain field). */
+export function fromWhere(d: Pick<Duel, 'def'>, k: 0 | 1): string {
+  const me = d.def.sides[k], them = d.def.sides[1 - k]!;
+  return d.def.ruleset === 'keeps' ? `from behind the ${me.name.toLowerCase()} keep` : `at the ${them.name.toLowerCase()} face`;
+}
+
+/**
  * The HUD block that replaces the objective rows in a duel. `refusal`: why the shot aimed now would be refused.
  * `az`: the launcher's azimuth at the view now (aim.ts azFromYaw); outside the player to fire's arc, the block says
  * which way to drag to reach it (duel-view.ts turnCue), on a mouse or two fingers on a touch screen (body.kg-touch).
@@ -37,14 +55,15 @@ export function duelHudHtml(d: Duel, refusal: Refusal = null, az: number | null 
     return `<div class="row duel-side${on ? ' on' : ''}"><span><i class="ink" style="background:${css(side.ink)}"></i>${esc(side.name)}${on ? ' ◂' : ''}</span><span>${measure} · ${st.shotsLeft} shot${st.shotsLeft === 1 ? '' : 's'} left</span></div>`;
   }).join('');
   const answer = !d.result.over && keeps && d.answering === d.turn && d.sides[1 - d.turn]!.fellOn === null && d.sides[d.turn]!.fellOn !== null;
-  const turn = d.result.over ? '' : `<div class="row"><span class="small">${esc(def.sides[d.turn].name)} ${answer ? 'answers' : 'to fire'}, from the ${sideOf(def.sides[d.turn].arc)}</span></div>`;
+  const turn = d.result.over ? '' : `<div class="row"><span class="small">${esc(def.sides[d.turn].name)} ${answer ? 'answers' : 'to fire'}, ${esc(fromWhere(d, d.turn))}</span></div>`;
+  const goal = d.result.over ? '' : `<div class="row duel-goal"><span class="small">${goalHtml(d)}</span></div>`;
   const side = def.sides[d.turn], cue = az !== null && !d.result.over && d.shooter === null ? turnCue(side.arc, az) : null;
   const arrow = cue === 'right' ? '▸' : '◂';
   const why = cue
     ? `<div class="bad small turn-cue"><span class="kg-desk">Drag ${cue} ${arrow}</span><span class="kg-tch">Two fingers ${cue} ${arrow}</span> to turn to ${esc(side.name)}'s side</div>`
     : refusal && refusal.why === 'arc' ? `<div class="bad small">${esc(refusal.message)}</div>`
     : ownAim && keeps ? `<div class="bad small own-aim">That's ${esc(side.name)}'s own keep</div>` : '';
-  return `<div class="row"><span class="small">${modeLine(d)}</span></div>${rows}${turn}${why}`;
+  return `<div class="row"><span class="small">${modeLine(d)}</span></div>${goal}${rows}${turn}${why}`;
 }
 
 /**
@@ -64,7 +83,7 @@ export function handoffText(d: Duel, touch: boolean): { head: string; foot: stri
  * last shot's points too (scoreFloatHtml), since the card covers the middle of the screen where they would float.
  */
 export function handoffHtml(d: Duel, touch: boolean): string {
-  const { head, foot } = handoffText(d, touch), ink = css(d.def.sides[d.turn].ink), tally = d.def.ruleset === 'heraldry' ? scoreFloatHtml(d) : keepTallyHtml(d);
+  const { head, foot } = handoffText(d, touch), ink = css(d.def.sides[d.turn].ink), tally = shotSummaryHtml(d);
   const last = tally ? `<div class="tally">${esc(d.def.sides[d.lastShot!.player].name)}'s shot: ${tally}</div>` : '';
   return `<div class="band" style="border-color:${ink}">${last}<div class="head" style="color:${ink}">${esc(head)}</div><div class="foot">${esc(foot)}</div></div>`;
 }
@@ -95,6 +114,17 @@ export function scoreFloatHtml(d: Duel): string {
   return `${parts} <b>= ${sign(t.points)}</b>`;
 }
 
+/**
+ * What the last settled shot did, for the hand-over card and the result card: every shot gets a line (PT34: a shot
+ * that dropped nothing got none in Heraldry), in Two Keeps keepTallyHtml, in Heraldry its points or "nothing down".
+ * Empty before the first shot settles.
+ */
+export function shotSummaryHtml(d: Duel): string {
+  if (!d.lastShot) return '';
+  if (d.def.ruleset === 'keeps') return keepTallyHtml(d);
+  return scoreFloatHtml(d) || 'nothing down <b>= 0</b>';
+}
+
 /** The duel's result card: the winner (or a draw) and why, each side's numbers, Rematch (the other side starts) and Again (the same start). */
 export function duelResultHtml(d: Duel): string {
   const r = d.result, def = d.def;
@@ -105,9 +135,13 @@ export function duelResultHtml(d: Duel): string {
     const st = d.sides[k]!;
     return `<div class="line" style="opacity:1;animation:none"><span><i class="ink" style="background:${css(side.ink)}"></i>${esc(side.name)}</span><span>${def.ruleset === 'keeps' ? `${pct(st.share)} standing${st.kingDown ? ', king down' : ''}` : ptsText(st.points)}</span></div>`;
   }).join('');
+  // The last shot is summarised here, as every other is on the hand-over card (PT34: it never was).
+  const t = d.lastShot, summary = shotSummaryHtml(d);
+  const last = t && summary ? `<div class="duel-last small">${esc(def.sides[t.player].name)}'s last shot: ${summary}</div>` : '';
   return `
     <div class="name" style="color:${ink}">${head}</div>
     <div class="sub">${esc(DUEL_NAMES.rulesets[def.ruleset])} · ${esc(r.why)} · ${d.log.length} shot${d.log.length === 1 ? '' : 's'}</div>
+    ${last}
     ${lines}
     <div class="actions"><button data-act="rematch" class="primary"><kbd>R</kbd> Rematch</button><button data-act="again">Same start</button></div>`;
 }
@@ -121,6 +155,11 @@ export const DUEL_CSS = `
   .duel-handoff.show { display: flex; animation: duel-fade 0.25s ease-out; }
   @keyframes duel-fade { from { opacity: 0; } to { opacity: 1; } }
   .duel-handoff .band { width: 100%; padding: 18px 16px; box-sizing: border-box; text-align: center; background: rgba(20, 24, 33, 0.86); border-top: 3px solid; border-bottom: 3px solid; font: 14px/1.45 system-ui, sans-serif; color: #e8ebf2; }
+  /* A phone's hand-over card is opaque (PT34: the rack showed through the band, which sits over the docked tray) and dims the table more. */
+  body.kg-touch .duel-handoff { background: rgba(12, 15, 22, 0.72); }
+  body.kg-touch .duel-handoff .band { background: rgb(20, 24, 33); }
+  .kg-result .duel-last { margin: 4px 0 8px; color: #c9cfdb; }
+  .kg-hud .duel-goal b { font-weight: 700; }
   .duel-handoff .head { font: 800 32px/1.2 system-ui, sans-serif; letter-spacing: 0.02em; }
   .duel-handoff .foot { margin-top: 6px; color: #c9cfdb; }
   .duel-handoff .tally { margin-bottom: 6px; font-weight: 700; font-size: 16px; }

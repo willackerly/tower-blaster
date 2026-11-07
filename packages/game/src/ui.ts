@@ -280,14 +280,21 @@ export const HELP_BUDGET = 80;
 /** Every control, for the game page's ? (and the viewer's help under Keystone rules, which has room). */
 export const GAME_KEYS = 'hover: aim · click: fire · drag: orbit (the launcher follows you) · right-drag: pan · wheel: zoom · <kbd>1</kbd>–<kbd>4</kbd> ammo · <kbd>Q</kbd>/<kbd>E</kbd> power · <kbd>W</kbd>/<kbd>S</kbd> launcher up and down · hold <kbd>Space</kbd>: fast · <kbd>K</kbd> skip to the settle · <kbd>F</kbd> fire the first shot (when offered) · <kbd>B</kbd> bank (outcome levels) · <kbd>T</kbd> freeze and resume (Bullet Time levels) · <kbd>U</kbd> or <kbd>Ctrl</kbd>+<kbd>Z</kbd> undo the last shot · <kbd>R</kbd> restart · <kbd>N</kbd>/<kbd>P</kbd> level · <kbd>M</kbd> mute';
 
+/**
+ * A Siege Table duel's hint line and keys (PT34): no undo and no restart in a hot-seat match, whose turns are the two
+ * players'; R is the result card's Rematch.
+ */
+export const DUEL_HELP = 'click: fire · drag: orbit · wheel: zoom · <kbd>?</kbd> keys';
+export const DUEL_KEYS = 'hover: aim · click: fire · drag: orbit (the launcher follows you) · right-drag: pan · wheel: zoom · <kbd>1</kbd>–<kbd>4</kbd> ammo · <kbd>Q</kbd>/<kbd>E</kbd> power · <kbd>W</kbd>/<kbd>S</kbd> launcher up and down · hold <kbd>Space</kbd>: fast · <kbd>K</kbd> skip to the settle · <kbd>R</kbd> rematch (once the duel is over) · <kbd>M</kbd> mute';
+
 /** The help line on a touch screen (hud.ts, where the docked HUD shows it above its tray until the first shot). */
 export { TOUCH_HELP };
 
 /**
  * The game page's help panel: the desktop hint line, or every key once `?` (or its button) opens them,
- * and the touch line on a touch screen (GAME_CSS picks by body.kg-touch).
+ * and the touch line on a touch screen (GAME_CSS picks by body.kg-touch). In a duel, its own (DUEL_HELP, DUEL_KEYS).
  */
-export const helpHtml = (all: boolean) => `<span class="kg-desk">${all ? `${GAME_KEYS} <button data-act="keys">fewer</button>` : GAME_HELP.replace('<kbd>?</kbd> keys', '<button data-act="keys"><kbd>?</kbd> keys</button>')}</span><span class="kg-tch">${TOUCH_HELP}</span>`;
+export const helpHtml = (all: boolean, duel = false) => `<span class="kg-desk">${all ? `${duel ? DUEL_KEYS : GAME_KEYS} <button data-act="keys">fewer</button>` : (duel ? DUEL_HELP : GAME_HELP).replace('<kbd>?</kbd> keys', '<button data-act="keys"><kbd>?</kbd> keys</button>')}</span><span class="kg-tch">${TOUCH_HELP}</span>`;
 
 /** The help panel as the page opens: the hint line (helpHtml(false)). */
 export const HELP_HTML = helpHtml(false);

@@ -9,7 +9,7 @@ import { type CastPlay, castPlay, type CompiledLevel, compileLevel, DUELS, duelL
 import { limitProblems } from '@tb/engine-api';
 import { createDevice, isSoftwareAdapter } from '@tb/gpu';
 import { driverOptions, engineKind, makeEngine, makeMasonEngine } from './engines.ts';
-import { type DuelOutcome, duelOutcome, noviceDuel } from './duel-bot.ts';
+import { type DuelOutcome, duelOutcome, noviceDuel, type NoviceTurn, swappedOrder } from './duel-bot.ts';
 
 export interface CastHandle {
   status: 'loading' | 'ready' | 'error';
@@ -41,7 +41,7 @@ export interface CastHandle {
    * One novice Siege Table duel (duel-bot.ts noviceDuel: the agent playtest's bot) on a fresh engine built as the game
    * builds the table's level for `first`: PT5's balance on this engine (agent playtest round 2: the GPU solver).
    */
-  duel(id: string, first: Player, seed: number, aspect?: number): Promise<DuelOutcome & { ms: number }>;
+  duel(id: string, first: Player, seed: number, aspect?: number, opts?: DuelProbe): Promise<DuelOutcome & { ms: number; mirror: number; shots: DuelShot[] }>;
 }
 
 export interface RestReport { presettle: number; steps: number; maxMove: number; topDrop: number; settle: { maxMove: number; fell: number }; limits: string[]; ms: number }
@@ -50,6 +50,15 @@ declare global { interface Window { __cast: CastHandle } }
 
 const log = document.getElementById('log')!;
 const notReady = async (): Promise<never> => { throw new Error('the cast page is not ready'); };
+/**
+ * A probe duel (PT22): `turns` stops after that many shots; `swap` trades the sides' parts in the part list (duel-bot.ts
+ * swappedOrder); `rivalOnly` aims only clicks on rival blocks (duel-bot.ts NoviceOptions).
+ */
+export interface DuelProbe { turns?: number; swap?: boolean; rivalOnly?: boolean }
+/** One shot of a probe duel as it crosses to node: who fired, the referee's tally and the kings after it. */
+export interface DuelShot { player: Player; rival: number; own: number; kingsDown: [boolean, boolean] }
+const duelShot = (t: NoviceTurn): DuelShot => ({ player: t.player, rival: t.tally?.rival ?? 0, own: t.tally?.own ?? 0, kingsDown: t.kingsDown });
+
 const handle: CastHandle = { status: 'loading', adapter: '', software: false, engine: '', play: notReady, rest: notReady, rube: notReady, wave: notReady, mason: notReady, duel: notReady };
 window.__cast = handle;
 
@@ -116,11 +125,15 @@ async function main() {
       return { ...v, limits: limitProblems(e.health ? await e.health() : null, e.info.name), ms: performance.now() - t0 };
     } finally { e.dispose(); }
   };
-  handle.duel = async (id, first, seed, aspect = 1.6) => {
-    const def = DUELS.find((d) => d.id === id);
-    if (!def) throw new Error(`no duel ${id}: ${DUELS.map((d) => d.id).join(', ')}`);
+  handle.duel = async (id, first, seed, aspect = 1.6, opts = {}) => {
+    const table = DUELS.find((d) => d.id === id);
+    if (!table) throw new Error(`no duel ${id}: ${DUELS.map((d) => d.id).join(', ')}`);
+    const def = opts.swap ? swappedOrder(table) : table;
     const e = makeEngine(kind, compileLevel(duelLevel(def, first)), device), t0 = performance.now();
-    try { return { ...duelOutcome(await noviceDuel(e, def, first, seed, aspect)), ms: performance.now() - t0 }; } finally { e.dispose(); }
+    try {
+      const r = await noviceDuel(e, def, first, seed, aspect, { ...(opts.turns ? { turns: opts.turns } : {}), ...(opts.rivalOnly ? { rivalOnly: true } : {}) });
+      return { ...duelOutcome(r), ms: performance.now() - t0, mirror: r.mirror, shots: r.turns.map(duelShot) };
+    } finally { e.dispose(); }
   };
   handle.status = 'ready';
   log.textContent = `${handle.adapter} (${kind}): ready`;
