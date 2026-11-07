@@ -33,7 +33,28 @@ export function editHtml(e: EditController | null, keys = true, run = false): st
     + (e.tool === 'place' && e.session.slideMax(e.hold) > 0 ? `<button type="button" data-a="slide" data-d="-1" title="Move the piece back along its length, off the point">Slide back${k('[')}</button><button type="button" data-a="slide" data-d="1" title="Move the piece out along its length, so it can reach past an edge">Slide out${k(']')}</button>` : '')
     + `<button type="button" data-a="undo"${e.session.canUndo ? '' : ' disabled'}>Undo${k('Z')}</button><button type="button" data-a="clear">Clear</button></div>`
     + `<label class="snap"><input type="checkbox" name="snap"${e.snap ? ' checked' : ''}> snap to faces and the grid${keys ? '<span class="kg-desk"> (Alt: off while held)</span>' : ''}</label>`
+    + fusesHtml(e)
     + `<div class="out${e.ghost && !e.ghost.ok ? ' warn' : ''}">${esc(e.status())}</div>`;
+}
+
+const ORD = ['1st', '2nd', '3rd', '4th', '5th', '6th', '7th', '8th'];
+
+/**
+ * A domino-fuse level's lanes as built (M5b; EditController.laneReport): each lane's dominoes, when it fires and in
+ * what order (lanes within 0.05 s share a place). Nothing on other levels.
+ */
+export function fusesHtml(e: EditController): string {
+  const rep = e.laneReport();
+  if (!rep.length) return '';
+  const times = [...new Set(rep.flatMap((r) => (r.seconds === null ? [] : [Math.round(r.seconds * 20)])))].sort((a, b) => a - b);
+  const rows = rep.map((r) => {
+    const what = r.dominoes === 0 ? '<span class="warn">no fuse: its row stands</span>'
+      : !r.reaches ? `${r.dominoes} dominoes, <span class="warn">short of the socket</span>`
+      : r.seconds === null ? `${r.dominoes} dominoes, <span class="warn">broken</span>`
+      : `${r.dominoes} dominoes · ${r.seconds.toFixed(1)} s · fires ${ORD[times.indexOf(Math.round(r.seconds * 20))] ?? ''}`;
+    return `<div class="lane" data-lane="${r.lane}"><b>Lane ${r.lane + 1}</b> ${what}</div>`;
+  }).join('');
+  return `<div class="fuses" title="Each lane's fuse burns about 0.2 s a domino on a straight, a little faster round a bend">${rows}</div>`;
 }
 
 /** Fills el (a details panel) and calls act for its controls; show redraws it. */

@@ -19,6 +19,7 @@ Agent playtest round 2 (`docs/game/agent-playtest-2.md`) found that **the new mo
   |---|---|---|---|---|---|---|
   | shot | yes | yes | yes | yes | yes | (the shot) |
   | fuse | no | no | no | yes | no | the Timeline's **Plunger** (Enter) |
+  | fuse, domino fuses (F6 on) | no | no | no | yes | yes | the HUD's **Light the fuses** (key F): no Timeline, the dominoes are the delays |
   | quake | no | no | no | no | no | the designer's **Start the quake** (Enter) |
   | rube | no | no | no | no | as Run | **Run** |
 
@@ -38,7 +39,7 @@ Agent playtest round 2 (`docs/game/agent-playtest-2.md`) found that **the new mo
   - `MODE_CARDS[mode]` then changes the sub line, rows, stamp, points and gold, and can add a `tip` after the reason:
     - **Rube Lab:** the sub line is "parts 2 / par 2". Rows are Bell (rung / not rung) and Parts (used / par). There are no points lines or total (a contraption's one plunger is no stroke) and no gold badge. A failed run is stamped NOT RUNG, with the tip "change the build and Run again".
     - **Aftershock:** the sub line is "1 quake · energy 151 J". A cleared round is stamped "2/2 CONDEMNED · HERITAGE SAFE". The points lines were already Condemned and Heritage. The tip is "try a stronger or longer quake, or another axis".
-    - **Fuse & Fold:** the sub line reads "folded" and adds the spill. The fold reasons come from the shared `failReason`.
+    - **Fuse & Fold:** the sub line reads "folded" and adds the spill. The fold reasons come from the shared `failReason`; on a domino-fuse level a misfire comes first ("2 columns never cut: a fuse did not reach its socket").
   - The words are a first draft from the playtest notes. The Fuse & Fold, Aftershock and Rube Lab threads own them.
 
 ## Option

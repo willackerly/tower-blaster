@@ -6,7 +6,7 @@
 // and which start verb it has (hudProfile), and what its result card says (cardModel). hud.ts draws both.
 // A mode thread changes its mode's content here (PROFILES, MODE_CARDS); the mechanism is the same for all.
 // keystone.modeui=0 draws the projectile HUD and card for every mode, as before.
-import { HERITAGE_LOST, type LevelDef, type LevelScore, type Objective } from '@tb/keystone';
+import { HERITAGE_LOST, isFuseLevel, type LevelDef, type LevelScore, type Objective } from '@tb/keystone';
 
 /** How a level is played: aimed shots (every series before the new modes), or one of the modes with a panel of its own. */
 export type PlayMode = 'shot' | 'fuse' | 'quake' | 'rube';
@@ -50,8 +50,11 @@ const PROFILES: Record<PlayMode, Omit<HudProfile, 'mode'>> = {
 };
 
 /** The HUD profile of a level's mode. */
-export function hudProfile(def: Pick<LevelDef, 'rube' | 'objective'>): HudProfile {
+export function hudProfile(def: Pick<LevelDef, 'rube' | 'objective' | 'build' | 'charges'>): HudProfile {
   const mode = playMode(def);
+  // A domino-fuse level (M5b) has no Timeline panel: the dominoes are the delays, and the HUD's Light the fuses (key F)
+  // is the start, so its opener is the plunger itself (keystone fuseGo), never a pre-aimed answer.
+  if (mode === 'fuse' && isFuseLevel(def as LevelDef)) return { mode, ...PROFILES.fuse, opener: true, start: 'Light the fuses' };
   return { mode, ...PROFILES[mode] };
 }
 
@@ -69,6 +72,8 @@ export interface CardFacts {
   spill?: number;
   /** Energy fired over the round, J (Aftershock's star metric). */
   energy?: number;
+  /** Fold levels: plunger charges whose column still stands (a domino fuse that never reached its socket, M5b). */
+  misfires?: number;
 }
 
 /** One of a mode's own card rows: a fact, not points. */
@@ -111,6 +116,7 @@ export function failReason(def: Pick<LevelDef, 'objective'>, score: LevelScore, 
     case 'hold': return 'A crown fell: every crown has to stay up';
     case 'quake': return `${standing} of ${plural(f.crownsTotal, 'condemned tower')} still standing`;
     case 'fold':
+      if (f.misfires) return `${plural(f.misfires, 'column')} never cut: a fuse did not reach its socket`;
       if (f.collapse < o.min) return `${pct(f.collapse)} folded, ${pct(o.min)} needed`;
       return `${pct(f.spill ?? 0)} spilled out of the lot, at most ${pct(o.spillMax)} allowed`;
     case 'bell': return 'The bell did not ring';

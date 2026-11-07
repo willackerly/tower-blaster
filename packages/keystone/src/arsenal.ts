@@ -22,19 +22,25 @@
 import { blastArea, type BodyDesc, checkBlast, type InputEvent, type ShapeDesc, type Snapshot, type SpawnEvent, type Vec3 } from '@tb/engine-api';
 import { boundingRadius } from '@tb/geom';
 import {
-  BUILTIN_WEAPONS, chargeProblems, checkWeapon, loadIssues, type GrenadeBlast, thrownProblems, WeaponSpecError, type GrenadeSpec, type GrenadeWorld, type MunitionSpec, nominalYield, scaleWeapon, SHELL_FRICTION, SHELL_RESTITUTION, type ShellSpec,
-  type WeaponLoad, type WeaponScale, type WeaponSpec, type WeaponTier, WeaponRuntime, weaponBudget, type YieldFill,
+  BUILTIN_CHARGES, BUILTIN_WEAPONS, chargeProblems, checkWeapon, loadIssues, type GrenadeBlast, thrownProblems, WeaponSpecError, type GrenadeSpec, type GrenadeWorld, type MunitionSpec, nominalYield, scaleWeapon, SHELL_FRICTION, SHELL_RESTITUTION, type ShellSpec,
+  type Trigger, type WeaponLoad, type WeaponScale, type WeaponSpec, type WeaponTier, WeaponRuntime, weaponBudget, type YieldFill,
 } from '@tb/weapons';
 import type { CompiledLevel } from './level.ts';
 import { materialId } from './materials.ts';
 import { chargeWeaponOf, grenadeShell, type ItemSpec, itemRef, levelWeapon, type RackItem, weaponOf } from './rack.ts';
+import { foldProp } from './rules.ts';
 import { MAX_CHARGES, type PlungerShot, pullEnergy } from './shots.ts';
 
-/** The commonest structure block (by material and size; the first such body on a tie), or null for an empty level. */
+/**
+ * The commonest structure block (by material and size; the first such body on a tie), or null for an empty level. A
+ * fold level's props (rules.ts foldProp: a fuse's lead, run and socket, M5b) do not count: its charges scale to its
+ * building, however many dominoes the player lays (a 2 x 2 tower has 24 rods; two lanes of fuse outnumber them).
+ */
 export function levelBlock(c: CompiledLevel): { index: number; mass: number; half: [number, number, number] } | null {
   const m = c.meta, count = new Map<string, number>();
   let best = -1, bestN = 0;
   for (let i = 0; i < m.n; i++) {
+    if (foldProp(c, i)) continue;
     const key = `${m.material[i]} ${m.half[3 * i]} ${m.half[3 * i + 1]} ${m.half[3 * i + 2]}`, k = (count.get(key) ?? 0) + 1;
     count.set(key, k);
     if (k > bestN) { bestN = k; best = i; }
@@ -205,9 +211,12 @@ function inLevel(c: CompiledLevel, raw: WeaponSpec): WeaponSpec {
  * armed, and its nominal yield: each blast's against levelFill times how often it can go off, plus a
  * pull's energy (shots.ts pullEnergy) per removeTarget.
  */
-export interface ChargeArm { index: number; host: number; point: Vec3; arm: 'plunger' | 'start'; spec: WeaponSpec; yield: number }
+export interface ChargeArm { index: number; host: number; point: Vec3; arm: 'plunger' | 'start'; spec: WeaponSpec; yield: number; /** The body its moved trigger reads (ChargeDef.watch; default the host). */ watch: number }
 
 const chargeCache = new WeakMap<CompiledLevel, ChargeArm[]>();
+
+/** Whether a trigger is, or holds, a moved trigger. */
+const hasMoved = (t: Trigger): boolean => 'moved' in t || ('then' in t && t.then.some(hasMoved)) || ('any' in t && t.any.some(hasMoved));
 
 /** The level's charges resolved (ChargeArm), in LevelDef.charges order. Throws on the first that does not resolve (chargeIssues says why each). */
 export function levelCharges(c: CompiledLevel): ChargeArm[] {
@@ -241,8 +250,9 @@ function chargesOf(c: CompiledLevel): { arms: ChargeArm[]; issues: string[] } {
     const point: Vec3 = [p[0] * h, p[1] * h, p[2] * h];
     // Within the host's largest half-extent on every axis: inside it however it is turned (meta.half is its world box at rest).
     if (point.some((x) => Math.abs(x) > Math.max(...half) * (1 + 1e-9))) { issues.push(`${at}: at ${JSON.stringify(p)} h is outside its host`); return; }
+    if (d.watch !== undefined && (!Number.isInteger(d.watch) || d.watch < 0 || d.watch >= m.n)) { issues.push(`${at}: watch ${d.watch} is not a structure body (0 to ${m.n - 1})`); return; }
     const raw = chargeWeaponOf(c.def, d.weapon);
-    if (!raw) { issues.push(`${at}: weapon ${JSON.stringify(d.weapon)} is neither the level's nor a built-in charge (cutter, kicker, relay)`); return; }
+    if (!raw) { issues.push(`${at}: weapon ${JSON.stringify(d.weapon)} is neither the level's nor a built-in charge (${Object.keys(BUILTIN_CHARGES).join(', ')})`); return; }
     if (!('version' in raw)) { issues.push(`${at}: weapon ${d.weapon} is a GrenadeSpec; a charge is a WeaponSpec`); return; }
     let spec: WeaponSpec;
     try {
@@ -252,7 +262,8 @@ function chargesOf(c: CompiledLevel): { arms: ChargeArm[]; issues: string[] } {
     } catch (e) { issues.push(`${at}: ${(e as Error).message}`); return; }
     const fill = levelFill(c), b = weaponBudget(spec);
     const y = b.blasts.reduce((a, x) => a + x.count * nominalYield(fullBlast(x.blast), fill), 0) + b.targets * pullEnergy(c.frame);
-    arms.push({ index: i, host: d.host, point, arm: d.arm ?? 'plunger', spec, yield: y });
+    if (d.watch !== undefined && !spec.rules.some((r) => hasMoved(r.when))) { issues.push(`${at}: watch ${d.watch} needs a weapon with a moved trigger, and ${d.weapon} has none`); return; }
+    arms.push({ index: i, host: d.host, point, arm: d.arm ?? 'plunger', spec, yield: y, watch: d.watch ?? d.host });
   });
   return { arms, issues };
 }
@@ -322,7 +333,7 @@ export class Arsenal {
    */
   armStart(s: Snapshot, step: number, gone: Gone): InputEvent[] {
     const out: InputEvent[] = [];
-    for (const ch of levelCharges(this.level)) if (ch.arm === 'start') out.push(...this.charges.attach(ch.host, step, ch.spec, ch.point, { s, step, floor: step }));
+    for (const ch of levelCharges(this.level)) if (ch.arm === 'start') out.push(...this.charges.attach(ch.host, step, ch.spec, ch.point, { s, step, floor: step }, ch.watch));
     return this.charged(out, gone);
   }
 
@@ -334,7 +345,7 @@ export class Arsenal {
     const arms = levelCharges(this.level), out: InputEvent[] = [];
     for (const [i, delay] of shot.fuse) {
       const ch = arms[i]!;
-      out.push(...this.charges.attach(ch.host, step + delay, ch.spec, ch.point, { s, step: sStep, floor: step }));
+      out.push(...this.charges.attach(ch.host, step + delay, ch.spec, ch.point, { s, step: sStep, floor: step }, ch.watch));
     }
     return this.charged(out, gone);
   }

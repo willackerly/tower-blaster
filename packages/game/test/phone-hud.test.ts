@@ -1,7 +1,7 @@
 // The phone HUD and the result card's place and buttons (docs/game/phone-hud.md; agent playtest PT3 and PT4):
 // the pure parts. The browser checks are in phone-hud-e2e.test.ts.
 import { describe, expect, it } from 'vitest';
-import { AFTERSHOCK_LEVELS, B1, B3, compileLevel, FUSE_LEVELS, L1, L5, levelScore, LEVELS, BIG_LEVELS, outcomeScore, RUBE_LEVELS, U1, UNDERCUT_LEVELS, TRIAL_LEVELS, WAVE_LEVELS, MASON_LEVELS, CHORUS_LEVELS } from '@tb/keystone';
+import { AFTERSHOCK_LEVELS, B1, B3, compileLevel, FOLD_SERIES, L1, L5, levelScore, LEVELS, BIG_LEVELS, outcomeScore, RUBE_LEVELS, U1, UNDERCUT_LEVELS, TRIAL_LEVELS, WAVE_LEVELS, MASON_LEVELS, CHORUS_LEVELS } from '@tb/keystone';
 import { cardActions, failedRound, hudHtml, meterTicks, rackChips, resultHtml, slotAction, tallyHtml } from '../src/hud.ts';
 import { CARD_DELAY_S, layoutFor, layoutOf, MAX_CARD_DELAY_S } from '../src/layout.ts';
 import { seriesForward } from '../src/door.ts';
@@ -115,8 +115,8 @@ describe('the result card (PT4)', () => {
     expect(at(B3.id)).toEqual({ index: levels.findIndex((l) => l.id === LEVELS[0]!.id), label: 'Next: Chamber' });
     expect(at(L5.id)).toEqual({ index: levels.findIndex((l) => l.id === UNDERCUT_LEVELS[0]!.id), label: 'Next: Undercut' });
     expect(at(UNDERCUT_LEVELS.at(-1)!.id)).toEqual({ index: levels.findIndex((l) => l.id === RUBE_LEVELS[0]!.id), label: 'Next: Rube Lab' });
-    expect(at(RUBE_LEVELS.at(-1)!.id)).toEqual({ index: levels.findIndex((l) => l.id === FUSE_LEVELS[0]!.id), label: 'Next: Fuse & Fold' });
-    expect(at(FUSE_LEVELS.at(-1)!.id)).toEqual({ index: levels.findIndex((l) => l.id === AFTERSHOCK_LEVELS[0]!.id), label: 'Next: Aftershock' });
+    expect(at(RUBE_LEVELS.at(-1)!.id)).toEqual({ index: levels.findIndex((l) => l.id === FOLD_SERIES[0]!.id), label: 'Next: Fuse & Fold' });
+    expect(at(FOLD_SERIES.at(-1)!.id)).toEqual({ index: levels.findIndex((l) => l.id === AFTERSHOCK_LEVELS[0]!.id), label: 'Next: Aftershock' });
     expect(at(AFTERSHOCK_LEVELS.at(-1)!.id)).toEqual({ index: levels.findIndex((l) => l.id === WAVE_LEVELS[0]!.id), label: 'Next: Wavefront' });
     expect(at(WAVE_LEVELS.at(-1)!.id)).toEqual({ index: levels.findIndex((l) => l.id === MASON_LEVELS[0]!.id), label: "Next: Mason's Trial" });
     expect(at(MASON_LEVELS.at(-1)!.id)).toEqual({ index: levels.findIndex((l) => l.id === CHORUS_LEVELS[0]!.id), label: 'Next: Chorus' });

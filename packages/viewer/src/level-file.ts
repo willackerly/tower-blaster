@@ -81,10 +81,11 @@ export function parseLevelDef(v: unknown, where = 'level'): LevelDef {
 /** A charge on the structure (@tb/keystone ChargeDef), naming a built-in charge or a key of the level's weapons. */
 function charge(v: unknown, where: string): NonNullable<LevelDef['charges']>[number] {
   const o = object(v, where);
-  only(o, ['host', 'at', 'weapon', 'arm'], where);
+  only(o, ['host', 'at', 'weapon', 'arm', 'watch'], where);
   const c: NonNullable<LevelDef['charges']>[number] = { host: int(o.host, `${where}.host`), weapon: str(o.weapon, `${where}.weapon`) };
   if (o.at !== undefined) c.at = vec3(o.at, `${where}.at`);
   if (o.arm !== undefined) c.arm = oneOf(o.arm, ['plunger', 'start'], `${where}.arm`) as 'plunger' | 'start';
+  if (o.watch !== undefined) c.watch = int(o.watch, `${where}.watch`);
   return c;
 }
 

@@ -7,7 +7,7 @@
 // its own elements; the viewer calls it for rules=keystone, with hooks for its
 // dev panels (docs/design/viewer-superset.md, step C).
 import { type BodyDesc, type EngineHealth, limitsHit, type PhysicsEngine, type Vec3 } from '@tb/engine-api';
-import { armRefusal, type RackItem, type CompiledLevel, compileLevel, Driver, type DriverCheckpoint, Duel, type DuelDef, DEFAULT_TURN_SECONDS, type Feedback, type Footprint, type Goal, goalMet, type Player, type Grade, gradeOf, type LevelDef, type LevelScore, type LotSheet, type PerStep, playShots, rapidDue, roundFacts, RUBE_GO, runSession, scoringOf, selectFootprints, selectGroups, type Shot, isIcePiece, QUAKE, MasonTrial, masonWorlds, snapshotHash, TIER_NAMES } from '@tb/keystone';
+import { armRefusal, type RackItem, type CompiledLevel, compileLevel, Driver, type DriverCheckpoint, Duel, type DuelDef, DEFAULT_TURN_SECONDS, type Feedback, type Footprint, fuseGo, type Goal, goalMet, type Player, type Grade, gradeOf, type LevelDef, type LevelScore, type LotSheet, type PerStep, playShots, rapidDue, roundFacts, RUBE_GO, runSession, scoringOf, selectFootprints, selectGroups, type Shot, isIcePiece, QUAKE, MasonTrial, masonWorlds, snapshotHash, TIER_NAMES } from '@tb/keystone';
 import { DIAL_KEYS, type DialField, dialShot, dialStart, dialStep, type QuakeDial, quakePanelHtml, seismogram } from './quake-panel.ts';
 import { clampPitch, eyeOf, type Orbit, rayThrough, viewProj } from '@tb/render/camera';
 import type { EffectStats, Fx, FxOptions, PixelStats, Renderer, SnapshotSource } from '@tb/render';
@@ -1338,8 +1338,9 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     selected = nextSelection(c.def.rack, driver.session.rackLeft, retry ? selected : null);
     if (!c.def.rack.includes(QUAKE)) dial = null;
     else if (!retry || !dial) dial = dialStart(c);
-    // Rube Lab levels open with their plunger (the trapdoor's release): the HUD's Go button and key F fire it.
-    opener = env.opener?.(c) ?? (c.def.rube ? RUBE_GO : null);
+    // Rube Lab levels open with their plunger (the trapdoor's release), domino-fuse levels with theirs (every lane lit at
+    // once): the HUD's Go or Light button and key F fire it.
+    opener = env.opener?.(c) ?? (c.def.rube ? RUBE_GO : fuseGo(c.def));
     profile = feel.modeUi ? hudProfile(c.def) : undefined;
     // A mode that fires nothing from the scene drops the help's "click: fire" (ui.ts fireSpan).
     document.body.classList.toggle('kg-nofire', profile !== undefined && !profile.fire);
@@ -1677,6 +1678,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
       heritageBroken: s.heritageBroken.reduce((a, x) => a + x, 0), heritageTotal: c.meta.heritage.length,
       collapse: f?.collapse ?? s.liveCollapse,
       ...(f?.spill !== undefined ? { spill: f.spill } : {}), ...(f?.energy !== undefined ? { energy: f.energy } : {}),
+      ...(f?.misfires ? { misfires: f.misfires } : {}),
     };
   }
 
