@@ -3,7 +3,7 @@
 import { describe, expect, it } from 'vitest';
 import { B1, BIG_LEVELS, L1, L2, L3, seriesOf, type Shot, writeShots } from '@tb/keystone';
 import { compileLevel } from '@tb/keystone';
-import { DEFAULT_LEVEL, GAME_LOOK, levelRules, loadOptions, offscreenOf, onEngine, parseGameParams, withRules, writeLevelRules } from '../src/params.ts';
+import { buildOption, DEFAULT_LEVEL, GAME_LOOK, levelRules, loadOptions, offscreenOf, onEngine, parseGameParams, weaponTierOf, withRules, writeLevelRules } from '../src/params.ts';
 import { DEFAULT_FEEL } from '../src/pacing.ts';
 
 const parse = (search: string) => parseGameParams(new URLSearchParams(search));
@@ -11,7 +11,7 @@ const par = L1.solutions!.par as Shot[];
 
 describe('game URL keys', () => {
   it('a bare URL opens the slice\'s first level (B1) on the GPU solver in the maquette look, no juice and no line', () => {
-    expect(parse('')).toEqual({ level: B1, rack: null, rules: {}, engine: 'gpu', feel: DEFAULT_FEEL, look: GAME_LOOK, shots: null, duel: null, offscreen: false, offscreenSize: [640, 400], sound: 'collapse', impactsDb: 0 });
+    expect(parse('')).toEqual({ level: B1, rack: null, rules: {}, engine: 'gpu', feel: DEFAULT_FEEL, look: GAME_LOOK, shots: null, duel: null, offscreen: false, offscreenSize: [640, 400], weaponTier: null, sound: 'collapse', impactsDb: 0 });
     expect(DEFAULT_LEVEL).toBe('B1');
     expect(seriesOf(DEFAULT_LEVEL)).toBe(BIG_LEVELS);
     // The chamber levels stay one key away, with par scoring.
@@ -22,7 +22,7 @@ describe('game URL keys', () => {
 
   it('reads every key, a level in any case and the viewer\'s name for the GPU solver, and leaves other keys alone', () => {
     expect(parse(`?level=l3&engine=rapier&keystone.hitstop=1&keystone.slowmo=0&look=real&real.sunElevation=6&offscreen=1&scenario=S4&cam=1,2,3,0,0,9`)).toEqual({
-      level: L3, rack: null, rules: {}, engine: 'rapier', feel: { ...DEFAULT_FEEL, hitStop: true }, look: 'real', shots: null, duel: null, offscreen: true, offscreenSize: [640, 400], sound: 'collapse', impactsDb: 0,
+      level: L3, rack: null, rules: {}, engine: 'rapier', feel: { ...DEFAULT_FEEL, hitStop: true }, look: 'real', shots: null, duel: null, offscreen: true, offscreenSize: [640, 400], weaponTier: null, sound: 'collapse', impactsDb: 0,
     });
     expect(parse('?keystone.sound=synth&keystone.impacts=-6')).toMatchObject({ sound: 'synth', impactsDb: -6 });
     expect(parse('?keystone.sound=classic')).toMatchObject({ sound: 'classic' });
@@ -55,6 +55,17 @@ describe('game URL keys', () => {
     expect(() => parse('?keystone.rack=marble,nuke')).toThrow(/keystone.rack: nuke is not one of marble, cannonball/);
     expect(() => parse('?keystone.rack=marble,')).toThrow(/keystone.rack: an empty name is not one of/);
     expect(() => parse('?level=L1&keystone.rack=w-big')).toThrow(/keystone.rack: L1 has no weapons.big for w-big/);
+  });
+
+  it('keystone.tier sets the tier the rack\'s weapons must fit; absent, the device\'s quality tier, else high', () => {
+    expect(parse('?level=L1').weaponTier).toBeNull();
+    expect(weaponTierOf(parse('?level=L1').weaponTier)).toBe('high');
+    expect(parse('?level=L1&keystone.tier=low').weaponTier).toBe('low');
+    expect(weaponTierOf('mid')).toBe('mid');
+    // The device's quality tier when the URL says nothing; the URL wins.
+    expect(weaponTierOf(null, 'low')).toBe('low');
+    expect(weaponTierOf('high', 'low')).toBe('high');
+    expect(() => parse('?keystone.tier=huge')).toThrow(/keystone.tier must be one of low, mid, high: huge/);
   });
 
   it('opens a big level by id with its outcome scoring; a chamber level keeps par', () => {
@@ -113,7 +124,8 @@ describe('rule overrides', () => {
     writeLevelRules({ settle: 'v1' }, q);
     expect(levelRules(q)).toEqual({ settle: 'v1' });
     expect(parse('?level=L1&keystone.settle=v3').rules).toEqual({ settle: 'v3' });
-    expect(() => parse('?keystone.settle=v9')).toThrow(/keystone.settle must be v1 or v2 or v3: v9/);
+    expect(() => parse('?keystone.settle=v9')).toThrow(/keystone.settle must be v1 or v2 or v3 or v4: v9/);
+    expect(parse('?level=L1&keystone.settle=v4').rules).toEqual({ settle: 'v4' });
   });
   it('keystone.freeze gives the player a freeze budget: a custom level with its own hash; refuses a bad one', () => {
     const p = parse('?level=L1&keystone.freeze=3');
@@ -152,6 +164,16 @@ describe('rule overrides', () => {
   it('refuses bad values, naming the key', () => {
     expect(() => parse('?keystone.scoring=golf')).toThrow(/keystone.scoring must be par or outcome: golf/);
     expect(() => parse('?keystone.autobank=yes')).toThrow(/keystone.autobank must be 0 or 1: yes/);
+  });
+});
+
+describe('the build phase key (buildOption)', () => {
+  const bo = (search: string) => buildOption(new URLSearchParams(search));
+  it('leaves the default (on) to playKeystone when absent, reads 0 or 1, and refuses anything else', () => {
+    expect(bo('')).toEqual({});
+    expect(bo('?keystone.build=0')).toEqual({ build: false });
+    expect(bo('?keystone.build=1')).toEqual({ build: true });
+    expect(() => bo('?keystone.build=yes')).toThrow(/keystone.build must be 0 or 1/);
   });
 });
 

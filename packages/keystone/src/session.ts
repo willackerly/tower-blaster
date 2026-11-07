@@ -7,7 +7,7 @@ import { GRAVITY } from './materials.ts';
 import { itemYield, levelCharges, plungerYield } from './arsenal.ts';
 import { castStars, type CompiledLevel, type Scoring, scoringOf, settleOf } from './level.ts';
 import { collapseFraction, floorPotential_mJ, homePotential_mJ, homeSkyline, objectiveMet, type OutcomeFacts, outcomeScore } from './outcome.ts';
-import { crownDown, heritageBroken, leverage, levelScore, type LevelScore, type Observation, type Reductions, type SettleRule, type SettleState, settleCap, settleUpdate, type ShotOutcome, skyline, tier } from './rules.ts';
+import { ammoInFlight, crownDown, heritageBroken, leverage, levelScore, type LevelScore, levelTier, refereedScore, roundLeverage, type Observation, type Reductions, type SettleRule, type SettleState, settleCap, settleUpdate, type ShotOutcome, skyline } from './rules.ts';
 import type { RackItem } from './rack.ts';
 import { ammoKE, type PlungerShot, pullEnergy, type Shot, shotEvent } from './shots.ts';
 
@@ -37,6 +37,12 @@ export type Feedback =
   | { t: 'cut'; step: number; shot: number; outcome: ShotOutcome }
   | { t: 'levelEnd'; step: number; cleared: boolean; score: LevelScore };
 
+/** The highest a spawned body's centre can sit on the ground: a sphere's radius, a box's half diagonal (any face or edge down). */
+export function restHeight(spawn: SpawnEvent): number {
+  const sh = spawn.body.shape;
+  return sh.kind === 'sphere' ? sh.radius : Math.hypot(...sh.half);
+}
+
 /** Vertical speed of a crown (m/s, downward) that starts slow motion. */
 export const SLOWMO_VY = -1.5;
 
@@ -51,6 +57,10 @@ interface Live {
   ammo: RackItem;
   settle: SettleState;
   contact: boolean;
+  /** The highest the ammo's centre can sit on the ground, m (rules.ts ammoInFlight); 0 for a pull. */
+  rest: number;
+  /** Whether the ammo was in flight at the last observed step (ammoInFlight). */
+  inFlight: boolean;
   prevVel: Vec3 | null;
   tier: number;
   slowMo: boolean;
@@ -77,8 +87,10 @@ export class Session {
   readonly armed: number[] = [];
   /** Structure bodies taken out by charges (removeTarget), in order (Driver tells the session as it pushes them). */
   readonly cut: number[] = [];
-  /** Leverage of the shot in flight, for the HUD. */
+  /** Leverage of the shot in flight, or of the last shot once it closed (until the next goes in): the HUD's "this shot". */
   liveLeverage = 0;
+  /** The shot in flight's release so far, mJ (0 between shots): what roundLeverageNow adds to the closed shots. */
+  private liveDPE_mJ = 0;
   private live: Live | null = null;
   private ammoCount = 0;
   private ordinal = 0;
@@ -103,7 +115,14 @@ export class Session {
   readonly startPe_mJ: number;
   readonly floorPe_mJ: number;
 
-  constructor(readonly level: CompiledLevel, home?: Float64Array) {
+  /**
+   * A refereed round (a Siege Table duel, whose referee is Duel): the round ends as an outcome level
+   * would, but with refereedScore, no solo tally or stars (PT16).
+   */
+  readonly refereed: boolean;
+
+  constructor(readonly level: CompiledLevel, home?: Float64Array, opts: { refereed?: boolean } = {}) {
+    this.refereed = opts.refereed ?? false;
     this.home = (home ?? level.meta.home).slice(0, 3 * level.meta.n);
     this.startPe_mJ = homePotential_mJ(level, this.home);
     this.floorPe_mJ = floorPotential_mJ(level);
@@ -120,6 +139,15 @@ export class Session {
   collapse(pe_mJ: number): number { return collapseFraction(this.startPe_mJ, pe_mJ, this.floorPe_mJ); }
 
   get strokes() { return this.outcomes.length + (this.live ? 1 : 0); }
+
+  /**
+   * The round's leverage as it stands (roundLeverage over the closed shots and the one in flight, its
+   * release so far): what the HUD shows. Once the round ends it equals the card's (LevelScore.leverage).
+   */
+  roundLeverageNow(): number {
+    const L = this.live;
+    return roundLeverage(L ? [...this.outcomes, { ke: L.ke, yield: L.yield, dPE_mJ: this.liveDPE_mJ }] : this.outcomes);
+  }
   /**
    * Whether `ammo` can go in now: the round is open (aiming, or a shot running: rapid fire, which
    * cuts the shot in flight) and the rack still holds one. Whether a player may fire mid-shot is the
@@ -215,13 +243,14 @@ export class Session {
     const yieldJ = shot.ammo === 'plunger' ? plungerYield(this.level, shot) : itemYield(this.level, shot.ammo);
     const live = spawn ? body : -1;
     this.live = {
-      shot, spawnStep: step, body: live, ke, yield: yieldJ, mass: spawn ? massOf(spawn.body) : 0, ammo: shot.ammo, settle: { quietSince: null }, contact: false, prevVel: null, tier: 0, slowMo: false,
+      shot, spawnStep: step, body: live, ke, yield: yieldJ, mass: spawn ? massOf(spawn.body) : 0, ammo: shot.ammo, settle: { quietSince: null }, contact: false, rest: spawn ? restHeight(spawn) : 0, inFlight: spawn !== null, prevVel: null, tier: 0, slowMo: false,
       crownsBefore: this.crownDown.reduce((a, x) => a + x, 0), heritageBefore: this.heritageBroken.reduce((a, x) => a + x, 0),
     };
     this.inputs.push({ step, shot: recorded });
     this.watchIdx = Int32Array.from(spawn ? [...this.level.meta.crowns, ...this.level.meta.heritage, body] : [...this.level.meta.crowns, ...this.level.meta.heritage]);
     this.phase = 'running';
     this.liveLeverage = 0;
+    this.liveDPE_mJ = 0;
     out.push({ t: 'fired', step, ammo: shot.ammo, body: event?.kind === 'remove' ? event.id : spawn ? body : -1, ke });
     return { spawn, event, feedback: out };
   }
@@ -243,6 +272,8 @@ export class Session {
       ...(cut ? { cut: true as const } : {}),
     };
     this.outcomes.push(outcome);
+    this.liveLeverage = outcome.leverage;
+    this.liveDPE_mJ = 0;
     this.live = null;
     this.watchIdx = Int32Array.from([...m.crowns, ...m.heritage]);
     return { t: cut ? 'cut' : 'settled', step: o.step, shot: this.outcomes.length - 1, outcome };
@@ -272,7 +303,8 @@ export class Session {
         }
       }
       L.prevVel = v;
-    }
+      L.inFlight = ammoInFlight(c, L.contact, w.pos[3 * ak + 1]!, Math.hypot(...v), L.rest);
+    } else if (ak < 0) L.inFlight = false;
 
     for (let k = 0; k < nc; k++) {
       const p = pos(k);
@@ -287,14 +319,16 @@ export class Session {
       }
     }
 
-    this.liveLeverage = leverage(o.basePe_mJ - o.red.pe_mJ, L.ke + L.yield);
+    this.liveDPE_mJ = o.basePe_mJ - o.red.pe_mJ;
+    this.liveLeverage = leverage(this.liveDPE_mJ, L.ke + L.yield);
     this.liveCollapse = this.collapse(o.red.pe_mJ);
-    const t = tier(this.liveLeverage);
+    // Tiers against the level's gold line (levelTier): none on a level without one.
+    const t = levelTier(this.liveLeverage, c.def) ?? 0;
     if (t > L.tier) { L.tier = t; out.push({ t: 'tier', step, leverage: this.liveLeverage, tier: t }); }
     const total = o.red.impacts.reduce((a, x) => a + x, 0);
     if (total) out.push({ t: 'impacts', step, hist: o.red.impacts, total });
 
-    const s = settleUpdate(L.settle, o.red, L.spawnStep, this.settleRule, m.n, this.liveCollapse);
+    const s = settleUpdate(L.settle, o.red, L.spawnStep, this.settleRule, m.n, this.liveCollapse, L.inFlight);
     L.settle = s.state;
     if (!s.settled || (hold && o.step - L.spawnStep < settleCap(this.settleRule))) return out;
 
@@ -350,12 +384,11 @@ export class Session {
   outcomeFacts(): OutcomeFacts {
     const c = this.level, m = c.meta, last = this.lastSettle;
     const pe = last ? last.red.pe_mJ : this.startPe_mJ;
-    const fired = this.outcomes.reduce((a, o) => a + o.ke + o.yield, 0);
     const start = homeSkyline(c, this.home);
     return {
       met: this.objectiveDone,
       collapse: this.collapse(pe),
-      leverage: leverage(this.startPe_mJ - pe, fired),
+      leverage: roundLeverage(this.outcomes),
       comboMax: Math.max(0, ...this.outcomes.map((o) => o.crownsDown)),
       hasCrowns: m.crowns.length > 0,
       rackLeft: this.rackLeft.length,
@@ -371,7 +404,7 @@ export class Session {
 
   private end(step: number): Feedback {
     this.phase = this.objectiveDone ? 'cleared' : 'failed';
-    this.score = outcomeScore(this.outcomeFacts(), castStars(this.level), this.level.def.stars?.metric);
+    this.score = this.refereed ? refereedScore(this.outcomes) : outcomeScore(this.outcomeFacts(), castStars(this.level), this.level.def.stars?.metric);
     return { t: 'levelEnd', step, cleared: this.objectiveDone, score: this.score };
   }
 }

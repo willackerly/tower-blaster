@@ -1,8 +1,8 @@
 // Page-side drivers for the GPU physics tests (bundled by loadBundle).
 import { createDevice, sharedDevice, isSoftwareAdapter, readBuffer, type Readback } from '@tb/gpu';
-import { boundingRadius, groundManifold, NO_AXIS, quatNormalize, shapeManifold, spherePairs, supportArea, type Manifold as CpuManifold } from '@tb/geom';
+import { boundingRadius, groundManifold, NO_AXIS, quatNormalize, rotate, shapeManifold, spherePairs, supportArea, type Manifold as CpuManifold } from '@tb/geom';
 import { Body, BodyProps, field, Manifold, readField, readStruct, Shape, SolverBody, SolverContact, SolverRecord, writeStruct } from '@tb/schema';
-import type { BodyDesc, InputEvent, Quat, Vec3 } from '@tb/engine-api';
+import { type BodyDesc, type InputEvent, inertiaOf, massOf, type Quat, spawnedBodies, type Vec3 } from '@tb/engine-api';
 import { buildScenario } from '@tb/scenarios';
 import { bodiesAt } from '@tb/engine-api';
 import { ACTIVE_HEAD, AvbdSolver, Broadphase, Coloring, DEFAULT_DISPATCH, GpuAvbdEngine, type GpuEngineOptions, type GpuRestitutionStats, type HessianForm, ISLAND_BODY_BYTES, MAX_COLORS, Narrowphase, restitutionStatsOf } from '../src/index.ts';
@@ -1222,4 +1222,132 @@ export async function primalKernel(hessian: HessianForm, n: number, seed: number
   solver.destroy();
   for (const b of Object.values(B)) b.destroy();
   return { error: error?.message ?? null, bits, changed: bits.filter((b, k) => b !== before[k]).length, nonFinite, points, zeroRows };
+}
+
+/**
+ * A long run watched for a blow-up (s5-blowup-probe.test.ts, opt-in). Every step reads the bodies,
+ * the step's diagnostics and, with the energy cap on, the islands (labels and the solve's velocities, IslandBody.v/.w),
+ * and splits the step's change in semi-implicit Euler's invariant energy (host f64 from the f32 state) into the
+ * solve's (start to post-solve) and the pass's (post-solve to end), with the worst island excess over max(start,
+ * solve) (bounce.ts islandExcess's rule) and the body that gained most. Logs a row every `every` steps, every step in
+ * [from, to], and every step once the fastest body passes `thresh` m/s, stopping `after` steps past that.
+ */
+export async function watchRun(scene: SceneDesc, steps: number, params: Partial<AvbdParams>, o: { every: number; from: number; to: number; thresh: number; after: number }) {
+  const { device, adapter } = await sharedDevice();
+  const info = (adapter as GPUAdapter & { info?: GPUAdapterInfo }).info;
+  const adapterText = info ? `${info.vendor} | ${info.architecture} | ${info.device} | ${info.description}` : 'no adapter.info';
+  device.pushErrorScope('validation');
+  const e = new GpuAvbdEngine(params, { device });
+  await e.init(scene);
+  const inner = e as unknown as { n: number; parts: { solver: AvbdSolver } };
+  const islands = inner.parts.solver.restIslands;
+  const all = [...scene.bodies, ...spawnedBodies([...scene.inputs].sort((a, b) => a.step - b.step))];
+  const g = scene.gravity, h = scene.dt;
+  const energy = (i: number, x: ArrayLike<number>, q: ArrayLike<number>, v: ArrayLike<number>, w: ArrayLike<number>, vo = 3 * i, wo = 3 * i) => {
+    const m = massOf(all[i]!), I = inertiaOf(all[i]!);
+    const u = [0, 1, 2].map((k) => v[vo + k]! + g[k]! * h / 2);
+    const wb = rotate([-q[4 * i]!, -q[4 * i + 1]!, -q[4 * i + 2]!, q[4 * i + 3]!], [w[wo]!, w[wo + 1]!, w[wo + 2]!]);
+    return 0.5 * m * (u[0]! ** 2 + u[1]! ** 2 + u[2]! ** 2) + 0.5 * (I[0] * wb[0] ** 2 + I[1] * wb[1] ** 2 + I[2] * wb[2] ** 2)
+      - m * (g[0] * x[3 * i]! + g[1] * x[3 * i + 1]! + g[2] * x[3 * i + 2]!);
+  };
+  const sp = (v: ArrayLike<number>, o3: number) => Math.hypot(v[o3]!, v[o3 + 1]!, v[o3 + 2]!);
+  const lines: string[] = [];
+  let prev = await e.snapshot(), hit = -1;
+  const t0 = performance.now();
+  for (let k = 1; k <= steps; k++) {
+    e.step();
+    const s = await e.snapshot(), d = await e.diagnostics(), st = params.restitution ? await e.restitutionStats() : null;
+    const want = k % o.every === 0 || (k >= o.from && k <= o.to) || hit >= 0 || k === steps;
+    let vmax = 0, arg = -1, fast = 0;
+    for (let i = 0; i < s.count; i++) { const v = sp(s.linVel, 3 * i); if (v > vmax) { vmax = v; arg = i; } if (v > 5) fast++; }
+    if (hit < 0 && vmax > o.thresh) hit = k;
+    if (want || hit >= 0) {
+      const ran = !!st?.contacts && !!islands && prev.count === s.count;
+      const il = ran ? await readBuffer(device, islands!, s.count * ISLAND_BODY_BYTES) : null;
+      const iu = il ? new Uint32Array(il) : null, fl = il ? new Float32Array(il) : null, w = ISLAND_BODY_BYTES / 4;
+      let E0 = 0, Ep = 0, E1 = 0, best = -Infinity, bi = -1, vpsMax = 0, vpsArg = -1;
+      const isl = new Map<number, { e0: number; ep: number; e1: number; k: number; n: number }>();
+      for (let i = 0; i < s.count; i++) {
+        const e0 = i < prev.count ? energy(i, prev.pos, prev.rot, prev.linVel, prev.angVel) : 0;
+        const e1 = energy(i, s.pos, s.rot, s.linVel, s.angVel);
+        const ep = fl ? energy(i, s.pos, s.rot, fl, fl, i * w + 8, i * w + 12) : e1;
+        E0 += e0; Ep += ep; E1 += e1;
+        if (e1 - e0 > best) { best = e1 - e0; bi = i; }
+        if (fl) { const v = sp(fl, i * w + 8); if (v > vpsMax) { vpsMax = v; vpsArg = i; } }
+        if (iu) {
+          const t = isl.get(iu[i * w]!) ?? { e0: 0, ep: 0, e1: 0, k: 0, n: 0 };
+          t.e0 += e0; t.ep += ep; t.e1 += e1; t.n++;
+          t.k += 0.5 * massOf(all[i]!) * (sp(s.linVel, 3 * i) ** 2 + (i < prev.count ? sp(prev.linVel, 3 * i) ** 2 : 0));
+          isl.set(iu[i * w]!, t);
+        }
+      }
+      let worst = -Infinity, worstN = 0, biggest = 0;
+      for (const t of isl.values()) { const x = (t.e1 - Math.max(t.e0, t.ep)) / (t.k + 1e-6); if (x > worst) { worst = x; worstN = t.n; } biggest = Math.max(biggest, t.n); }
+      const bl = iu ? iu[bi * w]! : -1, bn = iu ? isl.get(bl)?.n ?? 0 : 0;
+      const bvPrev = bi < prev.count ? sp(prev.linVel, 3 * bi) : NaN, bvPs = fl ? sp(fl, bi * w + 8) : NaN, bvAfter = sp(s.linVel, 3 * bi);
+      lines.push(`${k} vmax ${vmax.toFixed(2)} @${arg} solvedVmax ${fl ? vpsMax.toFixed(2) : '-'} @${vpsArg} fast ${fast} pairs ${d.pairsRequired}${d.pairsRequired > d.maxPairs ? ' OVERFLOW' : ''}`
+        + ` bounced ${st?.contacts ?? -1} capped ${st?.capped ?? -1} alpha ${(st?.capAlpha ?? -1).toFixed(4)}`
+        + ` E ${E0.toFixed(1)} dSolve ${fl ? (Ep - E0).toFixed(2) : '-'} dPass ${fl ? (E1 - Ep).toFixed(2) : '-'} dStep ${(E1 - E0).toFixed(2)}`
+        + ` islands ${isl.size} biggest ${biggest} worstExcess ${iu ? worst.toExponential(2) : '-'} (n ${worstN})`
+        + ` gainer #${bi} +${best.toFixed(2)} J |v| ${bvPrev.toFixed(2)}>${bvPs.toFixed(2)}>${bvAfter.toFixed(2)} y ${s.pos[3 * bi + 1]!.toFixed(2)} island ${bl} (n ${bn})`);
+    }
+    prev = s;
+    if (hit >= 0 && k >= hit + o.after) break;
+  }
+  const wallMs = performance.now() - t0;
+  const final = await e.diagnostics();
+  const error = await device.popErrorScope();
+  e.dispose();
+  return { error: error?.message ?? null, adapterText, lines, hit, final, wallMs };
+}
+
+/**
+ * Runs a scene with `pushes` (step -> events) pushed just before that step, snapshotting every `every` steps and at
+ * the end (as simulateGpu). A push() that throws ends the run: its message is `pushError`, the snapshots are those
+ * taken until then. Init errors land in `initError`.
+ */
+export async function pushedRun(scene: SceneDesc, steps: number, params: Partial<AvbdParams>, opts: Omit<GpuEngineOptions, 'device'>, pushes: Array<[number, InputEvent[]]>, every = 0) {
+  const { device } = await sharedDevice();
+  device.pushErrorScope('validation');
+  const e = new GpuAvbdEngine(params, { ...opts, device });
+  const snaps: PlainSnapshot[] = [];
+  const take = async () => {
+    const s = await e.snapshot();
+    snaps.push({ step: e.stepIndex, pos: [...s.pos], rot: [...s.rot], linVel: [...s.linVel], angVel: [...s.angVel], awake: [...s.awake], ...(s.tier ? { tier: [...s.tier] } : {}) });
+  };
+  let initError: string | null = null, pushError: string | null = null;
+  try {
+    await e.init(scene);
+    await take();
+    for (let i = 0; i < steps; i++) {
+      for (const [at, events] of pushes) if (at === i) e.push(events);
+      e.step();
+      if (every && (i + 1) % every === 0 && i + 1 < steps) await take();
+    }
+    await take();
+  } catch (err) {
+    if (e.stepIndex === 0 && !snaps.length) initError = String((err as Error).message); else pushError = String((err as Error).message);
+  }
+  const error = await device.popErrorScope();
+  e.dispose();
+  return { error: error?.message ?? null, initError, pushError, snaps };
+}
+
+/** Runs `steps` steps, taking a checkpoint before step `at`; then restores it and runs to `steps` again. Both final snapshots. */
+export async function checkpointReplay(scene: SceneDesc, steps: number, at: number, params: Partial<AvbdParams> = {}, opts: Omit<GpuEngineOptions, 'device'> = {}) {
+  const { device } = await sharedDevice();
+  device.pushErrorScope('validation');
+  const e = new GpuAvbdEngine(params, { ...opts, device });
+  await e.init(scene);
+  const plain = async (): Promise<PlainSnapshot> => { const s = await e.snapshot(); return { step: e.stepIndex, pos: [...s.pos], rot: [...s.rot], linVel: [...s.linVel], angVel: [...s.angVel], awake: [...s.awake] }; };
+  let cp: ReturnType<GpuAvbdEngine['checkpoint']> | null = null;
+  for (let i = 0; i < steps; i++) { if (i === at) cp = e.checkpoint(); e.step(); }
+  const first = await plain();
+  cp!.restore();
+  for (let i = at; i < steps; i++) e.step();
+  const second = await plain();
+  cp!.dispose();
+  const error = await device.popErrorScope();
+  e.dispose();
+  return { error: error?.message ?? null, first, second };
 }

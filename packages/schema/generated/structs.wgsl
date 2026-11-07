@@ -18,7 +18,7 @@ struct Body {
   invMass: f32, // @12 0 for static
   rot: vec4f, // @16 unit quaternion (x, y, z, w)
   linVel: vec3f, // @32
-  flags: u32, // @44 bit 0 awake, bits 8-15 tier
+  flags: u32, // @44 bit 0 awake, bit 1 pinned (never wakes), bits 8-15 tier
   angVel: vec3f, // @48
   shape: u32, // @60 index into the shape table
 }
@@ -248,16 +248,18 @@ struct ColorParams {
 }
 
 // Restitution pass state per contact slot (allocated only while AvbdParams.restitution is on).
-// size 80 B, align 16
+// size 96 B, align 16
 struct RestSlot {
   vnTarget: vec4f, // @0 per point q: the normal velocity the pass raises it to (-e vn0 if it bounces, the solve's vn if it is a support)
   P: vec4f, // @16 per point q: the normal impulse the pass has applied there so far, N s (>= 0)
-  lin: vec3f, // @32 this round's linear impulse on body b, the sum of dP n (body a takes -lin)
+  lin: vec3f, // @32 this round's linear impulse on body b, the sum of dP n over the rows its anchors do not cut (the jam guard)
   flags: u32, // @44 bits 0-3: point q bounces; bits 4-7: point q is a support; bit 8 (ground slots): the body is in a bouncing manifold
   angB: vec3f, // @48 this round's angular impulse on body b, the sum of dP (rbw x n)
   b: u32, // @60 body b of the slot
   angA: vec3f, // @64 this round's angular impulse on body a, the sum of -dP (raw x n)
   split: u32, // @76 ground slots: the pass's manifolds the body is in (its mass split); 0 if it is not in the pass
+  linA: vec3f, // @80 this round's linear impulse on body a, the sum of -dP n over the rows its anchors do not cut
+  pad0: u32, // @92
 }
 
 // Per-body sleep bookkeeping (physics-gpu sleep.ts; GpuEngineOptions.sleep).

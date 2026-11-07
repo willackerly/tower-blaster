@@ -37,10 +37,16 @@ export async function launchChromium(options: Parameters<typeof chromium.launchS
   }
 }
 
+/**
+ * A browser page with WebGPU, or null if there is none (an error under REQUIRE_WEBGPU=1). The channel is
+ * opts.channel or TB_CHANNEL (channelOf); with one, a software adapter is an error under REQUIRE_WEBGPU=1 and a
+ * warning otherwise (softwareOnChannel).
+ */
 export async function openWebGPU(extraArgs: string[] = [], opts: { channel?: string; headless?: boolean } = {}): Promise<WebGPUSession | null> {
+  const channel = channelOf(opts);
   let browser: Browser, closeBrowser: () => Promise<void>;
   try {
-    ({ browser, close: closeBrowser } = await launchChromium({ args: [...WEBGPU_ARGS, ...extraArgs], headless: opts.headless ?? true, ...(opts.channel ? { channel: opts.channel } : {}) }));
+    ({ browser, close: closeBrowser } = await launchChromium({ args: [...WEBGPU_ARGS, ...extraArgs], headless: opts.headless ?? true, ...(channel ? { channel } : {}) }));
   } catch (e) {
     if (requireWebGPU()) throw e;
     return null;
@@ -66,7 +72,32 @@ export async function openWebGPU(extraArgs: string[] = [], opts: { channel?: str
     if (requireWebGPU()) throw new Error('WebGPU adapter unavailable in Chromium');
     return null;
   }
+  const mismatch = softwareOnChannel(channel, adapter);
+  if (mismatch) {
+    if (requireWebGPU()) { await closeBrowser(); throw new Error(mismatch); }
+    console.warn(`openWebGPU: ${mismatch}`);
+  }
   return { page, adapter, close: () => closeWithin([['browser', closeBrowser]], CLOSE_TIMEOUT_MS) };
+}
+
+/**
+ * The browser channel openWebGPU launches: opts.channel, else TB_CHANNEL (chrome on the Mac: the installed
+ * Chrome, so the real GPU), else none (Playwright's Chromium: SwiftShader where there is no GPU, as in CI).
+ * Before 2026-11-06 openWebGPU read only opts.channel, so suites that called it bare (physics-gpu's harness.ts
+ * among them) ran on SwiftShader with TB_CHANNEL=chrome set.
+ */
+export function channelOf(opts: { channel?: string } = {}, env: Record<string, string | undefined> = process.env): string | undefined {
+  return opts.channel || env.TB_CHANNEL || undefined;
+}
+
+/**
+ * Why a session is not what was asked for, or null: a channel asks for a real GPU, so a software adapter
+ * under one is an error (openWebGPU throws under REQUIRE_WEBGPU=1 and warns otherwise), not a run to label
+ * with the channel.
+ */
+export function softwareOnChannel(channel: string | undefined, adapter: AdapterSummary): string | null {
+  if (!channel || !isSoftwareAdapter(adapter)) return null;
+  return `channel ${channel} gave a software adapter (${adapter.vendor} ${adapter.architecture} ${adapter.description}), not a real GPU`;
 }
 
 /** CI sets REQUIRE_WEBGPU=1 so a missing adapter fails instead of skipping. */
@@ -94,5 +125,7 @@ export * from './observe.ts';
 export * from './teardown.ts';
 export * from './shard.ts';
 export * from './blast.ts';
+export * from './field.ts';
+export * from './pinned.ts';
 export * from './remove.ts';
 export * from './png.ts';

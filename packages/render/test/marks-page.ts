@@ -1,9 +1,9 @@
 // Page-side drivers for the engraved-mark tests (render-marks.test.ts): a row
-// of tinted cubes facing the camera, unmarked, marked hit and marked save, and
+// of tinted cubes facing the camera, unmarked, marked hit and marked save (or keep), and
 // the WGSL carving against its TypeScript twin (marks.ts).
 import { emptySnapshot, type BodyDesc, type Snapshot } from '@tb/engine-api';
 import { readBuffer, sharedDevice } from '@tb/gpu';
-import { engrave, lookAt, MARK_HIT, MARK_NONE, MARK_SAVE, MARKS_WGSL, markPoint, multiply, perspective, Renderer, SnapshotSource, type FrameParams, type V3 } from '../src/index.ts';
+import { engrave, lookAt, MARK_HIT, MARK_KEEP, MARK_NONE, MARK_SAVE, MARKS_WGSL, markPoint, multiply, perspective, Renderer, SnapshotSource, type FrameParams, type V3 } from '../src/index.ts';
 import { LOOKS } from './looks.ts';
 
 const FOV = 0.9;
@@ -35,6 +35,8 @@ export interface MarksCase {
   keep?: boolean;
   /** After setMarks: a setFx flash without a mark and a bulk scale write, which must keep the marks. */
   restyle?: boolean;
+  /** The third cube (celadon) carries the keep crown instead of the save shield. */
+  keepGlyph?: boolean;
 }
 
 const HALF = 0.25;
@@ -68,7 +70,7 @@ export async function marksFrames(c: MarksCase) {
   rend.setShadowBounds([0, y, z], 3);
   const tints: Array<{ tint: V3; emissive?: number }> = [{ tint: GOLD, emissive: 0.1 }, { tint: GOLD, emissive: 0.1 }, { tint: CELADON }, { tint: CELADON }, { tint: GOLD, emissive: 0.1 }, { tint: CELADON }];
   tints.slice(0, descs.length).forEach((t, i) => rend.setFx(i, t));
-  const marks = [MARK_NONE, MARK_HIT, MARK_SAVE, MARK_NONE, MARK_HIT, MARK_SAVE].slice(0, descs.length);
+  const marks = [MARK_NONE, MARK_HIT, c.keepGlyph ? MARK_KEEP : MARK_SAVE, MARK_NONE, MARK_HIT, MARK_SAVE].slice(0, descs.length);
   if (c.marks !== false) rend.setMarks(0, marks);
   if (c.restyle) {
     rend.setFx(1, { tint: GOLD, emissive: 0.1, flash: 0 });
@@ -174,7 +176,7 @@ export async function engraveMatches(n = 4096) {
     const axis = Math.floor(r() * 3), sgn = r() < 0.5 ? -1 : 1, faceN: V3 = [0, 0, 0];
     faceN[axis] = sgn;
     const lp = half.map((h, k) => f32(k === axis ? sgn * h : (r() * 2 - 1) * h)) as V3;
-    return { mark: Math.floor(r() * 3), lp, faceN, half, pxM: f32(10 ** (r() * 3 - 4)) };
+    return { mark: Math.floor(r() * 4), lp, faceN, half, pxM: f32(10 ** (r() * 3 - 4)) };
   });
   const xs = new Float32Array(cases.flatMap((k) => [...k.lp, k.pxM, ...k.faceN, k.mark, ...k.half, 0]));
   const code = `${MARKS_WGSL}

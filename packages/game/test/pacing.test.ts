@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
+import { STEADY_D, STEADY_STEPS } from '@tb/keystone';
 import {
   alphaAt, arrived, checkPaceFeel, DEFAULT_BUDGET_MS, DEFAULT_FEEL, FAST_SCALE, FRAME_MS, MAX_LAG_MS, newArrivals, Pacer, paceFeel, SLOWMO_IN, SLOWMO_MAX, SLOWMO_OUT, SLOWMO_SCALE, slowTag,
-  SpeedMeter, stepCost, TAIL_GAIN, TAIL_STEPS, TailSkip, valve, VALVE_MIN, writePaceFeel, DEFAULT_UNDO_MB, MAX_UNDO_MB,
+  SKIP_SCALE, SpeedMeter, stepCost, TAIL_GAIN, TAIL_STEPS, TailSkip, valve, VALVE_MIN, writePaceFeel, DEFAULT_UNDO_MB, MAX_UNDO_MB,
 } from '../src/pacing.ts';
 
 const DT_MS = 1000 / 60;
@@ -22,7 +23,11 @@ const sum = (xs: number[]) => xs.reduce((a, b) => a + b, 0);
 describe('pace feel', () => {
   it('juice and every camera motion are off unless the URL asks for them; the valve and the tail skip are on; every frame is drawn', () => {
     expect(paceFeel(new URLSearchParams(''))).toEqual(DEFAULT_FEEL);
-    expect(DEFAULT_FEEL).toEqual({ hitStop: false, slowMo: false, budgetMs: DEFAULT_BUDGET_MS, tailSkip: true, follow: false, shake: false, frames: 'all', rapid: true, turnView: true, arcs: true, undoMB: DEFAULT_UNDO_MB, launch: 'high', balls: 'painted', marks: true, view: 'goals', impact: true, xray: 'off' });
+    expect(DEFAULT_FEEL).toEqual({ hitStop: false, slowMo: false, budgetMs: DEFAULT_BUDGET_MS, tailSkip: true, follow: false, shake: false, frames: 'all', rapid: true, turnView: true, arcs: true, undoMB: DEFAULT_UNDO_MB, launch: 'high', balls: 'painted', marks: true, fx: 'damage', spent: true, pullAnim: true, frozenLook: true, view: 'goals', impact: true, xray: 'off' });
+    // Impact effects follow the damage by default (PT2); keystone.fx=classic restores the old look. Spent ammo fades (PT19), off by keystone.spent=0.
+    expect(paceFeel(new URLSearchParams('?keystone.fx=classic'))).toEqual({ ...DEFAULT_FEEL, fx: 'classic' });
+    expect(paceFeel(new URLSearchParams('?keystone.spent=0'))).toEqual({ ...DEFAULT_FEEL, spent: false });
+    expect(() => paceFeel(new URLSearchParams('?keystone.fx=loud'))).toThrow(/keystone.fx/);
     // The opening view (PT1): goals by default, classic by its key, anything else refused; written back only when not the default.
     expect(paceFeel(new URLSearchParams('?keystone.view=classic'))).toEqual({ ...DEFAULT_FEEL, view: 'classic' });
     expect(() => paceFeel(new URLSearchParams('?keystone.view=top'))).toThrow(/keystone.view must be goals or classic: top/);
@@ -31,7 +36,7 @@ describe('pace feel', () => {
     expect(paceFeel(new URLSearchParams('?keystone.impact=0'))).toEqual({ ...DEFAULT_FEEL, impact: false });
     expect(() => paceFeel(new URLSearchParams('?keystone.impact=yes'))).toThrow(/keystone.impact/);
     { const w = new URLSearchParams(); writePaceFeel({ ...DEFAULT_FEEL, impact: false }, w); expect(w.toString()).toBe('keystone.impact=0'); }
-    // Hidden goals: auto by default, on and off by their key, anything else refused.
+    // Hidden goals: off by default, on and off by their key, anything else refused.
     expect(paceFeel(new URLSearchParams('?keystone.xray=on'))).toEqual({ ...DEFAULT_FEEL, xray: 'on' });
     expect(() => paceFeel(new URLSearchParams('?keystone.xray=1'))).toThrow(/keystone.xray must be auto, on, off: 1/);
     { const w = new URLSearchParams(); writePaceFeel({ ...DEFAULT_FEEL, xray: 'auto' }, w); expect(w.toString()).toBe('keystone.xray=auto'); }
@@ -53,6 +58,14 @@ describe('pace feel', () => {
     // Stone marks are on by default (Will, 2026-11-06), off by keystone.marks=0.
     expect(paceFeel(new URLSearchParams('?keystone.marks=0'))).toEqual({ ...DEFAULT_FEEL, marks: false });
     expect(() => paceFeel(new URLSearchParams('?keystone.marks=off'))).toThrow(/keystone.marks must be 0 or 1: off/);
+    // Pulls drawn and Bullet Time's frozen look are on by default (playtest PT17, PT8), each off by its key, and write back.
+    expect(paceFeel(new URLSearchParams('?keystone.pullanim=0'))).toEqual({ ...DEFAULT_FEEL, pullAnim: false });
+    expect(paceFeel(new URLSearchParams('?keystone.frozenlook=0'))).toEqual({ ...DEFAULT_FEEL, frozenLook: false });
+    expect(() => paceFeel(new URLSearchParams('?keystone.frozenlook=off'))).toThrow(/keystone.frozenlook must be 0 or 1: off/);
+    const off = new URLSearchParams();
+    writePaceFeel({ ...DEFAULT_FEEL, pullAnim: false, frozenLook: false }, off);
+    expect(off.toString()).toBe('keystone.pullanim=0&keystone.frozenlook=0');
+    expect(paceFeel(off)).toEqual({ ...DEFAULT_FEEL, pullAnim: false, frozenLook: false });
     expect(() => paceFeel(new URLSearchParams('?keystone.rapid=off'))).toThrow(/keystone.rapid must be 0 or 1: off/);
     expect(paceFeel(new URLSearchParams('?keystone.hitstop=1'))).toEqual({ ...DEFAULT_FEEL, hitStop: true });
     expect(paceFeel(new URLSearchParams('?keystone.slowmo=1&keystone.hitstop=1'))).toEqual({ ...DEFAULT_FEEL, hitStop: true, slowMo: true });
@@ -205,7 +218,7 @@ describe('SpeedMeter', () => {
     expect(m.speed(2000)).toBeLessThan(0.05);
   });
   it('the HUD tag shows the speed only under 0.95', () => {
-    expect([1, 0.96, 0.95, 0.8, 0.75, 0.25].map(slowTag)).toEqual(['', '', '', '×0.8', '×0.75', '×0.25']);
+    expect([1, 0.96, 0.95, 0.8, 0.75, 0.25, 0.844].map(slowTag)).toEqual(['', '', '', '80% speed', '75% speed', '25% speed', '84% speed']);
   });
 });
 
@@ -225,12 +238,40 @@ describe('TailSkip', () => {
   });
   it('waits while D still gains or too many move, and needs a full window', () => {
     const t = new TailSkip();
-    for (let i = 0; i < 300; i++) expect(t.update(50, n, i * 2e-5)).toBe(false); // 1.2e-3 over 60
+    for (let i = 0; i < 300; i++) expect(t.update(50, n, i * 5e-5)).toBe(false); // 3e-3 over 60; past the steady band every 100 steps
     const u = new TailSkip();
-    for (let i = 0; i < 300; i++) expect(u.update(100, n, 0.4)).toBe(false); // exactly 1%: not under
+    for (let i = 0; i < STEADY_STEPS - 1; i++) expect(u.update(100, n, 0.4 + 1e-5 * i)).toBe(false); // exactly 1%: not under
     const w = new TailSkip();
     for (let i = 0; i < TAIL_STEPS; i++) expect(w.update(0, n, 0.4)).toBe(false);
     expect(w.update(0, n, 0.4)).toBe(true);
+  });
+});
+
+describe('TailSkip: a steady collapse (agent playtest PT6)', () => {
+  const n = 10_000;
+  it(`turns on once D stays within ${STEADY_D} for ${STEADY_STEPS} steps, however many still move`, () => {
+    const t = new TailSkip();
+    for (let i = 0; i < 60; i++) expect(t.update(3000, n, i * 0.005)).toBe(false); // falling
+    let on = -1;
+    for (let i = 0; i < 400 && on < 0; i++) if (t.update(3000, n, 0.3 + 1e-5 * i)) on = i;
+    expect(on).toBe(STEADY_STEPS - 1);
+  });
+  it('a gain past the band restarts the run, as settle v4 counts it', () => {
+    const t = new TailSkip();
+    for (let i = 0; i < 100; i++) expect(t.update(3000, n, 0.3)).toBe(false);
+    expect(t.update(3000, n, 0.3 + STEADY_D)).toBe(false); // at the band's edge: a new run
+    for (let i = 1; i < STEADY_STEPS - 1; i++) expect(t.update(3000, n, 0.3 + STEADY_D)).toBe(false);
+    expect(t.update(3000, n, 0.3 + STEADY_D)).toBe(true);
+  });
+});
+
+describe('Skip (agent playtest PT6)', () => {
+  it(`runs sim time at ${SKIP_SCALE}x real time past the valve; without it the valve and fast-forward hold`, () => {
+    const p = new Pacer();
+    p.due(0, DT_MS, { skip: true, stepMs: 12, budgetMs: 16.7 });
+    expect(p.timeScale).toBe(SKIP_SCALE);
+    p.due(1, DT_MS, { fastForward: true, stepMs: 12, budgetMs: 16.7 });
+    expect(p.timeScale).toBeCloseTo(16.7 / 12, 9);
   });
 });
 

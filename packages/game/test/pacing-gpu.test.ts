@@ -46,7 +46,7 @@ describe('pacing on the GPU solver (G4.2)', () => {
     for (const s of late) {
       expect(s.timeScale).toBeCloseTo(valve(DEFAULT_BUDGET_MS, s.costMs), 2);
       expect(s.speed).toBeLessThan(0.95);
-      expect(s.tag).toMatch(/^×0\.\d+$/);
+      expect(s.tag).toMatch(/^\d{1,2}% speed$/);
       expect(s.hud).toBe(s.tag); // the HUD shows it
     }
     expect(errors).toEqual([]);

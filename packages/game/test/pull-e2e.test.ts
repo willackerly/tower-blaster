@@ -8,6 +8,7 @@ import { describe, expect, it } from 'vitest';
 import { RapierEngine } from '@tb/adapter-rapier';
 import { compileLevel, L1, runSession, type Shot, snapshotHash, writeShots } from '@tb/keystone';
 import { driverOptions } from '../src/engines.ts';
+import { PULL_SLIDE_STEPS } from '../src/pull-anim.ts';
 import { gamePage, ready } from './page.ts';
 
 const MINUTES = 60_000;
@@ -39,10 +40,10 @@ describe('pull on the game page', () => {
     expect(await page.evaluate(() => window.__game.select('pull'))).toBe(true);
     // Sweep the view for what a pull would take under each point: plain blocks, crowns refused.
     const seen = await page.evaluate(() => {
-      const out: Array<{ body: number; ok: boolean }> = [];
+      const out: Array<{ body: number; ok: boolean; at: [number, number] }> = [];
       for (let y = -0.9; y <= 0.9; y += 0.05) for (let x = -0.5; x <= 0.5; x += 0.05) {
         const a = window.__game.aim(x, y);
-        if (a && a.shot.ammo === 'pull') out.push({ body: a.shot.body, ok: a.reachable });
+        if (a && a.shot.ammo === 'pull') out.push({ body: a.shot.body, ok: a.reachable, at: [x, y] });
       }
       return out;
     });
@@ -50,7 +51,27 @@ describe('pull on the game page', () => {
     expect(seen.some((s) => s.ok)).toBe(true);
     for (const s of seen) expect(s.ok, `body ${s.body}`).toBe(!crowns.has(s.body));
     expect(seen.some((s) => crowns.has(s.body)), 'the sweep reaches the crown course').toBe(true);
-    // A refused pull does nothing.
+    // The refusal hint (PT17): neutral while a crown is only hovered, red once a click on it is refused, and
+    // neutral again after the aim has left the crown and come back.
+    const crown = seen.find((s) => crowns.has(s.body))!, plain = seen.find((s) => s.ok)!;
+    const hint = () => page.evaluate(() => {
+      const el = document.querySelector('.pull-hint');
+      return el ? { cls: el.className, colour: getComputedStyle(el).color } : null;
+    });
+    const hintIs = (cls: string | null) => page.waitForFunction((want) => (document.querySelector('.pull-hint')?.className.split(' ')[0] ?? null) === want, cls, { timeout: 30_000, polling: 50 });
+    const RED = 'rgb(240, 128, 106)';
+    await page.evaluate((at) => window.__game.aim(at[0], at[1]), crown.at);
+    await hintIs('hint');
+    const hovered = (await hint())!;
+    expect(hovered.colour).not.toBe(RED);
+    // A refused pull does nothing, and turns the hint red.
+    expect(await page.evaluate((b) => window.__game.fire({ ammo: 'pull', body: b }), crown.body)).toBe(false);
+    await hintIs('bad');
+    expect((await hint())!.colour).toBe(RED);
+    await page.evaluate((at) => window.__game.aim(at[0], at[1]), plain.at);
+    await hintIs(null);
+    await page.evaluate((at) => window.__game.aim(at[0], at[1]), crown.at);
+    await hintIs('hint');
     expect(await page.evaluate((b) => window.__game.fire({ ammo: 'pull', body: b }), c.meta.crowns[0]!)).toBe(false);
     for (const [k, shot] of LINE.entries()) {
       expect(await page.evaluate((s) => window.__game.fire(s), shot)).toBe(true);
@@ -69,6 +90,56 @@ describe('pull on the game page', () => {
     expect(errors).toEqual([]);
     await page.close();
   }, 10 * MINUTES);
+
+  it('Rapier: a pull is drawn (PT17): ten steps on the block is out of its slot by more than half its depth and shrinking, then gone; keystone.pullanim=0 draws none', async (ctx) => {
+    if (!game.browser()) return ctx.skip();
+    for (const anim of [true, false]) {
+      // A freeze (Bullet Time's, keystone.freeze=1) holds the world ten steps after the pull, for the reads.
+      const o = await game.open(`/?level=L1&engine=rapier&offscreen=1&keystone.rack=${RACK.join(',')}&keystone.freeze=1${anim ? '' : '&keystone.pullanim=0'}`);
+      if (!o) return ctx.skip();
+      const { page, errors } = o;
+      await ready(page);
+      expect(await page.evaluate(() => window.__game.select('pull'))).toBe(true);
+      // A plain block in view: the first the aim would pull, sweeping up from the bottom of the view.
+      const body = await page.evaluate(() => {
+        for (let y = 0.9; y >= -0.9; y -= 0.05) for (let x = -0.3; x <= 0.3; x += 0.05) { const a = window.__game.aim(x, y); if (a && a.shot.ammo === 'pull' && a.reachable) return a.shot.body; }
+        return -1;
+      });
+      expect(body).toBeGreaterThanOrEqual(0);
+      expect(await page.evaluate((b) => window.__game.coverage(b), body)).toBeGreaterThan(20);
+      const start = await page.evaluate(() => window.__game.stepIndex);
+      await page.evaluate(([b, n]) => new Promise<void>((done) => {
+        if (!window.__game.fire({ ammo: 'pull', body: b })) throw new Error('the pull was refused');
+        const t = setInterval(() => { if (window.__game.stepIndex >= n) { clearInterval(t); window.__game.freeze(true); done(); } }, 2);
+      }), [body, start + 10] as const);
+      const k = (await page.evaluate(() => window.__game.stepIndex)) - start;
+      expect(k).toBeGreaterThanOrEqual(10);
+      expect(k).toBeLessThanOrEqual(PULL_SLIDE_STEPS);
+      const drawn = await page.evaluate(() => window.__game.pullDrawn);
+      const cover = await page.evaluate((b) => window.__game.coverage(b), body);
+      if (anim) {
+        expect(drawn).not.toBeNull();
+        expect({ body: drawn!.body, k: drawn!.k }).toEqual({ body, k });
+        const home = [0, 1, 2].map((j) => c.meta.home[3 * body + j]!);
+        // The block's depth is one h (0.5 m): more than half of it out, at the height it stood.
+        expect(Math.hypot(drawn!.pos[0] - home[0]!, drawn!.pos[2] - home[2]!)).toBeGreaterThan(0.25);
+        expect(Math.abs(drawn!.pos[1] - home[1]!), 'at the height it stood (settled a little under its build pose)').toBeLessThan(0.05);
+        expect(drawn!.scale).toBeGreaterThan(0.3);
+        expect(drawn!.scale).toBeLessThan(1);
+        expect(cover, 'the sliding block is in the frame').toBeGreaterThan(0);
+      } else {
+        expect(drawn).toBeNull();
+        expect(cover).toBe(0);
+      }
+      // Resumed, the slide ends and the slot is a tombstone again, drawn by nothing.
+      expect(await page.evaluate(() => window.__game.freeze(false))).toBe(true);
+      await page.waitForFunction((n) => window.__game.stepIndex >= n || window.__game.ready, start + PULL_SLIDE_STEPS + 3, { timeout: MINUTES, polling: 20 });
+      expect(await page.evaluate(() => window.__game.pullDrawn)).toBeNull();
+      expect(await page.evaluate((b) => window.__game.coverage(b), body)).toBe(0);
+      expect(errors).toEqual([]);
+      await page.close();
+    }
+  }, 5 * MINUTES);
 
   it('GPU solver: a pull line from the link wakes and drops the column above, and replays bit-equal on the same device', async (ctx) => {
     if (!game.browser()) return ctx.skip();

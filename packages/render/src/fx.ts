@@ -8,9 +8,9 @@
 //           bit 18 matte: on a sphere, a satin finish with no clear coat and no ball glow (a bomb's iron)
 //           bit 19 band: on a sphere, a white band round its body-space equator (a fired ball, so it reads as
 //           a ball and never as a bomb, and its spin shows)
-//           bits 20-21 mark: on a box, an engraved glyph (marks.ts: 1 hit, 2 save); kept by setFx until clearFx
+//           bits 20-21 mark: on a box, an engraved glyph (marks.ts: 1 hit, 2 save, 3 keep); kept by setFx until clearFx
 //           bits 22-23 xray: on a box, an objective drawn through what hides it while Renderer.xray is on (1 crown,
-//           2 heritage); kept by setFx until clearFx
+//           2 heritage, 3 a crown to hold: drawn as heritage); kept by setFx until clearFx
 //   word 2  f32 flash start (frame time, seconds)
 //   word 3  f32 flash duration (seconds); 0 = emissive is steady
 //
@@ -56,7 +56,7 @@ export interface FxOptions {
   /** Spheres: a white band round the body-space equator, which turns with the ball (a fired ball's stripe). */
   band?: boolean;
   /**
-   * Boxes: an engraved glyph (marks.ts MARK_HIT, MARK_SAVE; MARK_NONE clears it). Absent, Renderer.setFx keeps
+   * Boxes: an engraved glyph (marks.ts MARK_HIT, MARK_SAVE, MARK_KEEP; MARK_NONE clears it). Absent, Renderer.setFx keeps
    * the slot's mark as it was (Renderer.setMarks sets marks in bulk).
    */
   mark?: MarkId;

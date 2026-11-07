@@ -4,7 +4,7 @@
 import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { loadBundle, openWebGPU, type WebGPUSession } from '@tb/testkit';
-import { engrave, MARK_COVER, MARK_HIT, MARK_MASK, MARK_NONE, MARK_SAVE, MARK_SHADE, MARK_SHIFT, markPoint, markSd, packFx, shieldSd, unpackFx, FX_ANCHOR, FX_BAND, FX_MATTE, FX_PAINT, FX_WORDS, type V3 } from '../src/index.ts';
+import { engrave, MARK_COVER, MARK_HIT, MARK_KEEP, MARK_MASK, MARK_NONE, MARK_SAVE, MARK_SHADE, MARK_SHIFT, markPoint, markSd, packFx, shieldSd, unpackFx, FX_ANCHOR, FX_BAND, FX_MATTE, FX_PAINT, FX_WORDS, type V3 } from '../src/index.ts';
 import type * as Drivers from './marks-page.ts';
 
 describe('glyphs (CPU)', () => {
@@ -37,13 +37,32 @@ describe('glyphs (CPU)', () => {
     expect(markSd(MARK_SAVE, 0, 0.8)).toBeGreaterThan(0);
   });
 
-  it('both glyphs keep clear of the cell edge (the bevel and seam) and cover a similar share of it', () => {
-    for (const mark of [MARK_HIT, MARK_SAVE]) {
+  it('keep is a crown: a solid band, three points with a jewel on each, open between the points and above the band', () => {
+    expect(markSd(MARK_KEEP, 0, -0.44)).toBeLessThan(0); // the band's middle
+    expect(markSd(MARK_KEEP, 0.45, -0.44)).toBeLessThan(0); // its end
+    for (const [x, y] of [[0, 0.52], [0.58, 0.42], [-0.58, 0.42]] as const) expect(markSd(MARK_KEEP, x, y)).toBeLessThan(0); // the jewels
+    expect(markSd(MARK_KEEP, 0.53, 0)).toBeLessThan(0); // a side
+    expect(markSd(MARK_KEEP, 0.4, 0.3)).toBeGreaterThan(0); // between an outer point and the middle one
+    expect(markSd(MARK_KEEP, 0, -0.15)).toBeGreaterThan(0); // above the band, under the middle point
+    expect(markSd(MARK_KEEP, 0, 0.8)).toBeGreaterThan(0);
+    for (const [x, y] of [[0.3, 0.1], [0.1, -0.4], [0.5, 0.2]] as const) expect(markSd(MARK_KEEP, -x, y)).toBe(markSd(MARK_KEEP, x, y));
+    // A silhouette of its own: where the crown is open the crosshair or the shield carve, and the other way round.
+    expect(markSd(MARK_HIT, 0, 0)).toBeLessThan(0);
+    expect(markSd(MARK_SAVE, 0, -0.15)).toBeLessThan(0);
+    expect(markSd(MARK_HIT, 0.4, -0.44)).toBeGreaterThan(0);
+    expect(markSd(MARK_SAVE, 0.58, 0.42)).toBeGreaterThan(0);
+  });
+
+  it('every glyph keeps clear of the cell edge (the bevel and seam) and covers a similar share of it', () => {
+    for (const mark of [MARK_HIT, MARK_SAVE, MARK_KEEP]) {
       for (let t = -1; t <= 1; t += 0.05) for (const [x, y] of [[t, 0.85], [t, -0.85], [0.85, t], [-0.85, t]]) expect(markSd(mark, x!, y!)).toBeGreaterThan(0);
       expect(MARK_COVER[mark]).toBeGreaterThan(0.08);
       expect(MARK_COVER[mark]).toBeLessThan(0.3);
     }
     expect(Math.abs(MARK_COVER[MARK_HIT]! - MARK_COVER[MARK_SAVE]!)).toBeLessThan(0.08);
+    expect(Math.abs(MARK_COVER[MARK_HIT]! - MARK_COVER[MARK_KEEP]!)).toBeLessThan(0.08);
+    // Under a pixel per stroke a mark is its mean shade: the keep crown's is its own (WGSL engrave's select).
+    expect(engrave(MARK_KEEP, [0, 0, 0.25], [0, 0, 1], [0.25, 0.25, 0.25], 0.2).shade).toBeCloseTo(1 - MARK_SHADE * MARK_COVER[MARK_KEEP]!, 9);
   });
 
   it('a long face carries a row of square cells; the glyph is centred in each', () => {
@@ -157,6 +176,18 @@ describe('marked cubes on the GPU', () => {
     // Unmarked faces carry no pattern.
     expect(Math.abs(contrast(plainGold, hitSd)), msg).toBeLessThan(4);
     expect(Math.abs(contrast(plainCeladon, saveSd)), msg).toBeLessThan(4);
+  });
+
+  it.for(['hazy', 'real', 'candy'] as const)('%s: a keep crown reads as a crown, not a shield or a crosshair', async (look, ctx) => {
+    if (!gpu) return ctx.skip();
+    const r = await frames({ look, keepGlyph: true });
+    expect(r.error).toBeNull();
+    const keep = r.faces[2] as Face;
+    const keepSd: Sd = (x, y) => markSd(MARK_KEEP, x, y), saveSd: Sd = (x, y) => markSd(MARK_SAVE, x, y), hitSd: Sd = (x, y) => markSd(MARK_HIT, x, y);
+    const msg = JSON.stringify({ contrast: contrast(keep, keepSd), notSave: prefers(keep, keepSd, saveSd), notHit: prefers(keep, keepSd, hitSd) });
+    expect(contrast(keep, keepSd), msg).toBeGreaterThan(15);
+    expect(prefers(keep, keepSd, saveSd), msg).toBeGreaterThan(10);
+    expect(prefers(keep, keepSd, hitSd), msg).toBeGreaterThan(10);
   });
 
   it('a mark stays through a setFx without one and a bulk scale write, and clearFx removes it', async (ctx) => {

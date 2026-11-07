@@ -3,9 +3,9 @@
 // crown glow, the Regrow animation on retry as per-slot visual scales, and
 // arc-preview beads as overlay spheres. Everything here is pure data for
 // Renderer.setFx / setOverlay; none of it reaches the physics.
-import { type CompiledLevel, itemRef, MATERIALS, type RackItem } from '@tb/keystone';
-import { type FxOptions, MARK_HIT, MARK_NONE, MARK_SAVE, type MarkId, srgbToLinear } from '@tb/render';
-import { PROJECTILE_PRESETS } from '@tb/weapons';
+import { type CompiledLevel, itemRef, type LevelDef, MATERIALS, type RackItem, weaponOf } from '@tb/keystone';
+import { type EffectStyle, type FxOptions, MARK_HIT, MARK_KEEP, MARK_NONE, MARK_SAVE, type MarkId, srgbToLinear } from '@tb/render';
+import { isWeaponSpec, type MunitionSpec, PROJECTILE_PRESETS } from '@tb/weapons';
 import type { XrayMode } from './pacing.ts';
 
 /** Linear rgb (0..1) and emissive (0..1) to the renderer's bulk tint word: r low byte, emissive high byte. */
@@ -61,6 +61,66 @@ export function ballFx(item: RackItem, style: BallStyle = 'painted'): FxOptions 
   return null;
 }
 
+/**
+ * A ram's paint, sRGB: weathered bronze, the colour of a battering ram's head, far from the bombs' near-black
+ * iron, the crowns' gold, the crimson cannonball and the blue marble. Banded as a ball is: a ram is a heavy
+ * ball that never goes off (PT19, the agent playtest of 2026-11-06: rams drawn as bombs read as duds).
+ */
+export const RAM_PAINT = 0x8c5a2b;
+
+/** Whether munition spec m ever acts: blasts, splits or removes itself (or a child that does). */
+function acts(m: MunitionSpec): boolean {
+  return m.rules.some((r) => r.do.length > 0) || Object.values(m.children ?? {}).some(acts);
+}
+
+/**
+ * A rack item's kind of fired body, by what it does: 'bomb' for a weapon that goes off (a rule that blasts,
+ * splits or removes it: a lit fuse and BOMB_FX), 'ram' for a weapon that never does (rules: [], a heavy
+ * shell such as big-levels.ts RAM), 'ball' for the rest (marbles, cannonballs, presets, the anvil...). A
+ * level's own grenades always go off.
+ */
+export function firedKind(def: Pick<LevelDef, 'weapons'>, item: RackItem): 'bomb' | 'ram' | 'ball' {
+  const r = itemRef(item);
+  if (r?.kind !== 'weapon') return 'ball';
+  const w = weaponOf(def, r.key);
+  return w && isWeaponSpec(w) && !acts(w) ? 'ram' : 'bomb';
+}
+
+/** A fired ram's paint (painted style; null in plain, which draws it as a bomb as before PT19). */
+export function ramFx(style: BallStyle = 'painted'): FxOptions | null {
+  return style === 'plain' ? null : { tint: linearOf(RAM_PAINT), paint: true, band: true };
+}
+
+/** Spent ammo's grey (linear): a dull stone, darker than the blocks, so it reads as rubble and not as a live ball. */
+export const SPENT_GREY: [number, number, number] = [0.16, 0.16, 0.17];
+/** How far spent ammo goes toward SPENT_GREY (1: all the way), and how long the fade takes, s. */
+export const SPENT_MIX = 0.75;
+export const SPENT_FADE = 0.6;
+
+/**
+ * Spent ammo's look `t` of the way into its fade (0 live, 1 spent; PaceFeel.spent): its paint (or the plain
+ * look's, taken as white) mixed toward SPENT_GREY, matte (no clear coat or glow), its band kept so it still
+ * reads as a fired ball, not a block.
+ */
+export function spentFx(fx: FxOptions | null, t: number): FxOptions {
+  const k = SPENT_MIX * Math.min(1, Math.max(0, t)), from = fx?.paint ? fx.tint ?? [1, 1, 1] : [1, 1, 1];
+  return { tint: from.map((x, i) => x + (SPENT_GREY[i]! - x) * k) as [number, number, number], paint: true, matte: t > 0, band: fx?.band ?? false };
+}
+// (The game fades only painted balls and rams: play.ts spendFired. A null fx fades from white, for tools.)
+
+/**
+ * How the game paints the structure's role events under effect style `style` (PaceFeel.fx): the flash of a felled
+ * crown and of cracked heritage, and the glow each keeps after (also when an undo or a line restores them). In
+ * 'damage' (PT2) a cracked heritage block flashes teal and stays its teal, and a felled crown stays gold without
+ * a glow, as play leaves them; 'classic' flashes them to white (emissive 1, 16x the albedo) and an undo restored
+ * them glowing (crown 0.9, heritage 1), unlike play.
+ */
+export function rolePaint(style: EffectStyle) {
+  return style === 'damage'
+    ? { crownFlash: { tint: TINT.crown, emissive: 0.9, flash: 0.5 }, heritageFlash: { tint: TINT.heritage, emissive: 0.2, flash: 0.8 }, crownKept: { tint: TINT.crown }, heritageKept: { tint: TINT.heritage } }
+    : { crownFlash: { tint: TINT.crown, emissive: 0.9, flash: 0.5 }, heritageFlash: { tint: TINT.heritage, emissive: 1, flash: 0.8 }, crownKept: { tint: TINT.crown, emissive: 0.9 }, heritageKept: { tint: TINT.heritage, emissive: 1 } };
+}
+
 // Ice is drawn by the renderer's ice pass (@tb/render ice.ts), which makes its own blue from the light's
 // path through the block (absorption): a tint here would multiply it a second time, so ice is untinted.
 const MATERIAL_TINT: Record<string, [number, number, number]> = {
@@ -77,13 +137,14 @@ export function tintOf(c: CompiledLevel, i: number): number {
 
 /**
  * The glyph carved on structure body i (Renderer.setMarks; PaceFeel.marks): a crosshair (hit) on a crown, which
- * the level asks the player to bring down, and a shield (save) on heritage, which must stay intact, and on a
- * crown under a hold objective (Undercut's Hollow), which must stay up: there the crown's gold says nothing
- * of which way it goes, and the carving does. Plain blocks carry none.
+ * the level asks the player to bring down, a shield (save) on heritage, which must stay intact, and a crown
+ * (keep) on a crown under a hold objective (Undercut's Hollow), which must stay up: there the crown's gold says
+ * nothing of which way it goes, and the carving does, in a glyph of its own (playtest PT17: the shield it carried
+ * before read as heritage). Plain blocks carry none.
  */
 export function markOf(c: CompiledLevel, i: number): MarkId {
   const role = c.meta.role[i];
-  if (role === 1) return c.def.objective.kind === 'hold' ? MARK_SAVE : MARK_HIT;
+  if (role === 1) return c.def.objective.kind === 'hold' ? MARK_KEEP : MARK_HIT;
   if (role === 2) return MARK_SAVE;
   return MARK_NONE;
 }

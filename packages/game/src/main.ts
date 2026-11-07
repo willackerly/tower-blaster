@@ -12,8 +12,8 @@ import { DUELS, duelLevel, duelLevelId, lotSheetOf, type Player, type Shot, show
 import { createDevice } from '@tb/gpu';
 import { lookByName, parseBlastOptions, parseIceOptions, parseRealOptions, Renderer, SnapshotSource } from '@tb/render';
 import { installDoor, type DoorPage } from './door-page.ts';
-import { doorDuels, doorMode, doorOnLoad, duelsOnDoor, openerFor, preaimMode } from './door.ts';
-import { GAME_SERIES, loadOptions, lookName, onEngine, parseGameParams, withRules } from './params.ts';
+import { doorDuels, doorMode, doorOnLoad, duelsOnDoor, openerFor, preaimMode, seriesForward } from './door.ts';
+import { buildOption, GAME_SERIES, loadOptions, lookName, onEngine, parseGameParams, weaponTierOf, withRules } from './params.ts';
 import { browserKeyValue, memoryKeyValue, type ProgressStore, progressStore } from './progress.ts';
 import { bankAfterLine, type SessionFacts, sessionFile, sessionFileName } from './session-file.ts';
 import { CAMERA_KEYS, cameraFeel, LAUNCH_KEYS, launchFeel, MARKS_KEYS, marksFeel, RAPID_KEYS, rapidFeel, type Settings, SettingsStore, TURN_VIEW_KEYS, turnViewFeel, VIEW_KEYS, viewFeel, IMPACT_KEYS, impactFeel, XRAY_KEYS, xrayFeel } from './settings.ts';
@@ -23,6 +23,7 @@ import { NO_WEBGPU_HTML, webgpuMissing } from './support.ts';
 import { type GameHandle, newGameHandle, playKeystone, playLine } from './play.ts';
 import { helpHtml, installGameStyles } from './ui.ts';
 import { goalsMode } from './lot-hud.ts';
+import { LAYOUT_KEYS, layoutOf } from './layout.ts';
 import { touchMode } from './touch.ts';
 
 declare global { interface Window { __game: GameHandle; __progress: ProgressStore; __door: DoorPage } }
@@ -53,7 +54,7 @@ function fail(e: unknown) {
 
 async function main() {
   const q = new URLSearchParams(location.search);
-  const { level, rack, rules, engine, feel, shots, offscreen, offscreenSize, sound, impactsDb, duel } = parseGameParams(q);
+  const { level, rack, rules, engine, feel, shots, offscreen, offscreenSize, sound, impactsDb, duel, weaponTier } = parseGameParams(q);
   // Best plays and settings kept in the browser (?progress=off: this visit only); custom runs are not recorded.
   // A setting's URL key (look, sound, sharp) wins over the stored one for the visit (settings.ts).
   const progress = progressStore(q);
@@ -79,6 +80,11 @@ async function main() {
   Object.assign(feel, impactFeel(feel, q, settings.current.impact));
   // Hidden goals: the URL's keystone.xray where it says, else the setting (auto: the city levels). Read live, each frame.
   Object.assign(feel, xrayFeel(feel, q, settings.current.xray));
+  // Where the HUD and the result card sit (layout.ts): the URL's keystone.hud / card / carddelay where they say, else the Layout setting.
+  // One object, read live by the game; the HUD's kg-dock class docks it on a phone (ui.ts DOCK_CSS).
+  const layout = layoutOf(q, settings.current.layout);
+  const applyLayout = () => $('hud').classList.toggle('kg-dock', layout.hud === 'dock');
+  applyLayout();
   const door = doorMode(q), preaim = preaimMode(q), bank = bankAfterLine(q), goals = goalsMode(q);
   // ?keystone.rack replaces the opening level's rack (its def, so retry keeps it); other levels keep their own.
   // The rule overrides (keystone.scoring, keystone.autobank, physics) apply to every level; stars cast on
@@ -157,8 +163,9 @@ async function main() {
       if (changed === 'impact') Object.assign(feel, impactFeel(feel, new URLSearchParams(), st.impact));
       if (changed === 'xray') Object.assign(feel, xrayFeel(feel, new URLSearchParams(), st.xray));
       if (changed === 'marks') { Object.assign(feel, marksFeel(feel, new URLSearchParams(), st.marks)); handle.refreshMarks(); }
+      if (changed === 'layout') { Object.assign(layout, layoutOf(new URLSearchParams(), st.layout)); applyLayout(); }
       // The setting now says it: the URL keys that set it for this visit go.
-      const u = new URLSearchParams(location.search), keys = changed === 'camera' ? CAMERA_KEYS : changed === 'rapid' ? RAPID_KEYS : changed === 'duelView' ? TURN_VIEW_KEYS : changed === 'launch' ? LAUNCH_KEYS : changed === 'marks' ? MARKS_KEYS : changed === 'view' ? VIEW_KEYS : changed === 'impact' ? IMPACT_KEYS : changed === 'xray' ? XRAY_KEYS : [changed];
+      const u = new URLSearchParams(location.search), keys = changed === 'camera' ? CAMERA_KEYS : changed === 'rapid' ? RAPID_KEYS : changed === 'duelView' ? TURN_VIEW_KEYS : changed === 'launch' ? LAUNCH_KEYS : changed === 'marks' ? MARKS_KEYS : changed === 'layout' ? LAYOUT_KEYS : changed === 'view' ? VIEW_KEYS : changed === 'impact' ? IMPACT_KEYS : changed === 'xray' ? XRAY_KEYS : [changed];
       if (keys.some((k) => u.has(k))) { for (const k of keys) u.delete(k); history.replaceState(null, '', `?${u}`); }
     },
   });
@@ -172,7 +179,8 @@ async function main() {
   let ended: SessionFacts | null = null, banked = false;
   await playKeystone({
     canvas, offscreen, offscreenSize, device, renderer, source, hud: $('hud'), banner: $('banner'), result: $('result'),
-    levels: played, start: duel ? 0 : start, ...(duel ? {} : { series: seriesIdx }), engine, feel, fail, sound, impactsDb, muted: !settings.current.sound, touch: touchMode(q), ...loadOptions(q),
+    levels: played, start: duel ? 0 : start, ...(duel ? {} : { series: seriesIdx, seriesForward: (i: number) => seriesForward(seriesIdx, i, levels) }),
+    layout, onLevels: () => front.show(), engine, feel, weaponTier: () => weaponTierOf(weaponTier, handle.quality?.tier), fail, sound, impactsDb, muted: !settings.current.sound, touch: touchMode(q), ...loadOptions(q), ...buildOption(q),
     ...(duel ? { duel } : {}),
     // The pre-aimed opener (?keystone.preaim): by default the series' first level, until it has a record here.
     // The level's lot sheet (?keystone.goals=shown|all|off): proven goals by default, with the ones met on earlier plays marked.

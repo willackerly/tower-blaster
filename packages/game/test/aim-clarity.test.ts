@@ -5,10 +5,11 @@ import { describe, expect, it } from 'vitest';
 import { emptySnapshot, type Snapshot, type Vec3 } from '@tb/engine-api';
 import { compileLevel, type CompiledLevel, GRAVITY, L1, type LaunchItem, SERIES, type Shot, shotToSpawn } from '@tb/keystone';
 import { rotate } from '@tb/geom';
-import { rayThrough } from '@tb/render/camera';
+import { rayThrough, viewProj } from '@tb/render/camera';
 import { arcContact, azFromYaw, launchHeight, launchY, pick, previewBeads, rayBox, REACH, shotFor, SUBSTEPS } from '../src/aim.ts';
 import { defaultInsets, viewOf } from '../src/view.ts';
 import { nextSelection } from '../src/hud.ts';
+import { markOf } from '../src/scene.ts';
 
 function atHome(c: CompiledLevel): Snapshot {
   const s = emptySnapshot(c.meta.n);
@@ -71,7 +72,7 @@ describe('arcContact', () => {
 
 describe('every level, from its opening view', () => {
   for (const def of ALL) {
-    it(`${def.id}: every structure point under a 9x9 grid of the free area within the ball's range is reachable at full power, wide and upright`, () => {
+    it(`${def.id}: every structure point under a 9x9 grid of the free area, and every objective's middle, within the ball's range is reachable at full power, wide and upright`, () => {
       const c = compileLevel(def), s = atHome(c);
       const ammo = nextSelection(c.def.rack, c.def.rack, null);
       if (!ammo || !isLaunch(ammo)) return;
@@ -79,8 +80,18 @@ describe('every level, from its opening view', () => {
         const o = viewOf(c, aspect), az = azFromYaw(o.yaw), ins = defaultInsets(aspect), at = launchHeight(c, 'high');
         const sq = aspect >= 1 ? 1 / aspect : 1, bad: string[] = [];
         let near = 0, far = 0;
-        for (let i = 0; i < 9; i++) for (let j = 0; j < 9; j++) {
-          const x = (-1 + 2 * ins.left + (2 - 2 * ins.left - 2 * ins.right) * (i + 0.5) / 9) * sq, y = -1 + 2 * ins.bottom + (2 - 2 * ins.bottom - 2 * ins.top) * (j + 0.5) / 9;
+        // The 9x9 grid, then the middle of every objective body on screen (at most 32, evenly spread): a sparse lot
+        // like T-W1's three dominoes falls between the grid's rays.
+        const rays: [number, number][] = [];
+        for (let i = 0; i < 9; i++) for (let j = 0; j < 9; j++) rays.push([(-1 + 2 * ins.left + (2 - 2 * ins.left - 2 * ins.right) * (i + 0.5) / 9) * sq, -1 + 2 * ins.bottom + (2 - 2 * ins.bottom - 2 * ins.top) * (j + 0.5) / 9]);
+        const goals = Array.from({ length: c.meta.n }, (_, b) => b).filter((b) => markOf(c, b) !== 0), m = viewProj(o, aspect);
+        for (let g = 0; g < Math.min(32, goals.length); g++) {
+          const b = goals[Math.floor((g * goals.length) / Math.min(32, goals.length))]!, h = c.meta.home;
+          const w = [0, 1, 2, 3].map((r) => m[r]! * h[3 * b]! + m[4 + r]! * h[3 * b + 1]! + m[8 + r]! * h[3 * b + 2]! + m[12 + r]!);
+          const x = w[0]! / w[3]!, y = w[1]! / w[3]!;
+          if (w[3]! > 0 && x > -1 + 2 * ins.left && x < 1 - 2 * ins.right && y > -1 + 2 * ins.bottom && y < 1 - 2 * ins.top) rays.push([x, y]);
+        }
+        for (const [x, y] of rays) {
           const hit = pick(rayThrough(o, aspect, x, y), s, c);
           if (!hit || hit.body < 0) continue;
           if (beyond(c, ammo, az, at, hit.point)) { far++; continue; }

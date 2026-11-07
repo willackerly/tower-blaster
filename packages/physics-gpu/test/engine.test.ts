@@ -400,7 +400,7 @@ describe('GPU AVBD engine: engine contract (friction rule, integrator)', () => {
     // Its effect on the GPU: engine-restitution.test.ts.
     expect(() => new GpuAvbdEngine({ restitution: true })).not.toThrow();
     // The reference's checks, switch on or off.
-    for (const [p, msg] of [[{ restitutionThreshold: -1 }, 'restitutionThreshold must be a finite number >= 0, got -1'], [{ restitutionThreshold: Number.NaN }, 'restitutionThreshold must be a finite number >= 0, got NaN'], [{ restitutionRounds: 0 }, 'restitutionRounds must be an integer >= 1, got 0'], [{ restitution: true, restitutionRounds: 2.5 }, 'restitutionRounds must be an integer >= 1, got 2.5']] as const) {
+    for (const [p, msg] of [[{ restitutionThreshold: -1 }, 'restitutionThreshold must be a finite number >= 0, got -1'], [{ restitutionThreshold: Number.NaN }, 'restitutionThreshold must be a finite number >= 0, got NaN'], [{ restitutionRounds: 0 }, 'restitutionRounds must be an integer >= 1, got 0'], [{ restitution: true, restitutionRounds: 2.5 }, 'restitutionRounds must be an integer >= 1, got 2.5'], [{ restitution: true, restitutionAnchorCut: 2 }, 'restitutionAnchorCut must be a number in [0, 1], got 2']] as const) {
       expect(() => new AvbdReferenceEngine(p)).toThrow(msg);
       expect(() => new GpuAvbdEngine(p)).toThrow(msg);
     }

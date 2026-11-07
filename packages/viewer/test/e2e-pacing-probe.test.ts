@@ -22,6 +22,10 @@
 // default (every frame), on a 120 Hz display (TB_HEADED=1: headless Chrome
 // runs rAF at 60 Hz, which is never decimated). TB_PROBE_CASES=<regex> runs
 // only the cases whose name matches (e.g. 'cluster-40-rendered').
+// The fx cases (PT2, docs/render/damage-effects.md) time the frames of B1's and B3's pre-aimed openers
+// (solutions.ace's first shot) under keystone.fx=damage and classic, FX_RUNS runs each, interleaved so a
+// thermal drift hits both styles alike; afterAll writes one 'fx cost' line per level and style with the
+// frame p50/p95 pooled over the runs and the sparks spawned (TB_PROBE_CASES='^fx-').
 // On macOS it refuses to start in Low Power Mode (power.ts; E7 round 2 lost a
 // run to it), unless TB_PROBE_ALLOW_LOW_POWER=1, and each summary line records
 // the power state. A summary's costMs is the step's own GPU time (what the
@@ -30,7 +34,7 @@
 // Not a performance result unless run on the physical GPU (CLAUDE.md).
 import { appendFileSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { limitsHit } from '@tb/engine-api';
 import { aimAt, compileLevel, launcherPos, type LaunchItem, levelById, type LevelDef, scenarioLevel, settleAllowance, type Shot } from '@tb/keystone';
 import { browser, useViewer } from './e2e-harness.ts';
@@ -72,7 +76,12 @@ function shotAt(def: LevelDef, ammo: LaunchItem, yLo: number, yHi: number): Shot
 const q = (xs: number[], p: number) => { const s = [...xs].sort((a, b) => a - b); return s.length ? s[Math.min(s.length - 1, Math.floor(p * s.length))]! : NaN; };
 
 /** budgetMs: keystone.budget (absent: the default); a w- case other than w-grenade has a rack of just its weapon. */
-interface Case { name: string; scene: Scene; ammo: 'cannonball' | 'w-grenade' | 'w-cluster' | 'w-grenadem' | 'w-grenadexl'; iterations: 40 | 20; rendered: boolean; budgetMs?: number; frames?: 'half' | 'auto'; screenshots?: boolean }
+/** opener: fire the level's own pre-aimed opener (solutions.ace's first shot) with its own rack; fx: keystone.fx. */
+interface Case { name: string; scene: Scene; ammo: 'cannonball' | 'w-grenade' | 'w-cluster' | 'w-grenadem' | 'w-grenadexl' | 'w-bomb'; iterations: 40 | 20; rendered: boolean; budgetMs?: number; frames?: 'half' | 'auto'; screenshots?: boolean; opener?: boolean; fx?: 'damage' | 'classic' }
+const FX_RUNS = 5;
+/** PT2's cost: B1 and B3 openers rendered, damage vs classic, runs interleaved (B1 small: the same level, 1k blocks, plain). */
+const FX_CASES: Case[] = ['B1', 'B3'].flatMap((id) => Array.from({ length: FX_RUNS }, (_, r) => (['damage', 'classic'] as const).map((fx): Case => (
+  { name: `fx-${id.toLowerCase()}-${fx}-${r + 1}`, scene: { scenario: '', params: {}, search: `level=${id}`, level: id }, ammo: 'w-bomb', iterations: 40, rendered: true, opener: true, fx })))).flat();
 const ALL: Case[] = [
   { name: 'city-cannonball-40', scene: CITY, ammo: 'cannonball', iterations: 40, rendered: false },
   { name: 'blocks-grenade-40', scene: BLOCKS, ammo: 'w-grenade', iterations: 40, rendered: false },
@@ -99,10 +108,15 @@ const ALL: Case[] = [
   { name: 'b3-grenadexl-40', scene: B3_CITY, ammo: 'w-grenadexl', iterations: 40, rendered: false },
   { name: 'b3-grenadexl-40-rendered', scene: B3_CITY, ammo: 'w-grenadexl', iterations: 40, rendered: true },
   { name: 'b3-grenadem-40-rendered', scene: B3_CITY, ammo: 'w-grenadem', iterations: 40, rendered: true },
+  ...FX_CASES,
 ];
 // Rendered frames take up to a second on SwiftShader: the rendered case is a real GPU's only.
 const ONLY = process.env.TB_PROBE_CASES ? new RegExp(process.env.TB_PROBE_CASES) : null;
-const CASES = (SMALL ? ALL.filter((k) => k.iterations === 40 && !k.rendered) : ALL).filter((k) => !ONLY || ONLY.test(k.name));
+// Small: B1's (1k blocks) first fx pair too, offscreen at fast-forward, to check the fx plumbing on SwiftShader
+// (a rendered B1 shot there does not settle in 20 min; no frame times, and they would mean nothing).
+const CASES = (SMALL ? ALL.filter((k) => k.iterations === 40 && !k.rendered).concat(ALL.filter((k) => /^fx-b1-\w+-1$/.test(k.name)).map((k) => ({ ...k, rendered: false }))) : ALL).filter((k) => !ONLY || ONLY.test(k.name));
+/** The fx cases' frames and sparks, pooled per level and style for afterAll. */
+const fxPool = new Map<string, { frameMs: number[]; spawned: number[]; runs: number }>();
 
 describe.runIf(RUN)('G4 probe: a 10k level\'s shot on a real GPU', () => {
   const power = powerState();
@@ -111,15 +125,24 @@ describe.runIf(RUN)('G4 probe: a 10k level\'s shot on a real GPU', () => {
       throw new Error(`Low Power Mode is on (pmset ${JSON.stringify(power.raw)}): step costs are not the machine's. Turn it off, or set TB_PROBE_ALLOW_LOW_POWER=1 to measure it anyway.`);
     }
   });
+  afterAll(() => {
+    for (const [key, v] of fxPool) {
+      const line = `fx cost ${JSON.stringify({ case: key, runs: v.runs, frames: v.frameMs.length, frameMs: { p50: q(v.frameMs, 0.5), p95: q(v.frameMs, 0.95), p99: q(v.frameMs, 0.99) }, sparksPerRun: v.spawned, power })}\n`;
+      process.stdout.write(line);
+      if (OUT) { mkdirSync(OUT, { recursive: true }); appendFileSync(join(OUT, 'summary.txt'), line); }
+    }
+  });
   for (const k of CASES) {
     it(k.name, async (ctx) => {
       if (!browser) return ctx.skip();
       // The page's level, with the URL's rack (the compiled frame carries the cluster's shell for aiming).
       const base = k.scene.level ? levelById(k.scene.level)! : scenarioLevel(k.scene.scenario, k.scene.params, 1);
-      const own = k.ammo.startsWith('w-') && k.ammo !== 'w-grenade';
+      const own = !k.opener && k.ammo.startsWith('w-') && k.ammo !== 'w-grenade';
       const def: LevelDef = own ? { ...base, rack: [k.ammo] } : base;
-      const shot = shotAt(def, k.ammo, 3, 6);
-      const search = `/?${k.scene.search}&rules=keystone${k.iterations !== 40 ? `&keystone.iterations=${k.iterations}` : ''}${own ? `&keystone.rack=${k.ammo}` : ''}${k.budgetMs !== undefined ? `&keystone.budget=${k.budgetMs}` : ''}${k.frames ? `&keystone.frames=${k.frames}` : ''}${SMALL ? '&keystone.presettle=30' : ''}${k.rendered ? '' : '&offscreen=1'}`;
+      const opener = k.opener ? base.solutions?.ace?.[0] ?? base.solutions?.par?.[0] : undefined;
+      if (k.opener && !opener) throw new Error(`${base.id} has no recorded opener`);
+      const shot = opener ?? shotAt(def, k.ammo, 3, 6);
+      const search = `/?${k.scene.search}&rules=keystone${k.iterations !== 40 ? `&keystone.iterations=${k.iterations}` : ''}${own ? `&keystone.rack=${k.ammo}` : ''}${k.budgetMs !== undefined ? `&keystone.budget=${k.budgetMs}` : ''}${k.frames ? `&keystone.frames=${k.frames}` : ''}${k.fx ? `&keystone.fx=${k.fx}` : ''}${SMALL ? '&keystone.presettle=30' : ''}${k.rendered ? '' : '&offscreen=1'}`;
       const o = await openRules(search, k.rendered && !SMALL ? { width: 1440, height: 900 } : undefined, 10 * MINUTES);
       if (!o) return ctx.skip();
       const { page, errors } = o;
@@ -141,6 +164,8 @@ describe.runIf(RUN)('G4 probe: a 10k level\'s shot on a real GPU', () => {
       const wallMs = Date.now() - t0;
       const t = await page.evaluate(() => { const g = window.__viewer.game!; return { ...g.timing, collapse: g.collapse, bodies: g.bodies, draws: g.draws }; });
       const health = await page.evaluate(() => window.__viewer.health);
+      // Sparks spawned since the level loaded (the renderer resets its effects on load): the style's own trace.
+      const effects = k.fx ? await page.evaluate(() => window.__viewer.game!.effects()) : null;
       const n = compileLevel(def).meta.n, allowance = settleAllowance(n);
       // The first step from which nMoving stays at or under x for good: when a v2 with that allowance could have ended.
       const quietFrom = (x: number) => { let i = t.moving.length; while (i > 0 && t.moving[i - 1]! <= x) i--; return i; };
@@ -154,7 +179,13 @@ describe.runIf(RUN)('G4 probe: a 10k level\'s shot on a real GPU', () => {
         pace: { speedMin: Math.min(...pace.map((p) => p.speed)), speedMedian: q(pace.map((p) => p.speed), 0.5), tagged: pace.filter((p) => p.tag).length, samples: pace.length, tailSkipAt: pace.find((p) => p.tailSkip)?.t ?? null },
         moving: { peak: Math.max(...t.moving), last: t.moving.at(-1), every60, quietFromAllowance: quietFrom(allowance), quietFrom1pct: quietFrom(n / 100), quietFrom0: quietFrom(0) },
         limits: health ? limitsHit(health) : null,
+        effects,
       };
+      if (k.fx) {
+        const key = k.name.replace(/-\d+$/, ''), v = fxPool.get(key) ?? { frameMs: [], spawned: [], runs: 0 };
+        v.frameMs.push(...t.frameMs); v.spawned.push(effects!.spawned); v.runs++;
+        fxPool.set(key, v);
+      }
       const line = `G4 probe ${JSON.stringify(summary)}\n`;
       process.stdout.write(line);
       if (OUT) {

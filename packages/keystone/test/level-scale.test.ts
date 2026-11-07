@@ -3,7 +3,7 @@
 // level the old one could judge, a 10k city in well under 2 s, and the new
 // budget checks (count per engine, watched bodies, nothing to bring down).
 import { describe, expect, it } from 'vitest';
-import { compileLevel, ENGINE_MAX_BODIES, type Issue, type LevelDef, LEVELS, MATERIALS, MAX_WATCHED, type Part, ROLES, validateLevel } from '@tb/keystone';
+import { compileLevel, ENGINE_MAX_BODIES, type Issue, type LevelDef, type BlockPart, LEVELS, MATERIALS, MAX_WATCHED, type Part, ROLES, validateLevel } from '@tb/keystone';
 import { validateLevelRef } from './validate-ref.ts';
 
 /** mulberry32, seeded: the same draws everywhere. */
@@ -90,7 +90,7 @@ describe('validateLevel at scale', () => {
   });
 
   it('flags more than 64 watched bodies (crowns plus heritage)', () => {
-    const row = (n: number, role: 'crown' | 'heritage'): Part => ({ kind: 'block', at: [-20, 0, 0], size: [n, 1, 1], material: 'plaster', role });
+    const row = (n: number, role: 'crown' | 'heritage'): BlockPart => ({ kind: 'block', at: [-20, 0, 0], size: [n, 1, 1], material: 'plaster', role });
     const watched = (crowns: number, heritage: number) => validateLevel(compileLevel({ ...base, crownLine: 0, lot: { min: [-30, -30], max: [30, 30] }, parts: [row(crowns, 'crown'), { ...row(heritage, 'heritage'), at: [-20, 0, 3] }] })).filter((i) => i.code === 'watched');
     expect(MAX_WATCHED).toBe(64);
     expect(watched(40, 24)).toEqual([]);
