@@ -111,6 +111,7 @@ export function objectiveShort(o: Objective): string {
     case 'collapse': return pct(o.min);
     case 'hold': return 'crown up';
     case 'bell': return 'ring the bell';
+    case 'trial': return 'pass the test';
   }
 }
 

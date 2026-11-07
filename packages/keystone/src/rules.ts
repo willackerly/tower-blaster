@@ -413,6 +413,13 @@ export interface LevelScore {
   /** Bullet Time levels (LevelDef.freeze): freezes spent (freezesUsed) of the level's budget. Absent elsewhere. */
   freezes?: { used: number; total: number };
   /**
+   * Levels judged in many jittered worlds (Mason's Trial; Chorus): `cleared` of `of` worlds passed, and the worlds
+   * one, two and three stars need (`thresholds`, counts), so the card shows "c of K" once. Absent elsewhere.
+   */
+  worlds?: { cleared: number; of: number; thresholds: readonly [number, number, number] };
+  /** Mason's Trial (LevelDef.mason): the build budget left and the budget, for the card's budget line. Absent elsewhere. */
+  mason?: { left: number; budget: number };
+  /**
    * A refereed round (a Siege Table duel: Session's refereed option): no solo tally was made. lines
    * empty, total and stars 0, the stamp DUEL; the duel's own result (Duel.result) is the outcome.
    */
@@ -468,6 +475,53 @@ export function rubeStars(cleared: boolean, spent: number, partsPar: number): 0 
   if (spent <= partsPar) return 3;
   if (spent <= Math.ceil(1.5 * partsPar)) return 2;
   return 1;
+}
+
+/** Mason's Trial (docs/game/masons-trial.md): a build is cleared when at least this share of its worlds pass. */
+export const MASON_CLEAR = 0.5;
+
+/**
+ * Mason's Trial's two score lines (agreed with the scoring owner, docs/game/scoring.md): Robust, 500 x the share of
+ * worlds passed, and Budget left, 500 x that share x the share of the budget left. Their sum is
+ * round(1000 x (passes / K) x (1 + left / budget) / 2), give or take 1 from rounding: a fully robust build that
+ * spends the whole budget scores 500, a robust free one would score 1000.
+ */
+export function masonLines(passes: number, K: number, left: number, budget: number): ScoreLine[] {
+  const p = passes / K, l = budget > 0 ? Math.max(0, left) / budget : 0;
+  return [{ label: `Robust ${passes}/${K}`, value: Math.round(500 * p) }, { label: `Budget left ${Math.max(0, left)}/${budget}`, value: Math.round(500 * p * l) }];
+}
+
+/** Stars for a Mason build: 0 uncleared (fewer than MASON_CLEAR of its worlds passed), 1 cleared, 2 at t2 points, 3 at t3. */
+export function masonStars(cleared: boolean, points: number, stars: readonly [number, number]): 0 | 1 | 2 | 3 {
+  if (!cleared) return 0;
+  return points >= stars[1] ? 3 : points >= stars[0] ? 2 : 1;
+}
+
+/**
+ * The fewest worlds of K that give one, two and three stars to a build with `left` of `budget` unspent: ceil(K
+ * MASON_CLEAR), and the least passes whose lines reach t2 and t3 (K + 1: out of reach at this budget).
+ */
+export function masonThresholds(K: number, left: number, budget: number, stars: readonly [number, number]): [number, number, number] {
+  const least = (t: number) => {
+    for (let c = 0; c <= K; c++) if (floorTotal(masonLines(c, K, left, budget)) >= t) return c;
+    return K + 1;
+  };
+  const one = Math.ceil(K * MASON_CLEAR);
+  return [one, Math.max(one, least(stars[0])), Math.max(one, least(stars[1]))];
+}
+
+/**
+ * A Mason level's score from its judge (passes of K worlds) and the build's cost (build.ts placedCost): the two
+ * lines, stars on their total (masonStars), the stamp ROBUST or WOBBLY, the shared worlds field and the budget.
+ * No leverage, no gold and no heritage star loss: the heritage is the pass rule's.
+ */
+export function masonScore(def: LevelDef, passes: number, K: number, spent: number): LevelScore {
+  const m = def.mason!, budget = def.build?.budget ?? 0, left = Math.max(0, budget - spent);
+  const lines = masonLines(passes, K, left, budget), total = floorTotal(lines), cleared = passes >= Math.ceil(K * MASON_CLEAR);
+  return {
+    lines, total, stars: masonStars(cleared, total, m.stars), stamp: cleared ? (passes === K ? 'ROBUST' : 'STANDS') : 'WOBBLY', leverage: 0,
+    worlds: { cleared: passes, of: K, thresholds: masonThresholds(K, left, budget, m.stars) }, mason: { left, budget },
+  };
 }
 
 /** A Rube Lab level's stamp: PARTS PAR at or under the parts par, else +N PARTS. */

@@ -12,6 +12,7 @@ import { type ScenarioPart, scenarioBodies, scenarioKey } from './scenario-part.
 import { ammoBody, type LauncherDef, launcherPos, type Shot, type ShotFrame } from './shots.ts';
 import { checkIce, type IceBlock, IceBreaker, iceOf } from './ice.ts';
 import type { BuildDef } from './build.ts';
+import { masonIssues, type MasonDef } from './mason.ts';
 import { obbAabb, obbOfBody, obbOverlap, pieceQuat } from './placement.ts';
 import { runPoses } from './stroke.ts';
 
@@ -76,6 +77,11 @@ export type Objective =
    * levels only; a settle with a crown down ends the level there, failed. Scored on what was pulled.
    */
   | { kind: 'hold'; footprintMax?: number }
+  /**
+   * Mason's Trial (LevelDef.mason, mason.ts): the build passes its test in at least half of the worlds it is judged
+   * in. Decided by the judge (mason-judge.ts), never by a settle.
+   */
+  | { kind: 'trial'; footprintMax?: number }
   /**
    * Rube Lab's bell (docs/game/rube-lab.md): the crowns are the level's bells, watched every step. A bell rings
    * when its centre enters `region` (h, world: a sensor box, for a runner that must arrive somewhere) or, with
@@ -201,6 +207,12 @@ export interface LevelDef {
    */
   rube?: { partsPar: number };
   /**
+   * Mason's Trial (M8, mason.ts, docs/game/masons-trial.md): the test that runs once the build is done, its pass
+   * rule, the jitter of the worlds it is judged in, and the star points. Hashed (the stars too, as rube.partsPar).
+   * Such a level always plays at MASON_ITERATIONS.
+   */
+  mason?: MasonDef;
+  /**
    * Made from an authored level by overrides (URL keys keystone.*): it plays, but cast stars do not
    * apply ("custom: stars not recorded"). Not part of the hash: the overrides already are.
    */
@@ -249,10 +261,17 @@ export interface PhysicsBlock {
 export const PHYSICS_DEFAULTS = { iterations: 40, gapSlop: 3e-5, bounce: null, presettle: 300, sleep: false } as const satisfies PhysicsBlock;
 export type ResolvedPhysics = { iterations: number; gapSlop: number; bounce: number | null; presettle: number; sleep: boolean; pairsPerBody?: number };
 
+/**
+ * Solver iterations every Mason level plays at (LevelDef.mason, mason.ts), whatever its physics block, a URL override
+ * or the quality tier says: probe X4 found a 95 % harmonic overhang holds and a corbelled span carries the ball at
+ * 40, while at 20 the overhang topples and an arch wall creeps 1.1 cm (docs/game/mode-probes.md). physicsOf pins it.
+ */
+export const MASON_ITERATIONS = 40;
+
 export function physicsOf(d: LevelDef): ResolvedPhysics {
   const p = d.physics ?? {};
   return {
-    iterations: p.iterations ?? PHYSICS_DEFAULTS.iterations, gapSlop: p.gapSlop ?? PHYSICS_DEFAULTS.gapSlop,
+    iterations: d.mason ? MASON_ITERATIONS : p.iterations ?? PHYSICS_DEFAULTS.iterations, gapSlop: p.gapSlop ?? PHYSICS_DEFAULTS.gapSlop,
     bounce: p.bounce === undefined ? PHYSICS_DEFAULTS.bounce : p.bounce, presettle: p.presettle ?? PHYSICS_DEFAULTS.presettle,
     sleep: p.sleep ?? PHYSICS_DEFAULTS.sleep,
     ...(p.pairsPerBody !== undefined ? { pairsPerBody: p.pairsPerBody } : {}),
@@ -526,7 +545,7 @@ function bodiesDigest(bodies: readonly BodyDesc[]): string {
 }
 
 export interface Issue {
-  code: 'count' | 'capacity' | 'launcher' | 'overlap' | 'unsupported' | 'mass-ratio' | 'ammo-ratio' | 'dud' | 'tunnelling' | 'crown-start' | 'rack' | 'weapon' | 'empty' | 'watched' | 'flat' | 'objective' | 'freeze' | 'charge';
+  code: 'count' | 'capacity' | 'launcher' | 'overlap' | 'unsupported' | 'mass-ratio' | 'ammo-ratio' | 'dud' | 'tunnelling' | 'crown-start' | 'rack' | 'weapon' | 'empty' | 'watched' | 'flat' | 'objective' | 'freeze' | 'charge' | 'mason';
   message: string;
   bodies?: number[];
   /** Legal but worth knowing (a dud item): the level still plays as authored. */
@@ -612,8 +631,13 @@ export function validateLevel(c: CompiledLevel, opts: ValidateOptions = {}): Iss
     const ice = IceBreaker.budget(c);
     issues.push({ code: 'capacity', message: `${m.n} bodies + ${rackBodies(def.rack.filter(isRackItem), c.arms)} the rack can add${ice ? ` + ${ice} ice pieces` : ''} > ${max} (the ${engine} engine's budget)` });
   }
-  const size = rackSizeProblem(def.rack);
-  if (size || def.par < 1 || def.par > def.rack.length) issues.push({ code: 'rack', message: `rack of ${def.rack.length} with par ${def.par}: need 1 <= par <= rack, at most ${MAX_RACK} fired items and ${MAX_PULLS} pulls${size ? ` (${size})` : ''}` });
+  // A Mason level fires nothing: its test (mason.ts) takes the rack's place, so its rack must be empty.
+  if (def.mason) {
+    for (const message of masonIssues(def)) issues.push({ code: 'mason', message });
+    if (def.rack.length) issues.push({ code: 'mason', message: `a Mason level's test replaces the rack, so its rack must be empty: ${def.rack.join(', ')}` });
+  }
+  const size = def.mason ? null : rackSizeProblem(def.rack);
+  if (!def.mason && (size || def.par < 1 || def.par > def.rack.length)) issues.push({ code: 'rack', message: `rack of ${def.rack.length} with par ${def.par}: need 1 <= par <= rack, at most ${MAX_RACK} fired items and ${MAX_PULLS} pulls${size ? ` (${size})` : ''}` });
   const fz = def.freeze === undefined ? null : freezeProblem(def.freeze);
   if (fz) issues.push({ code: 'freeze', message: fz });
   for (const message of chargeIssues(c)) issues.push({ code: 'charge', message });
@@ -697,7 +721,7 @@ export function validateLevel(c: CompiledLevel, opts: ValidateOptions = {}): Iss
     for (let i = 0; i < m.n; i++) if (!pinned(i)) { pe0 += peOf_mJ(m.mass[i]!, m.home[3 * i + 1]!); floor += peOf_mJ(m.mass[i]!, Math.min(m.half[3 * i]!, m.half[3 * i + 1]!, m.half[3 * i + 2]!)); }
     const block = commonMass(m), least = peOf_mJ(block, h);
     // A bell level brings nothing down: what it must do is ring the bell.
-    if (pe0 - floor < least && def.objective.kind !== 'bell') issues.push({ code: 'flat', message: `the structure holds ${((pe0 - floor) / 1000).toFixed(1)} J over lying flat, under one ${block.toFixed(1)} kg block falling 1 h (${(least / 1000).toFixed(1)} J): nothing to bring down` });
+    if (pe0 - floor < least && def.objective.kind !== 'bell' && !def.mason) issues.push({ code: 'flat', message: `the structure holds ${((pe0 - floor) / 1000).toFixed(1)} J over lying flat, under one ${block.toFixed(1)} kg block falling 1 h (${(least / 1000).toFixed(1)} J): nothing to bring down` });
   }
 
   issues.push(...rackIssues(c, engine));

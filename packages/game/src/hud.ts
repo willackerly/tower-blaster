@@ -148,6 +148,7 @@ export function objectiveText(o: Objective): string {
     case 'collapse': return `bring ${pct(o.min)} down`;
     case 'hold': return 'keep the crown up';
     case 'bell': return 'ring the bell';
+    case 'trial': return 'build it to pass the test';
   }
 }
 
