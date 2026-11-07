@@ -3,8 +3,16 @@
 // nothing. Outputs live in golden/options-golden.json and inputs in golden/options-cases.ts; never
 // regenerate the outputs. An option added later is not in the record: each comparison takes the
 // recorded fields, keys and rows only, so a new option leaves this file and its record alone.
+//
+// Deliberate changes since the record, each edited into the record by hand (never regenerated), with its reason:
+//   - 2026-11-07, PT37 (agent playtest 2, J1 #19): the Sound row is an On/Off pair; it was one toggle reading "On" or
+//     "Off", which the judges read as a label with no other side. The four recorded Sound rows were edited to the pair.
+//   - 2026-11-07, PT37 (J2 #19): Advanced settings shows six rows and puts the rest under a Developer settings
+//     disclosure. The rows are rendered with it open and compared in the registry's order (SETTING_OPTIONS), which
+//     the door keeps within each part; their markup is unchanged.
 import { describe, expect, it } from 'vitest';
 import { doorHtml } from '../src/door.ts';
+import { SETTING_OPTIONS } from '../src/options/registry.ts';
 import { checkPaceFeel, DEFAULT_FEEL, paceFeel, writePaceFeel } from '../src/pacing.ts';
 import * as S from '../src/settings.ts';
 import { CHECK_PATCHES, FEEL_SEARCHES, FLIPPED_FEEL_SEARCH, FLIPPED_SETTINGS, STORED, URL_SETTINGS } from './golden/options-cases.ts';
@@ -17,6 +25,9 @@ const run = <T>(f: () => T): { ok: T } | { error: string } => { try { return { o
 /** Whether `want` appears in `have` in order (other entries may sit between). */
 const subsequence = (want: readonly string[], have: readonly string[]) => { let i = 0; for (const h of have) if (h === want[i]) i++; return i === want.length; };
 const doorRows = (html: string) => html.split('\n').map((l) => l.trim()).filter((l) => l.startsWith('<span class="group">'));
+/** Rows back in the registry's order (the door shows the player's rows, then the Developer ones, each part in this order). */
+const actOf = (row: string) => SETTING_OPTIONS.findIndex((o) => row.includes(`data-act="${o.door.act}"`));
+const inListOrder = (rows: readonly string[]) => [...rows].sort((a, b) => actOf(a) - actOf(b));
 
 describe('game options, as recorded before the registry (O4)', () => {
   it('the feel defaults, field by field and in order', () => {
@@ -92,7 +103,7 @@ describe('game options, as recorded before the registry (O4)', () => {
   it("the door's Advanced settings rows, markup and order", () => {
     const settings: Record<string, S.Settings> = { default: S.DEFAULT_SETTINGS, flipped: { ...S.DEFAULT_SETTINGS, ...FLIPPED_SETTINGS } as S.Settings, candy: { ...S.DEFAULT_SETTINGS, look: 'candy', quality: 'mid', sharp: 2 } };
     for (const c of golden.doorCases) {
-      const rows = doorRows(doorHtml({ levels: [], current: -1, settings: settings[c.settings]!, howTo: false, advanced: true, detected: c.detected as never }));
+      const rows = inListOrder(doorRows(doorHtml({ levels: [], current: -1, settings: settings[c.settings]!, howTo: false, advanced: true, developer: true, detected: c.detected as never })));
       expect(subsequence(c.rows, rows), `${c.settings} ${c.detected}:\n${rows.join('\n')}`).toBe(true);
     }
   });

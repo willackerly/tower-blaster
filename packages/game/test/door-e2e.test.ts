@@ -103,6 +103,10 @@ describe('front door', () => {
     // The settings sit behind Advanced settings, closed until it is clicked.
     expect(await page.locator('.kg-door [data-act="look"]').count()).toBe(0);
     await page.locator('.kg-door [data-act="advanced"]').click();
+    // PT37: six settings show; the rest wait under Developer settings, opened here to reach them all.
+    expect(await page.locator('.kg-door .advanced .group').count()).toBe(6);
+    expect(await page.locator('.kg-door [data-act="marks"]').count()).toBe(0);
+    await page.locator('.kg-door [data-act="developer"]').click();
     // Each setting clicked, and what it changes by its option's door row (settings.ts doorChange): what is stored after.
     const changed: Partial<Settings> = {};
     const pick = async (act: string, arg = '') => {
@@ -110,7 +114,7 @@ describe('front door', () => {
       Object.assign(changed, doorChange(act, arg, { ...DEFAULT_SETTINGS, ...changed }));
     };
     await pick('look', 'real');
-    await pick('sound');
+    await pick('sound', 'off');
     await pick('sharp', '1');
     // Camera: still by default; Dynamic turns the follow and the shake on at once, over the URL's keystone.shake=0, which goes.
     expect(await page.locator('.kg-door [data-act="camera"].on').innerText()).toBe('Still');
@@ -158,8 +162,9 @@ describe('front door', () => {
     await page.goto(game.url('/?level=L1&engine=rapier&offscreen=1&door=1'));
     await page.waitForFunction(() => window.__game?.status === 'running', undefined, { timeout: MINUTES });
     await page.locator('.kg-door [data-act="advanced"]').click();
+    await page.locator('.kg-door [data-act="developer"]').click();
     expect(await page.locator('.kg-door [data-act="look"].on').innerText()).toBe('Photoreal');
-    expect(await page.locator('.kg-door [data-act="sound"]').innerText()).toBe('Off');
+    expect(await page.locator('.kg-door [data-act="sound"].on').innerText()).toBe('Off');
     expect(await page.locator('.kg-door [data-act="camera"].on').innerText()).toBe('Dynamic');
     expect(await page.evaluate(() => window.__game.feel)).toMatchObject({ follow: true, shake: true, rapid: false, turnView: false });
     expect(await page.locator('.kg-door [data-act="duelview"].on').innerText()).toBe('Leave it');
@@ -170,10 +175,14 @@ describe('front door', () => {
     const l1 = page.locator('.kg-door .card[aria-label^="L1 "]');
     expect(await l1.innerText()).toContain('1 play');
     expect(await l1.locator('li.got').count()).toBe(stars);
-    // Forget my progress takes two clicks.
+    // Forget my progress asks first (PT37): Keep backs out, Forget forgets.
+    await page.locator('.kg-door [data-act="reset"]').click();
+    await page.locator('.kg-door [data-act="reset-no"]').click();
+    expect(await l1.innerText()).toContain('1 play');
+    expect(await page.locator('.kg-door [data-act="reset-yes"]').count()).toBe(0);
     await page.locator('.kg-door [data-act="reset"]').click();
     expect(await l1.innerText()).toContain('1 play');
-    await page.locator('.kg-door [data-act="reset"]').click();
+    await page.locator('.kg-door [data-act="reset-yes"]').click();
     expect(await l1.innerText()).toContain('Not played yet');
     expect(errors).toEqual([]);
     await page.close();

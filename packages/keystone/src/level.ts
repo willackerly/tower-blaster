@@ -210,6 +210,8 @@ export interface LevelDef {
   solutions?: { par?: Shot[]; ace?: Shot[]; opener?: Shot; teach?: true };
   /** Default 'par': every level before the spectacle mode, scored as before. */
   scoring?: Scoring;
+  /** How leverage pays points (LEV_POINTS; URL key keystone.levpoints). Default 'log'; 'share' is part of the hash, so score casts made under log never show. */
+  levPoints?: LevPoints;
   /** Outcome levels: the cast star thresholds; absent, stars are uncast (only the objective's star). */
   stars?: StarsDef;
   /** Outcome levels: end at the first settle where the objective is met, as par levels do (URL key keystone.autobank). Default: end at a bank or an empty rack. */
@@ -397,6 +399,20 @@ export function checkSettle(v: unknown, where = 'settle'): SettleRule {
   return v as SettleRule;
 }
 
+/**
+ * How leverage pays points (rules.ts leveragePoints; URL key keystone.levpoints; PT31): 'log', the default every
+ * score was made under, 300 log2(1 + L) on the round; 'share', each shot's leverage against the level's gold line,
+ * capped, times the share of the structure that shot brought down, so the line is at most 1,000 and a shot that
+ * brings nothing down adds nothing. Opt-in until the score-metric casts (B2) are recast under it.
+ */
+export const LEV_POINTS = ['log', 'share'] as const;
+export type LevPoints = (typeof LEV_POINTS)[number];
+/** Throws unless v is a leverage points rule, naming `where`. */
+export function checkLevPoints(v: unknown, where = 'levPoints'): LevPoints {
+  if (!(LEV_POINTS as readonly unknown[]).includes(v)) throw new Error(`${where} must be ${LEV_POINTS.join(' or ')}: ${String(v)}`);
+  return v as LevPoints;
+}
+
 export const ROLE_ID: Record<Role, number> = { plain: 0, crown: 1, heritage: 2 };
 /** Most rack items that fire something; pulls count apart (MAX_PULLS), since they add no body. */
 export const MAX_RACK = 8;
@@ -485,6 +501,7 @@ export function hashString(s: string): string {
 export function compileLevel(def: LevelDef): CompiledLevel {
   if (def.physics) checkPhysics(def.physics);
   if (def.settle !== undefined) checkSettle(def.settle);
+  if (def.levPoints !== undefined) checkLevPoints(def.levPoints);
   if (def.runWindow !== undefined) checkRunWindow(def.runWindow);
   if (def.quake !== undefined) checkQuakeRules(def.quake);
   if (def.heritage !== undefined && def.heritage !== 'pose' && def.heritage !== 'standing') throw new Error(`heritage must be pose or standing: ${String(def.heritage)}`);
@@ -570,6 +587,7 @@ export function compileLevel(def: LevelDef): CompiledLevel {
   const { solutions: _omit, stars: _stars, custom: _custom, push: _push, ...geometry } = def;
   if (geometry.scoring === 'par') delete geometry.scoring;
   if (geometry.autobank === false) delete geometry.autobank;
+  if (geometry.levPoints === 'log') delete geometry.levPoints;
   // The settle rule a level plays by hashes as absent when it is the one its scoring used before v3 (par v1, outcome v2), so those
   // levels hash as they did; any other, outcome levels' default v4 included, is written out, so stars cast under one rule never show under another.
   const settleRule = settleOf(def);
