@@ -109,16 +109,32 @@ export function spentFx(fx: FxOptions | null, t: number): FxOptions {
 // (The game fades only painted balls and rams: play.ts spendFired. A null fx fades from white, for tools.)
 
 /**
- * How the game paints the structure's role events under effect style `style` (PaceFeel.fx): the flash of a felled
- * crown and of cracked heritage, and the glow each keeps after (also when an undo or a line restores them). In
- * 'damage' (PT2) a cracked heritage block flashes teal and stays its teal, and a felled crown stays gold without
- * a glow, as play leaves them; 'classic' flashes them to white (emissive 1, 16x the albedo) and an undo restored
- * them glowing (crown 0.9, heritage 1), unlike play.
+ * The colour of lost heritage (PT28, agent playtest 2: judges read "28 cracked" over a cathedral that still
+ * looked whole, since a cracked block kept its teal): a fired-brick red, painted (COAT_PAINT, the duel inks'
+ * mechanism) so it is the same red in every look. sRGB #A1342A, OKLCh L 0.48 C 0.15 hue 29: the HUD's crack
+ * banner (#F0806A) and the aim beads (#FF7A5A, L 0.73) share its hue but sit far above it in lightness, and it
+ * is 147 degrees from the glaze, so lost and intact heritage differ in hue and in luma.
  */
-export function rolePaint(style: EffectStyle) {
+export const HERITAGE_LOST_TINT_SRGB = 0xa1342a;
+export const HERITAGE_LOST_TINT: [number, number, number] = [(HERITAGE_LOST_TINT_SRGB >> 16) & 255, (HERITAGE_LOST_TINT_SRGB >> 8) & 255, HERITAGE_LOST_TINT_SRGB & 255].map((x) => srgbToLinear(x / 255)) as [number, number, number];
+/** The flash of heritage breaking, damage style: the lost red at this glow, fading over HERITAGE_FLASH_S seconds. */
+export const HERITAGE_FLASH_GLOW = 0.6;
+export const HERITAGE_FLASH_S = 0.9;
+
+/**
+ * How the game paints the structure's role events under effect style `style` (PaceFeel.fx): the flash of a felled
+ * crown and of cracked heritage, and the look each keeps after (also when an undo or a line restores them). The
+ * caller supplies the body's own tint (`{ tint: ownTint(b), ...paint }`), which an entry here overrides only where
+ * it names one. In 'damage' a felled crown flashes once and keeps its gold without a glow (PT2), and cracked
+ * heritage flashes red and stays painted the lost red (PT28): a loss, distinct from intact heritage in every look.
+ * 'classic' is the look before PT2: both flash to white (emissive 1, 16x the albedo) and an undo restored them
+ * glowing (crown 0.9, heritage 1), unlike play.
+ */
+export function rolePaint(style: EffectStyle): { crownFlash: FxOptions; heritageFlash: FxOptions; crownKept: FxOptions; heritageKept: FxOptions } {
+  const lost: FxOptions = { coat: COAT_PAINT, tint: HERITAGE_LOST_TINT };
   return style === 'damage'
-    ? { crownFlash: { tint: TINT.crown, emissive: 0.9, flash: 0.5 }, heritageFlash: { tint: TINT.heritage, emissive: 0.2, flash: 0.8 }, crownKept: { tint: TINT.crown }, heritageKept: { tint: TINT.heritage } }
-    : { crownFlash: { tint: TINT.crown, emissive: 0.9, flash: 0.5 }, heritageFlash: { tint: TINT.heritage, emissive: 1, flash: 0.8 }, crownKept: { tint: TINT.crown, emissive: 0.9 }, heritageKept: { tint: TINT.heritage, emissive: 1 } };
+    ? { crownFlash: { emissive: 0.9, flash: 0.5 }, heritageFlash: { ...lost, emissive: HERITAGE_FLASH_GLOW, flash: HERITAGE_FLASH_S }, crownKept: {}, heritageKept: lost }
+    : { crownFlash: { emissive: 0.9, flash: 0.5 }, heritageFlash: { emissive: 1, flash: 0.8 }, crownKept: { emissive: 0.9 }, heritageKept: { emissive: 1 } };
 }
 
 // Ice is drawn by the renderer's ice pass (@tb/render ice.ts), which makes its own blue from the light's

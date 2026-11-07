@@ -10,7 +10,7 @@ import { type BodyDesc, type EngineHealth, limitsHit, type PhysicsEngine, type V
 import { armRefusal, type RackItem, type CompiledLevel, compileLevel, Driver, type DriverCheckpoint, Duel, type DuelDef, DEFAULT_TURN_SECONDS, type Feedback, type Footprint, type Goal, goalMet, type Player, type Grade, gradeOf, type LevelDef, type LevelScore, type LotSheet, type PerStep, playShots, rapidDue, roundFacts, RUBE_GO, runSession, selectFootprints, selectGroups, type Shot, isIcePiece, QUAKE, snapshotHash, TIER_NAMES } from '@tb/keystone';
 import { DIAL_KEYS, type DialField, dialShot, dialStart, dialStep, type QuakeDial, quakePanelHtml, seismogram } from './quake-panel.ts';
 import { clampPitch, eyeOf, type Orbit, rayThrough, viewProj } from '@tb/render/camera';
-import type { EffectStats, FxOptions, PixelStats, Renderer, SnapshotSource } from '@tb/render';
+import type { EffectStats, Fx, FxOptions, PixelStats, Renderer, SnapshotSource } from '@tb/render';
 import type { HostStats } from '@tb/audio';
 import type { WeaponTier } from '@tb/weapons';
 import { type Aimed, arcContact, azFromYaw, type Contact, launchHeight, launchStep, pick, previewBeads, pullFor, shotFor, SUBSTEPS } from './aim.ts';
@@ -239,6 +239,8 @@ export interface GameHandle {
   effects(): Promise<EffectStats>;
   /** The mark carved on each structure body now, read back from the renderer (@tb/render MARK_NONE, MARK_HIT, MARK_SAVE). */
   marks(): number[];
+  /** Body `body`'s fx record now, read back from the renderer (tint, glow, its flash, mark, coat): tests (PT28's lost heritage). */
+  fxOf(body: number): Fx | null;
   /** Carve or clear the stones again as feel.marks now says (the front door's Stone marks setting changed). */
   refreshMarks(): void;
   /** Physics state now: step, phase and a hash of every pose. */
@@ -334,7 +336,7 @@ export function newGameHandle(): GameHandle {
   const none = (): SessionState => ({ step: 0, phase: 'loading', strokes: 0, heritageBroken: 0, hash: '' });
   return {
     status: 'loading', engine: '', level: '', phase: 'loading', ready: false, frozen: false, frames: 0, stepIndex: 0, strokes: 0, bodies: 0, collapse: 0, fast: false, hold: false, pace: { timeScale: 1, speed: 1, tag: '', tailSkip: false, costMs: NaN }, view: { target: [0, 0, 0], distance: 0, yaw: 0, pitch: 0, following: false, jolt: 0, turning: false, cue: null, arcBeads: 0, impact: false, xray: false }, input: { touch: false, gesture: 'idle', fingers: 0, aimed: null, power: 100, launch: 0 }, result: null, counts: {}, feel: { ...DEFAULT_FEEL }, resultShownAt: null, card: { place: 'center', endedMs: null, shownMs: null }, openingHud: null, timing: { loadMs: 0, load: noPhases(), stepMs: [], moving: [], frameMs: [], costMs: [] }, draws: { drawn: 0, skipped: 0, decimating: false },
-    fire: () => false, bank: () => false, skip: () => false, freeze: () => false, fireOpener: () => false, setMuted: () => {}, maxDpr: 2, quality: null, aim: () => null, reach: null, impact: null, select: () => false, dial: () => null, dialStep: () => null, startQuake: () => false, load: async () => {}, retry: async () => {}, undo: async () => false, undone: null, spare: null, undoMemory: () => ({ marks: 0, bytes: 0 }), capture: async () => null, sightlines: async () => null, coverage: async () => 0, pixelsOf: async () => ({ width: 0, height: 0, at: [] }), pullDrawn: null, frozenGrade: 0, firedLooks: () => [], spentLooks: () => [], effects: async () => ({ particles: 0, hot: 0, spawned: 0, flashes: 0, blasts: 0, fuses: 0 }), marks: () => [], refreshMarks: () => {},
+    fire: () => false, bank: () => false, skip: () => false, freeze: () => false, fireOpener: () => false, setMuted: () => {}, maxDpr: 2, quality: null, aim: () => null, reach: null, impact: null, select: () => false, dial: () => null, dialStep: () => null, startQuake: () => false, load: async () => {}, retry: async () => {}, undo: async () => false, undone: null, spare: null, undoMemory: () => ({ marks: 0, bytes: 0 }), capture: async () => null, sightlines: async () => null, coverage: async () => 0, pixelsOf: async () => ({ width: 0, height: 0, at: [] }), pullDrawn: null, frozenGrade: 0, firedLooks: () => [], spentLooks: () => [], effects: async () => ({ particles: 0, hot: 0, spawned: 0, flashes: 0, blasts: 0, fuses: 0 }), marks: () => [], fxOf: () => null, refreshMarks: () => {},
     state: none, asleep: () => ({ asleep: 0, of: 0 }), line: () => [], replay: async () => none(), health: async () => null, pairsPerBody: 0, limitsHit: [], goals: [], grade: null, duel: null, handoff: false, scoreFloat: '',
     sound: () => ({ mode: 'collapse', status: 'off', error: '', posted: 0, stats: null }),
     ice: () => ({ count: 0, cracks: [] }),
@@ -975,8 +977,8 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     applyMarks();
     paintIce();
     const s = driver.session, roles = rolePaint(feel.fx);
-    s.crownLive.forEach((down, k) => { if (down) renderer.setFx(c.meta.crowns[k]!, { ...roles.crownKept, tint: ownTint(c.meta.crowns[k]!) }); });
-    s.heritageBroken.forEach((cracked, k) => { if (cracked) renderer.setFx(c.meta.heritage[k]!, { ...roles.heritageKept, tint: ownTint(c.meta.heritage[k]!) }); });
+    s.crownLive.forEach((down, k) => { if (down) renderer.setFx(c.meta.crowns[k]!, { tint: ownTint(c.meta.crowns[k]!), ...roles.crownKept }); });
+    s.heritageBroken.forEach((cracked, k) => { if (cracked) renderer.setFx(c.meta.heritage[k]!, { tint: ownTint(c.meta.heritage[k]!), ...roles.heritageKept }); });
     // No spark, heat, flash, blast or lit fuse of the undone shot carries over (PT2); the kept shots' fuses are lit again below.
     renderer.resetEffects();
     fading = [];
@@ -1202,8 +1204,8 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     foldLot = c.def.objective.kind === 'fold' ? lotBeads(c) : null;
     if (line) {
       const s = driver.session, roles = rolePaint(feel.fx);
-      s.crownLive.forEach((down, k) => { if (down) renderer.setFx(c.meta.crowns[k]!, { ...roles.crownKept, tint: ownTint(c.meta.crowns[k]!) }); });
-      s.heritageBroken.forEach((cracked, k) => { if (cracked) renderer.setFx(c.meta.heritage[k]!, { ...roles.heritageKept, tint: ownTint(c.meta.heritage[k]!) }); });
+      s.crownLive.forEach((down, k) => { if (down) renderer.setFx(c.meta.crowns[k]!, { tint: ownTint(c.meta.crowns[k]!), ...roles.crownKept }); });
+      s.heritageBroken.forEach((cracked, k) => { if (cracked) renderer.setFx(c.meta.heritage[k]!, { tint: ownTint(c.meta.heritage[k]!), ...roles.heritageKept }); });
     }
     fxSlots = descs.length;
     pacer.reset();
@@ -1451,7 +1453,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
         case 'crownDown':
           juice.shake(0.08);
           // A felled crown flashes once and stops glowing.
-          renderer.setFx(f.body, { ...rolePaint(feel.fx).crownFlash, tint: ownTint(f.body) });
+          renderer.setFx(f.body, { tint: ownTint(f.body), ...rolePaint(feel.fx).crownFlash });
           // Only where the clear ends the level: par levels, and outcome levels with autobank.
           if (c.def.objective.kind === 'crowns' && f.ordinal + 1 === c.meta.crowns.length && driver.session.phase === 'running' && (driver.session.scoring === 'par' || c.def.autobank)) {
             ending = true;
@@ -1488,8 +1490,8 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
         case 'heritageCrack':
           juice.shake(0.3);
           banner('Heritage cracked', 'crack');
-          // Damage style: a teal flash that stays teal (classic: to white).
-          renderer.setFx(f.body, { ...rolePaint(feel.fx).heritageFlash, tint: ownTint(f.body) });
+          // Damage style: a red flash, and the block stays painted the lost red (PT28; classic: to white).
+          renderer.setFx(f.body, { tint: ownTint(f.body), ...rolePaint(feel.fx).heritageFlash });
           break;
         case 'tier': banner(`${TIER_NAMES[f.tier]}!`); break;
         case 'settled':
@@ -1783,6 +1785,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
   };
   handle.startQuake = () => dial !== null && fire(dialShot(dial));
   handle.marks = () => Array.from({ length: c.meta.n }, (_, i) => renderer.fxOf(i).mark);
+  handle.fxOf = (b) => renderer.fxOf(b);
   handle.refreshMarks = () => applyMarks();
   handle.firedLooks = () => {
     const fused = new Set(renderer.fuses.slots), out: ('bomb' | 'ram' | 'painted' | 'plain')[] = [];
