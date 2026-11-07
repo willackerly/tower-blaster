@@ -9,7 +9,9 @@
 //             instead of box when all of it lies lodDepth or more past the
 //             near plane (material level of detail: see Renderer), and in
 //             boxIce instead when its surface is ice (surface.ts; drawn in
-//             the ice pass after the opaque scene, at every distance)
+//             the ice pass after the opaque scene, at every distance); an
+//             ice box's shadow goes in boxIceShadow, drawn with a screen-door
+//             caster that lets part of the sun through (ice.ts IceParams.shadow)
 //   scan      exclusive scan over all segment flags (one Scanner, fixed n)
 //   scatter   flagged slot -> lists[seg * capacity + local index]
 //   args      one thread: drawIndirect arguments per segment
@@ -25,9 +27,9 @@ import { FX_WGSL } from './fx.ts';
 import { SURFACE_ICE } from './surface.ts';
 import type { BodySource } from './source.ts';
 
-export const SEGMENTS = ['box', 'sphere', 'boxShadow', 'sphereShadow', 'boxFar', 'boxIce'] as const;
+export const SEGMENTS = ['box', 'sphere', 'boxShadow', 'sphereShadow', 'boxFar', 'boxIce', 'boxIceShadow'] as const;
 export type Segment = (typeof SEGMENTS)[number];
-export const SEG = { box: 0, sphere: 1, boxShadow: 2, sphereShadow: 3, boxFar: 4, boxIce: 5 } as const;
+export const SEG = { box: 0, sphere: 1, boxShadow: 2, sphereShadow: 3, boxFar: 4, boxIce: 5, boxIceShadow: 6 } as const;
 const NSEG = SEGMENTS.length;
 
 /** CullFrame.lodDepth when no box is far: every visible box is listed in box. */
@@ -120,10 +122,11 @@ fn prepare(@builtin(global_invocation_id) id: vec3u) {
   }
   scan[i] = select(0u, 1u, vis && seg == 0u && !far && !ice);
   scan[cap + i] = select(0u, 1u, vis && seg == 1u);
-  scan[2u * cap + i] = select(0u, 1u, shadow && seg == 0u);
+  scan[2u * cap + i] = select(0u, 1u, shadow && seg == 0u && !ice);
   scan[3u * cap + i] = select(0u, 1u, shadow && seg == 1u);
   scan[4u * cap + i] = select(0u, 1u, vis && seg == 0u && far && !ice);
   scan[5u * cap + i] = select(0u, 1u, vis && seg == 0u && ice);
+  scan[6u * cap + i] = select(0u, 1u, shadow && seg == 0u && ice);
   if (i == 0u) { scan[${NSEG}u * cap] = 0u; }
 }
 
@@ -142,7 +145,7 @@ fn scatter(@builtin(global_invocation_id) id: vec3u) {
 fn writeArgs() {
   let cap = p.capacity;
   for (var s = 0u; s < ${NSEG}u; s++) {
-    args[4u * s] = select(select(p.vertsBox, p.vertsBoxShadow, s == ${SEG.boxShadow}u), p.vertsSphere, s == ${SEG.sphere}u || s == ${SEG.sphereShadow}u);
+    args[4u * s] = select(select(p.vertsBox, p.vertsBoxShadow, s == ${SEG.boxShadow}u || s == ${SEG.boxIceShadow}u), p.vertsSphere, s == ${SEG.sphere}u || s == ${SEG.sphereShadow}u);
     args[4u * s + 1u] = scan[(s + 1u) * cap] - scan[s * cap];
     args[4u * s + 2u] = 0u;
     args[4u * s + 3u] = 0u;

@@ -85,6 +85,7 @@ The bench also gains an `ice` pass-time column and an ice-box count.
 | `ice.crack` | 1 | 0 to 2 | crack visibility |
 | `ice.blur` | 2 px | | blur of what is seen through |
 | `ice.rime` | 0.2 | 0 to 1 | white rime at the edges |
+| `ice.shadow` | 0.7 | 0 to 1 | share of the sun an ice block's shadow lets through (0: opaque, as stone's) |
 
 Absorption and glint size are per metre, converted by the world's metres per unit, so a quarter-metre world looks the same.
 
@@ -113,12 +114,19 @@ The rules decide when ice cracks and shatters, deterministically, from observed 
   - Each piece is 4% smaller than its cell, so the pieces start apart.
   - Each piece is denser by the same share, so mass is kept.
   - Each piece moves at the block's velocity at its centre (v + ω × r), plus an outward kick of 0.6 m/s. The kick grows with the hit, up to twice that.
-  - Momentum is kept: the kicks cancel over the symmetric split, and a test checks it.
+  - Momentum is kept: the kicks' mass-weighted mean is taken off (zero over an even split), and a test checks it.
   - At most one block shatters per step, the hardest hit first; the others keep their damage and go in later steps.
   - Pieces crack but never shatter again.
+  - **As fragments** (`fragments`, the default since PT15; below): the cuts are uneven, the pieces' faces rough, and each piece starts crushed.
+- **Fragments (PT15, agent playtest 1: "whole cubes skating 20 m across the plain, no fragments").** Three changes, each in `keystone/src/ice.ts`:
+  - *Uneven cuts.* Each split axis is cut at `pieceCut(seed, axis)`, from 32% to 68% of its length (`PIECE_CUT` 0.18), seeded by the block's crack seed with an integer hash (no trig or floats: the same on every platform, so replays hold). The cells still tile the block, so mass and centre are kept exactly; the kick's mass-weighted mean is taken off to keep the momentum.
+  - *Rough faces.* Pieces take `PIECE_FRICTION` 0.5 instead of ice's 0.05: a fracture face is rough, a polished block is not. Keystone combines friction by the minimum, so pieces on 0.05 slid as far as a whole block on the ice's own polish: about 25 m from 5 m/s; on 0.5, 2.6 m. Whole blocks keep 0.05 (ice is slippery).
+  - *Crushed.* Each piece starts at crack level `PIECE_CRACK` 4 (crushed white and grainy) at the corner that faced the block's centre (`pieceCorner`), so the faces that were inside read as broken; it carries on cracking from there. The shatter feedback carries these cracks (`IceShatter.cracks`) and the game paints them.
+  - Measured on Rapier (`keystone-lab/test/ice.test.ts`: L1 built of ice under its par shot): each piece's horizontal distance from where it spawned to where the session settles it: median **1.1 m**, p90 **3.8 m**, max 6.1 m as fragments; 6.1, 23.6 and 39 m as even cubes on 0.05.
+  - Alternatives weighed: *more pieces* (3 x 3 x 3) reads finer but costs 27 bodies a block instead of 8 against the engines' budget (`IceBreaker.budget`) and the GPU's capacity; *shard meshes* (Voronoi) need a mesh pipeline and the engines collide only boxes and spheres; *more ground friction for ice* would change how whole blocks slide, which is ice's character, and every level's ground; *damping the pieces* hides the motion instead of explaining it. `fragments: false` keeps the even cubes.
 - **Scoring.** The rules score the structure's n bodies. A shattered block is scored where its pieces are: at their mass-weighted centre, moving at their mass-weighted velocity, awake while any piece is (`IceBreaker.view`). The structure's potential energy is then exactly what it would be summed over the pieces. A shattered crown counts as down, and shattered heritage as broken (`Session.shatter`).
 - **Budget.** Engines reserve 8 bodies per ice block (`IceBreaker.budget`), in the GPU capacity and in Rapier's validation.
-- **Level block.** `LevelDef.physics.ice` takes `{ crackDv, shatterDv, shatter }`. Whenever a level has ice, the rules join the level hash written out in full, so retuning `ICE_DEFAULTS` drops stars cast under the old values. A level without ice hashes as before.
+- **Level block.** `LevelDef.physics.ice` takes `{ crackDv, shatterDv, shatter, fragments }`. Whenever a level has ice, the rules join the level hash written out in full, so retuning `ICE_DEFAULTS` drops stars cast under the old values. A level without ice hashes as before.
 
 ### Calibration
 
@@ -195,7 +203,32 @@ At 1.5 and 5, the counts per engine are:
 ## Known limitations and follow-ups
 
 - **Ice behind ice.** Ice seen through ice shows what is behind both. Depth peeling fixes it at two more depth layers, if ice walls need it.
-- **Shadows.** Ice casts an opaque shadow. Coloured or caustic shadows would mean a transmittance shadow map. To keep stacked ice from going navy, light inside the ice (scattering, bubbles, frosted lines) takes the sun at `mix(shadow, 1, 0.6)` and is not gated by the entry face; the highlight and glints keep the hard shadow.
+- **Shadows.** Ice casts a lighter shadow than stone (PT15, below); a coloured or caustic shadow would still need a transmittance shadow map. Light inside the ice (scattering, bubbles, frosted lines) takes the sun at `mix(shadow, 1, 0.6)` and is not gated by the entry face; the highlight and glints keep the shadow as it is.
+
+### A lighter shadow (PT15, agent playtest 1)
+
+The judges saw T-I1's lower courses go "near-black, dark smoked glass" in the real look (`T-I1-real-desktop-00`). The cause: those courses refract the floor just behind the column (screen-space refraction, step 3 above), and that floor lay in the column's own shadow, opaque as stone's. With the sun from the opening view (`docs/render/look-colours.md` §1) T-I1's shadow falls in front, so the opening frame mostly recovered, but an orbiting player sees the column against its shadow again, and the bottom course was still dark.
+
+Clear ice lets most of the sun through: Fresnel at each face takes about 2% head-on, absorption over a 2 m path at `absorb` 0.5 takes most of the red and little of the rest, and refraction moves the light (caustics) rather than removing it. So an ice box now casts its shadow through a **screen door**: the cull pass lists ice shadows in their own segment (`SEG.boxIceShadow`), drawn after the opaque casters with a depth pipeline whose fragment shader (`fsIceShadow`) discards `ice.shadow` of the shadow-map texels, in ninths, in an ordered 3 x 3 pattern (0.7 opens 6 of 9). The receivers' filter (3 x 3 taps, or the real look's PCSS) averages the holes into a shadow a third as deep. The pattern's period is 3 because the stylized looks' filter is 3 x 3 taps: every such window, bilinear taps included, holds each of the nine cells exactly once, so the shadow is even. A first 4 x 4 (Bayer) pattern showed moire rings in hazy's shadow under T-I2. Opaque casters keep their depth-only pipeline, the same draw as before; without ice the extra draw is skipped.
+
+Measured on T-I1 in the real look, the look's own sun (shadow behind the column), OKLab lightness of each course's own pixels from the ID pass (`game/test/ice-pale-e2e.test.ts`):
+
+| Ice shadow | Lowest 4 courses | Next 4 |
+|---|---|---|
+| opaque (`ice.shadow=0`, before) | 0.433 | 0.561 |
+| **screen door 0.7 (default: 6 of 9 open)** | **0.525** | 0.561 |
+| none (`ice.shadow=1`, the ceiling) | 0.556 | 0.561 |
+
+0.7 closes 75% of the gap and keeps a visible shadow that grounds the column (half open closed about 60%, measured with the first pattern).
+
+Alternatives weighed:
+
+- *No shadow from ice.* The ceiling above, but an ice tower then floats: the shadow is most of what puts it on the ground.
+- *A frostier, milkier ice (more `cloud`)* so the background matters less. Ice in every look would turn opaque white and lose the refraction that makes it read as ice (the judges: ice in hazy "really does read as ice").
+- *A transmittance (coloured) shadow map.* Correct colour and caustics, at a second shadow target and a second sample per receiver for every block in the scene. The screen door is one more indirect draw and only while ice exists.
+- *A dithered discard in the existing box caster.* One pipeline, but a fragment stage with `discard` on every box's shadow loses the tile GPUs' depth-only fast path for stone too; a separate segment keeps stone's draw as it was.
+
+Tests: the cull reference lists ice shadows in `boxIceShadow` and the GPU cull matches it (`render.test.ts`, seed 10 with ice; no ice, none listed); the knob parses (`ice.test.ts`); the table above as bounds (`ice-pale-e2e.test.ts`: the low courses within 7% of the next four and 70% of the gap closed; opaque, they are under 85%).
 - **Particles.** Debris and chips from ice use the stone colours, so a shatter emits no burst (the stone-coloured sparks read as metal on ice). Frost powder (white, slow, drifting particles) is the follow-up.
 - **Colour of what is behind.** Through ice, the brown ground reads slightly green in the real look, which is the blue absorption over brown. This is physically right, but may want a hue nudge.
 - **Engine-dependent thresholds.** Rapier shatters about 4× as much as AVBD at the same thresholds.
