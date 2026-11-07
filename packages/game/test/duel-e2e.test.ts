@@ -7,10 +7,10 @@
 // refused shot say which way to drag. Nothing shows empty, and a duel cannot be banked before it is decided
 // (PT5, agent playtest 1). Headless Chromium.
 import { describe, expect, it } from 'vitest';
-import { D1, EAST_ARC, inArc, type Shot, WEST_ARC } from '@tb/keystone';
+import { compileLevel, D1, duelLevel, EAST_ARC, inArc, type Shot, WEST_ARC } from '@tb/keystone';
 import type { Page } from 'playwright';
 import { azFromYaw } from '../src/aim.ts';
-import { DUEL_YAW_OFFSET } from '../src/duel-view.ts';
+import { duelEndView, DUEL_YAW_OFFSET } from '../src/duel-view.ts';
 import { gamePage, ready } from './page.ts';
 
 /** Turn view azimuths: DUEL_YAW_OFFSET round from the middle of each side's arc (duel-view.ts duelView). */
@@ -37,7 +37,10 @@ describe('game page, Siege Table', () => {
     const { page, errors } = o;
     await ready(page);
     expect(await page.evaluate(() => [window.__game.level, window.__game.duel?.turn, window.__game.duel?.first])).toEqual(['D1', 0, 0]);
-    expect(await page.evaluate(() => document.querySelector('.kg-hud')!.textContent)).toMatch(/Gold to fire, from the west/);
+    expect(await page.evaluate(() => document.querySelector('.kg-hud')!.textContent)).toMatch(/Gold to fire, from behind the gold keep/);
+    // PT34: the goal from the first frame, and no undo or restart on offer in a hot-seat match.
+    expect(await page.evaluate(() => document.querySelector('.kg-hud .duel-goal')?.textContent)).toBe("Topple Blue's ⌖ king · protect your ⛨ king");
+    expect(await page.evaluate(() => document.querySelector('#help')!.textContent)).not.toMatch(/undo|restart/i);
     // The turn view: the duel opens over Gold's shoulder (DUEL_YAW_OFFSET off the middle of its side), its arc dotted on the ground, and no cue.
     await page.waitForFunction(() => window.__game.view.arcBeads > 0, undefined, { timeout: 30_000 });
     const opening = await page.evaluate(() => window.__game.view);
@@ -74,11 +77,20 @@ describe('game page, Siege Table', () => {
       if (k > 0) {
         expect(await page.evaluate(() => [window.__game.handoff, document.querySelector('.duel-handoff.show')?.textContent])).toEqual([true, expect.stringMatching(turn === 0 ? /Gold's turn/ : /Blue's turn/)]);
         expect(await emptyShown(page)).toEqual([]);
+        // PT34: every hand-over says what the last shot did, a miss too.
+        expect(await page.evaluate(() => document.querySelector('.duel-handoff.show .tally')?.textContent)).toMatch(turn === 0 ? /^Blue's shot: 0 gold blocks down · Gold's king stands$/ : /^Gold's shot: 0 blue blocks down · Blue's king stands$/);
         // The second turn's card is tapped away (a tap never fires); later ones go when the shot is fired.
         if (k === 1) {
+          // PT34: on a touch screen the card is opaque, so the rack does not show through it.
+          expect(await page.evaluate(() => { document.body.classList.add('kg-touch'); const bg = getComputedStyle(document.querySelector('.duel-handoff .band')!).backgroundColor; document.body.classList.remove('kg-touch'); return bg; })).toBe('rgb(20, 24, 33)');
           await page.click('.duel-handoff');
           expect(await page.evaluate(() => [window.__game.handoff, window.__game.strokes])).toEqual([false, 1]);
         }
+      }
+      // PT34: R mid-duel restarts nothing (it is Rematch once the duel is over).
+      if (k === 2) {
+        await page.keyboard.press('r');
+        expect(await page.evaluate(() => [window.__game.level, window.__game.strokes, window.__game.duel!.turn])).toEqual(['D1', 2, turn]);
       }
       const ammo = k >= 6 ? 'w-grenade' : 'cannonball';
       const shot = miss(turn === 0 ? WEST : EAST, ammo);
@@ -97,7 +109,12 @@ describe('game page, Siege Table', () => {
     const d = await page.evaluate(() => window.__game.duel!);
     expect(d).toMatchObject({ over: true, winner: null, why: 'both keeps stand alike', log: order });
     expect(d.sides.map((s) => [s.name, s.share, s.shotsLeft])).toEqual([['Gold', 1, 0], ['Blue', 1, 0]]);
-    expect(await page.evaluate(() => document.querySelector('.kg-result')!.textContent)).toMatch(/A draw/);
+    expect(await page.evaluate(() => document.querySelector('.kg-result')!.textContent)).toMatch(/A draw[^]*Blue's last shot: 0 gold blocks down/);
+    // PT34: the turn view ends on the whole table, both keeps (duel-view.ts duelEndView).
+    await page.waitForFunction(() => !window.__game.view.turning, undefined, { timeout: 30_000, polling: 100 });
+    const end = await page.evaluate(() => window.__game.view);
+    const want = duelEndView(compileLevel(duelLevel(D1, 0)), 640 / 400); // offscreen=1 draws 640 x 400
+    expect([end.yaw, end.pitch, end.distance]).toEqual([want.yaw, want.pitch, want.distance].map((x) => expect.closeTo(x, 6)));
     expect(await page.evaluate(() => window.__game.handoff)).toBe(false);
     expect(await emptyShown(page)).toEqual([]);
     // Custom (a duel has no stars): nothing recorded.

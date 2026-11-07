@@ -5,8 +5,8 @@
 // docs/game/siege-table.md ("Balance") come from the same bot over more seeds.
 import { describe, expect, it } from 'vitest';
 import { RapierEngine } from '@tb/adapter-rapier';
-import { D1, D2, type Player } from '@tb/keystone';
-import { clickPoints, type DuelOutcome, noviceDuel, seeded, tallyDuels, tallyLine } from '../src/duel-bot.ts';
+import { compileLevel, D1, D2, Duel, duelLevel, type DuelDef, type Player } from '@tb/keystone';
+import { clickPoints, type DuelOutcome, median, noviceDuel, seeded, swappedOrder, tallyDuels, tallyLine } from '../src/duel-bot.ts';
 
 const SEEDS = Array.from({ length: 20 }, (_, k) => 9100 + k);
 
@@ -35,11 +35,25 @@ describe('novice duels (Rapier)', () => {
   }, 240_000);
 
   it('a balance row counts sides, seats and draws, and rates over the decided duels only', () => {
-    const o = (first: Player, winner: Player | null, turns = 4, own = 0): DuelOutcome => ({ first, winner, over: true, why: '', turns, own, steps: 0 });
-    const t = tallyDuels([o(0, 0), o(1, 0, 6), o(0, 1, 2, 1), o(1, null), { ...o(0, null), over: false, why: 'undecided' }]);
+    const o = (first: Player, winner: Player | null, turns = 4, own = 0, spread = 0): DuelOutcome => ({ first, winner, over: true, why: '', turns, own, steps: 0, spread });
+    const t = tallyDuels([o(0, 0, 4, 0, 7), o(1, 0, 6, 0, 3), o(0, 1, 2, 1, 5), o(1, null), { ...o(0, null), over: false, why: 'undecided' }]);
     expect({ gold: t.gold, blue: t.blue, draw: t.draw, first: t.first, second: t.second, fewest: t.fewest, own: t.own }).toEqual({ gold: 2, blue: 1, draw: 2, first: 1, second: 2, fewest: 2, own: 1 });
-    expect([t.goldRate, t.firstRate, t.turnsPerDuel]).toEqual([2 / 3, 1 / 3, 20 / 5]);
-    expect(tallyLine('D1', 'gpu', 1.6, t)).toBe('D1 gpu aspect 1.6, 5 duels: Gold 2, Blue 1, draws 2; first 1, second 2 (Gold 67%, first 33% of decided); 4.0 turns a duel (fewest 2); clicks on own blocks 1');
+    expect([t.goldRate, t.firstRate, t.turnsPerDuel, t.drawRate, t.medianTurns, t.medianSpread]).toEqual([2 / 3, 1 / 3, 20 / 5, 2 / 5, 4, 3]);
+    expect(tallyLine('D1', 'gpu', 1.6, t)).toBe('D1 gpu aspect 1.6, 5 duels: Gold 2, Blue 1, draws 2; first 1, second 2 (Gold 67%, first 33% of decided); 4.0 turns a duel (median 4, fewest 2); draws 40%; median score margin 3; clicks on own blocks 1');
     expect(tallyDuels([]).goldRate).toBeNaN();
+    expect([median([3, 1, 2]), median([4, 1, 3, 2]), median([])]).toEqual([2, 2.5, NaN]);
+  });
+
+  // PT22's control: the same table with the parts in another order, so the solver meets the sides the other way round.
+  it.each([['D1', D1], ['D2', D2]] as const)('%s with its parts swapped is the same table: each side owns the same blocks', (_id, def: DuelDef) => {
+    const sw = swappedOrder(def);
+    expect(swappedOrder(sw).level.parts).toEqual(def.level.parts);
+    expect(sw.level.parts).not.toEqual(def.level.parts);
+    const owned = (d: DuelDef) => {
+      const c = compileLevel(duelLevel(d)), duel = new Duel(d, c), h = c.meta.home;
+      const at = (g: Int32Array | null) => (g ? Array.from(g, (i) => [h[3 * i], h[3 * i + 1], h[3 * i + 2]].map((v) => v!.toFixed(4)).join(',')).sort() : null);
+      return [at(duel.owned[0]), at(duel.owned[1]), at(duel.kings[0]), at(duel.kings[1])];
+    };
+    expect(owned(sw)).toEqual(owned(def));
   });
 });

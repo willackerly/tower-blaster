@@ -99,9 +99,15 @@ export function checkQuakeRules(q: QuakeRules, where = 'quake'): void {
 /** The engine steps a quake shakes for (its last field key, restoring gravity, is due then). */
 export const quakeSteps = (shot: Pick<QuakeShot, 'sec'>, dt: number): number => Math.round(shot.sec / 10 / dt);
 
+/**
+ * A quake axis in degrees as engine-api's azimuth (radians from +x toward +z). Aftershock's shot path and Mason's
+ * test (mason.ts masonField) both go through it, so one quake gives one set of field keys in either mode.
+ */
+export const quakeAzimuth = (degrees: number): number => (degrees * Math.PI) / 180;
+
 /** The engine-api quake a shot fired at `step` is. */
 export function quakeSpecOf(shot: QuakeShot, step: number, dt: number): QuakeSpec {
-  return { step, seconds: shot.sec / 10, dt, peak: shot.peak / 100, hz: shot.hz / 10, azimuth: (shot.axis * Math.PI) / 180 };
+  return { step, seconds: shot.sec / 10, dt, peak: shot.peak / 100, hz: shot.hz / 10, azimuth: quakeAzimuth(shot.axis) };
 }
 
 /**

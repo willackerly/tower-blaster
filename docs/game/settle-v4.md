@@ -85,3 +85,22 @@ Paired outcome lines: 19 (3 on B1). Shots: 55.
 | U3 | U3-novice | 0.5 / 0.5 / 0.5 / 0.5 | 0.5 / 0.5 / 0.5 / 0.5 | 0.0000 | 0.0000 | +0.0000 |
 
 Seven more trial lines (the heaviest, under v3 or v4) did not finish in the cloud before its jobs were stopped. The Mac's replay (`--only B1,B2,B3,T`, roadmap PT6b) runs them along with B2 and B3, and its numbers land here with the B1 to B3 unpin and recast.
+
+## A level's own end (agent playtest PT32)
+
+Round 2 of the agent playtest (docs/game/agent-playtest-2.md, rank 14) found solved Rube Lab runs sitting to the 10 s cap after the bell had rung, and Aftershock's A4 line taking 12.7 s.
+
+**Rube Lab: `LevelDef.end = { on: 'rung', after: 1.5 }`** (`rules.ts LevelEnd`, `checkEnd`). A run settles 1.5 s after every bell of the bell objective has rung, whatever is still rolling. The end is one more way the settle rule settles: `settleUpdate`'s `done` keeps a run of steps on which the condition holds, next to the quiet, frozen and steady runs. Like them, it never settles before `SETTLE_MIN`, and a flight or a hold restarts it (`Session.observe` passes `met` false while a weapon is still to go off). The cap still ends a run that never rings, so a slow contraption still fails at 10 s. A bell stays rung, so the outcome is decided at the ring.
+
+On the reference, every recorded build of RL1 to RL5 (10 builds) still clears, and each now ends exactly 90 steps after its ring. Before, 8 of the 10 ran to the 600-step cap, and the other two ended 140 and 254 steps after the ring. The end is in the hash, so Rube Lab levels hash anew. They carry no cast stars (their stars are the parts par), so the only loss is the playtest's per-hash progress. The row's verify asked that RL1's build settle in 5 s or less, but RL1's par build (the span) rings at step 480 (8 s), so its run is now 9.5 s, and the fill build's 5.4 s.
+
+| Option | Verdict |
+| --- | --- |
+| A per-level end inside the settle rule (chosen) | one settle path; replays, casts, undo checkpoints and the HUD all see the same step |
+| The game ends the round on the ring | a second settle path: the cast tools and replays would end elsewhere |
+| A shorter cap on Rube Lab levels | a slow contraption that rings at 9 s (RL5's slab builds ring at steps 480 to 550) would fail |
+| End every bell level at its ring, with no field | changes behaviour without a hash change, and is not per level |
+| End any level once its objective is met | only a bell is latched: a crown can be judged down and a heritage block can still break before the settle |
+
+**Aftershock: no end condition.** The mode's job is done when the quake is over and the scene is at rest, and that is what the settle rule decides. Aftershock already holds the shot open through the quake. A1 to A5 are pinned to v3 for their cast stars, and on the reference their aces settle 195 to 423 steps after the quake, except A4 at 619. The towers are still falling and rocking for most of that, and heritage is judged standing at the settle, so ending earlier would judge a rocking tower. A4's 619 is v3's frozen run waiting on rolling debris. Under v4 A4 settles 206 steps after the quake (D 0.1521 against 0.1552), and the other four settle at the same step or within 14 steps of v3. So Aftershock's part of PT32 is the A levels' v4 unpin and recast, the same as the B levels' (PT6b).
+

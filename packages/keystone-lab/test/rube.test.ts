@@ -5,7 +5,7 @@
 // (shelves, ramps, the bin's bumper and ramp) move exactly 0; the level's parts par
 // is its cheapest recorded clear. The search that found them: pnpm rube:gate.
 import { describe, expect, it } from 'vitest';
-import { compileLevel, RUBE_GATE, RUBE_LEVELS, partsStars } from '@tb/keystone';
+import { compileLevel, RUBE_END_AFTER, RUBE_GATE, RUBE_LEVELS, partsStars } from '@tb/keystone';
 import { build, playRube } from '../src/rube.ts';
 import { RUBE_MIN_FAMILIES, RUBE_SOLUTIONS, RUBE_WRONG } from '../src/rube-solutions.ts';
 
@@ -31,6 +31,8 @@ describe('Rube Lab gate puzzles on the reference', () => {
         const r = await playRube(b!.def, undefined, b!.spent);
         expect(r.cleared, `${sol.label} clears`).toBe(true);
         expect(r.rungAt, sol.label).toBeGreaterThan(0);
+        // PT32: the run ends RUBE_END_AFTER after the ring (LevelDef.end), not at the cap with the ball still rolling.
+        expect(r.steps - r.rungAt, `${sol.label}: steps from the ring to the end`).toBe(RUBE_END_AFTER * 60);
         expect(r.pinnedMove, `${sol.label}: pins move`).toBe(0);
         costs.push(b!.spent);
         console.log(`${def.id} ${sol.family}: ${sol.label}, cost ${b!.spent}, rung at step ${r.rungAt} of ${r.steps}, ${partsStars(true, b!.spent, def.build!.par!)} stars`);

@@ -1,7 +1,7 @@
 // The phone HUD and the result card's place and buttons (docs/game/phone-hud.md; agent playtest PT3 and PT4):
 // the pure parts. The browser checks are in phone-hud-e2e.test.ts.
 import { describe, expect, it } from 'vitest';
-import { AFTERSHOCK_LEVELS, B1, B3, compileLevel, FUSE_LEVELS, L1, L5, levelScore, LEVELS, BIG_LEVELS, outcomeScore, RUBE_LEVELS, U1, UNDERCUT_LEVELS, TRIAL_LEVELS, WAVE_LEVELS } from '@tb/keystone';
+import { AFTERSHOCK_LEVELS, B1, B3, compileLevel, FUSE_LEVELS, L1, L5, levelScore, LEVELS, BIG_LEVELS, outcomeScore, RUBE_LEVELS, U1, UNDERCUT_LEVELS, TRIAL_LEVELS, WAVE_LEVELS, MASON_LEVELS, CHORUS_LEVELS } from '@tb/keystone';
 import { cardActions, failedRound, hudHtml, meterTicks, rackChips, resultHtml, slotAction, tallyHtml } from '../src/hud.ts';
 import { CARD_DELAY_S, layoutFor, layoutOf, MAX_CARD_DELAY_S } from '../src/layout.ts';
 import { seriesForward } from '../src/door.ts';
@@ -14,17 +14,20 @@ const missed = levelScore(L1, [{ ...shot, crownsDown: 1 }], false, 40);
 
 describe('layout (keystone.hud, keystone.card, keystone.carddelay)', () => {
   it('docked by default: the phone HUD docked, the card aside after 1.2 s; classic: the panel and the centred card at once', () => {
-    expect(layoutFor('docked')).toEqual({ hud: 'dock', card: 'dock', cardDelay: CARD_DELAY_S });
+    expect(layoutFor('docked')).toEqual({ hud: 'dock', card: 'strip', cardDelay: CARD_DELAY_S });
     expect(CARD_DELAY_S).toBe(1.2);
     expect(layoutFor('classic')).toEqual({ hud: 'panel', card: 'center', cardDelay: 0 });
   });
   it('each URL key wins over the setting for its part, and a bad value is refused naming the key', () => {
     expect(layoutOf(q(''), 'docked')).toEqual(layoutFor('docked'));
-    expect(layoutOf(q('keystone.hud=panel'), 'docked')).toEqual({ hud: 'panel', card: 'dock', cardDelay: 1.2 });
+    expect(layoutOf(q('keystone.hud=panel'), 'docked')).toEqual({ hud: 'panel', card: 'strip', cardDelay: 1.2 });
     expect(layoutOf(q('keystone.card=dock&keystone.carddelay=0.5'), 'classic')).toEqual({ hud: 'panel', card: 'dock', cardDelay: 0.5 });
     expect(layoutOf(q('keystone.carddelay=0'), 'docked').cardDelay).toBe(0);
+    // PT30: a phone's strip is the docked default; keystone.card=dock is the whole docked card of PT4, and strip works from classic too.
+    expect(layoutOf(q('keystone.card=dock'), 'docked').card).toBe('dock');
+    expect(layoutOf(q('keystone.card=strip'), 'classic')).toEqual({ hud: 'panel', card: 'strip', cardDelay: 0 });
     expect(() => layoutOf(q('keystone.hud=strip'), 'docked')).toThrow(/keystone\.hud must be dock or panel: strip/);
-    expect(() => layoutOf(q('keystone.card=left'), 'docked')).toThrow(/keystone\.card must be dock or center/);
+    expect(() => layoutOf(q('keystone.card=left'), 'docked')).toThrow(/keystone\.card must be strip, dock or center/);
     for (const bad of ['-1', 'x', '1e3', String(MAX_CARD_DELAY_S + 1)]) expect(() => layoutOf(q(`keystone.carddelay=${bad}`), 'docked')).toThrow(/keystone\.carddelay must be seconds/);
   });
 });
@@ -96,7 +99,7 @@ describe('the result card (PT4)', () => {
     expect(acts(cardActions(missed, 1, { act: 'next' }, false, true))).toEqual(['undo', 'retry*', 'next']);
     const outcomeMiss = outcomeScore({ met: false, collapse: 0.17, leverage: 1, comboMax: 1, hasCrowns: false, rackLeft: 1, heritageBroken: 0, outOfLot: 0, crownsDown: 0, skylineRatio: 1, pulled: 0 }, undefined);
     expect(outcomeMiss.stamp).toBe('INCOMPLETE');
-    expect(acts(resultHtml(B1, outcomeMiss, 3, true, true, '', true))).toEqual(['undo', 'retry*', 'save', 'next']);
+    expect(acts(resultHtml(B1, outcomeMiss, 3, true, true, '', true))).toEqual(['card', 'undo', 'retry*', 'save', 'next']);
   });
   it('a series\' last level offers the next series, or Levels; true and false still mean Next and none', () => {
     expect(cardActions(cleared, 1, { act: 'series', label: 'Next: Chamber' }, false, false)).toMatch(/<button data-act="series" class="primary">Next: Chamber →<\/button>/);
@@ -105,7 +108,7 @@ describe('the result card (PT4)', () => {
     expect(acts(cardActions(cleared, 1, false, false, false))).toEqual(['retry']);
     expect(acts(cardActions(cleared, 1, null, false, false))).toEqual(['retry']);
   });
-  it('the game page\'s series lead on: Spectacle to Chamber to Undercut to Rube Lab to Fuse & Fold to Aftershock to Wavefront, then the trials are not offered (Levels instead)', () => {
+  it('the game page\'s series lead on: Spectacle to Chamber to Undercut to Rube Lab to Fuse & Fold to Aftershock to Wavefront to Mason\'s Trial to Chorus, then the trials are not offered (Levels instead)', () => {
     const levels = GAME_SERIES.flat(), series = GAME_SERIES.flatMap((s, k) => s.map(() => k));
     const at = (id: string) => seriesForward(series, levels.findIndex((l) => l.id === id), levels);
     expect(at(B1.id)).toBeNull(); // not a series' end: Next
@@ -115,7 +118,9 @@ describe('the result card (PT4)', () => {
     expect(at(RUBE_LEVELS.at(-1)!.id)).toEqual({ index: levels.findIndex((l) => l.id === FUSE_LEVELS[0]!.id), label: 'Next: Fuse & Fold' });
     expect(at(FUSE_LEVELS.at(-1)!.id)).toEqual({ index: levels.findIndex((l) => l.id === AFTERSHOCK_LEVELS[0]!.id), label: 'Next: Aftershock' });
     expect(at(AFTERSHOCK_LEVELS.at(-1)!.id)).toEqual({ index: levels.findIndex((l) => l.id === WAVE_LEVELS[0]!.id), label: 'Next: Wavefront' });
-    expect(at(WAVE_LEVELS.at(-1)!.id)).toBeNull();
+    expect(at(WAVE_LEVELS.at(-1)!.id)).toEqual({ index: levels.findIndex((l) => l.id === MASON_LEVELS[0]!.id), label: "Next: Mason's Trial" });
+    expect(at(MASON_LEVELS.at(-1)!.id)).toEqual({ index: levels.findIndex((l) => l.id === CHORUS_LEVELS[0]!.id), label: 'Next: Chorus' });
+    expect(at(CHORUS_LEVELS.at(-1)!.id)).toBeNull();
     expect(at(TRIAL_LEVELS.at(-1)!.id)).toBeNull();
     expect(at(U1.id)).toBeNull();
     expect(BIG_LEVELS.at(-1)!.id).toBe(B3.id);

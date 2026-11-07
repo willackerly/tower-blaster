@@ -3,7 +3,7 @@ import { emptySnapshot, type Snapshot } from '@tb/engine-api';
 import { quatFromAxisAngle } from '@tb/geom';
 import {
   aabbTop, ammoInFlight, baselineOf, compileLevel, crownDown, DEFAULT_GOLD, FROZEN_D, FROZEN_SPEED, FROZEN_STEPS, GRAVITY, HEIGHT_BINS, heritageBroken, type LevelDef, levelScore, leverage, parStars, peOf_mJ,
-  potential_mJ, QUIET_SPEED, quietUnder, reduceCpu, type Reductions, SETTLE_CAP, SETTLE_CAP_V2, SETTLE_MIN, SETTLE_QUIET, SETTLE_RULES, settleAllowance, STEADY_D, STEADY_STEPS, settleCap, settleHeld, type SettleRule, type SettleState, settleUpdate, type ShotOutcome, skyline, stampOf, tier,
+  potential_mJ, QUIET_SPEED, quietUnder, reduceCpu, type Reductions, SETTLE_CAP, SETTLE_CAP_V2, SETTLE_MIN, SETTLE_QUIET, SETTLE_RULES, settleAllowance, STEADY_D, STEADY_STEPS, settleCap, settleHeld, checkEnd, type SettleRule, type SettleState, settleUpdate, type ShotOutcome, skyline, stampOf, tier,
 } from '@tb/keystone';
 
 const def: LevelDef = {
@@ -110,6 +110,42 @@ describe('settling', () => {
     expect(u.settled).toBe(false);
     expect(settleUpdate(st, red(SETTLE_MIN, 0, 0), 0).settled).toBe(true);
     expect(run(Array(SETTLE_CAP + 5).fill(2))).toBe(SETTLE_CAP);
+  });
+});
+
+describe('a level\'s end condition (LevelDef.end, agent playtest PT32)', () => {
+  const red = (step: number, speed = 2): Reductions => ({ step, nAwake: 500, maxSpeed: speed, maxAngSpeed: 0, pe_mJ: 0, peHeritage_mJ: 0, displaced: 0, outOfLot: 0, mass_g: 0, spill_g: 0, heightHist: new Uint32Array(64), impacts: new Uint32Array(48), nMoving: 500, movingBox: new Float64Array(6), ammoSpeed: 0 });
+  /** Steps 1.. with everything moving fast; `met(i)` the end condition, `flight(i)` ammo in flight; the settle step or null. */
+  function run(met: (i: number) => boolean, steps = 90, flight: (i: number) => boolean = () => false, rule: SettleRule = 'v1') {
+    let st: SettleState = { quietSince: null };
+    for (let i = 1; i <= settleCap(rule) + 5; i++) {
+      const u = settleUpdate(st, red(i), 0, rule, 1000, 0.01 * i, flight(i), undefined, { met: met(i), steps }); // D still climbing: no steady run
+      st = u.state;
+      if (u.settled) return i;
+    }
+    return null;
+  }
+  it('settles `steps` after the condition first held, whatever still moves, under every rule', () => {
+    for (const rule of SETTLE_RULES) expect(run((i) => i >= 100, 90, undefined, rule), rule).toBe(190);
+  });
+  it('a break restarts the run; a flight restarts it too; never before SETTLE_MIN; the cap still ends a run that never holds', () => {
+    expect(run((i) => i >= 100 && i !== 150)).toBe(151 + 90);
+    expect(run((i) => i >= 100, 90, (i) => i < 120)).toBe(120 + 90);
+    expect(run(() => true, 5)).toBe(SETTLE_MIN);
+    expect(run(() => false)).toBe(SETTLE_CAP);
+  });
+  it('without an end condition the state and the settle are as before', () => {
+    const st: SettleState = { quietSince: null };
+    expect(settleUpdate(st, red(30), 0, 'v3', 1000, 0.3, true).state).toEqual({ quietSince: null, frozenSince: null });
+    expect(settleUpdate(st, red(30), 0, 'v3', 1000, 0.3, true, undefined, { met: true, steps: 1 }).state).toEqual({ quietSince: null, frozenSince: null, doneSince: null });
+  });
+  it('checkEnd: on rung with 0 to 10 s after, and only on a bell objective', () => {
+    expect(checkEnd({ on: 'rung', after: 1.5 }, 'bell')).toEqual({ on: 'rung', after: 1.5 });
+    expect(() => checkEnd({ on: 'rung', after: 1.5 }, 'collapse')).toThrow(/needs a bell objective/);
+    expect(() => checkEnd({ on: 'quiet', after: 1 }, 'bell')).toThrow(/on must be rung/);
+    expect(() => checkEnd({ on: 'rung', after: 11 }, 'bell')).toThrow(/after must be seconds from 0 to 10/);
+    expect(() => checkEnd({ on: 'rung', after: -1 }, 'bell')).toThrow(/after must be/);
+    expect(() => checkEnd({ on: 'rung', after: 1, x: 1 }, 'bell')).toThrow(/only on and after/);
   });
 });
 

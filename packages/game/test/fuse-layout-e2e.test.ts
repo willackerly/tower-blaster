@@ -6,6 +6,8 @@
 //   - F2, F4 and F5 upright: the Plunger is on screen with the rows folded and unfolded, the panel stands on the
 //     docked HUD's tray (not over it) and clear of its strip, at most FUSE_PANEL_SHARE of the height, and the
 //     opening view's measured band holds it.
+// And the plan in the scene (PT24): no direction lit at load, the hint, the N and Yard tags on screen and off the panel,
+// a Sweep lights its direction and All at 0 clears it, the tags gone at the result.
 // The layout does not depend on the solver: Rapier keeps the rounds short.
 import { describe, expect, it } from 'vitest';
 import type { Page } from 'playwright';
@@ -32,8 +34,8 @@ const shown = (page: Page, sel: string) => page.evaluate((s) => {
   return { x: r.left, y: r.top, w: r.width, h: r.height, inside: r.left >= 0 && r.top >= 0 && r.right <= innerWidth && r.bottom <= innerHeight, onTop: hit === e || (hit !== null && e.contains(hit)) };
 }, sel);
 
-/** Every button on the shown card, as `shown` sees it. */
-const cardButtons = (page: Page) => page.evaluate(() => [...document.querySelectorAll<HTMLElement>('.kg-result.show button')].map((b) => {
+/** Every visible button on the shown card, as `shown` sees it (a phone strip's Details is not drawn on a wide screen). */
+const cardButtons = (page: Page) => page.evaluate(() => [...document.querySelectorAll<HTMLElement>('.kg-result.show button')].filter((b) => b.getClientRects().length > 0).map((b) => {
   const r = b.getBoundingClientRect(), cx = r.left + r.width / 2, cy = r.top + r.height / 2;
   return { act: b.dataset.act, inside: r.left >= 0 && r.top >= 0 && r.right <= innerWidth && r.bottom <= innerHeight, onTop: document.elementFromPoint(cx, cy)?.closest('button') === b };
 }));
@@ -118,6 +120,45 @@ describe('the Timeline panel never covers the result card or the Plunger (PT21)'
     expect(got.x).toBeGreaterThan(W / 2);
     expect(got.hud).not.toBeNull();
     expect(got.hud!.right).toBeGreaterThanOrEqual((W - got.x) / W - 1e-9);
+    expect(errors).toEqual([]);
+    await page.close();
+  }, 4 * MINUTES);
+
+  for (const [name, ctx] of [['desktop 1280 x 800', DESKTOP], ['upright 390 x 844', UPRIGHT]] as const) it(`F2 ${name} (PT24): no direction lit at load, the hint, N and Yard on screen off the panel; a Sweep lights its direction`, async (t) => {
+    if (!game.browser()) return t.skip();
+    const o = await open('F2', ctx);
+    if (!o) return t.skip();
+    const { page, errors } = o;
+    await ready(page, 2 * MINUTES);
+    expect(await page.locator('.kg-fuse .sweep button.on').count(), 'a direction lit at load').toBe(0);
+    expect(await page.locator('.kg-fuse .hint').textContent()).toBe('Sweep toward the yard, then Plunger');
+    // The tags are placed a frame after load: wait for N.
+    await page.waitForFunction(() => { const n = document.querySelector<HTMLElement>('.kg-fuse-tags span.n'); return !!n && n.style.visibility !== 'hidden' && n.style.transform !== ''; }, undefined, { timeout: 30_000, polling: 100 });
+    const tags = await page.evaluate(() => {
+      const box = (e: Element) => { const r = e.getBoundingClientRect(); return { x: r.left, y: r.top, w: r.width, h: r.height }; };
+      const shown = [...document.querySelectorAll<HTMLElement>('.kg-fuse-tags span')].filter((e) => e.style.visibility !== 'hidden');
+      return { n: shown.filter((e) => e.classList.contains('n')).map(box), yard: shown.filter((e) => e.classList.contains('yard')).map(box), charges: shown.filter((e) => !e.className).length, panel: box(document.querySelector('.kg-fuse.show')!), vw: innerWidth, vh: innerHeight };
+    });
+    const clear = (b: { x: number; y: number; w: number; h: number }) => b.x >= 0 && b.y >= 0 && b.x + b.w <= tags.vw && b.y + b.h <= tags.vh
+      && !(b.x < tags.panel.x + tags.panel.w && tags.panel.x < b.x + b.w && b.y < tags.panel.y + tags.panel.h && tags.panel.y < b.y + b.h);
+    expect(tags.n, 'N').toHaveLength(1);
+    expect(tags.yard, 'Yard').toHaveLength(1);
+    expect(clear(tags.n[0]!), `N on screen, off the panel: ${JSON.stringify(tags)}`).toBe(true);
+    expect(clear(tags.yard[0]!), `Yard on screen, off the panel: ${JSON.stringify(tags)}`).toBe(true);
+    expect(tags.charges, 'charge tags').toBeGreaterThan(0);
+    // A Sweep lights its direction; All at 0 puts every delay back and lights none.
+    await page.locator('.kg-fuse button[data-dir="N"]').click();
+    expect(await page.locator('.kg-fuse .sweep button.on').allTextContents()).toEqual(['N']);
+    await page.locator('.kg-fuse button[data-act="clear"]').click();
+    expect(await page.locator('.kg-fuse .sweep button.on').count()).toBe(0);
+    // Spacing before any Sweep sets only the spacing: every delay stays 0.
+    await page.locator('.kg-fuse button[data-act="sp+"]').click();
+    expect(new Set(await page.locator('.kg-fuse .r .t').allTextContents())).toEqual(new Set(['0.0 s']));
+    // At the result the tags go with the panel.
+    await page.evaluate(() => { window.__game.fast = true; });
+    await page.keyboard.press('Enter');
+    await page.waitForFunction(() => document.querySelector('.kg-result.show') !== null, undefined, { timeout: 3 * MINUTES, polling: 100 });
+    expect(await page.locator('.kg-fuse-tags').isVisible()).toBe(false);
     expect(errors).toEqual([]);
     await page.close();
   }, 4 * MINUTES);

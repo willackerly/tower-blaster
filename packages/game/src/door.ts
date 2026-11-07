@@ -13,8 +13,8 @@
 // objective's star alone, one target row and one star slot, never a placeholder
 // (the agent playtest's PT7: "targets coming soon" read as unfinished), and picks
 // the rest up from the file with no change here.
-import { castStars, type CompiledLevel, compileLevel, DUEL_NAMES, type DuelDef, isTrial, type LevelDef, type Objective, scoringOf, SERIES, SERIES_TITLES, type Shot, type StarMetric, type StarsDef } from '@tb/keystone';
-import { CUSTOM_NOTE, esc, fmtPoints, itemLabel, LEVERAGE_MEANS, levelTag, objectiveText, pct, playerName } from './hud.ts';
+import { castStars, type CompiledLevel, compileLevel, DUEL_NAMES, type DuelDef, isTrial, type LevelDef, MASON_CLEAR, masonWorlds, type Objective, scoringOf, SERIES, SERIES_TITLES, type Shot, type StarMetric, type StarsDef, chorusOf } from '@tb/keystone';
+import { CUSTOM_NOTE, esc, fmtPoints, itemLabel, LEVERAGE_MEANS, levelTag, objectiveText, pct, playerName, chorusWorldClear } from './hud.ts';
 import type { LevelRecord } from './progress.ts';
 import type { QualityTier } from './quality.ts';
 import { type Settings, settingRows } from './settings.ts';
@@ -135,6 +135,25 @@ export function starTargets(c: CompiledLevel, stars: StarsDef | undefined): { ta
   const d = c.def;
   const heritage = c.meta.heritage.length ? ', heritage intact' : '';
   const one = cap(objectiveText(d.objective)), oneShort = objectiveShort(d.objective);
+  // Chorus levels (chorus.ts chorusScore): fixed thresholds on the worlds cleared, no cast.
+  const ch = chorusOf(d);
+  if (ch) {
+    const [a, b, t] = ch.stars, K = ch.worlds;
+    // A world with cracked heritage does not clear, so the heritage needs no row of its own.
+    return { targets: [`Clear ${a} of ${K} worlds (${chorusWorldClear(ch.need)} in each)`, `…${b} of ${K}`, `…${t} of ${K}`], short: [`${a}/${K}`, `${b}/${K}`, `${t}/${K}`], cast: true };
+  }
+  // Mason's Trial (rules.ts masonScore): one star for standing in half the worlds, two and three at the level's
+  // points (worlds stood and budget left); no shots at all.
+  if (d.mason) {
+    const K = masonWorlds(d.mason), half = Math.ceil(K * MASON_CLEAR), [t2, t3] = d.mason.stars!;
+    return { targets: [`Stand in ${half} of ${K} worlds`, `${fmtPoints(t2)} points (worlds stood, budget left)`, `${fmtPoints(t3)} points`], short: [`${half} of ${K} worlds`, fmtPoints(t2), fmtPoints(t3)], cast: true };
+  }
+  // Parts-par levels (Rube Lab, rules.ts partsStars): three at the parts par or under, two within half again; no strokes counted.
+  const partsPar = d.build?.par;
+  if (partsPar !== undefined) {
+    const two = Math.ceil(1.5 * partsPar), parts = (n: number) => `${n} part${n === 1 ? '' : 's'}`;
+    return { targets: [one, `…with ${parts(two)} or fewer`, `…with ${parts(partsPar)} or fewer (parts par)${heritage}`], short: [oneShort, parts(two), `par ${parts(partsPar)}`], cast: true };
+  }
   // Par levels (keystone parStars): three stars less one per stroke over par and one for broken heritage.
   if (scoringOf(d) === 'par') return { targets: [one, `…in ${shotCount(d.par + 1, d.rack)}`, `…in par (${shotCount(d.par, d.rack)})${heritage}`], short: [oneShort, shotCount(d.par + 1, d.rack), `par ${d.par}`], cast: true };
   if (!stars) return { targets: [one, '', ''], short: [oneShort, '', ''], cast: false };
@@ -154,7 +173,7 @@ export function doorLevels(levels: readonly LevelDef[], best: (id: string, hash:
     if (skip(d)) return [];
     const c = compiled(d), stars = castStars(c);
     return [{
-      id: d.id, tag: levelTag(d), name: playerName(d), blocks: c.meta.n, rack: rackText(d.rack), ...starTargets(c, stars), custom: Boolean(d.custom), best: d.custom ? null : best(d.id, c.hash),
+      id: d.id, tag: levelTag(d), name: playerName(d), blocks: c.meta.n, rack: d.mason && d.build?.budget !== undefined ? `budget ${d.build.budget}` : rackText(d.rack), ...starTargets(c, stars), custom: Boolean(d.custom), best: d.custom ? null : best(d.id, c.hash),
       index, series: seriesTitle(d.id), trial: isTrial(d.id),
     }];
   });
@@ -187,7 +206,10 @@ export const BULLET_TIME_HOW = 'Bullet Time levels give you a few freezes. While
 /** How to play's Siege Table line (PT18: the two-player mode was on the door but not in How to play). */
 export const SIEGE_TABLE_HOW = `${DUEL_NAMES.mode}: two players on one device take turns, each from their own side, passing the device between shots. ${DUEL_NAMES.rulesets.keeps}: topple the other king to win, and keep your own standing. ${DUEL_NAMES.rulesets.heraldry}: each shot scores the rival's blocks it brings down, less your own.`;
 
-/** How to play, in seven lines (the controls line is GAME_HELP's, shown in play). */
+/** How to play's Mason's Trial line (M8: a mode with no shots needs its own sentence). */
+export const MASON_HOW = "Mason's Trial levels are built, not shot: place pieces (<span class=\"kg-desk\"><kbd>[</kbd> <kbd>]</kbd></span><span class=\"kg-tch\">Slide</span> slides a plank out past an edge), then Play tests the build in 64 slightly different worlds while you watch one. Standing in half of them is a star; more worlds and less of the budget spent earn two and three.";
+
+/** How to play, in eight lines (the controls line is GAME_HELP's, shown in play). */
 export const HOW_TO_PLAY: readonly string[] = [
   '<span class="kg-desk">Pick a spot on the structure and click to fire. Drag to look around; the launcher follows you.</span><span class="kg-tch">Touch the structure and drag to aim; lift your finger to fire. Two fingers turn the view and pinch to zoom; the launcher follows you. Put a second finger down to call off a shot.</span>',
   'Fire again whenever you like, even while things are still falling. Once everything settles, the world waits while you aim; <kbd>K</kbd> or Skip runs the rest of a shot fast. Rubble stays between shots.',
@@ -195,6 +217,7 @@ export const HOW_TO_PLAY: readonly string[] = [
   'Meet the objective for one star. Chamber levels: clear in par for three, each shot over par or piece of heritage broken costs one, and leverage at the level\'s gold line earns the gold badge. Elsewhere, bring more down for two and three; the targets were set by a bot playing each level hundreds of times.',
   'After any shot you may <kbd>B</kbd> bank: end the level and keep the unused rack as points.',
   `${LEVERAGE_MEANS} The card shows the whole round's; Brute is under the level's gold line, Clean at it. A score never goes below 0: cracked heritage shows as its own red line and costs stars.`,
+  MASON_HOW,
   SIEGE_TABLE_HOW,
 ];
 
@@ -419,8 +442,14 @@ export function preaimMode(q: URLSearchParams): PreaimMode {
  * one, and only until the player has a record for it: the first-minute promise is for a first visit, and
  * handing every level its best opener would give the stars away. A teaching opener (solutions.teach: Wavefront's
  * starter push, which starts the wave without winning the level, PT39) is offered on a first visit of any level.
+ * A pull is never pre-aimed (PT35): one pull brings nothing down alone, so it keeps no first-minute promise, and
+ * on an Undercut par puzzle (U1) it plays half the puzzle's answer for the player (agent playtest 2: the opener
+ * pulled a leg and any adjacent leg then cleared it).
  */
 export function openerFor(def: LevelDef, index: number, mode: PreaimMode, played: boolean): Shot | null {
   if (mode === '0' || (mode === 'auto' && (played || (index !== 0 && !def.solutions?.teach)))) return null;
-  return def.solutions?.opener ?? def.solutions?.ace?.[0] ?? def.solutions?.par?.[0] ?? null;
+  // A one-shot ace's first shot is the whole answer (Aftershock's ace quake: agent playtest round 2, PT23): never hand it over.
+  const ace = def.solutions?.ace, aceFirst = ace && ace.length > 1 ? ace[0] : undefined;
+  const shot = def.solutions?.opener ?? aceFirst ?? def.solutions?.par?.[0] ?? null;
+  return shot?.ammo === 'pull' ? null : shot;
 }

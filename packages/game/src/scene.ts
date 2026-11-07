@@ -21,6 +21,15 @@ export const TINT = {
   none: [1, 1, 1] as [number, number, number],
 };
 export const CROWN_GLOW = 0.1;
+/**
+ * What the player built (a part placed in a build phase: PiecePart/RunPart/BallPart.placed), sRGB: a clear blue, its
+ * own colour in every look (coats.ts COAT_PAINT), so the contraption reads as yours against the level's own parts
+ * (PT26). Picked in OKLCh away from the other colours a build shows: hue 262 against the gilt bell's 79, heritage's
+ * glaze 176, the ghost's green (about 142), the Go button's orange (about 45) and the aim beads' coral 35.
+ */
+export const BUILT_SRGB = 0x4a86e8;
+/** BUILT_SRGB, linear (a tint: with coats on the colour itself, without a multiple of the look's). */
+export const BUILT_TINT = [(BUILT_SRGB >> 16) & 255, (BUILT_SRGB >> 8) & 255, BUILT_SRGB & 255].map((x) => srgbToLinear(x / 255)) as [number, number, number];
 /** The block a selected pull would take (play.ts setHover): warm white, glowing, so it reads on any material. */
 export const PULL_HOVER = tintWordOf([1, 0.93, 0.8], 0.55);
 /**
@@ -109,16 +118,32 @@ export function spentFx(fx: FxOptions | null, t: number): FxOptions {
 // (The game fades only painted balls and rams: play.ts spendFired. A null fx fades from white, for tools.)
 
 /**
- * How the game paints the structure's role events under effect style `style` (PaceFeel.fx): the flash of a felled
- * crown and of cracked heritage, and the glow each keeps after (also when an undo or a line restores them). In
- * 'damage' (PT2) a cracked heritage block flashes teal and stays its teal, and a felled crown stays gold without
- * a glow, as play leaves them; 'classic' flashes them to white (emissive 1, 16x the albedo) and an undo restored
- * them glowing (crown 0.9, heritage 1), unlike play.
+ * The colour of lost heritage (PT28, agent playtest 2: judges read "28 cracked" over a cathedral that still
+ * looked whole, since a cracked block kept its teal): a fired-brick red, painted (COAT_PAINT, the duel inks'
+ * mechanism) so it is the same red in every look. sRGB #A1342A, OKLCh L 0.48 C 0.15 hue 29: the HUD's crack
+ * banner (#F0806A) and the aim beads (#FF7A5A, L 0.73) share its hue but sit far above it in lightness, and it
+ * is 147 degrees from the glaze, so lost and intact heritage differ in hue and in luma.
  */
-export function rolePaint(style: EffectStyle) {
+export const HERITAGE_LOST_TINT_SRGB = 0xa1342a;
+export const HERITAGE_LOST_TINT: [number, number, number] = [(HERITAGE_LOST_TINT_SRGB >> 16) & 255, (HERITAGE_LOST_TINT_SRGB >> 8) & 255, HERITAGE_LOST_TINT_SRGB & 255].map((x) => srgbToLinear(x / 255)) as [number, number, number];
+/** The flash of heritage breaking, damage style: the lost red at this glow, fading over HERITAGE_FLASH_S seconds. */
+export const HERITAGE_FLASH_GLOW = 0.6;
+export const HERITAGE_FLASH_S = 0.9;
+
+/**
+ * How the game paints the structure's role events under effect style `style` (PaceFeel.fx): the flash of a felled
+ * crown and of cracked heritage, and the look each keeps after (also when an undo or a line restores them). The
+ * caller supplies the body's own tint (`{ tint: ownTint(b), ...paint }`), which an entry here overrides only where
+ * it names one. In 'damage' a felled crown flashes once and keeps its gold without a glow (PT2), and cracked
+ * heritage flashes red and stays painted the lost red (PT28): a loss, distinct from intact heritage in every look.
+ * 'classic' is the look before PT2: both flash to white (emissive 1, 16x the albedo) and an undo restored them
+ * glowing (crown 0.9, heritage 1), unlike play.
+ */
+export function rolePaint(style: EffectStyle): { crownFlash: FxOptions; heritageFlash: FxOptions; crownKept: FxOptions; heritageKept: FxOptions } {
+  const lost: FxOptions = { coat: COAT_PAINT, tint: HERITAGE_LOST_TINT };
   return style === 'damage'
-    ? { crownFlash: { tint: TINT.crown, emissive: 0.9, flash: 0.5 }, heritageFlash: { tint: TINT.heritage, emissive: 0.2, flash: 0.8 }, crownKept: { tint: TINT.crown }, heritageKept: { tint: TINT.heritage } }
-    : { crownFlash: { tint: TINT.crown, emissive: 0.9, flash: 0.5 }, heritageFlash: { tint: TINT.heritage, emissive: 1, flash: 0.8 }, crownKept: { tint: TINT.crown, emissive: 0.9 }, heritageKept: { tint: TINT.heritage, emissive: 1 } };
+    ? { crownFlash: { emissive: 0.9, flash: 0.5 }, heritageFlash: { ...lost, emissive: HERITAGE_FLASH_GLOW, flash: HERITAGE_FLASH_S }, crownKept: {}, heritageKept: lost }
+    : { crownFlash: { emissive: 0.9, flash: 0.5 }, heritageFlash: { emissive: 1, flash: 0.8 }, crownKept: { emissive: 0.9 }, heritageKept: { emissive: 1 } };
 }
 
 // Ice is drawn by the renderer's ice pass (@tb/render ice.ts), which makes its own blue from the light's
@@ -128,6 +153,11 @@ const MATERIAL_TINT: Record<string, [number, number, number]> = {
 };
 
 const isIce = (c: CompiledLevel, i: number) => MATERIALS[c.meta.material[i]!]!.name === 'ice';
+/** Body i belongs to a part the player placed in a build phase (BuildSession: PiecePart/RunPart/BallPart.placed). */
+export const isBuilt = (c: CompiledLevel, i: number): boolean => {
+  const p = c.def.parts[c.meta.part[i]!];
+  return !!p && 'placed' in p && p.placed === true;
+};
 
 /**
  * The coat of structure body i (@tb/render coats.ts; PaceFeel.coats): crowns gilded and heritage glazed, their
@@ -137,7 +167,7 @@ const isIce = (c: CompiledLevel, i: number) => MATERIALS[c.meta.material[i]!]!.n
 export function coatOf(c: CompiledLevel, i: number): CoatId {
   if (isIce(c, i)) return COAT_NONE;
   const role = c.meta.role[i];
-  return role === 1 ? COAT_GILT : role === 2 ? COAT_GLAZE : COAT_NONE;
+  return role === 1 ? COAT_GILT : role === 2 ? COAT_GLAZE : isBuilt(c, i) ? COAT_PAINT : COAT_NONE;
 }
 
 /** One coat per structure slot (coatOf), or none at all when `on` is false, for one Renderer.setCoats at level load. */
@@ -151,7 +181,8 @@ export function structureCoats(c: CompiledLevel, on = true): Uint8Array {
  */
 export function roleTint(c: CompiledLevel, i: number, coats = true): [number, number, number] {
   const role = c.meta.role[i];
-  if (role !== 1 && role !== 2) return TINT.none;
+  // A built part's colour is its tint (painted with coats on; a multiple of the look's without).
+  if (role !== 1 && role !== 2) return isBuilt(c, i) && !isIce(c, i) ? BUILT_TINT : TINT.none;
   if (coats && coatOf(c, i) !== COAT_NONE) return TINT.none;
   return role === 1 ? TINT.crown : TINT.heritage;
 }
@@ -161,6 +192,7 @@ export function tintOf(c: CompiledLevel, i: number, coats = true): number {
   const role = c.meta.role[i];
   if (role === 1) return tintWordOf(roleTint(c, i, coats), CROWN_GLOW);
   if (role === 2) return tintWordOf(roleTint(c, i, coats));
+  if (isBuilt(c, i) && !isIce(c, i)) return tintWordOf(BUILT_TINT);
   return tintWordOf(MATERIAL_TINT[MATERIALS[c.meta.material[i]!]!.name] ?? TINT.none);
 }
 

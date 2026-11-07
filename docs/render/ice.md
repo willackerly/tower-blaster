@@ -151,9 +151,46 @@ At 1.5 and 5, the counts per engine are:
 
 - **On load.** Every ice body is painted ice (`Driver.iceSurfaces`). After an undo, the cracks and pieces as they stood are repainted from the driver's checkpointed state.
 - **`iceCrack` feedback** sets the body's crack level, origin and seed. The synth plays a dry high tick, louder for a bigger crack.
-- **`shatter` feedback** paints the pieces as ice and puffs ice dust where the block broke. The synth plays a hiss and a quick run of high chimes on the game's pentatonic scale. The pieces never paint as bombs.
+- **`shatter` feedback** paints the pieces as ice and bursts ice debris where the block broke (`Renderer.burst(..., { ice: true })`; see *Ice debris* below). The synth plays a hiss and a quick run of high chimes on the game's pentatonic scale. The pieces never paint as bombs.
 - **Collision sound.** Pieces are recognised by their unique density (`isIcePiece`) and sound as ice.
-- **Trials.** T-I1 *Ice Tower*, T-I2 *Ice Wall* and T-I3 *Frozen Keep* (stone below, ice above) are in the door under Trials.
+- **Trials.** T-I1 *Ice Tower*, T-I2 *Ice Wall* and T-I3 *Frozen Keep* (stone below, ice above) are in the door under Trials. See *Ice toughness* below for how T-I1 and T-I2 were rebuilt after the second agent playtest.
+
+## Ice debris (PT38)
+
+The second agent playtest saw ice throw orange metal sparks in the stylized looks and beige sand in the real look (`T-I1-novice-desktop-04-shot-1-settled`, `T-I2-real-desktop-04-shot-1-settled`). Impacts on ice now make ice's own debris:
+
+- **Detector.** The spark detector (`sparks.ts` detect) reads the per-slot surface words, the same buffer the cull reads. An impact on a body whose surface is ice gets material `MATERIAL_ICE` (8) in its event's material bits. That is the nibble's top bit, which the look buffer never holds, so no look material can read as ice. The surface buffer is detect's eighth storage buffer, the stage's limit; spawn, simulate and the draw are unchanged in their bindings.
+- **Particles.** Every spark, puff and chip spawned from an ice event carries `ICE_BIT` (bit 13 of its packed word, taken from the seed bits and cleared for every other material). Flight, life, budgets and rings are the same for every material, so the shared particle budget is untouched.
+- **Look.**
+  - Stylized looks: streaks run cold, white to pale blue, at a quarter of a hot spark's brightness, so they glitter rather than burn.
+  - Real look: chips are white to pale blue and glossy (GGX alpha 0.08, against stone's 0.5), so they catch the sun as they tumble. Puffs are frost powder, white with a cold cast, even when raised from the ground.
+  - Ice impacts throw no flash light. The flash is amber (`DEFAULT_LIGHTS.flashColour`) and lit the ice orange.
+- **Shatter.** The game bursts ice debris where the block broke, at the shatter's speed change.
+
+Tests (`render.test.ts`):
+
+- CPU twins: an ice event's sparks (both rules), puffs and chips carry the bit, and other materials' never do. The word differs by that bit alone.
+- On the GPU: four boxes take the same knock, two of them ice. Their events carry `MATERIAL_ICE`, and in both modes the particles split evenly by the bit.
+- The colour of a burst, against the frame without it, over pixels that are not already warm. Ice: 0 warm pixels in both looks. Stone: warm in both, as before. A difference would be no measure, since white added over blue adds more red than blue.
+
+## Ice toughness (PT38)
+
+One cannonball brought T-I1 and T-I2 100% down, so the rest of the rack did nothing. Ice is light (density 225 against stone's 625, about real ice to granite), and a steel cannonball weighs about 18 ice blocks. Measured with the game's aim from the high launcher, a cannonball at the middle of the old structures from 8 sides:
+
+| | Rapier | Reference |
+|---|---|---|
+| T-I1, the 2 x 2 column | all 4 crowns down, collapse 0.84 to 1.0 | (not run: Rapier already clears every shot) |
+| T-I2, one wythe | collapse 0.66 to 1.0, against 0.3 | |
+
+The alternatives, each probed the same way (24 shots: 8 sides, at 30%, 50% and 75% of the height):
+
+| Alternative | Result | Verdict |
+|---|---|---|
+| Tougher ice (crack 2.5, shatter 8 m/s) | T-I1 still 4/4 crowns from a cannonball (collapse 0.82 to 1.0); T-I2 0.56 to 1.0 | Toppling is rigid-body, so toughness only removes the spectacle |
+| Marbles first, same structures | T-I1: a marble topples the 2 x 2 column (crowns 4 in 21 of 24) | The column is too slender |
+| **Marbles first; T-I1 3 x 3; T-I2 two deep, 65% to clear** | A marble at the middle clears neither from any side, on Rapier or the reference; a marble anywhere clears T-I1 4 of 24 (along the crown course), T-I2 0 of 24. The cannonball at the middle: T-I1 collapse 0.75 to 1.0 (Rapier) and 0.30 to 0.76 (reference); T-I2 0.55 to 1.0 and 0.50 to 0.93 | **Chosen.** Marbles crack and chip, and the cannonball (third) finishes |
+
+The racks are `ICE_RACK`: marble, marble, cannonball, then the grenades, the same items as before in a new order. T-I3 keeps its rack and keep: its crown sits on a stone keep that holds. `keystone-lab/test/ice-trials.test.ts` holds the opener, the sweep and the finisher as bounds.
 
 ## Tests
 
@@ -221,6 +258,16 @@ Measured on T-I1 in the real look, the look's own sun (shadow behind the column)
 
 0.7 closes 75% of the gap and keeps a visible shadow that grounds the column (half open closed about 60%, measured with the first pattern).
 
+Since PT38, T-I1 is a 3 x 3 tower, not a 2 x 2 column. Light crosses three blocks, so every course is darker, and the opaque shadow darkens every course alike rather than the low ones most. The same measure on the tower:
+
+| Ice shadow | Lowest 4 courses | Next 4 |
+|---|---|---|
+| opaque (`ice.shadow=0`) | 0.404 | 0.413 |
+| **screen door 0.7 (default)** | **0.486** | 0.505 |
+| none (`ice.shadow=1`) | 0.516 | 0.537 |
+
+The screen door still closes 73% of the gap, and the lowest courses stay within 4% of the next four. The test now compares the opaque shadow against the no-shadow ceiling, and every course against 0.45.
+
 Alternatives weighed:
 
 - *No shadow from ice.* The ceiling above, but an ice tower then floats: the shadow is most of what puts it on the ground.
@@ -229,7 +276,6 @@ Alternatives weighed:
 - *A dithered discard in the existing box caster.* One pipeline, but a fragment stage with `discard` on every box's shadow loses the tile GPUs' depth-only fast path for stone too; a separate segment keeps stone's draw as it was.
 
 Tests: the cull reference lists ice shadows in `boxIceShadow` and the GPU cull matches it (`render.test.ts`, seed 10 with ice; no ice, none listed); the knob parses (`ice.test.ts`); the table above as bounds (`ice-pale-e2e.test.ts`: the low courses within 7% of the next four and 70% of the gap closed; opaque, they are under 85%).
-- **Particles.** Debris and chips from ice use the stone colours, so a shatter emits no burst (the stone-coloured sparks read as metal on ice). Frost powder (white, slow, drifting particles) is the follow-up.
 - **Colour of what is behind.** Through ice, the brown ground reads slightly green in the real look, which is the blue absorption over brown. This is physically right, but may want a hue nudge.
 - **Engine-dependent thresholds.** Rapier shatters about 4× as much as AVBD at the same thresholds.
 - **Stone marks** (`marks.ts`: the crosshair and shield) are carved only in the opaque pass, so an ice crown or ice heritage block shows no mark. Carving into the ice pass is a follow-up if ice crowns ship in a rated level.

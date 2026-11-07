@@ -2,4 +2,4 @@
 import { MT4 } from '@tb/keystone';
 import { masonRefSuite } from './mason-ref.ts';
 
-masonRefSuite(MT4);
+masonRefSuite(MT4, true); // the representative level CI runs in full (O5)

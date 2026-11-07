@@ -27,6 +27,7 @@ describe('game URL keys', () => {
     });
     expect(parse('?keystone.sound=synth&keystone.impacts=-6')).toMatchObject({ sound: 'synth', impactsDb: -6 });
     expect(parse('?keystone.sound=classic')).toMatchObject({ sound: 'classic' });
+    expect(parse('?keystone.sound=real1')).toMatchObject({ sound: 'real1' });
     expect(parse('?engine=avbd-gpu').engine).toBe('gpu');
     expect(parse('?engine=gpu').engine).toBe('gpu');
     expect(parse(`?level=L1&keystone.shots=${writeShots(par)}`).shots).toEqual(par);
@@ -81,7 +82,7 @@ describe('game URL keys', () => {
     expect(() => parse('?engine=physx')).toThrow(/unknown engine physx: use rapier or gpu/);
     expect(() => parse('?keystone.hitstop=yes')).toThrow(/keystone.hitstop must be 0 or 1: yes/);
     expect(() => parse('?keystone.slowmo=')).toThrow(/keystone.slowmo must be 0 or 1: $/);
-    expect(() => parse('?keystone.sound=loud')).toThrow(/keystone.sound must be collapse, classic, synth: loud/);
+    expect(() => parse('?keystone.sound=loud')).toThrow(/keystone.sound must be collapse, real1, classic, synth: loud/);
     expect(() => parse('?keystone.impacts=30')).toThrow(/keystone.impacts \(dB\) must be from -40 to 20: 30/);
     expect(() => parse('?keystone.impacts=')).toThrow(/keystone.impacts/);
     expect(() => parse('?look=neon')).toThrow(/unknown look neon; known: candy, hazy, real/);

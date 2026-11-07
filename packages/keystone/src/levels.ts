@@ -1,114 +1,30 @@
-// Starter levels, one per behaviour the mechanics probe found usable
-// (pnpm keystone:probe): shear, lintel tip, pick-off, catapult, dominoes.
-// Coordinates are in cells (h); see LevelDef. Par lines are the most robust
-// clean solutions pnpm keystone:bot found on the f64 AVBD reference at
-// AVBD_ITERATIONS and AVBD_GAP_SLOP (docs/game/findings.md), and tests replay
-// them. lGold is the lower quartile of the leverage the par line's clean
-// neighbours on the nudge grid reach (pnpm keystone:par): the gold-leverage
-// badge's line. Stars are strokes and heritage only (rules.ts parStars,
-// docs/game/stars.md).
+// The built-in levels by series (the chamber levels are in chamber-levels.ts) and lookup by id.
 import { BIG_LEVELS } from './big-levels.ts';
+import { CHORUS_LEVELS } from './chorus-levels.ts';
 import { TRIAL_LEVELS } from './trial-levels.ts';
 import { UNDERCUT_LEVELS } from './undercut-levels.ts';
 import { AFTERSHOCK_LEVELS } from './aftershock-levels.ts';
 import { FUSE_LEVELS } from './fuse-levels.ts';
 import { RUBE_LEVELS } from './rube-levels.ts';
+import { MASON_LEVELS } from './mason-levels.ts';
 import { WAVE_LEVELS } from './wave-levels.ts';
 import type { LevelDef } from './level.ts';
 
-type V3 = [number, number, number];
-
-/** W1-1, shear. A slender tower (the probe's B2): one cannonball low on it brings the crowns down. */
-export const L1: LevelDef = {
-  id: 'L1', name: 'Open Fire', version: 3, world: 1,
-  parts: [{ kind: 'block', at: [-1, 0, -1], size: [2, 10, 2], material: 'plaster', courses: [{ k: 9, role: 'crown' }] }],
-  lot: { min: [-7, -7], max: [7, 7] },
-  crownLine: 2, objective: { kind: 'crowns' }, par: 1,
-  rack: ['cannonball', 'cannonball', 'marble', 'marble'],
-  launcher: { radius: 14, y: 2, dropY: 16 },
-  lGold: 0.71,
-  solutions: { par: [{ ammo: 'cannonball', az: 360, y: 8, yaw: 0, pitch: 207, power: 100 }] },
-};
-
-/** W1-2, lintel tip. Fell one column and the lintel sheds its crowns; fell the other and it lands on the pavilion. */
-export const L2: LevelDef = {
-  id: 'L2', name: 'Lintel', version: 2, world: 1,
-  parts: [
-    { kind: 'block', at: [-4, 0, -1], size: [2, 12, 2], material: 'plaster' },
-    { kind: 'block', at: [2, 0, -1], size: [2, 12, 2], material: 'plaster' },
-    { kind: 'slab', at: [0, 12, 0], half: [4, 0.125, 1], material: 'stone' },
-    { kind: 'block', at: [-1.5, 12.25, -1], size: [3, 1, 2], material: 'plaster', role: 'crown' },
-    { kind: 'block', at: [-9, 0, -2], size: [3, 3, 4], material: 'plaster', role: 'heritage' },
-  ],
-  lot: { min: [-10, -8], max: [10, 8] },
-  crownLine: 2, objective: { kind: 'crowns' }, par: 1,
-  rack: ['marble', 'marble', 'cannonball'],
-  launcher: { radius: 16, y: 2, dropY: 18 },
-  lGold: 1.5,
-  solutions: { par: [{ ammo: 'cannonball', az: 540, y: 8, yaw: 0, pitch: 616, power: 100 }] },
-};
-
-/** W1-3, pick-off. Crowns sit between heritage cubes on top of a wall: take them without touching their neighbours. */
-export const L3: LevelDef = {
-  id: 'L3', name: 'Surgeon', version: 2, world: 1,
-  parts: [{
-    kind: 'block', at: [-2.5, 0, -0.5], size: [5, 8, 1], material: 'plaster',
-    courses: [{ k: 7, role: 'heritage' }, { k: 7, cells: [[1, 0], [3, 0]], role: 'crown' }],
-  }],
-  lot: { min: [-7, -7], max: [7, 7] },
-  crownLine: 2, objective: { kind: 'crowns' }, par: 2,
-  rack: ['marble', 'marble', 'marble', 'cannonball'],
-  launcher: { radius: 14, y: 8, dropY: 14 },
-  lGold: 1.3,
-  solutions: { par: [{ ammo: 'marble', az: 540, y: 8, yaw: -42, pitch: 27, power: 100 }, { ammo: 'marble', az: 180, y: 8, yaw: -42, pitch: 382, power: 60 }] },
-};
-
-/** W2-1, catapult. A slab on a central pier with its crown end on a prop: drop the anvil on the free end. */
-export const L4: LevelDef = {
-  id: 'L4', name: 'Catapult', version: 2, world: 2,
-  parts: [
-    { kind: 'block', at: [5.5, 0, -1.5], size: [1, 4, 3], material: 'plaster' },
-    { kind: 'block', at: [11, 0, -0.5], size: [1, 4, 1], material: 'plaster' },
-    { kind: 'slab', at: [6, 4, 0], half: [6, 0.125, 1.5], material: 'plaster' },
-    { kind: 'block', at: [9, 4.25, -1.5], size: [3, 1, 3], material: 'plaster', role: 'crown' },
-    { kind: 'block', at: [-4, 0, -4], size: [1, 6, 1], material: 'plaster', role: 'heritage' },
-    { kind: 'block', at: [-4, 0, 3], size: [1, 6, 1], material: 'plaster', role: 'heritage' },
-  ],
-  lot: { min: [-3, -6], max: [14, 6] },
-  crownLine: 2, objective: { kind: 'crowns' }, par: 1,
-  rack: ['drop', 'marble', 'marble'],
-  launcher: { radius: 14, y: 2, dropY: 12 },
-  lGold: 0.18,
-  solutions: { par: [{ ammo: 'drop', x: 10, z: -4 }] },
-};
-
-/** W2-2, dominoes. Five slender columns; the crown sits on the last. */
-export const L5: LevelDef = {
-  id: 'L5', name: 'Dominoes', version: 1, world: 2,
-  parts: [0, 1, 2, 3, 4].map((k) => ({
-    kind: 'block' as const, at: [-8 + 4 * k, 0, -0.5] as V3, size: [1, 9, 1] as V3, material: 'plaster' as const,
-    courses: k === 4 ? [{ k: 8, role: 'crown' as const }] : [],
-  })),
-  lot: { min: [-14, -8], max: [14, 8] },
-  crownLine: 2, objective: { kind: 'crowns' }, par: 1,
-  rack: ['marble', 'marble', 'cannonball'],
-  launcher: { radius: 18, y: 2, dropY: 14 },
-  lGold: 5,
-  solutions: { par: [{ ammo: 'marble', az: 0, y: 8, yaw: 0, pitch: 249, power: 60 }] },
-};
+export { L1, L2, L3, L4, L5 } from './chamber-levels.ts';
+import { L1, L2, L3, L4, L5 } from './chamber-levels.ts';
 
 /** The chamber levels, scored on par (the game's default series). */
 export const LEVELS: readonly LevelDef[] = [L1, L2, L3, L4, L5];
 
 /**
  * Every built-in level's series: the chamber levels (L1 to L5), the big levels (B1 on), Undercut's (U1 on),
- * Rube Lab's (RL1 on), Fuse & Fold's (F1 on: fuse-levels.ts), Aftershock's (A1 on) and the trials (T-..., unrated: trial-levels.ts).
+ * Rube Lab's (RL1 on), Fuse & Fold's (F1 on: fuse-levels.ts), Aftershock's (A1 on), Wavefront's (W3 on), Mason's Trial's (MT1 on: mason-levels.ts), Chorus's (CH1 on: chorus-levels.ts) and the trials (T-..., unrated: trial-levels.ts).
  * A level plays on into the rest of its own series.
  */
-export const SERIES: readonly (readonly LevelDef[])[] = [LEVELS, BIG_LEVELS, UNDERCUT_LEVELS, RUBE_LEVELS, FUSE_LEVELS, AFTERSHOCK_LEVELS, WAVE_LEVELS, TRIAL_LEVELS];
+export const SERIES: readonly (readonly LevelDef[])[] = [LEVELS, BIG_LEVELS, UNDERCUT_LEVELS, RUBE_LEVELS, FUSE_LEVELS, AFTERSHOCK_LEVELS, WAVE_LEVELS, MASON_LEVELS, CHORUS_LEVELS, TRIAL_LEVELS];
 
 /** Each series' title, in SERIES order (the game's door heads its sections with them). */
-export const SERIES_TITLES: readonly string[] = ['Chamber', 'Spectacle', 'Undercut', 'Rube Lab', 'Fuse & Fold', 'Aftershock', 'Wavefront', 'Trials · unrated'];
+export const SERIES_TITLES: readonly string[] = ['Chamber', 'Spectacle', 'Undercut', 'Rube Lab', 'Fuse & Fold', 'Aftershock', 'Wavefront', "Mason's Trial", 'Chorus', 'Trials · unrated'];
 
 const sameId = (a: string, b: string) => a.toUpperCase() === b.toUpperCase();
 
