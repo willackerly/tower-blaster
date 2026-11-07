@@ -361,7 +361,8 @@ export function tallyHtml(level: LevelDef, score: LevelScore | null, over: strin
  */
 export function resultHtml(level: LevelDef, score: LevelScore | null, strokes: number, forward: boolean | CardForward, canSave = false, extra = '', canUndo = false): string {
   const outcome = scoringOf(level) === 'outcome';
-  const shotsText = `${strokes} ${outcome ? 'shot' : 'stroke'}${strokes === 1 ? '' : 's'}${outcome ? '' : ` · par ${level.par}`}`;
+  // A Rube Lab level's one plunger is no stroke to count: its line is the parts used against the parts par.
+  const shotsText = score?.parts ? `parts ${score.parts.used} / par ${score.parts.par}` : `${strokes} ${outcome ? 'shot' : 'stroke'}${strokes === 1 ? '' : 's'}${outcome ? '' : ` · par ${level.par}`}`;
   const actions = cardActions(score, strokes, forward, canSave, canUndo);
   if (!score) {
     return `<div class="c1">

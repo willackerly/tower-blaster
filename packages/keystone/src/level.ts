@@ -195,8 +195,9 @@ export interface LevelDef {
    */
   build?: BuildDef;
   /**
-   * Rube Lab (docs/game/rube-lab.md, rube-levels.ts rubeStars): the parts par, the least build cost a bot found
-   * that clears. Scoring data, not geometry: not part of the hash (as stars are not).
+   * Rube Lab (docs/game/rube-lab.md, rules.ts rubeStars): the parts par, the least build cost a bot found
+   * that clears. Hashed, unlike stars: progress keeps the best stars per level hash, so a retuned par is a new
+   * record rather than keeping stars earned under the old one.
    */
   rube?: { partsPar: number };
   /**
@@ -452,7 +453,7 @@ export function compileLevel(def: LevelDef): CompiledLevel {
   // Solutions don't change the scene, and the stars are cast against the hash (StarsDef.hash).
   // scoring 'par', autobank false, the scoring's settle rule and physics at its defaults are the defaults, so writing them out names the same level;
   // custom marks overrides the hash already holds.
-  const { solutions: _omit, stars: _stars, custom: _custom, rube: _rube, ...geometry } = def;
+  const { solutions: _omit, stars: _stars, custom: _custom, ...geometry } = def;
   if (geometry.scoring === 'par') delete geometry.scoring;
   if (geometry.autobank === false) delete geometry.autobank;
   // The settle rule a level plays by hashes as absent when it is the one its scoring used before v3 (par v1, outcome v2), so those

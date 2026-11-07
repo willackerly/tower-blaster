@@ -38,7 +38,7 @@ If the gate had failed, M10 would have parked until V6 (joints) and the DAG runn
 | Tilted piece | `piece.tilt` (degrees about local +z, before the yaw) | `pieceQuat(yaw, tilt)` |
 | Ball part | `{kind: 'ball', at, radius, material, role?, pinned?, placed?}` | a sphere body |
 | Bell objective | `{kind: 'bell', region?: {min, max}, moved?}` | every crown must ring |
-| Rube block | `rube: {partsPar}` | not hashed (like `solutions` and `stars`) |
+| Rube block | `rube: {partsPar}` | hashed (a retuned par is a new level for progress) |
 
 `validateLevel` lets pinned bodies overlap each other (a ramp may sink into a shelf), skips the mass-ratio, support and flat-PE checks for pins, and flags a free body inside a pin, a bell level without a bell, a region with min not below max, and a region bell that starts inside its region (already rung). The viewer's level file reads and writes all of it (`packages/viewer/src/level-file.ts`; `level-file.test.ts` round-trips every Rube level and a built RL1).
 
@@ -52,7 +52,7 @@ If the gate had failed, M10 would have parked until V6 (joints) and the DAG runn
 
 A pinned part ignores the ground and other pinned bodies in the overlap check, and is refused into a free body. Cost (`placedCost`) matches a placed part to its catalogue item by its sorted half-extents, so a file's parts list prices the same as the tool's.
 
-**Scoring.** `rubeStars(cleared, spent, partsPar)`: 0 uncleared; 3 at or under the parts par (the cheapest robust build the gate found); 2 within half again (`ceil(1.5 par)`); 1 for any clear. The session applies it at the par end when the level has a `rube` block. Parts pars: RL1 2, RL2 3, RL3 3.
+**Scoring.** `levelScore` scores a level with a `rube` block on its parts (docs/game/scoring.md, Rube Lab parts par): `rubeStars(cleared, spent, partsPar)` gives 0 uncleared, 3 at or under the parts par (the cheapest robust build the gate found), 2 within half again (`ceil(1.5 par)`), 1 for any clear, less one for broken heritage; the stamp is PARTS PAR or +N PARTS, there is no gold, and the card reads "parts N / par P". The parts par is hashed, so a retuned par is a new progress record. Parts pars: RL1 2, RL2 3, RL3 3.
 
 **In the game.** Rube Lab is a series on the door, after Undercut. A level opens in the build phase (C9's edit mode with the level's bin and budget); the slot's button reads **Go: release the ball** (F), which fires the plunger and runs the contraption.
 
@@ -83,7 +83,6 @@ Smaller calls:
 ## Known limits and follow-ups
 
 - The ghost does not check support: a part can be placed hanging in the air if it fits, and presettle drops it. The bot's builds all come from real faces, so the gate is not affected.
-- The result card shows Rube stars, but its line still reads as a par level's (strokes against par); a parts-used line is the scores thread's to add (`roundLeverage` and the card).
 - Fuse & Fold's timeline panel (PR #253) shows on levels with plunger charges; a Rube level's release should not open it. Exclude `def.rube` when that lands.
 - A yawed piece that is part of a `run` would hash through trig; no Rube level has one.
 - More levels: RL4 and RL5 can combine the families (a ramp up, a bumper turn, a pier in a gap) once the scores line exists.

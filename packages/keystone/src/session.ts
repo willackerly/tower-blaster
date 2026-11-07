@@ -10,7 +10,6 @@ import { collapseFraction, floorPotential_mJ, homePotential_mJ, homeSkyline, obj
 import { ammoInFlight, bellRung, crownDown, heritageBroken, leverage, levelScore, type LevelScore, levelTier, refereedScore, roundLeverage, type Observation, type Reductions, type SettleRule, type SettleState, settleCap, settleUpdate, type ShotOutcome, skyline } from './rules.ts';
 import type { RackItem } from './rack.ts';
 import { placedCost } from './build.ts';
-import { rubeStars } from './rube-levels.ts';
 import { ammoKE, type PlungerShot, pullEnergy, type Shot, shotEvent } from './shots.ts';
 
 export type Phase = 'aiming' | 'running' | 'cleared' | 'failed';
@@ -360,9 +359,8 @@ export class Session {
     }
     if (cleared || this.rackLeft.length === 0) {
       this.phase = cleared ? 'cleared' : 'failed';
-      this.score = levelScore(c.def, this.outcomes, cleared, m.n);
-      // Rube Lab: a binary clear, starred on the build's cost against the parts par (rube-levels.ts rubeStars).
-      if (c.def.rube) this.score = { ...this.score, stars: rubeStars(cleared, placedCost(c.def), c.def.rube.partsPar) };
+      // Rube Lab: a binary clear, starred on the build's cost against the parts par (rules.ts rubeStars).
+      this.score = levelScore(c.def, this.outcomes, cleared, m.n, c.def.rube ? placedCost(c.def) : 0);
       out.push({ t: 'levelEnd', step, cleared, score: this.score });
     } else {
       this.phase = 'aiming';

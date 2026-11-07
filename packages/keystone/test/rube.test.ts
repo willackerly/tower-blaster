@@ -156,4 +156,7 @@ describe('stars', () => {
   it('3 at or under the parts par, 2 within half again, 1 for any clear, 0 uncleared', () => {
     expect([rubeStars(true, 2, 3), rubeStars(true, 3, 3), rubeStars(true, 5, 3), rubeStars(true, 6, 3), rubeStars(false, 1, 3)]).toEqual([3, 3, 2, 1, 0]);
   });
+  it('the parts par is in the level hash: a retuned par is a new level for progress records', () => {
+    expect(compileLevel({ ...RL1, rube: { partsPar: 3 } }).hash).not.toBe(compileLevel(RL1).hash);
+  });
 });

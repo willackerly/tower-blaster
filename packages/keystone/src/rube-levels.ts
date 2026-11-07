@@ -84,16 +84,7 @@ export function rubeLevel(s: RubeSpec): LevelDef {
   };
 }
 
-/**
- * Stars for a cleared Rube Lab level (docs/game/rube-lab.md, scoring): 3 at or under the parts par (what
- * the bot's cheapest clear cost), 2 within half again, 1 for any clear; 0 uncleared. Binary clear, no cast.
- */
-export function rubeStars(cleared: boolean, spent: number, partsPar: number): 0 | 1 | 2 | 3 {
-  if (!cleared) return 0;
-  if (spent <= partsPar) return 3;
-  if (spent <= Math.ceil(1.5 * partsPar)) return 2;
-  return 1;
-}
+// Stars for a Rube Lab level: rules.ts rubeStars, applied by levelScore.
 
 // ---- The gate's three puzzles (docs/game/rube-lab.md, the gate) ----
 
