@@ -8,6 +8,7 @@ import { readBuffer, sharedDevice } from '@tb/gpu';
 import { Body, RenderRecord, Shape, TIER, readStruct } from '@tb/schema';
 import {
   packSurface, ICE_BIT, MATERIAL_ICE, agx, AGX_WGSL, TONE_MAPS, TONE_WGSL, toneMapped, GRAIN_WGSL, grainNoise, grainPixels, grained, agxBase, pbrNeutral, aces, type ToneMap, type RealOptions, type LookParams, fromHalf, Atmosphere, CLEAR_DAY, transmittance, transmittanceHMu, multiScattering, skyViewDir, skyRadiance, skyViewUv, sampleTransmittance, ambientOf, distanceToGround, meteredIlluminance, Materials, heightNormal, STONES, GROUNDS, MATERIAL_LAYERS, WOOD_WGSL, WOOD_RING_M, woodRings, PCG_WGSL, pcg3d, MACRO_LAYER, layerTile, materialSample, macroSample, adaptedExposure, LUMA, R_TOP, R_GROUND, FX_WORDS, packFx, toHalf, bevelNormal, BEVEL_WGSL, oklabToLinear, OKLAB_WGSL, Post, Culler, cullReference, FLOOR_REACH, GpuBodySource, invert, listMatches, lookAt, makeGpuBodies, multiply, packBodies, perspective, Renderer, SEG, SEGMENTS, SnapshotSource, transform, translation, normalize, rockIn, ROCK_CELL, ROCK_CLUMP, ROCK_SINK, sunOf, hallTraceCpu, HALL_MAT, OLYMPIA, BOX_VERTS, SPHERE_VERTS, SUN, Sparks, CTL, CLASSIC_SPARKS, sparkBucketReference, type SparkParams, MAX_EVENTS, flashSlot, FLASHES, MAX_BALLS, TRAIL, Lights, LIGHTS, LIGHT_META, LIGHT_PACKED, MATERIAL, AoVolume, aoGrid, aoFrame, splatReference, composeReference, AO_FOOT_WGSL, AO_SAMPLE_WGSL, AO_SEAM_WGSL, AO_ONE, type SplatBody, unpackImpacts, unpackSparks, spawnReference, stepReference, debrisSpawnReference, dustStepReference, chipStepReference, type SparkState, type Impact, type BodySource, type CullFrame, type FrameParams, type RendererOptions, type V3,
+  COAT_PAINT,
 } from '../src/index.ts';
 import { LOOKS, lookByName, realLook } from './looks.ts';
 
@@ -757,6 +758,13 @@ export async function fxColour() {
   const flashMid = await mean();
   rend.setFx(0, { emissive: 0.5, flash: 1, flashAt: 5 });
   const flashDone = await mean();
+  // A painted block (COAT_PAINT: the tint is its colour), the game's lost heritage (PT28): a red flash at the
+  // break (0.2 s into a 0.9 s fade), and the red it keeps.
+  const lostRed: V3 = [0.356, 0.035, 0.024];
+  rend.setFx(0, { coat: COAT_PAINT, tint: lostRed, emissive: 0.6, flash: 0.9, flashAt: 9.8 });
+  const paintedFlash = await mean();
+  rend.setFx(0, { coat: COAT_PAINT, tint: lostRed });
+  const paintedKept = await mean();
   rend.clearFx(0);
   // Overlay: a glowing sphere hidden behind the box changes nothing; one in front of it shows.
   const pix = async () => (await rend.render(f, true, true))!.pixels!;
@@ -777,7 +785,7 @@ export async function fxColour() {
   const backBehindBox = mask[back[1] * W + back[0]] !== 0;
   const err = await device.popErrorScope();
   rend.destroy();
-  return { plain, red, glow, flashMid, flashDone, frontDelta, backDelta, backBehindBox, error: err?.message ?? null };
+  return { plain, red, glow, flashMid, flashDone, paintedFlash, paintedKept, frontDelta, backDelta, backBehindBox, error: err?.message ?? null };
 }
 
 /**

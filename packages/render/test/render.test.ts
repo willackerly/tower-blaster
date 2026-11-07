@@ -1350,6 +1350,9 @@ describe('drawing', () => {
     expect(luma(r.flashMid)).toBeGreaterThan(luma(r.plain) + 5); // halfway through the flash
     expect(luma(r.flashMid)).toBeLessThan(luma(r.glow));
     expect(Math.abs(luma(r.flashDone) - luma(r.plain))).toBeLessThan(1); // flash over: as if none
+    // A painted red block (the game's lost heritage): red kept, and its flash red and brighter.
+    for (const c of [r.paintedKept, r.paintedFlash]) expect(c[0]!).toBeGreaterThan(1.8 * Math.max(c[1]!, c[2]!));
+    expect(luma(r.paintedFlash)).toBeGreaterThan(luma(r.paintedKept) + 15);
     expect(r.backBehindBox).toBe(true);
     expect(r.frontDelta).toBeGreaterThan(30); // the front sphere is drawn
     expect(r.backDelta).toBeLessThan(3); // the one behind the box is hidden by depth
