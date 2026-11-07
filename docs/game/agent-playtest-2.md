@@ -15,7 +15,7 @@ All 176 runs played to the end with no page error: desktop, phone and phone side
 
 Three verifies fail:
 - **PT5's balance on the GPU solver.** Gold wins 17 of 20 decided D1 duels (85%, two-sided binomial p ≈ 0.003) and 12 of 18 D2 duels (67%), although the seat is fair (55% and 39% for whoever fires first).
-- **PT14 on phones.** The pre-aimed opener shows "Out of reach" at load in 15 of 34 trial aim views.
+- **PT14 on phones.** The pre-aimed opener shows "Out of reach" at load in 15 of 34 trial aim views. After #246 none of the 20 remaining trials does (supplement B), but the D1 phone duel still does.
 - **PT3 on two levels.** L3's phone HUD grows after shot 1 (27.6% to 29.5%), and Aftershock's quake dial takes 35.1% of a phone.
 
 Four independent Opus judges raised 97 issues: core loop, modes and phone, trials and looks, and the new modes. They found:
@@ -52,14 +52,14 @@ The closest things to a regression are two residuals of round-1 rows, not breaks
 | PT4 | No centred card before 1.2 s; Retry primary on a fail; forward button at a series end | **Pass** | INCOMPLETE cards lead with Retry (`B1-novice-desktop-07-result`). RL5's card offers "Next: Fuse & Fold" (`RL5-line-desktop-07-result`). The phone result frames show fog over the card instead of the debris (J1 #5), which is PT30. |
 | PT5 | Novice clicks land on the enemy half; duels last ≥ 2 turns; no empty banner; D1/D2 40-60% on the GPU | **Fail** (balance) | Own-keep clicks 0 in 24 GPU duels; fewest turns 2; no judge saw an empty banner (PT5's DOM test covers it). D1 GPU: Gold 85% of decided (p ≈ 0.003); D2 GPU: Gold 67% (12 of 18; both tables together 29 of 38, p ≈ 0.002). D1 phone draws after 2 shots (`duel-D1-phone-09-result`). PT22. |
 | PT6 | Big-level fire-to-settle median ≤ 8 s, none at the cap | **Pending #272** | B3 shot 1 29.4 and 29.9 s (B levels are pinned to settle v3 until #272 lands their recast); B1 18.4 s, B2 10-13 s. The chamber levels settle in 1.4-7.3 s. Rube Lab waits out its 10 s cap after the bell (PT32). |
-| PT7 | stars.json holds B3 and U1-U3; no "coming soon" | **Pending #246** | The door still reads "targets coming soon" for B1-B3 (desktop) and "★★ ? · ★★★ ?" (phone). |
+| PT7 | stars.json holds B3 and U1-U3; no "coming soon" | **Pass** on text after #246 (supplement B); B3 and U3 casts pending on the Mac | The door still reads "targets coming soon" for B1-B3 (desktop) and "★★ ? · ★★★ ?" (phone). |
 | PT8 | Frozen frame clearly graded; L5 cut-in keeps par; How to play names Bullet Time | **Pass** (grade); test (par) | The frozen grade reads (J2 keep #5, `L5-bullet-time-desktop-01-frozen-mid-shot`). The L5 cut-in in this round did not clear, so par was not exercised; the bullet-time-undercut tests cover it. New problems: the grade also greys the crown, and there is no reticle while frozen (PT33). |
 | PT9 | One leverage number on HUD, chip and card | **Pass** | HUD and card agree on every run checked; the chip is now "N% speed" (pacing, `L5-bullet-time-desktop-02`). The judges now ask what the number means (PT31). |
 | PT10 | Ammo is live while it closes on the lot | **Test** | Chamber levels now play on the GPU solver, which does not sleep, so the round cannot show it; `settleUpdate` tests cover it. |
-| PT11 | Trial prune and load-stability test | **Pending #246** | T-S8 is still a heap at load on Rapier (`T-S8-novice-desktop-00`), and T-X4's arch still sheds bricks (`T-X4-novice-desktop-00`). Both are in #246's prune. |
+| PT11 | Trial prune and load-stability test | **Pass** after #246 (supplement B) | T-S8 is still a heap at load on Rapier (`T-S8-novice-desktop-00`), and T-X4's arch still sheds bricks (`T-X4-novice-desktop-00`). Both are in #246's prune. |
 | PT12 | HUD counters in step with the picture | **Pass** | No judge saw a counter that disagrees with its frame (frames are held at their step since round 1's fix). T-X2's "Down 12%" with nothing visible is a different problem: an inner collapse (J3 #20, PT31). |
-| PT13 | B1's opener alone ≥ 40% | **Pending #246** | On f52dc5f the opener brings 17% down on Rapier, where this round plays the big levels (`B1-novice-desktop-04`); #246 measured 0.427 on Metal for the same opener, so the GPU decides, and #246's chooser and door e2e (40% on the GPU solver) carry the verify. |
-| PT14 | No shot-0 "Out of reach"; opener reachable | **Fail** (phone) | No judge saw the warning at shot 0 on a desktop rated level (J3 saw it on the desktop only on T-S8 and T-X3, both in #246's scope). The phone trial aim views show the warning in 15 of 34 (J3 #3: T-B1A, T-B1B, T-B4A, T-B5A, T-B5C, T-I2, T-S12, T-S14, T-S3, T-S3R, T-S8, T-X1, T-X3, T-X3B, T-X3K; checked by eye on `T-S3-view-phone-00`). In D1 on the phone the warning shows on an arc that lands on the keep and knocks the king off (J2 #5, `duel-D1-phone-01` to `-05`). PT29. |
+| PT13 | B1's opener alone ≥ 40% | **Pending the GPU** (#246 merged; Metal pick queued) | On f52dc5f the opener brings 17% down on Rapier, where this round plays the big levels (`B1-novice-desktop-04`); #246 measured 0.427 on Metal for the same opener, so the GPU decides, and #246's chooser and door e2e (40% on the GPU solver) carry the verify. |
+| PT14 | No shot-0 "Out of reach"; opener reachable | **Fail** on f52dc5f (phone); trials **pass** after #246 (supplement B) | No judge saw the warning at shot 0 on a desktop rated level (J3 saw it on the desktop only on T-S8 and T-X3, both in #246's scope). The phone trial aim views show the warning in 15 of 34 (J3 #3: T-B1A, T-B1B, T-B4A, T-B5A, T-B5C, T-I2, T-S12, T-S14, T-S3, T-S3R, T-S8, T-X1, T-X3, T-X3B, T-X3K; checked by eye on `T-S3-view-phone-00`). In D1 on the phone the warning shows on an arc that lands on the keep and knocks the king off (J2 #5, `duel-D1-phone-01` to `-05`). PT29. |
 | PT15 | Crown gold and heritage teal in every look | **Partial** (row still doing) | Real and hazy are right. Candy still uses teal and gold in the body gradient beside the special tiles (`L3-candy-desktop-00`, `B2-candy-desktop-00`); crown and heritage tiles look plastic in the real look (`B2-real-desktop-00`). Evidence passed to PT15. |
 | PT16 | Totals ≥ 0; incomplete strokes 0; no solo score in a duel | **Pass** | 0 negative totals in 176 runs; duel cards show no solo score. |
 | PT17 | Pull animation; no 0/1 counter on U3 | **Pass** | U3's HUD reads "Crown standing ✓" (report `hud`). The U3 card shows "4 shots · 4% down" beside the "13% PULLED" stamp (J1 #9): a minor leftover, PT35. |
@@ -193,7 +193,7 @@ The judges see option 1's captures, and the balance comes from option 2.
 
 ## Supplement: latest main
 
-Played after the main round with the same harness. Frames and reports are under `playtest/agent-2/supplement/` in the project files.
+Played after the main round with the same harness. Frames and reports are under `playtest/agent-2/supplement/` in the project files. The supplements re-check verifies and the mains that moved under the round. They were checked by eye against the frames, not given to a fresh judge; Wavefront's first judge pass belongs to round 3's new-modes lens.
 
 ### A. Main 404b6a4: phones after PT3b, and Wavefront
 
@@ -213,7 +213,22 @@ HUD shares are unchanged, because PT3b moves the camera, not the HUD. Aftershock
 
 ### B. Main 8b40cd3: the level set (#246)
 
-SUPPLEMENT_B
+This supplement is 55 runs, all ok with 0 page errors. It covers every trial left after the prune (20 on the door) on the desktop, with their aim views on a phone and the ice trials in the real look. It also covers U1-U3 at both sizes, B1 (desktop, phone, sideways) and the door.
+
+- **PT7: pass on text; casts pending.** The door no longer says "targets coming soon" or "?" anywhere (`supB-door` HUD text). Uncast levels show one star row. B3's and U3's casts wait on the Mac.
+- **PT11: pass.**
+  - The door lists 20 trials.
+  - T-X4 is now the Gateway and stands at load (1 star, 54% down).
+  - T-S8 is still a heap at load, but only on Rapier, which is the harness's trial engine. `level-stability-rapier.test.ts` lists it as Rapier's mass-ratio case, and it stands on the GPU solver the game plays. So this is not a player issue.
+  - The Kapla Spire drafts (T-B5A to C) are still inert to a novice (0% down after three shots). They are drafts on the door, waiting on the Metal explore.
+- **PT14 on phones: pass on the trials.** None of the 20 trial aim views shows "Out of reach", down from 15 of 34 (#246's openers and #273's framing; checked by eye on all 20).
+  - The D1 phone duel still shows the warning on an arc that hits, so PT29 keeps that case.
+  - On several trials (T-S4, T-S14, T-S14T, T-X1, T-X3B) the default aim now lands on the ground in front of the structure (`T-X3B-view-phone-00-aim-view`). That is PT29's "every opening aim does something".
+- **PT13: pending the GPU.** B1's opener still brings 17% down on Rapier, here at all three sizes. #246 measured 0.427 on Metal, and its door e2e asks 40% on the GPU solver. The Metal opener pick is queued on the Mac.
+- **PT35, Undercut:**
+  - U1 is now a par puzzle. The novice's first pull hit the fixed top and was refused (stroke charged), and its second pull cleared it at par on the desktop and with a bogey on a phone.
+  - U2 refuses pulls on the fixed beam. The novice pulled the two near cubes (the wrong guess) and then could not reach the far rods from the middle of the screen. That is a harness limit, not a lock: two pulls stay usable on rods 6 and 7.
+  - The U1/U2 slab shortcut is gone. PT35 keeps only U3's two metrics.
 
 ## Re-running it
 
