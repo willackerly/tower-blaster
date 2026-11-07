@@ -188,6 +188,8 @@
   "packages/keystone-lab/test/lay-levels.test.ts": 40.7,
   "packages/keystone-lab/test/level-stability-2.test.ts": 172.8,
   "packages/keystone-lab/test/level-stability-3.test.ts": 160.3,
+  "packages/keystone-lab/test/level-stability-gpu-2.test.ts": 0.5,
+  "packages/keystone-lab/test/level-stability-gpu-3.test.ts": 0.5,
   "packages/keystone-lab/test/level-stability-gpu-X3B.test.ts": 100.8,
   "packages/keystone-lab/test/level-stability-gpu.test.ts": 247.2,
   "packages/keystone-lab/test/level-stability-rapier.test.ts": 116.2,
