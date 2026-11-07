@@ -21,7 +21,7 @@ const MATERIAL_NAMES = MATERIALS.map((m) => m.name) as readonly string[];
 /** The LevelDef a JSON value describes, or an error saying where it is wrong. */
 export function parseLevelDef(v: unknown, where = 'level'): LevelDef {
   const o = object(v, where);
-  only(o, ['format', 'id', 'name', 'version', 'world', 'unit', 'gap', 'parts', 'lot', 'crownLine', 'objective', 'par', 'rack', 'launcher', 'lGold', 'solutions', 'scoring', 'stars', 'autobank', 'settle', 'runWindow', 'freeze', 'physics', 'custom', 'build', 'charges', 'rube', 'cut', 'end'], where);
+  only(o, ['format', 'id', 'name', 'version', 'world', 'unit', 'gap', 'parts', 'lot', 'crownLine', 'objective', 'par', 'rack', 'launcher', 'lGold', 'solutions', 'scoring', 'stars', 'autobank', 'settle', 'runWindow', 'freeze', 'physics', 'custom', 'build', 'charges', 'rube', 'cut', 'end', 'push'], where);
   if (o.format !== undefined && o.format !== LEVEL_FILE_FORMAT) throw new Error(`${where}.format should be "${LEVEL_FILE_FORMAT}"`);
   const id = str(o.id, `${where}.id`);
   if (!/^[\w-]{1,32}$/.test(id)) throw new Error(`${where}.id must be 1 to 32 letters, digits, - or _`);
@@ -40,10 +40,11 @@ export function parseLevelDef(v: unknown, where = 'level'): LevelDef {
   if (o.lGold !== undefined) def.lGold = num(o.lGold, `${where}.lGold`);
   if (o.solutions !== undefined) {
     const s = object(o.solutions, `${where}.solutions`);
-    only(s, ['par', 'ace', 'opener'], `${where}.solutions`);
+    only(s, ['par', 'ace', 'opener', 'teach'], `${where}.solutions`);
     def.solutions = {};
     for (const k of ['par', 'ace'] as const) if (s[k] !== undefined) def.solutions[k] = arr(s[k], `${where}.solutions.${k}`).map((x, i) => shot(x, `${where}.solutions.${k}[${i}]`));
     if (s.opener !== undefined) def.solutions.opener = shot(s.opener, `${where}.solutions.opener`);
+    if (s.teach !== undefined) { if (s.teach !== true) throw new Error(`${where}.solutions.teach must be true`); def.solutions.teach = true; }
   }
   if (o.scoring !== undefined) def.scoring = oneOf(o.scoring, SCORINGS, `${where}.scoring`) as Scoring;
   if (o.stars !== undefined) def.stars = stars(o.stars, `${where}.stars`);
@@ -66,6 +67,10 @@ export function parseLevelDef(v: unknown, where = 'level'): LevelDef {
   if (o.cut !== undefined) {
     if (o.cut !== true) throw new Error(`${where}.cut must be true`);
     def.cut = true;
+  }
+  if (o.push !== undefined) {
+    def.push = arr(o.push, `${where}.push`).map((x, i) => int(x, `${where}.push[${i}]`));
+    for (const k of def.push) if (k < 0 || k >= def.parts.length) throw new Error(`${where}.push: part ${k} is not one of the level's ${def.parts.length}`);
   }
   if (o.end !== undefined) def.end = checkEnd(o.end, def.objective.kind, `${where}.end`);
   return def;

@@ -2044,9 +2044,25 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     if (!upright && !matchMedia(DOCK_SIDEWAYS).matches) return undefined;
     const boxOf = (e: Element) => { const r = e.getBoundingClientRect(); return { x: r.left, y: r.top, w: r.width, h: r.height }; };
     const boxes = [...env.hud.querySelectorAll(upright ? ':scope > .st, :scope > .tray, :scope > .tray > .above' : ':scope > .st, :scope > .tray')].map(boxOf);
+    // Fuse & Fold's panel is part of the band (PT21): upright it stands on the tray, sideways it runs down the right side.
+    if (fuse?.timeline) { placeFuse(); boxes.push(boxOf(fuse.el)); }
     const out = hudInsets(boxes, innerWidth, innerHeight), above = env.hud.querySelector(':scope > .tray > .above');
     if (!upright && above) { const b = boxOf(above); if (b.w > 0 && b.h > 0) out.top = Math.max(out.top, Math.min(1, (b.y + b.h) / innerHeight)); }
     return out;
+  }
+
+  /**
+   * Upright on a docked phone, Fuse & Fold's panel stands on the HUD's tray (and the hints over it) instead of
+   * covering it (PT21); anywhere else it keeps the stylesheet's place. Every frame on a level with a timeline.
+   */
+  function placeFuse(): void {
+    if (!fuse?.timeline) return;
+    let bottom: number | null = null;
+    if (env.hud.classList.contains('kg-dock') && document.body.classList.contains('kg-touch') && matchMedia(DOCK_PORTRAIT).matches) {
+      const tops = [...env.hud.querySelectorAll(':scope > .tray, :scope > .tray > .above')].map((e) => e.getBoundingClientRect()).filter((r) => r.width > 0 && r.height > 0).map((r) => r.top);
+      if (tops.length) bottom = innerHeight - Math.min(...tops) + 8;
+    }
+    fuse.dock(bottom);
   }
 
   function drawHud() {
@@ -2139,7 +2155,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     // Fuse & Fold: the charges' markers, coloured by their delays, while the plunger can still go.
     const plungerReady = !!fuse?.timeline && handle.ready && driver.session.rackLeft.includes('plunger');
     fuse?.ready(plungerReady);
-    if (fuse?.timeline) fuse.heading(view.yaw, view.pitch);
+    if (fuse?.timeline) { fuse.heading(view.yaw, view.pitch); placeFuse(); }
     const ghost = pullAnim ? ghostOutline(pullAnim, now - pullAnim.at) : null;
     const o = joinOverlays(beads ? beadOverlay(beads, aimed?.reachable ?? true) : null, arc, ghost, plungerReady ? timelineOverlay(fuse!.timeline!) : null, foldLot);
     renderer.reach(ring?.centre ?? null, ring?.radius ?? 0);

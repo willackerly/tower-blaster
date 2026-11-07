@@ -7,6 +7,7 @@ import type { PhysicsEngine, Snapshot } from '@tb/engine-api';
 import { type CompiledLevel } from './level.ts';
 import { Driver, type DriverOptions, playShots, snapshotHash } from './driver.ts';
 import type { Shot } from './shots.ts';
+import { runWindowSteps } from './rules.ts';
 
 /** The plunger that starts every Rube Lab level: charge 0 (the release) at once. */
 export const RUBE_GO: Shot = { ammo: 'plunger', fuse: [[0, 0]] };
@@ -39,7 +40,8 @@ export async function rubePlay(engine: PhysicsEngine, c: CompiledLevel, opts: Dr
   const start = engine.stepIndex;
   let rungAt = -1;
   const r = await playShots(d, [RUBE_GO], 0, {
-    maxSteps: start + (opts.maxSteps ?? 2400),
+    // A level with a run window (C22: Wavefront's Lay levels) may run past 40 s: cap it at its window, plus a margin.
+    maxSteps: start + (opts.maxSteps ?? Math.max(2400, c.def.runWindow ? runWindowSteps(c.def.runWindow, c.scene.dt) + 600 : 0)),
     perStep: () => { if (rungAt < 0 && d.session.crownLive.length && d.session.crownLive.every(Boolean)) rungAt = d.snapshotStep - start; return []; },
   });
   // The observed step the session ended at (its levelEnd), not engine.stepIndex: a pipelined driver has stepped once more.
