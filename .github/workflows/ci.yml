@@ -35,8 +35,8 @@ jobs:
   test:
     name: test ${{ matrix.shard }}/8
     runs-on: ubuntu-latest
-    # Stopgap (O5): shards now take 12-20 min on main and queue for ~10 min before
-    # that, so 20 min cancelled green shards. Back to ~15 once O5 rebalances them.
+    # Stopgap (O5): shards now take 12-20 min of tests on main (queueing doesn't
+    # count), so 20 cancelled green shards. Back to ~15 once O5 rebalances them.
     timeout-minutes: 30
     strategy:
       fail-fast: false
