@@ -159,8 +159,9 @@ Review points not acted on here:
   `keystone.balls=plain`.
 - Wider issues of the real look, added to the roadmap as follow-ups (not
   step 7): the per-block tint variation reads as a mosaic rather than
-  masonry; gold crown blocks read as a printed decal (gilded brass would
-  stay readable and look physical). The reviewer also asked for ambient
+  masonry (R7, done: `look-colours.md` §5); gold crown blocks read as a
+  printed decal (gilded brass would stay readable and look physical; R8,
+  done: `look-colours.md` §3). The reviewer also asked for ambient
   occlusion, soft shadows and haze, which the real look has (steps 3 to 6);
   SwiftShader's small frames show less of them.
 

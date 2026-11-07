@@ -4,7 +4,7 @@
 // `pnpm playtest:agent` (minutes to an hour on SwiftShader), not a CI test.
 import { describe, expect, it } from 'vitest';
 import { BIG_LEVELS, DUELS, LEVELS, TRIAL_LEVELS, UNDERCUT_LEVELS } from '@tb/keystone';
-import { agentPlan, frameName, lineOf, noviceAim, rng, sheetGrid, spiral, VIEWPORTS } from '../src/agent/plan.ts';
+import { agentPlan, frameName, lineOf, noviceAim, rng, sheetGrid, spiral, VIEWPORTS, withLook } from '../src/agent/plan.ts';
 
 const plan = agentPlan();
 const played = (id: string) => plan.filter((s) => s.level === id && (s.script.kind === 'play' || s.script.kind === 'freeze'));
@@ -90,5 +90,13 @@ describe('captures', () => {
     expect(sheetGrid(4, 1280, 800)).toEqual({ cols: 3, rows: 2, cellW: 640, cellH: 400 });
     expect(sheetGrid(9, 390, 844)).toEqual({ cols: 6, rows: 2, cellW: 300, cellH: 649 });
     expect(sheetGrid(1, 1280, 800).cols).toBe(1);
+  });
+});
+
+describe('--look (a look review: the same scenarios in another look)', () => {
+  it('sets the look, replacing one the scenario names and keeping the rest of its search', () => {
+    expect(withLook('?level=L3', 'real')).toBe('?level=L3&look=real');
+    expect(withLook('?level=B2&look=candy', 'hazy')).toBe('?level=B2&look=hazy');
+    expect(new URLSearchParams(withLook('?level=B1&keystone.freeze=3', 'real')).get('keystone.freeze')).toBe('3');
   });
 });

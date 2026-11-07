@@ -85,8 +85,9 @@ export function cullReference(w: CpuWorld, f: CullFrame): CullRef {
     const far: Test = x > EPS ? 'in' : x < -EPS ? 'out' : 'maybe';
     tests.forEach((t, j) => {
       const s = seg + 2 * j;
-      // An ice box is in boxIce at any distance, never in box or boxFar (its shadow is any box's).
-      const lists = s === SEG.box ? (ice ? [[SEG.boxIce, true, true]] as const : [[SEG.box, far === 'out', far !== 'in'], [SEG.boxFar, far === 'in', far !== 'out']] as const) : [[s, true, true]] as const;
+      // An ice box is in boxIce at any distance, never in box or boxFar; its shadow in boxIceShadow, not boxShadow.
+      const lists = s === SEG.box ? (ice ? [[SEG.boxIce, true, true]] as const : [[SEG.box, far === 'out', far !== 'in'], [SEG.boxFar, far === 'in', far !== 'out']] as const)
+        : s === SEG.boxShadow && ice ? [[SEG.boxIceShadow, true, true]] as const : [[s, true, true]] as const;
       for (const [l, sure, maybe] of lists) {
         if (t === 'in' && sure) must[l]!.push(i);
         if (t !== 'out' && maybe) may[l]!.push(i);

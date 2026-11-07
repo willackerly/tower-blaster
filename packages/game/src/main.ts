@@ -16,7 +16,7 @@ import { doorDuels, doorMode, doorOnLoad, duelsOnDoor, openerFor, preaimMode, se
 import { buildOption, GAME_SERIES, loadOptions, lookName, onEngine, parseGameParams, weaponTierOf, withRules } from './params.ts';
 import { browserKeyValue, memoryKeyValue, type ProgressStore, progressStore } from './progress.ts';
 import { bankAfterLine, type SessionFacts, sessionFile, sessionFileName } from './session-file.ts';
-import { CAMERA_KEYS, cameraFeel, LAUNCH_KEYS, launchFeel, MARKS_KEYS, marksFeel, RAPID_KEYS, rapidFeel, type Settings, SettingsStore, TURN_VIEW_KEYS, turnViewFeel } from './settings.ts';
+import { CAMERA_KEYS, cameraFeel, LAUNCH_KEYS, launchFeel, HANDOFF_KEYS, handoffFeel, MARKS_KEYS, marksFeel, RAPID_KEYS, rapidFeel, type Settings, SettingsStore, TURN_VIEW_KEYS, turnViewFeel } from './settings.ts';
 import { knobsFor, type QualityState, tierFor } from './quality.ts';
 import { probeQuality } from './quality-probe.ts';
 import { NO_WEBGPU_HTML, webgpuMissing } from './support.ts';
@@ -70,6 +70,8 @@ async function main() {
   if (duel) feel.rapid = false;
   // A duel's turn view: the URL's keystone.turnview where it says, else the Duel turns setting (on by default). Read live: from the next turn.
   Object.assign(feel, turnViewFeel(feel, q, settings.current.duelView));
+  // A duel's hand-over card: the URL's keystone.handoff where it says, else the Hand-over setting (on by default). Read live: from the next turn.
+  Object.assign(feel, handoffFeel(feel, q, settings.current.handoff));
   // Launch height: the URL's keystone.launch where it says, else the setting (high by default). Read live: a change moves the launcher at once.
   Object.assign(feel, launchFeel(feel, q, settings.current.launch));
   // Stone marks: the URL's keystone.marks where it says, else the setting (on by default). Read live: a change recarves the stones at once.
@@ -152,11 +154,12 @@ async function main() {
       if (changed === 'camera') Object.assign(feel, cameraFeel(feel, new URLSearchParams(), st.camera));
       if (changed === 'rapid') { Object.assign(feel, rapidFeel(feel, new URLSearchParams(), st.rapid)); if (duel) feel.rapid = false; }
       if (changed === 'duelView') Object.assign(feel, turnViewFeel(feel, new URLSearchParams(), st.duelView));
+      if (changed === 'handoff') Object.assign(feel, handoffFeel(feel, new URLSearchParams(), st.handoff));
       if (changed === 'launch') Object.assign(feel, launchFeel(feel, new URLSearchParams(), st.launch));
       if (changed === 'marks') { Object.assign(feel, marksFeel(feel, new URLSearchParams(), st.marks)); handle.refreshMarks(); }
       if (changed === 'layout') { Object.assign(layout, layoutOf(new URLSearchParams(), st.layout)); applyLayout(); }
       // The setting now says it: the URL keys that set it for this visit go.
-      const u = new URLSearchParams(location.search), keys = changed === 'camera' ? CAMERA_KEYS : changed === 'rapid' ? RAPID_KEYS : changed === 'duelView' ? TURN_VIEW_KEYS : changed === 'launch' ? LAUNCH_KEYS : changed === 'marks' ? MARKS_KEYS : changed === 'layout' ? LAYOUT_KEYS : [changed];
+      const u = new URLSearchParams(location.search), keys = changed === 'camera' ? CAMERA_KEYS : changed === 'rapid' ? RAPID_KEYS : changed === 'duelView' ? TURN_VIEW_KEYS : changed === 'handoff' ? HANDOFF_KEYS : changed === 'launch' ? LAUNCH_KEYS : changed === 'marks' ? MARKS_KEYS : changed === 'layout' ? LAYOUT_KEYS : [changed];
       if (keys.some((k) => u.has(k))) { for (const k of keys) u.delete(k); history.replaceState(null, '', `?${u}`); }
     },
   });

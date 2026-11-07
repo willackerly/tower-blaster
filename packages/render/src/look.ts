@@ -79,7 +79,8 @@ export interface LookParams {
    * metres), edge wear and dirt (0 to 1), texture strength, and fade: the pixel footprint (metres)
    * where the texture has faded out (from half that), past which blocks drop the stone code.
    */
-  stone?: { kind: Stone; scale: number; wear: number; dirt: number; detail: number; fade: number };
+  /** jitter: the span of each block's lightness jitter, a share (BLOCK_JITTER, scaled by RealOptions.mosaic); warmth: of its warm/cool drift along WARM_AXIS (RealOptions.warmth). */
+  stone?: { kind: Stone; scale: number; wear: number; dirt: number; detail: number; fade: number; jitter?: number; warmth?: number };
   /**
    * With an atmosphere: the ground's material (materials.ts GROUNDS), texture scale (1 = a tile per
    * GROUND_TILE metres), texture strength (0: flat floor, nothing sampled) and macro variation (0 to 1):
@@ -272,6 +273,18 @@ export interface RealOptions {
   grainSize: number;
   ballMetal: number;
   ballRough: number;
+  /**
+   * Masonry (R7): how much each block's colour differs from its neighbours', as a share of the stone palette's
+   * full spread (1: as before R7, a mosaic; 0: every block the palette's mean). The palette's keys move toward
+   * their OKLab mean (light keys faster, mosaicRamp), and the per-block lightness jitter and per-tower hue turn shrink
+   * with them; the stone texture's own variation inside each block stays.
+   */
+  mosaic: number;
+  /**
+   * Masonry (R7): the span of each block's warm/cool drift in OKLab along WARM_AXIS (+-half of it; 0: none, as
+   * before R7), so blocks differ a little toward ochre or blue-grey as well as in lightness.
+   */
+  warmth: number;
 }
 
 export const REAL_DEFAULTS: RealOptions = {
@@ -281,11 +294,37 @@ export const REAL_DEFAULTS: RealOptions = {
   sunSize: 0.53, shadowSoftness: 1, shadowFill: 0.5,
   dust: 1, chips: 1, dustSize: 0.9, dustOpacity: 0.4, dustThreshold: 2, dustFace: 0.15, dustErode: 0.7, dustThin: 0.3, dustSkirt: 0.9,
   env: 'outdoor', hallSize: 1, hallGlass: 0.5, hallIron: 0.55, hallExterior: 1,
-  toneMap: 'agx', grain: 0.2, grainSize: 1.5, ballMetal: 1, ballRough: 0.2,
+  toneMap: 'agx', grain: 0.2, grainSize: 1.5, ballMetal: 1, ballRough: 0.2, mosaic: 0.8, warmth: 0.025,
 };
 
 /** Step 7's options at the values that leave the real look as it was before them (the golden gate pins it). */
 export const REAL_POLISH_OFF: Partial<RealOptions> = { toneMap: 'agx', grain: 0, ballMetal: 0 };
+
+/**
+ * The direction (OKLab a, b; unit length) of a block's warm/cool drift: a : b = 0.3 : 1, so warm is ochre and cool
+ * blue-grey. Along b alone, warm/pink stone went violet on the cool side and olive on the warm (R7 review 3).
+ */
+export const WARM_AXIS: readonly [number, number] = [0.3 / Math.hypot(0.3, 1), 1 / Math.hypot(0.3, 1)];
+
+/** The span of a block's lightness jitter, as a share (+-half of it; the palette's own, before RealOptions.mosaic scales it). */
+export const BLOCK_JITTER = 0.08;
+
+/**
+ * A palette (sRGB 0..1) with its spread scaled by m (RealOptions.mosaic): each key moved toward the keys'
+ * mean in OKLab, so 1 is the palette itself and 0 five copies of its mean. Keys lighter than the mean move
+ * by m^1.5, darker ones by m: below 1 the lightest blocks pull in hardest (the R7 review: no near-white
+ * block beside a dark one).
+ */
+export function mosaicRamp(pal: readonly V3[], m: number): V3[] {
+  if (m === 1) return pal.map((c) => [...c] as V3); // exactly the palette (the OKLab round trip is 2e-8 off)
+  const labs = pal.map((c) => linearToOklab(c.map(srgbToLinear) as V3));
+  const mean = [0, 1, 2].map((k) => labs.reduce((s, l) => s + l[k]!, 0) / labs.length);
+  return labs.map((l) => {
+    const f = l[0] > mean[0]! ? m ** 1.5 : m;
+    return oklabToLinear(l.map((x, k) => mean[k]! + f * (x - mean[k]!)) as V3).map((x) => linearToSrgb(Math.max(x, 0))) as V3;
+  });
+}
+
 
 /** Direction toward the sun from elevation and azimuth in degrees. */
 export function sunFrom(elevation: number, azimuth: number): V3 {
@@ -312,14 +351,14 @@ export function realLook(o: Partial<RealOptions> = {}): LookParams {
     roughness: 0.8,
     clearcoat: 0,
     bevel: 0.012,
-    ramp: STONE_PALETTES[r.stone].map(hex) as LookParams['ramp'],
-    stone: { kind: r.stone, scale: r.stoneScale, wear: r.wear, dirt: r.dirt, detail: r.stoneDetail, fade: r.stoneFade / 100 },
+    ramp: mosaicRamp(STONE_PALETTES[r.stone].map(hex), r.mosaic) as LookParams['ramp'],
+    stone: { kind: r.stone, scale: r.stoneScale, wear: r.wear, dirt: r.dirt, detail: r.stoneDetail, fade: r.stoneFade / 100, jitter: BLOCK_JITTER * r.mosaic, warmth: r.warmth },
     ground: { kind: r.groundMaterial, scale: r.groundScale, detail: r.groundDetail, variation: r.groundVariation, relief: r.groundRelief, patches: r.groundPatches, rocks: r.rocks, rockSize: r.rockSize },
     hills: { height: r.hills, distance: r.hillDistance, cover: r.hillCover, ridges: r.hillRidges },
     shadow: { softness: r.shadowSoftness, fill: r.shadowFill },
     debris: { dust: r.dust, chips: r.chips, size: r.dustSize, opacity: r.dustOpacity, threshold: r.dustThreshold, face: r.dustFace, skirt: r.dustSkirt, erode: r.dustErode, thin: r.dustThin },
     ...(r.env === 'hall' ? { hall: { params: hallScaled(OLYMPIA, r.hallSize), glass: r.hallGlass, iron: r.hallIron, exterior: r.hallExterior >= 0.5 } } : {}),
-    hueStep: 4,
+    hueStep: 4 * r.mosaic,
     ball: hex('#8A8D90'),
     ballEmissive: 0,
     exposure: r.exposure,
@@ -379,6 +418,8 @@ export const REAL_KNOBS = {
   grainSize: { label: 'grain size (px at 1080 lines)', min: 1, max: 4, step: 0.25 },
   ballMetal: { label: 'ball steel 0-1 (0: clear-coated grey)', min: 0, max: 1, step: 0.05 },
   ballRough: { label: 'ball steel roughness', min: 0.02, max: 1, step: 0.01 },
+  mosaic: { label: 'block-to-block colour 0-1', min: 0, max: 1, step: 0.05 },
+  warmth: { label: 'block warm/cool drift 0-0.1', min: 0, max: 0.1, step: 0.005 },
 } as const;
 export type RealKnob = keyof typeof REAL_KNOBS;
 
