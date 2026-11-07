@@ -5,7 +5,7 @@
 // (objective kind 'bell'): a crown that must be hit (moved a quarter h) or
 // must arrive in a sensor region. Scored par-style: the clear is binary, and
 // the build's cost against the level's parts par is what the stars read
-// (rubeStars). Everything here is plain level data in h; no joints (V6), so
+// (partsStars). Everything here is plain level data in h; no joints (V6), so
 // the vocabulary is balls, boxes, dominoes, fixed ramps and bumpers.
 import type { Vec3 } from '@tb/engine-api';
 import type { BuildDef, CatalogName } from './build.ts';
@@ -56,7 +56,7 @@ export interface RubeSpec {
   runnerBell?: boolean;
   objective: Extract<Objective, { kind: 'bell' }>;
   build: BuildDef & { budget: number; pieces: CatalogName[] };
-  /** The least cost a bot found that clears (the parts par: rubeStars). */
+  /** The least cost a bot found that clears (the parts par, build.par: partsStars). */
   partsPar: number;
   /** Lot half-size in cells around the origin. */
   lot: [number, number, number, number];
@@ -78,13 +78,13 @@ export function rubeLevel(s: RubeSpec): LevelDef {
     crownLine: 0, objective: s.objective, par: 1, rack: ['plunger'],
     launcher: { radius: 16, y: 2, dropY: 10 },
     // In the order a level file reads them back (viewer level-file.ts): the hash follows key order.
-    build: s.build,
+    build: { ...s.build, par: s.partsPar },
     charges: [{ host: 0, weapon: 'release' }],
-    rube: { partsPar: s.partsPar },
+    rube: true,
   };
 }
 
-// Stars for a Rube Lab level: rules.ts rubeStars, applied by levelScore.
+// Stars for a Rube Lab level: rules.ts partsStars, applied by levelScore.
 
 // ---- The gate's three puzzles (docs/game/rube-lab.md, the gate) ----
 
@@ -142,7 +142,47 @@ export const RL3: LevelDef = rubeLevel({
   partsPar: 3, lot: [-18, -6, 18, 6],
 });
 
-/** The gate's puzzles, in order. */
-export const RUBE_GATE: readonly LevelDef[] = [RL1, RL2, RL3];
+/**
+ * RL4 Up and Over (M10b): RL3's fast runner along the ground into the face of a broad 1.5 h shelf; the bell
+ * (RL2's light ball) waits on the shelf top, off the ball's line. Two steps chained: lift the ball (a ramp, RL3)
+ * and turn it on the shelf (a bumper or a free beam, RL2). The gate found no other family: a domino run curving
+ * into a plank on end leans the plank on the shelf edge, short of the bell, and turning first on the ground
+ * leaves the ball too slow to climb (docs/game/rube-lab.md).
+ */
+export const RL4: LevelDef = rubeLevel({
+  id: 'RL4', name: 'Up and Over', trapdoor: [-15.9, 6.3, 0],
+  parts: [
+    rampTo([0, 0, 0], 20, 6 / Math.sin((20 * Math.PI) / 180), { width: 2 }),
+    fixed([15, 0.75, 3.5], [5, 0.75, 5.5]),
+    { kind: 'ball', at: [14, 2.3, 6.5], radius: 0.8, material: 'plaster', role: 'crown' },
+  ],
+  objective: { kind: 'bell' },
+  build: { budget: 14, pieces: ['domino', 'cube', 'plank', 'beam', 'ramp', 'bumper'], brush: true },
+  partsPar: 6, lot: [-18, -6, 22, 12],
+});
+
+const STEP = 1, GAP5 = 2;
+/**
+ * RL5 Step and Turn (M10b): a runner off a steep (30 degree) ramp onto a low platform (1 h), a 2 h gap only 1 h
+ * deep, then a wide platform with a pocket off the ball's line: the runner is the bell, and must reach the pocket.
+ * Cross (a cube stands in this gap flush with the platforms, the twist on RL1's wrong build, or a slab spans it)
+ * and turn (a bumper, or a free beam) on the far platform. The ramp is steep because a slab's 0.25 h edge takes
+ * most of a slow ball's speed, and the session's 600-step settle cap ends a crawling run; the gap is 2 h because at
+ * 1.5 h the faster ball hops it (a bumper alone cleared). A region, not a ball to hit, as a slowed ball still rolls.
+ */
+export const RL5: LevelDef = rubeLevel({
+  id: 'RL5', name: 'Step and Turn', trapdoor: [-10.8, STEP + 3.45, 0], runnerBell: true,
+  parts: [
+    fixed([-7, STEP / 2, 0], [7, STEP / 2, 1.5]),
+    fixed([GAP5 + 7, STEP / 2, 3.75], [7, STEP / 2, 5.25]),
+    rampTo([-6, STEP, 0], 30, 6, { width: 2 }),
+  ],
+  objective: { kind: 'bell', region: { min: [8, STEP, 5], max: [14, STEP + 3, 9] } },
+  build: { budget: 9, pieces: ['cube', 'slab', 'plank', 'beam', 'bumper'], brush: false },
+  partsPar: 4, lot: [-14, -4, 18, 10],
+});
+
+/** The gate's puzzles, in order: RL1-RL3 (M10), then RL4-RL5 combining their families (M10b). */
+export const RUBE_GATE: readonly LevelDef[] = [RL1, RL2, RL3, RL4, RL5];
 /** Rube Lab's series, in door order. */
 export const RUBE_LEVELS: readonly LevelDef[] = [...RUBE_GATE];

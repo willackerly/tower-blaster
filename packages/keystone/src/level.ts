@@ -195,11 +195,10 @@ export interface LevelDef {
    */
   build?: BuildDef;
   /**
-   * Rube Lab (docs/game/rube-lab.md, rules.ts rubeStars): the parts par, the least build cost a bot found
-   * that clears. Hashed, unlike stars: progress keeps the best stars per level hash, so a retuned par is a new
-   * record rather than keeping stars earned under the old one.
+   * A Rube Lab level (docs/game/rube-lab.md): its one plunger is the Go button (release the ball). Its
+   * parts par is build.par, which any build level may name (scored by rules.ts partsStars).
    */
-  rube?: { partsPar: number };
+  rube?: true;
   /**
    * Made from an authored level by overrides (URL keys keystone.*): it plays, but cast stars do not
    * apply ("custom: stars not recorded"). Not part of the hash: the overrides already are.
