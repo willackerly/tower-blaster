@@ -28,8 +28,8 @@ export interface CastHandle {
    * fell, in cells (h), with the engine's limit report; ms is the whole run's wall time.
    */
   rest(level: LevelDef, steps: number): Promise<RestReport>;
-  /** A Rube Lab level (par scoring, one plunger: keystone rube-play.ts) as the game plays it, on a fresh engine. */
-  rube(level: LevelDef): Promise<RubeResult & { ms: number }>;
+  /** A Rube Lab level (par scoring, one plunger: keystone rube-play.ts) as the game plays it, on a fresh engine; maxSteps caps the run (rubePlay's). */
+  rube(level: LevelDef, maxSteps?: number): Promise<RubeResult & { ms: number }>;
   /** A Wavefront level (keystone wave-play.ts) played with one line (writeShots text) on a fresh engine, the wave metered. */
   wave(level: LevelDef, line: string, opts?: Pick<WaveOptions, 'groups' | 'fell' | 'maxSteps'>): Promise<WaveResult & { ms: number }>;
   /** A Mason level as built, judged in `worlds` (MasonDef worlds' indices) at once on a fresh engine (keystone judgeMason); limits as rest's. */
@@ -86,9 +86,9 @@ async function main() {
       return { presettle, steps, maxMove: maxMove / h, topDrop: (topA - topB) / h, limits, ms: performance.now() - t0 };
     } finally { e.dispose(); }
   };
-  handle.rube = async (level) => {
+  handle.rube = async (level, maxSteps) => {
     const c = compileLevel(level), e = makeEngine(kind, c, device), t0 = performance.now();
-    try { return { ...(await rubePlay(e, c, driverOptions(kind))), ms: performance.now() - t0 }; } finally { e.dispose(); }
+    try { return { ...(await rubePlay(e, c, { ...driverOptions(kind), ...(maxSteps !== undefined ? { maxSteps } : {}) })), ms: performance.now() - t0 }; } finally { e.dispose(); }
   };
   handle.wave = async (level, line, opts = {}) => {
     const c = compileLevel(level), e = makeEngine(kind, c, device), t0 = performance.now();

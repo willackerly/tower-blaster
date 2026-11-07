@@ -23,6 +23,7 @@
 //   tower, both ways (at 2.5 to 3 h it is chaotic). A relay tower of loose cubes
 //   splits like any tower and carries from some cells and not their neighbours.
 import type { LevelDef, Part } from './level.ts';
+import { W1, W2, W6 } from './lay-levels.ts';
 
 type V3 = [number, number, number];
 
@@ -133,4 +134,4 @@ export const W5: LevelDef = {
   ...WAVE_RULES,
 };
 
-export const WAVE_LEVELS: readonly LevelDef[] = [W3, W4, W5];
+export const WAVE_LEVELS: readonly LevelDef[] = [W1, W2, W3, W4, W5, W6];

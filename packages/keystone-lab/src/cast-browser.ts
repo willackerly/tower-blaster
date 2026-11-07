@@ -54,8 +54,8 @@ export interface BrowserCastPlayer extends CastPlayer {
   setBatchTimeout(ms: number): void;
   /** The level at rest on the page's engine (the cast page's rest: pre-settle, then `steps` with nothing fired). */
   rest(level: LevelDef, steps: number): Promise<RestReport>;
-  /** A Rube Lab level played once with its plunger on the page's engine (cast-page.ts rube). */
-  rube(level: LevelDef): Promise<RubeResult & { ms: number }>;
+  /** A Rube Lab level played once with its plunger on the page's engine (cast-page.ts rube), at most maxSteps steps. */
+  rube(level: LevelDef, maxSteps?: number): Promise<RubeResult & { ms: number }>;
   /** A Wavefront level played once with `shots` on the page's engine, the wave metered (cast-page.ts wave). */
   wave(level: LevelDef, shots: Shot[], opts?: Pick<WaveOptions, 'groups' | 'fell' | 'maxSteps'>): Promise<WaveResult & { ms: number }>;
   /** A Mason level as built, judged in `worlds` at once on the page's engine (cast-page.ts mason). */
@@ -145,7 +145,7 @@ export async function openBrowserCastPlayer(opts: BrowserCastOptions = {}): Prom
       return out;
     },
     rest: (level, steps) => onPage('rest', (p) => p.evaluate(([lv, n]) => window.__cast.rest(lv, n), [level, steps] as const)),
-    rube: (level) => onPage(`rube ${level.id}`, (p) => p.evaluate((lv) => window.__cast.rube(lv), level)),
+    rube: (level, maxSteps) => onPage(`rube ${level.id}`, (p) => p.evaluate(([lv, m]) => window.__cast.rube(lv, m ?? undefined), [level, maxSteps ?? null] as const)),
     wave: (level, shots, o = {}) => onPage(`wave ${level.id}`, (p) => p.evaluate(([lv, line, oo]) => window.__cast.wave(lv, line, oo), [level, writeShots(shots), o] as const)),
     mason: (level, worlds) => onPage(`mason ${level.id}`, (p) => p.evaluate(([lv, w]) => window.__cast.mason(lv, w), [level, worlds] as const)),
     injectFault(kind) { fault = kind; },

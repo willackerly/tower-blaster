@@ -10,8 +10,8 @@ There are three verbs:
 
 Status (2026-11-07):
 
-- **Shipped:** the run window and bodies that start asleep (C22), the wave meter (`wavePlay`), Steer's two levels W3 Fall Line and W4 Avenue, Cut (`LevelDef.cut`) and its level W5 Firebreak, and the Wavefront series on the door.
-- **Not yet built:** Lay (W1 and W2, on Rube Lab's parts par from #268), a 10k Steer city (held until X9 lands on Metal), and the wave-map overlay.
+- **Shipped:** the run window and bodies that start asleep (C22), the wave meter (`wavePlay`), Steer's two levels W3 Fall Line and W4 Avenue, Cut (`LevelDef.cut`) and its level W5 Firebreak (#265), Lay with its bot and three levels W1 First Run, W2 Two Bells and W6 Orchard (1,021 dominoes), and the Wavefront series on the door.
+- **Not yet built:** a 10k Steer city (held until X9 lands on Metal) and the wave-map overlay.
 
 ## C22: the run window, and bodies that start asleep
 
@@ -72,15 +72,41 @@ The game steps physics only while a shot runs, so nothing moves while the player
 - **Charges armed before the shot (rejected for now).** C5's cutter charge, armed in aim and fired by a timeline, would let the player plan the cut. It is a fine later variant, but it hides the live read of the front that Cut is about.
 - **Keep physics running while aiming on Cut levels (rejected).** It changes the game loop for one family and breaks the camera and aim feel the rest of the game relies on.
 
+## Lay: the brush, the bot and the parts par
+
+A Lay level is a contraption (Rube Lab's `rubeLevel`, `keystone/src/lay-levels.ts`): the Go button drops a ball down a fixed ramp, the ball knocks the first domino of the player's run, and every bell (a crown domino) must be hit. The build is the brush alone (`pieces: ['domino']`), and the stars read the build's cost against the parts par (`build.par`, rules.ts `partsStars`, from #268).
+
+**The bot (`keystone-lab/src/lay.ts`).** The parts par is the cheapest build found by perturbing authored solutions (`lay-solutions.ts`), the way another hand draws the same idea:
+
+- Every control point of a stroke moves up to 0.8 h in x and z (seeded), except the held ones. By default those are each stroke's first and last: where the push arrives or a branch forks off, and the bell it runs to. A player lines those up on the ghost; the route between is what varies.
+- Every candidate is built through `BuildSession` (the brush's own clash and budget rules) and played with the plunger on Rapier.
+- A clear counts only if it also clears on 4 nudged builds (`nudgedLevel`: 1 mm and 0.2° per body). A clear that fails a nudge is luck and does not set par.
+
+**What building them found.**
+
+- **A fork is two strokes side by side**, 0.6 h either side of the line, one gap (1.1 h) past the parent's last domino. Measured on a fork with a straight 10 h parent: 30 of 30 nudges at every side offset from 0.55 to 0.7 h and gap from 0.9 to 1.1 h, for branches spreading 1.5, 3 or 6 h. A wide splitter domino across both branches did no better. A 12 h spread cleared 0 of 30 in that isolated rig, yet the Orchard's 12 h fork holds on every nudge; that difference is not yet explained.
+- **The gap is measured from the last domino, not the end of the path.** The brush lays a domino every pitch (1.2 h) and stops short of the path's end by up to a pitch. The first Orchard placed each fork from its parent's path end, so a fork could sit up to 2.3 h off the last domino. That field rang all sixteen bells on 6 of 20 nudges. Placed from the last domino, it rang all sixteen on 20 of 20.
+- **Drawing into a pre-laid run is safe.** The dominoes that would clash with it are left out, so W6's authored run stops 1.25 h short of the trunk's first domino.
+- **An end drawn off its bell is the usual miss.** With the ends free to move 0.8 h, W2's fork cleared 12 of 21 perturbations; with the ends held, 21 of 21. The misses were runs that ended beside a bell.
+
+**Alternatives considered.**
+
+- **A placement bot that searches freely for stars (rejected by R3, as in Rube Lab).** It finds degenerate builds no player draws. Perturbing authored solutions keeps par to lines a player would recognise.
+- **The player's own push (a marble at a starter domino, as T-W1).** Rejected for Lay: the aim adds a second, noisy skill to a level about the run. The plunger makes the push the same every time, so the stars read the run alone.
+- **Par as the authored solution's cost.** Rejected: the bot found W1's run at 11 dominoes against a hand-drawn 11 to 12, and W2's fork at 19 against 19 to 22. The bot's cheapest is the "best line found" rule that B2 and B3 use.
+
 ## The levels
 
 | id | name | verb | the design | what the tests pin |
 |---|---|---|---|---|
+| W1 | First Run | Lay | A wall stops the ball 6.5 h down the line, and the bell stands behind it. Budget 30, parts par 11. | Rapier: both authored runs (round the north end, round the south) clear on 50 of 50 nudges. A run into the wall, or nothing built, fails. The bot's par is 11 (50 of 50 perturbations clear, costs 11 to 12). GPU: both clear. |
+| W2 | Two Bells | Lay | A bell to the north and one to the south, with the wall on the ball's line. One run cannot ring both: fork it, or start two runs side by side at the ramp's foot. Budget 50, parts par 19. | Rapier: the fork and the split at the foot clear on 50 of 50 nudges; one branch of the fork fails. The bot's par is 19 (costs 19 to 22). GPU: both clear. |
 | W3 | Fall Line | Steer | Three north-south streets 10 cells apart: the west one unbroken (8 towers), the middle and east ones each broken by a 9-cell gap. A starter at each end of each street. Par 1, two cannonballs, collapse at least 0.16. | Rapier: each street from each end fells its towers in order to its first gap (8, 3, 2 or 4), the rest standing, from 3 hit points on the starter. Only the west street clears in one stroke, and a push across an avenue fells one tower. GPU: the west street clears. |
 | W4 | Avenue | Steer, build | One street broken by a 10-cell avenue (3 towers, then 4), with a budget of one relay slab (cost 16). Par 1, two cannonballs, collapse at least 0.4. | Rapier: bare, the wave dies at the avenue from either end. A relay built (through `BuildSession`) 3.5, 4, 4.5, 5, 5.5 or 6 h into the avenue carries it the length of the street, both ways. GPU: with a relay, the street clears. |
 | W5 | Firebreak | Cut | One street of 8 towers in three blocks (3, 3, 2) joined by two built-in relay slabs, a starter at the south end, and a village (heritage on the top course of towers 7 and 8) at the north end. Cut level, par 2 (push, pull), cannonball and pull, collapse at least 0.33, heritage judged standing. | Rapier: with no pull, all 8 fall (village lost, 2 stars). Pulling the second relay 60 or 300 steps after the push fells 6 and saves the village (3 stars); at 600 steps it is too late (8 fall, 2 stars). Pulling the first relay fells 3 and misses the objective. GPU: pull at 120 steps, 6 fall, the village stands. |
+| W6 | Orchard | Lay at 1k | A pre-laid field of 1,021 dominoes: a trunk forking four times (each branch spreads half as far as its parent) into sixteen leaves that run 48 h to a bell each. A wall on the ball's line. Lay the run round the wall to the trunk; one bell left standing fails. Budget 40, parts par 21, 60 s window. | Rapier: the north run rings all 16 on 30 of 30 nudges in CI. With `WAVE_SLOW=1`, the north and south runs each ring all 16 on 150 of 150, so at 95% confidence at least 98.0% of nudges clear for each. The bot's par is 21 (18 robust clears of 18 perturbations, costs 21 to 23). Nothing built, or a run into the wall, rings none. GPU: the north run rings all 16 by step 2,087. |
 
-Every Wavefront level plays under `WAVE_RULES`: GPU sleep, the structure asleep from the start, and a 60 s run window.
+The Steer and Cut levels play under `WAVE_RULES`: GPU sleep, the structure asleep from the start, and a 60 s run window. The Lay levels sleep and start asleep too. Only W6 has the window: W1's and W2's runs are done in 5 s.
 
 On W4, two strokes clear the bare level too: each half of the street pushed from its own starter gives 0.27 + 0.34. That costs a star, as par scoring means it to.
 
@@ -92,6 +118,11 @@ On W4, two strokes clear the bare level too: each half of the street pushed from
 | W4 relay, north | clear, 7 towers | 0.569 | 227 / 124 of 227 | 9.1 s |
 | W3 west street, north | clear, 8 towers | 0.186 | 258 / 149 of 646 | 8.8 s |
 | W5 push, pull relay 2 at 120 steps | clear, 6 towers, village standing | 0.430 | 218 max of 259 (mean not logged) | |
+| W1 north, W1 south | clear, bell at step 303 | | | 10.0 s (the cap) |
+| W2 fork, W2 split at the foot | clear, both bells by step 313 | | | 7.2 s, 6.4 s |
+| W6 north | all 16 bells by step 2,087 | | | not quiet by 60 s |
+
+**W6 on the GPU does not come quiet inside its window.** On Rapier the fallen field settles about 1 s after the last bell rings. On SwiftShader the session runs to the end of the 60 s window, so the player waits 25 s past the last bell for the result. The GPU test therefore stops at 2,250 steps and judges the bells, not the clear. The next step is to find which bodies keep the GPU field from settling: the fallen leaves, or the ball against the wall.
 
 The awake count is probe X1's meter (every 5 steps, from the first shot). With the city asleep from the start, the front stays on the street the wave runs down. Metal casts and timings go through the coordinator's Mac queue (`TB_CHANNEL=chrome` on these files). SwiftShader seconds are never performance numbers.
 
@@ -115,4 +146,7 @@ The awake count is probe X1's meter (every 5 steps, from the first shot). With t
 | `packages/physics-ref/test/asleep.test.ts`, `packages/adapter-rapier/test/asleep.test.ts`, `packages/physics-gpu/test/engine-asleep.test.ts` | each | Bodies that start asleep stay asleep until reached (GPU), or run awake bit-identical to unflagged (reference, Rapier). |
 | `packages/keystone-lab/test/wave-levels.test.ts` | Rapier | W3 and W4 as designed (above). |
 | `packages/keystone/test/cut.test.ts` | none | A Cut level refuses a pull while aiming, the same level without `cut` accepts it, and `cut` is in the hash. |
+| `packages/keystone-lab/test/lay-levels.test.ts` | Rapier | W1 and W2: every authored solution clears on at least 98% of 50 nudges, the wrong builds fail, the budget refuses a long run, and the bot's par is the level's `build.par`. |
+| `packages/keystone-lab/test/lay-W6.test.ts` | Rapier | W6: 1,021 dominoes and 16 bells; the north run rings all 16 on 30 of 30 nudges; nothing built rings none. 150 nudges of both runs and the par search run with `WAVE_SLOW=1`. |
+| `packages/keystone-lab/test/wave-gpu-lay.test.ts`, `wave-gpu-W6.test.ts` | GPU | The Lay levels' authored runs ring every bell on the game's engine, and the pinned ramp and wall do not move. |
 | `packages/keystone-lab/test/wave-gpu-W3.test.ts`, `wave-gpu-W4.test.ts`, `wave-gpu-W5.test.ts` | GPU | The clean line of each level on the game's engine, the awake count logged and bounded. |

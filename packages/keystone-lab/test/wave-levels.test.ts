@@ -30,7 +30,7 @@ const HITS = [{ dx: 0, fy: 2 / 3 }, { dx: 0.9, fy: 0.95 }, { dx: -0.9, fy: 0.5 }
 
 describe('Wavefront levels on Rapier', () => {
   it('every level compiles clean and plays asleep in its window', () => {
-    for (const l of WAVE_LEVELS) {
+    for (const l of WAVE_LEVELS.filter((d) => !d.rube)) { // the Steer and Cut levels; Lay levels are lay-levels.test.ts
       const k = compileLevel(l);
       expect(validateLevel(k).map((i) => i.code), l.id).toEqual([]);
       expect(l.runWindow).toBeGreaterThan(30);
