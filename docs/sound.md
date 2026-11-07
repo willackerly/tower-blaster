@@ -580,8 +580,37 @@ What the tower found, and what changed:
   towers (spread +-1.4 dB). A level trim, not physics: the game was mixed on real1, and the tower now
   plays stone within 1.0 dB and ice within 0.3 dB of it (test: knock, clatter and tumble within 3 dB).
 
-`levels-cli.ts` takes `set=`. Next: a level (stone and ice levels: T-I1, T-I3, B3). The free-text
-describer (CLAP) still needs huggingface.co.
+`levels-cli.ts` takes `set=`.
+
+### Step 4: a level (2026-11-07)
+
+The game's own path: `sound-cli.ts` plays a level on the AVBD reference, taps it from the game's opening
+camera and renders it through the level's sound slots at the game's level, limiter and all. It now takes
+any built-in level (its par line, else its showcase line, else `shots=`), and maps every body by its
+description as the page does (a spawned ice piece was an index past the shots). The ice trials have no
+recorded line, so each takes a cannonball at the centre then a grenade from 20 degrees round
+(`cannonball.0.16.0.20.100_w-grenade.40.12.0.30.100`).
+
+| level (impacts) | set | judge: real share, top classes | limiter: worst, time under -3 dB |
+|---|---|---|---|
+| T-I1 ice tower (526 block, 6449 piece) | real1 | 0.79: Glass, Chink, Music, Ding | -6.9 dB, 80 ms |
+| | **real** | **0.93**: Explosion, Chainsaw, Breaking (mineral .42) | -12.3 dB, 370 ms |
+| T-I2 ice wall (1083, 1185) | real1 | 0.62: Glass, Chink, Ding, Music | none |
+| | **real** | **0.89**: Glass, Explosion, Chink, Fireworks | none |
+| T-I3 stone keep, ice top (476 stone, 299 ice, 1429 piece) | real1 | 0.64: Glass, Music, Chink, Breaking | -7.6 dB, 100 ms |
+| | **real** | **0.86**: Sound effect, Camera, Fire (mineral .39) | -9.9 dB, 340 ms |
+
+What the level found:
+
+- **A shattered ice block's pieces sounded as whole blocks.** Keystone splits a block 2 x 2 x 2 (ice.ts);
+  every piece played ice at the block's edge, so a grenade's 6000 piece hits rang like 6000 blocks. New
+  slot `PIECE_SLOT` (sound-map.ts, after the ammo): ice at half the edge, an octave up with an eighth of
+  a block's energy. The pieces now sit 12-18 LU under the blocks.
+- **A grenade among ice blocks drives the limiter in either set**: the whole blocks it throws peak
+  7-9 dB over full scale at the game's level (real1 too). The real set holds it 3-4 times as long (its
+  grit is crackle: peak-to-loudness 2-6 dB over real1's). Left as is: it lasts a third of a second inside
+  an explosion, which is what the limiter is there for; a listening item for Will.
+- The real set reads as breaking where real1 read as glass and music on every ice level.
 
 ## Plan (each step lands with its test)
 

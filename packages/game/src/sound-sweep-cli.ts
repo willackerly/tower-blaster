@@ -12,7 +12,7 @@
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { type AudioFrame, BLOCK, CollapseEngine, FULL_SCALE, SOUND_KNOBS, type SoundKnob, type SoundMaterial, soundMaterials, SOUND_SETS, type SoundSet, tunedMaterial } from '@tb/audio';
 import { compileLevel, LEVELS } from '@tb/keystone';
-import { AMMO_SLOT, gameSoundDb, slotSounds } from './sound-map.ts';
+import { AMMO_SLOT, gameSoundDb, PIECE_SLOT, slotSounds } from './sound-map.ts';
 
 const kv = Object.fromEntries(process.argv.slice(2).map((a) => a.split('=') as [string, string]));
 const KEYS = new Set(['from', 'out', 'name', 'levels', 'set', 'as', 'only', 'vol', 'edge', ...Object.keys(SOUND_KNOBS)]);
@@ -43,7 +43,7 @@ for (const id of (kv.levels ?? 'L1,L2,L3').split(',')) {
   const e = new CollapseEngine({ sampleRate: SR, seed: 1, fullScale: FULL_SCALE / 10 ** ((viewer ? Number(kv.vol ?? 0) : gameSoundDb(set)) / 20) });
   if (viewer) e.setMaterial(0, tune(mats[kv.as ?? (id === 'kapla' ? 'pine' : 'acrylic')]!), Number(kv.edge ?? 1));
   else slotSounds(compileLevel(LEVELS.find((l) => l.id === id)!), set).forEach((x, i) =>
-    e.setMaterial(i, only && !only.includes(i) ? null : tune(i === 0 && kv.as ? mats[kv.as]! : x.material, i >= AMMO_SLOT), x.edge));
+    e.setMaterial(i, only && !only.includes(i) ? null : tune(i === 0 && kv.as ? mats[kv.as]! : x.material, i >= AMMO_SLOT && i < PIECE_SLOT), x.edge));
   const n = Math.ceil((frames.reduce((s, f) => s + f.dt, 0) * SR) / BLOCK) + 160, L = new Float32Array(n * BLOCK), R = new Float32Array(n * BLOCK);
   const l = new Float32Array(BLOCK), r = new Float32Array(BLOCK);
   let due = 0, b = 0;
