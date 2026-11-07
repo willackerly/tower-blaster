@@ -7,6 +7,7 @@ import { balls } from './balls.ts';
 import { budgetMs } from './budget.ts';
 import { camera } from './camera.ts';
 import { coats } from './coats.ts';
+import { fireside } from './fireside.ts';
 import { follow } from './follow.ts';
 import { frames } from './frames.ts';
 import { frozenLook } from './frozenlook.ts';
@@ -18,6 +19,7 @@ import { launch } from './launch.ts';
 import { layout } from './layout.ts';
 import { look } from './look.ts';
 import { marks } from './marks.ts';
+import { openAim } from './openaim.ts';
 import { view } from './openview.ts';
 import { pullAnim } from './pullanim.ts';
 import { quality } from './quality.ts';
@@ -51,10 +53,12 @@ export const OPTIONS = [
   handoff,
   undoMB,
   launch,
+  fireside,
   balls,
   marks,
   view,
   impact,
+  openAim,
   xray,
   coats,
   sun,

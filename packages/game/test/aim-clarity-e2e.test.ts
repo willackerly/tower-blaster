@@ -39,6 +39,24 @@ describe('game page, the aim at shot 0', () => {
     }, 180_000);
   }
 
+  it('no preview on the result card (PT36): no dots, no marker once the card shows', async (ctx) => {
+    if (!game.browser()) return ctx.skip();
+    const o = await game.open('/?level=L1&engine=rapier&offscreen=1&progress=off&door=0', 60_000);
+    if (!o) return ctx.skip();
+    const { page, errors } = o;
+    await ready(page);
+    // Aim at the tower (a preview is drawn), then fire the opener, which clears L1, and leave the aim where it was.
+    await page.evaluate(() => window.__game.aim(0, 0));
+    expect(await page.evaluate(() => window.__game.fireOpener())).toBe(true);
+    await page.waitForFunction(() => window.__game.result !== null, undefined, { timeout: 120_000, polling: 250 });
+    await page.waitForSelector('.kg-result.show', { timeout: 30_000 });
+    const f0 = await page.evaluate(() => window.__game.frames);
+    await page.waitForFunction((n) => window.__game.frames > n + 2, f0, { timeout: 30_000, polling: 100 });
+    expect(await page.evaluate(() => ({ dots: window.__game.view.dots.length, impact: window.__game.view.impact }))).toEqual({ dots: 0, impact: false });
+    expect(errors).toEqual([]);
+    await page.close();
+  }, 240_000);
+
   it('keystone.impact=0: the flight shows, the marker does not', async (ctx) => {
     if (!game.browser()) return ctx.skip();
     const o = await game.open('/?level=L1&engine=rapier&offscreen=1&progress=off&door=0&keystone.impact=0');

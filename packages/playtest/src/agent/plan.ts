@@ -16,8 +16,8 @@ export type ViewportName = keyof typeof VIEWPORTS;
 /**
  * How a scenario plays its level:
  * - `line`: the level's recorded line (solutions.par on the chamber levels, solutions.ace on B1 and B2): a competent player.
- * - `novice`: what a first visit does: the pre-aimed opener when the HUD offers one, then clicks near the middle of
- *   the screen with the first item left in the rack, a small seeded jitter each time (noviceAim), up to `shots` shots;
+ * - `novice`: what a first visit does: the pre-aimed opener when the HUD offers one, else a tap on the opening aim the
+ *   game shows (PT29), then clicks near the middle of the screen with the first item left in the rack, a small seeded jitter each time (noviceAim), up to `shots` shots;
  *   an outcome level still open after them is banked. In the new modes (round 2) a first visit takes what the
  *   level offers as it opens: Fuse & Fold's Plunger with the delays as they load, Aftershock's Start with the
  *   dial as it loads, Rube Lab's Play with nothing built and then its Plunger.
