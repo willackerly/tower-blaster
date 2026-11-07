@@ -4,14 +4,15 @@
 // level already loading behind it, so the first shot is one click away.
 //
 // Every series shows, each under its title (Spectacle, Chamber, Undercut), and
-// the trials (keystone trial-levels.ts: unrated, 25 of them) under a toggle,
+// the trials (keystone trial-levels.ts: unrated: 16 after PT11's pruning, then the C9 workshop and the Kapla Spire drafts) under a toggle,
 // closed by default so the door neither scrolls past them nor compiles them
 // (a 10k trial compiles in 20-30 ms) until the player opens it.
 //
 // Star targets come from each level's cast stars (stars.json via castStars):
-// a level whose cast has not landed yet (B3 while its cast runs) shows only the
-// objective's star and "more stars once cast", and picks the rest up from the
-// file with no change here.
+// a level with none (a trial, or a level whose cast has not landed) shows the
+// objective's star alone, one target row and one star slot, never a placeholder
+// (the agent playtest's PT7: "targets coming soon" read as unfinished), and picks
+// the rest up from the file with no change here.
 import { castStars, type CompiledLevel, compileLevel, DUEL_NAMES, type DuelDef, isTrial, type LevelDef, type Objective, scoringOf, SERIES, SERIES_TITLES, type Shot, type StarMetric, type StarsDef } from '@tb/keystone';
 import { CUSTOM_NOTE, esc, fmtPoints, itemLabel, LEVERAGE_MEANS, levelTag, objectiveText, pct, playerName } from './hud.ts';
 import type { LevelRecord } from './progress.ts';
@@ -122,19 +123,20 @@ export function objectiveShort(o: Objective): string {
   }
 }
 
-const shotCount = (n: number) => `${n} shot${n === 1 ? '' : 's'}`;
+/** "2 shots", or "2 pulls" on a rack of pulls only (Undercut's par puzzles). */
+const shotCount = (n: number, rack: readonly string[] = []) => {
+  const word = rack.length && rack.every((x) => x === 'pull') ? 'pull' : 'shot';
+  return `${n} ${word}${n === 1 ? '' : 's'}`;
+};
 
-/** Shown for two and three stars on a level whose cast has not landed (B3 while it runs). */
-export const UNCAST_TARGETS = 'targets coming soon';
-
-/** The three star targets of a compiled level: the objective, then T2 and T3 (or UNCAST_TARGETS), and par for par levels. */
+/** The three star targets of a compiled level: the objective, then T2 and T3 ('' when uncast: the door shows the objective's row alone), and par for par levels. */
 export function starTargets(c: CompiledLevel, stars: StarsDef | undefined): { targets: [string, string, string]; short: [string, string, string]; cast: boolean } {
   const d = c.def;
   const heritage = c.meta.heritage.length ? ', heritage intact' : '';
   const one = cap(objectiveText(d.objective)), oneShort = objectiveShort(d.objective);
   // Par levels (keystone parStars): three stars less one per stroke over par and one for broken heritage.
-  if (scoringOf(d) === 'par') return { targets: [one, `…in ${shotCount(d.par + 1)}`, `…in par (${shotCount(d.par)})${heritage}`], short: [oneShort, `${d.par + 1} shots`, `par ${d.par}`], cast: true };
-  if (!stars) return { targets: [one, UNCAST_TARGETS, UNCAST_TARGETS], short: [oneShort, '?', '?'], cast: false };
+  if (scoringOf(d) === 'par') return { targets: [one, `…in ${shotCount(d.par + 1, d.rack)}`, `…in par (${shotCount(d.par, d.rack)})${heritage}`], short: [oneShort, shotCount(d.par + 1, d.rack), `par ${d.par}`], cast: true };
+  if (!stars) return { targets: [one, '', ''], short: [oneShort, '', ''], cast: false };
   return {
     targets: [one, cap(thresholdText(stars.metric, stars.t2)), `${cap(thresholdText(stars.metric, stars.t3))}${heritage}`],
     short: [oneShort, thresholdShort(stars.metric, stars.t2), thresholdShort(stars.metric, stars.t3)],
@@ -238,16 +240,17 @@ export function doorHtml(m: DoorModel): string {
   const next = nextLevel(m.levels);
   const card = (l: DoorLevel, i: number) => {
     const earned = l.best?.stars ?? 0;
-    // An uncast level's two- and three-star rows say the same thing: one row for both.
-    const rows = (l.cast ? l.targets : l.targets.slice(0, 2)).map((t, k) => `<li class="${earned > k ? 'got' : ''}${!l.cast && k > 0 ? ' uncast' : ''}"><span class="s">${'★'.repeat(k + 1)}</span>${esc(t)}</li>`).join('');
-    const short = l.short.map((t, k) => `<span class="${earned > k ? 'got' : ''}"><b>${'★'.repeat(k + 1)}</b> ${esc(t)}</span>`).join(' · ');
+    // An uncast level has the objective's star only: its row alone, and one star slot.
+    const most = l.cast ? 3 : 1;
+    const rows = l.targets.slice(0, most).map((t, k) => `<li class="${earned > k ? 'got' : ''}"><span class="s">${'★'.repeat(k + 1)}</span>${esc(t)}</li>`).join('');
+    const short = l.short.slice(0, most).map((t, k) => `<span class="${earned > k ? 'got' : ''}"><b>${'★'.repeat(k + 1)}</b> ${esc(t)}</span>`).join(' · ');
     return `<button class="card${l.index === m.current ? ' current' : ''}${i === next ? ' next' : ''}${l.trial ? ' trial' : ''}" data-act="level" data-arg="${l.index}" data-id="${esc(l.id)}" aria-label="${esc(`${l.tag} ${l.name}`)}">
       <div class="id">${esc(l.tag)}</div>
       <div class="lname">${esc(l.name)}</div>
       <div class="meta">${l.blocks.toLocaleString('en-US')} blocks · ${esc(l.rack)}</div>
       <ul class="targets">${rows}</ul>
       <div class="short">${short}</div>
-      <div class="best"><span class="earned">${'★'.repeat(earned)}</span><span class="unearned">${'☆'.repeat(3 - earned)}</span> ${esc(bestText(l.best))}</div>
+      <div class="best"><span class="earned">${'★'.repeat(earned)}</span><span class="unearned">${'☆'.repeat(Math.max(0, most - earned))}</span> ${esc(bestText(l.best))}</div>
       ${l.custom ? `<div class="custom">${CUSTOM_NOTE}</div>` : ''}
     </button>`;
   };
@@ -329,7 +332,6 @@ export const DOOR_CSS = `
   .kg-door .targets li { display: flex; gap: 8px; padding: 2px 0; color: #c7cdda; }
   .kg-door .targets li .s { flex: none; min-width: 3.2em; color: #7a8296; letter-spacing: -0.05em; }
   .kg-door .targets li.got .s, .kg-door .short .got b { color: #f7b955; }
-  .kg-door .targets li.uncast { color: #8a93a6; }
   .kg-door .short { display: none; margin: 8px 0; font-size: 13px; color: #c7cdda; font-variant-numeric: tabular-nums; }
   .kg-door .short b { color: #7a8296; font-weight: 400; letter-spacing: -0.05em; }
   .kg-door .best { margin-top: auto; padding-top: 8px; border-top: 1px solid #2b3242; font-size: 12px; color: #a6aec0; font-variant-numeric: tabular-nums; }
@@ -410,12 +412,13 @@ export function preaimMode(q: URLSearchParams): PreaimMode {
 }
 
 /**
- * The pre-aimed opening shot for level def at index `index` of its series: the first shot of its best
- * recorded line (solutions.ace, else solutions.par), or null. Under auto only the series' first level has
+ * The pre-aimed opening shot for level def at index `index` of its series: the level's chosen opener
+ * (solutions.opener: a shot that wins it alone, PT13), else the first shot of its best recorded line
+ * (solutions.ace, else solutions.par), or null. Under auto only the series' first level has
  * one, and only until the player has a record for it: the first-minute promise is for a first visit, and
  * handing every level its best opener would give the stars away.
  */
 export function openerFor(def: LevelDef, index: number, mode: PreaimMode, played: boolean): Shot | null {
   if (mode === '0' || (mode === 'auto' && (index !== 0 || played))) return null;
-  return def.solutions?.ace?.[0] ?? def.solutions?.par?.[0] ?? null;
+  return def.solutions?.opener ?? def.solutions?.ace?.[0] ?? def.solutions?.par?.[0] ?? null;
 }

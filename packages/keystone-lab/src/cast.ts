@@ -214,17 +214,39 @@ export function facingAzimuth(c: CompiledLevel, point: Vec3, normal: [number, nu
 }
 
 /**
- * The shot an intent fires: a launch aimed with aimAt from the ring point facing the target (at the
- * intent's power, or more if the target is out of reach there), or an anvil dropped over the target body.
+ * The body a pull intent takes: of the bodies a pull may take (not a crown, heritage or fixed, and not
+ * `taken` already in the line), the one whose authored centre is nearest the face point the intent names
+ * (surfaceTarget): a player pulls what they see where they look. -1 when none is left.
  */
-export function intentShot(c: CompiledLevel, it: Intent, substeps: number): Shot {
+export function pullTarget(c: CompiledLevel, it: Intent, taken: ReadonlySet<number> = new Set()): number {
+  const m = c.meta, p = surfaceTarget(c, it).point, keep = new Set([...m.crowns, ...m.heritage, ...m.fixed, ...taken]);
+  let best = -1, d2 = Infinity;
+  for (let i = 0; i < m.n; i++) {
+    if (keep.has(i)) continue;
+    const d = (m.home[3 * i]! - p[0]) ** 2 + (m.home[3 * i + 1]! - p[1]) ** 2 + (m.home[3 * i + 2]! - p[2]) ** 2;
+    if (d < d2 - 1e-12) { best = i; d2 = d; }
+  }
+  return best;
+}
+
+/**
+ * The shot an intent fires: a launch aimed with aimAt from the ring point facing the target (at the
+ * intent's power, or more if the target is out of reach there), an anvil dropped over the target body,
+ * or a pull of the body pullTarget names (`taken`: the line's pulls before it; lineShots threads them).
+ */
+export function intentShot(c: CompiledLevel, it: Intent, substeps: number, taken: ReadonlySet<number> = new Set()): Shot {
+  if (it.item === 'pull') {
+    const body = pullTarget(c, it, taken);
+    if (body < 0) throw new Error(`the cast has nothing left to pull on ${c.def.id}`);
+    return { ammo: 'pull', body };
+  }
   const t = surfaceTarget(c, it);
   if (it.item === 'drop') {
     const q = (x: number) => Math.round((4 * x) / (c.frame.pitch * c.frame.unit));
     const b = Math.max(0, t.body);
     return { ammo: 'drop', x: q(c.meta.home[3 * b]!), z: q(c.meta.home[3 * b + 2]!) };
   }
-  if (!isLaunchItem(it.item)) throw new Error(`the cast cannot aim ${it.item}: only launched items and drops`);
+  if (!isLaunchItem(it.item)) throw new Error(`the cast cannot aim ${it.item}: only launched items, drops and pulls`);
   // A competent player who cannot reach the target at the drawn power fires harder: the least power, in steps
   // of 5 up to 100, whose arc passes within a tenth of a block of it (at 100, the closest miss).
   const y = Math.round(4 * c.frame.launcher.y), item = it.item, az = facingAzimuth(c, t.point, t.normal, it.skew * MAX_SKEW);
@@ -236,6 +258,16 @@ export function intentShot(c: CompiledLevel, it: Intent, substeps: number): Shot
 
 /** How close (in blocks) an aimed arc must pass the target for the cast to call it reached. */
 export const REACH = 0.1;
+
+/** A line of intents as shots (intentShot), each pull taking a body no earlier pull of the line took. */
+export function lineShots(c: CompiledLevel, its: readonly Intent[], substeps: number): Shot[] {
+  const taken = new Set<number>();
+  return its.map((it) => {
+    const s = intentShot(c, it, substeps, taken);
+    if (s.ammo === 'pull') taken.add(s.body);
+    return s;
+  });
+}
 
 /** The face sectors given to each direction: FACE_SECTORS shared out by exposed face count (largest remainders). */
 export function faceSectors(c: CompiledLevel): number[] {
@@ -277,7 +309,9 @@ export function competentIntents(c: CompiledLevel, n: number, seed: number, powe
  * structure), lateral point (5% along the faces), skew (5 deg) or power (5%).
  */
 export function moveIntents(line: readonly Intent[], r: () => number): Intent[] {
-  const k = Math.floor(r() * line.length), kind = Math.floor(r() * 4), sign = r() < 0.5 ? -1 : 1;
+  const k = Math.floor(r() * line.length), drawn = Math.floor(r() * 4), sign = r() < 0.5 ? -1 : 1;
+  // A pull has no skew or power: its moves are height and lateral only (same draws, so launch lines move as before).
+  const kind = line[k]!.item === 'pull' ? drawn % 2 : drawn;
   const it = { ...line[k]! }, clamp = (x: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, x));
   if (kind === 0) it.yFrac = clamp(it.yFrac + 0.05 * sign, 0, 1);
   else if (kind === 1) it.lateral = clamp(it.lateral + 0.05 * sign, 0, 1);
@@ -323,7 +357,7 @@ export function launchModel(c: CompiledLevel, substeps: number, powers?: [number
     kind: 'launch',
     competent: (n, seed) => competentIntents(c, n, seed, powers),
     move: moveIntents,
-    shots: (its) => its.map((it) => intentShot(c, it, substeps)),
+    shots: (its) => lineShots(c, its, substeps),
     noise: (base, r) => ({ shots: nudgeLine(base, r), nudge: 0 }),
   };
 }
@@ -492,8 +526,8 @@ export function thresholds(metric: StarMetric, compEnd: readonly number[], cloud
   return { raw, t2, t3 };
 }
 
-/** The metric a level is cast on when neither the caller nor its stars name one: fold on a fold level, else collapse. */
-export const defaultMetric = (level: LevelDef): StarMetric => (level.objective.kind === 'fold' ? 'fold' : 'collapse');
+/** A level's cast metric when its stars name none: a fold level's fold, a hold level's (Undercut's Hollow) share pulled, as outcomeScore scores it by default; otherwise collapse. */
+export const defaultMetric = (level: LevelDef): StarMetric => (level.objective.kind === 'fold' ? 'fold' : level.objective.kind === 'hold' ? 'pulled' : 'collapse');
 
 /** Casts an outcome level's stars on `player`: the plays, the thresholds and the gates. */
 export async function castLevel(level: LevelDef, player: CastPlayer, opts: CastOptions = {}): Promise<CastResult> {
@@ -580,11 +614,13 @@ export function judgeCast(c: CompiledLevel, metric: StarMetric, seed: number, li
   const all = lines.flatMap((l) => l.samples.map((s) => sampleValue(s, metric)));
   const { raw, t2, t3 } = thresholds(metric, compEnd, cloudEnd, all);
   const boot = bootstrapT3(metric, cloudEnd, seed), range = metricRange(metric, c, all);
-  const metRate = cloud.filter((p) => p.samples.at(-1)?.met).length / Math.max(1, cloud.length);
+  // A play meets the objective where the player would bank it (endValue: its best met settle). On a hold level a play
+  // can meet it and lose it later (the capstone falls), so any met settle counts; elsewhere met stays met, as before.
+  const metRate = cloud.filter((p) => p.samples.some((x) => x.met)).length / Math.max(1, cloud.length);
   const limited = lines.filter((l) => l.limits.length).length, incomplete = lines.filter((l) => !l.complete).length;
   const gap = good(metric, raw.t3) - good(metric, raw.t2);
   const gates: CastGates = {
-    fair: { pass: metRate >= 0.8, value: metRate, need: 0.8, note: 'share of the nudge cloud meeting the objective' },
+    fair: { pass: metRate >= 0.8, value: metRate, need: 0.8, note: 'share of the nudge cloud meeting the objective at some settle (its bank point)' },
     skill: { pass: gap >= 0.1 * range, value: gap, need: 0.1 * range, note: 'T3 - T2 (raw), at least 10% of the metric range' },
     stable: { pass: boot.halfWidth < 0.05 * range, value: boot.halfWidth, need: 0.05 * range, note: "half-width of T3's bootstrap 90% interval, under 5% of the range (a recast with another seed is compareCasts)" },
     limits: { pass: limited === 0, value: limited, need: 0, note: 'plays where the engine hit a limit that changed the physics' },
@@ -913,7 +949,7 @@ export interface Exploration {
  */
 export async function exploreLevel(level: LevelDef, player: CastPlayer, n: number, seed = 1, powers?: [number, number]): Promise<Exploration> {
   const c = compileLevel(level);
-  const lines = competentIntents(c, n, seed, powers).map((its) => its.map((it) => intentShot(c, it, player.substeps)));
+  const lines = competentIntents(c, n, seed, powers).map((its) => lineShots(c, its, player.substeps));
   const plays = await player.play(level, lines);
   return {
     level: level.id, hash: c.hash, bodies: c.meta.n, adapter: player.adapter, engine: player.engine, n, seed,

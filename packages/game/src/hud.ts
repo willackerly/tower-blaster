@@ -192,7 +192,7 @@ export function objectiveText(o: Objective): string {
 }
 
 /** Why a pull is refused (Session.pullRefusal: crowns and heritage are the objective's). */
-export const PULL_HINT = 'Crowns and heritage stay: pull a plain block';
+export const PULL_HINT = 'Crowns, heritage and fixed beams stay: pull a plain block';
 
 /**
  * A hold level's crown row (Undercut's Hollow): its crowns are to be kept up, so the row says whether they

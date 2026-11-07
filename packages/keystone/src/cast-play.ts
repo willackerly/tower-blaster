@@ -35,7 +35,7 @@ export interface CastSample {
 /** One played line: a sample at every settle (the last is the end), the engine steps, the end state's hash and any engine limit hit. */
 export interface CastPlay {
   samples: CastSample[];
-  /** Every shot of the line was fired and settled (false: the step budget ran out first). */
+  /** Every shot of the line was fired and settled, or the rules ended the level first (a hold level's capstone fell); false: the step budget ran out first. */
   complete: boolean;
   steps: number;
   hash: string;
@@ -73,5 +73,5 @@ export async function castPlay(engine: PhysicsEngine, c: CompiledLevel, shots: S
   const settled = r.session.outcomes.length;
   if (settled > samples.length) samples.push(sampleOf(r.session, r.session.outcomes[settled - 1]!.settleStep));
   const health = engine.health ? await engine.health() : null;
-  return { samples, complete: settled === shots.length, steps: r.steps, hash: snapshotHash(r.snapshot), limits: limitProblems(health, engine.info.name) };
+  return { samples, complete: settled === shots.length || r.session.phase === 'failed', steps: r.steps, hash: snapshotHash(r.snapshot), limits: limitProblems(health, engine.info.name) };
 }
