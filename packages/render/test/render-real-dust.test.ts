@@ -28,5 +28,5 @@ describe('dust shape (2026-11-02)', () => {
     // the burst in the air (not from the ground) keeps its shape exactly.
     expect(mid.looks[2]!.ground.aspect).toBeLessThan(0.7 * mid.looks[0]!.ground.aspect);
     expect(young.looks[2]!.air.sum).toBe(young.looks[0]!.air.sum);
-  }, 240_000); // two runs of four renderers
+  }, 480_000); // two runs of four renderers: ~150 s on a runner, over 240 s on a loaded shard (PR #308)
 });

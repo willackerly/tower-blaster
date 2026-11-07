@@ -19,5 +19,5 @@ describe('dust shape (2026-11-02)', () => {
     // Normalised at half grown: denser while small (0.2 s), fainter grown (1.7 s).
     expect(young.looks[1]!.air.sum).toBeGreaterThan(1.5 * young.looks[0]!.air.sum);
     expect(old.looks[1]!.air.sum).toBeLessThan(0.8 * old.looks[0]!.air.sum);
-  }, 240_000); // two runs of three renderers
+  }, 480_000); // two runs of three renderers; 480 s as its sibling's (render-real-dust.test.ts)
 });
