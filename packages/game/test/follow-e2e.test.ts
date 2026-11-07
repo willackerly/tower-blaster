@@ -16,8 +16,8 @@ const game = gamePage();
 const shot = L1.solutions!.par![0] as Shot;
 const BASE = '/?level=L1&offscreen=1&engine=rapier';
 type View = { target: [number, number, number]; distance: number; following: boolean; jolt: number };
-/** The view less what it marks in the scene (the impact marker, the x-ray), which change with the aim, not the camera. */
-const camera = <V extends object>(v: V): Omit<V, 'impact' | 'xray'> => { const { impact: _i, xray: _x, ...rest } = v as V & { impact?: unknown; xray?: unknown }; return rest as Omit<V, 'impact' | 'xray'>; };
+/** The view less what it marks in the scene (the impact marker, the x-ray, the preview's dots), which change with the aim, not the camera. */
+const camera = <V extends object>(v: V): Omit<V, 'impact' | 'xray' | 'dots'> => { const { impact: _i, xray: _x, dots: _d, ...rest } = v as V & { impact?: unknown; xray?: unknown; dots?: unknown }; return rest as Omit<V, 'impact' | 'xray' | 'dots'>; };
 
 /** Fire the par shot and sample the view every frame until the shot is over (L1's par shot clears the level) and the follow let go. */
 async function fireAndWatch(page: Page): Promise<View[]> {

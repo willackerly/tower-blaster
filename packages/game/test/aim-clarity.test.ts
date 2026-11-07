@@ -6,7 +6,7 @@ import { emptySnapshot, type Snapshot, TIER_FREE, type Vec3 } from '@tb/engine-a
 import { compileLevel, type CompiledLevel, GRAVITY, L1, type LaunchItem, levelById, SERIES, type Shot, shotToSpawn } from '@tb/keystone';
 import { rotate } from '@tb/geom';
 import { rayThrough, viewProj } from '@tb/render/camera';
-import { arcContact, azFromYaw, launchHeight, launchY, pick, previewBeads, rayBox, REACH, shotFor, SUBSTEPS } from '../src/aim.ts';
+import { arcContact, azFromYaw, launchAz, launchHeight, launchY, pick, previewBeads, rayBox, REACH, shotFor, SUBSTEPS } from '../src/aim.ts';
 import { defaultInsets, viewOf } from '../src/view.ts';
 import { nextSelection } from '../src/hud.ts';
 import { markOf } from '../src/scene.ts';
@@ -99,12 +99,13 @@ describe('a ball in the structure (a Rube Lab runner)', () => {
 
 describe('every level, from its opening view', () => {
   for (const def of ALL) {
-    it(`${def.id}: every structure point under a 9x9 grid of the free area, and every objective's middle, within the ball's range is reachable at full power, wide and upright`, () => {
+    it(`${def.id}: every structure point under a 9x9 grid of the free area, and every objective's middle, within the ball's range is reachable at full power, wide and upright, the launcher to the side and behind`, () => {
       const c = compileLevel(def), s = atHome(c);
       const ammo = nextSelection(c.def.rack, c.def.rack, null);
       if (!ammo || !isLaunch(ammo)) return;
-      for (const aspect of [1.6, 390 / 844]) {
-        const o = viewOf(c, aspect), az = azFromYaw(o.yaw), ins = defaultInsets(aspect), at = launchHeight(c, 'high');
+      // The launcher to the side of the eye (the default, PT36) and behind it (keystone.fireside=behind).
+      for (const aspect of [1.6, 390 / 844]) for (const side of ['side', 'behind'] as const) {
+        const o = viewOf(c, aspect), az = launchAz(o.yaw, side), ins = defaultInsets(aspect), at = launchHeight(c, 'high');
         const sq = aspect >= 1 ? 1 / aspect : 1, bad: string[] = [];
         let near = 0, far = 0;
         // The 9x9 grid, then the middle of every objective body on screen (at most 32, evenly spread): a sparse lot
@@ -126,7 +127,7 @@ describe('every level, from its opening view', () => {
           if (!a?.reachable) bad.push(`${x.toFixed(2)},${y.toFixed(2)}: ${a?.error.toFixed(2)} m`);
           near++;
         }
-        expect(bad, `aspect ${aspect.toFixed(2)}`).toEqual([]);
+        expect(bad, `aspect ${aspect.toFixed(2)}, launcher ${side}`).toEqual([]);
         expect(near, 'points tested').toBeGreaterThan(0);
       }
     });

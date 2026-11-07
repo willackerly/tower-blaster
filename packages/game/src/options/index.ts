@@ -9,6 +9,7 @@ import { chorusViewOption } from './chorusview.ts';
 import { budgetMs } from './budget.ts';
 import { camera } from './camera.ts';
 import { coats } from './coats.ts';
+import { fireside } from './fireside.ts';
 import { dudNote } from './dudnote.ts';
 import { duelLead } from './duellead.ts';
 import { follow } from './follow.ts';
@@ -24,6 +25,7 @@ import { launchSound } from './launchsound.ts';
 import { layout } from './layout.ts';
 import { look } from './look.ts';
 import { marks } from './marks.ts';
+import { openAim } from './openaim.ts';
 import { modeUi } from './modeui.ts';
 import { view } from './openview.ts';
 import { pullAnim } from './pullanim.ts';
@@ -60,10 +62,12 @@ export const OPTIONS = [
   duelLead,
   undoMB,
   launch,
+  fireside,
   balls,
   marks,
   view,
   impact,
+  openAim,
   xray,
   coats,
   sun,

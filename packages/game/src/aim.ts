@@ -29,6 +29,22 @@ export function azFromYaw(yaw: number): number {
   return ((Math.round(deg * 2) % 720) + 720) % 720;
 }
 
+/**
+ * Where the launcher stands on the ring for an eye at `yaw` (PT36, docs/game/aim-clarity.md): behind the eye
+ * (azFromYaw), or FIRE_SIDE_DEG round from it (`side`). From behind the eye the flight lies in a plane through the
+ * eye and is seen end on: a stack of dots from the launcher, near the camera, to the target (agent playtest 2, L1,
+ * L3, D2). From the side it reads as a curve, but every shot strikes at an angle (options/fireside.ts: behind stays
+ * the default). The eye does not move: the opening view stays the one framed for it.
+ */
+export type FireSide = 'side' | 'behind';
+export const FIRE_SIDES: readonly FireSide[] = ['side', 'behind'];
+/** How far round from behind the eye the launcher stands when it is to the side, degrees (counter-clockwise from above: the flight comes in from the left). */
+export const FIRE_SIDE_DEG = 25;
+
+export function launchAz(yaw: number, side: FireSide = 'behind'): number {
+  return (azFromYaw(yaw) + (side === 'side' ? 2 * FIRE_SIDE_DEG : 0)) % 720;
+}
+
 export interface Ray { origin: Vec3; dir: Vec3 }
 export interface Hit { body: number; t: number; point: Vec3; normal: Vec3 }
 
@@ -177,6 +193,17 @@ export function shotFor(c: CompiledLevel, ammo: RackItem, az: number, power: num
   if (ammo === 'quake') return null; // a quake shakes the ground: the quake panel sets it
   const a = aimAt(f, ammo, { az, y: launchY(c, ammo, at), power }, target, { substeps, minPitch: AIM_MIN_PITCH });
   return { shot: a.shot, error: a.error, reachable: a.error <= REACH };
+}
+
+/**
+ * Whether the aim earns no "Out of reach" warning (PT29): the flight reaches the point aimed at, or the drawn flight
+ * (arcContact) meets a structure block on the way. The warning is about the flight the player sees: an arc that lands
+ * on the structure short of the point does something, and its impact marker says where (agent playtest 2: D1 on a
+ * phone warned on an arc that knocked the king off). Only a flight that meets nothing of the structure, landing on the
+ * ground or flying off, is out of reach.
+ */
+export function reachesStructure(a: Pick<Aimed, 'reachable'>, contact: Pick<Contact, 'body'> | null): boolean {
+  return a.reachable || (contact !== null && contact.body >= 0);
 }
 
 /** Steps of predicted flight the preview looks along (4 s at 60 Hz). */

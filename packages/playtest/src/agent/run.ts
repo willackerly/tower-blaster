@@ -147,9 +147,19 @@ async function runOne(browser: Browser, origin: string, sc: Scenario, vp: Viewpo
     // Real pace (no fast-forward): effects timed in wall time (sparks, dust, the result card's entrance) then show as a player sees them.
 
     /** Fire shot k as the policy says; returns how, or null when nothing could be fired. */
+    /** The aim view before the first shot: the game's opening aim where it shows one (PT29: what a player sees before touching), else a click near the middle. */
+    const aimView = async () => {
+      // A frame or two first: the opening aim is worked out at the frame's aim update.
+      const f0 = await page.evaluate(() => window.__game.frames);
+      await page.waitForFunction((n) => window.__game.frames > n + 1, f0, { timeout: MIN, polling: 100 }).catch(() => {});
+      if (!(await page.evaluate(() => window.__game.openingAim !== null))) await page.evaluate(() => window.__game.aim(0, -0.05));
+    };
+
     const fireNovice = async (k: number): Promise<{ shot: Shot | null; how: string } | null> => {
       if (k === 0 && (await page.locator('.kg-hud button.opener').count())) { await tap('.kg-hud button.opener'); return { shot: null, how: 'opener (HUD button)' }; }
-      const pts = [noviceAim(k, 1), ...spiral()];
+      // A first visit taps the target the game shows (the opening aim, PT29) before trying the middle of the screen.
+      const shown = k === 0 ? await page.evaluate(() => window.__game.openingAim?.ndc ?? null) : null;
+      const pts = [...(shown ? [shown] : []), noviceAim(k, 1), ...spiral()];
       for (const [x, y] of pts) {
         const a = await page.evaluate(([px, py]) => { const r = window.__game.aim(px!, py!); return r ? { shot: r.shot, ok: r.reachable } : null; }, [x, y]);
         if (a?.ok && (await page.evaluate((s) => window.__game.fire(s), a.shot))) return { shot: a.shot, how: `click at ${x.toFixed(2)},${y.toFixed(2)}` };
@@ -252,7 +262,7 @@ async function runOne(browser: Browser, origin: string, sc: Scenario, vp: Viewpo
       if (await page.locator('.kg-door [data-act="advanced"]').count()) { await tap('.kg-door [data-act="advanced"]'); await shoot('advanced settings', 400); await tap('.kg-door [data-act="advanced"]'); }
       if (await page.locator('.kg-door [data-act="trials"]').count()) { await tap('.kg-door [data-act="trials"]'); await shoot('trials open', 400); }
     } else if (s.kind === 'view') {
-      await page.evaluate(() => window.__game.aim(0, -0.05));
+      await aimView();
       await shoot('aim view');
       rec.hud = await textOf(page, '#hud');
       if (sc.level) await buildPhase(levelById(sc.level)!, 'novice', false);
@@ -260,7 +270,7 @@ async function runOne(browser: Browser, origin: string, sc: Scenario, vp: Viewpo
       const def = levelById(sc.level!)!;
       // A level whose recorded line is a build (Rube Lab, a retrofit) builds it, then plays its own verb.
       const line = s.policy === 'line' && !buildLine(def) ? lineOf(def) : null;
-      if (!line) await page.evaluate(() => window.__game.aim(0, -0.05));
+      if (!line) await aimView();
       await shoot('aim view');
       rec.hud = await textOf(page, '#hud');
       await buildPhase(def, s.policy, true);
@@ -296,7 +306,7 @@ async function runOne(browser: Browser, origin: string, sc: Scenario, vp: Viewpo
         await shoot('after retry', 500);
       }
     } else if (s.kind === 'freeze') {
-      await page.evaluate(() => window.__game.aim(0, -0.05));
+      await aimView();
       await shoot('aim view');
       const before = await gameState(page);
       const first = await fireNovice(0);
