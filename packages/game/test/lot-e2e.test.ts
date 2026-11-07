@@ -61,6 +61,8 @@ describe('game page, Lot Sheet', () => {
       await page.waitForFunction((n) => window.__game.result !== null || (window.__game.ready && window.__game.strokes === n), k + 1, { timeout: 120_000, polling: 100 });
     }
     await page.waitForFunction(() => window.__game.result !== null, undefined, { timeout: 120_000, polling: 100 });
+    // The HUD is drawn at the end of the frame that ended the round, which can come after the result is set: wait for it.
+    await page.waitForFunction(() => document.querySelector('.kg-hud .goals') !== null && !document.querySelector('.kg-hud .goals.closed'), undefined, { timeout: 10_000, polling: 50 });
     expect((await hud(page)).closed).toBe(false);
     expect(errors).toEqual([]);
     await page.close();
