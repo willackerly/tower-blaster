@@ -3,7 +3,7 @@
 import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { loadBundle, openWebGPU, type WebGPUSession } from '@tb/testkit';
-import { bakeBlastNoise, blastState, Blasts, DEFAULT_BLASTS, durationScale, MAX_BLASTS, NOISE_SIZE } from '../src/blasts.ts';
+import { bakeBlastNoise, blastState, Blasts, DEFAULT_BLASTS, durationScale, MAX_BLASTS, NOISE_SIZE, RING_BLASTS } from '../src/blasts.ts';
 import type * as Drivers from './blasts-page.ts';
 
 const p = DEFAULT_BLASTS;
@@ -74,6 +74,25 @@ describe('Blasts (CPU side)', () => {
     expect(b.states(0.5).length).toBe(MAX_BLASTS);
     expect(b.states(10).length).toBe(0);
     expect(b.blasts.length).toBe(0);
+  });
+
+  it('a ring (RING_BLASTS, Renderer.ring: PT26) draws its shell alone, slower than a blast\'s, and keeps its own params', () => {
+    const r = RING_BLASTS, b = blasts();
+    // No fireball at any age; the shell reaches the radius after `shock` (scaled), later than a blast's.
+    for (const age of [0, 0.1, 0.3, 0.6, 1]) expect(blastState([0, 0, 0], 3, age, r).fireR).toBe(0);
+    const k = durationScale(3, r);
+    expect(blastState([0, 0, 0], 3, r.shock * k, r).shockR).toBeCloseTo(3, 9);
+    expect(blastState([0, 0, 0], 3, 0.5 * r.shock * k, r).shockA).toBe(1);
+    expect(r.shock).toBeGreaterThan(2 * DEFAULT_BLASTS.shock);
+    // Kept per blast: a ring and a blast side by side each follow their own timeline; a ring that starts later is not drawn yet.
+    b.add([0, 0, 0], 3, 0, r);
+    b.add([0, 0, 0], 3, 0);
+    b.add([0, 0, 0], 4.5, 0.35, r);
+    const [ring, blast, echo] = b.states(0.05);
+    expect(ring!.fireR).toBe(0);
+    expect(blast!.fireR).toBeGreaterThan(0);
+    expect(echo!.alive).toBe(false);
+    expect(b.states(0.4)[2]!.alive).toBe(true);
   });
 
   it('refuses blasts with no reach or a non-finite centre', () => {

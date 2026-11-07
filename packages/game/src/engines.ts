@@ -4,7 +4,7 @@
 // are sized at init from these options).
 import { RapierEngine } from '@tb/adapter-rapier';
 import { type EngineHealth, limitsHit, type PhysicsEngine, type ShapeDesc } from '@tb/engine-api';
-import { AVBD_GAP_SLOP, AVBD_ITERATIONS, ammoBody, type CompiledLevel, type DriverOptions, IceBreaker, masonCapacity, masonProbes, physicsOf, rackBodies } from '@tb/keystone';
+import { ammoBody, AVBD_GAP_SLOP, AVBD_ITERATIONS, ChorusEngine, type ChorusEngineOptions, chorusOf, type CompiledLevel, type DriverOptions, IceBreaker, masonCapacity, masonProbes, physicsOf, rackBodies } from '@tb/keystone';
 import { everyPairPerBody, GpuAvbdEngine, type GpuEngineOptions } from '@tb/physics-gpu';
 
 export const ENGINES = ['rapier', 'gpu'] as const;
@@ -101,10 +101,30 @@ export function gpuEngineOptions(c: CompiledLevel, pairsPerBody?: number): GpuEn
  * ground); its own iterations are not AVBD's, so the block's iterations and slop are the GPU's only.
  * `pairsPerBody` as gpuEngineOptions takes it (GPU only).
  */
-export function makeEngine(kind: EngineKind, c: CompiledLevel, device?: GPUDevice, pairsPerBody?: number): PhysicsEngine {
-  if (kind === 'rapier') return new RapierEngine();
-  return new GpuAvbdEngine(gpuParams(c), { device, ...gpuEngineOptions(c, pairsPerBody) });
+export function makeEngine(kind: EngineKind, c: CompiledLevel, device?: GPUDevice, pairsPerBody?: number, chorus: ChorusEngineOptions = {}): PhysicsEngine {
+  const ch = chorusOf(c.def);
+  if (ch) return new ChorusEngine(makeInner(kind, c, device, pairsPerBody, chorus.only === undefined ? ch.worlds : 1), c, chorus);
+  return makeInner(kind, c, device, pairsPerBody, 1);
 }
+
+/**
+ * The engine itself, sized for `worlds` copies of the level (a Chorus level's islands, keystone chorus.ts): K times
+ * the capacity, the same pair room per body as one world (islands never touch, so a body meets what it meets alone),
+ * and the exact box test, which needs about half the pairs of a packed block (C10 ran 9.6k bodies so).
+ */
+function makeInner(kind: EngineKind, c: CompiledLevel, device: GPUDevice | undefined, pairsPerBody: number | undefined, worlds: number): PhysicsEngine {
+  if (kind === 'rapier') return new RapierEngine();
+  if (worlds === 1) return new GpuAvbdEngine(gpuParams(c), { device, ...gpuEngineOptions(c, pairsPerBody) });
+  const o = gpuOptions(c, pairsPerBody ?? physicsOf(c.def).pairsPerBody);
+  return new GpuAvbdEngine(gpuParams(c), { device, ...o, capacity: o.capacity * worlds, pairsPerBody: pairsPerBody ?? Math.min(o.pairsPerBody, CHORUS_PAIRS_PER_BODY), boxBroadphase: true });
+}
+
+/**
+ * Pair room per body on a Chorus level's islands: every pair of one small world (everyPairPerBody) times K worlds
+ * would not fit the device (a 40-body world asks 22 per body, a 140-body one 70); 24 with the box test is what C10's
+ * 9.6k-body islands ran on SwiftShader and Metal with no dropped pair. roomAfter grows it if a round drops pairs.
+ */
+export const CHORUS_PAIRS_PER_BODY = 24;
 
 /**
  * The engine a Mason level's judge runs on (keystone mason-judge.ts MasonRun, `worlds` islands): the level's

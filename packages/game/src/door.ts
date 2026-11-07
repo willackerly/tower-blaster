@@ -13,8 +13,8 @@
 // objective's star alone, one target row and one star slot, never a placeholder
 // (the agent playtest's PT7: "targets coming soon" read as unfinished), and picks
 // the rest up from the file with no change here.
-import { castStars, type CompiledLevel, compileLevel, DUEL_NAMES, type DuelDef, isTrial, type LevelDef, MASON_CLEAR, masonWorlds, type Objective, scoringOf, SERIES, SERIES_TITLES, type Shot, type StarMetric, type StarsDef } from '@tb/keystone';
-import { CUSTOM_NOTE, esc, fmtPoints, itemLabel, LEVERAGE_MEANS, levelTag, objectiveText, pct, playerName } from './hud.ts';
+import { castStars, type CompiledLevel, compileLevel, DUEL_NAMES, type DuelDef, isTrial, type LevelDef, MASON_CLEAR, masonWorlds, type Objective, scoringOf, SERIES, SERIES_TITLES, type Shot, type StarMetric, type StarsDef, chorusOf } from '@tb/keystone';
+import { CUSTOM_NOTE, esc, fmtPoints, itemLabel, LEVERAGE_MEANS, levelTag, objectiveText, pct, playerName, chorusWorldClear } from './hud.ts';
 import type { LevelRecord } from './progress.ts';
 import type { QualityTier } from './quality.ts';
 import { type Settings, settingRows } from './settings.ts';
@@ -135,6 +135,13 @@ export function starTargets(c: CompiledLevel, stars: StarsDef | undefined): { ta
   const d = c.def;
   const heritage = c.meta.heritage.length ? ', heritage intact' : '';
   const one = cap(objectiveText(d.objective)), oneShort = objectiveShort(d.objective);
+  // Chorus levels (chorus.ts chorusScore): fixed thresholds on the worlds cleared, no cast.
+  const ch = chorusOf(d);
+  if (ch) {
+    const [a, b, t] = ch.stars, K = ch.worlds;
+    // A world with cracked heritage does not clear, so the heritage needs no row of its own.
+    return { targets: [`Clear ${a} of ${K} worlds (${chorusWorldClear(ch.need)} in each)`, `…${b} of ${K}`, `…${t} of ${K}`], short: [`${a}/${K}`, `${b}/${K}`, `${t}/${K}`], cast: true };
+  }
   // Mason's Trial (rules.ts masonScore): one star for standing in half the worlds, two and three at the level's
   // points (worlds stood and budget left); no shots at all.
   if (d.mason) {
