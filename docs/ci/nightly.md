@@ -5,7 +5,7 @@ Every test case runs in one of three places. None is dropped.
 | tier | where | what | when |
 |---|---|---|---|
 | PR / main | `ci.yml`, 20 shards on GitHub runners (SwiftShader) | every test file except the nightly-only ones, slow cases off | every push |
-| nightly | `nightly.yml`, 4 shards, `PHYSICS_GPU_SLOW=1 TB_TIER=slow` | the files in `vitest.nightly.json`, plus every file with `PHYSICS_GPU_SLOW` cases of its own, slow cases on | 06:30 UTC on main, and by hand (Actions, Run workflow) |
+| nightly | `nightly.yml`, 6 shards (330 min limit each), `PHYSICS_GPU_SLOW=1 TB_TIER=slow`, balanced on `vitest.durations.nightly.json` | the files in `vitest.nightly.json`, plus every file with `PHYSICS_GPU_SLOW` cases of its own, slow cases on | 06:30 UTC on main, and by hand (Actions, Run workflow) |
 | Mac | Will's M5 Max, real Metal GPU, `TB_CHANNEL=chrome` | the GPU solver's levels too big for SwiftShader | queued as an idle job (see below) |
 
 `PHYSICS_GPU_SLOW=1 pnpm test` runs the PR and nightly tiers together.
@@ -38,3 +38,20 @@ TB_CHANNEL=chrome PHYSICS_GPU_SLOW=1 pnpm vitest run \
 ```
 
 With `TB_CHANNEL` set, every level runs, the big ones included. Each file's "names the levels left" case lists anything this adapter didn't run.
+
+The rest-stability matrix at full size is a Mac run too. On SwiftShader the nightly runs its 24 cases at 400 bodies for 600 frames (CI's own case). At 1,000 bodies for 3,600 frames it would take some 8 h there, and the first nightly hit its job limit inside it:
+
+```
+TB_CHANNEL=chrome PHYSICS_GPU_SLOW=1 REST_SIZES=1000,10000 REQUIRE_WEBGPU=1 \
+  REST_LOG=rest.txt pnpm vitest run packages/physics-gpu/test/rest-stability.test.ts
+```
+
+## Nightly times
+
+`vitest.durations.nightly.json` holds the nightly tier's per-file times, in CI-runner seconds. They come from the first nightly's logs, and are estimates where a file failed or has since changed. Merge a new run's times with:
+
+```
+pnpm durations --file vitest.durations.nightly.json --from-log <slow shard log>
+```
+
+The longest file, chorus-gpu (~154 min), sets the longest shard.
