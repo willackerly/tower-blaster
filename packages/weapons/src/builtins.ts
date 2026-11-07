@@ -91,5 +91,26 @@ export const RELEASE: WeaponSpec = {
   rules: [{ when: { after: 0 }, do: [{ removeTarget: true }] }],
 };
 
+/**
+ * How long a detonator waits for its fuse, seconds from the plunger: longer than any fuse a level's budget lays (M5b;
+ * keystone fuse-boards.test checks every fuse site: one lane given the whole budget burns in under 11 s).
+ */
+export const DETONATOR_WAIT = 15;
+
+/**
+ * A detonator (Fuse & Fold's domino fuses, M5b; docs/game/fuse-and-fold.md): rides a column and watches the socket
+ * domino at the end of a fuse (ChargeDef.watch). Armed by the plunger, it fires as a relay does (5 cm or 0.5 m/s:
+ * the socket tipping, the wave arriving), a cutter's blast and its column out; with no wave by DETONATOR_WAIT
+ * seconds (a dead fuse) it stands down. Its timer holds the shot open while the fuse burns, which a watching relay
+ * never does.
+ */
+export const DETONATOR: WeaponSpec = {
+  version: 1, name: 'detonator', shell: CHARGE_SHELL,
+  rules: [
+    { when: { moved: 0.05, speed: 0.5 }, do: [{ blast: { radius: 1.5, impulse: 2, core: 0.2 } }, { removeTarget: true }] },
+    { when: { after: DETONATOR_WAIT }, do: [{ remove: true }] },
+  ],
+};
+
 /** By name: the charges a level may name without writing them into its weapons. */
-export const BUILTIN_CHARGES: Readonly<Record<string, WeaponSpec>> = { cutter: CUTTER, kicker: KICKER, relay: RELAY, release: RELEASE };
+export const BUILTIN_CHARGES: Readonly<Record<string, WeaponSpec>> = { cutter: CUTTER, kicker: KICKER, relay: RELAY, release: RELEASE, detonator: DETONATOR };

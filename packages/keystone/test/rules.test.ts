@@ -88,7 +88,7 @@ describe('reductions', () => {
 });
 
 describe('settling', () => {
-  const red = (step: number, speed: number, awake = 1): Reductions => ({ step, nAwake: awake, maxSpeed: speed, maxAngSpeed: 0, pe_mJ: 0, peHeritage_mJ: 0, displaced: 0, outOfLot: 0, mass_g: 0, spill_g: 0, heightHist: new Uint32Array(64), impacts: new Uint32Array(48), nMoving: 0, movingBox: new Float64Array(6), ammoSpeed: 0 });
+  const red = (step: number, speed: number, awake = 1): Reductions => ({ step, nAwake: awake, maxSpeed: speed, maxAngSpeed: 0, pe_mJ: 0, peAside_mJ: 0, displaced: 0, outOfLot: 0, mass_g: 0, spill_g: 0, heightHist: new Uint32Array(64), impacts: new Uint32Array(48), nMoving: 0, movingBox: new Float64Array(6), ammoSpeed: 0 });
   function run(speeds: number[], spawn = 0) {
     let st = { quietSince: null as number | null };
     for (let i = 0; i < speeds.length; i++) {
@@ -114,7 +114,7 @@ describe('settling', () => {
 });
 
 describe('a level\'s end condition (LevelDef.end, agent playtest PT32)', () => {
-  const red = (step: number, speed = 2): Reductions => ({ step, nAwake: 500, maxSpeed: speed, maxAngSpeed: 0, pe_mJ: 0, peHeritage_mJ: 0, displaced: 0, outOfLot: 0, mass_g: 0, spill_g: 0, heightHist: new Uint32Array(64), impacts: new Uint32Array(48), nMoving: 500, movingBox: new Float64Array(6), ammoSpeed: 0 });
+  const red = (step: number, speed = 2): Reductions => ({ step, nAwake: 500, maxSpeed: speed, maxAngSpeed: 0, pe_mJ: 0, peAside_mJ: 0, displaced: 0, outOfLot: 0, mass_g: 0, spill_g: 0, heightHist: new Uint32Array(64), impacts: new Uint32Array(48), nMoving: 500, movingBox: new Float64Array(6), ammoSpeed: 0 });
   /** Steps 1.. with everything moving fast; `met(i)` the end condition, `flight(i)` ammo in flight; the settle step or null. */
   function run(met: (i: number) => boolean, steps = 90, flight: (i: number) => boolean = () => false, rule: SettleRule = 'v1') {
     let st: SettleState = { quietSince: null };
@@ -153,7 +153,7 @@ describe('settle v2: a few stragglers per thousand', () => {
   const N = 10_000, A = settleAllowance(N);
   /** Reductions with `moving` structure bodies moving (the fastest at 1 m/s) and live ammo at ammoSpeed. */
   const red = (step: number, moving: number, ammoSpeed = 0): Reductions => ({
-    step, nAwake: N, maxSpeed: moving ? 1 : 0.01, maxAngSpeed: 0, pe_mJ: 0, peHeritage_mJ: 0, displaced: 0, outOfLot: 0, mass_g: 0, spill_g: 0, heightHist: new Uint32Array(64), impacts: new Uint32Array(48),
+    step, nAwake: N, maxSpeed: moving ? 1 : 0.01, maxAngSpeed: 0, pe_mJ: 0, peAside_mJ: 0, displaced: 0, outOfLot: 0, mass_g: 0, spill_g: 0, heightHist: new Uint32Array(64), impacts: new Uint32Array(48),
     nMoving: moving, movingBox: new Float64Array(6), ammoSpeed,
   });
   function run(moving: (i: number) => number, steps: number, rule: SettleRule = 'v2', n = N, ammo: (i: number) => number = () => 0) {
@@ -207,7 +207,7 @@ describe('settle v3: v2, or a frozen structure', () => {
   const N = 1000, A = settleAllowance(N);
   /** A wall ringing: `moving` bodies (over the allowance) at maxSpeed, the collapse D and displaced as given, live ammo at ammoSpeed. */
   const red = (step: number, o: { moving?: number; maxSpeed?: number; displaced?: number; ammoSpeed?: number } = {}): Reductions => ({
-    step, nAwake: N, maxSpeed: o.maxSpeed ?? 0.3, maxAngSpeed: 0, pe_mJ: 0, peHeritage_mJ: 0, displaced: o.displaced ?? 40, outOfLot: 0, mass_g: 0, spill_g: 0, heightHist: new Uint32Array(64), impacts: new Uint32Array(48),
+    step, nAwake: N, maxSpeed: o.maxSpeed ?? 0.3, maxAngSpeed: 0, pe_mJ: 0, peAside_mJ: 0, displaced: o.displaced ?? 40, outOfLot: 0, mass_g: 0, spill_g: 0, heightHist: new Uint32Array(64), impacts: new Uint32Array(48),
     nMoving: o.moving ?? 150, movingBox: new Float64Array(6), ammoSpeed: o.ammoSpeed ?? 0,
   });
   /** The step a run of `steps` settles at (null: not within them), with reductions r(i) and D d(i). */
@@ -253,7 +253,7 @@ describe('settle v4: v3, or a steady collapse (agent playtest PT6)', () => {
   const N = 1000;
   /** Debris rolling (300 bodies at 1.5 m/s: v2 and v3 never settle on it) with displaced as given. */
   const red = (step: number, displaced = 40): Reductions => ({
-    step, nAwake: N, maxSpeed: 1.5, maxAngSpeed: 0, pe_mJ: 0, peHeritage_mJ: 0, displaced, outOfLot: 0, mass_g: 0, spill_g: 0, heightHist: new Uint32Array(64), impacts: new Uint32Array(48),
+    step, nAwake: N, maxSpeed: 1.5, maxAngSpeed: 0, pe_mJ: 0, peAside_mJ: 0, displaced, outOfLot: 0, mass_g: 0, spill_g: 0, heightHist: new Uint32Array(64), impacts: new Uint32Array(48),
     nMoving: 300, movingBox: new Float64Array(6), ammoSpeed: 0,
   });
   function run(d: (i: number) => number, steps: number, rule: SettleRule = 'v4', r: (i: number) => Reductions = (i) => red(1 + i)) {
@@ -294,7 +294,7 @@ describe('settle v4: v3, or a steady collapse (agent playtest PT6)', () => {
 });
 
 describe('ammo in flight holds the settle (agent playtest PT10)', () => {
-  const asleep = (step: number): Reductions => ({ step, nAwake: 0, maxSpeed: 0, maxAngSpeed: 0, pe_mJ: 0, peHeritage_mJ: 0, displaced: 0, outOfLot: 0, mass_g: 0, spill_g: 0, heightHist: new Uint32Array(64), impacts: new Uint32Array(48), nMoving: 0, movingBox: new Float64Array(6), ammoSpeed: 0 });
+  const asleep = (step: number): Reductions => ({ step, nAwake: 0, maxSpeed: 0, maxAngSpeed: 0, pe_mJ: 0, peAside_mJ: 0, displaced: 0, outOfLot: 0, mass_g: 0, spill_g: 0, heightHist: new Uint32Array(64), impacts: new Uint32Array(48), nMoving: 0, movingBox: new Float64Array(6), ammoSpeed: 0 });
   /** The step a shot settles at over a structure asleep throughout, the ammo flying until `lands` (null: never). */
   function run(rule: SettleRule, lands: number | null, steps: number) {
     let st: SettleState = { quietSince: null };

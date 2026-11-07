@@ -412,5 +412,14 @@
   "packages/keystone-lab/test/retrofit-gpu-A8.test.ts": 0.5,
   "packages/keystone-lab/test/retrofit-ref-A6.test.ts": 59,
   "packages/keystone-lab/test/retrofit-ref-A7.test.ts": 0.5,
-  "packages/keystone-lab/test/retrofit-ref-A8.test.ts": 0.5
+  "packages/keystone-lab/test/retrofit-ref-A8.test.ts": 0.5,
+  "packages/keystone-lab/test/fuse-delay.test.ts": 150,
+  "packages/keystone-lab/test/fuse-ref-F6.test.ts": 56,
+  "packages/keystone-lab/test/fuse-ref-F7.test.ts": 137,
+  "packages/keystone-lab/test/fuse-ref-F8.test.ts": 171,
+  "packages/keystone-lab/test/fuse-gpu-F6.test.ts": 167,
+  "packages/keystone-lab/test/fuse-gpu-F7.test.ts": 0.5,
+  "packages/keystone-lab/test/fuse-gpu-F8.test.ts": 0.5,
+  "packages/keystone/test/fuse-boards.test.ts": 1,
+  "packages/game/test/fuse-build.test.ts": 2.5
 }

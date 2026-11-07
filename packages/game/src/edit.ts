@@ -4,7 +4,7 @@
 // and key events into rays and names, and draws bodies() with fx() over its
 // renderer. Time is stopped throughout; play() is the level to compile and run.
 import type { BodyDesc, Vec3 } from '@tb/engine-api';
-import { BuildSession, CATALOG_NAMES, type CatalogName, type Ghost, type Hold, type LevelDef, type Obb, type P2, type Ray, smoothStroke, type StrokeGhost, turn } from '@tb/keystone';
+import { BuildSession, CATALOG_NAMES, type CatalogName, fuseLanes, fuseSteps, type Ghost, type Hold, isFuseLevel, type LaneInfo, type LevelDef, type Obb, type P2, type Ray, runCentres, DOMINO_PITCH, smoothStroke, snapFuse, type StrokeGhost, turn } from '@tb/keystone';
 import type { FxOptions } from '@tb/render';
 
 export const EDIT_TOOLS = ['place', 'brush', 'erase'] as const;
@@ -27,6 +27,12 @@ export interface Mods { alt?: boolean; shift?: boolean }
 
 const box = (b: Obb, sphere = false): BodyDesc => ({ shape: sphere ? { kind: 'sphere', radius: b.half[0] } : { kind: 'box', half: [...b.half] as Vec3 }, pos: [...b.c] as Vec3, rot: [...b.q] as BodyDesc['rot'], linVel: [0, 0, 0], angVel: [0, 0, 0], density: 250, friction: 0.6, restitution: 0, tag: 0 });
 
+/**
+ * One lane of a domino-fuse level as built (M5b): the dominoes of the fuse laid from its head, whether its last domino
+ * stands close enough to tip the socket, and when it fires, in seconds from the plunger (fuseSteps: an estimate).
+ */
+export interface LaneReport { lane: number; dominoes: number; reaches: boolean; seconds: number | null }
+
 export class EditController {
   readonly session: BuildSession;
   tool: EditTool;
@@ -41,13 +47,16 @@ export class EditController {
   version = 0;
   /** The last thing that did not work, for the panel ('' when the last action did). */
   message = '';
+  /** A domino-fuse level's lanes (fuseLanes): a stroke snaps to their heads and ends. Empty elsewhere. */
+  readonly lanes: LaneInfo[];
   private stroke: P2[] | null = null;
   private lastRay: Ray | null = null;
   private lastMods: Mods = {};
 
   constructor(def: LevelDef, opts: EditOptions = {}) {
     this.session = new BuildSession(def, { author: opts.author });
-    this.tool = opts.tool ?? 'place';
+    this.lanes = isFuseLevel(def) ? fuseLanes(this.session.compiled()) : [];
+    this.tool = opts.tool ?? (this.lanes.length && this.session.brush ? 'brush' : 'place');
     const item = opts.item && this.session.items.some((i) => i.name === opts.item) ? opts.item : (this.session.items[0]?.name as CatalogName | undefined) ?? 'cube';
     this.hold = { item, yaw: 0, tip: 0 };
     if (this.tool === 'brush' && !this.session.brush) this.tool = 'place';
@@ -67,7 +76,8 @@ export class EditController {
       if (this.stroke && hit) {
         const h = this.session.h, p: P2 = [hit.point[0] / h, hit.point[2] / h];
         this.stroke.push(p);
-        this.strokeGhost = this.session.stroke(smoothStroke(this.stroke));
+        const path = smoothStroke(this.stroke);
+        this.strokeGhost = this.session.stroke(this.snap && !mods.alt ? snapFuse(this.lanes, path) : path);
       }
       return;
     }
@@ -186,6 +196,22 @@ export class EditController {
     else if (this.ghost) this.ghost.boxes.forEach((_, i) => out.push([n + i, this.ghost!.ok ? GHOST_OK : GHOST_BAD]));
     if (this.hover >= 0) out.push([this.hover, ERASE_MARK]);
     return out;
+  }
+
+  /**
+   * Each lane's fuse as built (empty on other levels): the placed run that starts at the lane's head (snapFuse puts a
+   * snapped stroke's first point there exactly), its dominoes, whether its last domino stands within 1.9 h of the socket,
+   * and its burn time. A lane with no such run reports 0 dominoes and no time: its row will not be cut.
+   */
+  laneReport(): LaneReport[] {
+    const runs = this.session.def().parts.flatMap((p) => (p.kind === 'run' && p.placed && p.path.length > 1 ? [p] : []));
+    return this.lanes.map((l, lane) => {
+      const run = runs.find((r) => Math.hypot(r.path[0]![0] - l.head[0], r.path[0]![1] - l.head[1]) < 0.01);
+      if (!run) return { lane, dominoes: 0, reaches: false, seconds: null };
+      const c = runCentres(run.path, DOMINO_PITCH), last = c.at(-1)!;
+      const reaches = Math.hypot(last[0] - l.socketAt[0], last[1] - l.socketAt[1]) <= 1.9;
+      return { lane, dominoes: c.length - (run.omit?.length ?? 0), reaches, seconds: reaches && !run.omit?.length ? fuseSteps(run.path) / 60 : null };
+    });
   }
 
   /** One line for the panel: what is held, how it is turned, what is left, and why the ghost does not fit. */

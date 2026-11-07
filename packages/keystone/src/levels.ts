@@ -11,6 +11,7 @@ import { BIG_LEVELS } from './big-levels.ts';
 import { TRIAL_LEVELS } from './trial-levels.ts';
 import { UNDERCUT_LEVELS } from './undercut-levels.ts';
 import { AFTERSHOCK_LEVELS } from './aftershock-levels.ts';
+import { FUSE_DOMINO_LEVELS } from './fuse-boards.ts';
 import { FUSE_LEVELS } from './fuse-levels.ts';
 import { RUBE_LEVELS } from './rube-levels.ts';
 import { MASON_LEVELS } from './mason-levels.ts';
@@ -103,10 +104,13 @@ export const LEVELS: readonly LevelDef[] = [L1, L2, L3, L4, L5];
 
 /**
  * Every built-in level's series: the chamber levels (L1 to L5), the big levels (B1 on), Undercut's (U1 on),
- * Rube Lab's (RL1 on), Fuse & Fold's (F1 on: fuse-levels.ts), Aftershock's (A1 on), Wavefront's (W3 on), Mason's Trial's (MT1 on: mason-levels.ts) and the trials (T-..., unrated: trial-levels.ts).
+ * Rube Lab's (RL1 on), Fuse & Fold's (F1 on: fuse-levels.ts, F6 on: fuse-boards.ts), Aftershock's (A1 on), Wavefront's (W3 on), Mason's Trial's (MT1 on: mason-levels.ts) and the trials (T-..., unrated: trial-levels.ts).
  * A level plays on into the rest of its own series.
  */
-export const SERIES: readonly (readonly LevelDef[])[] = [LEVELS, BIG_LEVELS, UNDERCUT_LEVELS, RUBE_LEVELS, FUSE_LEVELS, AFTERSHOCK_LEVELS, WAVE_LEVELS, MASON_LEVELS, TRIAL_LEVELS];
+/** Fuse & Fold's series: the timeline levels (F1 to F5), then the domino-fuse levels (F6 on: fuse-boards.ts). */
+export const FOLD_SERIES: readonly LevelDef[] = [...FUSE_LEVELS, ...FUSE_DOMINO_LEVELS];
+
+export const SERIES: readonly (readonly LevelDef[])[] = [LEVELS, BIG_LEVELS, UNDERCUT_LEVELS, RUBE_LEVELS, FOLD_SERIES, AFTERSHOCK_LEVELS, WAVE_LEVELS, MASON_LEVELS, TRIAL_LEVELS];
 
 /** Each series' title, in SERIES order (the game's door heads its sections with them). */
 export const SERIES_TITLES: readonly string[] = ['Chamber', 'Spectacle', 'Undercut', 'Rube Lab', 'Fuse & Fold', 'Aftershock', 'Wavefront', "Mason's Trial", 'Trials · unrated'];

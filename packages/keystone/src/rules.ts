@@ -119,15 +119,15 @@ export interface Reductions {
   maxAngSpeed: number;
   /** Potential energy of the structure, sum of round(m g y * 1000) in index order. */
   pe_mJ: number;
-  /** The part of pe_mJ that is heritage's (a fold level's collapse is the building's: outcome.ts buildingOnly). */
-  peHeritage_mJ: number;
+  /** The part of pe_mJ outside the building (asideOf: heritage and props; a fold level's collapse is the building's: outcome.ts buildingOnly). */
+  peAside_mJ: number;
   /** Structure bodies more than DISPLACED h from the shot baseline. */
   displaced: number;
   /** Structure bodies whose centre is outside the lot grown by 0.5 h. */
   outOfLot: number;
   /**
    * Fuse & Fold's spill, in integer grams (docs/game/fuse-and-fold.md): the building's mass (structure bodies
-   * that are not heritage and not removed) and the part of it whose centre is outside the lot grown by 0.5 h.
+   * that are not aside, asideOf, and not removed) and the part of it whose centre is outside the lot grown by 0.5 h.
    * spillOf divides them: C11's spill (footprint.ts) with the lot as the target mask.
    */
   mass_g: number;
@@ -200,13 +200,34 @@ export function ammoInFlight(c: CompiledLevel, contact: boolean, y: number, spee
   return !contact && speed >= QUIET_SPEED && y > rest + 0.05 * c.frame.unit;
 }
 
+/** Part kinds whose bodies are props, not building: the pieces, domino runs and balls a level or a player places (M5b's fuses). */
+const PROP_KINDS: ReadonlySet<string> = new Set(['piece', 'run', 'ball']);
+/** Whether body i of a fold level is a prop (PROP_KINDS), which its building, collapse, spill and weapon scale (arsenal.ts levelBlock) leave out. */
+export const foldProp = (c: CompiledLevel, i: number): boolean => c.def.objective.kind === 'fold' && PROP_KINDS.has(c.def.parts[c.meta.part[i]!]!.kind);
+const asides = new WeakMap<CompiledLevel, Uint8Array>();
+
+/**
+ * Per structure body, 1 where a fold level's building leaves it out (outcome.ts buildingOnly): heritage, which stands
+ * outside it, and props (PROP_KINDS: a domino fuse's lead, run and socket, M5b). Collapse, spill and the building's
+ * mass read the rest. Shipped fold levels F1 to F5 have no props, so their numbers are as before.
+ */
+export function asideOf(c: CompiledLevel): Uint8Array {
+  let a = asides.get(c);
+  if (a) return a;
+  const m = c.meta;
+  a = new Uint8Array(m.n);
+  for (let i = 0; i < m.n; i++) a[i] = m.role[i] === ROLE_HERITAGE || PROP_KINDS.has(c.def.parts[m.part[i]!]!.kind) ? 1 : 0;
+  asides.set(c, a);
+  return a;
+}
+
 export function reduceCpu(s: Snapshot, prevLinVel: Float64Array | null, c: CompiledLevel, base: Baseline, step: number): Reductions {
   const { meta: m } = c, h = c.frame.unit, dt = c.scene.dt;
   const r: Reductions = {
-    step, nAwake: 0, maxSpeed: 0, maxAngSpeed: 0, pe_mJ: 0, peHeritage_mJ: 0, displaced: 0, outOfLot: 0, mass_g: 0, spill_g: 0, heightHist: new Uint32Array(HEIGHT_BINS), impacts: new Uint32Array(MATERIALS.length * BANDS),
+    step, nAwake: 0, maxSpeed: 0, maxAngSpeed: 0, pe_mJ: 0, peAside_mJ: 0, displaced: 0, outOfLot: 0, mass_g: 0, spill_g: 0, heightHist: new Uint32Array(HEIGHT_BINS), impacts: new Uint32Array(MATERIALS.length * BANDS),
     nMoving: 0, movingBox: Float64Array.of(Infinity, Infinity, Infinity, -Infinity, -Infinity, -Infinity), ammoSpeed: 0,
   };
-  const top = Math.max(c.height, 1e-9);
+  const top = Math.max(c.height, 1e-9), aside = asideOf(c);
   for (let i = 0; i < s.count; i++) {
     const structure = i < m.n;
     if (!structure && !ammoLive(c, s, i)) continue;
@@ -232,12 +253,12 @@ export function reduceCpu(s: Snapshot, prevLinVel: Float64Array | null, c: Compi
     const x = s.pos[3 * i]!, y = s.pos[3 * i + 1]!, z = s.pos[3 * i + 2]!;
     const pe = peOf_mJ(m.mass[i]!, y);
     r.pe_mJ += pe;
-    if (m.role[i] === ROLE_HERITAGE) r.peHeritage_mJ += pe;
+    if (aside[i]) r.peAside_mJ += pe;
     const dx = x - base.pos[3 * i]!, dy = y - base.pos[3 * i + 1]!, dz = z - base.pos[3 * i + 2]!;
     if (dx * dx + dy * dy + dz * dz > (DISPLACED * h) ** 2) r.displaced++;
     const out = outsideLot(c, x, z, 0.5 * h);
     if (out) r.outOfLot++;
-    if (m.role[i] !== ROLE_HERITAGE && s.tier?.[i] !== TIER_FREE) {
+    if (!aside[i] && s.tier?.[i] !== TIER_FREE) {
       const g = Math.round(m.mass[i]! * 1000);
       r.mass_g += g;
       if (out) r.spill_g += g;

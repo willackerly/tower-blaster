@@ -4,7 +4,7 @@
 // spacing between rows along it), and the player tunes from there. Pure state: fuse-panel.ts draws it,
 // and the markers on the charges' hosts are an overlay coloured by delay; the lot is chalked on the ground and
 // the panel's compass needle turns with the camera, so the compass buttons read in the scene.
-import type { CompiledLevel, PlungerShot } from '@tb/keystone';
+import { type CompiledLevel, isFuseLevel, type PlungerShot } from '@tb/keystone';
 import { rgbe } from './scene.ts';
 
 /** Engine steps per snap (0.1 s at 60 Hz) and the most snaps a delay can be (2 s). */
@@ -76,10 +76,11 @@ export const RELAY_CSS = 'rgb(90, 190, 255)';
 
 /**
  * The timeline the Fuse & Fold panel shows for a level: one when its rack has a plunger and the plunger arms a
- * charge, none on a Rube Lab contraption (its plunger is the Go button's release, not a timed demolition).
+ * charge; none on a Rube Lab contraption (its plunger is the Go button's release, not a timed demolition) or on a
+ * domino-fuse level (M5b: the dominoes the player lays are the delays; Light the fuses fires every charge at 0).
  */
 export function panelTimeline(c: CompiledLevel): Timeline | null {
-  if (!c.def.rack.includes('plunger') || c.def.rube) return null;
+  if (!c.def.rack.includes('plunger') || c.def.rube || isFuseLevel(c.def)) return null;
   const t = new Timeline(c);
   return t.empty ? null : t;
 }

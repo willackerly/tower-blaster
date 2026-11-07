@@ -296,10 +296,16 @@ export interface ChargeDef {
   host: number;
   /** Its point in the host's frame, in h (default the host's centre): a blast is centred there. */
   at?: Vec3;
-  /** A key of the level's weapons (a WeaponSpec in cube units) or a built-in charge: cutter, kicker, relay. */
+  /** A key of the level's weapons (a WeaponSpec in cube units) or a built-in charge: cutter, kicker, relay, release, detonator. */
   weapon: string;
   /** 'plunger' (default): armed by a plunger shot naming it; 'start': armed when play starts (a relay, with a moved trigger). */
   arm?: 'plunger' | 'start';
+  /**
+   * The structure body its moved trigger watches (default its host): a detonator on a column, set off when the socket
+   * domino at the end of a domino fuse falls (Fuse & Fold's fuses, M5b, docs/game/fuse-and-fold.md). Blasts and
+   * removeTarget stay the host's. Needs a weapon with a moved trigger. Part of the hash when given.
+   */
+  watch?: number;
 }
 
 /** A level's physics settings (spectacle-mode.md, section 8). Absent fields take PHYSICS_DEFAULTS. */
