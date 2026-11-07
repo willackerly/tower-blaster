@@ -22,6 +22,13 @@ import { COAT_MASK, COAT_SHIFT, type CoatId } from './coats.ts';
 import { MARK_MASK, MARK_SHIFT, type MarkId } from './marks.ts';
 
 export const FX_WORDS = 4;
+/**
+ * The scene target's alpha on what the frozen grade leaves in colour (Bullet Time, PT33; post.ts): an objective,
+ * a fired ball, the overlays (the aim's beads). Opaque passes write 1 everywhere else and the clear is 1; the
+ * blended passes leave alpha alone, except the aim's reach and impact marker, which add their coverage
+ * (reach.ts). The composite reads the keep as clamp(alpha - 1, 0, 1), so nothing at or under 1 is kept.
+ */
+export const KEEP_ALPHA = 2;
 /** HDR multiple of the albedo at emissive 1 (blooms well above 1). */
 export const FX_EMISSIVE_MAX = 16;
 export const FX_ANCHOR = 1 << 16;
@@ -137,6 +144,12 @@ fn fxScale(w1: u32) -> FxScale {
 }
 fn fxTint(w0: u32) -> vec3f {
   return 1.0 - unpack4x8unorm(w0).rgb;
+}
+// The scene target's alpha for this record (post.ts KEEP_*): above 1 marks a pixel the frozen grade leaves in
+// colour (Bullet Time, PT33). An objective box (an x-ray kind: a crown, heritage, a crown to hold) or a fired
+// ball (painted or banded) writes KEEP_ALPHA; everything else 1, as before.
+fn fxKeep(w1: u32) -> f32 {
+  return select(1.0, ${KEEP_ALPHA}, (w1 & (${XRAY_MASK >>> 0}u | ${FX_PAINT}u | ${FX_BAND}u)) != 0u);
 }
 // Emissive multiple of the albedo at frame time t.
 fn fxGlow(w: vec4u, t: f32) -> f32 {

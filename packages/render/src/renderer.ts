@@ -304,9 +304,11 @@ export class Renderer {
    * Bullet Time's frozen look (the game's PaceFeel.frozenLook): grade, the post grade's amount (0 none to 1;
    * post.ts frozenGrade); sparks, the share of sparks drawn (1 all, 0 none; shaders.ts vsSpark); heat, the heat
    * glow's brightness (1 as drawn). The game eases them while a shot is frozen, and passes FrameParams.dt 0 so
-   * the sparks hang, undrawn, and come back where they were when it resumes.
+   * the sparks hang, undrawn, and come back where they were when it resumes. keep (PT33): what the scene marks
+   * (objectives, fired balls, the aim's beads, reach and impact marker; fx.ts KEEP_ALPHA) stays out of the grade's
+   * drain and tint.
    */
-  freezeFx = { grade: 0, sparks: 1, heat: 1 };
+  freezeFx: { grade: number; sparks: number; heat: number; keep?: boolean } = { grade: 0, sparks: 1, heat: 1, keep: true };
   private effects: EffectStyle = 'damage';
   private readonly stoneLod: boolean;
   private readonly realDiag: RendererOptions['realDiag'];
@@ -1005,7 +1007,7 @@ export class Renderer {
     this.encodeScene(enc, f, 'scene', stamp);
     // With an atmosphere, the exposure adapts to the light (csAmbient, written in encodeScene).
     const adapted = this.look.atmosphere && this.real ? { buffer: this.real.atmosphere.ambient, offset: ADAPTED_EXPOSURE_OFFSET } : undefined;
-    if (this.toggles.post) this.post.encode(enc, this.hdr!, tex.createView(), this.freezeFx.grade > 0 ? { ...this.look, grade: this.freezeFx.grade } : this.look, stamp, adapted, this.postFrames++);
+    if (this.toggles.post) this.post.encode(enc, this.hdr!, tex.createView(), this.freezeFx.grade > 0 ? { ...this.look, grade: this.freezeFx.grade, keep: this.freezeFx.keep !== false } : this.look, stamp, adapted, this.postFrames++);
     prof?.resolve(enc);
     let read: GPUBuffer | null = null;
     const bytesPerRow = Math.ceil((tex.width * 4) / 256) * 256;

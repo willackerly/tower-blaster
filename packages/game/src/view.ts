@@ -12,9 +12,10 @@ import { idRaster, pixelCounts, type ScreenRect, seen } from './sightlines.ts';
 export const PORTRAIT_HUD_SHARE = 0.4;
 /**
  * The share of an upright phone's height the fuse panel may take at the bottom (fuse-panel.ts: max-height, a level with
- * charges, Fuse & Fold): such a level's opening view keeps clear of it (openingInsets), or the panel hides the lot.
+ * charges, Fuse & Fold; 0.45 before PT21 folded its rows): such a level's opening view keeps clear of it (openingInsets),
+ * or the panel hides the lot. On a docked phone HUD the panel's measured box joins the band instead (play.ts dockedHud).
  */
-export const FUSE_PANEL_SHARE = 0.45;
+export const FUSE_PANEL_SHARE = 0.35;
 
 /** The insets a level's own panels add to defaultInsets: upright, the fuse panel's band when the level shows it. */
 export function openingInsets(aspect: number, fusePanel: boolean): Partial<Insets> | undefined {
