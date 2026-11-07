@@ -2,7 +2,7 @@
 // contract. Used as a reference for quality metrics and as the number every
 // GPU variant has to beat by a wide margin.
 import RAPIER from '@dimforge/rapier3d-simd-compat';
-import { blastArea, blastCentre, blastVelocity, type BodyDesc, checkBlast, checkInputQueue, DEFAULT_RESTITUTION_COMBINE, emptySnapshot, type EngineCheckpoint, type EngineInfo, type FieldEvent, gravityChanges, type InputEvent, kicks, massOf, type PhysicsEngine, type SceneDesc, queueInputs, type Snapshot, TIER_FREE } from '@tb/engine-api';
+import { blastArea, blastCentre, blastVelocity, type BodyDesc, type BodyMotion, checkBlast, checkInputQueue, DEFAULT_RESTITUTION_COMBINE, emptySnapshot, type EngineCheckpoint, type EngineInfo, type FieldEvent, ForceTable, forceKicks, gravityChanges, type InputEvent, kicks, massOf, type PhysicsEngine, type SceneDesc, queueInputs, type Snapshot, relativeBody, TIER_FREE } from '@tb/engine-api';
 import { createBody, createGround, initRapier, RULES } from './bodies.ts';
 
 export interface RapierOptions {
@@ -20,6 +20,10 @@ export class RapierEngine implements PhysicsEngine {
   /** Removed bodies (remove.ts): disabled in Rapier, so they touch nothing and stay where they were, at rest. */
   private gone = new Set<number>();
   private pending: InputEvent[] = [];
+  /** The forces force events have set (engine-api force.ts). */
+  private forces = new ForceTable();
+  /** The scene's step, s (Rapier keeps its own timestep in f32). */
+  private dt = 0;
   private sleep = true;
   private combine = RAPIER.CoefficientCombineRule.Average;
   private restitutionCombine = RAPIER.CoefficientCombineRule.Average;
@@ -55,6 +59,8 @@ export class RapierEngine implements PhysicsEngine {
     this.gone = new Set();
     for (const b of scene.bodies) this.add(b);
     this.pending = pending;
+    this.forces = new ForceTable();
+    this.dt = scene.dt;
     this.stepIndex = 0;
   }
 
@@ -72,16 +78,24 @@ export class RapierEngine implements PhysicsEngine {
   push(events: InputEvent[]): void {
     // Stable insertion keeps push order among events due at the same step; checked before anything changes.
     const pending = queueInputs(this.pending, events);
-    checkInputQueue(this.bodies.length, pending, this.gone);
+    checkInputQueue(this.bodies.length, pending, this.gone, this.stepIndex, this.forces.ends());
     this.pending = pending;
   }
 
   step(): void {
     const w = this.world;
     if (!w) throw new Error('init() first');
-    while (this.pending.length && this.pending[0]!.step <= this.stepIndex) {
-      const ev = this.pending.shift()!;
-      if (ev.kind === 'spawn') { this.add(ev.body); continue; }
+    const due: InputEvent[] = [];
+    while (this.pending.length && this.pending[0]!.step <= this.stepIndex) due.push(this.pending.shift()!);
+    // A relative spawn reads its parent as the step starts, before any of the step's events (engine-api spawn.ts).
+    const parents = new Map<number, BodyMotion>();
+    for (const ev of due) {
+      if (ev.kind !== 'spawn' || !ev.from || parents.has(ev.from.body)) continue;
+      const rb = this.bodies[ev.from.body]!, p = rb.translation(), q = rb.rotation(), v = rb.linvel(), a = rb.angvel();
+      parents.set(ev.from.body, { pos: [p.x, p.y, p.z], rot: [q.x, q.y, q.z, q.w], linVel: [v.x, v.y, v.z], angVel: [a.x, a.y, a.z] });
+    }
+    for (const ev of due) {
+      if (ev.kind === 'spawn') { this.add(ev.from ? relativeBody(parents.get(ev.from.body)!, ev.body, ev.from.axes) : ev.body); continue; }
       if (ev.kind === 'remove') {
         // A removal (remove.ts): at rest, then out of the simulation (a disabled body and its colliders take part in nothing).
         const rb = this.bodies[ev.id]!;
@@ -89,8 +103,10 @@ export class RapierEngine implements PhysicsEngine {
         rb.setAngvel({ x: 0, y: 0, z: 0 }, false);
         rb.setEnabled(false);
         this.gone.add(ev.id);
+        this.forces.remove(ev.id);
         continue;
       }
+      if (ev.kind === 'force') { this.forces.apply(ev, this.stepIndex); continue; }
       if (ev.kind === 'field') { this.field(ev); continue; }
       // A blast (engine-api blast.ts): mass and volume from the description, as the AVBD engines.
       const b = checkBlast(ev.blast);
@@ -103,6 +119,17 @@ export class RapierEngine implements PhysicsEngine {
         const v = blastVelocity(b, centre, id, at(rb), [u.x, u.y, u.z], massOf(d), blastArea(d.shape));
         if (v) rb.setLinvel({ x: v[0], y: v[1], z: v[2] }, true);
       });
+    }
+    // Forces (force.ts), after every other event of the step: a kick h F / m (mass from the description, as a
+    // blast's), which wakes the body every step it is forced; Rapier wakes what it pushes into.
+    const motion = (id: number): BodyMotion => {
+      const rb = this.bodies[id]!, p = rb.translation(), q = rb.rotation(), v = rb.linvel(), a = rb.angvel();
+      return { pos: [p.x, p.y, p.z], rot: [q.x, q.y, q.z, q.w], linVel: [v.x, v.y, v.z], angVel: [a.x, a.y, a.z] };
+    };
+    for (const { id, dv } of forceKicks(this.forces.act(this.stepIndex), this.stepIndex, this.dt, motion, (id) => massOf(this.descs[id]!))) {
+      if (this.descs[id]!.pinned) continue; // a pinned (fixed) body feels no force (engine-api pinned.ts)
+      const rb = this.bodies[id]!, u = rb.linvel();
+      rb.setLinvel({ x: u.x + dv[0], y: u.y + dv[1], z: u.z + dv[2] }, true);
     }
     w.step();
     this.stepIndex++;
@@ -143,14 +170,14 @@ export class RapierEngine implements PhysicsEngine {
   /**
    * The world as Rapier serialises it (World.takeSnapshot: bodies, colliders, islands, broad and
    * narrow phase with the contacts' warm-start impulses, integration parameters), and this
-   * adapter's own state: body handles and descriptions, removed bodies, queued inputs, step index.
+   * adapter's own state: body handles and descriptions, removed bodies, queued inputs, forces, step index.
    * restore() builds a world from the bytes (World.restoreSnapshot) in place of the current one.
    */
   checkpoint(): EngineCheckpoint {
     const w = this.world;
     if (!w) throw new Error('init() first');
     const bytes = w.takeSnapshot(), handles = this.bodies.map((b) => b.handle), descs = [...this.descs];
-    const gone = [...this.gone], pending = [...this.pending], step = this.stepIndex, generation = this.generation;
+    const gone = [...this.gone], pending = [...this.pending], forces = this.forces.clone(), step = this.stepIndex, generation = this.generation;
     // The gravity in force (field events change it); restored explicitly, whatever the snapshot keeps of it.
     const gravity = { ...w.gravity };
     let live = true;
@@ -167,6 +194,7 @@ export class RapierEngine implements PhysicsEngine {
         this.descs = [...descs];
         this.gone = new Set(gone);
         this.pending = [...pending];
+        this.forces = forces.clone();
         this.stepIndex = step;
       },
       dispose: () => { live = false; },

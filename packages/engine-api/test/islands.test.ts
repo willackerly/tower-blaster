@@ -144,6 +144,35 @@ describe('the id map and event release', () => {
     expect(() => isl.push(3, [])).toThrow(/no island 3/);
   });
 
+  it('a relative spawn keeps its parent\'s frame and a force its body: only ids move, and a pull\'s world point with the island', () => {
+    const w = scene('a', [cube([0, 0.25, 0]), cube([1, 0.25, 0])]);
+    const isl = new Islands([w, w], { gap: 10 }), o = isl.offsets[1]!;
+    const child = ball([0, 0.5, 0]);
+    const thrust = { thrust: [0, 5, 0] as Vec3, axes: 'heading' as const, steps: 4 };
+    const pull = { pull: [2, 1, -1] as Vec3, stiffness: 50, steps: 3 };
+    isl.push(1, [
+      { step: 1, kind: 'spawn', body: child, from: { body: 1, axes: 'body' } },
+      { step: 2, kind: 'force', id: 2, force: thrust },
+      { step: 2, kind: 'force', id: 0, force: pull },
+      { step: 3, kind: 'force', id: 2, force: null },
+    ]);
+    const out = [0, 1, 2, 3].flatMap((s) => isl.due(s));
+    expect(isl.idOf(1, 2)).toBe(4);
+    expect(out).toEqual([
+      { step: 1, kind: 'spawn', body: child, from: { body: isl.idOf(1, 1), axes: 'body' } },
+      { step: 2, kind: 'force', id: 4, force: thrust },
+      { step: 2, kind: 'force', id: isl.idOf(1, 0), force: { ...pull, pull: [2 + o[0], 1, -1 + o[2]] } },
+      { step: 3, kind: 'force', id: 4, force: null },
+    ]);
+    // solo(1) is in local ids, with the pull point and plain spawns offset, the relative spawn as written.
+    const solo = isl.solo(1).inputs;
+    expect(solo[0]).toEqual({ step: 1, kind: 'spawn', body: child, from: { body: 1, axes: 'body' } });
+    expect(solo[2]).toEqual({ step: 2, kind: 'force', id: 0, force: { ...pull, pull: [2 + o[0], 1, -1 + o[2]] } });
+    // A relative spawn does not widen the world (its parent is already in it); a pull point must fit the cell.
+    expect(worldExtent(scene('b', [cube([0, 0.25, 0])], [{ step: 1, kind: 'spawn', body: ball([30, 0, 0]), from: { body: 0 } }]))).toBe(worldExtent(scene('c', [cube([0, 0.25, 0])])));
+    expect(() => isl.push(0, [{ step: 5, kind: 'force', id: 0, force: { ...pull, pull: [6, 0, 0] } }])).toThrow(/outside its cell/);
+  });
+
   it('refuses field events: gravity and kicks belong to the whole solve, not one island', () => {
     const isl = new Islands([scene('a', [cube([0, 0.25, 0])]), scene('b', [cube([0, 0.25, 0])])], { gap: 10 });
     expect(() => isl.push(1, [{ step: 2, kind: 'field', gravity: [1, -9.75, 0] }])).toThrow(/field event at step 2.*world-wide/);

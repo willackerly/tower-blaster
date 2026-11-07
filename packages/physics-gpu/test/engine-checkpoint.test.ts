@@ -130,6 +130,23 @@ describe('GPU AVBD engine: checkpoint and restore', () => {
     expect(r.runs.every((x) => x.skipped > 0)).toBe(true);
   });
 
+  it('the same with forces (engine-api force.ts) acting and pending at the checkpoint, sleep on', { timeout: 300_000 }, async (ctx) => {
+    if (!gpu) return ctx.skip();
+    // A pull drags the top cube of the first column from step 10, a vibration shakes the second column's top from
+    // 20 (it ends at 50), and a heading thrust starts at 30 on a cube thrown at 26: at the checkpoint (24) one force
+    // acts, one has just begun, one is pending. The thrown-away future replaces the pull and adds a thrust.
+    const s = scene(columns(3), [
+      { step: 10, kind: 'force', id: 2, force: { steps: 60, pull: [-2, 3, 0], stiffness: 30, damping: 4, max: 20 } },
+      { step: 24, kind: 'force', id: 5, force: { steps: 26, vibrate: [0, 0, 12], period: 0.2 } },
+      { step: 26, kind: 'spawn', body: cube([4, 0.5, 0], [-3, 0, 0]) },
+      { step: 30, kind: 'force', id: 6, force: { steps: 20, thrust: [0, 8, 0], axes: 'heading' } },
+    ], true);
+    expectExact(await run({
+      scene: s, params: { iterations: 8 }, opts: { sleep: true }, poison: true,
+      at: 24, diverge: [{ step: 25, kind: 'force', id: 2, force: { steps: 10, thrust: [0, 30, 0] } }, { step: 27, kind: 'force', id: 0, force: { steps: 10, thrust: [5, 0, 0], axes: 'body' } }], divergeSteps: 20, after: 60,
+    }));
+  });
+
   it('negative controls: garbage over the contact history or the solver bodies does change the run', { timeout: 240_000 }, async (ctx) => {
     if (!gpu) return ctx.skip();
     for (const corrupt of ['avbd contacts', 'avbd solver bodies']) {

@@ -1,7 +1,7 @@
 // The shared pinned-body cases (engine-api pinned.ts, roadmap C8): every
 // engine runs the same scenes and must hold a pinned body exactly where it was
-// given, at rest and awake 0, under gravity, a falling load, a ball, a blast
-// and a removal of its neighbour; and a body sliding on a pinned slab must move
+// given, at rest and awake 0, under gravity, a falling load, a ball, a blast,
+// forces (engine-api force.ts) and a removal of its neighbour; and a body sliding on a pinned slab must move
 // as it moves on the ground plane at the slab's height (probe X5's frame
 // test, with the real flag).
 import { type BodyDesc, type InputEvent, type SceneDesc, type Snapshot, type Vec3 } from '@tb/engine-api';
@@ -17,9 +17,11 @@ const box = (half: Vec3, pos: Vec3, opts: Partial<BodyDesc> = {}): BodyDesc => (
  * ground, given a velocity it must ignore (body 0); a second pinned box beside
  * it (1) that a cube rests on (2), removed at `remove` so the cube falls; a
  * cube dropped onto the slab (3); a ball fired at the slab (4); a blast at the
- * slab's edge at `blast` that pushes the bodies around it but not the pins.
+ * slab's edge at `blast` that pushes the bodies around it but not the pins; a
+ * thrust in the slab's own axes from `force` and a pull on the second pin, which
+ * neither feels (a pinned body feels no force).
  */
-export const PIN_CASE = { blast: 40, remove: 60, end: 120, pins: [0, 1], cube: 2, dropped: 3, ball: 4 } as const;
+export const PIN_CASE = { force: 10, blast: 40, remove: 60, end: 120, pins: [0, 1], cube: 2, dropped: 3, ball: 4 } as const;
 
 const tilt = (deg: number): [number, number, number, number] => { const a = (deg * Math.PI) / 360; return [0, 0, Math.sin(a), Math.cos(a)]; };
 
@@ -32,6 +34,8 @@ export function pinScene(): SceneDesc {
     { shape: { kind: 'sphere', radius: 0.3 }, pos: [-6, 4.5, 0], rot: [0, 0, 0, 1], linVel: [8, 0, 0], angVel: [0, 0, 0], density: 4, friction: 0.5, restitution: 0, tag: 0 },
   ];
   const inputs: InputEvent[] = [
+    { step: PIN_CASE.force, kind: 'force', id: 0, force: { thrust: [0, 500, 0], axes: 'body', steps: 20 } },
+    { step: PIN_CASE.force + 20, kind: 'force', id: 1, force: { pull: [6, 6, 0], stiffness: 400, damping: 5, steps: 20 } },
     { step: PIN_CASE.blast, kind: 'blast', blast: { centre: [3, 3, 0], radius: 3, impulse: 20 } },
     { step: PIN_CASE.remove, kind: 'remove', id: 1 },
   ];

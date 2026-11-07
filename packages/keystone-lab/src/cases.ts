@@ -2,7 +2,7 @@
 // with a nominal shot and an outcome test. The grammar is "loose lattice":
 // cubes rest on the cube below and columns 1 cm apart do not touch, so
 // columns are independent and only slabs couple them.
-import { type CompiledLevel, type LevelDef, type Shot, aimAt, compileLevel } from '@tb/keystone';
+import { type CompiledLevel, type LaunchItem, type LevelDef, type Shot, aimAt, compileLevel } from '@tb/keystone';
 import type { ProbeCase } from './probe.ts';
 import type { PlayResult } from './runner.ts';
 
@@ -41,7 +41,7 @@ export const RAPIER_SUBSTEPS = 4;
  * Aim a launch shot from azimuth az (0.5 deg) at a point given in cells
  * (x, y, z), for an engine integrating in `substeps` substeps per step.
  */
-export function aimCells(level: LevelDef, ammo: 'marble' | 'cannonball', az: number, at: V3, power = 100, y = 8, substeps = RAPIER_SUBSTEPS): Shot {
+export function aimCells(level: LevelDef, ammo: LaunchItem, az: number, at: V3, power = 100, y = 8, substeps = RAPIER_SUBSTEPS): Shot {
   const c = compileLevel(level), h = c.frame.unit, p = h * c.frame.pitch;
   return aimAt(c.frame, ammo, { az, y, power }, [at[0] * p, at[1] * h, at[2] * p], { substeps }).shot;
 }

@@ -128,4 +128,6 @@ export * from './blast.ts';
 export * from './field.ts';
 export * from './pinned.ts';
 export * from './remove.ts';
+export * from './spawn.ts';
 export * from './png.ts';
+export * from './force.ts';

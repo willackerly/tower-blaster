@@ -2,7 +2,7 @@
 // block at every few courses, plays each on a real engine, and keeps the ones
 // that clear the level. The chaos audit then nudges a solution over the probe
 // grid: a par solution counts only if most of its neighbourhood also clears.
-import { type BlockPart, type LevelDef, type Shot } from '@tb/keystone';
+import { type BlockPart, type LaunchItem, type LevelDef, type Shot } from '@tb/keystone';
 import { aimCells, RAPIER_SUBSTEPS } from './cases.ts';
 import { engineSubsteps } from './engines.ts';
 import { quantile, runProbe, type ProbeResult } from './probe.ts';
@@ -14,12 +14,13 @@ export interface Candidate { label: string; shot: Shot }
  * Launch shots at every cell of the four side faces of each block, every
  * `every` courses, plus anvil drops over every top cell of blocks and slabs.
  * Launch shots are aimed for an engine with `substeps` substeps per step, from launcher height `y`
- * (1/4 h; default 8, the 2 h every chamber level's par line was recorded from).
+ * (1/4 h; default 8, the 2 h every chamber level's par line was recorded from). `ammo`: the launch items to aim
+ * (default the rack's marbles and cannonballs).
  */
-export function candidates(level: LevelDef, opts: { every?: number; powers?: number[]; substeps?: number; y?: number } = {}): Candidate[] {
+export function candidates(level: LevelDef, opts: { every?: number; powers?: number[]; substeps?: number; y?: number; ammo?: readonly LaunchItem[] } = {}): Candidate[] {
   const every = opts.every ?? 2, powers = opts.powers ?? [60, 100], substeps = opts.substeps ?? RAPIER_SUBSTEPS, y = opts.y ?? 8;
   const out: Candidate[] = [];
-  const launch = [...new Set(level.rack.filter((a): a is 'marble' | 'cannonball' => a === 'marble' || a === 'cannonball'))];
+  const launch: LaunchItem[] = opts.ammo ? [...opts.ammo] : [...new Set(level.rack.filter((a): a is 'marble' | 'cannonball' => a === 'marble' || a === 'cannonball'))];
   level.parts.forEach((p, pi) => {
     if (p.kind === 'scenario' || p.kind === 'run' || p.kind === 'piece' || p.kind === 'ball') return; // the par bot is for authored chamber levels (lattice blocks and slabs)
     if (level.rack.includes('drop')) {

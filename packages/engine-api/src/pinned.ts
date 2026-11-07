@@ -6,7 +6,8 @@
 // A pinned body (BodyDesc.pinned) never moves: its pose stays exactly as it
 // was given (bit for bit, as the engine holds it), its velocities are 0 (the
 // description's are ignored), and it feels no gravity, no blast, no field
-// kick (field.ts) and no contact. To every body that touches it, it is an
+// kick (field.ts), no force (force.ts) and no contact. It is never the
+// child of a relative spawn (spawn.ts): it is placed in world coordinates. To every body that touches it, it is an
 // infinite mass: they solve against its fixed pose, as against the ground.
 // Contacts between two pinned bodies, or a pinned body and the ground, do
 // nothing (both ends are fixed). A snapshot reports it with awake 0, as a

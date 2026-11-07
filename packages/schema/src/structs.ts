@@ -337,7 +337,7 @@ export const SleepBody = defineStruct(
     ['anchorRot', 'vec4f', 'rotation when the quiet window began'],
     ['wakes', 'u32', 'times it has been woken (saturates): it needs steps << min(wakes, 4) quiet steps to sleep again'],
     ['slept', 'u32', '1 if it was asleep at the end of last step (a blast may have woken it since)'],
-    ['pad0', 'u32'],
+    ['forced', 'u32', '1 when a force (engine-api force.ts) acted on it this step: it does not fall asleep at the end of the step'],
     ['pad1', 'u32'],
   ],
   'Per-body sleep bookkeeping (physics-gpu sleep.ts; GpuEngineOptions.sleep).',

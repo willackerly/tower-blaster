@@ -68,7 +68,7 @@ export function munitionList(d: Draft): { path: string; depth: number }[] {
 
 export const TRIGGER_KINDS = ['after', 'near', 'apex', 'then', 'any'] as const;
 export type TriggerKind = (typeof TRIGGER_KINDS)[number];
-export const ACTION_KINDS = ['blast', 'remove', 'split'] as const;
+export const ACTION_KINDS = ['blast', 'remove', 'split', 'thrust', 'vibrate'] as const;
 export type ActionKind = (typeof ACTION_KINDS)[number];
 
 export function triggerKind(t: unknown): TriggerKind | null {
@@ -100,6 +100,8 @@ export function defaultAction(kind: ActionKind, child = ''): Action {
     case 'blast': return { blast: { radius: 3, impulse: 20, core: 0.2 } };
     case 'remove': return { remove: true };
     case 'split': return { split: { into: 6, child, pattern: 'sphere', spread: 5, at: 1 } };
+    case 'thrust': return { thrust: { accel: [0, 20, 0], for: 1 } };
+    case 'vibrate': return { vibrate: { accel: [0, 0, 20], period: 0.2, for: 1 } };
   }
 }
 
@@ -132,7 +134,7 @@ export function addRule(d: Draft, mun: string): Draft {
   return setAt(d, [...munitionKeys(mun), 'rules', rules.length], { when: { after: 1 }, do: [{ remove: true }] });
 }
 
-/** An action of `kind` added to rule `rule` of munition `mun` (at most MAX_ACTIONS), before a spending one (remove, split) so the order stays valid. */
+/** An action of `kind` added to rule `rule` of munition `mun` (at most MAX_ACTIONS); one that does not spend it (blast, thrust, vibrate) goes before a spending one (remove, split) so the order stays valid. */
 export function addAction(d: Draft, mun: string, rule: number, kind: ActionKind): Draft {
   const at = [...munitionKeys(mun), 'rules', rule, 'do'];
   const acts = getAt(d, at);
@@ -141,7 +143,7 @@ export function addAction(d: Draft, mun: string, rule: number, kind: ActionKind)
   const children = getAt(d, [...munitionKeys(mun), 'children']);
   const a = defaultAction(kind, isObj(children) ? Object.keys(children)[0] ?? '' : '');
   const spend = list.findIndex((x) => actionKind(x) === 'remove' || actionKind(x) === 'split');
-  if (kind === 'blast' && spend >= 0) list.splice(spend, 0, a);
+  if (kind !== 'remove' && kind !== 'split' && spend >= 0) list.splice(spend, 0, a);
   else list.push(a);
   return setAt(d, at, list);
 }

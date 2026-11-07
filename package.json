@@ -29,6 +29,7 @@
     "keystone:stars": "tsx packages/keystone-lab/src/stars-audit-cli.ts",
     "keystone:cast": "tsx packages/keystone-lab/src/cast-cli.ts",
     "keystone:goals": "tsx packages/keystone-lab/src/goals-cli.ts",
+    "keystone:fun": "tsx packages/keystone-lab/src/weapon-fun-cli.ts",
     "keystone:fuse": "tsx packages/keystone-lab/src/fuse-search-cli.ts",
     "duel:bot": "tsx packages/game/src/duel-bot-cli.ts",
     "keystone:settle-study": "tsx packages/keystone-lab/src/settle-study-cli.ts",

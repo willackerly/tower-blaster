@@ -74,7 +74,7 @@ export function worldExtent(w: SceneDesc): number {
   const body = (b: BodyDesc) => { const r = shapeRadius(b.shape); e = Math.max(e, Math.abs(b.pos[0]) + r, Math.abs(b.pos[2]) + r); };
   w.bodies.forEach(body);
   for (const ev of w.inputs) {
-    if (ev.kind === 'spawn') body(ev.body);
+    if (ev.kind === 'spawn') { if (!ev.from) body(ev.body); } // a relative spawn is placed from its parent, which is in the world already
     else if (ev.kind === 'blast' && Array.isArray(ev.blast.centre)) e = Math.max(e, Math.abs(ev.blast.centre[0]) + ev.blast.radius, Math.abs(ev.blast.centre[2]) + ev.blast.radius);
   }
   return e;
@@ -177,6 +177,9 @@ export class Islands {
         if (Array.isArray(c) ? Math.max(Math.abs(c[0]), Math.abs(c[2])) + r > this.half : r > this.reach) {
           throw new RangeError(`islands: island ${k}'s blast (radius ${r} m) can reach past its cell (half side ${this.half} m, reach ${this.reach.toFixed(3)} m); widen the gap`);
         }
+      } else if (ev.kind === 'force' && ev.force && 'pull' in ev.force) {
+        const c = ev.force.pull;
+        if (Math.max(Math.abs(c[0]), Math.abs(c[2])) > this.half) throw new RangeError(`islands: island ${k}'s pull to (${c[0]}, ${c[2]}) is outside its cell (half side ${this.half} m)`);
       }
     }
     this.queues[k] = queueInputs(this.queues[k]!, events);
@@ -232,8 +235,9 @@ export class Islands {
   solo(k: number): SceneDesc {
     const w = this.worlds[this.check(k)]!, o = this.offsets[k]!;
     const shift = (ev: InputEvent): InputEvent => {
-      if (ev.kind === 'spawn') return { ...ev, body: this.place(k, ev.body) };
+      if (ev.kind === 'spawn') return ev.from ? ev : { ...ev, body: this.place(k, ev.body) };
       if (ev.kind === 'blast' && Array.isArray(ev.blast.centre)) { const c = ev.blast.centre; return { ...ev, blast: { ...ev.blast, centre: [c[0] + o[0], c[1] + o[1], c[2] + o[2]] } }; }
+      if (ev.kind === 'force' && ev.force && 'pull' in ev.force) { const c = ev.force.pull; return { ...ev, force: { ...ev.force, pull: [c[0] + o[0], c[1] + o[1], c[2] + o[2]] } }; }
       return ev;
     };
     return { ...w, id: `${w.id}@${k}`, bodies: w.bodies.map((b) => this.place(k, b)), inputs: [...this.sent[k]!, ...this.queues[k]!].map(shift) };
@@ -301,7 +305,14 @@ export class Islands {
     switch (ev.kind) {
       case 'spawn': {
         this.register(k, ev.body.shape);
+        // A relative spawn (spawn.ts) is in its parent's frame: only the parent's id moves, not its position.
+        if (ev.from) return { step, kind: 'spawn', body: ev.body, from: { ...ev.from, body: this.idOf(k, ev.from.body) } };
         return { step, kind: 'spawn', body: this.place(k, ev.body) };
+      }
+      case 'force': {
+        const f = ev.force;
+        const force = f && 'pull' in f ? { ...f, pull: [f.pull[0] + o[0], f.pull[1] + o[1], f.pull[2] + o[2]] as Vec3 } : f;
+        return { step, kind: 'force', id: this.idOf(k, ev.id), force };
       }
       case 'remove':
         return { step, kind: 'remove', id: this.idOf(k, ev.id) };

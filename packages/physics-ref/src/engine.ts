@@ -1,5 +1,5 @@
 // The reference AVBD solver behind the engine contract.
-import { blastArea, blastCentre, blastVelocity, checkBlast, checkInputQueue, emptySnapshot, kicks, queueInputs, scenePins, TIER_FREE, type EngineInfo, type InputEvent, type PhysicsEngine, type SceneDesc, type Snapshot } from '@tb/engine-api';
+import { blastArea, blastCentre, blastVelocity, type BodyMotion, checkBlast, checkInputQueue, emptySnapshot, ForceTable, forceKicks, kicks, queueInputs, relativeBody, scenePins, TIER_FREE, type EngineInfo, type InputEvent, type PhysicsEngine, type SceneDesc, type Snapshot } from '@tb/engine-api';
 import { type AvbdParams, avbdVariant, AvbdWorld, checkColoring, checkGapSlop, checkRecords, checkRemoved, checkRestitution, DEFAULT_AVBD } from './avbd.ts';
 
 export class AvbdReferenceEngine implements PhysicsEngine {
@@ -7,6 +7,8 @@ export class AvbdReferenceEngine implements PhysicsEngine {
   stepIndex = 0;
   world: AvbdWorld | null = null;
   private pending: InputEvent[] = [];
+  /** The forces force events have set (engine-api force.ts). */
+  private forces = new ForceTable();
   private readonly params: AvbdParams;
 
   constructor(params: Partial<AvbdParams> = {}) {
@@ -31,13 +33,14 @@ export class AvbdReferenceEngine implements PhysicsEngine {
     this.world = new AvbdWorld(scene, this.params);
     for (const b of scene.bodies) this.world.add(b);
     this.pending = pending;
+    this.forces = new ForceTable();
     this.stepIndex = 0;
   }
 
   push(events: InputEvent[]): void {
     // Stable insertion keeps push order among events due at the same step; checked before anything changes.
     const pending = queueInputs(this.pending, events);
-    checkInputQueue(this.world?.bodies.length ?? 0, pending, this.removed());
+    checkInputQueue(this.world?.bodies.length ?? 0, pending, this.removed(), this.stepIndex, this.forces.ends());
     if (this.params.restitution && scenePins({ bodies: [], inputs: events })) throw new Error('AvbdReferenceEngine: pinned bodies are not implemented with AvbdParams.restitution yet (docs/design/gravity-and-pins.md)');
     this.pending = pending;
   }
@@ -45,11 +48,20 @@ export class AvbdReferenceEngine implements PhysicsEngine {
   step(): void {
     const w = this.world;
     if (!w) throw new Error('init() first');
-    while (this.pending.length && this.pending[0]!.step <= this.stepIndex) {
-      const ev = this.pending.shift()!;
-      if (ev.kind === 'spawn') { w.add(ev.body); continue; }
+    const due: InputEvent[] = [];
+    while (this.pending.length && this.pending[0]!.step <= this.stepIndex) due.push(this.pending.shift()!);
+    // A relative spawn reads its parent as the step starts, before any of the step's events (engine-api spawn.ts).
+    const parents = new Map<number, BodyMotion>();
+    for (const ev of due) {
+      if (ev.kind !== 'spawn' || !ev.from || parents.has(ev.from.body)) continue;
+      const b = w.bodies[ev.from.body]!;
+      parents.set(ev.from.body, { pos: [...b.pos], rot: [...b.rot], linVel: [...b.linVel], angVel: [...b.angVel] });
+    }
+    for (const ev of due) {
+      if (ev.kind === 'spawn') { w.add(ev.from ? relativeBody(parents.get(ev.from.body)!, ev.body, ev.from.axes) : ev.body); continue; }
       // A removal (remove.ts): the body touches nothing from this step on.
-      if (ev.kind === 'remove') { w.remove(ev.id); continue; }
+      if (ev.kind === 'remove') { w.remove(ev.id); this.forces.remove(ev.id); continue; }
+      if (ev.kind === 'force') { this.forces.apply(ev, this.stepIndex); continue; }
       // A field event (field.ts): the gravity from this step on, and a kick for every moving body (to its warm
       // start's previous velocity too, as a blast's). Nothing sleeps here, so there is nothing to wake.
       if (ev.kind === 'field') {
@@ -75,6 +87,14 @@ export class AvbdReferenceEngine implements PhysicsEngine {
         body.prevLinVel = [p[0] + (v[0] - u[0]), p[1] + (v[1] - u[1]), p[2] + (v[2] - u[2])];
         body.linVel = v;
       });
+    }
+    // Forces (force.ts), after every other event of the step: a kick h F / m, added to prevLinVel too, as a blast's.
+    const motion = (id: number): BodyMotion => { const b = w.bodies[id]!; return { pos: b.pos, rot: b.rot, linVel: b.linVel, angVel: b.angVel }; };
+    for (const { id, dv } of forceKicks(this.forces.act(this.stepIndex), this.stepIndex, w.scene.dt, motion, (id) => w.bodies[id]!.mass)) {
+      const b = w.bodies[id]!, u = b.linVel, p = b.prevLinVel;
+      if (b.pinned) continue; // a pinned body feels no force (pinned.ts)
+      b.linVel = [u[0] + dv[0], u[1] + dv[1], u[2] + dv[2]];
+      b.prevLinVel = [p[0] + dv[0], p[1] + dv[1], p[2] + dv[2]];
     }
     w.step();
     this.stepIndex++;

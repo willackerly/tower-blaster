@@ -13,7 +13,7 @@ Code: `packages/keystone/src/trial-levels.ts` (`TRIAL_LEVELS`, `TRIAL_NOTES`), t
 - **Rack**: up to a few thousand blocks, a cannonball, two marbles and two grenades (`TRIAL_RACK_SMALL`); light bodies (S8's rods, dominoes, Kapla planks), three marbles and a grenade (`TRIAL_RACK_LIGHT`: a cannonball is 27 to 68 times one, over the ammo ratio); 5k blocks and up, the big levels' three bombs and two rams (`TRIAL_RACK_BIG`). The drafts keep their own racks.
 - Everything else (launcher ring, lot, physics) is what `scenarioLevel` or `outcomeLevel` gives, so a change there (the launch point, for one) reaches the trials too.
 
-## The 31 trials
+## The 36 trials
 
 | Id | Name | From | Blocks | Validator notes |
 |---|---|---|---|---|
@@ -40,6 +40,7 @@ Code: `packages/keystone/src/trial-levels.ts` (`TRIAL_LEVELS`, `TRIAL_NOTES`), t
 | T-I2 | Ice Wall | ice: a third-bond wall 8 x 6 | 48 | |
 | T-I3 | Frozen Keep | ice: a 3 x 3 stone keep, its top four courses ice | 72 | |
 | T-W1 | Domino Workshop | workshop (placement.md): three crown dominoes a quarter circle apart, one marble; a build phase with a 30-domino brush | 3 + what you lay | crown line 0.6 h |
+| T-A1 to T-A5 | (L1 to L5's name): New Arms | weapons: L1 to L5's structure and launcher, the lot grown to the ring less 3 cells, rack `w-scatter`, `w-rocket`, `marble` (weapon-trials.md) | as L1 to L5 | |
 
 Left out, and why:
 

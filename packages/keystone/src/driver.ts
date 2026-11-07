@@ -334,6 +334,9 @@ export class Driver {
     this.noteSpawns([spawn]);
     // A weapon's fuse starts with its spawn: what it knows at launch (a timer's blast) goes in with it.
     const armed = this.arsenal.launch(shot.ammo, body, step, spawn.body.shape);
+    // A split on a timer alone is known at launch too: its children are numbered as any spawn (WeaponRuntime asks their ids).
+    for (const e of armed) if (e.kind === 'spawn') this.spawnSteps.push(e.step);
+    this.noteSpawns(armed);
     this.pushed.push(...armed);
     this.engine.push([spawn, ...armed]);
     this.blastsDue.push(...blasts(armed));

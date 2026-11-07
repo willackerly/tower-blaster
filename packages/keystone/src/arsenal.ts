@@ -22,8 +22,8 @@
 import { blastArea, type BodyDesc, checkBlast, type InputEvent, type ShapeDesc, type Snapshot, type SpawnEvent, type Vec3 } from '@tb/engine-api';
 import { boundingRadius } from '@tb/geom';
 import {
-  BUILTIN_WEAPONS, chargeProblems, checkWeapon, loadIssues, type GrenadeBlast, thrownProblems, WeaponSpecError, type GrenadeSpec, type GrenadeWorld, type MunitionSpec, nominalYield, scaleWeapon, SHELL_FRICTION, SHELL_RESTITUTION, type ShellSpec,
-  type WeaponLoad, type WeaponScale, type WeaponSpec, type WeaponTier, WeaponRuntime, weaponBudget, type YieldFill,
+  BUILTIN_WEAPONS, chargeProblems, checkWeapon, loadIssues, type GrenadeBlast, isForceAction, thrownProblems, WeaponSpecError, type GrenadeSpec, type GrenadeWorld, type MunitionSpec, nominalYield, scaleWeapon, SHELL_FRICTION, SHELL_RESTITUTION, type ShellSpec,
+  timedForces, type WeaponLoad, type WeaponScale, type WeaponSpec, type WeaponTier, WeaponRuntime, weaponBudget, type YieldFill,
 } from '@tb/weapons';
 import type { CompiledLevel } from './level.ts';
 import { materialId } from './materials.ts';
@@ -98,6 +98,12 @@ export interface Arm {
   blasts: { path: string; blast: GrenadeBlast; count: number }[];
   /** Nominal yield, J: sum of count x nominalYield(blast) against levelFill. */
   yield: number;
+  /**
+   * Nominal work of its forces (thrust, vibrate), J: for each force action, count x m |a| T (v + dv / 2), the work of
+   * a push of |a| per unit mass for T s along a path at the munition's speed bound v (a vibration's dv: |a| period /
+   * pi, the most one half-swing adds). Charged as fired energy beside the yield (itemYield), as a launch is.
+   */
+  motor: number;
   /** Largest bounding radius of its munitions, m (the GPU engine's broadphase reach). */
   maxRadius: number;
 }
@@ -127,7 +133,7 @@ export function levelArm(c: CompiledLevel, key: string): Arm {
     const g = levelWeapon(c.def, key)!, shell = grenadeShell(c.frame.unit), shape = shapeOf(shell);
     return {
       spec: g, shell, bodies: 1, munitions: [{ path: '', shape, mass: shell.density * volumeOf(shape), speed: shell.vMax, count: 1 }],
-      blasts: [{ path: 'blast', blast: g.blast, count: 1 }], yield: nominalYield(g.blast, fill), maxRadius: boundingRadius(shape),
+      blasts: [{ path: 'blast', blast: g.blast, count: 1 }], yield: nominalYield(g.blast, fill), motor: 0, maxRadius: boundingRadius(shape),
     };
   }
   return specArm(c, raw);
@@ -139,11 +145,21 @@ function specArm(c: CompiledLevel, raw: WeaponSpec): Arm {
   const spec = inLevel(c, raw);
   const thrown = thrownProblems(spec);
   if (thrown.length) throw new WeaponSpecError(thrown);
-  const budget = weaponBudget(spec), shell = shellItem(spec.shell);
-  // Speed bounds: a child leaves its parent at the parent's speed plus its split's spread.
+  const budget = weaponBudget(spec), shell = shellItem(spec.shell), motorOf = timedForces(spec);
+  if (motorOf.length) shell.motor = motorOf;
+  // Speed bounds: a munition's forces add at most their delta-v; a child leaves its parent at the parent's speed plus its split's spread.
   const munitions: ArmMunition[] = [];
-  const walk = (m: MunitionSpec, path: string, speed: number, count: number) => {
-    munitions.push({ path, shape: m.shell.shape, mass: m.shell.density * volumeOf(m.shell.shape), speed, count });
+  let motor = 0;
+  const walk = (m: MunitionSpec, path: string, launched: number, count: number) => {
+    const mass = m.shell.density * volumeOf(m.shell.shape);
+    let speed = launched;
+    for (const r of m.rules) for (const a of r.do) {
+      if (!isForceAction(a)) continue;
+      const t = 'thrust' in a ? a.thrust : a.vibrate, acc = Math.hypot(...t.accel), dv = 'thrust' in a ? acc * t.for : (acc * Math.min(a.vibrate.period, 2 * t.for)) / Math.PI;
+      motor += count * mass * acc * t.for * (launched + dv / 2);
+      speed += dv;
+    }
+    munitions.push({ path, shape: m.shell.shape, mass, speed, count });
     for (const [name, child] of Object.entries(m.children ?? {})) {
       let n = 0, spread = 0;
       for (const r of m.rules) for (const a of r.do) if ('split' in a && a.split.child === name) { n += a.split.into; spread = Math.max(spread, a.split.spread ?? 0); }
@@ -154,7 +170,7 @@ function specArm(c: CompiledLevel, raw: WeaponSpec): Arm {
   const blasts = budget.blasts.map((b) => ({ path: b.path, blast: fullBlast(b.blast), count: b.count }));
   return {
     spec, shell, bodies: budget.bodies, munitions, blasts,
-    yield: blasts.reduce((a, b) => a + b.count * nominalYield(b.blast, fill), 0),
+    yield: blasts.reduce((a, b) => a + b.count * nominalYield(b.blast, fill), 0), motor,
     maxRadius: Math.max(...munitions.map((x) => boundingRadius(x.shape))),
   };
 }
@@ -284,9 +300,10 @@ function armOf(c: CompiledLevel, item: RackItem): Arm | null {
   return c.arms[item] ?? levelArm(c, r.key);
 }
 
-/** Energy fired by a rack item beyond its launch: a weapon's nominal yield, J; 0 for anything else. */
+/** Energy fired by a rack item beyond its launch: a weapon's nominal yield plus its motor's work, J; 0 for anything else. */
 export function itemYield(c: CompiledLevel, item: RackItem): number {
-  return armOf(c, item)?.yield ?? 0;
+  const a = armOf(c, item);
+  return a ? a.yield + a.motor : 0;
 }
 
 /**

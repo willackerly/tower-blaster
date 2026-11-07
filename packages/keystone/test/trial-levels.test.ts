@@ -13,7 +13,7 @@ describe('trial levels', () => {
     const ids = TRIAL_LEVELS.map((d) => d.id);
     expect(new Set(ids).size).toBe(ids.length);
     for (const id of ids) {
-      expect(id).toMatch(/^T-[SXBIW]\d+[A-Z]?$/);
+      expect(id).toMatch(/^T-[SXBIWA]\d+[A-Z]?$/);
       expect(isTrial(id) && isTrial(id.toLowerCase())).toBe(true);
       expect(TRIAL_NOTES[id]?.from, id).toBeTruthy();
       expect(findLevel(id)).toBe(TRIAL_LEVELS.find((d) => d.id === id));
@@ -40,6 +40,17 @@ describe('trial levels', () => {
     expect([...k.material].filter((m) => m === stone)).toHaveLength(36);
     expect(k.crowns.every((b) => k.material[b] === ice)).toBe(true);
     for (const id of ids) expect(IceBreaker.budget(sizes.get(id)!), id).toBeGreaterThan(0);
+  });
+
+  it('the weapon trials are L1 to L5 with the new weapons: the same structure and launcher, the lot at least as big, a rack of them', () => {
+    const ids = TRIAL_LEVELS.filter((d) => /^T-A/.test(d.id)).map((d) => d.id);
+    expect(ids).toEqual(['T-A1', 'T-A2', 'T-A3', 'T-A4', 'T-A5']);
+    ids.forEach((id, k) => {
+      const t = TRIAL_LEVELS.find((d) => d.id === id)!, l = LEVELS[k]!;
+      expect([t.parts, t.launcher, t.objective]).toEqual([l.parts, l.launcher, l.objective]);
+      for (const a of [0, 1] as const) expect([t.lot.min[a] <= l.lot.min[a], t.lot.max[a] >= l.lot.max[a]]).toEqual([true, true]);
+      expect(t.rack).toEqual(['w-scatter', 'w-rocket', 'marble']);
+    });
   });
 
   it('T-W1, the Domino Workshop: three crown dominoes on a circle facing along it, one marble, a domino-only brush budget', () => {

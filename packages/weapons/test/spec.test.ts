@@ -4,7 +4,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   BUILTIN_CHARGES, BUILTIN_WEAPONS, chargeProblems, checkWeapon, cosSin, DEFAULT_GRENADE, GRENADE_WEAPON, grenadeAsSpec, isWeaponSpec, MAX_WEAPON_BODIES, parseWeapon, scaleWeapon,
-  splitDirections, thrownProblems, validateWeapon, type WeaponIssueCode, type WeaponSpec, WeaponSpecError, weaponBudget, writeWeapon,
+  splitDirections, splitPattern, thrownProblems, validateWeapon, type WeaponIssueCode, type WeaponSpec, WeaponSpecError, weaponBudget, writeWeapon,
 } from '../src/index.ts';
 
 const BALL = (r: number) => ({ kind: 'sphere' as const, radius: r });
@@ -55,7 +55,7 @@ describe('WeaponSpec format', () => {
       expect(spec.name).toBe(name);
       expect(Object.hasOwn(BUILTIN_WEAPONS, name), name).toBe(false);
     }
-    expect(Object.fromEntries(Object.entries(BUILTIN_WEAPONS).map(([k, s]) => [k, weaponBudget(s).bodies]))).toEqual({ firework: 13, cluster: 7, grenades: 1, grenadem: 1, grenadel: 1, grenadexl: 1 });
+    expect(Object.fromEntries(Object.entries(BUILTIN_WEAPONS).map(([k, s]) => [k, weaponBudget(s).bodies]))).toEqual({ firework: 13, cluster: 7, grenades: 1, grenadem: 1, grenadel: 1, grenadexl: 1, scatter: 6, rocket: 1 });
   });
 
   it('a weapons record tells a WeaponSpec (version) from a GrenadeSpec', () => {
@@ -145,7 +145,7 @@ describe('WeaponSpec budget', () => {
     expect(b.depth).toBe(3);
     expect(b.munitions.map((m) => [m.path, m.count])).toEqual([['', 1], ['star', 8], ['star.spark', 32]]);
     expect(b.blasts.map((x) => [x.path, x.count, x.blast.radius])).toEqual([['star.rules.0.do.0', 8, 1.5], ['star.spark.rules.0.do.0', 32, 0.5]]);
-    expect(weaponBudget(GRENADE_WEAPON)).toEqual({ bodies: 1, depth: 1, munitions: [{ path: '', shell: GRENADE_WEAPON.shell, count: 1 }], blasts: [{ path: 'rules.0.do.0', blast: DEFAULT_GRENADE.blast, count: 1 }], targets: 0 });
+    expect(weaponBudget(GRENADE_WEAPON)).toEqual({ bodies: 1, depth: 1, munitions: [{ path: '', shell: GRENADE_WEAPON.shell, count: 1 }], blasts: [{ path: 'rules.0.do.0', blast: DEFAULT_GRENADE.blast, count: 1 }], forced: 0, forces: [], targets: 0 });
   });
 
   it('two splits of the same child add up (an upper bound), and the cap is MAX_WEAPON_BODIES', () => {
@@ -228,5 +228,49 @@ describe('split patterns', () => {
     // Same numbers on every call (no Math.random, no Math.sin).
     expect(splitDirections(8, 'sphere')).toEqual(splitDirections(8, 'sphere'));
     expect(splitDirections(4, 'ring').map((v) => v.map((x) => Math.round(x * 1e12) / 1e12 + 0))).toEqual([[1, 0, 0], [0, 0, 1], [-1, 0, 0], [0, 0, -1]]);
+  });
+
+  it('a fan is a level arc across the heading, from -angle to +angle of it; one child goes along it', () => {
+    const axis: [number, number, number] = [0.6, 0, 0.8];
+    const d = splitDirections(5, 'fan', 30, axis);
+    for (const v of d) {
+      expect(Math.hypot(...v)).toBeCloseTo(1, 14);
+      expect(v[1]).toBeCloseTo(0, 15);
+    }
+    expect(d.map((v) => Math.round((Math.acos(v[0] * 0.6 + v[2] * 0.8) * 180) / Math.PI * 1e9) / 1e9)).toEqual([30, 15, 0, 15, 30]);
+    // Left to right, symmetric about the heading.
+    expect(d[0]![0] * 0.8 - d[0]![2] * 0.6).toBeCloseTo(-(d[4]![0] * 0.8 - d[4]![2] * 0.6), 14);
+    expect(splitDirections(1, 'fan', 30, axis)[0]).toEqual(axis);
+    expect(splitPattern(5, 'fan').axes).toBe('heading');
+    expect(splitPattern(5, 'cone').axes).toBe('heading');
+    expect(splitPattern(5, 'ring').axes).toBe('world');
+    expect(splitPattern(5, 'sphere').axes).toBe('world');
+  });
+
+  it('conserve centres every pattern: its directions sum to zero, so the burst adds no momentum', () => {
+    for (const p of ['ring', 'sphere', 'cone', 'fan'] as const) for (const n of [1, 2, 5, 12]) {
+      const { dirs } = splitPattern(n, p, 40, true);
+      for (let k = 0; k < 3; k++) expect(Math.abs(dirs.reduce((a, v) => a + v[k]!, 0))).toBeLessThan(1e-14);
+      // Centring takes off the mean only: differences between children are kept.
+      const raw = splitPattern(n, p, 40).dirs;
+      for (let i = 1; i < n; i++) for (let k = 0; k < 3; k++) expect(dirs[i]![k]! - dirs[0]![k]!).toBeCloseTo(raw[i]![k]! - raw[0]![k]!, 14);
+    }
+    // A conserving cone is a ring across the heading.
+    for (const v of splitDirections(6, 'cone', 40, [0, 0, 1], true)) expect(v[2]).toBeCloseTo(0, 15);
+  });
+
+  it('conserve is a boolean, written after at; children that do not weigh what the munition weighed are a warning', () => {
+    const t = clone(FIREWORK);
+    (t.rules[0]!.do[0] as unknown as { split: Record<string, unknown> }).split.conserve = 'yes';
+    expect(codes(t)).toEqual(['type']);
+    // 8 stars of radius 0.2 at density 4 weigh 1/8 of the 0.4 shell's mass x 8 = 1 x: no warning; at density 2, half.
+    const ok = clone(FIREWORK);
+    (ok.rules[0]!.do[0] as { split: { conserve?: boolean } }).split.conserve = true;
+    expect(codes(ok, 'warn')).toEqual([]);
+    expect(writeWeapon(ok)).toMatch(/"at": 0.9,\n\s*"conserve": true/);
+    const light = clone(ok);
+    light.children!.star!.shell.density = 2;
+    expect(codes(light, 'warn')).toEqual(['mass']);
+    expect(validateWeapon(light).issues[0]!.message).toMatch(/0\.500 x the munition/);
   });
 });

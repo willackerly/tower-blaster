@@ -1,7 +1,8 @@
 // Shots. Every player action is a quantised integer record, so a session is
 // replayed exactly from (level, shots) and a shot fits in a few bytes. A shot
 // becomes one engine spawn event; nothing else about the engine is touched.
-import { type BodyDesc, massOf, type RemoveEvent, type SpawnEvent, TAG_BALL, type Vec3 } from '@tb/engine-api';
+import { type BodyDesc, type BodyMotion, type CheckedForce, checkForce, forceAt, massOf, type RemoveEvent, type SpawnEvent, TAG_BALL, type Vec3 } from '@tb/engine-api';
+import { forceOfAction, stepsOf, type TimedForce } from '@tb/weapons';
 import { GRAVITY } from './materials.ts';
 import { AMMO, isRackItem, type ItemFrame, type ItemSpec, itemSpec, type LaunchItem, PLUNGER, PULL, RACK_ITEM_NAMES, type RackItem, speedOf } from './rack.ts';
 
@@ -219,13 +220,32 @@ export function ammoKE(ev: SpawnEvent): number {
  * then x += v dt) over `substeps` equal substeps per step. Engines differ
  * here: Rapier substeps once per solver iteration (4 by default), which puts
  * a single-substep prediction 6 cm off after one second.
+ *
+ * motor: a weapon shell's timed forces (ItemSpec.motor): each acts from its
+ * step (after, in steps from the spawn) for its burn, as the runtime pushes it
+ * and every engine applies it (engine-api force.ts): at the start of a step,
+ * v += dt F / m from the state then (per unit mass here), a later one replacing
+ * an earlier. The shell spins as it flies in an engine, so a thrust in body
+ * axes is flown as if it did not: exact for heading and world axes only.
  */
-export function predictArc(ev: SpawnEvent, g: Vec3, dt: number, steps: number, substeps = 1): Float64Array {
+export function predictArc(ev: SpawnEvent, g: Vec3, dt: number, steps: number, substeps = 1, motor: readonly TimedForce[] = []): Float64Array {
   const out = new Float64Array(3 * (steps + 1));
-  const x = [...ev.body.pos], v = [...ev.body.linVel], h = dt / substeps;
+  const x = [...ev.body.pos] as Vec3, v = [...ev.body.linVel] as Vec3, h = dt / substeps;
+  const forces: { from: number; to: number; f: CheckedForce }[] = motor.map((m) => {
+    const f = checkForce(forceOfAction(m.action, 1, dt)), from = stepsOf(m.after, dt);
+    return { from, to: from + f.steps, f };
+  });
   out.set(x, 0);
   for (let n = 1; n <= steps; n++) {
-    for (let s = 0; s < substeps; s++) for (let k = 0; k < 3; k++) { v[k]! += g[k]! * h; x[k]! += v[k]! * h; }
+    // The step from state n - 1 is engine step n - 1 after the spawn.
+    const k = n - 1;
+    let on: (typeof forces)[number] | null = null;
+    for (const f of forces) if (f.from <= k && (!on || f.from >= on.from)) on = f;
+    if (on && k < on.to) {
+      const b: BodyMotion = { pos: x, rot: ev.body.rot, linVel: v, angVel: [0, 0, 0] }, a = forceAt(on.f, k - on.from, dt, b);
+      for (let i = 0; i < 3; i++) v[i]! += dt * a[i]!;
+    }
+    for (let s = 0; s < substeps; s++) for (let i = 0; i < 3; i++) { v[i]! += g[i]! * h; x[i]! += v[i]! * h; }
     out.set(x, 3 * n);
   }
   return out;
@@ -258,13 +278,13 @@ export function aimAt(f: ShotFrame, ammo: LaunchItem, at: { az: number; y: numbe
   const th = Math.atan2(target[2] - p[2], target[0] - p[0]);
   let yaw = Math.round(((th - (at.az * 0.5 * DEG + Math.PI)) / DEG) * 10);
   yaw = ((((yaw + 1800) % 3600) + 3600) % 3600) - 1800;
-  const g: Vec3 = [0, -GRAVITY, 0];
+  const g: Vec3 = [0, -GRAVITY, 0], motor = itemSpec(ammo, f).motor ?? [];
   const errorAt = new Map<number, number>();
   const err = (pitch: number) => {
     let e = errorAt.get(pitch);
     if (e === undefined) {
       const shot: LaunchShot = { ammo, az: at.az, y: at.y, yaw, pitch, power: at.power };
-      e = closestApproach(predictArc(shotToSpawn(f, shot, 0), g, dt, maxSteps, substeps), target);
+      e = closestApproach(predictArc(shotToSpawn(f, shot, 0), g, dt, maxSteps, substeps, motor), target);
       errorAt.set(pitch, e);
     }
     return e;

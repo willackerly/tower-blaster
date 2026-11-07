@@ -19,21 +19,35 @@
 //           before it (an open one cannot fire up to the lookahead).
 // A rule fires once. Its events go out (are released) when no other rule of
 // the munition that removes or splits it could still fire first, so nothing
-// acts on a removed munition, which engines refuse; a split's also wait until
-// its step is within the lookahead (its children start from the munition's
-// state then). A step already passed when it is released (a reader observing
-// less often than it looks ahead) is moved to the next one.
+// acts on a removed munition, which engines refuse. A step already passed when
+// it is released (a reader observing less often than it looks ahead) is moved
+// to the next one.
 //
-// A split places `into` children on its pattern (splitDirections) around the
-// munition's state at the split step: the free-flight prediction from the
-// observed state, right while it flies free, to rounding: the engines'
-// free flight and freeFlight agree to an ulp or so, not bit for bit, so a
-// reader observing less often places children alike, not identically (a
-// later engine primitive spawns relative to the live state: docs/design/
-// weapons.md step 5). Each child
-// starts at pos + at * dir with velocity vel + spread * dir, unrotated and
-// not spinning, then the munition is removed. Children run their own rules
-// from their spawn step.
+// A split spawns `into` children relative to the munition (engine-api spawn.ts:
+// SpawnEvent.from), so the engine places them from the munition's own state as
+// the split step starts, whatever the reader saw of it and when: every reader
+// cadence that fires the split at the same step spawns the same children, bit
+// for bit. Each child starts at `at` along its pattern direction (splitPattern:
+// ring and sphere in world axes, cone and fan in heading axes, around the
+// munition's velocity), moving with the munition plus `spread` along the
+// direction (and with its spin, which the engine adds), then the munition is
+// removed. With `conserve` the directions are centred first (their mean taken
+// off), so the offsets and the spreads sum to zero and the children's centre of
+// mass carries the munition's position and momentum on (per unit mass: equal to
+// the munition's own when the children weigh what it weighed). Children run
+// their own rules from their spawn step.
+//
+// A thrust or vibrate action pushes an engine-api ForceEvent on the munition
+// at the rule's step: accel x its mass (shell density x volume), for `for`
+// seconds rounded to steps (at least one). Engines refuse a queue that would
+// force more than MAX_FORCED bodies at once, so the runtime counts the forces
+// it has pushed (each from its step to its end or the munition's removal) and
+// drops one that could make MAX_FORCED + 1 (forcesDropped counts them): it
+// counts every force it pushed that overlaps the new one in steps, an upper
+// bound on how many act together. Forces anyone else pushes are not counted.
+// Near and apex triggers look ahead along the free-flight path (no force):
+// with a lookahead of one step a force a moves the path by h^2 a, under a
+// millimetre for any built-in.
 //
 // Ids: a child's id is whatever the engine gives its spawn, by the engine's
 // numbering (spawns in the order they apply: by step, then push order). The
@@ -51,11 +65,12 @@
 // the step given), so the caller can drop a charge whose host has gone
 // before its events reach the engine (drop). A charge whose host shows as
 // removed (Snapshot.tier TIER_FREE) is dropped by observe.
-import { type BodyDesc, freeFlight, type InputEvent, type ShapeDesc, type Snapshot, type SpawnEvent, TIER_FREE, type Vec3 } from '@tb/engine-api';
+import { type BodyDesc, type Force, type ForceEvent, type InputEvent, MAX_FORCED, type ShapeDesc, type Snapshot, type SpawnEvent, TIER_FREE, type Vec3, volumeOf } from '@tb/engine-api';
 import { boundingRadius } from '@tb/geom';
 import { checkGrenade, flightPath, type GrenadeSpec, type GrenadeWorld, type PathPoint, proximityStep, stepsOf } from './grenade.ts';
 import {
-  type Action, chargeProblems, checkWeapon, grenadeAsSpec, isWeaponSpec, type MunitionSpec, type Rule, splitDirections, thrownProblems, type Trigger, type WeaponSpec, WeaponSpecError,
+  type Action, chargeProblems, checkWeapon, grenadeAsSpec, isForceAction, isWeaponSpec, type MunitionSpec, type Rule, splitPattern, thrownProblems, type ThrustSpec, type Trigger,
+  type VibrateSpec, type WeaponSpec, WeaponSpecError,
 } from './spec.ts';
 
 /** Friction and restitution of a shell that sets none (BodyDesc needs both). */
@@ -77,7 +92,6 @@ interface RuleLive {
   /** The step it fires at, once committed. */
   due: number | null;
   spends: boolean;
-  splits: boolean;
 }
 
 interface Live {
@@ -90,6 +104,8 @@ interface Live {
   /** Step its spawn is due: the clock of its after triggers. */
   base: number;
   rules: RuleLive[];
+  /** Its shell's mass (forces are accel x mass). */
+  mass: number;
   /** A charge: its point in its host's frame (id is the host); null for a munition with a body. */
   charge: Vec3 | null;
 }
@@ -108,8 +124,39 @@ const spends = (a: Action) => 'remove' in a || 'removeTarget' in a || 'split' in
 /** Whether a trigger has a clock running towards a step it will fire at (a timer), rather than only watching. */
 const ticking = (n: Node): boolean => n.k === 'after' || (n.k === 'then' ? ticking(n.aStep === null ? n.a : n.b) : n.k === 'any' && n.xs.some(ticking));
 
+/** The engine-api Force a thrust or vibrate action puts on a munition of `mass` in a world of step `dt`: accel x mass, its burn in steps (at least 1). */
+export function forceOfAction(a: { thrust: ThrustSpec } | { vibrate: VibrateSpec }, mass: number, dt: number): Force {
+  const t = 'thrust' in a ? a.thrust : a.vibrate, steps = Math.max(1, stepsOf(t.for, dt));
+  const F: Vec3 = [t.accel[0] * mass, t.accel[1] * mass, t.accel[2] * mass];
+  if ('thrust' in a) return { steps, thrust: F, axes: a.thrust.axes ?? 'heading' };
+  return { steps, vibrate: F, period: a.vibrate.period, ...(a.vibrate.phase ? { phase: a.vibrate.phase } : {}) };
+}
+
+/** A force a munition takes on a timer from its spawn (a rule whose trigger is `after` alone): s after it, and the action. */
+export interface TimedForce { after: number; action: { thrust: ThrustSpec } | { vibrate: VibrateSpec } }
+
+/**
+ * The forces munition `m` is sure to take on timers, in rule then action order (a later one at the same step
+ * replaces an earlier, as in the engines): its motor, which an aim can fly. Rules after a timer that spends it
+ * are left out (as the runtime drops them); forces on other triggers (near, apex) are not foreseeable and are
+ * left out too.
+ */
+export function timedForces(m: MunitionSpec): TimedForce[] {
+  const spentAt = Math.min(...m.rules.filter((r) => 'after' in r.when && r.do.some(spends)).map((r) => (r.when as { after: number }).after));
+  const out: TimedForce[] = [];
+  for (const r of m.rules) {
+    if (!('after' in r.when) || r.when.after > spentAt) continue;
+    for (const a of r.do) if (isForceAction(a)) out.push({ after: r.when.after, action: a });
+  }
+  return out;
+}
+
 export class WeaponRuntime {
   private live: Live[] = [];
+  /** Forces pushed, by munition: [from, to) in steps (to shortened when it is removed). */
+  private forced: { live: Live; from: number; to: number }[] = [];
+  /** Force actions dropped because MAX_FORCED bodies could already be forced then. */
+  forcesDropped = 0;
 
   /** lookahead: steps beyond each observed state to predict (about the steps between observations). */
   constructor(readonly world: GrenadeWorld, readonly lookahead = 1) {
@@ -139,11 +186,11 @@ export class WeaponRuntime {
     const spec = isWeaponSpec(weapon) ? checkWeapon(weapon) : grenadeAsSpec(checkGrenade(weapon), { shape, density: 1, speed: [0, 0] });
     const bad = thrownProblems(spec);
     if (bad.length) throw new WeaponSpecError(bad);
-    const g: Live = { id, spawn: null, m: spec, radius: boundingRadius(shape), base: step, rules: spec.rules.map((r) => this.ruleLive(r)), charge: null };
+    const g: Live = { id, spawn: null, m: spec, radius: boundingRadius(shape), base: step, rules: spec.rules.map((r) => this.ruleLive(r)), charge: null, mass: spec.shell.density * volumeOf(shape) };
     this.live.push(g);
-    const out: InputEvent[] = [];
-    this.pass(g, null, out, []);
-    this.live = this.live.filter((x) => x.rules.length);
+    const out: InputEvent[] = [], born: Live[] = [];
+    this.pass(g, null, out, born);
+    this.live = [...this.live.filter((x) => x.rules.length), ...born];
     return out;
   }
 
@@ -158,7 +205,7 @@ export class WeaponRuntime {
     const spec = checkWeapon(weapon), bad = chargeProblems(spec);
     if (bad.length) throw new WeaponSpecError(bad);
     if (!Number.isInteger(host) || host < 0) throw new Error(`WeaponRuntime.attach: bad host ${host}`);
-    const g: Live = { id: host, spawn: null, m: spec, radius: 0, base: step, rules: spec.rules.map((r) => this.ruleLive(r)), charge: [point[0], point[1], point[2]] };
+    const g: Live = { id: host, spawn: null, m: spec, radius: 0, base: step, rules: spec.rules.map((r) => this.ruleLive(r)), charge: [point[0], point[1], point[2]], mass: 0 };
     this.live.push(g);
     const out: InputEvent[] = [];
     if (now) {
@@ -202,6 +249,7 @@ export class WeaponRuntime {
       this.pass(g, seen, out, born);
     }
     this.live = [...this.live.filter((g) => g.rules.length), ...born];
+    this.forced = this.forced.filter((f) => f.to > step);
     return out;
   }
 
@@ -215,7 +263,7 @@ export class WeaponRuntime {
       if ('then' in t) return { k: 'then', a: node(t.then[0]), b: node(t.then[1]), aStep: null };
       return { k: 'any', xs: t.any.map(node) };
     };
-    return { rule, node: node(rule.when), due: null, spends: rule.do.some(spends), splits: rule.do.some((a) => 'split' in a) };
+    return { rule, node: node(rule.when), due: null, spends: rule.do.some(spends) };
   }
 
   /** The step `n` commits to, with its clock at `base`; null: not at any step up to the horizon. */
@@ -278,7 +326,6 @@ export class WeaponRuntime {
       const at = Math.max(next.due!, g.charge ? floor! : seen ? seen.step + 1 : -Infinity);
       // Another rule that spends g and is still open could fire before it.
       if (g.rules.some((r) => r !== next && r.spends && r.due === null) && at > horizon) return;
-      if (next.splits && (!seen || at > Math.max(horizon, seen.step + 1))) return;
       this.fire(g, next, at, seen, out, born);
       g.rules = next.spends ? [] : g.rules.filter((r) => r !== next);
     }
@@ -286,6 +333,7 @@ export class WeaponRuntime {
 
   private fire(g: Live, r: RuleLive, step: number, seen: Seen | null, out: InputEvent[], born: Live[]): void {
     const id = g.id!;
+    const spent = () => { for (const f of this.forced) if (f.live === g) f.to = Math.min(f.to, step); };
     if (g.charge) {
       for (const a of r.rule.do) {
         if ('removeTarget' in a) out.push({ step, kind: 'remove', id });
@@ -301,39 +349,42 @@ export class WeaponRuntime {
       return;
     }
     for (const a of r.rule.do) {
-      if ('remove' in a) out.push({ step, kind: 'remove', id });
+      if ('remove' in a) { out.push({ step, kind: 'remove', id }); spent(); }
       else if ('blast' in a) {
         const { offset, ...b } = a.blast;
         out.push({ step, kind: 'blast', blast: { centre: offset ? { body: id, offset } : { body: id }, exclude: [id], ...b } });
+      } else if ('thrust' in a || 'vibrate' in a) {
+        const force = forceOfAction(a, g.mass, this.world.dt), steps = force.steps;
+        // An overlapping force of this munition is replaced by this one (engine-api force.ts), so it does not count.
+        const others = this.forced.filter((f) => f.live !== g && f.from < step + steps && f.to > step).length;
+        if (others >= MAX_FORCED) { this.forcesDropped++; continue; }
+        for (const f of this.forced) if (f.live === g && f.to > step) f.to = Math.max(f.from, step);
+        this.forced.push({ live: g, from: step, to: step + steps });
+        const ev: ForceEvent = { step, kind: 'force', id, force };
+        out.push(ev);
       } else if ('split' in a) {
+        // Children in the munition's frame; the engine places them from its state as the step starts (spawn.ts).
         const sp = a.split, child = g.m.children![sp.child]!;
-        // The munition's state at the split step, from the observed state.
-        const last = seen!.path[seen!.path.length - 1]!;
-        let { p, v } = seen!.path.find((q) => q.step === step) ?? last;
-        if (step > last.step) {
-          const f = flightPathFrom(p, v, step - last.step, this.world);
-          p = f.p; v = f.v;
-        }
-        const speed = Math.sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]);
-        const axis: Vec3 = speed > 1e-9 ? [v[0] / speed, v[1] / speed, v[2] / speed] : [0, 1, 0];
         const dist = sp.at ?? g.radius, spread = sp.spread ?? 0;
-        for (const d of splitDirections(sp.into, sp.pattern ?? 'sphere', sp.angle ?? 30, axis)) {
+        const { dirs, axes } = splitPattern(sp.into, sp.pattern ?? 'sphere', sp.angle ?? 30, sp.conserve ?? false);
+        for (const d of dirs) {
           const body: BodyDesc = {
             shape: child.shell.shape,
-            pos: [p[0] + dist * d[0], p[1] + dist * d[1], p[2] + dist * d[2]],
+            pos: [dist * d[0], dist * d[1], dist * d[2]],
             rot: [0, 0, 0, 1],
-            linVel: [v[0] + spread * d[0], v[1] + spread * d[1], v[2] + spread * d[2]],
+            linVel: [spread * d[0], spread * d[1], spread * d[2]],
             angVel: [0, 0, 0],
             density: child.shell.density,
             friction: child.shell.friction ?? SHELL_FRICTION,
             restitution: child.shell.restitution ?? SHELL_RESTITUTION,
             tag: 0,
           };
-          const spawn: SpawnEvent = { step, kind: 'spawn', body };
+          const spawn: SpawnEvent = { step, kind: 'spawn', body, from: { body: id, axes } };
           out.push(spawn);
-          born.push({ id: null, spawn, m: child, radius: boundingRadius(child.shell.shape), base: step, rules: child.rules.map((cr) => this.ruleLive(cr)), charge: null });
+          born.push({ id: null, spawn, m: child, radius: boundingRadius(child.shell.shape), base: step, rules: child.rules.map((cr) => this.ruleLive(cr)), mass: body.density * volumeOf(body.shape), charge: null });
         }
         out.push({ step, kind: 'remove', id });
+        spent();
       }
     }
   }
@@ -346,10 +397,3 @@ function rotate(q: [number, number, number, number], v: Vec3): Vec3 {
   return [v[0] + w * tx + (y * tz - z * ty), v[1] + w * ty + (z * tx - x * tz), v[2] + w * tz + (x * ty - y * tx)];
 }
 
-function flightPathFrom(p: Vec3, v: Vec3, steps: number, world: GrenadeWorld): { p: Vec3; v: Vec3 } {
-  let pos = p, vel = v;
-  for (let k = 0; k < steps; k++) ({ pos, vel } = freeFlightStep(pos, vel, world));
-  return { p: pos, v: vel };
-}
-
-const freeFlightStep = (p: Vec3, v: Vec3, w: GrenadeWorld) => freeFlight(p, v, w.gravity, w.dt, w.substeps, 1);

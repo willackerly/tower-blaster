@@ -9,7 +9,7 @@
 import { describe, expect, it } from 'vitest';
 import { type BodyDesc, type InputEvent, queueInputs, type SceneDesc, type ShapeDesc, type Snapshot, type SpawnEvent, type Vec3 } from '@tb/engine-api';
 import { AvbdReferenceEngine } from '@tb/physics-ref';
-import { CLUSTER, DEFAULT_GRENADE, FIREWORK, GRENADE_M, grenadeAsSpec, type GrenadeWorld, previewWeapon, type PreviewLaunch, weaponBudget, type WeaponSpec, WeaponRuntime } from '../src/index.ts';
+import { CLUSTER, DEFAULT_GRENADE, FIREWORK, GRENADE_M, ROCKET, grenadeAsSpec, type GrenadeWorld, previewWeapon, type PreviewLaunch, weaponBudget, type WeaponSpec, WeaponRuntime } from '../src/index.ts';
 
 const DT = 1 / 60;
 const WORLD: GrenadeWorld = { dt: DT, substeps: 1, gravity: [0, -9.81, 0], groundY: 0 };
@@ -124,6 +124,30 @@ describe('previewWeapon: the arc preview is the fired path', () => {
     // It split on nearing the wall (near 3), well before the 6 s timer.
     expect(pre.tracks[0]!.points.length - 1).toBeLessThan(30);
     expect(pre.blasts).toHaveLength(6);
+  });
+
+  it('the rocket: its motor (a heading thrust) in the track, exactly, and its blast where it lands', async () => {
+    const sh = ROCKET.shell;
+    const { pre, exact } = await agree(ROCKET, { shape: sh.shape, pos: [0, 1.5, 0], vel: [10, 6, 0], density: sh.density }, 300);
+    expect(pre.tracks).toHaveLength(1);
+    expect(pre.blasts).toHaveLength(1);
+    // Its fuse sees the ground well past the burn (steps 6 to 66), in the air, far beyond a coasting shell's reach.
+    expect(pre.tracks[0]!.contact).toBeNull();
+    expect(pre.blasts[0]!.step).toBeGreaterThan(66);
+    expect(pre.blasts[0]!.centre[0]).toBeGreaterThan(40);
+    expect(exact).toBe(1);
+  });
+
+  it('a shaker: a world vibration in the track, exactly', async () => {
+    const spec: WeaponSpec = {
+      version: 1, shell: { shape: BALL, density: 6, speed: [5, 20] },
+      rules: [{ when: { after: 0.05 }, do: [{ vibrate: { accel: [0, 0, 60], period: 0.25, phase: 0.1, for: 0.8 } }] }, { when: { after: 1 }, do: [{ blast: { radius: 2, impulse: 5 } }, { remove: true }] }],
+    };
+    const { pre, exact } = await agree(spec, { shape: BALL, pos: [0, 2, 0], vel: [6, 8, 0], density: 6 }, 90);
+    expect(pre.tracks[0]!.contact).toBeNull();
+    expect(exact).toBe(1);
+    // It swung sideways and back: off the plane of its launch while it shook.
+    expect(Math.max(...pre.tracks[0]!.points.map((p) => Math.abs(p[2])))).toBeGreaterThan(0.1);
   });
 
   it('the M grenade fired flat: a proximity fuse on the ground', async () => {

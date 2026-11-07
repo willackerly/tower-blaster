@@ -21,7 +21,10 @@
 // blast centred on a removed body (checkInputQueue).
 import type { InputEvent } from './index.ts';
 import { checkBlast } from './blast.ts';
+import { checkForce, MAX_FORCED } from './force.ts';
+import { checkSpawnFrom } from './spawn.ts';
 import { checkField } from './field.ts';
+import { isPinned } from './pinned.ts';
 
 /** Snapshot.tier of a removed body: @tb/schema TIER.free (an unused slot; every render pass skips it). */
 export const TIER_FREE = 255;
@@ -30,14 +33,40 @@ export const TIER_FREE = 255;
  * Throws unless every event in `queue` (the events an engine will apply, in
  * order) can be applied: each field event passes checkField (field.ts); each blast passes checkBlast and, centred on a body,
  * names one that exists and is not removed when it is due; each removal names
- * a body that exists then and is not removed yet. `existing` bodies are there
- * at the start, `removed` of them already removed.
+ * a body that exists then and is not removed yet; each relative spawn
+ * (spawn.ts) passes checkSpawnFrom, is not pinned, and names a parent that exists at the start
+ * of its step and was not removed at an earlier step; each force event
+ * (force.ts) names a body that exists then and is not removed, its force
+ * passes checkForce, and no step has forces on more than MAX_FORCED bodies.
+ * `existing` bodies are there at the start, `removed` of them already
+ * removed, `forcing` of them under a force until the step it maps them to
+ * (exclusive; ForceTable.ends). `now`: the engine's stepIndex, when events due
+ * at past steps all apply at the next step (so they share its start).
  */
-export function checkInputQueue(existing: number, queue: readonly InputEvent[], removed: ReadonlySet<number> = new Set()): void {
-  let n = existing;
-  const gone = new Set(removed);
+export function checkInputQueue(existing: number, queue: readonly InputEvent[], removed: ReadonlySet<number> = new Set(), now = 0, forcing: ReadonlyMap<number, number> = new Map()): void {
+  let n = existing, atStart = existing, step = -Infinity;
+  const gone = new Set(removed), forced = new Map(forcing);
+  let goneAtStart = new Set(gone);
+  // The bodies under a force at `step`, once all its events have applied.
+  const crowded = () => {
+    let k = 0;
+    for (const end of forced.values()) if (end > step) k++;
+    if (k > MAX_FORCED) throw new Error(`forces at step ${step} act on ${k} bodies, more than MAX_FORCED (${MAX_FORCED})`);
+  };
   for (const ev of queue) {
-    if (ev.kind === 'spawn') { n++; continue; }
+    const due = Math.max(ev.step, now);
+    if (due !== step) { if (step >= now) crowded(); step = due; atStart = n; goneAtStart = new Set(gone); }
+    if (ev.kind === 'spawn') {
+      if (ev.from !== undefined) {
+        const p = checkSpawnFrom(ev.from).body;
+        if (p >= atStart) throw new Error(`spawn at step ${ev.step} is relative to body ${p}, which does not exist at the start of that step (${atStart} bodies)`);
+        if (goneAtStart.has(p)) throw new Error(`spawn at step ${ev.step} is relative to body ${p}, which is removed before that step`);
+        // A pinned body is bolted to the world (pinned.ts): it is placed in the world's frame, never a parent's.
+        if (isPinned(ev.body)) throw new Error(`spawn at step ${ev.step} is pinned and relative to body ${p}; a pinned body is placed in world coordinates`);
+      }
+      n++;
+      continue;
+    }
     if (ev.kind === 'field') { checkField(ev); continue; }
     if (ev.kind === 'remove') {
       const id = ev.id;
@@ -45,12 +74,23 @@ export function checkInputQueue(existing: number, queue: readonly InputEvent[], 
       if (id >= n) throw new Error(`remove at step ${ev.step} names body ${id}, which does not exist then (${n} bodies)`);
       if (gone.has(id)) throw new Error(`remove at step ${ev.step} names body ${id}, which is already removed`);
       gone.add(id);
+      forced.delete(id);
+      continue;
+    }
+    if (ev.kind === 'force') {
+      const id = ev.id;
+      if (!Number.isInteger(id) || id < 0) throw new Error(`force at step ${ev.step}: id must be a body id, got ${JSON.stringify(id)}`);
+      if (id >= n) throw new Error(`force at step ${ev.step} names body ${id}, which does not exist then (${n} bodies)`);
+      if (gone.has(id)) throw new Error(`force at step ${ev.step} names body ${id}, which is removed then`);
+      if (ev.force === null) forced.delete(id);
+      else forced.set(id, due + checkForce(ev.force).steps);
       continue;
     }
     const b = checkBlast(ev.blast);
     if (b.body >= n) throw new Error(`blast at step ${ev.step} is centred on body ${b.body}, which does not exist then (${n} bodies)`);
     if (b.body >= 0 && gone.has(b.body)) throw new Error(`blast at step ${ev.step} is centred on body ${b.body}, which is removed then`);
   }
+  if (step >= now) crowded();
 }
 
 /** checkInputQueue, by its earlier name (a queue of spawns and blasts). */

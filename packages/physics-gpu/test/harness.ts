@@ -29,8 +29,8 @@ export const toSnap = (p: Drivers.PlainSnapshot): Snapshot => {
   if (p.tier) s.tier = Uint8Array.from(p.tier);
   return s;
 };
-export async function runGpu(scene: SceneDesc, steps: number, params: Partial<AvbdParams> = {}, every = 0, kicks: Drivers.Kick[] = []) {
-  const r = await call('simulateGpu', scene, steps, params, every, {}, kicks);
+export async function runGpu(scene: SceneDesc, steps: number, params: Partial<AvbdParams> = {}, every = 0, kicks: Drivers.Kick[] = [], opts: Parameters<D['simulateGpu']>[4] = {}) {
+  const r = await call('simulateGpu', scene, steps, params, every, opts, kicks);
   expect(r.error).toBeNull();
   // No step dropped broadphase pairs: every step, not only the sampled ones (the broadphase's sticky counter).
   expect(r.final.pairsOverflowSteps).toBe(0);
