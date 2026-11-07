@@ -86,6 +86,7 @@ export function thresholdText(metric: StarMetric, t: number): string {
     case 'pulled': return `${pct(t)} pulled`;
     case 'energy': return `a quake of ${Math.round(t)} J or less`;
     case 'fold': return `${pct(t)} folded`;
+    case 'built': return `braced with ${Math.round(t)} blocks or fewer`;
   }
 }
 
@@ -102,7 +103,7 @@ const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 
 /** A star threshold as a bare number: "70%", "3,200". */
 export function thresholdShort(metric: StarMetric, t: number): string {
-  return metric === 'collapse' || metric === 'skyline' || metric === 'pulled' || metric === 'fold' ? pct(t) : metric === 'energy' ? `${Math.round(t)} J` : fmtPoints(Math.round(t));
+  return metric === 'collapse' || metric === 'skyline' || metric === 'pulled' || metric === 'fold' ? pct(t) : metric === 'energy' ? `${Math.round(t)} J` : metric === 'built' ? `${Math.round(t)} blocks` : fmtPoints(Math.round(t));
 }
 
 /** What the objective asks, in a word or number. */

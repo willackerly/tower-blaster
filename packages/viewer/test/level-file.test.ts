@@ -1,7 +1,7 @@
 // Levels of your own: a LevelDef from JSON, the URL (level.def) or a saved
 // scene (scene.levelDef), checked strictly, and run as the game compiles it.
 import { describe, expect, it } from 'vitest';
-import { BuildSession, compileLevel, L2, L4, LEVELS, type LevelDef, PRESETTLE_STEPS, RL1, RUBE_LEVELS, U3 } from '@tb/keystone';
+import { A1, AFTERSHOCK_LEVELS, BuildSession, compileLevel, L2, L4, LEVELS, type LevelDef, PRESETTLE_STEPS, retrofitCandidate, RL1, RUBE_LEVELS, U3 } from '@tb/keystone';
 import {
   CUSTOM_LEVEL, decodeLevelParam, encodeLevelParam, LEVEL_FILE_FORMAT, levelChoice, levelIssues, levelJson, parseLevelDef, parseSceneFile, parseViewerConfig, proposeScene,
   sceneFile, sceneTitle, toSearch, viewerScene, withCustomLevel,
@@ -67,6 +67,28 @@ describe('level files', () => {
     expect(bad({ parts: [{ kind: 'ball', at: [0, 0, 0], radius: -1, material: 'stone' }] })).toThrow(/parts\[0\]\.radius/);
     expect(bad({ objective: { kind: 'bell', region: { min: [0, 0], max: [1, 1, 1] } } })).toThrow(/objective\.region\.min/);
     expect(bad({ charges: [{ host: 0, weapon: 'release', arm: 'later' }] })).toThrow(/charges\[0\]\.arm/);
+  });
+
+  it('Aftershock (M7, M7b): its levels and a braced retrofit round-trip through JSON (quake rules, a fixed quake, standing heritage, pins, the quake objective)', () => {
+    for (const def of [...AFTERSHOCK_LEVELS, retrofitCandidate('RC-1')]) {
+      const back = parseLevelDef(JSON.parse(levelJson(def)));
+      expect(back).toEqual(def);
+      expect(compileLevel(back).hash).toBe(compileLevel(def).hash);
+    }
+    // A pinned block and box part (an anchored tower's bottom storey) read back pinned.
+    const anchored = { ...A1, parts: [...A1.parts, { kind: 'block' as const, at: [9, 0, 9] as [number, number, number], size: [1, 1, 1] as [number, number, number], material: 'stone' as const, pinned: true as const }, { kind: 'slab' as const, at: [12, 0, 12] as [number, number, number], half: [1, 0.5, 1] as [number, number, number], material: 'stone' as const, pinned: true as const }] };
+    expect(parseLevelDef(JSON.parse(levelJson(anchored)))).toEqual(anchored);
+    // Braced as a player braces (a pier of three beside the first column), saved and loaded: same hash, same base hash.
+    const rc = retrofitCandidate('RC-1'), s = new BuildSession(rc), h = s.h, p = s.pitch;
+    expect(s.place(s.ghost({ body: -1, point: [-0.5 * p * h, 0, 0.5 * p * h], normal: [0, 1, 0], t: 1 }, { item: 'pier3', yaw: 0, tip: 0 }))).toBe(true);
+    const built = s.def(), back = parseLevelDef(JSON.parse(levelJson(built))), cb = compileLevel(back);
+    expect(back).toEqual(built);
+    expect([cb.hash, cb.baseHash]).toEqual([compileLevel(built).hash, compileLevel(rc).hash]);
+    const bad = (p: unknown) => () => parseLevelDef({ ...JSON.parse(levelJson(rc)), ...(p as object) });
+    expect(bad({ quake: { fixed: { peak: 30, hz: 10, sec: 10 } } })).toThrow(/quake\.fixed\.axis/);
+    expect(bad({ quake: { fixed: { peak: 30, hz: 10, sec: 10, axis: 0 }, peakMax: 40 } })).toThrow(/a fixed quake takes no peakMax/);
+    expect(bad({ quake: { hz: [10] } })).toThrow(/quake\.hz must be \[lowest, highest\]/);
+    expect(bad({ heritage: 'upright' })).toThrow(/heritage/);
   });
 
   it('reads racks and solutions holding presets and weapons (p-, w-)', () => {

@@ -69,7 +69,7 @@ export function objectiveMet(c: CompiledLevel, f: ObjectiveFacts, scoring: Scori
       && (scoring === 'outcome' || obj.footprintMax === undefined || f.red.outOfLot <= obj.footprintMax * c.meta.n);
     case 'collapse': return f.collapse >= obj.min;
     case 'hold': return c.meta.crowns.length > 0 && f.crownsTotal === 0;
-    case 'quake': return c.meta.crowns.length > 0 && f.crownsTotal === c.meta.crowns.length && (f.heritage ?? 0) === 0;
+    case 'quake': return (c.meta.crowns.length > 0 || c.def.build !== undefined) && c.meta.heritage.length > 0 && f.crownsTotal === c.meta.crowns.length && (f.heritage ?? 0) === 0;
     case 'fold': return f.collapse >= obj.min && spillOf(f.red) <= obj.spillMax + 1e-12 && (f.heritage ?? 0) === 0;
     case 'bell': return c.meta.crowns.length > 0 && f.crownsTotal === c.meta.crowns.length;
   }
@@ -94,6 +94,8 @@ export const OUTCOME_WEIGHTS = {
   footprint: -3000,
   /** Fuse & Fold: per share of the building's mass outside its lot (all of it: -3000, as the footprint line). */
   spill: -3000,
+  /** Aftershock retrofits: per unit of the build budget not spent, once the heritage stood (200 left: 2000). */
+  budgetLeft: 10,
 } as const;
 
 /** What happened in an outcome level, as of its end. */
@@ -125,6 +127,8 @@ export interface OutcomeFacts {
   energy?: number;
   /** Fold levels (Fuse & Fold): the building's spill at the end (rules.ts spillOf), 0 to 1; absent on other levels. */
   spill?: number;
+  /** Build levels (a build block): what the player placed (build.ts placedCost) and the level's budget (absent: none). */
+  built?: { spent: number; budget?: number };
 }
 
 const tri = (n: number) => (n * (n + 1)) / 2;
@@ -143,7 +147,9 @@ export function outcomeTally(f: OutcomeFacts, w = OUTCOME_WEIGHTS): ScoreLine[] 
   if (f.quake) {
     // Aftershock: each condemned tower down and each protected one broken. No Collapse or Leverage line: both pay
     // for the protected towers coming down as well. The quake's economy is the stars' metric (energy) instead.
-    lines.push({ label: 'Condemned', value: w.condemned * f.crownsDown });
+    if (f.hasCrowns) lines.push({ label: 'Condemned', value: w.condemned * f.crownsDown });
+    // A retrofit (M7b): the bracing not spent, once the heritage stood (its stars are on what was spent: built).
+    if (f.met && f.built?.budget !== undefined && f.built.budget > f.built.spent) lines.push({ label: 'Budget left', value: w.budgetLeft * (f.built.budget - f.built.spent) });
     if (f.heritageBroken) lines.push({ label: 'Heritage', value: w.heritage * f.heritageBroken });
     return lines;
   }
@@ -172,6 +178,7 @@ export function metricValue(metric: StarMetric, f: OutcomeFacts, total: number):
     case 'pulled': return f.pulled;
     case 'energy': return f.energy ?? Infinity;
     case 'fold': return foldValue(f.collapse, f.spill ?? 0);
+    case 'built': return f.built?.spent ?? Infinity;
   }
 }
 
@@ -209,7 +216,7 @@ export interface OutcomeScore extends LevelScore {
  * hold level), BEAT THE BOT past the best cast play, else how much came down ("72% DOWN"), or on a
  * hold level how much was pulled ("35% PULLED").
  */
-export function outcomeScore(f: OutcomeFacts, cast: StarsDef | undefined, metric: StarMetric = cast?.metric ?? (f.hold ? 'pulled' : f.quake ? 'energy' : 'collapse')): OutcomeScore {
+export function outcomeScore(f: OutcomeFacts, cast: StarsDef | undefined, metric: StarMetric = cast?.metric ?? (f.hold ? 'pulled' : f.quake ? (f.built ? 'built' : 'energy') : 'collapse')): OutcomeScore {
   const lines = outcomeTally(f);
   const total = floorTotal(lines);
   const value = metricValue(metric, f, total);

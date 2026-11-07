@@ -6,7 +6,7 @@
 // Whether the level is any good (overlaps, unsupported bodies, tunnelling ammo)
 // is validateLevel's question; the panel shows its issues without refusing.
 import {
-  type BuildDef, CATALOG_NAMES, checkPhysics, checkSettle, freezeProblem, checkShot, compileLevel, type CourseOverride, type Issue, type LevelDef, MATERIALS, type MaterialName, type Part, type PhysicsBlock, isRackItem, RACK_ITEM_NAMES, type RackItem, type Role, type RoleRule, ROLES, type ScenarioPart, SCORINGS, type Scoring, type Shot,
+  type BuildDef, CATALOG_NAMES, checkPhysics, checkQuakeRules, type QuakeRules, checkSettle, freezeProblem, checkShot, compileLevel, type CourseOverride, type Issue, type LevelDef, MATERIALS, type MaterialName, type Part, type PhysicsBlock, isRackItem, RACK_ITEM_NAMES, type RackItem, type Role, type RoleRule, ROLES, type ScenarioPart, SCORINGS, type Scoring, type Shot,
   STAR_METRICS, type StarMetric, type StarsDef, validateLevel,
 } from '@tb/keystone';
 import { SCENARIOS } from '@tb/scenarios';
@@ -21,7 +21,7 @@ const MATERIAL_NAMES = MATERIALS.map((m) => m.name) as readonly string[];
 /** The LevelDef a JSON value describes, or an error saying where it is wrong. */
 export function parseLevelDef(v: unknown, where = 'level'): LevelDef {
   const o = object(v, where);
-  only(o, ['format', 'id', 'name', 'version', 'world', 'unit', 'gap', 'parts', 'lot', 'crownLine', 'objective', 'par', 'rack', 'launcher', 'lGold', 'solutions', 'scoring', 'stars', 'autobank', 'settle', 'freeze', 'physics', 'custom', 'build', 'charges', 'rube'], where);
+  only(o, ['format', 'id', 'name', 'version', 'world', 'unit', 'gap', 'parts', 'lot', 'crownLine', 'objective', 'par', 'rack', 'launcher', 'lGold', 'solutions', 'scoring', 'stars', 'autobank', 'settle', 'freeze', 'physics', 'custom', 'build', 'charges', 'rube', 'quake', 'heritage'], where);
   if (o.format !== undefined && o.format !== LEVEL_FILE_FORMAT) throw new Error(`${where}.format should be "${LEVEL_FILE_FORMAT}"`);
   const id = str(o.id, `${where}.id`);
   if (!/^[\w-]{1,32}$/.test(id)) throw new Error(`${where}.id must be 1 to 32 letters, digits, - or _`);
@@ -57,6 +57,8 @@ export function parseLevelDef(v: unknown, where = 'level'): LevelDef {
   if (o.physics !== undefined) def.physics = physics(o.physics, `${where}.physics`);
   if (o.build !== undefined) def.build = build(o.build, `${where}.build`);
   if (o.charges !== undefined) def.charges = arr(o.charges, `${where}.charges`).map((c, i) => charge(c, `${where}.charges[${i}]`));
+  if (o.quake !== undefined) def.quake = quakeRules(o.quake, `${where}.quake`);
+  if (o.heritage !== undefined) def.heritage = oneOf(o.heritage, ['pose', 'standing'], `${where}.heritage`) as 'pose' | 'standing';
   if (o.rube !== undefined) {
     const r = object(o.rube, `${where}.rube`);
     only(r, ['partsPar'], `${where}.rube`);
@@ -73,6 +75,29 @@ function charge(v: unknown, where: string): NonNullable<LevelDef['charges']>[num
   if (o.at !== undefined) c.at = vec3(o.at, `${where}.at`);
   if (o.arm !== undefined) c.arm = oneOf(o.arm, ['plunger', 'start'], `${where}.arm`) as 'plunger' | 'start';
   return c;
+}
+
+/** Aftershock's quake rules (@tb/keystone QuakeRules), ranges as checkQuakeRules. */
+function quakeRules(v: unknown, where: string): QuakeRules {
+  const o = object(v, where);
+  only(o, ['peakMax', 'hz', 'sec', 'budget', 'axisStep', 'fixed'], where);
+  const q: QuakeRules = {};
+  if (o.peakMax !== undefined) q.peakMax = int(o.peakMax, `${where}.peakMax`);
+  if (o.axisStep !== undefined) q.axisStep = int(o.axisStep, `${where}.axisStep`);
+  if (o.budget !== undefined) q.budget = positive(o.budget, `${where}.budget`);
+  for (const k of ['hz', 'sec'] as const) {
+    if (o[k] === undefined) continue;
+    const a = arr(o[k], `${where}.${k}`);
+    if (a.length !== 2) throw new Error(`${where}.${k} must be [lowest, highest]`);
+    q[k] = [int(a[0], `${where}.${k}[0]`), int(a[1], `${where}.${k}[1]`)];
+  }
+  if (o.fixed !== undefined) {
+    const f = object(o.fixed, `${where}.fixed`);
+    only(f, ['peak', 'hz', 'sec', 'axis'], `${where}.fixed`);
+    q.fixed = { peak: int(f.peak, `${where}.fixed.peak`), hz: int(f.hz, `${where}.fixed.hz`), sec: int(f.sec, `${where}.fixed.sec`), axis: int(f.axis, `${where}.fixed.axis`) };
+  }
+  checkQuakeRules(q, where);
+  return q;
 }
 
 /** An outcome level's cast thresholds (@tb/keystone StarsDef). */
@@ -151,17 +176,17 @@ function part(v: unknown, where: string): Part {
     return r;
   }
   if (kind === 'block') {
-    only(o, ['kind', 'at', 'size', 'material', 'role', 'courses'], where);
+    only(o, ['kind', 'at', 'size', 'material', 'role', 'courses', 'pinned'], where);
     const size = vec3(o.size, `${where}.size`);
     if (size.some((x) => !Number.isInteger(x) || x < 1)) throw new Error(`${where}.size must be three whole numbers of cubes, each at least 1`);
-    const p: Part = { kind, at: vec3(o.at, `${where}.at`), size, material, ...(role ? { role } : {}) };
+    const p: Part = { kind, at: vec3(o.at, `${where}.at`), size, material, ...(role ? { role } : {}), ...pinned };
     if (o.courses !== undefined) p.courses = arr(o.courses, `${where}.courses`).map((c, i) => course(c, `${where}.courses[${i}]`));
     return p;
   }
-  only(o, ['kind', 'at', 'half', 'material', 'role'], where);
+  only(o, ['kind', 'at', 'half', 'material', 'role', 'pinned'], where);
   const half = vec3(o.half, `${where}.half`);
   if (half.some((x) => !(x > 0))) throw new Error(`${where}.half must be three numbers above 0`);
-  return { kind, at: vec3(o.at, `${where}.at`), half, material, ...(role ? { role } : {}) };
+  return { kind, at: vec3(o.at, `${where}.at`), half, material, ...(role ? { role } : {}), ...pinned };
 }
 
 /** A scenario as a part (@tb/keystone ScenarioPart); its params are checked by building it, at compile. */
@@ -229,9 +254,9 @@ function lot(v: unknown, where: string): LevelDef['lot'] {
 
 function objective(v: unknown, where: string): LevelDef['objective'] {
   const o = object(v, where);
-  const kind = oneOf(o.kind, ['crowns', 'skyline', 'collapse', 'hold', 'bell'], `${where}.kind`);
+  const kind = oneOf(o.kind, ['crowns', 'skyline', 'collapse', 'hold', 'bell', 'quake'], `${where}.kind`);
   const footprint = o.footprintMax !== undefined ? { footprintMax: num(o.footprintMax, `${where}.footprintMax`) } : {};
-  if (kind === 'crowns' || kind === 'hold') {
+  if (kind === 'crowns' || kind === 'hold' || kind === 'quake') {
     only(o, ['kind', 'footprintMax'], where);
     return { kind, ...footprint };
   }
@@ -270,7 +295,7 @@ function launcher(v: unknown, where: string): LevelDef['launcher'] {
 function shot(v: unknown, where: string): Shot {
   const o = object(v, where);
   const ammo = rackItem(o.ammo, `${where}.ammo`);
-  const keys = ammo === 'drop' ? ['x', 'z'] : ammo === 'cue' ? ['x', 'y', 'z', 'dir', 'power'] : ['az', 'y', 'yaw', 'pitch', 'power'];
+  const keys = ammo === 'drop' ? ['x', 'z'] : ammo === 'cue' ? ['x', 'y', 'z', 'dir', 'power'] : ammo === 'quake' ? ['peak', 'hz', 'sec', 'axis'] : ['az', 'y', 'yaw', 'pitch', 'power'];
   only(o, ['ammo', ...keys], where);
   const s = { ammo, ...Object.fromEntries(keys.map((k) => [k, int(o[k], `${where}.${k}`)])) } as Shot;
   try {
