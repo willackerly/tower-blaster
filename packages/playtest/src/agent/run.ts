@@ -299,6 +299,12 @@ async function runOne(browser: Browser, origin: string, sc: Scenario, vp: Viewpo
       for (let k = 0; k < s.turns; k++) {
         await page.waitForFunction(() => window.__game.status !== 'running' || window.__game.result !== null || (window.__game.ready && window.__game.phase !== 'running' && !window.__game.view.turning), undefined, { timeout: 5 * MIN, polling: 250 });
         if ((await gameState(page)).result) break;
+        // The hand-over card (PT5): the next player taps it before they can aim; a tap never fires.
+        if (await page.evaluate(() => window.__game.handoff)) {
+          await shoot(`turn ${k + 1} hand-over`);
+          await tap('.duel-handoff');
+          await page.waitForFunction(() => !window.__game.handoff, undefined, { timeout: MIN, polling: 100 });
+        }
         await page.evaluate(() => window.__game.aim(0, -0.05));
         await shoot(`turn ${k + 1} aim`);
         if (!(await playShot(k, () => fireNovice(k + 1), k === 0))) break;

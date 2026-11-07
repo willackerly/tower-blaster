@@ -94,8 +94,8 @@ export function agentPlan(): Scenario[] {
   // Bullet Time on a big level and a chamber level.
   out.push({ id: 'B1-bullet-time', title: 'Bullet Time on B1 (3 freezes)', mode: 'bullet-time', search: '?level=B1&keystone.freeze=3', viewports: BOTH, script: { kind: 'freeze' }, level: 'B1' });
   out.push({ engine: 'gpu', id: 'L5-bullet-time', title: 'Bullet Time on L5 (2 freezes)', mode: 'bullet-time', search: '?level=L5&keystone.freeze=2', viewports: ['desktop'], script: { kind: 'freeze' }, level: 'L5' });
-  // Siege Table: every table, four turns.
-  for (const d of DUELS) out.push({ engine: 'gpu', id: `duel-${d.id}`, title: `Siege Table ${d.id} ${d.name}`, mode: 'siege-table', search: `?duel=${d.id}`, viewports: BOTH, script: { kind: 'duel', turns: 4 }, level: null });
+  // Siege Table: every table, up to eight turns (a novice duel ends in about four on the GPU: round 2).
+  for (const d of DUELS) out.push({ engine: 'gpu', id: `duel-${d.id}`, title: `Siege Table ${d.id} ${d.name}`, mode: 'siege-table', search: `?duel=${d.id}`, viewports: BOTH, script: { kind: 'duel', turns: 8 }, level: null });
   // The looks on two levels (the default is hazy; candy and real are options).
   for (const look of ['real', 'candy']) for (const id of ['L3', 'B2']) out.push({ ...(id === 'L3' ? { engine: 'gpu' as const } : {}), id: `${id}-${look}`, title: `${id} in the ${look} look`, mode: 'look', search: `?level=${id}&look=${look}`, viewports: ['desktop'], script: { kind: 'view' }, level: id });
   // B1 turned sideways on a phone.
