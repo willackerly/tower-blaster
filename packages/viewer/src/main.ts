@@ -17,7 +17,7 @@ import { alphaAt, newArrivals, newClock, newPacer, pauseLatch, runFree, stepsDue
 import type { V3 } from './math.ts';
 import { HEALTH_MS, limitFix, limitFixLabel, limitsHtml } from './health.ts';
 import { escapeHtml } from './html.ts';
-import { bounceOn, defaultPresettle, engineSpec, firedBody, froudeSpeed, keystoneEngine, levelOf, pageLevels, parseViewerConfig, presetSearch, quarterMetre, scenarioEngineSpec, sceneTitle, tierRefusal, toSearch, type ViewerConfig, viewerScene, withOption, worldEngineSpec } from './params.ts';
+import { bounceOn, defaultPresettle, engineSpec, firedBody, froudeSpeed, keystoneEngine, levelOf, pageLevels, parseViewerConfig, presetSearch, quarterMetre, scenarioEngineSpec, sceneTitle, sleepEngineSpec, tierRefusal, toSearch, type ViewerConfig, viewerScene, withOption, worldEngineSpec } from './params.ts';
 import { inLevelGrenade, inLevelWeapon, projectileRadius, pushRadiusLimit, worldGrenade, worldWeapon } from './projectile.ts';
 import { grenadeAsSpec, type GrenadeWorld, type WeaponScale, WeaponRuntime, type WeaponSpec } from '@tb/weapons';
 import { previewBeads, scenePreview } from './weapon-preview.ts';
@@ -58,7 +58,7 @@ const GPU_ITERATIONS = [10, 15, 20, 40];
 const KEYSTONE_AVBD = { iterations: AVBD_ITERATIONS, gapSlop: AVBD_GAP_SLOP } as const;
 const keystoneAvbd = (spec: string) => withOption(withOption(spec, 'iterations', KEYSTONE_AVBD.iterations), 'gapSlop', KEYSTONE_AVBD.gapSlop);
 
-const viewerEngine = (c: ViewerConfig): PhysicsEngine => makeEngine(worldEngineSpec(engineSpec(scenarioEngineSpec(c.engine, c.scenario), c.projectile, c.scale), c.scale));
+const viewerEngine = (c: ViewerConfig): PhysicsEngine => makeEngine(worldEngineSpec(engineSpec(sleepEngineSpec(scenarioEngineSpec(c.engine, c.scenario), c.sleep), c.projectile, c.scale), c.scale));
 
 interface ViewerHandle {
   status: 'loading' | 'running' | 'error';
@@ -251,6 +251,8 @@ async function main() {
   renderer.setSource(source);
   renderer.look = lookByName(config.look, config.real);
   renderer.toggles.blasts = config.blast.on;
+  // Debug: sleeping bodies in blue (keystone.sleeptint, under rules=keystone; the game loop sets it from feel there).
+  renderer.toggles.sleepTint = config.feel.sleepTint;
   renderer.blasts.config = { ...config.blast.params };
   renderer.ice.params = { ...config.ice };
   const sound = new ViewerSound();
@@ -359,6 +361,7 @@ async function main() {
     const t0 = performance.now();
     const s = await engine.snapshot();
     config = want;
+    renderer.toggles.sleepTint = want.feel.sleepTint;
     scene = next;
     // A load ends edit mode (Play, Cancel, R, a new scene from the panel).
     if (editing) leaveEdit();

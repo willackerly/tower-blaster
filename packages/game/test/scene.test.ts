@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { compileLevel, L1, L2, L3, TRIAL_LEVELS, U3 } from '@tb/keystone';
-import { COAT_GILT, COAT_GLAZE, COAT_NONE, MARK_HIT, MARK_KEEP, MARK_NONE, MARK_SAVE, tintWord, unpackFx } from '@tb/render';
+import { compileLevel, D1, Duel, L1, L2, L3, MATERIALS, TRIAL_LEVELS, U3 } from '@tb/keystone';
+import { COAT_GILT, COAT_GLAZE, COAT_NONE, COAT_PAINT, linearToOklab, MARK_HIT, MARK_KEEP, MARK_NONE, MARK_SAVE, tintWord, unpackFx } from '@tb/render';
 import { PROJECTILE_PRESETS } from '@tb/weapons';
-import { BALL_PAINT, ballFx, BOMB_FX, coatOf, markOf, roleTint, structureCoats, structureMarks } from '../src/scene.ts';
+import { BALL_PAINT, ballFx, BOMB_FX, coatOf, DUEL_NEUTRAL, duelCoats, duelTint, duelTints, markOf, roleTint, structureCoats, structureMarks } from '../src/scene.ts';
 import { BEAD_COLOUR, BEAD_OUT_COLOUR, BEAD_RADIUS, beadOverlay, rgbe, CROWN_GLOW, easeOut, regrowDuration, regrowScale, regrowScales, structureTints, TARGET_SCALE, TINT, tintOf, tintWordOf } from '../src/scene.ts';
 
 /** What the renderer will see for a bulk tint word. */
@@ -87,6 +87,37 @@ describe('coats (coatOf, structureCoats, roleTint)', () => {
     expect(coatOf(c, crown)).toBe(COAT_NONE);
     expect(structureCoats(c).every((k) => k === COAT_NONE)).toBe(true);
     expect(roleTint(c, crown)).toEqual(TINT.crown);
+  });
+});
+
+describe('duel colours (duelTint, duelTints, duelCoats)', () => {
+  const c = compileLevel(D1.level), d = new Duel(D1, c), inks = D1.sides.map((s) => s.ink);
+  const wall = Array.from({ length: c.meta.n }, (_, i) => i).filter((i) => MATERIALS[c.meta.material[i]!]!.name === 'plaster');
+  it('D1: every side block in its ink (kings glowing), the wall neutral grey, every block painted', () => {
+    expect(wall.length).toBeGreaterThan(0);
+    const t = duelTints(c, d.owned, inks), k = duelCoats(c);
+    d.owned.forEach((g, side) => { for (const b of g) {
+      expect(duelTint(c, d.owned, inks, b)).toEqual([...inks[side]!]);
+      expect(decoded(t[b]!).tint[0]).toBeCloseTo(inks[side]![0]!, 2);
+      expect(decoded(t[b]!).emissive > 0).toBe(c.meta.role[b] === 1);
+    } });
+    for (const b of wall) {
+      expect(duelTint(c, d.owned, inks, b)).toEqual(DUEL_NEUTRAL);
+      expect(decoded(t[b]!).tint[1]).toBeCloseTo(DUEL_NEUTRAL[1], 2);
+    }
+    expect(k.every((x) => x === COAT_PAINT)).toBe(true);
+  });
+  it('paint off (keystone.coats=0): no coats and the wall keeps its material tint, the sides their ink as before', () => {
+    const t = duelTints(c, d.owned, inks, false), base = structureTints(c, false);
+    expect(duelCoats(c, false)).toEqual(new Uint8Array(c.meta.n));
+    for (const b of wall) expect(t[b]).toBe(base[b]);
+    for (const b of d.owned[1]) expect(decoded(t[b]!).tint[2]).toBeCloseTo(inks[1]![2]!, 2);
+  });
+  it('the neutral grey: low chroma, a touch warm against the looks\' blue skies, mid-light', () => {
+    const [L, a, b] = linearToOklab(DUEL_NEUTRAL);
+    expect(Math.hypot(a, b)).toBeLessThan(0.012);
+    expect(b).toBeGreaterThan(0);
+    expect(L).toBeGreaterThan(0.6);
   });
 });
 

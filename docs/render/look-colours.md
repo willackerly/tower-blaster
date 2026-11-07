@@ -263,3 +263,55 @@ shader's block colours: ratio 0.7–0.85 per stone, light keys trimmed more
 than dark ones, the warmth std, the exact old look at 1/0) and the real-look
 GPU suites (stones, wood, steel, hall). Not checked on Metal yet; it goes
 into the look capture job in §4, which uses the defaults.
+
+## 6. A duel's colours: each side in its ink, the wall neutral (`COAT_PAINT`)
+
+From the Siege Table look review (PT5, `docs/game/siege-table.md`): in a duel
+the plaster wall between the keeps read as Blue's. Each duel side's blocks
+were tinted with its ink, and the tint multiplied the look's own colour, as
+crowns' did before §2; the wall had no tint at all, so it took the look's
+palette. Measured on D1, OKLCh hue / chroma of each group's own pixels (ID
+pass), SwiftShader:
+
+| Look | Wall | Gold side | Blue side |
+|---|---|---|---|
+| hazy, before | 270 / 0.026 | 94 / 0.046 | 265 / 0.062 |
+| candy, before | 85 / 0.072 | 124 / 0.067 | 248 / 0.064 |
+| real, before | 78 / 0.020 | 79 / 0.091 | 254 / 0.065 |
+| hazy, now | 257 / 0.003 | 92 / 0.065 | 258 / 0.060 |
+| candy, now | 288 / 0.023 | 90 / 0.074 | 262 / 0.118 |
+| real, now | 48 / 0.009 | 89 / 0.094 | 257 / 0.093 |
+
+So hazy (the default) put the wall 5° from Blue at 42% of its chroma; candy
+made the wall as yellow as Gold, and turned Gold's ink green (124°).
+
+**What changed.** A fourth coat, `COAT_PAINT` (`@tb/render` `coats.ts`, the
+free value of the two coat bits): a white base, so the block's fx tint *is*
+its colour, finished as the look's blocks are (the real look's stone detail
+and wear still apply). In a duel (`scene.ts` `duelTints`, `duelCoats`) every
+non-ice block is painted: each side's in its ink (`INK` in `duels.ts`, kings
+glowing as crowns do), and blocks owned by neither side `DUEL_NEUTRAL`,
+sRGB #9E9A94, a grey a touch warm (OKLab b +0.010) to offset the hazy and
+candy skies' blue. A felled king keeps its side's ink (`play.ts` `ownTint`),
+where before it took the crown gold whichever side it was. Off with
+`keystone.coats=0`, which keeps the old multiplied inks and the look's wall.
+
+**Alternatives considered:** *a bit 17 `paint` on boxes* (it means the same
+on spheres, but bulk `setFx` rewrites word 1's flags at every load while the
+coat bits survive it; a coat was the smaller change); *one coat per ink*
+(three more coat colours need a third bit and fix the inks in the renderer,
+so a new duel's colour would need a renderer change); *only retinting the
+wall* (leaves candy's green Gold); *a pure grey* (#9A9A9A: candy's wall
+chroma 0.029, toward Blue; the warm grey takes it to 0.023).
+
+**Review:** a blind Opus reader, three looks, old and new shuffled per look:
+the new one separates Gold, Blue and neutral in every look (hazy and candy
+high confidence, real medium-high); "candy breaks both team colours" before.
+It noted two things left: hazy's Gold ink is a muted mustard, and the real
+look's wall (L 0.42) sits close to the tone of cast shadows at its foot.
+
+**Tests:** `duel-colours-e2e` (D1 in all three looks: Gold within 10° of 90,
+Blue within 10° of 259, the wall under a third of either side's chroma; and
+`keystone.coats=0` in hazy reproduces the wall at Blue's hue);
+`scene.test` (duel tints, coats, the neutral's OKLab); `render-marks`
+(`COAT_PAINT` packs, a white base in the WGSL).
