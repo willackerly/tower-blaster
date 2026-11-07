@@ -19,7 +19,9 @@ function asChorus(base: LevelDef, id: string, rack: LevelDef['rack'], extra: Par
   const { solutions: _s, lGold: _g, stars: _t, ...rest } = base;
   const r = base.launcher.radius - 3, { min, max } = base.lot, cx = (min[0] + max[0]) / 2, cz = (min[1] + max[1]) / 2;
   const lot = { min: [Math.min(min[0], cx - r), Math.min(min[1], cz - r)] as [number, number], max: [Math.max(max[0], cx + r), Math.max(max[1], cz + r)] as [number, number] };
-  return { ...rest, id, name: `${base.name} ×64`, version: 1, rack, par: 1, scoring: 'outcome', lot, chorus: {}, ...extra };
+  // Settle pinned at v3, the outcome default these levels' evidence was measured under (settle v4 becomes the
+  // default in PT6b, docs/game/settle-v4.md); the Chorus hold waits for the other worlds either way.
+  return { ...rest, id, name: `${base.name} ×64`, version: 1, rack, par: 1, scoring: 'outcome', settle: 'v3', lot, chorus: {}, ...extra };
 }
 
 /** CH1, from L1 (Open Fire): one cannonball, every crown down in each world. */
