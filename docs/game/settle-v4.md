@@ -67,6 +67,4 @@ Paired outcome lines: 19 (3 on B1). Shots: 55.
 | U3 | U3-novice | 0.5 / 0.5 / 0.5 / 0.8 | 0.5 / 0.5 / 0.5 / 0.8 | 0.0120 | 0.0120 | +0.0000 |
 | U3 | U3-novice | 0.5 / 0.5 / 0.5 / 0.5 | 0.5 / 0.5 / 0.5 / 0.5 | 0.0000 | 0.0000 | +0.0000 |
 
-Unpaired outcome lines still running: 7
-
-B2 and B3 (Mac, PT6b) and the B1 to B3 recast land with the unpin.
+Seven more trial lines (the heaviest, under v3 or v4) did not finish in the cloud before its jobs were stopped. The Mac's replay (`--only B1,B2,B3,T`, roadmap PT6b) runs them along with B2 and B3, and its numbers land here with the B1 to B3 unpin and recast.
