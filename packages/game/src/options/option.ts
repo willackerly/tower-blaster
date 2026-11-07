@@ -37,10 +37,14 @@ export interface DoorChoice<V> { readonly arg: string; readonly value: V; readon
 /** What a door row may know beyond its setting: the tier the load probe picked (quality.ts), if one ran. */
 export interface DoorContext { readonly detected: string | null; readonly esc: (s: string) => string }
 
-/** A row of the door's Advanced settings: a label and buttons, data-act="<act>" each. */
+/**
+ * A row of the door's Advanced settings: a label and buttons, data-act="<act>" each. `player`: one of the
+ * few rows a player sees when Advanced settings opens (PT37: about six); a row without it sits under the
+ * Developer settings disclosure, so a new option lands there unless it says otherwise.
+ */
 export type DoorRow<V> =
-  | { readonly act: string; readonly label: string; readonly choices: readonly DoorChoice<V>[] }
-  | { readonly act: string; readonly label: string; buttons(v: V, ctx: DoorContext): string; click(arg: string, v: V): V | undefined };
+  | { readonly act: string; readonly label: string; readonly player?: true; readonly choices: readonly DoorChoice<V>[] }
+  | { readonly act: string; readonly label: string; readonly player?: true; buttons(v: V, ctx: DoorContext): string; click(arg: string, v: V): V | undefined };
 
 /** The setting part: one Settings field, stored in the browser and shown on the door. */
 export interface SettingOption<S extends string = string, V = unknown> {

@@ -124,6 +124,22 @@ Agent playtest round 2 (`agent-playtest-2.md`, row PT30) found two things still 
 - Both duel kings inside the free band: the Siege Table thread's `duel-view.ts`, which frames duels without the measured band.
 - The new modes' panels pushing the scene into a narrow strip: PT21 (Fuse & Fold, #284) and PT25 (Aftershock's dial).
 
+## The rack on a phone held upright (PT37, 2026-11-07)
+
+On a 390 px wide screen the docked tray's rack scrolls sideways, and the second playtest's novice never found the cut-off chips ("Big grenade" sat past the edge on T-S3).
+
+- `play.ts markRackOverflow` sets `.more` on the chips when they overflow and are not scrolled to the end. CSS cannot detect overflow, which is why this is done in script.
+- While `.more` is set, the chips fade at their right edge (a mask) and a "›" cue shows at the tray's edge.
+- Scrolling to the end clears it. It is re-measured on every HUD draw, on scroll and on resize.
+- The power and height rows show their labels ("power", "height") as small capitals above their −/+ buttons, so the bare −/+ say what they change. The label is the row's existing first span, set as a small absolute caption over the buttons, so the tray does not grow (PT3's budget and PT30's one-size HUD hold).
+- `phone-door-build-e2e.test.ts` (upright on T-S3) checks that every chip is whole or the cue shows, that scrolling to the end clears the cue, and that the row labels read power and height.
+
+Alternatives considered:
+
+- **Wrapping the rack onto two rows.** Every chip would be visible, but the tray would grow by a row and cover the structure that view.ts frames below it.
+- **Smaller chips.** These fall under the 44 px touch target.
+- **A "+N more" chip.** This works, but it adds a control. The fade and cue say the same thing without one.
+
 ## Not done here
 
 - The copy on the door and in the HUD (PT18) followed this layout: [front-door.md](front-door.md), "Player-facing copy".

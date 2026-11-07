@@ -68,7 +68,7 @@ export interface SceneFile {
   camera: CameraPose | null;
   /**
    * Present only under Keystone's rules (ViewerConfig.rules, feel and shots: the line to play on load, rack: the rack played instead of the level's (ViewerConfig.rack),
-   * absent for none; scoring, autobank, settle, freeze and physics: the game's rule overrides, ViewerConfig.keystone,
+   * absent for none; scoring, autobank, settle, freeze, levPoints and physics: the game's rule overrides, ViewerConfig.keystone,
    * absent when not overridden); absent: the sandbox.
    */
   rules?: { mode: 'keystone'; shots?: Shot[]; rack?: RackItem[]; /** The feel options with a scene key (@tb/game FEEL_OPTIONS: hitstop, slowmo, budget...). */ [feel: string]: unknown } & LevelRules;
@@ -250,7 +250,7 @@ export function parseSceneFile(text: string): { config: ViewerConfig; name: stri
   }
   if (root.rules !== undefined) {
     const r = object(root.rules, 'rules');
-    only(r, ['mode', ...SCENE_FEEL.map((o) => o.scene!.key), 'shots', 'rack', 'scoring', 'autobank', 'settle', 'freeze', 'physics'], 'rules');
+    only(r, ['mode', ...SCENE_FEEL.map((o) => o.scene!.key), 'shots', 'rack', 'scoring', 'autobank', 'settle', 'freeze', 'levPoints', 'physics'], 'rules');
     q.set('rules', str(r.mode, 'rules.mode'));
     // Each feel option's scene key as its URL key (paceFeel checks the values).
     for (const o of SCENE_FEEL) {
@@ -269,6 +269,7 @@ export function parseSceneFile(text: string): { config: ViewerConfig; name: stri
     if (r.autobank !== undefined) lr.autobank = bool(r.autobank, 'rules.autobank');
     if (r.settle !== undefined) lr.settle = str(r.settle, 'rules.settle') as LevelRules['settle'];
     if (r.freeze !== undefined) lr.freeze = num(r.freeze, 'rules.freeze');
+    if (r.levPoints !== undefined) lr.levPoints = str(r.levPoints, 'rules.levPoints') as LevelRules['levPoints'];
     if (r.physics !== undefined) {
       const ph = object(r.physics, 'rules.physics');
       only(ph, ['iterations', 'gapSlop', 'bounce', 'presettle', 'sleep'], 'rules.physics');

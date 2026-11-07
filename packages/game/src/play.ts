@@ -27,7 +27,8 @@ import { outlineAreas, pixelCounts, type ScreenRect } from './sightlines.ts';
 import { ViewSun } from './light.ts';
 export { viewOf } from './view.ts';
 import { driverOptions, type EngineKind, gpuEngineOptions, makeEngine, makeMasonEngine, roomAfter } from './engines.ts';
-import { type CardForward, hudHtml, meterTicks, trialText, type MeterTick, nextSelection, POWER_STEP, rackChips, resultHtml, starsText, tallyHtml } from './hud.ts';
+import { type CardForward, esc, hudHtml, itemLabel, meterTicks, trialText, type MeterTick, nextSelection, POWER_STEP, rackChips, resultHtml, starsText, tallyHtml } from './hud.ts';
+import { dudNote, innerNote, isDud, itemPunch } from './dud.ts';
 import { hudInsets, type Layout, type ScreenInsets } from './layout.ts';
 import { type CardFacts, type HudProfile, hudProfile } from './mode-ui.ts';
 import { type GoalLine, goalsHudHtml, goalsResultHtml } from './lot-hud.ts';
@@ -290,6 +291,8 @@ export interface GameHandle {
   handoff: boolean;
   /** The text of the last Heraldry score float (duel-hud.ts scoreFloatHtml), or '' before one. */
   scoreFloat: string;
+  /** The last dud note's text (PT31, dud.ts dudNote), or '' before one; a load clears it. */
+  shotNote: string;
   /**
    * Mason's Trial (keystone mason-trial.ts): the test running in world 0 as drawn, the judge's worlds beside it,
    * or null when no trial has started since the level loaded. `hero` is world 0's verdict once it is judged.
@@ -356,7 +359,7 @@ export function newGameHandle(): GameHandle {
   return {
     status: 'loading', engine: '', level: '', phase: 'loading', ready: false, frozen: false, frames: 0, stepIndex: 0, strokes: 0, bodies: 0, collapse: 0, fast: false, hold: false, pace: { timeScale: 1, speed: 1, tag: '', tailSkip: false, costMs: NaN }, view: { target: [0, 0, 0], distance: 0, yaw: 0, pitch: 0, following: false, jolt: 0, turning: false, cue: null, arcBeads: 0, impact: false, xray: false }, input: { touch: false, gesture: 'idle', fingers: 0, aimed: null, power: 100, launch: 0 }, result: null, counts: {}, feel: { ...DEFAULT_FEEL }, resultShownAt: null, card: { place: 'center', endedMs: null, shownMs: null }, openingHud: null, timing: { loadMs: 0, load: noPhases(), stepMs: [], moving: [], frameMs: [], costMs: [] }, draws: { drawn: 0, skipped: 0, decimating: false },
     fire: () => false, bank: () => false, skip: () => false, freeze: () => false, fireOpener: () => false, setMuted: () => {}, maxDpr: 2, quality: null, aim: () => null, reach: null, impact: null, select: () => false, dial: () => null, dialStep: () => null, startQuake: () => false, load: async () => {}, retry: async () => {}, undo: async () => false, undone: null, spare: null, undoMemory: () => ({ marks: 0, bytes: 0 }), capture: async () => null, sightlines: async () => null, coverage: async () => 0, pixelsOf: async () => ({ width: 0, height: 0, at: [] }), pullDrawn: null, ground: [0, 0], frozenGrade: 0, firedLooks: () => [], spentLooks: () => [], effects: async () => ({ particles: 0, hot: 0, spawned: 0, flashes: 0, blasts: 0, fuses: 0 }), marks: () => [], fx: () => null, refreshMarks: () => {},
-    state: none, asleep: () => ({ asleep: 0, of: 0 }), line: () => [], replay: async () => none(), health: async () => null, pairsPerBody: 0, limitsHit: [], goals: [], grade: null, duel: null, handoff: false, trial: null, scoreFloat: '',
+    state: none, asleep: () => ({ asleep: 0, of: 0 }), line: () => [], replay: async () => none(), health: async () => null, pairsPerBody: 0, limitsHit: [], goals: [], grade: null, duel: null, handoff: false, trial: null, scoreFloat: '', shotNote: '',
     sound: () => ({ mode: 'collapse', status: 'off', error: '', posted: 0, stats: null }),
     ice: () => ({ count: 0, cracks: [] }),
     edit: { on: false, enter: () => false, play: () => {}, cancel: () => {}, key: () => false, ray: () => {}, status: () => '', def: () => null, ghosts: () => 0, played: null },
@@ -1071,23 +1074,56 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
    * structure's middle. Not while the hand-over card shows them instead (it covers the middle of the screen), nor
    * once the duel is decided (the result card has the totals).
    */
-  let float: HTMLElement | null = null;
+  let float: HTMLElement | null = null, note: HTMLElement | null = null;
   function floatScore() {
     const html = duel ? scoreFloatHtml(duel) : '';
     if (html) handle.scoreFloat = html.replace(/<[^>]+>/g, '');
     if (!html || feel.handoff || duel!.result.over) return;
     float ??= Object.assign(document.createElement('div'), { className: 'duel-float' });
-    if (!float.isConnected) document.body.append(float);
+    floatAt(float, html);
+  }
+  /** Shows `el` (a floating label) with `html` over where the last shot was aimed, else the structure's middle, and restarts its fade. */
+  function floatAt(el: HTMLElement, html: string) {
+    if (!el.isConnected) document.body.append(el);
     const at = firedAt ?? [0, c.height / 2, 0], m = viewProj(orbit, viewAspect()), r = canvas.getBoundingClientRect();
     const w = m[3]! * at[0] + m[7]! * at[1] + m[11]! * at[2] + m[15]!;
     const x = (m[0]! * at[0] + m[4]! * at[1] + m[8]! * at[2] + m[12]!) / w, y = (m[1]! * at[0] + m[5]! * at[1] + m[9]! * at[2] + m[13]!) / w;
     const inView = w > 0 && Math.abs(x) <= 0.95 && Math.abs(y) <= 0.95;
-    float.style.left = `${r.left + (inView ? (x + 1) / 2 : 0.5) * r.width}px`;
-    float.style.top = `${r.top + (inView ? (1 - y) / 2 : 0.4) * r.height}px`;
-    float.innerHTML = html;
-    float.classList.remove('show');
-    void float.offsetWidth; // restart the animation
-    float.classList.add('show');
+    el.style.left = `${r.left + (inView ? (x + 1) / 2 : 0.5) * r.width}px`;
+    el.style.top = `${r.top + (inView ? (1 - y) / 2 : 0.4) * r.height}px`;
+    el.innerHTML = html;
+    el.classList.remove('show');
+    void el.offsetWidth; // restart the animation
+    el.classList.add('show');
+  }
+  /**
+   * PT31: after a settled shot, one line over where it was aimed when the picture alone would not say what happened.
+   * A dud (under 1% of the structure moved, no crown down; dud.ts): nothing moved, and what to try (not after a pull,
+   * plunger or quake, which fire no body). A shot that gave way inside (innerNote: collapse up, the top standing,
+   * nothing spilled): how much came down. Not in a duel (its turn has its own float), nor once the round has ended
+   * (the card says it). keystone.dudnote=0 keeps both quiet.
+   */
+  let seen = { collapse: 0, skyline: 1 };
+  /** The collapse and skyline the next shot's note is measured from: the last settle's (an undo's kept shots), else the start's. */
+  function seenNow() {
+    const s = driver.session;
+    if (!s.outcomes.length) return { collapse: 0, skyline: 1 };
+    const f = s.outcomeFacts();
+    return { collapse: f.collapse, skyline: f.skylineRatio };
+  }
+  function noteShot() {
+    const s = driver.session, k = s.outcomes.length - 1, o = s.outcomes[k], input = s.inputs[k];
+    const before = seen;
+    seen = seenNow();
+    if (duel || !feel.dudNote || !o || !input || s.phase !== 'aiming') return;
+    const fired = input.shot.ammo as RackItem, prev = s.outcomes[k - 1];
+    // Inner first: a shot that brought 5% down moved something, however few bodies crossed the displaced line.
+    const text = innerNote(seen.collapse - before.collapse, before.skyline - seen.skyline, o.outOfLot - (prev?.outOfLot ?? 0), c.meta.n)
+      ?? (isDud(o, prev?.displaced ?? 0, c.meta.n) && itemPunch(c, fired) !== null ? dudNote(fired, s.rackLeft, (i) => itemPunch(c, i), itemLabel) : null);
+    if (!text) return;
+    handle.shotNote = text;
+    note ??= Object.assign(document.createElement('div'), { className: 'kg-note' });
+    floatAt(note, esc(text));
   }
   /** Coats as feel.coats says, but never gilt or glaze in a duel, whose blocks wear their side's ink (painted, duelCoats). */
   const coatsOn = () => feel.coats && !duel;
@@ -1367,6 +1403,9 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     const m = 4 * c.frame.unit;
     followClip = Float64Array.of(c.lot.min[0] - m, 0, c.lot.min[1] - m, c.lot.max[0] + m, 1.5 * c.height + m, c.lot.max[1] + m);
     handle.result = null;
+    handle.shotNote = '';
+    note?.classList.remove('show');
+    seen = seenNow();
     handle.counts = counts;
     handle.level = c.def.id;
     ending = false;
@@ -1672,6 +1711,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
           judgeGoals();
           pacer.release();
           spendFired();
+          noteShot();
           // A crown back above the line (rare: a catapult) means the round goes on after all.
           if (ending && driver.session.phase === 'aiming') { ending = false; hideResult(); }
           selected = nextSelection(c.def.rack, driver.session.rackLeft, selected);
@@ -1882,8 +1922,10 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     // The world as this shot goes in, for undo (before the fire: the shot is not in it yet).
     takeMark();
     const fb = driver.fire(shot);
+    // Where the shot was aimed: a Heraldry score floats there (PT5), and a dud's note (PT31).
+    firedAt = aimHit && aimed && aimed.shot === shot ? aimHit.point : handle.impact ? [...handle.impact.point] as Vec3 : null;
     if (shot.ammo === 'quake') quakeRun = quakeRunOf();
-    if (duel) { duel.fired(shot); turnStart = performance.now(); syncDuel(); swing.grab(); hideHandoff(); firedAt = aimHit && aimed && aimed.shot === shot ? aimHit.point : null; }
+    if (duel) { duel.fired(shot); turnStart = performance.now(); syncDuel(); swing.grab(); hideHandoff(); }
     // A shot fired while frozen (Bullet Time) has cut in at the frozen step: the world runs on with it.
     frozen = false;
     // A held aim (PT33) was only for the freeze: it goes with it, at the next frame.
@@ -2329,8 +2371,15 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     document.body.classList.toggle('kg-mason', !!c.def.mason);
     if (crownsDown > crownsShown) html = html.replace('class="crowns"', 'class="crowns pop"');
     crownsShown = crownsDown;
-    if (html !== lastHud) { env.hud.innerHTML = html; lastHud = html; }
+    if (html !== lastHud) { env.hud.innerHTML = html; lastHud = html; markRackOverflow(); }
   }
+  /** PT37: the rack's chips row carries .more while some of it is scrolled out of view to the right (ui.ts draws a fade and an arrow). */
+  function markRackOverflow(): void {
+    const c = env.hud.querySelector<HTMLElement>('.tray .chips');
+    if (c) c.classList.toggle('more', c.scrollLeft + c.clientWidth < c.scrollWidth - 1);
+  }
+  env.hud.addEventListener('scroll', markRackOverflow, true);
+  addEventListener('resize', markRackOverflow);
 
   await load(levelIdx);
   handle.status = 'running';

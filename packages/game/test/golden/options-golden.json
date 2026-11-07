@@ -2445,7 +2445,7 @@
    "settings": "default",
    "detected": null,
    "rows": [
-    "<span class=\"group\"><span class=\"lbl\">Sound</span><span class=\"seg\"><button data-act=\"sound\" class=\"on\">On</button></span></span>",
+    "<span class=\"group\"><span class=\"lbl\">Sound</span><span class=\"seg\"><button data-act=\"sound\" data-arg=\"on\" class=\"on\" title=\"Impacts and collapses make a sound\">On</button><button data-act=\"sound\" data-arg=\"off\" class=\"\" title=\"Silent (the M key also toggles it in play)\">Off</button></span></span>",
     "<span class=\"group\"><span class=\"lbl\">Look</span><span class=\"seg\"><button data-act=\"look\" data-arg=\"hazy\" class=\"on\">Maquette</button><button data-act=\"look\" data-arg=\"real\" class=\"\">Photoreal</button><button data-act=\"look\" data-arg=\"candy\" class=\"\">Candy</button></span></span>",
     "<span class=\"group\"><span class=\"lbl\">Camera</span><span class=\"seg\"><button data-act=\"camera\" data-arg=\"still\" class=\"on\" title=\"Moves only when you move it\">Still</button><button data-act=\"camera\" data-arg=\"dynamic\" class=\"\" title=\"Follows the collapse and shakes on hits\">Dynamic</button></span></span>",
     "<span class=\"group\"><span class=\"lbl\">Rapid fire</span><span class=\"seg\"><button data-act=\"rapid\" data-arg=\"on\" class=\"on\" title=\"Fire again before the last shot settles\">On</button><button data-act=\"rapid\" data-arg=\"off\" class=\"\" title=\"Each shot waits for the last to settle\">Off</button></span></span>",
@@ -2462,7 +2462,7 @@
    "settings": "default",
    "detected": "mid",
    "rows": [
-    "<span class=\"group\"><span class=\"lbl\">Sound</span><span class=\"seg\"><button data-act=\"sound\" class=\"on\">On</button></span></span>",
+    "<span class=\"group\"><span class=\"lbl\">Sound</span><span class=\"seg\"><button data-act=\"sound\" data-arg=\"on\" class=\"on\" title=\"Impacts and collapses make a sound\">On</button><button data-act=\"sound\" data-arg=\"off\" class=\"\" title=\"Silent (the M key also toggles it in play)\">Off</button></span></span>",
     "<span class=\"group\"><span class=\"lbl\">Look</span><span class=\"seg\"><button data-act=\"look\" data-arg=\"hazy\" class=\"on\">Maquette</button><button data-act=\"look\" data-arg=\"real\" class=\"\">Photoreal</button><button data-act=\"look\" data-arg=\"candy\" class=\"\">Candy</button></span></span>",
     "<span class=\"group\"><span class=\"lbl\">Camera</span><span class=\"seg\"><button data-act=\"camera\" data-arg=\"still\" class=\"on\" title=\"Moves only when you move it\">Still</button><button data-act=\"camera\" data-arg=\"dynamic\" class=\"\" title=\"Follows the collapse and shakes on hits\">Dynamic</button></span></span>",
     "<span class=\"group\"><span class=\"lbl\">Rapid fire</span><span class=\"seg\"><button data-act=\"rapid\" data-arg=\"on\" class=\"on\" title=\"Fire again before the last shot settles\">On</button><button data-act=\"rapid\" data-arg=\"off\" class=\"\" title=\"Each shot waits for the last to settle\">Off</button></span></span>",
@@ -2479,7 +2479,7 @@
    "settings": "flipped",
    "detected": "high",
    "rows": [
-    "<span class=\"group\"><span class=\"lbl\">Sound</span><span class=\"seg\"><button data-act=\"sound\" class=\"\">Off</button></span></span>",
+    "<span class=\"group\"><span class=\"lbl\">Sound</span><span class=\"seg\"><button data-act=\"sound\" data-arg=\"on\" class=\"\" title=\"Impacts and collapses make a sound\">On</button><button data-act=\"sound\" data-arg=\"off\" class=\"on\" title=\"Silent (the M key also toggles it in play)\">Off</button></span></span>",
     "<span class=\"group\"><span class=\"lbl\">Look</span><span class=\"seg\"><button data-act=\"look\" data-arg=\"hazy\" class=\"\">Maquette</button><button data-act=\"look\" data-arg=\"real\" class=\"on\">Photoreal</button><button data-act=\"look\" data-arg=\"candy\" class=\"\">Candy</button></span></span>",
     "<span class=\"group\"><span class=\"lbl\">Camera</span><span class=\"seg\"><button data-act=\"camera\" data-arg=\"still\" class=\"\" title=\"Moves only when you move it\">Still</button><button data-act=\"camera\" data-arg=\"dynamic\" class=\"on\" title=\"Follows the collapse and shakes on hits\">Dynamic</button></span></span>",
     "<span class=\"group\"><span class=\"lbl\">Rapid fire</span><span class=\"seg\"><button data-act=\"rapid\" data-arg=\"on\" class=\"\" title=\"Fire again before the last shot settles\">On</button><button data-act=\"rapid\" data-arg=\"off\" class=\"on\" title=\"Each shot waits for the last to settle\">Off</button></span></span>",
@@ -2496,7 +2496,7 @@
    "settings": "candy",
    "detected": null,
    "rows": [
-    "<span class=\"group\"><span class=\"lbl\">Sound</span><span class=\"seg\"><button data-act=\"sound\" class=\"on\">On</button></span></span>",
+    "<span class=\"group\"><span class=\"lbl\">Sound</span><span class=\"seg\"><button data-act=\"sound\" data-arg=\"on\" class=\"on\" title=\"Impacts and collapses make a sound\">On</button><button data-act=\"sound\" data-arg=\"off\" class=\"\" title=\"Silent (the M key also toggles it in play)\">Off</button></span></span>",
     "<span class=\"group\"><span class=\"lbl\">Look</span><span class=\"seg\"><button data-act=\"look\" data-arg=\"hazy\" class=\"\">Maquette</button><button data-act=\"look\" data-arg=\"real\" class=\"\">Photoreal</button><button data-act=\"look\" data-arg=\"candy\" class=\"on\">Candy</button></span></span>",
     "<span class=\"group\"><span class=\"lbl\">Camera</span><span class=\"seg\"><button data-act=\"camera\" data-arg=\"still\" class=\"on\" title=\"Moves only when you move it\">Still</button><button data-act=\"camera\" data-arg=\"dynamic\" class=\"\" title=\"Follows the collapse and shakes on hits\">Dynamic</button></span></span>",
     "<span class=\"group\"><span class=\"lbl\">Rapid fire</span><span class=\"seg\"><button data-act=\"rapid\" data-arg=\"on\" class=\"on\" title=\"Fire again before the last shot settles\">On</button><button data-act=\"rapid\" data-arg=\"off\" class=\"\" title=\"Each shot waits for the last to settle\">Off</button></span></span>",

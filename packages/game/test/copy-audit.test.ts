@@ -4,7 +4,7 @@
 // judges found: "engine", "probe", the weapon key "grenadel", "1 pts", and trial ids (T-S14T) or the W5- prefix.
 // Ids may stay in attributes (data-id, the URL): what is checked is what a player reads.
 import { describe, expect, it } from 'vitest';
-import { compileLevel, D1, D2, Duel, duelLevel, type LevelDef, TRIAL_LEVELS } from '@tb/keystone';
+import { compileLevel, D1, D2, Duel, duelLevel, type LevelDef, type LevelScore, TRIAL_LEVELS } from '@tb/keystone';
 import { doorDuels, doorHtml, doorLevels, HOW_TO_PLAY, SIEGE_TABLE_HOW, TRIALS_BLURB } from '../src/door.ts';
 import { duelHudHtml, duelResultHtml } from '../src/duel-hud.ts';
 import { CUSTOM_NOTE, hudHtml, hudTitle, itemLabel, levelTag, playerName, rackChips, resultHtml, tallyHtml, WEAPON_LABEL } from '../src/hud.ts';
@@ -37,6 +37,7 @@ describe('player-facing copy (PT18)', () => {
       audit(`the door (current ${current})`, doorHtml({ levels, current, settings: DEFAULT_SETTINGS, howTo: true, advanced: true, trials: { count: TRIAL_LEVELS.length, open: true }, duels: doorDuels([D1, D2], null) }));
     }
     audit('the trials blurb', TRIALS_BLURB);
+    for (const h of HOW_TO_PLAY) audit(`How to play: ${h.title}`, doorHtml({ levels, current: -1, settings: DEFAULT_SETTINGS, howTo: true, howMode: h.id, advanced: true, developer: true }));
   });
 
   it('the HUD, the tallying banner and the result card of every level, before and after a shot', () => {
@@ -52,6 +53,19 @@ describe('player-facing copy (PT18)', () => {
       audit(`${d.id}'s card`, resultHtml(d, null, 1, true));
     }
     audit('the custom note', CUSTOM_NOTE);
+  });
+
+  it('unrated trials: no star glyphs on their result card or tallying banner, an Unrated note instead (PT37)', () => {
+    for (const d of TRIAL_LEVELS) for (const stars of [0, 1] as const) {
+      const score = { lines: [], total: 0, stars, stamp: '100% DOWN', leverage: 1 } as unknown as LevelScore;
+      for (const [where, html] of [['card', resultHtml(d, score, 1, true)], ['banner', tallyHtml(d, score)]] as const) {
+        const text = visible(html);
+        expect(text, `${d.id} ${where}`).not.toMatch(/[★☆]/);
+        expect(text, `${d.id} ${where}`).toContain(stars ? 'Unrated · goal met' : 'Unrated · goal not met');
+      }
+    }
+    // A rated level keeps its stars.
+    expect(visible(resultHtml(ALL.find((d) => d.id === 'L1')!, { lines: [], total: 0, stars: 2, stamp: 'PAR', leverage: 1 } as unknown as LevelScore, 1, true))).toContain('★★☆');
   });
 
   it('the duels: one point is "1 pt"', () => {
@@ -94,10 +108,10 @@ describe('player-facing copy (PT18)', () => {
   });
 
   it('how to play covers Bullet Time and the Siege Table', () => {
-    const how = HOW_TO_PLAY.join(' ');
+    const how = HOW_TO_PLAY.flatMap((h) => h.lines).join(' ');
     expect(how).toMatch(/Bullet Time/);
     expect(how).toMatch(/<kbd>T<\/kbd>/);
-    expect(HOW_TO_PLAY).toContain(SIEGE_TABLE_HOW);
+    expect(HOW_TO_PLAY.find((h) => h.id === 'siege')!.lines).toContain(SIEGE_TABLE_HOW);
     expect(SIEGE_TABLE_HOW).toMatch(/^Siege Table: two players/);
     expect(SIEGE_TABLE_HOW).toMatch(/Two Keeps: .*Heraldry: /);
   });
