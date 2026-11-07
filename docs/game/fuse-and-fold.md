@@ -64,6 +64,37 @@ Alternatives considered:
 
 All seven cases fail on the old layout.
 
+### The plan in the scene (agent playtest round 2, PT24)
+
+Round 2's judges found that the panel's rows (A1 to D3) had no counterpart in the scene. The charges were unlabelled 8 to 10 px dots, north was a 20 px icon in the panel, and nothing tied "W" to the yard. "W" was also lit at load while every delay was 0.0 s. On F2, whose yard is to the north, it pointed the wrong way. The novice runs ended INCOMPLETE on all five levels. Now:
+
+- **No direction is lit until a Sweep is applied.** All at 0 clears the lit direction too. Before any Sweep, the spacing buttons set only the spacing that the next Sweep uses. A hint under the head reads "Sweep toward the yard, then Plunger".
+- **A yard arrow on the ground** (`fuse-timeline.ts yardArrow`): green beads from just outside the building (its outermost charge host, plus 1.5 cells) to just inside the lot's far edge. It runs along the line from the building's middle to the lot's middle: F1 west, F2 north, F3 north-west (the corner lot), F4 and F5 west. A "Yard" tag sits at its tip.
+- **A ground compass** (`compassArrow`): an orange arrow pointing north, 4 cells long. It stands just outside a corner of the lot, never in the yard. The corners are tried NE, NW, SE, SW, and the first whose arrow misses every body's footprint is used, so it is never under a neighbour. An "N" tag sits at its tip, in the needle's colour.
+- **Charge tags**: each charge's grid label and delay ("B2 0.6") sits over its marker, in its delay's colour. Where tags would overlap (F4's twelve on a phone), they claim their places in a fixed order (`tagOrder`): N and Yard, the selected charge, then one charge of each delay (earliest first, so every row of a Sweep is named), then the rest. A tag that would overlap one already placed hides (`placeTags`). Its marker still shows.
+- The arrows and tags show only while the plunger can go. They are gone once it fires and at the result. The tags sit over the scene and under every panel.
+- **The opening view frames the yard** (`view.ts framedBox`): on a fold level, the framed box is the structure's box, plus the lot and the compass. On a wide screen the view also keeps clear of the panel's column (`openingInsets(aspect, true, screenW)`: 320 px of the screen, as the part of the framed middle square it covers). Upright, the panel's band is measured (PT21). Everything is set at load: the camera does not move.
+
+Alternatives considered:
+
+- **Text in the 3D scene** (a glyph atlas in the renderer) instead of HTML tags. Rejected for now: a new render pass and font pipeline for a dozen labels, which HTML draws crisply at any DPI for the cost of one projection per tag per frame. Tags do not hide behind the building, which also helps here: the charges' tags name columns inside it.
+- **A tag on every charge, always.** Rejected: on F4 the twelve tags piled into an unreadable block at phone size. The overlap rule keeps one tag per delay row in sight wherever there is room.
+- **A tag per sweep row** ("row A 0.0") instead of per charge. Rejected: it stops being true once the player tunes a single row, and the rows' names then mean nothing in the scene.
+- **The compass inside the lot.** Rejected: the lot is the building and its yard, so a compass there sits under the fall or across the yard arrow (F1's lot is a 3 m wide strip).
+- **Frame only the structure, as before.** Rejected: F1's yard reaches 12.75 m west of a building whose structure box ends 2 m from it, so the yard opened off screen or under the panel.
+
+Tests:
+
+- `game/test/view.test.ts`, "a fold level's opening view frames its yard clear of the panels" (unit). For F1 to F5 at 1280 x 800, the lot's projected box is inside the screen and off both the Timeline column and the HUD's box. Upright, it is inside the free band. F1, F2 and F5 fail with the old framing; F3's and F4's neighbours already spanned their lots.
+- `game/test/fuse-timeline.test.ts`, "the plan in the world": the arrows' headings, ends and footprint clearance, and the beads' colours.
+- `game/test/fuse-tags.test.ts`: the projection, the overlap rule and the order.
+- `game/test/fuse-layout-e2e.test.ts`, F2 at 1280 x 800 and 390 x 844:
+  - No direction is lit at load, and the hint shows.
+  - The N and Yard tags are on screen and off the panel.
+  - A Sweep lights its direction, and All at 0 clears it.
+  - Spacing before a Sweep leaves every delay at 0.
+  - The tags are gone at the result.
+
 ## Every charge fires
 
 A fold level's plunger must name every plunger charge (`Session.plungerRefusal`). Alternatives weighed:
