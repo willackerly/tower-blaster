@@ -49,10 +49,12 @@ export interface SoundOptions extends Record<SoundKnob, number> {
   room: Room | 'auto';
   /** Space (A8a): sectors at their impacts' pan, the room's send by distance (the classic set never uses it). */
   space: boolean;
+  /** Air absorption (A8a step 3, air.ts): with space, far impacts lose their top end. */
+  air: boolean;
 }
 
 export const DEFAULT_SOUND: SoundOptions = {
-  on: false, material: 'auto', set: 'real', room: 'auto', space: true,
+  on: false, material: 'auto', set: 'real', room: 'auto', space: true, air: true,
   ...(Object.fromEntries(Object.entries(SOUND_KNOBS).map(([k, v]) => [k, v.def])) as Record<SoundKnob, number>),
 };
 
@@ -61,6 +63,7 @@ export function checkSound(o: SoundOptions): SoundOptions {
   if (!SOUND_SETS.includes(o.set)) throw new Error(`snd.set must be one of ${SOUND_SETS.join(', ')}: ${String(o.set)}`);
   if (o.room !== 'auto' && !(ROOMS as readonly string[]).includes(o.room)) throw new Error(`snd.room must be auto or one of ${ROOMS.join(', ')}: ${String(o.room)}`);
   if (typeof o.space !== 'boolean') throw new Error(`snd.space must be 0 or 1: ${String(o.space)}`);
+  if (typeof o.air !== 'boolean') throw new Error(`snd.air must be 0 or 1: ${String(o.air)}`);
   if (o.material !== 'auto' && !SOUND_MATERIAL_NAMES.includes(o.material)) throw new Error(`snd.mat must be auto or one of ${SOUND_MATERIAL_NAMES.join(', ')}: ${String(o.material)}`);
   for (const k of Object.keys(SOUND_KNOBS) as SoundKnob[]) {
     const r = SOUND_KNOBS[k], v = o[k];
@@ -89,6 +92,11 @@ export function parseSoundOptions(q: URLSearchParams): SoundOptions {
     if (space !== '0' && space !== '1') throw new Error(`snd.space must be 0 or 1: ${space}`);
     o.space = space === '1';
   }
+  const air = q.get('snd.air');
+  if (air !== null) {
+    if (air !== '0' && air !== '1') throw new Error(`snd.air must be 0 or 1: ${air}`);
+    o.air = air === '1';
+  }
   for (const k of Object.keys(SOUND_KNOBS) as SoundKnob[]) {
     const v = q.get(`snd.${k}`);
     if (v !== null) o[k] = v.trim() === '' ? NaN : Number(v);
@@ -103,6 +111,7 @@ export function writeSoundOptions(o: SoundOptions, q: URLSearchParams): void {
   if (o.set !== DEFAULT_SOUND.set) q.set('snd.set', o.set);
   if (o.room !== DEFAULT_SOUND.room) q.set('snd.room', o.room);
   if (o.space !== DEFAULT_SOUND.space) q.set('snd.space', o.space ? '1' : '0');
+  if (o.air !== DEFAULT_SOUND.air) q.set('snd.air', o.air ? '1' : '0');
   for (const k of Object.keys(SOUND_KNOBS) as SoundKnob[]) if (o[k] !== DEFAULT_SOUND[k]) q.set(`snd.${k}`, String(o[k]));
 }
 

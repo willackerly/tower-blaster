@@ -27,6 +27,13 @@ describe('sound options', () => {
     writeSoundOptions(sp, ws);
     expect(ws.toString()).toBe('snd.space=0');
     expect(parseSoundOptions(new URLSearchParams('snd.space=1')).space).toBe(true);
+    // Air (A8a step 3): on by default; snd.air=0 turns it off, and round-trips.
+    expect(DEFAULT_SOUND.air).toBe(true);
+    const ar = parseSoundOptions(new URLSearchParams('snd.air=0')), wa = new URLSearchParams();
+    expect(ar.air).toBe(false);
+    writeSoundOptions(ar, wa);
+    expect(wa.toString()).toBe('snd.air=0');
+    expect(() => parseSoundOptions(new URLSearchParams('snd.air=2'))).toThrow(/snd.air must be 0 or 1: 2/);
     const none = new URLSearchParams();
     writeSoundOptions(DEFAULT_SOUND, none);
     expect(none.toString()).toBe('');

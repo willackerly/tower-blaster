@@ -40,7 +40,8 @@
 // its distance-free level, through a send of gain (distance / dref)^law (capped; law is the room's: 1, a diffuse
 // field's, in the hall; 0.5 outdoors), so the dry sound falls 6 dB a doubling and the hall's reverb stays put: far
 // impacts sound far. The early taps follow the mix's mean distance by geometry (RoomVerb.setDistance). Without a
-// room the send is not built.
+// room the send is not built. With air on too (setAir), each voice and each sector is filtered for the air
+// over its distance (air.ts, ISO 9613-1).
 //
 // Master: Pa to full scale, the room (room.ts: off by default; setRoom), a low cut (2nd-order Butterworth high-pass at
 // `lowcut` Hz: below ~35 Hz no speaker plays it, yet a big block's thump puts
@@ -49,6 +50,7 @@
 // limiting does not crackle.
 import { binOf, DV_EDGES, SPACE_FIELDS, TOP_FIELDS, type AudioFrame } from './frame.ts';
 import type { SoundMaterial } from './material.ts';
+import { AirFilter } from './air.ts';
 import { makeRoom, ROOMS, type Room, type RoomParams, type RoomVerb } from './room.ts';
 import { BL_CLICK_MAX, C_AIR, clickFilter, clickKernel, contactTime, mass, RHO_AIR, radiatedClick, DENSE_BANDS, denseField, forceSpectrum, gauss, modes, roughness, roughTime, soundSize, type Modes } from './modes.ts';
 
@@ -217,6 +219,7 @@ interface Voice {
   on: boolean; mat: number; age: number; life: number; level: number;
   gl: number; gr: number;
   send: number; // its gain into the room's send (space: (gl + gr) / 2 x distance / dref)
+  air: AirFilter; // the air over its distance (space and air on)
   a1: Float32Array; a2: Float32Array; y1: Float32Array; y2: Float32Array; M: number;
   click: Float32Array; clickAt: number; clickGain: number;
   start: number; // absolute sample
@@ -306,7 +309,12 @@ export class CollapseEngine {
   private sGs = new Float64Array(0);
   private sQuiet = new Uint8Array(0);
   private send = new Float32Array(BLOCK);
-  private vbuf = new Float32Array(BLOCK); // one voice's block, with a send
+  private vbuf = new Float32Array(BLOCK); // one voice's block, with a send or air
+  // Air (A8a step 3): on with space; each sector's distance now (smoothed) and its target, and its filter.
+  private airOn = false;
+  private sD = new Float64Array(0);
+  private sDT = new Float64Array(0);
+  private sAir: AirFilter[] = [];
   // The mix's mean distance (energy-weighted over the last frame's sectors) now and its target: the room's early taps follow it.
   private dMix = SPACE_DREF;
   private dMixT = SPACE_DREF;
@@ -353,7 +361,7 @@ export class CollapseEngine {
     this.gw = BLOCK + dmax;
     this.gbus = new Float32Array(this.sectors * this.gw);
     this.voices = Array.from({ length: opts.voices ?? 48 }, () => ({
-      on: false, mat: 0, age: 0, life: 0, level: 0, gl: 0, gr: 0, send: 0, M: 0,
+      on: false, mat: 0, age: 0, life: 0, level: 0, gl: 0, gr: 0, send: 0, air: new AirFilter(this.sr), M: 0,
       a1: new Float32Array(64), a2: new Float32Array(64), y1: new Float32Array(64), y2: new Float32Array(64), amp: new Float32Array(64),
       click: new Float32Array(0), clickAt: 0, clickGain: 0, start: 0,
     }));
@@ -441,6 +449,7 @@ export class CollapseEngine {
   /** Schedule one frame's impacts. */
   push(f: AudioFrame): void {
     if (!(f.dt > 0)) return;
+    if (!(f.sectors >= 1 && f.materials >= 0)) throw new Error(`frame needs materials and sectors: ${f.materials}, ${f.sectors}`);
     const len = Math.round(f.dt * this.sr), earliest = this.now + Math.round(this.latency * this.sr);
     if (this.nextFrame < 0 || Math.abs(this.nextFrame - earliest) > this.resync * this.sr) this.nextFrame = earliest;
     const start = Math.max(this.nextFrame, this.now + BLOCK);
@@ -455,9 +464,10 @@ export class CollapseEngine {
         this.sPanT[s] = Math.max(-1, Math.min(1, sp[SPACE_FIELDS * s + 1]! / w));
         const d = sp[SPACE_FIELDS * s + 2]! / w;
         this.sKT[s] = Math.min(this.sendCap, (d / this.dref) ** law);
+        this.sDT[s] = d;
         wAll += w; wd += w * d; quiet &&= this.sQuiet[s] === 1;
         // A silent sector takes its target at once (no glide in from its centre); a ringing one glides.
-        if (this.sQuiet[s]) { this.sPan[s] = this.sPanT[s]!; this.sK[s] = this.sKT[s]!; }
+        if (this.sQuiet[s]) { this.sPan[s] = this.sPanT[s]!; this.sK[s] = this.sKT[s]!; this.sD[s] = d; }
       }
       if (wAll > 0) { this.dMixT = wd / wAll; if (quiet) this.dMix = this.dMixT; }
     }
@@ -562,6 +572,7 @@ export class CollapseEngine {
       tmax = Math.max(tmax, st.md.tau[k]!);
     }
     const [gl, gr] = panGains(pan), send = this.spaceOn ? ((gl + gr) / 2) * Math.min(this.sendCap, (geo / this.dref) ** (this.roomVerb?.law ?? 1)) : 0;
+    if (this.spaceOn && this.airOn) { v.air.reset(); v.air.set(geo); }
     Object.assign(v, { on: true, mat, M: st.M, age: 0, life: Math.max(tmax, T) * this.sr, level, gl, gr, send, start: at, click: radiatedClick(st.m, T, this.sr, st.edge), clickAt: 0, clickGain: level });
   }
 
@@ -711,6 +722,8 @@ export class CollapseEngine {
       for (let s = 0; s < S; s++) {
         this.sPan[s]! += a * (this.sPanT[s]! - this.sPan[s]!);
         this.sK[s]! += a * (this.sKT[s]! - this.sK[s]!);
+        this.sD[s]! += a * (this.sDT[s]! - this.sD[s]!);
+        if (this.airOn) { const f = this.sAir[s]!; f.set(this.sD[s]!); f.process(sec, s * BLOCK, (s + 1) * BLOCK); }
         const [gl, gr] = panGains(this.sPan[s]!), gs = ((gl + gr) / 2) * this.sK[s]!;
         const l0 = this.sGl[s]!, r0 = this.sGr[s]!, s0 = this.sGs[s]!, dl = (gl - l0) / BLOCK, dr = (gr - r0) / BLOCK, ds = (gs - s0) / BLOCK;
         let peak = 0;
@@ -728,8 +741,9 @@ export class CollapseEngine {
       if (!v.on) continue;
       const from = Math.max(0, v.start - this.now);
       if (from >= BLOCK) continue;
-      if (send) {
-        // With a send (space and a room): the voice's modes and click into one mono buffer, then out to L, R and the send.
+      const air = this.spaceOn && this.airOn;
+      if (send || air) {
+        // With a send (space and a room) or air: the voice's modes and click into one mono buffer, through the air, then out to L, R and the send.
         const vb = this.vbuf;
         vb.fill(0, from);
         for (let k = 0; k < v.M; k++) {
@@ -739,7 +753,9 @@ export class CollapseEngine {
           v.y1[k] = y1; v.y2[k] = y2;
         }
         for (let i = from; i < BLOCK && v.clickAt < v.click.length; i++, v.clickAt++) vb[i]! += v.clickGain * v.click[v.clickAt]!;
-        for (let i = from; i < BLOCK; i++) { const x = vb[i]!; L[i]! += v.gl * x; R[i]! += v.gr * x; send[i]! += v.send * x; }
+        if (air) v.air.process(vb, from, BLOCK);
+        if (send) for (let i = from; i < BLOCK; i++) { const x = vb[i]!; L[i]! += v.gl * x; R[i]! += v.gr * x; send[i]! += v.send * x; }
+        else for (let i = from; i < BLOCK; i++) { const x = vb[i]!; L[i]! += v.gl * x; R[i]! += v.gr * x; }
       } else {
         for (let k = 0; k < v.M; k++) {
           const a1 = v.a1[k]!, a2 = v.a2[k]!;
@@ -791,6 +807,16 @@ export class CollapseEngine {
   /** Is space on? */
   get space(): boolean { return this.spaceOn; }
 
+  /** Air absorption (A8a step 3, air.ts): with space on, each voice and sector filtered for the air over its distance. */
+  setAir(on: boolean): void {
+    if (on === this.airOn) return;
+    this.airOn = on;
+    for (const f of this.sAir) f.reset();
+  }
+
+  /** Is air on (it acts only with space on)? */
+  get air(): boolean { return this.airOn; }
+
   private resetSpace(): void {
     const S = this.sectors;
     this.sPan = Float64Array.from({ length: S }, (_, s) => -1 + (2 * s + 1) / S);
@@ -802,6 +828,8 @@ export class CollapseEngine {
     this.sQuiet = new Uint8Array(S).fill(1);
     this.dMix = this.dMixT = this.dref;
     this.roomVerb?.setDistance(this.dref, this.dref);
+    this.sD = new Float64Array(S).fill(this.dref); this.sDT = new Float64Array(S).fill(this.dref);
+    this.sAir = Array.from({ length: S }, () => new AirFilter(this.sr));
   }
 
   /** Resonators with state or input (a cost probe). */

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { binOf, buildFrame, cellOf, DV_EDGES, type FrameInput, pitchZ, sectorOf, TOP_FIELDS } from '@tb/audio';
+import { type AudioFrame, binOf, BLOCK, buildFrame, CollapseEngine, cellOf, DV_EDGES, type FrameInput, framesFrom, pitchZ, sectorOf, soundMaterials, TOP_FIELDS } from '@tb/audio';
 
 // Camera at the origin looking down -z, right = +x.
 const base = (bodies: { pos: number[]; vel: number[]; prev: number[]; mat?: number }[], over: Partial<FrameInput> = {}): FrameInput => ({
@@ -54,5 +54,27 @@ describe('buildFrame (the audio tap reference)', () => {
     expect(Math.abs(mean)).toBeLessThan(0.03);
     expect(sd).toBeCloseTo(1, 1);
     expect(pitchZ(7)).toBe(pitchZ(7));
+  });
+
+  it('framesFrom reads frames back from JSON, a capture without materials and sectors as 1 and 4, and the bank plays', () => {
+    const f = buildFrame(base([{ pos: [1, 0, -10], vel: [0, 0, 0], prev: [0, -3, 0] }, { pos: [-2, 0, -8], vel: [0, 0, 0], prev: [0, -1, 0], mat: 1 }]));
+    const [back] = framesFrom(JSON.parse(JSON.stringify([{ ...f, counts: [...f.counts], a2: [...f.a2], top: [...f.top], space: [...f.space!] }])));
+    expect(back).toEqual(f);
+    // capture-cli before 2026-11-07: no materials or sectors. Spread as it was, the engine skipped the bank
+    // (its loops ran to undefined) and played the voices alone; it now refuses such a frame.
+    const g = buildFrame(base([{ pos: [0, 0, -10], vel: [0, 0, 0], prev: [0, -3, 0] }], { materials: 1, top: 0 }));
+    const rec = { dt: g.dt, counts: [...g.counts], a2: [...g.a2], top: [...g.top] };
+    const [h] = framesFrom([rec]);
+    expect([h!.materials, h!.sectors]).toEqual([1, 4]);
+    const energy = (fr: AudioFrame) => {
+      const e = new CollapseEngine({ sampleRate: 48000, seed: 1, fullScale: 1e3 }); e.setMaterial(0, soundMaterials('real').stone, 0.5);
+      const L = new Float32Array(BLOCK), R = new Float32Array(BLOCK); let s = 0;
+      e.push(fr); for (let b = 0; b < 100; b++) { e.render(L, R); for (let i = 0; i < BLOCK; i++) s += L[i]! ** 2 + R[i]! ** 2; }
+      return s;
+    };
+    expect(energy(h!)).toBeGreaterThan(0);
+    expect(() => energy({ ...rec, counts: h!.counts, a2: h!.a2, top: h!.top } as unknown as AudioFrame)).toThrow(/materials and sectors/);
+    expect(() => framesFrom([{ ...rec, sectors: 8 }])).toThrow(/does not fit 1 materials x 8 sectors/);
+    expect(() => framesFrom([{ ...rec, space: [1, 2, 3] }])).toThrow(/space 3/);
   });
 });

@@ -15,8 +15,8 @@ export type SoundMessage =
   | { type: 'gain'; gain: number; muted?: boolean; lowcut?: number }
   /** The room (room.ts): off, outdoor or hall; size scales the hall's (and the outdoor surroundings') distances. */
   | { type: 'room'; room: Room; size?: number }
-  /** Space (A8a, engine.setSpace): sectors at their impacts' pan, the room's send by distance. */
-  | { type: 'space'; on: boolean };
+  /** Space (A8a, engine.setSpace): sectors at their impacts' pan, the room's send by distance; air: its absorption too (setAir; absent: unchanged). */
+  | { type: 'space'; on: boolean; air?: boolean };
 
 export interface HostStats {
   type: 'stats';
@@ -74,6 +74,7 @@ export class CollapseHost {
         break;
       case 'space':
         this.engine.setSpace(m.on);
+        if (m.air !== undefined) this.engine.setAir(m.air);
         break;
       case 'room':
         this.engine.setRoom(m.room, m.size ?? 1);
