@@ -4,6 +4,7 @@
 // (render ice.ts IceParams.shadow, cull.ts SEG.boxIceShadow). Measured with the look's own sun
 // (keystone.sun=look), which puts that shadow behind the column, as an orbiting player would see it.
 // OKLab lightness of each course's own pixels (the ID pass of the same frame). Rapier, headless Chromium, grain off.
+// No opening aim (keystone.openaim=0, PT29): its preview dots and impact marker would draw over the courses measured.
 import { describe, expect, it } from 'vitest';
 import type { Page } from 'playwright';
 import { compileLevel, TRIAL_LEVELS } from '@tb/keystone';
@@ -37,7 +38,7 @@ describe('ice pale at any depth (real look)', () => {
     if (!game.browser()) return ctx.skip();
     const got: Record<string, number[]> = {};
     for (const shadow of ['0.7', '0', '1']) {
-      const o = await game.open(`/?level=T-I1&look=real&real.grain=0&engine=rapier&offscreen=1&progress=off&door=0&keystone.sun=look${shadow === '0.7' ? '' : `&ice.shadow=${shadow}`}`, 5 * MINUTES);
+      const o = await game.open(`/?level=T-I1&look=real&real.grain=0&engine=rapier&offscreen=1&progress=off&door=0&keystone.sun=look&keystone.openaim=0${shadow === '0.7' ? '' : `&ice.shadow=${shadow}`}`, 5 * MINUTES);
       if (!o) return ctx.skip();
       await ready(o.page, 5 * MINUTES);
       got[shadow] = await courseLightness(o.page);
