@@ -36,7 +36,7 @@ import { CLEAR_SHARE, FrameGovernor } from './frame-rate.ts';
 import { canvasSize, type QualityState } from './quality.ts';
 import { UndoMarks } from './undo-marks.ts';
 import { FusePanel } from './fuse-panel.ts';
-import { lotBeads, panelTimeline, timelineOverlay } from './fuse-timeline.ts';
+import { lotBeads, panelTimeline, planBeads, timelineOverlay } from './fuse-timeline.ts';
 import { ballFx, beadOverlay, BOMB_FX, CROWN_GLOW, firedKind, PULL_HOVER, ramFx, regrowDuration, regrowScales, roleTint, rolePaint, SPENT_FADE, spentFx, structureCoats, duelCoats, duelTint, duelTints, structureMarks, structureTints, tintOf, tintWordOf, xrayOn } from './scene.ts';
 import { easeGrade, FROZEN_LABEL, freezeFxOf } from './frozen-look.ts';
 import { ghostOutline, PULL_SLIDE_STEPS, type PullAnim, pullAnimFor, withPulled } from './pull-anim.ts';
@@ -689,6 +689,8 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
   const fuse = env.hud.parentElement ? new FusePanel(env.hud.parentElement, { fire: (shot) => handle.fire(shot) }) : null;
   /** The lot's chalk line on a fold level (fuse-timeline.ts lotBeads), else null. */
   let foldLot: Overlay | null = null;
+  /** A fold level's plan on the ground while the plunger can go (fuse-timeline.ts planBeads, PT24): the yard arrow and the compass. */
+  let foldPlan: Overlay | null = null;
   /** Each side's arc on the ground (duel-view.ts arcBeads), made at load. */
   let arcs: Overlay[] = [], arcBeadsDrawn = 0, impactDrawn = false;
   let xrayMemo: { c: CompiledLevel; mode: PaceFeel['xray']; on: boolean } | null = null;
@@ -1072,7 +1074,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     spare = s;
     handle.spare = { level: def.id, settled: false };
     // The next level's opening view is searched now too (view.ts remembers it), not at the swap (B2's takes ~0.2 s).
-    void s.built.then((x) => { if (spare === s && x) { handle.spare = { level: def.id, settled: true }; if (!duel) viewOf(x.c, viewAspect(), undefined, undefined, undefined, { mode: feel.view, insets: openingInsets(viewAspect(), panelTimeline(x.c) !== null), hud: dockedHud() }); } });
+    void s.built.then((x) => { if (spare === s && x) { handle.spare = { level: def.id, settled: true }; if (!duel) viewOf(x.c, viewAspect(), undefined, undefined, undefined, { mode: feel.view, insets: openingInsets(viewAspect(), panelTimeline(x.c) !== null, innerWidth), hud: dockedHud() }); } });
     handle.counts.prefetch = (handle.counts.prefetch ?? 0) + 1;
   }
   /**
@@ -1193,6 +1195,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     fuse?.level(c);
     // A fold level is judged on what stays in its lot: chalk the lot on the ground, the whole round.
     foldLot = c.def.objective.kind === 'fold' ? lotBeads(c) : null;
+    foldPlan = planBeads(c);
     if (line) {
       const s = driver.session, roles = rolePaint(feel.fx);
       s.crownLive.forEach((down, k) => { if (down) renderer.setFx(c.meta.crowns[k]!, { ...roles.crownKept, tint: ownTint(c.meta.crowns[k]!) }); });
@@ -1263,7 +1266,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
       // (A duel's HUD reads the view's yaw and is not measured: it keeps its framing.)
       const hud = duel ? undefined : (drawHud(), dockedHud());
       handle.openingHud = hud ?? null;
-      orbit = viewOf(c, viewAspect(), undefined, undefined, undefined, { mode: duel ? 'classic' : feel.view, insets: openingInsets(viewAspect(), panelTimeline(c) !== null), hud });
+      orbit = viewOf(c, viewAspect(), undefined, undefined, undefined, { mode: duel ? 'classic' : feel.view, insets: openingInsets(viewAspect(), panelTimeline(c) !== null, innerWidth), hud });
     }
     // A duel opens (and Same start reopens) on the first player's side, as each turn after does (duel-view.ts).
     if (duel && feel.turnView) orbit = duelView(c, duel.def, duel.turn, viewAspect());
@@ -2155,9 +2158,14 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     // Fuse & Fold: the charges' markers, coloured by their delays, while the plunger can still go.
     const plungerReady = !!fuse?.timeline && handle.ready && driver.session.rackLeft.includes('plunger');
     fuse?.ready(plungerReady);
-    if (fuse?.timeline) { fuse.heading(view.yaw, view.pitch); placeFuse(); }
+    if (fuse?.timeline) {
+      fuse.heading(view.yaw, view.pitch);
+      placeFuse();
+      // The plan's tags in the scene (PT24) while the plunger can go: charge delays, N and Yard.
+      fuse.world(plungerReady ? viewProj(view, viewAspect()) : null, canvas.getBoundingClientRect());
+    }
     const ghost = pullAnim ? ghostOutline(pullAnim, now - pullAnim.at) : null;
-    const o = joinOverlays(beads ? beadOverlay(beads, aimed?.reachable ?? true) : null, arc, ghost, plungerReady ? timelineOverlay(fuse!.timeline!) : null, foldLot);
+    const o = joinOverlays(beads ? beadOverlay(beads, aimed?.reachable ?? true) : null, arc, ghost, plungerReady ? timelineOverlay(fuse!.timeline!) : null, plungerReady ? foldPlan : null, foldLot);
     renderer.reach(ring?.centre ?? null, ring?.radius ?? 0);
     // The impact marker: where the previewed flight first touches, on that face, a little wider than the shot (none under a blast zone).
     const mark = feel.impact && beads && contact && !ring ? contact : null;
