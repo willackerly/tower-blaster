@@ -32,15 +32,18 @@ export class CollapseSound {
   private readonly kapla: boolean;
   /** The room it plays in (keystone.room); the classic set always plays dry. */
   readonly room: Room;
+  /** Space (keystone.space, A8a): sectors at their impacts' pan, the room by distance; never in the classic set. */
+  readonly space: boolean;
 
   /**
    * extraDb: the level over the game's own (gameSoundDb of the set); set: the materials ('classic': G6's); kapla: Kapla
    * planks sound as real ones (keystone.kaplasound pine; never in the classic set, which is G6's); room: where it is
-   * heard (keystone.room, @tb/audio room.ts; dry in the classic set).
+   * heard (keystone.room, @tb/audio room.ts; dry in the classic set); space: keystone.space (A8a; off in the classic set).
    */
-  constructor(private readonly extraDb = 0, private readonly set: SoundSet = 'real', kapla = true, room: Room = 'outdoor') {
+  constructor(private readonly extraDb = 0, private readonly set: SoundSet = 'real', kapla = true, room: Room = 'outdoor', space = true) {
     this.kapla = kapla && set !== 'classic';
     this.room = set === 'classic' ? 'off' : room;
+    this.space = space && set !== 'classic';
   }
 
   private get gain(): number { return 10 ** ((gameSoundDb(this.set) + this.extraDb) / 20); }
@@ -75,7 +78,7 @@ export class CollapseSound {
     for (; this.slots < s.count && this.slots < descs.length; this.slots++) this.tap.setMaterial(this.slots, soundSlotOf(c, descs[this.slots]!, this.slots, this.kapla));
     const f = [target[0] - eye[0], target[2] - eye[2]], l = Math.hypot(f[0]!, f[1]!) || 1;
     const frame = this.tap.frame(s, { metres: 1, camera: { pos: eye, right: [-f[1]! / l, 0, f[0]! / l] }, dvMin: DV_MIN, dt, top: TOP });
-    this.node.port.postMessage({ type: 'frame', frame } satisfies SoundMessage, [frame.counts.buffer, frame.a2.buffer, frame.top.buffer]);
+    this.node.port.postMessage({ type: 'frame', frame } satisfies SoundMessage, [frame.counts.buffer, frame.a2.buffer, frame.top.buffer, ...(frame.space ? [frame.space.buffer] : [])]);
     this.posted++;
   }
 
@@ -113,6 +116,7 @@ export class CollapseSound {
       this.sendLevel();
       this.post({ type: 'gain', gain: this.gain, muted: this.muted });
       this.post({ type: 'room', room: this.room });
+      this.post({ type: 'space', on: this.space });
       void ctx.resume().then(() => this.running());
     } catch (e) {
       this.fail(e instanceof Error ? e.message : String(e));

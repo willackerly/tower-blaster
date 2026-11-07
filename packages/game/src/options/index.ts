@@ -34,6 +34,7 @@ import { rapid } from './rapid.ts';
 import { room } from './room.ts';
 import { shake } from './shake.ts';
 import { sharp } from './sharp.ts';
+import { space } from './space.ts';
 import { sleepTint } from './sleeptint.ts';
 import { slowMo } from './slowmo.ts';
 import { sound } from './sound.ts';
@@ -86,4 +87,5 @@ export const OPTIONS = [
   blastSound,
   kaplaSound,
   room,
+  space,
 ] as const;

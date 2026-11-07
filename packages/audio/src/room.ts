@@ -46,9 +46,16 @@ export interface RoomParams {
   /** Delay before the late part starts, s (it is fed from the diffuser after this). */
   preDelay: number;
   early: readonly Reflection[];
-  /** Energies against the dry signal's, dB. */
+  /** Energies against the dry signal's, dB (at the space's reference distance, when space is on: engine.setSpace). */
   earlyDb: number;
   lateDb: number;
+  /**
+   * With space on (A8a), the room's send for an impact at distance d is (d / dref)^distanceLaw, so the late part
+   * against the dry sound grows 6 x distanceLaw dB a doubling of distance. 1 (the default) is a diffuse field's:
+   * an enclosed room's reverb does not fall with the source's distance (Sabine). The early taps follow geometry
+   * whatever the law (setDistance).
+   */
+  distanceLaw?: number;
 }
 
 /**
@@ -64,7 +71,9 @@ export interface RoomParams {
  * at about half the critical distance (17 m): the late part 6 dB under the direct sound.
  *
  * Outdoor: a tree line ~15 m off and a building ~27 m off answer at 0.09 and 0.16 s, darker with distance;
- * foliage scatters a little diffuse sound that dies in 0.7 s (0.2 s at 8 kHz), 22 dB under the direct.
+ * foliage scatters a little diffuse sound that dies in 0.7 s (0.2 s at 8 kHz), 22 dB under the direct. In the
+ * open the scattered sound is not a field that holds its level, so its distance law is 0.5 (3 dB a doubling),
+ * chosen on the judge's control (docs/sound.md, Space), not measured.
  */
 export const ROOM_PRESETS: Record<Exclude<Room, 'off'>, RoomParams> = {
   hall: {
@@ -75,9 +84,12 @@ export const ROOM_PRESETS: Record<Exclude<Room, 'off'>, RoomParams> = {
   outdoor: {
     rt60: 0.7, rtHigh: 0.2, lines: [0.029, 0.067], preDelay: 0.06,
     early: [[0.09, 1, 3500, -1], [0.16, 0.8, 2500, 1]],
-    earlyDb: -16, lateDb: -22,
+    earlyDb: -16, lateDb: -22, distanceLaw: 0.5,
   },
 };
+
+/** Speed of sound, m/s (20 C): turns an early tap's delay into its extra path. */
+const SOUND_SPEED = 343;
 
 const N = 8;
 const IMPULSE_BLOCK = 128; // pathEnergies' block (any length works: the processor keeps its state across calls)
@@ -127,6 +139,8 @@ export class RoomVerb {
   readonly size: number;
   /** Samples after the input falls silent until the tail is under -120 dB of where it was: then it idles. */
   readonly tail: number;
+  /** The late send's distance law (RoomParams.distanceLaw; the engine reads it with space on). */
+  readonly law: number;
   // Gains of the two paths (linear amplitude).
   gEarly = 1;
   gLate = 1;
@@ -134,7 +148,7 @@ export class RoomVerb {
   private ap: Float32Array[]; private apAt: number[];
   // Diffused mono history for the early taps and the late feed.
   private h: Float32Array; private hLen: number; private hAt = 0;
-  private eD: Int32Array; private eG: Float64Array; private eC: Float64Array; private eSide: Int8Array; private eY: Float64Array;
+  private eD: Int32Array; private eG: Float64Array; private eG0: Float64Array; private eP: Float64Array; private eC: Float64Array; private eSide: Int8Array; private eY: Float64Array;
   private pre: number;
   // FDN.
   private lines: Float32Array[]; private len: number[]; private at: number[]; private fa: Float64Array; private fb: Float64Array; private fy: Float64Array;
@@ -149,6 +163,10 @@ export class RoomVerb {
     const e = params.early;
     this.eD = Int32Array.from(e.map((r) => Math.max(1, Math.round(r[0] * s * sr))));
     this.eG = Float64Array.from(e.map((r) => r[1]));
+    this.eG0 = Float64Array.from(this.eG);
+    this.eP = Float64Array.from(e.map((r) => r[0] * s * SOUND_SPEED));
+    this.law = params.distanceLaw ?? 1;
+    if (!(this.law >= 0 && this.law <= 2)) throw new Error(`room distanceLaw must be from 0 to 2: ${this.law}`);
     this.eC = Float64Array.from(e.map((r) => lp(r[2], sr)));
     this.eSide = Int8Array.from(e.map((r) => r[3]));
     this.eY = new Float64Array(e.length);
@@ -167,6 +185,19 @@ export class RoomVerb {
     this.tail = Math.ceil(2 * rt * sr) + this.hLen + Math.max(...this.len);
   }
 
+  /**
+   * Space (A8a): the mix's sources are about d metres off, and the send already carries (d / dref)^law of them. A
+   * reflection with extra path p (its delay x c) arrives at d / (d + p) of the direct sound's amplitude, which
+   * the preset's tap gains hold at dref: so tap k's gain is its own x (dref + p) / (d + p) x (d / dref)^(1 - law).
+   * At d = dref the gains are the preset's exactly.
+   */
+  setDistance(d: number, dref: number): void {
+    const { eG, eG0, eP } = this;
+    if (d === dref) { eG.set(eG0); return; }
+    const x = (d / dref) ** (1 - this.law);
+    for (let k = 0; k < eG.length; k++) eG[k] = eG0[k]! * ((dref + eP[k]!) / (d + eP[k]!)) * x;
+  }
+
   /** Zero every state (the tail stops). */
   reset(): void {
     for (const a of this.ap) a.fill(0);
@@ -178,10 +209,15 @@ export class RoomVerb {
   /** Is it idle (input silent for longer than the tail)? An idle room costs nothing. */
   get idle(): boolean { return this.quiet > this.tail; }
 
-  process(L: Float32Array, R: Float32Array): void {
+  /**
+   * Add the room to one block of L, R. Its input is their mono mix, or `send` when given (mono, the same
+   * length: the engine's distance-weighted send, A8a); the dry L, R pass through either way.
+   */
+  process(L: Float32Array, R: Float32Array, send?: Float32Array): void {
     const n = L.length;
     let peak = 0;
-    for (let i = 0; i < n; i++) peak = Math.max(peak, Math.abs(L[i]!), Math.abs(R[i]!));
+    if (send) for (let i = 0; i < n; i++) peak = Math.max(peak, Math.abs(send[i]!));
+    else for (let i = 0; i < n; i++) peak = Math.max(peak, Math.abs(L[i]!), Math.abs(R[i]!));
     if (peak > 1e-6) this.quiet = 0;
     else {
       if (this.quiet > this.tail) return;
@@ -192,8 +228,8 @@ export class RoomVerb {
     for (let i = 0; i < n; i++) {
       const xl = L[i]!, xr = R[i]!;
       let ol = 0, or = 0;
-      // Diffuser on the mono mix.
-      let m = 0.5 * (xl + xr);
+      // Diffuser on the mono mix (or the send).
+      let m = send ? send[i]! : 0.5 * (xl + xr);
       for (let k = 0; k < 4; k++) {
         const buf = ap[k]!, j = apAt[k]!, d = buf[j]!, v = m + DIFFUSE_G * d;
         buf[j] = v; m = d - DIFFUSE_G * v; apAt[k] = j + 1 === buf.length ? 0 : j + 1;

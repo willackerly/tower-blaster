@@ -9,6 +9,7 @@ import { capture, render } from '../src/sound-cli.ts';
 import { CollapseSound } from '../src/collapse-sound.ts';
 import { kaplaSoundOf } from '../src/options/kaplasound.ts';
 import { roomSoundOf } from '../src/options/room.ts';
+import { paceFeel } from '../src/pacing.ts';
 import { AMMO_SLOT, isKaplaPlank, KAPLA_DIMS, KAPLA_SLOT, kaplaLevelDb, kaplaSound, PIECE_SLOT, PRESET_SLOT, presetOf, presetSound, ammoKindOf, ammoOn, mainMaterial, pairEc, GAME_SOUND_DB, gameSoundDb, KEYSTONE_SOUNDS, keystoneSounds, slotSounds, SOUND_SLOTS, soundSetOf, soundSlotOf } from '../src/sound-map.ts';
 
 describe('game sound slots', () => {
@@ -158,6 +159,9 @@ describe('Kapla planks (A9)', () => {
     expect(new CollapseSound().room).toBe('outdoor');
     expect(new CollapseSound(0, 'real', true, 'hall').room).toBe('hall');
     expect(new CollapseSound(0, 'classic', true, 'hall').room).toBe('off');
+    // keystone.space (A8a): on by default, off by keystone.space=0; never in the classic set.
+    expect([new CollapseSound().space, new CollapseSound(0, 'real', true, 'outdoor', false).space, new CollapseSound(0, 'classic', true, 'outdoor', true).space]).toEqual([true, false, false]);
+    expect(paceFeel(new URLSearchParams('keystone.space=0')).space).toBe(false);
     // A stone box in Kapla's proportions stays stone.
     const stone = { ...c, meta: { ...c.meta, material: c.meta.material.map(() => materialId('stone')) } };
     expect(soundSlotOf(stone, c.scene.bodies[0]!, 0)).toBe(materialId('stone'));

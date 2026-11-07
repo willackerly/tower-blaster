@@ -39,3 +39,6 @@ export function soundRoom(c: Pick<ViewerConfig, 'look' | 'real' | 'sound'>): { r
   const room = c.sound.room === 'auto' ? (inHall ? 'hall' : 'outdoor') : c.sound.room;
   return { room, size: room === 'hall' ? size : 1 };
 }
+
+/** Space (snd.space, A8a: sectors at their impacts' pan, the room by distance); the classic set never uses it, as G6 did not. */
+export const soundSpace = (c: Pick<ViewerConfig, 'sound'>): boolean => c.sound.set !== 'classic' && c.sound.space;

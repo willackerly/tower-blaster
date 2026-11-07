@@ -20,6 +20,13 @@ describe('sound options', () => {
       writeSoundOptions(r, w);
       expect(w.toString()).toBe(`snd.room=${room}`);
     }
+    // Space (A8a): on by default; snd.space=0 turns it off, and round-trips.
+    expect(DEFAULT_SOUND.space).toBe(true);
+    const sp = parseSoundOptions(new URLSearchParams('snd.space=0')), ws = new URLSearchParams();
+    expect(sp.space).toBe(false);
+    writeSoundOptions(sp, ws);
+    expect(ws.toString()).toBe('snd.space=0');
+    expect(parseSoundOptions(new URLSearchParams('snd.space=1')).space).toBe(true);
     const none = new URLSearchParams();
     writeSoundOptions(DEFAULT_SOUND, none);
     expect(none.toString()).toBe('');
@@ -32,6 +39,7 @@ describe('sound options', () => {
     expect(() => parseSoundOptions(new URLSearchParams('snd.damping='))).toThrow(/snd.damping/);
     expect(() => parseSoundOptions(new URLSearchParams('snd.voices=2.5'))).toThrow(/whole/);
     expect(() => parseSoundOptions(new URLSearchParams('snd.room=cave'))).toThrow(/snd.room must be auto or one of off, outdoor, hall: cave/);
+    expect(() => parseSoundOptions(new URLSearchParams('snd.space=yes'))).toThrow(/snd.space must be 0 or 1: yes/);
     for (const [k, r] of Object.entries(SOUND_KNOBS)) expect(r.def >= r.min && r.def <= r.max, k).toBe(true);
   });
 

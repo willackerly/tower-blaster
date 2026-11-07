@@ -12,7 +12,7 @@ import workletUrl from '@tb/audio/worklet?worker&url';
 import type { BodyDesc, Snapshot } from '@tb/engine-api';
 import type { V3 } from './math.ts';
 import type { ViewerConfig } from './params.ts';
-import { soundGain, soundMaterial, soundRoom, soundSlot } from './sound-config.ts';
+import { soundGain, soundMaterial, soundRoom, soundSpace, soundSlot } from './sound-config.ts';
 
 export type SoundStatus = 'off' | 'starting' | 'waiting' | 'on' | 'error';
 
@@ -47,6 +47,7 @@ export class ViewerSound {
     this.send({ type: 'material', slot: 0, material: soundMaterial(c), edge: c.scale });
     this.send({ type: 'gain', gain: soundGain(c), lowcut: c.sound.lowcut });
     this.send({ type: 'room', ...soundRoom(c) });
+    this.send({ type: 'space', on: soundSpace(c) });
     this.resume();
   }
 
@@ -71,7 +72,7 @@ export class ViewerSound {
     const right: V3 = [-f[2]! / rl, 0, f[0]! / rl];
     const m = c.scale;
     const frame = this.tap.frame(s, { metres: m, camera: { pos: [eye[0] * m, eye[1] * m, eye[2] * m], right }, dvMin: c.sound.dv, dt, top: c.sound.voices });
-    this.node.port.postMessage({ type: 'frame', frame } satisfies SoundMessage, [frame.counts.buffer, frame.a2.buffer, frame.top.buffer]);
+    this.node.port.postMessage({ type: 'frame', frame } satisfies SoundMessage, [frame.counts.buffer, frame.a2.buffer, frame.top.buffer, ...(frame.space ? [frame.space.buffer] : [])]);
     this.posted++;
   }
 

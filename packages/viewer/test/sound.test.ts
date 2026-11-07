@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { DEFAULT_SOUND, SOUND_MATERIALS, tunedMaterial } from '@tb/audio';
 import { TAG_BALL } from '@tb/engine-api';
-import { autoSoundMaterial, parseSceneFile, parseViewerConfig, presetSearch, SCENE_FILE_FORMAT, sceneFile, soundGain, soundMaterial, soundMaterialName, soundRoom, soundSlot, toSearch } from '../src/index.ts';
+import { autoSoundMaterial, parseSceneFile, parseViewerConfig, presetSearch, SCENE_FILE_FORMAT, sceneFile, soundGain, soundMaterial, soundMaterialName, soundRoom, soundSlot, soundSpace, toSearch } from '../src/index.ts';
 
 describe('viewer sound config', () => {
   it('is off by default and round-trips through the URL, presets and the config file', () => {
@@ -51,6 +51,14 @@ describe('viewer sound config', () => {
     expect(at('?scenario=S4&look=real&real.env=hall&snd.set=classic')).toEqual({ room: 'off', size: 1 });
     const c = parseViewerConfig('?scenario=S4&snd=1&snd.room=hall');
     expect(parseSceneFile(JSON.stringify(sceneFile(c, '', null))).config.sound.room).toBe('hall');
+  });
+
+  it('space (A8a): on unless snd.space=0; never in the classic set; kept in the scene file', () => {
+    const at = (search: string) => soundSpace(parseViewerConfig(search));
+    expect([at('?scenario=S4'), at('?scenario=S4&snd.space=0'), at('?scenario=S4&snd.set=classic'), at('?scenario=S4&snd.set=real1')]).toEqual([true, false, false, true]);
+    const c = parseViewerConfig('?scenario=S4&snd=1&snd.space=0');
+    expect(parseSceneFile(JSON.stringify(sceneFile(c, '', null))).config.sound.space).toBe(false);
+    expect(parseSceneFile(JSON.stringify(sceneFile(parseViewerConfig('?scenario=S4&snd=1'), '', null))).config.sound.space).toBe(true);
   });
 
   it('balls are silent, blocks sound; volume is dB', () => {
