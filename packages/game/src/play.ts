@@ -7,7 +7,7 @@
 // its own elements; the viewer calls it for rules=keystone, with hooks for its
 // dev panels (docs/design/viewer-superset.md, step C).
 import { type BodyDesc, type EngineHealth, limitsHit, type PhysicsEngine, type Vec3 } from '@tb/engine-api';
-import { armRefusal, type RackItem, type CompiledLevel, compileLevel, Driver, type DriverCheckpoint, Duel, type DuelDef, DEFAULT_TURN_SECONDS, type Feedback, type Footprint, type Goal, goalMet, type Player, type Grade, gradeOf, type LevelDef, type LevelScore, type LotSheet, type PerStep, playShots, rapidDue, roundFacts, RUBE_GO, runSession, selectFootprints, selectGroups, type Shot, isIcePiece, QUAKE, snapshotHash, TIER_NAMES } from '@tb/keystone';
+import { armRefusal, type RackItem, type CompiledLevel, compileLevel, Driver, type DriverCheckpoint, Duel, type DuelDef, DEFAULT_TURN_SECONDS, type Feedback, type Footprint, type Goal, goalMet, type Player, type Grade, gradeOf, type LevelDef, type LevelScore, type LotSheet, type PerStep, playShots, rapidDue, roundFacts, RUBE_GO, runSession, scoringOf, selectFootprints, selectGroups, type Shot, isIcePiece, QUAKE, snapshotHash, TIER_NAMES } from '@tb/keystone';
 import { DIAL_KEYS, type DialField, dialShot, dialStart, dialStep, type QuakeDial, quakePanelHtml, seismogram } from './quake-panel.ts';
 import { clampPitch, eyeOf, type Orbit, rayThrough, viewProj } from '@tb/render/camera';
 import type { EffectStats, FxOptions, PixelStats, Renderer, SnapshotSource } from '@tb/render';
@@ -25,6 +25,7 @@ export { viewOf } from './view.ts';
 import { driverOptions, type EngineKind, gpuEngineOptions, makeEngine, roomAfter } from './engines.ts';
 import { type CardForward, hudHtml, meterTicks, type MeterTick, nextSelection, POWER_STEP, rackChips, resultHtml, starsText, tallyHtml } from './hud.ts';
 import { hudInsets, type Layout, type ScreenInsets } from './layout.ts';
+import { type CardFacts, type HudProfile, hudProfile } from './mode-ui.ts';
 import { type GoalLine, goalsHudHtml, goalsResultHtml } from './lot-hud.ts';
 import { duelHudHtml, duelResultHtml, handoffHtml, scoreFloatHtml } from './duel-hud.ts';
 import { arcBeads, duelMarks, duelView, joinOverlays, type Overlay, turnCue, turnCueText, TurnSwing } from './duel-view.ts';
@@ -655,6 +656,11 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
   let regrowBuf = new Float32Array(0);
   let selected: RackItem | null = null;
   let opener: Shot | null = null;
+  /**
+   * The level's mode's HUD (mode-ui.ts, PT23; undefined under keystone.modeui=0), and a Run asked for from the Build
+   * panel: Rube Lab's Run plays the build and releases the ball once the level as built is loaded and grown in.
+   */
+  let profile: HudProfile | undefined, runPending = false;
   let power = 100;
   // The quake designer's dial (levels with a quake in the rack), kept over Retry and Undo so the player can iterate,
   // and its seismogram, recomputed only when the dial moves.
@@ -722,7 +728,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
   /** The Build panel: shown while building, or while the build phase can start; redrawn only when its HTML changes. */
   function showPanel() {
     buildEl.hidden = !(editing || canEdit());
-    buildPanel.show(editing);
+    buildPanel.show(editing, profile?.mode === 'rube');
   }
   function showEdit() {
     if (editing) editView.show(editing, feel.marks);
@@ -759,6 +765,8 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     if (JSON.stringify(def) !== JSON.stringify(levels[levelIdx])) levels[levelIdx] = def;
     leaveEdit();
     void load(levelIdx, true).catch(fail);
+    // Rube Lab's one start verb (PT23): the Build panel's Run also releases the ball (the tick fires it when it can).
+    runPending = profile?.mode === 'rube';
   }
   function cancelEdit() {
     if (!editing) return;
@@ -813,8 +821,9 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
   let loading = 0;
   function load(i: number, retry = false): Promise<void> {
     loading++;
-    // A load ends the build phase (Play, Cancel, a level picked at the door).
+    // A load ends the build phase (Play, Cancel, a level picked at the door), and any Run waiting on it.
     if (editing) leaveEdit();
+    runPending = false;
     buildAfterLoad = false;
     // Not ready from now on (a load can take many frames), so nothing fires into the level being left.
     if (driver) syncState();
@@ -1229,6 +1238,9 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     else if (!retry || !dial) dial = dialStart(c);
     // Rube Lab levels open with their plunger (the trapdoor's release): the HUD's Go button and key F fire it.
     opener = env.opener?.(c) ?? (c.def.rube ? RUBE_GO : null);
+    profile = feel.modeUi ? hudProfile(c.def) : undefined;
+    // A mode that fires nothing from the scene drops the help's "click: fire" (ui.ts fireSpan).
+    document.body.classList.toggle('kg-nofire', profile !== undefined && !profile.fire);
     if (!retry) {
       setPower(100);
       // The play area: the lot (where debris counts), grown a little, up to the structure's top.
@@ -1507,6 +1519,17 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
    * (layout.ts, PT4), a small tallying banner shows instead and the card waits Layout.cardDelay of wall time
    * after the settle, so the player sees the collapse land; then it docks aside, not over the middle.
    */
+  /** What the round left, for the card's words (mode-ui.ts CardFacts): an outcome level's facts as its score read them. */
+  function cardFacts(): CardFacts {
+    const s = driver.session, f = scoringOf(c.def) === 'outcome' ? s.outcomeFacts() : null;
+    return {
+      crownsDown: s.crownLive.reduce((a, x) => a + x, 0), crownsTotal: c.meta.crowns.length,
+      heritageBroken: s.heritageBroken.reduce((a, x) => a + x, 0), heritageTotal: c.meta.heritage.length,
+      collapse: f?.collapse ?? s.liveCollapse,
+      ...(f?.spill !== undefined ? { spill: f.spill } : {}), ...(f?.energy !== undefined ? { energy: f.energy } : {}),
+    };
+  }
+
   function showResult(score: LevelScore | null) {
     if (duel && !score) return;
     let duelHtml = '';
@@ -1523,11 +1546,11 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     if (duel) env.result.innerHTML = duelHtml;
     else {
       const sheet = score && lot ? goalsResultHtml(handle.goals, handle.grade, lot.sheet.grades !== undefined) : '';
-      env.result.innerHTML = resultHtml(c.def, score, driver.session.strokes, cardForward(), Boolean(env.onSave), sheet, true);
+      env.result.innerHTML = resultHtml(c.def, score, driver.session.strokes, cardForward(), Boolean(env.onSave), sheet, true, { facts: cardFacts(), modeUi: feel.modeUi });
     }
     if (score) handle.card.endedMs = performance.now();
     if (delay <= 0) { revealCard(); return; }
-    tally.innerHTML = tallyHtml(c.def, score, duel ? 'Round over' : null);
+    tally.innerHTML = tallyHtml(c.def, score, duel ? 'Round over' : null, { facts: cardFacts(), modeUi: feel.modeUi });
     tally.classList.add('show');
     document.body.classList.add('kg-tallying');
     if (!score) return;
@@ -1679,6 +1702,8 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
   const openerNow = (): Shot | null => (opener && driver.session.strokes === 0 && driver.session.canFire(opener.ammo) ? opener : null);
 
   function fireOpener(): boolean {
+    // The mode's HUD offers no opener where the mode's panel holds the start (key F included; PT23).
+    if (profile && !profile.opener) return false;
     const o = openerNow();
     return o !== null && fire(o);
   }
@@ -2060,7 +2085,8 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
       reachable: aimed ? aimed.reachable : null,
       pullRefused: aimed?.shot.ammo === 'pull' && !aimed.reachable && (aimed.shot.body === refusedPull ? 'tapped' : true),
       collapse: s.liveCollapse, pulled: s.pulledShare(), met: s.objectiveDone, canBank: !stepping && regrowT === null && s.canBank(), canSkip: canSkip(), skipping, pace: handle.pace.tag,
-      opener: !stepping && regrowT === null && s.phase === 'aiming' && openerNow() !== null, ticks,
+      // While building, the mode's HUD leaves the start to the Build panel's Run (one start verb, PT23).
+      opener: !stepping && regrowT === null && s.phase === 'aiming' && openerNow() !== null && !(profile && editing), ticks, profile,
       // While the turn view swings or the hand-over card shows, the aim is the old side's: no refusal, cue or warning (PT5's red line mid-swing).
       ...(duel ? { duel: swing.active || handle.handoff ? duelHudHtml(duel) : duelHudHtml(duel, s.phase === 'aiming' && aimed ? duel.refuse(aimed.shot) : null, azFromYaw(orbit.yaw), s.phase === 'aiming' && aimHit !== null && duel.owned[duel.turn].includes(aimHit.body)) } : {}),
       ...(selected === QUAKE && dial ? { quake: quakeHud(dial) } : {}),
@@ -2105,6 +2131,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
       renderer.setFx(0, null, regrowScales(c, done ? Infinity : regrowT, regrowBuf), !done);
       if (done) { regrowT = null; aimDirty = true; }
     }
+    if (runPending && !loading && !editing && regrowT === null) { runPending = false; fireOpener(); }
     const running = !loading && driver.session.phase === 'running';
     // Physics is behind when the sim runs under the HUD's slow-motion speed without being asked to
     // (slow-motion juice, fast-forward); it has headroom when steps cost under CLEAR_SHARE of a step.

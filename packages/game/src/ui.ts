@@ -4,7 +4,7 @@
 // panel column); the banner and the result card place themselves.
 
 import { DUEL_CSS } from './duel-hud.ts';
-import { TOUCH_HELP } from './hud.ts';
+import { TOUCH_HELP, TOUCH_LOOK } from './hud.ts';
 import { LOT_CSS } from './lot-hud.ts';
 import { FUSE_CSS } from './fuse-panel.ts';
 
@@ -179,6 +179,8 @@ export const GAME_CSS = `
   .kg-result .stars { font-size: 30px; color: #f7b955; opacity: 0; animation: kg-slam 0.3s ease-out forwards; }
   .kg-result .gold { margin-top: 2px; font-size: 13px; color: #8a93a6; opacity: 0; animation: kg-slam 0.3s ease-out forwards; }
   .kg-result .gold.got { color: #f7b955; font-weight: 700; }
+  .kg-result .stamp.s-heritagelost { border-color: #f0806a; color: #f0806a; }
+  .kg-result .reason { margin-top: 8px; font-size: 13px; line-height: 1.35; }
   .kg-result .lost { margin-top: 2px; font-size: 13px; opacity: 0; animation: kg-slam 0.3s ease-out forwards; }
   .kg-hud .lev .shot { opacity: 0.75; margin-left: 4px; line-height: 1; white-space: nowrap; }
   .kg-hud .lev .shot.held { visibility: hidden; }
@@ -208,6 +210,8 @@ export const GAME_CSS = `
   .kg-hud .slot { display: inline-flex; gap: 8px; align-items: center; }
   .kg-hud .slot button.skip { margin-top: 0; }
   .kg-hud .slot-row.idle, .kg-hud .slot.empty, .kg-hud .lev.pre, .kg-hud .tch-hint { display: none; }
+  .h-look, body.kg-nofire .h-fire { display: none; }
+  body.kg-nofire .h-look { display: inline; }
   body.kg-touch .kg-hud .slot-row.idle { display: flex; }
   .kg-hud .acts { gap: 8px; }
   .kg-hud .acts.kg-tch { display: none; }
@@ -287,7 +291,13 @@ export { TOUCH_HELP };
  * The game page's help panel: the desktop hint line, or every key once `?` (or its button) opens them,
  * and the touch line on a touch screen (GAME_CSS picks by body.kg-touch).
  */
-export const helpHtml = (all: boolean) => `<span class="kg-desk">${all ? `${GAME_KEYS} <button data-act="keys">fewer</button>` : GAME_HELP.replace('<kbd>?</kbd> keys', '<button data-act="keys"><kbd>?</kbd> keys</button>')}</span><span class="kg-tch">${TOUCH_HELP}</span>`;
+export const helpHtml = (all: boolean) => `<span class="kg-desk">${fireSpan(all ? `${GAME_KEYS} <button data-act="keys">fewer</button>` : GAME_HELP.replace('<kbd>?</kbd> keys', '<button data-act="keys"><kbd>?</kbd> keys</button>'))}</span><span class="kg-tch"><span class="h-fire">${TOUCH_HELP}</span><span class="h-look">${TOUCH_LOOK}</span></span>`;
+
+/**
+ * The help's words about firing, in a span a mode with no shot to fire hides (body.kg-nofire, set from the level's
+ * HudProfile.fire: Fuse & Fold, Aftershock, Rube Lab; PT23). The touch line has a second wording for those modes.
+ */
+const fireSpan = (h: string) => h.replace(/(hover: aim · )?click: fire · /, (m) => `<span class="h-fire">${m}</span>`);
 
 /** The help panel as the page opens: the hint line (helpHtml(false)). */
 export const HELP_HTML = helpHtml(false);
