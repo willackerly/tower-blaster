@@ -30,6 +30,7 @@ export const quality = {
     door: {
       act: 'quality',
       label: 'Quality',
+      player: true,
       buttons: (v, { detected, esc }) =>
         QUALITY_CHOICES.map((c) => `<button data-act="quality" data-arg="${c.quality}" class="${v === c.quality ? 'on' : ''}" title="${esc(QUALITY_TITLES[c.quality])}">${c.quality === 'auto' && detected ? `Auto (${tierName(detected)})` : c.label}</button>`).join(''),
       click: (arg) => ((QUALITY_SETTINGS as readonly string[]).includes(arg) ? (arg as QualitySetting) : undefined),

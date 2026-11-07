@@ -68,7 +68,10 @@ viewer's sandbox keys are separate tables with their own owners. They stay where
 3. Read it where it is used, as `feel.<field>` or `settings.current.<field>`. If changing the setting
    must do more than set feel fields (re-carve stones, re-lay the HUD), add one `if (changed === …)`
    line in `main.ts`'s `applied`.
-4. Test the option in its own test file. `options.test.ts` checks the registry rules (each module
+4. A setting's door row lands under **Developer settings** on the door. Give the row `player: true` only when a
+   newcomer needs it: PT37 keeps Advanced to six rows (Sound, Look, Camera, Hand-over, Layout, Quality;
+   docs/game/front-door.md), and `door.test.ts` pins that list.
+5. Test the option in its own test file. `options.test.ts` checks the registry rules (each module
    is listed, names are unique, parts are consistent) without being edited.
 
 Option modules import only leaf modules: `aim`, `scene`, `frame-rate`, `quality`, `layout` and
@@ -134,6 +137,11 @@ pin:
 - in the viewer, the URL, the scene file's `rules`, the scene file read back, and its refusals.
 
 These are the observable differences, all deliberate:
+
+- **Sound as an On/Off pair, and the Developer fold (PT37).** The four Sound rows in
+  `options-golden.json` were edited by hand to the pair's markup (not re-recorded). The door cases render
+  with the Developer fold open and compare the rows in registry order, so the split between player and
+  developer rows does not move the pinned markup.
 
 - **The stored settings' key order.** `tb.settings.v1` now lists its keys in the door's order, so
   `sharp` moves after `layout`. Reading is field by field, so nothing reads the order.
