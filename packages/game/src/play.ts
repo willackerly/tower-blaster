@@ -32,7 +32,7 @@ import { COST_WINDOW, runPhysics, wakeable } from './physics-loop.ts';
 import { CLEAR_SHARE, FrameGovernor } from './frame-rate.ts';
 import { canvasSize, type QualityState } from './quality.ts';
 import { UndoMarks } from './undo-marks.ts';
-import { ballFx, beadOverlay, BOMB_FX, CROWN_GLOW, firedKind, PULL_HOVER, ramFx, regrowDuration, regrowScales, roleTint, rolePaint, SPENT_FADE, spentFx, structureCoats, structureMarks, structureTints, tintOf, tintWordOf } from './scene.ts';
+import { ballFx, beadOverlay, BOMB_FX, CROWN_GLOW, firedKind, PULL_HOVER, ramFx, regrowDuration, regrowScales, roleTint, rolePaint, SPENT_FADE, spentFx, structureCoats, duelCoats, duelTint, duelTints, structureMarks, structureTints, tintOf, tintWordOf } from './scene.ts';
 import { easeGrade, FROZEN_LABEL, freezeFxOf } from './frozen-look.ts';
 import { ghostOutline, PULL_SLIDE_STEPS, type PullAnim, pullAnimFor, withPulled } from './pull-anim.ts';
 import { type GestureState, type TouchAction, TouchGestures, touchFace, type TouchMode } from './touch.ts';
@@ -848,7 +848,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
   function applyMarks() {
     // In a duel the player to fire's own king wears the shield, the rival's the crosshair (duel-view.ts duelMarks).
     renderer.setMarks(0, duel ? duelMarks(c, duel, feel.marks) : structureMarks(c, feel.marks));
-    renderer.setCoats(0, structureCoats(c, coatsOn()));
+    renderer.setCoats(0, duel ? duelCoats(c, feel.coats) : structureCoats(c, coatsOn()));
   }
 
   /**
@@ -898,8 +898,13 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     void float.offsetWidth; // restart the animation
     float.classList.add('show');
   }
-  /** Coats as feel.coats says, but never in a duel, whose blocks wear their side's ink. */
+  /** Coats as feel.coats says, but never gilt or glaze in a duel, whose blocks wear their side's ink (painted, duelCoats). */
   const coatsOn = () => feel.coats && !duel;
+  const inks = () => duel!.def.sides.map((s) => s.ink);
+  /** The structure's tints at a load or restore: a duel's sides in their inks and its neutral blocks plain (scene.ts duelTints). */
+  const baseTints = () => (duel ? duelTints(c, duel.owned, inks(), feel.coats) : structureTints(c, coatsOn()));
+  /** Body b's own linear tint, for a felled crown's or cracked heritage's paint: in a duel its side's ink, never the other side's gold. */
+  const ownTint = (b: number) => (duel ? duelTint(c, duel.owned, inks(), b, feel.coats) : roleTint(c, b, coatsOn()));
 
   function restoreMark(mark: UndoMark) {
     mark.cp.restore();
@@ -910,12 +915,12 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     source.update(driver.snapshot, descs);
     if (fxSlots) renderer.clearFx(0, fxSlots);
     regrowBuf = regrowScales(c, Infinity, new Float32Array(c.meta.n));
-    renderer.setFx(0, structureTints(c, coatsOn()), regrowBuf, false);
+    renderer.setFx(0, baseTints(), regrowBuf, false);
     applyMarks();
     paintIce();
     const s = driver.session, roles = rolePaint(feel.fx);
-    s.crownLive.forEach((down, k) => { if (down) renderer.setFx(c.meta.crowns[k]!, { ...roles.crownKept, tint: roleTint(c, c.meta.crowns[k]!, coatsOn()) }); });
-    s.heritageBroken.forEach((cracked, k) => { if (cracked) renderer.setFx(c.meta.heritage[k]!, { ...roles.heritageKept, tint: roleTint(c, c.meta.heritage[k]!, coatsOn()) }); });
+    s.crownLive.forEach((down, k) => { if (down) renderer.setFx(c.meta.crowns[k]!, { ...roles.crownKept, tint: ownTint(c.meta.crowns[k]!) }); });
+    s.heritageBroken.forEach((cracked, k) => { if (cracked) renderer.setFx(c.meta.heritage[k]!, { ...roles.heritageKept, tint: ownTint(c.meta.heritage[k]!) }); });
     // No spark, heat, flash, blast or lit fuse of the undone shot carries over (PT2); the kept shots' fuses are lit again below.
     renderer.resetEffects();
     fading = [];
@@ -1130,16 +1135,15 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     duel = env.duel ? new Duel(env.duel, c, i as Player, driver.session.home) : null;
     hideHandoff();
     firedAt = null;
-    const tints = structureTints(c, coatsOn());
-    // Owner ink: each side's blocks in its colour, its king glowing a little as crowns do.
-    if (duel) duel.owned.forEach((idx, k) => { for (const b of idx) tints[b] = tintWordOf(duel!.def.sides[k]!.ink, c.meta.role[b] === 1 ? CROWN_GLOW : 0); });
+    // Owner ink: each side's blocks in its colour, its king glowing a little as crowns do; a duel's neutral blocks plain grey.
+    const tints = baseTints();
     renderer.setFx(0, tints, regrowBuf, !line);
     applyMarks();
     paintIce();
     if (line) {
       const s = driver.session, roles = rolePaint(feel.fx);
-      s.crownLive.forEach((down, k) => { if (down) renderer.setFx(c.meta.crowns[k]!, { ...roles.crownKept, tint: roleTint(c, c.meta.crowns[k]!, coatsOn()) }); });
-      s.heritageBroken.forEach((cracked, k) => { if (cracked) renderer.setFx(c.meta.heritage[k]!, { ...roles.heritageKept, tint: roleTint(c, c.meta.heritage[k]!, coatsOn()) }); });
+      s.crownLive.forEach((down, k) => { if (down) renderer.setFx(c.meta.crowns[k]!, { ...roles.crownKept, tint: ownTint(c.meta.crowns[k]!) }); });
+      s.heritageBroken.forEach((cracked, k) => { if (cracked) renderer.setFx(c.meta.heritage[k]!, { ...roles.heritageKept, tint: ownTint(c.meta.heritage[k]!) }); });
     }
     fxSlots = descs.length;
     pacer.reset();
@@ -1327,7 +1331,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
         case 'crownDown':
           juice.shake(0.08);
           // A felled crown flashes once and stops glowing.
-          renderer.setFx(f.body, { ...rolePaint(feel.fx).crownFlash, tint: roleTint(c, f.body, coatsOn()) });
+          renderer.setFx(f.body, { ...rolePaint(feel.fx).crownFlash, tint: ownTint(f.body) });
           // Only where the clear ends the level: par levels, and outcome levels with autobank.
           if (c.def.objective.kind === 'crowns' && f.ordinal + 1 === c.meta.crowns.length && driver.session.phase === 'running' && (driver.session.scoring === 'par' || c.def.autobank)) {
             ending = true;
@@ -1365,7 +1369,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
           juice.shake(0.3);
           banner('Heritage cracked', 'crack');
           // Damage style: a teal flash that stays teal (classic: to white).
-          renderer.setFx(f.body, { ...rolePaint(feel.fx).heritageFlash, tint: roleTint(c, f.body, coatsOn()) });
+          renderer.setFx(f.body, { ...rolePaint(feel.fx).heritageFlash, tint: ownTint(f.body) });
           break;
         case 'tier': banner(`${TIER_NAMES[f.tier]}!`); break;
         case 'settled':
