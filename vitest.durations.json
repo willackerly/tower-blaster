@@ -175,6 +175,7 @@
   "packages/keystone-lab/test/rube.test.ts": 12.4,
   "packages/keystone-lab/test/run-window-ref.test.ts": 52,
   "packages/keystone-lab/test/settle-flight.test.ts": 3.4,
+  "packages/keystone-lab/test/settle-hold.test.ts": 60,
   "packages/keystone-lab/test/sim-lean.test.ts": 86.5,
   "packages/keystone-lab/test/sim.test.ts": 131.7,
   "packages/keystone-lab/test/stars-audit.test.ts": 0,
