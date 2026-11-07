@@ -32,6 +32,12 @@ export interface QuakeRules {
    * is locked to it, and no other quake goes in. The ranges above then hold only it.
    */
   fixed?: QuakeDialValues;
+  /**
+   * Where the game's dial starts (PT25, docs/game/aftershock.md "The dial's starting quake"): a quake inside the
+   * rules that does part of the job (keystone-lab quake-seed.ts). Not part of the hash: it changes no outcome, only
+   * where the dial opens, so a seeded level keeps its stars. Absent: the dial opens at 0.3 g, 1 Hz, 3 s along x.
+   */
+  start?: QuakeDialValues;
 }
 
 /** A quake's four dial values, QuakeShot's units (peak % g, hz 0.1 Hz, sec 0.1 s, axis degrees). */
@@ -43,7 +49,7 @@ export type QuakeDialValues = Pick<QuakeShot, 'peak' | 'hz' | 'sec' | 'axis'>;
  */
 export const QUAKE_DEFAULTS = { peakMax: 80, hz: [3, 30], sec: [5, 120], axisStep: 15 } as const satisfies QuakeRules;
 
-export interface ResolvedQuakeRules { peakMax: number; hz: [number, number]; sec: [number, number]; budget?: number; axisStep: number; fixed?: QuakeDialValues }
+export interface ResolvedQuakeRules { peakMax: number; hz: [number, number]; sec: [number, number]; budget?: number; axisStep: number; fixed?: QuakeDialValues; start?: QuakeDialValues }
 
 export function quakeRulesOf(d: Pick<LevelDef, 'quake'>): ResolvedQuakeRules {
   const q = d.quake ?? {};
@@ -52,6 +58,7 @@ export function quakeRulesOf(d: Pick<LevelDef, 'quake'>): ResolvedQuakeRules {
   return {
     peakMax: q.peakMax ?? QUAKE_DEFAULTS.peakMax, hz: q.hz ?? [...QUAKE_DEFAULTS.hz], sec: q.sec ?? [...QUAKE_DEFAULTS.sec],
     axisStep: q.axisStep ?? QUAKE_DEFAULTS.axisStep, ...(q.budget !== undefined ? { budget: q.budget } : {}),
+    ...(q.start ? { start: { peak: q.start.peak, hz: q.start.hz, sec: q.start.sec, axis: q.start.axis } } : {}),
   };
 }
 
@@ -75,7 +82,17 @@ export function checkQuakeRules(q: QuakeRules, where = 'quake'): void {
     for (const k of Object.keys(f)) if (!known.has(k)) throw new Error(`${where}.fixed.${k} is not a quake field (peak, hz, sec, axis)`);
     for (const k of ['peak', 'hz', 'sec', 'axis'] as const) intIn(f[k] as number, `fixed.${k}`, QUAKE_RANGE[k][0], QUAKE_RANGE[k][1]);
     // The ranges would only contradict it: a fixed quake is the whole dial.
-    for (const k of ['peakMax', 'hz', 'sec', 'axisStep'] as const) if (q[k] !== undefined) throw new Error(`${where}: a fixed quake takes no ${k} (the dial is locked to it)`);
+    for (const k of ['peakMax', 'hz', 'sec', 'axisStep', 'start'] as const) if (q[k] !== undefined) throw new Error(`${where}: a fixed quake takes no ${k} (the dial is locked to it)`);
+  }
+  if (q.start !== undefined) {
+    const s = q.start as unknown as Record<string, unknown>;
+    if (typeof s !== 'object' || s === null) throw new Error(`${where}.start must be {peak, hz, sec, axis}`);
+    const known = new Set(['peak', 'hz', 'sec', 'axis']);
+    for (const k of Object.keys(s)) if (!known.has(k)) throw new Error(`${where}.start.${k} is not a quake field (peak, hz, sec, axis)`);
+    for (const k of ['peak', 'hz', 'sec', 'axis'] as const) intIn(s[k] as number, `start.${k}`, QUAKE_RANGE[k][0], QUAKE_RANGE[k][1]);
+    // Inside the dial's own rules: the dial must be able to stand where it starts.
+    const r = quakeRulesOf({ quake: { ...q, start: undefined } }), st = q.start;
+    if (st.peak > r.peakMax || st.hz < r.hz[0] || st.hz > r.hz[1] || st.sec < r.sec[0] || st.sec > r.sec[1] || st.axis % r.axisStep !== 0) throw new Error(`${where}.start is outside the level's dial: ${JSON.stringify(st)}`);
   }
 }
 

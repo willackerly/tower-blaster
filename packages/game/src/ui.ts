@@ -49,7 +49,9 @@ export const DOCK_CSS = `
     body.kg-touch .kg-dock .tray .ctl .qdials { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 4px 8px; }
     body.kg-touch .kg-dock .tray .ctl .qdials .power { justify-content: space-between; }
     body.kg-touch .kg-dock .tray .ctl .qdials .compass { width: 26px; height: 26px; }
-    body.kg-touch .kg-dock .tray .ctl .qv { min-width: 0; flex: 1; }
+    body.kg-touch .kg-dock .tray .ctl .qv { min-width: 0; flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; line-height: 1.15; align-self: stretch; }
+    /* PT25: the docked dial keeps its labels, each over its value inside the 44 px row (no line added). */
+    body.kg-touch .kg-dock .tray .ctl .qv::before { content: attr(data-label); font: 500 10.5px/1.1 system-ui, sans-serif; color: #9aa3b8; }
     body.kg-touch .kg-dock .tray .ctl .qfoot { display: flex; gap: 8px; }
     body.kg-touch .kg-dock .tray .ctl .qfoot .seismo { flex: 1 1 40px; min-width: 0; width: 40px; height: 32px; }
     body.kg-touch .kg-dock .tray .ctl .qfoot .qe .bar { width: 48px; min-width: 48px; flex: none; }
@@ -97,6 +99,19 @@ export const DOCK_CSS = `
     body.kg-touch .kg-dock .st .obj > span:first-child { display: none; }
     body.kg-building.kg-touch .kg-dock ~ .kg-build { top: auto; left: 8px; right: 8px; bottom: 8px; max-height: 46%; }
     body.kg-touch .kg-dock .tray button.qd { width: 44px; height: 44px; }
+    /*
+     * PT25: while the quake is set and the action slot is idle, the panel's foot (seismograph, energy, Start) and Undo
+     * and Restart share one line: the panel and the slot row are laid out as one wrap (display: contents), the idle
+     * slot goes. The docked HUD then covers under 30% of an upright phone, as a launcher's does. (Upright only: the
+     * sideways rail is too narrow for the foot and the buttons on one line, and has the height for both.)
+     */
+    body.kg-touch .kg-dock .tray:has(.quake-panel):has(.slot-row.idle) { flex-flow: row wrap; align-items: center; column-gap: 8px; }
+    body.kg-touch .kg-dock .tray:has(.quake-panel):has(.slot-row.idle) > .chips { flex: 1 1 100%; }
+    body.kg-touch .kg-dock .tray:has(.quake-panel):has(.slot-row.idle) > .ctl, body.kg-touch .kg-dock .tray:has(.quake-panel):has(.slot-row.idle) > .ctl > .quake-panel, body.kg-touch .kg-dock .tray:has(.quake-panel):has(.slot-row.idle) > .slot-row { display: contents; }
+    body.kg-touch .kg-dock .tray:has(.quake-panel):has(.slot-row.idle) .qdials { flex: 1 1 100%; }
+    body.kg-touch .kg-dock .tray:has(.quake-panel):has(.slot-row.idle) .qfoot { flex: 1 1 0; min-width: 0; }
+    body.kg-touch .kg-dock .tray:has(.quake-panel):has(.slot-row.idle) .slot-row > .slot, body.kg-touch .kg-dock .tray:has(.quake-panel):has(.slot-row.idle) .slot-row > .note { display: none; }
+    body.kg-touch .kg-dock .tray:has(.quake-panel):has(.slot-row.idle) .slot-row > .acts { flex: none; display: flex; gap: 4px; }
   }
   @media ${DOCK_SIDEWAYS} {
     body.kg-touch .kg-hud.kg-dock { right: auto; width: clamp(200px, 28vw, 250px); }
@@ -138,8 +153,10 @@ export const GAME_CSS = `
   .kg-hud .qfoot .seismo { grid-column: 1 / -1; width: 100%; }
   .kg-hud .qe { display: flex; align-items: center; gap: 8px; } .kg-hud .qe b { white-space: nowrap; }
   .kg-hud button.qd { font: 700 16px/1 system-ui, sans-serif; width: 28px; height: 26px; padding: 0; border: 0; border-radius: 6px; background: #2b3242; color: #e8ebf2; cursor: pointer; }
-  .kg-hud .qv { min-width: 58px; text-align: center; }
-  .kg-hud .seismo polyline { fill: none; stroke: #f7b955; stroke-width: 1.4; } .kg-hud .seismo .axis { stroke: #3a4459; stroke-width: 1; }
+  .kg-hud .qv { min-width: 58px; text-align: center; position: relative; padding-bottom: 5px; }
+  .kg-hud .qticks { position: absolute; left: 4px; right: 4px; bottom: 0; width: calc(100% - 8px); height: 6px; overflow: visible; }
+  .kg-hud .qticks line { stroke-width: 1.6; vector-effect: non-scaling-stroke; } .kg-hud .qticks .tc { stroke: #f7b955; } .kg-hud .qticks .tp { stroke: #7fc8f0; } .kg-hud .qticks .tv { fill: #e8ebf2; }
+  .kg-hud .seismo polyline { fill: none; stroke: #f7b955; stroke-width: 1.4; } .kg-hud .seismo .axis { stroke: #3a4459; stroke-width: 1; } .kg-hud .seismo .head { stroke: #e8ebf2; stroke-width: 1.6; }
   .kg-hud .compass circle { fill: none; stroke: #3a4459; } .kg-hud .compass line { stroke: #f7b955; stroke-width: 2.2; } .kg-hud .compass .tip { fill: #f7b955; stroke: none; }
   .kg-hud button.quake-go { font: 650 14px/1 system-ui, sans-serif; padding: 8px 12px; border: 0; border-radius: 6px; background: #d8693f; color: #fff; cursor: pointer; }
   .kg-hud button.quake-go:disabled { background: #3a4459; color: #8a93a6; cursor: default; }
