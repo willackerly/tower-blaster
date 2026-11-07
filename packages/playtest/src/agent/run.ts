@@ -24,8 +24,9 @@ import { fileURLToPath } from 'node:url';
 import { platform } from 'node:os';
 import { chromium, type Browser, type Page } from 'playwright';
 import { createServer } from 'vite';
-import { levelById, type Shot } from '@tb/keystone';
+import { levelById, RUBE_GO, type Shot } from '@tb/keystone';
 import { WEBGPU_ARGS } from '@tb/testkit';
+import { type EditAction, fuseSweep, rubeLine } from './modes.ts';
 import { agentPlan, frameName, lineOf, noviceAim, type Scenario, sheetGrid, spiral, VIEWPORTS, type ViewportName, withLook } from './plan.ts';
 
 const MIN = 60_000;
@@ -43,6 +44,10 @@ export interface RunRecord {
   hud?: string; help?: string;
   undo?: { ok: boolean; mode: string; ms: number } | null; retryWallMs?: number;
   freeze?: { frozeAt: number; frozen: boolean; firedWhileFrozen: boolean; resumed: boolean } | null;
+  /** Round 2: a build phase (Rube Lab, Mason's Trial): what was built (the recorded build's label, or nothing) and the panel's line after it. */
+  build?: { built: string; status: string } | null;
+  /** PT3's verify on a touch viewport: the docked HUD's share of the screen (upright: strip + tray heights over the height; sideways: the rail's right edge over the width) at the aim view and after shot 1, and whether its boxes stayed put. */
+  hudShare?: { before: number; after: number | null; same: boolean | null; dock: boolean } | null;
   duel?: unknown; goals?: unknown; counts?: Record<string, number>; pace?: unknown;
   frames: string[]; sheet?: string; errors: string[]; wallMs: number;
 }
@@ -76,6 +81,15 @@ async function mirror(page: Page): Promise<boolean> {
     return true;
   });
 }
+
+/** The docked HUD's boxes and its share of the screen, as game/test/phone-hud-e2e.test.ts measures it (PT3). */
+const hudBoxes = (page: Page) => page.evaluate(() => {
+  // No named helper inside: tsx's esbuild wraps named functions in __name, which the page does not define.
+  const [st, tray] = ['.kg-hud .st', '.kg-hud .tray'].map((sel) => { const e = document.querySelector(sel) as HTMLElement | null; if (!e || e.offsetParent === null) return null; const r = e.getBoundingClientRect(); return { x: r.x, y: r.y, w: r.width, h: r.height }; });
+  const vw = innerWidth, vh = innerHeight;
+  const share = !st || !tray ? NaN : vw > vh ? Math.max(st.x + st.w, tray.x + tray.w) / vw : (st.h + tray.h) / vh;
+  return { st, tray, share, dock: !!document.querySelector('.kg-hud.kg-dock') };
+});
 
 const textOf = (page: Page, sel: string) => page.locator(sel).first().innerText({ timeout: 2000 }).catch(() => '');
 const gameState = (page: Page) => page.evaluate(() => { const g = window.__game; return { ready: g.ready, phase: g.phase, strokes: g.strokes, step: g.stepIndex, collapse: g.collapse, result: g.result, status: g.status, error: g.error, frozen: g.frozen }; });
@@ -119,7 +133,7 @@ async function runOne(browser: Browser, origin: string, sc: Scenario, vp: Viewpo
   try {
     await page.goto(new URL(url, origin).toString());
     await page.waitForFunction(() => window.__game?.status !== 'loading', undefined, { timeout: 15 * MIN, polling: 250 });
-    if (sc.script.kind !== 'door') await page.waitForFunction(() => window.__game.status !== 'running' || window.__game.ready, undefined, { timeout: 15 * MIN, polling: 250 });
+    if (sc.script.kind !== 'door') await page.waitForFunction(() => window.__game.status !== 'running' || window.__game.ready || window.__game.edit.on, undefined, { timeout: 15 * MIN, polling: 250 });
     rec.loadWallMs = Date.now() - t0;
     const st0 = await gameState(page);
     if (st0.status === 'error') throw new Error(`page error: ${st0.error}`);
@@ -136,6 +150,44 @@ async function runOne(browser: Browser, origin: string, sc: Scenario, vp: Viewpo
         if (a?.ok && (await page.evaluate((s) => window.__game.fire(s), a.shot))) return { shot: a.shot, how: `click at ${x.toFixed(2)},${y.toFixed(2)}` };
       }
       return null;
+    };
+
+    /**
+     * Round 2's modes: fire as the level offers. Aftershock: Start with the dial as it loads. A plunger (Fuse & Fold,
+     * Rube Lab): with `sweep`, the timeline swept toward the yard at the spacing shown; then the panel's Plunger, or
+     * the plunger shot itself where no panel shows. Null when the level is none of these.
+     */
+    const fireMode = async (def: NonNullable<ReturnType<typeof levelById>>, policy: string): Promise<{ shot: Shot | null; how: string } | null> => {
+      if (def.quake) return (await page.evaluate(() => window.__game.startQuake())) ? { shot: null, how: `Start (dial ${JSON.stringify(await page.evaluate(() => window.__game.dial()))})` } : null;
+      if (def.rack[0] !== 'plunger') return null;
+      const panel = '.kg-fuse.show';
+      let how = '';
+      if (policy === 'sweep') {
+        const dir = fuseSweep(def);
+        await tap(`${panel} button[data-dir="${dir}"]`);
+        how = `sweep ${dir} at ${await textOf(page, `${panel} .sp b`)}, `;
+        await shoot(`timeline swept ${dir}`, 300);
+      }
+      if (await page.locator(`${panel} button.plunger`).count()) { await tap(`${panel} button.plunger`); return { shot: null, how: `${how}Plunger (panel)` }; }
+      if (await page.locator('.kg-hud button.opener').count()) { await tap('.kg-hud button.opener'); return { shot: null, how: `${how}Go (HUD button)` }; }
+      return (await page.evaluate((x) => window.__game.fire(x), RUBE_GO)) ? { shot: RUBE_GO, how: `${how}plunger (no panel showed)` } : null;
+    };
+
+    /** A build phase open on load (Rube Lab, Mason's Trial): build the recorded build (`line`) or nothing, capture it, then Play. */
+    const buildPhase = async (def: NonNullable<ReturnType<typeof levelById>>, policy: string, play: boolean) => {
+      if (!(await page.evaluate(() => window.__game.edit.on))) return;
+      const line = policy === 'line' ? rubeLine(def) : null;
+      if (line) {
+        for (const a of line.actions as EditAction[]) {
+          await page.evaluate((x) => { const e = window.__game.edit; if ('key' in x) e.key(x.key, x.shift); else e.ray(x.ray, x.at.origin, x.at.dir); }, a);
+        }
+        await shoot('built', 300);
+      }
+      rec.build = { built: line?.label ?? 'nothing', status: await page.evaluate(() => window.__game.edit.status()) };
+      if (!play) return;
+      await page.evaluate(() => window.__game.edit.play());
+      await page.waitForFunction(() => !window.__game.edit.on && (window.__game.ready || window.__game.status !== 'running'), undefined, { timeout: 5 * MIN, polling: 250 });
+      await shoot('after Play', 300);
     };
 
     const playShot = async (k: number, fire: () => Promise<{ shot: Shot | null; how: string } | null>, sequence: boolean) => {
@@ -181,15 +233,23 @@ async function runOne(browser: Browser, origin: string, sc: Scenario, vp: Viewpo
       await page.evaluate(() => window.__game.aim(0, -0.05));
       await shoot('aim view');
       rec.hud = await textOf(page, '#hud');
+      if (sc.level) await buildPhase(levelById(sc.level)!, 'novice', false);
     } else if (s.kind === 'play') {
       const def = levelById(sc.level!)!;
-      const line = s.policy === 'line' ? lineOf(def) : null;
+      const line = s.policy === 'line' && !def.rube ? lineOf(def) : null;
       if (!line) await page.evaluate(() => window.__game.aim(0, -0.05));
       await shoot('aim view');
       rec.hud = await textOf(page, '#hud');
+      await buildPhase(def, s.policy, true);
+      const moded = !!def.quake || def.rack[0] === 'plunger';
+      const hud0 = v.touch ? await hudBoxes(page) : null;
       for (let k = 0; k < s.shots; k++) {
-        const fire = line ? async () => ((await page.evaluate((x) => window.__game.fire(x), line[k]!)) ? { shot: line[k]!, how: 'recorded line' } : null) : () => fireNovice(k);
+        const fire = line ? async () => ((await page.evaluate((x) => window.__game.fire(x), line[k]!)) ? { shot: line[k]!, how: 'recorded line' } : null) : moded ? () => fireMode(def, s.policy) : () => fireNovice(k);
         if (!(await playShot(k, fire, k === 0))) break;
+        if (k === 0 && hud0) {
+          const hud1 = (await gameState(page)).result ? null : await hudBoxes(page);
+          rec.hudShare = { before: hud0.share, after: hud1?.share ?? null, same: hud1 ? JSON.stringify([hud0.st, hud0.tray]) === JSON.stringify([hud1.st, hud1.tray]) : null, dock: hud0.dock };
+        }
         await shoot(`shot ${k + 1} settled`);
         if ((await gameState(page)).result) break;
       }
@@ -239,6 +299,12 @@ async function runOne(browser: Browser, origin: string, sc: Scenario, vp: Viewpo
       for (let k = 0; k < s.turns; k++) {
         await page.waitForFunction(() => window.__game.status !== 'running' || window.__game.result !== null || (window.__game.ready && window.__game.phase !== 'running' && !window.__game.view.turning), undefined, { timeout: 5 * MIN, polling: 250 });
         if ((await gameState(page)).result) break;
+        // The hand-over card (PT5): the next player taps it before they can aim; a tap never fires.
+        if (await page.evaluate(() => window.__game.handoff)) {
+          await shoot(`turn ${k + 1} hand-over`);
+          await tap('.duel-handoff');
+          await page.waitForFunction(() => !window.__game.handoff, undefined, { timeout: MIN, polling: 100 });
+        }
         await page.evaluate(() => window.__game.aim(0, -0.05));
         await shoot(`turn ${k + 1} aim`);
         if (!(await playShot(k, () => fireNovice(k + 1), k === 0))) break;

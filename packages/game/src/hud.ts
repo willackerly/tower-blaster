@@ -192,7 +192,7 @@ export function objectiveText(o: Objective): string {
 }
 
 /** Why a pull is refused (Session.pullRefusal: crowns and heritage are the objective's). */
-export const PULL_HINT = 'Crowns and heritage stay: pull a plain block';
+export const PULL_HINT = 'Crowns, heritage and fixed beams stay: pull a plain block';
 /**
  * A par level judged on collapse (Wavefront's Steer and Cut levels): D now against the objective's share, so the
  * player can read how far the wave got (agent playtest 2: no row showed it, and the crown row read 0 / 0).

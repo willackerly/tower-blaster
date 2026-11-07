@@ -281,6 +281,24 @@ describe('Session, settle rules', () => {
     }
     expect(at).toBe(SETTLE_CAP_V2);
   });
+  it('v4 counts no run while a weapon is still to go off, so a shot never settles on the step its hold ends; v3 keeps its count', () => {
+    // A lone block creeping (quiet under v2+, D steady) with a weapon pending until step H: under v3 the quiet run
+    // counted through the hold and the shot settles on the first step without it (as the v3 casts were made);
+    // under v4 every run starts when the hold ends (F3's plunger line settled with its last charge, D 0.002 for 0.289).
+    const H = 200;
+    const settleAt = (d: LevelDef) => {
+      const lc = compileLevel(d), s = world(1), obs = new CpuObserver(lc, s), se = new Session(lc);
+      se.fire(marble, 0);
+      for (let t = 1; t < SETTLE_CAP; t++) {
+        s.awake.fill(0); s.linVel.fill(0); s.awake[heritage] = 1; s.linVel[3 * heritage] = 0.1;
+        if (se.observe(obs.observe(s, t, se.watchIdx), t <= H).some((f) => f.t === 'settled')) return t;
+      }
+      return null;
+    };
+    expect(settleAt({ ...out, settle: 'v3' })).toBe(H + 1);
+    expect(settleAt(out)).toBe(H + SETTLE_QUIET);
+    expect(settleAt({ ...out, settle: 'v2' })).toBe(H + 1);
+  });
   it('par\'s v1 and outcome\'s v2 hash as absent (as before v3); outcome\'s default v4 and every other rule is a different level', () => {
     const h = (d: LevelDef) => compileLevel(d).hash;
     // The hashes these levels had before v3 (main at 2a4a436, where outcome levels defaulted to v2).

@@ -3,7 +3,7 @@
 // (every number checkable by hand) and on Rapier with a tiny recipe.
 import { describe, expect, it } from 'vitest';
 import { aimAt, type CastPlay, type CastSample, compileLevel, readShots, writeShots, launcherPos, type LaunchShot, type LevelDef, scenarioLevel, type Shot } from '@tb/keystone';
-import { applyWaivers, bootstrapT3, castLevel, cloudCheck, crossDeviceGate, exposedFaces, faceSectors, facingAzimuth, FACE_SECTORS, REACH, type CastPlayer, type CastRecipe, type CastResult, competentIntents, compareCasts, compareReplay, extendCloud, judgeCast, replayCast, endValue, HEIGHT_BANDS, higherBetter, intentShot, moveIntents, nodeCastPlayer, nudgeLine, phaseEnds, playsOf, poolCasts, quantile, rng, roundEasier, SHORT_RECIPE, shotSummary, streamSeed, surfaceTarget, NONFINITE, playLimits, WAIVABLE, withBounce, withWallTime } from '../src/index.ts';
+import { lineShots, pullTarget, applyWaivers, bootstrapT3, castLevel, cloudCheck, crossDeviceGate, exposedFaces, faceSectors, facingAzimuth, FACE_SECTORS, REACH, type CastPlayer, type CastRecipe, type CastResult, competentIntents, compareCasts, compareReplay, extendCloud, judgeCast, replayCast, endValue, HEIGHT_BANDS, higherBetter, intentShot, moveIntents, nodeCastPlayer, nudgeLine, phaseEnds, playsOf, poolCasts, quantile, rng, roundEasier, SHORT_RECIPE, shotSummary, streamSeed, surfaceTarget, NONFINITE, playLimits, WAIVABLE, withBounce, withWallTime } from '../src/index.ts';
 
 /** A 10 x 4 wall of plaster cubes along x as an outcome level, rack of two cannonballs. */
 const WALL: LevelDef = { ...scenarioLevel('S3', { W: 10, H: 4 }, 1, { rack: ['cannonball', 'cannonball'] }), id: 'T1' };
@@ -477,4 +477,33 @@ describe('castLevel on Rapier', () => {
     expect(b.stars).toEqual(a.stars);
     expect(b.lines.map((l) => l.hash)).toEqual(a.lines.map((l) => l.hash));
   }, 300_000);
+});
+
+describe('pull intents (Undercut casts)', () => {
+  it('a pull takes the nearest body a pull may take, never a crown, heritage, a fixed part or one the line already pulled', async () => {
+    const { U1, U2, U3 } = await import('@tb/keystone');
+    for (const d of [U1, U2, U3]) {
+      const c = compileLevel(d), keep = new Set([...c.meta.crowns, ...c.meta.heritage, ...c.meta.fixed]);
+      for (const its of competentIntents(c, 32, 3)) {
+        const shots = lineShots(c, its, 1);
+        const bodies = shots.map((s) => (s.ammo === 'pull' ? s.body : -1));
+        expect(bodies.every((b) => b >= 0 && !keep.has(b)), d.id).toBe(true);
+        expect(new Set(bodies).size, d.id).toBe(bodies.length);
+      }
+    }
+    const c = compileLevel(U3), it0 = competentIntents(c, 1, 1)[0]![0]!;
+    expect(pullTarget(c, it0, new Set(Array.from({ length: 30 }, (_, i) => i)))).toBe(-1); // only the crown left
+  });
+
+  it('U3 (hold) casts on the share pulled; a line whose capstone falls is complete, and meets the objective at its bank point', async () => {
+    const { U3 } = await import('@tb/keystone');
+    const cast = await castLevel(U3, nodeCastPlayer({ kind: 'rapier' }), { recipe: { competent: 8, climbLines: 1, climbMoves: 1, climbNudges: 1, cloud: 2, confirmLines: 0, confirmNudges: 0 } });
+    expect(cast.metric).toBe('pulled');
+    expect(cast.lines.every((l) => l.shots.split('_').every((x) => x.startsWith('pull.')))).toBe(true);
+    expect(cast.gates.complete.pass).toBe(true);
+    // Some competent line topples before its rack runs out, and still counts complete.
+    expect(cast.lines.some((l) => l.shots.split('_').length > l.samples.length)).toBe(true);
+    expect(cast.gates.fair.pass).toBe(true);
+    expect(cast.stars.t3).toBeGreaterThan(cast.stars.t2);
+  }, 120_000);
 });

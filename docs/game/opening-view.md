@@ -94,7 +94,7 @@ The B2 search takes about 0.2 s on this cloud box. The chamber levels take a few
   - B2's old view shows nothing and the new one passes.
   - L5 opens 30 degrees or more off the row, with exposure going from under 40% to over 80%.
   - Search order, determinism, *classic* and the cache are each checked.
-- `sightlines-gpu.test.ts` (chamber levels) and `sightlines-city-gpu.test.ts` (B2, T-B2A, T-B4A) are **the gate**.
+- `sightlines-gpu.test.ts` (chamber levels) and `sightlines-city-gpu.test.ts` (B2, T-B2C, T-B4A; T-B2A until PT11 dropped it) are **the gate**.
   The game page reads the renderer's own ID pass (`handle.sightlines`), with the page's real HUD panels measured from
   the DOM, at desktop 1280x800 and phone 390x844. Each asserts the PT1 verify: at least 75% of the crowns and at
   least one heritage body in sight. A last case opens B2 with `keystone.view=classic` and asserts that the gate sees
