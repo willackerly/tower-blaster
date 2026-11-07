@@ -76,3 +76,32 @@ export async function noviceDuel(engine: PhysicsEngine, def: DuelDef, first: Pla
   await d.drain();
   return { first, turns, result: duel.result, sides: duel.sides, steps: engine.stepIndex };
 }
+
+/** One novice duel as a line of a balance table: who fired first, who won (null: a draw or undecided), why, its turns and clicks on own blocks. */
+export interface DuelOutcome { first: Player; winner: Player | null; over: boolean; why: string; turns: number; own: number; steps: number }
+
+export const duelOutcome = (r: NoviceDuel): DuelOutcome => ({
+  first: r.first, winner: r.result.over ? r.result.winner : null, over: r.result.over, why: r.result.over ? r.result.why : 'undecided',
+  turns: r.turns.length, own: r.turns.filter((t) => t.own).length, steps: r.steps,
+});
+
+/**
+ * A balance row from novice duels: wins by side (Gold 0, Blue 1) and by seat (first, second), draws (and undecided),
+ * turns per duel, the fewest turns, own-block clicks, and each seat's and side's win rate over the decided duels.
+ * PT5's verify asks for 40 to 60% (agent playtest round 2).
+ */
+export function tallyDuels(rs: readonly DuelOutcome[]) {
+  const t = { duels: rs.length, gold: 0, blue: 0, draw: 0, first: 0, second: 0, turns: 0, fewest: Infinity, own: 0 };
+  for (const r of rs) {
+    if (r.over && r.winner !== null) { t[r.winner ? 'blue' : 'gold']++; t[r.winner === r.first ? 'first' : 'second']++; } else t.draw++;
+    t.turns += r.turns; t.fewest = Math.min(t.fewest, r.turns); t.own += r.own;
+  }
+  const decided = t.gold + t.blue;
+  return { ...t, turnsPerDuel: rs.length ? t.turns / rs.length : 0, goldRate: decided ? t.gold / decided : NaN, firstRate: decided ? t.first / decided : NaN };
+}
+
+/** A balance row as one line of text (the CLIs print it). */
+export function tallyLine(id: string, engine: string, aspect: number, t: ReturnType<typeof tallyDuels>): string {
+  const pc = (x: number) => (Number.isNaN(x) ? 'n/a' : `${Math.round(100 * x)}%`);
+  return `${id} ${engine} aspect ${aspect}, ${t.duels} duels: Gold ${t.gold}, Blue ${t.blue}, draws ${t.draw}; first ${t.first}, second ${t.second} (Gold ${pc(t.goldRate)}, first ${pc(t.firstRate)} of decided); ${t.turnsPerDuel.toFixed(1)} turns a duel (fewest ${t.fewest}); clicks on own blocks ${t.own}`;
+}
