@@ -28,10 +28,32 @@ export const TOP_MARGIN = 0.1;
 export interface Insets { top: number; bottom: number; left: number; right: number }
 export const NO_INSETS: Insets = { top: 0, bottom: 0, left: 0, right: 0 };
 
-/** What every opening view keeps clear of: on a wide screen the top margin, upright the HUD's band at the top. */
-export function defaultInsets(aspect: number): Insets {
-  return { ...NO_INSETS, top: aspect < 1 ? PORTRAIT_HUD_SHARE : TOP_MARGIN };
+/**
+ * What every opening view keeps clear of: on a wide screen the top margin, upright the HUD's band at the top
+ * (PORTRAIT_HUD_SHARE, a guess sized for the old tall panel). With `hud`, the docked phone HUD's band as measured
+ * (docs/game/phone-hud.md, PT3b; play.ts dockedHud): that band over the top margin, in place of the guess.
+ */
+export function defaultInsets(aspect: number, hud?: Insets): Insets {
+  return hud ? joinInsets({ ...NO_INSETS, top: TOP_MARGIN }, fitShares(hud, aspect)) : { ...NO_INSETS, top: aspect < 1 ? PORTRAIT_HUD_SHARE : TOP_MARGIN };
 }
+
+/**
+ * Screen shares as fitBox counts them: upright (aspect < 1) as they are; wide, fitBox frames the middle square of
+ * the screen (so every wide window opens on the same view), and a side's share of the whole width becomes the part
+ * of that square it covers: a rail to L of an aspect-A screen ends at x = -A (1 - 2L) in the square's units, which
+ * reach from -1 to 1, so it takes max(0, (1 - A (1 - 2L)) / 2) of it (844 x 390, a rail to 0.28: 0.025).
+ */
+export function fitShares(s: Insets, aspect: number): Insets {
+  if (aspect < 1) return { ...s };
+  const side = (l: number) => Math.max(0, (1 - aspect * (1 - 2 * l)) / 2);
+  return { top: s.top, bottom: s.bottom, left: side(s.left), right: side(s.right) };
+}
+
+/**
+ * Which HUD the search masks (hudRects): the game page's floating panel (wide, its top-left box; upright, the top
+ * band), or the docked phone HUD, all of which lies in the insets the fit keeps the structure out of.
+ */
+export type HudShape = 'panel' | 'docked';
 
 /** Each side the larger of a and b. */
 export function joinInsets(a: Insets, b?: Partial<Insets>): Insets {
@@ -57,8 +79,12 @@ export function baseYaw(c: CompiledLevel): number {
   return first && 'az' in first ? 90 - first.az / 2 : DEFAULT_FRAMING.yaw;
 }
 
-/** How an opening view is made (viewOf): `insets` joined with defaultInsets (e.g. the HUD's measured band); `mode` 'classic' (PaceFeel.view, keystone.view) skips the search. */
-export interface ViewOptions { insets?: Partial<Insets>; mode?: OpeningView }
+/**
+ * How an opening view is made (viewOf): `insets` joined with defaultInsets (a level's own panels: openingInsets);
+ * `hud` the docked phone HUD's band as measured, screen shares (layout.ts hudInsets via play.ts dockedHud), in place
+ * of the upright guess; `mode` 'classic' (PaceFeel.view, keystone.view) skips the search.
+ */
+export interface ViewOptions { insets?: Partial<Insets>; hud?: Insets; mode?: OpeningView }
 
 /**
  * The game's opening view of a level: the structure framed whole from openingDirection, clear of the screen's
@@ -71,8 +97,8 @@ export interface ViewOptions { insets?: Partial<Insets>; mode?: OpeningView }
 export function viewOf(c: CompiledLevel, aspect = 1, face?: Direction, focus?: Vec3, only?: ArrayLike<number>, opts: ViewOptions = {}): Orbit {
   if (face) return faceView(c, aspect, face, focus, only);
   const { min, max } = structureBox(c);
-  const ins = joinInsets(defaultInsets(aspect), opts.insets);
-  const dir = opts.mode === 'classic' ? { yaw: baseYaw(c), pitch: DEFAULT_FRAMING.pitch } : openingDirection(c, aspect, ins);
+  const ins = joinInsets(defaultInsets(aspect, opts.hud), opts.insets);
+  const dir = opts.mode === 'classic' ? { yaw: baseYaw(c), pitch: DEFAULT_FRAMING.pitch } : openingDirection(c, aspect, ins, opts.hud ? 'docked' : 'panel');
   return { ...fitBox(min, max, dir, aspect, ins), floor: EYE_ABOVE_GROUND };
 }
 
@@ -206,6 +232,12 @@ export const SPREAD_SHARE = 0.8;
 /** The search's raster: this many pixels on the screen's longer side (a fraction of a millisecond per thousand boxes). */
 export const SEARCH_PX = 160;
 /**
+ * The raster a passing view is confirmed at before the search takes it (PT3b): at SEARCH_PX a small crown is a few
+ * pixels and the coarse count can pass a crown the page's own frame hides (T-X3B upright, docked: 0.39 of a crown at
+ * 74 x 160, 0.20 at 390 x 844). Only views that already pass are drawn again, so the search costs one more raster a pick.
+ */
+export const CONFIRM_PX = 480;
+/**
  * The wide HUD panel at the top left, shares of the screen, on the large side (hud.ts: 290 x 245 of 1280 x 800 on B2,
  * 310 x 300 with L5's lot sheet, 550 wide with four chips): the GPU gate measures the real panels.
  */
@@ -232,16 +264,16 @@ export const showsObjectives = (s: ViewScore): boolean =>
   s.crownsSeen >= CROWNS_SEEN * s.crowns - 1e-9 && (s.heritage === 0 || s.heritageSeen >= Math.max(1, HERITAGE_SEEN * s.heritage - 1e-9));
 
 /** The search raster's size for a screen of this aspect (wide screens as the game's 16:10 reference, so every wide window agrees). */
-export function searchSize(aspect: number): { width: number; height: number; aspect: number } {
+export function searchSize(aspect: number, px = SEARCH_PX): { width: number; height: number; aspect: number } {
   const a = aspect >= 1 ? 1.6 : aspect;
-  return a >= 1 ? { width: SEARCH_PX, height: Math.round(SEARCH_PX / a), aspect: a } : { width: Math.round(SEARCH_PX * a), height: SEARCH_PX, aspect: a };
+  return a >= 1 ? { width: px, height: Math.round(px / a), aspect: a } : { width: Math.round(px * a), height: px, aspect: a };
 }
 
 /** Score one direction: fit it, rasterize the structure at search size, count what the screen (less the HUD) shows. */
-export function scoreView(c: CompiledLevel, dir: Direction, aspect: number, insets: Insets): ViewScore {
-  const { min, max } = structureBox(c), size = searchSize(aspect);
+export function scoreView(c: CompiledLevel, dir: Direction, aspect: number, insets: Insets, hud: HudShape = 'panel', rasterPx = SEARCH_PX): ViewScore {
+  const { min, max } = structureBox(c), size = searchSize(aspect, rasterPx);
   const o = { ...fitBox(min, max, dir, size.aspect, insets), floor: EYE_ABOVE_GROUND }, m = viewProj(o, size.aspect);
-  const covered = hudRects(size.aspect, insets);
+  const covered = hudRects(size.aspect, insets, hud);
   const r = idRaster(c, m, size.width, size.height), px = pixelCounts(r, c.meta.n, covered);
   const count = (list: ArrayLike<number>) => Array.from(list).filter((i) => seen(px[i]!, r.solo[i]!, SEARCH_SEEN_SHARE)).length;
   let shown = 0, whole = 0;
@@ -250,25 +282,31 @@ export function scoreView(c: CompiledLevel, dir: Direction, aspect: number, inse
   return { dir, crowns: c.meta.crowns.length, crownsSeen: count(c.meta.crowns), heritage: c.meta.heritage.length, heritageSeen: count(c.meta.heritage), exposure };
 }
 
-/** Where the HUD covers the screen for the search: wide, the top-left panel; upright, the top band (the insets keep the structure out of it anyway). */
-export function hudRects(aspect: number, insets: Insets): ScreenRect[] {
+/**
+ * Where the HUD covers the screen for the search: the panel wide, its top-left box; upright, the top band (the insets
+ * keep the structure out of it anyway). Docked, nothing: the measured band is all in the insets, and fitBox keeps
+ * every corner of the structure's box inside the rest, so no body can be under it.
+ */
+export function hudRects(aspect: number, insets: Insets, hud: HudShape = 'panel'): ScreenRect[] {
+  if (hud === 'docked') return [];
   return aspect >= 1 ? [WIDE_HUD] : [{ left: 0, top: 0, right: 1, bottom: insets.top }];
 }
 
 /**
  * Which way the opening view looks. A level with no crowns or heritage keeps the base view (baseYaw, 12 degrees).
  * Otherwise pitches are tried lowest first and, at each, yaws nearest the base first; the first view that shows the
- * objectives (showsObjectives) and keeps the bodies apart (SPREAD_SHARE of the best yaw at that pitch) wins. When
+ * objectives (showsObjectives, on the search raster and again at CONFIRM_PX) and keeps the bodies apart (SPREAD_SHARE
+ * of the best yaw at that pitch) wins. When
  * none does, the view showing the most objectives (then the most bodies, then the lowest and least turned) wins.
  * Deterministic and pure: the same level and screen shape always open on the same view.
  */
-export function openingDirection(c: CompiledLevel, aspect: number, insets: Insets = defaultInsets(aspect)): Direction {
+export function openingDirection(c: CompiledLevel, aspect: number, insets: Insets = defaultInsets(aspect), hud: HudShape = 'panel'): Direction {
   if (c.meta.crowns.length === 0 && c.meta.heritage.length === 0) return { yaw: baseYaw(c), pitch: DEFAULT_FRAMING.pitch };
-  // Remembered per level, screen shape and insets: a retry, an undo or a return to the level costs nothing (B2's search is ~0.2 s).
-  const key = `${c.hash}|${searchSize(aspect).aspect.toFixed(4)}|${insets.top},${insets.bottom},${insets.left},${insets.right}`;
+  // Remembered per level, screen shape, insets and HUD: a retry, an undo or a return to the level costs nothing (B2's search is ~0.2 s).
+  const key = `${c.hash}|${searchSize(aspect).aspect.toFixed(4)}|${insets.top},${insets.bottom},${insets.left},${insets.right}|${hud}`;
   let dir = picked.get(key);
   if (!dir) {
-    dir = searchViews(c, aspect, insets).pick;
+    dir = searchViews(c, aspect, insets, hud).pick;
     if (picked.size >= PICKED_MAX) picked.delete(picked.keys().next().value!);
     picked.set(key, dir);
   }
@@ -279,7 +317,7 @@ const PICKED_MAX = 64;
 const picked = new Map<string, Direction>();
 
 /** The search behind openingDirection, with every view it scored (tests and the design note read them). */
-export function searchViews(c: CompiledLevel, aspect: number, insets: Insets = defaultInsets(aspect)): { pick: Direction; scored: ViewScore[] } {
+export function searchViews(c: CompiledLevel, aspect: number, insets: Insets = defaultInsets(aspect), hud: HudShape = 'panel'): { pick: Direction; scored: ViewScore[] } {
   const base = baseYaw(c), scored: ViewScore[] = [];
   let fallback: ViewScore | null = null;
   const better = (a: ViewScore, b: ViewScore | null) => {
@@ -289,10 +327,12 @@ export function searchViews(c: CompiledLevel, aspect: number, insets: Insets = d
     return oa !== ob ? oa > ob : a.exposure > b.exposure;
   };
   for (const pitch of SEARCH_PITCHES) {
-    const row = SEARCH_YAWS.map((d) => scoreView(c, { yaw: base + d, pitch }, aspect, insets));
+    const row = SEARCH_YAWS.map((d) => scoreView(c, { yaw: base + d, pitch }, aspect, insets, hud));
     scored.push(...row);
     const best = Math.max(...row.map((s) => s.exposure));
-    const pick = row.find((s) => showsObjectives(s) && s.exposure >= SPREAD_SHARE * best);
+    // A view that passes on the coarse raster is taken once it passes at CONFIRM_PX too (its objectives only: the spread
+    // is a ratio of whole-structure areas, which the coarse raster measures well).
+    const pick = row.find((s) => showsObjectives(s) && s.exposure >= SPREAD_SHARE * best && showsObjectives(scoreView(c, s.dir, aspect, insets, hud, CONFIRM_PX)));
     if (pick) return { pick: pick.dir, scored };
     for (const s of row) if (better(s, fallback)) fallback = s;
   }
