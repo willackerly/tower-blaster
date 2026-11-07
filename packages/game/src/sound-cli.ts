@@ -8,7 +8,7 @@
 // usage: tsx packages/game/src/sound-cli.ts [levels=L1,L2 wav=dir frames=dir (writes captures) from=dir (reads them) set=real|real1|classic db=(the set's level) shots=cannonball.0.16.0.20.100]
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { AvbdReferenceEngine } from '@tb/physics-ref';
-import { type AudioFrame, BLOCK, CollapseEngine, FrameTap, FULL_SCALE, loudness, SOUND_SETS, type SoundSet } from '@tb/audio';
+import { type AudioFrame, BLOCK, CollapseEngine, FrameTap, type FrameRecord, framesFrom, FULL_SCALE, loudness, SOUND_SETS, type SoundSet } from '@tb/audio';
 import { AMMO_KINDS, ammoBody, MATERIALS, AVBD_GAP_SLOP, AVBD_ITERATIONS, compileLevel, levelById, LEVELS, readShots, runSession, type Shot } from '@tb/keystone';
 import type { PhysicsEngine } from '@tb/engine-api';
 import { PRESET_NAMES } from '@tb/weapons';
@@ -36,7 +36,7 @@ export async function capture(id: string, engine: PhysicsEngine = new AvbdRefere
       const s = d.snapshot;
       // Each body by its description, as the page does (driver.bodies: structure, ammo, and spawned debris such as ice's).
       for (; n < s.count; n++) tap.setMaterial(n, soundSlotOf(c, d.bodies[n] ?? (n < c.meta.n ? c.scene.bodies[n]! : ammoBody(shots[n - c.meta.n]!.ammo, c.frame.unit, [0, 0, 0], [0, 0, 0])), n, set !== 'classic'));
-      const fr = tap.frame(s, { metres: 1, camera: { pos: eye, right: [-f[1]! / l, 0, f[0]! / l] }, dvMin: 0.25, dt: c.scene.dt, top: 8 });
+      const fr = tap.frame(s, { metres: 1, camera: { pos: eye, right: [-f[1]! / l, 0, f[0]! / l] }, dvMin: 0.25, dt: c.scene.dt, top: 8, slide: { gravity: [c.scene.gravity[0], c.scene.gravity[1], c.scene.gravity[2]] } });
       frames.push(fr);
       for (let i = 0; i < fr.counts.length; i++) slots[Math.floor(i / (fr.counts.length / SOUND_SLOTS))]! += fr.counts[i]!;
       return [];
@@ -60,8 +60,8 @@ export function render(id: string, frames: AudioFrame[], db?: number, set: Sound
 }
 
 function load(path: string): { frames: AudioFrame[]; slots: number[] } {
-  const j = JSON.parse(readFileSync(path, 'utf8')) as { slots: number[]; frames: { dt: number; materials: number; sectors: number; counts: number[]; a2: number[]; top: number[]; space?: number[] }[] };
-  return { slots: j.slots, frames: j.frames.map((f) => ({ ...f, counts: Float32Array.from(f.counts), a2: Float32Array.from(f.a2), top: Float32Array.from(f.top), space: f.space ? Float32Array.from(f.space) : undefined })) };
+  const j = JSON.parse(readFileSync(path, 'utf8')) as { slots: number[]; frames: FrameRecord[] };
+  return { slots: j.slots, frames: framesFrom(j.frames) };
 }
 
 function wav(path: string, L: Float32Array, R: Float32Array) {
@@ -78,7 +78,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   const rows = [];
   for (const id of ids) {
     const { frames, slots } = kv.from ? load(`${kv.from}/${id}.json`) : await capture(id, undefined, kv.shots === undefined ? undefined : readShots(kv.shots));
-    if (kv.frames) writeFileSync(`${kv.frames}/${id}.json`, JSON.stringify({ slots, frames: frames.map((f) => ({ ...f, counts: [...f.counts], a2: [...f.a2], top: [...f.top], space: f.space ? [...f.space] : undefined })) }));
+    if (kv.frames) writeFileSync(`${kv.frames}/${id}.json`, JSON.stringify({ slots, frames: frames.map((f) => ({ ...f, counts: [...f.counts], a2: [...f.a2], top: [...f.top], space: f.space ? [...f.space] : undefined, slide: f.slide ? [...f.slide] : undefined })) }));
     const v0 = render(id, frames, kv.db === undefined ? undefined : Number(kv.db), set);
     let peak = 0;
     for (let i = 0; i < v0.L.length; i++) peak = Math.max(peak, Math.abs(v0.L[i]!), Math.abs(v0.R[i]!));

@@ -3,7 +3,7 @@
 // snapshot the game already has on the CPU (FrameTap). It replaces the
 // synth's impact and contact voices (audio.ts); the crown, heritage, tier,
 // level-end and launch cues stay there. Created on the first user gesture.
-import { FrameTap, type HostStats, PROCESSOR, type Room, type SoundMessage, type SoundSet } from '@tb/audio';
+import { FrameTap, frameBuffers, type HostStats, PROCESSOR, type Room, type SoundMessage, type SoundSet } from '@tb/audio';
 import workletUrl from '@tb/audio/worklet?worker&url';
 import type { BodyDesc, Snapshot, Vec3 } from '@tb/engine-api';
 import type { CompiledLevel } from '@tb/keystone';
@@ -36,17 +36,21 @@ export class CollapseSound {
   readonly space: boolean;
   /** Air (keystone.air, A8a step 3): far impacts lose their top end; with space only, never in the classic set. */
   readonly air: boolean;
+  /** Scraping (keystone.scrape, A8b): sliding bodies as friction crackle; never in the classic set. */
+  readonly scrape: boolean;
 
   /**
    * extraDb: the level over the game's own (gameSoundDb of the set); set: the materials ('classic': G6's); kapla: Kapla
    * planks sound as real ones (keystone.kaplasound pine; never in the classic set, which is G6's); room: where it is
-   * heard (keystone.room, @tb/audio room.ts; dry in the classic set); space: keystone.space (A8a; off in the classic set); air: keystone.air (with space).
+   * heard (keystone.room, @tb/audio room.ts; dry in the classic set); space: keystone.space (A8a; off in the classic set); air: keystone.air (with space);
+   * scrape: keystone.scrape (A8b; off in the classic set).
    */
-  constructor(private readonly extraDb = 0, private readonly set: SoundSet = 'real', kapla = true, room: Room = 'outdoor', space = true, air = true) {
+  constructor(private readonly extraDb = 0, private readonly set: SoundSet = 'real', kapla = true, room: Room = 'outdoor', space = true, air = true, scrape = false) {
     this.kapla = kapla && set !== 'classic';
     this.room = set === 'classic' ? 'off' : room;
     this.space = space && set !== 'classic';
     this.air = air && this.space;
+    this.scrape = scrape && set !== 'classic';
   }
 
   private get gain(): number { return 10 ** ((gameSoundDb(this.set) + this.extraDb) / 20); }
@@ -80,8 +84,9 @@ export class CollapseSound {
     this.last = now;
     for (; this.slots < s.count && this.slots < descs.length; this.slots++) this.tap.setMaterial(this.slots, soundSlotOf(c, descs[this.slots]!, this.slots, this.kapla));
     const f = [target[0] - eye[0], target[2] - eye[2]], l = Math.hypot(f[0]!, f[1]!) || 1;
-    const frame = this.tap.frame(s, { metres: 1, camera: { pos: eye, right: [-f[1]! / l, 0, f[0]! / l] }, dvMin: DV_MIN, dt, top: TOP });
-    this.node.port.postMessage({ type: 'frame', frame } satisfies SoundMessage, [frame.counts.buffer, frame.a2.buffer, frame.top.buffer, ...(frame.space ? [frame.space.buffer] : [])]);
+    const g = c.scene.gravity, slide = this.scrape ? { gravity: [g[0], g[1], g[2]] as const } : undefined;
+    const frame = this.tap.frame(s, { metres: 1, camera: { pos: eye, right: [-f[1]! / l, 0, f[0]! / l] }, dvMin: DV_MIN, dt, top: TOP, slide });
+    this.node.port.postMessage({ type: 'frame', frame } satisfies SoundMessage, frameBuffers(frame));
     this.posted++;
   }
 
@@ -120,6 +125,7 @@ export class CollapseSound {
       this.post({ type: 'gain', gain: this.gain, muted: this.muted });
       this.post({ type: 'room', room: this.room });
       this.post({ type: 'space', on: this.space, air: this.air });
+      this.post({ type: 'slide', on: this.scrape });
       void ctx.resume().then(() => this.running());
     } catch (e) {
       this.fail(e instanceof Error ? e.message : String(e));

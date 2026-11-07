@@ -1040,6 +1040,73 @@ distance. **Cost** (cost-cli, this VM): within noise, city 11.3-11.7% of a core,
 
 Clips (space, space + air) for L3, L5, the Kapla topple and the city: /mnt/project-files/sound/air/.
 
+## Scraping (A8b, 2026-11-07)
+
+Between the knocks a collapse slides: planks tip over edges, blocks grind down a pile, a tower settles. Until now
+only impacts sounded, so those stretches were silent. `keystone.scrape=1` (game) and `snd.scrape=1` (viewer) play
+them. **Off by default** until Will has heard it: the judge cannot rank it confidently (below).
+
+**How much there is.** Measured on Rapier (`capture-cli` scenes, per body per frame): bodies that slide with no
+impact lose about 11-12% as much energy as the impacts take, mostly while a tower tips and in the settling tail.
+Rotational energy is negligible for cubes and 15% for Kapla planks; rolling (no slip) loses nothing and is left out.
+
+**What the tap sums** (`frame.ts`, `slideOf`; `FrameTap` matches `buildFrame`, the test holds them equal). A body
+with no impact this frame, moving faster than SLIDE_VMIN = 0.2 m/s on average (a tower built with gaps settles at
+~0.06), loses D = (|v0|^2 - |v|^2) / 2 + g . dx per unit mass to its contacts: friction's work. Free flight and
+tipping without slipping lose none (gravity's work is the kinetic energy gained). With w = 2 D / distance^2, in
+A^2's units, the frame carries per (material, sector): sum w (net: contacts also hand energy from body to body, so a
+pushed body's gain cancels some of its pusher's loss), sum w over the bodies that lost energy, that sum weighted by
+their speed, and their speeds' sum (metres slid a second). The positive w also joins the space sums, so a scrape
+pans and sends as its impacts do. The tap needs a slot's last position: a slot only counts from its second frame
+with slides on (after a reset, a spawn, or turning scrape on).
+
+**What the engine plays** (`setSlide`). Per (material, sector), the net power, smoothed over 30 ms, at
+10^((levelDb + scrapeDb)/10) of the modal energy a bin-0 impact of the same A^2 rings (`sRef`; SCRAPE_DB = -10). As
+stick-slip crackle: up to 4 streams a sector (metres slid a second over the mean speed), each gated on and off at
+random (80 ms on, 50 ms off at -20 dB), each shedding a grain per 5 mm slid (scrapePulse), at most 200 a second
+(SCRAPE_RATE; past it, fewer and larger grains). A grain is 2-5 ms of Hann-windowed noise, log-normal in size, on its
+own bus into the sector. The reference counts modes only, so against whole impacts of the same energy a slide at
+scrapeDb 0 reads from -21 dB (rubber, mostly click) to +7 dB (pine) (`slide.test.ts` pins the table). `scrapeRing`
+(default 0) sends a share through the material's modes instead, as filtered noise.
+
+Fixed on the way: the first cut scaled the slide by levelDb twice (level^4 in energy), 10 dB too loud on stone.
+
+**How the texture was found.** The judge gained a per-clip `contact` score, the sum of YAMNet's friction classes
+(Scrape, Scratch, Rub, Roll, Crushing, Crumpling, Tearing, Creak, Crunch, Squeak, Skidding, Sliding door). Real
+scrape recordings score 0.35-1.0, mostly Tearing, Crumpling and Crunch. What it heard:
+
+| Source | The judge's top classes |
+|---|---|
+| Micro-impacts through the bank's lowest bin | Fireworks |
+| Continuous noise through the modes (the scrapeRing path) | Gears, Ratchet, Bicycle, Vehicle |
+| Broadband half-octave band noise | Pink noise, Ocean |
+| An even stream of grit grains | Rain, Water |
+| Grains at ~200/s with stick-slip gating (python study) | Crack, Zipper, Scrape, Shuffling cards (contact 0.87) |
+
+Grains at 400/s or more read as fireworks again, 50-100/s as almost nothing. The engine plays the last row.
+
+**Judge, in mixes** (outdoor room, space and air on; real share and contact, each the mean of three engine seeds):
+
+| | L1 | L2 | L3 | Kapla | tower | mean |
+|---|---|---|---|---|---|---|
+| off | 0.947 / 0.39 | 0.974 / 0.11 | 0.931 / 0.09 | 0.969 / 0.15 | 0.944 / 0.16 | 0.953 / 0.18 |
+| on (200 grains/s) | 0.987 / 0.46 | 0.977 / 0.15 | 0.949 / 0.38 | 0.979 / 0.10 | 0.990 / 0.15 | 0.976 / 0.25 |
+| on, 2000/s | 0.986 / 0.46 | 0.980 / 0.16 | 0.928 / 0.26 | 0.960 / 0.09 | 0.987 / 0.14 | 0.968 / 0.22 |
+| on, uncapped | 0.985 / 0.53 | 0.978 / 0.09 | 0.931 / 0.28 | 0.978 / 0.13 | 0.988 / 0.11 | 0.972 / 0.23 |
+
+Every scene's real share holds or rises, and L3 gains a Scrape class. But one seed to the next moves a clip by up to
+0.07 (L1 off: 0.90, 0.97, 0.97), so the mean gain of 0.023 is about the size of the noise, and Kapla's contact score
+falls. Hence off by default, with clips for Will (`/mnt/project-files/sound/scrape/`). Cost (this VM): within
+noise of off on the tower and the Kapla topple (uncapped, Kapla shed 585k grains and took +2.9 points of a core).
+
+**Alternatives weighed:**
+- A voice per sliding body: the top-K voices are impacts; slides are long and many (Kapla: hundreds at once), and a
+  sector's sums already carry their energy, pan and distance.
+- Contact pairs from the solver (true slip speed and normal force per contact): the engines would have to export
+  them, and the GPU tap (S4) would grow a pass. The body-level D needs nothing new from any engine.
+- Rolling: a rolling ball or cylinder loses next to nothing (D ~ 0); its rumble would need its own source. Left out.
+- Modes-only scraping (scrapeRing 1): the judge hears machinery. Kept as a key for tuning, default 0.
+
 ## Judge fix: viewer captures (2026-11-07)
 
 `sound-sweep-cli` rendered the viewer's captures (the city and the Kapla topple, from `capture-cli`) with no
@@ -1069,7 +1136,7 @@ Kapla (the topples), Room (the game mixes) and Space. Clips that had the same fa
 5. S5 AudioWorklet engine (foreground, bank, sectors, limiter). Done; exact
    bank clicks, lookahead limiter and low cut 2026-10-30.
 6. S6 viewer Sound section and `snd.*` URL params. Done.
-7. S7 ground and hall: reverb tied to `real.env`, done as A5 (Room above; the viewer's snd.room=auto). Floor resonators not yet. Distance in the room and stereo by impact: A8a (Space above); air absorption: A8a step 3 (Air above).
+7. S7 ground and hall: reverb tied to `real.env`, done as A5 (Room above; the viewer's snd.room=auto). Floor resonators not yet. Distance in the room and stereo by impact: A8a (Space above); air absorption: A8a step 3 (Air above). Sliding: A8b (Scraping above), off by default.
 8. S8 granular non-modal layers: stone grit done (2026-11-01, Grit above); splinters and rubble sliding not yet.
 9. S9 calibration from recordings (example-guided, Ren et al. 2013). The realism judge (2026-11-05,
    Realism above) is the objective half; recordings of the actual materials would pin the levels.

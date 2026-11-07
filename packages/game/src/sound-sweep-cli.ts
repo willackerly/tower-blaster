@@ -11,6 +11,8 @@
 //   room=hall size=1   the room (@tb/audio room.ts: off, outdoor, hall) and its size; tail=1 s of render after the last frame
 //   space=1 dref=10    space (A8a, engine.setSpace): sectors at their impacts' pan, the room by distance / dref (frames need the space sums)
 //   air=1              air absorption over each impact's distance (A8a step 3, engine.setAir; with space=1)
+//   seed=1             the engine's random seed (its grains, jitter and gates: run-to-run noise)
+//   slide=1            scraping (A8b, engine.setSlide): sliding bodies as friction noise (frames need the slide sums)
 // usage: tsx packages/game/src/sound-sweep-cli.ts from=dir out=dir name=tag [levels=L1,L2,L3|city|kapla] [options]
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { BLOCK, CollapseEngine, framesFrom, type FrameRecord, type Room, type RoomParams, FULL_SCALE, SOUND_KNOBS, type SoundKnob, type SoundMaterial, soundMaterials, SOUND_SETS, type SoundSet, tunedMaterial } from '@tb/audio';
@@ -18,7 +20,7 @@ import { compileLevel, LEVELS } from '@tb/keystone';
 import { AMMO_SLOT, gameSoundDb, PIECE_SLOT, slotSounds } from './sound-map.ts';
 
 const kv = Object.fromEntries(process.argv.slice(2).map((a) => a.split('=') as [string, string]));
-const KEYS = new Set(['from', 'out', 'name', 'levels', 'set', 'as', 'only', 'vol', 'edge', 'room', 'size', 'tail', 'roomtune', 'space', 'dref', 'air', ...Object.keys(SOUND_KNOBS)]);
+const KEYS = new Set(['from', 'out', 'name', 'levels', 'set', 'as', 'only', 'vol', 'edge', 'room', 'size', 'tail', 'roomtune', 'space', 'dref', 'air', 'slide', 'seed', ...Object.keys(SOUND_KNOBS)]);
 for (const k of Object.keys(kv)) if (!KEYS.has(k) && !k.startsWith('m.') && !k.startsWith('a.')) throw new Error(`unknown option ${k}`);
 if (!kv.from || !kv.out || !kv.name) throw new Error('from=, out= and name= are required');
 const set = (kv.set ?? 'real') as SoundSet;
@@ -42,10 +44,11 @@ mkdirSync(kv.out, { recursive: true });
 for (const id of (kv.levels ?? 'L1,L2,L3').split(',')) {
   const j = JSON.parse(readFileSync(`${kv.from}/${id}.json`, 'utf8')) as { frames: FrameRecord[] };
   const frames = framesFrom(j.frames);
-  const viewer = id === 'city' || id === 'kapla';
-  const e = new CollapseEngine({ sampleRate: SR, seed: 1, fullScale: FULL_SCALE / 10 ** ((viewer ? Number(kv.vol ?? 0) : gameSoundDb(set)) / 20) });
+  const viewer = id === 'city' || id === 'kapla' || id === 'tower'; // capture-cli's scenes
+  const e = new CollapseEngine({ sampleRate: SR, seed: Number(kv.seed ?? 1), fullScale: FULL_SCALE / 10 ** ((viewer ? Number(kv.vol ?? 0) : gameSoundDb(set)) / 20) });
   e.setSpace(kv.space === '1', Number(kv.dref ?? 10));
   e.setAir(kv.air === '1');
+  e.setSlide(kv.slide === '1');
   e.setRoom((kv.room ?? 'off') as Room, Number(kv.size ?? 1), kv.roomtune ? (JSON.parse(kv.roomtune) as Partial<RoomParams>) : {});
   if (viewer) e.setMaterial(0, tune(mats[kv.as ?? (id === 'kapla' ? 'pine' : 'acrylic')]!), Number(kv.edge ?? 1));
   else slotSounds(compileLevel(LEVELS.find((l) => l.id === id)!), set).forEach((x, i) =>

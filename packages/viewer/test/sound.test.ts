@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { DEFAULT_SOUND, SOUND_MATERIALS, tunedMaterial } from '@tb/audio';
 import { TAG_BALL } from '@tb/engine-api';
-import { autoSoundMaterial, parseSceneFile, parseViewerConfig, presetSearch, SCENE_FILE_FORMAT, sceneFile, soundGain, soundMaterial, soundMaterialName, soundRoom, soundAir, soundSlot, soundSpace, toSearch } from '../src/index.ts';
+import { autoSoundMaterial, parseSceneFile, parseViewerConfig, presetSearch, SCENE_FILE_FORMAT, sceneFile, soundGain, soundMaterial, soundMaterialName, soundRoom, soundAir, soundScrape, soundSlot, soundSpace, toSearch } from '../src/index.ts';
 
 describe('viewer sound config', () => {
   it('is off by default and round-trips through the URL, presets and the config file', () => {
@@ -66,6 +66,13 @@ describe('viewer sound config', () => {
     expect([at('?scenario=S4'), at('?scenario=S4&snd.air=0'), at('?scenario=S4&snd.space=0'), at('?scenario=S4&snd.set=classic')]).toEqual([true, false, false, false]);
     expect(parseSceneFile(JSON.stringify(sceneFile(parseViewerConfig('?scenario=S4&snd=1&snd.air=0'), '', null))).config.sound.air).toBe(false);
     expect(parseSceneFile(JSON.stringify(sceneFile(parseViewerConfig('?scenario=S4&snd=1'), '', null))).config.sound.air).toBe(true);
+  });
+
+  it('scrape (A8b): off unless snd.scrape=1; never in the classic set; kept in the scene file', () => {
+    const at = (search: string) => soundScrape(parseViewerConfig(search));
+    expect([at('?scenario=S4'), at('?scenario=S4&snd.scrape=1'), at('?scenario=S4&snd.scrape=1&snd.set=classic'), at('?scenario=S4&snd.scrape=1&snd.space=0')]).toEqual([false, true, false, true]);
+    expect(parseSceneFile(JSON.stringify(sceneFile(parseViewerConfig('?scenario=S4&snd=1&snd.scrape=1'), '', null))).config.sound.scrape).toBe(true);
+    expect(parseSceneFile(JSON.stringify(sceneFile(parseViewerConfig('?scenario=S4&snd=1'), '', null))).config.sound.scrape).toBe(false);
   });
 
   it('balls are silent, blocks sound; volume is dB', () => {

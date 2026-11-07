@@ -16,7 +16,9 @@ export type SoundMessage =
   /** The room (room.ts): off, outdoor or hall; size scales the hall's (and the outdoor surroundings') distances. */
   | { type: 'room'; room: Room; size?: number }
   /** Space (A8a, engine.setSpace): sectors at their impacts' pan, the room's send by distance; air: its absorption too (setAir; absent: unchanged). */
-  | { type: 'space'; on: boolean; air?: boolean };
+  | { type: 'space'; on: boolean; air?: boolean }
+  /** Scraping (A8b, engine.setSlide): sliding bodies as friction crackle (frames need their slide sums). */
+  | { type: 'slide'; on: boolean };
 
 export interface HostStats {
   type: 'stats';
@@ -75,6 +77,9 @@ export class CollapseHost {
       case 'space':
         this.engine.setSpace(m.on);
         if (m.air !== undefined) this.engine.setAir(m.air);
+        break;
+      case 'slide':
+        this.engine.setSlide(m.on);
         break;
       case 'room':
         this.engine.setRoom(m.room, m.size ?? 1);

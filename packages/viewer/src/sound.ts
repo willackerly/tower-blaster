@@ -7,12 +7,12 @@
 // Browsers start an AudioContext suspended until the page has had a click or
 // a key; with snd=1 in the URL the sound waits for the first one (status
 // 'waiting'), which in the viewer is usually the first shot.
-import { FrameTap, type HostStats, PROCESSOR, type SoundMessage } from '@tb/audio';
+import { FrameTap, frameBuffers, type HostStats, PROCESSOR, type SoundMessage } from '@tb/audio';
 import workletUrl from '@tb/audio/worklet?worker&url';
-import type { BodyDesc, Snapshot } from '@tb/engine-api';
+import type { BodyDesc, Snapshot, Vec3 } from '@tb/engine-api';
 import type { V3 } from './math.ts';
 import type { ViewerConfig } from './params.ts';
-import { soundAir, soundGain, soundMaterial, soundRoom, soundSpace, soundSlot } from './sound-config.ts';
+import { soundAir, soundGain, soundMaterial, soundRoom, soundScrape, soundSpace, soundSlot } from './sound-config.ts';
 
 export type SoundStatus = 'off' | 'starting' | 'waiting' | 'on' | 'error';
 
@@ -33,6 +33,8 @@ export class ViewerSound {
   private slots = 0;
   private last = 0;
   private config: ViewerConfig | null = null;
+  /** The scene's gravity, in scene units (scraping counts the work gravity does on a slider; the default: a level's 9.81 m/s^2 at 1 m cubes). */
+  private gravity: Vec3 = [0, -9.81, 0];
 
   /** Apply a config's sound options (live): start, stop, or retune. */
   configure(c: ViewerConfig): void {
@@ -48,11 +50,13 @@ export class ViewerSound {
     this.send({ type: 'gain', gain: soundGain(c), lowcut: c.sound.lowcut });
     this.send({ type: 'room', ...soundRoom(c) });
     this.send({ type: 'space', on: soundSpace(c), air: soundAir(c) });
+    this.send({ type: 'slide', on: soundScrape(c) });
     this.resume();
   }
 
-  /** A new scene: forget every velocity, so its first frame only records. */
-  scene(): void {
+  /** A new scene (its gravity in scene units): forget every velocity, so its first frame only records. */
+  scene(gravity?: Vec3): void {
+    if (gravity) this.gravity = gravity;
     this.tap.reset();
     this.slots = 0;
   }
@@ -71,8 +75,9 @@ export class ViewerSound {
     const rl = Math.hypot(f[2]!, f[0]!) || 1;
     const right: V3 = [-f[2]! / rl, 0, f[0]! / rl];
     const m = c.scale;
-    const frame = this.tap.frame(s, { metres: m, camera: { pos: [eye[0] * m, eye[1] * m, eye[2] * m], right }, dvMin: c.sound.dv, dt, top: c.sound.voices });
-    this.node.port.postMessage({ type: 'frame', frame } satisfies SoundMessage, [frame.counts.buffer, frame.a2.buffer, frame.top.buffer, ...(frame.space ? [frame.space.buffer] : [])]);
+    const g = this.gravity, slide = soundScrape(c) ? { gravity: [g[0] * m, g[1] * m, g[2] * m] as const } : undefined;
+    const frame = this.tap.frame(s, { metres: m, camera: { pos: [eye[0] * m, eye[1] * m, eye[2] * m], right }, dvMin: c.sound.dv, dt, top: c.sound.voices, slide });
+    this.node.port.postMessage({ type: 'frame', frame } satisfies SoundMessage, frameBuffers(frame));
     this.posted++;
   }
 
