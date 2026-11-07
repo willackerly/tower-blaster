@@ -18,6 +18,9 @@ const PROMISE_S = 20;
 const real = Boolean(process.env.TB_CHANNEL);
 /** The GPU solver on a real GPU, or on SwiftShader with PHYSICS_GPU_SLOW=1 (B1's 20 s take about 8 min there); Rapier otherwise. */
 const engine = real || process.env.PHYSICS_GPU_SLOW === '1' ? 'gpu' : 'rapier';
+/** The GPU solver on SwiftShader (the nightly): B1's 20 s of sim take ~8 min, twice that on a slow runner, so the
+ * first collapse may take 25 min and the case 45 (it passed 15 in nightly run 42394058839). */
+const SOFT_GPU = engine === 'gpu' && !real;
 /**
  * What the first shot must bring down. On the players' engine, the objective itself (PT13: the first visit is a
  * win: B1's objective, 40%). Rapier parts from the GPU solver on B1 (PT12: the opener brought 0.43 down on Metal in
@@ -48,7 +51,7 @@ describe('front door', () => {
     await page.waitForFunction(() => window.__game.ready, undefined, { timeout: 5 * MINUTES, polling: 250 });
     const start = await page.evaluate(() => window.__game.stepIndex);
     await page.locator('.kg-hud button.opener').click();
-    await page.waitForFunction((d) => window.__game.collapse >= d || window.__game.phase === 'aiming' && window.__game.strokes === 1, FIRST_COLLAPSE, { timeout: 10 * MINUTES, polling: 100 });
+    await page.waitForFunction((d) => window.__game.collapse >= d || window.__game.phase === 'aiming' && window.__game.strokes === 1, FIRST_COLLAPSE, { timeout: (SOFT_GPU ? 25 : 10) * MINUTES, polling: 100 });
     const at = await page.evaluate(() => ({ wall: performance.now(), step: window.__game.stepIndex, collapse: window.__game.collapse, strokes: window.__game.strokes }));
     const simS = (at.step - start) / 60;
     console.log(`first collapse on ${engine}: D ${at.collapse.toFixed(3)} after ${simS.toFixed(1)} s of sim, ${(at.wall / 1000).toFixed(1)} s of wall time since navigation${real ? '' : ' (software: not a performance result)'}`);
@@ -61,7 +64,7 @@ describe('front door', () => {
     expect(await page.locator('.kg-hud button.opener').count()).toBe(0);
     expect(errors).toEqual([]);
     await page.close();
-  }, 15 * MINUTES);
+  }, (SOFT_GPU ? 45 : 15) * MINUTES);
 
   it('Esc and Menu toggle it; a named level opens without it; door=1 shows it anyway', async (ctx) => {
     if (!game.browser()) return ctx.skip();

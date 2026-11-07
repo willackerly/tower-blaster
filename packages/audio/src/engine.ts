@@ -35,14 +35,22 @@
 // previous frame, so frames neither overlap nor leave gaps; the clock resyncs if
 // the two drift apart by more than `resync`.
 //
-// Master: Pa to full scale, a low cut (2nd-order Butterworth high-pass at
+// Space (A8a; off by default, setSpace): each sector plays at the mean pan of the impacts it got (the
+// frame's space sums, smoothed over SPACE_TAU), not at its fixed centre; and the room hears every impact at
+// its distance-free level, through a send of gain (distance / dref)^law (capped; law is the room's: 1, a diffuse
+// field's, in the hall; 0.5 outdoors), so the dry sound falls 6 dB a doubling and the hall's reverb stays put: far
+// impacts sound far. The early taps follow the mix's mean distance by geometry (RoomVerb.setDistance). Without a
+// room the send is not built.
+//
+// Master: Pa to full scale, the room (room.ts: off by default; setRoom), a low cut (2nd-order Butterworth high-pass at
 // `lowcut` Hz: below ~35 Hz no speaker plays it, yet a big block's thump puts
 // a third of its energy there, which only uses up headroom), then a lookahead
 // peak limiter (Limiter): gain changes are ramps, never steps, so heavy
 // limiting does not crackle.
-import { binOf, DV_EDGES, TOP_FIELDS, type AudioFrame } from './frame.ts';
+import { binOf, DV_EDGES, SPACE_FIELDS, TOP_FIELDS, type AudioFrame } from './frame.ts';
 import type { SoundMaterial } from './material.ts';
-import { C_AIR, clickFilter, clickKernel, contactTime, mass, RHO_AIR, radiatedClick, DENSE_BANDS, denseField, forceSpectrum, gauss, modes, roughness, roughTime, soundSize, type Modes } from './modes.ts';
+import { makeRoom, ROOMS, type Room, type RoomParams, type RoomVerb } from './room.ts';
+import { BL_CLICK_MAX, C_AIR, clickFilter, clickKernel, contactTime, mass, RHO_AIR, radiatedClick, DENSE_BANDS, denseField, forceSpectrum, gauss, modes, roughness, roughTime, soundSize, type Modes } from './modes.ts';
 
 export const BLOCK = 128;
 const RING = 64; // blocks of scheduling horizon (171 ms at 48 kHz)
@@ -178,6 +186,11 @@ interface MatState {
   /** Click resonator per (bin, sector): its period D (samples, per bin), 2 cos(2 pi / D), state, input and the input's last D samples. */
   cD: Int32Array; cc: Float64Array; cy1: Float64Array; cy2: Float64Array; cx: Float32Array; cring: Float64Array[];
   cLast: Float64Array; // per (bin, sector): absolute sample of its last input (-Infinity: none)
+  /**
+   * Per bin: a click shorter than BL_CLICK_MAX samples plays as its band-limited kernel instead (A7; null: the
+   * resonator), overlap-added per (bin, sector) into cAcc (BLOCK + the kernel's length).
+   */
+  cFir: (Float32Array | null)[]; cAcc: Float64Array[];
   clickPeak: Float64Array; // per bin: impulse into the click resonator per (m/s of dv per m)
   /** Radiation filter of the bank's clicks (clickFilter; null: the compact dipole), its per-sector state [x1 x2 y1 y2] and bus. */
   cf: [number, number, number, number, number] | null; cfz: Float64Array; cbus: Float64Array;
@@ -203,11 +216,17 @@ interface MatState {
 interface Voice {
   on: boolean; mat: number; age: number; life: number; level: number;
   gl: number; gr: number;
+  send: number; // its gain into the room's send (space: (gl + gr) / 2 x distance / dref)
   a1: Float32Array; a2: Float32Array; y1: Float32Array; y2: Float32Array; M: number;
   click: Float32Array; clickAt: number; clickGain: number;
   start: number; // absolute sample
   amp: Float32Array;
 }
+
+/** Space (A8a): reference distance (m) where a room's earlyDb / lateDb hold, the send's cap, and the smoothing of a sector's pan and send (s). */
+export const SPACE_DREF = 10;
+export const SPACE_CAP = 32;
+export const SPACE_TAU = 0.05;
 
 /** Equal-power gains for a pan in [-1, 1]. */
 export const panGains = (pan: number): [number, number] => { const a = ((Math.max(-1, Math.min(1, pan)) + 1) * Math.PI) / 4; return [Math.cos(a), Math.sin(a)]; };
@@ -271,6 +290,26 @@ export class CollapseEngine {
   private sector = new Float32Array(0);
   readonly limiter = new Limiter();
   readonly highpass = new HighPass();
+  private roomVerb: RoomVerb | null = null;
+  private roomKey = 'off';
+  // Space (A8a): per sector the pan and send now (smoothed) and their targets, the gains applied last
+  // block (ramps start there), and whether it was silent last block (then a new target is taken at once).
+  private spaceOn = false;
+  private dref = SPACE_DREF;
+  private sendCap = SPACE_CAP;
+  private sPan = new Float64Array(0);
+  private sPanT = new Float64Array(0);
+  private sK = new Float64Array(0);
+  private sKT = new Float64Array(0);
+  private sGl = new Float64Array(0);
+  private sGr = new Float64Array(0);
+  private sGs = new Float64Array(0);
+  private sQuiet = new Uint8Array(0);
+  private send = new Float32Array(BLOCK);
+  private vbuf = new Float32Array(BLOCK); // one voice's block, with a send
+  // The mix's mean distance (energy-weighted over the last frame's sectors) now and its target: the room's early taps follow it.
+  private dMix = SPACE_DREF;
+  private dMixT = SPACE_DREF;
   // Impulse buckets, by block: t (sample in block), material, class, sector, A, dv.
   private bt = new Uint16Array(RING * BUCKET);
   private bm = new Uint8Array(RING * BUCKET);
@@ -307,13 +346,14 @@ export class CollapseEngine {
     this.rand = mulberry(opts.seed ?? 1);
     this.grand = mulberry((opts.seed ?? 1) ^ 0x5bd1e995);
     this.sector = new Float32Array(this.sectors * BLOCK);
+    this.resetSpace();
     this.kernels = grainKernels(this.sr);
     const dmax = Math.max(...this.kernels.map((k) => k.length));
     if (dmax > BLOCK) throw new Error(`grain kernels longer than a block at ${this.sr} Hz`);
     this.gw = BLOCK + dmax;
     this.gbus = new Float32Array(this.sectors * this.gw);
     this.voices = Array.from({ length: opts.voices ?? 48 }, () => ({
-      on: false, mat: 0, age: 0, life: 0, level: 0, gl: 0, gr: 0, M: 0,
+      on: false, mat: 0, age: 0, life: 0, level: 0, gl: 0, gr: 0, send: 0, M: 0,
       a1: new Float32Array(64), a2: new Float32Array(64), y1: new Float32Array(64), y2: new Float32Array(64), amp: new Float32Array(64),
       click: new Float32Array(0), clickAt: 0, clickGain: 0, start: 0,
     }));
@@ -334,6 +374,7 @@ export class CollapseEngine {
       cD: new Int32Array(DV_EDGES.length), cc: new Float64Array(DV_EDGES.length),
       cy1: new Float64Array(DV_EDGES.length * S), cy2: new Float64Array(DV_EDGES.length * S),
       cx: keep ? old.cx : new Float32Array(DV_EDGES.length * S * BLOCK), cring: [], cLast: new Float64Array(DV_EDGES.length * S).fill(-Infinity),
+      cFir: [], cAcc: [],
       cf: clickFilter(m, this.sr, edge), cfz: new Float64Array(4 * S), cbus: new Float64Array(S * BLOCK),
       clickPeak: new Float64Array(DV_EDGES.length), binT: new Float64Array(DV_EDGES.length), w: new Float64Array(md.freq.length),
       gritAmp: Math.sqrt(gritEnergy(m, edge)),
@@ -355,12 +396,15 @@ export class CollapseEngine {
       // cycle of the kernel's sine is D samples, and the same impulse negated D samples later ends it
       // (u = x - x[n - D]). Scaled so one impulse carries the exact kernel's energy (clickKernel) for a
       // unit dv at 1 m; the cycle's energy is D / 2 / sin(th)^2.
-      const D = Math.max(4, Math.round(T * this.sr)), th = (2 * Math.PI) / D;
+      const D = Math.max(4, Math.round(T * this.sr)), th = (2 * Math.PI) / D, kernel = clickKernel(m, T, this.sr, edge);
       st.cD[bin] = D; st.cc[bin] = 2 * Math.cos(th);
+      // A short click (A7) is its band-limited kernel itself: an impulse of A plays A times it.
+      const fir = m.clickBand === 'limited' && T * this.sr < BL_CLICK_MAX ? kernel : null;
+      st.cFir.push(fir);
       let ek = 0;
-      for (const x of clickKernel(m, T, this.sr, edge)) ek += x * x;
-      st.clickPeak[bin] = Math.sqrt(ek / (D / 2)) * Math.sin(th);
-      for (let s = 0; s < S; s++) st.cring.push(new Float64Array(D));
+      for (const x of kernel) ek += x * x;
+      st.clickPeak[bin] = fir ? 1 : Math.sqrt(ek / (D / 2)) * Math.sin(th);
+      for (let s = 0; s < S; s++) { st.cring.push(new Float64Array(fir ? 0 : D)); st.cAcc.push(new Float64Array(fir ? BLOCK + fir.length : 0)); }
     }
     const dense = denseField(m, st.binT, edge, Math.min(18000, 0.45 * this.sr));
     if (dense) {
@@ -375,8 +419,8 @@ export class CollapseEngine {
     // A click under way keeps playing through a change that keeps its period.
     if (keep) for (let r = 0; r < st.cring.length; r++) {
       const bin = Math.floor(r / S);
-      if (old.cD[bin] !== st.cD[bin]) continue;
-      st.cring[r] = old.cring[r]!; st.cy1[r] = old.cy1[r]!; st.cy2[r] = old.cy2[r]!; st.cLast[r] = old.cLast[r]!;
+      if (old.cD[bin] !== st.cD[bin] || old.cAcc[r]?.length !== st.cAcc[r]!.length) continue;
+      st.cring[r] = old.cring[r]!; st.cy1[r] = old.cy1[r]!; st.cy2[r] = old.cy2[r]!; st.cLast[r] = old.cLast[r]!; st.cAcc[r] = old.cAcc[r]!;
     }
     // Ringing cracks: a crack is a pulse shorter than any contact (flat over the modes, the shortest
     // contact's dense row), with no rigid-body click (it carries no momentum). Its energy for A = 1:
@@ -402,6 +446,21 @@ export class CollapseEngine {
     const start = Math.max(this.nextFrame, this.now + BLOCK);
     this.nextFrame = start + len;
     const S = f.sectors;
+    if (this.spaceOn && f.space) {
+      const sp = f.space, law = this.roomVerb?.law ?? 1;
+      let wAll = 0, wd = 0, quiet = true;
+      for (let s = 0; s < S && s < this.sectors; s++) {
+        const w = sp[SPACE_FIELDS * s]!;
+        if (!(w > 0)) continue;
+        this.sPanT[s] = Math.max(-1, Math.min(1, sp[SPACE_FIELDS * s + 1]! / w));
+        const d = sp[SPACE_FIELDS * s + 2]! / w;
+        this.sKT[s] = Math.min(this.sendCap, (d / this.dref) ** law);
+        wAll += w; wd += w * d; quiet &&= this.sQuiet[s] === 1;
+        // A silent sector takes its target at once (no glide in from its centre); a ringing one glides.
+        if (this.sQuiet[s]) { this.sPan[s] = this.sPanT[s]!; this.sK[s] = this.sKT[s]!; }
+      }
+      if (wAll > 0) { this.dMixT = wd / wAll; if (quiet) this.dMix = this.dMixT; }
+    }
     // Background: the histogram, less the foreground's share.
     const counts = Float32Array.from(f.counts), a2 = Float32Array.from(f.a2);
     for (let j = 0; j < f.top.length / TOP_FIELDS; j++) {
@@ -410,7 +469,7 @@ export class CollapseEngine {
       counts[c] = Math.max(0, counts[c]! - 1); a2[c] = Math.max(0, a2[c]! - (dv / dist) ** 2);
       const at = start + (this.alignOnsets ? 0 : Math.floor(this.rand() * len));
       const st = this.mats[mat], A = (st?.level ?? 1) * dv / dist;
-      this.voice(mat, dv, dv / A, pan, f.top[o + 4]!, at);
+      this.voice(mat, dv, dv / A, pan, f.top[o + 4]!, at, dist);
       if (st?.dK) this.impulse(at, mat, DENSE_ONLY, s, A, dv);
       if (st && st.gritAmp > 0) this.grit(st, at, s, A * dv, grainsOf(st, dv), 1);
     }
@@ -469,7 +528,26 @@ export class CollapseEngine {
     }
   }
 
-  private voice(mat: number, dv: number, dist: number, pan: number, z: number, at: number): void {
+  /** A short click's (bin, sector) r for this block: its impulses overlap-add their band-limited kernel (A7). */
+  private firClick(st: MatState, r: number, h: Float32Array): void {
+    const acc = st.cAcc[r]!, L = h.length, o = r * BLOCK, out = st.cf ? st.cbus : this.sector, so = (r % this.sectors) * BLOCK;
+    let last = st.cLast[r]!;
+    // Idle: no input this block, and the last kernel has played out.
+    if (!st.cIn[r] && this.now - last >= L) return;
+    st.cIn[r] = 0;
+    this.work += BLOCK;
+    for (let i = 0; i < BLOCK; i++) {
+      const x = st.cx[o + i]!;
+      if (x === 0) continue;
+      st.cx[o + i] = 0; last = this.now + i;
+      for (let j = 0; j < L; j++) acc[i + j]! += x * h[j]!;
+    }
+    for (let i = 0; i < BLOCK; i++) out[so + i]! += acc[i]!;
+    acc.copyWithin(0, BLOCK); acc.fill(0, L);
+    st.cLast[r] = last;
+  }
+
+  private voice(mat: number, dv: number, dist: number, pan: number, z: number, at: number, geo = this.dref): void {
     const st = this.mats[mat];
     if (!st) return;
     const level = dv / dist;
@@ -483,8 +561,8 @@ export class CollapseEngine {
       v.amp[k] = level * w[k]! * forceSpectrum(f, T, st.rough, st.roughT) * st.md.gain[k]! * Math.sin((2 * Math.PI * Math.min(f, 0.45 * this.sr)) / this.sr);
       tmax = Math.max(tmax, st.md.tau[k]!);
     }
-    const [gl, gr] = panGains(pan);
-    Object.assign(v, { on: true, mat, M: st.M, age: 0, life: Math.max(tmax, T) * this.sr, level, gl, gr, start: at, click: radiatedClick(st.m, T, this.sr, st.edge), clickAt: 0, clickGain: level });
+    const [gl, gr] = panGains(pan), send = this.spaceOn ? ((gl + gr) / 2) * Math.min(this.sendCap, (geo / this.dref) ** (this.roomVerb?.law ?? 1)) : 0;
+    Object.assign(v, { on: true, mat, M: st.M, age: 0, life: Math.max(tmax, T) * this.sr, level, gl, gr, send, start: at, click: radiatedClick(st.m, T, this.sr, st.edge), clickAt: 0, clickGain: level });
   }
 
   /** Render one block of BLOCK samples (stereo, overwrites). */
@@ -551,6 +629,8 @@ export class CollapseEngine {
         if (peak < 1e-7) { st.live[r] = 0; st.nLive--; st.y1[r] = 0; st.y2[r] = 0; }
       }
       for (let r = 0; r < st.cring.length; r++) {
+        const fir = st.cFir[Math.floor(r / S)];
+        if (fir) { this.firClick(st, r, fir); continue; }
         const D = st.cD[Math.floor(r / S)]!, c = st.cc[Math.floor(r / S)]!, ring = st.cring[r]!, o = r * BLOCK, so = (r % S) * BLOCK;
         let y1 = st.cy1[r]!, y2 = st.cy2[r]!, last = st.cLast[r]!;
         // Idle: no input for a period (the ring holds only zeros) and the last cycle ended.
@@ -616,34 +696,112 @@ export class CollapseEngine {
       gb.copyWithin(o, o + BLOCK, o + W);
       gb.fill(0, o + W - BLOCK, o + W);
     }
-    for (let s = 0; s < S; s++) {
-      const [gl, gr] = panGains(-1 + (2 * s + 1) / S);
-      for (let i = 0; i < BLOCK; i++) { L[i]! += gl * sec[s * BLOCK + i]!; R[i]! += gr * sec[s * BLOCK + i]!; }
+    const send = this.spaceOn && this.roomVerb ? this.send : null;
+    if (send) send.fill(0);
+    if (!this.spaceOn) {
+      for (let s = 0; s < S; s++) {
+        const [gl, gr] = panGains(-1 + (2 * s + 1) / S);
+        for (let i = 0; i < BLOCK; i++) { L[i]! += gl * sec[s * BLOCK + i]!; R[i]! += gr * sec[s * BLOCK + i]!; }
+      }
+    } else {
+      // Space: each sector at its smoothed pan and send, the gains ramped across the block from the last ones.
+      const a = 1 - Math.exp(-BLOCK / (SPACE_TAU * this.sr));
+      this.dMix += a * (this.dMixT - this.dMix);
+      this.roomVerb?.setDistance(this.dMix, this.dref);
+      for (let s = 0; s < S; s++) {
+        this.sPan[s]! += a * (this.sPanT[s]! - this.sPan[s]!);
+        this.sK[s]! += a * (this.sKT[s]! - this.sK[s]!);
+        const [gl, gr] = panGains(this.sPan[s]!), gs = ((gl + gr) / 2) * this.sK[s]!;
+        const l0 = this.sGl[s]!, r0 = this.sGr[s]!, s0 = this.sGs[s]!, dl = (gl - l0) / BLOCK, dr = (gr - r0) / BLOCK, ds = (gs - s0) / BLOCK;
+        let peak = 0;
+        for (let i = 0; i < BLOCK; i++) {
+          const x = sec[s * BLOCK + i]!, j = i + 1;
+          L[i]! += (l0 + dl * j) * x; R[i]! += (r0 + dr * j) * x;
+          if (send) send[i]! += (s0 + ds * j) * x;
+          peak = Math.max(peak, Math.abs(x));
+        }
+        this.sGl[s] = gl; this.sGr[s] = gr; this.sGs[s] = gs; this.sQuiet[s] = peak < 1e-9 ? 1 : 0;
+      }
     }
     // Foreground voices.
     for (const v of this.voices) {
       if (!v.on) continue;
       const from = Math.max(0, v.start - this.now);
       if (from >= BLOCK) continue;
-      for (let k = 0; k < v.M; k++) {
-        const a1 = v.a1[k]!, a2 = v.a2[k]!;
-        let y1 = v.y1[k]!, y2 = v.y2[k]!;
-        for (let i = from; i < BLOCK; i++) {
-          const y = a1 * y1 + a2 * y2 + (v.age === 0 && i === from ? v.amp[k]! : 0);
-          y2 = y1; y1 = y; L[i]! += v.gl * y; R[i]! += v.gr * y;
+      if (send) {
+        // With a send (space and a room): the voice's modes and click into one mono buffer, then out to L, R and the send.
+        const vb = this.vbuf;
+        vb.fill(0, from);
+        for (let k = 0; k < v.M; k++) {
+          const a1 = v.a1[k]!, a2 = v.a2[k]!;
+          let y1 = v.y1[k]!, y2 = v.y2[k]!;
+          for (let i = from; i < BLOCK; i++) { const y = a1 * y1 + a2 * y2 + (v.age === 0 && i === from ? v.amp[k]! : 0); y2 = y1; y1 = y; vb[i]! += y; }
+          v.y1[k] = y1; v.y2[k] = y2;
         }
-        v.y1[k] = y1; v.y2[k] = y2;
+        for (let i = from; i < BLOCK && v.clickAt < v.click.length; i++, v.clickAt++) vb[i]! += v.clickGain * v.click[v.clickAt]!;
+        for (let i = from; i < BLOCK; i++) { const x = vb[i]!; L[i]! += v.gl * x; R[i]! += v.gr * x; send[i]! += v.send * x; }
+      } else {
+        for (let k = 0; k < v.M; k++) {
+          const a1 = v.a1[k]!, a2 = v.a2[k]!;
+          let y1 = v.y1[k]!, y2 = v.y2[k]!;
+          for (let i = from; i < BLOCK; i++) {
+            const y = a1 * y1 + a2 * y2 + (v.age === 0 && i === from ? v.amp[k]! : 0);
+            y2 = y1; y1 = y; L[i]! += v.gl * y; R[i]! += v.gr * y;
+          }
+          v.y1[k] = y1; v.y2[k] = y2;
+        }
+        for (let i = from; i < BLOCK && v.clickAt < v.click.length; i++, v.clickAt++) { const c = v.clickGain * v.click[v.clickAt]!; L[i]! += v.gl * c; R[i]! += v.gr * c; }
       }
-      for (let i = from; i < BLOCK && v.clickAt < v.click.length; i++, v.clickAt++) { const c = v.clickGain * v.click[v.clickAt]!; L[i]! += v.gl * c; R[i]! += v.gr * c; }
       v.age += BLOCK - from;
       if (v.age > 7 * v.life) v.on = false;
     }
     // Master: Pa to full scale, then the limiter.
     const g = this.muted ? 0 : 1 / this.fullScale;
     for (let i = 0; i < BLOCK; i++) { L[i]! *= g; R[i]! *= g; }
+    if (send) { for (let i = 0; i < BLOCK; i++) send[i]! *= g; this.roomVerb!.process(L, R, send); }
+    else this.roomVerb?.process(L, R);
     if (this.lowcut > 0) this.highpass.process(L, R, this.lowcut, this.sr);
     this.limiter.process(L, R, this.sr);
     this.now += BLOCK;
+  }
+
+  /** The room the collapse plays in (room.ts): off (dry, the default), outdoor, or hall at size x the Grand Hall. A change restarts the tail. */
+  setRoom(room: Room, size = 1, tune: Partial<RoomParams> = {}): void {
+    if (!(ROOMS as readonly string[]).includes(room)) throw new Error(`room must be one of ${ROOMS.join(', ')}: ${String(room)}`);
+    const key = room === 'off' ? 'off' : `${room}:${size}${Object.keys(tune).length ? `:${JSON.stringify(tune)}` : ''}`;
+    if (key === this.roomKey) return;
+    this.roomVerb = makeRoom(room, this.sr, size, tune);
+    this.roomKey = key;
+  }
+
+  /** The room now playing: 'off', or room:size. */
+  get room(): string { return this.roomKey; }
+
+  /**
+   * Space (A8a): sectors at their impacts' mean pan, and the room's send by distance / dref (capped at cap).
+   * Off (the default) is the engine as before A8a, bit for bit. A change starts every sector at its centre.
+   */
+  setSpace(on: boolean, dref = SPACE_DREF, cap = SPACE_CAP): void {
+    if (!(dref > 0) || !(cap > 0)) throw new Error(`space dref and cap must be positive: ${dref}, ${cap}`);
+    if (on === this.spaceOn && dref === this.dref && cap === this.sendCap) return;
+    this.spaceOn = on; this.dref = dref; this.sendCap = cap;
+    this.resetSpace();
+  }
+
+  /** Is space on? */
+  get space(): boolean { return this.spaceOn; }
+
+  private resetSpace(): void {
+    const S = this.sectors;
+    this.sPan = Float64Array.from({ length: S }, (_, s) => -1 + (2 * s + 1) / S);
+    this.sPanT = Float64Array.from(this.sPan);
+    this.sK = new Float64Array(S).fill(1); this.sKT = new Float64Array(S).fill(1);
+    this.sGl = Float64Array.from(this.sPan, (p) => panGains(p)[0]);
+    this.sGr = Float64Array.from(this.sPan, (p) => panGains(p)[1]);
+    this.sGs = Float64Array.from({ length: S }, (_, s) => (this.sGl[s]! + this.sGr[s]!) / 2);
+    this.sQuiet = new Uint8Array(S).fill(1);
+    this.dMix = this.dMixT = this.dref;
+    this.roomVerb?.setDistance(this.dref, this.dref);
   }
 
   /** Resonators with state or input (a cost probe). */

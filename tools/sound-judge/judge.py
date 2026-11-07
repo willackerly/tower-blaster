@@ -32,6 +32,10 @@ MATERIALS = {
   'metal': ['Clang', 'Ding', 'Ping', 'Coin (dropping)', 'Keys jangling', 'Jingle, tinkle', 'Dishes, pots, and pans', 'Cutlery, silverware'],
   'mineral': ['Crack', 'Clatter', 'Rattle', 'Crushing', 'Smash, crash', 'Breaking', 'Rumble'],
 }
+# Where it sounds recorded (A5, room sound): AudioSet's acoustic-environment labels, reported per clip
+# beside the groups (they are in none, so the real share does not move with them).
+ENVIRONMENT = {'small room': 'Inside, small room', 'hall': 'Inside, large room or hall', 'public': 'Inside, public space',
+               'urban': 'Outside, urban or manmade', 'rural': 'Outside, rural or natural', 'reverb': 'Reverberation', 'echo': 'Echo'}
 SR, WIN, HOP, NFFT, MELS, FMIN, FMAX, EPS = 16000, 400, 160, 512, 64, 125.0, 7500.0, 1e-4
 LAYERS = [('c', 2, 32), ('s', 1, 64), ('s', 2, 128), ('s', 1, 128), ('s', 2, 256), ('s', 1, 256), ('s', 2, 512),
           ('s', 1, 512), ('s', 1, 512), ('s', 1, 512), ('s', 1, 512), ('s', 1, 512), ('s', 2, 1024), ('s', 1, 1024)]
@@ -153,7 +157,7 @@ def main():
   if sys.argv[1] == '--summary': return summary(sys.argv[2])
   out, files = sys.argv[1], sys.argv[2:]
   model = Yamnet()
-  missing = [n for cls in (*GROUPS.values(), *MATERIALS.values()) for n in cls if n not in model.names]
+  missing = [n for cls in (*GROUPS.values(), *MATERIALS.values(), ENVIRONMENT.values()) for n in cls if n not in model.names]
   if missing: raise SystemExit(f'not YAMNet classes: {missing}')
   idx = {g: [i for i, n in enumerate(model.names) if n in cls] for g, cls in GROUPS.items()}
   mix = {g: [i for i, n in enumerate(model.names) if n in cls] for g, cls in MATERIALS.items()}
@@ -161,7 +165,7 @@ def main():
   for f in files:
     s, e, n = score(model, load(f))
     top = np.argsort(-s)[:6]
-    res[f] = {g: float(s[ix].sum()) for g, ix in idx.items()} | {'top': [(model.names[i], round(float(s[i]), 3)) for i in top], 'frames': n, 'materials': materials(s, mix)} | signal_figures(f)
+    res[f] = {g: float(s[ix].sum()) for g, ix in idx.items()} | {'top': [(model.names[i], round(float(s[i]), 3)) for i in top], 'frames': n, 'materials': materials(s, mix), 'environment': {k: round(float(s[model.names.index(n)]), 4) for k, n in ENVIRONMENT.items()}} | signal_figures(f)
     v = res[f]
     print(f"{os.path.basename(f):44s} share {share(v):.2f} real {v['real']:.3f} elec {v['electronic']:.3f} instr {v['instrument']:.3f} tonal {v['tonal']:.2f}  {' '.join(f'{g[:2]} {x:.2f}' for g, x in v['materials'].items())}  {', '.join(f'{a} {b:.2f}' for a, b in v['top'][:4])}", flush=True)
   json.dump(res, open(out, 'w'))

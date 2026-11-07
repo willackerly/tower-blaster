@@ -14,7 +14,8 @@ label off and comments why.
 active. Each run handles at most one PR:
 
 1. **pick** (`merge-train-cli.ts pick`, default-branch code only):
-   - Lists the open PRs with the label and orders them: labelled longest ago first, then lowest number.
+   - Lists the open PRs with the label, skipping any that has closed since the listing was made, and orders them:
+     labelled longest ago first, then lowest number.
    - Refuses three kinds of PR, each with a comment and the label taken off:
      - a fork, since the train never runs a fork's code with its token;
      - a draft;
@@ -88,8 +89,33 @@ the merge-train runs alongside the `ci` push runs. PRs merged by hand still get 
 - **The cache.** One shared risk remains: the `ci` jobs may save a pnpm cache under the default branch's scope.
   For same-repository PRs by collaborators, that is accepted.
 
+## Runner time
+
+A PR's own `ci` run still runs on its pushes, and the train runs the suite once more on the merged tree. The
+repository is public, so the minutes are free, but the account has a limited number of concurrent runners. With
+another PR's run and main's push run in flight, the first verify run below waited about 25 minutes for runners
+before its slowest shard (8 min) ran. A train run with free runners takes about 14 minutes.
+
 ## Verify (O6)
 
-Two PRs labelled at the same moment land one after the other, with no thread action. This was run on a scratch
-base branch, `merge-train-test`, with two throwaway PRs; the train treats any base branch the same as main.
-Results are in the PR that added this.
+Requirement: two PRs labelled at the same moment land one after the other, with no thread action. This was run on
+2026-11-07 on a scratch base branch, `merge-train-test` (main at fc32dfe), with two throwaway PRs, #312 and #313,
+each adding one docs file. The train treats any base branch as it treats main.
+
+| time (UTC) | event |
+|---|---|
+| 20:48:01 | #312 and #313 labelled in the same second (both label events read `20:48:01Z`) |
+| 20:48:03 | two `pull_request_target` runs: one active, one pending |
+| 20:48:51 | run 1 picks #312 (equal times, so the lower number): "testing 95d669b merged into merge-train-test at fc32dfe; behind it: #313" |
+| 20:55:40 | another thread labels a real PR, #315. Its run replaces the pending one, which GitHub cancels (the dropped nudge this design expects) |
+| 21:28:35 | run 1 lands #312 as 3b6b64d (parents fc32dfe, 95d669b) and dispatches the next run. That replaces #315's pending run, also cancelled |
+| 21:28:37 | run 2 (`workflow_dispatch`) picks #313: "testing 6376b50 merged into merge-train-test at 3b6b64d; behind it: #315" |
+| 21:42:27 | run 2 lands #313 as 696507c (parents 3b6b64d, 6376b50) and dispatches run 3 |
+| 21:42:50 | run 3 picks #315, the first real PR: "testing e59c7be merged into main at ddd0ea2" |
+
+Both scratch PRs landed in label order, each tested on the base it then landed on, with no action between labelling
+and landing. Two of the four nudges were dropped and nothing was lost.
+
+One finding, fixed in the same follow-up: the issues listing lags a merge by a moment. Both lands logged the PR they
+had just merged among those still labelled ("Next run dispatched for #315, #313, #312"). A pick that saw that listing
+would have spent a CI run on a merged PR before land aborted it. `queue` now skips a PR that is no longer open.

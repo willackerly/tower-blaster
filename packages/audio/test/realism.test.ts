@@ -363,12 +363,15 @@ describe('step 2c defaults (Will away 2026-11-06: the recommended picks, stone E
     expect(soundMaterials('real1')).toBe(REAL1_SOUND_MATERIALS);
     expect(soundMaterials()).toBe(SOUND_MATERIALS);
     const R1 = REAL1_SOUND_MATERIALS as Record<string, SoundMaterial>;
-    for (const k of Object.keys(REAL)) if (k !== 'stone' && k !== 'ice' && k !== 'pine') expect(REAL[k], k).toBe(R1[k]);
+    // A7: every real material's short clicks are band-limited; real1 and classic keep G6's sampled ones.
+    for (const k of Object.keys(REAL)) expect(REAL[k]!.clickBand, k).toBe('limited');
+    for (const set of [R1, CLASSIC]) for (const m of Object.values(set)) expect(m.clickBand).toBeUndefined();
+    for (const k of Object.keys(REAL)) if (k !== 'stone' && k !== 'ice' && k !== 'pine') expect(REAL[k], k).toEqual({ ...R1[k], clickBand: 'limited' });
     // A9: Kapla pine damped as in a pile, under the energy law; real1's and classic's stay the free plank.
-    expect(REAL.pine).toEqual({ ...CLASSIC.pine, law: 'energy', eta: 0.045 });
+    expect(REAL.pine).toEqual({ ...CLASSIC.pine, law: 'energy', eta: 0.045, clickBand: 'limited' });
     expect(R1.pine).toBe(CLASSIC.pine);
-    expect(REAL.stone).toEqual({ ...R1.stone, overlap: 1, jitter: 0.15, gritDb: 50, gritRate: 10, face: 0.6, gritShare: 0.0015, levelDb: -10 });
-    expect(REAL.ice).toEqual({ ...R1.ice, jitter: 0.08, gritDb: 50, gritRate: 30, gritSpread: 0.08, face: 0.5, gritShare: 0.01, levelDb: -7 });
+    expect(REAL.stone).toEqual({ ...R1.stone, overlap: 1, jitter: 0.15, gritDb: 50, gritRate: 10, face: 0.6, gritShare: 0.0015, levelDb: -10, clickBand: 'limited' });
+    expect(REAL.ice).toEqual({ ...R1.ice, jitter: 0.08, gritDb: 50, gritRate: 30, gritSpread: 0.08, face: 0.5, gritShare: 0.01, levelDb: -7, clickBand: 'limited' });
     for (const m of [REAL.stone!, REAL.ice!]) expect(parseSoundMaterial({}, m)).toEqual(m);
   });
 

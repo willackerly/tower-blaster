@@ -13,7 +13,7 @@
 // Cost: one pass over the slots (~10 ns each in V8), so 10k bodies are
 // ~0.1 ms of main thread a frame. The GPU tap (plan S4) replaces it when the
 // snapshots stop coming back to the CPU.
-import { binOf, cellOf, DV_EDGES, pitchZ, sectorOf, TOP_FIELDS, type AudioFrame } from './frame.ts';
+import { binOf, cellOf, DV_EDGES, pitchZ, sectorOf, SPACE_FIELDS, TOP_FIELDS, type AudioFrame } from './frame.ts';
 
 export interface TapInput {
   count: number;
@@ -66,7 +66,7 @@ export class FrameTap {
 
   frame(s: TapInput, p: TapParams): AudioFrame {
     const cells = this.materials * DV_EDGES.length * this.sectors;
-    const counts = new Float32Array(cells), a2 = new Float32Array(cells);
+    const counts = new Float32Array(cells), a2 = new Float32Array(cells), space = new Float32Array(SPACE_FIELDS * this.sectors);
     const K = Math.max(0, Math.floor(p.top));
     if (this.keyA.length < K) { this.keyA = new Float64Array(K); this.keyI = new Int32Array(K); this.keyD = new Float64Array(K); }
     if (this.prev.length < 3 * s.count) { const g = new Float64Array(Math.max(3 * s.count, 2 * this.prev.length)); g.set(this.prev); this.prev = g; }
@@ -86,9 +86,10 @@ export class FrameTap {
       const px = x[o]! * m - cx, py = x[o + 1]! * m - cy, pz = x[o + 2]! * m - cz;
       const dist = Math.max(Math.sqrt(px * px + py * py + pz * pz), 0.5);
       const pan = (px * rx + py * ry + pz * rz) / dist;
-      const A = dv / dist, c = cellOf(mi, binOf(dv), sectorOf(pan, S), S);
+      const A = dv / dist, sec = sectorOf(pan, S), c = cellOf(mi, binOf(dv), sec, S), w = A * A;
       counts[c]! += 1;
-      a2[c]! += A * A;
+      a2[c]! += w;
+      space[SPACE_FIELDS * sec]! += w; space[SPACE_FIELDS * sec + 1]! += w * pan; space[SPACE_FIELDS * sec + 2]! += w * dist;
       // Top K by A, strictly louder to enter: ties keep the earlier slot.
       if (kept < K || A > keyA[kept - 1]!) {
         let j = kept < K ? kept++ : kept - 1;
@@ -105,6 +106,6 @@ export class FrameTap {
       const dist = Math.max(Math.sqrt(px * px + py * py + pz * pz), 0.5);
       top.set([keyD[j]!, dist, (px * rx + py * ry + pz * rz) / dist, mats[i]!, pitchZ(i)], j * TOP_FIELDS);
     }
-    return { dt: p.dt, materials: M, sectors: S, counts, a2, top };
+    return { dt: p.dt, materials: M, sectors: S, counts, a2, top, space };
   }
 }

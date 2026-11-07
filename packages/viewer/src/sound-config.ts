@@ -1,7 +1,7 @@
 // What the viewer's sound plays for a config: the material (snd.mat, or the
 // scene's own for auto) tuned by the knobs, and which body slots sound. Pure,
 // so node tests cover it; sound.ts runs it.
-import { type SoundMaterial, type SoundMaterialName, soundMaterials, tunedMaterial } from '@tb/audio';
+import { type Room, type SoundMaterial, type SoundMaterialName, soundMaterials, tunedMaterial } from '@tb/audio';
 import { type BodyDesc, TAG_BALL } from '@tb/engine-api';
 import type { ViewerConfig } from './params.ts';
 
@@ -28,3 +28,17 @@ export const soundSlot = (b: BodyDesc): number => (b.tag === TAG_BALL ? -1 : 0);
 
 /** Master gain (linear) for snd.volume (dB). */
 export const soundGain = (c: Pick<ViewerConfig, 'sound'>): number => 10 ** (c.sound.volume / 20);
+
+/**
+ * The room the sound plays in (snd.room, @tb/audio room.ts). auto: the real look's hall (at its hallSize) when
+ * the scene is in it, else outdoor. The classic set plays dry, as G6 did (as the game's keystone.sound=classic).
+ */
+export function soundRoom(c: Pick<ViewerConfig, 'look' | 'real' | 'sound'>): { room: Room; size: number } {
+  if (c.sound.set === 'classic') return { room: 'off', size: 1 };
+  const inHall = c.look === 'real' && c.real.env === 'hall', size = inHall ? (c.real.hallSize ?? 1) : 1;
+  const room = c.sound.room === 'auto' ? (inHall ? 'hall' : 'outdoor') : c.sound.room;
+  return { room, size: room === 'hall' ? size : 1 };
+}
+
+/** Space (snd.space, A8a: sectors at their impacts' pan, the room by distance); the classic set never uses it, as G6 did not. */
+export const soundSpace = (c: Pick<ViewerConfig, 'sound'>): boolean => c.sound.set !== 'classic' && c.sound.space;

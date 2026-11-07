@@ -5,13 +5,18 @@
 import type { AudioFrame } from './frame.ts';
 import { BLOCK, CollapseEngine } from './engine.ts';
 import type { SoundMaterial } from './material.ts';
+import type { Room } from './room.ts';
 
 export type SoundMessage =
   | { type: 'frame'; frame: AudioFrame }
   /** Material slot i (null: silent). edge: the body's edge in metres (shell and cube materials without their own size). */
   | { type: 'material'; slot: number; material: SoundMaterial | null; edge: number }
   /** Master gain (linear, before the limiter), mute, and the low cut (Hz, 0 off; absent: unchanged). */
-  | { type: 'gain'; gain: number; muted?: boolean; lowcut?: number };
+  | { type: 'gain'; gain: number; muted?: boolean; lowcut?: number }
+  /** The room (room.ts): off, outdoor or hall; size scales the hall's (and the outdoor surroundings') distances. */
+  | { type: 'room'; room: Room; size?: number }
+  /** Space (A8a, engine.setSpace): sectors at their impacts' pan, the room's send by distance. */
+  | { type: 'space'; on: boolean };
 
 export interface HostStats {
   type: 'stats';
@@ -66,6 +71,12 @@ export class CollapseHost {
           if (!(m.lowcut >= 0 && Number.isFinite(m.lowcut))) throw new Error(`lowcut must be a finite number >= 0: ${m.lowcut}`);
           this.engine.lowcut = m.lowcut;
         }
+        break;
+      case 'space':
+        this.engine.setSpace(m.on);
+        break;
+      case 'room':
+        this.engine.setRoom(m.room, m.size ?? 1);
         break;
     }
   }

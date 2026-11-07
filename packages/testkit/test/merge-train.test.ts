@@ -2,7 +2,7 @@
 import { describe, expect, it } from 'vitest';
 import { afterMergeError, type Candidate, LABEL, landDecision, mergeTitle, type Now, queue, type Tested } from '../src/merge-train.ts';
 
-const pr = (number: number, labelledAt: string | null, more: Partial<Candidate> = {}): Candidate => ({ number, labelledAt, draft: false, sameRepo: true, files: ['packages/game/src/a.ts'], ...more });
+const pr = (number: number, labelledAt: string | null, more: Partial<Candidate> = {}): Candidate => ({ number, open: true, labelledAt, draft: false, sameRepo: true, files: ['packages/game/src/a.ts'], ...more });
 const A = 'a'.repeat(40), B = 'b'.repeat(40), C = 'c'.repeat(40), D = 'd'.repeat(40);
 const tested: Tested = { headSha: A, baseSha: B, ci: 'success' };
 const now = (more: Partial<Now> = {}): Now => ({ state: 'open', merged: false, labelled: true, headSha: A, baseSha: B, ...more });
@@ -24,6 +24,11 @@ describe('queue: who goes next', () => {
     expect(q.refuse[0]!.reason).toMatch(/fork/);
     expect(q.refuse[1]!.reason).toMatch(/draft/);
     expect(q.refuse[2]!.reason).toMatch(/workflows/);
+  });
+  it('skips, without refusing, a PR no longer open (the listing can lag the merge the last run made)', () => {
+    const q = queue([pr(312, '2026-11-07T20:48:01Z', { open: false }), pr(313, '2026-11-07T20:48:01Z'), pr(315, '2026-11-07T20:55:38Z')]);
+    expect(q.order).toEqual([313, 315]);
+    expect(q.refuse).toEqual([]);
   });
 });
 
