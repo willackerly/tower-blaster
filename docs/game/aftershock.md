@@ -111,6 +111,14 @@ Order: A1 first because many quakes clear it (a gentle 1 Hz jolt, or a slow sway
 late because only a narrow band of the dial clears it; A5 last because it needs two levers at once. Each level's towers are its candidate site's exactly
 (`quake.test.ts` compares the compiled scenes), so the physics the gate judged is the physics played.
 
+**Recast under settle v4 (PT32b, 2026-11-07).** A1 to A5 dropped their settle v3 pin and were cast again under v4,
+the outcome default (`pnpm keystone:quake levels QC-1,QC-3,QC-4` and `QC-2,QC-5 --axes 0,45,90`, the same grid and
+8 builds, 157 to 754 s a site on 4 cores). Every site passes the gate as before, with the same best quake (Cross
+Grain's highest-scoring moved from 0.25 to 0.30 g at 90 degrees, its cheapest is unchanged) and the same aces and
+T3. Two T2 lines moved one rounding step with the grid's median: Slow Sway 200 to 190 J (budget 800 to 760), Cross
+Grain 2,000 to 2,100 J (budget 8,000 to 8,400). The hashes moved (the settle rule is in them); the aces still clear
+every level on the GPU solver and each seed still does part of the job on 7 or more of 8 builds.
+
 ## Scoring and stars
 
 Agreed with the scores thread (PT9/PT16, docs/game/scoring.md):
@@ -240,8 +248,9 @@ the town first, with C9's build phase and a block budget, and is scored on what 
 - **The bin** (`RETROFIT_BUILD`): cube, pier of three, course of four, wall 4x2, plank, beam and slab; no domino
   brush. Pinned parts (C8, M10) are allowed in a retrofit's authored geometry, and the viewer's level file now
   reads `pinned`, `quake`, `heritage` and quake solutions.
-- **Settle v3**: every Aftershock level names `settle: 'v3'` (every cast and gate ran under it), in the level file's
-  place for it, so the hashes hold whichever outcome default main has (PT6b, docs/game/settle-v4.md).
+- **Settle v3**: every retrofit names `settle: 'v3'` (its cast and gate ran under it), in the level file's place for
+  it, so the hashes hold whichever outcome default main has (PT6b, docs/game/settle-v4.md). A1 to A5 were recast
+  under v4 (PT32b, below) and name none.
 
 ### The game
 
@@ -403,8 +412,8 @@ The search's wall times on 4 cores: 330 s, 1,296 s and 1,131 s (results/retrofit
 ## Follow-ups
 
 - Metal casts (M5 Max) of the shipped levels' aces and the gate's confirm stage, through the coordinator.
-- Retrofit: Metal runs of the retrofit tests (TB_CHANNEL=chrome) through the coordinator; a v4 recast of A1 to A8 to
-  drop the settle v3 pin (low priority); a retrofit with a dialled quake as well as a build (the grammar allows it);
+- Retrofit: Metal runs of the retrofit tests (TB_CHANNEL=chrome) through the coordinator; a v4 recast of A6 to A8 to
+  drop their settle v3 pin (low priority); a retrofit with a dialled quake as well as a build (the grammar allows it);
   and build moves for the agent playtest.
 - The agent playtest (G9b) cannot yet dial a quake.
 - PT25: dust in the stylised looks (hazy, candy), which draw impacts as sparks: a dust style of their own is the
