@@ -639,6 +639,75 @@ rank the whump against the glide but cannot tune a cannonball's. Real launch rec
 cannon, potato cannon) are the next reference (A10b). A drop (released, not launched) and the cue (pushed)
 keep the glide. `keystone.launchsound=glide` brings the old cue back.
 
+## Blasts (A6, 2026-11-07)
+
+A weapon going off (a grenade, a bomb, a plunger's charges) made no sound of its own: only the blocks it
+threw were heard. It now booms (blast-sound.ts), from the blast's reach (the radius it pushes out to) and
+the camera's distance from it:
+
+- **Shock**: a Friedlander pulse, its positive phase 0.4 ms per metre of reach (Hopkinson-Cranz: every
+  time and length of a blast grows as the cube root of its charge, and the reach is such a length).
+  A charge's 1.5 m is a 0.6 ms crack; the grenade's 5 m a 2 ms thump.
+- **Rumble**: the same pulse echoing off the ground and the scene, a velvet-noise train of 2000 echoes a
+  second under e^(-t/tau), tau = 0.4 s x sqrt(reach) (0.49 s for a charge, 0.89 s for the grenade),
+  darkened by two poles at 400 Hz for the echoes' longer paths. The Friedlander pulse is the impulse
+  response of a two-pole filter, so both parts are that filter run over their taps (exact, O(n)).
+- Mixed 0.35 / 0.65 by energy, DC-blocked at 20 Hz, then a tanh-like soft clip at drive 8: the overload
+  of an ear or microphone near a blast. Peak 0.6 for the grenade at 15 m, scaling as reach / distance
+  within 0.05-0.8, and it plays distance / c after the flash (at most 150 ms).
+
+Judged (tools/sound-judge), four takes each at reach 1.5, 2, 3 and 5 m: all 16 top-1 Explosion
+(0.50 / 0.55 / 0.63 / 0.62 by reach; real share 0.92-0.94). One step off at a time, one take each:
+
+| ablation | judge's top label | Explosion |
+|---|---|---|
+| rumble not darkened (no 400 Hz poles) | Ocean, Waves (all 4 reaches) | 0.00 |
+| no overload (drive 0: the 1-sample peak sets the level, the rumble 25 dB under) | Silence (3 of 4) | 0.27-0.38 |
+| rumble half as long | Timpani, Sound effect | 0.00-0.17 |
+
+Tried and dropped: clustered echoes (a slow random swell over the taps, for a rolling rumble) read as
+Wind (Explosion 0.08-0.20). As with the launch, the judge hears nothing under 125 Hz, so the grenade's
+low thump is judged by its upper half; real explosion recordings would be the next reference.
+
+Each wave is built once per reach (to the centimetre) and take (four, so blasts going off together do
+not add up coherently) and cached by the Synth: building one is a few ms on a CI box. The feedback
+carries only the reach, not the blast's impulse, so two weapons of one reach sound alike.
+`keystone.blastsound=none` brings the old silence back.
+
+## Everything spawned sounds (A6, 2026-11-07)
+
+Before this, a body spawned during a level was heard only if it was Keystone's own steel or iron ammo
+or an ice piece. The rack's real-world presets, every weapon's shell (B1-B3's bomb, B2's ram, the
+firework, the default w-grenade: their densities are scaled to the level's blocks, so they are neither
+steel nor iron) and Mason's Trial probes were silent. sound-map.ts soundSlotOf now goes, for a spawned body:
+ice piece; rack preset (a sphere at a preset's real diameter and its density x MODEL_DENSITY, presetOf);
+Keystone ammo; a structure material's density (a probe) as that material; anything else as the steel
+ammo of its shape, a metal casing. Nothing spawned is silent.
+
+Each preset has its own slot (PRESET_SLOT + k, at its real diameter; 6 slots, ~5 ms to build next to
+the other 11's ~120 ms):
+
+| preset | body model | judge, knock (clatter) |
+|---|---|---|
+| beach ball | vinyl shell, 0.25 kg wall, inflated contact 25 ms | Door, Knock, Tap (wood .78) |
+| basketball | rubber shell, 0.62 kg wall, inflated contact 12 ms | Knock .54, Whack, Door, Thump (wood .91) |
+| bowling ball | solid polyester resin, E 3.5 GPa, loss 0.02 | Sound effect, Tick (no class over .2) |
+| cannonball (24-pounder) | solid cast iron | Tick, Sound effect |
+| wrecking ball | solid steel, 0.9 m | Chink .70, Glass, Ding (metal .80 on clatter): it rings, as the steel ammo does |
+| boulder | the level's stone at 6.7 m, grit and all | Music, Door (clatter: Plop, Crack; mineral .41) |
+
+An inflated ball's stiffness is its air's, not its wall's: Hertz on the rubber gives a 3 ms contact,
+where high-speed video puts a basketball's at 10-15 ms; ecForContact solves the contact modulus for
+INFLATED_CONTACT. A shell this thin and soft put its plate modes under 20 Hz, where the synth's
+resonators barely decay and drifted toward full scale (the beach ball's knock peaked at 0.9, 97% of its
+energy under 20 Hz, at the end of the clip). modes.ts now drops every mode under MIN_MODE_HZ (20 Hz) for
+every model; no Keystone material or ammo had one. The inflated balls' wall modes are off as well
+(ringDb -Infinity): a pressurised membrane is not a clamped plate, and the basketball's plates (now
+20-60 Hz) read as a murmur where without them it reads Knock. What is not modelled: a ball's air cavity (a basketball's
+"ping") and a preset's own size for a weapon shell (a shell takes the nearest ammo slot's size: B2's
+ram, 1 m across, sounds as the 0.5 m cannonball). The judge separates these less than it did stone
+from ice; the baseline here is silence.
+
 ## Plan (each step lands with its test)
 
 1. S1 `@tb/audio` material config and mode derivation. Done (#93).

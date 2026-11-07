@@ -2,12 +2,13 @@
 // function, and a thin WebAudio player renders them. Everything melodic sits
 // on one major pentatonic scale, so any pile of impacts sounds consonant.
 import { BANDS, type Feedback, MATERIALS } from '@tb/keystone';
+import { blastParams, type BlastParams, blastWave, REF_DIST } from './blast-sound.ts';
 import { LAUNCH_SECONDS, launchParams, type LaunchParams, type LaunchShape, launchWave } from './launch-sound.ts';
 
 export type Wave = 'sine' | 'triangle' | 'square' | 'sawtooth';
 export interface Voice {
-  /** 'tone' is an oscillator; 'noise' is band-passed noise centred on freq; 'launch' plays launchWave(launch) (freq unused). */
-  kind: 'tone' | 'noise' | 'launch';
+  /** 'tone' is an oscillator; 'noise' is band-passed noise centred on freq; 'launch' plays launchWave(launch), 'blast' blastWave(blast) (freq unused). */
+  kind: 'tone' | 'noise' | 'launch' | 'blast';
   freq: number;
   wave?: Wave;
   /** Peak gain, 0..1 before the master. */
@@ -20,7 +21,14 @@ export interface Voice {
   glide?: number;
   /** kind 'launch': the whump's physics (launch-sound.ts); its samples peak at gain. */
   launch?: LaunchParams;
+  /** kind 'blast': the boom's physics (blast-sound.ts); its samples peak at gain, and its delay is the sound's travel time. */
+  blast?: BlastParams;
+  /** kind 'blast': which of BLAST_TAKES takes plays (simultaneous blasts differ, so they do not add up coherently). */
+  take?: number;
 }
+
+/** Distinct takes of each blast's boom (Synth caches one wave per reach and take). */
+export const BLAST_TAKES = 4;
 
 export const PENTATONIC = [1, 9 / 8, 5 / 4, 3 / 2, 5 / 3];
 export const ROOT = 220; // A3
@@ -57,8 +65,10 @@ export const BELL_NOTE = degree(10);
  * opts.launch: the fired body's size and speed, so a launched shot whumps (launch-sound.ts, PaceFeel.launchSound
  * 'whump'); without it, or with opts.launchSound 'glide', the old sine glide. A drop (released, not launched) and
  * a cue (pushed) keep the glide either way.
+ * opts.blastDist: the camera's distance from a blast (m; absent: REF_DIST), so a weapon going off booms
+ * (blast-sound.ts, PaceFeel.blastSound 'boom'), quieter and later from further; opts.blastSound 'none': silent.
  */
-export function voicesFor(fb: Feedback, opts: { impacts?: boolean; bell?: boolean; launch?: LaunchShape | null; launchSound?: 'whump' | 'glide' } = {}): Voice[] {
+export function voicesFor(fb: Feedback, opts: { impacts?: boolean; bell?: boolean; launch?: LaunchShape | null; launchSound?: 'whump' | 'glide'; blastDist?: number | null; blastSound?: 'boom' | 'none' } = {}): Voice[] {
   if (opts.impacts === false && (fb.t === 'impacts' || fb.t === 'contact')) return [];
   switch (fb.t) {
     case 'fired':
@@ -75,6 +85,11 @@ export function voicesFor(fb: Feedback, opts: { impacts?: boolean; bell?: boolea
       }
       // The old cue: a sine gliding down, heavier for heavier shots.
       return [{ kind: 'tone', wave: 'sine', freq: fb.ammo === 'cannonball' ? 70 : fb.ammo === 'drop' ? 55 : 110, gain: 0.35, decay: 0.22, delay: 0, glide: 0.5 }];
+    case 'blast': {
+      if (opts.blastSound === 'none' || !(fb.radius > 0)) return [];
+      const p = blastParams(fb.radius, opts.blastDist ?? REF_DIST);
+      return [{ kind: 'blast', freq: 0, gain: p.gain, decay: p.seconds, delay: p.delay, blast: p, take: (((fb.step * 7 + fb.body) % BLAST_TAKES) + BLAST_TAKES) % BLAST_TAKES }];
+    }
     case 'contact': {
       const g = Math.min(0.6, 0.12 + 0.07 * Math.log2(1 + fb.impulse / 50));
       return [{ kind: 'noise', freq: 900, gain: g, decay: 0.09, delay: 0 }, { kind: 'tone', wave: 'sine', freq: 60, gain: g, decay: 0.25, delay: 0, glide: 0.7 }];
@@ -137,6 +152,21 @@ export class Synth {
   readonly master: AudioNode;
   private readonly noise: AudioBuffer;
   muted = false;
+  /** Blast waves at unit gain by reach (cm) and take: building one is ~1 ms of a frame, so each reach is built once. */
+  private readonly blasts = new Map<string, AudioBuffer>();
+
+  private blastBuffer(p: BlastParams, take: number): AudioBuffer {
+    const key = `${Math.round(p.reach * 100)}:${take}`;
+    let buf = this.blasts.get(key);
+    if (!buf) {
+      const x = blastWave({ ...p, gain: 1 }, this.ctx.sampleRate, take + 1);
+      buf = this.ctx.createBuffer(1, x.length, this.ctx.sampleRate);
+      buf.copyToChannel(x, 0);
+      if (this.blasts.size >= 32) this.blasts.delete(this.blasts.keys().next().value!);
+      this.blasts.set(key, buf);
+    }
+    return buf;
+  }
 
   constructor(readonly ctx: AudioContext, dest: AudioNode = ctx.destination) {
     this.master = dest;
@@ -163,7 +193,15 @@ export class Synth {
       env.gain.exponentialRampToValueAtTime(0.0001, t0 + v.decay);
       env.connect(this.out);
       let src: AudioScheduledSourceNode;
-      if (v.kind === 'launch' && v.launch) {
+      if (v.kind === 'blast' && v.blast) {
+        // A cached unit-gain wave for the blast's reach and take, played at the voice's gain.
+        const n = this.ctx.createBufferSource();
+        n.buffer = this.blastBuffer(v.blast, v.take ?? 0);
+        env.gain.cancelScheduledValues(t0);
+        env.gain.setValueAtTime(v.gain, t0);
+        n.connect(env);
+        src = n;
+      } else if (v.kind === 'launch' && v.launch) {
         // Samples at the context's rate, already enveloped and at their gain: the envelope stays open.
         const x = launchWave(v.launch, this.ctx.sampleRate), buf = this.ctx.createBuffer(1, x.length, this.ctx.sampleRate), n = this.ctx.createBufferSource();
         buf.copyToChannel(x, 0);

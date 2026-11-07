@@ -3,8 +3,9 @@
 // ammo kind (all steel, each at its own size: a 20 cm marble knocks, a 50 cm
 // cannonball thuds, the cue is a steel rod that rings as a bar). Pure, so
 // node tests cover it; collapse-sound.ts runs it.
-import { AMMO, AMMO_KINDS, type AmmoKind, type CompiledLevel, isIcePiece, MATERIALS, materialId } from '@tb/keystone';
-import { roughTime, soundMaterials, type SoundMaterial, type SoundSet } from '@tb/audio';
+import { AMMO, AMMO_KINDS, type AmmoKind, type CompiledLevel, isIcePiece, MATERIALS, materialId, MODEL_DENSITY } from '@tb/keystone';
+import { PRESET_NAMES, type PresetName, presetMass, PROJECTILE_PRESETS } from '@tb/weapons';
+import { mass, roughTime, soundMaterials, type SoundMaterial, type SoundSet } from '@tb/audio';
 import type { BodyDesc } from '@tb/engine-api';
 
 /**
@@ -55,7 +56,9 @@ export const AMMO_SLOT = MATERIALS.length;
  * (docs/sound.md, Material identity, step 4).
  */
 export const PIECE_SLOT = AMMO_SLOT + AMMO_KINDS.length;
-export const SOUND_SLOTS = PIECE_SLOT + 1;
+/** First preset slot; slot PRESET_SLOT + k is PRESET_NAMES[k] (the rack's real-world projectiles, p-<preset>). */
+export const PRESET_SLOT = PIECE_SLOT + 1;
+export const SOUND_SLOTS = PRESET_SLOT + PRESET_NAMES.length;
 
 export interface SlotSound { material: SoundMaterial; edge: number }
 
@@ -112,7 +115,68 @@ export function slotSounds(c: CompiledLevel, set: SoundSet = 'real'): SlotSound[
     if (a > 3 * b) return { material: { ...steel, model: 'plank', dims: [2 * a * h, 2 * b * h, 2 * d * h], G: STEEL_G }, edge: 2 * a * h };
     return { material: steel, edge: 2 * a * h };
   });
-  return [...structure, ...ammo, { material: sounds.ice, edge: h / 2 }];
+  const presets = PRESET_NAMES.map((name): SlotSound => {
+    const own = presetSound(name, set), hard = name === 'bowlingball' || name === 'cannonball' || name === 'wreckingball';
+    return { material: set === 'real' && hard ? ammoOn(own, struck) : own, edge: PROJECTILE_PRESETS[name].diameter };
+  });
+  return [...structure, ...ammo, { material: sounds.ice, edge: h / 2 }, ...presets];
+}
+
+/**
+ * The inflated balls' contact times on a hard floor at INFLATED_DV, s. An inflated ball's stiffness is its
+ * air pressure's, not its rubber's (Hertz on the wall's modulus gives 3 ms): high-speed video puts a
+ * basketball's bounce near 10-15 ms, and a beach ball, at a fraction of the pressure, is softer still.
+ */
+export const INFLATED_CONTACT = { beachball: 0.025, basketball: 0.012 } as const;
+export const INFLATED_DV = 3;
+
+/** The contact modulus that gives a material at `edge` the Hertz contact time T at dv (modes.ts contactTime, solved for Ec). */
+export function ecForContact(m: SoundMaterial, edge: number, T: number, dv: number): number {
+  const ms = m.mstar * mass(m, edge), Es = Math.sqrt((2.87 ** 5 * ms * ms) / (m.R * dv * T ** 5));
+  return Es * 2 * (1 - m.nu * m.nu);
+}
+
+/**
+ * What a rack preset (@tb/weapons PROJECTILE_PRESETS, at its real size) sounds like: its real material
+ * on one of @tb/audio's body models, the contact radius its own (a sphere's Hertz contact is its radius).
+ * - beach ball and basketball: hollow (the shell model), vinyl (1300 kg/m^3) and rubber (1100) walls as
+ *   thick as their real masses make them (0.25 kg and 0.62 kg over pi d^2), with the contact of an
+ *   inflated ball (INFLATED_CONTACT). Their wall modes are off (ringDb -Infinity): a pressurised membrane
+ *   is not a clamped plate, and as plates they sit under or just over 20 Hz. What is heard is the soft
+ *   contact's thump (a ball's air is not modelled).
+ * - bowling ball: solid polyester resin (E 3.5 GPa, 1340 kg/m^3, loss 0.02), its 7.3 kg as a cube of its diameter.
+ * - cannonball (24-pounder iron shot) and wrecking ball: solid cast iron and steel, like the steel ammo.
+ * - boulder: the level's stone, grit and all, 6.7 m across.
+ * In the real set the hard ones take the pair's contact with the struck material (ammoOn), as the ammo does.
+ */
+export function presetSound(name: PresetName, set: SoundSet = 'real'): SoundMaterial {
+  const s = keystoneSounds(set), p = PROJECTILE_PRESETS[name], d = p.diameter, r = d / 2;
+  const ball = (rho: number, E: number): SoundMaterial => {
+    const m: SoundMaterial = { ...s.rubber, model: 'shell', wall: presetMass(p) / (rho * Math.PI * d * d), E, nu: 0.45, rho, eta: 0.1, R: r, ringDb: -Infinity };
+    return { ...m, Ec: ecForContact(m, d, INFLATED_CONTACT[name as keyof typeof INFLATED_CONTACT], INFLATED_DV) };
+  };
+  switch (name) {
+    case 'beachball': return ball(1300, 0.02e9);
+    case 'basketball': return ball(1100, 0.05e9);
+    case 'bowlingball': return { ...s.rubber, model: 'cube', E: 3.5e9, nu: 0.35, rho: 1340, eta: 0.02, jitter: 0.01, R: r };
+    case 'cannonball': return { ...s.steel, E: 170e9, nu: 0.27, rho: 7200, eta: 0.002, R: r };
+    case 'wreckingball': return { ...s.steel, R: r };
+    case 'boulder': return { ...s.stone, rho: 2700, R: r };
+  }
+}
+
+/** The rack preset a body is (a sphere at the preset's real diameter and its density at MODEL_DENSITY, rack.ts itemSpec), or null. */
+export function presetOf(b: BodyDesc): PresetName | null {
+  if (b.shape.kind !== 'sphere') return null;
+  const r = b.shape.radius, near = (a: number, x: number) => Math.abs(a - x) <= 1e-9 * Math.max(1, Math.abs(x));
+  return PRESET_NAMES.find((n) => near(r, PROJECTILE_PRESETS[n].diameter / 2) && near(b.density, PROJECTILE_PRESETS[n].density * MODEL_DENSITY)) ?? null;
+}
+
+/** The steel ammo kind a body's shape is nearest (a sphere: marble or cannonball by size; a box: cue or drop). */
+function ammoShapeOf(b: BodyDesc, h: number): AmmoKind {
+  if (b.shape.kind === 'sphere') return b.shape.radius / h < 0.35 ? 'marble' : 'cannonball';
+  const [a, , d] = [...b.shape.half].sort((x, y) => y - x) as [number, number, number];
+  return a > 3 * d ? 'cue' : 'drop';
 }
 
 /**
@@ -122,16 +186,25 @@ export function slotSounds(c: CompiledLevel, set: SoundSet = 'real'): SlotSound[
  */
 export function ammoKindOf(b: BodyDesc, h: number): AmmoKind | null {
   if (b.density !== STEEL_DENSITY && b.density !== IRON_DENSITY) return null;
-  if (b.shape.kind === 'sphere') return b.shape.radius / h < 0.35 ? 'marble' : 'cannonball';
-  const [a, , d] = [...b.shape.half].sort((x, y) => y - x) as [number, number, number];
-  return a > 3 * d ? 'cue' : 'drop';
+  return ammoShapeOf(b, h);
 }
 
-/** Sound slot of body i: its Keystone material for the structure (the first c.meta.n), PIECE_SLOT for an ice piece, else its ammo kind's (-1: silent). */
+/**
+ * Sound slot of body i. The structure (the first c.meta.n) sounds as its Keystone material. Of what is
+ * spawned: a shattered ice block's pieces as ice pieces (PIECE_SLOT); a rack preset as itself
+ * (PRESET_SLOT + k); Keystone's steel or iron ammo as its kind; a body of a structure material's density
+ * (a Mason's Trial probe) as that material; anything else (a weapon's shell or munition, its density
+ * scaled to the level's blocks: B1-B3's bomb, the firework, w-grenade) as the steel ammo of its shape,
+ * a metal casing. Nothing spawned is silent.
+ */
 export function soundSlotOf(c: CompiledLevel, b: BodyDesc, i: number): number {
   if (i < c.meta.n) return c.meta.material[i]!;
-  // A shattered ice block's pieces sound as ice pieces (PIECE_SLOT).
   if (isIcePiece(b)) return PIECE_SLOT;
+  const p = presetOf(b);
+  if (p) return PRESET_SLOT + PRESET_NAMES.indexOf(p);
   const k = ammoKindOf(b, c.frame.unit);
-  return k ? AMMO_SLOT + AMMO_KINDS.indexOf(k) : -1;
+  if (k) return AMMO_SLOT + AMMO_KINDS.indexOf(k);
+  const m = MATERIALS.findIndex((x) => x.density === b.density);
+  if (m >= 0) return m;
+  return AMMO_SLOT + AMMO_KINDS.indexOf(ammoShapeOf(b, c.frame.unit));
 }
