@@ -51,6 +51,8 @@ describe('door text', () => {
   });
   it('star targets: objective, then the cast T2 and T3; uncast levels say so; heritage named for three stars', () => {
     expect(starTargets(compileLevel(B1), B1.stars)).toEqual({ targets: ['Bring 40% down', '70% down', '94% down'], short: ['40%', '70%', '94%'], cast: true });
+    // Chorus (chorus.ts): fixed thresholds on the worlds cleared, so it counts as cast.
+    expect(starTargets(compileLevel(CHORUS_LEVELS[0]!), undefined)).toEqual({ targets: ['Clear 32 of 64 worlds (fell every crown in each)', '…48 of 64', '…60 of 64'], short: ['32/64', '48/64', '60/64'], cast: true });
     const b2 = starTargets(compileLevel(B2), B2.stars);
     expect(b2.targets).toEqual(['Fell every crown', '770 points', '3,000 points, heritage intact']);
     expect(b2.short).toEqual(['all crowns', '770', '3,000']);

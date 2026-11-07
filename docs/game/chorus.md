@@ -129,7 +129,40 @@ chorus block and in a build phase. It reads the engine and draws; it never moves
 
 ## Levels
 
-LEVELS_TBD
+Three levels, `CH1` to `CH3` (`packages/keystone/src/chorus-levels.ts`), each a chamber level with a
+one-item rack and its lot grown to the launcher ring less 3 cells (an outcome level's launcher rule; it
+grows about the lot's centre, so every shot lands where it did). The door lists them as the "Chorus"
+series after Rube Lab, with the star targets "Clear 32 of 64 worlds", "…48", "…60".
+
+Each level has two recorded lines (`CHORUS_LINES`): the *obvious* shot, the straight shot a new player
+tries, and the *best* found. The brief's test is the obvious shot's spread: neither none nor all.
+
+| level | from | obvious shot | GPU (16 worlds, SwiftShader) | Rapier (64) | best line | GPU | Rapier |
+|---|---|---|---|---|---|---|---|
+| CH1 Open Fire ×64 | L1, one cannonball, all 4 crowns | mid-tower, `cannonball.360.8.22.252.100` | 4 / 16 | 6 / 64 | L1's par line, low on the tower | 16 / 16 | 64 / 64 |
+| CH2 Lintel ×64 | L2, one cannonball, all 6 crowns, spare the pavilion | L2's par line `cannonball.540.8.0.616.100` | 13 / 16 | 31 / 64 | from the side, a cannonball high on the near column at 80 % (`cannonball.360.8.-24.391.80`) | GPU_CH2 | 60 / 64 |
+| CH3 Dominoes ×64 | L5, one marble, the crown on the last column | first column, mid-height, 60 % | 7 / 16 | 30 / 64 | L5's par line | 16 / 16 | 64 / 64 |
+
+What the levels teach: on CH1 and CH3 the shot that knocks the structure hardest is not the one that
+clears most worlds; the low, deliberate par shots clear every world on both engines. CH2's par line, which
+clears L2 once, fails in a fifth (GPU) to a half (Rapier) of the worlds, where the lintel tips but sheds
+only some of its six crowns: a lesson in how a tip-over depends on where the shot lands.
+
+**The engines disagree, as expected.** The GPU solver is less chaotic, so where the shot itself is robust
+both clear everything, and where it is marginal they split by different amounts (CH1's obvious shot: 25 %
+on the GPU, 9 % on Rapier). The stars are fixed fractions, so a level is somewhat easier or harder per
+engine; the GPU (the game's default) is the reference, and the counts above are the evidence that every
+level splits on both. GPU numbers at 64 worlds come from the Mac when it is next idle.
+
+Levels considered and dropped:
+- L3 (Surgeon) with one marble for one crown: aimed straight at a crown it clears 32 of 32 on Rapier, so
+  the obvious shot clears everything; with a cannonball the heritage beside the crowns always cracks (0
+  clears in 180 candidates).
+- L1 with one marble: no candidate brings all four crowns down (0 in 30).
+- L4 (Catapult): a drop has only the structure's hair of jitter (the bot nudges a drop a whole cell, which
+  is not hand noise), so its worlds barely differ on the GPU.
+- The trials: the small ones hold ice (refused) or weapons; the rest are hundreds to thousands of bodies,
+  over the roadmap's 100 bodies per world for real time.
 
 ## Verify
 

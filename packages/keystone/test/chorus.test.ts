@@ -214,6 +214,17 @@ describe('the engine', () => {
     expect(e.judge().leaks).toBe(0);
   });
 
+  it('health() and checkpoint() exist exactly when the inner engine has them (Rapier keeps no health: a call would throw at the round\'s end)', () => {
+    const c = compileLevel(surgeon({ worlds: 2 }));
+    const bare = new ChorusEngine(new Scripted(), c);
+    expect([bare.health, bare.checkpoint]).toEqual([undefined, undefined]);
+    const health = async () => ({ limits: {} }) as never, kept = new Scripted();
+    Object.assign(kept, { health, checkpoint: () => ({ step: 0, bytes: 0, restore() {}, dispose() {} }) });
+    const e = new ChorusEngine(kept, c);
+    expect(typeof e.health).toBe('function');
+    expect(typeof e.checkpoint).toBe('function');
+  });
+
   it('only: k plays world k alone at the origin, jittered and nudged as in the chorus', async () => {
     const c = compileLevel(surgeon()), all = chorusWorlds(c), inner = new Scripted(), e = new ChorusEngine(inner, c, { only: 3 });
     await e.init(c.scene);

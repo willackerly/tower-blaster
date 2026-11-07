@@ -12,8 +12,8 @@
 // a level whose cast has not landed yet (B3 while its cast runs) shows only the
 // objective's star and "more stars once cast", and picks the rest up from the
 // file with no change here.
-import { castStars, type CompiledLevel, compileLevel, DUEL_NAMES, type DuelDef, isTrial, type LevelDef, type Objective, scoringOf, SERIES, SERIES_TITLES, type Shot, type StarMetric, type StarsDef } from '@tb/keystone';
-import { CUSTOM_NOTE, esc, fmtPoints, itemLabel, LEVERAGE_MEANS, objectiveText, pct } from './hud.ts';
+import { castStars, chorusOf, type CompiledLevel, compileLevel, DUEL_NAMES, type DuelDef, isTrial, type LevelDef, type Objective, scoringOf, SERIES, SERIES_TITLES, type Shot, type StarMetric, type StarsDef } from '@tb/keystone';
+import { chorusWorldClear, CUSTOM_NOTE, esc, fmtPoints, itemLabel, LEVERAGE_MEANS, objectiveText, pct } from './hud.ts';
 import type { LevelRecord } from './progress.ts';
 import type { QualityTier } from './quality.ts';
 import { type Settings, settingRows } from './settings.ts';
@@ -124,6 +124,13 @@ export function starTargets(c: CompiledLevel, stars: StarsDef | undefined): { ta
   const d = c.def;
   const heritage = c.meta.heritage.length ? ', heritage intact' : '';
   const one = cap(objectiveText(d.objective)), oneShort = objectiveShort(d.objective);
+  // Chorus levels (chorus.ts chorusScore): fixed thresholds on the worlds cleared, no cast.
+  const ch = chorusOf(d);
+  if (ch) {
+    const [a, b, t] = ch.stars, K = ch.worlds;
+    // A world with cracked heritage does not clear, so the heritage needs no row of its own.
+    return { targets: [`Clear ${a} of ${K} worlds (${chorusWorldClear(ch.need)} in each)`, `…${b} of ${K}`, `…${t} of ${K}`], short: [`${a}/${K}`, `${b}/${K}`, `${t}/${K}`], cast: true };
+  }
   // Par levels (keystone parStars): three stars less one per stroke over par and one for broken heritage.
   if (scoringOf(d) === 'par') return { targets: [one, `…in ${shotCount(d.par + 1)}`, `…in par (${shotCount(d.par)})${heritage}`], short: [oneShort, `${d.par + 1} shots`, `par ${d.par}`], cast: true };
   if (!stars) return { targets: [one, UNCAST_TARGETS, UNCAST_TARGETS], short: [oneShort, '?', '?'], cast: false };

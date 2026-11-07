@@ -1,7 +1,7 @@
 // HUD and result card. Formatting is pure and tested; the DOM side only
 // writes strings into fixed elements. Level text is authored in this repo,
 // but everything still goes through esc().
-import { castStars, type CompiledLevel, DEFAULT_GOLD, itemRef, type LevelDef, type LevelScore, levelTier, type Objective, type RackItem, scoringOf, TIER_NAMES } from '@tb/keystone';
+import { castStars, chorusOf, type CompiledLevel, DEFAULT_GOLD, itemRef, type LevelDef, type LevelScore, levelTier, type Objective, type RackItem, scoringOf, TIER_NAMES } from '@tb/keystone';
 import { PROJECTILE_PRESETS } from '@tb/weapons';
 
 export const esc = (s: string) => s.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
@@ -141,6 +141,18 @@ export const launchRow = (m: number) => `<div class="row"><span>Height <kbd>W</k
 export const pct = (x: number) => `${Math.floor(100 * x)}%`;
 
 /** What the objective asks, in a few words. */
+/**
+ * A Chorus level's objective (chorus.ts): what clears one world, and in how many worlds. World 0's own
+ * objective check is not the round's, so the HUD row shows this with no tick.
+ */
+export function chorusObjectiveText(d: LevelDef): string | null {
+  const ch = chorusOf(d);
+  return ch ? `${chorusWorldClear(ch.need)} in each of ${ch.worlds} worlds` : null;
+}
+
+/** What clears one Chorus world: every crown down, or `need` of them. */
+export const chorusWorldClear = (need: number | null): string => (need === null ? 'fell every crown' : `fell ${need} crown${need === 1 ? '' : 's'}`);
+
 export function objectiveText(o: Objective): string {
   switch (o.kind) {
     case 'crowns': return 'fell every crown';
@@ -256,7 +268,7 @@ export function hudHtml(s: HudState, sheet = ''): string {
   const head = outcome
     ? `<div class="row"><span>Shot ${s.strokes}</span>${d.objective.kind === 'hold' ? `<span>Pulled <b class="down${(s.pulled ?? 0) > 0 ? '' : ' none'}">${pct(s.pulled ?? 0)}</b></span>` : `<span>Down <b class="down${(s.collapse ?? 0) > 0 ? '' : ' none'}">${pct(s.collapse ?? 0)}</b></span>`}</div>
     ${s.ticks?.length ? meterHtml(d.objective.kind === 'hold' ? s.pulled ?? 0 : s.collapse ?? 0, s.ticks, d.objective.kind === 'hold' ? 'pulled' : 'down') : ''}
-    <div class="row obj"><span>Objective</span><span class="${s.met ? 'ok' : ''}">${esc(objectiveText(d.objective))}${s.met ? ' ✓' : ''}</span></div>`
+    <div class="row obj"><span>Objective</span>${chorusObjectiveText(d) !== null ? `<span>${esc(chorusObjectiveText(d)!)}</span>` : `<span class="${s.met ? 'ok' : ''}">${esc(objectiveText(d.objective))}${s.met ? ' ✓' : ''}</span>`}</div>`
     : `<div class="row"><span>Par ${d.par}</span><span>Stroke ${s.strokes}</span></div>`;
   const fz = s.freezes;
   const freezes = fz ? `<div class="row"><span>Freezes</span><span class="${fz.left ? '' : 'spent'}">${fz.left} / ${fz.total}</span></div>` : '';

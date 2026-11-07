@@ -136,8 +136,10 @@ export class ChorusPanel {
     const g = cv.getContext('2d')!;
     g.setTransform(dpr, 0, 0, dpr, 0, 0);
     g.clearRect(0, 0, w, h);
-    // One frame for every tile: the lot's width along x (a margin each side) and the level's height and a half.
-    const x0 = c.lot.min[0], x1 = c.lot.max[0], top = Math.max(c.height * 1.5, (x1 - x0) * 0.5), span = Math.max(x1 - x0, top);
+    // One frame for every tile: the structure's width along x with a quarter of it each side (the lot can reach
+    // the launcher ring, far wider), and the level's height and a half.
+    const [sx0, sx1] = structureX(c), pad = Math.max(1, 0.25 * (sx1 - sx0)), x0 = sx0 - pad, x1 = sx1 + pad;
+    const top = Math.max(c.height * 1.5, (x1 - x0) * 0.5), span = Math.max(x1 - x0, top);
     const sc = (tile - 4) / span, ox = 2 + ((tile - 4) - (x1 - x0) * sc) / 2;
     const n = c.meta.n, role = c.meta.role, crownLine = c.def.crownLine * c.frame.unit;
     for (let k = 0; k < K; k++) {
@@ -164,6 +166,17 @@ export class ChorusPanel {
       g.strokeRect(tx + 0.5, ty + 0.5, tile - 1, tile - 1);
     }
   }
+}
+
+/** The structure's extent along x, m (its bodies' boxes at rest). */
+function structureX(c: CompiledLevel): [number, number] {
+  let lo = Infinity, hi = -Infinity;
+  for (let i = 0; i < c.meta.n; i++) {
+    const x = c.scene.bodies[i]!.pos[0], hx = Math.hypot(c.meta.half[3 * i]!, c.meta.half[3 * i + 2]!);
+    lo = Math.min(lo, x - hx);
+    hi = Math.max(hi, x + hx);
+  }
+  return lo <= hi ? [lo, hi] : [c.lot.min[0], c.lot.max[0]];
 }
 
 function size(cv: HTMLCanvasElement, w: number, h: number, dpr: number): void {

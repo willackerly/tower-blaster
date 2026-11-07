@@ -303,6 +303,9 @@ export class ChorusEngine implements PhysicsEngine, ChorusRound {
     if (opts.only !== undefined && !(Number.isInteger(opts.only) && opts.only >= 0 && opts.only < ch.worlds)) throw new RangeError(`ChorusEngine: only must be a world from 0 to ${ch.worlds - 1}, got ${opts.only}`);
     this.worlds = opts.only === undefined ? ch.worlds : 1;
     this.info = { ...inner.info, variant: { ...inner.info.variant, chorus: ch.worlds, ...(opts.only !== undefined ? { chorusOnly: opts.only } : {}) } };
+    // Optional engine methods exist exactly when the inner engine has them: callers test for them.
+    if (inner.health) this.health = () => inner.health!();
+    if (inner.checkpoint) this.checkpoint = () => this.checkpointAll();
   }
 
   /** The world island i plays: i, or the one world asked for. */
@@ -447,14 +450,13 @@ export class ChorusEngine implements PhysicsEngine, ChorusRound {
 
   finish(): Promise<void> { return this.inner.finish?.() ?? Promise.resolve(); }
 
-  health(): Promise<EngineHealth> {
-    if (!this.inner.health) return Promise.reject(new Error('ChorusEngine: the inner engine reports no health'));
-    return this.inner.health();
-  }
+  /** The inner engine's limit counters, when it keeps them (Rapier keeps none: then there is no health(), as on Rapier). */
+  readonly health?: () => Promise<EngineHealth>;
+  /** Every world's state, when the inner engine keeps checkpoints (else none, as on the inner engine). */
+  readonly checkpoint?: () => EngineCheckpoint;
 
-  checkpoint(): EngineCheckpoint {
-    const inner = this.inner.checkpoint?.();
-    if (!inner) throw new Error(`ChorusEngine: ${this.inner.info.name} keeps no checkpoints`);
+  private checkpointAll(): EngineCheckpoint {
+    const inner = this.inner.checkpoint!();
     const saved = forkDeep({ isl: this.isl, last: this.last, lastStep: this.lastStep, ref: this.ref, spawnsPushed: this.spawnsPushed, quiet: this.quiet, fenced: this.fenced });
     return {
       step: inner.step,

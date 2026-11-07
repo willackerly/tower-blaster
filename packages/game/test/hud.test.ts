@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { B1, B2, type ChorusJudgement, chorusScore, compileLevel, levelGoldLine, L1, L2, L3, L4, L5, levelScore, outcomeScore, RL1, type ShotOutcome, U3 } from '@tb/keystone';
 import { HOW_TO_PLAY } from '../src/door.ts';
 import { GAME_HELP, GAME_KEYS, HELP_BUDGET, helpHtml, TOUCH_HELP } from '../src/ui.ts';
-import { BANK_BUTTON, SKIP_BUTTON, esc, freezeButton, POWER_STEP, fmtLeverage, fmtPoints, goldHtml, hudHtml, keepRow, LEVERAGE_MEANS, leverageRow, meterHtml, meterTicks, nextSelection, objectiveText, rackChips, resultHtml, starsText, slotAction, tallyHtml, touchActs } from '../src/hud.ts';
+import { BANK_BUTTON, chorusObjectiveText, SKIP_BUTTON, esc, freezeButton, POWER_STEP, fmtLeverage, fmtPoints, goldHtml, hudHtml, keepRow, LEVERAGE_MEANS, leverageRow, meterHtml, meterTicks, nextSelection, objectiveText, rackChips, resultHtml, starsText, slotAction, tallyHtml, touchActs } from '../src/hud.ts';
 
 describe('rack', () => {
   it('groups by kind in first-seen order with counts and keys', () => {
@@ -267,6 +267,9 @@ describe('scores and leverage add up (PT9, PT16)', () => {
     expect(html).toContain('49 of 64 worlds cleared');
     expect(html).not.toMatch(/Brute|Clean|Elegant|Keystone|class="gold/);
     expect(goldHtml(def, score)).toBe('');
+    expect(chorusObjectiveText(def)).toBe('fell every crown in each of 64 worlds');
+    expect(chorusObjectiveText({ ...def, chorus: { worlds: 16, need: 1 } })).toBe('fell 1 crown in each of 16 worlds');
+    expect(chorusObjectiveText(L1)).toBeNull();
   });
   it('heritage is its own red line with the stars it cost, and the total never shows negative', () => {
     const score = levelScore(L3, [shot({ dPE_mJ: 1e5, heritageNew: 9 }), shot({ dPE_mJ: 1e5 })], true, 40);

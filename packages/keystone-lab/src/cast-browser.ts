@@ -8,7 +8,7 @@ import { platform } from 'node:os';
 import type { Page } from 'playwright';
 import { createServer } from 'vite';
 import { CLOSE_TIMEOUT_MS, closeWithin, launchChromium, WEBGPU_ARGS } from '@tb/testkit';
-import { type CastPlay, type LevelDef, readShots, type RubeResult, writeShots } from '@tb/keystone';
+import { type CastPlay, type LevelDef, readShots, type RubeResult, type Shot, writeShots } from '@tb/keystone';
 import type { RestReport } from '../../game/src/cast-page.ts';
 import type { CastPlayer } from './cast.ts';
 import { withPageRetry } from './page-retry.ts';
@@ -46,6 +46,8 @@ async function injectFault(p: Page, f: PageFault): Promise<void> {
 export interface BrowserCastPlayer extends CastPlayer {
   /** True on a software adapter (SwiftShader): its plays are valid, its timings are not performance results. */
   software: boolean;
+  /** As play, with a Chorus level's world k played alone (chorusOnly for these lines only): the verify's solo arm. */
+  playOnly(level: LevelDef, lines: Shot[][], chorusOnly: number): Promise<CastPlay[]>;
   /** Wall time of each play in the page, ms, in play order. */
   readonly playMs: number[];
   /** One line per page lost mid-batch and reopened (when, what was running, the error): empty on a clean cast. */
@@ -130,22 +132,24 @@ export async function openBrowserCastPlayer(opts: BrowserCastOptions = {}): Prom
     adapter: info.adapter, software: info.software, engine: info.engine, playMs, reopens,
     // The game aims for the GPU engine's one substep per step; Rapier substeps once per iteration (4).
     substeps: info.engine === 'rapier' ? 4 : 1,
-    async play(level, lines) {
-      const out: CastPlay[] = [];
-      for (let k = 0; k < lines.length; k += batch) {
-        const text = lines.slice(k, k + batch).map((l) => writeShots(l));
-        // Shot text holds integers only (readShots checks each shot), so a line crosses to the page exactly.
-        for (const t of text) readShots(t);
-        // Each play starts from the level on a fresh engine, so a batch replayed on a reopened page returns the same plays.
-        const got = await onPage(`plays ${k + 1}-${k + text.length}`, (p) => p.evaluate(([lv, ls, max, only]) => window.__cast.play(lv, ls, max ?? undefined, only ?? undefined), [level, text, opts.maxSteps ?? null, opts.chorusOnly ?? null] as const));
-        for (const { ms, ...p } of got) { playMs.push(ms); out.push(p); }
-      }
-      return out;
-    },
+    play: (level, lines) => playLines(level, lines, opts.chorusOnly ?? null),
+    playOnly: (level, lines, k) => playLines(level, lines, k),
     rest: (level, steps) => onPage('rest', (p) => p.evaluate(([lv, n]) => window.__cast.rest(lv, n), [level, steps] as const)),
     rube: (level) => onPage(`rube ${level.id}`, (p) => p.evaluate((lv) => window.__cast.rube(lv), level)),
     injectFault(kind) { fault = kind; },
     setBatchTimeout(ms) { batchTimeoutMs = ms; },
     close,
   };
+  async function playLines(level: LevelDef, lines: Shot[][], only: number | null): Promise<CastPlay[]> {
+      const out: CastPlay[] = [];
+      for (let k = 0; k < lines.length; k += batch) {
+        const text = lines.slice(k, k + batch).map((l) => writeShots(l));
+        // Shot text holds integers only (readShots checks each shot), so a line crosses to the page exactly.
+        for (const t of text) readShots(t);
+        // Each play starts from the level on a fresh engine, so a batch replayed on a reopened page returns the same plays.
+        const got = await onPage(`plays ${k + 1}-${k + text.length}`, (p) => p.evaluate(([lv, ls, max, k]) => window.__cast.play(lv, ls, max ?? undefined, k ?? undefined), [level, text, opts.maxSteps ?? null, only] as const));
+        for (const { ms, ...p } of got) { playMs.push(ms); out.push(p); }
+      }
+      return out;
+  }
 }
