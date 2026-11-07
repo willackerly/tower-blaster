@@ -120,6 +120,34 @@ describe('the quake designer on the game page', () => {
     await o.page.close();
   }, 10 * MINUTES);
 
+  it('a quake with no shot shakes the ground too: Mason\'s Bell Tower (MT5) test, world 0 on the page, along x', async (ctx) => {
+    if (!game.browser()) return ctx.skip();
+    const o = await game.open('/?level=MT5&engine=rapier&offscreen=1&progress=off&door=0');
+    if (!o) return ctx.skip();
+    const { page, errors } = o;
+    await page.waitForFunction(() => window.__game.edit.on, undefined, { timeout: 2 * MINUTES, polling: 100 });
+    const view = await page.evaluate(() => ({ ...window.__game.view }));
+    // Play with nothing built: the test pushes the level's quake into the page's driver as field events (no shot).
+    await page.click('.kg-build button[data-a=play]');
+    await page.waitForFunction(() => window.__game.trial !== null, undefined, { timeout: MINUTES, polling: 100 });
+    const peak = await page.evaluate(() => new Promise<number[]>((done) => {
+      let x = 0, z = 0;
+      const tick = () => {
+        const [gx, gz] = window.__game.ground; x = Math.max(x, Math.abs(gx)); z = Math.max(z, Math.abs(gz));
+        if (x > 0.01 || window.__game.trial?.state !== 'running') done([x, z]); else requestAnimationFrame(tick);
+      };
+      tick();
+    }));
+    console.log(`MT5 world 0: ground swung ${(100 * peak[0]!).toFixed(1)} cm along x, ${(100 * peak[1]!).toFixed(1)} cm along z`);
+    expect(peak[0]).toBeGreaterThan(0.01);
+    expect(peak[1]).toBe(0);
+    expect(await page.evaluate(() => window.__game.line())).toEqual([]);
+    const after = await page.evaluate(() => ({ ...window.__game.view }));
+    expect({ target: after.target, distance: after.distance, yaw: after.yaw, pitch: after.pitch }).toEqual({ target: view.target, distance: view.distance, yaw: view.yaw, pitch: view.pitch });
+    expect(errors).toEqual([]);
+    await page.close();
+  }, 10 * MINUTES);
+
   it('on a phone, upright and sideways: every dial button and Start on screen, the tray not wider than the screen or its rail', async (ctx) => {
     if (!game.browser()) return ctx.skip();
     const phone = { deviceScaleFactor: 1, isMobile: true, hasTouch: true };
