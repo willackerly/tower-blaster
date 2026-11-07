@@ -78,7 +78,8 @@ describe('Rube Lab on the game page (PT26)', () => {
     expect(build.built!.chroma).toBeGreaterThan(0.05);
 
     // Play, then the frame before Go: the bell as it stands, still gold.
-    await page.evaluate(() => window.__game.edit.play());
+    // play(false): Run without its release (PT23 makes Play Rube Lab's one start verb), so the frame before Go is ours.
+    await page.evaluate(() => window.__game.edit.play(false));
     await page.waitForFunction(() => !window.__game.edit.on && window.__game.ready, undefined, { timeout: 2 * MINUTES, polling: 100 });
     const rest = await looks(page, { bell: [BELL] });
     expect(rest.bell!.hue).toBeGreaterThan(60);

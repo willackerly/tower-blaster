@@ -7,7 +7,7 @@
 // its own elements; the viewer calls it for rules=keystone, with hooks for its
 // dev panels (docs/design/viewer-superset.md, step C).
 import { type BodyDesc, type EngineHealth, limitsHit, type PhysicsEngine, type Vec3 } from '@tb/engine-api';
-import { armRefusal, type RackItem, type CompiledLevel, compileLevel, Driver, type DriverCheckpoint, Duel, type DuelDef, DEFAULT_TURN_SECONDS, type Feedback, type Footprint, type Goal, goalMet, type Player, type Grade, gradeOf, type LevelDef, type LevelScore, type LotSheet, type PerStep, playShots, rapidDue, roundFacts, RUBE_GO, runSession, selectFootprints, selectGroups, type Shot, isIcePiece, QUAKE, MasonTrial, masonWorlds, snapshotHash, TIER_NAMES } from '@tb/keystone';
+import { armRefusal, type RackItem, type CompiledLevel, compileLevel, Driver, type DriverCheckpoint, Duel, type DuelDef, DEFAULT_TURN_SECONDS, type Feedback, type Footprint, type Goal, goalMet, type Player, type Grade, gradeOf, type LevelDef, type LevelScore, type LotSheet, type PerStep, playShots, rapidDue, roundFacts, RUBE_GO, runSession, scoringOf, selectFootprints, selectGroups, type Shot, isIcePiece, QUAKE, MasonTrial, masonWorlds, snapshotHash, TIER_NAMES } from '@tb/keystone';
 import { DIAL_KEYS, type DialField, dialShot, dialStart, dialStep, type QuakeDial, quakePanelHtml, seismogram } from './quake-panel.ts';
 import { clampPitch, eyeOf, type Orbit, rayThrough, viewProj } from '@tb/render/camera';
 import type { EffectStats, Fx, FxOptions, PixelStats, Renderer, SnapshotSource } from '@tb/render';
@@ -25,6 +25,7 @@ export { viewOf } from './view.ts';
 import { driverOptions, type EngineKind, gpuEngineOptions, makeEngine, makeMasonEngine, roomAfter } from './engines.ts';
 import { type CardForward, hudHtml, meterTicks, trialText, type MeterTick, nextSelection, POWER_STEP, rackChips, resultHtml, starsText, tallyHtml } from './hud.ts';
 import { hudInsets, type Layout, type ScreenInsets } from './layout.ts';
+import { type CardFacts, type HudProfile, hudProfile } from './mode-ui.ts';
 import { type GoalLine, goalsHudHtml, goalsResultHtml } from './lot-hud.ts';
 import { duelHudHtml, duelResultHtml, handoffHtml, scoreFloatHtml } from './duel-hud.ts';
 import { arcBeads, duelEndView, duelMarks, duelView, joinOverlays, launcherAz, type Overlay, turnCue, turnCueText, TurnSwing } from './duel-view.ts';
@@ -56,7 +57,8 @@ export interface GameEditHandle {
   readonly on: boolean;
   /** Enter the build phase (false when the level offers none, or a shot has gone in); Play; leave without the edits. */
   enter(): boolean;
-  play(): void;
+  /** The build phase's Play (Rube Lab: Run, which releases the ball once the level is in); run=false stops before Go, as a test that looks at the frame before it needs. */
+  play(run?: boolean): void;
   cancel(): void;
   /** A key as the build phase takes it (Q / E turn, T tip, 1 to 9 items, B brush, X erase, Z undo); whether it was one. */
   key(k: string, shift?: boolean): boolean;
@@ -130,7 +132,7 @@ export interface GameHandle {
    * The result card's placement (layout.ts: docked aside or centred) and wall times (performance.now, ms): when the round's
    * end settled (levelEnd) and when the card itself showed; null until then. Docked, the card waits Layout.cardDelay after the end.
    */
-  card: { place: 'dock' | 'center'; endedMs: number | null; shownMs: number | null };
+  card: { place: 'strip' | 'dock' | 'center'; endedMs: number | null; shownMs: number | null };
   /** The docked phone HUD's band the level's opening view kept clear of (screen shares, PT3b), or null when the HUD is not docked. */
   openingHud: ScreenInsets | null;
   /**
@@ -665,6 +667,11 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
   let regrowBuf = new Float32Array(0);
   let selected: RackItem | null = null;
   let opener: Shot | null = null;
+  /**
+   * The level's mode's HUD (mode-ui.ts, PT23; undefined under keystone.modeui=0), and a Run asked for from the Build
+   * panel: Rube Lab's Run plays the build and releases the ball once the level as built is loaded and grown in.
+   */
+  let profile: HudProfile | undefined, runPending = false;
   let power = 100;
   // The quake designer's dial (levels with a quake in the rack), kept over Retry and Undo so the player can iterate,
   // and its seismogram, recomputed only when the dial moves.
@@ -741,7 +748,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
   /** The Build panel: shown while building, or while the build phase can start; redrawn only when its HTML changes. */
   function showPanel() {
     buildEl.hidden = !(editing || canEdit());
-    buildPanel.show(editing);
+    buildPanel.show(editing, profile?.mode === 'rube');
   }
   function showEdit() {
     if (editing) editView.show(editing, feel.marks, coatsOn());
@@ -771,7 +778,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     document.body.classList.remove('kg-building');
     showPanel();
   }
-  function playEdit() {
+  function playEdit(run = true) {
     if (!editing) return;
     const def = editing.play();
     handle.edit.played = compileLevel(def).hash;
@@ -780,6 +787,8 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     // Mason's Trial: Play is build, then test.
     trialAfterLoad = !!def.mason;
     void load(levelIdx, true).catch(fail);
+    // Rube Lab's one start verb (PT23): the Build panel's Run also releases the ball (the tick fires it when it can).
+    runPending = run && profile?.mode === 'rube';
   }
   function cancelEdit() {
     if (!editing) return;
@@ -906,8 +915,9 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
   let loading = 0;
   function load(i: number, retry = false): Promise<void> {
     loading++;
-    // A load ends the build phase (Play, Cancel, a level picked at the door), and a Mason test.
+    // A load ends the build phase (Play, Cancel, a level picked at the door), any Run waiting on it, and a Mason test.
     if (editing) leaveEdit();
+    runPending = false;
     stopTrial();
     trialPending = false;
     buildAfterLoad = false;
@@ -1330,6 +1340,9 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     else if (!retry || !dial) dial = dialStart(c);
     // Rube Lab levels open with their plunger (the trapdoor's release): the HUD's Go button and key F fire it.
     opener = env.opener?.(c) ?? (c.def.rube ? RUBE_GO : null);
+    profile = feel.modeUi ? hudProfile(c.def) : undefined;
+    // A mode that fires nothing from the scene drops the help's "click: fire" (ui.ts fireSpan).
+    document.body.classList.toggle('kg-nofire', profile !== undefined && !profile.fire);
     if (!retry) {
       setPower(100);
       // The play area: the lot (where debris counts), grown a little, up to the structure's top.
@@ -1656,6 +1669,17 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
    * (layout.ts, PT4), a small tallying banner shows instead and the card waits Layout.cardDelay of wall time
    * after the settle, so the player sees the collapse land; then it docks aside, not over the middle.
    */
+  /** What the round left, for the card's words (mode-ui.ts CardFacts): an outcome level's facts as its score read them. */
+  function cardFacts(): CardFacts {
+    const s = driver.session, f = scoringOf(c.def) === 'outcome' ? s.outcomeFacts() : null;
+    return {
+      crownsDown: s.crownLive.reduce((a, x) => a + x, 0), crownsTotal: c.meta.crowns.length,
+      heritageBroken: s.heritageBroken.reduce((a, x) => a + x, 0), heritageTotal: c.meta.heritage.length,
+      collapse: f?.collapse ?? s.liveCollapse,
+      ...(f?.spill !== undefined ? { spill: f.spill } : {}), ...(f?.energy !== undefined ? { energy: f.energy } : {}),
+    };
+  }
+
   function showResult(score: LevelScore | null) {
     if (duel && !score) return;
     let duelHtml = '';
@@ -1668,15 +1692,19 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     const lay = env.layout, delay = lay ? lay.cardDelay : 0;
     handle.resultShownAt ??= driver.engine.stepIndex;
     handle.card.place = lay?.card ?? 'center';
-    env.result.classList.toggle('dock', handle.card.place === 'dock');
+    env.result.classList.toggle('dock', handle.card.place !== 'center');
+    // A phone's strip (PT30): the card in the band the docked HUD held, Details for the rest. A duel's card has no
+    // rows to fold away, so it docks whole.
+    env.result.classList.toggle('strip', handle.card.place === 'strip' && !duel);
+    env.result.classList.remove('full');
     if (duel) env.result.innerHTML = duelHtml;
     else {
       const sheet = score && lot ? goalsResultHtml(handle.goals, handle.grade, lot.sheet.grades !== undefined) : '';
-      env.result.innerHTML = resultHtml(c.def, score, driver.session.strokes, cardForward(), Boolean(env.onSave), sheet, true);
+      env.result.innerHTML = resultHtml(c.def, score, driver.session.strokes, cardForward(), Boolean(env.onSave), sheet, true, { facts: cardFacts(), modeUi: feel.modeUi });
     }
     if (score) handle.card.endedMs = performance.now();
     if (delay <= 0) { revealCard(); return; }
-    tally.innerHTML = tallyHtml(c.def, score, duel ? 'Round over' : null);
+    tally.innerHTML = tallyHtml(c.def, score, duel ? 'Round over' : null, { facts: cardFacts(), modeUi: feel.modeUi });
     tally.classList.add('show');
     document.body.classList.add('kg-tallying');
     if (!score) return;
@@ -1832,6 +1860,8 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
   function fireOpener(): boolean {
     // A Mason level's slot is its Test.
     if (c.def.mason) return startTrial();
+    // The mode's HUD offers no opener where the mode's panel holds the start (key F included; PT23).
+    if (profile && !profile.opener) return false;
     const o = openerNow();
     return o !== null && fire(o);
   }
@@ -2120,6 +2150,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     if (act === 'retry') void handle.retry();
     if (act === 'undo') void handle.undo();
     if (act === 'save') env.onSave?.();
+    if (act === 'card') env.result.classList.toggle('full');
     if (act === 'next' && step(levelIdx, 1)) void load(levelIdx + 1).catch(fail);
     if (act === 'series') { const f = env.seriesForward?.(levelIdx); if (f) void load(f.index).catch(fail); }
     if (act === 'levels') env.onLevels?.();
@@ -2231,7 +2262,8 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
       reachable: aimed ? aimed.reachable : null,
       pullRefused: aimed?.shot.ammo === 'pull' && !aimed.reachable && (aimed.shot.body === refusedPull ? 'tapped' : true),
       collapse: s.liveCollapse, pulled: s.pulledShare(), met: s.objectiveDone, canBank: !stepping && regrowT === null && s.canBank(), canSkip: canSkip(), skipping, pace: handle.pace.tag,
-      opener: !stepping && regrowT === null && s.phase === 'aiming' && (openerNow() !== null || trialReady()), ticks,
+      // While building, the mode's HUD leaves the start to the Build panel's Run (one start verb, PT23).
+      opener: !stepping && regrowT === null && s.phase === 'aiming' && (openerNow() !== null || trialReady()) && !(profile && editing), ticks, profile,
       ...(c.def.mason ? { trial: trialText(handle.trial, masonWorlds(c.def.mason)) } : {}),
       // While the turn view swings or the hand-over card shows, the aim is the old side's: no refusal, cue or warning (PT5's red line mid-swing).
       ...(duel ? { duel: swing.active || handle.handoff ? duelHudHtml(duel) : duelHudHtml(duel, s.phase === 'aiming' && aimed ? duel.refuse(aimed.shot) : null, aimAz(), s.phase === 'aiming' && aimHit !== null && duel.owned[duel.turn].includes(aimHit.body)) } : {}),
@@ -2285,6 +2317,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
       renderer.setFx(0, null, regrowScales(c, done ? Infinity : regrowT, regrowBuf), !done);
       if (done) { regrowT = null; aimDirty = true; }
     }
+    if (runPending && !loading && !editing && regrowT === null) { runPending = false; fireOpener(); }
     // Mason's Trial: the test after the build phase's Play, once the level is in and has grown back.
     if (trialPending && trialReady()) { trialPending = false; startTrial(); }
     const running = !loading && driver.session.phase === 'running';

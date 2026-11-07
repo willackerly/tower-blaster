@@ -448,6 +448,8 @@ export function preaimMode(q: URLSearchParams): PreaimMode {
  */
 export function openerFor(def: LevelDef, index: number, mode: PreaimMode, played: boolean): Shot | null {
   if (mode === '0' || (mode === 'auto' && (played || (index !== 0 && !def.solutions?.teach)))) return null;
-  const shot = def.solutions?.opener ?? def.solutions?.ace?.[0] ?? def.solutions?.par?.[0] ?? null;
+  // A one-shot ace's first shot is the whole answer (Aftershock's ace quake: agent playtest round 2, PT23): never hand it over.
+  const ace = def.solutions?.ace, aceFirst = ace && ace.length > 1 ? ace[0] : undefined;
+  const shot = def.solutions?.opener ?? aceFirst ?? def.solutions?.par?.[0] ?? null;
   return shot?.ammo === 'pull' ? null : shot;
 }
