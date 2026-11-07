@@ -5,7 +5,7 @@
 // --engine gpu drives it (keystone-lab cast-browser.ts): SwiftShader in CI,
 // Metal with --channel chrome on a Mac. No rendering: physics only.
 // ?engine=rapier plays on Rapier instead, for comparison.
-import { type CastPlay, castPlay, type CompiledLevel, compileLevel, type LevelDef, nudgedLevel, physicsOf, readShots, type RubeResult, rubePlay } from '@tb/keystone';
+import { type CastPlay, castPlay, type CompiledLevel, compileLevel, type LevelDef, nudgedLevel, physicsOf, readShots, type RubeResult, rubePlay, type WaveOptions, type WaveResult, wavePlay } from '@tb/keystone';
 import { limitProblems } from '@tb/engine-api';
 import { createDevice, isSoftwareAdapter } from '@tb/gpu';
 import { driverOptions, engineKind, makeEngine } from './engines.ts';
@@ -30,6 +30,8 @@ export interface CastHandle {
   rest(level: LevelDef, steps: number): Promise<RestReport>;
   /** A Rube Lab level (par scoring, one plunger: keystone rube-play.ts) as the game plays it, on a fresh engine. */
   rube(level: LevelDef): Promise<RubeResult & { ms: number }>;
+  /** A Wavefront level (keystone wave-play.ts) played with one line (writeShots text) on a fresh engine, the wave metered. */
+  wave(level: LevelDef, line: string, opts?: Pick<WaveOptions, 'groups' | 'fell' | 'maxSteps'>): Promise<WaveResult & { ms: number }>;
 }
 
 export interface RestReport { presettle: number; steps: number; maxMove: number; topDrop: number; limits: string[]; ms: number }
@@ -38,7 +40,7 @@ declare global { interface Window { __cast: CastHandle } }
 
 const log = document.getElementById('log')!;
 const notReady = async (): Promise<never> => { throw new Error('the cast page is not ready'); };
-const handle: CastHandle = { status: 'loading', adapter: '', software: false, engine: '', play: notReady, rest: notReady, rube: notReady };
+const handle: CastHandle = { status: 'loading', adapter: '', software: false, engine: '', play: notReady, rest: notReady, rube: notReady, wave: notReady };
 window.__cast = handle;
 
 async function main() {
@@ -85,6 +87,10 @@ async function main() {
   handle.rube = async (level) => {
     const c = compileLevel(level), e = makeEngine(kind, c, device), t0 = performance.now();
     try { return { ...(await rubePlay(e, c, driverOptions(kind))), ms: performance.now() - t0 }; } finally { e.dispose(); }
+  };
+  handle.wave = async (level, line, opts = {}) => {
+    const c = compileLevel(level), e = makeEngine(kind, c, device), t0 = performance.now();
+    try { return { ...(await wavePlay(e, c, readShots(line), { ...driverOptions(kind), ...opts })), ms: performance.now() - t0 }; } finally { e.dispose(); }
   };
   handle.status = 'ready';
   log.textContent = `${handle.adapter} (${kind}): ready`;

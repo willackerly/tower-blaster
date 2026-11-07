@@ -16,7 +16,7 @@ function wave(front: number, tail = 0) {
     const live = i < front;
     return {
       step: 1 + i, nAwake: live ? 16 : tail, maxSpeed: live ? 2 : tail ? 0.1 : 0, maxAngSpeed: live ? 4 : tail ? 0.3 : 0, pe_mJ: 0, displaced: Math.floor((Math.min(i, front) * 5) / 60),
-      outOfLot: 0, heightHist: new Uint32Array(64), impacts: new Uint32Array(48), nMoving: live ? 8 : tail, movingBox: new Float64Array(6), ammoSpeed: 0,
+      outOfLot: 0, heightHist: new Uint32Array(64), impacts: new Uint32Array(48), nMoving: live ? 8 : tail, movingBox: new Float64Array(6), ammoSpeed: 0, peHeritage_mJ: 0, mass_g: 0, spill_g: 0,
     };
   };
   return { r, d: dAt };
