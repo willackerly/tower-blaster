@@ -7,7 +7,7 @@
 // its own elements; the viewer calls it for rules=keystone, with hooks for its
 // dev panels (docs/design/viewer-superset.md, step C).
 import { type BodyDesc, type EngineHealth, limitsHit, type PhysicsEngine, type Vec3 } from '@tb/engine-api';
-import { armRefusal, type RackItem, type CompiledLevel, compileLevel, Driver, type DriverCheckpoint, Duel, type DuelDef, DEFAULT_TURN_SECONDS, type Feedback, type Footprint, type Goal, goalMet, type Player, type Grade, gradeOf, type LevelDef, type LevelScore, type LotSheet, type PerStep, playShots, rapidDue, roundFacts, RUBE_GO, runSession, scoringOf, selectFootprints, selectGroups, type Shot, isIcePiece, type QuakeShot, QUAKE, MasonTrial, masonWorlds, snapshotHash, TIER_NAMES } from '@tb/keystone';
+import { armRefusal, type RackItem, type CompiledLevel, compileLevel, Driver, type DriverCheckpoint, Duel, type DuelDef, DEFAULT_TURN_SECONDS, type Feedback, type Footprint, fuseGo, type Goal, goalMet, type Player, type Grade, gradeOf, type LevelDef, type LevelScore, type LotSheet, type PerStep, playShots, rapidDue, roundFacts, RUBE_GO, runSession, scoringOf, selectFootprints, selectGroups, type Shot, isIcePiece, type QuakeShot, QUAKE, MasonTrial, masonWorlds, snapshotHash, TIER_NAMES } from '@tb/keystone';
 import { DIAL_KEYS, type DialField, dialShot, dialStart, dialStep, type QuakeDial, quakePanelHtml, quakeRunHtml, seismogram } from './quake-panel.ts';
 import { dustBeats, fieldQuake, groundAt, type GroundMotion, groundMotion, groundMotionOf } from './quake-ground.ts';
 import { columnUnder, towerTicks } from './quake-ticks.ts';
@@ -18,6 +18,7 @@ import type { HostStats } from '@tb/audio';
 import type { WeaponTier } from '@tb/weapons';
 import { type Aimed, arcContact, azFromYaw, type Contact, launchHeight, launchStep, pick, previewBeads, pullFor, shotFor, SUBSTEPS } from './aim.ts';
 import { Synth, type Voice, voicesFor } from './audio.ts';
+import { launchShapeOf } from './launch-sound.ts';
 import { CollapseSound, type CollapseStatus } from './collapse-sound.ts';
 import { type GameSoundMode, soundSetOf } from './sound-map.ts';
 import { openingInsets, viewOf } from './view.ts';
@@ -1373,8 +1374,9 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     selected = nextSelection(c.def.rack, driver.session.rackLeft, retry ? selected : null);
     if (!c.def.rack.includes(QUAKE)) dial = null;
     else if (!retry || !dial) dial = dialStart(c);
-    // Rube Lab levels open with their plunger (the trapdoor's release): the HUD's Go button and key F fire it.
-    opener = env.opener?.(c) ?? (c.def.rube ? RUBE_GO : null);
+    // Rube Lab levels open with their plunger (the trapdoor's release), domino-fuse levels with theirs (every lane lit at
+    // once): the HUD's Go or Light button and key F fire it.
+    opener = env.opener?.(c) ?? (c.def.rube ? RUBE_GO : fuseGo(c.def));
     profile = feel.modeUi ? hudProfile(c.def) : undefined;
     // A mode that fires nothing from the scene drops the help's "click: fire" (ui.ts fireSpan).
     document.body.classList.toggle('kg-nofire', profile !== undefined && !profile.fire);
@@ -1579,7 +1581,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
   function onFeedback(fb: Feedback[]) {
     for (const f of fb) {
       handle.counts[f.t] = (handle.counts[f.t] ?? 0) + 1;
-      voices.push(...voicesFor(f, { impacts: !collapse, bell: c.def.objective.kind === 'bell' }));
+      voices.push(...voicesFor(f, { impacts: !collapse, bell: c.def.objective.kind === 'bell', launch: f.t === 'fired' ? launchShapeOf(driver.bodies[f.body]) : null, launchSound: feel.launchSound }));
       switch (f.t) {
         case 'fired':
           juice.kick(f.ammo === 'cannonball' ? 0.05 : 0.03);
@@ -1713,6 +1715,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
       heritageBroken: s.heritageBroken.reduce((a, x) => a + x, 0), heritageTotal: c.meta.heritage.length,
       collapse: f?.collapse ?? s.liveCollapse,
       ...(f?.spill !== undefined ? { spill: f.spill } : {}), ...(f?.energy !== undefined ? { energy: f.energy } : {}),
+      ...(f?.misfires ? { misfires: f.misfires } : {}),
     };
   }
 

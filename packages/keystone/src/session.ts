@@ -90,6 +90,10 @@ export class Session {
   readonly armed: number[] = [];
   /** Structure bodies taken out by charges (removeTarget), in order (Driver tells the session as it pushes them). */
   readonly cut: number[] = [];
+  /** Hosts of the level's plunger charges that remove them (fold levels: what `misfires` counts). */
+  private get mustCut(): number[] {
+    return levelCharges(this.level).filter((ch) => ch.arm === 'plunger' && ch.spec.rules.some((r) => r.do.some((x) => 'removeTarget' in x))).map((ch) => ch.host);
+  }
   /** Leverage of the shot in flight, or of the last shot once it closed (until the next goes in): the HUD's "this shot". */
   liveLeverage = 0;
   /** The shot in flight's release so far, mJ (0 between shots): what roundLeverageNow adds to the closed shots. */
@@ -161,7 +165,7 @@ export class Session {
   /** Collapse fraction D with the structure at potential energy pe_mJ. */
   collapse(pe_mJ: number): number { return collapseFraction(this.startPe_mJ, pe_mJ, this.floorPe_mJ); }
   /** The PE a reduction holds of what collapse counts (startPe_mJ's: the building's alone on a fold level). */
-  peOf(red: Pick<Reductions, 'pe_mJ' | 'peHeritage_mJ'>): number { return this.building ? red.pe_mJ - red.peHeritage_mJ : red.pe_mJ; }
+  peOf(red: Pick<Reductions, 'pe_mJ' | 'peAside_mJ'>): number { return this.building ? red.pe_mJ - red.peAside_mJ : red.pe_mJ; }
 
   get strokes() { return this.outcomes.length + (this.live ? 1 : 0); }
 
@@ -257,6 +261,17 @@ export class Session {
 
   /** Whether heritage is judged at settles only (LevelDef.heritage 'standing', Aftershock), not every step. */
   get heritageAtSettle(): boolean { return this.level.def.heritage === 'standing'; }
+
+  /**
+   * Misfires on a fold level (M5b): plunger charges that cut their host (cutters, detonators) whose host is still in
+   * the world, a dead fuse's row standing. Every charge of a fold level must fire, as on F1 to F5 a plunger must name
+   * every charge (plungerRefusal): a row left uncut is a hinge that fells a frame with no timing at all (fuse-and-fold.md).
+   * Always 0 off fold levels, and on F1 to F5 once the plunger has fired (each cutter cuts at its own step).
+   */
+  get misfires(): number {
+    if (this.level.def.objective.kind !== 'fold') return 0;
+    return this.mustCut.filter((b) => !this.cut.includes(b)).length;
+  }
 
   /** A charge took structure body `body` out (Driver): it can no longer be pulled. */
   chargeCut(body: number): void {
@@ -402,7 +417,7 @@ export class Session {
     out.push(...this.cracks.splice(0), settled);
     const crownsTotal = settled.outcome.crownsTotal;
 
-    const cleared = objectiveMet(c, { red: o.red, crownsTotal, collapse: this.collapse(this.peOf(o.red)), heritage: this.heritageBroken.reduce((a, x) => a + x, 0) }, this.scoring);
+    const cleared = objectiveMet(c, { red: o.red, crownsTotal, collapse: this.collapse(this.peOf(o.red)), heritage: this.heritageBroken.reduce((a, x) => a + x, 0), misfires: this.misfires }, this.scoring);
     this.objectiveDone = cleared;
     this.lastSettle = { red: o.red, crownsTotal };
     if (this.scoring === 'outcome') {
@@ -478,7 +493,7 @@ export class Session {
       ...(c.def.objective.kind === 'hold' ? { hold: true } : {}),
       ...(c.def.objective.kind === 'quake' ? { quake: true } : {}),
       energy: energyFired(this.outcomes),
-      ...(c.def.objective.kind === 'fold' ? { spill: last ? spillOf(last.red) : 0 } : {}),
+      ...(c.def.objective.kind === 'fold' ? { spill: last ? spillOf(last.red) : 0, misfires: this.misfires } : {}),
       ...(c.def.build ? { built: { spent: placedCost(c.def), ...(c.def.build.budget !== undefined ? { budget: c.def.build.budget } : {}) } } : {}),
     };
   }

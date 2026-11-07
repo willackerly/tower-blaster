@@ -50,7 +50,10 @@
 // step an event may still carry (the step after the observed one; at attach,
 // the step given), so the caller can drop a charge whose host has gone
 // before its events reach the engine (drop). A charge whose host shows as
-// removed (Snapshot.tier TIER_FREE) is dropped by observe.
+// removed (Snapshot.tier TIER_FREE) is dropped by observe. A charge may watch
+// another body than its host (attach's `watch`: Fuse & Fold's domino fuses,
+// M5b): its moved trigger then reads that body's state, and everything else
+// (blasts, removeTarget, riding and dropping) stays its host's.
 import { type BodyDesc, freeFlight, type InputEvent, type ShapeDesc, type Snapshot, type SpawnEvent, TIER_FREE, type Vec3 } from '@tb/engine-api';
 import { boundingRadius } from '@tb/geom';
 import { checkGrenade, flightPath, type GrenadeSpec, type GrenadeWorld, type PathPoint, proximityStep, stepsOf } from './grenade.ts';
@@ -92,6 +95,8 @@ interface Live {
   rules: RuleLive[];
   /** A charge: its point in its host's frame (id is the host); null for a munition with a body. */
   charge: Vec3 | null;
+  /** A charge's watched body (its moved trigger reads it): the host unless attach named another. */
+  watch: number | null;
 }
 
 /** What a pass of the rules sees: the observed state and its path, or nothing (at launch). */
@@ -139,7 +144,7 @@ export class WeaponRuntime {
     const spec = isWeaponSpec(weapon) ? checkWeapon(weapon) : grenadeAsSpec(checkGrenade(weapon), { shape, density: 1, speed: [0, 0] });
     const bad = thrownProblems(spec);
     if (bad.length) throw new WeaponSpecError(bad);
-    const g: Live = { id, spawn: null, m: spec, radius: boundingRadius(shape), base: step, rules: spec.rules.map((r) => this.ruleLive(r)), charge: null };
+    const g: Live = { id, spawn: null, m: spec, radius: boundingRadius(shape), base: step, rules: spec.rules.map((r) => this.ruleLive(r)), charge: null, watch: null };
     this.live.push(g);
     const out: InputEvent[] = [];
     this.pass(g, null, out, []);
@@ -152,13 +157,15 @@ export class WeaponRuntime {
    * world units), its clock starting at engine step `step`. `now`, if given: the state after
    * now.step steps, to decide from at once, and `floor` (>= now.step), the earliest step an event
    * may carry (the engine's stepIndex: a plunger's fire step); the events due by then are returned.
-   * Without it nothing is decided until the next observe.
+   * Without it nothing is decided until the next observe. `watch`: the body its moved trigger reads (default the
+   * host): a detonator on a column set off by a domino falling elsewhere (Fuse & Fold's fuses, M5b).
    */
-  attach(host: number, step: number, weapon: WeaponSpec, point: Vec3 = [0, 0, 0], now?: { s: Snapshot; step: number; floor: number }): InputEvent[] {
+  attach(host: number, step: number, weapon: WeaponSpec, point: Vec3 = [0, 0, 0], now?: { s: Snapshot; step: number; floor: number }, watch: number = host): InputEvent[] {
     const spec = checkWeapon(weapon), bad = chargeProblems(spec);
     if (bad.length) throw new WeaponSpecError(bad);
     if (!Number.isInteger(host) || host < 0) throw new Error(`WeaponRuntime.attach: bad host ${host}`);
-    const g: Live = { id: host, spawn: null, m: spec, radius: 0, base: step, rules: spec.rules.map((r) => this.ruleLive(r)), charge: [point[0], point[1], point[2]] };
+    if (!Number.isInteger(watch) || watch < 0) throw new Error(`WeaponRuntime.attach: bad watched body ${watch}`);
+    const g: Live = { id: host, spawn: null, m: spec, radius: 0, base: step, rules: spec.rules.map((r) => this.ruleLive(r)), charge: [point[0], point[1], point[2]], watch };
     this.live.push(g);
     const out: InputEvent[] = [];
     if (now) {
@@ -193,6 +200,8 @@ export class WeaponRuntime {
       }
       if (g.id >= s.count) continue;
       if (g.charge) {
+        // A watched body not in this state yet (it cannot be, for a structure body; checked as the host is).
+        if (g.watch! >= s.count) continue;
         // A charge whose host is out of the world is gone with it.
         if (s.tier && s.tier[g.id] === TIER_FREE) { g.rules = []; continue; }
         this.pass(g, { s, step, horizon: step + this.lookahead, path: [], shapes }, out, born, step + 1);
@@ -236,7 +245,7 @@ export class WeaponRuntime {
       case 'moved': {
         // Decided from observed states only: due at the step after the one that shows it.
         if (!seen || seen.step < base) return null;
-        const i = g.id!, s = seen.s, p: Vec3 = [s.pos[3 * i]!, s.pos[3 * i + 1]!, s.pos[3 * i + 2]!];
+        const i = g.watch ?? g.id!, s = seen.s, p: Vec3 = [s.pos[3 * i]!, s.pos[3 * i + 1]!, s.pos[3 * i + 2]!];
         if (!n.ref) n.ref = p;
         const dx = p[0] - n.ref[0], dy = p[1] - n.ref[1], dz = p[2] - n.ref[2];
         if (dx * dx + dy * dy + dz * dz >= n.d2) return seen.step + 1;
@@ -331,7 +340,7 @@ export class WeaponRuntime {
           };
           const spawn: SpawnEvent = { step, kind: 'spawn', body };
           out.push(spawn);
-          born.push({ id: null, spawn, m: child, radius: boundingRadius(child.shell.shape), base: step, rules: child.rules.map((cr) => this.ruleLive(cr)), charge: null });
+          born.push({ id: null, spawn, m: child, radius: boundingRadius(child.shell.shape), base: step, rules: child.rules.map((cr) => this.ruleLive(cr)), charge: null, watch: null });
         }
         out.push({ step, kind: 'remove', id });
       }

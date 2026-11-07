@@ -151,7 +151,7 @@ const lines = (f: OutcomeFacts) => Object.fromEntries(outcomeTally(f).map((l) =>
 
 describe('tally', () => {
   it('scores each line by its weight', () => {
-    expect(OUTCOME_WEIGHTS).toEqual({ objective: 1000, collapse: 3000, leverage: 300, combo: 50, comboCap: 12, rackLeft: 400, pulled: 3000, condemned: 500, heritage: -500, footprint: -3000, spill: -3000, budgetLeft: 10 });
+    expect(OUTCOME_WEIGHTS).toEqual({ objective: 1000, collapse: 3000, leverage: 300, combo: 50, comboCap: 12, rackLeft: 400, pulled: 3000, condemned: 500, heritage: -500, footprint: -3000, spill: -3000, misfire: -200, budgetLeft: 10 });
     expect(outcomeTally(facts())).toEqual([
       { label: 'Objective', value: 1000 },
       { label: 'Collapse', value: 1500 },

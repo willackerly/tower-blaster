@@ -79,6 +79,8 @@ Alternatives weighed for "a timeline":
 
 `LevelDef.charges[i].arm: 'start'` arms a charge when play starts (after the presettle), its clock at that step; such a charge is not named by plungers. With a `moved` trigger it is the sympathetic charge. A charge watching with no timer running does not hold a settle (it could wait forever); one whose timer is running does. Its energy is the level's, not the player's: it is part of the puzzle, so no shot is charged for it.
 
+`LevelDef.charges[i].watch: n` points a charge's `moved` trigger at another body (M5b's detonator, docs/game/fuse-and-fold.md "Domino fuses"): the trigger reads body n's centre and speed, while the blast and `removeTarget` stay the host's. A detonator rides a column and watches the socket domino at the end of a fuse, so the column goes when the wave arrives. Only a weapon with a `moved` trigger may watch (arsenal.ts `chargesOf`), and `watch` joins the level hash when given. Alternatives: a relay on the socket that kicks the columns (a blast across the board reaches the building only as debris), or a cord of dominoes to each column (the delay would then depend on the cord).
+
 ## Built-in charges
 
 `@tb/weapons` `BUILTIN_CHARGES`, in cube units (scaled to a level's commonest block as `w-` items are), named by `LevelDef.charges[i].weapon` unless the level's own `weapons` has that key. Built-ins a level names join its hash written out, as defaulted `w-` items do.

@@ -1,7 +1,7 @@
 // HUD and result card. Formatting is pure and tested; the DOM side only
 // writes strings into fixed elements. Level text is authored in this repo,
 // but everything still goes through esc().
-import { castStars, chorusOf, type CompiledLevel, DEFAULT_GOLD, isTrial, itemRef, type LevelDef, type LevelScore, levelTier, type Objective, type RackItem, scoringOf, TIER_NAMES, TRIAL_LEVELS } from '@tb/keystone';
+import { castStars, chorusOf, type CompiledLevel, DEFAULT_GOLD, isFuseLevel, isTrial, itemRef, type LevelDef, type LevelScore, levelTier, type Objective, type RackItem, scoringOf, TIER_NAMES, TRIAL_LEVELS } from '@tb/keystone';
 import { PROJECTILE_PRESETS } from '@tb/weapons';
 import { type CardFacts, cardModel, type HudProfile } from './mode-ui.ts';
 
@@ -177,6 +177,8 @@ export const GO_BUTTON = '<button data-act="opener" class="opener go"><kbd>F</kb
 export const RUN_BUTTON = '<button data-act="opener" class="opener go"><kbd>F</kbd> Run: release the ball</button>';
 /** Mason's Trial's opener (docs/game/masons-trial.md): the level's test, run on the build as it stands. */
 export const TEST_BUTTON = '<button data-act="opener" class="opener go"><kbd>F</kbd> Test the build</button>';
+/** A domino-fuse level's opener (Fuse & Fold M5b, docs/game/fuse-and-fold.md): the plunger, every lane lit at once. */
+export const LIGHT_BUTTON = '<button data-act="opener" class="opener go"><kbd>F</kbd> Light the fuses</button>';
 
 /**
  * Mason's Trial's status row: before the test, what it will do; while world 0 runs; while the judge finishes its
@@ -276,7 +278,7 @@ export const BANK_BUTTON = '<button data-act="bank" class="bank"><kbd>B</kbd> Ba
 export const BANK_QUIET = '<button data-act="bank" class="bank quiet" title="Ends the level now: the objective is not met yet, so no star"><kbd>B</kbd> Bank</button>';
 
 /** What the HUD's action slot offers now: one button, always in the same place (docs/game/phone-hud.md). */
-export type SlotAction = 'freeze' | 'resume' | 'skip' | 'skipping' | 'opener' | 'go' | 'test' | 'bank' | null;
+export type SlotAction = 'freeze' | 'resume' | 'skip' | 'skipping' | 'opener' | 'go' | 'test' | 'light' | 'bank' | null;
 
 /**
  * The action slot's button, by priority: Resume while frozen, Freeze while a running shot can be, Skip
@@ -291,7 +293,7 @@ export function slotAction(s: Pick<HudState, 'level' | 'opener' | 'canBank' | 'f
   if (s.freezes?.can) return 'freeze';
   if (s.canSkip) return 'skip';
   if (s.skipping) return 'skipping';
-  if (s.opener && (s.profile?.opener ?? true)) return s.level.mason ? 'test' : s.level.rube ? 'go' : 'opener';
+  if (s.opener && (s.profile?.opener ?? true)) return s.level.mason ? 'test' : s.level.rube ? 'go' : isFuseLevel(s.level) ? 'light' : 'opener';
   if (s.canBank && scoringOf(s.level) === 'outcome') return 'bank';
   return null;
 }
@@ -305,6 +307,7 @@ const SLOT_NOTE: Record<Exclude<SlotAction, null>, string> = {
   opener: '<span class="kg-desk">or aim and click</span><span class="kg-tch">or drag and lift</span>',
   go: 'the contraption runs from here',
   test: 'every world plays it: the score is how many stand',
+  light: 'every lane at once: the longest fuse burns last',
   bank: 'end here, keep the rack',
 };
 
@@ -331,6 +334,7 @@ export function slotHtml(act: SlotAction, s: Pick<HudState, 'canSkip' | 'met' | 
     case 'opener': return OPENER_BUTTON;
     case 'go': return s.profile ? RUN_BUTTON : GO_BUTTON;
     case 'test': return TEST_BUTTON;
+    case 'light': return LIGHT_BUTTON;
     case 'bank': return s.met ? BANK_BUTTON : BANK_QUIET;
     default: return '';
   }

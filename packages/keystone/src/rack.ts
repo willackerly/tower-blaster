@@ -192,7 +192,7 @@ export function weaponOf(def: { weapons?: Record<string, LevelWeapon> }, key: st
 
 /**
  * The weapon a level's charge names (ChargeDef.weapon): its own weapons[key], or @tb/weapons'
- * built-in charge of that name (BUILTIN_CHARGES: cutter, kicker, relay). Null if none. Unchecked:
+ * built-in charge of that name (BUILTIN_CHARGES: cutter, kicker, relay, release, detonator). Null if none. Unchecked:
  * arsenal.ts levelCharges checks and scales it.
  */
 export function chargeWeaponOf(def: { weapons?: Record<string, LevelWeapon> }, key: string): LevelWeapon | null {
