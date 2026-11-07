@@ -1,18 +1,20 @@
 // What the master does with a capture (capture-cli.ts): render it through CollapseEngine at a few
 // volumes and report the output peak, the most the limiter took off, its steepest gain change, and
 // the spectrum (octave bands, dB of the total). wav=dir also writes each volume's output.
-// usage: tsx packages/audio/src/levels-cli.ts frames.json [mat=stone edge=1 lowcut=35 wav=dir]
+// usage: tsx packages/audio/src/levels-cli.ts frames.json [mat=stone set=real|real1|classic edge=1 lowcut=35 wav=dir]
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { BLOCK, CollapseEngine } from './engine.ts';
 import type { AudioFrame } from './frame.ts';
-import { SOUND_MATERIALS, type SoundMaterial } from './material.ts';
+import { SOUND_SETS, type SoundMaterial, soundMaterials, type SoundSet } from './material.ts';
 import { FULL_SCALE } from './host.ts';
 
 const [file, ...kv] = process.argv.slice(2);
-const o: Record<string, string> = { mat: 'stone', edge: '1', lowcut: '35', wav: '' };
+const o: Record<string, string> = { mat: 'stone', set: 'real', edge: '1', lowcut: '35', wav: '' };
 for (const a of kv) { const [k, v] = a.split('='); if (!(k! in o)) throw new Error(`unknown option ${k}`); o[k!] = v!; }
 const SR = 48000, frames = (JSON.parse(readFileSync(file!, 'utf8')) as { frames: { dt: number; counts: number[]; a2: number[]; top: number[] }[] }).frames;
-const material = SOUND_MATERIALS[o.mat as keyof typeof SOUND_MATERIALS] as SoundMaterial;
+if (!(SOUND_SETS as readonly string[]).includes(o.set!)) throw new Error(`set must be one of ${SOUND_SETS.join(', ')}: ${o.set}`);
+const material = (soundMaterials(o.set as SoundSet) as Record<string, SoundMaterial>)[o.mat!]!;
+if (material === undefined) throw new Error(`unknown material ${o.mat}`);
 
 /** The capture through an engine at fullScale; L and R. */
 function render(fullScale: number) {
@@ -58,7 +60,7 @@ function wav(path: string, L: number[], R: number[]) {
 
 // Unlimited (the limiter never acts at this full scale): the signal the limiter is handed, in Pa.
 const BIG = 1e6, raw = render(BIG);
-console.log(`${o.mat}, edge ${o.edge} m, low cut ${o.lowcut} Hz; octaves from 16 Hz (dB of total): ${octaves(raw.L).join(' ')}`);
+console.log(`${o.mat} (${o.set}), edge ${o.edge} m, low cut ${o.lowcut} Hz; octaves from 16 Hz (dB of total): ${octaves(raw.L).join(' ')}`);
 const rows = [];
 if (o.wav) mkdirSync(o.wav, { recursive: true });
 for (const volume of [0, 6, 12, 20]) {
@@ -75,6 +77,6 @@ for (const volume of [0, 6, 12, 20]) {
     prev = g; at = i;
   }
   rows.push({ volumeDb: volume, peak: +peak.toFixed(3), limitedDb: +(20 * Math.log10(least)).toFixed(1), steepestDbPerSample: +steepest.toFixed(3) });
-  if (o.wav) wav(`${o.wav}/${o.mat}-vol${volume}.wav`, out.L, out.R);
+  if (o.wav) wav(`${o.wav}/${o.mat}-${o.set}-vol${volume}.wav`, out.L, out.R);
 }
 console.table(rows);

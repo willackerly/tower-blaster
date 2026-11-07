@@ -8,6 +8,7 @@ import { chorusViewOption } from './chorusview.ts';
 import { budgetMs } from './budget.ts';
 import { camera } from './camera.ts';
 import { coats } from './coats.ts';
+import { duelLead } from './duellead.ts';
 import { follow } from './follow.ts';
 import { frames } from './frames.ts';
 import { frozenAim } from './frozenaim.ts';
@@ -20,6 +21,7 @@ import { launch } from './launch.ts';
 import { layout } from './layout.ts';
 import { look } from './look.ts';
 import { marks } from './marks.ts';
+import { modeUi } from './modeui.ts';
 import { view } from './openview.ts';
 import { pullAnim } from './pullanim.ts';
 import { quality } from './quality.ts';
@@ -51,6 +53,7 @@ export const OPTIONS = [
   turnView,
   arcs,
   handoff,
+  duelLead,
   undoMB,
   launch,
   balls,
@@ -68,6 +71,7 @@ export const OPTIONS = [
   sleepTint,
   pullAnim,
   frozenLook,
+  modeUi,
   chorusViewOption,
   frozenAim,
 ] as const;

@@ -11,11 +11,11 @@ import type { BodyDesc } from '@tb/engine-api';
  * Impacts by @tb/audio's collision sound with its current materials ('collapse', the default), with
  * G6's materials ('classic': smooth contacts, table modes only), or as the old pentatonic voices (audio.ts).
  */
-export type GameSoundMode = 'collapse' | 'classic' | 'synth';
-export const GAME_SOUND_MODES = ['collapse', 'classic', 'synth'] as const satisfies readonly GameSoundMode[];
+export type GameSoundMode = 'collapse' | 'real1' | 'classic' | 'synth';
+export const GAME_SOUND_MODES = ['collapse', 'real1', 'classic', 'synth'] as const satisfies readonly GameSoundMode[];
 
-/** The material set a collision-sound mode plays. */
-export const soundSetOf = (mode: GameSoundMode): SoundSet => (mode === 'classic' ? 'classic' : 'real');
+/** The material set a collision-sound mode plays: real1 is the real set before step 2c's stone and ice. */
+export const soundSetOf = (mode: GameSoundMode): SoundSet => (mode === 'classic' ? 'classic' : mode === 'real1' ? 'real1' : 'real');
 
 /** Keystone material name -> its sound in a set (same names in @tb/audio). */
 export function keystoneSounds(set: SoundSet = 'real'): Record<(typeof MATERIALS)[number]['name'], SoundMaterial> {
@@ -48,7 +48,14 @@ export const gameSoundDb = (set: SoundSet = 'real'): number => (set === 'classic
 
 /** First ammo slot; slot AMMO_SLOT + k is AMMO_KINDS[k]. */
 export const AMMO_SLOT = MATERIALS.length;
-export const SOUND_SLOTS = AMMO_SLOT + AMMO_KINDS.length;
+/**
+ * A shattered ice block's pieces (keystone ice.ts: 2 x 2 x 2, each about half the block's edge and an
+ * eighth of its mass): ice at half the edge, so a piece rings an octave up with an eighth of a block's
+ * energy. As full blocks, a grenade's thousands of piece impacts went 6-9 dB into the limiter
+ * (docs/sound.md, Material identity, step 4).
+ */
+export const PIECE_SLOT = AMMO_SLOT + AMMO_KINDS.length;
+export const SOUND_SLOTS = PIECE_SLOT + 1;
 
 export interface SlotSound { material: SoundMaterial; edge: number }
 
@@ -105,7 +112,7 @@ export function slotSounds(c: CompiledLevel, set: SoundSet = 'real'): SlotSound[
     if (a > 3 * b) return { material: { ...steel, model: 'plank', dims: [2 * a * h, 2 * b * h, 2 * d * h], G: STEEL_G }, edge: 2 * a * h };
     return { material: steel, edge: 2 * a * h };
   });
-  return [...structure, ...ammo];
+  return [...structure, ...ammo, { material: sounds.ice, edge: h / 2 }];
 }
 
 /**
@@ -120,11 +127,11 @@ export function ammoKindOf(b: BodyDesc, h: number): AmmoKind | null {
   return a > 3 * d ? 'cue' : 'drop';
 }
 
-/** Sound slot of body i: its Keystone material for the structure (the first c.meta.n), else its ammo kind's (-1: silent). */
+/** Sound slot of body i: its Keystone material for the structure (the first c.meta.n), PIECE_SLOT for an ice piece, else its ammo kind's (-1: silent). */
 export function soundSlotOf(c: CompiledLevel, b: BodyDesc, i: number): number {
   if (i < c.meta.n) return c.meta.material[i]!;
-  // A shattered ice block's pieces sound as ice (keystone ice.ts).
-  if (isIcePiece(b)) return materialId('ice');
+  // A shattered ice block's pieces sound as ice pieces (PIECE_SLOT).
+  if (isIcePiece(b)) return PIECE_SLOT;
   const k = ammoKindOf(b, c.frame.unit);
   return k ? AMMO_SLOT + AMMO_KINDS.indexOf(k) : -1;
 }

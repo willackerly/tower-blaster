@@ -3,11 +3,12 @@
 // dominoes, burn and firing order, there is no timeline to set, and the slot offers Light the fuses.
 import { describe, expect, it } from 'vitest';
 import type { Vec3 } from '@tb/engine-api';
-import { compileLevel, FUSE_LEVELS, fuseCandidate, fuseLanes, type LevelDef } from '@tb/keystone';
+import { compileLevel, FUSE_LEVELS, fuseCandidate, fuseLanes, type LevelDef, outcomeScore } from '@tb/keystone';
 import { EditController } from '../src/index.ts';
 import { fusesHtml } from '../src/edit-panel.ts';
 import { panelTimeline } from '../src/fuse-timeline.ts';
 import { LIGHT_BUTTON, slotAction } from '../src/hud.ts';
+import { failReason, hudProfile } from '../src/mode-ui.ts';
 
 const def: LevelDef = fuseCandidate('FD-1'), c = compileLevel(def), h = c.frame.unit, lanes = fuseLanes(c);
 /** Straight down onto (x, z) in h. */
@@ -82,5 +83,18 @@ describe('firing a fuse level', () => {
     expect(slotAction({ level: def, opener: true, canBank: false, canSkip: false, skipping: false })).toBe('light');
     expect(slotAction({ level: FUSE_LEVELS[0]!, opener: true, canBank: false, canSkip: false, skipping: false })).toBe('opener');
     expect(LIGHT_BUTTON).toMatch(/data-act="opener"/);
+  });
+
+  it('its HUD profile keeps the opener (Light the fuses is the start), unlike a timeline fold level', () => {
+    expect(hudProfile(def)).toMatchObject({ mode: 'fuse', opener: true, start: 'Light the fuses', aim: false, chips: false });
+    expect(hudProfile(FUSE_LEVELS[0]!)).toMatchObject({ mode: 'fuse', opener: false, start: 'Plunger' });
+    expect(slotAction({ level: def, opener: true, canBank: false, canSkip: false, skipping: false, profile: hudProfile(def) })).toBe('light');
+  });
+
+  it('a misfire is the card\'s reason: a fuse that never reached its socket', () => {
+    const score = outcomeScore({ met: false, collapse: 0.8, leverage: 1, comboMax: 0, hasCrowns: false, rackLeft: 0, heritageBroken: 0, outOfLot: 0, crownsDown: 0, skylineRatio: 1, pulled: 0, spill: 0, misfires: 2 }, undefined);
+    const facts = { crownsDown: 0, crownsTotal: 0, heritageBroken: 0, heritageTotal: 4, collapse: 0.8, spill: 0, misfires: 2 };
+    expect(failReason(def, score, facts)).toBe('2 columns never cut: a fuse did not reach its socket');
+    expect(failReason(def, score, { ...facts, misfires: 0, collapse: 0.3 })).toBe('30% folded, 60% needed');
   });
 });

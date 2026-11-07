@@ -1,3 +1,4 @@
+// Nightly only (vitest.nightly.json, PHYSICS_GPU_SLOW=1): one case over the 300 s a CI file may take.
 // PT5's balance on the GPU solver (agent playtest round 2): the cast page plays a novice Siege Table duel
 // (game duel-bot.ts) on the game's own engine for the table, as `pnpm duel:bot --engine gpu` does for the balance
 // table. One seeded duel here: it ends decided after at least two turns, as the Rapier test asks, with no click on

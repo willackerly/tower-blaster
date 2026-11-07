@@ -3,7 +3,7 @@
 //   PT3: the docked HUD covers at most 30% of the screen (upright: the strip and tray's heights; sideways:
 //        the rail's width), and has the same boxes before and after the first shot; the touch hint goes.
 //   PT4: no card until Layout.cardDelay of wall time after the settle (the tallying banner meanwhile), the
-//        card docked aside, never centred; every card button inside the screen and on top, unscrolled;
+//        card docked aside (a phone's strip, PT30), never centred; every card button inside the screen and on top, unscrolled;
 //        a failed round's primary button is Retry; the last chamber level leads on to Undercut.
 import { describe, expect, it } from 'vitest';
 import type { Page } from 'playwright';
@@ -44,7 +44,7 @@ const fireAndSettle = async (page: Page, shot: Shot, n: number) => {
 };
 
 /** Every button on the shown card: inside the screen and the topmost element at its centre (so not scrolled away or covered). */
-const cardButtons = (page: Page) => page.evaluate(() => [...document.querySelectorAll<HTMLElement>('.kg-result.show button')].map((b) => {
+const cardButtons = (page: Page) => page.evaluate(() => [...document.querySelectorAll<HTMLElement>('.kg-result.show button')].filter((b) => b.getClientRects().length > 0).map((b) => {
   const r = b.getBoundingClientRect(), cx = r.left + r.width / 2, cy = r.top + r.height / 2;
   const inside = r.left >= 0 && r.top >= 0 && r.right <= innerWidth && r.bottom <= innerHeight;
   return { act: b.dataset.act, inside, onTop: document.elementFromPoint(cx, cy)?.closest('button') === b, primary: b.classList.contains('primary') };
@@ -217,20 +217,22 @@ describe('the result card (PT4)', () => {
     await page.waitForFunction(() => window.__game.card.shownMs !== null, undefined, { timeout: 2 * MINUTES, polling: 50 });
     const card = await page.evaluate(() => window.__game.card);
     const seen = await page.evaluate(() => (window as unknown as { __seen: Array<{ t: number; tally: boolean; card: boolean; ended: number | null }> }).__seen);
-    expect(card.place).toBe('dock');
+    // Docked on every screen; on a phone, the strip (PT30, card-strip-e2e.test.ts), which is the docked card on a wide screen.
+    expect(card.place).toBe('strip');
     expect(card.shownMs! - card.endedMs!, 'wall time from the settle to the card').toBeGreaterThanOrEqual(1200 - 5);
     expect(seen.some((s) => s.tally && !s.card), 'the tallying banner showed before the card').toBe(true);
     expect(seen.filter((s) => s.card && s.ended !== null).every((s) => s.t - s.ended! >= 1200 - 25)).toBe(true);
     expect(seen.some((s) => s.tally && s.card)).toBe(false);
-    // Docked, not centred: aside on the right (desktop), along the bottom (upright), down the right (sideways).
-    const r = await page.evaluate(() => { const b = document.querySelector('.kg-result')!.getBoundingClientRect(); return { l: b.left, t: b.top, r: b.right, b: b.bottom, vw: innerWidth, vh: innerHeight }; });
-    if (name === 'upright') expect(r.vh - r.b).toBeLessThanOrEqual(8.5);
-    else expect(r.vw - r.r).toBeLessThanOrEqual(12.5);
-    if (name !== 'upright') expect(r.l).toBeGreaterThan(r.vw / 4);
     // Let the lines slam in, then every button: on screen and on top, without scrolling the card.
     await page.waitForTimeout(2500);
+    // Docked, not centred (measured once it has slid in): aside on the right (desktop), along the bottom (upright), in the left rail's place (sideways, PT30).
+    const r = await page.evaluate(() => { const b = document.querySelector('.kg-result')!.getBoundingClientRect(); return { l: b.left, t: b.top, r: b.right, b: b.bottom, vw: innerWidth, vh: innerHeight }; });
+    if (name === 'upright') expect(r.vh - r.b).toBeLessThanOrEqual(8.5);
+    else if (name === 'desktop') { expect(r.vw - r.r).toBeLessThanOrEqual(12.5); expect(r.l).toBeGreaterThan(r.vw / 4); }
+    else { expect(r.l).toBeLessThanOrEqual(8.5); expect(r.r).toBeLessThanOrEqual(r.vw * 0.3); }
     const buttons = await cardButtons(page);
-    expect(buttons.map((b) => b.act)).toEqual(['undo', 'retry', 'save', 'next']);
+    // A phone's strip has Details for the rest of the card.
+    expect(buttons.map((b) => b.act)).toEqual([...(name === 'desktop' ? [] : ['card']), 'undo', 'retry', 'save', 'next']);
     for (const b of buttons) expect(b, `${name}: ${b.act}`).toMatchObject({ inside: true, onTop: true });
     expect(buttons.find((b) => b.primary)?.act).toBe('next');
     await page.screenshot({ path: `${process.env.TB_SHOTS ?? '/tmp'}/pt4-${name}.png` }).catch(() => {});

@@ -59,6 +59,12 @@ export interface DuelDef {
   fallShare?: number;
   /** Real seconds a turn runs at its own pace before the page fast-forwards the rest of its settle (default 8). */
   turnSeconds?: number;
+  /**
+   * The launcher's lead, degrees: how far round the ring from the view the launcher stands, to the view's right (the
+   * game's aim, duel-view.ts launcherAz). 0 (default) puts it behind the camera, as in every other mode. A table whose
+   * structure stands at the ring's centre needs one, or every shot runs straight away from the eye (PT34, D2).
+   */
+  lead?: number;
   /** heraldry: with no more than this share of the tower standing at the end of a round, the duel ends on points (default 0.15). */
   endShare?: number;
 }
@@ -114,6 +120,7 @@ export function checkDuel(def: DuelDef, c: CompiledLevel): void {
   if (!(f >= 0 && f < 1)) throw new Error(`${where}: fallShare must be from 0 to below 1: ${f}`);
   if (!(e >= 0 && e < 1)) throw new Error(`${where}: endShare must be from 0 to below 1: ${e}`);
   if (!(t > 0 && t <= 60)) throw new Error(`${where}: turnSeconds must be above 0 and at most 60: ${t}`);
+  if (def.lead !== undefined && !(Number.isInteger(def.lead) && Math.abs(def.lead) < 60)) throw new Error(`${where}: lead must be a whole number of degrees under 60 either way: ${def.lead}`);
 }
 
 /**
@@ -229,19 +236,20 @@ export class Duel {
   private judge(): DuelResult {
     const [a, b] = this.sides, names = this.def.sides.map((s) => s.name), spent = a.shotsLeft + b.shotsLeft === 0;
     if (this.ruleset === 'keeps') {
-      const fa = a.fellOn !== null, fb = b.fellOn !== null;
+      // Said of what fell: the kings when the sides have them (PT34: "keeps fell" when the rule is kings), else the keeps.
+      const fa = a.fellOn !== null, fb = b.fellOn !== null, what = this.kings[0] && this.kings[1] ? 'king' : 'keep';
       if (!(fa && fb) && this.answering !== null) return { over: false };
       if (fa && fb) {
         // Both down on one shot: its shooter brought down their own too, and loses. On two shots of a round: a draw.
         if (a.fellOn === b.fellOn) {
           const shooter = this.log[a.fellOn!]!.player;
-          return { over: true, winner: (1 - shooter) as Player, why: `${names[shooter]} toppled both keeps` };
+          return { over: true, winner: (1 - shooter) as Player, why: `${names[shooter]} toppled both ${what}s` };
         }
-        return { over: true, winner: null, why: 'both keeps fell in one round' };
+        return { over: true, winner: null, why: `both ${what}s fell in one round` };
       }
       if (fa || fb) {
         const loser: Player = fa ? 0 : 1, by = this.log[this.sides[loser].fellOn!]!.player;
-        return { over: true, winner: (1 - loser) as Player, why: by === loser ? `${names[loser]} toppled its own keep` : `${names[loser]}'s keep fell` };
+        return { over: true, winner: (1 - loser) as Player, why: by === loser ? `${names[loser]} toppled its own ${what}` : `${names[loser]}'s ${what} fell` };
       }
       if (!spent) return { over: false };
       if (a.share === b.share) return { over: true, winner: null, why: 'both keeps stand alike' };

@@ -33,7 +33,7 @@ Measured (browser test, Rapier, 1x): upright the strip and tray together are 26.
 ## Options (every behaviour above can be put back)
 
 - Advanced settings → **Layout**: Docked (default) or Classic (the one panel, the centred card at once). Stored with the other settings.
-- URL keys, each winning over the setting for the visit, dropped when the setting changes: `keystone.hud=dock|panel`, `keystone.card=dock|center`, `keystone.carddelay=<seconds>` (0 to 10).
+- URL keys, each winning over the setting for the visit, dropped when the setting changes: `keystone.hud=dock|panel`, `keystone.card=strip|dock|center` (strip is the docked default, PT30), `keystone.carddelay=<seconds>` (0 to 10).
 - The viewer, which hosts the same HUD and card in its own panel column, keeps the classic behaviour (it passes no layout).
 
 ## Alternatives considered
@@ -58,7 +58,7 @@ Docked, the opening view keeps clear of the HUD **as measured**, not the old gue
 - **How it frames** (`viewOf` `opts.hud`, `defaultInsets(aspect, hud)`): the measured band over the wide screen's 10% sky margin, in place of the guess; then joined with the level's own panels (`openingInsets`, the fuse panel). Wide, `fitBox` frames the screen's middle square, so `fitShares` turns the rail's share of the width into the part of that square it covers (844 x 390, a rail to 0.27: 0.002).
 - **The search's mask** (`hudRects`, shape `'docked'`): nothing. The fit keeps every corner of the structure's box inside the screen less the measured band, so no body is under the HUD; the floating panel's top-left box (`WIDE_HUD`) stays for the desktop. The search's cache key carries the shape.
 - **Sideways hints moved to the top**, right of the rail: they sat at the bottom beside the tray, over the structure's base (B1's wall, L1's tower). Counting them as a bottom inset would have shrunk every sideways opening by 12% for a hint that goes at the first shot; at the top they sit in the sky the fit keeps free anyway (they add about 2% to the top inset).
-- **Result** (screenshots, 390 x 844): L1's tower stands whole between the strip and the tray, larger than before (it had its base under the hint and tray); B1's wall base is clear of the hint. Duels keep their framing (the Siege Table thread's).
+- **Result** (screenshots, 390 x 844): L1's tower stands whole between the strip and the tray, larger than before (it had its base under the hint and tray); B1's wall base is clear of the hint. Duels frame in the measured band too since PT30 ([siege-table.md](siege-table.md)).
 
 Tests: `view.test.ts` (every series level, upright and sideways with the measured bands: every corner of the structure on screen clear of them, and the objectives in sight; L1's base under the tray on the guess and clear of it docked; `fitShares`, `defaultInsets`, `hudRects`), `phone-hud-e2e.test.ts` (L1, L2, B1 on the page at both shapes: the band the view used matches the HUD's boxes measured in the test, and the structure clears them; Layout classic measures nothing), and the PT1 gate (`sightlines-gpu.test.ts`, the docked HUD at 390 x 844).
 
@@ -74,6 +74,55 @@ Measured (browser test, 1x): upright the building panel is 374 x 255 px at the b
 Mason's Trial (M8, [masons-trial.md](masons-trial.md)) adds two buttons to the panel's turn row only when the held piece slides (Slide back / Slide out, with a plank or slab held) and puts its Test button in the tray's slot; `game/test/mason-e2e.test.ts` checks both on the docked phone, upright and sideways.
 
 Alternatives: the panel above the tray (both visible) left about a third of an upright screen to build on, for a tray that does nothing while building; a collapsible panel (a Build chip that opens a sheet) hid Play and the tools behind a tap on every placement; the panel inside the HUD element (a third group) would put the editor's markup into the HUD's per-frame string, which the viewer and every HUD test read.
+
+## The HUD keeps one size, and the result strip (PT30, 2026-11-07)
+
+Agent playtest round 2 (`agent-playtest-2.md`, row PT30) found two things still wrong on phones.
+- L3's HUD grew by a line after shot 1 ("Heritage 1 cracked" wrapped).
+- On every phone result frame the card covered what the shot had brought down. The camera may not move on its own (#169), so the fix has to be layout.
+
+**One size through the round** (`hud.ts`, `ui.ts`):
+- Every value that changes width during a round sits in a `fit()` sizer. This is an inline grid holding the value and a hidden copy of the widest the round can make it, both in one cell, so the box keeps the widest size from the first frame. It covers heritage ("32 cracked"), crowns (`N / N`), Down and Pulled (`100%`), the objective with its tick, the Bell, and the par line's collapse.
+- **Held aim rows.** A rack that opens with a drop or a pull and has a projectile later (L4, T-X2) used to grow Power and Height at the projectile. Those rows now take their place hidden (`.row.held`, `visibility: hidden`) while the selected item has nothing to aim.
+- `hud-size-e2e.test.ts` lays out each series level's first-frame HUD and the widest one its round can reach (every crown down, all heritage cracked, the most strokes, a three-digit leverage, the objective met, the end-of-round buttons) with the game's CSS, at 390 x 844 and 844 x 390. Neither the strip nor the tray may grow. A shrink is allowed only where a mode drops a start control after the first shot:
+  - Aftershock's tray loses the quake designer.
+  - Wavefront's strip loses its push hint.
+  - Rube Lab's tray loses Run.
+- Before the fix, the test failed on B2 (strip 65 to 81 px) and on L4 and T-X2 sideways (tray 152 to 202 px).
+
+**The result strip** (`layout.ts` `card: 'strip'`, the docked default; CSS in `ui.ts`):
+- The opening view framed the structure inside the band the docked HUD leaves free (PT3b), and the camera has not moved since. So a card kept to the HUD's own band covers nothing the view framed: the tray's band upright, the rail's column sideways.
+- The strip shows the level's name, the stamp, the stars, the reason line (on a failed round), the buttons, and **Details**.
+- **Details** opens the whole card (`.full`), and **Less** folds it again. The full card is at most the screen less 8 px a side, so nothing in it scrolls behind the button bar. In round 2 the lot sheet was clipped there.
+  - Sideways, the full card is wide, and the lot sheet sits beside the stamp and stars.
+- The HUD under the strip is hidden, not drawn through it: the tray upright, the whole rail sideways. The status strip at the top stays (dimmed, as before).
+- The stamp and stars fade in at once in the strip. Their usual delays wait for the point lines, which the strip does not show.
+- On a wide screen, or without touch (the HUD is not docked there), strip and dock are the same card.
+- A duel's card has no rows to fold, so it stays whole and docked.
+
+**Option:** `keystone.card=dock` brings back PT4's whole docked card on phones, and `center` the classic card. There is no new door row (PT37).
+
+**Tests:**
+- `card-strip-e2e.test.ts` runs at 390 x 844 and 844 x 390, on L1 cleared and on L5 missed (a reason line). It checks that:
+  - the strip lies inside the HUD's opening band;
+  - the view at the result equals the opening view;
+  - nothing in the strip scrolls or overflows, and the HUD under it is hidden;
+  - every button is on screen and on top;
+  - Details shows the lot sheet and total with no scroll, and every button stays on screen and on top;
+  - Less folds it.
+- `phone-hud-e2e.test.ts` (PT4) now expects the strip on phones: Details first, the left rail's place sideways.
+- `phone-hud.test.ts` covers the `keystone.card` parse.
+
+**Alternatives considered:**
+1. **A "show card" tab** that hides the card entirely until tapped. This shows the most rubble, but a round that just ended would show no stamp or stars and no Retry or Next without a tap. The strip keeps the verdict and the buttons where the HUD was.
+2. **Docking the card into the HUD element** (a third group of `.kg-hud`). This puts the card into the HUD's per-frame string, which the viewer and every HUD test read. It also makes the HUD's size budget (PT3) cover the card.
+3. **Moving the camera to frame the rubble** (judge J1 #5). This conflicts with Will's rule that the camera moves only on player input.
+4. **A smaller centred card.** Any centred card sits on the structure, and the opening view puts the structure in the middle of the free band.
+5. **Sideways, the strip along the bottom.** At 390 px tall, a 44 px button row plus the verdict row takes about 25% of the height, over the structure's base. The rail's column is already outside the framed band.
+
+**Still open in PT30, owned elsewhere:**
+- Both duel kings inside the free band: the Siege Table thread's `duel-view.ts`, which frames duels without the measured band.
+- The new modes' panels pushing the scene into a narrow strip: PT21 (Fuse & Fold, #284) and PT25 (Aftershock's dial).
 
 ## Not done here
 

@@ -110,7 +110,7 @@ export interface GameParams {
   offscreen: boolean;
   /** The offscreen frame's size in pixels: 640x400 for ?offscreen=1, or ?offscreen=WxH (agent playtests: a phone's or a desktop's shape). */
   offscreenSize: [number, number];
-  /** ?keystone.sound=classic: the collision sound with G6's materials; synth: impacts as the old pentatonic voices (collapse, the default). */
+  /** ?keystone.sound=classic: the collision sound with G6's materials; real1: the real set before step 2c's stone and ice; synth: impacts as the old pentatonic voices (collapse, the default). */
   sound: GameSoundMode;
   /** ?keystone.impacts=-6: the collision sound's level, dB over the game's own (-40 to 20). */
   impactsDb: number;
