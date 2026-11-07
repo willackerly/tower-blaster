@@ -150,6 +150,7 @@ export function objectiveText(o: Objective): string {
     case 'collapse': return `bring ${pct(o.min)} down`;
     case 'hold': return 'keep the crown up';
     case 'quake': return 'fell the condemned, spare the heritage';
+    case 'fold': return `fold ${pct(o.min)} into its lot, neighbours untouched`;
     case 'bell': return 'ring the bell';
   }
 }
@@ -243,8 +244,9 @@ export function hudHtml(s: HudState, sheet = ''): string {
   // A rack of one quake: the docked phone HUD drops its chip while the quake panel stands for it (ui.ts).
   const onlyQuake = s.chips.length === 1 && sel === 'quake' && s.quake ? ' only-quake' : '';
   // The power bar, with minus and plus buttons on a touch screen (keys Q and E).
-  const power = sel === 'drop' || sel === 'pull' || sel === 'quake' ? (sel === 'quake' ? s.quake ?? '' : '') : `<div class="row"><span>Power <kbd>Q</kbd><kbd>E</kbd></span><span class="power">${POWER_STEP_BUTTON(-POWER_STEP)}<span class="bar"><i style="width:${s.power}%"></i></span>${POWER_STEP_BUTTON(POWER_STEP)}</span></div>`;
-  const height = sel === 'drop' || sel === 'pull' || sel === 'quake' || s.launch === undefined ? '' : launchRow(s.launch);
+  // A plunger aims at nothing (the timeline sets it): no power, no launcher height. A quake has its own designer instead.
+  const power = sel === 'drop' || sel === 'pull' || sel === 'plunger' || sel === 'quake' ? (sel === 'quake' ? s.quake ?? '' : '') : `<div class="row"><span>Power <kbd>Q</kbd><kbd>E</kbd></span><span class="power">${POWER_STEP_BUTTON(-POWER_STEP)}<span class="bar"><i style="width:${s.power}%"></i></span>${POWER_STEP_BUTTON(POWER_STEP)}</span></div>`;
+  const height = sel === 'drop' || sel === 'pull' || sel === 'plunger' || sel === 'quake' || s.launch === undefined ? '' : launchRow(s.launch);
   const reach = s.pullRefused ? `<div class="${s.pullRefused === 'tapped' ? 'bad' : 'hint'} small pull-hint">${PULL_HINT}</div>` : s.reachable === false ? '<div class="bad small reach">Out of reach at this power</div>' : '';
   const ctl = `<div class="ctl">${power}${height}</div>`;
   const pace = s.pace ? ` <span class="pace" title="physics is running slower than real time">${esc(s.pace)}</span>` : '';

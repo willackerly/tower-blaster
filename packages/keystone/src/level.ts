@@ -7,7 +7,7 @@ import { DEFAULT_GAP, DEFAULT_UNIT, encodeTag, GRAVITY, MATERIALS, materialId, t
 import { peOf_mJ, SETTLE_RULES, type SettleRule } from './rules.ts';
 import { type Arm, armLoad, chargeIssues, levelArm, rackArms } from './arsenal.ts';
 import { loadIssues, loadTier } from '@tb/weapons';
-import { chargeWeaponOf, isRackItem, itemRef, type LevelWeapon, PLUNGER, QUAKE, RACK_ITEM_NAMES, rackBodies, type RackItem, speedOf, WEAPON_KEY, weaponOf } from './rack.ts';
+import { chargeWeaponOf, isLaunchItem, isRackItem, itemRef, type LevelWeapon, PLUNGER, QUAKE, RACK_ITEM_NAMES, rackBodies, type RackItem, speedOf, WEAPON_KEY, weaponOf } from './rack.ts';
 import { checkQuakeRules, type QuakeRules } from './quake.ts';
 import { type ScenarioPart, scenarioBodies, scenarioKey } from './scenario-part.ts';
 import { ammoBody, type LauncherDef, launcherPos, type Shot, type ShotFrame } from './shots.ts';
@@ -86,6 +86,12 @@ export type Objective =
    */
   | { kind: 'quake'; footprintMax?: number }
   /**
+   * Fuse & Fold (docs/game/fuse-and-fold.md): bring the building down into its lot. Met when the collapse
+   * fraction is at least `min`, the building's spill (rules.ts spillOf: the share of its mass outside the lot
+   * grown by 0.5 h) is at most `spillMax`, and no heritage is broken. Outcome levels only.
+   */
+  | { kind: 'fold'; min: number; spillMax: number; footprintMax?: number }
+  /**
    * Rube Lab's bell (docs/game/rube-lab.md): the crowns are the level's bells, watched every step. A bell rings
    * when its centre enters `region` (h, world: a sensor box, for a runner that must arrive somewhere) or, with
    * no region, when it has moved `moved` h from home (default rules.ts BELL_MOVED: a target that must be hit). Once rung
@@ -100,10 +106,11 @@ export type Scoring = (typeof SCORINGS)[number];
 /**
  * The one metric an outcome level's stars are measured on: collapse (D, higher is better), crowns
  * (crowns down), skyline (end skyline over start skyline, lower is better), score (the tally total)
- * pulled (the share of the structure's mass pulled, Undercut; higher is better) or energy (the joules fired,
- * Aftershock's quake: lower is better, and an input, so it reads the same on every engine).
+ * pulled (the share of the structure's mass pulled, Undercut; higher is better), fold (Fuse & Fold:
+ * collapse x (1 - spill), what came down discounted by the share of the building that left its lot; higher is better)
+ * or energy (the joules fired, Aftershock's quake: lower is better, and an input, so it reads the same on every engine).
  */
-export const STAR_METRICS = ['collapse', 'crowns', 'skyline', 'score', 'pulled', 'energy'] as const;
+export const STAR_METRICS = ['collapse', 'crowns', 'skyline', 'score', 'pulled', 'fold', 'energy'] as const;
 export type StarMetric = (typeof STAR_METRICS)[number];
 /** Lower is better on this metric (skyline and energy); higher for the rest. */
 export const lowerIsBetter = (metric: StarMetric): boolean => metric === 'skyline' || metric === 'energy';
@@ -651,6 +658,11 @@ export function validateLevel(c: CompiledLevel, opts: ValidateOptions = {}): Iss
     if (physicsOf(def).bounce !== null) issues.push({ code: 'objective', message: 'a quake level plays without Bounce: the AVBD restitution pass refuses pinned bodies, and Aftershock levels stand on pins' });
   } else if (def.quake !== undefined) issues.push({ code: 'rack', message: 'the level sets quake rules, and its rack holds no quake' });
   for (const i of [...m.crowns, ...m.heritage]) if (pinned(i)) issues.push({ code: 'objective', message: `body ${i} is a ${m.role[i] === ROLE_ID.crown ? 'crown' : 'heritage'} and pinned: it could never come down`, bodies: [i] });
+  if (def.objective.kind === 'fold') {
+    const o = def.objective;
+    if (scoringOf(def) !== 'outcome') issues.push({ code: 'objective', message: 'a fold objective needs outcome scoring (a par level ends at its clear)' });
+    if (!(o.min > 0 && o.min <= 1) || !(o.spillMax >= 0 && o.spillMax < 1)) issues.push({ code: 'objective', message: `a fold objective needs 0 < min <= 1 and 0 <= spillMax < 1: min ${o.min}, spillMax ${o.spillMax}` });
+  }
   if (def.objective.kind === 'bell') {
     const o = def.objective;
     if (m.crowns.length === 0) issues.push({ code: 'objective', message: 'a bell objective needs a bell (a crown) to ring' });
@@ -735,7 +747,8 @@ export function validateLevel(c: CompiledLevel, opts: ValidateOptions = {}): Iss
   }
 
   issues.push(...rackIssues(c, engine));
-  if (scoringOf(def) === 'outcome') issues.push(...launcherIssues(c));
+  // Only a launched shot can settle before it lands: a rack of plungers and pulls (Fuse & Fold, Undercut) fires nothing from the ring.
+  if (scoringOf(def) === 'outcome' && def.rack.some((it) => isLaunchItem(it) || itemRef(it)?.kind === 'weapon')) issues.push(...launcherIssues(c));
 
   for (const i of m.crowns) {
     const x = m.home[3 * i]!, y = m.home[3 * i + 1]!, z = m.home[3 * i + 2]!;

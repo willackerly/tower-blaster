@@ -125,9 +125,9 @@ describe('quake level grammar', () => {
 
   it('the quake objective: every crown down and no heritage broken', () => {
     const c = compileLevel(level()), red = {} as Reductions;
-    expect(objectiveMet(c, { red, crownsTotal: 1, collapse: 0, heritageBroken: 0 }, 'outcome')).toBe(true);
-    expect(objectiveMet(c, { red, crownsTotal: 1, collapse: 0, heritageBroken: 1 }, 'outcome')).toBe(false);
-    expect(objectiveMet(c, { red, crownsTotal: 0, collapse: 0, heritageBroken: 0 }, 'outcome')).toBe(false);
+    expect(objectiveMet(c, { red, crownsTotal: 1, collapse: 0, heritage: 0 }, 'outcome')).toBe(true);
+    expect(objectiveMet(c, { red, crownsTotal: 1, collapse: 0, heritage: 1 }, 'outcome')).toBe(false);
+    expect(objectiveMet(c, { red, crownsTotal: 0, collapse: 0, heritage: 0 }, 'outcome')).toBe(false);
   });
 
   it('heritageFallen: dropped or tilted counts, sideways travel does not', () => {

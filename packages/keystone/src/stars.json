@@ -1,5 +1,10 @@
 {
  "B1": { "metric": "collapse", "t2": 0.7, "t3": 0.94, "best": 0.9583025426945702, "castOn": "apple metal-3", "engine": "gpu", "hash": "18cf21360845bb8b", "n": 372, "seed": 1 },
  "B2": { "metric": "score", "t2": 770, "t3": 3000, "best": 3805, "castOn": "apple metal-3", "engine": "gpu", "hash": "c75fbd9832e6814b", "n": 236, "seed": 1 },
- "B3": { "metric": "collapse", "t2": 0.53, "t3": 0.61, "best": 0.8068006323953886, "castOn": "apple metal-3", "engine": "gpu", "hash": "f11e947a868b602f", "n": 446, "seed": 1, "waived": ["skill"] }
+ "B3": { "metric": "collapse", "t2": 0.53, "t3": 0.61, "best": 0.8068006323953886, "castOn": "apple metal-3", "engine": "gpu", "hash": "f11e947a868b602f", "n": 446, "seed": 1, "waived": ["skill"] },
+ "F1": { "metric": "fold", "t2": 0.24, "t3": 0.89, "best": 0.9128386340961162, "castOn": "node", "engine": "ref", "hash": "9acc3e63c670e728", "n": 210, "seed": 1 },
+ "F2": { "metric": "fold", "t2": 0.24, "t3": 0.85, "best": 0.8745380828513101, "castOn": "node", "engine": "ref", "hash": "939cf50122196108", "n": 210, "seed": 1 },
+ "F3": { "metric": "fold", "t2": 0.29, "t3": 0.81, "best": 0.8377199196652577, "castOn": "node", "engine": "ref", "hash": "e7a4c87d7041c476", "n": 210, "seed": 1 },
+ "F4": { "metric": "fold", "t2": 0.28, "t3": 0.69, "best": 0.8051613415835969, "castOn": "node; T3 from google swiftshader", "engine": "ref", "hash": "fcf549b7ba40606c", "n": 210, "seed": 1 },
+ "F5": { "metric": "fold", "t2": 0.33, "t3": 0.74, "best": 0.793947532806166, "castOn": "node", "engine": "ref", "hash": "5c56a05c82b267f9", "n": 210, "seed": 1 }
 }

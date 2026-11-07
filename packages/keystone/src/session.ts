@@ -7,8 +7,8 @@ import { GRAVITY } from './materials.ts';
 import { itemYield, levelCharges, plungerYield } from './arsenal.ts';
 import { castStars, type CompiledLevel, type Scoring, scoringOf, settleOf } from './level.ts';
 import type { IceCrack } from './ice.ts';
-import { collapseFraction, floorPotential_mJ, homePotential_mJ, homeSkyline, objectiveMet, type OutcomeFacts, outcomeScore } from './outcome.ts';
-import { ammoInFlight, bellRung, crownDown, energyFired, heritageBroken, heritageFallen, leverage, levelScore, type LevelScore, levelTier, refereedScore, roundLeverage, type Observation, type Reductions, type SettleRule, type SettleState, settleCap, settleUpdate, type ShotOutcome, skyline } from './rules.ts';
+import { buildingOnly, collapseFraction, floorPotential_mJ, homePotential_mJ, homeSkyline, objectiveMet, type OutcomeFacts, outcomeScore } from './outcome.ts';
+import { ammoInFlight, bellRung, crownDown, energyFired, heritageBroken, heritageFallen, leverage, levelScore, type LevelScore, levelTier, refereedScore, roundLeverage, type Observation, type Reductions, type SettleRule, type SettleState, settleCap, settleUpdate, type ShotOutcome, skyline, spillOf } from './rules.ts';
 import type { RackItem } from './rack.ts';
 import { placedCost } from './build.ts';
 import { ammoKE, type PlungerShot, pullEnergy, type QuakeShot, type Shot, shotEvent } from './shots.ts';
@@ -117,8 +117,11 @@ export class Session {
    */
   readonly home: Float64Array;
   /** The structure's potential energy at home, PE(B0), and lying flat, PE_floor: the collapse fraction's range. */
+  /** PE at the start and lying flat: of the building alone on a fold level (outcome.ts buildingOnly), else of the whole structure. */
   readonly startPe_mJ: number;
   readonly floorPe_mJ: number;
+  /** Collapse counts the building alone (a fold level). */
+  readonly building: boolean;
 
   /**
    * A refereed round (a Siege Table duel, whose referee is Duel): the round ends as an outcome level
@@ -129,8 +132,9 @@ export class Session {
   constructor(readonly level: CompiledLevel, home?: Float64Array, opts: { refereed?: boolean } = {}) {
     this.refereed = opts.refereed ?? false;
     this.home = (home ?? level.meta.home).slice(0, 3 * level.meta.n);
-    this.startPe_mJ = homePotential_mJ(level, this.home);
-    this.floorPe_mJ = floorPotential_mJ(level);
+    this.building = buildingOnly(level);
+    this.startPe_mJ = homePotential_mJ(level, this.home, this.building);
+    this.floorPe_mJ = floorPotential_mJ(level, this.building);
     this.scoring = scoringOf(level.def);
     this.settleRule = settleOf(level.def);
     this.rackLeft = [...level.def.rack];
@@ -150,6 +154,8 @@ export class Session {
 
   /** Collapse fraction D with the structure at potential energy pe_mJ. */
   collapse(pe_mJ: number): number { return collapseFraction(this.startPe_mJ, pe_mJ, this.floorPe_mJ); }
+  /** The PE a reduction holds of what collapse counts (startPe_mJ's: the building's alone on a fold level). */
+  peOf(red: Pick<Reductions, 'pe_mJ' | 'peHeritage_mJ'>): number { return this.building ? red.pe_mJ - red.peHeritage_mJ : red.pe_mJ; }
 
   get strokes() { return this.outcomes.length + (this.live ? 1 : 0); }
 
@@ -209,6 +215,12 @@ export class Session {
       if (this.armed.includes(i)) return `charge ${i} is already armed`;
       if (!Number.isInteger(delay) || delay < 0 || delay >= cap) return `charge ${i}'s delay ${delay} is not 0 to ${cap - 1} steps (the settle cap)`;
       seen.add(i);
+    }
+    // Fuse & Fold: a demolition fires every charge, so the decision is when each goes, not which to leave out
+    // (leaving a row standing is a hinge that fells a frame as surely as a long delay does: fuse-and-fold.md).
+    if (this.level.def.objective.kind === 'fold') {
+      const left = charges.flatMap((ch, i) => ((ch.arm ?? 'plunger') === 'plunger' && !seen.has(i) && !this.armed.includes(i) ? [i] : []));
+      if (left.length) return `a fold level's plunger fires every charge: ${left.length} not named (${left.slice(0, 4).join(', ')}${left.length > 4 ? ', ...' : ''})`;
     }
     return null;
   }
@@ -351,7 +363,7 @@ export class Session {
 
     this.liveDPE_mJ = o.basePe_mJ - o.red.pe_mJ;
     this.liveLeverage = leverage(this.liveDPE_mJ, L.ke + L.yield);
-    this.liveCollapse = this.collapse(o.red.pe_mJ);
+    this.liveCollapse = this.collapse(this.peOf(o.red));
     // Tiers against the level's gold line (levelTier): none on a level without one.
     const t = levelTier(this.liveLeverage, c.def) ?? 0;
     if (t > L.tier) { L.tier = t; out.push({ t: 'tier', step, leverage: this.liveLeverage, tier: t }); }
@@ -367,7 +379,7 @@ export class Session {
     out.push(...this.cracks.splice(0), settled);
     const crownsTotal = settled.outcome.crownsTotal;
 
-    const cleared = objectiveMet(c, { red: o.red, crownsTotal, collapse: this.collapse(o.red.pe_mJ), heritageBroken: this.heritageBroken.reduce((a, x) => a + x, 0) }, this.scoring);
+    const cleared = objectiveMet(c, { red: o.red, crownsTotal, collapse: this.collapse(this.peOf(o.red)), heritage: this.heritageBroken.reduce((a, x) => a + x, 0) }, this.scoring);
     this.objectiveDone = cleared;
     this.lastSettle = { red: o.red, crownsTotal };
     if (this.scoring === 'outcome') {
@@ -425,7 +437,7 @@ export class Session {
   /** What an outcome level is scored on as it stands at the last settle. */
   outcomeFacts(): OutcomeFacts {
     const c = this.level, m = c.meta, last = this.lastSettle;
-    const pe = last ? last.red.pe_mJ : this.startPe_mJ;
+    const pe = last ? this.peOf(last.red) : this.startPe_mJ;
     const start = homeSkyline(c, this.home);
     return {
       met: this.objectiveDone,
@@ -443,6 +455,7 @@ export class Session {
       ...(c.def.objective.kind === 'hold' ? { hold: true } : {}),
       ...(c.def.objective.kind === 'quake' ? { quake: true } : {}),
       energy: energyFired(this.outcomes),
+      ...(c.def.objective.kind === 'fold' ? { spill: last ? spillOf(last.red) : 0 } : {}),
     };
   }
 
