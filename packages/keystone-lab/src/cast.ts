@@ -11,10 +11,9 @@
 // the best line. T2 = median of the competent ends, T3 = lower quartile of the
 // nudge cloud, both rounded toward easier to two significant figures.
 import type { Vec3 } from '@tb/engine-api';
-import { aimAt, castPlay, checkStars, fuseLanes, isFuseLevel, lowerIsBetter, type CastPlay, type CastSample, type CompiledLevel, compileLevel, isLaunchItem, type LevelDef, nudgedLevel, type RackItem, readShots, sampleValue, type Shot, type StarMetric, type StarsDef, writeShots } from '@tb/keystone';
+import { aimAt, castPlay, checkStars, lowerIsBetter, type CastPlay, type CastSample, type CompiledLevel, compileLevel, isLaunchItem, type LevelDef, nudgedLevel, type RackItem, readShots, sampleValue, type Shot, type StarMetric, type StarsDef, writeShots } from '@tb/keystone';
 import { type EngineSpec, engineSubsteps, makeEngine } from './engines.ts';
 import { COMPASS, lineOf, MAX_SNAPS, plungerCharges, rowRanks } from './fuse-search.ts';
-import { buildKey, buildLevel, extrasProblem, firing, fuseSiteOf } from './fuse-gate.ts';
 import { quantile } from './probe.ts';
 
 /** Plays lines of an outcome level, each from the level's start on a fresh engine, in order. */
@@ -335,11 +334,8 @@ export function nudgeLine(shots: readonly Shot[], r: () => number): Shot[] {
 
 // ---- Line models: what a line is on a level, and its noise ----
 
-/**
- * A line as played: its shots and the build it plays on (a nudge seed; 0 the exact build), and on a fuse level the
- * fuses laid (a fuse-gate.ts buildKey; absent: the level as authored).
- */
-export interface Noisy { shots: Shot[]; nudge: number; build?: string }
+/** A line as played: its shots and the build it plays on (a nudge seed; 0 the exact build). */
+export interface Noisy { shots: Shot[]; nudge: number }
 
 /**
  * What the cast's bot draws, moves and roughs up on a level. Launch levels (the spec's): a line is aim intents,
@@ -349,13 +345,11 @@ export interface Noisy { shots: Shot[]; nudge: number; build?: string }
  * (a timeline is exact steps, so a nudged build is what varies; docs/game/fuse-and-fold.md).
  */
 export interface LineModel<L> {
-  kind: 'launch' | 'plunger' | 'build';
+  kind: 'launch' | 'plunger';
   competent(n: number, seed: number): L[];
   move(line: L, r: () => number): L;
   shots(line: L): Shot[];
   noise(base: readonly Shot[], r: () => number): Noisy;
-  /** The build a line lays (build lines only: buildModel), as a key the level is rebuilt from (fuse-gate.ts buildLevel). */
-  build?(line: L): string;
 }
 
 export function launchModel(c: CompiledLevel, substeps: number, powers?: [number, number]): LineModel<Intent[]> {
@@ -389,82 +383,19 @@ export function plungerModel(c: CompiledLevel): LineModel<number[]> {
   };
 }
 
-/** The most dominoes a competent fuse sweep adds per lane rank (FD-1's tower folds at 4 to 6). */
-export const FUSE_MAX_STEP = 6;
-
-/** Each lane's rank along (dx, dz) by its row's columns (rowRanks' rule): the lane furthest along fires first, rank 0. */
-export function laneRanks(c: CompiledLevel, dx: number, dz: number): number[] {
-  const lanes = fuseLanes(c), defs = c.def.charges!;
-  // Each lane's first detonator: a charge watching the lane's socket, hosted on one of the row's columns.
-  const ch = lanes.map((l) => defs.findIndex((d) => d.watch === l.socket));
-  return rowRanks(c, ch, dx, dz);
-}
-
-/**
- * Fuse levels (M5b's domino fuses; M5c): a line is a build, the dominoes beyond straight each lane's fuse takes
- * (fuse-gate.ts extrasBuild: bumps turned away from the board's middle), and the shot is always Light the fuses.
- * A competent build is a sweep, as a competent timeline is: one of 8 compass directions, each lane a rank further
- * along it 1 to FUSE_MAX_STEP dominoes longer, each lane a domino short, exact or long, the shortest laid straight;
- * a sweep too long for the budget (or the lanes' room) shortens its step until it fits, down to all straight. A move
- * lengthens or shortens one lane by one domino; the noise is the build's nudge (the fuses, like a timeline, are exact).
- */
-export function buildModel(c: CompiledLevel): LineModel<number[]> {
-  const site = fuseSiteOf(c.def);
-  if (!site) throw new Error(`cast: ${c.def.id} is not a fuse site's level`);
-  const fits = (ex: readonly number[]) => ex.every((x) => x >= 0) && extrasProblem(site, ex) === null, shot = firing(c.def);
-  const lanes = fuseLanes(c).length;
-  return {
-    kind: 'build',
-    competent: (n, seed) => Array.from({ length: n }, (_, i) => {
-      const r = rng(streamSeed(seed, 'fuse-sweep', i)), [, dx, dz] = COMPASS[Math.floor(r() * COMPASS.length)]!, top = randInt(r, 1, FUSE_MAX_STEP);
-      const ranks = laneRanks(c, dx, dz), jitter = ranks.map(() => randInt(r, -1, 1));
-      for (let sp = top; sp >= 0; sp--) {
-        const raw = ranks.map((k, j) => k * sp + jitter[j]!), lo = Math.min(...raw), ex = raw.map((x) => x - lo);
-        if (fits(ex)) return ex;
-      }
-      return Array.from({ length: lanes }, () => 0);
-    }),
-    move: (ex, r) => {
-      const k = Math.floor(r() * ex.length), d = r() < 0.5 ? -1 : 1, cand = ex.map((x, i) => (i === k ? x + d : x));
-      return fits(cand) ? cand : ex;
-    },
-    shots: () => [shot],
-    noise: (base, r) => ({ shots: [...base], nudge: drawNudge(r) }),
-    build: buildKey,
-  };
-}
-
-/** The model a level is cast with: a fuse level's builds, a plunger level's timelines, else launch aims. */
+/** The model a level is cast with. */
 export function lineModel(c: CompiledLevel, substeps: number, powers?: [number, number]): LineModel<unknown> {
-  return (isFuseLevel(c.def) ? buildModel(c) : isPlungerLevel(c) ? plungerModel(c) : launchModel(c, substeps, powers)) as LineModel<unknown>;
+  return (isPlungerLevel(c) ? plungerModel(c) : launchModel(c, substeps, powers)) as LineModel<unknown>;
 }
 
-/** A line of `model` as played once: its shots roughed up by the model's noise, and its build when it lays one. */
-export function noisyLine<L>(model: LineModel<L>, line: L, r: () => number): Noisy {
-  const n = model.noise(model.shots(line), r);
-  return model.build ? { ...n, build: model.build(line) } : n;
-}
-
-/**
- * Plays noisy lines on a player: the nudges passed only when some play is on a nudged build (a launch cast's players see what they always did).
- * Lines that lay a build play on the level as built (fuse-gate.ts buildLevel), each run of lines on one build in one call.
- */
-export async function playNoisy(player: CastPlayer, level: LevelDef, lines: readonly Noisy[]): Promise<CastPlay[]> {
-  const same = (lv: LevelDef, ls: readonly Noisy[]) => (ls.some((l) => l.nudge !== 0) ? player.play(lv, ls.map((l) => l.shots), ls.map((l) => l.nudge)) : player.play(lv, ls.map((l) => l.shots)));
-  if (!lines.some((l) => l.build)) return same(level, lines);
-  const out: CastPlay[] = [];
-  for (let i = 0; i < lines.length;) {
-    let j = i;
-    while (j < lines.length && lines[j]!.build === lines[i]!.build) j++;
-    const b = lines[i]!.build;
-    out.push(...(await same(b ? buildLevel(level, b) : level, lines.slice(i, j))));
-    i = j;
-  }
-  return out;
+/** Plays noisy lines on a player: the nudges passed only when some play is on a nudged build (a launch cast's players see what they always did). */
+export function playNoisy(player: CastPlayer, level: LevelDef, lines: readonly Noisy[]): Promise<CastPlay[]> {
+  const nudged = lines.some((l) => l.nudge !== 0);
+  return nudged ? player.play(level, lines.map((l) => l.shots), lines.map((l) => l.nudge)) : player.play(level, lines.map((l) => l.shots));
 }
 
 /** A recorded play as a CastLine. */
-const castLine = (phase: CastLine['phase'], l: Noisy, p: CastPlay): CastLine => ({ phase, shots: writeShots(l.shots), samples: p.samples, steps: p.steps, complete: p.complete, hash: p.hash, limits: playLimits(p), ...(l.nudge ? { nudge: l.nudge } : {}), ...(l.build ? { build: l.build } : {}) });
+const castLine = (phase: CastLine['phase'], l: Noisy, p: CastPlay): CastLine => ({ phase, shots: writeShots(l.shots), samples: p.samples, steps: p.steps, complete: p.complete, hash: p.hash, limits: playLimits(p), ...(l.nudge ? { nudge: l.nudge } : {}) });
 
 // ---- Metrics, quantiles, thresholds ----
 
@@ -534,7 +465,7 @@ export function playLimits(p: { limits: readonly string[]; samples: readonly Cas
   return broke && !p.limits.includes(NONFINITE) ? [...p.limits, NONFINITE] : [...p.limits];
 }
 
-export interface CastLine { phase: 'competent' | 'climb' | 'cloud'; shots: string; samples: CastSample[]; steps: number; complete: boolean; hash: string; limits: string[]; /** The play's build nudge (plunger levels; absent: the exact build). */ nudge?: number; /** The fuses laid (fuse levels: fuse-gate.ts buildKey). */ build?: string }
+export interface CastLine { phase: 'competent' | 'climb' | 'cloud'; shots: string; samples: CastSample[]; steps: number; complete: boolean; hash: string; limits: string[]; /** The play's build nudge (plunger levels; absent: the exact build). */ nudge?: number }
 
 export interface CastResult {
   level: string;
@@ -551,8 +482,8 @@ export interface CastResult {
   /** The raw quantiles; `stars` holds them rounded toward easier, with T3 at least as hard as T2. */
   raw: { t2: number; t3: number; best: number };
   stars: StarsDef;
-  /** The best line (shot text, and on a fuse level its build key), its climb score (the mini-cloud's player-worse quartile), and the competent line it climbed from (a fuse level's: its build key). */
-  bestLine: { shots: string; build?: string; score: number; climbedFrom: string };
+  /** The best line (shot text) and its climb score (the mini-cloud's player-worse quartile). */
+  bestLine: { shots: string; score: number; climbedFrom: string };
   competent: ReturnType<typeof summary>;
   cloud: ReturnType<typeof summary>;
   bootstrap: { lo: number; hi: number; halfWidth: number };
@@ -613,21 +544,20 @@ export async function castLevel(level: LevelDef, player: CastPlayer, opts: CastO
     return out;
   };
 
-  // 1. Competent plays: a launch line as aimed, a plunger line or a fuse build on a nudged build (its only noise).
+  // 1. Competent plays: a launch line as aimed, a plunger line on a nudged build (its only noise).
   const intents = model.competent(recipe.competent, seed), rn = rng(streamSeed(seed, 'competent-builds'));
-  const comp = await play('competent', intents.map((its) => (model.kind !== 'launch' ? noisyLine(model, its, rn) : { shots: model.shots(its), nudge: 0 })));
+  const comp = await play('competent', intents.map((its) => (model.kind === 'plunger' ? model.noise(model.shots(its), rn) : { shots: model.shots(its), nudge: 0 })));
   const compEnd = comp.map((p) => endValue(p, metric));
 
   // 2. Hill-climb from the best competent lines; a line's score is the player-worse quartile of every nudged play
   // of it so far (a line judged twice pools both samples rather than keeping the luckier one).
   const order = compEnd.map((v, i) => i).sort((a, b) => good(metric, compEnd[b]!) - good(metric, compEnd[a]!) || a - b);
-  // A build line's shot is always the same (Light the fuses): its build tells lines apart.
-  const key = (its: unknown) => (model.build ? model.build(its) : writeShots(model.shots(its)));
+  const key = (its: unknown) => writeShots(model.shots(its));
   const judged = new Map<string, { its: unknown; ends: number[]; from: number }>();
   const scoreOf = (k: string) => good(metric, lowerQ(metric, judged.get(k)!.ends, 0.25));
   const judge = async (its: unknown, from: number, n: number, tag: string): Promise<number> => {
-    const r = rng(streamSeed(seed, 'mini', tag)), k = key(its);
-    const ps = await play('climb', Array.from({ length: n }, () => noisyLine(model, its, r)));
+    const r = rng(streamSeed(seed, 'mini', tag)), base = model.shots(its), k = key(its);
+    const ps = await play('climb', Array.from({ length: n }, () => model.noise(base, r)));
     const e = judged.get(k) ?? { its, ends: [], from };
     e.ends.push(...ps.map((p) => endValue(p, metric)));
     judged.set(k, e);
@@ -656,11 +586,11 @@ export async function castLevel(level: LevelDef, player: CastPlayer, opts: CastO
   }
   const bestKey = ranked()[0];
   const best = bestKey === undefined ? null : { ...judged.get(bestKey)!, score: scoreOf(bestKey) };
-  const bestIts = best ? best.its : intents[order[0]!]!, bestShots = model.shots(bestIts), bestBuild = model.build?.(bestIts);
+  const bestShots = best ? model.shots(best.its) : model.shots(intents[order[0]!]!);
 
   // 3. The nudge cloud.
   const rc = rng(streamSeed(seed, 'cloud'));
-  const cloud = await play('cloud', Array.from({ length: recipe.cloud }, () => noisyLine(model, bestIts, rc)));
+  const cloud = await play('cloud', Array.from({ length: recipe.cloud }, () => model.noise(bestShots, rc)));
   const cloudEnd = cloud.map((p) => endValue(p, metric));
 
   // 4. Thresholds and 5. gates, from the plays.
@@ -669,7 +599,7 @@ export async function castLevel(level: LevelDef, player: CastPlayer, opts: CastO
   const stars: StarsDef = { metric, t2, t3, best: raw.best, castOn: player.adapter, engine: player.engine, hash: c.hash, n: lines.length, seed };
   return {
     level: level.id, hash: c.hash, metric, recipe, seed, adapter: player.adapter, engine: player.engine, n: lines.length, wallMs: 0,
-    raw, stars, bestLine: { shots: writeShots(bestShots), ...(bestBuild ? { build: bestBuild } : {}), score: best ? (hb ? best.score : -best.score) : NaN, climbedFrom: lines[best?.from ?? order[0]!]!.build ?? lines[best?.from ?? order[0]!]!.shots },
+    raw, stars, bestLine: { shots: writeShots(bestShots), score: best ? (hb ? best.score : -best.score) : NaN, climbedFrom: lines[best?.from ?? order[0]!]!.shots },
     competent: summary(compEnd), cloud: summary(cloudEnd), bootstrap: boot, gates, lines,
   };
 }
@@ -710,7 +640,7 @@ export async function extendCloud(level: LevelDef, player: CastPlayer, cast: Cas
   if (c.hash !== cast.hash) throw new Error(`extend: ${level.id} hashes ${c.hash} here but the cast was of ${cast.hash}`);
   if (player.adapter !== cast.adapter || player.engine !== cast.engine) throw new Error(`extend: the cast was on ${cast.adapter} (${cast.engine}), this player is ${player.adapter} (${player.engine}): extend it on the same device`);
   const had = cast.lines.filter((l) => l.phase === 'cloud').length, best = readShots(cast.bestLine.shots), r = rng(streamSeed(cast.seed, 'extend', had));
-  const model = lineModel(c, player.substeps), batch = Array.from({ length: n }, () => bestNoise(model, cast, best, r)), plays = await playNoisy(player, level, batch);
+  const model = lineModel(c, player.substeps), batch = Array.from({ length: n }, () => model.noise(best, r)), plays = await playNoisy(player, level, batch);
   const lines = [...cast.lines, ...plays.map((p, k) => castLine('cloud', batch[k]!, p))];
   const { raw, t2, t3, boot, gates } = judgeCast(c, cast.metric, cast.seed, lines);
   const cloudEnd = lines.filter((l) => l.phase === 'cloud').map((l) => endValue(l, cast.metric));
@@ -859,12 +789,6 @@ export function poolCasts(casts: readonly CastResult[], t3From: PoolT3 = 'pooled
   return { raw, stars: { metric: m, t2, t3, best: raw.best, castOn: a.adapter, engine: a.engine, hash: a.hash, n, seed: t3Seed ?? a.seed }, competent: summary(comp), cloud: summary(cloud), seeds: casts.map((r) => r.seed), gates, t3From, ...(t3Seed !== undefined ? { t3Seed } : {}) };
 }
 
-/** One noisy play of a recorded cast's best line (its shots, and its build on a fuse level). */
-const bestNoise = (model: LineModel<unknown>, cast: CastResult, best: Shot[], r: () => number): Noisy => {
-  const n = model.noise(best, r);
-  return cast.bestLine.build ? { ...n, build: cast.bestLine.build } : n;
-};
-
 /** A nudge cloud of another device's best line, played here: the cross-device gate at a smaller N than a whole cast. */
 export interface CloudCheck {
   level: string;
@@ -892,7 +816,7 @@ export async function cloudCheck(level: LevelDef, player: CastPlayer, cast: Cast
   const c = compileLevel(level);
   if (c.hash !== cast.hash) throw new Error(`cloud check: ${level.id} hashes ${c.hash} here but the cast was of ${cast.hash}`);
   const best = readShots(cast.bestLine.shots), r = rng(streamSeed(seed, 'cross-device'));
-  const model = lineModel(c, player.substeps), batch = Array.from({ length: n }, () => bestNoise(model, cast, best, r));
+  const batch = Array.from({ length: n }, () => lineModel(c, player.substeps).noise(best, r));
   const plays = await playNoisy(player, level, batch);
   const ends = plays.map((p) => endValue(p, cast.metric)), t3 = lowerQ(cast.metric, ends, 0.25);
   const limited = plays.filter((p) => playLimits(p).length).length, incomplete = plays.filter((p) => !p.complete).length;
@@ -951,11 +875,11 @@ export async function replayCast(level: LevelDef, player: CastPlayer, cast: Cast
   if (c.hash !== cast.hash) throw new Error(`replay: ${level.id} hashes ${c.hash} here but the cast was of ${cast.hash}`);
   const rec = cast.lines.filter((l) => l.phase === phase).slice(0, n);
   if (!rec.length) throw new Error(`replay: the cast has no ${phase} plays`);
-  const plays = await playNoisy(player, level, rec.map((l) => ({ shots: readShots(l.shots), nudge: l.nudge ?? 0, ...(l.build ? { build: l.build } : {}) })));
+  const plays = await playNoisy(player, level, rec.map((l) => ({ shots: readShots(l.shots), nudge: l.nudge ?? 0 })));
   const { same, rows } = compareReplay(rec, plays, cast.metric);
   return {
     level: level.id, hash: c.hash, adapter: player.adapter, engine: player.engine, against: { adapter: cast.adapter, engine: cast.engine, seed: cast.seed },
-    phase, same, rows, lines: plays.map((p, k) => ({ phase, shots: rec[k]!.shots, samples: p.samples, steps: p.steps, complete: p.complete, hash: p.hash, limits: playLimits(p), ...(rec[k]!.nudge ? { nudge: rec[k]!.nudge } : {}), ...(rec[k]!.build ? { build: rec[k]!.build } : {}) })),
+    phase, same, rows, lines: plays.map((p, k) => ({ phase, shots: rec[k]!.shots, samples: p.samples, steps: p.steps, complete: p.complete, hash: p.hash, limits: playLimits(p), ...(rec[k]!.nudge ? { nudge: rec[k]!.nudge } : {}) })),
   };
 }
 
@@ -982,7 +906,7 @@ export function castMarkdown(r: CastResult): string {
     '',
     `Thresholds: T2 ${f3(r.stars.t2)} (median of competent ends, raw ${f3(r.raw.t2)}), T3 ${f3(r.stars.t3)} (lower quartile of the nudge cloud, raw ${f3(r.raw.t3)}), beat the bot above ${f3(r.raw.best)}.`,
     '',
-    `Best line \`${r.bestLine.shots}\`${r.bestLine.build ? ` on build \`${r.bestLine.build}\`` : ''} (climbed from \`${r.bestLine.climbedFrom}\`).`,
+    `Best line \`${r.bestLine.shots}\` (climbed from \`${r.bestLine.climbedFrom}\`).`,
     '',
     '| Cloud | n | min | P10 | P25 | P50 | P75 | P90 | max |',
     '|---|---|---|---|---|---|---|---|---|',

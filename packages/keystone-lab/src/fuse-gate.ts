@@ -7,7 +7,7 @@
 // The naive build is every lane straight: equal fuses fire every row at once (M5's "all at once"). The
 // structured builds are sweeps, as on F1 to F5: the lanes ranked along the rows' axis, each `step`
 // dominoes longer than the one before, in either direction.
-import { castPlay, compileLevel, Driver, DOMINO_HALF, DOMINO_PITCH, type FuseLane, fuseCandidate, fuseLanes, FUSE_SITES, laneGeometry, type LevelDef, nudgedLevel, type P2, playShots, type PlungerShot, type RunPart, runCentres, sampleOf } from '@tb/keystone';
+import { castPlay, compileLevel, Driver, DOMINO_HALF, DOMINO_PITCH, type FuseLane, fuseCandidate, FUSE_SITES, laneGeometry, type LevelDef, nudgedLevel, type P2, playShots, type PlungerShot, type RunPart, runCentres, sampleOf } from '@tb/keystone';
 import { type EngineSpec, makeEngine } from './engines.ts';
 import { type FoldEnd, type LineStats, lineStats, orderGate, type GateResult } from './fuse-search.ts';
 
@@ -125,83 +125,4 @@ export async function fuseGate(site: string, order: readonly number[], o: { scre
   const keep = [builds[0]!, ...ranked.slice(0, o.keep ?? 3).map((x) => builds[x.i]!)];
   const confirm = lineStats(keep.map((b) => ({ name: b.name, shot: firing(level) })), await play(keep, o.confirm ?? [1, 2, 3, 4, 5, 6, 7, 8]));
   return { level: site, screen, confirm, gate: orderGate(confirm), builds: keep };
-}
-
-// ---- Builds as the star cast lays them (M5c, cast.ts buildModel) ----
-//
-// A cast line on a fuse level is a build: how many dominoes beyond straight each lane's fuse takes (its "extras"),
-// keyed `fuse.<e0>.<e1>...` so a cast's JSON records the build each play ran on. Each lane bumps away from the board's
-// middle (a middle lane, on an odd board, toward the side of the lane with the most extras), so neighbours' bumps
-// never face each other: FD-1's two lanes, 3 h apart, may both bump. A build is laid only when every lane's count is
-// reachable (laneFuse), it fits the level's budget, and no two fuses come within FUSE_CLEAR of each other.
-
-/** Least distance between two lanes' domino centres (h): the domino is 1 h wide, so 1.5 leaves half a domino between. */
-export const FUSE_CLEAR = 1.5;
-
-const siteCache = new WeakMap<LevelDef, string | null>();
-/** The fuse site a level's lanes were built from (FUSE_SITES id), matched by every lane's head to 1e-3 h; null on other levels. */
-export function fuseSiteOf(level: LevelDef): string | null {
-  if (siteCache.has(level)) return siteCache.get(level)!;
-  const lanes = fuseLanes(compileLevel(level));
-  const hit = Object.entries(FUSE_SITES).find(([, s]) => s.fuse.lanes.length === lanes.length && s.fuse.lanes.every((l, k) => {
-    const g = laneGeometry(l), h = lanes[k]!.head;
-    return Math.abs(g.head[0] - h[0]) < 1e-3 && Math.abs(g.head[1] - h[1]) < 1e-3;
-  }))?.[0] ?? null;
-  siteCache.set(level, hit);
-  return hit;
-}
-
-/** Which side lane k's bumps turn to on `site` (laneFuse's side): away from the board's middle; a lane on the middle line follows `tie`. */
-export function outwardSide(site: string, k: number, tie: 1 | -1 = 1): 1 | -1 {
-  const lanes = FUSE_SITES[site]!.fuse.lanes, n = lanes.length;
-  const mid = [lanes.reduce((a, l) => a + l.lead[0], 0) / n, lanes.reduce((a, l) => a + l.lead[1], 0) / n];
-  const g = laneGeometry(lanes[k]!), lat = (-g.dir[1]) * (lanes[k]!.lead[0] - mid[0]!) + g.dir[0] * (lanes[k]!.lead[1] - mid[1]!);
-  return Math.abs(lat) < 1e-6 ? tie : lat < 0 ? -1 : 1;
-}
-
-const fuseCache = new Map<string, P2[] | null>();
-/** laneFuse, remembered (its search tries a few hundred paths). */
-function laneFuseCached(site: string, k: number, extra: number, side: 1 | -1): P2[] | null {
-  const key = `${site}/${k}/${extra}/${side}`;
-  if (!fuseCache.has(key)) fuseCache.set(key, extra < 0 ? null : laneFuse(FUSE_SITES[site]!.fuse.lanes[k]!, extra, side));
-  return fuseCache.get(key)!;
-}
-
-export const buildKey = (extras: readonly number[]): string => `fuse.${extras.join('.')}`;
-/** A build key's extras; throws on anything else. */
-export function parseBuildKey(key: string): number[] {
-  const m = /^fuse((?:\.\d+)+)$/.exec(key);
-  if (!m) throw new Error(`not a fuse build key: ${key}`);
-  return m[1]!.slice(1).split('.').map(Number);
-}
-
-/** Why a build cannot be laid (null: it can): a lane's count unreachable, over the budget, or two fuses too close. */
-export function extrasProblem(site: string, extras: readonly number[]): string | null {
-  const fs = FUSE_SITES[site]!.fuse;
-  if (extras.length !== fs.lanes.length) return `${extras.length} lanes for ${fs.lanes.length}`;
-  const b = extrasBuild(site, extras);
-  if (!b) return 'a lane cannot take that many';
-  const cost = fs.lanes.reduce((a, l, k) => a + l.straight + extras[k]!, 0);
-  if (cost > fs.budget) return `${cost} dominoes over the budget of ${fs.budget}`;
-  const centres = b.fuses.map((p) => runCentres(p!, DOMINO_PITCH));
-  for (let i = 0; i < centres.length; i++) for (let j = i + 1; j < centres.length; j++) for (const a of centres[i]!) for (const q of centres[j]!) {
-    if (Math.hypot(a[0] - q[0], a[1] - q[1]) < FUSE_CLEAR) return `lanes ${i + 1} and ${j + 1} within ${FUSE_CLEAR} h`;
-  }
-  return null;
-}
-
-/** The build with `extras` dominoes beyond straight per lane, bumping outward; null when a lane cannot take its count. */
-export function extrasBuild(site: string, extras: readonly number[]): FuseBuild | null {
-  const most = extras.indexOf(Math.max(...extras)), tie = outwardSide(site, most);
-  const fuses = extras.map((e, k) => laneFuseCached(site, k, e, outwardSide(site, k, tie)));
-  return fuses.some((f) => f === null) ? null : { name: buildKey(extras), fuses };
-}
-
-/** A fuse level as built by `key` (buildKey); throws when the level is not a fuse site's or the build cannot be laid. */
-export function buildLevel(level: LevelDef, key: string): LevelDef {
-  const site = fuseSiteOf(level), extras = parseBuildKey(key);
-  if (!site) throw new Error(`${level.id} is not a fuse level: no build ${key}`);
-  const why = extrasProblem(site, extras);
-  if (why) throw new Error(`${level.id}: build ${key} cannot be laid: ${why}`);
-  return built(level, extrasBuild(site, extras)!);
 }
